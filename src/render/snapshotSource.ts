@@ -234,14 +234,25 @@ export interface OnlineLayer {
   resultKey: string;
   firstFrame: number;
   count: number;
+  /** 层表 v 2(C10 契约第 18 节第 3 条):共享档的内容键;v 1 或取不到为 null */
+  contentKey?: string | null;
+  /** 层表 v 2:产出这一层的环境的指纹;v 1 或取不到为 null */
+  envFingerprint?: string | null;
 }
 
 export interface LayerMap {
+  /** 层表的版本(`server/artifact-transfer.mjs` 的 `LAYER_MAP_VERSION`);没写当 1 */
+  v: number;
   projectId: string | null;
   fps: number;
   span: number;
   layers: OnlineLayer[];
 }
+
+/** 在线普通档认的层表版本(C10 契约第 18 节第 3 条);低内存档 v 1、v 2 都认 */
+export const LAYER_MAP_V2 = 2;
+/** 页面认得的层表版本;不认得的 `v` 整张当没有 */
+export const KNOWN_LAYER_MAP_VERSIONS = [1, 2] as const;
 
 export interface OnlineSnapshotDeps {
   /** 文档服务上的一次请求(`content.get`);没连上就抛 */
@@ -267,19 +278,50 @@ export interface OnlineSnapshotDeps {
 
 /** 内容库回包里的层表;形状不对回 null */
 export function parseLayerMap(body: unknown): LayerMap | null {
-  const b = body as { kind?: unknown; projectId?: unknown; fps?: unknown; span?: unknown; layers?: unknown } | null;
+  const b = body as { v?: unknown; kind?: unknown; projectId?: unknown; fps?: unknown; span?: unknown; layers?: unknown } | null;
   if (!b || b.kind !== "layer-map" || !Array.isArray(b.layers)) return null;
+  // 不认得的版本整张当没有(C10 契约第 18 节第 3 条);没写版本的是 v 1(C10a 的形状)
+  const v = b.v === undefined ? 1 : Number(b.v);
+  if (!(KNOWN_LAYER_MAP_VERSIONS as readonly number[]).includes(v)) return null;
   const span = Math.max(1, Math.floor(Number(b.span) || 60));
   const layers: OnlineLayer[] = [];
+  const str = (x: unknown) => (typeof x === "string" && x ? x : null);
   for (const raw of b.layers as Record<string, unknown>[]) {
     const kind = raw?.kind;
     if (kind !== "html" && kind !== "local") continue;
     const firstFrame = Number(raw.firstFrame), count = Number(raw.count);
     if (typeof raw.clipId !== "string" || typeof raw.key !== "string" || typeof raw.resultKey !== "string") continue;
     if (!Number.isInteger(firstFrame) || firstFrame < 0 || !Number.isInteger(count) || count < 1) continue;
-    layers.push({ clipId: raw.clipId, kind, key: raw.key, resultKey: raw.resultKey, firstFrame, count });
+    layers.push({ clipId: raw.clipId, kind, key: raw.key, resultKey: raw.resultKey, firstFrame, count,
+      ...(v >= LAYER_MAP_V2 ? { contentKey: str(raw.contentKey), envFingerprint: str(raw.envFingerprint) } : {}) });
   }
-  return { projectId: typeof b.projectId === "string" ? b.projectId : null, fps: Number(b.fps) || 30, span, layers };
+  return { v, projectId: typeof b.projectId === "string" ? b.projectId : null, fps: Number(b.fps) || 30, span, layers };
+}
+
+/**
+ * 这一层在这一档能不能用(C10 契约第 5 节、第 18 节第 3 条):
+ *   - 普通档(取预渲染原尺寸):只认 v 2、且带 `contentKey` 与 `envFingerprint` 的层 —— 页面不算键,
+ *     部署的 `/editor` 与渲染节点代码版本对不上、层表缺这两项时,这一层按「没有预渲染结果」处理(占位、暂停活渲),不报错;
+ *   - 低内存档(取预渲染小尺寸):v 1、v 2 都认。
+ */
+export function usableLayer(map: Pick<LayerMap, "v">, layer: OnlineLayer, { lowMemory = false }: { lowMemory?: boolean } = {}): boolean {
+  if (lowMemory) return true;
+  return map.v >= LAYER_MAP_V2 && !!layer.contentKey && !!layer.envFingerprint;
+}
+
+/**
+ * 层表里某个片段那一层(普通档口径):层表对得上回 `{ …, contentKey, envFingerprint }`;对不上(不认得的版本、v 1、
+ * 缺内容键、缺指纹、没这一层、层表坏)回 null,不抛。`table` 收内容库回包的 body 或已解析的层表。
+ */
+export function layerRefOf(table: unknown, clipId: string, opts: { lowMemory?: boolean } = {}): OnlineLayer | null {
+  let map: LayerMap | null = null;
+  try {
+    map = table && typeof table === "object" && Array.isArray((table as LayerMap).layers) && (table as LayerMap).v !== undefined && typeof (table as { kind?: unknown }).kind !== "string"
+      ? (table as LayerMap) : parseLayerMap(table);
+  } catch { map = null; }
+  if (!map) return null;
+  const layer = map.layers.find((l) => l.clipId === clipId);
+  return layer && usableLayer(map, layer, opts) ? layer : null;
 }
 
 /** 一层落在 `[fromGlobal, toGlobal]`(全局帧,闭区间)的那几段:本地帧 0 起每 `span` 帧一段、最后一段到 `count - 1` */
@@ -349,10 +391,43 @@ export class ByteLru {
 interface ManifestState {
   /** 本地帧 → 小位图哈希 */
   small: Map<number, string>;
-  /** 这一段每一帧都有小位图了:不必再取 */
+  /** 本地帧 → 原尺寸 HTML 快照哈希(`frames` 表) */
+  frames: Map<number, string>;
+  /** 这一段每一帧都有这一档了:不必再取 */
   full: boolean;
   fetchedAt: number;
 }
+
+/**
+ * 在线来源取哪一档(C10 契约第 5 节):普通档取预渲染原尺寸(`snap/<hash>` 的 HTML 快照),低内存档取预渲染小尺寸
+ * (`px/<hash>` 的小位图)。
+ */
+export type OnlineTier = "small" | "original";
+
+/** 页面内快照库 L2 用到的那几样(`src/online/l2.ts` 的 `L2Store`;这里只列接口,不引实现) */
+export interface L2Like {
+  putBlock(key: string, bytes: Uint8Array | ArrayBuffer, type?: string): Promise<unknown>;
+  getBlock(key: string): Promise<{ bytes: Uint8Array; type: string } | null>;
+  hasBlock(key: string): boolean;
+  putRange(layerKey: string, from: number, to: number): Promise<Array<[number, number]>>;
+  getRanges(layerKey: string): Promise<Array<[number, number]>>;
+  subscribeReady(cb: (e: { layerKey: string; ranges: Array<[number, number]> }) => void): () => void;
+}
+
+export interface OnlineSourceOptions {
+  /** 没有 L2 时的内存缓存上限(C10a 的 64 MiB) */
+  maxBytes?: number;
+  tier?: OnlineTier;
+  /** 页面内快照库 L2(C10 契约第 4 节);给了就把块存进它,内存里只留一小份刚用过的 */
+  store?: L2Like | Promise<L2Like | null> | null;
+}
+
+/** 等 L2 打开最多这么久(毫秒),打不开就照内存走 */
+export const STORE_WAIT_MS = 5000;
+/** 有 L2 时内存里只留这么多刚用过的(免得同一窗口里反复解码 / 反复读库) */
+export const ONLINE_HOT_CACHE_BYTES = 16 * 1024 * 1024;
+
+const textDecoder = typeof TextDecoder !== "undefined" ? new TextDecoder() : null;
 
 /** 在线实现(见上) */
 export class OnlineSnapshotSource implements SnapshotSource {
@@ -374,18 +449,47 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private again = false;
   private queue: Array<() => Promise<void>> = [];
   private active = 0;
-  /** 取到一张新的小位图之后叫(宿主据此重投一次) */
+  readonly tier: OnlineTier;
+  private store: L2Like | null = null;
+  private storeOff: (() => void) | null = null;
+  /**
+   * L2 还在打开时先别取:不然第一轮预取在库打开之前就发出去,关掉再开时已在库里的块又被请求一遍(C10-A2)。
+   * 最多等 `STORE_WAIT_MS`,打不开就照内存走。
+   */
+  private storeWait: Promise<unknown> | null = null;
+  /** 原尺寸:每层(按结果键)已在 L2 里的本地帧(`ranges` 表的镜像) */
+  private inStore = new Map<string, Set<number>>();
+  private rangesLoaded = new Set<string>();
+  /** 取到一张新的块之后叫(宿主据此重投一次) */
   onFetched: (() => void) | null = null;
   /** 层表取回来过没有(取到了,或者内容库回「没有这一项」);取之前判不了哪些层缺产物 */
   private mapKnown = false;
-  readonly stats = { mapFetches: 0, manifestFetches: 0, smallFetches: 0, smallBytes: 0, errors: 0 };
+  readonly stats = { mapFetches: 0, manifestFetches: 0, smallFetches: 0, smallBytes: 0, snapFetches: 0, snapBytes: 0, l2Hits: 0, errors: 0 };
 
-  constructor(deps: OnlineSnapshotDeps, { maxBytes = ONLINE_CACHE_MAX_BYTES }: { maxBytes?: number } = {}) {
+  constructor(deps: OnlineSnapshotDeps, { maxBytes = ONLINE_CACHE_MAX_BYTES, tier = "small", store = null }: OnlineSourceOptions = {}) {
     this.deps = deps;
-    this.cache = new ByteLru(maxBytes);
+    this.tier = tier;
+    this.cache = new ByteLru(store ? Math.min(maxBytes, ONLINE_HOT_CACHE_BYTES) : maxBytes);
+    if (store) {
+      const opened = Promise.resolve(store).then((s) => {
+        if (!s || this.stopped) return;
+        this.store = s;
+        this.storeOff = s.subscribeReady((e) => this.onStoreReady(e.layerKey, e.ranges));
+        this.rangesLoaded.clear();
+      }, () => { /* 打不开 L2:照内存走 */ });
+      this.storeWait = Promise.race([opened, new Promise((r) => setTimeout(r, STORE_WAIT_MS))]).then(() => { this.storeWait = null; });
+    }
   }
 
   private now(): number { return (this.deps.now ?? Date.now)(); }
+  private get lowMemory(): boolean { return this.tier === "small"; }
+
+  /** 这一档此刻能用的层(普通档只认 v 2 且两项齐的层) */
+  private layers(): OnlineLayer[] {
+    const map = this.map;
+    if (!map) return [];
+    return map.layers.filter((l) => usableLayer(map, l, { lowMemory: this.lowMemory }));
+  }
 
   /** 看哪个项目(层表的键);换了项目就清表重来 */
   setProject(projectId: string | null): void {
@@ -402,7 +506,17 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.kick();
   }
 
-  /** 播放头挪了:取这一窗口的清单,预取这一窗口可见重层的小位图 */
+  /**
+   * 队列报了 `task.done`(C10 契约第 7 节「页面订阅 task.done,并入层表与就绪」):不等下一轮轮询,马上重取层表、
+   * 还没满的清单也重取。
+   */
+  refresh(): void {
+    this.lastMapAt = -Infinity;
+    for (const st of this.manifests.values()) if (!st.full) st.fetchedAt = -Infinity;
+    this.kick();
+  }
+
+  /** 播放头挪了:取这一窗口的清单,预取这一窗口可见重层的块 */
   focus(t: number, fps: number): void {
     this.playhead = { t: Number(t) || 0, fps: Math.max(1, Number(fps) || 30) };
     this.kick();
@@ -412,7 +526,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.listeners.add(onMessage);
     // 新订阅方:先 reset,再把手里已有的层全量发一遍(C3 的恢复路)
     try { onMessage({ type: "reset", localRev: 0 }); } catch { /* 订阅方坏了 */ }
-    for (const layer of this.map?.layers ?? []) {
+    for (const layer of this.layers()) {
       try { onMessage(this.layerMessage(layer)); } catch { /* 同上 */ }
     }
     this.kick();
@@ -420,6 +534,14 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   async fetchSnapshot(kind: ReadyKind, key: string, localFrame: number, signal?: AbortSignal): Promise<string> {
+    if (this.storeWait) await this.storeWait;
+    if (this.tier === "original") {
+      const hit = this.frameOf(kind, key, localFrame);
+      if (!hit) throw Object.assign(new Error(`没有这一帧的预渲染原尺寸:${kind}/${key}/${localFrame}`), { status: 404 });
+      const cached = this.cache.get(`snap/${hit.hash}`);
+      if (cached !== undefined) return cached;
+      return this.fetchOriginal(hit.hash, hit.layer, localFrame, signal);
+    }
     const hash = this.smallHashOf(kind, key, localFrame);
     if (!hash) throw Object.assign(new Error(`没有这一帧的预渲染小尺寸:${kind}/${key}/${localFrame}`), { status: 404 });
     const hit = this.cache.get(hash);
@@ -433,18 +555,28 @@ export class OnlineSnapshotSource implements SnapshotSource {
    */
   layerClipIds(): ReadonlySet<string> | null {
     if (!this.mapKnown) return null;
-    return new Set((this.map?.layers ?? []).map((l) => l.clipId));
+    return new Set(this.layers().map((l) => l.clipId));
   }
 
-  /** 导出前释放小尺寸缓存(契约第 11.1 节) */
+  /** 此刻的层表(探针用);还没有回 null */
+  layerMap(): LayerMap | null {
+    return this.map;
+  }
+
+  /** 导出前释放缓存(契约第 11.1 节):内存里那一份;L2 是可重建的缓存库,不动 */
   clearCache(): void { this.cache.clear(); }
   get cacheBytes(): number { return this.cache.total; }
   get cacheSize(): number { return this.cache.size; }
   /** 探针用:此刻的层表与各层就绪帧数 */
   debug() {
+    const usable = this.layers();
     return {
       projectId: this.projectId,
-      layers: (this.map?.layers ?? []).map((l) => ({ clipId: l.clipId, kind: l.kind, key: l.key, ready: this.readyFrames(l).length })),
+      tier: this.tier,
+      mapVersion: this.map?.v ?? null,
+      store: !!this.store,
+      layers: usable.map((l) => ({ clipId: l.clipId, kind: l.kind, key: l.key, resultKey: l.resultKey, envFingerprint: l.envFingerprint ?? null, ready: this.readyFrames(l).length })),
+      skipped: (this.map?.layers ?? []).filter((l) => !usable.includes(l)).map((l) => l.clipId),
       manifests: this.manifests.size,
       cacheBytes: this.cache.total, cacheSize: this.cache.size, ...this.stats,
     };
@@ -456,10 +588,19 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.timer = null;
     this.listeners.clear();
     this.queue.length = 0;
+    this.storeOff?.();
+    this.storeOff = null;
   }
 
   /** 单测用:手动跑一轮(取层表、取窗口里的清单、预取) */
   async tickNow(): Promise<void> { await this.tick(); }
+
+  /** 单测用:等在飞的取块都落定 */
+  async idle(): Promise<void> {
+    for (let i = 0; i < 50 && (this.inflight.size || this.active || this.queue.length); i++) {
+      await Promise.allSettled([...this.inflight.values()]);
+    }
+  }
 
   /* ---------------- 内部 ---------------- */
 
@@ -478,9 +619,16 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private readyFrames(layer: OnlineLayer): number[] {
     const out: number[] = [];
     const span = this.map?.span ?? 60;
+    const have = this.inStore.get(layer.resultKey);
     for (let from = 0; from < layer.count; from += span) {
       const st = this.manifests.get(this.manifestKey(layer, this.segOf(layer, from)));
-      if (st) for (const f of st.small.keys()) out.push(f);
+      if (!st) continue;
+      if (this.tier === "original") {
+        // 写入即就绪(C10 契约第 4 节):清单里有、块也已写进 L2 的帧才算就绪;没有 L2 时退回「清单里有」
+        for (const f of st.frames.keys()) if (!this.store || have?.has(f)) out.push(f);
+      } else {
+        for (const f of st.small.keys()) out.push(f);
+      }
     }
     return out;
   }
@@ -491,7 +639,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
 
   /** 各层的就绪区间变了才发(全量语义) */
   private publishLayers() {
-    for (const layer of this.map?.layers ?? []) {
+    for (const layer of this.layers()) {
       const msg = this.layerMessage(layer);
       if (msg.type !== "layer") continue;
       const id = `${layer.kind}:${layer.clipId}`;
@@ -502,11 +650,51 @@ export class OnlineSnapshotSource implements SnapshotSource {
     }
   }
 
+  /** L2 的 `ranges` 写入了(写入即就绪):更新镜像,重发就绪 */
+  private onStoreReady(layerKey: string, ranges: Array<[number, number]>) {
+    const set = new Set<number>();
+    for (const [a, b] of ranges) for (let f = a; f <= b; f++) set.add(f);
+    this.inStore.set(layerKey, set);
+    if (this.layers().some((l) => l.resultKey === layerKey)) this.publishLayers();
+  }
+
+  /** 层表到了:把每层已在 L2 里的区间读进镜像(关掉再开时,已在库里的块不再请求) */
+  private async loadStoreRanges(): Promise<void> {
+    const store = this.store;
+    if (!store || this.tier !== "original") return;
+    let changed = false;
+    for (const layer of this.layers()) {
+      if (this.rangesLoaded.has(layer.resultKey)) continue;
+      this.rangesLoaded.add(layer.resultKey);
+      try {
+        const ranges = await store.getRanges(layer.resultKey);
+        const set = this.inStore.get(layer.resultKey) ?? new Set<number>();
+        for (const [a, b] of ranges) for (let f = a; f <= b; f++) set.add(f);
+        this.inStore.set(layer.resultKey, set);
+        changed = true;
+      } catch { this.rangesLoaded.delete(layer.resultKey); }
+    }
+    if (changed) this.publishLayers();
+  }
+
   private smallHashOf(kind: ReadyKind, key: string, localFrame: number): string | null {
-    for (const layer of this.map?.layers ?? []) {
+    for (const layer of this.layers()) {
       if (layer.kind !== kind || layer.key !== key) continue;
       const hash = this.manifests.get(this.manifestKey(layer, this.segOf(layer, localFrame)))?.small.get(localFrame);
       if (hash) return hash;
+    }
+    return null;
+  }
+
+  /**
+   * 原尺寸:这一帧的 HTML 快照哈希与它所在的那一层。一层只取层表记录的那一种环境的帧(C10 契约第 5 节):
+   * 清单按层表那一层的结果键取,而结果键就是「内容键 × 那个环境的指纹」。
+   */
+  private frameOf(kind: ReadyKind, key: string, localFrame: number): { hash: string; layer: OnlineLayer } | null {
+    for (const layer of this.layers()) {
+      if (layer.kind !== kind || layer.key !== key) continue;
+      const hash = this.manifests.get(this.manifestKey(layer, this.segOf(layer, localFrame)))?.frames.get(localFrame);
+      if (hash) return { hash, layer };
     }
     return null;
   }
@@ -541,11 +729,13 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   private async tickOnce(): Promise<void> {
+    if (this.storeWait) await this.storeWait;
     const now = this.now();
     if (this.projectId && now - this.lastMapAt >= LAYER_MAP_POLL_MS) {
       this.lastMapAt = now;
       await this.loadMap();
     }
+    await this.loadStoreRanges();
     await this.loadWindow(now);
     this.prefetchWindow();
   }
@@ -576,20 +766,18 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const map = parseLayerMap(reply.body);
     if (!map) return;
     this.mapKnown = true;
-    const sig = JSON.stringify(map.layers) + `|${map.span}`;
+    const sig = `v${map.v}|` + JSON.stringify(map.layers) + `|${map.span}`;
     if (sig === this.mapSig) return;
-    const prev = this.map;
+    const prevLayers = this.layers();
     this.map = map;
     this.mapSig = sig;
-    if (prev) {
-      const alive = new Set(map.layers.map((l) => `${l.kind}:${l.clipId}`));
-      for (const old of prev.layers) {
-        const id = `${old.kind}:${old.clipId}`;
-        if (alive.has(id)) continue;
-        // 这张卡不在层表里了(改判轻、删了):发一条空层,把页面表里的旧区间撤掉
-        this.emitted.delete(id);
-        this.emit({ type: "layer", clipId: old.clipId, kind: old.kind, key: old.key, ranges: [] });
-      }
+    const alive = new Set(this.layers().map((l) => `${l.kind}:${l.clipId}`));
+    for (const old of prevLayers) {
+      const id = `${old.kind}:${old.clipId}`;
+      if (alive.has(id)) continue;
+      // 这张卡不在层表里了(改判轻、删了、这一档不认了):发一条空层,把页面表里的旧区间撤掉
+      this.emitted.delete(id);
+      this.emit({ type: "layer", clipId: old.clipId, kind: old.kind, key: old.key, ranges: [] });
     }
     // 换了键的层(重渲之后):就绪区间按新键重算、全量发;新键的清单还没到时区间是空的,页面按兜底顺序显示占位
     this.publishLayers();
@@ -608,7 +796,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     if (!map) return;
     const [lo, hi] = this.windowFrames();
     const wanted: { seg: [number, number]; key: string }[] = [];
-    for (const layer of map.layers) {
+    for (const layer of this.layers()) {
       if (this.deps.skipLayer?.(layer.clipId)) continue;
       for (const seg of segmentsInWindow(layer, map.span, lo, hi)) {
         const key = this.manifestKey(layer, seg);
@@ -621,6 +809,16 @@ export class OnlineSnapshotSource implements SnapshotSource {
     }
     if (!wanted.length) return;
     let changed = false;
+    const pick = (list: unknown, seg: [number, number]) => {
+      const out = new Map<number, string>();
+      for (const item of Array.isArray(list) ? (list as unknown[]) : []) {
+        if (!Array.isArray(item) || !Number.isInteger(item[0]) || !/^[0-9a-f]{64}$/.test(String(item[1]))) continue;
+        const f = item[0] as number;
+        if (f < seg[0] || f > seg[1]) continue;
+        out.set(f, String(item[1]));
+      }
+      return out;
+    };
     await Promise.all(wanted.map(async ({ seg, key }) => {
       this.manifestFlying.add(key);
       try {
@@ -628,20 +826,17 @@ export class OnlineSnapshotSource implements SnapshotSource {
         this.stats.manifestFetches++;
         const prev = this.manifests.get(key);
         if (reply?.type !== "content.item" || reply.missing) {
-          this.manifests.set(key, { small: prev?.small ?? new Map(), full: false, fetchedAt: this.now() });
+          this.manifests.set(key, { small: prev?.small ?? new Map(), frames: prev?.frames ?? new Map(), full: false, fetchedAt: this.now() });
           return;
         }
-        const body = reply.body as { small?: unknown } | undefined;
-        const small = new Map<number, string>();
-        for (const item of Array.isArray(body?.small) ? (body!.small as unknown[]) : []) {
-          if (!Array.isArray(item) || !Number.isInteger(item[0]) || !/^[0-9a-f]{64}$/.test(String(item[1]))) continue;
-          const f = item[0] as number;
-          if (f < seg[0] || f > seg[1]) continue;
-          small.set(f, String(item[1]));
-        }
-        const full = small.size === seg[1] - seg[0] + 1;
-        if (!prev || prev.small.size !== small.size || [...small].some(([f, h]) => prev.small.get(f) !== h)) changed = true;
-        this.manifests.set(key, { small, full, fetchedAt: this.now() });
+        const body = reply.body as { small?: unknown; frames?: unknown } | undefined;
+        const small = pick(body?.small, seg);
+        const frames = pick(body?.frames, seg);
+        const mine = this.tier === "original" ? frames : small;
+        const full = mine.size === seg[1] - seg[0] + 1;
+        const before = this.tier === "original" ? prev?.frames : prev?.small;
+        if (!before || before.size !== mine.size || [...mine].some(([f, h]) => before.get(f) !== h)) changed = true;
+        this.manifests.set(key, { small, frames, full, fetchedAt: this.now() });
       } catch {
         this.stats.errors++;
       } finally {
@@ -651,27 +846,71 @@ export class OnlineSnapshotSource implements SnapshotSource {
     if (changed && this.map === map && !this.stopped) this.publishLayers();
   }
 
-  /** 预取:这一窗口里当前可见的重层、有小位图的帧,离播放头近的先取 */
+  /** 预取:这一窗口里当前可见的重层、这一档有块的帧,离播放头近的先取;已在 L2 里的不再请求 */
   private prefetchWindow() {
     const map = this.map;
     if (!map || !this.deps.assetBase()) return;
     const [lo, hi] = this.windowFrames();
     const g = Math.max(0, Math.floor(this.playhead.t * (map.fps || this.playhead.fps) + 1e-6));
-    const wanted: { hash: string; dist: number }[] = [];
-    for (const layer of map.layers) {
+    const wanted: { hash: string; dist: number; layer: OnlineLayer; local: number }[] = [];
+    for (const layer of this.layers()) {
       if (this.deps.skipLayer?.(layer.clipId)) continue;
       const first = Math.max(lo, layer.firstFrame), last = Math.min(hi, layer.firstFrame + layer.count - 1);
       for (let gf = first; gf <= last; gf++) {
-        const hash = this.smallHashOf(layer.kind, layer.key, gf - layer.firstFrame);
-        if (hash && !this.cache.has(hash) && !this.inflight.has(hash)) wanted.push({ hash, dist: Math.abs(gf - g) });
+        const local = gf - layer.firstFrame;
+        if (this.tier === "original") {
+          const hit = this.frameOf(layer.kind, layer.key, local);
+          if (!hit) continue;
+          const id = `snap/${hit.hash}`;
+          if (this.store?.hasBlock(id)) {
+            // 块已在库里(同一内容别的层取过、或上次打开取过):不请求,补记这一层的就绪
+            if (!this.inStore.get(layer.resultKey)?.has(local)) void this.store.putRange(layer.resultKey, local, local).catch(() => {});
+            continue;
+          }
+          if (!this.cache.has(id) && !this.inflight.has(id)) wanted.push({ hash: hit.hash, dist: Math.abs(gf - g), layer, local });
+        } else {
+          const hash = this.smallHashOf(layer.kind, layer.key, local);
+          if (hash && !this.cache.has(hash) && !this.inflight.has(hash)) wanted.push({ hash, dist: Math.abs(gf - g), layer, local });
+        }
       }
     }
     wanted.sort((a, b) => a.dist - b.dist);
     const seen = new Set<string>();
-    for (const { hash } of wanted) {
-      if (seen.has(hash)) continue;
-      seen.add(hash);
-      void this.fetchSmall(hash).catch(() => { /* 下一轮再取 */ });
+    for (const w of wanted) {
+      if (seen.has(w.hash)) continue;
+      seen.add(w.hash);
+      if (this.tier === "original") void this.fetchOriginal(w.hash, w.layer, w.local).catch(() => { /* 下一轮再取 */ });
+      else void this.fetchSmall(w.hash).catch(() => { /* 下一轮再取 */ });
+    }
+  }
+
+  /** 从素材服务取一块(凭只读票据);超时、中止都算失败 */
+  private async fetchAsset(ns: "px" | "snap", hash: string, signal?: AbortSignal): Promise<{ bytes: Uint8Array; type: string }> {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const ms = this.deps.assetTimeoutMs ?? 15_000;
+    let deadline: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        (async () => {
+          const base = this.deps.assetBase();
+          if (!base) throw new Error("还没有远程素材服务");
+          const headers = await this.deps.authHeaders();
+          const f = this.deps.fetch ?? fetch;
+          const res = await f(`${base.replace(/\/+$/, "")}/${ns}/${hash}`, { headers, signal: controller.signal, cache: "force-cache" });
+          if (!res.ok) throw Object.assign(new Error(`取不到 ${ns}/${hash}:${res.status}`), { status: res.status });
+          const bytes = new Uint8Array(await res.arrayBuffer());
+          const fallback = ns === "px" ? "image/webp" : "text/html";
+          const type = (res.headers.get("content-type") || fallback).split(";")[0].trim() || fallback;
+          return { bytes, type };
+        })(),
+        new Promise<never>((_, reject) => { deadline = setTimeout(() => { controller.abort(); reject(new Error("素材请求超时")); }, ms); }),
+      ]);
+    } finally {
+      if (deadline !== null) clearTimeout(deadline);
+      signal?.removeEventListener("abort", abort);
     }
   }
 
@@ -681,37 +920,17 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const work = new Promise<string>((resolve, reject) => {
       this.queue.push(async () => {
         try {
-          const controller = new AbortController();
-          const abort = () => controller.abort();
-          signal?.addEventListener("abort", abort, { once: true });
-          if (signal?.aborted) abort();
-          const ms = this.deps.assetTimeoutMs ?? 15_000;
-          let deadline: ReturnType<typeof setTimeout> | null = null;
-          let bytes: Uint8Array;
-          let type: string;
-          try {
-            ({ bytes, type } = await Promise.race([
-              (async () => {
-                const base = this.deps.assetBase();
-                if (!base) throw new Error("还没有远程素材服务");
-                const headers = await this.deps.authHeaders();
-                const f = this.deps.fetch ?? fetch;
-                const res = await f(`${base.replace(/\/+$/, "")}/px/${hash}`, { headers, signal: controller.signal, cache: "force-cache" });
-                if (!res.ok) throw Object.assign(new Error(`取不到小位图 ${hash}:${res.status}`), { status: res.status });
-                const bytes = new Uint8Array(await res.arrayBuffer());
-                const type = (res.headers.get("content-type") || "image/webp").split(";")[0].trim() || "image/webp";
-                return { bytes, type };
-              })(),
-              new Promise<never>((_, reject) => { deadline = setTimeout(() => { controller.abort(); reject(new Error("小位图请求超时")); }, ms); }),
-            ]));
-          } finally {
-            if (deadline !== null) clearTimeout(deadline);
-            signal?.removeEventListener("abort", abort);
+          let block = this.store ? await this.store.getBlock(`px/${hash}`) : null;
+          if (block) this.stats.l2Hits++;
+          else {
+            block = await this.fetchAsset("px", hash, signal);
+            this.stats.smallFetches++;
+            this.stats.smallBytes += block.bytes.length;
+            // 低内存档的 L2 只存小尺寸(C10 契约第 4 节)
+            if (this.store) void this.store.putBlock(`px/${hash}`, block.bytes, block.type).catch(() => {});
           }
-          const url = `data:${type};base64,${bytesToBase64(bytes)}`;
+          const url = `data:${block.type || "image/webp"};base64,${bytesToBase64(block.bytes)}`;
           this.cache.set(hash, url);
-          this.stats.smallFetches++;
-          this.stats.smallBytes += bytes.length;
           resolve(url);
           try { this.onFetched?.(); } catch { /* 宿主坏了 */ }
         } catch (e) {
@@ -722,6 +941,42 @@ export class OnlineSnapshotSource implements SnapshotSource {
       this.pump();
     }).finally(() => { this.inflight.delete(hash); });
     this.inflight.set(hash, work);
+    return work;
+  }
+
+  /**
+   * 原尺寸(C10 契约第 5 节「流程」):可见范围的重层 → 按层表取清单 → 缺的块凭只读票据从素材服务拉 → 写 L2 →
+   * `ranges` 就绪 → 可见舞台下一拍换上。块在 L2 里就不请求。
+   */
+  private fetchOriginal(hash: string, layer: OnlineLayer, localFrame: number, signal?: AbortSignal): Promise<string> {
+    const id = `snap/${hash}`;
+    const flying = this.inflight.get(id);
+    if (flying) return flying;
+    const work = new Promise<string>((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          let block = this.store ? await this.store.getBlock(id) : null;
+          if (block) this.stats.l2Hits++;
+          else {
+            block = await this.fetchAsset("snap", hash, signal);
+            this.stats.snapFetches++;
+            this.stats.snapBytes += block.bytes.length;
+            if (this.store) await this.store.putBlock(id, block.bytes, block.type || "text/html").catch(() => {});
+          }
+          const html = textDecoder ? textDecoder.decode(block.bytes) : String.fromCharCode(...block.bytes);
+          this.cache.set(id, html);
+          // 写入即就绪:这一层这一帧记进 ranges;L2 通知之后本来源重发就绪(onStoreReady)
+          if (this.store && !this.inStore.get(layer.resultKey)?.has(localFrame)) await this.store.putRange(layer.resultKey, localFrame, localFrame).catch(() => {});
+          resolve(html);
+          try { this.onFetched?.(); } catch { /* 宿主坏了 */ }
+        } catch (e) {
+          this.stats.errors++;
+          reject(e);
+        }
+      });
+      this.pump();
+    }).finally(() => { this.inflight.delete(id); });
+    this.inflight.set(id, work);
     return work;
   }
 

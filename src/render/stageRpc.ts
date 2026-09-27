@@ -36,6 +36,13 @@ export interface HostCapabilities {
    */
   lowMemory: boolean;
   /**
+   * 这一台舞台有后台舞台做伴(双舞台,父页在 src 查询串里给 `dual=1`):能在后台舞台测量卡片成本(C10 契约第 2 节
+   * 「宿主能力表照实报」;在线普通档开了后台舞台也报 true)。低内存档、单舞台为 false。
+   */
+  measure: boolean;
+  /** 能在后台舞台追到精确活渲再互换(K5 第二路);条件同 `measure` */
+  catchUp: boolean;
+  /**
    * 父页在 src 查询串里给的舞台 id(`A` / `B`)。**只是实例名,和角色无关**(E1):
    * 角色只经 `setRole` 定,两个 iframe 谁当 `front` 都行、中途还会互换(K5)。
    */
@@ -269,6 +276,13 @@ export interface StageRpcApi {
    * 新的 `setTime` / `play` / `setProject` / `setRole` 打断它(回 `ok: false, reason: 'superseded'`)。
    */
   settleLowMemory(tSec: number, opts?: { timeoutMs?: number }): Promise<LowMemorySettleResult>;
+  /**
+   * 后台活的开始 / 停止(C10 契约第 2 节「后台舞台的摆放与节拍」):后台舞台 `opacity: 0` 原位叠放,舞台里的
+   * `requestIdleCallback` 不可靠,由编辑器页判空闲(页面可见、父页 rAF 间隔不持续超过 500 ms、父页自己的 rIC 在回调)
+   * 经这条 RPC 发开始、停止。舞台逐帧用 `setTimeout(0)` 推进,帧与帧之间查停止标志,停着就等,不丢活。
+   * 缺省(不发)= 开着(桌面运行环境)。
+   */
+  setBackWork(on: boolean): Promise<{ ok: true }>;
 }
 
 export type StageEvent =
@@ -284,7 +298,11 @@ export type StageEvent =
    */
   | { type: "probe"; identityKey: string; fps: number; stepMs: number; inlineMs: number; rasterMs: number; serializeMs: number; catchUpMs: number; capped?: boolean; kind: "random" | "stepped"; vtOk?: boolean; seekOk?: boolean; seekMs?: number | null }
   | { type: "demote"; clipId: string }
-  | { type: "probe-frame"; clipId: string; localFrame: number; html: string };
+  /**
+   * K1 探针推过的一帧。跨源的在线舞台(C10 契约第 2 节「大块产出压成可转移的 ArrayBuffer」)不直接传大字符串:
+   * `html` 为空串,改在 `htmlGz` 里交 gzip 压过的字节(随 postMessage 转移,不拷贝),父页用 `probeFrameHtml` 解开。
+   */
+  | { type: "probe-frame"; clipId: string; localFrame: number; html: string; htmlGz?: ArrayBuffer };
 
 export const STAGE_EVENT_TYPES = new Set<StageEvent["type"]>(["mediaReady", "frame", "ended", "settled", "probe", "demote", "probe-frame"]);
 
@@ -336,7 +354,7 @@ export interface StageRpcClient extends StageRpcApi {
 
 const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitTest", "rectsWithBounds", "size", "setProxy", "setRole", "setPlan",
   "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots", "setMediaPolicy",
-  "settleLowMemory"];
+  "settleLowMemory", "setBackWork"];
 
 /**
  * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。
@@ -501,9 +519,31 @@ export function serveStageRpc(api: StageRpcApi, opts: { parentOrigin?: string } 
   return () => window.removeEventListener("message", onMessage);
 }
 
-/** 舞台侧:向父页发一条事件(七种之一) */
-export function postStageEvent(e: StageEvent, parentOrigin = "*"): void {
-  window.parent?.postMessage(e, parentOrigin);
+/** 舞台侧:向父页发一条事件(七种之一)。`transfer` 里的 ArrayBuffer 随消息转移(不拷贝,发完本侧就不能再用) */
+export function postStageEvent(e: StageEvent, parentOrigin = "*", transfer: Transferable[] = []): void {
+  if (transfer.length) window.parent?.postMessage(e, parentOrigin, transfer);
+  else window.parent?.postMessage(e, parentOrigin);
+}
+
+/** 舞台侧:把一帧 HTML 快照压成可转移的字节(gzip);浏览器没有 `CompressionStream` 时回 null(调用方照旧传字符串) */
+export async function compressHtml(html: string): Promise<ArrayBuffer | null> {
+  const CS = (globalThis as { CompressionStream?: new (f: string) => TransformStream<Uint8Array, Uint8Array> }).CompressionStream;
+  if (!CS || typeof Blob === "undefined") return null;
+  try {
+    const stream = new Blob([html]).stream().pipeThrough(new CS("gzip"));
+    return await new Response(stream).arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+/** 父页侧:取出 `probe-frame` 的 HTML(带 `htmlGz` 的先解压) */
+export async function probeFrameHtml(e: { html: string; htmlGz?: ArrayBuffer }): Promise<string> {
+  if (!e.htmlGz) return e.html;
+  const DS = (globalThis as { DecompressionStream?: new (f: string) => TransformStream<Uint8Array, Uint8Array> }).DecompressionStream;
+  if (!DS) return e.html;
+  const stream = new Blob([e.htmlGz]).stream().pipeThrough(new DS("gzip"));
+  return await new Response(stream).text();
 }
 
 /** 舞台侧:握手(带宿主能力表,J4) */
@@ -565,11 +605,20 @@ export function detectHostCapabilities({ online = false }: { online?: boolean } 
   }
   // `?glOffscreen=0`:把探测强制为 false(R9 验收「能力退路」;glHost 读同一个开关走主线程)
   if (q.get("glOffscreen") === "0") offscreenGl = false;
+  /*
+   * c10a 第 8 节:只在在线模式里判(deviceMemory、粗指针 + 触点 + 屏幕长边,设备设置可覆盖);桌面恒为普通档。
+   * C10:父页在 src 里给了 `lm=0|1` 就照它(跨源舞台读不到编辑器页那个源的设备设置,自己判可能判出另一档)。
+   */
+  const lm = q.get("lm");
+  const lowMemory = online && lm === "1" ? true : online && lm === "0" ? false : lowMemoryMode(online);
+  // C10 契约第 2 节:开了后台舞台(父页给 `dual=1`)、又不是低内存档,就照实报能测量、能追活渲
+  const backStage = q.get("dual") === "1" && !lowMemory;
   return {
     prerender: q.get("prerender") === "1",
     offscreenGl,
-    // c10a 第 8 节:只在在线模式里判(deviceMemory、粗指针 + 触点 + 屏幕长边,设备设置可覆盖);桌面恒为普通档
-    lowMemory: lowMemoryMode(online),
+    lowMemory,
+    measure: backStage,
+    catchUp: backStage,
     // stageId **只是实例名,和角色无关**(E1):两个 iframe 是 `A` / `B`,谁是 front / back
     // 只经 setRole 定。缺省给 `A` 而不是 `front`,免得又把实例名读成角色名。
     stageId: q.get("id") || "A",

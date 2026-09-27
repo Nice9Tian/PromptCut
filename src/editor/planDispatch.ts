@@ -22,7 +22,7 @@
  */
 import type { Project } from "../kernel/project";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
-import { planPipelines, type PipelinePlan } from "../render/pipelinePlan.mjs";
+import { clipWeight, planPipelines, type PipelinePlan } from "../render/pipelinePlan.mjs";
 import { resolveTuning, type PipelineTuning } from "../render/pipelineTuning.mjs";
 import type { StageRole } from "../render/stageRpc";
 import { wirePlan } from "../render/wirePlan";
@@ -46,6 +46,11 @@ let lowMemory = false;
 /** 界限搜索判轻的卡的 identityKey;null = 还没有结果 */
 let lowMemoryLight: ReadonlySet<string> | null = null;
 let judged: PipelinePlan | null = null;
+/**
+ * L4(在线普通档,C10 契约第 6 节、第 18 节第 1 条):分派时每张重卡每拍的固定成本换成实测的换帧成本 `swapMs`
+ * (`planPipelines` 的 `opts.deadMs`),与播放时 `beatSwap.mjs` 的 `fitBeatSwaps` 同一个数。null = 桌面的 `DEAD_MS`。
+ */
+let deadMs: number | null = null;
 /** 上一次真的发出去的那份表的序列化结果，用来省掉「没变还发一遍」 */
 let sentWire = "";
 let scheduled = false;
@@ -77,8 +82,9 @@ function recompute(): void {
   }
   const { identityKeys, frameModes } = clipIdentityOf(project);
   const fps = Math.max(1, project.fps || 30);
-  plan = planPipelines(project, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}) });
-  judged = lowMemory ? planPipelines(project, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [] }) : plan;
+  const dead = deadMs !== null ? { deadMs } : {};
+  plan = planPipelines(project, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}), ...dead });
+  judged = lowMemory ? planPipelines(project, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [], ...dead }) : plan;
 }
 
 /**
@@ -179,11 +185,40 @@ export function planLowMemoryLight(): ReadonlySet<string> | null {
   return lowMemoryLight;
 }
 
+/** L4:在线普通档把分派的每拍重卡成本换成实测换帧成本(`null` 回到桌面的 `DEAD_MS`)。变了才重算重发 */
+export function setPlanDeadMs(ms: number | null): void {
+  const next = ms !== null && Number.isFinite(ms) && ms >= 0 ? ms : null;
+  if (next === deadMs) return;
+  deadMs = next;
+  schedule();
+}
+
+/**
+ * 这一刻轻管线里活渲的卡每拍占了多少毫秒(C10 契约第 18 节第 1 条的「已占用」):当前位置 `light` 集合里每张卡的
+ * `clipWeight(...).w` 之和,口径与 `planPipelines` 的贪心同一份。不在任何位置(没有表、空白处)回 0。
+ */
+export function lightCostAt(t: number): number {
+  if (!plan || !project) return 0;
+  const seg = plan.segments.find((s) => t >= s.fromSec && t < s.toSec);
+  if (!seg || !seg.light.size) return 0;
+  const fps = Math.max(1, project.fps || 30);
+  const { identityKeys, frameModes } = clipIdentityOf(project);
+  const byKey = new Map(costs.map((r) => [r.identityKey, r]));
+  let sum = 0;
+  for (const clipId of seg.light) {
+    const key = identityKeys[clipId];
+    const w = clipWeight(key ? byKey.get(key) : undefined, frameModes[clipId], fps, tuning).w;
+    if (Number.isFinite(w)) sum += w;
+  }
+  return sum;
+}
+
 /** 测试用 */
 export function resetPlanDispatch(): void {
   lowMemory = false;
   lowMemoryLight = null;
   judged = null;
+  deadMs = null;
   project = null;
   costs = [];
   tuning = resolveTuning(null);

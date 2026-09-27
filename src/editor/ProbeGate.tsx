@@ -6,6 +6,8 @@ import { onProbeProgress, probeProgress, requeueProbeRun, syncProbeRun, type Pro
 import { whenStageReady } from "./stageBridge";
 import { cardsStamp, onCardsUpdated } from "../kernel/registry";
 import { whenStagesHaveCards } from "./stageCards";
+import { ONLINE } from "../online/mode";
+import { lowMemoryMode } from "../online/lowMemory";
 import "./ProbeGate.css";
 
 /**
@@ -25,8 +27,10 @@ import "./ProbeGate.css";
  */
 export function ProbeGate() {
   const project = useStore((s) => s.project);
-  // `?preview=stage` 才有后台舞台（E1）；缺省的 legacy 一个字都不受影响
-  const enabled = previewMode() === "stage";
+  // `?preview=stage` 才有后台舞台（E1）；缺省的 legacy 一个字都不受影响。
+  // 在线普通档恢复（C10 契约第 3 节：打开项目在加载遮罩下测完；后台舞台握不上手、退回单舞台时探针等不到后台舞台，遮罩不出现）；
+  // 低内存档不测（c10a 第 8 节：不开后台舞台、不跑 ProbeGate；界限搜索归 `claude/c10-cost`）
+  const enabled = previewMode() === "stage" && !(ONLINE && lowMemoryMode(true));
   const [p, setP] = useState<ProbeProgress>(probeProgress);
 
   useEffect(() => {

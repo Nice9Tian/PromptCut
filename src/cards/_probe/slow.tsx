@@ -1,4 +1,6 @@
 import type { CardDef, CardProps } from "../../kernel/types";
+import { useRef } from "react";
+import { isExportMode } from "../../kernel/clock";
 
 /**
  * K6 的判例卡：**每一次 React 渲染都烧掉 `burnMs` 毫秒**。
@@ -54,4 +56,30 @@ export const probeSlowCard: CardDef<{ burnMs: number; label: string }> = {
     { key: "label", type: "text", label: "文字" },
   ],
   Component: ProbeSlowCard,
+};
+
+/**
+ * 同一张卡的推帧版(C10 本机验收,`scripts/probes/c10-browser-probe.mjs`):`direct` 卡在预渲染管线里不产快照,
+ * 渲染节点预渲染不了;在线普通档要验「重层贴节点预渲染好的原尺寸快照」,得有一张在哪台机器上都稳定判重、
+ * 又由渲染节点产快照的卡。画法与 `probe-slow` 相同(只画自己那一块,审阅表里 `independent`)。
+ *
+ * **只在舞台里、每个新时刻烧一次时间**(导出页 / 预渲染间里不烧;被抑制、t 冻住时的重渲染不烧):成本是给「舞台上活渲装不下」用的;预渲染间推一帧要渲好几次、
+ * 推帧卡还要从入点推到目标帧,在那里也烧就会把预渲染拖到协议超时。画面与烧不烧无关。
+ */
+function ProbeSlowSteppedCard(props: CardProps<{ burnMs: number; label: string }>) {
+  // 每个新的时刻只烧一次:被抑制(t 冻住)时的重渲染不算这张卡在活渲
+  const last = useRef<number | null>(null);
+  const fresh = last.current !== (props.t ?? 0);
+  last.current = props.t ?? 0;
+  const burnMs = isExportMode() || !fresh ? 0 : props.params.burnMs;
+  return <ProbeSlowCard {...props} params={{ ...props.params, burnMs }} />;
+}
+
+export const probeSlowSteppedCard: CardDef<{ burnMs: number; label: string }> = {
+  ...probeSlowCard,
+  id: "probe-slow-stepped",
+  name: "探针卡 · 可调成本(推帧)",
+  description: "probe-slow 的推帧版:舞台里每次渲染烧掉 burnMs 毫秒(预渲染间里不烧);渲染节点能为它产快照",
+  frameMode: "stateful",
+  Component: ProbeSlowSteppedCard,
 };
