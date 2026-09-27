@@ -751,6 +751,8 @@ try {
   }, { id: heavyClip, salt: salts[1] }), 30_000, 300);
   check(creatorSaw, '修改经文档服务到了创建者');
   const editAt = Date.now();
+  // L22:第 3 步的时刻分解。改完就开始采样(手机每秒一次、创建者的队列诊断每 2 秒一次),第 3 步末尾算各段时刻
+  const tl3 = startStep3Timeline({ t0: t3, heavyClip, creatorSawAt: editAt });
   /*
    * c10a 契约第 17 节(4):补渲排在本机判重的任务之后。改动让重卡重渲(本机判重的 normal 任务),
    * 同时在手机上再放一张轻卡(缺产物 → 补渲);节点先做完 normal 的,空下来再做 backfill 的。
@@ -775,6 +777,7 @@ try {
   check(newPx, '手机收到重渲后的新小尺寸');
   // 整段重渲完:内容库里新键下每一段清单都在、小位图都在素材服务上
   const layer1 = await until('重渲整段完成(新键下每帧两档齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore && l.frames === l.count && l.smallCount === l.frames && l.missingSmall.length === 0 ? l : null; }, 900_000, 2000);
+  const layer1At = Date.now();
   check(layer1, '层表里重卡片段换了新的键、整段重渲完成', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12), why: layer1 ? undefined : state.layerWhy });
   // 补渲排在后面:手机为新放的轻卡发的补渲做完,核对节点的认领先后
   const bf3 = state.extraClip ? await until('手机为新放的轻卡发出补渲任务', () => P(phone, (spec) => {
@@ -801,8 +804,9 @@ try {
   check(extraSmall, '新放的轻卡的补渲小尺寸回到手机', extraSmall);
   state.order = order;
   await shot(phone, '3-phone-after-edit');
-  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxRequests: newPx?.count ?? 0, fullRerenderMs: layer1 ? Date.now() - t3 : null,
-    keyChanged: !!layer1, newKey: layer1 ? { key: layer1.key.slice(0, 12), frames: layer1.frames, small: layer1.smallCount } : null, backfillOrder: state.order };
+  const timeline = await tl3.finish({ layer1, pxBefore, extraClip: state.extraClip, fullRerenderAt: layer1At });
+  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxRequests: newPx?.count ?? 0, fullRerenderMs: layer1 ? layer1At - t3 : null,
+    keyChanged: !!layer1, newKey: layer1 ? { key: layer1.key.slice(0, 12), frames: layer1.frames, small: layer1.smallCount } : null, backfillOrder: state.order, timeline };
   say('step3.done', out.steps.edit);
 
   /* ---------------------------------------------------------------- 4. 低内存档逐帧导出 */
@@ -1047,6 +1051,116 @@ async function stageDiag(page) {
   return { badResponses: page.badResponses?.slice(-12), consoleErrors: page.consoleErrors?.slice(-6), pageErrors: page.pageErrors?.slice(-5), preview: await page.evaluate(() => { try { return window.__pcPreviewDiag?.() ?? null; } catch { return null; } }).catch(() => null), heavyClip: state.heavyClip, frameUrl: f ? f.url().split('?')[0] : null, stage, online: online ? JSON.parse(JSON.stringify(online)) : null };
 }
 
+/**
+ * L22:第 3 步「新的小尺寸到手机」的时刻分解。改动一到创建者就开始在后台采样,第 3 步末尾 `finish` 算出各段时刻:
+ *
+ *   edit(手机改参数) → creatorSaw(创建者收到) → planPublished(创建者发布 plan,诊断 `published`) → planClaimed(节点认领 plan)
+ *   → planSplit(plan 的 task.done,切出细任务) → 各重卡细任务的 claim / render(执行器 `executor.render`,原尺寸与小尺寸同一趟产)
+ *   / done(task.done 到创建者:推送两档与写清单都在它之前) → phoneLayerMap(手机层表换成新键) → phoneManifest(手机取到新键下带小尺寸的清单)
+ *   → phoneReadyIndex(新键的就绪区间进了手机的就绪表) → phoneMounted(手机舞台贴上新键的画面) → phoneNewPx(手机第一次请求新哈希的 px/)。
+ *
+ * 手机那边每秒采一次(只记变化),创建者的队列诊断每 2 秒取一次(`events` 只留最近 80 条,采样时累积)。每个时刻给绝对时刻(ISO)
+ * 与距改动(`t0`)的毫秒数。拿不到数据源的段记 null,并在 `missing` 里写原因。
+ */
+function startStep3Timeline({ t0, heavyClip, creatorSawAt }) {
+  const phone = state.phone;
+  const phoneTrack = [];
+  const events = new Map();
+  let lastDiag = null;
+  let running = true;
+  let lastSig = '';
+  const loop = (async () => {
+    let lastDiagAt = 0;
+    while (running) {
+      const at = Date.now();
+      const s = await P(phone, (id) => {
+        const o = window.__pcOnlineSnapshots?.();
+        const f = window.__pcPreviewDiag?.()?.snapshotFeed;
+        const layer = o?.layers?.find((l) => l.clipId === id) ?? null;
+        const ready = f?.ready?.find((r) => r.clipId === id)?.kinds?.[0] ?? null;
+        return { key: layer?.key?.slice(0, 12) ?? null, ready: layer?.ready ?? 0, feedKey: ready?.key ?? null, feedRanges: ready?.ranges ?? 0,
+          pick: f?.picks?.find((m) => m.clipId === id)?.key ?? null, mounted: f?.mounted?.find((m) => m.clipId === id)?.key ?? null, t: window.__pcStore?.getState?.().t ?? null };
+      }, heavyClip).catch(() => null);
+      const w = await stageSample(phone).then((x) => x?.wraps?.find((y) => y.id === heavyClip) ?? null, () => null);
+      if (s) {
+        const row = { ...s, small: !!w?.small, suppressed: !!w?.suppressed, placeholder: !!w?.placeholder };
+        const sig = JSON.stringify(row);
+        if (sig !== lastSig) { lastSig = sig; phoneTrack.push({ at, ...row }); }
+      }
+      if (at - lastDiagAt >= 2000) {
+        lastDiagAt = at;
+        const q = await diag().catch(() => null);
+        if (q) {
+          lastDiag = q;
+          for (const e of q.events ?? []) if (e.at >= t0 - 5000) events.set(`${e.at}|${e.event}|${e.id ?? ''}`, e);
+        }
+      }
+      await delay(Math.max(0, 1000 - (Date.now() - at)));
+    }
+  })();
+  const stamp = (at) => (Number.isFinite(at) ? { at: new Date(at).toISOString(), ms: at - t0 } : null);
+  return {
+    async finish({ layer1, pxBefore, extraClip, fullRerenderAt }) {
+      running = false;
+      await loop.catch(() => {});
+      const q = (await diag().catch(() => null)) ?? lastDiag;
+      for (const e of q?.events ?? []) if (e.at >= t0 - 5000) events.set(`${e.at}|${e.event}|${e.id ?? ''}`, e);
+      const missing = [];
+      const newKey = layer1?.key?.slice(0, 12) ?? null;
+      const resultKey = layer1?.resultKey ?? null;
+      // 创建者:改动之后发布的 plan(改参数、加轻卡各可能一版)
+      const pubs = (q?.published ?? []).filter((p) => p.at >= t0 - 1000).sort((a, b) => a.at - b.at);
+      const claims = (q?.claims ?? []).filter((c) => c.at >= t0 - 1000);
+      const plans = pubs.map((p) => {
+        const claim = claims.find((c) => c.id === p.planId);
+        const done = q?.tasks?.[p.planId];
+        const derived = q?.plans?.[p.planId] ?? null;
+        return { planId: p.planId.slice(0, 48), rev: p.projectRev, published: stamp(p.at), claimed: stamp(claim?.at), split: done?.state === 'done' ? stamp(done.at) : null,
+          derived: Array.isArray(derived) ? derived.length : null };
+      });
+      if (!pubs.length) missing.push('planPublished:诊断 published 里没有改动之后的发布(可能是别的节点发布的,或 published 被清过)');
+      // 重卡新键的细任务:id 是 snapshot:<resultKey>:<from>-<to>
+      const renders = [...events.values()].filter((e) => e.event === 'executor.render');
+      const heavyTasks = resultKey ? [...new Set([...claims.map((c) => c.id), ...Object.keys(q?.tasks ?? {})])].filter((id) => id.startsWith(`snapshot:${resultKey}:`)) : [];
+      const segs = heavyTasks.map((id) => {
+        const m = /:(\d+)-(\d+)$/.exec(id);
+        const claim = claims.find((c) => c.id === id);
+        const done = q?.tasks?.[id];
+        const r = renders.filter((e) => e.id === id).sort((a, b) => a.at - b.at).pop();
+        return { range: m ? `${m[1]}-${m[2]}` : id.slice(-12), from: m ? Number(m[1]) : null, priority: claim?.priority ?? null, claimed: stamp(claim?.at),
+          renderStart: r ? stamp(r.at - r.ms) : null, renderEnd: stamp(r?.at), renderMs: r?.ms ?? null, done: done?.state === 'done' ? stamp(done.at) : null,
+          pushMs: r && done?.state === 'done' ? done.at - r.at : null };
+      }).sort((a, b) => (a.claimed?.ms ?? Infinity) - (b.claimed?.ms ?? Infinity));
+      if (!resultKey) missing.push('heavyTasks:重渲没完成,不知道新键的 resultKey');
+      else if (!segs.length) missing.push('heavyTasks:诊断里没有新键的细任务(不是本机节点认领的?)');
+      if (segs.some((x) => !x.renderEnd)) missing.push('render:部分段的 executor.render 事件不在诊断 events(只留最近 80 条、采样间隔 2 秒)里');
+      // 手机那一侧
+      const first = (pred) => phoneTrack.find(pred)?.at;
+      const keyAt = newKey ? first((x) => x.key === newKey) : undefined;
+      const manifestAt = newKey ? first((x) => x.key === newKey && x.ready > 0) : undefined;
+      const readyAt = newKey ? first((x) => x.feedKey === newKey && x.feedRanges > 0) : undefined;
+      const mountedAt = newKey ? first((x) => x.mounted === newKey) : undefined;
+      // 手机播放头所在的段(重卡从第 0 帧起;span 与层表一致,缺省 60)
+      const t = phoneTrack.at(-1)?.t ?? null;
+      const phoneFrame = t === null ? null : Math.floor(t * FPS + 1e-6);
+      const heavySet = new Set(layer1?.smallHashes ?? []);
+      const pxAfter = phone.assets.filter((a) => a.ns === 'px' && a.method === 'GET' && !a.sub && a.at >= t0);
+      const heavyNew = pxAfter.filter((a) => heavySet.has(a.hash) && !pxBefore.has(a.hash));
+      const otherNew = pxAfter.filter((a) => !heavySet.has(a.hash) && !pxBefore.has(a.hash));
+      const reused = [...heavySet].filter((h) => pxBefore.has(h)).length;
+      if (!mountedAt) missing.push('phoneMounted:手机舞台一直没贴新键(暂停时低内存档停下追一帧画成活渲,不贴小尺寸;见 phoneTrack)');
+      const phoneSeg = segs.find((x) => x.from !== null && phoneFrame !== null && x.from <= phoneFrame && phoneFrame < x.from + 60) ?? null;
+      return {
+        t0: stamp(t0), creatorSaw: stamp(creatorSawAt), plans, heavySegments: segs, phoneFrame, phoneSegment: phoneSeg?.range ?? null,
+        phoneLayerMap: stamp(keyAt), phoneManifest: stamp(manifestAt), phoneReadyIndex: stamp(readyAt), phoneMounted: stamp(mountedAt),
+        phoneNewPx: { heavyFirst: stamp(heavyNew[0]?.at), heavyCount: heavyNew.length, otherFirst: stamp(otherNew[0]?.at), otherCount: otherNew.length,
+          heavyHashes: heavySet.size, heavyHashesAlreadyOnPhone: reused, extraClip: extraClip ? extraClip.slice(0, 8) : null },
+        fullRerender: stamp(fullRerenderAt), phoneTrack: phoneTrack.map((x) => ({ ms: x.at - t0, ...x, at: undefined })), missing,
+      };
+    },
+  };
+}
+
 /** 内容库里重卡片段的层与它各段清单:键、帧数、小尺寸张数;小位图都在素材服务上才回。没到齐时把原因记进 state.layerWhy */
 async function heavyLayer() {
   const reply = await conn.rpc({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${state.docId}` });
@@ -1071,5 +1185,5 @@ async function heavyLayer() {
     const has = await conn.client.has('px', h).catch((e) => `error: ${String(e?.message ?? e).slice(0, 120)}`);
     if (has !== true) { state.layerWhy = { frames, small: small.length, pxHas: has }; return null; }
   }
-  return { key: layer.key, frames, count: layer.count, smallCount: small.length, missingSmall };
+  return { key: layer.key, resultKey: layer.resultKey, frames, count: layer.count, smallCount: small.length, missingSmall, smallHashes: small };
 }
