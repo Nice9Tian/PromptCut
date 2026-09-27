@@ -68,8 +68,8 @@ export const SNAPSHOT_FETCH_MS = 30_000;
 /** render 会话建不成 / 结束后重建的退避 */
 const REDIAL_MIN_MS = 1000;
 const REDIAL_MAX_MS = 30_000;
-/** 推帧口径(契约第 4.3 节):探针 P2 证明顺推与 4 帧一批从头推相同之前,照桌面 4 帧一批 */
-export const BAKE_MODE: "batch4" | "seq" = "batch4";
+/** 推帧口径(契约第 4.3 节):逐帧顺推(探针 P2:DOM 独立卡与桌面 4 帧一批从头推等价、便宜 4～7 倍;画布卡不进浏览器) */
+export const BAKE_MODE: "batch4" | "seq" = "seq";
 /** 被踢、项目被删:不再重连(HT-a) */
 const FATAL_CLOSE = new Set([4003, 4004]);
 
@@ -252,6 +252,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     }
     if (!reply.ok) {
       stage.errors[reply.reason] = (stage.errors[reply.reason] ?? 0) + 1;
+      // 不可重试:再做一遍结果一样。`not-ready`(就绪闸超时)按可重试交回,同桌面 waitFrameReady 抛错的处理
       const finalReasons = new Set(["lossy", "no-clip", "no-control", "frame-mismatch", "unsupported"]);
       if (reply.reason === "role" || reply.reason === "no-project") l.pushedTo = null;
       throw Object.assign(new Error(`生成快照没成:${reply.reason}${reply.detail ? `(${reply.detail})` : ""}`), { retryable: !finalReasons.has(reply.reason) });

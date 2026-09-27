@@ -1442,19 +1442,35 @@ export default function StageView() {
     let bakeCursor: { project: Project; clipId: string; frame: number } | null = null;
     /** 就绪闸的上限(照预渲染 `waitFrameReady`:控件异步活、字体、图片都就绪才生成快照) */
     const BAKE_READY_MAX_MS = 20_000;
-    const bakeReady = async (stale: () => boolean): Promise<void> => {
+    /**
+     * 每帧生成快照之前的就绪闸(M7 探针 P2 之后主会话裁定,照预渲染 `server/bakery/frame-ready.mjs` 的 `waitFrameReady`):
+     * 控件的异步活、字体、图片都就绪才生成快照;等的时候照样给同一时刻的拍(不推时间,靠 rAF 装载的控件要拍才走得动);
+     * 控件报错、或 `BAKE_READY_MAX_MS` 之内没就绪,回不就绪 —— 这一段 `fail`,不出空白帧。
+     */
+    const bakeReady = async (stale: () => boolean): Promise<{ ok: true } | { ok: false; detail: string }> => {
       const t0 = realNow();
-      for (;;) {
-        await waitForFrameWork().catch(() => {});
-        document.documentElement.getBoundingClientRect();
-        await document.fonts.ready;
-        await Promise.all([...document.images].filter((img) => img.getAttribute("src")).map((img) => img.decode().catch(() => {})));
-        if (stale() || (!frameWorkStatus().length && document.fonts.status === "loaded")) return;
-        if (realNow() - t0 > BAKE_READY_MAX_MS) return;
-        // 等的时候只空跑同一时刻的拍,不推时间
+      let failure: string | null = null;
+      let done = false;
+      const gate = (async () => {
+        do {
+          await waitForFrameWork();
+          // 先排一次版,新挂上的文字才会开始装字体
+          document.documentElement.getBoundingClientRect();
+          await document.fonts.ready;
+          await Promise.all([...document.images].filter((img) => img.getAttribute("src") || img.getAttribute("srcset")).map((img) => img.decode().catch(() => {})));
+          // 一个装载做完可能在 React 提交里又挂上另一个控件
+        } while (frameWorkStatus().length > 0 || document.fonts.status !== "loaded");
+      })().catch((e) => { failure = String((e as Error)?.message ?? e); }).finally(() => { done = true; });
+      while (!done) {
+        await Promise.race([gate, new Promise<void>((r) => realSetTimeout(r, 4))]);
+        if (done || stale()) break;
+        if (realNow() - t0 > BAKE_READY_MAX_MS) {
+          return { ok: false, detail: `控件、字体或图片在 ${Math.round(BAKE_READY_MAX_MS / 1000)} 秒内未就绪:${frameWorkStatus().map((w) => w.label).join("、") || (document.fonts.status !== "loaded" ? "字体" : "图片")}` };
+        }
         clock?.tick(clock.now());
-        await new Promise<void>((r) => realSetTimeout(r, 4));
       }
+      if (failure) return { ok: false, detail: failure };
+      return { ok: true };
     };
     const sha256Hex = async (bytes: Uint8Array): Promise<string> =>
       [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -2115,8 +2131,8 @@ export default function StageView() {
        * M7 生成快照的一帧(契约第 4.3、4.4 节;协议见 `stageRpc.ts` 的 `BakeFrameRequest`)。项目是父页经 `pushProject('back', …)`
        * 灌进来的隔离单卡工程,目标片段是唯一可见输出,本地帧 n 就是全局帧 n。
        *
-       * 推帧:`batch4`(缺省)批起点按 4 帧对齐、每批从头推(重挂载、从挂载帧推到这一帧,同桌面 `fillCardControls`);
-       * `seq` 接着上一帧顺推,接不上才从头推。帧与帧之间让一个宏任务、查后台活的停止标志(停着的时长记进 `pausedMs`,不算耗时);
+       * 推帧:`seq`(缺省)接着上一帧顺推,接不上才从头推 —— 探针 P2 证明对 DOM 独立卡(含 Motion)与桌面 4 帧一批从头推等价、
+       * 便宜 4～7 倍(画布卡不等价,节点侧与切分都不让它进浏览器);`batch4` 批起点按 4 帧对齐、每批从头推(同桌面 `fillCardControls`)。帧与帧之间让一个宏任务、查后台活的停止标志(停着的时长记进 `pausedMs`,不算耗时);
        * 不受一拍预算截断。到了这一帧先过就绪闸,再生成快照、取本控件的 HTML:有读不出像素的画布(`lossy`)回 `lossy`
        * (父页按不可重试失败交回,同 `server/bakery/bake.mjs`)。
        */
@@ -2135,7 +2151,7 @@ export default function StageView() {
         let pausedMs = 0;
         const stale = () => gen !== bakeGen || ref.current.role !== "back" || ref.current.project !== p;
         const cur = bakeCursor;
-        const continuing = !!cur && cur.project === p && cur.clipId === req.clipId && cur.frame === n - 1 && (req.mode === "seq" || n % 4 !== 0);
+        const continuing = !!cur && cur.project === p && cur.clipId === req.clipId && cur.frame === n - 1 && (req.mode !== "batch4" || n % 4 !== 0);
         bakeCursor = null;
         if (!continuing) {
           // 从头推:别的在飞的补跑 / 探针作废(单飞队列本来就不会让它们并存,这里兜底)
@@ -2172,8 +2188,9 @@ export default function StageView() {
         }
         ref.current.t = sec;
         const t0 = realNow();
-        await bakeReady(stale);
+        const ready = await bakeReady(stale);
         if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        if (!ready.ok) return { ok: false, reason: "not-ready", detail: ready.detail.slice(0, 300) } satisfies BakeFrameReply;
         const readyMs = realNow() - t0;
         const root = rootRef.current;
         const snap = createSnapshot(root);

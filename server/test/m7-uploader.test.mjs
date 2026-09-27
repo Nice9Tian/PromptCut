@@ -3,7 +3,8 @@
  * `asset-service.ts`,memory 存储)推 `snap` / `px` 块。
  *   - 对账 → 缺的分片 PUT(每片带大小与扩展名)→ complete,之后 `has` 为真;已有的跳过;
  *   - 写入凭 rw 票据,手里那张被拒(401)就强制换一张、这一步重试一次;
- *   - 哈希对不上 complete 回 409,抛出(可重试)。
+ *   - 哈希对不上 complete 回 409,抛出(可重试);
+ *   - 同一哈希按单飞推;收尾回 incomplete 时重查 chunks 补传一次(探针 P4)。
  * 跑:node --test server/test/m7-uploader.test.mjs
  */
 import crypto from 'node:crypto';
@@ -64,4 +65,39 @@ test('M7-UP-02 哈希不符 complete 回 409 抛出(可重试);没有素材服�
   await assert.rejects(none.put('snap', sha256(small), new Uint8Array(small), 'html'), /还没有远程素材服务/);
   assert.equal(await none.has('snap', sha256(small)), false);
   await srv.close();
+});
+
+test('M7-UP-03 同一哈希并发推只推一次(单飞),另一个等它的结果;对着真素材服务', async () => {
+  const srv = await harness.serve({ tickets: KIT.tickets, isTrusted: () => false });
+  const puts = [];
+  const f = async (url, init) => { if (init?.method === 'PUT') puts.push(url); return fetch(url, init); };
+  const up = createSnapUploader({ base: () => srv.base, ticket: async () => KIT.issue('rw'), fetch: f });
+  const body = Buffer.from('<p>同一块</p>', 'utf8');
+  const h = sha256(body);
+  const [a, b, c] = await Promise.all([1, 2, 3].map(() => up.put('snap', h, new Uint8Array(body), 'html')));
+  assert.deepEqual([a, b, c].sort(), ['pushed', 'skipped', 'skipped']);
+  assert.equal(puts.length, 1, '只 PUT 了一次');
+  assert.equal(await up.has('snap', h), true);
+  await srv.close();
+});
+
+test('M7-UP-04 收尾回 400 incomplete:重查 chunks、补传一次再收尾', async () => {
+  const body = new Uint8Array(Buffer.from('<p>x</p>', 'utf8'));
+  const h = sha256(Buffer.from(body));
+  let completes = 0, puts = 0, chunkCalls = 0;
+  const json = (status, obj) => ({ ok: status < 300, status, json: async () => obj });
+  const f = async (url, init) => {
+    if (url.endsWith('/chunks')) { chunkCalls++; return json(200, { size: null, chunkSize: 8388608, received: [], complete: false }); }
+    if (init?.method === 'PUT') { puts++; return json(200, { ok: true }); }
+    if (url.endsWith('/complete')) { completes++; return completes === 1 ? json(400, { error: 'incomplete', missing: [0] }) : json(200, { ok: true, complete: true }); }
+    return json(404, {});
+  };
+  const up = createSnapUploader({ base: () => 'https://h.example/api/asset', ticket: async () => 't', fetch: f });
+  assert.equal(await up.put('snap', h, body, 'html'), 'pushed');
+  assert.deepEqual({ completes, puts, chunkCalls, recheck: up.stats().recheck }, { completes: 2, puts: 2, chunkCalls: 2, recheck: 1 });
+  // 第二次还是 incomplete:抛(可重试),不无限重来
+  completes = 0;
+  const f2 = async (url, init) => (url.endsWith('/complete') ? json(400, { error: 'incomplete', missing: [0] }) : f(url, init));
+  const up2 = createSnapUploader({ base: () => 'https://h.example/api/asset', ticket: async () => 't', fetch: f2 });
+  await assert.rejects(up2.put('snap', h, body, 'html'), (e) => e.retryable === true && /incomplete/.test(e.message));
 });

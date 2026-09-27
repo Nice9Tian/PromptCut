@@ -6,6 +6,7 @@
  *   `GET <ns>/<hash>/chunks` 对账 → 缺的分片 `PUT <ns>/<hash>/<n>`(每片带 `X-Media-Size`、`X-Media-Ext`)→ `POST <ns>/<hash>/complete`
  *
  * 分片 8 MiB;HTML 快照与小尺寸 WebP 都远小于它,一般一片。已经 `complete` 的哈希不再推(按内容寻址,天然去重)。
+ * 同一哈希按单飞推(同时来的第二次等第一次的结果);收尾回 `400 incomplete` 时重查 chunks、补传一次再收尾(M7 探针 P4 的撞车)。
  * 写入凭写票据:`Authorization: Bearer <rw 票据>`(`auth.ticket { kind: 'asset', access: 'rw' }`,宿主按时限续签);
  * 回 401 就强制换一张新的、这一步重试一次。票据不进地址、不进日志与诊断。
  *
@@ -36,6 +37,8 @@ export interface UploaderStats {
   failed: number;
   /** 401 之后换票据重试的次数 */
   reauth: number;
+  /** 收尾回 `incomplete` 之后重查 chunks 的次数 */
+  recheck: number;
   lastError: string | null;
 }
 
@@ -59,7 +62,7 @@ const fail = (message: string, extra: Record<string, unknown> = {}) => Object.as
 
 export function createSnapUploader(deps: UploaderDeps): SnapUploader {
   const f = deps.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
-  const stats: UploaderStats = { pushed: 0, pushedBytes: 0, skipped: 0, failed: 0, reauth: 0, lastError: null };
+  const stats: UploaderStats = { pushed: 0, pushedBytes: 0, skipped: 0, failed: 0, reauth: 0, recheck: 0, lastError: null };
 
   const urlOf = (ns: Namespace, hash: string, tail: string) => {
     const base = deps.base();
@@ -81,6 +84,55 @@ export function createSnapUploader(deps: UploaderDeps): SnapUploader {
     return go(true);
   };
 
+  /** 在飞的推送:`<ns>/<hash>` → 结果 */
+  const inflight = new Map<string, Promise<"pushed" | "skipped">>();
+
+  /** 缺的片 PUT 上去 */
+  const putMissing = async (ns: Namespace, hash: string, bytes: Uint8Array, ext: string, received: Set<number>) => {
+    const size = bytes.length;
+    const count = Math.max(1, Math.ceil(size / CHUNK_SIZE));
+    for (let n = 0; n < count; n++) {
+      if (received.has(n)) continue;
+      const body = bytes.subarray(n * CHUNK_SIZE, Math.min(size, (n + 1) * CHUNK_SIZE));
+      const res = await authed(urlOf(ns, hash, `/${n}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/octet-stream", "X-Media-Size": String(size), "X-Media-Ext": ext },
+        body: body as BodyInit,
+      });
+      if (!res.ok) throw fail(`推 ${ns} 第 ${n} 片回 ${res.status}`, { status: res.status });
+    }
+  };
+
+  /** 推一块:对账 → 缺的片 → 收尾;收尾回 `incomplete`(别人的请求与这一次交错)就重查 chunks、补传一次再收尾 */
+  const pushOnce = async (ns: Namespace, hash: string, bytes: Uint8Array, ext: string): Promise<"pushed" | "skipped"> => {
+    try {
+      if (!HEX64.test(hash)) throw fail(`哈希不对:${hash.slice(0, 16)}`, { retryable: false });
+      if (!bytes.length) throw fail("不能推空块", { retryable: false });
+      let state = await chunksOf(ns, hash);
+      if (state.complete) { stats.skipped++; return "skipped"; }
+      for (let attempt = 0; ; attempt++) {
+        await putMissing(ns, hash, bytes, ext, state.received);
+        const done = await authed(urlOf(ns, hash, "/complete"), { method: "POST" });
+        if (done.ok) break;
+        const body = await done.json().catch(() => null) as { error?: string } | null;
+        if (done.status === 400 && body?.error === "incomplete" && attempt === 0) {
+          stats.recheck++;
+          state = await chunksOf(ns, hash);
+          if (state.complete) break;
+          continue;
+        }
+        throw fail(`收尾 ${ns} 回 ${done.status}${body?.error ? ` ${body.error}` : ""}`, { status: done.status });
+      }
+      stats.pushed++;
+      stats.pushedBytes += bytes.length;
+      return "pushed";
+    } catch (e) {
+      stats.failed++;
+      stats.lastError = String((e as Error)?.message ?? e);
+      throw e;
+    }
+  };
+
   const chunksOf = async (ns: Namespace, hash: string) => {
     const res = await authed(urlOf(ns, hash, "/chunks"), { method: "GET", cache: "no-store" });
     if (!res.ok) throw fail(`对账 ${ns} 回 ${res.status}`, { status: res.status });
@@ -93,34 +145,14 @@ export function createSnapUploader(deps: UploaderDeps): SnapUploader {
       if (!HEX64.test(hash)) return false;
       try { return (await chunksOf(ns, hash)).complete; } catch { return false; }
     },
-    async put(ns, hash, bytes, ext) {
-      try {
-        if (!HEX64.test(hash)) throw fail(`哈希不对:${hash.slice(0, 16)}`, { retryable: false });
-        if (!bytes.length) throw fail("不能推空块", { retryable: false });
-        const state = await chunksOf(ns, hash);
-        if (state.complete) { stats.skipped++; return "skipped"; }
-        const size = bytes.length;
-        const count = Math.max(1, Math.ceil(size / CHUNK_SIZE));
-        for (let n = 0; n < count; n++) {
-          if (state.received.has(n)) continue;
-          const body = bytes.subarray(n * CHUNK_SIZE, Math.min(size, (n + 1) * CHUNK_SIZE));
-          const res = await authed(urlOf(ns, hash, `/${n}`), {
-            method: "PUT",
-            headers: { "Content-Type": "application/octet-stream", "X-Media-Size": String(size), "X-Media-Ext": ext },
-            body: body as BodyInit,
-          });
-          if (!res.ok) throw fail(`推 ${ns} 第 ${n} 片回 ${res.status}`, { status: res.status });
-        }
-        const done = await authed(urlOf(ns, hash, "/complete"), { method: "POST" });
-        if (!done.ok) throw fail(`收尾 ${ns} 回 ${done.status}`, { status: done.status });
-        stats.pushed++;
-        stats.pushedBytes += size;
-        return "pushed";
-      } catch (e) {
-        stats.failed++;
-        stats.lastError = String((e as Error)?.message ?? e);
-        throw e;
-      }
+    put(ns, hash, bytes, ext) {
+      // 按哈希单飞:同一块已经在推,等它的结果(M7 探针 P4:相邻帧内容相同的块并发推会撞成 `incomplete`)
+      const key = `${ns}/${hash}`;
+      const flying = inflight.get(key);
+      if (flying) return flying.then(() => { stats.skipped++; return "skipped" as const; });
+      const work = pushOnce(ns, hash, bytes, ext).finally(() => { inflight.delete(key); });
+      inflight.set(key, work);
+      return work;
     },
     stats: () => ({ ...stats }),
   };

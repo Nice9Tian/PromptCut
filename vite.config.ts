@@ -127,6 +127,8 @@ const desktopConfig: UserConfig = {
  * C10 契约第 7 节(主会话 2026-09-28 的补充约束):在线页面发布的清单计划写 `requires.codeVersion`,由构建时按渲染节点同一套算法
  * (`server/frame-code.mjs` 的 `frameCode`,换行统一成 LF)算出、以 `__PC_CODE_VERSION__` 嵌进页面(`src/online/buildInfo.ts`)。
  * 只在在线构建里算(遍历 src/ 一次)。
+ * 不压缩 CSS(`cssMinify: false`,M7 探针 P2 之后主会话裁定):快照把根元素上的 CSS 自定义属性按原文内联,压缩过的 CSS
+ * (`0.4` → `.4`、`150ms` → `.15s`)会让在线页面生成的快照与桌面(未压缩)逐字节不同、像素相同 —— 同指纹同结果键下混两种字节。
  */
 const onlineConfig = async (): Promise<UserConfig> => {
   const { frameCode } = await import("./server/frame-code.mjs");
@@ -135,7 +137,7 @@ const onlineConfig = async (): Promise<UserConfig> => {
     base: "/editor/",
     plugins: [react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss()],
     define: { "import.meta.env.VITE_PC_ONLINE": JSON.stringify("1"), __PC_CODE_VERSION__: JSON.stringify(codeVersion) },
-    build: { outDir: "dist-online", emptyOutDir: true },
+    build: { outDir: "dist-online", emptyOutDir: true, cssMinify: false },
   };
 };
 

@@ -221,8 +221,9 @@ export interface SetRoleOptions {
  * 把隔离单卡工程灌进后台舞台,再逐帧发这条。舞台把这一帧推到、生成快照、取本控件的 HTML,算 sha256、压 gzip,
  * 要小尺寸时按 `foreignObject` 栅格化成 WebP;字节经 `bake-frame` 事件随消息转移,回包只带摘要。
  *
- * 推帧口径:`mode: 'batch4'`(缺省,与桌面预渲染一致)—— 批起点按 4 帧对齐,每批从头推(重挂载、从挂载帧推到这一帧);
- * `mode: 'seq'` —— 接着上一帧顺推,只有接不上时才从头推(探针 P2 证明两者相同后可换)。帧间查后台活的停止标志(`setBackWork`),
+ * 推帧口径:`mode: 'seq'`(缺省)—— 接着上一帧顺推,只有接不上时才从头推(探针 P2:对 DOM 独立卡与桌面 4 帧一批等价、便宜 4～7 倍);
+ * `mode: 'batch4'` —— 与桌面预渲染一致,批起点按 4 帧对齐,每批从头推(重挂载、从挂载帧推到这一帧)。
+ * 每帧生成快照前过就绪闸(控件异步活、字体、图片,同预渲染的 `waitFrameReady`),20 秒没就绪回 `not-ready`(这一段失败,不出空白帧)。帧间查后台活的停止标志(`setBackWork`),
  * 被门挡住的时长单记(`pausedMs`),不算进耗时。
  */
 export interface BakeFrameRequest {
@@ -237,7 +238,7 @@ export interface BakeFrameRequest {
 }
 export type BakeFrameReply =
   | { ok: true; localFrame: number; hash: string; bytes: number; small: { hash: string; bytes: number } | null; ms: number; pausedMs: number; remounted: boolean; smallMs: number; readyMs: number }
-  | { ok: false; reason: "unsupported" | "role" | "no-project" | "no-clip" | "cancelled" | "lossy" | "no-control" | "frame-mismatch" | "small-failed"; detail?: string };
+  | { ok: false; reason: "unsupported" | "role" | "no-project" | "no-clip" | "cancelled" | "lossy" | "no-control" | "frame-mismatch" | "small-failed" | "not-ready"; detail?: string };
 export interface SetRoleReply {
   ok: boolean;
   reason?: "unsupported";
