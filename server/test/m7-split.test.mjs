@@ -128,7 +128,7 @@ test('D1 端到端：切分出的两份经切分节点发布，页面的纯浏�
   const res = h.publish('pc', tasks).one('pc', 'task.published').results;
   for (const r of res) assert.equal(r.error, undefined, JSON.stringify(r));
   // 浏览器看得见的只有浏览器那份（身份继承自页面的 plan，前置过滤只给同指纹）
-  const seen = h.bus.of('br', 'task.opened').map((m) => m.task);
+  const seen = h.bus.of('br', 'task.opened').map((m) => m.task).filter((t) => t.kind === 'snapshot');   // 页面自己的清单计划它也看得见（本人任务），只看细任务
   assert.ok(seen.length === 2 && seen.every((t) => t.requires.envFingerprint === BR), JSON.stringify(seen.map((t) => t.id)));
   const brTask = seen.find((t) => t.range.from === 0);
   const c = h.claim('br', brTask.id, brTask.version).last('br', ['task.claimed', 'task.claim-rejected']);
