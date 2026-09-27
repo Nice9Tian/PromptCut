@@ -7,6 +7,8 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { PreviewCard } from "../PreviewCard";
 import { requestCaptions } from "../captionsBus";
 import { AudioStrip } from "./AudioStrip";
+import { useMediaTierPolicy, usePreviewMediaUrl } from "../../media/previewUrl";
+import { previewMediaUrl } from "../../../render/mediaTier";
 import { ThumbTile } from "./ThumbTile";
 import type { GroupData, GroupItem } from "./groups";
 
@@ -118,6 +120,8 @@ function startMediaDrag(e: React.DragEvent, m: MediaAsset) {
 function MediaTile({ m, onContextMenu }: { m: MediaAsset; onContextMenu: (e: React.MouseEvent) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [hot, setHot] = useState(false);
+  // 桌面是 m.url;在线浏览器模式换成远程素材服务的地址(低内存档只给小尺寸),没就绪时不挂 src
+  const src = usePreviewMediaUrl(m) || undefined;
   const [progress, setProgress] = useState<number | null>(null);
 
   useEffect(() => {
@@ -137,11 +141,11 @@ function MediaTile({ m, onContextMenu }: { m: MediaAsset; onContextMenu: (e: Rea
 
   const preview =
     m.kind === "image" ? (
-      <img src={m.url} alt="" draggable={false} />
+      <img src={src} alt="" draggable={false} />
     ) : (
       <video
         ref={videoRef}
-        src={m.url}
+        src={src}
         muted
         loop
         playsInline
@@ -185,6 +189,7 @@ function MediaTile({ m, onContextMenu }: { m: MediaAsset; onContextMenu: (e: Rea
  */
 function MediaThumb({ m }: { m: MediaAsset }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const src = usePreviewMediaUrl(m) || undefined;
 
   const stop = useCallback(() => {
     const v = videoRef.current;
@@ -209,7 +214,7 @@ function MediaThumb({ m }: { m: MediaAsset }) {
   );
 
   if (m.kind === "image") {
-    return <ThumbTile preview={<img src={m.url} alt="" draggable={false} />} />;
+    return <ThumbTile preview={<img src={src} alt="" draggable={false} />} />;
   }
   return (
     <ThumbTile
@@ -218,7 +223,7 @@ function MediaThumb({ m }: { m: MediaAsset }) {
       preview={
         <video
           ref={videoRef}
-          src={m.url}
+          src={src}
           muted
           loop
           playsInline
@@ -238,13 +243,14 @@ const audioSub = (m: MediaAsset) => [fmtDur(m.duration), transcriptNote(m)].filt
 
 /** 音频一条:名字 + 时长(+ 已有字幕的段数),背景是整段波形。转写入口在右键菜单里 */
 function AudioRow({ m, onContextMenu }: { m: MediaAsset; onContextMenu: (e: React.MouseEvent) => void }) {
+  const url = usePreviewMediaUrl(m) || undefined;
   return (
     <AudioStrip
       attrs={{ "data-pc-media": m.id }}
       className="is-grab"
       name={m.name}
       sub={audioSub(m)}
-      url={m.url}
+      url={url}
       draggable
       onDragStart={(e) => startMediaDrag(e, m)}
       onDragEnd={clearDragPayload}
@@ -384,6 +390,7 @@ export function useMediaGroup(
   openMenu: (e: React.MouseEvent, m: MediaAsset) => void,
 ): GroupData {
   const allMedia = useStore((s) => s.project.media);
+  const tierPolicy = useMediaTierPolicy();
   return useMemo(() => {
     const list = allMedia.filter((m) => m.kind === kind);
     const hits = q ? list.filter((m) => m.name.toLowerCase().includes(q)) : list;
@@ -395,12 +402,12 @@ export function useMediaGroup(
     );
     const thumbs: GroupItem[] = hits.slice(0, 2).map((m) => ({
       id: m.id,
-      node: kind === "audio" ? <AudioStrip name={m.name} sub={audioSub(m)} url={m.url} /> : <MediaThumb m={m} />,
+      node: kind === "audio" ? <AudioStrip name={m.name} sub={audioSub(m)} url={previewMediaUrl(m, tierPolicy) || undefined} /> : <MediaThumb m={m} />,
     }));
     return {
       items,
       thumbs,
       emptyDetail: list.length === 0 ? <EmptyMedia noun={noun} /> : <div className="pc-left-note">没有匹配的{noun}</div>,
     };
-  }, [allMedia, kind, q, openMenu]);
+  }, [allMedia, kind, q, openMenu, tierPolicy]);
 }
