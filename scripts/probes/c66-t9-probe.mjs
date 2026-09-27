@@ -602,7 +602,17 @@ async function runCreator(out) {
 
     // ---- 6. 等观察端,改卡
     await store.put('editready', { at: Date.now() });
-    await store.wait('observer.joined', '观察端进入', 20 * 60_000);
+    // 等观察端报进入;它先交了结果(出错收尾)就不再等
+    const joinEnd = Math.min(Date.now() + 20 * 60_000, deadline);
+    let joined = null;
+    let observerGone = false;
+    while (!joined && !observerGone && Date.now() < joinEnd) {
+      joined = await store.get('observer.joined', 5000).catch(() => null);
+      if (!joined && (await store.get('observer', 0).catch(() => null))) observerGone = true;
+    }
+    if (!joined && !observerGone) throw new Error('等观察端进入超时');
+    if (observerGone) fails.push('[creator] 观察端没报进入就结束了,没有改卡');
+    else {
     const tEdit = Date.now();
     const edit = await postJson(`${A.origin}/api/cards/edit`, { id: CARD_ID, find: MARK('v1'), replace: MARK('v2') });
     out.edit = { ok: edit.body?.ok ?? false, ms: Date.now() - tEdit, backup: !!edit.body?.backup };
@@ -613,6 +623,7 @@ async function runCreator(out) {
       return s.records?.[CARD_REL]?.rev >= 2 ? s.records[CARD_REL].rev : null;
     }, 20_000, 300);
     out.cardRevAfterEdit = rev2;
+    }
 
     // ---- 7. 汇总三方
     const [obs, host] = await Promise.all([
