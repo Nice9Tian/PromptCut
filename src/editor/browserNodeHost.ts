@@ -164,7 +164,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   let lastError: string | null = null;
   let eligibility: { ok: boolean; reason: string | null } = { ok: false, reason: "starting" };
   const nodeId = `browser-${pageSession()}`;
-  const conn = { sessions: 0, opens: 0, closes: 0, lastClose: null as { code: number; reason: string } | null };
+  const conn = { sessions: 0, opens: 0, closes: 0, resumes: 0, lastClose: null as { code: number; reason: string } | null };
   const stage = { frames: 0, ms: [] as number[], pausedMs: 0, remounts: 0, small: 0, smallMs: [] as number[], readyMs: [] as number[], errors: {} as Record<string, number> };
   const manifestStats = { written: 0, failed: 0, lastError: null as string | null };
 
@@ -379,6 +379,23 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   });
   const onVisibility = () => { if (typeof document !== "undefined" && document.visibilityState === "hidden") node?.yieldFor("hidden"); };
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
+  /*
+   * 冻结(M7 探针 P5):冻结只发生在隐藏之后,D8 已经放回;`freeze` 事件来时再尽力放回一次(切走约 2 s 后到,还发得出消息)。
+   * 冻结恢复时 Chrome 会关掉 WebSocket,手里的认领在冻结超过租约时已经丢了:`resume` 一律当一次重连 —— 结束这条会话、马上重建、重新报到。
+   */
+  const onFreeze = () => { node?.yieldFor("hidden"); };
+  const onResume = () => {
+    conn.resumes++;
+    const e = ep;
+    if (!e) return;
+    ep = null;
+    if (readyState === "ready") setReady("pending");
+    for (const w of [...snapshotWaiters.values()]) w({ type: "error" });
+    try { e.close(); } catch { /* 已经关了 */ }
+    redialAt = 0;
+    redialDelay = REDIAL_MIN_MS;
+  };
+  if (typeof document !== "undefined") { document.addEventListener("freeze", onFreeze); document.addEventListener("resume", onResume); }
   const onPageHide = () => teardown("pagehide");
   if (typeof window !== "undefined") window.addEventListener("pagehide", onPageHide);
 
@@ -541,7 +558,11 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     offStage();
     offStore();
     offScrub();
-    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("freeze", onFreeze);
+      document.removeEventListener("resume", onResume);
+    }
     if (typeof window !== "undefined") window.removeEventListener("pagehide", onPageHide);
     if (w) delete w.__pcBrowserNode;
   };
