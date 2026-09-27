@@ -446,3 +446,22 @@ export async function findApiGuard(importer) {
   }
   return null;
 }
+
+/** 目录下所有文件（递归） */
+export const walkFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkFiles(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+
+/**
+ * 构建产物里以 `/api/` 开头、后面紧跟地址的字面量（引号或反引号起头）；回 [{ file, at, context }]。
+ * 守卫判前缀用的 `"/api/"`（引号紧跟在斜杠后）不算。
+ */
+export function apiLiterals(dir) {
+  const hits = [];
+  for (const file of walkFiles(dir)) {
+    if (!/\.(m?js|html)$/.test(file)) continue;
+    const text = fs.readFileSync(file, 'utf8');
+    const re = /["'`]\/api\/[A-Za-z0-9_$]/g;
+    let m;
+    while ((m = re.exec(text))) hits.push({ file: path.relative(dir, file), at: m.index, context: text.slice(Math.max(0, m.index - 40), m.index + 60).replace(/\s+/g, ' ') });
+  }
+  return hits;
+}
