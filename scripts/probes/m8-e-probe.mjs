@@ -24,6 +24,9 @@
  *   e2  半开断线接手：host-a 经代理（`--via-proxy`）连文档服务，第一次持有任务时让代理 stall（开着的连接只攒不转）；
  *       别的节点在 ≤ 37 s 内接手（旁观节点的时间线，从 creator 收到 KV 信号起算）；接手后 creator 写 `takeover`，
  *       host-a 让代理 resume，它手里那几个任务的旧认领一律 `lease-lost`，不产生第二次 `task.done`；J 三条。
+ *       C1（笔记本断网 30 s，主会话 2026-09-28 更正为应用层做法，constraints.md「不动宿主机的网络」）：host 加 `--stall-s 30`，
+ *       stall 固定秒数后自己 resume、不等接手；判「被接手（≤ 37 s）」或「会话保留期内接续、照常由受害方完成」两种都认，
+ *       结果行 `victim.outcomes` 与 `victim.session.kind` 写明是哪一种。本探针不碰网卡、防火墙、代理设置、路由、DNS。
  *   e3  文档服务重启：有任务完成、主机持有任务时重启 ——
  *       cloud（C2）：creator 写 KV `signal.restart.request`、把要在远端执行的命令打到 stderr，等 KV `signal.restart.done`
  *       （由主会话执行 `pm2 restart` 后写，见下文「远端步骤」）；
@@ -50,7 +53,7 @@
  *        [--out <目录>] [--timeout-min 40]
  *   node scripts/probes/m8-e-probe.mjs --role host --name host-a --case … --place … --coord <协调口> [--port 5583]
  *        [--lan-host <ip:端口>] [--via-proxy <代理监听端口>] [--proxy-target <host:port>] [--stall-prob 0]
- *        [--stall] [--fake-fingerprint <16 位十六进制>] [--host-concurrency 2] [--band 5580-5599] [--run <id>] [--out <目录>]
+ *        [--stall] [--stall-s <秒>] [--fake-fingerprint <16 位十六进制>] [--host-concurrency 2] [--band 5580-5599] [--run <id>] [--out <目录>]
  *   node scripts/probes/m8-e-probe.mjs --role watcher --coord <协调口> [--run <id>]        （可选：另一台机器上的旁观节点）
  *   node scripts/probes/m8-e-probe.mjs --role signal --coord <协调口> --run <id> --name <信号名> [--value '<json>']
  *   node scripts/probes/m8-e-probe.mjs --role all --case … --place <lan|cloud> [--lan-ip …]    本机替身（见下）
@@ -294,8 +297,8 @@ async function fetchArtifacts(entry, derived) {
       });
     });
     // 局域网主机不登记素材服务（只在设了 PROMPTCUT_DOCSERVICE_URL 时登记）：同 hostAssetClient，从文档服务地址推同一进程的素材服务
-    const derived = (() => { const u = new URL(entry.url); return `${/^(wss|https):/.test(u.protocol) ? 'https:' : 'http:'}//${u.host}/api/asset`; })();
-    const base = assetUrl ?? derived;
+    const derivedBase = (() => { const u = new URL(entry.url); return `${/^(wss|https):/.test(u.protocol) ? 'https:' : 'http:'}//${u.host}/api/asset`; })();
+    const base = assetUrl ?? derivedBase;
     const client = createAssetClient({ base, ticket: createTicketSource(conn.ep, { access: 'r' }), timeoutMs: 120_000 });
     const art = { assetUrl: base, announced: !!assetUrl, manifests: 0, missingManifests: [], blocks: 0, bytes: 0, badBlocks: [] };
     const seen = new Set();
@@ -660,14 +663,29 @@ async function caseE2(ctx) {
   let takeover = null;
   if (r.check('stall-signal', !!stall?.held?.length, stall)) {
     const held = stall.held;
-    const per = await until(() => {
-      const xs = held.map((id) => ({ id, ms: takeoverMs(watch.events(id), seenAt) }));
-      return xs.every((x) => x.ms !== null) ? xs : null;
-    }, 5 * 60_000, 200);
-    const final = per ?? held.map((id) => ({ id, ms: takeoverMs(watch.events(id), seenAt), timeline: summarizeTimeline(watch.events(id)) }));
-    takeover = { held, per: final, stalledAtHostClock: stall.at, seenAt };
-    r.check('takeover<=37s', !!per && per.every((x) => x.ms <= TAKEOVER_LIMIT_MS), { limitMs: TAKEOVER_LIMIT_MS, per: final });
-    await kv.signal('takeover', { at: Date.now(), per: final });
+    if (stall.seconds) {
+      // C1(应用层断线,主会话 2026-09-28 更正):受害方 stall 固定秒数后自己 resume,不等接手。两种结局都认:
+      // 租约到期被别的节点接手(≤ 37 s),或会话保留期内接续、任务照常由受害方完成(没被放回、最后是 done)
+      const outcomeOf = (id) => {
+        const ms = takeoverMs(watch.events(id), seenAt);
+        if (ms !== null) return { id, outcome: 'takeover', ms };
+        const t = summarizeTimeline(watch.events(id).filter((e) => e.t >= seenAt));
+        return t.closed.at(-1) === 'done' && t.reopenedAfterTaken === 0 && !watch.events(id).some((e) => e.t >= seenAt && e.ev === 'opened') ? { id, outcome: 'resumed-done' } : null;
+      };
+      const per = await until(() => { const xs = held.map(outcomeOf); return xs.every(Boolean) ? xs : null; }, (stall.seconds + 180) * 1000, 250);
+      const final = per ?? held.map((id) => outcomeOf(id) ?? { id, outcome: null, timeline: summarizeTimeline(watch.events(id)) });
+      takeover = { mode: 'c1-fixed', seconds: stall.seconds, held, per: final, stalledAtHostClock: stall.at, seenAt };
+      r.check('c1-outcome', !!per && per.every((x) => x.outcome === 'resumed-done' || x.ms <= TAKEOVER_LIMIT_MS), { limitMs: TAKEOVER_LIMIT_MS, per: final });
+    } else {
+      const per = await until(() => {
+        const xs = held.map((id) => ({ id, ms: takeoverMs(watch.events(id), seenAt) }));
+        return xs.every((x) => x.ms !== null) ? xs : null;
+      }, 5 * 60_000, 200);
+      const final = per ?? held.map((id) => ({ id, ms: takeoverMs(watch.events(id), seenAt), timeline: summarizeTimeline(watch.events(id)) }));
+      takeover = { mode: 'until-takeover', held, per: final, stalledAtHostClock: stall.at, seenAt };
+      r.check('takeover<=37s', !!per && per.every((x) => x.ms <= TAKEOVER_LIMIT_MS), { limitMs: TAKEOVER_LIMIT_MS, per: final });
+      await kv.signal('takeover', { at: Date.now(), per: final });
+    }
   }
   const round = await settling;
   if (!r.check('plan-settled', round.ok, { lastStatus: round.lastStatus })) throw new Error('这一版没落定');
@@ -678,8 +696,12 @@ async function caseE2(ctx) {
     const victim = Object.entries(results).find(([, x]) => x?.stall);
     if (victim) {
       const [name, res] = victim;
-      r.check('victim-lease-lost', res.stall.leaseLost === true, { host: name, ...res.stall });
-      r.check('victim-no-double-done', (res.stall.completedHeld ?? []).length === 0, { host: name, completedHeld: res.stall.completedHeld ?? [] });
+      // 被接手的任务:受害方恢复后旧认领一律 lease-lost、它自己不再完成;C1 里会话接续、照常完成的那些不在此列
+      const takenOver = (takeover?.per ?? []).filter((x) => x.outcome !== 'resumed-done').map((x) => x.id);
+      const lostIds = new Set((res.stall.lost ?? []).filter((x) => x.at).map((x) => x.id));
+      r.check('victim-lease-lost', takenOver.every((id) => lostIds.has(id)), { host: name, takenOver, lost: res.stall.lost, session: res.stall.session ?? null });
+      r.check('victim-no-double-done', takenOver.every((id) => !(res.stall.completedHeld ?? []).includes(id)), { host: name, completedHeld: res.stall.completedHeld ?? [] });
+      r.set({ victim: { host: name, mode: takeover?.mode ?? null, session: res.stall.session ?? null, outcomes: (takeover?.per ?? []).map((x) => x.outcome ?? 'takeover') } });
     } else r.check('victim-result', false, '没有主机报 stall');
   };
 }
@@ -1068,18 +1090,26 @@ async function hostStall(r, kv, host, proxy, idsSeen, pollEvents) {
     return null;
   }, Math.max(1000, deadline - Date.now()), 100);
   if (!r.check('held-before-stall', holding === true, { holding })) return;
+  const seconds = Number(arg('--stall-s', 0)) || 0;
+  const n0 = (await host.node().catch(() => null)) ?? {};
   const stalled = await proxy.stall();
   const stallAt = Date.now();
-  await kv.signal('stall', { held, at: stallAt });
-  say('stalled', { held });
-  const tk = await waitKv(kv, 'signal.takeover', { timeoutMs: 6 * 60_000 });
+  await kv.signal('stall', { held, at: stallAt, ...(seconds ? { seconds } : {}) });
+  say('stalled', { held, seconds: seconds || null });
+  // --stall-s:C1 应用层断线,固定秒数后 resume;不给:等 creator 写 takeover(E2 半开接手)
+  const tk = seconds ? (await delay(seconds * 1000), null) : await waitKv(kv, 'signal.takeover', { timeoutMs: 6 * 60_000 });
   const resumed = await proxy.resume();
   const resumeAt = Date.now();
-  // 恢复之后：旧认领 complete / 续约回 lease-lost（或会话接续时 hello.resume 报丢）
-  const lostAll = await until(async () => { await pollEvents(); return held.every((id) => idsSeen.lost.has(id)) || null; }, 120_000, 1000);
+  // 恢复之后:被接手的任务旧认领 complete / 续约回 lease-lost(或会话接续时报丢);会话接续里照常完成的不会有 lost
+  await until(async () => {
+    await pollEvents();
+    return held.every((id) => idsSeen.lost.has(id) || idsSeen.completed.has(id) || idsSeen.dedup.has(id)) || null;
+  }, 180_000, 1000);
+  const n1 = (await host.node().catch(() => null)) ?? {};
   const completedHeld = held.filter((id) => { const c = idsSeen.completed.get(id) ?? idsSeen.dedup.get(id); return c && c.at >= stallAt; });
-  r.set({ stall: { held, stallAt, resumeAt, stalledMs: resumeAt - stallAt, takeoverSignal: !!tk, stallAck: !!stalled, resumeAck: !!resumed,
-    leaseLost: !!lostAll, lost: held.map((id) => ({ id, ...(idsSeen.lost.get(id) ?? {}), sinceResumeMs: idsSeen.lost.get(id) ? idsSeen.lost.get(id).at - resumeAt : null })), completedHeld } });
+  r.set({ stall: { held, seconds: seconds || null, stallAt, resumeAt, stalledMs: resumeAt - stallAt, takeoverSignal: !!tk, stallAck: !!stalled, resumeAck: !!resumed,
+    lost: held.map((id) => ({ id, ...(idsSeen.lost.get(id) ?? {}), sinceResumeMs: idsSeen.lost.get(id) ? idsSeen.lost.get(id).at - resumeAt : null })), completedHeld,
+    session: { opens: [n0.opens ?? null, n1.opens ?? null], resumes: [n0.resumes ?? null, n1.resumes ?? null], kind: (n1.opens ?? 0) > (n0.opens ?? 0) ? 'new-session' : (n1.resumes ?? 0) > (n0.resumes ?? 0) ? 'resumed' : 'unchanged' } } });
   r.check('proxy-stall-resume', !!stalled && !!resumed, { stall: stalled?.event ?? null, resume: resumed?.event ?? null });
 }
 
@@ -1241,7 +1271,7 @@ async function runAll() {
     const roles = [{ role: 'creator', label: 'creator', args: ['--port', String(LOCAL_PORTS.creator), '--hosted', hosted.hosted, '--hosts', hosts.join(','), ...(lanIp ? ['--lan-ip', lanIp] : []), ...flags] }];
     for (const h of hosts) {
       const extra = [];
-      if (CASE === 'e2' && h === 'host-a') extra.push('--via-proxy', String(LOCAL_PORTS.proxy), '--stall');
+      if (CASE === 'e2' && h === 'host-a') extra.push('--via-proxy', String(LOCAL_PORTS.proxy), '--stall', ...(arg('--stall-s', null) ? ['--stall-s', arg('--stall-s')] : []));
       if (CASE === 'e6' && h === 'host-a') extra.push('--fake-fingerprint', arg('--fake-fingerprint', E6_FP));
       roles.push({ role: 'host', label: h, args: ['--name', h, '--port', String(LOCAL_PORTS[h]), ...extra] });
     }
