@@ -259,6 +259,21 @@ try {
     return { cls: wrap?.className ?? null };
   }, setup.heavyId);
   await sleep(800);
+  // 诊断:停下前后舞台收到的会清掉「停下画好的层」的 RPC(setTime / setProject / play / setRole / settleLowMemory)
+  await stageFrame()?.evaluate(() => {
+    const api = window.__pcStage;
+    window.__pcRpcLog = [];
+    if (!api || api.__pcLogged) return;
+    api.__pcLogged = true;
+    for (const m of ['setTime', 'setProject', 'play', 'pause', 'setRole', 'settleLowMemory']) {
+      const orig = api[m];
+      if (typeof orig !== 'function') continue;
+      api[m] = function (...a) {
+        window.__pcRpcLog.push({ m, at: Math.round(performance.now()), t: typeof a[0] === 'number' ? a[0] : null, opts: a[1] && typeof a[1] === 'object' ? Object.keys(a[1]).join(',') : null });
+        return orig.apply(this, a);
+      };
+    }
+  });
   await store(`actions.pause();`);
   // 等父页记下这一次停下追一帧的结果(时限 5 秒)
   let settleResult = null;
@@ -270,7 +285,7 @@ try {
   const stageState = await stageFrame()?.evaluate((id) => {
     const d = window.__pcStageDiag?.() ?? {};
     const wrap = document.querySelector(`[data-pc-clip="${CSS.escape(id)}"]`);
-    return { settling: d.settling ?? null, suppressed: d.suppressed ?? null, cls: wrap?.className ?? null, hasSmall: !!wrap?.querySelector('img[data-pc-small-snapshot]') };
+    return { settling: d.settling ?? null, suppressed: d.suppressed ?? null, lowMemLive: d.lowMemLive ?? null, cls: wrap?.className ?? null, hasSmall: !!wrap?.querySelector('img[data-pc-small-snapshot]'), rpc: (window.__pcRpcLog ?? []).slice(0, 20) };
   }, setup.heavyId);
   out.G3 = { t0, t1: g3, playing: playingState, stage: stageState, settle: settleResult };
   check(g3 - t0 > 1, 'G3 播放头跟舞台走了 1 秒以上', { t0, t1: g3 });

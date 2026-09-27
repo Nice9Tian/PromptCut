@@ -1099,6 +1099,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * `settle: true` 启动 K5 的暂停态活渲:点时间轴、拖动松开、按暂停、播放到头都带它,
    * **拖动过程中不带**(E3)。
    */
+  /**
+   * 发给可见舞台的 `setTime` 的代数(每发一次 +1)。低内存档停下追一帧按「此刻最新的 setTime + 秒数」去重:
+   * 暂停那一下父页会连着发几次 setTime(暂停、舞台最后一拍改写的 t),各自的追一帧可能在最后一次 setTime 之后才发出;
+   * 同一秒两次追一帧在舞台里并发,后一次会把前一次画好的层打断成「没画好」,画好的层又回到抑制(lowmem-online-probe G3 实测)。
+   */
+  const setTimeEpochRef = useRef(0);
+  const lowMemSettleKeyRef = useRef<string | null>(null);
   const sendSetTime = useCallback(async (sec: number, opts: { settle?: true } = {}) => {
     const s = stage();
     if (!s || lowMemoryMeasuring()) return;
@@ -1113,6 +1120,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         : { snapshots: {} as Record<string, string | null>, awaiting: [] as string[] };
       // 低内存档的停下追一帧另走 `settleLowMemory`(下面),舞台的 K5 第一路不起
       const { settle: _settle, ...stageOpts } = opts;
+      setTimeEpochRef.current++;
       await s.setTime(sec, {
         ...(lowMemRef.current ? stageOpts : opts),
         ...(Object.keys(feed.snapshots).length ? { snapshots: feed.snapshots } : {}),
@@ -1141,6 +1149,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const lowMemSettleGenRef = useRef(0);
   const lowMemSettleRef = useRef<(LowMemorySettleResult & { at: number }) | null>(null);
   const settleLowMemoryAt = useCallback(async (s: StageRpcClient, sec: number): Promise<void> => {
+    // 同一次 setTime 之后同一秒已经在追:不再发第二次(见 setTimeEpochRef)
+    const key = `${setTimeEpochRef.current}|${sec}`;
+    if (lowMemSettleKeyRef.current === key) return;
+    lowMemSettleKeyRef.current = key;
     const gen = ++lowMemSettleGenRef.current;
     let result: LowMemorySettleResult;
     try {
