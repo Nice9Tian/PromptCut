@@ -23,6 +23,7 @@
 //                                              [--layouts a-same,b-port,...] [--n 500]
 //   node scripts/probes/c10-stage-probe.mjs p2 [--rounds 3] [--heads both] [--places ...] [--hidden-places overlay-opacity0,translate-offscreen]
 //   node scripts/probes/c10-stage-probe.mjs p3 [--heads both] [--total-mib 256]
+//   node scripts/probes/c10-stage-probe.mjs p3q                        真实配额撞 QuotaExceededError（临时占约 10 GiB 磁盘，见 runP3Quota）
 //   node scripts/probes/c10-stage-probe.mjs p4 [--heads headless]
 //   node scripts/probes/c10-stage-probe.mjs calibrate [--n 500]      只量 createSnapshot 的单帧耗时
 //   公共：--gpu on（不加 --disable-gpu；本机 GPU 路径下 rAF 只有 ~11 次 / 秒，所以缺省加）、--out <目录>（JSON 与构建的 snap.js，缺省系统临时目录下 c10-stage-probe）、--port-base 5420
@@ -595,6 +596,63 @@ async function runP3() {
   log(`\nJSON: ${file}`);
 }
 
+/**
+ * P3 的补充：Chrome 152 里 CDP Storage.overrideQuotaForOrigin 回 ok 却不生效（estimate().quota 不变、写多少都不报错），
+ * 所以用真实配额撞 QuotaExceededError：无头、一次性配置目录，按 8 MiB 一条写到报错，然后删一批（64 MiB）立刻重试一次。
+ * 会临时占掉约「源配额」那么多磁盘（本机约 10 GiB），浏览器关掉时连配置目录一起删。
+ */
+async function runP3Quota() {
+  const SNAP = await buildSnap();
+  const servers = await startStatic(SNAP);
+  const file = path.join(OUT, `p3q-${Date.now()}.json`);
+  const browser = await launch('headless');
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${PORT.parent}/`, { waitUntil: 'load' });
+    // 页面里备好库与写入函数；写入按批从 Node 驱动，免得单次 evaluate 超过协议时限
+    await page.evaluate(async () => {
+      window.__db = await new Promise((res, rej) => { const q = indexedDB.open('c10probe-q', 1); q.onupgradeneeded = () => q.result.createObjectStore('s'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      window.__put = (key, val) => new Promise((res, rej) => { const tx = __db.transaction('s', 'readwrite'); tx.objectStore('s').put(val, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); });
+      const base = new Uint8Array(8 * 1048576); for (let k = 0; k < base.length; k += 65536) crypto.getRandomValues(base.subarray(k, k + 65536));
+      window.__val = (n) => { const v = base.slice(); v[0] = n & 255; v[1] = (n >> 8) & 255; return v; };
+    });
+    const mib = (x) => +(x / 1048576).toFixed(1);
+    const est = () => page.evaluate(async () => { const e = await navigator.storage.estimate(); return { usage: e.usage, quota: e.quota }; });
+    const est0 = await est();
+    const freeGiB = () => { const st = fs.statfsSync(os.tmpdir()); return Math.round(st.bavail * st.bsize / 1073741824); };
+    log(`P3q quota at start ${mib(est0.quota)} MiB, disk free ${freeGiB()} GiB`);
+    const t0 = Date.now(); let n = 0, err = null;
+    while (!err && n < 4000) {
+      const r = await page.evaluate(async (from) => { let k = from; try { for (; k < from + 64; k++) await __put(k, __val(k)); return { n: k }; } catch (e) { return { n: k, err: { name: e && e.name, message: String(e && e.message).slice(0, 200) } }; } }, n);
+      n = r.n; err = r.err || null;
+      if (n % 256 === 0 || err) log(`  wrote ${n * 8} MiB ${err ? 'ERR ' + err.name : ''} (disk free ${freeGiB()} GiB)`);
+      if (!err && freeGiB() < 40) { err = { name: 'probe-stop', message: 'disk free < 40 GiB, stopped by the probe' }; break; }
+    }
+    const writeS = (Date.now() - t0) / 1000;
+    const est1 = await est();
+    const tDel = Date.now();
+    await page.evaluate(() => new Promise((res, rej) => { const tx = __db.transaction('s', 'readwrite'); tx.objectStore('s').delete(IDBKeyRange.bound(0, 7)); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }));
+    const delMs = Date.now() - tDel;
+    const est2 = await est();
+    const retry = []; let ok = false;
+    for (const wait of [0, 1000, 5000]) {
+      if (ok) break; if (wait) await sleep(wait);
+      const x = await page.evaluate(async (k) => { try { await __put(k, __val(k)); return { ok: true }; } catch (e) { return { ok: false, name: e && e.name }; } }, n);
+      ok = x.ok; retry.push({ wait, ...x });
+    }
+    let more = 0;
+    if (ok) more = await page.evaluate(async (from) => { let m = 0; for (let k = 1; k < 20; k++) { try { await __put(from + k, __val(from + k)); m++; } catch { break; } } return m; }, n);
+    const est3 = await est();
+    await page.evaluate(() => new Promise((res) => { __db.close(); const d = indexedDB.deleteDatabase('c10probe-q'); d.onsuccess = d.onerror = d.onblocked = res; }));
+    const r = { quota0MiB: mib(est0.quota), usage0MiB: mib(est0.usage), entries8MiB: n, wroteMiB: n * 8, writeS: +writeS.toFixed(1), writeMiBps: +(n * 8 / writeS).toFixed(1), error: err,
+      atError: { usageMiB: mib(est1.usage), quotaMiB: mib(est1.quota) }, deleted: { entries: 8, MiB: 64, ms: delMs }, afterDelete: { usageMiB: mib(est2.usage), quotaMiB: mib(est2.quota) },
+      retry, moreEntriesAfterRetry: more, end: { usageMiB: mib(est3.usage), quotaMiB: mib(est3.quota) } };
+    log(`P3q ${JSON.stringify(r)}`);
+    fs.writeFileSync(file, JSON.stringify(r, null, 1));
+  } finally { await browser.close().catch(() => {}); await closeAll(servers); }
+  log(`\nJSON: ${file}`);
+}
+
 /* ------------------------------------------------------------------ P4 */
 
 function proxy(port, target, { strip = false, prefix = null, stagePage = null } = {}) {
@@ -719,6 +777,7 @@ log(`c10-stage-probe ${CMD} out=${OUT} ports ${BASE}..${BASE + 9} puppeteer Chro
 if (CMD === 'p1') await runP1();
 else if (CMD === 'p2') await runP2();
 else if (CMD === 'p3') await runP3();
+else if (CMD === 'p3q') await runP3Quota();
 else if (CMD === 'p4') await runP4();
 else if (CMD === 'calibrate') await runCalibrate();
 else { console.error('unknown command ' + CMD); process.exitCode = 2; }
