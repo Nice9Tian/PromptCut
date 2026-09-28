@@ -71,7 +71,7 @@
 
 | 放法 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 放云端 | `m8-e-probe.mjs --case e4 --burst 50 --gaps 0,200,900`（`agent` 角色连项目、`project.commit` 带期望版本；笔记本另开成员页面只看） | 待填 | 三份 sha256 与 rev；每轮提交与 `stale` 次数；突发期间完成数 | 每轮结束文档服务、PC 页面、笔记本页面三份项目 sha256 相同；`stale` 重读重写、50 次都落地；突发期间至少完成 1 个细任务，结束后 J-全完 |
+| 放云端 | `m8-e-probe.mjs --case e4 --burst 50 --gaps 0,200,900`（`agent` 角色连项目、`project.commit` 带期望版本；笔记本另开成员页面只看）；PC `--role creator --case e4 --hosts host-a`，笔记本 `--role host --name host-a --case e4` | **过**（run `m8e4c`，08:36:55Z 起，20.3 min）：三轮各 50 次全落地；每轮三份摘要相同；后台 50 个细任务全完成，认领 PC 7、host-a 43 | 结果行 `ok true fails []`：间隔 0 / 200 / 900 ms 三轮 `all-landed` 50/50，`three-digests-equal` 文档服务、PC 副本、笔记本副本 = `93f7e51c…` rev 249 / `d5345714…` rev 546 / `59f267a1…` rev 986；`stale-exercised` 196 / 191 / 138 次（每次重读后重写）；`background-not-starved` 突发期间完成 2 / 3 / 6 个；`background:J-all-done` 50/50、`J-exactly-once` dup []、`J-pure-layers` 10 层 mixed []；host-a stats：认领 43、完成 41、去重 2、失败 0、丢认领 0。「页面」是按页面同一条协议维持的 Node 副本（`project.open` + 逐版应用 `project.ops`，同一个 `applyOps`、同一摘要算法），不是浏览器页面（`AGENT-m8-e2e.md` 第 5 节第 6 条） | 每轮结束文档服务、PC 页面、笔记本页面三份项目 sha256 相同；`stale` 重读重写、50 次都落地；突发期间至少完成 1 个细任务，结束后 J-全完 |
 | 放本机 | 同上，`--place lan` | 待填 | 同上 | 同上 |
 
 ### E5 纯浏览器节点只见本人任务
