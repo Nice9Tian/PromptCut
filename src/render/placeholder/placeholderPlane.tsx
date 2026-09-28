@@ -12,7 +12,11 @@ export const PlaceholderPlane = memo(function PlaceholderPlane({ clipId, geometr
   if (reason === "unsupported") {
     const style: CSSProperties = solid
       ? { position: "absolute", left: geometry.box.left, top: geometry.box.top, width: geometry.box.width, height: geometry.box.height }
-      : { position: "absolute", left: geometry.center.x, top: geometry.center.y, transform: "translate(-50%, -50%)" };
+      /*
+       * 小徽标:按 `--pc-ph-ui-scale` 反向放大(在线浏览器模式的舞台按父页的预览缩放设,`placeholderHost.placeholderUiScale`),
+       * 中心不动;变量没设时是 1,与原来一样。
+       */
+      : { position: "absolute", left: geometry.center.x, top: geometry.center.y, transform: "translate(-50%, -50%) scale(var(--pc-ph-ui-scale, 1))" };
     return <div data-pc-placeholder-plane="" data-pc-placeholder-kind={solid ? "unsupported" : "unsupported-badge"}
       data-pc-placeholder-clip={clipId} data-pc-placeholder-reason={reason}
       role="status" aria-label={UNSUPPORTED_TEXT} style={style}>

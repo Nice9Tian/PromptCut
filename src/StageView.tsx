@@ -37,7 +37,7 @@ import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePla
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { StreamPlayer } from "./render/streamPlayer";
 import {
-  applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
+  applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, onlineBrowserMode, PLACEHOLDER_UI_SCALE_VAR, placeholderUiScale, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
   resetPlaceholderGeometry, setCatchingUpClips, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
   unsupportedHere,
 } from "./render/placeholderHost";
@@ -2285,6 +2285,14 @@ export default function StageView() {
         const changed = setSyncedUserCards(Array.isArray(entries) ? entries : []);
         if (changed) commitPlanes();
         return { ok: true as const, changed };
+      },
+      /**
+       * 父页的预览缩放倍数:在线浏览器模式下把「需要本地 PC 渲染辅助」图标反向放大(CSS 变量设在本文档的根元素上,
+       * 占位组件的样式读它)。模式关着什么都不设,桌面舞台的输出一个字节不变。
+       */
+      async setViewScale(scale) {
+        if (onlineBrowserMode()) document.documentElement.style.setProperty(PLACEHOLDER_UI_SCALE_VAR, String(placeholderUiScale(scale)));
+        return { ok: true as const };
       },
       async setMediaPolicy(next) {
         // 低内存档只会从普通改到低(运行中改判),不回头:舞台自己判出来的 true 不被父页的 false 盖掉

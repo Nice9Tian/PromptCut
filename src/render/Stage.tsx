@@ -17,7 +17,7 @@ import { ensurePlaneStyle } from "./planeStyle";
 import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
 /* 占位组件(product/rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
-import { PlaceholderPlane, PLACEHOLDER_CSS, maxAnimated } from "./placeholder";
+import { PlaceholderPlane, PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, maxAnimated } from "./placeholder";
 import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
 import type { PlaceholderReason } from "./placeholder/contract";
 
@@ -119,7 +119,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    */
   const placeholders = usesPlanes && placeholdersEnabled();
   useEffect(() => {
-    if (placeholders) ensurePlaceholderStyle(PLACEHOLDER_CSS);
+    // 在线浏览器模式另加「需要本地 PC 渲染辅助」图标的放大规则;桌面注入的样式表与原来逐字相同
+    if (placeholders) ensurePlaceholderStyle(onlineBrowserMode() ? PLACEHOLDER_CSS + PLACEHOLDER_ONLINE_CSS : PLACEHOLDER_CSS);
   }, [placeholders]);
 
   /*

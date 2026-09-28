@@ -202,3 +202,19 @@ test("unsupported:只在在线浏览器模式下,且只认用户卡和图卡", (
   }
   assert.equal(UNSUPPORTED_TEXT, "需要本地 PC 渲染辅助");
 });
+
+/* ---------------------------------------------------------------- 续做:图标在屏幕上的大小 */
+
+import { placeholderUiScale, PLACEHOLDER_UI_SCALE_VAR } from "./placeholderHost.ts";
+
+test("placeholderUiScale:clamp(1 / 预览缩放, 1, 8);坏值回 1", () => {
+  assert.equal(PLACEHOLDER_UI_SCALE_VAR, "--pc-ph-ui-scale");
+  assert.equal(placeholderUiScale(0.25), 4);
+  assert.ok(Math.abs(placeholderUiScale(0.27) - 1 / 0.27) < 1e-12);
+  assert.equal(placeholderUiScale(0.5), 2);
+  assert.equal(placeholderUiScale(1), 1);
+  assert.equal(placeholderUiScale(2), 1, "放大预览时不缩小图标");
+  assert.equal(placeholderUiScale(0.05), 8, "缩得极小时封顶 8 倍");
+  for (const bad of [0, -1, NaN, Infinity, undefined, null, "x"]) assert.equal(placeholderUiScale(bad), 1, String(bad));
+  assert.equal(placeholderUiScale("0.5"), 2, "数字字符串照认");
+});

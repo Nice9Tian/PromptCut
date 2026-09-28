@@ -24,6 +24,21 @@ const TURN_RULES = PERF_DEGRADED ? "" : `
 }
 @keyframes pc-ph-turn { from { transform: rotate(0deg); } to { transform: rotate(180deg); } }`;
 
+/**
+ * 在线浏览器模式追加的规则(续做:图标在屏幕上的大小):铺满形态里的图标加字按 `--pc-ph-ui-scale` 放大、居中,
+ * 放不下就被框裁掉(占位平面本来就 `overflow: hidden`)。变量由舞台按父页的预览缩放设(`placeholderHost.placeholderUiScale`)。
+ * 单列一份、只在在线浏览器模式注入:桌面预览舞台注入的样式表与原来逐字相同。小徽标的放大写在组件的内联 `transform` 里。
+ */
+export const PLACEHOLDER_ONLINE_CSS = `
+[data-pc-placeholder-plane][data-pc-placeholder-kind="unsupported"] {
+  overflow: hidden;
+}
+[data-pc-placeholder-plane][data-pc-placeholder-kind="unsupported"] > .pc-ph-unsupported {
+  flex: none;
+  transform: scale(var(--pc-ph-ui-scale, 1));
+  transform-origin: 50% 50%;
+}`;
+
 export const PLACEHOLDER_CSS = `
 [data-pc-placeholder-plane] {
   position: absolute;

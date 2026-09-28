@@ -9,7 +9,7 @@
  * 预渲染结果由探针替渲染节点写:内容库的层表(v 2)与段清单(每帧都有原尺寸与小尺寸),字节由代理在 `/media/api/asset/snap|px/<hash>`
  * 上直接给(探针自己的「nginx」,不经素材服务的写票据);代理记下每个请求。
  *
- * 摆法(一个共享项目,五条轨道同一时段,各占画面的一格):
+ * 摆法(一个共享项目,六条轨道同一时段,各占画面的一格:框 640×360、不缩放):
  *   b   内置卡 `punch-pill`(有层)
  *   u   仓库用户卡 `mu-animated-shiny-text`(有层)
  *   s1  内容库同步来的用户卡 `probe-synced-card`(有层)
@@ -244,6 +244,26 @@ async function visibleStage(page) {
   }
   return frames[0] ?? null;
 }
+/**
+ * 某个片段的「需要本地 PC 渲染辅助」图标在**屏幕**上多大:舞台里占位平面的 `getBoundingClientRect`(已含包裹层与图标自己的变换)
+ * 乘以父页把舞台 iframe 缩到预览框的倍数(iframe 在父页里的宽 / 它的布局宽),位置加上 iframe 在父页里的左上角。
+ */
+async function iconOnScreen(page, clipId) {
+  const f = await visibleStage(page);
+  const el = f ? await f.frameElement().catch(() => null) : null;
+  if (!el) return null;
+  const outer = await el.evaluate((e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, layoutW: e.offsetWidth }; });
+  const inner = await f.evaluate((id) => {
+    const p = document.querySelector(`[data-pc-clip="${id}"] > [data-pc-placeholder-slot]:not([hidden]) [data-pc-placeholder-plane]`);
+    if (!p) return null;
+    const r = p.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height, kind: p.getAttribute('data-pc-placeholder-kind'), uiScale: getComputedStyle(document.documentElement).getPropertyValue('--pc-ph-ui-scale').trim() };
+  }, clipId);
+  if (!inner || !outer.layoutW) return null;
+  const k = outer.w / outer.layoutW;
+  return { viewScale: k, uiScale: inner.uiScale, kind: inner.kind, stage: { w: inner.w, h: inner.h },
+    screen: { x: outer.x + inner.x * k, y: outer.y + inner.y * k, w: inner.w * k, h: inner.h * k } };
+}
 /** 舞台里每个片段的状态:有没有包裹层、组件、快照平面(原尺寸 / 小尺寸)、占位槽位显没显示、原因与种类 */
 async function stageState(page, ids) {
   const f = await visibleStage(page);
@@ -329,7 +349,7 @@ try {
       duration: Math.max(p.duration, 4),
       tracks: [
         ...Object.keys(ids).map((k, i) => ({ id: 'ouc-t-' + k, name: '序列 ' + k, clips: [{ id: ids[k], cardId: cards[k], start: 0, end: 4, params: {},
-          frame: { x: tiles[i][0], y: tiles[i][1], scale: 1 / 3 } }] })),
+          frame: { x: tiles[i][0], y: tiles[i][1], w: 640, h: 360 } }] })),
         ...p.tracks,
       ],
     }));
@@ -372,6 +392,13 @@ try {
   check(st[ID.s2]?.placeholderShown && st[ID.s2]?.reason === 'unsupported' && /^unsupported/.test(st[ID.s2]?.kind ?? '') && (st[ID.s2]?.text ?? '').includes(UNSUPPORTED),
     '舞台:没有层的同步卡是「需要本地 PC 渲染辅助」(不是沙漏)', st[ID.s2]);
   check(st[ID.x]?.wrapper === false, '舞台:未知 id 不画', st[ID.x]);
+  // 图标在屏幕上看得清(续做):宽 ≥ 150、高 ≥ 24 屏幕像素
+  n.icon = await until('s2 的图标按预览缩放反向放大', async () => { const r = await iconOnScreen(A, ID.s2); return r && r.screen.w >= 150 ? r : null; }, 15_000) ?? await iconOnScreen(A, ID.s2);
+  check(n.icon && n.icon.screen.w >= 150 && n.icon.screen.h >= 24, 's2 的「需要本地 PC 渲染辅助」图标在屏幕上宽 ≥ 150、高 ≥ 24', n.icon);
+  if (n.icon) {
+    const pad = 24;
+    await A.screenshot({ path: path.join(OUT, 'normal-1-icon.png'), clip: { x: Math.max(0, n.icon.screen.x - pad), y: Math.max(0, n.icon.screen.y - pad), width: n.icon.screen.w + pad * 2, height: n.icon.screen.h + pad * 2, scale: 2 } }).catch(() => {});
+  }
   check(st[ID.b]?.wrapper === true, '舞台:内置卡在', st[ID.b]);
   n.requests = { snapU: reqsFor(L.u, 'snap'), snapS1: reqsFor(L.s1, 'snap'), snapB: reqsFor(L.b, 'snap'), pxAny: assetLog.filter((r) => r.ns === 'px').length };
   n.online = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
@@ -462,5 +489,5 @@ out.ok = fails.length === 0;
 out.fails = fails;
 out.assetRequests = { snap: assetLog.filter((r) => r.ns === 'snap').length, px: assetLog.filter((r) => r.ns === 'px').length };
 say('result', { ok: out.ok, fails: fails.length });
-console.log(JSON.stringify({ ok: out.ok, fails, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, lowmem: { backfill: out.lowmem.backfill, requests: out.lowmem.requests }, assetRequests: out.assetRequests }));
+console.log(JSON.stringify({ ok: out.ok, fails, icon: out.normal.icon ?? null, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, lowmem: { backfill: out.lowmem.backfill, requests: out.lowmem.requests }, assetRequests: out.assetRequests }));
 process.exit(out.ok ? 0 : 1);

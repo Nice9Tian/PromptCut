@@ -61,6 +61,8 @@ test("SL-01 在线:本机跑不了的卡不挂组件,照挂快照 / 流平面,�
       assert.doesNotMatch(w, /data-pc-placeholder-fixed/, "不再是常驻槽位");
       assert.match(w, /data-pc-placeholder-reason="unsupported"/);
       assert.match(w, /需要本地 PC 渲染辅助/);
+      // 量不到实体框:小徽标,按 --pc-ph-ui-scale 反向放大(续做:图标在屏幕上的大小),中心不动
+      assert.match(w, /data-pc-placeholder-kind="unsupported-badge"[^>]*transform:translate\(-50%, -50%\) scale\(var\(--pc-ph-ui-scale, 1\)\)/);
     }
     assert.doesNotMatch(b, /data-pc-placeholder-reason="unsupported"/, "内置卡的占位照旧是沙漏");
     assert.equal(wrapOf(html, "x"), null, "两边都没有的 id 不画");

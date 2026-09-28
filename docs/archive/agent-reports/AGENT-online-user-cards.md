@@ -114,3 +114,55 @@
 - 「进入后最多约 5 秒」那条小缺口按遗留处理，不改：最坏多测一次、多记一条很便宜的成本记录，键与桌面不同、不串，表到了之后不再起作用。
 - 用户当天另定：徽标文字改成「需要本地 PC 渲染辅助」、出现条件同图标（代码已由本分支直接引用占位符那句）；语义 `product/platforms.md` 与 `c10-contract.md` 第 9 节、文案表、`c10a-contract.md` 由主会话改。报告里建议的两句（定时重取不用 `content.watch`、覆盖按清单判）已写进 `c10-contract.md` 第 9 节。
 - 本报告随合并归档到 `docs/archive/agent-reports/`。
+
+## 续做：图标在屏幕上的大小
+
+问题：在线的用户卡从不在本机活渲，也没有流，量不到实体框，`unsupported` 总是小徽标形态。徽标按舞台像素画（图标 32×28、字 14px），舞台 iframe 是 1920×1080，父页用 CSS `scale(预览缩放)` 缩到预览框，27% 时屏幕上只剩十几个像素宽。
+
+做了什么：
+
+- **新 RPC `setViewScale(scale)`**（`src/render/stageRpc.ts` 的接口与 `METHODS`）：父页（`Preview.tsx`）握手时发一次，`scale` 变了再发，只在 `onlineBrowserMode()` 为真时发。
+- **舞台**（`StageView.tsx`）：只在 `onlineBrowserMode()` 为真时，把 `placeholderUiScale(scale)` 设到本文档根元素的 CSS 变量 `--pc-ph-ui-scale`。模式关着什么都不设。纯函数在 `src/render/placeholderHost.ts`：`clamp(1 / scale, 1, 8)`，坏值回 1。
+- **占位组件**，只改 `unsupported` 的两种形态：
+  - 小徽标（`placeholderPlane.tsx`）：内联 `transform` 改成 `translate(-50%, -50%) scale(var(--pc-ph-ui-scale, 1))`，中心不动。
+  - 铺满形态：新常量 `PLACEHOLDER_ONLINE_CSS`（`placeholderStyle.ts`，由 `placeholder/index.ts` 转出）。内容是 `.pc-ph-unsupported` 按变量放大、`transform-origin: 50% 50%` 居中，框 `overflow: hidden` 裁掉放不下的部分。它只在在线浏览器模式下由 `Stage` 拼在 `PLACEHOLDER_CSS` 后面注入，所以桌面预览舞台注入的样式表与原来逐字相同。
+- **沙漏、噪点**那几种没动。在 27% 预览下它们同样偏小（沙漏徽标 28×28 舞台像素，屏幕上约 7 像素），不在本次范围。
+- **占位符照旧不进导出、预渲染和生成的快照**：只有前台预览舞台打开占位（`setPlaceholdersEnabled`），后台舞台、导出页、预渲染从不打开；截图和快照的排除规则没动。
+- **桌面不变**：模式关着时不发 RPC、不设变量、不注入新规则；小徽标的内联样式只出现在 `unsupported` 形态，而这种形态只在在线浏览器模式下出现。
+
+测试：
+
+- `src/render/placeholderHost.test.mjs` 加 `placeholderUiScale` 一条：0.25→4、0.5→2、1→1、2→1、0.05→8，坏值回 1。
+- `src/render/placeholder/placeholder.test.mjs` 加一条：徽标 `transform`；铺满形态的规则在 `PLACEHOLDER_ONLINE_CSS` 里，`PLACEHOLDER_CSS` 里没有这个变量；变量只出现在 `unsupported` 的规则里。
+- `src/render/stageLocalOnly.test.mjs` 的 SL-01：在线时小徽标带 `scale(var(--pc-ph-ui-scale, 1))`。
+
+探针 `online-user-cards-probe`：
+
+- 各格的框改成 640×360、不缩放（原来是整幅 1920×1080 缩到 1/3，片段自己的缩放会把图标再缩三分之一）。
+- 量 s2 图标在屏幕上的大小：舞台里占位平面的 `getBoundingClientRect`，乘以父页里 iframe 宽与布局宽之比。断言宽 ≥ 150、高 ≥ 24。另存放大截图 `normal-1-icon.png`。
+
+验证（笔记本，2026-09-29）：
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc -b --force` | 退出码 0 |
+| 改到的单测（`placeholder`、`placeholderHost`、`stageLocalOnly`） | 21 + 2 条，全过 |
+| `npm test` | 3811 条：通过 3809、失败 0、跳过 2，退出码 0 |
+| 在线构建 `npx vite build --mode online --outDir <tmp>/dist-online` | 退出码 0 |
+| `online-user-cards-probe`（5744～5748） | 退出码 0，`ok:true`，`fails:[]` |
+| `c10-ui-probe`（5740～5743） | 退出码 0，`ok:true`，`fails:[]` |
+
+`c10-ui-probe` 第一遍失败过一次：「A7 不自动下载(点之前一份都没有) :: 2」。原因是 `--out` 目录里留着上一轮的两份备份下载，探针按目录里已有的文件数判；换空目录重跑即过。探针的问题，与本改动无关。
+
+量到的图标（`online-user-cards-probe` 最后一行 JSON 的 `icon`）：
+
+```
+"icon":{"viewScale":0.2657,"uiScale":"3.763","kind":"unsupported-badge","stage":{"w":732.2,"h":150.5},"screen":{"x":473.6,"y":331.5,"w":194.6,"h":40.0}}
+```
+
+也就是预览缩到 26.6% 时，图标加字在屏幕上是 **194.6 × 40.0 像素**（舞台像素 732 × 150）。看过的图：`normal-1-icon.png`，图标与「需要本地 PC 渲染辅助」清楚可读；`normal-1-before-s2-layer.png`，预览里 s2、s3 两个图标都看得清。
+
+记下的现象（没改）：
+
+- 放大后的徽标约 730 舞台像素宽，比 640 宽的格子还宽。相邻两个片段的徽标会叠在一起（s2、s3 就叠了一截），也会伸出片段的框（小徽标 `overflow: visible`，包裹层不裁）。片段一般铺满或占画面一大块，这只在很多个小片段挨着时出现。
+- 片段自己缩得很小（`frame.scale` 小于 1）时，图标跟着缩，放大倍数只补预览缩放那一层。

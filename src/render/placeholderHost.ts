@@ -176,6 +176,19 @@ export function needsLocalPc(
 }
 
 /**
+ * 「需要本地 PC 渲染辅助」图标的放大倍数(CSS 变量 `--pc-ph-ui-scale`)。舞台 iframe 按 1920×1080 画,父页用 CSS
+ * `scale(预览缩放)` 缩到预览框大小;图标按舞台像素画(32×28、字 14px),27% 时屏幕上只剩十几个像素。把它按
+ * `1 / 预览缩放` 反向放大,屏幕上约等于原尺寸;夹在 1～8 之间(放大预览时不缩小,缩得极小时也不无限放大)。
+ * 不是正数或不是有限数时回 1。只有在线浏览器模式的舞台用它(`StageView` 的 `setViewScale`)。
+ */
+export const PLACEHOLDER_UI_SCALE_VAR = "--pc-ph-ui-scale";
+export function placeholderUiScale(viewScale: unknown): number {
+  const s = Number(viewScale);
+  if (!Number.isFinite(s) || s <= 0) return 1;
+  return Math.min(8, Math.max(1, 1 / s));
+}
+
+/**
  * 在线浏览器模式下这台设备跑不了的片段(`unsupportedHere`,定义从注册表取)。模式关着回空集合。
  * 舞台据此不挂组件、照挂快照 / 流平面,占位符在兜底顺序尽头显示 `unsupported`。
  */

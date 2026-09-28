@@ -37,7 +37,7 @@ import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
 import { assetAuthHeaders, docRequest, hasDocLink, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
-import { needsLocalPc, setOnlineBrowserMode } from "../render/placeholderHost";
+import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
 import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
 import { setCoverageSource } from "./onlineCoverage";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
@@ -174,6 +174,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   const [cam, setCam] = useState<View2D>({ scale: 0.4, tx: 0, ty: 0, auto: true });
   const scale = cam.scale;
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
   const camRef = useRef(cam);
   camRef.current = cam;
   /**
@@ -599,6 +601,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         if (ONLINE) void pushMediaPolicyRef.current();
         // C10 契约第 9 节:内容库同步来的用户卡(本机跑不了)交给这一台舞台;桌面运行环境不发
         if (ONLINE) void client.setSyncedUserCards([...syncedUserCards().values()]).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
+        // 在线浏览器模式:预览缩放倍数交给舞台,「需要本地 PC 渲染辅助」图标据此反向放大;桌面不发
+        if (onlineBrowserMode()) void client.setViewScale(scaleRef.current).catch(() => { /* 同上 */ });
         // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
         if (role === "front") setStageReady((n) => n + 1);
         return;
@@ -844,6 +848,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     w.__pcCardSourcesSync = () => sources.sync();
     return () => { window.clearInterval(timer); offChange(); sources.stop(); delete w.__pcCardSources; delete w.__pcCardSourcesSync; };
   }, [online]);
+  /*
+   * 在线浏览器模式:预览缩放倍数变了,发给两个舞台(「需要本地 PC 渲染辅助」图标按它反向放大,屏幕上看得清)。
+   * 握手时另发一次(见 `pc-stage-ready` 那段)。桌面不发。
+   */
+  useEffect(() => {
+    if (!onlineBrowserMode()) return;
+    for (const id of STAGE_IDS) {
+      const c = rpcRef.current[id];
+      if (c) void c.setViewScale(scale).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
+    }
+  }, [scale]);
   /*
    * C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上。
    * M7 D12:task.done 的结果键认定活着、task.failed { error: 'superseded' } 是另一份活着(不是失败),在线来源据此选层表 v 3 的候选。
