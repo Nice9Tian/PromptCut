@@ -47,12 +47,31 @@ tsParticles 4.4 的 `Container.start()` 在 `init()`（粒子已排好）之后�
 ### 基线
 
 - `npx tsc -b --force`：exit 0（合并 main 之前和之后各跑一次）。
-- `npm test`（合并 main 之前）：tests 3467，pass 3465，fail 0，skipped 2，exit 0。
+- `npm test`：合并 main 之前 tests 3467 / pass 3465 / fail 0 / skipped 2；合并 main（211695d）之后 tests 3641 / pass 3639 / fail 0 / skipped 2，exit 0。
 - 导出确定性与像素基线比对：见下节。
 
 ## 导出确定性与像素基线
 
-（待补）
+合并 main 之后，用自己的 dev server（5860）跑：
+
+- `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5860/?export=1"`：Total Frames 1800，Identical 1800，Different 0，exit 0。
+- 用 `compare-frames.mjs` 逐像素比基准 `.worktrees/pc-g0r-base/out/verify-a/frames`：
+  `{"total":1800,"identical":1800,"different":0,"missing":0,"extra":0,"worst":null,"firstDiffs":[]}`
+- **导出像素基线没有变。** 但演示时间轴里没有粒子卡，这个结论只说明这次改动没有波及别的卡。
+
+粒子卡本身的导出另测了一次（`out/pb/pt.json`：只有一张默认参数的粒子卡，6 s，180 帧；导出脚本 `out/pb/export-pt.mjs`，比对脚本 `out/pb/cmp.mjs`）：导两遍逐像素相同（180 帧，差异帧 0，最大通道差 0），每帧都有约 2.3～2.7 万个不透明像素。
+
+### 遗留：预览与导出在同一时刻还不完全一致
+
+拿修后预览 t=3 s 的 canvas 原始像素（`pp-after/t3-first-canvas.png`）和导出第 90 帧比：约 2.5 万个不透明像素两边都有，有 879 个只在预览里有，776 个只在导出里有。也就是说，有少数粒子或连线的位置不同。t=5 s 两边的不透明像素数恰好都是 24520，但没做逐像素比对。
+
+已经排除的原因：整格步数。用 3、90/30、2.9999999999999996、5 算，都是 180 或 300 步，两边一样。
+
+还没查明。两个怀疑方向：
+- 导出页挂载的时机或次数不同。多张卡或多次挂载的 load 交错着用同一个全局随机数时，消耗顺序会不同。
+- 引擎那个延后触发的定时器，在两条路上相对于推进的先后不同。
+
+修前预览是空的，这个差异以前根本比不出来，不是这次改动引入的。建议另立任务，用 `verify-preview-window.mjs` 的 `particles-ready` 用例（需要能建 junction 的环境）或逐帧哈希追查。
 
 ## 没做的及原因
 
