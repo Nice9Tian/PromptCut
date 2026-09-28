@@ -519,17 +519,17 @@
 
 | 遗留 | 出处 | 去向 |
 |---|---|---|
-| `SWAP_MS` 按卡种实测没做，仍是缺省 3 ms | `REPORT-C10.md` 第 11 节 | 没有对应编号（报告建议并进 M7 或 M8 维护项，待核） |
-| 在线舞台握手成功后又断，沿用 iframe 重载 | 同上 | 没有对应编号（待核） |
-| 「区分自然进场与从卡中间开始播放」（`pause-precise` 的维护项） | `REPORT-C10.md` 第 6 节第 29 行 | 报告写「待进 M8 计划遗留表（待编号）」，`m8-plan.md` 第 5 节没有这一条 |
+| `SWAP_MS` 按卡种实测没做，仍是缺省 3 ms | `REPORT-C10.md` 第 11 节 | 没有 M8 计划编号，记在本节（`REPORT-C10.md` 第 11 节已改成指向这里） |
+| 在线舞台握手成功后又断，沿用 iframe 重载 | 同上 | 没有 M8 计划编号，记在本节（同上） |
+| 「区分自然进场与从卡中间开始播放」（`pause-precise` 的维护项） | `REPORT-C10.md` 第 6 节第 29 行 | `m8-plan.md` 第 5 节没有这一条，记在本节（`REPORT-C10.md` 第 6 节第 29 行已改成指向这里） |
 | 页面只是忙也会被 D2 接手，已做的帧白费 | `REPORT-M7.md` 第 11 节 | M8 维护或另立 |
 | 执行器不标 `snapshotOversize`，切分只按卡种挡浏览器 | 同上 | M8 维护或另立 |
 | 舞台互换时生成快照跟着后台位置走，没有专门的互换剧本验 | 同上 | M8 维护 |
 | 探针的 `PC_CHROME_ARGS` 别用来关 TLS 校验 | 同上 | 探针用法说明 |
 | 阿里云上残留三个 M7 探针项目 `m7ap-m7w0928a`、`m7ap-m7w0928b`、`m7ap-m7wlocal1` | `REPORT-M7.md` 第 9、11 节 | 用户或主会话按名删 |
 | `claude/join-error` 未合入 | `REPORT-M7.md` 第 4 节第 8 条 | 待用户审 |
-| `claude/m7-probe` 的四个可行性探针脚本 | `REPORT-M7.md` 第 12 节写「没并进集成分支、由主会话定」 | 已由 main `e86a754` 合入（按 `git log` 核），M7 报告第 12 节这句没回改 |
-| 归档后仍写旧路径 `docs/reports/AGENT-…` 的代码注释与文件头 | `REPORT-C10.md` 第 12 节；`REPORT-M7.md` 第 12 节 | 是否统一改由主会话定 |
+| `claude/m7-probe` 的四个可行性探针脚本 | `REPORT-M7.md` 第 12 节写「没并进集成分支、由主会话定」 | 已由 main `e86a754` 合入（按 `git log` 核），`REPORT-M7.md` 第 1、12 节已照此回改 |
+| 归档后仍写旧路径（`docs/reports/` 下的 `AGENT-…`）的代码注释与文件头 | `REPORT-C10.md` 第 12 节；`REPORT-M7.md` 第 12 节 | `.md` 里的已由分支 `claude/total-report` 改成新路径；代码文件里的 41 处没改（改 `src/` 连注释也会变代码版本），逐条列在 `AGENT-total-report.md`，是否统一改由主会话定 |
 | 粒子卡在编辑器预览里停住时画面空白（与 `/catalog/` 无关） | `REPORT-C10.md` 第 10 节「catalog 修复」 | 另立 `claude/particles-blank`（M8 期间的维护分支，结果由 M8 填） |
 
 ## 8. 待用户项
@@ -641,12 +641,12 @@
 
 ## 附录 B 各阶段 AGENT 报告的归档位置
 
-- `docs/archive/agent-reports/`：main `0cabcfb0` 上共 87 份。骨架时 66 份（M5b、M6、SP、C6.5、C6.6、C10a、HT-a 及同期维护分支）；之后进来 21 份：
+- `docs/archive/agent-reports/`：分支 `claude/total-report`（起点 main `0cabcfb0` 之后）上共 **105 份**：main `0cabcfb0` 上的 87 份，加本次归档的 18 份（见下）。main `0cabcfb0` 上的 87 份：骨架时 66 份（M5b、M6、SP、C6.5、C6.6、C10a、HT-a 及同期维护分支）；之后进来 21 份：
   - C10 其余 12 份：`AGENT-c10-a4.md`、`AGENT-c10-browser.md`、`AGENT-c10-cost.md`、`AGENT-c10-integ.md`、`AGENT-c10-probe.md`、`AGENT-c10-tests.md`、`AGENT-c10-ui.md`、`AGENT-tier-reload-seek.md`（`REPORT-C10.md` 第 12 节，提交 `7069423`），`AGENT-pause-precise.md`、`AGENT-c10-site.md`、`AGENT-c10-catalog.md`、`AGENT-online-prune.md`（定稿分支 `claude/c10-report-final`）；
   - M7 5 份：`AGENT-rq-m7-queue.md`、`AGENT-rq-m7-node.md`、`AGENT-rq-m7-tests.md`、`AGENT-m7-accept-probe.md`、`AGENT-m7-probe.md`（`REPORT-M7.md` 第 12 节）；
   - M8 期间 4 份：`AGENT-m8-e6r.md`、`AGENT-sink-has.md`、`AGENT-site-bake-slow.md`、`AGENT-stall-phases.md`（按 `git diff --name-status c718be6 0cabcfb0` 核；归哪个阶段由 M8 主会话定）。
 - M5a、C5、C6.1～C6.4 的子报告**没有单独文件**：内容并进阶段报告，原文留在各子分支的提交里（各报告「过程记录」一节）。
-- main `0cabcfb0` 上仍在 `docs/reports/` 的 18 份，待 M8 收尾时归档：`AGENT-card-overlay.md`、`AGENT-eol-eperm.md`、`AGENT-evidence-audit.md`、`AGENT-host-diag.md`、`AGENT-hygiene.md`、`AGENT-lan-asset.md`、`AGENT-lowmem-latency.md`、`AGENT-m8-connect-proxy.md`、`AGENT-m8-e2e.md`、`AGENT-m8-kit.md`、`AGENT-m8-migrate.md`、`AGENT-m8-scale.md`、`AGENT-m8-session-legacy.md`、`AGENT-particles-blank.md`、`AGENT-perf-encode.md`、`AGENT-perf-t4.md`、`AGENT-tailwind-guard.md`、`AGENT-undo-refresh.md`。C10、M7 的都已归档。
+- 2026-09-29 分支 `claude/total-report` 用 `git mv` 归档的 18 份（原在 `docs/reports/`，同名文件归档目录里都没有）：`AGENT-card-overlay.md`、`AGENT-eol-eperm.md`、`AGENT-evidence-audit.md`、`AGENT-host-diag.md`、`AGENT-hygiene.md`、`AGENT-lan-asset.md`、`AGENT-lowmem-latency.md`、`AGENT-m8-connect-proxy.md`、`AGENT-m8-e2e.md`、`AGENT-m8-kit.md`、`AGENT-m8-migrate.md`、`AGENT-m8-scale.md`、`AGENT-m8-session-legacy.md`、`AGENT-particles-blank.md`、`AGENT-perf-encode.md`、`AGENT-perf-t4.md`、`AGENT-tailwind-guard.md`、`AGENT-undo-refresh.md`。本分支的 `docs/reports/` 里只剩这次任务自己的 `AGENT-total-report.md`（随本分支合入后由主会话归档）。main 在本分支起点之后又进来的 `AGENT-m8-e3-page.md`（main `9cf43f1f`）不在本分支上，合入后仍在 `docs/reports/`，由主会话归档。
 - 还没进 main 的：`AGENT-join-error.md`（在 `claude/join-error` 上，随它合入时归档；`REPORT-M7.md` 第 12 节）；M8 各分支的由主会话收尾时填。
 
 ## 骨架里发现的缺口
@@ -680,15 +680,15 @@
 3. 【已解决】`REPORT-C6.6.md` 第 11 节已回改：位置写成 `src/store/docsync.ts`，注明原写 `src/editor/sync/` 有误。
 4. 主计划第 6.5、7 节多处写「云端」。2026-09-28 第四次修订一度把云端工作节点归档，同日第二次补充又恢复在线（主计划文件头；`m8-plan.md`「依据」）；C10 外网四轮实际由云端当独立渲染主机（`REPORT-C10.md` 第 0、7 节），M7 的 W7 由笔记本当成员 B、云端当不了纯浏览器节点（`REPORT-M7.md` 第 7 节）。本文第 3.2 节第 7、12 条与骨架时的「云端已归档」说法已按两份报告改；主计划正文没回改（没解决，留给主会话）。
 
-**四、补 C10、M7 时发现的，与各阶段报告对不上或报告自身前后不一的地方**（都没改各阶段报告，只记在这里）
+**四、补 C10、M7 时发现的，与各阶段报告对不上或报告自身前后不一的地方**（2026-09-29 由分支 `claude/total-report` 照现状改了对应报告与计划的字面，每条前标【已更正】并写改了哪里；第 9 条是待用户项，不改）
 
-1. `REPORT-C10.md` 第 1 节末仍写「还没合入 main」、表里 `pause-precise`、`c10-site` 仍写「在做」；实际这两条已在第 10 节写明并入集成分支，C10 也已合入 main（快进到 `51f01c4`）。
-2. `REPORT-C10.md` 第 5 节开头写「外网一轮都还没跑（第 7 节）」，与同报告第 5 节 A5 行、第 7 节的外网结果（run `c10s0928e` 通过）矛盾，是定稿时没回改的旧句。
-3. `REPORT-C10.md` 第 3 节把 `62850af` 叫「合入提交」；按 `git log --first-parent`，C10 是快进进 main，`62850af` 是集成分支上的报告定稿提交，main 最后停在 `51f01c4`（之后两次只改报告）。本文第 2.8 节两个都写了。
-4. `REPORT-C10.md` 第 5 节 A9 行备注「外网 `c10a-demo-probe` 这一阶段没跑部署后外网复跑 `c10a-demo-probe` 定为随 M8-X3 做」少了标点，读起来是两句粘在一起。
-5. `REPORT-C10.md` 第 6 节第 29 行与第 11 节写「区分自然进场与从卡中间开始播放」「`SWAP_MS` 按卡种实测」「舞台握手后又断」待进 M8 遗留表或「没有对应编号」；`m8-plan.md` 第 5 节至今没有这三条（本文第 7.4 节暂记）。
-6. `REPORT-M7.md` 第 1 节末仍写「还没合入 main」；实际 M7 已快进进 main（`a52344a`）。
-7. `REPORT-M7.md` 第 12 节写 `claude/m7-probe` 的四个探针脚本「没并进集成分支、要不要并进由主会话定」；main 上已有 `e86a754`「合并 claude/m7-probe：M7 可行性探针 P1～P6 脚本」，这句没回改。
-8. `REPORT-M7.md` 第 0 节写「C10 合入 main 之后开工」，但第 1 节的分支起点都是 C10 集成分支的 `24c2c57`（C10 合入 main 之前），集成分支到 `313b27c` 才合 main `3ab63cf` 带上 C10。「之后」指的是 C10 契约与集成定形之后还是真合入之后，报告没说清（待核）。
-9. M7 D18 的语义改动：`REPORT-M7.md` 第 8 节说是「定计划时的 dry run」，但按 `suggested_agent_behavior.md`「对齐」，定计划时的语义 dry run 要用户确认后才写；报告只说契约「发给用户但不等」，没有用户确认的记录（本文第 8 节第 28 条记为待用户审）。
-10. `m8-plan.md` 第 1.1 节前置表与 `REPORT-render-queue-m8.md`（main 上的旧版）第 1.1 节仍写 C10、M7「未合入」，`REPORT-render-queue-m8.md` 的「E5 纯浏览器节点只见本人任务」表写「M7 交付的探针（文件名待 M7 合入后填）」；这两份归 M8，由主会话收尾时改。
+1. 【已更正】`REPORT-C10.md` 第 0 节、第 1 节表与合入顺序、第 11 节 L21 行：两条后续分支改成已并入集成分支（`2f7f821`、`fb3aaa7`）、报告指向归档位置；「还没合入 main」删掉，合入顺序补到 `51f01c4`，写明 C10 快进进 main。原记：`REPORT-C10.md` 第 1 节末仍写「还没合入 main」、表里 `pause-precise`、`c10-site` 仍写「在做」；实际这两条已在第 10 节写明并入集成分支，C10 也已合入 main（快进到 `51f01c4`）。
+2. 【已更正】`REPORT-C10.md` 第 5 节开头：旧句删掉，改写成云端跑了外网四轮、`c10s0928e` 全过、A5 外网通过、其余归 M8-X3。原记：`REPORT-C10.md` 第 5 节开头写「外网一轮都还没跑（第 7 节）」，与同报告第 5 节 A5 行、第 7 节的外网结果（run `c10s0928e` 通过）矛盾，是定稿时没回改的旧句。
+3. 【已更正】`REPORT-C10.md` 第 3 节 G0 表：`62850af` 一行改叫「报告定稿」，写明 C10 快进进 main、main 停在 `51f01c4`；第 13 节同步。原记：`REPORT-C10.md` 第 3 节把 `62850af` 叫「合入提交」；按 `git log --first-parent`，C10 是快进进 main，`62850af` 是集成分支上的报告定稿提交，main 最后停在 `51f01c4`（之后两次只改报告）。本文第 2.8 节两个都写了。
+4. 【已更正】`REPORT-C10.md` 第 5 节 A9 行备注：补句号分成两句。原记：`REPORT-C10.md` 第 5 节 A9 行备注「外网 `c10a-demo-probe` 这一阶段没跑部署后外网复跑 `c10a-demo-probe` 定为随 M8-X3 做」少了标点，读起来是两句粘在一起。
+5. 【已更正】`REPORT-C10.md` 第 6 节第 29 行与第 11 节两行：`m8-plan.md` 第 5 节确实没有这三条，改成「没有 M8 计划编号，记在 `REPORT-M5-M8.md` 第 7.4 节」；本文第 7.4 节三行同步。原记：`REPORT-C10.md` 第 6 节第 29 行与第 11 节写「区分自然进场与从卡中间开始播放」「`SWAP_MS` 按卡种实测」「舞台握手后又断」待进 M8 遗留表或「没有对应编号」；`m8-plan.md` 第 5 节至今没有这三条（本文第 7.4 节暂记）。
+6. 【已更正】`REPORT-M7.md` 第 1 节末：「还没合入 main」改成已快进进 main、main 指到 `a52344a`，并列出之后 main 上的合并与文档提交。原记：`REPORT-M7.md` 第 1 节末仍写「还没合入 main」；实际 M7 已快进进 main（`a52344a`）。
+7. 【已更正】`REPORT-M7.md` 第 1 节表 `m7-probe` 行与第 12 节：改成四个探针脚本由 main `e86a754` 合入；本文第 7.4 节该行同步。原记：`REPORT-M7.md` 第 12 节写 `claude/m7-probe` 的四个探针脚本「没并进集成分支、要不要并进由主会话定」；main 上已有 `e86a754`「合并 claude/m7-probe：M7 可行性探针 P1～P6 脚本」，这句没回改。
+8. 【已更正】`REPORT-M7.md` 第 0 节：按 git 历史写准——契约定的是「C10 合入 main 之后」开工，实际各分支起点是 C10 集成分支 `24c2c57`（05:15），首个提交 05:31，早于 C10 快进进 main（`51f01c4`，08:06），即 C10 合入 main 之前开工，集成分支到 `313b27c` 才带上已合入 main 的 C10。原记：`REPORT-M7.md` 第 0 节写「C10 合入 main 之后开工」，但第 1 节的分支起点都是 C10 集成分支的 `24c2c57`（C10 合入 main 之前），集成分支到 `313b27c` 才合 main `3ab63cf` 带上 C10。「之后」指的是 C10 契约与集成定形之后还是真合入之后，报告没说清（待核）。
+9. 待用户项，不改。M7 D18 的语义改动：`REPORT-M7.md` 第 8 节说是「定计划时的 dry run」，但按 `suggested_agent_behavior.md`「对齐」，定计划时的语义 dry run 要用户确认后才写；报告只说契约「发给用户但不等」，没有用户确认的记录（本文第 8 节第 28 条记为待用户审）。
+10. 【已更正】`m8-plan.md` 第 1.1 节前置表：C10、M7 两行改成已合入（main `51f01c4`、`a52344a`），遗留一行补 L10/L16 `2fa0c1a6`、L4/L5 `2e957270`、L14 `278eeb9d`、L20 `211695d`，表下补探针分支 m8-kit `fdf515e3`、m8-migrate `6d516f32`、m8-scale `b18256e1`、m8-e2e `4538ec42`（每个提交都用 `git log -1` 与 `git merge-base --is-ancestor <提交> origin/main` 核过）；`REPORT-render-queue-m8.md` 那一半由主会话在另一分支改，本分支没动。原记：`m8-plan.md` 第 1.1 节前置表与 `REPORT-render-queue-m8.md`（main 上的旧版）第 1.1 节仍写 C10、M7「未合入」，`REPORT-render-queue-m8.md` 的「E5 纯浏览器节点只见本人任务」表写「M7 交付的探针（文件名待 M7 合入后填）」；这两份归 M8，由主会话收尾时改。
