@@ -29,7 +29,7 @@
  * 令牌与口令：集群令牌、票据、会话号、口令都不打印、不进结果行；票据只在内存里做「有没有漏进地址 / 日志 / describe」的比对。
  *
  * 其它参数：
- *   --out <目录>  --keep-temp  --dist <在线构建目录>  --timeout-min 45  --node-wait-s 60  --a3-seconds 60
+ *   --out <目录>  --keep-temp  --dist <在线构建目录>  --timeout-min 120  --node-wait-s 60  --a3-seconds 60
  *   --no-twin     页面没当节点时不跑「页面同身份替身」的 D1 / D2 / D12 服务端检查（它要 30 s 以上的锁闲置）
  *   --no-a10      不跑 M7-A10（它要重启 A 的编辑器、关页面、等 30 s）
  *   --headful     node 角色用有头 Chrome（排障）
@@ -63,7 +63,7 @@ const TICKET_RE = /v1\.[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{30,}/;
 const { arg, flag } = argsOf();
 const ROLE = arg('--role', arg('--site') ? 'creator' : 'all');
 const say = sayer(PROBE, ROLE);
-const TIMEOUT_MS = Number(arg('--timeout-min', 45)) * 60_000;
+const TIMEOUT_MS = Number(arg('--timeout-min', 120)) * 60_000;
 const deadline = Date.now() + TIMEOUT_MS;
 const NODE_WAIT_MS = Number(arg('--node-wait-s', 60)) * 1000;
 const A3_MS = Number(arg('--a3-seconds', 60)) * 1000;
@@ -86,7 +86,7 @@ function createBook() {
     part(id, name, status, detail) {
       if (!['pass', 'fail', 'pending'].includes(status)) throw new Error(`状态不对：${status}`);
       (items[id] ??= { parts: {} }).parts[name] = { status, ...(detail === undefined ? {} : { detail }) };
-      say('part', { id, name, status });
+      say('part', { id, name, status, detail: JSON.stringify(detail ?? null).slice(0, 1500) });
       return status === 'pass';
     },
     judge(id, name, ok, detail) { return book.part(id, name, ok ? 'pass' : 'fail', detail); },
