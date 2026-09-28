@@ -1,6 +1,6 @@
 # M8 阶段报告：多端物理联调
 
-状态：**骨架**（2026-09-28，由 PC 主会话「PromptCut 主会话（PC）」派出的子智能体起草，只写文档）。每项留「命令 / 结果 / 证据 / 判据」四栏：命令写的是 `m8-plan.md` 里的命令形状（端口、地址以跑时为准，令牌只从环境变量取、不进命令行与输出），判据照 `m8-plan.md` 与主计划第 7 节 M8 抄录，结果与证据待填。全案总账见 `REPORT-M5-M8.md`（主会话裁定 D8：两份报告）。
+状态：**定稿**（2026-09-29，主会话「PromptCut M5～M8 开发交接」收尾）。骨架由 PC 主会话「PromptCut 主会话（PC）」派出的子智能体起草（2026-09-28）；每项「命令 / 结果 / 证据 / 判据」四栏，命令写跑时的实际参数（令牌只从环境变量取、不进命令行与输出），判据照 `m8-plan.md` 与主计划第 7 节 M8 抄录。全案总账见 `REPORT-M5-M8.md`（主会话裁定 D8：两份报告）。
 
 - **依据**：主计划 `Master-Execution-Plan.md` 第 6.5 节 W8、第 6.8 节、第 7 节 M8、第 8 节；M8 执行计划 `m8-plan.md`（分支 `claude/m8-plan` `9f13055`，含主会话对 D1～D12 的裁定与预检结果）；任务书 `TASK-distributed-prerender-queue.md` 第 6 节；`hosting-migration.md`；`http-transport-contract.md` 第 11 节；`m7-contract.md` 第 10 节；`c10-contract.md` 第 13、18、20 节。
 - **代号**：E1～E6、K1、I1、G0 / G0-R、W8、待跨机复核、待用户项的白话说明见 `REPORT-M5-M8.md` 的代号表；本文新出现的：
@@ -12,7 +12,14 @@
 
 ## 0. 结论
 
-〔待填：M8 验收是否全过；没过的项、原因、按回退梯次走到哪一级；哪些仍待跨机复核或待用户。〕
+**M8 验收全过**（main = release = `501a7dd7` 之后只合文档；全案最终基线见第 9 节）。
+
+- **E1～E6**：放云端全过（E5 的 A1～A3 过、A4 按 M7 口径记经公网的观察项；E6 测试开关与真不同环境两种都过）；放本机由 PC 辅助节点当局域网主机、笔记本当主机的**真跨机**全过（E1 只靠组播发现，E2、E3（兼 C4，两轮）、E4、E6）；E5 放本机按语义不做（第 13.3 节）。
+- **K1-X、I1-X** 过；**异地接入**：假任务两轮与真实渲染一轮过（PC 创建者、笔记本远程成员，全程没有到 PC 的局域网连接；真热点记待用户项）；**换机迁移演练**过。
+- **C1～C5** 过（C1 放云端首轮挂在停滞误判、修复后过；C4 两轮，另补重启后的 `asset-lan-probe`）；**M8-X1～X3** 过（M8-X1 放本机版 T9 真跨机），M8-X4 按语义不做。
+- **带耗时门槛的项**（笔记本判）：T4 三轮过；T9 改卡后重测 2247 ms 过；M7-A4 本机过；**1080p 分段编码**收尾前复测贴线没过（中位数 302 ms），按性能缺陷修（`claude/perf-encode-2`，产出逐字节不变），最终候选上连续 5 轮 p50 207～224 ms 过。
+- **M8 期间查出并修好的缺陷**：停滞误判、产物库缺块、跨节点去重（各有契约级〔裁〕）、纯浏览器节点推送提速、编码余量；另按用户要求堵上测试与探针写用户 `Videos\PromptCut` 的两条路（第 12a 节）。
+- **仍未真跨机或没做的**：真手机热点、真手机扫码与 iOS 导出（需要人在机器旁）；浏览器进放本机的项目（按语义不做）；C3 的无扰动对照（只记录项，没跑）。〔裁〕与待用户项见第 13.2、13.4 节。
 
 ## 1. 前置、环境与握手
 
@@ -89,7 +96,7 @@
 
 | 放法 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 放云端 | `scripts/probes/m7-browser-probe.mjs` 的站点模式（W7 同法）：PC `--role creator --site https://8-219-80-16.sslip.io --run <id> --node-wait-s 2400`；笔记本 `--role node --site … --run <id> --timing-authoritative`（笔记本 Chrome 当成员 B 的纯浏览器节点） | **A1、A2 过；A3 服务端那半在外网模式看不到认领者，由节点侧 `page-forbidden-claimed-0` 判**：M7 阶段的 W7（run `m7w0928e`，旧代码 `ddf69b5e…`）跨机过；部署推送提速之后复测（run `m7w0928f`，09:36Z，代码 `21c62981…`）：A1、A2、A5（笔记本计时）、A7、A8、A9、A10、A12（笔记本计时）、D1-D2-D12、D9、D10、D14 过，A3、A11 按外网模式记待定（看不到托管端的认领者与日志）；A4 与 A6 见下。**站点复测第 2 轮**（run `m7w0928L`，2026-09-28T12:03:14Z～12:26:11Z，第五次修订后 PC 待命：创建者 `--role creator --site … --node-wait-s 2400 --base-port 5780` 与成员 B 的节点 `--role node --site … --timing-authoritative --base-port 5760` 都在笔记本上，main `29e6e837`）：A1、A2、A3（节点侧 `page-forbidden-claimed-0`）、A5、**A6**（上一轮挂在探针时序、修后这轮过）、A7、A8、A9、A12、D9、D10、D14、D1-D2-D12 过；A10 的「空闲接手」过（锁移到 PC 指纹、页面层换过去、ready 61，用时 218 s）；**没过的两处都是慢**：① A4 最慢锚点段 33.3 s（经公网，笔记本判；上一轮 37.4 s），另 3 层到判的那一刻还没有浏览器产的帧（`page-layer-env-browser`：h1 ready 60、h2 / h3 / light 仍是 PC 指纹的主候选 ready 0）；② A10「两份任务谁先谁得卡、每张卡只出自一种环境」：加的两张卡 w2 由浏览器节点做完（`258acaaa…`），w1 在探针等的 300 s 里谁都没做完，于是记失败——同一台笔记本上同时跑创建者的 PC 节点（刚接手重渲整张 z1）与浏览器节点，软件渲染排不开；**没有一张卡混两种环境**。〔裁〕A4 照 M7 验收口径记经公网的观察项（30 s 门槛以笔记本本机 M7-T1c 27.6 s 为准）；A10 的站点通过证据以 `m7w0928f`（PC 创建者、笔记本节点，过）为准，这一轮的超时记单机负载下的现象；W7 的真跨机（D17）仍待复核：云端的无头 Chromium 过不了它的代理的 WebSocket 升级（W7-4），当不了成员 B 的浏览器 | 创建者结果行（`items` 逐项）；笔记本 M8-B3a 回执（交接前已收，见 `HANDOFF-2026-09-28-pc.md` 第 5 节）。**A6「更急的活在帧边界让路」这一轮没过**（`framesAfter 60`、没有释放）：查明是探针时序——节点认领一到手先报一条 done 0，探针见到就触发，而这时后台舞台上还没在生成，测量直接做完、没有东西可让；同一代码在本机替身（含压 76 ms）与旧代码的站点首轮都过。探针改为等这一段真的出过帧（done ≥ 1）再触发（`claude/m7-a6-race`，合并提交 `21eaeb8f`，与停滞修复、产物库修复同一批进 main，main 前进到 `0cabcfb0`），复跑见本行结果栏站点复测第 2 轮 `m7w0928L`：A6 过。**A4** 最慢锚点段 37.4 s（旧代码同法 63 s）：首段从闸门放开到完成 23.7 s，其后两段各约 7 s（每帧 p50 95 ms），剩下的超出在首段开工前约 17 s（经公网取卡片代码、素材、票据与舞台预热），按 M7 验收口径（30 s 门槛在笔记本本机判，M7-T1c 27.6 s 过）记为经公网的观察项 | M7-A1、A2、A3：同项目另一成员的任务收到 0 条、认领 `forbidden`；同名不同设备同样挡住 |
+| 放云端 | `scripts/probes/m7-browser-probe.mjs` 的站点模式（W7 同法）：PC `--role creator --site https://8-219-80-16.sslip.io --run <id> --node-wait-s 2400`；笔记本 `--role node --site … --run <id> --timing-authoritative`（笔记本 Chrome 当成员 B 的纯浏览器节点） | **A1、A2 过；A3 服务端那半在外网模式看不到认领者，由节点侧 `page-forbidden-claimed-0` 判**：M7 阶段的 W7（run `m7w0928e`，旧代码 `ddf69b5e…`）跨机过；部署推送提速之后复测（run `m7w0928f`，09:36Z，代码 `21c62981…`）：A1、A2、A5（笔记本计时）、A7、A8、A9、A10、A12（笔记本计时）、D1-D2-D12、D9、D10、D14 过，A3、A11 按外网模式记待定（看不到托管端的认领者与日志）；A4 与 A6 见下。**站点复测第 2 轮**（run `m7w0928L`，2026-09-28T12:03:14Z～12:26:11Z，第五次修订后 PC 待命：创建者 `--role creator --site … --node-wait-s 2400 --base-port 5780` 与成员 B 的节点 `--role node --site … --timing-authoritative --base-port 5760` 都在笔记本上，main `29e6e837`）：A1、A2、A3（节点侧 `page-forbidden-claimed-0`）、A5、**A6**（上一轮挂在探针时序、修后这轮过）、A7、A8、A9、A12、D9、D10、D14、D1-D2-D12 过；A10 的「空闲接手」过（锁移到 PC 指纹、页面层换过去、ready 61，用时 218 s）；**没过的两处都是慢**：① A4 最慢锚点段 33.3 s（经公网，笔记本判；上一轮 37.4 s），另 3 层到判的那一刻还没有浏览器产的帧（`page-layer-env-browser`：h1 ready 60、h2 / h3 / light 仍是 PC 指纹的主候选 ready 0）；② A10「两份任务谁先谁得卡、每张卡只出自一种环境」：加的两张卡 w2 由浏览器节点做完（`258acaaa…`），w1 在探针等的 300 s 里谁都没做完，于是记失败——同一台笔记本上同时跑创建者的 PC 节点（刚接手重渲整张 z1）与浏览器节点，软件渲染排不开；**没有一张卡混两种环境**。〔裁〕A4 照 M7 验收口径记经公网的观察项（30 s 门槛以笔记本本机 M7-T1c 27.6 s 为准）；A10 的站点通过证据以 `m7w0928f`（PC 创建者、笔记本节点，过）为准，这一轮的超时记单机负载下的现象；W7 的真跨机（D17：PC 当用户 A、笔记本 Chrome 当成员 B）由 `m7w0928e`、`m7w0928f` 跑过；第 2 轮两个角色都在笔记本上，是因为第五次修订后 PC 待命、云端的无头 Chromium 又过不了它的代理的 WebSocket 升级（W7-4），当不了成员 B | 创建者结果行（`items` 逐项）；笔记本 M8-B3a 回执（交接前已收，见 `HANDOFF-2026-09-28-pc.md` 第 5 节）。**A6「更急的活在帧边界让路」这一轮没过**（`framesAfter 60`、没有释放）：查明是探针时序——节点认领一到手先报一条 done 0，探针见到就触发，而这时后台舞台上还没在生成，测量直接做完、没有东西可让；同一代码在本机替身（含压 76 ms）与旧代码的站点首轮都过。探针改为等这一段真的出过帧（done ≥ 1）再触发（`claude/m7-a6-race`，合并提交 `21eaeb8f`，与停滞修复、产物库修复同一批进 main，main 前进到 `0cabcfb0`），复跑见本行结果栏站点复测第 2 轮 `m7w0928L`：A6 过。**A4** 最慢锚点段 37.4 s（旧代码同法 63 s）：首段从闸门放开到完成 23.7 s，其后两段各约 7 s（每帧 p50 95 ms），剩下的超出在首段开工前约 17 s（经公网取卡片代码、素材、票据与舞台预热），按 M7 验收口径（30 s 门槛在笔记本本机判，M7-T1c 27.6 s 过）记为经公网的观察项 | M7-A1、A2、A3：同项目另一成员的任务收到 0 条、认领 `forbidden`；同名不同设备同样挡住 |
 | 放本机 | 同上，`--place lan`；前提是浏览器能进放本机的项目（M8-X4） | **按语义不做**（2026-09-28 主会话更正裁定 D6）：`product/platforms.md`「在线浏览器模式」（用户 2026-09-27 定）写明「只加入……项目只能是放云端的多用户协作项目」，浏览器进放本机的项目不是一期承诺的能力，纯浏览器节点也就不会出现在放本机的项目里。原裁定 D6「记待跨机复核」等于推到 M8 之外，与主计划第 10 节「不得缩小范围」对不上；按「语义优先」改为不做，见第 13 节 | — | — |
 
 ### E6 两种指纹
@@ -213,8 +220,8 @@
 
 | 项 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 1080p 全幅流 15 帧分段编码 | 笔记本空闲时段跑 `node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5203`（不带 `--group`；dev server 是 `.claude/launch.json` 的 `dev-test`），每轮前 5 s 平均 CPU < 15% | **收尾前复测没过（贴线），修复中**：笔记本（接交流电、Balanced）main `9cf43f1f` 上有效 5 轮 p50 = 300 / 332 / 283 / 311 / 302 ms（中位数 302）；另有一轮撞上别的会话遗留批次开跑（343 ms）不计。编码路径 `server/bakery/` 自 `claude/perf-encode`（main `211695d`：当时笔记本 ENC-1 290 ms、ENC-2 283 ms、五轮全过）没改过，是当时余量不够（那份报告估笔记本 265～300 ms「离线不远」）。按规矩算真挂、不按机器差异豁免、门槛不动：派 `claude/perf-encode-2` 在笔记本上找余量（先找产出逐字节不变的路），结果见第 12a 节 | 每轮结果行（`bench` 里 `clip-bg` 的 `p50` 与三次 `encodeMs`；`clip-pill` 50～90 ms） | p50 ≤ 300 ms；改门槛须用户确认 |
-| 后台上传期间主线程无 > 50 ms 长任务 | `node scripts/probes/tiers-probe.mjs --port-a 5760 --port-r 5763` ×3（每轮前 5 s 平均 CPU < 15%） | **过**（笔记本空闲，main `9cf43f1f`，17:17:11Z～17:19:36Z）：三轮开跑前 CPU 9.7% / 10.1% / 7.3%，窗口 2557 / 2497 / 2502 ms 里编辑 21 / 20 / 20 次，> 50 ms 长任务都是 0 | 每轮 `ok true`、`t4.longtasksOver50` 0、`imports` 3、队列每份素材先小后原 | 空闲时段 3 轮全过 |
+| 1080p 全幅流 15 帧分段编码 | 笔记本空闲时段跑 `node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5203`（不带 `--group`；dev server 是 `.claude/launch.json` 的 `dev-test`），每轮前 5 s 平均 CPU < 15% | **过**（修复后，全案最终基线）：候选 main `501a7dd7`（`claude/perf-encode-2` 合入）上第二组连续 5 轮 p50 = 207 / 224 / 214 / 208 / 207 ms（中位数 208，每轮 `fails []`，截图 869～952 ms）；第一组 5 轮 215 / 320 / 217 / 214 / 258（那一轮截图 1199 ms、比平时慢四分之一，三次编码 294 / 320 / 445，记为外来负载下的离群值，按「五轮全过」另跑第二组）。**修复前**：收尾前在 main `9cf43f1f` 上有效 5 轮 300 / 332 / 283 / 311 / 302（中位数 302）没过——编码路径 `server/bakery/` 自上次修复（`211695d`，当时笔记本 283～290）没改过，是余量不够；按规矩算真挂、门槛不动，派 `claude/perf-encode-2` 修（第 12a 节） | 每轮结果行（`bench` 里 `clip-bg` 的 `p50` 与三次 `encodeMs`；`clip-pill` 35～46 ms） | p50 ≤ 300 ms；改门槛须用户确认（没改） |
+| 后台上传期间主线程无 > 50 ms 长任务 | `node scripts/probes/tiers-probe.mjs --port-a 5760 --port-r 5763` ×3（每轮前 5 s 平均 CPU < 15%） | **过**：全案最终基线（main 候选 `501a7dd7`，20:16:14Z～20:18:25Z）三轮开跑前 CPU 3.2% / 1.2% / 3.8%，窗口约 2.3 s 里编辑 18 / 20 / 18 次，> 50 ms 长任务都是 0；此前 main `9cf43f1f` 上（17:17～17:19Z）也是三轮都 0 | 每轮 `ok true`、`t4.longtasksOver50` 0、`imports` 3、队列每份素材先小后原 | 空闲时段 3 轮全过 |
 | M7-A4 纯浏览器 30 秒内预渲染完锚帧 | M7 探针：笔记本本机 `m7-browser-probe --role all --timing-authoritative`（M7-T1c）；站点模式的数只作观察 | **过**（M7 合入时笔记本本机 M7-T1c，`88e70e3`：最慢锚点段 27.6 s）。经公网观察：站点首轮 63 s（`m7w0928e`，旧代码）→ 部署推送提速后 37.4 s（`m7w0928f`，首段开工前约 17 s、其后每段约 7 s）；PC 本机参考 21.1 s（合并后的代码，run `mukz7q6d6b84`） | `REPORT-M7.md`；本报告第 2 节 E5 与第 12a 节 | 页面可见且空闲时 30 s 内完成（`m7-contract.md`） |
 | C6.6 T9「改卡后 5 s 内重测」 | 随 M8-X1 | **过**（笔记本，放本机版 T9 run `t9lanM`，观察端限速 1 MB/s）：改卡后 3 652 ms 重测、装上 292 ms | 观察端结果行 `remeasureMs 3652`、`installMs 292` | 1 MB/s 与不限速下判 |
 | C10a 第 3 步「新的小尺寸到手机」（L22） | `c10a-demo-probe.mjs`，放云端那遍记时刻分解 | 记录（站点，run 见 M8-X3 的 A9 一行，12:31:57Z 起）：改一处后新键 6 952 ms、新的小尺寸产出 11 026 ms、手机播放中挂上新层 11 287 ms、手机取到新的小位图 293 963 ms（请求 53 次）、整段重渲 242 974 ms | `c10a-demo-probe` 第 3 步结果行（`newKeyMs`、`newSmallMs`、`mountedWhilePlayingMs`、`newPxMs`、`fullRerenderMs`、`backfillOrder`） | 只记录，不设门槛 |
@@ -226,8 +233,8 @@
 | G0 类型检查（M8 期间每次合入，PC 辅助节点跑） | `npx tsc -b --force` | `9cf43f1f`（合 `claude/m8-e3-page`）：0 错误；`e27fa520`（合 `claude/xnode-dedup`）：0 错误 | PC-M8-1、PC-M8-3 回执（第 11 节） | 零错误 |
 | G0 全量测试 | `npm test` | `9cf43f1f`：3779 / 3777 / 0 失败 / 2 跳过；`e27fa520`：3785 / 3783 / 0 / 2（跳过的两条都是要设 `PROMPTCUT_BASE` 才跑的集成测试） | 同上 | 失败 0、跳过 ≤ 2、总条数不少于合并前 main 加新增 |
 | G0-R | 导出确定性、与 PC 像素基准逐像素比、快照重放、`ready-index-probe`、`stream-produce-probe --group`、`preview-fallback-probe` 两种 | `e27fa520`（改到预渲染）：导出确定性 1800/1800；与 PC 像素基准（`.worktrees/pc-g0r-base`，`d70fce77`）逐像素 1800 相同；快照重放一致 PASS；`ready-index-probe` fails []；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（286、287 拍）；`npm run build` 成功。`9cf43f1f` 只改探针与测试，不跑 G0-R | PC-M8-3 回执 | 全过；像素基准不变 |
-| 全案最终基线 | 见 `REPORT-M5-M8.md` 第 4 节 | 待填 | 待填 | — |
-| 主工作区 | `git status` | 待填 | 待填 | 干净 |
+| 全案最终基线 | PC：检出 `501a7dd7`，`tsc`、`npm test`、G0-R 全套、`npm run build`（PC-M8-10）；笔记本（性能基准机）：带耗时门槛的两项 | PC：tsc 0；3793 / 3791 / 0 失败 / 2 跳过；导出确定性 1800/1800；与 PC 像素基准逐像素 1800 相同；快照重放 PASS；`ready-index-probe` fails []；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（287、285 拍）；构建成功；代码版本 `b38706791f86…`。笔记本：1080p 分段编码连续 5 轮 p50 207～224 ms（中位数 208）；T4 三轮 > 50 ms 长任务 0 | PC-M8-10 回执；第 8 节 | 全绿；像素基准不变；耗时项在笔记本过 |
+| 主工作区 | `git status` | 干净（主工作区快进到 `501a7dd7`；文档合入后再核一次，见 `REPORT-M5-M8.md` 第 4 节） | 主会话记录 | 干净 |
 
 ## 10. 远端操作记录（`8.219.80.16`）
 
@@ -251,6 +258,7 @@
 | 17:54:33Z | 在线编辑器页换代（main `e27fa520`，代码版本 `21c62981…` → `f979b95e…`：xnode-dedup 改了进代码版本的 `server/frame-pipeline.mjs`，桌面节点与在线页面要同版本才在一个池里） | 笔记本 `npx vite build --mode online`（`index-CeTzP2gc.js` 含 `f979b95e`、不含 `21c62981`）；`runtime-config.json` 先备份为 `/root/runtime-config.bak-20260928-m8enc`；`scp` 到 `/opt/promptcut-hosted/.incoming-editor`，远端执行 `server/hosted/deploy.mjs` 的 `editorSwapLines()`（与 `deploy-hosted --editor` 同一段换名脚本） | 0 | nginx `/editor/` 直接出静态文件，托管组合不重启（`restarts` 仍 16）；保留上一代 assets 7 个、`runtime-config.json` 原样；主站与 `s1`、`s2` 的 `/editor/` 都给 `index-CeTzP2gc.js`；托管端服务代码不变（改的文件不在部署清单里），不重新部署 |
 | 18:2xZ | 删迁移种子项目（探针自建，`sp_vfuwa4grkhyqqaw6sveotuytn2`，`m8迁移探针-mule3l4c-83a487`） | 笔记本凭种子文件里的创建者口令（用户名 `m8-creator`）经 `wss://8-219-80-16.sslip.io/hosted` 走 `shared.challenge` → `adminProof(op delete)` → `shared.admin { op: delete }`（同 `m8/conn.mjs` 的 `deleteProbeProject`，用户名按种子文件） | `deleted true` | 只删这一个；其余 14 个见下一行 |
 | 18:56:37Z～18:56:38Z | 删主实例上探针留下的其余 14 个项目（`m8x-repro`、`m8e-e1-m8e1c2`、`sp-probe-muhgn208-fc53f5`、`sp-probe-mul74c9o-dadb32`、`c10浏览器-c10s0928b`、`m7ap-m7wlocal1`、`m7ap-m7w0928b`、`m8x-remote-r2`、`m8e-e1-m8xreal`、`m8e-e1-m8c3c`、`m8e-e1-m8e1c`、`m8x-remote-r1`、`m7ap-m7w0928a`、`rhp-muhg3z5h`，都建于 09-25～09-28、名字都是探针起的）。用户在主会话里定「由主会话自己删、不让辅助节点做」；创建者口令不在笔记本、不能经消息传，托管端的管理身份又被挡在 `shared.*` 之外，所以在服务器上停服删，删法与 `shared.admin delete` 相同（删凭证存储里的项目记录、删 `tenants/<项目 id>`） | 先核对：`docservice/auth/projects` 正好这 14 份、租户目录合计约 3.4 MB、托管端只有 1 条连接（素材服务自己的登记）；备份 14 份记录与租户目录为 `/root/m8-probe-projects-backup-20260928.tar.gz`（980 915 字节、98 个条目、0600）；`pm2 stop promptcut-hosted`；用部署目录里的 `server/auth/store.mjs`（与 main 逐字节相同）`openCredentialStore({ dir: …/docservice/auth }).remove(id)` 逐个删，再 `rm -rf tenants/<id>`；`pm2 start promptcut-hosted` | 0 | 14 个都 `removed true`、租户目录删掉；重启后日志 `auth.store.open {"projects":0}`，记录 0 份、租户目录 0 个；`/healthz` 正常，`restarts` 仍 16；停服约 1 s，没有成员在线。块（media / snap / px）是按内容寻址共用的，删项目本来就不删块 |
+| 20:26:28Z | 在线编辑器页再换一代（main `501a7dd7`，代码版本 `f979b95e…` → `b38706791f86…`：`claude/perf-encode-2` 改的 `server/bakery/ffmpeg.mjs` 进代码版本） | 同 17:54:33Z 那一行：`npx vite build --mode online`（`index-De7OE6ge.js` 含 `b38706791f86`、不含 `f979b95e`）；备份 `runtime-config.json` 为 `/root/runtime-config.bak-20260928-m8enc2`；`scp` 后执行 `editorSwapLines()` | 0 | 托管组合不重启（`restarts` 仍 16）；保留上一代 assets 7 个、`runtime-config.json` 原样；主站与 `s1`、`s2` 的 `/editor/` 都给 `index-De7OE6ge.js` |
 
 ## 11. 跨机指令与回执
 
@@ -269,6 +277,10 @@
 | PC-M8-4（xreal3 + C4） | 开跑前核两边残余连接 0；`m8-e-probe` 创建者 `--run m8xrealR`（放云端）与 `--case e3 --place lan --run m8e3lanP` | xreal3 `ok true`、两台主机 `ok true`；C4 只挂 `cloud-untouched`（阿里云日志查证与本轮无关），其余全过 | `e27fa520` |
 | PC-M8-5（C4 再跑一轮，补重启后的 `asset-lan-probe`） | 重起 5789 协调口；`--case e3 --place lan --run m8e3lanQ` | 见第 7 节 C4 | `e27fa520` |
 | PC-M8-6（清理阿里云主实例上探针留下的 14 个项目） | 只读地在 PC 的临时目录里找各项目的创建者配置；找到的用创建者证明删（同 `deleteProbeProject`，用户名按配置） | 只读查找：PC 主会话临时目录里找到 4 个（`m8e1c2`、`m8xreal`、`m8c3c`、`m8e1c` 的创建者配置），其余 10 个在找；删除停在确认前——PC 辅助节点按它的规矩，远端不可撤回的删除要 PC 那边的用户亲自确认；PC 那边用户选了「不删」（指的是不让辅助节点删），只读搜索停止；随后用户在主会话里定由主会话自己删，18:56Z 在服务器上删完（第 10 节） | `e27fa520` |
+| PC-M8-7（只读核对 PC 上的 `Videos\PromptCut`，用户问「测试与探针有没有写到用户目录」） | 报环境变量；列 `Videos\PromptCut` 第一层与 `frame-library` 第一层的条目数和日期；找带探针名字的条目 | `PROMPTCUT_EXPORT_DIR` / `PROMPTCUT_DATA_DIR` 在用户级、系统级、shell 都是空；`Videos\PromptCut` 是 9/7～9/14 的一批整份导出与 `frame-library` 461 个哈希目录（9/12～9/16、9/24，9/29 18:51:58Z～18:52:06Z 的 297 个不是辅助节点起的）；没有带探针名的条目；全程只读 | 不涉及仓库 |
+| PC-M8-8（`claude/merge-no-user-videos` 的 G0） | 检出 `efcaec60`；tsc；`npm test`；数 `[no-user-dirs]` 提示行 | tsc 0；3790 / 3788 / 0 / 2；守门那条过；提示行 0 | `efcaec60` |
+| PC-M8-9（`efcaec60` 的构建，release 判用） | `npm run build` | 0（`✓ built in 886ms`） | `efcaec60` |
+| PC-M8-10（`claude/merge-perf-encode-2` 的 G0 + G0-R + 构建，兼全案最终基线的 PC 部分） | 检出 `501a7dd7`；同 PC-M8-3 全套；算代码版本 | 全过（第 9 节）；代码版本 `b38706791f86…`；20:18:17Z 做完 | `501a7dd7` |
 
 ## 12. 顾问调用记录
 
@@ -291,6 +303,8 @@
 | 探针：`m7-browser-probe` 的 A6「更急的活在帧边界让路」等这一段出过帧（done ≥ 1）再触发 | 站点复测 `m7w0928f` 触发时这一段一帧未出，测量在空闲的后台舞台上直接做完、没有东西可让，A6 判失败 | `claude/m7-a6-race` | 本机替身：A6 urgent 34 ms 让路、之后 1 帧，`fails []` | 站点复测重跑 |
 | 探针：`m8-e-probe` 的 e3 补「在线页面恢复同步、重启前最后一次提交可读」，重启后重读只认新会话里真完成了 `project.open` 的 | C2 原文要「在线页面恢复同步、重启前最后一次提交可读」，原探针没判 | `claude/m8-e3-page`，main `9cf43f1f`（release 同步） | 本机替身 C2 / C4 过、故意坏自检判红；PC G0：tsc 0、3779 / 3777 / 0 / 2；构建成功 | E3 / C2 放云端（`m8e3cL`）、E3 放本机 |
 | 跨节点去重：独立渲染主机也产预渲染小尺寸；产物库在本机有原尺寸、缺小尺寸时认内容库里两档齐、块都在的清单；`has` 回 false 记 `sink.has-miss` 原因；e3 探针主机侧重连基准取持有任务那一刻 | E3 放本机本机替身（`m8e3lanM`）：重启前 host-a 做完的一段被局域网主机的节点领到，只补画小尺寸、以「完成」而非「去重」收尾（违反「已经在素材服务里的结果不用重做」）。根因：主机不产小尺寸，去重检查在本机缺小尺寸时不查内容库 | `claude/xnode-dedup`（`opus-dev-high` 子智能体，报告 `AGENT-xnode-dedup.md`）；契约 `artifact-transfer-contract.md` 第 4 节〔2026-09-29 裁〕；main `e27fa520`（release 同步）；代码版本 `21c62981…` → `f979b95e…`（`frame-pipeline.mjs` 进代码版本），17:54:33Z 在线编辑器页随之换代 | 子智能体：X1～X6 修前 5 条挂、修后 50/50（连相关旧测）；e3 放本机替身修前挂、修后过（rerendered []）；e3 放云端替身过；tsc 0、`npm test` 3784 / 3782 / 0 / 2。PC 合并后 G0：tsc 0、3785 / 3783 / 0 / 2；G0-R 全过（第 9 节）；构建成功。真跨机：C4 / E3 放本机（`m8e3lanP`）rerendered []；xreal3 过（主机每段多推小尺寸，1200 块） | E3 放本机（C4）；此后各项在 `f979b95e…` 上跑。代价：主机每段多约 60 块（约 0.3 MB），段用时 30～38 s（原约 35 s）；新旧版本混跑时旧主机仍不产小尺寸 |
+| 测试与探针不写用户的 `Videos\PromptCut`：`npm test` 全局设置与起编辑器 / 预渲染 / 导出的 51 个脚本开头摘掉继承的 `PROMPTCUT_EXPORT_DIR` / `PROMPTCUT_DATA_DIR`，显式传入 Videos 下的目录报错；`export-e2e --media-lib` 改硬链接拷贝；守门测试 `no-user-dirs` | 用户 2026-09-29 问（桌面版帧库已到 273 GB）。核对出两条路：继承了桌面版环境变量时 12 个探针或脚本的帧库会落进 Videos；`export-e2e --media-lib` 的 junction 会把下载与导入直接写进用户素材目录（不需要环境变量）。没有写死的输出目录 | `claude/no-user-videos`（`opus-dev` 子智能体，报告 `AGENT-no-user-videos.md`），main `efcaec60`（release 同步）；没动 `src/` 与进代码版本的文件 | 子智能体：守门 5/5、去掉一处引入守门就挂并点名、相关单测 23/23 与 12/12、51 个脚本 `node --check`、tsc 0。PC G0：3790 / 3788 / 0 / 2；构建成功。PC 上只读核对没发现测试或探针写过 Videos（PC-M8-7） | 与 M8 验收项无关；「存储占用」功能项另记进主计划与 `TODO.md`（M8 之后、团队测试之前） |
+| 1080p 分段编码再提速（产出逐字节不变、`encoderParamsHash` 不变）：输入端不攒包（`-probesize 32 -analyzeduration 0 -threads 1`）、alpha 在预乘前分叉（免掉 ffmpeg 8 自动插的整帧反预乘）、两半用 `gbrp` 拼、滤镜切片线程按核数封顶 8 | 收尾前在笔记本复测贴线没过（中位数 302 ms，第 8 节）；上次修复留的余量不够 | `claude/perf-encode-2`（`opus-dev-high` 子智能体，报告 `AGENT-perf-encode-2.md`），main `501a7dd7`（release 同步）；只改 `server/bakery/ffmpeg.mjs` 与两份单测；代码版本 `f979b95e…` → `b38706791f86…`（bakery 进代码版本与共享快照键，已有的预渲染快照按新键重做，代码对截图代码的既定做法），20:26:28Z 在线编辑器页随之换代 | 子智能体：笔记本上 main 与候选交替 4 组（最终版 27 轮里 26 轮 208～280 ms，1 轮外来负载 369）；真帧、合成帧、格式混用、切片 0～13 片逐字节相同；相关单测 58 条过；tsc 0。PC 合并后 G0：3793 / 3791 / 0 / 2；G0-R 全过、像素基准 1800 相同；构建成功。笔记本全案最终基线：连续 5 轮 p50 207～224 ms | 第 8 节 1080p 由没过变为过 |
 
 ## 13. 与计划不一致、语义冲突、待用户项、遗留
 
@@ -320,7 +334,7 @@
 | 9 | `render-queue-contract.md` A.12、`render-host-contract.md` 第 3 节（`claude/stall-phases`） | 活着、在干活的节点不再被判停滞：进度带工作计数 `step`，帧数或工作计数变化都重新计时；主机只在预渲染间空着时认领；收回原因如实下发 | 契约级（机制；`docs/semantics/` 未改） |
 | 10 | `artifact-transfer-contract.md` 第 4 节 `has`、`manifest-contract.md`（`claude/sink-has`） | 本机帧库覆盖整段时核对素材服务，缺的块用本机字节补推、推齐才回「已有」 | 契约级（机制；`docs/semantics/` 未改） |
 | 11 | `artifact-transfer-contract.md` 第 4 节 `has`（`claude/xnode-dedup`，2026-09-29） | 本机有原尺寸、缺小尺寸时认内容库里两档齐、块都在的清单；独立渲染主机也产小尺寸、按两档推 | 契约级（机制；`docs/semantics/` 未改） |
-| 12 | 第 8 节 1080p（进行中） | 编码提速若只能靠改产出字节的办法，由用户定；门槛不改（改门槛须用户确认） | 待定 |
+| 12 | 第 8 节 1080p | 了结：逐字节不变的修法就凑够了余量（`claude/perf-encode-2`），没有改产出字节、没有改门槛；改字节的选项表留在 `AGENT-perf-encode-2.md` 第 7 节备查 | — |
 
 - 〔裁〕E6 反方向的判据（2026-09-28 主会话，非语义拍板，发给用户不等）：计划写「笔记本主机先认领按清单发布的 plan」后「指纹 Y 的主机……层表逐层指纹」，按字面要求这一版每层都出自 Y。但页面是发布方、在线时按 M7 的双份键规则（`m7-contract.md` D1）切分方也给页面发一份它自己环境的任务，页面可以用自己的指纹做出某张卡（本机替身 run 2 里页面做出了主卡那一层，层表的主候选仍是 Y、页面的指纹只在候选里）。改判为：X（另一种指纹）对 Y 指纹的细任务认领 0；每张卡只来自一种指纹（不混）；J-全完、J-恰一（被双份键作废的任务不计）。依据：`m7-contract.md` D1 与 `mechanism/rendering.md`「不同环境的结果不混用」。探针 `c10-browser-probe.mjs --e6-reverse`（`claude/m8-e6r`，报告已归档 `docs/archive/agent-reports/AGENT-m8-e6r.md`）。
 - 撤销的〔裁〕：原「异地接入·真实渲染一轮由云端当远程成员」（PC 待命时的替代）——PC 辅助节点恢复后按原计划由 PC 当创建者、笔记本当远程成员跑过（第 4 节），云端那几轮留作补充证据。
@@ -332,7 +346,7 @@
 
 ### 13.4 待用户项
 
-1. 审本节 13.2 的〔裁〕（1～11；第 12 条视编码修复结果）。
+1. 审本节 13.2 的〔裁〕（1～11；第 12 条已了结）。
 2. 真热点下的异地接入（需要人在机器旁的物理操作）；真手机扫码与 iOS 导出（C10a）。
 3. 笔记本 `.env.cluster` 里的集群令牌与服务器上的不一致（迁移演练库存那一步回 401，改从服务器读）：要同步笔记本的这份本机配置。
 4. 笔记本辅助节点交接前留下的批次脚本（`a73dae3c…/scratchpad/m8b3b/run.sh`）在交接后继续跑完了第 5～9 项（W7 节点空等到超时、X3 重跑 `c10x0928b`、C10a 演示），占了笔记本 CPU、在阿里云上建过项目；主会话按约束没结束它。它的结果不作 M8 证据。
