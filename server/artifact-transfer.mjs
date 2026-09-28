@@ -489,10 +489,8 @@ function resultBlocks(result) {
  * 把清单里的每个块 `client.put` 一次(快照进 `snap`、流进 `px`;`put` 自己会跳过素材服务上已有的块)。
  * 全部成功才返回 `{ result, uploaded, skipped, bytes }`;任何一块失败就抛(第一处错误,带 `stats`:推到哪儿了)。
  * `onBlock({ blocks, pushed, bytes })`(可选,诊断):开推时报一次总块数,之后每推完一块报一次(`bytes` 是已推块的字节数)。
- * `signal`(可选):中止后不再开推新的块(已在路上的那几块照常推完),以 `code: 'aborted'` 抛出 ——
- * 认领丢了的节点不再占着上行带宽和别人抢(`docs/reports/AGENT-stall-phases.md`);已推的块按内容寻址,下一个认领者推时跳过。
  */
-export async function pushResult(client, result, readBlob, { onBlock, signal } = {}) {
+export async function pushResult(client, result, readBlob, { onBlock } = {}) {
   if (!result || result.v !== RESULT_VERSION) throw fail('不认识的任务清单', { retryable: false });
   if (typeof readBlob !== 'function') throw fail('pushResult 需要 readBlob', { retryable: false });
   assertResultSize(result);
@@ -501,7 +499,6 @@ export async function pushResult(client, result, readBlob, { onBlock, signal } =
   const tell = () => { try { onBlock?.({ blocks: blocks.length, pushed: uploaded + skipped, bytes: bytesDone }); } catch { /* 诊断回调出错不影响推送 */ } };
   tell();
   const settled = await settleLimited(blocks, TRANSFER_CONCURRENCY, async ({ ns, hash, ext }) => {
-    if (signal?.aborted) throw fail('推送已中止(认领丢了)', { code: 'aborted' });
     const bytes = await readBlob(hash);
     if (!bytes || sha256(bytes) !== hash) throw fail(`块 ${hash} 的内容和清单对不上(本机文件在清单之后被改过)`);
     const put = await client.put(ns, Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes), { ext });
@@ -675,9 +672,9 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
     /**
      * 第二个参数(可选,诊断):`report({ stage, blocks, pushed, bytes })` —— `stage` 是 `collect`(列清单)/ `push`(推块);
      * 推块时每推完一块报一次。没收全时回包另带 `reason`(为什么)与 `stats`(`{ blocks, pushed, bytes, ms }`),
-     * 并记一行 `sink.incomplete`;收全时回包带 `stats`。`signal`(可选)中止后不再开推新的块(回 `push-failed:aborted`)。
+     * 并记一行 `sink.incomplete`;收全时回包带 `stats`。
      */
-    async put(ref, { report, signal } = {}) {
+    async put(ref, { report } = {}) {
       const started = Date.now();
       const tell = (fields) => { try { report?.(fields); } catch { /* 诊断回调出错不影响推送 */ } };
       let progress = { blocks: null, pushed: 0, bytes: 0 };
@@ -705,7 +702,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
         stage = 'push';
         tell({ stage });
         await pushResult(client, collected.result, collected.readBlob, {
-          onBlock: (p) => { progress = p; tell(p); }, signal,
+          onBlock: (p) => { progress = p; tell(p); },
         });
         if (content) await writeManifest(content, collected.result, log);
         return { complete: true, result: collected.result, stats: stats() };

@@ -289,7 +289,6 @@ M8 的 C1（放云端）里两台独立渲染主机各丢了 6、7 次认领，�
 
 4. **`task.progress` 可带 `step`**（A.6 的 `task.progress` 多一个可选字段 `step: number`）：节点这个认领的工作计数，换阶段、出一批帧、推完一块时加一（续约本身不加）。第 2 项改为：`claimed` 且 `now - claim.progress.changedAt > STALL_MS` 且 `claim.progress.done !== null` → 放弃；`changedAt` 在 `done` 变了、**或带来的 `step` 与上次不同**时重起。不带 `step` 的旧节点只看 `done`，与原来相同；旧队列丢掉这个字段，新节点照旧工作（只是推产物慢时仍按旧规则停滞）。`step` 不是数或 `null` 回 `bad-message`。`describe()` 的 `claim.progress` 在收到过 `step` 时多带 `step`。执行器、产物库真卡死时计数不动，照旧在 `STALL_MS` 后收回（I8 不变）。节点侧：会话 `advance(id)` 只记不发，下一次 `progress` 或续约带上；执行编排换阶段时当场报一次进度，下一步卡死时停滞计时从这一刻算起。
 5. **独立渲染主机闲时认领**（`render-host-contract.md` 第 3 节「闲时门槛」）：快照与 `plan` 共用预渲染管线里一条串行 lane；要用它的任务只在它空着（执行器 `laneBusy() === 0`）、全部节点手里没有还没走到推送的同 lane 任务（`occupying()`）、也没有在飞的同 lane 认领时才认领。推产物不占 lane，前一段推送时下一段照样认领、渲染；流任务不受这道闸。执行器不给 `laneOf` 时不加闸（测试替身行为不变）。节点会话多一个可选的 `canClaim(task)`，认领前过一遍候选。
-6. **丢了认领就不再开推新的块**：产物库 `put` 的 `signal` 中止后，`pushResult` 不再开推新的块（在路上的推完），回 `push-failed:aborted`：被收回的节点不再占上行带宽和接手的节点抢。已推的块按内容寻址，接手者推时跳过。
 
 ---
 

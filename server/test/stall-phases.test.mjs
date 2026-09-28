@@ -348,36 +348,3 @@ test('Q1 队列:step 变了重起停滞计时;续约不带新 step 照旧停滞;
   assert.equal(sent.at(-1).msg.reason, 'bad-message');
 });
 
-/* ================================================================== P1 */
-
-test('P1 认领丢了就不再开推新的块:put 的 signal 中止后停手,回 push-failed:aborted', async () => {
-  const fs = await import('node:fs');
-  const os = await import('node:os');
-  const path = await import('node:path');
-  const { createAssetSink } = await import('../artifact-transfer.mjs');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-stall-p1-'));
-  try {
-    for (let f = 0; f < 40; f++) fs.writeFileSync(path.join(root, `${f}.html`), `<div>${f}</div>`);
-    const pipeline = {
-      snapshots: () => ({ snapshotIndex: async () => ({ frames: [[0, 39]], oversize: [] }), dir: () => root }),
-      whenSmallSettled: async () => {},
-    };
-    const controller = new AbortController();
-    let puts = 0;
-    const client = {
-      put: async (ns, bytes) => {
-        puts += 1;
-        if (puts === 6) controller.abort('stalled');
-        await new Promise((resolve) => setImmediate(resolve));
-        return { hash: createHash('sha256').update(bytes).digest('hex'), uploaded: true };
-      },
-    };
-    const ref = { kind: 'snapshot', tier: 'shared', resultKey: sha256('rk:p1'), range: { unit: 'localFrame', from: 0, to: 39 } };
-    const r = await createAssetSink({ pipeline, client }).put({ ...ref, artifacts: null, meta: { taskId: 't', nodeId: 'N', token: 1 } }, { signal: controller.signal });
-    assert.equal(r.complete, false);
-    assert.equal(r.reason, 'push-failed:aborted');
-    assert.ok(puts < 12, `中止后只推完路上的几块(推了 ${puts} 块,共 40 块)`);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
