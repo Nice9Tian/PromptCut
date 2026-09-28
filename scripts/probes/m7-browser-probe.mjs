@@ -1275,6 +1275,9 @@ async function pageServerSide(ctx) {
   // 「下一次有人发布计划」：再开 b2（B 的另一台设备，普通档，会发清单计划、也当节点）
   await kv.signal('a10.open-b2', { at: Date.now() });
   await waitSignal(kv, 'a10.b2-ready');
+  // 「下一次有人发布计划」要是新的一版：只开 b2 时版本没变，它发的清单计划与 b1 那一版同 id、已 done，队列只回 task.done，
+  // 没人重新切分，也就不会接手（契约第 3.4 节：接手只在有人重新切分时发生）。改一处轻卡参数，让页面按新版本重发
+  ctx.rev = await touchLight(ctx.aConn, projectId, ctx.run);
   const pcDoneZ = () => [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === z.clip && t.requires?.envFingerprint === ctx.pcFp && god.tasks.get(t.id)?.state === 'done');
   const tTake = Date.now();
   const took = await until(() => (god.lockOf(`snapshot:${lockKeyZ}`)?.envFingerprint === ctx.pcFp || pcDoneZ().length > 0 ? { lock: god.lockOf(`snapshot:${lockKeyZ}`)?.envFingerprint ?? null, pcDone: pcDoneZ().length } : null), 600_000, 1000);

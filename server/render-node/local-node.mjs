@@ -305,8 +305,10 @@ export function createLocalNode({
           const task = byId.get(r.id);
           const fp = task?.requires?.envFingerprint;
           const lockKey = lockKeyOf(task);
-          if (r.lockIdleMs !== undefined && lockKey != null && typeof fp === 'string' && fp && fp !== node?.envFingerprint) {
-            const entry = followed.get(lockKey) ?? { lockedBy: fp, info: lockInfoOf(r), ids: [] };
+          // 锁在别的环境上:照锁出键的(fp 不是自己的)、或已有的任务合并进来而回包带 lockedBy 的(没被拒,F.7)
+          const lockedBy = typeof r.lockedBy === 'string' && r.lockedBy ? r.lockedBy : fp;
+          if (r.lockIdleMs !== undefined && lockKey != null && typeof lockedBy === 'string' && lockedBy && lockedBy !== node?.envFingerprint) {
+            const entry = followed.get(lockKey) ?? { lockedBy, info: lockInfoOf(r), ids: [] };
             entry.ids.push(r.id);
             followed.set(lockKey, entry);
           }

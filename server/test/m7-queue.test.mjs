@@ -845,3 +845,39 @@ test('M7Q-A10e 进程内（真页面上的场景）：b1 持有一段时走掉�
   pc2.stop();
   await pc2.settled();
 });
+
+test('M7Q-D1-Q5 切分方那份先按单份建过、后一版按双份发来：合并时补上 dual；浏览器那份先认领，它照样被作废', () => {
+  const h = setup();
+  const own0 = snap('ck1', P, 0);                     // 页面报到之前那一版：单份
+  h.publish('p', [own0]);
+  const r = published(h.publish('p', [snap('ck1', P, 0, { dual: true }), snap('ck1', B, 0, { dual: true })]), 'p');
+  assert.deepEqual(r.map((x) => [x.created, x.error]), [[false, undefined], [true, undefined]]);
+  h.claim('bw', snap('ck1', B, 0).id, 1);
+  assert.deepEqual([h.task(own0.id).state, h.task(own0.id).lastError], ['failed', 'superseded']);
+});
+
+test('M7Q-D1-Q6 锁已在别的指纹上时合并进来的 dual 一份：当场作废（回包状态 failed），不留死任务', () => {
+  const h = setup();
+  const own0 = snap('ck1', P, 0);
+  const br0 = snap('ck1', B, 0, { dual: true });
+  h.publish('p', [own0, br0]);
+  h.claim('bw', br0.id, 1);                          // 锁到 B；own0 不带 dual，没被作废
+  assert.equal(h.task(own0.id).state, 'open');
+  const r = published(h.publish('p', [snap('ck1', P, 0, { dual: true })]), 'p')[0];
+  assert.deepEqual([r.state, r.lockedBy], ['failed', B], JSON.stringify(r));
+  assert.equal(h.task(own0.id).lastError, 'superseded');
+});
+
+test('M7Q-A10f 切分方自己那份已存在、合并回包带 lockedBy 与闲置描述：闲置超 30 s 且没做完 → 带 takeover 重发', async () => {
+  const a = control({ clipId: 'a', contentKey: 'ck-a', count: 30 });
+  let round = 0;
+  const respond = (tasks) => { round += 1; return tasks.map((t) => (round === 1
+    ? { id: t.id, state: 'open', version: 1, created: false, lockedBy: B, lockIdleMs: 50_000, lockedByProfile: 'browser', lockUndone: 1 }
+    : { id: t.id, state: 'open', version: 1, created: true })); };
+  const rig = splitterRig({ respond, cardPlan: [a], takeoverLocked: localNodeModule.idleLockTakeover });
+  rig.endpoint.deliver({ type: 'task.claimed', id: listPlan.id, token: 2, version: 2, leaseUntil: T0 + 30_000, task: planView });
+  await flush();
+  const rounds = rig.publishes();
+  assert.equal(rounds.length, 2);
+  assert.deepEqual(rounds[1].map((t) => [t.requires.envFingerprint, t.takeover === true]), [[P, true]]);
+});

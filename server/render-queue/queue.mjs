@@ -721,6 +721,12 @@ export function createRenderQueue(options = {}) {
       // 原有处理之后再看锁（F.1）；锁身份取表里的任务，和认领第 3a 步查的是同一份
       const locked = lockOnPublish(task, input.takeover, after, nodeOf(conn));
       if (locked !== null) Object.assign(result, locked);
+      // M7 D1：合并进来的这一份是 dual、这张卡已经锁在别的指纹上：另一份早就得卡了，这一份谁也认领不到，照建锁时一样作废
+      if (locked?.lockedBy && !result.error && isActive(task.state) && task.input?.dual === true) {
+        const notify = supersedeDual(lockIdOf(task).key, locked.lockedBy);
+        if (notify) after.push(notify);
+        Object.assign(result, { state: task.state, version: task.version });
+      }
       results.push(result);
     }
     emit(conn, 'task.published', { results }, reqId);
@@ -743,6 +749,11 @@ export function createRenderQueue(options = {}) {
           after.push(() => broadcast(task, 'task.opened', { task: view }));
         }
       }
+      /*
+       * M7 D1（验收探针查出）：切分方这一份早先按单份建过（页面报到之前的那一版），这一版又按双份发来 ——
+       * 它现在有了另一份，补上 `dual`，建锁时才会被作废，不留成谁都认领不了的死任务。换新对象，不原地改。
+       */
+      if (input.input?.dual === true && task.input?.dual !== true) task.input = { ...task.input, dual: true };
     } else if (task.state === 'done') {
       const fields = doneFields(task);
       after.push(() => emit(conn, 'task.done', fields));
