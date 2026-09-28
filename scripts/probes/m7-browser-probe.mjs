@@ -1150,6 +1150,21 @@ async function pageServerSide(ctx) {
   const pageFp = pn?.envFingerprint ?? ctx.pageNode?.envFingerprint ?? null;
   book.judge('M7-A3', 'server-page-node-registered', !!pn && pn.profile === 'browser', { node: pn ? { profile: pn.profile, fp: pn.envFingerprint } : null });
 
+  // 后台应答 node 角色的两个请求：A11 在服务端结束 b1 的 render 会话（票据过期后）；A10 加一张新重卡 z1
+  (async () => {
+    const req = await waitSignal(kv, 'a11.end-render');
+    if (!req) return;
+    if (ctx.site.remote) { await kv.signal('a11.ended', { closed: false, reason: '外网模式在服务端结束不了那条会话（阿里云上另用托管端的测试钩子验）' }); return; }
+    const conns = (ctx.site.combo.service.describe()?.conns ?? []).filter((c) => c.principal?.userId === `${users.b1.username}@${req.deviceId}` && (c.principal?.role === 'render' || c.node));
+    for (const c of conns) ctx.site.combo.service.closeConn(c.connId, 1001, 'm7ap-ticket-expiry');
+    await kv.signal('a11.ended', { closed: conns.length > 0, conns: conns.length, code: 1001, reason: conns.length ? null : '找不到 b1 的 render 连接' });
+  })().catch((e) => say('a11.responder-error', { error: errText(e) }));
+  (async () => {
+    const req = await waitSignal(kv, 'a10.want-z');
+    if (!req) return;
+    ctx.rev = await addCards(ctx.aConn, projectId, [['z1', 'probe-slow-stepped', { burnMs: 40, label: 'z1' }]], ctx.run);
+  })().catch((e) => say('a10.responder-error', { error: errText(e) }));
+
   /* ---- A3 页面：本人任务里放禁收的各类（页面的指纹、页面的代码版本），60 s 内页面节点认领 0 次 */
   const pageCv = [...watcher.bodies.values()].find((t) => t.kind === 'plan' && t.source?.userId === userB1)?.requires?.codeVersion ?? null;
   const bPub = await openConn({ url: ctx.site.ws, projectId, username: users.b1.username, password: ctx.projectPassword, as: 'member', role: 'page', device: users.b1.deviceId, tag: 'b1pub', log: say });
@@ -1623,11 +1638,20 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   book.timed('M7-A12', 'bake-longtasks-0', Array.isArray(bakeLong) && bakeLong.filter((x) => x.at <= b1.gateLiftAt + Math.max(30_000, a4.worstSinceGateMs ?? 0)).length === 0, { count: bakeLong?.length ?? null, worst: (bakeLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3) }, authoritative);
 
   /* ---- 等本页拿着一段（生成快照中）：下面几条让路都要这个前提 */
+  // 持有中 = 最后一次认领晚于最后一次结束（完成 / 放回 / 失败 / 丢认领），且这次认领之后报过进度、最近 3 s 内还在报（在生成快照）；
+  // 页面诊断的 state 是 baking 时另作对照。同一段放回后重新认领很常见，所以按时间比，不按 id 集合
   const holding = async (ms = 120_000) => until(async () => {
-    const claimed = tap.recv('task.claimed').map((f) => f.id);
-    const ended = new Set([...tap.sent('task.complete'), ...tap.sent('task.release'), ...tap.sent('task.fail'), ...tap.recv('task.lease-lost')].map((f) => f.id));
-    const cur = claimed.filter((id) => !ended.has(id)).at(-1);
-    return cur && tap.sent('task.progress').some((f) => f.id === cur) ? cur : null;
+    const lastAt = (frames, id) => Math.max(-Infinity, ...frames.filter((f) => f.id === id).map((f) => f.at));
+    const ends = [...tap.sent('task.complete'), ...tap.sent('task.release'), ...tap.sent('task.fail'), ...tap.recv('task.lease-lost')];
+    const claims = tap.recv('task.claimed');
+    const ids = [...new Set(claims.map((f) => f.id))];
+    const now = Date.now();
+    const cur = ids.filter((id) => lastAt(claims, id) > lastAt(ends, id))
+      .filter((id) => { const p = tap.sent('task.progress').filter((f) => f.id === id && f.at >= lastAt(claims, id)); return p.length > 0 && now - p.at(-1).at < 3000; })
+      .at(-1);
+    if (!cur) return null;
+    const d = await readNodeDiag(page);
+    return !d.available || d.state === 'baking' || d.held.includes(cur) ? cur : null;
   }, ms, 100);
 
   /* ---- A5：生成快照中连续拖动 3 秒 */
@@ -1690,8 +1714,10 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   }
 
   /* ---- A9 页面：低内存档页面对浏览器产的层贴小尺寸、不显示占位 */
-  await P(low.page, () => { const s = window.__pcStore; s.actions.seek(1); s.actions.play(); }).catch(() => {});
-  await delay(2500);
+  // 先等低内存页三层的产物都到齐（本页节点要把每张卡 5 段都做完），再从头播放、在 1.5 s 处取样：取样的那一帧一定有产物
+  const lowReady = await until(async () => { const o = await onlineDiag(low.page); return heavy.every((c) => (o?.layers?.find((l) => l.clipId === c)?.ready ?? 0) >= FPS * SECONDS) ? o : null; }, 600_000, 2000);
+  await P(low.page, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); }).catch(() => {});
+  await delay(1500);
   const lowOd = await onlineDiag(low.page);
   const lowShown = await (async () => {
     const f = low.page.frames().find((x) => /[?&]stage=1/.test(x.url()));
@@ -1700,24 +1726,26 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   await P(low.page, () => window.__pcStore.actions.pause()).catch(() => {});
   const lowLayers = heavy.map((c) => ({ clip: c, layer: lowOd?.layers?.find((l) => l.clipId === c) ?? null, shown: lowShown?.find((w) => w.id === c) ?? null }));
   book.judge('M7-A9', 'page-low-memory-shows-small', lowOd?.tier === 'small' && lowLayers.every((x) => x.layer?.envFingerprint === pageFp && (x.layer?.ready ?? 0) > 0 && x.shown && !x.shown.placeholder),
-    { tier: lowOd?.tier ?? null, layers: lowLayers.map((x) => ({ clip: x.clip, fp: x.layer?.envFingerprint ?? null, ready: x.layer?.ready ?? null, placeholder: x.shown?.placeholder ?? null })) });
+    { waitedForAllFrames: !!lowReady, tier: lowOd?.tier ?? null, layers: lowLayers.map((x) => ({ clip: x.clip, fp: x.layer?.envFingerprint ?? null, ready: x.layer?.ready ?? null, placeholder: x.shown?.placeholder ?? null })) });
 
   /* ---- A11：render 票据过期（2 分钟）之后重建会话照常 */
   const firstRender = tap.renderConns().sort((a, b) => a.createdAt - b.createdAt)[0];
   if (!firstRender) book.pending('M7-A11', 'page-render-ticket-expiry', '找不到 render 连接');
   else {
+    // 票据 2 分钟有效：等过期后请 creator 在服务端结束这条 render 会话（应用层，不动网络）；页面只能新建会话、重签票据
     await sleepUntil(firstRender.createdAt + 130_000);
-    const cdp = tap.cdp;
-    await cdp.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     const tOff = Date.now();
-    await delay(70_000); // 超过会话保留期（60 s）：会话结束，只能重建（重新签票据）
-    await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    await kv.signal('a11.end-render', { deviceId: cfg.users.b1.deviceId, at: tOff });
+    const ended = await waitSignal(kv, 'a11.ended');
+    if (!ended?.closed) { book.pending('M7-A11', 'page-render-ticket-expiry', ended?.reason ?? 'creator 没能结束这条会话', ended); }
+    else {
     const rebuilt = await until(() => {
       const w = tap.recv('node.welcome', tOff)[0];
       const t = tap.sent('auth.ticket', tOff).find((f) => f.role === 'render' && f.owner === 'browser');
       return w && t ? { welcomeMs: w.at - tOff, ticket: true } : null;
     }, 120_000, 250);
-    book.judge('M7-A11', 'page-render-ticket-expiry', !!rebuilt, { offlineMs: 70_000, rebuilt, newRenderConns: tap.renderConns().filter((c) => c.createdAt > tOff).length });
+    book.judge('M7-A11', 'page-render-ticket-expiry', !!rebuilt, { endedBy: ended, rebuilt, newRenderConns: tap.renderConns().filter((c) => c.createdAt > tOff).length });
+    }
   }
 
   /* ---- A3 页面：creator 以本页的身份发布的禁收任务，本页整场认领 0 次（线上看 task.claim） */
@@ -1733,10 +1761,10 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   /* ---- A10 页面：本页拿着一张新卡的一段时关掉；creator 等锁闲置 > 30 s、重启 pc（不只切分）、发计划 → pc 接手；b2 上整层换键 */
   if (!cfg.a10) { book.pending('M7-A10', 'page', '--no-a10'); return; }
   const tZ = Date.now();
-  // creator 在 A10 前没加卡；这里由本页（成员）加一张新重卡 z，本页测完、发计划、认领它的一段
-  await P(page, () => window.__pcStore.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: 4 })).catch(() => {});
-  const zClaim = await until(() => tap.recv('task.claimed', tZ).find((f) => f.task && !heavy.includes(f.task.clipId) && f.task.clipId !== 'light') ?? null, 180_000, 200);
-  if (!zClaim) { book.pending('M7-A10', 'page', '新卡没被本页认领（没法测「拿着一段后关掉」）'); return; }
+  // creator 加一张新重卡 z1（A 的路径操作）；本页测完、发计划、切分方双份出键，本页认领它的一段
+  await kv.signal('a10.want-z', { at: tZ });
+  const zClaim = await until(() => tap.recv('task.claimed', tZ).find((f) => f.task?.clipId === 'z1') ?? null, 300_000, 200);
+  if (!zClaim) { book.pending('M7-A10', 'page', '新卡 z1 没被本页认领（没法测「拿着一段后关掉」）', { diag: (await readNodeDiag(page)).counts ?? null }); await kv.signal('a10.page-closed', { clip: null }); return; }
   await until(() => tap.sent('task.progress', zClaim.at).some((f) => f.id === zClaim.id), 30_000, 100);
   await b1.page.close();
   await kv.signal('a10.page-closed', { clip: zClaim.task.clipId, at: Date.now() });
