@@ -570,7 +570,7 @@
 
 ## 9. 顾问调用汇总
 
-从各阶段报告与交接文件逐次收，共 **20 次**（含一次连通性自检）。codex 一律 `gpt-6-sol` / `high`，Gemini 一律 `gemini-3.1-pro-high`。
+从各阶段报告与交接文件逐次收，到骨架为止共 **20 次**（含一次连通性自检；第 20 次是 M8 计划期的预检，M8 执行期的由主会话收尾时补）。C10 其余的两次是第 18、19 次，都在写契约前；M7 没调（`REPORT-C10.md` 第 8 节、`REPORT-M7.md` 第 8 节）。codex 一律 `gpt-6-sol` / `high`，Gemini 一律 `gemini-3.1-pro-high`。
 
 | # | 阶段 | 何时 | 顾问 | 用途 | 为什么 | 结论 | 采纳 | 出处 |
 |---|---|---|---|---|---|---|---|---|
@@ -591,9 +591,10 @@
 | 15 | C10a | 2026-09-27 | codex | 查资料 | 7 题（低内存判定、后台节流、邀请码等） | `c10a-research.md` | 采纳（契约第 13 节） | `REPORT-C10a.md` 第 4 节；`HANDOFF-2026-09-27.md` 第 7 节 |
 | 16 | C10a | 2026-09-27 | Gemini | 交互与文案 | 加入表单、多用户协作、低内存档提示 | `c10a-ux-draft.md` | 核对后采纳（契约第 14 节） | 同上 |
 | 17 | C10a | 2026-09-27 | codex（worktree） | 攻坚 | 演示 R2：层表 900 s 不更新、相对地址 404 | 失活路径多处修复，WIP `050065d`，交 Opus 复核 | 采纳（复核后改三处） | `REPORT-C10a.md` 第 2.9、4 节 |
-| 18 | C10 其余 / M7 | 2026-09-27 | codex | 查资料 | IndexedDB 配额、明文 http 缺的 API、媒体鉴权、后台 iframe 节流、子协议凭证 | `c10-research.md` | 采纳（契约第 17 节；Q1 第 5 条被探针推翻） | `HANDOFF-2026-09-27-pc.md` 第 7 节 |
-| 19 | C10 其余 | 2026-09-27 | Gemini | 交互与文案 | 离线提示、素材导入、后台预渲染可见性、放本机从浏览器进入等 | `c10-ux-draft.md`（第 4 版） | 核对后采纳（契约第 17 节表 A） | 同上 |
+| 18 | C10 其余 / M7 | 2026-09-27 | codex | 查资料 | IndexedDB 配额、明文 http 缺的 API、媒体鉴权、后台 iframe 节流、子协议凭证 | `c10-research.md` | 采纳（契约第 17 节；Q1 第 5 条被探针 P1 推翻；Q5 归 M7） | `REPORT-C10.md` 第 8 节；`HANDOFF-2026-09-27-pc.md` 第 7 节 |
+| 19 | C10 其余 | 2026-09-27 | Gemini | 交互与文案 | 离线提示、素材导入、后台预渲染可见性、放本机从浏览器进入等 | `c10-ux-draft.md`（第 4 版） | 核对后部分采纳（契约第 17 节表 A；不采纳 1.6、第 3～5 节，理由在契约第 17 节） | 同上 |
 | 20 | M8 | 2026-09-28 | codex | 查资料 | Windows 新阻止规则对已建立 TCP 连接是否立刻生效 | 下一个包触发重新授权；长连接在一个心跳内生效 | 采纳，笔记本仍要实测 | `m8-plan.md` 第 4 节「预检结果」 |
+| M8 | M8 | — | — | — | — | M8：主会话收尾时填（`REPORT-render-queue-m8.md`） | — | — |
 
 **没调顾问的阶段与理由**：
 
@@ -604,12 +605,12 @@
 | SP、M6、C6.5、C6.6 的 Gemini 发散 | 没走到回退第 3 级 | 各报告顾问节 |
 | HT-a | Opus 在回退第 1 级内解决 | `REPORT-HT-a.md` 第 3 节 |
 | C10a 后半（第 2.11～2.15 节） | 同上 | `REPORT-C10a.md` 第 4 节末 |
-| C10 其余派活到交接 | 主会话没调；各子报告里也没有 | `HANDOFF-2026-09-28.md` 第 9 节 |
-| M7 | 待核（`m7-contract.md` 里没查到顾问记录） | — |
+| C10 其余派活到交接，与 PC 接手后的集成、`c10-a4` | 笔记本主会话与各分支没调；PC 接手后也没调，A4 与 `ProbeGate` 两处缺陷在回退梯次第 1 级内由 Opus 查清修好；第 6 节第 19 行（X4）是改计划契约、没改语义，所以没走「codex 与 Gemini 各出一轮」 | `REPORT-C10.md` 第 8 节；`HANDOFF-2026-09-28.md` 第 9 节 |
+| M7 | 没调：五份 AGENT 报告与契约全文都没有 codex、Gemini、agy 的调用记录；契约由主会话派的只读调查子 Agent 起草；D18 是定计划时的 dry run，不是执行中卡住后的改动；B.3 改的是计划契约 | `REPORT-M7.md` 第 8 节 |
 
 ## 10. 需要用户决定的事
 
-〔占位：合并与 release 之外的。已知候选：审〔裁〕（第 6.1 节）；改门槛（1080p 编码，第 8 节第 21 条）；真换机时机；第 8 节里仍有效的各条。〕
+〔占位：合并与 release 之外的，M8 主会话收尾时定稿。已知候选：审〔裁〕（第 6.1 节，C10 29 条、M7 30 条）；`claude/join-error` 合不合（第 8 节第 26 条）；D18 两句三级语义（第 8 节第 28 条）；低内存档判轻的卡要不要也补小尺寸（第 8 节第 19 条）；真换机时机；第 8 节里仍有效的各条。1080p 编码门槛已在笔记本过线，不再需要用户定（第 8 节第 21 条）。〕
 
 ## 附录 A 跨机指令与回执原文索引
 
@@ -626,14 +627,23 @@
 | C6.6 | W-开工-2、L-1、T9-X1～X3；V-1 | `REPORT-C6.6.md` 第 7、9 节 |
 | HT-a | PC-4（W-HT-a 跨机）；HT9 两轮 | `REPORT-HT-a.md` 第 1.6、1.7 节 |
 | 交接期 | HT9-1（`to-cloud` seq 10）、交接通知 seq 11；PC-1～PC-5 | `HANDOFF-2026-09-28.md` 第 5 节 |
-| C10、M7、M8 | 待填 | — |
+| C10 其余 | 本机经协调口 KV 的 creator + host 一轮（run `c10loc0928a`） | `REPORT-C10.md` 第 10 节「c10-site」；`docs/archive/agent-reports/AGENT-c10-site.md` |
+| C10 其余 | 外网四轮 run `c10s0928b`～`e`（云端当独立渲染主机；含 HT9 / M8-X2、W-HT-a 云端一侧的服务器侧掐线） | `REPORT-C10.md` 第 7 节（主会话记录；报告里是摘要，没有指令与回执原文） |
+| C10 其余 | 笔记本 C10-T1、ENC-1、ENC-2 | `REPORT-C10.md` 第 3、7 节（主会话记录，同上） |
+| M7 | W7 真跨机 run `m7w0928e`；之前的外网试跑 `m7w0928a`、`m7w0928b`、`m7wlocal1` | `REPORT-M7.md` 第 7.1 节、代号节（主会话记录）；`docs/archive/agent-reports/AGENT-m7-accept-probe.md` 第四段 |
+| M7 | 笔记本 M7-T1、M7-T1b、M7-T1c | `REPORT-M7.md` 第 5 节（主会话记录） |
+| M7 | 云端当纯浏览器节点的尝试 | `REPORT-M7.md` 第 7.2 节（主会话记录） |
+| M8 | M8：主会话收尾时填 | `REPORT-render-queue-m8.md` |
 
 ## 附录 B 各阶段 AGENT 报告的归档位置
 
-- `docs/archive/agent-reports/`：66 份（M5b、M6、SP、C6.5、C6.6、C10a、HT-a 及同期维护分支）。
+- `docs/archive/agent-reports/`：main `0cabcfb0` 上共 87 份。骨架时 66 份（M5b、M6、SP、C6.5、C6.6、C10a、HT-a 及同期维护分支）；之后进来 21 份：
+  - C10 其余 12 份：`AGENT-c10-a4.md`、`AGENT-c10-browser.md`、`AGENT-c10-cost.md`、`AGENT-c10-integ.md`、`AGENT-c10-probe.md`、`AGENT-c10-tests.md`、`AGENT-c10-ui.md`、`AGENT-tier-reload-seek.md`（`REPORT-C10.md` 第 12 节，提交 `7069423`），`AGENT-pause-precise.md`、`AGENT-c10-site.md`、`AGENT-c10-catalog.md`、`AGENT-online-prune.md`（定稿分支 `claude/c10-report-final`）；
+  - M7 5 份：`AGENT-rq-m7-queue.md`、`AGENT-rq-m7-node.md`、`AGENT-rq-m7-tests.md`、`AGENT-m7-accept-probe.md`、`AGENT-m7-probe.md`（`REPORT-M7.md` 第 12 节）；
+  - M8 期间 4 份：`AGENT-m8-e6r.md`、`AGENT-sink-has.md`、`AGENT-site-bake-slow.md`、`AGENT-stall-phases.md`（按 `git diff --name-status c718be6 0cabcfb0` 核；归哪个阶段由 M8 主会话定）。
 - M5a、C5、C6.1～C6.4 的子报告**没有单独文件**：内容并进阶段报告，原文留在各子分支的提交里（各报告「过程记录」一节）。
-- 仍在 `docs/reports/`、待随 C10 或 M8 归档的：`AGENT-c10-probe.md`、`AGENT-tier-reload-seek.md`（随 C10）；`AGENT-host-diag.md`、`AGENT-hygiene.md`、`AGENT-perf-t4.md`、`AGENT-undo-refresh.md`（维护分支）。
-- 在修分支上还没进 main 的 AGENT 报告：C10、M7、M8 各分支与 `claude/card-overlay`、`claude/eol-eperm`、`claude/perf-encode` 等（待填）。
+- main `0cabcfb0` 上仍在 `docs/reports/` 的 18 份，待 M8 收尾时归档：`AGENT-card-overlay.md`、`AGENT-eol-eperm.md`、`AGENT-evidence-audit.md`、`AGENT-host-diag.md`、`AGENT-hygiene.md`、`AGENT-lan-asset.md`、`AGENT-lowmem-latency.md`、`AGENT-m8-connect-proxy.md`、`AGENT-m8-e2e.md`、`AGENT-m8-kit.md`、`AGENT-m8-migrate.md`、`AGENT-m8-scale.md`、`AGENT-m8-session-legacy.md`、`AGENT-particles-blank.md`、`AGENT-perf-encode.md`、`AGENT-perf-t4.md`、`AGENT-tailwind-guard.md`、`AGENT-undo-refresh.md`。C10、M7 的都已归档。
+- 还没进 main 的：`AGENT-join-error.md`（在 `claude/join-error` 上，随它合入时归档；`REPORT-M7.md` 第 12 节）；M8 各分支的由主会话收尾时填。
 
 ## 骨架里发现的缺口
 
