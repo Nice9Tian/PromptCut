@@ -4,6 +4,7 @@
  * 从 scripts/export-frames.mjs 拆出来(纯重构,逐字搬运)。
  */
 
+import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
 import { spawn } from 'child_process';
@@ -208,12 +209,21 @@ export function streamFilterIdentity(pixFmt = 'yuv420p') {
  */
 const STREAM_INPUT_ARGS = ['-probesize', '32', '-analyzeduration', '0', '-threads', '1'];
 
+/**
+ * 滤镜图的切片线程数:缺省(0)是逻辑核数,这里封顶 8。滤镜和 x264(auto 线程是核数 × 1.5)抢同一批核,
+ * 16 线程的笔记本上切 16 片反而比 8 片慢约 15 ms / 段(`docs/reports/AGENT-perf-encode-2.md`);8 核以下不变。
+ * 切几片**不改产出**:swscale / premultiply / vstack 按行切片,1～16 片输出逐字节相同(单测里比 1 片和 3 片)。
+ */
+export function streamFilterThreads(cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length) {
+  return Math.max(1, Math.min(8, Math.floor(Number(cpus)) || 1));
+}
+
 /** 一个分段的完整命令行(输出 fMP4 到 stdout) */
 export function streamSegmentArgs({ encoder = 'libx264', fps }) {
   const spec = STREAM_ENCODERS[encoder];
   if (!spec) throw new Error(`未知的轨道流编码器 ${encoder}`);
   if (!(Number(fps) > 0)) throw new Error('轨道流编码要帧率');
-  return ['-y', '-hide_banner', '-loglevel', 'error',
+  return ['-y', '-hide_banner', '-loglevel', 'error', '-filter_complex_threads', String(streamFilterThreads()),
     '-reinit_filter', '0', ...STREAM_INPUT_ARGS, '-f', 'image2pipe', '-c:v', 'png', '-framerate', String(fps), '-i', 'pipe:0',
     '-filter_complex', streamFilter(spec.pixFmt),
     ...spec.args,

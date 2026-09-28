@@ -15,7 +15,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { PNG } from 'pngjs';
 import {
   streamFilter, streamFilterIdentity, STREAM_ENCODERS, openStreamSegmentEncoder, endsWithCompleteMfra,
-  dropStreamEncoderSpares, streamEncoderSpareCount, streamPrewarmEnabled, streamSegmentArgs,
+  dropStreamEncoderSpares, streamEncoderSpareCount, streamPrewarmEnabled, streamSegmentArgs, streamFilterThreads,
 } from '../bakery/ffmpeg.mjs';
 import { encoderParamsHash, splitFmp4, segmentInfo } from '../frame-stream.mjs';
 
@@ -42,9 +42,9 @@ function synthPngs(width, height, count, seed0 = 7) {
   return out;
 }
 
-/** 同一批 PNG 过一条滤镜链,拿送进编码器之前的原始 YUV */
-function filtered(filter, pngs) {
-  return execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-reinit_filter', '0', '-f', 'image2pipe', '-c:v', 'png',
+/** 同一批 PNG 过一条滤镜链,拿送进编码器之前的原始 YUV(`threads`:滤镜图切片线程数,0 = ffmpeg 缺省) */
+function filtered(filter, pngs, threads = 0) {
+  return execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-filter_complex_threads', String(threads), '-reinit_filter', '0', '-f', 'image2pipe', '-c:v', 'png',
     '-framerate', '30', '-i', 'pipe:0', '-filter_complex', filter, '-f', 'rawvideo', 'pipe:1'],
   { input: Buffer.concat(pngs), maxBuffer: 1 << 28, windowsHide: true });
 }
@@ -56,6 +56,16 @@ test('新滤镜链只少了中间转换,字面上仍是 G3 的那几步', () => 
   assert.match(f, /scale=out_range=tv:out_color_matrix=bt709,format=yuv420p$/);
   assert.match(streamFilter('nv12'), /format=nv12$/);
   assert.notEqual(streamFilter('yuv420p'), streamFilterIdentity('yuv420p'));
+});
+
+test('滤镜切片线程数:按核数封顶 8', () => {
+  assert.equal(streamFilterThreads(16), 8);
+  assert.equal(streamFilterThreads(32), 8);
+  assert.equal(streamFilterThreads(8), 8);
+  assert.equal(streamFilterThreads(4), 4);
+  assert.equal(streamFilterThreads(1), 1);
+  assert.equal(streamFilterThreads(0), 1);
+  assert.equal(streamFilterThreads(NaN), 1);
 });
 
 test('分段签名里的编码参数哈希和改写前相同(已有分段不作废)', () => {
@@ -73,6 +83,8 @@ test('新滤镜链与旧写法送进编码器的 YUV 逐字节相同', { skip: !
       const b = filtered(streamFilter(pixFmt), pngs);
       assert.equal(a.length, 3 * w * 2 * (h + 8) * 1.5, `${w}x${h} ${pixFmt}: 帧大小`);
       assert.ok(a.equals(b), `${w}x${h} ${pixFmt}: 新旧滤镜链的输出不同`);
+      // 切片线程数不改产出(命令行按核数封顶 8,机器不同片数不同)
+      for (const threads of [1, 3]) assert.ok(filtered(streamFilter(pixFmt), pngs, threads).equals(a), `${w}x${h} ${pixFmt}: ${threads} 片的输出不同`);
     }
   }
 });
