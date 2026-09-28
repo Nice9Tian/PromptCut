@@ -9,7 +9,15 @@
  * 两个角色经协调口 KV(`probe-coord.mjs` 的形状)交换配置与结果,不共享文件系统,可以在不同机器上跑。
  *
  *   node scripts/probes/ht-w-probe.mjs --role creator | host | all
- *        --hosted <文档服务基址>        必给(本探针缺省不连任何地址):本机 http://127.0.0.1:8797,阿里云 https://8-219-80-16.sslip.io/hosted
+ *        [--place cloud | lan]         缺省 cloud(项目在 --hosted 的托管端)。lan = M8 的 C5-2(计划 `docs/plan/m8-plan.md` 第 2.6 节):
+ *                                      creator 以局域网主机起编辑器(`PROMPTCUT_LAN_HOST=1`,绑 0.0.0.0),在本机建局域网模式的项目;
+ *                                      host 经局域网发现找到它(`--lan-host <ip:端口>` 手填兜底),代理转到发现的地址;
+ *                                      会话计数 `sessions.resumed` 改读 PC 局域网主机的 `/api/docservice/healthz`(只答回环,
+ *                                      由 creator 在收到 `host.holding` 与 `host.resumed` 时读,判 `lan-healthz-resumed`)。
+ *                                      放本机时不给 --hosted,全程不连托管端
+ *        [--lan-ip <PC 局域网地址>]     lan 的 creator:发给主机的地址用它,缺省取本机第一块局域网网卡(`lan/discovery.mjs` 的选网卡规则)
+ *        [--lan-host <ip:端口>]         lan 的 host:发现查不到时手填
+ *        --hosted <文档服务基址>        cloud 必给(本探针缺省不连任何地址):本机 http://127.0.0.1:8797,阿里云 https://8-219-80-16.sslip.io/hosted
  *        --coord <协调口基址>           必给:本机 http://127.0.0.1:8799,阿里云 https://8-219-80-16.sslip.io/coord
  *        [--run <本轮 id>]             两个角色用同一个;creator 不给就自己生成并写进 KV `htw.latest`,host 不给就从那里取
  *        [--port <编辑器端口>]          creator 缺省 5600、host 缺省 5603(各另占 +1、+2 当舞台端口);--role all 是起点(缺省 5600)
@@ -18,7 +26,7 @@
  *        [--proxy-port <端口>]          --cut proxy 时本机代理监听的端口,缺省「主机编辑器端口 + 3」(all 里是 5606)
  *        [--proxy-target <host:port>]  --cut proxy 时代理转到哪里。缺省取 --hosted 的主机与端口,只在它是 http:// 或 ws:// 时可推;
  *                                      https 的托管端(阿里云经 nginx 443)要给明文的文档服务端口,例如 8.219.80.16:8787
- *        [--proxy-path <路径>]         主机经代理连的路径,缺省 /(直连文档服务端口时就是根)
+ *        [--proxy-path <路径>]         主机经代理连的路径,缺省 /(直连文档服务端口时就是根);lan 缺省取发现到的地址的路径(/docservice)
  *        [--seconds 8] [--clips 4]     时间轴:clips 条轨道各放一段 seconds 秒的 `r6-canvas`(共享档,参数带本轮的盐,结果键全新),
  *                                      按 60 帧一段切,缺省 4 × 4 = 16 个细任务
  *        [--host-concurrency 2]        主机并发(`render-host.mjs --max-concurrent`);发布方的本机节点并发是 1,主机多拿一些
@@ -100,6 +108,12 @@
  *   node scripts/probes/ht-w-probe.mjs --role all --cut proxy --hosted http://127.0.0.1:8797 --coord http://127.0.0.1:8799 --out "$OUT/roles"
  *   (跑完结束这两个后台进程、删掉 $DATA)
  *
+ * 放本机(C5-2,PC 当局域网主机、笔记本经代理连它;协调口用 PC 局域网上的 probe-coord,全程不连阿里云):
+ *   PC:    node scripts/probes/probe-coord.mjs serve --host 0.0.0.0 --port 5789
+ *          node scripts/probes/ht-w-probe.mjs --role creator --place lan --coord http://<PC 局域网地址>:5789 --port 5780 --run <id>
+ *   笔记本: node scripts/probes/ht-w-probe.mjs --role host --place lan --cut proxy --coord http://<PC 局域网地址>:5789 --run <id> --port 5583 --proxy-port 5596
+ *   本机替身:node scripts/probes/ht-w-probe.mjs --role all --place lan --coord <本机协调口> --port 5740 --proxy-port 5749
+ *
  * 对阿里云(托管端 https://8-219-80-16.sslip.io/hosted,协调口 https://8-219-80-16.sslip.io/coord,各机都要 PROBE_MAIL_TOKEN):
  *   creator(笔记本):
  *     node scripts/probes/ht-w-probe.mjs --role creator --hosted https://8-219-80-16.sslip.io/hosted --coord https://8-219-80-16.sslip.io/coord --run <id>
@@ -132,6 +146,9 @@ const ROLE = arg('--role', null);
 const HOSTED = arg('--hosted', null) ? String(arg('--hosted')).replace(/\/+$/, '') : null;
 const COORD = arg('--coord', null) ? String(arg('--coord')).replace(/\/+$/, '') : null;
 const CUT = arg('--cut', 'proxy');
+const PLACE = arg('--place', 'cloud');
+/** 放云端要托管端;放本机不要(项目在 creator 的局域网主机编辑器里) */
+const needHosted = () => PLACE === 'cloud' && !HOSTED;
 const TIMEOUT_MS = Number(arg('--timeout-min', 20)) * 60_000;
 const KEEP = argv.includes('--keep-temp');
 const SECONDS = Number(arg('--seconds', 8));
@@ -290,10 +307,11 @@ function probeProject(salt) {
 }
 
 async function runCreator(out) {
-  if (!HOSTED || !COORD) { fails.push('要给 --hosted 与 --coord'); process.exitCode = 2; return; }
+  if (needHosted() || !COORD || !['cloud', 'lan'].includes(PLACE)) { fails.push('要给 --coord,放云端另要 --hosted(--place 取 cloud | lan)'); process.exitCode = 2; return; }
   const c = coordClient(COORD);
   const run = arg('--run', null) ?? newRunId();
   out.run = run;
+  out.place = PLACE;
   const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-htw-${run}`, 'creator')));
   fs.mkdirSync(OUT, { recursive: true });
   const port = Number(arg('--port', DEFAULT_PORT.creator));
@@ -303,30 +321,58 @@ async function runCreator(out) {
   let watcher = null;
   let project = null;
   let creatorPw = null;
+  let lanSessions = null;
+  let delWs = null;
   const put = async (name, value) => { try { await c.put(K(run, name), value); } catch (error) { say('kv-put-failed', { name, message: String(error?.message ?? error) }); } };
   try {
     await c.put('htw.latest', { run, at: Date.now() });
-    const hostedWs = M.wsBaseOf(HOSTED);
-    const health = await json(healthzOf(hostedWs), { timeoutMs: 15_000 }).catch((e) => ({ ok: false, body: String(e?.message ?? e) }));
-    if (!check('hosted-healthz', health.ok, health.ok ? undefined : health.body)) return;
+    // 放云端:项目在托管端;放本机:项目在本编辑器(局域网主机)里,本机节点与建项目走回环,主机与旁观节点走局域网地址
+    const lanIp = PLACE === 'lan' ? (arg('--lan-ip', null) ?? (await import('../../server/lan/discovery.mjs')).selectInterfaces()[0]?.address ?? null) : null;
+    if (PLACE === 'lan' && !lanIp) { fails.push('放本机要有局域网地址(--lan-ip)'); process.exitCode = 2; return; }
+    const loopbackWs = `ws://127.0.0.1:${port}/docservice`;
+    delWs = PLACE === 'cloud' ? M.wsBaseOf(HOSTED) : loopbackWs;
+    const hostedWs = PLACE === 'cloud' ? M.wsBaseOf(HOSTED) : `ws://${lanIp}:${port}/docservice`;
+    out.lanIp = lanIp;
+    if (PLACE === 'cloud') {
+      const health = await json(healthzOf(hostedWs), { timeoutMs: 15_000 }).catch((e) => ({ ok: false, body: String(e?.message ?? e) }));
+      if (!check('hosted-healthz', health.ok, health.ok ? undefined : health.body)) return;
+    }
 
-    // 1. 编辑器(队列模式,只绑回环);配置文件在第一次打 /api/frames/* 时才读,先起、后写
+    // 1. 编辑器(队列模式;放云端只绑回环,放本机以局域网主机起、绑 0.0.0.0);配置文件在第一次打 /api/frames/* 时才读,先起、后写
     for (const p of [port, port + 1, port + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
     const creatorConfig = path.join(OUT, 'creator.json');
-    const env = baseEnv(OUT, { PROMPTCUT_QUEUE_NODE: '1', PROMPTCUT_SHARED_CONFIG: creatorConfig });
-    editor = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
+    const env = baseEnv(OUT, { PROMPTCUT_QUEUE_NODE: '1', PROMPTCUT_SHARED_CONFIG: creatorConfig, ...(PLACE === 'lan' ? { PROMPTCUT_LAN_HOST: '1' } : {}) });
+    editor = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', ...(PLACE === 'lan' ? [] : ['--host', '127.0.0.1'])], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
     editorLines = collect(editor);
     const editorUrl = `http://127.0.0.1:${port}`;
+    const lanHealthz = `${editorUrl}/api/docservice/healthz`;
+    if (PLACE === 'lan') {
+      const up = await until(async () => (await json(lanHealthz, { timeoutMs: 3000 })).ok || null, 240_000, 500);
+      if (!check('lan-host-up', !!up, editorLines.slice(-6))) return;
+    }
 
-    // 2. 托管端的共享项目
+    // 2. 共享项目(托管端,或本机的局域网模式项目:只有回环能建)
     creatorPw = secret();
     const projectPw = secret();
-    project = await M.createSharedProject({ where: 'hosted', hostedUrl: hostedWs, name: `htw-${run}`, mode: 'free', creator: { username: 'creator', password: creatorPw }, password: projectPw });
+    project = await M.createSharedProject({ where: PLACE === 'cloud' ? 'hosted' : 'lan', ...(PLACE === 'cloud' ? { hostedUrl: hostedWs } : { lanBase: loopbackWs }),
+      name: `htw-${run}`, mode: 'free', creator: { username: 'creator', password: creatorPw }, password: projectPw });
     out.projectId = project.projectId;
     const devId = (tag) => `htw-${tag}-${run}`.replace(/[^A-Za-z0-9_-]/g, '-').padEnd(16, '0').slice(0, 64);
-    fs.writeFileSync(creatorConfig, JSON.stringify([{ url: hostedWs, projectId: project.projectId, username: 'creator', deviceId: devId('creator'), deviceName: 'W-HT-a creator (probe)', as: 'creator', role: 'render', password: creatorPw }], null, 2));
+    fs.writeFileSync(creatorConfig, JSON.stringify([{ url: PLACE === 'cloud' ? hostedWs : loopbackWs, projectId: project.projectId, username: 'creator', deviceId: devId('creator'), deviceName: 'W-HT-a creator (probe)', as: 'creator', role: 'render', password: creatorPw }], null, 2));
     const salt = `${run}-${randomBytes(3).toString('hex')}`;
-    await c.put(K(run, 'config'), { run, hosted: HOSTED, hostedWs, projectId: project.projectId, member: { username: 'host', password: projectPw }, salt, at: Date.now() });
+    await c.put(K(run, 'config'), { run, place: PLACE, hosted: HOSTED, hostedWs, name: project.name, projectId: project.projectId, member: { username: 'host', password: projectPw }, salt, at: Date.now() });
+    // 放本机:主机读不到局域网主机的 /api/docservice/healthz(只答回环),由本角色在 host.holding / host.resumed 时各读一次 sessions
+    lanSessions = PLACE === 'lan' ? (async () => {
+      const holding = await c.take(K(run, 'host.holding'), deadline).catch(() => null);
+      if (!holding) return null;
+      const before = (await json(lanHealthz, { timeoutMs: 10_000 }).catch(() => null))?.body?.sessions ?? null;
+      const resumed = await c.take(K(run, 'host.resumed'), deadline).catch(() => null);
+      const after = await until(async () => {
+        const s = (await json(lanHealthz, { timeoutMs: 10_000 }).catch(() => null))?.body?.sessions ?? null;
+        return s && before && (s.resumed ?? 0) > (before.resumed ?? 0) ? s : null;
+      }, 15_000, 500) ?? (await json(lanHealthz, { timeoutMs: 10_000 }).catch(() => null))?.body?.sessions ?? null;
+      return { resumedSignal: !!resumed, before: before?.resumed ?? null, after: after?.resumed ?? null };
+    })() : null;
     say('config', { run, projectId: project.projectId });
 
     const prerender = await until(async () => {
@@ -424,6 +470,12 @@ async function runCreator(out) {
     const hostDone = (host.completed ?? 0) + (host.dedup ?? 0);
     out.completedByNode = { pc: pc.completed.length + pc.dedup.length, host: hostDone };
     check('host-worked', hostDone >= 1 && out.completedByNode.pc + hostDone === plan.tasks, { ...out.completedByNode, tasks: plan.tasks });
+    if (lanSessions) {
+      // 放本机:主机那边的 healthz-resumed 由这里代判(局域网主机的 healthz 只答回环)
+      const s = await lanSessions;
+      out.lanSessions = s;
+      check('lan-healthz-resumed', !!s && s.after !== null && s.before !== null && s.after > s.before, s);
+    }
   } catch (error) {
     fails.push(`creator 出错:${String(error?.message ?? error).slice(0, 600)}`);
     say('error', { stack: String(error?.stack ?? error).slice(0, 1500) });
@@ -437,7 +489,7 @@ async function runCreator(out) {
       let deleteError;
       let conn = null;
       try {
-        conn = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId: project.projectId, username: 'creator', password: creatorPw, as: 'creator', tag: 'creator-del' });
+        conn = await openConn(M, { url: delWs, projectId: project.projectId, username: 'creator', password: creatorPw, as: 'creator', tag: 'creator-del' });
         if (!conn) throw new Error('连不上项目');
         const ch = await conn.rpc({ type: 'shared.challenge' });
         if (ch.type !== 'shared.challenge.ok') throw new Error(`challenge ${ch.reason ?? ch.type}`);
@@ -462,7 +514,7 @@ async function runCreator(out) {
 /* ================================================================== host */
 
 async function runHost(out) {
-  if (!HOSTED || !COORD) { fails.push('要给 --hosted 与 --coord'); process.exitCode = 2; return; }
+  if (needHosted() || !COORD) { fails.push('要给 --coord,放云端另要 --hosted'); process.exitCode = 2; return; }
   if (!['proxy', 'external'].includes(CUT)) { fails.push('--cut 取 proxy 或 external'); process.exitCode = 2; return; }
   const c = coordClient(COORD);
   const run = arg('--run', null) ?? (await c.take('htw.latest', Date.now() + 120_000))?.run;
@@ -483,13 +535,29 @@ async function runHost(out) {
     const cfg = await c.take(K(run, 'config'), deadline);
     if (!check('host-config', !!cfg)) return;
     out.projectId = cfg.projectId;
+    out.place = cfg.place ?? 'cloud';
+    const lan = cfg.place === 'lan';
+
+    // 0. 放本机:经局域网发现找局域网主机(--lan-host 手填兜底),连发现到的地址;查不到就用 creator 给的地址,记一条失败
+    let baseWs = cfg.hostedWs;
+    if (lan) {
+      const [{ findSharedProject, wsBaseOf }, { discoverLan }] = await Promise.all([import('../../server/auth/route.mjs'), import('../../server/lan/discovery.mjs')]);
+      const t0 = Date.now();
+      const manual = arg('--lan-host', null);
+      const found = await findSharedProject({ name: cfg.name, hostedUrl: null, lan: { discover: discoverLan, manual: manual ? [manual] : [] } })
+        .catch((e) => ({ candidates: [], errors: [{ message: String(e?.message ?? e) }] }));
+      const hit = found.candidates.find((x) => x.where === 'lan' && x.projectId === cfg.projectId) ?? null;
+      out.discovery = { ms: Date.now() - t0, via: hit?.via ?? null, firstSeenMs: hit?.firstSeenMs ?? null, base: hit?.base ?? null, errors: (found.errors ?? []).slice(0, 3) };
+      check('lan-found', !!hit, out.discovery);
+      if (hit) baseWs = wsBaseOf(hit.base);
+    }
 
     // 1. 连接地址:proxy 经本机代理,external 直连
-    let docUrl = cfg.hostedWs;
+    let docUrl = baseWs;
     if (CUT === 'proxy') {
       let target = arg('--proxy-target', null);
       if (!target) {
-        const u = new URL(cfg.hostedWs);
+        const u = new URL(baseWs);
         if (u.protocol !== 'ws:') { fails.push('--hosted 是 https / wss 时要给 --proxy-target <明文文档服务的 host:port>(代理不解 TLS)'); process.exitCode = 2; return; }
         target = `${u.hostname}:${u.port || 80}`;
       }
@@ -500,7 +568,7 @@ async function runHost(out) {
       proxyLines = collect(proxy);
       const listening = await until(() => proxyLines.some((l) => l.includes('"event":"listen"')) || null, 10_000, 100);
       if (!check('proxy-listening', !!listening, proxyLines.slice(-3))) return;
-      const p = String(arg('--proxy-path', '/'));
+      const p = String(arg('--proxy-path', lan ? new URL(baseWs).pathname.replace(/\/+$/, '') || '/' : '/'));
       docUrl = `ws://127.0.0.1:${proxyPort}${p.startsWith('/') ? p : `/${p}`}`;
       out.proxy = { port: proxyPort, target };
     }
@@ -557,7 +625,8 @@ async function runHost(out) {
       return null;
     }, TIMEOUT_MS, 150);
     if (!check('held-before-cut', holding === true, { holding, last: pre ? { held: pre.held } : null })) return;
-    const sessionsBefore = await sessionsOf(cfg.hostedWs);
+    // 放本机:局域网主机的 healthz 只答回环,这两次读由 creator 代做(lan-healthz-resumed)
+    const sessionsBefore = lan ? null : await sessionsOf(cfg.hostedWs);
     const linesBeforeCut = lines.length;
     Object.assign(out, { held: pre.held, opensBefore: pre.opens, resumesBefore: pre.resumes ?? 0, transport: pre.transport ?? null, sessionsResumedBefore: sessionsBefore?.resumed ?? null });
     await c.put(K(run, 'host.holding'), { held: pre.held, at: Date.now() });
@@ -585,7 +654,7 @@ async function runHost(out) {
     const since = lines.slice(linesBeforeCut);
     const has = (ev) => since.some((l) => l.includes(`docservice.${ev} `) || l.includes(`docservice.${ev}"`));
     const logged = { detach: has('session.detach'), resume: has('session.resume'), open: has('session.open'), close: has('session.close') };
-    const sessionsAfter = await until(async () => {
+    const sessionsAfter = lan ? null : await until(async () => {
       const s = await sessionsOf(cfg.hostedWs);
       return s && sessionsBefore && (s.resumed ?? 0) > (sessionsBefore.resumed ?? 0) ? s : null;
     }, 15_000, 500) ?? await sessionsOf(cfg.hostedWs);
@@ -595,7 +664,7 @@ async function runHost(out) {
     check('session-resumed', !!resumed, { resumes: [out.resumesBefore, resumed?.resumes ?? null], logged });
     check('not-new-session', !!resumed && resumed.opens === out.opensBefore && !logged.open && !logged.close,
       { opens: [out.opensBefore, resumed?.opens ?? null], connectFailed: resumed?.connectFailed ?? null, logged });
-    check('healthz-resumed', (sessionsAfter?.resumed ?? 0) > (sessionsBefore?.resumed ?? Infinity), { before: sessionsBefore?.resumed ?? null, after: sessionsAfter?.resumed ?? null });
+    if (!lan) check('healthz-resumed', (sessionsAfter?.resumed ?? 0) > (sessionsBefore?.resumed ?? Infinity), { before: sessionsBefore?.resumed ?? null, after: sessionsAfter?.resumed ?? null });
     await put('host.resumed', { at: Date.now(), resumes: resumed?.resumes ?? null });
 
     // 6. 等 creator 的 plan,核对持有的任务
@@ -650,14 +719,14 @@ async function runHost(out) {
 /* ================================================================== all */
 
 async function runAll(out) {
-  if (!HOSTED || !COORD) { fails.push('要给 --hosted 与 --coord'); process.exitCode = 2; return; }
+  if (needHosted() || !COORD) { fails.push('要给 --coord,放云端另要 --hosted'); process.exitCode = 2; return; }
   if (CUT !== 'proxy') { fails.push('--role all 只跑 --cut proxy'); process.exitCode = 2; return; }
   const run = arg('--run', null) ?? newRunId();
   out.run = run;
   const outDir = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-htw-${run}`)));
   const base = Number(arg('--port', DEFAULT_PORT.creator));
-  const pass = ['--seconds', '--clips', '--host-concurrency', '--resume-timeout-s', '--timeout-min', '--proxy-target', '--proxy-path'].flatMap((n) => (arg(n, null) !== null ? [n, arg(n)] : []));
-  const common = ['--hosted', HOSTED, '--coord', COORD, '--run', run, ...pass, ...(KEEP ? ['--keep-temp'] : [])];
+  const pass = ['--seconds', '--clips', '--host-concurrency', '--resume-timeout-s', '--timeout-min', '--proxy-target', '--proxy-path', '--lan-ip', '--lan-host'].flatMap((n) => (arg(n, null) !== null ? [n, arg(n)] : []));
+  const common = [...(HOSTED ? ['--hosted', HOSTED] : []), '--place', PLACE, '--coord', COORD, '--run', run, ...pass, ...(KEEP ? ['--keep-temp'] : [])];
   const roles = [
     { role: 'creator', args: ['--port', String(base)] },
     { role: 'host', args: ['--port', String(base + 3), '--proxy-port', String(arg('--proxy-port', base + 6)), '--cut', 'proxy'] },

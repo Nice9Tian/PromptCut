@@ -13,6 +13,27 @@
  *        [--out <截图目录>]          缺省 <系统临时目录>/pc-c66t9-<run>/<角色>
  *        [--timeout-min 25] [--keep-temp]
  *        [--observer-throttle <字节/秒>]  观察端页面加入后用 CDP 限速(舞台 iframe 一并限),复现原尺寸从远端慢慢拉;也可设环境变量 T9_OBSERVER_THROTTLE
+ *        [--place cloud | lan]       缺省 cloud(项目在 --hosted 的托管端)。lan = M8-X1(计划 `docs/plan/m8-plan.md` 第 3.1 节「放本机版 T9」):
+ *                                   creator 以局域网主机起编辑器 A(`PROMPTCUT_LAN_HOST=1`,绑 0.0.0.0),在本机建局域网模式的项目;
+ *                                   observer、host 经局域网发现(`--lan-host <ip:端口>` 手填兜底)凭项目凭证进入。见下文「放本机」
+ *        [--lan-ip <PC 局域网地址>]  lan 的 creator:发给另两方的地址,缺省取本机第一块局域网网卡
+ *        [--lan-host <ip:端口>]      lan 的 observer / host:发现查不到时手填
+ *        [--heavy slow-stepped | pinned]  重卡片段怎么保证「一定判重」(计划第 5 节 L3),缺省 slow-stepped(C10 合入 main 之后,51f01c4):
+ *                                   slow-stepped 放 `probe-slow-stepped`(`src/cards/_probe/slow.tsx`:每帧在舞台里烧 40 ms、预渲染间里不烧、
+ *                                                `independent`),在哪台机器上都稳定判重,不用钉死;
+ *                                   pinned       旧做法,只作对照:放 16 秒 `probe-typewriter`,放卡前按成本记录的「人工钉死」(`pinnedHeavy`)写一条记录
+ *
+ * ## 放本机(--place lan,M8-X1)与放云端的差别
+ *   - 局域网主机就是素材服务所在:页面导入的两档素材直接落在主机本地,没有上传队列(页面挑不到别处的素材服务,留在本地),
+ *     所以没有「暂停上传 / 续传」那一段:creator 改为核主机上两档都 complete、字节与哈希相符;observer 的「出第一帧时原尺寸还在路上」
+ *     与「换档属于覆盖情形」两条不判(只记 `swapMode`),其余先小后大的断言照判(页面还没问过素材服务时先给小尺寸);
+ *   - 局域网主机不经 service.endpoints 登记素材服务(`vite-plugin-media.ts` 只在设了 PROMPTCUT_DOCSERVICE_URL 时登记):
+ *     探针自己的连接取不到登记时按文档服务地址推 `http://<主机>/api/asset`(同 `vite-plugin-frames.ts` 的 hostAssetClient);
+ *   - 跨机:PC 跑 creator,笔记本跑 observer 与 host,协调口用 PC 局域网上的 probe-coord(全程不连阿里云):
+ *       PC:    node scripts/probes/probe-coord.mjs serve --host 0.0.0.0 --port 5789
+ *              node scripts/probes/c66-t9-probe.mjs --role creator --place lan --coord http://<PC 局域网地址>:5789 --port 5780 --run <id>
+ *       笔记本: node scripts/probes/c66-t9-probe.mjs --role observer --place lan --coord http://<PC 局域网地址>:5789 --port 5590 --run <id>
+ *              node scripts/probes/c66-t9-probe.mjs --role host --place lan --coord http://<PC 局域网地址>:5789 --port 5583 --run <id>
  *
  * 环境变量:协调口开了信箱时 KV 要 `PROBE_MAIL_TOKEN`(`coordClient` 自动带,令牌不打印)。云端跑 host 另要
  * `NODE_USE_ENV_PROXY=1`、`PC_CHROME_ARGS=--no-sandbox`(脚本不管,原样传给子进程)。
@@ -78,8 +99,9 @@
  *   主机**不再**往本检出里预写探针用户卡(c66-host-cards):代码版本不含用户卡,用到用户卡的任务另标卡片代码身份,
  *   主机经内容库 `card-source` 自己同步(`render-host-contract.md` 第 7 节)。另断言:主机的卡片同步记下了探针卡
  *   (`GET /api/frames/queue` 的 `cardSync`);主机的代码版本与创建者的相同;创建者改卡之后(观察端走到那一步时)
- *   主机 15 s 内装上 v2(记账 rev ≥ 2,生效内容带 v2 记号;本检出里原来有这张卡时 v2 在主机自己的改动层里,底版不动)。
- *   本检出里原来没有这张卡(跨机)时,主机同步照现有装卡路径写进 `src/cards/user/`,收尾删掉。
+ *   主机 15 s 内装上 v2(记账 rev ≥ 2,生效内容带 v2 记号,在主机自己的改动层里;本检出里原来有这张卡时底版不动)。
+ *   主机有改动层(数据目录下的 `card-overrides`),卡片改动层修复(`claude/card-overlay`)之后同步来的新卡只进改动层、
+ *   不写检出目录:本检出里原来没有这张卡(跨机)时,另断言检出目录里没有多出它;收尾照旧只删本探针写过的。
  *
  * ## --role all(本机替身,主执行计划 6.8 节)
  *   同一台机器上各起一个子进程跑三个角色(端口缺省 5590 / 5593 / 5596,起点用 --port 或 --port-base 改),汇总三行结果。
@@ -114,11 +136,18 @@ const KEEP = argv.includes('--keep-temp');
 /** 观察端浏览器限速(字节 / 秒;0 = 不限):复现「原尺寸从远端慢慢拉」,CDP `Network.emulateNetworkConditions`,舞台 iframe 一并限 */
 const OBSERVER_THROTTLE = Math.max(0, Number(arg('--observer-throttle', process.env.T9_OBSERVER_THROTTLE ?? 0)) || 0);
 const DEFAULT_PORT = { creator: 5590, observer: 5593, host: 5596 };
+/** 放法:cloud(托管端)| lan(M8-X1,creator 当局域网主机) */
+const PLACE = arg('--place', 'cloud');
+/** 重卡片段的保证方式(计划第 5 节 L3):slow-stepped(确定判重的探针卡,缺省)| pinned(人工钉死,旧做法) */
+const HEAVY_MODE = arg('--heavy', 'slow-stepped');
 const FPS = 30;
 const SEEK = 2.5;
 const EXPECT_IDX = Math.round(SEEK * FPS);
-/** 重卡片段:审阅过的独立推帧卡(共享档),放卡前按成本记录的人工钉死写成重卡(见 runCreator 第 5 步) */
-const HEAVY = { cardId: 'probe-typewriter', seconds: 16 };
+/**
+ * 重卡片段:审阅过的独立推帧卡(共享档)。pinned:16 秒 probe-typewriter,放卡前按成本记录的人工钉死写成重卡(见 runCreator 第 5 步);
+ * slow-stepped:probe-slow-stepped(C10 集成分支的探针卡,舞台里每帧烧 burnMs,在哪台机器上都判重),不用钉死
+ */
+const HEAVY = HEAVY_MODE === 'slow-stepped' ? { cardId: 'probe-slow-stepped', seconds: 16, burnMs: 40 } : { cardId: 'probe-typewriter', seconds: 16 };
 const started = Date.now();
 const deadline = started + TIMEOUT_MS;
 
@@ -187,9 +216,10 @@ function editorEnv(dir, extra = {}) {
 }
 
 const children = [];
-async function startEditor(label, port, env) {
+/** 起一个编辑器;`lanHost` 为真时不给 --host(环境里的 PROMPTCUT_LAN_HOST=1 让 vite.config 绑 0.0.0.0,当局域网主机) */
+async function startEditor(label, port, env, { lanHost = false } = {}) {
   for (const p of [port, port + 1, port + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
-  const child = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
+  const child = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', ...(lanHost ? [] : ['--host', '127.0.0.1'])],
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
   children.push(child);
   const log = [];
@@ -221,13 +251,13 @@ function saveEditorLogs(dir) {
 /* ------------------------------------------------------------------ 文档服务连接(Node 侧) */
 
 async function mods() {
-  const [route, client, shared, ws, endpoint, ticket, asset] = await Promise.all([
+  const [route, client, shared, link, endpoint, ticket, asset] = await Promise.all([
     import('../../server/auth/route.mjs'), import('../../server/auth/client.mjs'), import('../../server/auth/shared-config.mjs'),
-    import('../../server/render-node/ws-transport.mjs'), import('../../server/render-node/endpoint.mjs'),
+    import('../../server/render-node/session-link.mjs'), import('../../server/render-node/endpoint.mjs'),
     import('../../server/auth/ticket-source.mjs'), import('../../server/asset-store/client.mjs'),
   ]);
   // route 与 client 都导出 createSharedProject:要 route 的那个(按 where 分派)
-  return { ...client, ...route, ...shared, ...ws, ...endpoint, ...ticket, ...asset, createSharedProject: route.createSharedProject };
+  return { ...client, ...route, ...shared, ...link, ...endpoint, ...ticket, ...asset, createSharedProject: route.createSharedProject };
 }
 
 /** 请求 / 回包按 reqId 配对(同 shared-project-probe) */
@@ -251,24 +281,28 @@ function rpcOn(ep) {
 
 /**
  * 以某个身份连上项目(page 角色):回 { ep, rpc, assetUrl, client(只读或读写票据的素材客户端), close }。
- * 素材服务地址从 service.endpoints 取。
+ * 连接是一个会话(HT-a,`createDocEndpoint`,同 render-host-probe.mjs 与编辑器页面):单次传输中断在保留期内接续。
+ * 素材服务地址从 service.endpoints 取;局域网主机不登记(只在设了 PROMPTCUT_DOCSERVICE_URL 时登记),取不到就按文档服务地址推
+ * `http://<主机>/api/asset`(同 vite-plugin-frames.ts 的 hostAssetClient:局域网模式的素材服务与文档服务在同一个进程)。
  */
 async function openConn(M, { url, projectId, username, password, as = 'member', tag }) {
   const entry = M.normalizeEntry({ url, projectId, username, password, as, role: 'page', deviceId: `c66t9-${tag}-${randomBytes(6).toString('hex')}`, deviceName: `c66-t9-probe ${tag}` });
-  const ep = M.createWsEndpoint({ url: entry.url, protocols: M.sharedProtocols(entry, { role: 'page' }), log: () => {} });
+  const ep = M.createDocEndpoint({ url: entry.url, protocols: M.sharedProtocols(entry, { role: 'page' }), log: () => {} });
   const opened = await new Promise((resolve) => {
     if (ep.connected) return resolve(true);
     const t = setTimeout(() => resolve(false), 20_000);
     ep.onOpen(() => { clearTimeout(t); resolve(true); });
   });
   if (!opened) { try { ep.close(); } catch { /* 没连上 */ } throw new Error(`${tag} 连不上文档服务`); }
-  const assetUrl = await new Promise((resolve) => {
-    const t = setTimeout(() => { stop(); resolve(null); }, 15_000);
+  const announced = await new Promise((resolve) => {
+    const t = setTimeout(() => { stop(); resolve(null); }, PLACE === 'lan' ? 5_000 : 15_000);
     const stop = M.watchServiceEndpoints(ep, ['asset'], (list) => {
       const u = list.find((e) => e.kind === 'asset' && Array.isArray(e.urls) && e.urls.length)?.urls[0];
       if (u) { clearTimeout(t); stop(); resolve(u); }
     });
   });
+  const derived = (() => { try { const u = new URL(entry.url); return `${/^(wss|https):/.test(u.protocol) ? 'https:' : 'http:'}//${u.host}/api/asset`; } catch { return null; } })();
+  const assetUrl = announced ?? (PLACE === 'lan' ? derived : null);
   const rpc = rpcOn(ep);
   const client = (access = 'r', opts = {}) => M.createAssetClient({ base: assetUrl, ticket: M.createTicketSource(ep, { access }), ...opts });
   const close = async () => {
@@ -277,6 +311,21 @@ async function openConn(M, { url, projectId, username, password, as = 'member', 
     await Promise.race([closed, delay(3000)]);
   };
   return { ep, rpc, assetUrl, client, close };
+}
+
+/**
+ * 放本机:经局域网发现按项目名找局域网主机(--lan-host 手填兜底),回 { base(ws 基址), discovery };查不到回 creator 给的地址,
+ * discovery.found 为假(调用方记一条失败)
+ */
+async function discoverLanBase(M, cfg) {
+  const { discoverLan } = await import('../../server/lan/discovery.mjs');
+  const t0 = Date.now();
+  const manual = arg('--lan-host', null);
+  const found = await M.findSharedProject({ name: cfg.name, hostedUrl: null, lan: { discover: discoverLan, manual: manual ? [manual] : [] } })
+    .catch((e) => ({ candidates: [], errors: [{ message: String(e?.message ?? e) }] }));
+  const hit = found.candidates.find((x) => x.where === 'lan' && x.projectId === cfg.projectId) ?? null;
+  const discovery = { found: !!hit, ms: Date.now() - t0, via: hit?.via ?? null, firstSeenMs: hit?.firstSeenMs ?? null, base: hit?.base ?? null, errors: (found.errors ?? []).slice(0, 3) };
+  return { base: hit ? M.wsBaseOf(hit.base) : cfg.ws, candidateBase: hit?.base ?? cfg.base, discovery };
 }
 
 /* ------------------------------------------------------------------ 探针用户卡 */
@@ -414,9 +463,17 @@ async function runCreator(out) {
   fs.mkdirSync(OUT, { recursive: true });
   const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-c66t9-creator-'));
   out.port = port;
-  const wsBase = M.wsBaseOf(HOSTED);
-  const httpBase = M.httpBaseOf(wsBase);
+  out.place = PLACE;
+  out.heavyMode = HEAVY_MODE;
+  const lan = PLACE === 'lan';
+  const lanIp = lan ? (arg('--lan-ip', null) ?? (await import('../../server/lan/discovery.mjs')).selectInterfaces()[0]?.address ?? null) : null;
+  if (lan && !lanIp) throw new Error('放本机要有局域网地址(--lan-ip)');
+  // 成员(观察端、主机、本探针的检查连接)用 wsBase;创建者自己的节点、建项目、删项目用 selfWs(放本机时走回环:只有回环能建)
+  const wsBase = lan ? `ws://${lanIp}:${port}/docservice` : M.wsBaseOf(HOSTED);
+  const selfWs = lan ? `ws://127.0.0.1:${port}/docservice` : wsBase;
+  const httpBase = lan ? `http://${lanIp}:${port}` : M.httpBaseOf(wsBase);
   out.hosted = httpBase;
+  out.lanIp = lanIp;
   const CARD_ID = `c66t9-${run.toLowerCase()}`;
   const CARD_REL = `src/cards/user/${CARD_ID}.tsx`;
   const MARK = (v) => `T9-${run}-${v}`;
@@ -427,8 +484,10 @@ async function runCreator(out) {
   let creatorPw = null;
   const pageErrors = [];
   try {
-    const health = await getJson(`${httpBase}/healthz`).catch((e) => ({ error: String(e?.message ?? e) }));
-    if (!check(health?.ok, '托管端 /healthz', health)) throw new Error('托管端不通');
+    if (!lan) {
+      const health = await getJson(`${httpBase}/healthz`).catch((e) => ({ error: String(e?.message ?? e) }));
+      if (!check(health?.ok, '托管端 /healthz', health)) throw new Error('托管端不通');
+    }
 
     // ---- 1. 测试视频:1280×720 画帧号条纹(tier-switch-probe 的画法),最近邻放大到 1920×1080;moov 在尾
     const { findFfmpeg } = await import('../../server/bakery/ffmpeg.mjs');
@@ -442,22 +501,26 @@ async function runCreator(out) {
     const videoBytes = fs.readFileSync(video);
     out.video = { name: path.basename(video), bytes: videoBytes.length, sha: sha256(videoBytes).slice(0, 12), size: '1920x1080', fps: FPS, seconds: 6 };
 
-    // ---- 2. 共享项目、探针卡、编辑器 A(发布方)
+    // ---- 2. 探针卡、编辑器 A(发布方;放本机时是局域网主机)、共享项目。共享项目配置在第一次打 /api/frames/* 时才读:先起编辑器、后写
     creatorPw = randomBytes(12).toString('base64url');
     const projectPw = randomBytes(12).toString('base64url');
     const name = `c66t9-${run}`;
-    shared = await M.createSharedProject({ where: 'hosted', hostedUrl: wsBase, name, mode: 'free', creator: { username: 'creator', password: creatorPw }, password: projectPw });
-    out.projectId = shared.projectId;
-    out.projectName = name;
-    say('project.created', { projectId: shared.projectId, name });
     card.write(cardSource(CARD_ID, MARK('v1')));
     const creatorConfig = path.join(TMP, 'creator-shared.json');
-    fs.writeFileSync(creatorConfig, JSON.stringify([{ url: wsBase, projectId: shared.projectId, username: 'creator', password: creatorPw, as: 'creator', role: 'render',
-      deviceId: `c66t9-pcnode-${run}`.padEnd(16, '0'), deviceName: 'c66-t9 creator node' }]));
     const A = await startEditor('creator', port, editorEnv(path.join(TMP, 'editor'), {
       PROMPTCUT_QUEUE_NODE: '1', PROMPTCUT_SHARED_CONFIG: creatorConfig,
       PROMPTCUT_DEVICE_ID: `c66t9-a-${run}`.padEnd(16, '0'), PROMPTCUT_DEVICE_NAME: 'c66-t9 creator',
-    }));
+      ...(lan ? { PROMPTCUT_LAN_HOST: '1' } : {}),
+    }), { lanHost: lan });
+    if (lan && !(await until('[creator] 局域网主机的文档服务起来', async () => (await fetch(`${A.origin}/api/docservice/healthz`, { signal: AbortSignal.timeout(3000) })).ok || null, 120_000, 500))) {
+      throw new Error('局域网主机的文档服务没起来');
+    }
+    shared = await M.createSharedProject({ where: lan ? 'lan' : 'hosted', ...(lan ? { lanBase: selfWs } : { hostedUrl: wsBase }), name, mode: 'free', creator: { username: 'creator', password: creatorPw }, password: projectPw });
+    out.projectId = shared.projectId;
+    out.projectName = name;
+    say('project.created', { projectId: shared.projectId, name, place: PLACE });
+    fs.writeFileSync(creatorConfig, JSON.stringify([{ url: selfWs, projectId: shared.projectId, username: 'creator', password: creatorPw, as: 'creator', role: 'render',
+      deviceId: `c66t9-pcnode-${run}`.padEnd(16, '0'), deviceName: 'c66-t9 creator node' }]));
     const prerender = await until('[creator] 预渲染进程就绪', async () => {
       const info = await getJson(`${A.origin}/api/prerender/info`, 3000);
       return info?.ready && info.url ? info.url : null;
@@ -489,7 +552,7 @@ async function runCreator(out) {
       proto.__t9Wrapped = true;
     });
     const entered = await P(page, async (candidate, cred) => (await import('/src/editor/sync/syncManager.ts')).enterShared(candidate, cred),
-      { where: 'hosted', base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode }, { as: 'creator', username: 'creator', password: creatorPw });
+      { where: shared.where, base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode }, { as: 'creator', username: 'creator', password: creatorPw });
     if (!entered?.ok) throw new Error(`创建者进不去共享项目:${JSON.stringify(entered)}`);
     const pushed = await until('[creator] 用户卡传上内容库', async () => {
       const s = await getJson(`${A.origin}/api/cards/sync/status`);
@@ -499,8 +562,9 @@ async function runCreator(out) {
     // 托管端连接(创建者,page 角色):素材服务地址、票据、chunks
     conn = await openConn(M, { url: wsBase, projectId: shared.projectId, username: 'creator', password: creatorPw, as: 'creator', tag: 'creator-check' });
     out.assetUrl = conn.assetUrl;
-    if (!check(conn.assetUrl, '[creator] 从 service.endpoints 拿到托管端素材服务地址')) throw new Error('没有素材服务地址');
-    const target = await until('[creator] 页面把托管端素材服务交给上传队列', async () => {
+    if (!check(conn.assetUrl, lan ? '[creator] 拿到局域网主机的素材服务地址(按文档服务地址推)' : '[creator] 从 service.endpoints 拿到托管端素材服务地址')) throw new Error('没有素材服务地址');
+    // 放本机:素材就在本机,页面挑不到别处的素材服务、不设上传目标
+    const target = lan ? null : await until('[creator] 页面把托管端素材服务交给上传队列', async () => {
       const q = await getJson(`${A.origin}/api/media/upload-queue`);
       return q?.target?.base && q.target.base.replace(/\/+$/, '') === conn.assetUrl.replace(/\/+$/, '') ? q.target : null;
     }, 30_000, 300);
@@ -542,30 +606,63 @@ async function runCreator(out) {
     }, 360_000, 20);
     if (!smallUp) throw new Error('素材小尺寸没传到托管端');
     const tPause = Date.now();
-    const pausePost = await postJson(`${A.origin}/api/media/upload-queue/target`, { base: null });
-    say('upload.paused', { via: smallUp });
-    const [cs0, co0] = await Promise.all([cli.chunks('media', smallHash).catch(() => null), cli.chunks('media', media.original).catch(() => null)]);
-    if (cs0?.complete) firstComplete.small = tPause;
-    const chunkSize = cs0?.chunkSize ?? null;
-    const originalSize = videoBytes.length;
-    const totalChunks = chunkSize ? Math.max(1, Math.ceil(originalSize / chunkSize)) : null;
-    out.pause = { at: tPause, sinceImportMs: tPause - tImport, via: smallUp, postStatus: pausePost.status, chunkSize, originalBytes: originalSize, originalChunks: totalChunks,
-      originalReceived: co0?.received?.length ?? 0, originalComplete: co0?.complete === true, smallComplete: cs0?.complete === true };
-    check(pausePost.status === 200 && pausePost.body?.ok !== false, '[creator] 暂停上传队列(上传目标置空)', pausePost);
-    check(out.pause.smallComplete, '[creator] 暂停时托管端素材小尺寸已 complete', out.pause);
-    check(!out.pause.originalComplete, '[creator] 暂停时托管端素材原尺寸还没 complete', out.pause);
-    check(totalChunks >= 4, '[creator] 素材原尺寸至少分 4 片', out.pause);
-    // 暂停之后队列里还留着这个素材(不丢),原尺寸不再往上走
-    await delay(1500);
-    const [co1, q1p] = await Promise.all([cli.chunks('media', media.original).catch(() => null), getJson(`${A.origin}/api/media/upload-queue`).catch(() => null)]);
-    out.pause.after1500ms = { originalReceived: co1?.received?.length ?? 0, originalComplete: co1?.complete === true, queued: q1p?.queue?.items?.length ?? null, target: q1p?.target ?? null };
-    check(!out.pause.after1500ms.originalComplete && out.pause.after1500ms.queued === 1 && !q1p?.target, '[creator] 暂停期间原尺寸停着、素材还在上传队列里', out.pause.after1500ms);
+    if (lan) {
+      // 放本机:局域网主机就是素材服务所在,导入即落地、没有上传队列,不暂停也不续传;只核两档在主机上的状态
+      const [cs0, co0] = await Promise.all([cli.chunks('media', smallHash).catch(() => null), cli.chunks('media', media.original).catch(() => null)]);
+      if (cs0?.complete) firstComplete.small = tPause;
+      out.pause = { skipped: 'lan', at: tPause, via: smallUp, chunkSize: cs0?.chunkSize ?? null, smallComplete: cs0?.complete === true, originalComplete: co0?.complete === true };
+      check(out.pause.smallComplete, '[creator] 局域网主机上素材小尺寸已 complete', out.pause);
+    } else {
+      const pausePost = await postJson(`${A.origin}/api/media/upload-queue/target`, { base: null });
+      say('upload.paused', { via: smallUp });
+      const [cs0, co0] = await Promise.all([cli.chunks('media', smallHash).catch(() => null), cli.chunks('media', media.original).catch(() => null)]);
+      if (cs0?.complete) firstComplete.small = tPause;
+      const chunkSize = cs0?.chunkSize ?? null;
+      const originalSize = videoBytes.length;
+      const totalChunks = chunkSize ? Math.max(1, Math.ceil(originalSize / chunkSize)) : null;
+      out.pause = { at: tPause, sinceImportMs: tPause - tImport, via: smallUp, postStatus: pausePost.status, chunkSize, originalBytes: originalSize, originalChunks: totalChunks,
+        originalReceived: co0?.received?.length ?? 0, originalComplete: co0?.complete === true, smallComplete: cs0?.complete === true };
+      check(pausePost.status === 200 && pausePost.body?.ok !== false, '[creator] 暂停上传队列(上传目标置空)', pausePost);
+      check(out.pause.smallComplete, '[creator] 暂停时托管端素材小尺寸已 complete', out.pause);
+      check(!out.pause.originalComplete, '[creator] 暂停时托管端素材原尺寸还没 complete', out.pause);
+      check(totalChunks >= 4, '[creator] 素材原尺寸至少分 4 片', out.pause);
+      // 暂停之后队列里还留着这个素材(不丢),原尺寸不再往上走
+      await delay(1500);
+      const [co1, q1p] = await Promise.all([cli.chunks('media', media.original).catch(() => null), getJson(`${A.origin}/api/media/upload-queue`).catch(() => null)]);
+      out.pause.after1500ms = { originalReceived: co1?.received?.length ?? 0, originalComplete: co1?.complete === true, queued: q1p?.queue?.items?.length ?? null, target: q1p?.target ?? null };
+      check(!out.pause.after1500ms.originalComplete && out.pause.after1500ms.queued === 1 && !q1p?.target, '[creator] 暂停期间原尺寸停着、素材还在上传队列里', out.pause.after1500ms);
+    }
     const smallInProject = await until('[creator] 项目里写上 tiers.small', () => P(page, async (id) => (await import('/src/store/project.ts')).getState().project.media.find((x) => x.id === id)?.tiers?.small ?? null, media.id), 30_000, 300);
     out.tiers = { original: media.original, small: smallHash, remuxed: media.original !== sha256(videoBytes) };
     check(smallHash && /^[0-9a-f]{64}$/.test(smallHash) && smallInProject === smallHash, '[creator] 项目里有 tiers.small,与两档登记一致', { smallHash, smallInProject, smallState });
 
     /** 观察端报小尺寸出画面并稳定(或它已交结果)之后续传,等原尺寸 complete、队列清空,再核对顺序与字节 */
+    /** 两档从素材服务整个取回、核哈希(托管端;放本机时是局域网主机) */
+    const checkHostedBytes = async () => {
+      // 整个取回再核哈希。原尺寸约 44 MB 只发一个请求,客户端缺省时限 30 s 含读完回包,托管端远时读不完
+      // (T9-X3 就是这样被判成不符);这里放宽到 10 分钟,取不回时记下错误原文,不和「字节不符」混在一起
+      const whole = conn.client('r', { timeoutMs: 600_000 });
+      out.hostedBytes = {};
+      for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
+        if (!h) continue;
+        const t0 = Date.now();
+        let bytes = null;
+        let error = null;
+        try { bytes = await whole.get('media', h); } catch (e) { error = { code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 200) }; }
+        out.hostedBytes[tier] = { ms: Date.now() - t0, bytes: bytes ? bytes.length : null, error };
+        check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`, out.hostedBytes[tier]);
+      }
+    };
+
     const resumeUpload = async () => {
+      if (lan) {
+        const origDone = await until('[creator] 局域网主机上素材原尺寸 complete', async () => ((await cli.chunks('media', media.original).catch(() => null))?.complete ? Date.now() : null), 300_000, 200);
+        if (origDone) firstComplete.original = origDone;
+        out.firstCompleteMs = { small: firstComplete.small ? firstComplete.small - tImport : null, original: firstComplete.original ? firstComplete.original - tImport : null, polls };
+        check(firstComplete.small && firstComplete.original, '[creator] 局域网主机上两档都 complete', firstComplete);
+        await checkHostedBytes();
+        return;
+      }
       let signal = null;
       const end = Math.min(Date.now() + 15 * 60_000, deadline);
       while (!signal && Date.now() < end) {
@@ -625,32 +722,21 @@ async function runCreator(out) {
         && (last.length === 3 || JSON.stringify(last.slice(0, 2)) === JSON.stringify(['tier-start small', 'tier-done small'])),
         '[creator] 上传队列日志:先小后大(暂停前小尺寸传完、原尺寸没传完;续传后原尺寸传完出队)', order);
       check(sent.filter((x) => x.tier === 'small' && x.attempt > 1).every((x) => x.sent === 0), '[creator] 续传时小尺寸一片没重发', sent);
-      // 整个取回再核哈希。原尺寸约 44 MB 只发一个请求,客户端缺省时限 30 s 含读完回包,托管端远时读不完
-      // (T9-X3 就是这样被判成不符);这里放宽到 10 分钟,取不回时记下错误原文,不和「字节不符」混在一起
-      const whole = conn.client('r', { timeoutMs: 600_000 });
-      out.hostedBytes = {};
-      for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
-        if (!h) continue;
-        const t0 = Date.now();
-        let bytes = null;
-        let error = null;
-        try { bytes = await whole.get('media', h); } catch (e) { error = { code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 200) }; }
-        out.hostedBytes[tier] = { ms: Date.now() - t0, bytes: bytes ? bytes.length : null, error };
-        check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`, out.hostedBytes[tier]);
-      }
+      await checkHostedBytes();
     };
 
     // ---- 5. KV config;等主机;加重卡片段,等 plan 落定
     await store.put('config', {
-      run, hosted: httpBase, ws: wsBase, projectId: shared.projectId, name: shared.name, mode: shared.mode, base: shared.base, memberPassword: projectPw,
+      run, place: PLACE, where: shared.where, hosted: httpBase, ws: wsBase, projectId: shared.projectId, name: shared.name, mode: shared.mode,
+      base: lan ? M.candidateBaseOf(wsBase) : shared.base, memberPassword: projectPw,
       tiers: out.tiers, mediaName: path.basename(video), fps: FPS, seek: SEEK,
       card: { id: CARD_ID, rel: CARD_REL, v1: MARK('v1'), v2: MARK('v2'), source: cardSource(CARD_ID, MARK('v1')) },
       heavy: { cardId: HEAVY.cardId, seconds: HEAVY.seconds, salt: `t9-${run}` },
-      pause: { at: out.pause.at, originalComplete: out.pause.originalComplete, originalReceived: out.pause.after1500ms.originalReceived, originalChunks: out.pause.originalChunks },
+      pause: { at: out.pause.at, skipped: out.pause.skipped ?? null, originalComplete: out.pause.originalComplete, originalReceived: out.pause.after1500ms?.originalReceived ?? null, originalChunks: out.pause.originalChunks ?? null },
       at: Date.now(),
     });
     // 续传在后台等观察端的信号,与主机、重卡片段、plan 并行
-    const resumeTask = resumeUpload().catch((error) => { fails.push(`[creator] 续传出错:${String(error?.message ?? error).slice(0, 300)}`); });
+    const resumeTask = resumeUpload().catch((error) => { fails.push(`[creator] ${lan ? '核两档' : '续传'}出错:${String(error?.message ?? error).slice(0, 300)}`); });
     say('config.put', { run });
     const hostReady = await store.wait('host.ready', '主机起来', 15 * 60_000);
     out.hostReady = { at: hostReady.at ?? null, port: hostReady.port ?? null };
@@ -665,39 +751,47 @@ async function runCreator(out) {
     // 切不出任务(报告 AGENT-c66-t9-fix 第 1 节)。所以放卡前先按成本记录的「人工钉死」(`pinnedHeavy`,costs-store 的粘性旗标)
     // 给这张卡的身份写一条记录:页面探针见到已有记录就不再测,两端的 planPipelines 都判 capped。不改轻重门槛与判定。
     await waitProbeIdle(page, 'creator');
-    const pinSpec = { cardId: HEAVY.cardId, duration: HEAVY.seconds, salt: `t9-${run}`, userClip };
-    const pinKeys = await P(page, async (spec) => {
-      const S = await import('/src/store/project.ts');
-      const I = await import('/src/editor/costIdentity.ts');
-      const R = await import('/src/kernel/registry.ts');
-      const p = S.getState().project;
-      const def = R.getCard(spec.cardId);
-      // 与 addCardClip 同一个形状(参数写入时展开成全量);身份键不含 clipId 与位置(cardCostKey)
-      const clip = { id: 't9-pin', cardId: spec.cardId, start: 0, end: spec.duration, params: { ...(def?.defaults ?? {}), probeSalt: spec.salt } };
-      I.resetClipIdentityCache();
-      const synthetic = I.clipIdentityOf({ ...p, tracks: [...p.tracks, { id: 't9-pin-track', name: 'pin', clips: [clip] }] }).identityKeys;
-      I.resetClipIdentityCache();
-      const own = I.clipIdentityOf(S.getState().project).identityKeys;
-      return { heavy: synthetic['t9-pin'] ?? null, user: own[spec.userClip] ?? null };
-    }, pinSpec);
-    // 页面的 device 串(probeRunner 私有)从它自己写过的用户卡记录上取:探针按 (identityKey, device) 判「已测过」
-    const allCosts = (await getJson(`${A.origin}/api/data/costs`))?.costs ?? [];
-    const userRecord = allCosts.find((r) => r.identityKey === pinKeys.user) ?? null;
-    if (!check(pinKeys.heavy && userRecord?.device, '[creator] 算出重卡片段的成本身份、拿到页面的 device 串', { pinKeys, userRecord: !!userRecord })) throw new Error('钉不住重卡片段');
-    const pinRecord = { identityKey: pinKeys.heavy, device: userRecord.device, ...(userRecord.mode ? { mode: userRecord.mode } : {}), fps: FPS,
-      pinnedHeavy: true, measuredAt: Date.now(), note: 'c66-t9-probe 人工钉死' };
-    const pinPut = await fetch(`${A.origin}/api/data/costs`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records: [pinRecord] }) })
-      .then((r) => r.json()).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-    check(pinPut?.ok, '[creator] 写入重卡片段的钉死记录', pinPut);
-    // 编辑器进程转给预渲染进程是不等回复的:等预渲染那一份也有了再放卡(它按自己那份算预渲染集合)
-    const pinForwarded = await until('[creator] 预渲染进程收到钉死记录', async () => {
-      const c = (await getJson(`${prerender}/api/data/costs`, 5000))?.costs ?? [];
-      return c.some((r) => r.identityKey === pinKeys.heavy && r.pinnedHeavy === true) || null;
-    }, 30_000, 300);
+    const pinSpec = { cardId: HEAVY.cardId, duration: HEAVY.seconds, salt: `t9-${run}`, userClip, params: HEAVY.burnMs ? { burnMs: HEAVY.burnMs, label: `T9-${run}` } : {} };
+    let pinKeys = { heavy: null, user: null };
+    let pinForwarded = null;
+    if (HEAVY_MODE === 'slow-stepped') {
+      // L3:确定判重的探针卡,不用钉死。C10 集成分支才有它,本检出没有就明说,不退回钉死(免得以为验过了)
+      const has = await P(page, async (id) => (await import('/src/kernel/registry.ts')).getCard(id) != null, HEAVY.cardId);
+      if (!check(has, `[creator] 本检出有 ${HEAVY.cardId}`, 'C10 集成分支的探针卡(src/cards/_probe/slow.tsx),C10 合入 main 之前没有;先用 --heavy pinned')) throw new Error(`没有 ${HEAVY.cardId}`);
+    } else {
+      pinKeys = await P(page, async (spec) => {
+        const S = await import('/src/store/project.ts');
+        const I = await import('/src/editor/costIdentity.ts');
+        const R = await import('/src/kernel/registry.ts');
+        const p = S.getState().project;
+        const def = R.getCard(spec.cardId);
+        // 与 addCardClip 同一个形状(参数写入时展开成全量);身份键不含 clipId 与位置(cardCostKey)
+        const clip = { id: 't9-pin', cardId: spec.cardId, start: 0, end: spec.duration, params: { ...(def?.defaults ?? {}), probeSalt: spec.salt } };
+        I.resetClipIdentityCache();
+        const synthetic = I.clipIdentityOf({ ...p, tracks: [...p.tracks, { id: 't9-pin-track', name: 'pin', clips: [clip] }] }).identityKeys;
+        I.resetClipIdentityCache();
+        const own = I.clipIdentityOf(S.getState().project).identityKeys;
+        return { heavy: synthetic['t9-pin'] ?? null, user: own[spec.userClip] ?? null };
+      }, pinSpec);
+      // 页面的 device 串(probeRunner 私有)从它自己写过的用户卡记录上取:探针按 (identityKey, device) 判「已测过」
+      const allCosts = (await getJson(`${A.origin}/api/data/costs`))?.costs ?? [];
+      const userRecord = allCosts.find((r) => r.identityKey === pinKeys.user) ?? null;
+      if (!check(pinKeys.heavy && userRecord?.device, '[creator] 算出重卡片段的成本身份、拿到页面的 device 串', { pinKeys, userRecord: !!userRecord })) throw new Error('钉不住重卡片段');
+      const pinRecord = { identityKey: pinKeys.heavy, device: userRecord.device, ...(userRecord.mode ? { mode: userRecord.mode } : {}), fps: FPS,
+        pinnedHeavy: true, measuredAt: Date.now(), note: 'c66-t9-probe 人工钉死' };
+      const pinPut = await fetch(`${A.origin}/api/data/costs`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records: [pinRecord] }) })
+        .then((r) => r.json()).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      check(pinPut?.ok, '[creator] 写入重卡片段的钉死记录', pinPut);
+      // 编辑器进程转给预渲染进程是不等回复的:等预渲染那一份也有了再放卡(它按自己那份算预渲染集合)
+      pinForwarded = await until('[creator] 预渲染进程收到钉死记录', async () => {
+        const c = (await getJson(`${prerender}/api/data/costs`, 5000))?.costs ?? [];
+        return c.some((r) => r.identityKey === pinKeys.heavy && r.pinnedHeavy === true) || null;
+      }, 30_000, 300);
+    }
     const heavyClip = await P(page, async (spec, seek) => {
       const S = await import('/src/store/project.ts');
       const t = S.actions.addTrack('T9 重卡');
-      const c = S.actions.addCardClip(spec.cardId, 0, { trackId: t.id, duration: spec.duration, params: { probeSalt: spec.salt } });
+      const c = S.actions.addCardClip(spec.cardId, 0, { trackId: t.id, duration: spec.duration, params: { ...spec.params, probeSalt: spec.salt } });
       S.actions.seek(seek);
       return c?.id ?? null;
     }, pinSpec, SEEK);
@@ -710,9 +804,9 @@ async function runCreator(out) {
       const r = I.clipIdentityOf(S.getState().project);
       return { key: r.identityKeys[clipId] ?? null, frameMode: r.frameModes[clipId] ?? null, compositing: r.capabilities.get(clipId)?.compositing ?? null };
     }, heavyClip);
-    out.heavy = { cardId: HEAVY.cardId, seconds: HEAVY.seconds, clipId: heavyClip, identityKey: heavyState.key, pinned: heavyState.key === pinKeys.heavy,
+    out.heavy = { mode: HEAVY_MODE, cardId: HEAVY.cardId, seconds: HEAVY.seconds, clipId: heavyClip, identityKey: heavyState.key, pinned: heavyState.key === pinKeys.heavy,
       forwarded: !!pinForwarded, frameMode: heavyState.frameMode, compositing: heavyState.compositing };
-    check(out.heavy.pinned, '[creator] 放上的重卡片段就是钉死的那个身份', { placed: heavyState.key, pinned: pinKeys.heavy });
+    if (HEAVY_MODE !== 'slow-stepped') check(out.heavy.pinned, '[creator] 放上的重卡片段就是钉死的那个身份', { placed: heavyState.key, pinned: pinKeys.heavy });
     check(heavyState.frameMode === 'stateful' && heavyState.compositing === 'independent', '[creator] 重卡片段是审阅过的独立推帧卡(共享档)', heavyState);
     const tPublish = Date.now();
     let lastNewAt = null;
@@ -817,7 +911,7 @@ async function runCreator(out) {
     // 删掉托管端的测试项目(创建者操作 delete)
     if (shared && creatorPw) {
       try {
-        conn ??= await openConn(M, { url: M.wsBaseOf(HOSTED), projectId: shared.projectId, username: 'creator', password: creatorPw, as: 'creator', tag: 'creator-del' });
+        conn ??= await openConn(M, { url: wsBase, projectId: shared.projectId, username: 'creator', password: creatorPw, as: 'creator', tag: 'creator-del' });
         const ch = await conn.rpc({ type: 'shared.challenge' });
         if (ch.type !== 'shared.challenge.ok') throw new Error(`challenge ${ch.reason ?? ch.type}`);
         const key = await M.deriveKey(creatorPw, ch.salt, ch.kdf);
@@ -857,6 +951,13 @@ async function runObserver(out) {
   const pageErrors = [];
   try {
     cfg = await store.wait('config', '创建者的配置');
+    let candidateBase = cfg.base;
+    if (cfg.place === 'lan') {
+      const found = await discoverLanBase(await mods(), cfg);
+      out.discovery = found.discovery;
+      check(found.discovery.found, '[observer] 经局域网发现找到局域网主机', found.discovery);
+      candidateBase = found.candidateBase;
+    }
     const CARD_ID = cfg.card.id;
     card = repoCard(cfg.card.rel);
     out.cardInRepoBefore = card.existedBefore;
@@ -875,7 +976,7 @@ async function runObserver(out) {
     // ---- 进入
     const tJoin = Date.now();
     const entered = await P(page, async (candidate, cred) => (await import('/src/editor/sync/syncManager.ts')).enterShared(candidate, cred),
-      { where: 'hosted', base: cfg.base, projectId: cfg.projectId, name: cfg.name, mode: cfg.mode }, { as: 'member', username: 'observer', password: cfg.memberPassword });
+      { where: cfg.where ?? 'hosted', base: candidateBase, projectId: cfg.projectId, name: cfg.name, mode: cfg.mode }, { as: 'member', username: 'observer', password: cfg.memberPassword });
     if (!entered?.ok) throw new Error(`观察端进不去共享项目:${JSON.stringify(entered)}`);
     const clip = await until('[observer] 看到视频片段', () => P(page, async (orig) => {
       const S = await import('/src/store/project.ts');
@@ -1008,7 +1109,8 @@ async function runObserver(out) {
     // 而且要等本端报「小尺寸出画面并稳定」才续传 —— 此刻 KV 里还不该有 `resumed`
     const resumedAtFirst = await store.get('resumed', 0).catch(() => undefined);
     out.originalAtFirstFrame = { paused: cfg.pause ?? null, resumedBefore: resumedAtFirst === undefined ? 'unknown' : resumedAtFirst !== null };
-    check(cfg.pause && cfg.pause.originalComplete === false && resumedAtFirst === null, '[observer] 出第一帧时素材原尺寸还没 complete(创建方暂停着上传、还没续传)', out.originalAtFirstFrame);
+    // 放本机:局域网主机导入即落地,原尺寸本来就在,不判「还在路上」(见文件头「放本机」)
+    if (cfg.place !== 'lan') check(cfg.pause && cfg.pause.originalComplete === false && resumedAtFirst === null, '[observer] 出第一帧时素材原尺寸还没 complete(创建方暂停着上传、还没续传)', out.originalAtFirstFrame);
     check(firstShown?.tier === 'small', '[observer] 素材层先以素材小尺寸出现', firstShown);
     const samplingStarted = firstShown?.tier === 'small' ? startSampling() : Promise.resolve(false);
     // 诊断:两个舞台里每个 <video> 的事件、页面代码写 currentTime / 调 load() 的地方(带调用栈),写进 __t9MediaLog
@@ -1192,7 +1294,7 @@ async function runObserver(out) {
       check(samples.length >= 10, '[observer] 逐帧采样够数(≥ 10)', out.swapSamples);
       if (mode === 'covered') check(coversSwap, '[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本)', out.swapSamples);
       // 创建方暂停着原尺寸、等本端报了小尺寸才续传,换档一定晚于小尺寸出画面好几个采样间隔
-      check(mode === 'covered', '[observer] 原尺寸加入时还在路上,换档属于「覆盖」情形', { mode, swapGapMs, sampleIntervalMs });
+      if (cfg.place !== 'lan') check(mode === 'covered', '[observer] 原尺寸加入时还在路上,换档属于「覆盖」情形', { mode, swapGapMs, sampleIntervalMs });
       // 快换时「先小后大」由 firstShown(小尺寸)与之后换成原尺寸那两条断言保证,这里不再要求样本覆盖
       check(black.length === 0, '[observer] 换档期间逐帧采样无黑帧 / 无空档', black.slice(0, 3));
       check(idxs.every((i) => Math.abs(i - EXPECT_IDX) <= 1), '[observer] 换档期间画面一直停在同一时刻', idxs);
@@ -1324,13 +1426,20 @@ async function runHost(out) {
   let conn = null;
   try {
     cfg = await store.wait('config', '创建者的配置');
-    // 只为收尾:本检出里原来没有这张卡(跨机)时,主机的卡片同步会把它装进 src/cards/user/,跑完删掉。
-    // 不往检出里预写(c66-host-cards):主机靠卡片同步拿到它
+    let docUrl = cfg.ws;
+    if (cfg.place === 'lan') {
+      const found = await discoverLanBase(M, cfg);
+      out.discovery = found.discovery;
+      check(found.discovery.found, '[host] 经局域网发现找到局域网主机', found.discovery);
+      docUrl = found.base;
+    }
+    // 主机靠卡片同步拿到它,不往检出里预写(c66-host-cards);同步来的卡只进主机的改动层(卡片改动层修复)。
+    // repoCard 只用来记「本检出里原来有没有这张卡」、收尾照旧只删本探针写过的
     card = repoCard(cfg.card.rel);
     out.cardInRepoBefore = card.existedBefore;
     for (const p of [port, port + 1, port + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
     const configFile = path.join(TMP, 'host-shared.json');
-    fs.writeFileSync(configFile, JSON.stringify([{ url: cfg.ws, projectId: cfg.projectId, username: 'render-host', password: cfg.memberPassword, as: 'member', role: 'render',
+    fs.writeFileSync(configFile, JSON.stringify([{ url: docUrl, projectId: cfg.projectId, username: 'render-host', password: cfg.memberPassword, as: 'member', role: 'render',
       deviceId: `c66t9-host-${run}`.padEnd(16, '0'), deviceName: 'c66-t9 render host', maxConcurrent: 2 }]));
     const env = { ...process.env };
     for (const key of ['PROMPTCUT_DOCSERVICE_URL', 'PROMPTCUT_CLUSTER_TOKEN', 'PROMPTCUT_QUEUE_NODE', 'PROMPTCUT_SHARED_CONFIG', 'PROMPTCUT_TEST_CODE_VERSION']) delete env[key];
@@ -1368,6 +1477,9 @@ async function runHost(out) {
     out.cardSync = synced ? { connected: synced.connected, rev: synced.records?.[cfg.card.rel] ?? null, notices: (synced.notices ?? []).map((n) => n.type) } : null;
     check(synced?.enabled === true, '[host] 主机开着卡片同步', synced);
     check(effective()?.includes(cfg.card.v1), '[host] 主机上生效的探针卡是 v1', { overlay: fs.existsSync(hostOverlay) });
+    // 卡片改动层修复之后:主机本来没有的卡只进改动层,不写检出目录(跨机时本检出里原来没有它)
+    if (!card.existedBefore) check(fs.existsSync(hostOverlay) && !fs.existsSync(path.join(ROOT, cfg.card.rel)), '[host] 同步来的新卡只进主机的改动层、检出目录里没有多出它',
+      { overlay: fs.existsSync(hostOverlay), inCheckout: fs.existsSync(path.join(ROOT, cfg.card.rel)) });
 
     const plan = await store.wait('plan', '创建者的 plan 落定', 20 * 60_000);
     const editor = `http://127.0.0.1:${port}`;
@@ -1429,6 +1541,7 @@ async function runHost(out) {
       out.cardV2 = { ms: v2 ? Date.now() - t0 : null, rev: v2?.records?.[cfg.card.rel] ?? null, inOverlay: fs.existsSync(hostOverlay),
         baseUntouched: card.existedBefore ? fs.readFileSync(path.join(ROOT, cfg.card.rel), 'utf8').includes(cfg.card.v1) : null };
       if (card.existedBefore) check(out.cardV2.inOverlay && out.cardV2.baseUntouched, '[host] v2 装进主机自己的改动层,检出里的那份不动', out.cardV2);
+      else check(out.cardV2.inOverlay && !fs.existsSync(path.join(ROOT, cfg.card.rel)), '[host] v2 装进主机自己的改动层,检出目录里仍没有这张卡', out.cardV2);
     } else {
       out.cardV2 = { skipped: edited ? '创建者改卡失败' : '创建者没改卡(观察端没走到那一步)' };
     }
@@ -1457,7 +1570,8 @@ async function runAll(out) {
   out.run = run;
   const outDir = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-c66t9-${run}`)));
   const common = ['--hosted', HOSTED, '--coord', COORD, '--run', run, '--timeout-min', String(Number(arg('--timeout-min', 25))), ...(KEEP ? ['--keep-temp'] : []),
-    ...(OBSERVER_THROTTLE ? ['--observer-throttle', String(OBSERVER_THROTTLE)] : [])];
+    ...(OBSERVER_THROTTLE ? ['--observer-throttle', String(OBSERVER_THROTTLE)] : []),
+    '--place', PLACE, '--heavy', HEAVY_MODE, ...['--lan-ip', '--lan-host'].flatMap((n) => (arg(n, null) !== null ? [n, arg(n)] : []))];
   const roles = ['creator', 'observer', 'host'];
   const basePort = Number(arg('--port', DEFAULT_PORT.creator));
   if (!Number.isInteger(basePort) || basePort < 1 || basePort + 8 > 65535) throw new Error('--port 需给三组连续编辑器端口留出 9 个端口');
