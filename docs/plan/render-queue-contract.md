@@ -359,7 +359,8 @@ export function pickCandidate(tasks, { k = 4, random = Math.random, lastProjectI
 `pickCandidate`：
 
 1. 空数组回 `null`；
-2. 取 `rankCandidates` 的前 `k` 个；
+2. 取 `rankCandidates` 里与第一名同档、**同整数 priority** 的那些，再取其前 `k` 个；
+   〔裁〕2026-09-28（主会话）：原文是「取 `rankCandidates` 的前 `k` 个」。为什么改：前 `k` 个里锚帧段（50）和普通段（10）混在一起随机挑，锚帧优先几乎不起作用——笔记本跑 M7-A4 时页面认领顺序是 h3:0-59、h1:0-59、h2:120-179、h2:240-299、h2:180-239、h1:120-179、最后才 h2:0-59，最差 85.3 s（`docs/reports/AGENT-lowmem-latency.md`「段的顺序基本随机」是同一件事）。改成：先取最高那一个整数名次，只在它的前 `k` 个里随机（同名次内保留随机，多节点照旧错开）；这一名次认领完才轮到下一名次。代码向语义「锚帧优先」靠，语义不改。
 3. 若给了 `lastProjectId`，且前 `k` 个里有和第一名**同优先级**、但 `source.projectId !== lastProjectId` 的，候选只留这些（同优先级里按项目轮转）；
 4. 在候选里取 `candidates[Math.floor(random() * candidates.length)]`（`random()` 返回 `[0, 1)`）。
 

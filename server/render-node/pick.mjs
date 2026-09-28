@@ -4,7 +4,9 @@
  * 排序:优先级档(`normal` 先于 `backfill`,c10a 契约第 17 节)→ 档内名次(整数 `priority` 降序)
  * → `source.publishedAt` 升序 → `id` 升序(按码元比较,结果与区域设置无关)。
  * 只在排头那一档里挑:还有 `normal` 可认领时一张 `backfill` 都不碰(语义「补渲排在后面」)。
- * 然后在前 K 个里随机取一个去认领:所有节点都抢第一名的话会互相撞出一串 `taken`。
+ * 〔裁〕(2026-09-28,主会话;笔记本 M7-A4 查出)档内也只在排头那一个整数名次里挑:锚帧段(50)还有可认领的,
+ * 普通段(10)一段都不碰。原来在前 K 个里随机、不分名次,锚帧段和普通段混在一起,锚帧优先几乎不起作用。
+ * 然后在这一名次的前 K 个里随机取一个去认领:所有节点都抢第一名的话会互相撞出一串 `taken`。
  * 给了 `lastProjectId` 时,同优先级里先换一个项目(多项目共用一台渲染主机时的轮转)。
  *
  * 纯函数;随机源由调用方注入,测试可以固定。
@@ -37,9 +39,10 @@ export function rankCandidates(tasks) {
 export function pickCandidate(tasks, { k = 4, random = Math.random, lastProjectId = null } = {}) {
   if (!tasks?.length) return null;
   const ranked = rankCandidates(tasks);
-  // 只在排头那一档里挑(normal 还有就不碰 backfill);旧形状全在 normal 档,行为不变
+  // 只在排头那一档、排头那一个整数名次里挑(normal 还有就不碰 backfill;锚帧段 50 还有就不碰普通段 10,〔裁〕见文件头)
   const head = bandOf(ranked[0]);
-  const top = ranked.filter(task => bandOf(task) === head).slice(0, Math.max(1, Math.floor(Number(k) || 0)));
+  const headRank = priorityOf(ranked[0]);
+  const top = ranked.filter(task => bandOf(task) === head && priorityOf(task) === headRank).slice(0, Math.max(1, Math.floor(Number(k) || 0)));
   let candidates = top;
   if (lastProjectId != null) {
     const headPriority = priorityOf(top[0]);
