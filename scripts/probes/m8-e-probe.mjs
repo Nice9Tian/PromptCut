@@ -1137,7 +1137,7 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
   }
   // 放本机：局域网主机不经 service.endpoints 登记素材服务，地址随局域网发现下发（通告里带 docservice 与 asset）。
   // 重启期间每 2 s 查一次发现，记「查不到 → 又查到」的时刻（本机时钟）
-  const lan = { polls: 0, downAt: null, backAt: null, asset: null };
+  const lan = { polls: 0, downAt: null, backAt: null, asset: null, oks: [] };
   let lanPolling = cfg.place === 'lan';
   const lanLoop = (async () => {
     if (!lanPolling) return;
@@ -1146,6 +1146,7 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
       const d = await discoverLan({ name: cfg.name, timeoutMs: 1500 }).catch(() => ({ hosts: [] }));
       lan.polls++;
       const h = d.hosts.find((x) => x.projectId === cfg.projectId) ?? null;
+      if (h) lan.oks.push(Date.now());
       if (!h && lan.downAt === null) lan.downAt = Date.now();
       if (h && lan.downAt !== null && lan.backAt === null) { lan.backAt = Date.now(); lan.asset = h.asset ?? null; }
       await delay(500);
@@ -1169,18 +1170,19 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
     return null;
   }, Math.max(1000, deadline - Date.now()), 250);
   const reconnected = typeof reconnectedAt === 'number';
-  await until(() => (lan.backAt !== null || !lanPolling ? true : null), 60_000, 200);
+  // 重启很快(几秒)时轮询不一定撞上「查不到」:等重连之后第一次查到(新进程的应答)
+  await until(() => (!lanPolling || (reconnected && lan.oks.some((t) => t >= reconnectedAt)) ? true : null), 60_000, 200);
   lanPolling = false;
   await lanLoop.catch(() => {});
   await waitKv(kv, 'done', { stopOn: ['abort'] });
   // 重新下发：放云端看 service.endpoints（连接重开之后第一次见到非空的素材服务地址）；
-  // 放本机看局域网发现（节点重连之后多久又能从发现拿到主机与素材服务地址，早于重连记 0）
+  // 放本机看局域网发现（节点重连之后第一次从发现拿到主机与素材服务地址用了多久；重启只几秒时轮询不一定撞上「查不到」）
   const reopenAt = ep.events.filter((e) => e.ev === 'open').at(-1)?.at ?? null;
   const firstAsset = reopenAt ? ep.events.find((e) => e.ev === 'asset' && e.at >= reopenAt && e.urls > 0) : null;
   const withdrawn = ep.events.some((e) => e.ev === 'asset' && e.urls === 0) || ep.closes > 0;
   const completedAfter = reconnected ? [...idsSeen.completed].filter(([, x]) => x.at >= reconnectedAt).map(([id]) => id) : [];
   const reannounceMs = cfg.place === 'lan'
-    ? (lan.backAt !== null && reconnected ? Math.max(0, lan.backAt - reconnectedAt) : null)
+    ? (reconnected ? ((t) => (t === undefined ? null : t - reconnectedAt))(lan.oks.find((t) => t >= reconnectedAt)) : null)
     : (firstAsset && reopenAt ? firstAsset.at - reopenAt : null);
   r.set({ e3: { reconnected, reconnectedAt: reconnected ? reconnectedAt : null, completedAfter, heldAtRestart: holding?.held ?? null, reannounceMs,
     lanDiscovery: cfg.place === 'lan' ? { polls: lan.polls, downMs: lan.downAt && lan.backAt ? lan.backAt - lan.downAt : null, asset: lan.asset } : null,
