@@ -619,12 +619,11 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | — | 换档依赖无关的重渲染 | 已修 | `d011783`（`AGENT-tier-reload-seek.md`） |
 | — | 生成快照 id 改名线性化 | 已修 | `bb01107` |
 | — | Tailwind 扫描让改文档整页重载 | 已修 | `94fb419` |
-| L20 | 1080p 分段编码超门槛 | 已修，在 main；笔记本 ENC-1 修复版 p50 中位数 290 ms、ENC-2 合入后 283 ms | `211695d`（`REPORT-C10.md` 第 3、11 节） |
+| L20 | 1080p 分段编码超门槛 | 已修，在 main；笔记本 ENC-1 修复版 p50 中位数 290 ms、ENC-2 合入后 283 ms；M8 在 main `9cf43f1f` 上又贴线没过（中位数 302 ms），见第 7.5 节 | `211695d`（`REPORT-C10.md` 第 3、11 节） |
 | L21 | 停下到精确活渲太慢（C10-A4 两条后续） | 已修，随 C10 进 main；PC 上 8541 ms → 6905 / 6916 ms；「区分自然进场与从卡中间开始播放」另记维护项（没有编号） | `2f7f821`（`REPORT-C10.md` 第 10 节、第 6 节第 29 行） |
 | L24 | 在线构建按编译期 `ONLINE` 剪掉置灰入口背后的调用 | 已修，随 C10 进 main；`/api` 棘轮清单 120 → 19，在线构建少 384 KB | `97bda2b`（`REPORT-C10.md` 第 10 节「online-prune」） |
 | — | 在线构建缺 `/catalog/`，内置 Lottie、粒子卡全 404 | 已修，随 C10 进 main；nginx 三个源放行 `/catalog/` | `cc1d137`（`REPORT-C10.md` 第 10 节「catalog 修复」） |
 | — | M7 验收查出的五处：A5 / A6 让路、A10 锁不接手、D1 合并不补 dual、切分候选只在内存、锚帧段优先级被冲淡 | 已修，随 M7 进 main | `7329780`、`119d42a`、`d047ff2` / `a0d751b`、`11bbe53`、`fdbf19f`（`REPORT-M7.md` 第 4 节） |
-
 | L4、L5 | 主机把本来没有的用户卡写进检出目录；`create_card` 带 overwrite 被改动层旧版盖住 | 已修，M8 跨机前合入 | `2e957270`（`claude/card-overlay`，`AGENT-card-overlay.md`） |
 | L10、L16 | 拼卡片源码不统一换行；Windows 改名偶发 `EPERM` | 已修，M8 跨机前合入 | `2fa0c1a6`（`claude/eol-eperm`，`AGENT-eol-eperm.md`） |
 | L14 | `server/card-sync.mjs` 等旧客户端没接会话层（裁定 D9） | 已修 | `278eeb9d`（`claude/m8-session-legacy`，`AGENT-m8-session-legacy.md`） |
