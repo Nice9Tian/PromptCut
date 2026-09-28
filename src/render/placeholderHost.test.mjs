@@ -99,9 +99,9 @@ test("平面样式表放过占位平面:藏子树的四条规则都不碰槽位�
   }
 });
 
-/* ---------------------------------------------------------------- P3:同屏上限、常驻槽位、unsupported */
+/* ---------------------------------------------------------------- P3:同屏上限、unsupported 的显隐与判定 */
 
-import { setMaxAnimated, setOnlineBrowserMode, unsupportedHere } from "./placeholderHost.ts";
+import { localOnlyClipIds, needsLocalPc, setMaxAnimated, setOnlineBrowserMode, unsupportedHere } from "./placeholderHost.ts";
 import { PLACEHOLDER_FIXED_ATTR, PLACEHOLDER_STATIC_ATTR, UNSUPPORTED_TEXT } from "./placeholder/contract.ts";
 
 test("同屏超过 maxAnimated 个:多出来的槽位加静止标记,撤下时摘掉", () => {
@@ -119,13 +119,69 @@ test("同屏超过 maxAnimated 个:多出来的槽位加静止标记,撤下时�
   setMaxAnimated(Infinity);
 });
 
-test("常驻槽位(unsupported)不归显隐调度管", () => {
-  const fixed = fakeSlot({ [PLACEHOLDER_FIXED_ATTR]: "" });
-  fixed.hidden = false;
-  const slotOf = () => fixed;
-  applyPlaceholders(new Map([["u", "no-data"]]), slotOf);
+test("unsupported 进显隐调度(2026-09-29 起不再常驻):要它就显示并标原因,不要了就撤", () => {
+  const slot = fakeSlot();
+  const slotOf = () => slot;
+  applyPlaceholders(new Map([["u", "unsupported"]]), slotOf);
+  assert.equal(slot.hidden, false);
+  assert.equal(slot.getAttribute("data-pc-placeholder-reason"), "unsupported");
   applyPlaceholders(new Map(), slotOf);
-  assert.equal(fixed.hidden, false, "不会被这一拍的「不要了」关掉");
+  assert.equal(slot.hidden, true, "快照或流到了:这一拍不要了就撤");
+  // 旧的常驻标记不再有特权:带着它也照样被调度
+  const legacy = fakeSlot({ [PLACEHOLDER_FIXED_ATTR]: "" });
+  legacy.hidden = false;
+  applyPlaceholders(new Map([["x", "unsupported"]]), () => legacy);
+  applyPlaceholders(new Map(), () => legacy);
+  assert.equal(legacy.hidden, true);
+});
+
+test("placeholderWanted:本机跑不了的卡贴不上快照 / 流时一律 unsupported,顶替沙漏;贴得上就不显示", () => {
+  const unsupported = new Set(["u", "s", "w"]);
+  const wanted = placeholderWanted({
+    suppressed: new Set(["u", "b", "w"]),
+    snapshots: new Map([["s", "<div/>"]]),
+    awaiting: new Set(["u", "a"]),
+    settling: new Map([["u", 0]]),
+    streamShowing: new Set(["w"]),
+    unsupported,
+    isLight: () => false,
+  });
+  assert.equal(wanted.get("u"), "unsupported", "被抑制、等快照、追帧的原因都换成 unsupported");
+  assert.equal(wanted.has("s"), false, "贴着快照:不显示");
+  assert.equal(wanted.has("w"), false, "流这一拍画着:不显示");
+  assert.equal(wanted.get("b"), "no-data", "内置卡照旧");
+  assert.equal(wanted.get("a"), "awaiting");
+  // 不在抑制、不等快照(普通档暂停)也显示:它没有活渲
+  assert.equal(placeholderWanted({ suppressed: new Set(), snapshots: new Map(), awaiting: new Set(), settling: new Map(), streamShowing: new Set(),
+    unsupported: new Set(["p"]) }).get("p"), "unsupported");
+  // 不给 unsupported:与以前逐项相同
+  const old = placeholderWanted({ suppressed: new Set(["u"]), snapshots: new Map(), awaiting: new Set(), settling: new Map(), streamShowing: new Set(), isLight: () => false });
+  assert.deepEqual([...old], [["u", "no-data"]]);
+});
+
+test("needsLocalPc / localOnlyClipIds:同步来的用户卡没有定义也认;两边都没有的 id 不算;缺省查注册表", async () => {
+  const R = await import("../kernel/registry.ts");
+  R.setUserCardSources({ built: "" }, { "built-user": "built" });
+  R.setSyncedUserCards([{ id: "synced-user", name: "同步卡" }]);
+  try {
+    assert.equal(needsLocalPc("synced-user", undefined), true, "同步来的用户卡:没有 def 也认");
+    assert.equal(needsLocalPc("built-user", { Component: () => null }), true, "构建时的用户卡");
+    assert.equal(needsLocalPc("nobody", undefined), false, "两边都没有:未知卡片,不算");
+    assert.equal(needsLocalPc("builtin", { Component: () => null }), false);
+    assert.equal(needsLocalPc("graph", { card: () => ({}) }), true);
+    const clips = [{ id: "a", cardId: "synced-user" }, { id: "b", cardId: "built-user" }, { id: "c", cardId: "nobody" }, { id: "d" }];
+    assert.deepEqual([...localOnlyClipIds(clips)], [], "模式关着:空");
+    setOnlineBrowserMode(true);
+    try {
+      assert.deepEqual([...localOnlyClipIds(clips)].sort(), ["a", "b"]);
+      assert.equal(unsupportedHere("synced-user", undefined), true);
+    } finally {
+      setOnlineBrowserMode(false);
+    }
+  } finally {
+    R.setSyncedUserCards([]);
+    R.setUserCardSources({}, {});
+  }
 });
 
 test("unsupported:只在在线浏览器模式下,且只认用户卡和图卡", () => {
