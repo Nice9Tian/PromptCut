@@ -234,7 +234,10 @@ export function createRenderQueue(options = {}) {
     tasks.delete(task.id);
   }
 
-  /** 出站消息里的任务（A.4 TaskView）：不含 claim、subscribers；深拷贝由 makeMessage 做 */
+  /**
+   * 出站消息里的任务（A.4 TaskView）：不含 claim、subscribers；深拷贝由 makeMessage 做。
+   * 上一次放弃的原因 `lastError` 只在有时才带（契约 A.12〔裁〕：回收、失败后放回 open 的广播里看得出为什么；旧节点不认这一项，照常工作）
+   */
   function viewOf(task) {
     const v = { id: task.id, kind: task.kind };
     if (task.kind === 'snapshot') v.tier = task.tier;
@@ -243,6 +246,7 @@ export function createRenderQueue(options = {}) {
       input: task.input, weight: task.weight, requires: task.requires, priority: task.priority,
       state: task.state, version: task.version, attempts: task.attempts,
     });
+    if (typeof task.lastError === 'string' && task.lastError) v.lastError = task.lastError;
     return v;
   }
 
@@ -327,11 +331,14 @@ export function createRenderQueue(options = {}) {
     return { state: 'open', notify: () => broadcast(task, 'task.opened', { task: view }) };
   }
 
-  /** tick 里的回收：放弃，并告诉原认领者（它的那条连接还在的话） */
+  /**
+   * tick 里的回收：放弃，并告诉原认领者（它的那条连接还在的话）。
+   * `lease-lost` 的 reason 就是回收的原因（`lease-expired` / `stalled` / `disconnected`，契约 A.12〔裁〕；原来一律 `expired`）
+   */
   function reclaim(task, lastError) {
     const { conn, token } = task.claim;
     const out = abandon(task, { lastError });
-    if (isLive(conn)) emit(conn, 'task.lease-lost', { id: task.id, token, reason: 'expired' });
+    if (isLive(conn)) emit(conn, 'task.lease-lost', { id: task.id, token, reason: lastError });
     out.notify();
   }
 
@@ -903,7 +910,7 @@ export function createRenderQueue(options = {}) {
     task.retryAfter = null;
     task.claim = {
       nodeId: node.nodeId, conn, token: task.version, claimedAt: at,
-      leaseUntil: at + C.LEASE_MS, progress: { done: null, changedAt: at },
+      leaseUntil: at + C.LEASE_MS, progress: { done: null, step: null, changedAt: at },
     };
     const claimed = { id, token: task.claim.token, version: task.version, leaseUntil: task.claim.leaseUntil, task: viewOf(task) };
     // M7 D1：plan 的认领回包带本项目在线的、同一用户的纯浏览器节点的指纹，切分方据此给浏览器可做的卡另出一份
@@ -933,8 +940,12 @@ export function createRenderQueue(options = {}) {
     if (!task) return;
     const claim = task.claim;
     claim.leaseUntil = at + C.LEASE_MS;
-    // 停滞计时只在 done 变了的时候重起：心跳还在但画面不动的节点照样按停滞回收（F3.1）
-    if (body.done !== claim.progress.done) claim.progress = { done: body.done, changedAt: at };
+    // 停滞计时只在进度变了的时候重起：心跳还在但工作不动的节点照样按停滞回收（F3.1）。
+    // 「进度」是帧数 done，以及节点带来的工作计数 step（推块、换阶段时也在变，契约 A.12〔裁〕）；没带 step 的旧节点只看 done
+    const stepChanged = body.step !== null && body.step !== claim.progress.step;
+    if (body.done !== claim.progress.done || stepChanged) {
+      claim.progress = { done: body.done, step: body.step ?? claim.progress.step, changedAt: at };
+    }
     // M7 D2：续约也算锁定方还在产出（一段重卡在浏览器上要十几秒，产出中不该被判闲置）
     const lockId = lockIdOf(task);
     const lock = lockId ? locks.get(lockId.key) : undefined;
@@ -1142,7 +1153,8 @@ export function createRenderQueue(options = {}) {
         attempts: t.attempts, lastError: t.lastError,
         claim: t.claim && {
           nodeId: t.claim.nodeId, token: t.claim.token, leaseUntil: t.claim.leaseUntil,
-          progress: { done: t.claim.progress.done, changedAt: t.claim.progress.changedAt },
+          progress: { done: t.claim.progress.done, changedAt: t.claim.progress.changedAt,
+            ...(t.claim.progress.step !== null ? { step: t.claim.progress.step } : {}) },
         },
         subscribers: [...t.subscribers].sort(byId),
         finishedAt: t.finishedAt,

@@ -487,24 +487,34 @@ function resultBlocks(result) {
 
 /**
  * 把清单里的每个块 `client.put` 一次(快照进 `snap`、流进 `px`;`put` 自己会跳过素材服务上已有的块)。
- * 全部成功才返回 `{ result, uploaded, skipped }`;任何一块失败就抛(第一处错误)。
+ * 全部成功才返回 `{ result, uploaded, skipped, bytes }`;任何一块失败就抛(第一处错误,带 `stats`:推到哪儿了)。
+ * `onBlock({ blocks, pushed, bytes })`(可选,诊断):开推时报一次总块数,之后每推完一块报一次(`bytes` 是已推块的字节数)。
  */
-export async function pushResult(client, result, readBlob) {
+export async function pushResult(client, result, readBlob, { onBlock } = {}) {
   if (!result || result.v !== RESULT_VERSION) throw fail('不认识的任务清单', { retryable: false });
   if (typeof readBlob !== 'function') throw fail('pushResult 需要 readBlob', { retryable: false });
   assertResultSize(result);
   const blocks = resultBlocks(result);
-  let uploaded = 0, skipped = 0;
+  let uploaded = 0, skipped = 0, bytesDone = 0;
+  const tell = () => { try { onBlock?.({ blocks: blocks.length, pushed: uploaded + skipped, bytes: bytesDone }); } catch { /* 诊断回调出错不影响推送 */ } };
+  tell();
   const settled = await settleLimited(blocks, TRANSFER_CONCURRENCY, async ({ ns, hash, ext }) => {
     const bytes = await readBlob(hash);
     if (!bytes || sha256(bytes) !== hash) throw fail(`块 ${hash} 的内容和清单对不上(本机文件在清单之后被改过)`);
     const put = await client.put(ns, Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes), { ext });
     if (put?.hash && put.hash !== hash) throw fail(`素材服务回的哈希 ${put.hash} 和清单里的 ${hash} 不同`);
     if (put?.uploaded) uploaded++; else skipped++;
+    bytesDone += bytes.length;
+    tell();
   });
   const failed = settled.find(item => item.status === 'rejected');
-  if (failed) throw failed.reason;
-  return { result, uploaded, skipped };
+  if (failed) {
+    const reason = failed.reason;
+    const stats = { blocks: blocks.length, pushed: uploaded + skipped, failed: settled.filter(item => item.status === 'rejected').length, bytes: bytesDone };
+    if (reason && typeof reason === 'object') { try { reason.stats = stats; } catch { /* 冻结的错误对象 */ } }
+    throw reason;
+  }
+  return { result, uploaded, skipped, bytes: bytesDone };
 }
 
 /** 本机帧库是否覆盖了这一段(快照:`frames ∪ oversize` 盖住每一帧;流:每个分段和它的 init 都在清单里) */
@@ -659,22 +669,46 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
       const key = manifestKeyOf(ref);
       return key && remembered.has(key) ? remembered.get(key) : null;
     },
-    async put(ref) {
+    /**
+     * 第二个参数(可选,诊断):`report({ stage, blocks, pushed, bytes })` —— `stage` 是 `collect`(列清单)/ `push`(推块);
+     * 推块时每推完一块报一次。没收全时回包另带 `reason`(为什么)与 `stats`(`{ blocks, pushed, bytes, ms }`),
+     * 并记一行 `sink.incomplete`;收全时回包带 `stats`。
+     */
+    async put(ref, { report } = {}) {
+      const started = Date.now();
+      const tell = (fields) => { try { report?.(fields); } catch { /* 诊断回调出错不影响推送 */ } };
+      let progress = { blocks: null, pushed: 0, bytes: 0 };
+      let stage = 'collect';
+      const stats = () => ({ ...progress, ms: Date.now() - started });
+      const incomplete = (reason, extra = {}) => {
+        const out = { complete: false, reason, stats: stats() };
+        safeLog(log, 'sink.incomplete', { resultKey: String(ref?.resultKey ?? '').slice(0, 16), range: ref?.range ?? null, reason, ...out.stats, ...extra });
+        return out;
+      };
       try {
-        if (ref?.kind !== 'snapshot' && ref?.kind !== 'stream') return { complete: false };
+        if (ref?.kind !== 'snapshot' && ref?.kind !== 'stream') return incomplete('bad-kind');
+        tell({ stage: 'collect' });
         const collected = await collect(ref);
-        if (!resultComplete(collected.result)) return { complete: false };
+        if (!resultComplete(collected.result)) {
+          const listed = ref.kind === 'snapshot' ? collected.result.frames.length : Object.keys(collected.result.segments ?? {}).length;
+          return incomplete('range-missing', { listed });
+        }
         // c10a 第 9 节:两档都推送成功才算完成;缺小尺寸回 incomplete,节点按可重试失败交回,重做时补上
         if (wantsSmall(pipeline, ref) && !smallComplete(collected.result)) {
           safeLog(log, 'sink.small-incomplete', { resultKey: String(ref.resultKey ?? '').slice(0, 16), range: ref.range ?? null,
             frames: collected.result.frames.length, small: smallFramesOf(collected.result).length });
-          return { complete: false };
+          return incomplete('small-missing', { frames: collected.result.frames.length, small: smallFramesOf(collected.result).length });
         }
-        await pushResult(client, collected.result, collected.readBlob);
+        stage = 'push';
+        tell({ stage });
+        await pushResult(client, collected.result, collected.readBlob, {
+          onBlock: (p) => { progress = p; tell(p); },
+        });
         if (content) await writeManifest(content, collected.result, log);
-        return { complete: true, result: collected.result };
-      } catch {
-        return { complete: false };
+        return { complete: true, result: collected.result, stats: stats() };
+      } catch (error) {
+        const code = error?.code ?? error?.status ?? null;
+        return incomplete(`${stage}-failed${code !== null ? `:${String(code).slice(0, 40)}` : ''}`, { message: String(error?.message ?? error).slice(0, 200) });
       }
     },
   };

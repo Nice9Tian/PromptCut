@@ -272,7 +272,7 @@ test('F2.2 处理超时：推进 30.1 s，T 回 open，attempts = 1，version +1
 
   const out = h.advance(30_100);
   assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'lease-expired' });
-  assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
+  assertLeaseLost(out, 'a', { id, token: 2, reason: 'lease-expired' });
   // A 自己也是 watch 者，同样收到 task.opened
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
   assert.deepEqual(out.sortedTypes('a'), ['task.lease-lost', 'task.opened']);
@@ -313,7 +313,7 @@ test('F2.4 处理超时：推进 20 s 后续约一次，再推进 25 s，T 仍 c
   h.at(T0 + 50_000).assertSilent('新租约恰好到点');
   const out = h.at(T0 + 50_001);
   assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'lease-expired' });
-  assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
+  assertLeaseLost(out, 'a', { id, token: 2, reason: 'lease-expired' });
 });
 
 /* ============================================================ F3 进度停滞 */
@@ -331,7 +331,7 @@ test('F3.1 进度停滞：从 t=10 s 起每 10 s 报 done=24，停滞从 t=10 s 
 
   const out = h.at(T0 + 130_001);
   assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'stalled' });
-  assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
+  assertLeaseLost(out, 'a', { id, token: 2, reason: 'stalled' });
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
   assert.deepEqual(out.conns(), WATCHERS);
 });
@@ -351,7 +351,7 @@ test('F3.2 进度停滞：done 在 t=100 s 变成 25 之后不变，停滞从 t=
 
   const out = h.at(T0 + 220_001);
   assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'stalled' });
-  assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
+  assertLeaseLost(out, 'a', { id, token: 2, reason: 'stalled' });
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
 });
 
@@ -362,7 +362,7 @@ test('F3.3 进度停滞：从未报过进度的任务只受租约管，30.1 s �
     assertTask(h, id, { claim: { progress: { done: null, changedAt: T0 } } });
     const out = h.advance(30_100);
     assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'lease-expired' });
-    assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
+    assertLeaseLost(out, 'a', { id, token: 2, reason: 'lease-expired' });
     assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
   }
   // 把 STALL 调得比租约短，更能看出 done === null 时停滞扫描不管它（契约 A.8 第 2 项）
@@ -374,7 +374,7 @@ test('F3.3 进度停滞：从未报过进度的任务只受租约管，30.1 s �
     assertTask(h, id, { state: 'claimed', version: 2, attempts: 0 });
     const out = h.at(T0 + LEASE + 1);
     assertTask(h, id, { state: 'open', version: 3, attempts: 1, lastError: 'lease-expired' });
-    assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
+    assertLeaseLost(out, 'a', { id, token: 2, reason: 'lease-expired' });
   }
 });
 
@@ -429,7 +429,7 @@ test('F4.2 反复失败的任务：超时、断开、停滞和 fail 共用一个
     h.bus.clear();
     const out = h.advance(LEASE + 1);
     assertTask(h, id, { state: 'failed', version: 7, attempts: 3, claim: null, lastError: 'lease-expired', finishedAt: h.now() });
-    assertLeaseLost(out, 'a', { id, token: 6, reason: 'expired' });
+    assertLeaseLost(out, 'a', { id, token: 6, reason: 'lease-expired' });
     const f = out.one('p', 'task.failed');
     assert.deepEqual([f.id, f.error], [id, 'lease-expired']);
     assertClosed(out, WATCHERS, id, 'failed');
@@ -458,7 +458,7 @@ test('F4.2 反复失败的任务：超时、断开、停滞和 fail 共用一个
     h.bus.clear();
     const out = h.at(x + STALL + 1);
     assertTask(h, id, { state: 'failed', version: 7, attempts: 3, claim: null, lastError: 'stalled' });
-    assertLeaseLost(out, 'c', { id, token: 6, reason: 'expired' });
+    assertLeaseLost(out, 'c', { id, token: 6, reason: 'stalled' });
     assert.equal(out.one('p', 'task.failed').error, 'stalled');
     assertClosed(out, ['a', 'c', 'w'], id, 'failed');
   }
@@ -586,7 +586,7 @@ test('F6.1 节点推产物推到一半就崩了：报过进度后既不完成也
 
   const out = h.at(T0 + 5_000 + LEASE + 1);
   assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'lease-expired' });
-  assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
+  assertLeaseLost(out, 'a', { id, token: 2, reason: 'lease-expired' });
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
   assert.equal(h.bus.ofType('task.done').length, 0, '没有 complete 就不算完成');
 

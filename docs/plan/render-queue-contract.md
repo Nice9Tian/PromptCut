@@ -110,7 +110,7 @@ taskIdOf({ kind, resultKey, range })
 { id, kind, tier?, resultKey, range, source, input, weight, requires, priority, state, version, attempts }
 ```
 
-不含 `claim`、`subscribers`。
+不含 `claim`、`subscribers`。放弃过的任务另带 `lastError`（A.12〔裁〕）。
 
 ### A.5 连接角色
 
@@ -130,7 +130,7 @@ taskIdOf({ kind, resultKey, range })
 | `task.publish` | `tasks: TaskInput[]`（至少 1 个） | `task.published { results: [...] }`，见 A.7.1 |
 | `task.unsubscribe` | `ids?: string[]` 或 `projectId: string, projectRev?: int`（二选一） | `task.unsubscribed { ids: [实际移除了订阅的 id] }` |
 | `task.claim` | `id: string`、`expectVersion: int` | `task.claimed { id, token, version, leaseUntil, task: TaskView }` 或 `task.claim-rejected { id, reason, state?, version? }` |
-| `task.progress` | `id`、`token: int`、`done: number` | `task.renewed { id, token, leaseUntil }` |
+| `task.progress` | `id`、`token: int`、`done: number`、`step?: number`（A.12 第 4 条〔裁〕） | `task.renewed { id, token, leaseUntil }` |
 | `task.complete` | `id`、`token`、`result?: { ranges?: any }` | `task.completed { id }` |
 | `task.release` | `id`、`token`、`reason?: string` | `task.released { id }` |
 | `task.fail` | `id`、`token`、`error?: string`、`retryable?: boolean`（缺省 `true`） | `task.fail-ack { id, state }`（`state` 是处理后的状态：`open`、`failed`，或没有订阅者被删时的 `removed`） |
@@ -203,7 +203,7 @@ claim = null
 ```
 
 - `task.fail` 自己回 `task.fail-ack { id, state }`。
-- 回收时（A.8），若原认领者的连接还在，给它发 `task.lease-lost { id, token, reason: 'expired' }`；连接已断开就不发。
+- 回收时（A.8），若原认领者的连接还在，给它发 `task.lease-lost { id, token, reason: 'expired' }`；连接已断开就不发。（2026-09-28 起 `reason` 是回收原因 `lease-expired` / `stalled` / `disconnected`，见 A.12〔裁〕）
 - **没有订阅者**的任务经「放弃」或「放回」（A.7.5）回到 `open` 时，直接删除（发 `task.closed { id, state: 'removed' }` 代替 `task.opened`）〔裁〕：它不会再有人要，理由同 A.8 第 3 项。这时 `task.fail-ack` 的 `state` 是 `'removed'`。
 
 ### A.8 `tick()` 的四项扫描（按此顺序）
@@ -211,7 +211,7 @@ claim = null
 所有比较都是**严格大于**：
 
 1. **租约**：`claimed` 且 `now > claim.leaseUntil` → 放弃（`lastError = 'lease-expired'`）
-2. **停滞**：`claimed` 且 `now - claim.progress.changedAt > STALL_MS` 且 `claim.progress.done !== null` → 放弃（`lastError = 'stalled'`）。从未报过进度的任务只受租约管（F3.3）
+2. **停滞**：`claimed` 且 `now - claim.progress.changedAt > STALL_MS` 且 `claim.progress.done !== null` → 放弃（`lastError = 'stalled'`）。从未报过进度的任务只受租约管（F3.3）。`changedAt` 在 `done` 或节点带来的工作计数 `step` 变了时重起（A.12 第 4 条〔裁〕）
 3. **宽限**：
    - 节点断开且 `now - disconnectedAt > RECONNECT_GRACE_MS`：它名下每个 `claimed` 任务放弃（`lastError = 'disconnected'`），然后删掉这个节点记录；
    - 发布方断开且超过宽限：从所有任务的订阅者里移除它；变得没有订阅者的 `open` 任务删除（给可见的 watch 者发 `task.closed { id, state: 'removed' }`），`claimed` 的保留；然后删掉这个发布方记录（C5）
@@ -276,6 +276,19 @@ claim = null
 所有出站消息都带 `epoch`（C6）。回包带入站的 `reqId`（有的话）。
 
 `node.welcome`、`publisher.welcome`、`queue.snapshot`、`task.published`、`task.unsubscribed`、`task.claimed`、`task.claim-rejected`、`task.renewed`、`task.completed`、`task.released`、`task.fail-ack`、`task.lease-lost`、`task.opened`、`task.taken`、`task.closed`、`task.done`、`task.failed`、`error`。
+
+### A.12 收回原因与丢认领的诊断（2026-09-28，`claude/stall-phases`）〔裁〕
+
+M8 的 C1（放云端）里两台独立渲染主机各丢了 6、7 次认领，节点那边只收到 `lease-lost { reason: 'expired' }`，分不出是租约到期、停滞还是断线；主机的逐任务事件也不进日志。试过只看现有日志与诊断接口：队列对三种回收发的是同一个 reason，任务视图不带 `lastError`，`describe()` 只在托管端进程里、事后拿不到。只能改消息形状，改动如下（三级机制，报告 `docs/reports/AGENT-stall-phases.md`）：
+
+1. **回收的 `lease-lost` 带真实原因**：A.8 的回收给原认领者发 `task.lease-lost { id, token, reason }`，`reason` 就是这次放弃记的 `lastError`：`lease-expired`（第 1 项）、`stalled`（第 2 项）、`disconnected`（第 3 项；这时连接多半已不在，照 A.7.6 不发）。原来一律是 `expired`。节点侧只把 `reason` 原样交给 `onLost`，不按它分支，旧节点照常工作。A.7.6 那一条按此读。
+2. **任务视图带 `lastError`**：`TaskView` 在任务放弃过（`lastError` 非空）时多带 `lastError: string`，没放弃过的不带这一项。放回 `open` 的 `task.opened`、`queue.snapshot`、认领回包里的 `task` 都一样。旧节点不认这一项，照常工作。
+3. **节点侧的诊断**（不改消息）：`task-runner.mjs` 的 `lost`、`discarded`、`failed`、`completed`、`dedup` 事件带所处阶段（`dedup` / `manifest` / `render` / `push` / `plan`，及执行器、产物库报的细一层位置）、帧数、距上次帧数变化与距认领的毫秒数，推送阶段另带块数与用时；预渲染进程按行打 `[queue-node] node.task-<类型> {…}`，编辑器进程的转发器放行这几种行与 `sink.incomplete`（只带任务 id、原因、阶段与毫秒数，不带会话号与凭证）。产物库 `put(entry, { signal?, report? })` 的第二个参数可选：`report` 报推送进度；没收全时回包另带 `reason`（`range-missing` / `small-missing` / `collect-failed:<code>` / `push-failed:<code>` / `bad-kind`）与 `stats`。D.1 的形状不变，只多了可选项。
+
+**修复**（诊断之后；同一分支）。C1 里受害主机被扣的任务恢复后 154 s 才收回、它自己其实做完了；另一台全程没断线也丢了 7 次。连接活着、续约照发，收回只能是第 2 项停滞：`done` 超过 `STALL_MS` 没变。本机替身复现到两个帧数不变的阶段（`server/test/stall-phases.test.mjs`）：推产物（60 块、每块 10 s，推到第 48 块时 120.5 s 收回，满 3 次永久失败）与在预渲染间里排队（主机 `maxConcurrent` 2、lane 串行，第二段 `lane ahead=1` 排了 120.5 s 收回）。语义（`mechanism/document-service.md`「渲染任务队列」）是「在约定时间内既没报进度也没报完成」才收回，现行只认帧数，比语义严。比较过三条路：(a) 进度带一个随工作推进而变的计数；(b) 真正开工才报 `progress(0)`、排队只受租约管、另加节点本地看门狗；(c) 主机只在执行器空着时认领。只用 (b)：推产物阶段帧数照样不变，还是会误判，看门狗又是一套新的卡死判定；只用 (c)：推产物仍误判；只用 (a)：排队时本来就没有工作在推进，计数也不动。定为 (a) + (c)：
+
+4. **`task.progress` 可带 `step`**（A.6 的 `task.progress` 多一个可选字段 `step: number`）：节点这个认领的工作计数，换阶段、出一批帧、推完一块时加一（续约本身不加）。第 2 项改为：`claimed` 且 `now - claim.progress.changedAt > STALL_MS` 且 `claim.progress.done !== null` → 放弃；`changedAt` 在 `done` 变了、**或带来的 `step` 与上次不同**时重起。不带 `step` 的旧节点只看 `done`，与原来相同；旧队列丢掉这个字段，新节点照旧工作（只是推产物慢时仍按旧规则停滞）。`step` 不是数或 `null` 回 `bad-message`。`describe()` 的 `claim.progress` 在收到过 `step` 时多带 `step`。执行器、产物库真卡死时计数不动，照旧在 `STALL_MS` 后收回（I8 不变）。节点侧：会话 `advance(id)` 只记不发，下一次 `progress` 或续约带上；执行编排换阶段时当场报一次进度，下一步卡死时停滞计时从这一刻算起。
+5. **独立渲染主机闲时认领**（`render-host-contract.md` 第 3 节「闲时门槛」）：快照与 `plan` 共用预渲染管线里一条串行 lane；要用它的任务只在它空着（执行器 `laneBusy() === 0`）、全部节点手里没有还没走到推送的同 lane 任务（`occupying()`）、也没有在飞的同 lane 认领时才认领。推产物不占 lane，前一段推送时下一段照样认领、渲染；流任务不受这道闸。执行器不给 `laneOf` 时不加闸（测试替身行为不变）。节点会话多一个可选的 `canClaim(task)`，认领前过一遍候选。
 
 ---
 

@@ -21,6 +21,10 @@
  *                    (候选按实际出键;独立渲染主机用 `publishLayerMap` 选项写,PC 用管线自己的推送队列写)。层表只在切分完成后写,
  *                    不再在切分之前按本机视图写(D12 的时机)。
  *
+ * 诊断(`docs/reports/AGENT-stall-phases.md`):`render` 经 runner 给的 `phase(name, fields)` 报它此刻在哪一步 ——
+ * `project`(取项目快照、算这一版的计划)、`lane`(交给管线了、这一段的第一批还没交;`ahead` 是当时这条管线上
+ * 已经在跑的 `'queue'` lane 工作数,大于 0 就是在排队)、`frames`(在出批)、`finish`(帧都交了,在收尾:补小尺寸、换页)。
+ *
  * M6c 起执行器不再有 `isIdle()`(J.4 原有):PC 节点的闲时门槛改为 `queue-idle.mjs`(X5),独立渲染主机本来就
  * 只看全局并发闸,这个判据已经没人用(集成裁定,`docs/plan/m6c-contract.md`「集成时的裁定」)。
  */
@@ -33,6 +37,22 @@ import { splitCandidatesOf } from './artifact-transfer.mjs';
 export const PLAN_CACHE_SIZE = 4;
 
 const fail = (code, message, retryable) => Object.assign(new Error(message), { code, retryable });
+
+/**
+ * 每条管线上经执行器交给 `'queue'` lane 的工作(快照的一段、plan 的取计划):管线 → 在跑的个数。
+ * lane 是串行的(`FramePipeline.runQueueTask`),同一条管线由主机的几个项目节点的执行器共用,所以记在模块里、按管线分。
+ * 只计数,不排队、不改管线的行为。
+ */
+const laneWork = new WeakMap();
+async function onLane(pipeline, work) {
+  laneWork.set(pipeline, (laneWork.get(pipeline) ?? 0) + 1);
+  try { return await work(); }
+  finally { laneWork.set(pipeline, Math.max(0, (laneWork.get(pipeline) ?? 1) - 1)); }
+}
+/** 这条管线上此刻经执行器交给 `'queue'` lane、还没落定的工作数 */
+export function laneBusy(pipeline) {
+  return laneWork.get(pipeline) ?? 0;
+}
 
 /**
  * @param {object} options
@@ -82,7 +102,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       if (!Array.isArray(project?.tracks) || !Number.isFinite(project?.duration) || project.duration <= 0) {
         throw fail('bad-snapshot', `项目快照 ${version} 不是能渲的项目`, false);
       }
-      return pipeline.planForQueue(project, { signal });
+      return onLane(pipeline, () => pipeline.planForQueue(project, { signal }));
     })();
     cache.set(id, work);
     while (cache.size > PLAN_CACHE_SIZE) cache.delete(cache.keys().next().value);
@@ -166,9 +186,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return null;
   }
 
-  async function render(task, { signal, progress } = {}) {
+  async function render(task, { signal, progress, phase } = {}) {
+    const say = (name, fields) => { try { phase?.(name, fields); } catch { /* 诊断回调出错不影响执行 */ } };
     if (task?.kind === 'stream') return renderStream(task, { signal, progress });
     if (task?.kind !== 'snapshot') throw fail('bad-task', `不认识的任务 kind:${task?.kind}`, false);
+    say('project');
     const { entry } = await contextFor(task, signal);
     const control = matchControl(task, entry);
     // c10a 契约第 17 节:补渲细任务的片段在本机可能判轻(不在预渲染集合里,管线会跳过它);按任务把它记成补渲再渲。
@@ -178,8 +200,15 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
     const range = { from: task.range.from, to: task.range.to };
     const started = Date.now();
-    if (task.tier === 'shared') await pipeline.renderCardSnapshotRange(entry, control, range, { signal, progress });
-    else await pipeline.renderSceneSnapshotRange(entry, control, range, { signal, progress });
+    const total = range.to - range.from + 1;
+    say('lane', { ahead: laneBusy(pipeline) });
+    const tracked = done => {
+      say(done >= total ? 'finish' : 'frames', { done, total });
+      progress?.(done);
+    };
+    await onLane(pipeline, () => (task.tier === 'shared'
+      ? pipeline.renderCardSnapshotRange(entry, control, range, { signal, progress: tracked })
+      : pipeline.renderSceneSnapshotRange(entry, control, range, { signal, progress: tracked })));
     say('executor.render', { id: task.id, tier: task.tier, clipId: control.clipId, ms: Date.now() - started });
     return null;
   }
@@ -203,5 +232,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
   }
 
-  return { plan, render, afterSplit, forget: () => cache.clear() };
+  /**
+   * 独立渲染主机的闲时认领(契约 A.12〔裁〕,`render-node/host.mjs`):任务要用哪条串行 lane —— 快照与 plan 用 `'queue'`
+   * (`runQueueTask`,一次只做一件),流用流预渲染间池,不算(回 null)。`laneBusy()` 是这条管线上此刻经执行器交给
+   * `'queue'` lane、还没落定的工作数(包括已经被中止、管线还没收手的那一件)。
+   */
+  const laneOf = task => (task?.kind === 'snapshot' || task?.kind === 'plan' ? 'queue' : null);
+  return { plan, render, afterSplit, forget: () => cache.clear(), laneOf, laneBusy: () => laneBusy(pipeline) };
 }

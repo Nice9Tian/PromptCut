@@ -31,7 +31,7 @@
   - 节点描述另带 `cardSourceVersions`（契约 render-queue B.2，只在节点侧过滤用，不进 `node.hello`）：本机此刻有的卡片代码身份〔c66-host-cards 加，见第 7 节〕；
   - `envFingerprint` 照本机探测结果。
 - **不认领 `plan`**：主机只认领 `snapshot` 细任务，`plan` 留给发布方自己的节点（第 11.2 节「`plan` 就近认领」的一部分）。流任务在 M6c 接入之后才认领。
-- **闲时门槛**：主机没有页面、没有播放，只要执行器有空位就认领。
+- **闲时门槛**：主机没有页面、没有播放，只要执行器有空位就认领。〔2026-09-28 `claude/stall-phases` 裁：「空位」按预渲染间算——快照与 `plan` 共用一条串行 lane，要用它的任务只在它空着、全部节点手里也没有还没走到推送的同 lane 任务时才认领；推产物不占 lane，前一段推送时下一段照样认领。`maxConcurrent` 仍是持有 + 在飞的总上限。理由与试过的路见 `render-queue-contract.md` A.12 第 5 条〕
 - **产物**：
   - 推到该项目文档服务下发的素材服务地址（`service.endpoints` 里的 `asset`），用 `auth.ticket` 取的素材票据写；
   - 推完、收全再报 `complete`，与 PC 节点相同。
