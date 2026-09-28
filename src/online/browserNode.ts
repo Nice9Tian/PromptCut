@@ -229,6 +229,11 @@ const quantile = (sorted: number[], p: number): number | null =>
 
 /** 每帧耗时留最近这么多个样本算 p50 / p95 */
 const FRAME_SAMPLES = 200;
+/**
+ * 让路(play / drag / urgent)之后等当前这一帧做完最多这么久;过了就像页面隐藏那样中止它、立即放回(三级数字)。
+ * 播放、拖动时后台活的门会关,正在做的那一帧在舞台里被挡住,不设上限就既不出帧也不放回(M7 验收探针 A5 / A6)。
+ */
+export const YIELD_FRAME_MAX_MS = 1000;
 /** 已做的帧留几段(让路后重新认领同一段只补缺的帧) */
 const RETAINED_TASKS = 8;
 
@@ -242,6 +247,8 @@ interface Run {
   phase: "prep" | "baking" | "between" | "finishing";
   /** 要求让路的原因(做完当前帧就放回) */
   yieldCause: YieldCause | null;
+  /** 要求让路的时刻(`deps.now()`):当前帧 `YIELD_FRAME_MAX_MS` 之内做不完就立即放回 */
+  yieldAt: number | null;
   frames: Map<number, FrameRecord>;
   /** 去重查到的清单(`sink.resultFor` 回它) */
   found: Record<string, unknown> | null;
@@ -300,6 +307,16 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     if (!frames.size) return;
     retained.set(id, frames);
     while (retained.size > RETAINED_TASKS) retained.delete(retained.keys().next().value as string);
+  };
+
+  /** 不等当前帧:中止它并立即放回(页面隐藏;让路之后当前帧超时做不完) */
+  const abortAndRelease = (r: Run, reason: string) => {
+    if (!holding(r)) return;
+    keepFrames(r.task.id, r.frames);
+    session.yieldAll(reason);
+    bump(counters.released, reason);
+    r.controller.abort();
+    endRun(r, `released:${reason}`);
   };
 
   /** 放回手里这一段(让路、取不到项目):不计失败(C2)。放回之后 runner 判「不再持有」,丢掉这次执行 */
@@ -435,7 +452,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
       if (!task || typeof task.id !== "string") return;
       if (run) { run.controller.abort(); endRun(run, "replaced"); }
       run = {
-        task, token: ctx.token, controller: new AbortController(), phase: "prep", yieldCause: null,
+        task, token: ctx.token, controller: new AbortController(), phase: "prep", yieldCause: null, yieldAt: null,
         frames: new Map(retained.get(task.id) ?? []), found: null, ended: false,
       };
       // 开工先报 0、去重、执行、推送、完成的规矩在 task-runner(桌面与页面同一份,D11)
@@ -488,6 +505,11 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     },
     tick() {
       if (stopped || refused) return;
+      // 让路之后当前帧迟迟做不完(播放、拖动时后台活的门关了,这一帧在舞台里被挡住):不再等,中止并立即放回
+      const r = run;
+      if (r && !r.ended && r.yieldCause && r.phase === "baking" && r.yieldAt !== null && deps.now() - r.yieldAt >= YIELD_FRAME_MAX_MS) {
+        abortAndRelease(r, `yield-${r.yieldCause}`);
+      }
       session.tick();
     },
     yieldFor(cause) {
@@ -495,15 +517,10 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
       if (!r || r.ended) return;
       if (cause === "hidden") {
         // 隐藏页的计时器被节流,续约不可靠:不等当前帧,中止并立即放回;迟到的结果丢掉
-        if (!holding(r)) return;
-        keepFrames(r.task.id, r.frames);
-        session.yieldAll("yield-hidden");
-        bump(counters.released, "yield-hidden");
-        r.controller.abort();
-        endRun(r, "released:yield-hidden");
+        abortAndRelease(r, "yield-hidden");
         return;
       }
-      if (!r.yieldCause) r.yieldCause = cause;
+      if (!r.yieldCause) { r.yieldCause = cause; r.yieldAt = deps.now(); }
       // 在等哪一步决定什么时候放回:
       //   prep       还没开始生成快照(查去重、取项目),没有「当前这一批」:立即放回并中止
       //   baking     当前这一帧做完再放回(执行循环在帧回来之后看 yieldCause)
