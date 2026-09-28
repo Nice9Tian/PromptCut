@@ -1489,14 +1489,15 @@ export class FramePipeline {
     const store = new SnapshotStore(this.root);
     /*
      * C6.4 第 4 节的快照钩子:`commitSnapshots`(`batch` 也经它)每写完一批,把这一批覆盖到的每一段进推送队列。
-     * 没配推送队列时原样返回 `commitSnapshots` 自己的 promise —— 不多一个 tick、不多写任何东西。
+     * 没配推送队列、也没开小尺寸时原样返回 `commitSnapshots` 自己的 promise —— 不多一个 tick、不多写任何东西。
      */
     const commit = store.commitSnapshots.bind(store);
     store.commitSnapshots = args => {
       const done = commit(args);
-      if (!this.pushQueue) return done;
+      // 独立渲染主机:没有推送队列,但打开了小尺寸(`enableSmallTier`),照样记下这一批的小尺寸
+      if (!this.pushQueue && !this.smallTierEnabled()) return done;
       return done.then(index => {
-        try { this.enqueueSnapshotPush(args); } catch {}
+        if (this.pushQueue) { try { this.enqueueSnapshotPush(args); } catch {} }
         // c10a 第 9 节:同一批帧的预渲染小尺寸(只在推送队列配着、本进程已有开着的预渲染 Chrome 时;不挡这一批)
         try { this.scheduleSmallSnapshots(args); } catch {}
         return index;
@@ -1591,6 +1592,7 @@ export class FramePipeline {
    * 再进一次推送队列 —— 小位图随同一段推到素材服务(`px`),清单里带 `small` 表(`artifact-transfer.mjs`)。
    *
    * - 只在配了推送队列时做:小尺寸只给在线页面从素材服务拉,不连素材服务就没有消费方(离线照旧,一个字节不多写)。
+   *   独立渲染主机没有推送队列、由 sink 推,它起节点前调 `enableSmallTier` 打开(AGENT-xnode-dedup)。
    * - 只借**已经开着**的预渲染间(lane 的 `bakery`),在它换页前画:不为小尺寸单独起浏览器、也不另开页面 ——
    *   推送队列本身从不开 Chrome、不渲染(C6.4)。
    * - 从素材服务拉来的帧(`adopted: true`)不做:别的节点产的,清单里本来就有它的小尺寸。
@@ -1598,7 +1600,16 @@ export class FramePipeline {
    * - `PROMPTCUT_SMALL_TIER=0` 关掉(排查用)。
    */
   smallTierEnabled() {
-    return !!this.pushQueue && process.env.PROMPTCUT_SMALL_TIER !== '0';
+    return (!!this.pushQueue || this.smallTierForced === true) && process.env.PROMPTCUT_SMALL_TIER !== '0';
+  }
+  /**
+   * 独立渲染主机(`vite-plugin-frames.ts` 的 `startHostNode`)没有推送队列,产物由各项目节点的 sink 推 —— 它也是渲染节点,
+   * 照 `product/rendering.md`「两档」与 c10a 第 9 节(「由渲染节点(桌面版的队列节点、独立渲染主机)一并生成」)同样要产小尺寸:
+   * 起节点前调这里打开。打开之后 `commitSnapshots` 照样记下每一批的小尺寸、换页时画掉,sink 的完成条件照样要两档
+   * (`docs/reports/AGENT-xnode-dedup.md`:主机只推原尺寸时,别的节点领到它做完的段只能补画小尺寸,不能去重)。
+   */
+  enableSmallTier() {
+    this.smallTierForced = true;
   }
   /**
    * 这一批要生成小尺寸:记下来(不等、不开 Chrome),等下一次有预渲染间要换页时在它**要扔掉的那一页**上画(`flushSmallOn`)。

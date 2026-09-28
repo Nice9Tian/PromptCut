@@ -219,7 +219,7 @@ test('D4 产物库 put:推送出错回 reason 与 stats 并记 sink.incomplete;�
   }
 });
 
-test('D5 转发器放行逐任务收尾行与 sink.incomplete,别的 queue-node 行不转,会话行照旧转', () => {
+test('D5 转发器放行逐任务收尾行、sink.incomplete 与去重诊断(sink.has-miss、manifest.*-failed),别的 queue-node 行不转,会话行照旧转', () => {
   const out = [];
   const forward = createSessionLineForwarder((line) => out.push(line));
   forward([
@@ -228,13 +228,16 @@ test('D5 转发器放行逐任务收尾行与 sink.incomplete,别的 queue-node 
     '[queue-node] node.task-failed {"id":"snapshot:cd:0-59","error":"sink-incomplete","why":"push-failed:timeout"}',
     '[queue-node] node.task-completed {"id":"snapshot:ef:0-59","push":{"blocks":120,"pushed":120,"ms":40000}}',
     '[queue-node] sink.incomplete {"resultKey":"ab","reason":"push-failed:timeout"}',
+    '[queue-node] sink.has-miss {"resultKey":"ab","reason":"manifest-missing","covered":false}',
+    '[queue-node] manifest.get-failed {"kind":"snapshot-manifest","code":"timeout"}',
     '[queue-node] queue.started {"nodeId":"x"}',
     '[queue-node] executor.plan {"version":"p@1"}',
     '[queue-node] docservice.session.resume {"gapMs":600}',
     '',
   ].join('\n'));
   assert.deepEqual(out.map((l) => l.split(' ')[1]), [
-    'node.task-lost', 'node.task-discarded', 'node.task-failed', 'node.task-completed', 'sink.incomplete', 'docservice.session.resume',
+    'node.task-lost', 'node.task-discarded', 'node.task-failed', 'node.task-completed', 'sink.incomplete', 'sink.has-miss', 'manifest.get-failed',
+    'docservice.session.resume',
   ]);
   // 一轮几十个任务:逐任务行不被会话行的额度(每种每分钟 10 行)压掉
   const many = [];

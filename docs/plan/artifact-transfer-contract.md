@@ -115,7 +115,7 @@ export function createAssetSink({ pipeline, client }) → Sink     // 实现 D.1
 **`pushResult`**：清单里的每个块都 `client.put` 一次，快照进 `snap`、流进 `px`，`put` 本身会跳过已有的块；全部成功才返回。
 
 **`createAssetSink`**：
-- `has(ref)`：本机帧库覆盖了整个 `range` 就回 `true`。只看本机，不查素材服务。〔2026-09-28 `claude/sink-has` 裁：本机覆盖了整段还不够，素材服务上也得齐——按本机帧库列清单，经 `pushResult`「先问 chunks、有了就跳过」把缺的块用本机字节补推（不重渲），推齐后写清单、回 `true`；补推出错回 `false`，交给执行 → `put` 再推。原因：推到一半丢了认领、又被自己重新认领时，只看本机会以去重完成，而素材服务上缺块，别的成员按清单取不到，违反语义「节点先把产物推送到素材服务，再向文档服务报完成」（`product/document-service.md`）。块齐时只问不推，「已在素材服务里的直接完成、不重渲」不变。报告 `docs/reports/AGENT-sink-has.md`〕
+- `has(ref)`：本机帧库覆盖了整个 `range` 就回 `true`。只看本机，不查素材服务。〔2026-09-28 `claude/sink-has` 裁：本机覆盖了整段还不够，素材服务上也得齐——按本机帧库列清单，经 `pushResult`「先问 chunks、有了就跳过」把缺的块用本机字节补推（不重渲），推齐后写清单、回 `true`；补推出错回 `false`，交给执行 → `put` 再推。原因：推到一半丢了认领、又被自己重新认领时，只看本机会以去重完成，而素材服务上缺块，别的成员按清单取不到，违反语义「节点先把产物推送到素材服务，再向文档服务报完成」（`product/document-service.md`）。块齐时只问不推，「已在素材服务里的直接完成、不重渲」不变。报告 `docs/reports/AGENT-sink-has.md`〕〔2026-09-29 `claude/xnode-dedup` 裁：开着预渲染小尺寸（c10a 第 9 节）时，本机覆盖了原尺寸却缺小尺寸——典型是按别的节点的清单拉来的帧（拉取端只拉原尺寸）——不再直接回 `false`：查内容库里这一段的清单，两档都齐、块都在素材服务上就回 `true`（`resultFor` 回那份清单）；清单缺小尺寸才回 `false`，交给执行器从本机原尺寸补画小尺寸。另：独立渲染主机没有推送队列，也照 c10a 第 9 节产小尺寸、按两档推（`FramePipeline.enableSmallTier`）。原因：M8 E3 放本机，host-a 做完的段在局域网主机重启后被 PC 领到，PC 本机有拉来的原尺寸、没有小尺寸，只能补画后以「完成」而非「去重」收尾。`has` 回 `false` 时记 `sink.has-miss { reason }`。报告 `docs/reports/AGENT-xnode-dedup.md`〕
 - `put({ ...ref, artifacts, meta })`：`artifacts` 本阶段约定为 `null` 或被忽略，字节以本机帧库为准。流程是 `collect*`，再 `pushResult`，全部推完回 `{ complete: true, result }`；清单有缺帧、有块推失败，回 `{ complete: false }`。
 - 返回值多了 `result` 字段，这是对 D.1 的**扩展**。`local-node.mjs` 什么时候把它放进 `session.complete(id, { ranges, …result })`，由 M5b 改，本阶段不改 `local-node.mjs`。
 
