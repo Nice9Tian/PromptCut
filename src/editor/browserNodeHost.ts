@@ -166,6 +166,10 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   const nodeId = `browser-${pageSession()}`;
   const conn = { sessions: 0, opens: 0, closes: 0, resumes: 0, lastClose: null as { code: number; reason: string } | null };
   const stage = { frames: 0, ms: [] as number[], pausedMs: 0, remounts: 0, small: 0, smallMs: [] as number[], readyMs: [] as number[], errors: {} as Record<string, number> };
+  /** 父页一侧每帧的时间构成(毫秒,最近 200 帧):开活与灌工程、舞台往返、解压、推两档、进页面内快照库 */
+  const PHASES = ["lease", "rpc", "gunzip", "snap", "px", "l2", "total"] as const;
+  const phases = Object.fromEntries(PHASES.map((k) => [k, [] as number[]])) as Record<(typeof PHASES)[number], number[]>;
+  const notePhase = (k: (typeof PHASES)[number], ms: number) => { const a = phases[k]; a.push(ms); if (a.length > 200) a.splice(0, a.length - 200); };
   const manifestStats = { written: 0, failed: 0, lastError: null as string | null };
 
   /* ---------------- 写票据与上传器(D7:父页推) ---------------- */
@@ -227,6 +231,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   };
 
   const bakeFrame = async ({ task, project, localFrame, signal }: { task: NodeTask; project: unknown; localFrame: number; signal: AbortSignal }) => {
+    const t0 = performance.now();
     if (!lease || lease.taskId !== task.id) {
       closeLease();
       const l = await openLease(task, project);
@@ -242,6 +247,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       l.pushedTo = l.stage;
     }
     const session = task.id;
+    const tRpc = performance.now();
+    notePhase("lease", tRpc - t0);
     const onAbort = () => { void l.stage.bakeCancel().catch(() => {}); };
     signal.addEventListener("abort", onAbort, { once: true });
     let reply;
@@ -250,6 +257,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     } finally {
       signal.removeEventListener("abort", onAbort);
     }
+    notePhase("rpc", performance.now() - tRpc);
     if (!reply.ok) {
       stage.errors[reply.reason] = (stage.errors[reply.reason] ?? 0) + 1;
       // 不可重试:再做一遍结果一样。`not-ready`(就绪闸超时)按可重试交回,同桌面 waitFrameReady 抛错的处理
@@ -266,26 +274,35 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     if (stage.ms.length > 200) { stage.ms.splice(0, stage.ms.length - 200); stage.readyMs.splice(0, stage.readyMs.length - 200); }
     stage.pausedMs += reply.pausedMs;
     if (reply.remounted) stage.remounts++;
+    let tp = performance.now();
     const bytes = ev.htmlGz ? await gunzip(ev.htmlGz) : new Uint8Array(ev.htmlRaw ?? new ArrayBuffer(0));
+    notePhase("gunzip", performance.now() - tp);
     if (bytes.length !== ev.bytes) throw Object.assign(new Error("解压后的快照字节数对不上"), { retryable: true });
     // 推素材服务(两档都推成功才算这一帧做完;c10a 第 9 节)
+    tp = performance.now();
     await uploader.put("snap", ev.hash, bytes, "html");
+    notePhase("snap", performance.now() - tp);
     let small: { hash: string; bytes: number } | null = null;
     if (ev.small) {
       const webp = new Uint8Array(ev.small.webp);
+      tp = performance.now();
       await uploader.put("px", ev.small.hash, webp, "webp");
+      notePhase("px", performance.now() - tp);
       small = { hash: ev.small.hash, bytes: ev.small.bytes };
       stage.small++;
       stage.smallMs.push(reply.smallMs);
       if (stage.smallMs.length > 200) stage.smallMs.splice(0, stage.smallMs.length - 200);
     }
     // 自产的块进页面内快照库;这一层的 ranges 写这一帧(写入即就绪,在线来源据此换上)
+    tp = performance.now();
     const s = await store;
     if (s) {
       await s.putBlock(`snap/${ev.hash}`, bytes, "text/html").catch(() => {});
       if (ev.small) await s.putBlock(`px/${ev.small.hash}`, new Uint8Array(ev.small.webp), "image/webp").catch(() => {});
       await s.putRange(task.resultKey, localFrame, localFrame).catch(() => {});
     }
+    notePhase("l2", performance.now() - tp);
+    notePhase("total", performance.now() - t0);
     return { hash: ev.hash, bytes: bytes.length, small };
   };
 
@@ -540,6 +557,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
           frames: stage.frames, remounts: stage.remounts, pausedMs: Math.round(stage.pausedMs), errors: { ...stage.errors },
           frameMs: { p50: quantile(ms, 0.5), p95: quantile(ms, 0.95) },
           smallFrames: stage.small, smallMs: { p50: quantile(sm, 0.5), p95: quantile(sm, 0.95) },
+          phases: Object.fromEntries(PHASES.map((k) => { const a = [...phases[k]].sort((x, y) => x - y); return [k, { n: a.length, p50: quantile(a, 0.5), p95: quantile(a, 0.95) }]; })),
         },
         upload: { pushed: up.pushed, skipped: up.skipped, bytes: up.pushedBytes, failed: up.failed, reauth: up.reauth, recheck: up.recheck, lastError: up.lastError },
         manifests: { ...manifestStats },

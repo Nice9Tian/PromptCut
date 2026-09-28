@@ -1407,10 +1407,32 @@ async function tapPage(page, name) {
   cdp.on('Network.webSocketFrameSent', onFrame('sent'));
   cdp.on('Network.webSocketFrameReceived', onFrame('recv'));
   cdp.on('Network.requestWillBeSent', ({ request }) => noteLeak('http-url', request?.url ?? ''));
+  // 素材服务的 HTTP 请求（每帧时间构成的排查用）：方法、命名空间、哪一步（chunks / 片 / complete）、起止（CDP 单调时钟，秒）
+  const http = new Map();
+  cdp.on('Network.requestWillBeSent', ({ requestId, request, timestamp }) => {
+    const m = /\/api\/asset\/(snap|px|media)\/[a-f0-9]{64}\/(chunks|complete|\d+)(?:\?|$)/.exec(request?.url ?? '');
+    if (!m) return;
+    const step = m[2] === 'chunks' || m[2] === 'complete' ? m[2] : 'part';
+    http.set(requestId, { kind: `${request.method} ${m[1]} ${step}`, t0: timestamp, wall: Date.now(), t1: null, status: null });
+    if (http.size > 50_000) http.delete(http.keys().next().value);
+  });
+  cdp.on('Network.responseReceived', ({ requestId, response }) => { const r = http.get(requestId); if (r) r.status = response?.status ?? null; });
+  cdp.on('Network.loadingFinished', ({ requestId, timestamp }) => { const r = http.get(requestId); if (r) r.t1 = timestamp; });
+  cdp.on('Network.loadingFailed', ({ requestId, timestamp }) => { const r = http.get(requestId); if (r) { r.t1 = timestamp; r.status = 'failed'; } });
+  /** 某个墙钟时刻（毫秒）以后的素材服务请求，按种类汇总：个数、耗时 p50 / p95（毫秒） */
+  const assetHttp = (since = 0) => {
+    const by = {};
+    for (const r of http.values()) {
+      if (r.wall < since || r.t1 == null) continue;
+      (by[r.kind] ??= []).push((r.t1 - r.t0) * 1000);
+    }
+    const q = (a, p) => (a.length ? Math.round(a[Math.min(a.length - 1, Math.floor(p * a.length))]) : null);
+    return Object.fromEntries(Object.entries(by).map(([k, a]) => { a.sort((x, y) => x - y); return [k, { n: a.length, p50: q(a, 0.5), p95: q(a, 0.95) }]; }));
+  };
   const renderConns = () => [...conns.values()].filter((c) => c.role === 'render' || frames.some((f) => f.conn === c.requestId && f.type === 'node.hello'));
   return {
     name, cdp, conns, frames, secrets, leaks,
-    renderConns,
+    renderConns, assetHttp,
     sent: (type, since = 0) => frames.filter((f) => f.dir === 'sent' && f.type === type && f.at >= since),
     recv: (type, since = 0) => frames.filter((f) => f.dir === 'recv' && f.type === type && f.at >= since),
     /** 页面当了节点：发过 node.hello 且收到 node.welcome */
@@ -1695,7 +1717,9 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   const done = got ?? anchorDone();
   const worst = Math.max(...heavy.map((c) => Math.max(...(done[c] ?? [{ sinceGateMs: Infinity }]).map((x) => x.sinceGateMs))));
   const l2 = await l2Snapshots(page);
-  const a4 = { anchorRule, perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, authoritative, diag: await readNodeDiag(page) };
+  const a4 = { anchorRule, perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, authoritative, diag: await readNodeDiag(page),
+    assetHttp: tap.assetHttp(b1.gateLiftAt), phases: await page.evaluate(() => window.__pcBrowserNode?.()?.stage?.phases ?? null).catch(() => null) };
+  say('a4.timing', { bakeMs: a4.diag?.counts?.bakeMs ?? null, stageMs: a4.diag?.counts?.stageMs ?? null, assetHttp: a4.assetHttp, phases: a4.phases });
   book.judge('M7-A4', 'page-anchors-done', heavy.every((c) => done[c]?.length) && (l2 ?? 0) > 0, a4);
   book.timed('M7-A4', 'page-within-30s', Number.isFinite(worst) && worst <= 30_000, { worstSinceGateMs: a4.worstSinceGateMs }, authoritative);
   const od = await onlineDiag(page);
