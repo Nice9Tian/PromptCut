@@ -881,3 +881,19 @@ test('M7Q-A10f 切分方自己那份已存在、合并回包带 lockedBy 与闲�
   assert.equal(rounds.length, 2);
   assert.deepEqual(rounds[1].map((t) => [t.requires.envFingerprint, t.takeover === true]), [[P, true]]);
 });
+
+test('M7Q-D12-P1 管线的切分候选落盘：重启（新的 FramePipeline、同一库根）后照样按它列候选', async () => {
+  const os = await import('node:os');
+  const { FramePipeline } = await import('../frame-pipeline.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm7q-split-cand-'));
+  try {
+    const p1 = Object.create(FramePipeline.prototype);
+    p1.root = root;
+    assert.equal(p1.splitCandidatesFor('ck-a'), null);
+    p1.recordSplitCandidates(new Map([['ck-a', [P, B]]]));
+    assert.deepEqual(p1.splitCandidatesFor('ck-a'), [P, B]);
+    const p2 = Object.create(FramePipeline.prototype);
+    p2.root = root;
+    assert.deepEqual(p2.splitCandidatesFor('ck-a'), [P, B], '重启后读得回来');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
