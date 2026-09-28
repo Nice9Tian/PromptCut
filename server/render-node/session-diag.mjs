@@ -124,10 +124,12 @@ export const SESSION_LINE_RE = /^\[(?:queue-node|artifact-push)\] docservice\.(s
 
 /**
  * 预渲染进程输出里的逐任务收尾行(`docs/reports/AGENT-stall-phases.md`):`[queue-node] node.task-<lost|failed|discarded|completed|dedup> {…}`
- * 与产物库没收全的 `[queue-node] sink.incomplete {…}`(`vite-plugin-frames.ts` 的 `taskEventLog`、`artifact-transfer.mjs` 的 `put`)。
+ * 与产物库没收全的 `[queue-node] sink.incomplete {…}`(`vite-plugin-frames.ts` 的 `taskEventLog`、`artifact-transfer.mjs` 的 `put`),
+ * 以及产物库去重那一步的 `sink.has-miss`(为什么没走去重)/ `sink.has-pushed` / `sink.has-push-failed`、内容库清单读写出错的
+ * `manifest.get-failed` / `manifest.put-failed`(`artifact-transfer.mjs` 的 `has`、`writeManifest`;`docs/reports/AGENT-xnode-dedup.md`)。
  * 这些行只带任务 id、原因、阶段与毫秒数,不带会话号与凭证。
  */
-export const TASK_LINE_RE = /^\[queue-node\] (node\.task-(?:lost|failed|discarded|completed|dedup)|sink\.incomplete)\b/;
+export const TASK_LINE_RE = /^\[queue-node\] (node\.task-(?:lost|failed|discarded|completed|dedup)|sink\.(?:incomplete|has-miss|has-pushed|has-push-failed)|manifest\.(?:get|put)-failed)\b/;
 
 /**
  * 按行转发子进程输出里的会话事件行(编辑器进程收预渲染进程的 stdout / stderr 用)。块可能在行中间断开,
