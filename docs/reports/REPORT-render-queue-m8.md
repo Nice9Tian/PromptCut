@@ -234,6 +234,12 @@
 | 攻坚（codex worktree） | 待填 | 待填 | 待填 |
 | 发散（Gemini） | 待填（M8 没有新的用户侧界面，按计划不调，卡死时按回退梯次第 3 级调） | — | — |
 
+## 12a. M8 期间合入的修复
+
+| 修复 | 起因 | 分支与合入 | 验证 | 影响的 M8 项 |
+|---|---|---|---|---|
+| 纯浏览器节点推送提速：原尺寸与小尺寸两次推送改为并行；推这一帧时把下一帧先交给后台舞台做（让路时多做的那一帧照旧在帧边界取消、不产出） | W7 真跨机（run `m7w0928e`）锚点段 63 s，远慢于本机 27.6 s。子智能体查明每帧多出的是两次串行推送各自的一趟 `GET chunks` 往返（PC 到阿里云约 76 ms），舞台本身两种模式下都是每帧 87 ms（`docs/archive/agent-reports/AGENT-site-bake-slow.md`） | `claude/site-bake`，main `5649236`（release 同步前进）；改 `src/editor/browserNodeHost.ts`、`src/online/snapUploader.ts`，代码版本由 `ddf69b5e…` 变为 `21c62981…` | G0：`tsc -b --force` 0 错误；`npm test` 3758 / 3756 / 0 失败 / 2 跳过；`npm run build`、`vite build --mode online` 成功。合并后的代码跑 `m7-browser-probe --role all --no-a10 --no-twin`（run `mukz7q6d6b84`）：`fails []`，A1、A2、A3、A6、A7、A8、A9、A11、D1-D2-D12、D9、D10、D14 过；计时项待笔记本复核，PC 参考判定都过（A4 最慢锚点段 21.1 s、A5 602 ms、A12 长任务 0）；每帧 bakeMs p50 89 ms、p95 133 ms，推送段 p50 13.4 ms。本机素材服务压 76 ms 时每帧 653 → 280 ms（子智能体数，PC 参考） | 之后的 M8 各项都在新代码版本上跑（第 1.2 节）；E1、E2（`m8e1c2`、`m8e2c`）与第一批 C1、E4、E6 在旧版本 `ddf69b5e…` 上跑，这次改动只动纯浏览器节点，不影响它们的结论。站点上的锚点段耗时部署后由笔记本复测（第 8 节） |
+
 ## 13. 与计划不一致、语义冲突、待用户项、遗留
 
 〔待填。已知会写进来的：〕
