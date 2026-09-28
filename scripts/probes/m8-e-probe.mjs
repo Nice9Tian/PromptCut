@@ -1303,14 +1303,16 @@ async function hostE3Page(r, kv, cfg, run, docUrl) {
     const detachAt = replica.ep.stats?.().lastDetach?.at ?? null;
     const downAt = [detachAt, st.lastCloseAt].filter((t) => typeof t === 'number' && t >= reqAt - 60_000).sort((a, b) => a - b)[0] ?? null;
     const valueAt = String(lastCommit.path ?? '').split('/').filter(Boolean).reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), st.body);
-    const j = judgeLastCommit(lastCommit, { sessionsAfter: st.sessions - sessions0, rev: st.rev, seenAfter, valueAt });
+    // 「重启后重读过」只认新会话里真的完成了 project.open 的（会话建成而没重读的，副本还是重启前内存里的内容）
+    const reopenedSessions = new Set(seenAfter.filter((x) => x.via === 'open').map((x) => x.session)).size;
+    const j = judgeLastCommit(lastCommit, { sessionsAfter: reopenedSessions, rev: st.rev, seenAfter, valueAt });
     r.judge('page-resync-after-restart', j.resync);
     r.judge('last-commit-readable', j.readable);
     const at = seenAfter.filter((x) => x.rev === lastCommit.rev);
     return { docId: doc.docId, resync: j.resync.ok, readable: j.readable.ok, via: j.readable.via ?? null, synced: !!synced,
       revBefore, revAfter: st.rev, lastCommitRev: lastCommit.rev, digestMatch: j.readable.digestMatch ?? null,
       digestAfter: at.at(-1)?.digest?.slice(0, 16) ?? null, digestWant: String(lastCommit.digest ?? '').slice(0, 16),
-      reconnectMs: firstReopen && downAt ? firstReopen.at - downAt : null, reopens: st.reopens - reopens0, sessionsAfter: st.sessions - sessions0,
+      reconnectMs: firstReopen && downAt ? firstReopen.at - downAt : null, reopens: st.reopens - reopens0, sessionsAfter: st.sessions - sessions0, reopenedSessions,
       closes: st.closes, applied: st.applied };
   } finally {
     await replica.close().catch(() => {});
