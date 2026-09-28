@@ -38,8 +38,8 @@
 | `claude/rq-m7-tests` | `opus-dev` | `24c2c57` | 契约测试 47 条（K1～K11），不看实现 | `docs/archive/agent-reports/AGENT-rq-m7-tests.md` |
 | `claude/rq-m7-queue` | `opus-dev-high` | `24c2c57` | D1、D2、D4、D9、D10、D11 的一半、D12、D14；第二、三轮修 A10、D1、锚帧段优先 | `docs/archive/agent-reports/AGENT-rq-m7-queue.md` |
 | `claude/rq-m7-node` | `opus-dev-high` | `24c2c57` | 页面节点、宿主、舞台 `bakeFrame`、小尺寸、上传器、层表 v3 页面侧、探针之后的更正；A5 / A6 让路修复 | `docs/archive/agent-reports/AGENT-rq-m7-node.md` |
-| `claude/m7-accept-probe` | 子智能体（类型待核） | `claude/rq-m7-queue` `fdbeb60` | 验收探针 `m7-browser-probe.mjs`（本机、局域网、外网三种模式）、适配处、判定纯函数 `m7-judge.mjs` | `docs/archive/agent-reports/AGENT-m7-accept-probe.md` |
-| `claude/join-error` | 子智能体（类型待核） | — | 加入项目「连不上」错报成「密码错」的修复，新增 `shared/verify`〔裁〕 | 分支上的 `docs/reports/AGENT-join-error.md`；**未合入，待用户审**（主会话记录） |
+| `claude/m7-accept-probe` | 子智能体 `opus-dev` | `claude/rq-m7-queue` `fdbeb60` | 验收探针 `m7-browser-probe.mjs`（本机、局域网、外网三种模式）、适配处、判定纯函数 `m7-judge.mjs` | `docs/archive/agent-reports/AGENT-m7-accept-probe.md` |
+| `claude/join-error` | 子智能体 `opus-dev` | — | 加入项目「连不上」错报成「密码错」的修复，新增 `shared/verify`〔裁〕 | 分支上的 `docs/reports/AGENT-join-error.md`；**未合入，待用户审**（主会话记录） |
 
 合入关系（主会话记录，提交号逐个核过存在）：`claude/rq-m7-tests` → `claude/rq-m7-queue`（`434441e` 合 tests `8f18461`）→ `claude/rq-m7-node`（合过 queue `f8c2879` 与验收探针）；验收探针分支合过 node `9774eda` 与 main `8f92683`；queue 分支 `dc04362` 合验收探针 `56b829b`、`d47365b` 合 node 的让路修复。集成分支 `claude/rq-m7` 的 first-parent（`git log --first-parent 3ab63cf..claude/rq-m7`，旧到新）：
 
@@ -86,7 +86,7 @@
 | 提交 | tsc | npm test（总 / 过 / 败 / 跳过） | 构建 | 出处 |
 |---|---|---|---|---|
 | `313b27c`（集成分支合 main） | 退出码 0 | 3754 / 3752 / 0 / 2 | `npm run build` 与在线构建（`vite build --mode online`）都通过；代码版本 `ddf69b5e…` | 主会话记录 |
-| `88e70e3`（最终集成） | 【待填：主会话在 `88e70e3` 上补跑】 | 【待填】 | 【待填】 | 主会话记录 |
+| `88e70e3`（最终集成；合入提交只多探针脚本与文档） | 退出码 0 | 3758 / 3756 / 0 / 2 | 合入前在 `4540315`（= `88e70e3` + 可行性探针脚本 + 本报告）上 `npm run build` 与在线构建都通过 | 主会话记录 |
 
 跳过的 2 条是 main 原有、显式开启的两条（`/api/cards/layout` 集成、SKILL 闸门集成）。M7 的门（契约测试 39 条）在合进页面节点分支后全部打开（`AGENT-rq-m7-queue.md` 第二轮基线、`AGENT-rq-m7-node.md` 终验）。
 
@@ -94,12 +94,12 @@
 
 | 项 | `313b27c`（主会话记录） | `88e70e3` |
 |---|---|---|
-| `verify-determinism` | 1800 / 1800 相同 | 【待填：主会话补】 |
-| 与 `pc-g0r-base` 逐像素 | 1800 相同 | 【待填】 |
-| `verify-unified-frames` | PASS | 【待填】 |
-| `ready-index-probe` | fails [] | 【待填】 |
-| `stream-produce-probe --group` | PASS | 【待填】 |
-| `preview-fallback-probe` 兜底透明拍 | 0（beats 290 / 277） | 【待填】 |
+| `verify-determinism` | 1800 / 1800 相同 | 1800 / 1800 相同 |
+| 与 `pc-g0r-base` 逐像素 | 1800 相同 | 1800 相同，不同 0、缺 0、多 0 |
+| `verify-unified-frames` | PASS | PASS |
+| `ready-index-probe` | fails [] | fails [] |
+| `stream-produce-probe --group` | PASS | PASS |
+| `preview-fallback-probe` 兜底透明拍 | 0（beats 290 / 277） | 0（beats 278 / 274） |
 
 - 分支上的旁证：`rq-m7-node` 在 `isolatedCardProject` 挪动之后跑 `verify-determinism` 1800 / 1800 相同、两遍与 `pc-g0r-base` 都 1800 / 1800 / 0（`AGENT-rq-m7-node.md` 验证第 7 条）；`rq-m7-queue` 跑 `ready-index-probe` fails []、`stream-produce-probe --group` PASS（`AGENT-rq-m7-queue.md`「探针」）。
 - `313b27c` 之后并入的只有锚帧段优先（队列选段）、探针修正与判定纯函数，不碰桌面导出路径。
@@ -137,7 +137,7 @@
 | A12 主文档长任务 | 计时 pending（参考值 0） | **过**：长任务 0 | — |
 | D9、D10、D14 | 过 | 过 | — |
 | D1-D2-D12 | 按新判据三张卡都是 pc 那份整份作废、两个候选都在 | 旧判据挂 → 判据改按出键分组（第 4 节第 7 条） | 新判据的笔记本一轮见下行 |
-| 最终一轮 M7-T1c（`88e70e3`） | — | 【待填：主会话补笔记本 M7-T1c 结果】 | — |
+| 最终一轮 M7-T1c（`88e70e3`，主会话记录） | — | 第 2 次跑（run `muku8rvfd6f7`）fails []，16 项全过，只 W7/cross-machine 待（本机替身；真跨机见 7.1 的 `m7w0928e`）；A4 27.6 s（锚帧段 h1 11.9 s → h2 19.8 s → h3 27.6 s，没夹别的段）、A5 695 ms、A12 长任务 0；D1-D2-D12 新判据过（h1、h3 中途被 D2 接手，只作说明）；bakeMs p50 117 / p95 162。第 1 次跑 3.5 分钟时页面导航 180 s 超时（暂时性故障），退避 60 s 重跑 | 笔记本回执 M7-T1c |
 
 - 本机 run12 的三条 fail 与原因在 `AGENT-m7-accept-probe.md` 第二段；run13 原始结果行在第三段。
 - M7-A4 的夹具由「3 张重 Motion 卡」改述为「3 张实测为重的独立内置卡」〔裁〕：Motion 卡在快机器上判轻、不产任务（`AGENT-m7-accept-probe.md`「发现的缺口」第 5 条）；验收用 `probe-slow-stepped`。
@@ -202,7 +202,7 @@
 | 项 | 状态 |
 |---|---|
 | W7（契约第 10 节） | 过（7.1） |
-| M7-A4 等计时项（笔记本） | M7-T1b 过；M7-T1c【待填】 |
+| M7-A4 等计时项（笔记本） | M7-T1b 过；M7-T1c 过（A4 27.6 s） |
 | E5 放云端（M8 计划第 2.1 节） | 归 M8 |
 
 ## 8. 顾问调用记录
@@ -254,5 +254,5 @@
 
 ## 13. 占位清单
 
-- 第 3 节：`88e70e3` 的 G0 一行与 G0-R 一列【待填：主会话补】。
-- 第 5 节、第 7.3 节：笔记本 M7-T1c（`88e70e3`）【待填：主会话补】。
+- 第 3 节：`88e70e3` 的 G0 与 G0-R 已补（主会话记录）。
+- 第 5 节、第 7.3 节：笔记本 M7-T1c 已补（主会话记录）。
