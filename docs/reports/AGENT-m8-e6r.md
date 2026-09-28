@@ -94,13 +94,21 @@ FAIL J-all-done {"total":21,"done":9, notDone: 10 个 failed、2 个 open}
 
 - `npx tsc -b --force`:退出码 0,没有输出。
 - `npm test`:退出码 0,共 3758 个测试,通过 3756,失败 0,跳过 2。
-- 原有 `c10-browser-probe` 本机替身(不带新开关):结果见下面第 3.1 节。
+- 原有 `c10-browser-probe` 本机替身(不带新开关):`ok: true`、`fails: []`,详见第 3.1 节。
 
 ### 3.1 原有本机替身(不带新开关)
 
 命令:`node scripts/probes/c10-browser-probe.mjs --base-port 5740 --out <目录>`
 
-(结果待本节补上。)
+改完之后(`base2`)退出码 0,用时 326 s:
+
+```
+{"ok":true,"fails":[],"pending":[],"mode":"a1-a5","ms":326287,"cleanup":{"deleted":"shared.admin.ok","listening":[]},"layer0":3,
+ "a5":{"claimant":"0c10b0e5f1a9e7d2","newLayer":{"resultKey":"e8065d11146a","envFingerprint":"258acaaa7c5fe509","by":"page","ready":60},"shown":{"t":2.13,"planeSig":"12196:1yjsbn0"}},
+ "play":{"longTasks":0,"distinct":57}}
+```
+
+改之前,同一检出上不带新开关跑过一次(`base1`,当时 e6r1 刚跑完),`ok: false`,失败 21 条:层表 v 2 判据、A5 新快照超时(与上面两处过时判据一致),另有舞台握手失败(`handshake: failed`、只握上舞台 A)引出的 A1～A4、A2 一串。改后再跑全过,舞台握手那一串没有复现。原因没查实,只在这里记一笔:可能是本机偶发,也可能是与前一轮收尾挨得太近。
 
 ## 4. 没做成的,与建议
 
@@ -141,4 +149,11 @@ node scripts/probes/c10-browser-probe.mjs --role host --run <id> --coord http://
 
 ## 6. 提交
 
-(见分支 `git log a52344a..claude/m8-e6r`。)
+分支 `claude/m8-e6r`,在 `a52344a` 之上:
+
+- `8a4d8f7` 报告:建文件
+- `58332eb` 探针:加 `--e6-reverse`
+- `39a8ee7` 探针:按 M7 D1 双份判;X 不碰自己指纹的任务;层表 v 3 也认
+- `120e95a` 探针:A5 新快照认主机或页面自己出的层,失败时给精简诊断
+- `1ede602` 报告:本机替身结果、跨机命令与建议
+- 本条所在的提交:报告补基线结果
