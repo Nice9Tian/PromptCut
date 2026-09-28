@@ -31,7 +31,7 @@
 import { getState } from "../store/project";
 import type { Project } from "../kernel/project";
 import { cardMountedAt } from "../render/frameWindow.mjs";
-import { catchUpEstimateMs } from "../render/catchUpEstimate.mjs";
+import { catchUpEstimateMs, playingLeadMs, sceneCatchUpCost } from "../render/catchUpEstimate.mjs";
 import { clipWeight, pipelineAt } from "../render/pipelinePlan.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { StageEvent, StageRpcClient } from "../render/stageRpc";
@@ -70,6 +70,33 @@ export interface SwapHost {
   lowMemory?(): boolean;
 }
 
+/** 诊断:最近几次暂停态第二路的结果(探针看) */
+const swapLog: { at: number; t: number; stale: number; ready: boolean; swapped: boolean; error?: string }[] = [];
+export function stageSwapDebug() {
+  return swapLog.slice();
+}
+/** 诊断:暂停态第二路每次进门、判据与出门的原因(C10-A4 排障;探针看) */
+const swapTrace: Record<string, unknown>[] = [];
+function trace(entry: Record<string, unknown>): void {
+  swapTrace.push({ at: Math.round(performance.now()), ...entry });
+  if (swapTrace.length > 40) swapTrace.shift();
+}
+export function stageSwapTrace() {
+  return swapTrace.slice();
+}
+/** 诊断:按卡说明 `staleOnBackCatchUp` 为什么收 / 不收它 */
+export function staleExplain(project: Project, t: number): Record<string, unknown>[] {
+  const plan = currentPlan();
+  const fps = Math.max(1, project.fps || 30);
+  const { identityKeys, frameModes } = clipIdentityOf(project);
+  return activeCardClips(project, t).map((clip) => {
+    const record = recordOf(project, clip.id);
+    let tier: string | undefined;
+    try { if (record) tier = clipWeight(record, frameModes[clip.id], fps, currentTuning()).tier; } catch { tier = "error"; }
+    return { id: clip.id.slice(0, 8), pipeline: pipelineAt(plan, clip.id, t) ?? null, key: identityKeys[clip.id]?.slice(0, 10) ?? null, record: !!record, vtOk: record?.vtOk, tier };
+  });
+}
+
 /** 此刻是不是低内存档(宿主说了算;没有宿主 = 普通档) */
 export function swapBlockedByLowMemory(): boolean {
   try { return host?.lowMemory?.() === true; } catch { return false; }
@@ -82,10 +109,62 @@ export function setSwapHost(next: SwapHost | null): void {
 
 /** 正在跑的那一次（同时只能有一次：后台舞台只有一台） */
 let running = false;
+/** 诊断:占着 `running` 的是哪一路 */
+let runningKind: "settle" | "playing" | null = null;
 /** 上一次的预估补跑时长（K3(b) 第二次翻倍） */
 let lastGuessMs = 0;
 /** 第二路正在跑时又来的 settle：只记**最后**那一次，当前这次结束后补做（R5-15） */
 let pendingSettleT: number | null = null;
+/** 占着 `running` 的是第几次（让路之后旧的那一次收手时不能再动 `running`） */
+let runSeq = 0;
+let owner = 0;
+/**
+ * 正在跑的播放态互换的中止开关。停下时（暂停 / 点击 / 拖动松开 / 播放到头）暂停态第二路拿它
+ * **抢断**播放态补跑，不等它自己收手（C10-A4 后续）。进了互换那一步（`swapAndDress`）就置空、
+ * 不再可抢 —— 换到一半的新 `front` 还没穿戴好，让它换完，停下那一次照 R5-15 在收手时补做。
+ */
+let playingAbort: AbortController | null = null;
+/** 诊断:让路的次数与最近一次 */
+let preemptCount = 0;
+/**
+ * 被抢断时后台舞台上还在跑的补跑 `render`（父页已经不等它的回包了）。暂停态第二路的第 (1) 步
+ * `pushProject(reset)` 会在舞台下一次让出时把它掐成 `'project'`；这一刻没有要补跑的卡时，
+ * 由 `abortOrphanRender` 单独掐一次，免得它在后台白推十几秒。
+ */
+let orphanRender: Promise<unknown> | null = null;
+
+/** `p` 与中止信号赛跑：信号先到回 `null`（不等 `p`） */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal | undefined): Promise<T | null> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise<T | null>((resolve, reject) => {
+    const onAbort = () => resolve(null);
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then((v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
+      (e) => { signal.removeEventListener("abort", onAbort); reject(e); });
+  });
+}
+
+/** 记下没人等的补跑 `render`：它落定（推完或被掐）就不再算孤儿 */
+function markOrphan(p: Promise<unknown>): void {
+  orphanRender = p;
+  const clear = () => { if (orphanRender === p) orphanRender = null; };
+  p.then(clear, clear);
+}
+
+/**
+ * 掐掉后台舞台上没人等的补跑。排在 `catchup` 档（探针让路）；`pushProject(reset)` 让舞台在下一次
+ * 让出时把在飞的 `render` 回成 `'project'`（`job: 'catchup'` 期间一律丢弃，不重发）。
+ * 这份项目本来就是当前项目，之后探针要缩水项目时照常自己重灌。
+ */
+async function abortOrphanRender(project: Project): Promise<void> {
+  // 不在这里先看 `orphanRender`:刚抢断的那一刻,被抢的那个活还没来得及记下它;排在它后面的这个活开工时就记下了
+  await runBackJob("catchup", async (ctx) => {
+    if (!orphanRender || !ctx.stage || ctx.stage === frontStage()) return;
+    trace({ op: "orphan-abort" });
+    await pushProject("back", project, { reset: true });
+  });
+}
 
 export function swapInFlight(): boolean {
   return running;
@@ -197,17 +276,68 @@ export function staleOnBackCatchUp(project: Project, t: number): string[] {
  *
  * **只改「追多少」这个实际取值**：K2 的轻重分派仍按整段最差判（pinned 渲染 3、
  * `clipWeight` 一个字不动）。
+ *
+ * **补跑是整场景推的，所以估的是整台戏**（C10-A4 后续）：场上每张卡（判重的也算，后台舞台没有
+ * 分派表、整台戏都活渲）各按上面的公式从 max(入点, 起推点) 估到 `t`，加起来。只有目标卡一张时
+ * 和以前一样。`clipIds` 只用来判「目标卡有没有数」，都没有就再加 1 秒兜底。
  */
 export function guessCatchUpMs(project: Project, clipIds: readonly string[], t: number): number {
-  const fps = Math.max(1, project.fps || 30);
-  const starts = new Map(activeCardClips(project, t).map((c) => [c.id, c.start]));
-  let worst = 0;
-  for (const id of clipIds) {
-    const start = starts.get(id);
-    const frames = start === undefined ? 0 : (t - start) * fps;
-    worst = Math.max(worst, catchUpEstimateMs(recordOf(project, id), frames));
+  return sceneCostOf(project, clipIds, t).backlogMs;
+}
+
+/**
+ * 场上全部卡片段（隐藏轨道除外）连同成本记录 —— 后台舞台补跑时整台戏都活渲，判重的卡也推。
+ */
+function sceneEntries(project: Project) {
+  const out: { id: string; start: number; end: number; record: CardCostRecord | undefined }[] = [];
+  for (const tr of project.tracks) {
+    if (tr.hidden) continue;
+    for (const clip of tr.clips) {
+      if (!clip.cardId && !clip.nodeId) continue;
+      out.push({ id: clip.id, start: clip.start, end: clip.end, record: recordOf(project, clip.id) });
+    }
   }
-  return worst > 0 ? worst : DEFAULT_CATCHUP_GUESS_MS;
+  return out;
+}
+
+/**
+ * 整场景补跑到 `t` 的积压与此后的推帧速率（`sceneCatchUpCost`）。
+ *
+ * **同场的重卡一起算**（C10-A4 后续）：以前只按目标轻卡自己的 `catchUpMs` 估，而后台舞台是整台戏
+ * 从最早的入点逐帧推，判重的慢卡每帧都要推一遍 —— 实测一张 90 ms 的轻卡带着 9 张 40 ms/帧的重卡，
+ * 补到 1.03 秒用了 11 秒，目标拍早被可见舞台走过。
+ *
+ * 目标卡自己一个数都没有时（没有成本记录，照理不会发起），积压上再加 1 秒的兜底。
+ */
+function sceneCostOf(project: Project, clipIds: readonly string[], t: number): { backlogMs: number; ratePerSec: number } {
+  const fps = Math.max(1, project.fps || 30);
+  const entries = sceneEntries(project);
+  const { backlogMs, ratePerSec } = sceneCatchUpCost(entries, t, fps, cardMountedAt);
+  const known = entries.some((e) => clipIds.includes(e.id) && catchUpEstimateMs(e.record, Math.max(0, t - e.start) * fps) > 0);
+  return { backlogMs: backlogMs + (known ? 0 : DEFAULT_CATCHUP_GUESS_MS), ratePerSec };
+}
+
+/**
+ * 播放态互换发起前的判断：目标拍领先播放头多少；**追不上就不发起**（C10-A4 后续）。
+ *
+ * 追不上有两种：
+ *   - `rate`：后台舞台推 1 秒时间线要花 1 秒以上墙钟（场上的卡每帧加起来超过一拍）—— 可见舞台
+ *     按 1 秒 / 秒往前走，后台永远到不了目标拍；
+ *   - `past-end`：解出来的目标拍落在这几张目标卡全部出场之后 —— 换过去它们已经不在画面上了。
+ *
+ * 这两种情况以前也发起互换：整场景补跑白占后台舞台十几秒（测量、认领都得让路），换来的只是
+ * 「武装停已过」两次之后的降级。播放中本来就不追精确（`product/rendering.md`「停下就精确」只管停下），
+ * 所以这里干脆不发起；停下那一刻暂停态第二路照常把它补成精确活渲。
+ */
+export function planPlayingSwap(project: Project, clipIds: readonly string[], t: number):
+  { ok: true; leadMs: number; backlogMs: number; ratePerSec: number } | { ok: false; reason: "rate" | "past-end"; backlogMs: number; ratePerSec: number; leadMs: number | null } {
+  const { backlogMs, ratePerSec } = sceneCostOf(project, clipIds, t);
+  const leadMs = playingLeadMs(backlogMs, ratePerSec);
+  if (leadMs === null) return { ok: false, reason: "rate", backlogMs, ratePerSec, leadMs };
+  let lastEnd = -Infinity;
+  for (const tr of project.tracks) for (const clip of tr.clips) if (clipIds.includes(clip.id)) lastEnd = Math.max(lastEnd, clip.end);
+  if (t + leadMs / 1000 >= lastEnd) return { ok: false, reason: "past-end", backlogMs, ratePerSec, leadMs };
+  return { ok: true, leadMs, backlogMs, ratePerSec };
 }
 
 /* ------------------------------------------------------------------ 等事件 */
@@ -239,29 +369,42 @@ interface BackReady {
  * (1)(2)(3)：把后台舞台补到 `targetSec` 并等它的素材层出一帧。
  * 排进 `stageJobs` 的 `catchup` 档 —— 探针整体让路，掐出来的 `'project'` 一律丢弃（E0 的例外）。
  */
-async function catchUpBack(project: Project, targetSec: number): Promise<BackReady | null> {
+async function catchUpBack(project: Project, targetSec: number, preempt?: AbortSignal): Promise<BackReady | null> {
   // 低内存档不追活渲、也没有后台舞台(c10a 第 8 节):一步都不排
   if (swapBlockedByLowMemory()) return null;
+  trace({ op: "catchup-queued", t: targetSec });
   return await runBackJob("catchup", async (ctx) => {
     const back = ctx.stage;
+    trace({ op: "catchup-start", t: targetSec, back: !!back, sameAsFront: back === frontStage() });
+    if (preempt?.aborted) return null;
     if (!back || back === frontStage()) return null;   // legacy 单舞台：没有后台可换
     // (1) 探针可能把它换成了缩水项目，整份重灌并更新 stageBridge 的基线
     await pushProject("back", project, { reset: true });
-    if (ctx.signal.aborted) return null;
+    if (ctx.signal.aborted || preempt?.aborted) return null;
     // (2) 整场景从最早的 mountFrameOf 补到目标拍。不传 maxCatchUp 会被 6000 ms 削掉起点
-    const reply = await back.render(targetSec, { jump: true, maxCatchUp: Infinity });
+    const pending = back.render(targetSec, { jump: true, maxCatchUp: Infinity });
+    /*
+     * 被抢断(停下了)就**不等这次 render 的回包**,当场把单飞队列让给暂停态第二路:它的第 (1) 步
+     * `pushProject(reset)` 会在舞台下一次让出时掐掉这次 render。等回包的话要等舞台把整台戏推到
+     * 目标拍(C10-A4 实测约 1.5 秒,重的项目十几秒)。
+     */
+    const reply = await untilAborted(pending, preempt);
+    if (reply === null) { markOrphan(pending); trace({ op: "catchup-preempted", t: targetSec }); return null; }
+    trace({ op: "catchup-rendered", t: targetSec, aborted: "aborted" in reply ? reply.aborted : false, reason: (reply as { reason?: string }).reason });
     if ("aborted" in reply && reply.aborted) return null;
-    if (ctx.signal.aborted) return null;
+    if (ctx.signal.aborted || preempt?.aborted) return null;
     // (3) 素材层也到位（最多等 300 ms，超时照样换）
     const ready = waitForEvent((e) => e.type === "mediaReady", MEDIA_READY_TIMEOUT_MS);
     await back.setMediaT(targetSec);
-    await ready;
+    await untilAborted(ready, preempt);
+    if (preempt?.aborted) return null;
     return { back, atSec: targetSec };
   });
 }
 
 /** (4)(5)：互换并把新 `front` 该有的状态补齐 */
 async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClient | null> {
+  dressError = null;
   const oldFront = frontStage();
   const swapped = host?.swapRoles();
   if (!swapped?.front) return null;
@@ -304,9 +447,10 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
       await next.setScrubbing(false);
       await next.setProxy(host?.proxy() ?? false);
     }
-  } catch { /* iframe 正在换：下一次 setTime 会把状态重新摆一遍 */ }
+  } catch (e) { dressError = String((e as Error)?.message ?? e).slice(0, 160); /* iframe 正在换：下一次 setTime 会把状态重新摆一遍 */ }
   return next;
 }
+let dressError: string | null = null;
 
 /**
  * 暂停态的第二路（K5）：`setTime(t, { settle: true })` 之后，只要有一张判重卡是
@@ -320,21 +464,49 @@ export async function runSettleSwap(t: number): Promise<boolean> {
    * 按最后那一次的 `t` 再做一遍；中间被盖掉的那些本来就不用做。
    */
   // 低内存档:暂停后不追到活渲,停在已有的预渲染小尺寸上(c10a 第 8 节)
-  if (swapBlockedByLowMemory()) return false;
-  if (running) { pendingSettleT = t; return false; }
+  if (swapBlockedByLowMemory()) { trace({ op: "settle", t, out: "lowmem" }); return false; }
+  /*
+   * **播放态补跑立即让路**(C10-A4 后续):停下时正在跑的若是播放态互换,当场中止它、接过 `running`,
+   * 暂停态第二路马上开始,不等它收手。播放态那一次整场景补跑的目标拍是「播放头 + 估时」,停下之后
+   * 它推出来的那一拍用不上;以前要等它推完(实测约 1.5 秒)、放掉 `running`,停下那一次才轮得到。
+   * 仍在播放(没停)、或它已经进了互换那一步(`playingAbort` 置空)时照旧只记下,由它收手时补做。
+   */
+  let preempted = false;
+  if (running) {
+    if (runningKind === "playing" && playingAbort && !getState().playing) {
+      trace({ op: "settle", t, out: "preempt" });
+      playingAbort.abort();
+      playingAbort = null;
+      preemptCount++;
+      preempted = true;
+    } else {
+      trace({ op: "settle", t, out: "running", runningKind });
+      pendingSettleT = t;
+      return false;
+    }
+  }
   running = true;
+  runningKind = "settle";
+  const me = owner = ++runSeq;
   try {
     let target = t;
     for (;;) {
       pendingSettleT = null;
       let swapped = false;
       const project = getState().project;
-      if (staleOnBackCatchUp(project, target).length) {
+      const stale = staleOnBackCatchUp(project, target).length;
+      trace({ op: "settle", t: target, stale, plan: !!currentPlan(), costs: currentCosts().length, ...(stale ? {} : { cards: staleExplain(project, target) }) });
+      // 这一拍不用补跑,但刚抢断的播放态补跑可能还在后台舞台上推:单独掐掉(要补跑时第 (1) 步顺手就掐了)
+      if (!stale && (preempted || orphanRender)) await abortOrphanRender(project);
+      preempted = false;
+      if (stale) {
         const ready = await catchUpBack(project, target);
         // 补跑期间用户又动了：这一次作废（下面那一轮按最新的 `t` 重来）
         if (ready && Math.abs(getState().t - target) <= 1e-6 && !getState().playing) {
           swapped = !!(await swapAndDress(target, false));
         }
+        swapLog.push({ at: Math.round(performance.now()), t: target, stale, ready: !!ready, swapped, ...(dressError ? { error: dressError } : {}) });
+        if (swapLog.length > 10) swapLog.shift();
       }
       const next = pendingSettleT;
       // 没有新请求、或新请求就是刚做完的这一拍：收工
@@ -342,8 +514,11 @@ export async function runSettleSwap(t: number): Promise<boolean> {
       target = next;
     }
   } finally {
-    running = false;
-    pendingSettleT = null;
+    if (owner === me) {
+      running = false;
+      runningKind = null;
+      pendingSettleT = null;
+    }
   }
 }
 
@@ -360,7 +535,22 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
   if (swapBlockedByLowMemory()) return false;
   const project = getState().project;
   if (!pendingIds.length) return false;
+  /*
+   * 估出来追不上就不发起(C10-A4 后续,`planPlayingSwap`):不抑制、不排后台任务、不占 `running`。
+   * 以前照样发起,整场景补跑白占后台舞台十几秒,最后「武装停已过」两次再降级。
+   */
+  const plan = planPlayingSwap(project, pendingIds, getState().t);
+  lastPlayingPlan = { at: Math.round(performance.now()), t: getState().t, ...plan };
+  if (!plan.ok) {
+    trace({ op: "playing", t: getState().t, ids: pendingIds.map((id) => id.slice(0, 8)), out: `skip-${plan.reason}`, backlogMs: Math.round(plan.backlogMs), ratePerSec: Math.round(plan.ratePerSec) });
+    return false;
+  }
   running = true;
+  runningKind = "playing";
+  const me = owner = ++runSeq;
+  const abort = new AbortController();
+  playingAbort = abort;
+  trace({ op: "playing", t: getState().t, ids: pendingIds.map((id) => id.slice(0, 8)), leadMs: Math.round(plan.leadMs), backlogMs: Math.round(plan.backlogMs), ratePerSec: Math.round(plan.ratePerSec) });
   // 等待期间这几张卡进 front 的 suppressed（藏子树、t 冻住 —— 没有平面时舞台显示占位符 T4）
   setExtraSuppressed(pendingIds);
   /**
@@ -380,16 +570,18 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
   let gaveUp = false;
   try {
     const fps = Math.max(1, project.fps || 30);
-    lastGuessMs = guessCatchUpMs(project, pendingIds, getState().t);
+    // 领先量按整场景估(同场的重卡一起推),含「边补边被可见舞台追」的那一截
+    lastGuessMs = plan.leadMs;
     const beatOf = (sec: number) => Math.round(sec * fps);
     let target = Math.ceil((getState().t + lastGuessMs / 1000) * fps) / fps;
-    let ready = await catchUpBack(project, target);
+    let ready = await catchUpBack(project, target, abort.signal);
     if (!ready) return false;
     for (let attempt = 0; attempt < 2; attempt++) {
       const oldFront = frontStage();
-      if (!oldFront || !getState().playing) return false;
+      if (!oldFront || !getState().playing || abort.signal.aborted) return false;
       const armed = waitForEvent((e) => e.type === "frame" && beatOf(e.sec) >= beatOf(target), ARM_WAIT_TIMEOUT_MS);
-      const reply = await oldFront.pause({ atSec: target });
+      const reply = await untilAborted(oldFront.pause({ atSec: target }), abort.signal);
+      if (!reply) return false;
       if (reply.ok && reply.passed) {
         // 可见舞台先走到了 T：重取 T' 并对 back **续推**（不带 jump，从 T 接着推）
         // 两次都追不上 → 改判为重（K6）并留在 suppressed（R5-11）
@@ -398,30 +590,66 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
         target = Math.ceil((getState().t + lastGuessMs / 1000) * fps) / fps;
         const back = backStage();
         if (!back) return false;
-        const again = await back.render(target, { maxCatchUp: Infinity });
+        const pending = back.render(target, { maxCatchUp: Infinity });
+        const again = await untilAborted(pending, abort.signal);
+        if (!again) { markOrphan(pending); return false; }
         if ("aborted" in again && again.aborted) return false;
         const media = waitForEvent((e) => e.type === "mediaReady", MEDIA_READY_TIMEOUT_MS);
         await back.setMediaT(target);
-        await media;
+        await untilAborted(media, abort.signal);
         continue;
       }
       if (!reply.ok) return false;
-      await armed;
+      await untilAborted(armed, abort.signal);
+      // 停下了(抢断),或武装停等到超时时已不在播放:不再换成播放态
+      if (abort.signal.aborted || !getState().playing) return false;
+      // 进了互换这一步就不再可抢:换到一半的新 front 还没穿戴好(停下那一次照 R5-15 在收手时补做)
+      if (playingAbort === abort) playingAbort = null;
       // 互换之后新 front 的 H(T) 里没有它们(它们判轻),所以这一份要先清掉
       setExtraSuppressed([]);
       return !!(await swapAndDress(target, true));
     }
     return giveUp();
   } finally {
-    running = false;
+    const preempted = owner !== me;
+    trace({ op: "playing-end", t: getState().t, gaveUp, preempted, pendingSettleT: preempted ? null : pendingSettleT });
+    if (playingAbort === abort) playingAbort = null;
     // 放弃那一次**不清**：那张卡活渲出来的状态是错的，死素材就绪前留在 suppressed（R5-11）
     if (!gaveUp) setExtraSuppressed([]);
+    // 被暂停态第二路抢断了:`running` 已经归它,下面的交接也轮不到这里
+    if (!preempted) {
+      running = false;
+      runningKind = null;
+      /*
+       * **跑着时来的暂停态 settle 交给暂停态那一路**(R5-15 的另一半;C10-A4)。
+       * 停下时一般已经当场抢断(见 `runSettleSwap`),走到这里的是抢不了的那几种:停下那一刻它已经进了
+       * 互换那一步,或者 settle 来时 store 还在播放。以前只有暂停态那一路会消费 `pendingSettleT`,
+       * 这里收手时既不做也不交出去 —— 判重的 `vtOk = false` 卡就停在快照上,直到下一次跳转或播放,
+       * 违背「停下就精确」。收手时又在播放了就不补:下一次停下自己会再来一次。
+       */
+      const next = pendingSettleT;
+      pendingSettleT = null;
+      if (next !== null && !getState().playing) void runSettleSwap(next).catch(() => { /* 后台舞台正在换:下一次 setTime 会重来 */ });
+    }
   }
+}
+
+/** 诊断:最近一次播放态互换的发起判断(领先量、积压、速率,或为什么不发起)与让路次数(探针看) */
+let lastPlayingPlan: Record<string, unknown> | null = null;
+export function stageSwapPlayingDebug() {
+  return { lastPlan: lastPlayingPlan, preemptCount, orphan: !!orphanRender };
 }
 
 /** 测试用 */
 export function resetStageSwap(): void {
   running = false;
+  runningKind = null;
+  pendingSettleT = null;
   lastGuessMs = 0;
   host = null;
+  playingAbort = null;
+  orphanRender = null;
+  owner = 0;
+  preemptCount = 0;
+  lastPlayingPlan = null;
 }

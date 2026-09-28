@@ -95,6 +95,11 @@ export interface StageClock {
      * 父页的 RPC 消息、iframe 自己的 resize 都得有机会进来。缺省不让(只让微任务)。
      */
     yieldEvery?: number;
+    /**
+     * 帧与帧之间查一次的「停止标志」(C10 契约第 2 节:后台活由编辑器页经 RPC 发开始 / 停止)。回 Promise 就等它落定
+     * (停着的时候不推、不丢,恢复了接着推);回 `void` 照常推。只在帧之间调,不改变推出来的任何一帧。缺省没有。
+     */
+    gate?: () => void | Promise<void>;
   }): Promise<void>;
 }
 
@@ -238,6 +243,7 @@ export function installStageClock(): StageClock {
       while (ms < target) {
         if (opts.yieldEvery && ran > 0 && ran % opts.yieldEvery === 0) await new Promise<void>((r) => realTimeout(r, 0));
         else await Promise.resolve();
+        if (opts.gate && ran > 0) { const g = opts.gate(); if (g) await g; }
         if (opts.abort?.()) return;
         ran++;
         ms = Math.min(target, ms + step);

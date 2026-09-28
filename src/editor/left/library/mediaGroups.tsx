@@ -8,9 +8,10 @@ import { PreviewCard } from "../PreviewCard";
 import { requestCaptions } from "../captionsBus";
 import { AudioStrip } from "./AudioStrip";
 import { useMediaTierPolicy, usePreviewMediaUrl } from "../../media/previewUrl";
-import { previewMediaUrl } from "../../../render/mediaTier";
+import { mediaTierPolicy, originalMediaUrl, previewMediaUrl } from "../../../render/mediaTier";
 import { ThumbTile } from "./ThumbTile";
 import type { GroupData, GroupItem } from "./groups";
+import { onlinePage, onlineUnsupported } from "../../../online/pageFlag";
 
 /**
  * 素材库的视频 / 图片 / 音频三个组:导入进来的素材。
@@ -300,7 +301,12 @@ export function useMediaMenu(flash: (text: string, ms?: number) => void) {
       let height = m.height;
       if (!width || !height || width <= 0 || height <= 0) {
         // 图片得用 <img> 量,拿 <video> 读它只会报「加载视频元数据失败」
-        const measured = m.kind === "image" ? await measureImageDimensions(m.url) : await measureVideoDimensions(m.url);
+        // 量的必须是原尺寸(量小尺寸会把画幅设小):桌面原样 m.url,在线页面走远程素材服务上的原尺寸。
+        // 低内存档平时不拉原尺寸:素材没记下宽高就不量,照实说
+        const policy = mediaTierPolicy();
+        const url = policy.lowMemory ? "" : originalMediaUrl(m, policy);
+        if (!url) { alert("这份素材没有记下分辨率，在这台设备上量不了"); return; }
+        const measured = m.kind === "image" ? await measureImageDimensions(url) : await measureVideoDimensions(url);
         width = measured.width;
         height = measured.height;
       }
@@ -322,6 +328,8 @@ export function useMediaMenu(flash: (text: string, ms?: number) => void) {
           {
             label: m.transcript ? "查看字幕" : "转写字幕",
             hint: m.transcript ? `${m.transcript.segments.length} 段` : undefined,
+            // 在线浏览器模式没有语音识别(C10 契约第 10 节):没有字幕的只能转写,置灰;已有字幕的照常查看
+            ...(!m.transcript && onlinePage() ? { disabled: true, title: onlineUnsupported("语音识别") } : {}),
             // 走全局入口:左栏切到「字幕」分区、展开抽屉、聚焦这份素材
             onClick: () => requestCaptions(m.id),
           },

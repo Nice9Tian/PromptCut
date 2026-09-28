@@ -65,7 +65,9 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       {items.map((item, i) => (
         <div
           key={i}
-          className={`pc-tl-ctxmenu-item px-3 py-1.5 cursor-pointer ${item.disabled ? "opacity-50 pointer-events-none" : ""}`}
+          title={item.title}
+          aria-disabled={item.disabled || undefined}
+          className={`pc-tl-ctxmenu-item px-3 py-1.5 cursor-pointer ${item.disabled ? (item.title ? "opacity-50 cursor-default" : "opacity-50 pointer-events-none") : ""}`}
           onClick={() => {
             if (!item.disabled) {
               item.action();

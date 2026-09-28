@@ -22,7 +22,7 @@
  */
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
-import { isBackfillPlan } from './render-queue/index.mjs';
+import { isListPlan } from './render-queue/index.mjs';
 
 /** 按版本缓存的上下文条数(附件第 3 节:LRU 约 4 条) */
 export const PLAN_CACHE_SIZE = 4;
@@ -35,10 +35,12 @@ const fail = (code, message, retryable) => Object.assign(new Error(message), { c
  * @param {{ get(projectId: string, projectRev: number): Promise<object | null> }} options.projects  J.2 的项目客户端
  * @param {(project: any) => any} [options.prepareProject]  缺省原样;预渲染进程传 `renderProject`
  * @param {(event: string, fields?: object) => void} [options.log]
+ * @param {(entry: object) => void} [options.publishLayerMap]  认下带片段清单的 plan 之后写层表(C10 契约第 18 节第 9 条):
+ *   独立渲染主机没有推送队列,管线自己的 `publishLayerMap` 写不出去,由主机按这条连接的内容库写;PC 节点不给(照旧由推送队列写)
  * @param {() => unknown} [options.codeStamp]  卡片代码的版次(c66-host-cards:`card-code.mjs` 的 `epoch`)。缓存按
  *   「项目版本 + 版次」存:卡片代码变了(同步装上了新卡),同一版项目的上下文要按新代码重算,不然任务对回的还是旧的 control
  */
-export function createPrerenderExecutor({ pipeline, projects, prepareProject = project => project, log = () => {}, codeStamp = () => '' }) {
+export function createPrerenderExecutor({ pipeline, projects, prepareProject = project => project, log = () => {}, codeStamp = () => '', publishLayerMap = null }) {
   if (!pipeline) throw new Error('createPrerenderExecutor needs a pipeline');
   if (!projects || typeof projects.get !== 'function') throw new Error('createPrerenderExecutor needs a project client');
   /** `projectId@projectRev` → Promise<{ entry, context }>;Map 的插入顺序就是 LRU 顺序 */
@@ -86,10 +88,15 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   async function plan(planTask, { signal } = {}) {
     const { id } = versionOf(planTask);
     const { entry, context } = await contextFor(planTask, signal);
-    // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做
-    if (isBackfillPlan(planTask) && typeof pipeline.addBackfill === 'function') {
+    // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
+    // C10 契约第 18 节第 9 条:在线页面的清单计划同一条路(清单是页面自己判重的片段)
+    if (isListPlan(planTask) && typeof pipeline.addBackfill === 'function') {
       const added = pipeline.addBackfill(entry, planTask.input?.clips ?? []);
       say('executor.backfill', { version: id, clips: planTask.input?.clips?.length ?? 0, added });
+    }
+    // 在线页面按层表找清单(页面不算键):没有推送队列的节点(独立渲染主机)在这里写一份这一版的层表
+    if (isListPlan(planTask) && typeof publishLayerMap === 'function') {
+      try { publishLayerMap(entry); } catch (error) { say('executor.layer-map-failed', { version: id, message: String(error?.message ?? error) }); }
     }
     say('executor.plan', { version: id, entryKey: entry.key, controls: context.cardPlan.length, locks: context.cardLocks?.size ?? 0 });
     return context;

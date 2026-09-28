@@ -17,12 +17,13 @@
  * - X3 `watch: 'all'` 收紧：`browser` 回 `error { reason: 'forbidden' }`；`host` 只收项目摘要 `queue.summary`
  *   （形状同契约 H.3），不收单任务增量；`pc` 照旧。见 onWatch。
  * - X4 plan 就近认领：带 `requires.preferNode` 的 plan 在发布后 `PLAN_PREFER_MS` 之内只给那个节点认领，
- *   别的回 `preferred`（带 `retryInMs`）；窗口过后任何指纹符合的 pc 能认领。`host`、`browser` 认领 plan 一律回
- *   `plan-profile`。preferNode 断开，窗口立即结束、重连不恢复（集成裁定，见 detachNode）。
+ *   别的回 `preferred`（带 `retryInMs`）；窗口过后任何指纹符合的 pc 能认领。`browser` 认领 plan 一律回
+ *   `plan-profile`；`host` 认领不带片段清单的 plan 回 `plan-profile`（C10 契约第 18 节第 9 条：带清单的 plan host 能认领）。
+ *   preferNode 断开，窗口立即结束、重连不恢复（集成裁定，见 detachNode）。
  */
 import { randomUUID } from 'node:crypto';
 import { QUEUE_DEFAULTS } from './constants.mjs';
-import { makeMessage, parseInbound, lockKeyOf, priorityBand, prioritySummaryValue, NODE_TYPES, PUBLISHER_TYPES } from './messages.mjs';
+import { makeMessage, parseInbound, lockKeyOf, priorityBand, prioritySummaryValue, isListPlan, NODE_TYPES, PUBLISHER_TYPES } from './messages.mjs';
 
 function resolveConstants(overrides) {
   const out = { ...QUEUE_DEFAULTS };
@@ -698,8 +699,10 @@ export function createRenderQueue(options = {}) {
       // 不带 state / version：别人的任务连状态也不给纯浏览器看
       return emit(conn, 'task.claim-rejected', { id, reason: 'forbidden' }, reqId);
     }
-    // X4：plan 只给 pc。独立主机不替任何页面做计划，纯浏览器没有 Chrome 和 card-cache（filter.mjs 规则 6 在节点侧也挡）
-    if (task.kind === 'plan' && (node.profile === 'host' || node.profile === 'browser')) {
+    // X4：plan 只给 pc。独立主机不替任何页面做计划，纯浏览器没有 Chrome 和 card-cache（filter.mjs 规则 6 在节点侧也挡）。
+    // C10 契约第 18 节第 9 条〔裁〕对 X4 的修改：带片段清单的 plan（在线页面的清单计划、低内存档的补渲计划）host 也能认领，
+    // 由认领的节点用自己的指纹切分；不带清单的桌面 plan 照旧只给 pc。纯浏览器一律不认领 plan
+    if (task.kind === 'plan' && (node.profile === 'browser' || (node.profile === 'host' && !isListPlan(task)))) {
       return emit(conn, 'task.claim-rejected', { id, reason: 'plan-profile' }, reqId);
     }
     if (task.state !== 'open') {

@@ -349,7 +349,9 @@ test('segment encoder command line follows G3: premultiplied, out_range=tv, stri
   const args = streamSegmentArgs({ encoder: 'libx264', fps: 30 });
   const joined = args.join(' ');
   assert.ok(args.includes('-reinit_filter') && args[args.indexOf('-reinit_filter') + 1] === '0');
-  assert.match(joined, /format=gbrap,premultiply=inplace=1,format=rgba/);
+  // 预乘之后直接在 gbrap 上分叉(不再转回 rgba,和旧写法逐字节等价,见 stream-encode-fast.test.mjs)
+  assert.match(joined, /\[0:v\]format=gbrap,premultiply=inplace=1,split=2\[c\]\[a\]/);
+  assert.match(joined, /\[a\]alphaextract,format=rgb24,pad=iw:ih\+8:0:0:black\[mask\]/);
   assert.match(joined, /scale=out_range=tv:out_color_matrix=bt709,format=yuv420p/);
   assert.match(joined, /-color_range tv/);
   assert.match(joined, /-c:v libx264 -preset veryfast -crf 16 -g 15 -keyint_min 15 -sc_threshold 0 -bf 0/);

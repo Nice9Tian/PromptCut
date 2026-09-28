@@ -3,11 +3,70 @@
  * - 「同步已暂停」:离线批次的第一条被拒、用户关掉了离线对话框(暂不决定)时一直显示,点它重新打开对话框
  *   (c65-design.md 第 8 节裁定);
  * - 「离线」:连不上文档服务时的提示(修改照常,先攒在本机);
+ * - 在线页面(C10 契约第 10 节):「离线」换成表 A 的五条状态措辞(`onlineStatus.ts`),另有「备份」小部件列出
+ *   本页内存里的备份、可逐个下载(同步面板);
  * - 共享项目:成员按钮(MembersPanel)。
  */
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { setOfflineOpen, useSync } from "./syncManager";
 import { MembersButton } from "./MembersPanel";
+import { BackupsDialog } from "./BackupsDialog";
+import { ONLINE } from "../../online/mode";
+import { remoteAssetsDown, subscribeRemoteAssetsHealth } from "../media/assetTiers";
+import { OFFLINE_SHOW_DELAY_MS, ONLINE_STATUS_TEXT, onlineStatusOf, type OnlineStatusKind } from "./onlineStatus";
 import "./sync.css";
+
+function subscribeNavigator(cb: () => void): () => void {
+  window.addEventListener("online", cb);
+  window.addEventListener("offline", cb);
+  return () => { window.removeEventListener("online", cb); window.removeEventListener("offline", cb); };
+}
+
+/** 在线页面顶栏的状态措辞;离线类的要持续 `OFFLINE_SHOW_DELAY_MS` 才出(HT-a 会话接续、马上重建会话时不闪) */
+function useOnlineStatus(): OnlineStatusKind | null {
+  const status = useSync((v) => v.status);
+  const recovery = useSync((v) => v.recovery);
+  const navigatorOnline = useSyncExternalStore(subscribeNavigator, () => navigator.onLine, () => true);
+  const assetDown = useSyncExternalStore(subscribeRemoteAssetsHealth, remoteAssetsDown, () => false);
+  const want = onlineStatusOf({ status, navigatorOnline, assetDown, recovery });
+  const offlineKind = want === "noNetwork" || want === "docDown" || want === "assetDown";
+  const [shown, setShown] = useState<OnlineStatusKind | null>(null);
+  useEffect(() => {
+    if (!offlineKind) { setShown(want); return; }
+    const t = setTimeout(() => setShown(want), OFFLINE_SHOW_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [want, offlineKind]);
+  // 离线类:等延迟过了才换上(延迟内又好了就根本不出);非离线类(恢复中 / 恢复完成 / 没事)当场换
+  return shown;
+}
+
+function OnlineStatusChip() {
+  const kind = useOnlineStatus();
+  if (!kind) return null;
+  const text = ONLINE_STATUS_TEXT[kind];
+  const tone = kind === "recovering" || kind === "recovered" ? "pc-sync-chip--recover" : "pc-sync-chip--offline";
+  return (
+    <span className={`pc-sync-chip pc-sync-chip--online ${tone}`} data-pc="sync-online-status" data-kind={kind} title={text} role="status">
+      <span className="pc-sync-chip-dot" />
+      <span className="pc-sync-chip-text">{text}</span>
+    </span>
+  );
+}
+
+/** 同步面板里的「备份」:本页内存里有备份才出现,点开列出、逐个下载 */
+function OnlineBackupsChip() {
+  const n = useSync((v) => v.onlineBackups);
+  const [open, setOpen] = useState(false);
+  if (!n) return null;
+  return (
+    <>
+      <button type="button" className="pc-sync-chip pc-sync-chip--backups" data-pc="sync-backups" title="被覆盖、离线丢弃的修改先留在本页，关闭页面前可以下载" onClick={() => setOpen(true)}>
+        备份 {n}
+      </button>
+      <BackupsDialog open={open} onClose={() => setOpen(false)} />
+    </>
+  );
+}
 
 export function SyncChips() {
   const status = useSync((v) => v.status);
@@ -21,12 +80,15 @@ export function SyncChips() {
           <span className="pc-sync-chip-dot" />
           同步已暂停
         </button>
+      ) : ONLINE ? (
+        <OnlineStatusChip />
       ) : status === "offline" ? (
         <span className="pc-sync-chip pc-sync-chip--offline" data-pc="sync-offline" title="连不上文档服务：修改照常，先攒在本机，恢复后按顺序提交">
           <span className="pc-sync-chip-dot" />
           离线
         </span>
       ) : null}
+      {ONLINE ? <OnlineBackupsChip /> : null}
       <MembersButton />
     </>
   );

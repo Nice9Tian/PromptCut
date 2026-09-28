@@ -147,7 +147,7 @@
 | 类别 | 路径 |
 |---|---|
 | 整个目录（跳过 `test/` 与 `*.test.*`） | `server/hosted/`、`server/docservice/`、`server/auth/`、`server/asset-store/`、`server/render-queue/` |
-| 单个文件 | `server/asset-service.ts`、`server/vite-plugin-media.ts`、`server/http-guard.mjs`、`server/asset-announce.mjs`、`server/render-node/ws-transport.mjs` |
+| 单个文件 | `server/asset-service.ts`、`server/vite-plugin-media.ts`、`server/http-guard.mjs`、`server/asset-announce.mjs`、`server/render-node/session-link.mjs`（M8 计划 D9 起地址登记走会话）、`server/render-node/ws-transport.mjs` |
 | 生成 | 部署目录根上的 `package.json`（`{ "type": "module" }`） |
 
 - 素材服务中间件是 `.ts`：靠 Node 的类型剥离直接载入（Node ≥ 22.18 / 24，远端 v24.21.0），不转译；

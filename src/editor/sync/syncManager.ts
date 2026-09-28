@@ -24,7 +24,15 @@ import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } fr
 import { connectSharedAssets, disconnectSharedAssets, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
 import { ONLINE } from "../../online/mode";
+
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
+ * 写成 `!ONLINE_BUILD && !ONLINE`:在线构建里整句折成 false,单测里把 `mode.ts` 换成在线桩时照旧按 `ONLINE` 走。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 import { loadBrowserDevice } from "../../online/device";
+import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
+import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
 
 /* ---------------- 界面状态 ---------------- */
 
@@ -71,6 +79,8 @@ export interface Toast {
   id: number;
   text: string;
   tone: "info" | "warn";
+  /** 气泡上的一个按钮(在线页面的「下载备份」):点了照样不关气泡,用户自己关 */
+  action?: { label: string; run: () => void; pc?: string };
 }
 
 export type Blocked = "kicked" | "removed" | "deleted";
@@ -128,6 +138,12 @@ export interface SyncView {
   agentOpsVersion: number;
   /** 工具调用记录(eventRecords)的版本号:变了就加一 */
   eventsVersion: number;
+  /** 还没拿到文档服务确认的本地提交条数(在线页面的离线提示用;桌面不更新,恒为 0) */
+  unconfirmed: number;
+  /** 在线页面从离线回来的恢复阶段(C10 契约第 10 节,`onlineStatus.ts` 的 `nextRecovery`) */
+  recovery: "recovering" | "recovered" | null;
+  /** 在线页面内存里的本地备份份数(`onlineBackups.ts`) */
+  onlineBackups: number;
 }
 
 let view: SyncView = {
@@ -144,6 +160,9 @@ let view: SyncView = {
   device: null,
   agentOpsVersion: 0,
   eventsVersion: 0,
+  unconfirmed: 0,
+  recovery: null,
+  onlineBackups: 0,
 };
 const viewListeners = new Set<() => void>();
 
@@ -166,10 +185,11 @@ export function useSync<T>(selector: (v: SyncView) => T): T {
 }
 
 let toastSeq = 0;
-export function pushToast(text: string, tone: Toast["tone"] = "info", ms = 6000) {
-  const t = { id: ++toastSeq, text, tone };
+/** `ms` 给 `Infinity` 就不自己消失(用户点 × 关) */
+export function pushToast(text: string, tone: Toast["tone"] = "info", ms = 6000, action?: Toast["action"]) {
+  const t: Toast = { id: ++toastSeq, text, tone, ...(action ? { action } : {}) };
   patch({ toasts: [...view.toasts, t] });
-  setTimeout(() => dismissToast(t.id), ms);
+  if (Number.isFinite(ms)) setTimeout(() => dismissToast(t.id), ms);
 }
 
 export function dismissToast(id: number) {
@@ -252,10 +272,36 @@ async function loadDevice(): Promise<DeviceInfo | null> {
 
 /* ---------------- 本地备份 ---------------- */
 
+/**
+ * 在线页面的本地备份只留在本页内存里(C10 契约第 10 节、第 18 节第 4 条;`onlineBackups.ts`):
+ * 不写浏览器存储、不自动下载,关页面即丢。桌面照旧写编辑器进程的 `/api/project-backups`。
+ */
+const onlineBackupStore: OnlineBackups = createOnlineBackups({ projectName: () => getState().project.name });
+onlineBackupStore.subscribe(() => patch({ onlineBackups: onlineBackupStore.list().length }));
+
+export function onlineBackups(): OnlineBackups {
+  return onlineBackupStore;
+}
+
+/**
+ * 在线页面:存进内存,当场给「下载备份」按钮。
+ * - 被覆盖:一条不打断操作的提示(气泡,10 秒后自己消失;面板里仍能下载);
+ * - 丢弃离线修改:用户刚在对话框里点了「不要了」,气泡留着直到用户关。
+ */
+function saveOnlineBackup(b: LocalBackup) {
+  const index = onlineBackupStore.save(b);
+  const action = { label: "下载备份", pc: "backup-download", run: () => { onlineBackupStore.download(index); } };
+  if (b.kind === "overwritten") {
+    const what = entityLabel(b.entity, getState().project);
+    pushToast(`${what}被别人覆盖了，你之前那一版已留在本页。关闭页面前可以下载备份。`, "info", 10_000, action);
+  } else {
+    pushToast(`已丢弃 ${b.batch.length} 步离线时的修改，这些修改已留在本页。关闭页面前可以下载备份。`, "warn", Infinity, action);
+  }
+}
+
 async function saveBackup(b: LocalBackup) {
-  // 本地备份存在编辑器进程的数据目录里;在线页面没有编辑器进程(C10a 第 2 节):照实告诉用户存不下来
   if (ONLINE) {
-    pushToast("本地备份没存下来(在线页面没有本机),被覆盖的那一版找不回了。", "warn", 10_000);
+    saveOnlineBackup(b);
     return;
   }
   const project = getState().project;
@@ -342,6 +388,32 @@ function refreshStatus() {
   const status = ds.status;
   const paused = ds.pausedInfo;
   patch({ status, paused, offlineOpen: status === "paused" ? view.offlineOpen || view.status !== "paused" : false });
+  if (ONLINE) tickOnline();
+}
+
+/*
+ * 在线页面:未确认的提交条数与恢复阶段(C10 契约第 10 节)。DocSync 不为「未确认条数变了」发事件,
+ * 这里每 500 ms 看一眼(只在变了时才更新界面状态);状态变化时 `refreshStatus` 也顺带看一次。
+ */
+export const ONLINE_TICK_MS = 500;
+let recoveryState: { phase: "recovering" | "recovered" | null; wasOffline: boolean; hadUnsent: boolean } = { phase: null, wasOffline: false, hadUnsent: false };
+let recoveredTimer: ReturnType<typeof setTimeout> | null = null;
+
+function tickOnline() {
+  if (!cur) return;
+  const ds = cur.link.ds;
+  const unconfirmed = ds.unconfirmed;
+  const prevPhase = recoveryState.phase;
+  recoveryState = nextRecovery(recoveryState, ds.status, unconfirmed);
+  if (recoveryState.phase === "recovered" && prevPhase !== "recovered") {
+    if (recoveredTimer) clearTimeout(recoveredTimer);
+    recoveredTimer = setTimeout(() => {
+      recoveredTimer = null;
+      if (recoveryState.phase === "recovered") recoveryState = { ...recoveryState, phase: null };
+      patch({ recovery: null });
+    }, RECOVERED_SHOW_MS);
+  }
+  if (unconfirmed !== view.unconfirmed || recoveryState.phase !== view.recovery) patch({ unconfirmed, recovery: recoveryState.phase });
 }
 
 /* ---------------- Agent 服务端的项目副本(server/vite-plugin-ai.ts 的 /api/agent/bind) ---------------- */
@@ -437,11 +509,16 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
       noteProjectForCardSync(p);
     }),
   ];
+  if (ONLINE) {
+    recoveryState = { phase: null, wasOffline: false, hadUnsent: false };
+    const tick = setInterval(tickOnline, ONLINE_TICK_MS);
+    offs.push(() => clearInterval(tick));
+  }
   cur = { link, kind, docProjectId, url, unbind, offs };
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
-  // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑
-  if (!ONLINE) {
+  // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
+  if (!ONLINE_BUILD && !ONLINE) {
     bindAgentSide(kind, docProjectId, url);
     bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
   }
@@ -457,7 +534,7 @@ function detach() {
     prev.unbind();
     retire(prev.link);
   }
-  patch({ active: false, kind: "off", status: "idle", paused: null, offlineOpen: false, notice: null });
+  patch({ active: false, kind: "off", status: "idle", paused: null, offlineOpen: false, notice: null, unconfirmed: 0, recovery: null });
 }
 
 /** 换下来的连接:等它手里没确认的提交落地(最多 5 s)再关 */
@@ -653,7 +730,21 @@ function rememberEvent(e: Record<string, unknown>) {
   patch({ agentOpsVersion: view.agentOpsVersion + 1 });
 }
 
+/**
+ * 渲染任务队列推给本页(作为发布方)的完成通知(C10 契约第 7 节:页面订阅 `task.done`,并入层表与就绪)。
+ * 发布方自动订阅自己发布的 plan 与它切出的细任务;这里只转,不解释。
+ */
+const queueEventListeners = new Set<(msg: AnyMsg) => void>();
+export function subscribeQueueEvents(cb: (msg: AnyMsg) => void): () => void {
+  queueEventListeners.add(cb);
+  return () => { queueEventListeners.delete(cb); };
+}
+
 function onSideMessage(msg: AnyMsg) {
+  if (msg.type === "task.done" || msg.type === "task.failed") {
+    for (const l of [...queueEventListeners]) { try { l(msg); } catch { /* 订阅方坏了不影响别人 */ } }
+    return;
+  }
   switch (msg.type) {
     case "service.endpoints":
       receiveSharedAssetEndpoints(msg.endpoints);

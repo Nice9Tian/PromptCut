@@ -294,6 +294,12 @@ export class FramePipeline {
     if (this.environment) return this.environment;
     if (!bakery?.browser || !bakery?.page) return this.environment;
     this.environmentProbe ||= probeBrowserEnvironment({ browser: bakery.browser, page: bakery.page }).then(environment => {
+      /*
+       * 仅供测试:`PROMPTCUT_TEST_ENV_FINGERPRINT`(16 位小写十六进制)把本进程的环境指纹换成给定值 —— 同一台机器上造一个
+       * 「环境不同」的渲染节点(C10-A5:独立渲染主机的本机替身认领在线页面发布的清单计划)。生产环境不设。
+       */
+      const fake = String(process.env.PROMPTCUT_TEST_ENV_FINGERPRINT ?? '');
+      if (/^[0-9a-f]{16}$/.test(fake)) environment = { ...environment, fingerprint: fake, testOverride: true };
       this.environment ||= environment;
       return this.environment;
     });

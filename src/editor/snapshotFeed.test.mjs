@@ -324,3 +324,41 @@ test("低内存档:一层的就绪表有缺口(清单缺几帧小尺寸)时,有�
   assert.equal(at(1), 27, "第 30 帧缺:回溯到 27");
   assert.equal(at(3), 90);
 });
+
+/* ---------------------------------------------------------------- C10 第 9 节:在线的用户卡、图卡 */
+
+test("在线浏览器模式:用户卡、图卡不进 heavy、不选帧、不报缺口、不取字节;桌面照旧(C10 契约第 9 节 + 第 18 节第 6 条)", async () => {
+  const registry = await import(srcUrl("kernel/registry.ts"));
+  const host = await import(srcUrl("render/placeholderHost.ts"));
+  registry.registerCards([{ id: "graphish", card: () => null, params: {} }]);
+  registry.setUserCardSources({ "mine.tsx": "" }, { mine: "mine.tsx" });
+  const clips = [
+    { ...card("u", 0, 10), cardId: "mine" },
+    { ...card("g", 0, 10), cardId: "graphish" },
+    card("b", 0, 10),
+  ];
+  const p = project(clips);
+  plan = heavyEverywhere("u", "g", "b");
+  for (const id of ["u", "g", "b"]) src.push(layer(id, [[0, 299]]));
+  try {
+    // 桌面:三张都是重卡,照常选帧、取字节
+    host.setOnlineBrowserMode(false);
+    assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, ["b", "g", "u"]);
+    // 在线:只剩内置卡
+    host.setOnlineBrowserMode(true);
+    resetSnapshotFeed(); src = fakeSource(); setSnapshotSource(src); syncSnapshotSubscription(() => {});
+    for (const id of ["u", "g", "b"]) src.push(layer(id, [[0, 100]]));
+    const got = planFeed({ project: p, t: 5, playing: true });
+    assert.deepEqual(got.heavy, ["b"]);
+    assert.deepEqual([...got.picks.keys()], ["b"]);
+    assert.deepEqual(got.wanted.map((w) => w.clipId), ["b"], "缺口只报内置卡");
+    assert.deepEqual(suppressedAt({ project: p, t: 5, playing: true }), ["b"]);
+    const stage = fakeStage();
+    await deliverSnapshots(stage, "front", { project: p, t: 1, playing: true });
+    await settle();
+    assert.ok(src.fetched.length > 0 && src.fetched.every((id) => id.includes("k-b")), `只为内置卡取字节:${src.fetched.join(",")}`);
+  } finally {
+    host.setOnlineBrowserMode(false);
+    registry.setUserCardSources({}, {});
+  }
+});

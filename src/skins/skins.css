@@ -355,3 +355,30 @@ html.skin-swapping * {
 /* 播放头:竖线和圆形把手(都是 playhead 的直接子 div)统一用主文字色,
    深色皮肤下近白、浅色皮肤下仍看得见;扁平,不加辉光。时间标签的胶囊样式在 timeline.css */
 [data-skin] [data-pc="playhead"] > div { background-color: var(--ui-fg); box-shadow: none; }
+
+/* 在线浏览器模式下含用户卡或图卡的片段(C10 契约第 9 节):右上角(右把手左边)一个「电脑 + 离线」小徽标,
+   悬停出「该模式暂不支持自定义卡」。和转场的链条角标同时出现时往左让一格。只是提示:鼠标按下照样冒泡到片段上,
+   选中、拖动都不挡 */
+.pc-clip-custom {
+  position: absolute;
+  top: 2px;
+  right: 10px;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  pointer-events: auto;
+}
+.pc-clip-link ~ .pc-clip-custom {
+  right: 27px;
+}
+/* 在线浏览器模式里置灰的导入入口(C10 契约第 10 节):看得出点不了 */
+[data-pc-add][disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

@@ -172,13 +172,20 @@ export function smallFramesOf(result) {
 
 /** 层表在内容库里的键前缀。它和段清单同类(`snapshot-manifest`),键里带冒号前缀,不会和 `<resultKey>:<from>-<to>` 撞 */
 export const LAYER_MAP_PREFIX = 'layers:';
-export const LAYER_MAP_VERSION = 1;
+/**
+ * 层表的版本。v 2(C10 契约第 5 节、第 18 节第 3 条):每层加 `contentKey`(共享档的内容键,与环境无关)与
+ * `envFingerprint`(产出这一层的环境的指纹)。在线普通档只认 v 2 且两项齐的层;低内存档 v 1、v 2 都认(只用小尺寸那几项)。
+ */
+export const LAYER_MAP_VERSION = 2;
 export const layerMapKeyOf = projectId => (typeof projectId === 'string' && projectId ? LAYER_MAP_PREFIX + projectId : null);
 
 /**
  * 一版 card plan 的层表:在线页面没有预渲染进程,算不出重卡的键(键里有渲染节点的环境指纹、快照代码的哈希),
- * 由渲染节点按它认下的这一版写出来。每项:
- *   `{ clipId, kind: 'html' | 'local', key(就绪索引线上的键), tier, resultKey(清单键的前半), dirKey, entryKey, firstFrame, count }`
+ * 由渲染节点按它认下的这一版写出来(页面不算键,C10 契约第 5 节)。每项:
+ *   `{ clipId, kind: 'html' | 'local', key(就绪索引线上的键), tier, resultKey(清单键的前半), dirKey, entryKey, firstFrame, count,
+ *      contentKey(共享档的内容键), envFingerprint(产出这一层的环境) }`
+ * 本层表是 `contentKey` 与 `envFingerprint` 唯一定形的地方(C10 契约第 18 节第 3 条)。取不到这两项的层照旧列出,
+ * 在线普通档按「没有预渲染结果」处理,低内存档照旧能用小尺寸。
  * 段与推送、与队列细任务同一种切法:本地帧 0 起每 `span` 帧一段,最后一段到 `count - 1`,清单键
  * `<resultKey>:<from>-<to>`。只列在预渲染集合里、产快照的卡(`picked` 由调用方给)。
  */
@@ -193,15 +200,17 @@ export function layerMapOf(entry, { picked = () => true, fingerprint = null, spa
     const key = wireSnapshotKey(tier, entry.key, control.snapshotKey);
     if (!key) continue;
     let resultKey = control.snapshotKey;
+    const fp = typeof (control.envFingerprint ?? fingerprint) === 'string' && (control.envFingerprint ?? fingerprint) ? (control.envFingerprint ?? fingerprint) : null;
     if (tier === 'local') {
-      const fp = control.envFingerprint ?? fingerprint;
       if (!fp) continue;
       resultKey = resultKeyOf(`${entry.key}/${control.contentKey ?? control.snapshotKey}`, fp);
     }
     const firstFrame = Number(control.sampling?.firstFrame);
     const count = Number(control.count);
     if (!Number.isInteger(firstFrame) || !Number.isInteger(count) || count < 1) continue;
-    layers.push({ clipId: control.clipId, kind, key, tier, resultKey, dirKey: control.snapshotKey, entryKey: tier === 'local' ? entry.key : null, firstFrame, count });
+    const contentKey = typeof control.contentKey === 'string' && control.contentKey ? control.contentKey : null;
+    layers.push({ clipId: control.clipId, kind, key, tier, resultKey, dirKey: control.snapshotKey, entryKey: tier === 'local' ? entry.key : null, firstFrame, count,
+      contentKey, envFingerprint: fp });
   }
   return {
     v: LAYER_MAP_VERSION, kind: 'layer-map', projectId: project.id ?? null, entryKey: entry?.key ?? null,

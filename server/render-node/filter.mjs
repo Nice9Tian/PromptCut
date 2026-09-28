@@ -14,11 +14,13 @@
  *   3  用户卡、图卡需要对应能力
  *   4  重度策略(见 `DEFAULT_WEIGHT_POLICY`)
  *   5  内存要求不超过本机可用内存
- *   6  `plan` 任务要 Chrome 和服务端的 card-cache,纯浏览器不接;独立渲染主机(`host`)也不接 ——
- *      `plan` 留给发布方自己的节点(M6b,`docs/plan/render-host-contract.md` 第 3、4 节)
+ *   6  `plan` 任务要 Chrome 和服务端的 card-cache,纯浏览器不接;独立渲染主机(`host`)不接不带片段清单的 `plan` ——
+ *      桌面 `plan` 留给发布方自己的节点(M6b,`docs/plan/render-host-contract.md` 第 3、4 节);带片段清单的 `plan`
+ *      (在线页面的清单计划、低内存档的补渲计划)`host` 接,用自己的指纹切分(C10 契约第 18 节第 9 条,对 M6c X4 的修改)
  *
  * 纯函数,不改入参。
  */
+import { isListPlan } from '../render-queue/index.mjs';
 
 /**
  * 各类节点的重度策略表。每一项的取值:
@@ -102,7 +104,7 @@ export function checkClaimable(task, node) {
 
   // 6
   if (plan && browser) return reject(6, 'plan-on-browser');
-  if (plan && host) return reject(6, 'plan-on-host');
+  if (plan && host && !isListPlan(task)) return reject(6, 'plan-on-host');
 
   return pass;
 }

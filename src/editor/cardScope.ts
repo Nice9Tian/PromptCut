@@ -89,10 +89,13 @@ export function writeVisibility(v: CardVisibility): void {
 /** 服务端那张归属表。改动不频繁,读进来缓存着;建卡和改档位之后失效 */
 let scopeCache: Record<string, ScopeEntry> | null = null;
 
+/** 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」):在线构建里剪掉 /api/cards/scopes */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
 export async function loadScopes(force = false): Promise<Record<string, ScopeEntry>> {
   if (scopeCache && !force) return scopeCache;
   // 在线浏览器模式没有编辑器进程,也就没有定制卡的归属表(用户卡在在线页面一期不渲染,契约第 1 节)
-  if (onlinePage()) return (scopeCache = {});
+  if (ONLINE_BUILD || onlinePage()) return (scopeCache = {});
   try {
     const r = await fetch("/api/cards/scopes").then((x) => x.json());
     scopeCache = r?.ok ? (r.scopes ?? {}) : {};
@@ -114,7 +117,7 @@ export function invalidateScopes(): void {
  * 而 isCardVisible 恰恰是整个「定制卡跨项目泄露」的唯一修复点,最该有测试的就是它。
  */
 export async function setCardScope(cardId: string, scope: CardScope, projectId?: string | null): Promise<void> {
-  if (onlinePage()) return;
+  if (ONLINE_BUILD || onlinePage()) return;
   await fetch("/api/cards/scopes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

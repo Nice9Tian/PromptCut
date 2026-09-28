@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { TranscriptSegment } from "../../kernel/project";
 import { sttStatus, sttInstall, transcribeMedia, type SttStatus } from "../io/stt";
+import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 
 interface TranscribePanelProps {
   mediaId: string;
@@ -39,7 +40,9 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
   // 状态
   const [statusData, setStatusData] = useState<SttStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [loadingStatus, setLoadingStatus] = useState(true);
+  // 在线浏览器模式没有语音识别(C10 契约第 10 节):不查引擎状态(那是编辑器进程的接口),只给一个置灰的按钮
+  const online = onlinePage();
+  const [loadingStatus, setLoadingStatus] = useState(!online);
 
   // 安装
   const [installing, setInstalling] = useState(false);
@@ -58,7 +61,7 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
   const cancelRef = useRef(false);
 
   useEffect(() => {
-    loadStatus();
+    if (!online) loadStatus();
   }, []);
 
   // 安装日志自动滚动
@@ -149,7 +152,7 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
   const engineInstalled =
     statusData?.engines[engine as "faster-whisper" | "whisper"]?.installed ?? false;
 
-  const showInstallBtn = !loadingStatus && !statusError && !engineInstalled;
+  const showInstallBtn = !online && !loadingStatus && !statusError && !engineInstalled;
 
   return (
     <div
@@ -194,6 +197,12 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
           ✕
         </button>
       </div>
+
+      {online && (
+        <button type="button" data-pc="start-transcribe-btn" className="pc-left-btn is-primary is-block mb-2" disabled title={onlineUnsupported("语音识别")}>
+          开始转写
+        </button>
+      )}
 
       {/* 状态区 */}
       {loadingStatus && (

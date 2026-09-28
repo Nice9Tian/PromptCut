@@ -57,6 +57,7 @@ import { summarizeProbe } from "../render/probeSummary.mjs";
 import { pageEnvironment } from "./pageEnvironment.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, SnapshotCost, StageEvent, StageRpcClient } from "../render/stageRpc";
+import { probeFrameHtml } from "../render/stageRpc";
 import { mirrorKey } from "../render/dataMirror";
 import { clipIdentityOf, resetClipIdentityCache } from "./costIdentity";
 import { mergePlanCosts, setPlanCosts } from "./planDispatch";
@@ -219,7 +220,51 @@ function planJobs(project: Project, costs: CardCostRecord[], device: string): Pr
 
 /* ------------------------------------------------------------------ 端点 */
 
+/**
+ * 成本记录存在哪(C10 契约第 3 节):桌面运行环境是编辑器进程的 `GET / PUT /api/data/costs`;在线普通档由 `Preview` 换成
+ * 页面内快照库 L2 的 `costs` 表(`src/online/l2Costs.ts`,`mode=build`,关掉再开不重测)。
+ * `forwardFrames`:探针帧要不要转发给预渲染进程(在线页面没有预渲染进程,不转发)。
+ */
+export interface CostBackend {
+  load(): Promise<{ costs: CardCostRecord[]; tuning: PipelineTuning }>;
+  save(records: CardCostRecord[]): Promise<boolean>;
+  forwardFrames?: boolean;
+}
+const httpBackend: CostBackend = { load: () => getCostsHttp(), save: (records) => putCostsHttp(records), forwardFrames: true };
+let backend: CostBackend = httpBackend;
+
+/** 换成本记录的存放处;null 回到编辑器进程 */
+export function setCostBackend(next: CostBackend | null): void {
+  backend = next ?? httpBackend;
+}
+
+/**
+ * 测完写进成本记录的那一处留的订阅口(C10 契约第 18 节第 7 条):每写一次,把这次测得的记录发给订阅方
+ * (`stored`:写没写成)。文档服务那一侧的共享成本记录由 `claude/c10-cost` 接在这里(集成时由主会话接线)。
+ */
+const costRecordListeners = new Set<(records: CardCostRecord[], info: { stored: boolean }) => void>();
+export function onCostRecords(cb: (records: CardCostRecord[], info: { stored: boolean }) => void): () => void {
+  costRecordListeners.add(cb);
+  return () => { costRecordListeners.delete(cb); };
+}
+
 async function getCosts(): Promise<{ costs: CardCostRecord[]; tuning: PipelineTuning }> {
+  return backend.load();
+}
+
+async function putCosts(records: CardCostRecord[]): Promise<boolean> {
+  const stored = await backend.save(records).catch(() => false);
+  for (const l of [...costRecordListeners]) { try { l(records, { stored }); } catch { /* 订阅方坏了不影响测量 */ } }
+  return stored;
+}
+
+/** 探针帧的诊断:收到几帧、其中几帧是压过的可转移字节(C10 契约第 2 节「大块产出」) */
+const probeFrameStats = { frames: 0, gzFrames: 0, gzBytes: 0, htmlBytes: 0 };
+export function probeFrameDiag() {
+  return { ...probeFrameStats };
+}
+
+async function getCostsHttp(): Promise<{ costs: CardCostRecord[]; tuning: PipelineTuning }> {
   try {
     const res = await fetch("/api/data/costs");
     if (!res.ok) return { costs: [], tuning: resolveTuning(null) };
@@ -234,7 +279,7 @@ async function getCosts(): Promise<{ costs: CardCostRecord[]; tuning: PipelineTu
   }
 }
 
-async function putCosts(records: CardCostRecord[]): Promise<boolean> {
+async function putCostsHttp(records: CardCostRecord[]): Promise<boolean> {
   try {
     const res = await fetch("/api/data/costs", {
       method: "PUT",
@@ -266,6 +311,11 @@ let snapshotEndpointMissing = false;
  * 快照随之锁定到页面的环境（卡片级指纹锁，契约 F.4）。
  */
 async function forwardProbeFrame(e: Extract<StageEvent, { type: "probe-frame" }>): Promise<void> {
+  probeFrameStats.frames++;
+  if (e.htmlGz) { probeFrameStats.gzFrames++; probeFrameStats.gzBytes += e.htmlGz.byteLength; }
+  else probeFrameStats.htmlBytes += e.html.length;
+  // 在线页面没有预渲染进程:不转发(存下来当预渲染结果属于 M7 的认领,C10 契约第 8 节)
+  if (!backend.forwardFrames) return;
   if (snapshotEndpointMissing) return;
   const key = mirrorKey();
   if (!key) return;
@@ -273,7 +323,7 @@ async function forwardProbeFrame(e: Extract<StageEvent, { type: "probe-frame" }>
     const res = await fetch("/api/frames/snapshot", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session: key.session, localRev: key.localRev, clipId: e.clipId, localFrame: e.localFrame, html: e.html, environment: pageEnvironment() }),
+      body: JSON.stringify({ session: key.session, localRev: key.localRev, clipId: e.clipId, localFrame: e.localFrame, html: await probeFrameHtml(e), environment: pageEnvironment() }),
     });
     if (res.status === 404) snapshotEndpointMissing = true;
   } catch {
@@ -434,6 +484,8 @@ async function probeCardOnce(
       rasterMs: round(summary.rasterMs),
       serializeMs: round(summary.serializeMs),
       catchUpMs: round(summary.catchUpMs),
+      // 计时趟真实采到的帧数(共享成本记录要它;没有时转写按 `device` 串里的 stepN 记,见 `sharedCosts.ts` 的 `samplesOf`)
+      ...(summary.samples > 0 ? { samples: summary.samples } : {}),
       ...(capped ? { capped: true } : {}),
       kind,
       ...(typeof booleans.vtOk === "boolean" ? { vtOk: booleans.vtOk } : {}),

@@ -3,7 +3,9 @@ import { ClipVolumeDialog } from "./ClipVolumeDialog";
 import { useMemo, useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
-import { getCard } from "../../kernel/registry";
+import { getCard, userCardSources } from "../../kernel/registry";
+import { unsupportedHere } from "../../render/placeholderHost";
+import { ONLINE_CUSTOM_CARD_TEXT, onlinePage, onlineUnsupported } from "../../online/pageFlag";
 import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from "./utils";
 import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
@@ -24,6 +26,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const isSelected = selection.includes(clip.id);
   const cardDef = clip.cardId ? getCard(clip.cardId) : null;
   const label = clip.cardId ? (cardDef ? cardDef.name : "未知卡片") : clip.label;
+  // 在线浏览器模式下这台设备渲染不了的卡(用户卡、图卡;C10 契约第 9 节):片段里挂个小徽标,悬停出全文。
+  // 片段照常可选中、移动、删除、改参数(只是个提示,不挡任何操作)
+  const customCard = !!cardDef && unsupportedHere(clip.cardId, cardDef, (id) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, id));
   // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
   // 这一段是不是「有画面的素材」:只有它能转成声音(卡片、图片、已经是声音的都不行)
@@ -260,6 +265,15 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           </span>
         )}
 
+        {customCard && (
+          <span className="pc-clip-custom" data-pc="clip-custom-card" title={ONLINE_CUSTOM_CARD_TEXT} aria-label={ONLINE_CUSTOM_CARD_TEXT}>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="1.5" y="2" width="9" height="6" rx="1" />
+              <path d="M4.5 10.5h3M6 8v2.5M1.5 1.5l9 8" />
+            </svg>
+          </span>
+        )}
+
         {/* 镜头切换标记画在文字之上、把手之下:把手要能拖，标记只是看的 */}
         <ShotMarkers clip={clip} rowHeight={ROW_SIZE_H[rowSize]} />
 
@@ -295,6 +309,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               return [{
                 label: media.transcript ? `查看字幕(${media.transcript.segments.length} 段)` : "转写字幕",
                 action: () => requestCaptions(media.id),
+                // 在线浏览器模式没有语音识别(C10 契约第 10 节):只能转写的置灰,已有字幕的照常查看
+                ...(!media.transcript && onlinePage() ? { disabled: true, title: onlineUnsupported("语音识别") } : {}),
               }];
             })(),
             {

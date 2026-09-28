@@ -85,7 +85,7 @@
 - 本机改底版卡片的观察脚本不入库（运行时要改仓库卡片文件，误跑会波及用户常驻编辑器）。
 - 上传目标 `{ base: null }` 回到缺省目标（设了 `PROMPTCUT_ASSET_URL` 就是它）。
 - 渲染主机的换行统一：接受（否则 Linux 云端主机与 Windows PC 永不同池；代价是 Windows 上的预渲染结果一次性重渲）。
-- 主机本来没有的用户卡写进检出目录 `src/cards/user/`：暂时接受（与桌面同步、打开 `.proc` 同一条路，用户卡加载器只扫这个目录）。一台主机服务多个项目时同名卡后装的赢、另一项目的相应任务跳过（不会用错代码）。
+- 主机本来没有的用户卡写进检出目录 `src/cards/user/`：暂时接受（与桌面同步、打开 `.proc` 同一条路，用户卡加载器只扫这个目录）。一台主机服务多个项目时同名卡后装的赢、另一项目的相应任务跳过（不会用错代码）。〔2026-09-28 已推翻并修掉：`claude/card-overlay` 合入 main（`0d114df`）——有改动层时用户卡一律写改动层、检出目录一个文件都不写，用户卡装载入口经 `src/cards/userOverlay.ts` 收改动层里的卡。〕
 - T9 探针用人工钉死的重卡片段；快速换档的判法。
 - C6.6 与 C10a 重叠排期：C10a 三个分支从 C6.6 集成分支拉出，与 T9 并行（不跳过任何验收）。
 
@@ -147,13 +147,13 @@ release 每次都按 `git_and_release.md` 判过并快进（`8a5d6ff`、`f126bf0
 
 ## 11. 要在 M8 之内修的遗留（本阶段新增或更新）
 
-- 点「撤销这步」后文档服务里那条轨道已删，页面时间轴要等下一次改动才刷新（`src/editor/sync/`，runner-callid 端到端时发现）。
-- 代码注释里的旧词「原片」「小版」统一换成「素材原尺寸」「素材小尺寸」。
+- 点「撤销这步」后文档服务里那条轨道已删，页面时间轴要等下一次改动才刷新（runner-callid 端到端时发现）。〔2026-09-28 已修：位置实为 `src/store/docsync.ts`（原写 `src/editor/sync/` 有误），`claude/undo-refresh` 的 `ceab9e4` 已合入 main。〕
+- 代码注释里的旧词「原片」「小版」统一换成「素材原尺寸」「素材小尺寸」。〔2026-09-28 已修：`claude/hygiene` 合入 main（`c718be6`）；漏掉的一处注释随 `claude/docs-close-0928` 改掉。〕
 - T9 用确定判重的探针卡代替人工钉死（加固项）。
-- 主机本来没有的用户卡目前写进检出目录；「主机完全不写检出目录」要求用户卡加载器也扫改动层。
-- `server/test/skill-gate.test.mjs` 缺省连 5190：用户编辑器开着时 `npm test` 会对它发写请求（关、开 SKILL 模式，占独占锁）。已派维护分支改为显式开启（`claude/skill-gate-optin`）。修复进 main 前，主会话跑全量测试一律把 `PROMPTCUT_BASE` 指到连不上的端口。
-- `PAUSE-2026-09-26.md` 第 4 节其余三条照旧（`create_card` 带 overwrite 被改动层旧版盖住；聊天记录窗口化与 callId 两条已在本期修掉）。
-- `server/vite-plugin-frames.ts` 第 52 行引用的 `AGENT-c6-4-pipeline.md` 在仓库历史里不存在（早先就断掉的引用）。
+- 主机本来没有的用户卡目前写进检出目录；「主机完全不写检出目录」要求用户卡加载器也扫改动层。〔2026-09-28 已修：`claude/card-overlay`（`0d114df`）。〕
+- `server/test/skill-gate.test.mjs` 缺省连 5190：用户编辑器开着时 `npm test` 会对它发写请求（关、开 SKILL 模式，占独占锁）。已派维护分支改为显式开启（`claude/skill-gate-optin`）。修复进 main 前，主会话跑全量测试一律把 `PROMPTCUT_BASE` 指到连不上的端口。〔已修：`claude/skill-gate-optin` 已合入 main（`6be10d9`）。〕
+- `PAUSE-2026-09-26.md` 第 4 节其余三条照旧（`create_card` 带 overwrite 被改动层旧版盖住；聊天记录窗口化与 callId 两条已在本期修掉）。〔2026-09-28：`create_card` 那条已由 `claude/card-overlay`（`0d114df`）修掉。〕
+- `server/vite-plugin-frames.ts` 第 52 行引用的 `AGENT-c6-4-pipeline.md` 在仓库历史里不存在（早先就断掉的引用）。〔已修：`claude/hygiene`（`c718be6`）。〕
 
 ## 12. 需要用户决定或知道的事
 

@@ -1,3 +1,16 @@
+import { mediaTierPolicy, remoteMediaUrl } from "../mediaTier";
+
+/**
+ * 卡片自己引用的素材地址:桌面原样(`/@media/<hash>`);在线浏览器模式没有本机编辑器进程,换成远程素材服务上的
+ * 原尺寸(带只读票据;卡片画进画布、导出都要原尺寸)。远程地址还没就绪时给 "",解码当场失败,不发请求。
+ * (图卡在在线的预览里不挂,常驻「需要本地 PC 渲染辅助」;这里管的是其余会走到这条路的调用。)
+ */
+function cardMediaUrl(url: string): string {
+  const p = mediaTierPolicy();
+  if (!p.online) return url;
+  return p.remote ? remoteMediaUrl(url, p.remote) : "";
+}
+
 /** A decoder belongs to one card canvas. Seeking it never touches a timeline
  * media element or another card's source cursor. GPU registration can therefore
  * sample video locally without a server round trip or per-frame PNG transfer. */
@@ -14,7 +27,9 @@ export class CardMediaSource {
         const event = image ? 'load' : 'loadeddata';
         source.addEventListener(event, () => resolve(source), { once: true });
         source.addEventListener('error', () => reject(new Error('Card media could not be decoded: ' + media.url)), { once: true });
-        source.src = media.url;
+        const src = cardMediaUrl(media.url);
+        if (!src) { reject(new Error('Card media is not reachable yet: ' + media.url)); return; }
+        source.src = src;
       });
       this.sources.set(media.url, ready);
     }

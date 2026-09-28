@@ -19,6 +19,7 @@
  */
 import type { Project } from "../kernel/project";
 import { renameSnapshotIds } from "../render/snapshotRename";
+import { withTicket } from "./ticketRenewal";
 
 type ExportWindow = Window & typeof globalThis & {
   __pcReady?: boolean;
@@ -56,6 +57,11 @@ export interface CompositorOptions {
   /** 背景色(成片不透明) */
   background?: string;
   signal?: AbortSignal;
+  /**
+   * 当前的只读票据(C10 契约第 12 节:导出途中按时限续签)。给了就在每一帧装素材之前,把导出页里素材地址的 `?t=` 换成这一张 ——
+   * 导出页每一帧都按 `data-pc-media-src` 重新装素材(`frameMedia.ts`),所以跨过票据时限也照常取得到。
+   */
+  freshTicket?: () => string | null;
 }
 
 const EMPTY = (p: Project) => ({ width: p.width, height: p.height, fps: p.fps, duration: 1, tracks: [], media: [] });
@@ -103,7 +109,7 @@ export class ExportCompositor {
   private w: ExportWindow;
   private opts: CompositorOptions;
   private scratch: HTMLCanvasElement;
-  readonly stats = { frames: 0, stepMs: 0, snapshotMs: 0, mediaMs: 0, rasterMs: 0, heavyReplaced: 0, mediaFrames: 0, manualTicks: 0, rafFallbacks: 0 };
+  readonly stats = { frames: 0, stepMs: 0, snapshotMs: 0, mediaMs: 0, rasterMs: 0, heavyReplaced: 0, mediaFrames: 0, manualTicks: 0, rafFallbacks: 0, ticketSwaps: 0 };
 
   private constructor(frameEl: HTMLIFrameElement, opts: CompositorOptions) {
     this.frameEl = frameEl;
@@ -278,6 +284,14 @@ export class ExportCompositor {
     const live = [...doc.querySelectorAll<HTMLVideoElement | HTMLImageElement>("[data-pc-scene] video[data-pc-media-src], [data-pc-scene] img[data-pc-media-src]")];
     if (live.length) {
       for (const el of live) if (!el.crossOrigin) el.crossOrigin = "anonymous";
+      const ticket = this.opts.freshTicket?.() ?? null;
+      if (ticket) {
+        for (const el of live) {
+          const src = el.getAttribute("data-pc-media-src") ?? "";
+          const next = withTicket(src, ticket);
+          if (next !== src) { el.setAttribute("data-pc-media-src", next); this.stats.ticketSwaps++; }
+        }
+      }
       await this.w.__pcPrepareFrameMedia?.();
       const holes = [...tpl.content.querySelectorAll<HTMLElement>("video[data-pc-media-src], img[data-pc-media-src]")];
       holes.forEach((hole, i) => {

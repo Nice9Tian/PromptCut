@@ -941,8 +941,8 @@ export function mediaPlugin(): Plugin {
               token: process.env.PROMPTCUT_CLUSTER_TOKEN || null,
               urls,
               log: (event: string, fields: object) => {
-                // WebSocket 端点的重连日志太密,只留连上、断开和本模块自己的
-                if (event.startsWith("asset-announce.") || event === "ws.open" || event === "ws.close") console.info("[asset-announce]", event, JSON.stringify(fields));
+                // 会话端点的重试日志太密,只留会话建成、结束、传输脱开与接续和本模块自己的
+                if (event.startsWith("asset-announce.") || event === "session.open" || event === "session.close" || event === "session.detach" || event === "session.resume") console.info("[asset-announce]", event, JSON.stringify(fields));
               },
             });
             httpServer.once("close", () => {
