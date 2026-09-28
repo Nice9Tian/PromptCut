@@ -11,7 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import {
   newRunId, deviceIdOf, fingerprintOf, FINGERPRINT_RE, placeParams, docTargetOf, hostPortOf, checkPorts, CLOUD,
   judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, parseTaskId, fakeLayerTasks, sha256Of, judgeIdenticalBytes,
-  judgeEachWorked, summarizeTimeline, takeoverMs, createResult, mergeRoleResults, lastJsonLine,
+  judgeEachWorked, summarizeTimeline, takeoverMs, createResult, mergeRoleResults, lastJsonLine, judgeLastCommit,
 } from '../../scripts/probes/m8/lib.mjs';
 import { kvKey, kvClient, roleKv, resolveRun } from '../../scripts/probes/m8/kv.mjs';
 import { parseRemoteSample, diffSamples, remoteSampleScript } from '../../scripts/probes/m8/resources.mjs';
@@ -400,4 +400,34 @@ test('M8K-19 子进程环境：去掉会连错地方或带凭证的变量，目�
   assert.equal(env.PROMPTCUT_DATA_DIR, path.join(dir, 'data'));
   assert.equal(env.TEMP, path.join(dir, 'tmp'));
   assert.ok(fs.existsSync(path.join(dir, 'tmp')));
+});
+
+test('M8K-20 E3 页面：重启后以新会话重读、追到最后一次提交的版本且摘要相同；没重连、摘要不符、没追到都判红', () => {
+  const last = { rev: 3, digest: 'd3', path: '/page/lastCommit', value: 'm1' };
+  // 正常：重启后一个新会话，重读见到 rev 3、摘要相同
+  const ok = judgeLastCommit(last, { sessionsAfter: 1, rev: 3, seenAfter: [{ rev: 3, digest: 'd3' }], valueAt: 'm1' });
+  assert.equal(ok.resync.ok, true);
+  assert.equal(ok.readable.ok, true);
+  assert.equal(ok.readable.via, 'digest');
+  // 没重连（副本还拿着重启前内存里的内容）：两条都红
+  const stale = judgeLastCommit(last, { sessionsAfter: 0, rev: 3, seenAfter: [], valueAt: 'm1' });
+  assert.equal(stale.resync.ok, false);
+  assert.equal(stale.readable.ok, false);
+  // 重读了但摘要不符
+  const bad = judgeLastCommit(last, { sessionsAfter: 1, rev: 3, seenAfter: [{ rev: 3, digest: 'xx' }], valueAt: 'm1' });
+  assert.equal(bad.resync.ok, true);
+  assert.equal(bad.readable.ok, false);
+  assert.equal(bad.readable.digestMatch, false);
+  // 文档服务丢了这次提交（重启后只到 rev 2）
+  const lost = judgeLastCommit(last, { sessionsAfter: 1, rev: 2, seenAfter: [{ rev: 2, digest: 'd2' }], valueAt: null });
+  assert.equal(lost.resync.ok, false);
+  assert.equal(lost.readable.ok, false);
+  // 重启后又有写入、没见到 rev 3 那一版：退回核对写下的值
+  const later = judgeLastCommit(last, { sessionsAfter: 1, rev: 5, seenAfter: [{ rev: 5, digest: 'd5' }], valueAt: 'm1' });
+  assert.equal(later.readable.ok, true);
+  assert.equal(later.readable.via, 'value');
+  assert.equal(judgeLastCommit(last, { sessionsAfter: 1, rev: 5, seenAfter: [{ rev: 5, digest: 'd5' }], valueAt: 'other' }).readable.ok, false);
+  // 缺信号
+  assert.equal(judgeLastCommit(null, { sessionsAfter: 1, rev: 3, seenAfter: [] }).resync.ok, false);
+  assert.equal(judgeLastCommit(last, null).readable.ok, false);
 });

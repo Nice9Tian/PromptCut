@@ -310,6 +310,39 @@ export function judgeEachWorked(workByNode, { min = 1, expectNodes = null, total
   return { ok: nodes.length > 0 && idle.length === 0 && sumOk, nodes: nodes.length, idle, sum, ...(total === null ? {} : { total }) };
 }
 
+/**
+ * E3（C2 / C4）「在线页面恢复同步、重启前最后一次提交可读」。
+ * @param {{ rev: number, digest: string, path?: string, value?: any } | null} lastCommit 页面角色在重启前最后一次提交
+ *   （提交后以 `project.open` 读回的版本与摘要；`path` / `value` 是这次提交写下的字段）
+ * @param {{ sessionsAfter: number, rev: number, seenAfter: { rev: number, digest: string | null }[], valueAt?: any } | null} page
+ *   主机侧副本在重启之后的观察：`sessionsAfter` = 重启之后建成并重读过的新会话数；`rev` = 最后的版本；
+ *   `seenAfter` = 这些新会话里重读、逐版应用见到的各版摘要（不含重启前内存里的）；`valueAt` = 最后内容里 `path` 处的值
+ * @returns {{ resync: { ok, … }, readable: { ok, … } }}
+ *   resync：重启之后以新会话重读过、并追到 rev ≥ lastCommit.rev。
+ *   readable：重启之后见到的 lastCommit.rev 那一版摘要与 lastCommit.digest 相同；重启后又有写入、没见到那一版时，
+ *   退回核对那次提交写下的值还在（`via: 'value'`）。
+ */
+export function judgeLastCommit(lastCommit, page) {
+  if (!lastCommit || !page) {
+    const why = !lastCommit ? '没有重启前最后一次提交' : '没有副本的观察';
+    return { resync: { ok: false, why }, readable: { ok: false, why } };
+  }
+  const resyncOk = page.sessionsAfter >= 1 && page.rev >= lastCommit.rev;
+  const resync = { ok: resyncOk, sessionsAfter: page.sessionsAfter, rev: page.rev, want: lastCommit.rev };
+  const at = (page.seenAfter ?? []).filter((x) => x.rev === lastCommit.rev);
+  let readable;
+  if (!resyncOk) readable = { ok: false, why: '重启后副本没重读或没追到那一版', rev: page.rev, want: lastCommit.rev };
+  else if (at.length) {
+    const match = at.every((x) => x.digest === lastCommit.digest);
+    readable = { ok: match, via: 'digest', rev: lastCommit.rev, digestMatch: match, seen: at.length };
+  } else {
+    const hasValue = lastCommit.path !== undefined && 'value' in lastCommit;
+    const match = hasValue && JSON.stringify(page.valueAt) === JSON.stringify(lastCommit.value);
+    readable = { ok: match, via: 'value', rev: page.rev, want: lastCommit.rev, digestMatch: null, valueMatch: hasValue ? match : null };
+  }
+  return { resync, readable };
+}
+
 /* ================================================================== 旁观节点的时间线 */
 
 /**

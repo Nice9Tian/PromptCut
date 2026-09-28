@@ -33,6 +33,14 @@
  *       lan（C4，D2）：creator 结束自己起的局域网主机编辑器进程树，同端口再起。
  *       之后重新发布同一版项目；判 epoch 变了、J-全完、J-恰一（按 epoch，D3）、重启前已完成的任务重启后 0 次重渲
  *       （都走去重）；host 记素材服务地址的撤回与重新下发（lan：重连后 ≤ 10 s）。
+ *       在线页面恢复同步、重启前最后一次提交可读（M8 报告第 7 节 C2 的判据，C4 同样适用）：用例开始时 creator 建一份单独的
+ *       项目真身 `m8e3-<run>`（KV `signal.e3.doc`），host 立刻开成员 `page` 角色的副本（与 e4 同一个 `openReplica`，
+ *       同样是 Node 里按页面协议维持的副本，不是浏览器页面）；重启前 creator 以 `page` 角色写一条无害字段，读回这一版的
+ *       rev 与摘要放进 `signal.restart.request` 的 `lastCommit`（放本机也写这个信号，不带远端命令）。host 收到时记副本的
+ *       rev（revBefore）；重启后副本由连接层自己建新会话、重新 `project.open`，要追到 rev ≥ lastCommit.rev，且重启之后
+ *       见到的那一版摘要与 lastCommit.digest 相同（重启后又有写入、没见到那一版时退回核对写下的值）。host 结果行
+ *       `e3.page { revBefore, revAfter, digestMatch, reconnectMs, reopens, … }`，检查 `page-resync-after-restart`、
+ *       `last-commit-readable`；creator 汇总成 `page-resync-after-restart-<host>`、`last-commit-readable-<host>`。
  *   e4  Agent 突发修改：后台有一版真实任务在跑时，以 `agent` 角色（带对话号，`project.op` 带 `expectRev`）连项目，
  *       间隔 0 / 200 / 900 ms（`--gaps`）各一轮、每轮 `--burst` 次（缺省 50）；同时一个 `page` 角色的写入方每 100 ms 写一次
  *       （不带期望版本，逼出 `stale`）。Agent 遇 `stale` 重读（`project.open`）再写。每轮结束：文档服务的 rev 与摘要、
@@ -76,7 +84,7 @@
  *   signal.holding.<host> host → creator：e3 时手里有任务了
  *   signal.stall          host → creator：e2 时代理已 stall（带持有的任务 id）
  *   signal.takeover       creator → host：e2 时被扣住的任务都已被别人接手，可以 resume
- *   signal.restart.request / signal.restart.done / signal.restarted   e3
+ *   signal.e3.doc / signal.restart.request（带 lastCommit）/ signal.restart.done / signal.restarted   e3
  *   signal.fake.start / signal.fake.done                              e1 的假任务那一轮
  *   signal.e4.round.<k> / signal.e4.replica.<host>.<k>                e4 每轮的摘要核对
  *   result.<角色>、abort、done
@@ -96,7 +104,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   argsOf, createResult, mergeRoleResults, sayer, newRunId, fingerprintOf, fakeLayerTasks, judgeAllDone, judgeExactlyOnce,
-  judgePureLayers, layerObservations, judgeEachWorked, summarizeTimeline, takeoverMs, placeParams, docTargetOf, CLOUD,
+  judgePureLayers, layerObservations, judgeEachWorked, summarizeTimeline, takeoverMs, placeParams, docTargetOf, CLOUD, judgeLastCommit,
 } from './m8/lib.mjs';
 import { roleKv, resolveRun, kvClient, kvKey } from './m8/kv.mjs';
 import { startHostedCombo, startCoord, startProxy, startRenderHost, startQueueEditor, runRole, until, portFree } from './m8/procs.mjs';
@@ -409,17 +417,27 @@ async function identicalCheck({ port, dir, project, library }) {
   }
 }
 
-/* ================================================================== e4 的副本 */
+/* ================================================================== 页面副本（e4、e3） */
 
 /**
  * 按页面同一条协议维持的项目副本：`project.open` 拿当前内容，之后按 `project.ops` 逐版应用（`json-ops.mjs` 的 applyOps，
  * 与文档服务同一个函数）；版本对不上或 `resync` 就重读。摘要 = sha256(JSON.stringify(内容))，与文档服务的算法相同。
+ * 会话结束后连接层（`createDocEndpoint`，缺省 `renew`）自己建新会话，新会话一建成（`onOpen`）就重读——在线页面的做法；
+ * 文档服务重启后旧会话接续不上，走的就是这条路（e3）。
+ * `history: true`（e3）：每次重读、每应用一版都记 `{ rev, digest, session, at }`（`session` = 这是第几个新会话，0 是最初那个），
+ * 留最近 `HISTORY_MAX` 条；另记会话结束的次数与时刻。
  */
-async function openReplica({ entry, docId, tag }) {
+async function openReplica({ entry, docId, tag, history = false }) {
   const { applyOps } = await import('../../server/docservice/json-ops.mjs');
   const conn = await openConn({ entry, role: 'page', tag, log: say });
   if (!conn) throw new Error(`${tag} 连不上项目`);
-  const st = { rev: 0, body: null, reopens: 0, applied: 0 };
+  const HISTORY_MAX = 200;
+  const st = { rev: 0, body: null, reopens: 0, applied: 0, sessions: 0, closes: 0, lastCloseAt: null, seen: [] };
+  const note = (via) => {
+    if (!history) return;
+    st.seen.push({ rev: st.rev, digest: st.body === null ? null : sha256(JSON.stringify(st.body)), session: st.sessions, via, at: Date.now() });
+    if (st.seen.length > HISTORY_MAX) st.seen.splice(0, st.seen.length - HISTORY_MAX);
+  };
   let reopening = null;
   const reopen = async () => {
     reopening ??= (async () => {
@@ -429,19 +447,31 @@ async function openReplica({ entry, docId, tag }) {
       st.rev = s.rev;
       st.body = s.project ?? null;
       st.reopens += 1;
+      note('open');
     })().finally(() => { reopening = null; });
     return reopening;
   };
   conn.ep.onMessage((m) => {
     if (m?.type !== 'project.ops' || m.projectId !== docId || reopening) return;
     if (m.resync || m.rev !== st.rev + 1 || !Array.isArray(m.ops)) { reopen().catch((e) => say('replica.reopen-failed', { tag, message: errText(e) })); return; }
-    try { st.body = applyOps(st.body, m.ops).root; st.rev = m.rev; st.applied += 1; }
+    try { st.body = applyOps(st.body, m.ops).root; st.rev = m.rev; st.applied += 1; note('ops'); }
     catch (e) { say('replica.apply-failed', { tag, message: errText(e) }); reopen().catch(() => {}); }
   });
-  conn.ep.onOpen(() => { reopen().catch(() => {}); });
+  conn.ep.onClose(() => { st.closes += 1; st.lastCloseAt = Date.now(); });
+  // 新会话建成（首个会话之后的每一个）：重读。重读失败（服务刚起、还没就绪）隔 1 s 再试，直到这个会话又断了
+  conn.ep.onOpen(() => {
+    st.sessions += 1;
+    const mine = st.sessions;
+    const tryOpen = () => reopen().catch((e) => {
+      say('replica.reopen-failed', { tag, message: errText(e) });
+      if (st.sessions === mine && conn.ep.connected) setTimeout(tryOpen, 1000);
+    });
+    tryOpen();
+  });
   await reopen();
   return {
     st,
+    ep: conn.ep,
     digest: () => (st.body === null ? null : sha256(JSON.stringify(st.body))),
     /** 等副本追到 rev（或更新） */
     async at(rev, timeoutMs = 60_000) {
@@ -722,6 +752,21 @@ async function caseE3(ctx) {
   const session = `m8e-${run}`;
   const project = probeProject({ id: ctx.queueProject, clips: CLIPS, seconds: SECONDS, salt: `${run}-${randomBytes(3).toString('hex')}` });
   const base = await queueBaseline(ctx.ed);
+  // 在线页面（同 e4 的口径：Node 里按页面同一条协议维持的副本，不是浏览器页面）：单独一份项目真身 m8e3-<run>，
+  // 创建者以 page 角色写，主机开成员 page 角色的副本跟着（KV signal.e3.doc）
+  const docId = `m8e3-${run}`;
+  const writer = await openConn({ entry: ctx.creatorEntry('page-writer', 'page'), role: 'page', tag: 'page-writer', log: say });
+  if (!r.check('page-writer-connected', !!writer)) throw new Error('页面写入方连不上');
+  ctx.closers.push(() => writer.close());
+  const openDoc = async () => {
+    const s = await writer.rpc({ type: 'project.open', projectId: docId }, 30_000);
+    if (s.type !== 'project.state') throw new Error(`project.open 回 ${s.type}`);
+    return s;
+  };
+  const d0 = await openDoc();
+  const init = await writer.rpc({ type: 'project.op', projectId: docId, opId: `m8e3-init-${run}`, session: 'm8e3-page', expectRev: d0.rev, ops: [{ op: 'set', path: '', value: { page: {} } }] }, 30_000);
+  if (!r.check('page-doc-created', init.type === 'project.op.ok', init)) throw new Error('建不了页面用的项目真身');
+  await kv.signal('e3.doc', { docId, at: Date.now() });
   await pushAndPreload(ctx.ed, session, project);
   const needDone = Number(arg('--restart-after-done', 5));
   // 重启时机：已有 needDone 个细任务完成，且有主机持有任务（主机写 signal.holding.<名>）
@@ -738,6 +783,13 @@ async function caseE3(ctx) {
     return null;
   }, 20 * 60_000, 1000);
   if (!r.check('restart-window', !!ready, { needDone, planA: planA ? { planId: planA.planId, tasks: planA.derived.length } : null })) throw new Error('等不到重启时机');
+  // 重启前页面最后一次提交：写一条无害字段，读回这一版的 rev 与摘要，随 restart.request 交给主机（重启后它的副本要读得到）
+  const marker = `${run}-${randomBytes(4).toString('hex')}`;
+  const last = await writer.rpc({ type: 'project.op', projectId: docId, opId: `m8e3-last-${run}`, session: 'm8e3-page', ops: [{ op: 'set', path: '/page/lastCommit', value: marker }] }, 30_000);
+  if (!r.check('page-last-commit', last.type === 'project.op.ok', last)) throw new Error('页面最后一次提交没落地');
+  const d1 = await openDoc();
+  const lastCommit = { docId, rev: d1.rev, digest: d1.digest, path: '/page/lastCommit', value: marker, opRev: last.rev };
+  r.set({ page: { docId, lastCommit: { rev: lastCommit.rev, opRev: last.rev, digest: String(lastCommit.digest ?? '').slice(0, 16) } } });
   const epochA = watch.epochs.at(-1) ?? null;
   let countsA = null;
   let pcCompletedA = null;
@@ -747,6 +799,8 @@ async function caseE3(ctx) {
     const qa = (await ctx.ed.queue()) ?? {};
     countsA = { ...(qa.doneCounts ?? {}) };
     pcCompletedA = new Set([...(qa.local?.completed ?? []), ...(qa.local?.dedup ?? [])]);
+    // 放本机也写 restart.request（不带远端命令）：主机据此记副本重启前的版本、拿到页面最后一次提交
+    await kv.signal('restart.request', { how: 'lan-editor', lastCommit, at: Date.now() });
     await ctx.ed.stop();
     const t1 = Date.now();
     ctx.ed = await startQueueEditor(ctx.edOpts);
@@ -769,7 +823,7 @@ async function caseE3(ctx) {
         await delay(250);
       }
     })();
-    await kv.signal('restart.request', { cmd, signalCmd, at: Date.now() });
+    await kv.signal('restart.request', { cmd, signalCmd, lastCommit, at: Date.now() });
     say('remote-step', { what: 'C2：在阿里云上重启托管组合，完成后写回信号', cmd, then: signalCmd, key: kvKey(PREFIX, run, 'signal', 'restart.done') });
     const done = await kv.takeSignal('restart.done', Math.min(deadline, Date.now() + 30 * 60_000));
     if (!r.check('restart-done-signal', !!done)) throw new Error('等不到远端重启完成的信号');
@@ -811,6 +865,10 @@ async function caseE3(ctx) {
       if (!res?.e3) continue;
       r.check(`reconnected-${h}`, res.e3.reconnected === true, res.e3);
       if (PLACE === 'lan') r.check(`endpoint-reannounced-${h}`, res.e3.reannounceMs !== null && res.e3.reannounceMs <= REANNOUNCE_LIMIT_MS, { limitMs: REANNOUNCE_LIMIT_MS, ...res.e3.endpoints });
+      // 在线页面恢复同步、重启前最后一次提交可读（主机侧副本判的两条，纳入汇总）
+      const pg = res.e3.page ?? null;
+      r.check(`page-resync-after-restart-${h}`, pg?.resync === true, pg);
+      r.check(`last-commit-readable-${h}`, pg?.readable === true, pg);
     }
   };
 }
@@ -1177,6 +1235,8 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
       await delay(500);
     }
   })();
+  // 在线页面的副本：一开始就开，跟着创建者的写入；重启之后要自己以新会话重读、追到重启前最后一次提交
+  const pageP = hostE3Page(r, kv, cfg, run, docUrl).catch((e) => { r.fail(`e3 页面副本出错：${errText(e)}`); return null; });
   const n0 = (await host.node()) ?? {};
   const holding = await until(async () => {
     const n = await host.node().catch(() => null);
@@ -1200,6 +1260,7 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
   lanPolling = false;
   await lanLoop.catch(() => {});
   await waitKv(kv, 'done', { stopOn: ['abort'] });
+  const page = await pageP;
   // 重新下发：放云端看 service.endpoints（连接重开之后第一次见到非空的素材服务地址）；
   // 放本机看局域网发现（节点重连之后第一次从发现拿到主机与素材服务地址用了多久；重启只几秒时轮询不一定撞上「查不到」）
   const reopenAt = ep.events.filter((e) => e.ev === 'open').at(-1)?.at ?? null;
@@ -1209,9 +1270,53 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
   const reannounceMs = cfg.place === 'lan'
     ? (reconnected ? ((t) => (t === undefined ? null : t - reconnectedAt))(lan.oks.find((t) => t >= reconnectedAt)) : null)
     : (firstAsset && reopenAt ? firstAsset.at - reopenAt : null);
-  r.set({ e3: { reconnected, reconnectedAt: reconnected ? reconnectedAt : null, completedAfter, heldAtRestart: holding?.held ?? null, reannounceMs,
+  r.set({ e3: { reconnected, reconnectedAt: reconnected ? reconnectedAt : null, completedAfter, heldAtRestart: holding?.held ?? null, reannounceMs, page,
     lanDiscovery: cfg.place === 'lan' ? { polls: lan.polls, downMs: lan.downAt && lan.backAt ? lan.backAt - lan.downAt : null, asset: lan.asset } : null,
     endpoints: { closes: ep.closes, opens: ep.opens, withdrawn, events: ep.events.slice(-12).map((e) => ({ ...e, at: e.at - (ep.events[0]?.at ?? e.at) })) } } });
+}
+
+/**
+ * e3 主机侧的在线页面：成员 page 角色的副本（`openReplica`，带历史）。收到 restart.request 记副本当时的版本与会话序号；
+ * 等创建者写 restarted 之后，副本要以新会话（服务端重启，旧会话接续不上，连接层自己建新会话、重读）追到
+ * rev ≥ lastCommit.rev，并且重启之后见到的那一版摘要与 lastCommit.digest 相同（`m8/lib.mjs` 的 judgeLastCommit）。
+ * 结果回 `e3.page`，并判 page-resync-after-restart、last-commit-readable 两条。
+ */
+async function hostE3Page(r, kv, cfg, run, docUrl) {
+  const doc = await waitKv(kv, 'signal.e3.doc');
+  if (!r.check('page-doc-signal', !!doc)) return null;
+  const replica = await openReplica({ entry: sharedEntry({ url: docUrl, projectId: cfg.projectId, username: 'member', password: cfg.member.password, as: 'member', role: 'page', run, tag: `${NAME}-page` }),
+    docId: doc.docId, tag: `${NAME}-page`, history: true });
+  try {
+    const req = await waitKv(kv, 'signal.restart.request');
+    if (!r.check('page-restart-request', !!req?.lastCommit, req ? { hasLastCommit: !!req.lastCommit } : null)) return null;
+    const reqAt = Date.now();
+    const lastCommit = req.lastCommit;
+    const revBefore = replica.st.rev;
+    const sessions0 = replica.st.sessions;
+    const reopens0 = replica.st.reopens;
+    await waitKv(kv, 'signal.restarted', { timeoutMs: 40 * 60_000 });
+    // 重启之后：新会话里重读过、追到了那一版
+    const synced = await until(() => (replica.st.sessions > sessions0 && replica.st.seen.some((x) => x.session > sessions0) && replica.st.rev >= lastCommit.rev ? true : null), 120_000, 100);
+    const st = replica.st;
+    const seenAfter = st.seen.filter((x) => x.session > sessions0);
+    const firstReopen = seenAfter.find((x) => x.via === 'open') ?? null;
+    const detachAt = replica.ep.stats?.().lastDetach?.at ?? null;
+    const downAt = [detachAt, st.lastCloseAt].filter((t) => typeof t === 'number' && t >= reqAt - 60_000).sort((a, b) => a - b)[0] ?? null;
+    const valueAt = String(lastCommit.path ?? '').split('/').filter(Boolean).reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), st.body);
+    // 「重启后重读过」只认新会话里真的完成了 project.open 的（会话建成而没重读的，副本还是重启前内存里的内容）
+    const reopenedSessions = new Set(seenAfter.filter((x) => x.via === 'open').map((x) => x.session)).size;
+    const j = judgeLastCommit(lastCommit, { sessionsAfter: reopenedSessions, rev: st.rev, seenAfter, valueAt });
+    r.judge('page-resync-after-restart', j.resync);
+    r.judge('last-commit-readable', j.readable);
+    const at = seenAfter.filter((x) => x.rev === lastCommit.rev);
+    return { docId: doc.docId, resync: j.resync.ok, readable: j.readable.ok, via: j.readable.via ?? null, synced: !!synced,
+      revBefore, revAfter: st.rev, lastCommitRev: lastCommit.rev, digestMatch: j.readable.digestMatch ?? null,
+      digestAfter: at.at(-1)?.digest?.slice(0, 16) ?? null, digestWant: String(lastCommit.digest ?? '').slice(0, 16),
+      reconnectMs: firstReopen && downAt ? firstReopen.at - downAt : null, reopens: st.reopens - reopens0, sessionsAfter: st.sessions - sessions0, reopenedSessions,
+      closes: st.closes, applied: st.applied };
+  } finally {
+    await replica.close().catch(() => {});
+  }
 }
 
 /** e4 主机侧：成员 page 角色的副本，每轮 creator 写 e4.round.<k> 后追到那一版、回摘要 */
