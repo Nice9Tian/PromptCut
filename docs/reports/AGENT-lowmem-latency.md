@@ -50,9 +50,9 @@
 ## 验证
 
 - `npx tsc -b --force`：退出码 0（合 main 211695d 之后）。
-- `npm test`：见下一节。
+- `npm test`：退出码 0，tests 3641 / pass 3639 / fail 0 / skipped 2。
 - 渲染路径没动（只改 `scripts/probes/c10a-demo-probe.mjs` 与本报告），不跑 verify-determinism 与像素比较。
-- 探针：改后 R4、R5 `ok: true`、`fails: []`（R4 全程 632 s）。
+- 探针：改后 R4 `ok: true`、`fails: []`（全程 632 s）；R5 第 3 步各项都过，但整轮 `ok: false`，挂两处与本任务无关的：第 1 步「plan 落定时重卡每帧两档都在」292/300（那一段时间我同时在跑 `tsc -b --force`），第 5 步打开旧邀请链接的页面导航 120 s 超时（C10a 报告第 2.7 节 R5 同样的挂法，当时按负载登记）。
 
 ## 笔记本复测命令
 
