@@ -142,3 +142,9 @@ b8ab7a8 WIP:生成快照的纯函数
 23efdf3 报告:开工占位
 8f18461 … 7685c5e(合入的 claude/rq-m7-tests)
 ```
+
+## 补：A5 / A6 让路修复（主会话 2026-09-28 转验收探针结论）
+
+- 缺陷：播放、拖动时后台活的门关了，正在做的那一帧在舞台里被挡住；节点按 D8 等「当前帧做完」再放回，于是既不出帧也不放回，停下后约 5.2 s 才放回。
+- 修：`src/online/browserNode.ts` 让路（play / drag / urgent）之后，当前帧 `YIELD_FRAME_MAX_MS`（1 s，三级数字）内做不完就像页面隐藏那样中止它、立即放回（宿主每 250 ms 的节拍里判）。单测 `src/online/browserNode.test.mjs` 4 条，修前 3 条失败。
+- 验收探针（合入 `claude/m7-accept-probe`，`--role all`）：M7-A5 `page-yield-on-drag` pass（`claimsDuring 0`、`framesDuringDrag 0`、`yield-drag` 在拖动后 1162 ms 放回）、`page-attempts-unchanged` pass；M7-A6 `play-yield` pass（`claims 0`、`frames 0`、`releases ["yield-play"]`）、`hidden-release-now` pass、`urgent-stops-at-frame-boundary` pass（1153 ms）。同一轮其余 fail：M7-A10 两条、D1-D2-D12 一条，都在切分 / 锁接手一侧（队列分支在复现 A10），不是本修复的范围。
