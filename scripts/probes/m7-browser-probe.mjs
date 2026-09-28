@@ -52,8 +52,10 @@ const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SELF), '..', '..');
 const PROBE = 'm7-browser-probe';
 const PREFIX = 'm7ap';
-const BAND = [5450, 5459];
-const PORTS = { site: 5450, stageA: 5451, stageB: 5452, editor: 5453, coord: 5456 };
+/** --base-port N：整段端口挪到 N～N+9（缺省 5450；笔记本用它自己的 5580～5599 段时给 --base-port 5590） */
+const BASE_PORT = (() => { const i = process.argv.indexOf('--base-port'); const v = i >= 0 ? Number(process.argv[i + 1]) : 5450; if (!Number.isInteger(v) || v < 1024 || v > 65526) throw new Error(`--base-port 不对：${process.argv[i + 1]}`); return v; })();
+const BAND = [BASE_PORT, BASE_PORT + 9];
+const PORTS = { site: BASE_PORT, stageA: BASE_PORT + 1, stageB: BASE_PORT + 2, editor: BASE_PORT + 3, coord: BASE_PORT + 6 };
 const FPS = 30;
 const SECONDS = 10;
 const NODE_PENDING = '节点未就绪（等 rq-m7-node）';
@@ -747,24 +749,7 @@ async function runCreator(book, head) {
 
     if (isNode) {
       await pageServerSide(ctx);
-      // 页面当了节点时不起同身份替身（会与真页面抢）：双份出键、作废、层表 v3 直接在真页面的 h1～h3 上判；锁闲置接手见 M7-A10
-      const lmD = await contentGet(ctx.aConn, `layers:${ctx.projectId}`);
-      const pageFpD = ctx.pageNode?.envFingerprint ?? null;
-      const perClip = {};
-      for (const clip of ['h1', 'h2', 'h3']) {
-        const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
-        const pcCopy = ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp);
-        const pgCopy = ts.filter((t) => t.requires?.envFingerprint === pageFpD);
-        const cands = lmD?.layers?.find((l) => l.clipId === clip)?.candidates ?? [];
-        // 页面报到前（最多等 3 s）发的那一版切分时还没有浏览器指纹，只出 pc 一份（不带 dual）：这些照契约不作废，单列
-        const pcDual = pcCopy.filter((t) => t.input?.dual === true);
-        perClip[clip] = { pc: pcCopy.length, pcDual: pcDual.length, pcSingle: pcCopy.length - pcDual.length, page: pgCopy.length,
-          pageDual: pgCopy.length > 0 && pgCopy.every((t) => t.input?.dual === true || pcDual.length === 0),
-          pageHasBake: pgCopy.length > 0 && pgCopy.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
-          pcSuperseded: pcDual.filter((t) => god.tasks.get(t.id)?.state === 'failed' && /superseded/.test(String(god.tasks.get(t.id)?.lastError))).length,
-          candidates: cands.map((c) => c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFpD ? 'page' : c.envFingerprint) };
-      }
-      book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lmD?.v === 3 && Object.values(perClip).every((x) => x.page > 0 && x.pageDual && x.pageHasBake && x.pcSuperseded === x.pcDual && x.candidates.includes('page')), { v: lmD?.v ?? null, perClip });
+
     }
     else {
       for (const id of ['M7-A3', 'M7-A4', 'M7-A8', 'M7-A9', 'M7-A10']) book.pending(id, 'server', NODE_PENDING, { browserNodes: god.browserNodes().map((n) => ({ profile: n.profile, userId: n.userId })) });
@@ -800,6 +785,17 @@ async function runCreator(book, head) {
     say('creator-crash', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
     await kv.abort(errText(error));
   } finally {
+    // 删掉探针自己建的共享项目（外网模式下它在阿里云上；本机替身的托管组合本来就是临时的，一样删）
+    if (ctx.aConn && ctx.projectId && ctx.creator) {
+      try {
+        const M = await mods();
+        const ch = await ctx.aConn.rpc({ type: 'shared.challenge' });
+        const key = await M.deriveKey(ctx.creator.password, ch.salt, ch.kdf);
+        const m = await M.adminProof({ key, projectId: ctx.projectId, username: ctx.creator.username, op: 'delete', nonce: ch.nonce });
+        const r = await ctx.aConn.rpc({ type: 'shared.admin', op: 'delete', proof: { nonce: ch.nonce, m } });
+        head.projectDeleted = r?.type === 'shared.admin.ok';
+      } catch (error) { head.projectDeleted = false; head.projectDeleteError = errText(error); }
+    }
     for (const c of cleanups.reverse()) { try { await c(); } catch { /* 收尾出错不影响结论 */ } }
     await ownCoord?.stop();
     if (!flag('--keep-temp')) { try { fs.rmSync(path.join(out, 'hosted'), { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* Windows 句柄 */ } }
@@ -1046,7 +1042,8 @@ async function twinChecks(ctx) {
       const twinCopy = byFp[twin.fp] ?? [];
       const d1 = {
         clip, msAfterEdit: split ? Date.now() - tEdit : null, fps: Object.fromEntries(Object.entries(byFp).map(([k, v]) => [k, v.length])),
-        allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
+        // 只记不判：旁观节点存的是它最后收到的 task.opened；队列合并补 dual 后只对还 open 的重发，已认领 / 已作废的那几份留着旧正文
+      allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
         twinHasBake: twinCopy.length > 0 && twinCopy.every((t) => t.input?.compositing === 'independent' && t.input?.bake && ['start', 'end', 'count', 'sampling'].every((k) => k in t.input.bake)),
         pcHasNoBake: pcCopy.every((t) => !t.input?.bake),
         sameRanges: JSON.stringify(pcCopy.map((t) => `${t.range.from}-${t.range.to}:${t.priority}`).sort()) === JSON.stringify(twinCopy.map((t) => `${t.range.from}-${t.range.to}:${t.priority}`).sort()),
@@ -1159,6 +1156,43 @@ function planOnlyState(ctx) {
   return ctx.planOnly;
 }
 
+
+/**
+ * D1-D2-D12 在真页面上判（页面当了节点时；不起同身份替身，免得与真页面抢）。在 M7-A4 之后、M7-A10 之前判：
+ * 之后 pc 要重启、任务过了 DONE_TTL 会被回收，那时的切分没有浏览器、层表只剩 pc（队列方第二轮查明）。
+ * 判据（主会话 2026-09-28）：h1～h3 每张卡都出了双份（pc 指纹、页面指纹，都 dual，页面那份带 bake 与 independent）；
+ * 每张卡恰好有一份被作废（先认领的是谁都行：宿主全开时 pc 先得卡也合契约），被作废那份的全部段都是 superseded；
+ * 层表 v3 这一层两个候选（pc、页面）都在。
+ */
+async function judgeDualOnPage(ctx) {
+  const { book, god, watcher } = ctx;
+  const lm = await contentGet(ctx.aConn, `layers:${ctx.projectId}`);
+  const pageFp = ctx.pageNode?.envFingerprint ?? null;
+  const sup = (t) => god.tasks.get(t.id)?.state === 'failed' && (god.remote || /superseded/.test(String(god.tasks.get(t.id)?.lastError)));
+  const perClip = {};
+  for (const clip of ['h1', 'h2', 'h3']) {
+    const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
+    const copies = { pc: ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp), page: ts.filter((t) => t.requires?.envFingerprint === pageFp) };
+    const superseded = Object.entries(copies).filter(([, list]) => list.length > 0 && list.every(sup)).map(([k]) => k);
+    // 每一段（同一帧范围）恰好一份有效（没被作废）：先认领者得卡时是整份作废另一份；中途被 D2 接手（页面慢、锁闲置超 30 s）时
+    // 是先前那份的后几段作废、接手方补上 —— 两种都是每段恰好一份有效
+    const ranges = new Map();
+    for (const t of [...copies.pc, ...copies.page]) { const k = `${t.range?.from}-${t.range?.to}`; ranges.set(k, (ranges.get(k) ?? 0) + (sup(t) ? 0 : 1)); }
+    const badRanges = [...ranges].filter(([, n]) => n !== 1).map(([k, n]) => `${k}:${n}`);
+    const cands = lm?.layers?.find((l) => l.clipId === clip)?.candidates ?? [];
+    perClip[clip] = {
+      pc: copies.pc.length, page: copies.page.length,
+      allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
+      pageHasBake: copies.page.length > 0 && copies.page.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
+      superseded, partlySuperseded: Object.entries(copies).filter(([, list]) => list.some(sup) && !list.every(sup)).map(([k]) => k), badRanges,
+      candidates: cands.map((c) => (c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFp ? 'page' : c.envFingerprint)),
+    };
+  }
+  book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lm?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.pageHasBake
+    && x.badRanges.length === 0 && (x.superseded.length === 1 || x.partlySuperseded.length > 0) && x.candidates.includes('pc') && x.candidates.includes('page')),
+    { v: lm?.v ?? null, perClip, takenOverMidway: Object.entries(perClip).filter(([, x]) => x.partlySuperseded.length > 0).map(([c, x]) => `${c}: ${x.partlySuperseded.join('、')} 那份中途被 D2 接手（说明，不算失败）`) });
+}
+
 /* ---------------------------------------------------------------- 页面当了节点：服务端那一侧 */
 
 async function pageServerSide(ctx) {
@@ -1262,6 +1296,9 @@ async function pageServerSide(ctx) {
   for (const { t, man } of manifests) smallRows.push({ id: t.id.slice(0, 20), frames: man.frames?.length ?? 0, small: man.small?.length ?? 0, pxAll: await hasAll('px', man.small) });
   book.judge('M7-A9', 'server-every-frame-has-px', smallRows.length > 0 && smallRows.every((r) => r.small === r.frames && r.pxAll), smallRows);
 
+  /* ---- D1-D2-D12：A4 之后、A10 之前判（见 judgeDualOnPage） */
+  await judgeDualOnPage(ctx);
+
   /* ---- A10：宿主全开时谁先谁得卡；浏览器认领后关页、锁闲置 > 30 s、有人发布计划 → pc 接手整张卡 */
   if (flag('--no-a10')) { book.pending('M7-A10', 'server', '--no-a10'); return; }
   const z = await waitSignal(kv, 'a10.page-closed');
@@ -1312,7 +1349,8 @@ async function tapPage(page, name) {
   const leaks = [];
   const noteLeak = (where, s) => { if (TICKET_RE.test(String(s)) || [...secrets].some((t) => String(s).includes(t))) leaks.push(where); };
   cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
-    conns.set(requestId, { requestId, createdAt: Date.now(), role: null, owner: null, echoed: null, offered: [], closedAt: null, kind: null });
+    let host = null; try { host = new URL(url).host; } catch { /* 认不出 */ }
+    conns.set(requestId, { requestId, host, createdAt: Date.now(), role: null, owner: null, echoed: null, offered: [], closedAt: null, kind: null });
     noteLeak('ws-url', url);
   });
   cdp.on('Network.webSocketWillSendHandshakeRequest', ({ requestId, request }) => {
@@ -1340,6 +1378,8 @@ async function tapPage(page, name) {
     c.status = response?.status ?? null;
   });
   cdp.on('Network.webSocketClosed', ({ requestId }) => { const c = conns.get(requestId); if (c) c.closedAt = Date.now(); });
+  cdp.on('Network.webSocketFrameError', ({ requestId, errorMessage }) => { const c = conns.get(requestId); if (c) c.closeInfo = String(errorMessage).slice(0, 200); });
+  cdp.on('Network.loadingFailed', ({ requestId, errorText }) => { const c = conns.get(requestId); if (c) c.closeInfo = String(errorText).slice(0, 200); });
   const onFrame = (dir) => ({ requestId, response }) => {
     const text = response?.payloadData;
     if (typeof text !== 'string' || text.length > 4_000_000 || text[0] !== '{') return;
@@ -1395,7 +1435,9 @@ async function launchBrowser(cfg) {
     args: [...(process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu',
       ...(flag('--headful') ? [] : ['--window-position=-32000,-32000']),
       // 跨机（W7）时站点是局域网的 http：WebCrypto 等要安全上下文，按测试源放行（只放行这三个源）
-      ...(loopback ? [] : [`--unsafely-treat-insecure-origin-as-secure=${origins.join(',')}`])],
+      ...(loopback ? [] : [`--unsafely-treat-insecure-origin-as-secure=${origins.join(',')}`]),
+      // 额外的 Chromium 参数（与 c10-browser-probe 同一约定）。不要拿它关 TLS 校验：出站代理做 TLS 中间人的机器，把代理根证书导入 Chromium 的证书库
+      ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])],
   });
 }
 
@@ -1406,6 +1448,8 @@ async function openMember(browser, cfg, key, { lowMem = false, single = false } 
   page.on('dialog', (d) => void d.accept());
   page.pageErrors = [];
   page.on('pageerror', (e) => page.pageErrors.push(String(e?.message ?? e).slice(0, 200)));
+  page.consoleErrors = [];
+  page.on('console', (m) => { if (m.type() === 'error' && page.consoleErrors.length < 60) page.consoleErrors.push(m.text().slice(0, 240)); });
   const tap = await tapPage(page, key);
   const u = cfg.users[key];
   await page.evaluateOnNewDocument((dev, low) => {
@@ -1443,7 +1487,11 @@ async function openMember(browser, cfg, key, { lowMem = false, single = false } 
   const joined = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
   if (!joined) {
     const msg = await page.$eval('[data-pc="join-message"]', (el) => el.textContent).catch(() => null);
-    throw new Error(`${key} 没进项目：${msg}`);
+    // 页面把「连接没建成就断了」一律报成「用户名或密码不对」（syncManager.ts enterShared 末行）：把 WebSocket 的实情一并带上，
+    // 分得清是凭证被拒（握手 101 之后以 4xxx 关）还是连接根本没通（没有 101：证书、代理、升级被挡）
+    const wsDiag = [...tap.conns.values()].map((c) => ({ host: c.host ?? null, status: c.status ?? null, echoed: c.echoed ?? null, offered: c.offered, closed: !!c.closedAt, closeInfo: c.closeInfo ?? null }));
+    say('join-failed', { key, msg, ws: wsDiag, pageErrors: page.pageErrors.slice(-5), console: (page.consoleErrors ?? []).slice(-8) });
+    throw new Error(`${key} 没进项目：${msg}；WebSocket：${JSON.stringify(wsDiag).slice(0, 600)}`);
   }
   // 加载遮罩：出现又撤下（低内存档过渡期不测，可能根本不出现：members 在、2 s 内没有遮罩就算撤下）
   let seen = false;
@@ -1815,7 +1863,7 @@ async function runAll() {
     const run = newRunId();
     const common = ['--coord', coord.url, '--run', run, '--out', out, '--timeout-min', String(TIMEOUT_MS / 60_000), '--node-wait-s', String(NODE_WAIT_MS / 1000), '--a3-seconds', String(A3_MS / 1000),
       ...(flag('--no-twin') ? ['--no-twin'] : []), ...(flag('--no-a10') ? ['--no-a10'] : []), ...(arg('--dist') ? ['--dist', arg('--dist')] : []), ...(flag('--keep-temp') ? ['--keep-temp'] : []),
-      ...(flag('--a4-motion') ? ['--a4-motion'] : [])];
+      ...(flag('--a4-motion') ? ['--a4-motion'] : []), ...(arg('--base-port') ? ['--base-port', arg('--base-port')] : [])];
     const runRole = (role, extra = []) => new Promise((resolve) => {
       const c = spawn(process.execPath, [SELF, '--role', role, ...common, ...extra], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let stdout = '';
@@ -1823,7 +1871,8 @@ async function runAll() {
       c.stderr.on('data', (d) => process.stderr.write(d));
       c.once('exit', (code) => resolve({ role, code, line: lastJsonLine(stdout) }));
     });
-    const [cr, nd] = await Promise.all([runRole('creator'), runRole('node')]);
+    // 计时项按不按判定只看 node 角色（它在页面旁边计时）：--role all 带 --timing-authoritative 就转给 node
+    const [cr, nd] = await Promise.all([runRole('creator'), runRole('node', flag('--timing-authoritative') ? ['--timing-authoritative'] : [])]);
     return { run, out, creator: cr, node: nd };
   } finally {
     await coord.stop();
