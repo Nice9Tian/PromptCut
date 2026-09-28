@@ -6,7 +6,7 @@
 
 ## 状态
 
-修完、验证完，待主会话审。
+修完、验证完（单测、lan / cloud 探针、G0、G0-R 两项都过），待主会话审。
 
 ## 1. 观测（先加的诊断）
 
@@ -84,13 +84,25 @@ X1～X4 用帧库替身、素材服务与内容库替身；X5 用真的 `FramePi
 | `xdA1` | 诊断（未转发） | lan | 1 | **挂** `rerendered [pc 844724ed…:0-59]` | 修前复现 |
 | `xdA2` | 诊断（已转发） | lan | 0 | 过 `rerendered []` | 修前；这一轮 PC 没领到 host 做完的段 |
 | `xdL3` | 修后 `a5e12bd4` | lan | 0 | 过 `doneBeforeRestart 5, rerendered []` | 见下 |
-| `xdC1` | 修后 | cloud | 待填 | 待填 | |
+| `xdC1` | 修后 `a5e12bd4` | cloud | 1 | 挂 `rerendered [host-a ×3]` | **探针自己的误判**，见下 |
+| `xdC2` | 修后 + 探针修正 `6760411a` | cloud | 0 | 过 `doneBeforeRestart 5, rerendered []` | 见下 |
 
 `xdL3` 说明修复的路径真被走到了：host-a 重启前完成 `13150623…:0-59`、`a087f3ca…:0-59`、`7a657a52…:0-59`（主机推送 `blocks 180`，修前是 120——主机现在产小尺寸）；重启后 PC 在 15:56:11～15:56:15 连续 `node.task-dedup` 5 段，其中就有这三段（修前这就是 `xdA1` 那种补画重推）。其余检查全过：J-全完 30/30、J-恰一（按 epoch）、J-纯层 6 层、`reconnected-host-a`、`endpoint-reannounced-host-a`。主机每段用时 30～38 s（修前 `xdA1` 约 35 s），多出的小尺寸没有明显拖慢。
 
+`xdC1` 挂的三段（`44b1b651…:0-59`、`77b7130f…:0-59`、`f9adfc20…:0-59`）是 host-a 在 16:11:50、16:12:37、16:13:35 完成的，而托管组合 16:13:36 才重启（host-a 日志 `session.close 4404` 在这三行之后）——都是**重启前**完成的，探针却记成「重启后完成」。原因在 `m8-e-probe.mjs` 的 `hostE3`：重连的判据「opens 比进函数时多」的基准 `n0` 取在节点还没连上的时候（opens 0），节点第一次连上就被当成重连（`reconnectedAt` = 16:10:50，比重启早 3 分钟），之后完成的都算进「重启后」。修正（`6760411a`）：基准取「持有任务」那一刻的 opens（那时节点一定连着）。放本机那几轮 `reconnectedAt` 都在重启之后，没撞上。
+
+`xdC2` 说明修复在放云端也走到了：host-a 重启前完成 `30130486…:0-59`、`04f9a026…:0-59`、`b6285f1b…:0-59`（各 `blocks 180`），重启后 PC 在 16:30:40～16:30:43 连续去重 5 段，其中就有这三段。J-全完 30/30、J-恰一（按 epoch）、J-纯层、`reconnected-host-a` 全过。
+
 ### 4.3 G0 与 G0-R
 
-（待填）
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0 |
+| 全量测试 | `npm test`（PATH 先加 ffmpeg） | tests 3784 / pass 3782 / fail 0 / skipped 2（跳过的两条是要自起 dev server 的集成测试：`/api/cards/layout`、SKILL 闸门） |
+| 就绪索引端到端 | `node scripts/probes/ready-index-probe.mjs --port 5740` | 退出码 0，`ok: true`、`fails: []` |
+| 导出与快照重放一致 | 自起 `vite --port 5740 --strictPort --host 127.0.0.1`，`PC_FRAME_TEST_URL=http://127.0.0.1:5740 node scripts/verify-unified-frames.mjs` | 退出码 0，`PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; streamed video contains all 10 frames.` |
+
+导出确定性（`verify-determinism.mjs`）没跑：改动不碰导出路径——导出只读预渲染原尺寸与活渲，本次只是让主机多产一档小尺寸（写在快照同目录的 `<帧>.small.webp`，原 HTML 与 `index.json` 一字不动，c10a 第 9 节），以及产物库去重判据；导出像素不受影响。
 
 ## 5. 偏离与待定
 
@@ -98,5 +110,6 @@ X1～X4 用帧库替身、素材服务与内容库替身；X5 用真的 `FramePi
 - **二级语义冲突（已按语义改代码，未改语义）**：独立渲染主机不产预渲染小尺寸，与 `product/rendering.md`「两档」、c10a 第 9 节冲突；按原则 2 改了代码。影响：主机多一步截小位图、多推一档（每段多 60 块、约 0.3 MB），用时见 4.2。请主会话确认接受。
 - **〔裁〕**：`artifact-transfer-contract.md` 第 4 节 `has` 的补充（3 节末条）。属三级（机制），用户看不出区别；待主会话 / 用户审。
 - **探针判据的口径**：`no-rerender-of-done` 把 PC 重启后「完成」的已完成段都算重渲；修后不会再有「只补小尺寸」的完成，但若产出方是修前版本的主机（只有原尺寸），PC 领到仍会补画小尺寸、判据仍挂。跨版本混跑时请注意。
+- **探针修正**：`scripts/probes/m8-e-probe.mjs` 的 `hostE3` 重连基准（4.2 节 `xdC1`）。这不是产品缺陷，但会让 `no-rerender-of-done` 在放云端时偶发误报，主会话以前 `m8e3cL` 那一轮若也撞上过同类误报，值得回看。
 - **跨机没跑**：只跑了本机替身（lan、cloud 各一次），真跨机（笔记本 + PC）与阿里云 C2 没跑（任务书不要求，也不许连阿里云）。
 - 探针 `--keep` 跑的两轮（`xdA1`、`xdA2`）在 worktree 的 `out/docservice` 里留了两个项目（`m8e-e3-xdA1`、`m8e-e3-xdA2`），不入库；删 worktree 时一起没。
