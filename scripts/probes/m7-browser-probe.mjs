@@ -1029,7 +1029,8 @@ async function twinChecks(ctx) {
       const twinCopy = byFp[twin.fp] ?? [];
       const d1 = {
         clip, msAfterEdit: split ? Date.now() - tEdit : null, fps: Object.fromEntries(Object.entries(byFp).map(([k, v]) => [k, v.length])),
-        allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
+        // 只记不判：旁观节点存的是它最后收到的 task.opened；队列合并补 dual 后只对还 open 的重发，已认领 / 已作废的那几份留着旧正文
+      allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
         twinHasBake: twinCopy.length > 0 && twinCopy.every((t) => t.input?.compositing === 'independent' && t.input?.bake && ['start', 'end', 'count', 'sampling'].every((k) => k in t.input.bake)),
         pcHasNoBake: pcCopy.every((t) => !t.input?.bake),
         sameRanges: JSON.stringify(pcCopy.map((t) => `${t.range.from}-${t.range.to}:${t.priority}`).sort()) === JSON.stringify(twinCopy.map((t) => `${t.range.from}-${t.range.to}:${t.priority}`).sort()),
@@ -1169,7 +1170,7 @@ async function judgeDualOnPage(ctx) {
       candidates: cands.map((c) => (c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFp ? 'page' : c.envFingerprint)),
     };
   }
-  book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lm?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.allDual && x.pageHasBake
+  book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lm?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.pageHasBake
     && x.superseded.length === 1 && x.partlySuperseded.length === 0 && x.candidates.includes('pc') && x.candidates.includes('page')), { v: lm?.v ?? null, perClip });
 }
 
