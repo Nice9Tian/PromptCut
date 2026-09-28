@@ -18,11 +18,10 @@
  *                                   observer、host 经局域网发现(`--lan-host <ip:端口>` 手填兜底)凭项目凭证进入。见下文「放本机」
  *        [--lan-ip <PC 局域网地址>]  lan 的 creator:发给另两方的地址,缺省取本机第一块局域网网卡
  *        [--lan-host <ip:端口>]      lan 的 observer / host:发现查不到时手填
- *        [--heavy pinned | slow-stepped]  重卡片段怎么保证「一定判重」(计划第 5 节 L3),缺省 pinned:
- *                                   pinned       放 16 秒 `probe-typewriter`,放卡前按成本记录的「人工钉死」(`pinnedHeavy`)写一条记录(原做法);
- *                                   slow-stepped 放 `probe-slow-stepped`(每帧在舞台里烧 40 ms、预渲染间里不烧、`independent`),在哪台机器上都
- *                                                稳定判重,不用钉死。这张卡在 C10 集成分支(`src/cards/_probe/slow.tsx`),C10 合入 main 之前
- *                                                本检出没有它,选它会在放卡前报「卡不存在」退出;C10 合入后把缺省改成 slow-stepped、删掉钉死那一段
+ *        [--heavy slow-stepped | pinned]  重卡片段怎么保证「一定判重」(计划第 5 节 L3),缺省 slow-stepped(C10 合入 main 之后,51f01c4):
+ *                                   slow-stepped 放 `probe-slow-stepped`(`src/cards/_probe/slow.tsx`:每帧在舞台里烧 40 ms、预渲染间里不烧、
+ *                                                `independent`),在哪台机器上都稳定判重,不用钉死;
+ *                                   pinned       旧做法,只作对照:放 16 秒 `probe-typewriter`,放卡前按成本记录的「人工钉死」(`pinnedHeavy`)写一条记录
  *
  * ## 放本机(--place lan,M8-X1)与放云端的差别
  *   - 局域网主机就是素材服务所在:页面导入的两档素材直接落在主机本地,没有上传队列(页面挑不到别处的素材服务,留在本地),
@@ -139,8 +138,8 @@ const OBSERVER_THROTTLE = Math.max(0, Number(arg('--observer-throttle', process.
 const DEFAULT_PORT = { creator: 5590, observer: 5593, host: 5596 };
 /** 放法:cloud(托管端)| lan(M8-X1,creator 当局域网主机) */
 const PLACE = arg('--place', 'cloud');
-/** 重卡片段的保证方式(计划第 5 节 L3):pinned(人工钉死,缺省)| slow-stepped(确定判重的探针卡,C10 合入后才有) */
-const HEAVY_MODE = arg('--heavy', 'pinned');
+/** 重卡片段的保证方式(计划第 5 节 L3):slow-stepped(确定判重的探针卡,缺省)| pinned(人工钉死,旧做法) */
+const HEAVY_MODE = arg('--heavy', 'slow-stepped');
 const FPS = 30;
 const SEEK = 2.5;
 const EXPECT_IDX = Math.round(SEEK * FPS);
