@@ -295,11 +295,21 @@ export function createLocalNode({
       const byId = new Map(tasks.map(t => [t.id, t]));
       /** 这一轮被拒的:lockKey → { lockedBy, info } */
       const rejected = new Map();
+      /** 这一轮照别的指纹的锁发布成功、回包带着锁的描述的(M7-A10):lockKey → { lockedBy, info, ids } */
+      const followed = new Map();
       for (const r of Array.isArray(results) ? results : []) {
         if (r?.id == null) continue;
         if (r.error == null) {
           if (!seen.has(r.id)) { seen.add(r.id); derived.push(r.id); }
           if (r.state !== 'failed' && byId.has(r.id)) published.set(r.id, byId.get(r.id));
+          const task = byId.get(r.id);
+          const fp = task?.requires?.envFingerprint;
+          const lockKey = lockKeyOf(task);
+          if (r.lockIdleMs !== undefined && lockKey != null && typeof fp === 'string' && fp && fp !== node?.envFingerprint) {
+            const entry = followed.get(lockKey) ?? { lockedBy: fp, info: lockInfoOf(r), ids: [] };
+            entry.ids.push(r.id);
+            followed.set(lockKey, entry);
+          }
           continue;
         }
         // limit 等其它错误:没建成,不进 derived,也不做锁处理(F.7 第 4 条)
@@ -307,6 +317,18 @@ export function createLocalNode({
         const lockKey = lockKeyOf(byId.get(r.id));
         if (lockKey == null || typeof r.lockedBy !== 'string' || r.lockedBy === '') continue;
         rejected.set(lockKey, { lockedBy: r.lockedBy, info: lockInfoOf(r) });
+      }
+      // M7-A10:照锁出键的卡(本机锁库说锁在别的环境上,发布不会被拒)同样按 D2 判接手:锁定方闲置超时、还没做完,
+      // 就当这张卡被拒,下面按本节点指纹带 takeover 重发;照锁发出去的那几份随即被队列作废,不算发布成功
+      for (const [lockKey, entry] of followed) {
+        if (rejected.has(lockKey) || !takesOverLocked(lockKey, entry.lockedBy, entry.info)) continue;
+        rejected.set(lockKey, { lockedBy: entry.lockedBy, info: entry.info });
+        for (const id of entry.ids) {
+          published.delete(id);
+          const at = derived.indexOf(id);
+          if (at >= 0) derived.splice(at, 1);
+          seen.delete(id);
+        }
       }
       if (rejected.size === 0) break;
       for (const lockKey of rejected.keys()) relocked.add(lockKey);
