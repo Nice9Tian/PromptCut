@@ -158,7 +158,7 @@
 
 | 放法 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 放云端 | 受害节点（云端独立主机，或笔记本回来后）经 `render-queue-proxy.mjs` 连文档服务，持有任务后（KV `host.holding`）往代理写 `stall`，30 s 后写 `resume`（约束「不动宿主机的网络」（2026-09-28）；`blackout.ps1` 已删） | 待填 | 代理 `control.stall` / `control.resume` 时刻与 `stalledMs`；旁观节点时间线；`resumes` / `opens` / `lost` | 接手 ≤ 37 s 或保留期内接续；旧令牌 `complete` 回 `lease-lost`；60 s 内重连取活；J-全完、J-恰一、J-纯层 |
+| 放云端 | 受害节点（云端独立主机，或笔记本回来后）经 `render-queue-proxy.mjs` 连文档服务，持有任务后（KV `host.holding`）往代理写 `stall`，30 s 后写 `resume`（约束「不动宿主机的网络」（2026-09-28）；`blackout.ps1` 已删）。实际：笔记本 host-a `--via-proxy 5596 --stall --stall-s 30`、host-b 直连；PC `--role creator --case e2` | **首轮没过**（run `m8c1c`，08:19～08:36Z）：`c1-outcome`（被扣的任务恢复后 154 s、stall 起 184 s 才被放回）、`e2:J-all-done` 29/30（`408754…:0-59` 满 3 次尝试后永久失败）、`J-exactly-once` missing 1、`victim-no-double-done`（受害方做完了被收回的那一段，完成报告按令牌作废，没有第二次 `task.done`）。修复后复跑，待填 | 创建者结果行（`fails` 4 条原文见主会话记录）；代理：stall 08:19:42.375Z、resume 08:20:12.538Z（`stalledMs` 30162，积压上行 4、下行 5 块）；08:24:24.178Z 上游（8787）关了连接（`upstream-closed`，托管端记 `session.detach` 1006），630 ms 后会话接续、重发 7 条；两台主机：host-a 认领 21 / 完成 9 / 去重 5 / 失败 1 / **丢认领 6**，host-b（全程没断线）认领 19 / 完成 6 / 去重 4 / 失败 2 / **丢认领 7**；3 次 `sink-incomplete`（host-b `408754…:0-59` 08:22:58.856Z、host-a `0f1040…:240-299` 08:29:52.999Z、host-b `184ecf…:240-299` 08:30:15.646Z）。对照：E1 两台丢认领 0、E4 host-a 认领 43 丢 0、E2 两台各丢 1。**推断**：08:20:12～08:24:24 受害方连接正常、续约照发，host-b 全程没断线，所以这些收回只能是队列的「停滞」规则（帧数 120 s 没变就收回，契约 A.8 第 2 项）；节点在预渲染间里排队、渲完补小尺寸、推产物这几段帧数都不变，慢了就被误判。现有日志不记每次收回的原因（队列对节点一律报 `expired`、主机逐任务事件不进日志），诊断与修复在 `claude/stall-phases`（第 12a 节） | 接手 ≤ 37 s 或保留期内接续；旧令牌 `complete` 回 `lease-lost`；60 s 内重连取活；J-全完、J-恰一、J-纯层 |
 | 放本机 | 同上，代理指向 PC 局域网主机 | 待填 | 同上 | 同上 |
 
 ### C2 `pm2 restart` 阿里云托管组合（兼 E3 放云端）
