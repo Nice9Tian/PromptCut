@@ -785,6 +785,17 @@ async function runCreator(book, head) {
     say('creator-crash', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
     await kv.abort(errText(error));
   } finally {
+    // 删掉探针自己建的共享项目（外网模式下它在阿里云上；本机替身的托管组合本来就是临时的，一样删）
+    if (ctx.aConn && ctx.projectId && ctx.creator) {
+      try {
+        const M = await mods();
+        const ch = await ctx.aConn.rpc({ type: 'shared.challenge' });
+        const key = await M.deriveKey(ctx.creator.password, ch.salt, ch.kdf);
+        const m = await M.adminProof({ key, projectId: ctx.projectId, username: ctx.creator.username, op: 'delete', nonce: ch.nonce });
+        const r = await ctx.aConn.rpc({ type: 'shared.admin', op: 'delete', proof: { nonce: ch.nonce, m } });
+        head.projectDeleted = r?.type === 'shared.admin.ok';
+      } catch (error) { head.projectDeleted = false; head.projectDeleteError = errText(error); }
+    }
     for (const c of cleanups.reverse()) { try { await c(); } catch { /* 收尾出错不影响结论 */ } }
     await ownCoord?.stop();
     if (!flag('--keep-temp')) { try { fs.rmSync(path.join(out, 'hosted'), { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* Windows 句柄 */ } }
