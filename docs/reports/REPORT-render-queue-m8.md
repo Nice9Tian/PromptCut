@@ -18,30 +18,33 @@
 
 ### 1.1 前置核对（主计划第 6.5 节 W8：「M6～M7 全部合入之后」）
 
-| 前置 | 现状（main `c718be6`，2026-09-28） | 合入提交 | 证据 |
+| 前置 | 现状（骨架起草时 main `c718be6`，2026-09-28） | 合入提交 | 证据 |
 |---|---|---|---|
-| C10 其余合入 main 并部署阿里云 | 未合入（`claude/c10-integ` `24c2c57`） | 待填 | 待填 |
-| M7 合入 main 并部署 | 未合入（`claude/rq-m7-node`、`claude/rq-m7-queue`、`claude/rq-m7-tests`、`claude/m7-probe` 在做） | 待填 | 待填 |
+| C10 其余合入 main 并部署阿里云 | 未合入（`claude/c10-integ` `24c2c57`） | **已合入**：main `51f01c4`（C10 合入的最后一个提交）；阿里云主实例 04:59Z 部署 M7 合入后的在线构建（含 C10），09:18Z、10:28Z 各重部署一次（第 10 节） | `REPORT-C10.md`；第 10 节前三行 |
+| M7 合入 main 并部署 | 未合入（`claude/rq-m7-node`、`claude/rq-m7-queue`、`claude/rq-m7-tests`、`claude/m7-probe` 在做） | **已合入**：main `a52344a`（`REPORT-M7.md` 补齐时的提交；各子分支的合并见 `REPORT-M7.md`），04:59Z 部署 | `REPORT-M7.md`；第 10 节第一行 |
 | 1080p 分段编码在笔记本过线（L20） | `claude/perf-encode` `7cbf70a`，合入 main `211695d` | 过：笔记本 ENC-1 修复版 p50 中位数 290 ms（main 403）、ENC-2 合入后 283 ms，五轮 fails []、字节不变 | 笔记本回执（主会话记录，2026-09-28） |
-| 进跨机前必须合入的遗留：L10、L16（`claude/eol-eperm`）、L17（已合 `96e69cb`）、L1（已合 `ceab9e4`）、L4、L5（`claude/card-overlay`） | 见左 | 待填 | 待填 |
-| L14 `server/card-sync.mjs` 接会话层（裁定 D9） | `claude/m8-session-legacy` 在做 | 待填 | 待填 |
-| 探针分支 `claude/m8-kit`、`claude/m8-e2e`、`claude/m8-scale`、`claude/m8-migrate` | `m8-kit`、`m8-migrate` 已开；`m8-e2e`、`m8-scale` 未见分支 | 待填 | 待填 |
+| 进跨机前必须合入的遗留：L10、L16（`claude/eol-eperm`）、L17（已合 `96e69cb`）、L1（已合 `ceab9e4`）、L4、L5（`claude/card-overlay`） | 见左 | **都已合入**：L10、L16 `2fa0c1a6`（`claude/eol-eperm`）；L17 `96e69cb`；L1 `ceab9e4`；L4、L5 `2e957270`（`claude/card-overlay`） | 各合并提交的信息；`AGENT-eol-eperm.md`、`AGENT-card-overlay.md` |
+| L14 `server/card-sync.mjs` 接会话层（裁定 D9） | `claude/m8-session-legacy` 在做 | **已合入**：`278eeb9d` | `AGENT-m8-session-legacy.md` |
+| 探针分支 `claude/m8-kit`、`claude/m8-e2e`、`claude/m8-scale`、`claude/m8-migrate` | `m8-kit`、`m8-migrate` 已开；`m8-e2e`、`m8-scale` 未见分支 | **都已合入**：`m8-kit` `fdf515e3`、`m8-migrate` `6d516f32`、`m8-scale` `b18256e1`、`m8-e2e` `4538ec42`；M8 期间另合的探针见第 12a 节 | 各合并提交的信息 |
 
 ### 1.2 参与方与代码同步
 
 | 机器 | 角色 | 提交（`git rev-parse HEAD`） | node / Chrome / 指纹 | 端口 |
 |---|---|---|---|---|
-| PC（主会话） | 创建者、发布方、PC 节点、放本机的项目的局域网主机、阿里云管理员 | 待填 | 待填 | 5780～5789（`m8-plan.md` 第 1.3 节，待主会话核对） |
-| 笔记本（辅助测试节点，性能基准机） | 独立渲染主机、第二成员、纯浏览器节点、断网受害方、耗时项 | 待填 | 待填 | 5580～5599 |
-| 阿里云 `8.219.80.16` | 托管组合 `promptcut-hosted`；信箱与协调口 `probe-coord`；演练实例 `promptcut-drill` | 部署提交待填 | — | 8787 / 8788；演练 8777 / 8778 |
-| 笔记本（**主会话，2026-09-28 第五次修订起**，「PromptCut M5～M8 开发交接」） | 创建者、发布方、PC 节点、独立渲染主机、放本机的项目的局域网主机（本机替身）、阿里云管理员、性能基准机 | `29e6e837`（代码同 `0cabcfb0`，代码版本 `21c62981…`） | Node 24.19.0；预渲染 Chrome 152（SwiftShader）；指纹 `258acaaa7c5fe509` | 5760～5799；局域网地址 `192.168.50.79`（有线） |
+| PC（主会话，第五次修订之前） | 创建者、发布方、PC 节点、阿里云管理员 | 交接时 main `0cabcfb0`（各项跑时的提交见各行） | Node 24.19.0；系统 Chrome 154.0.8037.57；预渲染 Chrome 同为 SwiftShader 时指纹 `258acaaa7c5fe509`；RTX 3080 | 5780～5789 |
+| 笔记本（辅助测试节点，性能基准机；第五次修订之前） | 独立渲染主机、第二成员、纯浏览器节点、耗时项 | `.worktrees/lt-M8` @ `0cabcfb0`（交接时） | Node 24.19.0；预渲染 Chrome 152（SwiftShader）；指纹 `258acaaa7c5fe509` | 5580～5599 |
+| 阿里云 `8.219.80.16` | 托管组合 `promptcut-hosted`；信箱与协调口 `probe-coord`；演练实例 `promptcut-drill` | 服务端 main `0cabcfb0`（10:28Z 部署，之后到 M8 收尾只改了探针与文档）；编辑器页 `index-Cp2h7djI.js`（代码版本 `21c62981…`，09:18Z 部署） | — | 8787 / 8788；演练 8777 / 8778（演练完收回） |
+| 笔记本（**主会话，2026-09-28 第五次修订起**，「PromptCut M5～M8 开发交接」） | 创建者、发布方、PC 节点、独立渲染主机、放本机的项目的局域网主机（本机替身）、阿里云管理员、性能基准机 | `29e6e837`（代码同 `0cabcfb0`，代码版本 `21c62981…`） | Node 24.19.0；预渲染 Chrome 152（SwiftShader）；指纹 `258acaaa7c5fe509` | 5760～5799；局域网地址先是 `192.168.50.79`（有线），15:50Z 前后起 `192.168.50.247`（WLAN `ASUS_00_5G`，中间一段只连着别的 WiFi `10.11.130.249`，到 PC 不通） |
 | 云端（「PromptCut M5～M8 云端工作节点」，第五次修订起唯一的第二台机器） | 独立渲染主机、远程成员（只能经代理出网、没有局域网） | `29e6e837`（指令 E6R-1 检出） | Node 22.22.2；Chromium 141；指纹 `0326290ea8e62e3d`；没有 ffmpeg | 容器内 5425 |
+| PC 辅助节点（「PromptCut M5～M8 PC 辅助测试节点」，2026-09-28 15:48Z 前后起用户恢复） | 放本机一串的局域网主机与创建者、异地接入的创建者、全量测试与构建 | 报到时 `29e6e837`；工作 worktree `.worktrees/pc-m8-merge` @ `9cf43f1f` | Node 24.19.0；系统 Chrome 154.0.8037.57；ffmpeg 9.0.1；RTX 3080；局域网 `192.168.50.96`（以太网 3，公用网络，node.exe 入站 TCP / UDP 已放行） | 5780～5789（协调口 5789） |
 
-- 第五次修订（2026-09-28 ~11:15Z，用户定的交接，`HANDOFF-2026-09-28-pc.md`）之后 PC 主会话与两个辅助节点待命；上面前三行是交接前的分工，后两行是之后的。
+- 第五次修订（2026-09-28 ~11:15Z，用户定的交接，`HANDOFF-2026-09-28-pc.md`）之后 PC 主会话与两个辅助节点待命；上面前两行是交接前的分工，笔记本主会话与云端两行是之后的。2026-09-28 15:48Z 前后用户恢复 PC 辅助节点，派活顺序回到主计划 6.4 节（算力类先 PC，其次本机，云端最后；带耗时门槛的验收仍在笔记本判），笔记本辅助节点继续待命。
 
 ### 1.3 握手
 
-〔待填：笔记本报到（能力、权限模式、提交）与主会话回执，主计划第 6.4 节。〕
+- **交接之前（PC 主会话期间）**：笔记本辅助节点的报到与各批指令（M8-B1～M8-B3b）的回执见 `HANDOFF-2026-09-28-pc.md` 第 5 节与第 2～7 节各行证据栏；交接时没有已发未回执的指令。
+- **第五次修订后，云端**：主会话经信箱 `to-cloud` 第 25 条确认自己是主会话（「PromptCut M5～M8 开发交接」），云端 `to-local` 第 29 条回执：已知悉、只听本会话，HEAD 当时 `4047133b`；此后按指令检出 `29e6e837`（E6R-1、RMT-1）。
+- **2026-09-28 15:48Z 前后，PC 辅助节点**（用户叫它恢复）：经跨会话消息报到（会话 `local_11a6491a…`，权限模式 `bypassPermissions` 不挂起消息；HEAD `29e6e837` = origin/main；Node v24.19.0、Chrome 154.0.8037.57、ffmpeg 9.0.1、RTX 3080、局域网 192.168.50.96），主会话核对后回执，握手完成。随后 PC-M8-0 局域网 TCP 互探：笔记本 → PC 5789 收到 `pc-ok 2026-09-28T15:53:20.014Z 192.168.50.247`，PC → 笔记本 5799 收到 `laptop-ok 2026-09-28T15:52:39.898Z 192.168.50.96`（笔记本日志 `conn from 192.168.50.96:7811`）；两边网络类别都是「公用」，node.exe 入站 TCP、UDP 都已放行，不用改防火墙。
 
 ## 2. E1～E6（放云端一遍、放本机经局域网直连一遍）
 
@@ -83,7 +86,7 @@
 
 | 放法 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 放云端 | `scripts/probes/m7-browser-probe.mjs` 的站点模式（W7 同法）：PC `--role creator --site https://8-219-80-16.sslip.io --run <id> --node-wait-s 2400`；笔记本 `--role node --site … --run <id> --timing-authoritative`（笔记本 Chrome 当成员 B 的纯浏览器节点） | **A1、A2 过；A3 服务端那半在外网模式看不到认领者，由节点侧 `page-forbidden-claimed-0` 判**：M7 阶段的 W7（run `m7w0928e`，旧代码 `ddf69b5e…`）跨机过；部署推送提速之后复测（run `m7w0928f`，09:36Z，代码 `21c62981…`）：A1、A2、A5（笔记本计时）、A7、A8、A9、A10、A12（笔记本计时）、D1-D2-D12、D9、D10、D14 过，A3、A11 按外网模式记待定（看不到托管端的认领者与日志）；A4 与 A6 见下。**站点复测第 2 轮**（run `m7w0928L`，2026-09-28T12:03:14Z～12:26:11Z，第五次修订后 PC 待命：创建者 `--role creator --site … --node-wait-s 2400 --base-port 5780` 与成员 B 的节点 `--role node --site … --timing-authoritative --base-port 5760` 都在笔记本上，main `29e6e837`）：A1、A2、A3（节点侧 `page-forbidden-claimed-0`）、A5、**A6**（上一轮挂在探针时序、修后这轮过）、A7、A8、A9、A12、D9、D10、D14、D1-D2-D12 过；A10 的「空闲接手」过（锁移到 PC 指纹、页面层换过去、ready 61，用时 218 s）；**没过的两处都是慢**：① A4 最慢锚点段 33.3 s（经公网，笔记本判；上一轮 37.4 s），另 3 层到判的那一刻还没有浏览器产的帧（`page-layer-env-browser`：h1 ready 60、h2 / h3 / light 仍是 PC 指纹的主候选 ready 0）；② A10「两份任务谁先谁得卡、每张卡只出自一种环境」：加的两张卡 w2 由浏览器节点做完（`258acaaa…`），w1 在探针等的 300 s 里谁都没做完，于是记失败——同一台笔记本上同时跑创建者的 PC 节点（刚接手重渲整张 z1）与浏览器节点，软件渲染排不开；**没有一张卡混两种环境**。〔裁〕A4 照 M7 验收口径记经公网的观察项（30 s 门槛以笔记本本机 M7-T1c 27.6 s 为准）；A10 的站点通过证据以 `m7w0928f`（PC 创建者、笔记本节点，过）为准，这一轮的超时记单机负载下的现象；W7 的真跨机（D17）仍待复核：云端的无头 Chromium 过不了它的代理的 WebSocket 升级（W7-4），当不了成员 B 的浏览器 | 创建者结果行（`items` 逐项）；笔记本 M8-B3a 回执（待填）。**A6「更急的活在帧边界让路」这一轮没过**（`framesAfter 60`、没有释放）：查明是探针时序——节点认领一到手先报一条 done 0，探针见到就触发，而这时后台舞台上还没在生成，测量直接做完、没有东西可让；同一代码在本机替身（含压 76 ms）与旧代码的站点首轮都过。探针改为等这一段真的出过帧（done ≥ 1）再触发（`claude/m7-a6-race`），复跑待填。**A4** 最慢锚点段 37.4 s（旧代码同法 63 s）：首段从闸门放开到完成 23.7 s，其后两段各约 7 s（每帧 p50 95 ms），剩下的超出在首段开工前约 17 s（经公网取卡片代码、素材、票据与舞台预热），按 M7 验收口径（30 s 门槛在笔记本本机判，M7-T1c 27.6 s 过）记为经公网的观察项 | M7-A1、A2、A3：同项目另一成员的任务收到 0 条、认领 `forbidden`；同名不同设备同样挡住 |
+| 放云端 | `scripts/probes/m7-browser-probe.mjs` 的站点模式（W7 同法）：PC `--role creator --site https://8-219-80-16.sslip.io --run <id> --node-wait-s 2400`；笔记本 `--role node --site … --run <id> --timing-authoritative`（笔记本 Chrome 当成员 B 的纯浏览器节点） | **A1、A2 过；A3 服务端那半在外网模式看不到认领者，由节点侧 `page-forbidden-claimed-0` 判**：M7 阶段的 W7（run `m7w0928e`，旧代码 `ddf69b5e…`）跨机过；部署推送提速之后复测（run `m7w0928f`，09:36Z，代码 `21c62981…`）：A1、A2、A5（笔记本计时）、A7、A8、A9、A10、A12（笔记本计时）、D1-D2-D12、D9、D10、D14 过，A3、A11 按外网模式记待定（看不到托管端的认领者与日志）；A4 与 A6 见下。**站点复测第 2 轮**（run `m7w0928L`，2026-09-28T12:03:14Z～12:26:11Z，第五次修订后 PC 待命：创建者 `--role creator --site … --node-wait-s 2400 --base-port 5780` 与成员 B 的节点 `--role node --site … --timing-authoritative --base-port 5760` 都在笔记本上，main `29e6e837`）：A1、A2、A3（节点侧 `page-forbidden-claimed-0`）、A5、**A6**（上一轮挂在探针时序、修后这轮过）、A7、A8、A9、A12、D9、D10、D14、D1-D2-D12 过；A10 的「空闲接手」过（锁移到 PC 指纹、页面层换过去、ready 61，用时 218 s）；**没过的两处都是慢**：① A4 最慢锚点段 33.3 s（经公网，笔记本判；上一轮 37.4 s），另 3 层到判的那一刻还没有浏览器产的帧（`page-layer-env-browser`：h1 ready 60、h2 / h3 / light 仍是 PC 指纹的主候选 ready 0）；② A10「两份任务谁先谁得卡、每张卡只出自一种环境」：加的两张卡 w2 由浏览器节点做完（`258acaaa…`），w1 在探针等的 300 s 里谁都没做完，于是记失败——同一台笔记本上同时跑创建者的 PC 节点（刚接手重渲整张 z1）与浏览器节点，软件渲染排不开；**没有一张卡混两种环境**。〔裁〕A4 照 M7 验收口径记经公网的观察项（30 s 门槛以笔记本本机 M7-T1c 27.6 s 为准）；A10 的站点通过证据以 `m7w0928f`（PC 创建者、笔记本节点，过）为准，这一轮的超时记单机负载下的现象；W7 的真跨机（D17）仍待复核：云端的无头 Chromium 过不了它的代理的 WebSocket 升级（W7-4），当不了成员 B 的浏览器 | 创建者结果行（`items` 逐项）；笔记本 M8-B3a 回执（交接前已收，见 `HANDOFF-2026-09-28-pc.md` 第 5 节）。**A6「更急的活在帧边界让路」这一轮没过**（`framesAfter 60`、没有释放）：查明是探针时序——节点认领一到手先报一条 done 0，探针见到就触发，而这时后台舞台上还没在生成，测量直接做完、没有东西可让；同一代码在本机替身（含压 76 ms）与旧代码的站点首轮都过。探针改为等这一段真的出过帧（done ≥ 1）再触发（`claude/m7-a6-race`，main `21eaeb8f`），复跑见本行结果栏站点复测第 2 轮 `m7w0928L`：A6 过。**A4** 最慢锚点段 37.4 s（旧代码同法 63 s）：首段从闸门放开到完成 23.7 s，其后两段各约 7 s（每帧 p50 95 ms），剩下的超出在首段开工前约 17 s（经公网取卡片代码、素材、票据与舞台预热），按 M7 验收口径（30 s 门槛在笔记本本机判，M7-T1c 27.6 s 过）记为经公网的观察项 | M7-A1、A2、A3：同项目另一成员的任务收到 0 条、认领 `forbidden`；同名不同设备同样挡住 |
 | 放本机 | 同上，`--place lan`；前提是浏览器能进放本机的项目（M8-X4） | **按语义不做**（2026-09-28 主会话更正裁定 D6）：`product/platforms.md`「在线浏览器模式」（用户 2026-09-27 定）写明「只加入……项目只能是放云端的多用户协作项目」，浏览器进放本机的项目不是一期承诺的能力，纯浏览器节点也就不会出现在放本机的项目里。原裁定 D6「记待跨机复核」等于推到 M8 之外，与主计划第 10 节「不得缩小范围」对不上；按「语义优先」改为不做，见第 13 节 | — | — |
 
 ### E6 两种指纹
@@ -92,7 +95,7 @@
 |---|---|---|---|---|
 | 放云端（测试开关） | `m8-e-probe.mjs --case e6`；笔记本 `--role host --fake-fingerprint <16 位十六进制>`（设 `PROMPTCUT_TEST_ENV_FINGERPRINT`，开关在 C10 集成分支的 `server/frame-pipeline.mjs`）；实际 PC `--role creator --case e6 --hosts host-a`，笔记本 `--fake-fingerprint e6f00d00e6f00d00` | **核心判据过、J-全完差一个**（run `m8e6c`，08:57:33Z 起，19.2 min）：指纹 `e6f00d00e6f00d00` 的主机认领 0（`other-fingerprint-claimed-0-host-a` claimed 0、ids []，主机侧 `fingerprint.applied true`）；`e6:J-pure-layers` 4 层、观测 39、mixed []；但唯一能做这一版的 PC 节点有 1 个任务 `32c612…:120-179` 满 3 次尝试后永久失败，`e6:J-all-done` 19/20、`J-exactly-once` missing 1。PC 节点一次只认领 1 个（不排队），那段时间 PC 上另有两个子智能体在跑测试与本机替身；与 C1 同一类（停滞误判，`claude/stall-phases`）。**修复后复跑全过**（run `m8e6d`，10:38Z，main `0cabcfb0`，11.7 min）：`other-fingerprint-claimed-0-host-a` claimed 0（`e6f00d00e6f00d00`）；`e6:J-all-done` 20/20（全部由 PC 节点完成）、`J-exactly-once` total 21 dup []、`J-pure-layers` 4 层 mixed [] | 创建者结果行（`fails` 2 条）；笔记本 M8-B1 回执（host-a stats 全 0、`envFingerprint e6f00d00e6f00d00`） | 指纹 Y 的主机对这一版细任务认领 0；J-全完、J-纯层；反方向（笔记本主机先认领按清单发布的 plan）再一遍 |
 | 放云端（反方向：Y 先认领页面发布的清单 plan；**真不同环境**，云端当 Y） | 笔记本：`c10-browser-probe.mjs --site https://8-219-80-16.sslip.io --e6-reverse --run e6r0928L --base-port 5780 --host-wait-min 30`（页面、创建者桌面版，X 的两种节点：协议层 claimer 与真独立渲染主机，都是笔记本的真实指纹 `258acaaa7c5fe509`）；云端（指令 E6R-1，`to-cloud` 第 26 条）：`c10-browser-probe.mjs --role host --run e6r0928L --port 5425`，不用测试开关，真实环境 Linux、Chromium 141，指纹 `0326290ea8e62e3d` | **过**（run `e6r0928L`，11:42:58Z～11:58:19Z，15.4 min，main `29e6e837`，代码版本 `21c62981…`）：Y 在 X 上线前认领了页面这一版的清单 plan（`plan:…@11#clips:…`），按自己的指纹切分；X 的协议层节点对要求 Y 指纹的细任务试认领 9 次，9 次都被拒（`fingerprint-mismatch`）、认领 0；X 的真主机同时在线，同样 0 | 页面结果行 `ok true fails []`，`steps.e6r` 九条全过：`Y-claimed-plan`（Y 的持有记录里有这个 plan，认领早于 X 上线）；`derived-fingerprints` 17 个细任务 = Y 自己那份 5 个 + M7 D1 双份 Y/dual 6 个 + 页面/dual 6 个，没有别的；`X-online-while-work`（X 上线后还有 11 个完成）；`X-claimed-0`（claimer 9 次尝试全是 `fingerprint-mismatch`）；`J-all-done` 11/11（作废的 6 个全是 dual）；`J-exactly-once` total 12、dup []、missing []、单一 epoch；`J-pure-layers` 3 层、mixed []（Y 做 10、页面 1）；`layer-map-covers-done` v 3、3 张卡全覆盖、主指纹全是 Y；`X-differs-from-Y`。L18：桌面发布的 plan 对 host 档回 `plan-profile`（只记录）。云端回执（`to-local` 第 30 条）：HEAD `29e6e837`、退出码 0、`ok true fails []`，认领 11（plan + 10）、完成 10、丢认领 0、失败 0、传输 ws、opens 1、resumes 0、代码版本 `21c62981…`，主机环境没有 ffmpeg 照常做完 | 同上（〔裁〕E6 反方向判据，见第 13 节）。这一轮补上了「真不同环境指纹的两台机器之间」这一项（原先只有测试开关与纯浏览器节点两种替代） |
-| 放云端（纯浏览器节点当第二种指纹，裁定 D12） | M7 合入后 | 待填 | 同上 | 同上 |
+| 放云端（纯浏览器节点当第二种指纹，裁定 D12） | 随 E5 的站点复测（`m7-browser-probe --site`，第 2 节 E5） | **已随 W7 跑过，「天然不同」没成立**〔裁〕：W7（`m7w0928f`、`m7w0928L`）里页面这个纯浏览器节点报的指纹是 `258acaaa7c5fe509`，PC 节点由 M7 探针的测试开关改成 `c9c809564ae7cdfe`（`pcFpApplied true`）；在这两种指纹之间 D1-D2-D12（双份键先认领者得卡、建锁时作废另一份、层表 v 3 的候选）与 A10（每张卡只出自一种环境）都判过。计划 D12 (b) 设想纯浏览器节点「天然不同指纹」：同机时页面用的 puppeteer Chrome 与桌面版预渲染的 Chrome 是同一个二进制、同为 SwiftShader，指纹相同，所以 M7 探针才给 PC 节点开测试开关。「真实的第二种环境」这一半由 E6 反方向补上（云端 Linux / Chromium 141，指纹 `0326290ea8e62e3d`，不用测试开关） | `m7w0928L` 创建者结果行 `pcFp c9c809564ae7cdfe`、`pcFpApplied true`、`pageFp 258acaaa7c5fe509`；E6 反方向一行 | 同上 |
 | 放本机 | 同上，`--place lan`：创建者 `--case e6 --hosts host-a`，host-a `--case e6 --fake-fingerprint e6f00d00e6f00d00`。本机替身（第五次修订后 PC 待命）：笔记本同时当局域网主机（创建者编辑器 `PROMPTCUT_LAN_HOST=1`、绑 0.0.0.0:5780，局域网地址 `192.168.50.79`）与主机，协调口也在笔记本（`probe-coord.mjs serve --host 0.0.0.0 --port 5799`，全程不连阿里云）；主机 `--lan-host 192.168.50.79:5780`；main `29e6e837`。真跨机（PC 当局域网主机）待复核 | **过（本机替身）**（run `m8e6lanL`，13:51:14Z～14:05:47Z，14.4 min）：指纹 `e6f00d00e6f00d00` 的主机认领 0；20 个细任务全由创建者节点完成 | 创建者结果行 `ok true fails []`（15 条）：`other-fingerprint-claimed-0-host-a` claimed 0、ids []；`e6:J-all-done` 20/20；`e6:J-exactly-once` total 21 dup []；`e6:J-pure-layers` 4 层 mixed []；`cloud-untouched` 1 = 1。L18（桌面 plan 领不到环境不同的主机）的现象同放云端 | 同上；另记桌面 plan 领不到环境不同的主机的现象（L18） |
 
 ## 3. K1、I1 真实多端复测
@@ -202,7 +205,7 @@
 
 | 项 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 1080p 全幅流 15 帧分段编码 | 笔记本空闲时段与 main 交替跑 `node scripts/probes/stream-produce-probe.mjs`（不带 `--group`） | 待填（`claude/perf-encode` 待复核） | 每轮 p50 与机器负载 | p50 ≤ 300 ms；改门槛须用户确认 |
+| 1080p 全幅流 15 帧分段编码 | 笔记本空闲时段与 main 交替跑 `node scripts/probes/stream-produce-probe.mjs`（不带 `--group`） | **过**（笔记本；`claude/perf-encode` 合入 main `211695d`）：ENC-1 修复版 p50 中位数 290 ms（当时 main 403 ms）、ENC-2 合入后 283 ms，五轮 fails []、编码字节不变（第 1.1 节）；全案最终基线在笔记本再跑一次（第 9 节） | 笔记本回执（交接前，主会话记录） | p50 ≤ 300 ms；改门槛须用户确认 |
 | 后台上传期间主线程无 > 50 ms 长任务 | `node scripts/probes/tiers-probe.mjs --port-a 5580 --port-r 5583` ×3 | 已过一次（`a038948`，`AGENT-perf-t4.md`）；最终基线再跑，待填 | 每轮 `t4.longtasksOver50` | 空闲时段 3 轮全过 |
 | M7-A4 纯浏览器 30 秒内预渲染完锚帧 | M7 探针：笔记本本机 `m7-browser-probe --role all --timing-authoritative`（M7-T1c）；站点模式的数只作观察 | **过**（M7 合入时笔记本本机 M7-T1c，`88e70e3`：最慢锚点段 27.6 s）。经公网观察：站点首轮 63 s（`m7w0928e`，旧代码）→ 部署推送提速后 37.4 s（`m7w0928f`，首段开工前约 17 s、其后每段约 7 s）；PC 本机参考 21.1 s（合并后的代码，run `mukz7q6d6b84`） | `REPORT-M7.md`；本报告第 2 节 E5 与第 12a 节 | 页面可见且空闲时 30 s 内完成（`m7-contract.md`） |
 | C6.6 T9「改卡后 5 s 内重测」 | 随 M8-X1 | **过**（笔记本，放本机版 T9 run `t9lanM`，观察端限速 1 MB/s）：改卡后 3 652 ms 重测、装上 292 ms | 观察端结果行 `remeasureMs 3652`、`installMs 292` | 1 MB/s 与不限速下判 |
@@ -219,8 +222,6 @@
 | 主工作区 | `git status` | 待填 | 待填 | 干净 |
 
 ## 10. 远端操作记录（`8.219.80.16`）
-
-〔待填：每次部署、重启、nginx / UFW 改动、迁移演练：时刻、命令、退出码、备份文件名、断开了哪些连接。〕
 
 | 时刻 | 操作 | 命令 | 退出码 | 影响 |
 |---|---|---|---|---|
@@ -242,7 +243,7 @@
 
 ## 11. 跨机指令与回执
 
-〔待填：发给笔记本的每条指令（编号、分支与提交、环境变量名、命令、期望输出）与回执原文；先在对话里列出再发（主计划第 6.3 节）。〕
+指令都先在主会话对话里列出再发（主计划第 6.3 节）；原文在主会话记录里，这里记要点。
 
 | 编号 | 指令 | 回执 | 核对的提交 |
 |---|---|---|---|
@@ -250,14 +251,17 @@
 | `to-cloud` 第 25 条：主会话确认（第五次修订后笔记本接手） | 云端只听「PromptCut M5～M8 开发交接」，挂着等指令 | `to-local` 第 29 条：已知悉 | HEAD `4047133b`（当时） |
 | `to-cloud` 第 26 条：E6R-1（E6 反方向，云端当指纹 Y 的独立渲染主机，run `e6r0928L`） | `git checkout --detach 29e6e837`；`c10-browser-probe.mjs --role host --run e6r0928L --port 5425 --timeout-min 150`（不用测试指纹） | `to-local` 第 30 条：退出码 0、`ok true fails []`、认领 11、完成 10、丢认领 0、失败 0、ws、opens 1、resumes 0 | `29e6e837` |
 | `to-cloud` 第 27 条：RMT-1（异地接入假任务一轮补跑，云端当远程成员） | `shared-project-probe.mjs --mode internet --role member --expect-tasks 1`，不设集群令牌 | `to-local` 第 31 条：退出码 0、`ok true fails []`、`clusterToken unset`、认领 6、完成 6 | `29e6e837` |
+| 跨会话消息：回执 PC-report + PC-M8-1（合并候选 `claude/merge-m8-e3-page` 的 G0） | 检出 `9cf43f1f`；`npx tsc -b --force`；`npm test` | tsc 0 错误；tests 3779 / pass 3777 / fail 0 / cancelled 0 / skipped 2（PC 用时不作性能验收） | `9cf43f1f` |
+| PC-M8-0（局域网 TCP 互探） | 报 PC 局域网地址；PC 起 5789 临时监听；PC 连笔记本 5799 | PC 192.168.50.96（以太网 3，公用）；收到 `laptop-ok 2026-09-28T15:52:39.898Z 192.168.50.96`；笔记本连 PC 5789 收到 `pc-ok 2026-09-28T15:53:20.014Z 192.168.50.247` | 不涉及仓库 |
+| PC-M8-2（构建 + 放本机一串的创建者侧 + 异地接入真实渲染一轮） | `npm run build`；只读报 node.exe 入站规则；起局域网协调口 `probe-coord.mjs serve --host 0.0.0.0 --port 5789`；按顺序跑 9 项创建者（`m8xrealP`、`t9lanP`、`m8e1lanP`、`m8e2lanP`、`m8e4lanP`、`m8e6lanP`、`m8c1lanP`、`m8c3lanP`、`htwlanP`），笔记本同时起对应的主机 / 观察端 / 成员 | 构建 exit 0（`✓ built in 868ms`）；node.exe 入站 TCP、UDP 在「公用」放行；协调口 15:58:40Z 起在 5789；各项结果见第 2、4、5、7 节 | `9cf43f1f` |
 
 ## 12. 顾问调用记录
 
 | 用途 | 问题 | 结论 | 采纳 |
 |---|---|---|---|
 | 查资料（codex，`gpt-6-sol` / `high`，只读联网） | Windows 新阻止规则对已建立 TCP 连接是否立刻生效 | 下一个包触发重新授权，长连接在一个心跳内生效，空闲连接不保证；只加入站规则不够（`m8-plan.md` 第 4 节「预检结果」） | 采纳，笔记本仍要实测（P-C1） |
-| 攻坚（codex worktree） | 待填 | 待填 | 待填 |
-| 发散（Gemini） | 待填（M8 没有新的用户侧界面，按计划不调，卡死时按回退梯次第 3 级调） | — | — |
+| 攻坚（codex worktree） | 没有调 | — | M8 的缺陷（停滞误判、产物库缺块、跨节点去重、探针时序）都由 Opus 子智能体在 worktree 里查因修复（第 12a 节）；交接前 PC 主会话那段的交接文件也没有 codex / Gemini 调用记录 |
+| 发散（Gemini） | 没有调（M8 没有新的用户侧界面，按计划不调） | — | — |
 
 ## 12a. M8 期间合入的修复
 
