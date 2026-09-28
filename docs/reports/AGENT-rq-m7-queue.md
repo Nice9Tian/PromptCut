@@ -162,3 +162,18 @@ fbefcac 重构:task-runner.mjs、idleLockTakeover、afterSplit
 run2 作废：跑的中途我提交了一处 `server/frame-pipeline.mjs`，pc 的代码版本随工作区变了，与在线构建的代码版本对不上，pc 不再认领计划（`pcFilter: code-version`）。教训：探针跑着时不改工作区。
 
 **基线**：`npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3752、pass 3750、fail 0、skipped 2（合进页面节点分支后，页面节点的门都打开了）。
+
+## 第三轮：锚帧段先认领（笔记本 M7-A4 查出，主会话〔裁〕）
+
+- 原因：`pick.mjs` 的 `pickCandidate` 在排序后的前 K 个里随机挑，锚帧段（50）与普通段（10）混在一起。
+- 修法：只在排头那一档、排头那一个整数名次里挑，同名次内保留随机；契约 `render-queue-contract.md` B.3 第 2 步改写，标〔裁〕写明原文、原因、改法。
+- 单测 M7Q-PICK-1 修前失败、修后通过；`render-node-logic.test.mjs` 里一条按旧行为写的断言（更低优先级也可能被挑中）改成新口径。
+- K1 规模探针（`node scripts/probes/m8-scale-probe.mjs --role all --case k1`，端口 0）前后：
+
+| | claims | claimed | taken（四处） | card-locked | K1-card-locked |
+|---|---|---|---|---|---|
+| 改前 | 115 | 100 | 3 / 4 / 2 / 3 | 3（race 3，上限 8） | ok |
+| 改后 | 112 | 100 | 1 / 3 / 3 / 5 | 0 | ok |
+
+  K1 的任务全是 `priority: 0`，改前改后挑法相同，差别是噪声；这个探针测不到本次改动。估算混合名次时的代价：8 个节点同时挑、排头名次只剩 3 段（原来前 4 个里是 3 段锚帧 + 1 段普通），期望 `taken` 从每轮约 4.4 升到约 5.1，只发生在还有锚帧段可认领的那一小段时间。
+- `npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3753、pass 3751、fail 0、skipped 2。
