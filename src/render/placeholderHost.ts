@@ -8,7 +8,8 @@
  *      样式表也不注入 —— 导出像素基线不受影响。
  *   2. **显示谁**(`placeholderWanted`,纯函数):T1 兜底链尽头(被抑制、这一拍流 blank、又没挂快照)、
  *      T2 `.pc-awaiting`(快照还没到)、T3 `.pc-settling` 且没挂快照(不可见地追帧)、
- *      T4 等后台补跑互换的轻卡(被抑制、分派表说它这一刻是轻卡)。
+ *      T4 等后台补跑互换的轻卡(被抑制、分派表说它这一刻是轻卡);在线浏览器模式下这台设备跑不了的卡
+ *      (用户卡、图卡)没有可贴的快照 / 流时一律是 `unsupported`。
  *   3. **显隐**:`StageView` 每拍 / 每次平面提交之后按上面的结果只用 contract 的 `setPlaceholderShown`
  *      切槽位的 `hidden`,不经 React 提交(`applyPlaceholders`)。满 120 ms 才可见由占位组件的 CSS 负责。
  *   4. **几何**(`geometryFor`):流清单的实体框(`tight ?? bound`)→ 这张卡上次活渲时量到的墨迹框 →
@@ -23,9 +24,10 @@
  * 一视同仁(`isPlaceholderNode`)。
  */
 import {
-  PLACEHOLDER_ATTR, PLACEHOLDER_FIXED_ATTR, PLACEHOLDER_SLOT_ATTR, PLACEHOLDER_STATIC_ATTR, setPlaceholderShown,
+  PLACEHOLDER_ATTR, PLACEHOLDER_SLOT_ATTR, PLACEHOLDER_STATIC_ATTR, setPlaceholderShown,
   type PlaceholderBox, type PlaceholderGeometry, type PlaceholderReason,
 } from "./placeholder/contract.ts";
+import { getCard, isUserCardId } from "../kernel/registry.ts";
 
 /** 包裹层里托着占位组件的槽位(常量在 contract 里,这里转出去给已有的引用方) */
 export { PLACEHOLDER_SLOT_ATTR };
@@ -84,6 +86,11 @@ export interface PlaceholderState {
   streamShowing: ReadonlySet<string>;
   /** 被抑制但这一刻判轻的卡(K3(b) 的 `vtOk = false` 轻卡在等后台补跑);缺省看 `setCatchingUpClips` 那一份 */
   isLight?: (clipId: string) => boolean;
+  /**
+   * 此刻在场、这台设备跑不了的卡(在线浏览器模式下的用户卡、图卡;`localOnlyClipIds`)。它们照兜底顺序贴快照 / 流,
+   * 什么都贴不上时显示 `unsupported`(「电脑 + 离线」图标),顶替沙漏;不管在不在抑制、等快照里。缺省空。
+   */
+  unsupported?: ReadonlySet<string>;
 }
 
 /** T4 的那几张(被抑制、这一刻判轻:等后台补跑互换)。`StageView` 收到 `setSuppressed` 时按分派表算好 */
@@ -95,18 +102,29 @@ export function isCatchingUpClip(clipId: string): boolean {
   return catchingUp.has(clipId);
 }
 
-/** 这一拍哪几张卡要显示占位符、为什么(T1~T4) */
+/** 这一拍哪几张卡要显示占位符、为什么(T1~T4;这台设备跑不了的卡在兜底顺序尽头是 `unsupported`) */
 export function placeholderWanted(s: PlaceholderState): Map<string, PlaceholderReason> {
   const out = new Map<string, PlaceholderReason>();
+  const unsupported = s.unsupported;
+  // 这台设备跑不了的卡:贴着快照或流就不显示;否则一律 `unsupported`(它们没有活渲可等,沙漏不对)
+  if (unsupported) {
+    for (const id of unsupported) {
+      if (s.snapshots.has(id) || s.streamShowing.has(id)) continue;
+      out.set(id, "unsupported");
+    }
+  }
+  const skip = (id: string) => !!unsupported?.has(id);
   for (const id of s.suppressed) {
+    if (skip(id)) continue;
     if (s.snapshots.has(id) || s.streamShowing.has(id)) continue;
     // T4:等后台补跑后互换的轻卡;其余是 T1(兜底链尽头)
     out.set(id, (s.isLight ?? isCatchingUpClip)(id) ? "catching-up" : "no-data");
   }
   // T2:快照还没到(`.pc-awaiting` 500 ms 兜底之后由舞台摘掉,占位符随之撤)
-  for (const id of s.awaiting) out.set(id, "awaiting");
+  for (const id of s.awaiting) if (!skip(id)) out.set(id, "awaiting");
   // T3:不可见地追帧,又没有快照垫着
   for (const id of s.settling.keys()) {
+    if (skip(id)) continue;
     if (!s.snapshots.has(id) && !out.has(id)) out.set(id, "catching-up");
   }
   return out;
@@ -115,11 +133,12 @@ export function placeholderWanted(s: PlaceholderState): Map<string, PlaceholderR
 /* ------------------------------------------------------------------ 2b. 本机渲染不了的卡(unsupported) */
 
 /**
- * 在线浏览器模式(product/platforms.md):一期只支持内置卡片,用户卡和图卡在这台设备上渲染不了,
- * 显示常驻的 `unsupported` 占位(电脑 + 离线图标、「需要本地 PC 渲染辅助」),不走兜底顺序、不显示沙漏。
+ * 在线浏览器模式(product/platforms.md「在线浏览器模式」,2026-09-29 用户改语义):用户卡、图卡的代码这台设备跑不了,
+ * 但有预渲染结果就照贴,与内置卡相同(一律按重卡:播放中抑制、不活渲,停下不追)。只有这一帧没有可贴的结果、又轮到
+ * 这台设备自己渲染时,才在兜底顺序尽头显示 `unsupported` 占位(「电脑 + 离线」图标和「需要本地 PC 渲染辅助」),
+ * 不透明、顶替沙漏;结果到了自动换上(C10 契约第 9 节)。
  *
- * **在线浏览器模式本身还没有实现**(没有运行期的判据);现在只由舞台地址上的 `platform=browser` 显式打开
- * (`StageView` 读它,编辑页的同名参数经 `stageSrc` 转发过来),给截图和探针用。模式落地时把判据换成真的。
+ * 开关:在线页面(`ONLINE`)与舞台地址上的 `platform=browser`(截图和探针用)。桌面、导出、预渲染、Agent 看到的画面恒为关。
  */
 let onlineBrowser = false;
 export function setOnlineBrowserMode(on: boolean): void {
@@ -130,30 +149,41 @@ export function onlineBrowserMode(): boolean {
 }
 
 /**
- * 这张卡在此刻的平台上是不是渲染不了。`isUserCard` 查定制卡登记(`registry.userCardSources().fileOf`),
- * 图卡的判法和 `kernel/cardAuthoring.mjs` 一致(`card` / `audio` 是函数)。
+ * 这张卡在此刻的平台上是不是渲染不了。`isUserCard` 缺省查注册表的 `isUserCardId`(构建时的定制卡登记,
+ * 加上内容库同步来的用户卡);图卡的判法和 `kernel/cardAuthoring.mjs` 一致(`card` / `audio` 是函数)。
  */
 export function unsupportedHere(
   cardId: string | undefined,
   def: { card?: unknown; audio?: unknown } | undefined,
-  isUserCard: (cardId: string) => boolean,
+  isUserCard: (cardId: string) => boolean = isUserCardId,
 ): boolean {
   if (!onlineBrowser) return false;
   return needsLocalPc(cardId, def, isUserCard);
 }
 
 /**
- * 这张卡是不是只有本地 PC 渲染得了(用户卡、图卡),不看此刻的平台。在线页面的父页(不是舞台)判补渲时用它:
- * 这些卡低内存档本来就不显示(常驻「需要本地 PC 渲染辅助」),不为它们发补渲任务(c10a 契约第 17 节)。
+ * 这张卡是不是只有本地 PC 渲染得了(用户卡、图卡),不看此刻的平台。同步来的用户卡没有定义(`def` 为 undefined),
+ * 靠 `isUserCard` 认出来;两边都没有的 id(未知卡片)回 false。
  */
 export function needsLocalPc(
   cardId: string | undefined,
   def: { card?: unknown; audio?: unknown } | undefined,
-  isUserCard: (cardId: string) => boolean,
+  isUserCard: (cardId: string) => boolean = isUserCardId,
 ): boolean {
   if (!cardId) return false;
   if (isUserCard(cardId)) return true;
   return !!def && (typeof def.card === "function" || typeof def.audio === "function");
+}
+
+/**
+ * 在线浏览器模式下这台设备跑不了的片段(`unsupportedHere`,定义从注册表取)。模式关着回空集合。
+ * 舞台据此不挂组件、照挂快照 / 流平面,占位符在兜底顺序尽头显示 `unsupported`。
+ */
+export function localOnlyClipIds(clips: Iterable<{ id: string; cardId?: string }>): Set<string> {
+  const out = new Set<string>();
+  if (!onlineBrowser) return out;
+  for (const c of clips) if (c.cardId && unsupportedHere(c.cardId, getCard(c.cardId))) out.add(c.id);
+  return out;
 }
 
 /* ------------------------------------------------------------------ 3. 显隐 */
@@ -184,8 +214,6 @@ export function applyPlaceholders(wanted: ReadonlyMap<string, PlaceholderReason>
   for (const id of new Set([...wanted.keys(), ...shown])) {
     const slot = slotOf(id);
     if (!slot) continue;
-    // 常驻的(`unsupported`)不归这里管:它由 `Stage` 按项目和平台直接渲成显示
-    if (slot.hasAttribute(PLACEHOLDER_FIXED_ATTR)) continue;
     const on = wanted.has(id);
     setPlaceholderShown(slot, on);
     if (on) {

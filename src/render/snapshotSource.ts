@@ -286,11 +286,19 @@ export interface OnlineSnapshotDeps {
   /** 取单张小位图的兜底超时 */
   assetTimeoutMs?: number;
   /**
-   * 这一层不取(C10 契约第 9 节):在线浏览器模式下的用户卡、图卡常驻「需要本地 PC 渲染辅助」,不贴别人预渲染好的快照,
-   * 所以既不取它的清单也不预取它的字节。由父页按片段判(`snapshotFeed` 的 `exemptOnline`);不给就都取。
+   * 要知道整段覆盖情况的层(C10 契约第 9 节:时间轴徽标「需要本地 PC 渲染辅助」要看这台设备跑不了的卡的预渲染结果
+   * 覆盖没覆盖整段)。这些层的清单不只取播放头那一窗口,整段每一段都取(慢一点,`COVERAGE_POLL_MS`);不给就只取窗口。
    */
-  skipLayer?: (clipId: string) => boolean;
+  coverageLayer?: (clipId: string) => boolean;
 }
+
+/** 整段覆盖:还没取齐的清单多久再取一次(窗口之外的段) */
+export const COVERAGE_POLL_MS = 5000;
+/** 整段覆盖:一轮最多取这么多份窗口之外的清单(长片段分几轮取完,不一下子打满内容库) */
+export const COVERAGE_FETCHES_PER_TICK = 16;
+
+/** 一个片段的预渲染结果覆盖了多少:没有可用的层 / 有层但没覆盖整段 / 整段都有(这一档的帧) */
+export type LayerCoverage = "none" | "partial" | "full";
 
 /** 层表 v 3 的候选表:只留三项都是非空字符串的,坏项跳过 */
 function candidatesOf(raw: unknown): LayerCandidate[] {
@@ -517,6 +525,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
   onFetched: (() => void) | null = null;
   /** 层表取回来过没有(取到了,或者内容库回「没有这一项」);取之前判不了哪些层缺产物 */
   private mapKnown = false;
+  /** 覆盖情况可能变了(层表换了、清单到了)时叫的订阅方 */
+  private coverageListeners = new Set<() => void>();
   readonly stats = { mapFetches: 0, manifestFetches: 0, smallFetches: 0, smallBytes: 0, snapFetches: 0, snapBytes: 0, l2Hits: 0, errors: 0 };
 
   constructor(deps: OnlineSnapshotDeps, { maxBytes = ONLINE_CACHE_MAX_BYTES, tier = "small", store = null }: OnlineSourceOptions = {}) {
@@ -599,6 +609,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.emitted.clear();
     this.lastMapAt = -Infinity;
     this.emit({ type: "reset", localRev: 0 });
+    this.coverageChanged();
     this.kick();
   }
 
@@ -646,6 +657,34 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   /**
+   * 这个片段的预渲染结果覆盖了多少(C10 契约第 9 节,时间轴徽标用):这一档没有可用的层 → `none`;层在,但有哪一段的
+   * 清单还没取到、或清单里这一档的帧不齐 → `partial`;每一段都齐 → `full`。「齐」看清单(结果在素材服务里),
+   * 不看字节有没有取到本页。整段的清单由 `coverageLayer` 点名的层才取(见 `loadWindow`)。
+   */
+  coverage(clipId: string): LayerCoverage {
+    const layer = this.layers().find((l) => l.clipId === clipId);
+    if (!layer) return "none";
+    const span = this.map?.span ?? 60;
+    for (let from = 0; from < layer.count; from += span) {
+      const seg = this.segOf(layer, from);
+      const st = this.manifests.get(this.manifestKey(layer, seg));
+      const mine = st ? (this.tier === "original" ? st.frames : st.small) : null;
+      if ((mine?.size ?? 0) < seg[1] - seg[0] + 1) return "partial";
+    }
+    return "full";
+  }
+
+  /** 覆盖情况可能变了就叫 `cb`(层表换了、清单到了);回退订函数 */
+  subscribeCoverage(cb: () => void): () => void {
+    this.coverageListeners.add(cb);
+    return () => { this.coverageListeners.delete(cb); };
+  }
+
+  private coverageChanged() {
+    for (const l of [...this.coverageListeners]) { try { l(); } catch { /* 订阅方坏了 */ } }
+  }
+
+  /**
    * 层表里列着的片段(c10a 契约第 17 节「补渲」按清单判产物:不在层表里的判重层,素材服务里就没有它的产物)。
    * 层表还没取回来过回 null(判不了);内容库里没有层表回空集合(一层都没有)。
    */
@@ -686,6 +725,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     if (this.timer !== null) (this.deps.clearTimer ?? ((t: unknown) => clearTimeout(t as ReturnType<typeof setTimeout>)))(this.timer);
     this.timer = null;
     this.listeners.clear();
+    this.coverageListeners.clear();
     this.queue.length = 0;
     this.storeOff?.();
     this.storeOff = null;
@@ -880,6 +920,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     }
     // 换了键的层(重渲之后):就绪区间按新键重算、全量发;新键的清单还没到时区间是空的,页面按兜底顺序显示占位
     this.publishLayers();
+    this.coverageChanged();
   }
 
   /** 播放头这一窗口(前后各 `PREFETCH_SEC` 秒)的全局帧区间 */
@@ -896,7 +937,6 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const [lo, hi] = this.windowFrames();
     const wanted: { seg: [number, number]; key: string }[] = [];
     for (const layer of this.layers()) {
-      if (this.deps.skipLayer?.(layer.clipId)) continue;
       for (const seg of segmentsInWindow(layer, map.span, lo, hi)) {
         const key = this.manifestKey(layer, seg);
         const st = this.manifests.get(key);
@@ -904,6 +944,21 @@ export class OnlineSnapshotSource implements SnapshotSource {
         if (st && now - st.fetchedAt < MANIFEST_POLL_MS) continue;
         if (this.manifestFlying.has(key) || wanted.some((w) => w.key === key)) continue;
         wanted.push({ seg, key });
+      }
+    }
+    // 整段覆盖(`coverageLayer` 点名的层):窗口之外的段也取,慢一点、一轮有上限
+    let extra = 0;
+    for (const layer of this.deps.coverageLayer ? this.layers() : []) {
+      if (!this.deps.coverageLayer!(layer.clipId)) continue;
+      for (let from = 0; from < layer.count && extra < COVERAGE_FETCHES_PER_TICK; from += map.span) {
+        const seg = this.segOf(layer, from);
+        const key = this.manifestKey(layer, seg);
+        const st = this.manifests.get(key);
+        if (st?.full) continue;
+        if (st && now - st.fetchedAt < COVERAGE_POLL_MS) continue;
+        if (this.manifestFlying.has(key) || wanted.some((w) => w.key === key)) continue;
+        wanted.push({ seg, key });
+        extra++;
       }
     }
     if (!wanted.length) return;
@@ -942,7 +997,10 @@ export class OnlineSnapshotSource implements SnapshotSource {
         this.manifestFlying.delete(key);
       }
     }));
-    if (changed && this.map === map && !this.stopped) this.publishLayers();
+    if (changed && this.map === map && !this.stopped) {
+      this.publishLayers();
+      this.coverageChanged();
+    }
   }
 
   /** 预取:这一窗口里当前可见的重层、这一档有块的帧,离播放头近的先取;已在 L2 里的不再请求 */
@@ -953,7 +1011,6 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const g = Math.max(0, Math.floor(this.playhead.t * (map.fps || this.playhead.fps) + 1e-6));
     const wanted: { hash: string; dist: number; layer: OnlineLayer; local: number }[] = [];
     for (const layer of this.layers()) {
-      if (this.deps.skipLayer?.(layer.clipId)) continue;
       const first = Math.max(lo, layer.firstFrame), last = Math.min(hi, layer.firstFrame + layer.count - 1);
       for (let gf = first; gf <= last; gf++) {
         const local = gf - layer.firstFrame;

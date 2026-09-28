@@ -12,7 +12,8 @@
  */
 import type { Project } from "../kernel/project";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
-import { allCards, cardsRegistryGen, getCard, userCardSources } from "../kernel/registry";
+import { allCards, cardsRegistryGen, getCard, syncedUserCardsGen, userCardSources } from "../kernel/registry";
+import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles, cardSourceFilesVersion } from "../render/cardSourceFiles.mjs";
 import { clipCostIndex } from "../render/pipelinePlan.mjs";
@@ -55,10 +56,31 @@ export function sourceVersionsOf(): Record<string, string> {
 
 let cachedProject: Project | null = null;
 let cached: ClipIdentity = EMPTY;
+/** 记忆化的另外两个键:在线浏览器模式开没开、同步用户卡表的代数(决定哪些片段本机跑不了) */
+let cachedLocalKey = "";
+
+/**
+ * 在线浏览器模式下这台设备跑不了的片段(用户卡、图卡;C10 契约第 9 节)不给身份:页面不测它们(`probeRunner` 按身份挑卡)、
+ * 分派表查不到成本记录也查不到声明的帧模式,一律按重卡(`clipWeight` 的 `declared-heavy`)—— 旧的 L2 里哪怕留着
+ * 以前在后台舞台上测过的记录也不认;舞台拿不到它们的身份,停下也就不追;不把它们的记录转写进文档服务。
+ * 桌面(模式关着)照旧。
+ */
+function dropLocalOnly(project: Project, id: ClipIdentity): ClipIdentity {
+  const local = localOnlyClipIds(project.tracks.flatMap((tr) => tr.clips));
+  if (!local.size) return id;
+  const identityKeys: Record<string, string> = {};
+  const frameModes: Record<string, string> = {};
+  const capabilities = new Map<string, Record<string, unknown>>();
+  for (const [k, v] of Object.entries(id.identityKeys)) if (!local.has(k)) identityKeys[k] = v;
+  for (const [k, v] of Object.entries(id.frameModes)) if (!local.has(k)) frameModes[k] = v;
+  for (const [k, v] of id.capabilities) if (!local.has(k)) capabilities.set(k, v);
+  return { identityKeys, frameModes, capabilities };
+}
 
 export function clipIdentityOf(project: Project | null): ClipIdentity {
   if (!project) return EMPTY;
-  if (project === cachedProject) return cached;
+  const localKey = onlineBrowserMode() ? `on:${syncedUserCardsGen()}:${cardsRegistryGen()}` : "off";
+  if (project === cachedProject && localKey === cachedLocalKey) return cached;
   let out = EMPTY;
   try {
     // projectCardGraph 对悬空输入会 throw（删片段不清 cardNodes）——
@@ -73,10 +95,12 @@ export function clipIdentityOf(project: Project | null): ClipIdentity {
       }
     }
     out = { identityKeys, frameModes, capabilities };
+    if (localKey !== "off") out = dropLocalOnly(project, out);
   } catch {
     out = EMPTY;
   }
   cachedProject = project;
+  cachedLocalKey = localKey;
   cached = out;
   return out;
 }
@@ -84,6 +108,7 @@ export function clipIdentityOf(project: Project | null): ClipIdentity {
 /** 测试用 */
 export function resetClipIdentityCache(): void {
   cachedProject = null;
+  cachedLocalKey = "";
   cached = EMPTY;
   versionsMemo = null;
 }

@@ -28,6 +28,7 @@ import type { StageRole } from "../render/stageRpc";
 import { wirePlan } from "../render/wirePlan";
 import { clipIdentityOf } from "./costIdentity";
 import { frontStage, backStage } from "./stageBridge";
+import { onSyncedUserCardsChanged } from "../kernel/registry";
 
 let project: Project | null = null;
 let costs: CardCostRecord[] = [];
@@ -120,6 +121,12 @@ function schedule(): void {
     void sendPlanTo("front");
   });
 }
+
+/*
+ * 在线浏览器模式下同步来的用户卡表变了(C10 契约第 9 节):哪些片段本机跑不了跟着变,它们一律按重卡(`costIdentity.ts`
+ * 不给它们身份),所以重算重发一次。桌面不设这张表,永远不触发。
+ */
+onSyncedUserCardsChanged(() => schedule());
 
 /** 项目变了（`ProbeGate` 的 effect 里叫）。引用没变就什么都不做 */
 export function setPlanProject(next: Project | null): void {

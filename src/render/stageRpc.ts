@@ -291,6 +291,11 @@ export interface StageRpcApi {
    * 票据续签、运行中改判低内存档时再发。缺省(不发)= 桌面运行环境。
    */
   setMediaPolicy(policy: StageMediaPolicy): Promise<{ ok: true }>;
+  /**
+   * C10 契约第 9 节「识别」:在线页面从内容库卡片源码里认出的用户卡(本机没有它们的代码,「已知但本机不能运行」)。
+   * 父页握手后发一次,表变了再发;舞台写进自己的注册表(`registry.setSyncedUserCards`)。只在线页面发,桌面运行环境不发。
+   */
+  setSyncedUserCards(entries: { id: string; name: string; source?: string }[]): Promise<{ ok: true; changed: boolean }>;
   /** A3c:patch 是相对上次投递的增量,null = 摘掉;reset = 先清空全部再应用 */
   setSnapshots(patch: Record<string, string | null>, opts?: { reset?: boolean }): Promise<{ ok: true; bytes: number }>;
   /**
@@ -388,7 +393,7 @@ export interface StageRpcClient extends StageRpcApi {
 
 const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitTest", "rectsWithBounds", "size", "setProxy", "setRole", "setPlan",
   "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots", "setMediaPolicy",
-  "settleLowMemory", "setBackWork", "bakeFrame", "bakeCancel"];
+  "setSyncedUserCards", "settleLowMemory", "setBackWork", "bakeFrame", "bakeCancel"];
 
 /**
  * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。

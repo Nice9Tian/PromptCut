@@ -35,8 +35,8 @@ import { mirrorKey, pushWanted } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
 import { currentPlan } from "./planDispatch";
-import { getCard, userCardSources } from "../kernel/registry";
-import { needsLocalPc, onlineBrowserMode } from "../render/placeholderHost";
+import { cardsRegistryGen, syncedUserCardsGen } from "../kernel/registry";
+import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
 import { fitBeatSwaps, SWAP_MS } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
@@ -364,16 +364,21 @@ function demoteReady(clipId: string, globalFrame: number, localFrame: number, co
 }
 
 /**
- * 在线浏览器模式下这台设备渲染不了的卡（用户卡、图卡；C10 契约第 9 节 + 第 18 节第 6 条）：
- * 舞台上常驻「电脑 + 离线」图标（`placeholderHost` 的 `unsupportedHere`），**不贴别人预渲染好的快照**
- * （`product/rendering.md`「兜底顺序」末条）。所以选帧与投递在这里把它们整个豁免：不进 `heavy`（不抑制）、
- * 不选帧、不报缺口，快照来源也就不为它们取字节。判法与舞台同一个（`needsLocalPc`）；开关是
- * `setOnlineBrowserMode`（在线页面的父页由 `Preview` 按 `ONLINE` 设）。桌面恒为 false，照旧。
+ * 在线浏览器模式下这台设备跑不了的卡（用户卡、图卡；C10 契约第 9 节，2026-09-29 用户改语义）：
+ * 有预渲染结果就照贴，与内置卡相同。它们在这台设备上**一律按重卡**：不管分派表怎么判（表还没算出来、旧记录判轻），
+ * 播放中抑制、照常选帧、报缺口、取字节；停下时不追（没有组件可追），所以暂停态的「已精确」（`settled`）对它们不成立，
+ * 有这一帧的快照就一直贴着，没有就由舞台显示 `unsupported` 占位。判法与舞台同一个（`localOnlyClipIds`）；
+ * 开关是 `setOnlineBrowserMode`，桌面恒为关，这里恒为空集合。
  */
-export function exemptOnline(clip: { cardId?: string }): boolean {
-  if (!onlineBrowserMode()) return false;
-  return needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined,
-    (cardId) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId));
+let localOnlyMemo: { project: Project; key: string; ids: ReadonlySet<string> } | null = null;
+const NO_IDS: ReadonlySet<string> = new Set();
+export function localOnlyOf(project: Project): ReadonlySet<string> {
+  if (!onlineBrowserMode()) return NO_IDS;
+  const key = `${cardsRegistryGen()}:${syncedUserCardsGen()}`;
+  if (localOnlyMemo && localOnlyMemo.project === project && localOnlyMemo.key === key) return localOnlyMemo.ids;
+  const ids = localOnlyClipIds(project.tracks.flatMap((tr) => tr.clips));
+  localOnlyMemo = { project, key, ids };
+  return ids;
 }
 
 /** 这一刻活跃的卡片段（口径同 `Stage` / `FrameScene` 的 live 路：含 LEAD） */
@@ -428,9 +433,10 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   const picks = new Map<string, Pick>();
   const wanted: { clipId: string; frame: number }[] = [];
   const clips: { clip: TrackClip; firstFrame: number; count: number }[] = [];
+  const localOnly = localOnlyOf(project);
   for (const clip of activeCardClips(project, t)) {
-    if (pipelineAt(plan, clip.id, t) !== "heavy") continue;
-    if (exemptOnline(clip)) continue; // 在线的用户卡、图卡:常驻图标,不选帧、不报缺口、不取字节
+    // 这台设备跑不了的卡一律按重卡(在线浏览器模式;见 `localOnlyOf`)
+    if (pipelineAt(plan, clip.id, t) !== "heavy" && !localOnly.has(clip.id)) continue;
     const { firstFrame, count } = samplingOf(clip, fps);
     if (pendingDemote.has(clip.id)) {
       // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会贴快照）
@@ -461,7 +467,8 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   for (const { clip, firstFrame, count } of clips) {
     // 根因 B:暂停态已经追到精确活渲的卡不再选快照(停下就撤兜底,直到下一次 setTime / 播放)。
     // 低内存档同样:停下追一帧画好的层(c10a 契约第 17 节,取代原来的「不追活渲」)
-    if (!playing && isSettled("front", clip.id)) continue;
+    // 这台设备跑不了的卡停下不追,暂停态的「已精确」对它们不成立:快照照贴
+    if (!playing && isSettled("front", clip.id) && !localOnly.has(clip.id)) continue;
     const tier: PickTier = covered.has(clip.id) ? "poster" : wantedStream.has(clip.id) ? "over" : "none";
     let picked: Pick | null = null;
     for (const kind of KIND_ORDER) {

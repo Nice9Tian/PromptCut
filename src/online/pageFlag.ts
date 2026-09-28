@@ -17,6 +17,8 @@
  * `import.meta.env` 不存在、为 false,不会像静态引 `mode.ts` 那样当场抛错。守门:`src/online/onlinePrune.test.mjs`
  * 核对这一行逐字相同,`server/test/c10a-online-build.test.mjs` 核对 `/api` 棘轮清单与产物一致。
  */
+import { UNSUPPORTED_TEXT } from "../render/placeholder/contract.ts";
+
 const KEY = "__pcOnlinePage";
 
 export function onlinePage(): boolean {
@@ -38,5 +40,8 @@ export function onlineUnsupported(entry: string): string {
   return `${ONLINE_UNSUPPORTED_PREFIX}${entry}${ONLINE_UNSUPPORTED_SUFFIX}`;
 }
 
-/** 时间轴上含用户卡或图卡的片段的徽标悬停文案(语义原文,`product/platforms.md`「在线浏览器模式」) */
-export const ONLINE_CUSTOM_CARD_TEXT = "该模式暂不支持自定义卡";
+/**
+ * 时间轴上这台设备跑不了、预渲染结果又还没覆盖整段的片段(用户卡、图卡)的徽标悬停文案。2026-09-29 用户定:与舞台上
+ * `unsupported` 占位符同一句「需要本地 PC 渲染辅助」,出现条件也相同(按片段算),所以直接引用占位符那句已定的文字,不另写一份。
+ */
+export const ONLINE_CUSTOM_CARD_TEXT = UNSUPPORTED_TEXT;

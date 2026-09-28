@@ -8,7 +8,8 @@
  * - 同一批还在等的不重发:发过的片段在 `BACKFILL_RESEND_MS` 之内、项目版本没变(或刚变不到 `BACKFILL_REV_GRACE_MS`)
  *   都算「还在等」;产物到了(进了层表)就忘掉它;
  * - 页面只发布,不认领(只发 `publisher.hello` 与 `task.publish`,从不发 `node.hello`);
- * - 用户卡、图卡不发(这台设备本来就不显示它们,常驻「需要本地 PC 渲染辅助」)。
+ * - 用户卡、图卡照样发(2026-09-29 用户改语义):它们在这台设备上判重、跑不了,没有产物就进补渲清单,由桌面版等渲染节点渲,
+ *   结果到了自动换上;纯浏览器节点不认领它们的细任务(M7 契约)。
  *
  * 任务的形状与队列侧 `server/render-queue/messages.mjs` 的 `backfillPlanTaskOf` 逐字段相同(单测对拍);
  * 这里照抄一份,不从 server 引 —— 页面构建不带服务端模块。
@@ -63,13 +64,12 @@ export function backfillPlanTask({ projectId, projectRev, clips }: { projectId: 
 
 /**
  * 缺产物的判重层:项目里可见的卡片段里页面判重的(`heavy`,界限搜索的结果;契约 `c10-contract.md` 第 18 节第 8 条:
- * 判轻的卡不发补渲),减去层表里列着的(有产物的)、减去本机渲染不了的(用户卡、图卡)。升序。
- * 不给 `heavy` 按全部判重算(C10a 过渡做法的口径,只剩单测用)。
+ * 判轻的卡不发补渲),减去层表里列着的(有产物的)。升序。本机渲染不了的(用户卡、图卡)一律判重(界限搜索的 `forcedHeavy`),
+ * 照样在内(2026-09-29 起不再去掉)。不给 `heavy` 按全部判重算(C10a 过渡做法的口径,只剩单测用)。
  */
-export function missingLayers({ project, layerClipIds, unsupported, heavy }: {
+export function missingLayers({ project, layerClipIds, heavy }: {
   project: Pick<Project, "tracks">;
   layerClipIds: ReadonlySet<string>;
-  unsupported: (clip: { id: string; cardId?: string }) => boolean;
   heavy?: ReadonlySet<string>;
 }): string[] {
   const out: string[] = [];
@@ -80,7 +80,6 @@ export function missingLayers({ project, layerClipIds, unsupported, heavy }: {
       if (!(Number(clip.end) > Number(clip.start))) continue;
       if (heavy && !heavy.has(clip.id)) continue;
       if (layerClipIds.has(clip.id)) continue;
-      if (unsupported(clip)) continue;
       out.push(clip.id);
     }
   }

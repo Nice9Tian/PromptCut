@@ -16,7 +16,7 @@ import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { MiniScrubber } from "./preview/MiniScrubber";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
-import { getCard, userCardSources } from "../kernel/registry";
+import { getCard, onSyncedUserCardsChanged, syncedUserCards } from "../kernel/registry";
 import { useLayoutMode } from "./layoutMode";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
@@ -24,7 +24,7 @@ import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
-import { currentReadyIndex, deliverSnapshots, exemptOnline, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { currentReadyIndex, deliverSnapshots, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
@@ -38,6 +38,8 @@ import { assetAuthHeaders, docRequest, hasDocLink, remoteAssetBase, remoteAssetT
 import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
 import { needsLocalPc, setOnlineBrowserMode } from "../render/placeholderHost";
+import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
+import { setCoverageSource } from "./onlineCoverage";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
 import { lowMemoryMeasuring, lowMemorySearchState, reclassify, runLowMemorySearch, type LowMemorySearchOutcome } from "./lowMemorySearch";
 import { LowMemoryGate } from "./LowMemoryGate";
@@ -94,8 +96,9 @@ function l2LowMemoryCostStore(): CostStore {
 
 /*
  * 父页的在线浏览器模式开关(C10 契约第 9 节):与舞台 `StageView` 同一个判据(在线构建,或编辑页地址上的
- * `platform=browser`,后者经 `stageSrc` 转给舞台)。`snapshotFeed` 据它豁免用户卡、图卡的选帧与投递,
- * 时间轴据它给这些片段挂「该模式暂不支持自定义卡」的徽标。
+ * `platform=browser`,后者经 `stageSrc` 转给舞台)。开着时这台设备跑不了的卡(用户卡、图卡)一律按重卡贴预渲染结果
+ * (`snapshotFeed` 的 `localOnlyOf`、`costIdentity.ts` 不给它们身份),时间轴在它们的结果没覆盖整段时挂
+ * 「需要本地 PC 渲染辅助」徽标。
  */
 try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location */ }
 
@@ -594,6 +597,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         void client.setRole(role).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
         // c10a 第 8 节:在线页面把取档策略(低内存档、远程素材服务)交给这一台舞台;桌面运行环境不发,舞台照缺省
         if (ONLINE) void pushMediaPolicyRef.current();
+        // C10 契约第 9 节:内容库同步来的用户卡(本机跑不了)交给这一台舞台;桌面运行环境不发
+        if (ONLINE) void client.setSyncedUserCards([...syncedUserCards().values()]).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
         // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
         if (role === "front") setStageReady((n) => n + 1);
         return;
@@ -770,14 +775,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
      */
     const src = new OnlineSnapshotSource({
       request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders,
-      // 用户卡、图卡的层不取清单、不预取字节(C10 契约第 9 节,与选帧的豁免同一个判法)
-      skipLayer: (clipId) => {
-        for (const tr of getState().project.tracks) for (const c of tr.clips) if (c.id === clipId) return exemptOnline(c);
-        return false;
-      },
+      /*
+       * 用户卡、图卡的层与内置卡一样取清单与字节(C10 契约第 9 节,2026-09-29 起不再豁免);另外整段的清单都取,
+       * 时间轴据此判「预渲染结果覆盖整段没有」(徽标)。
+       */
+      coverageLayer: (clipId) => localOnlyOf(getState().project).has(clipId),
     }, { tier: lowMemRef.current ? "small" : "original", store: pageL2({ lowMemory: lowMemRef.current }) });
     onlineSourceRef.current = src;
     setActiveOnlineSource(src);
+    setCoverageSource(src);
     setSnapshotSource(src);
     // 投递时缺的那一帧取到之后也要重投一次(暂停着的页面没有别的事件会再投)
     setSnapshotArrive(() => { void pumpRef.current(); });
@@ -811,9 +817,33 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       src.stop();
       onlineSourceRef.current = null;
       setActiveOnlineSource(null);
+      setCoverageSource(null);
       stopSnapshotFeed();
     };
   }, [online, lowMem]);
+  /*
+   * C10 契约第 9 节「识别」:在线页面经同一条文档服务连接读本项目内容库的卡片源码(`card-source`,键前缀 `src/cards/user/`),
+   * 解析出卡片的 id 与名字,进注册表作「已知但本机不能运行」的条目(`sync/onlineCardSources.ts`)。定时重取;连接换了
+   * (重连、换项目)清表重取。表变了发给两个舞台(舞台是另一份文档,有它自己的注册表)。
+   */
+  useEffect(() => {
+    if (!online) return;
+    const sources = new OnlineCardSources({ request: docRequest, linkKey: () => (hasDocLink() ? currentSharedLink() : null) });
+    const push = () => {
+      const entries = [...syncedUserCards().values()];
+      for (const id of STAGE_IDS) {
+        const c = rpcRef.current[id];
+        if (c) void c.setSyncedUserCards(entries).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
+      }
+    };
+    const offChange = onSyncedUserCardsChanged(push);
+    const timer = window.setInterval(() => { void sources.sync(); }, CARD_SOURCE_POLL_MS);
+    void sources.sync();
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcCardSources = () => sources.debug();
+    w.__pcCardSourcesSync = () => sources.sync();
+    return () => { window.clearInterval(timer); offChange(); sources.stop(); delete w.__pcCardSources; delete w.__pcCardSourcesSync; };
+  }, [online]);
   /*
    * C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上。
    * M7 D12:task.done 的结果键认定活着、task.failed { error: 'superseded' } 是另一份活着(不是失败),在线来源据此选层表 v 3 的候选。
@@ -848,21 +878,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   }, [online, lowMem]);
   /*
    * C10 契约第 7 节、第 18 节第 9 条:在线普通档自己发布清单计划 —— 测量落定后发、防抖、项目每次改动(文档服务确认的版本变了)
-   * 或清单变了就重发;清单是页面自己判重的片段(预渲染集合,去掉这台设备显示不了的用户卡、图卡)。没人认领不报错。
+   * 或清单变了就重发;清单是页面自己判重的片段(预渲染集合)。这台设备跑不了的用户卡、图卡一律判重(`costIdentity.ts`),
+   * 照样进清单,由桌面版等渲染节点认领(C10 契约第 9 节,2026-09-29 起不再去掉)。没人认领不报错。
    */
   useEffect(() => {
     if (!online || lowMem) return;
-    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
     const clips = () => {
       const plan = currentPlan();
       if (!plan) return [];
       const p = getState().project;
       const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
-      return [...plan.prerenderSet].filter((id) => {
-        const clip = byId.get(id);
-        // 只列卡片段(素材段不产快照),去掉这台设备显示不了的用户卡、图卡
-        return !!clip && !!clip.cardId && !needsLocalPc(clip.cardId, getCard(clip.cardId), isUserCard);
-      });
+      // 只列卡片段(素材段不产快照)
+      return [...plan.prerenderSet].filter((id) => !!byId.get(id)?.cardId);
     };
     const publisher = createPlanPublisher({
       request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION,
@@ -902,13 +929,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   /*
    * 低内存档的补渲(c10a 契约第 17 节):判重的层在素材服务里没有产物(不在渲染节点写的层表里)时,
    * 向队列发布带片段清单的补渲计划任务(标 backfill)。同一批还在等的不重发;页面只发布,不认领。
-   * 用户卡、图卡不发(这台设备不显示它们)。经在线来源同一条文档服务连接发。
+   * 用户卡、图卡照样发(它们判重,由桌面版等渲染节点渲;2026-09-29 起不再豁免)。经在线来源同一条文档服务连接发。
    */
   useEffect(() => {
     if (!online || !lowMem) return;
     const publisher = new BackfillPublisher({ request: docRequest, publisherId: `lowmem-${pageSession()}` });
     let link: unknown = null;
-    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
     const check = () => {
       const src = onlineSourceRef.current;
       const layers = src?.layerClipIds() ?? null;
@@ -921,7 +947,6 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         project: getState().project,
         layerClipIds: layers,
         heavy: judgedPlan()?.prerenderSet ?? new Set<string>(),
-        unsupported: (clip) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard),
       });
       void publisher.sync({ projectId: currentDocProjectId() || null, projectRev: shared.ds.rev || null, missing });
     };
@@ -944,8 +969,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     // 本地复用接 L2(要在第一次界限搜索之前接上,否则那一轮用页面内存)
     setLowMemoryCostStore(l2LowMemoryCostStore());
     let disposed = false;
-    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
-    const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard);
+    // 这台设备跑不了的卡(用户卡、图卡)不测、一律判重(界限搜索的 `forcedHeavy`)
+    const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined);
     const tick = async () => {
       if (disposed) return;
       const shared = currentSharedLink();
