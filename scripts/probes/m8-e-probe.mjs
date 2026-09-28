@@ -1185,12 +1185,14 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
     return null;
   }, Math.max(1000, deadline - Date.now()), 200);
   if (holding && holding !== 'done') await kv.signal(`holding.${NAME}`, { held: holding.held, at: Date.now() });
-  // 等本节点重连：opens 增加（新会话），或连接断过又连上
+  // 等本节点重连：opens 增加（新会话），或连接断过又连上。opens 的基准取「持有任务」那一刻（节点那时一定连着）：
+  // 取进本函数时的值不行 —— 节点可能还没连上（opens 0），第一次连上就被当成重连，重启前完成的段被算进「重启后」（AGENT-xnode-dedup）
+  const openedAtHold = holding && holding !== 'done' ? (holding.opens ?? n0.opens ?? 0) : (n0.opens ?? 0);
   let wasDown = false;
   const reconnectedAt = await until(async () => {
     const n = await host.node().catch(() => null);
     if (n && n.connected === false) wasDown = true;
-    if (n && n.connected && ((n.opens ?? 0) > (n0.opens ?? 0) || wasDown)) return Date.now();
+    if (n && n.connected && ((n.opens ?? 0) > openedAtHold || wasDown)) return Date.now();
     if (await kv.get('done', 0).catch(() => null)) return 'done';
     return null;
   }, Math.max(1000, deadline - Date.now()), 250);
