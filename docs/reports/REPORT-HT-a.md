@@ -52,7 +52,7 @@
   - run `c10s0928c` 按主机报到时的出口 160.79.106.23 在服务器侧 `ss -K` 没掐中主机的 WebSocket（主机会话 opens 1、resumes 0）：云端出站代理有多个出口地址（后来在 443 上看到 160.79.106.129 / .133 / .134 / .137 / .141）。
   - `d` 改掐上游：主机侧全过（resumes 1、opens 1、lost 0、6.5 s 接续原会话，托管端 `sessions.resumed` 3）；PC 侧两条失败是探针假阳性，`c10-browser-probe` 修正在 main `e807a0e`。
   - `e`（修好的探针）全过：01:26:02Z 持有 `snapshot:3e9b9605…:180-239`，01:26:06Z 在阿里云上掐 nginx 到文档服务的上游连接（`ss -K dport 8787`）5 条、1 秒内重连 4 条；主机 `resumes` 0→1、`opens` 1→1、6494 ms 接续原会话；托管端 `sessions.resumed` 3→8（掐线后 20 s）、legacy 0；持有的那段 taken 1 / reopened 0 / closed [done] / taskDone 1；云端主机 `host:vm:5425/p0` connectFailed 0；旁观节点被一起掐断后接续（newSessions 0、resumes 1）、漏看 0；页面 5 个任务都恰好一次 `task.done`。
-  - 结论：W-HT-a 云端一侧通过——会话接续、租约不丢、恰好一次，且会话客户端接续后不漏推事件。云端容器本身只能经代理出网，「只能出网的节点」一侧也由这几轮（`c`、`d`、`e`）复核；本机另有 CONNECT 代理替身四轮通过（main `8f92683`，`docs/reports/AGENT-m8-connect-proxy.md`）。
+  - 结论：W-HT-a 云端一侧通过——会话接续、租约不丢、恰好一次，且会话客户端接续后不漏推事件。云端容器本身只能经代理出网，「只能出网的节点」一侧也由这几轮（`c`、`d`、`e`）复核；本机另有 CONNECT 代理替身四轮通过（main `8f92683`，`docs/archive/agent-reports/AGENT-m8-connect-proxy.md`）。
 
 ## 1.7 HT9：两轮没过的原因与改到的做法
 - 第 1 轮（`ht9a0927`，2026-09-27T14:37Z）：笔记本 creator 第一次往协调口写配置回 401（同一时刻观察端与云端用同一个令牌读都正常，原因没查明），重跑。

@@ -22,14 +22,14 @@
 
 ### 1.1 M8 开工的前置（主执行计划第 6.5 节 W8：「M6～M7 全部合入之后」）
 
-| 前置 | 现状（main `a038948`） | 缺什么 |
+| 前置 | 现状（首版按 main `a038948` 写，C10、M7、遗留与探针分支的合入于 2026-09-29 按 `git log` 与 `git merge-base --is-ancestor <提交> origin/main` 核过改写） | 缺什么 |
 |---|---|---|
-| C10 其余合入 main 并部署阿里云 | 未合入。`claude/c10-integ`（`24c2c57`）已合 `c10-browser`、`c10-a4`，C10-A1～A10 本机验收已跑；`claude/pause-precise`（停下到精确活渲太慢的两条后续）在修；`claude/c10-site`（C10 浏览器探针的外网模式与独立主机角色）在起稿 | 集成收口、部署（两个舞台子域的专用 nginx 站点）、外网复验 |
-| M7 合入 main 并部署 | 契约第 1 版已在 main（`1e7c940`）；`claude/m7-probe`、`claude/rq-m7-queue`、`claude/rq-m7-tests` 在起稿，`claude/rq-m7-node` 未建 | 全部 |
-| 性能缺陷修到笔记本过线（`HANDOFF-2026-09-28.md` 第 6 节） | T4（后台上传期间长任务）已合入（`a038948`，笔记本空闲时 3 轮全过）；1080p 分段编码在 `claude/perf-encode`（`7cbf70a`，PC 上 p50 中位数 360 → 270 ms），**未合入、待笔记本复核** | 笔记本复核、合入 |
-| 「要在 M8 之内修的遗留」 | 见第 5 节：已修 3 条、在修 9 条、未修 8 条 | 第 5 节 |
+| C10 其余合入 main 并部署阿里云 | **已合入**：集成分支 `claude/c10-integ` 快进进 main，main 指到 `51f01c4`（`claude/pause-precise`、`claude/c10-site`、`claude/online-prune`、`claude/c10-catalog` 都先并入集成分支；`REPORT-C10.md` 第 1 节）。已部署：2026-09-28 部署 `2f7f821` 的服务端与在线构建、两个舞台子域的专用 nginx 站点，再以 `d29a7ba` 的在线构建重新部署编辑器（`REPORT-C10.md` 第 7 节） | 外网复验只做完 A5（run `c10s0928e`，同时算 M8-X2），其余归 M8-X3 |
+| M7 合入 main 并部署 | **已合入**：集成分支 `claude/rq-m7` 快进进 main，main 指到 `a52344a`（`claude/m7-probe` 的探针脚本由 main `e86a754` 合入；`REPORT-M7.md` 第 1、12 节）。W7 时阿里云部署的是 `4047133` 的构建（`REPORT-M7.md` 第 7.1 节） | 合入后的部署提交待核 |
+| 性能缺陷修到笔记本过线（`HANDOFF-2026-09-28.md` 第 6 节） | T4（后台上传期间长任务）已合入（`a038948`，笔记本空闲时 3 轮全过）；1080p 分段编码 `claude/perf-encode` 已合入 main（`211695d`），笔记本 ENC-1、ENC-2 都过线（第 5 节 L20） | 无 |
+| 「要在 M8 之内修的遗留」 | 首版统计（main `a038948`）：已修 3 条、在修 9 条、未修 8 条。之后已合入 main 的：L10、L16 `2fa0c1a6`（`claude/eol-eperm`）；L4、L5 `2e957270`（`claude/card-overlay`）；L14 `278eeb9d`（`claude/m8-session-legacy`）；L20 `211695d`（`claude/perf-encode`）；L21 随 C10 合入（`claude/pause-precise`，集成分支 `2f7f821`） | 第 5 节 |
 
-M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在就开；只有「跑」要等前置齐。
+M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入。已合入 main 的：`claude/m8-kit` `fdf515e3`、`claude/m8-migrate` `6d516f32`、`claude/m8-scale` `b18256e1`、`claude/m8-e2e` `4538ec42`。
 
 ### 1.2 参与方（2026-09-28 起）
 

@@ -141,7 +141,7 @@
 
 ## 15. 可行性探针（`claude/c10-probe`，先于实现）
 
-主会话 2026-09-27 派出（`opus-dev`），探针 `scripts/probes/c10-stage-probe.mjs`（子命令 `p1`～`p4`、`p3q`、`calibrate`；用真实的 `createSnapshot`），报告 `docs/reports/AGENT-c10-probe.md`。环境：puppeteer 的 Chrome 152.0.7977.75，有头、无头各一遍；这台机器 GPU 路径只有每秒约 11 次 rAF，全部用 `--disable-gpu`（有头 180 Hz、无头 60 Hz）；每轮开始时 CPU 占用 0%～88%，只比较同一时段的结果。
+主会话 2026-09-27 派出（`opus-dev`），探针 `scripts/probes/c10-stage-probe.mjs`（子命令 `p1`～`p4`、`p3q`、`calibrate`；用真实的 `createSnapshot`），报告 `docs/archive/agent-reports/AGENT-c10-probe.md`。环境：puppeteer 的 Chrome 152.0.7977.75，有头、无头各一遍；这台机器 GPU 路径只有每秒约 11 次 rAF，全部用 `--disable-gpu`（有头 180 Hz、无头 60 Hz）；每轮开始时 CPU 占用 0%～88%，只比较同一时段的结果。
 
 | 编号 | 问题 | 结果 |
 |---|---|---|
