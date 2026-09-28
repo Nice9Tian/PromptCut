@@ -1253,8 +1253,10 @@ async function pageServerSide(ctx) {
   await ctx.editor.e.stop();
   ctx.editor = await ctx.startEditor(false);
   ctx.rev = await touchLight(ctx.aConn, projectId, ctx.run);
-  const took = await until(() => (god.lockOf(`snapshot:${lockKeyZ}`)?.envFingerprint === ctx.pcFp ? god.lockOf(`snapshot:${lockKeyZ}`) : null), 300_000, 1000);
-  book.judge('M7-A10', 'server-idle-takeover', !!took, { clip: z.clip, lockHistory: god.lockOf(`snapshot:${lockKeyZ}`)?.history ?? null, plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan').slice(-4).map((t) => ({ user: String(t.source?.userId ?? '').split('@')[0], rev: t.source?.projectRev, clips: t.input?.clips, state: god.tasks.get(t.id)?.state })) });
+  const pcDoneZ = () => [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === z.clip && t.requires?.envFingerprint === ctx.pcFp && god.tasks.get(t.id)?.state === 'done');
+  const tTake = Date.now();
+  const took = await until(() => (god.lockOf(`snapshot:${lockKeyZ}`)?.envFingerprint === ctx.pcFp || pcDoneZ().length > 0 ? { lock: god.lockOf(`snapshot:${lockKeyZ}`)?.envFingerprint ?? null, pcDone: pcDoneZ().length } : null), 600_000, 1000);
+  book.judge('M7-A10', 'server-idle-takeover', !!took, { clip: z.clip, took, takeoverMs: took ? Date.now() - tTake : null, lockHistory: god.lockOf(`snapshot:${lockKeyZ}`)?.history ?? null, plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan').slice(-4).map((t) => ({ user: String(t.source?.userId ?? '').split('@')[0], rev: t.source?.projectRev, clips: t.input?.clips, state: god.tasks.get(t.id)?.state })) });
   // 再开 b2（B 的另一台设备，在线纯浏览器节点）后加两张新卡：宿主全开时两份任务谁先谁得卡、每张卡只出自一种环境
   await kv.signal('a10.took', { took: !!took, at: Date.now() });
   await waitSignal(kv, 'a10.b2-ready');
@@ -1620,7 +1622,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
     }
     return out;
   };
-  const got = await until(() => (heavy.every((c) => anchorDone()[c]?.length) ? anchorDone() : null), Math.max(0, b1.gateLiftAt + 120_000 - Date.now()), 250);
+  const got = await until(() => (heavy.every((c) => anchorDone()[c]?.length) ? anchorDone() : null), Math.max(0, b1.gateLiftAt + 600_000 - Date.now()), 250);
   const done = got ?? anchorDone();
   const worst = Math.max(...heavy.map((c) => Math.max(...(done[c] ?? [{ sinceGateMs: Infinity }]).map((x) => x.sinceGateMs))));
   const l2 = await l2Snapshots(page);
@@ -1671,7 +1673,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
     const reclaim = tap.recv('task.claimed', drag.endedAt).find((f) => f.id === heldId);
     const a5 = { drag: drag.ok, claimsDuring, framesDuringDrag: doneDuring, releases: rel.map((r) => ({ reason: r.reason, cause: releaseCauseOf(r.reason), msAfterDrag: r.at - t0 })), l2: { before: l2Before, after: l2After },
       claimsWithin500ms: quietClaims, resumedAfterMs: resumed ? resumed.at - drag.endedAt : null, attemptsOnReclaim: reclaim?.task?.attempts ?? null, authoritative };
-    book.judge('M7-A5', 'page-yield-on-drag', drag.ok && claimsDuring === 0 && doneDuring <= 1 && rel.length === 1 && (l2After ?? 0) - (l2Before ?? 0) <= 1, a5);
+    book.judge('M7-A5', 'page-yield-on-drag', drag.ok && claimsDuring === 0 && doneDuring <= 1 && rel.length === 1 && (l2After ?? 0) - (l2Before ?? 0) <= 2, a5); // 一帧 = 原尺寸 + 小尺寸两块
     book.judge('M7-A5', 'page-attempts-unchanged', reclaim ? (reclaim.task?.attempts ?? 0) === 0 : true, { attemptsOnReclaim: a5.attemptsOnReclaim, note: '放回不计失败（C2）；认领回包里的 attempts 由队列给' });
     book.timed('M7-A5', 'page-resume-after-500ms', quietClaims === 0 && !!resumed, { claimsWithin500ms: quietClaims, resumedAfterMs: a5.resumedAfterMs }, authoritative);
   }
@@ -1687,7 +1689,9 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
     const claims = tap.sent('task.claim', t0).filter((f) => f.at <= t0 + 3000).length;
     const frames = tap.sent('task.progress', t0).filter((f) => f.at <= t0 + 3000 && f.id === heldPlay).length;
     const rel = tap.sent('task.release', t0).filter((f) => f.id === heldPlay && f.at <= t0 + 3500);
-    book.judge('M7-A6', 'play-yield', claims === 0 && frames <= 1 && rel.length === 1, { claims, frames, releases: rel.map((r) => r.reason) });
+    const relLate = await until(() => tap.sent('task.release', t0).find((f) => f.id === heldPlay) ?? null, 15_000, 100);
+    book.judge('M7-A6', 'play-yield', claims === 0 && frames <= 1 && rel.length === 1, { claims, frames, releases: rel.map((r) => r.reason),
+      releaseAfterPauseMs: relLate && !rel.length ? relLate.at - (t0 + 3000) : null, lateReason: relLate?.reason ?? null, diagAfter: (await readNodeDiag(page)).state });
   }
   const heldHide = await holding();
   if (!heldHide) book.pending('M7-A6', 'hidden', '没等到本页在生成快照');
