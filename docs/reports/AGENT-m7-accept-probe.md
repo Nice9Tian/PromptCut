@@ -175,3 +175,34 @@ f918648 Merge branch 'claude/m8-kit' into claude/m7-accept-probe
 - `--site https://8-219-80-16.sslip.io`：creator 不起本机托管组合与代理，连阿里云托管组合（文档服务 `<站点>/hosted/`，素材服务 `<站点>/media/api/asset`，在线编辑器 `<站点>/editor/`，两个舞台源读 `<站点>/editor/runtime-config.json`）；协调口缺省 `<站点>/coord`（`PROBE_MAIL_TOKEN` 从环境变量取）；给了 `--site` 时 `--role` 缺省 creator。
 - 外网模式没有进程内的 `describe()`：上帝视角改由 pc 档旁观节点收到的消息拼（任务状态、按被认领那份的指纹推断的锁；认领者、`attempts`、`lastError` 拿不到）；素材块用读票据 `GET <ns>/<hash>/chunks` 核 `complete`；A3 页面部分由 node 角色按线上 `task.claim` 判；托管端日志与 `describe()` 的票据泄漏、A11 的服务端结束会话记 pending（阿里云上另验）。
 - node 角色：`--site` 同上；`--chrome <路径>`（或 `PUPPETEER_EXECUTABLE_PATH`）用系统的 Chromium；Linux 上自动加 `--no-sandbox --disable-dev-shm-usage`；站点是 https 不需要放行不安全源。
+
+### 合入页面节点与 main 之后的本机结果（run12）
+
+分支上合了 `claude/rq-m7-node`（9774eda）与 main（8f92683，含 C10 51f01c4；`vite.config.ts` 一处冲突按两边意图合：main 的 `rawEolPlugin`、`onlineCatalogPlugin` 加页面节点分支的 `tailwindcss({ optimize: false })`）。`npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3741、pass 3739、fail 0、skipped 2（原有两条）。
+
+`node scripts/probes/m7-browser-probe.mjs --role all`：退出码 1，1425 s，跑完 5450～5459 上没有监听。
+
+```
+M7-A1      pass     server-B-other-user, server-same-name-other-device, page
+M7-A2      pass     server-claim-other-user-forbidden, server-own-plan-plan-profile, server-d9-browser-as-pc-forbidden, page-hello-profile-browser
+M7-A3      pass     server-standin-*（2）, server-page-node-registered, server-page-forbidden-claimed-0, page-forbidden-claimed-0, page-light-medium-done
+M7-A4      pending  server-anchors-by-browser=pass, server-layer-map-points-to-browser=pass, page-anchors-done=pass, page-layer-env-browser=pass, page-within-30s=pending（参考值 42.8 s，PC 忙，待笔记本）
+M7-A5      pending  page-yield-on-drag=pass, page-attempts-unchanged=pass, page-resume-after-500ms=pending（计时）
+M7-A6      fail     play-yield=fail, hidden-release-now=pass, hidden-no-claims-then-resume=pass, urgent-stops-at-frame-boundary=pass
+M7-A7      pass     setup-single-stage, no-render-connection
+M7-A8      pass     server-manifest-matches, server-one-env-per-layer, server-exactly-once-done, server-desktop-applied
+M7-A9      pass     server-every-frame-has-px, page-low-memory-shows-small
+M7-A10     fail     server-idle-takeover=fail, server-race-one-env-per-card=pass, page-layer-switched=pass（这条判得太宽，已改）
+M7-A11     pass     server-logs-describe, page-render-ticket-expiry, echo-only-promptcut.v1, render-echo-only-promptcut.v1, ticket-not-in-url-or-page-diag
+M7-A12     pending  play-10s-claims-0=pass, play-10s-longtasks-0 / bake-longtasks-0=pending（计时，参考值都是 0 条）
+W7         pending  cross-machine=pending（本机替身）, A1～A3=pass, A4-timing-on-laptop=pending
+D9 / D10 / D14  pass
+D1-D2-D12  fail     page-dual-split-supersede-layermap（判据对「页面报到前那一版只出 pc 一份」判得太严，已改）
+planOnly: {"fineClaimedByPc":5,"plansClaimedByPc":4,"applied":false}
+```
+
+三条 fail 的原因：
+
+1. **M7-A6 play-yield（页面节点的行为，两轮都复现）**：生成快照中开始播放 3 s，这 3 s 里这一段 0 帧、0 次放回；放回（`yield-play`）在暂停之后约 5.2 s 才发出（run11 同样 `releaseAfterPauseMs: 5212`）。拖动那条（A5）run12 过了、run11 同样 0 帧 0 放回，是时有时无。推测：播放、拖动时后台活的门关了，舞台把正在做的那一帧挡在门外（记进 `pausedMs`），那一帧既做不完也不放回，要等交互结束门重新打开。契约 D8 是「当前这一帧做完，随后放回」。建议页面节点分支：让路时当前帧如果被门挡住，就照隐藏那样立即放回（不等这一帧），或者门对正在做的那一帧放行到帧末。
+2. **M7-A10 server-idle-takeover**：b1 拿着 z1 的一段后关掉，锁闲置超过 30 s，重启 pc（宿主全开）、再开 b2（下一个发布计划的人），等了 600 s 锁一直在页面指纹上，pc 那份没做。run11 里接手发生过（锁在 b2 打开后转到 pc），run12 没有。本机替身里 b2 与 b1 是同一台机器，指纹相同但用户不同（设备不同）：b1 留下的那几份任务按 D13 属于 b1，b2 认领不了，切分方又按「锁在浏览器指纹上、这一版的浏览器也是这个指纹」照锁出键。这是不是接手判定漏了「锁定方已离线、同指纹的是别的用户」这种情形，要队列分支看一下（`split.mjs` 的 `keyingOf` 与 `idleLockTakeover` 的调用处）。
+3. **D1 判据**：h2、h3 的 pc 那份里有不带 `dual` 的，是页面报到之前（最多等 3 s）发的那一版切出来的，照契约只出 pc 一份、不参与作废；h1 的 5 份双份、全部作废、层表 v3 两个候选都对。判据已改成只对带 `dual` 的要求作废（`探针:真页面上的 D1 判据…` 那次提交）。
