@@ -1,6 +1,7 @@
 /** Real .proc playback, in an isolated source/cache copy. Input stays read-only.
  * node scripts/verify-playback-project.mjs --project <file.proc> [--seconds 12]
  */
+import './lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs/promises';
 import { existsSync, lstatSync, unlinkSync } from 'node:fs';
 import path from 'node:path';

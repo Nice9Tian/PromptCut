@@ -18,6 +18,7 @@
  *
  * 输出:过程写 stderr;stdout 只有最后一行 JSON:{ ok, ..., fails: [] }。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
 import os from 'node:os';

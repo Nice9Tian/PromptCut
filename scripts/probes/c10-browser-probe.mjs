@@ -130,6 +130,7 @@
  *   abort          creator 出错收尾时写;host 看到就退出
  *   host           host 的结果行(`e6Reverse` 时带 `ids`,同 host.progress)
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { fork, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';

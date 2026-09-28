@@ -48,6 +48,7 @@
  *   要用主仓库那份,先设 `PROMPTCUT_PYTHON`、`PROMPTCUT_PYLIBS`、`PROMPTCUT_MODELS`。脚本启动时会提醒。
  * - `scripts/headless.mjs` 的无头实例在 SKILL 关着时拒绝一切工具,不能拿它测普通对话;所以这里自己开页面。
  */
+import './lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

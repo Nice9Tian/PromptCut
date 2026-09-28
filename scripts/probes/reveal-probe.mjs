@@ -24,6 +24,7 @@
  * `--headed` 用有头 Chrome 再跑一遍播放和拖动 —— 用户真正看到的是有头浏览器，
  * 有头下 rAF 受真实显示节拍约束，报出来的间隔才是用户感觉到的那个。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

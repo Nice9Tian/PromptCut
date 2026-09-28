@@ -27,6 +27,7 @@
  * 「锚帧先于其他帧就绪」这一条量的是真的冷启动,而不是上一次跑剩下的盘。
  * 它由子进程继承,预渲染进程崩了重起也还是同一个目录(F5 那一条要靠它)。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';

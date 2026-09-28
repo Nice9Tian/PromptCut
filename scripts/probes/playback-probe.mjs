@@ -26,6 +26,7 @@
  * 是**到达间隔的均值 = 1000 / fps** 和**连续两条 `frame` 的 `sec` 差恒为 1/fps**。
  * 真机（有垂直同步的会话）上的 2/3 交替要靠 `oac-probe` 那种带显示节拍的跑法验，这里记一笔。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

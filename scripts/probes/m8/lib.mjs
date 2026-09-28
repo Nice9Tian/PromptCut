@@ -17,6 +17,7 @@
  *   `ok` = 没有 fails 且至少一条 check。`--role all` 汇总时各角色的结果放在 `roles.<角色>`，checks 名前加 `<角色>:`。
  *   口令、令牌一律不进结果行。
  */
+import '../../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { createHash, randomBytes } from 'node:crypto';
 
 /* ================================================================== 角色与本轮 id */

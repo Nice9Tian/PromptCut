@@ -14,6 +14,7 @@
  * 不用 server/bakery/chrome.mjs 的 CHROME_ARGS:那边的 --enable-begin-frame-control 要靠 CDP
  * 手动发 BeginFrame 才出帧,页面里的 rAF 会挂住。fill 的序列化形式和出帧管线无关。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';

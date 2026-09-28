@@ -126,6 +126,7 @@
  *     看到 KV `htw.<id>.host.holding` 后,在服务器上杀掉这台主机到 nginx 443 的那条连接(见 AGENT-ht-w-probe 报告的 `ss -K` 条件),
  *     再 `PUT /coord/kv/htw.<id>.cut.done`(带 X-Mail-Token)。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync, fork } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';

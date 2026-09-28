@@ -14,6 +14,7 @@
  * 测试指纹（`PROMPTCUT_TEST_ENV_FINGERPRINT`，16 位小写十六进制）只在 C10 集成分支及其后的代码里生效；
  * 在更早的检出上设了也没用，`fingerprintApplied()` 回假（探针据此判「开关没生效」而不是误判认领结果）。
  */
+import '../../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync, fork } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';

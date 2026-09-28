@@ -71,6 +71,7 @@
  * 输出：过程写 stderr；stdout 最后一行一行 JSON `{ probe, role, run, ok, checks, fails, … }`，`ok` 为假退出码 1，参数不对 2。
  * 口令、令牌不进 stdout / stderr；代理记录不含路径、查询串与请求头。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, fork, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';

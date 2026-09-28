@@ -15,6 +15,7 @@
  *
  * 导出页把背景设成透明(合成用),定格图直接看会是一张透明底,所以截图前给根元素铺一层 --bg。
  */
+import './lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import puppeteer from "puppeteer";
 import fs from "node:fs/promises";
 import path from "node:path";

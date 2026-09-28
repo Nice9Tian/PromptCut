@@ -3,12 +3,18 @@
  *
  *   1. 在一段空闲端口上起一台**自己的** dev server,用完连同子进程一起收掉
  *      (`scripts/export-e2e.mjs`、`scripts/review-loop-run.mjs` 用);
- *   2. media junction:建链接、只拆链接、清理上次被强杀留下的链接。
+ *   2. media 素材目录:硬链接镜像(`mirrorMediaLibrary`,`export-e2e.mjs` 用);旧的 junction 只剩
+ *      清理上次被强杀留下的链接这一件事还在用(建链接、只拆链接的函数留给守门测试)。
+ *
+ * 本模块和它起的 dev server 都不继承外部的 `PROMPTCUT_EXPORT_DIR` / `PROMPTCUT_DATA_DIR`
+ * (`no-user-dirs.mjs`);调用方显式给的目录指向用户的 `Videos\PromptCut` 时直接抛。
  *
  * 端口:每台 dev server 另占「端口 +1」「端口 +2」当舞台端口,三个连号都要空着;
  * 被占了页面会退回同源单舞台,测出来的就不是正常形态。5190~5192 是用户常驻的那台,不碰。
  */
+import './no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
+import { assertNoUserExportDir } from './user-dirs.mjs';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -116,6 +122,7 @@ export async function startDevServer({ env = {}, logFile, port, log = () => {} }
 }
 
 async function startOnce(port, env, logFile, log) {
+  assertNoUserExportDir(env, 'dev server');
   const origin = `http://127.0.0.1:${port}`;
   const logStream = fs.createWriteStream(logFile, { flags: 'a' });
   const child = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'], {
@@ -238,6 +245,57 @@ export function sweepStaleJunctions(root) {
     if (removeMarkedJunction(dir)) removed.push(info.link);
   }
   return removed;
+}
+
+/* ------------------------------------------------------------------ *
+ * media 硬链接镜像
+ *
+ * junction 的另一个问题在「写」:导出目录里的 media 就是编辑器的本地内容库(`<PROMPTCUT_EXPORT_DIR>/media`),
+ * 按需拉取、导入、Agent 预渲染的 bake 图、索引 `index.json` 都往里落文件,经 junction 全写进了
+ * 用户的素材目录(缺省 `%USERPROFILE%\Videos\PromptCut\media`)。镜像改成一个真目录:素材文件逐个建硬链接
+ * (不占空间、读到的是同一份字节),`index.json` 和点开头的元数据文件复制一份。之后编辑器新写的文件只落在
+ * 镜像里;删镜像只删链接,素材本身不动(硬链接删一个名字不影响另一个)。
+ *
+ * 限制:硬链接要求两边在同一个盘;不在同一个盘就抛,让调用方把导出目录换到素材所在的盘上,不退回 junction。
+ * 素材按内容哈希命名、写一次不再原地改,所以共享的那份字节不会被镜像这边改掉。
+ * ------------------------------------------------------------------ */
+
+/** 复制而不是硬链接的文件:会被编辑器原地改写的元数据 */
+const COPY_NOT_LINK = (name) => name === 'index.json' || name.startsWith('.');
+
+/**
+ * 在 dest 建一个真目录,把 src 里的文件逐个硬链接进来(子目录照样递归),元数据文件复制。
+ * src 里的链接(junction、符号链接)跳过不跟。
+ * @param {string} src  素材目录(只读用)
+ * @param {string} dest 镜像目录,不能已经存在
+ * @returns {{ linked: number, copied: number, skipped: number }}
+ */
+export function mirrorMediaLibrary(src, dest) {
+  const from = path.resolve(src);
+  const st = lstatOrNull(from);
+  if (!st || !st.isDirectory()) throw new Error(`素材目录不存在:${from}`);
+  if (lstatOrNull(dest)) throw new Error(`${dest} 已经存在,不在它上面建镜像`);
+  const counts = { linked: 0, copied: 0, skipped: 0 };
+  const walk = (a, b) => {
+    fs.mkdirSync(b, { recursive: true });
+    for (const e of fs.readdirSync(a, { withFileTypes: true })) {
+      const s = path.join(a, e.name);
+      const d = path.join(b, e.name);
+      if (e.isSymbolicLink()) { counts.skipped++; continue; }
+      if (e.isDirectory()) { walk(s, d); continue; }
+      if (!e.isFile()) { counts.skipped++; continue; }
+      if (COPY_NOT_LINK(e.name)) { fs.copyFileSync(s, d); counts.copied++; continue; }
+      try {
+        fs.linkSync(s, d);
+        counts.linked++;
+      } catch (err) {
+        if (err.code === 'EXDEV') throw new Error(`硬链接要求导出目录和素材目录在同一个盘:${from} → ${dest}。用 --work 把导出目录指到素材所在的盘上`);
+        throw err;
+      }
+    }
+  };
+  walk(from, dest);
+  return counts;
 }
 
 /** 2026-09-23T15:30:12 → 20260923-153012,给默认目录名用 */

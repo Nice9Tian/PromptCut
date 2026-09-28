@@ -92,6 +92,7 @@
  *
  *   让 creator 结束保持:有 `--coord` 时 `POST /stop`,否则写 `<state>/stop`。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, fork } from 'node:child_process';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';

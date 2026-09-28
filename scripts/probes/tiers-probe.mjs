@@ -30,6 +30,7 @@
  * 编辑器自己拉起的预渲染进程由系统给空端口(`vite-plugin-prerender.ts`)。结束时只结束本探针起的进程树。
  * 输出最后一行是一行 JSON:`{ ok, imports, queueOrder, remote, t4, fails }`。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';

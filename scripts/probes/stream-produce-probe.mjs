@@ -27,6 +27,7 @@
  *
  * 输出 JSON 结论;任何一条不过就以非零退出。`--keep` 不删库根(给 `stream-play-probe.mjs` 接着用)。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
