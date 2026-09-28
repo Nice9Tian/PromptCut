@@ -43,8 +43,15 @@ export interface BrowserExportDeps {
   originals: OriginalsDeps | null;
   /** 还没有层表时,页面自己判重的片段 */
   fallbackHeavy?: () => string[];
+  /**
+   * 低内存档:只有这些片段(页面判重的)用预渲染原尺寸,别的(判轻的)一律本机逐帧渲,层表里有也不取。
+   * 回 null 或不给 = 层表里的都算重卡(普通档)。
+   */
+  heavyOnly?: () => string[] | null;
   /** 素材原尺寸的地址:在线页面换成远程素材服务 + 只读票据(`mediaTier.ts` 的 `remoteMediaUrl`) */
   mediaUrl?: (url: string) => string;
+  /** 当前的只读票据(导出途中续签,C10 契约第 12 节;`ticketRenewal.ts`):每一帧装素材前换进素材地址 */
+  freshTicket?: () => string | null;
   /** 导出页地址(缺省按当前页面拼) */
   exportUrl?: string;
   env?: EncoderEnv;
@@ -78,7 +85,7 @@ async function precheck(deps: BrowserExportDeps): Promise<OriginalsIndex | null>
     if (deps.signal.aborted) throw cancelled();
     const media = await deps.checkMediaOriginals();
     let index: OriginalsIndex | null = null;
-    if (deps.originals) index = await loadOriginalsIndex(deps.project.id || null, deps.originals, { fallbackHeavy: deps.fallbackHeavy?.() ?? [] });
+    if (deps.originals) index = await loadOriginalsIndex(deps.project.id || null, deps.originals, { fallbackHeavy: deps.fallbackHeavy?.() ?? [], onlyClips: deps.heavyOnly?.() ?? null });
     const parts: string[] = [];
     if (media.length) parts.push(awaitingUploaderMessage(media));
     if (index?.missing.length) parts.push(ONLINE_EXPORT_TEXT.missingOriginals(index.missing.length));
@@ -227,7 +234,7 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
   const exportProject: Project = deps.mediaUrl
     ? { ...project, media: project.media.map((m) => ({ ...m, url: m.url ? deps.mediaUrl!(m.url) : m.url })) }
     : project;
-  const compositor = await ExportCompositor.open({ project: exportProject, exportUrl: deps.exportUrl, originals, signal: deps.signal });
+  const compositor = await ExportCompositor.open({ project: exportProject, exportUrl: deps.exportUrl, originals, signal: deps.signal, freshTicket: deps.freshTicket });
 
   let muxer: Mp4Muxer | null = null;
   let failure: unknown = null;

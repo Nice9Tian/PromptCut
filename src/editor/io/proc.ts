@@ -16,7 +16,11 @@ import { getSkillSnapshot } from "../../skill/skillMode";
  * 所有权作废了(有第三方在重构 vite-plugin-skill.ts),所以还是在这里写。
  * 只有一个写入方,不会出现两处各写各的。
  */
+/** 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」):在线页面没有 SKILL 模式,不盖戳 */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
 function skillStamp(): { active: boolean; jobId?: string | null; at?: string } | undefined {
+  if (ONLINE_BUILD) return undefined;
   const { state } = getSkillSnapshot();
   if (!state.active) return undefined;
   return { active: true, jobId: state.jobId, at: new Date().toISOString() };

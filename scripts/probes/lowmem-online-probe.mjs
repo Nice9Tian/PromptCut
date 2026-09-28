@@ -16,7 +16,9 @@
  *   G1 能力闸:只有一个同源舞台(没有 B)、带 `preview=stage`;舞台判出低内存档;没有探针遮罩、没有 `/api/data/costs`;进入提示照抄表 C。
  *   G2 只拉小尺寸:有小尺寸的视频只拉小尺寸;没有小尺寸的视频不拉、显示「等待上传方」;重卡贴 `px/<hash>` 的小位图;
  *      原尺寸(素材原尺寸、`snap/`)一个请求都没有。
- *   G3 播放 2 秒、暂停:播放头跟舞台走;暂停后重卡仍抑制、贴小尺寸,不起追帧(不追活渲)。
+ *   G3 播放 2 秒、暂停:播放头跟舞台走;播放中重卡抑制着。暂停后照 c10a 契约第 17 节「停下追当前一帧」:在时限(5 秒)内
+ *      把这一帧画出来(画好的层撤掉抑制),或到时限维持兜底(抑制着、贴小尺寸或占位)。
+ *      〔C10 其余 c10-cost 改:原断言「暂停后重卡仍抑制、贴小尺寸、不追活渲」是 §17 之前的规则,在 e067d0b 上同样挂。〕
  *   G4 逐帧导出:素材原尺寸没到齐时提示「等待上传方」、不出片,可取消;到齐后导出 2 秒,ffprobe 核对帧数、时长、编码;
  *      请求记录里有素材原尺寸与 `snap/`(预渲染原尺寸);重卡那一层画的是原尺寸快照(品红「原尺寸」色块在画面里)。
  *
@@ -248,22 +250,50 @@ try {
   const online = await page.evaluate(() => window.__pcOnlineSnapshots?.());
   out.G2.onlineSource = online;
 
-  /* ============================================================ G3:播放、暂停不追活渲 */
+  /* ============================================================ G3:播放、暂停后停下追一帧(c10a 契约第 17 节) */
   const t0 = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().t);
   await store(`actions.play();`);
-  await sleep(2000);
-  await store(`actions.pause();`);
+  await sleep(1200);
+  const playingState = await stageFrame()?.evaluate((id) => {
+    const wrap = document.querySelector(`[data-pc-clip="${CSS.escape(id)}"]`);
+    return { cls: wrap?.className ?? null };
+  }, setup.heavyId);
   await sleep(800);
+  // 诊断:停下前后舞台收到的会清掉「停下画好的层」的 RPC(setTime / setProject / play / setRole / settleLowMemory)
+  await stageFrame()?.evaluate(() => {
+    const api = window.__pcStage;
+    window.__pcRpcLog = [];
+    if (!api || api.__pcLogged) return;
+    api.__pcLogged = true;
+    for (const m of ['setTime', 'setProject', 'play', 'pause', 'setRole', 'settleLowMemory']) {
+      const orig = api[m];
+      if (typeof orig !== 'function') continue;
+      api[m] = function (...a) {
+        window.__pcRpcLog.push({ m, at: Math.round(performance.now()), t: typeof a[0] === 'number' ? a[0] : null, opts: a[1] && typeof a[1] === 'object' ? Object.keys(a[1]).join(',') : null });
+        return orig.apply(this, a);
+      };
+    }
+  });
+  await store(`actions.pause();`);
+  // 等父页记下这一次停下追一帧的结果(时限 5 秒)
+  let settleResult = null;
+  for (let i = 0; i < 40 && !settleResult; i++) {
+    await sleep(200);
+    settleResult = await page.evaluate(() => { const r = window.__pcPreviewDiag?.()?.lowMemSettle; return r && r.ok ? { sec: r.sec, ms: r.ms, drawn: r.drawn.map((d) => d.clipId), timedOut: r.timedOut, skipped: r.skipped } : null; });
+  }
   const g3 = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().t);
   const stageState = await stageFrame()?.evaluate((id) => {
     const d = window.__pcStageDiag?.() ?? {};
     const wrap = document.querySelector(`[data-pc-clip="${CSS.escape(id)}"]`);
-    return { settling: d.settling ?? null, suppressed: d.suppressed ?? null, cls: wrap?.className ?? null, hasSmall: !!wrap?.querySelector('img[data-pc-small-snapshot]') };
+    return { settling: d.settling ?? null, suppressed: d.suppressed ?? null, lowMemLive: d.lowMemLive ?? null, cls: wrap?.className ?? null, hasSmall: !!wrap?.querySelector('img[data-pc-small-snapshot]'), rpc: (window.__pcRpcLog ?? []).slice(0, 20) };
   }, setup.heavyId);
-  out.G3 = { t0, t1: g3, stage: stageState };
+  out.G3 = { t0, t1: g3, playing: playingState, stage: stageState, settle: settleResult };
   check(g3 - t0 > 1, 'G3 播放头跟舞台走了 1 秒以上', { t0, t1: g3 });
-  check(stageState && /pc-suppressed/.test(stageState.cls || '') && stageState.hasSmall, 'G3 暂停后重卡仍抑制、贴小尺寸(不追活渲)', stageState);
-  check(!stageState?.settling || (Array.isArray(stageState.settling) ? !stageState.settling.length : !Object.keys(stageState.settling).length), 'G3 暂停后没有追帧', stageState);
+  check(playingState && /pc-suppressed/.test(playingState.cls || ''), 'G3 播放中重卡抑制着(不活渲)', playingState);
+  const drawnHeavy = !!settleResult?.drawn?.includes(setup.heavyId);
+  const timedOutHeavy = !!settleResult?.timedOut?.includes(setup.heavyId);
+  check(settleResult && settleResult.ms <= 6000 && (drawnHeavy || timedOutHeavy), 'G3 暂停后停下追一帧在时限内收尾,重卡画好或超时', settleResult);
+  check(drawnHeavy ? !/pc-suppressed/.test(stageState?.cls || '') : (/pc-suppressed/.test(stageState?.cls || '')), 'G3 画好的重卡撤了抑制(超时的维持兜底)', { stageState, drawnHeavy });
   check(apiRequests.length === 0, 'G1 没有探针 / 预渲染进程的请求(/api/data/costs、/api/frames)', apiRequests.slice(0, 5));
   const probeGate = await page.$('[data-pc="probe-gate"]');
   check(!probeGate, 'G1 没有探针遮罩');

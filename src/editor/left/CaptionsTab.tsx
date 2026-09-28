@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { actions, useStore } from "../../store/project";
 import type { MediaAsset, Project, TranscriptSegment } from "../../kernel/project";
 import { TranscribePanel } from "./TranscribePanel";
+import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 
 /**
  * 字幕分区的主体:一棵两级树。
@@ -272,7 +273,7 @@ function MediaNode({
               >
                 铺成字幕轨
               </button>
-              <button type="button" className="pc-left-btn is-sm" onClick={onRetranscribe}>
+              <button type="button" className="pc-left-btn is-sm" onClick={onRetranscribe} disabled={onlinePage()} title={onlinePage() ? onlineUnsupported("语音识别") : undefined}>
                 重新转写
               </button>
             </div>

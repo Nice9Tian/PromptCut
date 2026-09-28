@@ -19,6 +19,8 @@
  */
 
 import { ONLINE } from "../online/mode";
+import { lowMemoryMode } from "../online/lowMemory";
+import { onlineStageState, stageLayout } from "../online/stageOrigins";
 
 /** 舞台实例名。**只是实例名,和角色无关**(E1):谁当 `front` 由 `setRole` 定 */
 export type StageId = "A" | "B";
@@ -57,6 +59,8 @@ export function stagePorts(): number[] {
  * 才是实测过的那条路(`docs/archive/restructure_planning/g0-a-webview2-probe.md`),换成别的 host 就成了另一件事。
  */
 export function stageOrigins(): Record<StageId, string> | null {
+  // 在线浏览器模式(C10 契约第 2 节):舞台源来自运行配置(`/editor/runtime-config.json`),不看舞台端口表
+  if (ONLINE) return onlineStageState().origins;
   const ports = stagePorts();
   if (ports.length < STAGE_IDS.length) return null;
   const out = {} as Record<StageId, string>;
@@ -69,8 +73,14 @@ export function stageOrigins(): Record<StageId, string> | null {
  * 少一个就退回 legacy 的同源单舞台 —— 宁可少一个后台舞台,也不能让编辑台开不出画面。
  */
 export function dualStage(): boolean {
-  // 在线浏览器模式只有一个同源舞台(c10a 第 8.1 节);静态构建里本来也没有舞台端口,这里再钉死一道
-  if (ONLINE) return false;
+  /*
+   * 在线浏览器模式(C10 契约第 2 节):普通档开两个同站跨源的舞台,舞台源来自运行配置;读不到配置、握手失败、
+   * 低内存档都退回 C10a 的同源单舞台(c10a 第 8.1 节)。舞台端口表在线上一律不看。
+   */
+  if (ONLINE) {
+    const st = onlineStageState();
+    return stageLayout({ lowMemory: lowMemoryMode(true), origins: st.origins, handshake: st.handshake, pageOrigin: typeof location === "undefined" ? undefined : location.origin }) === "dual";
+  }
   return previewMode() === "stage" && stageOrigins() !== null;
 }
 
@@ -107,7 +117,14 @@ export function stageSrc(id: StageId): string {
   const mode = dual || singleLiveStage() ? "&preview=stage" : previewMode() === "legacy" ? "&preview=legacy" : "";
   // 在线浏览器模式还没有运行期判据,先由编辑页地址上的 `platform=browser` 显式打开、转给舞台(`unsupported` 占位)
   const platform = new URLSearchParams(location.search).get("platform") === "browser" ? "&platform=browser" : "";
-  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${mode}${platform}`;
+  /*
+   * `dual=1`:这一台舞台有后台舞台做伴,宿主能力表照实报「能测量、能追活渲」(C10 契约第 2 节)。
+   * 在线页面另带 `lm=0|1`:父页判出来的档。跨源的舞台读不到编辑器页那个源的设备设置(显示档存在页面本地),
+   * 自己判可能判出另一档 —— 舞台照父页的判定走。
+   */
+  const dualFlag = dual ? "&dual=1" : "";
+  const tier = ONLINE ? `&lm=${lowMemoryMode(true) ? 1 : 0}` : "";
+  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${mode}${platform}${dualFlag}${tier}`;
 }
 
 /** 给 `createStageRpc` 的 `targetOrigin`:跨源时必须点名,不能用 `location.origin` */

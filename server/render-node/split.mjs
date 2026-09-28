@@ -1,4 +1,4 @@
-import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf, backfillPlanTaskOf, isBackfillPlan } from '../render-queue/index.mjs';
+import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf, backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan } from '../render-queue/index.mjs';
 import { snapshotTier } from '../snapshot-tier.mjs';
 import { resultKeyOf } from './fingerprint.mjs';
 
@@ -74,7 +74,7 @@ export function planTaskOf({ projectId, projectRev, priority = 0, codeVersion, e
  * 没有产物时发布,带片段清单(`input.clips`),标 `priority: 'backfill'`。认领它的节点把清单里的片段当重卡算键、
  * 切出细任务,细任务同样标 `backfill`(`splitPlan` 的 `lane`)。形状与校验在队列那边(`messages.mjs`)。
  */
-export { backfillPlanTaskOf, isBackfillPlan };
+export { backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan };
 
 /** `[from, to]` 闭区间序列:first .. last 每 span 一段,最后一段到 last。 */
 function spans(first, last, span) {

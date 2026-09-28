@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { JSX } from "react";
 import { type LayoutMode, setLayoutMode, useLayoutMode } from "./layoutMode";
 import { closeSkillMode, subscribeSkill } from "../skill/skillMode";
+import { onlinePage, onlineUnsupported } from "../online/pageFlag";
 import "./ModeSwitch.css";
 
 /**
@@ -20,6 +21,12 @@ import "./ModeSwitch.css";
 
 type Mode = LayoutMode | "skill";
 
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线页面进不了 SKILL 模式
+ * (这一格置灰,`skillMode.ts` 也不轮询),订阅与退出在在线构建里剪掉,连同 `skillMode.ts` 背后的 /api 调用(M8 遗留 L24)。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
 const ITEMS: { id: Mode; label: string; hint: string }[] = [
   { id: "classic", label: "传统式", hint: "左中右三栏 + 时间轴" },
   { id: "chat", label: "对话式", hint: "AI 助手 + 预览" },
@@ -31,7 +38,7 @@ export function ModeSwitch(props: { onOpenSkill: () => void }): JSX.Element {
   const [skillOn, setSkillOn] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => subscribeSkill((s) => setSkillOn(s.state.active)), []);
+  useEffect(() => (ONLINE_BUILD ? undefined : subscribeSkill((s) => setSkillOn(s.state.active))), []);
 
   // SKILL 一开就压过布局:那时候界面的主角是「有人在替你改项目」这件事
   const active: Mode = skillOn ? "skill" : layout;
@@ -43,7 +50,7 @@ export function ModeSwitch(props: { onOpenSkill: () => void }): JSX.Element {
       props.onOpenSkill();
       return;
     }
-    if (skillOn) {
+    if (skillOn && !ONLINE_BUILD) {
       // 从 SKILL 切回布局 = 退出 SKILL 模式。顺手把布局也切过去,少一步操作
       setBusy(true);
       try {
@@ -73,9 +80,12 @@ export function ModeSwitch(props: { onOpenSkill: () => void }): JSX.Element {
             type="button"
             className={`pc-modeswitch-item${on ? " is-on" : ""}`}
             aria-pressed={on}
-            disabled={busy}
+            // 在线浏览器模式:SKILL 要拉起桌面版的 AI 助手(C10 契约第 10 节),置灰
+            disabled={busy || (item.id === "skill" && !on && onlinePage())}
             title={
-              item.id === "skill"
+              item.id === "skill" && !on && onlinePage()
+                ? onlineUnsupported("SKILL 模式")
+                : item.id === "skill"
                 ? on
                   ? "当前为 SKILL 模式。点别的格子可以退出"
                   : "从「Skill 模式…」进入:要选驱动、建任务目录、拉起桌面 app"

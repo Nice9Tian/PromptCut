@@ -24,6 +24,9 @@ import {
 
 /** 轮询间隔(A1:每 2 秒) */
 export const POLL_MS = 2000;
+/** 在线页面素材全到齐时,每这么多轮问一次素材服务看它还在不在(`pollOnce`) */
+const HEALTH_EVERY = 5;
+let idleRounds = 0;
 /** 同一轮里同时在飞的 `chunks` 请求数 */
 const POLL_CONCURRENCY = 4;
 /** 素材票据的有效期(`server/auth/protocol.mjs` 的 `TICKET_TTL.asset`);剩 1/3 时续签 */
@@ -33,7 +36,7 @@ export interface RemoteAssets {
   /** 远程素材服务的 API 基址,形如 `http://<ip>:<port>/api/asset` */
   base: string;
   /** 取一张只读素材票据;取不到给 null(那就不带,由素材服务回 401) */
-  ticket?: () => Promise<string | null>;
+  ticket?: (() => Promise<string | null>) & { info?: (opts?: { force?: boolean }) => Promise<{ ticket: string; exp: number } | null> };
 }
 
 const LOCAL_BASE = "/api/asset";
@@ -98,6 +101,16 @@ export function remoteAssetBase(): string | null {
   return remote?.base ?? null;
 }
 
+/**
+ * 当前远程素材服务的只读票据连同过期时刻(C10 契约第 12 节:逐帧导出续签票据的 `fetchTicket`,`src/export/ticketRenewal.ts`)。
+ * `force`:不管手里那张还剩多久,换一张新的。本地素材服务、取不到给 null。
+ */
+export async function remoteAssetTicketInfo(force = false): Promise<{ ticket: string; exp: number } | null> {
+  const info = remote?.ticket?.info;
+  if (!info) return null;
+  try { return await info({ force }); } catch { return null; }
+}
+
 /** 当前远程素材服务的只读票据(在线页面给 `<video>` 的查询串、取预渲染小尺寸用;c10a 第 8、9 节);本地给 null */
 export async function remoteAssetTicket(): Promise<string | null> {
   if (!remote?.ticket) return null;
@@ -154,6 +167,7 @@ export function setRemoteAssets(next: RemoteAssets | null): void {
   }
   remote = next ? { ...next, base: base! } : null;
   serviceGen++;
+  setRemoteDown(false);
   complete = new Set();
   known = false;
   publish();
@@ -167,13 +181,19 @@ export function setRemoteAssets(next: RemoteAssets | null): void {
  */
 export async function askComplete(hashes: readonly string[]): Promise<Set<string>> {
   const base = remote?.base ?? LOCAL_BASE;
+  const gen = serviceGen;
   const headers = await authHeaders();
   const out = new Set<string>();
   const queue = [...new Set(hashes)];
+  let answered = 0, unreachable = 0;
   const worker = async () => {
     for (let h = queue.shift(); h; h = queue.shift()) {
+      let r: Response;
       try {
-        const r = await fetch(`${base}/media/${h}/chunks`, { headers, cache: "no-store" });
+        r = await fetch(`${base}/media/${h}/chunks`, { headers, cache: "no-store" });
+      } catch { unreachable++; continue; } // 网络错误:连不上素材服务
+      answered++;
+      try {
         if (!r.ok) continue;
         const body = await r.json();
         if (body?.complete === true) out.add(h);
@@ -181,7 +201,27 @@ export async function askComplete(hashes: readonly string[]): Promise<Set<string
     }
   };
   await Promise.all(Array.from({ length: Math.min(POLL_CONCURRENCY, queue.length) }, worker));
+  // 远程素材服务连不连得上(在线页面顶栏「连不上素材服务」用):这一轮一个回应都没有、全是网络错误才算连不上
+  if (remote && gen === serviceGen && (answered || unreachable)) setRemoteDown(answered === 0);
   return out;
+}
+
+/* ---------------- 远程素材服务连不连得上(C10 契约第 10 节) ---------------- */
+
+let remoteDown = false;
+const healthListeners = new Set<() => void>();
+function setRemoteDown(down: boolean): void {
+  if (down === remoteDown) return;
+  remoteDown = down;
+  for (const l of [...healthListeners]) { try { l(); } catch { /* 同上 */ } }
+}
+/** 最近一轮问远程素材服务时一个回应都没拿到(网络错误,不是 4xx/5xx)。本地素材服务、还没问过都给 false */
+export function remoteAssetsDown(): boolean {
+  return !!remote && remoteDown;
+}
+export function subscribeRemoteAssetsHealth(cb: () => void): () => void {
+  healthListeners.add(cb);
+  return () => { healthListeners.delete(cb); };
 }
 
 /** 这一轮要问的哈希:素材原尺寸还没到齐的素材问素材原尺寸,素材小尺寸还没到齐的也问素材小尺寸;全到顶档的不问 */
@@ -203,6 +243,14 @@ export async function pollOnce(project: Pick<Project, "media"> = getState().proj
   if (noEditorProcess && !remote) return;
   const gen = serviceGen;
   const ask = hashesToAsk(project, complete);
+  /*
+   * 在线页面:素材全到齐之后这一轮本来什么都不问,也就看不出素材服务断没断。每 `HEALTH_EVERY` 轮
+   * 顺带问一张已经到齐的素材原尺寸(一个很小的对账请求),只为顶栏的「连不上素材服务」。
+   */
+  if (!ask.length && noEditorProcess && remote && ++idleRounds % HEALTH_EVERY === 0) {
+    const probe = (project.media ?? []).map(originalHashOf).find(Boolean);
+    if (probe) ask.push(probe);
+  }
   const got = ask.length ? await askComplete(ask) : new Set<string>();
   if (gen !== serviceGen) return; // 这一轮问的是换掉之前的素材服务
   for (const h of got) complete.add(h);
@@ -307,21 +355,35 @@ interface LinkLike {
   request(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
 }
 
-/** 按 `auth.ticket` 取只读素材票据,剩 1/3 有效期时换新的 */
-export function assetTicketSource(link: LinkLike, now: () => number = Date.now): () => Promise<string | null> {
-  let cur: { ticket: string; exp: number } | null = null;
-  let inflight: Promise<string | null> | null = null;
-  return async () => {
-    if (cur && cur.exp - now() > ASSET_TICKET_TTL_MS / 3) return cur.ticket;
+/**
+ * 按 `auth.ticket` 取只读素材票据,剩 1/3 有效期时换新的。「有效期」按这一张实际的寿命算(签发到过期),不写死 15 分钟:
+ * 测试里缩短了票据时限(C10 契约第 12 节的验收)时照样提前换。
+ * 回的函数带 `info({ force })`:连同过期时刻给出(逐帧导出的续签用,`src/export/ticketRenewal.ts`)。
+ */
+export function assetTicketSource(link: LinkLike, now: () => number = Date.now): (() => Promise<string | null>) & { info: (opts?: { force?: boolean }) => Promise<{ ticket: string; exp: number } | null> } {
+  let cur: { ticket: string; exp: number; issued: number } | null = null;
+  let inflight: Promise<{ ticket: string; exp: number } | null> | null = null;
+  const fresh = () => !!cur && cur.exp - now() > Math.min(ASSET_TICKET_TTL_MS, Math.max(0, cur.exp - cur.issued)) / 3;
+  const take = (): Promise<{ ticket: string; exp: number } | null> => {
     inflight ??= link.request({ type: "auth.ticket", kind: "asset", access: "r" }).then((r) => {
       if (r.type === "auth.ticket.ok" && typeof r.ticket === "string") {
-        cur = { ticket: r.ticket, exp: Number(r.exp) || now() + ASSET_TICKET_TTL_MS };
-        return cur.ticket;
+        const issued = now();
+        cur = { ticket: r.ticket, exp: Number(r.exp) || issued + ASSET_TICKET_TTL_MS, issued };
+        return { ticket: cur.ticket, exp: cur.exp };
       }
       return null;
     }, () => null).finally(() => { inflight = null; });
     return inflight;
   };
+  const get = async () => {
+    if (fresh()) return cur!.ticket;
+    return (await take())?.ticket ?? null;
+  };
+  get.info = async (opts: { force?: boolean } = {}) => {
+    if (!opts.force && fresh()) return { ticket: cur!.ticket, exp: cur!.exp };
+    return take();
+  };
+  return get;
 }
 
 /**

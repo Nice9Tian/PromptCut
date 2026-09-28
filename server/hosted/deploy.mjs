@@ -38,6 +38,47 @@ export function checkPublicUrl(value, kind) {
 }
 
 /**
+ * `--stage-origins <A>,<B>`（C10 契约第 2 节）：在线普通档两个舞台的源，与编辑器页同站跨源（阿里云上是
+ * `https://s1.<主机>`、`https://s2.<主机>`）。回写进运行配置 `editor/runtime-config.json` 的内容 `{ v: 1, stageOrigins: [A, B] }`；
+ * 不给回 undefined；给了但不是两个不同的合法源（`http(s)://host[:port]`，不带路径）就抛错。
+ */
+export function checkStageOrigins(value) {
+  if (value === undefined || value === null) return undefined;
+  const parts = String(value).split(',').map((x) => x.trim().replace(/\/+$/, '')).filter(Boolean);
+  if (parts.length !== 2) throw new Error(`--stage-origins 要两个源，用逗号隔开：${value}`);
+  for (const text of parts) {
+    let u;
+    try { u = new URL(text); } catch { throw new Error(`--stage-origins 里的 ${text} 不是合法的源`); }
+    if (!['http:', 'https:'].includes(u.protocol) || u.pathname !== '/' || u.search || u.hash || u.origin !== text) {
+      throw new Error(`--stage-origins 里的 ${text} 要是 http(s)://主机[:端口]，不带路径`);
+    }
+  }
+  if (parts[0] === parts[1]) throw new Error('--stage-origins 的两个源不能相同');
+  return { v: 1, stageOrigins: parts };
+}
+
+/** 运行配置的文件名（页面按 base 取 `/editor/runtime-config.json`，`src/online/stageOrigins.ts`） */
+export const RUNTIME_CONFIG_FILE = 'runtime-config.json';
+
+/**
+ * 把运行配置写进 `editor/`（`--stage-origins`）：先写临时文件再换名，nginx 不会读到写了一半的 JSON。
+ * 没有 `editor/`（还没部署过在线构建）也先建目录写进去，下次 `--editor` 换代时照样保留（见 `editorSwapLines`）。
+ */
+export function runtimeConfigLines(config) {
+  const json = JSON.stringify(config);
+  if (json.includes('RUNTIMECONFIG')) throw new Error('运行配置里不能有 RUNTIMECONFIG');
+  return [
+    '# 运行配置（C10 契约第 2 节：两个舞台的源）',
+    'mkdir -p editor',
+    `cat > editor/.${RUNTIME_CONFIG_FILE}.tmp <<'RUNTIMECONFIG'`,
+    json,
+    'RUNTIMECONFIG',
+    `mv editor/.${RUNTIME_CONFIG_FILE}.tmp editor/${RUNTIME_CONFIG_FILE}`,
+    `echo "editor: ${RUNTIME_CONFIG_FILE} 已写（$(cat editor/${RUNTIME_CONFIG_FILE})）"`,
+  ];
+}
+
+/**
  * PM2 配置（写在远端部署目录里，仓库外）：fork 模式、1 个实例；环境里没有任何秘密。
  *
  * 两个公网地址缺省按 `publicHost` 拼成 `ws://<主机>:<端口>`、`http://<主机>:<端口>/api/asset`；
@@ -98,6 +139,8 @@ export function editorSwapLines() {
     '  done < editor/.assets-own',
     '  echo "editor: 保留上一代 assets $kept 个"',
     'fi',
+    '# 运行配置（C10 契约第 2 节，--stage-origins 写的）跟着换代保留；这次另给了就在后面覆盖',
+    `if [ -f editor/${RUNTIME_CONFIG_FILE} ] && [ ! -e .incoming-editor/${RUNTIME_CONFIG_FILE} ]; then cp -p editor/${RUNTIME_CONFIG_FILE} .incoming-editor/${RUNTIME_CONFIG_FILE}; echo "editor: 保留 ${RUNTIME_CONFIG_FILE}"; fi`,
     'rm -rf editor.prev',
     'if [ -d editor ]; then mv editor editor.prev; fi',
     'mv .incoming-editor editor',
@@ -110,7 +153,7 @@ export function editorSwapLines() {
  * 经 ssh 标准输入交给远端 bash 的部署脚本。令牌（只在 --write-token 时有）只出现在这段文本里，已校验只含 base64url 字符。
  * `editor: true`（`--editor`）时，本机已把在线构建拷到 `<部署目录>/.incoming-editor`，脚本把它换成 `editor/`（`editorSwapLines`）。
  */
-export function hostedDeployScript(inst, { pm2Config, save, replaceDocservice, token, editor = false }) {
+export function hostedDeployScript(inst, { pm2Config, save, replaceDocservice, token, editor = false, runtimeConfig = null }) {
   const lines = [
     'set -euo pipefail',
     'set +x',
@@ -124,6 +167,7 @@ export function hostedDeployScript(inst, { pm2Config, save, replaceDocservice, t
     'mv .incoming app',
     'rm -rf app.prev',
     ...(editor ? editorSwapLines() : []),
+    ...(runtimeConfig ? runtimeConfigLines(runtimeConfig) : []),
     '# 数据目录与 secrets/：没有就建（0700）；已有的内容不动',
     'umask 077',
     'mkdir -p "$DATA/secrets"',

@@ -31,10 +31,15 @@ export interface PlanPipelinesOptions {
   /** clipId → 声明的帧模式。只在这张卡没有成本记录时用：`direct` 视为轻，其余视为重。 */
   frameModes?: ClipIndex<string>;
   /**
-   * 低内存档的过渡做法(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):不测,所有卡按重卡处理 ——
-   * 每张卡在每个位置都判重、整段进预渲染集合,不看成本记录与声明。只有在线页面的低内存档传 true。
+   * 每张卡在每个位置都判重、整段进预渲染集合,不看成本记录与声明。低内存档的**显示**用它(播放时一律不活渲,
+   * 语义 `product/platforms.md`「面向的平台」);低内存档的轻重判定看 `lowMemoryLight`。
    */
   allHeavy?: boolean;
+  /**
+   * 低内存档的判定(界限搜索的结果,`src/render/boundarySearch.mjs`):判轻的卡的 identityKey。给了就不看成本记录与声明,
+   * 集合里的卡在每个位置都判轻(不受预算挤出),其余在每个位置都判重。`allHeavy` 为 true 时不看它。
+   */
+  lowMemoryLight?: Iterable<string> | null;
 }
 
 export const DEAD_MS: number;
@@ -47,7 +52,8 @@ export function budgetOf(fps: number): number;
 export type PipelineTier =
   | 'declared-light' | 'declared-heavy'
   | 'capped' | 'over-catchup'
-  | 'direct' | 'seek' | 'catchup-a' | 'catchup-b';
+  | 'direct' | 'seek' | 'catchup-a' | 'catchup-b'
+  | 'lowmem-light';
 
 export interface ClipWeight {
   /** 每个位置都判重、不参加贪心 */

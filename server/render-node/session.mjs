@@ -144,7 +144,7 @@ export function createNodeSession({
       return;
     }
     // taken / gone / forbidden / card-locked / fingerprint-mismatch(契约 I.10 第 4 条)/ local-media(M6c X2)/
-    // plan-profile(M6c X4)(以及认不出的原因):这一轮不再考虑它。
+    // plan-profile(M6c X4;C10 契约第 18 节第 9 条起只对不带片段清单的 plan 与纯浏览器回)(以及认不出的原因):这一轮不再考虑它。
     // card-locked(契约 F.2):这张卡的锁在别的指纹上,本节点的指纹做不了,按 taken 丢掉候选、
     // 不重试;任务在队列里仍是 open,只有队列再发 task.opened / queue.snapshot 时才会回到视图
     open.delete(id);

@@ -118,7 +118,8 @@ interface MessageRowProps {
  * renderMarkdown、JSON.stringify),历史到 1200 次工具时实测每片段 114 ms,界面卡死。
  * 流式只换最后一条的对象,其余消息引用不变 —— memo 之后它们一次都不重渲。
  */
-const MessageRow = React.memo(function MessageRow(props: MessageRowProps) {
+// 标纯调用:否则本模块被 chat.css 的引入带进在线构建时,这一行算副作用,连带工具图标、ToolVisual 背后的 /api 调用都留下(M8 遗留 L24)
+const MessageRow = /* @__PURE__ */ React.memo(function MessageRow(props: MessageRowProps) {
   const { m } = props;
   // 用户消息靠右、不放头像
   if (m.role === "user") {
