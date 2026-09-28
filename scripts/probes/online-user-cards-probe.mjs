@@ -414,6 +414,7 @@ try {
   await shot(A, 'normal-2-after-s2-layer');
   n.stageShot2 = await stageShot(A, 'normal-2-stage');
   n.errors = A.errors.slice(0, 5);
+  check(A.errors.length === 0, '普通档页面没有页面错误(没有定义的同步卡沿线不崩)', n.errors);
   out.normal = n;
 
   /* ============================================================ 低内存档(仿手机) */
@@ -446,6 +447,7 @@ try {
   await shot(P, 'lowmem-1');
   lm.stageShot = await stageShot(P, 'lowmem-1-stage');
   lm.errors = P.errors.slice(0, 5);
+  check(P.errors.length === 0, '低内存档页面没有页面错误', lm.errors);
   out.lowmem = lm;
   node.close();
 } catch (e) {

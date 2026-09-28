@@ -1474,6 +1474,9 @@ try {
   await creator.waitForSelector('[data-pc="collab-section"]', { visible: true, timeout: 20_000 });
   await creator.click('[data-pc="collab-toggle"]');
   await creator.waitForSelector('[data-pc="collab-where-hosted"]', { visible: true });
+  // 创建者用户名的缺省值(设备名)是异步填的:等它填上;填不上就自己写一个(不然提交时报「创建者用户名和密码不能为空」)
+  const nameFilled = await until('创建者用户名的缺省值填上', () => creator.$eval('#pc-collab-creator', (i) => i.value.trim()).catch(() => ''), 10_000, 200);
+  if (!nameFilled) { fails.pop(); await typeInto(creator, '#pc-collab-creator', `c10b-creator-${RUN}`.slice(0, 32)); }
   const creatorCred = { username: await creator.$eval('#pc-collab-creator', (i) => i.value), password: await creator.$eval('#pc-collab-cpw', (i) => i.value) };
   state.creatorCred = creatorCred;
   state.projectPassword = await creator.$eval('#pc-collab-ppw', (i) => i.value);
