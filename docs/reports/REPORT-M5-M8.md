@@ -452,7 +452,7 @@ M8 之后，放本机各项的本机替身都已由 PC 当局域网主机的真�
 
 ### 4.1 M8 期间每次合入的 G0 / G0-R
 
-照 `REPORT-render-queue-m8.md` 第 9、12a 节。M8 期间合入前的 G0 由主会话或 PC 辅助节点跑；`9cf43f1f`、`e27fa520` 两次由 PC 辅助节点跑（指令 PC-M8-1、PC-M8-3）。全量测试写成「总条数 / 通过 / 失败 / 跳过」，跳过的两条都是要设 `PROMPTCUT_BASE` 才跑的集成测试。
+照 `REPORT-render-queue-m8.md` 第 9、11、12a 节。M8 期间合入前的 G0 由主会话或 PC 辅助节点跑；`9cf43f1f`、`e27fa520`、`efcaec60`、`501a7dd7` 四次由 PC 辅助节点跑（指令 PC-M8-1、PC-M8-3、PC-M8-8 / 9、PC-M8-10）。全量测试写成「总条数 / 通过 / 失败 / 跳过」，跳过的两条都是要设 `PROMPTCUT_BASE` 才跑的集成测试。
 
 | 合入 | main 提交 | G0 | G0-R | 出处 |
 |---|---|---|---|---|
@@ -463,25 +463,29 @@ M8 之后，放本机各项的本机替身都已由 PC 当局域网主机的真�
 | 停滞修复、A6 探针修正与 `claude/sink-has` 叠在一起 | `0cabcfb0` | tsc 0；3778 / 3776 / 0 / 2；构建成功 | 同上六项全过（透明拍 0，286、285 拍） | 第 12a 节 |
 | `claude/m8-e3-page` | `9cf43f1f` | tsc 0；3779 / 3777 / 0 / 2；构建成功（PC-M8-1、PC-M8-2） | 只改探针与测试，不跑 | 第 9 节；第 11 节 |
 | `claude/xnode-dedup` | `e27fa520` | tsc 0；3785 / 3783 / 0 / 2；`npm run build` 成功（PC-M8-3） | 导出确定性 1800/1800；与 PC 像素基准（`.worktrees/pc-g0r-base`，`d70fce77`）逐像素 1800 相同；快照重放一致 PASS；`ready-index-probe` `fails []`；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（286、287 拍） | 第 9 节；第 11 节 |
+| `claude/no-user-videos` | `efcaec60` | tsc 0；3790 / 3788 / 0 / 2；守门测试 `no-user-dirs` 过、`[no-user-dirs]` 提示行 0（PC-M8-8）；`npm run build` 成功（PC-M8-9，release 判用） | 没动 `src/` 与进代码版本的文件，不跑 | 第 11、12a 节 |
+| `claude/perf-encode-2` | `501a7dd7` | tsc 0；3793 / 3791 / 0 / 2；构建成功（PC-M8-10） | 全过，像素基准 1800 相同（即第 4.2 节全案最终基线的 PC 部分） | 第 9、11、12a 节 |
 | 其余（L1、L4、L5、L10、L14、L16、L17 的遗留修复，四个探针分支，CONNECT 代理替身，`claude/m7-a6-race`） | 见第 2.10 节 | `REPORT-render-queue-m8.md` 没逐次记数字（见各合并提交信息与归档的 AGENT 报告；`m7-a6-race` 只记了本机替身 A6 `fails []`） | — | 第 1.1、12a 节 |
 
 ### 4.2 全案最终基线
 
 `m8-plan.md` 第 2.8 节：在最终 main 上，PC 跑 G0 与 G0-R 里不带耗时门槛的六项，笔记本跑带耗时门槛的（第 2.7 节）；像素比较用同一台机器的基准（PC：`.worktrees/pc-g0r-base`，笔记本：`.worktrees/main-g0r`）。
 
-〔占位：全案最终基线要等 1080p 分段编码修复（`claude/perf-encode-2`）合入 main 后，在那时的最终 main 上跑，由主会话填下表。〕
+全案最终基线在代码的最终提交 main `501a7dd7`（`claude/perf-encode-2` 合入，之后只合文档）上跑，**全绿**（`REPORT-render-queue-m8.md` 第 8、9 节）。
 
 | 项 | 机器 | 命令 | 结果 | 证据 |
 |---|---|---|---|---|
-| main 提交 | — | `git rev-parse main` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
-| 类型检查 | PC | `npx tsc -b --force` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
-| 全量测试（跳过 ≤ 2） | PC | `npm test` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
-| 导出确定性 1800/1800 | PC | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:<端口>/?export=1"` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
-| 导出像素与 PC 基准逐像素相同 | PC | 与 `.worktrees/pc-g0r-base` 的帧比 | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
-| 快照重放 | PC | `node scripts/verify-unified-frames.mjs` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
-| 预渲染探针 | PC | `ready-index-probe.mjs`、`stream-produce-probe.mjs --group`、`preview-fallback-probe.mjs`（两种） | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
-| 带耗时门槛的项 | 笔记本 | `stream-produce-probe.mjs`（不带 `--group`）、`tiers-probe.mjs` T4 等（`m8-plan.md` 第 2.7 节） | 〔待 M8 收尾：1080p 编码修复合入后跑〕。此前在 main `9cf43f1f` 上笔记本跑过一次：T4 三轮长任务 0，过；1080p 有效 5 轮中位数 302 ms，没过 | `REPORT-render-queue-m8.md` 第 8 节 |
-| 主工作区 | — | `git status` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
+| main 提交 | — | `git rev-parse main` | `501a7dd7`（= release；之后只合文档）；代码版本 `b38706791f86…` | PC-M8-10 回执 |
+| 类型检查 | PC | `npx tsc -b --force` | 0 错误 | PC-M8-10 回执 |
+| 全量测试（跳过 ≤ 2） | PC | `npm test` | 3793 / 3791 / 0 失败 / 2 跳过（跳过的两条都是要设 `PROMPTCUT_BASE` 才跑的集成测试） | PC-M8-10 回执 |
+| 导出确定性 1800/1800 | PC | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:<端口>/?export=1"` | 1800/1800 | PC-M8-10 回执 |
+| 导出像素与 PC 基准逐像素相同 | PC | 与 `.worktrees/pc-g0r-base` 的帧比 | 逐像素 1800 相同 | PC-M8-10 回执 |
+| 快照重放 | PC | `node scripts/verify-unified-frames.mjs` | PASS | PC-M8-10 回执 |
+| 预渲染探针 | PC | `ready-index-probe.mjs`、`stream-produce-probe.mjs --group`、`preview-fallback-probe.mjs`（两种） | `ready-index-probe` `fails []`；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（287、285 拍） | PC-M8-10 回执 |
+| 构建 | PC | `npm run build` | 成功 | PC-M8-10 回执 |
+| 带耗时门槛：1080p 分段编码 | 笔记本 | `stream-produce-probe.mjs`（不带 `--group`） | 连续 5 轮 p50 207 / 224 / 214 / 208 / 207 ms（中位数 208），过；第一组里 320 ms 那一轮是外来负载下的离群值、另跑第二组（第 3.1 节） | `REPORT-render-queue-m8.md` 第 8 节 |
+| 带耗时门槛：后台上传期间长任务（T4） | 笔记本 | `tiers-probe.mjs` ×3 | 三轮开跑前 CPU 3.2% / 1.2% / 3.8%，> 50 ms 长任务都是 0，过 | 同上 |
+| 主工作区 | — | `git status` | 干净（主工作区快进到 `501a7dd7`；文档合入后主会话再核一次） | `REPORT-render-queue-m8.md` 第 9 节 |
 
 ## 5. 阿里云
 
@@ -507,7 +511,7 @@ M8 之后，放本机各项的本机替身都已由 PC 当局域网主机的真�
 | 2026-09-28 约 07:05 JST | C10：部署 `2f7f821` 的服务端与在线构建（`deploy-hosted --save`，`--stage-origins` 两个舞台源 `s1.`、`s2.`，专用 nginx 站点三方带 OAC） | `REPORT-C10.md` 第 7 节部署行 |
 | 2026-09-28 约 07:35 JST | C10：以 `d29a7ba` 的在线构建重新部署编辑器（带 `catalog/`）；nginx 主站与两个舞台源各加 `location ^~ /catalog/`（先备份，`nginx -t` 通过） | 同上 |
 | 2026-09-28 | C10 外网四轮：run `c10s0928d`、`e` 在阿里云上 `ss -K dport 8787` 掐 nginx 到文档服务的上游连接 | `REPORT-C10.md` 第 7 节 |
-| 2026-09-28 | M7：W7 时阿里云部署 `4047133` 的构建（部署命令与时间报告没写，待核）；残留三个探针项目未删 | `REPORT-M7.md` 第 7.1、9 节 |
+| 2026-09-28 | M7：W7 时阿里云部署 `4047133` 的构建（部署命令与时间报告没写，待核）；残留三个探针项目未删（M8 收尾时已删，见下面 2026-09-28 18:56Z 一行） | `REPORT-M7.md` 第 7.1、9 节 |
 | 2026-09-28 04:59Z 前后 | M8：部署 M7 合入后的在线构建（主实例，`deploy-hosted --save … --stage-origins …`），托管组合重启一次 | `REPORT-render-queue-m8.md` 第 10 节 |
 | 2026-09-28 09:18Z 前后 | M8：部署纯浏览器节点推送提速后的在线构建（main `5649236`，代码版本 `21c62981…`），托管组合重启（`restarts` 13 → 14） | 同上 |
 | 2026-09-28 09:19:28Z、09:20Z | M8 迁移演练准备：备份两份 `pm2.config.cjs` 与 `dump.pm2`（`*.bak-20260928-m8`）、`pm2 delete` HT 第 1 版的 `promptcut-drill`、旧数据挪成 `drill.old-20260928-m8`；部署演练实例（8777 / 8778），UFW 临时放行（裁定 D7） | 同上 |
@@ -516,7 +520,9 @@ M8 之后，放本机各项的本机替身都已由 PC 当局域网主机的真�
 | 2026-09-28 15:00:40Z | M8 C2（兼 E3 放云端）：`pm2 restart promptcut-hosted`（`restarts` 15 → 16），在线会话 8 条断开重连 | 同上；第 7 节 C2 |
 | 2026-09-28 15:15Z～15:37:22Z | M8 迁移演练：管理端口经 SSH 转发；主实例停写 15:17:53Z～15:29:20Z（11 分 27 秒）、rsync、起演练实例；服务器上逐块重算 sha256（只读）；`--sample all` 跑不动被停；收尾停演练实例、UFW 两条（连 v6 共 4 条）删掉、`pm2 save` | 同上；第 6 节 |
 | 2026-09-28 17:54:33Z | M8：在线编辑器页换代（main `e27fa520`，代码版本 `21c62981…` → `f979b95e…`），只换 `/editor/` 静态文件、托管组合不重启；`runtime-config.json` 先备份为 `/root/runtime-config.bak-20260928-m8enc` | 同上 |
-| 待定 | M8：阿里云上探针留下的项目清理（E1 留作迁移演练用的 `sp_2zepiwyualirjjkb3eq2zumiwu`、C3 首轮的 `m8e-e1-m8c3c`、迁移种子项目等）与演练实例数据目录（`drill`、`drill.deploy-20260928-m8`、`drill.old-20260928-m8`）的处理。〔占位：阿里云探针项目清理结果，等主会话收尾时清理后填〕 | `REPORT-render-queue-m8.md` 第 2 节 E1、第 6 节、第 7 节 C3、第 13.4 节第 9 条 |
+| 2026-09-28 18:2xZ | M8：删迁移种子项目（`sp_vfuwa4grkhyqqaw6sveotuytn2`）：笔记本凭种子文件里的创建者口令走 `shared.challenge` → `adminProof(op delete)` → `shared.admin { op: delete }`，`deleted true` | `REPORT-render-queue-m8.md` 第 10 节 |
+| 2026-09-28 18:56:37Z～18:56:38Z | M8：删主实例上探针留下的其余 14 个项目（含 E1 留作迁移演练用的 `m8e-e1-m8e1c2`、C3 首轮的 `m8e-e1-m8c3c`、M7 残留的 `m7ap-m7w0928a`、`m7ap-m7w0928b`、`m7ap-m7wlocal1` 等）。用户定由主会话自己删；创建者口令不在笔记本、不能经消息传，就在服务器上删：先备份到 `/root/m8-probe-projects-backup-20260928.tar.gz`（980 915 字节），`pm2 stop promptcut-hosted`，用部署目录里的 `server/auth/store.mjs` 删项目记录、`rm -rf tenants/<id>`，再 `pm2 start`；停服约 1 s，没有成员在线，`restarts` 仍 16；之后记录 0 份、租户目录 0 个。块按内容寻址共用，删项目不删块。演练实例的数据目录没删（待用户项，第 8 节第 33 条） | 同上 |
+| 2026-09-28 20:26:28Z | M8：在线编辑器页再换一代（main `501a7dd7`，代码版本 `f979b95e…` → `b38706791f86…`，`claude/perf-encode-2` 改的 `server/bakery/ffmpeg.mjs` 进代码版本）；做法同 17:54:33Z，`runtime-config.json` 先备份为 `/root/runtime-config.bak-20260928-m8enc2`，托管组合不重启 | 同上 |
 
 ### 5.2 资源
 
