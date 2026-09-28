@@ -910,7 +910,7 @@ export function createRenderQueue(options = {}) {
     task.retryAfter = null;
     task.claim = {
       nodeId: node.nodeId, conn, token: task.version, claimedAt: at,
-      leaseUntil: at + C.LEASE_MS, progress: { done: null, changedAt: at },
+      leaseUntil: at + C.LEASE_MS, progress: { done: null, step: null, changedAt: at },
     };
     const claimed = { id, token: task.claim.token, version: task.version, leaseUntil: task.claim.leaseUntil, task: viewOf(task) };
     // M7 D1：plan 的认领回包带本项目在线的、同一用户的纯浏览器节点的指纹，切分方据此给浏览器可做的卡另出一份
@@ -940,8 +940,12 @@ export function createRenderQueue(options = {}) {
     if (!task) return;
     const claim = task.claim;
     claim.leaseUntil = at + C.LEASE_MS;
-    // 停滞计时只在 done 变了的时候重起：心跳还在但画面不动的节点照样按停滞回收（F3.1）
-    if (body.done !== claim.progress.done) claim.progress = { done: body.done, changedAt: at };
+    // 停滞计时只在进度变了的时候重起：心跳还在但工作不动的节点照样按停滞回收（F3.1）。
+    // 「进度」是帧数 done，以及节点带来的工作计数 step（推块、换阶段时也在变，契约 A.12〔裁〕）；没带 step 的旧节点只看 done
+    const stepChanged = body.step !== null && body.step !== claim.progress.step;
+    if (body.done !== claim.progress.done || stepChanged) {
+      claim.progress = { done: body.done, step: body.step ?? claim.progress.step, changedAt: at };
+    }
     // M7 D2：续约也算锁定方还在产出（一段重卡在浏览器上要十几秒，产出中不该被判闲置）
     const lockId = lockIdOf(task);
     const lock = lockId ? locks.get(lockId.key) : undefined;
@@ -1149,7 +1153,8 @@ export function createRenderQueue(options = {}) {
         attempts: t.attempts, lastError: t.lastError,
         claim: t.claim && {
           nodeId: t.claim.nodeId, token: t.claim.token, leaseUntil: t.claim.leaseUntil,
-          progress: { done: t.claim.progress.done, changedAt: t.claim.progress.changedAt },
+          progress: { done: t.claim.progress.done, changedAt: t.claim.progress.changedAt,
+            ...(t.claim.progress.step !== null ? { step: t.claim.progress.step } : {}) },
         },
         subscribers: [...t.subscribers].sort(byId),
         finishedAt: t.finishedAt,

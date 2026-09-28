@@ -317,7 +317,8 @@ const PARSERS = new Map([
   })],
   ['task.claim', (m) => ({ id: str(m.id, 'id'), expectVersion: int(m.expectVersion, 'expectVersion') })],
   // done 可以是 null：节点会话在还没报过进度时续约，发的就是 done: null（契约 B.5）
-  ['task.progress', (m) => ({ ...tokenFields(m), done: optNumOrNull(m.done, 'done') })],
+  // step(可选):随节点的工作推进而变的计数(推块、换阶段、出批),变了也算报了进度(契约 A.12〔裁〕);旧节点不带
+  ['task.progress', (m) => ({ ...tokenFields(m), done: optNumOrNull(m.done, 'done'), step: optNumOrNull(m.step, 'step') })],
   ['task.complete', (m) => ({ ...tokenFields(m), result: absent(m.result) ? null : plainObject(m.result, 'result') })],
   ['task.release', (m) => ({ ...tokenFields(m), reason: optStr(m.reason, 'reason') })],
   ['task.fail', (m) => {

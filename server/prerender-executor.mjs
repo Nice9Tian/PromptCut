@@ -232,5 +232,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
   }
 
-  return { plan, render, afterSplit, forget: () => cache.clear() };
+  /**
+   * 独立渲染主机的闲时认领(契约 A.12〔裁〕,`render-node/host.mjs`):任务要用哪条串行 lane —— 快照与 plan 用 `'queue'`
+   * (`runQueueTask`,一次只做一件),流用流预渲染间池,不算(回 null)。`laneBusy()` 是这条管线上此刻经执行器交给
+   * `'queue'` lane、还没落定的工作数(包括已经被中止、管线还没收手的那一件)。
+   */
+  const laneOf = task => (task?.kind === 'snapshot' || task?.kind === 'plan' ? 'queue' : null);
+  return { plan, render, afterSplit, forget: () => cache.clear(), laneOf, laneBusy: () => laneBusy(pipeline) };
 }

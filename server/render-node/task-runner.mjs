@@ -31,6 +31,13 @@
  * 距上次帧数变化 `sinceDoneMs`、距认领 `sinceClaimMs`、在这一阶段多久 `phaseMs`;推送阶段另带
  * `push: { blocks, pushed, bytes, ms }`。时刻由注入的 `now` 取(缺省 `Date.now`),不开计时器。
  *
+ * # 工作计数(契约 A.12〔裁〕)
+ *
+ * 换阶段、执行器报一步(出一批帧、换一个细分位置)、产物库每推完一块,都调一次会话的 `advance(id)`(会话没有这个方法就不调):
+ * 队列按它判「还在报进度」,推产物、渲完收尾这些帧数不变的阶段不再被当成卡死。执行器或产物库真卡死时这些回调都不来,
+ * 计数不动,照旧在 STALL_MS 后按停滞收回(I8)。
+ * `occupying()` 列出还没走到推送的执行(`{ id, kind, phase }`):独立渲染主机据此只在预渲染间空着时认领(`host.mjs`)。
+ *
  * @typedef {object} TaskRunner
  * @property {(task: object, ctx: { token: number, browserFingerprints?: string[] }) => void} onTask  会话的 onTask
  * @property {(id: string, reason: string) => void} onLost   会话的 onLost
@@ -41,6 +48,7 @@
  * @property {() => boolean} stopped
  * @property {(id: string) => number | null} tokenOf   跑表里这个 id 的令牌(接续判断用)
  * @property {() => string[]} running
+ * @property {() => { id: string, kind: string, phase: string }[]} occupying   还没走到推送的执行
  * @property {() => Promise<void>} settled
  */
 
@@ -99,11 +107,23 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
     try { const t = now(); return Number.isFinite(t) ? t : Date.now(); } catch { return Date.now(); }
   };
 
-  /** 进入一个阶段(诊断);细一层的位置清空 */
+  /** 工作推进了一步(见文件头「工作计数」):仍持有才记 */
+  function touch(run) {
+    if (!holding(run)) return;
+    try { session().advance?.(run.id); } catch { /* 会话坏了:续约照样会失败,由队列按租约收回 */ }
+  }
+
+  /**
+   * 进入一个阶段(诊断);细一层的位置清空。换阶段也算工作推进了一步,并且当场报一次进度(带新的计数):
+   * 下一步若卡死,停滞计时从这一刻算起,不用等下一次续约(I8 的收回时刻不因计数推迟)。
+   */
   function enter(run, phase) {
     run.phase = phase;
     run.phaseAt = clock();
     run.detail = null;
+    touch(run);
+    if (!holding(run)) return;
+    try { session().progress(run.id, run.done); } catch { /* 连接坏了:由执行里的异常处理或队列的租约收尾 */ }
   }
 
   /** 执行器、产物库报的细一层位置(诊断):只留名字和数字字段 */
@@ -114,6 +134,7 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
       for (const [k, v] of Object.entries(fields)) if (typeof v === 'number' && Number.isFinite(v)) detail[k.slice(0, 24)] = v;
     }
     run.detail = detail;
+    touch(run);
   }
 
   /** 事件里带的执行诊断(见文件头) */
@@ -135,8 +156,10 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
   function pushReport(run) {
     return (update) => {
       if (!update || typeof update !== 'object' || !run.push || run.controller.signal.aborted) return;
+      const before = run.push.pushed;
       for (const k of ['blocks', 'pushed', 'bytes']) if (Number.isFinite(update[k])) run.push[k] = update[k];
       if (typeof update.stage === 'string') note(run, update.stage);
+      else if (run.push.pushed !== before) touch(run);
     };
   }
 
@@ -228,6 +251,7 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
       const progress = done => {
         if (signal.aborted) return;
         if (done !== run.done) { run.done = done; run.doneAt = clock(); }
+        touch(run);
         if (holding(run)) session().progress(id, done);
       };
       // 执行器报细一层的位置(诊断,可以不调)
@@ -281,6 +305,8 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
     stopped: () => stopped,
     tokenOf: id => active.get(id)?.token ?? null,
     running: () => [...active.keys()].sort(),
+    /** 还没走到推送的执行(见文件头「工作计数」) */
+    occupying: () => [...active.values()].filter(run => run.phase !== 'push').map(({ id, kind, phase }) => ({ id, kind, phase })),
     settled: async () => { await Promise.all([...pending]); },
   };
 }
