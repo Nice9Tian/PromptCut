@@ -512,10 +512,18 @@ async function startWatcher(M, { projectId, password }) {
     else if (m?.type === 'task.opened' && typeof m.task?.id === 'string') { const r = rec(m.task.id); if (r.taken > 0) r.reopenedAfterTaken++; }
     else if (m?.type === 'task.closed' && typeof m.id === 'string') rec(m.id).closed.push(m.state ?? null);
   });
-  const hello = await c.rpc({ type: 'node.hello', nodeId: `c10b-watch-${RUN}`.slice(0, 64), profile: 'pc', codeVersions: [], capabilities: {}, maxConcurrent: 1 }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
-  const watch = await c.rpc({ type: 'queue.watch', projects: [projectId] }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+  const subscribe = async () => {
+    const hello = await c.rpc({ type: 'node.hello', nodeId: `c10b-watch-${RUN}`.slice(0, 64), profile: 'pc', codeVersions: [], capabilities: {}, maxConcurrent: 1 }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+    const watch = await c.rpc({ type: 'queue.watch', projects: [projectId] }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+    return { hello, watch };
+  };
+  const { hello, watch } = await subscribe();
   check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
-  return { seen, close: c.close };
+  // 会话结束后建了新会话(onOpen 只在新会话时调;接续调 onResume、订阅还在):重发 hello 与 watch。计数进结果
+  const stats = { newSessions: 0, resumes: 0 };
+  c.ep.onOpen(() => { stats.newSessions++; void subscribe(); });
+  c.ep.onResume?.(() => { stats.resumes++; });
+  return { seen, stats, close: c.close };
 }
 /** 成员页收到的 task.done(CDP 读页面 WebSocket 的入站帧;会话层的重发按 seq 去重,同一任务不同 seq 算两次) */
 async function countPageDone(page) {
@@ -536,18 +544,27 @@ async function countPageDone(page) {
 /** creator 一侧对持有的任务的判据:旁观节点看到认领恰好一次、之后没再 open、关闭一次且是 done;页面恰好一次 task.done */
 async function judgeHeld(held, watcher, pageDone) {
   const end = Date.now() + 300_000;
+  let pageSince = null;
   while (Date.now() < Math.min(end, deadline)) {
-    if (held.every((id) => (watcher.seen.get(id)?.closed ?? []).length > 0 && (pageDone.counts()[id] ?? 0) > 0)) break;
+    const pageAll = held.every((id) => (pageDone.counts()[id] ?? 0) > 0);
+    if (pageAll) pageSince ??= Date.now();
+    if (pageAll && held.every((id) => (watcher.seen.get(id)?.closed ?? []).length > 0)) break;
+    // 页面已收到 task.done 而旁观节点 30 s 还没见到关闭:按漏看处理,不再等
+    if (pageSince && Date.now() - pageSince > 30_000) break;
     await delay(1000);
   }
   await delay(1500);
   const counts = pageDone.counts();
   const perHeld = held.map((id) => { const w = watcher.seen.get(id) ?? { taken: 0, reopenedAfterTaken: 0, closed: [] }; return { id, taken: w.taken, reopened: w.reopenedAfterTaken, closed: w.closed, taskDone: counts[id] ?? 0 }; });
-  check(perHeld.length > 0 && perHeld.every((h) => h.taken === 1 && h.reopened === 0 && h.closed.length === 1 && h.closed[0] === 'done'), '--cut:持有的任务 taken 1 / reopened 0 / done 1', perHeld);
+  // 旁观节点漏看(没见到关闭、也没见到重新 open,而页面恰好一次 task.done):单列,不判 taken / done 失败
+  const missed = perHeld.filter((h) => h.closed.length === 0 && h.reopened === 0 && h.taskDone === 1);
+  if (missed.length) pending.push({ item: '--cut:旁观节点漏看持有的任务的关闭(页面恰好一次 task.done)', status: '旁观节点漏看', held: missed.map((h) => ({ id: h.id, taken: h.taken })), watcher: watcher.stats });
+  const judged = perHeld.filter((h) => !missed.includes(h));
+  check(perHeld.length > 0 && judged.every((h) => h.taken === 1 && h.reopened === 0 && h.closed.length === 1 && h.closed[0] === 'done'), '--cut:持有的任务 taken 1 / reopened 0 / done 1', { perHeld, watcher: watcher.stats });
   check(perHeld.length > 0 && perHeld.every((h) => h.taskDone === 1), '--cut:持有的任务恰好一次 task.done(页面收到)', perHeld.map((h) => ({ id: h.id, taskDone: h.taskDone })));
   const multi = Object.entries(counts).filter(([, n]) => n > 1);
   check(multi.length === 0, '--cut:页面收到的 task.done 没有重复的', Object.fromEntries(multi));
-  return { perHeld, pageTaskDone: { tasks: Object.keys(counts).length, allOne: multi.length === 0 } };
+  return { perHeld, watcher: watcher.stats, missedByWatcher: missed.map((h) => h.id), pageTaskDone: { tasks: Object.keys(counts).length, allOne: multi.length === 0 } };
 }
 
 /* ================================================================== 协调口 KV(外部主机) */
@@ -733,12 +750,13 @@ async function runHostRole() {
 /* ================================================================== 文档服务连接(Node 侧,创建者身份) */
 
 async function mods() {
-  const [route, client, shared, ws, endpoint, ticket, asset, fp] = await Promise.all([
+  const [route, client, shared, ws, endpoint, ticket, asset, fp, link] = await Promise.all([
     import('../../server/auth/route.mjs'), import('../../server/auth/client.mjs'), import('../../server/auth/shared-config.mjs'),
     import('../../server/render-node/ws-transport.mjs'), import('../../server/render-node/endpoint.mjs'),
     import('../../server/auth/ticket-source.mjs'), import('../../server/asset-store/client.mjs'), import('../../server/render-node/fingerprint.mjs'),
+    import('../../server/render-node/session-link.mjs'),
   ]);
-  return { ...client, ...route, ...shared, ...ws, ...endpoint, ...ticket, ...asset, ...fp };
+  return { ...client, ...route, ...shared, ...ws, ...endpoint, ...ticket, ...asset, ...fp, createDocEndpoint: link.createDocEndpoint };
 }
 function rpcOn(ep) {
   const waiting = new Map();
@@ -759,7 +777,8 @@ function rpcOn(ep) {
 }
 async function openConn(M, { url, projectId, username, password, as, role = 'page' }) {
   const entry = M.normalizeEntry({ url, projectId, username, password, as, role, deviceId: `c10b-chk-${randomBytes(6).toString('hex')}`, deviceName: 'c10-browser-probe 核对' });
-  const ep = M.createWsEndpoint({ url: entry.url, protocols: M.sharedProtocols(entry, { role }), log: () => {} });
+  // 会话客户端(createDocEndpoint,同 ht-w-probe):传输断了是接续,不是换一条新连接;新会话才调 onOpen,接续调 onResume
+  const ep = M.createDocEndpoint({ url: entry.url, protocols: M.sharedProtocols(entry, { role }), log: () => {} });
   const opened = await new Promise((resolve) => {
     if (ep.connected) return resolve(true);
     const t = setTimeout(() => resolve(false), 20_000);
@@ -1079,7 +1098,8 @@ try {
   })).catch(() => null);
   check(Array.isArray(costMode) && costMode.length && costMode.every((m) => m === 'build'), 'A2:成本记录 mode=build', costMode);
   // 第 3 节 + 第 18 节第 7 条(集成接线):在线普通档测完的记录当场转写进文档服务(onCostRecords → publishSharedCosts)
-  const costPublish = await until('成员页测完的成本记录写进了文档服务', () => P(member, () => { const d = window.__pcCostPublish?.(); return d && d.ok > 0 ? d : null; }), 30_000, 500);
+  // 等在途的转写都回了(calls = ok + failed)、条数够了再判;只看 ok > 0 会在外网延迟下读到还在途的那一条
+  const costPublish = await until('成员页测完的成本记录写进了文档服务', () => P(member, (costs) => { const d = window.__pcCostPublish?.(); return d && d.calls > 0 && d.ok + d.failed === d.calls && d.records >= costs ? d : null; }, costs1?.costs ?? 0), 30_000, 500);
   check(costPublish && costPublish.failed === 0 && costPublish.records >= costs1?.costs, '第 3 节:在线普通档测完写进文档服务(当场转写,没有失败)', { publish: costPublish, relay: await P(member, () => window.__pcSharedCosts?.() ?? null).catch(() => null) });
   state.costPublish = costPublish;
 
