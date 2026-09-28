@@ -59,3 +59,14 @@ creator 一侧旁观节点看持有的任务 taken 1 / reopened 0 / done 1，成
     会话日志 session.open → session.detach(1006) → session.resume(gapMs 592)。
   - 持有的任务 taken 1、reopened 0、closed [done]、页面 task.done 1；页面收到的 task.done 无重复。
   - A5：新层指纹 0c10b0e5f1a9e7d2、ready 60、播放中贴着 main-v2；主机 ffmpeg found false、能力 streams false。项目已删、端口全放。
+
+## 第三轮（2026-09-28，外网 run c10s0928d 两条假阳性的修正）
+
+- 诊断：①成本记录转写那条在掐线前一分钟判，读到 calls 4 / ok 3 / failed 0，差的一条在途（`Preview.tsx` 先 calls++、应答回来才 ok++），探针 `ok > 0` 就判；
+  ②旁观节点用旧客户端 `createWsEndpoint`，上游全掐后重连成一条没有 hello / watch 的新连接，之后收不到 task.closed；页面（`createDocEndpoint`）接续后恰好一次 task.done。都不是会话层缺陷。
+- 改（`532c296`）：转写等 `calls = ok + failed` 且条数够了再判；`openConn`（旁观节点与探针自己的核对连接）改用 `createDocEndpoint`，
+  新会话时（onOpen）重发 hello / watch，接续计数进结果；旁观节点漏看（没见到关闭、没见到重新 open、页面恰好一次 task.done）单列进 `pending`，不判失败。
+- 验证：本机 `--role all --cut proxy --host-no-ffmpeg` 退出码 0、`ok: true`、`fails: []`、703 s；转写 calls 4 / ok 4 / records 4；
+  持有 `snapshot:92d5c2e7…:0-59`，断前 opens 1 / resumes 0 / sessions.resumed 0，断后 resumes 1 / opens 1 / ws / 729 ms / sessions.resumed 1；
+  taken 1 / reopened 0 / closed [done] / 页面 task.done 1，旁观节点 newSessions 0 / resumes 0（本机代理只经过主机那条），missedByWatcher []。
+  `npx tsc -b --force` 退出码 0；`npm test` tests 3634 / pass 3632 / fail 0 / skipped 2。
