@@ -260,7 +260,12 @@ export interface RemoteStep {
 }
 
 type Events = {
-  project: (project: Project, cause: "commit" | "remote" | "state" | "rejected" | "undo" | "redo" | "discard" | "replay" | "load") => void;
+  /**
+   * 本地副本换了。`commit` / `load` 是 store 自己(setProject / loadProject)发起的,调用方拿返回值写 state;
+   * 其余都不是经 store 发起的,接 store 的一侧要把它写进 state。`revert-remote` 是 AI 栏「撤销这步」
+   * (`revertRemote`):以本页面身份提交,但不经 setProject,所以不能算 `commit`。
+   */
+  project: (project: Project, cause: "commit" | "remote" | "state" | "rejected" | "undo" | "redo" | "revert-remote" | "discard" | "replay" | "load") => void;
   status: (status: SyncStatus) => void;
   notice: (notice: SyncNotice) => void;
 };
@@ -345,6 +350,14 @@ export class DocSync {
   /** 文档服务确认过的版本号 */
   get rev(): number {
     return this.confirmedRev;
+  }
+
+  /**
+   * 文档服务确认过的那一版项目(`rev` 那一版;还没有回 null)。只读:纯浏览器节点发布清单计划时按版本号留存它
+   * (M7 契约 D6:执行细任务用任务的 `projectRev` 那一版),不改它。
+   */
+  get confirmedProject(): Project | null {
+    return this.confirmed;
   }
 
   get status(): SyncStatus {
@@ -753,7 +766,13 @@ export class DocSync {
     return this.ownOps.slice(Math.max(0, mark - this.ownOpsBase));
   }
 
-  private commitInternal(next: Project, opts: CommitOptions, undoOf: string | undefined, target: "undo" | "redo" | undefined): Project {
+  private commitInternal(
+    next: Project,
+    opts: CommitOptions,
+    undoOf: string | undefined,
+    target: "undo" | "redo" | undefined,
+    cause: "commit" | "undo" | "redo" | "revert-remote" = target ?? "commit",
+  ): Project {
     const prev = this.local;
     const d = diffProject(prev, next);
     if (d.ops.length === 0) return prev;
@@ -789,7 +808,7 @@ export class DocSync {
       }
       this.redoStack = [];
     }
-    this.setLocal(r.value, target ?? "commit");
+    this.setLocal(r.value, cause);
     this.flush();
     return this.local;
   }
@@ -966,7 +985,8 @@ export class DocSync {
     }
     const undoOf = step.opIds[step.opIds.length - 1];
     const before = this.pending.length;
-    this.commitInternal(candidate, kind ? { undoable: false } : {}, undoOf, kind);
+    // 撤别人那一步不经 setProject:以 revert-remote 发出,让接 store 的一侧写进 state(不然页面要等下一次改动才刷新)
+    this.commitInternal(candidate, kind ? { undoable: false } : {}, undoOf, kind, kind ?? "revert-remote");
     const opId = this.pending.length > before ? this.pending[this.pending.length - 1].opId : undefined;
     return { done: opId !== undefined, skipped, failed, opId };
   }

@@ -3,6 +3,13 @@ import type { MediaAsset } from "../../kernel/project";
 import { isViewOnly } from "./viewOnly";
 
 /**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线浏览器模式没有本机内容库与转码:
+ * 导入媒体置灰(C10 契约第 10 节),素材小尺寸补转也不跑(`Preview` 按 `ONLINE` 不起)。下面几个入口在在线构建里直接回空,
+ * 背后的 /api/media/upload、adopt、tiers 调用一起剪掉(M8 遗留 L24)。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
+/**
  * 导入 = 先入库再引用(A1)。
  *
  * **为什么不在页面里算哈希**:素材键是文件内容的 sha256,4 GB 的视频在主线程上读一遍
@@ -29,10 +36,10 @@ export interface UploadedMedia {
   deduped?: boolean;
   /**
    * C6.6 两档(只有视频有):`original` 就是 `hash`(缺 faststart 的已经重封装过,哈希是重封装后的),
-   * `small` 是小版哈希;小版还在本机后台转时是 null、`smallState` 是 pending,由 watchSmallTier 补上。
+   * `small` 是素材小尺寸哈希;素材小尺寸还在本机后台转时是 null、`smallState` 是 pending,由 watchSmallTier 补上。
    */
   tiers?: { original: string; small: string | null };
-  /** 小版的状态:pending / ready / failed / none(没有视频流) */
+  /** 素材小尺寸的状态:pending / ready / failed / none(没有视频流) */
   smallState?: string;
 }
 
@@ -48,8 +55,9 @@ function tiersOf(data: { tiers?: { original?: unknown; small?: unknown }; small?
 
 /** 把一个 File 流进本地内容库,拿回它的内容哈希。失败给 null(调用方负责提示) */
 export async function uploadMediaFile(file: File): Promise<UploadedMedia | null> {
+  if (ONLINE_BUILD) return null;
   try {
-    // tiers=1:视频在服务端做 faststart 判定(缺了就同容器重封装),并在后台生成小版(C6.6)
+    // tiers=1:视频在服务端做 faststart 判定(缺了就同容器重封装),并在后台生成素材小尺寸(C6.6)
     const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}?tiers=1`, { method: "POST", body: file });
     if (!res.ok) {
       console.warn(`[io] 上传素材失败(HTTP ${res.status}): ${file.name}`);
@@ -84,6 +92,7 @@ export async function uploadMediaFile(file: File): Promise<UploadedMedia | null>
  * 失败给 null,那条素材就按没有 hash 的迁移期素材走(仍然能按文件名播)。
  */
 export async function adoptServerMedia(filePath: string): Promise<UploadedMedia | null> {
+  if (ONLINE_BUILD) return null;
   try {
     const res = await fetch(`/api/media/adopt?path=${encodeURIComponent(filePath)}&tiers=1`, { method: "POST" });
     if (!res.ok) {
@@ -136,19 +145,20 @@ export function applyUploadedMedia(mediaId: string, up: UploadedMedia | null): v
   if (up?.tiers && !up.tiers.small && up.smallState === "pending") watchSmallTier(mediaId, up.tiers.original);
 }
 
-/** 小版在本机后台转码,每隔这么久问一次 */
+/** 素材小尺寸在本机后台转码,每隔这么久问一次 */
 const SMALL_POLL_MS = 2000;
 /** 最多问这么久 */
 const SMALL_POLL_LIMIT_MS = 6 * 60 * 60 * 1000;
 const watching = new Set<string>();
 
 /**
- * 小版好了就把它的哈希写进 `project.media[i].tiers.small`(C6.6)。问的是本机的
- * `GET /api/media/tiers?hashes=<原片>`(本机转码的登记,不是同步状态)。素材被删了、原片换了、
- * 转码失败或确定没有小版就停。只在编辑器会话里跑:页面关了就不再问(小版照样在本机生成、照样上传,
- * 只是这条素材的项目记录里没有 small,别的设备按「还没有小版时直接拉原片」处理)。
+ * 素材小尺寸好了就把它的哈希写进 `project.media[i].tiers.small`(C6.6)。问的是本机的
+ * `GET /api/media/tiers?hashes=<素材原尺寸>`(本机转码的登记,不是同步状态)。素材被删了、素材原尺寸换了、
+ * 转码失败或确定没有素材小尺寸就停。只在编辑器会话里跑:页面关了就不再问(素材小尺寸照样在本机生成、照样上传,
+ * 只是这条素材的项目记录里没有 small,别的设备按「还没有素材小尺寸时直接拉素材原尺寸」处理)。
  */
 export function watchSmallTier(mediaId: string, original: string): void {
+  if (ONLINE_BUILD) return;
   const key = `${mediaId}:${original}`;
   if (watching.has(key)) return;
   watching.add(key);
@@ -176,19 +186,19 @@ export function watchSmallTier(mediaId: string, original: string): void {
   setTimeout(() => { void tick(); }, SMALL_POLL_MS);
 }
 
-/* ---------------- 打开项目时补转小版(C6.6 设计稿第 9 节第 2 条) ---------------- */
+/* ---------------- 打开项目时补转素材小尺寸(C6.6 设计稿第 9 节第 2 条) ---------------- */
 
-/** 这一页已经问过补转的原片哈希(同一会话里不重复问;小版在转的由 watchSmallTier 接着盯) */
+/** 这一页已经问过补转的素材原尺寸哈希(同一会话里不重复问;素材小尺寸在转的由 watchSmallTier 接着盯) */
 const backfillAsked = new Set<string>();
 
 /**
  * 项目里缺 `tiers.small`、按哈希入库的视频:请编辑器进程补转(`POST /api/media/tiers/backfill`)。
- * 本地内容库里有这份原片的才转(没有的回 `absent`,不为了转小版去拉原片),转好补写 `tiers.small`。
- * 页面在小版好之前关了,下次打开再补。没有本机编辑器(在线浏览器模式)时请求失败,什么都不做。
+ * 本地内容库里有这份素材原尺寸的才转(没有的回 `absent`,不为了转素材小尺寸去拉素材原尺寸),转好补写 `tiers.small`。
+ * 页面在素材小尺寸好之前关了,下次打开再补。没有本机编辑器(在线浏览器模式)时请求失败,什么都不做。
  * 回这次问了几份。
  */
 export async function backfillSmallTiers(project = getState().project): Promise<number> {
-  if (isViewOnly()) return 0; // 只读页面不改项目
+  if (ONLINE_BUILD || isViewOnly()) return 0; // 在线页面没有本机转码;只读页面不改项目
   const want: { mediaId: string; hash: string; name: string }[] = [];
   for (const m of project.media ?? []) {
     if (m.kind !== "video" || m.pending || m.tiers?.small) continue;
@@ -219,7 +229,7 @@ export async function backfillSmallTiers(project = getState().project): Promise<
   return want.length;
 }
 
-/** 把小版哈希写进这条素材的 `tiers`(原片没换过才写);写法同 applyUploadedMedia 的说明 */
+/** 把素材小尺寸哈希写进这条素材的 `tiers`(素材原尺寸没换过才写);写法同 applyUploadedMedia 的说明 */
 function writeSmallTier(mediaId: string, original: string, small: string): void {
   const fresh = getState().project.media.find((m) => m.id === mediaId);
   if (!fresh || (fresh.tiers?.original ?? fresh.hash) !== original || fresh.tiers?.small) return;
@@ -227,10 +237,11 @@ function writeSmallTier(mediaId: string, original: string, small: string): void 
 }
 
 /**
- * 打开项目(以及素材表变了)时补转小版,回停止函数。预览挂上时调。
- * 同一份原片一个页面会话里只问一次;素材表没变就不问。
+ * 打开项目(以及素材表变了)时补转素材小尺寸,回停止函数。预览挂上时调。
+ * 同一份素材原尺寸一个页面会话里只问一次;素材表没变就不问。
  */
 export function startTierBackfill(): () => void {
+  if (ONLINE_BUILD) return () => {};
   let lastMedia: unknown = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const check = () => {

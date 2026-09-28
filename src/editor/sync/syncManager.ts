@@ -24,6 +24,12 @@ import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } fr
 import { connectSharedAssets, disconnectSharedAssets, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
 import { ONLINE } from "../../online/mode";
+
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
+ * 写成 `!ONLINE_BUILD && !ONLINE`:在线构建里整句折成 false,单测里把 `mode.ts` 换成在线桩时照旧按 `ONLINE` 走。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 import { loadBrowserDevice } from "../../online/device";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
 import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
@@ -511,8 +517,8 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   cur = { link, kind, docProjectId, url, unbind, offs };
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
-  // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑
-  if (!ONLINE) {
+  // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
+  if (!ONLINE_BUILD && !ONLINE) {
     bindAgentSide(kind, docProjectId, url);
     bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
   }
@@ -1096,6 +1102,11 @@ export function leaveSharedToLocal(project: Project = getState().project): Proje
 /** 当前是不是连着共享项目(项目设置「多用户协作」按它显示勾选状态) */
 export function currentSharedLink(): SyncLink | null {
   return cur && cur.kind === "shared" ? cur.link : null;
+}
+
+/** 当前共享项目连接的文档服务地址(纯浏览器节点的 render 连接连同一个地址,M7 契约第 5 节);没连共享项目回 null */
+export function currentSharedUrl(): string | null {
+  return cur && cur.kind === "shared" ? cur.url : null;
 }
 
 /** 被踢 / 被移出 / 项目被删之后点「开始页」:回到本机空间,回开始页 */

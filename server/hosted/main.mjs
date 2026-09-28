@@ -36,7 +36,7 @@
  * 没有令牌照常启动：管理接口只认本机回环，带令牌的握手 401。
  *
  * 只依赖 Node 内置模块与仓库里的这些目录 / 文件（部署清单见契约第 10 节）：
- * server/hosted/、server/docservice/、server/auth/、server/asset-store/、server/render-queue/、server/render-node/ws-transport.mjs、
+ * server/hosted/、server/docservice/、server/auth/、server/asset-store/、server/render-queue/、server/render-node/session-link.mjs、server/render-node/ws-transport.mjs、
  * server/asset-announce.mjs、server/asset-service.ts、server/vite-plugin-media.ts、server/http-guard.mjs。
  * `.ts` 靠 Node 的类型剥离直接载入（Node ≥ 22.18 / 24），不转译。
  */

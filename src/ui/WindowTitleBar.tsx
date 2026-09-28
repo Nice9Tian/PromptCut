@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { JSX, MouseEvent as ReactMouseEvent } from "react";
+import { onlineUnsupported } from "../online/pageFlag";
 import "./WindowTitleBar.css";
+
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `mode.ts` 的 `ONLINE`。
+ * 在线页面上标题栏菜单同顶栏(C10 契约第 10 节〔裁〕,2026-09-28):桌面才有的项置灰,悬停说明与顶栏同一套
+ * `onlineUnsupported` 文案,点了不动作;在线构建里桌面壳命令那一支(`desktop_titlebar_command`)剪掉。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 type ResizeDirection = "North" | "NorthEast" | "NorthWest";
 
@@ -20,19 +28,24 @@ type TauriGlobal = {
 
 type MenuId = "file" | "edit" | "view" | "help";
 
-const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; command?: string; shortcut?: string; separator?: boolean }> }> = [
+/**
+ * `desktopOnly`:在线页面做不成的项,值是悬停说明里的入口名(`onlineUnsupported(入口名)`)。
+ * 依据:`product/platforms.md`「在线浏览器模式」只加入、不新建、不存草稿(新建、打开、保存);C10 契约第 10 节置灰清单
+ * (配音、语音识别、合并 Skill 结果);其余是桌面壳的命令(打开本机目录、看运行日志、退出),在线页面没有桌面壳。
+ */
+const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; command?: string; shortcut?: string; separator?: boolean; desktopOnly?: string }> }> = [
   {
     id: "file",
     label: "文件",
     items: [
-      { label: "新建项目", command: "new-project", shortcut: "Ctrl N" },
-      { label: "打开项目…", command: "open-project", shortcut: "Ctrl O" },
-      { label: "保存项目", command: "save-project", shortcut: "Ctrl S" },
+      { label: "新建项目", command: "new-project", shortcut: "Ctrl N", desktopOnly: "新建项目" },
+      { label: "打开项目…", command: "open-project", shortcut: "Ctrl O", desktopOnly: "打开项目" },
+      { label: "保存项目", command: "save-project", shortcut: "Ctrl S", desktopOnly: "保存项目" },
       { label: "导出视频", command: "export-video", shortcut: "Ctrl E" },
-      { label: "打开导出文件夹", command: "open-export", separator: true },
-      { label: "打开数据目录", command: "open-data" },
+      { label: "打开导出文件夹", command: "open-export", separator: true, desktopOnly: "打开导出文件夹" },
+      { label: "打开数据目录", command: "open-data", desktopOnly: "打开数据目录" },
       { label: "返回首页", command: "go-home", separator: true },
-      { label: "退出", command: "quit" },
+      { label: "退出", command: "quit", desktopOnly: "退出" },
     ],
   },
   {
@@ -48,11 +61,11 @@ const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; co
     label: "视图",
     items: [
       { label: "皮肤…", command: "open-skin" },
-      { label: "配音设置…", command: "open-voice" },
-      { label: "合并 Skill 结果…", command: "merge-project", separator: true },
-      { label: "语音识别引擎（库目录）", command: "open-pylibs" },
-      { label: "语音模型目录", command: "open-models" },
-      { label: "重置 Python 库", command: "reset-pylibs" },
+      { label: "配音设置…", command: "open-voice", desktopOnly: "配音" },
+      { label: "合并 Skill 结果…", command: "merge-project", separator: true, desktopOnly: "合并 Skill 结果" },
+      { label: "语音识别引擎（库目录）", command: "open-pylibs", desktopOnly: "语音识别" },
+      { label: "语音模型目录", command: "open-models", desktopOnly: "语音识别" },
+      { label: "重置 Python 库", command: "reset-pylibs", desktopOnly: "语音识别" },
     ],
   },
   {
@@ -60,7 +73,7 @@ const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; co
     label: "帮助",
     items: [
       { label: "快捷键", command: "shortcuts" },
-      { label: "查看运行日志", command: "open-logs" },
+      { label: "查看运行日志", command: "open-logs", desktopOnly: "查看运行日志" },
       { label: "关于 PromptCut", command: "about", separator: true },
     ],
   },
@@ -73,7 +86,7 @@ function tauriWindow(): WindowApi | null {
 
 function sendCommand(command: string) {
   const t = (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
-  if (["open-export", "open-data", "open-pylibs", "open-models", "open-logs", "reset-pylibs", "about", "quit"].includes(command)) {
+  if (!ONLINE_BUILD && ["open-export", "open-data", "open-pylibs", "open-models", "open-logs", "reset-pylibs", "about", "quit"].includes(command)) {
     const invoke = t?.core?.invoke;
     if (invoke) {
       void invoke("desktop_titlebar_command", { command }).catch(() => {});
@@ -170,7 +183,15 @@ export function WindowTitleBar(): JSX.Element {
                 {menu.items.map((item) => (
                   <div key={item.label}>
                     {item.separator && <div className="pc-titlebar-menu-separator" role="separator" />}
-                    <button type="button" role="menuitem" className="pc-titlebar-menu-item" onClick={() => choose(item.command)}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="pc-titlebar-menu-item"
+                      data-pc={item.command ? `titlebar-${item.command}` : undefined}
+                      disabled={ONLINE_BUILD && !!item.desktopOnly}
+                      title={ONLINE_BUILD && item.desktopOnly ? onlineUnsupported(item.desktopOnly) : undefined}
+                      onClick={() => { if (!(ONLINE_BUILD && item.desktopOnly)) choose(item.command); }}
+                    >
                       <span>{item.label}</span>
                       {item.shortcut && <kbd>{item.shortcut}</kbd>}
                     </button>

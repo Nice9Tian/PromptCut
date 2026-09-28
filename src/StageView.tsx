@@ -20,6 +20,7 @@ import {
   postStageCards,
   postStageTrouble,
   type BackJob,
+  type BakeFrameReply,
   type PlayReply,
   type ProbeBooleans,
   type RenderReply,
@@ -56,6 +57,9 @@ import { ONLINE } from "./online/mode";
 import { setMediaTierPolicy } from "./render/mediaTier";
 import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
 import { clipFrameMode } from "./kernel/frameMode.mjs";
+import { resolveFrameSize } from "./kernel/frameSize.mjs";
+import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
+import { renderSmallWebp } from "./render/bakeSmall";
 import "./cards";
 
 /**
@@ -593,7 +597,7 @@ export default function StageView() {
       p.resolve({ aborted: true, reason, elapsedMs: realNow() - p.startedAt, frames: p.frames() });
     };
 
-    /** 片段的入点(冻结 probe-frame 时算本地帧号用) */
+    /** 片段的入点(给 probe-frame 生成快照时算本地帧号用) */
     const clipStart = (clipId: string): number => {
       const p = ref.current.project;
       if (!p) return 0;
@@ -1430,6 +1434,54 @@ export default function StageView() {
     };
     const flushProbeFrames = async () => { if (probeFramePosts.size) await Promise.allSettled([...probeFramePosts]); };
 
+    /*
+     * M7 生成快照(`bakeFrame`,契约第 4.3 节):代数(`bakeCancel`、新的一帧作废在飞的那一帧)与顺推的接续点
+     * (上一帧推到了哪一帧、在哪份项目上;项目换了对象就接不上,从头推)。
+     */
+    let bakeGen = 0;
+    let bakeCursor: { project: Project; clipId: string; frame: number } | null = null;
+    /**
+     * 舞台这一侧的生成快照诊断(契约第 7 节「舞台」,`__pcStageDiag().bake`):逐帧耗时(不含被门挡住的时长)、
+     * 被门挡住的时长单记、从头推的次数、没成的原因计数。
+     */
+    const bakeStats = { frames: 0, ms: [] as number[], pausedMs: 0, remounts: 0, smallMs: [] as number[], errors: {} as Record<string, number> };
+    const bakeFail = <R extends { ok: false; reason: string }>(r: R): R => { bakeStats.errors[r.reason] = (bakeStats.errors[r.reason] ?? 0) + 1; return r; };
+    const q = (xs: number[], p: number) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))] * 10) / 10; };
+    /** 就绪闸的上限(照预渲染 `waitFrameReady`:控件异步活、字体、图片都就绪才生成快照) */
+    const BAKE_READY_MAX_MS = 20_000;
+    /**
+     * 每帧生成快照之前的就绪闸(M7 探针 P2 之后主会话裁定,照预渲染 `server/bakery/frame-ready.mjs` 的 `waitFrameReady`):
+     * 控件的异步活、字体、图片都就绪才生成快照;等的时候照样给同一时刻的拍(不推时间,靠 rAF 装载的控件要拍才走得动);
+     * 控件报错、或 `BAKE_READY_MAX_MS` 之内没就绪,回不就绪 —— 这一段 `fail`,不出空白帧。
+     */
+    const bakeReady = async (stale: () => boolean): Promise<{ ok: true } | { ok: false; detail: string }> => {
+      const t0 = realNow();
+      let failure: string | null = null;
+      let done = false;
+      const gate = (async () => {
+        do {
+          await waitForFrameWork();
+          // 先排一次版,新挂上的文字才会开始装字体
+          document.documentElement.getBoundingClientRect();
+          await document.fonts.ready;
+          await Promise.all([...document.images].filter((img) => img.getAttribute("src") || img.getAttribute("srcset")).map((img) => img.decode().catch(() => {})));
+          // 一个装载做完可能在 React 提交里又挂上另一个控件
+        } while (frameWorkStatus().length > 0 || document.fonts.status !== "loaded");
+      })().catch((e) => { failure = String((e as Error)?.message ?? e); }).finally(() => { done = true; });
+      while (!done) {
+        await Promise.race([gate, new Promise<void>((r) => realSetTimeout(r, 4))]);
+        if (done || stale()) break;
+        if (realNow() - t0 > BAKE_READY_MAX_MS) {
+          return { ok: false, detail: `控件、字体或图片在 ${Math.round(BAKE_READY_MAX_MS / 1000)} 秒内未就绪:${frameWorkStatus().map((w) => w.label).join("、") || (document.fonts.status !== "loaded" ? "字体" : "图片")}` };
+        }
+        clock?.tick(clock.now());
+      }
+      if (failure) return { ok: false, detail: failure };
+      return { ok: true };
+    };
+    const sha256Hex = async (bytes: Uint8Array): Promise<string> =>
+      [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
     const api: StageRpcApi = {
       /**
        * 换项目文档。patch 复用 A7 的 changedClips 结构,合并时**保持未变片段的对象引用**
@@ -1808,7 +1860,8 @@ export default function StageView() {
        * `bake` 在本地模式不支持(预渲染者是预渲染进程),回 `unsupported`、不抛。
        */
       async setRole(role, opts = {}) {
-        if (role === "back" && opts.job === "bake") return { ok: false, reason: "unsupported" as const };
+        // `bake`:本地模式不支持(预渲染者是预渲染进程);在线构建的后台舞台兼做纯浏览器节点(M7 契约 D3)
+        if (role === "back" && opts.job === "bake" && !ONLINE) return { ok: false, reason: "unsupported" as const };
         /*
          * K5 (6):**从 `back` 转正**的舞台要报一次 `settled`(`clipIds` 为空数组)。
          *
@@ -2081,6 +2134,117 @@ export default function StageView() {
         if (backWork.on) for (const w of [...backWork.waiters]) w();
         return { ok: true as const };
       },
+      /**
+       * M7 生成快照的一帧(契约第 4.3、4.4 节;协议见 `stageRpc.ts` 的 `BakeFrameRequest`)。项目是父页经 `pushProject('back', …)`
+       * 灌进来的隔离单卡工程,目标片段是唯一可见输出,本地帧 n 就是全局帧 n。
+       *
+       * 推帧:`seq`(缺省)接着上一帧顺推,接不上才从头推 —— 探针 P2 证明对 DOM 独立卡(含 Motion)与桌面 4 帧一批从头推等价、
+       * 便宜 4～7 倍(画布卡不等价,节点侧与切分都不让它进浏览器);`batch4` 批起点按 4 帧对齐、每批从头推(同桌面 `fillCardControls`)。帧与帧之间让一个宏任务、查后台活的停止标志(停着的时长记进 `pausedMs`,不算耗时);
+       * 不受一拍预算截断。到了这一帧先过就绪闸,再生成快照、取本控件的 HTML:有读不出像素的画布(`lossy`)回 `lossy`
+       * (父页按不可重试失败交回,同 `server/bakery/bake.mjs`)。
+       */
+      async bakeFrame(req) {
+        if (!ONLINE || !clock) return { ok: false, reason: "unsupported" } satisfies BakeFrameReply;
+        if (ref.current.role !== "back") return { ok: false, reason: "role" } satisfies BakeFrameReply;
+        const p = ref.current.project;
+        if (!p) return { ok: false, reason: "no-project" } satisfies BakeFrameReply;
+        const clip = p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips).find((c) => c.id === req.clipId);
+        if (!clip) return { ok: false, reason: "no-clip" } satisfies BakeFrameReply;
+        const fps = Math.max(1, p.fps || 30);
+        const n = Math.max(0, Math.floor(Number(req.localFrame) || 0));
+        const sec = n / fps;
+        const gen = ++bakeGen;
+        const started = realNow();
+        let pausedMs = 0;
+        const stale = () => gen !== bakeGen || ref.current.role !== "back" || ref.current.project !== p;
+        const cur = bakeCursor;
+        const continuing = !!cur && cur.project === p && cur.clipId === req.clipId && cur.frame === n - 1 && (req.mode !== "batch4" || n % 4 !== 0);
+        bakeCursor = null;
+        if (!continuing) {
+          // 从头推:别的在飞的补跑 / 探针作废(单飞队列本来就不会让它们并存,这里兜底)
+          renderGen.current++;
+          abortPending("superseded");
+          remountAt(sec, fps);
+        }
+        let lastMs = clock.now();
+        await clock.advanceToAsync(sec * 1000, {
+          step: 1000 / fps,
+          yieldEvery: 1,
+          gate: () => {
+            const g = backGate(stale);
+            if (!g) return undefined;
+            const t0 = realNow();
+            return g.then(() => { pausedMs += realNow() - t0; });
+          },
+          abort: stale,
+          onFrame: (ms) => { flushSync(() => setT(ms / 1000)); },
+          afterFrame: (ms) => {
+            lastMs = ms;
+            pinner.sync(ms, skipWrappers());
+            const g = glStrict(ms / 1000);
+            return g ? g.then(() => undefined) : undefined;
+          },
+        });
+        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        if (Math.abs(lastMs - sec * 1000) > 1e-6 || !continuing) {
+          // 挂载帧本身(没推任何一步)或推完没落在这一帧上:补一次提交、钉动画、等 GL 位图
+          flushSync(() => setT(sec));
+          pinner.sync(sec * 1000, skipWrappers());
+          const g = glStrict(sec);
+          if (g) await g;
+        }
+        ref.current.t = sec;
+        const t0 = realNow();
+        const ready = await bakeReady(stale);
+        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        if (!ready.ok) return bakeFail({ ok: false, reason: "not-ready", detail: ready.detail.slice(0, 300) } satisfies BakeFrameReply);
+        const readyMs = realNow() - t0;
+        const root = rootRef.current;
+        const snap = createSnapshot(root);
+        if (snap.lossy) return bakeFail({ ok: false, reason: "lossy", detail: `${snap.lossy} 张读不出像素的画布` } satisfies BakeFrameReply);
+        const own = snap.controls.find((c) => c.id === req.clipId);
+        if (!own) return bakeFail({ ok: false, reason: "no-control" } satisfies BakeFrameReply);
+        if (own.frame !== n) return bakeFail({ ok: false, reason: "frame-mismatch", detail: `生成快照的本地帧是 ${own.frame},要的是 ${n}` } satisfies BakeFrameReply);
+        const bytes = new TextEncoder().encode(own.html);
+        const hash = await sha256Hex(bytes);
+        const gz = await compressHtml(own.html);
+        let small: { hash: string; bytes: number; webp: ArrayBuffer } | null = null;
+        let smallMs = 0;
+        if (req.small) {
+          const s0 = realNow();
+          const box = resolveFrameSize(clip.frame, p);
+          let webp: ArrayBuffer | null = null;
+          try {
+            webp = await renderSmallWebp({ html: own.html, projectWidth: p.width, projectHeight: p.height, boxWidth: Number(box.w) || p.width, boxHeight: Number(box.h) || p.height });
+          } catch (e) {
+            return { ok: false, reason: "small-failed", detail: String((e as Error)?.message ?? e).slice(0, 200) } satisfies BakeFrameReply;
+          }
+          if (!webp) return { ok: false, reason: "small-failed", detail: "浏览器出不了 WebP" } satisfies BakeFrameReply;
+          small = { hash: await sha256Hex(new Uint8Array(webp)), bytes: webp.byteLength, webp };
+          smallMs = realNow() - s0;
+        }
+        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        const transfer: Transferable[] = [];
+        const event = { type: "bake-frame" as const, session: req.session, clipId: req.clipId, localFrame: n, hash, bytes: bytes.length,
+          ...(gz ? { htmlGz: gz } : { htmlRaw: bytes.buffer as ArrayBuffer }), small };
+        transfer.push(gz ?? (bytes.buffer as ArrayBuffer));
+        if (small) transfer.push(small.webp);
+        postStageEvent(event, "*", transfer);
+        bakeCursor = { project: p, clipId: req.clipId, frame: n };
+        bakeStats.frames++;
+        bakeStats.ms.push(realNow() - started - pausedMs);
+        bakeStats.pausedMs += pausedMs;
+        if (!continuing) bakeStats.remounts++;
+        if (req.small) bakeStats.smallMs.push(smallMs);
+        if (bakeStats.ms.length > 200) { bakeStats.ms.splice(0, bakeStats.ms.length - 200); bakeStats.smallMs.splice(0, Math.max(0, bakeStats.smallMs.length - 200)); }
+        return { ok: true, localFrame: n, hash, bytes: bytes.length, small: small ? { hash: small.hash, bytes: small.bytes } : null,
+          ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing, smallMs, readyMs } satisfies BakeFrameReply;
+      },
+      async bakeCancel() {
+        bakeGen++;
+        bakeCursor = null;
+        return { ok: true as const };
+      },
       async setMediaPolicy(next) {
         // 低内存档只会从普通改到低(运行中改判),不回头:舞台自己判出来的 true 不被父页的 false 盖掉
         setMediaTierPolicy({ lowMemory: caps.lowMemory || !!next?.lowMemory, remote: next?.remote ?? null });
@@ -2160,6 +2324,12 @@ export default function StageView() {
       gl: gl.diag(),
       /** 兜底顺序尽头:此刻显示着占位符的卡 */
       placeholders: [...shownPlaceholders()],
+      /** M7 生成快照(契约第 7 节「舞台」):逐帧耗时不含被门挡住的时长,后者单记 */
+      bake: {
+        frames: bakeStats.frames, frameMs: { p50: q(bakeStats.ms, 0.5), p95: q(bakeStats.ms, 0.95) }, pausedMs: Math.round(bakeStats.pausedMs),
+        remounts: bakeStats.remounts, smallMs: { p50: q(bakeStats.smallMs, 0.5), p95: q(bakeStats.smallMs, 0.95) }, errors: { ...bakeStats.errors },
+        cursor: bakeCursor ? { clipId: bakeCursor.clipId, frame: bakeCursor.frame } : null,
+      },
     });
     // 探针用:问 Worker 要它那一侧的诊断(上下文数、纹理上传次数、图集尺寸)
     (window as unknown as Record<string, unknown>).__pcGlWorkerDiag = () => gl.workerDiag();

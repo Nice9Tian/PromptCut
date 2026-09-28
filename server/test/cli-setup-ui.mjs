@@ -3,6 +3,13 @@
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
 
+// 地址必须显式给(环境变量 BASE),不给就报用法退出:永不缺省连用户常驻的编辑器(5190～5192)。
+const BASE = (process.env.BASE || '').replace(/\/+$/, '');
+if (!BASE) {
+  console.error('用法: BASE=http://127.0.0.1:<自己起的 dev server 端口> node server/test/cli-setup-ui.mjs\n不给地址不跑:不缺省连用户常驻的编辑器。');
+  process.exit(2);
+}
+
 const browser = await puppeteer.launch({ headless: true });
 try {
   const page = await browser.newPage();
@@ -29,7 +36,7 @@ try {
     }
     await request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(data) });
   });
-  await page.goto((process.env.BASE || 'http://127.0.0.1:5192') + '/?nosetup=1', { waitUntil: 'networkidle2' });
+  await page.goto(BASE + '/?nosetup=1', { waitUntil: 'networkidle2' });
   const button = await page.$eval('.ai-gear-btn', e => ({ text: e.textContent, height: e.getBoundingClientRect().height }));
   assert.ok(button.text.includes('AI 设置')); assert.ok(button.height >= 32);
   await page.click('.ai-gear-btn');

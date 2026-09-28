@@ -1,4 +1,4 @@
-// C6.6 第 4 节:本地素材服务读路由的按需拉取(边落盘边按 Range 服务)、预取队列、导出前的原片检查。
+// C6.6 第 4 节:本地素材服务读路由的按需拉取(边落盘边按 Range 服务)、预取队列、导出前的素材原尺寸检查。
 // 实现在 server/media-pull.mjs,接在 server/vite-plugin-media.ts 的 `/@media/<hash>` 未命中那一支上。
 // 跑法:node --test server/test/media-pull.test.mjs
 //
@@ -219,7 +219,7 @@ test('T5-prefetch-2:没连远程素材服务时预取不做事', async () => {
   assert.equal(remoteHits.length, 0);
 });
 
-test('T7-originals-1:导出前的原片检查只问当前连接的素材服务(远程:chunks 的 complete;本机缓存不算数)', async () => {
+test('T7-originals-1:导出前的素材原尺寸检查只问当前连接的素材服务(远程:chunks 的 complete;本机缓存不算数)', async () => {
   const ready = addRemote(10_000, 81);
   const notYet = addRemote(10_000, 82, { complete: false });
   // notYet 在本机缓存里已经有了(比如别的路径拷过来),但远程没 complete:照样算没到齐

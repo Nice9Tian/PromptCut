@@ -1,9 +1,9 @@
 /**
  * 素材上传队列(C6.6,`docs/plan/c66-design.md` 第 3 节;语义 `docs/semantics/product/asset-service.md`「上传」)。
  *
- * 编辑器进程里一个持久队列,把本机导入的素材(两档:小版、原片)传到**当前连接的素材服务**:
+ * 编辑器进程里一个持久队列,把本机导入的素材(两档:素材小尺寸、素材原尺寸)传到**当前连接的素材服务**:
  *   - **逐个素材**:队头那一个两档都在素材服务上 `complete` 了才出队,才轮到下一个。队头在退避时后面的也等着(严格按序)。
- *   - **先小后大**:同一素材先传小版、再传原片;没有小版(不是视频、小版没生成出来)就只传原片。
+ *   - **先小后大**:同一素材先传素材小尺寸、再传素材原尺寸;没有素材小尺寸(不是视频、素材小尺寸没生成出来)就只传素材原尺寸。
  *   - **分片、断点续传**:每一档走素材服务客户端的 `putFile`(先问 `chunks`,只补 `received` 里缺的片,最后 `complete`
  *     由服务端按 sha256 校验)。断了按退避重试(5 s、30 s、120 s,之后每 10 min),不放弃。
  *   - **两档都 complete 才出队**:传完再各问一次 `chunks`,两档都报 `complete: true` 才算。同步状态只问素材服务,
@@ -57,9 +57,9 @@ export const ENQUEUE_MAX_ITEMS = 2000;
  * 素材也要上云;`POST /api/media/upload-queue/enqueue` 调它)。
  *
  * - `items`:`[{ name?, original, small? }]`,一个素材一项(视频两档:`small` 是 `tiers.small`、`original` 是 `tiers.original`;
- *   图片、音频只有一档,只给 `original`)。也收 `hashes: string[]`(每个当作只有原片一档)。
- * - 只收本地有的:原片本地没有 → 整个素材不进队,原片哈希记进 `missing`;小版本地没有 → 只传原片,小版哈希记进 `missing`。
- * - 进队照队列本来的规则:逐个素材、先小后大、两档都 complete 才出队;同一原片已在队里就合并档位。
+ *   图片、音频只有一档,只给 `original`)。也收 `hashes: string[]`(每个当作只有素材原尺寸一档)。
+ * - 只收本地有的:素材原尺寸本地没有 → 整个素材不进队,素材原尺寸哈希记进 `missing`;素材小尺寸本地没有 → 只传素材原尺寸,素材小尺寸哈希记进 `missing`。
+ * - 进队照队列本来的规则:逐个素材、先小后大、两档都 complete 才出队;同一素材原尺寸已在队里就合并档位。
  * - 当前连的是本机素材服务(队列是空操作)时回 `local: true`,什么都不进。
  *
  * @param {{ enqueue(raw: object): Promise<{ queued: boolean, reason?: string }> }} queue
@@ -119,7 +119,7 @@ export function createUploadQueue({
   const delays = Array.isArray(backoff) && backoff.length ? backoff.map((ms) => Math.max(0, Number(ms) || 0)) : [...UPLOAD_BACKOFF_MS];
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响上传 */ } };
 
-  /** id(原片哈希)→ { id, name, tiers, attempts, nextAt, seq } */
+  /** id(素材原尺寸哈希)→ { id, name, tiers, attempts, nextAt, seq } */
   const items = new Map();
   let seq = 0;
   let running = false;
@@ -226,7 +226,7 @@ export function createUploadQueue({
     for (const t of item.tiers) {
       const filePath = await resolveFile(t.hash);
       if (!filePath) {
-        // 本地内容库里没有这一档(被删了):传不了,记一笔跳过这一档;原片也没有就整个丢掉
+        // 本地内容库里没有这一档(被删了):传不了,记一笔跳过这一档;素材原尺寸也没有就整个丢掉
         counters.missing++;
         say('upload.missing', { id: item.id, tier: t.tier, hash: t.hash });
         continue;
@@ -256,7 +256,7 @@ export function createUploadQueue({
   return {
     /**
      * 进队一个素材的两档。当前连的是本机素材服务时是空操作(回 `{ queued: false, reason: 'local' }`)。
-     * 同一原片已在队里就合并档位(例如小版后到),不改它的位置。回的 promise 在队列文件写回后兑现。
+     * 同一素材原尺寸已在队里就合并档位(例如素材小尺寸后到),不改它的位置。回的 promise 在队列文件写回后兑现。
      * @param {{ name?: string, tiers: { tier: 'small' | 'original', hash: string, ext?: string }[] }} raw
      */
     async enqueue(raw) {

@@ -105,11 +105,11 @@ gradient ids             ["_r_0_"]
 getAttribute("fill")     "url(#_r_0_)"
 computed .fill           "url(\"#_r_0_\")"
 cssText 里的 fill          "fill:url(\"#_r_0_\")"
-冻结后 outerHTML 里的 fill:
+生成快照后 outerHTML 里的 fill:
   ;fill:url(&quot;#_r_0_&quot;)
 el.style.fill=computed 后的 outerHTML:
   <path d="…" fill="url(#_r_0_)" opacity="0" style="fill: url(&quot;#_r_0_&quot;);"></path>
-整棵 control 冻结后(516806 字节)出现过的形式:
+整棵 control 生成快照后(516806 字节)出现过的形式:
   url(…#…)               ["url(#_r_0_)","url(&quot;#_r_0_&quot;)"]
   href="#…"              []
   id="…"                 [" id=\"_r_0_\""]
@@ -122,7 +122,7 @@ DOMParser 收 id           ["_r_0_"]
 结论:
 
 - **计算样式是相对形式**,Chrome 不把页面 URL 补进 `url()`。整份快照里不含 `&amp;`,`&` 的担心不成立。
-- 冻结后实际只有两种形式:属性上的 `url(#id)`,和计算样式内联出来的 `url(&quot;#id&quot;)`
+- 生成快照后实际只有两种形式:属性上的 `url(#id)`,和计算样式内联出来的 `url(&quot;#id&quot;)`
   (`setAttribute('style', …)` 之后 `outerHTML` 把 `"` 转义成 `&quot;`)。两种现有正则都能命中。
 - React 19 的 `useId()` 产出 `_r_0_`,**不再是 `:r1:`**。改名仍按原字符串匹配、不用 `CSS.escape`,
   含冒号的 id 照样能改(消费侧 `src/render/snapshotRename.ts` 有单测钉住)。

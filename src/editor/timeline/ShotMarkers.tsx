@@ -10,10 +10,15 @@
 import { useStore } from "../../store/project";
 import type { ShotTransition, TrackClip } from "../../kernel/project";
 import { useTimelineContext } from "./TimelineContext";
-import { onlinePage } from "../../online/pageFlag";
 
 /** 缩略图太小就看不清，太大又盖住片段本身，行高不够时干脆只留竖线 */
 const THUMB_MIN_ROW_H = 40;
+
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。缩略图在编辑器进程的镜头检测目录里,
+ * 在线页面只画竖线;两个标记里再判一次,在线构建里连同 `/api/shots/thumb/` 地址一起剪掉(M8 遗留 L24)。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 export function ShotMarkers({ clip, rowHeight }: { clip: TrackClip; rowHeight: number }) {
   const { pxPerSec } = useTimelineContext();
@@ -28,7 +33,7 @@ export function ShotMarkers({ clip, rowHeight }: { clip: TrackClip; rowHeight: n
   const visibleFrom = offset;
   const visibleTo = offset + (clip.end - clip.start);
   // 缩略图在编辑器进程的镜头检测目录里(`/api/shots/thumb/`);在线页面没有编辑器进程,只画竖线,不发请求(C10 契约第 10 节)
-  const showThumbs = rowHeight >= THUMB_MIN_ROW_H && !onlinePage();
+  const showThumbs = !ONLINE_BUILD && rowHeight >= THUMB_MIN_ROW_H;
 
   return (
     <div className="pc-shot-layer" aria-hidden>
@@ -62,7 +67,7 @@ function CutMark({ t, left, showThumbs }: { t: ShotTransition; left: number; sho
   return (
     <div className="pc-shot-cut" style={{ left }} title={`硬切 ${t.time.toFixed(2)}s`}>
       <div className="pc-shot-line" />
-      {showThumbs && thumb && (
+      {!ONLINE_BUILD && showThumbs && thumb && (
         // 和溶解用同一个 .pc-shot-stack 包一层:标记本身宽度是 0(它就是一条线),
         // 绝对定位的 img 拿零宽包含块算 width:auto 会得到 0。包一层有宽度的容器、
         // 让 img 静态定位，它才会按自身宽高比撑开。
@@ -87,7 +92,7 @@ function DissolveMark(
       {/* 渐变的两端各一条细线，中间一层薄底表示「这一段在交融」 */}
       <div className="pc-shot-line pc-shot-line--start" />
       <div className="pc-shot-line pc-shot-line--end" />
-      {showThumbs && a && (
+      {!ONLINE_BUILD && showThumbs && a && (
         <span className="pc-shot-stack">
           <img className="pc-shot-thumb" src={thumbUrl(a)} alt="" draggable={false} width={160} height={90} />
           {b && (

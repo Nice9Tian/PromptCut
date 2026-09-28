@@ -21,7 +21,6 @@ import { SttInstallProgress } from "./editor/right/SttInstallProgress";
 import { VoiceSettingsDialog } from "./voice/VoiceSettingsDialog";
 import { openVoiceSettings, useVoiceSettingsState } from "./ai/voiceSettingsStore";
 import { getVoiceConfig } from "./ai/voice";
-import { ONLINE } from "./online/mode";
 import { JoinForm } from "./editor/sync/JoinForm";
 
 /** 字节数写成人看的样子 */
@@ -54,9 +53,35 @@ function humanDate(iso: string): string {
  * 四块:开始创作、加入别人的项目、拓展功能、本地草稿。没有左侧栏,也没有那排圆形入口。
  *
  * 在线浏览器模式(C10a 契约第 2 节「首屏」):只有「加入别人的项目」—— 在线页面里新建项目、本机草稿、拓展功能
- * 都要编辑器进程(`/api/*`),C10a 不提供(新建与草稿随 C10 其余)。
+ * 都要编辑器进程(`/api/*`),C10a 不提供(新建与草稿随 C10 其余)。在线构建里只留 `OnlineStartPage`,桌面那一页
+ * 连同草稿、拓展功能背后的调用一起剪掉(M8 遗留 L24;写法见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。
  */
-export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
+function JoinSection(props: { onEnterEditor: () => void }): JSX.Element {
+  return (
+    <section className="sp-section" data-pc="start-join">
+      <h2 className="sp-section-title">加入别人的项目</h2>
+      <JoinForm onJoined={props.onEnterEditor} />
+    </section>
+  );
+}
+
+function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
+  return (
+    <div className="sp">
+      <header className="sp-bar">
+        <Logo size={22} />
+        <span className="sp-bar-spacer" />
+      </header>
+      <main className="sp-main"><JoinSection onEnterEditor={props.onEnterEditor} /></main>
+    </div>
+  );
+}
+
+export const StartPage: (props: { onEnterEditor: () => void }) => JSX.Element = ONLINE_BUILD ? OnlineStartPage : DesktopStartPage;
+
+function DesktopStartPage(props: { onEnterEditor: () => void }): JSX.Element {
   const { onEnterEditor } = props;
   const [drafts, setDrafts] = useState<DraftInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,7 +101,7 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
     }
   }, []);
 
-  useEffect(() => { if (!ONLINE) void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh]);
 
   const startNew = () => {
     newProject("未命名");
@@ -125,25 +150,6 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
     }
   };
 
-  const joinSection = (
-    <section className="sp-section" data-pc="start-join">
-      <h2 className="sp-section-title">加入别人的项目</h2>
-      <JoinForm onJoined={onEnterEditor} />
-    </section>
-  );
-
-  if (ONLINE) {
-    return (
-      <div className="sp">
-        <header className="sp-bar">
-          <Logo size={22} />
-          <span className="sp-bar-spacer" />
-        </header>
-        <main className="sp-main">{joinSection}</main>
-      </div>
-    );
-  }
-
   return (
     <div className="sp">
       <header className="sp-bar">
@@ -162,7 +168,7 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
           <span className="sp-hero-sub">新建一个空项目</span>
         </button>
 
-        {joinSection}
+        <JoinSection onEnterEditor={onEnterEditor} />
 
         <section className="sp-section">
           <h2 className="sp-section-title">拓展功能</h2>

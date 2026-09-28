@@ -28,7 +28,10 @@
  *   - 删掉 `PROMPTCUT_DOCSERVICE_URL`、`PROMPTCUT_CLUSTER_TOKEN`、`PROMPTCUT_HEADLESS`、`PROMPTCUT_PUSH`:主机只凭项目凭证
  *     连配置里的文档服务,集群令牌不进数据面。
  *
- * 起来之后打一行 `[render-host] ready {…}`(`GET /api/frames/queue` 的结果,不含凭证)。
+ * 起来之后打一行 `[render-host] ready {…}`(`GET /api/frames/queue` 的结果,不含凭证)。之后每 5 s 看一次诊断,
+ * 节点到文档服务的会话计数(建立、接续、脱开、重建、接续被拒、丢弃、最后一次关闭码与原因)有变化就打一行
+ * `[render-host] session {"nodes":[{ projectId, nodeId, connected, transport, session }]}`(`render-node/session-diag.mjs`
+ * 的 `sessionStatusOf`;不含会话号与凭证)。会话事件本身随 `[queue-node] docservice.session.*` 行转出(源头已节流)。
  *
  * 退出:SIGINT、SIGTERM、SIGBREAK,或经 IPC 收到 `{ type: 'shutdown' }`(探针用;Windows 上别的进程发不了真信号):
  *   1. `POST /api/frames/queue/release`:各节点 `task.release` 手里的认领、停节点、关连接;
@@ -47,6 +50,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { renderHostArgs as parseArgs, renderHostEnv as hostEnv } from '../server/render-node/host.mjs';
+import { sessionStatusOf } from '../server/render-node/session-diag.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -151,6 +155,18 @@ async function main() {
   if (stopping) return;
   say('ready', { port: opts.port, data, queue: summary });
   if (process.send) process.send({ type: 'ready', port: opts.port, queue: summary });
+  // 会话计数有变化才打一行(混沌测试看「接续了几次、丢了几次、是否重建会话」)
+  let lastKey = sessionStatusOf(summary).key;
+  const watch = setInterval(async () => {
+    if (stopping) { clearInterval(watch); return; }
+    try {
+      const q = await getJson(`${editorUrl}/api/frames/queue`, { timeoutMs: 5000 });
+      if (stopping) return;
+      const { key, status } = sessionStatusOf(q.body);
+      if (key !== lastKey) { lastKey = key; say('session', status); }
+    } catch { /* 这一拍没问到,下一拍再看 */ }
+  }, 5000);
+  watch.unref?.();
 }
 
 if (path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) void main();

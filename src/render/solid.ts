@@ -7,7 +7,7 @@
  * 按类名做全文档选择也不成立。根就是带 `data-pc-scene` 的那个 relative div。
  *
  * 坐标:除 `canvasPaintedBox` 外都返回**舞台坐标**(相对根的左上角、按根的布局像素);
- * `canvasPaintedBox` 返回**画布像素坐标**(冻结快照写进 `data-pc-painted-box` 用,
+ * `canvasPaintedBox` 返回**画布像素坐标**(生成快照时写进 `data-pc-painted-box` 用,
  * 同一份共享快照挂到不同位置和框的片段上时各自按 `<img>` 的实际框换算)。
  */
 import { canvasBox, canvasPixels, type CanvasPixels } from "./contentBox";
@@ -59,7 +59,7 @@ const paintedColor = (v: string) => {
   return parts.length < 4 || parseFloat(parts[3]) > 0;
 };
 
-/** 冻结快照里 canvas 换成的 `<img>` 带的 `data-pc-painted-box="x,y,w,h"`(画布像素坐标) */
+/** 生成的快照里 canvas 换成的 `<img>` 带的 `data-pc-painted-box="x,y,w,h"`(画布像素坐标) */
 export function paintedBoxAttr(el: Element): PaintedBox | null {
   const raw = el.getAttribute("data-pc-painted-box");
   if (!raw) return null;

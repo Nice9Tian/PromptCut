@@ -1,7 +1,13 @@
 import type { Transcript, TranscriptSegment } from "../../kernel/project";
 import { getMediaFile } from "./index";
 import { actions } from "../../store/project";
-import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
+import { onlineUnsupported } from "../../online/pageFlag";
+
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线浏览器模式没有本机语音识别
+ * (那要编辑器进程与内置 Python;入口都已置灰),三个入口一进来就报「暂不支持」,在线构建里后面的 /api/stt 调用整段剪掉(M8 遗留 L24)。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 export interface SttEngineStatus {
   installed: boolean;
@@ -47,7 +53,7 @@ export interface SttStatus {
 /** 查询 STT 服务状态(Python 版本、引擎是否安装、可用模型等) */
 export async function sttStatus(): Promise<SttStatus> {
   // 在线浏览器模式没有本机语音识别(那要编辑器进程与内置 Python)
-  if (onlinePage()) throw new Error(onlineUnsupported("语音识别"));
+  if (ONLINE_BUILD) throw new Error(onlineUnsupported("语音识别"));
   const res = await fetch("/api/stt/status");
   if (res.status === 503) {
     const data = await res.json().catch(() => ({}));
@@ -64,6 +70,7 @@ export async function sttInstall(
   engine: string,
   onLog?: (line: string) => void
 ): Promise<{ ok: boolean; log: string[] }> {
+  if (ONLINE_BUILD) throw new Error(onlineUnsupported("语音识别"));
   const res = await fetch("/api/stt/install", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -103,6 +110,7 @@ export async function transcribeMedia(
     p: { done: number; total: number } | { log: string } | { segment: TranscriptSegment }
   ) => void
 ): Promise<Transcript> {
+  if (ONLINE_BUILD) throw new Error(onlineUnsupported("语音识别"));
   const file = getMediaFile(mediaId);
   if (!file) {
     throw new Error("素材文件不在内存里(可能是打开的项目),请重新导入");

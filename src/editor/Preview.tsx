@@ -26,7 +26,7 @@ import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
 import { currentReadyIndex, deliverSnapshots, exemptOnline, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
-import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
+import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
@@ -55,6 +55,7 @@ import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
 import { onCostRecords, onProbeProgress, probeFrameDiag, probeSettledFor, setCostBackend } from "./probeRunner";
+import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
 /** 「进入项目时提示一次当前是低内存档」(c10a 第 8 节):一个页面会话只提示一次 */
@@ -813,11 +814,38 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       stopSnapshotFeed();
     };
   }, [online, lowMem]);
-  /* C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上 */
+  /*
+   * C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上。
+   * M7 D12:task.done 的结果键认定活着、task.failed { error: 'superseded' } 是另一份活着(不是失败),在线来源据此选层表 v 3 的候选。
+   */
   useEffect(() => {
     if (!online) return;
-    return subscribeQueueEvents((m) => { if (m.type === "task.done") onlineSourceRef.current?.refresh(); });
+    return subscribeQueueEvents((m) => {
+      if (m.type !== "task.done" && m.type !== "task.failed") return;
+      onlineSourceRef.current?.noteQueueEvent(m);
+      if (m.type === "task.done") onlineSourceRef.current?.refresh();
+    });
   }, [online]);
+  /*
+   * M7(契约第 2 节):在线普通档的后台舞台在闲时兼做纯浏览器渲染节点。当不当节点由宿主每拍按条件判
+   * (在线构建且嵌了代码版本、普通档、两个跨源舞台都握上手、Chromium、以成员身份连着云端项目、测量落定)。
+   */
+  useEffect(() => {
+    if (!online || lowMem) return;
+    return startBrowserNodeHost({
+      eligibility: () => ({
+        online: ONLINE,
+        codeVersion: CODE_VERSION,
+        lowMemory: lowMemRef.current,
+        stageLayout: dualRef.current && onlineStageState().handshake === "ok" ? "dual" : "single",
+        userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
+        member: !!currentSharedLink() && hasDocLink(),
+        measured: probeSettledFor(getState().project),
+      }),
+      projectId: () => (currentSharedLink() ? currentDocProjectId() || null : null),
+      onAlive: (resultKey) => onlineSourceRef.current?.markAlive(resultKey),
+    });
+  }, [online, lowMem]);
   /*
    * C10 契约第 7 节、第 18 节第 9 条:在线普通档自己发布清单计划 —— 测量落定后发、防抖、项目每次改动(文档服务确认的版本变了)
    * 或清单变了就重发;清单是页面自己判重的片段(预渲染集合,去掉这台设备显示不了的用户卡、图卡)。没人认领不报错。
@@ -836,7 +864,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         return !!clip && !!clip.cardId && !needsLocalPc(clip.cardId, getCard(clip.cardId), isUserCard);
       });
     };
-    const publisher = createPlanPublisher({ request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION });
+    const publisher = createPlanPublisher({
+      request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION,
+      // M7:本页当纯浏览器节点时,这一版的清单计划等节点报到完(拿到指纹)再发,最多 3 s(契约第 3.3 节)
+      nodeReady: browserNodeReady,
+      // M7 D6:发之前把这一版的已确认项目按版本号留在内存,执行细任务时用任务的 projectRev 那一版
+      onPublish: () => {
+        const ds = currentSharedLink()?.ds;
+        if (ds) keepConfirmedProject(ds.rev, ds.confirmedProject);
+      },
+    });
+    const offNodeReady = subscribeBrowserNodeReady(() => publisher.nodeChanged());
     let link: unknown = null;
     let lastKey = "";
     const version = () => ({ projectId: currentDocProjectId() || null, projectRev: currentSharedLink()?.ds.rev ?? null });
@@ -857,7 +895,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     check();
     const w = window as unknown as Record<string, unknown>;
     w.__pcPlanPublisher = () => publisher.debug();
-    return () => { offProbe(); window.clearInterval(timer); publisher.dispose(); delete w.__pcPlanPublisher; };
+    return () => { offProbe(); offNodeReady(); window.clearInterval(timer); publisher.dispose(); delete w.__pcPlanPublisher; };
   }, [online, lowMem]);
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
 
@@ -1102,6 +1140,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       swapInFlight: swapInFlight(),
       swapLog: stageSwapDebug(),
       swapTrace: stageSwapTrace(),
+      // 播放态互换的发起判断(整场景估时 / 追不上不发起)与停下时的让路次数
+      swapPlaying: stageSwapPlayingDebug(),
       setTimeLog: setTimeLogRef.current.slice(),
       setTimeError: setTimeErrorRef.current,
       // 低内存档停下追一帧的上一次结果(c10a 契约第 17 节;c10a-demo-probe 读它)

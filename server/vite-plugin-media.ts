@@ -277,7 +277,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
  * 页面管的几条(同源,`/api/**` 守卫照旧):
  * - `POST /api/media/remote { base, ticket }`:设当前连接的远程素材服务(null / DELETE 清掉);`GET` 看状态;
  * - `POST /api/media/prefetch { items: [{ hash }] }`:换一份预取清单(有序);
- * - `POST /api/media/originals { hashes }`:这些原片在当前素材服务上哪些还没 `complete`(导出前的拦截)。
+ * - `POST /api/media/originals { hashes }`:这些素材原尺寸在当前素材服务上哪些还没 `complete`(导出前的拦截)。
  */
 async function handlePullApi(req: Connect.IncomingMessage, res: ServerResponse, root: string): Promise<boolean> {
   const url = String(req.url || "").split("?")[0];
@@ -518,7 +518,7 @@ export function mediaTierService(root: string, { withQueue = true }: { withQueue
   return pending;
 }
 
-/** 导入(`?tiers=1`)之后:视频做重封装判定、排小版;回包字段 */
+/** 导入(`?tiers=1`)之后:视频做重封装判定、排素材小尺寸;回包字段 */
 async function prepareTiers(root: string, stored: StoredMedia) {
   const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
   const out = await service.manager.prepareImport(stored);
@@ -548,7 +548,7 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
         stored = prepared.stored;
         if (prepared.tiers) extra = { tiers: prepared.tiers, small: prepared.small, remux: prepared.remux };
       } catch (err) {
-        // 两档出了问题不挡导入:照原来的回包,只有原片一档
+        // 两档出了问题不挡导入:照原来的回包,只有素材原尺寸一档
         tiersLog("tiers.prepare-failed", { hash: stored.hash, message: err instanceof Error ? err.message : String(err) });
       }
     }
@@ -767,9 +767,9 @@ export function mediaMiddleware(root: string) {
       }
     }
 
-    // POST /api/media/tiers/backfill { items: [{ hash, name? }] } —— 打开项目时补转小版(C6.6 设计稿第 9 节第 2 条):
-    // 本地内容库里有这份原片的视频排进后台转码,回 { ok, items: { [hash]: { state, small? } } };
-    // 本地没有原片的回 state: 'absent'(不为了转小版去拉原片)
+    // POST /api/media/tiers/backfill { items: [{ hash, name? }] } —— 打开项目时补转素材小尺寸(C6.6 设计稿第 9 节第 2 条):
+    // 本地内容库里有这份素材原尺寸的视频排进后台转码,回 { ok, items: { [hash]: { state, small? } } };
+    // 本地没有素材原尺寸的回 state: 'absent'(不为了转素材小尺寸去拉素材原尺寸)
     if (req.method === "POST" && req.url.split("?")[0] === "/api/media/tiers/backfill") {
       try {
         const body = await readJsonBody(req);
@@ -790,9 +790,9 @@ export function mediaMiddleware(root: string) {
       }
     }
 
-    // GET /api/media/tiers?hashes=a,b —— 这些原片的小版情况(C6.6):{ ok, items: { [原片]: { state, small? } } }。
-    // state:pending(在转)、ready(small 是小版哈希)、failed、none(没有视频流)、unknown(本机没登记过)。
-    // 页面导入后按它把小版哈希写进 project.media[i].tiers.small;这不是同步状态(传没传完只问素材服务的 chunks)
+    // GET /api/media/tiers?hashes=a,b —— 这些素材原尺寸的素材小尺寸情况(C6.6):{ ok, items: { [素材原尺寸]: { state, small? } } }。
+    // state:pending(在转)、ready(small 是素材小尺寸哈希)、failed、none(没有视频流)、unknown(本机没登记过)。
+    // 页面导入后按它把素材小尺寸哈希写进 project.media[i].tiers.small;这不是同步状态(传没传完只问素材服务的 chunks)
     if (req.method === "GET" && req.url.startsWith("/api/media/tiers")) {
       const query = new URL(req.url, "http://promptcut.local").searchParams;
       const asked = (query.get("hashes") || "").split(",").map((h) => h.trim().toLowerCase()).filter(isMediaHash).slice(0, 200);
@@ -840,7 +840,7 @@ export function mediaMiddleware(root: string) {
       }
     }
 
-    // C6.6:当前连接的远程素材服务、预取清单、导出前的原片检查
+    // C6.6:当前连接的远程素材服务、预取清单、导出前的素材原尺寸检查
     if (req.url.startsWith("/api/media/remote") || req.url.startsWith("/api/media/prefetch") || req.url.startsWith("/api/media/originals")) {
       if (await handlePullApi(req, res, root)) return;
     }
@@ -910,7 +910,7 @@ export function mediaPlugin(): Plugin {
       server.middlewares.use((req, res, next) => { void asset(req, res, () => { void handler(req, res, next); }); });
 
       // 两档素材与上传队列(C6.6):只在编辑器进程(ui)里跑。预渲染进程不导入素材;无头实例是临时副本,
-      // 和用户的编辑器共用同一个 out/,不接着转别人的小版、不起上传队列(它导入时照样生成小版,见 prepareTiers)。
+      // 和用户的编辑器共用同一个 out/,不接着转别人的素材小尺寸、不起上传队列(它导入时照样生成素材小尺寸,见 prepareTiers)。
       const { isPrerender } = await import("./render-role.mjs");
       if (!isPrerender && process.env.PROMPTCUT_HEADLESS !== "1") {
         void mediaTierService(root).then((service) => {
@@ -941,8 +941,8 @@ export function mediaPlugin(): Plugin {
               token: process.env.PROMPTCUT_CLUSTER_TOKEN || null,
               urls,
               log: (event: string, fields: object) => {
-                // WebSocket 端点的重连日志太密,只留连上、断开和本模块自己的
-                if (event.startsWith("asset-announce.") || event === "ws.open" || event === "ws.close") console.info("[asset-announce]", event, JSON.stringify(fields));
+                // 会话端点的重试日志太密,只留会话建成、结束、传输脱开与接续和本模块自己的
+                if (event.startsWith("asset-announce.") || event === "session.open" || event === "session.close" || event === "session.detach" || event === "session.resume") console.info("[asset-announce]", event, JSON.stringify(fields));
               },
             });
             httpServer.once("close", () => {

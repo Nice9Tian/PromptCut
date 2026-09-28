@@ -93,7 +93,7 @@ test('snapshotCode covers only the snapshot files and reports missing ones deter
   };
   await write('server/bakery/chrome.mjs', 'freeze v1');
   await write('server/bakery/capture-snapshot.mjs', 'restore v1');
-  // 截图相关但和冻结无关的文件不进指纹。
+  // 截图相关但和生成快照无关的文件不进指纹。
   await write('server/bakery/capture-frame.mjs', 'shot v1');
   const first = snapshotCode(root);
   await write('server/bakery/capture-frame.mjs', 'shot v2');
@@ -102,7 +102,7 @@ test('snapshotCode covers only the snapshot files and reports missing ones deter
   await write('server/bakery/chrome.mjs', 'freeze v2');
   invalidateFrameCode(root);
   assert.notEqual(snapshotCode(root), first, 'changing snapshot code must change the key');
-  // J1:冻结逻辑搬进 src/ 之后集合不变,但那两个文件从 'missing' 变成有内容,
+  // J1:生成快照的逻辑搬进 src/ 之后集合不变,但那两个文件从 'missing' 变成有内容,
   // 指纹必然变一次 —— 这正是搬家那一刻该发生的事。
   await write('src/render/createSnapshot.ts', 'export function createSnapshot() {}');
   invalidateFrameCode(root);

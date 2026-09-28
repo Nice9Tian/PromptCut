@@ -8,7 +8,7 @@
  * 每一处假设用「假设 K<n>」标出，报告 `docs/archive/agent-reports/AGENT-c66-tests.md` 按同样的编号列出。
  *
  *   K1  两档生成：新模块 `server/media-tiers.mjs`（设计稿第 2 节没点名文件）导出
- *       - `makeSmallTier({ ffmpeg, input, output })`：把 `input` 转成小版写到 `output`（mp4），resolve 即完成；
+ *       - `makeSmallTier({ ffmpeg, input, output })`：把 `input` 转成素材小尺寸写到 `output`（mp4），resolve 即完成；
  *       - `hasFaststart(file)`：ISO BMFF（mp4 / mov / m4v）按顶层 box 顺序判，`moov` 在首个 `mdat` 前 → true，
  *         否则 false；不是 ISO BMFF（MKV、AVI 等）→ null（「不适用」）。可同步也可异步；
  *       - `ensureFaststart({ ffmpeg, input, workDir })` → `{ path, remuxed }`：需要就 `-c copy -movflags +faststart`
@@ -27,7 +27,7 @@
  *   K3  导出拦截：新模块 `server/export-gate.mjs` 导出 `checkExportOriginals({ project, has })`：
  *       `has(hash) → Promise<boolean>` 是「当前素材服务上这个哈希 complete 没有」；
  *       回 `{ ok: true }` 或 `{ ok: false, message, missing: [{ mediaId, hash, name? }] }`（另带 `code` 也行，测试不看），
- *       `message` 里有「等待上传方」。只看被片段引用的素材的**原片**（`tiers.original`，没有 tiers 就是 `hash`）。
+ *       `message` 里有「等待上传方」。只看被片段引用的素材的**素材原尺寸**（`tiers.original`，没有 tiers 就是 `hash`）。
  *   K4  可播性：仍是 `src/render/playability.ts`，导出名不变（`probePlayable(hash, url, ext, kind)`、
  *       `playableOnThisHost`、`rememberPlayable`、`forgetPlayable`）；浏览器主版本取自 `navigator.userAgent`
  *       （`Chrome/<n>`、`Firefox/<n>`、`Version/<n> Safari`），`localStorage` 里存结论的键包含哈希与主版本号；
@@ -49,7 +49,7 @@
  *
  * 上面 K1～K5 是测试方写时的假设；实际模块名与形状不同的，由下面各 `load*` 适配成假设的形状，用例本身不动：
  *   K1  `server/media-tiers.mjs`：`makeSmallVersion`（回 `{ ok }`，不抛）、`faststartState`（四态字符串）、
- *       `remuxIfNeeded`（写到调用方给的 `output`）、`createTierManager`（在本地内容库里做导入：重封装、排小版、登记）。
+ *       `remuxIfNeeded`（写到调用方给的 `output`）、`createTierManager`（在本地内容库里做导入：重封装、排素材小尺寸、登记）。
  *       `prepareTiers` 用一个临时内容库 + 真的 `createTierManager().prepareImport()` + `idle()` 拼出来。
  *   K2  `server/upload-queue.mjs` 的 `createUploadQueue({ file, target, resolveFile })`：素材服务客户端由
  *       `server/asset-store/client.mjs` 的 `createAssetClient({ base, fetch, chunkSize })` 建；档位是数组 `[{ tier, hash, ext }]`；
@@ -189,8 +189,8 @@ export function boxFaststart(file) {
  *   prores    1280×720 ProRes MOV + PCM（ffmpeg 的 mov 缺省就是晚置 moov）
  *   mkv       640×360 H.264 MKV
  *   fps120    640×360、120 fps、1 s，无音轨
- *   odd       1001×777、yuv444p（小版要换成 yuv420p、偶数尺寸）
- *   portrait  1920×1080 画面 + 显示旋转 90°（-autorotate 后小版是竖的）
+ *   odd       1001×777、yuv444p（素材小尺寸要换成 yuv420p、偶数尺寸）
+ *   portrait  1920×1080 画面 + 显示旋转 90°（-autorotate 后素材小尺寸是竖的）
  *   noAudio   640×360、无音轨（不放大）
  *   png       320×240 一帧图片
  *   m4a       2 s 正弦 AAC
@@ -234,7 +234,7 @@ export async function loadTiers() {
   const createTierManager = pick(mod, ['createTierManager'], file);
   const makeSmall = async ({ ffmpeg: f, input, output }) => {
     const r = await makeSmallVersion({ ffmpeg: f, input, output });
-    if (!r?.ok) throw new Error(`makeSmallVersion 没生成小版：${r?.reason}`);
+    if (!r?.ok) throw new Error(`makeSmallVersion 没生成素材小尺寸：${r?.reason}`);
     return r;
   };
   const hasFaststartFn = async (f) => {
@@ -248,7 +248,7 @@ export async function loadTiers() {
     return r.state === 'remuxed' ? { path: output, remuxed: true } : { path: input, remuxed: false };
   };
   const prepareFn = async ({ ffmpeg: f, input, workDir }) => {
-    // 临时本地内容库：把源文件按哈希放进去（同导入），再走真的 prepareImport + 后台小版
+    // 临时本地内容库：把源文件按哈希放进去（同导入），再走真的 prepareImport + 后台素材小尺寸
     const dir = path.join(workDir, 'lib');
     fs.mkdirSync(dir, { recursive: true });
     const ext = path.extname(input).slice(1).toLowerCase();

@@ -9,3 +9,14 @@ export function catchUpEstimateMs(
   record: Partial<CardCostRecord> | null | undefined,
   frames: number,
 ): number;
+
+/** 整场景补跑的代价：推到 `t` 的积压（毫秒）与此后每秒时间线的墙钟（毫秒 / 秒）。见 `.mjs` 注释 */
+export function sceneCatchUpCost(
+  entries: readonly { start: number; end: number; record?: Partial<CardCostRecord> | null }[],
+  t: number,
+  fps: number,
+  activeAt?: (entry: { start: number; end: number }, t: number) => boolean,
+): { backlogMs: number; ratePerSec: number };
+
+/** 播放态互换的目标拍要领先多少毫秒；后台推帧比播放慢（追不上）回 null */
+export function playingLeadMs(backlogMs: number, ratePerSec: number): number | null;

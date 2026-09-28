@@ -11,8 +11,8 @@
  *   2. ProRes 422 HQ 的 MOV(10 bit,无音轨);
  *   3. 640×360 的 H.264 MP4,刻意不加 `+faststart`(晚置 moov)。
  * 按页面导入的同一个请求(`POST /api/media/upload/<名字>?tiers=1`)依次导入 A,然后核对:
- *   - 重封装:三个都缺 faststart,都重封装了;新哈希 ≠ 源文件 sha256;库里的原片 moov 在前、各流编码与源文件相同;
- *   - 小版:A 的 `GET /api/media/tiers` 报 ready;小版 ≤ 800×600、H.264、faststart;不放大;
+ *   - 重封装:三个都缺 faststart,都重封装了;新哈希 ≠ 源文件 sha256;库里的素材原尺寸 moov 在前、各流编码与源文件相同;
+ *   - 素材小尺寸:A 的 `GET /api/media/tiers` 报 ready;素材小尺寸 ≤ 800×600、H.264、faststart;不放大;
  *   - 队列:A 的上传队列清空;日志里的顺序是「逐个素材、先小后大」(`upload.tier-start` / `tier-done` / `item-done`);
  *   - R 上六个哈希(三个素材 × 两档)的 `chunks` 各自 `complete: true`,取回的字节 sha256 对得上;
  *   - T4(C6.6 集成加):A 上开一个编辑器页面,导入、转码、上传期间每 120 ms 编辑一次,
@@ -154,7 +154,25 @@ try {
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 300)));
   await page.goto(`${A.origin}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded' });
-  await until('[a] 页面与舞台起来、测量遮罩退下', () => page.evaluate(() => document.querySelectorAll('iframe').length >= 2 && !document.querySelector('[data-pc="probe-gate"]')), 300_000);
+  await until('[a] 页面与舞台起来', () => page.evaluate(() => document.querySelectorAll('iframe').length >= 2), 300_000);
+  // 测量遮罩在页面起来约 3 s 后才出现(docs/reports/AGENT-perf-t4.md「没做的与建议」第 3 条):只等「没有遮罩」
+  // 会在它出现之前就放行,测量和后面的静置、对照窗口叠在一起。所以先等测量开始(遮罩出现,或 probeRunner 报 running),
+  // 再等它结束(遮罩退下且不再 running)。项目里没有要测的卡时测量根本不开始:等满 GATE_APPEAR_MS 没见到就照常往下走。
+  const gateState = () => page.evaluate(async () => {
+    const gate = !!document.querySelector('[data-pc="probe-gate"]');
+    let running = false;
+    try { running = !!(await import('/src/editor/probeRunner.ts')).probeProgress().running; } catch { /* 取不到就只看遮罩 */ }
+    return { gate, running };
+  });
+  const GATE_APPEAR_MS = 30_000;
+  const gateSeen = await until('[a] 测量开始(遮罩出现)', async () => { const s = await gateState(); return s.gate || s.running ? s : null; }, GATE_APPEAR_MS, 100);
+  if (gateSeen) {
+    await until('[a] 测量结束、遮罩退下', async () => { const s = await gateState(); return !s.gate && !s.running; }, 300_000, 200);
+    out.probeGate = 'shown-then-gone';
+  } else {
+    if (fails.at(-1) === '超时:[a] 测量开始(遮罩出现)') fails.pop(); // 没见到遮罩不算失败:这个项目没有要测的卡
+    out.probeGate = 'never-shown';
+  }
   // 页面打开时把上传目标交回缺省({ base: null } → PROMPTCUT_ASSET_URL):目标仍是 R
   await delay(5000);
   const q1 = await (await fetch(`${A.origin}/api/media/upload-queue`)).json();
@@ -214,9 +232,9 @@ try {
     s.body = body;
     s.importMs = Date.now() - t0;
   }
-  // ---- 小版 ----
+  // ---- 素材小尺寸 ----
   const hashes = SOURCES.map((s) => s.body.hash);
-  const tiers = await until('小版全部生成', async () => {
+  const tiers = await until('素材小尺寸全部生成', async () => {
     const j = await (await fetch(`${A.origin}/api/media/tiers?hashes=${hashes.join(',')}`)).json();
     return hashes.every((h) => j.items[h]?.state && j.items[h].state !== 'pending') ? j.items : null;
   }, TIMEOUT_MS);
@@ -228,17 +246,17 @@ try {
     const row = { name: s.name, src: s.sha.slice(0, 12), original: b.hash?.slice(0, 12), small: rec.small?.slice(0, 12) ?? null, remux: b.remux?.state, smallState: rec.state, importMs: s.importMs };
     check(b.ok === true && b.tiers?.original === b.hash, `${s.name} 回包有 tiers.original`, b);
     check(b.remux?.state === 'remuxed' && b.remux.from === s.sha && b.hash !== s.sha, `${s.name} 重封装、按输出哈希入库`, b.remux);
-    // 原片:从 A 取回,moov 在前,编码与源文件相同
+    // 素材原尺寸:从 A 取回,moov 在前,编码与源文件相同
     const origFile = path.join(dl, `${b.hash}.${b.ext}`);
     const origBytes = Buffer.from(await (await fetch(`${A.origin}/@media/${b.hash}`)).arrayBuffer());
     await fs.writeFile(origFile, origBytes);
     row.originalFaststart = await faststartState(origFile);
     row.originalCodecs = ffprobe(origFile).streams.map((x) => `${x.codec_type}:${x.codec_name}`);
-    check(sha(origBytes) === b.hash, `${s.name} 原片字节与哈希相符`);
-    check(row.originalFaststart === 'faststart', `${s.name} 原片 moov 在前`, row.originalFaststart);
-    check(JSON.stringify(row.originalCodecs) === JSON.stringify(s.codecs), `${s.name} 原片编码不变`, { src: s.codecs, got: row.originalCodecs });
-    // 小版
-    check(rec.state === 'ready' && /^[0-9a-f]{64}$/.test(rec.small ?? ''), `${s.name} 小版 ready`, rec);
+    check(sha(origBytes) === b.hash, `${s.name} 素材原尺寸字节与哈希相符`);
+    check(row.originalFaststart === 'faststart', `${s.name} 素材原尺寸 moov 在前`, row.originalFaststart);
+    check(JSON.stringify(row.originalCodecs) === JSON.stringify(s.codecs), `${s.name} 素材原尺寸编码不变`, { src: s.codecs, got: row.originalCodecs });
+    // 素材小尺寸
+    check(rec.state === 'ready' && /^[0-9a-f]{64}$/.test(rec.small ?? ''), `${s.name} 素材小尺寸 ready`, rec);
     if (rec.small) {
       const smallFile = path.join(dl, `${rec.small}.mp4`);
       await fs.writeFile(smallFile, Buffer.from(await (await fetch(`${A.origin}/@media/${rec.small}`)).arrayBuffer()));
@@ -247,10 +265,10 @@ try {
       row.smallSize = `${v.width}x${v.height}`;
       row.smallCodec = v.codec_name;
       row.smallFaststart = await faststartState(smallFile);
-      check(v.codec_name === 'h264', `${s.name} 小版 H.264`, v.codec_name);
-      check(v.width <= 800 && v.height <= 600 && v.width % 2 === 0 && v.height % 2 === 0, `${s.name} 小版 ≤ 800×600 且偶数`, row.smallSize);
-      check(v.width <= srcV.width && v.height <= srcV.height, `${s.name} 小版不放大`, row.smallSize);
-      check(row.smallFaststart === 'faststart', `${s.name} 小版 faststart`, row.smallFaststart);
+      check(v.codec_name === 'h264', `${s.name} 素材小尺寸 H.264`, v.codec_name);
+      check(v.width <= 800 && v.height <= 600 && v.width % 2 === 0 && v.height % 2 === 0, `${s.name} 素材小尺寸 ≤ 800×600 且偶数`, row.smallSize);
+      check(v.width <= srcV.width && v.height <= srcV.height, `${s.name} 素材小尺寸不放大`, row.smallSize);
+      check(row.smallFaststart === 'faststart', `${s.name} 素材小尺寸 faststart`, row.smallFaststart);
     }
     out.imports.push(row);
   }

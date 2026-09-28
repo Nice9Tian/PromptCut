@@ -20,12 +20,14 @@ test("七种事件各只认一个角色发来的(E0:不过滤就会在互换那�
   assert.equal(stageEventRole("mediaReady"), "back");
   assert.equal(stageEventRole("probe"), "back");
   assert.equal(stageEventRole("probe-frame"), "back");
+  // M7:生成快照的产出只认后台舞台
+  assert.equal(stageEventRole("bake-frame"), "back");
 });
 
-test("事件白名单就是这七种,一个不多一个不少", () => {
+test("事件白名单就是这八种(E0 的七种 + M7 的 bake-frame),一个不多一个不少", () => {
   assert.deepEqual(
     [...STAGE_EVENT_TYPES].sort(),
-    ["demote", "ended", "frame", "mediaReady", "probe", "probe-frame", "settled"],
+    ["bake-frame", "demote", "ended", "frame", "mediaReady", "probe", "probe-frame", "settled"],
   );
   // 每一种都能分到一个角色:漏一种,那种事件就会被两个舞台都当成自己的
   for (const type of STAGE_EVENT_TYPES) assert.ok(stageEventRole(type) === "front" || stageEventRole(type) === "back");

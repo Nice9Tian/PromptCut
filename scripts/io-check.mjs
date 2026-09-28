@@ -3,6 +3,15 @@ import fs from 'fs';
 import path from 'path';
 import { PNG } from 'pngjs';
 
+// 地址必须显式给(--url <地址> 或环境变量 PROMPTCUT_BASE),不给就报用法退出:
+// 永不缺省连用户常驻的编辑器(5190～5192)。
+const urlArg = process.argv.indexOf('--url');
+const BASE = ((urlArg >= 0 ? process.argv[urlArg + 1] : '') || process.env.PROMPTCUT_BASE || '').replace(/\/+$/, '');
+if (!BASE || BASE.startsWith('--')) {
+  console.error('用法: node scripts/io-check.mjs --url http://127.0.0.1:<自己起的 dev server 端口>\n  或设环境变量 PROMPTCUT_BASE。不给地址不跑:不缺省连用户常驻的编辑器。');
+  process.exit(2);
+}
+
 (async () => {
   console.log('Launching Puppeteer...');
   const browser = await puppeteer.launch({ headless: true });
@@ -18,8 +27,8 @@ import { PNG } from 'pngjs';
     console.log(`Export Progress: ${done}/${total}`);
   });
 
-  console.log('Opening http://127.0.0.1:5190/');
-  await page.goto('http://127.0.0.1:5190/');
+  console.log(`Opening ${BASE}/`);
+  await page.goto(`${BASE}/`);
 
   console.log('Waiting for window.__pcIo and initial clips...');
   await page.waitForFunction(() => {

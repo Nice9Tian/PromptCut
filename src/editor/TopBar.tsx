@@ -34,12 +34,18 @@ import { isViewOnly } from "./io/viewOnly";
 import { SyncChips } from "./sync/SyncChips";
 import { BackupsDialog } from "./sync/BackupsDialog";
 import { useSync, whenSaved } from "./sync/syncManager";
-import { ONLINE } from "../online/mode";
 import { onlineUnsupported } from "../online/pageFlag";
 import "../ui/toolbar.css";
 
 /** 在线浏览器模式里置灰的项目菜单项:都要编辑器进程(草稿、另存、本地备份),C10a 不提供(契约第 2 节) */
 const ONLINE_OFF = (entry: string): string => onlineUnsupported(entry);
+
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `mode.ts` 的 `ONLINE`。
+ * 在线页面上置灰的项(新建、打开、保存、打包保存、SKILL)背后的函数在在线构建里换成空函数,
+ * 连同草稿、打包、Skill 对话框背后的 /api 调用一起剪掉(M8 遗留 L24)。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 /** 顶栏宽度档位:宽档(全部展开)、中档(图标收缩)、窄档(折叠更多菜单) */
 type BarTier = "wide" | "icon" | "narrow";
@@ -327,7 +333,7 @@ export function TopBar() {
    * await;先去存草稿再弹窗,手势就过期了,浏览器会直接抛 SecurityError。
    * 用户点取消就整个不算保存:草稿不写、脏标记不清,和「我没保存」一致。
    */
-  const saveProject = async () => {
+  const saveProject = ONLINE_BUILD ? async () => {} : async () => {
     const fileName = `${name}${PROC_EXT}`;
     try {
       // 挑好落点之后、写之前:等文档服务确认完所有本地修改(语义「页面只在拿到确认之后才写」),再序列化
@@ -366,7 +372,7 @@ export function TopBar() {
    * 装包(从本地内容库按哈希取素材)只能排在挑好落点之后。包里素材按内容哈希去重,
    * 同一份素材被几条片段引用也只有一份字节。
    */
-  const savePackedProject = async () => {
+  const savePackedProject = ONLINE_BUILD ? async () => {} : async () => {
     const fileName = `${name}${PROCP_EXT}`;
     let target: FileSystemFileHandle | null = null;
     try {
@@ -409,7 +415,7 @@ export function TopBar() {
   const exportProject = async () => {
     const project = getState().project;
     // C6.6:按轮询到的集合先判一次(不发请求,不耽误下面「另存为」要的用户手势);
-    // 原片还没传完就不弹另存为,直接提示等待上传方。exportVideo 里还会再问一遍素材服务
+    // 素材原尺寸还没传完就不弹另存为,直接提示等待上传方。exportVideo 里还会再问一遍素材服务
     const pending = exportGateNow(project);
     if (pending && pending.length) {
       setExportState({ phase: "error", done: 0, total: 1, target: "", message: awaitingUploaderMessage(pending) });
@@ -470,7 +476,7 @@ export function TopBar() {
   };
 
   /** 新建项目:清空当前编排,并断开草稿绑定(保存时会新开一份) */
-  const createProject = () => {
+  const createProject = ONLINE_BUILD ? () => {} : () => {
     if (dirty && !confirm("当前项目还有未保存的改动，新建会丢掉它们。继续？")) return;
     newProject();
     setActiveDraftId(null);
@@ -481,7 +487,7 @@ export function TopBar() {
    * 只认裸 Project 和 {cards} 编排,拿它开 .proc 会直接报「无法识别」—— 所以 .proc 走
    * loadProc(连剧本和对话一起灌回去),其余的旧 JSON 才交给 importProjectFile。
    */
-  const openProjectFile = async (file: File) => {
+  const openProjectFile = ONLINE_BUILD ? async (_file: File) => {} : async (file: File) => {
     if (dirty && !confirm("当前项目还有未保存的改动，打开别的项目会丢掉它们。继续？")) return;
     // .procp 是「编排 + 素材」的 zip 包(A1):先把素材按哈希拆进本地内容库,
     // 再拿里面那条 project.proc 走和 .proc 完全一样的路。不能先 file.text() ——
@@ -518,7 +524,7 @@ export function TopBar() {
    * (曾经这里是拿当前项目当基线的 —— 那样「我有、对方没有」的每张卡都被判成对方删掉的,
    * 挑一份不相干的 .proc 会把整个项目清空替换。见 io/combineImport.ts。)
    */
-  const mergeFromFile = async (file: File) => {
+  const mergeFromFile = ONLINE_BUILD ? async (_file: File) => {} : async (file: File) => {
     try {
       const report = applyCombine(await file.text(), null);
       alert(`已把「${file.name}」合并到当前项目(记得保存):
@@ -538,16 +544,16 @@ ${summarizeCombine(report)}
       const command = (event as CustomEvent<string>).detail;
       switch (command) {
         // 在线页面:这几项在菜单里都置灰(C10 契约第 10 节),标题栏菜单发来的同名命令同样不做
-        case "new-project": if (!ONLINE) createProject(); break;
-        case "open-project": if (!ONLINE) projectInput.current?.click(); break;
-        case "save-project": if (!viewOnly && !ONLINE) void saveProject(); break;
+        case "new-project": if (!ONLINE_BUILD) createProject(); break;
+        case "open-project": if (!ONLINE_BUILD) projectInput.current?.click(); break;
+        case "save-project": if (!viewOnly && !ONLINE_BUILD) void saveProject(); break;
         case "export-video": void run(exportProject)(); break;
         case "go-home": goHome(); break;
         case "undo": actions.undo(); break;
         case "redo": actions.redo(); break;
         case "open-skin": setSkinOpen(true); break;
-        case "open-voice": if (!ONLINE) openVoiceSettings(); break;
-        case "merge-project": if (!ONLINE) mergeInput.current?.click(); break;
+        case "open-voice": if (!ONLINE_BUILD) openVoiceSettings(); break;
+        case "merge-project": if (!ONLINE_BUILD) mergeInput.current?.click(); break;
         case "shortcuts": alert("空格 播放/暂停\nCtrl/Cmd + Z 撤销\nCtrl/Cmd + Shift + Z 重做\nCtrl/Cmd + Y 重做\nDelete 删除选中片段"); break;
         case "about": alert("PromptCut\nAI 视频编辑器"); break;
       }
@@ -668,10 +674,13 @@ ${summarizeCombine(report)}
             type="button"
             className="pc-btn"
             style={{ width: "100%", justifyContent: "flex-start" }}
-            title="挑一份 .proc,把它的改动三方合并进当前项目"
+            data-pc="menu-merge-skill"
+            // 在线页面:合并要把 .proc 里带的卡装进本机卡片目录(编辑器进程),在线做不成(C10 契约第 10 节〔裁〕),置灰
+            disabled={ONLINE_BUILD}
+            title={ONLINE_BUILD ? ONLINE_OFF("合并 Skill 结果") : "挑一份 .proc,把它的改动三方合并进当前项目"}
             onClick={() => {
               setMenuOpen(false);
-              mergeInput.current?.click();
+              if (!ONLINE_BUILD) mergeInput.current?.click();
             }}
           >
             <IconImport />
@@ -698,11 +707,11 @@ ${summarizeCombine(report)}
             left: Math.max(8, Math.min(projRect?.left ?? 0, window.innerWidth - 248)),
           }}
         >
-          <button type="button" role="menuitem" className="pc-proj-item" disabled={ONLINE} title={ONLINE ? ONLINE_OFF("新建项目") : undefined} onClick={() => { setProjOpen(false); createProject(); }}>
+          <button type="button" role="menuitem" className="pc-proj-item" disabled={ONLINE_BUILD} title={ONLINE_BUILD ? ONLINE_OFF("新建项目") : undefined} onClick={() => { setProjOpen(false); createProject(); }}>
             <IconNew />
             <span className="pc-proj-text"><b>新建项目</b><small>开一个空项目</small></span>
           </button>
-          <button type="button" role="menuitem" className="pc-proj-item" disabled={ONLINE} title={ONLINE ? ONLINE_OFF("打开项目") : undefined} onClick={() => { setProjOpen(false); projectInput.current?.click(); }}>
+          <button type="button" role="menuitem" className="pc-proj-item" disabled={ONLINE_BUILD} title={ONLINE_BUILD ? ONLINE_OFF("打开项目") : undefined} onClick={() => { setProjOpen(false); projectInput.current?.click(); }}>
             <IconOpen />
             <span className="pc-proj-text"><b>打开项目…</b><small>{PROC_EXT} 项目文件</small></span>
           </button>
@@ -710,8 +719,8 @@ ${summarizeCombine(report)}
             type="button"
             role="menuitem"
             className="pc-proj-item"
-            disabled={viewOnly || ONLINE}
-            title={ONLINE ? ONLINE_OFF("保存项目") : viewOnly ? "只读查看模式:改不了这个项目" : undefined}
+            disabled={viewOnly || ONLINE_BUILD}
+            title={ONLINE_BUILD ? ONLINE_OFF("保存项目") : viewOnly ? "只读查看模式:改不了这个项目" : undefined}
             onClick={() => { setProjOpen(false); void saveProject(); }}
           >
             <IconSave />
@@ -722,8 +731,8 @@ ${summarizeCombine(report)}
             type="button"
             role="menuitem"
             className="pc-proj-item"
-            disabled={viewOnly || ONLINE}
-            title={ONLINE ? ONLINE_OFF("打包保存") : viewOnly ? "只读查看模式:改不了这个项目" : "编排和素材打成一个包,换台机器直接打开"}
+            disabled={viewOnly || ONLINE_BUILD}
+            title={ONLINE_BUILD ? ONLINE_OFF("打包保存") : viewOnly ? "只读查看模式:改不了这个项目" : "编排和素材打成一个包,换台机器直接打开"}
             onClick={() => { setProjOpen(false); void savePackedProject(); }}
           >
             <IconSave />
@@ -732,7 +741,7 @@ ${summarizeCombine(report)}
           <div className="pc-proj-sep" role="separator" />
           <button type="button" role="menuitem" className="pc-proj-item" data-pc="menu-backups" onClick={() => { setProjOpen(false); setBackupsOpen(true); }}>
             <IconSave />
-            <span className="pc-proj-text"><b>本地备份…</b><small>{ONLINE ? "被覆盖、离线丢弃的修改(只留在本页)" : "被覆盖、离线丢弃的修改"}</small></span>
+            <span className="pc-proj-text"><b>本地备份…</b><small>{ONLINE_BUILD ? "被覆盖、离线丢弃的修改(只留在本页)" : "被覆盖、离线丢弃的修改"}</small></span>
           </button>
           <div className="pc-proj-sep" role="separator" />
           <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); setSettingsOpen(true); }}>
@@ -780,7 +789,7 @@ ${summarizeCombine(report)}
           {dirty && <span className="pc-proj-dirty" title="有没保存的改动" />}
         </button>
         {/* 配音设置:开子窗口,和开始页配音卡的「设置」是同一个 */}
-        <Btn onClick={openVoiceSettings} label="配音设置" icon={<IconVoice />} collapsed={tier !== "wide"} disabled={ONLINE} title={ONLINE ? ONLINE_OFF("配音") : undefined} />
+        <Btn onClick={openVoiceSettings} label="配音设置" icon={<IconVoice />} collapsed={tier !== "wide"} disabled={ONLINE_BUILD} title={ONLINE_BUILD ? ONLINE_OFF("配音") : undefined} />
         <Btn
           onClick={run(exportProject)}
           label="导出视频"
@@ -800,7 +809,8 @@ ${summarizeCombine(report)}
 
       {/* 项目设置对话框 */}
       <SkinDialog open={skinOpen} onClose={() => setSkinOpen(false)} />
-      <SkillDialog open={skillOpen} onClose={() => setSkillOpen(false)} />
+      {/* 在线页面 SKILL 置灰(ModeSwitch),对话框打不开 */}
+      {ONLINE_BUILD ? null : <SkillDialog open={skillOpen} onClose={() => setSkillOpen(false)} />}
       <input
         ref={mergeInput}
         type="file"

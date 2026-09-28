@@ -35,7 +35,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { bakeStream } from './bakery/bake.mjs';
-import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilter, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
+import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
@@ -509,10 +509,10 @@ const KEY_RE = /^[a-f0-9]{64}$/;
 const INIT_RE = /^[a-f0-9]{16}$/;
 const SEG_RE = /^(\d{1,7})-([a-f0-9]{16})\.m4s$/;
 
-/** 编码参数的哈希(分段签名的一部分,G2) */
+/** 编码参数的哈希(分段签名的一部分,G2)。滤镜链按它的身份算(`streamFilterIdentity`),等价改写不作废已有分段 */
 export function encoderParamsHash(encoder) {
   const spec = STREAM_ENCODERS[encoder];
-  return sha(JSON.stringify({ args: spec?.args ?? null, filter: streamFilter(spec?.pixFmt) }), 16);
+  return sha(JSON.stringify({ args: spec?.args ?? null, filter: streamFilterIdentity(spec?.pixFmt) }), 16);
 }
 
 /** 分段签名 = 流签名 + 分段号 + stride + 编码器名 + 编码参数哈希(G2),再加上矩形(变体) */
