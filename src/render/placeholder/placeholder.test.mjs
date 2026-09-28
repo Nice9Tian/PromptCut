@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import "../../testing/registerTs.mjs";
 
 const contract = await import("./contract.ts");
-const { PLACEHOLDER_CSS, PERF_DEGRADED } = await import("./placeholderStyle.ts");
+const { PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, PERF_DEGRADED } = await import("./placeholderStyle.ts");
 const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const component = readFileSync(new URL("./placeholderPlane.tsx", import.meta.url), "utf8");
 
@@ -58,4 +58,16 @@ test("unsupported:电脑 + 离线图标加固定文字,不用沙漏、不铺噪�
   assert.match(component, /pc-ph-offline/);
   assert.equal(contract.UNSUPPORTED_TEXT, "需要本地 PC 渲染辅助");
   assert.doesNotMatch(PLACEHOLDER_CSS, /kind="unsupported[^"]*"\]\s*\{[^}]*(background-image|animation)/s);
+});
+
+test("unsupported 按 --pc-ph-ui-scale 放大(续做:图标在屏幕上的大小);沙漏与噪点不受它影响", () => {
+  // 小徽标:transform 带上变量,中心不动(translate 在前)
+  assert.match(component, /translate\(-50%, -50%\) scale\(var\(--pc-ph-ui-scale, 1\)\)/);
+  // 铺满形态:里面的图标加字按变量放大、居中,框裁掉放不下的部分
+  assert.match(PLACEHOLDER_ONLINE_CSS, /kind="unsupported"\]\s*>\s*\.pc-ph-unsupported\s*\{[^}]*transform:\s*scale\(var\(--pc-ph-ui-scale, 1\)\)[^}]*transform-origin:\s*50% 50%/s);
+  assert.match(PLACEHOLDER_ONLINE_CSS, /kind="unsupported"\]\s*\{[^}]*overflow:\s*hidden/s);
+  // 桌面注入的那一份不带它(与原来逐字相同);变量只出现在 unsupported 的规则里
+  assert.doesNotMatch(PLACEHOLDER_CSS, /--pc-ph-ui-scale/);
+  const rules = [...PLACEHOLDER_ONLINE_CSS.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter(([, , body]) => body.includes("--pc-ph-ui-scale"));
+  assert.ok(rules.length > 0 && rules.every(([, sel]) => sel.includes('kind="unsupported"')), rules.map((r) => r[1].trim()).join(" | "));
 });

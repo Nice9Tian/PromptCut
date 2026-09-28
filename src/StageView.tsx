@@ -4,7 +4,7 @@ import { Stage, type StreamPlaneGroup } from "./render/Stage";
 import { FrameScene } from "./render/FrameScene";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
-import { cardsStamp, cardsVersion, getCard, onCardsUpdated, userCardSources } from "./kernel/registry";
+import { cardsStamp, cardsVersion, getCard, onCardsUpdated, setSyncedUserCards, syncedUserCardsGen, cardsRegistryGen } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
@@ -37,14 +37,15 @@ import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePla
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { StreamPlayer } from "./render/streamPlayer";
 import {
-  applyPlaceholders, hideAllPlaceholders, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
+  applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, onlineBrowserMode, PLACEHOLDER_UI_SCALE_VAR, placeholderUiScale, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
   resetPlaceholderGeometry, setCatchingUpClips, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
   unsupportedHere,
 } from "./render/placeholderHost";
 
 /*
- * 在线浏览器模式(product/platforms.md)还没有运行期判据:先由舞台地址上的 `platform=browser` 显式打开,
- * 只影响 `unsupported` 占位(用户卡 / 图卡在这台设备上渲染不了)。编辑页的同名参数经 `stageSrc` 转发过来。
+ * 在线浏览器模式(product/platforms.md「在线浏览器模式」):在线构建(`ONLINE`)恒开;桌面上由舞台地址的 `platform=browser`
+ * 显式打开(截图和探针用,编辑页的同名参数经 `stageSrc` 转发过来)。开着时这台设备跑不了的卡(用户卡、图卡)不挂组件,
+ * 照贴预渲染结果,什么都贴不上才显示 `unsupported` 占位(C10 契约第 9 节)。
  */
 try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location:导出 / 单测 */ }
 import { PLACEHOLDER_SHOW_DELAY_MS } from "./render/placeholder/contract";
@@ -503,17 +504,44 @@ export default function StageView() {
     };
     const NO_CLIPS: ReadonlySet<string> = new Set();
     /**
+     * 这份项目里这台设备跑不了的片段(在线浏览器模式下的用户卡、图卡;`localOnlyClipIds`)。按项目引用、注册表与同步表的代数记忆化;
+     * 模式关着(桌面)恒为空集合,不多花一次遍历。
+     */
+    let localOnlyMemo: { project: unknown; reg: number; synced: number; ids: ReadonlySet<string> } | null = null;
+    const localOnlyAll = (): ReadonlySet<string> => {
+      const p = ref.current.project;
+      if (!p) return NO_CLIPS;
+      const reg = cardsRegistryGen(), synced = syncedUserCardsGen();
+      if (localOnlyMemo && localOnlyMemo.project === p && localOnlyMemo.reg === reg && localOnlyMemo.synced === synced) return localOnlyMemo.ids;
+      const ids = localOnlyClipIds(p.tracks.flatMap((tr) => tr.clips as { id: string; cardId?: string }[]));
+      localOnlyMemo = { project: p, reg, synced, ids };
+      return ids;
+    };
+    /** 此刻在场的那几张(口径同 `Stage`:含 LEAD) */
+    const localOnlyAt = (sec: number): ReadonlySet<string> => {
+      const all = localOnlyAll();
+      if (!all.size) return NO_CLIPS;
+      const out = new Set<string>();
+      for (const id of all) {
+        const c = clipById(id);
+        if (c && cardMountedAt(c, sec)) out.add(id);
+      }
+      return out;
+    };
+    /**
      * 按这一拍的状态切占位符(product/rendering.md「兜底顺序」;T1~T4 的判据在 `placeholderHost.placeholderWanted`)。
      * **只切槽位的 `hidden`,不经 React 提交**;满 120 ms 才可见由占位组件的 CSS 负责。
      * T1 的「流这一拍 blank」按 `player.showingClips()` 当拍读 —— 所以每拍在 `presentStreams` 之后叫它。
+     * 这台设备跑不了的卡(`localOnlyAt`)贴不上快照 / 流时显示 `unsupported`。
      * 没有任何来不及的层、也没有显示着的占位符时一个 DOM 查询都不做。
      */
     const refreshPlaceholders = (): void => {
       if (!placeholdersEnabled()) return;
       const { suppressed, snapshots, awaiting, settling } = ref.current;
-      if (!suppressed.size && !awaiting.size && !settling.size && !shownPlaceholders().size) return;
+      const unsupported = localOnlyAt(ref.current.t);
+      if (!suppressed.size && !awaiting.size && !settling.size && !unsupported.size && !shownPlaceholders().size) return;
       const streamShowing = ref.current.streamPlanes.length ? player.showingClips() : NO_CLIPS;
-      applyPlaceholders(placeholderWanted({ suppressed, snapshots, awaiting, settling, streamShowing }), slotOf);
+      applyPlaceholders(placeholderWanted({ suppressed, snapshots, awaiting, settling, streamShowing, unsupported }), slotOf);
     };
 
     /**
@@ -993,8 +1021,11 @@ export default function StageView() {
      */
     const routeSettle = (target: number, fps: number): void => {
       const plan = ref.current.plan?.plan ?? null;
+      const localOnly = localOnlyAll();
       for (const clip of cardClipsAt(target)) {
         if (pipelineAt(plan, clip.id, target) !== "heavy") continue;
+        // 这台设备跑不了的卡停下不追(没有组件可追),快照照贴着
+        if (localOnly.has(clip.id)) continue;
         const { record } = tierOf(clip.id, fps);
         if (record?.vtOk !== true) continue;
         const task = startCatchUp(clip.id, target * 1000, fps, true);
@@ -2039,7 +2070,8 @@ export default function StageView() {
       /**
        * 低内存档停下追当前一帧(c10a 契约第 17 节;纯的部分在 `render/lowMemorySettle.ts`)。父页在暂停、点击或拖动松开、
        * 播放到头的那次 `setTime` 之后发。当前这一帧的所有卡(重卡也画)按「直接定位的先、推帧卡要推的帧少的先」一层层活渲,
-       * 画好的层撤兜底、换上活渲;到 `timeoutMs` 还没画好的维持占位符。用户卡、图卡不追(`unsupported` 占位常驻)。
+       * 画好的层撤兜底、换上活渲;到 `timeoutMs` 还没画好的维持占位符。用户卡、图卡不追:有这一帧的预渲染小尺寸就贴,
+       * 没有才显示 `unsupported` 占位(2026-09-29 用户改语义)。
        * 新的 `setTime` / `play` / `setProject` / `setRole` 递增 `catchUpGen`,这一次随之收摊、回 `ok: false`。
        */
       async settleLowMemory(tSec, opts = {}) {
@@ -2056,12 +2088,12 @@ export default function StageView() {
         const targetMs = sec * 1000;
         const targetFrame = Math.round(sec * fps);
         const gen = catchUpGen.current;
-        const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
         const items: LowMemorySettleItem[] = [];
         for (const clip of cardClipsAt(sec)) {
           const c = clip as { id: string; start: number; end: number; cardId?: string; parts?: unknown[]; params?: unknown };
           const def = c.cardId ? getCard(c.cardId) : undefined;
-          const unsupported = unsupportedHere(c.cardId, def, isUserCard);
+          // 这台设备跑不了的卡(用户卡、图卡)不追:有这一帧的预渲染小尺寸就贴着,没有就是 `unsupported` 占位
+          const unsupported = unsupportedHere(c.cardId, def);
           const mountFrame = mountFrameOf(clip, fps);
           const frameMode = def ? clipFrameMode(c as never, def) : undefined;
           const kind = settleKindOf({ unsupported, frameMode, mountFrame, targetFrame });
@@ -2243,6 +2275,23 @@ export default function StageView() {
       async bakeCancel() {
         bakeGen++;
         bakeCursor = null;
+        return { ok: true as const };
+      },
+      /**
+       * 在线页面读内容库卡片源码得到的「已知但本机不能运行」的用户卡(C10 契约第 9 节「识别」)。舞台是另一份文档,
+       * 由父页发一份过来进本页的注册表;变了就重渲一次(这些片段改挂快照 / 流平面与 `unsupported` 占位)。
+       */
+      async setSyncedUserCards(entries) {
+        const changed = setSyncedUserCards(Array.isArray(entries) ? entries : []);
+        if (changed) commitPlanes();
+        return { ok: true as const, changed };
+      },
+      /**
+       * 父页的预览缩放倍数:在线浏览器模式下把「需要本地 PC 渲染辅助」图标反向放大(CSS 变量设在本文档的根元素上,
+       * 占位组件的样式读它)。模式关着什么都不设,桌面舞台的输出一个字节不变。
+       */
+      async setViewScale(scale) {
+        if (onlineBrowserMode()) document.documentElement.style.setProperty(PLACEHOLDER_UI_SCALE_VAR, String(placeholderUiScale(scale)));
         return { ok: true as const };
       },
       async setMediaPolicy(next) {

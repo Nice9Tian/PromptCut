@@ -2,12 +2,12 @@
  * C10 用户卡与图卡、置灰与离线文案、`/api` 棘轮（`docs/plan/c10-contract.md` 第 9、10、17 节）。
  * 跑：node --experimental-test-module-mocks --test server/test/c10-ui-gates.test.mjs
  *
- *   C10-UI-01 表 A 的文案（顶栏五种状态、离线常驻提示、置灰悬停的模板、时间轴提示「该模式暂不支持自定义卡」）
- *             以原文出现在 `src/` 的非测试源文件里；
- *   C10-UI-02 「该模式暂不支持素材输入的音频图卡」不再单独出现（第 9 节：并入图标，不另报错）；
- *   C10-UI-03 用户卡、图卡那一层不发快照请求：在线时 `planFeed` 不给它们选帧、不报缺口，`deliverSnapshots` 不为它们取字节；
- *             同一时刻的内置重卡照常；
- *   C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧——在线的豁免不漏到桌面；
+ *   C10-UI-01 表 A 的文案（顶栏五种状态、离线常驻提示、置灰悬停的模板、时间轴徽标「需要本地 PC 渲染辅助」——
+ *             2026-09-29 用户定与舞台图标同一句）以原文出现在 `src/` 的非测试源文件里；
+ *   C10-UI-02 「该模式暂不支持素材输入的音频图卡」「该模式暂不支持自定义卡」不再出现（第 9 节：并入图标；徽标换了文字）；
+ *   C10-UI-03 用户卡、图卡（含内容库同步来的、本机没有定义的用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
+ *             选帧、报缺口、取字节；暂停态整台「已精确」时它们的快照照挂（停下不追）——2026-09-29 用户改语义，撤销原豁免；
+ *   C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧，同步表不影响桌面；
  *   C10-RA-01 `/api` 棘轮清单只减不增：清单是基线的子集，不重复。
  *
  * 置灰入口「点了不发请求、不露报错」要在真页面里点，归探针与验收 C10-A7（主会话），这里只核文案。
@@ -76,17 +76,20 @@ beforeEach(async () => {
     { id: 'c10-graph-card', name: 'g', card: () => ({}), Component: () => null },
   ]);
   registry.setUserCardSources({ 'c10-user-card.tsx': '' }, { 'c10-user-card': 'c10-user-card.tsx' });
+  // 内容库同步来的用户卡:本机没有定义,只在同步表里
+  registry.setSyncedUserCards([{ id: 'c10-synced-card', name: '同步卡', source: 'src/cards/user/c10-synced-card.tsx' }]);
   plan = { segments: [{ fromSec: 0, toSec: 1000, heavy: new Set(['b', 'g', 'u']) }] };
-  for (const id of ['b', 'g', 'u']) src.push({ type: 'layer', clipId: id, kind: 'html', key: `k-${id}`, ranges: [[0, 100]] });
+  for (const id of ['b', 'g', 'u', 's']) src.push({ type: 'layer', clipId: id, kind: 'html', key: `k-${id}`, ranges: [[0, 100]] });
   now += 10_000;
 });
 
-const clips = () => [card('b', 'builtin-heavy'), card('g', 'c10-graph-card'), card('u', 'c10-user-card')];
+// 's' 是同步来的用户卡,分派表里故意不判重(表里没有它):这台设备跑不了的卡一律按重卡
+const clips = () => [card('b', 'builtin-heavy'), card('g', 'c10-graph-card'), card('u', 'c10-user-card'), card('s', 'c10-synced-card')];
 
-async function feedOnce(online) {
+async function feedOnce(online, { playing = true } = {}) {
   placeholder.setOnlineBrowserMode(online);
   try {
-    const head = { project: project(clips()), t: 1, playing: true };
+    const head = { project: project(clips()), t: 1, playing };
     const f = feed.planFeed(head);
     const stage = { calls: [], async setSnapshots(patch, opts) { this.calls.push({ patch, opts }); } };
     await feed.deliverSnapshots(stage, 'front', head);
@@ -97,20 +100,42 @@ async function feedOnce(online) {
   }
 }
 
-itUi('C10-UI-03 在线时用户卡、图卡那一层不发快照请求；内置重卡照常', async () => {
+itUi('C10-UI-03 在线时用户卡、图卡（含同步来的）与内置重卡一样选帧、报缺口、取字节', async () => {
   const { f, fetched } = await feedOnce(true);
-  assert.ok(f.picks.has('b'), '内置重卡照常选帧');
-  for (const id of ['u', 'g']) {
-    assert.equal(f.picks.has(id), false, `${id} 不该选帧`);
-    assert.equal(f.wanted.some((w) => w.clipId === id), false, `${id} 不该报缺口`);
-    assert.equal(fetched.some((x) => x.includes(`k-${id}`)), false, `${id} 不该取字节：${JSON.stringify(fetched)}`);
+  assert.deepEqual(f.heavy, ['b', 'g', 's', 'u'], '同步卡分派表里没判重,在线照样按重卡');
+  for (const id of ['b', 'u', 'g', 's']) {
+    assert.ok(f.picks.has(id), `${id} 照常选帧`);
+    assert.ok(fetched.some((x) => x.includes(`k-${id}`)), `${id} 取了字节：${JSON.stringify(fetched)}`);
   }
-  assert.ok(fetched.some((x) => x.includes('k-b')), '内置重卡取了字节');
+  placeholder.setOnlineBrowserMode(true);
+  try {
+    // 第 150 帧不在就绪区间里:回溯到 100,并报缺口
+    const late = feed.planFeed({ project: project(clips()), t: 5, playing: true });
+    for (const id of ['b', 'u', 'g', 's']) {
+      assert.equal(late.picks.get(id)?.localFrame, 100, `${id} 回溯到最近的就绪帧`);
+      assert.ok(late.wanted.some((w) => w.clipId === id), `${id} 照常报缺口`);
+    }
+  } finally {
+    placeholder.setOnlineBrowserMode(false);
+  }
+  // 暂停态整台「已精确」(K5 第二路互换之后):内置卡不再投,这台设备跑不了的卡停下不追,快照照挂
+  placeholder.setOnlineBrowserMode(true);
+  try {
+    assert.deepEqual(feed.suppressedAt({ project: project(clips()), t: 1, playing: true }), ['b', 'g', 's', 'u'], '播放中一律抑制');
+    feed.markAllSettled('front');
+    const paused = feed.planFeed({ project: project(clips()), t: 1, playing: false });
+    assert.deepEqual([...paused.picks.keys()].sort(), ['g', 's', 'u'], '停下只剩本机跑不了的卡还贴快照');
+  } finally {
+    placeholder.setOnlineBrowserMode(false);
+  }
 });
 
-itUi('C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧', async () => {
+itUi('C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧，同步表不影响桌面', async () => {
   const { f } = await feedOnce(false);
   for (const id of ['b', 'u', 'g']) assert.ok(f.picks.has(id), `${id} 在桌面照常选帧`);
+  assert.equal(f.picks.has('s'), false, '桌面按分派表:同步表不起作用(桌面也不设它)');
+  feed.markAllSettled('front');
+  assert.equal(feed.planFeed({ project: project(clips()), t: 1, playing: false }).picks.size, 0, '桌面暂停态整台精确:一张不投');
 });
 
 /* ------------------------------------------------------------------ 棘轮（K9） */

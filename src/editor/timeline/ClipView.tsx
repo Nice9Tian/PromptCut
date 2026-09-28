@@ -1,10 +1,12 @@
 import { AudioWaveform } from "./AudioWaveform";
 import { ClipVolumeDialog } from "./ClipVolumeDialog";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
-import { getCard, userCardSources } from "../../kernel/registry";
-import { unsupportedHere } from "../../render/placeholderHost";
+import { getCard, knownCardName, onSyncedUserCardsChanged, syncedUserCardsGen } from "../../kernel/registry";
+import { onlineBrowserMode, unsupportedHere } from "../../render/placeholderHost";
+import { clipCoverage, subscribeCoverage } from "../onlineCoverage";
+import { clipCardLabel, showLocalPcBadge } from "./localPcBadge";
 import { ONLINE_CUSTOM_CARD_TEXT, onlinePage, onlineUnsupported } from "../../online/pageFlag";
 import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from "./utils";
 import { ShotMarkers } from "./ShotMarkers";
@@ -25,10 +27,18 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const selection = useStore((s) => s.selection);
   const isSelected = selection.includes(clip.id);
   const cardDef = clip.cardId ? getCard(clip.cardId) : null;
-  const label = clip.cardId ? (cardDef ? cardDef.name : "未知卡片") : clip.label;
-  // 在线浏览器模式下这台设备渲染不了的卡(用户卡、图卡;C10 契约第 9 节):片段里挂个小徽标,悬停出全文。
-  // 片段照常可选中、移动、删除、改参数(只是个提示,不挡任何操作)
-  const customCard = !!cardDef && unsupportedHere(clip.cardId, cardDef, (id) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, id));
+  // 同步来的用户卡(在线页面从内容库卡片源码认出来的)表变了要重绘:标签换成真名
+  useSyncExternalStore(onSyncedUserCardsChanged, syncedUserCardsGen);
+  // 标签:构建时定义的名字 → 同步表里的名字 →「未知卡片」(C10 契约第 9 节)
+  const label = clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
+  /*
+   * 在线浏览器模式下这台设备跑不了的卡(用户卡、图卡、同步来的用户卡),预渲染结果又还没覆盖整段时:片段里挂个小徽标,
+   * 悬停出「需要本地 PC 渲染辅助」(与舞台上的图标同一句、同一条件;C10 契约第 9 节)。覆盖变了重绘,齐了撤掉。
+   * 两边都没有的 id 只标「未知卡片」,不挂徽标。片段照常可选中、移动、删除、改参数(只是个提示,不挡任何操作)。
+   */
+  const localOnly = !!clip.cardId && unsupportedHere(clip.cardId, cardDef ?? undefined);
+  const coverage = useSyncExternalStore(subscribeCoverage, () => (localOnly ? clipCoverage(clip.id) : null));
+  const customCard = showLocalPcBadge({ online: onlineBrowserMode(), localOnly, coverage });
   // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
   // 这一段是不是「有画面的素材」:只有它能转成声音(卡片、图片、已经是声音的都不行)

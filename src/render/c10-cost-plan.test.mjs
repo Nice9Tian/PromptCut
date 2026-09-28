@@ -71,13 +71,14 @@ const B = await import(srcUrl("editor/lowMemoryBackfill.ts"));
 test("CP-03 补渲只对判重又缺产物的层:判轻的卡不发;判重已有产物的不发", () => {
   const clip = (id, extra = {}) => ({ id, cardId: `card-${id}`, start: 0, end: 4, params: {}, ...extra });
   const p = { tracks: [{ id: "t", clips: [clip("h1"), clip("h2"), clip("l1"), clip("l2"), clip("u", { cardId: "user-card" })] }] };
+  // 用户卡 u 判重、没有产物:照样发(2026-09-29 起不再豁免,由桌面版等渲染节点渲)
   const missing = B.missingLayers({
-    project: p, layerClipIds: new Set(["h2", "l2"]), unsupported: (c) => c.cardId === "user-card",
+    project: p, layerClipIds: new Set(["h2", "l2"]),
     heavy: new Set(["h1", "h2", "u"]),
   });
-  assert.deepEqual(missing, ["h1"]);
+  assert.deepEqual(missing, ["h1", "u"]);
   // 没给 heavy(旧口径):全部按重
-  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(), unsupported: () => false }), ["h1", "h2", "l1", "l2", "u"]);
+  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set() }), ["h1", "h2", "l1", "l2", "u"]);
 });
 
 const O = await import(srcUrl("export/originals.ts"));

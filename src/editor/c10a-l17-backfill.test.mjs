@@ -3,7 +3,8 @@
  * 不在渲染节点写的层表里)时,向队列发布带片段清单、标 backfill 的计划任务;同一批还在等的不重发;页面只发布,不认领。
  *
  *   B1 任务形状:与队列侧 `backfillPlanTaskOf` 逐字段相同,队列的入站校验收它
- *   B2 缺产物的层:全部可见卡片段减去层表里的、减去用户卡 / 图卡;素材段、隐藏轨道不算
+ *   B2 缺产物的层:全部可见卡片段减去层表里的;用户卡 / 图卡照样在内(2026-09-29 用户改语义,由桌面版等渲染节点渲);
+ *      素材段、隐藏轨道不算
  *   B3 不重发:还在等的片段不再发;新缺的单独成一批;到了的忘掉;过了重发时限或换了版本才再发
  *   B4 只发布不认领:发出去的只有 publisher.hello(一次)与 task.publish;发失败的不算在等,下一轮重发
  *   B5 在线来源的层表:取回来之前判不了(null),内容库里没有层表 = 一层都没有(空集合)
@@ -31,16 +32,19 @@ test("C10A-L17-B1 补渲计划任务的形状与队列侧逐字段相同,队列�
 const project = (tracks) => ({ tracks });
 const clip = (id, extra = {}) => ({ id, cardId: `card-${id}`, start: 0, end: 4, params: {}, ...extra });
 
-test("C10A-L17-B2 缺产物的层:所有可见卡片段减去层表里的与用户卡 / 图卡;素材段、隐藏轨道不算", () => {
+test("C10A-L17-B2 缺产物的层:所有可见卡片段减去层表里的,用户卡 / 图卡(含同步来的)照样在内;素材段、隐藏轨道不算", () => {
   const p = project([
-    { id: "t1", clips: [clip("heavy"), clip("light"), clip("user", { cardId: "my-user-card" }), clip("graph", { cardId: "graph-card" })] },
+    { id: "t1", clips: [clip("heavy"), clip("light"), clip("user", { cardId: "my-user-card" }), clip("graph", { cardId: "graph-card" }),
+      clip("synced", { cardId: "synced-user-card" })] },
     { id: "t2", clips: [{ id: "video", mediaId: "m1", start: 0, end: 4 }, clip("zero", { end: 0 })] },
     { id: "t3", hidden: true, clips: [clip("hidden")] },
   ]);
-  const unsupported = (c) => c.cardId === "my-user-card" || c.cardId === "graph-card";
-  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy"]), unsupported }), ["light"]);
-  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(), unsupported }), ["heavy", "light"]);
-  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy", "light"]), unsupported }), []);
+  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy"]) }), ["graph", "light", "synced", "user"]);
+  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set() }), ["graph", "heavy", "light", "synced", "user"]);
+  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy", "light", "user", "graph"]) }), ["synced"], "同步卡没有层:进补渲清单");
+  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy", "light", "user", "graph", "synced"]) }), []);
+  // 判定的表(界限搜索的结果)里这台设备跑不了的卡一律判重(forcedHeavy):没有产物就进清单
+  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy"]), heavy: new Set(["heavy", "user", "graph", "synced"]) }), ["graph", "synced", "user"]);
 });
 
 /** 假的文档服务连接:记下每条请求,按类型回包 */

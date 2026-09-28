@@ -54,9 +54,10 @@
  *       发出去的是渲染任务队列的 `task.publish`（`server/render-queue/messages.mjs` 的 `parseInbound` 认得），
  *       `tasks[0]` 是 `plan`，`resultKey` 的 `#clips:` 之前那一段 = `<projectId>@<projectRev>`（集成对账：页面发清单计划，
  *       工厂另收 `clips`，发布前先报到，见 `planFactoryDeps`）。
- *   K7  用户卡与图卡（契约第 9 节）：在线开关沿用 `src/render/placeholderHost.ts` 的 `setOnlineBrowserMode(true)`；
- *       用户卡 = `userCardSources().fileOf` 里有的卡，图卡 = 定义里 `card` 是函数（与 `unsupportedHere` 同一判法）；
- *       `snapshotFeed.ts` 的 `planFeed` 在在线时不给这两种选帧、不报缺口，`deliverSnapshots` 不为它们取字节。
+ *   K7  用户卡与图卡（契约第 9 节，2026-09-29 用户改语义）：在线开关沿用 `src/render/placeholderHost.ts` 的 `setOnlineBrowserMode(true)`；
+ *       用户卡 = 注册表 `isUserCardId`（`userCardSources().fileOf` 里有的卡，或 `setSyncedUserCards` 同步来的卡），
+ *       图卡 = 定义里 `card` 是函数（与 `unsupportedHere` 同一判法）；`snapshotFeed.ts` 的 `planFeed` 在在线时把它们一律按重卡，
+ *       照常选帧、报缺口，`deliverSnapshots` 照常取字节；暂停态「已精确」对它们不成立。
  *       门：C10-UI 的文案出现（K8）。
  *   K8  置灰与离线文案（契约第 10 节、第 17 节表 A）：文案以字面量写在 `src/` 的非测试源文件里（置灰的模板拆成
  *       「在线浏览器模式暂不支持」与「，请在电脑上的 PromptCut 里使用。」两段找）。门：`C10_UI_MARKERS` 任一出现。
@@ -435,11 +436,12 @@ export const TABLE_A = [
   '当前离线，有未提交的修改。关闭页面将丢失这些操作。',
   '在线浏览器模式暂不支持',
   '，请在电脑上的 PromptCut 里使用。',
-  '该模式暂不支持自定义卡',
+  // 时间轴徽标:2026-09-29 用户定与舞台图标同一句(原「该模式暂不支持自定义卡」)
+  '需要本地 PC 渲染辅助',
 ];
 export const C10_UI_MARKERS = ['，请在电脑上的 PromptCut 里使用。', '当前离线，有未提交的修改。关闭页面将丢失这些操作。'];
 /** 第 9 节：并入图标，不另报错 */
-export const DROPPED_TEXTS = ['该模式暂不支持素材输入的音频图卡'];
+export const DROPPED_TEXTS = ['该模式暂不支持素材输入的音频图卡', '该模式暂不支持自定义卡'];
 export function uiGate() {
   const hits = C10_UI_MARKERS.flatMap(srcFilesContaining);
   return hits.length ? { ok: true, files: hits } : { ok: false, reason: skipReason(`src/ 的非测试源文件里没有表 A 的「${C10_UI_MARKERS.join('」或「')}」`) };

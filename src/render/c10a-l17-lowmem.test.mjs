@@ -6,7 +6,8 @@
  *      (C10 其余把轻重判定换成界限搜索,判定的表另见 `c10-cost-plan.test.mjs`;显示仍全部判重:低内存档播放不活渲)
  *   S1 停下追一帧:直接定位的先、推帧卡要推的帧少的先;时限 5 秒(一处常量)
  *   S2 时限到了:还没画好的层维持占位(记进 timedOut),没开始画的一并算;画好的记下耗时
- *   S3 用户卡、图卡不追:单列 skipped;在线浏览器模式下它们显示「需要本地 PC 渲染辅助」(unsupported 占位)
+ *   S3 用户卡、图卡不追:单列 skipped;在线浏览器模式下有这一帧的预渲染小尺寸就贴着,没有才显示「需要本地 PC 渲染辅助」
+ *      (unsupported 占位,进显隐调度;2026-09-29 用户改语义)。同步来的用户卡没有定义也认
  *   S4 被新的跳转 / 播放打断:回 ok: false,没画的层照样算没画
  *   S5 舞台 RPC:settleLowMemory 按「它自己的时限 + 余量」判超时,别的调用不变
  *
@@ -134,7 +135,7 @@ test("C10A-L17-S2 时限到了:画到一半的与还没开始画的都维持占�
   assert.equal(r2.timeoutMs, 60_000);
 });
 
-test("C10A-L17-S3 用户卡、图卡不追:单列 skipped;在线浏览器模式下显示「需要本地 PC 渲染辅助」", async () => {
+test("C10A-L17-S3 用户卡、图卡不追:单列 skipped;在线浏览器模式下贴小尺寸,没有才显示「需要本地 PC 渲染辅助」", async () => {
   const H = await import(srcUrl("render/placeholderHost.ts"));
   const isUser = (id) => id === "my-user-card";
   const graphDef = { card: () => null };
@@ -152,7 +153,16 @@ test("C10A-L17-S3 用户卡、图卡不追:单列 skipped;在线浏览器模式�
     ];
     const f = fakeDraw({ b: 100 });
     const r = await S.runLowMemorySettle({ sec: 2, items, timeoutMs: 5000, now: f.now, draw: f.draw });
-    assert.deepEqual(r.skipped, ["g", "u"], "不追,舞台上常驻 unsupported 占位(电脑 + 离线图标、需要本地 PC 渲染辅助)");
+    assert.deepEqual(r.skipped, ["g", "u"], "不追:舞台上贴着小尺寸,没有才是 unsupported 占位(电脑 + 离线图标、需要本地 PC 渲染辅助)");
+    // 同步来的用户卡:本机没有定义,缺省判法查注册表的同步表
+    const R = await import(srcUrl("kernel/registry.ts"));
+    R.setSyncedUserCards([{ id: "synced-card", name: "同步卡" }]);
+    try {
+      assert.equal(S.settleKindOf({ unsupported: H.unsupportedHere("synced-card", undefined), frameMode: undefined, mountFrame: 0, targetFrame: 60 }), "unsupported");
+      assert.equal(H.unsupportedHere("unknown-card", undefined), false, "两边都没有的 id 不算(与桌面一致:不画)");
+    } finally {
+      R.setSyncedUserCards([]);
+    }
     assert.deepEqual(f.calls, ["b"], "只画内置卡");
     assert.deepEqual(r.drawn.map((d) => d.clipId), ["b"]);
   } finally {

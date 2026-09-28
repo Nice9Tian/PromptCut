@@ -10,9 +10,10 @@
  * (成员甲走 --proxy-port,成员乙走 --proxy2-port;只断甲的那一个,乙照常在线);无头 Chrome。
  *
  * 断言:
- *   A6 用户卡(仓库里的 `mu-animated-shiny-text`)的片段:时间轴上有「该模式暂不支持自定义卡」徽标(悬停文案),内置卡没有;
- *      舞台上是常驻的「需要本地 PC 渲染辅助」,不是沙漏;层表里有这一层也不取它的清单、不取它的 `px/` 字节(内置卡那一层照取);
- *      片段照常可选中、改参数、移动,另一成员看得到。
+ *   A6 用户卡(仓库里的 `mu-animated-shiny-text`)的片段(2026-09-29 用户改语义:有预渲染结果就照贴,与内置卡相同):
+ *      层表里有这一层就照取它的清单与 `snap/` 字节(与内置卡那一层一样);清单覆盖了整段,时间轴不挂徽标;
+ *      片段照常可选中、改参数、移动,另一成员看得到。贴快照、没有结果时的图标与徽标、同步来的用户卡、清单计划与低内存档补渲
+ *      见 `online-user-cards-probe.mjs`(新 A6 的完整断言,字节由探针的代理给)。
  *   A7 置灰:导入媒体、配音、SKILL、片段右键「转写字幕」置灰且悬停是表 A 文案;点了不发请求、没有页面错误、`/api` 守卫一条没拦;
  *      被覆盖时给不打断的提示带「下载备份」;离线(会话接续期间不闪)→「连不上服务器…」+ 常驻提示 + 原生离开确认;
  *      断网 →「当前没有网络连接。」;恢复 →「丢弃」后给「下载备份」、同步面板列出、逐个下载出 JSON;
@@ -70,7 +71,8 @@ const TEXT = {
   recovering: '已恢复连接，正在提交离线时的修改…',
   recovered: '离线时的修改已全部提交。',
   unsent: '当前离线，有未提交的修改。关闭页面将丢失这些操作。',
-  custom: '该模式暂不支持自定义卡',
+  // 时间轴徽标:2026-09-29 用户定与舞台图标同一句(原「该模式暂不支持自定义卡」)
+  custom: '需要本地 PC 渲染辅助',
 };
 
 /* ------------------------------------------------------------------ 服务 */
@@ -255,39 +257,29 @@ try {
   check(rm.type === 'content.stored', '写层表', rm);
   node.close();
 
-  /* ============================================================ A6 用户卡 */
+  /* ============================================================ A6 用户卡(新语义:照取清单与字节;完整断言在 online-user-cards-probe) */
   await sleep(8000); // 层表每几秒轮询一次;预取按播放头前后 2 秒
-  // 普通档取原尺寸 snap/(C10 第 5 节);用户卡那一层 snap/ 与 px/ 都不该有请求
   const assetReq = (hashes) => px1.log.filter((r) => /\/media\/api\/asset\/(px|snap)\//.test(r.p) && hashes.some((h) => r.p.endsWith(h))).length;
   const a6 = {};
-  a6.pxUser = assetReq([...layers[0].small, ...layers[0].full]);
-  a6.pxBuiltin = assetReq(layers[1].full);
+  a6.snapUser = await until('A6 用户卡那一层照取 snap/', () => { const n2 = assetReq(layers[0].full); return n2 > 0 ? n2 : null; }, 20_000) ?? 0;
+  a6.pxUser = assetReq(layers[0].small);
+  a6.snapBuiltin = assetReq(layers[1].full);
   a6.online = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
-  const readyOf = (id) => a6.online?.layers?.find((l) => l.clipId === id)?.ready ?? null;
-  a6.readyUser = readyOf(setup.u);
-  a6.readyBuiltin = readyOf(setup.b);
-  a6.badges = await A.evaluate((u, b) => ({
-    user: !!document.querySelector(`[data-clip-id="${u}"] [data-pc="clip-custom-card"]`),
-    builtin: !!document.querySelector(`[data-clip-id="${b}"] [data-pc="clip-custom-card"]`),
-    title: document.querySelector(`[data-clip-id="${u}"] [data-pc="clip-custom-card"]`)?.getAttribute('title') ?? null,
-  }), setup.u, setup.b);
-  a6.stage = await stageFrame(A)?.evaluate(() => {
-    const fixed = [...document.querySelectorAll('[data-pc-placeholder-fixed]')];
-    return { fixed: fixed.length, text: fixed.map((e) => e.textContent).join('|').slice(0, 200) };
-  }).catch((e) => ({ error: String(e) }));
-  a6.feed = await A.evaluate(() => window.__pcPreviewDiag?.()?.snapshotFeed ?? null);
-  check(a6.badges.user && !a6.badges.builtin, 'A6 时间轴徽标只在用户卡片段上', a6.badges);
-  check(a6.badges.title === TEXT.custom, 'A6 徽标悬停文案', a6.badges.title);
-  check(a6.stage?.fixed >= 1 && /需要本地 PC 渲染辅助/.test(a6.stage?.text ?? ''), 'A6 舞台常驻「需要本地 PC 渲染辅助」', a6.stage);
-  check(a6.pxUser === 0, 'A6 用户卡那一层一个快照请求(snap/、px/)都没有', a6.pxUser);
-  check(a6.pxBuiltin > 0, 'A6 对照:内置卡那一层照常预取原尺寸 snap/(取到了清单才会按清单里的哈希去取)', a6.pxBuiltin);
-  check(a6.readyUser === 0, 'A6 用户卡那一层不取清单(就绪帧 0)', a6.readyUser);
-  // 普通档的就绪 = 清单里有且块已写进 L2;替身没上传字节(snap/ 回 404),内置卡那一层就绪帧也是 0,这里只核它是在线来源认得的层
-  check(a6.readyBuiltin !== null, 'A6 对照:内置卡那一层是在线来源认得的层(层表 v 2)', a6.readyBuiltin);
-  check(!(a6.feed?.picks ?? []).some((p) => p.clipId === setup.u), 'A6 选帧里没有用户卡', a6.feed);
-  // 悬停出全文:鼠标移到徽标上(原生 title 提示),截图
-  const badge = await A.$(`[data-clip-id="${setup.u}"] [data-pc="clip-custom-card"]`);
-  if (badge) { await badge.hover(); await sleep(1200); }
+  const layerOfClip = (id) => a6.online?.layers?.find((l) => l.clipId === id) ?? null;
+  a6.badges = await until('A6 清单覆盖整段:用户卡不挂徽标', async () => {
+    const b = await A.evaluate((u, b2) => ({
+      user: !!document.querySelector(`[data-clip-id="${u}"] [data-pc="clip-custom-card"]`),
+      builtin: !!document.querySelector(`[data-clip-id="${b2}"] [data-pc="clip-custom-card"]`),
+      label: document.querySelector(`[data-clip-id="${u}"] span.truncate`)?.textContent?.trim() ?? null,
+    }), setup.u, setup.b);
+    return !b.user ? b : null;
+  }, 20_000);
+  check(a6.snapUser > 0, 'A6 用户卡那一层照取原尺寸 snap/(不再豁免)', a6.snapUser);
+  check(a6.pxUser === 0, 'A6 普通档不取用户卡的预渲染小尺寸 px/', a6.pxUser);
+  check(a6.snapBuiltin > 0, 'A6 对照:内置卡那一层照取 snap/', a6.snapBuiltin);
+  check(!!layerOfClip(setup.u), 'A6 用户卡那一层是在线来源认得的层(不再列在 skipped)', a6.online?.skipped);
+  check(a6.badges && !a6.badges.user && !a6.badges.builtin, 'A6 清单覆盖整段:用户卡、内置卡都不挂徽标', a6.badges);
+  check(a6.badges?.label === '闪光文字', 'A6 用户卡标签是构建时的名字', a6.badges?.label);
   await shot(A, 'a6-1-user-card');
   // 片段照常可选中、改参数、移动
   const clipEl = await A.$(`[data-clip-id="${setup.u}"]`);

@@ -6,6 +6,8 @@
  *        [--ticket-ttl-ms 20000]
  *        [--no-video]            不导入视频(只验卡片)
  *        [--only-a4]             只跑到 A4(播放、暂停追活渲)为止,跳过 A2 的重开与 A5(排障用)
+ *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`),验端到端:成员页发布的清单计划含它,桌面渲染节点渲出来、
+ *                                写进层表,成员页贴上快照、没有「需要本地 PC 渲染辅助」的图标与徽标(C10 契约第 9 节,2026-09-29)
  *        [--base-port 5420]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
  *                                (A5 里创建者关掉之后,独立渲染主机用同一段)
  *
@@ -148,6 +150,7 @@ const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const A10 = argv.includes('--a10');
 const ONLY_A4 = argv.includes('--only-a4');
+const USER_CARD = argv.includes('--user-card');
 const KEEP = argv.includes('--keep-temp');
 const VIDEO = !argv.includes('--no-video');
 const BASE = Number(arg('--base-port', 5420));
@@ -1457,9 +1460,11 @@ try {
       S.actions.setClipParams(c.id, { burnMs: 40, label: 'x' });
       extras.push(c.id);
     }
+    // --user-card:一张仓库用户卡(在线页面跑不了它的代码,只能贴渲染节点的产物)
+    const user = spec.userCard ? S.actions.addClipOnNewTrack({ index: 0, cardId: 'mu-animated-shiny-text', start: 0, duration: spec.seconds }) : null;
     S.actions.seek(1);
-    return { light: light?.id ?? null, main: main?.id ?? null, extras };
-  }, { mediaId: state.media?.id ?? null, seconds: SECONDS, extra: EXTRA_HEAVY });
+    return { light: light?.id ?? null, main: main?.id ?? null, extras, userClip: user?.id ?? null };
+  }, { mediaId: state.media?.id ?? null, seconds: SECONDS, extra: EXTRA_HEAVY, userCard: USER_CARD });
   Object.assign(state, clips);
   check(state.main && state.extras.length === EXTRA_HEAVY, '创建者放好卡片', clips);
   state.docId = await P(creator, async () => (await import('/src/store/project.ts')).getState().project.id);
@@ -1469,6 +1474,9 @@ try {
   await creator.waitForSelector('[data-pc="collab-section"]', { visible: true, timeout: 20_000 });
   await creator.click('[data-pc="collab-toggle"]');
   await creator.waitForSelector('[data-pc="collab-where-hosted"]', { visible: true });
+  // 创建者用户名的缺省值(设备名)是异步填的:等它填上;填不上就自己写一个(不然提交时报「创建者用户名和密码不能为空」)
+  const nameFilled = await until('创建者用户名的缺省值填上', () => creator.$eval('#pc-collab-creator', (i) => i.value.trim()).catch(() => ''), 10_000, 200);
+  if (!nameFilled) { fails.pop(); await typeInto(creator, '#pc-collab-creator', `c10b-creator-${RUN}`.slice(0, 32)); }
   const creatorCred = { username: await creator.$eval('#pc-collab-creator', (i) => i.value), password: await creator.$eval('#pc-collab-cpw', (i) => i.value) };
   state.creatorCred = creatorCred;
   state.projectPassword = await creator.$eval('#pc-collab-ppw', (i) => i.value);
@@ -1665,6 +1673,41 @@ try {
   out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp, costPublish: state.costPublish,
     publisher: await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null) };
   say('step1.done', out.steps.member);
+
+  if (USER_CARD) {
+    /* ---------------------------------------------------------------- 用户卡端到端(C10 契约第 9 节,2026-09-29 用户改语义) */
+    const tU = Date.now();
+    check(!!state.userClip, '用户卡:创建者放好了用户卡片段', state.userClip);
+    const planU = await until('用户卡:成员页发布的清单计划含用户卡片段', async () => {
+      const d = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
+      return d?.lastClips?.includes(state.userClip) ? d : null;
+    }, 120_000, 1000);
+    check(!!planU, '用户卡:成员页发布的清单计划含用户卡片段(页面一律按重卡)', planU?.lastClips);
+    const userStage = async () => {
+      const f = await frontFrame(member);
+      return f ? f.evaluate((id) => {
+        const w = document.querySelector(`[data-pc-clip="${id}"]:not([data-pc-media])`);
+        const slot = w?.querySelector(':scope > [data-pc-placeholder-slot]');
+        const plane = w?.querySelector(':scope > [data-pc-snapshot-plane]');
+        return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null } : null;
+      }, state.userClip).catch(() => null) : null;
+    };
+    const firstLook = { stage: await userStage(), badge: await P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null) };
+    await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); });
+    const got = await until('用户卡:成员页贴出桌面渲染节点产的快照,图标与徽标撤掉', async () => {
+      await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); }).catch(() => {});
+      const o = await onlineDiag(member);
+      const l = o?.layers?.find((x) => x.clipId === state.userClip);
+      const st = await userStage();
+      const badge = await P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null);
+      return l && l.ready > 0 && st?.snapshot && !st.placeholder && badge === false ? { layer: l, stage: st, ms: Date.now() - tU } : null;
+    }, 1_200_000, 5000);
+    check(!!got, '用户卡端到端:桌面节点渲出、成员页贴上快照,没有图标与徽标', { got, firstLook, last: { stage: await userStage(), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null } });
+    if (got) check(got.layer.envFingerprint === state.creatorFp, '用户卡:那一层出自创建者的桌面节点', { layer: got.layer.envFingerprint, creator: state.creatorFp });
+    await shot(member, 'user-card-e2e');
+    out.steps.userCard = { ms: Date.now() - tU, clip: state.userClip, planClips: planU?.lastClips ?? null, firstLook, got };
+    say('user-card.done', out.steps.userCard);
+  }
 
   if (A10) {
     /* ---------------------------------------------------------------- A10. 逐帧导出跨过票据时限 */
