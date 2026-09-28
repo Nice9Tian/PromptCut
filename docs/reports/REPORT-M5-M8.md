@@ -567,7 +567,7 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | HT-a | `REPORT-HT-a.md` 第 0、1 节；契约第 16、17 节 | 报告正文记号 5 处；契约两节未数（待核） | 待审（`REPORT-HT-a.md` 第 4 节） |
 | C10 其余 | `REPORT-C10.md` 第 6 节（总表，含 `c10-contract.md` 第 2～10 节、第 18 节第 1～9 条、集成期间的裁定、主会话认可的分支偏离、第 10 节在线剪枝两条、`pause-precise` 一条）；三级语义三处（`mechanism/platforms.md`「在线浏览器模式」、`mechanism/rendering.md`、`mechanism/document-service.md`「成本记录」） | **29 条**（契约 19、集成期间 4、分支偏离 2 组、集成方提请 1、定稿前新增 3；`REPORT-C10.md` 第 6 节开头） | 待用户审（`REPORT-C10.md` 第 9 节：尤其第 18 行二级观察、第 19 行 X4 修改） |
 | M7 | `REPORT-M7.md` 第 6 节（总表，含 `m7-contract.md` 第 13 节 D1～D18 与「探针之后的更正」十条、`render-queue-contract.md` B.3、验收夹具改述、队列侧与契约原文不同的四处等）；D18 两句三级语义（`mechanism/rendering.md`「舞台」、`mechanism/platforms.md`「渲染节点」，`REPORT-M7.md` 第 10 节） | **30 条**（D1～D18 共 18、之后 12；另 `claude/join-error` 的 `shared/verify` 1 条不在本阶段、未合入；「探针之后的更正」十条里除第 4 条外九条照契约那张表、不另列；`REPORT-M7.md` 第 6 节开头） | 待用户审（`REPORT-M7.md` 第 9 节：尤其第 20、22～25、27 行，以及 `claude/join-error` 合不合） |
-| M8 | `REPORT-render-queue-m8.md` 第 13.2 节（总表）；计划期的在 `m8-plan.md` 末「主会话裁定」D1～D12（其中 D1 因约束「不动宿主机的网络」作废，D6 更正为「按语义不做」） | **11 条加 1 条待定，撤销 1 条**：第 1～8 条是验收判法或做法（E6 反方向判据、K1 判据、E5 的 A4 / A10、D12 纯浏览器节点指纹、放本机 T9 限速、迁移抽查、迁移两台客户端同机、迁移不用 E1 真实项目判），非语义；第 9～11 条改在契约里（`render-queue-contract.md` A.12 与 `render-host-contract.md` 第 3 节；`artifact-transfer-contract.md` 第 4 节 `has` 与 `manifest-contract.md`；`artifact-transfer-contract.md` 第 4 节 2026-09-29），M8 报告标「三级（机制）」，没有改 `docs/semantics/`，属契约级；第 12 条（1080p 编码提速若只能靠改产出字节的办法由用户定，门槛不改）待定；撤销的是「异地接入真实渲染由云端当远程成员」 | 第 9～11 条主会话审过、同意（`REPORT-render-queue-m8.md` 第 12a 节）；全部待用户审（同报告第 13.4 节第 1 条；本文第 8 节第 30 条） |
+| M8 | `REPORT-render-queue-m8.md` 第 13.2 节（总表）；计划期的在 `m8-plan.md` 末「主会话裁定」D1～D12（其中 D1 因约束「不动宿主机的网络」作废，D6 更正为「按语义不做」） | **12 条（第 12 条已了结），撤销 1 条**：第 1～8 条是验收判法或做法（E6 反方向判据、K1 判据、E5 的 A4 / A10、D12 纯浏览器节点指纹、放本机 T9 限速、迁移抽查、迁移两台客户端同机、迁移不用 E1 真实项目判），非语义；第 9～11 条改在契约里（`render-queue-contract.md` A.12 与 `render-host-contract.md` 第 3 节；`artifact-transfer-contract.md` 第 4 节 `has` 与 `manifest-contract.md`；`artifact-transfer-contract.md` 第 4 节 2026-09-29），M8 报告标「契约级（机制；`docs/semantics/` 未改）」；第 12 条（1080p 编码提速若只能靠改产出字节的办法由用户定）已了结：逐字节不变的修法就凑够了余量（`claude/perf-encode-2`），没有改产出字节、没有改门槛；撤销的是「异地接入真实渲染由云端当远程成员」 | 第 9～11 条主会话审过、同意（`REPORT-render-queue-m8.md` 第 12a 节）；全部待用户审（同报告第 13.4 节第 1 条；本文第 8 节第 30 条） |
 | 主计划 | 文件头第三、四次修订（用户定的交接）；第 6.4 节派活顺序；第 9 节端口 | 待核 | 待核 |
 
 ### 6.2 语义改动汇总
@@ -585,7 +585,7 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | — | C10 其余一级、二级语义没改；第 6 节第 18 行（低内存档判轻的卡播放时一直占位）作为二级观察交用户，没改语义 | — | 待用户定 | `REPORT-C10.md` 第 6 节第 18 行、第 9 节 |
 | `331d2f2`（随 `8cd21c1` 合 `claude/m7-report` 进 main） | M7 D18 两句三级语义：`mechanism/rendering.md`「舞台」加「在线浏览器模式（普通档）下，后台舞台还在闲时为认领到的快照任务逐帧生成快照」；`mechanism/platforms.md`「渲染节点」加「纯浏览器节点的环境指纹由文档服务按页面报来的原始值算；一期只在 Chromium 内核的浏览器上当节点」；都标〔裁〕 | 三级 | 定计划时在 `m7-contract.md` 第 13 节做了「修改前 / 修改后」dry run，契约发给用户不等；用户确认的记录报告里没写，待用户审 | `REPORT-M7.md` 第 10 节、第 8 节第 2 条 |
 | `d3b674d` | 规则：约束「不动宿主机的网络」（模拟断线只在应用层做） | 规则 | 待核（`REPORT-C10.md`、`REPORT-M7.md` 没写；按提交信息，C10 集成分支在 `82d1a33` 合 main `9cf6525` 时带进来） | 提交信息 |
-| — | M8 没改 `docs/semantics/` 下的语义（计划与语义冲突的两项按语义不做，语义没改）。M8 的三条〔裁〕改在契约里：`render-queue-contract.md` A.12、`render-host-contract.md` 第 3 节（停滞按帧数或工作计数重新计时、收回原因如实下发）；`artifact-transfer-contract.md` 第 4 节 `has`、`manifest-contract.md`（本机帧库覆盖整段时核对素材服务、缺块补推）；`artifact-transfer-contract.md` 第 4 节（2026-09-29：本机缺小尺寸时认内容库里两档齐的清单、主机也产小尺寸）。另 `hosting-migration.md` 第 2 节末补了演练的实际命令、第 9 步保留 7 天（计划文档） | 契约级（M8 报告标「三级（机制）」） | 执行中改、标〔裁〕，主会话审过同意，待用户审 | `REPORT-render-queue-m8.md` 第 6 节、第 12a 节、第 13.2、13.3 节 |
+| — | M8 没改 `docs/semantics/` 下的语义（计划与语义冲突的两项按语义不做，语义没改）。M8 的三条〔裁〕改在契约里：`render-queue-contract.md` A.12、`render-host-contract.md` 第 3 节（停滞按帧数或工作计数重新计时、收回原因如实下发）；`artifact-transfer-contract.md` 第 4 节 `has`、`manifest-contract.md`（本机帧库覆盖整段时核对素材服务、缺块补推）；`artifact-transfer-contract.md` 第 4 节（2026-09-29：本机缺小尺寸时认内容库里两档齐的清单、主机也产小尺寸）。另 `hosting-migration.md` 第 2 节末补了演练的实际命令、第 9 步保留 7 天（计划文档） | 契约级（机制；`docs/semantics/` 未改） | 执行中改、标〔裁〕，主会话审过同意，待用户审 | `REPORT-render-queue-m8.md` 第 6 节、第 12a 节、第 13.2、13.3 节 |
 
 ### 6.3 代码与语义仍有出入的地方
 
@@ -627,7 +627,7 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | — | 换档依赖无关的重渲染 | 已修 | `d011783`（`AGENT-tier-reload-seek.md`） |
 | — | 生成快照 id 改名线性化 | 已修 | `bb01107` |
 | — | Tailwind 扫描让改文档整页重载 | 已修 | `94fb419` |
-| L20 | 1080p 分段编码超门槛 | 已修，在 main；笔记本 ENC-1 修复版 p50 中位数 290 ms、ENC-2 合入后 283 ms；M8 在 main `9cf43f1f` 上又贴线没过（中位数 302 ms），见第 7.5 节 | `211695d`（`REPORT-C10.md` 第 3、11 节） |
+| L20 | 1080p 分段编码超门槛 | 已修，在 main；笔记本 ENC-1 修复版 p50 中位数 290 ms、ENC-2 合入后 283 ms；M8 收尾前在 main `9cf43f1f` 上又贴线没过（中位数 302 ms），**M8 收尾再修后过**：`claude/perf-encode-2`（main `501a7dd7`，产出逐字节不变）后全案最终基线连续 5 轮中位数 208 ms | `211695d`（`REPORT-C10.md` 第 3、11 节）；`501a7dd7`（`REPORT-render-queue-m8.md` 第 8、12a 节） |
 | L21 | 停下到精确活渲太慢（C10-A4 两条后续） | 已修，随 C10 进 main；PC 上 8541 ms → 6905 / 6916 ms；「区分自然进场与从卡中间开始播放」另记维护项（没有编号） | `2f7f821`（`REPORT-C10.md` 第 10 节、第 6 节第 29 行） |
 | L24 | 在线构建按编译期 `ONLINE` 剪掉置灰入口背后的调用 | 已修，随 C10 进 main；`/api` 棘轮清单 120 → 19，在线构建少 384 KB | `97bda2b`（`REPORT-C10.md` 第 10 节「online-prune」） |
 | — | 在线构建缺 `/catalog/`，内置 Lottie、粒子卡全 404 | 已修，随 C10 进 main；nginx 三个源放行 `/catalog/` | `cc1d137`（`REPORT-C10.md` 第 10 节「catalog 修复」） |
@@ -640,10 +640,11 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | — | 推到一半丢认领后自己重新认领时以去重完成、素材服务上缺块 | 已修 | `0cabcfb0`（`claude/sink-has`；同上） |
 | — | 跨节点去重：独立渲染主机不产小尺寸，别的节点领到做完的段只补画小尺寸（E3 放本机本机替身挂的原因） | 已修，E3 / C4 放本机真跨机两轮过 | `e27fa520`（`claude/xnode-dedup`；同上） |
 | — | 探针三处：M7-A6 触发时序、e3 补在线页面恢复同步判据、异地接入 `--assert-no-lan` | 已修 | `21eaeb8f`、`9cf43f1f`、`f550b02`（同上） |
+| — | 测试与探针可能写进用户的 `Videos\PromptCut`（继承桌面版环境变量时 12 个探针或脚本的帧库落进 Videos；`export-e2e --media-lib` 的 junction 写进用户素材目录） | 已修；PC 上只读核对没发现测试或探针写过 Videos（PC-M8-7） | `efcaec60`（`claude/no-user-videos`；同上） |
 
 上表 L20 以下至 M7 一行是按 main `0cabcfb0` 与 `REPORT-C10.md`、`REPORT-M7.md` 补的；L4 起各行是 2026-09-29 按 `REPORT-render-queue-m8.md` 第 1.1、12a 节补的。
 
-其余各条（2026-09-29 按 `REPORT-render-queue-m8.md` 更新；那份报告没提到的标「M8 报告没写」）：L3（随 `claude/m8-e2e`，该分支已合入 `4538ec42`；T9 是否换成确定判重的探针卡 M8 报告没写，待核）、L4 与 L5、L10 与 L16（已修，见上表）、L12（已修：`claude/tailwind-guard` 由 main `0d114df` 合入，按 `git log` 核）、L13（id 改名的平方复杂度已由 `bb01107` 修；样式内联代价 M7 报告没单列，M7-A12 在笔记本长任务 0，是否算修完待核；`REPORT-C10.md` 第 11 节、`REPORT-M7.md` 第 5 节）、L14（已修，见上表）、L15（C10 已合入，「合入后 grep 核一遍」`REPORT-C10.md` 没写结果，待核）、L18（只记录；M8 E6 两个方向都记了现象）、L19（随 `claude/m8-kit`，该分支已合入 `fdf515e3`；协调口 401 是否再现 M8 报告没写，待核）、L22（`REPORT-M7.md` 第 4 节第 5 条把 M7-A4 85.3 s 的根因「锚帧段优先级被冲淡」记为与 L22 同一件事，`fdbf19f` 已修；M8 在站点上记了时刻分解：新键 6952 ms、新小尺寸产出 11 026 ms、手机播放中挂上新层 11 287 ms、手机取到新的小位图 293 963 ms、整段重渲 242 974 ms，只记录、不设门槛，`REPORT-render-queue-m8.md` 第 8 节）、L23（裁定 D10：不做）；L20 在 M8 又贴线没过，见第 7.5 节。
+其余各条（2026-09-29 按 `REPORT-render-queue-m8.md` 更新；那份报告没提到的标「M8 报告没写」）：L3（已修：随 `claude/m8-e2e` 合入 `4538ec42`，T9 缺省用确定判重的探针卡 `probe-slow-stepped`，人工钉死只作对照模式；`REPORT-render-queue-m8.md` 第 1.1 节）、L4 与 L5、L10 与 L16（已修，见上表）、L12（已修：`claude/tailwind-guard` 由 main `0d114df` 合入，按 `git log` 核）、L13（id 改名的平方复杂度已由 `bb01107` 修；样式内联代价 M7 报告没单列，M7-A12 在笔记本长任务 0，是否算修完待核；`REPORT-C10.md` 第 11 节、`REPORT-M7.md` 第 5 节）、L14（已修，见上表）、L15（C10 已合入，「合入后 grep 核一遍」`REPORT-C10.md` 没写结果，待核）、L18（只记录；M8 E6 两个方向都记了现象）、L19（缓解：随 `claude/m8-kit` 合入 `fdf515e3`，`m8/kv.mjs` 遇 401 记下状态码与响应体、隔 500 ms 重试一次；M8 各轮 `kv-no-401` 都是 0；原因没查明，同上）、L22（`REPORT-M7.md` 第 4 节第 5 条把 M7-A4 85.3 s 的根因「锚帧段优先级被冲淡」记为与 L22 同一件事，`fdbf19f` 已修；M8 在站点上记了时刻分解：新键 6952 ms、新小尺寸产出 11 026 ms、手机播放中挂上新层 11 287 ms、手机取到新的小位图 293 963 ms、整段重渲 242 974 ms，只记录、不设门槛，`REPORT-render-queue-m8.md` 第 8 节）、L23（裁定 D10：不做）；L20 在 M8 收尾前又贴线没过、再修后过，见上表。
 
 ### 7.2 推迟到 M8 之后的
 
@@ -680,11 +681,11 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | 执行器不标 `snapshotOversize`，切分只按卡种挡浏览器 | 同上 | M8 维护或另立 |
 | 舞台互换时生成快照跟着后台位置走，没有专门的互换剧本验 | 同上 | M8 维护 |
 | 探针的 `PC_CHROME_ARGS` 别用来关 TLS 校验 | 同上 | 探针用法说明 |
-| 阿里云上残留三个 M7 探针项目 `m7ap-m7w0928a`、`m7ap-m7w0928b`、`m7ap-m7wlocal1` | `REPORT-M7.md` 第 9、11 节 | 用户或主会话按名删 |
+| 阿里云上残留三个 M7 探针项目 `m7ap-m7w0928a`、`m7ap-m7w0928b`、`m7ap-m7wlocal1` | `REPORT-M7.md` 第 9、11 节 | 已删：M8 收尾时随其余探针项目在服务器上删掉（2026-09-28 18:56Z，第 5.1 节） |
 | `claude/join-error` 未合入 | `REPORT-M7.md` 第 4 节第 8 条 | 待用户审 |
 | `claude/m7-probe` 的四个可行性探针脚本 | `REPORT-M7.md` 第 12 节写「没并进集成分支、由主会话定」 | 已由 main `e86a754` 合入（按 `git log` 核），`REPORT-M7.md` 第 1、12 节已照此回改 |
 | 归档后仍写旧路径（`docs/reports/` 下的 `AGENT-…`）的代码注释与文件头 | `REPORT-C10.md` 第 12 节；`REPORT-M7.md` 第 12 节 | `.md` 里的已由分支 `claude/total-report` 改成新路径；代码文件里的 41 处没改（改 `src/` 连注释也会变代码版本），逐条列在 `AGENT-total-report.md`，是否统一改由主会话定 |
-| 粒子卡在编辑器预览里停住时画面空白（与 `/catalog/` 无关） | `REPORT-C10.md` 第 10 节「catalog 修复」 | 另立 `claude/particles-blank`（M8 期间的维护分支；`AGENT-particles-blank.md` 已由本分支归档，结果 `REPORT-render-queue-m8.md` 没写，待核） |
+| 粒子卡在编辑器预览里停住时画面空白（与 `/catalog/` 无关） | `REPORT-C10.md` 第 10 节「catalog 修复」 | 已修：`claude/particles-blank` 由 main `edffbc60` 合入（2026-09-28 01:19Z，C10 阶段，不属于 M8）：粒子卡暂停时不再全透明，导出像素基线不变（`AGENT-particles-blank.md`，已由本分支归档） |
 
 ### 7.5 M8 新留下的
 
@@ -692,7 +693,7 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 
 | 遗留 | 现状 | 去向 | 出处 |
 |---|---|---|---|
-| 1080p 全幅流 15 帧分段编码（L20）在笔记本贴线没过：main `9cf43f1f` 有效 5 轮中位数 302 ms（门槛 300 ms）；编码路径自 `211695d` 没改过，是当时余量不够 | 修复中：`claude/perf-encode-2` 在笔记本上找余量，先找产出逐字节不变的路；门槛不动，若只能靠改产出字节的办法由用户定（〔裁〕第 12 条）。〔占位：等 `claude/perf-encode-2` 的结果与合入后的复测〕 | M8 之内修完 | 第 8 节第 1 行、第 13.2 节第 12 条 |
+| 1080p 全幅流 15 帧分段编码（L20）收尾前在笔记本贴线没过：main `9cf43f1f` 有效 5 轮中位数 302 ms（门槛 300 ms）；编码路径自 `211695d` 没改过，是当时余量不够 | **已修**：`claude/perf-encode-2`（main `501a7dd7`）只改 `server/bakery/ffmpeg.mjs` 与两份单测，产出逐字节不变、`encoderParamsHash` 不变；全案最终基线连续 5 轮 p50 207～224 ms（中位数 208）；没有改产出字节、没有改门槛（〔裁〕第 12 条了结）。代价：代码版本变了，已有的预渲染快照按新键重做 | — | 第 8 节第 1 行、第 12a 节、第 13.2 节第 12 条 |
 | 新旧版本混跑时，旧版独立渲染主机仍不产小尺寸，别的节点领到它做完的段只能补画小尺寸 | 只记录 | — | 第 12a、13.5 节；`AGENT-xnode-dedup.md` |
 | 跨节点去重的代价：主机每段多推约 60 块（约 0.3 MB），段用时 30～38 s（原约 35 s） | 只记录 | — | 第 12a 节 |
 | 放本机项目的素材服务地址经局域网发现带回、不进 `service.endpoints`；`asset-lan-probe` 不给 `--asset` 时按老写法等 `service.endpoints`，对放本机项目会超时 | 探针待改：按发现取地址 | 探针维护 | 第 7 节 C4、第 13.5 节 |
@@ -700,7 +701,7 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | 纯浏览器节点经公网的锚点段 33～37 s | 观察项，门槛以笔记本本机为准（M7-T1c 27.6 s） | — | 第 2 节 E5、第 8 节、第 13.5 节 |
 | 云端工作节点的检出停在 `29e6e837`（代码版本 `21c62981…`） | 再派它当渲染主机前要先检出当前 main | 下次用云端时 | 第 13.5 节 |
 | C3 放云端首轮 `m8c3c`（PC 创建者）两台主机 17 分钟没领到任务 | 原因未查；笔记本重跑没复现 | 只记录 | 第 7 节 C3 |
-| 阿里云上探针留下的项目、演练实例的数据目录 | 种子项目报告写完后删；E1 的 `sp_2zepiwyualirjjkb3eq2zumiwu`、`m8e-e1-m8c3c` 留在主实例上；演练数据目录约 2 GB 以上。〔占位：阿里云探针项目清理结果，等主会话收尾时清理后填〕 | 待用户项（第 8 节第 33、34 条） | 第 6 节、第 7 节 C3、第 13.4 节第 9 条 |
+| 阿里云上探针留下的项目、演练实例的数据目录 | 探针项目**已删**：迁移种子项目用创建者证明删；其余 14 个由主会话按用户要求在服务器上删（先备份到 `/root/m8-probe-projects-backup-20260928.tar.gz`，停服约 1 s，用部署的 `store.mjs` 删记录与租户目录）。演练实例的数据目录（约 2 GB 以上）还在 | 探针项目：已解决；演练数据目录：待用户项（第 8 节第 33 条） | 第 10 节 18:2xZ、18:56Z 两行；第 13.4 节第 9 条 |
 | 代码注释里 41 处仍指向归档前的 `docs/reports/AGENT-…` 路径 | 见第 7.4 节倒数第二行 | 下次改 `src/` 时顺带 | 第 13.5 节；`AGENT-total-report.md` |
 
 ## 8. 待用户项
