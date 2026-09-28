@@ -1746,14 +1746,20 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   /* ---- 等本页拿着一段（生成快照中）：下面几条让路都要这个前提 */
   // 持有中 = 最后一次认领晚于最后一次结束（完成 / 放回 / 失败 / 丢认领），且这次认领之后报过进度、最近 3 s 内还在报（在生成快照）；
   // 页面诊断的 state 是 baking 时另作对照。同一段放回后重新认领很常见，所以按时间比，不按 id 集合
-  const holding = async (ms = 120_000) => until(async () => {
+  // minDone：要求这一段在认领之后至少报过 done ≥ minDone 的进度。节点认领一到手就先报一条 done 0（契约 D.2），
+  // 这时后台舞台上未必已经在生成；「更急的活要在帧边界让路」那一步必须等真的出过帧再触发，否则测量直接在空闲的
+  // 后台舞台上做完、没有东西可让（W7 站点复测 m7w0928f 出现过：触发时这一段一帧未出，之后照常出满 60 帧）
+  const holding = async (ms = 120_000, { minDone = 0 } = {}) => until(async () => {
     const lastAt = (frames, id) => Math.max(-Infinity, ...frames.filter((f) => f.id === id).map((f) => f.at));
     const ends = [...tap.sent('task.complete'), ...tap.sent('task.release'), ...tap.sent('task.fail'), ...tap.recv('task.lease-lost')];
     const claims = tap.recv('task.claimed');
     const ids = [...new Set(claims.map((f) => f.id))];
     const now = Date.now();
     const cur = ids.filter((id) => lastAt(claims, id) > lastAt(ends, id))
-      .filter((id) => { const p = tap.sent('task.progress').filter((f) => f.id === id && f.at >= lastAt(claims, id)); return p.length > 0 && now - p.at(-1).at < 3000; })
+      .filter((id) => {
+        const p = tap.sent('task.progress').filter((f) => f.id === id && f.at >= lastAt(claims, id));
+        return p.length > 0 && now - p.at(-1).at < 3000 && p.some((f) => (f.done ?? 0) >= minDone);
+      })
       .at(-1);
     if (!cur) return null;
     const d = await readNodeDiag(page);
@@ -1810,7 +1816,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
     book.judge('M7-A6', 'hidden-release-now', h.hidden && !!rel && (!lastProgress || lastProgress.at >= rel.at), { hidden: h.hidden, releaseMs: rel ? rel.at - h.at : null, reason: rel?.reason ?? null, cause: releaseCauseOf(rel?.reason), progressBeforeRelease: !!lastProgress && lastProgress.at < (rel?.at ?? 0) });
     book.judge('M7-A6', 'hidden-no-claims-then-resume', claimsHidden === 0 && !!resumed, { claimsHidden, resumed: !!resumed });
   }
-  const heldUrgent = await holding();
+  const heldUrgent = await holding(120_000, { minDone: 1 });
   if (!heldUrgent) book.pending('M7-A6', 'urgent', '没等到本页在生成快照');
   else {
     // 更急的后台活：加一张新卡 → 后台舞台要测量它（测量 > 生成快照）
