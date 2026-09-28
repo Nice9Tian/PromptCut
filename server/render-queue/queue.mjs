@@ -234,7 +234,10 @@ export function createRenderQueue(options = {}) {
     tasks.delete(task.id);
   }
 
-  /** 出站消息里的任务（A.4 TaskView）：不含 claim、subscribers；深拷贝由 makeMessage 做 */
+  /**
+   * 出站消息里的任务（A.4 TaskView）：不含 claim、subscribers；深拷贝由 makeMessage 做。
+   * 上一次放弃的原因 `lastError` 只在有时才带（契约 A.12〔裁〕：回收、失败后放回 open 的广播里看得出为什么；旧节点不认这一项，照常工作）
+   */
   function viewOf(task) {
     const v = { id: task.id, kind: task.kind };
     if (task.kind === 'snapshot') v.tier = task.tier;
@@ -243,6 +246,7 @@ export function createRenderQueue(options = {}) {
       input: task.input, weight: task.weight, requires: task.requires, priority: task.priority,
       state: task.state, version: task.version, attempts: task.attempts,
     });
+    if (typeof task.lastError === 'string' && task.lastError) v.lastError = task.lastError;
     return v;
   }
 
@@ -327,11 +331,14 @@ export function createRenderQueue(options = {}) {
     return { state: 'open', notify: () => broadcast(task, 'task.opened', { task: view }) };
   }
 
-  /** tick 里的回收：放弃，并告诉原认领者（它的那条连接还在的话） */
+  /**
+   * tick 里的回收：放弃，并告诉原认领者（它的那条连接还在的话）。
+   * `lease-lost` 的 reason 就是回收的原因（`lease-expired` / `stalled` / `disconnected`，契约 A.12〔裁〕；原来一律 `expired`）
+   */
   function reclaim(task, lastError) {
     const { conn, token } = task.claim;
     const out = abandon(task, { lastError });
-    if (isLive(conn)) emit(conn, 'task.lease-lost', { id: task.id, token, reason: 'expired' });
+    if (isLive(conn)) emit(conn, 'task.lease-lost', { id: task.id, token, reason: lastError });
     out.notify();
   }
 

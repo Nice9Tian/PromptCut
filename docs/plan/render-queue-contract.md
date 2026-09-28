@@ -110,7 +110,7 @@ taskIdOf({ kind, resultKey, range })
 { id, kind, tier?, resultKey, range, source, input, weight, requires, priority, state, version, attempts }
 ```
 
-不含 `claim`、`subscribers`。
+不含 `claim`、`subscribers`。放弃过的任务另带 `lastError`（A.12〔裁〕）。
 
 ### A.5 连接角色
 
@@ -203,7 +203,7 @@ claim = null
 ```
 
 - `task.fail` 自己回 `task.fail-ack { id, state }`。
-- 回收时（A.8），若原认领者的连接还在，给它发 `task.lease-lost { id, token, reason: 'expired' }`；连接已断开就不发。
+- 回收时（A.8），若原认领者的连接还在，给它发 `task.lease-lost { id, token, reason: 'expired' }`；连接已断开就不发。（2026-09-28 起 `reason` 是回收原因 `lease-expired` / `stalled` / `disconnected`，见 A.12〔裁〕）
 - **没有订阅者**的任务经「放弃」或「放回」（A.7.5）回到 `open` 时，直接删除（发 `task.closed { id, state: 'removed' }` 代替 `task.opened`）〔裁〕：它不会再有人要，理由同 A.8 第 3 项。这时 `task.fail-ack` 的 `state` 是 `'removed'`。
 
 ### A.8 `tick()` 的四项扫描（按此顺序）
@@ -276,6 +276,14 @@ claim = null
 所有出站消息都带 `epoch`（C6）。回包带入站的 `reqId`（有的话）。
 
 `node.welcome`、`publisher.welcome`、`queue.snapshot`、`task.published`、`task.unsubscribed`、`task.claimed`、`task.claim-rejected`、`task.renewed`、`task.completed`、`task.released`、`task.fail-ack`、`task.lease-lost`、`task.opened`、`task.taken`、`task.closed`、`task.done`、`task.failed`、`error`。
+
+### A.12 收回原因与丢认领的诊断（2026-09-28，`claude/stall-phases`）〔裁〕
+
+M8 的 C1（放云端）里两台独立渲染主机各丢了 6、7 次认领，节点那边只收到 `lease-lost { reason: 'expired' }`，分不出是租约到期、停滞还是断线；主机的逐任务事件也不进日志。试过只看现有日志与诊断接口：队列对三种回收发的是同一个 reason，任务视图不带 `lastError`，`describe()` 只在托管端进程里、事后拿不到。只能改消息形状，改动如下（三级机制，报告 `docs/reports/AGENT-stall-phases.md`）：
+
+1. **回收的 `lease-lost` 带真实原因**：A.8 的回收给原认领者发 `task.lease-lost { id, token, reason }`，`reason` 就是这次放弃记的 `lastError`：`lease-expired`（第 1 项）、`stalled`（第 2 项）、`disconnected`（第 3 项；这时连接多半已不在，照 A.7.6 不发）。原来一律是 `expired`。节点侧只把 `reason` 原样交给 `onLost`，不按它分支，旧节点照常工作。A.7.6 那一条按此读。
+2. **任务视图带 `lastError`**：`TaskView` 在任务放弃过（`lastError` 非空）时多带 `lastError: string`，没放弃过的不带这一项。放回 `open` 的 `task.opened`、`queue.snapshot`、认领回包里的 `task` 都一样。旧节点不认这一项，照常工作。
+3. **节点侧的诊断**（不改消息）：`task-runner.mjs` 的 `lost`、`discarded`、`failed`、`completed`、`dedup` 事件带所处阶段（`dedup` / `manifest` / `render` / `push` / `plan`，及执行器、产物库报的细一层位置）、帧数、距上次帧数变化与距认领的毫秒数，推送阶段另带块数与用时；预渲染进程按行打 `[queue-node] node.task-<类型> {…}`，编辑器进程的转发器放行这几种行与 `sink.incomplete`（只带任务 id、原因、阶段与毫秒数，不带会话号与凭证）。产物库 `put(entry, { signal?, report? })` 的第二个参数可选：`report` 报推送进度；没收全时回包另带 `reason`（`range-missing` / `small-missing` / `collect-failed:<code>` / `push-failed:<code>` / `bad-kind`）与 `stats`。D.1 的形状不变，只多了可选项。
 
 ---
 

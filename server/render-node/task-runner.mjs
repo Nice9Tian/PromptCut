@@ -22,6 +22,15 @@
  * 对注入接口的每次等待都和中止信号赛跑(`untilAborted`):执行器或产物库不理会中止、一直不返回,这次执行也会在
  * 中止时落定(`settled()` 不会被卡死的执行器拖住),之后它再返回什么都被丢弃。
  *
+ * # 阶段与收尾事件的诊断(`docs/reports/AGENT-stall-phases.md`)
+ *
+ * 每次执行记它此刻在哪个阶段:`dedup`(`sink.has`)、`manifest`(`sink.resultFor`)、`render`(`executor.render`)、
+ * `push`(`sink.put`)、`plan`(切分)。执行器与产物库可以经多给的回调报细一层的位置(执行器的第二个参数里
+ * `phase(name, fields)`;产物库 `put` 的第二个参数里 `report({ stage, blocks, pushed, bytes })`),不用也照常工作。
+ * `lost`、`discarded`、`failed`、`completed`、`dedup` 事件带上:阶段 `phase` 与细分 `detail`、帧数 `done`、
+ * 距上次帧数变化 `sinceDoneMs`、距认领 `sinceClaimMs`、在这一阶段多久 `phaseMs`;推送阶段另带
+ * `push: { blocks, pushed, bytes, ms }`。时刻由注入的 `now` 取(缺省 `Date.now`),不开计时器。
+ *
  * @typedef {object} TaskRunner
  * @property {(task: object, ctx: { token: number, browserFingerprints?: string[] }) => void} onTask  会话的 onTask
  * @property {(id: string, reason: string) => void} onLost   会话的 onLost
@@ -65,11 +74,12 @@ export function resultFields(result) {
  * @param {{ render: (task: object, opts: { signal: AbortSignal, progress: (done: number) => void }) => Promise<unknown> }} options.executor
  * @param {{ has: Function, put: Function, resultFor?: Function }} options.sink
  * @param {(event: object) => void} [options.emit]   诊断事件(调用方负责吞掉它自己的异常)
+ * @param {() => number} [options.now]   诊断用的时钟(缺省 `Date.now`)
  * @param {(run: object, task: object, ctx: object) => Promise<void>} [options.executePlan]
  *   plan 任务怎么做(桌面给);它抛出的错误按细任务的规矩 fail。不给时 plan 按不可重试失败处理
  * @returns {TaskRunner}
  */
-export function createTaskRunner({ nodeId, session, executor, sink, emit = () => {}, executePlan = null }) {
+export function createTaskRunner({ nodeId, session, executor, sink, emit = () => {}, executePlan = null, now = Date.now }) {
   /** 在跑表:id → 当前这一次执行 { id, token, kind, controller }。中止即移出 */
   const active = new Map();
   /** 还没落定的执行(含已中止、还在收尾的),供 `settled()` 等 */
@@ -85,6 +95,51 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
     for (const run of [...active.values()]) abortRun(run, reason);
   }
 
+  const clock = () => {
+    try { const t = now(); return Number.isFinite(t) ? t : Date.now(); } catch { return Date.now(); }
+  };
+
+  /** 进入一个阶段(诊断);细一层的位置清空 */
+  function enter(run, phase) {
+    run.phase = phase;
+    run.phaseAt = clock();
+    run.detail = null;
+  }
+
+  /** 执行器、产物库报的细一层位置(诊断):只留名字和数字字段 */
+  function note(run, name, fields) {
+    if (typeof name !== 'string' || !name) return;
+    const detail = { name: name.slice(0, 40) };
+    if (fields && typeof fields === 'object') {
+      for (const [k, v] of Object.entries(fields)) if (typeof v === 'number' && Number.isFinite(v)) detail[k.slice(0, 24)] = v;
+    }
+    run.detail = detail;
+  }
+
+  /** 事件里带的执行诊断(见文件头) */
+  function info(run) {
+    const t = clock();
+    const out = {
+      phase: run.phase, done: run.done,
+      sinceDoneMs: Math.max(0, t - run.doneAt), sinceClaimMs: Math.max(0, t - run.claimedAt), phaseMs: Math.max(0, t - run.phaseAt),
+    };
+    if (run.detail) out.detail = { ...run.detail };
+    if (run.push) {
+      const { blocks, pushed, bytes, startedAt, endedAt } = run.push;
+      out.push = { blocks, pushed, bytes, ms: Math.max(0, (endedAt ?? t) - startedAt) };
+    }
+    return out;
+  }
+
+  /** 产物库 `put` 的进度回调:推送开始时给总块数,每推完一块给已推块数 */
+  function pushReport(run) {
+    return (update) => {
+      if (!update || typeof update !== 'object' || !run.push || run.controller.signal.aborted) return;
+      for (const k of ['blocks', 'pushed', 'bytes']) if (Number.isFinite(update[k])) run.push[k] = update[k];
+      if (typeof update.stage === 'string') note(run, update.stage);
+    };
+  }
+
   /** 仍持有:见文件头。同步判定,判完到发消息之间不能 await。 */
   function holding(run) {
     if (stopped || run.controller.signal.aborted || active.get(run.id) !== run) return false;
@@ -97,7 +152,12 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
     // 同一 id 还挂着旧的执行:它的持有已经没了(否则会话不会再调 onTask),先中止
     const previous = active.get(id);
     if (previous) abortRun(previous, 'reclaimed');
-    const run = { id, token: ctx.token, kind: task.kind, controller: new AbortController() };
+    const at = clock();
+    const run = {
+      id, token: ctx.token, kind: task.kind, controller: new AbortController(),
+      // 诊断(见文件头「阶段与收尾事件的诊断」)
+      claimedAt: at, phase: 'start', phaseAt: at, detail: null, done: 0, doneAt: at, push: null,
+    };
     active.set(id, run);
     // 开工先报一次进度 0(契约 D.2〔裁〕)
     try {
@@ -114,17 +174,22 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
 
   function onLost(id, reason) {
     const run = active.get(id);
+    const diag = run ? info(run) : {};
     if (run) abortRun(run, reason);
-    emit({ type: 'lost', id, reason });
+    emit({ type: 'lost', id, reason, ...diag });
   }
 
   /** 一次执行。从不拒绝:所有异常都在这里收掉。 */
   async function execute(run, task, ctx) {
     const { id } = run;
     const { signal } = run.controller;
-    const discard = () => emit({ type: 'discarded', id });
+    const discard = () => {
+      const why = signal.reason;
+      emit({ type: 'discarded', id, ...(typeof why === 'string' && why ? { reason: why } : {}), ...info(run) });
+    };
     try {
       if (task.kind === 'plan') {
+        enter(run, 'plan');
         if (typeof executePlan !== 'function') {
           throw Object.assign(new Error('这个节点不切分 plan 任务'), { retryable: false });
         }
@@ -138,6 +203,7 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
       const ref = { resultKey, kind, tier: task.tier ?? null, range, input: task.input, requires: task.requires };
       const ranges = [[range?.from, range?.to]];
 
+      enter(run, 'dedup');
       const have = await untilAborted(() => sink.has({ ...ref }), signal);
       if (!holding(run)) return discard();
       if (have === true) {
@@ -145,6 +211,7 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
         // resultFor 抛错算「没有清单」:照旧以去重方式完成,不让任务失败(契约 J.10)
         let manifest = null;
         if (typeof sink.resultFor === 'function') {
+          enter(run, 'manifest');
           try {
             manifest = await untilAborted(() => sink.resultFor({ ...ref }), signal);
           } catch (error) {
@@ -154,29 +221,40 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
           if (!holding(run)) return discard();
         }
         session().complete(id, { ranges, dedup: true, ...resultFields(manifest) });
-        emit({ type: 'dedup', id });
+        emit({ type: 'dedup', id, ...info(run) });
         return;
       }
 
       const progress = done => {
+        if (signal.aborted) return;
+        if (done !== run.done) { run.done = done; run.doneAt = clock(); }
         if (holding(run)) session().progress(id, done);
       };
-      const artifacts = await untilAborted(() => executor.render(task, { signal, progress }), signal);
+      // 执行器报细一层的位置(诊断,可以不调)
+      const phase = (name, fields) => { if (!signal.aborted) note(run, name, fields); };
+      enter(run, 'render');
+      const artifacts = await untilAborted(() => executor.render(task, { signal, progress, phase }), signal);
       if (!holding(run)) return discard();
 
+      enter(run, 'push');
+      run.push = { blocks: null, pushed: 0, bytes: null, startedAt: clock(), endedAt: null };
+      const report = pushReport(run);
       const r = await untilAborted(
-        () => sink.put({ ...ref, artifacts, meta: { taskId: id, nodeId, token: run.token } }),
+        () => sink.put({ ...ref, artifacts, meta: { taskId: id, nodeId, token: run.token } }, { signal, report }),
         signal,
       );
+      run.push.endedAt = clock();
       if (!holding(run)) return discard();
       if (r?.complete !== true) {
         session().fail(id, 'sink-incomplete', true);
-        emit({ type: 'failed', id, error: 'sink-incomplete', retryable: true });
+        // 产物库说了为什么没收全(缺帧、缺小尺寸、推送出错)就一并记下;报给队列的 error 仍是 sink-incomplete
+        const why = typeof r?.reason === 'string' && r.reason ? { why: r.reason.slice(0, 300) } : {};
+        emit({ type: 'failed', id, error: 'sink-incomplete', retryable: true, ...why, ...info(run) });
         return;
       }
       // put 回的清单(C6.2 第 3 节)展开进 task.done 的 result(J.3)
       session().complete(id, { ranges, ...resultFields(r.result) });
-      emit({ type: 'completed', id });
+      emit({ type: 'completed', id, ...info(run) });
     } catch (error) {
       if (error === ABORTED || !holding(run)) return discard();
       const message = String(error?.message ?? error);
@@ -186,7 +264,7 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
       } catch {
         // 连发失败都做不到(连接已坏):持有已经从会话里移除,队列会按租约或断开回收
       }
-      emit({ type: 'failed', id, error: message, retryable });
+      emit({ type: 'failed', id, error: message, retryable, ...info(run) });
     }
   }
 

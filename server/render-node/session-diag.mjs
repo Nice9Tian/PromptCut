@@ -123,12 +123,23 @@ export function sessionLogger(write, { extra = {}, throttle = createLogThrottle(
 export const SESSION_LINE_RE = /^\[(?:queue-node|artifact-push)\] docservice\.(session\.[a-z-]+)\b/;
 
 /**
+ * 预渲染进程输出里的逐任务收尾行(`docs/reports/AGENT-stall-phases.md`):`[queue-node] node.task-<lost|failed|discarded|completed|dedup> {…}`
+ * 与产物库没收全的 `[queue-node] sink.incomplete {…}`(`vite-plugin-frames.ts` 的 `taskEventLog`、`artifact-transfer.mjs` 的 `put`)。
+ * 这些行只带任务 id、原因、阶段与毫秒数,不带会话号与凭证。
+ */
+export const TASK_LINE_RE = /^\[queue-node\] (node\.task-(?:lost|failed|discarded|completed|dedup)|sink\.incomplete)\b/;
+
+/**
  * 按行转发子进程输出里的会话事件行(编辑器进程收预渲染进程的 stdout / stderr 用)。块可能在行中间断开,
  * 不完整的尾巴留到下一块;单行超过 `maxLine` 字符截断。源头(预渲染进程)已按事件节流,这里再兜一层:
  * 每种事件每个窗口最多 `burst` 行,压下的条数随下一行带出(行尾 ` (suppressed N)`)。
+ * 逐任务收尾行(`TASK_LINE_RE`)另走 `taskThrottle`(每种每分钟 60 行):一轮几十个任务,不该被会话事件的额度压掉。
  * 回 `(chunk) => void`。
  */
-export function createSessionLineForwarder(write, { throttle = createLogThrottle({ burst: 10, windowMs: 60_000 }), maxLine = 2000, re = SESSION_LINE_RE } = {}) {
+export function createSessionLineForwarder(write, {
+  throttle = createLogThrottle({ burst: 10, windowMs: 60_000 }), maxLine = 2000, re = SESSION_LINE_RE,
+  taskRe = TASK_LINE_RE, taskThrottle = createLogThrottle({ burst: 60, windowMs: 60_000 }),
+} = {}) {
   let tail = '';
   return (chunk) => {
     const text = tail + String(chunk);
@@ -137,8 +148,9 @@ export function createSessionLineForwarder(write, { throttle = createLogThrottle
     if (tail.length > maxLine * 4) tail = '';
     for (const raw of lines) {
       const m = re.exec(raw);
-      if (!m) continue;
-      const got = throttle.take(m[1]);
+      const t = m ? null : (taskRe ? taskRe.exec(raw) : null);
+      if (!m && !t) continue;
+      const got = m ? throttle.take(m[1]) : taskThrottle.take(t[1]);
       if (!got) continue;
       const line = raw.length > maxLine ? `${raw.slice(0, maxLine)}…` : raw;
       write(got.suppressed > 0 ? `${line} (suppressed ${got.suppressed})` : line);

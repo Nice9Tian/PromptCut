@@ -246,6 +246,23 @@ const queueLog = (event: string, fields: object = {}) => {
   try { console.info("[queue-node]", event, JSON.stringify(fields)); } catch { console.info("[queue-node]", event); }
 };
 
+/**
+ * 逐任务的收尾事件进日志(`docs/reports/AGENT-stall-phases.md`):local-node 的 `lost` / `failed` / `discarded` / `completed` / `dedup`
+ * 各打一行 `[queue-node] node.task-<类型> {…}`,带时刻、任务 id、原因、所处阶段、距上次帧数变化与距认领的毫秒数,推送阶段另带块数与用时
+ * (task-runner 的 `info`)。编辑器进程的转发器(`session-diag.mjs` 的 `createSessionLineForwarder`)放行这几种行,
+ * 独立渲染主机的日志(`scripts/render-host.mjs`)与 PC 编辑器的日志都看得到。只带诊断字段,不带会话号、票据、口令。
+ */
+const TASK_LOG_TYPES = new Set(["lost", "failed", "discarded", "completed", "dedup"]);
+function taskEventLog(event: any, extra: object = {}) {
+  const type = event?.type;
+  if (!TASK_LOG_TYPES.has(type)) return;
+  const pick: Record<string, unknown> = { at: new Date().toISOString(), id: typeof event.id === "string" ? event.id : null, ...extra };
+  for (const k of ["reason", "error", "why", "retryable", "phase", "detail", "done", "sinceDoneMs", "sinceClaimMs", "phaseMs", "push"]) {
+    if (event[k] !== undefined) pick[k] = typeof event[k] === "string" ? event[k].slice(0, 300) : event[k];
+  }
+  queueLog(`node.task-${type}`, pick);
+}
+
 type QueueNode = {
   /** 连着文档服务、本机节点已经报到:`/preload` 走队列模式 */
   active(): boolean;
@@ -458,6 +475,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
         else if (event?.type === "lost") stats.lost++;
         else if (event?.type === "plan-split") { stats.planSplit++; planDerived.set(id, [...(event.derived ?? [])]); }
         if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { id, ...(event.error ? { error: event.error } : {}), ...(event.derived ? { derived: event.derived.length } : {}) });
+        taskEventLog(event);
       },
     });
   };
@@ -836,6 +854,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     },
     onEvent: (event: any) => {
       if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { project: event.index, id: event.id, ...(event.error ? { error: event.error } : {}) });
+      taskEventLog(event, { project: event?.index ?? null, projectId: event?.projectId ?? null });
     },
   });
 

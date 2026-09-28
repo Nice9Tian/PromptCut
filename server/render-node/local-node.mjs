@@ -246,7 +246,7 @@ export function createLocalNode({
   // 细任务的编排在同构模块里(M7 D11);plan 的切分只在这里(要 split.mjs)
   // eslint-disable-next-line prefer-const
   let session;
-  const runner = createTaskRunner({ nodeId, session: () => session, executor, sink, emit, executePlan });
+  const runner = createTaskRunner({ nodeId, session: () => session, executor, sink, emit, executePlan, now });
   const { holding } = runner;
 
   // undefined 不传,让会话用它自己的缺省值

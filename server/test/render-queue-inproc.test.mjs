@@ -840,7 +840,7 @@ async function runHungNode({ seedA, seedB, onHang }) {
   });
   const lostMsgs = rig.out('task.lease-lost').filter(e => e.connId === a.connId && e.message.id === victim);
   assert.equal(lostMsgs.length, 1, '卡死节点应收到一条 lease-lost');
-  assert.equal(lostMsgs[0].message.reason, 'expired');
+  assert.equal(lostMsgs[0].message.reason, reclaimError, 'lease-lost 的 reason 是回收原因（契约 A.12〔裁〕）');
   assert.ok(a.eventsOf('lost').some(e => e.id === victim), '卡死节点应报 lost');
   assert.equal(rig.exec.hung().find(c => c.id === victim)?.abortSeen, true, '丢认领后应中止对应的执行');
   const finisher = rig.out('task.completed').filter(e => e.message.id === victim);
