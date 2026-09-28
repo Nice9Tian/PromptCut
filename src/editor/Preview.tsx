@@ -9,7 +9,7 @@ import { actions, getState, useStore } from "../store/project";
 import { findClip } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
-import { frontStage, onStageEvent, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
+import { frontStage, onStageEvent, pushProject, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
 import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, liveStage, singleLiveStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
@@ -24,9 +24,9 @@ import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
-import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { currentReadyIndex, deliverSnapshots, exemptOnline, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
-import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
+import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
@@ -34,15 +34,69 @@ import { resolveGlRoute } from "../render/costDevice.mjs";
 import { ONLINE } from "../online/mode";
 import { LOW_MEMORY_TEXT, lowMemoryMode, noteRuntimeTrouble, readDisplayTier, setDisplayTier, type DisplayTier } from "../online/lowMemory";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
-import { assetAuthHeaders, docRequest, remoteAssetBase, remoteAssetTicket, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
-import { currentDocProjectId, currentSharedLink, pageSession, pushToast } from "./sync/syncManager";
+import { assetAuthHeaders, docRequest, hasDocLink, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
+import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
-import { needsLocalPc } from "../render/placeholderHost";
-import { setPlanAllHeavy } from "./planDispatch";
+import { needsLocalPc, setOnlineBrowserMode } from "../render/placeholderHost";
+import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
+import { lowMemoryMeasuring, lowMemorySearchState, reclassify, runLowMemorySearch, type LowMemorySearchOutcome } from "./lowMemorySearch";
+import { LowMemoryGate } from "./LowMemoryGate";
+import { SHARED_COST_RELAY_MS, SharedCostRelay, publishSharedCosts, toSharedInput, type SharedCostInput } from "./sharedCosts";
+import { clipIdentityOf } from "./costIdentity";
+import { pageEnvironment } from "./pageEnvironment.mjs";
+import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.mjs";
+import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
+import { SWAP_MS } from "../render/beatSwap.mjs";
+import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
+import { pageL2 } from "../online/l2";
+import { l2CostBackend } from "../online/l2Costs";
+import { createPlanPublisher } from "../online/planPublisher";
+import { CODE_VERSION } from "../online/buildInfo";
+import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
+import { backStage } from "./stageBridge";
+import { onCostRecords, onProbeProgress, probeFrameDiag, probeSettledFor, setCostBackend } from "./probeRunner";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
 /** 「进入项目时提示一次当前是低内存档」(c10a 第 8 节):一个页面会话只提示一次 */
 let lowMemoryNoticeShown = false;
+
+/**
+ * 低内存档界限搜索的本地复用(「卡片身份 + 本机环境指纹」→ 本机实测的单帧耗时;`boundarySearch.mjs`)。
+ * 缺省是页面内存;集成时由主会话经 `setLowMemoryCostStore` 接到页面内快照库 L2 的 `costs` 表(方法同名 `getCost` / `putCost`)。
+ */
+let lowMemoryCostStore: CostStore = createMemoryCostStore();
+export function setLowMemoryCostStore(store: CostStore): void {
+  lowMemoryCostStore = store;
+}
+
+/**
+ * 低内存档的本地复用接到页面内快照库 L2 的 `costs` 表(C10 集成:交接文件第 2.2 节第 3 条)。键形 `<identityKey>|<envFingerprint>`
+ * (`boundarySearch.mjs` 的 `localCostKey`),与普通档 K1 记录的键(`<identityKey>
+<device>`,`l2Costs.ts`)不相撞;
+ * 这些记录没有 `device`,普通档读 K1 记录时滤掉。L2 打不开(没有 IndexedDB、被浏览器拒)时退回页面内存。
+ */
+function l2LowMemoryCostStore(): CostStore {
+  const fallback = createMemoryCostStore();
+  const l2 = () => pageL2({ lowMemory: true }).catch(() => null);
+  return {
+    async getCost(key: string) {
+      const s = await l2();
+      return s ? s.getCost(key) : fallback.getCost(key);
+    },
+    async putCost(key: string, rec) {
+      const s = await l2();
+      if (s) await s.putCost(key, rec);
+      else fallback.putCost(key, rec);
+    },
+  };
+}
+
+/*
+ * 父页的在线浏览器模式开关(C10 契约第 9 节):与舞台 `StageView` 同一个判据(在线构建,或编辑页地址上的
+ * `platform=browser`,后者经 `stageSrc` 转给舞台)。`snapshotFeed` 据它豁免用户卡、图卡的选帧与投递,
+ * 时间轴据它给这些片段挂「该模式暂不支持自定义卡」的徽标。
+ */
+try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location */ }
 
 /*
  * A1 的 `localHashes`:**当前连接的素材服务**报 `complete` 的哈希集合,换档判据只看它
@@ -87,6 +141,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   const frameARef = useRef<HTMLIFrameElement>(null);
   const frameBRef = useRef<HTMLIFrameElement>(null);
+  /*
+   * 在线普通档的两个舞台(C10 契约第 2 节):舞台源来自运行配置(页面载入时取,`src/online/boot.ts`),握手失败退回同源单舞台。
+   * 状态变了要重渲(`dualStage()` 读的是这一份)。运行配置还没取完时先不挂舞台 iframe,免得先按同源挂上、再换源重载一次。
+   */
+  const onlineStages = useSyncExternalStore(subscribeOnlineStages, onlineStageState, onlineStageState);
+  const stagesPending = ONLINE && onlineStages.config !== "done";
   const dual = dualStage();
   /**
    * 可见舞台渲 live 变体:双舞台,或在线页面的同源单舞台(`docs/plan/c10a-contract.md` 第 8.1 节)。
@@ -164,6 +224,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   const rpcRef = useRef<Record<StageId, StageRpcClient | null>>({ A: null, B: null });
   const hostCapsRef = useRef<Record<StageId, HostCapabilities | null>>({ A: null, B: null });
+  /** 在线双舞台这一轮握上手的舞台(C10 契约第 2 节:两个都握上才算成;超时算失败,退回同源单舞台) */
+  const handshookRef = useRef(new Set<StageId>());
   /**
    * 下面那一堆(拖动、命中、心跳、节拍)问的都是**可见舞台**。
    *
@@ -216,9 +278,16 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (base) { try { ticket = await remoteAssetTicket(); } catch { ticket = null; } }
     const policy: MediaTierPolicy = { lowMemory: lowMemRef.current, online: true, remote: base ? { base, ticket } : null };
     setMediaTierPolicy(policy);
+    /*
+     * 跨源的舞台(C10 契约第 2 节「舞台读素材」):一律用相对地址读**自己源上**反代的 `/media`,不跨源直读素材服务
+     * (那要靠 CORS,媒体画进 canvas 会污染它)。基址与编辑器页同源时换成路径;票据照旧经 RPC 下发、走 `?t=`。
+     */
+    const stagePolicy: MediaTierPolicy = dualRef.current && base
+      ? { ...policy, remote: { base: stageAssetBase(base, location.origin), ticket } }
+      : policy;
     for (const id of STAGE_IDS) {
       const c = rpcRef.current[id];
-      if (c) void c.setMediaPolicy(policy).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
+      if (c) void c.setMediaPolicy(stagePolicy).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
     }
   }, []);
   const pushMediaPolicyRef = useRef(pushMediaPolicy);
@@ -226,18 +295,63 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   useEffect(() => {
     if (!ONLINE) return;
     void pushMediaPolicy();
-    // 远程素材服务换了(进入 / 离开共享项目)就重发;票据 15 分钟有效,每 5 分钟续一次
+    // 远程素材服务换了(进入 / 离开共享项目)就重发。票据按它自己的寿命续:剩一半就重发一次(15 分钟的票据约 7 分钟一次;
+    // 测试里缩短了票据时限时跟着变快 —— C10 契约第 12 节),至多 5 分钟一次
     const off = subscribeRemoteAssets(() => { void pushMediaPolicy(); });
-    const timer = window.setInterval(() => { void pushMediaPolicy(); }, 5 * 60_000);
-    return () => { off(); window.clearInterval(timer); };
+    let timer = 0;
+    let alive = true;
+    const loop = async () => {
+      if (!alive) return;
+      await pushMediaPolicy();
+      const info = await remoteAssetTicketInfo(false);
+      const left = info ? info.exp - Date.now() : 5 * 60_000;
+      if (alive) timer = window.setTimeout(() => { void loop(); }, Math.max(1000, Math.min(5 * 60_000, left / 2)));
+    };
+    timer = window.setTimeout(() => { void loop(); }, 1000);
+    return () => { alive = false; off(); window.clearTimeout(timer); };
   }, [lowMem, pushMediaPolicy]);
   /*
-   * 低内存档的过渡做法(c10a 契约第 17 节「全部按重卡」):不测,所有卡按重卡处理 —— 播放时一律贴预渲染小尺寸,
-   * 不活渲任何卡;没有产物的层照兜底顺序显示占位符。普通档(电脑浏览器)不变。
+   * 低内存档(语义 `product/platforms.md`「面向的平台」):播放时一律贴预渲染小尺寸、不活渲任何卡(显示用的表全部判重);
+   * 轻重判定按共享成本记录加界限搜索(下面那个 effect),只决定补渲发给谁、导出时谁本机渲。普通档(电脑浏览器)不变。
    */
   useEffect(() => {
-    setPlanAllHeavy(ONLINE && lowMem);
-    return () => setPlanAllHeavy(false);
+    setPlanLowMemory(ONLINE && lowMem);
+    return () => setPlanLowMemory(false);
+  }, [lowMem]);
+  /*
+   * L4(C10 契约第 6 节、第 18 节第 1 条):在线普通档没有流,重层每拍换一次 HTML 快照 —— 播放中的投递不受 33 ms 节流;
+   * 换帧成本 `swapMs` 进每拍预算,分派时每张重卡每拍的固定成本也换成它(两边同一个预算)。
+   */
+  useEffect(() => {
+    const on = ONLINE && !lowMem;
+    setBeatSwap(on, { swapMs: SWAP_MS, occupied: lightCostAt });
+    setPlanDeadMs(on ? SWAP_MS : null);
+    return () => { setBeatSwap(false); setPlanDeadMs(null); };
+  }, [lowMem]);
+  /* C10 契约第 3 节:在线普通档的成本记录存进 L2 的 `costs` 表(`mode=build`,关掉再开不重测) */
+  useEffect(() => {
+    if (!ONLINE || lowMem) return;
+    setCostBackend({ ...l2CostBackend(pageL2({ lowMemory: false })), forwardFrames: false });
+    /*
+     * 测完写进文档服务(契约第 3 节、第 18 节第 7 条;交接文件第 2.2 节第 2 条):连着共享项目时,每测完一张卡当场转写一次。
+     * 下面的 `SharedCostRelay` 每 5 秒也会从分派表里补传(接上共享项目之前测过的、这里没发成的),两路都走也无害:
+     * 文档服务按测量时刻留最新。
+     */
+    const diag = { calls: 0, ok: 0, failed: 0, records: 0, lastError: null as string | null };
+    const off = onCostRecords((records) => {
+      if (!hasDocLink() || !currentSharedLink()) return;
+      const projectId = currentDocProjectId();
+      if (!projectId) return;
+      const input = records.map((r) => toSharedInput(r)).filter((r): r is SharedCostInput => !!r);
+      if (!input.length) return;
+      diag.calls++;
+      void publishSharedCosts({ request: docRequest, projectId, environment: pageEnvironment(), records: input })
+        .then((r) => { if (r.ok) { diag.ok++; diag.records += input.length; } else { diag.failed++; diag.lastError = r.error ?? null; } })
+        .catch((e) => { diag.failed++; diag.lastError = String(e); });
+    });
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcCostPublish = () => ({ ...diag });
+    return () => { off(); setCostBackend(null); delete w.__pcCostPublish; };
   }, [lowMem]);
   /* 低内存档切到后台时停预览(契约第 13 节 Q2 的采纳:后台计时器、rAF 都不保证继续,回来时从停着的地方接) */
   useEffect(() => {
@@ -465,7 +579,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         // 新载入的舞台就是最新的卡片代码
         noteStageFresh(id);
         rpcRef.current[id]?.dispose();
-        const client = createStageRpc(win, stageTargetOrigin(id));
+        // 回包发给这个 iframe 此刻真实的源(换源重载的过渡期里 `stageTargetOrigin` 可能已经是另一个)
+        const client = createStageRpc(win, e.origin && e.origin !== "null" ? e.origin : stageTargetOrigin(id));
+        handshookRef.current.add(id);
+        if (ONLINE && dualRef.current && handshookRef.current.has("A") && handshookRef.current.has("B")) markStageHandshake("ok");
         rpcRef.current[id] = client;
         const caps = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
         hostCapsRef.current[id] = caps;
@@ -493,6 +610,16 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       sharedGlRef.current = null;
     };
   }, [glPortTo]);
+
+  useEffect(() => {
+    if (!ONLINE || !dual) return;
+    handshookRef.current = new Set();
+    const timer = window.setTimeout(() => {
+      const got = [...handshookRef.current];
+      if (got.length < 2) markStageHandshake("failed", `握上手的舞台:${got.join("、") || "无"}`);
+    }, STAGE_HANDSHAKE_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [dual]);
 
   /*
    * 卡片代码换了一般不重载舞台(C6.6 集成 3b)。以前改一张卡,热更新冒到本组件,Fast Refresh 重跑上面那个握手 effect,
@@ -582,7 +709,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   /** 上一次发出去的流平面(R8;同样拼成字符串比) */
   const streamPlanesRef = useRef("[]");
   const pumpFeed = useCallback(async () => {
-    if (!liveRef.current) return;
+    // 低内存档界限搜索正占着唯一那个舞台测量:不投快照、不发抑制(测完由 restore 重投)
+    if (!liveRef.current || lowMemoryMeasuring()) return;
     const s = frontStage();
     if (!s) return;
     const head = { project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current };
@@ -616,12 +744,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * `stopSnapshotFeed()` 把就绪索引、字节缓存、投递基线全清掉再重连,重连空档里播放中的重卡全透明。
    * 拆成两个:核 session 的跟着 `project` 跑,收摊的只在 `dual` 变了 / 卸载时跑。
    */
+  // 在线页面没有预渲染进程(没有 SSE 就绪索引):双舞台时快照来源照旧是下面的在线实现
   useEffect(() => {
-    if (!dual) return;
+    if (!dual || ONLINE) return;
     syncSnapshotSubscription(() => { void pumpRef.current(); });
   }, [dual, project]);
   useEffect(() => {
-    if (!dual) return;
+    if (!dual || ONLINE) return;
     return () => stopSnapshotFeed();
   }, [dual]);
 
@@ -634,7 +763,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const onlineSourceRef = useRef<OnlineSnapshotSource | null>(null);
   useEffect(() => {
     if (!online) return;
-    const src = new OnlineSnapshotSource({ request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders });
+    /*
+     * C10 契约第 4、5 节:普通档取预渲染原尺寸(`snap/<hash>`,按层表 v 2 与清单)进页面内快照库 L2;低内存档仍取小尺寸,
+     * C10a 的 64 MiB 内存 LRU 换成 L2(只存小尺寸)。
+     */
+    const src = new OnlineSnapshotSource({
+      request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders,
+      // 用户卡、图卡的层不取清单、不预取字节(C10 契约第 9 节,与选帧的豁免同一个判法)
+      skipLayer: (clipId) => {
+        for (const tr of getState().project.tracks) for (const c of tr.clips) if (c.id === clipId) return exemptOnline(c);
+        return false;
+      },
+    }, { tier: lowMemRef.current ? "small" : "original", store: pageL2({ lowMemory: lowMemRef.current }) });
     onlineSourceRef.current = src;
     setActiveOnlineSource(src);
     setSnapshotSource(src);
@@ -672,7 +812,53 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       setActiveOnlineSource(null);
       stopSnapshotFeed();
     };
+  }, [online, lowMem]);
+  /* C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上 */
+  useEffect(() => {
+    if (!online) return;
+    return subscribeQueueEvents((m) => { if (m.type === "task.done") onlineSourceRef.current?.refresh(); });
   }, [online]);
+  /*
+   * C10 契约第 7 节、第 18 节第 9 条:在线普通档自己发布清单计划 —— 测量落定后发、防抖、项目每次改动(文档服务确认的版本变了)
+   * 或清单变了就重发;清单是页面自己判重的片段(预渲染集合,去掉这台设备显示不了的用户卡、图卡)。没人认领不报错。
+   */
+  useEffect(() => {
+    if (!online || lowMem) return;
+    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
+    const clips = () => {
+      const plan = currentPlan();
+      if (!plan) return [];
+      const p = getState().project;
+      const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
+      return [...plan.prerenderSet].filter((id) => {
+        const clip = byId.get(id);
+        // 只列卡片段(素材段不产快照),去掉这台设备显示不了的用户卡、图卡
+        return !!clip && !!clip.cardId && !needsLocalPc(clip.cardId, getCard(clip.cardId), isUserCard);
+      });
+    };
+    const publisher = createPlanPublisher({ request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION });
+    let link: unknown = null;
+    let lastKey = "";
+    const version = () => ({ projectId: currentDocProjectId() || null, projectRev: currentSharedLink()?.ds.rev ?? null });
+    const check = () => {
+      const shared = currentSharedLink();
+      if (shared !== link) { link = shared; publisher.reset(); }
+      if (!shared || !probeSettledFor(getState().project)) return;
+      const v = version();
+      const key = `${v.projectId}@${v.projectRev}|${clips().sort().join(",")}`;
+      if (key === lastKey) return;
+      const first = !lastKey;
+      lastKey = key;
+      if (first) publisher.measured(v);
+      else publisher.changed(v);
+    };
+    const offProbe = onProbeProgress(() => check());
+    const timer = window.setInterval(check, 1000);
+    check();
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcPlanPublisher = () => publisher.debug();
+    return () => { offProbe(); window.clearInterval(timer); publisher.dispose(); delete w.__pcPlanPublisher; };
+  }, [online, lowMem]);
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
 
   /*
@@ -689,12 +875,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       const src = onlineSourceRef.current;
       const layers = src?.layerClipIds() ?? null;
       const shared = currentSharedLink();
-      if (!src || !layers || !shared) return;
+      // 界限搜索做完之前不知道谁重,不发(契约 c10-contract.md 第 18 节第 8 条:判轻的卡不发补渲)
+      if (!src || !layers || !shared || !lowMemoryJudged()) return;
       // 连接换了(重连、换项目):重新报到,还缺的重发(队列只在内存里)
       if (shared !== link) { link = shared; publisher.reset(); }
       const missing = missingLayers({
         project: getState().project,
         layerClipIds: layers,
+        heavy: judgedPlan()?.prerenderSet ?? new Set<string>(),
         unsupported: (clip) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard),
       });
       void publisher.sync({ projectId: currentDocProjectId() || null, projectRev: shared.ds.rev || null, missing });
@@ -705,6 +893,126 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     w.__pcBackfill = () => publisher.debug();
     return () => { window.clearInterval(timer); delete w.__pcBackfill; };
   }, [online, lowMem]);
+  /*
+   * 低内存档的轻重判定:共享成本记录加界限搜索(`lowMemorySearch.ts`;语义 `mechanism/rendering.md`「低内存档」)。
+   * 连上共享项目、项目到了、舞台就绪后,每个共享项目搜一次;之后项目变了(加卡、改参数)不再测,按已有的界限判新卡。
+   * 取不到记录(没连上、被拒)隔一拍再试;搜索期间真要测时 `LowMemoryGate` 盖遮罩。
+   */
+  const stageReadyRef = useRef(stageReady);
+  stageReadyRef.current = stageReady;
+  const lowMemSearchRef = useRef<{ projectId: string; outcome: LowMemorySearchOutcome | null; running: boolean; waited: number } | null>(null);
+  useEffect(() => {
+    if (!online || !lowMem) return;
+    // 本地复用接 L2(要在第一次界限搜索之前接上,否则那一轮用页面内存)
+    setLowMemoryCostStore(l2LowMemoryCostStore());
+    let disposed = false;
+    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
+    const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard);
+    const tick = async () => {
+      if (disposed) return;
+      const shared = currentSharedLink();
+      const projectId = currentDocProjectId();
+      const s = frontStage();
+      if (!shared || !hasDocLink() || !projectId || !s || !stageReadyRef.current || !((shared.ds?.rev ?? 0) > 0)) return;
+      const project = getState().project;
+      const cur = lowMemSearchRef.current;
+      if (cur && cur.projectId === projectId) {
+        if (cur.running || !cur.outcome) return;
+        setPlanLowMemoryLight(reclassify(cur.outcome, project, clipIdentityOf(project).identityKeys, unsupported));
+        return;
+      }
+      const identity = clipIdentityOf(project);
+      const cardClips = project.tracks.some((tr) => tr.clips.some((c) => !!c.cardId || !!c.nodeId));
+      // 卡片身份还没算出来(卡片注册表还在装):多等几拍,10 拍之后照样开始(算不出身份的卡按重卡)
+      const waitKey = `${projectId}#wait`;
+      const waited = cur?.projectId === waitKey ? cur.waited : 0;
+      if (cardClips && !Object.keys(identity.identityKeys).length && waited < 10) {
+        lowMemSearchRef.current = { projectId: waitKey, outcome: null, running: false, waited: waited + 1 };
+        return;
+      }
+      lowMemSearchRef.current = { projectId, outcome: null, running: true, waited };
+      try {
+        const outcome = await runLowMemorySearch({
+          request: docRequest,
+          projectId,
+          project,
+          environment: pageEnvironment(),
+          identityKeys: identity.identityKeys,
+          capabilities: identity.capabilities,
+          unsupported,
+          stage: frontStage,
+          pushProject: (p) => pushProject("front", p, { reset: true }),
+          currentProject: () => getState().project,
+          restore: () => {
+            // 舞台回到可见舞台:整份项目已重灌;抑制、流平面、快照基线作废,stageReady +1 让时间与投递重来一遍
+            suppressedRef.current = "";
+            streamPlanesRef.current = "[]";
+            markBaselineReset("front");
+            setStageReady((n) => n + 1);
+          },
+          store: lowMemoryCostStore,
+          mode: import.meta.env.DEV ? "dev" : "build",
+        });
+        if (disposed) return;
+        lowMemSearchRef.current = { projectId, outcome, running: false, waited };
+        // 搜索期间项目可能又变了:按最新的项目判一遍
+        const latest = getState().project;
+        setPlanLowMemoryLight(latest === project ? outcome.light : reclassify(outcome, latest, clipIdentityOf(latest).identityKeys, unsupported));
+      } catch {
+        // 取不到记录:下一拍再试
+        if (lowMemSearchRef.current?.projectId === projectId) lowMemSearchRef.current = null;
+      }
+    };
+    const timer = window.setInterval(() => { void tick(); }, 1000);
+    void tick();
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcLowMemSearch = () => {
+      const cur = lowMemSearchRef.current;
+      const o = cur?.outcome ?? null;
+      return {
+        projectId: cur?.projectId ?? null,
+        running: cur?.running ?? false,
+        state: lowMemorySearchState(),
+        light: [...(planLowMemoryLight() ?? [])].sort(),
+        judgedHeavyClips: [...(judgedPlan()?.prerenderSet ?? [])].sort(),
+        outcome: o && {
+          keys: o.keys, forcedHeavy: o.forcedHeavy, records: o.records.length, envFingerprint: o.envFingerprint, elapsedMs: o.elapsedMs,
+          measurements: o.result.measurements, searchMeasurements: o.result.searchMeasurements, boundary: o.result.boundary,
+          threshold: o.result.threshold, order: o.result.order, trace: o.result.trace, budgetMs: o.result.budgetMs,
+          heavy: [...o.result.heavy].sort(), light: [...o.light].sort(), unrecorded: o.result.unrecorded,
+        },
+      };
+    };
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      delete w.__pcLowMemSearch;
+      lowMemSearchRef.current = null;
+    };
+  }, [online, lowMem]);
+
+  /*
+   * 非低内存档(桌面版、电脑浏览器的普通档)连着共享项目时,把本机测完的成本记录转写进文档服务(`sharedCosts.ts`;
+   * 语义 `mechanism/document-service.md`「成本记录」)。没连就不写、不报错;只转写这台浏览器测的、当前项目用到的卡。
+   */
+  useEffect(() => {
+    if (lowMem) return;
+    const relay = new SharedCostRelay({
+      request: docRequest,
+      linkKey: () => (hasDocLink() ? currentSharedLink() : null),
+      projectId: () => (currentSharedLink() ? currentDocProjectId() || null : null),
+      environment: pageEnvironment,
+      costs: currentCosts,
+      identityKeys: () => new Set(Object.values(clipIdentityOf(getState().project).identityKeys)),
+    });
+    const timer = window.setInterval(() => { void relay.sync().catch(() => 0); }, SHARED_COST_RELAY_MS);
+    void relay.sync().catch(() => 0);
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcSharedCosts = () => relay.debug();
+    w.__pcSharedCostsSync = () => relay.sync();
+    return () => { window.clearInterval(timer); delete w.__pcSharedCosts; delete w.__pcSharedCostsSync; };
+  }, [lowMem]);
+
   useEffect(() => { onlineSourceRef.current?.focus(t, project.fps || 30); }, [t, project.fps]);
 
   /* 换了 iframe:那一份投递基线跟着作废,下一次带 `reset`(A3c) */
@@ -749,6 +1057,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     suppressedRef.current = "";
     return { front: nextFront, back: nextBack };
   }, []);
+  /* 退回单舞台(握手失败、改判低内存档)时,可见舞台回到 A(B 已经卸掉) */
+  useEffect(() => {
+    if (!dual && frontIdRef.current !== "A") { frontIdRef.current = "A"; setFrontId("A"); }
+  }, [dual]);
+  /*
+   * C10 契约第 2 节「后台舞台的摆放与节拍」:在线双舞台的后台活由本页判空闲(页面可见、rAF 间隔不持续超过 500 ms、
+   * 父页 rIC 在回调),经 RPC 发开始 / 停止。桌面运行环境不发(照旧)。
+   */
+  useEffect(() => {
+    if (!dual || !ONLINE) return;
+    return startBackWorkGate({ back: () => { const b = backStage(); return b && b !== frontStage() ? b : null; } });
+  }, [dual]);
   useEffect(() => {
     if (!dual) return;
     setSwapHost({
@@ -780,9 +1100,22 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       pendingDemote: [...pendingDemotes()],
       demoted: [...demotedClips()],
       swapInFlight: swapInFlight(),
+      swapLog: stageSwapDebug(),
+      swapTrace: stageSwapTrace(),
+      // 播放态互换的发起判断(整场景估时 / 追不上不发起)与停下时的让路次数
+      swapPlaying: stageSwapPlayingDebug(),
+      setTimeLog: setTimeLogRef.current.slice(),
+      setTimeError: setTimeErrorRef.current,
       // 低内存档停下追一帧的上一次结果(c10a 契约第 17 节;c10a-demo-probe 读它)
       lowMemory: lowMemRef.current,
       lowMemSettle: lowMemSettleRef.current,
+      // C10:在线双舞台、按拍换快照、后台活开关、探针帧的可转移字节
+      dual: dualRef.current,
+      onlineStages: onlineStageState(),
+      beatSwap: beatSwapDebug(),
+      backWork: backWorkDiag(),
+      probeFrames: probeFrameDiag(),
+      hostCaps: { ...hostCapsRef.current },
       snapshotFeed: snapshotFeedDebug({ project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current }),
     });
     return () => { delete w.__pcPreviewDiag; };
@@ -926,7 +1259,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
 
   // 项目文档变了就发过去:经 stageBridge 只发变了的片段(两层 diff),没有基线时整份 + reset
   useEffect(() => {
-    if (!stageReady) return;
+    // 低内存档界限搜索测量期间舞台上是缩水项目:不推(测完整份重灌、stageReady +1 再来一次)
+    if (!stageReady || lowMemoryMeasuring()) return;
     void syncProject("front", project).then(() => refreshRects(), () => {});
   }, [stageReady, project, refreshRects]);
 
@@ -952,7 +1286,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 双舞台模式下由页面触发预渲染(公共 hook,legacy 那一路在 `UnifiedPreview` 里用同一份):
    * 编辑推送成功(`frameRequest` 先 `alignMirror`)且空闲(不在播放、不在拖动)时防抖发 `preload`,没就绪就接着问。
    */
-  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing, waitForProbe: true });
+  usePrerenderPreload(project, { enabled: dual && !ONLINE, idle: !playing && !scrubbing, waitForProbe: true });
+  /** 诊断:最近几次 setTime 与上一次失败(探针排查暂停后没追到活渲用) */
+  const setTimeLogRef = useRef<{ at: number; sec: number; settle: boolean }[]>([]);
+  const setTimeErrorRef = useRef<{ at: number; sec: number; error: string } | null>(null);
   const scrubbingRef = useRef(scrubbing);
   scrubbingRef.current = scrubbing;
   const lastRenderKey = useRef("");
@@ -962,9 +1299,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * `settle: true` 启动 K5 的暂停态活渲:点时间轴、拖动松开、按暂停、播放到头都带它,
    * **拖动过程中不带**(E3)。
    */
+  /**
+   * 发给可见舞台的 `setTime` 的代数(每发一次 +1)。低内存档停下追一帧按「此刻最新的 setTime + 秒数」去重:
+   * 暂停那一下父页会连着发几次 setTime(暂停、舞台最后一拍改写的 t),各自的追一帧可能在最后一次 setTime 之后才发出;
+   * 同一秒两次追一帧在舞台里并发,后一次会把前一次画好的层打断成「没画好」,画好的层又回到抑制(lowmem-online-probe G3 实测)。
+   */
+  const setTimeEpochRef = useRef(0);
+  const lowMemSettleKeyRef = useRef<string | null>(null);
   const sendSetTime = useCallback(async (sec: number, opts: { settle?: true } = {}) => {
+    setTimeLogRef.current.push({ at: Math.round(performance.now()), sec, settle: !!opts.settle });
+    if (setTimeLogRef.current.length > 12) setTimeLogRef.current.shift();
     const s = stage();
-    if (!s) return;
+    if (!s || lowMemoryMeasuring()) return;
     try {
       await syncProject("front", getState().project);
       /*
@@ -976,13 +1322,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         : { snapshots: {} as Record<string, string | null>, awaiting: [] as string[] };
       // 低内存档的停下追一帧另走 `settleLowMemory`(下面),舞台的 K5 第一路不起
       const { settle: _settle, ...stageOpts } = opts;
+      setTimeEpochRef.current++;
       await s.setTime(sec, {
         ...(lowMemRef.current ? stageOpts : opts),
         ...(Object.keys(feed.snapshots).length ? { snapshots: feed.snapshots } : {}),
         ...(feed.awaiting.length ? { awaiting: feed.awaiting } : {}),
       });
-    } catch {
+    } catch (e) {
       // iframe 正在换(detached):新的 ready 会重发
+      setTimeErrorRef.current = { at: Math.round(performance.now()), sec, error: String((e as Error)?.message ?? e).slice(0, 120) };
       markBaselineReset("front");
       return;
     }
@@ -1004,6 +1352,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const lowMemSettleGenRef = useRef(0);
   const lowMemSettleRef = useRef<(LowMemorySettleResult & { at: number }) | null>(null);
   const settleLowMemoryAt = useCallback(async (s: StageRpcClient, sec: number): Promise<void> => {
+    // 同一次 setTime 之后同一秒已经在追:不再发第二次(见 setTimeEpochRef)
+    const key = `${setTimeEpochRef.current}|${sec}`;
+    if (lowMemSettleKeyRef.current === key) return;
+    lowMemSettleKeyRef.current = key;
     const gen = ++lowMemSettleGenRef.current;
     let result: LowMemorySettleResult;
     try {
@@ -1353,6 +1705,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         ))}
         {online && <DisplayTierPicker lowMem={lowMem} />}
       </div>
+      {online && lowMem && <LowMemoryGate />}
 
       {view === "2d" && <ToolBar tool={tool} onToolChange={setTool} zoom={cam.scale} fitted={cam.auto} onFit={fitToWindow} />}
 
@@ -1412,7 +1765,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
             <div style={{ position: "relative", width: project.width, height: project.height }}>
               {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
               <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={tierList} />
-              <iframe
+              {!stagesPending && <iframe
                 ref={frameRefOf.A}
                 data-pc="stage-frame"
                 title="预览舞台"
@@ -1444,8 +1797,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                   // 后台那个还要挡掉指针 —— K5 互换之后 A 可能就是后台那一个
                   ...(frontId === "A" ? null : { pointerEvents: "none" as const }),
                 }}
-              />
-              {dual && (
+              />}
+              {dual && !stagesPending && (
                 <iframe
                   ref={frameRefOf.B}
                   data-pc="stage-frame-back"

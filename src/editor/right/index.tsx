@@ -11,14 +11,16 @@ import { CollectLoginDialog } from "./CollectLoginDialog";
 import { AgentBrowserFrame } from "./AgentBrowserFrame";
 
 import { editorApi } from "../../mcp/api";
-import { onlinePage } from "../../online/pageFlag";
+
+/** 在线构建的编译期常量,写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」 */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 export function RightPanel() {
   const [mcpConnected, setMcpConnected] = useState(false);
 
   useEffect(() => {
-    // 在线浏览器模式没有编辑器进程:不连 Agent 的工具通道(C10a 契约第 2 节)
-    if (onlinePage()) return;
+    // 在线浏览器模式没有编辑器进程:不连 Agent 的工具通道(C10a 契约第 2 节);在线构建里连同工具执行器一起剪掉
+    if (ONLINE_BUILD) return;
     const cleanup = connectMcpExecutor(() => editorApi, (s) => setMcpConnected(s.connected));
     return cleanup;
   }, []);
@@ -40,12 +42,16 @@ export function RightPanel() {
         排在宿主后面:宿主的布局效应先跑、先登记,页面内容的布局效应跑的时候节点已经挂进文档
       */}
       <DockPages mcpConnected={mcpConnected} />
+      {/*
+        下面三个浮层在线页面打不开(打开它们的入口在线都置灰或不存在:网页采集、配音设置、Agent 交出浏览器),
+        在线构建里不挂,连同背后的 /api 调用一起剪掉(C10 契约第 10 节;M8 遗留 L24)
+      */}
       {/* 站点登录框:开始页的卡和 collect_login 工具都会打开它,挂在这里才能在编辑台里出现 */}
-      <CollectLoginDialog />
+      {ONLINE_BUILD ? null : <CollectLoginDialog />}
       {/* 配音设置子窗口:顶栏的「配音设置」按钮开它 */}
-      <VoiceSettingsDialog />
+      {ONLINE_BUILD ? null : <VoiceSettingsDialog />}
       {/* 桌面壳模式下 agent 交出浏览器时的浮层(Chrome 方案下永远不会打开) */}
-      <AgentBrowserFrame />
+      {ONLINE_BUILD ? null : <AgentBrowserFrame />}
     </>
   );
 }

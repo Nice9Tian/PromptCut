@@ -741,7 +741,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const { sharedProtocols }: any = await import("./auth/shared-config.mjs");
   const { createTicketSource }: any = await import("./auth/ticket-source.mjs");
   const { createPrerenderExecutor }: any = await import("./prerender-executor.mjs");
-  const { createAssetSink }: any = await import("./artifact-transfer.mjs");
+  const { createAssetSink, layerMapOf, layerMapKeyOf }: any = await import("./artifact-transfer.mjs");
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
 
   const events: object[] = [];
@@ -794,7 +794,20 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
       rec.ticket = createTicketSource(rec.endpoint, { access: "rw" });
       rec.assets = hostAssetClient({ node, endpoint: rec.endpoint, docUrl: entry.url, origin, ticket: rec.ticket, createAssetClient, owner: `host:p${index}` });
       const sink = createAssetSink({ pipeline: service, client: rec.assets.client, content, log });
-      const executor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log, codeStamp: () => cardCode(root).epoch });
+      /*
+       * C10 契约第 18 节第 9 条:主机认领在线页面的清单计划、补渲计划时,按这条连接的内容库写这一版的层表(`layers:<项目文档 id>`,
+       * 在线页面按它找清单)。主机没有推送队列,管线自己的 publishLayerMap 写不出去。
+       */
+      const publishLayerMap = (entry: any) => {
+        const key = layerMapKeyOf(entry?.project?.id);
+        if (!key || (service as any).pushQueue) return;
+        const body = layerMapOf(entry, { picked: (clipId: string) => (service as any).prerenderPicked(entry, clipId), fingerprint: (service as any).envFingerprint });
+        void content.put("snapshot-manifest", key, body).then(
+          () => log("host.layer-map", { project: index, key: key.slice(0, 24), layers: body.layers.length }),
+          (error: any) => log("host.layer-map-failed", { project: index, message: String(error?.message ?? error) }),
+        );
+      };
+      const executor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log, codeStamp: () => cardCode(root).epoch, publishLayerMap });
       if (createHostCardSync && rec.projectId) {
         try {
           rec.cards = createHostCardSync({

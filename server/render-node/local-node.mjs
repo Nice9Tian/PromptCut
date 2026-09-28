@@ -1,5 +1,6 @@
 import { createNodeSession } from './session.mjs';
-import { isBackfillPlan, lockKeyOf, splitPlan } from './split.mjs';
+import { lockKeyOf, splitPlan } from './split.mjs';
+import { isListPlan, priorityBand } from '../render-queue/index.mjs';
 
 /**
  * 本机渲染节点的编排(分布式预渲染 M3,契约 `docs/plan/render-queue-contract.md` D 节)。
@@ -20,7 +21,7 @@ import { isBackfillPlan, lockKeyOf, splitPlan } from './split.mjs';
  *
  *   plan    executor.plan → splitPlan → task.publish 细任务(带 reqId)→ 等同一 reqId 的
  *           task.published → (有 card-locked 就照锁重切重发)→ complete 这个 plan
- *           (补渲计划任务:预渲染集合换成它的片段清单、不切流、细任务标 backfill,见 `backfillOverrides`)
+ *           (带片段清单的计划任务:预渲染集合换成它的片段清单、不切流;补渲计划的细任务标 backfill,见 `listPlanOverrides`)
  *   细任务   sink.has 为真就直接 complete(dedup,带 sink.resultFor 的清单);否则 executor.render →
  *            sink.put → 收全才 complete(带 put 回的清单),没收全 fail(可重试)。
  *            sink 收到的 ref 带任务的 input 与 requires(契约 J.3)
@@ -150,14 +151,15 @@ function resultFields(result) {
 }
 
 /**
- * 补渲计划任务(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):清单里的片段当重卡算键 ——
- * 预渲染集合换成清单(与本机的判重无关),不切轨道流(低内存档不消费流),细任务一律标 `backfill`。
- * 不是补渲计划任务时回空对象,切分照旧。
+ * 带片段清单的计划任务:补渲计划(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」)与在线页面的清单计划
+ * (C10 契约第 7 节、第 18 节第 9 条)。清单里的片段当重卡算键 —— 预渲染集合换成清单(与本机的判重无关),
+ * 不切轨道流(低内存档与在线页面都不消费流)。细任务的档跟着 plan:补渲计划的一律标 `backfill`,清单计划照 normal 的名次。
+ * 不是带清单的 plan 时回空对象,切分照旧。
  */
-function backfillOverrides(task) {
-  if (!isBackfillPlan(task)) return {};
+function listPlanOverrides(task) {
+  if (!isListPlan(task)) return {};
   const clips = Array.isArray(task.input?.clips) ? task.input.clips.filter(id => typeof id === 'string' && id) : [];
-  return { prerenderSet: new Set(clips), streams: [], lane: 'backfill' };
+  return { prerenderSet: new Set(clips), streams: [], lane: priorityBand(task.priority) === 'backfill' ? 'backfill' : 'normal' };
 }
 
 /** 中止时抛出的标记:赛跑输给中止信号,不是执行器自己的错误。 */
@@ -353,7 +355,7 @@ export function createLocalNode({
         if (!holding(run)) return discard();
         // ctx 放在前面:切分节点自己的指纹、plan 与代码版本一定生效(设计 2.1);
         // ctx 带的 cardLocks / takeover 随展开原样传给切分(契约 F.2)
-        const base = { ...ctx, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, ...backfillOverrides(task) };
+        const base = { ...ctx, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, ...listPlanOverrides(task) };
         const outcome = await publishDerived(run, base, ctx?.cardLocks);
         if (!holding(run)) return discard();
         const { derived, relocked, gaveUp } = outcome;

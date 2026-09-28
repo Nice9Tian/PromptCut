@@ -35,6 +35,11 @@ export interface CardCostRecord {
   /** total catch-up from the mount frame to the last clip frame (0 for random-access cards) */
   catchUpMs: number;
   capped?: boolean;
+  /**
+   * 计时趟真实采到的帧数（`summarizeProbe` 的 `samples`）。只给共享成本记录用（文档服务的 `samples`，
+   * `mechanism/document-service.md`「成本记录」），不进判重和分派；旧记录没有这一项，转写时按 `device` 串里的 `stepN` 记。
+   */
+  samples?: number;
   kind: 'random' | 'stepped';
   vtOk?: boolean;
   seekOk?: boolean;

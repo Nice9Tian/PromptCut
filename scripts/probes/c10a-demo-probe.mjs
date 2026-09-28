@@ -695,43 +695,37 @@ try {
     ...(phoneDiag ? { diag: phoneDiag } : {}), lowmem: state.lowmem };
   say('step2.done', out.steps.phone);
 
-  /* ---------------------------------------------------------------- 2c. 补渲:轻卡在创建者那边不预渲染,手机上缺产物 → 补渲任务 → 小尺寸回到手机 */
-  // c10a 契约第 17 节(3):低内存档判重、素材服务里又没有产物的层(不在层表里),页面发布带片段清单的补渲计划任务(backfill)
+  /* ---------------------------------------------------------------- 2c. 轻重判定与补渲(C10 其余第 3 节:共享成本记录加界限搜索) */
+  /*
+   * C10 其余第 3 节取代 c10a 第 17 节的「全部按重卡」(契约 c10-contract.md 第 3 节、第 18 节第 8 条):
+   * - 创建者桌面版测完卡、把成本记录转写进文档服务(钉死的重卡片段那两条记录没有单帧耗时,不转写);
+   * - 手机打开项目时取本项目的记录做界限搜索:轻卡(chapter-bar)有记录、本机跑得动 → 判轻;重卡片段没有记录 → 判重;
+   * - 补渲只对判重又缺产物的层:重卡片段已有产物,轻卡判轻 —— 这一步不该发出任何补渲;
+   * - 判轻的卡播放时同样不活渲,没有产物就占位(以前这里断言「轻卡补渲来的小尺寸」,按新规则改成断言它不补渲、占位)。
+   * 补渲的整条路(发布、节点认领、backfill 排在 normal 之后、小尺寸回到手机)由第 3 步新放的卡覆盖:它还没有成本记录,按重卡。
+   */
   const t2c = Date.now();
-  const bf = await until('手机为缺产物的轻卡发出补渲任务', () => P(phone, (id) => {
-    const d = window.__pcBackfill?.();
-    const hit = d?.log?.find((e) => !e.error && e.clips.includes(id));
-    return hit ? { id: hit.id, clips: hit.clips, at: hit.at, helloOk: d.helloOk } : null;
-  }, state.lightClip), 60_000, 500);
-  check(bf && bf.id.includes('#backfill:') && !bf.clips.includes(state.heavyClip), '手机发出补渲任务(片段清单里是缺产物的轻卡,不含已有产物的重卡)', bf);
-  const nodeBf = bf ? await until('渲染节点认领补渲计划任务、切出的细任务都做完', async () => {
-    const q = await diag();
-    const derived = q?.plans?.[bf.id];
-    if (!Array.isArray(derived) || !derived.length) return null;
-    const states = derived.map((id) => q.tasks?.[id]?.state ?? 'pending');
-    if (!states.every((x) => x === 'done' || x === 'failed')) return null;
-    const claims = (q.claims ?? []).filter((c) => derived.includes(c.id) || c.id === bf.id);
-    return { derived: derived.length, done: states.filter((x) => x === 'done').length, priorities: [...new Set(claims.map((c) => String(c.priority)))] };
-  }, 900_000, 2000) : null;
-  check(nodeBf && nodeBf.done === nodeBf.derived, '补渲细任务全部做完', nodeBf);
-  check(nodeBf && nodeBf.priorities.length === 1 && nodeBf.priorities[0] === 'backfill', '补渲计划任务与它切出的细任务都标 backfill', nodeBf);
-  const lightSmall = await until('轻卡的预渲染小尺寸回到手机(层表里有它、清单带小尺寸)', () => P(phone, (id) => {
-    const l = (window.__pcOnlineSnapshots?.()?.layers ?? []).find((x) => x.clipId === id);
-    return l && l.ready > 0 ? { key: l.key.slice(0, 12), ready: l.ready } : null;
-  }, state.lightClip), 300_000, 1000);
-  check(lightSmall, '补渲的小尺寸回到手机', lightSmall);
-  // 播放中轻卡那一层贴着小尺寸(不活渲)
+  const search = await until('手机的界限搜索做完', () => P(phone, () => { const d = window.__pcLowMemSearch?.(); return d?.outcome ? d : null; }), 300_000, 500);
+  const lightKey = keys.light;
+  check(search && search.outcome.records > 0, '手机取到了本项目的成本记录', search ? { records: search.outcome.records } : null);
+  check(search && search.outcome.light.includes(lightKey), '轻卡(有记录、本机跑得动)判轻', search?.outcome ? { light: search.outcome.light.length, heavy: search.outcome.heavy.length, trace: search.outcome.trace } : null);
+  check(search && search.judgedHeavyClips.includes(heavyClip) && !search.judgedHeavyClips.includes(state.lightClip), '重卡片段(没有单帧耗时记录)判重,轻卡不在判重的片段里', search ? { heavy: search.judgedHeavyClips } : null);
+  check(search && search.outcome.measurements <= Math.ceil(Math.log2(search.outcome.order.length + 1)) + 4, '测量次数 ≤ ⌈log₂(n+1)⌉ + 4', search ? { measurements: search.outcome.measurements, n: search.outcome.order.length } : null);
+  await delay(5000); // 补渲每 3 秒核一次:给它两轮
+  const bfLog = await P(phone, () => window.__pcBackfill?.()?.log ?? []);
+  check(!bfLog.some((e) => e.clips.includes(state.lightClip) || e.clips.includes(heavyClip)), '判轻的轻卡、已有产物的重卡都不发补渲', bfLog.map((e) => ({ id: e.id.slice(0, 30), clips: e.clips.length })));
   await P(phone, () => { const s = window.__pcStore; s.actions.seek(0.5); s.actions.play(); });
-  let lightShown = null;
-  for (let i = 0; i < 8 && !lightShown; i++) {
+  let lightPlaceholder = null;
+  for (let i = 0; i < 8 && !lightPlaceholder; i++) {
     await delay(400);
     const x = await stageSample(phone);
     const w = x?.playing ? x.wraps.find((y) => y.id === state.lightClip) : null;
-    if (w?.small && w.suppressed) { lightShown = { at: i }; await shotStage(phone, '2c-phone-stage-playing-backfilled'); }
+    if (w?.suppressed && w.placeholder && !w.small) { lightPlaceholder = { at: i }; await shotStage(phone, '2c-phone-stage-playing-light-placeholder'); }
   }
   await P(phone, () => { const s = window.__pcStore; s.actions.pause(); s.actions.seek(2.5); });
-  check(lightShown, '手机播放中轻卡贴着补渲来的小尺寸');
-  out.steps.backfill = { ms: Date.now() - t2c, plan: bf ? { id: bf.id.slice(0, 40), clips: bf.clips.length } : null, node: nodeBf, small: lightSmall, shownWhilePlaying: !!lightShown };
+  check(lightPlaceholder, '手机播放中判轻的轻卡不活渲、没有产物显示占位');
+  out.steps.backfill = { ms: Date.now() - t2c, search: search ? { records: search.outcome.records, n: search.outcome.order.length, measurements: search.outcome.measurements, light: search.outcome.light.length, heavyClips: search.judgedHeavyClips.length } : null,
+    backfillLog: bfLog.length, lightPlaceholderWhilePlaying: !!lightPlaceholder };
   say('step2c.done', out.steps.backfill);
   // 排障:--hold-min N 在这里停 N 分钟(配 --debug-port 从外面连上浏览器看)
   if (Number(arg('--hold-min', 0)) > 0 && (!argv.includes('--hold-on-fail') || fails.length)) { say('hold', { minutes: Number(arg('--hold-min', 0)) }); await delay(Number(arg('--hold-min', 0)) * 60_000); }
@@ -755,6 +749,7 @@ try {
   /*
    * c10a 契约第 17 节(4):补渲排在本机判重的任务之后。改动让重卡重渲(本机判重的 normal 任务),
    * 同时在手机上再放一张轻卡(缺产物 → 补渲);节点先做完 normal 的,空下来再做 backfill 的。
+   * C10 其余第 3 节起:这张新放的卡片段长度与第一张不同(卡片身份不同),手机打开时取到的成本记录里没有它 → 按重卡 → 缺产物就补渲。
    */
   state.extraClip = await P(phone, (spec) => {
     const s = window.__pcStore;
@@ -791,10 +786,19 @@ try {
     const claims = (q.claims ?? []).filter((c) => c.at >= editAt && !c.id.startsWith('plan:'));
     const normal = claims.map((c, i) => [c, i]).filter(([c]) => c.priority !== 'backfill').map(([, i]) => i);
     const backfill = claims.map((c, i) => [c, i]).filter(([c]) => c.priority === 'backfill').map(([, i]) => i);
+    // 补渲切出的细任务里,认领时是 normal 档的(同一个结果键已有创建方的 normal 任务:不另起、按 normal 做)
+    const derivedClaims = (q.claims ?? []).filter((c) => derived.includes(c.id));
     return { claims: claims.length, normal: normal.length, backfill: backfill.length, lastNormal: normal.length ? Math.max(...normal) : null, firstBackfill: backfill.length ? Math.min(...backfill) : null,
-      seq: claims.map((c) => (c.priority === 'backfill' ? 'B' : 'N')).join('') };
+      seq: claims.map((c) => (c.priority === 'backfill' ? 'B' : 'N')).join(''), derived: derived.length, derivedNormal: derivedClaims.filter((c) => c.priority !== 'backfill').length };
   }, 900_000, 2000) : null;
-  check(order && order.normal > 0 && order.backfill > 0 && order.lastNormal < order.firstBackfill, '补渲细任务排在本机判重的任务之后(节点先做完 normal,再做 backfill)', order);
+  /*
+   * 两种结果都合乎「补渲排在后面」(mechanism/document-service.md「优先级」):
+   * - 补渲的细任务是新键:标 backfill,节点先做完 normal 再做它们;
+   * - 创建方这一版的 normal 计划也切到了新放的卡(它在创建方那边还没测、按声明判重),细任务同键:不另起、按 normal 做,
+   *   一张 backfill 都不出现(c10-cost 第 2 轮实测 `NNNNNNN`,第 1 轮 `NNNNNNNNBB`,取决于两边谁先发布)。
+   */
+  const orderOk = !!order && order.normal > 0 && (order.backfill > 0 ? order.lastNormal < order.firstBackfill : order.derivedNormal > 0);
+  check(orderOk, '补渲细任务排在本机判重的任务之后(节点先做完 normal,再做 backfill;同键已有 normal 任务时按 normal 做)', order);
   const extraSmall = state.extraClip ? await until('新放的轻卡的小尺寸回到手机', () => P(phone, (id) => {
     const l = (window.__pcOnlineSnapshots?.()?.layers ?? []).find((x) => x.clipId === id);
     return l && l.ready > 0 ? { ready: l.ready } : null;

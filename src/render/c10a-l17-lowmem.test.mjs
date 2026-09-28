@@ -2,7 +2,8 @@
  * c10a 契约第 17 节「低内存档的过渡做法」页面一侧的单测(编号 C10A-L17-…):
  *
  *   H1 全部按重卡:低内存档不测,所有卡(包括声明为 direct、实测很轻的)在每个位置都判重、整段进预渲染集合
- *   H2 分派表下发:`planDispatch.setPlanAllHeavy` 打开后,父页这一份表里所有卡判重;关上回到按成本记录
+ *   H2 分派表下发:`planDispatch.setPlanLowMemory` 打开后,父页显示用的这一份表(`currentPlan`,发给舞台)里所有卡判重;关上回到按成本记录
+ *      (C10 其余把轻重判定换成界限搜索,判定的表另见 `c10-cost-plan.test.mjs`;显示仍全部判重:低内存档播放不活渲)
  *   S1 停下追一帧:直接定位的先、推帧卡要推的帧少的先;时限 5 秒(一处常量)
  *   S2 时限到了:还没画好的层维持占位(记进 timedOut),没开始画的一并算;画好的记下耗时
  *   S3 用户卡、图卡不追:单列 skipped;在线浏览器模式下它们显示「需要本地 PC 渲染辅助」(unsupported 占位)
@@ -44,7 +45,7 @@ test("C10A-L17-H1 低内存档所有卡判重:不看成本记录与声明,每个
   }
 });
 
-test("C10A-L17-H2 分派表:低内存档打开「全部按重卡」后父页的表里所有卡判重,关上回到按成本记录", async () => {
+test("C10A-L17-H2 分派表:低内存档打开后父页显示用的表里所有卡判重(播放不活渲),关上回到按成本记录", async () => {
   mock.module(srcUrl("editor/stageBridge.ts"), { exports: { frontStage: () => null, backStage: () => null } });
   mock.module(srcUrl("editor/costIdentity.ts"), { exports: { clipIdentityOf: () => ({ identityKeys: {}, frameModes: { a: "direct", b: "direct" } }) } });
   const d = await import(srcUrl("editor/planDispatch.ts"));
@@ -54,12 +55,12 @@ test("C10A-L17-H2 分派表:低内存档打开「全部按重卡」后父页的�
   d.setPlanProject(p);
   await settle();
   assert.deepEqual([...d.currentPlan().prerenderSet], [], "普通档:声明 direct 的卡判轻");
-  d.setPlanAllHeavy(true);
+  d.setPlanLowMemory(true);
   await settle();
-  assert.equal(d.planAllHeavy(), true);
+  assert.equal(d.planLowMemory(), true);
   assert.deepEqual([...d.currentPlan().prerenderSet], ["a", "b"], "低内存档:全部判重");
   assert.equal(pipelineAt(d.currentPlan(), "a", 1), "heavy");
-  d.setPlanAllHeavy(false);
+  d.setPlanLowMemory(false);
   await settle();
   assert.deepEqual([...d.currentPlan().prerenderSet], []);
   d.resetPlanDispatch();

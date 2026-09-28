@@ -7,7 +7,6 @@ import { openProcPath } from "./editor/io/openPath";
 import { installHeadlessHooks } from "./headless";
 import { WindowTitleBar } from "./ui/WindowTitleBar";
 import { useSkin } from "./skins/useSkin";
-import { ONLINE } from "./online/mode";
 import { peekCapturedInvite } from "./online/invite";
 import { forgetSharedResume, hasSharedResume, resumeShared } from "./editor/sync/syncManager";
 import { newProject } from "./editor/io/proc";
@@ -25,8 +24,11 @@ import { newProject } from "./editor/io/proc";
  *   `?headless=1`      装上 window.__pcHeadless,给 scripts/headless.mjs 的自动写回用。
  *
  * 在线浏览器模式(C10a 契约第 2 节)不认这几个参数:它们都要编辑器进程(草稿、磁盘路径、无头实例);
- * 打开就是开始页,从「加入别人的项目」进编辑器。
+ * 打开就是开始页,从「加入别人的项目」进编辑器。在线构建里这几条连同草稿、按路径打开、无头钩子一起剪掉
+ * (`ONLINE_BUILD`,写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」;M8 遗留 L24)。
  */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
 export function Shell(): JSX.Element {
   // Keep the shared --ui-* palette mounted on the start page as well as the editor.
   // The title bar is outside both routes, so its colors stay synchronized.
@@ -34,7 +36,7 @@ export function Shell(): JSX.Element {
   const [inEditor, setInEditor] = useState(() => {
     // 在线页面打开就是开始页;只有在线模式的**开发服务**(探针 lowmem-online-probe 用)认 `?editor`,
     // 在线构建(vite build --mode online)里 DEV 为假,这一支被剪掉
-    if (ONLINE) return !!import.meta.env.DEV && new URLSearchParams(location.search).has("editor");
+    if (ONLINE_BUILD) return !!import.meta.env.DEV && new URLSearchParams(location.search).has("editor");
     try {
       return new URLSearchParams(location.search).has("editor");
     } catch {
@@ -76,7 +78,7 @@ export function Shell(): JSX.Element {
 
   // 启动参数只看一次
   useEffect(() => {
-    if (ONLINE) return;
+    if (ONLINE_BUILD) return;
     let q: URLSearchParams;
     try {
       q = new URLSearchParams(location.search);
@@ -102,6 +104,7 @@ export function Shell(): JSX.Element {
 
   // 桌面壳在已经开着的窗口上又收到一个 .proc(双击了文件):走同一条「复制再打开」的路
   useEffect(() => {
+    if (ONLINE_BUILD) return; // 在线页面不在桌面壳里
     const tauri = (window as unknown as {
       __TAURI__?: { event?: { listen?: (e: string, cb: (ev: { payload: unknown }) => void) => Promise<() => void> } };
     }).__TAURI__;
