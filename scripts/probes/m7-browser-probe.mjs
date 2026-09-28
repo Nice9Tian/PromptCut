@@ -52,8 +52,10 @@ const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SELF), '..', '..');
 const PROBE = 'm7-browser-probe';
 const PREFIX = 'm7ap';
-const BAND = [5450, 5459];
-const PORTS = { site: 5450, stageA: 5451, stageB: 5452, editor: 5453, coord: 5456 };
+/** --base-port N：整段端口挪到 N～N+9（缺省 5450；笔记本用它自己的 5580～5599 段时给 --base-port 5590） */
+const BASE_PORT = (() => { const i = process.argv.indexOf('--base-port'); const v = i >= 0 ? Number(process.argv[i + 1]) : 5450; if (!Number.isInteger(v) || v < 1024 || v > 65526) throw new Error(`--base-port 不对：${process.argv[i + 1]}`); return v; })();
+const BAND = [BASE_PORT, BASE_PORT + 9];
+const PORTS = { site: BASE_PORT, stageA: BASE_PORT + 1, stageB: BASE_PORT + 2, editor: BASE_PORT + 3, coord: BASE_PORT + 6 };
 const FPS = 30;
 const SECONDS = 10;
 const NODE_PENDING = '节点未就绪（等 rq-m7-node）';
