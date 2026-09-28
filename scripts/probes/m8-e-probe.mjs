@@ -703,8 +703,9 @@ async function caseE2(ctx) {
       const [name, res] = victim;
       // 被接手的任务:受害方恢复后旧认领一律 lease-lost、它自己不再完成;C1 里会话接续、照常完成的那些不在此列
       const takenOver = (takeover?.per ?? []).filter((x) => x.outcome !== 'resumed-done').map((x) => x.id);
-      const lostIds = new Set((res.stall.lost ?? []).filter((x) => x.at).map((x) => x.id));
-      r.check('victim-lease-lost', takenOver.every((id) => lostIds.has(id)), { host: name, takenOver, lost: res.stall.lost, session: res.stall.session ?? null });
+      // 旧认领作废:受害方那边这个任务以 lease-lost 收场,或它的执行在断线期间先失败了(例如取项目快照超时,恢复后报的 fail 带旧令牌、不作数)
+      const voidIds = new Set([...(res.stall.lost ?? []), ...(res.stall.failed ?? [])].filter((x) => x.at).map((x) => x.id));
+      r.check('victim-old-claim-void', takenOver.every((id) => voidIds.has(id)), { host: name, takenOver, lost: res.stall.lost, failed: res.stall.failed ?? [], session: res.stall.session ?? null });
       r.check('victim-no-double-done', takenOver.every((id) => !(res.stall.completedHeld ?? []).includes(id)), { host: name, completedHeld: res.stall.completedHeld ?? [] });
       r.set({ victim: { host: name, mode: takeover?.mode ?? null, session: res.stall.session ?? null, outcomes: (takeover?.per ?? []).map((x) => x.outcome ?? 'takeover') } });
     } else r.check('victim-result', false, '没有主机报 stall');
@@ -1045,7 +1046,10 @@ async function runHost(r) {
     r.set({ stats: { claimed: n.claimed ?? null, completed: n.completed ?? null, dedup: n.dedup ?? null, failed: n.failed ?? null, lost: n.lost ?? null,
       released: n.released ?? null, opens: n.opens ?? null, resumes: n.resumes ?? null, connected: n.connected ?? null },
     ids: Object.fromEntries(Object.entries(idsSeen).map(([k, m]) => [k, [...m.keys()]])) });
-    r.check('host-no-failed', !(n.failed > 0), { failed: n.failed ?? null, events: [...idsSeen.failed].slice(0, 3) });
+    // e2 / C1 的受害方:被扣住的任务在断线期间执行失败是预期的(旧认领随后作废),不算这台主机的失败
+    const expected = new Set(r.extra.stall?.held ?? []);
+    const unexpected = [...idsSeen.failed].filter(([id]) => !expected.has(id));
+    r.check('host-no-failed', unexpected.length === 0, { failed: n.failed ?? null, unexpected: unexpected.slice(0, 3), expectedDuringStall: [...expected].filter((id) => idsSeen.failed.has(id)) });
   } catch (error) {
     r.fail(`${NAME} 出错：${errText(error)}`);
     say('error', { stack: String(error?.stack ?? error).slice(0, 1500) });
@@ -1108,12 +1112,13 @@ async function hostStall(r, kv, host, proxy, idsSeen, pollEvents) {
   // 恢复之后:被接手的任务旧认领 complete / 续约回 lease-lost(或会话接续时报丢);会话接续里照常完成的不会有 lost
   await until(async () => {
     await pollEvents();
-    return held.every((id) => idsSeen.lost.has(id) || idsSeen.completed.has(id) || idsSeen.dedup.has(id)) || null;
+    return held.every((id) => idsSeen.lost.has(id) || idsSeen.failed.has(id) || idsSeen.completed.has(id) || idsSeen.dedup.has(id)) || null;
   }, 180_000, 1000);
   const n1 = (await host.node().catch(() => null)) ?? {};
   const completedHeld = held.filter((id) => { const c = idsSeen.completed.get(id) ?? idsSeen.dedup.get(id); return c && c.at >= stallAt; });
   r.set({ stall: { held, seconds: seconds || null, stallAt, resumeAt, stalledMs: resumeAt - stallAt, takeoverSignal: !!tk, stallAck: !!stalled, resumeAck: !!resumed,
     lost: held.map((id) => ({ id, ...(idsSeen.lost.get(id) ?? {}), sinceResumeMs: idsSeen.lost.get(id) ? idsSeen.lost.get(id).at - resumeAt : null })), completedHeld,
+    failed: held.filter((id) => idsSeen.failed.has(id)).map((id) => ({ id, ...idsSeen.failed.get(id) })),
     session: { opens: [n0.opens ?? null, n1.opens ?? null], resumes: [n0.resumes ?? null, n1.resumes ?? null], kind: (n1.opens ?? 0) > (n0.opens ?? 0) ? 'new-session' : (n1.resumes ?? 0) > (n0.resumes ?? 0) ? 'resumed' : 'unchanged' } } });
   r.check('proxy-stall-resume', !!stalled && !!resumed, { stall: stalled?.event ?? null, resume: resumed?.event ?? null });
 }
