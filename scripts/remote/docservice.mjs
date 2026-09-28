@@ -15,7 +15,7 @@
  *
  * 托管组合（SP，契约 docs/plan/shared-project-contract.md 第 1、2 节；文件清单见 server/hosted/files.mjs 与契约第 10 节）：
  *   deploy-hosted [--instance drill] [--save] [--replace-docservice] [--write-token]
- *                 [--editor <dist-online 目录>] [--doc-public-url <url>] [--asset-public-url <url>]
+ *                 [--editor <dist-online 目录>] [--doc-public-url <url>] [--asset-public-url <url>] [--stage-origins <A>,<B>]
  *            在本机按清单拼暂存目录，整个拷到远端 <部署目录>/.incoming 再换成 <部署目录>/app；
  *            在部署目录里写 PM2 配置 <部署目录>/pm2.config.cjs（仓库外，不含任何秘密），pm2 startOrReload，
  *            最后查两个端口的 /healthz。**不改防火墙**：UFW 放行由主会话在服务器上手工加。
@@ -37,6 +37,10 @@
  *            - --doc-public-url / --asset-public-url（C10a 契约第 3 节）：写进 PM2 配置的两个公网地址（阿里云上是
  *              wss://<域名>/hosted/ 与 https://<域名>/media/api/asset）；不给才按 PROMPTCUT_PUBLIC_HOST 拼 ws://…:8787、http://…:8788/api/asset。
  *              文档服务公网地址的源也是邀请链接的源（<源>/editor#invite=…）。
+ *            - --stage-origins <A>,<B>（C10 契约第 2 节）：在线普通档两个舞台的源（阿里云上是 https://s1.<主机>,https://s2.<主机>），
+ *              写进 <部署目录>/editor/runtime-config.json（`{ v: 1, stageOrigins: [A, B] }`），页面从这里取舞台源；之后只给 --editor 换代时
+ *              这个文件照样保留。只改脚本与运行配置：两个子域的 DNS、证书、nginx（舞台页与 /media 反代、三方的 Origin-Agent-Cluster: ?1）
+ *              由主会话部署时做；
  *            环境变量：PROMPTCUT_HOSTED_DIR、PROMPTCUT_HOSTED_DATA 覆盖部署目录与数据目录；
  *            PROMPTCUT_PUBLIC_HOST 是写进公网地址的主机名，缺省取 PROMPTCUT_REMOTE 里 @ 后面的部分。
  *   status-hosted [--instance drill]   PM2 里这个 app 的状态、两个端口的 /healthz、数据目录占用、UFW 里这两个端口的规则
@@ -53,7 +57,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { checkTokenFormat } from '../../server/docservice/auth.mjs';
 import { stageHostedFiles } from '../../server/hosted/files.mjs';
-import { hostedInstance, hostedPm2Config, hostedDeployScript, checkPublicUrl, shq } from '../../server/hosted/deploy.mjs';
+import { hostedInstance, hostedPm2Config, hostedDeployScript, checkPublicUrl, checkStageOrigins, shq } from '../../server/hosted/deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = process.env.PROMPTCUT_REMOTE;
@@ -214,12 +218,14 @@ function deployHosted() {
   const publicHost = process.env.PROMPTCUT_PUBLIC_HOST || String(target).split('@').pop();
   let urls;
   let editorDir;
+  let runtimeConfig;
   try {
     urls = {
       docPublicUrl: checkPublicUrl(option('--doc-public-url'), 'doc'),
       assetPublicUrl: checkPublicUrl(option('--asset-public-url'), 'asset'),
     };
     editorDir = editorDirOf(option('--editor'));
+    runtimeConfig = checkStageOrigins(option('--stage-origins')) ?? null;
   } catch (err) {
     console.error(err.message);
     return 1;
@@ -265,6 +271,7 @@ function deployHosted() {
     replaceDocservice: flag('--replace-docservice'),
     token,
     editor: !!editorDir,
+    runtimeConfig,
   }));
 }
 

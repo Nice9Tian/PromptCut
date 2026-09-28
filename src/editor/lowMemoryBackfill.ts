@@ -1,7 +1,9 @@
 /**
  * 低内存档的补渲(c10a 契约第 17 节;语义 `mechanism/rendering.md`「低内存档」的补渲、`product/document-service.md`
- * 「渲染任务队列」的「补渲排在后面」):低内存档把所有卡判重,发现判重的层在素材服务里没有产物(按清单判:不在渲染节点
- * 写的层表里)时,向队列发布补渲任务 —— 一种带片段清单的计划任务,标 `priority: 'backfill'`。
+ * 「渲染任务队列」的「补渲排在后面」):低内存档按界限搜索判轻重(`lowMemorySearch.ts`),发现**判重**的层在素材服务里没有产物
+ * (按清单判:不在渲染节点写的层表里)时,向队列发布补渲任务 —— 一种带片段清单的计划任务,标 `priority: 'backfill'`。
+ * 判轻的卡不发(播放时一直占位,停下时画出,导出时本机逐帧渲;契约 `c10-contract.md` 第 18 节第 8 条)。
+ * 界限搜索做完之前不发(还不知道谁重)。
  *
  * - 同一批还在等的不重发:发过的片段在 `BACKFILL_RESEND_MS` 之内、项目版本没变(或刚变不到 `BACKFILL_REV_GRACE_MS`)
  *   都算「还在等」;产物到了(进了层表)就忘掉它;
@@ -60,13 +62,15 @@ export function backfillPlanTask({ projectId, projectRev, clips }: { projectId: 
 }
 
 /**
- * 缺产物的判重层:低内存档所有卡判重,所以是项目里全部可见的卡片段,减去层表里列着的(有产物的)、
- * 减去本机渲染不了的(用户卡、图卡)。升序。
+ * 缺产物的判重层:项目里可见的卡片段里页面判重的(`heavy`,界限搜索的结果;契约 `c10-contract.md` 第 18 节第 8 条:
+ * 判轻的卡不发补渲),减去层表里列着的(有产物的)、减去本机渲染不了的(用户卡、图卡)。升序。
+ * 不给 `heavy` 按全部判重算(C10a 过渡做法的口径,只剩单测用)。
  */
-export function missingLayers({ project, layerClipIds, unsupported }: {
+export function missingLayers({ project, layerClipIds, unsupported, heavy }: {
   project: Pick<Project, "tracks">;
   layerClipIds: ReadonlySet<string>;
   unsupported: (clip: { id: string; cardId?: string }) => boolean;
+  heavy?: ReadonlySet<string>;
 }): string[] {
   const out: string[] = [];
   for (const tr of project.tracks ?? []) {
@@ -74,6 +78,7 @@ export function missingLayers({ project, layerClipIds, unsupported }: {
     for (const clip of tr.clips ?? []) {
       if (!clip.cardId && !clip.nodeId) continue;
       if (!(Number(clip.end) > Number(clip.start))) continue;
+      if (heavy && !heavy.has(clip.id)) continue;
       if (layerClipIds.has(clip.id)) continue;
       if (unsupported(clip)) continue;
       out.push(clip.id);

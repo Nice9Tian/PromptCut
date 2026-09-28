@@ -1,3 +1,4 @@
+import { onlinePage, onlineUnsupported } from "../../../online/pageFlag";
 import type { GroupLayout } from "./layout";
 import type { GroupData, GroupDef } from "./groups";
 
@@ -32,11 +33,12 @@ export function GroupBox({
           type="button"
           className="pc-lib-group-empty is-action"
           data-pc-add="media-empty"
-          title="导入素材(视频 / 音频 / 图片,按类型自动归位)"
+          disabled={onlinePage()}
+          title={onlinePage() ? onlineUnsupported("导入媒体") : "导入素材(视频 / 音频 / 图片,按类型自动归位)"}
           onClick={(e) => {
             // 占位是导入入口,不是打开组
             e.stopPropagation();
-            onImport();
+            if (!onlinePage()) onImport();
           }}
         >
           导入…

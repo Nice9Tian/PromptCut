@@ -22,7 +22,7 @@
  */
 import type { Project } from "../kernel/project";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
-import { planPipelines, type PipelinePlan } from "../render/pipelinePlan.mjs";
+import { clipWeight, planPipelines, type PipelinePlan } from "../render/pipelinePlan.mjs";
 import { resolveTuning, type PipelineTuning } from "../render/pipelineTuning.mjs";
 import type { StageRole } from "../render/stageRpc";
 import { wirePlan } from "../render/wirePlan";
@@ -34,17 +34,35 @@ let costs: CardCostRecord[] = [];
 let tuning: PipelineTuning = resolveTuning(null);
 let plan: PipelinePlan | null = null;
 /**
- * 低内存档(c10a 契约第 17 节「全部按重卡」,语义 `product/platforms.md`「面向的平台」的过渡期):不测,所有卡按重卡处理 ——
- * 播放时一律贴预渲染小尺寸,不活渲任何卡。只有在线页面判为低内存档时由 `Preview` 打开;普通档不变。
+ * 低内存档(语义 `product/platforms.md`「面向的平台」;只有在线页面判为低内存档时由 `Preview` 打开,普通档不变)。两张表:
+ * - **显示用的表**(`currentPlan`,发给舞台、`snapshotFeed` 按它抑制和选帧):每张卡在每个位置都判重 ——
+ *   低内存档播放时只看预渲染小尺寸,不活渲任何卡,判轻的卡也一样(没有产物就是占位,停下时画出);
+ * - **判定的表**(`judgedPlan`):轻重按界限搜索的结果(`lowMemoryLight`,`src/editor/lowMemorySearch.ts`)。
+ *   补渲只对它判重、又缺产物的层发(`lowMemoryBackfill.ts`);导出时判轻的卡本机逐帧渲、判重的卡用预渲染原尺寸。
+ *   搜索完成之前 `lowMemoryLight` 是 null:没有结果,补渲不发,判定的表里全部按重卡。
+ * C10a 的过渡做法(判定也全部按重卡)随之退出(契约 `docs/plan/c10-contract.md` 第 3 节)。
  */
-let allHeavy = false;
+let lowMemory = false;
+/** 界限搜索判轻的卡的 identityKey;null = 还没有结果 */
+let lowMemoryLight: ReadonlySet<string> | null = null;
+let judged: PipelinePlan | null = null;
+/**
+ * L4(在线普通档,C10 契约第 6 节、第 18 节第 1 条):分派时每张重卡每拍的固定成本换成实测的换帧成本 `swapMs`
+ * (`planPipelines` 的 `opts.deadMs`),与播放时 `beatSwap.mjs` 的 `fitBeatSwaps` 同一个数。null = 桌面的 `DEAD_MS`。
+ */
+let deadMs: number | null = null;
 /** 上一次真的发出去的那份表的序列化结果，用来省掉「没变还发一遍」 */
 let sentWire = "";
 let scheduled = false;
 
-/** 这一刻算出来的分派表（R5 / 验收探针用） */
+/** 这一刻算出来的分派表（R5 / 验收探针用）。低内存档里是显示用的那一张（全部判重），判定看 `judgedPlan` */
 export function currentPlan(): PipelinePlan | null {
   return plan;
+}
+
+/** 轻重判定的表：普通档与 `currentPlan` 是同一张；低内存档按界限搜索的结果（还没有结果时全部判重） */
+export function judgedPlan(): PipelinePlan | null {
+  return judged;
 }
 
 export function currentCosts(): CardCostRecord[] {
@@ -59,10 +77,14 @@ export function currentTuning(): PipelineTuning {
 function recompute(): void {
   if (!project) {
     plan = null;
+    judged = null;
     return;
   }
   const { identityKeys, frameModes } = clipIdentityOf(project);
-  plan = planPipelines(project, costs, Math.max(1, project.fps || 30), { tuning, identityKeys, frameModes, ...(allHeavy ? { allHeavy: true } : {}) });
+  const fps = Math.max(1, project.fps || 30);
+  const dead = deadMs !== null ? { deadMs } : {};
+  plan = planPipelines(project, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}), ...dead });
+  judged = lowMemory ? planPipelines(project, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [], ...dead }) : plan;
 }
 
 /**
@@ -126,21 +148,77 @@ export function mergePlanCosts(records: readonly CardCostRecord[]): void {
   schedule();
 }
 
-/** 低内存档打开 / 关上「全部按重卡」(c10a 契约第 17 节)。变了才重算重发 */
-export function setPlanAllHeavy(on: boolean): void {
-  if (allHeavy === !!on) return;
-  allHeavy = !!on;
+/** 低内存档打开 / 关上。变了才重算重发;关上时丢掉搜索结果 */
+export function setPlanLowMemory(on: boolean): void {
+  if (lowMemory === !!on) return;
+  lowMemory = !!on;
+  if (!lowMemory) lowMemoryLight = null;
   schedule();
 }
 
-/** 此刻是不是「全部按重卡」 */
-export function planAllHeavy(): boolean {
-  return allHeavy;
+/** 此刻是不是低内存档(显示用的表全部判重) */
+export function planLowMemory(): boolean {
+  return lowMemory;
+}
+
+/**
+ * 界限搜索的结果:判轻的卡的 identityKey(`null` = 撤掉结果,判定回到全部按重)。同一份集合不重算。
+ * 表同步重算(不攒拍):补渲、导出拿到结果后马上就要用判定的表。
+ */
+export function setPlanLowMemoryLight(keys: Iterable<string> | null): void {
+  const next = keys === null ? null : new Set(keys);
+  const same = next === null ? lowMemoryLight === null
+    : lowMemoryLight !== null && next.size === lowMemoryLight.size && [...next].every((k) => lowMemoryLight!.has(k));
+  if (same) return;
+  lowMemoryLight = next;
+  recompute();
+  schedule();
+}
+
+/** 低内存档的轻重判定有没有结果(界限搜索做完了);普通档恒为 true */
+export function lowMemoryJudged(): boolean {
+  return !lowMemory || lowMemoryLight !== null;
+}
+
+/** 界限搜索判轻的卡(诊断与探针用) */
+export function planLowMemoryLight(): ReadonlySet<string> | null {
+  return lowMemoryLight;
+}
+
+/** L4:在线普通档把分派的每拍重卡成本换成实测换帧成本(`null` 回到桌面的 `DEAD_MS`)。变了才重算重发 */
+export function setPlanDeadMs(ms: number | null): void {
+  const next = ms !== null && Number.isFinite(ms) && ms >= 0 ? ms : null;
+  if (next === deadMs) return;
+  deadMs = next;
+  schedule();
+}
+
+/**
+ * 这一刻轻管线里活渲的卡每拍占了多少毫秒(C10 契约第 18 节第 1 条的「已占用」):当前位置 `light` 集合里每张卡的
+ * `clipWeight(...).w` 之和,口径与 `planPipelines` 的贪心同一份。不在任何位置(没有表、空白处)回 0。
+ */
+export function lightCostAt(t: number): number {
+  if (!plan || !project) return 0;
+  const seg = plan.segments.find((s) => t >= s.fromSec && t < s.toSec);
+  if (!seg || !seg.light.size) return 0;
+  const fps = Math.max(1, project.fps || 30);
+  const { identityKeys, frameModes } = clipIdentityOf(project);
+  const byKey = new Map(costs.map((r) => [r.identityKey, r]));
+  let sum = 0;
+  for (const clipId of seg.light) {
+    const key = identityKeys[clipId];
+    const w = clipWeight(key ? byKey.get(key) : undefined, frameModes[clipId], fps, tuning).w;
+    if (Number.isFinite(w)) sum += w;
+  }
+  return sum;
 }
 
 /** 测试用 */
 export function resetPlanDispatch(): void {
-  allHeavy = false;
+  lowMemory = false;
+  lowMemoryLight = null;
+  judged = null;
+  deadMs = null;
   project = null;
   costs = [];
   tuning = resolveTuning(null);

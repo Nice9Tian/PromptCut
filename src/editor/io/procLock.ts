@@ -18,6 +18,12 @@
  * 拿不到锁不是崩溃,是一句话:调用方决定要不要拦住「打开」这个动作。
  */
 
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线页面没有草稿(新建、打开、保存都置灰),
+ * 也就不抢、不放草稿锁;在线构建里 /api/skill-lock 调用整段剪掉(M8 遗留 L24)。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
 /** Tauri 的 invoke。浏览器里跑就没有,那时只有 Node 那半 */
 function invoke(): ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
   const t = (window as unknown as {
@@ -37,6 +43,7 @@ export interface LockOutcome {
 }
 
 async function post(action: "acquire" | "release", body: Record<string, unknown>): Promise<LockOutcome> {
+  if (ONLINE_BUILD) return { ok: true, skipped: "online" };
   try {
     const res = await fetch(`/api/skill-lock/${action}`, {
       method: "POST",
@@ -108,7 +115,7 @@ export async function releaseDraftLock(): Promise<void> {
  * fetch,页面正在卸载时普通请求会被浏览器掐掉。外壳那层的句柄不用管:进程还活着的话
  * 下一句 acquire 会先 release,进程没了内核自己就收走了。
  */
-if (typeof window !== "undefined") {
+if (!ONLINE_BUILD && typeof window !== "undefined") {
   window.addEventListener("pagehide", () => {
     if (!heldDraftId) return;
     try {

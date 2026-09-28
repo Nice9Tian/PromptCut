@@ -557,6 +557,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     return false;
   };
   return async function assetService(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
+    if (isAssetMergePath(req.url)) return answerMerge(req, res);
     if (!isAssetCorsPath(req.url)) return next();
     applyCors(req, res);
     if (req.method === "OPTIONS") { res.statusCode = 204; return res.end(); }
@@ -603,6 +604,30 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
   };
+}
+
+/**
+ * 预留的「合并分发」接口(`docs/semantics/mechanism/platforms.md`「预留的接口」;C10 契约第 11 节):
+ * `POST merge/<projectId>/<共享键>`,现在一律回 501。各客户端把自己预渲染出的共享结果推给素材服务、由它合并去重后
+ * 分发给其它客户端,这一步还没做;现在只实现推送自己的(`snap/`、`px/`)。
+ *
+ * 素材服务没有项目语义(`product/asset-service.md`):这条路由只占位,`<projectId>` 与共享键都不解析、不校验,
+ * 不读请求体、不碰数据层、不核对票据。它不在同源守卫的豁免正则(`http-guard.mjs` 的 `ASSET_ROUTE`)里,
+ * 由本中间件在最前面答掉,不会落到别的 `/api` 处理函数上。
+ */
+const MERGE_ROUTE = /^\/api\/asset\/merge\/[^/]+\/[^/]+$/;
+
+export function isAssetMergePath(url: string | undefined): boolean {
+  return MERGE_ROUTE.test(apiPath(url));
+}
+
+function answerMerge(req: IncomingMessage, res: ServerResponse): void {
+  applyCors(req, res);
+  const method = String(req.method || "GET").toUpperCase();
+  if (method === "OPTIONS") { res.statusCode = 204; res.end(); return; }
+  if (method !== "POST") { res.setHeader("Allow", "POST"); return sendJson(res, 405, { ok: false, error: "method" }); }
+  req.resume(); // 请求体不读,丢掉,连接照常收尾
+  sendJson(res, 501, { ok: false, error: "not-implemented" });
 }
 
 /** 上传方每一片要带的请求头(测试和将来第 6 步的上传队列用) */

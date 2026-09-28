@@ -167,8 +167,25 @@ export function streamEncoderPreference(env = process.env) {
  * G3 的滤镜链。**色半区存预乘色**(`premultiply=inplace=1`,透明处 RGB 恒为纯黑);
  * **`out_range=tv`**(G0-b 结论 2:`pc` 在 Chrome 上会被当成限定范围再展开一次,alpha 平均误差 8.4/255)。
  * 宽高已经是 G1 外扩过的偶数,滤镜链不再取整。
+ *
+ * 和 `streamFilterIdentity` 那条旧写法逐字节等价(送进编码器的每一帧 YUV 都相同,见
+ * `server/test/stream-encode-fast.test.mjs`),只是少走两趟整帧转换:预乘之后不再转回 `rgba` 再分叉
+ * (`gbrap` 直接分叉,色半区 `gbrap → rgb24`、alpha 半区 `alphaextract` 出来的 `gray → rgb24`),
+ * 1080p 一段 15 帧省下约五分之一的滤镜耗时(`docs/reports/AGENT-perf-encode.md`)。
  */
 export function streamFilter(pixFmt = 'yuv420p') {
+  return '[0:v]format=gbrap,premultiply=inplace=1,split=2[c][a];'
+    + '[c]format=rgb24,pad=iw:ih+8:0:0:black[rgb];'
+    + '[a]alphaextract,format=rgb24,pad=iw:ih+8:0:0:black[mask];'
+    + `[rgb][mask]vstack=inputs=2,scale=out_range=tv:out_color_matrix=bt709,format=${pixFmt}`;
+}
+
+/**
+ * 滤镜链的**身份**:分段签名里的编码参数哈希按它算(`encoderParamsHash`),不按 `streamFilter` 的字面。
+ * 这是改写前的那条链;现在的链和它产出逐字节相同,所以盘上已有的分段照旧有效、不必重产。
+ * **改滤镜链、使产出变了时,必须同时改这里**(否则新旧分段会被当成同一套参数的产物)。
+ */
+export function streamFilterIdentity(pixFmt = 'yuv420p') {
   return '[0:v]format=gbrap,premultiply=inplace=1,format=rgba,split=2[c][a];'
     + '[c]format=rgb24,pad=iw:ih+8:0:0:black[rgb];'
     + '[a]alphaextract,format=gray,format=rgb24,pad=iw:ih+8:0:0:black[mask];'
@@ -190,18 +207,134 @@ export function streamSegmentArgs({ encoder = 'libx264', fps }) {
     '-f', 'mp4', 'pipe:1'];
 }
 
+/* ------------------------------------------------------------ 预先拉起的编码进程 */
+
+/**
+ * 每种命令行留一个**预先拉起、空等输入**的 ffmpeg(`openStreamSegmentEncoder` 领走它,再补拉一个)。
+ * 同一条命令行、同一个可执行文件,产出与现拉的逐字节相同;省下的是进程装载和初始化那一截
+ * (`docs/reports/AGENT-perf-encode.md` 的耗时拆分)。
+ * 空等的进程不拖住 Node 退出(`unref`),空等超过 `SPARE_IDLE_MS` 就收掉;Node 退出时它的 stdin 断开,
+ * 读到 EOF 自己退出,`exit` 时也会再杀一遍。`PROMPTCUT_STREAM_PREWARM=0` 关掉。
+ */
+const SPARE_IDLE_MS = 60_000;
+const spareSegmentProcs = new Map();
+let spareExitHook = false;
+
+export function streamPrewarmEnabled(env = process.env) {
+  return String(env.PROMPTCUT_STREAM_PREWARM ?? '').trim() !== '0';
+}
+
+function spareKey(ffmpeg, args) { return `${ffmpeg}\u0000${args.join('\u0000')}`; }
+
+function spawnSegmentProc(ffmpeg, args) {
+  return spawn(ffmpeg, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+}
+
+function setRef(proc, on) {
+  for (const handle of [proc, proc.stdin, proc.stdout, proc.stderr]) {
+    try { if (on) handle?.ref?.(); else handle?.unref?.(); } catch { /* 句柄已关 */ }
+  }
+}
+
+function parkSpare(ffmpeg, args) {
+  const key = spareKey(ffmpeg, args);
+  if (spareSegmentProcs.has(key)) return;
+  let proc;
+  try { proc = spawnSegmentProc(ffmpeg, args); } catch { return; }
+  const entry = { proc, dead: false, timer: null, onGone: null };
+  // 空等期间出错或退出只是把它从池里拿掉;被领走之后由领的人接管(`takeSpare` 摘掉这个监听)
+  entry.onGone = () => {
+    entry.dead = true;
+    clearTimeout(entry.timer);
+    if (spareSegmentProcs.get(key) === entry) spareSegmentProcs.delete(key);
+  };
+  proc.on('error', entry.onGone);
+  proc.on('exit', entry.onGone);
+  proc.stdin.on('error', entry.onGone);
+  entry.timer = setTimeout(() => { entry.onGone(); try { proc.stdin.destroy(); } catch {} proc.kill(); }, SPARE_IDLE_MS);
+  entry.timer.unref?.();
+  setRef(proc, false);
+  spareSegmentProcs.set(key, entry);
+  if (!spareExitHook) {
+    spareExitHook = true;
+    process.once('exit', () => { for (const e of spareSegmentProcs.values()) { try { e.proc.kill(); } catch {} } });
+  }
+}
+
+function takeSpare(ffmpeg, args) {
+  const key = spareKey(ffmpeg, args);
+  const entry = spareSegmentProcs.get(key);
+  if (!entry) return null;
+  spareSegmentProcs.delete(key);
+  clearTimeout(entry.timer);
+  const { proc } = entry;
+  proc.off('error', entry.onGone);
+  proc.off('exit', entry.onGone);
+  proc.stdin.off('error', entry.onGone);
+  // 空等时 ffmpeg 不输出、不退出;已经退了(或被杀)就不要它
+  if (entry.dead || proc.exitCode !== null || proc.signalCode !== null || proc.killed || !proc.pid) {
+    try { proc.kill(); } catch {}
+    return null;
+  }
+  setRef(proc, true);
+  return proc;
+}
+
+/** 收掉全部空等的编码进程(测试和关停用) */
+export function dropStreamEncoderSpares() {
+  for (const [key, entry] of spareSegmentProcs) {
+    spareSegmentProcs.delete(key);
+    clearTimeout(entry.timer);
+    entry.dead = true;
+    try { entry.proc.stdin.destroy(); } catch {}
+    try { entry.proc.kill(); } catch {}
+  }
+}
+
+/** 池里空等的进程数(测试用) */
+export function streamEncoderSpareCount() { return spareSegmentProcs.size; }
+
+/**
+ * `buf` 是否恰好以一个完整的 `mfra` 顶层盒子收尾(mov 分片封装的 trailer 最后写的就是它)。
+ * 看到它就说明 ffmpeg 已经把整段写完,不必再等进程退出(退出前释放编码器内存还要几十毫秒)。
+ */
+export function endsWithCompleteMfra(buf) {
+  let off = 0, last = null;
+  while (off + 8 <= buf.length) {
+    let size = buf.readUInt32BE(off);
+    const type = buf.toString('latin1', off + 4, off + 8);
+    if (size === 1) {
+      if (off + 16 > buf.length) return false;
+      size = Number(buf.readBigUInt64BE(off + 8));
+    } else if (size === 0) return false;
+    if (size < 8 || off + size > buf.length) return false;
+    last = type;
+    off += size;
+  }
+  return off === buf.length && last === 'mfra';
+}
+
 /**
  * 开一个分段编码器。`write(png)` 按到达顺序喂(背压:等 stdin 收下),`finish()` 回 ffmpeg 输出的
  * 整段 fMP4 字节(`ftyp moov moof mdat mfra`),`abort()` 丢掉。
  * 喂进去几帧、ffmpeg 就该编出几帧 —— 对不上由切分那一侧按样本数判(G2「少一帧就重拍」)。
+ *
+ * `prewarm`(缺省看 `streamPrewarmEnabled`):优先领一个预先拉起的进程,并补拉下一个。
+ * `finish()` 在输出以完整的 `mfra` 收尾时就交字节,不等进程退出;没收尾而进程退出码非零,照旧报错。
  */
-export function openStreamSegmentEncoder(ffmpeg, { encoder = 'libx264', fps }) {
+export function openStreamSegmentEncoder(ffmpeg, { encoder = 'libx264', fps, prewarm = streamPrewarmEnabled() }) {
   const args = streamSegmentArgs({ encoder, fps });
-  const proc = spawn(ffmpeg, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  const proc = (prewarm && takeSpare(ffmpeg, args)) || spawnSegmentProc(ffmpeg, args);
+  if (prewarm) setImmediate(() => parkSpare(ffmpeg, args));
   const chunks = [];
-  let stderr = '', inputError = null, written = 0;
+  let stderr = '', inputError = null, written = 0, received = 0, onTrailer = null;
   const startedAt = Date.now();
-  proc.stdout.on('data', d => chunks.push(d));
+  const checkTrailer = () => {
+    if (!onTrailer) return;
+    const buf = Buffer.concat(chunks, received);
+    if (endsWithCompleteMfra(buf)) onTrailer(buf);
+  };
+  proc.stdout.on('data', d => { chunks.push(d); received += d.length; checkTrailer(); });
   proc.stderr.on('data', d => { stderr = (stderr + d).slice(-4000); });
   proc.stdin.on('error', e => { inputError = e; });
   const done = new Promise((resolve, reject) => {
@@ -220,8 +353,10 @@ export function openStreamSegmentEncoder(ffmpeg, { encoder = 'libx264', fps }) {
     },
     async finish() {
       const endedAt = Date.now();
+      const trailer = new Promise(resolve => { onTrailer = resolve; });
       proc.stdin.end();
-      const bytes = await done;
+      checkTrailer();
+      const bytes = await Promise.race([done, trailer]);
       // encodeMs:从开编码器到出完字节(和出帧重叠);tailMs:喂完最后一帧之后还要等多久
       return { bytes, encodeMs: Date.now() - startedAt, tailMs: Date.now() - endedAt, written };
     },
@@ -276,7 +411,7 @@ export async function probeEncoders(ffmpeg, { order = STREAM_ENCODER_ORDER, fps 
   for (const name of order) {
     if (!STREAM_ENCODERS[name]) { results.push({ name, ok: false, error: '未知编码器' }); continue; }
     const started = Date.now();
-    const enc = openStreamSegmentEncoder(ffmpeg, { encoder: name, fps });
+    const enc = openStreamSegmentEncoder(ffmpeg, { encoder: name, fps, prewarm: false });
     const timer = setTimeout(() => { void enc.abort(); }, timeoutMs);
     try {
       for (const png of pngs) await enc.write(png);

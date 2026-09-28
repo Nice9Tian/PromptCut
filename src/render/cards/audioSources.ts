@@ -35,6 +35,7 @@
 import type { CardDef } from "../../kernel/types";
 import type { MediaAsset, Project, TrackClip } from "../../kernel/project";
 import type { CardNode } from "../../kernel/cardGraph.mjs";
+import { onlinePage } from "../../online/pageFlag";
 
 /** 一路输入解析后的样子。`offset` 是秒,`rate` 是播放速率(第一版只支持 1) */
 export type AudioSourceRef =
@@ -105,6 +106,11 @@ async function mediaBlock(hash: string, position: number, count: number, sampleR
     blockCache.delete(cacheKey); blockCache.set(cacheKey, hit);
     return hit;
   }
+  /*
+   * 在线浏览器模式:`/@media/<hash>/pcm` 是编辑器进程(ffmpeg 裁采样)的接口,远程素材服务没有这一路;
+   * 图卡在这台设备上本来就渲染不了(常驻「需要本地 PC 渲染辅助」,C10 契约第 9 节),这里不发请求,当场失败。
+   */
+  if (onlinePage()) fail("在线浏览器模式不取素材的采样块(图卡需要本地 PC 渲染辅助)");
   const pending = (async () => {
     const url = `/@media/${hash}/pcm?start=${position}&count=${count}&sampleRate=${sampleRate}&ch=${MEDIA_PCM_CHANNELS}`;
     const response = await fetch(url);

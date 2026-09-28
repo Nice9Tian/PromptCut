@@ -35,6 +35,9 @@ import { mirrorKey, pushWanted } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
 import { currentPlan } from "./planDispatch";
+import { getCard, userCardSources } from "../kernel/registry";
+import { needsLocalPc, onlineBrowserMode } from "../render/placeholderHost";
+import { fitBeatSwaps, SWAP_MS } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
@@ -147,6 +150,8 @@ export function snapshotFeedDebug(head: Playhead) {
     mounted: [...baselines.front.mounted].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12) })),
     reset: baselines.front.needsReset,
     settled: [...baselines.front.settled],
+    settledAll: baselines.front.settledAll,
+    settledLog: settledLog.slice(),
   };
 }
 
@@ -208,6 +213,7 @@ export function noteSettled(role: StageRole, clipIds: readonly string[]): void {
  * 暂停中不再给任何卡投快照,直到下一次 `setTime` / 播放。
  */
 export function markAllSettled(role: StageRole): void {
+  noteSettledLog("all", role, "");
   baselines[role].settledAll = true;
 }
 
@@ -215,7 +221,14 @@ export function markAllSettled(role: StageRole): void {
  * 「停下就撤兜底」(product/rendering.md「兜底顺序」末条):暂停态已经追到精确活渲的卡,暂停中不再盖回快照。
  * 下一次 `setTime`(`pickForSetTime`)或播放时清空。
  */
-function clearSettled(role: StageRole): void {
+/** 诊断:最近几次 settled 的清与设(谁、何时),探针排查「占位撤下后又盖回」用 */
+const settledLog: { at: number; op: string; role: StageRole; why: string }[] = [];
+function noteSettledLog(op: string, role: StageRole, why: string) {
+  settledLog.push({ at: Math.round(performance.now()), op, role, why });
+  if (settledLog.length > 30) settledLog.shift();
+}
+function clearSettled(role: StageRole, why = ""): void {
+  if (baselines[role].settled.size || baselines[role].settledAll) noteSettledLog("clear", role, why);
   const base = baselines[role];
   if (base.settled.size) base.settled = new Set();
   base.settledAll = false;
@@ -224,6 +237,61 @@ function clearSettled(role: StageRole): void {
 function isSettled(role: StageRole, clipId: string): boolean {
   const base = baselines[role];
   return base.settledAll || base.settled.has(clipId);
+}
+
+/* --------------------------------------------------------------- 按拍换快照(L4) */
+
+/**
+ * 在线普通档的「按拍换快照」(C10 契约第 6 节〔裁:D8〕、第 18 节第 1 条)。开着时:
+ *   - 播放中的投递**不受** `SNAPSHOT_THROTTLE_MS` 的 33 ms 节流 —— 重层每拍换一次;节流只留给非播放时的投递;
+ *   - 每拍按 `fitBeatSwaps` 算装得下几个重层(`deadMs = max(0, B − 已占用)`,`floor(deadMs / swapMs)`),
+ *     按从上到下的层序取,装不下的重层这一拍摘掉快照,由舞台显示占位符(兜底顺序第 4 步)。
+ * 桌面(关着)一个字节不变。
+ */
+let beatSwap = false;
+let beatSwapMs = SWAP_MS;
+/** 这一拍轻管线已占用的毫秒(宿主给:`planDispatch.ts` 的 `lightCostAt`);不给按 0 */
+let occupiedAt: (t: number) => number = () => 0;
+let lastBeatFit: { t: number; occupiedMs: number; deadMs: number; fit: number; swap: string[]; placeholder: string[] } | null = null;
+/** 探针看:播放中按拍投出去几次、其中几次在上一次投递之后不到 33 ms(节流会挡掉的那种) */
+const beatStats = { deliveries: 0, underThrottle: 0, placeholders: 0 };
+
+export function setBeatSwap(on: boolean, opts: { swapMs?: number; occupied?: (t: number) => number } = {}): void {
+  beatSwap = !!on;
+  if (Number(opts.swapMs) > 0) beatSwapMs = Number(opts.swapMs);
+  if (opts.occupied) occupiedAt = opts.occupied;
+  if (!beatSwap) lastBeatFit = null;
+}
+
+/** 探针看:上一拍的换帧取舍 */
+export function beatSwapDebug() {
+  return { on: beatSwap, swapMs: beatSwapMs, last: lastBeatFit, ...beatStats };
+}
+
+/** 这几张卡从上到下的顺序:轨道按项目里的先后(第一条在最上面),同一轨道里后面的片段盖在前面的上面 */
+export function topDownOrder(project: Project, clipIds: Iterable<string>): string[] {
+  const want = new Set(clipIds);
+  const out: string[] = [];
+  for (const tr of project.tracks) {
+    for (let i = tr.clips.length - 1; i >= 0; i--) {
+      const id = tr.clips[i].id;
+      if (want.has(id)) { out.push(id); want.delete(id); }
+    }
+  }
+  for (const id of want) out.push(id);
+  return out;
+}
+
+/** 播放中按拍的预算把装不下的重层从这一拍的选帧里拿掉(那一层落到占位符) */
+function applyBeatBudget(head: Playhead, picks: Map<string, Pick>): Map<string, Pick> {
+  if (!beatSwap || !head.playing || !picks.size) return picks;
+  const occupiedMs = Math.max(0, Number(occupiedAt(head.t)) || 0);
+  const fit = fitBeatSwaps({ fps: head.project.fps || 30, occupiedMs, layers: topDownOrder(head.project, picks.keys()), swapMs: beatSwapMs });
+  lastBeatFit = { t: head.t, occupiedMs, deadMs: fit.deadMs, fit: fit.fit, swap: fit.swap, placeholder: fit.placeholder };
+  if (!fit.placeholder.length) return picks;
+  const out = new Map(picks);
+  for (const id of fit.placeholder) out.delete(id);
+  return out;
 }
 
 /* --------------------------------------------------------------- 选帧 */
@@ -295,6 +363,19 @@ function demoteReady(clipId: string, globalFrame: number, localFrame: number, co
   return false;
 }
 
+/**
+ * 在线浏览器模式下这台设备渲染不了的卡（用户卡、图卡；C10 契约第 9 节 + 第 18 节第 6 条）：
+ * 舞台上常驻「电脑 + 离线」图标（`placeholderHost` 的 `unsupportedHere`），**不贴别人预渲染好的快照**
+ * （`product/rendering.md`「兜底顺序」末条）。所以选帧与投递在这里把它们整个豁免：不进 `heavy`（不抑制）、
+ * 不选帧、不报缺口，快照来源也就不为它们取字节。判法与舞台同一个（`needsLocalPc`）；开关是
+ * `setOnlineBrowserMode`（在线页面的父页由 `Preview` 按 `ONLINE` 设）。桌面恒为 false，照旧。
+ */
+export function exemptOnline(clip: { cardId?: string }): boolean {
+  if (!onlineBrowserMode()) return false;
+  return needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined,
+    (cardId) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId));
+}
+
 /** 这一刻活跃的卡片段（口径同 `Stage` / `FrameScene` 的 live 路：含 LEAD） */
 function activeCardClips(project: Project, t: number): TrackClip[] {
   const out: TrackClip[] = [];
@@ -349,6 +430,7 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   const clips: { clip: TrackClip; firstFrame: number; count: number }[] = [];
   for (const clip of activeCardClips(project, t)) {
     if (pipelineAt(plan, clip.id, t) !== "heavy") continue;
+    if (exemptOnline(clip)) continue; // 在线的用户卡、图卡:常驻图标,不选帧、不报缺口、不取字节
     const { firstFrame, count } = samplingOf(clip, fps);
     if (pendingDemote.has(clip.id)) {
       // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会贴快照）
@@ -499,7 +581,7 @@ function packChanges(role: StageRole, changes: Change[], reset: boolean): { patc
  */
 export function pickForSetTime(head: Playhead): { snapshots: Record<string, string | null>; awaiting: string[] } {
   // 新的一次 setTime:上一次暂停态的 settled 作废(这一刻重新按兜底顺序选)
-  clearSettled("front");
+  clearSettled("front", `setTime ${head.t}`);
   const feed = planFeed(head);
   fetchMissing(feed.picks);
   if (feed.wanted.length) pushWanted(feed.wanted);
@@ -540,18 +622,25 @@ export function pickForSetTime(head: Playhead): { snapshots: Record<string, stri
  */
 export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, head: Playhead): Promise<number> {
   // 播放中没有「停下就精确」这回事:settled 作废
-  if (head.playing) clearSettled(role);
+  if (head.playing) clearSettled(role, "playing");
   const feed = planFeed(head);
   fetchMissing(feed.picks, role);
   if (feed.wanted.length) pushWanted(feed.wanted);
   const base = baselines[role];
   const now = performance.now();
-  if (!base.needsReset && now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) return 0;
+  // L4:在线普通档播放中每拍都换,不受 33 ms 节流(C10 契约第 6 节);暂停、拖动时照旧节流
+  const perBeat = beatSwap && head.playing;
+  if (!perBeat && !base.needsReset && now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) return 0;
   const reset = base.needsReset;
-  const changes = diffAgainst(role, feed.picks, reset);
+  const changes = diffAgainst(role, applyBeatBudget(head, feed.picks), reset);
   if (!reset && !changes.length) return 0;
   const { patch, next } = packChanges(role, changes, reset);
   if (!reset && !Object.keys(patch).length) return 0;
+  if (perBeat) {
+    beatStats.deliveries++;
+    if (now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) beatStats.underThrottle++;
+    if (lastBeatFit?.placeholder.length) beatStats.placeholders++;
+  }
   base.mounted = next;
   base.needsReset = false;
   base.lastSentAt = now;
@@ -607,6 +696,13 @@ export function suppressedAt(head: Playhead): string[] {
 /** 测试用 */
 export function resetSnapshotFeed(): void {
   stopSnapshotFeed();
+  beatSwap = false;
+  beatSwapMs = SWAP_MS;
+  occupiedAt = () => 0;
+  lastBeatFit = null;
+  beatStats.deliveries = 0;
+  beatStats.underThrottle = 0;
+  beatStats.placeholders = 0;
   anchorsFor = null;
   source = new HttpSnapshotSource();
 }

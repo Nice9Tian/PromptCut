@@ -26,8 +26,15 @@ export const SALT_BYTES = 16;
 export const KEY_BYTES = 32;
 export const NONCE_BYTES = 32;
 
+/**
+ * 仅供测试：`PROMPTCUT_TEST_ASSET_TICKET_TTL_MS` 把素材票据的有效期缩短（5 秒～15 分钟之间才认），C10 契约第 12 节的验收
+ * 「逐帧导出跨过票据时限照常完成」用（C10-A10）。生产环境不设，照契约第 8 节的 15 分钟。
+ */
+const TEST_ASSET_TTL = Number(globalThis.process?.env?.PROMPTCUT_TEST_ASSET_TICKET_TTL_MS);
+const ASSET_TTL = Number.isInteger(TEST_ASSET_TTL) && TEST_ASSET_TTL >= 5_000 && TEST_ASSET_TTL <= 15 * 60_000 ? TEST_ASSET_TTL : 15 * 60_000;
+
 /** 票据有效期（契约第 8 节〔裁〕） */
-export const TICKET_TTL = Object.freeze({ asset: 15 * 60_000, conn: 2 * 60_000 });
+export const TICKET_TTL = Object.freeze({ asset: ASSET_TTL, conn: 2 * 60_000 });
 
 /** 子协议里 JSON 的上限（契约第 5 节） */
 export const MAX_PROTOCOL_JSON = 1024;

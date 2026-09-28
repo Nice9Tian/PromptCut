@@ -155,3 +155,7 @@
   .pc-titlebar-menu-button { padding: 0 7px; }
   .pc-window-control { width: 40px; }
 }
+
+/* 在线页面置灰的项(桌面才有,见 WindowTitleBar.tsx 的 desktopOnly),与顶栏项目菜单的置灰一个样子 */
+.pc-titlebar-menu-item:disabled { opacity: 0.45; cursor: default; }
+.pc-titlebar-menu-item:disabled:hover { background: transparent; border-color: transparent; }
