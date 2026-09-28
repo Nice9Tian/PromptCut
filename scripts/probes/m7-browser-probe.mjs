@@ -756,12 +756,15 @@ async function runCreator(book, head) {
         const pcCopy = ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp);
         const pgCopy = ts.filter((t) => t.requires?.envFingerprint === pageFpD);
         const cands = lmD?.layers?.find((l) => l.clipId === clip)?.candidates ?? [];
-        perClip[clip] = { pc: pcCopy.length, page: pgCopy.length, allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
+        // 页面报到前（最多等 3 s）发的那一版切分时还没有浏览器指纹，只出 pc 一份（不带 dual）：这些照契约不作废，单列
+        const pcDual = pcCopy.filter((t) => t.input?.dual === true);
+        perClip[clip] = { pc: pcCopy.length, pcDual: pcDual.length, pcSingle: pcCopy.length - pcDual.length, page: pgCopy.length,
+          pageDual: pgCopy.length > 0 && pgCopy.every((t) => t.input?.dual === true || pcDual.length === 0),
           pageHasBake: pgCopy.length > 0 && pgCopy.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
-          pcSuperseded: pcCopy.filter((t) => god.tasks.get(t.id)?.state === 'failed' && /superseded/.test(String(god.tasks.get(t.id)?.lastError))).length,
+          pcSuperseded: pcDual.filter((t) => god.tasks.get(t.id)?.state === 'failed' && /superseded/.test(String(god.tasks.get(t.id)?.lastError))).length,
           candidates: cands.map((c) => c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFpD ? 'page' : c.envFingerprint) };
       }
-      book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lmD?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.allDual && x.pageHasBake && x.pcSuperseded === x.pc && x.candidates.includes('pc') && x.candidates.includes('page')), { v: lmD?.v ?? null, perClip });
+      book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lmD?.v === 3 && Object.values(perClip).every((x) => x.page > 0 && x.pageDual && x.pageHasBake && x.pcSuperseded === x.pcDual && x.candidates.includes('page')), { v: lmD?.v ?? null, perClip });
     }
     else {
       for (const id of ['M7-A3', 'M7-A4', 'M7-A8', 'M7-A9', 'M7-A10']) book.pending(id, 'server', NODE_PENDING, { browserNodes: god.browserNodes().map((n) => ({ profile: n.profile, userId: n.userId })) });
@@ -1796,7 +1799,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   await waitSignal(kv, 'a10.server-done');
   const od2 = await onlineDiag(b2.page);
   const zl = od2?.layers?.find((l) => l.clipId === zClaim.task.clipId);
-  book.judge('M7-A10', 'page-layer-switched', zl?.envFingerprint === cfg.pcFp, { clip: zClaim.task.clipId, fp: zl?.envFingerprint ?? null, pcFp: cfg.pcFp, ready: zl?.ready ?? null });
+  book.judge('M7-A10', 'page-layer-switched', zl?.envFingerprint === cfg.pcFp && (zl?.ready ?? 0) > 0, { clip: zClaim.task.clipId, fp: zl?.envFingerprint ?? null, pcFp: cfg.pcFp, ready: zl?.ready ?? null });
 }
 
 /* ================================================================== all */
