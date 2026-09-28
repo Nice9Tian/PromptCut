@@ -80,23 +80,26 @@
  *
  *   在线页面(发布方)发布带片段清单的 plan → 指纹 Y 的独立渲染主机先认领 plan、按自己的指纹切分 → 指纹 X 的节点在 Y 认领 plan
  *   之后才上线(免得它抢到 plan)→ 判:
- *     e6r:Y-claimed-plan        Y 认领了页面这一版的 plan(旁观节点见到 task.taken,Y 自己的认领记录里有这个 id)
- *     e6r:derived-require-Y     切出的细任务都要求 Y 的指纹(`requires.envFingerprint`)
- *     e6r:X-online-while-work   X 上线之后这一版还有细任务完成(X 确实和这一版同时在线,认领 0 才有意义)
- *     e6r:X-claimed-0           X 对这一版细任务认领 0(见下面 X 的两种)
- *     e6r:J-all-done            J-全完:这一版细任务全部 done(旁观节点看到的最终状态)
- *     e6r:J-exactly-once        J-恰一:发布方(成员页)对每个任务恰好收到一次 task.done(CDP 读页面 WebSocket 入站帧,按 seq 去重、按 epoch 数)
- *     e6r:J-pure-layers         J-纯层:按层(结果键)汇总细任务要求的指纹、完成它的节点的指纹、层表记的指纹,没有一层混两种
- *     e6r:layer-map-Y           层表(`layers:<项目文档 id>`)逐层的指纹都是 Y
- *     e6r:X-differs-from-Y      X 与 Y 的指纹不同
+ *     e6r:Y-claimed-plan         Y 认领了页面这一版的 plan(旁观节点见到 task.taken;Y 的持有记录里有这个 id,
+ *                                或者推断:认领发生在 X 上线前、此刻能认领 plan 的只有 Y、Y 的认领计数 ≥ 1、切分方自己那份要求 Y 的指纹)
+ *     e6r:derived-fingerprints   切分方自己那份细任务要求 Y 的指纹;其余只许是 M7 D1 给页面出的浏览器那份(`input.dual`、要求页面指纹)
+ *     e6r:X-online-while-work    X 上线之后这一版还有细任务完成(X 确实和这一版同时在线,认领 0 才有意义)
+ *     e6r:X-claimed-0            要求别的指纹(Y)的细任务 X 认领 0;要求 X 自己指纹的(同一台机器上页面的浏览器那份)X 本来就能认领,只计数
+ *     e6r:J-all-done             J-全完:没被作废的细任务全部 done;作废(`superseded`,M7 D1 双份里输了的那份)的只许是 dual 的
+ *     e6r:J-exactly-once         J-恰一:发布方(成员页)对 plan 与每个没被作废的细任务恰好收到一次 task.done
+ *                                (CDP 读页面 WebSocket 入站帧,按 seq 去重、按 epoch 数)
+ *     e6r:J-pure-layers          J-纯层:按卡(层表的内容键)汇总细任务要求的指纹与完成它的节点的指纹,没有一张卡混两种
+ *     e6r:layer-map-covers-done  层表(`layers:<项目文档 id>`,v 3)每张卡的候选里含完成那一份的指纹;另记「主指纹全是 Y」(primaryAllY)
+ *     e6r:X-differs-from-Y       X 与 Y 的指纹不同
  *   另记 L18(不判):桌面发布的 plan(创建者在第 0 步发布的)对 host 档认领回什么(X 节点拿 host 身份试认领一次,期望 `plan-profile`)。
  *   这一向把第 5 步(A5)的改动扩到主重卡与全部额外重卡(文字 + burnMs,`--e6-burn-ms`,缺省本机替身 120、外网 250:
  *   外网的 X 主机起来要半分钟以上),Y 的并发压到 1,好让 X 上线时这一版还没做完。
  *
  *   X 的两种(`--x-nodes`,逗号分隔):
  *     claimer  协议层节点:成员身份、`role: 'render'`、`node.hello` 报 profile host 与本机的真实指纹(= 创建者桌面节点报的那个),
- *              `queue.watch` 本项目;对旁观节点看到的每个还 open 的细任务主动 `task.claim` 一次(认领成了就当场 `task.release`,
- *              记为失败),记各拒绝原因。不起进程、不占端口,Y 认领 plan 后几乎立刻在线。
+ *              `queue.watch` 本项目;对旁观节点看到的每个还 open、要求别的指纹的细任务主动 `task.claim` 一次(认领成了就当场
+ *              `task.release`,记为失败),记各拒绝原因;要求它自己指纹的(页面的浏览器那份)不碰 —— 认领再放回会把卡锁到
+ *              X 的指纹上、把切分方那份作废,扰乱这一版(第一次本机替身就是这样)。不起进程、不占端口,Y 认领 plan 后几乎立刻在线。
  *     host     真的独立渲染主机(`scripts/render-host.mjs`,真实指纹),端口「基址 +0、+1、+2」。只在外网模式(`--site`)可用:
  *              本机替身的 10 个端口(托管组合 + 三个源占 5 个,创建者 / Y 占 3 个)放不下第二台主机。
  *   缺省:外网模式 `claimer,host`,本机替身 `claimer`。
@@ -665,14 +668,19 @@ function trackNodeIds(origin) {
     try {
       pre ??= (await getJson(`${origin}/api/prerender/info`, 5000))?.url ?? null;
       if (!pre) return;
-      const events = (await getJson(`${pre}/api/frames/diagnostics`, 20_000))?.queue?.events ?? [];
-      for (const e of events) {
+      const q = (await getJson(`${pre}/api/frames/diagnostics`, 20_000))?.queue ?? {};
+      for (const e of q.events ?? []) {
         const m = /^node\.(claimed|completed|dedup|lost|failed)$/.exec(String(e?.event ?? ''));
         if (m && typeof e.id === 'string') ids[m[1]].add(e.id);
       }
+      // 执行器不发 node.claimed 事件(task-runner 只报 completed / dedup / lost / failed / discarded):
+      // 认领过的任务从此刻持有、在跑的里收(plan 切分时也在 held 里)
+      const idOf = (x) => (typeof x === 'string' ? x : typeof x?.id === 'string' ? x.id : null);
+      for (const x of [...(q.running ?? []), ...(q.nodes ?? []).flatMap((n) => [...(n?.held ?? []), ...(n?.running ?? [])])]) { const id = idOf(x); if (id) ids.claimed.add(id); }
+      for (const id of [...ids.completed, ...ids.dedup, ...ids.failed, ...ids.lost]) ids.claimed.add(id);
     } catch { /* 下一拍再试 */ }
   };
-  void (async () => { while (!stopped) { await poll(); await delay(1000); } })();
+  void (async () => { while (!stopped) { await poll(); await delay(400); } })();
   return {
     ids, poll,
     stop: () => { stopped = true; },
@@ -690,13 +698,15 @@ async function startE6Watcher(M, { projectId, password }) {
   const tasks = new Map();
   const epochs = [];
   const rec = (id) => {
-    if (!tasks.has(id)) tasks.set(id, { kind: null, derivedFrom: null, fp: undefined, resultKey: null, version: null, state: null, taken: [], closed: [], seenAt: Date.now() });
+    if (!tasks.has(id)) tasks.set(id, { kind: null, derivedFrom: null, fp: undefined, resultKey: null, contentKey: null, dual: false, version: null, state: null, taken: [], closed: [], seenAt: Date.now() });
     return tasks.get(id);
   };
   const see = (t) => {
     if (typeof t?.id !== 'string') return;
     const r = rec(t.id);
     r.kind ??= t.kind ?? null;
+    r.contentKey ??= typeof t.input?.contentKey === 'string' ? t.input.contentKey : null;
+    if (t.input?.dual === true) r.dual = true;
     r.derivedFrom ??= t.source?.derivedFrom ?? null;
     if (r.fp === undefined) r.fp = typeof t.requires?.envFingerprint === 'string' ? t.requires.envFingerprint : null;
     r.resultKey ??= t.resultKey ?? null;
@@ -722,24 +732,29 @@ async function startE6Watcher(M, { projectId, password }) {
   return { tasks, epochs, stats, close: c.close };
 }
 
-/** 成员页(发布方)收到的每一条 task.done:CDP 读页面 WebSocket 的入站帧,同一任务同一 seq 只算一次(会话层重发),记 epoch */
+/**
+ * 成员页(发布方)收到的每一条 task.done 与 task.failed:CDP 读页面 WebSocket 的入站帧,同一任务同一 seq 只算一次(会话层重发),
+ * 记 epoch;task.failed 记 error(`superseded` = M7 D1 双份里被作废的那一份)。
+ */
 async function pageDoneEvents(page) {
   const cdp = await page.createCDPSession();
   await cdp.send('Network.enable');
   const seen = new Set();
   const events = [];
+  const failed = [];
   cdp.on('Network.webSocketFrameReceived', (e) => {
     const s = e?.response?.payloadData;
-    if (typeof s !== 'string' || !s.includes('task.done')) return;
+    if (typeof s !== 'string' || !(s.includes('task.done') || s.includes('task.failed'))) return;
     let m;
     try { m = JSON.parse(s); } catch { return; }
-    if (m?.type !== 'task.done' || typeof m.id !== 'string') return;
-    const key = `${m.id}\u0000${m.seq ?? `frame-${events.length}`}`;
+    if ((m?.type !== 'task.done' && m?.type !== 'task.failed') || typeof m.id !== 'string') return;
+    const key = `${m.type}\u0000${m.id}\u0000${m.seq ?? `frame-${events.length + failed.length}`}`;
     if (seen.has(key)) return;
     seen.add(key);
-    events.push({ id: m.id, epoch: typeof m.epoch === 'string' ? m.epoch : null, at: Date.now() });
+    if (m.type === 'task.done') events.push({ id: m.id, epoch: typeof m.epoch === 'string' ? m.epoch : null, at: Date.now() });
+    else failed.push({ id: m.id, error: String(m.error ?? '').slice(0, 120), at: Date.now() });
   });
-  return { events, detach: () => cdp.detach().catch(() => {}) };
+  return { events, failed, detach: () => cdp.detach().catch(() => {}) };
 }
 
 /**
@@ -749,7 +764,7 @@ async function pageDoneEvents(page) {
 async function startClaimer(M, { projectId, password, fingerprint, watcher, isRound }) {
   const c = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId, username: 'E6 X 节点', password, as: 'member', role: 'render' });
   const nodeId = `c10b-e6x-${RUN}`.slice(0, 64);
-  const st = { nodeId, fingerprint, hello: null, watch: null, onlineAt: null, visible: new Set(), attempts: [], claimed: [], released: [], rejected: {} };
+  const st = { nodeId, fingerprint, hello: null, watch: null, onlineAt: null, visible: new Set(), attempts: [], claimed: [], released: [], rejected: {}, sameFp: [] };
   c.ep.onMessage((m) => {
     if (m?.type === 'task.opened' && typeof m.task?.id === 'string') st.visible.add(m.task.id);
     else if (m?.type === 'queue.snapshot') for (const t of m.tasks ?? []) if (typeof t?.id === 'string') st.visible.add(t.id);
@@ -787,6 +802,9 @@ async function startClaimer(M, { projectId, password, fingerprint, watcher, isRo
       for (const [id, t] of watcher.tasks) {
         if (tried.has(id) || t.kind === 'plan' || t.state !== 'open' || !isRound(t)) continue;
         tried.add(id);
+        // 要求 X 自己这种指纹的(M7 D1 给同一台机器上的页面出的浏览器那一份)X 本来就可以认领:不去碰,只计数
+        // (认领再放回会把卡锁在 X 的指纹上、把切分方那一份作废,扰乱这一版)
+        if (t.fp === fingerprint) { st.sameFp.push(id); continue; }
         await claimOnce(id, t.version ?? 1);
       }
     })().finally(() => { busy = false; });
@@ -795,7 +813,7 @@ async function startClaimer(M, { projectId, password, fingerprint, watcher, isRo
     st,
     probePlan: (id, version = 1) => claimOnce(id, version, { plan: true }),
     view: () => ({ nodeId, fingerprint, onlineAt: st.onlineAt, hello: st.hello, visibleRound: [...st.visible].filter((id) => { const t = watcher.tasks.get(id); return t && t.kind !== 'plan' && isRound(t); }).length,
-      attempts: st.attempts.length, claimed: st.claimed.slice(0, 20), released: st.released, rejected: st.rejected, sample: st.attempts.slice(0, 6) }),
+      attempts: st.attempts.length, claimed: st.claimed.slice(0, 20), released: st.released, rejected: st.rejected, sameFpSkipped: st.sameFp.length, sample: st.attempts.slice(0, 4) }),
     close: () => { clearInterval(timer); c.close(); },
   };
 }
@@ -1197,7 +1215,11 @@ async function e6Begin(planId) {
 async function e6AfterYUp() {
   const taken = await until('E6 反方向:Y 认领页面发布的 plan', () => ((e6.watcher.tasks.get(e6.planId)?.taken.length ?? 0) > 0 ? true : null), 900_000, 250);
   e6.planTakenAt = taken ? Date.now() : null;
-  say('e6r.plan-taken', { ok: !!taken, afterMs: taken ? Date.now() - e6.startedAt : null });
+  // 此刻 Y 的认领计数(本机替身读它的诊断;外部主机读它最近一次 host.progress):plan 被认领时在线、能认领 plan 的只有 Y
+  // (创建者已关,纯浏览器认领 plan 一律 plan-profile,X 还没上线)
+  const yq = EXTERNAL_HOST ? await xstore.get('host.progress', 5000).catch(() => null) : hostView(await hostQueue(), hostLog);
+  e6.yAtPlanTaken = { claimed: yq?.nodes?.[0]?.claimed ?? null, completed: yq?.nodes?.[0]?.completed ?? null, envFingerprint: yq?.envFingerprint ?? null };
+  say('e6r.plan-taken', { ok: !!taken, afterMs: taken ? Date.now() - e6.startedAt : null, y: e6.yAtPlanTaken });
   if (X_NODES.includes('claimer')) {
     e6.claimer = await startClaimer(M, { projectId: state.projectId, password: state.projectPassword, fingerprint: state.creatorFp, watcher: e6.watcher, isRound: e6.isRound });
     for (const id of (state.desktopPlans ?? []).slice(-3)) e6.l18.push(await e6.claimer.probePlan(id));
@@ -1230,7 +1252,17 @@ async function e6Settle() {
   return !!ok;
 }
 
-/** E6 反方向的判据(文件头的 e6r:* 各条);yIds = Y 认领 / 完成的任务 id,yFp = Y 的指纹 */
+/**
+ * E6 反方向的判据(文件头的 e6r:* 各条)。yIds = Y 认领 / 完成的任务 id,yFp = Y 的指纹。
+ *
+ * M7 D1:页面(纯浏览器节点、与 plan 同一用户)在线时,切分方给纯浏览器做得了的卡另出一份页面指纹的(`input.dual`),
+ * 谁先认领这张卡的任一段谁得锁,另一份作废(`superseded`:订阅者收 task.failed、旁观者收 task.closed failed)。所以:
+ *   - 这一版的细任务 = Y 自己那份(要求 Y)+ 浏览器那份(要求页面指纹、dual);
+ *   - J-全完 / J-恰一 按「没被作废的」判,作废的只许是 dual 的;
+ *   - X 与页面在同一台机器上时指纹相同,浏览器那份 X 本来就可以认领(同环境同产物):X-claimed-0 判的是
+ *     「要求别的指纹(Y)的细任务 X 认领 0」,要求 X 自己指纹的那几份只计数;
+ *   - J-纯层按卡(内容键)判:一张卡没作废的段只出自一种指纹;层表 v 3 的候选要含完成那一份的指纹。
+ */
 async function e6Judge({ yIds, yFp }) {
   const W = e6.watcher;
   const checks = [];
@@ -1239,73 +1271,102 @@ async function e6Judge({ yIds, yFp }) {
   const ids = e6.roundIds();
   const idSet = new Set(ids);
   const T = (id) => W.tasks.get(id);
+  const short = (id) => String(id).slice(0, 90);
   const yClaimed = yIds?.claimed ?? [];
   const yDone = [...(yIds?.completed ?? []), ...(yIds?.dedup ?? [])];
   const xFp = state.creatorFp;
   const xhostFp = e6.xhostView?.envFingerprint ?? null;
+  const pageFp = state.pageFp ?? null;
+  const superseded = new Set(e6.pageDone.failed.filter((f) => f.error === 'superseded' && idSet.has(f.id)).map((f) => f.id));
+  const live = ids.filter((id) => !superseded.has(id));
+  const own = ids.filter((id) => T(id).fp === yFp);
+  const others = ids.filter((id) => T(id).fp !== yFp);
+  const xOnlineAt = Math.min(...[e6.claimer?.st.onlineAt, e6.xhost?.readyAt].filter(Number.isFinite));
+  const planTaken = T(e6.planId)?.taken ?? [];
   // 1. Y 认领了页面这一版的 plan
-  add('Y-claimed-plan', plans.includes(e6.planId) && yClaimed.includes(e6.planId),
-    { planId: String(e6.planId ?? '').slice(0, 100), watcherTaken: T(e6.planId)?.taken.length ?? 0, yClaimedPlans: yClaimed.filter((id) => id.startsWith('plan:')).map((id) => id.slice(0, 100)), roundPlans: plans.length });
-  // 2. 细任务都要求 Y 的指纹
+  const byIds = yClaimed.includes(e6.planId);
+  const byInference = planTaken.length > 0 && planTaken[0] < xOnlineAt && own.length > 0 && (e6.yAtPlanTaken?.claimed ?? 0) >= 1;
+  add('Y-claimed-plan', plans.includes(e6.planId) && (byIds || byInference), {
+    planId: short(e6.planId), watcherTaken: planTaken.length, takenBeforeX: planTaken.length > 0 ? planTaken[0] < xOnlineAt : null,
+    inYHeld: byIds, yAtPlanTaken: e6.yAtPlanTaken ?? null, ownCopiesRequireY: own.length, roundPlans: plans.length,
+    how: byIds ? 'Y 的持有记录里有这个 plan' : '推断:plan 被认领时只有 Y 能认领 plan(创建者已关、纯浏览器认领 plan 回 plan-profile、X 未上线),且切分方自己那份要求 Y 的指纹',
+  });
+  // 2. 细任务的指纹:切分方自己那份要求 Y;其余只许是 M7 D1 给页面的浏览器那份(dual、要求页面指纹)
   const byFp = {};
-  for (const id of ids) { const k = T(id).fp ?? '(none)'; byFp[k] = (byFp[k] ?? 0) + 1; }
-  add('derived-require-Y', ids.length > 0 && ids.every((id) => T(id).fp === yFp), { tasks: ids.length, yFp, byFp });
-  // 3. X 上线之后这一轮还有细任务完成
+  for (const id of ids) { const k = `${T(id).fp ?? '(none)'}${T(id).dual ? '/dual' : ''}`; byFp[k] = (byFp[k] ?? 0) + 1; }
+  add('derived-fingerprints', own.length > 0 && others.every((id) => T(id).dual && T(id).fp === pageFp), { tasks: ids.length, yFp, pageFp, byFp, badOthers: others.filter((id) => !(T(id).dual && T(id).fp === pageFp)).slice(0, 3).map(short) });
+  // 3. X 上线之后这一版还有细任务完成
   const doneAt = (id) => T(id).closed.find((c) => c.state === 'done')?.at ?? null;
-  const after = (at) => (at ? ids.filter((id) => (doneAt(id) ?? 0) > at).length : 0);
+  const after = (at) => (at ? live.filter((id) => (doneAt(id) ?? 0) > at).length : 0);
   const online = {};
   if (e6.claimer) online.claimer = { onlineAt: e6.claimer.st.onlineAt, doneAfter: after(e6.claimer.st.onlineAt) };
   if (e6.xhost) online.host = { onlineAt: e6.xhost.readyAt, doneAfter: after(e6.xhost.readyAt) };
-  add('X-online-while-work', Object.keys(online).length > 0 && Object.values(online).every((o) => o.doneAfter > 0), { ...online, tasks: ids.length, planTakenAt: e6.planTakenAt ?? null });
-  // 4. X 认领 0
+  add('X-online-while-work', Object.keys(online).length > 0 && Object.values(online).every((o) => o.doneAfter > 0), { ...online, tasks: live.length });
+  // 4. X 对要求别的指纹(Y)的细任务认领 0;要求 X 自己指纹的(浏览器那份)只计数
   const xDetail = {};
-  let xClaimed = 0;
+  let xBad = 0;
   if (e6.claimer) {
     const v = e6.claimer.view();
-    xDetail.claimer = { fingerprint: v.fingerprint, visibleRound: v.visibleRound, attempts: v.attempts, rejected: v.rejected, claimed: v.claimed.length, sample: v.sample };
-    xClaimed += v.claimed.length;
+    xDetail.claimer = { fingerprint: v.fingerprint, attempts: v.attempts, rejected: v.rejected, claimed: v.claimed.length, sameFpSkipped: v.sameFpSkipped, visibleRound: v.visibleRound, sample: v.sample };
+    xBad += v.claimed.length;
   }
   let xhostDone = [];
   if (e6.xhost) {
     const view = e6.xhostTracker?.view() ?? {};
     const q = hostView(await e6.xhost.queue(), e6.xhost.lines);
     const claimedRound = (view.claimed ?? []).filter((id) => idSet.has(id));
+    const claimedOther = claimedRound.filter((id) => T(id).fp !== xhostFp);
     xhostDone = [...(view.completed ?? []), ...(view.dedup ?? [])].filter((id) => idSet.has(id));
-    xDetail.host = { envFingerprint: q?.envFingerprint ?? xhostFp, nodeClaimed: q?.nodes?.[0]?.claimed ?? null, claimedRound: claimedRound.length, connected: q?.nodes?.[0]?.connected ?? null };
-    xClaimed += claimedRound.length + (q?.nodes?.[0]?.claimed ?? 0);
+    xDetail.host = { envFingerprint: q?.envFingerprint ?? xhostFp, nodeClaimed: q?.nodes?.[0]?.claimed ?? null, claimedRound: claimedRound.length, claimedOtherFp: claimedOther.map(short).slice(0, 5), sameFpClaimed: claimedRound.length - claimedOther.length, connected: q?.nodes?.[0]?.connected ?? null };
+    xBad += claimedOther.length;
   }
-  add('X-claimed-0', Object.keys(xDetail).length > 0 && xClaimed === 0, xDetail);
-  // 5. J-全完
-  const states = Object.fromEntries(ids.map((id) => [id, T(id).closed.at(-1)?.state ?? T(id).state]));
-  add('J-all-done', judgeAllDone(ids, states).ok, judgeAllDone(ids, states));
-  // 6. J-恰一(发布方 = 成员页;plan 与细任务都算)
-  const once = judgeExactlyOnce([...plans, ...ids], e6.pageDone.events);
-  add('J-exactly-once', once.ok, { ...once, missing: once.missing.slice(0, 5).map((id) => id.slice(0, 80)), dup: once.dup.slice(0, 5) });
-  // 7. 层表逐层指纹
+  add('X-claimed-0', Object.keys(xDetail).length > 0 && xBad === 0, xDetail);
+  // 5. J-全完:没被作废的细任务全部 done;作废的只许是 dual 的
+  const states = Object.fromEntries(live.map((id) => [id, T(id).closed.at(-1)?.state ?? T(id).state]));
+  const all = judgeAllDone(live, states);
+  const badSuperseded = [...superseded].filter((id) => !T(id).dual);
+  add('J-all-done', all.ok && badSuperseded.length === 0, { ...all, notDone: all.notDone.slice(0, 5).map((x) => ({ ...x, id: short(x.id), fp: T(x.id)?.fp ?? null, dual: T(x.id)?.dual ?? null })), superseded: superseded.size, badSuperseded: badSuperseded.map(short) });
+  // 6. J-恰一(发布方 = 成员页;plan 与没被作废的细任务)
+  const once = judgeExactlyOnce([...plans, ...live], e6.pageDone.events);
+  add('J-exactly-once', once.ok, { ...once, missing: once.missing.slice(0, 5).map(short), dup: once.dup.slice(0, 5) });
+  // 层表(v 3:每层 contentKey、主指纹、candidates)
   let layers = null;
   try {
     const r = await conn.rpc({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${state.docId}` });
-    layers = r?.type === 'content.item' && !r.missing ? (r.body?.layers ?? []) : null;
+    layers = r?.type === 'content.item' && !r.missing ? { v: r.body?.v ?? null, list: r.body?.layers ?? [] } : null;
   } catch { layers = null; }
-  const layerRows = (layers ?? []).map((l) => ({ clip: String(l.clipId ?? '').slice(0, 8), fp: l.envFingerprint ?? null, rk: String(l.resultKey ?? '').slice(0, 16) }));
-  add('layer-map-Y', Array.isArray(layers) && layers.length > 0 && layers.every((l) => l.envFingerprint === yFp), { yFp, layers: layerRows });
-  // 8. J-纯层:细任务要求的指纹 + 完成它的节点的指纹 + 层表记的指纹,按层(结果键)
-  const layerOfId = (id) => T(id).resultKey ?? parseTaskId(id)?.resultKey ?? id;
+  const cardOf = new Map();
+  for (const l of layers?.list ?? []) {
+    const card = l.contentKey ?? l.resultKey;
+    for (const c of [{ resultKey: l.resultKey, envFingerprint: l.envFingerprint }, ...(l.candidates ?? [])]) if (c?.resultKey) cardOf.set(c.resultKey, { card, layer: l });
+  }
+  const layerOfId = (id) => { const rk = T(id).resultKey ?? parseTaskId(id)?.resultKey ?? id; return cardOf.get(rk)?.card ?? T(id).contentKey ?? rk; };
+  // 7. J-纯层:按卡汇总没被作废的细任务要求的指纹与完成它的节点的指纹(Y / X 主机按各自的认领记录;其余由页面完成,页面指纹为探针独立算的 pageFp)
   const completedBy = {};
   for (const id of yDone) if (idSet.has(id)) completedBy[id] ??= 'Y';
   for (const id of xhostDone) completedBy[id] ??= 'X';
-  const obs = layerObservations(ids.map((id) => ({ id, layer: layerOfId(id), requires: { envFingerprint: T(id).fp ?? undefined } })), completedBy, { Y: yFp, X: xhostFp ?? xFp }, (t) => t.layer);
-  const roundKeys = new Set(ids.map(layerOfId));
-  for (const l of layers ?? []) if (roundKeys.has(l.resultKey)) obs.push({ layer: l.resultKey, fingerprint: l.envFingerprint ?? null, ref: `layer-map:${String(l.clipId ?? '').slice(0, 8)}` });
+  let inferredPage = 0;
+  for (const id of live) if (!completedBy[id] && states[id] === 'done') { completedBy[id] = 'page'; inferredPage += 1; }
+  const obs = layerObservations(live.map((id) => ({ id, layer: layerOfId(id), requires: { envFingerprint: T(id).fp ?? undefined } })), completedBy, { Y: yFp, X: xhostFp ?? xFp, page: pageFp }, (t) => t.layer);
   const pure = judgePureLayers(obs);
-  const attributed = Object.keys(completedBy).length;
-  add('J-pure-layers', pure.ok && attributed === ids.length, { ...pure, mixed: pure.mixed.slice(0, 3), attributed, tasks: ids.length, byNode: { Y: Object.values(completedBy).filter((n) => n === 'Y').length, X: Object.values(completedBy).filter((n) => n === 'X').length } });
+  const attributed = live.filter((id) => completedBy[id]).length;
+  const byNode = {};
+  for (const n of Object.values(completedBy)) byNode[n] = (byNode[n] ?? 0) + 1;
+  add('J-pure-layers', pure.ok && attributed === live.length, { ...pure, mixed: pure.mixed.slice(0, 3), attributed, tasks: live.length, byNode, inferredPage });
+  // 8. 层表:这一版每张卡都有一层,候选里含完成那一份的指纹
+  const doneFpByCard = new Map();
+  for (const id of live) if (states[id] === 'done') doneFpByCard.set(layerOfId(id), T(id).fp);
+  const layerRows = (layers?.list ?? []).map((l) => ({ clip: String(l.clipId ?? '').slice(0, 14), fp: l.envFingerprint ?? null, candidates: (l.candidates ?? []).map((c) => c.envFingerprint), doneFp: doneFpByCard.get(l.contentKey ?? l.resultKey) ?? null }));
+  const uncovered = [...doneFpByCard].filter(([card, fp]) => { const l = (layers?.list ?? []).find((x) => (x.contentKey ?? x.resultKey) === card); return !l || !((l.candidates ?? []).some((c) => c.envFingerprint === fp) || l.envFingerprint === fp); });
+  add('layer-map-covers-done', !!layers && doneFpByCard.size > 0 && uncovered.length === 0, { v: layers?.v ?? null, cards: doneFpByCard.size, uncovered: uncovered.length, primaryAllY: layerRows.length > 0 && layerRows.every((r) => r.fp === yFp), layers: layerRows });
   // 9. X 与 Y 的指纹不同
-  add('X-differs-from-Y', !!yFp && !!xFp && xFp !== yFp && (!xhostFp || xhostFp !== yFp), { yFp, xClaimerFp: e6.claimer ? xFp : null, xHostFp: xhostFp });
+  add('X-differs-from-Y', !!yFp && !!xFp && xFp !== yFp && (!xhostFp || xhostFp !== yFp), { yFp, xClaimerFp: e6.claimer ? xFp : null, xHostFp: xhostFp, pageFp });
+  const doneByFp = {};
+  for (const id of live) if (states[id] === 'done') doneByFp[T(id).fp ?? '(none)'] = (doneByFp[T(id).fp ?? '(none)'] ?? 0) + 1;
   return {
-    checks, planId: String(e6.planId ?? '').slice(0, 100), roundPlans: plans.length, tasks: ids.length, epochs: W.epochs.length,
-    y: { fp: yFp, claimed: yClaimed.length, done: yDone.filter((id) => idSet.has(id)).length },
-    x: xDetail, pageDoneEvents: e6.pageDone.events.length,
+    checks, planId: short(e6.planId), roundPlans: plans.length, tasks: ids.length, live: live.length, superseded: superseded.size, doneByFp, epochs: W.epochs.length,
+    y: { fp: yFp, claimedSeen: yClaimed.length, done: yDone.filter((id) => idSet.has(id)).length },
+    x: xDetail, pageFp, pageDoneEvents: e6.pageDone.events.length, pageFailedEvents: e6.pageDone.failed.length,
     l18: {
       note: '只记录不判(C10 契约第 18 节第 9 条、M8 计划 L18):桌面发布的 plan 不带片段清单,requires 带发布方指纹与 preferNode;host 档认领回 plan-profile,环境不同的主机领不到',
       desktopPlans: (state.desktopPlans ?? []).length, desktopFingerprint: state.creatorFp ?? null,
@@ -1443,7 +1504,8 @@ try {
     }
     return frames === l.count ? { v: r.body.v, contentKey: !!l.contentKey, envFingerprint: l.envFingerprint, resultKey: l.resultKey, count: l.count, extras: ex.length } : null;
   }, 1_200_000, 3000);
-  check(layer0?.v === 2 && layer0.contentKey && layer0.envFingerprint, '层表 v 2,重层带 contentKey 与 envFingerprint', layer0);
+  // M7 D12 起层表是 v 3(v 2 加每层的 candidates),普通档 v 2、v 3 都认
+  check(layer0?.v >= 2 && layer0.contentKey && layer0.envFingerprint, '层表 v 2 或 v 3,重层带 contentKey 与 envFingerprint', layer0);
   check(layer0 && layer0.envFingerprint === state.creatorFp, '层的产出环境 = 创建者节点的指纹', { layer: layer0?.envFingerprint, node: state.creatorFp });
   state.layer0 = layer0;
   out.steps.creator = { ms: Date.now() - t0, projectId: state.projectId, clips: { main: state.main, extras: state.extras.length, light: state.light }, creatorFp: state.creatorFp, layer: layer0 };
@@ -1506,10 +1568,10 @@ try {
   }).then((e) => M.describeEnvironment({ platform: e.platform, renderer: e.renderer, vendor: e.vendor, chromeVersion: e.ua }).fingerprint).catch(() => null);
 
   // A3:普通档取原尺寸
-  const ready = await until('成员页主重卡的原尺寸就绪(层表 v 2、snap/ 进 L2)', async () => {
+  const ready = await until('成员页主重卡的原尺寸就绪(层表 v 2 / v 3、snap/ 进 L2)', async () => {
     const o = await onlineDiag(member);
     const l = o?.layers?.find((x) => x.clipId === state.main);
-    return o?.tier === 'original' && o.mapVersion === 2 && l && l.ready > 0 ? { o, l } : null;
+    return o?.tier === 'original' && o.mapVersion >= 2 && l && l.ready > 0 ? { o, l } : null;
   }, 180_000, 1000);
   check(ready, 'A3:在线来源取原尺寸一档,主重卡有就绪区间', ready?.l);
   await member.bringToFront();
