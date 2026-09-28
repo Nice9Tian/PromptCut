@@ -425,7 +425,8 @@ test('B.3 pickCandidate：别的项目只在更低优先级里有时，不按项
   // 排名：A(p1,10) B(p2,5)；B 和第一名不同优先级，不算
   const tasks = [cand('A', 10, 1, 'p1'), cand('B', 5, 2, 'p2')];
   assert.equal(pickCandidate(tasks, { random: () => 0, lastProjectId: 'p1' }).id, 'A');
-  assert.equal(pickCandidate(tasks, { random: () => 0.999999, lastProjectId: 'p1' }).id, 'B');
+  // 〔裁〕2026-09-28（契约 B.3 第 2 步改写）：只在排头那一个整数名次里挑，更低优先级的 B 不再进候选
+  assert.equal(pickCandidate(tasks, { random: () => 0.999999, lastProjectId: 'p1' }).id, 'A');
 });
 
 test('B.3 pickCandidate：轮转只在前 K 个里找，第 K+1 名的别的项目不算', () => {

@@ -898,3 +898,20 @@ test('M7Q-D12-P1 管线的切分候选落盘：重启（新的 FramePipeline、�
     assert.deepEqual(p2.splitCandidatesFor('ck-a'), [P, B], '重启后读得回来');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+/* ================================================================== 锚帧段先认领（笔记本 M7-A4 查出，主会话〔裁〕改契约 B.3） */
+
+test('M7Q-PICK-1 锚帧段（50）与普通段（10）同时可认领：pickCandidate 一定先给锚帧段，同档里照旧随机', async () => {
+  const { pickCandidate } = await import('../render-node/pick.mjs');
+  const t = (id, priority, publishedAt) => ({ id, priority, source: { projectId: 'p1', publishedAt } });
+  // 普通段发布得更早，前 4 名里混着两档
+  const tasks = [t('h1:60', 10, 1), t('h2:120', 10, 2), t('h1:0', 50, 3), t('h2:0', 50, 4), t('h3:60', 10, 5)];
+  for (const r of [0, 0.3, 0.6, 0.99]) {
+    const got = pickCandidate(tasks, { k: 4, random: () => r });
+    assert.equal(got.priority, 50, `random=${r} 挑到了 ${got.id}`);
+  }
+  assert.deepEqual(new Set([0, 0.99].map((r) => pickCandidate(tasks, { k: 4, random: () => r }).id)), new Set(['h1:0', 'h2:0']), '同档内仍随机');
+  // 锚帧段都认领完：普通段照旧前 k 个里随机
+  const rest = tasks.filter((x) => x.priority === 10);
+  assert.equal(pickCandidate(rest, { k: 4, random: () => 0.99 }).id, 'h3:60');
+});
