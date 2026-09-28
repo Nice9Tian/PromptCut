@@ -559,7 +559,7 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | HT-a | `REPORT-HT-a.md` 第 0、1 节；契约第 16、17 节 | 报告正文记号 5 处；契约两节未数（待核） | 待审（`REPORT-HT-a.md` 第 4 节） |
 | C10 其余 | `REPORT-C10.md` 第 6 节（总表，含 `c10-contract.md` 第 2～10 节、第 18 节第 1～9 条、集成期间的裁定、主会话认可的分支偏离、第 10 节在线剪枝两条、`pause-precise` 一条）；三级语义三处（`mechanism/platforms.md`「在线浏览器模式」、`mechanism/rendering.md`、`mechanism/document-service.md`「成本记录」） | **29 条**（契约 19、集成期间 4、分支偏离 2 组、集成方提请 1、定稿前新增 3；`REPORT-C10.md` 第 6 节开头） | 待用户审（`REPORT-C10.md` 第 9 节：尤其第 18 行二级观察、第 19 行 X4 修改） |
 | M7 | `REPORT-M7.md` 第 6 节（总表，含 `m7-contract.md` 第 13 节 D1～D18 与「探针之后的更正」十条、`render-queue-contract.md` B.3、验收夹具改述、队列侧与契约原文不同的四处等）；D18 两句三级语义（`mechanism/rendering.md`「舞台」、`mechanism/platforms.md`「渲染节点」，`REPORT-M7.md` 第 10 节） | **30 条**（D1～D18 共 18、之后 12；另 `claude/join-error` 的 `shared/verify` 1 条不在本阶段、未合入；「探针之后的更正」十条里除第 4 条外九条照契约那张表、不另列；`REPORT-M7.md` 第 6 节开头） | 待用户审（`REPORT-M7.md` 第 9 节：尤其第 20、22～25、27 行，以及 `claude/join-error` 合不合） |
-| M8 | 见 `REPORT-render-queue-m8.md` 第 13 节；计划期的在 `m8-plan.md` 末「主会话裁定」D1～D12 | M8：主会话收尾时填 | M8：主会话收尾时填 |
+| M8 | `REPORT-render-queue-m8.md` 第 13.2 节（总表）；计划期的在 `m8-plan.md` 末「主会话裁定」D1～D12（其中 D1 因约束「不动宿主机的网络」作废，D6 更正为「按语义不做」） | **11 条加 1 条待定，撤销 1 条**：第 1～8 条是验收判法或做法（E6 反方向判据、K1 判据、E5 的 A4 / A10、D12 纯浏览器节点指纹、放本机 T9 限速、迁移抽查、迁移两台客户端同机、迁移不用 E1 真实项目判），非语义；第 9～11 条改在契约里（`render-queue-contract.md` A.12 与 `render-host-contract.md` 第 3 节；`artifact-transfer-contract.md` 第 4 节 `has` 与 `manifest-contract.md`；`artifact-transfer-contract.md` 第 4 节 2026-09-29），M8 报告标「三级（机制）」，没有改 `docs/semantics/`，属契约级；第 12 条（1080p 编码提速若只能靠改产出字节的办法由用户定，门槛不改）待定；撤销的是「异地接入真实渲染由云端当远程成员」 | 第 9～11 条主会话审过、同意（`REPORT-render-queue-m8.md` 第 12a 节）；全部待用户审（同报告第 13.4 节第 1 条；本文第 8 节第 30 条） |
 | 主计划 | 文件头第三、四次修订（用户定的交接）；第 6.4 节派活顺序；第 9 节端口 | 待核 | 待核 |
 
 ### 6.2 语义改动汇总
@@ -577,16 +577,16 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | — | C10 其余一级、二级语义没改；第 6 节第 18 行（低内存档判轻的卡播放时一直占位）作为二级观察交用户，没改语义 | — | 待用户定 | `REPORT-C10.md` 第 6 节第 18 行、第 9 节 |
 | `331d2f2`（随 `8cd21c1` 合 `claude/m7-report` 进 main） | M7 D18 两句三级语义：`mechanism/rendering.md`「舞台」加「在线浏览器模式（普通档）下，后台舞台还在闲时为认领到的快照任务逐帧生成快照」；`mechanism/platforms.md`「渲染节点」加「纯浏览器节点的环境指纹由文档服务按页面报来的原始值算；一期只在 Chromium 内核的浏览器上当节点」；都标〔裁〕 | 三级 | 定计划时在 `m7-contract.md` 第 13 节做了「修改前 / 修改后」dry run，契约发给用户不等；用户确认的记录报告里没写，待用户审 | `REPORT-M7.md` 第 10 节、第 8 节第 2 条 |
 | `d3b674d` | 规则：约束「不动宿主机的网络」（模拟断线只在应用层做） | 规则 | 待核（`REPORT-C10.md`、`REPORT-M7.md` 没写；按提交信息，C10 集成分支在 `82d1a33` 合 main `9cf6525` 时带进来） | 提交信息 |
-| M8 | M8：主会话收尾时填 | — | — | `REPORT-render-queue-m8.md` |
+| — | M8 没改 `docs/semantics/` 下的语义（计划与语义冲突的两项按语义不做，语义没改）。M8 的三条〔裁〕改在契约里：`render-queue-contract.md` A.12、`render-host-contract.md` 第 3 节（停滞按帧数或工作计数重新计时、收回原因如实下发）；`artifact-transfer-contract.md` 第 4 节 `has`、`manifest-contract.md`（本机帧库覆盖整段时核对素材服务、缺块补推）；`artifact-transfer-contract.md` 第 4 节（2026-09-29：本机缺小尺寸时认内容库里两档齐的清单、主机也产小尺寸）。另 `hosting-migration.md` 第 2 节末补了演练的实际命令、第 9 步保留 7 天（计划文档） | 契约级（M8 报告标「三级（机制）」） | 执行中改、标〔裁〕，主会话审过同意，待用户审 | `REPORT-render-queue-m8.md` 第 6 节、第 12a 节、第 13.2、13.3 节 |
 
 ### 6.3 代码与语义仍有出入的地方
 
 | 出入 | 现状 | 出处 |
 |---|---|---|
-| 桌面发布的 plan 领不到环境不同的独立主机（X4 与 J.3；语义比 X4 宽） | 只记录；页面发布的 plan 按 C10 契约第 18 节第 9 条放开，C10 在 main。C10 报告另记：若用户认为 X4 属于二级语义，这处〔裁〕要补「codex 与 Gemini 各出一轮」的说明 | `REPORT-HT-a.md` 第 1.7、4 节；`REPORT-C10.md` 第 6 节第 19 行、第 8 节末条；`m8-plan.md` L18 |
-| `server/card-sync.mjs` 等旧客户端没接会话层，断一次就断线 | M8 里修（裁定 D9，分支 `claude/m8-session-legacy`） | `REPORT-HT-a.md` 第 4 节；`TODO.md` HT-b 条目 |
+| 桌面发布的 plan 领不到环境不同的独立主机（X4 与 J.3；语义比 X4 宽） | 只记录；页面发布的 plan 按 C10 契约第 18 节第 9 条放开，C10 在 main。M8 E6 两个方向都记了现象：桌面发布的 plan 对 host 档回 `plan-profile`（`REPORT-render-queue-m8.md` 第 2 节 E6、第 13.5 节）。C10 报告另记：若用户认为 X4 属于二级语义，这处〔裁〕要补「codex 与 Gemini 各出一轮」的说明 | `REPORT-HT-a.md` 第 1.7、4 节；`REPORT-C10.md` 第 6 节第 19 行、第 8 节末条；`m8-plan.md` L18 |
+| `server/card-sync.mjs` 等旧客户端没接会话层，断一次就断线 | 已修：M8 里做（裁定 D9），`claude/m8-session-legacy` 合入 main `278eeb9d`（`REPORT-render-queue-m8.md` 第 1.1 节） | `REPORT-HT-a.md` 第 4 节；`TODO.md` HT-b 条目 |
 | 服务端没有会话层时客户端怎么退化，语义没写 | 只记录 | `REPORT-HT-a.md` 第 4 节 |
-| 主机把本来没有的用户卡写进检出目录 | 在修（`claude/card-overlay`） | `REPORT-C6.6.md` 第 5、11 节 |
+| 主机把本来没有的用户卡写进检出目录 | 已修：`claude/card-overlay` 合入 main `2e957270`（L4、L5；`REPORT-render-queue-m8.md` 第 1.1 节） | `REPORT-C6.6.md` 第 5、11 节 |
 | 「加入共享项目的桌面应用自动成为渲染节点」 | 代码靠启动时环境变量，没做到「自动」 | `TODO.md`「语义与代码的差距」 |
 | 手动截短总时长的入口 | 编辑界面没有 | 同上 |
 | 刷新后回到刷新前打开的共享项目 | 代码已做，语义没写，建议补一级语义 | `REPORT-C10a.md` 第 2.9 节 |
@@ -595,7 +595,9 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | 纯浏览器节点只收独立卡（D4），比二级「只认领……快照任务」更窄 | 按节点自选处理，不改语义 | `REPORT-M7.md` 第 6 节第 4 行 |
 | 只能经 TLS 中间人代理出网的浏览器连不上 WebSocket，加入不了项目、当不了节点（语义里「只能出网的节点」这一侧对浏览器做不到） | 归 HT-b（HTTP 长轮询传输，M8 之后） | `REPORT-M7.md` 第 7.2 节、第 11 节 |
 | 加入项目时连接没建成就断，页面报成「用户名或密码不对」 | 修复 `claude/join-error`（新增 `shared/verify`〔裁〕）未合入，待用户审 | `REPORT-M7.md` 第 4 节第 8 条、第 9 节 |
-| M8 | M8：主会话收尾时填 | `REPORT-render-queue-m8.md` |
+| 浏览器进放本机的项目（`c10-contract.md` 第 13 节「手填主机地址或桌面版给的局域网链接」；主计划第 7 节 M8 要的 E5 放本机） | 计划与语义冲突：`product/platforms.md`「在线浏览器模式」（用户 2026-09-27 定）只让浏览器进放云端的项目。M8-X4 与 E5 放本机按语义不做，原裁定 D6 作废；2026-09-28 用户在对话里把「C10 里手填主机地址进入」列进可做的一批，主会话说明了冲突、没有做；要做须先改那条语义（一级 / 二级，由用户定），语义没改 | `REPORT-render-queue-m8.md` 第 13.3 节 |
+| M8 查出、已修的三处代码与语义出入：① 队列的停滞规则只认帧数，比语义「既没报进度也没报完成才收回」严（推产物、在预渲染间排队时被误收回）；② 推到一半丢认领、又被自己重新认领时以去重完成、素材服务上缺块，违反「节点先把产物推送到素材服务，再向文档服务报完成」；③ 独立渲染主机不产小尺寸、去重检查在本机缺小尺寸时不查内容库，别的节点领到做完的段只补画小尺寸、以「完成」收尾，违反「已经在素材服务里的结果不用重做」 | 都已修：① `claude/stall-phases`、② `claude/sink-has`（main `0cabcfb0`），③ `claude/xnode-dedup`（main `e27fa520`） | `REPORT-render-queue-m8.md` 第 12a 节 |
+| 新旧版本混跑时，旧版独立渲染主机仍不产小尺寸 | 只记录（新旧混跑时别的节点领到它做完的段只能补画小尺寸） | `REPORT-render-queue-m8.md` 第 12a、13.5 节 |
 
 ## 7. 遗留
 
