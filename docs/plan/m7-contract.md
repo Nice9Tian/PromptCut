@@ -355,14 +355,14 @@ G0 + G0-R（改了预渲染与快照路径）；桌面导出像素基线不变�
 
 ### 探针之后的更正（〔裁〕，2026-09-28，PC 主会话；非语义）
 
-依据：`docs/reports/AGENT-m7-probe.md`（分支 `claude/m7-probe`）「对 M7 契约的更正建议」。主会话逐条裁定照做，页面侧由 `claude/rq-m7-node` 落实（下表「落实」列）。
+依据：`docs/archive/agent-reports/AGENT-m7-probe.md`（原在分支 `claude/m7-probe` 的 `docs/reports/`，M7 阶段报告时归档）「对 M7 契约的更正建议」。主会话逐条裁定照做，页面侧由 `claude/rq-m7-node` 落实（下表「落实」列）。
 
 | # | 改哪里 | 更正 | 落实 |
 |---|---|---|---|
 | 1 | D11、第 0 节第 4 行 | 要改两处 import：`session.mjs` 改从 `constants.mjs`、`filter.mjs` 改从 `messages.mjs`（队列分支已改）。风险改述为「在线构建不失败（摇树），但开发服务器整页白屏」 | 守门测试 `src/pageNodeImports.test.mjs`：从 `src/main.tsx` 起顺着静态 import 走遍页面会载入的模块（`src/` 与 `server/`），出现 Node 内置模块就判红并给出引用链（变异验证：`session.mjs` 改回引 `index.mjs` 即红） |
 | 2 | D3、第 4.3 节 | 生成快照每一帧先等与 `waitFrameReady` 同样的就绪（控件异步活、字体、图片），等待期间照常 tick；超时（20 s）或控件报错就 `fail` 这一段，不出空白帧 | 舞台 `bakeFrame` 的就绪闸，不就绪回 `not-ready`，节点按可重试失败交回（同桌面 `waitFrameReady` 抛错） |
 | 3 | 第 4.3 节 | 用逐帧顺推（DOM、Motion 卡与桌面等价且便宜 4～7 倍）；`canvasHeavy` 卡顺推不等价，节点侧 `filter.mjs` 的纯浏览器规则再挡一次 | 缺省 `mode: 'seq'`；`filter.mjs` 规则 7 加 `canvas-heavy`；切分也不给浏览器另出画布卡那一份 |
-| 4 | D1 (d)、D10 | 在线构建关掉 CSS 压缩，再用 `m7-bake-probe` 的 compare 比在线构建与桌面；`will-change` 若仍有差异照实报，是否在快照序列化里去掉它另定（会让现有快照键一次性失效） | `vite.config.ts` 在线构建 `build.cssMinify: false`，另关 Tailwind 插件的构建期优化（`optimize: false`：Lightning CSS 不压缩也把 `0.4` 改写成 `.4`）。compare 结果见 `docs/reports/AGENT-rq-m7-node.md`：ticker、slow 60/60 逐字节相同；pill 46/60 相同，其余 14 帧只差 `will-change`（未动） |
+| 4 | D1 (d)、D10 | 在线构建关掉 CSS 压缩，再用 `m7-bake-probe` 的 compare 比在线构建与桌面；`will-change` 若仍有差异照实报，是否在快照序列化里去掉它另定（会让现有快照键一次性失效） | `vite.config.ts` 在线构建 `build.cssMinify: false`，另关 Tailwind 插件的构建期优化（`optimize: false`：Lightning CSS 不压缩也把 `0.4` 改写成 `.4`）。compare 结果见 `docs/archive/agent-reports/AGENT-rq-m7-node.md`：ticker、slow 60/60 逐字节相同；pill 46/60 相同，其余 14 帧只差 `will-change`（未动） |
 | 5 | D5、第 4.4 节 | 小尺寸必须内嵌页面的全局样式表；外部字体的顾虑改述为「只影响用户卡」 | `src/render/bakeSmall.ts` 把舞台页的样式表整份放进 `foreignObject` |
 | 6 | 第 3.4 节 | 「60 帧 8～15 s」换成实测（40 ms 推帧卡约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃）；切分方不把这类卡（Lottie 素材卡、预计帧超体积上限的）派给纯浏览器 | `split.mjs` 的浏览器可做判定挡掉 `lottie` / `lottie-*`、画布卡、执行器标了 `snapshotOversize` 的卡（只出切分方那一份） |
 | 7 | （M7 之外） | 在线构建与托管端没带 `/catalog/`，Lottie 素材卡在线是空白 | 主会话另派人修；修之前第 2 条的就绪闸把这些段 `fail` 掉（实测 `not-ready: 控件尚未就绪 (lottie): HTTP 404`） |
