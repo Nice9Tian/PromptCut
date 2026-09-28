@@ -583,6 +583,39 @@ export async function blocksPresent(client, result) {
   return !missing && present === blocks.length;
 }
 
+/**
+ * 诊断用:清单里的块在素材服务上的情况 `{ total, present, missing, errors, sample, error }`,逐个问完不提前停
+ * (只在 `has` 回 false 的路上用,那条路接下来就是整段重渲,多问几次不算成本)。`sample` 是前两个缺块的哈希前缀,
+ * `error` 是第一处问不到的原因。
+ */
+async function blocksStatus(client, result) {
+  if (typeof client?.has !== 'function') return { total: null, present: 0, missing: null, errors: 0, sample: [], error: 'client-has-missing' };
+  let blocks;
+  try { blocks = resultBlocks(result); } catch (error) { return { total: null, present: 0, missing: null, errors: 0, sample: [], error: String(error?.message ?? error).slice(0, 120) }; }
+  let present = 0, errors = 0, firstError = null;
+  const sample = [];
+  await settleLimited(blocks, TRANSFER_CONCURRENCY, async ({ ns, hash }) => {
+    try {
+      if ((await client.has(ns, hash)) === true) { present++; return; }
+    } catch (error) {
+      errors++;
+      firstError ??= `${error?.code ?? error?.status ?? ''} ${String(error?.message ?? error)}`.trim().slice(0, 160);
+    }
+    if (sample.length < 2) sample.push(`${ns}/${hash.slice(0, 12)}`);
+  });
+  return { total: blocks.length, present, missing: blocks.length - present, errors, sample, error: firstError };
+}
+
+/** 诊断用:内容库取回的清单为什么当不了这一段用(`manifestMatches` 回 false 时):第一处对不上的字段 */
+function manifestMismatch(body, ref) {
+  if (!body || typeof body !== 'object') return 'no-body';
+  if (body.v !== RESULT_VERSION) return `v:${body.v}`;
+  if (body.kind !== ref?.kind) return `kind:${body.kind}`;
+  if (body.resultKey !== ref?.resultKey) return `resultKey:${String(body.resultKey).slice(0, 16)}`;
+  if (body.range?.from !== ref?.range?.from || body.range?.to !== ref?.range?.to) return `range:${body.range?.from}-${body.range?.to}`;
+  return `shape:${body.kind}`;
+}
+
 /** 把一段的清单写进内容库。写失败、清单超限只记日志,回 false(C6.4 第 3 节:内容库清单只是给以后复用的) */
 export async function writeManifest(content, result, log = () => {}) {
   const kind = manifestKindOf(result?.kind);
@@ -617,7 +650,10 @@ function safeLog(log, event, fields) {
  *          交给执行 → `put` 再推。`report` 同 `put` 的,补推时每处理完一块报一次(节点据此算进度);
  *       2. 给了 `content`:按 `<resultKey>:<from>-<to>` 查内容库里的清单。清单在、清单覆盖整段、清单里每个块
  *          在素材服务上都有(逐个 `client.has`),三条都满足 → true,并把清单记在 sink 里(`resultFor` 回它);
- *       3. 其它 → false。
+ *       3. 其它 → false。回 false 前记一行 `sink.has-miss { reason, covered, … }`(诊断,不改行为):`reason` 是
+ *          `no-content` / `no-key` / `manifest-get-failed` / `manifest-missing` / `manifest-mismatch`(带 `field`)/
+ *          `manifest-incomplete`(带 `listed`)/ `blocks-missing`(带 `total`、`present`、`missing`、`errors`、`sample`)/
+ *          `local-small-missing`;本机覆盖而补推出错的仍记 `sink.has-push-failed`。
  *   - `resultFor(ref)`:`has` 回 true 之后拿清单(M5b 的 local-node 以去重方式完成时放进 `result`)。本机覆盖的由
  *     `collect*` 现算;查内容库得到的回记下的那份;都不是回 null。
  *   - `put({ ...ref, artifacts, meta })`:`artifacts` 本阶段忽略,字节以本机帧库为准。`collect*` 再
@@ -635,6 +671,11 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
   const collect = ref => (ref?.kind === 'snapshot' ? collectSnapshotResult(pipeline, ref) : collectStreamResult(pipeline, ref));
   return {
     async has(ref, { report } = {}) {
+      /** 回 false 前记一行 `sink.has-miss`(为什么没走去重;诊断,不改行为) */
+      const miss = (reason, fields = {}) => {
+        safeLog(log, 'sink.has-miss', { resultKey: String(ref?.resultKey ?? '').slice(0, 16), kind: ref?.kind ?? null, range: ref?.range ?? null, reason, ...fields });
+        return false;
+      };
       /*
        * c10a 第 9 节:开着小尺寸时,本机帧库覆盖了整段、而这一段还缺小尺寸,就不算已有 —— 交给执行器补上小尺寸再推。
        * 这时也不去查内容库:那里的清单多半是本机推送队列边渲边写的,原尺寸齐、小尺寸缺,认了它这一段就永远缺小尺寸。
@@ -662,23 +703,33 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
           }
         }
         // 本机覆盖了、清单却不全(缺小尺寸,c10a 第 9 节):交给执行器补上再推。也不去查内容库(见上)
-        if (collected && wantsSmall(pipeline, ref)) return false;
+        if (collected && wantsSmall(pipeline, ref)) return miss('local-small-missing', { covered: true });
       }
-      if (!content || typeof content.get !== 'function') return false;
+      if (!content || typeof content.get !== 'function') return miss('no-content', { covered });
       const kind = manifestKindOf(ref?.kind);
       const key = manifestKeyOf(ref);
-      if (!kind || !key) return false;
+      if (!kind || !key) return miss('no-key', { covered });
+      let item;
       try {
-        const item = await content.get(kind, key);
-        const body = item?.body;
-        if (!manifestMatches(body, ref) || !resultComplete(body)) return false;
-        if (!(await blocksPresent(client, body))) return false;
-        remembered.set(key, body);
-        return true;
+        item = await content.get(kind, key);
       } catch (error) {
         safeLog(log, 'manifest.get-failed', { kind, key, code: error?.code ?? null, message: String(error?.message ?? error) });
-        return false;
+        return miss('manifest-get-failed', { covered, code: error?.code ?? null, message: String(error?.message ?? error).slice(0, 160) });
       }
+      const body = item?.body;
+      if (!item || body === undefined) return miss('manifest-missing', { covered });
+      if (!manifestMatches(body, ref)) return miss('manifest-mismatch', { covered, field: manifestMismatch(body, ref) });
+      if (!resultComplete(body)) {
+        const listed = body.kind === 'snapshot' ? body.frames.length : Object.keys(body.segments ?? {}).length;
+        return miss('manifest-incomplete', { covered, listed });
+      }
+      if (!(await blocksPresent(client, body))) {
+        let status;
+        try { status = await blocksStatus(client, body); } catch (error) { status = { error: String(error?.message ?? error).slice(0, 160) }; }
+        return miss('blocks-missing', { covered, ...status });
+      }
+      remembered.set(key, body);
+      return true;
     },
     async resultFor(ref) {
       try {
