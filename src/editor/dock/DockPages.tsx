@@ -10,7 +10,7 @@ import { EffectsSection } from "../left/EffectsSection";
 import { EditSection } from "../left/EditSection";
 import { CaptionsSection } from "../left/CaptionsSection";
 import { AiPanel } from "../right/AiPanel";
-import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
+import { onlineUnsupported } from "../../online/pageFlag";
 import { ScriptPage } from "../right/chat/ScriptPage";
 import { AgentAttentionTracker } from "./agentAttention";
 import { DockPageContext } from "./dockSide";
@@ -40,7 +40,8 @@ function OnlineAgentPlaceholder(_props: { tabId: string; active: boolean; mcpCon
     </div>
   );
 }
-const AgentPage = memo(onlinePage() ? OnlineAgentPlaceholder : AiPanel);
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+const AgentPage = memo(ONLINE_BUILD ? OnlineAgentPlaceholder : AiPanel);
 
 const goImport = () => activateRailItem("library", { expand: true });
 

@@ -4,7 +4,7 @@
  * 为什么要问:A2(7) 的消费侧改名(src/render/snapshotRename.ts)照抄了当年 export-frames.mjs(现 src/render/createSnapshot.ts)的正则
  *   (url\((?:&quot;|["'])?[^)"'&]*#)<id>((?:&quot;|["'])?\))
  * 那条 `[^)"'&]*` 把 `&` 排除在外。而导出页地址本身含 `&`(server/frame-pipeline.mjs:183 的
- * '/?export=1&timeline='),`outerHTML` 会把 `&` 序列化成 `&amp;`。只要 Chrome 在冻结时把 fill
+ * '/?export=1&timeline='),`outerHTML` 会把 `&` 序列化成 `&amp;`。只要 Chrome 在生成快照时把 fill
  * 写成绝对 URL,这条正则就一条都匹配不上 —— 共享快照挂到多个片段上时渐变会串台。
  *
  * 跑法:node scripts/probes/svg-url-serialize-probe.mjs
@@ -74,7 +74,7 @@ try {
     const cs = getComputedStyle(el);
     const before = el.outerHTML;
 
-    // 冻结过程的写法,照当年 export-frames.mjs 的冻结写法:把全部计算样式内联成 style 属性
+    // 生成快照的写法,照当年 export-frames.mjs 生成快照的写法:把全部计算样式内联成 style 属性
     const clone = el.cloneNode(true);
     let s = '';
     for (let k = 0; k < cs.length; k++) { const q = cs.item(k); s += q + ':' + cs.getPropertyValue(q) + ';'; }
@@ -145,9 +145,9 @@ try {
   j('computed .fill', JSON.stringify(out.computedFill));
   j('cssText 里的 fill', JSON.stringify(out.cssTextFill));
   console.log('outerHTML(原样):\n  ' + out.outerHTMLBefore);
-  console.log('冻结后 outerHTML 里的 fill:\n  ' + out.frozenFillInOuterHTML);
+  console.log('生成快照后 outerHTML 里的 fill:\n  ' + out.frozenFillInOuterHTML);
   console.log('el.style.fill=computed 后的 outerHTML:\n  ' + out.inlineOnlyOuterHTML);
-  console.log(`整棵 control 冻结后(${out.frozenLen} 字节)出现过的形式:`);
+  console.log(`整棵 control 生成快照后(${out.frozenLen} 字节)出现过的形式:`);
   j('  url(…#…)', JSON.stringify(out.urlForms));
   j('  href="#…"', JSON.stringify(out.hrefForms));
   j('  id="…"', JSON.stringify(out.idForms));
@@ -165,8 +165,8 @@ try {
     ? '计算样式是【绝对形式】url("<页面 URL>#id");属性值仍是相对形式 url(#id)。'
     : '计算样式是【相对形式】url(#id)。');
   console.log(hasAmp
-    ? '冻结后的 outerHTML 里含 &amp;(页面 URL 的 & 被序列化),当年 export-frames.mjs 的 [^)"\'&]* 会漏。'
-    : '冻结后的 outerHTML 里不含 &amp;。');
+    ? '生成快照后的 outerHTML 里含 &amp;(页面 URL 的 & 被序列化),当年 export-frames.mjs 的 [^)"\'&]* 会漏。'
+    : '生成快照后的 outerHTML 里不含 &amp;。');
   console.log(absolute || hasAmp
     ? '→ 改名正则必须放开到 [^)"\']*,并把绝对前缀整段丢掉,改写成 url(#新id),快照才与 host 无关。'
     : '→ [^)"\'&]* 就够用;snapshotRename.ts 仍放开成 [^)"\']* 并丢掉 `#` 前的前缀,属于防御。');

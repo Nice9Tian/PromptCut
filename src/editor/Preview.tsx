@@ -26,7 +26,7 @@ import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
 import { currentReadyIndex, deliverSnapshots, exemptOnline, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
-import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
+import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
@@ -1140,6 +1140,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       swapInFlight: swapInFlight(),
       swapLog: stageSwapDebug(),
       swapTrace: stageSwapTrace(),
+      // 播放态互换的发起判断(整场景估时 / 追不上不发起)与停下时的让路次数
+      swapPlaying: stageSwapPlayingDebug(),
       setTimeLog: setTimeLogRef.current.slice(),
       setTimeError: setTimeErrorRef.current,
       // 低内存档停下追一帧的上一次结果(c10a 契约第 17 节;c10a-demo-probe 读它)

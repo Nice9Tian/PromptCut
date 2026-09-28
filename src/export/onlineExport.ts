@@ -105,7 +105,7 @@ export async function exportVideoOnline(
       originals: originalsDeps(),
       fallbackHeavy: () => heavyClipsOfPlan(p),
       heavyOnly: heavyOnlyOf(p),
-      // 导出只用素材原尺寸:原片地址换成远程素材服务的取回地址(只读票据走查询串,`<video>` 带不了头)
+      // 导出只用素材原尺寸:它的地址换成远程素材服务的取回地址(只读票据走查询串,`<video>` 带不了头)
       mediaUrl: remote ? (url) => remoteMediaUrl(url, { base: remote.base, ticket: renewer?.ticket() ?? remote.ticket }) : undefined,
       freshTicket: renewer ? () => renewer.ticket() : undefined,
     });

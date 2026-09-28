@@ -131,20 +131,20 @@ const RESPONSE_KEYS = new Set(['ok', 'hash', 'ext', 'name', 'path', 'url', 'byte
 const SYNC_WORDS = /upload|sync|complete|received|progress|queued/i;
 
 /* ======================================================================== *
- * T1:导入 1080p 视频 → 小版 ≤ 800×600、H.264、faststart;原片编码不变;tiers 两个哈希
+ * T1:导入 1080p 视频 → 素材小尺寸 ≤ 800×600、H.264、faststart;素材原尺寸编码不变;tiers 两个哈希
  * ======================================================================== */
 
 const rootA = path.join(OUT, 'importer');
 fs.mkdirSync(media.mediaDir(rootA), { recursive: true });
 const originA = await listen(serviceHandler(rootA));
 
-test('T1-1 导入 1080p 晚置 moov 的 MP4:原片按 faststart 重封装(编码不变、按输出哈希入库),小版 800×450 H.264 faststart;连本地素材服务时队列空操作', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
+test('T1-1 导入 1080p 晚置 moov 的 MP4:素材原尺寸按 faststart 重封装(编码不变、按输出哈希入库),素材小尺寸 800×450 H.264 faststart;连本地素材服务时队列空操作', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
   const srcHash = sha256File(LATE_1080);
   assert.equal(await tiers.faststartState(LATE_1080), 'needs', '测试素材本身应当缺 faststart');
   const body = await importFile(originA, LATE_1080);
   assert.equal(body.remux.state, 'remuxed');
   assert.equal(body.remux.from, srcHash);
-  assert.notEqual(body.hash, srcHash, '重封装的结果是新的原片,哈希不同');
+  assert.notEqual(body.hash, srcHash, '重封装的结果是新的素材原尺寸,哈希不同');
   assert.equal(body.tiers.original, body.hash);
   assert.ok(['pending', 'ready'].includes(body.small));
   for (const key of Object.keys(body)) assert.ok(RESPONSE_KEYS.has(key), `回包多了字段 ${key}`);
@@ -156,7 +156,7 @@ test('T1-1 导入 1080p 晚置 moov 的 MP4:原片按 faststart 重封装(编码
   assert.equal(rec.state, 'ready');
   assert.match(rec.small, /^[0-9a-f]{64}$/);
 
-  // 原片:库里的就是重封装后的,moov 在前,流的编码与源文件逐一相同
+  // 素材原尺寸:库里的就是重封装后的,moov 在前,流的编码与源文件逐一相同
   const orig = path.join(media.mediaDir(rootA), `${body.hash}.mp4`);
   assert.equal(sha256File(orig), body.hash);
   assert.equal(await tiers.faststartState(orig), 'faststart');
@@ -165,7 +165,7 @@ test('T1-1 导入 1080p 晚置 moov 的 MP4:原片按 faststart 重封装(编码
   // 重封装前那份不留在库里
   assert.equal((await fetch(`${originA}/@media/${srcHash}`)).status, 404);
 
-  // 小版:≤ 800×600、H.264、faststart、AAC
+  // 素材小尺寸:≤ 800×600、H.264、faststart、AAC
   const small = path.join(media.mediaDir(rootA), `${rec.small}.mp4`);
   const sp = probe(small);
   const v = sp.streams.find((s) => s.codec_type === 'video');
@@ -190,7 +190,7 @@ test('T1-1 导入 1080p 晚置 moov 的 MP4:原片按 faststart 重封装(编码
   assert.equal(again.tiers.small, rec.small);
 });
 
-test('T1-2 ProRes MOV:原片仍是 ProRes(只做同容器重封装),小版是 H.264', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
+test('T1-2 ProRes MOV:素材原尺寸仍是 ProRes(只做同容器重封装),素材小尺寸是 H.264', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
   const body = await importFile(originA, PRORES);
   assert.equal(body.ext, 'mov');
   assert.ok(['remuxed', 'faststart'].includes(body.remux.state), JSON.stringify(body.remux));
@@ -214,7 +214,7 @@ test('T1-3 已经 faststart 的 MP4 不重封装,哈希就是源文件的 sha256
   assert.equal(body.hash, sha256File(FASTSTART));
 });
 
-test('T1-4 只对视频做:图片、音频导入不带 tiers,也不排小版', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
+test('T1-4 只对视频做:图片、音频导入不带 tiers,也不排素材小尺寸', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
   const png = path.join(fixtures, 'still.png');
   const m4a = path.join(fixtures, 'tone.m4a');
   ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240', '-frames:v', '1', png]);
@@ -232,7 +232,7 @@ test('T1-4 只对视频做:图片、音频导入不带 tiers,也不排小版', {
   assert.equal('tiers' in plain, false);
 });
 
-test('T1-5 HDR(BT.2020 + PQ 标签完整)走 zscale + tonemap 分支,小版标 BT.709', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
+test('T1-5 HDR(BT.2020 + PQ 标签完整)走 zscale + tonemap 分支,素材小尺寸标 BT.709', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
   const info = await tiers.probeMedia('ffprobe', HDR);
   assert.equal(tiers.isHdrPq(info.video), true);
   assert.match(tiers.smallVideoFilter({ hdr: true, video: info.video }), /zscale=tin=smpte2084:pin=bt2020.*tonemap=tonemap=hable/);
@@ -247,7 +247,7 @@ test('T1-5 HDR(BT.2020 + PQ 标签完整)走 zscale + tonemap 分支,小版标 B
   assert.equal(tiers.isHdrPq((await tiers.probeMedia('ffprobe', FASTSTART)).video), false);
 });
 
-test('T1-6 小版命令:VFR 保留,只丢间隔不足 1/60 s 的帧(120 fps → 60 fps,30 fps 一帧不丢)', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
+test('T1-6 素材小尺寸命令:VFR 保留,只丢间隔不足 1/60 s 的帧(120 fps → 60 fps,30 fps 一帧不丢)', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
   const hi = path.join(fixtures, 'hi120.mp4');
   ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=120', '-t', '2', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', hi]);
   const out = path.join(OUT, 'hi-small.mp4');
@@ -275,7 +275,7 @@ test('T1-7 ISO BMFF box 扫描:64 位长度、size=0、分片 MP4、坏长度', 
   assert.equal(await tiers.faststartState(write('f.mp4', [box('ftyp', 8), box('mdat', 10)])), 'unknown');
 });
 
-test('T1-8 重封装失败保留源文件当原片,不转码', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
+test('T1-8 重封装失败保留源文件当素材原尺寸,不转码', { skip: !ffmpegOk && '没有 ffmpeg' }, async () => {
   const root = path.join(OUT, 'remux-fail');
   const dir = media.mediaDir(root);
   fs.mkdirSync(dir, { recursive: true });
@@ -299,7 +299,7 @@ test('T1-8 重封装失败保留源文件当原片,不转码', { skip: !ffmpegOk
  * T2:断网导入再联网 —— 只补缺片;两档的 chunks 分别 complete;回包、项目记录没有同步字段
  * ======================================================================== */
 
-test('T2-1 经插件接线:连远程素材服务,传到原片第 2 片时断网,联网后只补缺的分片;两档 chunks 分别 complete;带票据', { skip: !ffmpegOk && '没有 ffmpeg', timeout: 60_000 }, async () => {
+test('T2-1 经插件接线:连远程素材服务,传到素材原尺寸第 2 片时断网,联网后只补缺的分片;两档 chunks 分别 complete;带票据', { skip: !ffmpegOk && '没有 ffmpeg', timeout: 60_000 }, async () => {
   const rootR = path.join(OUT, 'remote');
   fs.mkdirSync(media.mediaDir(rootR), { recursive: true });
   const remote = await listen(serviceHandler(rootR));
@@ -315,7 +315,7 @@ test('T2-1 经插件接线:连远程素材服务,传到原片第 2 片时断网,
 
   const srcBytes = fs.statSync(LATE_1080).size;
   assert.ok(srcBytes > 2 * 8 * 1024 * 1024, `测试素材要超过 2 片,实际 ${srcBytes}`);
-  // 原片第 1 号分片(第 2 片)一到就断网
+  // 素材原尺寸第 1 号分片(第 2 片)一到就断网
   let original = null;
   proxy.state.dropWhen = (req) => original && req.method === 'PUT' && req.url === `/api/asset/media/${original}/1`;
   const body = await importFile(originB, LATE_1080, 'offline.mp4');
@@ -331,7 +331,7 @@ test('T2-1 经插件接线:连远程素材服务,传到原片第 2 片时断网,
   const before = await chunksOf(`${remote}/api/asset`, original);
   assert.deepEqual(before.received, [0], '断网前只收到第 0 片');
   assert.equal(before.complete, false);
-  assert.equal((await chunksOf(`${remote}/api/asset`, small)).complete, true, '小版先传,断网前已完整');
+  assert.equal((await chunksOf(`${remote}/api/asset`, small)).complete, true, '素材小尺寸先传,断网前已完整');
 
   // 联网,等队列清空(队列退避 5 s 后重试)
   proxy.state.offline = false;
@@ -406,15 +406,15 @@ test('T2-2 重启续传:断网时停掉队列(留在 upload-queue.json 里),新�
   await q2.drain();
   await q2.stop();
   // 「重启后只补缺片」看 q2 整个过程发出的全部分片，而不只看最后一次 tier-done：客户端 retries 为 0，
-  // 机器忙时 q2 可能撞上一次连接抖动（代理刚销毁过套接字）而整项重试，第二遍原片已齐、tier-done 的 sent 是 []。
+  // 机器忙时 q2 可能撞上一次连接抖动（代理刚销毁过套接字）而整项重试，第二遍素材原尺寸已齐、tier-done 的 sent 是 []。
   // 判据没放宽：q2 只要重发了第 0、1 片（或根本没发第 2 片），下面两条都会挂。
   const tierDone = events.slice(eventMark).filter((e) => e.e === 'upload.tier-done' && e.hash === hash);
-  assert.ok(tierDone.length >= 1, '重启后原片传完');
+  assert.ok(tierDone.length >= 1, '重启后素材原尺寸传完');
   assert.deepEqual([...new Set(tierDone.flatMap((e) => e.sent))].sort(), [2], `重启后只补第 2 片：${JSON.stringify(tierDone.map((e) => e.sent))}`);
   const puts = proxy.state.log.slice(logMark)
     .filter((x) => x.method === 'PUT' && x.path.startsWith(`/api/asset/media/${hash}/`))
     .map((x) => Number(x.path.split('/').at(-1)));
-  assert.deepEqual([...new Set(puts)].sort(), [2], `重启后发往素材服务的原片分片只有第 2 片：${JSON.stringify(puts)}`);
+  assert.deepEqual([...new Set(puts)].sort(), [2], `重启后发往素材服务的素材原尺寸分片只有第 2 片：${JSON.stringify(puts)}`);
   assert.equal((await chunksOf(`${remote}/api/asset`, hash)).complete, true);
   assert.equal((await chunksOf(`${remote}/api/asset`, smallHash)).complete, true);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items, []);
@@ -453,7 +453,7 @@ test('T3-1 逐个素材、同一素材先小后大、两档都 complete 才轮�
   const client = memoryClient({ failOnce: new Set([H('b')]) });
   const log = [];
   const q = uq.createUploadQueue({ file: null, target: () => ({ client }), resolveFile: () => HERE, backoff: [20], log: (e, f) => log.push(`${e}:${f.id?.[0] ?? ''}:${f.tier ?? ''}`) });
-  // 进队顺序 A、B、C;tiers 故意把原片写在前面,队列要自己排成先小后大
+  // 进队顺序 A、B、C;tiers 故意把素材原尺寸写在前面,队列要自己排成先小后大
   await q.enqueue({ name: 'A', tiers: [{ tier: 'original', hash: H('b') }, { tier: 'small', hash: H('a') }] });
   await q.enqueue({ name: 'B', tiers: [{ tier: 'original', hash: H('d') }, { tier: 'small', hash: H('c') }] });
   await q.enqueue({ name: 'C', tiers: [{ tier: 'original', hash: H('e') }] });

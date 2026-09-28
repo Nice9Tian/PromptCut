@@ -106,8 +106,8 @@ export interface CanvasPixels {
  */
 /**
  * 读像素用的离屏画布只留**一张**,按需放大、每次先清空。
- * 每次都 createElement 一张 1920×1080 的话,连续几次读(选框心跳、冻结快照、探针)之间 GC 来不及回收,
- * Chrome 的画布内存预算一到,getContext("2d") 就开始回 null —— 实测第三次冻结起 canvas 的实体框就量不到了,
+ * 每次都 createElement 一张 1920×1080 的话,连续几次读(选框心跳、生成快照、探针)之间 GC 来不及回收,
+ * Chrome 的画布内存预算一到,getContext("2d") 就开始回 null —— 实测第三次生成快照起 canvas 的实体框就量不到了,
  * 而且不报错(只是退回整块画布)。
  */
 let scratch: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;

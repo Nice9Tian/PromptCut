@@ -30,11 +30,19 @@
  *
  * 文件怎么读、怎么装（审查、写进改动层、热更新、重测）、怎么备份都由调用方注入（`server/vite-plugin-cards.ts`），
  * 本模块只管规则、记账与连接；只依赖 Node 内置模块，WebSocket 端点可注入（测试不必起编辑器）。
+ *
+ * # 连接
+ * 缺省的连接是一个**会话**（`server/render-node/session-link.mjs` 的 `createDocEndpoint`，HT-a 契约
+ * `docs/plan/http-transport-contract.md` 第 9 节；语义 `docs/semantics/product/document-service.md`「会话与传输」）：
+ * 传输断开只让会话脱开，保留期内接续，期间发出的请求与服务端发来的 `content.changed` 都不丢不重，
+ * 所以接续（`onResume`）时不重订阅、不重对账；只有会话结束（`onClose`）才算断线，之后建新会话时（`onOpen`）
+ * 重新 `content.watch` 与对账。建新会话时才调 `protocols()`（共享项目要向页面要一张票据），接续不调。
+ * 对没有会话层的旧服务端，端点退化为「一条传输一个会话」，行为与原来的 `createWsEndpoint` 相同。
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { createWsEndpoint } from './render-node/ws-transport.mjs';
+import { createDocEndpoint } from './render-node/session-link.mjs';
 
 export const CARD_SOURCE = 'card-source';
 
@@ -108,7 +116,15 @@ function createLedger(stateDir, spaceId) {
   };
 }
 
-const sameActor = (a, b) => !!a && !!b && a.userId === b.userId && (a.deviceId ?? null) === (b.deviceId ?? null) && (a.role ?? null) === (b.role ?? null);
+/** 诊断里的会话状态（端点有 `stats()` 才有）：实际用的传输（脱开时为 null）、是否脱开、接续与脱开次数、是否对着旧服务端退化 */
+function linkDiag(endpoint) {
+  let st = null;
+  try { st = typeof endpoint?.stats === 'function' ? endpoint.stats() : null; } catch { st = null; }
+  if (!st) return null;
+  return { transport: st.transport ?? null, detached: st.detached === true, detaches: st.detaches ?? 0, resumes: st.resumes ?? 0, legacy: st.legacy === true };
+}
+
+const sameActor =(a, b) => !!a && !!b && a.userId === b.userId && (a.deviceId ?? null) === (b.deviceId ?? null) && (a.role ?? null) === (b.role ?? null);
 
 /**
  * @param {object} o
@@ -119,8 +135,8 @@ const sameActor = (a, b) => !!a && !!b && a.userId === b.userId && (a.deviceId ?
  *   - `install(rel, source, { rev }) → { ok: boolean, error?: string }`：装上服务上的版本（审查、写改动层、热更新、重测），`rev` 是这一版的 cardRev；
  *   - `backup(rel, content) → string`：覆盖前把本机那份存起来，回备份的相对路径。
  * @param {(o: { url: string, protocols: () => Promise<string[]> | string[] }) => object} [o.connect]
- *   建一个端点（`server/render-node/ws-transport.mjs` 的 `createWsEndpoint` 形状：send、onMessage、onOpen、onClose、close）；
- *   缺省就用 `createWsEndpoint`（断线指数退避重连，每次重连前现取子协议）
+ *   建一个端点（`server/render-node/session-link.mjs` 的 `createDocEndpoint` 形状：send、onMessage、onOpen、onClose、close，
+ *   可选 onResume）；缺省就用 `createDocEndpoint`（会话：传输断开在保留期内接续；会话结束后指数退避建新会话，建前现取子协议）
  * @param {(event: object) => void} [o.notify] 覆盖提示、装上、被拒等事件（插件经 HMR 转给页面）
  * @param {(event: string, fields?: object) => void} [o.log]
  * @param {boolean} [o.readOnly]  只读(独立渲染主机用,c66-host-cards):只装服务上的版本,从不上传、不记待上传 ——
@@ -143,7 +159,7 @@ export function createCardSync({
   }
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响同步 */ } };
   if (connect !== null && typeof connect !== 'function') throw new TypeError('createCardSync: connect 要是函数');
-  const connectTo = connect ?? (({ url, protocols }) => createWsEndpoint({ url, protocols, log: (event, fields) => say(`ws.${event}`, fields) }));
+  const connectTo = connect ?? (({ url, protocols }) => createDocEndpoint({ url, protocols, log: (event, fields) => say(`doc.${event}`, fields) }));
   const changedOf = typeof files.changed === 'function' ? files.changed : () => true;
   const notices = [];
   const emit = (event) => {
@@ -171,6 +187,8 @@ export function createCardSync({
       chain: Promise.resolve(),
       connected: false,
       opens: 0,
+      /** 传输断开后接续上的次数（会话没断：不重订阅、不重对账） */
+      resumes: 0,
       retryTimer: null,
       closed: false,
     };
@@ -182,6 +200,13 @@ export function createCardSync({
       if (!local) binding.endpoint.send({ type: 'content.watch', kinds: [CARD_SOURCE], reqId: `cards#watch-${++reqSeq}` });
       enqueue(binding, () => reconcile(binding));
     });
+    // 接续：还是那个会话，订阅还在，脱开期间的回包与变化由会话层按序补齐、去重，这里只记数
+    if (typeof endpoint.onResume === 'function') {
+      endpoint.onResume(() => {
+        binding.resumes += 1;
+        say('cards.sync.resume', { spaceId, projectId, resumes: binding.resumes });
+      });
+    }
     endpoint.onClose((info) => {
       binding.connected = false;
       for (const [, w] of binding.waiting) {
@@ -492,6 +517,8 @@ export function createCardSync({
           url: binding.url,
           connected: binding.connected,
           opens: binding.opens,
+          resumes: binding.resumes,
+          link: linkDiag(binding.endpoint),
           keys: [...binding.keys].sort(),
           ...binding.ledger.snapshot(),
         } : {}),

@@ -13,7 +13,7 @@ import { CardMediaSource } from "./mediaSource";
 type Graph = Timeline["graph"];
 
 /** 只看节点:图里有这个节点、是图卡节点、不是音频卡 —— 那这个片段的画面由 GraphCard 出,
- * 原始素材层不再画(否则滤镜卡会叠成「原片 + 滤镜」两层)。 */
+ * 原始素材层不再画(否则滤镜卡会叠成「原素材 + 滤镜」两层)。 */
 export function graphVisualNode(graph: Graph, nodeId?: string) {
   if (!nodeId) return false;
   const node = graph?.nodes.find((node) => node.id === nodeId);

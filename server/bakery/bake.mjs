@@ -161,9 +161,9 @@ export async function bakeFrames(bakery, opts = {}) {
   let reused = 0;
 
   /*
-   * HTML 采样缓存(opts.domCache):每截完一帧顺手把舞台冻结成 HTML,gzip 后写到 <out>/dom/%06d.html.gz。
+   * HTML 采样缓存(opts.domCache):每截完一帧顺手把舞台生成 HTML 快照,gzip 后写到 <out>/dom/%06d.html.gz。
    * 之后要重截(换格式、渐进铺开、多进程并行)就走 scripts/replay-frames.mjs,不必再从第 0 帧顺推。
-   * 实测冻结 10~36 ms/帧,gzip 后 8~15 KB/帧。静态跳过复用的帧,快照也复用上一份。
+   * 实测生成快照 10~36 ms/帧,gzip 后 8~15 KB/帧。静态跳过复用的帧,快照也复用上一份。
    */
   const domDir = opts.domCache ? path.join(outDir, 'dom') : null;
   const gzip = domDir ? (await import('node:zlib')).gzipSync : null;
@@ -192,7 +192,7 @@ export async function bakeFrames(bakery, opts = {}) {
     let lastBuf = null;  // 上一张**真截**出来的图
     let lastShotFrame = null; // 上一张真截对应的帧号:紧挨着的上一帧截过图才能省掉预热
     let lastDrawnFrame = null; // 上一次带截图的一拍落在哪一帧(真截和生成快照前推的那一拍都算),见 flushFrameLoop
-    let lastDom = null;  // 上一份冻结下来的舞台(gzip 过的)
+    let lastDom = null;  // 上一份生成快照的舞台(gzip 过的)
     let runLen = 0;      // 已经连续复用了几帧
     // 上一张真截对应的遮罩:undefined = 还没截过(null = 截了,没有玻璃)。静止帧复用卡片图时遮罩也一起复用
     let lastGlass;

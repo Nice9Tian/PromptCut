@@ -208,7 +208,7 @@ test("seek 很便宜时(同一个 GOP 里往后挪)也不会每动一下就 seek
 
 const sc = (id, url, start, end, offset = 0) => ({ id, url, start, end, offset });
 const c1 = sc("c1", "/a.mp4", 0, 5, 20);
-const c2 = sc("c2", "/a.mp4", 5, 8, 133); // 同一个文件,原片里不连续
+const c2 = sc("c2", "/a.mp4", 5, 8, 133); // 同一个文件,源文件里不连续
 const c3 = sc("c3", "/b.mp4", 8, 10, 7);
 const slot = (clip, ready = true) => ({ clip, ready });
 const empty = { clip: null, ready: false };
@@ -293,7 +293,7 @@ const c1small = sc("c1", "/@media/small", 0, 5, 20);
 const c1orig = sc("c1", "/@media/orig", 0, 5, 20);
 
 test("换档(播放中):新档装进另一个槽位预热,上一档照常当 active 往下放,不冻、不闪黑", () => {
-  // 片段已经放到第 3 秒(早过了 NOT_READY_GRACE_SEC),小版在 0 号显示,原片刚到齐
+  // 片段已经放到第 3 秒(早过了 NOT_READY_GRACE_SEC),素材小尺寸在 0 号显示,素材原尺寸刚到齐
   const p = planSlots({ slots: [slot(c1small), empty], shown: 0, cur: c1orig, next: null, t: 3, playing: true });
   assert.equal(p.active, 0, "上一档接着放(C6.6:后台静音加载新档)");
   assert.equal(p.warm, 1);

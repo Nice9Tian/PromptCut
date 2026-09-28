@@ -394,7 +394,7 @@ def _transcode_h264(src: str, emit: Optional[Emit], duration: Optional[float]) -
     t.join(timeout=5)
     if code != 0 or not os.path.isfile(tmp):
         raise RuntimeError(f"ffmpeg 转码失败（退出码 {code}）：{' | '.join(err_tail)[-800:]}")
-    # 先把转好的落到最终名,再删原片:反过来的话中间出错就两头都没了
+    # 先把转好的落到最终名,再删原文件:反过来的话中间出错就两头都没了
     final = base + ".mp4"
     os.replace(tmp, final)
     if os.path.abspath(src) != os.path.abspath(final) and os.path.exists(src):

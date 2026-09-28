@@ -2,8 +2,8 @@
  * C6.6 第 4 节(`docs/plan/c66-design.md`):换档判据、预热槽位的对齐与名额、可播性探测、预取顺序、导出拦截。
  * 跑:node --test src/render/tierSwitch.test.mjs
  *
- * 用例名前缀对应设计稿的验收:T5 = 另一端打开先透明、小版出现、原片到了换档(帧误差不超过一帧);
- * T6 = 原片不可播时预览停在小版;T7 = 原片没到时导出提示「等待上传方」、不出片。
+ * 用例名前缀对应设计稿的验收:T5 = 另一端打开先透明、素材小尺寸出现、素材原尺寸到了换档(帧误差不超过一帧);
+ * T6 = 素材原尺寸不可播时预览停在素材小尺寸;T7 = 素材原尺寸没到时导出提示「等待上传方」、不出片。
  * 可播性探测用一个假的 DOM(只有 `<video>` 要的那几样),不起浏览器;真浏览器的那一份在
  * `scripts/probes/tier-switch-probe.mjs`。
  */
@@ -22,22 +22,22 @@ const never = () => { throw new Error("不该问可播性"); };
 
 /* ---------------- T5:换档判据 ---------------- */
 
-test("T5-tier-1:还没问过素材服务 → 小版(第一帧不直接拉原片),不算等待", () => {
+test("T5-tier-1:还没问过素材服务 → 素材小尺寸(第一帧不直接拉素材原尺寸),不算等待", () => {
   assert.deepEqual(chooseTier(media, [], { playable: never }), { url: `/@media/${SMALL}`, tier: "small", awaiting: false });
 });
 
-test("T5-tier-2:问过了、两档都没到齐 → 挂原片、这一层在等上传方(透明 + 提示)", () => {
+test("T5-tier-2:问过了、两档都没到齐 → 挂素材原尺寸、这一层在等上传方(透明 + 提示)", () => {
   const c = chooseTier(media, [TIERS_KNOWN_REMOTE], { playable: never });
   assert.equal(c.url, `/@media/${ORIG}`);
   assert.equal(c.awaiting, true);
 });
 
-test("T5-tier-3:小版到了 → 小版;原片也到了且这台设备放得了 → 原片", () => {
+test("T5-tier-3:素材小尺寸到了 → 素材小尺寸;素材原尺寸也到了且这台设备放得了 → 素材原尺寸", () => {
   assert.deepEqual(chooseTier(media, [TIERS_KNOWN_REMOTE, SMALL], { playable: never }), { url: `/@media/${SMALL}`, tier: "small", awaiting: false });
   assert.equal(playbackUrl(media, [TIERS_KNOWN_REMOTE, SMALL, ORIG], { playable: () => true }), `/@media/${ORIG}`);
 });
 
-test("T5-tier-4:只有原片一档(浏览器里导入的)→ 原片;没到齐时等待", () => {
+test("T5-tier-4:只有素材原尺寸一档(浏览器里导入的)→ 素材原尺寸;没到齐时等待", () => {
   const only = { ...media, tiers: { original: ORIG } };
   assert.equal(chooseTier(only, [], { playable: never }).url, `/@media/${ORIG}`);
   assert.equal(chooseTier(only, [TIERS_KNOWN_LOCAL], { playable: never }).awaiting, true);
@@ -105,7 +105,7 @@ test("T5-warm-4:上一档从没出过画(等待上传方时挂失败了)→ 不�
 
 /* ---------------- T5:预取顺序 ---------------- */
 
-test("T5-prefetch-order:先全部小版、再全部原片,各按片段在时间轴上的先后;没用到的排最后;同一哈希只一次", () => {
+test("T5-prefetch-order:先全部素材小尺寸、再全部素材原尺寸,各按片段在时间轴上的先后;没用到的排最后;同一哈希只一次", () => {
   const h = (c) => c.repeat(64);
   const project = {
     media: [
@@ -155,15 +155,15 @@ function fakeDom({ canPlay = "maybe", behavior = (el) => el.fire("loadeddata"), 
 }
 function clearDom() { delete globalThis.document; delete globalThis.window; }
 
-test("T6-probe-1:canPlayType 回空串 → 判放不了、记进本机缓存;预览永远停在小版", async () => {
+test("T6-probe-1:canPlayType 回空串 → 判放不了、记进本机缓存;预览永远停在素材小尺寸", async () => {
   P.forgetPlayable(); P.setBrowserMajorForTest("152");
   const env = fakeDom({ canPlay: "" });
   try {
     assert.equal(await P.probePlayable(ORIG, `/@media/${ORIG}`, "mxf"), false);
     assert.deepEqual(env.asked, ["application/mxf"]);
     assert.equal(P.playableOnThisHost(ORIG), false);
-    for (let i = 0; i < 3; i++) assert.equal(playbackUrl(media, [TIERS_KNOWN_REMOTE, SMALL, ORIG]), `/@media/${SMALL}`, "两档都到齐也停在小版");
-    assert.equal(playbackUrl(media, [TIERS_KNOWN_REMOTE, ORIG]), `/@media/${ORIG}`, "没有小版可给时才回退到原片");
+    for (let i = 0; i < 3; i++) assert.equal(playbackUrl(media, [TIERS_KNOWN_REMOTE, SMALL, ORIG]), `/@media/${SMALL}`, "两档都到齐也停在素材小尺寸");
+    assert.equal(playbackUrl(media, [TIERS_KNOWN_REMOTE, ORIG]), `/@media/${ORIG}`, "没有素材小尺寸可给时才回退到素材原尺寸");
   } finally { clearDom(); P.setBrowserMajorForTest(null); P.forgetPlayable(); }
 });
 
@@ -204,7 +204,7 @@ test("T6-probe-4:超时记「未知」:不进缓存、冷却期内不重探、�
     assert.equal(P.shouldProbe(ORIG), false, "冷却中");
     env.now += P.RETRY_UNKNOWN_MS;
     assert.equal(P.shouldProbe(ORIG), true, "冷却过了再探");
-    // 未知期间预览给小版
+    // 未知期间预览给素材小尺寸
     assert.equal(playbackUrl(media, [TIERS_KNOWN_LOCAL, SMALL, ORIG], { probe: false }), `/@media/${SMALL}`);
   } finally { clearDom(); P.setBrowserMajorForTest(null); P.forgetPlayable(); }
 });
@@ -270,7 +270,7 @@ test("T6-probe-6:探出结论时通知订阅方(画面层暂停中也当场换�
 
 /* ---------------- T7:导出拦截 ---------------- */
 
-test("T7-gate-1:时间轴上用到的原片没到齐的才拦;没用到的、迁移期的不拦;提示写「等待上传方」和素材名", () => {
+test("T7-gate-1:时间轴上用到的素材原尺寸没到齐的才拦;没用到的、迁移期的不拦;提示写「等待上传方」和素材名", () => {
   const h = (c) => c.repeat(64);
   const project = {
     media: [
@@ -281,7 +281,7 @@ test("T7-gate-1:时间轴上用到的原片没到齐的才拦;没用到的、迁
     ],
     tracks: [{ id: "t", clips: [{ id: "x", mediaId: "b", start: 5, end: 6 }, { id: "y", mediaId: "a", start: 0, end: 5 }, { id: "z", mediaId: "d", start: 6, end: 7 }] }],
   };
-  // 小版到齐了也不算:导出只用原片
+  // 素材小尺寸到齐了也不算:导出只用素材原尺寸
   const missing = missingOriginals(project, [h("2"), h("3")]);
   assert.deepEqual(missing.map((m) => m.name), ["开场.mov"]);
   assert.deepEqual(missingOriginals(project, [h("1"), h("3")]), []);

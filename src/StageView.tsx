@@ -597,7 +597,7 @@ export default function StageView() {
       p.resolve({ aborted: true, reason, elapsedMs: realNow() - p.startedAt, frames: p.frames() });
     };
 
-    /** 片段的入点(冻结 probe-frame 时算本地帧号用) */
+    /** 片段的入点(给 probe-frame 生成快照时算本地帧号用) */
     const clipStart = (clipId: string): number => {
       const p = ref.current.project;
       if (!p) return 0;

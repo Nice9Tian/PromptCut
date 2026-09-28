@@ -12,8 +12,8 @@ import { playableOnThisHost, probePlayable, shouldProbe } from "./playability";
  *
  * 只有**实时播放**的几条路:舞台里的 `VideoTrack`(视频槽位和图片层)、`FrameScene` live 路的像素映射
  * 素材(`PixelMappedMedia`)、编辑器主文档的声音层(`MediaLayers` 的 `AudioLayer`)。
- * 导出、预渲染、`see_frames`、`FrameScene` 的 placeholder 路**一律用 `media.url`(原片)**,不经这里 ——
- * 导出和像素级检查只用原片。
+ * 导出、预渲染、`see_frames`、`FrameScene` 的 placeholder 路**一律用 `media.url`(素材原尺寸)**,不经这里 ——
+ * 导出和像素级检查只用素材原尺寸。
  *
  * # 规则
  *
@@ -23,13 +23,13 @@ import { playableOnThisHost, probePlayable, shouldProbe } from "./playability";
  * 轮询回过一次之后集合里一定带一个**标记**(`TIERS_KNOWN_LOCAL` / `TIERS_KNOWN_REMOTE`),
  * 所以「问过了、一个都没到齐」和「还没问过」分得开。
  *
- *   0. 集合为空(还没问过)→ 有小版给小版,没有给原片:打开项目的第一帧不直接拉原片(A1「先小后大」)。
- *   1. 原片在集合里 → 原片;但**这台设备放不了原片**(本机缓存 `playability.ts`)且小版也在集合里时 → 小版。
- *   2. 原片不在、小版在 → 小版(先小后大)。
- *   3. 两档都不在 → 原片(「还没有小版时直接拉原片」;哪一档都没传完时也只能给原片,那一层等待上传方)。
+ *   0. 集合为空(还没问过)→ 有素材小尺寸给素材小尺寸,没有给素材原尺寸:打开项目的第一帧不直接拉素材原尺寸(A1「先小后大」)。
+ *   1. 素材原尺寸在集合里 → 素材原尺寸;但**这台设备放不了素材原尺寸**(本机缓存 `playability.ts`)且素材小尺寸也在集合里时 → 素材小尺寸。
+ *   2. 素材原尺寸不在、素材小尺寸在 → 素材小尺寸(先小后大)。
+ *   3. 两档都不在 → 素材原尺寸(「还没有素材小尺寸时直接拉素材原尺寸」;哪一档都没传完时也只能给素材原尺寸,那一层等待上传方)。
  *
- * 原片和小版都在、可播性还不知道时:先给小版,顺手在后台探一次;探出来能放,下一次渲染就换回原片
- * (「先拉小版显示,再拉原片替换它」)。只有真有两档可选时才探 —— 不白白去拉原片的首帧。
+ * 素材原尺寸和素材小尺寸都在、可播性还不知道时:先给素材小尺寸,顺手在后台探一次;探出来能放,下一次渲染就换回素材原尺寸
+ * (「先拉素材小尺寸显示,再拉素材原尺寸替换它」)。只有真有两档可选时才探 —— 不白白去拉素材原尺寸的首帧。
  *
  * 地址里不带扩展名 —— 哈希就是身份,Content-Type 由服务端按入库时记下的扩展名给
  * (server/vite-plugin-media.ts 的 resolveHashFile / contentTypeForExt)。
@@ -215,7 +215,7 @@ export function originalMediaUrl(media: Pick<MediaAsset, "url" | "hash">, p: Med
   return remoteMediaUrl(url, p.remote);
 }
 
-/** 原片的地址:`media.url` 就是身份(`/@media/<original 哈希>`);没有 url 但有哈希的才拼一个 */
+/** 素材原尺寸的地址:`media.url` 就是身份(`/@media/<original 哈希>`);没有 url 但有哈希的才拼一个 */
 function originalUrl(media: Pick<MediaAsset, "url" | "hash">): string {
   if (media.url) return media.url;
   return media.hash ? `/@media/${media.hash}` : "";
@@ -232,13 +232,13 @@ export function hashFromUrl(url: string): string | null {
   return m ? m[1].toLowerCase() : null;
 }
 
-/** 素材的原片哈希(按哈希寻址的才有;迁移期按文件名存的给 null) */
+/** 素材的原尺寸哈希(按哈希寻址的才有;迁移期按文件名存的给 null) */
 export function originalHashOf(media: Pick<MediaAsset, "url" | "hash" | "tiers">): string | null {
   const h = (media.tiers?.original || media.hash || hashFromUrl(media.url) || "").toLowerCase();
   return /^[0-9a-f]{64}$/.test(h) ? h : null;
 }
 
-/** 素材的小版哈希(没有小版、或小版就是原片时给 null) */
+/** 素材的小尺寸哈希(没有素材小尺寸、或素材小尺寸就是素材原尺寸时给 null) */
 export function smallHashOf(media: Pick<MediaAsset, "url" | "hash" | "tiers">): string | null {
   const s = (media.tiers?.small || "").toLowerCase();
   return /^[0-9a-f]{64}$/.test(s) && s !== originalHashOf(media) ? s : null;
@@ -276,7 +276,7 @@ export interface PrefetchItem {
 }
 
 /**
- * 打开项目后的预取队列(A1「预取队列」):项目引用到的每个哈希,**先全部小版、再全部原片**,
+ * 打开项目后的预取队列(A1「预取队列」):项目引用到的每个哈希,**先全部素材小尺寸、再全部素材原尺寸**,
  * 每一档内按片段在时间轴上的先后。同一个哈希只出现一次。只收按哈希寻址的素材。
  */
 export function prefetchOrder(project: Pick<Project, "tracks" | "media">): PrefetchItem[] {
@@ -300,7 +300,7 @@ export interface MissingOriginal {
 }
 
 /**
- * 导出前的拦截(A1「导出只用原片」):时间轴上用到的、按哈希寻址的素材里,原片在当前素材服务上
+ * 导出前的拦截(A1「导出只用素材原尺寸」):时间轴上用到的、按哈希寻址的素材里,素材原尺寸在当前素材服务上
  * 还没 `complete` 的那些。`complete` 是当前素材服务报齐了的哈希集合。
  * 空数组 = 可以导出。迁移期没有哈希的素材不在这里拦(它们不经素材服务)。
  */
@@ -349,6 +349,6 @@ export async function checkExportOriginals(
 export function awaitingUploaderMessage(missing: readonly MissingOriginal[]): string {
   const names = missing.map((m) => m.name);
   const shown = names.slice(0, 5).join("、") + (names.length > 5 ? ` 等 ${names.length} 个` : "");
-  // 用词照 glossary.md「素材原尺寸、素材小尺寸」(取代旧词「原片」「小版」);界面上的字用新词,代码注释暂未统一
+  // 用词照 glossary.md「素材原尺寸、素材小尺寸」(取代旧词「原片」「小版」),界面上的字与代码注释都用新词
   return `等待上传方:这些素材的原尺寸还没传完,导出只用素材原尺寸,传完后再导出 —— ${shown}`;
 }

@@ -1,10 +1,10 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { loadCosts, loadTuning, saveTuning, upsertCosts, mergeCosts, filterCosts, costsPath, tuningPath } from '../costs-store.mjs';
+import { loadCosts, loadTuning, saveTuning, upsertCosts, mergeCosts, filterCosts, costsPath, tuningPath, RENAME_RETRIES } from '../costs-store.mjs';
 import { DEFAULT_TUNING } from '../../src/render/pipelineTuning.mjs';
 
 /** 每个用例一个干净的根;PROMPTCUT_DATA_DIR 会把落点挪走,测试期间一律摘掉 */
@@ -223,4 +223,55 @@ test('PROMPTCUT_DATA_DIR 覆盖落点', () => {
     else process.env.PROMPTCUT_DATA_DIR = saved;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/** 让 fs.renameSync 前 n 次抛 code 错,之后照常改名 */
+function flakyRename(n, code) {
+  const real = fs.renameSync;
+  let calls = 0;
+  const m = mock.method(fs, 'renameSync', (from, to) => {
+    calls += 1;
+    if (calls <= n) throw Object.assign(new Error(`${code}: rename ${from} -> ${to}`), { code });
+    return real.call(fs, from, to);
+  });
+  return { calls: () => calls, restore: () => m.mock.restore() };
+}
+
+test('改名偶发 EPERM / EBUSY / EACCES:退避重试后写成,不留临时文件', () => {
+  for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+    withRoot((root) => {
+      upsertCosts(root, [rec({ inlineMs: 1 })]);
+      const flaky = flakyRename(3, code);
+      try {
+        const out = upsertCosts(root, [rec({ inlineMs: 2 })]);
+        assert.equal(out.updated, 1);
+        assert.equal(flaky.calls(), 4, `${code}:失败 3 次、第 4 次成功`);
+      } finally { flaky.restore(); }
+      assert.equal(loadCosts(root)[0].inlineMs, 2);
+      assert.deepEqual(fs.readdirSync(path.dirname(costsPath(root))).filter((f) => f.endsWith('.tmp')), []);
+    });
+  }
+});
+
+test('改名重试用尽仍失败:报原错误、旧存档不动、临时文件删掉', () => {
+  withRoot((root) => {
+    upsertCosts(root, [rec({ inlineMs: 1 })]);
+    const flaky = flakyRename(Infinity, 'EPERM');
+    try {
+      assert.throws(() => upsertCosts(root, [rec({ inlineMs: 2 })]), (err) => err.code === 'EPERM');
+      assert.equal(flaky.calls(), RENAME_RETRIES + 1);
+    } finally { flaky.restore(); }
+    assert.equal(loadCosts(root)[0].inlineMs, 1);
+    assert.deepEqual(fs.readdirSync(path.dirname(costsPath(root))).filter((f) => f.endsWith('.tmp')), []);
+  });
+});
+
+test('改名遇到别的错误不重试', () => {
+  withRoot((root) => {
+    const flaky = flakyRename(1, 'ENOENT');
+    try {
+      assert.throws(() => upsertCosts(root, [rec()]), (err) => err.code === 'ENOENT');
+      assert.equal(flaky.calls(), 1);
+    } finally { flaky.restore(); }
+  });
 });

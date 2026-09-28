@@ -29,7 +29,7 @@ function fakeStore() {
 }
 
 test("像素映射工具:A 拒绝并回等价 ops、B 接单回 webgl、C 说明翻译不了哪一处", async () => {
-  const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
+  const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, ws: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   try {
     const { createPixelMapTools } = await server.ssrLoadModule("/src/mcp/tools/pixelMapTools.ts");
     const toolsOf = () => { const s = fakeStore(); return { s, tools: createPixelMapTools(s) }; };

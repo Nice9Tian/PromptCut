@@ -32,7 +32,7 @@ function file(size, ext = 'mp4') {
 const tier = ({ hash, path: p, ext }) => ({ hash, path: p, ext });
 const chunkCount = (f) => Math.ceil(f.size / CHUNK);
 
-/** 三个素材：A、B 是视频（两档），C 是图片（只有原片） */
+/** 三个素材：A、B 是视频（两档），C 是图片（只有素材原尺寸） */
 function materials() {
   const A = { small: file(150 * 1024), original: file(600 * 1024) };
   const B = { small: file(100 * 1024), original: file(300 * 1024) };
@@ -100,13 +100,13 @@ test('C66-T3-01 逐个素材、同一素材先小后大；上一档 complete 之
 
 // ------------------------------------------------------------------ T2
 
-test('C66-T2-01 上传中断网、重启后续传：同一个 upload-queue.json 建新队列，只补缺的分片；小版、原片的 chunks 分别报 complete', async () => {
+test('C66-T2-01 上传中断网、重启后续传：同一个 upload-queue.json 建新队列，只补缺的分片；素材小尺寸、素材原尺寸的 chunks 分别报 complete', async () => {
   const createQueue = await loadUploadQueue();
   const srv = await harness.serve({ chunkSize: CHUNK, isTrusted: () => true });
   const { A, B, C, items } = materials();
   const qf = queueFile();
 
-  // 第一个实例：A 原片传过 3 片就断网，之后一直不通（这个实例不再恢复，模拟进程被关掉）
+  // 第一个实例：A 素材原尺寸传过 3 片就断网，之后一直不通（这个实例不再恢复，模拟进程被关掉）
   let aOrigPuts = 0;
   const rec1 = recordingFetch((info, _log, state) => {
     if (info.action === 'put' && info.hash === A.original.hash && ++aOrigPuts > 3) {
@@ -121,11 +121,11 @@ test('C66-T2-01 上传中断网、重启后续传：同一个 upload-queue.json 
   await q1.close();
 
   assert.ok(fs.existsSync(qf), 'upload-queue.json 要落盘');
-  assert.equal((await chunksOf(srv.base, A.small.hash)).complete, true, '断网前 A 的小版已经传完');
+  assert.equal((await chunksOf(srv.base, A.small.hash)).complete, true, '断网前 A 的素材小尺寸已经传完');
   const mid = await chunksOf(srv.base, A.original.hash);
-  assert.equal(mid.complete, false, '断网时 A 原片没传完');
+  assert.equal(mid.complete, false, '断网时 A 素材原尺寸没传完');
   const received = new Set(mid.received);
-  assert.ok(received.size >= 1 && received.size < chunkCount(A.original), `A 原片收了一部分分片：${[...received]}`);
+  assert.ok(received.size >= 1 && received.size < chunkCount(A.original), `A 素材原尺寸收了一部分分片：${[...received]}`);
   for (const f of [B.small, B.original, C.original]) {
     assert.equal((await chunksOf(srv.base, f.hash)).received.length, 0, `A 没完之前 B、C 一片都没传（${f.hash.slice(0, 6)}）`);
   }
@@ -137,13 +137,13 @@ test('C66-T2-01 上传中断网、重启后续传：同一个 upload-queue.json 
   await q2.close();
 
   const puts = (f) => rec2.log.filter((e) => e.action === 'put' && e.hash === f.hash).map((e) => e.n);
-  assert.deepEqual(puts(A.small), [], '已 complete 的 A 小版不重传');
+  assert.deepEqual(puts(A.small), [], '已 complete 的 A 素材小尺寸不重传');
   const missing = [...Array(chunkCount(A.original)).keys()].filter((n) => !received.has(n));
-  assert.deepEqual([...puts(A.original)].sort((a, b) => a - b), missing, 'A 原片只补缺的分片，每片一次');
+  assert.deepEqual([...puts(A.original)].sort((a, b) => a - b), missing, 'A 素材原尺寸只补缺的分片，每片一次');
   const runs = writeRuns(rec2.log).map((r) => r.hash);
   assert.deepEqual(runs, [A.original.hash, B.small.hash, B.original.hash, C.original.hash], '续传仍按「A 原、B 小、B 原、C 原」');
 
-  for (const [name, f] of Object.entries({ 'A 小版': A.small, 'A 原片': A.original, 'B 小版': B.small, 'B 原片': B.original, 'C 原片': C.original })) {
+  for (const [name, f] of Object.entries({ 'A 素材小尺寸': A.small, 'A 素材原尺寸': A.original, 'B 素材小尺寸': B.small, 'B 素材原尺寸': B.original, 'C 素材原尺寸': C.original })) {
     const st = await chunksOf(srv.base, f.hash);
     assert.equal(st.complete, true, `${name} 的 GET media/<hash>/chunks 报 complete: true`);
   }
@@ -161,7 +161,7 @@ test('C66-T2-02 素材服务上已 complete 的档不重传（问过 chunks 就�
   const createQueue = await loadUploadQueue();
   const srv = await harness.serve({ chunkSize: CHUNK, isTrusted: () => true });
   const { A, items } = materials();
-  // 事先把 A 的小版放进素材服务
+  // 事先把 A 的素材小尺寸放进素材服务
   const st = srv.stores.media;
   for (let n = 0; n < chunkCount(A.small); n++) {
     const part = A.small.bytes.subarray(n * CHUNK, Math.min(A.small.size, (n + 1) * CHUNK));
@@ -174,7 +174,7 @@ test('C66-T2-02 素材服务上已 complete 的档不重传（问过 chunks 就�
   await q.enqueue(items[0]);
   assert.equal(await drainWithin(q, 20_000), true);
   await q.close();
-  assert.deepEqual(rec.log.filter((e) => e.action === 'put' && e.hash === A.small.hash), [], '已 complete 的小版一片都不传');
+  assert.deepEqual(rec.log.filter((e) => e.action === 'put' && e.hash === A.small.hash), [], '已 complete 的素材小尺寸一片都不传');
   assert.equal((await chunksOf(srv.base, A.original.hash)).complete, true);
   await srv.close();
 });

@@ -29,7 +29,7 @@ async function startEnv(t, { gateway = true, direct = false } = {}) {
   // 没有网关时挡一层「旧服务端」前端：去掉会话项，服务端把页面当旧客户端（服务端会话层合入前后都成立）
   const front = gw || direct ? null : await startLegacyFront({ upstream: docUrl });
   const proxy = await createTcpProxy({ target: gw ? gw.port : direct ? server.address().port : front.port });
-  const vite = await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
+  const vite = await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, ws: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
   const links = [];
   t.after(async () => {
     for (const l of links) l.stop();

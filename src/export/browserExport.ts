@@ -5,7 +5,7 @@
  *   → 提示保持前台 → 混音并编 AAC → 逐帧:合成一帧到复用的原尺寸画布 → `VideoEncoder.encode()` → `frame.close()`
  *   (`encodeQueueSize` 不超过 3)→ 封装(`mp4Mux.ts`)写出。
  *
- * 时间按帧号定(`i / fps`,导出页的钉时间办法同 `src/kernel/exportClock.ts`)。导出只用原尺寸:素材原尺寸(导出页按原片地址、
+ * 时间按帧号定(`i / fps`,导出页的钉时间办法同 `src/kernel/exportClock.ts`)。导出只用原尺寸:素材原尺寸(导出页按它的地址、
  * Range 取)、重卡的预渲染原尺寸(`originals.ts`);小尺寸在这里一张都不用。
  *
  * 这一层不认识编辑器:项目、素材服务、文档服务、提示、确认都由调用方(`src/editor/io/index.ts` 的 `exportVideo` 在线分支)注入。
