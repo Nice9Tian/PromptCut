@@ -745,7 +745,24 @@ async function runCreator(book, head) {
     // 页面播放 10 秒（A12）时不改项目，免得重灌打扰计时
     await waitSignal(kv, 'node.play-done');
 
-    if (isNode) await pageServerSide(ctx);
+    if (isNode) {
+      await pageServerSide(ctx);
+      // 页面当了节点时不起同身份替身（会与真页面抢）：双份出键、作废、层表 v3 直接在真页面的 h1～h3 上判；锁闲置接手见 M7-A10
+      const lmD = await contentGet(ctx.aConn, `layers:${ctx.projectId}`);
+      const pageFpD = ctx.pageNode?.envFingerprint ?? null;
+      const perClip = {};
+      for (const clip of ['h1', 'h2', 'h3']) {
+        const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
+        const pcCopy = ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp);
+        const pgCopy = ts.filter((t) => t.requires?.envFingerprint === pageFpD);
+        const cands = lmD?.layers?.find((l) => l.clipId === clip)?.candidates ?? [];
+        perClip[clip] = { pc: pcCopy.length, page: pgCopy.length, allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
+          pageHasBake: pgCopy.length > 0 && pgCopy.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
+          pcSuperseded: pcCopy.filter((t) => god.tasks.get(t.id)?.state === 'failed' && /superseded/.test(String(god.tasks.get(t.id)?.lastError))).length,
+          candidates: cands.map((c) => c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFpD ? 'page' : c.envFingerprint) };
+      }
+      book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lmD?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.allDual && x.pageHasBake && x.pcSuperseded === x.pc && x.candidates.includes('pc') && x.candidates.includes('page')), { v: lmD?.v ?? null, perClip });
+    }
     else {
       for (const id of ['M7-A3', 'M7-A4', 'M7-A8', 'M7-A9', 'M7-A10']) book.pending(id, 'server', NODE_PENDING, { browserNodes: god.browserNodes().map((n) => ({ profile: n.profile, userId: n.userId })) });
       if (!flag('--no-twin')) await twinChecks(ctx);
@@ -1252,14 +1269,14 @@ async function pageServerSide(ctx) {
   // 改一处（轻卡参数）→ 还开着的页面（single：普通档单舞台，照发清单计划）重发计划 → pc 切分：z 的锁闲置超 30 s、没做完 → 接手
   await ctx.editor.e.stop();
   ctx.editor = await ctx.startEditor(false);
-  ctx.rev = await touchLight(ctx.aConn, projectId, ctx.run);
+  // 「下一次有人发布计划」：再开 b2（B 的另一台设备，普通档，会发清单计划、也当节点）
+  await kv.signal('a10.open-b2', { at: Date.now() });
+  await waitSignal(kv, 'a10.b2-ready');
   const pcDoneZ = () => [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === z.clip && t.requires?.envFingerprint === ctx.pcFp && god.tasks.get(t.id)?.state === 'done');
   const tTake = Date.now();
   const took = await until(() => (god.lockOf(`snapshot:${lockKeyZ}`)?.envFingerprint === ctx.pcFp || pcDoneZ().length > 0 ? { lock: god.lockOf(`snapshot:${lockKeyZ}`)?.envFingerprint ?? null, pcDone: pcDoneZ().length } : null), 600_000, 1000);
   book.judge('M7-A10', 'server-idle-takeover', !!took, { clip: z.clip, took, takeoverMs: took ? Date.now() - tTake : null, lockHistory: god.lockOf(`snapshot:${lockKeyZ}`)?.history ?? null, plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan').slice(-4).map((t) => ({ user: String(t.source?.userId ?? '').split('@')[0], rev: t.source?.projectRev, clips: t.input?.clips, state: god.tasks.get(t.id)?.state })) });
-  // 再开 b2（B 的另一台设备，在线纯浏览器节点）后加两张新卡：宿主全开时两份任务谁先谁得卡、每张卡只出自一种环境
-  await kv.signal('a10.took', { took: !!took, at: Date.now() });
-  await waitSignal(kv, 'a10.b2-ready');
+  // 宿主全开、b2 在线时加两张新卡：两份任务谁先谁得卡、每张卡只出自一种环境
   ctx.rev = await addCards(ctx.aConn, projectId, [['w1', 'probe-slow-stepped', { burnMs: 40, label: 'w1' }], ['w2', 'probe-slow-stepped', { burnMs: 40, label: 'w2' }]], ctx.run);
   const race = {};
   for (const clip of ['w1', 'w2']) {
@@ -1772,7 +1789,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   await until(() => tap.sent('task.progress', zClaim.at).some((f) => f.id === zClaim.id), 30_000, 100);
   await b1.page.close();
   await kv.signal('a10.page-closed', { clip: zClaim.task.clipId, at: Date.now() });
-  await waitSignal(kv, 'a10.took');
+  await waitSignal(kv, 'a10.open-b2');
   const b2 = await openMember(browser, cfg, 'b2');
   await until(() => b2.tap.nodeState().isNode, NODE_WAIT_MS, 250);
   await kv.signal('a10.b2-ready', { isNode: b2.tap.nodeState().isNode });
