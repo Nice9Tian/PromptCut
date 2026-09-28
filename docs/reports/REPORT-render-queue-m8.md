@@ -249,7 +249,8 @@
 | 15:30Z 前后 | 服务器上对演练实例逐块重算 sha256（只读） | `find $ns -type f -print0 \| xargs -0 sha256sum \| awk …`（三个命名空间；全文见 `hosting-migration.md` 第 2 节末），结果写 `/tmp/m8-drill-hashes.txt`，`scp` 回笔记本与库存对账 | 0 | 用时 30 s；只读 |
 | 15:37:22Z | 迁移演练收尾 | `pm2 stop promptcut-drill`；`ufw delete allow 8777/tcp`；`ufw delete allow 8778/tcp`；`pm2 list`；确认后 `pm2 save` | 0 | 演练实例 stopped；8777 / 8778 收回、无人监听；dump 按「hosted online、drill stopped」存，演练前的 dump 在 `~/.pm2/dump.pm2.bak-20260928-m8` |
 | 17:54:33Z | 在线编辑器页换代（main `e27fa520`，代码版本 `21c62981…` → `f979b95e…`：xnode-dedup 改了进代码版本的 `server/frame-pipeline.mjs`，桌面节点与在线页面要同版本才在一个池里） | 笔记本 `npx vite build --mode online`（`index-CeTzP2gc.js` 含 `f979b95e`、不含 `21c62981`）；`runtime-config.json` 先备份为 `/root/runtime-config.bak-20260928-m8enc`；`scp` 到 `/opt/promptcut-hosted/.incoming-editor`，远端执行 `server/hosted/deploy.mjs` 的 `editorSwapLines()`（与 `deploy-hosted --editor` 同一段换名脚本） | 0 | nginx `/editor/` 直接出静态文件，托管组合不重启（`restarts` 仍 16）；保留上一代 assets 7 个、`runtime-config.json` 原样；主站与 `s1`、`s2` 的 `/editor/` 都给 `index-CeTzP2gc.js`；托管端服务代码不变（改的文件不在部署清单里），不重新部署 |
-| 18:2xZ | 删迁移种子项目（探针自建，`sp_vfuwa4grkhyqqaw6sveotuytn2`，`m8迁移探针-mule3l4c-83a487`） | 笔记本凭种子文件里的创建者口令（用户名 `m8-creator`）经 `wss://8-219-80-16.sslip.io/hosted` 走 `shared.challenge` → `adminProof(op delete)` → `shared.admin { op: delete }`（同 `m8/conn.mjs` 的 `deleteProbeProject`，用户名按种子文件） | `deleted true` | 只删这一个；主实例上其余 14 个探针项目要用 PC 上探针目录里的创建者口令，PC 辅助节点等用户在 PC 上亲自确认；用户选了「不删」，都保留（PC-M8-6，第 11 节） |
+| 18:2xZ | 删迁移种子项目（探针自建，`sp_vfuwa4grkhyqqaw6sveotuytn2`，`m8迁移探针-mule3l4c-83a487`） | 笔记本凭种子文件里的创建者口令（用户名 `m8-creator`）经 `wss://8-219-80-16.sslip.io/hosted` 走 `shared.challenge` → `adminProof(op delete)` → `shared.admin { op: delete }`（同 `m8/conn.mjs` 的 `deleteProbeProject`，用户名按种子文件） | `deleted true` | 只删这一个；其余 14 个见下一行 |
+| 18:56:37Z～18:56:38Z | 删主实例上探针留下的其余 14 个项目（`m8x-repro`、`m8e-e1-m8e1c2`、`sp-probe-muhgn208-fc53f5`、`sp-probe-mul74c9o-dadb32`、`c10浏览器-c10s0928b`、`m7ap-m7wlocal1`、`m7ap-m7w0928b`、`m8x-remote-r2`、`m8e-e1-m8xreal`、`m8e-e1-m8c3c`、`m8e-e1-m8e1c`、`m8x-remote-r1`、`m7ap-m7w0928a`、`rhp-muhg3z5h`，都建于 09-25～09-28、名字都是探针起的）。用户在主会话里定「由主会话自己删、不让辅助节点做」；创建者口令不在笔记本、不能经消息传，托管端的管理身份又被挡在 `shared.*` 之外，所以在服务器上停服删，删法与 `shared.admin delete` 相同（删凭证存储里的项目记录、删 `tenants/<项目 id>`） | 先核对：`docservice/auth/projects` 正好这 14 份、租户目录合计约 3.4 MB、托管端只有 1 条连接（素材服务自己的登记）；备份 14 份记录与租户目录为 `/root/m8-probe-projects-backup-20260928.tar.gz`（980 915 字节、98 个条目、0600）；`pm2 stop promptcut-hosted`；用部署目录里的 `server/auth/store.mjs`（与 main 逐字节相同）`openCredentialStore({ dir: …/docservice/auth }).remove(id)` 逐个删，再 `rm -rf tenants/<id>`；`pm2 start promptcut-hosted` | 0 | 14 个都 `removed true`、租户目录删掉；重启后日志 `auth.store.open {"projects":0}`，记录 0 份、租户目录 0 个；`/healthz` 正常，`restarts` 仍 16；停服约 1 s，没有成员在线。块（media / snap / px）是按内容寻址共用的，删项目本来就不删块 |
 
 ## 11. 跨机指令与回执
 
@@ -267,7 +268,7 @@
 | PC-M8-3（`claude/merge-xnode-dedup` 的 G0 + G0-R + 构建） | 检出 `e27fa520`；tsc；`npm test`；导出确定性、与像素基准比、快照重放、`ready-index-probe`、`stream-produce-probe --group`、`preview-fallback-probe` 两种；`npm run build` | 全过（数字见第 9 节），17:29:30Z 做完 | `e27fa520` |
 | PC-M8-4（xreal3 + C4） | 开跑前核两边残余连接 0；`m8-e-probe` 创建者 `--run m8xrealR`（放云端）与 `--case e3 --place lan --run m8e3lanP` | xreal3 `ok true`、两台主机 `ok true`；C4 只挂 `cloud-untouched`（阿里云日志查证与本轮无关），其余全过 | `e27fa520` |
 | PC-M8-5（C4 再跑一轮，补重启后的 `asset-lan-probe`） | 重起 5789 协调口；`--case e3 --place lan --run m8e3lanQ` | 见第 7 节 C4 | `e27fa520` |
-| PC-M8-6（清理阿里云主实例上探针留下的 14 个项目） | 只读地在 PC 的临时目录里找各项目的创建者配置；找到的用创建者证明删（同 `deleteProbeProject`，用户名按配置） | 只读查找：PC 主会话临时目录里找到 4 个（`m8e1c2`、`m8xreal`、`m8c3c`、`m8e1c` 的创建者配置），其余 10 个在找；删除停在确认前——PC 辅助节点按它的规矩，远端不可撤回的删除要 PC 那边的用户亲自确认；用户选了「不删」，14 个都保留，只读搜索停止 | `e27fa520` |
+| PC-M8-6（清理阿里云主实例上探针留下的 14 个项目） | 只读地在 PC 的临时目录里找各项目的创建者配置；找到的用创建者证明删（同 `deleteProbeProject`，用户名按配置） | 只读查找：PC 主会话临时目录里找到 4 个（`m8e1c2`、`m8xreal`、`m8c3c`、`m8e1c` 的创建者配置），其余 10 个在找；删除停在确认前——PC 辅助节点按它的规矩，远端不可撤回的删除要 PC 那边的用户亲自确认；PC 那边用户选了「不删」（指的是不让辅助节点删），只读搜索停止；随后用户在主会话里定由主会话自己删，18:56Z 在服务器上删完（第 10 节） | `e27fa520` |
 
 ## 12. 顾问调用记录
 
@@ -339,7 +340,7 @@
 6. M7 D18 语义改动的用户确认记录（`REPORT-M7.md` 第 8 节）。
 7. 二级观察：低内存档判轻的卡播放时一直占位（照现有语义；要不要改成判轻的也补小尺寸）。
 8. 「只能出网的节点」一侧是否在团队测试时补（`m8-plan.md` 第 8.3 节）。
-9. 阿里云上演练实例的数据目录（`/var/lib/promptcut/drill`、`drill.deploy-20260928-m8`、`drill.old-20260928-m8`，合计约 2 GB 以上）删不删；探针留在主实例上的其余 14 个项目：用户 2026-09-28 18:3xZ 在 PC 的对话里选了「不删」，保留（迁移种子项目已删，见第 10 节）；以后要清理时，`m8e1c2`、`m8xreal`、`m8c3c`、`m8e1c` 四个的创建者配置在 PC 主会话的临时目录里（`<运行>/creator/creator.json`），其余的没找到创建者配置、要在服务器上另想办法。
+9. 阿里云上演练实例的数据目录（`/var/lib/promptcut/drill`、`drill.deploy-20260928-m8`、`drill.old-20260928-m8`，合计约 2 GB 以上）删不删；（已处理，不再是待用户项：主实例上探针留下的 15 个项目都已删掉——迁移种子项目用创建者证明删，其余 14 个按用户「由主会话自己删」在服务器上删，备份在 `/root/m8-probe-projects-backup-20260928.tar.gz`，见第 10 节）。
 10. 浏览器进放本机的项目（`c10-contract.md` 第 13 节）：要做须先改语义（13.3）。
 
 ### 13.5 遗留
