@@ -625,9 +625,18 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | — | 在线构建缺 `/catalog/`，内置 Lottie、粒子卡全 404 | 已修，随 C10 进 main；nginx 三个源放行 `/catalog/` | `cc1d137`（`REPORT-C10.md` 第 10 节「catalog 修复」） |
 | — | M7 验收查出的五处：A5 / A6 让路、A10 锁不接手、D1 合并不补 dual、切分候选只在内存、锚帧段优先级被冲淡 | 已修，随 M7 进 main | `7329780`、`119d42a`、`d047ff2` / `a0d751b`、`11bbe53`、`fdbf19f`（`REPORT-M7.md` 第 4 节） |
 
-上表 L20 以下各行是按 main `0cabcfb0` 与 `REPORT-C10.md`、`REPORT-M7.md` 补的。
+| L4、L5 | 主机把本来没有的用户卡写进检出目录；`create_card` 带 overwrite 被改动层旧版盖住 | 已修，M8 跨机前合入 | `2e957270`（`claude/card-overlay`，`AGENT-card-overlay.md`） |
+| L10、L16 | 拼卡片源码不统一换行；Windows 改名偶发 `EPERM` | 已修，M8 跨机前合入 | `2fa0c1a6`（`claude/eol-eperm`，`AGENT-eol-eperm.md`） |
+| L14 | `server/card-sync.mjs` 等旧客户端没接会话层（裁定 D9） | 已修 | `278eeb9d`（`claude/m8-session-legacy`，`AGENT-m8-session-legacy.md`） |
+| — | 纯浏览器节点每帧两次串行推送（W7 经公网锚点段 63 s） | 已修，推送改并行、下一帧先交给后台舞台；经公网锚点段降到 37.4 s / 33.3 s | `5649236`（`claude/site-bake`；`REPORT-render-queue-m8.md` 第 12a 节） |
+| — | 活着、在干活的节点被判停滞（C1 放云端首轮、E6 放云端首轮失败的原因） | 已修，C1、E6 复跑全过 | `0cabcfb0`（`claude/stall-phases`；同上） |
+| — | 推到一半丢认领后自己重新认领时以去重完成、素材服务上缺块 | 已修 | `0cabcfb0`（`claude/sink-has`；同上） |
+| — | 跨节点去重：独立渲染主机不产小尺寸，别的节点领到做完的段只补画小尺寸（E3 放本机本机替身挂的原因） | 已修，E3 / C4 放本机真跨机两轮过 | `e27fa520`（`claude/xnode-dedup`；同上） |
+| — | 探针三处：M7-A6 触发时序、e3 补在线页面恢复同步判据、异地接入 `--assert-no-lan` | 已修 | `21eaeb8f`、`9cf43f1f`、`f550b02`（同上） |
 
-未修或在修的（M8 收尾时更新；本次只改了与 C10、M7 有关的几条）：L3（随 `claude/m8-e2e`）、L4 与 L5（`claude/card-overlay`）、L10 与 L16（`claude/eol-eperm`）、L12（已修：`claude/tailwind-guard` 由 main `0d114df` 合入，按 `git log` 核）、L13（id 改名的平方复杂度已由 `bb01107` 修；样式内联代价 M7 报告没单列，M7-A12 在笔记本长任务 0，是否算修完待核；`REPORT-C10.md` 第 11 节、`REPORT-M7.md` 第 5 节）、L14（`claude/m8-session-legacy`）、L15（C10 已合入，「合入后 grep 核一遍」`REPORT-C10.md` 没写结果，待核）、L19（随 `claude/m8-kit`）、L22（`REPORT-M7.md` 第 4 节第 5 条把 M7-A4 85.3 s 的根因「锚帧段优先级被冲淡」记为与 L22 同一件事，`fdbf19f` 已修；L22 本身的结论由 M8 填）、L23（裁定 D10：不做）。
+上表 L20 以下至 M7 一行是按 main `0cabcfb0` 与 `REPORT-C10.md`、`REPORT-M7.md` 补的；L4 起各行是 2026-09-29 按 `REPORT-render-queue-m8.md` 第 1.1、12a 节补的。
+
+其余各条（2026-09-29 按 `REPORT-render-queue-m8.md` 更新；那份报告没提到的标「M8 报告没写」）：L3（随 `claude/m8-e2e`，该分支已合入 `4538ec42`；T9 是否换成确定判重的探针卡 M8 报告没写，待核）、L4 与 L5、L10 与 L16（已修，见上表）、L12（已修：`claude/tailwind-guard` 由 main `0d114df` 合入，按 `git log` 核）、L13（id 改名的平方复杂度已由 `bb01107` 修；样式内联代价 M7 报告没单列，M7-A12 在笔记本长任务 0，是否算修完待核；`REPORT-C10.md` 第 11 节、`REPORT-M7.md` 第 5 节）、L14（已修，见上表）、L15（C10 已合入，「合入后 grep 核一遍」`REPORT-C10.md` 没写结果，待核）、L18（只记录；M8 E6 两个方向都记了现象）、L19（随 `claude/m8-kit`，该分支已合入 `fdf515e3`；协调口 401 是否再现 M8 报告没写，待核）、L22（`REPORT-M7.md` 第 4 节第 5 条把 M7-A4 85.3 s 的根因「锚帧段优先级被冲淡」记为与 L22 同一件事，`fdbf19f` 已修；M8 在站点上记了时刻分解：新键 6952 ms、新小尺寸产出 11 026 ms、手机播放中挂上新层 11 287 ms、手机取到新的小位图 293 963 ms、整段重渲 242 974 ms，只记录、不设门槛，`REPORT-render-queue-m8.md` 第 8 节）、L23（裁定 D10：不做）；L20 在 M8 又贴线没过，见第 7.5 节。
 
 ### 7.2 推迟到 M8 之后的
 
@@ -651,7 +660,7 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | 界限搜索之后的新卡不重拉记录（主会话已定不做） | `REPORT-C10.md` 第 11 节、第 6 节第 25 行 |
 | 快照里留着 `will-change`（pill 14 / 60 帧只差它、像素相同），去掉会让现有快照键失效一次，下一次动快照代码时一起定 | `REPORT-M7.md` 第 6 节第 27 行、第 11 节 |
 | 云端不能当纯浏览器节点（出站代理不支持 WebSocket 升级），要等 HT-b | `REPORT-M7.md` 第 7.2 节 |
-| M8：主会话收尾时填 | `REPORT-render-queue-m8.md` |
+| M8 新留下的限制与遗留见第 7.5 节 | `REPORT-render-queue-m8.md` 第 13.5 节 |
 
 ### 7.4 C10 其余、M7 新留下、还没有 M8 编号的遗留
 
@@ -668,7 +677,24 @@ SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3
 | `claude/join-error` 未合入 | `REPORT-M7.md` 第 4 节第 8 条 | 待用户审 |
 | `claude/m7-probe` 的四个可行性探针脚本 | `REPORT-M7.md` 第 12 节写「没并进集成分支、由主会话定」 | 已由 main `e86a754` 合入（按 `git log` 核），`REPORT-M7.md` 第 1、12 节已照此回改 |
 | 归档后仍写旧路径（`docs/reports/` 下的 `AGENT-…`）的代码注释与文件头 | `REPORT-C10.md` 第 12 节；`REPORT-M7.md` 第 12 节 | `.md` 里的已由分支 `claude/total-report` 改成新路径；代码文件里的 41 处没改（改 `src/` 连注释也会变代码版本），逐条列在 `AGENT-total-report.md`，是否统一改由主会话定 |
-| 粒子卡在编辑器预览里停住时画面空白（与 `/catalog/` 无关） | `REPORT-C10.md` 第 10 节「catalog 修复」 | 另立 `claude/particles-blank`（M8 期间的维护分支，结果由 M8 填） |
+| 粒子卡在编辑器预览里停住时画面空白（与 `/catalog/` 无关） | `REPORT-C10.md` 第 10 节「catalog 修复」 | 另立 `claude/particles-blank`（M8 期间的维护分支；`AGENT-particles-blank.md` 已由本分支归档，结果 `REPORT-render-queue-m8.md` 没写，待核） |
+
+### 7.5 M8 新留下的
+
+照 `REPORT-render-queue-m8.md` 第 8、12a、13.5 节与第 13.4 节里属遗留的几条。
+
+| 遗留 | 现状 | 去向 | 出处 |
+|---|---|---|---|
+| 1080p 全幅流 15 帧分段编码（L20）在笔记本贴线没过：main `9cf43f1f` 有效 5 轮中位数 302 ms（门槛 300 ms）；编码路径自 `211695d` 没改过，是当时余量不够 | 修复中：`claude/perf-encode-2` 在笔记本上找余量，先找产出逐字节不变的路；门槛不动，若只能靠改产出字节的办法由用户定（〔裁〕第 12 条）。〔占位：等 `claude/perf-encode-2` 的结果与合入后的复测〕 | M8 之内修完 | 第 8 节第 1 行、第 13.2 节第 12 条 |
+| 新旧版本混跑时，旧版独立渲染主机仍不产小尺寸，别的节点领到它做完的段只能补画小尺寸 | 只记录 | — | 第 12a、13.5 节；`AGENT-xnode-dedup.md` |
+| 跨节点去重的代价：主机每段多推约 60 块（约 0.3 MB），段用时 30～38 s（原约 35 s） | 只记录 | — | 第 12a 节 |
+| 放本机项目的素材服务地址经局域网发现带回、不进 `service.endpoints`；`asset-lan-probe` 不给 `--asset` 时按老写法等 `service.endpoints`，对放本机项目会超时 | 探针待改：按发现取地址 | 探针维护 | 第 7 节 C4、第 13.5 节 |
+| 探针判法的三处弱点：`cloud-untouched` 数阿里云总连接数（别人进出就误判，宜改按本轮用户查）；`--assert-no-lan` 的 TCP 采样不分连接状态（上一项的 TIME_WAIT 会被数进去）；`real:tasks>=50` 的标签是固定写法（门槛按片段数缩放） | 只记录；这几轮都靠日志或重跑判清 | 探针维护 | 第 4 节、第 7 节 C4、第 13.5 节 |
+| 纯浏览器节点经公网的锚点段 33～37 s | 观察项，门槛以笔记本本机为准（M7-T1c 27.6 s） | — | 第 2 节 E5、第 8 节、第 13.5 节 |
+| 云端工作节点的检出停在 `29e6e837`（代码版本 `21c62981…`） | 再派它当渲染主机前要先检出当前 main | 下次用云端时 | 第 13.5 节 |
+| C3 放云端首轮 `m8c3c`（PC 创建者）两台主机 17 分钟没领到任务 | 原因未查；笔记本重跑没复现 | 只记录 | 第 7 节 C3 |
+| 阿里云上探针留下的项目、演练实例的数据目录 | 种子项目报告写完后删；E1 的 `sp_2zepiwyualirjjkb3eq2zumiwu`、`m8e-e1-m8c3c` 留在主实例上；演练数据目录约 2 GB 以上。〔占位：阿里云探针项目清理结果，等主会话收尾时清理后填〕 | 待用户项（第 8 节第 33、34 条） | 第 6 节、第 7 节 C3、第 13.4 节第 9 条 |
+| 代码注释里 41 处仍指向归档前的 `docs/reports/AGENT-…` 路径 | 见第 7.4 节倒数第二行 | 下次改 `src/` 时顺带 | 第 13.5 节；`AGENT-total-report.md` |
 
 ## 8. 待用户项
 
