@@ -448,18 +448,38 @@ M8 之后，放本机各项的本机替身都已由 PC 当局域网主机的真�
 
 ## 4. 最终基线
 
-〔占位：`m8-plan.md` 第 2.8 节「全案最终基线」〕
+### 4.1 M8 期间每次合入的 G0 / G0-R
+
+照 `REPORT-render-queue-m8.md` 第 9、12a 节。M8 期间合入前的 G0 由主会话或 PC 辅助节点跑；`9cf43f1f`、`e27fa520` 两次由 PC 辅助节点跑（指令 PC-M8-1、PC-M8-3）。全量测试写成「总条数 / 通过 / 失败 / 跳过」，跳过的两条都是要设 `PROMPTCUT_BASE` 才跑的集成测试。
+
+| 合入 | main 提交 | G0 | G0-R | 出处 |
+|---|---|---|---|---|
+| `claude/site-bake` | `5649236` | tsc 0；3758 / 3756 / 0 / 2；`npm run build`、`vite build --mode online` 成功 | M8 报告没写 G0-R 六项；改的是纯浏览器节点，合并后另跑 `m7-browser-probe --role all --no-a10 --no-twin`（run `mukz7q6d6b84`）`fails []` | 第 12a 节 |
+| `claude/m8-nolan` | `f550b02` | 3763 / 3761 / 0 / 2（单测 5 条过，守门名单加 `m8-no-lan.test.mjs`） | 只改探针与测试，不跑 | 第 12a 节 |
+| `claude/m8-e6r` | `42e691c` | 3763 / 3761 / 0 / 2（首轮 `sp-store.test.mjs` 整份加载失败一次，单独 9/9、全量重跑全绿） | 只改探针，不跑 | 第 12a 节 |
+| `claude/stall-phases` | G0-R 在 `c15d693` | tsc 0；3774 / 3772 / 0 / 2；构建成功 | 导出确定性 1800/1800；与 PC 基准逐像素 1800 相同；快照重放一致 PASS；`ready-index-probe` `fails []`；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（288、289 拍） | 第 12a 节 |
+| 停滞修复、A6 探针修正与 `claude/sink-has` 叠在一起 | `0cabcfb0` | tsc 0；3778 / 3776 / 0 / 2；构建成功 | 同上六项全过（透明拍 0，286、285 拍） | 第 12a 节 |
+| `claude/m8-e3-page` | `9cf43f1f` | tsc 0；3779 / 3777 / 0 / 2；构建成功（PC-M8-1、PC-M8-2） | 只改探针与测试，不跑 | 第 9 节；第 11 节 |
+| `claude/xnode-dedup` | `e27fa520` | tsc 0；3785 / 3783 / 0 / 2；`npm run build` 成功（PC-M8-3） | 导出确定性 1800/1800；与 PC 像素基准（`.worktrees/pc-g0r-base`，`d70fce77`）逐像素 1800 相同；快照重放一致 PASS；`ready-index-probe` `fails []`；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（286、287 拍） | 第 9 节；第 11 节 |
+| 其余（L1、L4、L5、L10、L14、L16、L17 的遗留修复，四个探针分支，CONNECT 代理替身，`claude/m7-a6-race`） | 见第 2.10 节 | `REPORT-render-queue-m8.md` 没逐次记数字（见各合并提交信息与归档的 AGENT 报告；`m7-a6-race` 只记了本机替身 A6 `fails []`） | — | 第 1.1、12a 节 |
+
+### 4.2 全案最终基线
+
+`m8-plan.md` 第 2.8 节：在最终 main 上，PC 跑 G0 与 G0-R 里不带耗时门槛的六项，笔记本跑带耗时门槛的（第 2.7 节）；像素比较用同一台机器的基准（PC：`.worktrees/pc-g0r-base`，笔记本：`.worktrees/main-g0r`）。
+
+〔占位：全案最终基线要等 1080p 分段编码修复（`claude/perf-encode-2`）合入 main 后，在那时的最终 main 上跑，由主会话填下表。〕
 
 | 项 | 机器 | 命令 | 结果 | 证据 |
 |---|---|---|---|---|
-| main 提交 | — | `git rev-parse main` | 待填 | 待填 |
-| 类型检查 | PC | `npx tsc -b --force` | 待填 | 待填 |
-| 全量测试（跳过 ≤ 2） | PC | `npm test` | 待填 | 待填 |
-| 导出确定性 1800/1800 | PC | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:<端口>/?export=1"` | 待填 | 待填 |
-| 导出像素与 PC 基准逐像素相同 | PC | 与 `.worktrees/pc-g0r-base` 的帧比 | 待填 | 待填 |
-| 快照重放 | PC | `node scripts/verify-unified-frames.mjs` | 待填 | 待填 |
-| 预渲染探针 | PC | `ready-index-probe.mjs`、`stream-produce-probe.mjs --group`、`preview-fallback-probe.mjs`（两种） | 待填 | 待填 |
-| 带耗时门槛的项 | 笔记本 | `stream-produce-probe.mjs`（不带 `--group`）、`tiers-probe.mjs` T4 等（`m8-plan.md` 第 2.7 节） | 待填 | 待填 |
+| main 提交 | — | `git rev-parse main` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
+| 类型检查 | PC | `npx tsc -b --force` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
+| 全量测试（跳过 ≤ 2） | PC | `npm test` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
+| 导出确定性 1800/1800 | PC | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:<端口>/?export=1"` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
+| 导出像素与 PC 基准逐像素相同 | PC | 与 `.worktrees/pc-g0r-base` 的帧比 | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
+| 快照重放 | PC | `node scripts/verify-unified-frames.mjs` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
+| 预渲染探针 | PC | `ready-index-probe.mjs`、`stream-produce-probe.mjs --group`、`preview-fallback-probe.mjs`（两种） | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
+| 带耗时门槛的项 | 笔记本 | `stream-produce-probe.mjs`（不带 `--group`）、`tiers-probe.mjs` T4 等（`m8-plan.md` 第 2.7 节） | 〔待 M8 收尾：1080p 编码修复合入后跑〕。此前在 main `9cf43f1f` 上笔记本跑过一次：T4 三轮长任务 0，过；1080p 有效 5 轮中位数 302 ms，没过 | `REPORT-render-queue-m8.md` 第 8 节 |
+| 主工作区 | — | `git status` | 〔待 M8 收尾：1080p 编码修复合入后跑〕 | — |
 
 ## 5. 阿里云
 
