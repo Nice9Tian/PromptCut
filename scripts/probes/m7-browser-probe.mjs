@@ -35,6 +35,7 @@
  *   --no-a10      不跑 M7-A10（它要重启 A 的编辑器、关页面、等 30 s）
  *   --headful     node 角色用有头 Chrome（排障）
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';

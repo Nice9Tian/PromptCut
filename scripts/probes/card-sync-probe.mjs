@@ -28,6 +28,7 @@
  * 输出:过程写 stderr;stdout 只有最后一行 JSON:
  *   { ok, installMs, hmrMs, remeasureMs, stageMs, cardRev, ..., fails: [] }。ok 要求 installMs ≤ 5000 且各项核对通过。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
 import os from 'node:os';

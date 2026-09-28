@@ -40,6 +40,7 @@
  *
  * 输出:过程写 stderr(一行一条 JSON);stdout 最后一行是一行 JSON `{ ok, fails, … }`,`ok` 为假时退出码 1。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';

@@ -1,3 +1,4 @@
+import './lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';

@@ -10,7 +10,7 @@
  * | `--frames a-b` | 只导这一段,同时交给确定性检查 |
  * | `--video` | 合成 `overlay.mov` / `preview.mp4`。默认 `--no-video` |
  * | `--determinism` | 同时(并行)跑 `verify-determinism.mjs`:同一段导两遍逐像素比。两边都过才退出 0 |
- * | `--media-lib [目录]` | 在导出目录里建 `media` junction 指向素材目录,默认 `%USERPROFILE%\Videos\PromptCut\media`。项目里 `/@media/<文件>` 的素材从这里取 |
+ * | `--media-lib [目录]` | 在导出目录里建 `media` 镜像:素材逐个硬链接进来(素材目录只读),默认取 `%USERPROFILE%\Videos\PromptCut\media`。项目里 `/@media/<文件>` 的素材从这里取。要和 `--work` 在同一个盘 |
  * | `--work <目录>` | 导出目录(`PROMPTCUT_EXPORT_DIR`),默认 `%TEMP%\promptcut-e2e\export-<时间>` |
  * | `--port N` | 指定编辑器端口,N、N+1、N+2 都得空;默认随机挑 |
  * | `-- …` | 之后的参数原样交给 `export-frames.mjs`,如 `-- --workers 1 --media ffmpeg` |
@@ -21,7 +21,7 @@
  *   <work>/export-<id>/project.json      页面读的项目;`--out` 就是这个目录,帧在 frames/,音频在 audio/
  *   <work>/export-<id>/export.log        export-frames 的输出
  *   <work>/determinism/out/verify-a|b    确定性检查的两趟(它按工作目录定输出位置)
- *   <work>/media                         `--media-lib` 时的 junction,退出前拆掉
+ *   <work>/media                         `--media-lib` 时的硬链接镜像(真目录,留着;删它不动素材本身)
  *
  * 为什么这样搭:
  *
@@ -29,9 +29,12 @@
  *   `PROMPTCUT_EXPORT_DIR`,ffmpeg 那条路按它找素材。
  * - `--out` 必须就是 `export-<id>`:Chrome 混音页从 `/@export/<id>/audio/` 取裁好的音频。
  * - 端口三个连号都要空着:每台 dev server 另占 +1、+2 当舞台端口。5190~5192 是用户常驻的那台。
- * - media junction:正常结束、失败、Ctrl+C、关窗口都会先拆链接(只拆链接,核对它没了、
- *   素材目录还在)再退出;被强杀没来得及拆的,下次运行时按标记清掉。脚本从不删导出目录。
- *   自己删导出目录之前,先确认里面没有 media junction,做法见 docs/semantics/guide_files/verification.md。
+ * - media 用硬链接镜像,不用 junction:导出目录里的 media 就是编辑器的本地内容库,编辑器会往里写
+ *   (按需拉取的素材、导入、Agent 预渲染的 bake 图、索引 `index.json`),经 junction 就全写进了用户的素材目录。
+ *   镜像是真目录,新写的文件只落在镜像里;素材文件是硬链接,`index.json` 与点开头的元数据是复制的。
+ *   旧版本留下的 junction(被强杀没来得及拆的)下次运行时按标记清掉。脚本从不删导出目录。
+ * - 本脚本不继承外部的 `PROMPTCUT_EXPORT_DIR` / `PROMPTCUT_DATA_DIR`(`scripts/lib/no-user-dirs.mjs`),
+ *   `--work` 指到用户的 `Videos\PromptCut` 下面直接报错。
  *
  * 坑:
  *
@@ -39,11 +42,13 @@
  *   dev server 会重启,页面等不到就绪,导出中途失败。脚本看到重启会打 ⚠。
  * - 比对第一趟差几十帧多半是字体预热,丢掉冷启动那一趟;更多见 docs/guides/compare-pitfalls.md。
  */
+import './lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { REPO, startDevServer, killTree, createJunction, removeMarkedJunction, sweepStaleJunctions, stamp } from './lib/dev-server.mjs';
+import { REPO, startDevServer, killTree, mirrorMediaLibrary, sweepStaleJunctions, stamp } from './lib/dev-server.mjs';
+import { assertNoUserExportDir } from './lib/user-dirs.mjs';
 
 const DEFAULT_ROOT = path.join(os.tmpdir(), 'promptcut-e2e');
 const DEFAULT_MEDIA = path.join(os.homedir(), 'Videos', 'PromptCut', 'media');
@@ -87,13 +92,12 @@ try {
 
 const work = path.resolve(opts.work || path.join(DEFAULT_ROOT, `export-${stamp()}`));
 const outDir = path.join(work, `export-${opts.id}`);
-const mediaLink = path.join(work, 'media');
+const mediaMirror = path.join(work, 'media');
 
-/* ---------------- 收工:子进程 → dev server → junction,顺序不能反 ---------------- */
+/* ---------------- 收工:子进程 → dev server ---------------- */
 
 const children = new Set();
 let server = null;
-let junctionMade = false;
 let cleaned = false;
 
 function cleanup() {
@@ -102,15 +106,6 @@ function cleanup() {
   // 先停用着素材的进程,再拆它们脚下的链接
   for (const c of children) if (c.exitCode === null) killTree(c.pid);
   if (server) { server.stop(); log('已关 dev server'); }
-  if (junctionMade) {
-    try {
-      if (removeMarkedJunction(work)) log('已拆 media junction(只拆链接,素材目录没动)');
-    } catch (e) {
-      console.error(`[export-e2e] ✖ media junction 没拆成:${e.message}`);
-      console.error(`  在 PowerShell 里手动拆:[System.IO.Directory]::Delete('${mediaLink}'),再用 Test-Path 确认没了。确认之前不要删 ${work}`);
-      process.exitCode = 1;
-    }
-  }
 }
 
 process.on('exit', cleanup);
@@ -162,12 +157,12 @@ async function main() {
   log(`导出目录 ${work}`);
 
   if (opts.mediaLib) {
-    createJunction(mediaLink, opts.mediaLib);
-    junctionMade = true;
-    log(`media → ${path.resolve(opts.mediaLib)}(junction,退出前拆掉)`);
+    const n = mirrorMediaLibrary(opts.mediaLib, mediaMirror);
+    log(`media ← ${path.resolve(opts.mediaLib)}(硬链接 ${n.linked} 个、复制 ${n.copied} 个元数据${n.skipped ? `、跳过 ${n.skipped} 个链接` : ''};素材目录只读)`);
   }
 
   const env = { PROMPTCUT_EXPORT_DIR: work };
+  assertNoUserExportDir(env, 'export-e2e 的导出目录');
   const started = Date.now();
   server = await startDevServer({ env, logFile: path.join(work, 'vite.log'), port: opts.port, log });
   log(`dev server 就绪 ${server.origin}(舞台 ${server.stagePorts.join(' / ')},${((Date.now() - started) / 1000).toFixed(1)}s)`);
@@ -198,6 +193,6 @@ async function main() {
 }
 
 main()
-  // cleanup 拆链接失败时会把 exitCode 置 1,不能被「导出成功」的 0 盖掉
+  // 别处已把 exitCode 置 1 的,不能被「导出成功」的 0 盖掉
   .then((code) => { cleanup(); process.exit(process.exitCode || code); })
   .catch((e) => { console.error(`[export-e2e] ✖ ${e.message}`); cleanup(); process.exit(1); });

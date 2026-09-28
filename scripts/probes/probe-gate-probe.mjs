@@ -34,6 +34,7 @@
  * 量不到主线程停顿 —— rAF 被垂直同步钉在 16.7 ms，主线程被占住 10 ms 也看不出来。
  * 所以这里照做，两个参数都带上；带了之后 rAF 的间隔才反映真实的主线程可用度。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

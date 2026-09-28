@@ -25,6 +25,7 @@
  * 没给就现场生成（HT-a）。
  * 结果：每项一行 JSON `{ check, ok, … }`，最后一行 `{ summary }`；有失败退出码 1。截图写进 --out。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
 import os from 'node:os';

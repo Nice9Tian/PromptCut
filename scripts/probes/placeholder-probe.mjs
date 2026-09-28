@@ -3,6 +3,7 @@
  * Starts its own Vite server on 5240 and a static redirect service on 5243, launches Chrome,
  * writes screenshots under %TEMP%, and stops only the processes it started.
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
