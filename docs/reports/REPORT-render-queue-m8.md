@@ -85,7 +85,7 @@
 
 | 放法 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 放云端（测试开关） | `m8-e-probe.mjs --case e6`；笔记本 `--role host --fake-fingerprint <16 位十六进制>`（设 `PROMPTCUT_TEST_ENV_FINGERPRINT`，开关在 C10 集成分支的 `server/frame-pipeline.mjs`） | 待填 | 各节点认领表；层表逐层指纹 | 指纹 Y 的主机对这一版细任务认领 0；J-全完、J-纯层；反方向（笔记本主机先认领按清单发布的 plan）再一遍 |
+| 放云端（测试开关） | `m8-e-probe.mjs --case e6`；笔记本 `--role host --fake-fingerprint <16 位十六进制>`（设 `PROMPTCUT_TEST_ENV_FINGERPRINT`，开关在 C10 集成分支的 `server/frame-pipeline.mjs`）；实际 PC `--role creator --case e6 --hosts host-a`，笔记本 `--fake-fingerprint e6f00d00e6f00d00` | **核心判据过、J-全完差一个**（run `m8e6c`，08:57:33Z 起，19.2 min）：指纹 `e6f00d00e6f00d00` 的主机认领 0（`other-fingerprint-claimed-0-host-a` claimed 0、ids []，主机侧 `fingerprint.applied true`）；`e6:J-pure-layers` 4 层、观测 39、mixed []；但唯一能做这一版的 PC 节点有 1 个任务 `32c612…:120-179` 满 3 次尝试后永久失败，`e6:J-all-done` 19/20、`J-exactly-once` missing 1。PC 节点一次只认领 1 个（不排队），那段时间 PC 上另有两个子智能体在跑测试与本机替身；与 C1 同一类（停滞误判，`claude/stall-phases`），修复后复跑，待填 | 创建者结果行（`fails` 2 条）；笔记本 M8-B1 回执（host-a stats 全 0、`envFingerprint e6f00d00e6f00d00`） | 指纹 Y 的主机对这一版细任务认领 0；J-全完、J-纯层；反方向（笔记本主机先认领按清单发布的 plan）再一遍 |
 | 放云端（纯浏览器节点当第二种指纹，裁定 D12） | M7 合入后 | 待填 | 同上 | 同上 |
 | 放本机 | 同上，`--place lan` | 待填 | 同上 | 同上；另记桌面 plan 领不到环境不同的主机的现象（L18） |
 
@@ -216,7 +216,11 @@
 
 | 时刻 | 操作 | 命令 | 退出码 | 影响 |
 |---|---|---|---|---|
-| 待填 | 待填 | 待填 | 待填 | 待填 |
+| 2026-09-28 04:59Z 前后 | 部署 M7 合入后的在线构建（主实例） | `node scripts/remote/docservice.mjs deploy-hosted --save --editor <dist-online> --doc-public-url wss://8-219-80-16.sslip.io/hosted/ --asset-public-url https://8-219-80-16.sslip.io/media/api/asset --stage-origins https://s1.8-219-80-16.sslip.io,https://s2.8-219-80-16.sslip.io` | 0 | 托管组合重启一次（此后 `promptcut-hosted` 起于 04:59:20Z），在线连接全部重连 |
+| 同日（C10 部署时） | nginx 主站点与 `promptcut-stages` 加 `/catalog/` 路由 | 手工改 `/etc/nginx/sites-available/promptcut`、`promptcut-stages`，`nginx -t` 后 reload | 0 | 备份 `promptcut.bak-20260928-catalog`、`promptcut-stages.bak-20260928-catalog`；reload 不断连接 |
+| 09:18Z 前后 | 部署纯浏览器节点推送提速后的在线构建（main `5649236`，代码版本 `21c62981…`） | 同上一行的 `deploy-hosted --save …`（从 `.worktrees/merge-test2` 跑） | 0 | 托管组合重启（epoch `5dcf9833…` → `d535ee3a…`，`restarts` 13 → 14）；当时没有用例在跑。核对：`/editor/` 给 `assets/index-Cp2h7djI.js`、内含代码版本 `21c62981…`；`runtime-config.json` 的两个舞台源在；`s1` 子域 `/editor/` 200 |
+| 09:19:28Z | 迁移演练准备（`m8-migrate-probe.mjs --step remote-plan` 清单 A、B 步）：备份、删旧的 HT 第 1 版演练进程、挪开旧数据 | `cp -a` 两份 `pm2.config.cjs` 与 `~/.pm2/dump.pm2` 为 `*.bak-20260928-m8`；`pm2 delete promptcut-drill`；`mv /var/lib/promptcut/drill /var/lib/promptcut/drill.old-20260928-m8`；建空的 `drill/secrets`（0700），在服务器上把主实例的 `secrets/cluster-token` 拷过去（令牌不经 PC、不打印） | 0 | 只动演练实例；主实例不受影响 |
+| 09:20Z 前后 | 部署演练实例（当前 main 的服务端代码）并临时放行端口 | `deploy-hosted --instance drill --doc-public-url ws://8.219.80.16:8777 --asset-public-url http://8.219.80.16:8778/api/asset`（不加 `--save`）；`ufw allow 8777/tcp`、`ufw allow 8778/tcp`（注释 `m8-drill 20260928`，裁定 D7，演练完收回） | 0 / 0 | `promptcut-drill` online、重启 0；PC 读两个端口的 `/healthz` 都 ok |
 
 ## 11. 跨机指令与回执
 
