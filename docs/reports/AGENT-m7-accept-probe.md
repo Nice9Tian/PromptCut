@@ -153,3 +153,25 @@ f918648 Merge branch 'claude/m8-kit' into claude/m7-accept-probe
 2b51508 文档:AGENT-m7-accept-probe 报告(开工)
 (本提交) 文档:报告补本机结果与提交列表
 ```
+
+## 第二段（主会话 2026-09-28 追加：诊断补渲计划、合入页面节点、外网模式、合 main）
+
+### 诊断：低内存页的补渲计划为什么一直 open
+
+- 那份计划是 `plan:<项目>@2#backfill:<签名>`（用户 B-low、`priority: 'backfill'`、`requires: {}`、清单 `["h4"]`）：低内存页发现 h4 判重、层表里没有它，按 c10a 第 17 节发补渲。发布本身是对的。
+- 谁该认领：本项目的桌面节点（pc；语义「加入共享项目的桌面应用……可以认领本项目任何成员发布的任务」）与独立渲染主机（host；带清单的计划 host 也收，filter 规则 6）。纯浏览器不收计划（规则 6、队列 `plan-profile`）。
+- 节点侧过滤：探针的 `dumpPlans` 按 pc 的节点描述对它跑 `checkClaimable`，结果 `{ ok: true }`，没有一条规则挡它。队列侧也没有拒绝记录。
+- 实际没人认领的原因：pc 是 `maxConcurrent: 1`，`pick.mjs` 在还有 normal 档可认领的任务时一张 backfill 都不碰（语义「补渲排在后面」）。第一轮里 D15 的只切分开关还不存在，pc 在一件一件地做 h1～h3 的 normal 细任务，所以补渲计划一直排在后面，在探针那几分钟里始终 open。
+- 复现（run6，加了替 pc 吃掉 normal 细任务的吸收者）：pc 空下来 1 秒内就认领了这份补渲计划、切出 5 个 backfill 档细任务，计划 `done`（`executor.backfill` → `node.plan-relocked` → `node.plan-split derived 5`）。合入页面节点、开关生效之后的 run10 里两份 B-low 的补渲计划也都 `done`。
+- 结论：**不是产品缺陷**，是探针环境（当时没有 D15 开关、pc 单并发忙着做 normal 活）让它排在后面，行为符合「补渲排在后面」。不需要改代码。
+
+### 合入页面节点（`claude/rq-m7-node` 9774eda）后
+
+- 适配处 `m7-node-adapter.mjs` 的 A-4、A-5 按它报告的「诊断形状」一节改了：计数取 `counters`（`claims`、`bakedFrames`；放回的键是线上原因原文，按 `releaseCauseOf` 归类），推送取 `upload`，小尺寸取 `stage.smallFrames`，每帧耗时取 `counters.frameMs`、`stage.frameMs`、`stage.pausedMs`。
+- 探针随之改的：持有中按时间判（放回后重新认领很常见）；A5 一帧按两块（原尺寸 + 小尺寸）算；A9 等三层产物到齐再从头播放取样；A11 的「票据过期后重建」改由 creator 在服务端 `closeConn(…, 1001)` 结束那条 render 会话（应用层，不动网络；原来用 CDP 断网，不可靠且不合新约束）；A10 由 creator 加 z1；计时项（A4 的 30 s、A5 的 500 ms、A12 的长任务）只在带 `--timing-authoritative` 的 node 角色上判，其余机器只记录、标「待笔记本复核」。
+
+### 外网模式（W7：云端 Linux 节点当成员 B）
+
+- `--site https://8-219-80-16.sslip.io`：creator 不起本机托管组合与代理，连阿里云托管组合（文档服务 `<站点>/hosted/`，素材服务 `<站点>/media/api/asset`，在线编辑器 `<站点>/editor/`，两个舞台源读 `<站点>/editor/runtime-config.json`）；协调口缺省 `<站点>/coord`（`PROBE_MAIL_TOKEN` 从环境变量取）；给了 `--site` 时 `--role` 缺省 creator。
+- 外网模式没有进程内的 `describe()`：上帝视角改由 pc 档旁观节点收到的消息拼（任务状态、按被认领那份的指纹推断的锁；认领者、`attempts`、`lastError` 拿不到）；素材块用读票据 `GET <ns>/<hash>/chunks` 核 `complete`；A3 页面部分由 node 角色按线上 `task.claim` 判；托管端日志与 `describe()` 的票据泄漏、A11 的服务端结束会话记 pending（阿里云上另验）。
+- node 角色：`--site` 同上；`--chrome <路径>`（或 `PUPPETEER_EXECUTABLE_PATH`）用系统的 Chromium；Linux 上自动加 `--no-sandbox --disable-dev-shm-usage`；站点是 https 不需要放行不安全源。
