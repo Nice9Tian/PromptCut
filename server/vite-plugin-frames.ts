@@ -762,6 +762,11 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   // M6c X1:能力与 PC 节点同一个判据(`streams` 按实报)
   const capabilities = await nodeCapabilities(service);
   if (services.get(root) !== service || (service as any).closed) return;
+  /*
+   * 主机也是渲染节点:产原尺寸时一并产预渲染小尺寸,两档都推(`product/rendering.md`「两档」、c10a 第 9 节)。主机没有推送队列,
+   * 小尺寸默认不开,要在这里打开 —— 不然它做完的段只有原尺寸,别的节点领到时只能补画小尺寸、不能去重(AGENT-xnode-dedup)。
+   */
+  (service as any).enableSmallTier?.();
 
   const { sharedProtocols }: any = await import("./auth/shared-config.mjs");
   const { createTicketSource }: any = await import("./auth/ticket-source.mjs");

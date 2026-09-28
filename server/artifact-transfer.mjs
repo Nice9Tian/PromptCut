@@ -648,6 +648,9 @@ function safeLog(log, event, fields) {
  *          `docs/reports/AGENT-sink-has.md`)。按本机帧库列清单,`pushResult` 逐块「先问 chunks、有了就跳过」,
  *          缺的块用本机字节补推(不重渲),推齐后把清单写进内容库、回 true;补推出错回 false(记 `sink.has-push-failed`),
  *          交给执行 → `put` 再推。`report` 同 `put` 的,补推时每处理完一块报一次(节点据此算进度);
+ *          本机覆盖了原尺寸、开着小尺寸却缺小尺寸(按别的节点的清单拉来的帧 —— `applyResult` 不拉小尺寸):只认内容库里
+ *          **两档都齐**、块都在素材服务上的清单(回 true、记下它);否则回 false,交给执行器从本机原尺寸补画小尺寸
+ *          (`docs/reports/AGENT-xnode-dedup.md`);
  *       2. 给了 `content`:按 `<resultKey>:<from>-<to>` 查内容库里的清单。清单在、清单覆盖整段、清单里每个块
  *          在素材服务上都有(逐个 `client.has`),三条都满足 → true,并把清单记在 sink 里(`resultFor` 回它);
  *       3. 其它 → false。回 false 前记一行 `sink.has-miss { reason, covered, … }`(诊断,不改行为):`reason` 是
@@ -669,6 +672,38 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
   /** 查内容库得到的清单:清单键 → 清单 */
   const remembered = new Map();
   const collect = ref => (ref?.kind === 'snapshot' ? collectSnapshotResult(pipeline, ref) : collectStreamResult(pipeline, ref));
+  /**
+   * 查内容库里这一段的清单能不能直接当结果用:清单在、对得上、覆盖整段、(`requireSmall` 时)小尺寸也列全、块都在素材服务上。
+   * 能用回 `{ ok: true, body }` 并记下(`resultFor` 回它);不能用回 `{ ok: false, reason, fields }`(`sink.has-miss` 的原因)。
+   */
+  async function lookup(ref, { requireSmall }) {
+    if (!content || typeof content.get !== 'function') return { ok: false, reason: 'no-content', fields: {} };
+    const kind = manifestKindOf(ref?.kind);
+    const key = manifestKeyOf(ref);
+    if (!kind || !key) return { ok: false, reason: 'no-key', fields: {} };
+    let item;
+    try {
+      item = await content.get(kind, key);
+    } catch (error) {
+      safeLog(log, 'manifest.get-failed', { kind, key, code: error?.code ?? null, message: String(error?.message ?? error) });
+      return { ok: false, reason: 'manifest-get-failed', fields: { code: error?.code ?? null, message: String(error?.message ?? error).slice(0, 160) } };
+    }
+    const body = item?.body;
+    if (!item || body === undefined) return { ok: false, reason: 'manifest-missing', fields: {} };
+    if (!manifestMatches(body, ref)) return { ok: false, reason: 'manifest-mismatch', fields: { field: manifestMismatch(body, ref) } };
+    if (!resultComplete(body)) {
+      const listed = body.kind === 'snapshot' ? body.frames.length : Object.keys(body.segments ?? {}).length;
+      return { ok: false, reason: 'manifest-incomplete', fields: { listed } };
+    }
+    if (requireSmall && !smallComplete(body)) return { ok: false, reason: 'no-small', fields: { small: smallFramesOf(body).length } };
+    if (!(await blocksPresent(client, body))) {
+      let status;
+      try { status = await blocksStatus(client, body); } catch (error) { status = { error: String(error?.message ?? error).slice(0, 160) }; }
+      return { ok: false, reason: 'blocks-missing', fields: status };
+    }
+    remembered.set(key, body);
+    return { ok: true, body };
+  }
   return {
     async has(ref, { report } = {}) {
       /** 回 false 前记一行 `sink.has-miss`(为什么没走去重;诊断,不改行为) */
@@ -677,8 +712,10 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
         return false;
       };
       /*
-       * c10a 第 9 节:开着小尺寸时,本机帧库覆盖了整段、而这一段还缺小尺寸,就不算已有 —— 交给执行器补上小尺寸再推。
-       * 这时也不去查内容库:那里的清单多半是本机推送队列边渲边写的,原尺寸齐、小尺寸缺,认了它这一段就永远缺小尺寸。
+       * c10a 第 9 节:开着小尺寸时,本机帧库覆盖了整段、而这一段还缺小尺寸,本机这份就不算已有。这时只认内容库里**两档都齐**、
+       * 块都在素材服务上的清单(AGENT-xnode-dedup:别的节点产的一段,本机按清单只拉了原尺寸 —— `applyResult` 不拉小尺寸 ——
+       * 重启后本机领到它时应走去重);清单缺小尺寸就交给执行器从本机原尺寸补画小尺寸再推(不重渲原尺寸)。不认缺小尺寸的清单:
+       * 那多半是本机推送队列边渲边写的,原尺寸齐、小尺寸缺,认了它这一段就永远缺小尺寸。
        */
       let covered = false;
       try { covered = await coversRange(pipeline, ref); } catch { covered = false; /* 当本机没有 */ }
@@ -702,40 +739,23 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
             return false;
           }
         }
-        // 本机覆盖了、清单却不全(缺小尺寸,c10a 第 9 节):交给执行器补上再推。也不去查内容库(见上)
-        if (collected && wantsSmall(pipeline, ref)) return miss('local-small-missing', { covered: true });
+        // 本机覆盖了、清单却不全(缺小尺寸,c10a 第 9 节):内容库里两档齐的清单才认(见上),否则交给执行器补上再推
+        if (collected && wantsSmall(pipeline, ref)) {
+          const found = await lookup(ref, { requireSmall: true });
+          if (found.ok) return true;
+          if (found.reason === 'blocks-missing') return miss('blocks-missing', { covered: true, ...found.fields });
+          return miss('local-small-missing', { covered: true, manifest: found.reason, ...found.fields });
+        }
       }
-      if (!content || typeof content.get !== 'function') return miss('no-content', { covered });
-      const kind = manifestKindOf(ref?.kind);
-      const key = manifestKeyOf(ref);
-      if (!kind || !key) return miss('no-key', { covered });
-      let item;
-      try {
-        item = await content.get(kind, key);
-      } catch (error) {
-        safeLog(log, 'manifest.get-failed', { kind, key, code: error?.code ?? null, message: String(error?.message ?? error) });
-        return miss('manifest-get-failed', { covered, code: error?.code ?? null, message: String(error?.message ?? error).slice(0, 160) });
-      }
-      const body = item?.body;
-      if (!item || body === undefined) return miss('manifest-missing', { covered });
-      if (!manifestMatches(body, ref)) return miss('manifest-mismatch', { covered, field: manifestMismatch(body, ref) });
-      if (!resultComplete(body)) {
-        const listed = body.kind === 'snapshot' ? body.frames.length : Object.keys(body.segments ?? {}).length;
-        return miss('manifest-incomplete', { covered, listed });
-      }
-      if (!(await blocksPresent(client, body))) {
-        let status;
-        try { status = await blocksStatus(client, body); } catch (error) { status = { error: String(error?.message ?? error).slice(0, 160) }; }
-        return miss('blocks-missing', { covered, ...status });
-      }
-      remembered.set(key, body);
-      return true;
+      const found = await lookup(ref, { requireSmall: false });
+      return found.ok ? true : miss(found.reason, { covered, ...found.fields });
     },
     async resultFor(ref) {
       try {
         if (await coversRange(pipeline, ref)) {
           const { result } = await collect(ref);
-          return resultComplete(result) && (!wantsSmall(pipeline, ref) || smallComplete(result)) ? result : null;
+          if (resultComplete(result) && (!wantsSmall(pipeline, ref) || smallComplete(result))) return result;
+          // 本机这份缺小尺寸:`has` 认的是内容库里两档齐的那份(记下了),回它
         }
       } catch { /* 退到记下的清单 */ }
       const key = manifestKeyOf(ref);
