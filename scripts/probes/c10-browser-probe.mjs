@@ -76,16 +76,59 @@
  *   PC 这边的 `--role creator`(外网模式的缺省;本机替身里给它表示 A5 也等外部主机,本机自测跨机协议用)在 A5 处按上一节等外部主机。
  *   本机替身不给 --role(缺省 all):A5 照旧由探针自己起本机的独立渲染主机。
  *
+ * ## E6「两种指纹」的反方向:--e6-reverse(`docs/plan/m8-plan.md` 第 2.1 节 E6 判据末句;C10 契约第 18 节第 9 条)
+ *
+ *   在线页面(发布方)发布带片段清单的 plan → 指纹 Y 的独立渲染主机先认领 plan、按自己的指纹切分 → 指纹 X 的节点在 Y 认领 plan
+ *   之后才上线(免得它抢到 plan)→ 判:
+ *     e6r:Y-claimed-plan         Y 认领了页面这一版的 plan(旁观节点见到 task.taken;Y 的持有记录里有这个 id,
+ *                                或者推断:认领发生在 X 上线前、此刻能认领 plan 的只有 Y、Y 的认领计数 ≥ 1、切分方自己那份要求 Y 的指纹)
+ *     e6r:derived-fingerprints   切分方自己那份细任务要求 Y 的指纹;其余只许是 M7 D1 给页面出的浏览器那份(`input.dual`、要求页面指纹)
+ *     e6r:X-online-while-work    X 上线之后这一版还有细任务完成(X 确实和这一版同时在线,认领 0 才有意义)
+ *     e6r:X-claimed-0            要求别的指纹(Y)的细任务 X 认领 0;要求 X 自己指纹的(同一台机器上页面的浏览器那份)X 本来就能认领,只计数
+ *     e6r:J-all-done             J-全完:没被作废的细任务全部 done;作废(`superseded`,M7 D1 双份里输了的那份)的只许是 dual 的
+ *     e6r:J-exactly-once         J-恰一:发布方(成员页)对 plan 与每个没被作废的细任务恰好收到一次 task.done
+ *                                (CDP 读页面 WebSocket 入站帧,按 seq 去重、按 epoch 数)
+ *     e6r:J-pure-layers          J-纯层:按卡(层表的内容键)汇总细任务要求的指纹与完成它的节点的指纹,没有一张卡混两种
+ *     e6r:layer-map-covers-done  层表(`layers:<项目文档 id>`,v 3)每张卡的候选里含完成那一份的指纹;另记「主指纹全是 Y」(primaryAllY)
+ *     e6r:X-differs-from-Y       X 与 Y 的指纹不同
+ *   另记 L18(不判):桌面发布的 plan(创建者在第 0 步发布的)对 host 档认领回什么(X 节点拿 host 身份试认领一次,期望 `plan-profile`)。
+ *   这一向把第 5 步(A5)的改动扩到主重卡与全部额外重卡(文字 + burnMs,`--e6-burn-ms`,缺省本机替身 120、外网 250:
+ *   外网的 X 主机起来要半分钟以上),Y 的并发压到 1,好让 X 上线时这一版还没做完。
+ *
+ *   X 的两种(`--x-nodes`,逗号分隔):
+ *     claimer  协议层节点:成员身份、`role: 'render'`、`node.hello` 报 profile host 与本机的真实指纹(= 创建者桌面节点报的那个),
+ *              `queue.watch` 本项目;对旁观节点看到的每个还 open、要求别的指纹的细任务主动 `task.claim` 一次(认领成了就当场
+ *              `task.release`,记为失败),记各拒绝原因;要求它自己指纹的(页面的浏览器那份)不碰 —— 认领再放回会把卡锁到
+ *              X 的指纹上、把切分方那份作废,扰乱这一版(第一次本机替身就是这样)。不起进程、不占端口,Y 认领 plan 后几乎立刻在线。
+ *     host     真的独立渲染主机(`scripts/render-host.mjs`,真实指纹),端口「基址 +0、+1、+2」。只在外网模式(`--site`)可用:
+ *              本机替身的 10 个端口(托管组合 + 三个源占 5 个,创建者 / Y 占 3 个)放不下第二台主机。
+ *   缺省:外网模式 `claimer,host`,本机替身 `claimer`。
+ *
+ *   命令:
+ *     本机替身(一台机器跑完全部角色):
+ *       node scripts/probes/c10-browser-probe.mjs --e6-reverse --base-port 5740 [--out <目录>]
+ *     本机自测跨机协议(Y 经协调口 KV 报到,同一台机器):先起协调口,再起 creator 与 host 两个进程
+ *       node scripts/probes/probe-coord.mjs serve --port 5748
+ *       node scripts/probes/c10-browser-probe.mjs --role creator --e6-reverse --base-port 5740 --coord http://127.0.0.1:5748 --run <id>
+ *       node scripts/probes/c10-browser-probe.mjs --role host --run <id> --coord http://127.0.0.1:5748 --port 5745 --test-fingerprint <Y>
+ *       (Y 的端口段就是创建者编辑器的 +5～+7:config 在创建者关掉之后才写,主机拿到 config 才占端口)
+ *     跨机(PC 起 creator 与 X,笔记本起 Y;令牌只从环境变量 PROBE_MAIL_TOKEN 取):
+ *       PC:    node scripts/probes/c10-browser-probe.mjs --site https://8-219-80-16.sslip.io --e6-reverse --run <id> --base-port <PC 段起点> [--coord <协调口>]
+ *       笔记本:node scripts/probes/c10-browser-probe.mjs --role host --run <id> --test-fingerprint <Y> --port <笔记本端口> [--coord <协调口>]
+ *   结果写 `steps.e6r`:checks(每条 { name, ok, detail })、plan、细任务数、X 与 Y 的认领 / 完成、层表逐层指纹、l18。
+ *   KV:不加新键;config 多一个字段 `e6Reverse`,host.progress 与 host 多一个字段 `ids`(见下一节)。
+ *
  * ## KV 键(`c10b.<run>.<名>`)
- *   config         creator → host:文档服务的 ws 地址、项目 id、成员口令、项目文档 id、主重卡片段 id、页面发布的计划 id(口令只进 KV 与主机临时目录里的配置文件)
+ *   config         creator → host:文档服务的 ws 地址、项目 id、成员口令、项目文档 id、主重卡片段 id、页面发布的计划 id(口令只进 KV 与主机临时目录里的配置文件);
+ *                  `--e6-reverse` 时另带 `e6Reverse: true`(主机并发压到 1、记认领 / 完成的任务 id)
  *   host.ready     host → creator:起来了(nodeId、profile、envFingerprint、codeVersion、transport、机器平台)
- *   host.progress  host → creator:认领、完成、失败数与传输(变了才写)
+ *   host.progress  host → creator:认领、完成、失败数与传输(变了才写);`e6Reverse` 时另带 `ids`(claimed / completed / dedup / lost / failed 的任务 id)
  *   host.holding   host → 外部与 creator:--cut 时主机此刻持有的任务(可以掐了)
  *   cut.done       外部 → host:--cut external 时掐完线写
  *   host.cut       host → creator:--cut 的结果(持有的任务、前后的 opens / resumes / sessions.resumed、判据)
  *   finish         creator → host:可以退出了(页面已取到新快照,或 creator 不等了)
  *   abort          creator 出错收尾时写;host 看到就退出
- *   host           host 的结果行
+ *   host           host 的结果行(`e6Reverse` 时带 `ids`,同 host.progress)
  */
 import { fork, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -97,6 +140,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, parseTaskId } from './m8/lib.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -127,6 +171,19 @@ const CUT_WAIT_MS = Number(arg('--cut-wait-min', 10)) * 60_000;
 const RESUME_TIMEOUT_MS = Number(arg('--resume-timeout-s', 90)) * 1000;
 /** 主机子进程里去掉 ffmpeg(本机模拟云端没有 ffmpeg) */
 const HOST_NO_FFMPEG = argv.includes('--host-no-ffmpeg');
+/** E6 反方向(见文件头「E6『两种指纹』的反方向」) */
+const E6R = argv.includes('--e6-reverse');
+const X_NODES = String(arg('--x-nodes', REMOTE ? 'claimer,host' : 'claimer')).split(',').map((s) => s.trim()).filter(Boolean);
+if (E6R) {
+  const bad = (m) => { process.stderr.write(`${m}\n`); process.exit(2); };
+  if (ROLE === 'host') bad('--e6-reverse 给 creator 一侧(--role all | creator);主机那边照常 --role host,由 config 里的 e6Reverse 知道');
+  if (A10 || ONLY_A4) bad('--e6-reverse 不与 --a10、--only-a4 同用(反方向在第 5 步做)');
+  if (CUT !== null || argv.includes('--no-host')) bad('--e6-reverse 不与 --cut、--no-host 同用');
+  if (!X_NODES.length || X_NODES.some((x) => !['claimer', 'host'].includes(x))) bad('--x-nodes 取 claimer、host(逗号分隔)');
+  if (!REMOTE && X_NODES.includes('host')) bad('本机替身的 X 只能是 claimer:端口段 10 个放不下第二台独立渲染主机(托管组合与三个源占 +0～+4,Y 占 +5～+7)');
+}
+/** E6 反方向:本轮 A5 改动的 burnMs(拉长这一版,好让 X 上线时还有细任务没做) */
+const E6R_BURN_MS = Number(arg('--e6-burn-ms', REMOTE ? 250 : 120));
 const COORD = String(arg('--coord', 'https://8-219-80-16.sslip.io/coord')).replace(/\/+$/, '');
 if (A10 && ROLE !== 'host') process.env.PROMPTCUT_TEST_ASSET_TICKET_TTL_MS = String(TTL_MS);
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4, node: BASE + 5 };
@@ -149,7 +206,7 @@ const started = Date.now();
 const deadline = started + Number(arg('--timeout-min', REMOTE || ROLE !== 'all' ? 120 : 60)) * 60_000;
 
 const fails = [];
-const out = { ok: false, run: RUN, role: ROLE, mode: A10 ? 'a10' : 'a1-a5', target: REMOTE ? 'site' : 'local', site: SITE, stageOrigins: STAGE_ORIGINS, out: OUT, steps: {} };
+const out = { ok: false, run: RUN, role: ROLE, mode: A10 ? 'a10' : E6R ? 'a1-a5+e6-reverse' : 'a1-a5', target: REMOTE ? 'site' : 'local', site: SITE, stageOrigins: STAGE_ORIGINS, out: OUT, steps: {} };
 /** 待笔记本复核 / 待笔记本主机的项(不算失败,只记下) */
 const pending = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ` :: ${JSON.stringify(extra).slice(0, 500)}`)); return !!cond; };
@@ -327,13 +384,13 @@ async function stopEditor() {
 
 let host = null;
 const hostLog = [];
-async function startHost(config) {
+async function startHost(config, extraArgs = []) {
   for (const p of [PORTS.node, PORTS.node + 1, PORTS.node + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用(主机)`);
   const env = { ...process.env, PROMPTCUT_TEST_ENV_FINGERPRINT: HOST_FP };
   delete env.PROMPTCUT_TEST_ASSET_TICKET_TTL_MS;
   if (HOST_NO_FFMPEG) stripFfmpeg(env, TMP);
   out.hostFfmpeg = ffmpegIn(env);
-  const child = spawn(process.execPath, [path.join(ROOT, 'scripts', 'render-host.mjs'), '--config', config, '--port', String(PORTS.node), '--data', path.join(TMP, 'host')],
+  const child = spawn(process.execPath, [path.join(ROOT, 'scripts', 'render-host.mjs'), '--config', config, '--port', String(PORTS.node), '--data', path.join(TMP, 'host'), ...extraArgs],
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true, env });
   const keep = (c) => { for (const line of c.toString().split(/\r?\n/)) if (line) { hostLog.push(line); if (hostLog.length > 4000) hostLog.shift(); } };
   child.stdout.on('data', keep);
@@ -597,6 +654,200 @@ async function kvOf(run) {
   };
 }
 
+/* ================================================================== E6 反方向(--e6-reverse) */
+
+/**
+ * 节点认领 / 完成了哪些任务:每秒读一次预渲染进程诊断里的节点事件(`node.claimed|completed|dedup|lost|failed`,带任务 id;
+ * 诊断只留最近 80 条事件,所以要勤读,同 m8-e-probe 的 host)。`origin` 是编辑器(render-host 的 --port)地址。
+ */
+function trackNodeIds(origin) {
+  const ids = { claimed: new Set(), completed: new Set(), dedup: new Set(), lost: new Set(), failed: new Set() };
+  let pre = null;
+  let stopped = false;
+  const poll = async () => {
+    try {
+      pre ??= (await getJson(`${origin}/api/prerender/info`, 5000))?.url ?? null;
+      if (!pre) return;
+      const q = (await getJson(`${pre}/api/frames/diagnostics`, 20_000))?.queue ?? {};
+      for (const e of q.events ?? []) {
+        const m = /^node\.(claimed|completed|dedup|lost|failed)$/.exec(String(e?.event ?? ''));
+        if (m && typeof e.id === 'string') ids[m[1]].add(e.id);
+      }
+      // 执行器不发 node.claimed 事件(task-runner 只报 completed / dedup / lost / failed / discarded):
+      // 认领过的任务从此刻持有、在跑的里收(plan 切分时也在 held 里)
+      const idOf = (x) => (typeof x === 'string' ? x : typeof x?.id === 'string' ? x.id : null);
+      for (const x of [...(q.running ?? []), ...(q.nodes ?? []).flatMap((n) => [...(n?.held ?? []), ...(n?.running ?? [])])]) { const id = idOf(x); if (id) ids.claimed.add(id); }
+      for (const id of [...ids.completed, ...ids.dedup, ...ids.failed, ...ids.lost]) ids.claimed.add(id);
+    } catch { /* 下一拍再试 */ }
+  };
+  void (async () => { while (!stopped) { await poll(); await delay(400); } })();
+  return {
+    ids, poll,
+    stop: () => { stopped = true; },
+    view: () => Object.fromEntries(Object.entries(ids).map(([k, s]) => [k, [...s].slice(0, 400)])),
+    size: () => Object.values(ids).reduce((n, s) => n + s.size, 0),
+  };
+}
+
+/**
+ * E6 的旁观节点:成员、`role: 'render'`、`node.hello` 不带指纹(前置过滤放行全部任务)、`queue.watch` 本项目,只收不认领。
+ * 每个任务记:kind、derivedFrom、要求的指纹、结果键、最新版本号、状态、taken 次数(与时刻)、关闭状态(与时刻)。
+ */
+async function startE6Watcher(M, { projectId, password }) {
+  const c = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId, username: 'E6 旁观节点', password, as: 'member', role: 'render' });
+  const tasks = new Map();
+  const epochs = [];
+  const rec = (id) => {
+    if (!tasks.has(id)) tasks.set(id, { kind: null, derivedFrom: null, fp: undefined, resultKey: null, contentKey: null, dual: false, version: null, state: null, taken: [], closed: [], seenAt: Date.now() });
+    return tasks.get(id);
+  };
+  const see = (t) => {
+    if (typeof t?.id !== 'string') return;
+    const r = rec(t.id);
+    r.kind ??= t.kind ?? null;
+    r.contentKey ??= typeof t.input?.contentKey === 'string' ? t.input.contentKey : null;
+    if (t.input?.dual === true) r.dual = true;
+    r.derivedFrom ??= t.source?.derivedFrom ?? null;
+    if (r.fp === undefined) r.fp = typeof t.requires?.envFingerprint === 'string' ? t.requires.envFingerprint : null;
+    r.resultKey ??= t.resultKey ?? null;
+    if (typeof t.version === 'number') r.version = t.version;
+    if (typeof t.state === 'string') r.state = t.state;
+  };
+  c.ep.onMessage((m) => {
+    if (typeof m?.epoch === 'string' && !epochs.includes(m.epoch)) epochs.push(m.epoch);
+    if (m?.type === 'task.opened') see(m.task);
+    else if (m?.type === 'queue.snapshot') for (const t of m.tasks ?? []) see(t);
+    else if (m?.type === 'task.taken' && typeof m.id === 'string') { const r = rec(m.id); r.taken.push(Date.now()); r.state = 'claimed'; if (typeof m.version === 'number') r.version = m.version; }
+    else if (m?.type === 'task.closed' && typeof m.id === 'string') { const r = rec(m.id); r.closed.push({ state: m.state ?? null, at: Date.now() }); r.state = m.state ?? 'closed'; }
+  });
+  const stats = { newSessions: 0 };
+  const subscribe = async () => {
+    const hello = await c.rpc({ type: 'node.hello', nodeId: `c10b-e6w-${RUN}`.slice(0, 64), profile: 'pc', codeVersions: [], capabilities: {}, maxConcurrent: 1 }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+    const watch = await c.rpc({ type: 'queue.watch', projects: [projectId] }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+    return { hello: hello.type, watch: watch.type, reason: hello.reason ?? watch.reason ?? null };
+  };
+  const first = await subscribe();
+  check(first.hello !== 'error' && first.watch === 'queue.snapshot', 'E6 反方向:旁观节点在看本项目的队列', first);
+  c.ep.onOpen(() => { stats.newSessions++; void subscribe(); });
+  return { tasks, epochs, stats, close: c.close };
+}
+
+/**
+ * 成员页(发布方)收到的每一条 task.done 与 task.failed:CDP 读页面 WebSocket 的入站帧,同一任务同一 seq 只算一次(会话层重发),
+ * 记 epoch;task.failed 记 error(`superseded` = M7 D1 双份里被作废的那一份)。
+ */
+async function pageDoneEvents(page) {
+  const cdp = await page.createCDPSession();
+  await cdp.send('Network.enable');
+  const seen = new Set();
+  const events = [];
+  const failed = [];
+  cdp.on('Network.webSocketFrameReceived', (e) => {
+    const s = e?.response?.payloadData;
+    if (typeof s !== 'string' || !(s.includes('task.done') || s.includes('task.failed'))) return;
+    let m;
+    try { m = JSON.parse(s); } catch { return; }
+    if ((m?.type !== 'task.done' && m?.type !== 'task.failed') || typeof m.id !== 'string') return;
+    const key = `${m.type}\u0000${m.id}\u0000${m.seq ?? `frame-${events.length + failed.length}`}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (m.type === 'task.done') events.push({ id: m.id, epoch: typeof m.epoch === 'string' ? m.epoch : null, at: Date.now() });
+    else failed.push({ id: m.id, error: String(m.error ?? '').slice(0, 120), at: Date.now() });
+  });
+  return { events, failed, detach: () => cdp.detach().catch(() => {}) };
+}
+
+/**
+ * X(claimer):协议层节点,profile host、报本机真实指纹。对旁观节点看到的、还 open 的细任务各 `task.claim` 一次;
+ * 认领成了当场 `task.release`(记进 claimed,判失败)。`probePlan(id)`:拿 host 身份试认领一个 plan,只记回包(L18)。
+ */
+async function startClaimer(M, { projectId, password, fingerprint, watcher, isRound }) {
+  const c = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId, username: 'E6 X 节点', password, as: 'member', role: 'render' });
+  const nodeId = `c10b-e6x-${RUN}`.slice(0, 64);
+  const st = { nodeId, fingerprint, hello: null, watch: null, onlineAt: null, visible: new Set(), attempts: [], claimed: [], released: [], rejected: {}, sameFp: [] };
+  c.ep.onMessage((m) => {
+    if (m?.type === 'task.opened' && typeof m.task?.id === 'string') st.visible.add(m.task.id);
+    else if (m?.type === 'queue.snapshot') for (const t of m.tasks ?? []) if (typeof t?.id === 'string') st.visible.add(t.id);
+  });
+  const subscribe = async () => {
+    const hello = await c.rpc({ type: 'node.hello', nodeId, profile: 'host', envFingerprint: fingerprint, codeVersions: [], capabilities: {}, maxConcurrent: 1 }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+    const watch = await c.rpc({ type: 'queue.watch', projects: [projectId] }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+    st.hello = { type: hello.type, reason: hello.reason ?? null, envFingerprint: hello.envFingerprint ?? null };
+    st.watch = { type: watch.type, reason: watch.reason ?? null };
+  };
+  await subscribe();
+  st.onlineAt = Date.now();
+  check(st.hello?.type !== 'error' && st.watch?.type === 'queue.snapshot', 'E6 反方向:X(claimer)以 host 身份报到并看着本项目', { hello: st.hello, watch: st.watch });
+  c.ep.onOpen(() => { void subscribe(); });
+  const tried = new Set();
+  const claimOnce = async (id, version, { plan = false } = {}) => {
+    const r = await c.rpc({ type: 'task.claim', id, expectVersion: version }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+    const entry = { id: id.slice(0, 120), at: Date.now(), type: r.type, reason: r.reason ?? null };
+    if (r.type === 'task.claimed') {
+      const rel = await c.rpc({ type: 'task.release', id, token: r.token, reason: 'e6-probe' }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+      entry.released = rel.type;
+      if (!plan) { st.claimed.push(id); st.released.push({ id, type: rel.type }); }
+    } else if (!plan) {
+      const k = r.reason ?? r.type;
+      st.rejected[k] = (st.rejected[k] ?? 0) + 1;
+    }
+    if (!plan) st.attempts.push(entry);
+    return entry;
+  };
+  let busy = false;
+  const timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void (async () => {
+      for (const [id, t] of watcher.tasks) {
+        if (tried.has(id) || t.kind === 'plan' || t.state !== 'open' || !isRound(t)) continue;
+        tried.add(id);
+        // 要求 X 自己这种指纹的(M7 D1 给同一台机器上的页面出的浏览器那一份)X 本来就可以认领:不去碰,只计数
+        // (认领再放回会把卡锁在 X 的指纹上、把切分方那一份作废,扰乱这一版)
+        if (t.fp === fingerprint) { st.sameFp.push(id); continue; }
+        await claimOnce(id, t.version ?? 1);
+      }
+    })().finally(() => { busy = false; });
+  }, 300);
+  return {
+    st,
+    probePlan: (id, version = 1) => claimOnce(id, version, { plan: true }),
+    view: () => ({ nodeId, fingerprint, onlineAt: st.onlineAt, hello: st.hello, visibleRound: [...st.visible].filter((id) => { const t = watcher.tasks.get(id); return t && t.kind !== 'plan' && isRound(t); }).length,
+      attempts: st.attempts.length, claimed: st.claimed.slice(0, 20), released: st.released, rejected: st.rejected, sameFpSkipped: st.sameFp.length, sample: st.attempts.slice(0, 4) }),
+    close: () => { clearInterval(timer); c.close(); },
+  };
+}
+
+/** X(host):外网模式里再起一台真的独立渲染主机(真实指纹),端口 BASE +0～+2(外网模式不起本机托管组合,这一段空着) */
+async function startXHost(config) {
+  const port = BASE;
+  for (const p of [port, port + 1, port + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用(X 主机)`);
+  const env = { ...process.env };
+  for (const key of ['PROMPTCUT_DOCSERVICE_URL', 'PROMPTCUT_CLUSTER_TOKEN', 'PROMPTCUT_QUEUE_NODE', 'PROMPTCUT_SHARED_CONFIG', 'PROMPTCUT_TEST_CODE_VERSION', 'PROMPTCUT_TEST_ASSET_TICKET_TTL_MS', 'PROMPTCUT_TEST_ENV_FINGERPRINT']) delete env[key];
+  const lines = [];
+  const child = fork(path.join(ROOT, 'scripts', 'render-host.mjs'), ['--config', config, '--port', String(port), '--data', path.join(TMP, 'xhost')],
+    { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
+  const keep = (c) => { for (const l of c.toString().split(/\r?\n/)) if (l) { lines.push(l); if (lines.length > 4000) lines.shift(); } };
+  child.stdout.on('data', keep);
+  child.stderr.on('data', keep);
+  const ready = await new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), 360_000);
+    child.on('message', (m) => { if (m?.type === 'ready') { clearTimeout(t); resolve(m); } });
+    child.once('exit', () => { clearTimeout(t); resolve(null); });
+  });
+  const origin = `http://127.0.0.1:${port}`;
+  return {
+    child, lines, origin, port, ready: !!ready, readyAt: Date.now(),
+    queue: () => getJson(`${origin}/api/frames/queue`, 10_000).catch(() => null),
+    async stop() {
+      try { child.send?.({ type: 'shutdown' }); } catch { /* 已退 */ }
+      await Promise.race([new Promise((r) => child.once('exit', r)), delay(20_000)]);
+      killTree(child.pid);
+      for (const p of [port, port + 1, port + 2]) { const pid = pidOnPort(p); if (pid) killTree(pid); }
+    },
+  };
+}
+
 /* ================================================================== --role host:外部独立渲染主机 */
 
 async function runHostRole() {
@@ -608,6 +859,7 @@ async function runHostRole() {
   const lines = [];
   let exitLine = null;
   let proxyRef = null;
+  let tracker = null;
   try {
     if (!RUN_ARG) throw new Error('--role host 要给 --run <id>(或 --run latest)');
     if (RUN_ARG === 'latest') {
@@ -649,7 +901,9 @@ async function runHostRole() {
     out.testFingerprint = !!testFp;
     if (HOST_NO_FFMPEG) stripFfmpeg(env, TMP);
     out.ffmpeg = ffmpegIn(env);
-    child = fork(path.join(ROOT, 'scripts', 'render-host.mjs'), ['--config', configFile, '--port', String(port), '--data', path.join(TMP, 'data')],
+    // E6 反方向(creator 给了 --e6-reverse):并发压到 1,拉长这一版,好让 X 上线时还有细任务没做
+    out.e6Reverse = cfg.e6Reverse === true;
+    child = fork(path.join(ROOT, 'scripts', 'render-host.mjs'), ['--config', configFile, '--port', String(port), '--data', path.join(TMP, 'data'), ...(out.e6Reverse ? ['--max-concurrent', '1'] : [])],
       { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
     const keep = (c) => {
       for (const line of c.toString().split(/\r?\n/)) {
@@ -667,6 +921,8 @@ async function runHostRole() {
     });
     if (!check(ready, '[host] render-host 起来了', lines.slice(-6))) throw new Error('render-host 没起来');
     const origin = `http://127.0.0.1:${port}`;
+    // E6 反方向:记认领 / 完成的任务 id,随 host.progress 与结果行交回(creator 判 J-纯层、Y 认领了 plan)
+    tracker = out.e6Reverse ? trackNodeIds(origin) : null;
     const q0 = hostView(await getJson(`${origin}/api/frames/queue`, 30_000).catch(() => ready.queue), lines);
     out.ready = q0;
     const facts0 = hostLogFacts(lines);
@@ -702,8 +958,8 @@ async function runHostRole() {
       const q = hostView(await getJson(`${origin}/api/frames/queue`, 30_000).catch(() => null), lines);
       if (q) {
         last = q;
-        const sig = JSON.stringify(q.nodes.map((n) => [n.claimed, n.completed, n.failed, n.transport, n.connected]));
-        if (sig !== lastSig) { lastSig = sig; await store.put('host.progress', { at: Date.now(), ...q }).catch(() => {}); say('host.progress', { nodes: q.nodes.map((n) => ({ claimed: n.claimed, completed: n.completed, failed: n.failed, transport: n.transport })) }); }
+        const sig = JSON.stringify([q.nodes.map((n) => [n.claimed, n.completed, n.failed, n.transport, n.connected]), tracker?.size() ?? null]);
+        if (sig !== lastSig) { lastSig = sig; await store.put('host.progress', { at: Date.now(), ...q, ...(tracker ? { ids: tracker.view() } : {}) }).catch(() => {}); say('host.progress', { nodes: q.nodes.map((n) => ({ claimed: n.claimed, completed: n.completed, failed: n.failed, transport: n.transport })) }); }
       }
       const fin = await store.get('finish', 2000).catch(() => null);
       if (fin) { out.finish = { reason: fin.reason ?? null }; break; }
@@ -714,6 +970,7 @@ async function runHostRole() {
     }
     out.last = last;
     out.didWork = hostDidWork(last);
+    if (tracker) { await tracker.poll(); out.ids = tracker.view(); }
     if (cutP) {
       const r = await Promise.race([cutP, delay(5000).then(() => 'pending')]);
       if (r === 'pending') fails.push('[host] --cut 还没做完就收到了 finish / abort');
@@ -733,6 +990,7 @@ async function runHostRole() {
   } catch (e) {
     fails.push(`[host] 出错:${String(e?.message ?? e).slice(0, 600)}`);
   } finally {
+    tracker?.stop();
     if (child && child.exitCode === null) killTree(child.pid);
     await stopCutProxy(proxyRef).catch(() => {});
     for (const p of [port, port + 1, port + 2]) { const pid = pidOnPort(p); if (pid && child) killTree(pid); }
@@ -933,6 +1191,189 @@ let xfinished = false;
 /** 收尾用:--cut 的旁观节点与本机代理 */
 let watcherRef = null;
 let cutProxyRef = null;
+/** E6 反方向这一轮的状态(旁观节点、页面 task.done、Y 的任务 id、X 节点);收尾用 */
+let e6 = null;
+
+/** E6 反方向:页面发布之后、Y 起来之前 —— 旁观节点与页面 task.done 计数先起 */
+async function e6Begin(planId) {
+  const watcher = await startE6Watcher(M, { projectId: state.projectId, password: state.projectPassword });
+  const pageDone = await pageDoneEvents(state.member);
+  const s = { planId, watcher, pageDone, startedAt: Date.now(), claimer: null, xhost: null, xhostTracker: null, yTracker: null, l18: [] };
+  /** 页面清单 plan(`#clips:`)、有人认领过的 */
+  s.roundPlans = () => [...watcher.tasks].filter(([id, t]) => t.kind === 'plan' && id.includes('#clips:') && t.taken.length > 0).map(([id]) => id);
+  /** 这一轮的细任务:由上面那种 plan 切出来的 */
+  s.isRound = (t) => {
+    if (!t || t.kind === 'plan' || typeof t.derivedFrom !== 'string' || !t.derivedFrom.includes('#clips:')) return false;
+    return (watcher.tasks.get(t.derivedFrom)?.taken.length ?? 0) > 0;
+  };
+  s.roundIds = () => [...watcher.tasks].filter(([, t]) => s.isRound(t)).map(([id]) => id);
+  say('e6r.begin', { planId: String(planId ?? '').slice(0, 80), xNodes: X_NODES });
+  return s;
+}
+
+/** E6 反方向:Y 起来之后 —— 等 Y 认领页面的 plan,之后 X 上线;X(claimer)顺带拿 host 身份试认领桌面 plan(L18,只记录) */
+async function e6AfterYUp() {
+  const taken = await until('E6 反方向:Y 认领页面发布的 plan', () => ((e6.watcher.tasks.get(e6.planId)?.taken.length ?? 0) > 0 ? true : null), 900_000, 250);
+  e6.planTakenAt = taken ? Date.now() : null;
+  // 此刻 Y 的认领计数(本机替身读它的诊断;外部主机读它最近一次 host.progress):plan 被认领时在线、能认领 plan 的只有 Y
+  // (创建者已关,纯浏览器认领 plan 一律 plan-profile,X 还没上线)
+  const yq = EXTERNAL_HOST ? await xstore.get('host.progress', 5000).catch(() => null) : hostView(await hostQueue(), hostLog);
+  e6.yAtPlanTaken = { claimed: yq?.nodes?.[0]?.claimed ?? null, completed: yq?.nodes?.[0]?.completed ?? null, envFingerprint: yq?.envFingerprint ?? null };
+  say('e6r.plan-taken', { ok: !!taken, afterMs: taken ? Date.now() - e6.startedAt : null, y: e6.yAtPlanTaken });
+  if (X_NODES.includes('claimer')) {
+    e6.claimer = await startClaimer(M, { projectId: state.projectId, password: state.projectPassword, fingerprint: state.creatorFp, watcher: e6.watcher, isRound: e6.isRound });
+    for (const id of (state.desktopPlans ?? []).slice(-3)) e6.l18.push(await e6.claimer.probePlan(id));
+    say('e6r.x-claimer-online', { fingerprint: state.creatorFp, l18: e6.l18.map((r) => r.reason ?? r.type) });
+  }
+  if (X_NODES.includes('host')) {
+    const cfgFile = path.join(TMP, 'xhost.json');
+    fs.writeFileSync(cfgFile, JSON.stringify([{ url: M.wsBaseOf(HOSTED), projectId: state.projectId, username: 'E6 X 主机', password: state.projectPassword, as: 'member', role: 'render',
+      deviceId: `c10b-xh-${RUN}`.padEnd(16, '0'), deviceName: 'c10-browser E6 X 独立渲染主机' }]));
+    e6.xhost = await startXHost(cfgFile);
+    check(e6.xhost.ready, 'E6 反方向:X(独立渲染主机)起来了', e6.xhost.lines.slice(-6));
+    e6.xhostTracker = trackNodeIds(e6.xhost.origin);
+    e6.xhostView = hostView(await e6.xhost.queue(), e6.xhost.lines);
+    say('e6r.x-host-online', { port: e6.xhost.port, envFingerprint: e6.xhostView?.envFingerprint ?? null });
+  }
+}
+
+/** E6 反方向:等这一轮的 plan 与细任务都关闭(至多 15 分钟) */
+async function e6Settle() {
+  const W = e6.watcher;
+  const ok = await until('E6 反方向:这一轮的 plan 与细任务都关闭了', () => {
+    const plans = e6.roundPlans();
+    if (!plans.length || plans.some((id) => !W.tasks.get(id).closed.length)) return null;
+    const ids = e6.roundIds();
+    return ids.length && ids.every((id) => W.tasks.get(id).closed.length) ? true : null;
+  }, 900_000, 1000);
+  await delay(3000);
+  await e6.yTracker?.poll();
+  await e6.xhostTracker?.poll();
+  return !!ok;
+}
+
+/**
+ * E6 反方向的判据(文件头的 e6r:* 各条)。yIds = Y 认领 / 完成的任务 id,yFp = Y 的指纹。
+ *
+ * M7 D1:页面(纯浏览器节点、与 plan 同一用户)在线时,切分方给纯浏览器做得了的卡另出一份页面指纹的(`input.dual`),
+ * 谁先认领这张卡的任一段谁得锁,另一份作废(`superseded`:订阅者收 task.failed、旁观者收 task.closed failed)。所以:
+ *   - 这一版的细任务 = Y 自己那份(要求 Y)+ 浏览器那份(要求页面指纹、dual);
+ *   - J-全完 / J-恰一 按「没被作废的」判,作废的只许是 dual 的;
+ *   - X 与页面在同一台机器上时指纹相同,浏览器那份 X 本来就可以认领(同环境同产物):X-claimed-0 判的是
+ *     「要求别的指纹(Y)的细任务 X 认领 0」,要求 X 自己指纹的那几份只计数;
+ *   - J-纯层按卡(内容键)判:一张卡没作废的段只出自一种指纹;层表 v 3 的候选要含完成那一份的指纹。
+ */
+async function e6Judge({ yIds, yFp }) {
+  const W = e6.watcher;
+  const checks = [];
+  const add = (name, ok, detail) => { checks.push({ name, ok: !!ok, detail }); check(ok, `E6 反方向:${name}`, detail); };
+  const plans = e6.roundPlans();
+  const ids = e6.roundIds();
+  const idSet = new Set(ids);
+  const T = (id) => W.tasks.get(id);
+  const short = (id) => String(id).slice(0, 90);
+  const yClaimed = yIds?.claimed ?? [];
+  const yDone = [...(yIds?.completed ?? []), ...(yIds?.dedup ?? [])];
+  const xFp = state.creatorFp;
+  const xhostFp = e6.xhostView?.envFingerprint ?? null;
+  const pageFp = state.pageFp ?? null;
+  const superseded = new Set(e6.pageDone.failed.filter((f) => f.error === 'superseded' && idSet.has(f.id)).map((f) => f.id));
+  const live = ids.filter((id) => !superseded.has(id));
+  const own = ids.filter((id) => T(id).fp === yFp);
+  const others = ids.filter((id) => T(id).fp !== yFp);
+  const xOnlineAt = Math.min(...[e6.claimer?.st.onlineAt, e6.xhost?.readyAt].filter(Number.isFinite));
+  const planTaken = T(e6.planId)?.taken ?? [];
+  // 1. Y 认领了页面这一版的 plan
+  const byIds = yClaimed.includes(e6.planId);
+  const byInference = planTaken.length > 0 && planTaken[0] < xOnlineAt && own.length > 0 && (e6.yAtPlanTaken?.claimed ?? 0) >= 1;
+  add('Y-claimed-plan', plans.includes(e6.planId) && (byIds || byInference), {
+    planId: short(e6.planId), watcherTaken: planTaken.length, takenBeforeX: planTaken.length > 0 ? planTaken[0] < xOnlineAt : null,
+    inYHeld: byIds, yAtPlanTaken: e6.yAtPlanTaken ?? null, ownCopiesRequireY: own.length, roundPlans: plans.length,
+    how: byIds ? 'Y 的持有记录里有这个 plan' : '推断:plan 被认领时只有 Y 能认领 plan(创建者已关、纯浏览器认领 plan 回 plan-profile、X 未上线),且切分方自己那份要求 Y 的指纹',
+  });
+  // 2. 细任务的指纹:切分方自己那份要求 Y;其余只许是 M7 D1 给页面的浏览器那份(dual、要求页面指纹)
+  const byFp = {};
+  for (const id of ids) { const k = `${T(id).fp ?? '(none)'}${T(id).dual ? '/dual' : ''}`; byFp[k] = (byFp[k] ?? 0) + 1; }
+  add('derived-fingerprints', own.length > 0 && others.every((id) => T(id).dual && T(id).fp === pageFp), { tasks: ids.length, yFp, pageFp, byFp, badOthers: others.filter((id) => !(T(id).dual && T(id).fp === pageFp)).slice(0, 3).map(short) });
+  // 3. X 上线之后这一版还有细任务完成
+  const doneAt = (id) => T(id).closed.find((c) => c.state === 'done')?.at ?? null;
+  const after = (at) => (at ? live.filter((id) => (doneAt(id) ?? 0) > at).length : 0);
+  const online = {};
+  if (e6.claimer) online.claimer = { onlineAt: e6.claimer.st.onlineAt, doneAfter: after(e6.claimer.st.onlineAt) };
+  if (e6.xhost) online.host = { onlineAt: e6.xhost.readyAt, doneAfter: after(e6.xhost.readyAt) };
+  add('X-online-while-work', Object.keys(online).length > 0 && Object.values(online).every((o) => o.doneAfter > 0), { ...online, tasks: live.length });
+  // 4. X 对要求别的指纹(Y)的细任务认领 0;要求 X 自己指纹的(浏览器那份)只计数
+  const xDetail = {};
+  let xBad = 0;
+  if (e6.claimer) {
+    const v = e6.claimer.view();
+    xDetail.claimer = { fingerprint: v.fingerprint, attempts: v.attempts, rejected: v.rejected, claimed: v.claimed.length, sameFpSkipped: v.sameFpSkipped, visibleRound: v.visibleRound, sample: v.sample };
+    xBad += v.claimed.length;
+  }
+  let xhostDone = [];
+  if (e6.xhost) {
+    const view = e6.xhostTracker?.view() ?? {};
+    const q = hostView(await e6.xhost.queue(), e6.xhost.lines);
+    const claimedRound = (view.claimed ?? []).filter((id) => idSet.has(id));
+    const claimedOther = claimedRound.filter((id) => T(id).fp !== xhostFp);
+    xhostDone = [...(view.completed ?? []), ...(view.dedup ?? [])].filter((id) => idSet.has(id));
+    xDetail.host = { envFingerprint: q?.envFingerprint ?? xhostFp, nodeClaimed: q?.nodes?.[0]?.claimed ?? null, claimedRound: claimedRound.length, claimedOtherFp: claimedOther.map(short).slice(0, 5), sameFpClaimed: claimedRound.length - claimedOther.length, connected: q?.nodes?.[0]?.connected ?? null };
+    xBad += claimedOther.length;
+  }
+  add('X-claimed-0', Object.keys(xDetail).length > 0 && xBad === 0, xDetail);
+  // 5. J-全完:没被作废的细任务全部 done;作废的只许是 dual 的
+  const states = Object.fromEntries(live.map((id) => [id, T(id).closed.at(-1)?.state ?? T(id).state]));
+  const all = judgeAllDone(live, states);
+  const badSuperseded = [...superseded].filter((id) => !T(id).dual);
+  add('J-all-done', all.ok && badSuperseded.length === 0, { ...all, notDone: all.notDone.slice(0, 5).map((x) => ({ ...x, id: short(x.id), fp: T(x.id)?.fp ?? null, dual: T(x.id)?.dual ?? null })), superseded: superseded.size, badSuperseded: badSuperseded.map(short) });
+  // 6. J-恰一(发布方 = 成员页;plan 与没被作废的细任务)
+  const once = judgeExactlyOnce([...plans, ...live], e6.pageDone.events);
+  add('J-exactly-once', once.ok, { ...once, missing: once.missing.slice(0, 5).map(short), dup: once.dup.slice(0, 5) });
+  // 层表(v 3:每层 contentKey、主指纹、candidates)
+  let layers = null;
+  try {
+    const r = await conn.rpc({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${state.docId}` });
+    layers = r?.type === 'content.item' && !r.missing ? { v: r.body?.v ?? null, list: r.body?.layers ?? [] } : null;
+  } catch { layers = null; }
+  const cardOf = new Map();
+  for (const l of layers?.list ?? []) {
+    const card = l.contentKey ?? l.resultKey;
+    for (const c of [{ resultKey: l.resultKey, envFingerprint: l.envFingerprint }, ...(l.candidates ?? [])]) if (c?.resultKey) cardOf.set(c.resultKey, { card, layer: l });
+  }
+  const layerOfId = (id) => { const rk = T(id).resultKey ?? parseTaskId(id)?.resultKey ?? id; return cardOf.get(rk)?.card ?? T(id).contentKey ?? rk; };
+  // 7. J-纯层:按卡汇总没被作废的细任务要求的指纹与完成它的节点的指纹(Y / X 主机按各自的认领记录;其余由页面完成,页面指纹为探针独立算的 pageFp)
+  const completedBy = {};
+  for (const id of yDone) if (idSet.has(id)) completedBy[id] ??= 'Y';
+  for (const id of xhostDone) completedBy[id] ??= 'X';
+  let inferredPage = 0;
+  for (const id of live) if (!completedBy[id] && states[id] === 'done') { completedBy[id] = 'page'; inferredPage += 1; }
+  const obs = layerObservations(live.map((id) => ({ id, layer: layerOfId(id), requires: { envFingerprint: T(id).fp ?? undefined } })), completedBy, { Y: yFp, X: xhostFp ?? xFp, page: pageFp }, (t) => t.layer);
+  const pure = judgePureLayers(obs);
+  const attributed = live.filter((id) => completedBy[id]).length;
+  const byNode = {};
+  for (const n of Object.values(completedBy)) byNode[n] = (byNode[n] ?? 0) + 1;
+  add('J-pure-layers', pure.ok && attributed === live.length, { ...pure, mixed: pure.mixed.slice(0, 3), attributed, tasks: live.length, byNode, inferredPage });
+  // 8. 层表:这一版每张卡都有一层,候选里含完成那一份的指纹
+  const doneFpByCard = new Map();
+  for (const id of live) if (states[id] === 'done') doneFpByCard.set(layerOfId(id), T(id).fp);
+  const layerRows = (layers?.list ?? []).map((l) => ({ clip: String(l.clipId ?? '').slice(0, 14), fp: l.envFingerprint ?? null, candidates: (l.candidates ?? []).map((c) => c.envFingerprint), doneFp: doneFpByCard.get(l.contentKey ?? l.resultKey) ?? null }));
+  const uncovered = [...doneFpByCard].filter(([card, fp]) => { const l = (layers?.list ?? []).find((x) => (x.contentKey ?? x.resultKey) === card); return !l || !((l.candidates ?? []).some((c) => c.envFingerprint === fp) || l.envFingerprint === fp); });
+  add('layer-map-covers-done', !!layers && doneFpByCard.size > 0 && uncovered.length === 0, { v: layers?.v ?? null, cards: doneFpByCard.size, uncovered: uncovered.length, primaryAllY: layerRows.length > 0 && layerRows.every((r) => r.fp === yFp), layers: layerRows });
+  // 9. X 与 Y 的指纹不同
+  add('X-differs-from-Y', !!yFp && !!xFp && xFp !== yFp && (!xhostFp || xhostFp !== yFp), { yFp, xClaimerFp: e6.claimer ? xFp : null, xHostFp: xhostFp, pageFp });
+  const doneByFp = {};
+  for (const id of live) if (states[id] === 'done') doneByFp[T(id).fp ?? '(none)'] = (doneByFp[T(id).fp ?? '(none)'] ?? 0) + 1;
+  return {
+    checks, planId: short(e6.planId), roundPlans: plans.length, tasks: ids.length, live: live.length, superseded: superseded.size, doneByFp, epochs: W.epochs.length,
+    y: { fp: yFp, claimedSeen: yClaimed.length, done: yDone.filter((id) => idSet.has(id)).length },
+    x: xDetail, pageFp, pageDoneEvents: e6.pageDone.events.length, pageFailedEvents: e6.pageDone.failed.length,
+    l18: {
+      note: '只记录不判(C10 契约第 18 节第 9 条、M8 计划 L18):桌面发布的 plan 不带片段清单,requires 带发布方指纹与 preferNode;host 档认领回 plan-profile,环境不同的主机领不到',
+      desktopPlans: (state.desktopPlans ?? []).length, desktopFingerprint: state.creatorFp ?? null,
+      hostClaim: e6.l18.map((r) => ({ id: r.id.slice(0, 80), type: r.type, reason: r.reason, released: r.released ?? null })),
+    },
+  };
+}
 /** 外网模式:两个舞台源(--stage-origins 优先;否则 runtime-config.json;都没有就 s1./s2. 子域) */
 async function resolveStageOrigins() {
   const given = arg('--stage-origins', null);
@@ -1063,7 +1504,8 @@ try {
     }
     return frames === l.count ? { v: r.body.v, contentKey: !!l.contentKey, envFingerprint: l.envFingerprint, resultKey: l.resultKey, count: l.count, extras: ex.length } : null;
   }, 1_200_000, 3000);
-  check(layer0?.v === 2 && layer0.contentKey && layer0.envFingerprint, '层表 v 2,重层带 contentKey 与 envFingerprint', layer0);
+  // M7 D12 起层表是 v 3(v 2 加每层的 candidates),普通档 v 2、v 3 都认
+  check(layer0?.v >= 2 && layer0.contentKey && layer0.envFingerprint, '层表 v 2 或 v 3,重层带 contentKey 与 envFingerprint', layer0);
   check(layer0 && layer0.envFingerprint === state.creatorFp, '层的产出环境 = 创建者节点的指纹', { layer: layer0?.envFingerprint, node: state.creatorFp });
   state.layer0 = layer0;
   out.steps.creator = { ms: Date.now() - t0, projectId: state.projectId, clips: { main: state.main, extras: state.extras.length, light: state.light }, creatorFp: state.creatorFp, layer: layer0 };
@@ -1126,10 +1568,10 @@ try {
   }).then((e) => M.describeEnvironment({ platform: e.platform, renderer: e.renderer, vendor: e.vendor, chromeVersion: e.ua }).fingerprint).catch(() => null);
 
   // A3:普通档取原尺寸
-  const ready = await until('成员页主重卡的原尺寸就绪(层表 v 2、snap/ 进 L2)', async () => {
+  const ready = await until('成员页主重卡的原尺寸就绪(层表 v 2 / v 3、snap/ 进 L2)', async () => {
     const o = await onlineDiag(member);
     const l = o?.layers?.find((x) => x.clipId === state.main);
-    return o?.tier === 'original' && o.mapVersion === 2 && l && l.ready > 0 ? { o, l } : null;
+    return o?.tier === 'original' && o.mapVersion >= 2 && l && l.ready > 0 ? { o, l } : null;
   }, 180_000, 1000);
   check(ready, 'A3:在线来源取原尺寸一档,主重卡有就绪区间', ready?.l);
   await member.bringToFront();
@@ -1277,6 +1719,8 @@ try {
 
     /* ---------------------------------------------------------------- A5. 没有节点在线时改一处不报错;独立渲染主机认领、切分、完成 */
     const t5 = Date.now();
+    // E6 反方向:记下创建者(桌面)发布过的 plan,X 上线后拿 host 身份试认领一次(L18,只记录)
+    if (E6R) state.desktopPlans = ((await diag().catch(() => null))?.published ?? []).map((p) => p?.planId).filter((id) => typeof id === 'string');
     await creator.close().catch(() => {});
     await stopEditor();
     say('a5.creator-stopped');
@@ -1284,6 +1728,17 @@ try {
     const errorsBefore = member.pageErrors.length;
     const edited = await P(member, (id) => { const s = window.__pcStore; s.actions.setClipParams(id, { label: 'main-v2' }); return s.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)?.params?.label; }, state.main);
     check(edited === 'main-v2', 'A5:纯在线改一处(主重卡的文字)', { edited });
+    if (E6R) {
+      // E6 反方向:全部重卡都改(文字 + burnMs),这一版的层全换成 Y 的;每帧更慢,好让 X 上线时这一版还没做完
+      const changed = await P(member, (spec) => {
+        const s = window.__pcStore;
+        s.actions.setClipParams(spec.main, { burnMs: spec.burn });
+        for (const id of spec.extras) s.actions.setClipParams(id, { label: 'x-e6r', burnMs: spec.burn });
+        const clips = s.getState().project.tracks.flatMap((t) => t.clips);
+        return [spec.main, ...spec.extras].filter((id) => clips.find((c) => c.id === id)?.params?.burnMs === spec.burn).length;
+      }, { main: state.main, extras: state.extras, burn: E6R_BURN_MS });
+      check(changed === EXTRA_HEAVY + 1, 'E6 反方向:全部重卡改了文字与 burnMs', { changed, burnMs: E6R_BURN_MS });
+    }
     const published = await until('A5:页面发布清单计划(测量落定后、防抖)', async () => {
       const d = await P(member, () => window.__pcPlanPublisher?.() ?? null);
       const hit = d?.log?.filter((e) => e.ok).at(-1);
@@ -1295,6 +1750,10 @@ try {
     await delay(8000);
     const toasts = await P(member, () => [...document.querySelectorAll('[data-pc="toast"], .pc-toast')].map((t) => t.textContent)).catch(() => []);
     check(member.pageErrors.length === errorsBefore && !toasts.some((t) => /失败|出错|错误/.test(t ?? '')), 'A5:没有节点在线时不报错', { pageErrors: member.pageErrors.slice(errorsBefore), toasts });
+    if (E6R) {
+      if (!published?.id) throw new Error('E6 反方向:页面没发布清单计划,做不下去');
+      e6 = await e6Begin(published.id);
+    }
     let claimed = null;
     /** --cut:本机代理、旁观节点、页面收到的 task.done、断开的结果(本机替身自己断;外部主机经 KV host.cut 报) */
     let cutProxy = null;
@@ -1316,7 +1775,11 @@ try {
       }
       fs.writeFileSync(hostConfig, JSON.stringify([{ url: cutProxy ? cutProxy.url : M.wsBaseOf(HOSTED), projectId: state.projectId, username: '渲染主机', password: state.projectPassword,
         as: 'member', role: 'render', deviceId: `c10b-host-${RUN}`.padEnd(16, '0'), deviceName: 'c10-browser 独立渲染主机' }]));
-      await startHost(hostConfig);
+      await startHost(hostConfig, E6R ? ['--max-concurrent', '1'] : []);
+      if (e6) {
+        e6.yTracker = trackNodeIds(host.origin);
+        await e6AfterYUp();
+      }
       const cutP = CUT === 'proxy' ? cutWhileHolding({
         queue: hostQueue, healthz: `${SITE}/hosted/healthz`,
         doCut: async () => {
@@ -1346,7 +1809,7 @@ try {
       watcherRef = watcher;
       pageDone = await countPageDone(member);
       await xstore.put('config', { at: Date.now(), hosted: HOSTED, healthz: `${SITE}/hosted/healthz`, ws: M.wsBaseOf(HOSTED), projectId: state.projectId, memberPassword: state.projectPassword,
-        docId: state.docId, mainClip: state.main, planId: published?.id ?? null });
+        docId: state.docId, mainClip: state.main, planId: published?.id ?? null, ...(E6R ? { e6Reverse: true } : {}) });
       say('a5.waiting-external-host', { run: RUN, waitMin: HOST_WAIT_MS / 60_000 });
       const tReady = Date.now();
       const ready = await xstore.wait('host.ready', Date.now() + HOST_WAIT_MS);
@@ -1356,6 +1819,7 @@ try {
         hostFp = ready.envFingerprint ?? null;
         const readyMs = Date.now() - tReady;
         say('a5.external-host-ready', { profile: ready.profile, envFingerprint: ready.envFingerprint, nodeId: ready.nodes?.[0]?.nodeId, transport: ready.nodes?.[0]?.transport, platform: ready.platform, readyMs });
+        if (e6) await e6AfterYUp();
         const endClaim = Date.now() + 900_000;
         // 时限:报到之后 15 分钟内认领并做完至少一段(与本机替身同一时限)
         let lastProgress = null;
@@ -1385,14 +1849,18 @@ try {
     if (hostPending) {
       pending.push({ item: 'A5:独立渲染主机认领、切分、完成,页面取到新快照', status: hostPending });
       out.steps.a5 = { ms: Date.now() - t5, published, pendingHost: hostPending };
+      if (e6) pending.push({ item: 'E6 反方向:Y 认领页面的 plan、X 认领 0、J-全完 / J-恰一 / J-纯层', status: hostPending });
       say('a5.pending', out.steps.a5);
     } else {
     const fresh = await until('A5:页面取到主机产的新快照(层换了新键、环境是主机的,snap/ 就绪)', async () => {
       const o = await onlineDiag(member);
       const l = o?.layers?.find((x) => x.clipId === state.main);
-      return l && l.resultKey !== keyBefore && l.envFingerprint === hostFp && l.ready > 0 ? l : null;
+      // M7 D1:页面在线时切分方给这张卡另出一份页面指纹的,谁先认领谁得卡 —— 新层出自主机或页面自己都算页面取到了新快照(记下是谁)
+      return l && l.resultKey !== keyBefore && (l.envFingerprint === hostFp || (state.pageFp && l.envFingerprint === state.pageFp)) && l.ready > 0 ? l : null;
     }, 600_000, 2000);
-    check(fresh, 'A5:页面取到新快照', fresh ?? (await onlineDiag(member))?.layers);
+    const layersNow = async () => ((await onlineDiag(member))?.layers ?? []).map((l) => ({ clip: l.clipId, main: l.clipId === state.main, fp: l.envFingerprint, ready: l.ready, candidates: l.candidates, newKey: l.clipId === state.main ? l.resultKey !== keyBefore : undefined }));
+    check(fresh, 'A5:页面取到新快照', fresh ?? { main: (await layersNow()).find((l) => l.main) ?? null, hostFp, pageFp: state.pageFp, layers: (await layersNow()).length });
+    if (!fresh) out.steps.a5FreshDiag = { hostFp, pageFp: state.pageFp, keyBefore: String(keyBefore ?? '').slice(0, 12), layers: await layersNow() };
     await P(member, () => window.__pcStore.actions.seek(2));
     await P(member, () => { const s = window.__pcStore; s.actions.seek(2); s.actions.play(); });
     let newShown = null;
@@ -1420,15 +1888,25 @@ try {
         check(n && n.released === 0, '--cut proxy:not-released(持有的任务没被放回)', { released: n?.released ?? null });
       }
     }
-    out.steps.a5 = { ms: Date.now() - t5, published, external: EXTERNAL_HOST, claimant, cut: cutResult ? { held: cutResult.held, before: cutResult.before, after: cutResult.after, judge: cutJudge } : null, newLayer: fresh ? { resultKey: fresh.resultKey.slice(0, 12), envFingerprint: fresh.envFingerprint, ready: fresh.ready } : null, shown: newShown, planeText: newHtml?.slice(0, 40) ?? null };
+    // E6 反方向:等这一轮的细任务都关闭(外部主机要在 finish 之前做完)
+    const e6Settled = e6 ? await e6Settle() : null;
+    out.steps.a5 = { ms: Date.now() - t5, published, external: EXTERNAL_HOST, claimant, cut: cutResult ? { held: cutResult.held, before: cutResult.before, after: cutResult.after, judge: cutJudge } : null, newLayer: fresh ? { resultKey: fresh.resultKey.slice(0, 12), envFingerprint: fresh.envFingerprint, by: fresh.envFingerprint === hostFp ? 'host' : 'page', ready: fresh.ready } : null, shown: newShown, planeText: newHtml?.slice(0, 40) ?? null };
+    let hostIds = null;
     if (xstore) {
       await xstore.put('finish', { at: Date.now(), reason: fresh ? 'fresh' : 'gave-up' }).catch(() => {});
       xfinished = true;
       const hostResult = await xstore.wait('host', Date.now() + 120_000);
       out.steps.a5.hostResult = hostResult ? { ok: hostResult.ok, fails: hostResult.fails, exitCode: hostResult.exitCode ?? null, released: hostResult.released ?? null, ms: hostResult.ms ?? null } : null;
       check(hostResult?.ok, 'A5:外部主机的结果行 ok(正常退出、放回认领)', out.steps.a5.hostResult);
+      hostIds = hostResult?.ids ?? null;
+      if (e6) check(hostIds, 'E6 反方向:外部主机交回了认领 / 完成的任务 id(结果行 ids)', { keys: hostResult ? Object.keys(hostResult).slice(0, 30) : null });
     }
     say('a5.done', out.steps.a5);
+    if (e6) {
+      out.steps.e6r = await e6Judge({ yIds: EXTERNAL_HOST ? hostIds : e6.yTracker?.view(), yFp: hostFp });
+      out.steps.e6r.settled = e6Settled;
+      say('e6r.done', { checks: out.steps.e6r.checks.map((c) => `${c.ok ? 'ok' : 'FAIL'} ${c.name}`), tasks: out.steps.e6r.tasks });
+    }
     }
   }
 } catch (e) {
@@ -1437,6 +1915,14 @@ try {
 } finally {
   try { watcherRef?.close(); } catch { /* 已关 */ }
   await stopCutProxy(cutProxyRef).catch(() => {});
+  if (e6) {
+    try { e6.claimer?.close(); } catch { /* 已关 */ }
+    try { e6.watcher?.close(); } catch { /* 已关 */ }
+    e6.yTracker?.stop();
+    e6.xhostTracker?.stop();
+    await e6.pageDone?.detach();
+    if (e6.xhost) { try { fs.writeFileSync(path.join(OUT, 'x-host.log'), e6.xhost.lines.join('\n')); } catch { /* 写不了 */ } await e6.xhost.stop().catch(() => {}); }
+  }
   if (xstore && !xfinished) await xstore.put('abort', { at: Date.now(), reason: fails.length ? fails[0].slice(0, 200) : 'creator 结束' }).catch(() => {});
   out.pending = pending;
   if (state.member) out.memberDiag = { pageErrors: state.member.pageErrors?.slice(-8), consoleErrors: state.member.consoleErrors?.slice(-8) };
