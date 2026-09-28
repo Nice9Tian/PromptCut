@@ -19,6 +19,7 @@ import { entitiesOf, entityOfPath, type PathOp } from "../../kernel/diffProject"
 import type { Project } from "../../kernel/project";
 import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
+import { classifyEnterFailure } from "./enterFailure";
 import { client, errorStatus, route, type Candidate, type SharedMode, type Where } from "./sharedApi";
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
@@ -1075,8 +1076,13 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
     }, 15_000);
   });
   if (outcome === "open") return { ok: true };
-  if (outcome.reason === "timeout") return { ok: false, error: "unreachable" };
-  return { ok: false, error: wasKicked(candidate.projectId, cred.username) ? "kicked" : "auth" };
+  // 打开前就断:浏览器里分不出握手被拒和没连上,拿新证明问一次 shared/verify 再定(enterFailure.ts)
+  const failed = await classifyEnterFailure(outcome, {
+    fresh: make,
+    verify: (protocols) => client.verifyProtocols({ base: candidate.base, protocols }),
+    wasKicked: () => wasKicked(candidate.projectId, cred.username),
+  });
+  return { ok: false, ...failed };
 }
 
 /** 自己要关掉的那条共享项目连接(取消多用户协作时删项目会收到 4004,不算被删) */
