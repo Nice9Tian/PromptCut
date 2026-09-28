@@ -589,7 +589,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
           smallFrames: stage.small, smallMs: { p50: quantile(sm, 0.5), p95: quantile(sm, 0.95) },
           phases: Object.fromEntries(PHASES.map((k) => { const a = [...phases[k]].sort((x, y) => x - y); return [k, { n: a.length, p50: quantile(a, 0.5), p95: quantile(a, 0.95) }]; })),
         },
-        upload: { pushed: up.pushed, skipped: up.skipped, bytes: up.pushedBytes, failed: up.failed, reauth: up.reauth, recheck: up.recheck, lastError: up.lastError },
+        upload: { pushed: up.pushed, skipped: up.skipped, bytes: up.pushedBytes, failed: up.failed, reauth: up.reauth, recheck: up.recheck, lastError: up.lastError, ms: up.ms },
         manifests: { ...manifestStats },
         connection: { connected: !!ep?.connected, transport: ep?.stats().transport ?? null, ...conn },
         kept: [...kept.keys()],
