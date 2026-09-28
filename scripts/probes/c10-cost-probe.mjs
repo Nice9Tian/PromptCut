@@ -310,7 +310,7 @@ async function stageSample(page) {
         suppressed: w.classList.contains('pc-suppressed'),
         small: !!w.querySelector(':scope > [data-pc-snapshot-plane] img[data-pc-small-snapshot]'),
         placeholder: !!slot && !slot.hidden,
-        unsupported: !!w.querySelector(':scope > [data-pc-placeholder-fixed]'),
+        unsupported: !!slot && !slot.hidden && slot.getAttribute('data-pc-placeholder-reason') === 'unsupported', // 2026-09-29 起 unsupported 进显隐调度(不再常驻)
       };
     });
     return { playing: !!d.beatRunning, wraps, lowMemLive: d.lowMemLive ?? [], role: d.role ?? null, job: d.job ?? null, stageSuppressed: d.suppressed ?? null };

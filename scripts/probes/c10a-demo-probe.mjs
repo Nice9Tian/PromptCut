@@ -1052,7 +1052,7 @@ async function stageSample(page) {
         plane: !!w.querySelector(':scope > [data-pc-snapshot-plane]'),
         small: !!w.querySelector(':scope > [data-pc-snapshot-plane] img[data-pc-small-snapshot]'),
         placeholder: !!slot && !slot.hidden,
-        unsupported: !!w.querySelector(':scope > [data-pc-placeholder-fixed]'),
+        unsupported: !!slot && !slot.hidden && slot.getAttribute('data-pc-placeholder-reason') === 'unsupported', // 2026-09-29 起 unsupported 进显隐调度(不再常驻)
       };
     });
     return { playing: !!d.beatRunning, t: d.t, wraps, lowMemLive: d.lowMemLive ?? [], settling: d.settling ?? [], lowMemSettle: d.lowMemSettle ?? null };
