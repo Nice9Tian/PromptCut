@@ -50,7 +50,7 @@
 5. `4047133`：合验收探针（外网模式、`--role all` 转发 `--base-port` 与 `--timing-authoritative`、D1 判据「每段恰好一份有效」、成员进不了项目时记 WebSocket 实情、收尾删自己的项目）。
 6. `88e70e3`：合验收探针（D1-D2-D12 按出键分组判，判定抽成纯函数 `m7-judge.mjs` 加单测，`ca49299`）。
 
-已合入 main：快进，main 指到 `a52344a`（按 `git log --first-parent` 核）。集成最终代码 `88e70e3` 之后，main 上又有 `e86a754` 合 `claude/m7-probe`、`8cd21c1` 合 `claude/m7-report`，以及三次只改文档的提交 `4540315`（删掉合并带进来的 `docs/reports/AGENT-m7-probe.md`）、`76d6c02`、`a52344a`（改本报告）。
+已合入 main：快进，main 指到 `a52344a`（按 `git log --first-parent` 核）。集成最终代码 `88e70e3` 之后，main 上又有 `e86a754` 合 `claude/m7-probe`、`8cd21c1` 合 `claude/m7-report`，以及三次只改文档的提交 `4540315`（删掉合并 `claude/m7-probe` 时带进 `docs/reports/` 的那份 `AGENT-m7-probe.md`）、`76d6c02`、`a52344a`（改本报告）。
 
 ## 2. 各分支做了什么（摘要，证据在各自报告）
 
@@ -248,7 +248,7 @@
 本分支挪进 `docs/archive/agent-reports/` 的（`git mv`）：`AGENT-rq-m7-queue.md`、`AGENT-rq-m7-node.md`、`AGENT-rq-m7-tests.md`、`AGENT-m7-accept-probe.md`。`AGENT-m7-probe.md` 不在集成分支上，从 `claude/m7-probe` `26ea790` 原样取来放进同一目录。
 
 - `docs/plan/m7-contract.md` 第 13 节末两处引用随改到新路径。
-- 仍写着旧路径 `docs/reports/AGENT-…` 的地方（本分支只写文档，没改）：`server/test/m7-kit.mjs` 文件头注释；各归档报告正文里互相引用的旧路径（历史原文，不改）。
+- 仍写着旧路径（`docs/reports/` 下的 `AGENT-…`）的地方（本分支只写文档，没改）：`server/test/m7-kit.mjs` 文件头注释；各归档报告正文里互相引用的旧路径（历史原文，不改）。
 - `claude/m7-probe` 的四个探针脚本（`m7-build-probe.mjs`、`m7-bake-probe.mjs`、`m7-upload-probe.mjs`、`m7-visibility-probe.mjs`）没并进集成分支（集成分支上有页面节点版 `m7-bake-node-probe.mjs`）；M7 快进进 main 后，由 main `e86a754`「合并 claude/m7-probe」合入。
 - 没挪的：`docs/reports/AGENT-join-error.md` 在 `claude/join-error` 上，随它合入时再归档。
 

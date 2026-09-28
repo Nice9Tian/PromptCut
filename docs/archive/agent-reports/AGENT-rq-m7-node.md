@@ -4,7 +4,7 @@ M7（纯浏览器当渲染节点）的页面与舞台一侧，契约 `docs/plan/
 
 状态：实现与本机验证做完，待主会话审。
 
-代号说明：D1～D18 是契约第 11 节的待定点（裁定见第 13 节）；K10、K11 是契约测试 `server/test/m7-kit.mjs` 文件头对实现形状的第 10、11 条假设；M7-A1～A12 是契约第 10 节的验收项；P1～P6 是第 8 节的可行性探针（结果见 `claude/m7-probe` 的 `docs/reports/AGENT-m7-probe.md`）；A-1～A-9 是验收探针 `claude/m7-accept-probe` 的适配处 `scripts/probes/m7-node-adapter.mjs` 对页面诊断形状的假设。
+代号说明：D1～D18 是契约第 11 节的待定点（裁定见第 13 节）；K10、K11 是契约测试 `server/test/m7-kit.mjs` 文件头对实现形状的第 10、11 条假设；M7-A1～A12 是契约第 10 节的验收项；P1～P6 是第 8 节的可行性探针（结果见 `claude/m7-probe` 的 `AGENT-m7-probe.md`，已归档 `docs/archive/agent-reports/AGENT-m7-probe.md`）；A-1～A-9 是验收探针 `claude/m7-accept-probe` 的适配处 `scripts/probes/m7-node-adapter.mjs` 对页面诊断形状的假设。
 
 ## 做了什么
 

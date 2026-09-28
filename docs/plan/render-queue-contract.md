@@ -279,7 +279,7 @@ claim = null
 
 ### A.12 收回原因与丢认领的诊断（2026-09-28，`claude/stall-phases`）〔裁〕
 
-M8 的 C1（放云端）里两台独立渲染主机各丢了 6、7 次认领，节点那边只收到 `lease-lost { reason: 'expired' }`，分不出是租约到期、停滞还是断线；主机的逐任务事件也不进日志。试过只看现有日志与诊断接口：队列对三种回收发的是同一个 reason，任务视图不带 `lastError`，`describe()` 只在托管端进程里、事后拿不到。只能改消息形状，改动如下（三级机制，报告 `docs/reports/AGENT-stall-phases.md`）：
+M8 的 C1（放云端）里两台独立渲染主机各丢了 6、7 次认领，节点那边只收到 `lease-lost { reason: 'expired' }`，分不出是租约到期、停滞还是断线；主机的逐任务事件也不进日志。试过只看现有日志与诊断接口：队列对三种回收发的是同一个 reason，任务视图不带 `lastError`，`describe()` 只在托管端进程里、事后拿不到。只能改消息形状，改动如下（三级机制，报告 `docs/archive/agent-reports/AGENT-stall-phases.md`）：
 
 1. **回收的 `lease-lost` 带真实原因**：A.8 的回收给原认领者发 `task.lease-lost { id, token, reason }`，`reason` 就是这次放弃记的 `lastError`：`lease-expired`（第 1 项）、`stalled`（第 2 项）、`disconnected`（第 3 项；这时连接多半已不在，照 A.7.6 不发）。原来一律是 `expired`。节点侧只把 `reason` 原样交给 `onLost`，不按它分支，旧节点照常工作。A.7.6 那一条按此读。
 2. **任务视图带 `lastError`**：`TaskView` 在任务放弃过（`lastError` 非空）时多带 `lastError: string`，没放弃过的不带这一项。放回 `open` 的 `task.opened`、`queue.snapshot`、认领回包里的 `task` 都一样。旧节点不认这一项，照常工作。
@@ -373,7 +373,7 @@ export function pickCandidate(tasks, { k = 4, random = Math.random, lastProjectI
 
 1. 空数组回 `null`；
 2. 取 `rankCandidates` 里与第一名同档、**同整数 priority** 的那些，再取其前 `k` 个；
-   〔裁〕2026-09-28（主会话）：原文是「取 `rankCandidates` 的前 `k` 个」。为什么改：前 `k` 个里锚帧段（50）和普通段（10）混在一起随机挑，锚帧优先几乎不起作用——笔记本跑 M7-A4 时页面认领顺序是 h3:0-59、h1:0-59、h2:120-179、h2:240-299、h2:180-239、h1:120-179、最后才 h2:0-59，最差 85.3 s（`docs/reports/AGENT-lowmem-latency.md`「段的顺序基本随机」是同一件事）。改成：先取最高那一个整数名次，只在它的前 `k` 个里随机（同名次内保留随机，多节点照旧错开）；这一名次认领完才轮到下一名次。代码向语义「锚帧优先」靠，语义不改。
+   〔裁〕2026-09-28（主会话）：原文是「取 `rankCandidates` 的前 `k` 个」。为什么改：前 `k` 个里锚帧段（50）和普通段（10）混在一起随机挑，锚帧优先几乎不起作用——笔记本跑 M7-A4 时页面认领顺序是 h3:0-59、h1:0-59、h2:120-179、h2:240-299、h2:180-239、h1:120-179、最后才 h2:0-59，最差 85.3 s（`docs/archive/agent-reports/AGENT-lowmem-latency.md`「段的顺序基本随机」是同一件事）。改成：先取最高那一个整数名次，只在它的前 `k` 个里随机（同名次内保留随机，多节点照旧错开）；这一名次认领完才轮到下一名次。代码向语义「锚帧优先」靠，语义不改。
 3. 若给了 `lastProjectId`，且前 `k` 个里有和第一名**同优先级**、但 `source.projectId !== lastProjectId` 的，候选只留这些（同优先级里按项目轮转）；
 4. 在候选里取 `candidates[Math.floor(random() * candidates.length)]`（`random()` 返回 `[0, 1)`）。
 

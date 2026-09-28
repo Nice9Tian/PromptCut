@@ -86,4 +86,4 @@ G0-R（动了预渲染进程里的 `vite-plugin-frames.ts` 与 `asset-client.ts`
 ## 5. 没做的、建议
 
 - 胶水里 `createRenderHost` 的拼装是照 `startHostNode` 抄的一份，RHC 测的是 `render-node/host.mjs` 的编排，不覆盖 `vite-plugin-frames.ts` 里那份接线本身（由探针覆盖）。若想让单测直接覆盖，可以把 `startHostNode` 里「每项建端点、start + 计时器 tick、release 顺序」抽成 `host.mjs` 的一个函数；本任务范围外，没动。
-- `docs/reports/AGENT-m6-host.md` 第 7 节「多台素材服务的回退票据」这条遗留已修，那份报告没改（不在我的文件清单）。
+- `docs/archive/agent-reports/AGENT-m6-host.md` 第 7 节「多台素材服务的回退票据」这条遗留已修，那份报告没改（不在我的文件清单）。

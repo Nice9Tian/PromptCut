@@ -676,7 +676,7 @@
 **三、其它**
 
 1. 【已解决】`m8-plan.md` 已进 main；本文引用它的小节号（第 2.4、2.7、2.8、3.1、4 节「预检结果」、5、6.1、8.3 节与末「主会话裁定」）在 main `0cabcfb0` 上逐个核过，标题都在。
-2. 【已解决】L12（Tailwind 非代码后缀的守门测试）不在 hygiene 六项里，后来另开 `claude/tailwind-guard` 做了，main `0d114df` 合入（按 `git log` 核；`docs/reports/AGENT-tailwind-guard.md`）。`m8-plan.md` 第 5 节 L12 行仍写「疑在 `claude/hygiene`」，没回改。
+2. 【已解决】L12（Tailwind 非代码后缀的守门测试）不在 hygiene 六项里，后来另开 `claude/tailwind-guard` 做了，main `0d114df` 合入（按 `git log` 核；`docs/archive/agent-reports/AGENT-tailwind-guard.md`）。`m8-plan.md` 第 5 节 L12 行仍写「疑在 `claude/hygiene`」，没回改。
 3. 【已解决】`REPORT-C6.6.md` 第 11 节已回改：位置写成 `src/store/docsync.ts`，注明原写 `src/editor/sync/` 有误。
 4. 主计划第 6.5、7 节多处写「云端」。2026-09-28 第四次修订一度把云端工作节点归档，同日第二次补充又恢复在线（主计划文件头；`m8-plan.md`「依据」）；C10 外网四轮实际由云端当独立渲染主机（`REPORT-C10.md` 第 0、7 节），M7 的 W7 由笔记本当成员 B、云端当不了纯浏览器节点（`REPORT-M7.md` 第 7 节）。本文第 3.2 节第 7、12 条与骨架时的「云端已归档」说法已按两份报告改；主计划正文没回改（没解决，留给主会话）。
 

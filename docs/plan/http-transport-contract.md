@@ -328,7 +328,7 @@
 
 ## 17. 实现记录（HT-a，2026-09-27 集成 `claude/ht-integ`）
 
-HT-a 由三条分支实现：服务端 `claude/http-transport`（报告 `docs/reports/AGENT-http-transport-ht-a.md`）、客户端 `claude/ht-client`（`docs/reports/AGENT-ht-client.md`）、测试方 `claude/ht-tests`（`docs/reports/AGENT-ht-tests.md`），在 `claude/ht-integ` 集成（`docs/reports/AGENT-ht-integ.md`）。本节记实现与本契约正文的出入、契约外的补充，以及主会话的裁定。正文已随之改的地方（第 3.3、3.4、4.1、4.2、4.3、4.4 节）在这里只列一行。
+HT-a 由三条分支实现：服务端 `claude/http-transport`（报告 `docs/archive/agent-reports/AGENT-http-transport-ht-a.md`）、客户端 `claude/ht-client`（`docs/archive/agent-reports/AGENT-ht-client.md`）、测试方 `claude/ht-tests`（`docs/archive/agent-reports/AGENT-ht-tests.md`），在 `claude/ht-integ` 集成（`docs/archive/agent-reports/AGENT-ht-integ.md`）。本节记实现与本契约正文的出入、契约外的补充，以及主会话的裁定。正文已随之改的地方（第 3.3、3.4、4.1、4.2、4.3、4.4 节）在这里只列一行。
 
 ### 17.1 主会话的裁定（2026-09-27）〔裁〕
 
@@ -374,11 +374,11 @@ HT-a 由三条分支实现：服务端 `claude/http-transport`（报告 `docs/re
 
 ### 17.5 验收记录
 
-见 `docs/reports/AGENT-ht-integ.md` 第 3 节。HT7（阿里云外网三项拒绝）、跨机 W-HT-a、部署由主会话做。
+见 `docs/archive/agent-reports/AGENT-ht-integ.md` 第 3 节。HT7（阿里云外网三项拒绝）、跨机 W-HT-a、部署由主会话做。
 
 ### 17.6 旧客户端接会话层（M8 计划 D9，2026-09-28，`claude/m8-session-legacy`）
 
-第 17.1 节第 3 条列的调用方，按语义「每一方都按会话连」（`docs/semantics/product/document-service.md`、`mechanism/document-service.md`「会话与传输」）处理。报告 `docs/reports/AGENT-m8-session-legacy.md`。
+第 17.1 节第 3 条列的调用方，按语义「每一方都按会话连」（`docs/semantics/product/document-service.md`、`mechanism/document-service.md`「会话与传输」）处理。报告 `docs/archive/agent-reports/AGENT-m8-session-legacy.md`。
 
 1. **已接（产品代码）**：
    - `server/card-sync.mjs`：缺省端点改为 `createDocEndpoint`。传输断开只让会话脱开，接续时（`onResume`）不重订阅 `content.watch`、不重对账，脱开期间的 `content.put` 回包与别人的 `content.changed` 由会话层按序补齐、去重；会话结束（`onClose`）才算断线，建新会话（`onOpen`）时照旧重订阅、对账。建新会话才调 `protocols()`（共享项目向页面要一张票据），接续不调。`status()` 多 `resumes` 与 `link { transport, detached, detaches, resumes, legacy }`（`GET /api/cards/sync/status` 看得到）；端点日志以 `doc.session.*` 转进 `[cards]` 日志。
