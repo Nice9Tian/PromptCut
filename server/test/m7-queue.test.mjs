@@ -631,10 +631,11 @@ function inproc() {
   return { q, log, now: () => t, advance(ms) { t += ms; q.tick(); }, endpointOf, of: (connId, type) => log.filter((e) => e.connId === connId && e.m.type === type).map((e) => e.m) };
 }
 
-function pcSplitter(env, { cardPlan, afterSplit } = {}) {
+function pcSplitter(env, { cardPlan, afterSplit, cardLocks } = {}) {
   const endpoint = env.endpointOf('pc', { userId: 'rig@pc', tenantId: 't1' });
   const executor = {
-    plan: async () => ({ entryKey: 'entry-1', cardPlan, weightOf, anchorFrames: [] }),
+    // cardLocks:执行器(本机锁库)已知的锁,切分照它出键(契约 F.2)
+    plan: async () => ({ entryKey: 'entry-1', cardPlan, weightOf, anchorFrames: [], ...(cardLocks ? { cardLocks } : {}) }),
     render: async () => null,
     ...(afterSplit ? { afterSplit } : {}),
   };
@@ -751,4 +752,149 @@ test('M7Q-D12-E1 执行器 afterSplit：记切分候选；带片段清单的 pla
   await exec.afterSplit(planTaskOf({ projectId: 'proj-m7', projectRev: 4 }), { tasks });
   assert.equal(recorded.length, 2);
   assert.deepEqual(written, ['entry-1']);
+});
+
+/* ================================================================== M7-A10 真页面上查出的缺陷:切分方已知锁、照锁出键时从不接手 */
+
+test('M7Q-A10c 队列：切分节点照别的指纹的锁发布（合并进锁定方的任务）时，回包也带 lockIdleMs / lockedByProfile / lockUndone，不带 lockedBy', () => {
+  const h = setup();
+  const br0 = snap('ck1', B, 0), br1 = snap('ck1', B, 60);
+  h.publish('p', [br0, br1]);
+  h.claim('bw', br0.id, 1);
+  h.clock.advance(40_000);
+  // pc（指纹 P）以自己的发布身份照锁发 B 那份
+  h.handle('pc', { type: 'publisher.hello', publisherId: 'pub-pc' });
+  const r = published(h.publish('pc', [br0, br1]), 'pc');
+  for (const x of r) {
+    assert.equal(x.error, undefined, JSON.stringify(x));
+    assert.equal('lockedBy' in x, false, '锁就在这份的指纹上，不带 lockedBy');
+    assert.deepEqual([x.lockIdleMs, x.lockedByProfile, x.lockUndone], [40_000, 'browser', 2], JSON.stringify(x));
+  }
+  // 发布方不是节点、或节点指纹与锁相同：形状不变
+  const plain = published(h.publish('p', [br0]), 'p')[0];
+  assert.equal('lockIdleMs' in plain, false, JSON.stringify(plain));
+});
+
+test('M7Q-A10d 切分方从执行器已知锁在浏览器指纹上、照锁出键：回包说锁定方闲置超 30 s 且没做完 → 按自己的指纹带 takeover 重发；闲置不到 30 s 不重发', async () => {
+  const a = control({ clipId: 'a', contentKey: 'ck-a', count: 30 });
+  const scene = async (info) => {
+    const respond = (tasks) => tasks.map((t) => (t.requires.envFingerprint === B
+      ? { id: t.id, state: 'open', version: 1, created: false, ...info }
+      : { id: t.id, state: 'open', version: 1, created: true }));
+    const endpoint = scriptedEndpoint(respond);
+    const executor = { plan: async () => ({ entryKey: 'entry-1', cardPlan: [a], weightOf, anchorFrames: [], cardLocks: { 'snapshot:ck-a': B } }), render: async () => null };
+    const local = createLocalNode({
+      nodeId: 'pc-1', node: { profile: 'pc', envFingerprint: P, codeVersions: [CV] }, endpoint, now: () => T0, codeVersion: CV,
+      executor, sink: { has: async () => false, put: async () => ({ complete: true }) }, takeoverLocked: localNodeModule.idleLockTakeover,
+    });
+    local.start();
+    endpoint.deliver({ type: 'task.claimed', id: listPlan.id, token: 2, version: 2, leaseUntil: T0 + 30_000, task: planView, browserFingerprints: [B] });
+    await flush();
+    const rounds = endpoint.sent.filter((m) => m.type === 'task.publish').map((m) => m.tasks);
+    const done = endpoint.sent.find((m) => m.type === 'task.complete' && m.id === listPlan.id);
+    return { rounds, done };
+  };
+  const idle = await scene({ lockIdleMs: 45_000, lockedByProfile: 'browser', lockUndone: 1 });
+  assert.equal(idle.rounds.length, 2, JSON.stringify(idle.rounds.map((r) => r.map((t) => t.requires.envFingerprint))));
+  assert.deepEqual(idle.rounds[0].map((t) => t.requires.envFingerprint), [B], '第一轮照锁出键');
+  assert.deepEqual(idle.rounds[1].map((t) => [t.requires.envFingerprint, t.takeover === true]), [[P, true]], '第二轮接手');
+  assert.deepEqual(idle.done.result.derived, [idle.rounds[1][0].id], 'derived 只列接手后那份');
+  const busy = await scene({ lockIdleMs: 10_000, lockedByProfile: 'browser', lockUndone: 1 });
+  assert.equal(busy.rounds.length, 1, '还在产出：不重发');
+  const done = await scene({ lockIdleMs: 45_000, lockedByProfile: 'browser', lockUndone: 0 });
+  assert.equal(done.rounds.length, 1, '锁定方已做完：照锁投递');
+});
+
+test('M7Q-A10e 进程内（真页面上的场景）：b1 持有一段时走掉，锁闲置超 30 s；同指纹的另一用户 b2 在线并发布计划，切分方从本机锁库已知锁在 B 上 —— 仍由 pc 接手整张卡', async () => {
+  const env = inproc();
+  const a = control({ clipId: 'a', contentKey: 'ck-a', count: 120 });
+  const pc = pcSplitter(env, { cardPlan: [a] });
+  const { page, br } = pageAndBrowser(env);
+  const plan1 = clipsPlanTaskOf({ projectId: 'p1', projectRev: 1, clips: ['a'], codeVersion: CV });
+  page.send({ type: 'task.publish', tasks: [plan1] });
+  pc.tick();
+  await flush();
+  const brTasks = env.q.describe().tasks.filter((t) => t.id.startsWith(`snapshot:${rk('ck-a', B)}`));
+  br.send({ type: 'task.claim', id: brTasks[0].id, expectVersion: 1 });
+  const token = env.of('br', 'task.claimed').find((m) => m.id === brTasks[0].id).token;
+  br.send({ type: 'task.progress', id: brTasks[0].id, token, done: 3 });
+  env.q.disconnect('br');
+  pc.stop();
+  env.q.disconnect('pc');
+  env.advance(11_000); env.advance(5_000); env.advance(20_000);
+  assert.equal(env.q.describe().tasks.find((x) => x.id === brTasks[0].id).state, 'open');
+
+  // pc 重启：本机锁库已知这张卡锁在 B 上（照锁出键）
+  const pc2 = pcSplitter(env, { cardPlan: [a], cardLocks: { 'snapshot:ck-a': B } });
+  // 另一个用户的页面 b2，同指纹 B，在线、watch 本项目，发布计划
+  const page2 = env.endpointOf('page2', { userId: 'yan@devB', tenantId: 't1' });
+  page2.send({ type: 'publisher.hello', publisherId: 'pub-page2' });
+  const b2 = env.endpointOf('b2', { userId: 'yan@devB', tenantId: 't1' });
+  b2.send({ type: 'node.hello', nodeId: 'n-b2', profile: 'browser', envFingerprint: B });
+  b2.send({ type: 'queue.watch', projects: ['p1'] });
+  const plan2 = clipsPlanTaskOf({ projectId: 'p1', projectRev: 2, clips: ['a'], codeVersion: CV });
+  page2.send({ type: 'task.publish', tasks: [plan2] });
+  pc2.tick();
+  await flush();
+  assert.ok(env.of('pc', 'task.claimed').some((m) => m.id === plan2.id), 'pc 认领了第二版计划');
+  const d = env.q.describe();
+  assert.equal(d.locks.find((l) => l.lockKey === 'snapshot:ck-a').envFingerprint, P, `锁应转给 pc：${JSON.stringify(d.locks)}`);
+  for (const t of brTasks) assert.equal(d.tasks.find((x) => x.id === t.id).lastError, 'superseded', `${t.id} 作废`);
+  const pcIds = d.tasks.filter((t) => t.id.startsWith(`snapshot:${rk('ck-a', P)}`) && t.state === 'open');
+  assert.equal(pcIds.length, 2, 'pc 那份两段重建、open');
+  pc2.stop();
+  await pc2.settled();
+});
+
+test('M7Q-D1-Q5 切分方那份先按单份建过、后一版按双份发来：合并时补上 dual；浏览器那份先认领，它照样被作废', () => {
+  const h = setup();
+  const own0 = snap('ck1', P, 0);                     // 页面报到之前那一版：单份
+  h.publish('p', [own0]);
+  const r = published(h.publish('p', [snap('ck1', P, 0, { dual: true }), snap('ck1', B, 0, { dual: true })]), 'p');
+  assert.deepEqual(r.map((x) => [x.created, x.error]), [[false, undefined], [true, undefined]]);
+  assert.equal(h.bus.of('pc', 'task.opened').filter((m) => m.task.id === own0.id).at(-1)?.task.input.dual, true, '补上 dual 后重发 task.opened');
+  h.claim('bw', snap('ck1', B, 0).id, 1);
+  assert.deepEqual([h.task(own0.id).state, h.task(own0.id).lastError], ['failed', 'superseded']);
+});
+
+test('M7Q-D1-Q6 锁已在别的指纹上时合并进来的 dual 一份：当场作废（回包状态 failed），不留死任务', () => {
+  const h = setup();
+  const own0 = snap('ck1', P, 0);
+  const br0 = snap('ck1', B, 0, { dual: true });
+  h.publish('p', [own0, br0]);
+  h.claim('bw', br0.id, 1);                          // 锁到 B；own0 不带 dual，没被作废
+  assert.equal(h.task(own0.id).state, 'open');
+  const r = published(h.publish('p', [snap('ck1', P, 0, { dual: true })]), 'p')[0];
+  assert.deepEqual([r.state, r.lockedBy], ['failed', B], JSON.stringify(r));
+  assert.equal(h.task(own0.id).lastError, 'superseded');
+});
+
+test('M7Q-A10f 切分方自己那份已存在、合并回包带 lockedBy 与闲置描述：闲置超 30 s 且没做完 → 带 takeover 重发', async () => {
+  const a = control({ clipId: 'a', contentKey: 'ck-a', count: 30 });
+  let round = 0;
+  const respond = (tasks) => { round += 1; return tasks.map((t) => (round === 1
+    ? { id: t.id, state: 'open', version: 1, created: false, lockedBy: B, lockIdleMs: 50_000, lockedByProfile: 'browser', lockUndone: 1 }
+    : { id: t.id, state: 'open', version: 1, created: true })); };
+  const rig = splitterRig({ respond, cardPlan: [a], takeoverLocked: localNodeModule.idleLockTakeover });
+  rig.endpoint.deliver({ type: 'task.claimed', id: listPlan.id, token: 2, version: 2, leaseUntil: T0 + 30_000, task: planView });
+  await flush();
+  const rounds = rig.publishes();
+  assert.equal(rounds.length, 2);
+  assert.deepEqual(rounds[1].map((t) => [t.requires.envFingerprint, t.takeover === true]), [[P, true]]);
+});
+
+test('M7Q-D12-P1 管线的切分候选落盘：重启（新的 FramePipeline、同一库根）后照样按它列候选', async () => {
+  const os = await import('node:os');
+  const { FramePipeline } = await import('../frame-pipeline.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm7q-split-cand-'));
+  try {
+    const p1 = Object.create(FramePipeline.prototype);
+    p1.root = root;
+    assert.equal(p1.splitCandidatesFor('ck-a'), null);
+    p1.recordSplitCandidates(new Map([['ck-a', [P, B]]]));
+    assert.deepEqual(p1.splitCandidatesFor('ck-a'), [P, B]);
+    const p2 = Object.create(FramePipeline.prototype);
+    p2.root = root;
+    assert.deepEqual(p2.splitCandidatesFor('ck-a'), [P, B], '重启后读得回来');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

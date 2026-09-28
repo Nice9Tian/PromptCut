@@ -28,6 +28,8 @@ export interface Candidate {
   mode: SharedMode;
   hostDeviceName?: string;
   via?: "discover" | "manual";
+  /** 局域网发现通告里主机素材服务的地址(`route.mjs` 带过来;放本机项目的素材服务后备,`assetTiers.lanAssetBaseOf`) */
+  asset?: string;
   /**
    * WebSocket 地址（C10a）：凭源走 `/hosted/` 的候选（在线页面、粘贴的邀请链接）带上它，保留末尾斜杠
    * （`src/online/invite.ts` 的 `hostedWsUrlOf`）；没有就按 `route.wsBaseOf(base)`。

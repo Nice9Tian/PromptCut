@@ -22,7 +22,7 @@
 |---|---|---|---|
 | C10 其余合入 main 并部署阿里云 | 未合入（`claude/c10-integ` `24c2c57`） | 待填 | 待填 |
 | M7 合入 main 并部署 | 未合入（`claude/rq-m7-node`、`claude/rq-m7-queue`、`claude/rq-m7-tests`、`claude/m7-probe` 在做） | 待填 | 待填 |
-| 1080p 分段编码在笔记本过线（L20） | `claude/perf-encode` `7cbf70a` 待笔记本复核 | 待填 | 待填 |
+| 1080p 分段编码在笔记本过线（L20） | `claude/perf-encode` `7cbf70a`，合入 main `211695d` | 过：笔记本 ENC-1 修复版 p50 中位数 290 ms（main 403）、ENC-2 合入后 283 ms，五轮 fails []、字节不变 | 笔记本回执（主会话记录，2026-09-28） |
 | 进跨机前必须合入的遗留：L10、L16（`claude/eol-eperm`）、L17（已合 `96e69cb`）、L1（已合 `ceab9e4`）、L4、L5（`claude/card-overlay`） | 见左 | 待填 | 待填 |
 | L14 `server/card-sync.mjs` 接会话层（裁定 D9） | `claude/m8-session-legacy` 在做 | 待填 | 待填 |
 | 探针分支 `claude/m8-kit`、`claude/m8-e2e`、`claude/m8-scale`、`claude/m8-migrate` | `m8-kit`、`m8-migrate` 已开；`m8-e2e`、`m8-scale` 未见分支 | 待填 | 待填 |
@@ -113,15 +113,15 @@
 | 编号 | 项 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|---|
 | M8-X1 | 放本机版 T9（`REPORT-C6.6.md` 第 10 节） | PC：`node scripts/probes/c66-t9-probe.mjs --role creator --place lan`；笔记本：`--role observer`（`--place lan` **要改**；顺带 L3 确定判重的探针卡） | 待填 | 待填 | C6.6 T9：观察端先小后大、卡片源码自动装上；「改卡后 5 s 内重测」同轮记（第 8 节） |
-| M8-X2 | HT9（`REPORT-HT-a.md` 第 1.7、4 节） | C10 部署后，PC 开在线页面发布；笔记本 `c10-browser-probe.mjs --site … --role host`（在 `claude/c10-site`） | 待填 | 待填 | 带片段清单的 plan 由独立渲染主机认领并完成；同时算 C10-A5 外网复验；记实际传输与降级原因 |
-| M8-X3 | C10 外网复验（`HANDOFF-2026-09-28.md` 第 5 节） | 笔记本 Chrome：`c10-browser-probe.mjs --site https://8-219-80-16.sslip.io` | 待填 | 待填 | `c10-contract.md` 第 20 节 C10-A1～A10；性能相关的在笔记本判 |
+| M8-X2 | HT9（`REPORT-HT-a.md` 第 1.7、4 节） | C10 部署后，PC 开在线页面发布；笔记本 `c10-browser-probe.mjs --site … --role host`（在 `claude/c10-site`） | 通过（2026-09-28，主会话记录）：主机实际由云端当（Linux、无头 Chromium 141、出站只经代理），run `c10s0928e`：creator ok、`fails: []`；云端主机认领 3、完成 1、失败 0、ws、connectFailed 0；新层指纹 `0326290ea8e62e3d`、就绪 42、播放中 `main-v2`；页面 5 个任务都恰好一次 `task.done`；主机结果 ok、released 1。C10-A5 外网一并通过 | `REPORT-C10.md` 第 7 节；`REPORT-HT-a.md` 第 1.7 节；run `c10s0928b`～`e` 是这四轮的轮号（`b` 中止未跑，`c`、`d` 见 C5-1 行） | 带片段清单的 plan 由独立渲染主机认领并完成；同时算 C10-A5 外网复验；记实际传输与降级原因 |
+| M8-X3 | C10 外网复验（`HANDOFF-2026-09-28.md` 第 5 节） | 笔记本 Chrome：`c10-browser-probe.mjs --site https://8-219-80-16.sslip.io` | A5 部分完成（随 M8-X2，run `c10s0928e`；主会话记录）；其余 C10-A1～A10 的外网一遍待填。带耗时门槛的项已在笔记本本机判过（C10-T1） | `REPORT-C10.md` 第 5、7 节 | `c10-contract.md` 第 20 节 C10-A1～A10；性能相关的在笔记本判 |
 | M8-X4 | 放本机的项目从浏览器进入（`c10-contract.md` 第 13 节） | 待定（实现归属未定，裁定 D6） | 待填 | 待填 | 手填主机地址或桌面版给的局域网链接能进；E5 放本机那一遍的前提 |
 
 另：「只能出网的节点」一侧（裁定 D5）——笔记本仿一个经 CONNECT 代理出网的节点当替身跑一遍：
 
 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|
-| 笔记本入站全挡、出站只经本机 HTTP CONNECT 代理，主机设 `NODE_USE_ENV_PROXY=1`（代理与做法待写） | 待填 | 待填 | 经代理出网时会话接续与认领正常；真云端代理的怪癖仍待跨机复核 |
+| 笔记本入站全挡、出站只经本机 HTTP CONNECT 代理，主机设 `NODE_USE_ENV_PROXY=1`（代理与做法待写） | 通过（主会话记录）：本机 CONNECT 代理替身 `m8-outbound-probe` 四轮通过（main `8f92683`）；原记「待跨机复核」改为「云端已复核（run `c10s0928c` / `d` / `e`）」——云端容器本身只能经代理出网，这几轮它经代理认领并完成。查到的真云端代理怪癖：出站有多个出口地址，按出口地址掐线可能掐不中（见 C5-1 行） | `docs/reports/AGENT-m8-connect-proxy.md`；`REPORT-C10.md` 第 7 节 | 经代理出网时会话接续与认领正常；真云端代理的怪癖仍待跨机复核 |
 
 ## 6. 换机迁移演练（同一台阿里云上的第二份实例 8777 / 8778）
 
@@ -185,7 +185,7 @@
 
 | 遍 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| C5-1 放云端，服务器侧切 | 笔记本 `node scripts/probes/ht-w-probe.mjs --role host --cut external --hosted http://8.219.80.16:8787`；PC `--role creator`；PC 主会话在阿里云上 `ss -K` 切笔记本那一条（跑法模板 `docs/archive/agent-reports/AGENT-ht-w-probe.md` 第 5 节） | 待填 | 探针 14 条检查；服务端 `session.detach` / `session.resume` 与 gap；`ss -K` 命令与时刻；主机诊断 `session`（`96e69cb` 起有） | `resumes` 加一、`opens` 不变；持有的任务不被放回、不被别人认领、没有 `lease-lost`；消息不丢不重（序号连续） |
+| C5-1 放云端，服务器侧切 | 笔记本 `node scripts/probes/ht-w-probe.mjs --role host --cut external --hosted http://8.219.80.16:8787`；PC `--role creator`；PC 主会话在阿里云上 `ss -K` 切笔记本那一条（跑法模板 `docs/archive/agent-reports/AGENT-ht-w-probe.md` 第 5 节） | 通过（2026-09-28，主会话记录）：实际由云端当主机（`c10-browser-probe --role host`，不是笔记本 `ht-w-probe`），PC 当 creator。run `c10s0928c` 按主机报到时的出口 160.79.106.23 在服务器侧 `ss -K` 没掐中主机的 WebSocket（主机会话 opens 1、resumes 0）：云端出站代理有多个出口地址（后来在 443 上看到 160.79.106.129 / .133 / .134 / .137 / .141）；`d`、`e` 改掐阿里云上 nginx 到文档服务的上游连接（`ss -K dport 8787`）。`e`：01:26:02Z 持有 `snapshot:3e9b9605…:180-239`，01:26:06Z 在阿里云上掐 nginx 到文档服务的上游连接（`ss -K dport 8787`）5 条、1 秒内重连 4 条；主机 `resumes` 0→1、`opens` 1→1、6494 ms 接续原会话；托管端 `sessions.resumed` 3→8（掐线后 20 s）、legacy 0；持有的那段 taken 1 / reopened 0 / closed [done] / taskDone 1；旁观节点被一起掐断后接续（newSessions 0、resumes 1）、漏看 0；页面 5 个任务恰好一次 `task.done` | 探针 14 条检查；服务端 `session.detach` / `session.resume` 与 gap；`ss -K` 命令与时刻；主机诊断 `session`（`96e69cb` 起有） | `resumes` 加一、`opens` 不变；持有的任务不被放回、不被别人认领、没有 `lease-lost`；消息不丢不重（序号连续） |
 | C5-2 放本机，代理侧切 | `ht-w-probe.mjs --cut proxy --proxy-target <PC 局域网地址>:<端口> --place lan`（`--place lan` **要改**） | 待填 | 同上，`sessions.resumed` 读 PC 局域网主机的 `/healthz` | 同上 |
 
 - 已有的跨机证据（PC 当主机、代理侧切，PC-4，`REPORT-HT-a.md` 第 1.6 节）不重复算；M8 做的是角色对调后的两遍。

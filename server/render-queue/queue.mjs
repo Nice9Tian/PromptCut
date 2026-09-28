@@ -26,7 +26,8 @@
  *   （见 browserFingerprintsFor），切分方据此给浏览器可做的卡另出一份；认领建锁（以及 card.lock 建锁、同指纹认领）时，
  *   同锁键、异指纹、`input.dual` 为真的未完成任务作废（superseded，见 supersedeDual）。作废的任务记录不挡重新发布（当作不存在）。
  * - D2 锁闲置接手：card-locked 的发布回包与认领回包带 `lockIdleMs`（此刻减锁定方最后一次产出）、`lockedByProfile`，
- *   发布回包另带 `lockUndone`（锁定方这张卡还没做完的任务数）；续约也刷新锁。「产出」只算认领、续约、完成、card.lock，
+ *   发布回包另带 `lockUndone`（锁定方这张卡还没做完的任务数）；指纹不同的节点照锁发布（合并或新建都不被拒）时，
+ *   回包同样带这三项（不带 lockedBy），切分方才判得了要不要接手（M7-A10）；续约也刷新锁。「产出」只算认领、续约、完成、card.lock，
  *   不算发布（`producedAt`；`touchedAt` 照 F.1 仍管回收）。
  * - D9 nodeId 绑到 userId：节点记录在时，别的 userId 拿同一个 nodeId 报到回 forbidden。
  * - D10 `node.welcome` 回这个节点的 `envFingerprint`（浏览器的指纹由文档服务模块按页面报的原始值算好再交进来）。
@@ -477,7 +478,8 @@ export function createRenderQueue(options = {}) {
    * 这种情况只剩已有同 id 任务的合并，新建的在 lockRefusal 那一步就拒了。
    * 没锁又不接手时不建锁：谁先真正产出由第一次认领决定，只是发布了还不算。
    */
-  function lockOnPublish(task, takeover, after, profile) {
+  function lockOnPublish(task, takeover, after, node) {
+    const profile = node?.profile ?? null;
     const id = lockIdOf(task);
     if (!id) return null;
     const lock = locks.get(id.key);
@@ -490,6 +492,14 @@ export function createRenderQueue(options = {}) {
     if (lock.envFingerprint === id.fp) {
       // 发布只刷新 touchedAt（F.1），不算产出（M7 D2 的 lockIdleMs 不因此归零）
       lock.touchedAt = at;
+      // M7-A10（验收探针查出）：切分节点照别的环境的锁出键（它从本机锁库已知这张卡锁在别处）时，发布不会被拒，
+      // 它也就收不到锁的闲置情况、永远不接手。所以发布方是指纹不同的节点时，回包同样带锁的描述（不带 lockedBy：
+      // 锁就在这份的指纹上），切分方照 D2 判要不要接手
+      const nodeFp = fingerprintOf(node?.envFingerprint);
+      if (nodeFp !== null && nodeFp !== lock.envFingerprint) {
+        const { lockIdleMs, lockedByProfile, lockUndone } = lockInfo(id.key, lock, { undone: true });
+        return { lockIdleMs, lockedByProfile, lockUndone };
+      }
       return null;
     }
     if (takeover) {
@@ -709,8 +719,14 @@ export function createRenderQueue(options = {}) {
         result = mergeExisting(conn, task, input, after);
       }
       // 原有处理之后再看锁（F.1）；锁身份取表里的任务，和认领第 3a 步查的是同一份
-      const locked = lockOnPublish(task, input.takeover, after, nodeOf(conn)?.profile ?? null);
+      const locked = lockOnPublish(task, input.takeover, after, nodeOf(conn));
       if (locked !== null) Object.assign(result, locked);
+      // M7 D1：合并进来的这一份是 dual、这张卡已经锁在别的指纹上：另一份早就得卡了，这一份谁也认领不到，照建锁时一样作废
+      if (locked?.lockedBy && !result.error && isActive(task.state) && task.input?.dual === true) {
+        const notify = supersedeDual(lockIdOf(task).key, locked.lockedBy);
+        if (notify) after.push(notify);
+        Object.assign(result, { state: task.state, version: task.version });
+      }
       results.push(result);
     }
     emit(conn, 'task.published', { results }, reqId);
@@ -731,6 +747,18 @@ export function createRenderQueue(options = {}) {
         if (task.state === 'open') {
           const view = viewOf(task);
           after.push(() => broadcast(task, 'task.opened', { task: view }));
+        }
+      }
+      /*
+       * M7 D1（验收探针查出）：切分方这一份早先按单份建过（页面报到之前的那一版），这一版又按双份发来 ——
+       * 它现在有了另一份，补上 `dual`，建锁时才会被作废，不留成谁都认领不了的死任务。换新对象，不原地改。
+       */
+      if (input.input?.dual === true && task.input?.dual !== true) {
+        task.input = { ...task.input, dual: true };
+        // 同优先级升级：还 open 的重发一条 task.opened，看得见它的节点（与旁观者）视图里的 input 跟着换
+        if (task.state === 'open') {
+          const view = viewOf(task);
+          after.push(() => { if (task.state === 'open') broadcast(task, 'task.opened', { task: view }); });
         }
       }
     } else if (task.state === 'done') {

@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { openBakery, bakeFrames, findFfmpeg } from './bakery/index.mjs';
 // 直接按文件名引,不走 index:既有测试用 mock.module 替换整个 index,替身里没有这个出口
@@ -1731,11 +1732,29 @@ export class FramePipeline {
   /**
    * M7 契约 D12:队列切分完成后记下每张共享档卡实际出键的指纹(`artifact-transfer.mjs` 的 `splitCandidatesOf`,
    * 内容键 → 指纹表,切分方自己的在前),之后写层表(本机推送队列写的、独立渲染主机写的)都按它列候选。
-   * 后记的覆盖先记的;只在内存里,最多留 SPLIT_CANDIDATES_MAX 张卡(按记下的先后淘汰)。
+   * 后记的覆盖先记的;最多留 SPLIT_CANDIDATES_MAX 张卡(按记下的先后淘汰)。
+   * 落盘在库根的 `split-candidates.json`(整份重写),进程重启后照样按它列候选 —— 不然重启后的第一次写层表
+   * (preload、补渲登记)只剩自己一个候选,页面找不到自己产的那一层(M7 验收探针查出)。读写失败只当没有记录。
    */
+  splitCandidatesPath() {
+    return typeof this.root === 'string' && this.root ? path.join(this.root, 'split-candidates.json') : null;
+  }
+  loadSplitCandidates() {
+    if (this._splitCandidates) return this._splitCandidates;
+    this._splitCandidates = new Map();
+    const file = this.splitCandidatesPath();
+    if (!file) return this._splitCandidates;
+    try {
+      const body = JSON.parse(readFileSync(file, 'utf8'));
+      for (const [contentKey, fps] of Array.isArray(body?.entries) ? body.entries : []) {
+        if (typeof contentKey === 'string' && contentKey && Array.isArray(fps) && fps.every(fp => typeof fp === 'string' && fp)) this._splitCandidates.set(contentKey, [...fps]);
+      }
+    } catch { /* 没有或坏了:当没有记录 */ }
+    return this._splitCandidates;
+  }
   recordSplitCandidates(candidates) {
     if (!(candidates instanceof Map)) return 0;
-    this._splitCandidates ??= new Map();
+    this.loadSplitCandidates();
     let n = 0;
     for (const [contentKey, fps] of candidates) {
       if (typeof contentKey !== 'string' || !contentKey || !Array.isArray(fps) || !fps.length) continue;
@@ -1744,11 +1763,18 @@ export class FramePipeline {
       n++;
     }
     while (this._splitCandidates.size > SPLIT_CANDIDATES_MAX) this._splitCandidates.delete(this._splitCandidates.keys().next().value);
+    const file = n > 0 ? this.splitCandidatesPath() : null;
+    if (file) {
+      try {
+        writeFileSync(`${file}.tmp`, JSON.stringify({ v: 1, entries: [...this._splitCandidates.entries()] }));
+        renameSync(`${file}.tmp`, file);
+      } catch { /* 落不了盘:这一进程里照样按内存里的列 */ }
+    }
     return n;
   }
   /** 这张卡(共享档内容键)最近一次切分实际出键的指纹;没记过回 null */
   splitCandidatesFor(contentKey) {
-    const list = typeof contentKey === 'string' ? this._splitCandidates?.get(contentKey) : undefined;
+    const list = typeof contentKey === 'string' ? this.loadSplitCandidates().get(contentKey) : undefined;
     return list ? [...list] : null;
   }
   enqueueStreamPush(spec, segment) {

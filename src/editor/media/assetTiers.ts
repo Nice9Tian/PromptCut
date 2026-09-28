@@ -56,7 +56,7 @@ export function setNoEditorProcess(on: boolean): void {
  * 拉预渲染小尺寸,要在这条连接上 `content.get`(`src/render/snapshotSource.ts` 的在线实现经 `docRequest` 用它)。
  */
 let docLink: LinkLike | null = null;
-let sharedAssetContext: { link: LinkLike; docBase: string; online: boolean } | null = null;
+let sharedAssetContext: { link: LinkLike; docBase: string; online: boolean; fallback: string | null } | null = null;
 let discoveryTimer: ReturnType<typeof setTimeout> | null = null;
 let discoveryGeneration = 0;
 export function docRequest(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
@@ -408,11 +408,42 @@ export function pickAssetEndpoint(endpoints: unknown, docBase: string, selfHost:
 }
 
 /**
- * 进入共享项目后调:从服务地址登记里挑素材服务、设成当前远程素材服务。挑不到(本机就是主机、
- * 或主机没登记素材服务)就留在本地素材服务。回挑中的基址。
+ * 放本机(局域网)项目的素材服务后备地址(M8-X1):素材服务与文档服务在主机的同一个编辑器进程里
+ * (`docs/semantics/product/document-service.md`「部署组合」),主机不一定向服务地址登记素材服务
+ * (`server/vite-plugin-media.ts` 只在设了 `PROMPTCUT_DOCSERVICE_URL` 时登记)。先用局域网发现通告里的
+ * `asset`,没有(手填地址、邀请链接)就按文档服务地址推同一进程的 `/api/asset`——与独立渲染主机的推法相同
+ * (`server/vite-plugin-frames.ts` 的 `hostAssetClient`)。放云端不推:托管组合的素材服务不在 `/api/asset`,
+ * 且它已登记。
+ */
+export function lanAssetBaseOf(candidate: { where?: string; base?: string; asset?: string } | null | undefined): string | null {
+  if (candidate?.where !== "lan") return null;
+  const valid = (u: unknown): string | null => {
+    if (typeof u !== "string" || !u) return null;
+    try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? u.replace(/\/+$/, "") : null; } catch { return null; }
+  };
+  const announced = valid(candidate.asset);
+  if (announced) return announced;
+  try {
+    const u = new URL(String(candidate.base ?? ""));
+    const proto = u.protocol === "wss:" || u.protocol === "https:" ? "https:" : u.protocol === "ws:" || u.protocol === "http:" ? "http:" : null;
+    return proto ? `${proto}//${u.host}/api/asset` : null;
+  } catch { return null; }
+}
+
+/** 登记里挑不到时用后备;后备指向本页面自己(本机就是主机)的不算远程 */
+function withFallback(picked: string | null, fallback: string | null, online: boolean): string | null {
+  if (picked || !fallback) return picked;
+  if (online) return fallback;
+  const selfHost = typeof location === "undefined" ? "" : location.host;
+  try { return new URL(fallback).host === selfHost ? null : fallback; } catch { return null; }
+}
+
+/**
+ * 进入共享项目后调:从服务地址登记里挑素材服务、设成当前远程素材服务。登记里挑不到时用 `fallback`
+ * (放本机项目由 `lanAssetBaseOf` 给);都没有、或指向本页面自己(本机就是主机)就留在本地素材服务。回挑中的基址。
  * `online`:在线浏览器模式(调用方按 `mode.ts` 的 `ONLINE` 给;本模块会被 Node 单测载入,不静态引 `mode.ts`)。
  */
-export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false }: { online?: boolean } = {}): Promise<string | null> {
+export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false, fallback = null }: { online?: boolean; fallback?: string | null } = {}): Promise<string | null> {
   let base: string | null = null;
   // 同一条连接重连后再调(重新订阅登记):已经挑好的素材服务不因一次失败退回本地,挑到同一个也不重设
   const again = docLink === link && remote !== null;
@@ -420,17 +451,18 @@ export async function connectSharedAssets(link: LinkLike, docBase: string, { onl
   const generation = ++discoveryGeneration;
   if (discoveryTimer !== null) clearTimeout(discoveryTimer);
   discoveryTimer = null;
-  sharedAssetContext = { link, docBase, online };
+  sharedAssetContext = { link, docBase, online, fallback };
   docLink = link;
   try {
     const r = await link.request({ type: "service.watch", kinds: ["asset"] });
     base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host, { online });
-  } catch { failed = true; /* 取不到登记:留在本地 */ }
+  } catch { failed = true; /* 取不到登记:用后备,没有就留在本地 */ }
+  base = withFallback(base, fallback, online);
   if (generation !== discoveryGeneration || docLink !== link) return null;
   if (again && remote && (failed || base === remote.base)) {
     if (failed) discoveryTimer = setTimeout(() => {
       discoveryTimer = null;
-      if (docLink === link) void connectSharedAssets(link, docBase, { online });
+      if (docLink === link) void connectSharedAssets(link, docBase, { online, fallback });
     }, 2000);
     return remote.base;
   }
@@ -440,7 +472,7 @@ export async function connectSharedAssets(link: LinkLike, docBase: string, { onl
   // 在线页面没有本地素材服务：登记请求失败或服务尚未出现，都要继续找。
   if (online && !base) discoveryTimer = setTimeout(() => {
     discoveryTimer = null;
-    if (docLink === link) void connectSharedAssets(link, docBase, { online });
+    if (docLink === link) void connectSharedAssets(link, docBase, { online, fallback });
   }, 2000);
   return base;
 }
@@ -449,7 +481,7 @@ export async function connectSharedAssets(link: LinkLike, docBase: string, { onl
 export function receiveSharedAssetEndpoints(endpoints: unknown): void {
   const ctx = sharedAssetContext;
   if (!ctx || docLink !== ctx.link) return;
-  const base = pickAssetEndpoint(endpoints, ctx.docBase, typeof location === "undefined" ? "" : location.host, { online: ctx.online });
+  const base = withFallback(pickAssetEndpoint(endpoints, ctx.docBase, typeof location === "undefined" ? "" : location.host, { online: ctx.online }), ctx.fallback, ctx.online);
   if ((remote?.base ?? null) === base) return;
   discoveryGeneration++;
   if (discoveryTimer !== null) clearTimeout(discoveryTimer);
@@ -459,7 +491,7 @@ export function receiveSharedAssetEndpoints(endpoints: unknown): void {
   stopUploadTarget = startUploadTarget(ctx.link, base);
   if (ctx.online && !base) discoveryTimer = setTimeout(() => {
     discoveryTimer = null;
-    if (docLink === ctx.link) void connectSharedAssets(ctx.link, ctx.docBase, { online: true });
+    if (docLink === ctx.link) void connectSharedAssets(ctx.link, ctx.docBase, { online: true, fallback: ctx.fallback });
   }, 2000);
 }
 
