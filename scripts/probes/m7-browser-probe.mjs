@@ -47,6 +47,7 @@ import { argsOf, sayer, newRunId, lastJsonLine, fingerprintOf } from './m8/lib.m
 import { roleKv, resolveRun } from './m8/kv.mjs';
 import { startCoord, startQueueEditor, viteBin, killTree, until, claimPorts, portFree } from './m8/procs.mjs';
 import { ASSUMPTIONS, readNodeDiag, readStageBakeDiag, releaseCauseOf } from './m7-node-adapter.mjs';
+import { judgeDualClip } from './m7-judge.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SELF), '..', '..');
@@ -1173,24 +1174,21 @@ async function judgeDualOnPage(ctx) {
   for (const clip of ['h1', 'h2', 'h3']) {
     const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
     const copies = { pc: ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp), page: ts.filter((t) => t.requires?.envFingerprint === pageFp) };
-    const superseded = Object.entries(copies).filter(([, list]) => list.length > 0 && list.every(sup)).map(([k]) => k);
-    // 每一段（同一帧范围）恰好一份有效（没被作废）：先认领者得卡时是整份作废另一份；中途被 D2 接手（页面慢、锁闲置超 30 s）时
-    // 是先前那份的后几段作废、接手方补上 —— 两种都是每段恰好一份有效
-    const ranges = new Map();
-    for (const t of [...copies.pc, ...copies.page]) { const k = `${t.range?.from}-${t.range?.to}`; ranges.set(k, (ranges.get(k) ?? 0) + (sup(t) ? 0 : 1)); }
-    const badRanges = [...ranges].filter(([, n]) => n !== 1).map(([k, n]) => `${k}:${n}`);
-    const cands = lm?.layers?.find((l) => l.clipId === clip)?.candidates ?? [];
+    const layer = lm?.layers?.find((l) => l.clipId === clip);
+    const nameOf = (fp) => (fp === ctx.pcFp ? 'pc' : fp === pageFp ? 'page' : fp);
+    const groups = Object.fromEntries(Object.entries(copies).map(([k, list]) => [k, list.map((t) => ({ range: `${t.range?.from}-${t.range?.to}`, live: !sup(t) }))]));
+    const v = judgeDualClip({ groups, candidates: (layer?.candidates ?? []).map((c) => nameOf(c.envFingerprint)), layerFp: layer?.envFingerprint ? nameOf(layer.envFingerprint) : null });
     perClip[clip] = {
       pc: copies.pc.length, page: copies.page.length,
-      allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
+      allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true), // 只记不判（旁观节点手里可能是旧正文）
       pageHasBake: copies.page.length > 0 && copies.page.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
-      superseded, partlySuperseded: Object.entries(copies).filter(([, list]) => list.some(sup) && !list.every(sup)).map(([k]) => k), badRanges,
-      candidates: cands.map((c) => (c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFp ? 'page' : c.envFingerprint)),
+      ...v,
+      candidates: (layer?.candidates ?? []).map((c) => nameOf(c.envFingerprint)),
     };
   }
-  book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lm?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.pageHasBake
-    && x.badRanges.length === 0 && (x.superseded.length === 1 || x.partlySuperseded.length > 0) && x.candidates.includes('pc') && x.candidates.includes('page')),
-    { v: lm?.v ?? null, perClip, takenOverMidway: Object.entries(perClip).filter(([, x]) => x.partlySuperseded.length > 0).map(([c, x]) => `${c}: ${x.partlySuperseded.join('、')} 那份中途被 D2 接手（说明，不算失败）`) });
+  // 判据见 m7-judge.mjs：按出键分组，得卡那一组每段恰好一份有效；另一组整份作废，或中途被 D2 接手（只作说明）；层表两组候选都在、层指向其一
+  book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lm?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.pageHasBake && x.ok),
+    { v: lm?.v ?? null, perClip, takenOverMidway: Object.entries(perClip).filter(([, x]) => x.takenOverMidway.length > 0).map(([c, x]) => `${c}: ${x.takenOverMidway.join('、')} 那份中途被 D2 接手（说明，不算失败）`) });
 }
 
 /* ---------------------------------------------------------------- 页面当了节点：服务端那一侧 */
