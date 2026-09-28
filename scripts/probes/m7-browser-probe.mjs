@@ -1332,7 +1332,8 @@ async function tapPage(page, name) {
   const leaks = [];
   const noteLeak = (where, s) => { if (TICKET_RE.test(String(s)) || [...secrets].some((t) => String(s).includes(t))) leaks.push(where); };
   cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
-    conns.set(requestId, { requestId, createdAt: Date.now(), role: null, owner: null, echoed: null, offered: [], closedAt: null, kind: null });
+    let host = null; try { host = new URL(url).host; } catch { /* 认不出 */ }
+    conns.set(requestId, { requestId, host, createdAt: Date.now(), role: null, owner: null, echoed: null, offered: [], closedAt: null, kind: null });
     noteLeak('ws-url', url);
   });
   cdp.on('Network.webSocketWillSendHandshakeRequest', ({ requestId, request }) => {
@@ -1360,6 +1361,8 @@ async function tapPage(page, name) {
     c.status = response?.status ?? null;
   });
   cdp.on('Network.webSocketClosed', ({ requestId }) => { const c = conns.get(requestId); if (c) c.closedAt = Date.now(); });
+  cdp.on('Network.webSocketFrameError', ({ requestId, errorMessage }) => { const c = conns.get(requestId); if (c) c.closeInfo = String(errorMessage).slice(0, 200); });
+  cdp.on('Network.loadingFailed', ({ requestId, errorText }) => { const c = conns.get(requestId); if (c) c.closeInfo = String(errorText).slice(0, 200); });
   const onFrame = (dir) => ({ requestId, response }) => {
     const text = response?.payloadData;
     if (typeof text !== 'string' || text.length > 4_000_000 || text[0] !== '{') return;
@@ -1428,6 +1431,8 @@ async function openMember(browser, cfg, key, { lowMem = false, single = false } 
   page.on('dialog', (d) => void d.accept());
   page.pageErrors = [];
   page.on('pageerror', (e) => page.pageErrors.push(String(e?.message ?? e).slice(0, 200)));
+  page.consoleErrors = [];
+  page.on('console', (m) => { if (m.type() === 'error' && page.consoleErrors.length < 60) page.consoleErrors.push(m.text().slice(0, 240)); });
   const tap = await tapPage(page, key);
   const u = cfg.users[key];
   await page.evaluateOnNewDocument((dev, low) => {
@@ -1465,7 +1470,11 @@ async function openMember(browser, cfg, key, { lowMem = false, single = false } 
   const joined = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
   if (!joined) {
     const msg = await page.$eval('[data-pc="join-message"]', (el) => el.textContent).catch(() => null);
-    throw new Error(`${key} 没进项目：${msg}`);
+    // 页面把「连接没建成就断了」一律报成「用户名或密码不对」（syncManager.ts enterShared 末行）：把 WebSocket 的实情一并带上，
+    // 分得清是凭证被拒（握手 101 之后以 4xxx 关）还是连接根本没通（没有 101：证书、代理、升级被挡）
+    const wsDiag = [...tap.conns.values()].map((c) => ({ host: c.host ?? null, status: c.status ?? null, echoed: c.echoed ?? null, offered: c.offered, closed: !!c.closedAt, closeInfo: c.closeInfo ?? null }));
+    say('join-failed', { key, msg, ws: wsDiag, pageErrors: page.pageErrors.slice(-5), console: (page.consoleErrors ?? []).slice(-8) });
+    throw new Error(`${key} 没进项目：${msg}；WebSocket：${JSON.stringify(wsDiag).slice(0, 600)}`);
   }
   // 加载遮罩：出现又撤下（低内存档过渡期不测，可能根本不出现：members 在、2 s 内没有遮罩就算撤下）
   let seen = false;
