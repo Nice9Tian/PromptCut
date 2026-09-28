@@ -6,7 +6,7 @@
 
 ## 状态
 
-实现、单测、在线探针完成；全量基线与端到端结果见「验证」。等主会话审查。
+实现、单测、在线探针、真端到端都已完成并通过（见「验证」）。等主会话审查、在 PC 上跑导出像素基线。
 
 ## 缺陷与根因（复述）
 
@@ -36,9 +36,37 @@
 
 ## 验证
 
-（见下方逐项；命令都在 worktree 根目录跑）
+命令都在 worktree 根目录跑（笔记本，2026-09-29）。在线构建输出到本会话的临时目录 `<tmp>/dist-online`。
 
-待补。
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
+| 全量测试 | `npm test`（PATH 补上 ffmpeg，见 `docs/local.md`） | 3809 条：通过 3807、失败 0、跳过 2（其一是要 5190 的 `/api/cards/layout` 集成那条，原来就跳过），退出码 0 |
+| 改到与新增的单测 | `node --experimental-test-module-mocks --test <文件>` | `cardSourceParse` 6/6、`registrySynced` 1/1、`onlineUserCards` 5/5、`stageLocalOnly` 2/2、`placeholderHost` 11/11、`onlineSnapshotSource` 11/11、`c10-ui-gates` 5/5、`snapshotFeed` + `c10a-l17-lowmem` + `c10a-l17-backfill` + `c10-cost-plan` 37/37，全过 |
+| 在线构建 | `npx vite build --mode online --outDir <tmp>/dist-online` | 退出码 0 |
+| 新 A6 探针 | `node scripts/probes/online-user-cards-probe.mjs --dist <tmp>/dist-online --out <tmp>/ouc-shots`（端口 5744～5748） | 退出码 0，`ok: true`，`fails: []` |
+| A6（改写）/ A7 / A8 | `node scripts/probes/c10-ui-probe.mjs --dist <tmp>/dist-online --proxy-port 5740 --proxy2-port 5741 --doc-port 5742 --asset-port 5743` | 退出码 0，`ok: true`，`fails: []`；A6 `snapUser 224、pxUser 0、snapBuiltin 223、badges {user:false, builtin:false, label:"闪光文字"}`；A8 `status 501` |
+| 真端到端 | `node scripts/probes/c10-browser-probe.mjs --base-port 5740 --no-video --only-a4 --user-card --dist <tmp>/dist-online` | 退出码 0，`ok: true`，`fails: []`（A1～A4 照旧全过，外加用户卡一项），总耗时 1250 s |
+
+新 A6 探针最后一行 JSON（节选，全文在探针输出）：
+
+```
+{"ok":true,"fails":[],"normal":{"timeline":{…"ouc-s1":{"label":"探针同步卡"…},"ouc-x":{"label":"未知卡片","badge":false…}},
+ "requests":{"snapU":1,"snapS1":1,"snapB":1,"pxAny":0},"planClips":["ouc-s1","ouc-s2","ouc-s3","ouc-u"],
+ "after":{"stage":{"snapshot":true,"snapText":"SNAP ouc-s2","placeholderShown":false,…},"timeline":{"label":"探针同步卡","badge":false},"ms":1581}},
+ "lowmem":{"backfill":{"waiting":["ouc-s3"],"log":[{…"#backfill:…","clips":["ouc-s3"],"created":true}]},"requests":{"pxU":1,"pxS1":1}},
+ "assetRequests":{"snap":4,"px":4}}
+```
+
+（JSON 里 `timeline` 是第一次读到真名时的快照，那时 u、s1 的整段清单还没取齐、徽标还挂着；探针随后等到「u、s1 撤掉、s2、s3 还在」才过，见断言清单。）
+
+新 A6 探针核的断言（全过）：同步卡标签「探针同步卡」、未知 id「未知卡片」；u、s1 舞台贴出快照（`SNAP ouc-u` / `SNAP ouc-s1`）、没有图标、没有常驻槽位、`snap/` 请求 > 0、普通档 `px/` 请求 0、清单就绪帧 > 0；s2 舞台是 `unsupported` 图标（种类 `unsupported-badge`，文字「需要本地 PC 渲染辅助」，不是沙漏）；徽标只在 s2、s3 上、悬停文案对，u、s1、b、x 没有；未知 id 不画；页面清单计划 `lastClips` 含 u、s1、s2、s3、不含 x；给 s2 补层后 1.6 s 图标换成快照、徽标撤掉；两个页面都没有页面错误；低内存档 `__pcBackfill` 的缺口只有 s3、u 与 s1 贴小尺寸（`px/` 请求各 1）、s3 是图标、x 不画，停下追一帧（5 秒）之后 u、s1 照旧贴着。
+
+真端到端的用户卡一项（`user-card.done`）：成员页刚进来时用户卡片段舞台是 `unsupported` 图标、时间轴有徽标；成员页发布的清单计划含它（桌面判它轻、桌面自己的计划不渲它）；创建者的桌面渲染节点（与在线构建同一代码版本）认领、渲出、写进层表（`envFingerprint` = 创建者节点的指纹，层 `kind: html`，就绪 91 帧），约 707 s 后成员页贴上快照、图标与徽标撤掉。
+
+看过的图：`normal-1-stage.png`（u、s1 贴着绿 / 橙快照；s2、s3 位置是小图标——片段缩到 1/3、预览又缩到 27%，图标很小）、`normal-1-before-s2-layer.png`（时间轴 s2 片段右上有徽标，u、s1 没有）、`normal-2-after-s2-layer.png`、`user-card-e2e.png`（成员页贴着桌面节点渲的「PromptCut」闪光文字快照，片段上没有徽标）。低内存档仿手机的布局里预览面板不在屏内，舞台截图是空的，低内存档只靠 DOM 断言（舞台 iframe 里查包裹层、快照平面、槽位）。
+
+导出像素基线（`verify-determinism`、`verify-unified-frames`）没跑：主会话另在 PC 上跑（任务书约定）。桌面不变的依据见上一节。
 
 ## 主会话补充核实：真实桌面版给用户卡写的层，在线普通档能不能用上
 
@@ -59,7 +87,11 @@
 
 ## 没做成的及原因
 
-待补。
+- 导出像素基线没跑（任务书约定由主会话在 PC 上跑）。
+- `c10-cost-probe.mjs`、`c10a-demo-probe.mjs` 只改了认 `unsupported` 的判法，没跑（前者要成本记录那一套，后者要手机 + 创建者全流程；新 A6 探针已覆盖低内存档里用户卡的显示）。
+- 真端到端只验了仓库用户卡（在线构建里有定义）。「只在桌面卡片库里、在线构建里没有」的同步卡端到端没跑：要在创建者的桌面上临时建一张卡（写进本 worktree 的 `src/cards/user/` 或数据目录的改动层），而在线构建必须在那之前打好；同步卡的识别、贴图、补层换上已由新 A6 探针用内容库 + 替身层表核过。
+- 已知的小缺口（没改，记在这里）：在线页面在卡片源码表到达之前（进入后最多约 5 秒），同步卡被当成未知 id，后台舞台可能测它一次（渲不出东西、记一条很便宜的成本记录）；表到了之后它没有身份，这条记录不再起作用，身份键里的源码版本是 null，与桌面算的键不同，不会串到别处。要彻底避开，可以让页面测量等卡片源码第一次同步完再开始，涉及测量的门控，本次没动。
+- 舞台上 `unsupported` 图标的「徽标」形态（量不到实体框时）随包裹层缩放，片段缩得很小时图标跟着很小；这是占位组件原有的几何规则，不在本次范围。
 
 ## 对任务书或契约的更正建议
 
