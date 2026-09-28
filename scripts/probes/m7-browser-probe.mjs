@@ -31,6 +31,7 @@
  * 其它参数：
  *   --out <目录>  --keep-temp  --dist <在线构建目录>  --timeout-min 120  --node-wait-s 60  --a3-seconds 60
  *   --no-twin     页面没当节点时不跑「页面同身份替身」的 D1 / D2 / D12 服务端检查（它要 30 s 以上的锁闲置）
+ *   --media-delay-ms <毫秒>  本机替身里素材服务每个请求先压这么久（应用层模拟在线站点的网络往返，排查每帧耗时用）
  *   --no-a10      不跑 M7-A10（它要重启 A 的编辑器、关页面、等 30 s）
  *   --headful     node 角色用有头 Chrome（排障）
  */
@@ -70,6 +71,8 @@ const TIMEOUT_MS = Number(arg('--timeout-min', 120)) * 60_000;
 const deadline = Date.now() + TIMEOUT_MS;
 const NODE_WAIT_MS = Number(arg('--node-wait-s', 60)) * 1000;
 const A3_MS = Number(arg('--a3-seconds', 60)) * 1000;
+/** 本机替身里素材服务每个请求的附加延迟（毫秒，模拟在线站点的往返；缺省 0） */
+const MEDIA_DELAY_MS = Math.max(0, Number(arg('--media-delay-ms', 0)) || 0);
 
 /** 等一个 KV 信号；对方中止（abort）就回 null，不干等到总时限 */
 async function waitSignal(kv, name) {
@@ -266,7 +269,8 @@ async function startSite({ out, bind, publicHost }) {
       if (urls.length > 50_000) urls.shift();
       const url = new URL(req.url, 'http://x');
       if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, combo.docPort, '/hosted');
-      if (url.pathname.startsWith('/media/')) return forward(req, res, combo.assetPort, '/media');
+      // --media-delay-ms：素材服务的每个请求先压这么久再转发（应用层模拟到在线站点的网络往返，不动宿主机网络）
+      if (url.pathname.startsWith('/media/')) { if (MEDIA_DELAY_MS > 0) { req.pause(); setTimeout(() => { req.resume(); forward(req, res, combo.assetPort, '/media'); }, MEDIA_DELAY_MS); return; } return forward(req, res, combo.assetPort, '/media'); }
       const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
       const sendFile = (file, cache) => {
         res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
@@ -1407,10 +1411,36 @@ async function tapPage(page, name) {
   cdp.on('Network.webSocketFrameSent', onFrame('sent'));
   cdp.on('Network.webSocketFrameReceived', onFrame('recv'));
   cdp.on('Network.requestWillBeSent', ({ request }) => noteLeak('http-url', request?.url ?? ''));
+  // 素材服务的 HTTP 请求（每帧时间构成的排查用）：方法、命名空间、哪一步（chunks / 片 / complete）、起止（CDP 单调时钟，秒）
+  const http = new Map();
+  cdp.on('Network.requestWillBeSent', ({ requestId, request, timestamp }) => {
+    const u = String(request?.url ?? '');
+    if (/^(data|blob):/.test(u)) return;
+    const m = /\/api\/asset\/(snap|px|media)\/[a-f0-9]{64}\/(chunks|complete|\d+)(?:\?|$)/.exec(u);
+    // 素材服务的分片请求按「方法 命名空间 步骤」归类；其余请求按「方法 路径」归类（哈希、数字段折成 *），好看出每帧还发了什么
+    let kind;
+    if (m) kind = `${request.method} ${m[1]} ${m[2] === 'chunks' || m[2] === 'complete' ? m[2] : 'part'}`;
+    else { try { const x = new URL(u); kind = `${request.method} ${x.pathname.replace(/[a-f0-9]{16,}/g, '*').replace(/\/\d+(?=\/|$)/g, '/*')}`; } catch { return; } }
+    http.set(requestId, { kind, t0: timestamp, wall: Date.now(), t1: null, status: null });
+    if (http.size > 50_000) http.delete(http.keys().next().value);
+  });
+  cdp.on('Network.responseReceived', ({ requestId, response }) => { const r = http.get(requestId); if (!r) return; r.status = response?.status ?? null; const tm = response?.timing; if (tm) { r.pre = (tm.requestTime - r.t0) * 1000; r.ttfb = tm.receiveHeadersEnd; r.sock = tm.connectStart >= 0 ? 'new' : 'reused'; } });
+  cdp.on('Network.loadingFinished', ({ requestId, timestamp }) => { const r = http.get(requestId); if (r) r.t1 = timestamp; });
+  cdp.on('Network.loadingFailed', ({ requestId, timestamp }) => { const r = http.get(requestId); if (r) { r.t1 = timestamp; r.status = 'failed'; } });
+  /** 某个墙钟时刻（毫秒）以后本页发出的 HTTP 请求，按种类汇总：个数、耗时 p50 / p95、发出前等了多久（preP50）、新开连接几次（毫秒）*/
+  const assetHttp = (since = 0) => {
+    const by = {}; const pre = {}; const newSock = {};
+    for (const r of http.values()) {
+      if (r.wall < since || r.t1 == null) continue;
+      (by[r.kind] ??= []).push((r.t1 - r.t0) * 1000); (pre[r.kind] ??= []).push(r.pre ?? 0); if (r.sock === 'new') newSock[r.kind] = (newSock[r.kind] ?? 0) + 1;
+    }
+    const q = (a, p) => (a.length ? Math.round(a[Math.min(a.length - 1, Math.floor(p * a.length))]) : null);
+    return Object.fromEntries(Object.entries(by).map(([k, a]) => { a.sort((x, y) => x - y); const b = pre[k].sort((x, y) => x - y); return [k, { n: a.length, p50: q(a, 0.5), p95: q(a, 0.95), preP50: q(b, 0.5), newSockets: newSock[k] ?? 0 }]; }));
+  };
   const renderConns = () => [...conns.values()].filter((c) => c.role === 'render' || frames.some((f) => f.conn === c.requestId && f.type === 'node.hello'));
   return {
     name, cdp, conns, frames, secrets, leaks,
-    renderConns,
+    renderConns, assetHttp,
     sent: (type, since = 0) => frames.filter((f) => f.dir === 'sent' && f.type === type && f.at >= since),
     recv: (type, since = 0) => frames.filter((f) => f.dir === 'recv' && f.type === type && f.at >= since),
     /** 页面当了节点：发过 node.hello 且收到 node.welcome */
@@ -1695,7 +1725,12 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   const done = got ?? anchorDone();
   const worst = Math.max(...heavy.map((c) => Math.max(...(done[c] ?? [{ sinceGateMs: Infinity }]).map((x) => x.sinceGateMs))));
   const l2 = await l2Snapshots(page);
-  const a4 = { anchorRule, perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, authoritative, diag: await readNodeDiag(page) };
+  const a4 = { anchorRule, perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, authoritative, diag: await readNodeDiag(page),
+    assetHttp: tap.assetHttp(b1.gateLiftAt),
+    ticketReqs: tap.sent('auth.ticket', b1.gateLiftAt).reduce((o, f) => { const k = `${f.kind}:${f.access ?? f.role ?? ''}`; o[k] = (o[k] ?? 0) + 1; return o; }, {}),
+    phases: await page.evaluate(() => window.__pcBrowserNode?.()?.stage?.phases ?? null).catch(() => null),
+    uploadMs: await page.evaluate(() => window.__pcBrowserNode?.()?.upload?.ms ?? null).catch(() => null) };
+  say('a4.timing', { bakeMs: a4.diag?.counts?.bakeMs ?? null, stageMs: a4.diag?.counts?.stageMs ?? null, assetHttp: a4.assetHttp, ticketReqs: a4.ticketReqs, phases: a4.phases, uploadMs: a4.uploadMs });
   book.judge('M7-A4', 'page-anchors-done', heavy.every((c) => done[c]?.length) && (l2 ?? 0) > 0, a4);
   book.timed('M7-A4', 'page-within-30s', Number.isFinite(worst) && worst <= 30_000, { worstSinceGateMs: a4.worstSinceGateMs }, authoritative);
   const od = await onlineDiag(page);
@@ -1861,7 +1896,8 @@ async function runAll() {
     const run = newRunId();
     const common = ['--coord', coord.url, '--run', run, '--out', out, '--timeout-min', String(TIMEOUT_MS / 60_000), '--node-wait-s', String(NODE_WAIT_MS / 1000), '--a3-seconds', String(A3_MS / 1000),
       ...(flag('--no-twin') ? ['--no-twin'] : []), ...(flag('--no-a10') ? ['--no-a10'] : []), ...(arg('--dist') ? ['--dist', arg('--dist')] : []), ...(flag('--keep-temp') ? ['--keep-temp'] : []),
-      ...(flag('--a4-motion') ? ['--a4-motion'] : []), ...(arg('--base-port') ? ['--base-port', arg('--base-port')] : [])];
+      ...(flag('--a4-motion') ? ['--a4-motion'] : []), ...(arg('--base-port') ? ['--base-port', arg('--base-port')] : []),
+      ...(arg('--media-delay-ms') ? ['--media-delay-ms', arg('--media-delay-ms')] : [])];
     const runRole = (role, extra = []) => new Promise((resolve) => {
       const c = spawn(process.execPath, [SELF, '--role', role, ...common, ...extra], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let stdout = '';

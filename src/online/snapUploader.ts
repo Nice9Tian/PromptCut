@@ -40,6 +40,8 @@ export interface UploaderStats {
   /** 收尾回 `incomplete` 之后重查 chunks 的次数 */
   recheck: number;
   lastError: string | null;
+  /** 每次请求的时间构成(毫秒,累计):等票据、`fetch` 到响应头、读响应体;`requests` 是请求次数 */
+  ms: { requests: number; ticket: number; fetch: number; body: number };
 }
 
 export interface SnapUploader {
@@ -62,7 +64,8 @@ const fail = (message: string, extra: Record<string, unknown> = {}) => Object.as
 
 export function createSnapUploader(deps: UploaderDeps): SnapUploader {
   const f = deps.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
-  const stats: UploaderStats = { pushed: 0, pushedBytes: 0, skipped: 0, failed: 0, reauth: 0, recheck: 0, lastError: null };
+  const stats: UploaderStats = { pushed: 0, pushedBytes: 0, skipped: 0, failed: 0, reauth: 0, recheck: 0, lastError: null, ms: { requests: 0, ticket: 0, fetch: 0, body: 0 } };
+  const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
   const urlOf = (ns: Namespace, hash: string, tail: string) => {
     const base = deps.base();
@@ -73,10 +76,16 @@ export function createSnapUploader(deps: UploaderDeps): SnapUploader {
   /** 带写票据发一次;401 换一张新票据重试一次 */
   const authed = async (url: string, init: RequestInit): Promise<Response> => {
     const go = async (force: boolean) => {
+      const t0 = now();
       const ticket = await deps.ticket(force);
+      const t1 = now();
       const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
       if (ticket) headers.Authorization = `Bearer ${ticket}`;
-      return f(url, { ...init, headers });
+      const res = await f(url, { ...init, headers });
+      stats.ms.requests++;
+      stats.ms.ticket += t1 - t0;
+      stats.ms.fetch += now() - t1;
+      return res;
     };
     const res = await go(false);
     if (res.status !== 401) return res;
@@ -136,7 +145,9 @@ export function createSnapUploader(deps: UploaderDeps): SnapUploader {
   const chunksOf = async (ns: Namespace, hash: string) => {
     const res = await authed(urlOf(ns, hash, "/chunks"), { method: "GET", cache: "no-store" });
     if (!res.ok) throw fail(`对账 ${ns} 回 ${res.status}`, { status: res.status });
+    const tb = now();
     const j = (await res.json()) as { size?: number | null; received?: number[]; complete?: boolean };
+    stats.ms.body += now() - tb;
     return { complete: j?.complete === true, received: new Set(Array.isArray(j?.received) ? j.received : []) };
   };
 
@@ -154,6 +165,6 @@ export function createSnapUploader(deps: UploaderDeps): SnapUploader {
       inflight.set(key, work);
       return work;
     },
-    stats: () => ({ ...stats }),
+    stats: () => ({ ...stats, ms: { ...stats.ms } }),
   };
 }

@@ -27,6 +27,7 @@
  * 认领到的第一帧开一个单飞活 `bake`(最不急),`pushProject('back', 隔离单卡工程, { reset })` 灌进后台舞台(走 stageBridge 的基线),
  * 再逐帧 `bakeFrame`;舞台的 `bake-frame` 事件带回压过的 HTML 与小尺寸 WebP。父页:解压 → 推素材服务(`snap`、`px`,D7 父页推)→
  * 块进页面内快照库(`snap/<hash>`、`px/<hash>`)、这一层的 `ranges` 写这一帧(写入即就绪,通知在线来源)。
+ * 两档并行推;推的同时先把下一帧发给舞台(顺推、还闲时),每帧耗时是「舞台一帧」与「推两档的网络往返」取大,不是两者相加。
  * 全段齐后组清单(形状同桌面 `collectSnapshotResult`)、写内容库(失败只记诊断),`task.complete { ranges, ...清单 }`。
  * 这一段收尾(完成、失败、放回、丢认领)就交还后台舞台。
  *
@@ -53,7 +54,7 @@ import { isScrubbing, subscribeScrub } from "./timeline/useScrub";
 import { docRequest, remoteAssetBase } from "./media/assetTiers";
 import { currentSharedUrl, me, pageSession } from "./sync/syncManager";
 import type { Project } from "../kernel/project";
-import type { StageEvent, StageRpcClient } from "../render/stageRpc";
+import type { BakeFrameReply, StageEvent, StageRpcClient } from "../render/stageRpc";
 // @ts-expect-error 无类型声明的 .mjs(浏览器与 Node 通用,只用 WebSocket 与计时器)
 import { createDocEndpoint as createDocEndpointUntyped } from "../../server/render-node/session-link.mjs";
 
@@ -148,6 +149,8 @@ interface Lease {
   stage: StageRpcClient;
   /** 这台舞台灌过这一段的隔离单卡工程没有 */
   pushedTo: StageRpcClient | null;
+  /** 已经先发给舞台的下一帧(父页推上一帧的两档时舞台接着推这一帧,见 `bakeFrame`) */
+  ahead: { frame: number; stage: StageRpcClient; reply: Promise<BakeFrameReply> } | null;
   close: () => void;
 }
 
@@ -166,14 +169,26 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   const nodeId = `browser-${pageSession()}`;
   const conn = { sessions: 0, opens: 0, closes: 0, resumes: 0, lastClose: null as { code: number; reason: string } | null };
   const stage = { frames: 0, ms: [] as number[], pausedMs: 0, remounts: 0, small: 0, smallMs: [] as number[], readyMs: [] as number[], errors: {} as Record<string, number> };
+  /** 父页一侧每帧的时间构成(毫秒,最近 200 帧):开活与灌工程、舞台往返、解压、推两档、进页面内快照库 */
+  const PHASES = ["lease", "rpc", "gunzip", "snap", "px", "push", "l2", "total"] as const;
+  const phases = Object.fromEntries(PHASES.map((k) => [k, [] as number[]])) as Record<(typeof PHASES)[number], number[]>;
+  const notePhase = (k: (typeof PHASES)[number], ms: number) => { const a = phases[k]; a.push(ms); if (a.length > 200) a.splice(0, a.length - 200); };
   const manifestStats = { written: 0, failed: 0, lastError: null as string | null };
 
   /* ---------------- 写票据与上传器(D7:父页推) ---------------- */
 
   let rw: { ticket: string; exp: number; issued: number } | null = null;
-  const rwTicket = async (force = false): Promise<string | null> => {
+  /** 在签的那一次:两档并行推时同时来要票据,只签一张 */
+  let rwSigning: Promise<string | null> | null = null;
+  const rwTicket = (force = false): Promise<string | null> => {
     const now = Date.now();
-    if (!force && rw && now < rw.issued + ((rw.exp - rw.issued) * 2) / 3) return rw.ticket;
+    if (!force && rw && now < rw.issued + ((rw.exp - rw.issued) * 2) / 3) return Promise.resolve(rw.ticket);
+    if (rwSigning) return rwSigning;
+    rwSigning = signRw().finally(() => { rwSigning = null; });
+    return rwSigning;
+  };
+  const signRw = async (): Promise<string | null> => {
+    const now = Date.now();
     try {
       const r = await docRequest({ type: "auth.ticket", kind: "asset", access: "rw" });
       if (r.type === "auth.ticket.ok" && typeof r.ticket === "string") {
@@ -216,7 +231,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       void runBackJob("bake", async (ctx) => {
         let release!: () => void;
         const done = new Promise<void>((r) => { release = r; });
-        const l: Lease = { taskId: task.id, isolated, input, stage: ctx.stage, pushedTo: null, close: () => release() };
+        const l: Lease = { taskId: task.id, isolated, input, stage: ctx.stage, pushedTo: null, ahead: null, close: () => release() };
         // 更急的活来了(补跑、测量、探针):当前帧做完就放回(D8)
         ctx.signal.addEventListener("abort", () => { node?.yieldFor("urgent"); }, { once: true });
         got = true;
@@ -227,6 +242,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   };
 
   const bakeFrame = async ({ task, project, localFrame, signal }: { task: NodeTask; project: unknown; localFrame: number; signal: AbortSignal }) => {
+    const t0 = performance.now();
     if (!lease || lease.taskId !== task.id) {
       closeLease();
       const l = await openLease(task, project);
@@ -236,19 +252,40 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     const l = lease;
     // 舞台互换或 iframe 重载之后,后台位置上换了人:在新的后台舞台上重开(做到哪一帧记在节点里)
     const cur = backStage();
-    if (cur && cur !== l.stage) { l.stage = cur; l.pushedTo = null; }
+    if (cur && cur !== l.stage) { l.stage = cur; l.pushedTo = null; l.ahead = null; }
     if (l.pushedTo !== l.stage) {
       await pushProject("back", l.isolated, { reset: true });
       l.pushedTo = l.stage;
     }
     const session = task.id;
+    const tRpc = performance.now();
+    notePhase("lease", tRpc - t0);
     const onAbort = () => { void l.stage.bakeCancel().catch(() => {}); };
     signal.addEventListener("abort", onAbort, { once: true });
-    let reply;
+    // 上一帧推两档时已经先发给舞台的这一帧:直接等它的回包;对不上(跳了帧、换了舞台)就照常发,新的一帧作废在飞的那一帧
+    const ahead = l.ahead;
+    l.ahead = null;
+    let reply: BakeFrameReply;
     try {
-      reply = await l.stage.bakeFrame({ session, clipId: l.input.clipId, localFrame, mode: BAKE_MODE, small: true });
+      reply = ahead && ahead.frame === localFrame && ahead.stage === l.stage
+        ? await ahead.reply
+        : await l.stage.bakeFrame({ session, clipId: l.input.clipId, localFrame, mode: BAKE_MODE, small: true });
     } finally {
       signal.removeEventListener("abort", onAbort);
+    }
+    notePhase("rpc", performance.now() - tRpc);
+    /*
+     * 先发下一帧(顺推时):推素材服务是网络往返(在线站点上每块至少一次 `GET chunks`),舞台在另一个进程里,
+     * 两件事并行,每帧的耗时从「舞台 + 往返」降到两者取大。这一帧仍然两档都推成功才回(c10a 第 9 节);
+     * 下一帧的回包只在节点真来要它时才用。让路、放回、丢认领时 `closeLease` 的 `bakeCancel` 把它停在帧边界。
+     * 不闲(要让路)或已中止时不先发。
+     */
+    const range = task.range;
+    if (reply.ok && BAKE_MODE === "seq" && range && localFrame + 1 <= range.to && !signal.aborted && isIdle() && lease === l) {
+      const next = localFrame + 1;
+      const p = l.stage.bakeFrame({ session, clipId: l.input.clipId, localFrame: next, mode: BAKE_MODE, small: true })
+        .catch((e): BakeFrameReply => ({ ok: false, reason: "cancelled", detail: String((e as Error)?.message ?? e).slice(0, 200) }));
+      l.ahead = { frame: next, stage: l.stage, reply: p };
     }
     if (!reply.ok) {
       stage.errors[reply.reason] = (stage.errors[reply.reason] ?? 0) + 1;
@@ -266,26 +303,36 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     if (stage.ms.length > 200) { stage.ms.splice(0, stage.ms.length - 200); stage.readyMs.splice(0, stage.readyMs.length - 200); }
     stage.pausedMs += reply.pausedMs;
     if (reply.remounted) stage.remounts++;
+    let tp = performance.now();
     const bytes = ev.htmlGz ? await gunzip(ev.htmlGz) : new Uint8Array(ev.htmlRaw ?? new ArrayBuffer(0));
+    notePhase("gunzip", performance.now() - tp);
     if (bytes.length !== ev.bytes) throw Object.assign(new Error("解压后的快照字节数对不上"), { retryable: true });
-    // 推素材服务(两档都推成功才算这一帧做完;c10a 第 9 节)
-    await uploader.put("snap", ev.hash, bytes, "html");
+    // 推素材服务:两档并行推(各自至少一次网络往返,互不依赖),两档都推成功才算这一帧做完(c10a 第 9 节)
+    tp = performance.now();
+    const timed = (k: "snap" | "px", work: Promise<unknown>) => work.then(() => notePhase(k, performance.now() - tp));
+    const pushes = [timed("snap", uploader.put("snap", ev.hash, bytes, "html"))];
+    if (ev.small) pushes.push(timed("px", uploader.put("px", ev.small.hash, new Uint8Array(ev.small.webp), "webp")));
+    const settled = await Promise.allSettled(pushes);
+    const bad = settled.find((x): x is PromiseRejectedResult => x.status === "rejected");
+    if (bad) throw bad.reason;
+    notePhase("push", performance.now() - tp);
     let small: { hash: string; bytes: number } | null = null;
     if (ev.small) {
-      const webp = new Uint8Array(ev.small.webp);
-      await uploader.put("px", ev.small.hash, webp, "webp");
       small = { hash: ev.small.hash, bytes: ev.small.bytes };
       stage.small++;
       stage.smallMs.push(reply.smallMs);
       if (stage.smallMs.length > 200) stage.smallMs.splice(0, stage.smallMs.length - 200);
     }
     // 自产的块进页面内快照库;这一层的 ranges 写这一帧(写入即就绪,在线来源据此换上)
+    tp = performance.now();
     const s = await store;
     if (s) {
       await s.putBlock(`snap/${ev.hash}`, bytes, "text/html").catch(() => {});
       if (ev.small) await s.putBlock(`px/${ev.small.hash}`, new Uint8Array(ev.small.webp), "image/webp").catch(() => {});
       await s.putRange(task.resultKey, localFrame, localFrame).catch(() => {});
     }
+    notePhase("l2", performance.now() - tp);
+    notePhase("total", performance.now() - t0);
     return { hash: ev.hash, bytes: bytes.length, small };
   };
 
@@ -540,8 +587,9 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
           frames: stage.frames, remounts: stage.remounts, pausedMs: Math.round(stage.pausedMs), errors: { ...stage.errors },
           frameMs: { p50: quantile(ms, 0.5), p95: quantile(ms, 0.95) },
           smallFrames: stage.small, smallMs: { p50: quantile(sm, 0.5), p95: quantile(sm, 0.95) },
+          phases: Object.fromEntries(PHASES.map((k) => { const a = [...phases[k]].sort((x, y) => x - y); return [k, { n: a.length, p50: quantile(a, 0.5), p95: quantile(a, 0.95) }]; })),
         },
-        upload: { pushed: up.pushed, skipped: up.skipped, bytes: up.pushedBytes, failed: up.failed, reauth: up.reauth, recheck: up.recheck, lastError: up.lastError },
+        upload: { pushed: up.pushed, skipped: up.skipped, bytes: up.pushedBytes, failed: up.failed, reauth: up.reauth, recheck: up.recheck, lastError: up.lastError, ms: up.ms },
         manifests: { ...manifestStats },
         connection: { connected: !!ep?.connected, transport: ep?.stats().transport ?? null, ...conn },
         kept: [...kept.keys()],
