@@ -26,7 +26,11 @@
  * ## --mode internet --role member --hosted <url> --coord <url>
  *
  *   node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted http://127.0.0.1:8790 --coord http://127.0.0.1:8799
- *        [--expect-tasks 1] [--task-ms 600] [--max-concurrent 2] [--timeout-ms 180000]
+ *        [--expect-tasks 1] [--task-ms 600] [--max-concurrent 2] [--timeout-ms 180000] [--assert-no-lan <PC 局域网地址>]
+ *
+ *   `--assert-no-lan`（M8「异地接入」，`m8-plan.md` 第 2.3 节）：从拿到配置到收尾，每 2 s 只读地跑一次 `netstat -an`，
+ *   数本机到这个地址的 TCP 连接（要全程 0）；收尾前做一次 3 s 的局域网发现（要 0 条）。两项分开判，结果行 `noLan`。
+ *   不改防火墙、代理、路由（约束「不动宿主机的网络」），公共件 `scripts/probes/m8/no-lan.mjs`。
  *
  *   不设集群令牌（设了就判失败），只凭协调口给的项目凭证进入（`role: 'render'`，节点 profile `host`）：
  *   从 `service.endpoints` 拿素材服务地址；读项目快照（逐片取回、核摘要）、内容库条目、带票据读素材
@@ -92,10 +96,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { startCoordServer, coordClient } from './probe-coord.mjs';
+import { startNoLanWatch } from './m8/no-lan.mjs';
 
 const USAGE = `用法：
   node scripts/probes/shared-project-probe.mjs --mode internet --role creator --hosted <url> (--coord-port <n> | --coord <url>) [--tasks 6] [--transport auto|ws]
-  node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted <url> --coord <url> [--expect-tasks 1] [--transport auto|ws]
+  node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted <url> --coord <url> [--expect-tasks 1] [--transport auto|ws] [--assert-no-lan <PC 局域网地址>]
   node scripts/probes/shared-project-probe.mjs --role coord --port <n> [--host 127.0.0.1]
   node scripts/probes/shared-project-probe.mjs --role inventory --hosted <url> [--asset <url>] [--seed <种子文件>] [--scan-dir <数据目录>] --out <库存文件> [--data-dir <目录>]
   node scripts/probes/shared-project-probe.mjs --role migrate-check (--from <url> | --from-inventory <库存文件>) --to <url> [--to-asset <url>] [--seed <种子文件>] [--scan-dir <新数据目录>] [--data-dir <目录>] [--sample 100|all]
@@ -516,6 +521,9 @@ async function runMember() {
     finish(result, code);
   };
   check(result.clusterToken === 'unset', '成员不设集群令牌（PROMPTCUT_CLUSTER_TOKEN 应为空）');
+  // --assert-no-lan <PC 局域网地址>（m8-plan 第 2.3 节「异地接入」）：全程只读地数本机到这个地址的 TCP 连接，收尾前做一次 3 s 局域网发现
+  const noLanIp = arg('--assert-no-lan', null);
+  const noLan = noLanIp ? startNoLanWatch(noLanIp, { log }) : null;
 
   const handoff = await coord.take('member-config', deadline);
   if (!check(handoff?.config, '从协调口拿到成员配置')) return done(2);
@@ -625,6 +633,11 @@ async function runMember() {
   check(creatorDone, '等到创建者报 creator-done');
   result.artifactsWritten = counters.artifactsWritten;
   check(result.taskDone >= expectTasks, `完成至少 ${expectTasks} 个任务（实际 ${result.taskDone}）`);
+  if (noLan) {
+    result.noLan = await noLan.stop();
+    check(result.noLan.tcpOk, `全程没有到 ${noLanIp} 的 TCP 连接（采样 ${result.noLan.samples} 次，最多 ${result.noLan.maxTcp} 条）`);
+    check(result.noLan.discoveryOk, `3 s 局域网发现 0 条（实际 ${result.noLan.discovery?.hosts ?? result.noLan.discovery?.error}）`);
+  }
   return done();
 }
 

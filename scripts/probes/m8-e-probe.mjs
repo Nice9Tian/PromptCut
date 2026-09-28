@@ -54,6 +54,8 @@
  *   node scripts/probes/m8-e-probe.mjs --role host --name host-a --case … --place … --coord <协调口> [--port 5583]
  *        [--lan-host <ip:端口>] [--via-proxy <代理监听端口>] [--proxy-target <host:port>] [--stall-prob 0]
  *        [--stall] [--stall-s <秒>] [--fake-fingerprint <16 位十六进制>] [--host-concurrency 2] [--band 5580-5599] [--run <id>] [--out <目录>]
+ *        [--assert-no-lan <PC 局域网地址>]（异地接入：全程只读地数本机到这个地址的 TCP 连接、收尾前 3 s 局域网发现，都要 0；
+ *        公共件 `m8/no-lan.mjs`）。结果行另有 `idsDetail`：本机每一次丢认领、失败、丢弃的时刻与原因
  *   node scripts/probes/m8-e-probe.mjs --role watcher --coord <协调口> [--run <id>]        （可选：另一台机器上的旁观节点）
  *   node scripts/probes/m8-e-probe.mjs --role signal --coord <协调口> --run <id> --name <信号名> [--value '<json>']
  *   node scripts/probes/m8-e-probe.mjs --role all --case … --place <lan|cloud> [--lan-ip …]    本机替身（见下）
@@ -99,6 +101,7 @@ import {
 import { roleKv, resolveRun, kvClient, kvKey } from './m8/kv.mjs';
 import { startHostedCombo, startCoord, startProxy, startRenderHost, startQueueEditor, runRole, until, portFree } from './m8/procs.mjs';
 import { sharedEntry, createProbeProject, deleteProbeProject, openConn, startFakeNode, startFakePublisher } from './m8/conn.mjs';
+import { startNoLanWatch } from './m8/no-lan.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const PREFIX = 'm8e';
@@ -970,8 +973,12 @@ async function runHost(r) {
   let epWatch = null;
   const idsSeen = { claimed: new Map(), completed: new Map(), dedup: new Map(), lost: new Map(), failed: new Map() };
   const eventsLog = [];
+  const eventsDetail = [];
   let pollTimer = null;
   let prerenderUrl = null;
+  // --assert-no-lan <PC 局域网地址>（m8-plan 第 2.3 节「异地接入」的真实渲染一轮）：全程只读地数到这个地址的 TCP 连接
+  const noLanIp = arg('--assert-no-lan', null);
+  const noLan = noLanIp ? startNoLanWatch(noLanIp, { log: say }) : null;
   try {
     const cfg = await kv.takeConfig(deadline);
     if (!r.check('config', !!cfg)) return;
@@ -1012,11 +1019,18 @@ async function runHost(r) {
         if (!prerenderUrl) return;
         const events = (await getJson(`${prerenderUrl}/api/frames/diagnostics`, 10_000)).body?.queue?.events ?? [];
         for (const e of events) {
-          const m = /^node\.(claimed|completed|dedup|lost|failed)$/.exec(String(e?.event ?? ''));
+          const m = /^node\.(claimed|completed|dedup|lost|failed|discarded)$/.exec(String(e?.event ?? ''));
           if (!m || typeof e.id !== 'string') continue;
           const key = `${e.event}|${e.id}|${e.at}`;
           if (eventsLog.includes(key)) continue;
           eventsLog.push(key);
+          // 丢认领、失败、丢弃每一次都记（同一段可能在这台主机上丢不止一次），带时刻与原因，结果行 `idsDetail`
+          if (m[1] === 'lost' || m[1] === 'failed' || m[1] === 'discarded') {
+            if (eventsDetail.length < 200) eventsDetail.push({ ev: m[1], id: e.id, at: new Date(e.at ?? Date.now()).toISOString(),
+              ...(e.reason ? { reason: String(e.reason).slice(0, 80) } : {}), ...(e.phase ? { phase: String(e.phase).slice(0, 40) } : {}),
+              ...(e.error ? { error: String(e.error).slice(0, 160) } : {}) });
+          }
+          if (m[1] === 'discarded') continue;
           if (!idsSeen[m[1]].has(e.id)) idsSeen[m[1]].set(e.id, { at: e.at ?? Date.now(), error: e.error ? String(e.error).slice(0, 160) : undefined });
         }
       } catch { /* 下一拍再试 */ }
@@ -1045,7 +1059,13 @@ async function runHost(r) {
     const n = (await host.node()) ?? {};
     r.set({ stats: { claimed: n.claimed ?? null, completed: n.completed ?? null, dedup: n.dedup ?? null, failed: n.failed ?? null, lost: n.lost ?? null,
       released: n.released ?? null, opens: n.opens ?? null, resumes: n.resumes ?? null, connected: n.connected ?? null },
-    ids: Object.fromEntries(Object.entries(idsSeen).map(([k, m]) => [k, [...m.keys()]])) });
+    ids: Object.fromEntries(Object.entries(idsSeen).map(([k, m]) => [k, [...m.keys()]])), idsDetail: eventsDetail });
+    if (noLan) {
+      const nl = await noLan.stop();
+      r.set({ noLan: nl });
+      r.check('no-lan-tcp', nl.tcpOk, { ip: noLanIp, samples: nl.samples, maxTcp: nl.maxTcp, seen: nl.seen });
+      r.check('no-lan-discovery', nl.discoveryOk, nl.discovery);
+    }
     // e2 / C1 的受害方:被扣住的任务在断线期间执行失败是预期的(旧认领随后作废),不算这台主机的失败
     const expected = new Set(r.extra.stall?.held ?? []);
     const unexpected = [...idsSeen.failed].filter(([id]) => !expected.has(id));
