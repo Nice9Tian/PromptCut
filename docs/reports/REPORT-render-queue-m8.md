@@ -34,6 +34,10 @@
 | PC（主会话） | 创建者、发布方、PC 节点、放本机的项目的局域网主机、阿里云管理员 | 待填 | 待填 | 5780～5789（`m8-plan.md` 第 1.3 节，待主会话核对） |
 | 笔记本（辅助测试节点，性能基准机） | 独立渲染主机、第二成员、纯浏览器节点、断网受害方、耗时项 | 待填 | 待填 | 5580～5599 |
 | 阿里云 `8.219.80.16` | 托管组合 `promptcut-hosted`；信箱与协调口 `probe-coord`；演练实例 `promptcut-drill` | 部署提交待填 | — | 8787 / 8788；演练 8777 / 8778 |
+| 笔记本（**主会话，2026-09-28 第五次修订起**，「PromptCut M5～M8 开发交接」） | 创建者、发布方、PC 节点、独立渲染主机、放本机的项目的局域网主机（本机替身）、阿里云管理员、性能基准机 | `29e6e837`（代码同 `0cabcfb0`，代码版本 `21c62981…`） | Node 24.19.0；预渲染 Chrome 152（SwiftShader）；指纹 `258acaaa7c5fe509` | 5760～5799；局域网地址 `192.168.50.79`（有线） |
+| 云端（「PromptCut M5～M8 云端工作节点」，第五次修订起唯一的第二台机器） | 独立渲染主机、远程成员（只能经代理出网、没有局域网） | `29e6e837`（指令 E6R-1 检出） | Node 22.22.2；Chromium 141；指纹 `0326290ea8e62e3d`；没有 ffmpeg | 容器内 5425 |
+
+- 第五次修订（2026-09-28 ~11:15Z，用户定的交接，`HANDOFF-2026-09-28-pc.md`）之后 PC 主会话与两个辅助节点待命；上面前三行是交接前的分工，后两行是之后的。
 
 ### 1.3 握手
 
@@ -224,6 +228,7 @@
 | 09:19:28Z | 迁移演练准备（`m8-migrate-probe.mjs --step remote-plan` 清单 A、B 步）：备份、删旧的 HT 第 1 版演练进程、挪开旧数据 | `cp -a` 两份 `pm2.config.cjs` 与 `~/.pm2/dump.pm2` 为 `*.bak-20260928-m8`；`pm2 delete promptcut-drill`；`mv /var/lib/promptcut/drill /var/lib/promptcut/drill.old-20260928-m8`；建空的 `drill/secrets`（0700），在服务器上把主实例的 `secrets/cluster-token` 拷过去（令牌不经 PC、不打印） | 0 | 只动演练实例；主实例不受影响 |
 | 09:20Z 前后 | 部署演练实例（当前 main 的服务端代码）并临时放行端口 | `deploy-hosted --instance drill --doc-public-url ws://8.219.80.16:8777 --asset-public-url http://8.219.80.16:8778/api/asset`（不加 `--save`）；`ufw allow 8777/tcp`、`ufw allow 8778/tcp`（注释 `m8-drill 20260928`，裁定 D7，演练完收回） | 0 / 0 | `promptcut-drill` online、重启 0；PC 读两个端口的 `/healthz` 都 ok |
 | 10:28Z 前后 | 重新部署服务端（main `0cabcfb0`：停滞修复的 `step` 要队列一起更新、产物库修复），编辑器页不换 | `deploy-hosted --save --doc-public-url wss://8-219-80-16.sslip.io/hosted/ --asset-public-url https://8-219-80-16.sslip.io/media/api/asset`（不给 `--editor`，编辑器目录保留）；`deploy-hosted --instance drill --doc-public-url ws://8.219.80.16:8777 --asset-public-url http://8.219.80.16:8778/api/asset` | 0 / 0 | 主实例重启（epoch `d535ee3a…` → `f34a127c…`，`restarts` 15）、演练实例重启；当时没有用例在跑。核对：部署后的 `server/render-queue/queue.mjs` 含 `step` 与 `lastError`；`/editor/` 仍给 `index-Cp2h7djI.js` |
+| 12:00:02Z | 重启协调口，清掉上一轮异地接入留下的全局键（KV 只在内存里；信箱落盘在 `mail.jsonl`，不受影响） | `pm2 restart probe-coord` | 0 | 协调口 restarts 3 → 4；重启前的键（`member-config`、`m8x.remote.r2.go`、`m7ap.m7w0928f.*` 等）清空，信箱两队列照旧（`to-cloud` 26、`to-local` 30）；云端与笔记本的长轮询自己重连 |
 
 ## 11. 跨机指令与回执
 
@@ -231,7 +236,10 @@
 
 | 编号 | 指令 | 回执 | 核对的提交 |
 |---|---|---|---|
-| 待填 | 待填 | 待填 | 待填 |
+| （交接前）M8-B1～M8-B3b、W7-1～W7-4 等 | 见 `HANDOFF-2026-09-28-pc.md` 第 5 节与各项证据栏 | 均已回执 | 见各项 |
+| `to-cloud` 第 25 条：主会话确认（第五次修订后笔记本接手） | 云端只听「PromptCut M5～M8 开发交接」，挂着等指令 | `to-local` 第 29 条：已知悉 | HEAD `4047133b`（当时） |
+| `to-cloud` 第 26 条：E6R-1（E6 反方向，云端当指纹 Y 的独立渲染主机，run `e6r0928L`） | `git checkout --detach 29e6e837`；`c10-browser-probe.mjs --role host --run e6r0928L --port 5425 --timeout-min 150`（不用测试指纹） | `to-local` 第 30 条：退出码 0、`ok true fails []`、认领 11、完成 10、丢认领 0、失败 0、ws、opens 1、resumes 0 | `29e6e837` |
+| `to-cloud` 第 27 条：RMT-1（异地接入假任务一轮补跑，云端当远程成员） | `shared-project-probe.mjs --mode internet --role member --expect-tasks 1`，不设集群令牌 | `to-local` 第 31 条：退出码 0、`ok true fails []`、`clusterToken unset`、认领 6、完成 6 | `29e6e837` |
 
 ## 12. 顾问调用记录
 
