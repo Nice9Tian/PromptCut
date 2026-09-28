@@ -137,3 +137,28 @@ fbefcac 重构:task-runner.mjs、idleLockTakeover、afterSplit
 322bffe 文档:报告正文
 (本提交) 文档:报告补探针与提交列表
 ```
+
+## 第二轮：验收探针查出的 M7-A10 与 D1-D2-D12（2026-09-28）
+
+合进 `claude/m7-accept-probe`（56b829b）与 `claude/rq-m7-node`（bab9f46）后查。
+
+**M7-A10（锁闲置接手）**，两个原因：
+
+1. 队列侧缺陷（已修）：切分方从本机锁库已知这张卡锁在浏览器指纹上时，照锁出键，发布合并进离线用户的那几份，不会被拒，也就收不到锁的闲置情况，永远不接手。修法：指纹不同的切分节点照锁发布时，队列回包也带 `lockIdleMs / lockedByProfile / lockUndone`（不带 lockedBy）；合并已有任务、回包带 `lockedBy` 的同样带。`local-node` 对这两种回包照 D2 判：闲置严格超 30 s 且没做完，就按自己的指纹带 takeover 重发，照锁发的那几份不算发布成功。单测 M7Q-A10c～f 修前失败、修后通过。
+2. 探针时机：开 b2 时项目版本没变，b2 发的清单计划与 b1 那一版同 id、已 done，队列只回 task.done，没人重新切分（契约第 3.4 节：接手只在有人重新切分时发生）。探针改法（已改）：开 b2 后 `touchLight` 改一处轻卡参数，让页面按新版本重发。
+
+**D1-D2-D12（双份出键、作废、层表 v3）**，三个原因：
+
+1. 队列侧缺陷（已修）：页面报到之前那一版只出了 pc 单份；下一版按双份发来时 pc 那份合并进已有任务，没有 dual，浏览器先认领后不会被作废（留成死任务）。修法：合并时补上 dual（换新对象，还 open 就重发 task.opened）；锁已在别的指纹上时当场作废。
+2. D12 缺陷（已修）：切分候选只在内存，pc 重启后写的层表只剩 pc 一个候选。修法：落盘到库根 `split-candidates.json`。
+3. 探针判据的时机：这一项在 A10 之后判（pc 已重启，离 A4 已过 10 分钟 DONE_TTL，锁随任务过期被回收，之后的切分没有浏览器、只出 pc 一份，层表按实际出键就只剩 pc），并且假定页面总是先得卡（`pcSuperseded === pcDual`）；宿主全开时 pc 先得卡也合契约（那时作废的是页面那份）。建议：把这一项挪到 A4 之后、A10 之前判，判据改成「每张卡恰好一份被作废（看先认领者是谁）」。
+
+**验收探针**（`node scripts/probes/m7-browser-probe.mjs --role all --out <scratchpad>/m7ap/run3`，跑前 5450～5459 空着，跑完空着）：M7-A10 三条全过——
+
+- `server-idle-takeover` pass：锁 `258acaaa7c5fe509`（页面）→ `43ba7c6261e7f8e5`（pc），takeoverMs 230458；
+- `server-race-one-env-per-card` pass：w1、w2 各只有一种指纹；
+- `page-layer-switched` pass：b2 上 z1 层指纹 = pc 指纹，ready 61。
+
+run2 作废：跑的中途我提交了一处 `server/frame-pipeline.mjs`，pc 的代码版本随工作区变了，与在线构建的代码版本对不上，pc 不再认领计划（`pcFilter: code-version`）。教训：探针跑着时不改工作区。
+
+**基线**：`npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3752、pass 3750、fail 0、skipped 2（合进页面节点分支后，页面节点的门都打开了）。
