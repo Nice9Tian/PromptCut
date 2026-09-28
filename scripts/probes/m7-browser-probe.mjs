@@ -747,24 +747,7 @@ async function runCreator(book, head) {
 
     if (isNode) {
       await pageServerSide(ctx);
-      // 页面当了节点时不起同身份替身（会与真页面抢）：双份出键、作废、层表 v3 直接在真页面的 h1～h3 上判；锁闲置接手见 M7-A10
-      const lmD = await contentGet(ctx.aConn, `layers:${ctx.projectId}`);
-      const pageFpD = ctx.pageNode?.envFingerprint ?? null;
-      const perClip = {};
-      for (const clip of ['h1', 'h2', 'h3']) {
-        const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
-        const pcCopy = ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp);
-        const pgCopy = ts.filter((t) => t.requires?.envFingerprint === pageFpD);
-        const cands = lmD?.layers?.find((l) => l.clipId === clip)?.candidates ?? [];
-        // 页面报到前（最多等 3 s）发的那一版切分时还没有浏览器指纹，只出 pc 一份（不带 dual）：这些照契约不作废，单列
-        const pcDual = pcCopy.filter((t) => t.input?.dual === true);
-        perClip[clip] = { pc: pcCopy.length, pcDual: pcDual.length, pcSingle: pcCopy.length - pcDual.length, page: pgCopy.length,
-          pageDual: pgCopy.length > 0 && pgCopy.every((t) => t.input?.dual === true || pcDual.length === 0),
-          pageHasBake: pgCopy.length > 0 && pgCopy.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
-          pcSuperseded: pcDual.filter((t) => god.tasks.get(t.id)?.state === 'failed' && /superseded/.test(String(god.tasks.get(t.id)?.lastError))).length,
-          candidates: cands.map((c) => c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFpD ? 'page' : c.envFingerprint) };
-      }
-      book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lmD?.v === 3 && Object.values(perClip).every((x) => x.page > 0 && x.pageDual && x.pageHasBake && x.pcSuperseded === x.pcDual && x.candidates.includes('page')), { v: lmD?.v ?? null, perClip });
+
     }
     else {
       for (const id of ['M7-A3', 'M7-A4', 'M7-A8', 'M7-A9', 'M7-A10']) book.pending(id, 'server', NODE_PENDING, { browserNodes: god.browserNodes().map((n) => ({ profile: n.profile, userId: n.userId })) });
@@ -1159,6 +1142,37 @@ function planOnlyState(ctx) {
   return ctx.planOnly;
 }
 
+
+/**
+ * D1-D2-D12 在真页面上判（页面当了节点时；不起同身份替身，免得与真页面抢）。在 M7-A4 之后、M7-A10 之前判：
+ * 之后 pc 要重启、任务过了 DONE_TTL 会被回收，那时的切分没有浏览器、层表只剩 pc（队列方第二轮查明）。
+ * 判据（主会话 2026-09-28）：h1～h3 每张卡都出了双份（pc 指纹、页面指纹，都 dual，页面那份带 bake 与 independent）；
+ * 每张卡恰好有一份被作废（先认领的是谁都行：宿主全开时 pc 先得卡也合契约），被作废那份的全部段都是 superseded；
+ * 层表 v3 这一层两个候选（pc、页面）都在。
+ */
+async function judgeDualOnPage(ctx) {
+  const { book, god, watcher } = ctx;
+  const lm = await contentGet(ctx.aConn, `layers:${ctx.projectId}`);
+  const pageFp = ctx.pageNode?.envFingerprint ?? null;
+  const sup = (t) => god.tasks.get(t.id)?.state === 'failed' && (god.remote || /superseded/.test(String(god.tasks.get(t.id)?.lastError)));
+  const perClip = {};
+  for (const clip of ['h1', 'h2', 'h3']) {
+    const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
+    const copies = { pc: ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp), page: ts.filter((t) => t.requires?.envFingerprint === pageFp) };
+    const superseded = Object.entries(copies).filter(([, list]) => list.length > 0 && list.every(sup)).map(([k]) => k);
+    const cands = lm?.layers?.find((l) => l.clipId === clip)?.candidates ?? [];
+    perClip[clip] = {
+      pc: copies.pc.length, page: copies.page.length,
+      allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
+      pageHasBake: copies.page.length > 0 && copies.page.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
+      superseded, partlySuperseded: Object.entries(copies).filter(([, list]) => list.some(sup) && !list.every(sup)).map(([k]) => k),
+      candidates: cands.map((c) => (c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFp ? 'page' : c.envFingerprint)),
+    };
+  }
+  book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lm?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.allDual && x.pageHasBake
+    && x.superseded.length === 1 && x.partlySuperseded.length === 0 && x.candidates.includes('pc') && x.candidates.includes('page')), { v: lm?.v ?? null, perClip });
+}
+
 /* ---------------------------------------------------------------- 页面当了节点：服务端那一侧 */
 
 async function pageServerSide(ctx) {
@@ -1261,6 +1275,9 @@ async function pageServerSide(ctx) {
   const smallRows = [];
   for (const { t, man } of manifests) smallRows.push({ id: t.id.slice(0, 20), frames: man.frames?.length ?? 0, small: man.small?.length ?? 0, pxAll: await hasAll('px', man.small) });
   book.judge('M7-A9', 'server-every-frame-has-px', smallRows.length > 0 && smallRows.every((r) => r.small === r.frames && r.pxAll), smallRows);
+
+  /* ---- D1-D2-D12：A4 之后、A10 之前判（见 judgeDualOnPage） */
+  await judgeDualOnPage(ctx);
 
   /* ---- A10：宿主全开时谁先谁得卡；浏览器认领后关页、锁闲置 > 30 s、有人发布计划 → pc 接手整张卡 */
   if (flag('--no-a10')) { book.pending('M7-A10', 'server', '--no-a10'); return; }
