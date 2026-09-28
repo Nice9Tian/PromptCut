@@ -353,9 +353,9 @@
 ## 14. 骨架里发现的缺口（M8 部分）
 
 1. **E5 放本机那一遍可能填不了**：它依赖 M8-X4（浏览器进放本机的项目），而 M8-X4 的实现归属未定（裁定 D6 只说记待跨机复核）。主计划第 7 节 M8 要求 E1～E6 放本机一遍，第 10 节不许推迟到 M8 之外，两者目前对不上。——2026-09-28 主会话查明：语义 `product/platforms.md`「在线浏览器模式」（用户 2026-09-27 定）只让浏览器进放云端的项目，M8-X4 与 E5 放本机都不是一期承诺的能力，按「语义优先」记「按语义不做」（第 2 节 E5、第 5 节 M8-X4、第 13 节）。
-2. **五个探针还不存在**：`m8-e-probe.mjs`、`m8-scale-probe.mjs` 没有任何分支；`claude/m8-e2e`、`claude/m8-scale` 分支也还没开。`m8-migrate-probe.mjs` 与 `scripts/probes/m8/` 公共件已在 `claude/m8-migrate`、`claude/m8-kit` 上，未合入。
-3. **「只能出网的节点」替身的代理没有归属分支**：裁定 D5 要笔记本仿一个经 CONNECT 代理出网的节点，`m8-plan.md` 第 4、6 节的探针表里没有这一项。
-4. **E5 用的 M7 探针文件名未定**：`m8-plan.md` 写「`rq-m7-tests` 交付」，`claude/m7-probe` 上目前是 `m7-visibility-probe.mjs`、`m7-bake-probe.mjs`，哪一个负责 M7-A1～A3 的跨机模式待 M7 定。
-5. **`claude/m8-session-legacy` 改了生产代码**（`server/card-sync.mjs` 等），`m8-plan.md` 第 2.8 节只写了「探针分支不跑 G0-R」，这一支要不要跑 G0-R 没定。
+2. **五个探针还不存在**：`m8-e-probe.mjs`、`m8-scale-probe.mjs` 没有任何分支；`claude/m8-e2e`、`claude/m8-scale` 分支也还没开。`m8-migrate-probe.mjs` 与 `scripts/probes/m8/` 公共件已在 `claude/m8-migrate`、`claude/m8-kit` 上，未合入。——【已解决】`claude/m8-kit`（`fdf515e3`）、`claude/m8-migrate`（`6d516f32`）、`claude/m8-scale`（`b18256e1`）、`claude/m8-e2e`（`4538ec42`）都已合入 main（第 1.1 节）。
+3. **「只能出网的节点」替身的代理没有归属分支**：裁定 D5 要笔记本仿一个经 CONNECT 代理出网的节点，`m8-plan.md` 第 4、6 节的探针表里没有这一项。——【已解决】本机 CONNECT 代理替身 `m8-outbound-probe`（main `8f92683`，报告 `AGENT-m8-connect-proxy.md`），另由云端容器（只能经代理出网）实跑（第 5 节末）。
+4. **E5 用的 M7 探针文件名未定**：`m8-plan.md` 写「`rq-m7-tests` 交付」，`claude/m7-probe` 上目前是 `m7-visibility-probe.mjs`、`m7-bake-probe.mjs`，哪一个负责 M7-A1～A3 的跨机模式待 M7 定。——【已解决】E5 用 `m7-browser-probe.mjs` 的站点模式（第 2 节 E5）。
+5. **`claude/m8-session-legacy` 改了生产代码**（`server/card-sync.mjs` 等），`m8-plan.md` 第 2.8 节只写了「探针分支不跑 G0-R」，这一支要不要跑 G0-R 没定。——【已解决】`278eeb9d` 合入；之后 `c15d693`、`0cabcfb0`、`e27fa520` 的 G0-R 都在它之上跑、全过（第 9、12a 节）。
 6. **迁移第 2 步的「先 `pm2 delete` 旧演练实例」标着待核**：HT 第 1 版的 `promptcut-drill` 还在跑（`HANDOFF-2026-09-28.md` 第 7 节），删之前要确认没人在用。——2026-09-28 09:19:28Z 确认没人在用后删掉、旧数据挪成 `drill.old-20260928-m8`（第 10 节）。
-7. **端口段 5730～5789 待主会话核对**（`m8-plan.md` 第 1.3 节原注），本骨架第 1.2 节照抄。
+7. **端口段 5730～5789 待主会话核对**（`m8-plan.md` 第 1.3 节原注），本骨架第 1.2 节照抄。——【已解决】实际用法：PC 5780～5789（PC 主会话期间与 PC 辅助节点，协调口 5789）；笔记本主会话 5760～5799；笔记本辅助节点 5580～5599；子智能体 5740～5759（每个十个一段）。
