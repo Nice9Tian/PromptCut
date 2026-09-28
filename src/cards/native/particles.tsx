@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { beginFrameWork } from "../../kernel/frameReady";
-import { tsParticles, setRandom, type Container } from "@tsparticles/engine";
+import { tsParticles, setRandom, EventType, type Container } from "@tsparticles/engine";
 import { loadSlim } from "@tsparticles/slim";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { assetOptions } from "../catalogAssets";
@@ -55,6 +55,11 @@ function forceOurs(opts: Record<string, any>): Record<string, any> {
      * 画布尺寸由我们的布局说了算,引擎不需要自己盯着。
      */
     resize: { enable: false },
+    /*
+     * 引擎自己的帧循环一律不开:`start()` 末尾那次 `play()` 在 autoPlay=false 的首次启动时直接返回,
+     * refresh() 里 stop() 会把「首次启动」复位,所以往回拖重开时同样不开。画面只由 stepTo 推。
+     */
+    autoPlay: false,
     pauseOnOutsideViewport: false,
     background: { ...(opts.background || {}), color: "transparent" },
     interactivity: {
@@ -105,52 +110,97 @@ async function resolveOptions(params: Params): Promise<Record<string, any>> {
 export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () => Promise<Record<string, any>>; seed: number; depsKey: string; t?: number }) {
   const box = useRef<HTMLDivElement>(null);
   /** 引擎容器 + 已经推到了第几毫秒;重装时整个换掉 */
-  const state = useRef<{ container: Container | null; atMs: number; gen: number }>({ container: null, atMs: 0, gen: 0 });
+  const state = useRef<StepState & { gen: number }>({ container: null, atMs: 0, gen: 0 });
   const wantT = useRef(t);
   wantT.current = t;
 
   useEffect(() => {
     let dead = false;
-    const gen = ++state.current.gen;
-    state.current.container?.destroy();
-    state.current.container = null;
-    state.current.atMs = 0;
+    const st = state.current;
+    const gen = ++st.gen;
+    st.container?.destroy();
+    st.container = null;
+    st.atMs = 0;
+    st.reloading = false;
+    st.pendingT = undefined;
+    st.reload = undefined;
 
     // HMR 重跑这个模块时引擎已经 load 过,再注册插件会抛错;吞掉,插件本来就在
     engineReady ??= loadSlim(tsParticles).catch(() => {});
     const ready = beginFrameWork('particles');
+    let unlisten = () => {};
+
+    /**
+     * 装一个新容器,粒子排布好就回。首次挂载和往回拖都走这一条,两边的随机数流逐个相同。
+     * 不等 load() 的 Promise:它要等引擎 start() 里那个 setTimeout,暂停的舞台上它永远不响(见 whenSetUp)。
+     */
+    const mount = (opts: Record<string, any>): Promise<Container> | null => {
+      const el = box.current;
+      if (dead || !el) return null;
+      // 粒子的初始排布由种子决定:装载那一刻用的随机数就是播种过的
+      setRandom(seededRandom(seed));
+      withRealCanvas(() => {}); // 确保短路已装上(幂等)
+      const setUp = whenSetUp((k) => k.canvas.domElement?.parentElement === el);
+      unlisten = setUp.dispose;
+      tsParticles.load({ element: el, options: forceOurs(opts) }).catch((e) => { setUp.dispose(); console.warn("[particles] 启动失败:", e); });
+      return setUp.promise;
+    };
+    /** 装好了:掐掉引擎自己的帧循环,从现在起只有我们按 t 推它 */
+    const adopt = (c: Container): boolean => {
+      if (dead || gen !== st.gen) { c.destroy(); return false; }
+      c.pause();
+      st.container = c;
+      st.atMs = 0;
+      return true;
+    };
+
     Promise.all([engineReady, resolve()])
       .then(([, opts]) => {
-        if (dead || !box.current) return undefined;
-        // 粒子的初始排布由种子决定:装载那一刻用的随机数就是播种过的
-        setRandom(seededRandom(seed));
-        withRealCanvas(() => {}); // 确保短路已装上(幂等)
-        return tsParticles.load({ element: box.current, options: forceOurs(opts) });
+        /*
+         * 往回拖:整个容器销毁、按同一条路重装,再从 0 推过来(粒子系统没有倒带)。
+         *
+         * **不用 container.refresh()。** refresh 和首次 load() 走的不是同一条路:load 在建容器之前先拿一个
+         * 随机数给容器起名(engine/Core/Engine.js 的 `tsparticles${getRandom()}`,我们不传 id),refresh 不起名;
+         * 粒子编号、对象池也不归零。实测停在 3s、跳到 5s、再跳回 3s,refresh 重排出来的画面和第一次不同
+         * (补上起名那个随机数也还不同)。重装一个新容器,两次就是逐个相同的随机数、逐个相同的步序。
+         */
+        st.reload = (tSec: number) => {
+          st.reloading = true;
+          st.pendingT = tSec;
+          st.container?.destroy();
+          st.container = null;
+          st.atMs = 0;
+          const p = mount(opts);
+          if (!p) { st.reloading = false; return; }
+          p.then((c) => {
+            st.reloading = false;
+            if (adopt(c)) stepTo(st, seed, st.pendingT ?? tSec);
+          }).catch(() => { st.reloading = false; });
+        };
+        return mount(opts);
       })
       .then((c) => {
         if (!c) { ready.dispose(); return; }
-        if (dead || gen !== state.current.gen) { c.destroy(); return; }
-        // 掐掉引擎自己的帧循环:从现在起只有我们按 t 推它
-        c.pause();
-        state.current.container = c;
-        state.current.atMs = 0;
-        stepTo(state.current, seed, wantT.current);
+        if (!adopt(c)) return;
+        stepTo(st, seed, wantT.current);
         ready.ready();
       })
       .catch((e) => { ready.fail(e); console.warn("[particles] 启动失败:", e); });
 
     return () => {
       dead = true;
+      unlisten();
       ready.dispose();
-      state.current.container?.destroy();
-      state.current.container = null;
+      st.reload = undefined;
+      st.container?.destroy();
+      st.container = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [depsKey, seed]);
 
-  // t 变了就推到 t;往回拖就重开一遍再推(粒子系统没有倒带)
+  // t 变了就推到 t;往回拖就重装一遍再推(粒子系统没有倒带)
   useEffect(() => {
-    if (state.current.container) stepTo(state.current, seed, t);
+    stepTo(state.current, seed, t);
   }, [t, seed]);
 
   return <div ref={box} className="absolute inset-0" />;
@@ -161,15 +211,20 @@ const STEP_MS = 1000 / 60;
 /** 单次最多推多少步:20 秒;再长的 clip 也不至于一次卡死主线程 */
 const MAX_STEPS = 60 * 20;
 
-function stepTo(st: { container: Container | null; atMs: number }, seed: number, tSec: number) {
+/**
+ * 推进状态:引擎容器、已经推到第几毫秒。
+ * 往回拖时 reload 重装一个新容器;重装期间 reloading 为真,最新的 t 记在 pendingT,装好了一并推。
+ */
+interface StepState { container: Container | null; atMs: number; reloading?: boolean; pendingT?: number; reload?: (tSec: number) => void }
+
+function stepTo(st: StepState, seed: number, tSec: number) {
+  // 往回拖触发的重装还没好:记下最新的 t,装好了一并推
+  if (st.reloading) { st.pendingT = tSec; return; }
   const c = st.container;
   if (!c || c.destroyed) return;
   const target = Math.max(0, tSec) * 1000;
   if (target < st.atMs - 0.5) {
-    // 往回:重新播种、重新排布,再从 0 推过来
-    setRandom(seededRandom(seed));
-    st.atMs = 0;
-    c.refresh().then(() => { c.pause(); stepTo(st, seed, tSec); }).catch(() => {});
+    st.reload?.(tSec);
     return;
   }
   const render = c.canvas.render;
@@ -210,6 +265,36 @@ function stepTo(st: { container: Container | null; atMs: number }, seed: number,
     render.drawParticles({ value: STEP_MS, factor: 1 } as any);
     st.atMs += STEP_MS;
   }
+}
+
+/**
+ * 等某个容器「粒子排布好了」(引擎在 init() 末尾发的 particlesSetup 事件),**不等 load() / refresh() 的 Promise**。
+ *
+ * 为什么不能等那两个 Promise:引擎的 Container.start() 在 init() 之后还要
+ * `await new Promise(r => setTimeout(r, delay))` 才 resolve(delay 缺省 0)。而预览舞台(?stage=1,
+ * render/stageClock.ts)把 setTimeout 换成了登记在虚拟时钟上的定时器,只在时钟 tick 时结算 ——
+ * **暂停时舞台不 tick,这个 0ms 定时器就永远不响**,load() 永远不 resolve,stepTo 一次都没跑,
+ * 画布停在 init 时清空的样子:canvas 在、80 个粒子都排好了,一个像素都没画。往前拖时舞台会 tick,
+ * 定时器才响,所以「往前拖有画面、停住或往回拖全透明」。
+ *
+ * 那个定时器之后做的事(挂监听、插件 start、发 containerStarted、play())对画面没有影响:
+ * play() 在 autoPlay=false 的首次启动时直接返回(见 forceOurs),交互插件的鼠标事件也关了。
+ * 所以粒子排布好就可以开始按 t 推;定时器哪天响都一样。
+ * 事件是引擎全局的,多张粒子卡共用,用 match 认自己的容器。
+ */
+function whenSetUp(match: (c: Container) => boolean): { promise: Promise<Container>; dispose: () => void } {
+  let handler: ((e: any) => void) | null = null;
+  const dispose = () => { if (handler) tsParticles.removeEventListener(EventType.particlesSetup, handler); handler = null; };
+  const promise = new Promise<Container>((resolve) => {
+    handler = (e: any) => {
+      const k = e?.container as Container | undefined;
+      if (!k || !match(k)) return;
+      dispose();
+      resolve(k);
+    };
+    tsParticles.addEventListener(EventType.particlesSetup, handler);
+  });
+  return { promise, dispose };
 }
 
 /** 按 seed 播种的 PRNG(mulberry32):同一个 seed 永远是同一串数 */
