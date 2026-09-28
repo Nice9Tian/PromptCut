@@ -1163,17 +1163,23 @@ async function judgeDualOnPage(ctx) {
     const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
     const copies = { pc: ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp), page: ts.filter((t) => t.requires?.envFingerprint === pageFp) };
     const superseded = Object.entries(copies).filter(([, list]) => list.length > 0 && list.every(sup)).map(([k]) => k);
+    // 每一段（同一帧范围）恰好一份有效（没被作废）：先认领者得卡时是整份作废另一份；中途被 D2 接手（页面慢、锁闲置超 30 s）时
+    // 是先前那份的后几段作废、接手方补上 —— 两种都是每段恰好一份有效
+    const ranges = new Map();
+    for (const t of [...copies.pc, ...copies.page]) { const k = `${t.range?.from}-${t.range?.to}`; ranges.set(k, (ranges.get(k) ?? 0) + (sup(t) ? 0 : 1)); }
+    const badRanges = [...ranges].filter(([, n]) => n !== 1).map(([k, n]) => `${k}:${n}`);
     const cands = lm?.layers?.find((l) => l.clipId === clip)?.candidates ?? [];
     perClip[clip] = {
       pc: copies.pc.length, page: copies.page.length,
       allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true),
       pageHasBake: copies.page.length > 0 && copies.page.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
-      superseded, partlySuperseded: Object.entries(copies).filter(([, list]) => list.some(sup) && !list.every(sup)).map(([k]) => k),
+      superseded, partlySuperseded: Object.entries(copies).filter(([, list]) => list.some(sup) && !list.every(sup)).map(([k]) => k), badRanges,
       candidates: cands.map((c) => (c.envFingerprint === ctx.pcFp ? 'pc' : c.envFingerprint === pageFp ? 'page' : c.envFingerprint)),
     };
   }
   book.judge('D1-D2-D12', 'page-dual-split-supersede-layermap', lm?.v === 3 && Object.values(perClip).every((x) => x.pc > 0 && x.page > 0 && x.pageHasBake
-    && x.superseded.length === 1 && x.partlySuperseded.length === 0 && x.candidates.includes('pc') && x.candidates.includes('page')), { v: lm?.v ?? null, perClip });
+    && x.badRanges.length === 0 && (x.superseded.length === 1 || x.partlySuperseded.length > 0) && x.candidates.includes('pc') && x.candidates.includes('page')),
+    { v: lm?.v ?? null, perClip, takenOverMidway: Object.entries(perClip).filter(([, x]) => x.partlySuperseded.length > 0).map(([c, x]) => `${c}: ${x.partlySuperseded.join('、')} 那份中途被 D2 接手（说明，不算失败）`) });
 }
 
 /* ---------------------------------------------------------------- 页面当了节点：服务端那一侧 */
@@ -1846,7 +1852,7 @@ async function runAll() {
     const run = newRunId();
     const common = ['--coord', coord.url, '--run', run, '--out', out, '--timeout-min', String(TIMEOUT_MS / 60_000), '--node-wait-s', String(NODE_WAIT_MS / 1000), '--a3-seconds', String(A3_MS / 1000),
       ...(flag('--no-twin') ? ['--no-twin'] : []), ...(flag('--no-a10') ? ['--no-a10'] : []), ...(arg('--dist') ? ['--dist', arg('--dist')] : []), ...(flag('--keep-temp') ? ['--keep-temp'] : []),
-      ...(flag('--a4-motion') ? ['--a4-motion'] : [])];
+      ...(flag('--a4-motion') ? ['--a4-motion'] : []), ...(arg('--base-port') ? ['--base-port', arg('--base-port')] : [])];
     const runRole = (role, extra = []) => new Promise((resolve) => {
       const c = spawn(process.execPath, [SELF, '--role', role, ...common, ...extra], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let stdout = '';
@@ -1854,7 +1860,8 @@ async function runAll() {
       c.stderr.on('data', (d) => process.stderr.write(d));
       c.once('exit', (code) => resolve({ role, code, line: lastJsonLine(stdout) }));
     });
-    const [cr, nd] = await Promise.all([runRole('creator'), runRole('node')]);
+    // 计时项按不按判定只看 node 角色（它在页面旁边计时）：--role all 带 --timing-authoritative 就转给 node
+    const [cr, nd] = await Promise.all([runRole('creator'), runRole('node', flag('--timing-authoritative') ? ['--timing-authoritative'] : [])]);
     return { run, out, creator: cr, node: nd };
   } finally {
     await coord.stop();
