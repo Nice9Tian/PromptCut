@@ -1855,9 +1855,12 @@ try {
     const fresh = await until('A5:页面取到主机产的新快照(层换了新键、环境是主机的,snap/ 就绪)', async () => {
       const o = await onlineDiag(member);
       const l = o?.layers?.find((x) => x.clipId === state.main);
-      return l && l.resultKey !== keyBefore && l.envFingerprint === hostFp && l.ready > 0 ? l : null;
+      // M7 D1:页面在线时切分方给这张卡另出一份页面指纹的,谁先认领谁得卡 —— 新层出自主机或页面自己都算页面取到了新快照(记下是谁)
+      return l && l.resultKey !== keyBefore && (l.envFingerprint === hostFp || (state.pageFp && l.envFingerprint === state.pageFp)) && l.ready > 0 ? l : null;
     }, 600_000, 2000);
-    check(fresh, 'A5:页面取到新快照', fresh ?? (await onlineDiag(member))?.layers);
+    const layersNow = async () => ((await onlineDiag(member))?.layers ?? []).map((l) => ({ clip: l.clipId, main: l.clipId === state.main, fp: l.envFingerprint, ready: l.ready, candidates: l.candidates, newKey: l.clipId === state.main ? l.resultKey !== keyBefore : undefined }));
+    check(fresh, 'A5:页面取到新快照', fresh ?? { main: (await layersNow()).find((l) => l.main) ?? null, hostFp, pageFp: state.pageFp, layers: (await layersNow()).length });
+    if (!fresh) out.steps.a5FreshDiag = { hostFp, pageFp: state.pageFp, keyBefore: String(keyBefore ?? '').slice(0, 12), layers: await layersNow() };
     await P(member, () => window.__pcStore.actions.seek(2));
     await P(member, () => { const s = window.__pcStore; s.actions.seek(2); s.actions.play(); });
     let newShown = null;
@@ -1887,7 +1890,7 @@ try {
     }
     // E6 反方向:等这一轮的细任务都关闭(外部主机要在 finish 之前做完)
     const e6Settled = e6 ? await e6Settle() : null;
-    out.steps.a5 = { ms: Date.now() - t5, published, external: EXTERNAL_HOST, claimant, cut: cutResult ? { held: cutResult.held, before: cutResult.before, after: cutResult.after, judge: cutJudge } : null, newLayer: fresh ? { resultKey: fresh.resultKey.slice(0, 12), envFingerprint: fresh.envFingerprint, ready: fresh.ready } : null, shown: newShown, planeText: newHtml?.slice(0, 40) ?? null };
+    out.steps.a5 = { ms: Date.now() - t5, published, external: EXTERNAL_HOST, claimant, cut: cutResult ? { held: cutResult.held, before: cutResult.before, after: cutResult.after, judge: cutJudge } : null, newLayer: fresh ? { resultKey: fresh.resultKey.slice(0, 12), envFingerprint: fresh.envFingerprint, by: fresh.envFingerprint === hostFp ? 'host' : 'page', ready: fresh.ready } : null, shown: newShown, planeText: newHtml?.slice(0, 40) ?? null };
     let hostIds = null;
     if (xstore) {
       await xstore.put('finish', { at: Date.now(), reason: fresh ? 'fresh' : 'gave-up' }).catch(() => {});
