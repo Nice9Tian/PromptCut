@@ -31,6 +31,7 @@
  * 其它参数：
  *   --out <目录>  --keep-temp  --dist <在线构建目录>  --timeout-min 120  --node-wait-s 60  --a3-seconds 60
  *   --no-twin     页面没当节点时不跑「页面同身份替身」的 D1 / D2 / D12 服务端检查（它要 30 s 以上的锁闲置）
+ *   --media-delay-ms <毫秒>  本机替身里素材服务每个请求先压这么久（应用层模拟在线站点的网络往返，排查每帧耗时用）
  *   --no-a10      不跑 M7-A10（它要重启 A 的编辑器、关页面、等 30 s）
  *   --headful     node 角色用有头 Chrome（排障）
  */
@@ -70,6 +71,8 @@ const TIMEOUT_MS = Number(arg('--timeout-min', 120)) * 60_000;
 const deadline = Date.now() + TIMEOUT_MS;
 const NODE_WAIT_MS = Number(arg('--node-wait-s', 60)) * 1000;
 const A3_MS = Number(arg('--a3-seconds', 60)) * 1000;
+/** 本机替身里素材服务每个请求的附加延迟（毫秒，模拟在线站点的往返；缺省 0） */
+const MEDIA_DELAY_MS = Math.max(0, Number(arg('--media-delay-ms', 0)) || 0);
 
 /** 等一个 KV 信号；对方中止（abort）就回 null，不干等到总时限 */
 async function waitSignal(kv, name) {
@@ -266,7 +269,8 @@ async function startSite({ out, bind, publicHost }) {
       if (urls.length > 50_000) urls.shift();
       const url = new URL(req.url, 'http://x');
       if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, combo.docPort, '/hosted');
-      if (url.pathname.startsWith('/media/')) return forward(req, res, combo.assetPort, '/media');
+      // --media-delay-ms：素材服务的每个请求先压这么久再转发（应用层模拟到在线站点的网络往返，不动宿主机网络）
+      if (url.pathname.startsWith('/media/')) { if (MEDIA_DELAY_MS > 0) { req.pause(); setTimeout(() => { req.resume(); forward(req, res, combo.assetPort, '/media'); }, MEDIA_DELAY_MS); return; } return forward(req, res, combo.assetPort, '/media'); }
       const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
       const sendFile = (file, cache) => {
         res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
@@ -1885,7 +1889,8 @@ async function runAll() {
     const run = newRunId();
     const common = ['--coord', coord.url, '--run', run, '--out', out, '--timeout-min', String(TIMEOUT_MS / 60_000), '--node-wait-s', String(NODE_WAIT_MS / 1000), '--a3-seconds', String(A3_MS / 1000),
       ...(flag('--no-twin') ? ['--no-twin'] : []), ...(flag('--no-a10') ? ['--no-a10'] : []), ...(arg('--dist') ? ['--dist', arg('--dist')] : []), ...(flag('--keep-temp') ? ['--keep-temp'] : []),
-      ...(flag('--a4-motion') ? ['--a4-motion'] : []), ...(arg('--base-port') ? ['--base-port', arg('--base-port')] : [])];
+      ...(flag('--a4-motion') ? ['--a4-motion'] : []), ...(arg('--base-port') ? ['--base-port', arg('--base-port')] : []),
+      ...(arg('--media-delay-ms') ? ['--media-delay-ms', arg('--media-delay-ms')] : [])];
     const runRole = (role, extra = []) => new Promise((resolve) => {
       const c = spawn(process.execPath, [SELF, '--role', role, ...common, ...extra], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let stdout = '';
