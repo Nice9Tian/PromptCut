@@ -349,9 +349,13 @@ test('segment encoder command line follows G3: premultiplied, out_range=tv, stri
   const args = streamSegmentArgs({ encoder: 'libx264', fps: 30 });
   const joined = args.join(' ');
   assert.ok(args.includes('-reinit_filter') && args[args.indexOf('-reinit_filter') + 1] === '0');
-  // 预乘之后直接在 gbrap 上分叉(不再转回 rgba,和旧写法逐字节等价,见 stream-encode-fast.test.mjs)
-  assert.match(joined, /\[0:v\]format=gbrap,premultiply=inplace=1,split=2\[c\]\[a\]/);
-  assert.match(joined, /\[a\]alphaextract,format=rgb24,pad=iw:ih\+8:0:0:black\[mask\]/);
+  // 滤镜切片线程数按核数封顶 8(不改产出,见 stream-encode-fast.test.mjs)
+  assert.match(args[args.indexOf('-filter_complex_threads') + 1], /^\d+$/);
+  // alpha 在预乘之前分出去、两半用 gbrp 拼(和旧写法逐字节等价,见 stream-encode-fast.test.mjs)
+  assert.match(joined, /\[0:v\]format=gbrap,split=2\[p\]\[a\];\[p\]premultiply=inplace=1,format=gbrp,pad=iw:ih\+8:0:0:black\[rgb\]/);
+  assert.match(joined, /\[a\]alphaextract,format=gbrp,pad=iw:ih\+8:0:0:black\[mask\]/);
+  // 输入端不攒包:帧一到就开工(只改时机、不改产出)
+  assert.match(joined, /-probesize 32 -analyzeduration 0 -threads 1 -f image2pipe -c:v png -framerate 30 -i pipe:0/);
   assert.match(joined, /scale=out_range=tv:out_color_matrix=bt709,format=yuv420p/);
   assert.match(joined, /-color_range tv/);
   assert.match(joined, /-c:v libx264 -preset veryfast -crf 16 -g 15 -keyint_min 15 -sc_threshold 0 -bf 0/);

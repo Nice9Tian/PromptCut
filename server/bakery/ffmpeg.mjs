@@ -4,6 +4,7 @@
  * 从 scripts/export-frames.mjs 拆出来(纯重构,逐字搬运)。
  */
 
+import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
 import { spawn } from 'child_process';
@@ -169,14 +170,18 @@ export function streamEncoderPreference(env = process.env) {
  * 宽高已经是 G1 外扩过的偶数,滤镜链不再取整。
  *
  * 和 `streamFilterIdentity` 那条旧写法逐字节等价(送进编码器的每一帧 YUV 都相同,见
- * `server/test/stream-encode-fast.test.mjs`),只是少走两趟整帧转换:预乘之后不再转回 `rgba` 再分叉
- * (`gbrap` 直接分叉,色半区 `gbrap → rgb24`、alpha 半区 `alphaextract` 出来的 `gray → rgb24`),
- * 1080p 一段 15 帧省下约五分之一的滤镜耗时(`docs/reports/AGENT-perf-encode.md`)。
+ * `server/test/stream-encode-fast.test.mjs`),只是少做几趟整帧的活:
+ *   - 预乘之后不再转回 `rgba` 再分叉(`docs/reports/AGENT-perf-encode.md`);
+ *   - **alpha 半区在预乘之前分出去**:预乘只改色平面、不动 alpha 平面,所以取出来的 alpha 相同;
+ *     而 ffmpeg 8 起帧上带 alpha 模式,预乘后的帧标成「已预乘」,`alphaextract` 只收「未预乘」的,
+ *     分叉在预乘之后时滤镜图会自动插一个 `premultiply_dynamic` 把整帧反预乘回去(白算一趟、结果还被丢掉);
+ *   - 两半用平面 `gbrp` 拼(`gbrap → gbrp`、`gray → gbrp` 只是搬平面),最后一趟 `gbrp → yuv` 比 `rgb24 → yuv` 省;
+ * 单线程下这条链比上一版省约四分之一(`docs/reports/AGENT-perf-encode-2.md`)。
  */
 export function streamFilter(pixFmt = 'yuv420p') {
-  return '[0:v]format=gbrap,premultiply=inplace=1,split=2[c][a];'
-    + '[c]format=rgb24,pad=iw:ih+8:0:0:black[rgb];'
-    + '[a]alphaextract,format=rgb24,pad=iw:ih+8:0:0:black[mask];'
+  return '[0:v]format=gbrap,split=2[p][a];'
+    + '[p]premultiply=inplace=1,format=gbrp,pad=iw:ih+8:0:0:black[rgb];'
+    + '[a]alphaextract,format=gbrp,pad=iw:ih+8:0:0:black[mask];'
     + `[rgb][mask]vstack=inputs=2,scale=out_range=tv:out_color_matrix=bt709,format=${pixFmt}`;
 }
 
@@ -192,13 +197,37 @@ export function streamFilterIdentity(pixFmt = 'yuv420p') {
     + `[rgb][mask]vstack=inputs=2,scale=out_range=tv:out_color_matrix=bt709,format=${pixFmt}`;
 }
 
+/**
+ * 输入端的三个选项,**只改什么时候开工、不改产出**(同样输入逐字节相同,见 `stream-encode-fast.test.mjs`):
+ *   - `-probesize 32 -analyzeduration 0`:ffmpeg 开输入时缺省要先读够 5 MB(或 5 秒)才开工;一张 PNG 两三百 KB,
+ *     一段 15 帧整段都凑不够,于是**不等 stdin 关掉什么都不做**。帧率由 `-framerate` 给定、宽高与像素格式
+ *     从第一张 PNG 解出来,不需要多读;
+ *   - `-threads 1`(PNG 解码):帧级多线程解码要先攒够「线程数 − 1」个包才出第一帧(16 线程的机器上正好一整段)。
+ *     单线程解一张 1080p 截图只要一两毫秒,远快于后面的滤镜和编码,不成瓶颈。
+ * 两者合起来,帧一到就进滤镜和编码器,喂完最后一张之后只剩最后几帧和收尾(按出帧节奏喂时,
+ * 1080p 一段喂完到出完字节从约 270 ms 降到约 70 ms)。
+ */
+const STREAM_INPUT_ARGS = ['-probesize', '32', '-analyzeduration', '0', '-threads', '1'];
+
+/**
+ * 滤镜图的切片线程数:缺省(0)是逻辑核数,这里封顶 8。滤镜和 x264(auto 线程是核数 × 1.5)抢同一批核,
+ * 16 线程的笔记本上切 16 片反而比 8 片慢约 15 ms / 段(`docs/reports/AGENT-perf-encode-2.md`);8 核以下不变。
+ * 切几片**不改产出**:swscale / premultiply / vstack 按行切片,1～16 片输出逐字节相同(单测里比 1 片和 3 片)。
+ */
+export function streamFilterThreads(cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length, env = process.env) {
+  // PROMPTCUT_STREAM_FILTER_THREADS:手动指定(0 = 交给 ffmpeg,即逻辑核数),给别的机器调参用
+  const forced = String(env.PROMPTCUT_STREAM_FILTER_THREADS ?? '').trim();
+  if (/^\d+$/.test(forced)) return Number(forced);
+  return Math.max(1, Math.min(8, Math.floor(Number(cpus)) || 1));
+}
+
 /** 一个分段的完整命令行(输出 fMP4 到 stdout) */
 export function streamSegmentArgs({ encoder = 'libx264', fps }) {
   const spec = STREAM_ENCODERS[encoder];
   if (!spec) throw new Error(`未知的轨道流编码器 ${encoder}`);
   if (!(Number(fps) > 0)) throw new Error('轨道流编码要帧率');
-  return ['-y', '-hide_banner', '-loglevel', 'error',
-    '-reinit_filter', '0', '-f', 'image2pipe', '-c:v', 'png', '-framerate', String(fps), '-i', 'pipe:0',
+  return ['-y', '-hide_banner', '-loglevel', 'error', '-filter_complex_threads', String(streamFilterThreads()),
+    '-reinit_filter', '0', ...STREAM_INPUT_ARGS, '-f', 'image2pipe', '-c:v', 'png', '-framerate', String(fps), '-i', 'pipe:0',
     '-filter_complex', streamFilter(spec.pixFmt),
     ...spec.args,
     '-color_range', 'tv', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
@@ -346,6 +375,8 @@ export function openStreamSegmentEncoder(ffmpeg, { encoder = 'libx264', fps, pre
   return {
     encoder,
     get written() { return written; },
+    /** 已经从 stdout 收到的字节数(喂帧期间就开始增长:编码器在第一帧到时就开工,见 `STREAM_INPUT_ARGS`) */
+    get received() { return received; },
     async write(buffer) {
       if (inputError) throw inputError;
       await new Promise((resolve, reject) => proc.stdin.write(buffer, e => e ? reject(e) : resolve()));
