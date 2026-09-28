@@ -921,7 +921,7 @@ async function caseE6(ctx) {
   const { r, run, ed } = ctx;
   const skipped = [];
   if (flag('--browser-node')) skipped.push({ what: 'browser-node', reason: '纯浏览器节点（D12 的 b）由 M7 交付，本检出没有；M7 合入后在这里接 M7 探针的节点角色（跨机模式），判 Y 指纹的节点对 PC 这一版认领 0' });
-  skipped.push({ what: 'reverse', reason: '反方向（笔记本主机先认领按清单发布的 plan，C10 契约第 18 节第 9 条、计划 L18）要 C10 在线页面发布无指纹的 plan；桌面 plan 带发布方指纹，别的指纹的主机永远认领不到。C10 合入后补' });
+  skipped.push({ what: 'reverse', reason: '反方向（主机先认领按清单发布的 plan，C10 契约第 18 节第 9 条、计划 L18）要在线页面发布不带指纹的 plan；本探针的发布方是桌面编辑器（plan 带发布方指纹，别的指纹的主机永远认领不到），不起在线页面。这一向用 c10-browser-probe.mjs 的跨机模式（--role host 带测试指纹）做' });
   const fake = Object.entries(ctx.readies).filter(([, x]) => x.fingerprint?.requested);
   const notApplied = fake.filter(([, x]) => !x.fingerprint.applied);
   if (!fake.length) {
