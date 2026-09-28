@@ -852,6 +852,7 @@ test('M7Q-D1-Q5 切分方那份先按单份建过、后一版按双份发来：�
   h.publish('p', [own0]);
   const r = published(h.publish('p', [snap('ck1', P, 0, { dual: true }), snap('ck1', B, 0, { dual: true })]), 'p');
   assert.deepEqual(r.map((x) => [x.created, x.error]), [[false, undefined], [true, undefined]]);
+  assert.equal(h.bus.of('pc', 'task.opened').filter((m) => m.task.id === own0.id).at(-1)?.task.input.dual, true, '补上 dual 后重发 task.opened');
   h.claim('bw', snap('ck1', B, 0).id, 1);
   assert.deepEqual([h.task(own0.id).state, h.task(own0.id).lastError], ['failed', 'superseded']);
 });

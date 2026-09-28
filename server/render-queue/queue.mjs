@@ -753,7 +753,14 @@ export function createRenderQueue(options = {}) {
        * M7 D1（验收探针查出）：切分方这一份早先按单份建过（页面报到之前的那一版），这一版又按双份发来 ——
        * 它现在有了另一份，补上 `dual`，建锁时才会被作废，不留成谁都认领不了的死任务。换新对象，不原地改。
        */
-      if (input.input?.dual === true && task.input?.dual !== true) task.input = { ...task.input, dual: true };
+      if (input.input?.dual === true && task.input?.dual !== true) {
+        task.input = { ...task.input, dual: true };
+        // 同优先级升级：还 open 的重发一条 task.opened，看得见它的节点（与旁观者）视图里的 input 跟着换
+        if (task.state === 'open') {
+          const view = viewOf(task);
+          after.push(() => { if (task.state === 'open') broadcast(task, 'task.opened', { task: view }); });
+        }
+      }
     } else if (task.state === 'done') {
       const fields = doneFields(task);
       after.push(() => emit(conn, 'task.done', fields));
