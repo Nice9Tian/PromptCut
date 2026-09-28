@@ -58,7 +58,7 @@ ContentClient = {
 `createAssetSink({ pipeline, client, content? })` 新增可选的 `content`（`ContentClient`）。
 
 `has(ref)` 的判断顺序：
-1. 本机帧库覆盖整段 → `true`，与 C6.2 相同；
+1. 本机帧库覆盖整段 → `true`，与 C6.2 相同；（2026-09-28 起还要素材服务上块齐，缺的用本机字节补推，见 `artifact-transfer-contract.md` 第 4 节 `has` 的〔裁〕）
 2. 否则，给了 `content`：
    - 查 `content.get(kind, key)`；
    - 清单存在、清单里每个块在素材服务上都有（逐个 `client.has`；已有的数量达到清单的全部）、而且清单覆盖整段（快照：`frames` 覆盖 `range` 的每一帧；流：`segments` 覆盖每个分段号）；

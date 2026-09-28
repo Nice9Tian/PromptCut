@@ -610,8 +610,11 @@ function safeLog(log, event, fields) {
 /**
  * D.1 的产物库(`sink`),素材服务实现(C6.2 契约第 4 节、第 11 节第 3、7 条;C6.4 `manifest-contract.md` 第 3 节)。
  *
- *   - `has(ref)`:
- *       1. 本机帧库覆盖了整个 `range` → true(同 C6.2);
+ *   - `has(ref, { report }?)`:
+ *       1. 本机帧库覆盖了整个 `range`:素材服务上也得齐才算有(语义「节点先把产物推送到素材服务,再向文档服务报完成」,
+ *          `docs/reports/AGENT-sink-has.md`)。按本机帧库列清单,`pushResult` 逐块「先问 chunks、有了就跳过」,
+ *          缺的块用本机字节补推(不重渲),推齐后把清单写进内容库、回 true;补推出错回 false(记 `sink.has-push-failed`),
+ *          交给执行 → `put` 再推。`report` 同 `put` 的,补推时每处理完一块报一次(节点据此算进度);
  *       2. 给了 `content`:按 `<resultKey>:<from>-<to>` 查内容库里的清单。清单在、清单覆盖整段、清单里每个块
  *          在素材服务上都有(逐个 `client.has`),三条都满足 → true,并把清单记在 sink 里(`resultFor` 回它);
  *       3. 其它 → false。
@@ -631,18 +634,36 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
   const remembered = new Map();
   const collect = ref => (ref?.kind === 'snapshot' ? collectSnapshotResult(pipeline, ref) : collectStreamResult(pipeline, ref));
   return {
-    async has(ref) {
+    async has(ref, { report } = {}) {
       /*
        * c10a 第 9 节:开着小尺寸时,本机帧库覆盖了整段、而这一段还缺小尺寸,就不算已有 —— 交给执行器补上小尺寸再推。
        * 这时也不去查内容库:那里的清单多半是本机推送队列边渲边写的,原尺寸齐、小尺寸缺,认了它这一段就永远缺小尺寸。
        */
-      try {
-        if (await coversRange(pipeline, ref)) {
-          if (!wantsSmall(pipeline, ref)) return true;
-          const { result } = await collect(ref);
-          return resultComplete(result) && smallComplete(result);
+      let covered = false;
+      try { covered = await coversRange(pipeline, ref); } catch { covered = false; /* 当本机没有 */ }
+      if (covered) {
+        let collected;
+        try { collected = await collect(ref); } catch { collected = null; }
+        if (collected && resultComplete(collected.result) && (!wantsSmall(pipeline, ref) || smallComplete(collected.result))) {
+          // 本机有,素材服务上也得齐:推到一半丢了认领、又被自己重新认领时,这里补齐缺的块,不然别的成员按清单取不到
+          const tell = (fields) => { try { report?.(fields); } catch { /* 诊断回调出错不影响推送 */ } };
+          tell({ stage: 'has-push' });
+          try {
+            const pushed = await pushResult(client, collected.result, collected.readBlob, { onBlock: (p) => tell(p) });
+            if (content) await writeManifest(content, collected.result, log);
+            if (pushed.uploaded > 0) {
+              safeLog(log, 'sink.has-pushed', { resultKey: String(ref.resultKey ?? '').slice(0, 16), range: ref.range ?? null, uploaded: pushed.uploaded, skipped: pushed.skipped });
+            }
+            return true;
+          } catch (error) {
+            safeLog(log, 'sink.has-push-failed', { resultKey: String(ref.resultKey ?? '').slice(0, 16), range: ref.range ?? null,
+              code: error?.code ?? error?.status ?? null, message: String(error?.message ?? error).slice(0, 200), ...(error?.stats ?? {}) });
+            return false;
+          }
         }
-      } catch { /* 当本机没有 */ }
+        // 本机覆盖了、清单却不全(缺小尺寸,c10a 第 9 节):交给执行器补上再推。也不去查内容库(见上)
+        if (collected && wantsSmall(pipeline, ref)) return false;
+      }
       if (!content || typeof content.get !== 'function') return false;
       const kind = manifestKindOf(ref?.kind);
       const key = manifestKeyOf(ref);

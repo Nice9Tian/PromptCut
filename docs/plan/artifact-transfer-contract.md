@@ -115,7 +115,7 @@ export function createAssetSink({ pipeline, client }) → Sink     // 实现 D.1
 **`pushResult`**：清单里的每个块都 `client.put` 一次，快照进 `snap`、流进 `px`，`put` 本身会跳过已有的块；全部成功才返回。
 
 **`createAssetSink`**：
-- `has(ref)`：本机帧库覆盖了整个 `range` 就回 `true`。只看本机，不查素材服务。
+- `has(ref)`：本机帧库覆盖了整个 `range` 就回 `true`。只看本机，不查素材服务。〔2026-09-28 `claude/sink-has` 裁：本机覆盖了整段还不够，素材服务上也得齐——按本机帧库列清单，经 `pushResult`「先问 chunks、有了就跳过」把缺的块用本机字节补推（不重渲），推齐后写清单、回 `true`；补推出错回 `false`，交给执行 → `put` 再推。原因：推到一半丢了认领、又被自己重新认领时，只看本机会以去重完成，而素材服务上缺块，别的成员按清单取不到，违反语义「节点先把产物推送到素材服务，再向文档服务报完成」（`product/document-service.md`）。块齐时只问不推，「已在素材服务里的直接完成、不重渲」不变。报告 `docs/reports/AGENT-sink-has.md`〕
 - `put({ ...ref, artifacts, meta })`：`artifacts` 本阶段约定为 `null` 或被忽略，字节以本机帧库为准。流程是 `collect*`，再 `pushResult`，全部推完回 `{ complete: true, result }`；清单有缺帧、有块推失败，回 `{ complete: false }`。
 - 返回值多了 `result` 字段，这是对 D.1 的**扩展**。`local-node.mjs` 什么时候把它放进 `session.complete(id, { ranges, …result })`，由 M5b 改，本阶段不改 `local-node.mjs`。
 

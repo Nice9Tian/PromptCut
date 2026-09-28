@@ -227,7 +227,13 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
       const ranges = [[range?.from, range?.to]];
 
       enter(run, 'dedup');
-      const have = await untilAborted(() => sink.has({ ...ref }), signal);
+      // 产物库查的时候可能顺手把本机已有、素材服务上缺的块补推(AGENT-sink-has):每处理完一块也算工作推进了一步
+      const dedupReport = (update) => {
+        if (signal.aborted || !update || typeof update !== 'object') return;
+        if (typeof update.stage === 'string') note(run, update.stage);
+        else if (Number.isFinite(update.pushed)) note(run, run.detail?.name ?? 'dedup', { blocks: update.blocks, pushed: update.pushed });
+      };
+      const have = await untilAborted(() => sink.has({ ...ref }, { signal, report: dedupReport }), signal);
       if (!holding(run)) return discard();
       if (have === true) {
         // 去重完成也带清单,订阅方才拉得到(C6.4 第 3 节);sink 没有 resultFor 时照旧(D.2)
