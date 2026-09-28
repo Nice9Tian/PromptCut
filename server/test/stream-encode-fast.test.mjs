@@ -5,6 +5,8 @@
  *   - `endsWithCompleteMfra` 的判定;
  *   - 预先拉起的编码进程:领用后补拉、产出和现拉的逐字节相同、`finish()` 见到 mfra 就交字节;
  *     ffmpeg 出错时照旧报错;关掉开关不留进程。
+ *   - 整条命令行(输入端不攒包 + 新滤镜链)编出的 fMP4 与改写前的命令行逐字节相同;帧一到就开工
+ *     (`docs/reports/AGENT-perf-encode-2.md`)。
  * 需要 ffmpeg 的几条在没有 ffmpeg 的机器上跳过。
  */
 import { test, after } from 'node:test';
@@ -13,7 +15,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { PNG } from 'pngjs';
 import {
   streamFilter, streamFilterIdentity, STREAM_ENCODERS, openStreamSegmentEncoder, endsWithCompleteMfra,
-  dropStreamEncoderSpares, streamEncoderSpareCount, streamPrewarmEnabled,
+  dropStreamEncoderSpares, streamEncoderSpareCount, streamPrewarmEnabled, streamSegmentArgs,
 } from '../bakery/ffmpeg.mjs';
 import { encoderParamsHash, splitFmp4, segmentInfo } from '../frame-stream.mjs';
 
@@ -49,7 +51,8 @@ function filtered(filter, pngs) {
 
 test('新滤镜链只少了中间转换,字面上仍是 G3 的那几步', () => {
   const f = streamFilter('yuv420p');
-  assert.match(f, /^\[0:v\]format=gbrap,premultiply=inplace=1,split=2\[c\]\[a\];/);
+  assert.match(f, /^\[0:v\]format=gbrap,split=2\[p\]\[a\];\[p\]premultiply=inplace=1,/);
+  assert.doesNotMatch(f, /premultiply=inplace=1,split/, '分叉在预乘之后会让 alphaextract 前面自动插一趟反预乘');
   assert.match(f, /scale=out_range=tv:out_color_matrix=bt709,format=yuv420p$/);
   assert.match(streamFilter('nv12'), /format=nv12$/);
   assert.notEqual(streamFilter('yuv420p'), streamFilterIdentity('yuv420p'));
@@ -140,4 +143,44 @@ test('ffmpeg 出错时 finish 照旧报错(备用进程也一样)', { skip: !ffm
     await assert.rejects(enc.finish(), /ffmpeg\(libx264\)退出码|EPIPE|EOF/, `prewarm=${prewarm}`);
   }
   dropStreamEncoderSpares();
+});
+
+/* ------------------------------------------------------------ 整条命令行 */
+
+/** 改写前(main e27fa520)的完整命令行:输入端缺省探测 5 MB、帧级多线程解码,滤镜链是 `streamFilterIdentity` 那条 */
+function legacySegmentArgs(fps = 30) {
+  return ['-y', '-hide_banner', '-loglevel', 'error',
+    '-reinit_filter', '0', '-f', 'image2pipe', '-c:v', 'png', '-framerate', String(fps), '-i', 'pipe:0',
+    '-filter_complex', streamFilterIdentity('yuv420p'),
+    ...STREAM_ENCODERS.libx264.args,
+    '-color_range', 'tv', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
+    '-video_track_timescale', String(fps),
+    '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-an',
+    '-f', 'mp4', 'pipe:1'];
+}
+
+test('整条命令行编出的 fMP4 与改写前逐字节相同', { skip: !ffmpegOk && '没有 ffmpeg', timeout: 180_000 }, () => {
+  const run = (args, pngs) => execFileSync('ffmpeg', args, { input: Buffer.concat(pngs), maxBuffer: 1 << 28, windowsHide: true });
+  for (const [w, h] of [[320, 180], [642, 362]]) {
+    const pngs = synthPngs(w, h, 15, w * 7 + h);
+    const before = run(legacySegmentArgs(30), pngs);
+    const after = run(streamSegmentArgs({ encoder: 'libx264', fps: 30 }), pngs);
+    assert.ok(before.length > 1000, `${w}x${h}: 旧命令行有产出`);
+    assert.ok(after.equals(before), `${w}x${h}: 新旧命令行的 fMP4 不同(${after.length} vs ${before.length})`);
+  }
+});
+
+test('帧一到就开工:还没关 stdin,编码器已经开始出字节', { skip: !ffmpegOk && '没有 ffmpeg', timeout: 60_000 }, async () => {
+  dropStreamEncoderSpares();
+  const pngs = synthPngs(320, 180, 15, 5);
+  const enc = openStreamSegmentEncoder('ffmpeg', { encoder: 'libx264', fps: 30, prewarm: false });
+  // 只喂 3 帧、不关 stdin:改写前 ffmpeg 要先读够 5 MB 才开工,整段凑不够,这里会一直是 0
+  for (const png of pngs.slice(0, 3)) await enc.write(png);
+  const deadline = Date.now() + 20_000;
+  while (enc.received === 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 50));
+  assert.ok(enc.received > 0, '喂了 3 帧、stdin 没关,ffmpeg 还一个字节都没出(输入端在攒包)');
+  for (const png of pngs.slice(3)) await enc.write(png);
+  const out = await enc.finish();
+  const { segments } = splitFmp4(out.bytes);
+  assert.equal(segmentInfo(segments[0]).sampleCount, 15);
 });
