@@ -1417,7 +1417,7 @@ async function launchBrowser(cfg) {
       // 跨机（W7）时站点是局域网的 http：WebCrypto 等要安全上下文，按测试源放行（只放行这三个源）
       ...(loopback ? [] : [`--unsafely-treat-insecure-origin-as-secure=${origins.join(',')}`]),
       // 额外的 Chromium 参数（与 c10-browser-probe 同一约定）：云端容器的出站代理做 TLS 中间人，Chromium 不认它的根证书，那边传 --ignore-certificate-errors
-      ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/s+/).filter(Boolean) : [])],
+      ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])],
   });
 }
 
