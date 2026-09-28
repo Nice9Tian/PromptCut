@@ -22,7 +22,7 @@
 |---|---|---|---|
 | C10 其余合入 main 并部署阿里云 | 未合入（`claude/c10-integ` `24c2c57`） | 待填 | 待填 |
 | M7 合入 main 并部署 | 未合入（`claude/rq-m7-node`、`claude/rq-m7-queue`、`claude/rq-m7-tests`、`claude/m7-probe` 在做） | 待填 | 待填 |
-| 1080p 分段编码在笔记本过线（L20） | `claude/perf-encode` `7cbf70a` 待笔记本复核 | 待填 | 待填 |
+| 1080p 分段编码在笔记本过线（L20） | `claude/perf-encode` `7cbf70a`，合入 main `211695d` | 过：笔记本 ENC-1 修复版 p50 中位数 290 ms（main 403）、ENC-2 合入后 283 ms，五轮 fails []、字节不变 | 笔记本回执（主会话记录，2026-09-28） |
 | 进跨机前必须合入的遗留：L10、L16（`claude/eol-eperm`）、L17（已合 `96e69cb`）、L1（已合 `ceab9e4`）、L4、L5（`claude/card-overlay`） | 见左 | 待填 | 待填 |
 | L14 `server/card-sync.mjs` 接会话层（裁定 D9） | `claude/m8-session-legacy` 在做 | 待填 | 待填 |
 | 探针分支 `claude/m8-kit`、`claude/m8-e2e`、`claude/m8-scale`、`claude/m8-migrate` | `m8-kit`、`m8-migrate` 已开；`m8-e2e`、`m8-scale` 未见分支 | 待填 | 待填 |
