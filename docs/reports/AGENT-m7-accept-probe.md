@@ -213,3 +213,10 @@ planOnly: {"fineClaimedByPc":5,"plansClaimedByPc":4,"applied":false}
 - `npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3754、pass 3752、fail 0、skipped 2（原有两条）。
 - 本机验收 run13（跑前、跑后 5450～5459 空着，跑的期间没动工作区）：退出码 creator 1 / node 3，1228 s。M7-A1、A2、A3、A6、A7、A8、A9、A10、A11 与 D9、D10、D14 全过；M7-A4、A5、A12 只剩计时部分 pending（待笔记本复核；A4 参考值 124.8 s，PC 很忙）；W7 pending（本机替身）；D1-D2-D12 一条 fail：h1 的 `allDual` 为假。原因是探针的旁观节点手里是那几份任务最早的 `task.opened` 正文，队列合并补 `dual` 后只对还 open 的重发，已作废的那几份留着旧正文；按主会话给的判据（每张卡恰好一份被作废、两个候选都在），这一轮三张卡都是 pc 那份整份作废、候选 `page`、`pc` 都在。已把 `allDual` 改成只记不判（ecd71d2），没有再跑一轮。
 - `planOnly.applied: false`（pc 认领过 17 个细任务）是因为统计把 A10 那段也算了进去：A10 为了测「宿主全开」重启了不带只切分开关的 pc。
+
+## 第四段：外网模式第一次对阿里云跑（2026-09-28）
+
+- 云端 m7w0928b「用户名或密码不对」：成员账号是探针自建的自由进入项目（`createSharedProject` 以 A 建，项目名、项目口令经 KV `config` 传给 node），页面凭「项目名 + 项目口令 + 用户名 B」进入。PC 上用 Node 对阿里云建项目、以 B 进、再删，全部成功；PC 上 creator 与 node 两个角色都用 `--site` 的 m7wlocal1 里，b1、low、single 都进去了。所以账号与 KV 传递没问题。页面的 `enterShared`（`src/editor/sync/syncManager.ts` 末行）把「连接根本没建成就断了」一律报成 auth，云端那次多半是它的出站代理挡了 WebSocket 升级或证书。探针已改成进不了时带上每条 WebSocket 的握手状态、回显、错误与控制台错误（2be0efe），云端再跑就能分清。报错措辞建议页面节点 / C10 方另改（产品侧，本分支不动）。
+- m7wlocal1（PC 上两个角色，`--site https://8-219-80-16.sslip.io`，2036 s）：A1、A2、A6、A7、A8、A9、A10、D9、D10、D14 过；A3、A5、A11、A12 只剩外网看不到的部分或计时 pending；A4 `page-layer-env-browser` fail、D1-D2-D12 fail。两条都是页面经外网慢（锚帧段 218 s 才做完）、h1 / h2 的锁闲置超 30 s 被 pc 按 D2 接手：D1 那条已按主会话的补充改成「每段恰好一份有效、中途接手单列说明」（775b177，这一轮跑的是改前的代码）；A4 那条照实报——pc 开着只切分开关，接手后那份没人做，层表 h1 / h2 指到 pc、`ready 0`，要队列方的锚点优先级修好再看。
+- `--role all` 把 `--base-port` 与（给 node 的）`--timing-authoritative` 转给子角色（775b177）。
+- creator 收尾删掉自己建的项目（1d5cc7c）。之前 m7w0928a、m7w0928b、m7wlocal1 三轮的探针项目（`m7ap-<run>`）留在阿里云上：口令只在当时的进程内存里，删不了，要在阿里云上按名删。
