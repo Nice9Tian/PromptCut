@@ -769,21 +769,34 @@ try {
   const layer1P = until('重渲整段完成(新键下每帧两档齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore && l.frames === l.count && l.smallCount === l.frames && l.missingSmall.length === 0 ? l : null; }, 900_000, 2000)
     .then((l) => { layer1At = Date.now(); return l; });
   /*
-   * L22:「新的小尺寸到手机」按手机舞台真的贴上新键下的小尺寸判(层表换了新键、就绪表里新键有帧、舞台贴着的正是新键的那一帧),
+   * L22:「新的小尺寸到手机」按手机的就绪表判:层表换了新键、新键下已有带小尺寸的清单进了就绪表(页面据此贴图)。
    * 不再按「手机请求了以前没见过的 px/ 哈希」判:重卡改的 probeSalt 不影响画面,新键下的小位图与旧键逐字节相同、哈希相同,
    * 手机缓存里已有,根本不会再请求;以前量到的「新 px」其实是同一步里新放的轻卡的补渲产物,排在全部普通任务之后。
-   * 旧量法的数仍记在 newPxMs(同一步里任意新哈希的 px/ 第一次请求的时刻)。
+   * 旧量法的数仍记在 newPxMs。暂停着时低内存档把当前帧活渲出来(停下追一帧),舞台不贴小尺寸,所以「舞台换上」
+   * 另在就绪之后放一小段播放来看(mountedWhilePlayingMs),只记录、不判。
    */
-  const newPx = await until('手机舞台换上新键下的预渲染小尺寸', async () => {
+  const newPx = await until('新键下的预渲染小尺寸进了手机的就绪表', async () => {
     const k = await phoneKey();
     if (!keyChangedAt && k && k !== keyAtStart) keyChangedAt = Date.now();
     if (!keyChangedAt || !k) return null;
-    const mounted = await P(phone, (id) => window.__pcPreviewDiag?.()?.snapshotFeed?.mounted?.find((m) => m.clipId === id)?.key ?? null, heavyClip).catch(() => null);
-    if (!mounted || !k.startsWith(mounted)) return null;
-    const w = await stageSample(phone).then((x) => x?.wraps?.find((y) => y.id === heavyClip) ?? null, () => null);
-    return w?.small ? { keyMs: keyChangedAt - t3, first: Date.now() - t3 } : null;
+    const ready = await P(phone, (id) => window.__pcPreviewDiag?.()?.snapshotFeed?.ready?.find((r) => r.clipId === id)?.kinds?.[0] ?? null, heavyClip).catch(() => null);
+    return ready && k.startsWith(ready.key) && ready.ranges > 0 ? { keyMs: keyChangedAt - t3, first: Date.now() - t3 } : null;
   }, 900_000, 500);
-  check(newPx, '手机舞台换上重渲后的新小尺寸(新键)');
+  check(newPx, '新键下的预渲染小尺寸到了手机(就绪表)');
+  let mountedWhilePlaying = null;
+  if (newPx) {
+    const k = await phoneKey();
+    const playFrom = await P(phone, () => window.__pcStore.getState().t);
+    const t3p = Date.now();
+    await P(phone, (t) => { const s = window.__pcStore; s.actions.seek(Math.max(0, t - 0.5)); s.actions.play(); }, playFrom);
+    for (let i = 0; i < 16 && !mountedWhilePlaying; i++) {
+      await delay(250);
+      const m = await P(phone, (id) => window.__pcPreviewDiag?.()?.snapshotFeed?.mounted?.find((x) => x.clipId === id)?.key ?? null, heavyClip).catch(() => null);
+      const w = await stageSample(phone).then((x) => x?.wraps?.find((y) => y.id === heavyClip) ?? null, () => null);
+      if (m && k?.startsWith(m) && w?.small) mountedWhilePlaying = { ms: Date.now() - t3, afterPlayMs: Date.now() - t3p };
+    }
+    await P(phone, (t) => { const s = window.__pcStore; s.actions.pause(); s.actions.seek(t); }, playFrom);
+  }
   const layer1 = await layer1P;
   check(layer1, '层表里重卡片段换了新的键、整段重渲完成', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12), why: layer1 ? undefined : state.layerWhy });
   // 补渲排在后面:手机为新放的轻卡发的补渲做完,核对节点的认领先后
@@ -822,7 +835,7 @@ try {
   await shot(phone, '3-phone-after-edit');
   const timeline = await tl3.finish({ layer1, pxBefore, extraClip: state.extraClip, fullRerenderAt: layer1At });
   const freshPx = phone.assets.filter((a) => a.ns === 'px' && a.method === 'GET' && !a.sub && !pxBefore.has(a.hash) && a.at >= t3);
-  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxMs: freshPx.length ? freshPx[0].at - t3 : null, newPxRequests: freshPx.length,
+  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxMs: freshPx.length ? freshPx[0].at - t3 : null, mountedWhilePlayingMs: mountedWhilePlaying?.ms ?? null, newPxRequests: freshPx.length,
     fullRerenderMs: layer1 && layer1At ? layer1At - t3 : null,
     keyChanged: !!layer1, newKey: layer1 ? { key: layer1.key.slice(0, 12), frames: layer1.frames, small: layer1.smallCount } : null, backfillOrder: state.order, timeline };
   say('step3.done', out.steps.edit);
@@ -1169,7 +1182,7 @@ function startStep3Timeline({ t0, heavyClip, creatorSawAt }) {
       const heavyNew = pxAfter.filter((a) => heavySet.has(a.hash) && !pxBefore.has(a.hash));
       const otherNew = pxAfter.filter((a) => !heavySet.has(a.hash) && !pxBefore.has(a.hash));
       const reused = [...heavySet].filter((h) => pxBefore.has(h)).length;
-      if (!mountedAt) missing.push('phoneMounted:手机舞台一直没贴新键(暂停时低内存档停下追一帧画成活渲,不贴小尺寸;见 phoneTrack)');
+      if (!mountedAt) missing.push('phoneMounted:暂停着时手机舞台没贴新键(低内存档停下追一帧,当前帧是活渲);播放时贴上的时刻见 steps.edit.mountedWhilePlayingMs');
       const phoneSeg = segs.find((x) => x.from !== null && phoneFrame !== null && x.from <= phoneFrame && phoneFrame < x.from + 60) ?? null;
       const short = (id) => (id.startsWith('plan:') ? id.slice(0, 40) : `${id.split(':')[0]}:${(id.split(':')[1] ?? '').slice(0, 8)}:${id.split(':').pop()}`);
       const queue = claims.map((c) => ({ id: short(c.id), priority: c.priority, claimMs: c.at - t0, doneMs: doneOf(c.id) ? doneOf(c.id).at - t0 : null,
