@@ -166,6 +166,36 @@ test("T5-shared-5:同一条连接重连后重新登记失败,已挑好的素材�
   }
 });
 
+test("M8-X1-a:放本机项目的素材服务后备地址:先用局域网发现通告的 asset,再按文档服务地址推同一进程的 /api/asset;放云端不推", () => {
+  assert.equal(T.lanAssetBaseOf({ where: "lan", base: "http://192.168.1.5:5190/docservice/", asset: "http://192.168.1.5:5190/api/asset" }), "http://192.168.1.5:5190/api/asset");
+  assert.equal(T.lanAssetBaseOf({ where: "lan", base: "http://192.168.1.5:5190/docservice/" }), "http://192.168.1.5:5190/api/asset", "手填地址 / 邀请链接没有通告:按文档服务地址推");
+  assert.equal(T.lanAssetBaseOf({ where: "lan", base: "https://pc.lan:8443/docservice/" }), "https://pc.lan:8443/api/asset");
+  assert.equal(T.lanAssetBaseOf({ where: "hosted", base: "https://8-219-80-16.sslip.io/hosted/" }), null, "放云端:只认托管组合登记的素材服务");
+  assert.equal(T.lanAssetBaseOf({ where: "lan", base: "不是地址" }), null);
+});
+
+test("M8-X1-b:放本机的主机没登记素材服务时,成员页面用后备地址;有登记时登记优先;后备指向本页面自己时留在本地", async () => {
+  fakeFetch(() => false);
+  const mk = (endpoints) => ({ request: async (msg) => msg.type === "service.watch" ? { type: "service.endpoints", endpoints } : { type: "auth.ticket.ok", ticket: "t", exp: Date.now() + 900000 } });
+  const doc = "http://192.168.1.5:5190/docservice/";
+  const fallback = "http://192.168.1.5:5190/api/asset";
+  try {
+    assert.equal(await T.connectSharedAssets(mk([]), doc, { fallback }), fallback, "登记里没有:用后备");
+    assert.equal(T.remoteAssetBase(), fallback);
+    T.receiveSharedAssetEndpoints([]);
+    assert.equal(T.remoteAssetBase(), fallback, "后续全量通知仍为空:不退回本地");
+    T.disconnectSharedAssets();
+    const registered = "http://192.168.1.5:5190/api/asset-registered";
+    assert.equal(await T.connectSharedAssets(mk([{ kind: "asset", urls: [registered] }]), doc, { fallback }), registered, "登记优先");
+    T.disconnectSharedAssets();
+    globalThis.location = { host: "127.0.0.1:5190" };
+    assert.equal(await T.connectSharedAssets(mk([]), "http://127.0.0.1:5190/docservice/", { fallback: "http://127.0.0.1:5190/api/asset" }), null, "本机就是主机:留在本地素材服务");
+  } finally {
+    delete globalThis.location;
+    T.disconnectSharedAssets();
+  }
+});
+
 test("T7-gate-2:导出前问当前素材服务:素材原尺寸没到齐的列出来(素材小尺寸到齐不算);都到齐了放行", async () => {
   fakeFetch((_u, hash) => hash === h("2") || hash === h("3"));
   const missing = await T.exportGate(project);
