@@ -59,13 +59,16 @@ test('新滤镜链只少了中间转换,字面上仍是 G3 的那几步', () => 
 });
 
 test('滤镜切片线程数:按核数封顶 8', () => {
-  assert.equal(streamFilterThreads(16), 8);
+  assert.equal(streamFilterThreads(16, {}), 8);
   assert.equal(streamFilterThreads(32), 8);
   assert.equal(streamFilterThreads(8), 8);
   assert.equal(streamFilterThreads(4), 4);
   assert.equal(streamFilterThreads(1), 1);
   assert.equal(streamFilterThreads(0), 1);
   assert.equal(streamFilterThreads(NaN), 1);
+  assert.equal(streamFilterThreads(16, { PROMPTCUT_STREAM_FILTER_THREADS: '0' }), 0, '0 = 交给 ffmpeg');
+  assert.equal(streamFilterThreads(16, { PROMPTCUT_STREAM_FILTER_THREADS: '12' }), 12);
+  assert.equal(streamFilterThreads(16, { PROMPTCUT_STREAM_FILTER_THREADS: 'x' }), 8, '不是数字就不理');
 });
 
 test('分段签名里的编码参数哈希和改写前相同(已有分段不作废)', () => {

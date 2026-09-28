@@ -214,7 +214,10 @@ const STREAM_INPUT_ARGS = ['-probesize', '32', '-analyzeduration', '0', '-thread
  * 16 线程的笔记本上切 16 片反而比 8 片慢约 15 ms / 段(`docs/reports/AGENT-perf-encode-2.md`);8 核以下不变。
  * 切几片**不改产出**:swscale / premultiply / vstack 按行切片,1～16 片输出逐字节相同(单测里比 1 片和 3 片)。
  */
-export function streamFilterThreads(cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length) {
+export function streamFilterThreads(cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length, env = process.env) {
+  // PROMPTCUT_STREAM_FILTER_THREADS:手动指定(0 = 交给 ffmpeg,即逻辑核数),给别的机器调参用
+  const forced = String(env.PROMPTCUT_STREAM_FILTER_THREADS ?? '').trim();
+  if (/^\d+$/.test(forced)) return Number(forced);
   return Math.max(1, Math.min(8, Math.floor(Number(cpus)) || 1));
 }
 

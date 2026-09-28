@@ -350,7 +350,7 @@ test('segment encoder command line follows G3: premultiplied, out_range=tv, stri
   const joined = args.join(' ');
   assert.ok(args.includes('-reinit_filter') && args[args.indexOf('-reinit_filter') + 1] === '0');
   // 滤镜切片线程数按核数封顶 8(不改产出,见 stream-encode-fast.test.mjs)
-  assert.match(args[args.indexOf('-filter_complex_threads') + 1], /^[1-8]$/);
+  assert.match(args[args.indexOf('-filter_complex_threads') + 1], /^\d+$/);
   // alpha 在预乘之前分出去、两半用 gbrp 拼(和旧写法逐字节等价,见 stream-encode-fast.test.mjs)
   assert.match(joined, /\[0:v\]format=gbrap,split=2\[p\]\[a\];\[p\]premultiply=inplace=1,format=gbrp,pad=iw:ih\+8:0:0:black\[rgb\]/);
   assert.match(joined, /\[a\]alphaextract,format=gbrp,pad=iw:ih\+8:0:0:black\[mask\]/);
