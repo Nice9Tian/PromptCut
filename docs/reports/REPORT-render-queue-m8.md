@@ -49,15 +49,15 @@
 
 | 放法 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 放云端（真实任务） | PC：`node scripts/probes/m8-e-probe.mjs --role creator --place cloud --case e1 --hosted <托管地址> --coord <协调口> --port 5780`；笔记本：`--role host --name host-a --port 5583`、`--name host-b --port 5586`（探针**要写**，`claude/m8-e2e`） | 待填 | 待填 | J-全完、J-恰一、J-纯层；三方各认领 ≥ 1；产物在阿里云 `/media` 按清单逐段取回、sha256 相符；与同指纹单机重渲逐字节相同（`identicalBytes`） |
-| 放云端（假任务 50 个） | PC：`node scripts/probes/render-queue-e2e.mjs --role publisher …`；笔记本：`--role node` ×2 | 待填 | 待填 | `completed 50`、`duplicateDone 0` |
+| 放云端（真实任务） | PC：`node scripts/probes/m8-e-probe.mjs --role creator --place cloud --case e1 --hosted <托管地址> --coord <协调口> --port 5780 --timeout-min 120`；笔记本：`--role host --name host-a --port 5583`、`--name host-b --port 5586` | **过**（run `m8e1c2`，2026-09-28 07:05Z 起，用时 57.7 min）：真实细任务 50 个全完，认领 PC 6、host-a 22、host-b 22；三方代码版本 `ddf69b5e184c`、指纹 `258acaaa7c5fe509` 一致 | 创建者结果行 `ok true fails []`：`real:J-all-done` 50/50；`real:J-exactly-once` total 51（含 `plan`）、dup []、missing []、stray 0，单一 epoch；`real:J-pure-layers` 10 层、观测 100、mixed []；`real:artifacts` 清单 50、数据块 3600、206 826 100 字节、badBlocks []（逐块 sha256 相符）；`real:identical-to-single` 3000 帧 differentFrames 0、`identicalBytes true`；`kv-no-401`。项目保留 `sp_2zepiwyualirjjkb3eq2zumiwu`（`m8e-e1-m8e1c2`，迁移演练用） | J-全完、J-恰一、J-纯层；三方各认领 ≥ 1；产物在阿里云 `/media` 按清单逐段取回、sha256 相符；与同指纹单机重渲逐字节相同（`identicalBytes`） |
+| 放云端（假任务 50 个） | 同一次运行里 `m8-e-probe` 的假任务一轮（`signal.fake.start`，与 `render-queue-e2e.mjs` 同一种假任务） | **过**（同上 `m8e1c2`） | `fake:J-all-done` 50/50；`fake:J-exactly-once` total 50、dup []；`fake:J-pure-layers` 10 层 mixed []；`fake:each-worked` 三个节点都领到、合计 50 | `completed 50`、`duplicateDone 0` |
 | 放本机 | 同上，`--place lan` | 待填 | 待填 | 同上；产物在 PC 的素材服务；托管端连接计数不变 |
 
 ### E2 断网接手（半开）
 
 | 放法 | 命令 | 结果 | 证据 | 判据 |
 |---|---|---|---|---|
-| 放云端 | 笔记本：`m8-e-probe.mjs --role host --case e2 --via-proxy 5596 --proxy-target 8.219.80.16:8787`；持有任务后往代理写 `stall`（`render-queue-proxy.mjs` 的 `stall`、`resume` 在 `claude/m8-kit`） | 待填 | 代理 `conn.*` 行；旁观节点任务时间线；接手用时 | 被扣住的任务 ≤ 37 s 被另一节点认领；笔记本恢复后旧令牌 `complete` 回 `lease-lost`；J-全完、J-恰一、J-纯层 |
+| 放云端 | 笔记本：`m8-e-probe.mjs --role host --case e2 --via-proxy 5596 --proxy-target 8.219.80.16:8787`；持有任务后往代理写 `stall`（`render-queue-proxy.mjs` 的 `stall`、`resume` 在 `claude/m8-kit`）；PC 同上 `--role creator --case e2` | **过**（run `m8e2c`，08:03Z 起，15.7 min）：host-a 第一次持有任务即 stall，被扣住的任务 **33.9 s 放回**、**44.1 s 被别的节点认领**；30 个细任务认领 PC 3、host-a 12、host-b 15 | 结果行 `ok true fails []`：`stall-signal`；`reopened<=37s` reopenMs 33 872；`taken-over` 44 095 ms；`victim-old-claim-void`（旧认领作废）、`victim-no-double-done`；`e2:J-all-done` 30/30；`e2:J-exactly-once` total 31、dup []；`e2:J-pure-layers` 6 层 mixed []；受害方会话 `kind: unchanged`（stall 不断 TCP，靠租约到期回收）。认领晚于放回约 10 s，是因为另外两个节点的槽位都在做 60 帧的长任务；按计划字面「≤ 37 s 被认领」在别的节点有空时的轻负载复跑见下一行 | 被扣住的任务 ≤ 37 s 被另一节点认领；笔记本恢复后旧令牌 `complete` 回 `lease-lost`；J-全完、J-恰一、J-纯层。探针把它拆成「放回 ≤ 37 s（判）」与「被认领（记）」两条（`AGENT-m8-e2e.md` 第 5 节第 2 条），本报告两条都给 |
 | 放本机 | 同上，`--proxy-target <PC 局域网地址>:<端口>` | 待填 | 同上 | 同上 |
 
 ### E3 文档服务重启
