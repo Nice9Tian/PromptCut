@@ -163,6 +163,13 @@ test("边角:缺字段、值不是字面量、坏源码 → 不算卡,不抛", (
   assert.deepEqual(idName(parseCardSource(`export const a = { "id": 'q\\'s', 'name': "转义\\u4e2d\\n", defaults: {}, controls: [], Component: V } as const;`)), [{ id: "q's", name: "转义中\n" }], "引号键与转义");
 });
 
+test("没闭合的 \\u{ 转义:不卡死,余下原样留下(以前会从头重扫、无限循环,在线页面卡死)", () => {
+  const t0 = Date.now();
+  assert.deepEqual(idName(parseCardSource(`export const a = { id: "a", name: "坏\\u{41", defaults: {}, controls: [], Component: V };`)), [{ id: "a", name: "坏u{41" }]);
+  assert.deepEqual(idName(parseCardSource(`export const a = { id: "a", name: "好\\u{41}", defaults: {}, controls: [], Component: V };`)), [{ id: "a", name: "好A" }], "闭合的照常解");
+  assert.ok(Date.now() - t0 < 1000, `解析用了 ${Date.now() - t0} ms`);
+});
+
 test("默认值与控件:各种字面量、同文件常量的引用与展开;认不出的键、字段、控件按规矩丢", () => {
   const src = `
 import type { CardDef } from "../../kernel/types";
