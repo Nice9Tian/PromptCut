@@ -51,6 +51,8 @@ function decodeString(raw) {
     else if (n === "u") {
       if (raw[i + 1] === "{") {
         const end = raw.indexOf("}", i);
+        // 没闭合的 `\u{`(源码本身不合法):余下的原样留下就收尾。照常写 `i = end` 会把 i 拨回 -1、从头重扫,永远出不来
+        if (end < 0) { out += raw.slice(i); break; }
         out += String.fromCodePoint(parseInt(raw.slice(i + 2, end), 16) || 0);
         i = end;
       } else { out += String.fromCharCode(parseInt(raw.slice(i + 1, i + 5), 16) || 0); i += 4; }
