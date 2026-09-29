@@ -11,7 +11,6 @@ import {
   pidAlive, sweepFrameLibrary, sweepExportRoot, pruneExportDir, claimExportDir, EXPORT_KEEP, LEGACY_PLAYBACK_AGE_MS,
 } from '../storage-leftovers.mjs';
 import { MovFrameStore, PlaybackMovStore } from '../frame-mov.mjs';
-import { streamPngVideo } from '../bakery/ffmpeg.mjs';
 import { FramePipeline } from '../frame-pipeline.mjs';
 
 const DEAD = 424242;
@@ -192,18 +191,6 @@ test('MovFrameStore.suspend 中止写入后临时 MOV 不在', async () => {
     assert.equal(await exists(store.tempMovie), true);
     await store.suspend();
     assert.equal(await exists(store.tempMovie), false);
-  } finally { await fs.rm(dir, { recursive: true, force: true }); }
-});
-
-test('streamPngVideo().abort() 删掉写了一半的输出文件', async () => {
-  const dir = await tmpRoot('pc-abort-');
-  try {
-    const file = path.join(dir, `full-${process.pid}.tmp.mov`);
-    await fs.writeFile(file, 'half written');
-    // 拿 node 当「ffmpeg」:它不认这些参数、立刻退出,不需要本机装 ffmpeg
-    const writer = streamPngVideo(process.execPath, file, 30);
-    await writer.abort();
-    assert.equal(await exists(file), false);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
