@@ -2206,7 +2206,7 @@ export class FramePipeline {
    *   `onBatch` 每批交完调一次 `({ control, first, frames, snapshotFrames })`(进度用)。
    * 不传时逐字节是原来的行为。
    */
-  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null, timing = null } = {}) {
+  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null, timing = null, singlePass = false } = {}) {
     // 诊断(不改行为):给了 `timing` 就把换页、推帧、入库各花了多久累进去(队列细任务的分段耗时,`prerender-executor.mjs` 记进 executor.render)
     const clock = timing ? () => Date.now() : null;
     const add = (k, ms) => { if (timing) timing[k] = (timing[k] ?? 0) + ms; };
@@ -2309,11 +2309,22 @@ export class FramePipeline {
         for (let first = Math.max(0, range.from - (range.from % 4)); first <= last; first += 4) pending.add(first);
       } else for (let first = 0; first < control.count; first += 4) pending.add(first);
       const inRange = range ? n => n >= range.from && n <= range.to : () => true;
+      /*
+       * 队列细任务的一段(`range`)一趟顺推(`singlePass`,由 `renderCardSnapshotRange` 按 `queueSinglePass` 判):
+       * 这一段原来要跑的那几批并成一批 —— 帧集合与逐批跑的并集相同,只换一次页、只从挂载帧回放一次。
+       * 逐批时每批都要换一张新页(预渲染间重新取几百个模块)并从挂载帧回放到批首,一段 60 帧里换页占一半以上的时间
+       * (`docs/reports/AGENT-uc-latency.md`)。顺推与逐批从头推对 DOM 卡像素相同(M7 探针 P2,
+       * `docs/archive/agent-reports/AGENT-m7-probe.md`);canvas 卡不等价,不走这条(见 `queueSinglePass`)。
+       * 入库照旧每 4 帧交一次(进度、发层的粒度不变)。
+       */
+      const oneBatch = !!(range && singlePass && pending.size > 1);
+      if (timing) timing.singlePass = oneBatch;
       while (pending.size) {
         if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
-        const first = this.nextBatchStart(pending, control);
-        pending.delete(first);
-        const localFrames = Array.from({ length: Math.min(4, control.count - first) }, (_, n) => first + n);
+        const first = oneBatch ? Math.min(...pending) : this.nextBatchStart(pending, control);
+        const lastFirst = oneBatch ? Math.max(...pending) : first;
+        if (oneBatch) pending.clear(); else pending.delete(first);
+        const localFrames = Array.from({ length: Math.min(lastFirst + 4, control.count) - first }, (_, n) => first + n);
         // C2:帧集合收窄成**本卡缺的那些帧**(按该键 `index.json` 已有区间扣除)。
         // PNG 那一支照旧要全部帧(`targetFrames` 不动),只有生成快照这一支收窄。
         // R6-14:已经判过超限的那些帧也扣掉,不再白渲一遍
@@ -2325,10 +2336,32 @@ export class FramePipeline {
         const t1 = clock?.();
         if (timing) { add('resetMs', t1 - t0); add('smallMs', (this.smallStats.ms ?? 0) - small0); timing.batches = (timing.batches ?? 0) + 1; timing.resetMaxMs = Math.max(timing.resetMaxMs ?? 0, t1 - t0); }
         const produced = [];
+        // 每批(4 帧)交一次(不是每帧):写帧文件、判体积、并 index.json 由快照库一步做(#9)。
+        // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);R6-14:帧号记进
+        // `oversize`,下一趟跳过。一个键几千帧时,读-改-写一个小 JSON 也比不上批量摊薄。
+        const commitProduced = async () => {
+          if (!produced.length || signal?.aborted || !this.prerenderPicked(entry, control.clipId)) return;
+          const c0 = clock?.();
+          index = await this.snapshots().commitSnapshots({ ...target, clipId: control.clipId, capabilities: control.capabilities, items: produced.splice(0) });
+          // C3:这一层的区间长了就发一条全量 `layer`
+          if (index.written.length) this.publishLayer(entry, control, tier, index.frames);
+          if (timing) add('commitMs', clock() - c0);
+        };
+        // 一趟顺推(`oneBatch`)时照旧每 4 帧交一次、报一次进度:截过图的帧攒够 4 帧就交(这一帧的快照在截图之前已经生成)
+        const shotChunk = [];
+        const flushChunk = async () => {
+          await commitProduced();
+          const frames = shotChunk.splice(0);
+          if (frames.length && onBatch && !signal?.aborted) onBatch({ control, first: frames[0], frames, snapshotFrames: frames.filter(n => missing.includes(n)) });
+        };
         const baked = await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
           snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
           snapshotFrames: new Set(missing),
-          onFrame: async (frame, png) => entry.cardCache.put(control.key, frame, png, () => !signal?.aborted),
+          onFrame: async (frame, png) => {
+            const put = await entry.cardCache.put(control.key, frame, png, () => !signal?.aborted);
+            if (oneBatch) { shotChunk.push(frame); if (shotChunk.length >= 4) await flushChunk(); }
+            return put;
+          },
           // 隔离工程里目标片段是唯一可见输出,所以这一帧的 control 列表里认
           // `control.clipId` 那一条就是这张卡的子树。`data-pc-local-frame` 是卡片
           // 自己的本地帧,和隔离工程的帧号一致(片段被平移到了 -phase),但仍以
@@ -2341,16 +2374,11 @@ export class FramePipeline {
           } });
         const t2 = clock?.();
         if (timing) { add('bakeMs', t2 - t1); add('advancedFrames', Number(baked?.advancedFrames) || 0); add('shotFrames', localFrames.length); }
-        // 每批(4 帧)交一次(不是每帧):写帧文件、判体积、并 index.json 由快照库一步做(#9)。
-        // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);R6-14:帧号记进
-        // `oversize`,下一趟跳过。一个键几千帧时,读-改-写一个小 JSON 也比不上批量摊薄。
-        if (produced.length && !signal?.aborted && this.prerenderPicked(entry, control.clipId)) {
-          index = await this.snapshots().commitSnapshots({ ...target, clipId: control.clipId, capabilities: control.capabilities, items: produced });
-          // C3:这一层的区间长了就发一条全量 `layer`
-          if (index.written.length) this.publishLayer(entry, control, tier, index.frames);
+        if (oneBatch) await flushChunk();
+        else {
+          await commitProduced();
+          if (onBatch && !signal?.aborted) onBatch({ control, first, frames: localFrames, snapshotFrames: missing });
         }
-        if (timing) add('commitMs', clock() - t2);
-        if (onBatch && !signal?.aborted) onBatch({ control, first, frames: localFrames, snapshotFrames: missing });
       }
       if (!signal?.aborted) {
         const f0 = clock?.();
@@ -2598,6 +2626,23 @@ export class FramePipeline {
    * 这张卡被别的环境锁住(开工前或渲的途中被页面抢了锁)抛 `card-locked-local`(不可重试)。
    * `progress(done)` 报这一段里已经交过的本地帧数。回 `null`:产物在帧库里,sink 自己读。
    */
+  /**
+   * 队列细任务的一段能不能一趟顺推(`fillCardControls` 的 `singlePass`,`docs/reports/AGENT-uc-latency.md`):
+   *   - `PROMPTCUT_QUEUE_SINGLE_PASS=0`、或实例上 `queueSinglePassOff = true`(对照探针用)时不走;
+   *   - canvas 重卡(审阅表 `canvasHeavy`)不走:异步装载的画布卡顺推与逐批从头推不等价(M7 探针 P2);
+   *   - 页面报的播放头正要这张卡在这一段里的帧(C4 `wanted`)时照逐批跑,含播放头的那一批先出。
+   */
+  queueSinglePass(control, range) {
+    if (this.queueSinglePassOff === true || process.env.PROMPTCUT_QUEUE_SINGLE_PASS === '0') return false;
+    if (!range || control?.capabilities?.canvasHeavy === true) return false;
+    const firstFrame = Number(control?.sampling?.firstFrame) || 0;
+    for (const item of this.playheadWanted()) {
+      if (item?.clipId !== control?.clipId) continue;
+      const local = Number(item.frame) - firstFrame;
+      if (Number.isInteger(local) && local >= range.from - (range.from % 4) && local <= range.to) return false;
+    }
+    return true;
+  }
   async renderCardSnapshotRange(entry, control, range, { signal, progress, timing = null } = {}) {
     const locked = () => Object.assign(new Error(`片段 ${control.clipId} 这张卡锁在别的环境上`), { code: 'card-locked-local', retryable: false });
     if (control.cardLock?.foreign === true) throw locked();
@@ -2614,6 +2659,7 @@ export class FramePipeline {
       await this.fillCardControls(entry, bakery, signal, [control], {
         range,
         timing,
+        singlePass: this.queueSinglePass(control, range),
         onBatch: ({ frames }) => {
           done += frames.filter(n => n >= range.from && n <= range.to).length;
           try { progress?.(done); } catch { /* 进度回调出错不影响渲染 */ }
