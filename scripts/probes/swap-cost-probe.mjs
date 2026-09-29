@@ -38,6 +38,7 @@
  * 解析、样式、布局、绘制是浏览器原生代码,dev 与产物包一样。机器忙时数会偏大,报告里写明当时机器忙不忙。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
 import { devOrigin, flagArg } from './probe-connect.mjs';
@@ -208,10 +209,15 @@ window.__batch = async (swap, via) => {
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : NaN; };
 const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * p))] : NaN; };
 const r2 = (x) => Math.round(x * 100) / 100;
+/** 整机 CPU 的忙碌比例(量这张卡期间,所有逻辑核平均):报告里写「当时机器忙不忙」 */
+const cpuTimes = () => os.cpus().reduce((acc, c) => { const t = c.times; acc.idle += t.idle; acc.total += t.user + t.nice + t.sys + t.irq + t.idle; return acc; }, { idle: 0, total: 0 });
+const busySince = (a) => { const b = cpuTimes(); const total = b.total - a.total; return total > 0 ? Math.round((1 - (b.idle - a.idle) / total) * 100) : null; };
 const kb = (n) => Math.round(n / 102.4) / 10;
 
 const browser = await puppeteer.launch({
   headless: true,
+  // 大快照(Lottie、画布)的生成与换帧一批可能要几十秒,机器忙时更久
+  protocolTimeout: 600_000,
   args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'],
 });
@@ -261,6 +267,7 @@ try {
     const meta = metas[i];
     const kind = job.kind ?? (meta.source === 'user' ? 'user' : job.id.startsWith('lottie') ? 'lottie' : (meta.canvasHeavy || meta.glCanvas || job.id.startsWith('particles')) ? 'canvas' : 'dom');
     process.stderr.write(`[${i + 1}/${jobs.length}] ${job.id} (${kind}) … `);
+    const cpu0 = cpuTimes();
     try {
       const made = await page.evaluate((j) => window.__makeSnapshots(j), { cardId: job.id, fps: FPS, lenSec: CLIP_SEC, mode: meta.mode, canvas: kind === 'canvas', n: FRAMES });
       /*
@@ -299,7 +306,7 @@ try {
         cardId: job.id, kind, note: job.note ?? '', source: meta.source, mode: meta.mode,
         frames: snaps.length, distinct, plane: prep.plane, planeNodes: prep.planeNodes,
         kbMedian: kb(median(bytes)), kbMax: kb(Math.max(...bytes)), imgKbMedian: kb(median(imgBytes)),
-        swapMs: r2(swapMs),
+        swapMs: r2(swapMs), machineBusyPct: busySince(cpu0),
         swapTaskMsPerBatch: per(swapBatches, 'task').map(r2), baseTaskMsPerBatch: per(baseBatches, 'task').map(r2),
         styleMs: r2(median(per(swapBatches, 'style')) - median(per(baseBatches, 'style'))),
         layoutMsMetric: r2(median(per(swapBatches, 'layout')) - median(per(baseBatches, 'layout'))),
@@ -308,7 +315,7 @@ try {
         commitMedian: r2(median(swapTimes.map((t) => t.commitMs))), layoutMedian: r2(median(swapTimes.map((t) => t.layoutMs))),
       };
       results.push(row);
-      process.stderr.write(`swapMs ${row.swapMs}(同步 ${row.syncMedian} / p90 ${row.syncP90}),${row.kbMedian} KB,${distinct} 帧不同\n`);
+      process.stderr.write(`swapMs ${row.swapMs}(同步 ${row.syncMedian} / p90 ${row.syncP90}),${row.kbMedian} KB,${distinct} 帧不同,整机忙 ${row.machineBusyPct}%\n`);
     } catch (err) {
       results.push({ cardId: job.id, kind, error: String(err?.message || err) });
       process.stderr.write(`失败:${String(err?.message || err)}\n`);
@@ -322,7 +329,7 @@ try {
     const list = ok.filter((r) => r.kind === k);
     return [k, { n: list.length, swapMsMedian: r2(median(list.map((r) => r.swapMs))), swapMsMax: r2(Math.max(...list.map((r) => r.swapMs))), syncMedian: r2(median(list.map((r) => r.syncMedian))), syncP90Max: r2(Math.max(...list.map((r) => r.syncP90))) }];
   }));
-  const cols = ['cardId', 'kind', 'kbMedian', 'imgKbMedian', 'planeNodes', 'distinct', 'swapMs', 'styleMs', 'layoutMsMetric', 'scriptMs', 'syncMedian', 'syncP90', 'note'];
+  const cols = ['cardId', 'kind', 'kbMedian', 'imgKbMedian', 'planeNodes', 'distinct', 'swapMs', 'styleMs', 'layoutMsMetric', 'scriptMs', 'syncMedian', 'syncP90', 'machineBusyPct', 'note'];
   console.log('\n' + ['| ' + cols.join(' | ') + ' |', '|' + cols.map(() => '---').join('|') + '|', ...ok.map((r) => '| ' + cols.map((c) => r[c]).join(' | ') + ' |')].join('\n'));
   console.log('\n按卡种:' + JSON.stringify(byKind, null, 1));
   const failed = results.filter((r) => r.error);
