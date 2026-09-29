@@ -40,6 +40,8 @@ test("CP-01 lowMemoryLight:判轻的卡在每个位置都判轻(同时 40 张也
 test("CP-02 planDispatch:判定表按搜索结果;搜索完成前全部判重、lowMemoryJudged=false;显示表一直全部判重", async () => {
   mock.module(srcUrl("editor/stageBridge.ts"), { exports: { frontStage: () => null, backStage: () => null } });
   mock.module(srcUrl("editor/costIdentity.ts"), { exports: { clipIdentityOf: () => ({ identityKeys: { a: "ka", b: "kb", c: "kc" }, frameModes: { a: "direct", b: "direct", c: "direct" } }) } });
+  // 夹具里的卡要在注册表里有定义:两边都没有定义的「未知卡片」不进分派表(2026-09-29 起,舞台不画它们)
+  (await import(srcUrl("kernel/registry.ts"))).registerCards(["a", "b", "c"].map((id) => ({ id: `card-${id}`, name: id, defaults: {}, controls: [], frameMode: "direct", Component: () => null })));
   const d = await import(srcUrl("editor/planDispatch.ts"));
   d.resetPlanDispatch();
   const settle = () => new Promise((r) => queueMicrotask(r));

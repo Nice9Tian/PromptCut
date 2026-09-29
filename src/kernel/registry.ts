@@ -240,3 +240,23 @@ export function knownCardName(id: string | undefined | null): string | null {
   if (def) return def.name;
   return syncedEntry(id)?.name ?? null;
 }
+
+/**
+ * 这张卡认不认得:构建时的注册表里有定义,或是用户卡(构建时登记的、在线页面从内容库同步来的)。
+ * 两边都没有的是「未知卡片」:舞台不画,时间轴标「未知卡片」。
+ */
+export function isKnownCardId(id: string | undefined | null): boolean {
+  if (typeof id !== "string" || !id) return false;
+  return map.has(id) || isUserCardId(id);
+}
+
+/**
+ * 两边都没有定义的卡片段(未知卡片;桌面与在线一致)。舞台本来就不画它们,所以测量不测(不给身份)、
+ * 分派表不把它们当重卡、不进预渲染集合,页面发的清单计划与低内存档补渲也就不含它们。
+ * 只看写了 `cardId` 的片段(只有 `nodeId` 的图卡片段、素材段不算)。
+ */
+export function unknownCardClipIds(clips: Iterable<{ id: string; cardId?: string }>): Set<string> {
+  const out = new Set<string>();
+  for (const c of clips) if (c && typeof c.cardId === "string" && c.cardId && !isKnownCardId(c.cardId)) out.add(c.id);
+  return out;
+}
