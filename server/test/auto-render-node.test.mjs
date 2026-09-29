@@ -141,7 +141,8 @@ test('ARN-06 同项目只换基址与文档 id;换项目先撤再起', async () 
   const first = h.started[0];
   assert.equal(h.ctl.bind({ ...BIND, assetBase: 'https://other.example/api/asset', contentId: 'doc-2' }).action, 'same');
   assert.equal(first.assetBase(), 'https://other.example/api/asset');
-  assert.equal(first.contentId, 'doc-1', 'link 上的 contentId 是起步时的快照');
+  // push-scope:link 上的 contentId 现取(推送与发布的范围按它判,页面晚交来的 id 要看得到)
+  assert.equal(first.contentId, 'doc-2', 'link 上的 contentId 跟着同项目的交接换');
   assert.equal(h.ctl.status().contentId, 'doc-2');
   // 同项目但没给基址:沿用原来的
   h.ctl.bind({ url: BIND.url, projectId: 'P1' });

@@ -8,6 +8,8 @@
  * - `projectId` 可以换成 `name`（按名字查一次 `shared/lookup`）；
  * - `deviceId` / `deviceName` 不给时用本机设备信息（`device.mjs`）；`as` 缺省 `member`；`role` 缺省 `render`；
  * - `password` 与 `key`（已派生的 `K`）给一个。给 `password` 时第一次连接派生出 `K` 后只缓存 `K`。
+ * - `contentId`（可选）：这个共享项目的项目文档 id（项目 JSON 的 `id`）。预渲染进程的推送队列与 plan 发布只认这个项目的产物，
+ *   本机别的项目的帧留在本机（`server/push-scope.mjs`）；不写就不限（原来的行为）。
  *
  * 设了这个变量，就用它拼证明、连文档服务，并经 `auth.ticket` 取素材票据；没设就维持原来的做法：
  * 连回环地址时是本机身份，连不上就回落本机。
@@ -48,6 +50,7 @@ export function normalizeEntry(raw, device = localDeviceInfo()) {
     password: raw.password ?? null,
     key: raw.key ?? null,
     conversation: raw.conversation ?? null,
+    contentId: raw.contentId ?? null,
     owner: raw.owner ?? null,
   };
   if (out.projectId !== null && !isProjectId(out.projectId)) throw bad('projectId 不合法');
@@ -55,6 +58,7 @@ export function normalizeEntry(raw, device = localDeviceInfo()) {
   if (!isUsername(out.username)) throw bad('username 不合法');
   if (!isDeviceId(out.deviceId)) throw bad('deviceId 要 16～64 个 [A-Za-z0-9_-]');
   if (!isDeviceName(out.deviceName)) throw bad('deviceName 不合法');
+  if (out.contentId !== null && (typeof out.contentId !== 'string' || out.contentId === '' || out.contentId.length > 256)) throw bad('contentId 要是 1～256 字的字符串');
   if (out.as !== 'member' && out.as !== 'creator') throw bad("as 只能是 'member' 或 'creator'");
   if (!isRole(out.role)) throw bad('role 只能是 page / agent / render');
   if (out.key !== null && !isB64Bytes(out.key, KEY_BYTES)) throw bad('key 必须是 32 字节 base64url');
