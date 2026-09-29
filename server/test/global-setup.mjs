@@ -29,7 +29,7 @@
  * `bad-ports.test.mjs` 核对的是「名单里每个端口都 listen 不到」，不论谁占着。
  */
 import net from 'node:net';
-import { scrubUserDirEnv } from '../../scripts/lib/user-dirs.mjs';
+import { scrubUserDirEnv, markNoPortFile } from '../../scripts/lib/user-dirs.mjs';
 
 /**
  * WHATWG fetch 规范「bad port」名单里 ≥ 1024 的部分（低于 1024 的系统不会当临时端口发）。
@@ -82,6 +82,8 @@ export async function globalSetup() {
   for (const { key, value } of scrubUserDirEnv(process.env)) {
     console.error(`[global-setup] 不继承外部的 ${key}=${value}（测试不写用户目录，见 scripts/lib/user-dirs.mjs）`);
   }
+  // 测试起的编辑器不写公共的 %TEMP%\promptcut\port.json（scripts/lib/user-dirs.mjs 的 markNoPortFile；守门 port-file.test.mjs）
+  markNoPortFile(process.env);
   const got = await holdAll();
   process.env.PROMPTCUT_TEST_BAD_PORTS_HELD = got.join(',');
   if (held.size >= TOTAL) return;

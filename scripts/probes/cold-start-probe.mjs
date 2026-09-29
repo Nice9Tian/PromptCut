@@ -96,7 +96,8 @@ async function runOnce(kind, pair, coldMethod) {
     child = spawn('npx', commandArgs, {
       cwd: root, shell: process.platform === 'win32', detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
-      env: { ...process.env, npm_config_offline: 'true', npm_config_yes: 'false' },
+      // PROMPTCUT_NO_PORT_FILE=1:不写公共的 %TEMP%\promptcut\port.json(scripts/lib/user-dirs.mjs 的 markNoPortFile)
+      env: { ...process.env, npm_config_offline: 'true', npm_config_yes: 'false', PROMPTCUT_NO_PORT_FILE: '1' },
     });
     activeChild = child;
     child.once('error', (error) => log.push(String(error)));
