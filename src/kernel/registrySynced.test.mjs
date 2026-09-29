@@ -64,3 +64,45 @@ test("同步表:不进主注册表;isUserCardId 与显示名;撞车的忽略;变
     R.resetCards();
   }
 });
+
+test("syncedCardView:只读视图(名字、说明、默认值、控件,没有组件);不进主注册表;撞车的、没同步的回 undefined;没变回同一个对象", () => {
+  R.resetCards();
+  R.registerCards([def("builtin-a", "内置甲")]);
+  R.setUserCardSources({}, {});
+  try {
+    const controls = [{ key: "text", label: "文字", type: "text" }, { key: "n", label: "数", type: "number", min: 0, max: 9, step: 1 }];
+    R.setSyncedUserCards([
+      { id: "s", name: "同步卡", source: "src/cards/user/s.tsx", description: "说明", defaults: { text: "hi", n: 3 }, controls },
+      { id: "bare", name: "只有名字" },
+      { id: "opaque", name: "控件认不出", controls: [], controlsIncomplete: true },
+      { id: "builtin-a", name: "撞内置", controls },
+    ]);
+    const v = R.syncedCardView("s");
+    assert.deepEqual({ ...v }, { id: "s", name: "同步卡", description: "说明", defaults: { text: "hi", n: 3 }, controls, controlsIncomplete: false, synced: true });
+    assert.equal(v.Component, undefined, "没有组件");
+    assert.ok(Object.isFrozen(v), "只读");
+    assert.deepEqual({ ...R.syncedCardView("bare") }, { id: "bare", name: "只有名字", defaults: {}, controls: [], controlsIncomplete: false, synced: true });
+    assert.equal(R.syncedCardView("opaque").controlsIncomplete, true);
+    assert.equal(R.syncedCardView("builtin-a"), undefined, "和内置卡撞车:内置赢,不给视图");
+    assert.equal(R.syncedCardView("nobody"), undefined);
+    assert.equal(R.syncedCardView(undefined), undefined);
+    assert.equal(R.getCard("s"), undefined, "getCard 照旧看不到");
+    assert.ok(!R.allCards().some((c) => c.id === "s"), "allCards 照旧看不到");
+    // 同一份再设:不变、同一个对象;别的卡变了,这张的视图仍是同一个对象
+    assert.equal(R.setSyncedUserCards([
+      { id: "s", name: "同步卡", source: "src/cards/user/s.tsx", description: "说明", defaults: { text: "hi", n: 3 }, controls },
+      { id: "bare", name: "只有名字" }, { id: "opaque", name: "控件认不出", controls: [], controlsIncomplete: true }, { id: "builtin-a", name: "撞内置", controls },
+    ]), false);
+    assert.equal(R.syncedCardView("s"), v);
+    R.setSyncedUserCards([{ id: "s", name: "同步卡", source: "src/cards/user/s.tsx", description: "说明", defaults: { text: "hi", n: 3 }, controls }, { id: "bare", name: "改了名" }]);
+    assert.equal(R.syncedCardView("s"), v, "没变的卡视图不换");
+    // 控件变了:通知、换新视图
+    assert.equal(R.setSyncedUserCards([{ id: "s", name: "同步卡", source: "src/cards/user/s.tsx", description: "说明", defaults: { text: "hi", n: 4 }, controls }]), true);
+    assert.notEqual(R.syncedCardView("s"), v);
+    assert.equal(R.syncedCardView("s").defaults.n, 4);
+    assert.equal(R.syncedCardView("bare"), undefined, "从表里去掉了");
+  } finally {
+    R.setSyncedUserCards([]);
+    R.resetCards();
+  }
+});

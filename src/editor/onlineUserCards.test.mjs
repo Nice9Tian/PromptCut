@@ -201,3 +201,41 @@ test("OU-04b entriesOf:按键排序,同一 id 取第一条", () => {
     { id: "y", name: "y", source: "src/cards/user/a.tsx" },
   ]);
 });
+
+test("OU-04c 同步来的卡带上说明、默认值与控件:参数面板经 syncedCardView 看得到;主注册表照旧看不到", async () => {
+  setup();
+  const src = `import type { CardDef } from "../../kernel/types";
+const OPTS = [{ value: "l", label: "左" }, { value: "r", label: "右" }];
+export const c: CardDef = {
+  id: "synced-p", name: "带参数的同步卡", description: "说明",
+  defaults: { text: "hi", size: 48, side: "l", tint: "#ff0000" },
+  controls: [
+    { key: "text", label: "文字", type: "text" },
+    { key: "size", label: "字号", type: "number", min: 12, max: 200, step: 2 },
+    { key: "side", label: "位置", type: "select", options: OPTS },
+    { key: "tint", label: "颜色", type: "color" },
+  ],
+  Component: () => null,
+};
+export const opaque: CardDef = { id: "synced-o", name: "控件认不出", defaults: {}, controls: makeControls(), Component: () => null };
+`;
+  const content = fakeContent({ "src/cards/user/p.tsx": src });
+  const link = { id: 1 };
+  const sources = new S.OnlineCardSources({ request: content.request, linkKey: () => link });
+  try {
+    await sources.sync();
+    const v = R.syncedCardView("synced-p");
+    assert.equal(v.name, "带参数的同步卡");
+    assert.equal(v.description, "说明");
+    assert.deepEqual(v.defaults, { text: "hi", size: 48, side: "l", tint: "#ff0000" });
+    assert.deepEqual(v.controls.map((c) => c.type), ["text", "number", "select", "color"]);
+    assert.deepEqual(v.controls[2].options, [{ value: "l", label: "左" }, { value: "r", label: "右" }]);
+    assert.equal(v.controlsIncomplete, false);
+    assert.equal(R.syncedCardView("synced-o").controlsIncomplete, true);
+    assert.deepEqual(R.syncedCardView("synced-o").controls, []);
+    assert.equal(R.getCard("synced-p"), undefined);
+  } finally {
+    sources.stop();
+    R.setSyncedUserCards([]);
+  }
+});

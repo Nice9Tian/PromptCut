@@ -1,6 +1,8 @@
+import { useSyncExternalStore } from "react";
 import { useStore, actions } from "../../store/project";
 import { findClip } from "../../kernel/project";
-import { getCard, allCards } from "../../kernel/registry";
+import { getCard, allCards, onSyncedUserCardsChanged, syncedCardView, syncedUserCardsGen } from "../../kernel/registry";
+import { paramsCardView } from "./paramsView";
 import { ParamsForm } from "./ParamsForm";
 import { PartsForm } from "./PartsForm";
 import { isComposite } from "../../kernel/envelope";
@@ -17,6 +19,8 @@ import { ClipAudioFxForm } from "./ClipAudioFxForm";
 export function Inspector({ tab }: { tab: "form" | "code" }) {
   const selId = useStore(s => s.selection[0]);
   const project = useStore(s => s.project);
+  // 在线页面同步来的用户卡表变了(新同步到一张卡、源码改了控件):参数面板跟着换
+  useSyncExternalStore(onSyncedUserCardsChanged, syncedUserCardsGen);
 
   const hit = selId ? findClip(project, selId) : null;
 
@@ -60,7 +64,8 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
     );
   }
 
-  const cardDef = getCard(clip.cardId);
+  // 先查能跑的定义;在线页面同步来的用户卡没有定义,用源码里解析出的只读视图(名字、默认值、控件)
+  const cardDef = paramsCardView(clip.cardId, { getCard, syncedCardView });
   const magic = allCards().filter(c => c.source === "magicui");
   const native = allCards().filter(c => c.source === "native");
   const user = allCards().filter(c => c.source === "user");

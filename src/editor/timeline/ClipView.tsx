@@ -3,7 +3,8 @@ import { ClipVolumeDialog } from "./ClipVolumeDialog";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
-import { getCard, knownCardName, onSyncedUserCardsChanged, syncedUserCardsGen } from "../../kernel/registry";
+import { getCard, knownCardName, onSyncedUserCardsChanged, syncedCardView, syncedUserCardsGen } from "../../kernel/registry";
+import { clipSubtitleOf, paramsCardView } from "../left/paramsView";
 import { onlineBrowserMode, unsupportedHere } from "../../render/placeholderHost";
 import { clipCoverage, subscribeCoverage } from "../onlineCoverage";
 import { clipCardLabel, showLocalPcBadge } from "./localPcBadge";
@@ -27,6 +28,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const selection = useStore((s) => s.selection);
   const isSelected = selection.includes(clip.id);
   const cardDef = clip.cardId ? getCard(clip.cardId) : null;
+  // 副标题看的参数视图:先查定义,没有再看同步来的用户卡的只读视图(源码里解析出的默认值与控件)
+  const paramsView = clip.cardId ? paramsCardView(clip.cardId, { getCard, syncedCardView }) : undefined;
   // 同步来的用户卡(在线页面从内容库卡片源码认出来的)表变了要重绘:标签换成真名
   useSyncExternalStore(onSyncedUserCardsChanged, syncedUserCardsGen);
   // 标签:构建时定义的名字 → 同步表里的名字 →「未知卡片」(C10 契约第 9 节)
@@ -51,13 +54,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   let subtitle = "";
   if (isCaption) {
     subtitle = capCount > 0 ? `${capCount} 条字幕` : "还没有字幕,右键素材去转写";
-  } else if (clip.cardId && cardDef) {
-    const textControl = cardDef.controls.find((c) => c.type === "text");
-    if (textControl) {
-      const val = clip.params[textControl.key] ?? cardDef.defaults[textControl.key];
-      subtitle = val != null ? String(val).trim() : "";
-    }
-    if (!subtitle) subtitle = cardDef.description || "";
+  } else if (clip.cardId && paramsView) {
+    // 第一个文字控件的值 → 卡片说明;同步来的用户卡(在线页面没有定义)用源码里解析出的视图
+    subtitle = clipSubtitleOf(paramsView, clip.params);
   } else if (clip.mediaId) {
     subtitle = "时长 " + formatTime(clip.end - clip.start);
   }

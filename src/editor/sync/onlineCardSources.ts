@@ -5,14 +5,15 @@
  * 页面侧的卡片同步(`cardSync.ts`)。于是这里经页面已有的文档服务连接(在线来源用的同一条 `docRequest`,不走 `/api`):
  *
  *   `content.list({ kind: 'card-source', prefix: 'src/cards/user/' })` → 入口文件(`src/cards/user/<名>.tsx`)里
- *   哈希变了的逐条 `content.get` → 正文就是源码字符串(`server/card-sync.mjs`)→ `parseCardSource` 取卡片的 id 与名字
- *   → `registry.setSyncedUserCards`(不执行源码,也不进主注册表)。
+ *   哈希变了的逐条 `content.get` → 正文就是源码字符串(`server/card-sync.mjs`)→ `parseCardSource` 取卡片的 id、名字、
+ *   说明、参数默认值与控件(只认字面量)→ `registry.setSyncedUserCards`(不执行源码,也不进主注册表;参数面板经
+ *   `registry.syncedCardView` 看默认值与控件)。
  *
  * 跟变化的办法选**定时重取**(每 `CARD_SOURCE_POLL_MS` 列一次,哈希没变的不再取正文),不订阅 `content.watch`:
  * 内容库的订阅按连接只认最后一次 `watch` 的那一组,与同一条连接上别的订阅方会互相顶掉;会话接续、重连时也不必补订阅。
  * 连接换了(重连、换项目、离开共享项目)清表重取。取不到(没连上、被拒、超时)时手里的表不动,下一轮再试。
  */
-import { isUserCardEntryKey, parseCardSource } from "../../kernel/cardSourceParse.mjs";
+import { isUserCardEntryKey, parseCardSource, type ParsedCardSource } from "../../kernel/cardSourceParse.mjs";
 import { setSyncedUserCards, type SyncedUserCard } from "../../kernel/registry";
 
 /** 多久重列一次内容库的卡片源码 */
@@ -35,15 +36,26 @@ export interface OnlineCardSourcesDeps {
   now?: () => number;
 }
 
-/** 一份列表 + 已取到的正文 → 同步用户卡的条目(按键、按源码里的先后;同一 id 取第一条) */
-export function entriesOf(keys: readonly string[], parsed: ReadonlyMap<string, { id: string; name: string }[]>): SyncedUserCard[] {
+type ParsedCard = Pick<ParsedCardSource, "id" | "name"> & Partial<Omit<ParsedCardSource, "id" | "name">>;
+
+/**
+ * 一份列表 + 已取到的正文 → 同步用户卡的条目(按键、按源码里的先后;同一 id 取第一条)。
+ * 说明、默认值、控件原样带上(参数面板用);没有的不写这一项。
+ */
+export function entriesOf(keys: readonly string[], parsed: ReadonlyMap<string, ParsedCard[]>): SyncedUserCard[] {
   const out: SyncedUserCard[] = [];
   const seen = new Set<string>();
   for (const key of [...keys].sort()) {
     for (const c of parsed.get(key) ?? []) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
-      out.push({ id: c.id, name: c.name, source: key });
+      out.push({
+        id: c.id, name: c.name, source: key,
+        ...(c.description !== undefined ? { description: c.description } : {}),
+        ...(c.defaults !== undefined ? { defaults: c.defaults } : {}),
+        ...(c.controls !== undefined ? { controls: c.controls } : {}),
+        ...(c.controlsIncomplete ? { controlsIncomplete: true } : {}),
+      });
     }
   }
   return out;
@@ -53,7 +65,7 @@ export class OnlineCardSources {
   private readonly deps: OnlineCardSourcesDeps;
   private link: unknown = null;
   /** 键 → 这份正文的哈希与解析结果 */
-  private readonly cache = new Map<string, { hash: string; cards: { id: string; name: string }[] }>();
+  private readonly cache = new Map<string, { hash: string; cards: ParsedCard[] }>();
   private busy: Promise<void> | null = null;
   private entries: SyncedUserCard[] = [];
   private stopped = false;
