@@ -59,3 +59,9 @@
 4. 失败的导出「留已有的成片或透明层」有一处细节：单进程流式写 `overlay.mov` 的路径在渲染出错时，`streamPngVideo().abort()` 现在会把写了一半的 `overlay.mov` 删掉（它本来就不完整）；只有渲完、在合成或混音阶段失败的，透明层才留下。若语义要「失败也总有透明层」，这里要另议。
 5. 只有 `/api/export`（界面导出）收拾产物目录；命令行 `npm run export`、`verify-determinism` 这类直接调 `exportFrames` 的不删 `frames\`（验证要用），只在分片合并后删 `parts\`。
 6. 任务书让 G0-R 与实导共用一台带 `PROMPTCUT_EXPORT_DIR` 的 dev server；`verify-unified-frames.mjs` 在那种配置下必挂，建议 G0-R 的说明写明「不设 `PROMPTCUT_EXPORT_DIR`」。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- **集成时还原了 `server/bakery/ffmpeg.mjs`**（`e24eafb8`〔裁〕）：它在 `server/frame-code.mjs` 的 `SNAPSHOT_FILES` / `CAPTURE_FILES` 里，本分支在 `streamPngVideo().abort()` 里加的删文件会把 `snapshotCode` 从 `00a5264b…` 变成 `f3adde92…`、`captureCode` 从 `86e443cb…` 变成 `168d0728…`，所有机器的共享快照与卡片 PNG 缓存都会作废。临时 MOV 中止时 `MovFrameStore` 本来就自己删；测它的单测删掉（`401bab11`）。
+- 由此本报告前面「中止即删」的说法对单进程流式导出（`export.mjs` 的透明层流）不再成立：导出中途失败时半截 `overlay.mov` 留在导出目录，与 main 相同；语义「取消或失败的导出留下的文件同样列出」，用户可在「存储」里删。
+- 合入 main `fe62c17f`。

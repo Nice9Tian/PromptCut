@@ -72,3 +72,8 @@
 - `node --experimental-test-module-mocks --test server/test/prerender-executor.test.mjs server/test/queue-single-pass.test.mjs server/test/queue-single-pass-fill.test.mjs server/test/frame-video.test.mjs`：退出码 0，tests 19、pass 19、fail 0。其中 `prerender-executor.test.mjs` 占 10 条（J8 两条、J9、J9b、J10 四条、J10b、J11）。
 - 没改 `server/frame-pipeline.mjs`，所以没跑 `npx tsc -b --force`。按任务书没跑 `npm test` 全量。
 - `node -e "import('./server/frame-code.mjs').then(m=>console.log(m.snapshotCode(process.cwd()), m.captureCode(process.cwd())))"`：`00a5264bf8a062ff6e0b5ed0516cccd1 86e443cb6fa838aef64788af6822fd68`，与要求一致。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 两次任务都审过 diff：删掉测被还原行为的单测；J9、J10 的逐批断言在关掉顺推时照跑，另加 J9b / J10b，中止语义没问题（变异检查能抓到「入库前不查中止」）。
+- 合入 main `fe62c17f`。

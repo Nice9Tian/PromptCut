@@ -148,3 +148,9 @@ G0-R 没重跑：第二轮只改了存储管理器的量与单位、`/api/storag
 
 1. ~~GB 口径~~、~~字节数滞后~~：第二轮已按主会话定的做完。
 2. 合并：本分支在 `abd6ee56`（四支合入之后）之上，只动了 `server/storage-leftovers.mjs`、`server/exports-list.mjs`、`server/frame-library-storage.mjs`、`server/artifact-push.mjs`、`src/StartPage.tsx`、两个探针、三个测试文件与一个新测试文件。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 在本分支之上合了 r2-merge 的更新（`14bd8dca`）与 uc-latency（经 `claude/post-m8-r2`），还原 `server/bakery/ffmpeg.mjs`（见 `AGENT-storage-leaks.md` 末节），分支快进到 `e0b7d769` 后做最终合流验证：tsc 0；`npm test` 3963 / 3961 / 0 / 2；G0-R 全过；探针全过（`REPORT-post-M8.md` 第 2 轮）。
+- `/api/exports*` 的 409 回包没有 `code`：记进遗留。
+- 合入 main `fe62c17f`。

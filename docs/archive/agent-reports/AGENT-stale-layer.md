@@ -167,3 +167,10 @@
    - 探针等用户卡的循环里，把成员页 `window.__pcStore.getState().project` 的同一份东西也写进去；
    - 两边逐字段比。
 3. 如果确是 push-scope 扣住了段（自动节点路径 `contentId` 迟到），按 push-scope 报告里 `rescope()` 的时机去查，不是本分支的范围。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 第 8 节的回归：空闲笔记本上 r2-merge（合了本分支 `ff4a2ce4`，`05212eed`）三遍都过，用户卡那一步 712.0 / 606.7 / 551.5 s，签名 `i1-7d741a8c3803f58e` 两边一致。时间全在创建者节点逐段渲成员计划的 10 段上（每段 44～121 s）；PC 那次是机器同时跑着几支探针、超过 1200 s 时限，不是签名问题。uc-latency 合入后同一步约 110 s。
+- `online-stale-layer-probe --dist` 在 r2-merge 与最终合流上都过（改后 8～11 ms 撤旧层）。
+- 第 7 节要定的：`STALE_AWAIT_MS` 15 s 照留（〔裁〕，待用户审）；`mechanism/rendering.md` 已随 r2-merge 补（`2e4b9d48`）；两处原有闪烁与「卡片源码变化纳入判据」记进 `REPORT-post-M8.md` 第 2 轮遗留。
+- 合入 main `fe62c17f`。

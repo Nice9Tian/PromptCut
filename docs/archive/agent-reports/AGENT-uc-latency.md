@@ -140,3 +140,11 @@
 ## 九、事故记录
 
 - 开工时用 PowerShell 的 `[IO.File]::ReadAllText/WriteAllText` 给探针加计时，传的是相对路径：.NET 按进程的工作目录（主工作区）解析，不跟 PowerShell 的 `cd`，于是改到了**主工作区**的 `scripts/probes/desktop-auto-node-probe.mjs`（两次替换，第二次重复了 `const marks`）。主会话发现后说由它还原，我没有再碰主工作区。worktree 里的同名文件是之后用绝对路径改的，只声明了一次 `const marks`、`node --check` 通过；所有探针都是在 worktree 目录里跑 worktree 这份（命令都是 `cd <worktree> && node scripts/probes/…`），结果有效。之后一律用绝对路径。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 合入：经候选 `claude/post-m8-r2`（`7c18653c` 起）→ `claude/storage-merge` → main `fe62c17f`。
+- 根因二（一段一趟顺推）留下〔裁〕，理由与代价写在 `docs/plan/queue-executor-design.md` 第 3 节（`4a41dad2`）。本报告没跑的全量测试挂了 J9、J10（断言逐批的 bakeFrames 调用记录），按顺推改了测试，中止语义没问题（`78f9ab41`，见 `AGENT-post-m8-r2.md`）。
+- A4 卡 30 分钟：笔记本上用每处等待都记日志的探针连跑三遍 `desktop-auto-node-probe --skip-off --prerender-log`，都没卡（A4 改动→贴上 26.3 / 26.2 / 26.3 s，A3 46.8 / 47.2 / 59.3 s）；最终合流的完整一遍 A4 26.4 s。
+- 笔记本复核（性能基准机）：`c10-browser-probe --user-card --only-a4 --no-video` 用户卡那一步改前（r2-merge）712.0 / 606.7 / 551.5 s → 改后 110.4 / 110.4 / 110.5 s；一段 60 帧改后 10.4～12.9 s；G0-R 全过（1080p 流编码 p50 261 ms）。
+- 快照键：合流后 `snapshotCode` 仍是 `00a5264bf8a0…`。

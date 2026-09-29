@@ -66,3 +66,8 @@
 - 计划第 4 节没说删不掉时的回包：本分支是 `409 { ok: false, error, freedBytes, busy, skipped }`，建议补上。
 - `/api/storage` 的 `exports` 一栏可由 storage-cap 直接引 `server/exports-list.mjs` 的 `summarizeExports`，免得两份列举规则不一致。
 - 标题栏「存储…」在在线页面里是置灰的菜单项（同其它 `desktopOnly` 项）；语义「在线浏览器模式没有这一块」指的是开始页那块，菜单项置灰与 C10 契约第 10 节的做法一致。如要在线页面连菜单项都不出，需另定。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 最终合流上 `storage-ui-probe` 过；看过截图 `u1-storage.png`、`u8-fresh-bytes.png`（真接口：「5.0M / 上限 50.0G（缺省）」、导出 3 份、只删中间文件与删除入口）。
+- 合入 main `fe62c17f`。
