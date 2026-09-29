@@ -6,7 +6,7 @@ import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { themeStyle } from "./themes";
-import { allCards, getCard, userCardSources } from "./kernel/registry";
+import { allCards, getCard, unknownCardClipIds, userCardSources } from "./kernel/registry";
 import { cardSourceVersion } from "./render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles } from "./render/cardSourceFiles.mjs";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
@@ -146,6 +146,12 @@ export default function ExportView() {
           }
         }
         return { graph: graph ?? projectCardGraph(proj, getCard), sourceVersions,
+          /*
+           * 这个页面的注册表里查不到定义的卡片段(未知卡片;预渲染进程里没有同步表,等于「没有定义」)。舞台不画它们,
+           * `CardFrameCache.plan()` 据此不给它们出控件:不排预渲染、不进预渲染集合、层表里没有它们那一层。
+           * 图本身不动(别的卡的键逐字不变)。
+           */
+          unknownClipIds: [...unknownCardClipIds(proj.tracks.flatMap((track) => track.clips))].sort(),
           environment: { width: proj.width, height: proj.height, fps: proj.fps, theme: proj.themeId,
             // I0:这一帧排版实际用上的字体集合。共享快照键要它 —— 缺字体的机器
             // 画出来的 HTML 不一样,不能和有字体的机器共用一份快照。
