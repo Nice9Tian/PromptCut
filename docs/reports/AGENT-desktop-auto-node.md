@@ -75,3 +75,48 @@
 | `scripts/probes/desktop-auto-node-probe.mjs`（新） | 照壳启动环境的端到端探针 |
 
 没有碰另一个子智能体的文件清单，也没有碰生成快照的输入（`createSnapshot.ts`、`snapshot/*`、`snapshotRename.ts`、`server/bakery/*`、`CAPTURE_FILES`）；`server/frame-pipeline.mjs` 没改。
+
+## 要核对的几点
+
+1. **桌面页面打开云端项目时，本地项目 id 与云端项目 id 是否一致；层表键对不对得上。**
+   结论：对得上。要分清两个 id：
+   - 共享项目 id（文档服务的空间，探针里是 `sp_…`）：只用于连接与空间；
+   - 项目文档里的 `id`（`p-…`，创建者本地项目原来的 id，放云端时随文档一起上去）：桌面预渲染进程的 `entry.project.id` 是它，在线页面 `getState().project.id` 也是它（在线页面读层表用的是 `setProject(getState().project.id)`，不是 `currentDocProjectId()`；后者在共享项目里是空间 id）。
+   探针 run3：桌面 `p-mulysgmc-62ece872`、在线页面 `p-mulysgmc-62ece872`、层表 body 的 `projectId` 同值，空间 id `sp_axashgh7pvxsskq7gvxyfeu2e5`。补推按 `contentId`（页面交来的项目文档 id）挑 entry。
+2. **桌面自己 preload 渲出的层（含用户卡）会被推到云端素材服务，并写进云端层表。**
+   结论：会。交接前本机渲好的重卡 H（120 帧，只在本机帧库里，就是真机缺陷的情形）交接后由补推推上去：日志 `render-node.backfill { frames: 120, segments: 2 }`，云端层表 H 那一层 120 帧清单齐、120 个块都在云端素材服务里（A2）。
+   用户卡：桌面版自己按成本判它轻、本机 preload 不预渲染它（`picked: false`，探针 step0 记录），所以用户卡的层是由在线页面发布的清单计划（页面一律按重卡）经这台桌面的节点渲出、推上去、写进层表的（A3、A4）。
+3. **渲染节点上报的代码版本与同一提交的在线构建一致（`requires.codeVersion`）。**
+   结论：同一工作树里一致。探针在在线构建的脚本里找到了节点报的 64 位代码版本（`codeVersionInOnlineBuild: true`），在线页面的清单计划也被这台桌面认领了（节点侧按 `requires.codeVersion` 过滤，不一致就认领不了）。
+   安装版：这台机器（笔记本）上没有安装版，没法直接比安装版 `runtime/app` 的 `frameCode`。按代码推：`frameCode` 哈希 `src/` 下全部源码（用户卡除外、换行统一成 LF）加几份服务端文件；`prepare-runtime.mjs` 从干净检出拷 `src/`，只挡 `src/__probe-*`。所以**在线构建必须从同一提交的干净检出做**（工作树里有未入库的 `src/` 文件、或 `src/__probe-*` 残留，代码版本就会和安装版不同，桌面节点一个在线计划都认领不了）。建议主会话部署时核一次：`node -e "import('./server/frame-code.mjs').then(m=>console.log(m.frameCode(process.argv[1])))" <安装版 runtime/app>` 与在线构建嵌的值比。
+4. **撤掉时推送队列和节点都停干净，`nodes` 回空。**
+   结论：停干净。A5：桌面页面离开项目后 `nodes: []`、`auto.bound: false`，预渲染进程诊断里没有 `push`，编辑器进程不再记着配置，日志 `render-node.teardown { reason: 'left', push: true, node: true }`。
+   第一版有过一个问题（run2 查出）：撤掉时先等节点 `release()`，它要等手里在跑的那一批做完才返回，推送队列一直没停。改成先停推送队列、节点收尾最多等 10 秒。
+
+## 验证
+
+### 探针 `scripts/probes/desktop-auto-node-probe.mjs`（照壳的真实启动环境）
+
+命令：`node scripts/probes/desktop-auto-node-probe.mjs --base-port 5750 --out out/auto-node-run3`，退出码 0，用时 574 秒。桌面版环境里的 `PROMPTCUT_*` 只有 `PROMPTCUT_DATA_DIR`、`PROMPTCUT_EXPORT_DIR`、`PROMPTCUT_PROJECTS_DIR`、`PROMPTCUT_WORK_DIR`（都在系统临时目录；第二遍多一个 `PROMPTCUT_AUTO_RENDER_NODE`）。
+
+| 断言 | 结果 |
+|---|---|
+| A1 桌面进入项目后 `nodes` 里有这个项目的节点；`push.started` 目标是云端素材服务 | 过：节点 `prerender:LAPTOP-A56T03FK:5755` 连着；`push.started { docservice: 'page', url: 'ws://127.0.0.1:5750/hosted', asset: 'http://127.0.0.1:5750/media/api/asset' }`，推送与节点的素材服务都是 `source: 'page'` |
+| A2 云端层表里有 H（交接前渲的）与用户卡 U1 那一层，字节在云端 | 过：H 120/120 块、U1 120/120 块，层表 v3 |
+| A3 在线页面（另一个浏览器上下文 = 另一个设备 id）贴出 U1，没有图标与徽标 | 过：刚进时 U1 带「需要本地 PC 渲染辅助」徽标（桌面没渲它），164 秒后贴上 |
+| A4 桌面页面关掉（节点照常在线）后，在线页面把 U2 改成新内容：在线页面的清单计划被这台桌面认领、切分，细任务由它完成，在线页面贴上 | 过：计划 `plan:sp_…@2#clips:…` 认领并切出 6 个细任务，本机完成 5 个（另一个是去重）；U2 的结果键换了（`5337cbf1…` → `a5ed607b…`），云端 120/120 块，在线页面贴上新内容 |
+| A5 桌面页面回来（同一标签页刷新后回到共享项目，同项目重交只换票据，`starts` 仍是 1），再离开：`nodes` 回空、推送停 | 过 |
+| A6 `PROMPTCUT_AUTO_RENDER_NODE=0`：不起节点、不推送 | 过：`nodes: []`，预渲染进程报 `off: 'disabled'`，编辑器进程不记不转，日志没有 `push.started` / `render-node.bind`，云端没有这个项目的层表 |
+| 另核：两边项目文档 id 一致；节点代码版本在在线构建里 | 过 |
+
+最后一行（节选）：`{"ok":true,"run":"mulys…","target":"local","steps":{…},"cleanup":{"deleted":[{"projectId":"sp_axashgh7pvxsskq7gvxyfeu2e5","result":"shared.admin.ok"},{"projectId":"sp_uqifextqqtzg2nh5khp4pq3l7b","result":"shared.admin.ok"}],"listening":[]},"ms":574104,"fails":[]}`
+
+看过的图：`a3-online-u1.png`（在线页面舞台上 U1、U2 的闪光文字与 H 都是贴的快照，时间轴片段没有徽标）、`a4-online-u2-before.png`、`a4-online-u2-after.png`（U2 换成「U2 新内容 …」）。
+
+前两次没过、已修：run1 交接后节点没起（`DOCSERVICE_MODES` 不认 `page`）；run2 A1 推送队列起步时落到本机素材服务（页面第一次交接时还没挑到素材服务）、A5 推送队列没停（见上）。
+
+### 基线
+
+- `npx tsc -b --force`：退出码 0，零错误。
+- `npm test`：3827 个，通过 3825，失败 0，跳过 2（退出码 0）。
+- 新增单测：`server/test/auto-render-node.test.mjs` 11 个（ARN-01～08 开关、校验、交接、票据往返与缓存、等页面与续上、同项目 / 换项目、撤掉与起步期间撤掉、日志转发；RLY-01～03 中转与配置记忆），`src/editor/sync/renderNodeHandoff.test.mjs` 5 个（RNH-01～05），全过。
