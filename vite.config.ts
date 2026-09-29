@@ -7,6 +7,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
 import { viewGatePlugin } from "./server/vite-plugin-view-gate";
 import { exportPlugin } from "./server/vite-plugin-export";
+import { exportsListPlugin } from "./server/vite-plugin-exports-list";
 import vitePluginAi from "./server/vite-plugin-ai";
 import { sttPlugin } from "./server/vite-plugin-stt";
 import { shotsPlugin } from "./server/vite-plugin-shots";
@@ -83,7 +84,7 @@ const desktopConfig: UserConfig = {
   // stagePortsPlugin 排在 apiGuard 后面:它自己那条 /api/stage/ports 也该受同一道卡口管。
   // docservicePlugin(本地文档服务)总是注册;无头实例里它进入停用模式(不建文档服务、/docservice 回 503),
   // 因为无头实例是 Skill 的临时副本,不能自己发 projectRev。停用逻辑在插件里。
-  plugins: [lanHostPlugin(), apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), rawEolPlugin(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
+  plugins: [lanHostPlugin(), apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), exportsListPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), rawEolPlugin(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,
