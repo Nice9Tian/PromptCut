@@ -63,7 +63,7 @@
  *   node scripts/probes/m8-e-probe.mjs --role host --name host-a --case … --place … --coord <协调口> [--port 5583]
  *        [--lan-host <ip:端口>] [--via-proxy <代理监听端口>] [--proxy-target <host:port>] [--stall-prob 0]
  *        [--stall] [--stall-s <秒>] [--fake-fingerprint <16 位十六进制>] [--host-concurrency 2] [--band 5580-5599] [--run <id>] [--out <目录>]
- *        [--assert-no-lan <PC 局域网地址>]（异地接入：全程只读地数本机到这个地址的已建立 TCP 连接（TIME_WAIT 等不算）、收尾前 3 s 局域网发现，都要 0；
+ *        [--assert-no-lan <PC 局域网地址>]（异地接入：全程只读地数本机到这个地址、开始时没有的 TCP 连接（基线排除：开始时已有的不算，之后新出现的不论状态都算）、收尾前 3 s 局域网发现，都要 0；
  *        公共件 `m8/no-lan.mjs`）。结果行另有 `idsDetail`：本机每一次丢认领、失败、丢弃的时刻与原因
  *   node scripts/probes/m8-e-probe.mjs --role watcher --coord <协调口> [--run <id>]        （可选：另一台机器上的旁观节点）
  *   node scripts/probes/m8-e-probe.mjs --role signal --coord <协调口> --run <id> --name <信号名> [--value '<json>']
@@ -1041,7 +1041,7 @@ async function runHost(r) {
   const eventsDetail = [];
   let pollTimer = null;
   let prerenderUrl = null;
-  // --assert-no-lan <PC 局域网地址>（m8-plan 第 2.3 节「异地接入」的真实渲染一轮）：全程只读地数到这个地址的已建立 TCP 连接
+  // --assert-no-lan <PC 局域网地址>（m8-plan 第 2.3 节「异地接入」的真实渲染一轮）：全程只读地数到这个地址、基线之外的 TCP 连接（不论状态）
   const noLanIp = arg('--assert-no-lan', null);
   const noLan = noLanIp ? startNoLanWatch(noLanIp, { log: say }) : null;
   try {
@@ -1128,7 +1128,7 @@ async function runHost(r) {
     if (noLan) {
       const nl = await noLan.stop();
       r.set({ noLan: nl });
-      r.check('no-lan-tcp', nl.tcpOk, { ip: noLanIp, samples: nl.samples, maxTcp: nl.maxTcp, seen: nl.seen, maxOther: nl.maxOther, seenOther: nl.seenOther });
+      r.check('no-lan-tcp', nl.tcpOk, { ip: noLanIp, baselineOk: nl.baselineOk, samples: nl.samples, maxTcp: nl.maxTcp, seen: nl.seen, baseline: nl.baseline });
       r.check('no-lan-discovery', nl.discoveryOk, nl.discovery);
     }
     // e2 / C1 的受害方:被扣住的任务在断线期间执行失败是预期的(旧认领随后作废),不算这台主机的失败
