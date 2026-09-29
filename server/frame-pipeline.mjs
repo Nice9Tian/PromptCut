@@ -210,6 +210,11 @@ export class FramePipeline {
      */
     this.pushQueue = pushQueue;
     /**
+     * 帧库的使用索引与淘汰(`frame-library-storage.mjs`,存储占用计划 B 部分)。只有预渲染进程接上(`attachPipeline`);
+     * null 时下面三处 `this.usage?.` 什么都不做。
+     */
+    this.usage = null;
+    /**
      * 环境指纹(M4):card plan、轨道流的全部结果键都乘上它。定下来之前是 null —— 那时
      * `CardFrameCache.plan()` 抛出、`planStreams` 回 [],什么键都不产。
      */
@@ -1362,6 +1367,8 @@ export class FramePipeline {
     // `ticket`:HTTP 入口在等镜像之前就替它领了号(按到达顺序,不按算完的顺序,审查 #6)
     const ticket = adopt ? (issued ?? this.ready.request(session)) : undefined;
     const entry = await this.entry(project);
+    // 存储占用:打开的这一版用到的键记为使用(计划还没算出来时先记整场景与本地档,算出来后 `recordCardPlan` 再记全)
+    this.usage?.touchEntry(entry);
     if (queue !== undefined) entry.queueSnapshots = queue === true;
     if (adopt) {
       // 算 entry 的那一段里同一会话又来了更新的 preload:这个请求作废 —— 不认领,也不排后台活
@@ -1461,6 +1468,9 @@ export class FramePipeline {
         if (entry.stage !== 'ready') entry.stage = undefined;
         if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background');
         if (deferredCards.length && !controller.signal.aborted) this.scheduleCardLockRetry(entry, deferredCards, controller.signal);
+        // 存储占用:这一趟做完再记一次(轨道流此时才有),到节拍了就判一次要不要淘汰
+        this.usage?.touchEntry(entry);
+        this.usage?.afterBatch();
       }
     });
     return entry;
@@ -1999,6 +2009,8 @@ export class FramePipeline {
     entry.prerenderSet = entry.basePrerenderSet;
     // c10a 契约第 17 节:补渲登记过的片段并进来(`addBackfill`)
     this.applyBackfill(entry);
+    // 存储占用:任何 lane 用到这一版的计划,它的键都记为使用
+    this.usage?.touchEntry(entry);
     return plan;
   }
   /**
