@@ -26,6 +26,8 @@ import { cardCodeIdentityOf, onCardSourceChange, overridesRoot } from "./card-ov
 import { autoRenderNodeOffReason, createAutoRenderNode } from "./auto-render-node.mjs";
 import { foreignAssetEndpoints, selectAssetClient as selectAssetClientImpl } from "./asset-select.mjs";
 import { ALL as SCOPE_ALL, createPushScope } from "./push-scope.mjs";
+import { closeStorage, createExportSummary, storageDataDir, storageFor } from "./frame-library-storage.mjs";
+import { createStorageHandler, storageRouteOf } from "./storage-routes.mjs";
 
 const services = new Map<string, FramePipeline>();
 /**
@@ -979,11 +981,35 @@ function requestSignal(req: any, res: any) {
   res.once?.("close", () => { if (!res.writableEnded) abort(); });
   return controller.signal;
 }
+/** 导出目录与帧库目录(`PROMPTCUT_EXPORT_DIR`,开发期缺省 `<root>/out`) */
+const exportRoot = (root: string) => process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out");
+const libraryRoot = (root: string) => path.join(exportRoot(root), "frame-library");
+const storageLog = (event: string, fields: object = {}) => {
+  try { console.info("[storage]", event, JSON.stringify(fields)); } catch { console.info("[storage]", event); }
+};
+/**
+ * 帧库的使用索引、上限与淘汰(存储占用计划 B 部分,`frame-library-storage.mjs`)。**只在预渲染进程里建**:
+ * 编辑器进程的管线几乎不写帧库,`/api/storage*` 它原样转过来。
+ * `PROMPTCUT_STORAGE_EVICT=0` 只记只量、不删;`PROMPTCUT_TEST_STORAGE_MIN_CAP`(字节)仅供测试与探针,把用户可设的下限调小。
+ */
+function storageOf(root: string) {
+  const testMin = Number(process.env.PROMPTCUT_TEST_STORAGE_MIN_CAP);
+  return storageFor({ root: libraryRoot(root), dataDir: storageDataDir(root),
+    ...(Number.isSafeInteger(testMin) && testMin > 0 ? { minCapBytes: testMin } : {}),
+    evict: process.env.PROMPTCUT_STORAGE_EVICT !== "0", log: storageLog });
+}
+const exportSummaries = new Map<string, ReturnType<typeof createExportSummary>>();
+function exportSummaryOf(root: string) {
+  const dir = exportRoot(root);
+  let summary = exportSummaries.get(dir);
+  if (!summary) { summary = createExportSummary(dir); exportSummaries.set(dir, summary); }
+  return summary;
+}
 export function frameService(root: string, origin: string) {
   root = path.resolve(root);
   let service = services.get(root);
   if (!service) {
-    service = new FramePipeline({ root: path.join(process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out"), "frame-library"), origin: () => origin,
+    service = new FramePipeline({ root: libraryRoot(root), origin: () => origin,
       code: () => frameCode(root), captureCode: () => captureCode(root),
       // c66-host-cards:全局代码版本不含用户卡与改动层,这一版用到的定制卡的身份另算(整场景键、requires.cardSources)
       cardSources: (project: any) => cardCode(root).projectVersions(project),
@@ -1008,6 +1034,8 @@ export function frameService(root: string, origin: string) {
       mediaUrl: (m: any) => mediaSourceOf(m),
     });
     services.set(root, service);
+    /* 存储占用:预渲染进程的管线接上帧库的使用索引(预加载时记使用、按它的会话判「开着」的项目) */
+    if (isPrerender) storageOf(root).attachPipeline(service);
     /*
      * R8:轨道流分段的读口挂在下面的 `/api/frames/*` 上 —— 生产者要读口接上了才开工、才发 `stream` 层
      * (`StreamProducer.routeAttached`)。编辑器进程(`interactive: false`)没有生产者,这里是空操作。
@@ -1169,6 +1197,17 @@ export function framesPlugin(): Plugin {
       const queueNode = queueNodes.get(root); queueNodes.delete(root);
       const auto = autoNodes.get(root); autoNodes.delete(root);
       void (async () => { await auto?.unbind({ reason: "server-close" }).catch(() => {}); await queueNode?.close(); await teardown?.(); await s?.close(); })();
+      if (isPrerender) void closeStorage(libraryRoot(root)).catch(() => {});
+    });
+    /*
+     * 存储占用(计划第 4 节):`GET /api/storage`、`POST /api/storage/cap`、`POST /api/storage/clear-cache`。
+     * 扫描与淘汰在预渲染进程里做,编辑器进程原样转过去。路由与回包见 `storage-routes.mjs`。
+     */
+    const storageHandler = isPrerender ? createStorageHandler({ storage: () => storageOf(root), exports: exportSummaryOf(root) }) : null;
+    server.middlewares.use("/api/storage", (req, res, next) => {
+      if (!storageRouteOf(req)) return next();
+      if (!isPrerender) return proxyToPrerender(req, res);
+      return storageHandler!(req, res, next);
     });
     /*
      * D4(b) `/api/cards/layout`:Agent 的 `get_layout` —— 按 t 在**整场景**上实测实体框
