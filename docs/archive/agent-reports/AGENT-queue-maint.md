@@ -152,3 +152,9 @@
 - 任务 D 里播放、拖动不算忙（见「取舍」），是否也算由主会话定。
 - `stageJobs.ts` 补跑与互换之间的窗口（见任务 F「没改的」）没改。
 - G0-R 按任务书不跑。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过 `queue.mjs` 的 `lockLastActive`（报忙的节点须此刻连着、指纹是锁上的那一个）与 `node.active` 在 `NODE_TYPES` 里（没报到的连接先回 `not-registered`）；兼容旧页面、旧队列。页面只是在播放或拖动不算忙，照留。
+- 合流上 `m7-browser-probe --role all --timing-authoritative`（空闲笔记本）：M7-A1～A12、D9、D10、D14、D1-D2-D12 全过，A4 最慢锚点段 22.2 s、A5 619 ms 后恢复、A12 长任务 0；W7 真跨机待复核（退出码 3 = 只有待复核项）。`desktop-auto-node-probe` 两遍过。
+- 队列服务的改动随 0.7.4 部署到阿里云托管服务。合入 main `0efcd41d`。

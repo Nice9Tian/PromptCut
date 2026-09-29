@@ -181,3 +181,9 @@
   - `src/editor/Preview.tsx`（注入 `builtins`）。
 - 任务 G：6 个探针文件头、`scripts/README.md`。
 - 契约：`docs/plan/c10-contract.md` 第 2、9 节。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过跨文件解析：没有任何执行源码的写法（无 eval / new Function / 动态 import）；舞台看守放在 render 层、时钟可注入。
+- 合流上空闲笔记本重跑 `online-stage-watch-probe`：弄崩舞台 B 19.2 s 重载、19.7 s 握回来仍双舞台；A 的源回 503 再弄崩 A，34.8 s 退回同源单舞台并画出画面，之后不再请求舞台源；页面错误 0。`online-user-cards-probe` 过。
+- 语义建议里三级那条（在线双舞台的退回）已写进 `mechanism/rendering.md`「舞台」〔裁〕；二级那条（`product/platforms.md` 写同步卡能改参数）没写，列为待用户定。合入 main `0efcd41d`。
