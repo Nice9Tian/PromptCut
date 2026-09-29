@@ -99,6 +99,7 @@
 | 降级 | 播放中把最贵的轻卡改判为重卡 | 三 | mechanism/rendering.md |
 | 预渲染、预渲染结果 | 离屏预先渲染重卡，产出快照或轨道流 | 二 | product/rendering.md |
 | 预渲染集合 | 所有段里重卡的并集，只有它们会被预渲染 | 三 | mechanism/rendering.md |
+| 帧库 | 桌面版在本机存预渲染结果的目录，是可重新生成的缓存，有上限、按最近使用淘汰 | 三 | mechanism/platforms.md |
 | 成本记录 | 一张卡的活渲单帧耗时，按「卡片身份（不含测量机器）+ 环境指纹」存在文档服务，供低内存档排序 | 三 | mechanism/document-service.md、mechanism/rendering.md |
 | 界限搜索 | 低内存档判轻重的做法：按成本记录给卡排序，二分法测到自己跑不动的第一张，以它为界 | 三 | mechanism/rendering.md |
 | 快照 | 某张卡某一帧的 HTML，用于暂停和拖动 | 二 | product/rendering.md、mechanism/rendering.md |
