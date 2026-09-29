@@ -8,12 +8,20 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { frameService, renderProject } from "../vite-plugin-frames";
 import { postFrame } from "../png-post.mjs";
-import { removeDirWithRetry } from "../storage-leftovers.mjs";
 import { outRoot } from "./http";
 import { runExport } from "./worker-pool";
 import type { RenderJob2, Runner } from "./worker-pool";
 
 let counter = 0;
+
+/** 删临时导出目录,删不掉按退避重试(Windows 上渲染子进程刚退、文件可能还占着)。回是否删掉了。 */
+async function removeTempDir(dir: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try { await fsp.rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 }); return true; }
+    catch { await new Promise((r) => setTimeout(r, 200 * (attempt + 1))); }
+  }
+  return false;
+}
 
 /** 取一个号。`counter` 只住在本模块,跨模块(bake.ts 的临时文件名)只能通过它取 */
 export function nextCounter(): number {
@@ -204,6 +212,6 @@ export async function renderFrames(root: string, origin: string, project: any, t
   } finally {
     // 看一眼就够了,不留垃圾:等删完(Windows 上渲染子进程刚退、文件可能还占着,退避重试);
     // 还是删不掉也不该让这次调用失败,记一笔,下次启动由 sweepExportRoot 按 pid 清
-    if (!(await removeDirWithRetry(dir))) console.warn(`[vision] 临时导出目录删不掉,留给下次启动清理:${dir}`);
+    if (!(await removeTempDir(dir))) console.warn(`[vision] 临时导出目录删不掉,留给下次启动清理:${dir}`);
   }
 }

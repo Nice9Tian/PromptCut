@@ -201,12 +201,3 @@ export async function claimExportDir(base, now = new Date()) {
   }
   throw new Error('同一秒内的导出目录太多');
 }
-
-/** 删一个目录，失败按退避重试（Windows 上刚退出的子进程可能还占着文件）。回是否删掉了。 */
-export async function removeDirWithRetry(dir, { attempts = 5, delayMs = 200 } = {}) {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try { await fs.rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 }); return true; }
-    catch { await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1))); }
-  }
-  return false;
-}
