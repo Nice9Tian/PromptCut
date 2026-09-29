@@ -9,11 +9,16 @@
  *   说明、参数默认值与控件(只认字面量)→ `registry.setSyncedUserCards`(不执行源码,也不进主注册表;参数面板经
  *   `registry.syncedCardView` 看默认值与控件)。
  *
+ * **跟着 import 找**(C10 契约第 9 节〔裁〕2026-09-30):入口文件经相对导入引到的同一目录下的文件(`src/cards/user/` 下的
+ * `.ts` / `.tsx`,桌面版按卡的导入闭包一并同步进内容库)也在列表里,就同样按哈希取正文,再跟着它们的导入往下取(有环不重取);
+ * 解析入口时把这些正文交给 `parseCardSource`(`files`),引进来的控件、默认值照样认得出。引到页面自己带着的内置模块的,
+ * 由调用方给的 `builtins`(`src/cards/builtinSourceExports.ts`)解析。列表里没有的文件取不到,面板说明是哪一条。
+ *
  * 跟变化的办法选**定时重取**(每 `CARD_SOURCE_POLL_MS` 列一次,哈希没变的不再取正文),不订阅 `content.watch`:
  * 内容库的订阅按连接只认最后一次 `watch` 的那一组,与同一条连接上别的订阅方会互相顶掉;会话接续、重连时也不必补订阅。
  * 连接换了(重连、换项目、离开共享项目)清表重取。取不到(没连上、被拒、超时)时手里的表不动,下一轮再试。
  */
-import { isUserCardEntryKey, parseCardSource, type ParsedCardSource } from "../../kernel/cardSourceParse.mjs";
+import { cardSourceImports, isUserCardEntryKey, parseCardSource, type ParsedCardSource } from "../../kernel/cardSourceParse.mjs";
 import { setSyncedUserCards, type SyncedUserCard } from "../../kernel/registry";
 
 /** 多久重列一次内容库的卡片源码 */
@@ -21,6 +26,13 @@ export const CARD_SOURCE_POLL_MS = 5_000;
 /** 内容库里用户卡源码的键前缀 */
 export const CARD_SOURCE_PREFIX = "src/cards/user/";
 export const CARD_SOURCE_KIND = "card-source";
+/** 跟着 import 最多取多少个非入口文件(防坏数据把页面拖住) */
+export const CARD_SOURCE_MAX_DEPS = 200;
+
+/** 列表里可以当被引文件取的键:用户卡目录下的 `.ts` / `.tsx` / `.mjs` / `.js`(含子目录) */
+export function isCardSourceModuleKey(key: unknown): key is string {
+  return typeof key === "string" && key.startsWith(CARD_SOURCE_PREFIX) && /\.(tsx?|mjs|js)$/.test(key) && !key.split("/").some((p) => p === "" || p === "." || p === "..");
+}
 
 type Request = (msg: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>;
 
@@ -40,6 +52,8 @@ export interface OnlineCardSourcesDeps {
   onFirstSettled?: (ok: boolean, link: unknown) => void;
   requestTimeoutMs?: number;
   now?: () => number;
+  /** 页面自己带着的内置模块的导出(`parseCardSource` 的 `builtins`);缺省不认内置模块 */
+  builtins?: (key: string) => Readonly<Record<string, unknown>> | null | undefined;
 }
 
 type ParsedCard = Pick<ParsedCardSource, "id" | "name"> & Partial<Omit<ParsedCardSource, "id" | "name">>;
@@ -61,6 +75,7 @@ export function entriesOf(keys: readonly string[], parsed: ReadonlyMap<string, P
         ...(c.defaults !== undefined ? { defaults: c.defaults } : {}),
         ...(c.controls !== undefined ? { controls: c.controls } : {}),
         ...(c.controlsIncomplete ? { controlsIncomplete: true } : {}),
+        ...(c.skippedControls?.length ? { skippedControls: c.skippedControls } : {}),
       });
     }
   }
@@ -70,8 +85,10 @@ export function entriesOf(keys: readonly string[], parsed: ReadonlyMap<string, P
 export class OnlineCardSources {
   private readonly deps: OnlineCardSourcesDeps;
   private link: unknown = null;
-  /** 键 → 这份正文的哈希与解析结果 */
-  private readonly cache = new Map<string, { hash: string; cards: ParsedCard[] }>();
+  /** 键 → 这份正文与它的哈希(入口文件与跟着 import 取到的文件) */
+  private readonly cache = new Map<string, { hash: string; body: string }>();
+  /** 入口键 → 解析结果;正文有变(任何一份)时整份重解析 */
+  private parsed = new Map<string, ParsedCard[]>();
   private busy: Promise<void> | null = null;
   private entries: SyncedUserCard[] = [];
   private stopped = false;
@@ -117,6 +134,7 @@ export class OnlineCardSources {
       // 连接换了:换项目时别的项目的卡不能留着
       this.link = link;
       this.cache.clear();
+      this.parsed = new Map();
       this.apply([]);
       // 新连接的第一轮重新算「第一次」
       this.settled = false;
@@ -140,29 +158,56 @@ export class OnlineCardSources {
       return;
     }
     this.stats.truncated = listing.truncated === true;
-    const items = (listing.items as { key?: unknown; hash?: unknown }[])
-      .filter((it) => isUserCardEntryKey(it?.key))
-      .map((it) => ({ key: String(it.key), hash: typeof it.hash === "string" ? it.hash : "" }));
-    const keys = items.map((it) => it.key);
-    for (const k of [...this.cache.keys()]) if (!keys.includes(k)) this.cache.delete(k);
-    for (const it of items) {
-      const hit = this.cache.get(it.key);
-      if (hit && it.hash && hit.hash === it.hash) continue;
-      try {
-        const got = await this.request({ type: "content.get", kind: CARD_SOURCE_KIND, key: it.key });
-        this.stats.gets++;
-        if (this.stopped || this.deps.linkKey() !== link) return;
-        if (got?.type !== "content.item" || got.missing) { this.cache.delete(it.key); continue; }
-        const body = typeof got.body === "string" ? got.body : "";
-        this.cache.set(it.key, { hash: typeof got.hash === "string" ? got.hash : it.hash, cards: parseCardSource(body) });
-      } catch (err) {
-        // 这一条这轮取不到:留着旧的解析结果(有的话),下一轮再取
-        this.stats.errors++;
-        this.stats.lastError = String((err as Error)?.message ?? err).slice(0, 160);
-      }
+    const listed = new Map<string, string>();
+    for (const it of listing.items as { key?: unknown; hash?: unknown }[]) {
+      if (isCardSourceModuleKey(it?.key)) listed.set(it.key, typeof it.hash === "string" ? it.hash : "");
     }
-    const parsed = new Map([...this.cache].map(([k, v]) => [k, v.cards] as const));
-    this.apply(entriesOf([...this.cache.keys()], parsed));
+    const entryKeys = [...listed.keys()].filter((k) => isUserCardEntryKey(k)).sort();
+    let dirty = false;
+    for (const k of [...this.cache.keys()]) if (!listed.has(k)) { this.cache.delete(k); dirty = true; }
+    // 入口文件,再跟着 import 取同一目录下被引的文件(只取列表里有的;哈希没变不重取;有环不重取)
+    const queue = [...entryKeys];
+    const visited = new Set<string>();
+    let deps = 0;
+    while (queue.length) {
+      const key = queue.shift()!;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (!isUserCardEntryKey(key) && ++deps > CARD_SOURCE_MAX_DEPS) break;
+      const hash = listed.get(key) ?? "";
+      const hit = this.cache.get(key);
+      if (!(hit && hash && hit.hash === hash)) {
+        try {
+          const got = await this.request({ type: "content.get", kind: CARD_SOURCE_KIND, key });
+          this.stats.gets++;
+          if (this.stopped || this.deps.linkKey() !== link) return;
+          if (got?.type !== "content.item" || got.missing) { if (this.cache.delete(key)) dirty = true; continue; }
+          const body = typeof got.body === "string" ? got.body : "";
+          this.cache.set(key, { hash: typeof got.hash === "string" ? got.hash : hash, body });
+          dirty = true;
+        } catch (err) {
+          // 这一条这轮取不到:留着旧的正文(有的话),下一轮再取
+          this.stats.errors++;
+          this.stats.lastError = String((err as Error)?.message ?? err).slice(0, 160);
+        }
+      }
+      const cur = this.cache.get(key);
+      if (!cur) continue;
+      for (const dep of cardSourceImports(cur.body, key)) if (listed.has(dep) && !visited.has(dep)) queue.push(dep);
+    }
+    // 不再被引的文件不留
+    for (const k of [...this.cache.keys()]) if (!visited.has(k)) { this.cache.delete(k); dirty = true; }
+    if (dirty || [...this.parsed.keys()].some((k) => !this.cache.has(k))) {
+      const files = (k: string) => this.cache.get(k)?.body ?? null;
+      const next = new Map<string, ParsedCard[]>();
+      for (const k of entryKeys) {
+        const cur = this.cache.get(k);
+        if (!cur) continue;
+        next.set(k, parseCardSource(cur.body, { key: k, files, builtins: this.deps.builtins }));
+      }
+      this.parsed = next;
+    }
+    this.apply(entriesOf([...this.parsed.keys()], this.parsed));
     this.stats.lastSyncAt = (this.deps.now ?? Date.now)();
     this.settle(true, link);
   }
@@ -172,7 +217,8 @@ export class OnlineCardSources {
     return {
       link: !!this.link,
       settled: this.settled,
-      keys: [...this.cache.keys()].sort(),
+      keys: [...this.parsed.keys()].sort(),
+      deps: [...this.cache.keys()].filter((k) => !isUserCardEntryKey(k)).sort(),
       cards: this.entries.map((e) => ({ ...e })),
       ...this.stats,
     };
@@ -182,6 +228,7 @@ export class OnlineCardSources {
   stop(): void {
     this.stopped = true;
     this.cache.clear();
+    this.parsed = new Map();
     this.link = null;
     this.apply([]);
   }

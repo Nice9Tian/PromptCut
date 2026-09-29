@@ -78,10 +78,10 @@ test("syncedCardView:只读视图(名字、说明、默认值、控件,没有组
       { id: "builtin-a", name: "撞内置", controls },
     ]);
     const v = R.syncedCardView("s");
-    assert.deepEqual({ ...v }, { id: "s", name: "同步卡", description: "说明", defaults: { text: "hi", n: 3 }, controls, controlsIncomplete: false, synced: true });
+    assert.deepEqual({ ...v }, { id: "s", name: "同步卡", description: "说明", defaults: { text: "hi", n: 3 }, controls, controlsIncomplete: false, skippedControls: [], synced: true });
     assert.equal(v.Component, undefined, "没有组件");
     assert.ok(Object.isFrozen(v), "只读");
-    assert.deepEqual({ ...R.syncedCardView("bare") }, { id: "bare", name: "只有名字", defaults: {}, controls: [], controlsIncomplete: false, synced: true });
+    assert.deepEqual({ ...R.syncedCardView("bare") }, { id: "bare", name: "只有名字", defaults: {}, controls: [], controlsIncomplete: false, skippedControls: [], synced: true });
     assert.equal(R.syncedCardView("opaque").controlsIncomplete, true);
     assert.equal(R.syncedCardView("builtin-a"), undefined, "和内置卡撞车:内置赢,不给视图");
     assert.equal(R.syncedCardView("nobody"), undefined);

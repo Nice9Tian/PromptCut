@@ -53,6 +53,7 @@ import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
 import { createStageWatch, type StageWatch } from "../online/stageWatch";
+import { builtinSourceExports } from "../cards/builtinSourceExports";
 import { pageL2 } from "../online/l2";
 import { l2CostBackend } from "../online/l2Costs";
 import { createPlanPublisher } from "../online/planPublisher";
@@ -907,6 +908,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     holdMeasureForCardSources();
     const sources = new OnlineCardSources({
       request: docRequest, linkKey,
+      // 用户卡源码从内置模块引进来的控件、默认值:用页面自己带着的那份(`src/cards/builtinSourceExports.ts`)
+      builtins: builtinSourceExports,
       onFirstSettled: (ok, link) => releaseMeasureGate(ok, link),
     });
     const push = () => {
