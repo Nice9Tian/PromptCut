@@ -11,6 +11,9 @@ import { cardEntryCode } from './card-code.mjs';
 import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
 import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
+import { sweepFrameLibrary } from './storage-leftovers.mjs';
+/** 本进程已做过启动清理的帧库根 */
+const sweptRoots = new Set();
 import { CardFrameCache } from './card-cache.mjs';
 import { SnapshotStore, snapshotTier, rangeHas, rangeCount } from './snapshot-store.mjs';
 import { createReadyHub, DEFAULT_READY_SESSION, READY_SESSION_IDLE_MS, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
@@ -203,6 +206,15 @@ export class FramePipeline {
    */
   constructor({ root, origin, code = () => '', cardSources = () => ({}), captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null }) {
     this.root = root;
+    /**
+     * 存储计划 A 部分:启动时清掉死进程留在帧库里的临时文件(`storage-leftovers.mjs` 文件头列了认哪几种)。
+     * 只对真正的帧库根(`<导出目录>/frame-library`)做,一个进程一个根只做一次;测试用的临时根不碰。
+     * 不等它:清理和开工并行,只删死进程的东西,不会和本进程的写入撞上。
+     */
+    if (typeof root === 'string' && path.basename(root) === 'frame-library' && !sweptRoots.has(path.resolve(root))) {
+      sweptRoots.add(path.resolve(root));
+      this.leftoverSweep = sweepFrameLibrary(root, { log: message => console.log(message) }).catch(() => null);
+    } else this.leftoverSweep = Promise.resolve(null);
     /**
      * C6.4 的推送队列(`artifact-push.mjs` 的 `createPushQueue`,它建好后自己挂到这里)。**只有它不是 null 时**
      * 快照 / 流的推送钩子和 `preload` 里的换机取用才生效;null(缺省,含所有现有测试和探针)时逐路径行为不变。
@@ -2820,15 +2832,17 @@ export class FramePipeline {
           }
           await stream.finish();
           await fs.rename(temp, video);
-        } catch (e) { await stream.abort(); await fs.rm(temp, { force: true }); throw e; }
+        } catch (e) { await stream.abort().catch(() => {}); await fs.rm(temp, { force: true }).catch(() => {}); throw e; }
       }
       if (final) {
         for (const frame of frames) {
           await atomic(path.join(entry.dir, 'frames', `${pad(frame)}.png`), await fs.readFile(path.join(dir, `${pad(frame)}.png`)));
         }
         const temp = path.join(entry.dir, `preview-${process.pid}.tmp.mp4`);
-        await fs.copyFile(video, temp);
-        await fs.rename(temp, path.join(entry.dir, 'preview.mp4'));
+        try {
+          await fs.copyFile(video, temp);
+          await fs.rename(temp, path.join(entry.dir, 'preview.mp4'));
+        } catch (e) { await fs.rm(temp, { force: true }).catch(() => {}); throw e; }
       }
     }
   }
@@ -2891,6 +2905,8 @@ export class FramePipeline {
       if (this.playback?.owner === input.owner && input.sequence > this.playback.sequence) {
         this.playback.sequence = input.sequence; await this.stopPlayback();
         this.retiredPlaybackOwners.add(input.owner);
+        // 会话结束:播放 MOV 只是中转,用完即删(存储计划 A 部分)
+        await this.disposePlaybackMovie(this.playback.entry);
       }
       return { closed: true };
     }
@@ -2899,7 +2915,10 @@ export class FramePipeline {
     await entry.playbackMovie.ready;
     if (!this.playback || this.playback.owner !== input.owner || this.playback.entry !== entry) {
       if (this.playback && this.playback.owner !== input.owner) this.retiredPlaybackOwners.add(this.playback.owner);
+      const previous = this.playback?.entry;
       await this.stopPlayback();
+      // 换了版本(另一个 entry):上一个版本的播放 MOV 没人再读,删掉
+      if (previous && previous !== entry) await this.disposePlaybackMovie(previous);
       this.playback = new FramePlayback({ entry, movie: entry.playbackMovie,
         render: (times, options) => this.see_frames(entry.project, times, options),
         // Warm frames are verified like see_frames lookups; an empty legacy
@@ -2933,6 +2952,13 @@ export class FramePipeline {
       await this.resumeBackground(input.owner); await release(input.owner);
     }
     return { ...playback.status(), key: entry.key, movie: `/api/frames/${entry.key}/mov/${entry.playbackMovie.name}` };
+  }
+  /** 关掉并删掉一个 entry 的播放 MOV;下次播放这一版时重新建一份(帧从 MOV 缓存的 PNG 回填)。 */
+  async disposePlaybackMovie(entry) {
+    const movie = entry?.playbackMovie;
+    if (!movie) return;
+    entry.playbackMovie = null;
+    await movie.dispose().catch(() => {});
   }
   async stopPlayback() {
     const playback = this.playback;
@@ -2988,7 +3014,7 @@ export class FramePipeline {
     this.lanes.clear();
     await Promise.allSettled(this.userPool.map(session => session.bakery.close()));
     this.userPool.length = 0;
-    await Promise.allSettled([...this.entries.values()].flatMap(entry => [entry.mov?.close(), entry.playbackMovie?.close(), entry.cardCache?.close()]));
+    await Promise.allSettled([...this.entries.values()].flatMap(entry => [entry.mov?.close(), this.disposePlaybackMovie(entry), entry.cardCache?.close()]));
     for (const entry of this.entries.values()) entry.disposeArchive?.();
   }
 }
