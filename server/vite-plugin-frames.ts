@@ -23,6 +23,7 @@ import { renderProject } from "./render-project.mjs";
 import { resolvePublishVersion } from "./queue-publish.mjs";
 import { createCardCodeIndex } from "./card-code.mjs";
 import { cardCodeIdentityOf, onCardSourceChange, overridesRoot } from "./card-overrides.mjs";
+import { autoRenderNodeOffReason, createAutoRenderNode } from "./auto-render-node.mjs";
 
 const services = new Map<string, FramePipeline>();
 /**
@@ -98,12 +99,14 @@ function foreignAssetEndpoints(list: any[], origin: string | null): { announcerI
  * (`ticket`);本机身份不带票据(本机回环的素材服务不要票据)。集群令牌不再用于素材服务。
  * 每换一次基址记一行 `push.asset-base { source, base }`,基址不含票据。
  */
-function selectAssetClient({ node, endpoint, origin, ticket, createAssetClient, owner }:
-  { node: any; endpoint: any; origin: string; ticket: ((opts?: { refresh?: boolean }) => Promise<string | null>) | null; createAssetClient: any; owner: string }) {
+function selectAssetClient({ node, endpoint, origin, ticket, createAssetClient, owner, preferred }:
+  { node: any; endpoint: any; origin: string; ticket: ((opts?: { refresh?: boolean }) => Promise<string | null>) | null; createAssetClient: any; owner: string;
+    /** 自动渲染节点:页面此刻用的素材服务基址(页面给了就排在登记之前;现取,页面换了基址下一次调用就换) */
+    preferred?: () => string | null }) {
   const localBase = `${origin}/api/asset`;
   let current: any = null;
   let currentBase: string | null = null;
-  const use = (base: string, source: "env" | "announced" | "local") => {
+  const use = (base: string, source: "env" | "page" | "announced" | "local") => {
     if (base === currentBase && current) return;
     let next: any;
     try { next = createAssetClient({ base, ticket }); }
@@ -113,17 +116,26 @@ function selectAssetClient({ node, endpoint, origin, ticket, createAssetClient, 
     pushLog("push.asset-base", { source, base, for: owner });
   };
   const envBase = String(process.env.PROMPTCUT_ASSET_URL || "").trim().replace(/\/+$/, "");
+  const pagePick = () => { try { return preferred?.() ?? null; } catch { return null; } };
   let stop = () => {};
   if (envBase) use(envBase, "env");
-  if (!current) {
-    use(localBase, "local");
+  if (!current && pagePick()) use(pagePick()!, "page");
+  // 显式给了基址并且建成了就只用它;否则(含没给页面基址时)与原来相同:本机起步,按登记换
+  const envOk = !!envBase && currentBase === envBase;
+  if (!envOk) {
+    if (!current) use(localBase, "local");
     stop = node.watchServiceEndpoints(endpoint, ["asset"], (list: any[]) => {
+      if (pagePick()) return;
       const url = foreignAssetEndpoints(list, origin)[0]?.urls[0];
       if (url) use(url.replace(/\/+$/, ""), "announced");
       else use(localBase, "local");
     });
   }
-  const client = new Proxy({}, { get: (_target, key) => { const value = current?.[key]; return typeof value === "function" ? value.bind(current) : value; } });
+  const client = new Proxy({}, { get: (_target, key) => {
+    // 页面后来才给(或换了)素材基址:下一次调用就换上
+    if (!envOk) { const p = pagePick(); if (p && p !== currentBase) use(p, "page"); }
+    const value = current?.[key]; return typeof value === "function" ? value.bind(current) : value;
+  } });
   return { client, stop: () => { try { stop(); } catch { /* 已经停了 */ } }, base: () => currentBase };
 }
 
@@ -175,7 +187,7 @@ const sessionDiag = (endpoint: any) => sessionDiagOf(endpoint);
  */
 const pushModeAllowed = (mode: unknown) => mode === "remote" || mode === "local" || mode === "shared"
   || (mode === "editor" && (process.env.PROMPTCUT_QUEUE_NODE === "1" || process.env.PROMPTCUT_PUSH === "1"));
-async function startArtifactPush(root: string, service: FramePipeline) {
+async function startArtifactPush(root: string, service: FramePipeline, auto: AutoLink | null = null) {
   if (!isPrerender || process.env.PROMPTCUT_HEADLESS === "1") return;
   if (process.env.PROMPTCUT_PUSH === "0") return pushLog("push.skip", { reason: "disabled" });
   // M6b:独立渲染主机没有页面、不做 preload,产物由各项目节点的 sink 推(契约 render-host-contract 第 3 节「产物」)
@@ -184,32 +196,52 @@ async function startArtifactPush(root: string, service: FramePipeline) {
   if (!origin) return pushLog("push.skip", { reason: "no-asset-service" });
   const node: any = await import("./render-node/index.mjs");
   if (typeof node.createContentClient !== "function") return pushLog("push.skip", { reason: "no-content-client" });
-  const resolved = await resolveDocLink(node);
-  if (resolved.mode === "bad-config") return pushLog("push.skip", { reason: "bad-shared-config", detail: (resolved as any).detail });
-  if (!DOCSERVICE_MODES.has(resolved?.mode) || !resolved.url) {
-    return pushLog("push.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
+  /*
+   * 连哪个文档服务:自动渲染节点(页面交来的共享配置,`auto-render-node.mjs`)直接用它;否则照原来按环境变量解析(J.12 的开关只管这一支)。
+   */
+  let resolved: any;
+  if (auto) resolved = autoDocLink(auto);
+  else {
+    resolved = await resolveDocLink(node);
+    if (resolved.mode === "bad-config") return pushLog("push.skip", { reason: "bad-shared-config", detail: (resolved as any).detail });
+    if (!DOCSERVICE_MODES.has(resolved?.mode) || !resolved.url) {
+      return pushLog("push.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
+    }
+    // J.12:编辑器里挂的文档服务,没显式要推送就不建(开关关着时与 C6.4 之前相同)
+    if (!pushModeAllowed(resolved.mode)) return pushLog("push.skip", { reason: "editor-docservice-not-enabled", mode: resolved.mode });
   }
-  // J.12:编辑器里挂的文档服务,没显式要推送就不建(开关关着时与 C6.4 之前相同)
-  if (!pushModeAllowed(resolved.mode)) return pushLog("push.skip", { reason: "editor-docservice-not-enabled", mode: resolved.mode });
-  if (services.get(root) !== service || (service as any).closed) return;
+  if (services.get(root) !== service || (service as any).closed || (auto && !auto.alive())) return;
   const link = resolved as DocLink;
   const endpoint = node.createDocEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}),
     log: sessionLogger((event: string, fields: object) => pushLog(`docservice.${event}`, fields)) });
   const content = node.createContentClient(endpoint);
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
-  // J.13:按 D7 选推送的素材服务(环境变量 → 别的机器登记的 → 本机)
-  const assets = selectAssetClient({ node, endpoint, origin, ticket: await ticketFor(link, endpoint), createAssetClient, owner: "push" });
+  // J.13:按 D7 选推送的素材服务(环境变量 → 页面给的(自动渲染节点)→ 别的机器登记的 → 本机)
+  const assets = selectAssetClient({ node, endpoint, origin, ticket: await ticketFor(link, endpoint), createAssetClient, owner: "push", preferred: auto ? auto.assetBase : undefined });
   const client = assets.client;
   const { createPushQueue }: any = await import("./artifact-push.mjs");
-  // settleMs:同一段最后一次进队后静置 1.5 s 再推,边渲边推时一段不被推十几遍
-  const queue = createPushQueue({ pipeline: service, client, content, dir: service.root, log: pushLog, settleMs: 1500 });
+  // settleMs:同一段最后一次进队后静置 1.5 s 再推,边渲边推时一段不被推十几遍。
+  // 自动渲染节点的队列文件按项目分目录:撤掉时没推完的段留给同一个项目下次接着推,不推进别的项目的素材服务
+  const queue = createPushQueue({ pipeline: service, client, content, dir: auto ? autoPushDir(service, auto) : service.root, log: pushLog, settleMs: 1500 });
   queue.start();
   pushTeardowns.set(root, async () => {
     try { await queue.stop(); } catch {}
+    if ((service as any).pushQueue === queue) (service as any).pushQueue = null;
     assets.stop();
     try { endpoint.close(); } catch {}
   });
-  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: assets.base(), restored: queue.stats().restored });
+  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: assets.base(), restored: queue.stats().restored, ...(auto ? { projectId: auto.projectId } : {}) });
+}
+
+/** 自动渲染节点交来的链接(`auto-render-node.mjs` 的 `link`) */
+type AutoLink = { mode: "page"; url: string; shared: true; projectId: string; contentId: string | null; assetBase: () => string | null; protocols: () => Promise<string[]>; alive: () => boolean };
+const autoDocLink = (auto: AutoLink): DocLink => ({ mode: "page", url: auto.url, protocols: auto.protocols, shared: true, projectId: auto.projectId });
+/** 自动渲染节点的推送队列文件所在目录:帧库下 `push/<文档服务 host>-<项目 id>`(只留安全字符) */
+function autoPushDir(service: FramePipeline, auto: AutoLink) {
+  let host = "doc";
+  try { host = new URL(auto.url).host; } catch { /* 地址已经校验过 */ }
+  const name = `${host}-${auto.projectId}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 160);
+  return path.join((service as any).root, "push", name);
 }
 
 /* ======================================================================== *
@@ -324,21 +356,23 @@ async function nodeCapabilities(service: FramePipeline) {
  * `createProjectClient`(J.2)在 `render-node/index.mjs` 里;取不到它(svc 分支还没合进来)就不起,打日志,
  * 预渲染进程照原来的路径跑。任何一步出错都只打日志。
  */
-async function startQueueNode(root: string, service: FramePipeline) {
-  if (!isPrerender || !queueNodeSwitch() || process.env.PROMPTCUT_HEADLESS === "1") return;
+async function startQueueNode(root: string, service: FramePipeline, auto: AutoLink | null = null) {
+  // 自动渲染节点(页面交来的共享配置)不看 `PROMPTCUT_QUEUE_NODE`:它由 `auto-render-node.mjs` 的开关管
+  if (!isPrerender || (!auto && !queueNodeSwitch()) || process.env.PROMPTCUT_HEADLESS === "1") return;
+  const stale = () => services.get(root) !== service || (service as any).closed || (auto !== null && !auto.alive());
   const origin = assetServiceOrigin();
   if (!origin) return queueLog("queue.skip", { reason: "no-asset-service" });
   const node: any = await import("./render-node/index.mjs");
   const missing = ["createProjectClient", "createContentClient", "createLocalNode", "createDocEndpoint", "planTaskOf", "watchServiceEndpoints"]
     .filter(name => typeof node[name] !== "function");
   if (missing.length) return queueLog("queue.skip", { reason: "render-node-exports-missing", missing });
-  if (hostProfile()) return startHostNode(root, service, node, origin);
-  const resolved = await resolveDocLink(node);
+  if (hostProfile() && !auto) return startHostNode(root, service, node, origin);
+  const resolved: any = auto ? autoDocLink(auto) : await resolveDocLink(node);
   if (resolved.mode === "bad-config") return queueLog("queue.skip", { reason: "bad-shared-config", detail: (resolved as any).detail });
   if (!DOCSERVICE_MODES.has(resolved?.mode) || !resolved.url) {
     return queueLog("queue.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
   }
-  if (services.get(root) !== service || (service as any).closed) return;
+  if (stale()) return;
   const link = resolved as DocLink;
 
   // 指纹:报到前借一次流预渲染间探(`leaseStreamBakery` 开起来就定下本进程的环境),什么都不做就还
@@ -350,9 +384,9 @@ async function startQueueNode(root: string, service: FramePipeline) {
   }
   const envFingerprint: string | null = (service as any).envFingerprint;
   if (!envFingerprint) return queueLog("queue.skip", { reason: "no-environment" });
-  if (services.get(root) !== service || (service as any).closed) return;
+  if (stale()) return;
   const capabilities = await nodeCapabilities(service);
-  if (services.get(root) !== service || (service as any).closed) return;
+  if (stale()) return;
 
   const { createPrerenderExecutor }: any = await import("./prerender-executor.mjs");
   const { createAssetSink, applyResult }: any = await import("./artifact-transfer.mjs");
@@ -364,7 +398,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
   const content = node.createContentClient(endpoint);
   // J.13:sink 推、task.done 拉,都用按 D7 选的素材服务
   const assetTicket = await ticketFor(link, endpoint);
-  const assets = selectAssetClient({ node, endpoint, origin, ticket: assetTicket, createAssetClient, owner: "queue" });
+  const assets = selectAssetClient({ node, endpoint, origin, ticket: assetTicket, createAssetClient, owner: "queue", preferred: auto ? auto.assetBase : undefined });
   // J.6 的回退读别的机器的素材服务:凭共享项目进入时带票据
   setMediaFallbackTicket(assetTicket ? () => assetTicket() : null);
   const client = assets.client;
@@ -676,6 +710,12 @@ async function startQueueNode(root: string, service: FramePipeline) {
     },
   };
   queueNodes.set(root, handle);
+  // 自动渲染节点起步期间被撤了(页面离开了项目):当场收掉
+  if (auto && !auto.alive()) {
+    if (queueNodes.get(root) === handle) queueNodes.delete(root);
+    await handle.close();
+    return;
+  }
   // 端点在挂上 onOpen 之前就连上了(一般不会):补一次报到
   if (endpoint.connected === true && !started) onOpen();
 }
@@ -1002,6 +1042,113 @@ export function frameService(root: string, origin: string) {
   }
   return service;
 }
+/* ======================================================================== *
+ * 桌面应用自动成为共享项目的渲染节点(语义 product/platforms.md「渲染节点」;状态机在 `auto-render-node.mjs`)
+ * ======================================================================== */
+
+const autoLog = (event: string, fields: object = {}) => {
+  try { console.info("[queue-node]", event, JSON.stringify(fields)); } catch { console.info("[queue-node]", event); }
+};
+/** 每个帧库根一份 */
+const autoNodes = new Map<string, ReturnType<typeof createAutoRenderNode>>();
+/** 补推已有层的节拍:页面交接之后 preload 才算完计划的 entry 也要补 */
+const AUTO_BACKFILL_TICK_MS = 5_000;
+
+/**
+ * 向页面要一张 render 连接票据:经编辑器进程(`PROMPTCUT_EDITOR_URL` 的 `/api/render-node/ticket-request`,编辑器再经 HMR 问页面)。
+ * 要不到就抛(页面没了、页面签不出):会话层退避后再调,页面回来就续上。
+ */
+async function requestPageTicket(projectId: string): Promise<string> {
+  const editor = String(process.env.PROMPTCUT_EDITOR_URL || "").replace(/\/+$/, "");
+  if (!editor) throw new Error("没有编辑器进程可问");
+  const r = await fetch(`${editor}/api/render-node/ticket-request`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId }), signal: AbortSignal.timeout(15_000) });
+  const data: any = await r.json().catch(() => null);
+  if (!r.ok || typeof data?.ticket !== "string") throw new Error(`编辑器没要到连接票据:${data?.code ?? r.status}`);
+  return data.ticket;
+}
+
+/**
+ * 补推页面交接之前就已经在本机帧库里的层(用户在交接之前就打开过这个项目、渲过):推送队列只在帧**写进**帧库时进队,
+ * 交接之后 preload 命中的已有帧不会再写,不补就永远到不了素材服务、层表也不写。
+ * 只补这个项目的(`entry.project.id === contentId`;没给 contentId 时补所有正在被会话用着的版本),每个 entry 补一次:
+ * 写一次层表(`publishLayerMap`),每张卡已有的快照帧按段进推送队列(`enqueueSnapshotPush`,队列自己去重,素材服务已有的块跳过)。
+ * 轨道流不补:在线页面不用轨道流(product/platforms.md「在线浏览器模式」)。
+ */
+async function backfillPush(service: FramePipeline, auto: AutoLink, done: Set<string>) {
+  const pipeline: any = service;
+  if (!pipeline.pushQueue || !auto.alive()) return 0;
+  const live = new Set([...(pipeline.generations?.values?.() ?? [])].filter((g: any) => !g?.controller?.signal?.aborted).map((g: any) => g.key));
+  let queued = 0;
+  for (const entry of [...(pipeline.entries?.values?.() ?? [])]) {
+    if (!auto.alive() || !pipeline.pushQueue) break;
+    if (done.has(entry.key) || !live.has(entry.key) || !Array.isArray(entry.cardPlan) || !entry.cardPlan.length) continue;
+    if (auto.contentId && entry.project?.id !== auto.contentId) continue;
+    done.add(entry.key);
+    try { pipeline.publishLayerMap(entry); } catch { /* 层表写不了:推送照补 */ }
+    const store = pipeline.snapshots();
+    let segments = 0, frames = 0;
+    for (const control of entry.cardPlan) {
+      const tier = control?.tier || snapshotTier(control?.capabilities);
+      if ((tier !== "shared" && tier !== "local") || !control?.snapshotKey) continue;
+      let index: any;
+      try { index = await store.snapshotIndex({ tier, entryKey: entry.key, key: control.snapshotKey }); } catch { continue; }
+      const items: { localFrame: number }[] = [];
+      for (const [from, to] of index?.frames ?? []) for (let f = from; f <= to; f++) items.push({ localFrame: f });
+      if (!items.length) continue;
+      frames += items.length;
+      segments += pipeline.enqueueSnapshotPush({ tier, key: control.snapshotKey, entryKey: entry.key, items, capabilities: control.capabilities }) || 0;
+    }
+    queued += segments;
+    autoLog("render-node.backfill", { projectId: auto.projectId, entryKey: String(entry.key).slice(0, 12), controls: entry.cardPlan.length, frames, segments });
+  }
+  return queued;
+}
+
+/** 撤掉自动渲染节点:让掉认领、停节点、停推送队列、清素材回退,在跑的交给本机自己产 */
+async function stopAutoNode(root: string, service: FramePipeline, reason: string) {
+  const q = queueNodes.get(root);
+  queueNodes.delete(root);
+  let released = 0;
+  if (q) { try { released = await q.release(); } catch { /* 已停 */ } }
+  const teardown = pushTeardowns.get(root);
+  pushTeardowns.delete(root);
+  if (teardown) { try { await teardown(); } catch { /* 已停 */ } }
+  setMediaFallbackTicket(null);
+  setMediaFallbackBases([]);
+  let rerun = 0;
+  try { rerun = (service as any).leaveQueueMode?.() ?? 0; } catch { /* 管线已关 */ }
+  autoLog("render-node.teardown", { reason, released, rerun });
+}
+
+function autoNodeFor(root: string, origin: string) {
+  let ctl = autoNodes.get(root);
+  if (ctl) return ctl;
+  ctl = createAutoRenderNode({
+    start: async (link: any) => {
+      const auto = link as AutoLink;
+      const service = frameService(root, origin);
+      await startArtifactPush(root, service, auto);
+      if (auto.alive()) await startQueueNode(root, service, auto);
+      const done = new Set<string>();
+      const tick = () => { if (auto.alive()) void backfillPush(service, auto, done).catch((e: any) => autoLog("render-node.backfill-failed", { message: String(e?.message ?? e) })); };
+      tick();
+      const timer = setInterval(tick, AUTO_BACKFILL_TICK_MS);
+      timer.unref?.();
+      autoLog("render-node.started", { projectId: auto.projectId, push: pushTeardowns.has(root), node: queueNodes.has(root) });
+      return { service, timer };
+    },
+    stop: async (handle: any, reason: string) => {
+      clearInterval(handle.timer);
+      await stopAutoNode(root, handle.service, reason);
+    },
+    requestTicket: requestPageTicket,
+    log: autoLog,
+  });
+  autoNodes.set(root, ctl);
+  return ctl;
+}
+
 /** 原样搬到 `render-project.mjs`(契约 J.5),这里转出,调用方(`vision/render.ts`、脚本)不用改 */
 export { renderProject };
 export function framesPlugin(): Plugin {
@@ -1031,7 +1178,8 @@ export function framesPlugin(): Plugin {
       const s = services.get(root); services.delete(root);
       const teardown = pushTeardowns.get(root); pushTeardowns.delete(root);
       const queueNode = queueNodes.get(root); queueNodes.delete(root);
-      void (async () => { await queueNode?.close(); await teardown?.(); await s?.close(); })();
+      const auto = autoNodes.get(root); autoNodes.delete(root);
+      void (async () => { await auto?.unbind({ reason: "server-close" }).catch(() => {}); await queueNode?.close(); await teardown?.(); await s?.close(); })();
     });
     /*
      * D4(b) `/api/cards/layout`:Agent 的 `get_layout` —— 按 t 在**整场景**上实测实体框
@@ -1090,13 +1238,48 @@ export function framesPlugin(): Plugin {
        * 才建管线、起节点,所以 GET 这一下同时就是「开工」。
        */
       const queuePath = (req.url || "/").split("?")[0];
+      /*
+       * 自动渲染节点(`auto-render-node.mjs`;编辑器进程的中转在 `vite-plugin-prerender.ts` 的 `/api/render-node/*`):
+       *   POST /api/frames/render-node          { url, projectId, assetBase?, contentId?, ticket? }  交接 / 换票据
+       *   POST /api/frames/render-node/unbind   { projectId?, reason? }  撤掉(撤完才回)
+       *   GET  /api/frames/render-node          状态(不含票据)
+       */
+      if (queuePath === "/render-node" || queuePath === "/render-node/unbind") {
+        if (!isPrerender) return proxyToPrerender(req, res);
+        const off = autoRenderNodeOffReason(process.env);
+        if (req.method === "GET" && queuePath === "/render-node") {
+          return json(200, { ok: true, enabled: off === null, off, ...(autoNodes.get(root)?.status() ?? { bound: false }) });
+        }
+        if (req.method !== "POST") return next();
+        let raw = "";
+        req.on("data", (c: Buffer) => { raw += c; if (raw.length > 16 * 1024) req.destroy(); });
+        req.on("end", async () => {
+          let input: any;
+          try { input = JSON.parse(raw || "{}"); } catch { return json(400, { ok: false, error: "请求体不是 JSON" }); }
+          if (queuePath === "/render-node/unbind") {
+            const ctl = autoNodes.get(root);
+            if (!ctl) return json(200, { ok: true, action: "none" });
+            const r = await ctl.unbind({ projectId: typeof input?.projectId === "string" ? input.projectId : null, reason: typeof input?.reason === "string" ? input.reason.slice(0, 40) : "unbind" });
+            return json(200, r);
+          }
+          if (off) return json(200, { ok: true, enabled: false, reason: off });
+          try {
+            const r = autoNodeFor(root, origin).bind(input, { ticket: input?.ticket });
+            return json(200, { enabled: true, ...r });
+          } catch (e: any) {
+            return json(400, { ok: false, error: e?.message || String(e) });
+          }
+        });
+        return;
+      }
       if ((req.method === "GET" && queuePath === "/queue") || (req.method === "POST" && queuePath === "/queue/release")) {
         if (!isPrerender) return proxyToPrerender(req, res);
         frameService(root, origin);
         const queueNode = queueNodes.get(root);
         if (req.method === "GET") {
           return json(200, queueNode ? queueNode.summary()
-            : { nodes: [], codeVersion: null, envFingerprint: null, maxConcurrent: null, starting: queueNodeSwitch(), profile: hostProfile() ? "host" : "pc" });
+            : { nodes: [], codeVersion: null, envFingerprint: null, maxConcurrent: null, starting: queueNodeSwitch(), profile: hostProfile() ? "host" : "pc",
+              auto: autoNodes.get(root)?.status() ?? { bound: false } });
         }
         req.resume();
         if (!queueNode) return json(200, { ok: true, released: 0 });
