@@ -235,7 +235,7 @@ export function prerenderPlugin(): Plugin {
         child.stderr?.on("data", forwardErr);
         /*
          * 排障用(缺省不开):`PROMPTCUT_PRERENDER_LOG=<文件>` 时把预渲染进程的全部输出原样追加进这个文件,
-         * 每块前带收到的时刻(`docs/reports/AGENT-uc-latency.md` 查换页卡住用)。不设就什么都不做。
+         * 每块前带收到的时刻(`docs/archive/agent-reports/AGENT-uc-latency.md` 查换页卡住用)。不设就什么都不做。
          */
         const fullLog = String(process.env.PROMPTCUT_PRERENDER_LOG || "").trim();
         if (fullLog) {

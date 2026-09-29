@@ -21,7 +21,7 @@
  *                    (候选按实际出键;独立渲染主机用 `publishLayerMap` 选项写,PC 用管线自己的推送队列写)。层表只在切分完成后写,
  *                    不再在切分之前按本机视图写(D12 的时机)。
  *
- * 诊断(`docs/reports/AGENT-stall-phases.md`):`render` 经 runner 给的 `phase(name, fields)` 报它此刻在哪一步 ——
+ * 诊断(`docs/archive/agent-reports/AGENT-stall-phases.md`):`render` 经 runner 给的 `phase(name, fields)` 报它此刻在哪一步 ——
  * `project`(取项目快照、算这一版的计划)、`lane`(交给管线了、这一段的第一批还没交;`ahead` 是当时这条管线上
  * 已经在跑的 `'queue'` lane 工作数,大于 0 就是在排队)、`frames`(在出批)、`finish`(帧都交了,在收尾:补小尺寸、换页)。
  *

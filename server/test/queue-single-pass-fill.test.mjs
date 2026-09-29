@@ -1,5 +1,5 @@
 /**
- * 队列细任务一段一趟顺推(`fillCardControls` 的 `singlePass`,`docs/reports/AGENT-uc-latency.md`)的编排:
+ * 队列细任务一段一趟顺推(`fillCardControls` 的 `singlePass`,`docs/archive/agent-reports/AGENT-uc-latency.md`)的编排:
  * 换页次数、交给推帧的帧集合、入库与进度的粒度、最后盘上的快照,与原来逐批相同的部分逐项核对。
  * 跑:node --experimental-test-module-mocks --test server/test/queue-single-pass-fill.test.mjs
  *

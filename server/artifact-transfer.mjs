@@ -652,12 +652,12 @@ function safeLog(log, event, fields) {
  *
  *   - `has(ref, { report }?)`:
  *       1. 本机帧库覆盖了整个 `range`:素材服务上也得齐才算有(语义「节点先把产物推送到素材服务,再向文档服务报完成」,
- *          `docs/reports/AGENT-sink-has.md`)。按本机帧库列清单,`pushResult` 逐块「先问 chunks、有了就跳过」,
+ *          `docs/archive/agent-reports/AGENT-sink-has.md`)。按本机帧库列清单,`pushResult` 逐块「先问 chunks、有了就跳过」,
  *          缺的块用本机字节补推(不重渲),推齐后把清单写进内容库、回 true;补推出错回 false(记 `sink.has-push-failed`),
  *          交给执行 → `put` 再推。`report` 同 `put` 的,补推时每处理完一块报一次(节点据此算进度);
  *          本机覆盖了原尺寸、开着小尺寸却缺小尺寸(按别的节点的清单拉来的帧 —— `applyResult` 不拉小尺寸):只认内容库里
  *          **两档都齐**、块都在素材服务上的清单(回 true、记下它);否则回 false,交给执行器从本机原尺寸补画小尺寸
- *          (`docs/reports/AGENT-xnode-dedup.md`);
+ *          (`docs/archive/agent-reports/AGENT-xnode-dedup.md`);
  *       2. 给了 `content`:按 `<resultKey>:<from>-<to>` 查内容库里的清单。清单在、清单覆盖整段、清单里每个块
  *          在素材服务上都有(逐个 `client.has`),三条都满足 → true,并把清单记在 sink 里(`resultFor` 回它);
  *       3. 其它 → false。回 false 前记一行 `sink.has-miss { reason, covered, … }`(诊断,不改行为):`reason` 是

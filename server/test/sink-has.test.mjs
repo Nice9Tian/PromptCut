@@ -1,5 +1,5 @@
 /**
- * 产物库 `createAssetSink().has` 在本机帧库覆盖整段时也要素材服务上块齐(`docs/reports/AGENT-sink-has.md`)。
+ * 产物库 `createAssetSink().has` 在本机帧库覆盖整段时也要素材服务上块齐(`docs/archive/agent-reports/AGENT-sink-has.md`)。
  * 跑:npm test,或 node --test server/test/sink-has.test.mjs
  *
  * 语义:`product/document-service.md`「完成:节点先把产物推送到素材服务,再向文档服务报完成」;E3 的判据

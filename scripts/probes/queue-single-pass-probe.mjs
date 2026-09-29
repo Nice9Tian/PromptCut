@@ -1,6 +1,6 @@
 /**
  * 队列细任务「一段一趟顺推」与原来「每 4 帧一批、每批换页从挂载帧回放」产出的快照是否等价
- * (`server/frame-pipeline.mjs` 的 `queueSinglePass`;`docs/reports/AGENT-uc-latency.md`)。
+ * (`server/frame-pipeline.mjs` 的 `queueSinglePass`;`docs/archive/agent-reports/AGENT-uc-latency.md`)。
  *
  *   先起开发服务器(它另占 +1、+2 两个舞台端口):npx vite --port 5740 --strictPort --host 127.0.0.1
  *   node scripts/probes/queue-single-pass-probe.mjs --origin http://127.0.0.1:5740 [--out <目录>] [--cards a,b,c] [--seconds 4]

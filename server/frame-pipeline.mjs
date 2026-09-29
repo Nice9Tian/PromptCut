@@ -1628,7 +1628,7 @@ export class FramePipeline {
    * 独立渲染主机(`vite-plugin-frames.ts` 的 `startHostNode`)没有推送队列,产物由各项目节点的 sink 推 —— 它也是渲染节点,
    * 照 `product/rendering.md`「两档」与 c10a 第 9 节(「由渲染节点(桌面版的队列节点、独立渲染主机)一并生成」)同样要产小尺寸:
    * 起节点前调这里打开。打开之后 `commitSnapshots` 照样记下每一批的小尺寸、换页时画掉,sink 的完成条件照样要两档
-   * (`docs/reports/AGENT-xnode-dedup.md`:主机只推原尺寸时,别的节点领到它做完的段只能补画小尺寸,不能去重)。
+   * (`docs/archive/agent-reports/AGENT-xnode-dedup.md`:主机只推原尺寸时,别的节点领到它做完的段只能补画小尺寸,不能去重)。
    */
   enableSmallTier() {
     this.smallTierForced = true;
@@ -2337,7 +2337,7 @@ export class FramePipeline {
        * 队列细任务的一段(`range`)一趟顺推(`singlePass`,由 `renderCardSnapshotRange` 按 `queueSinglePass` 判):
        * 这一段原来要跑的那几批并成一批 —— 帧集合与逐批跑的并集相同,只换一次页、只从挂载帧回放一次。
        * 逐批时每批都要换一张新页(预渲染间重新取几百个模块)并从挂载帧回放到批首,一段 60 帧里换页占一半以上的时间
-       * (`docs/reports/AGENT-uc-latency.md`)。顺推与逐批从头推对 DOM 卡像素相同(M7 探针 P2,
+       * (`docs/archive/agent-reports/AGENT-uc-latency.md`)。顺推与逐批从头推对 DOM 卡像素相同(M7 探针 P2,
        * `docs/archive/agent-reports/AGENT-m7-probe.md`);canvas 卡不等价,不走这条(见 `queueSinglePass`)。
        * 入库照旧每 4 帧交一次(进度、发层的粒度不变)。
        */
@@ -2651,7 +2651,7 @@ export class FramePipeline {
    * `progress(done)` 报这一段里已经交过的本地帧数。回 `null`:产物在帧库里,sink 自己读。
    */
   /**
-   * 队列细任务的一段能不能一趟顺推(`fillCardControls` 的 `singlePass`,`docs/reports/AGENT-uc-latency.md`):
+   * 队列细任务的一段能不能一趟顺推(`fillCardControls` 的 `singlePass`,`docs/archive/agent-reports/AGENT-uc-latency.md`):
    *   - `PROMPTCUT_QUEUE_SINGLE_PASS=0`、或实例上 `queueSinglePassOff = true`(对照探针用)时不走;
    *   - canvas 重卡(审阅表 `canvasHeavy`)不走:异步装载的画布卡顺推与逐批从头推不等价(M7 探针 P2);
    *   - 页面报的播放头正要这张卡在这一段里的帧(C4 `wanted`)时照逐批跑,含播放头的那一批先出。

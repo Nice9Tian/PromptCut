@@ -1,5 +1,5 @@
 /**
- * 活着、在干活的节点不该被判停滞(`docs/reports/AGENT-stall-phases.md`;契约 `docs/plan/render-queue-contract.md` A.12〔裁〕)。
+ * 活着、在干活的节点不该被判停滞(`docs/archive/agent-reports/AGENT-stall-phases.md`;契约 `docs/plan/render-queue-contract.md` A.12〔裁〕)。
  * 跑:npm test,或 node --test server/test/stall-phases.test.mjs
  *
  * M8 的 C1(放云端)里,连接活着、续约照发的两台独立渲染主机各丢了 6、7 次认领,一个任务满 3 次尝试永久失败。

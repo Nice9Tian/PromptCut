@@ -1,5 +1,5 @@
 /**
- * 节点端点的会话诊断与会话日志节流（`server/render-node/session-diag.mjs`，报告 `docs/reports/AGENT-host-diag.md`）。
+ * 节点端点的会话诊断与会话日志节流（`server/render-node/session-diag.mjs`，报告 `docs/archive/agent-reports/AGENT-host-diag.md`）。
  * 跑：node --test server/test/session-diag.test.mjs
  *
  * 计数对着真的文档服务跑（前面挡 `session-gateway-kit.mjs` 的会话网关，断线用 `fake-ws-kit.mjs` 的 TCP 代理，

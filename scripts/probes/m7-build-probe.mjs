@@ -1,6 +1,6 @@
 /**
  * M7 契约第 8 节 P6(`docs/plan/m7-contract.md`):页面引渲染节点的会话状态机 `server/render-node/session.mjs` 之后,
- * `vite build --mode online` 能不能构建、构建产物在页面里能不能跑。报告:docs/reports/AGENT-m7-probe.md。
+ * `vite build --mode online` 能不能构建、构建产物在页面里能不能跑。报告:docs/archive/agent-reports/AGENT-m7-probe.md。
  *
  *   node scripts/probes/m7-build-probe.mjs --root <检出目录> [--skip-build] [--port 5713] [--global __m7CreateNodeSession]
  *   node scripts/probes/m7-build-probe.mjs --url http://127.0.0.1:5714/?stage=1     只做第 3 步:打开现成的页面(如开发服务器)

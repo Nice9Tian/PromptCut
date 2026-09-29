@@ -1,5 +1,5 @@
 /**
- * 丢认领、失败、丢弃的诊断(`docs/reports/AGENT-stall-phases.md`;契约 `docs/plan/render-queue-contract.md` A.12〔裁〕)。
+ * 丢认领、失败、丢弃的诊断(`docs/archive/agent-reports/AGENT-stall-phases.md`;契约 `docs/plan/render-queue-contract.md` A.12〔裁〕)。
  * 跑:npm test,或 node --test server/test/stall-phases-diag.test.mjs
  *
  *   D1  队列回收时给原认领者的 `task.lease-lost` 带真实原因(`lease-expired` / `stalled`),

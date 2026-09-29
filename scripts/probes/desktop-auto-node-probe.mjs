@@ -1,5 +1,5 @@
 /**
- * 桌面应用自动成为共享项目的渲染节点:照壳的真实启动环境跑一遍(报告 `docs/reports/AGENT-desktop-auto-node.md`;
+ * 桌面应用自动成为共享项目的渲染节点:照壳的真实启动环境跑一遍(报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`;
  * 语义 `docs/semantics/product/platforms.md`「渲染节点」:加入共享项目的桌面应用自动成为这个项目的渲染节点)。
  *
  *   node scripts/probes/desktop-auto-node-probe.mjs [--base-port 5750] [--dist <在线构建目录>] [--out <目录>] [--keep-temp]
@@ -33,7 +33,7 @@
  *   A5 桌面页面回来(同一个标签页,刷新后回到共享项目、重交配置),再离开项目:节点撤掉,`nodes` 回空,推送队列停
  *   A7 桌面绑着共享项目时,另一个浏览器上下文在同一台桌面上开一个**不共享**的本机项目 B(同样的重卡,标签不同):
  *      B 的帧在本机渲完之后,云端素材服务里没有 B 的任何一块、云端内容库没有 B 的层表,B 的 plan 没发进共享项目的队列;
- *      推送诊断里记着挡掉的段(`outOfScope`);绑定没被打断(仍绑着共享项目)(报告 `docs/reports/AGENT-push-scope.md`)
+ *      推送诊断里记着挡掉的段(`outOfScope`);绑定没被打断(仍绑着共享项目)(报告 `docs/archive/agent-reports/AGENT-push-scope.md`)
  *   另核:桌面页面与在线页面的项目文档 id 一致、层表键对得上;节点报的代码版本就是在线构建嵌的那一个。
  * 第二遍(`PROMPTCUT_AUTO_RENDER_NODE=0`):
  *   A6 同样建项目放云端,等 40 秒:不起节点(`nodes` 空)、不推送(日志没有 `push.started`,云端没有这个项目的层表)

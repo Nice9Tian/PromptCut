@@ -1,7 +1,7 @@
 /**
  * M7 契约第 8 节 P5(`docs/plan/m7-contract.md`):真 Chrome 里页面隐藏、窗口最小化、页面被冻结(frozen)时,
  * 续约(`task.progress`,队列 `RENEW_INTERVAL_MS` = 10 s、`LEASE_MS` = 30 s)与会话(文档服务 30 s 一轮 ping / pong)
- * 会怎样;放回(`task.release`)能多快到服务端。报告:docs/reports/AGENT-m7-probe.md。
+ * 会怎样;放回(`task.release`)能多快到服务端。报告:docs/archive/agent-reports/AGENT-m7-probe.md。
  *
  *   node scripts/probes/m7-visibility-probe.mjs [--chrome installed|bundled] [--port 5717]
  *        [--scenarios tab,minimize,freeze30,freeze90] [--tab-min 6.5] [--min-min 2] [--ping-ms 5000] [--occlusion off|on]

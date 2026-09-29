@@ -235,7 +235,7 @@ export function reloadOnComplete(input: {
   freshSrc: boolean;
   /**
    * 槽位眼下在用(播当前段、换档预热、备下一段)。缺省 true。闲着的槽位不重载:重载只会和可播性探测抢带宽
-   * (跨机 T9 `ht9a0927`,`docs/reports/AGENT-tier-reload-seek.md`);调用方要保证轮到它用时还会再判一次。
+   * (跨机 T9 `ht9a0927`,`docs/archive/agent-reports/AGENT-tier-reload-seek.md`);调用方要保证轮到它用时还会再判一次。
    */
   inUse?: boolean;
   /** 元素报了错(`el.error` 非空) */

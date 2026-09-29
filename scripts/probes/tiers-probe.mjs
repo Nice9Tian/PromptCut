@@ -156,7 +156,7 @@ try {
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 300)));
   await page.goto(`${A.origin}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded' });
   await until('[a] 页面与舞台起来', () => page.evaluate(() => document.querySelectorAll('iframe').length >= 2), 300_000);
-  // 测量遮罩在页面起来约 3 s 后才出现(docs/reports/AGENT-perf-t4.md「没做的与建议」第 3 条):只等「没有遮罩」
+  // 测量遮罩在页面起来约 3 s 后才出现(docs/archive/agent-reports/AGENT-perf-t4.md「没做的与建议」第 3 条):只等「没有遮罩」
   // 会在它出现之前就放行,测量和后面的静置、对照窗口叠在一起。所以先等测量开始(遮罩出现,或 probeRunner 报 running),
   // 再等它结束(遮罩退下且不再 running)。项目里没有要测的卡时测量根本不开始:等满 GATE_APPEAR_MS 没见到就照常往下走。
   const gateState = () => page.evaluate(async () => {

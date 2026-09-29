@@ -30,7 +30,7 @@
  * `X-Promptcut-Fallback` 与 `fetch` 留给 HT-b：`fallbackAfter()` 是接口位置，HT-a 永远回 null（每次重连仍从
  * WebSocket 开始，`stats().fallbacks` 恒为 0）。
  *
- * 契约之外的两处（报告 `docs/reports/AGENT-ht-client.md` 写明）：
+ * 契约之外的两处（报告 `docs/archive/agent-reports/AGENT-ht-client.md` 写明）：
  *   - **旧服务端**：服务端还没有会话层时（握手成功、第一条消息不是 `session.welcome`），退化为「一条传输就是一个会话」：
  *     消息不带 `seq` / `ack`，传输一断会话就结束，行为与 `createWsEndpoint` 相同（`stats().legacy` 为真）。为了
  *     尽快分辨，握手后 `legacyProbeMs` 内没收到任何消息，就发一条无害的 `{ type: 'session.ack', ack: 0 }`：新服务端

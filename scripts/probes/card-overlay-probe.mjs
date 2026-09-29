@@ -1,5 +1,5 @@
 /**
- * 用户卡与改动层的端到端探针(报告 `docs/reports/AGENT-card-overlay.md`):一个带改动层的编辑器(装机版的样子),
+ * 用户卡与改动层的端到端探针(报告 `docs/archive/agent-reports/AGENT-card-overlay.md`):一个带改动层的编辑器(装机版的样子),
  * 核对「有改动层时检出目录一个文件都不写」与「create_card 带 overwrite 不被改动层旧版盖住」在真 Vite 里成立。
  *
  * 用法(在仓库根或 worktree 根):

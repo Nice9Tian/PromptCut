@@ -77,7 +77,7 @@ const createDocEndpoint = createDocEndpointUntyped as (options: {
 /**
  * 页面未确认出站的上限。契约第 3.4 节给的是 1 MiB;页面的根替换分片上传(`project.upload`,最多 64 片 ×
  * 128 Ki 字符)一口气就发出好几 MiB,第一条确认回来之前就会超过 1 MiB,会话被自己以 1013 结束、重建后重发、
- * 又超 —— 所以页面放宽到 32 MiB(报告 `docs/reports/AGENT-ht-client.md` 写明,待契约定)。
+ * 又超 —— 所以页面放宽到 32 MiB(报告 `docs/archive/agent-reports/AGENT-ht-client.md` 写明,待契约定)。
  */
 export const PAGE_MAX_PENDING_BYTES = 32 * 1024 * 1024;
 

@@ -43,7 +43,7 @@
  * ## --step remote-plan [--public-host 8.219.80.16] [--tunnel-base 18700] [--stamp 20260928]
  *
  *   打印阿里云上的演练命令清单（备份、演练实例部署、UFW 临时放行与收回、停写、拷数据、核对、切客户端、收尾），不连远端。
- *   同一份清单写在 `docs/reports/AGENT-m8-migrate.md`。
+ *   同一份清单写在 `docs/archive/agent-reports/AGENT-m8-migrate.md`。
  *
  * ## --step local [--ui] [--shots <目录>] [--keep]
  *

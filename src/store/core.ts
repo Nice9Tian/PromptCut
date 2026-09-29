@@ -319,7 +319,7 @@ export function subscribe(l: Listener): () => void {
  * 项目每变一次(挪片段、改参数)也不重渲;重新露出来的那一次提交里按当时的 store 重读,
  * 和一直跟着的结果一样。
  *
- * 为什么要有它(tiers-probe T4,docs/reports/AGENT-perf-t4.md):分区页常驻挂载、只是 display:none,
+ * 为什么要有它(tiers-probe T4,docs/archive/agent-reports/AGENT-perf-t4.md):分区页常驻挂载、只是 display:none,
  * 以前每次编辑都把看不见的特效库、节点图、字幕列表整棵重渲一遍,和看得见的时间轴、预览挤在同一个
  * 同步任务里(useSyncExternalStore 的更新不能切片),后台转码、上传一抢 CPU 就超过 50 ms。
  */
