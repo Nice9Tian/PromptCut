@@ -37,8 +37,49 @@ const VISION = /^export-vision-(\d+)-/;
 /** 旧版 `playback-<uuid>.mov` 多久没动算遗留 */
 export const LEGACY_PLAYBACK_AGE_MS = 60 * 60 * 1000;
 
-/** 导出成功后留下的产物（其余都是中间文件） */
-export const EXPORT_KEEP = Object.freeze(['preview.mp4', 'overlay.mov', 'project.json']);
+/*
+ * 导出目录的规则只在这里定义一份：导出完成后的收拾（`pruneExportDir`，`vite-plugin-export.ts`）、
+ * 导出列表与「只删中间文件」（`exports-list.mjs`）、`/api/storage` 的导出一栏（`frame-library-storage.mjs` 经
+ * `exports-list.mjs` 的 `summarizeExports`）都引这几个。
+ */
+
+/**
+ * 一次导出的目录名：`export-YYYYMMDD-HHMMSS`（本地时间），同一秒重名时带 `-<n>`（`claimExportDir` 从 `-2` 起，
+ * 最多到 `-999`；这里放宽到 1～4 位）。视觉工具的 `export-vision-*` 不匹配。
+ */
+export const EXPORT_ID_RE = /^export-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})(?:-(\d{1,4}))?$/;
+/** 名字像不像一次导出的目录（只看名字；是不是真目录、在不在导出目录下由调用方判） */
+export const isExportDirName = name => typeof name === 'string' && EXPORT_ID_RE.test(name);
+/** 交付物：成片、只含卡片的透明层（列表按这个顺序列） */
+export const EXPORT_DELIVERABLES = Object.freeze(['preview.mp4', 'overlay.mov']);
+/** 导出成功后留下的（交付物加 `project.json`，列表显示所属项目用）；其余都是中间文件 */
+export const EXPORT_KEEP = Object.freeze([...EXPORT_DELIVERABLES, 'project.json']);
+/** 导出目录顶层的这个名字是不是要留下的 */
+export const isExportKeepName = name => EXPORT_KEEP.includes(name);
+
+/*
+ * 帧库遗留文件的名字规则（启动清理 `sweepFrameLibrary` 删的、`frame-library-storage.mjs` 的 `measureDir` 计进
+ * `leftovers.bytes` 的，是同一套）。
+ */
+
+/**
+ * 一个帧库里的文件按名字算不算遗留：写到一半的 MOV / 预览、属主进程已不在的播放 MOV、旧版超龄的播放 MOV。
+ * `dead(pid)` 判进程已不在；`ageMs` 是文件多久没动（只有旧版播放 MOV 要看）。回遗留的种类，不是回 null。
+ */
+export function leftoverFileKind(name, { dead, ageMs = 0, legacyAgeMs = LEGACY_PLAYBACK_AGE_MS }) {
+  let m;
+  if ((m = FULL_TMP.exec(name)) && dead(Number(m[1]))) return 'full-tmp';
+  if ((m = PREVIEW_TMP.exec(name)) && dead(Number(m[1]))) return 'preview-tmp';
+  if ((m = PLAYBACK.exec(name)) && dead(Number(m[1]))) return 'playback';
+  if (PLAYBACK_LEGACY.test(name) && ageMs > legacyAgeMs) return 'playback';
+  return null;
+}
+
+/** `html-cache` 下的这个子目录是不是死进程留下的溢出目录 */
+export function isDeadSpillDir(name, dead) {
+  const m = LIVE_SPILL.exec(name);
+  return !!m && dead(Number(m[1]));
+}
 
 /**
  * 进程还在吗。`process.kill(pid, 0)` 在 Windows 与 Linux 上都只做存在性检查：
@@ -112,19 +153,25 @@ export async function sweepFrameLibrary(root, { alive = pidAlive, now = Date.now
     for (const item of await entries(movDir)) {
       if (!item.isFile()) continue;
       const full = path.join(movDir, item.name);
-      let m;
-      if ((m = FULL_TMP.exec(item.name)) && dead(m[1])) await removeLeftover(full, report, { kind: 'full-tmp', log });
-      else if (playback && (m = PLAYBACK.exec(item.name)) && dead(m[1])) await removeLeftover(full, report, { kind: 'playback', log });
-      else if (playback && PLAYBACK_LEGACY.test(item.name)) {
-        const stat = await fs.lstat(full).catch(() => null);
-        if (stat && now - stat.mtimeMs > legacyAgeMs) await removeLeftover(full, report, { kind: 'playback', log });
+      if (FULL_TMP.test(item.name)) {
+        if (leftoverFileKind(item.name, { dead })) await removeLeftover(full, report, { kind: 'full-tmp', log });
+      } else if (playback && (PLAYBACK.test(item.name) || PLAYBACK_LEGACY.test(item.name))) {
+        // 旧版不带 pid 的要看多久没动;带 pid 的只看进程
+        let ageMs = 0;
+        if (PLAYBACK_LEGACY.test(item.name)) {
+          const stat = await fs.lstat(full).catch(() => null);
+          if (!stat) continue;
+          ageMs = now - stat.mtimeMs;
+        }
+        if (leftoverFileKind(item.name, { dead, ageMs, legacyAgeMs })) await removeLeftover(full, report, { kind: 'playback', log });
       }
     }
   };
   const sweepPreview = async (dir) => {
     for (const item of await entries(dir)) {
-      const m = item.isFile() && PREVIEW_TMP.exec(item.name);
-      if (m && dead(m[1])) await removeLeftover(path.join(dir, item.name), report, { kind: 'preview-tmp', log });
+      if (item.isFile() && PREVIEW_TMP.test(item.name) && leftoverFileKind(item.name, { dead })) {
+        await removeLeftover(path.join(dir, item.name), report, { kind: 'preview-tmp', log });
+      }
     }
   };
   for (const item of await entries(root)) {
@@ -134,8 +181,7 @@ export async function sweepFrameLibrary(root, { alive = pidAlive, now = Date.now
     await sweepPreview(dir);
     const cache = path.join(dir, 'html-cache');
     for (const spill of await entries(cache)) {
-      const m = LIVE_SPILL.exec(spill.name);
-      if (!m || !dead(m[1])) continue;
+      if (!isDeadSpillDir(spill.name, dead)) continue;
       if (!spill.isDirectory()) { if (spill.isSymbolicLink()) report.skipped.push({ path: path.join(cache, spill.name), kind: 'html-cache', reason: 'link' }); continue; }
       await removeLeftover(path.join(cache, spill.name), report, { kind: 'html-cache', log });
     }

@@ -15,12 +15,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-/** 导出目录名:export-20260929-091817,同秒重名时 export-20260929-091817-2 */
-export const EXPORT_ID_RE = /^export-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})(?:-(\d{1,4}))?$/;
+import { EXPORT_ID_RE, EXPORT_DELIVERABLES, EXPORT_KEEP, isExportKeepName } from './storage-leftovers.mjs';
+
+/*
+ * 目录名、交付物、留下的名字只在 `storage-leftovers.mjs` 定义一份(导出完成后的收拾 `pruneExportDir` 用的也是它们),
+ * 这里照引。导出目录名:export-20260929-091817,同秒重名时 export-20260929-091817-2。
+ */
+export { EXPORT_ID_RE };
 /** 列表里的交付物,按这个顺序列 */
-export const DELIVERABLE_NAMES = ['preview.mp4', 'overlay.mov'];
+export const DELIVERABLE_NAMES = EXPORT_DELIVERABLES;
 /** 只删中间文件时留下的 */
-export const KEEP_NAMES = [...DELIVERABLE_NAMES, 'project.json'];
+export const KEEP_NAMES = EXPORT_KEEP;
 /** 读 project.json 取项目名的上限;再大就不读(不显示项目名,不影响别的) */
 const PROJECT_JSON_MAX = 64 * 1024 * 1024;
 /** 有导出在跑时,最近这么久内还在写的未完成导出当作「进行中」,不让删 */
@@ -93,7 +98,7 @@ export async function describeExport(dir, id, opts = {}) {
     const s = await treeStats(path.join(dir, name));
     bytes += s.bytes;
     if (s.mtimeMs > mtimeMs) mtimeMs = s.mtimeMs;
-    if (!KEEP_NAMES.includes(name)) continue;
+    if (!isExportKeepName(name)) continue;
     let st = null;
     try { st = await fs.lstat(path.join(dir, name)); } catch { /* 刚没了 */ }
     if (!st || !st.isFile()) continue;
@@ -246,7 +251,7 @@ export async function pruneExport(root, id, opts = {}) {
   let names = [];
   try { names = await fs.readdir(r.abs); } catch { /* 空 */ }
   for (const n of names) {
-    if (KEEP_NAMES.includes(n)) {
+    if (isExportKeepName(n)) {
       // 留下的名字只留真文件;同名的链接照样跳过、不删
       continue;
     }

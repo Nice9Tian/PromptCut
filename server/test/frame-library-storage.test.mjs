@@ -12,8 +12,10 @@ import crypto from 'node:crypto';
 import {
   GB, DEFAULT_CAP_BYTES, MIN_CAP_BYTES, PROTECT_MS, CLEAR_KEEP_MS, INDEX_FILE, SETTINGS_FILE,
   parseRel, relDir, defaultCapBytes, capRange, validCap, resolveCap, readStorageSettings, writeStorageSettings,
-  measureDir, listRels, entryUsageRels, createFrameLibraryStorage, summarizeExports, isExportDirName, storageDataDir,
+  measureDir, listRels, entryUsageRels, createFrameLibraryStorage, storageDataDir, createExportSummary, relOfPath,
 } from '../frame-library-storage.mjs';
+import { summarizeExports, listExports } from '../exports-list.mjs';
+import { isExportDirName } from '../storage-leftovers.mjs';
 import { createReadyHub } from '../ready-index.mjs';
 
 const key = seed => crypto.createHash('sha256').update(String(seed)).digest('hex');
@@ -448,6 +450,119 @@ test('导出汇总:总字节、份数、中间文件(成片、透明层、projec
   assert.equal(isExportDirName('export-20260101-000000-12'), true);
   for (const bad of ['export-foo', 'export-20260101-000000-x', 'export-2026-01-01', 'export-20260101-000000/..', 'xexport-20260101-000000']) assert.equal(isExportDirName(bad), false, bad);
   assert.deepEqual(await summarizeExports(path.join(dir, 'none')), { bytes: 0, count: 0, intermediateBytes: 0 });
+});
+
+test('合并:/api/storage 的导出一栏(createExportSummary)与 /api/exports 的列表同一套规则,数字对得上', async t => {
+  const { dir } = await tempRoot(t);
+  const exportsDir = path.join(dir, 'exports');
+  const mk = async (id, files) => {
+    for (const [rel, bytes] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(exportsDir, id, rel)), { recursive: true });
+      await fs.writeFile(path.join(exportsDir, id, rel), Buffer.alloc(bytes));
+    }
+  };
+  await mk('export-20260929-101010', { 'preview.mp4': 100, 'overlay.mov': 200, 'project.json': 5, 'frames/000000.png': 1000 });
+  await mk('export-20260929-101010-2', { 'parts/a.mov': 300 });
+  await mk('export-20260929-101010-13', { 'preview.mp4': 7 });
+  await mk('export-vision-123-abc', { x: 999 });
+  // 名字对、但是个链接(junction):两边都不认
+  await fs.mkdir(path.join(dir, 'elsewhere'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'elsewhere', 'big.bin'), Buffer.alloc(5000));
+  await fs.symlink(path.join(dir, 'elsewhere'), path.join(exportsDir, 'export-20260929-111111'), 'junction');
+  const items = await listExports(exportsDir);
+  const summary = await createExportSummary(exportsDir).get();
+  assert.deepEqual(summary, {
+    bytes: items.reduce((s, it) => s + it.bytes, 0),
+    count: items.length,
+    intermediateBytes: items.reduce((s, it) => s + it.intermediateBytes, 0),
+  });
+  assert.deepEqual(summary, { bytes: 1612, count: 3, intermediateBytes: 1300 });
+});
+
+test('relOfPath:帧库里的文件归到它的键目录', () => {
+  const root = path.join(os.tmpdir(), 'x', 'frame-library');
+  const k = key('r');
+  assert.equal(relOfPath(root, path.join(root, k, 'mov', 'full-1.tmp.mov')), k);
+  assert.equal(relOfPath(root, path.join(root, 'controls', k, 'mov', 'full-1.tmp.mov')), `controls/${k}`);
+  assert.equal(relOfPath(root, path.join(root, 'tracks', k, 'preview-1.tmp.mp4')), `tracks/${k}`);
+  assert.equal(relOfPath(root, path.join(root, '.storage', 'trash', 'a')), null);
+  assert.equal(relOfPath(root, path.join(root, '..', 'elsewhere', k)), null);
+});
+
+/** 在一个键目录里造遗留文件与正常文件;回 { dir, leftoverBytes } */
+async function seedLeftovers(root, rel, dead = 424242) {
+  const dir = relDir(root, rel);
+  await fs.mkdir(path.join(dir, 'mov'), { recursive: true });
+  await fs.mkdir(path.join(dir, 'html-cache', `live-${dead}-x`), { recursive: true });
+  await fs.writeFile(path.join(dir, 'mov', `full-${dead}.tmp.mov`), Buffer.alloc(300));
+  await fs.writeFile(path.join(dir, 'mov', `playback-${dead}-${crypto.randomUUID()}.mov`), Buffer.alloc(200));
+  await fs.writeFile(path.join(dir, 'html-cache', `live-${dead}-x`, 'blob'), Buffer.alloc(100));
+  await fs.writeFile(path.join(dir, 'mov', 'full.mov'), Buffer.alloc(1000));
+  await fs.writeFile(path.join(dir, 'mov', `full-${process.pid}.tmp.mov`), Buffer.alloc(50));
+  return { dir, leftoverBytes: 600 };
+}
+
+test('合并:每次检查一并清遗留,leftovers.bytes 是清完之后的数;只停淘汰(PROMPTCUT_STORAGE_EVICT=0)时遗留照清', async t => {
+  for (const evict of [true, false]) {
+    const { root, data } = await tempRoot(t);
+    const k = key(`lf-${evict}`);
+    const { dir } = await seedLeftovers(root, k);
+    const logs = [];
+    const m = manager(root, data, { evict, log: (event, fields) => logs.push([event, fields]) });
+    await m.rescan('test');
+    assert.equal((await m.summary()).leftoverBytes, 600, '清之前计得到');
+    await m.check({ force: true });
+    const after = await m.summary();
+    assert.equal(after.leftoverBytes, 0, `evict=${evict}:清完之后是 0`);
+    assert.equal(after.bytes, 1050, '正常文件与活进程的临时文件留着');
+    assert.equal(await exists(path.join(dir, 'mov', 'full-424242.tmp.mov')), false);
+    assert.equal(await exists(path.join(dir, 'html-cache', 'live-424242-x')), false);
+    assert.equal(await exists(path.join(dir, 'mov', 'full.mov')), true);
+    assert.equal(await exists(path.join(dir, 'mov', `full-${process.pid}.tmp.mov`)), true);
+    const line = logs.find(([event]) => event === 'storage.leftovers');
+    assert.ok(line && line[1].removed === 3 && line[1].bytes === 600, `记一行日志:${JSON.stringify(logs.map(l => l[0]))}`);
+    await m.close();
+  }
+});
+
+test('合并:清理缓存前也清遗留;帧库根不叫 frame-library 时不清(与启动清理同一道保护);.storage 不被当成遗留', async t => {
+  const { root, data } = await tempRoot(t);
+  const k = key('cc');
+  await seedLeftovers(root, k);
+  const m = manager(root, data, { now: () => Date.now() });
+  await m.rescan('test');
+  await m.clearCache();
+  // 刚写的目录在清理缓存的保护窗里,留着;遗留照删
+  assert.equal(await exists(path.join(relDir(root, k), 'mov', 'full-424242.tmp.mov')), false);
+  assert.equal((await m.summary()).leftoverBytes, 0);
+  assert.equal(await exists(path.join(root, '.storage')), true, '.storage 还在');
+  await m.close();
+
+  const other = path.join(path.dirname(root), 'not-a-library');
+  await fs.mkdir(other, { recursive: true });
+  await seedLeftovers(other, k);
+  const m2 = manager(other, data);
+  await m2.check({ force: true });
+  assert.equal(await exists(path.join(relDir(other, k), 'mov', 'full-424242.tmp.mov')), true, '不是帧库根不动');
+  assert.equal((await m2.summary()).leftoverBytes, 600, '只计不删');
+  await m2.close();
+});
+
+test('measureDir:遗留认法与启动清理一致(带 pid 的播放 MOV 看进程;旧版不带 pid 的一小时没动才算)', async t => {
+  const { root } = await tempRoot(t);
+  const dir = path.join(root, key('pb'));
+  await fs.mkdir(path.join(dir, 'mov'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'mov', `playback-424242-${crypto.randomUUID()}.mov`), Buffer.alloc(10));
+  await fs.writeFile(path.join(dir, 'mov', `playback-${process.pid}-${crypto.randomUUID()}.mov`), Buffer.alloc(20));
+  const fresh = path.join(dir, 'mov', `playback-${crypto.randomUUID()}.mov`);
+  const old = path.join(dir, 'mov', `playback-${crypto.randomUUID()}.mov`);
+  await fs.writeFile(fresh, Buffer.alloc(40));
+  await fs.writeFile(old, Buffer.alloc(80));
+  const now = Date.now();
+  await fs.utimes(fresh, (now - 30 * MIN) / 1000, (now - 30 * MIN) / 1000);
+  await fs.utimes(old, (now - 2 * HOUR) / 1000, (now - 2 * HOUR) / 1000);
+  const measured = await measureDir(dir, { now, alive: pid => pid === process.pid });
+  assert.equal(measured.leftover, 90, '死进程的 10 + 两小时没动的旧版 80');
 });
 
 test('就绪索引的 unstage:摘掉被删的键,本地档按前缀摘', () => {

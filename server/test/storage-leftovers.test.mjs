@@ -145,6 +145,40 @@ test('同一秒两次导出不复用目录', async () => {
   } finally { await fs.rm(base, { recursive: true, force: true }); }
 });
 
+test('合并:导出目录的规则只有一份 —— claimExportDir 起的名字导出列表都认得,只删中间文件与导出完成后的收拾留下同一组', async () => {
+  const L = await import('../exports-list.mjs');
+  const S = await import('../storage-leftovers.mjs');
+  assert.equal(L.EXPORT_ID_RE, S.EXPORT_ID_RE, '同一个正则对象');
+  assert.equal(L.KEEP_NAMES, S.EXPORT_KEEP, '留下的名字同一份');
+  assert.equal(L.DELIVERABLE_NAMES, S.EXPORT_DELIVERABLES);
+  assert.deepEqual([...S.EXPORT_KEEP], ['preview.mp4', 'overlay.mov', 'project.json']);
+  const base = await tmpRoot('pc-claim-rule-');
+  try {
+    const at = new Date(2026, 8, 29, 8, 5, 9);
+    const claimed = [];
+    for (let i = 0; i < 12; i++) claimed.push(await claimExportDir(base, at));
+    for (const { id, outDir } of claimed) {
+      const name = path.basename(outDir);
+      assert.equal(S.isExportDirName(name), true, name);
+      const parsed = L.parseExportId(name);
+      assert.ok(parsed, name);
+      assert.equal(parsed.at.getTime(), at.getTime(), '列表里的时刻就是起名的时刻');
+      assert.equal(name, `export-${id}`);
+    }
+    assert.deepEqual(claimed.map(c => L.parseExportId(path.basename(c.outDir)).seq), [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], '后缀从 -2 起');
+    // 两边收拾同一份目录,结果一样
+    const one = path.join(base, 'a'), two = path.join(base, 'b');
+    for (const dir of [one, two]) for (const rel of [...INTERMEDIATE, ...EXPORT_KEEP]) await put(dir, rel, rel);
+    await pruneExportDir(one);
+    await fs.rename(two, path.join(base, 'export-20260929-080510'));
+    const pruned = await L.pruneExport(base, 'export-20260929-080510');
+    assert.equal(pruned.ok, true);
+    assert.deepEqual((await fs.readdir(one)).sort(), (await fs.readdir(path.join(base, 'export-20260929-080510'))).sort());
+    const listed = (await L.listExports(base)).map(item => item.id);
+    assert.equal(listed.length, 13, '12 个起的名字加一个改名的,全列出');
+  } finally { await fs.rm(base, { recursive: true, force: true }); }
+});
+
 test('MovFrameStore.suspend 中止写入后临时 MOV 不在', async () => {
   const dir = await tmpRoot('pc-suspend-');
   try {

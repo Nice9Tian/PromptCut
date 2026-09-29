@@ -41,6 +41,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { snapshotTier } from './snapshot-tier.mjs';
+import { isDeadSpillDir, leftoverFileKind, pidAlive as leftoverPidAlive, sweepFrameLibrary } from './storage-leftovers.mjs';
+import { summarizeExports } from './exports-list.mjs';
 
 /** 容量按十进制 GB 算（磁盘厂商标的「500 GB」「512 GB」就是这个口径） */
 export const GB = 1e9;
@@ -104,6 +106,14 @@ export function relDir(root, rel) {
   const parsed = parseRel(rel);
   if (!parsed) throw new Error(`不认得的键目录:${rel}`);
   return parsed.family === 'entry' ? path.join(root, parsed.key) : path.join(root, parsed.family, parsed.key);
+}
+
+/** 帧库里一个文件或目录所属的键目录（相对路径）；不在认得的键目录里回 null */
+export function relOfPath(root, file) {
+  const parts = path.relative(path.resolve(root), path.resolve(file)).split(/[\\/]/);
+  if (!parts.length || parts[0] === '..' || path.isAbsolute(parts[0])) return null;
+  if (parseRel(parts[0])) return parts[0];
+  return parts.length >= 2 ? (parseRel(`${parts[0]}/${parts[1]}`)?.rel ?? null) : null;
 }
 
 /** 一个整场景版本用到的键（`FramePipeline` 的 entry）：整场景、本地档、共享档、独立卡、轨道前缀、轨道流 */
@@ -247,16 +257,12 @@ export function pidAlive(pid) {
   catch (error) { return error?.code === 'EPERM'; }
 }
 
-const LEFTOVER_LIVE = /^live-(\d+)-/;
-const LEFTOVER_FULL = /^full-(\d+)\.tmp\.mov$/;
-const LEFTOVER_PREVIEW = /^preview-(\d+)\.tmp\.mp4$/;
-const LEFTOVER_PLAYBACK = /^playback-[0-9a-f-]{36}\.mov$/;
-
 /**
  * 量一个目录：总字节、最新修改时刻、里面有没有链接、其中遗留文件（计划第 3.3 节「遗留文件」那几种）的字节。
- * 碰到链接不进去。目录不存在回 `{ missing: true }`。
+ * 遗留按名字认，规则与启动清理同一套（`storage-leftovers.mjs` 的 `leftoverFileKind`、`isDeadSpillDir`），
+ * 进程死活也用那边偏保守的判法（拿不准按活）。碰到链接不进去。目录不存在回 `{ missing: true }`。
  */
-export async function measureDir(dir, { now = Date.now(), alive = pidAlive, concurrency = 8 } = {}) {
+export async function measureDir(dir, { now = Date.now(), alive = leftoverPidAlive, concurrency = 8 } = {}) {
   let bytes = 0, newest = 0, leftover = 0, linked = false, files = 0;
   let top;
   try { top = await fs.lstat(dir); } catch { return { missing: true, bytes: 0, newest: 0, leftover: 0, linked: false, files: 0 }; }
@@ -276,19 +282,12 @@ export async function measureDir(dir, { now = Date.now(), alive = pidAlive, conc
       if (stat.isSymbolicLink()) { linked = true; continue; }
       newest = Math.max(newest, stat.mtimeMs);
       if (stat.isDirectory()) {
-        const live = LEFTOVER_LIVE.exec(name);
-        queue.push({ dir: full, stale: stale || (!!live && path.basename(current) === 'html-cache' && dead(Number(live[1]))) });
+        queue.push({ dir: full, stale: stale || (path.basename(current) === 'html-cache' && isDeadSpillDir(name, dead)) });
         continue;
       }
       files++;
       bytes += stat.size;
-      let isLeftover = stale;
-      if (!isLeftover) {
-        const full_ = LEFTOVER_FULL.exec(name) || LEFTOVER_PREVIEW.exec(name);
-        if (full_) isLeftover = dead(Number(full_[1]));
-        else if (LEFTOVER_PLAYBACK.test(name)) isLeftover = now - stat.mtimeMs > CLEAR_KEEP_MS;
-      }
-      if (isLeftover) leftover += stat.size;
+      if (stale || leftoverFileKind(name, { dead, ageMs: now - stat.mtimeMs })) leftover += stat.size;
     }
   };
   let active = 0;
@@ -341,8 +340,14 @@ export async function listRels(root) {
  */
 export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(), minCapBytes = MIN_CAP_BYTES, evict = true, timers = true,
   tickMs = TICK_MS, protectMs = PROTECT_MS, clearKeepMs = CLEAR_KEEP_MS, calibrateMs = CALIBRATE_MS, flushMs = FLUSH_MS,
-  heartbeatMs = HEARTBEAT_MS, lockStaleMs = LOCK_STALE_MS, startupGraceMs = STARTUP_GRACE_MS, pid = process.pid, alive = pidAlive, log = () => {} } = {}) {
+  heartbeatMs = HEARTBEAT_MS, lockStaleMs = LOCK_STALE_MS, startupGraceMs = STARTUP_GRACE_MS, pid = process.pid, alive: aliveOpt, log = () => {},
+  sweepLeftovers } = {}) {
   root = path.resolve(root);
+  // 主进程锁按「拿不准算死」接管（本模块的 `pidAlive`）；遗留文件按「拿不准算活」不删（`storage-leftovers.mjs`）。测试注入的一个管两处
+  const alive = aliveOpt ?? pidAlive;
+  const leftoverAlive = aliveOpt ?? leftoverPidAlive;
+  // 遗留清理与启动清理一样只对真正的帧库根（`<导出目录>/frame-library`）动手；`PROMPTCUT_STORAGE_EVICT=0` 时照清
+  const sweeping = sweepLeftovers ?? path.basename(root) === 'frame-library';
   const storageDir = path.join(root, STORAGE_DIR);
   const indexFile = path.join(root, INDEX_FILE);
   const ownerFile = path.join(storageDir, 'owner.json');
@@ -487,7 +492,7 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
 
   /** 量一个键，写回索引；没有使用记录的最近使用时刻按最新文件的修改时刻兜底 */
   async function measureRel(rel, { concurrency = 8 } = {}) {
-    const result = await measureDir(relDir(root, rel), { now: now(), alive, concurrency });
+    const result = await measureDir(relDir(root, rel), { now: now(), alive: leftoverAlive, concurrency });
     if (result.missing) { keys.delete(rel); dirty.delete(rel); indexDirty = true; return null; }
     let row = keys.get(rel);
     if (!row) { row = { at: 0, bytes: null, leftover: 0, measuredAt: 0 }; keys.set(rel, row); }
@@ -577,6 +582,25 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
     for (const row of keys.values()) { bytes += row.bytes ?? 0; leftover += row.leftover ?? 0; }
     return { bytes, leftover };
   };
+
+  /**
+   * 清遗留文件（计划第 3.3 节「启动时与每次淘汰时一并清掉」；删哪些见 `storage-leftovers.mjs` 的 `sweepFrameLibrary`）。
+   * 删过东西的键目录记为要重量，接着的 `refresh()` 量完，`leftovers.bytes` 就是清完之后的数。
+   */
+  async function sweepLeftoverFiles() {
+    if (!sweeping) return null;
+    let report;
+    try { report = await sweepFrameLibrary(root, { alive: leftoverAlive, now: now() }); }
+    catch (error) { log('storage.leftovers-failed', { message: String(error?.message ?? error) }); return null; }
+    for (const item of report.removed) {
+      const rel = relOfPath(root, item.path);
+      if (rel && keys.has(rel)) { dirty.add(rel); indexDirty = true; }
+    }
+    if (report.removed.length || report.skipped.length) {
+      log('storage.leftovers', { removed: report.removed.length, bytes: report.bytes, skipped: report.skipped.length });
+    }
+    return report;
+  }
 
   /** 清掉垃圾目录（上一轮改了名没删完的） */
   async function sweepTrash() {
@@ -695,6 +719,7 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
     if (!loaded) await rescan('missing-index');
     else if (!Number.isFinite(calibratedAt) || now() - calibratedAt > calibrateMs) await rescan('calibrate');
     await sweepTrash();
+    await sweepLeftoverFiles();
     await mergePeerTouches();
     await refresh();
     const { capBytes } = await cap();
@@ -797,6 +822,7 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
         if (!(await becomeOwner())) throw Object.assign(new Error('另一个 PromptCut 进程正在管理这个帧库'), { code: 'STORAGE_NOT_OWNER', status: 409 });
         if (!loaded) await rescan('missing-index');
         await sweepTrash();
+        await sweepLeftoverFiles();
         await mergePeerTouches();
         await refresh();
         const result = await evictTo(null, { keepMs: clearKeepMs, reason: 'clear' });
@@ -851,45 +877,14 @@ export async function closeStorage(root) {
  * 导出产物的汇总（`GET /api/storage` 的 `exports`）
  * ======================================================================== */
 
-/** 成片与透明层（计划第 3.3 节「导出产物」） */
-export const EXPORT_DELIVERABLES = ['preview.mp4', 'overlay.mov'];
-/** 留着给列表显示所属项目用，不算中间文件 */
-export const EXPORT_KEEP = ['project.json'];
-
 /**
- * 导出目录下的一份导出：`export-YYYYMMDD-HHMMSS`，可带同秒重名后缀 `-n`；视觉工具的 `export-vision-*` 自然不匹配。
- * 与界面那一支 `server/exports-list.mjs` 的 `summarizeExports` 同一套规则（合并时改成直接引它）。
+ * 带缓存的导出汇总：`maxAgeMs` 内复用；过期先回旧值、后台刷新（第一次要等）。
+ * 认目录、算中间文件直接用导出列表那一支的 `summarizeExports`（`exports-list.mjs`，规则定义在 `storage-leftovers.mjs`），
+ * 与 `GET /api/exports` 的列表同一套：只认 `export-YYYYMMDD-HHMMSS[-n]` 的真目录、不含 `export-vision-*`、不跟链接。
  */
-export const EXPORT_DIR_NAME = /^export-\d{8}-\d{6}(?:-\d+)?$/;
-export function isExportDirName(name) {
-  return typeof name === 'string' && EXPORT_DIR_NAME.test(name);
-}
-
-/** `{ bytes, count, intermediateBytes }`。只进真目录，链接不进 */
-export async function summarizeExports(exportDir) {
-  let bytes = 0, count = 0, intermediateBytes = 0;
-  let items = [];
-  try { items = await fs.readdir(exportDir, { withFileTypes: true }); } catch { return { bytes, count, intermediateBytes }; }
-  for (const item of items) {
-    if (!item.isDirectory() || item.isSymbolicLink() || !isExportDirName(item.name)) continue;
-    const dir = path.join(exportDir, item.name);
-    const measured = await measureDir(dir, { concurrency: 4 });
-    if (measured.missing) continue;
-    let kept = 0;
-    for (const name of [...EXPORT_DELIVERABLES, ...EXPORT_KEEP]) {
-      try { const stat = await fs.lstat(path.join(dir, name)); if (stat.isFile()) kept += stat.size; } catch { /* 没有 */ }
-    }
-    count++;
-    bytes += measured.bytes;
-    intermediateBytes += Math.max(0, measured.bytes - kept);
-  }
-  return { bytes, count, intermediateBytes };
-}
-
-/** 带缓存的导出汇总：`maxAgeMs` 内复用；过期先回旧值、后台刷新（第一次要等） */
-export function createExportSummary(exportDir, { maxAgeMs = 60_000, now = () => Date.now() } = {}) {
+export function createExportSummary(exportDir, { maxAgeMs = 60_000, now = () => Date.now(), summarize = summarizeExports } = {}) {
   let value = null, at = 0, pending = null;
-  const refresh = () => (pending ||= summarizeExports(exportDir).then(result => { value = result; at = now(); return result; }).finally(() => { pending = null; }));
+  const refresh = () => (pending ||= summarize(exportDir).then(result => { value = result; at = now(); return result; }).finally(() => { pending = null; }));
   return {
     async get({ fresh = false } = {}) {
       if (!value || fresh) return refresh();
