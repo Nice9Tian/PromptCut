@@ -8,8 +8,9 @@
  *   deadMs = max(0, B − 已占用)          B = budgetOf(fps) = 1000 / fps × 0.7(与 `pipelinePlan.mjs` 的分派同一个预算)
  *   从上到下逐层累加各层自己的换帧成本,累加到超过 deadMs 的那一层起(含)都显示占位符
  *
- * 各层的换帧成本按卡种取(`SWAP_MS_BY_KIND`,swap-tuning 实测,`scripts/probes/swap-cost-probe.mjs`);
- * 认不出卡种的层、调用方没给每层成本时,取缺省 `SWAP_MS`(兜底)。只给 `swapMs` 的旧调用每层同一个成本,
+ * 各层的换帧成本由调用方给(`costOf`;swap-tuning 实测,`scripts/probes/swap-cost-probe.mjs`):已知这一层快照大小的
+ * 按大小估(`swapCostOfSize`),不知道的按卡种(`SWAP_MS_BY_KIND`);认不出卡种的层、调用方没给每层成本时,
+ * 取缺省 `SWAP_MS`(兜底)。只给 `swapMs` 的旧调用每层同一个成本,
  * 结果与原来的 `floor(deadMs / swapMs)` 相同。
  *
  * 「已占用」是这一拍轻管线里活渲的卡的权重之和(`planDispatch.ts` 的 `lightCostAt`,口径同 `clipWeight` 的 `w`)。
@@ -31,6 +32,31 @@ export const SWAP_MS = 3;
  * 数字是三级机制(`docs/semantics/mechanism/rendering.md`「兜底顺序」)。
  */
 export const SWAP_MS_BY_KIND = Object.freeze({ dom: 2, lottie: 20, canvas: 6 });
+
+/**
+ * 已知这一层快照有多大时的估法(swap-tuning 实测拟合,见 `swap-cost-probe.mjs`):换帧成本基本与快照的字符数成正比,
+ * DOM 与 Lottie 的 SVG 同属「文本」,每 KB 的成本相近;画布卡的快照几乎全是内联位图(一个长属性值),每 KB 便宜得多。
+ *
+ *   成本 = baseMs + (位图 ? bitmapMsPerKB : textMsPerKB) × 字符数 / 1024
+ *
+ * 同一卡种里快照大小可以差十倍(实测 DOM 卡 12～144 KB、Lottie 65～733 KB),按大小估比按卡种估准;
+ * 这一层还没投递过(不知道大小)时退回按卡种。数字是三级机制(`mechanism/rendering.md`「兜底顺序」)。
+ */
+export const SWAP_COST_MODEL = Object.freeze({ baseMs: 1, textMsPerKB: 0.05, bitmapMsPerKB: 0.01 });
+
+/**
+ * 按快照大小估这一层的换帧成本;大小不是正数回 `null`(调用方退回按卡种)。
+ * @param {{ bytes?: number, bitmap?: boolean } | null | undefined} size `bytes`:快照 HTML 的字符数;`bitmap`:内含内联位图(`data:image/`)
+ * @param {{ baseMs: number, textMsPerKB: number, bitmapMsPerKB: number }} [model]
+ * @returns {number | null}
+ */
+export function swapCostOfSize(size, model = SWAP_COST_MODEL) {
+  const bytes = Number(size?.bytes);
+  if (!(bytes > 0)) return null;
+  const perKB = size.bitmap ? model.bitmapMsPerKB : model.textMsPerKB;
+  const v = model.baseMs + perKB * bytes / 1024;
+  return v > 0 ? v : null;
+}
 
 /**
  * 一层属于哪个卡种。认不出来回 `null`(按 `SWAP_MS` 兜底)。
