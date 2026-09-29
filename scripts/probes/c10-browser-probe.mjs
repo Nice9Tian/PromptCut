@@ -1598,6 +1598,8 @@ try {
   // A1:播放含重卡的 10 秒时间轴:主文档长任务 0,重层按拍换快照
   await P(member, () => { window.__pcLongTasks.length = 0; });
   const beatBefore = (await previewDiag(member))?.beatSwap ?? {};
+  // 任务 C(swap-tuning):播放前记下播放态互换的发起判断,播完核「自然进场不发起」
+  const entryBefore = (await previewDiag(member))?.swapPlaying ?? null;
   await P(member, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); });
   const samples = [];
   let placeholderSeen = null;
@@ -1615,6 +1617,17 @@ try {
   }
   const longTasks = await P(member, () => window.__pcLongTasks.slice());
   const beatAfter = (await previewDiag(member))?.beatSwap ?? {};
+  {
+    /*
+     * 任务 C(swap-tuning):从 0 秒连续播放,`probe-typewriter`(入点 2 秒,判轻、(b) 档、vtOk = false)是逐拍自然进场的,
+     * 不该发起播放态互换,也不该走估时(以前在 t≈1.97 估一次、记 skip-rate)。
+     */
+    const sp = (await previewDiag(member))?.swapPlaying ?? null;
+    const planAt = (x) => x?.lastPlan?.at ?? null;
+    const planned = planAt(sp) !== null && planAt(sp) !== planAt(entryBefore);
+    out.steps.playEntry = { natural: { naturalSkips: sp?.naturalSkips ?? null, lastNaturalSkip: sp?.lastNaturalSkip ?? null, playRun: sp?.playRun ?? null, lastPlan: sp?.lastPlan ?? null, plannedDuringPlay: planned } };
+    check(sp && sp.naturalSkips > (entryBefore?.naturalSkips ?? 0) && !planned, '任务 C:从 0 秒连续播放,自然进场的 (b) 档轻卡不发起播放态互换、不走估时', out.steps.playEntry.natural);
+  }
   const playing = samples.filter((s) => s.playing);
   const mainSigs = playing.filter((s) => s.t >= 1).map((s) => s.wraps.find((w) => w.id === state.main)).filter((w) => w?.suppressed && w.plane).map((w) => w.planeSig);
   const worstLong = longTasks.slice().sort((a, b) => b.ms - a.ms).slice(0, 3);
@@ -1665,6 +1678,27 @@ try {
   const stillLive = await stageSample(member);
   check(stillLive && stillLive.wraps.filter((w) => w.id === state.main || state.extras.includes(w.id)).every((w) => !w.suppressed && !w.plane && !w.placeholder),
     'A4:占位撤下后不再盖回(3 秒后仍是活渲)', stillLive?.wraps?.slice(0, 4));
+  {
+    // 任务 C(swap-tuning):跳到 typewriter 中间(3 秒)再播 —— 从卡中间开始播放,照旧交给估时(发起与否由 planPlayingSwap 定)
+    const before = (await previewDiag(member))?.swapPlaying ?? null;
+    const seekAt3 = await P(member, () => { window.__pcStore.actions.seek(3); return Math.round(performance.now()); });
+    // 等 3 秒处的暂停态第二路做完再播(它跑着时父页不判播放态互换:`swapInFlight`)
+    await until('跳到 3 秒后暂停态第二路做完', async () => {
+      const d = await previewDiag(member);
+      return d && !d.swapInFlight && (d.swapLog ?? []).some((e) => Math.abs(e.t - 3) < 1e-6 && e.at >= seekAt3) ? true : null;
+    }, 90_000, 300);
+    await P(member, () => window.__pcStore.actions.play());
+    const seekPlan = await until('跳到卡中间再播:第一拍附近走估时', async () => {
+      const sp = (await previewDiag(member))?.swapPlaying ?? null;
+      const lp = sp?.lastPlan;
+      return lp && lp.at !== before?.lastPlan?.at && lp.t >= 3 && lp.t < 3.5 ? sp : null;
+    }, 5_000, 100);
+    await P(member, () => window.__pcStore.actions.pause());
+    await until('停下', () => P(member, () => !window.__pcStore.getState().playing), 5_000, 100);
+    out.steps.playEntry = { ...(out.steps.playEntry ?? {}), seekMiddle: { lastPlan: seekPlan?.lastPlan ?? null, playRun: seekPlan?.playRun ?? null, naturalSkips: seekPlan?.naturalSkips ?? null } };
+    check(seekPlan, '任务 C:跳到卡中间再播,照旧按估时决定(lastPlan 的 t 在 3～3.5 秒)', out.steps.playEntry.seekMiddle);
+    say('play-entry', out.steps.playEntry);
+  }
   const pd = await previewDiag(member);
   out.steps.settle = { settled: !!settled, stillLive: !!stillLive, feedSettled: pd?.snapshotFeed?.settled?.length ?? null, backWork: pd?.backWork, probeFrames: pd?.probeFrames };
   check(pd?.probeFrames?.gzFrames > 0 && pd.probeFrames.htmlBytes === 0, 'A1/第 2 节:后台舞台的探针帧压成可转移的 ArrayBuffer 交出', pd?.probeFrames);
