@@ -365,6 +365,8 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
   let loaded = false;
   let indexDirty = false, touchDirty = false;
   let scannedAt = null, calibratedAt = null, lastEvict = null, lastEvictDetail = null, lastCheckAt = 0;
+  /** 上一次清遗留（诊断用，?detail=1 里带） */
+  let lastLeftoverSweep = null;
   let scanning = null;
   let chain = Promise.resolve();
   let pipeline = null;
@@ -596,6 +598,7 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
       const rel = relOfPath(root, item.path);
       if (rel && keys.has(rel)) { dirty.add(rel); indexDirty = true; }
     }
+    lastLeftoverSweep = { at: now(), removed: report.removed.length, bytes: report.bytes, skipped: report.skipped.length };
     if (report.removed.length || report.skipped.length) {
       log('storage.leftovers', { removed: report.removed.length, bytes: report.bytes, skipped: report.skipped.length });
     }
@@ -799,6 +802,7 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
       };
       if (detail) {
         out.lastEvictDetail = lastEvictDetail;
+        out.lastLeftoverSweep = lastLeftoverSweep;
         out.units = all.sort((a, b) => a.at - b.at).map(unit => ({ unit: unit.unit, rels: unit.rels, at: unit.at, bytes: unit.bytes, leftover: unit.leftover, pinned: unit.pinned, protected: unit.protected, linked: unit.linked }));
       }
       return out;

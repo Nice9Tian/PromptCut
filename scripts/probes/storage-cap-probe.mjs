@@ -10,6 +10,8 @@
  *      30 分钟内用过的和正在打开的项目不删;越界的上限一律 400;
  *   4. `POST /api/storage/clear-cache`:只留 10 分钟内用过的(和正在打开的项目),数字变小;
  *   5. 链接(junction)和认不出的目录不动,链接指向的文件完好。
+ *   3a.(三支合并后)跑着时放进去的死进程遗留(`full-<pid>.tmp.mov`、`html-cache/live-<pid>-*`)由下一次检查一并清掉,
+ *      `leftovers.bytes` 归零。
  *
  *   node scripts/probes/storage-cap-probe.mjs [--port 5710] [--keep]
  *
@@ -17,7 +19,7 @@
  * 只在这个探针起的 dev server 里生效。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
@@ -233,8 +235,22 @@ try {
   /* ---- 3. 上限设小:淘汰 ---- */
   // 先设一个大上限(合法、不淘汰)让它立即检查一次:打开的项目刚写的键在检查时才量(增量维护),
   // 量完的总字节才是下面算目标用的
+  // (三支合并后)跑着的时候在一个留着的键目录里放死进程的遗留:下面这次检查要一并清掉(启动清理早就做过了,清它的只能是检查)
+  const deadPid = spawnSync(process.execPath, ['-e', '0']).pid;
+  const leftDir = path.join(LIBRARY, fakes[4].entryKey);
+  const leftFiles = [path.join(leftDir, 'mov', `full-${deadPid}.tmp.mov`), path.join(leftDir, 'html-cache', `live-${deadPid}-probe`, 'blob')];
+  for (const file of leftFiles) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, Buffer.alloc(250_000)); }
   const big = await postJson(`${EDITOR}/api/storage/cap`, { bytes: lib0.capBytes });
   check(big.ok, '③ 先设回缺省大小的上限(触发一次检查)', big.body);
+  const swept = await until('检查一并清掉遗留', async () => {
+    for (const file of leftFiles) if (await exists(file)) return null;
+    return true;
+  }, 30000, 300).catch(() => false);
+  check(swept, '③a 每次检查一并清遗留:死进程的 tmp.mov 与 html-cache/live-* 没了');
+  const afterSweep = await until('遗留字节归零', async () => { const s = await storage(); return s?.leftovers?.bytes === 0 ? s : null; }, 30000, 300).catch(() => null);
+  out.leftoverSweep = { deadPid, swept, leftovers: afterSweep?.leftovers ?? null, last: afterSweep?.frameLibrary?.lastLeftoverSweep ?? null };
+  check(afterSweep?.leftovers?.bytes === 0, '③a 清完之后 leftovers.bytes 为 0', out.leftoverSweep);
+  check(out.leftoverSweep.last?.removed >= 2 && out.leftoverSweep.last?.bytes >= 500_000, '③a 删它们的是帧库管理器的检查(lastLeftoverSweep),不是启动清理', out.leftoverSweep);
   const measured = await until('打开的项目的键量完', async () => {
     const s = await storage();
     const unit = unitOf(s.frameLibrary.units ?? [], `entry:${entryKey}`);
