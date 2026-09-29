@@ -9,9 +9,13 @@
 //   经这条连接的 auth.ticket 取一张 rw 素材票据和一张只读票据,读写都带票据。配置里的口令、K、证明、票据都不打印。
 //
 // 素材服务地址:
-//   - 没给 --asset:在这条连接上发 service.watch { kinds: ['asset'] },按登记顺序取第一个
-//     带票据 GET <url>/media/<一个不存在的哈希>/chunks 能通的地址(source: 'docservice')。地址来自控制面下发,不手填;
-//   - 给了 --asset:直接用它(source: 'arg')。
+//   - 没给 --asset:先按局域网发现(server/lan/discovery.mjs,限时 3 s)找这个项目。放本机的项目,素材服务地址经发现带回、
+//     不进控制面的 service.endpoints;找到就按发现的先后取第一个带票据 GET <url>/media/<一个不存在的哈希>/chunks
+//     能通的地址(source: 'lan')。没给 --docservice 时,票据也从发现到的那台文档服务取(同 server/auth/route.mjs 的选路)。
+//     找不到(放云端的项目,或不在同一网段)再在控制面连接上发 service.watch { kinds: ['asset'] },按登记顺序取第一个
+//     能通的地址(source: 'docservice')。地址都不手填。找地址那一段在 asset-lan-discover.mjs,单测 server/test/asset-lan-discover.test.mjs;
+//   - 给了 --asset:直接用它(source: 'arg');
+//   - --no-lan:不做局域网发现,只等 service.endpoints(老写法)。
 //
 // 断言(按顺序):
 //   1. 随机生成 --mb MB 数据,算出 sha256;
@@ -22,13 +26,15 @@
 //   6. Range: bytes=100-199 → 206,字节正确;查询串只读票据 ?t= 的 Range 也 206,带 no-store / no-referrer;
 //   7. 全件下载后 sha256 相符。
 //
-// 输出一行 JSON:{ ok, assetUrl, source, bytes, steps: [{ name, ok, ms }], fails: [{ step, detail }] }
+// 输出一行 JSON:{ ok, assetUrl, source, lan: { found, ms, candidates, errors } | null, bytes, steps: [{ name, ok, ms }], fails: [{ step, detail }] }
 // 退出码:0 全过;1 有断言失败(含超时);2 用法不对、没有共享项目配置、连不上控制面或素材服务。
 import crypto from 'node:crypto';
+import { discoverLanAsset, firstReachableAsset } from './asset-lan-discover.mjs';
 
-const USAGE = `用法:PROMPTCUT_SHARED_CONFIG=<配置> node scripts/probes/asset-lan-probe.mjs [--docservice <ws://…>] [--asset <http://…/api/asset>] [--mb 20] [--timeout-ms 60000]
-  --docservice  控制面(文档服务)地址,ws:// 或 wss://;缺省用共享项目配置里的 url;没给 --asset 时从这里订阅素材服务地址
-  --asset       直接指定素材服务基址(…/api/asset),跳过控制面
+const USAGE = `用法:PROMPTCUT_SHARED_CONFIG=<配置> node scripts/probes/asset-lan-probe.mjs [--docservice <ws://…>] [--asset <http://…/api/asset>] [--no-lan] [--mb 20] [--timeout-ms 60000]
+  --docservice  控制面(文档服务)地址,ws:// 或 wss://;缺省用局域网发现到的那台,没发现到用共享项目配置里的 url
+  --asset       直接指定素材服务基址(…/api/asset),跳过发现
+  --no-lan      不做局域网发现,只从控制面的 service.endpoints 取素材服务地址
   --mb          测试数据大小,单位 MB(缺省 20)
   --timeout-ms  整趟的超时(缺省 60000)
   凭证从环境变量 PROMPTCUT_SHARED_CONFIG 指向的共享项目配置读(素材票据经文档服务取)。
@@ -37,6 +43,9 @@ const USAGE = `用法:PROMPTCUT_SHARED_CONFIG=<配置> node scripts/probes/asset
 const CHUNK_DEFAULT = 8 * 1024 * 1024;
 const LAN_ORIGIN = 'http://192.168.50.247:9999';
 
+/** 不带值的开关 */
+const FLAGS = new Set(['no-lan', 'help']);
+
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
@@ -44,6 +53,7 @@ function parseArgs(argv) {
     if (!a.startsWith('--')) return { error: `多余的参数 ${a}` };
     const eq = a.indexOf('=');
     const key = eq > 0 ? a.slice(2, eq) : a.slice(2);
+    if (FLAGS.has(key) && eq < 0) { out[key] = true; continue; }
     const val = eq > 0 ? a.slice(eq + 1) : argv[++i];
     if (val === undefined) return { error: `--${key} 缺值` };
     out[key] = val;
@@ -68,7 +78,7 @@ const SECRETS = new Set();
 let TICKET = '';
 let READ_TICKET = '';
 
-const result = { ok: false, assetUrl: null, source: args.asset ? 'arg' : 'docservice', bytes: 0, steps: [], fails: [] };
+const result = { ok: false, assetUrl: null, source: args.asset ? 'arg' : 'docservice', lan: null, bytes: 0, steps: [], fails: [] };
 let finished = false;
 /** 打一行 JSON 退出。令牌不在 result 里,保险起见再擦一遍 */
 function finish(code) {
@@ -121,8 +131,11 @@ function check(cond, detail) {
   if (!cond) throw new Error(detail);
 }
 
-/** 凭共享项目连控制面,取素材票据;没给 --asset 时再订阅 asset 登记,按顺序找第一个能通的地址 */
-async function connectAndDiscover(docservice, wantDiscovery) {
+/**
+ * 凭共享项目连控制面,取素材票据;没给 --asset 时找第一个能通的素材服务地址:
+ * lanAssets 非空(局域网发现到了这个项目)就在它里面找,否则订阅 asset 登记按顺序找
+ */
+async function connectAndDiscover(docservice, wantDiscovery, lanAssets = []) {
   let parsed;
   try { parsed = new URL(docservice); } catch { throw new Unreachable(`--docservice 不是合法地址:${docservice}`); }
   if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') throw new Unreachable('--docservice 要 ws:// 或 wss://');
@@ -159,8 +172,16 @@ async function connectAndDiscover(docservice, wantDiscovery) {
     SECRETS.add(TICKET);
     SECRETS.add(READ_TICKET);
     if (!wantDiscovery) return null;
+    const missing = sha256(crypto.randomBytes(32));
+    const reach = (urls) => firstReachableAsset(urls, { ticket: TICKET, missingHash: missing, timeoutMs: Math.min(3000, left()) });
+    if (lanAssets.length) {
+      const hit = await reach(lanAssets);
+      if (hit) return hit;
+      throw new Unreachable(`局域网发现到的素材服务地址都不通:${lanAssets.join(', ')}`);
+    }
     const registrations = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Unreachable('等控制面的 service.endpoints 超时')), Math.min(left(), 15000));
+      const why = args['no-lan'] ? '' : '(局域网发现也没找到这个项目)';
+      const timer = setTimeout(() => reject(new Unreachable(`等控制面的 service.endpoints 超时${why}`)), Math.min(left(), 15000));
       ws.send(JSON.stringify({ type: 'service.watch', kinds: ['asset'] }));
       ws.addEventListener('error', () => { clearTimeout(timer); reject(new Unreachable(`连不上控制面 ${parsed.protocol}//${parsed.host}${parsed.pathname}`)); });
       ws.addEventListener('close', (e) => { clearTimeout(timer); reject(new Unreachable(`控制面关了连接(${e.code}${e.reason ? ` ${e.reason}` : ''})`)); });
@@ -174,17 +195,8 @@ async function connectAndDiscover(docservice, wantDiscovery) {
         // 空表:等后续推送
       });
     });
-    const missing = sha256(crypto.randomBytes(32));
-    for (const reg of registrations) {
-      for (const u of reg.urls) {
-        const base = String(u).replace(/\/+$/, '');
-        try {
-          const r = await request(`${base}/media/${missing}/chunks`, { headers: { Authorization: `Bearer ${TICKET}` } }, 3000);
-          await r.arrayBuffer().catch(() => {});
-          if (r.status === 200) return base;
-        } catch { /* 下一个 */ }
-      }
-    }
+    const hit = await reach(registrations.flatMap((r) => r.urls));
+    if (hit) return hit;
     throw new Unreachable(`控制面登记的素材服务地址都不通:${registrations.flatMap((r) => r.urls).join(', ')}`);
   } finally {
     await closeAndWait(ws);
@@ -217,7 +229,21 @@ async function main() {
     throw new Unreachable(safe(err?.message || err));
   }
   if (!SHARED) throw new Unreachable('没有共享项目配置:设环境变量 PROMPTCUT_SHARED_CONFIG');
-  const found = await connectAndDiscover(args.docservice ?? SHARED.url, !args.asset);
+  let lanAssets = [];
+  let lanDocservice = null;
+  if (!args.asset && !args['no-lan']) {
+    const lan = await discoverLanAsset({ projectId: SHARED.projectId, name: SHARED.name });
+    result.lan = {
+      found: lan.candidates.length > 0,
+      ms: lan.ms,
+      candidates: lan.candidates.map((c) => ({ asset: c.asset, docservice: c.docservice, hostDeviceName: c.hostDeviceName })),
+      errors: lan.errors,
+    };
+    lanAssets = lan.candidates.map((c) => c.asset);
+    lanDocservice = lan.candidates.find((c) => c.docservice)?.docservice ?? null;
+    if (lanAssets.length) result.source = 'lan';
+  }
+  const found = await connectAndDiscover(args.docservice ?? lanDocservice ?? SHARED.url, !args.asset, lanAssets);
   const base = args.asset ? String(args.asset).replace(/\/+$/, '') : found;
   result.assetUrl = base;
   const auth = { Authorization: `Bearer ${TICKET}` };
