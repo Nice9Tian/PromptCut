@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { actions } from "../../store/project";
-import type { CardDef, Control } from "../../kernel/types";
+import type { Control } from "../../kernel/types";
+import { paramsEmptyText, paramsPartialText, type ParamsCardView } from "./paramsView";
 import { ASSET_TARGET } from "../../cards/catalogAssets";
 import type { TrackClip } from "../../kernel/project";
 import { SpeakerPicker } from "./SpeakerPicker";
@@ -13,18 +14,22 @@ function isSpeakerVideoControl(ctrl: Control): boolean {
   return keyMatch || labelMatch;
 }
 
-export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: CardDef<any> | undefined }) {
+/**
+ * `cardDef`:能跑的定义,或在线页面同步来的用户卡的只读视图(`registry.syncedCardView`;没有组件,改参数照常经文档服务提交)。
+ */
+export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: ParamsCardView | undefined }) {
   const [pickerCtrlKey, setPickerCtrlKey] = useState<string | null>(null);
 
-  if (!cardDef || !cardDef.controls || cardDef.controls.length === 0) {
+  const empty = paramsEmptyText(cardDef);
+  if (empty !== null || !cardDef) {
     return (
-      <div className="p-4 text-center text-xs pc-left-muted">
-        这张卡没有可调参数
+      <div className="p-4 text-center text-xs pc-left-muted" data-pc="params-empty">
+        {empty}
       </div>
     );
   }
 
-  const merged = { ...cardDef.defaults, ...clip.params };
+  const merged: Record<string, any> = { ...cardDef.defaults, ...clip.params };
 
   const handlePointerDownNumber = (e: React.PointerEvent, key: string, current: number, step: number = 1, min?: number, max?: number) => {
     const el = e.currentTarget as HTMLDivElement;
@@ -180,6 +185,13 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: CardDe
           </div>
         );
       })}
+
+      {/* 同步来的卡:源码里有控件没认出来,认出的照常画,这里说明其余的在线改不了 */}
+      {paramsPartialText(cardDef) && (
+        <div className="px-3 pt-2 text-[11px] pc-left-muted" data-pc="params-partial">
+          {paramsPartialText(cardDef)}
+        </div>
+      )}
 
       <div className="mt-4 px-3">
         <button

@@ -18,7 +18,7 @@ import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
 /* 占位组件(product/rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
 import { PlaceholderPlane, PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, maxAnimated } from "./placeholder";
-import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
+import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, localOnlyReason, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholderFitFor, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
 import type { PlaceholderReason } from "./placeholder/contract";
 
 setMaxAnimated(maxAnimated);
@@ -119,7 +119,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    */
   const placeholders = usesPlanes && placeholdersEnabled();
   useEffect(() => {
-    // 在线浏览器模式另加「需要本地 PC 渲染辅助」图标的放大规则;桌面注入的样式表与原来逐字相同
+    // 在线浏览器模式另加「需要本地 PC 渲染辅助」图标的排法规则(这种图标只在这个模式下出现)
     if (placeholders) ensurePlaceholderStyle(onlineBrowserMode() ? PLACEHOLDER_CSS + PLACEHOLDER_ONLINE_CSS : PLACEHOLDER_CSS);
   }, [placeholders]);
 
@@ -416,12 +416,21 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 不经 React 提交 —— `hidden` 这个 prop 恒为 true,React 不会把手动切过的值冲掉。
                 放在最后:同一包裹层里它盖在快照 / 流平面上面(显示它的时候那两样本来就没画面)。
               */}
-              {placeholders ? (
-                <div {...{ [PLACEHOLDER_SLOT_ATTR]: "" }} hidden style={{ position: "absolute", inset: 0 }}>
-                  <PlaceholderPlane clipId={clip.id} geometry={geometryFor(clip.id, frameBox(clip.frame, timeline))}
-                    reason={unsupported ? "unsupported" : placeholderReasonOf(clip.id)} />
-                </div>
-              ) : null}
+              {placeholders ? (() => {
+                /*
+                 * 在屏幕上多大(`placeholderFit.ts`):沙漏只抵消预览缩放;「需要本地 PC 渲染辅助」图标同时抵消这一层的缩放、
+                 * 按框换排法;都不超出这一层的框。预览缩放由父页经 `setViewScale` 发来(桌面与在线都发)。
+                 */
+                const size = frameBox(clip.frame, timeline);
+                const geometry = geometryFor(clip.id, size);
+                const reason = unsupported ? localOnlyReason(clip.id) : placeholderReasonOf(clip.id);
+                return (
+                  <div {...{ [PLACEHOLDER_SLOT_ATTR]: "" }} hidden style={{ position: "absolute", inset: 0 }}>
+                    <PlaceholderPlane clipId={clip.id} geometry={geometry} reason={reason}
+                      fit={placeholderFitFor(clip.id, reason, geometry, size, clip.frame?.scale ?? 1)} />
+                  </div>
+                );
+              })() : null}
             </div>
           );
         })}

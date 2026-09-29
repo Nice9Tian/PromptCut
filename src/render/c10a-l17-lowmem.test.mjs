@@ -49,6 +49,8 @@ test("C10A-L17-H1 低内存档所有卡判重:不看成本记录与声明,每个
 test("C10A-L17-H2 分派表:低内存档打开后父页显示用的表里所有卡判重(播放不活渲),关上回到按成本记录", async () => {
   mock.module(srcUrl("editor/stageBridge.ts"), { exports: { frontStage: () => null, backStage: () => null } });
   mock.module(srcUrl("editor/costIdentity.ts"), { exports: { clipIdentityOf: () => ({ identityKeys: {}, frameModes: { a: "direct", b: "direct" } }) } });
+  // 夹具里的卡要在注册表里有定义:两边都没有定义的「未知卡片」不进分派表(2026-09-29 起,舞台不画它们)
+  (await import(srcUrl("kernel/registry.ts"))).registerCards(["a", "b"].map((id) => ({ id: `card-${id}`, name: id, defaults: {}, controls: [], frameMode: "direct", Component: () => null })));
   const d = await import(srcUrl("editor/planDispatch.ts"));
   d.resetPlanDispatch();
   const p = project([{ id: "a", start: 0, end: 2 }, { id: "b", start: 0, end: 2 }]);

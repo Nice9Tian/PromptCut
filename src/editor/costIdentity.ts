@@ -12,7 +12,7 @@
  */
 import type { Project } from "../kernel/project";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
-import { allCards, cardsRegistryGen, getCard, syncedUserCardsGen, userCardSources } from "../kernel/registry";
+import { allCards, cardsRegistryGen, getCard, syncedUserCardsGen, unknownCardClipIds, userCardSources } from "../kernel/registry";
 import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles, cardSourceFilesVersion } from "../render/cardSourceFiles.mjs";
@@ -66,7 +66,18 @@ let cachedLocalKey = "";
  * 桌面(模式关着)照旧。
  */
 function dropLocalOnly(project: Project, id: ClipIdentity): ClipIdentity {
-  const local = localOnlyClipIds(project.tracks.flatMap((tr) => tr.clips));
+  return dropClips(id, localOnlyClipIds(project.tracks.flatMap((tr) => tr.clips)));
+}
+
+/**
+ * 两边都没有定义的卡片段(未知卡片,`registry.unknownCardClipIds`;桌面与在线一致)也不给身份:舞台不画它们,测量不该挑它们
+ * (以前会在后台舞台上测一张空卡、记一条成本记录)。分派表那一侧另由 `planDispatch` 把它们整个去掉(不当重卡、不进预渲染集合)。
+ */
+function dropUnknown(project: Project, id: ClipIdentity): ClipIdentity {
+  return dropClips(id, unknownCardClipIds(project.tracks.flatMap((tr) => tr.clips)));
+}
+
+function dropClips(id: ClipIdentity, local: ReadonlySet<string>): ClipIdentity {
   if (!local.size) return id;
   const identityKeys: Record<string, string> = {};
   const frameModes: Record<string, string> = {};
@@ -79,7 +90,8 @@ function dropLocalOnly(project: Project, id: ClipIdentity): ClipIdentity {
 
 export function clipIdentityOf(project: Project | null): ClipIdentity {
   if (!project) return EMPTY;
-  const localKey = onlineBrowserMode() ? `on:${syncedUserCardsGen()}:${cardsRegistryGen()}` : "off";
+  // 注册表与同步表的代数也进键:卡片定义到了(热更新、同步到了),未知卡片变成认得的卡,身份跟着给
+  const localKey = `${onlineBrowserMode() ? "on" : "off"}:${syncedUserCardsGen()}:${cardsRegistryGen()}`;
   if (project === cachedProject && localKey === cachedLocalKey) return cached;
   let out = EMPTY;
   try {
@@ -95,7 +107,8 @@ export function clipIdentityOf(project: Project | null): ClipIdentity {
       }
     }
     out = { identityKeys, frameModes, capabilities };
-    if (localKey !== "off") out = dropLocalOnly(project, out);
+    if (onlineBrowserMode()) out = dropLocalOnly(project, out);
+    out = dropUnknown(project, out);
   } catch {
     out = EMPTY;
   }

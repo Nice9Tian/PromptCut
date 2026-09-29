@@ -1,8 +1,16 @@
 /**
- * 从一份卡片源码(`src/cards/user/*.tsx` 的原文)里取出它定义的卡片的 id 与名字,**不执行源码**。
+ * 从一份卡片源码(`src/cards/user/*.tsx` 的原文)里取出它定义的卡片的 id、名字、说明、参数默认值与参数控件,**不执行源码**。
  *
  * 用处(C10 契约第 9 节「识别」):在线浏览器模式的页面经文档服务读到内容库里同步来的卡片源码,但本机不能运行它们;
- * 页面只需要知道「这个 id 是一张用户卡、叫什么名字」,时间轴标真名、预览按本机跑不了的卡处理。
+ * 页面要知道「这个 id 是一张用户卡、叫什么名字」(时间轴标真名、预览按本机跑不了的卡处理),以及它有哪些参数
+ * (参数面板照常能改;片段照常可以改参数)。
+ *
+ * `defaults` / `controls` / `description` 只认字面量:字符串、没有替换的模板字符串、数字(含负数)、布尔、null、数组、对象,
+ * 以及同文件顶层 `const X = 字面量` 的引用(对象、数组里的展开也认同文件的字面量)。认不出的部分按下面的规矩丢:
+ *   - 控件逐个解析:`key`、`type`、`label` 不是字面量(或缺)的那一个跳过;个别字段不是字面量就丢掉那个字段
+ *     (`select` 没了 `options`、`asset` 没了 `kind` 画不出来,也跳过;`asset` 没了 `options` 按空表);
+ *   - `defaults` 里不是字面量的键丢掉;
+ *   - 有控件被跳过(或整个 `controls` 不是字面量)时 `controlsIncomplete` 为 true,参数面板据此说明「在线改不了」。
  *
  * 判据照 `src/cards/user/index.ts` 的 `isCardDef`,只是换成读源码:具名导出(含 `export default`、`export { a as b }`)
  * 的值是一个对象字面量,顶层写着字符串的 `id` 与 `name`,并写了 `defaults`、`controls`,以及 `Component` / `card` /
@@ -396,13 +404,284 @@ function declarationAt(tokens, k) {
   return { name: nameTok.v, valueAt: j + 1 };
 }
 
+/* ------------------------------------------------------------------ 字面量求值 */
+
+/** 值后面跟着这些标点就算结束 */
+const VALUE_END = new Set([",", ";", ")", "]", "}"]);
+/** 顶层语句开头的词:没写分号时,前一条语句的值到这里结束 */
+const STATEMENT_WORDS = new Set(["const", "let", "var", "export", "function", "import", "type", "interface", "class", "declare", "enum", "async"]);
+
+const isPlainObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+
+function numberOf(raw) {
+  if (typeof raw !== "string" || /n$/.test(raw)) return null;
+  const n = Number(raw.replace(/_/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
- * 一份卡片源码里定义的卡:`[{ id, name }]`,按源码里的先后;同一个 id 只留第一张。认不出任何卡回空数组,不抛。
+ * 求值器:在整份记号表上按下标走。`constAt`:同文件顶层声明的名字 → 初值第一个记号的下标。
+ * 每个 `parse*` 回 `{ ok, value, end }`:`ok` 是整段都是字面量;对象、数组即使 `ok` 为 false,`value` 里也留着认得出的那部分
+ * (对象丢掉认不出的键,数组丢掉认不出的元素,`items` 里逐个留着每个元素的结果);`end` 是这个值之后的下标。
+ */
+class Evaluator {
+  constructor(tokens, constAt) {
+    this.t = tokens;
+    this.constAt = constAt;
+    this.cache = new Map();
+    this.resolving = new Set();
+  }
+
+  /** 跳过一个认不出的表达式:到同层的 `,` / `;`,或者会让层数变负的那个右括号(不吃掉) */
+  skipExpr(i) {
+    const t = this.t;
+    let depth = 0;
+    for (; i < t.length; i++) {
+      const tok = t[i];
+      if (tok.t !== "punct") continue;
+      if (tok.v === "(" || tok.v === "[" || tok.v === "{") depth++;
+      else if (tok.v === ")" || tok.v === "]" || tok.v === "}") { if (depth === 0) return i; depth--; }
+      else if ((tok.v === "," || tok.v === ";") && depth === 0) return i;
+    }
+    return i;
+  }
+
+  /** 跳过尾随的类型断言(`as const`、`satisfies X`、`as Record<K, V>`):到值的结尾 */
+  skipType(i) {
+    const t = this.t;
+    let depth = 0;
+    let angle = 0;
+    for (; i < t.length; i++) {
+      const tok = t[i];
+      if (tok.t === "word" && depth === 0 && angle === 0 && STATEMENT_WORDS.has(tok.v)) return i;
+      if (tok.t !== "punct") continue;
+      if (tok.v === "<") angle++;
+      else if (tok.v === ">") angle = Math.max(0, angle - 1);
+      else if (tok.v === ">>") angle = Math.max(0, angle - 2);
+      else if (tok.v === "(" || tok.v === "[" || tok.v === "{") depth++;
+      else if (tok.v === ")" || tok.v === "]" || tok.v === "}") { if (depth === 0) return i; depth--; }
+      else if ((tok.v === "," && angle === 0 || tok.v === ";") && depth === 0) return i;
+    }
+    return i;
+  }
+
+  /** 一个值读完之后:后面是结尾就收;是类型断言就跳过;是别的(运算符、调用……)就整个不算字面量 */
+  finish(r) {
+    const n = this.t[r.end];
+    if (!n || (n.t === "punct" && VALUE_END.has(n.v))) return r;
+    if (n.t === "word" && (n.v === "as" || n.v === "satisfies")) return { ...r, end: this.skipType(r.end + 1) };
+    if (n.t === "word" && STATEMENT_WORDS.has(n.v)) return r;
+    return { ok: false, value: undefined, end: this.skipExpr(r.end) };
+  }
+
+  /** 同文件顶层常量的值 */
+  resolve(name) {
+    if (this.cache.has(name)) return this.cache.get(name);
+    const at = this.constAt.get(name);
+    if (at === undefined || this.resolving.has(name)) return { ok: false, value: undefined };
+    this.resolving.add(name);
+    const r = this.parse(at);
+    this.resolving.delete(name);
+    const out = { ok: r.ok, value: r.value };
+    this.cache.set(name, out);
+    return out;
+  }
+
+  parse(i) {
+    const tok = this.t[i];
+    if (!tok) return { ok: false, value: undefined, end: i };
+    const fail = () => ({ ok: false, value: undefined, end: this.skipExpr(i) });
+    if (tok.t === "string") return this.finish({ ok: true, value: tok.v, end: i + 1 });
+    if (tok.t === "template") return tok.v === null ? fail() : this.finish({ ok: true, value: tok.v, end: i + 1 });
+    if (tok.t === "number") {
+      const n = numberOf(tok.v);
+      return n === null ? fail() : this.finish({ ok: true, value: n, end: i + 1 });
+    }
+    if (tok.t === "punct" && (tok.v === "-" || tok.v === "+") && this.t[i + 1]?.t === "number") {
+      const n = numberOf(this.t[i + 1].v);
+      return n === null ? fail() : this.finish({ ok: true, value: tok.v === "-" ? (n === 0 ? 0 : -n) : n, end: i + 2 });
+    }
+    if (tok.t === "word") {
+      if (tok.v === "true" || tok.v === "false") return this.finish({ ok: true, value: tok.v === "true", end: i + 1 });
+      if (tok.v === "null") return this.finish({ ok: true, value: null, end: i + 1 });
+      // 同文件顶层常量(`X` 后面紧跟 `.` / `(` / `[` 是成员访问或调用,由 `finish` 判成不是字面量)
+      const r = this.resolve(tok.v);
+      return this.finish({ ok: r.ok, value: r.value, end: i + 1 });
+    }
+    if (tok.t === "punct" && tok.v === "(") {
+      const r = this.parse(i + 1);
+      const close = this.t[r.end];
+      if (!close || close.t !== "punct" || close.v !== ")") return fail();
+      return this.finish({ ok: r.ok, value: r.value, end: r.end + 1 });
+    }
+    if (tok.t === "punct" && tok.v === "[") return this.finish(this.parseArray(i));
+    if (tok.t === "punct" && tok.v === "{") return this.finish(this.parseObject(i));
+    return fail();
+  }
+
+  parseArray(open) {
+    const t = this.t;
+    const items = [];
+    const value = [];
+    let ok = true;
+    let k = open + 1;
+    for (;;) {
+      const tok = t[k];
+      if (!tok) return { ok: false, value, items, end: k };
+      if (tok.t === "punct" && tok.v === "]") return { ok, value, items, end: k + 1 };
+      if (tok.t === "punct" && tok.v === ",") { k++; continue; }
+      if (tok.t === "punct" && tok.v === "...") {
+        const r = this.parse(k + 1);
+        if (r.ok && Array.isArray(r.value)) for (const v of r.value) { items.push({ ok: true, value: v }); value.push(v); }
+        else ok = false;
+        k = Math.max(r.end, k + 1);
+        continue;
+      }
+      const r = this.parse(k);
+      items.push({ ok: r.ok, value: r.value });
+      if (r.ok) value.push(r.value);
+      else ok = false;
+      k = Math.max(r.end, k + 1);
+      // 元素后面既不是逗号也不是 `]`:认不出(比如截断),收掉
+      const next = t[k];
+      if (next && !(next.t === "punct" && (next.v === "," || next.v === "]"))) { ok = false; k = this.skipExpr(k); if (t[k]?.v === ";") return { ok: false, value, items, end: k }; }
+    }
+  }
+
+  parseObject(open) {
+    const t = this.t;
+    const value = {};
+    let ok = true;
+    let k = open + 1;
+    const set = (key, v) => { if (key !== "__proto__") value[key] = v; };
+    for (;;) {
+      const tok = t[k];
+      if (!tok) return { ok: false, value, end: k };
+      if (tok.t === "punct" && tok.v === "}") return { ok, value, end: k + 1 };
+      if (tok.t === "punct" && tok.v === ",") { k++; continue; }
+      if (tok.t === "punct" && tok.v === "...") {
+        // 展开:同文件的字面量对象;先展开、后写的键覆盖它,和 JS 一样按先后
+        const r = this.parse(k + 1);
+        if (isPlainObject(r.value)) for (const [kk, vv] of Object.entries(r.value)) set(kk, vv);
+        if (!r.ok) ok = false;
+        k = Math.max(r.end, k + 1);
+        continue;
+      }
+      let key = null;
+      if (tok.t === "word" || tok.t === "string") key = tok.v;
+      else if (tok.t === "number") key = String(numberOf(tok.v) ?? tok.v);
+      else if (tok.t === "template" && tok.v !== null) key = tok.v;
+      const after = t[k + 1];
+      if (key !== null && after && after.t === "punct" && after.v === ":") {
+        const r = this.parse(k + 2);
+        if (r.ok) set(key, r.value);
+        else ok = false;
+        k = Math.max(r.end, k + 2);
+        continue;
+      }
+      if (key !== null && tok.t === "word" && (!after || (after.t === "punct" && (after.v === "," || after.v === "}")))) {
+        // 简写 `{ a }`:同名的顶层常量
+        const r = this.resolve(key);
+        if (r.ok) set(key, r.value);
+        else ok = false;
+        k++;
+        continue;
+      }
+      // 方法、getter、计算键:认不出这一项
+      ok = false;
+      const next = this.skipExpr(k + 1);
+      k = next > k ? next : k + 1;
+      if (t[k]?.v === ";") return { ok: false, value, end: k };
+    }
+  }
+}
+
+const CONTROL_TYPES = new Set(["text", "number", "select", "color", "asset"]);
+
+/** `options` 表:每一项都得是 `{ value: 字符串, label: 字符串 }`;有一项不是就整个不认 */
+function optionsOf(v) {
+  if (!Array.isArray(v)) return null;
+  const out = [];
+  for (const o of v) {
+    if (!isPlainObject(o) || typeof o.value !== "string" || typeof o.label !== "string") return null;
+    out.push({ value: o.value, label: o.label });
+  }
+  return out;
+}
+
+/** 一个控件对象(已经求值、可能缺了认不出的字段)→ `Control`;画不出来的回 null(见文件头) */
+export function controlOf(v) {
+  if (!isPlainObject(v)) return null;
+  const { key, type, label } = v;
+  if (typeof key !== "string" || !key || typeof label !== "string" || !CONTROL_TYPES.has(type)) return null;
+  const c = { key, label, type };
+  if (typeof v.required === "boolean") c.required = v.required;
+  if (typeof v.hint === "string") c.hint = v.hint;
+  if (type === "number") {
+    for (const f of ["min", "max", "step"]) if (typeof v[f] === "number" && Number.isFinite(v[f])) c[f] = v[f];
+  }
+  if (type === "select") {
+    const options = optionsOf(v.options);
+    if (!options) return null;
+    c.options = options;
+  }
+  if (type === "asset") {
+    if (v.kind !== "lottie" && v.kind !== "particles") return null;
+    c.kind = v.kind;
+    c.options = optionsOf(v.options) ?? [];
+  }
+  return c;
+}
+
+/** 值记号数组的第一个记号在整份记号表里的下标;简写属性(值为 null)按同名常量 */
+function valueStart(index, slice, key, constAt) {
+  if (slice === null) return constAt.get(key);
+  if (!slice.length) return undefined;
+  return index.get(slice[0]);
+}
+
+/** 卡片对象上的 `defaults` / `controls` / `description` */
+function literalFields(ev, index, props, constAt) {
+  const at = (key) => (props.has(key) ? valueStart(index, props.get(key), key, constAt) : undefined);
+  const out = { defaults: {}, controls: [], controlsIncomplete: false };
+  const dAt = at("defaults");
+  if (dAt !== undefined) {
+    const r = ev.parse(dAt);
+    if (isPlainObject(r.value)) out.defaults = r.value;
+  }
+  const cAt = at("controls");
+  const r = cAt !== undefined ? ev.parse(cAt) : { ok: false, value: undefined };
+  if (Array.isArray(r.value)) {
+    // `items` 里逐个留着每个元素(对象即使有认不出的字段,也留着认得出的那部分)
+    const items = r.items ?? r.value.map((v) => ({ ok: true, value: v }));
+    for (const it of items) {
+      const c = controlOf(it.value);
+      if (c) out.controls.push(c);
+      else out.controlsIncomplete = true;
+    }
+    if (!r.ok) out.controlsIncomplete = true;
+  } else {
+    out.controlsIncomplete = true;
+  }
+  const descAt = at("description");
+  if (descAt !== undefined) {
+    const d = ev.parse(descAt);
+    if (d.ok && typeof d.value === "string") out.description = d.value;
+  }
+  return out;
+}
+
+/**
+ * 一份卡片源码里定义的卡:`[{ id, name, description?, defaults, controls, controlsIncomplete }]`,按源码里的先后;
+ * 同一个 id 只留第一张。认不出任何卡回空数组,不抛。
  */
 export function parseCardSource(source) {
   if (typeof source !== "string" || !source) return [];
   let tokens;
   try { tokens = new Lexer(source).all(); } catch { return []; }
+  const index = new Map(tokens.map((t, i) => [t, i]));
+  /** 顶层声明:名字 → 初值第一个记号的下标(字面量求值用) */
+  const constAt = new Map();
   const consts = new Map();
   /** 顶层对象字面量:名字 → `{` 的下标 */
   const objects = new Map();
@@ -416,6 +695,7 @@ export function parseCardSource(source) {
     const declAt = isExport ? k + 1 : k;
     const decl = declarationAt(tokens, declAt);
     if (decl && tokens[declAt].depth === 0) {
+      if (!constAt.has(decl.name)) constAt.set(decl.name, decl.valueAt);
       const v = tokens[decl.valueAt];
       if (v && (v.t === "string" || (v.t === "template" && v.v !== null))) {
         const after = tokens[decl.valueAt + 1];
@@ -456,6 +736,7 @@ export function parseCardSource(source) {
   const out = [];
   const seen = new Set();
   const usedAt = new Set();
+  const ev = new Evaluator(tokens, constAt);
   for (const at of exportedObjects) {
     if (usedAt.has(at)) continue;
     usedAt.add(at);
@@ -467,7 +748,10 @@ export function parseCardSource(source) {
     if (!props.has("Component") && !props.has("card") && !props.has("audio")) continue;
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, name });
+    let fields;
+    try { fields = literalFields(ev, index, props, constAt); } catch { fields = { defaults: {}, controls: [], controlsIncomplete: true }; }
+    const { description, defaults, controls, controlsIncomplete } = fields;
+    out.push({ id, name, ...(description !== undefined ? { description } : {}), defaults, controls, controlsIncomplete });
   }
   return out;
 }

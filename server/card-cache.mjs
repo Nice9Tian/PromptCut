@@ -56,8 +56,15 @@ export class CardFrameCache {
     const nodes = new Map(graph.nodes.map(node => [node.id, node]));
     const definitions = new Map((graph.definitions || []).map(definition => [definition.id, definition]));
     const identities = cardNodeIdentities(graph, { style: this.project.style || {}, environment: value?.environment || {}, sourceVersions: value?.sourceVersions || {} });
+    /*
+     * 未知卡片(预渲染间的注册表里查不到定义的卡片段,`__pcCardPlan` 的 `unknownClipIds`):舞台不画它们,不出控件 ——
+     * 不排预渲染、不进预渲染集合(否则按「没有定义」的缺省能力 stateful / 要预渲染判重)、层表里也没有它们那一层。
+     * 只跳过这些输出;图与节点身份照上面算,别的卡的键逐字不变(未知卡当别的卡的输入时也一样)。
+     */
+    const unknownClips = new Set(Array.isArray(value?.unknownClipIds) ? value.unknownClipIds : []);
     const controls = [];
     for (const output of graph.outputs) {
+      if (output?.clipId && unknownClips.has(output.clipId)) continue;
       const node = nodes.get(output.nodeId);
       const definition = definitions.get(node?.definitionId);
       const caps = output.capabilities || node?.capabilities || node?.definition?.capabilities || definition || {};
