@@ -41,6 +41,18 @@ export function paramsEmptyText(view: ParamsCardView | undefined): string | null
   return NO_PARAMS_TEXT;
 }
 
+/** 源码里的控件只认出一部分时,面板在认出的控件下面加的那一行用的入口名 */
+export const ONLINE_PARAMS_REST_ENTRY = "修改这张卡的其余参数";
+
+/**
+ * 同步来的卡控件只认出一部分(比如展开了从别的文件引进来的控件):照常画认出的那些,下面加一行提示;
+ * 其余情形(全认出、一个都没认出、能跑的定义)回 null。
+ */
+export function paramsPartialText(view: ParamsCardView | undefined): string | null {
+  if (!view?.controlsIncomplete || !Array.isArray(view.controls) || view.controls.length === 0) return null;
+  return onlineUnsupported(ONLINE_PARAMS_REST_ENTRY);
+}
+
 /** 时间轴副标题:第一个文字控件的当前值 → 卡片说明 → 空 */
 export function clipSubtitleOf(view: ParamsCardView | undefined, params: Record<string, unknown> | undefined): string {
   if (!view) return "";

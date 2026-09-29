@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { actions } from "../../store/project";
 import type { Control } from "../../kernel/types";
-import { paramsEmptyText, type ParamsCardView } from "./paramsView";
+import { paramsEmptyText, paramsPartialText, type ParamsCardView } from "./paramsView";
 import { ASSET_TARGET } from "../../cards/catalogAssets";
 import type { TrackClip } from "../../kernel/project";
 import { SpeakerPicker } from "./SpeakerPicker";
@@ -185,6 +185,13 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
           </div>
         );
       })}
+
+      {/* 同步来的卡:源码里有控件没认出来,认出的照常画,这里说明其余的在线改不了 */}
+      {paramsPartialText(cardDef) && (
+        <div className="px-3 pt-2 text-[11px] pc-left-muted" data-pc="params-partial">
+          {paramsPartialText(cardDef)}
+        </div>
+      )}
 
       <div className="mt-4 px-3">
         <button

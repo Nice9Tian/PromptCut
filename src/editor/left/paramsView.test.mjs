@@ -6,6 +6,7 @@
  *   PV-02 画不出控件时的文案:同步卡源码里有控件却一个都没认出来 → 「在线浏览器模式暂不支持修改这张卡的参数…」;
  *         真没有控件 →「这张卡没有可调参数」;有控件 → null
  *   PV-03 副标题:第一个文字控件的当前值 → 默认值 → 说明
+ *   PV-04 只认出一部分控件:认出的照常画,下面一行「在线浏览器模式暂不支持修改这张卡的其余参数…」
  */
 import { srcUrl } from "../../testing/registerTs.mjs";
 import test from "node:test";
@@ -41,4 +42,15 @@ test("PV-03 副标题", () => {
   assert.equal(V.clipSubtitleOf({ ...view, defaults: {} }, {}), "说明");
   assert.equal(V.clipSubtitleOf({ name: "s", defaults: {}, controls: [] }, {}), "");
   assert.equal(V.clipSubtitleOf(undefined, {}), "");
+});
+
+test("PV-04 只认出一部分控件:照常画认出的,下面一行提示其余参数在线改不了", () => {
+  const partial = { name: "s", defaults: {}, controls: [{ key: "t", label: "t", type: "text" }], controlsIncomplete: true };
+  assert.equal(V.paramsPartialText(partial), P.onlineUnsupported("修改这张卡的其余参数"));
+  assert.equal(V.paramsPartialText(partial), "在线浏览器模式暂不支持修改这张卡的其余参数，请在电脑上的 PromptCut 里使用。");
+  assert.equal(V.paramsEmptyText(partial), null, "认出的照常画");
+  assert.equal(V.paramsPartialText({ ...partial, controlsIncomplete: false }), null, "全认出:不提示");
+  assert.equal(V.paramsPartialText({ ...partial, controls: [] }), null, "一个都没认出:走空态那句,不重复提示");
+  assert.equal(V.paramsPartialText({ name: "b", defaults: {}, controls: [{ key: "t", label: "t", type: "text" }] }), null, "能跑的定义");
+  assert.equal(V.paramsPartialText(undefined), null);
 });
