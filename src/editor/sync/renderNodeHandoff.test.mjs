@@ -1,5 +1,5 @@
 /**
- * 桌面应用自动成为共享项目的渲染节点:页面一侧(`renderNodeHandoff.ts`)。报告 `docs/reports/AGENT-desktop-auto-node.md`。
+ * 桌面应用自动成为共享项目的渲染节点:页面一侧(`renderNodeHandoff.ts`)。报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`。
  * 跑:node --test src/editor/sync/renderNodeHandoff.test.mjs
  *
  *   RNH-01 接上共享项目:等本页面挑到素材服务再交(带素材基址与本页面签的 render 票据);同一个项目重复接不再交

@@ -22,7 +22,7 @@
  * 对注入接口的每次等待都和中止信号赛跑(`untilAborted`):执行器或产物库不理会中止、一直不返回,这次执行也会在
  * 中止时落定(`settled()` 不会被卡死的执行器拖住),之后它再返回什么都被丢弃。
  *
- * # 阶段与收尾事件的诊断(`docs/reports/AGENT-stall-phases.md`)
+ * # 阶段与收尾事件的诊断(`docs/archive/agent-reports/AGENT-stall-phases.md`)
  *
  * 每次执行记它此刻在哪个阶段:`dedup`(`sink.has`)、`manifest`(`sink.resultFor`)、`render`(`executor.render`)、
  * `push`(`sink.put`)、`plan`(切分)。执行器与产物库可以经多给的回调报细一层的位置(执行器的第二个参数里

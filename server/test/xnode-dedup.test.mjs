@@ -1,6 +1,6 @@
 /**
  * 跨节点去重:文档服务重启后,别的节点做完、两档都已在素材服务里的一段,被另一个节点领到时走去重完成
- * (`docs/reports/AGENT-xnode-dedup.md`;语义 `mechanism/document-service.md`「渲染任务队列」:「已经在素材服务里的结果不用重做」;
+ * (`docs/archive/agent-reports/AGENT-xnode-dedup.md`;语义 `mechanism/document-service.md`「渲染任务队列」:「已经在素材服务里的结果不用重做」;
  * `product/rendering.md`「两档」:渲染节点产出原尺寸后一并生成小尺寸,两档都推送到素材服务)。
  * 跑:node --experimental-test-module-mocks --test server/test/xnode-dedup.test.mjs
  *

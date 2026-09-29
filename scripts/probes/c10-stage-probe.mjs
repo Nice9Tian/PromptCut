@@ -1,4 +1,4 @@
-// C10 其余（在线浏览器模式 L1 后台舞台 / L2 页面内快照库）的可行性探针。报告：docs/reports/AGENT-c10-probe.md。
+// C10 其余（在线浏览器模式 L1 后台舞台 / L2 页面内快照库）的可行性探针。报告：docs/archive/agent-reports/AGENT-c10-probe.md。
 //
 // 四组实验，全部用 puppeteer 自带的 Chrome，自起静态服务（端口段 --port-base 起 10 个，缺省 5420～5429）：
 //
@@ -372,7 +372,7 @@ async function runP1() {
 
 async function runCalibrate() {
   // --ids：每个粒子带 id（p0、p1…），量整场景 id 改名的代价；sceneHash 是最后一帧整场景 html 的 FNV-1a，
-  // 改动前后对照输出是否逐字节相同（docs/reports/AGENT-snapshot-ids.md）
+  // 改动前后对照输出是否逐字节相同（docs/archive/agent-reports/AGENT-snapshot-ids.md）
   const IDS = process.argv.includes('--ids');
   const SNAP = await buildSnap();
   const servers = await startStatic(SNAP);

@@ -6,7 +6,7 @@
  * （`claude/rq-m7-queue`、以后的页面节点分支）。
  *
  * 契约没写死的模块路径、函数名、参数与回包形状全部集中在本文件，集成时对账只改这里，不改判据。
- * 每一处假设用「K<n>」标出，报告 `docs/reports/AGENT-rq-m7-tests.md` 按同样的编号列出。
+ * 每一处假设用「K<n>」标出，报告 `docs/archive/agent-reports/AGENT-rq-m7-tests.md` 按同样的编号列出。
  *
  * # 实现不在时怎么办（门）
  *

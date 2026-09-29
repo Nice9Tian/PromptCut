@@ -1,6 +1,6 @@
 /**
  * 桌面应用自动成为共享项目的渲染节点:预渲染进程一侧的状态机(`server/auto-render-node.mjs`)与编辑器进程一侧的中转
- * (`server/render-node-relay.mjs`)。报告 `docs/reports/AGENT-desktop-auto-node.md`。
+ * (`server/render-node-relay.mjs`)。报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`。
  * 跑:node --test server/test/auto-render-node.test.mjs
  *
  *   ARN-01 开关与环境变量:缺省接;PROMPTCUT_AUTO_RENDER_NODE=0 / 无头 / PUSH=0 / host 档 / 环境变量已配节点 不接

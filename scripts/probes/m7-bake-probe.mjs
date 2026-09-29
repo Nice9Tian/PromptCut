@@ -1,6 +1,6 @@
 /**
  * M7 契约第 8 节 P1、P2、P3(`docs/plan/m7-contract.md`):后台舞台为隔离单卡工程逐帧生成快照的节拍与隔离、
- * 生成的快照与桌面预渲染是否一致、`foreignObject` 出小尺寸与桌面 CDP 截图的差别。报告:docs/reports/AGENT-m7-probe.md。
+ * 生成的快照与桌面预渲染是否一致、`foreignObject` 出小尺寸与桌面 CDP 截图的差别。报告:docs/archive/agent-reports/AGENT-m7-probe.md。
  *
  * 舞台一侧要实验分支 `claude/m7-probe-exp` 的改动:`render(t, { jump: true, bake: { from } })` —— 快照趟不按一拍预算截断、
  * 挂载帧也生成快照、本地帧号小于 `from` 的只推不生成(即契约 4.3 的 `bake` RPC 的最小替身)。产品代码没有这个选项。

@@ -1,4 +1,4 @@
-// 预览视频的像素活挪到 worker 线程(`server/bakery/frame-video.mjs`,`docs/reports/AGENT-uc-latency.md`):结果与主线程上做的逐字节相同
+// 预览视频的像素活挪到 worker 线程(`server/bakery/frame-video.mjs`,`docs/archive/agent-reports/AGENT-uc-latency.md`):结果与主线程上做的逐字节相同
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';

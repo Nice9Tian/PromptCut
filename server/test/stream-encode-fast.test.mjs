@@ -1,12 +1,12 @@
 /**
- * 轨道流分段编码提速(`docs/reports/AGENT-perf-encode.md`)的单测:
+ * 轨道流分段编码提速(`docs/archive/agent-reports/AGENT-perf-encode.md`)的单测:
  *   - 新滤镜链与旧写法(`streamFilterIdentity`)送进编码器的 YUV 逐字节相同(yuv420p、nv12 两种尾巴);
  *   - 分段签名里的编码参数哈希不变(盘上已有的分段不作废);
  *   - `endsWithCompleteMfra` 的判定;
  *   - 预先拉起的编码进程:领用后补拉、产出和现拉的逐字节相同、`finish()` 见到 mfra 就交字节;
  *     ffmpeg 出错时照旧报错;关掉开关不留进程。
  *   - 整条命令行(输入端不攒包 + 新滤镜链)编出的 fMP4 与改写前的命令行逐字节相同;帧一到就开工
- *     (`docs/reports/AGENT-perf-encode-2.md`)。
+ *     (`docs/archive/agent-reports/AGENT-perf-encode-2.md`)。
  * 需要 ffmpeg 的几条在没有 ffmpeg 的机器上跳过。
  */
 import { test, after } from 'node:test';

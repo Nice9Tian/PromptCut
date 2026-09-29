@@ -1,4 +1,4 @@
-// 队列细任务一段一趟顺推的判定(`FramePipeline#queueSinglePass`,`docs/reports/AGENT-uc-latency.md`)
+// 队列细任务一段一趟顺推的判定(`FramePipeline#queueSinglePass`,`docs/archive/agent-reports/AGENT-uc-latency.md`)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FramePipeline } from '../frame-pipeline.mjs';

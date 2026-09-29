@@ -1,7 +1,7 @@
 /**
  * 推送只推绑定项目的产物(`server/push-scope.mjs`、`artifact-push.mjs` 的 `scope`),
  * 以及老路径起步时第一次推送就去配置的 / 已登记的素材服务(`server/asset-select.mjs`)。
- * 报告 `docs/reports/AGENT-push-scope.md`。
+ * 报告 `docs/archive/agent-reports/AGENT-push-scope.md`。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

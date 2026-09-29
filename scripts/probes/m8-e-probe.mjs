@@ -1,6 +1,6 @@
 /**
  * M8 端到端编排探针：E1、E2、E3、E4、E6（计划 `docs/plan/m8-plan.md` 第 1 版第 2.1 节、第 2.6 节 C2 / C4、第 4 节第 4 项，
- * 末尾「主会话裁定」D1～D12）。公共件在 `scripts/probes/m8/`（用法见 `docs/reports/AGENT-m8-kit.md` 第 5 节）。
+ * 末尾「主会话裁定」D1～D12）。公共件在 `scripts/probes/m8/`（用法见 `docs/archive/agent-reports/AGENT-m8-kit.md` 第 5 节）。
  *
  * 用到的代号：E1～E6 是任务书第 6 节的端到端用例；J-全完 / J-恰一 / J-纯层 是计划第 2 节开头的三条共用判据
  * （任务全部完成、每个任务恰好一次 `task.done`、没有一层混两种指纹）；D2 = 局域网主机的「素材服务重启」按重启整个编辑器进程算；

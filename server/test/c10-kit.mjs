@@ -5,7 +5,7 @@
  * 与它引的语义；测试方没看实现（`claude/c10-browser`、`claude/c10-ui`，以及还没合入 main 的 C10a、HT-a）。
  *
  * 契约没写死的模块路径、函数名、参数与回包形状全部集中在本文件，集成时对账只改这里，不改判据。
- * 每一处假设用「假设 K<n>」标出，报告 `docs/reports/AGENT-c10-tests.md` 按同样的编号列出。
+ * 每一处假设用「假设 K<n>」标出，报告 `docs/archive/agent-reports/AGENT-c10-tests.md` 按同样的编号列出。
  *
  * # 实现不在时怎么办（门）
  *

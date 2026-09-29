@@ -1,6 +1,6 @@
 /**
  * 预渲染进程里推送、拉取用哪一个素材服务(契约 `docs/plan/render-queue-contract.md` J.13,按 D7 选基址)。
- * 原在 `vite-plugin-frames.ts` 里,为了能单测搬到这里(`docs/reports/AGENT-push-scope.md`)。
+ * 原在 `vite-plugin-frames.ts` 里,为了能单测搬到这里(`docs/archive/agent-reports/AGENT-push-scope.md`)。
  *
  * 顺序:
  *   1. `PROMPTCUT_ASSET_URL`(形如 `http://192.168.50.96:5460/api/asset`);

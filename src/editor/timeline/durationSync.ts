@@ -2,7 +2,7 @@
  * 「播放范围跟着可见内容走」的同步点:内容末尾变了(挪、拉长、删掉最后一段),把总时长对上
  * (`effectiveDuration`,手动截断的上限照旧)。时间轴挂着的时候才做,和以前时间轴里那个 effect 一样。
  *
- * # 为什么不再只靠渲染后的 effect(tiers-probe T4,docs/reports/AGENT-perf-t4.md)
+ * # 为什么不再只靠渲染后的 effect(tiers-probe T4,docs/archive/agent-reports/AGENT-perf-t4.md)
  *
  * 以前是 `TimelineInner` 渲染完在 effect 里 `syncDuration`:挪最后一段 → 整个编辑器按新片段渲一遍 →
  * effect 发现时长不对 → 再改一次项目 → **整个编辑器在同一个任务里又渲一遍**。一次编辑两遍全量重渲,
