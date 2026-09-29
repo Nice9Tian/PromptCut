@@ -655,6 +655,7 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
     const at = now();
     const candidates = units(at, keepMs).filter(unit => !unit.protected).sort((a, b) => a.at - b.at);
     let total = totals().bytes;
+    const before = total;
     let freedBytes = 0, removed = 0, skipped = 0;
     const removedUnits = [], skippedUnits = [];
     for (const unit of candidates) {
@@ -670,7 +671,7 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
       else { removed++; removedUnits.push({ unit: unit.unit, at: unit.at, bytes: result.freed }); }
     }
     lastEvict = { at, freedBytes, removed, skipped, reason };
-    lastEvictDetail = { ...lastEvict, removedUnits, skippedUnits };
+    lastEvictDetail = { ...lastEvict, before, after: total, targetBytes, removedUnits, skippedUnits };
     indexDirty = true;
     if (removed || skipped) log('storage.evict', { reason, freedBytes, removed, skipped, total });
     await saveIndex().catch(() => {});
