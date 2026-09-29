@@ -505,3 +505,22 @@ test('路由:只认三条;回包形状照计划第 4 节;越界 400', async () =
   assert.deepEqual(await call('POST', '/clear-cache'), { status: 200, body: { ok: true, freedBytes: 10, removed: 2, skipped: 1 } });
   assert.deepEqual(await call('GET', '/nope'), { next: true });
 });
+
+test('启动:索引缺失马上重扫(只量不删),第一次判淘汰等宽限期过了才做', async t => {
+  const { root, data } = await tempRoot(t);
+  const clock = Date.now();
+  await makeKey(root, key('s1'), 3000, clock - 5 * HOUR);
+  await makeKey(root, key('s2'), 3000, clock - 4 * HOUR);
+  await writeStorageSettings(data, { frameLibraryCapBytes: 4000 });
+  const m = manager(root, data, { timers: true, startupGraceMs: 300, tickMs: 60 * MIN });
+  await m.start();
+  for (let i = 0; i < 50 && !(await m.summary()).scannedAt; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  const early = await m.summary();
+  assert.ok(early.scannedAt, '重扫马上开始');
+  assert.equal(early.bytes, 6000);
+  assert.equal(await exists(relDir(root, key('s1'))), true, '宽限期内不删');
+  for (let i = 0; i < 100 && !(await m.summary()).lastEvict; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(await exists(relDir(root, key('s1'))), false, '宽限期过了判一次,删最旧的');
+  assert.equal(await exists(relDir(root, key('s2'))), true);
+  await m.close();
+});

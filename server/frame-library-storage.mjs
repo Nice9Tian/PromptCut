@@ -58,6 +58,8 @@ export const PROTECT_MS = 30 * 60 * 1000;
 export const CLEAR_KEEP_MS = 10 * 60 * 1000;
 /** 开着的项目再记一次使用、检查一次要不要淘汰的节拍；检查最多这么频繁 */
 export const TICK_MS = 5 * 60 * 1000;
+/** 启动后第一次判淘汰前等这么久(页面重连、重发 preload,正在打开的项目先记上使用) */
+export const STARTUP_GRACE_MS = 2 * 60 * 1000;
 /** 全量重扫校正字节数的周期 */
 export const CALIBRATE_MS = 24 * 60 * 60 * 1000;
 /** 主进程心跳 */
@@ -339,7 +341,7 @@ export async function listRels(root) {
  */
 export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(), minCapBytes = MIN_CAP_BYTES, evict = true, timers = true,
   tickMs = TICK_MS, protectMs = PROTECT_MS, clearKeepMs = CLEAR_KEEP_MS, calibrateMs = CALIBRATE_MS, flushMs = FLUSH_MS,
-  heartbeatMs = HEARTBEAT_MS, lockStaleMs = LOCK_STALE_MS, pid = process.pid, alive = pidAlive, log = () => {} } = {}) {
+  heartbeatMs = HEARTBEAT_MS, lockStaleMs = LOCK_STALE_MS, startupGraceMs = STARTUP_GRACE_MS, pid = process.pid, alive = pidAlive, log = () => {} } = {}) {
   root = path.resolve(root);
   const storageDir = path.join(root, STORAGE_DIR);
   const indexFile = path.join(root, INDEX_FILE);
@@ -722,10 +724,15 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
     attachPipeline(p) { pipeline = p; if (p) p.usage = api; return api; },
     start() {
       if (started) return started;
-      started = serial(async () => {
-        await becomeOwner();
-        if (!loaded && owner) await loadIndex();
-      }).then(() => { void api.check({ force: true }).catch(() => {}); });
+      started = serial(() => becomeOwner()).then(() => {
+        // 索引缺失:马上开始重扫(只量不删);第一次判淘汰等 `startupGraceMs`,让页面重连、重发 preload,
+        // 正在打开的项目先记上使用 —— 不然用户昨天开着的项目可能在它的 preload 到达之前就被判成最久没用的
+        if (owner && !loaded) void api.rescan('missing-index').catch(() => {});
+        if (!timers) { void api.check({ force: true }).catch(() => {}); return; }
+        const first = setTimeout(() => { void api.check({ force: true }).catch(() => {}); }, startupGraceMs);
+        first.unref?.();
+        handles.push(first);
+      });
       if (timers) {
         const tick = setInterval(() => { touchOpen(); void api.check().catch(() => {}); }, tickMs);
         const beat = setInterval(() => { void heartbeat().catch(() => {}); }, heartbeatMs);
