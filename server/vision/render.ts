@@ -8,6 +8,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { frameService, renderProject } from "../vite-plugin-frames";
 import { postFrame } from "../png-post.mjs";
+import { removeDirWithRetry } from "../storage-leftovers.mjs";
 import { outRoot } from "./http";
 import { runExport } from "./worker-pool";
 import type { RenderJob2, Runner } from "./worker-pool";
@@ -201,7 +202,8 @@ export async function renderFrames(root: string, origin: string, project: any, t
     }
     return out;
   } finally {
-    // 看一眼就够了,不留垃圾;删不掉也不该让这次调用失败
-    fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    // 看一眼就够了,不留垃圾:等删完(Windows 上渲染子进程刚退、文件可能还占着,退避重试);
+    // 还是删不掉也不该让这次调用失败,记一笔,下次启动由 sweepExportRoot 按 pid 清
+    if (!(await removeDirWithRetry(dir))) console.warn(`[vision] 临时导出目录删不掉,留给下次启动清理:${dir}`);
   }
 }

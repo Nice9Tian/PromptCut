@@ -118,7 +118,7 @@ export function ExportDialog(props: {
 
         {state.phase === "done" && (
           <div className="pc-export-ok">
-            视频已保存。其余产物（overlay.mov、逐帧 PNG）在产物目录里；默认导出帧与视频共用 Chrome FrameScene。
+            视频已保存。只含卡片的透明层（overlay.mov）在产物目录里。
           </div>
         )}
 
@@ -126,7 +126,7 @@ export function ExportDialog(props: {
             改成说清楚现场留下了什么 */}
         {state.phase === "cancelled" && (
           <div className="pc-export-ok">
-            渲染已停止。产物目录里可能留有部分帧，重新导出会覆盖它们。
+            渲染已停止。中间文件已清掉；重新导出会另建一个产物目录。
           </div>
         )}
 
