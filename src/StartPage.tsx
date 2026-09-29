@@ -506,7 +506,7 @@ function StorageSection(): JSX.Element {
             : (
               <>
                 <div className="sp-storage-figure">{storageSize(exportBytes)} <span className="sp-muted">· {items.length} 份</span></div>
-                <div className="sp-muted">其中中间文件 {storageSize(exportMid)}，可以只删它们、留下成片与透明层。</div>
+                <div className="sp-muted">{exportMid > 0 ? `其中中间文件 ${storageSize(exportMid)}，可以只删它们、留下成片与透明层。` : "没有中间文件。"}</div>
               </>
             )}
         </div>
