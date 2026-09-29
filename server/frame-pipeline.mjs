@@ -1644,11 +1644,14 @@ export class FramePipeline {
     const jobs = this.smallPending?.splice(0) ?? [];
     if (!jobs.length || this.closed || !this.smallTierEnabled()) return this.whenSmallSettled();
     this.smallChain = (this.smallChain || Promise.resolve()).catch(() => {}).then(async () => {
+      const started = Date.now();
       const renderer = createSmallRenderer(bakery);
       for (const job of jobs) {
         try { await this.writeSmallSnapshots(job, renderer); }
         catch (error) { this.smallStats.failed++; this.smallStats.lastError = String(error?.message ?? error); break; }
       }
+      // 诊断(不改行为):画小尺寸累计用了多久(队列细任务的分段耗时要它)
+      this.smallStats.ms = (this.smallStats.ms ?? 0) + (Date.now() - started);
     });
     return this.smallChain;
   }
@@ -2203,7 +2206,10 @@ export class FramePipeline {
    *   `onBatch` 每批交完调一次 `({ control, first, frames, snapshotFrames })`(进度用)。
    * 不传时逐字节是原来的行为。
    */
-  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null } = {}) {
+  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null, timing = null } = {}) {
+    // 诊断(不改行为):给了 `timing` 就把换页、推帧、入库各花了多久累进去(队列细任务的分段耗时,`prerender-executor.mjs` 记进 executor.render)
+    const clock = timing ? () => Date.now() : null;
+    const add = (k, ms) => { if (timing) timing[k] = (timing[k] ?? 0) + ms; };
     if (!controls) {
       const browserPlan = await this.browserCardPlan(bakery);
       if (!browserPlan) return [];
@@ -2312,10 +2318,14 @@ export class FramePipeline {
         // PNG 那一支照旧要全部帧(`targetFrames` 不动),只有生成快照这一支收窄。
         // R6-14:已经判过超限的那些帧也扣掉,不再白渲一遍
         const missing = target ? localFrames.filter(n => inRange(n) && !rangeHas(index.frames, n) && !rangeHas(index.oversize, n)) : [];
+        const t0 = clock?.();
+        const small0 = timing ? (this.smallStats.ms ?? 0) : 0;
         await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
         await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
+        const t1 = clock?.();
+        if (timing) { add('resetMs', t1 - t0); add('smallMs', (this.smallStats.ms ?? 0) - small0); timing.batches = (timing.batches ?? 0) + 1; }
         const produced = [];
-        await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
+        const baked = await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
           snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
           snapshotFrames: new Set(missing),
           onFrame: async (frame, png) => entry.cardCache.put(control.key, frame, png, () => !signal?.aborted),
@@ -2329,6 +2339,8 @@ export class FramePipeline {
             if (!own || !Number.isInteger(own.frame)) return;
             produced.push({ localFrame: own.frame, html: own.html });
           } });
+        const t2 = clock?.();
+        if (timing) { add('bakeMs', t2 - t1); add('advancedFrames', Number(baked?.advancedFrames) || 0); add('shotFrames', localFrames.length); }
         // 每批(4 帧)交一次(不是每帧):写帧文件、判体积、并 index.json 由快照库一步做(#9)。
         // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);R6-14:帧号记进
         // `oversize`,下一趟跳过。一个键几千帧时,读-改-写一个小 JSON 也比不上批量摊薄。
@@ -2337,14 +2349,21 @@ export class FramePipeline {
           // C3:这一层的区间长了就发一条全量 `layer`
           if (index.written.length) this.publishLayer(entry, control, tier, index.frames);
         }
+        if (timing) add('commitMs', clock() - t2);
         if (onBatch && !signal?.aborted) onBatch({ control, first, frames: localFrames, snapshotFrames: missing });
       }
-      if (!signal?.aborted) await entry.cardCache.finish(control);
+      if (!signal?.aborted) {
+        const f0 = clock?.();
+        await entry.cardCache.finish(control);
+        if (timing) add('finishMs', clock() - f0);
+      }
     }
     // `fillCardControls` shares the background Chrome with the mandatory
     // complete-scene pass. Restore its normal project before snapshot/MOV.
+    const r0 = clock?.();
     await bakery.reset(entry.project, this.emptyUrl(entry.project), { deferCards: true });
     await bakery.page.setViewport({ width: entry.project.width, height: entry.project.height, deviceScaleFactor: this.scaleForLane('background') });
+    if (timing) add('restoreMs', clock() - r0);
     return skipped;
   }
   /**
@@ -2579,22 +2598,30 @@ export class FramePipeline {
    * 这张卡被别的环境锁住(开工前或渲的途中被页面抢了锁)抛 `card-locked-local`(不可重试)。
    * `progress(done)` 报这一段里已经交过的本地帧数。回 `null`:产物在帧库里,sink 自己读。
    */
-  async renderCardSnapshotRange(entry, control, range, { signal, progress } = {}) {
+  async renderCardSnapshotRange(entry, control, range, { signal, progress, timing = null } = {}) {
     const locked = () => Object.assign(new Error(`片段 ${control.clipId} 这张卡锁在别的环境上`), { code: 'card-locked-local', retryable: false });
     if (control.cardLock?.foreign === true) throw locked();
     let done = 0;
+    // 诊断(不改行为):`timing` 给了就记各步用时(排队等 lane、借预渲染间、推帧各项、收尾画小尺寸)
+    const queuedAt = Date.now();
     await this.runQueueTask(async lease => {
+      if (timing) timing.laneWaitMs = Date.now() - queuedAt;
       // c10a 第 9 节:这一段里已有原尺寸、缺小尺寸的帧先记下,借出预渲染间的换页、各批的换页会把它们画掉
       try { await this.scheduleMissingSmall(entry, control, range); } catch { /* 读不了帧库:完成条件那一关会拦下 */ }
+      const l0 = Date.now();
       const bakery = await lease(entry.project);
+      if (timing) timing.leaseMs = Date.now() - l0;
       await this.fillCardControls(entry, bakery, signal, [control], {
         range,
+        timing,
         onBatch: ({ frames }) => {
           done += frames.filter(n => n >= range.from && n <= range.to).length;
           try { progress?.(done); } catch { /* 进度回调出错不影响渲染 */ }
         },
       });
+      const s0 = Date.now();
       if (!signal?.aborted) await this.flushPendingSmall(bakery, entry.project);
+      if (timing) timing.flushSmallMs = Date.now() - s0;
     }, signal);
     if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
     if (control.cardLock?.foreign === true) throw locked();

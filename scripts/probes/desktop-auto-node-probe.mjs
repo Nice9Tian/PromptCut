@@ -123,6 +123,8 @@ function pidOnPort(port) {
 
 let combo = null;
 const proxies = [];
+/** 代理上升级过的连接(两头的 socket),收尾时一起掐掉 */
+const upgraded = new Set();
 let DIST = null;
 async function startLocalSite() {
   for (const p of [PORTS.site, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
@@ -182,6 +184,8 @@ async function startLocalSite() {
       const url = new URL(req.url, origin);
       if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
       const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
+      upgraded.add(socket);
+      socket.on('close', () => upgraded.delete(socket));
       const up = net.connect(PORTS.doc, '127.0.0.1', () => {
         const lines = [`${req.method} ${target} HTTP/1.1`];
         for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
@@ -190,6 +194,9 @@ async function startLocalSite() {
         up.pipe(socket);
         socket.pipe(up);
       });
+      upgraded.add(up);
+      up.on('close', () => { upgraded.delete(up); socket.destroy(); });
+      socket.on('close', () => up.destroy());
       up.on('error', () => socket.destroy());
       socket.on('error', () => up.destroy());
     });
@@ -237,7 +244,8 @@ async function startDesktop({ autoOff, name }) {
   const keep = (c) => {
     const lines = (partial + c.toString()).split(/\r?\n/);
     partial = lines.pop();
-    for (const line of lines) { log.push(line); if (log.length > 20000) log.shift(); }
+    // 行首带收到的时刻(`@<毫秒>`),分段耗时据此拼;找行的正则不锚行首,解析 JSON 从第一个 `{` 起,不受影响
+    for (const line of lines) { log.push(`@${Date.now()} ${line}`); if (log.length > 20000) log.shift(); }
   };
   child.stdout.on('data', keep);
   child.stderr.on('data', keep);
@@ -561,8 +569,12 @@ try {
     const joined = await member.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 90_000 }).then(() => true, () => false);
     if (!check(joined, 'A3:在线页面凭邀请进入', { message: await textOf(member, '[data-pc="join-message"]') })) throw new Error('在线页面没进去');
     await until('A3:在线页面测完', async () => !(await P(member, () => !!document.querySelector('[data-pc="probe-gate"]'))) && (await previewDiag(member))?.dual !== undefined, 300_000, 500);
+    const a3Marks = { joined: Date.now() - t3 };
     const firstU1 = { stage: await clipStage(member, state.u1), badge: await clipBadge(member, state.u1) };
     const u1 = await until('A3:在线页面贴出 U1 的层(没有图标与徽标)', () => onlinePasted(member, state.u1, 1), 900_000, 4000);
+    a3Marks.pasted = Date.now() - t3;
+    a3Marks.firstPlanAt = ((await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null))?.log ?? []).find((x) => x.ok)?.at ?? null;
+    if (a3Marks.firstPlanAt) a3Marks.firstPlanAt -= t3;
     await shot(member, 'a3-online-u1');
     check(!!u1, 'A3:在线页面贴出用户卡 U1 的层,没有「需要本地 PC 渲染辅助」', { u1, firstU1, last: { stage: await clipStage(member, state.u1), badge: await clipBadge(member, state.u1), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.u1) ?? null } });
     const u1Cloud = await until('A2:云端层表里 U1 那一层齐、字节在云端', () => layerCovered(conn, state.docId, state.u1), 120_000, 3000);
@@ -573,7 +585,7 @@ try {
     // 核对:节点报的代码版本 = 在线构建嵌的那一个
     const cvOk = await onlineBuildHas(state.nodeSummary.codeVersion).catch(() => false);
     check(cvOk, '核对:渲染节点报的代码版本就是在线构建嵌进页面的那一个(requires.codeVersion)', { node: String(state.nodeSummary.codeVersion).slice(0, 16) });
-    out.steps.a3 = { ms: Date.now() - t3, firstU1, u1, u1Cloud, ids: { desktop: state.docId, member: memberDocId, tenant: state.projectId }, codeVersionInOnlineBuild: cvOk };
+    out.steps.a3 = { ms: Date.now() - t3, marks: a3Marks, firstU1, u1, u1Cloud, ids: { desktop: state.docId, member: memberDocId, tenant: state.projectId }, codeVersionInOnlineBuild: cvOk };
     say('a3.done', out.steps.a3);
 
     /* ---------------------------------------------------------------- A4. 桌面页面关掉;在线页面把 U2 改成新内容,清单计划由这台桌面认领并完成 */
@@ -586,6 +598,8 @@ try {
     // U2 改之前那一层的结果键:改完之后要等一层新的(不同的结果键),免得把旧内容的层当成贴上了
     const u2Old = await until('A4:改之前 U2 已有一层(在线计划渲的)', () => layerCovered(conn, state.docId, state.u2), 600_000, 3000);
     const oldKey = u2Old?.fullResultKey ?? null;
+    // 分段计时(毫秒,相对「在线页面改 U2」那一刻):planPublishedAt 是页面记的发布成功时刻,其余是探针看到的时刻(按各自的轮询间隔有滞后)
+    const marks = { start: t4, u2OldSeen: Date.now(), edit: Date.now() };
     await P(member, (spec) => { const s = window.__pcStore; s.actions.setClipParams(spec.id, { text: spec.text }); s.actions.seek(1); }, { id: state.u2, text: `U2 新内容 ${RUN}` });
     await delay(1500);
     const firstU2 = { stage: await clipStage(member, state.u2), badge: await clipBadge(member, state.u2) };
@@ -595,24 +609,32 @@ try {
       return d?.last && d.last !== before?.last && d.lastClips?.includes(state.u2) ? d : null;
     }, 120_000, 1000);
     const planId = plan?.last ?? null;
+    marks.planSeen = Date.now();
+    marks.planPublishedAt = [...(plan?.log ?? [])].reverse().find((x) => x.id === planId && x.ok)?.at ?? null;
     const claimed = await until('A4:这台桌面的节点认领并切分了在线页面的那个计划', async () => {
       const q = (await dDiag())?.queue;
       const inClaims = q?.claims?.some((c) => c.id === planId);
       const split = q?.plans && Object.prototype.hasOwnProperty.call(q.plans, planId);
       return inClaims && split ? { derived: q.plans[planId], completed: q.local?.completed ?? [] } : null;
     }, 600_000, 2000);
+    marks.claimedSeen = Date.now();
     check(!!claimed, 'A4:在线页面发布的清单计划被这台桌面的节点认领、切分', { planId, claimed: !!claimed });
     const u2Cloud = await until('A4:云端层表里 U2 换成新内容那一层(结果键变了)、各段齐、字节在云端', () => layerCovered(conn, state.docId, state.u2, { notResultKey: oldKey }), 900_000, 3000);
+    marks.cloudLayerSeen = Date.now();
     check(!!u2Cloud && !!oldKey, 'A4:U2 的新内容由这台桌面渲出、推到云端、写进层表', { oldKey: oldKey?.slice(0, 16), u2Cloud });
     const u2 = await until('A4:在线页面贴上 U2 的新内容', () => onlinePasted(member, state.u2, 1, { notResultKey: oldKey }), 900_000, 4000);
+    marks.pastedSeen = Date.now();
     await shot(member, 'a4-online-u2-after');
     check(!!u2, 'A4:在线页面随之贴上 U2(没有图标与徽标)', { u2, firstU2, last: { stage: await clipStage(member, state.u2), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.u2) ?? null } });
     const q4 = (await dDiag())?.queue;
     const derived = Array.isArray(q4?.plans?.[planId]) ? q4.plans[planId] : [];
     const doneByDesktop = derived.filter((id) => q4?.local?.completed?.includes(id) || q4?.local?.dedup?.includes(id));
     check(derived.length === 0 || doneByDesktop.length > 0, 'A4:那个计划切出的细任务由这台桌面完成', { derived: derived.length, doneByDesktop: doneByDesktop.length });
-    out.steps.a4 = { ms: Date.now() - t4, planId, firstU2, oldKey: oldKey?.slice(0, 16), u2Cloud, derived: derived.length, doneByDesktop: doneByDesktop.length, u2, pageGoneNodes: qGone?.nodes?.map((n) => n.projectId) };
+    const rel = Object.fromEntries(Object.entries(marks).map(([k, v]) => [k, typeof v === 'number' ? v - marks.edit : null]));
+    out.steps.a4 = { ms: Date.now() - t4, editToPastedMs: marks.pastedSeen - marks.edit, marks: rel, marksAbs: marks, planId, firstU2, oldKey: oldKey?.slice(0, 16), u2Cloud, derived: derived.length, doneByDesktop: doneByDesktop.length, u2, pageGoneNodes: qGone?.nodes?.map((n) => n.projectId) };
     say('a4.done', out.steps.a4);
+    // 分段耗时的原始材料:预渲染进程的队列诊断(事件里有 executor.render-timing)
+    try { fs.writeFileSync(path.join(OUT, 'a4-diag.json'), JSON.stringify(await dDiag(), null, 1)); } catch { /* 取不到 */ }
 
     /* ---------------------------------------------------------------- A5. 桌面页面回来(刷新后回到共享项目),再离开:节点撤掉 */
     const t5 = Date.now();
@@ -685,12 +707,18 @@ try {
   const deleted = [];
   for (const p of projects) {
     if (KEEP_PROJECT) { deleted.push({ projectId: p.projectId, kept: true }); continue; }
-    deleted.push({ projectId: p.projectId, result: await adminDelete(p.projectId, p.creator).catch((err) => `error:${String(err?.message ?? err).slice(0, 80)}`) });
+    deleted.push({ projectId: p.projectId, result: await Promise.race([
+      adminDelete(p.projectId, p.creator).catch((err) => `error:${String(err?.message ?? err).slice(0, 80)}`),
+      delay(20_000).then(() => 'timeout'),
+    ]) });
   }
   try { await browser?.close(); } catch { /* 已关 */ }
   await stopDesktop().catch(() => {});
-  for (const s of proxies) await new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); });
-  try { await combo?.close(); } catch { /* 已关 */ }
+  // 升级过的 WebSocket 连接不归 http 服务器管,close 的回调会一直等它们:先全部掐掉,再限时等(以前会在这里挂住、不出结果行)
+  for (const sock of upgraded) { try { sock.destroy(); } catch { /* 已断 */ } }
+  const within = (p, ms) => Promise.race([p, delay(ms)]);
+  for (const s of proxies) await within(new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); }), 5000);
+  try { await within(combo?.close(), 10_000); } catch { /* 已关 */ }
   out.cleanup = { deleted, listening: [PORTS.site, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset, PORTS.desktop, PORTS.desktop + 1, PORTS.desktop + 2].filter((p) => pidOnPort(p)) };
   if (!KEEP) {
     for (const d of fs.readdirSync(TMP)) {
