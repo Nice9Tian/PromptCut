@@ -16,7 +16,8 @@
 | `6cc8aade` | 任务 D |
 | `8a34ff80` | 任务 E |
 | `0d09583b` | 任务 F |
-| （本报告的最后一次提交） | 报告定稿 |
+| `2137950c` | 报告初稿 |
+| （本报告的最后一次提交） | 报告定稿（探针结果） |
 
 ## 任务 D：页面只是忙，不被 D2 接手
 
@@ -139,11 +140,15 @@
 | 全量测试 | `npm test` | 3990 条：3987 过、0 失败、2 跳过、1 cancelled（`C66-I2-01`：60 s 超时，机器忙，ffmpeg 转码 82 s）；该文件单独重跑 `node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/c66-integ.test.mjs` 6/6 过（`C66-I2-01` 405 ms）。main 上 3963 条，多出的 27 条是本分支新增 |
 | 代码指纹 | `node -e "import('./server/frame-code.mjs')…"` | `00a5264bf8a062ff6e0b5ed0516cccd1 86e443cb6fa838aef64788af6822fd68`，不变；`server/bakery/`、快照代码文件 0 改动 |
 | 在线构建 | `npx vite build --mode online --outDir out/dist-online` | 退出码 0 |
-| 探针 | `node scripts/probes/m7-browser-probe.mjs --role all --base-port 5710 --dist out/dist-online` | 见下 |
-| 探针 | `node scripts/probes/desktop-auto-node-probe.mjs --dist out/dist-online --base-port 5710 --skip-off` | 见下 |
+| 探针 | `PROMPTCUT_NO_PORT_FILE=1 node scripts/probes/m7-browser-probe.mjs --role all --base-port 5710 --dist out/dist-online` | 第 1 次：node 角色页面导航 180 s 超时（暂时性故障，机器忙），一项没走到；退避 60 s 重跑。第 2 次（run `mun3z68y968d`）：`fails []`，creator / node 退出码都是 3（没有失败、只有待定）。M7-A1、A2、A3、A6、A7、A8、A9、A10、A11、D9、D10、D14、D1-D2-D12 全过；待定的只有带耗时门槛的项与跨机：A4 `page-within-30s`（参考判定 pass，最差 23.8 s）、A5 `page-resume-after-500ms`（参考判定 pass，634 ms 后恢复、500 ms 内 0 次认领）、A12 两项长任务、W7 cross-machine 与笔记本计时。bakeMs p50 100 / p95 146（180 帧）。同 M7 最终一轮的形状（`REPORT-M7.md` 第 5 节） |
+| 探针 | `PROMPTCUT_NO_PORT_FILE=1 node scripts/probes/desktop-auto-node-probe.mjs --dist out/dist-online --base-port 5710 --skip-off` | 退出码 0，`ok: true`、`fails []`；A1 3.1 s、A2 7.8 s、A7 457 s（泄漏 0、挡掉 108 段）、A3 79 s、A4 31 s、A5 3.5 s |
+| 进程 | 探针结束后查 5710～5719 的监听 | 无残留 |
 
-（探针结果待补。）
+带耗时门槛的项（A4 的 30 s、A5 的 500 ms、A12）在 PC 上只作参考，且跑时机器忙；按 `verification.md` 以笔记本为准，交主会话在空闲机器上判。
 
 ## 没做成的
 
-（待补。）
+- 真页面上没有直接看到 `node.active` 的线上消息：两个探针都不读这个计数（`debug().counters.active`、`__pcBrowserNode().stage.restage` 是本分支新加的），也不留 WebSocket 帧。行为由单测（QM-D、QM-D-P，含进程内真队列 + 真切分方）证；要在真页面上看，可在 `m7-node-adapter.mjs` 里读 `counters.active` 与 `stage.restage`，属探针改动，本分支没动。
+- 任务 D 里播放、拖动不算忙（见「取舍」），是否也算由主会话定。
+- `stageJobs.ts` 补跑与互换之间的窗口（见任务 F「没改的」）没改。
+- G0-R 按任务书不跑。
