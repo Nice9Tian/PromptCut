@@ -856,9 +856,13 @@ export const EXPORT_DELIVERABLES = ['preview.mp4', 'overlay.mov'];
 /** 留着给列表显示所属项目用，不算中间文件 */
 export const EXPORT_KEEP = ['project.json'];
 
-/** 导出目录下的一份导出：`export-<时刻>`（可带同秒重名后缀），不含视觉工具的 `export-vision-*` */
+/**
+ * 导出目录下的一份导出：`export-YYYYMMDD-HHMMSS`，可带同秒重名后缀 `-n`；视觉工具的 `export-vision-*` 自然不匹配。
+ * 与界面那一支 `server/exports-list.mjs` 的 `summarizeExports` 同一套规则（合并时改成直接引它）。
+ */
+export const EXPORT_DIR_NAME = /^export-\d{8}-\d{6}(?:-\d+)?$/;
 export function isExportDirName(name) {
-  return typeof name === 'string' && name.startsWith('export-') && !name.startsWith('export-vision-') && !name.includes('..');
+  return typeof name === 'string' && EXPORT_DIR_NAME.test(name);
 }
 
 /** `{ bytes, count, intermediateBytes }`。只进真目录，链接不进 */

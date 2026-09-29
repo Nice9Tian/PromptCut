@@ -445,6 +445,8 @@ test('导出汇总:总字节、份数、中间文件(成片、透明层、projec
   assert.deepEqual(summary, { bytes: 1605, count: 2, intermediateBytes: 1300 });
   assert.equal(isExportDirName('export-vision-1'), false);
   assert.equal(isExportDirName('export-20260101-000000'), true);
+  assert.equal(isExportDirName('export-20260101-000000-12'), true);
+  for (const bad of ['export-foo', 'export-20260101-000000-x', 'export-2026-01-01', 'export-20260101-000000/..', 'xexport-20260101-000000']) assert.equal(isExportDirName(bad), false, bad);
   assert.deepEqual(await summarizeExports(path.join(dir, 'none')), { bytes: 0, count: 0, intermediateBytes: 0 });
 });
 
