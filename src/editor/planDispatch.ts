@@ -28,7 +28,7 @@ import type { StageRole } from "../render/stageRpc";
 import { wirePlan } from "../render/wirePlan";
 import { clipIdentityOf } from "./costIdentity";
 import { frontStage, backStage } from "./stageBridge";
-import { onSyncedUserCardsChanged } from "../kernel/registry";
+import { onCardsUpdated, onSyncedUserCardsChanged, unknownCardClipIds } from "../kernel/registry";
 
 let project: Project | null = null;
 let costs: CardCostRecord[] = [];
@@ -84,8 +84,20 @@ function recompute(): void {
   const { identityKeys, frameModes } = clipIdentityOf(project);
   const fps = Math.max(1, project.fps || 30);
   const dead = deadMs !== null ? { deadMs } : {};
-  plan = planPipelines(project, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}), ...dead });
-  judged = lowMemory ? planPipelines(project, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [], ...dead }) : plan;
+  /*
+   * 两边都没有定义的卡片段(未知卡片)舞台不画:不当重卡、不进预渲染集合(桌面与在线一致;`knownCardsOnly`)。
+   * 不去掉的话它们没有身份、没有成本记录,会按声明兜底判重,进清单计划与低内存档补渲。
+   */
+  const planned = knownCardsOnly(project);
+  plan = planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}), ...dead });
+  judged = lowMemory ? planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [], ...dead }) : plan;
+}
+
+/** 去掉未知卡片段的项目(只给 `planPipelines` 看;没有未知卡片时原样回同一个对象) */
+export function knownCardsOnly(p: Project): Project {
+  const unknown = unknownCardClipIds(p.tracks.flatMap((tr) => tr.clips));
+  if (!unknown.size) return p;
+  return { ...p, tracks: p.tracks.map((tr) => ({ ...tr, clips: tr.clips.filter((c) => !unknown.has(c.id)) })) };
 }
 
 /**
@@ -127,6 +139,8 @@ function schedule(): void {
  * 不给它们身份),所以重算重发一次。桌面不设这张表,永远不触发。
  */
 onSyncedUserCardsChanged(() => schedule());
+/* 卡片代码换了(热更新装上新卡):原来的未知卡片可能认得了,要重新进表 */
+onCardsUpdated(() => schedule());
 
 /** 项目变了（`ProbeGate` 的 effect 里叫）。引用没变就什么都不做 */
 export function setPlanProject(next: Project | null): void {

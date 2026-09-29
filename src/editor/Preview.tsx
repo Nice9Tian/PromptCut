@@ -39,7 +39,9 @@ import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscri
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
 import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
 import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
-import { setCoverageSource } from "./onlineCoverage";
+import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
+import { setCoverageSource, subscribeCoverage } from "./onlineCoverage";
+import { localOnlyMissingAt } from "./localOnlyMissing";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
 import { lowMemoryMeasuring, lowMemorySearchState, reclassify, runLowMemorySearch, type LowMemorySearchOutcome } from "./lowMemorySearch";
 import { LowMemoryGate } from "./LowMemoryGate";
@@ -56,7 +58,7 @@ import { createPlanPublisher } from "../online/planPublisher";
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { onCostRecords, onProbeProgress, probeFrameDiag, probeSettledFor, setCostBackend } from "./probeRunner";
+import { onCostRecords, onProbeProgress, probeFrameDiag, probeRunDiag, probeSettledFor, setCostBackend } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
@@ -176,6 +178,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const scale = cam.scale;
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
+  /** 每台舞台上一次收到的「已确认没有结果」的片段(`setLocalOnlyMissing`,按 id 排好、用 `|` 连起来);变了才发 */
+  const missingSentRef = useRef<Partial<Record<StageId, string>>>({});
+  /** 按当前时刻重算并发出(真身在在线来源那段 effect 下面定义;握手时也叫) */
+  const pushMissingRef = useRef<() => void>(() => {});
   const camRef = useRef(cam);
   camRef.current = cam;
   /**
@@ -601,8 +607,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         if (ONLINE) void pushMediaPolicyRef.current();
         // C10 契约第 9 节:内容库同步来的用户卡(本机跑不了)交给这一台舞台;桌面运行环境不发
         if (ONLINE) void client.setSyncedUserCards([...syncedUserCards().values()]).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
-        // 在线浏览器模式:预览缩放倍数交给舞台,「需要本地 PC 渲染辅助」图标据此反向放大;桌面不发
-        if (onlineBrowserMode()) void client.setViewScale(scaleRef.current).catch(() => { /* 同上 */ });
+        // 预览缩放倍数交给舞台:占位符(沙漏、「需要本地 PC 渲染辅助」图标)据此补偿,屏幕上看得清;桌面与在线都发
+        void client.setViewScale(scaleRef.current).catch(() => { /* 同上 */ });
+        // 在线浏览器模式:已确认此刻没有可贴结果的「本机跑不了」的片段(其余显示沙漏;刚打开页面时不闪图标)
+        if (onlineBrowserMode()) { missingSentRef.current[id] = undefined; pushMissingRef.current(); }
         // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
         if (role === "front") setStageReady((n) => n + 1);
         return;
@@ -832,7 +840,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   useEffect(() => {
     if (!online) return;
-    const sources = new OnlineCardSources({ request: docRequest, linkKey: () => (hasDocLink() ? currentSharedLink() : null) });
+    /*
+     * 测量等卡片源码第一次同步完再开始(`measureGate.ts`):在那之前同步卡被当成未知 id,后台舞台可能把它测一次。
+     * 第一次同步有了结果(成功或失败)就开门;最多等 `MEASURE_GATE_MAX_MS`。桌面不关这道门。
+     */
+    const linkKey = () => (hasDocLink() ? currentSharedLink() : null);
+    // 门按连接算:换了项目 / 连接,问门时重新关上,等新连接的卡片源码同步完(`measureGate.ts`)
+    setMeasureGateLink(linkKey);
+    holdMeasureForCardSources();
+    const sources = new OnlineCardSources({
+      request: docRequest, linkKey,
+      onFirstSettled: (ok, link) => releaseMeasureGate(ok, link),
+    });
     const push = () => {
       const entries = [...syncedUserCards().values()];
       for (const id of STAGE_IDS) {
@@ -849,16 +868,45 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     return () => { window.clearInterval(timer); offChange(); sources.stop(); delete w.__pcCardSources; delete w.__pcCardSourcesSync; };
   }, [online]);
   /*
-   * 在线浏览器模式:预览缩放倍数变了,发给两个舞台(「需要本地 PC 渲染辅助」图标按它反向放大,屏幕上看得清)。
-   * 握手时另发一次(见 `pc-stage-ready` 那段)。桌面不发。
+   * 预览缩放倍数变了,发给两个舞台(占位符据此补偿:沙漏在屏幕上保持原大小,「需要本地 PC 渲染辅助」图标看得清)。
+   * 握手时另发一次(见 `pc-stage-ready` 那段)。桌面与在线都发。
    */
   useEffect(() => {
-    if (!onlineBrowserMode()) return;
     for (const id of STAGE_IDS) {
       const c = rpcRef.current[id];
       if (c) void c.setViewScale(scale).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
     }
   }, [scale]);
+  /*
+   * C10 契约第 9 节(刚打开页面不闪图标):这台设备跑不了的片段贴不上快照 / 流时,只有父页已确认这一帧没有可贴的结果
+   * (层表已取到、没有可用的层;或这一帧所在那一段的清单已取到、这一帧不在里面)才显示「需要本地 PC 渲染辅助」图标,
+   * 其余显示沙漏。这里按当前时刻算出「已确认」的那几张(`localOnlyMissing.ts`),变了才发给两个舞台。
+   * 时刻、项目、层表与清单(覆盖订阅)、同步表变了都重算;桌面(模式关着)什么都不发。
+   */
+  pushMissingRef.current = () => {
+    if (!onlineBrowserMode()) return;
+    const p = getState().project;
+    const src = onlineSourceRef.current;
+    const ids = localOnlyMissingAt({
+      clips: p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips),
+      t: tRef.current, fps: p.fps || 30, localOnly: localOnlyOf(p),
+      confirm: src ? (clipId, localFrame) => src.frameConfirmedMissing(clipId, localFrame) : null,
+    });
+    const key = ids.join("|");
+    for (const id of STAGE_IDS) {
+      const c = rpcRef.current[id];
+      if (!c || missingSentRef.current[id] === key) continue;
+      missingSentRef.current[id] = key;
+      void c.setLocalOnlyMissing(ids).catch(() => { missingSentRef.current[id] = undefined; });
+    }
+  };
+  useEffect(() => { pushMissingRef.current(); }, [t, project, online, lowMem]);
+  useEffect(() => {
+    if (!onlineBrowserMode()) return;
+    const offCoverage = subscribeCoverage(() => pushMissingRef.current());
+    const offSynced = onSyncedUserCardsChanged(() => pushMissingRef.current());
+    return () => { offCoverage(); offSynced(); };
+  }, [online]);
   /*
    * C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上。
    * M7 D12:task.done 的结果键认定活着、task.failed { error: 'superseded' } 是另一份活着(不是失败),在线来源据此选层表 v 3 的候选。
@@ -988,6 +1036,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined);
     const tick = async () => {
       if (disposed) return;
+      // 测量等卡片源码第一次同步完(`measureGate.ts`):同步卡在那之前是未知 id,不能被当成普通卡去测
+      if (!measureGateOpen()) return;
       const shared = currentSharedLink();
       const projectId = currentDocProjectId();
       const s = frontStage();
@@ -1193,6 +1243,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       beatSwap: beatSwapDebug(),
       backWork: backWorkDiag(),
       probeFrames: probeFrameDiag(),
+      // 常驻探针测过哪些片段、测量门什么时候开的(online-user-cards-probe 核对同步卡从没被测过)
+      probeRun: probeRunDiag(),
+      measureGate: measureGateDiag(),
       hostCaps: { ...hostCapsRef.current },
       snapshotFeed: snapshotFeedDebug({ project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current }),
     });

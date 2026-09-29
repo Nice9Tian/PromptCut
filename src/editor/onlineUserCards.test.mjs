@@ -2,7 +2,9 @@
  * 在线浏览器模式下这台设备跑不了的卡(用户卡、图卡、内容库同步来的用户卡)在父页一侧的判定(C10 契约第 9 节,2026-09-29 用户改语义)。
  * 跑:node --experimental-test-module-mocks --test src/editor/onlineUserCards.test.mjs
  *
- *   OU-01 `clipIdentityOf`:在线时不给它们身份(不测、查不到旧成本记录、查不到声明的帧模式);桌面照旧;同步表变了跟着变
+ *   OU-01 `clipIdentityOf`:在线时不给它们身份(不测、查不到旧成本记录、查不到声明的帧模式);桌面照旧;同步表变了跟着变;
+ *         两边都没有定义的未知卡片桌面与在线都不给身份
+ *   OU-05 未知卡片:不测、不当重卡、不进预渲染集合(桌面与在线一致);定义到了(热更新 / 同步到了)就照常进表
  *   OU-02 `planDispatch`:它们一律判重、进预渲染集合(页面发布的清单计划据此含它们),哪怕 L2 里留着判轻的旧记录;
  *         同步表后到也重算;没有定义的同步卡不让算表崩
  *   OU-03 时间轴:标签依次取构建时名字 → 同步名字 →「未知卡片」;徽标只在「在线、本机跑不了、没覆盖整段」三者同时成立时出
@@ -44,12 +46,15 @@ test("OU-01 clipIdentityOf:在线时这台设备跑不了的卡没有身份;桌�
   const p = project();
   try {
     const desk = CI.clipIdentityOf(p);
-    for (const id of ["b", "u", "s", "x"]) assert.ok(desk.identityKeys[id], `桌面:${id} 有身份`);
+    for (const id of ["b", "u"]) assert.ok(desk.identityKeys[id], `桌面:${id} 有身份`);
+    for (const id of ["s", "x"]) assert.equal(desk.identityKeys[id], undefined, `桌面:${id} 两边都没有定义(未知卡片),不给身份、不测`);
     assert.ok(desk.frameModes.b && desk.frameModes.u);
     H.setOnlineBrowserMode(true);
     const on1 = CI.clipIdentityOf(p);
     assert.notEqual(on1, desk, "模式变了不用旧的记忆");
-    assert.ok(on1.identityKeys.b && on1.identityKeys.s && on1.identityKeys.x, "同步表还没到:s 还是未知卡片,照旧有身份");
+    assert.ok(on1.identityKeys.b, "内置卡照旧有身份");
+    assert.equal(on1.identityKeys.s, undefined, "同步表还没到:s 还是未知卡片,不给身份(不测)");
+    assert.equal(on1.identityKeys.x, undefined, "未知卡片不给身份");
     assert.equal(on1.identityKeys.u, undefined, "构建时的用户卡:没有身份");
     assert.equal(on1.identityKeys.g, undefined, "图卡:没有身份");
     assert.equal(on1.frameModes.u, undefined, "也没有声明的帧模式(否则 direct 会判轻)");
@@ -57,7 +62,7 @@ test("OU-01 clipIdentityOf:在线时这台设备跑不了的卡没有身份;桌�
     R.setSyncedUserCards([{ id: "synced-card", name: "同步卡" }]);
     const on2 = CI.clipIdentityOf(p);
     assert.equal(on2.identityKeys.s, undefined, "同步表到了:同步卡也没有身份");
-    assert.ok(on2.identityKeys.x, "两边都没有的 id 不受影响");
+    assert.equal(on2.identityKeys.x, undefined, "两边都没有的 id 照旧没有身份");
     assert.equal(CI.clipIdentityOf(p), on2, "没变就用记忆");
   } finally {
     H.setOnlineBrowserMode(false);
@@ -96,6 +101,53 @@ test("OU-02 planDispatch:在线时本机跑不了的卡一律判重、进预渲�
   }
 });
 
+test("OU-05 未知卡片(两边都没有定义):桌面与在线都不测、不当重卡、不进预渲染集合;定义到了照常进表", async () => {
+  setup();
+  // x 声明 stateful:没有成本记录时按声明兜底会判重 —— 未知卡片不能走到这一步
+  const p = { ...project(), tracks: [{ id: "t", name: "t", clips: [clip("b", "builtin"), clip("x", "nobody", 0, 2)] }] };
+  assert.equal(R.isKnownCardId("builtin"), true);
+  assert.equal(R.isKnownCardId("mine"), true);
+  assert.equal(R.isKnownCardId("nobody"), false);
+  assert.deepEqual([...R.unknownCardClipIds([...p.tracks[0].clips, { id: "n", nodeId: "node-n", start: 0, end: 2 }])], ["x"], "只看写了 cardId 的片段;只有 nodeId 的不算");
+  assert.equal(D.knownCardsOnly(project()).tracks[0].clips.some((c) => c.id === "x"), false);
+  const plain = { ...project(), tracks: [{ id: "t", name: "t", clips: [clip("b", "builtin")] }] };
+  assert.equal(D.knownCardsOnly(plain), plain, "没有未知卡片时原样回同一个对象");
+  for (const online of [false, true]) {
+    H.setOnlineBrowserMode(online);
+    try {
+      CI.resetClipIdentityCache();
+      D.resetPlanDispatch();
+      D.setPlanCosts([], null);
+      D.setPlanProject(p);
+      await settle();
+      const tag = online ? "在线" : "桌面";
+      assert.equal(CI.clipIdentityOf(p).identityKeys.x, undefined, `${tag}:未知卡片没有身份(测量不挑它)`);
+      assert.ok(CI.clipIdentityOf(p).identityKeys.b, `${tag}:内置卡照旧有身份`);
+      assert.equal(D.currentPlan().prerenderSet.has("x"), false, `${tag}:不进预渲染集合(清单计划、低内存档补渲都不含它)`);
+      assert.ok(!D.currentPlan().segments.some((sg) => sg.heavy.has("x") || sg.light.has("x")), `${tag}:分派表里没有它`);
+      D.setPlanLowMemory(true);
+      await settle();
+      assert.equal(D.currentPlan().prerenderSet.has("x"), false, `${tag}:低内存档全部判重的显示表里也没有它`);
+      assert.equal(D.judgedPlan().prerenderSet.has("x"), false, `${tag}:低内存档判定表里也没有它`);
+      D.setPlanLowMemory(false);
+      await settle();
+    } finally {
+      H.setOnlineBrowserMode(false);
+    }
+  }
+  // 定义到了(热更新装上这张卡):照常给身份、按声明兜底判重
+  D.resetPlanDispatch();
+  D.setPlanCosts([], null);
+  D.setPlanProject(p);
+  await settle();
+  R.registerCards([dom("nobody", { frameMode: "stateful" })]);
+  R.noteCardsUpdated(1);
+  await settle();
+  assert.ok(CI.clipIdentityOf(p).identityKeys.x, "定义到了:有身份");
+  assert.equal(D.currentPlan().prerenderSet.has("x"), true, "定义到了:没有成本记录按声明 stateful 判重");
+  D.resetPlanDispatch();
+});
+
 test("OU-03 时间轴:标签与「需要本地 PC 渲染辅助」徽标的判定", () => {
   setup();
   R.setSyncedUserCards([{ id: "synced-card", name: "探针同步卡" }, { id: "builtin", name: "撞内置" }]);
@@ -108,7 +160,8 @@ test("OU-03 时间轴:标签与「需要本地 PC 渲染辅助」徽标的判定
     assert.equal(badge(true, "synced-card", "none"), true, "同步卡没有层:出");
     assert.equal(badge(true, "synced-card", "partial"), true, "没覆盖整段:出");
     assert.equal(badge(true, "synced-card", "full"), false, "覆盖齐了:撤");
-    assert.equal(badge(true, "mine", null), true, "没有在线来源(判不了覆盖):按没有结果");
+    assert.equal(badge(true, "mine", null), false, "没有在线来源(判不了覆盖):还不知道,不出");
+    assert.equal(badge(true, "synced-card", "unknown"), false, "层表没取到、有哪一段清单从没取到过:还不知道,不出");
     assert.equal(badge(true, "graphish", "partial"), true, "图卡");
     assert.equal(badge(true, "builtin", "none"), false, "内置卡从不出");
     assert.equal(badge(true, "nobody", "none"), false, "两边都没有的 id:只标未知卡片,不挂徽标");
@@ -200,4 +253,42 @@ test("OU-04b entriesOf:按键排序,同一 id 取第一条", () => {
     { id: "x", name: "甲里的 x", source: "src/cards/user/a.tsx" },
     { id: "y", name: "y", source: "src/cards/user/a.tsx" },
   ]);
+});
+
+test("OU-04c 同步来的卡带上说明、默认值与控件:参数面板经 syncedCardView 看得到;主注册表照旧看不到", async () => {
+  setup();
+  const src = `import type { CardDef } from "../../kernel/types";
+const OPTS = [{ value: "l", label: "左" }, { value: "r", label: "右" }];
+export const c: CardDef = {
+  id: "synced-p", name: "带参数的同步卡", description: "说明",
+  defaults: { text: "hi", size: 48, side: "l", tint: "#ff0000" },
+  controls: [
+    { key: "text", label: "文字", type: "text" },
+    { key: "size", label: "字号", type: "number", min: 12, max: 200, step: 2 },
+    { key: "side", label: "位置", type: "select", options: OPTS },
+    { key: "tint", label: "颜色", type: "color" },
+  ],
+  Component: () => null,
+};
+export const opaque: CardDef = { id: "synced-o", name: "控件认不出", defaults: {}, controls: makeControls(), Component: () => null };
+`;
+  const content = fakeContent({ "src/cards/user/p.tsx": src });
+  const link = { id: 1 };
+  const sources = new S.OnlineCardSources({ request: content.request, linkKey: () => link });
+  try {
+    await sources.sync();
+    const v = R.syncedCardView("synced-p");
+    assert.equal(v.name, "带参数的同步卡");
+    assert.equal(v.description, "说明");
+    assert.deepEqual(v.defaults, { text: "hi", size: 48, side: "l", tint: "#ff0000" });
+    assert.deepEqual(v.controls.map((c) => c.type), ["text", "number", "select", "color"]);
+    assert.deepEqual(v.controls[2].options, [{ value: "l", label: "左" }, { value: "r", label: "右" }]);
+    assert.equal(v.controlsIncomplete, false);
+    assert.equal(R.syncedCardView("synced-o").controlsIncomplete, true);
+    assert.deepEqual(R.syncedCardView("synced-o").controls, []);
+    assert.equal(R.getCard("synced-p"), undefined);
+  } finally {
+    sources.stop();
+    R.setSyncedUserCards([]);
+  }
 });

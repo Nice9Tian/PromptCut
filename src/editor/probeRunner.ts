@@ -63,6 +63,7 @@ import { clipIdentityOf, resetClipIdentityCache } from "./costIdentity";
 import { mergePlanCosts, setPlanCosts } from "./planDispatch";
 import { backStage, onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
+import { measureGateOpen, whenMeasureGateOpen } from "./measureGate";
 
 /* ------------------------------------------------------------------ 进度 */
 
@@ -256,6 +257,12 @@ async function putCosts(records: CardCostRecord[]): Promise<boolean> {
   const stored = await backend.save(records).catch(() => false);
   for (const l of [...costRecordListeners]) { try { l(records, { stored }); } catch { /* 订阅方坏了不影响测量 */ } }
   return stored;
+}
+
+/** 测过的片段(诊断、探针用;最近 200 条):哪个片段、哪张卡、身份键、什么时候开测 */
+const probedLog: Array<{ clipId: string; cardId: string; identityKey: string; at: number }> = [];
+export function probeRunDiag() {
+  return { probed: probedLog.map((e) => ({ ...e })), running: progress.running, done: progress.done, total: progress.total };
 }
 
 /** 探针帧的诊断:收到几帧、其中几帧是压过的可转移字节(C10 契约第 2 节「大块产出」) */
@@ -557,6 +564,11 @@ async function runLoop(): Promise<void> {
     // E1：后台舞台就绪了才开工（不去够 Preview 内部的 stageReady）
     await whenStageReady("back");
     for (;;) {
+      /*
+       * 在线页面:等卡片源码第一次同步完(同步来的用户卡在那之前是未知 id,不能测;`measureGate.ts`)。每一轮开头都问:
+       * 换了项目 / 连接,门会重新关上,等新项目的卡片源码同步完。桌面这道门一开始就开着。
+       */
+      await whenMeasureGateOpen();
       const gen = generation;
       const project = currentProject;
       if (!project) break;
@@ -573,8 +585,11 @@ async function runLoop(): Promise<void> {
       const failed: string[] = [];
       let done = 0;
       for (const job of jobs) {
-        if (gen !== generation) break;
+        // 门在这一轮里又关上了(换了连接):收摊,下一轮开头等门
+        if (gen !== generation || !measureGateOpen()) break;
         setProgress({ card: job.cardId, done });
+        probedLog.push({ clipId: job.clipId, cardId: job.cardId, identityKey: job.identityKey, at: Date.now() });
+        if (probedLog.length > 200) probedLog.splice(0, probedLog.length - 200);
         const record = await probeCard(job, tuning, device, () => gen !== generation);
         if (gen !== generation) break;
         if (record) {
@@ -588,7 +603,7 @@ async function runLoop(): Promise<void> {
         setProgress({ done, failed: [...failed] });
       }
 
-      if (gen !== generation) continue;          // 中途换了项目：从头再排一轮
+      if (gen !== generation || !measureGateOpen()) continue;          // 中途换了项目或连接：从头再排一轮
       // 这一轮走完了。项目里确实有卡片段时才算「打开项目的第一轮」过去了 ——
       // 空项目 / 还没加载完时那一轮不算，否则真项目到位时遮罩就不出现了。
       if (hasCardClip(project)) firstPassDone = true;
@@ -649,4 +664,5 @@ export function resetProbeRunner(): void {
   snapshotEndpointMissing = false;
   progress = IDLE;
   listeners.clear();
+  probedLog.length = 0;
 }

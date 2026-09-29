@@ -37,8 +37,8 @@ import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePla
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { StreamPlayer } from "./render/streamPlayer";
 import {
-  applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, onlineBrowserMode, PLACEHOLDER_UI_SCALE_VAR, placeholderUiScale, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
-  resetPlaceholderGeometry, setCatchingUpClips, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
+  applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, onlineBrowserMode, setPlaceholderViewScale, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
+  resetPlaceholderGeometry, setCatchingUpClips, setLocalOnlyConfirmed, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
   unsupportedHere,
 } from "./render/placeholderHost";
 
@@ -2287,12 +2287,22 @@ export default function StageView() {
         return { ok: true as const, changed };
       },
       /**
-       * 父页的预览缩放倍数:在线浏览器模式下把「需要本地 PC 渲染辅助」图标反向放大(CSS 变量设在本文档的根元素上,
-       * 占位组件的样式读它)。模式关着什么都不设,桌面舞台的输出一个字节不变。
+       * 父页的预览缩放倍数(桌面与在线都发):占位符按它补偿,屏幕上看得清(`placeholderFit.ts`:沙漏只抵消预览缩放,
+       * 「需要本地 PC 渲染辅助」图标还抵消这一层的缩放、按框换排法)。变了就重渲一次(`Stage` 给占位组件换 `fit`)。
+       * 占位符只在人看的预览里挂(导出、预渲染、后台舞台没有),这里只改预览。
        */
       async setViewScale(scale) {
-        if (onlineBrowserMode()) document.documentElement.style.setProperty(PLACEHOLDER_UI_SCALE_VAR, String(placeholderUiScale(scale)));
+        if (setPlaceholderViewScale(scale) && placeholdersEnabled()) commitPlanes();
         return { ok: true as const };
+      },
+      /**
+       * 父页已确认此刻没有可贴结果的这台设备跑不了的片段(C10 契约第 9 节):它们的占位从沙漏换成「需要本地 PC 渲染辅助」图标。
+       * 变了就重渲一次(`Stage` 给这些槽位的组件换 `reason`),再按这一拍的状态切显隐。
+       */
+      async setLocalOnlyMissing(clipIds) {
+        const changed = setLocalOnlyConfirmed(Array.isArray(clipIds) ? clipIds.map(String) : []);
+        if (changed) commitPlanes();
+        return { ok: true as const, changed };
       },
       async setMediaPolicy(next) {
         // 低内存档只会从普通改到低(运行中改判),不回头:舞台自己判出来的 true 不被父页的 false 盖掉

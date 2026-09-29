@@ -253,10 +253,25 @@ try {
     // 旋转 / 缩放的药丸此刻在兜底尽头(被抑制、没有流、没有快照):占位符
     const front = await frontFrame();
     const ph = front ? await front.evaluate(() => [...document.querySelectorAll('[data-pc-placeholder-slot]:not([hidden])')].map((s) => {
-      const r = (s.querySelector('[data-pc-placeholder-plane]') ?? s).getBoundingClientRect();
-      return { clip: s.parentElement?.getAttribute('data-pc-clip'), reason: s.getAttribute('data-pc-placeholder-reason'), cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height };
+      const plane = s.querySelector('[data-pc-placeholder-plane]');
+      const r = (plane ?? s).getBoundingClientRect();
+      // 沙漏的放大倍数(舞台按父页的预览缩放补偿,`placeholderFit.ts`):徽标写在根元素上,铺满形态写在中间那个上
+      const tf = (plane?.style.transform || plane?.querySelector('.pc-ph-center')?.style.transform || '');
+      const m = /scale\(([\d.]+)\)/.exec(tf);
+      return { clip: s.parentElement?.getAttribute('data-pc-clip'), reason: s.getAttribute('data-pc-placeholder-reason'), kind: plane?.getAttribute('data-pc-placeholder-kind') ?? null,
+        glassScale: m ? Number(m[1]) : 1, cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height };
     })).catch(() => []) : [];
     out.placeholdersWhilePlaying = ph;
+    // 沙漏在屏幕上约 28 像素(只抵消预览缩放,不抵消这一层自己的缩放):28 × 放大倍数 × 预览缩放
+    const viewScale = await page.evaluate(() => {
+      const f = [...document.querySelectorAll('iframe')].filter((el) => /stage=1/.test(el.src) && getComputedStyle(el).opacity !== '0')
+        .find((el) => el.getBoundingClientRect().width > 100);
+      return f ? f.getBoundingClientRect().width / f.offsetWidth : null;
+    }).catch(() => null);
+    out.hourglassScreen = ph.filter((x) => x.kind === 'badge' || x.kind === 'solid').map((x) => ({ clip: x.clip, kind: x.kind, glassScale: x.glassScale, viewScale, screenPxNoLayerScale: viewScale ? +(28 * x.glassScale * viewScale).toFixed(1) : null }));
+    if (LABEL !== 'before' && viewScale && out.hourglassScreen.length) {
+      check(out.hourglassScreen.every((x) => Math.abs(x.screenPxNoLayerScale - 28) <= 3), '沙漏在屏幕上约 28 像素(按预览缩放补偿)', out.hourglassScreen);
+    }
     const b = await shot('占位符-旋转与缩放');
     // 点中占位符命中它所在的卡;快照里没有占位节点
     if (front && ph.length) {

@@ -297,8 +297,11 @@ export const COVERAGE_POLL_MS = 5000;
 /** 整段覆盖:一轮最多取这么多份窗口之外的清单(长片段分几轮取完,不一下子打满内容库) */
 export const COVERAGE_FETCHES_PER_TICK = 16;
 
-/** 一个片段的预渲染结果覆盖了多少:没有可用的层 / 有层但没覆盖整段 / 整段都有(这一档的帧) */
-export type LayerCoverage = "none" | "partial" | "full";
+/**
+ * 一个片段的预渲染结果覆盖了多少:还不知道(层表没取到,或者有哪一段的清单从没取到过)/ 没有可用的层 /
+ * 有层但没覆盖整段 / 整段都有(这一档的帧)。
+ */
+export type LayerCoverage = "unknown" | "none" | "partial" | "full";
 
 /** 层表 v 3 的候选表:只留三项都是非空字符串的,坏项跳过 */
 function candidatesOf(raw: unknown): LayerCandidate[] {
@@ -657,21 +660,42 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   /**
-   * 这个片段的预渲染结果覆盖了多少(C10 契约第 9 节,时间轴徽标用):这一档没有可用的层 → `none`;层在,但有哪一段的
-   * 清单还没取到、或清单里这一档的帧不齐 → `partial`;每一段都齐 → `full`。「齐」看清单(结果在素材服务里),
-   * 不看字节有没有取到本页。整段的清单由 `coverageLayer` 点名的层才取(见 `loadWindow`)。
+   * 这个片段的预渲染结果覆盖了多少(C10 契约第 9 节,时间轴徽标用):层表还没取到 → `unknown`;这一档没有可用的层 → `none`;
+   * 层在,但有哪一段的清单从没取到过 → `unknown`;每一段的清单都取到过、有哪一段这一档的帧不齐 → `partial`;每一段都齐 → `full`。
+   * 「齐」看清单(结果在素材服务里),不看字节有没有取到本页。整段的清单由 `coverageLayer` 点名的层才取(见 `loadWindow`)。
+   * 徽标只在确认没覆盖整段(`none` / `partial`)时出;`unknown` 不出(刚打开页面时不闪)。
    */
   coverage(clipId: string): LayerCoverage {
+    if (!this.mapKnown) return "unknown";
     const layer = this.layers().find((l) => l.clipId === clipId);
     if (!layer) return "none";
     const span = this.map?.span ?? 60;
+    let partial = false;
     for (let from = 0; from < layer.count; from += span) {
       const seg = this.segOf(layer, from);
       const st = this.manifests.get(this.manifestKey(layer, seg));
-      const mine = st ? (this.tier === "original" ? st.frames : st.small) : null;
-      if ((mine?.size ?? 0) < seg[1] - seg[0] + 1) return "partial";
+      if (!st) return "unknown";
+      const mine = this.tier === "original" ? st.frames : st.small;
+      if (mine.size < seg[1] - seg[0] + 1) partial = true;
     }
-    return "full";
+    return partial ? "partial" : "full";
+  }
+
+  /**
+   * 父页能不能确认「这个片段这一帧没有可贴的预渲染结果」(C10 契约第 9 节;舞台据此在沙漏与「需要本地 PC 渲染辅助」图标之间选):
+   * 层表已经取到、这片段没有可用的层;或者这一帧所在那一段的清单已经取到、这一帧(这一档)不在里面。
+   * 层表没取到、清单没到、清单里有而字节还在路上,都不算确认(舞台显示普通加载占位)。
+   * `localFrame` 按片段本地帧,夹进层的帧数里。
+   */
+  frameConfirmedMissing(clipId: string, localFrame: number): boolean {
+    if (!this.mapKnown) return false;
+    const layer = this.layers().find((l) => l.clipId === clipId);
+    if (!layer) return true;
+    if (layer.count <= 0) return true;
+    const f = Math.min(layer.count - 1, Math.max(0, Math.round(Number(localFrame) || 0)));
+    const st = this.manifests.get(this.manifestKey(layer, this.segOf(layer, f)));
+    if (!st) return false;
+    return !(this.tier === "original" ? st.frames : st.small).has(f);
   }
 
   /** 覆盖情况可能变了就叫 `cb`(层表换了、清单到了);回退订函数 */

@@ -28,6 +28,7 @@ import {
   type PlaceholderBox, type PlaceholderGeometry, type PlaceholderReason,
 } from "./placeholder/contract.ts";
 import { getCard, isUserCardId } from "../kernel/registry.ts";
+import { hourglassFit, unsupportedFit, type PlaceholderFit } from "./placeholderFit.ts";
 
 /** 包裹层里托着占位组件的槽位(常量在 contract 里,这里转出去给已有的引用方) */
 export { PLACEHOLDER_SLOT_ATTR };
@@ -87,10 +88,35 @@ export interface PlaceholderState {
   /** 被抑制但这一刻判轻的卡(K3(b) 的 `vtOk = false` 轻卡在等后台补跑);缺省看 `setCatchingUpClips` 那一份 */
   isLight?: (clipId: string) => boolean;
   /**
-   * 此刻在场、这台设备跑不了的卡(在线浏览器模式下的用户卡、图卡;`localOnlyClipIds`)。它们照兜底顺序贴快照 / 流,
-   * 什么都贴不上时显示 `unsupported`(「电脑 + 离线」图标),顶替沙漏;不管在不在抑制、等快照里。缺省空。
+   * 此刻在场、这台设备跑不了的卡(在线浏览器模式下的用户卡、图卡;`localOnlyClipIds`)。它们照兜底顺序贴快照 / 流;
+   * 什么都贴不上时,父页已确认这一帧没有可贴的结果(`confirmedMissing`)的显示 `unsupported`(「电脑 + 离线」图标),
+   * 其余(层表没取到、清单没到、字节在路上)显示普通加载占位 `awaiting`(沙漏),暂停时也一样。不管在不在抑制、等快照里。缺省空。
    */
   unsupported?: ReadonlySet<string>;
+  /** `unsupported` 里父页已确认这一帧没有可贴结果的那几张(缺省看 `setLocalOnlyConfirmed` 那一份) */
+  confirmedMissing?: ReadonlySet<string>;
+}
+
+/**
+ * 父页确认「这一帧没有可贴的预渲染结果」的片段(在线浏览器模式下这台设备跑不了的卡;C10 契约第 9 节)。
+ * 确认 = 层表已经取到、这片段没有可用的层,或这一帧所在那一段的清单已经取到、这一帧不在里面。父页按当前时刻算好,
+ * 经 `setLocalOnlyMissing` 发来;没确认的一律按「结果在路上」显示沙漏(刚打开页面时不闪图标)。
+ */
+let confirmedMissing: ReadonlySet<string> = new Set();
+/** 换掉整份;内容没变回 false */
+export function setLocalOnlyConfirmed(ids: Iterable<string>): boolean {
+  const next = new Set<string>();
+  for (const id of ids ?? []) if (typeof id === "string" && id) next.add(id);
+  if (next.size === confirmedMissing.size && [...next].every((id) => confirmedMissing.has(id))) return false;
+  confirmedMissing = next;
+  return true;
+}
+export function localOnlyConfirmed(): ReadonlySet<string> {
+  return confirmedMissing;
+}
+/** 这台设备跑不了的卡什么都贴不上时显示哪种:确认没有结果 → `unsupported` 图标;否则 → `awaiting` 沙漏 */
+export function localOnlyReason(clipId: string, confirmed: ReadonlySet<string> = confirmedMissing): PlaceholderReason {
+  return confirmed.has(clipId) ? "unsupported" : "awaiting";
 }
 
 /** T4 的那几张(被抑制、这一刻判轻:等后台补跑互换)。`StageView` 收到 `setSuppressed` 时按分派表算好 */
@@ -102,15 +128,19 @@ export function isCatchingUpClip(clipId: string): boolean {
   return catchingUp.has(clipId);
 }
 
-/** 这一拍哪几张卡要显示占位符、为什么(T1~T4;这台设备跑不了的卡在兜底顺序尽头是 `unsupported`) */
+/**
+ * 这一拍哪几张卡要显示占位符、为什么(T1~T4;这台设备跑不了的卡在兜底顺序尽头:确认没有结果是 `unsupported`,
+ * 结果还在路上是 `awaiting`)
+ */
 export function placeholderWanted(s: PlaceholderState): Map<string, PlaceholderReason> {
   const out = new Map<string, PlaceholderReason>();
   const unsupported = s.unsupported;
-  // 这台设备跑不了的卡:贴着快照或流就不显示;否则一律 `unsupported`(它们没有活渲可等,沙漏不对)
+  const confirmed = s.confirmedMissing ?? confirmedMissing;
+  // 这台设备跑不了的卡:贴着快照或流就不显示;否则父页确认这一帧没有结果才是图标,其余是沙漏(结果在路上)
   if (unsupported) {
     for (const id of unsupported) {
       if (s.snapshots.has(id) || s.streamShowing.has(id)) continue;
-      out.set(id, "unsupported");
+      out.set(id, localOnlyReason(id, confirmed));
     }
   }
   const skip = (id: string) => !!unsupported?.has(id);
@@ -175,17 +205,40 @@ export function needsLocalPc(
   return !!def && (typeof def.card === "function" || typeof def.audio === "function");
 }
 
-/**
- * 「需要本地 PC 渲染辅助」图标的放大倍数(CSS 变量 `--pc-ph-ui-scale`)。舞台 iframe 按 1920×1080 画,父页用 CSS
- * `scale(预览缩放)` 缩到预览框大小;图标按舞台像素画(32×28、字 14px),27% 时屏幕上只剩十几个像素。把它按
- * `1 / 预览缩放` 反向放大,屏幕上约等于原尺寸;夹在 1～8 之间(放大预览时不缩小,缩得极小时也不无限放大)。
- * 不是正数或不是有限数时回 1。只有在线浏览器模式的舞台用它(`StageView` 的 `setViewScale`)。
+/*
+ * 占位符在屏幕上的大小(`placeholderFit.ts`):舞台 iframe 被父页用 CSS `scale(预览缩放)` 缩进预览框,占位组件要按它补偿。
+ * 父页经 `setViewScale` 发来预览缩放(桌面与在线都发),`Stage` 渲占位组件时按片段的框、这一层的缩放与它算出 `fit`。
  */
-export const PLACEHOLDER_UI_SCALE_VAR = "--pc-ph-ui-scale";
-export function placeholderUiScale(viewScale: unknown): number {
-  const s = Number(viewScale);
-  if (!Number.isFinite(s) || s <= 0) return 1;
-  return Math.min(8, Math.max(1, 1 / s));
+let viewScale = 1;
+/** 记下父页的预览缩放;变了回 true(`StageView` 据此重渲一次) */
+export function setPlaceholderViewScale(scale: unknown): boolean {
+  const s = Number(scale);
+  const next = Number.isFinite(s) && s > 0 ? s : 1;
+  if (next === viewScale) return false;
+  viewScale = next;
+  return true;
+}
+export function placeholderViewScale(): number {
+  return viewScale;
+}
+
+const fitCache = new Map<string, { key: string; fit: PlaceholderFit }>();
+/**
+ * 这张卡的占位组件怎么放(包裹层本地像素):沙漏只抵消预览缩放;「需要本地 PC 渲染辅助」图标同时抵消这一层的缩放、按框换排法。
+ * 都不超出框:徽标形态看位置框(`size`),铺满形态看实体框。同样的输入回同一个对象(占位组件是 `React.memo`)。
+ */
+export function placeholderFitFor(clipId: string, reason: PlaceholderReason, geometry: PlaceholderGeometry,
+  size: { width: number; height: number }, layerScale: unknown): PlaceholderFit {
+  const box = geometry.kind === "solid" ? { width: geometry.box.width, height: geometry.box.height } : { width: size.width, height: size.height };
+  const fit = reason === "unsupported"
+    ? unsupportedFit({ box, viewScale, layerScale })
+    : hourglassFit({ box, viewScale, layerScale });
+  const key = `${fit.scale}|${fit.layout ?? ""}`;
+  const hit = fitCache.get(clipId);
+  if (hit && hit.key === key) return hit.fit;
+  if (fitCache.size > 512) fitCache.clear();
+  fitCache.set(clipId, { key, fit });
+  return fit;
 }
 
 /**
@@ -285,6 +338,7 @@ export function resetPlaceholderGeometry(): void {
   streamBoxes.clear();
   inkBoxes.clear();
   geometryCache.clear();
+  fitCache.clear();
 }
 
 const geometryCache = new Map<string, { key: string; geometry: PlaceholderGeometry }>();
