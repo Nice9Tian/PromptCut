@@ -47,7 +47,6 @@
 - **在线浏览器模式**：还不存在。2026-09-26 第二轮定了入口（托管端 `/editor`）、开始页的加入表单、低内存档与预渲染小尺寸，落在 C10a。
 - **会话与传输**（2026-09-26 第二轮写入语义）：语义是文档服务与每一方之间一个会话（双向序号与确认、传输中断在保留期内接续），WebSocket 与 HTTP 长轮询自动选择；代码现状只有 WebSocket，断开即断线；HTTP 长轮询在 `claude/http-transport`（第 1 版，按 `docs/plan/http-transport-contract.md` 第 2 版返工）。落在 HT。
 - **本机按真正的发起方判断**（2026-09-26 第二轮写入语义）：语义要求经反向代理转进来的连接和请求按远端对待；代码的开关 `PROMPTCUT_TEST_NO_LOOPBACK_TRUST` 只接到了素材服务与管理接口，文档服务的握手与共享端点仍按套接字对端信任回环；阿里云眼下靠 nginx 的 `proxy_bind` 堵住。落在 HT（`PROMPTCUT_TRUST_LOOPBACK`）。HT-a 已在 `claude/ht-integ` 把新开关接到四处（文档服务握手、共享端点、素材服务、管理接口），旧名删掉；合入 main 并部署阿里云后这一条可删。
-- **加入共享项目的桌面应用自动成为渲染节点**（`product/platforms.md`「渲染节点」）：代码靠启动时的 `PROMPTCUT_QUEUE_NODE=1` 与 `PROMPTCUT_SHARED_CONFIG`，没做到「自动」。落地时要给观察端（C6.6 T9）留一个开发者开关关掉它。
 - **渲染任务队列与渲染节点**：还不存在；预渲染现在只由本机预渲染进程按页面的 preload 做（本机的结果键已在 M4 乘上环境指纹）。页面测量时推过的帧按卡片级指纹锁入库：页面上报自己的环境，帧存在页面指纹的键下，这张卡随之锁给页面的环境（`render-queue-contract.md` F 节，报告 `docs/reports/REPORT-render-queue-card-lock.md`）。设计见 `docs/plan/distributed-prerender-queue.md`。
 - **手动截短总时长的入口**：语义允许用户手动缩短总时长（`product/project-model.md`「总时长」），但编辑界面没有入口，现在只有 Agent 能经 `set_project_meta` 截断。UI 层要补手动截短总时长的操作入口，规则用 `src/kernel/duration.ts` 现成的那套。
 

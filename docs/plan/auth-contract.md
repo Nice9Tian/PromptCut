@@ -230,6 +230,7 @@
 - **Node 进程怎么拿凭证**：预渲染进程、独立主机、探针读环境变量 `PROMPTCUT_SHARED_CONFIG`。
   - 它指向一个 JSON 文件：`{ url, projectId, username, deviceId, deviceName, as, password | key, role }`，也可以是这样的对象组成的数组（独立主机加入多个项目时）。
   - 设了这个变量，就用它拼证明、连文档服务，并经 `auth.ticket` 取素材票据；没设就维持原来的做法：连回环地址时是本机身份，连不上就回落本机。
+  - 桌面版的预渲染进程不读配置文件（2026-09-29，落地语义「加入共享项目的桌面应用自动成为这个项目的渲染节点」，`claude/desktop-auto-node`，报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`）：页面进入共享项目时经编辑器进程交一张 render 角色的连接票据（页面在自己已认证的连接上以 `auth.ticket { kind: 'conn', role: 'render', owner: { kind: 'user' } }` 要来，票据由文档服务签发），之后每次建新会话经 HMR 向页面再要一张；不交项目口令，也不交 `K`。页面不在时已建的会话用到断开为止，之后等页面回来再续。
   - 集群令牌 `PROMPTCUT_CLUSTER_TOKEN` 只在管理用途上读取：`asset-announce` 登记地址、`scripts/remote/docservice.mjs`。
 - **素材客户端 `server/asset-store/client.mjs`**：接受 `ticket: () => string | Promise<string>` 取代 `token`，每个请求取一次；收到 401 时调一次 `ticket({ refresh: true })` 后重试一次。
 
