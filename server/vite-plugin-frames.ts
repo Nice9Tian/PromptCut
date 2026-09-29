@@ -24,6 +24,10 @@ import { resolvePublishVersion } from "./queue-publish.mjs";
 import { createCardCodeIndex } from "./card-code.mjs";
 import { cardCodeIdentityOf, onCardSourceChange, overridesRoot } from "./card-overrides.mjs";
 import { autoRenderNodeOffReason, createAutoRenderNode } from "./auto-render-node.mjs";
+import { foreignAssetEndpoints, selectAssetClient as selectAssetClientImpl } from "./asset-select.mjs";
+import { ALL as SCOPE_ALL, createPushScope } from "./push-scope.mjs";
+import { closeStorage, createExportSummary, storageDataDir, storageFor } from "./frame-library-storage.mjs";
+import { createStorageHandler, storageRouteOf } from "./storage-routes.mjs";
 
 const services = new Map<string, FramePipeline>();
 /**
@@ -68,75 +72,13 @@ const pushLog = (event: string, fields: object = {}) => {
  * 任何一步出错都只打日志,不影响预渲染进程。
  */
 /**
- * 服务地址登记里**别的机器**的素材服务(J.6 素材回退与 J.13 推送基址共用这一个判据):本机登记的排除 ——
- * `announcerId` 是 `asset:<本机主机名>`(`asset-announce.mjs` 的缺省身份),或者地址与本机素材服务同 host。
- * 按 `announcerId` 的字典序排,每项只留不是本机的地址,留不下地址的整项去掉。
+ * 推送、拉取用的素材服务客户端(契约 J.13,按 D7 选基址;实现与第一次调用前等登记见 `asset-select.mjs`)。
+ * 这里只把日志接到 `[artifact-push]`。
  */
-function foreignAssetEndpoints(list: any[], origin: string | null): { announcerId: string; urls: string[] }[] {
-  const self = `asset:${String(os.hostname() || "host").replace(/[^A-Za-z0-9._:-]/g, "-") || "host"}`.slice(0, 128);
-  let selfHost = "";
-  try { selfHost = origin ? new URL(origin).host : ""; } catch { /* 没有就不按地址排 */ }
-  const out: { announcerId: string; urls: string[] }[] = [];
-  for (const item of list ?? []) {
-    if (item?.kind !== "asset" || typeof item.announcerId !== "string" || item.announcerId === self) continue;
-    const urls: string[] = [];
-    for (const url of item.urls ?? []) {
-      try { if (new URL(url).host === selfHost) continue; } catch { continue; }
-      urls.push(String(url));
-    }
-    if (urls.length) out.push({ announcerId: item.announcerId, urls });
-  }
-  return out.sort((a, b) => (a.announcerId < b.announcerId ? -1 : a.announcerId > b.announcerId ? 1 : 0));
-}
-
-/**
- * 推送、拉取用的素材服务客户端(契约 J.13,按 D7 选基址),顺序:
- *   1. `PROMPTCUT_ASSET_URL`(形如 `http://192.168.50.96:5460/api/asset`);
- *   2. 服务地址登记里别的机器的 `asset`(`foreignAssetEndpoints`),取第一个的第一个地址;登记变了就新建一个
- *      client 换上,在飞的请求照旧用旧的(回的是一个代理,每次调用时才取当前的 client);
- *   3. 本机的 `assetServiceOrigin()` 加 `/api/asset`(原来的行为)。
- * 读写带素材票据(M6a,`docs/plan/auth-contract.md` 第 8、11 节):凭共享项目进入的,经文档服务连接的 `auth.ticket` 取
- * (`ticket`);本机身份不带票据(本机回环的素材服务不要票据)。集群令牌不再用于素材服务。
- * 每换一次基址记一行 `push.asset-base { source, base }`,基址不含票据。
- */
-function selectAssetClient({ node, endpoint, origin, ticket, createAssetClient, owner, preferred }:
-  { node: any; endpoint: any; origin: string; ticket: ((opts?: { refresh?: boolean }) => Promise<string | null>) | null; createAssetClient: any; owner: string;
+function selectAssetClient(opts: { node: any; endpoint: any; origin: string; ticket: ((opts?: { refresh?: boolean }) => Promise<string | null>) | null; createAssetClient: any; owner: string;
     /** 自动渲染节点:页面此刻用的素材服务基址(页面给了就排在登记之前;现取,页面换了基址下一次调用就换) */
     preferred?: () => string | null }) {
-  const localBase = `${origin}/api/asset`;
-  let current: any = null;
-  let currentBase: string | null = null;
-  const use = (base: string, source: "env" | "page" | "announced" | "local") => {
-    if (base === currentBase && current) return;
-    let next: any;
-    try { next = createAssetClient({ base, ticket }); }
-    catch (error: any) { pushLog("push.asset-base-error", { source, base, for: owner, message: String(error?.message ?? error) }); return; }
-    current = next;
-    currentBase = base;
-    pushLog("push.asset-base", { source, base, for: owner });
-  };
-  const envBase = String(process.env.PROMPTCUT_ASSET_URL || "").trim().replace(/\/+$/, "");
-  const pagePick = () => { try { return preferred?.() ?? null; } catch { return null; } };
-  let stop = () => {};
-  if (envBase) use(envBase, "env");
-  if (!current && pagePick()) use(pagePick()!, "page");
-  // 显式给了基址并且建成了就只用它;否则(含没给页面基址时)与原来相同:本机起步,按登记换
-  const envOk = !!envBase && currentBase === envBase;
-  if (!envOk) {
-    if (!current) use(localBase, "local");
-    stop = node.watchServiceEndpoints(endpoint, ["asset"], (list: any[]) => {
-      if (pagePick()) return;
-      const url = foreignAssetEndpoints(list, origin)[0]?.urls[0];
-      if (url) use(url.replace(/\/+$/, ""), "announced");
-      else use(localBase, "local");
-    });
-  }
-  const client = new Proxy({}, { get: (_target, key) => {
-    // 页面后来才给(或换了)素材基址:下一次调用就换上
-    if (!envOk) { const p = pagePick(); if (p && p !== currentBase) use(p, "page"); }
-    const value = current?.[key]; return typeof value === "function" ? value.bind(current) : value;
-  } });
-  return { client, stop: () => { try { stop(); } catch { /* 已经停了 */ } }, base: () => currentBase };
+  return selectAssetClientImpl({ ...opts, log: pushLog });
 }
 
 /**
@@ -145,7 +87,11 @@ function selectAssetClient({ node, endpoint, origin, ticket, createAssetClient, 
  */
 const DOCSERVICE_MODES = new Set(["remote", "local", "editor", "shared", "page"]);
 
-type DocLink = { mode: string; url: string; tried?: any[]; protocols?: () => Promise<string[]>; shared: boolean; projectId?: string | null };
+/**
+ * `contentIds`:这条连接只推哪几个项目文档的产物(`push-scope.mjs`)。老路径凭 `PROMPTCUT_SHARED_CONFIG` 进入、配置里写了
+ * `contentId` 时是 `[contentId]`;没写、或本机身份(没有共享项目的边界)时不设 = 不限。
+ */
+type DocLink = { mode: string; url: string; tried?: any[]; protocols?: () => Promise<string[]>; shared: boolean; projectId?: string | null; contentIds?: string[] | null };
 
 /**
  * 连哪个文档服务、凭什么进入(M6a,`docs/plan/auth-contract.md` 第 11 节):
@@ -160,7 +106,8 @@ async function resolveDocLink(node: any): Promise<DocLink | { mode: string; trie
       const { loadSharedConfig, sharedProtocols }: any = await import("./auth/shared-config.mjs");
       const entries = loadSharedConfig();
       const entry = entries[0];
-      return { mode: "shared", url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), shared: true, projectId: entry.projectId ?? null };
+      return { mode: "shared", url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), shared: true, projectId: entry.projectId ?? null,
+        contentIds: entry.contentId ? [entry.contentId] : null };
     } catch (error: any) {
       return { mode: "bad-config", shared: false, detail: String(error?.message ?? error) };
     }
@@ -220,12 +167,17 @@ async function startArtifactPush(root: string, service: FramePipeline, auto: Aut
   const content = node.createContentClient(endpoint);
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
   // J.13:按 D7 选推送的素材服务(环境变量 → 页面给的(自动渲染节点)→ 别的机器登记的 → 本机)
+  // 第一次推送前先等登记(没有环境变量、页面也没给基址时),不先推到本机素材服务(`asset-select.mjs`)
   const assets = selectAssetClient({ node, endpoint, origin, ticket: await ticketFor(link, endpoint), createAssetClient, owner: "push", preferred: auto ? auto.assetBase : undefined });
   const client = assets.client;
   const { createPushQueue }: any = await import("./artifact-push.mjs");
+  // 只推绑定项目的(`push-scope.mjs`):自动渲染节点按页面交来的项目文档 id(还没交来时先扣着);老路径按配置的 `contentId`
+  const scoped = scopeOf(link, auto);
+  const scope = scoped ? createPushScope({ pipeline: service, contentIds: scoped }) : null;
   // settleMs:同一段最后一次进队后静置 1.5 s 再推,边渲边推时一段不被推十几遍。
-  // 自动渲染节点的队列文件按项目分目录:撤掉时没推完的段留给同一个项目下次接着推,不推进别的项目的素材服务
-  const queue = createPushQueue({ pipeline: service, client, content, dir: auto ? autoPushDir(service, auto) : service.root, log: pushLog, settleMs: 1500 });
+  // 限了项目的队列文件按项目分目录:撤掉时没推完的段留给同一个项目下次接着推,不推进别的项目的素材服务
+  const queue = createPushQueue({ pipeline: service, client, content, dir: scoped && link.projectId ? pushDirOf(service, link.url, link.projectId) : service.root,
+    log: pushLog, settleMs: 1500, scope });
   queue.start();
   pushTeardowns.set(root, async () => {
     try { await queue.stop(); } catch {}
@@ -233,17 +185,31 @@ async function startArtifactPush(root: string, service: FramePipeline, auto: Aut
     assets.stop();
     try { endpoint.close(); } catch {}
   });
-  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: assets.base(), restored: queue.stats().restored, ...(auto ? { projectId: auto.projectId } : {}) });
+  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: assets.base(), assetSettled: assets.settled(), restored: queue.stats().restored,
+    scope: scope ? scope.describe() : SCOPE_ALL, ...(link.projectId ? { projectId: link.projectId } : {}) });
+}
+
+/**
+ * 推送队列只推哪几个项目文档的产物;回 null = 不限。
+ *   - 自动渲染节点:页面交来的项目文档 id(`contentId`,现取;还没交来时回 null,推送队列先扣着);
+ *   - 老路径凭 `PROMPTCUT_SHARED_CONFIG` 进入:配置里的 `contentId`;没写就不限(记一行 `push.scope`);
+ *   - 本机身份(`editor` / `local` / `remote`,没有共享项目的边界):不限。
+ */
+function scopeOf(link: DocLink, auto: AutoLink | null): (() => typeof SCOPE_ALL | string[] | null) | null {
+  if (auto) return () => (auto.contentId ? [auto.contentId] : null);
+  if (link.shared && link.contentIds?.length) { const ids = [...link.contentIds]; return () => ids; }
+  if (link.shared) pushLog("push.scope", { scope: SCOPE_ALL, reason: "no-content-id", projectId: link.projectId ?? null });
+  return null;
 }
 
 /** 自动渲染节点交来的链接(`auto-render-node.mjs` 的 `link`) */
 type AutoLink = { mode: "page"; url: string; shared: true; projectId: string; contentId: string | null; assetBase: () => string | null; protocols: () => Promise<string[]>; alive: () => boolean };
 const autoDocLink = (auto: AutoLink): DocLink => ({ mode: "page", url: auto.url, protocols: auto.protocols, shared: true, projectId: auto.projectId });
-/** 自动渲染节点的推送队列文件所在目录:帧库下 `push/<文档服务 host>-<项目 id>`(只留安全字符) */
-function autoPushDir(service: FramePipeline, auto: AutoLink) {
+/** 限了项目的推送队列文件所在目录:帧库下 `push/<文档服务 host>-<项目 id>`(只留安全字符);自动渲染节点与老路径同一个规则 */
+function pushDirOf(service: FramePipeline, url: string, projectId: string) {
   let host = "doc";
-  try { host = new URL(auto.url).host; } catch { /* 地址已经校验过 */ }
-  const name = `${host}-${auto.projectId}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 160);
+  try { host = new URL(url).host; } catch { /* 地址已经校验过 */ }
+  const name = `${host}-${projectId}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 160);
   return path.join((service as any).root, "push", name);
 }
 
@@ -377,6 +343,10 @@ async function startQueueNode(root: string, service: FramePipeline, auto: AutoLi
   }
   if (stale()) return;
   const link = resolved as DocLink;
+  /** 只替哪几个项目文档发布 plan(同推送队列的范围,`scopeOf`);null = 不限 */
+  const publishScope = auto ? () => (auto.contentId ? [auto.contentId] : null)
+    : link.shared && link.contentIds?.length ? (() => { const ids = [...link.contentIds!]; return () => ids; })() : null;
+  const outOfScopePublishLogged = new Set<string>();
 
   // 指纹:报到前借一次流预渲染间探(`leaseStreamBakery` 开起来就定下本进程的环境),什么都不做就还
   try {
@@ -633,6 +603,18 @@ async function startQueueNode(root: string, service: FramePipeline, auto: AutoLi
       const projectId = typeof project?.id === "string" && PROJECT_ID_RE.test(project.id) ? project.id
         : typeof session === "string" && PROJECT_ID_RE.test(session) ? session : null;
       if (!projectId) { log("queue.publish-skip", { reason: "no-project-id" }); return false; }
+      /*
+       * 只替绑定项目发布(`push-scope.mjs`):别的本机项目的 plan 发进共享项目的队列,就会被本机或别的节点渲出来、
+       * 推进共享项目的素材服务。不属于的(或页面还没交项目文档 id)本机自己产。
+       */
+      const allowed = publishScope ? publishScope() : SCOPE_ALL;
+      if (allowed !== SCOPE_ALL && !(Array.isArray(allowed) && typeof project?.id === "string" && allowed.includes(project.id))) {
+        if (!outOfScopePublishLogged.has(String(project?.id))) {
+          outOfScopePublishLogged.add(String(project?.id));
+          log("queue.publish-skip", { reason: allowed === null ? "scope-pending" : "out-of-scope", projectId });
+        }
+        return false;
+      }
       const text = JSON.stringify(project);
       const digest = createHash("sha256").update(text, "utf8").digest("hex");
       const key = `${projectId}\u0000${digest}`;
@@ -999,11 +981,35 @@ function requestSignal(req: any, res: any) {
   res.once?.("close", () => { if (!res.writableEnded) abort(); });
   return controller.signal;
 }
+/** 导出目录与帧库目录(`PROMPTCUT_EXPORT_DIR`,开发期缺省 `<root>/out`) */
+const exportRoot = (root: string) => process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out");
+const libraryRoot = (root: string) => path.join(exportRoot(root), "frame-library");
+const storageLog = (event: string, fields: object = {}) => {
+  try { console.info("[storage]", event, JSON.stringify(fields)); } catch { console.info("[storage]", event); }
+};
+/**
+ * 帧库的使用索引、上限与淘汰(存储占用计划 B 部分,`frame-library-storage.mjs`)。**只在预渲染进程里建**:
+ * 编辑器进程的管线几乎不写帧库,`/api/storage*` 它原样转过来。
+ * `PROMPTCUT_STORAGE_EVICT=0` 只记只量、不删;`PROMPTCUT_TEST_STORAGE_MIN_CAP`(字节)仅供测试与探针,把用户可设的下限调小。
+ */
+function storageOf(root: string) {
+  const testMin = Number(process.env.PROMPTCUT_TEST_STORAGE_MIN_CAP);
+  return storageFor({ root: libraryRoot(root), dataDir: storageDataDir(root),
+    ...(Number.isSafeInteger(testMin) && testMin > 0 ? { minCapBytes: testMin } : {}),
+    evict: process.env.PROMPTCUT_STORAGE_EVICT !== "0", log: storageLog });
+}
+const exportSummaries = new Map<string, ReturnType<typeof createExportSummary>>();
+function exportSummaryOf(root: string) {
+  const dir = exportRoot(root);
+  let summary = exportSummaries.get(dir);
+  if (!summary) { summary = createExportSummary(dir); exportSummaries.set(dir, summary); }
+  return summary;
+}
 export function frameService(root: string, origin: string) {
   root = path.resolve(root);
   let service = services.get(root);
   if (!service) {
-    service = new FramePipeline({ root: path.join(process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out"), "frame-library"), origin: () => origin,
+    service = new FramePipeline({ root: libraryRoot(root), origin: () => origin,
       code: () => frameCode(root), captureCode: () => captureCode(root),
       // c66-host-cards:全局代码版本不含用户卡与改动层,这一版用到的定制卡的身份另算(整场景键、requires.cardSources)
       cardSources: (project: any) => cardCode(root).projectVersions(project),
@@ -1028,6 +1034,8 @@ export function frameService(root: string, origin: string) {
       mediaUrl: (m: any) => mediaSourceOf(m),
     });
     services.set(root, service);
+    /* 存储占用:预渲染进程的管线接上帧库的使用索引(预加载时记使用、按它的会话判「开着」的项目) */
+    if (isPrerender) storageOf(root).attachPipeline(service);
     /*
      * R8:轨道流分段的读口挂在下面的 `/api/frames/*` 上 —— 生产者要读口接上了才开工、才发 `stream` 层
      * (`StreamProducer.routeAttached`)。编辑器进程(`interactive: false`)没有生产者,这里是空操作。
@@ -1074,19 +1082,22 @@ async function requestPageTicket(projectId: string): Promise<string> {
 /**
  * 补推页面交接之前就已经在本机帧库里的层(用户在交接之前就打开过这个项目、渲过):推送队列只在帧**写进**帧库时进队,
  * 交接之后 preload 命中的已有帧不会再写,不补就永远到不了素材服务、层表也不写。
- * 只补这个项目的(`entry.project.id === contentId`;没给 contentId 时补所有正在被会话用着的版本),每个 entry 补一次:
+ * 只补这个项目的(`entry.project.id === contentId`;页面还没交 contentId 时不补,交来之后下一拍再补),每个 entry 补一次:
  * 写一次层表(`publishLayerMap`),每张卡已有的快照帧按段进推送队列(`enqueueSnapshotPush`,队列自己去重,素材服务已有的块跳过)。
  * 轨道流不补:在线页面不用轨道流(product/platforms.md「在线浏览器模式」)。
  */
 async function backfillPush(service: FramePipeline, auto: AutoLink, done: Set<string>) {
   const pipeline: any = service;
   if (!pipeline.pushQueue || !auto.alive()) return 0;
+  // 只推绑定项目的:页面还没交项目文档 id 时不补(不知道哪一版属于它),交来之后先把扣着的段再判一次
+  if (!auto.contentId) return 0;
+  try { pipeline.pushQueue.rescope?.(); } catch { /* 判不了的继续扣着 */ }
   const live = new Set([...(pipeline.generations?.values?.() ?? [])].filter((g: any) => !g?.controller?.signal?.aborted).map((g: any) => g.key));
   let queued = 0;
   for (const entry of [...(pipeline.entries?.values?.() ?? [])]) {
     if (!auto.alive() || !pipeline.pushQueue) break;
     if (done.has(entry.key) || !live.has(entry.key) || !Array.isArray(entry.cardPlan) || !entry.cardPlan.length) continue;
-    if (auto.contentId && entry.project?.id !== auto.contentId) continue;
+    if (entry.project?.id !== auto.contentId) continue;
     done.add(entry.key);
     try { pipeline.publishLayerMap(entry); } catch { /* 层表写不了:推送照补 */ }
     const store = pipeline.snapshots();
@@ -1186,6 +1197,17 @@ export function framesPlugin(): Plugin {
       const queueNode = queueNodes.get(root); queueNodes.delete(root);
       const auto = autoNodes.get(root); autoNodes.delete(root);
       void (async () => { await auto?.unbind({ reason: "server-close" }).catch(() => {}); await queueNode?.close(); await teardown?.(); await s?.close(); })();
+      if (isPrerender) void closeStorage(libraryRoot(root)).catch(() => {});
+    });
+    /*
+     * 存储占用(计划第 4 节):`GET /api/storage`、`POST /api/storage/cap`、`POST /api/storage/clear-cache`。
+     * 扫描与淘汰在预渲染进程里做,编辑器进程原样转过去。路由与回包见 `storage-routes.mjs`。
+     */
+    const storageHandler = isPrerender ? createStorageHandler({ storage: () => storageOf(root), exports: exportSummaryOf(root) }) : null;
+    server.middlewares.use("/api/storage", (req, res, next) => {
+      if (!storageRouteOf(req)) return next();
+      if (!isPrerender) return proxyToPrerender(req, res);
+      return storageHandler!(req, res, next);
     });
     /*
      * D4(b) `/api/cards/layout`:Agent 的 `get_layout` —— 按 t 在**整场景**上实测实体框

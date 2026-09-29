@@ -31,6 +31,9 @@
  *   A4 桌面页面关掉(节点照常在线)之后,在线页面把 U2 改成一段新内容(没有预渲染结果):在线页面发布的清单计划被这台桌面的节点认领、切分,
  *      细任务由它完成,在线页面随之贴上
  *   A5 桌面页面回来(同一个标签页,刷新后回到共享项目、重交配置),再离开项目:节点撤掉,`nodes` 回空,推送队列停
+ *   A7 桌面绑着共享项目时,另一个浏览器上下文在同一台桌面上开一个**不共享**的本机项目 B(同样的重卡,标签不同):
+ *      B 的帧在本机渲完之后,云端素材服务里没有 B 的任何一块、云端内容库没有 B 的层表,B 的 plan 没发进共享项目的队列;
+ *      推送诊断里记着挡掉的段(`outOfScope`);绑定没被打断(仍绑着共享项目)(报告 `docs/reports/AGENT-push-scope.md`)
  *   另核:桌面页面与在线页面的项目文档 id 一致、层表键对得上;节点报的代码版本就是在线构建嵌的那一个。
  * 第二遍(`PROMPTCUT_AUTO_RENDER_NODE=0`):
  *   A6 同样建项目放云端,等 40 秒:不起节点(`nodes` 空)、不推送(日志没有 `push.started`,云端没有这个项目的层表)
@@ -82,12 +85,14 @@ const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ t: n
 const codeOf = (link) => String(link ?? '').split('invite=')[1] ?? '';
 
 async function until(label, fn, timeoutMs, everyMs = 500) {
+  const begin = Date.now();
   const end = Math.min(Date.now() + timeoutMs, deadline);
   for (;;) {
     let v = null;
     try { v = await fn(); } catch { v = null; }
-    if (v) return v;
-    if (Date.now() > end) { fails.push(`超时:${label}`); return null; }
+    // 每一处等待落定都记一行(等了多久),卡在哪一步从 stderr 看得出来
+    if (v) { say('wait.ok', { label, ms: Date.now() - begin }); return v; }
+    if (Date.now() > end) { say('wait.timeout', { label, ms: Date.now() - begin }); fails.push(`超时:${label}`); return null; }
     await delay(everyMs);
   }
 }
@@ -123,6 +128,8 @@ function pidOnPort(port) {
 
 let combo = null;
 const proxies = [];
+/** 代理上升级过的连接(两头的 socket),收尾时一起掐掉 */
+const upgraded = new Set();
 let DIST = null;
 async function startLocalSite() {
   for (const p of [PORTS.site, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
@@ -182,6 +189,8 @@ async function startLocalSite() {
       const url = new URL(req.url, origin);
       if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
       const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
+      upgraded.add(socket);
+      socket.on('close', () => upgraded.delete(socket));
       const up = net.connect(PORTS.doc, '127.0.0.1', () => {
         const lines = [`${req.method} ${target} HTTP/1.1`];
         for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
@@ -190,6 +199,9 @@ async function startLocalSite() {
         up.pipe(socket);
         socket.pipe(up);
       });
+      upgraded.add(up);
+      up.on('close', () => { upgraded.delete(up); socket.destroy(); });
+      socket.on('close', () => up.destroy());
       up.on('error', () => socket.destroy());
       socket.on('error', () => up.destroy());
     });
@@ -220,6 +232,8 @@ function shellEnv(dir, { autoOff }) {
     TEMP: tmp, TMP: tmp, TMPDIR: tmp,
   });
   if (autoOff) env.PROMPTCUT_AUTO_RENDER_NODE = '0';
+  // 排障(`--prerender-log`):预渲染进程的全部输出另存一份(壳不设这个变量;只影响日志)
+  if (argv.includes('--prerender-log')) env.PROMPTCUT_PRERENDER_LOG = path.join(OUT, `${path.basename(dir)}-prerender.log`);
   return env;
 }
 
@@ -237,7 +251,8 @@ async function startDesktop({ autoOff, name }) {
   const keep = (c) => {
     const lines = (partial + c.toString()).split(/\r?\n/);
     partial = lines.pop();
-    for (const line of lines) { log.push(line); if (log.length > 20000) log.shift(); }
+    // 行首带收到的时刻(`@<毫秒>`),分段耗时据此拼;找行的正则不锚行首,解析 JSON 从第一个 `{` 起,不受影响
+    for (const line of lines) { log.push(`@${Date.now()} ${line}`); if (log.length > 20000) log.shift(); }
   };
   child.stdout.on('data', keep);
   child.stderr.on('data', keep);
@@ -402,7 +417,7 @@ async function onlinePasted(page, clipId, seekTo, { notResultKey = null } = {}) 
 }
 
 /** 桌面页面建项目、放卡、测完 */
-async function desktopProject(page, name, { userCards }) {
+async function desktopProject(page, name, { userCards, label = 'H' }) {
   await page.goto(`${desktop.origin}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await until('桌面页面舞台起来', () => P(page, () => document.querySelectorAll('iframe').length >= 2 && !document.querySelector('[data-pc="probe-gate"]')), 300_000, 500);
   await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
@@ -410,7 +425,7 @@ async function desktopProject(page, name, { userCards }) {
   const clips = await P(page, async (spec) => {
     const S = await import('/src/store/project.ts');
     const heavy = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: spec.seconds });
-    S.actions.setClipParams(heavy.id, { burnMs: 40, label: 'H' });
+    S.actions.setClipParams(heavy.id, { burnMs: 40, label: spec.label });
     const out = { heavy: heavy?.id ?? null, u1: null, u2: null };
     if (spec.userCards) {
       const u1 = S.actions.addClipOnNewTrack({ index: 0, cardId: 'mu-animated-shiny-text', start: 0, duration: spec.seconds });
@@ -422,7 +437,7 @@ async function desktopProject(page, name, { userCards }) {
     }
     S.actions.seek(1);
     return out;
-  }, { seconds: SECONDS, userCards, run: RUN });
+  }, { seconds: SECONDS, userCards, run: RUN, label });
   const docId = await P(page, async () => (await import('/src/store/project.ts')).getState().project.id);
   await until('桌面页面测量测完', async () => P(page, async () => { const R = await import('/src/editor/probeRunner.ts'); return !R.probeProgress().running && !document.querySelector('[data-pc="probe-gate"]'); }), 300_000, 500);
   return { ...clips, docId };
@@ -461,6 +476,23 @@ async function localFrames(clipId) {
     } catch { return { frames: 0, picked: c.picked, key: c.snapshotKey.slice(0, 12) }; }
   }
   return null;
+}
+/** 这张卡在本机帧库里的共享档快照键(完整) */
+async function snapKeyOf(clipId) {
+  const d = await dDiag().catch(() => null);
+  for (const plan of d?.plans ?? []) {
+    const c = plan.controls?.find((x) => x.clipId === clipId);
+    if (c?.snapshotKey && c.tier === 'shared') return c.snapshotKey;
+  }
+  return null;
+}
+/** 本机帧库里这个共享档快照键下每一帧 HTML 的 sha256(推送时块的哈希就是它,`artifact-transfer.mjs`) */
+async function frameHashes(key) {
+  const { createHash } = await import('node:crypto');
+  const dir = path.join(desktop.dir, 'frame-library', 'controls-html', key);
+  const out = new Set();
+  for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) if (/^\d+\.html$/.test(f)) out.add(createHash('sha256').update(fs.readFileSync(path.join(dir, f))).digest('hex'));
+  return out;
 }
 /** 在线构建里嵌的代码版本是不是这一个(在编辑器页的脚本里找这串 64 位十六进制) */
 async function onlineBuildHas(codeVersion) {
@@ -549,6 +581,42 @@ try {
     out.steps.a2 = { ms: Date.now() - t2, heavy: heavyCloud, backfill };
     say('a2.heavy', out.steps.a2);
 
+    /* ---------------------------------------------------------------- A7. 同时开着的另一个本机项目:它的帧不到云端 */
+    const t7 = Date.now();
+    const octx = await browser.createBrowserContext();
+    const opage = await newPage(octx);
+    const other = await desktopProject(opage, `本机另一项目-${RUN}`, { userCards: false, label: `B ${RUN}` });
+    const otherLocal = await until('A7:另一个本机项目的重卡在本机渲完', async () => { const f = await localFrames(other.heavy); return f && f.frames >= SECONDS * FPS ? f : null; }, 600_000, 2000);
+    check(!!otherLocal, 'A7:另一个本机项目的帧写进了同一个帧库', otherLocal);
+    const keyB = await snapKeyOf(other.heavy);
+    const keyA = await snapKeyOf(state.heavy);
+    check(keyB && keyB !== keyA, 'A7:两个项目的重卡快照键不同', { keyA: keyA?.slice(0, 12), keyB: keyB?.slice(0, 12) });
+    // 推送队列静置 1.5 s 再推,留足余量等它(推错了也该推完了)
+    await delay(15_000);
+    const hashesA = keyA ? await frameHashes(keyA) : new Set();
+    const hashesB = [...(keyB ? await frameHashes(keyB) : new Set())].filter((h) => !hashesA.has(h));
+    let leaked = 0;
+    for (const h of hashesB) if (await conn.assets.has('snap', h)) leaked++;
+    const mapB = await conn.rpc({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${other.docId}` }).catch((e) => ({ error: String(e?.message ?? e) }));
+    const push7 = (await dDiag())?.push ?? null;
+    const published7 = (await dDiag())?.queue?.published ?? [];
+    const outLines = logLines(/\[artifact-push\] push\.out-of-scope /).map(jsonOfLine).filter(Boolean);
+    const rn7 = await dRenderNode();
+    check(hashesB.length > 0 && leaked === 0, 'A7:云端素材服务里没有另一个本机项目的任何一块', { blocks: hashesB.length, leaked });
+    check(mapB?.type === 'content.item' && mapB.missing === true, 'A7:云端内容库没有另一个本机项目的层表', { type: mapB?.type, missing: mapB?.missing, error: mapB?.error });
+    check((push7?.outOfScope ?? 0) > 0 && !(push7?.items ?? []).some((i) => keyB && i.id.includes(keyB)), 'A7:推送队列挡掉了另一个项目的段(outOfScope),队里没有它的', { outOfScope: push7?.outOfScope, scope: push7?.scope, items: push7?.items?.length });
+    check(!published7.some((p) => p.projectId === other.docId), 'A7:另一个项目的 plan 没发进共享项目的队列', published7.map((p) => p.projectId));
+    check(outLines.length > 0, 'A7:编辑器日志里看得到 push.out-of-scope', logLines(/push\./).slice(-5));
+    check(rn7?.bound === true && rn7.projectId === state.projectId, 'A7:开另一个本机项目没有打断共享项目的绑定', rn7);
+    // 绑定项目照常:H 那一层仍齐(A2 已核),这里再核一次它的块都在
+    const heavyStill = await layerCovered(conn, state.docId, state.heavy);
+    check(!!heavyStill, 'A7:绑定项目的层照常在云端', heavyStill);
+    out.steps.a7 = { ms: Date.now() - t7, otherDocId: other.docId, keyB: keyB?.slice(0, 12), frames: otherLocal?.frames ?? 0, blocks: hashesB.length, leaked,
+      layerMapMissing: mapB?.missing === true, outOfScope: push7?.outOfScope ?? null, scope: push7?.scope ?? null, published: published7.map((p) => p.projectId), outOfScopeLines: outLines.length };
+    say('a7.done', out.steps.a7);
+    await opage.close().catch(() => {});
+    await octx.close().catch(() => {});
+
     /* ---------------------------------------------------------------- A3. 另一台设备的在线页面进同一项目,贴出 U1 */
     const t3 = Date.now();
     const mctx = await browser.createBrowserContext();
@@ -561,8 +629,12 @@ try {
     const joined = await member.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 90_000 }).then(() => true, () => false);
     if (!check(joined, 'A3:在线页面凭邀请进入', { message: await textOf(member, '[data-pc="join-message"]') })) throw new Error('在线页面没进去');
     await until('A3:在线页面测完', async () => !(await P(member, () => !!document.querySelector('[data-pc="probe-gate"]'))) && (await previewDiag(member))?.dual !== undefined, 300_000, 500);
+    const a3Marks = { joined: Date.now() - t3 };
     const firstU1 = { stage: await clipStage(member, state.u1), badge: await clipBadge(member, state.u1) };
     const u1 = await until('A3:在线页面贴出 U1 的层(没有图标与徽标)', () => onlinePasted(member, state.u1, 1), 900_000, 4000);
+    a3Marks.pasted = Date.now() - t3;
+    a3Marks.firstPlanAt = ((await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null))?.log ?? []).find((x) => x.ok)?.at ?? null;
+    if (a3Marks.firstPlanAt) a3Marks.firstPlanAt -= t3;
     await shot(member, 'a3-online-u1');
     check(!!u1, 'A3:在线页面贴出用户卡 U1 的层,没有「需要本地 PC 渲染辅助」', { u1, firstU1, last: { stage: await clipStage(member, state.u1), badge: await clipBadge(member, state.u1), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.u1) ?? null } });
     const u1Cloud = await until('A2:云端层表里 U1 那一层齐、字节在云端', () => layerCovered(conn, state.docId, state.u1), 120_000, 3000);
@@ -573,7 +645,7 @@ try {
     // 核对:节点报的代码版本 = 在线构建嵌的那一个
     const cvOk = await onlineBuildHas(state.nodeSummary.codeVersion).catch(() => false);
     check(cvOk, '核对:渲染节点报的代码版本就是在线构建嵌进页面的那一个(requires.codeVersion)', { node: String(state.nodeSummary.codeVersion).slice(0, 16) });
-    out.steps.a3 = { ms: Date.now() - t3, firstU1, u1, u1Cloud, ids: { desktop: state.docId, member: memberDocId, tenant: state.projectId }, codeVersionInOnlineBuild: cvOk };
+    out.steps.a3 = { ms: Date.now() - t3, marks: a3Marks, firstU1, u1, u1Cloud, ids: { desktop: state.docId, member: memberDocId, tenant: state.projectId }, codeVersionInOnlineBuild: cvOk };
     say('a3.done', out.steps.a3);
 
     /* ---------------------------------------------------------------- A4. 桌面页面关掉;在线页面把 U2 改成新内容,清单计划由这台桌面认领并完成 */
@@ -586,6 +658,8 @@ try {
     // U2 改之前那一层的结果键:改完之后要等一层新的(不同的结果键),免得把旧内容的层当成贴上了
     const u2Old = await until('A4:改之前 U2 已有一层(在线计划渲的)', () => layerCovered(conn, state.docId, state.u2), 600_000, 3000);
     const oldKey = u2Old?.fullResultKey ?? null;
+    // 分段计时(毫秒,相对「在线页面改 U2」那一刻):planPublishedAt 是页面记的发布成功时刻,其余是探针看到的时刻(按各自的轮询间隔有滞后)
+    const marks = { start: t4, u2OldSeen: Date.now(), edit: Date.now() };
     await P(member, (spec) => { const s = window.__pcStore; s.actions.setClipParams(spec.id, { text: spec.text }); s.actions.seek(1); }, { id: state.u2, text: `U2 新内容 ${RUN}` });
     await delay(1500);
     const firstU2 = { stage: await clipStage(member, state.u2), badge: await clipBadge(member, state.u2) };
@@ -595,24 +669,32 @@ try {
       return d?.last && d.last !== before?.last && d.lastClips?.includes(state.u2) ? d : null;
     }, 120_000, 1000);
     const planId = plan?.last ?? null;
+    marks.planSeen = Date.now();
+    marks.planPublishedAt = [...(plan?.log ?? [])].reverse().find((x) => x.id === planId && x.ok)?.at ?? null;
     const claimed = await until('A4:这台桌面的节点认领并切分了在线页面的那个计划', async () => {
       const q = (await dDiag())?.queue;
       const inClaims = q?.claims?.some((c) => c.id === planId);
       const split = q?.plans && Object.prototype.hasOwnProperty.call(q.plans, planId);
       return inClaims && split ? { derived: q.plans[planId], completed: q.local?.completed ?? [] } : null;
     }, 600_000, 2000);
+    marks.claimedSeen = Date.now();
     check(!!claimed, 'A4:在线页面发布的清单计划被这台桌面的节点认领、切分', { planId, claimed: !!claimed });
     const u2Cloud = await until('A4:云端层表里 U2 换成新内容那一层(结果键变了)、各段齐、字节在云端', () => layerCovered(conn, state.docId, state.u2, { notResultKey: oldKey }), 900_000, 3000);
+    marks.cloudLayerSeen = Date.now();
     check(!!u2Cloud && !!oldKey, 'A4:U2 的新内容由这台桌面渲出、推到云端、写进层表', { oldKey: oldKey?.slice(0, 16), u2Cloud });
     const u2 = await until('A4:在线页面贴上 U2 的新内容', () => onlinePasted(member, state.u2, 1, { notResultKey: oldKey }), 900_000, 4000);
+    marks.pastedSeen = Date.now();
     await shot(member, 'a4-online-u2-after');
     check(!!u2, 'A4:在线页面随之贴上 U2(没有图标与徽标)', { u2, firstU2, last: { stage: await clipStage(member, state.u2), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.u2) ?? null } });
     const q4 = (await dDiag())?.queue;
     const derived = Array.isArray(q4?.plans?.[planId]) ? q4.plans[planId] : [];
     const doneByDesktop = derived.filter((id) => q4?.local?.completed?.includes(id) || q4?.local?.dedup?.includes(id));
     check(derived.length === 0 || doneByDesktop.length > 0, 'A4:那个计划切出的细任务由这台桌面完成', { derived: derived.length, doneByDesktop: doneByDesktop.length });
-    out.steps.a4 = { ms: Date.now() - t4, planId, firstU2, oldKey: oldKey?.slice(0, 16), u2Cloud, derived: derived.length, doneByDesktop: doneByDesktop.length, u2, pageGoneNodes: qGone?.nodes?.map((n) => n.projectId) };
+    const rel = Object.fromEntries(Object.entries(marks).map(([k, v]) => [k, typeof v === 'number' ? v - marks.edit : null]));
+    out.steps.a4 = { ms: Date.now() - t4, editToPastedMs: marks.pastedSeen - marks.edit, marks: rel, marksAbs: marks, planId, firstU2, oldKey: oldKey?.slice(0, 16), u2Cloud, derived: derived.length, doneByDesktop: doneByDesktop.length, u2, pageGoneNodes: qGone?.nodes?.map((n) => n.projectId) };
     say('a4.done', out.steps.a4);
+    // 分段耗时的原始材料:预渲染进程的队列诊断(事件里有 executor.render-timing)
+    try { fs.writeFileSync(path.join(OUT, 'a4-diag.json'), JSON.stringify(await dDiag(), null, 1)); } catch { /* 取不到 */ }
 
     /* ---------------------------------------------------------------- A5. 桌面页面回来(刷新后回到共享项目),再离开:节点撤掉 */
     const t5 = Date.now();
@@ -685,12 +767,18 @@ try {
   const deleted = [];
   for (const p of projects) {
     if (KEEP_PROJECT) { deleted.push({ projectId: p.projectId, kept: true }); continue; }
-    deleted.push({ projectId: p.projectId, result: await adminDelete(p.projectId, p.creator).catch((err) => `error:${String(err?.message ?? err).slice(0, 80)}`) });
+    deleted.push({ projectId: p.projectId, result: await Promise.race([
+      adminDelete(p.projectId, p.creator).catch((err) => `error:${String(err?.message ?? err).slice(0, 80)}`),
+      delay(20_000).then(() => 'timeout'),
+    ]) });
   }
   try { await browser?.close(); } catch { /* 已关 */ }
   await stopDesktop().catch(() => {});
-  for (const s of proxies) await new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); });
-  try { await combo?.close(); } catch { /* 已关 */ }
+  // 升级过的 WebSocket 连接不归 http 服务器管,close 的回调会一直等它们:先全部掐掉,再限时等(以前会在这里挂住、不出结果行)
+  for (const sock of upgraded) { try { sock.destroy(); } catch { /* 已断 */ } }
+  const within = (p, ms) => Promise.race([p, delay(ms)]);
+  for (const s of proxies) await within(new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); }), 5000);
+  try { await within(combo?.close(), 10_000); } catch { /* 已关 */ }
   out.cleanup = { deleted, listening: [PORTS.site, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset, PORTS.desktop, PORTS.desktop + 1, PORTS.desktop + 2].filter((p) => pidOnPort(p)) };
   if (!KEEP) {
     for (const d of fs.readdirSync(TMP)) {

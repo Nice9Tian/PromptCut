@@ -260,6 +260,8 @@ function pidOnPort(port) {
 
 let combo = null;
 const proxies = [];
+/** 代理上升级过的连接(两头的 socket),收尾时一起掐掉 */
+const upgraded = new Set();
 const docHeaders = [];
 async function startLocalSite() {
   for (const p of [PORTS.editor, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
@@ -319,6 +321,8 @@ async function startLocalSite() {
       const url = new URL(req.url, origin);
       if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
       const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
+      upgraded.add(socket);
+      socket.on('close', () => upgraded.delete(socket));
       const up = net.connect(PORTS.doc, '127.0.0.1', () => {
         const lines = [`${req.method} ${target} HTTP/1.1`];
         for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
@@ -327,6 +331,9 @@ async function startLocalSite() {
         up.pipe(socket);
         socket.pipe(up);
       });
+      upgraded.add(up);
+      up.on('close', () => { upgraded.delete(up); socket.destroy(); });
+      socket.on('close', () => up.destroy());
       up.on('error', () => socket.destroy());
       socket.on('error', () => up.destroy());
     });
@@ -1980,8 +1987,11 @@ try {
   try { fs.writeFileSync(path.join(OUT, 'creator-editor.log'), editorLog.join('\n')); fs.writeFileSync(path.join(OUT, 'host.log'), hostLog.join('\n')); } catch { /* 写不了 */ }
   await stopHost().catch(() => {});
   await stopEditor().catch(() => {});
-  for (const s of proxies) await new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); });
-  try { await combo?.close(); } catch { /* 已关 */ }
+  // 升级过的 WebSocket 连接不归 http 服务器管,close 的回调会一直等它们:先全部掐掉,再限时等(以前会在这里挂住、不出结果行)
+  for (const sock of upgraded) { try { sock.destroy(); } catch { /* 已断 */ } }
+  const within = (p, ms) => Promise.race([p, delay(ms)]);
+  for (const s of proxies) await within(new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); }), 5000);
+  try { await within(combo?.close(), 10_000); } catch { /* 已关 */ }
   out.cleanup = { deleted, listening: [PORTS.editor, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset, PORTS.node, PORTS.node + 1, PORTS.node + 2].filter((p) => pidOnPort(p)) };
   if (!KEEP) {
     for (const d of fs.readdirSync(TMP)) {

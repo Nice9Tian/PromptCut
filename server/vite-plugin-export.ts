@@ -8,6 +8,7 @@ import { spawn } from "child_process";
 import type { AddressInfo } from "net";
 import { exportBegin, exportEnd } from "./render-pool-state.mjs";
 import { exportOriginalsGate } from "./export-originals";
+import { EXPORT_KEEP, claimExportDir, pruneExportDir, sweepExportRoot } from "./storage-leftovers.mjs";
 
 interface ExportJob {
   id: string;
@@ -107,6 +108,23 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
   });
 }
 
+/**
+ * 导出进程退出后收拾产物目录:只留成片、透明层与 project.json(`storage-leftovers.mjs` 的 `pruneExportDir`)。
+ * 成功、取消、失败都做 —— 取消和失败留下的 frames / parts 同样是大块的废料;已有的成片、透明层照留,
+ * 列表里能看到这次导出。取消时 Chrome / ffmpeg 孙进程可能比渲染进程晚一点退、还占着文件,
+ * 删不掉的隔一会儿再试几次。
+ */
+async function cleanupExportDir(dir: string, { framesOnly = false } = {}) {
+  // --no-video 的导出只有逐帧 PNG,那就是产物,不删
+  const keep = framesOnly ? [...EXPORT_KEEP, "frames"] : EXPORT_KEEP;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const report = await pruneExportDir(dir, { keep, log: (m: string) => console.log(m) });
+    if (!report.skipped.some((s: { reason: string }) => s.reason !== "link")) return report;
+    await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+  }
+  return null;
+}
+
 async function handleExportStart(req: Connect.IncomingMessage, res: ServerResponse, server: ViteDevServer, root: string) {
   const chunks: Buffer[] = [];
   req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -135,9 +153,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         return;
       }
 
-      const now = new Date();
-      const id = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
-      const outDir = path.resolve(outRoot(root), `export-${id}`);
+      const { id, outDir } = await claimExportDir(outRoot(root));
       const mediaDir = path.resolve(outDir, "media");
       await fs.mkdir(mediaDir, { recursive: true });
       
@@ -254,8 +270,10 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         if (stderrLog.length > 10) stderrLog.shift();
       });
       
-      child.on("close", (code) => {
+      child.on("close", async (code) => {
         job.child = undefined;
+        // 先收拾目录再报结束:界面看到「完成」时目录已经是最终的样子(成片与透明层不动,取件不受影响)
+        await cleanupExportDir(outDir, { framesOnly: !!noVideo }).catch(() => {});
         if (job.cancelled) {
           job.status = "cancelled";
           job.message = "已取消";
@@ -451,6 +469,8 @@ export function exportPlugin(): Plugin {
     name: "vite-plugin-export",
     configureServer(server) {
       const root = server.config.root;
+      // 启动清理:死进程留下的视觉工具临时导出 `export-vision-<pid>-*`(只认这一种形态)
+      void sweepExportRoot(outRoot(root), { log: (m: string) => console.log(m) }).catch(() => {});
       server.middlewares.use(async (req, res, next) => {
         if (!req.url) return next();
         

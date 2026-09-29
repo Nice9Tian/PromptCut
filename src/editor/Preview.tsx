@@ -805,6 +805,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       if (m.type !== "done") void pumpRef.current();
     });
     src.setProject(getState().project.id || null);
+    src.setInputs(getState().project);
     src.focus(tRef.current, getState().project.fps || 30);
     const resume = () => {
       if (document.visibilityState === "visible") src.focus(tRef.current, getState().project.fps || 30);
@@ -833,6 +834,16 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       stopSnapshotFeed();
     };
   }, [online, lowMem]);
+  /*
+   * stale-layer:项目每变一次(本页改的、别的成员改了同步过来的)都把它交给在线来源。来源按它算各片段的输入签名,
+   * 与层表里每层记的 `inputSig` 比对:对不上的旧参数层马上撤掉(就绪区间发空,下一次投递就不再贴,用户卡、图卡显示沙漏,
+   * 内置重卡照在线普通档的兜底),渲染节点按新输入重写层表后新结果照常换上;改回原来的参数、原来那一层还在就照贴。
+   * 放在建来源那个 effect 之后:同一次提交里先建好来源再交项目。
+   */
+  useEffect(() => {
+    if (!online) return;
+    onlineSourceRef.current?.setInputs(project);
+  }, [online, lowMem, project]);
   /*
    * C10 契约第 9 节「识别」:在线页面经同一条文档服务连接读本项目内容库的卡片源码(`card-source`,键前缀 `src/cards/user/`),
    * 解析出卡片的 id 与名字,进注册表作「已知但本机不能运行」的条目(`sync/onlineCardSources.ts`)。定时重取;连接换了

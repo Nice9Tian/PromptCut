@@ -44,6 +44,7 @@ const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; co
       { label: "导出视频", command: "export-video", shortcut: "Ctrl E" },
       { label: "打开导出文件夹", command: "open-export", separator: true, desktopOnly: "打开导出文件夹" },
       { label: "打开数据目录", command: "open-data", desktopOnly: "打开数据目录" },
+      { label: "存储…", command: "open-storage", desktopOnly: "存储" },
       { label: "返回首页", command: "go-home", separator: true },
       { label: "退出", command: "quit", desktopOnly: "退出" },
     ],
@@ -84,7 +85,39 @@ function tauriWindow(): WindowApi | null {
   return t?.window?.getCurrentWindow?.() ?? null;
 }
 
+/**
+ * 「存储…」(`workflow/project.md`「开始」):回到开始页并滚到「存储」一块。
+ *
+ * 照「返回首页」的路走:在编辑器里时把 `go-home` 交给顶栏(`TopBar.tsx`),有没保存的改动由它问一句,
+ * 确认了它发 `pc-go-home`、`Shell` 换到开始页。这里只在它**真的回去了**时留一个待办,开始页挂上时取走、滚过去;
+ * 用户在确认框里点了取消就不留,免得下次回首页莫名其妙滚到底。已经在开始页时没有顶栏接 `go-home`,
+ * 开始页自己听 `STORAGE_EVENT` 滚过去。
+ */
+export const STORAGE_EVENT = "pc-open-storage";
+const STORAGE_PENDING_KEY = "__pcOpenStoragePending";
+
+export function takeStorageRequest(): boolean {
+  const g = globalThis as Record<string, unknown>;
+  const pending = g[STORAGE_PENDING_KEY] === true;
+  g[STORAGE_PENDING_KEY] = false;
+  return pending;
+}
+
+function openStorage() {
+  let wentHome = false;
+  const mark = () => { wentHome = true; };
+  window.addEventListener("pc-go-home", mark);
+  try {
+    window.dispatchEvent(new CustomEvent("pc-titlebar-command", { detail: "go-home" }));
+  } finally {
+    window.removeEventListener("pc-go-home", mark);
+  }
+  if (wentHome) (globalThis as Record<string, unknown>)[STORAGE_PENDING_KEY] = true;
+  else window.dispatchEvent(new Event(STORAGE_EVENT));
+}
+
 function sendCommand(command: string) {
+  if (!ONLINE_BUILD && command === "open-storage") return openStorage();
   const t = (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
   if (!ONLINE_BUILD && ["open-export", "open-data", "open-pylibs", "open-models", "open-logs", "reset-pylibs", "about", "quit"].includes(command)) {
     const invoke = t?.core?.invoke;

@@ -203,3 +203,88 @@
 /* 听写扩展卡里的安装进度和报错 */
 .sp-ext-progress { margin-top: 8px; }
 .sp-ext-error { margin-top: 6px; font-size: 12px; color: var(--danger, #ef4444); overflow-wrap: anywhere; }
+
+/* ── 存储 ─────────────────────────────────────────── */
+.sp-storage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+}
+.sp-storage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+.sp-storage-label { font-size: 13px; font-weight: 600; }
+.sp-storage-figure { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sp-storage-figure .sp-muted { font-weight: 400; }
+.sp-storage-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--fill-subtle);
+  overflow: hidden;
+}
+.sp-storage-bar > span { display: block; height: 100%; background: var(--accent); }
+.sp-storage-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.sp-storage-input {
+  width: 72px;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline);
+  background: var(--bg-canvas);
+  color: var(--ink);
+}
+.sp-storage-notice {
+  font-size: 12px;
+  color: var(--accent);
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+
+.sp-export-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.sp-export-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+}
+.sp-export-row + .sp-export-row { border-top: 1px solid var(--hairline); }
+.sp-export-main { min-width: 0; flex: 1 1 260px; }
+.sp-export-name {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-export-tag {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--fill-subtle);
+  color: var(--ink-muted);
+}
+.sp-export-tag.is-warn { color: var(--danger); }
+.sp-export-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.sp-danger-btn:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }

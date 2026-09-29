@@ -71,6 +71,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   /** `projectId@projectRev` → Promise<{ entry, context }>;Map 的插入顺序就是 LRU 顺序 */
   const cache = new Map();
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响执行 */ } };
+  /** 同 `say`;`render` 里的 `say` 被阶段回调遮住了,那里用这个名字记日志 */
+  const note = say;
 
   const versionOf = task => {
     const projectId = task?.source?.projectId;
@@ -206,10 +208,14 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       say(done >= total ? 'finish' : 'frames', { done, total });
       progress?.(done);
     };
+    // 诊断(不改行为):共享档这一段各步的用时(排队、借预渲染间、换页、推帧、入库、画小尺寸),记进 executor.render
+    const timing = {};
     await onLane(pipeline, () => (task.tier === 'shared'
-      ? pipeline.renderCardSnapshotRange(entry, control, range, { signal, progress: tracked })
+      ? pipeline.renderCardSnapshotRange(entry, control, range, { signal, progress: tracked, timing })
       : pipeline.renderSceneSnapshotRange(entry, control, range, { signal, progress: tracked })));
     say('executor.render', { id: task.id, tier: task.tier, clipId: control.clipId, ms: Date.now() - started });
+    // 上面那个 `say` 是阶段回调(这一行照旧);分段耗时另记一行日志(`log`),编辑器进程的转发器放行它
+    note('executor.render-timing', { id: task.id, tier: task.tier, clipId: control.clipId, ms: Date.now() - started, ...timing });
     return null;
   }
 

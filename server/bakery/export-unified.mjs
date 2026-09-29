@@ -139,6 +139,8 @@ export async function exportUnified(project, opts) {
     cardsVideo = path.join(out, 'overlay.mov');
     await concatVideos(ffmpeg, files, cardsVideo);
     console.log(`分片视频已合并: ${files.length} 个 part -> ${cardsVideo}`);
+    // 分片是合并后 overlay.mov 的逐字节重复,合完就删(存储计划 A 部分:大的导出里多占十几 GB)
+    await fs.rm(partsDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
   }
   return {
     ...(first || { framesDir: path.join(out, 'frames'), ext: 'png', width: project.width, height: project.height }),

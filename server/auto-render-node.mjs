@@ -128,7 +128,8 @@ export function createAutoRenderNode({ start, stop, requestTicket, now = Date.no
     url: rec.binding.url,
     shared: true,
     projectId: rec.binding.projectId,
-    contentId: rec.binding.contentId,
+    /** 现取:页面晚交来的项目文档 id(同一个项目只换 id,见 `bind`)也看得到;推送与发布的范围按它判(`push-scope.mjs`) */
+    get contentId() { return rec.binding.contentId; },
     assetBase: () => rec.binding.assetBase,
     protocols: protocolsOf(rec),
     /** 这一代还在不在(撤掉之后,还在起步的 start 据此收手) */

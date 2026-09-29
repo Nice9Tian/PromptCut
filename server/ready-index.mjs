@@ -389,6 +389,18 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
     while (staged.size > maxStaged) staged.delete(staged.keys().next().value);
   }
 
+  /**
+   * 摘掉挂着的键(帧库淘汰删了它的目录之后,`frame-library-storage.mjs`):`key` 摘一个,`prefix` 摘这一族里
+   * 键以它开头的全部(本地档的键是 `<entry.key>/<共享键>`)。已经发进会话的层不动 —— 被删的只会是没开着的版本。
+   */
+  function unstage({ kind, key, prefix } = {}) {
+    if (!READY_KINDS.includes(kind)) return 0;
+    let n = 0;
+    if (key) { if (staged.delete(`${kind}:${key}`)) n++; }
+    else if (prefix) for (const [id, item] of staged) if (item.kind === kind && item.key.startsWith(prefix)) { staged.delete(id); n++; }
+    return n;
+  }
+
   /** `/api/frames/ready?session=` 的订阅。退订后这个会话按 `idleMs` 回收 */
   function subscribe(id, send) {
     const record = session(id);
@@ -408,7 +420,7 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
     session: id => session(id),
     peek: id => sessions.get(norm(id)),
     current: id => sessions.get(norm(id))?.entryKey,
-    request, stale, adopt, publish, resetOn, markDone, claim, stageByKey, subscribe, prune, sessionsOn,
+    request, stale, adopt, publish, resetOn, markDone, claim, stageByKey, unstage, subscribe, prune, sessionsOn,
     drop: id => sessions.delete(norm(id)),
     sessionCount: () => sessions.size,
     stagedKeys: () => [...staged.values()].map(item => ({ ...item })),

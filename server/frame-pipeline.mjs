@@ -11,6 +11,9 @@ import { cardEntryCode } from './card-code.mjs';
 import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
 import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
+import { sweepFrameLibrary } from './storage-leftovers.mjs';
+/** 本进程已做过启动清理的帧库根 */
+const sweptRoots = new Set();
 import { CardFrameCache } from './card-cache.mjs';
 import { SnapshotStore, snapshotTier, rangeHas, rangeCount } from './snapshot-store.mjs';
 import { createReadyHub, DEFAULT_READY_SESSION, READY_SESSION_IDLE_MS, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
@@ -204,11 +207,25 @@ export class FramePipeline {
   constructor({ root, origin, code = () => '', cardSources = () => ({}), captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null }) {
     this.root = root;
     /**
+     * 存储计划 A 部分:启动时清掉死进程留在帧库里的临时文件(`storage-leftovers.mjs` 文件头列了认哪几种)。
+     * 只对真正的帧库根(`<导出目录>/frame-library`)做,一个进程一个根只做一次;测试用的临时根不碰。
+     * 不等它:清理和开工并行,只删死进程的东西,不会和本进程的写入撞上。
+     */
+    if (typeof root === 'string' && path.basename(root) === 'frame-library' && !sweptRoots.has(path.resolve(root))) {
+      sweptRoots.add(path.resolve(root));
+      this.leftoverSweep = sweepFrameLibrary(root, { log: message => console.log(message) }).catch(() => null);
+    } else this.leftoverSweep = Promise.resolve(null);
+    /**
      * C6.4 的推送队列(`artifact-push.mjs` 的 `createPushQueue`,它建好后自己挂到这里)。**只有它不是 null 时**
      * 快照 / 流的推送钩子和 `preload` 里的换机取用才生效;null(缺省,含所有现有测试和探针)时逐路径行为不变。
      * 预渲染进程只在连得上素材服务和文档服务时才建它(`vite-plugin-frames.ts`)。
      */
     this.pushQueue = pushQueue;
+    /**
+     * 帧库的使用索引与淘汰(`frame-library-storage.mjs`,存储占用计划 B 部分)。只有预渲染进程接上(`attachPipeline`);
+     * null 时下面三处 `this.usage?.` 什么都不做。
+     */
+    this.usage = null;
     /**
      * 环境指纹(M4):card plan、轨道流的全部结果键都乘上它。定下来之前是 null —— 那时
      * `CardFrameCache.plan()` 抛出、`planStreams` 回 [],什么键都不产。
@@ -1362,6 +1379,8 @@ export class FramePipeline {
     // `ticket`:HTTP 入口在等镜像之前就替它领了号(按到达顺序,不按算完的顺序,审查 #6)
     const ticket = adopt ? (issued ?? this.ready.request(session)) : undefined;
     const entry = await this.entry(project);
+    // 存储占用:打开的这一版用到的键记为使用(计划还没算出来时先记整场景与本地档,算出来后 `recordCardPlan` 再记全)
+    this.usage?.touchEntry(entry);
     if (queue !== undefined) entry.queueSnapshots = queue === true;
     if (adopt) {
       // 算 entry 的那一段里同一会话又来了更新的 preload:这个请求作废 —— 不认领,也不排后台活
@@ -1461,6 +1480,9 @@ export class FramePipeline {
         if (entry.stage !== 'ready') entry.stage = undefined;
         if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background');
         if (deferredCards.length && !controller.signal.aborted) this.scheduleCardLockRetry(entry, deferredCards, controller.signal);
+        // 存储占用:这一趟做完再记一次(轨道流此时才有),到节拍了就判一次要不要淘汰
+        this.usage?.touchEntry(entry);
+        this.usage?.afterBatch();
       }
     });
     return entry;
@@ -1644,11 +1666,14 @@ export class FramePipeline {
     const jobs = this.smallPending?.splice(0) ?? [];
     if (!jobs.length || this.closed || !this.smallTierEnabled()) return this.whenSmallSettled();
     this.smallChain = (this.smallChain || Promise.resolve()).catch(() => {}).then(async () => {
+      const started = Date.now();
       const renderer = createSmallRenderer(bakery);
       for (const job of jobs) {
         try { await this.writeSmallSnapshots(job, renderer); }
         catch (error) { this.smallStats.failed++; this.smallStats.lastError = String(error?.message ?? error); break; }
       }
+      // 诊断(不改行为):画小尺寸累计用了多久(队列细任务的分段耗时要它)
+      this.smallStats.ms = (this.smallStats.ms ?? 0) + (Date.now() - started);
     });
     return this.smallChain;
   }
@@ -1999,6 +2024,8 @@ export class FramePipeline {
     entry.prerenderSet = entry.basePrerenderSet;
     // c10a 契约第 17 节:补渲登记过的片段并进来(`addBackfill`)
     this.applyBackfill(entry);
+    // 存储占用:任何 lane 用到这一版的计划,它的键都记为使用
+    this.usage?.touchEntry(entry);
     return plan;
   }
   /**
@@ -2203,7 +2230,10 @@ export class FramePipeline {
    *   `onBatch` 每批交完调一次 `({ control, first, frames, snapshotFrames })`(进度用)。
    * 不传时逐字节是原来的行为。
    */
-  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null } = {}) {
+  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null, timing = null, singlePass = false } = {}) {
+    // 诊断(不改行为):给了 `timing` 就把换页、推帧、入库各花了多久累进去(队列细任务的分段耗时,`prerender-executor.mjs` 记进 executor.render)
+    const clock = timing ? () => Date.now() : null;
+    const add = (k, ms) => { if (timing) timing[k] = (timing[k] ?? 0) + ms; };
     if (!controls) {
       const browserPlan = await this.browserCardPlan(bakery);
       if (!browserPlan) return [];
@@ -2303,22 +2333,59 @@ export class FramePipeline {
         for (let first = Math.max(0, range.from - (range.from % 4)); first <= last; first += 4) pending.add(first);
       } else for (let first = 0; first < control.count; first += 4) pending.add(first);
       const inRange = range ? n => n >= range.from && n <= range.to : () => true;
+      /*
+       * 队列细任务的一段(`range`)一趟顺推(`singlePass`,由 `renderCardSnapshotRange` 按 `queueSinglePass` 判):
+       * 这一段原来要跑的那几批并成一批 —— 帧集合与逐批跑的并集相同,只换一次页、只从挂载帧回放一次。
+       * 逐批时每批都要换一张新页(预渲染间重新取几百个模块)并从挂载帧回放到批首,一段 60 帧里换页占一半以上的时间
+       * (`docs/reports/AGENT-uc-latency.md`)。顺推与逐批从头推对 DOM 卡像素相同(M7 探针 P2,
+       * `docs/archive/agent-reports/AGENT-m7-probe.md`);canvas 卡不等价,不走这条(见 `queueSinglePass`)。
+       * 入库照旧每 4 帧交一次(进度、发层的粒度不变)。
+       */
+      const oneBatch = !!(range && singlePass && pending.size > 1);
+      if (timing) timing.singlePass = oneBatch;
       while (pending.size) {
         if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
-        const first = this.nextBatchStart(pending, control);
-        pending.delete(first);
-        const localFrames = Array.from({ length: Math.min(4, control.count - first) }, (_, n) => first + n);
+        const first = oneBatch ? Math.min(...pending) : this.nextBatchStart(pending, control);
+        const lastFirst = oneBatch ? Math.max(...pending) : first;
+        if (oneBatch) pending.clear(); else pending.delete(first);
+        const localFrames = Array.from({ length: Math.min(lastFirst + 4, control.count) - first }, (_, n) => first + n);
         // C2:帧集合收窄成**本卡缺的那些帧**(按该键 `index.json` 已有区间扣除)。
         // PNG 那一支照旧要全部帧(`targetFrames` 不动),只有生成快照这一支收窄。
         // R6-14:已经判过超限的那些帧也扣掉,不再白渲一遍
         const missing = target ? localFrames.filter(n => inRange(n) && !rangeHas(index.frames, n) && !rangeHas(index.oversize, n)) : [];
+        const t0 = clock?.();
+        const small0 = timing ? (this.smallStats.ms ?? 0) : 0;
         await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
         await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
+        const t1 = clock?.();
+        if (timing) { add('resetMs', t1 - t0); add('smallMs', (this.smallStats.ms ?? 0) - small0); timing.batches = (timing.batches ?? 0) + 1; timing.resetMaxMs = Math.max(timing.resetMaxMs ?? 0, t1 - t0); }
         const produced = [];
-        await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
+        // 每批(4 帧)交一次(不是每帧):写帧文件、判体积、并 index.json 由快照库一步做(#9)。
+        // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);R6-14:帧号记进
+        // `oversize`,下一趟跳过。一个键几千帧时,读-改-写一个小 JSON 也比不上批量摊薄。
+        const commitProduced = async () => {
+          if (!produced.length || signal?.aborted || !this.prerenderPicked(entry, control.clipId)) return;
+          const c0 = clock?.();
+          index = await this.snapshots().commitSnapshots({ ...target, clipId: control.clipId, capabilities: control.capabilities, items: produced.splice(0) });
+          // C3:这一层的区间长了就发一条全量 `layer`
+          if (index.written.length) this.publishLayer(entry, control, tier, index.frames);
+          if (timing) add('commitMs', clock() - c0);
+        };
+        // 一趟顺推(`oneBatch`)时照旧每 4 帧交一次、报一次进度:截过图的帧攒够 4 帧就交(这一帧的快照在截图之前已经生成)
+        const shotChunk = [];
+        const flushChunk = async () => {
+          await commitProduced();
+          const frames = shotChunk.splice(0);
+          if (frames.length && onBatch && !signal?.aborted) onBatch({ control, first: frames[0], frames, snapshotFrames: frames.filter(n => missing.includes(n)) });
+        };
+        const baked = await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
           snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
           snapshotFrames: new Set(missing),
-          onFrame: async (frame, png) => entry.cardCache.put(control.key, frame, png, () => !signal?.aborted),
+          onFrame: async (frame, png) => {
+            const put = await entry.cardCache.put(control.key, frame, png, () => !signal?.aborted);
+            if (oneBatch) { shotChunk.push(frame); if (shotChunk.length >= 4) await flushChunk(); }
+            return put;
+          },
           // 隔离工程里目标片段是唯一可见输出,所以这一帧的 control 列表里认
           // `control.clipId` 那一条就是这张卡的子树。`data-pc-local-frame` 是卡片
           // 自己的本地帧,和隔离工程的帧号一致(片段被平移到了 -phase),但仍以
@@ -2329,22 +2396,26 @@ export class FramePipeline {
             if (!own || !Number.isInteger(own.frame)) return;
             produced.push({ localFrame: own.frame, html: own.html });
           } });
-        // 每批(4 帧)交一次(不是每帧):写帧文件、判体积、并 index.json 由快照库一步做(#9)。
-        // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);R6-14:帧号记进
-        // `oversize`,下一趟跳过。一个键几千帧时,读-改-写一个小 JSON 也比不上批量摊薄。
-        if (produced.length && !signal?.aborted && this.prerenderPicked(entry, control.clipId)) {
-          index = await this.snapshots().commitSnapshots({ ...target, clipId: control.clipId, capabilities: control.capabilities, items: produced });
-          // C3:这一层的区间长了就发一条全量 `layer`
-          if (index.written.length) this.publishLayer(entry, control, tier, index.frames);
+        const t2 = clock?.();
+        if (timing) { add('bakeMs', t2 - t1); add('advancedFrames', Number(baked?.advancedFrames) || 0); add('shotFrames', localFrames.length); }
+        if (oneBatch) await flushChunk();
+        else {
+          await commitProduced();
+          if (onBatch && !signal?.aborted) onBatch({ control, first, frames: localFrames, snapshotFrames: missing });
         }
-        if (onBatch && !signal?.aborted) onBatch({ control, first, frames: localFrames, snapshotFrames: missing });
       }
-      if (!signal?.aborted) await entry.cardCache.finish(control);
+      if (!signal?.aborted) {
+        const f0 = clock?.();
+        await entry.cardCache.finish(control);
+        if (timing) add('finishMs', clock() - f0);
+      }
     }
     // `fillCardControls` shares the background Chrome with the mandatory
     // complete-scene pass. Restore its normal project before snapshot/MOV.
+    const r0 = clock?.();
     await bakery.reset(entry.project, this.emptyUrl(entry.project), { deferCards: true });
     await bakery.page.setViewport({ width: entry.project.width, height: entry.project.height, deviceScaleFactor: this.scaleForLane('background') });
+    if (timing) add('restoreMs', clock() - r0);
     return skipped;
   }
   /**
@@ -2579,22 +2650,48 @@ export class FramePipeline {
    * 这张卡被别的环境锁住(开工前或渲的途中被页面抢了锁)抛 `card-locked-local`(不可重试)。
    * `progress(done)` 报这一段里已经交过的本地帧数。回 `null`:产物在帧库里,sink 自己读。
    */
-  async renderCardSnapshotRange(entry, control, range, { signal, progress } = {}) {
+  /**
+   * 队列细任务的一段能不能一趟顺推(`fillCardControls` 的 `singlePass`,`docs/reports/AGENT-uc-latency.md`):
+   *   - `PROMPTCUT_QUEUE_SINGLE_PASS=0`、或实例上 `queueSinglePassOff = true`(对照探针用)时不走;
+   *   - canvas 重卡(审阅表 `canvasHeavy`)不走:异步装载的画布卡顺推与逐批从头推不等价(M7 探针 P2);
+   *   - 页面报的播放头正要这张卡在这一段里的帧(C4 `wanted`)时照逐批跑,含播放头的那一批先出。
+   */
+  queueSinglePass(control, range) {
+    if (this.queueSinglePassOff === true || process.env.PROMPTCUT_QUEUE_SINGLE_PASS === '0') return false;
+    if (!range || control?.capabilities?.canvasHeavy === true) return false;
+    const firstFrame = Number(control?.sampling?.firstFrame) || 0;
+    for (const item of this.playheadWanted()) {
+      if (item?.clipId !== control?.clipId) continue;
+      const local = Number(item.frame) - firstFrame;
+      if (Number.isInteger(local) && local >= range.from - (range.from % 4) && local <= range.to) return false;
+    }
+    return true;
+  }
+  async renderCardSnapshotRange(entry, control, range, { signal, progress, timing = null } = {}) {
     const locked = () => Object.assign(new Error(`片段 ${control.clipId} 这张卡锁在别的环境上`), { code: 'card-locked-local', retryable: false });
     if (control.cardLock?.foreign === true) throw locked();
     let done = 0;
+    // 诊断(不改行为):`timing` 给了就记各步用时(排队等 lane、借预渲染间、推帧各项、收尾画小尺寸)
+    const queuedAt = Date.now();
     await this.runQueueTask(async lease => {
+      if (timing) timing.laneWaitMs = Date.now() - queuedAt;
       // c10a 第 9 节:这一段里已有原尺寸、缺小尺寸的帧先记下,借出预渲染间的换页、各批的换页会把它们画掉
       try { await this.scheduleMissingSmall(entry, control, range); } catch { /* 读不了帧库:完成条件那一关会拦下 */ }
+      const l0 = Date.now();
       const bakery = await lease(entry.project);
+      if (timing) timing.leaseMs = Date.now() - l0;
       await this.fillCardControls(entry, bakery, signal, [control], {
         range,
+        timing,
+        singlePass: this.queueSinglePass(control, range),
         onBatch: ({ frames }) => {
           done += frames.filter(n => n >= range.from && n <= range.to).length;
           try { progress?.(done); } catch { /* 进度回调出错不影响渲染 */ }
         },
       });
+      const s0 = Date.now();
       if (!signal?.aborted) await this.flushPendingSmall(bakery, entry.project);
+      if (timing) timing.flushSmallMs = Date.now() - s0;
     }, signal);
     if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
     if (control.cardLock?.foreign === true) throw locked();
@@ -2820,15 +2917,17 @@ export class FramePipeline {
           }
           await stream.finish();
           await fs.rename(temp, video);
-        } catch (e) { await stream.abort(); await fs.rm(temp, { force: true }); throw e; }
+        } catch (e) { await stream.abort().catch(() => {}); await fs.rm(temp, { force: true }).catch(() => {}); throw e; }
       }
       if (final) {
         for (const frame of frames) {
           await atomic(path.join(entry.dir, 'frames', `${pad(frame)}.png`), await fs.readFile(path.join(dir, `${pad(frame)}.png`)));
         }
         const temp = path.join(entry.dir, `preview-${process.pid}.tmp.mp4`);
-        await fs.copyFile(video, temp);
-        await fs.rename(temp, path.join(entry.dir, 'preview.mp4'));
+        try {
+          await fs.copyFile(video, temp);
+          await fs.rename(temp, path.join(entry.dir, 'preview.mp4'));
+        } catch (e) { await fs.rm(temp, { force: true }).catch(() => {}); throw e; }
       }
     }
   }
@@ -2891,6 +2990,8 @@ export class FramePipeline {
       if (this.playback?.owner === input.owner && input.sequence > this.playback.sequence) {
         this.playback.sequence = input.sequence; await this.stopPlayback();
         this.retiredPlaybackOwners.add(input.owner);
+        // 会话结束:播放 MOV 只是中转,用完即删(存储计划 A 部分)
+        await this.disposePlaybackMovie(this.playback.entry);
       }
       return { closed: true };
     }
@@ -2899,7 +3000,10 @@ export class FramePipeline {
     await entry.playbackMovie.ready;
     if (!this.playback || this.playback.owner !== input.owner || this.playback.entry !== entry) {
       if (this.playback && this.playback.owner !== input.owner) this.retiredPlaybackOwners.add(this.playback.owner);
+      const previous = this.playback?.entry;
       await this.stopPlayback();
+      // 换了版本(另一个 entry):上一个版本的播放 MOV 没人再读,删掉
+      if (previous && previous !== entry) await this.disposePlaybackMovie(previous);
       this.playback = new FramePlayback({ entry, movie: entry.playbackMovie,
         render: (times, options) => this.see_frames(entry.project, times, options),
         // Warm frames are verified like see_frames lookups; an empty legacy
@@ -2933,6 +3037,13 @@ export class FramePipeline {
       await this.resumeBackground(input.owner); await release(input.owner);
     }
     return { ...playback.status(), key: entry.key, movie: `/api/frames/${entry.key}/mov/${entry.playbackMovie.name}` };
+  }
+  /** 关掉并删掉一个 entry 的播放 MOV;下次播放这一版时重新建一份(帧从 MOV 缓存的 PNG 回填)。 */
+  async disposePlaybackMovie(entry) {
+    const movie = entry?.playbackMovie;
+    if (!movie) return;
+    entry.playbackMovie = null;
+    await movie.dispose().catch(() => {});
   }
   async stopPlayback() {
     const playback = this.playback;
@@ -2988,7 +3099,7 @@ export class FramePipeline {
     this.lanes.clear();
     await Promise.allSettled(this.userPool.map(session => session.bakery.close()));
     this.userPool.length = 0;
-    await Promise.allSettled([...this.entries.values()].flatMap(entry => [entry.mov?.close(), entry.playbackMovie?.close(), entry.cardCache?.close()]));
+    await Promise.allSettled([...this.entries.values()].flatMap(entry => [entry.mov?.close(), this.disposePlaybackMovie(entry), entry.cardCache?.close()]));
     for (const entry of this.entries.values()) entry.disposeArchive?.();
   }
 }
