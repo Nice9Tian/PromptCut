@@ -228,6 +228,8 @@ try {
     await page.click('[data-pc="storage-clear-cache"]');
     await until('真的清理缓存的提示', () => page.$eval('[data-pc="storage-notice"]', (el) => el.textContent.includes('腾出')), 60_000);
     out.U7.clearNotice = await page.$eval('[data-pc="storage-notice"]', (el) => el.textContent);
+    out.U7.lastEvictText = await until('上次清理那一行', () => page.$eval('[data-pc="start-storage"]', (el) => (el.textContent.match(/上次[^，]*/) || [null])[0]), 10_000).catch(() => null);
+    check(out.U7.lastEvictText?.startsWith('上次清理缓存'), 'U7 用户点的清理缓存不标成「自动清理」', out.U7.lastEvictText);
     await page.screenshot({ path: path.join(OUT, 'u7-real-cleared.png') });
     await page.$eval('[data-pc="storage-cap-input"]', (el) => { el.select(); });
     await page.type('[data-pc="storage-cap-input"]', '20');
@@ -239,7 +241,9 @@ try {
     const after = await storageJson('/api/storage');
     out.U7.cap = { sentBytes, capBytes: after.body?.frameLibrary?.capBytes, capSource: after.body?.frameLibrary?.capSource, text: await page.$eval('[data-pc="storage-cache-bytes"]', (el) => el.textContent) };
     check(sent.some((x) => x.path === '/api/storage/clear-cache'), 'U7 点「清理缓存」发出真的请求');
-    check(Number.isSafeInteger(sentBytes) && after.body?.frameLibrary?.capBytes === sentBytes && after.body?.frameLibrary?.capSource === 'user', 'U7 改上限落到服务端', out.U7.cap);
+    check(sentBytes === 20e9 && after.body?.frameLibrary?.capBytes === sentBytes && after.body?.frameLibrary?.capSource === 'user', 'U7 改上限落到服务端(填 20 = 20e9 字节,与服务端的十进制 GB 一致)', out.U7.cap);
+    check(/上限 20\.0G/.test(out.U7.cap.text), 'U7 回显「上限 20.0G」', out.U7.cap.text);
+    check(/上限 50\.0G（缺省）/.test(out.U7.cacheText ?? ''), 'U7 缺省上限显示成 50.0G(不是 46.6G)', out.U7.cacheText);
     check(fs.existsSync(path.join(DATA, 'storage.json')), 'U7 上限写在临时数据目录的 storage.json');
     await page.screenshot({ path: path.join(OUT, 'u7-real-cap.png') });
   }
@@ -273,7 +277,8 @@ try {
   await ed.close();
 
   // ── U5 模拟 /api/storage* ──
-  const GB = 1024 ** 3;
+  // 「存储」一块与服务端一样按十进制 GB(1e9):缺省 50 GB 显示成 50.0G,填 20 发 20e9
+  const GB = 1e9;
   const mock = { bytes: 12 * GB, capBytes: 50 * GB, capSource: 'default', diskBytes: 931 * GB };
   const sent = [];
   const mp = await newPage();

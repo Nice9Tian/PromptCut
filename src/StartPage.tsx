@@ -255,7 +255,18 @@ function DesktopStartPage(props: { onEnterEditor: () => void }): JSX.Element {
  * 只在桌面开始页里;在线构建连同这些调用一起剪掉(`StartPage` 在线构建里是 `OnlineStartPage`)。
  */
 
-const GB = 1024 * 1024 * 1024;
+/*
+ * 这一块的大小一律按十进制(1 GB = 10^9 字节):服务端的缓存上限、缺省 50 GB、下限 5 GB 都是这个口径
+ * (`server/frame-library-storage.mjs` 的 `GB`,与磁盘厂商标的一致),这里若按 1024 换算,缺省上限会显示成 46.6G、
+ * 填 20 发出去的是 21.47e9。草稿列表的大小仍用上面的 `humanSize`。
+ */
+const GB = 1e9;
+function storageSize(bytes: number): string {
+  if (bytes < 1e3) return `${bytes} B`;
+  if (bytes < 1e6) return `${(bytes / 1e3).toFixed(1)}K`;
+  if (bytes < 1e9) return `${(bytes / 1e6).toFixed(1)}M`;
+  return `${(bytes / 1e9).toFixed(1)}G`;
+}
 /** 缓存上限的下限(`mechanism/platforms.md`「帧库」:用户可在 5 GB 到磁盘总容量之间改) */
 const CAP_MIN_BYTES = 5 * GB;
 
@@ -267,7 +278,8 @@ interface StorageInfo {
     diskBytes: number;
     pinnedBytes?: number;
     scannedAt?: string | number | null;
-    lastEvict?: { at: string | number; freedBytes: number; removed: number; skipped: number } | null;
+    /** `reason`:`cap` 超上限自动清的,`clear` 用户点「清理缓存」清的(`frame-library-storage.mjs` 的 `evictTo`) */
+    lastEvict?: { at: string | number; freedBytes: number; removed: number; skipped: number; reason?: "cap" | "clear" } | null;
   };
 }
 
@@ -366,7 +378,7 @@ function StorageSection(): JSX.Element {
     setNotice("");
     try {
       const r = await storageJson<{ freedBytes: number; removed?: number; skipped?: number }>("/api/storage/clear-cache", { method: "POST" });
-      setNotice(`清理完成，腾出 ${humanSize(r.freedBytes || 0)}${r.skipped ? `；${r.skipped} 项正被使用，没删` : ""}。`);
+      setNotice(`清理完成，腾出 ${storageSize(r.freedBytes || 0)}${r.skipped ? `；${r.skipped} 项正被使用，没删` : ""}。`);
       await loadStorage();
     } catch (e) {
       setError(`清理缓存失败：${e instanceof Error ? e.message : String(e)}`);
@@ -393,7 +405,7 @@ function StorageSection(): JSX.Element {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bytes: Math.round(gb * GB) }),
       });
-      setNotice(`缓存上限已改为 ${humanSize(r.capBytes)}。`);
+      setNotice(`缓存上限已改为 ${storageSize(r.capBytes)}。`);
       await loadStorage();
     } catch (e) {
       setError(`改上限失败：${e instanceof Error ? e.message : String(e)}`);
@@ -404,15 +416,15 @@ function StorageSection(): JSX.Element {
 
   const act = async (item: ExportItem, action: "delete" | "prune" | "reveal") => {
     const who = `${item.projectName || "未知项目"}（${item.at ? humanDateTime(item.at) : item.id}）`;
-    if (action === "delete" && !confirm(`删除导出「${who}」？这会删掉磁盘上的文件（${humanSize(item.bytes)}），包括成片与透明层，不能撤销。`)) return;
-    if (action === "prune" && !confirm(`只删「${who}」的中间文件（${humanSize(item.intermediateBytes)}）？成片与透明层留着。这会删掉磁盘上的文件，不能撤销。`)) return;
+    if (action === "delete" && !confirm(`删除导出「${who}」？这会删掉磁盘上的文件（${storageSize(item.bytes)}），包括成片与透明层，不能撤销。`)) return;
+    if (action === "prune" && !confirm(`只删「${who}」的中间文件（${storageSize(item.intermediateBytes)}）？成片与透明层留着。这会删掉磁盘上的文件，不能撤销。`)) return;
     setBusy(`${action}:${item.id}`);
     setError("");
     setNotice("");
     try {
       const r = await storageJson<{ freedBytes?: number }>(`/api/exports/${encodeURIComponent(item.id)}/${action}`, { method: "POST" });
       if (action !== "reveal") {
-        setNotice(`${action === "delete" ? "已删除" : "已删中间文件"}，腾出 ${humanSize(r.freedBytes || 0)}。`);
+        setNotice(`${action === "delete" ? "已删除" : "已删中间文件"}，腾出 ${storageSize(r.freedBytes || 0)}。`);
         await loadExports();
       }
     } catch (e) {
@@ -449,12 +461,12 @@ function StorageSection(): JSX.Element {
           {storageState === "ok" && fl && (
             <>
               <div className="sp-storage-figure" data-pc="storage-cache-bytes">
-                {humanSize(fl.bytes)} <span className="sp-muted">/ 上限 {humanSize(fl.capBytes)}{fl.capSource === "default" ? "（缺省）" : ""}</span>
+                {storageSize(fl.bytes)} <span className="sp-muted">/ 上限 {storageSize(fl.capBytes)}{fl.capSource === "default" ? "（缺省）" : ""}</span>
               </div>
               <div className="sp-storage-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></div>
               {fl.lastEvict && (
                 <div className="sp-muted">
-                  上次自动清理 {humanDateTime(new Date(fl.lastEvict.at).toISOString())}，腾出 {humanSize(fl.lastEvict.freedBytes)}
+                  {fl.lastEvict.reason === "clear" ? "上次清理缓存" : "上次自动清理"} {humanDateTime(new Date(fl.lastEvict.at).toISOString())}，腾出 {storageSize(fl.lastEvict.freedBytes)}
                 </div>
               )}
               <div className="sp-storage-row">
@@ -493,8 +505,8 @@ function StorageSection(): JSX.Element {
             ? <div className="sp-muted">读取中…</div>
             : (
               <>
-                <div className="sp-storage-figure">{humanSize(exportBytes)} <span className="sp-muted">· {items.length} 份</span></div>
-                <div className="sp-muted">其中中间文件 {humanSize(exportMid)}，可以只删它们、留下成片与透明层。</div>
+                <div className="sp-storage-figure">{storageSize(exportBytes)} <span className="sp-muted">· {items.length} 份</span></div>
+                <div className="sp-muted">其中中间文件 {storageSize(exportMid)}，可以只删它们、留下成片与透明层。</div>
               </>
             )}
         </div>
@@ -519,11 +531,11 @@ function StorageSection(): JSX.Element {
                   </div>
                   <div className="sp-draft-sub">
                     <span title={it.id}>{it.at ? humanDateTime(it.at) : it.id}</span>
-                    {" · "}<span data-pc="storage-export-bytes">{humanSize(it.bytes)}</span>
+                    {" · "}<span data-pc="storage-export-bytes">{storageSize(it.bytes)}</span>
                     {it.deliverables.map((d) => (
-                      <span key={d.name}> · {DELIVERABLE_LABEL[d.name] ?? d.name} {humanSize(d.bytes)}</span>
+                      <span key={d.name}> · {DELIVERABLE_LABEL[d.name] ?? d.name} {storageSize(d.bytes)}</span>
                     ))}
-                    {it.intermediateBytes > 0 && <span data-pc="storage-export-mid"> · 中间文件 {humanSize(it.intermediateBytes)}</span>}
+                    {it.intermediateBytes > 0 && <span data-pc="storage-export-mid"> · 中间文件 {storageSize(it.intermediateBytes)}</span>}
                   </div>
                 </div>
                 <div className="sp-export-actions">
