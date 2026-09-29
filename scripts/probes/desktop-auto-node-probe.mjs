@@ -31,6 +31,9 @@
  *   A4 桌面页面关掉(节点照常在线)之后,在线页面把 U2 改成一段新内容(没有预渲染结果):在线页面发布的清单计划被这台桌面的节点认领、切分,
  *      细任务由它完成,在线页面随之贴上
  *   A5 桌面页面回来(同一个标签页,刷新后回到共享项目、重交配置),再离开项目:节点撤掉,`nodes` 回空,推送队列停
+ *   A7 桌面绑着共享项目时,另一个浏览器上下文在同一台桌面上开一个**不共享**的本机项目 B(同样的重卡,标签不同):
+ *      B 的帧在本机渲完之后,云端素材服务里没有 B 的任何一块、云端内容库没有 B 的层表,B 的 plan 没发进共享项目的队列;
+ *      推送诊断里记着挡掉的段(`outOfScope`);绑定没被打断(仍绑着共享项目)(报告 `docs/reports/AGENT-push-scope.md`)
  *   另核:桌面页面与在线页面的项目文档 id 一致、层表键对得上;节点报的代码版本就是在线构建嵌的那一个。
  * 第二遍(`PROMPTCUT_AUTO_RENDER_NODE=0`):
  *   A6 同样建项目放云端,等 40 秒:不起节点(`nodes` 空)、不推送(日志没有 `push.started`,云端没有这个项目的层表)
@@ -402,7 +405,7 @@ async function onlinePasted(page, clipId, seekTo, { notResultKey = null } = {}) 
 }
 
 /** 桌面页面建项目、放卡、测完 */
-async function desktopProject(page, name, { userCards }) {
+async function desktopProject(page, name, { userCards, label = 'H' }) {
   await page.goto(`${desktop.origin}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await until('桌面页面舞台起来', () => P(page, () => document.querySelectorAll('iframe').length >= 2 && !document.querySelector('[data-pc="probe-gate"]')), 300_000, 500);
   await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
@@ -410,7 +413,7 @@ async function desktopProject(page, name, { userCards }) {
   const clips = await P(page, async (spec) => {
     const S = await import('/src/store/project.ts');
     const heavy = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: spec.seconds });
-    S.actions.setClipParams(heavy.id, { burnMs: 40, label: 'H' });
+    S.actions.setClipParams(heavy.id, { burnMs: 40, label: spec.label });
     const out = { heavy: heavy?.id ?? null, u1: null, u2: null };
     if (spec.userCards) {
       const u1 = S.actions.addClipOnNewTrack({ index: 0, cardId: 'mu-animated-shiny-text', start: 0, duration: spec.seconds });
@@ -422,7 +425,7 @@ async function desktopProject(page, name, { userCards }) {
     }
     S.actions.seek(1);
     return out;
-  }, { seconds: SECONDS, userCards, run: RUN });
+  }, { seconds: SECONDS, userCards, run: RUN, label });
   const docId = await P(page, async () => (await import('/src/store/project.ts')).getState().project.id);
   await until('桌面页面测量测完', async () => P(page, async () => { const R = await import('/src/editor/probeRunner.ts'); return !R.probeProgress().running && !document.querySelector('[data-pc="probe-gate"]'); }), 300_000, 500);
   return { ...clips, docId };
@@ -461,6 +464,23 @@ async function localFrames(clipId) {
     } catch { return { frames: 0, picked: c.picked, key: c.snapshotKey.slice(0, 12) }; }
   }
   return null;
+}
+/** 这张卡在本机帧库里的共享档快照键(完整) */
+async function snapKeyOf(clipId) {
+  const d = await dDiag().catch(() => null);
+  for (const plan of d?.plans ?? []) {
+    const c = plan.controls?.find((x) => x.clipId === clipId);
+    if (c?.snapshotKey && c.tier === 'shared') return c.snapshotKey;
+  }
+  return null;
+}
+/** 本机帧库里这个共享档快照键下每一帧 HTML 的 sha256(推送时块的哈希就是它,`artifact-transfer.mjs`) */
+async function frameHashes(key) {
+  const { createHash } = await import('node:crypto');
+  const dir = path.join(desktop.dir, 'frame-library', 'controls-html', key);
+  const out = new Set();
+  for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) if (/^\d+\.html$/.test(f)) out.add(createHash('sha256').update(fs.readFileSync(path.join(dir, f))).digest('hex'));
+  return out;
 }
 /** 在线构建里嵌的代码版本是不是这一个(在编辑器页的脚本里找这串 64 位十六进制) */
 async function onlineBuildHas(codeVersion) {
@@ -548,6 +568,42 @@ try {
     check(!heavyCloud || heavyCloud.envFingerprint === state.nodeSummary.envFingerprint, 'A2:H 那一层出自这台桌面的环境', { layer: heavyCloud?.envFingerprint, node: state.nodeSummary.envFingerprint });
     out.steps.a2 = { ms: Date.now() - t2, heavy: heavyCloud, backfill };
     say('a2.heavy', out.steps.a2);
+
+    /* ---------------------------------------------------------------- A7. 同时开着的另一个本机项目:它的帧不到云端 */
+    const t7 = Date.now();
+    const octx = await browser.createBrowserContext();
+    const opage = await newPage(octx);
+    const other = await desktopProject(opage, `本机另一项目-${RUN}`, { userCards: false, label: `B ${RUN}` });
+    const otherLocal = await until('A7:另一个本机项目的重卡在本机渲完', async () => { const f = await localFrames(other.heavy); return f && f.frames >= SECONDS * FPS ? f : null; }, 600_000, 2000);
+    check(!!otherLocal, 'A7:另一个本机项目的帧写进了同一个帧库', otherLocal);
+    const keyB = await snapKeyOf(other.heavy);
+    const keyA = await snapKeyOf(state.heavy);
+    check(keyB && keyB !== keyA, 'A7:两个项目的重卡快照键不同', { keyA: keyA?.slice(0, 12), keyB: keyB?.slice(0, 12) });
+    // 推送队列静置 1.5 s 再推,留足余量等它(推错了也该推完了)
+    await delay(15_000);
+    const hashesA = keyA ? await frameHashes(keyA) : new Set();
+    const hashesB = [...(keyB ? await frameHashes(keyB) : new Set())].filter((h) => !hashesA.has(h));
+    let leaked = 0;
+    for (const h of hashesB) if (await conn.assets.has('snap', h)) leaked++;
+    const mapB = await conn.rpc({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${other.docId}` }).catch((e) => ({ error: String(e?.message ?? e) }));
+    const push7 = (await dDiag())?.push ?? null;
+    const published7 = (await dDiag())?.queue?.published ?? [];
+    const outLines = logLines(/\[artifact-push\] push\.out-of-scope /).map(jsonOfLine).filter(Boolean);
+    const rn7 = await dRenderNode();
+    check(hashesB.length > 0 && leaked === 0, 'A7:云端素材服务里没有另一个本机项目的任何一块', { blocks: hashesB.length, leaked });
+    check(mapB?.type === 'content.item' && mapB.missing === true, 'A7:云端内容库没有另一个本机项目的层表', { type: mapB?.type, missing: mapB?.missing, error: mapB?.error });
+    check((push7?.outOfScope ?? 0) > 0 && !(push7?.items ?? []).some((i) => keyB && i.id.includes(keyB)), 'A7:推送队列挡掉了另一个项目的段(outOfScope),队里没有它的', { outOfScope: push7?.outOfScope, scope: push7?.scope, items: push7?.items?.length });
+    check(!published7.some((p) => p.projectId === other.docId), 'A7:另一个项目的 plan 没发进共享项目的队列', published7.map((p) => p.projectId));
+    check(outLines.length > 0, 'A7:编辑器日志里看得到 push.out-of-scope', logLines(/push\./).slice(-5));
+    check(rn7?.bound === true && rn7.projectId === state.projectId, 'A7:开另一个本机项目没有打断共享项目的绑定', rn7);
+    // 绑定项目照常:H 那一层仍齐(A2 已核),这里再核一次它的块都在
+    const heavyStill = await layerCovered(conn, state.docId, state.heavy);
+    check(!!heavyStill, 'A7:绑定项目的层照常在云端', heavyStill);
+    out.steps.a7 = { ms: Date.now() - t7, otherDocId: other.docId, keyB: keyB?.slice(0, 12), frames: otherLocal?.frames ?? 0, blocks: hashesB.length, leaked,
+      layerMapMissing: mapB?.missing === true, outOfScope: push7?.outOfScope ?? null, scope: push7?.scope ?? null, published: published7.map((p) => p.projectId), outOfScopeLines: outLines.length };
+    say('a7.done', out.steps.a7);
+    await opage.close().catch(() => {});
+    await octx.close().catch(() => {});
 
     /* ---------------------------------------------------------------- A3. 另一台设备的在线页面进同一项目,贴出 U1 */
     const t3 = Date.now();
