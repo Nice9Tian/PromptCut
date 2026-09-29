@@ -35,6 +35,8 @@ export interface RenderNodeHooks {
 
 export interface RenderNodeDeps {
   post?: (path: string, body: unknown) => Promise<Record<string, unknown> | null>;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (t: unknown) => void;
 }
 
 async function defaultPost(path: string, body: unknown): Promise<Record<string, unknown> | null> {
@@ -47,30 +49,53 @@ async function defaultPost(path: string, body: unknown): Promise<Record<string, 
 }
 
 let post: NonNullable<RenderNodeDeps["post"]> = defaultPost;
+let setTimer: NonNullable<RenderNodeDeps["setTimer"]> = (fn, ms) => setTimeout(fn, ms);
+let clearTimer: NonNullable<RenderNodeDeps["clearTimer"]> = (t) => clearTimeout(t as ReturnType<typeof setTimeout>);
 let current: RenderNodeBinding | null = null;
 let hooks: RenderNodeHooks | null = null;
 let assetBase: string | null = null;
+/** 这个项目的共享配置交过没有;没交之前在等本页面挑素材服务(最多 ASSET_WAIT_MS) */
+let sent = false;
+let waitTimer: unknown = null;
 let lastAnswer: { at: number; ok: boolean; error?: string } | null = null;
 const counters = { binds: 0, unbinds: 0, tickets: 0, ticketFailures: 0 };
+/**
+ * 第一次交接等本页面挑到素材服务再交(`assetTiers.ts` 的 `startUploadTarget`,挑不到也会报一次 null),最多等这么久:
+ * 不然预渲染进程起步时不知道推到哪,先落到本机素材服务(探针 A1 实测)。
+ */
+export const ASSET_WAIT_MS = 5_000;
 
-/** 单测用:换掉 HTTP */
+/** 单测用:换掉 HTTP 与计时器 */
 export function setRenderNodeDeps(deps: RenderNodeDeps): void {
   post = deps.post ?? defaultPost;
+  setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  clearTimer = deps.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
 }
 
-async function sendBind(b: RenderNodeBinding, withTicket: boolean): Promise<void> {
+async function sendBind(withTicket: boolean): Promise<void> {
   if (ONLINE_BUILD) return;
+  const b = current;
+  if (!b) return;
   let ticket: string | null = null;
   if (withTicket && hooks) {
     try { ticket = await hooks.ticket(b.projectId); } catch { ticket = null; /* 预渲染进程建会话时再来要 */ }
   }
-  if (current !== b) return;
+  const now = current;
+  if (!now || now.url !== b.url || now.projectId !== b.projectId) return;
   counters.binds++;
-  const r = await post("/api/render-node/bind", { url: b.url, projectId: b.projectId, contentId: b.contentId, ...(assetBase ? { assetBase } : {}), ...(ticket ? { ticket } : {}) });
+  const r = await post("/api/render-node/bind", { url: now.url, projectId: now.projectId, contentId: now.contentId, ...(assetBase ? { assetBase } : {}), ...(ticket ? { ticket } : {}) });
   if (r && r.ok === false) console.warn("[render-node] 共享配置没交给预渲染进程:", r.error ?? "无回包");
 }
 
-/** 页面接上了共享项目:把共享配置交给预渲染进程 */
+/** 第一次交(带票据) */
+function sendFirst(): void {
+  if (sent || !current) return;
+  sent = true;
+  if (waitTimer !== null) { clearTimer(waitTimer); waitTimer = null; }
+  void sendBind(true);
+}
+
+/** 页面接上了共享项目:把共享配置交给预渲染进程(等本页面挑到素材服务,最多 ASSET_WAIT_MS) */
 export function bindRenderNode(b: RenderNodeBinding, h: RenderNodeHooks): void {
   if (ONLINE_BUILD) return;
   hooks = h;
@@ -79,29 +104,39 @@ export function bindRenderNode(b: RenderNodeBinding, h: RenderNodeHooks): void {
     // 同一个项目:只是项目文档的 id 晚到了(加入别人的项目时 store 里的项目稍后才换成文档服务的那份),再交一次,不另签票据
     if (current!.contentId === b.contentId || !b.contentId) return;
     current = { ...current!, contentId: b.contentId };
-    void sendBind(current, false);
+    if (sent) void sendBind(false);
     return;
   }
+  if (waitTimer !== null) { clearTimer(waitTimer); waitTimer = null; }
   current = { ...b };
   assetBase = null;
-  void sendBind(current, true);
+  sent = false;
+  waitTimer = setTimer(() => { waitTimer = null; sendFirst(); }, ASSET_WAIT_MS);
 }
 
-/** 本页面挑到了(或换了)当前共享项目的素材服务基址;null = 没有远程素材服务(本机就是主机) */
+/** 本页面挑到了(或换了)当前共享项目的素材服务基址;null = 没有远程素材服务(本机就是主机,预渲染进程推本机的) */
 export function noteRenderNodeAssetBase(base: string | null): void {
   if (ONLINE_BUILD) return;
   const next = base ? base.replace(/\/+$/, "") : null;
+  if (current && !sent) {
+    assetBase = next;
+    sendFirst();
+    return;
+  }
   if (next === assetBase) return;
   assetBase = next;
-  if (current && next) void sendBind(current, false);
+  if (current && next) void sendBind(false);
 }
 
 /** 本页面离开了这个共享项目:撤掉(只撤同一个项目的,别的页面在别的项目上的不受影响) */
 export function unbindRenderNode(projectId: string, reason = "page-left"): void {
   if (ONLINE_BUILD) return;
   if (!current || current.projectId !== projectId) return;
+  if (waitTimer !== null) { clearTimer(waitTimer); waitTimer = null; }
   current = null;
   assetBase = null;
+  sent = false;
+  // 还没交出去(在等素材服务)就离开了也照样撤:刷新之前的这个页面可能交过(撤一个没有的是空操作)
   counters.unbinds++;
   void post("/api/render-node/unbind", { projectId, reason });
 }
@@ -127,7 +162,7 @@ export async function answerRenderNodeTicket(d: Record<string, unknown>): Promis
 
 /** 诊断(探针读 `window.__pcRenderNodeHandoff`):不含票据 */
 export function renderNodeHandoffDiag() {
-  return { bound: current ? { url: current.url, projectId: current.projectId, contentId: current.contentId } : null, assetBase, counters: { ...counters }, lastAnswer };
+  return { bound: current ? { url: current.url, projectId: current.projectId, contentId: current.contentId } : null, sent, assetBase, counters: { ...counters }, lastAnswer };
 }
 
 /* HMR 通道:编辑器进程经它要票据。只在开发服务器给的页面里有(安装版就是开发服务器) */

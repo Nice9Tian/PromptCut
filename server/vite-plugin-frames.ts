@@ -1112,8 +1112,8 @@ async function backfillPush(service: FramePipeline, auto: AutoLink, done: Set<st
 async function stopAutoNode(root: string, service: FramePipeline, reason: string) {
   const q = queueNodes.get(root);
   queueNodes.delete(root);
-  let released = 0;
-  if (q) { try { released = await q.release(); } catch { /* 已停 */ } }
+  // 让掉认领、停节点:`release()` 最后要等手里在跑的那一批做完才关连接(可能要一阵),不挡下面停推送队列;最多等 AUTO_RELEASE_WAIT_MS
+  const releasing: Promise<number | "pending"> = q ? q.release().catch(() => 0) : Promise.resolve(0);
   const teardown = pushTeardowns.get(root);
   pushTeardowns.delete(root);
   if (teardown) { try { await teardown(); } catch { /* 已停 */ } }
@@ -1121,8 +1121,11 @@ async function stopAutoNode(root: string, service: FramePipeline, reason: string
   setMediaFallbackBases([]);
   let rerun = 0;
   try { rerun = (service as any).leaveQueueMode?.() ?? 0; } catch { /* 管线已关 */ }
-  autoLog("render-node.teardown", { reason, released, rerun });
+  const released = await Promise.race([releasing, new Promise<"pending">((r) => { const t = setTimeout(() => r("pending"), AUTO_RELEASE_WAIT_MS); t.unref?.(); })]);
+  autoLog("render-node.teardown", { reason, released, rerun, push: !!teardown, node: !!q });
 }
+/** 撤掉时等节点收尾(在跑的那一批做完、关连接)最多这么久;过了照样回,节点做完自己关 */
+const AUTO_RELEASE_WAIT_MS = 10_000;
 
 function autoNodeFor(root: string, origin: string) {
   let ctl = autoNodes.get(root);

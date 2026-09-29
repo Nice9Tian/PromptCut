@@ -328,11 +328,11 @@ async function adminDelete(projectId, creator) {
   return r?.type ?? null;
 }
 /** 层表里某个片段那一层:各段清单齐不齐、产物字节在不在云端素材服务 */
-async function layerCovered(conn, docId, clipId) {
+async function layerCovered(conn, docId, clipId, { notResultKey = null } = {}) {
   const r = await conn.rpc({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${docId}` });
   if (r?.type !== 'content.item' || r.missing) return null;
   const l = (r.body?.layers ?? []).find((x) => x.clipId === clipId);
-  if (!l) return null;
+  if (!l || (notResultKey && l.resultKey === notResultKey)) return null;
   let frames = 0;
   const hashes = [];
   for (let from = 0; from < l.count; from += r.body.span) {
@@ -343,7 +343,7 @@ async function layerCovered(conn, docId, clipId) {
   if (frames !== l.count) return null;
   let present = 0;
   for (const h of hashes) if (await conn.assets.has('snap', h)) present++;
-  return present === hashes.length ? { mapProjectId: r.body.projectId ?? null, v: r.body.v, envFingerprint: l.envFingerprint, resultKey: l.resultKey.slice(0, 16), count: l.count, blocks: hashes.length, present } : null;
+  return present === hashes.length ? { mapProjectId: r.body.projectId ?? null, v: r.body.v, envFingerprint: l.envFingerprint, fullResultKey: l.resultKey, resultKey: l.resultKey.slice(0, 16), count: l.count, blocks: hashes.length, present } : null;
 }
 
 /* ================================================================== 页面小件(同 c10-browser-probe) */
@@ -392,13 +392,13 @@ async function clipStage(page, clipId) {
 }
 const clipBadge = (page, clipId) => P(page, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), clipId).catch(() => null);
 /** 在线页面贴出了这个片段的层:层表里有、就绪、舞台上是快照、没有图标与徽标 */
-async function onlinePasted(page, clipId, seekTo) {
+async function onlinePasted(page, clipId, seekTo, { notResultKey = null } = {}) {
   await P(page, (t) => window.__pcStore.actions.seek(t), seekTo).catch(() => {});
   const o = await onlineDiag(page);
-  const l = o?.layers?.find((x) => x.clipId === clipId);
+  const l = o?.layers?.find((x) => x.clipId === clipId && (!notResultKey || x.resultKey !== notResultKey));
   const st = await clipStage(page, clipId);
   const badge = await clipBadge(page, clipId);
-  return l && l.ready > 0 && st?.snapshot && !st.placeholder && badge === false ? { layer: { ready: l.ready, envFingerprint: l.envFingerprint ?? null }, stage: st } : null;
+  return l && l.ready > 0 && st?.snapshot && !st.placeholder && badge === false ? { layer: { ready: l.ready, envFingerprint: l.envFingerprint ?? null, resultKey: String(l.resultKey ?? '').slice(0, 16) }, stage: st } : null;
 }
 
 /** 桌面页面建项目、放卡、测完 */
@@ -583,6 +583,9 @@ try {
     const qGone = await dq();
     check(qGone?.nodes?.some((x) => x.projectId === state.projectId), 'A4:桌面页面关掉之后节点照常在线', qGone);
     const before = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
+    // U2 改之前那一层的结果键:改完之后要等一层新的(不同的结果键),免得把旧内容的层当成贴上了
+    const u2Old = await until('A4:改之前 U2 已有一层(在线计划渲的)', () => layerCovered(conn, state.docId, state.u2), 600_000, 3000);
+    const oldKey = u2Old?.fullResultKey ?? null;
     await P(member, (spec) => { const s = window.__pcStore; s.actions.setClipParams(spec.id, { text: spec.text }); s.actions.seek(1); }, { id: state.u2, text: `U2 新内容 ${RUN}` });
     await delay(1500);
     const firstU2 = { stage: await clipStage(member, state.u2), badge: await clipBadge(member, state.u2) };
@@ -599,14 +602,16 @@ try {
       return inClaims && split ? { derived: q.plans[planId], completed: q.local?.completed ?? [] } : null;
     }, 600_000, 2000);
     check(!!claimed, 'A4:在线页面发布的清单计划被这台桌面的节点认领、切分', { planId, claimed: !!claimed });
-    const u2 = await until('A4:在线页面贴上 U2 的新内容', () => onlinePasted(member, state.u2, 1), 900_000, 4000);
+    const u2Cloud = await until('A4:云端层表里 U2 换成新内容那一层(结果键变了)、各段齐、字节在云端', () => layerCovered(conn, state.docId, state.u2, { notResultKey: oldKey }), 900_000, 3000);
+    check(!!u2Cloud && !!oldKey, 'A4:U2 的新内容由这台桌面渲出、推到云端、写进层表', { oldKey: oldKey?.slice(0, 16), u2Cloud });
+    const u2 = await until('A4:在线页面贴上 U2 的新内容', () => onlinePasted(member, state.u2, 1, { notResultKey: oldKey }), 900_000, 4000);
     await shot(member, 'a4-online-u2-after');
     check(!!u2, 'A4:在线页面随之贴上 U2(没有图标与徽标)', { u2, firstU2, last: { stage: await clipStage(member, state.u2), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.u2) ?? null } });
     const q4 = (await dDiag())?.queue;
     const derived = Array.isArray(q4?.plans?.[planId]) ? q4.plans[planId] : [];
     const doneByDesktop = derived.filter((id) => q4?.local?.completed?.includes(id) || q4?.local?.dedup?.includes(id));
     check(derived.length === 0 || doneByDesktop.length > 0, 'A4:那个计划切出的细任务由这台桌面完成', { derived: derived.length, doneByDesktop: doneByDesktop.length });
-    out.steps.a4 = { ms: Date.now() - t4, planId, firstU2, derived: derived.length, doneByDesktop: doneByDesktop.length, u2, pageGoneNodes: qGone?.nodes?.map((n) => n.projectId) };
+    out.steps.a4 = { ms: Date.now() - t4, planId, firstU2, oldKey: oldKey?.slice(0, 16), u2Cloud, derived: derived.length, doneByDesktop: doneByDesktop.length, u2, pageGoneNodes: qGone?.nodes?.map((n) => n.projectId) };
     say('a4.done', out.steps.a4);
 
     /* ---------------------------------------------------------------- A5. 桌面页面回来(刷新后回到共享项目),再离开:节点撤掉 */
@@ -627,13 +632,12 @@ try {
       await fetch(`${desktop.origin}/api/render-node/unbind`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: state.projectId, reason: 'probe' }) }).catch(() => {});
     }
     const q5 = await until('A5:离开项目后 nodes 回空', async () => { const q = await dq(); return Array.isArray(q?.nodes) && q.nodes.length === 0 && q.auto?.bound === false ? q : null; }, 60_000, 1000);
-    const d5 = await dDiag();
     const relay5 = await dRelay();
     check(!!q5, 'A5:桌面页面离开项目后节点撤掉,nodes 回空', q5 ?? await dq());
-    check(d5 && !('push' in d5), 'A5:推送队列停了(预渲染进程诊断里没有 push)', d5?.push ?? null);
     check(relay5?.binding === null, 'A5:编辑器进程不再记着这份共享配置', relay5?.binding);
-    const teardown = logLines(/\[queue-node\] render-node\.teardown /).map(jsonOfLine).filter(Boolean);
-    check(teardown.length >= 1, 'A5:日志有 render-node.teardown', teardown);
+    const teardown = (await until('A5:日志有 render-node.teardown', () => { const t = logLines(/\[queue-node\] render-node\.teardown /).map(jsonOfLine).filter(Boolean); return t.length ? t : null; }, 30_000, 500)) ?? [];
+    const dPush = await until('A5:推送队列停了', async () => { const d = await dDiag(); return d && !('push' in d) ? d : null; }, 30_000, 1000);
+    check(!!dPush, 'A5:推送队列停了(预渲染进程诊断里没有 push)', (await dDiag())?.push ?? null);
     out.steps.a5 = { ms: Date.now() - t5, resumed: !!resumed, counters: rnBack?.counters, nodes: q5?.nodes ?? null, teardown };
     say('a5.done', out.steps.a5);
     out.steps.pageErrors = { desktop: dpage.pageErrors.slice(-6), member: member.pageErrors.slice(-6) };

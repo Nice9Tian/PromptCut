@@ -2,7 +2,8 @@
  * 桌面应用自动成为共享项目的渲染节点:页面一侧(`renderNodeHandoff.ts`)。报告 `docs/reports/AGENT-desktop-auto-node.md`。
  * 跑:node --test src/editor/sync/renderNodeHandoff.test.mjs
  *
- *   RNH-01 接上共享项目:交共享配置,带本页面签的 render 票据;同一个项目重复接不再交
+ *   RNH-01 接上共享项目:等本页面挑到素材服务再交(带素材基址与本页面签的 render 票据);同一个项目重复接不再交
+ *   RNH-05 挑不到素材服务:最多等 ASSET_WAIT_MS 就不带基址照交;在等的时候离开照样撤
  *   RNH-02 项目文档 id 晚到、素材基址挑到:同一个项目再交一次,不另签票据
  *   RNH-03 票据往返:只答本页面连着的那个项目;签不出就交回错误
  *   RNH-04 离开:只撤同一个项目的;撤完再有票据请求不答
@@ -15,18 +16,25 @@ const H = await import("./renderNodeHandoff.ts");
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0)); };
 
 const posts = [];
-H.setRenderNodeDeps({ post: async (path, body) => { posts.push({ path, body }); return { ok: true }; } });
+const timers = [];
+H.setRenderNodeDeps({ post: async (path, body) => { posts.push({ path, body }); return { ok: true }; },
+  setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; }, clearTimer: (t) => { if (t) t.cleared = true; } });
 let signed = 0;
 let refuse = false;
 const hooks = { ticket: async (projectId) => { if (refuse) throw new Error("本页面没有连着这个共享项目"); signed++; return `v1.t${signed}-${projectId}.s`; } };
 const B = { url: "wss://site.example/hosted/", projectId: "P1", contentId: "doc-1" };
 
-test("RNH-01 接上共享项目:交共享配置与票据;重复接不再交", async () => {
+test("RNH-01 接上共享项目:等挑到素材服务再交,带基址与票据;重复接不再交", async () => {
   H.bindRenderNode(B, hooks);
   await flush();
+  assert.equal(posts.length, 0, "还在等本页面挑素材服务");
+  assert.equal(timers.at(-1).ms, H.ASSET_WAIT_MS);
+  H.noteRenderNodeAssetBase("https://site.example/media/api/asset/");
+  await flush();
+  assert.equal(timers.at(-1).cleared, true);
   assert.equal(posts.length, 1);
   assert.equal(posts[0].path, "/api/render-node/bind");
-  assert.deepEqual(posts[0].body, { url: B.url, projectId: "P1", contentId: "doc-1", ticket: "v1.t1-P1.s" });
+  assert.deepEqual(posts[0].body, { url: B.url, projectId: "P1", contentId: "doc-1", assetBase: "https://site.example/media/api/asset", ticket: "v1.t1-P1.s" });
   H.bindRenderNode({ ...B }, hooks);
   await flush();
   assert.equal(posts.length, 1);
@@ -38,12 +46,12 @@ test("RNH-02 文档 id 晚到、素材基址挑到:再交一次,不另签票据"
   const before = signed;
   H.bindRenderNode({ ...B, contentId: "doc-2" }, hooks);
   await flush();
-  assert.deepEqual(posts.at(-1).body, { url: B.url, projectId: "P1", contentId: "doc-2" });
-  H.noteRenderNodeAssetBase("https://site.example/media/api/asset/");
-  await flush();
   assert.deepEqual(posts.at(-1).body, { url: B.url, projectId: "P1", contentId: "doc-2", assetBase: "https://site.example/media/api/asset" });
+  H.noteRenderNodeAssetBase("https://other.example/api/asset");
+  await flush();
+  assert.deepEqual(posts.at(-1).body, { url: B.url, projectId: "P1", contentId: "doc-2", assetBase: "https://other.example/api/asset" });
   const n = posts.length;
-  H.noteRenderNodeAssetBase("https://site.example/media/api/asset");
+  H.noteRenderNodeAssetBase("https://other.example/api/asset");
   H.noteRenderNodeAssetBase(null); // 本机当主机:不交(预渲染进程推本机的)
   await flush();
   assert.equal(posts.length, n);
@@ -78,8 +86,31 @@ test("RNH-04 离开:只撤同一个项目的", async () => {
   assert.equal(posts.length, m, "撤完不再答票据、不重复撤");
   // 再接别的项目:重新签票据交接
   H.bindRenderNode({ url: "ws://192.168.1.5:5190/docservice", projectId: "P2", contentId: "doc-9" }, hooks);
+  H.noteRenderNodeAssetBase(null); // 局域网主机没登记素材服务:照交,不带基址(预渲染进程按登记或本机挑)
   await flush();
   assert.equal(posts.at(-1).path, "/api/render-node/bind");
+  assert.equal("assetBase" in posts.at(-1).body, false);
   assert.equal(posts.at(-1).body.projectId, "P2");
   assert.match(posts.at(-1).body.ticket, /-P2\.s$/);
+});
+
+test("RNH-05 挑不到素材服务:等满就照交;等的时候离开照样撤", async () => {
+  H.unbindRenderNode("P2");
+  await flush();
+  H.bindRenderNode({ url: B.url, projectId: "P3", contentId: "doc-3" }, hooks);
+  await flush();
+  const n = posts.length;
+  const t = timers.at(-1);
+  assert.equal(t.ms, H.ASSET_WAIT_MS);
+  t.fn();
+  await flush();
+  assert.equal(posts.length, n + 1);
+  assert.deepEqual(Object.keys(posts.at(-1).body).sort(), ["contentId", "projectId", "ticket", "url"]);
+  // 在等的时候离开
+  H.bindRenderNode({ url: B.url, projectId: "P4", contentId: "doc-4" }, hooks);
+  const t4 = timers.at(-1);
+  H.unbindRenderNode("P4");
+  await flush();
+  assert.equal(t4.cleared, true);
+  assert.deepEqual(posts.at(-1), { path: "/api/render-node/unbind", body: { projectId: "P4", reason: "page-left" } });
 });
