@@ -52,6 +52,7 @@ import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.
 import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
+import { createStageWatch, type StageWatch } from "../online/stageWatch";
 import { pageL2 } from "../online/l2";
 import { l2CostBackend } from "../online/l2Costs";
 import { createPlanPublisher } from "../online/planPublisher";
@@ -238,6 +239,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const hostCapsRef = useRef<Record<StageId, HostCapabilities | null>>({ A: null, B: null });
   /** 在线双舞台这一轮握上手的舞台(C10 契约第 2 节:两个都握上才算成;超时算失败,退回同源单舞台) */
   const handshookRef = useRef(new Set<StageId>());
+  /** 在线双舞台握手之后的看守(心跳断 → 重载那一台 → 重载也握不回来就退回单舞台;`src/online/stageWatch.ts`) */
+  const stageWatchRef = useRef<StageWatch | null>(null);
   /**
    * 下面那一堆(拖动、命中、心跳、节拍)问的都是**可见舞台**。
    *
@@ -595,6 +598,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         const client = createStageRpc(win, e.origin && e.origin !== "null" ? e.origin : stageTargetOrigin(id));
         handshookRef.current.add(id);
         if (ONLINE && dualRef.current && handshookRef.current.has("A") && handshookRef.current.has("B")) markStageHandshake("ok");
+        stageWatchRef.current?.ready(id);
         rpcRef.current[id] = client;
         const caps = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
         hostCapsRef.current[id] = caps;
@@ -637,6 +641,48 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       if (got.length < 2) markStageHandshake("failed", `握上手的舞台:${got.join("、") || "无"}`);
     }, STAGE_HANDSHAKE_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
+  }, [dual]);
+
+  /*
+   * 握手之后又断(C10 契约第 2 节「握手之后又断」〔裁〕):已握手的舞台心跳断了(卡死、跨源 iframe 的渲染进程崩了),
+   * 先照原来的做法整页重载那一台;重载后 20 秒内没握回来(或反复断),走首次握不上手的同一条路退回同源单舞台,
+   * 退回之后看守作废、不再重载(`markStageHandshake("failed")` 之后 `dual` 变假,本 effect 收摊)。
+   */
+  useEffect(() => {
+    if (!ONLINE || !dual) return;
+    const frames: Record<StageId, React.RefObject<HTMLIFrameElement | null>> = { A: frameARef, B: frameBRef };
+    const watch = createStageWatch({
+      ids: STAGE_IDS,
+      ping: (id) => rpcRef.current[id]?.size() ?? null,
+      reload: (id, reason) => {
+        const frame = frames[id].current;
+        const client = rpcRef.current[id];
+        if (client) {
+          releaseStageClient(client);
+          client.dispose();
+          rpcRef.current[id] = null;
+          hostCapsRef.current[id] = null;
+        }
+        console.warn(`[preview] 舞台 ${id} 断开(${reason}),整页重载它`);
+        if (frame) frame.src = frame.src;
+      },
+      fallback: (reason) => {
+        console.warn(`[preview] ${reason},退回同源单舞台`);
+        markStageHandshake("failed", reason);
+      },
+      hidden: () => typeof document !== "undefined" && document.hidden,
+    });
+    stageWatchRef.current = watch;
+    // 这一轮已经握过手的舞台(effect 晚于握手跑到时)照样看守
+    for (const id of STAGE_IDS) if (rpcRef.current[id]) watch.ready(id);
+    const w = window as unknown as { __pcStageWatch?: () => unknown };
+    w.__pcStageWatch = () => ({ A: watch.status("A"), B: watch.status("B"), reloads: watch.reloads, fellBack: watch.fellBack, handshake: onlineStageState().handshake, reason: onlineStageState().reason });
+    return () => {
+      watch.dispose();
+      if (stageWatchRef.current === watch) stageWatchRef.current = null;
+      // 退回之后留着观察口(探针核「退回后不再重载」),只把看守换成已作废的那一份
+      if (!watch.fellBack) delete w.__pcStageWatch;
+    };
   }, [dual]);
 
   /*
