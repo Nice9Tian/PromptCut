@@ -34,3 +34,8 @@
 ## 建议
 
 - 这 5 处要等下次这些文件因别的原因本来就要改（本来就会换快照键）时顺手改掉。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 另核 diff：除本报告外，改动的行把 `docs/archive/agent-reports/` 换回 `docs/reports/` 后逐字相同；`SNAPSHOT_FILES` / `CAPTURE_FILES` 里的文件一个没碰。
+- 合入 main `e3a09498`；留下的 5 处记进 `REPORT-post-M8.md` 第 2 轮遗留。
