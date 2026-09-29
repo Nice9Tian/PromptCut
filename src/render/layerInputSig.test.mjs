@@ -153,3 +153,11 @@ test("SIG-6 layerMapOf 写的 inputSig 与页面算的相同;项目里没有的�
   const edited = withClip(p, "a", (c) => ({ ...c, params: { ...c.params, n: 4 } }));
   assert.equal(inputSigStale(byId.a.inputSig, clipInputSig(edited, "a")), true);
 });
+
+test("SIG-7 节点侧的项目加工(renderProject 改写素材地址、管线 entry 给素材加 _frameSourceStamp、structuredClone)不改签名", async () => {
+  const { renderProject } = await import("../../server/render-project.mjs");
+  const p = project();
+  const nodeSide = structuredClone(renderProject(JSON.parse(JSON.stringify(p))));
+  nodeSide.media = nodeSide.media.map((m) => ({ ...m, _frameSourceStamp: "stamp-1" }));
+  for (const id of ["a", "g", "v"]) assert.equal(clipInputSig(nodeSide, id), clipInputSig(p, id), id);
+});
