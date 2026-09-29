@@ -1464,7 +1464,12 @@ try {
     const extras = [];
     for (let i = 0; i < spec.extra; i++) {
       const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: 1 });
-      S.actions.setClipParams(c.id, { burnMs: 40, label: 'x' });
+      /*
+       * padNodes:把这一层的快照做到约 70 KB(swap-tuning:在线换帧成本按快照大小估,`0.8 + 0.04 × KB` ≈ 3.6 ms;
+       * 原来这几层快照约 12 KB、只有 1.3 ms,9 层加起来装得下一拍,A4 的「装不下显示占位」就验不到了)。
+       * 9 层 ≈ 1.3 + 8 × 3.6 ms > 23.3 ms:装得下 7 层、2 层占位,与改之前按一律 3 ms 算的一样。
+       */
+      S.actions.setClipParams(c.id, { burnMs: 40, label: 'x', padNodes: 60 });
       extras.push(c.id);
     }
     // --user-card:一张仓库用户卡(在线页面跑不了它的代码,只能贴渲染节点的产物)

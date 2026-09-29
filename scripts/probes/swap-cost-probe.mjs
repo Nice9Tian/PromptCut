@@ -10,6 +10,7 @@
  *        [--batches 5]     换帧、空换各跑几批(交替),每批把 frames 帧换一遍
  *        [--via direct|rpc] direct(缺省):直接调舞台的 setSnapshots 实现;rpc:经 postMessage 投递(另含结构化克隆,
  *                          宿主与舞台同进程,两头的克隆都算进去,比真实的跨进程舞台偏大)
+ *        [--params <json>] 每张卡的参数(缺省卡的默认参数),例如 --cards probe-slow-stepped --params '{"padNodes":400}'
  *        [--json <file>]   结果另写一份 JSON
  *
  * # 做法
@@ -51,6 +52,8 @@ const cardsArg = flagArg('cards', null, argv);
 const jsonOut = flagArg('json', null, argv);
 const VIA = flagArg('via', 'direct', argv) === 'rpc' ? 'rpc' : 'direct';
 const ALL = argv.includes('--all');
+/** 给每张卡的参数(JSON),例如 `--params '{"padNodes":400}'`;缺省用卡的默认参数 */
+const PARAMS = (() => { const v = flagArg('params', null, argv); try { return v ? JSON.parse(v) : {}; } catch { throw new Error(`--params 不是 JSON:${v}`); } })();
 const PARTICLES = Math.max(0, Number(flagArg('particles', '6', argv)) || 0);
 const FPS = 30;
 const CLIP_SEC = 4;
@@ -124,10 +127,10 @@ window.__cardMeta = async (ids) => {
   return ids.map((id) => { const def = kit.getCard(id); return def ? { id, source: def.source || 'native',
     mode: kit.cardFrameMode(def, def.defaults), canvasHeavy: !!kit.reviewedCard(id)?.canvasHeavy, glCanvas: !!(def.canvas && def.canvas.kind !== 'dom2d') } : { id, missing: true }; });
 };
-window.__mkProject = (cardId, fps, lenSec) => ({
+window.__mkProject = (cardId, fps, lenSec, params = {}) => ({
   version: 1, id: 'swap-probe', name: 'swap-probe', width: 1920, height: 1080, fps, duration: lenSec,
   themeId: 'midnight', media: [],
-  tracks: [{ id: 'probe-track', clips: [{ id: 'c0', cardId, start: 0, end: lenSec, params: {} }] }],
+  tracks: [{ id: 'probe-track', clips: [{ id: 'c0', cardId, start: 0, end: lenSec, params }] }],
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const raf = () => new Promise((r) => requestAnimationFrame(() => r()));
@@ -136,7 +139,7 @@ const raf = () => new Promise((r) => requestAnimationFrame(() => r()));
 window.__makeSnapshots = async (job) => {
   const rpc = window.__rpcB, w = frames.B.contentWindow;
   await rpc.setRole('back', { job: 'probe' });
-  await rpc.setProject(window.__mkProject(job.cardId, job.fps, job.lenSec), { reset: true });
+  await rpc.setProject(window.__mkProject(job.cardId, job.fps, job.lenSec, job.params), { reset: true });
   await rpc.setTime(0);
   await sleep(200);
   if (job.canvas) {
@@ -166,7 +169,7 @@ window.__makeSnapshots = async (job) => {
 window.__prepareFront = async (job) => {
   const rpc = window.__rpcA;
   await rpc.setRole('front');
-  await rpc.setProject(window.__mkProject(job.cardId, job.fps, job.lenSec), { reset: true });
+  await rpc.setProject(window.__mkProject(job.cardId, job.fps, job.lenSec, job.params), { reset: true });
   await rpc.setTime(0.3);
   await rpc.setSuppressed(['c0']);
   window.__snaps = job.snaps;
@@ -269,7 +272,7 @@ try {
     process.stderr.write(`[${i + 1}/${jobs.length}] ${job.id} (${kind}) … `);
     const cpu0 = cpuTimes();
     try {
-      const made = await page.evaluate((j) => window.__makeSnapshots(j), { cardId: job.id, fps: FPS, lenSec: CLIP_SEC, mode: meta.mode, canvas: kind === 'canvas', n: FRAMES });
+      const made = await page.evaluate((j) => window.__makeSnapshots(j), { cardId: job.id, fps: FPS, lenSec: CLIP_SEC, mode: meta.mode, canvas: kind === 'canvas', n: FRAMES, params: PARAMS });
       /*
        * 只轮换**互不相同**的帧:相邻两帧一样时 `Stage` 看到同一个 `__html`、不动 DOM,那一次换帧等于空换,会把均值拉低。
        * 不同的帧不够 FRAMES 帧就循环补满;只有一种画面的卡(静止卡)播放时本来就不换,记 `static`、不量。
@@ -285,7 +288,7 @@ try {
       if (snaps.length > 2 && snaps[0] === snaps[snaps.length - 1]) snaps.pop();   // 循环接头处不重复
       const bytes = snaps.map((s) => s.length);
       const imgBytes = snaps.map((s) => (s.match(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g) || []).reduce((n, m) => n + m.length, 0));
-      const prep = await page.evaluate((j) => window.__prepareFront(j), { cardId: job.id, fps: FPS, lenSec: CLIP_SEC, snaps });
+      const prep = await page.evaluate((j) => window.__prepareFront(j), { cardId: job.id, fps: FPS, lenSec: CLIP_SEC, snaps, params: PARAMS });
       // 热身一批
       await page.evaluate((v) => window.__batch(true, v), VIA);
       const swapBatches = [], baseBatches = [], swapTimes = [];
