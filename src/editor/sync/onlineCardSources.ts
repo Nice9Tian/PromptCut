@@ -33,11 +33,11 @@ export interface OnlineCardSourcesDeps {
   /** 写进哪里;缺省注册表 */
   apply?: (entries: SyncedUserCard[]) => boolean;
   /**
-   * 第一次连着共享项目的那一轮有了结果(只叫一次):`ok` 为 true 是列完、取完、写进了表(个别条目这轮没取到也算),
-   * false 是列表取不到(没连上、被拒、超时、回包不对)。在线页面的测量等它开门(`measureGate.ts`);
-   * 还没连上共享项目的那几轮不算。
+   * 每条连接的第一轮有了结果(每条连接叫一次):`ok` 为 true 是列完、取完、写进了表(个别条目这轮没取到也算),
+   * false 是列表取不到(没连上、被拒、超时、回包不对)。`link` 是那一轮用的连接。在线页面的测量等它开门
+   * (`measureGate.ts`);连接换了(换项目、重连)再叫一次;还没连上共享项目的那几轮不算。
    */
-  onFirstSettled?: (ok: boolean) => void;
+  onFirstSettled?: (ok: boolean, link: unknown) => void;
   requestTimeoutMs?: number;
   now?: () => number;
 }
@@ -88,10 +88,10 @@ export class OnlineCardSources {
     if (changed) this.deps.onChange?.(entries);
   }
 
-  private settle(ok: boolean): void {
+  private settle(ok: boolean, link: unknown): void {
     if (this.settled || this.stopped) return;
     this.settled = true;
-    try { this.deps.onFirstSettled?.(ok); } catch { /* 订阅方坏了不影响同步 */ }
+    try { this.deps.onFirstSettled?.(ok, link); } catch { /* 订阅方坏了不影响同步 */ }
   }
 
   private request(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -118,6 +118,8 @@ export class OnlineCardSources {
       this.link = link;
       this.cache.clear();
       this.apply([]);
+      // 新连接的第一轮重新算「第一次」
+      this.settled = false;
     }
     if (!link) return;
     let listing: Record<string, unknown>;
@@ -127,14 +129,14 @@ export class OnlineCardSources {
     } catch (err) {
       this.stats.errors++;
       this.stats.lastError = String((err as Error)?.message ?? err).slice(0, 160);
-      this.settle(false);
+      this.settle(false, link);
       return;
     }
     if (this.stopped || this.deps.linkKey() !== link) return;
     if (listing?.type !== "content.listing" || !Array.isArray(listing.items)) {
       this.stats.errors++;
       this.stats.lastError = `回包不对:${String(listing?.type ?? "")}`.slice(0, 160);
-      this.settle(false);
+      this.settle(false, link);
       return;
     }
     this.stats.truncated = listing.truncated === true;
@@ -162,7 +164,7 @@ export class OnlineCardSources {
     const parsed = new Map([...this.cache].map(([k, v]) => [k, v.cards] as const));
     this.apply(entriesOf([...this.cache.keys()], parsed));
     this.stats.lastSyncAt = (this.deps.now ?? Date.now)();
-    this.settle(true);
+    this.settle(true, link);
   }
 
   /** 此刻认出的卡(诊断、探针用) */

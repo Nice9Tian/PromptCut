@@ -39,7 +39,7 @@ import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscri
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
 import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
 import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
-import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate } from "./measureGate";
+import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
 import { setCoverageSource, subscribeCoverage } from "./onlineCoverage";
 import { localOnlyMissingAt } from "./localOnlyMissing";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
@@ -844,10 +844,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
      * 测量等卡片源码第一次同步完再开始(`measureGate.ts`):在那之前同步卡被当成未知 id,后台舞台可能把它测一次。
      * 第一次同步有了结果(成功或失败)就开门;最多等 `MEASURE_GATE_MAX_MS`。桌面不关这道门。
      */
+    const linkKey = () => (hasDocLink() ? currentSharedLink() : null);
+    // 门按连接算:换了项目 / 连接,问门时重新关上,等新连接的卡片源码同步完(`measureGate.ts`)
+    setMeasureGateLink(linkKey);
     holdMeasureForCardSources();
     const sources = new OnlineCardSources({
-      request: docRequest, linkKey: () => (hasDocLink() ? currentSharedLink() : null),
-      onFirstSettled: (ok) => releaseMeasureGate(ok),
+      request: docRequest, linkKey,
+      onFirstSettled: (ok, link) => releaseMeasureGate(ok, link),
     });
     const push = () => {
       const entries = [...syncedUserCards().values()];

@@ -7,6 +7,9 @@
  *   MG-03 在线页面:第一次同步回了失败也开,原因 failed
  *   MG-04 在线页面:一直没回音,满 `MEASURE_GATE_MAX_MS` 自己开,原因 timeout
  *   MG-05 `OnlineCardSources.onFirstSettled`:没连上共享项目的那几轮不算;列完取完叫一次 true;列表取不到叫一次 false;只叫一次
+ *   MG-07 按连接算:换了连接(换项目、重连、离开再进)门重新关上,新连接第一次同步有结果才开;过时的结果不算;
+ *         最多等同样的上限、失败了照常开;没连着不关;桌面从不关
+ *   MG-08 `OnlineCardSources`:连接换了,新连接的第一轮再叫一次 `onFirstSettled`,带上新连接
  *   MG-06 接线:常驻探针在后台舞台就绪之后等这道门;低内存档的界限搜索门没开不开工;在线页面开始同步卡片源码时关门、有结果开门
  *         (`probeRunner.ts` 读 `import.meta.env`,Node 里载不进来,这里按源码核)
  */
@@ -178,5 +181,101 @@ test("MG-06 接线(按源码核)", () => {
   assert.match(tick, /if \(!measureGateOpen\(\)\) return;/, "低内存档界限搜索:门没开不开工");
   const sources = preview.slice(preview.indexOf("new OnlineCardSources({") - 400, preview.indexOf("new OnlineCardSources({") + 400);
   assert.match(sources, /holdMeasureForCardSources\(\)/, "开始同步卡片源码时关门");
-  assert.match(sources, /onFirstSettled: \(ok\) => releaseMeasureGate\(ok\)/, "第一次同步有结果就开门");
+  assert.match(sources, /onFirstSettled: \(ok, link\) => releaseMeasureGate\(ok, link\)/, "每条连接第一次同步有结果就开门");
+  assert.match(sources, /setMeasureGateLink\(linkKey\)/, "门按连接算:接上此刻的连接");
+  assert.match(loop, /for \(;;\) \{[\s\S]{0,400}await whenMeasureGateOpen\(\);/, "常驻探针每一轮开头都等门(换了连接重新关上时等新项目)");
+  assert.match(loop, /if \(gen !== generation \|\| !measureGateOpen\(\)\) break;/, "一轮里门又关上了就收摊");
+});
+
+test("MG-07 按连接算:换了连接重新关上,等新连接的卡片源码同步完", async () => {
+  F.markOnlinePage();
+  const clock = fakeClock();
+  G.resetMeasureGate(clock);
+  const L1 = { id: 1 }, L2 = { id: 2 }, L3 = { id: 3 };
+  let link = null;
+  G.setMeasureGateLink(() => link);
+  try {
+    G.holdMeasureForCardSources();
+    link = L1;
+    assert.equal(G.measureGateOpen(), false);
+    G.releaseMeasureGate(true, L1);
+    assert.equal(G.measureGateOpen(), true);
+    assert.equal(G.measureGateDiag().holds, 1);
+    // 换项目:连接换成 L2 → 问门时重新关上
+    link = L2;
+    let opened = false;
+    const wait = G.whenMeasureGateOpen().then(() => { opened = true; });
+    assert.equal(G.measureGateOpen(), false, "换了连接:门重新关上");
+    assert.equal(G.measureGateDiag().holds, 2);
+    G.releaseMeasureGate(true, L1);
+    await flush();
+    assert.equal(opened, false, "旧连接回来的结果不算");
+    clock.advance(G.MEASURE_GATE_MAX_MS - 1);
+    assert.equal(G.measureGateOpen(), false);
+    G.releaseMeasureGate(true, L2);
+    await wait;
+    assert.equal(G.measureGateOpen(), true, "新连接同步完:开");
+    assert.equal(G.measureGateDiag().reason, "synced");
+    // 同一条连接不再关
+    assert.equal(G.measureGateOpen(), true);
+    assert.equal(G.measureGateDiag().holds, 2);
+    // 离开项目(没连着):不关;再进(新连接 L3):关,一直没回音满上限自己开
+    link = null;
+    assert.equal(G.measureGateOpen(), true, "没连着不关");
+    link = L3;
+    assert.equal(G.measureGateOpen(), false, "离开再进:关");
+    clock.advance(G.MEASURE_GATE_MAX_MS);
+    assert.equal(G.measureGateOpen(), true);
+    assert.equal(G.measureGateDiag().reason, "timeout");
+    assert.equal(G.measureGateOpen(), true, "超时开的也算为 L3 开过,不再关");
+    // 新连接第一次同步回了失败:照常开
+    const L4 = { id: 4 };
+    link = L4;
+    assert.equal(G.measureGateOpen(), false);
+    G.releaseMeasureGate(false, L4);
+    assert.equal(G.measureGateOpen(), true);
+    assert.equal(G.measureGateDiag().reason, "failed");
+    // 门开着时新连接的结果先到(还没人问门):记下为它开的,之后不再关
+    const L5 = { id: 5 };
+    link = L5;
+    G.releaseMeasureGate(true, L5);
+    assert.equal(G.measureGateOpen(), true, "新连接已经同步完才问门:不关");
+  } finally {
+    delete globalThis.__pcOnlinePage;
+    G.resetMeasureGate();
+  }
+  // 桌面:给了连接也从不关
+  G.resetMeasureGate();
+  let dl = { id: "a" };
+  G.setMeasureGateLink(() => dl);
+  assert.equal(G.measureGateOpen(), true);
+  dl = { id: "b" };
+  assert.equal(G.measureGateOpen(), true, "桌面换了连接也不关");
+  G.resetMeasureGate();
+});
+
+test("MG-08 OnlineCardSources:连接换了,新连接的第一轮再叫一次 onFirstSettled", async () => {
+  const src = `export const c = { id: "s", name: "同步", defaults: {}, controls: [], Component: V };`;
+  const request = async (msg) => msg.type === "content.list"
+    ? { type: "content.listing", items: [{ key: "src/cards/user/s.tsx", hash: "h1" }] }
+    : { type: "content.item", key: msg.key, body: src, hash: "h1" };
+  const L1 = { id: 1 }, L2 = { id: 2 };
+  let link = L1;
+  const calls = [];
+  const s = new S.OnlineCardSources({ request, linkKey: () => link, onFirstSettled: (ok, l) => calls.push([ok, l]), apply: () => false });
+  await s.sync();
+  await s.sync();
+  assert.deepEqual(calls, [[true, L1]]);
+  link = L2;
+  await s.sync();
+  await s.sync();
+  assert.deepEqual(calls, [[true, L1], [true, L2]], "新连接再叫一次,带上新连接");
+  link = null;
+  await s.sync();
+  assert.equal(calls.length, 2, "没连着不叫");
+  link = L1;
+  await s.sync();
+  assert.deepEqual(calls.at(-1), [true, L1], "离开再进:又叫一次");
+  s.stop();
+  R.setSyncedUserCards([]);
 });
