@@ -32,6 +32,12 @@ export interface OnlineCardSourcesDeps {
   onChange?: (entries: SyncedUserCard[]) => void;
   /** 写进哪里;缺省注册表 */
   apply?: (entries: SyncedUserCard[]) => boolean;
+  /**
+   * 第一次连着共享项目的那一轮有了结果(只叫一次):`ok` 为 true 是列完、取完、写进了表(个别条目这轮没取到也算),
+   * false 是列表取不到(没连上、被拒、超时、回包不对)。在线页面的测量等它开门(`measureGate.ts`);
+   * 还没连上共享项目的那几轮不算。
+   */
+  onFirstSettled?: (ok: boolean) => void;
   requestTimeoutMs?: number;
   now?: () => number;
 }
@@ -69,6 +75,7 @@ export class OnlineCardSources {
   private busy: Promise<void> | null = null;
   private entries: SyncedUserCard[] = [];
   private stopped = false;
+  private settled = false;
   readonly stats = { lists: 0, gets: 0, errors: 0, lastSyncAt: 0, lastError: "" as string, truncated: false };
 
   constructor(deps: OnlineCardSourcesDeps) {
@@ -79,6 +86,12 @@ export class OnlineCardSources {
     this.entries = entries;
     const changed = (this.deps.apply ?? setSyncedUserCards)(entries);
     if (changed) this.deps.onChange?.(entries);
+  }
+
+  private settle(ok: boolean): void {
+    if (this.settled || this.stopped) return;
+    this.settled = true;
+    try { this.deps.onFirstSettled?.(ok); } catch { /* 订阅方坏了不影响同步 */ }
   }
 
   private request(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -114,12 +127,14 @@ export class OnlineCardSources {
     } catch (err) {
       this.stats.errors++;
       this.stats.lastError = String((err as Error)?.message ?? err).slice(0, 160);
+      this.settle(false);
       return;
     }
     if (this.stopped || this.deps.linkKey() !== link) return;
     if (listing?.type !== "content.listing" || !Array.isArray(listing.items)) {
       this.stats.errors++;
       this.stats.lastError = `回包不对:${String(listing?.type ?? "")}`.slice(0, 160);
+      this.settle(false);
       return;
     }
     this.stats.truncated = listing.truncated === true;
@@ -147,12 +162,14 @@ export class OnlineCardSources {
     const parsed = new Map([...this.cache].map(([k, v]) => [k, v.cards] as const));
     this.apply(entriesOf([...this.cache.keys()], parsed));
     this.stats.lastSyncAt = (this.deps.now ?? Date.now)();
+    this.settle(true);
   }
 
   /** 此刻认出的卡(诊断、探针用) */
   debug() {
     return {
       link: !!this.link,
+      settled: this.settled,
       keys: [...this.cache.keys()].sort(),
       cards: this.entries.map((e) => ({ ...e })),
       ...this.stats,

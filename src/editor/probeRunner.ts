@@ -63,6 +63,7 @@ import { clipIdentityOf, resetClipIdentityCache } from "./costIdentity";
 import { mergePlanCosts, setPlanCosts } from "./planDispatch";
 import { backStage, onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
+import { whenMeasureGateOpen } from "./measureGate";
 
 /* ------------------------------------------------------------------ 进度 */
 
@@ -256,6 +257,12 @@ async function putCosts(records: CardCostRecord[]): Promise<boolean> {
   const stored = await backend.save(records).catch(() => false);
   for (const l of [...costRecordListeners]) { try { l(records, { stored }); } catch { /* 订阅方坏了不影响测量 */ } }
   return stored;
+}
+
+/** 测过的片段(诊断、探针用;最近 200 条):哪个片段、哪张卡、身份键、什么时候开测 */
+const probedLog: Array<{ clipId: string; cardId: string; identityKey: string; at: number }> = [];
+export function probeRunDiag() {
+  return { probed: probedLog.map((e) => ({ ...e })), running: progress.running, done: progress.done, total: progress.total };
 }
 
 /** 探针帧的诊断:收到几帧、其中几帧是压过的可转移字节(C10 契约第 2 节「大块产出」) */
@@ -556,6 +563,8 @@ async function runLoop(): Promise<void> {
   try {
     // E1：后台舞台就绪了才开工（不去够 Preview 内部的 stageReady）
     await whenStageReady("back");
+    // 在线页面:等卡片源码第一次同步完(同步来的用户卡在那之前是未知 id,不能测;`measureGate.ts`)。桌面这道门一开始就开着
+    await whenMeasureGateOpen();
     for (;;) {
       const gen = generation;
       const project = currentProject;
@@ -575,6 +584,8 @@ async function runLoop(): Promise<void> {
       for (const job of jobs) {
         if (gen !== generation) break;
         setProgress({ card: job.cardId, done });
+        probedLog.push({ clipId: job.clipId, cardId: job.cardId, identityKey: job.identityKey, at: Date.now() });
+        if (probedLog.length > 200) probedLog.splice(0, probedLog.length - 200);
         const record = await probeCard(job, tuning, device, () => gen !== generation);
         if (gen !== generation) break;
         if (record) {
@@ -649,4 +660,5 @@ export function resetProbeRunner(): void {
   snapshotEndpointMissing = false;
   progress = IDLE;
   listeners.clear();
+  probedLog.length = 0;
 }

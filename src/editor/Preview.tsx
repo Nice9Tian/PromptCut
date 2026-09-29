@@ -39,6 +39,7 @@ import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscri
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
 import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
 import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
+import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate } from "./measureGate";
 import { setCoverageSource } from "./onlineCoverage";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
 import { lowMemoryMeasuring, lowMemorySearchState, reclassify, runLowMemorySearch, type LowMemorySearchOutcome } from "./lowMemorySearch";
@@ -56,7 +57,7 @@ import { createPlanPublisher } from "../online/planPublisher";
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { onCostRecords, onProbeProgress, probeFrameDiag, probeSettledFor, setCostBackend } from "./probeRunner";
+import { onCostRecords, onProbeProgress, probeFrameDiag, probeRunDiag, probeSettledFor, setCostBackend } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
@@ -832,7 +833,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   useEffect(() => {
     if (!online) return;
-    const sources = new OnlineCardSources({ request: docRequest, linkKey: () => (hasDocLink() ? currentSharedLink() : null) });
+    /*
+     * 测量等卡片源码第一次同步完再开始(`measureGate.ts`):在那之前同步卡被当成未知 id,后台舞台可能把它测一次。
+     * 第一次同步有了结果(成功或失败)就开门;最多等 `MEASURE_GATE_MAX_MS`。桌面不关这道门。
+     */
+    holdMeasureForCardSources();
+    const sources = new OnlineCardSources({
+      request: docRequest, linkKey: () => (hasDocLink() ? currentSharedLink() : null),
+      onFirstSettled: (ok) => releaseMeasureGate(ok),
+    });
     const push = () => {
       const entries = [...syncedUserCards().values()];
       for (const id of STAGE_IDS) {
@@ -988,6 +997,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined);
     const tick = async () => {
       if (disposed) return;
+      // 测量等卡片源码第一次同步完(`measureGate.ts`):同步卡在那之前是未知 id,不能被当成普通卡去测
+      if (!measureGateOpen()) return;
       const shared = currentSharedLink();
       const projectId = currentDocProjectId();
       const s = frontStage();
@@ -1193,6 +1204,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       beatSwap: beatSwapDebug(),
       backWork: backWorkDiag(),
       probeFrames: probeFrameDiag(),
+      // 常驻探针测过哪些片段、测量门什么时候开的(online-user-cards-probe 核对同步卡从没被测过)
+      probeRun: probeRunDiag(),
+      measureGate: measureGateDiag(),
       hostCaps: { ...hostCapsRef.current },
       snapshotFeed: snapshotFeedDebug({ project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current }),
     });
