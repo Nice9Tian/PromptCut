@@ -136,8 +136,8 @@ test("ST-A-09 已知这一层快照的大小:按大小估(文本每 KB 贵、位
   plan = { segments: [{ fromSec: 0, toSec: 1000, heavy: new Set(["m", "t"]), light: new Set() }] };
   for (const id of ["m", "t"]) src.push({ type: "layer", clipId: id, kind: "html", key: `k-${id}`, ranges: [[0, 300]] });
   const stage = fakeStage();
-  // 卡种估都是 3:deadMs 23.33 两层都装得下,第一次投递把两层都投出去、记下大小
-  setBeatSwap(true, { swapMs: 3, occupied: () => 0, costOf: () => 3 });
+  // deadMs 10;卡种估都是 3:两层都装得下,第一次投递把两层都投出去、记下大小
+  setBeatSwap(true, { swapMs: 3, occupied: () => 23.333333 - 10, costOf: () => 3 });
   await warm(stage, { project: p, t: 1, playing: true });
   await deliverSnapshots(stage, "front", { project: p, t: 1, playing: true });
   assert.equal(beatSwapDebug().knownSizes, 2);
@@ -145,7 +145,7 @@ test("ST-A-09 已知这一层快照的大小:按大小估(文本每 KB 贵、位
   const tMs = swapCostOfSize({ bytes: big.length, bitmap: false });
   assert.ok(Math.abs(mMs - (SWAP_COST_MODEL.baseMs + SWAP_COST_MODEL.bitmapMsPerKB * bmp.length / 1024)) < 1e-9);
   assert.ok(tMs > mMs * 3, `同样大小,文本比位图贵得多:${tMs} vs ${mMs}`);
-  // 下一拍:m(位图,约 5 ms)在上、t(文本,约 21 ms)在下;deadMs 23.33 → 只装得下 m
+  // 下一拍:m(位图,约 4.4 ms)在上、t(文本,约 17 ms)在下;deadMs 10 → 只装得下 m
   now += 40;
   await deliverSnapshots(stage, "front", { project: p, t: 1 + 1 / FPS, playing: true });
   const d = beatSwapDebug().last;

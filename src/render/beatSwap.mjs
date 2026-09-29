@@ -25,13 +25,15 @@ import { budgetOf } from './pipelinePlan.mjs';
 export const SWAP_MS = 3;
 
 /**
- * 按卡种的换帧成本(毫秒;swap-tuning 实测,可见舞台主线程每多换一层这一拍多干的时长,见 `swap-cost-probe.mjs`)。
+ * 按卡种的换帧成本(毫秒;swap-tuning 实测,可见舞台主线程每多换一层这一拍多干的时长,见 `swap-cost-probe.mjs`;
+ * 取各卡种实测中位数向上取到 0.5:DOM 25 张 1.7、Lottie 5 张 6.3、画布 7 张 3.7)。只在还不知道这一层快照大小时用
+ * (分派、这一层的第一次投递);Lottie 的长尾(大的一帧 27～31 ms)由按大小估接住。
  *   - `dom`:普通 DOM 卡(含毛玻璃 `backdrop-filter`、`filter: blur` 的卡、按声明是 DOM 的用户卡);
  *   - `lottie`:Lottie 卡(SVG 节点多,快照大);
  *   - `canvas`:画布卡(快照里画布已栅格成内联位图:粒子、三维、共享 WebGL 渲染器的卡)。
  * 数字是三级机制(`docs/semantics/mechanism/rendering.md`「兜底顺序」)。
  */
-export const SWAP_MS_BY_KIND = Object.freeze({ dom: 2, lottie: 20, canvas: 6 });
+export const SWAP_MS_BY_KIND = Object.freeze({ dom: 2, lottie: 6.5, canvas: 4 });
 
 /**
  * 已知这一层快照有多大时的估法(swap-tuning 实测拟合,见 `swap-cost-probe.mjs`):换帧成本基本与快照的字符数成正比,
@@ -39,10 +41,11 @@ export const SWAP_MS_BY_KIND = Object.freeze({ dom: 2, lottie: 20, canvas: 6 });
  *
  *   成本 = baseMs + (位图 ? bitmapMsPerKB : textMsPerKB) × 字符数 / 1024
  *
- * 同一卡种里快照大小可以差十倍(实测 DOM 卡 12～144 KB、Lottie 65～733 KB),按大小估比按卡种估准;
+ * 同一卡种里快照大小可以差十倍(实测 DOM 卡 12～144 KB、Lottie 65～733 KB),按大小估比按卡种估准
+ * (37 张卡相对实测的中位误差:按大小 11%、按卡种 32%、一律 3 ms 64%);
  * 这一层还没投递过(不知道大小)时退回按卡种。数字是三级机制(`mechanism/rendering.md`「兜底顺序」)。
  */
-export const SWAP_COST_MODEL = Object.freeze({ baseMs: 1, textMsPerKB: 0.05, bitmapMsPerKB: 0.01 });
+export const SWAP_COST_MODEL = Object.freeze({ baseMs: 0.8, textMsPerKB: 0.04, bitmapMsPerKB: 0.009 });
 
 /**
  * 按快照大小估这一层的换帧成本;大小不是正数回 `null`(调用方退回按卡种)。
