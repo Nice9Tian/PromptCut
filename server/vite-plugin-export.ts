@@ -8,7 +8,7 @@ import { spawn } from "child_process";
 import type { AddressInfo } from "net";
 import { exportBegin, exportEnd } from "./render-pool-state.mjs";
 import { exportOriginalsGate } from "./export-originals";
-import { EXPORT_KEEP, pruneExportDir, sweepExportRoot } from "./storage-leftovers.mjs";
+import { EXPORT_KEEP, claimExportDir, pruneExportDir, sweepExportRoot } from "./storage-leftovers.mjs";
 
 interface ExportJob {
   id: string;
@@ -106,27 +106,6 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ url: `/@export/media/${encodeURIComponent(safeName)}` }));
   });
-}
-
-/**
- * 这次导出的目录 `export-<YYYYMMDD-HHMMSS>`。同一秒已有同名目录(连点两次、两个窗口同时导)就加
- * `-2`、`-3`…… 后缀,不复用:复用会让两次导出往同一处写、后一次的清理删掉前一次的产物。
- * 用不带 recursive 的 mkdir 占位,两个请求同时来也只有一个拿得到同一个名字。
- */
-export async function claimExportDir(base: string, now = new Date()): Promise<{ id: string; outDir: string }> {
-  const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
-  await fs.mkdir(base, { recursive: true });
-  for (let n = 1; n < 1000; n++) {
-    const id = n === 1 ? stamp : `${stamp}-${n}`;
-    const outDir = path.resolve(base, `export-${id}`);
-    try {
-      await fs.mkdir(outDir);
-      return { id, outDir };
-    } catch (e: any) {
-      if (e?.code !== "EEXIST") throw e;
-    }
-  }
-  throw new Error("同一秒内的导出目录太多");
 }
 
 /**

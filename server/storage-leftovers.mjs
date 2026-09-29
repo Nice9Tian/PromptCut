@@ -180,6 +180,28 @@ export async function pruneExportDir(dir, { keep = EXPORT_KEEP, log = null } = {
   return report;
 }
 
+/**
+ * 一次导出的目录 `export-<YYYYMMDD-HHMMSS>`（本地时间）。同一秒已有同名目录（连点两次、两个窗口同时导）
+ * 就加 `-2`、`-3`…… 后缀，不复用：复用会让两次导出往同一处写，后一次的清理还会删掉前一次的产物。
+ * 用不带 recursive 的 mkdir 占位，两个请求同时来也只有一个拿得到同一个名字。回 `{ id, outDir }`。
+ */
+export async function claimExportDir(base, now = new Date()) {
+  const two = n => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
+  await fs.mkdir(base, { recursive: true });
+  for (let n = 1; n < 1000; n++) {
+    const id = n === 1 ? stamp : `${stamp}-${n}`;
+    const outDir = path.resolve(base, `export-${id}`);
+    try {
+      await fs.mkdir(outDir);
+      return { id, outDir };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+  }
+  throw new Error('同一秒内的导出目录太多');
+}
+
 /** 删一个目录，失败按退避重试（Windows 上刚退出的子进程可能还占着文件）。回是否删掉了。 */
 export async function removeDirWithRetry(dir, { attempts = 5, delayMs = 200 } = {}) {
   for (let attempt = 0; attempt < attempts; attempt++) {
