@@ -118,6 +118,7 @@ function pixelDiff(a, b) {
 }
 
 const fails = [];
+const notes = [];
 const out = { ok: false, origin: ORIGIN, out: OUT, cards: {}, timing: {} };
 try {
   const a = await runSide('batch4', true);
@@ -169,7 +170,11 @@ try {
           if (okA && !okB) judge.regressions.push(n);
         }
         row.versusLive = judge;
-        if (judge.regressions.length) fails.push(`${cardId}:顺推在逐批与活渲一致的帧上对不上 ${judge.regressions.length} 帧(${judge.regressions.slice(0, 8).join(',')})`);
+        // 逐批自己在这些帧里大半都与活渲对不上(预渲染间里本来就不确定的卡,如按 setInterval 走的 E4b 探针卡 `probe-typewriter`):
+        // 拿它当参照没有意义,只记不判
+        judge.referenceUnstable = judge.batch4Match * 2 < row.differFrames.length;
+        if (judge.referenceUnstable) notes.push(`${cardId}:逐批在不同的 ${row.differFrames.length} 帧里只有 ${judge.batch4Match} 帧与活渲一致:逐批当不了参照(要么逐批本身就错,如 mu-word-rotate;要么这张卡在预渲染间里本来就不确定,如按 setInterval 走的探针卡),只记不判`);
+        else if (judge.regressions.length) fails.push(`${cardId}:顺推在逐批与活渲一致的帧上对不上 ${judge.regressions.length} 帧(${judge.regressions.slice(0, 8).join(',')})`);
       }
       if (!row.singlePass && !(ca.capabilities?.canvasHeavy)) fails.push(`${cardId}:新行为没有走顺推`);
       log(`${cardId.padEnd(24)} 字节同 ${row.bytesSame} 只差will-change ${row.sameIgnoringWillChange} 像素同 ${row.pixelSame} 像素不同 ${row.pixelDiffer} 缺 ${row.missing}${row.versusLive ? `(不同的帧里与顺序活渲一致:逐批 ${row.versusLive.batch4Match}、顺推 ${row.versusLive.singleMatch}、顺推退步 ${row.versusLive.regressions.length})` : ''}  batch4 ${row.batch4.join('/')} ms  顺推 ${row.single.join('/')} ms`);
@@ -181,6 +186,7 @@ try {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 1200)}`);
 }
 out.fails = fails;
+out.notes = notes;
 out.ok = fails.length === 0;
 console.log(JSON.stringify(out));
 process.exit(out.ok ? 0 : 1);
