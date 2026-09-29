@@ -35,10 +35,14 @@ const BAKERY = path.join(SERVER, 'bakery');
  *     `PROMPTCUT_EXPORT_DIR` / `PROMPTCUT_DATA_DIR`(测试与探针不写用户的 Videos\PromptCut,要常驻基线);
  *   - `global-setup.mjs`(`npm test` 的全局准备,不是生产代码)用 `scripts/lib/user-dirs.mjs` 摘掉同样两个变量,
  *     和探针共用一份判定。
+ *   - `port-file.test.mjs` 测 `scripts/lib/user-dirs.mjs` 的 `markNoPortFile`，并扫描起编辑器的探针都带上 `PROMPTCUT_NO_PORT_FILE=1`
+ *     (测试与探针不覆盖公共的 %TEMP%\promptcut\port.json,要常驻基线);
+ *   - `asset-lan-discover.test.mjs` 测 `scripts/probes/asset-lan-discover.mjs`(`asset-lan-probe` 按局域网发现找放本机项目的素材服务地址);
+ *   - `m8-judges.test.mjs` 测 `scripts/probes/m8/lib.mjs` 里 `cloud-untouched` 与 `real:tasks` 的判法。
  *
  * 多一条都要在这里显式写出来,加不进来就说明依赖方向真的破了。
  */
-const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs']);
+const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs', 'server/test/port-file.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/m8-judges.test.mjs']);
 
 const CODE = /\.(mjs|mts|ts|tsx)$/;
 

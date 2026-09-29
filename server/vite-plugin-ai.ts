@@ -154,8 +154,10 @@ export default function vitePluginAi(): Plugin {
     configureServer(server) {
       server.httpServer?.on('listening', () => {
         // 无头实例(PROMPTCUT_HEADLESS=1)不写这个锁文件:它是给没指定端口的 mcp-server 兜底的,
-        // 被无头实例盖掉会把用户自己那份 AI 面板指到错误的端口上
-        if (process.env.PROMPTCUT_HEADLESS === '1') return;
+        // 被无头实例盖掉会把用户自己那份 AI 面板指到错误的端口上。
+        // 测试与探针起的编辑器(PROMPTCUT_NO_PORT_FILE=1)同理不写:公共入口 scripts/lib/no-user-dirs.mjs
+        // 与 npm test 的全局准备把它设上;桌面版和用户自己 `npm run dev` 起的编辑器照旧写
+        if (process.env.PROMPTCUT_HEADLESS === '1' || process.env.PROMPTCUT_NO_PORT_FILE === '1') return;
         try {
           const addr = server.httpServer?.address();
           if (addr && typeof addr !== 'string') {

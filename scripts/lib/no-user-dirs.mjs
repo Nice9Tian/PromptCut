@@ -5,8 +5,12 @@
  *
  * 必须是入口脚本的**第一个** import：ES 模块按引入顺序求值，排在它前面的模块若在顶层读了这两个变量，
  * 读到的还是外面的值。摘掉了什么打一行到 stderr，方便排查。
+ *
+ * 另设 `PROMPTCUT_NO_PORT_FILE=1`：之后起的编辑器不写公共的 `%TEMP%\promptcut\port.json`（原因见 `user-dirs.mjs`）。
  */
-import { scrubUserDirEnv } from './user-dirs.mjs';
+import { scrubUserDirEnv, markNoPortFile } from './user-dirs.mjs';
+
+markNoPortFile(process.env);
 
 for (const { key, value } of scrubUserDirEnv(process.env)) {
   console.error(`[no-user-dirs] 不继承外部的 ${key}=${value}（测试与探针不写用户目录，见 scripts/lib/user-dirs.mjs）`);

@@ -21,6 +21,12 @@
  *
  * 产品入口（`scripts/headless.mjs` 由编辑器的 Skill 拉起、`scripts/render-host.mjs` 自己按 `--data` 显式设、
  * `scripts/prune-prerender-cache.mjs` 本来就是清用户帧库的维护工具）不用它：它们要的就是用户的目录。
+ *
+ * 同一个入口顺带设 `PROMPTCUT_NO_PORT_FILE=1`（`markNoPortFile`）：编辑器一起来就把端口写进公共的
+ * `%TEMP%\promptcut\port.json`（`server/vite-plugin-ai.ts`），用户会话里的 PromptCut MCP 服务
+ * （`server/mcp-server.mjs`）按它找编辑器。测试和探针起的编辑器写了它，会把用户的 MCP 工具调用引到探针那台上，
+ * 或者反过来让某个探针的代理收到用户的调用。设了这个变量，编辑器就不写；桌面版和用户自己 `npm run dev`
+ * 起的编辑器没有这个变量，照旧写。守门：`server/test/port-file.test.mjs`。
  */
 import os from 'node:os';
 import path from 'node:path';
@@ -73,4 +79,18 @@ export function assertNoUserExportDir(env, who = '子进程') {
       throw new Error(`${who} 的 ${key}=${env[key]} 指向用户的 ${userExportDir()}，测试与探针不得写那里`);
     }
   }
+}
+
+/** 设成 `1` 时编辑器不写公共的 `%TEMP%\promptcut\port.json`（`server/vite-plugin-ai.ts`） */
+export const NO_PORT_FILE_ENV = 'PROMPTCUT_NO_PORT_FILE';
+
+/**
+ * 在 env 里设 `PROMPTCUT_NO_PORT_FILE=1`（原地改，默认改本进程的 `process.env`）；之后 `{ ...process.env }`
+ * 起的编辑器都不写公共的 port.json。返回设之前的值。
+ * @param {Record<string, string | undefined>} [env]
+ */
+export function markNoPortFile(env = process.env) {
+  const before = env[NO_PORT_FILE_ENV];
+  env[NO_PORT_FILE_ENV] = '1';
+  return before;
 }

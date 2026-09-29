@@ -87,7 +87,7 @@ const CASES = [
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-pmgl-'));
 const vite = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx',
   ['vite', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'],
-  { cwd: ROOT, env: { ...process.env, TEMP: tmp, TMP: tmp }, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+  { cwd: ROOT, env: { ...process.env, TEMP: tmp, TMP: tmp, PROMPTCUT_NO_PORT_FILE: '1' }, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
 let viteLog = '';
 vite.stdout.on('data', (d) => { viteLog += d; });
 vite.stderr.on('data', (d) => { viteLog += d; });

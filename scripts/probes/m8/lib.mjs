@@ -67,7 +67,7 @@ const trimSlash = (s) => String(s).replace(/\/+$/, '');
  * @param {'cloud' | 'lan' | 'local'} place
  *   - cloud：项目在阿里云主实例；`hosted`、`coord` 缺省取 CLOUD；
  *   - lan：项目在 PC 的局域网主机编辑器上（`PROMPTCUT_LAN_HOST=1`）；必给 `lanHost`（`<ip>:<端口>`）与 `coord`；
- *     `cloudHealthz` 是托管端 `/healthz`（判「全程不连阿里云」：前后连接计数不变，同 SP4）；
+ *     `cloudHealthz` 是托管端 `/healthz`（前后总连接数只记录；「全程不连阿里云」按本轮查，见 `judgeCloudUntouched`）；
  *   - local：本机替身（本机临时托管组合）；必给 `hosted`（http://127.0.0.1:<端口>）与 `coord`。
  * @param {{ hosted?: string, coord?: string, lanHost?: string, docPlain?: string, media?: string }} [o]
  * @returns {{ place, hosted: string, ws: string, healthz: string, coord: string, docPlain: string | null, media: string | null, cloudHealthz: string | null }}
@@ -450,4 +450,39 @@ export function argsOf(argv = process.argv.slice(2)) {
     arg: (name, fallback = null) => (argv.includes(name) && argv[argv.indexOf(name) + 1] !== undefined ? argv[argv.indexOf(name) + 1] : fallback),
     flag: (name) => argv.includes(name),
   };
+}
+
+/**
+ * 「放本机全程不连阿里云」（`cloud-untouched`）按本轮查：本轮的项目（名字带本轮编号）在云端托管端查不到，
+ * 本轮的用户（项目成员）就不可能进过云端。以前数云端 `/healthz` 的总连接数，别人进出就误判；总数只留作参考、不判。
+ *
+ * @param {{ status: number, body?: any } | null} lookup  云端 `GET shared/lookup?name=<本轮项目名>` 的结果；连不上给 null
+ * @param {{ projectId?: string | null, name?: string | null }} mine  本轮的项目
+ * @param {{ before?: number | null, after?: number | null }} [connections]  云端 `/healthz` 前后的总连接数（只记录）
+ * @returns {{ ok: boolean, via: 'lookup' | 'unreachable', why?: string, status?: number, connections: object }}
+ *   404：本轮项目不在云端，过；200 且 projectId 是本轮的：不过；200 但 projectId 不同（重名，不是本轮的）：过、写明；
+ *   连不上或别的状态：记 `unreachable` 并放过（同以前「前后有一次读不到就不判」）。
+ */
+export function judgeCloudUntouched(lookup, mine, connections = {}) {
+  const conns = { before: connections.before ?? null, after: connections.after ?? null };
+  if (!mine?.name) return { ok: false, via: 'lookup', why: '没有本轮的项目名', connections: conns };
+  if (!lookup || typeof lookup.status !== 'number') return { ok: true, via: 'unreachable', why: '云端查不了（连不上）', connections: conns };
+  if (lookup.status === 404) return { ok: true, via: 'lookup', status: 404, connections: conns };
+  if (lookup.status === 200) {
+    const id = lookup.body?.projectId ?? null;
+    if (mine.projectId && id && id !== mine.projectId) return { ok: true, via: 'lookup', status: 200, why: `云端有同名项目 ${id}，不是本轮的`, connections: conns };
+    return { ok: false, via: 'lookup', status: 200, why: `本轮的项目出现在云端（${id ?? '没有 projectId'}）`, connections: conns };
+  }
+  return { ok: true, via: 'unreachable', status: lookup.status, why: `云端回 ${lookup.status}`, connections: conns };
+}
+
+/**
+ * e1 真实细任务数的门槛与检查名：每条时间轴 `seconds × fps / segFrames` 段，门槛 `min(cap, 条数 × 每条段数)`；
+ * 检查名按门槛写（`real:tasks>=<门槛>`），不再固定写 50。
+ * @returns {{ need: number, label: string, expected: number }}
+ */
+export function realTasksThreshold({ clips, seconds, fps = 30, segFrames = 60, cap = 50 }) {
+  const expected = clips * seconds * fps / segFrames;
+  const need = Math.ceil(Math.min(cap, expected));
+  return { need, label: `real:tasks>=${need}`, expected };
 }

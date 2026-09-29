@@ -14,7 +14,8 @@
  *          （队列模式，以创建者、`role: 'render'` 连项目）当发布方与 PC 节点；host（笔记本）起独立渲染主机。
  *   lan    creator 以局域网主机起编辑器（`PROMPTCUT_LAN_HOST=1`，绑 0.0.0.0），在本机建局域网模式的项目并组播广播；
  *          host 经局域网发现（`--lan-host <ip:端口>` 可手填兜底）凭项目凭证进入。全程不连阿里云：
- *          creator 前后各读一次 `--hosted` 的 `/healthz`，连接计数不变（同 SP4）。
+ *          creator 收尾时按本轮查：本轮项目名在 `--hosted` 的 `shared/lookup` 查不到（`m8/lib.mjs` 的 `judgeCloudUntouched`；
+ *          前后两次 `/healthz` 的总连接数只记录、不判，别人进出会变）。
  *
  * ## 用例（--case）
  *   e1  抢活：PC 节点 + host-a + host-b 同时取活，真实细任务（缺省 10 条 × 10 s = 50 个）；
@@ -62,7 +63,7 @@
  *   node scripts/probes/m8-e-probe.mjs --role host --name host-a --case … --place … --coord <协调口> [--port 5583]
  *        [--lan-host <ip:端口>] [--via-proxy <代理监听端口>] [--proxy-target <host:port>] [--stall-prob 0]
  *        [--stall] [--stall-s <秒>] [--fake-fingerprint <16 位十六进制>] [--host-concurrency 2] [--band 5580-5599] [--run <id>] [--out <目录>]
- *        [--assert-no-lan <PC 局域网地址>]（异地接入：全程只读地数本机到这个地址的 TCP 连接、收尾前 3 s 局域网发现，都要 0；
+ *        [--assert-no-lan <PC 局域网地址>]（异地接入：全程只读地数本机到这个地址、开始时没有的 TCP 连接（基线排除：开始时已有的不算，之后新出现的不论状态都算）、收尾前 3 s 局域网发现，都要 0；
  *        公共件 `m8/no-lan.mjs`）。结果行另有 `idsDetail`：本机每一次丢认领、失败、丢弃的时刻与原因
  *   node scripts/probes/m8-e-probe.mjs --role watcher --coord <协调口> [--run <id>]        （可选：另一台机器上的旁观节点）
  *   node scripts/probes/m8-e-probe.mjs --role signal --coord <协调口> --run <id> --name <信号名> [--value '<json>']
@@ -105,6 +106,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import {
   argsOf, createResult, mergeRoleResults, sayer, newRunId, fingerprintOf, fakeLayerTasks, judgeAllDone, judgeExactlyOnce,
   judgePureLayers, layerObservations, judgeEachWorked, summarizeTimeline, takeoverMs, placeParams, docTargetOf, CLOUD, judgeLastCommit,
+  judgeCloudUntouched, realTasksThreshold,
 } from './m8/lib.mjs';
 import { roleKv, resolveRun, kvClient, kvKey } from './m8/kv.mjs';
 import { startHostedCombo, startCoord, startProxy, startRenderHost, startQueueEditor, runRole, until, portFree } from './m8/procs.mjs';
@@ -577,9 +579,13 @@ async function runCreator(r) {
     }
     await ctx.ed?.stop();
     if (PLACE === 'lan') {
+      // 按本轮查（judgeCloudUntouched）：本轮项目名在云端 shared/lookup 查不到；云端总连接数只记录、不判（别人进出会变）
       const cloudAfter = await getJson(P.cloudHealthz, 15_000).then((x) => x.body, () => null);
-      r.check('cloud-untouched', cloudBefore === null || cloudAfter === null || cloudBefore.connections === cloudAfter.connections,
-        { cloudHealthz: P.cloudHealthz, before: cloudBefore?.connections ?? null, after: cloudAfter?.connections ?? null, reachable: cloudBefore !== null });
+      const mine = { name: ctx.project?.name ?? `m8e-${CASE}-${run}`, projectId: ctx.project?.projectId ?? null };
+      const cloudBase = P.cloudHealthz.replace(/\/healthz$/, '');
+      const lookup = await getJson(`${cloudBase}/shared/lookup?name=${encodeURIComponent(mine.name)}`, 15_000).catch(() => null);
+      const cu = judgeCloudUntouched(lookup, mine, { before: cloudBefore?.connections ?? null, after: cloudAfter?.connections ?? null });
+      r.check('cloud-untouched', cu.ok, { cloud: cloudBase, project: mine.name, ...cu });
     }
     r.check('kv-no-401', kv.client.stats.unauthorized === 0, kv.client.stats);
     r.set({ out: OUT });
@@ -623,7 +629,8 @@ async function caseE1(ctx) {
   const round = await waitSettled(ed, { session, base });
   if (!r.check('real:plan-settled', round.ok, { lastStatus: round.lastStatus })) throw new Error('这一版没落定');
   r.set({ real: { planId: round.planId, tasks: round.derived.length, failed: round.failed.length, ms: Date.now() - t0, pcCompleted: round.pc.completed.length, pcDedup: round.pc.dedup.length } });
-  r.check('real:tasks>=50', round.derived.length >= Math.min(50, CLIPS * SECONDS * FPS / 60), { tasks: round.derived.length });
+  const want = realTasksThreshold({ clips: CLIPS, seconds: SECONDS, fps: FPS });
+  r.check(want.label, round.derived.length >= want.need, { tasks: round.derived.length, need: want.need, expected: want.expected });
   r.check('real:no-failed', round.failed.length === 0, round.failed.slice(0, 5));
   r.check('real:plan-by-pc', round.pc.planClaimed);
   // 产物：按清单逐段从该项目所在的素材服务取回
@@ -1034,7 +1041,7 @@ async function runHost(r) {
   const eventsDetail = [];
   let pollTimer = null;
   let prerenderUrl = null;
-  // --assert-no-lan <PC 局域网地址>（m8-plan 第 2.3 节「异地接入」的真实渲染一轮）：全程只读地数到这个地址的 TCP 连接
+  // --assert-no-lan <PC 局域网地址>（m8-plan 第 2.3 节「异地接入」的真实渲染一轮）：全程只读地数到这个地址、基线之外的 TCP 连接（不论状态）
   const noLanIp = arg('--assert-no-lan', null);
   const noLan = noLanIp ? startNoLanWatch(noLanIp, { log: say }) : null;
   try {
@@ -1121,7 +1128,7 @@ async function runHost(r) {
     if (noLan) {
       const nl = await noLan.stop();
       r.set({ noLan: nl });
-      r.check('no-lan-tcp', nl.tcpOk, { ip: noLanIp, samples: nl.samples, maxTcp: nl.maxTcp, seen: nl.seen });
+      r.check('no-lan-tcp', nl.tcpOk, { ip: noLanIp, baselineOk: nl.baselineOk, samples: nl.samples, maxTcp: nl.maxTcp, seen: nl.seen, baseline: nl.baseline });
       r.check('no-lan-discovery', nl.discoveryOk, nl.discovery);
     }
     // e2 / C1 的受害方:被扣住的任务在断线期间执行失败是预期的(旧认领随后作废),不算这台主机的失败
