@@ -164,6 +164,7 @@ export function createAutoRenderNode({ start, stop, requestTicket, now = Date.no
       return { ok: true, action: 'same', projectId: binding.projectId };
     }
     const prev = current;
+    if (prev) prev.stopReason = 'rebind';
     const rec = { gen: ++gen, binding, handle: null, starting: null, ticket: null, inflight: null, waitingPage: false, ticketFailures: 0, lastError: null, stopping: false, at: now() };
     if (ticketOk(ticket)) { keepTicket(rec, ticket); counters.pageTickets++; }
     current = rec;
@@ -187,7 +188,7 @@ export function createAutoRenderNode({ start, stop, requestTicket, now = Date.no
         const h = rec.handle;
         rec.handle = null;
         counters.stops++;
-        try { await stop(h, 'superseded'); } catch { /* 已撤 */ }
+        try { await stop(h, rec.stopReason ?? 'superseded'); } catch { /* 已撤 */ }
       }
     });
     return { ok: true, action: prev ? 'rebind' : 'started', projectId: binding.projectId };
@@ -200,6 +201,7 @@ export function createAutoRenderNode({ start, stop, requestTicket, now = Date.no
     if (projectId !== null && projectId !== rec.binding.projectId) return Promise.resolve({ ok: true, action: 'other-project', projectId: rec.binding.projectId });
     current = null;
     gen++;
+    rec.stopReason = reason;
     const done = chain.catch(() => {}).then(() => teardown(rec, reason));
     chain = done;
     return done.then(() => ({ ok: true, action: 'stopped', projectId: rec.binding.projectId }));

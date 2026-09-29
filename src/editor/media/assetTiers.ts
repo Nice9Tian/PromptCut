@@ -18,6 +18,7 @@
 import { useSyncExternalStore } from "react";
 import type { Project } from "../../kernel/project";
 import { getState, subscribe } from "../../store/project";
+import { noteRenderNodeAssetBase } from "../sync/renderNodeHandoff";
 import {
   TIERS_KNOWN_LOCAL, TIERS_KNOWN_REMOTE, missingOriginals, originalHashOf, prefetchOrder, smallHashOf, type MissingOriginal,
 } from "../../render/mediaTier";
@@ -551,6 +552,8 @@ export function startUploadTarget(link: LinkLike | null, base: string | null, de
   let stopped = false;
   let timer: unknown = null;
   setUploadTargetReady(null);
+  // 自动渲染节点(`sync/renderNodeHandoff.ts`):预渲染进程推产物用同一个素材服务(本机就是主机时为 null,它推本机的)
+  noteRenderNodeAssetBase(link && base ? base : null);
   if (!link || !base) {
     void post({ base: null });
     return () => { /* 本来就是本机 */ };

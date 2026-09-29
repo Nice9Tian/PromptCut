@@ -23,6 +23,7 @@ import { client, errorStatus, route, type Candidate, type SharedMode, type Where
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
+import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { ONLINE } from "../../online/mode";
 
 /**
@@ -480,6 +481,19 @@ const cardSyncHooks = {
     actor ? writerLabel({ actor, session: typeof actor.session === "string" ? actor.session : undefined }, me(), displayNames()) : "别人",
 };
 
+/**
+ * 桌面应用自动成为共享项目的渲染节点(`renderNodeHandoff.ts`):预渲染进程建新会话时要的 render 连接票据,
+ * 在本页面的共享项目连接上签(`owner: { kind: 'user' }`:这是用户自己的桌面节点,能认领本项目任何成员的任务)。
+ */
+const renderNodeHooks = {
+  ticket: async (projectId: string): Promise<string> => {
+    if (!cur || cur.kind !== "shared" || cur.docProjectId !== projectId) throw new Error("本页面没有连着这个共享项目");
+    const r = await cur.link.request({ type: "auth.ticket", kind: "conn", role: "render", owner: { kind: "user" } });
+    if (r.type !== "auth.ticket.ok" || typeof r.ticket !== "string") throw new Error(String(r.reason ?? r.detail ?? r.type));
+    return r.ticket;
+  },
+};
+
 /** 留在页面的 Agent 工具执行前记个位置,执行后取这期间本页面发出的提交(回包里带 opIds,server/agent/agent-side.mjs 用) */
 export function pageOpMark(): number | null {
   return cur ? cur.link.ds.opMark() : null;
@@ -507,6 +521,8 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
       if (p === seenProject) return;
       seenProject = p;
       noteProjectForCardSync(p);
+      // 自动渲染节点:项目文档的 id(层表键用它)晚到时再交一次(同一个项目只换 id,不重建)
+      if (kind === "shared" && !ONLINE_BUILD && !ONLINE) bindRenderNode({ url, projectId: docProjectId, contentId: p.id || null }, renderNodeHooks);
     }),
   ];
   if (ONLINE) {
@@ -521,6 +537,13 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   if (!ONLINE_BUILD && !ONLINE) {
     bindAgentSide(kind, docProjectId, url);
     bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
+    /*
+     * 桌面应用自动成为共享项目的渲染节点(语义 product/platforms.md「渲染节点」;`renderNodeHandoff.ts`):
+     * 离开共享项目(回本机空间、取消协作、换开别的项目)撤掉;接上共享项目把共享配置交给预渲染进程。
+     * 页面刚打开时先接本机空间(prev 为空)不算离开:别的标签页或上一次打开时交过的配置不动。
+     */
+    if (prev?.kind === "shared" && (kind !== "shared" || prev.docProjectId !== docProjectId)) unbindRenderNode(prev.docProjectId, kind === "shared" ? "switched" : "left");
+    if (kind === "shared") bindRenderNode({ url, projectId: docProjectId, contentId: getState().project.id || null }, renderNodeHooks);
   }
   if (prev && prev.link !== link) retire(prev.link);
 }
