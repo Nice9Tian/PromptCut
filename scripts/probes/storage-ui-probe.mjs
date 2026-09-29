@@ -17,6 +17,8 @@
  *   U6 接口的路径校验:`..`、`export-vision-*` 回 400(不点真的「打开所在目录」,那会在桌面上弹资源管理器)。
  *   U7 (三支合并后)不拦截:真的 `/api/storage` 与 `/api/exports` 都 ok,导出一栏 = 列表合计(删一份、只删中间文件之后马上跟上);
  *      页面上真的「清理缓存」与改上限落到服务端(帧库、`storage.json` 都在临时目录)。U1 此时要求缓存那一行显示数字。
+ *   U8 (最先跑,约多花 60 秒)往帧库里写一批帧,过 60 秒再打开开始页:先显示旧数,服务端后台量(`scanning: true`),
+ *      页面自己隔几秒再取,十几秒内显示成真实值。大小一律按 1024(GB = 1024³)。
  * 结果最后一行是一行 JSON(`ok`、`fails`),截图在 --out。
  */
 import '../lib/no-user-dirs.mjs';
@@ -157,6 +159,37 @@ try {
     return r.top >= 0 && r.top < window.innerHeight && (r.top < window.innerHeight * 0.5 || atBottom);
   });
 
+  // ── U8 刚写完一批帧后打开开始页:数字在十几秒内变成真实值 ──
+  // 上面等就绪的那次 GET 已经让服务端量过一次;之后往帧库里写一批帧(就像预渲染刚写完),
+  // 等过 60 秒(`SUMMARY_STALE_MS`)再打开开始页:第一次回包是旧数、带 scanning: true,页面隔几秒自己再取,
+  // 直到显示真实值。这期间不发任何 /api/storage 请求。
+  {
+    const readyAt = Date.now();
+    const batchKey = [...Array(64)].map((_, i) => '0123456789abcdef'[(i * 7 + 3) % 16]).join('');
+    for (let i = 0; i < 5; i++) put(path.join(EXPORTS, 'frame-library', batchKey, 'mov', 'frames', `${String(i).padStart(6, '0')}.png`), MB);
+    await sleep(Math.max(0, readyAt + 62_000 - Date.now()));
+    const p8 = await newPage();
+    const texts = [];
+    const t0 = Date.now();
+    await p8.goto(ORIGIN + '/', { waitUntil: 'domcontentloaded' });
+    const first = await until('缓存那一行', () => p8.$eval('[data-pc="storage-cache-bytes"]', (el) => el.textContent).catch(() => null), 20_000);
+    texts.push(first);
+    const settled = await until('数字变成真实值', async () => {
+      const t = await p8.$eval('[data-pc="storage-cache-bytes"]', (el) => el.textContent);
+      if (texts.at(-1) !== t) texts.push(t);
+      return t.startsWith('5.0M') ? t : null;
+    }, 20_000, 250).catch(() => null);
+    const elapsedMs = Date.now() - t0;
+    const server = (await storageJson('/api/storage')).body?.frameLibrary;
+    out.U8 = { first, settled, elapsedMs, texts, serverBytes: server?.bytes, scanning: server?.scanning };
+    await p8.$eval('[data-pc="start-storage"]', (el) => el.scrollIntoView());
+    await p8.screenshot({ path: path.join(OUT, 'u8-fresh-bytes.png') });
+    await p8.close();
+    check(!first.startsWith('5.0M'), 'U8 刚打开时是旧数(证明后面是自动重取,不是碰巧已经量过)', out.U8);
+    check(!!settled && elapsedMs < 20_000, 'U8 十几秒内自动变成真实值 5.0M', out.U8);
+    check(server?.bytes === 5 * MB && server?.scanning === false, 'U8 服务端量完:5 MB、scanning false', out.U8);
+  }
+
   // ── U1 ──
   const page = await newPage();
   await page.goto(ORIGIN + '/', { waitUntil: 'domcontentloaded' });
@@ -241,7 +274,7 @@ try {
     const after = await storageJson('/api/storage');
     out.U7.cap = { sentBytes, capBytes: after.body?.frameLibrary?.capBytes, capSource: after.body?.frameLibrary?.capSource, text: await page.$eval('[data-pc="storage-cache-bytes"]', (el) => el.textContent) };
     check(sent.some((x) => x.path === '/api/storage/clear-cache'), 'U7 点「清理缓存」发出真的请求');
-    check(sentBytes === 20e9 && after.body?.frameLibrary?.capBytes === sentBytes && after.body?.frameLibrary?.capSource === 'user', 'U7 改上限落到服务端(填 20 = 20e9 字节,与服务端的十进制 GB 一致)', out.U7.cap);
+    check(sentBytes === 20 * 1024 ** 3 && after.body?.frameLibrary?.capBytes === sentBytes && after.body?.frameLibrary?.capSource === 'user', 'U7 改上限落到服务端(填 20 = 20 × 1024³ 字节,与服务端的 GB 一致)', out.U7.cap);
     check(/上限 20\.0G/.test(out.U7.cap.text), 'U7 回显「上限 20.0G」', out.U7.cap.text);
     check(/上限 50\.0G（缺省）/.test(out.U7.cacheText ?? ''), 'U7 缺省上限显示成 50.0G(不是 46.6G)', out.U7.cacheText);
     check(fs.existsSync(path.join(DATA, 'storage.json')), 'U7 上限写在临时数据目录的 storage.json');
@@ -277,8 +310,8 @@ try {
   await ed.close();
 
   // ── U5 模拟 /api/storage* ──
-  // 「存储」一块与服务端一样按十进制 GB(1e9):缺省 50 GB 显示成 50.0G,填 20 发 20e9
-  const GB = 1e9;
+  // 「存储」一块与服务端一样 GB = 1024³:缺省 50 GB 显示成 50.0G,填 20 发 20 × 1024³
+  const GB = 1024 ** 3;
   const mock = { bytes: 12 * GB, capBytes: 50 * GB, capSource: 'default', diskBytes: 931 * GB };
   const sent = [];
   const mp = await newPage();

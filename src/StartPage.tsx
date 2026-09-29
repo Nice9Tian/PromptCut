@@ -256,19 +256,16 @@ function DesktopStartPage(props: { onEnterEditor: () => void }): JSX.Element {
  */
 
 /*
- * 这一块的大小一律按十进制(1 GB = 10^9 字节):服务端的缓存上限、缺省 50 GB、下限 5 GB 都是这个口径
- * (`server/frame-library-storage.mjs` 的 `GB`,与磁盘厂商标的一致),这里若按 1024 换算,缺省上限会显示成 46.6G、
- * 填 20 发出去的是 21.47e9。草稿列表的大小仍用上面的 `humanSize`。
+ * 这一块的大小与草稿列表一样按 1024 换算(`humanSize`),GB = 1024³ 字节 —— 与 Windows 资源管理器显示的「GB」一致;
+ * 服务端的缓存上限、缺省 50 GB、下限 5 GB 也是这个 GB(`server/frame-library-storage.mjs` 的 `GB`)。填 20 发 20 × 1024³。
  */
-const GB = 1e9;
-function storageSize(bytes: number): string {
-  if (bytes < 1e3) return `${bytes} B`;
-  if (bytes < 1e6) return `${(bytes / 1e3).toFixed(1)}K`;
-  if (bytes < 1e9) return `${(bytes / 1e6).toFixed(1)}M`;
-  return `${(bytes / 1e9).toFixed(1)}G`;
-}
+const GB = 1024 ** 3;
+const storageSize = humanSize;
 /** 缓存上限的下限(`mechanism/platforms.md`「帧库」:用户可在 5 GB 到磁盘总容量之间改) */
 const CAP_MIN_BYTES = 5 * GB;
+/** 服务端回 `scanning: true` 时隔多久再取、最多再取几次 */
+const STORAGE_RESCAN_MS = 3000;
+const STORAGE_RESCAN_TRIES = 10;
 
 interface StorageInfo {
   frameLibrary: {
@@ -278,6 +275,8 @@ interface StorageInfo {
     diskBytes: number;
     pinnedBytes?: number;
     scannedAt?: string | number | null;
+    /** 服务端正在重扫或正在量(数字还会变) */
+    scanning?: boolean;
     /** `reason`:`cap` 超上限自动清的,`clear` 用户点「清理缓存」清的(`frame-library-storage.mjs` 的 `evictTo`) */
     lastEvict?: { at: string | number; freedBytes: number; removed: number; skipped: number; reason?: "cap" | "clear" } | null;
   };
@@ -321,18 +320,34 @@ function StorageSection(): JSX.Element {
   const [busy, setBusy] = useState("");
   const [capGb, setCapGb] = useState("");
 
+  const shownCap = useRef<number | null>(null);
   const loadStorage = useCallback(async () => {
     try {
       const s = await storageJson<StorageInfo>("/api/storage");
       if (!s.frameLibrary || typeof s.frameLibrary.bytes !== "number") throw new Error("回包不对");
       setStorage(s);
       setStorageState("ok");
-      setCapGb(String(Math.round(s.frameLibrary.capBytes / GB)));
+      // 只在上限变了时改输入框(自动重取时不冲掉用户正在填的数)
+      if (shownCap.current !== s.frameLibrary.capBytes) {
+        shownCap.current = s.frameLibrary.capBytes;
+        setCapGb(String(Math.round(s.frameLibrary.capBytes / GB)));
+      }
     } catch {
       setStorage(null);
       setStorageState("unavailable");
     }
   }, []);
+
+  // 服务端在量(`scanning: true`,`GET /api/storage` 发现上次检查已过时会在后台量一次):
+  // 隔几秒再取,直到量完;最多重取 STORAGE_RESCAN_TRIES 次,不无限轮询
+  const scanTries = useRef(0);
+  const scanning = !!storage?.frameLibrary.scanning;
+  useEffect(() => {
+    if (!scanning) { scanTries.current = 0; return; }
+    if (scanTries.current >= STORAGE_RESCAN_TRIES) return;
+    const timer = window.setTimeout(() => { scanTries.current++; void loadStorage(); }, STORAGE_RESCAN_MS);
+    return () => window.clearTimeout(timer);
+  }, [scanning, storage, loadStorage]);
 
   const loadExports = useCallback(async () => {
     setExportsLoading(true);

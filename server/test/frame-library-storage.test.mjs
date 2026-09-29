@@ -72,7 +72,10 @@ test('上限:缺省 50 GB,磁盘小于 500 GB 取 10%;用户值在 5 GB 到磁�
   assert.equal(MIN_CAP_BYTES, 5 * GB);
   assert.equal(defaultCapBytes(2000 * GB), 50 * GB);
   assert.equal(defaultCapBytes(500 * GB), 50 * GB, '正好 500 GB 不算小盘');
-  assert.equal(defaultCapBytes(256 * GB), 25.6 * GB);
+  assert.equal(defaultCapBytes(256 * GB), Math.floor(256 * GB * 0.1));
+  assert.equal(GB, 1024 ** 3, 'GB 按 1024³');
+  assert.equal(DEFAULT_CAP_BYTES, 53687091200);
+  assert.equal(defaultCapBytes(500e9), Math.floor(500e9 * 0.1), '标称 500 GB(十进制)的盘不到 500 × 1024³,算小盘');
   assert.equal(defaultCapBytes(null), 50 * GB, '量不到磁盘时用 50 GB');
   assert.deepEqual(capRange(1000 * GB), { min: 5 * GB, max: 1000 * GB });
   assert.equal(validCap(5 * GB, 1000 * GB), true);
@@ -497,6 +500,58 @@ test('合并:导出列表删了一份、只删了中间文件,/api/storage 的�
   assert.deepEqual(await summary.get(), { bytes: 100, count: 1, intermediateBytes: 0 }, '删一份之后');
   clock += 1000;
   assert.deepEqual(await summary.get(), { bytes: 100, count: 1, intermediateBytes: 0 }, '没变就用缓存');
+});
+
+test('占用数字过期:refreshIfStale 在后台量一次(scanning 为 true,不等),量完数字是真的;60 秒内不再发起;只量不淘汰', async t => {
+  const { root, data } = await tempRoot(t);
+  let clock = Date.now();
+  await makeKey(root, key('old'), 3000, clock - 5 * HOUR);
+  await writeStorageSettings(data, { frameLibraryCapBytes: 1000 });   // 远低于总量:要是淘汰就会删
+  const m = manager(root, data, { now: () => clock });
+  await m.rescan('test');
+  assert.equal((await m.summary()).bytes, 3000);
+  // 预渲染刚写完一批:新目录,索引还不知道
+  await makeKey(root, key('new'), 5000, clock);
+  assert.equal((await m.summary()).bytes, 3000, '检查之前数字是旧的');
+  assert.equal(m.refreshIfStale(), true, '从没检查过:发起');
+  const during = await m.summary();
+  assert.equal(during.scanning, true, '回包带 scanning: true');
+  assert.equal(m.refreshIfStale(), true, '在量时再调不重复发起');
+  await m.flush();   // 串行链:排在那一趟后面
+  await new Promise(resolve => setImmediate(resolve));
+  const after = await m.summary();
+  assert.equal(after.scanning, false);
+  assert.equal(after.bytes, 8000, '量完是真实值');
+  assert.equal(after.lastEvict, null, '只量不淘汰');
+  assert.equal(await exists(relDir(root, key('old'))), true, '超上限也不删(淘汰照自己的节拍)');
+  clock += 30_000;
+  assert.equal(m.refreshIfStale(), false, '60 秒内不再发起');
+  clock += 31_000;
+  assert.equal(m.refreshIfStale(), true, '过了 60 秒再发起');
+  await m.close();
+});
+
+test('GET /api/storage 调 refreshIfStale,回包的 scanning 照实;POST 不调', async () => {
+  const { createStorageHandler } = await import('../storage-routes.mjs');
+  let calls = 0, scanningNow = false;
+  const fake = {
+    refreshIfStale() { calls++; scanningNow = true; return true; },
+    async summary() { return { bytes: 1, capBytes: 2, capSource: 'default', diskBytes: 3, pinnedBytes: 0, scannedAt: 4, lastEvict: null, scanning: scanningNow, leftoverBytes: 0 }; },
+    async clearCache() { return { freedBytes: 0, removed: 0, skipped: 0 }; },
+  };
+  const handler = createStorageHandler({ storage: () => fake, exports: { get: async () => ({ bytes: 0, count: 0, intermediateBytes: 0 }) } });
+  const { Readable } = await import('node:stream');
+  const call = (method, url) => new Promise(resolve => {
+    const req = Readable.from([]);
+    Object.assign(req, { method, url });
+    const res = { statusCode: 0, setHeader() {}, end(text) { resolve({ status: this.statusCode, body: JSON.parse(text) }); } };
+    handler(req, res, () => resolve({ next: true }));
+  });
+  const got = await call('GET', '/');
+  assert.equal(calls, 1);
+  assert.equal(got.body.frameLibrary.scanning, true);
+  await call('POST', '/clear-cache');
+  assert.equal(calls, 1, 'POST 不发起');
 });
 
 test('relOfPath:帧库里的文件归到它的键目录', () => {

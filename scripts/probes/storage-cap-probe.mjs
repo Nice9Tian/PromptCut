@@ -195,7 +195,8 @@ try {
   out.start = { bytes: lib0.bytes, capBytes: lib0.capBytes, capSource: lib0.capSource, diskBytes: lib0.diskBytes, owner: lib0.owner, exports: first?.exports, leftovers: first?.leftovers };
   check(lib0.bytes === created, '① 启动扫完的总字节 = 造的字节(链接、认不出的不计)', { bytes: lib0.bytes, created });
   const disk = lib0.diskBytes;
-  const expectedDefault = disk && disk < 500e9 ? Math.floor(disk * 0.1) : 50e9;
+  const GIB = 1024 ** 3; // GB 按 1024³
+  const expectedDefault = disk && disk < 500 * GIB ? Math.floor(disk * 0.1) : 50 * GIB;
   check(lib0.capSource === 'default' && lib0.capBytes === expectedDefault, '① 缺省上限:磁盘 ≥ 500 GB 取 50 GB,否则 10%', { capBytes: lib0.capBytes, disk });
   check(lib0.owner === true, '① 预渲染进程是帧库的主进程');
   check(first?.exports?.count === 1 && first?.exports?.bytes === 6002 && first?.exports?.intermediateBytes === 5000, '① 导出汇总:一份、不含 export-vision-*,中间文件 = 成片与 project.json 以外的', first?.exports);

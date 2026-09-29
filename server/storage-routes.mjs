@@ -4,7 +4,9 @@
  *   GET  /api/storage               { ok, frameLibrary: { bytes, capBytes, capSource, diskBytes, pinnedBytes, scannedAt, lastEvict, … },
  *                                     exports: { bytes, count, intermediateBytes }, leftovers: { bytes } }
  *                                   `?detail=1` 另带 `frameLibrary.units`(每个淘汰单元的最近使用时刻、字节数、保护与否)和
- *                                   `frameLibrary.lastEvictDetail`(上一轮删了哪些、跳过哪些),给探针和诊断
+ *                                   `frameLibrary.lastEvictDetail`(上一轮删了哪些、跳过哪些),给探针和诊断。
+ *                                   上一次检查早于 60 秒时先在后台发起一次量(只量不淘汰,`refreshIfStale`),
+ *                                   这次回包照旧立刻回,`frameLibrary.scanning` 为 true;界面见到它隔几秒再取
  *   POST /api/storage/cap           { bytes }  → { ok, capBytes };越界 400 `CAP_OUT_OF_RANGE`(带 min / max)。设了立即判一次(不等删完)
  *   POST /api/storage/clear-cache   → { ok, freedBytes, removed, skipped }(删完才回)
  *
@@ -53,6 +55,8 @@ export function createStorageHandler({ storage, exports: exportSummary }) {
       const manager = storage();
       if (route === '/') {
         const detail = new URL(req.url || '/', 'http://x').searchParams.get('detail') === '1';
+        // 上一次检查早于 60 秒:后台量一次(不挡这次回包;回包的 scanning 为 true,界面过几秒再取)
+        try { manager.refreshIfStale?.(); } catch { /* 量不了不挡回包 */ }
         const [frameLibrary, exportsInfo] = await Promise.all([manager.summary({ detail }), exportSummary.get()]);
         const { leftoverBytes, ...library } = frameLibrary;
         return json(res, 200, { ok: true, frameLibrary: library, exports: exportsInfo, leftovers: { bytes: leftoverBytes } });

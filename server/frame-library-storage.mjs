@@ -44,8 +44,11 @@ import { snapshotTier } from './snapshot-tier.mjs';
 import { isDeadSpillDir, isExportDirName, leftoverFileKind, pidAlive as leftoverPidAlive, sweepFrameLibrary } from './storage-leftovers.mjs';
 import { summarizeExports } from './exports-list.mjs';
 
-/** 容量按十进制 GB 算（磁盘厂商标的「500 GB」「512 GB」就是这个口径） */
-export const GB = 1e9;
+/**
+ * 容量的 GB 按 1024³ 字节算（与 Windows 资源管理器显示的「GB」、开始页草稿列表的大小同一口径）：
+ * 缺省 50 GB、下限 5 GB、「磁盘小于 500 GB 取 10%」的 500 GB 都是这个 GB。
+ */
+export const GB = 1024 ** 3;
 export const DEFAULT_CAP_BYTES = 50 * GB;
 /** 所在磁盘总容量小于它时，缺省上限取总容量的 `SMALL_DISK_RATIO` */
 export const SMALL_DISK_BYTES = 500 * GB;
@@ -72,6 +75,8 @@ export const LOCK_STALE_MS = 3 * 60 * 1000;
 export const FLUSH_MS = 60 * 1000;
 /** 就绪索引里的会话这么久没动静、又没有订阅者，就不算「开着」 */
 export const OPEN_SESSION_IDLE_MS = 10 * 60 * 1000;
+/** `GET /api/storage` 时上一次检查（或量）早于这么久，就在后台量一次（不淘汰），回包带 `scanning: true` */
+export const SUMMARY_STALE_MS = 60 * 1000;
 
 export const INDEX_FILE = 'usage.json';
 export const STORAGE_DIR = '.storage';
@@ -368,6 +373,8 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
   /** 上一次清遗留（诊断用，?detail=1 里带） */
   let lastLeftoverSweep = null;
   let scanning = null;
+  /** `refreshIfStale` 发起的后台量（只量不淘汰）；上一次量完的时刻 */
+  let measuring = null, lastMeasureAt = 0;
   let chain = Promise.resolve();
   let pipeline = null;
   let closed = false;
@@ -713,6 +720,18 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
     return { diskBytes, ...resolveCap(settings, diskBytes, minCapBytes) };
   }
 
+  /** 只量不淘汰（`refreshIfStale`）：并进别的进程的使用、清遗留、增量量 */
+  async function measureNow() {
+    if (closed) return null;
+    if (!(await becomeOwner())) { await saveTouches().catch(() => {}); return { owner: false }; }
+    if (!loaded) await rescan('missing-index');
+    await sweepLeftoverFiles();
+    await mergePeerTouches();
+    await refresh();
+    await flush().catch(() => {});
+    return { bytes: totals().bytes };
+  }
+
   /** 一次检查：并进别的进程的使用、增量量、超上限就淘汰。`force` 不受节拍限制 */
   async function checkNow({ force = false } = {}) {
     if (closed) return null;
@@ -788,6 +807,19 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
       void api.check().catch(() => {});
     },
     check(options) { return serial(() => checkNow(options)); },
+    /**
+     * 占用数字过期了就在后台量一次：上一次检查或量早于 `maxAgeMs` 时，并进别的进程的使用、清遗留、
+     * 增量量（与检查相同），但**不淘汰**、也不动淘汰检查的节拍（启动宽限、每 5 分钟最多一次照旧）。
+     * 不等量完就返回：回 true 表示此刻有一趟在量（`summary().scanning` 为 true）。
+     */
+    refreshIfStale({ maxAgeMs = SUMMARY_STALE_MS } = {}) {
+      if (closed) return false;
+      if (measuring) return true;
+      if (now() - Math.max(lastCheckAt, lastMeasureAt) <= maxAgeMs) return false;
+      lastMeasureAt = now();
+      measuring = serial(() => measureNow()).catch(() => {}).finally(() => { measuring = null; lastMeasureAt = now(); });
+      return true;
+    },
     /** 全量重扫（诊断、测试） */
     rescan(reason = 'manual') { return serial(() => rescan(reason)); },
     async summary({ detail = false } = {}) {
@@ -798,7 +830,7 @@ export function createFrameLibraryStorage({ root, dataDir, now = () => Date.now(
       const out = {
         bytes, capBytes, capSource, diskBytes, minCapBytes,
         pinnedBytes: all.filter(unit => unit.protected).reduce((sum, unit) => sum + unit.bytes, 0),
-        scannedAt, lastEvict, scanning: !!scanning, owner, leftoverBytes: leftover,
+        scannedAt, lastEvict, scanning: !!scanning || !!measuring, owner, leftoverBytes: leftover,
       };
       if (detail) {
         out.lastEvictDetail = lastEvictDetail;
