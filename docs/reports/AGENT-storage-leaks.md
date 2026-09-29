@@ -22,7 +22,8 @@
 - `73161381` 报告：开工
 - `20786690` 泄漏修复主体
 - `0f984b2b` `claimExportDir` 挪进 `storage-leftovers.mjs`；单测
-- `（本提交）` 视觉临时导出的删除改成 `render.ts` 内的退避重试；报告
+- `c9c00317` 视觉临时导出的删除改成 `render.ts` 内的退避重试
+- `46db4363` 报告与 `storage-leftovers.mjs` 文件头
 
 ## 验证
 
