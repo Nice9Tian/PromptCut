@@ -85,7 +85,7 @@ async function precheck(deps: BrowserExportDeps): Promise<OriginalsIndex | null>
     if (deps.signal.aborted) throw cancelled();
     const media = await deps.checkMediaOriginals();
     let index: OriginalsIndex | null = null;
-    if (deps.originals) index = await loadOriginalsIndex(deps.project.id || null, deps.originals, { fallbackHeavy: deps.fallbackHeavy?.() ?? [], onlyClips: deps.heavyOnly?.() ?? null });
+    if (deps.originals) index = await loadOriginalsIndex(deps.project.id || null, deps.originals, { fallbackHeavy: deps.fallbackHeavy?.() ?? [], onlyClips: deps.heavyOnly?.() ?? null, project: deps.project });
     const parts: string[] = [];
     if (media.length) parts.push(awaitingUploaderMessage(media));
     if (index?.missing.length) parts.push(ONLINE_EXPORT_TEXT.missingOriginals(index.missing.length));

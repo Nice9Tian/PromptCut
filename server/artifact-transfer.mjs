@@ -28,6 +28,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { rangeHas } from './snapshot-store.mjs';
+import { clipInputSig } from '../src/render/layerInputSig.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { MovFrameStore, signatureMatches } from './frame-mov.mjs';
 import { readRenderRecord } from './png-record.mjs';
@@ -178,6 +179,8 @@ export const LAYER_MAP_PREFIX = 'layers:';
  * v 3(M7 契约 D12,第 13 节裁定):每层另带 `candidates: [{ envFingerprint, resultKey, key, dirKey }]` —— 切分方双份出键之后
  * 一层可能有两套键(切分方自己的、纯浏览器的),哪一份活着由页面按 `task.done` 与清单认定;层上的 v 2 字段等于第一个候选,
  * 读 v 2 的页面照旧能用(当作一个候选)。
+ * 〔裁〕stale-layer:v 3 的层可另带 `inputSig`(生成这一层的片段输入的签名,`src/render/layerInputSig.mjs`)。不加版本号 ——
+ * 旧页面不读这一项,照旧贴;新页面遇到没有这一项的层(旧节点写的)也照旧贴。
  */
 export const LAYER_MAP_VERSION = 3;
 export const layerMapKeyOf = projectId => (typeof projectId === 'string' && projectId ? LAYER_MAP_PREFIX + projectId : null);
@@ -229,8 +232,12 @@ export function layerMapOf(entry, { picked = () => true, fingerprint = null, spa
       });
     }
     const primary = candidates[0] ?? { envFingerprint: fp, resultKey, key, dirKey: control.snapshotKey };
+    // 〔裁〕stale-layer:输入签名(`src/render/layerInputSig.mjs`)—— 生成这一层的那一版片段输入。页面按当前项目算同一个签名,
+    // 对不上就是旧参数的层,不贴(C10 契约第 9 节)。算不出(片段不在这一版项目里)不写这一项,页面照旧贴
+    const inputSig = clipInputSig(project, control.clipId);
     layers.push({ clipId: control.clipId, kind, key: primary.key, tier, resultKey: primary.resultKey, dirKey: primary.dirKey,
-      entryKey: tier === 'local' ? entry.key : null, firstFrame, count, contentKey, envFingerprint: primary.envFingerprint, candidates });
+      entryKey: tier === 'local' ? entry.key : null, firstFrame, count, contentKey, envFingerprint: primary.envFingerprint, candidates,
+      ...(inputSig ? { inputSig } : {}) });
   }
   return {
     v: LAYER_MAP_VERSION, kind: 'layer-map', projectId: project.id ?? null, entryKey: entry?.key ?? null,

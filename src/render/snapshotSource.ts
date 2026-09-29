@@ -1,4 +1,5 @@
 import type { PickedSnapshot, ReadyKind, ReadyLayer, ReadyRange } from "./snapshotPick.mjs";
+import { cachedClipInputSig, inputSigStale } from "./layerInputSig.mjs";
 
 /**
  * J3 舞台侧的快照来源接口。
@@ -244,6 +245,11 @@ export interface OnlineLayer {
    * v 2 没有这一项,当作一个候选(`layerCandidates`)。
    */
   candidates?: LayerCandidate[];
+  /**
+   * 〔裁〕stale-layer:生成这一层的片段输入的签名(`layerInputSig.mjs`)。页面按当前项目算同一个签名,对不上就是旧参数的层,
+   * 不贴(C10 契约第 9 节)。旧节点写的层表没有这一项:照旧贴。
+   */
+  inputSig?: string | null;
 }
 
 /** 层表 v 3 的一个候选(M7 契约 D12):一种环境出的一套键 */
@@ -291,6 +297,12 @@ export interface OnlineSnapshotDeps {
    */
   coverageLayer?: (clipId: string) => boolean;
 }
+
+/**
+ * 层过期(输入签名对不上,stale-layer)之后,多久之内当「新结果在路上」:这段时间里父页不确认缺料(用户卡、图卡显示沙漏、
+ * 时间轴不出徽标),等渲染节点按新输入重写层表;过了还没等到就和「层表里没有这一层」一样确认缺料(图标、徽标)。三级数字。
+ */
+export const STALE_AWAIT_MS = 15_000;
 
 /** 整段覆盖:还没取齐的清单多久再取一次(窗口之外的段) */
 export const COVERAGE_POLL_MS = 5000;
@@ -343,9 +355,11 @@ export function parseLayerMap(body: unknown): LayerMap | null {
     if (typeof raw.clipId !== "string" || typeof raw.key !== "string" || typeof raw.resultKey !== "string") continue;
     if (!Number.isInteger(firstFrame) || firstFrame < 0 || !Number.isInteger(count) || count < 1) continue;
     const candidates = v >= LAYER_MAP_V3 ? candidatesOf(raw.candidates) : [];
+    const inputSig = str(raw.inputSig);
     layers.push({ clipId: raw.clipId, kind, key: raw.key, resultKey: raw.resultKey, firstFrame, count,
       ...(v >= LAYER_MAP_V2 ? { contentKey: str(raw.contentKey), envFingerprint: str(raw.envFingerprint) } : {}),
-      ...(candidates.length ? { candidates } : {}) });
+      ...(candidates.length ? { candidates } : {}),
+      ...(inputSig ? { inputSig } : {}) });
   }
   return { v, projectId: typeof b.projectId === "string" ? b.projectId : null, fps: Number(b.fps) || 30, span, layers };
 }
@@ -368,8 +382,9 @@ export function usableLayer(map: Pick<LayerMap, "v">, layer: OnlineLayer, { lowM
  * 层表 v 3(M7 契约 D12):`opts.alive` 是页面认定活着的结果键(由 `task.done` 与清单得出)。候选里有活着的,
  * 就整份换成那个候选(结果键、指纹、线上键同出一个候选,不混);没有 `alive` 或认不出时回层上的(第一个候选)。
  * v 2 不看 `alive`。
+ * `opts.inputSig`(stale-layer):页面按当前项目算的这个片段的输入签名;这一层带签名而且对不上(旧参数的层)回 null。
  */
-export function layerRefOf(table: unknown, clipId: string, opts: { lowMemory?: boolean; alive?: ReadonlySet<string> } = {}): OnlineLayer | null {
+export function layerRefOf(table: unknown, clipId: string, opts: { lowMemory?: boolean; alive?: ReadonlySet<string>; inputSig?: string | null } = {}): OnlineLayer | null {
   let map: LayerMap | null = null;
   try {
     map = table && typeof table === "object" && Array.isArray((table as LayerMap).layers) && (table as LayerMap).v !== undefined && typeof (table as { kind?: unknown }).kind !== "string"
@@ -378,6 +393,7 @@ export function layerRefOf(table: unknown, clipId: string, opts: { lowMemory?: b
   if (!map) return null;
   const layer = map.layers.find((l) => l.clipId === clipId);
   if (!layer) return null;
+  if (inputSigStale(layer.inputSig, opts.inputSig)) return null;
   if (map.v >= LAYER_MAP_V3 && opts.alive && layer.candidates?.length) {
     const pick = layer.candidates.find((c) => opts.alive!.has(c.resultKey));
     if (pick) {
@@ -503,7 +519,12 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private mapSig = "";
   private manifests = new Map<string, ManifestState>();
   private manifestFlying = new Set<string>();
-  private emitted = new Map<string, string>();
+  /** 各层最后发出去的就绪(`<kind>:<clipId>` → 签名与撤层要用的键);层不能用了(过期、没了)就发空层撤掉 */
+  private emitted = new Map<string, { sig: string; clipId: string; kind: ReadyKind; key: string }>();
+  /** 页面此刻的项目(按它算各片段的输入签名,stale-layer);没给就不比签名 */
+  private inputProject: unknown = null;
+  /** 过期的层:片段 → 从哪一刻起(层的签名与页面的签名那一对没变就不重计) */
+  private staleSince = new Map<string, { key: string; since: number; expired: boolean }>();
   private listeners = new Set<(m: ReadyMessage) => void>();
   private timer: unknown = null;
   private playhead = { t: 0, fps: 30 };
@@ -550,11 +571,73 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private now(): number { return (this.deps.now ?? Date.now)(); }
   private get lowMemory(): boolean { return this.tier === "small"; }
 
-  /** 这一档此刻能用的层(普通档只认 v 2 且两项齐的层) */
+  /** 这一档此刻能用的层(普通档只认 v 2 且两项齐的层;输入签名对不上的旧层不算) */
   private layers(): OnlineLayer[] {
     const map = this.map;
     if (!map) return [];
-    return map.layers.map((l) => this.chosen(map, l)).filter((l) => usableLayer(map, l, { lowMemory: this.lowMemory }));
+    return map.layers.map((l) => this.chosen(map, l)).filter((l) => usableLayer(map, l, { lowMemory: this.lowMemory }) && !this.stale(l));
+  }
+
+  /** 页面按当前项目算的这个片段的输入签名;没给项目回 null(不比) */
+  private pageSig(clipId: string): string | null {
+    return this.inputProject ? cachedClipInputSig(this.inputProject, clipId) : null;
+  }
+
+  /** 这一层是旧输入的结果(层带签名,页面也算得出,两者不同) */
+  private stale(layer: OnlineLayer): boolean {
+    return !!layer.inputSig && inputSigStale(layer.inputSig, this.pageSig(layer.clipId));
+  }
+
+  /** 层表里这个片段那一层过期了(这一档本来能用、只是输入对不上) */
+  private staleLayerOf(clipId: string): OnlineLayer | null {
+    const map = this.map;
+    if (!map) return null;
+    for (const raw of map.layers) {
+      if (raw.clipId !== clipId) continue;
+      const l = this.chosen(map, raw);
+      if (usableLayer(map, l, { lowMemory: this.lowMemory }) && this.stale(l)) return l;
+    }
+    return null;
+  }
+
+  /** 记下哪些层过期、从哪一刻起;不再过期的删掉。回「过期集合变了没有」 */
+  private noteStale(): boolean {
+    const map = this.map;
+    const now = this.now();
+    const seen = new Set<string>();
+    let changed = false;
+    for (const raw of map?.layers ?? []) {
+      if (seen.has(raw.clipId)) continue;
+      const l = this.staleLayerOf(raw.clipId);
+      if (!l) continue;
+      seen.add(l.clipId);
+      const key = `${l.inputSig}|${this.pageSig(l.clipId)}`;
+      const rec = this.staleSince.get(l.clipId);
+      if (!rec || rec.key !== key) { this.staleSince.set(l.clipId, { key, since: now, expired: false }); changed = true; }
+    }
+    for (const id of [...this.staleSince.keys()]) if (!seen.has(id)) { this.staleSince.delete(id); changed = true; }
+    return changed;
+  }
+
+  /** 过期的层还在「新结果在路上」那段时间里(`STALE_AWAIT_MS`) */
+  private staleAwaiting(clipId: string): boolean {
+    if (!this.staleLayerOf(clipId)) return false;
+    const rec = this.staleSince.get(clipId);
+    if (!rec) return true;
+    return this.now() - rec.since < STALE_AWAIT_MS;
+  }
+
+  /**
+   * 页面此刻的项目(stale-layer):按它算各片段的输入签名,与层表里每层的 `inputSig` 比对,对不上的旧层马上撤掉
+   * (就绪区间发空,页面按兜底顺序显示占位或活渲),对上了(改回原来的参数)照贴。项目换了新对象才重算。
+   */
+  setInputs(project: unknown): void {
+    const next = project && typeof project === "object" ? project : null;
+    if (next === this.inputProject) return;
+    this.inputProject = next;
+    const changed = this.noteStale();
+    this.publishLayers();
+    if (changed) this.coverageChanged();
   }
 
   /*
@@ -610,6 +693,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.mapKnown = false;
     this.manifests.clear();
     this.emitted.clear();
+    this.staleSince.clear();
     this.lastMapAt = -Infinity;
     this.emit({ type: "reset", localRev: 0 });
     this.coverageChanged();
@@ -668,7 +752,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
   coverage(clipId: string): LayerCoverage {
     if (!this.mapKnown) return "unknown";
     const layer = this.layers().find((l) => l.clipId === clipId);
-    if (!layer) return "none";
+    // 旧输入的层:新结果在路上的那段时间里还不知道(不出徽标)
+    if (!layer) return this.staleAwaiting(clipId) ? "unknown" : "none";
     const span = this.map?.span ?? 60;
     let partial = false;
     for (let from = 0; from < layer.count; from += span) {
@@ -690,7 +775,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
   frameConfirmedMissing(clipId: string, localFrame: number): boolean {
     if (!this.mapKnown) return false;
     const layer = this.layers().find((l) => l.clipId === clipId);
-    if (!layer) return true;
+    // 旧输入的层(stale-layer):渲染节点还没按新输入重写层表的那段时间里不确认(沙漏),过了 `STALE_AWAIT_MS` 才确认
+    if (!layer) return !this.staleAwaiting(clipId);
     if (layer.count <= 0) return true;
     const f = Math.min(layer.count - 1, Math.max(0, Math.round(Number(localFrame) || 0)));
     const st = this.manifests.get(this.manifestKey(layer, this.segOf(layer, f)));
@@ -735,7 +821,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
       mapVersion: this.map?.v ?? null,
       store: !!this.store,
       layers: usable.map((l) => ({ clipId: l.clipId, kind: l.kind, key: l.key, resultKey: l.resultKey, envFingerprint: l.envFingerprint ?? null, ready: this.readyFrames(l).length,
-        candidates: l.candidates?.length ?? 0 })),
+        candidates: l.candidates?.length ?? 0, inputSig: l.inputSig ?? null })),
+      stale: [...this.staleSince.entries()].map(([clipId, r]) => ({ clipId, sinceMs: this.now() - r.since, awaiting: this.now() - r.since < STALE_AWAIT_MS })),
       aliveKeys: this.aliveKeys.size,
       deadKeys: this.deadKeys.size,
       skipped: (this.map?.layers ?? []).filter((l) => !usable.includes(l)).map((l) => l.clipId),
@@ -800,16 +887,23 @@ export class OnlineSnapshotSource implements SnapshotSource {
     return { type: "layer", clipId: layer.clipId, kind: layer.kind, key: layer.key, ranges: framesToRanges(this.readyFrames(layer)) };
   }
 
-  /** 各层的就绪区间变了才发(全量语义) */
+  /** 各层的就绪区间变了才发(全量语义);发过、现在不能用了的层(输入对不上、这一档不认了)发空层撤掉 */
   private publishLayers() {
+    const live = new Set<string>();
     for (const layer of this.layers()) {
       const msg = this.layerMessage(layer);
       if (msg.type !== "layer") continue;
       const id = `${layer.kind}:${layer.clipId}`;
+      live.add(id);
       const sig = `${msg.key}|${JSON.stringify(msg.ranges)}`;
-      if (this.emitted.get(id) === sig) continue;
-      this.emitted.set(id, sig);
+      if (this.emitted.get(id)?.sig === sig) continue;
+      this.emitted.set(id, { sig, clipId: layer.clipId, kind: layer.kind, key: layer.key });
       this.emit(msg);
+    }
+    for (const [id, prev] of [...this.emitted]) {
+      if (live.has(id)) continue;
+      this.emitted.delete(id);
+      this.emit({ type: "layer", clipId: prev.clipId, kind: prev.kind, key: prev.key, ranges: [] });
     }
   }
 
@@ -894,6 +988,12 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private async tickOnce(): Promise<void> {
     if (this.storeWait) await this.storeWait;
     const now = this.now();
+    // 过期的层等满 `STALE_AWAIT_MS` 还没等到新层:从「在路上」转成确认缺料,叫覆盖订阅方重算(图标、徽标)
+    let expired = false;
+    for (const rec of this.staleSince.values()) {
+      if (!rec.expired && now - rec.since >= STALE_AWAIT_MS) { rec.expired = true; expired = true; }
+    }
+    if (expired) this.coverageChanged();
     if (this.projectId && now - this.lastMapAt >= LAYER_MAP_POLL_MS) {
       this.lastMapAt = now;
       await this.loadMap();
@@ -942,6 +1042,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       this.emitted.delete(id);
       this.emit({ type: "layer", clipId: old.clipId, kind: old.kind, key: old.key, ranges: [] });
     }
+    this.noteStale();
     // 换了键的层(重渲之后):就绪区间按新键重算、全量发;新键的清单还没到时区间是空的,页面按兜底顺序显示占位
     this.publishLayers();
     this.coverageChanged();
