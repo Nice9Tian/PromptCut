@@ -292,3 +292,58 @@ export const opaque: CardDef = { id: "synced-o", name: "控件认不出", defaul
     R.setSyncedUserCards([]);
   }
 });
+
+test("OU-06 跟着 import 取同目录下被引的文件:只取被引到的;被引文件改了重取重解析;有环不重取;引不到的说明是哪一条;内置模块经 builtins", async () => {
+  setup();
+  const entry = `import type { CardDef } from "../../kernel/types";
+import { SHARED } from "./shared";
+import { MORE } from "./lib/more";
+import { GONE } from "./gone";
+import { hudControls } from "../native/hud";
+export const c: CardDef = { id: "synced-i", name: "引控件的同步卡", defaults: { text: "t" },
+  controls: [...SHARED, ...MORE, ...GONE, ...hudControls], Component: () => null };
+`;
+  const content = fakeContent({
+    "src/cards/user/i.tsx": entry,
+    "src/cards/user/shared.ts": `import { MORE } from "./lib/more";\nexport const SHARED = [{ key: "text", label: "文字", type: "text" }];\nexport const ECHO = MORE;\n`,
+    "src/cards/user/lib/more.ts": `import { ECHO } from "../shared";\nexport const MORE = [{ key: "side", label: "位置", type: "select", options: ["l", "r"] }];\n`,
+    "src/cards/user/unused.ts": `export const X = 1;\n`,
+  });
+  const link = { id: 1 };
+  const builtins = (k) => (k === "src/cards/native/hud.ts" ? { hudControls: [{ key: "accent", label: "主色", type: "color" }] } : null);
+  const sources = new S.OnlineCardSources({ request: content.request, linkKey: () => link, builtins });
+  const gets = () => content.sent.filter((m) => m.type === "content.get").map((m) => m.key);
+  try {
+    await sources.sync();
+    assert.deepEqual(gets().sort(), ["src/cards/user/i.tsx", "src/cards/user/lib/more.ts", "src/cards/user/shared.ts"], "没被引到的 unused.ts 不取;环上的不重取");
+    const v = R.syncedCardView("synced-i");
+    assert.deepEqual(v.controls.map((c) => c.key), ["text", "side", "accent"]);
+    assert.deepEqual(v.controls[1].options, [{ value: "l", label: "l" }, { value: "r", label: "r" }]);
+    assert.equal(v.controlsIncomplete, true);
+    assert.equal(v.skippedControls.length, 1);
+    assert.match(v.skippedControls[0].reason, /展开的 GONE 取不到:内容库里没有 \.\/gone 这个文件/);
+    assert.deepEqual(sources.debug().deps, ["src/cards/user/lib/more.ts", "src/cards/user/shared.ts"]);
+    // 再来一轮:都没变,不取
+    await sources.sync();
+    assert.equal(gets().length, 3);
+    // 被引文件改了:只重取它,入口重解析
+    content.store.set("src/cards/user/shared.ts", `export const SHARED = [{ key: "text", label: "文字改了", type: "text" }, { key: "n", label: "数", type: "number" }];\n`);
+    await sources.sync();
+    assert.deepEqual(gets().slice(3), ["src/cards/user/shared.ts"]);
+    assert.deepEqual(R.syncedCardView("synced-i").controls.map((c) => c.label), ["文字改了", "数", "位置", "主色"]);
+    // 缺的文件后来同步上来了:取到、补上,提示撤掉
+    content.store.set("src/cards/user/gone.ts", `export const GONE = [];\n`);
+    await sources.sync();
+    assert.equal(R.syncedCardView("synced-i").controlsIncomplete, false);
+    assert.deepEqual(R.syncedCardView("synced-i").skippedControls, []);
+    // 被引文件从内容库里删了:回到提示
+    content.store.delete("src/cards/user/lib/more.ts");
+    await sources.sync();
+    const v2 = R.syncedCardView("synced-i");
+    assert.deepEqual(v2.controls.map((c) => c.key), ["text", "n", "accent"]);
+    assert.match(v2.skippedControls[0].reason, /MORE 取不到/);
+  } finally {
+    sources.stop();
+    R.setSyncedUserCards([]);
+  }
+});

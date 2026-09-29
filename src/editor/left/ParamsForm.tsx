@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { actions } from "../../store/project";
 import type { Control } from "../../kernel/types";
-import { paramsEmptyText, paramsPartialText, type ParamsCardView } from "./paramsView";
+import { paramsEmptyText, paramsPartialText, paramsSkippedText, type ParamsCardView } from "./paramsView";
 import { ASSET_TARGET } from "../../cards/catalogAssets";
 import type { TrackClip } from "../../kernel/project";
 import { SpeakerPicker } from "./SpeakerPicker";
@@ -25,6 +25,9 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
     return (
       <div className="p-4 text-center text-xs pc-left-muted" data-pc="params-empty">
         {empty}
+        {paramsSkippedText(cardDef) && (
+          <div className="mt-2 text-left text-[11px]" data-pc="params-skipped">{paramsSkippedText(cardDef)}</div>
+        )}
       </div>
     );
   }
@@ -190,6 +193,9 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
       {paramsPartialText(cardDef) && (
         <div className="px-3 pt-2 text-[11px] pc-left-muted" data-pc="params-partial">
           {paramsPartialText(cardDef)}
+          {paramsSkippedText(cardDef) && (
+            <div className="mt-1" data-pc="params-skipped">{paramsSkippedText(cardDef)}</div>
+          )}
         </div>
       )}
 
