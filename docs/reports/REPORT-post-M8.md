@@ -161,3 +161,32 @@
 ### 2.8 顾问调用记录
 
 本轮没有调 codex 或 Gemini：第 ① 项复测三遍都过，拆时间线就定位清楚，不是做不出来；`ffmpeg.mjs` 的问题是审 diff 时对照 `server/frame-code.mjs` 的文件表核出来的；J9、J10 是测试断言了旧行为，回退梯次第 1 级 Opus 一次就改过了。子 Agent：`opus-dev` 两次（删测被还原行为的单测；代码注释旧路径），`opus-dev-high` 一次（J9 / J10）。
+
+## 第 3 轮：出 0.7.3，部署 `/editor`（2026-09-30，笔记本主会话）
+
+### 3.1 做了什么
+
+1. **版本号**：根目录 `package.json` 与 `package-lock.json` 两处 0.7.2 → 0.7.3，外壳仍 0.2.6（本版没动 `desktop/` 与 Rust，只动 Node 那一半，按 `git_and_release.md` 应用版本末位 +1、走更新补丁）。提交 `648eec9a`，`npm run build` 成功，release 前进到 `648eec9a`。
+2. **在线构建**：从 `648eec9a` 的干净检出（分离头 worktree）出 `index-BHNnlkq0.js`（`index.html` sha256 `2e54bc7d3263…`，82 个 assets），嵌代码版本 `63945f91ae27…`；共享快照键仍是 `00a5264bf8a0…`（与 0.7.x 相同，用户已有的共享快照照常可用）；在线构建里没有 `/api/storage`、`/api/exports` 调用。
+3. **部署 `/editor`**（只换编辑器页，托管服务没动）：先在服务器备份 `/root/editor-backup-20260930-073.tgz`（4.5 MB，换 0.7.3 之前的 `index-lRHxl2a9.js` 那一代）与 `/root/editor-runtime-config-20260930-073.json`；新构建经 tar 传到 `/opt/promptcut-hosted/.incoming-editor`，执行 `server/hosted/deploy.mjs` 的 `editorSwapLines()`：保留上一代 assets 8 个与运行配置，本代 82 个、在位 90 个。`promptcut-hosted` 仍 online、重启次数仍 16。
+4. **阿里云真机路径**：`desktop-auto-node-probe --remote` 过（3.2 节），探针建的项目已用创建者凭证删掉。
+5. **补丁：待办**。PC 辅助节点「PromptCut M5～M8 PC 辅助测试节点」整轮 offline，补丁只能在 PC 主工作区打（基准清单 `desktop\release\manifest-0.7.2.json` 在那里）。指令 PC-073-1 已写好（`git pull` 到 `648eec9a` 后 `cd desktop && npm run release -- --from-head --patch-only`，回传补丁字节数、SHA-256 与清单要点），PC 报到后发。**在装上 0.7.3 补丁之前，用户的桌面版不会认领 0.7.3 在线页面发的计划**（代码版本不同）；用户还没装 0.7.2，这个情况 0.7.2 部署后就已存在，本次没有变坏。
+
+### 3.2 验证
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 构建 | `npm run build`（`648eec9a`） | 成功 |
+| `/editor` 三个地址 | 取主站与 `s1.` / `s2.` 的 `/editor/`、对应 JS，核嵌的代码版本 | 三处都 200、都发 `index-BHNnlkq0.js`（3,809,539 字节）、都含 `63945f91ae27`；运行配置 `{ v: 1, stageOrigins: [s1, s2] }` 保留 |
+| 无头打开 | 无头 Chrome 打开 `https://8-219-80-16.sslip.io/editor/`，静置 8 s | 200，标题 PromptCut，页面错误 0，控制台错误 0 |
+| 阿里云真机路径 | `desktop-auto-node-probe --remote https://8-219-80-16.sslip.io --base-port 5620 --skip-off`（从 `648eec9a` 的干净检出起桌面端，笔记本） | 退出 0，`ok: true`，`fails: []`，582 s；A1 节点连上；A2 云端层表与块齐 21.3 s；A3 另一设备贴出用户卡 101.1 s；A4 改动 → 贴上 47.3 s；A5 离开后节点撤掉 4.1 s；两边页面错误 0；项目已删（`shared.admin.ok`）。对照 0.7.2 在 PC 上的真机路径 A3 291 s、A4 86 s |
+
+### 3.3 待用户项
+
+1. **装 0.7.3 补丁**（PC 上线打出来之后；打出来会再通知，附路径与 SHA-256）。从现在的 0.7.0 直接装即可，不用先装 0.7.1、0.7.2；装之前先关掉那台机器上在跑的 PromptCut Agent 会话。
+2. **装上后的第一次运行会清缓存**：用户 PC 的帧库约 282 GB，启动约 2 分钟后按 50 GB 上限一次清掉约 230 GB 最久没用的预渲染缓存（需要时重新预渲染，不可撤销）；想留更多，装完先在开始页「存储」把上限调大。
+3. 审第 2 轮 2.3 节的〔裁〕。
+
+### 3.4 待跨机复核
+
+- PC-073-1（出补丁）与用户装 0.7.3 后的真机复测。
