@@ -9,14 +9,15 @@ export function clipCardLabel(knownName: string | null | undefined): string {
   return typeof knownName === "string" ? knownName : UNKNOWN_CARD_LABEL;
 }
 
-/** 片段的预渲染结果覆盖了多少(`OnlineSnapshotSource.coverage`);没有在线来源时是 null */
-export type ClipCoverage = "none" | "partial" | "full" | null;
+/** 片段的预渲染结果覆盖了多少(`OnlineSnapshotSource.coverage`);没有在线来源时是 null(同「还不知道」) */
+export type ClipCoverage = "unknown" | "none" | "partial" | "full" | null;
 
 /**
  * 徽标出不出。三者同时成立才出:在线浏览器模式;这张卡这台设备跑不了(`unsupportedHere`:构建时的用户卡、图卡、
- * 同步来的用户卡 —— 两边都没有的 id 不算,与桌面一致只标「未知卡片」);它的预渲染结果还没覆盖整段
- * (层表里没有可用的层,或清单里这一档的帧没覆盖整段;低内存档看小尺寸那一层)。覆盖齐了撤掉。
+ * 同步来的用户卡 —— 两边都没有的 id 不算,与桌面一致只标「未知卡片」);**确认**它的预渲染结果没覆盖整段
+ * (层表取到了、里面没有可用的层,或每一段清单都取到过、这一档的帧不齐;低内存档看小尺寸那一层)。
+ * 还不知道(层表没取到、有哪一段的清单从没取到过、还没有在线来源)时不出:刚打开页面时不闪。覆盖齐了撤掉。
  */
 export function showLocalPcBadge(o: { online: boolean; localOnly: boolean; coverage: ClipCoverage }): boolean {
-  return o.online && o.localOnly && o.coverage !== "full";
+  return o.online && o.localOnly && (o.coverage === "none" || o.coverage === "partial");
 }

@@ -108,7 +108,8 @@ test("OU-03 时间轴:标签与「需要本地 PC 渲染辅助」徽标的判定
     assert.equal(badge(true, "synced-card", "none"), true, "同步卡没有层:出");
     assert.equal(badge(true, "synced-card", "partial"), true, "没覆盖整段:出");
     assert.equal(badge(true, "synced-card", "full"), false, "覆盖齐了:撤");
-    assert.equal(badge(true, "mine", null), true, "没有在线来源(判不了覆盖):按没有结果");
+    assert.equal(badge(true, "mine", null), false, "没有在线来源(判不了覆盖):还不知道,不出");
+    assert.equal(badge(true, "synced-card", "unknown"), false, "层表没取到、有哪一段清单从没取到过:还不知道,不出");
     assert.equal(badge(true, "graphish", "partial"), true, "图卡");
     assert.equal(badge(true, "builtin", "none"), false, "内置卡从不出");
     assert.equal(badge(true, "nobody", "none"), false, "两边都没有的 id:只标未知卡片,不挂徽标");

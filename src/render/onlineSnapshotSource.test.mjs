@@ -287,7 +287,7 @@ test('C10 第 9 节:用户卡、图卡的层照常取清单与字节(不再豁�
   assert.ok(!w.requests.some((r) => r.key === 'R:120-179'), '别的层只取窗口(前后 2 秒)');
   assert.ok(w.fetches.some((f) => f.url.includes(H(5000 + 0 + 7))), '用户卡那一层的字节照常预取');
   assert.equal(src.coverage('u'), 'partial', '最后一段不齐');
-  assert.equal(src.coverage('a'), 'partial');
+  assert.equal(src.coverage('a'), 'unknown', '不点名的层只取窗口:窗口外那一段的清单从没取到过 → 还不知道');
   assert.equal(src.coverage('nobody'), 'none', '层表里没有这一层');
   assert.ok(notified > 0, '清单到了通知覆盖变化');
   // 补齐最后一段:过了 COVERAGE_POLL_MS 再取,整段覆盖
@@ -302,5 +302,58 @@ test('C10 第 9 节:用户卡、图卡的层照常取清单与字节(不再豁�
   T += 60_000;
   await src.tickNow();
   assert.equal(w.requests.filter((r) => r.key === 'RU:0-59').length, n, '满了的清单不再取');
+  src.stop();
+});
+
+test('C10 第 9 节:刚打开页面不闪 —— 层表没到时覆盖「还不知道」、这一帧也不算确认没有;层表到了才按层表与清单确认', async () => {
+  const w = world();
+  let T = 1_000_000;
+  const all = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  w.layerMap([{ clipId: 'u', kind: 'html', key: 'KU', resultKey: 'RU', firstFrame: 0, count: 120 }]);
+  w.manifest('RU', 0, 59, all(0, 50));
+  // 第二段的清单不存在(内容库回「没有这一项」)
+  let gate = null;
+  const deps = { ...w.deps, now: () => T, coverageLayer: () => true,
+    async request(msg) { if (gate) await gate; return w.deps.request(msg); } };
+  let release;
+  gate = new Promise((r) => { release = r; });
+  const src = new OnlineSnapshotSource(deps);
+  src.subscribeReady('s', 0, () => {});
+  src.setProject('p1');
+  src.focus(0, 30);
+  // 层表还在路上
+  assert.equal(src.coverage('u'), 'unknown', '层表没取到:还不知道');
+  assert.equal(src.coverage('s2'), 'unknown', '没层的片段也还不知道');
+  assert.equal(src.frameConfirmedMissing('u', 0), false, '层表没取到:不算确认没有');
+  assert.equal(src.frameConfirmedMissing('s2', 0), false);
+  gate = null;
+  release();
+  await src.tickNow();
+  await src.tickNow();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(src.coverage('s2'), 'none', '层表取到了、没有这一层:确认没有');
+  assert.equal(src.frameConfirmedMissing('s2', 10), true, '层表取到了、没有这一层:这一帧确认没有');
+  assert.equal(src.frameConfirmedMissing('u', 10), false, '清单里有这一帧(字节在不在本页不管)');
+  assert.equal(src.frameConfirmedMissing('u', 55), true, '清单取到了、这一帧不在里面');
+  assert.equal(src.frameConfirmedMissing('u', 90), true, '内容库回「没有这一段清单」也算取到了');
+  assert.equal(src.frameConfirmedMissing('u', -3), false, '夹到第 0 帧');
+  assert.equal(src.frameConfirmedMissing('u', 999), true, '夹到最后一帧(那一段确认没有)');
+  assert.equal(src.coverage('u'), 'partial', '每一段都取到过、帧不齐:确认没覆盖整段');
+  src.stop();
+});
+
+test('C10 第 9 节:清单还没取到的那一段,这一帧不算确认没有(显示加载占位)', async () => {
+  const w = world();
+  w.layerMap([{ clipId: 'u', kind: 'html', key: 'KU', resultKey: 'RU', firstFrame: 0, count: 600 }]);
+  w.manifest('RU', 0, 59, [0]);
+  const src = new OnlineSnapshotSource({ ...w.deps, now: () => 1_000_000 });
+  src.subscribeReady('s', 0, () => {});
+  src.setProject('p1');
+  src.focus(0, 30);
+  await src.tickNow();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(src.frameConfirmedMissing('u', 1), true, '窗口里那一段取到了');
+  assert.equal(src.frameConfirmedMissing('u', 500), false, '窗口外那一段从没取过:还不知道');
+  assert.equal(src.coverage('u'), 'unknown', '不点名整段覆盖时,窗口外的段没取:还不知道');
   src.stop();
 });

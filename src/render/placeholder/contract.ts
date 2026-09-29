@@ -82,6 +82,12 @@ export interface PlaceholderPlaneProps {
   clipId: string;
   geometry: PlaceholderGeometry;
   reason: PlaceholderReason;
+  /**
+   * 在屏幕上多大(舞台一侧按预览缩放、这一层的缩放与框算好;`placeholderFit.ts`):`scale` 是组件在包裹层坐标里的放大倍数,
+   * `layout` 是「需要本地 PC 渲染辅助」图标的排法(横排 / 竖排 / 只留图标)。不给 = 倍数 1、横排(按舞台像素原样画)。
+   * 沙漏只放大沙漏本身(徽标的圆、铺满形态中间那个),噪点照旧铺满实体框。
+   */
+  fit?: { scale: number; layout?: "row" | "column" | "icon" };
 }
 
 /**

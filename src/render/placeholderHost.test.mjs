@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import {
   applyPlaceholders, geometryFor, hideAllPlaceholders, noteInkBox, placeholdersEnabled, placeholderWanted,
   resetPlaceholderGeometry, setCatchingUpClips, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders,
-  PLACEHOLDER_SLOT_ATTR,
+  PLACEHOLDER_SLOT_ATTR, setLocalOnlyConfirmed, localOnlyConfirmed, localOnlyReason,
 } from "./placeholderHost.ts";
 import { PLANE_CSS } from "./planeStyle.ts";
 import { PLACEHOLDER_ATTR } from "./placeholder/contract.ts";
@@ -135,25 +135,37 @@ test("unsupported 进显隐调度(2026-09-29 起不再常驻):要它就显示并
   assert.equal(legacy.hidden, true);
 });
 
-test("placeholderWanted:本机跑不了的卡贴不上快照 / 流时一律 unsupported,顶替沙漏;贴得上就不显示", () => {
-  const unsupported = new Set(["u", "s", "w"]);
+test("placeholderWanted:本机跑不了的卡贴不上快照 / 流时,父页确认没有结果才是 unsupported,其余是 awaiting 沙漏;贴得上就不显示", () => {
+  const unsupported = new Set(["u", "s", "w", "q"]);
   const wanted = placeholderWanted({
-    suppressed: new Set(["u", "b", "w"]),
+    suppressed: new Set(["u", "b", "w", "q"]),
     snapshots: new Map([["s", "<div/>"]]),
     awaiting: new Set(["u", "a"]),
     settling: new Map([["u", 0]]),
     streamShowing: new Set(["w"]),
     unsupported,
+    confirmedMissing: new Set(["u", "s", "w"]),
     isLight: () => false,
   });
-  assert.equal(wanted.get("u"), "unsupported", "被抑制、等快照、追帧的原因都换成 unsupported");
+  assert.equal(wanted.get("u"), "unsupported", "确认没有结果:被抑制、等快照、追帧的原因都换成 unsupported");
+  assert.equal(wanted.get("q"), "awaiting", "没确认(层表 / 清单没到、字节在路上):沙漏");
   assert.equal(wanted.has("s"), false, "贴着快照:不显示");
   assert.equal(wanted.has("w"), false, "流这一拍画着:不显示");
   assert.equal(wanted.get("b"), "no-data", "内置卡照旧");
   assert.equal(wanted.get("a"), "awaiting");
-  // 不在抑制、不等快照(普通档暂停)也显示:它没有活渲
-  assert.equal(placeholderWanted({ suppressed: new Set(), snapshots: new Map(), awaiting: new Set(), settling: new Map(), streamShowing: new Set(),
-    unsupported: new Set(["p"]) }).get("p"), "unsupported");
+  // 不在抑制、不等快照(普通档暂停)也显示:它没有活渲;确认了是图标,没确认是沙漏
+  const idle = { suppressed: new Set(), snapshots: new Map(), awaiting: new Set(), settling: new Map(), streamShowing: new Set(), unsupported: new Set(["p"]) };
+  assert.equal(placeholderWanted({ ...idle, confirmedMissing: new Set(["p"]) }).get("p"), "unsupported");
+  assert.equal(placeholderWanted({ ...idle, confirmedMissing: new Set() }).get("p"), "awaiting", "暂停时也一样");
+  // 缺省看 setLocalOnlyConfirmed 那一份
+  assert.equal(setLocalOnlyConfirmed(["p"]), true);
+  assert.equal(setLocalOnlyConfirmed(["p"]), false, "没变回 false");
+  assert.equal(placeholderWanted(idle).get("p"), "unsupported");
+  assert.equal(localOnlyReason("p"), "unsupported");
+  assert.equal(localOnlyReason("z"), "awaiting");
+  setLocalOnlyConfirmed([]);
+  assert.equal(placeholderWanted(idle).get("p"), "awaiting");
+  assert.equal(localOnlyConfirmed().size, 0);
   // 不给 unsupported:与以前逐项相同
   const old = placeholderWanted({ suppressed: new Set(["u"]), snapshots: new Map(), awaiting: new Set(), settling: new Map(), streamShowing: new Set(), isLight: () => false });
   assert.deepEqual([...old], [["u", "no-data"]]);
@@ -203,18 +215,32 @@ test("unsupported:只在在线浏览器模式下,且只认用户卡和图卡", (
   assert.equal(UNSUPPORTED_TEXT, "需要本地 PC 渲染辅助");
 });
 
-/* ---------------------------------------------------------------- 续做:图标在屏幕上的大小 */
+/* ---------------------------------------------------------------- 占位符在屏幕上的大小(纯函数在 placeholderFit.test.mjs) */
 
-import { placeholderUiScale, PLACEHOLDER_UI_SCALE_VAR } from "./placeholderHost.ts";
+import { placeholderFitFor, placeholderViewScale, setPlaceholderViewScale } from "./placeholderHost.ts";
 
-test("placeholderUiScale:clamp(1 / 预览缩放, 1, 8);坏值回 1", () => {
-  assert.equal(PLACEHOLDER_UI_SCALE_VAR, "--pc-ph-ui-scale");
-  assert.equal(placeholderUiScale(0.25), 4);
-  assert.ok(Math.abs(placeholderUiScale(0.27) - 1 / 0.27) < 1e-12);
-  assert.equal(placeholderUiScale(0.5), 2);
-  assert.equal(placeholderUiScale(1), 1);
-  assert.equal(placeholderUiScale(2), 1, "放大预览时不缩小图标");
-  assert.equal(placeholderUiScale(0.05), 8, "缩得极小时封顶 8 倍");
-  for (const bad of [0, -1, NaN, Infinity, undefined, null, "x"]) assert.equal(placeholderUiScale(bad), 1, String(bad));
-  assert.equal(placeholderUiScale("0.5"), 2, "数字字符串照认");
+test("placeholderFitFor:沙漏只抵消预览缩放,图标还抵消这一层的缩放;徽标看位置框、铺满看实体框;同样的输入回同一个对象", () => {
+  try {
+    assert.equal(setPlaceholderViewScale(0.25), true);
+    assert.equal(setPlaceholderViewScale(0.25), false, "没变回 false");
+    assert.equal(placeholderViewScale(), 0.25);
+    const badge = { kind: "badge", center: { x: 320, y: 180 } };
+    const size = { width: 640, height: 360 };
+    const h = placeholderFitFor("h", "awaiting", badge, size, 0.5);
+    assert.deepEqual(h, { scale: 4 }, "沙漏:1 / 0.25,不管这一层的 0.5");
+    assert.equal(placeholderFitFor("h", "awaiting", badge, size, 0.5), h, "同样的输入同一个对象");
+    const u = placeholderFitFor("u", "unsupported", badge, size, 0.5);
+    assert.equal(u.layout, "icon", "图标:目标倍数 1 / (0.25 × 0.5) = 8,横排、竖排、只留图标都放不进 640×360 → 只留图标、按框缩");
+    assert.ok(u.scale < 8 && u.scale > 7, String(u.scale));
+    setPlaceholderViewScale(0.5);
+    assert.deepEqual(placeholderFitFor("u2", "unsupported", badge, { width: 360, height: 360 }, 1), { scale: 2, layout: "column" }, "横排 396 放不进 360 → 竖排");
+    setPlaceholderViewScale(0.25);
+    const solid = { kind: "solid", box: { left: 0, top: 0, width: 100, height: 100 } };
+    assert.equal(placeholderFitFor("s", "unsupported", solid, size, 1).layout, "icon", "铺满形态看实体框(100×100)");
+    setPlaceholderViewScale(1);
+    assert.deepEqual(placeholderFitFor("h", "awaiting", badge, size, 1), { scale: 1 }, "预览 100%:原样");
+    for (const bad of [0, -1, NaN, undefined, "x"]) { setPlaceholderViewScale(bad); assert.equal(placeholderViewScale(), 1, String(bad)); }
+  } finally {
+    setPlaceholderViewScale(1);
+  }
 });

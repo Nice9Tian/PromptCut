@@ -3,8 +3,8 @@
  *   node --test src/render/stageLocalOnly.test.mjs
  *
  *   SL-01 在线浏览器模式:构建时的用户卡、图卡、同步来的用户卡(没有定义)不挂组件;包裹层照内置重卡的路子挂快照平面、
- *         流平面;占位槽位不再是常驻的(没有 `data-pc-placeholder-fixed`),默认 `hidden`,原因是 `unsupported`(进显隐调度);
- *         两边都没有的 id 不画(与桌面一致)
+ *         流平面;占位槽位不再是常驻的(没有 `data-pc-placeholder-fixed`),默认 `hidden`(进显隐调度);父页没确认这一帧没有结果时
+ *         是沙漏(`awaiting`),确认了才是「需要本地 PC 渲染辅助」图标;图标与沙漏按预览缩放补偿(`fit`);两边都没有的 id 不画
  *   SL-02 模式关着(桌面、导出、预渲染):用户卡、图卡照常挂组件,同步表不起作用,没有 `unsupported`
  */
 import test from "node:test";
@@ -59,11 +59,28 @@ test("SL-01 在线:本机跑不了的卡不挂组件,照挂快照 / 流平面,�
     for (const w of [u, s]) {
       assert.match(w, /data-pc-placeholder-slot="" hidden=""/, "槽位默认藏着,由显隐调度切");
       assert.doesNotMatch(w, /data-pc-placeholder-fixed/, "不再是常驻槽位");
+      // 父页还没确认这一帧没有结果:普通加载占位(沙漏),不是图标(刚打开页面不闪图标)
+      assert.match(w, /data-pc-placeholder-reason="awaiting"/);
+      assert.doesNotMatch(w, /需要本地 PC 渲染辅助/);
+    }
+    // 父页确认 u、s 这一帧没有可贴的结果:换成「需要本地 PC 渲染辅助」图标
+    H.setLocalOnlyConfirmed(["u", "s"]);
+    // 预览缩放 25%:片段框 640×360、不缩放 → 目标倍数 4,横排 792 放不进 → 竖排 640 也放不进(留边距)→ 只留图标
+    H.setPlaceholderViewScale(0.25);
+    const html2 = render({ snapshots: new Map([["s", "<p>snap-s</p>"]]), suppressed: new Set(["u", "s"]), streamPlanes: [{ clipIds: ["u"] }], awaiting: new Set(), settling: new Map() });
+    for (const id of ["u", "s"]) {
+      const w = wrapOf(html2, id);
       assert.match(w, /data-pc-placeholder-reason="unsupported"/);
       assert.match(w, /需要本地 PC 渲染辅助/);
-      // 量不到实体框:小徽标,按 --pc-ph-ui-scale 反向放大(续做:图标在屏幕上的大小),中心不动
-      assert.match(w, /data-pc-placeholder-kind="unsupported-badge"[^>]*transform:translate\(-50%, -50%\) scale\(var\(--pc-ph-ui-scale, 1\)\)/);
+      // 量不到实体框:小徽标,中心在位置框中心,按 fit 放大
+      assert.match(w, /data-pc-placeholder-kind="unsupported-badge"[^>]*data-pc-placeholder-layout="icon"[^>]*style="position:absolute;left:320px;top:180px;transform:translate\(-50%, -50%\) scale\(4\)"/);
+      assert.match(w, /aria-label="需要本地 PC 渲染辅助"/, "只留图标时 aria-label 照旧是全文");
     }
+    // 内置卡的沙漏:屏幕上保持原大小,只抵消预览缩放(28 × 4 舞台像素)
+    const b2 = wrapOf(html2, "b");
+    assert.match(b2, /data-pc-placeholder-kind="badge"[^>]*style="position:absolute;left:306px;top:166px;width:28px;height:28px;transform:scale\(4\)"/);
+    H.setLocalOnlyConfirmed([]);
+    H.setPlaceholderViewScale(1);
     assert.doesNotMatch(b, /data-pc-placeholder-reason="unsupported"/, "内置卡的占位照旧是沙漏");
     assert.equal(wrapOf(html, "x"), null, "两边都没有的 id 不画");
     // 后台舞台(占位关着):照样不挂组件,也没有槽位
@@ -85,5 +102,14 @@ test("SL-02 模式关着:用户卡照常挂组件,同步表不起作用,没有 u
     assert.equal(wrapOf(html, "s"), null, "同步卡本机没有定义:桌面不画");
     assert.doesNotMatch(html, /unsupported/);
   }
-  H.setPlaceholdersEnabled(false);
+  // 桌面预览也按预览缩放补偿沙漏(屏幕上约 28 像素),不补偿这一层自己的缩放
+  H.setPlaceholdersEnabled(true);
+  H.setPlaceholderViewScale(0.5);
+  try {
+    const html = render({ snapshots: new Map(), suppressed: new Set(["u"]) });
+    assert.match(wrapOf(html, "u"), /data-pc-placeholder-kind="badge"[^>]*width:28px;height:28px;transform:scale\(2\)/);
+  } finally {
+    H.setPlaceholderViewScale(1);
+    H.setPlaceholdersEnabled(false);
+  }
 }));
