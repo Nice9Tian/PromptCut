@@ -18,6 +18,8 @@
 | `b5340c06` | 任务 3：三处判法改法，抽成纯函数，单测 |
 | `98dd5f7d` | 任务 3 补：结果行带非已建立连接的记录，提示语写明「已建立」 |
 | `bd9a1bbf` | 依赖方向守门 `bakery-deps.test.mjs` 的名单加三份新测试 |
+| `bc62980e` | 报告收尾（第一轮） |
+| `a5e81f61` | 主会话审后第二轮：`--assert-no-lan` 改成基线排除；`compare-pitfalls.md` 补 `PROMPTCUT_NO_PORT_FILE` |
 
 ## 1. 探针和测试不写公共的 port.json
 
@@ -79,13 +81,16 @@
 
 | 弱点 | 改法 | 纯函数 | 单测 |
 |---|---|---|---|
-| `--assert-no-lan` 的 TCP 采样不分状态，上一项的 `TIME_WAIT` 被数进去 | `scripts/probes/m8/no-lan.mjs`：`parseNetstatLine` 多取 `state`；`countTcpTo` 只数 `ESTABLISHED`，别的状态进 `other`；采样记 `maxOther` / `seenOther` 只供排查；`m8-e-probe` 的 `no-lan-tcp` 结果带上这两项，`shared-project-probe` 提示语写明「已建立」 | `countTcpTo`、`judgeNoLanTcp`，常量 `COUNTED_STATES` | `m8-no-lan.test.mjs` 6 项（改 1 项、加 1 项：`TIME_WAIT` / `CLOSE_WAIT` / `FIN_WAIT_2` 不判失败，有一条 `ESTABLISHED` 就判失败，一次没采样到不算过，Linux 格式同样） |
+| `--assert-no-lan` 的 TCP 采样不分状态，上一项的 `TIME_WAIT` 被数进去 | 第一轮改成只数 `ESTABLISHED`；主会话审后指出会漏判（两次采样之间建立又关掉的短连接，下一次采样只剩 `TIME_WAIT`，被排除掉），第二轮（`a5e81f61`）改成**基线排除**：`startNoLanWatch` 开始时第一次取到的 netstat 是基线，已有的、对端是这个地址的 (本端, 对端) 对只记进 `baseline`；之后每次采样出现的、不在基线里的，不论状态（`ESTABLISHED`、`TIME_WAIT`、`SYN_SENT`、`CLOSE_WAIT`…）都计入 `maxTcp` / `seen`。第一次 netstat 失败时下一次取到的当基线；判法要求取到基线且基线之后至少采样一次。`m8-e-probe`、`shared-project-probe`、`m8/no-lan.mjs` 三处文件头与提示语改成这个写法，`no-lan-tcp` 结果带 `baselineOk`、`baseline` | `countNewTcpTo`、`judgeNoLanTcp`、`pairKey`（`countTcpTo` 回到任何状态都数） | `m8-no-lan.test.mjs` 10 项：基线里的 `TIME_WAIT` 不算、运行中新出现的 `TIME_WAIT` 算（短连接）、`SYN_SENT` 算、`CLOSE_WAIT` 算、没取到基线或基线后没采样不算过；`startNoLanWatch` 用注入的假 netstat 跑，不做真的局域网发现 |
 | `cloud-untouched` 数阿里云总连接数，别人进出就误判 | `m8-e-probe` 放本机时收尾按本轮查：本轮项目名 `m8e-<用例>-<本轮编号>` 在云端 `GET <hosted>/shared/lookup?name=` 回 404 才过；回 200 且 `projectId` 是本轮的（或没有 `projectId`）不过；同名但 `projectId` 不同写明「不是本轮的」照过；连不上或别的状态记 `unreachable` 放过（同以前「读不到就不判」）。前后两次 `/healthz` 的总连接数只记录、不判 | `m8/lib.mjs` 的 `judgeCloudUntouched` | `m8-judges.test.mjs` 3 项 |
 | `real:tasks>=50` 标签固定 | 门槛照旧 `min(50, 条数 × 秒数 × 30 / 60)`（向上取整，对整数任务数与以前的判法相同），检查名按门槛写 `real:tasks>=<门槛>`，细节带 `need`、`expected` | `m8/lib.mjs` 的 `realTasksThreshold` | `m8-judges.test.mjs` 1 项（10×10 → 50、4×10 → 20、20×10 → 封顶 50、3×5 → 8） |
 
 没对阿里云和局域网实跑（按任务书）。
 
 ## 基线
+
+- 第二轮（`a5e81f61`）：`npx tsc -b --force` 退出码 0；`npm test` 3876 项，通过 3874，失败 0，跳过 2，退出码 0。
+- 以下是第一轮：
 
 - `npx tsc -b --force`：退出码 0，零错误（在 `98dd5f7d` 上跑；之后只改了测试文件）。
 - `npm test`：
@@ -103,6 +108,6 @@
 ## 建议与需要主会话定的事
 
 1. `no-user-dirs.mjs` 现在管两件事（不继承用户目录、不写公共 `port.json`），文件名只说了前一件。要不要改名（例如 `probe-env.mjs`）？改名会动 40 多个探针的第一行 import，和别的分支冲突，建议等注释路径那 41 处一起做。
-2. `docs/guides/compare-pitfalls.md` 第 87 行「任何 dev server 启动时都会把自己的端口写进全局的 port.json」现在只对桌面版与 `npm run dev` 成立；几份归档计划里「`TEMP` 指到 scratch 免得覆盖全局 port.json」的做法对手动起的 dev server 仍然需要。这两处是文档，本分支没改，建议主会话顺手补一句 `PROMPTCUT_NO_PORT_FILE=1`。
+2. （第二轮已做，`a5e81f61`）`docs/guides/compare-pitfalls.md` 第 8 节补了：设了 `PROMPTCUT_NO_PORT_FILE=1` 的不写，测试与探针的公共入口都设了它，只有桌面版和 `npm run dev` 起的会写；手动起 dev server 做验证时也建议带上。归档计划里的旧写法没动。
 3. `cloud-untouched` 要不要真正按用户或设备查（见上一节），由主会话定；要做的话是服务端的改动。
 4. 合并：6 个提交都在 `claude/probe-hygiene`，未推送、未合并。
