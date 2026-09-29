@@ -1620,13 +1620,17 @@ try {
   {
     /*
      * 任务 C(swap-tuning):从 0 秒连续播放,`probe-typewriter`(入点 2 秒,判轻、(b) 档、vtOk = false)是逐拍自然进场的,
-     * 不该发起播放态互换,也不该走估时(以前在 t≈1.97 估一次、记 skip-rate)。
+     * 不该发起播放态互换,也不该走估时(以前在它的入点附近估一次、记 skip-rate)。起播那一刻已经挂着的卡(入点 0)照旧走估时,只报不判。
      */
     const sp = (await previewDiag(member))?.swapPlaying ?? null;
-    const planAt = (x) => x?.lastPlan?.at ?? null;
-    const planned = planAt(sp) !== null && planAt(sp) !== planAt(entryBefore);
-    out.steps.playEntry = { natural: { naturalSkips: sp?.naturalSkips ?? null, lastNaturalSkip: sp?.lastNaturalSkip ?? null, playRun: sp?.playRun ?? null, lastPlan: sp?.lastPlan ?? null, plannedDuringPlay: planned } };
-    check(sp && sp.naturalSkips > (entryBefore?.naturalSkips ?? 0) && !planned, '任务 C:从 0 秒连续播放,自然进场的 (b) 档轻卡不发起播放态互换、不走估时', out.steps.playEntry.natural);
+    state.typewriter = await P(member, () => window.__pcStore.getState().project.tracks.flatMap((tr) => tr.clips).find((c) => c.cardId === 'probe-typewriter')?.id ?? null);
+    const beforeAt = entryBefore?.lastPlan?.at ?? -1;
+    const plansInPlay = (sp?.plans ?? []).filter((x) => x.at > beforeAt);
+    const typewriterPlanned = plansInPlay.filter((x) => (x.ids ?? []).includes(state.typewriter));
+    out.steps.playEntry = { natural: { typewriter: state.typewriter, naturalSkipped: sp?.naturalSkipped ?? null, naturalSkips: sp?.naturalSkips ?? null, playRun: sp?.playRun ?? null,
+      plansInPlay: plansInPlay.map((x) => ({ t: x.t, ids: x.ids, ok: x.ok, reason: x.reason ?? null })) } };
+    check(state.typewriter && (sp?.naturalSkipped ?? []).includes(state.typewriter) && typewriterPlanned.length === 0 && sp?.playRun?.breaks === 0,
+      '任务 C:从 0 秒连续播放,自然进场的 (b) 档轻卡不发起播放态互换、不走估时(拍序号连续、没有断开)', out.steps.playEntry.natural);
   }
   const playing = samples.filter((s) => s.playing);
   const mainSigs = playing.filter((s) => s.t >= 1).map((s) => s.wraps.find((w) => w.id === state.main)).filter((w) => w?.suppressed && w.plane).map((w) => w.planeSig);
@@ -1690,13 +1694,13 @@ try {
     await P(member, () => window.__pcStore.actions.play());
     const seekPlan = await until('跳到卡中间再播:第一拍附近走估时', async () => {
       const sp = (await previewDiag(member))?.swapPlaying ?? null;
-      const lp = sp?.lastPlan;
-      return lp && lp.at !== before?.lastPlan?.at && lp.t >= 3 && lp.t < 3.5 ? sp : null;
+      const lp = (sp?.plans ?? []).find((x) => x.at > (before?.lastPlan?.at ?? -1) && (x.ids ?? []).includes(state.typewriter));
+      return lp && lp.t >= 3 && lp.t < 3.5 ? { ...sp, lastPlan: lp } : null;
     }, 5_000, 100);
     await P(member, () => window.__pcStore.actions.pause());
     await until('停下', () => P(member, () => !window.__pcStore.getState().playing), 5_000, 100);
     out.steps.playEntry = { ...(out.steps.playEntry ?? {}), seekMiddle: { lastPlan: seekPlan?.lastPlan ?? null, playRun: seekPlan?.playRun ?? null, naturalSkips: seekPlan?.naturalSkips ?? null } };
-    check(seekPlan, '任务 C:跳到卡中间再播,照旧按估时决定(lastPlan 的 t 在 3～3.5 秒)', out.steps.playEntry.seekMiddle);
+    check(seekPlan, '任务 C:跳到卡中间再播,typewriter 照旧按估时决定(发起判断的 t 在 3～3.5 秒)', out.steps.playEntry.seekMiddle);
     say('play-entry', out.steps.playEntry);
   }
   const pd = await previewDiag(member);

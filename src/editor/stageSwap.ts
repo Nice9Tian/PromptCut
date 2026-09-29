@@ -256,6 +256,8 @@ const playRun = createPlayRun();
 /** 诊断：因为自然进场而没发起播放态互换的次数与最近一次 */
 let naturalSkips = 0;
 let lastNaturalSkip: { t: number; ids: string[] } | null = null;
+/** 诊断：这一轮播放里因为自然进场而没发起的卡（完整 clipId；起播时清空） */
+let naturalSkipped = new Set<string>();
 
 function projectFps(): number {
   return Math.max(1, getState().project?.fps || 30);
@@ -264,6 +266,7 @@ function projectFps(): number {
 /** 按下播放（或换了舞台重起节拍）：这一轮播放从 `fromSec` 起。宿主在发 `play(fromSec)` 之前调 */
 export function notePlayRunStart(fromSec: number): void {
   notePlayStart(playRun, fromSec, projectFps());
+  naturalSkipped = new Set();
 }
 
 /** 可见舞台报来一拍（`frame` 事件）。宿主在算播放态互换的目标之前调；回这一拍算连续、重复还是断开 */
@@ -289,7 +292,8 @@ export function playingSwapTargets(project: Project, t: number): string[] {
   }
   if (natural.length) {
     naturalSkips++;
-    lastNaturalSkip = { t, ids: natural.map((id) => id.slice(0, 8)) };
+    lastNaturalSkip = { t, ids: natural };
+    for (const id of natural) naturalSkipped.add(id);
   }
   return out;
 }
@@ -602,7 +606,9 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
    * 以前照样发起,整场景补跑白占后台舞台十几秒,最后「武装停已过」两次再降级。
    */
   const plan = planPlayingSwap(project, pendingIds, getState().t);
-  lastPlayingPlan = { at: Math.round(performance.now()), t: getState().t, ...plan };
+  lastPlayingPlan = { at: Math.round(performance.now()), t: getState().t, ids: [...pendingIds], ...plan };
+  playingPlans.push(lastPlayingPlan);
+  if (playingPlans.length > 20) playingPlans.shift();
   if (!plan.ok) {
     trace({ op: "playing", t: getState().t, ids: pendingIds.map((id) => id.slice(0, 8)), out: `skip-${plan.reason}`, backlogMs: Math.round(plan.backlogMs), ratePerSec: Math.round(plan.ratePerSec) });
     return false;
@@ -701,9 +707,11 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
 
 /** 诊断:最近一次播放态互换的发起判断(领先量、积压、速率,或为什么不发起)与让路次数(探针看) */
 let lastPlayingPlan: Record<string, unknown> | null = null;
+/** 诊断:最近 20 次发起判断(含完整 clipId) */
+const playingPlans: Record<string, unknown>[] = [];
 export function stageSwapPlayingDebug() {
-  return { lastPlan: lastPlayingPlan, preemptCount, orphan: !!orphanRender,
-    playRun: { ...playRun }, naturalSkips, lastNaturalSkip };
+  return { lastPlan: lastPlayingPlan, plans: playingPlans.slice(), preemptCount, orphan: !!orphanRender,
+    playRun: { ...playRun }, naturalSkips, lastNaturalSkip, naturalSkipped: [...naturalSkipped] };
 }
 
 /** 测试用 */
@@ -723,4 +731,6 @@ export function resetStageSwap(): void {
   playRun.breaks = 0;
   naturalSkips = 0;
   lastNaturalSkip = null;
+  naturalSkipped = new Set();
+  playingPlans.length = 0;
 }
