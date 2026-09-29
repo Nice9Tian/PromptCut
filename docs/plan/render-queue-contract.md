@@ -1927,6 +1927,8 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 
 **开关**：`PROMPTCUT_QUEUE_NODE=1`，缺省关。关着时行为与现在完全一样。
 
+**页面交接**（2026-09-29，落地语义「加入共享项目的桌面应用自动成为这个项目的渲染节点」，`claude/desktop-auto-node`，报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`）：桌面版的页面进入共享项目时，经编辑器进程把这个项目的共享配置（文档服务地址、项目 id、项目文档 id、素材服务基址、页面签的 render 角色连接票据）交给预渲染进程（`POST /api/frames/render-node`），预渲染进程据此起本机节点并建推送队列（模式名 `page`）；每次建新会话经 HMR 向页面要一张新票据；页面离开项目、取消协作或换开别的项目时撤掉。开发者开关 `PROMPTCUT_AUTO_RENDER_NODE=0` 关掉它，缺省开；环境变量已经配出节点时不接交接。
+
 **开着、并且 `resolveDocservice` 不是 `offline` 时**：
 - **起本机节点**：`createLocalNode`：
   - `profile: 'pc'`；
@@ -2033,6 +2035,7 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 2. **推送只在显式开启时生效**：
    - `resolveDocservice` 回 `mode: 'editor'`、进程又没设 `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1` 时，不建推送队列，也不在 preload 之前拉取别的节点的结果，行为与 C6.4 之前相同；
    - `remote` / `local` 两种模式照旧建；
+   - 页面交来了共享配置（J.5「页面交接」，模式名 `page`）时建，不用显式开关；
    - `PROMPTCUT_PUSH=0` 一律关。
    这样开关关着时，默认的开发环境与探针的行为不变。
 3. **推迟到 M6，登记进计划第 11.2 节**：
@@ -2047,7 +2050,8 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 
 预渲染进程里的推送队列与队列节点，素材服务的基址按下面的顺序定：
 1. `PROMPTCUT_ASSET_URL`；
-2. 服务地址登记里别的机器登记的 `kind: 'asset'`，按 `announcerId` 字典序取第一个；登记变化时换用新的 client；
-3. 本机的 `assetServiceOrigin()`。
+2. 页面交来的素材服务基址（J.5「页面交接」）（2026-09-29，落地语义「加入共享项目的桌面应用自动成为这个项目的渲染节点」，`claude/desktop-auto-node`，报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`）；
+3. 服务地址登记里别的机器登记的 `kind: 'asset'`，按 `announcerId` 字典序取第一个；登记变化时换用新的 client；
+4. 本机的 `assetServiceOrigin()`。
 
 素材服务部署在主 PC，地址由控制面下发给工作节点（D7）。所以笔记本节点推送、拉取都走主 PC 的素材服务，主 PC 能拉到笔记本的产物。

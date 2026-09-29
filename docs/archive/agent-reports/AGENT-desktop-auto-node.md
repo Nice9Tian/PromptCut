@@ -151,3 +151,10 @@
 ## 提交
 
 见 `git log main..claude/desktop-auto-node`。
+
+## 主会话审查（2026-09-29）
+
+- 逐文件读过 diff：页面交接（`renderNodeHandoff.ts`、`syncManager.ts`）、编辑器进程中转（`render-node-relay.mjs`、`vite-plugin-prerender.ts`）、预渲染进程（`auto-render-node.mjs`、`vite-plugin-frames.ts`）。票据只在内存里、不进日志与诊断（诊断只有剩余有效时间）；新接口都在 `/api/**` 的同源守卫之下，要票据的那一个只认不带 Origin 的本机请求；不交项目口令与 `K`。没发现问题。
+- 建议的文档改动已由主会话写进 `render-queue-contract.md`（J.5 页面交接、J.12、J.13）、`auth-contract.md` 第 11 节、`Master-Execution-Plan.md`；`TODO.md` 那一条划掉。
+- 「用户卡在桌面判轻、桌面自己不预渲染，浏览器靠自己发的计划由桌面节点渲」「在浏览器里改了用户卡参数后新结果到之前显示旧画面」两条记为观察，写进给用户的汇报，另议。
+- 本报告随合并归档到 `docs/archive/agent-reports/`。
