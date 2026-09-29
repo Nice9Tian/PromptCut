@@ -344,3 +344,10 @@
 
 - 旧版桌面节点（没有这次改动）照旧会为未知卡排活、写那一层空画面，新页面不贴它，不影响。
 - 新版桌面节点收到旧页面发的清单计划时：旧页面的清单计划里可能带着未知卡片段（旧页面测过它，判轻就不带；没测到才带）。新节点的卡片计划里没有它，这一段不产结果，同样不影响画面。这两条是按代码推断的，没有实测混用。
+
+## 主会话审查（2026-09-29）
+
+- 逐文件读过 diff：参数视图（`cardSourceParse.mjs`、`registry.ts` 的 `syncedCardView`、`paramsView.ts`、`ParamsForm.tsx`）、图标与沙漏的屏幕大小（`placeholderFit.ts`、`placeholderHost.ts`、`placeholderPlane.tsx`、`Stage.tsx`，沙漏居中保留 `translate(-50%, -50%)`）、确认没有结果才出图标（`localOnlyMissing.ts`、`setLocalOnlyMissing`）、测量门（`measureGate.ts`）、未知卡两侧不判重（`costIdentity.ts`、`server/card-cache.mjs` 跳过未知卡输出，别的卡的键由 CU-01/CU-02 证明不变）。没发现问题。
+- 建议补进契约第 9 节的句子已由主会话写进 `c10-contract.md`（`c2da15d9`），尺寸规则放在契约里，不进 `mechanism/rendering.md`。
+- 「换项目后测量门不再关」「未知卡被反复测」「读不全的参数没有提示」「桌面预渲染进程为未知卡多渲一段空画面」四条已在本分支续做里修掉。
+- 本报告随合并归档到 `docs/archive/agent-reports/`。
