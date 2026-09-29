@@ -82,12 +82,14 @@ const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ t: n
 const codeOf = (link) => String(link ?? '').split('invite=')[1] ?? '';
 
 async function until(label, fn, timeoutMs, everyMs = 500) {
+  const begin = Date.now();
   const end = Math.min(Date.now() + timeoutMs, deadline);
   for (;;) {
     let v = null;
     try { v = await fn(); } catch { v = null; }
-    if (v) return v;
-    if (Date.now() > end) { fails.push(`超时:${label}`); return null; }
+    // 每一处等待落定都记一行(等了多久),卡在哪一步从 stderr 看得出来
+    if (v) { say('wait.ok', { label, ms: Date.now() - begin }); return v; }
+    if (Date.now() > end) { say('wait.timeout', { label, ms: Date.now() - begin }); fails.push(`超时:${label}`); return null; }
     await delay(everyMs);
   }
 }
