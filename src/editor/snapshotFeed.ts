@@ -37,7 +37,7 @@ import type { StageRole, StageRpcClient } from "../render/stageRpc";
 import { currentPlan } from "./planDispatch";
 import { cardsRegistryGen, syncedUserCardsGen } from "../kernel/registry";
 import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
-import { fitBeatSwaps, SWAP_MS } from "../render/beatSwap.mjs";
+import { fitBeatSwaps, SWAP_MS, swapCostOfSize } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
@@ -244,28 +244,51 @@ function isSettled(role: StageRole, clipId: string): boolean {
 /**
  * 在线普通档的「按拍换快照」(C10 契约第 6 节〔裁:D8〕、第 18 节第 1 条)。开着时:
  *   - 播放中的投递**不受** `SNAPSHOT_THROTTLE_MS` 的 33 ms 节流 —— 重层每拍换一次;节流只留给非播放时的投递;
- *   - 每拍按 `fitBeatSwaps` 算装得下几个重层(`deadMs = max(0, B − 已占用)`,`floor(deadMs / swapMs)`),
+ *   - 每拍按 `fitBeatSwaps` 算装得下几个重层(`deadMs = max(0, B − 已占用)`,从上到下累加各层的换帧成本:
+ *     已知这一层快照大小的按大小估,否则按卡种;宿主没给每层成本时每层 `swapMs`,即 `floor(deadMs / swapMs)`),
  *     按从上到下的层序取,装不下的重层这一拍摘掉快照,由舞台显示占位符(兜底顺序第 4 步)。
  * 桌面(关着)一个字节不变。
  */
 let beatSwap = false;
 let beatSwapMs = SWAP_MS;
+/** 每层自己的换帧成本(宿主给:`swapCost.ts` 的 `layerSwapMs`,按卡种);不给 = 每层 `beatSwapMs` */
+let beatCostOf: ((project: Project, clipId: string) => number) | null = null;
+/**
+ * 每层最近一次投出去的快照有多大(字符数、有没有内联位图)。开了每层成本(`beatCostOf`)时,已知大小的层按大小估
+ * (`swapCostOfSize`),还没投过的层按卡种。同一层相邻帧的大小很接近(实测同一张卡各帧的中位数与最大值差不到一成)。
+ */
+const layerSizes = new Map<string, { bytes: number; bitmap: boolean }>();
+function noteLayerSizes(patch: Record<string, string | null>): void {
+  if (!beatCostOf) return;
+  for (const [clipId, html] of Object.entries(patch)) {
+    if (typeof html !== "string" || !html.length) continue;
+    layerSizes.set(clipId, { bytes: html.length, bitmap: html.includes("data:image/") });
+  }
+  if (layerSizes.size > 1024) layerSizes.clear();
+}
+/** 这一层的换帧成本:已知大小按大小,否则按卡种(宿主给的),都没有按 `beatSwapMs` */
+function layerCost(project: Project, clipId: string): number {
+  const bySize = swapCostOfSize(layerSizes.get(clipId));
+  if (bySize !== null) return bySize;
+  return beatCostOf ? beatCostOf(project, clipId) : beatSwapMs;
+}
 /** 这一拍轻管线已占用的毫秒(宿主给:`planDispatch.ts` 的 `lightCostAt`);不给按 0 */
 let occupiedAt: (t: number) => number = () => 0;
-let lastBeatFit: { t: number; occupiedMs: number; deadMs: number; fit: number; swap: string[]; placeholder: string[] } | null = null;
+let lastBeatFit: { t: number; occupiedMs: number; deadMs: number; fit: number; usedMs: number; swap: string[]; placeholder: string[] } | null = null;
 /** 探针看:播放中按拍投出去几次、其中几次在上一次投递之后不到 33 ms(节流会挡掉的那种) */
 const beatStats = { deliveries: 0, underThrottle: 0, placeholders: 0 };
 
-export function setBeatSwap(on: boolean, opts: { swapMs?: number; occupied?: (t: number) => number } = {}): void {
+export function setBeatSwap(on: boolean, opts: { swapMs?: number; occupied?: (t: number) => number; costOf?: ((project: Project, clipId: string) => number) | null } = {}): void {
   beatSwap = !!on;
   if (Number(opts.swapMs) > 0) beatSwapMs = Number(opts.swapMs);
   if (opts.occupied) occupiedAt = opts.occupied;
+  if (opts.costOf !== undefined) beatCostOf = opts.costOf;
   if (!beatSwap) lastBeatFit = null;
 }
 
 /** 探针看:上一拍的换帧取舍 */
 export function beatSwapDebug() {
-  return { on: beatSwap, swapMs: beatSwapMs, last: lastBeatFit, ...beatStats };
+  return { on: beatSwap, swapMs: beatSwapMs, perLayer: !!beatCostOf, knownSizes: layerSizes.size, last: lastBeatFit, ...beatStats };
 }
 
 /** 这几张卡从上到下的顺序:轨道按项目里的先后(第一条在最上面),同一轨道里后面的片段盖在前面的上面 */
@@ -286,8 +309,11 @@ export function topDownOrder(project: Project, clipIds: Iterable<string>): strin
 function applyBeatBudget(head: Playhead, picks: Map<string, Pick>): Map<string, Pick> {
   if (!beatSwap || !head.playing || !picks.size) return picks;
   const occupiedMs = Math.max(0, Number(occupiedAt(head.t)) || 0);
-  const fit = fitBeatSwaps({ fps: head.project.fps || 30, occupiedMs, layers: topDownOrder(head.project, picks.keys()), swapMs: beatSwapMs });
-  lastBeatFit = { t: head.t, occupiedMs, deadMs: fit.deadMs, fit: fit.fit, swap: fit.swap, placeholder: fit.placeholder };
+  const fit = fitBeatSwaps({
+    fps: head.project.fps || 30, occupiedMs, layers: topDownOrder(head.project, picks.keys()), swapMs: beatSwapMs,
+    ...(beatCostOf ? { costOf: (id: string) => layerCost(head.project, id) } : {}),
+  });
+  lastBeatFit = { t: head.t, occupiedMs, deadMs: fit.deadMs, fit: fit.fit, usedMs: fit.usedMs, swap: fit.swap, placeholder: fit.placeholder };
   if (!fit.placeholder.length) return picks;
   const out = new Map(picks);
   for (const id of fit.placeholder) out.delete(id);
@@ -651,6 +677,7 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   base.mounted = next;
   base.needsReset = false;
   base.lastSentAt = now;
+  noteLayerSizes(patch);
   try {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -705,6 +732,8 @@ export function resetSnapshotFeed(): void {
   stopSnapshotFeed();
   beatSwap = false;
   beatSwapMs = SWAP_MS;
+  beatCostOf = null;
+  layerSizes.clear();
   occupiedAt = () => 0;
   lastBeatFit = null;
   beatStats.deliveries = 0;

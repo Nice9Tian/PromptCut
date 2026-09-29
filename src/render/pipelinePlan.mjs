@@ -22,7 +22,7 @@
  *
  * 预算 `B = 1000 / fps × 0.7`（pinned 渲染 3：留 30% 给素材层、平面换帧和 React 本身）。
  * 先给每张活跃卡定一个每拍权重 `w`（见 `clipWeight`），再按 `w` **升序贪心**逐个加入轻管线，
- * 停止条件 `Σ w + 重卡数 × DEAD_MS > B`。升序贪心对「数量最多」是最优解，所以小卡、中卡
+ * 停止条件 `Σ w + Σ 各重卡的固定成本 > B`（桌面每张 `DEAD_MS`）。升序贪心对「数量最多」是最优解，所以小卡、中卡
  * 先进、重卡被挤出去；全是重卡时轻管线可能一张都没有。
  *
  * Σ 里装的是 `w` 不是裸的 `stepMs` —— 否则几张 (b) 档卡会同时判轻，这一拍的真实成本是预算的
@@ -145,7 +145,7 @@ export function clipWeight(record, frameMode, fps, tuningOrOverrides) {
  * @param {any} project 项目（只读 `tracks[].clips[]` 的 `id` / `cardId` / `nodeId` / `start` / `end`）
  * @param {any[]} costs K1 的成本记录（`GET /api/data/costs` 回的那一份，已按当前 device / mode 过滤）
  * @param {number} fps 项目帧率
- * @param {object} [opts] `deadMs`（只有 L4 换成实测换帧成本）、`tuning`（覆盖值或已解析的一份）、
+ * @param {object} [opts] `deadMs`（只有 L4 换成实测换帧成本：数字每张一样，函数按片段取）、`tuning`（覆盖值或已解析的一份）、
  *   `identityKeys` / `frameModes`（片段 → 成本记录的索引，见 `clipCostIndex`）、
  *   `lowMemoryLight`（低内存档界限搜索判轻的卡的 identityKey 集合；给了就不看成本记录与声明，
  *   集合里的卡在每个位置都判轻、其余每个位置都判重，`src/render/boundarySearch.mjs`）、
@@ -156,7 +156,18 @@ export function planPipelines(project, costs, fps, opts = {}) {
   const rate = Math.max(1, Number(fps) || 30);
   // resolveTuning 是幂等的（范围内的值原样留着），所以已经解析过的一份再进来一次也不变
   const tuning = resolveTuning(opts.tuning);
-  const deadMs = Number.isFinite(Number(opts.deadMs)) ? Number(opts.deadMs) : DEAD_MS;
+  /*
+   * 每张重卡每拍的固定成本。数字:每张一样(桌面 `DEAD_MS`,在线旧调用的 `swapMs`);
+   * 函数:按片段各取各的(在线按卡种的换帧成本,`beatSwap.mjs` 的 `SWAP_MS_BY_KIND`),给不出正数的按 `DEAD_MS`。
+   */
+  const deadFn = typeof opts.deadMs === 'function' ? opts.deadMs : null;
+  const deadUniform = !deadFn && Number.isFinite(Number(opts.deadMs)) ? Number(opts.deadMs) : DEAD_MS;
+  const deadOf = (clipId) => {
+    if (!deadFn) return deadUniform;
+    let v;
+    try { v = Number(deadFn(clipId)); } catch { v = NaN; }
+    return Number.isFinite(v) && v >= 0 ? v : DEAD_MS;
+  };
   const B = budgetOf(rate);
 
   const clips = cardClipsOf(project);
@@ -201,13 +212,15 @@ export function planPipelines(project, costs, fps, opts = {}) {
 
     const light = new Set();
     let sum = 0;
-    for (const clip of candidates) {
+    // 装进第 i 张之后还剩的重卡:钉死的那些 + 排在它后面的候选。每张各计自己的固定成本(旧的「重卡数 × deadMs」是每张一样时的特例)
+    const pinnedDead = active.filter((clip) => weights.get(clip.id).pinned).reduce((acc, clip) => acc + deadOf(clip.id), 0);
+    const restDead = new Array(candidates.length + 1).fill(0);
+    for (let i = candidates.length - 1; i >= 0; i--) restDead[i] = restDead[i + 1] + deadOf(candidates[i].id);
+    for (const [i, clip] of candidates.entries()) {
       // 低内存档按卡判轻重,判轻的不受预算挤出
       if (lowLight) { light.add(clip.id); continue; }
       const next = sum + weights.get(clip.id).w;
-      // 装进去之后还剩几张重卡：钉死的那些 + 还没装进轻管线的候选
-      const heavyCount = pinnedCount + (candidates.length - light.size - 1);
-      if (next + heavyCount * deadMs > B) break;   // 装不下就停：后面的只会更贵
+      if (next + pinnedDead + restDead[i + 1] > B) break;   // 装不下就停：后面的只会更贵
       sum = next;
       light.add(clip.id);
     }
