@@ -35,7 +35,9 @@
  *     - 图标与沙漏在屏幕上的大小(见上面 4～8 秒那几段);
  *     - 另一成员(乙)页面一打开就每 100 ms 采样一次,直到快照贴上:有层的 u、s1 任何一次采样都没有图标、没有徽标;
  *       没层的 s2、s3 先可以是沙漏,层表取到之后才是图标加徽标;
- *     - 甲、乙两页的测量(常驻探针)从头到尾没测过同步卡片段,测量门按「卡片源码同步完」开。
+ *     - 甲、乙两页的测量(常驻探针)从头到尾没测过同步卡片段,测量门按「卡片源码同步完」开;
+ *     - 未知卡片 ouc-x(两边都没有定义)从头到尾没被测过,不在清单计划里;低内存档的补渲清单也没有它;
+ *     - 乙在页面里点「首页」、加入另一个带同步卡的项目(丁先摆好片段):测量门按新连接等卡片源码同步完,新项目的同步卡没被测过。
  *   低内存档(仿手机):`__pcBackfill()` 在等的片段含 s3;舞台上 u、s1 贴小尺寸(`px/` 请求 > 0),s3 是图标。
  * 不打印口令;结果最后一行是一行 JSON(`ok`、`fails`、各项数字),截图在 --out。
  */
@@ -192,8 +194,8 @@ const PROJECT_PW = `pw-${randomBytes(6).toString('hex')}`;
 const made = await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
 
 /** 凭证连接直接向托管端发请求(探针替渲染节点写层表与段清单、替桌面版写卡片源码) */
-async function wsAsCreator() {
-  const protocols = await buildAuthProtocols({ base: DOC_DIRECT, projectId: made.projectId, username: creator.username, deviceId: 'ouc-probe-node-01', deviceName: 'probe-node', as: 'creator', password: creator.password, role: 'page' });
+async function wsAsCreator(projectId = made.projectId) {
+  const protocols = await buildAuthProtocols({ base: DOC_DIRECT, projectId, username: creator.username, deviceId: 'ouc-probe-node-01', deviceName: 'probe-node', as: 'creator', password: creator.password, role: 'page' });
   const ws = new WebSocket(DOC_DIRECT.replace(/^http/, 'ws'), protocols);
   await new Promise((resolve, reject) => { ws.addEventListener('open', resolve); ws.addEventListener('error', reject); });
   const ask = (msg) => new Promise((resolve) => {
@@ -231,10 +233,11 @@ async function typeInto(page, sel, text) {
   await page.keyboard.press('Backspace');
   if (text) await page.type(sel, text, { delay: 5 });
 }
-async function join(page, username) {
-  await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+/** 加入共享项目;`reload: false` 时不刷新页面(已经在开始页上,比如在页面里点了「首页」) */
+async function join(page, username, name = NAME, { reload = true } = {}) {
+  if (reload) await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto(page, '[data-pc="join-name"]', NAME);
+  await typeInto(page, '[data-pc="join-name"]', name);
   await typeInto(page, '[data-pc="join-username"]', username);
   await typeInto(page, '[data-pc="join-password"]', PROJECT_PW);
   await page.click('[data-pc="join-submit"]');
@@ -567,6 +570,7 @@ try {
     const d = await pg.evaluate(() => { const x = window.__pcPreviewDiag?.(); return x ? { probed: x.probeRun?.probed ?? null, gate: x.measureGate ?? null } : null; });
     n[`measure${label}`] = d;
     check(d && Array.isArray(d.probed) && !d.probed.some((e) => synIds.includes(e.clipId)), `${label === 'A' ? '甲' : '乙'}:测量从没测过同步卡片段`, d);
+    check(d && Array.isArray(d.probed) && !d.probed.some((e) => e.clipId === ID.x), `${label === 'A' ? '甲' : '乙'}:测量从没测过未知卡片 ouc-x`, d);
     check(d?.gate?.reason === 'synced', `${label === 'A' ? '甲' : '乙'}:测量门在卡片源码第一次同步完时开`, d?.gate);
   }
 
@@ -603,6 +607,51 @@ try {
   }
   await store(A, `S.actions.seek(1); return true;`);
 
+  /* ------------------------------------------------ 换到另一个带同步卡的项目:测量门重新关上,同步卡没被测过 */
+  {
+    const NAME2 = `ouc2-${stamp}`;
+    const made2 = await createSharedProject({ base: DOC_DIRECT, name: NAME2, mode: 'free', creator, password: PROJECT_PW });
+    const node2 = await wsAsCreator(made2.projectId);
+    const SYNCED2_ID = 'probe-synced-card-b';
+    const put2 = await node2.ask({ type: 'content.put', kind: 'card-source', key: `src/cards/user/${SYNCED2_ID}.tsx`,
+      body: SYNCED_SOURCE.replaceAll(SYNCED_ID, SYNCED2_ID).replace(SYNCED_NAME, '探针同步卡乙') });
+    check(put2.type === 'content.stored', '项目二:创建者写卡片源码', put2);
+    // 丁先进项目二摆好同步卡片段(乙换过来时项目里已经有它们)
+    const D2 = await newPage('丁');
+    await join(D2, '丁', NAME2);
+    const setup2 = await store(D2, `
+      S.actions.editCardProject((p) => ({ ...p, duration: Math.max(p.duration, 4),
+        tracks: [{ id: 'ouc2-t', name: '序列', clips: [{ id: 'ouc2-s', cardId: args[0], start: 0, end: 4, params: {}, frame: { x: 0, y: 0, w: 640, h: 360 } }] }, ...p.tracks] }));
+      return { projectId: S.getState().project.id };`, SYNCED2_ID);
+    await sleep(2500);
+    const gateBefore = await B.evaluate(() => window.__pcPreviewDiag?.()?.measureGate ?? null);
+    // 乙在页面里换项目:点「首页」回开始页,再用同一张表单加入项目二(不刷新页面,测量门的状态接着用)
+    await B.evaluate(() => { [...document.querySelectorAll('button')].find((b) => b.title === '首页')?.click(); });
+    await join(B, '乙', NAME2, { reload: false });
+    const sw = {};
+    sw.label = await until('乙:项目二的同步卡认出真名', async () => {
+      const t = await timelineState(B, ['ouc2-s']);
+      return t?.['ouc2-s']?.label === '探针同步卡乙' ? t['ouc2-s'] : null;
+    }, 30_000);
+    /*
+     * 门按连接算:换过来之后,要么问门时发现新连接还没同步完、重新关上(holds 加一)再等它同步完开门;要么项目二的卡片源码
+     * 在问门之前就同步完了(门开着,记下为新连接开过)。两种都满足「新项目的卡片源码同步完之前不测」,`links` 都加一。
+     */
+    sw.gate = await until('乙:测量门为项目二的连接开过(卡片源码同步完)', async () => {
+      const g = await B.evaluate(() => window.__pcPreviewDiag?.()?.measureGate ?? null);
+      return g && g.links > (gateBefore?.links ?? 0) && g.state === 'open' && g.confirmedAt > (gateBefore?.confirmedAt ?? 0) ? g : null;
+    }, 30_000);
+    sw.gateLast = await B.evaluate(() => window.__pcPreviewDiag?.()?.measureGate ?? null).catch(() => null);
+    await sleep(3000);
+    sw.probed = await B.evaluate(() => window.__pcPreviewDiag?.()?.probeRun?.probed ?? null);
+    sw.gateBefore = gateBefore;
+    sw.setup2 = setup2;
+    n.switchProject = sw;
+    check(sw.gate && sw.gate.reason === 'synced' && sw.gate.links > (gateBefore?.links ?? 0), '乙换到项目二:测量门等项目二的卡片源码同步完(按新连接开门)', { gate: sw.gate, before: gateBefore });
+    check(Array.isArray(sw.probed) && !sw.probed.some((e) => e.clipId === 'ouc2-s'), '乙换到项目二:同步卡片段没被测过', sw.probed);
+    node2.close();
+  }
+
   // 给 s2 补层与清单:几秒内图标换成快照、徽标撤掉
   L.s2 = makeLayer(ID.s2, '#7e22ce', setup.fps, count);
   await writeManifests(node, L.s2);
@@ -617,6 +666,14 @@ try {
   if (n.after) check(n.after.ms < 15_000, 's2:几秒内换上', n.after.ms);
   await shot(A, 'normal-2-after-s2-layer');
   n.stageShot2 = await stageShot(A, 'normal-2-stage');
+  // 未知卡片 ouc-x 从头到尾:没被测过、不在清单计划里(甲、乙)
+  for (const [label, pg] of [['甲', A], ['乙', B]]) {
+    const d = await pg.evaluate(() => ({ probed: window.__pcPreviewDiag?.()?.probeRun?.probed ?? null, plan: window.__pcPlanPublisher?.()?.lastClips ?? null,
+      prerender: null })).catch(() => null);
+    n[`unknownX${label === '甲' ? 'A' : 'B'}`] = d;
+    check(d && Array.isArray(d.probed) && !d.probed.some((e) => e.clipId === ID.x), `${label}:最后核一遍,未知卡片 ouc-x 从没被测过`, d);
+    check(d && !(d.plan ?? []).includes(ID.x), `${label}:未知卡片 ouc-x 不在清单计划里`, d?.plan);
+  }
   n.errors = A.errors.slice(0, 5);
   check(A.errors.length === 0, '普通档页面没有页面错误(没有定义的同步卡沿线不崩)', n.errors);
   out.normal = n;
@@ -633,6 +690,7 @@ try {
   }, 120_000);
   check(lm.backfill?.waiting?.includes(ID.s3), '低内存档:__pcBackfill 的缺口含没有层的同步卡 s3', lm.backfill);
   check(!(lm.backfill?.waiting ?? []).includes(ID.u) && !(lm.backfill?.waiting ?? []).includes(ID.s1), '低内存档:有层的 u、s1 不进补渲', lm.backfill);
+  check(!(lm.backfill?.waiting ?? []).includes(ID.x), '低内存档:未知卡片 ouc-x 不在补渲清单里', lm.backfill);
   await store(P, `S.actions.seek(1.5); return true;`);
   lm.stage = await until('低内存档舞台:u、s1 贴小尺寸,s3 是图标', async () => {
     const s = await stageState(P, [ID.u, ID.s1, ID.s3, ID.x]);
@@ -669,5 +727,7 @@ say('result', { ok: out.ok, fails: fails.length });
 const sizeOf = (r) => r ? { layout: r.layout, reason: r.reason, screen: r.screen, clipScreen: r.clipScreen, textShown: r.textShown } : null;
 console.log(JSON.stringify({ ok: out.ok, fails, icon: out.normal.icon ?? null,
   sizes: { column_s2: sizeOf(out.normal.icon), icon_s4: sizeOf(out.normal.geom?.s4), icon_s5: sizeOf(out.normal.geom?.s5), row_s6: sizeOf(out.normal.geom?.s6), hourglass_s7: sizeOf(out.normal.geom?.s7Glass) },
-  dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null }, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, lowmem: { backfill: out.lowmem.backfill, requests: out.lowmem.requests }, assetRequests: out.assetRequests }));
+  dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null },
+  switchProject: out.normal.switchProject ? { gate: out.normal.switchProject.gate, gateBefore: out.normal.switchProject.gateBefore, gateLast: out.normal.switchProject.gateLast, probed: out.normal.switchProject.probed } : null,
+  unknownX: { a: out.normal.unknownXA ?? null, b: out.normal.unknownXB ?? null }, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, lowmem: { backfill: out.lowmem.backfill, requests: out.lowmem.requests }, assetRequests: out.assetRequests }));
 process.exit(out.ok ? 0 : 1);

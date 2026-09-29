@@ -238,8 +238,10 @@ test("MG-07 按连接算:换了连接重新关上,等新连接的卡片源码同
     // 门开着时新连接的结果先到(还没人问门):记下为它开的,之后不再关
     const L5 = { id: 5 };
     link = L5;
+    const linksBefore = G.measureGateDiag().links;
     G.releaseMeasureGate(true, L5);
     assert.equal(G.measureGateOpen(), true, "新连接已经同步完才问门:不关");
+    assert.equal(G.measureGateDiag().links, linksBefore + 1, "记下门为新连接开过");
   } finally {
     delete globalThis.__pcOnlinePage;
     G.resetMeasureGate();

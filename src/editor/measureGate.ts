@@ -29,7 +29,7 @@ let linkOf: (() => unknown) | null = null;
 let openFor: unknown = null;
 let heldFor: unknown = null;
 let maxMs = MEASURE_GATE_MAX_MS;
-const diag = { heldAt: null as number | null, openedAt: null as number | null, reason: null as MeasureGateReason | null, holds: 0 };
+const diag = { heldAt: null as number | null, openedAt: null as number | null, reason: null as MeasureGateReason | null, holds: 0, links: 0, confirmedAt: null as number | null };
 /** 单测可以换掉计时与时钟 */
 let clock: { now: () => number; setTimer: (fn: () => void, ms: number) => Timer; clearTimer: (t: Timer) => void } = {
   now: () => Date.now(),
@@ -47,7 +47,9 @@ function open(reason: MeasureGateReason, link: unknown = currentLink() ?? heldFo
   state = "open";
   if (timer !== null) clock.clearTimer(timer);
   timer = null;
+  if (link !== null && link !== openFor) diag.links++;
   openFor = link;
+  if (reason === "synced" || reason === "failed") diag.confirmedAt = clock.now();
   diag.openedAt = clock.now();
   diag.reason = reason;
   const list = waiters;
@@ -101,7 +103,12 @@ export function holdMeasureForCardSources(ms: number = MEASURE_GATE_MAX_MS): voi
 export function releaseMeasureGate(ok: boolean, link?: unknown): void {
   if (link !== undefined && linkOf && link !== currentLink()) return;
   if (state === "open") {
-    if (link !== undefined && diag.reason !== "desktop") openFor = link;
+    // 门开着时新连接的卡片源码先同步完了(还没人问门):记下为它开的,之后不再为它关
+    if (link !== undefined && diag.reason !== "desktop") {
+      if (link !== null && link !== openFor) diag.links++;
+      openFor = link;
+      diag.confirmedAt = clock.now();
+    }
     return;
   }
   if (state === "unset") state = "held";
@@ -121,9 +128,12 @@ export function whenMeasureGateOpen(): Promise<void> {
   return new Promise((resolve) => { waiters.push(resolve); });
 }
 
-/** 诊断、探针用(`holds`:关过几次门,换了连接重新关一次加一) */
+/**
+ * 诊断、探针用。`holds`:关过几次门(换了连接、问门时新连接还没同步完,重新关一次加一);`links`:门为几条连接开过
+ * (开门、或门开着时新连接先同步完,都算);`confirmedAt`:最近一次卡片源码同步有结果的时刻。
+ */
 export function measureGateDiag() {
-  return { state, heldAt: diag.heldAt, openedAt: diag.openedAt, reason: diag.reason, holds: diag.holds,
+  return { state, heldAt: diag.heldAt, openedAt: diag.openedAt, reason: diag.reason, holds: diag.holds, links: diag.links, confirmedAt: diag.confirmedAt,
     waitedMs: diag.openedAt !== null && diag.heldAt !== null ? diag.openedAt - diag.heldAt : null };
 }
 
@@ -141,6 +151,8 @@ export function resetMeasureGate(next?: Partial<typeof clock>): void {
   diag.openedAt = null;
   diag.reason = null;
   diag.holds = 0;
+  diag.links = 0;
+  diag.confirmedAt = null;
   clock = {
     now: next?.now ?? (() => Date.now()),
     setTimer: next?.setTimer ?? ((fn, ms) => setTimeout(fn, ms)),
