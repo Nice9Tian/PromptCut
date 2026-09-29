@@ -34,6 +34,8 @@
  *   --media-delay-ms <毫秒>  本机替身里素材服务每个请求先压这么久（应用层模拟在线站点的网络往返，排查每帧耗时用）
  *   --no-a10      不跑 M7-A10（它要重启 A 的编辑器、关页面、等 30 s）
  *   --headful     node 角色用有头 Chrome（排障）
+ *
+ * `PC_CHROME_ARGS` 只把参数原样透传给探针起的 Chrome(典型用途:云端 Linux 以 root 运行要 `--no-sandbox`);不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则对远端站点的探针在证书有问题时照样通过,掩盖真问题。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync } from 'node:child_process';

@@ -54,3 +54,18 @@ test("PV-04 只认出一部分控件:照常画认出的,下面一行提示其余
   assert.equal(V.paramsPartialText({ name: "b", defaults: {}, controls: [{ key: "t", label: "t", type: "text" }] }), null, "能跑的定义");
   assert.equal(V.paramsPartialText(undefined), null);
 });
+
+test("PV-05 没认出的控件逐条说明:哪一条、为什么;超过 5 条说「等 N 条」;没有逐条记录回 null", () => {
+  const base = { name: "同步", defaults: {}, controls: [{ key: "a", label: "甲", type: "text" }], controlsIncomplete: true };
+  assert.equal(V.paramsSkippedText({ ...base }), null, "旧页面没有逐条记录");
+  assert.equal(V.paramsSkippedText({ ...base, controlsIncomplete: false, skippedControls: [{ reason: "x" }] }), null);
+  const one = V.paramsSkippedText({ ...base, skippedControls: [{ key: "side", label: "位置", type: "select", reason: "下拉缺选项(options)" }] });
+  assert.equal(one, "没认出的参数:「位置」(side):下拉缺选项(options)");
+  const mixed = V.paramsSkippedText({ ...base, skippedControls: [{ key: "k", reason: "r1" }, { label: "只有标签", reason: "r2" }, { reason: "展开的 X 取不到:内容库里没有 ./x 这个文件" }] });
+  assert.equal(mixed, "没认出的参数:k:r1;「只有标签」:r2;一个控件:展开的 X 取不到:内容库里没有 ./x 这个文件");
+  const many = V.paramsSkippedText({ ...base, skippedControls: Array.from({ length: 7 }, (_, i) => ({ key: `k${i}`, reason: "r" })) });
+  assert.match(many, /k4:r;等 7 条$/);
+  assert.ok(!many.includes("k5"));
+  // 一个都没认出时,空白文案照旧,逐条说明另起一行(ParamsForm 画在它下面)
+  assert.equal(V.paramsEmptyText({ ...base, controls: [], skippedControls: [{ reason: "r" }] }), P.onlineUnsupported("修改这张卡的参数"));
+});

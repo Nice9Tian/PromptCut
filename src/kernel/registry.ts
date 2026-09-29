@@ -123,6 +123,16 @@ export interface SyncedUserCard {
   controls?: Control[];
   /** 有控件没认出来(或整个 `controls` 不是字面量):参数面板据此说明「在线改不了」 */
   controlsIncomplete?: boolean;
+  /** 被跳过的控件逐条(认得出的 key / label / type 与原因):参数面板说明是哪一条 */
+  skippedControls?: SkippedControl[];
+}
+
+/** 同步来的卡里没认出来的一个控件(`cardSourceParse` 的 `skippedControls`) */
+export interface SkippedControl {
+  key?: string;
+  label?: string;
+  type?: string;
+  reason: string;
 }
 
 /**
@@ -136,6 +146,8 @@ export interface SyncedCardView {
   defaults: Record<string, unknown>;
   controls: Control[];
   controlsIncomplete: boolean;
+  /** 被跳过的控件逐条(没有时为空表) */
+  skippedControls: SkippedControl[];
   /** 恒为 true:看的人据此知道这是同步来的视图,不是能跑的定义 */
   synced: true;
 }
@@ -150,7 +162,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 
 /** 条目的签名(判「内容没变」) */
 function entrySig(e: SyncedUserCard): string {
-  return JSON.stringify([e.name, e.source ?? null, e.description ?? null, e.defaults ?? null, e.controls ?? null, !!e.controlsIncomplete]);
+  return JSON.stringify([e.name, e.source ?? null, e.description ?? null, e.defaults ?? null, e.controls ?? null, !!e.controlsIncomplete, e.skippedControls ?? null]);
 }
 
 /**
@@ -167,6 +179,8 @@ export function setSyncedUserCards(entries: Iterable<SyncedUserCard>): boolean {
       ...(isRecord(e.defaults) ? { defaults: e.defaults } : {}),
       ...(Array.isArray(e.controls) ? { controls: e.controls.filter((c) => isRecord(c) && typeof c.key === "string" && typeof c.type === "string") } : {}),
       ...(e.controlsIncomplete ? { controlsIncomplete: true } : {}),
+      ...(Array.isArray(e.skippedControls) && e.skippedControls.length
+        ? { skippedControls: e.skippedControls.filter((c) => isRecord(c) && typeof c.reason === "string") } : {}),
     });
   }
   const same = next.size === synced.size && [...next].every(([id, e]) => {
@@ -181,7 +195,8 @@ export function setSyncedUserCards(entries: Iterable<SyncedUserCard>): boolean {
     if (prev && prevView && entrySig(prev) === entrySig(e)) { nextViews.set(id, prevView); continue; }
     nextViews.set(id, Object.freeze({
       id, name: e.name, ...(e.description !== undefined ? { description: e.description } : {}),
-      defaults: e.defaults ?? {}, controls: e.controls ?? [], controlsIncomplete: !!e.controlsIncomplete, synced: true as const,
+      defaults: e.defaults ?? {}, controls: e.controls ?? [], controlsIncomplete: !!e.controlsIncomplete,
+      skippedControls: e.skippedControls ?? [], synced: true as const,
     }));
   }
   synced = next;

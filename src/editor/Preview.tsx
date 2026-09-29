@@ -26,7 +26,7 @@ import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
 import { currentReadyIndex, deliverSnapshots, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
-import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
+import { notePlayFrame, notePlayRunStart, playingSwapTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
@@ -51,7 +51,10 @@ import { pageEnvironment } from "./pageEnvironment.mjs";
 import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.mjs";
 import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
+import { layerSwapMs } from "./swapCost";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
+import { createStageWatch, type StageWatch } from "../online/stageWatch";
+import { builtinSourceExports } from "../cards/builtinSourceExports";
 import { pageL2 } from "../online/l2";
 import { l2CostBackend } from "../online/l2Costs";
 import { createPlanPublisher } from "../online/planPublisher";
@@ -238,6 +241,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const hostCapsRef = useRef<Record<StageId, HostCapabilities | null>>({ A: null, B: null });
   /** 在线双舞台这一轮握上手的舞台(C10 契约第 2 节:两个都握上才算成;超时算失败,退回同源单舞台) */
   const handshookRef = useRef(new Set<StageId>());
+  /** 在线双舞台握手之后的看守(心跳断 → 重载那一台 → 重载也握不回来就退回单舞台;`src/online/stageWatch.ts`) */
+  const stageWatchRef = useRef<StageWatch | null>(null);
   /**
    * 下面那一堆(拖动、命中、心跳、节拍)问的都是**可见舞台**。
    *
@@ -332,13 +337,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   }, [lowMem]);
   /*
    * L4(C10 契约第 6 节、第 18 节第 1 条):在线普通档没有流,重层每拍换一次 HTML 快照 —— 播放中的投递不受 33 ms 节流;
-   * 换帧成本 `swapMs` 进每拍预算,分派时每张重卡每拍的固定成本也换成它(两边同一个预算)。
+   * 换帧成本进每拍预算,分派时每张重卡每拍的固定成本也换成它(两边同一个预算)。
    */
   useEffect(() => {
     const on = ONLINE && !lowMem;
-    setBeatSwap(on, { swapMs: SWAP_MS, occupied: lightCostAt });
-    setPlanDeadMs(on ? SWAP_MS : null);
-    return () => { setBeatSwap(false); setPlanDeadMs(null); };
+    // 每层的换帧成本按卡种取(swap-tuning 实测,`beatSwap.mjs` 的 `SWAP_MS_BY_KIND`);认不出卡种的按缺省 `SWAP_MS`
+    setBeatSwap(on, { swapMs: SWAP_MS, occupied: lightCostAt, costOf: on ? layerSwapMs : null });
+    setPlanDeadMs(on ? SWAP_MS : null, on ? layerSwapMs : null);
+    return () => { setBeatSwap(false, { costOf: null }); setPlanDeadMs(null); };
   }, [lowMem]);
   /* C10 契约第 3 节:在线普通档的成本记录存进 L2 的 `costs` 表(`mode=build`,关掉再开不重测) */
   useEffect(() => {
@@ -595,6 +601,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         const client = createStageRpc(win, e.origin && e.origin !== "null" ? e.origin : stageTargetOrigin(id));
         handshookRef.current.add(id);
         if (ONLINE && dualRef.current && handshookRef.current.has("A") && handshookRef.current.has("B")) markStageHandshake("ok");
+        stageWatchRef.current?.ready(id);
         rpcRef.current[id] = client;
         const caps = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
         hostCapsRef.current[id] = caps;
@@ -637,6 +644,48 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       if (got.length < 2) markStageHandshake("failed", `握上手的舞台:${got.join("、") || "无"}`);
     }, STAGE_HANDSHAKE_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
+  }, [dual]);
+
+  /*
+   * 握手之后又断(C10 契约第 2 节「握手之后又断」〔裁〕):已握手的舞台心跳断了(卡死、跨源 iframe 的渲染进程崩了),
+   * 先照原来的做法整页重载那一台;重载后 20 秒内没握回来(或反复断),走首次握不上手的同一条路退回同源单舞台,
+   * 退回之后看守作废、不再重载(`markStageHandshake("failed")` 之后 `dual` 变假,本 effect 收摊)。
+   */
+  useEffect(() => {
+    if (!ONLINE || !dual) return;
+    const frames: Record<StageId, React.RefObject<HTMLIFrameElement | null>> = { A: frameARef, B: frameBRef };
+    const watch = createStageWatch({
+      ids: STAGE_IDS,
+      ping: (id) => rpcRef.current[id]?.size() ?? null,
+      reload: (id, reason) => {
+        const frame = frames[id].current;
+        const client = rpcRef.current[id];
+        if (client) {
+          releaseStageClient(client);
+          client.dispose();
+          rpcRef.current[id] = null;
+          hostCapsRef.current[id] = null;
+        }
+        console.warn(`[preview] 舞台 ${id} 断开(${reason}),整页重载它`);
+        if (frame) frame.src = frame.src;
+      },
+      fallback: (reason) => {
+        console.warn(`[preview] ${reason},退回同源单舞台`);
+        markStageHandshake("failed", reason);
+      },
+      hidden: () => typeof document !== "undefined" && document.hidden,
+    });
+    stageWatchRef.current = watch;
+    // 这一轮已经握过手的舞台(effect 晚于握手跑到时)照样看守
+    for (const id of STAGE_IDS) if (rpcRef.current[id]) watch.ready(id);
+    const w = window as unknown as { __pcStageWatch?: () => unknown };
+    w.__pcStageWatch = () => ({ A: watch.status("A"), B: watch.status("B"), reloads: watch.reloads, fellBack: watch.fellBack, handshake: onlineStageState().handshake, reason: onlineStageState().reason });
+    return () => {
+      watch.dispose();
+      if (stageWatchRef.current === watch) stageWatchRef.current = null;
+      // 退回之后留着观察口(探针核「退回后不再重载」),只把看守换成已作废的那一份
+      if (!watch.fellBack) delete w.__pcStageWatch;
+    };
   }, [dual]);
 
   /*
@@ -861,6 +910,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     holdMeasureForCardSources();
     const sources = new OnlineCardSources({
       request: docRequest, linkKey,
+      // 用户卡源码从内置模块引进来的控件、默认值:用页面自己带着的那份(`src/cards/builtinSourceExports.ts`)
+      builtins: builtinSourceExports,
       onFirstSettled: (ok, link) => releaseMeasureGate(ok, link),
     });
     const push = () => {
@@ -1281,10 +1332,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         /*
          * K3(b) 的 `vtOk = false` 轻卡:播放头刚进入它时整场景在后台补跑后互换。
          * 每张卡这一轮播放只发起一次 —— 补跑一次要几百毫秒,每拍发一次只会互相掐。
+         * 只给从它中间开始播放的卡:这一轮播放中逐拍走过挂载帧、自然进场的不发起(`playingSwapTargets`)。
+         * 拍序号先记下(连续、重复还是断开),再算目标。
          */
+        notePlayFrame(e.sec);
         // 只有双舞台才有后台舞台可换;在线页面的单舞台、低内存档都不走(c10a 第 8 节「不追活渲」)
         if (dualRef.current && !lowMemRef.current && !swapInFlight()) {
-          const targets = playingCatchUpTargets(getState().project, e.sec).filter((id) => !swapTriedRef.current.has(id));
+          const targets = playingSwapTargets(getState().project, e.sec).filter((id) => !swapTriedRef.current.has(id));
           if (targets.length) {
             for (const id of targets) swapTriedRef.current.add(id);
             void runPlayingSwap(targets);
@@ -1603,7 +1657,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
            */
           await syncProject("front", getState().project);
           if (!alive) return;
-          const reply = await s.play(playStartOf());
+          const from = playStartOf();
+          // 这一轮播放的起点:起播那一刻已经挂着的卡算「从中间开始」,之后逐拍挂上的算自然进场(播放态互换只给前者)
+          notePlayRunStart(from);
+          const reply = await s.play(from);
           if (!alive) return;
           // 首拍的到达间隔以 `play()` 回包时刻为起点(K4)
           if (reply.ok) lastFrameAtRef.current = performance.now();

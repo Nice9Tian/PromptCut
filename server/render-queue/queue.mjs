@@ -31,9 +31,16 @@
  *   不算发布（`producedAt`；`touchedAt` 照 F.1 仍管回收）。
  * - D9 nodeId 绑到 userId：节点记录在时，别的 userId 拿同一个 nodeId 报到回 forbidden。
  * - D10 `node.welcome` 回这个节点的 `envFingerprint`（浏览器的指纹由文档服务模块按页面报的原始值算好再交进来）。
+ *
+ * M7 D2 补充〔裁〕（`claude/queue-maint`，`REPORT-M7.md` 第 11 节第 1 行「页面只是忙也会被 D2 接手」）：
+ * - `node.welcome` 带 `activeIntervalMs`（`NODE_ACTIVE_INTERVAL_MS`）：告诉节点这个队列认 `node.active`；
+ * - `node.active { busy? }`：节点还在、在忙（页面在生成别的卡的快照、后台舞台在测量或补跑），不回包，只记 `activeAt`；
+ * - 锁记下最后一次为它产出（认领、续约、完成）的节点 `nodeId`。回包里的 `lockIdleMs` 改为「此刻减锁定方最后一次产出或
+ *   报忙」：那个节点**此刻连着**、指纹没变、报过 `node.active` 时，它的 `activeAt` 与 `producedAt` 取晚的；断开（含宽限期内）、
+ *   从没报过（旧页面）、或报忙停了，就只剩 `producedAt`，与改动之前相同。切分方的判定（`idleLockTakeover`）不用改。
  */
 import { randomUUID } from 'node:crypto';
-import { QUEUE_DEFAULTS } from './constants.mjs';
+import { QUEUE_DEFAULTS, NODE_ACTIVE_INTERVAL_MS } from './constants.mjs';
 import { makeMessage, parseInbound, lockKeyOf, priorityBand, prioritySummaryValue, isListPlan, NODE_TYPES, PUBLISHER_TYPES } from './messages.mjs';
 
 function resolveConstants(overrides) {
@@ -66,7 +73,10 @@ export function createRenderQueue(options = {}) {
    * 用对象本身而不是 connId 认「同一条连接」：connId 可能被新连接复用，认领记的是当时那条连接。
    */
   const conns = new Map();
-  /** 节点身份（跨连接）：nodeId → { nodeId, userId, profile, envFingerprint, capabilities, codeVersions, maxConcurrent, conn, disconnectedAt }（userId：M7 D9） */
+  /**
+   * 节点身份（跨连接）：nodeId → { nodeId, userId, profile, envFingerprint, capabilities, codeVersions, maxConcurrent, conn, disconnectedAt,
+   * activeAt, activeBusy }（userId：M7 D9；activeAt / activeBusy：M7 D2 补充，最后一次 `node.active` 的时刻与忙什么，没报过为 null）
+   */
   const nodes = new Map();
   /** 发布方身份（跨连接）：publisherId → { publisherId, conn, disconnectedAt } */
   const publishers = new Map();
@@ -75,9 +85,10 @@ export function createRenderQueue(options = {}) {
   /** 每项目 open + claimed 的任务数，给 MAX_TASKS_PER_PROJECT 用；done / failed 不计（P10） */
   const activeByProject = new Map();
   /**
-   * 卡片级指纹锁（F.1）：lockKey → { envFingerprint, source: 'claim' | 'lock' | 'takeover', since, touchedAt, producedAt, profile }。
+   * 卡片级指纹锁（F.1）：lockKey → { envFingerprint, source: 'claim' | 'lock' | 'takeover', since, touchedAt, producedAt, profile, nodeId }。
    * `producedAt` 与 `profile`（M7 D2）：锁定方最后一次产出（认领、续约、完成、card.lock）的时刻与它的 profile，回包的
-   * `lockIdleMs` / `lockedByProfile` 由它们算；不进 describe()。
+   * `lockIdleMs` / `lockedByProfile` 由它们算；`nodeId`（M7 D2 补充）：最后一次经认领、续约、完成为它产出的节点，
+   * 它此刻连着又在报忙（`node.active`）时锁不算闲置（见 lockLastActive）。三项都不进 describe()。
    * 同一把锁下只让一种环境的结果被产出、投递，页面贴的连续帧才不会混环境（设计 2.1「谁定指纹」）。
    * 只在内存里，和任务表一样随 epoch 作废：新实例的锁从空开始。
    */
@@ -351,15 +362,32 @@ export function createRenderQueue(options = {}) {
     return key !== null && typeof fp === 'string' && fp !== '' ? { key, fp } : null;
   }
 
-  function setLock(key, envFingerprint, source, profile = null) {
-    locks.set(key, { envFingerprint, source, since: at, touchedAt: at, producedAt: at, profile });
+  function setLock(key, envFingerprint, source, profile = null, nodeId = null) {
+    locks.set(key, { envFingerprint, source, since: at, touchedAt: at, producedAt: at, profile, nodeId });
   }
 
-  /** 锁定方又产出了（M7 D2）：认领、续约、完成、card.lock 都算；发布不算，只刷新 touchedAt（F.1） */
-  function produced(lock, profile = null) {
+  /**
+   * 锁定方又产出了（M7 D2）：认领、续约、完成、card.lock 都算；发布不算，只刷新 touchedAt（F.1）。
+   * 经节点产出的（认领、续约、完成）另记下那个节点（M7 D2 补充）；card.lock 不经节点，原来记的节点不动
+   */
+  function produced(lock, profile = null, nodeId = null) {
     lock.touchedAt = at;
     lock.producedAt = at;
     if (profile !== null) lock.profile = profile;
+    if (nodeId !== null) lock.nodeId = nodeId;
+  }
+
+  /**
+   * 锁定方最后一次「在」的时刻（M7 D2 补充〔裁〕）：最后一次产出，与最后为它产出的那个节点最后一次报忙（`node.active`）取晚的。
+   * 报忙只在那个节点此刻连着（`conn` 在，断开后的宽限期里不算）、指纹仍是锁上的指纹时才算：页面走了（断开、超时被收回）
+   * 与从没报过忙的旧页面都只看产出，同改动之前。
+   */
+  function lockLastActive(lock) {
+    let last = lock.producedAt;
+    const owner = lock.nodeId != null ? nodes.get(lock.nodeId) : undefined;
+    if (owner && owner.conn !== null && isLive(owner.conn) && owner.envFingerprint === lock.envFingerprint
+      && typeof owner.activeAt === 'number' && owner.activeAt > last) last = owner.activeAt;
+    return last;
   }
 
   /**
@@ -368,7 +396,7 @@ export function createRenderQueue(options = {}) {
    * 闲置超过 30 s、又还有没做完的才接手（语义「还缺帧、而锁定方已经有一段时间没有再产出」）。
    */
   function lockInfo(key, lock, { undone = false } = {}) {
-    const out = { lockedBy: lock.envFingerprint, lockIdleMs: Math.max(0, at - lock.producedAt), lockedByProfile: lock.profile ?? null };
+    const out = { lockedBy: lock.envFingerprint, lockIdleMs: Math.max(0, at - lockLastActive(lock)), lockedByProfile: lock.profile ?? null };
     if (undone) {
       let n = 0;
       for (const t of tasks.values()) {
@@ -561,7 +589,7 @@ export function createRenderQueue(options = {}) {
       // 同一身份的新连接取代旧连接：旧连接此后不再代表这个节点，也不再收广播
       if (node.conn && node.conn !== conn) { node.conn.nodeId = null; unwatch(node.conn); }
     } else {
-      node = { nodeId, userId: conn.principal.userId };
+      node = { nodeId, userId: conn.principal.userId, activeAt: null, activeBusy: null };
       nodes.set(nodeId, node);
     }
     Object.assign(node, {
@@ -601,7 +629,10 @@ export function createRenderQueue(options = {}) {
     }
     const outs = dropped.map((task) => abandon(task, { lastError: 'not-resumed' }));
 
-    emit(conn, 'node.welcome', { nodeId, envFingerprint: node.envFingerprint ?? null, resumed, lost: lost.map((l) => l.id) }, reqId);
+    // activeIntervalMs（M7 D2 补充）：这个队列认 `node.active`，节点忙着时按这个间隔报；旧队列不带，节点据此不发
+    emit(conn, 'node.welcome', {
+      nodeId, envFingerprint: node.envFingerprint ?? null, resumed, lost: lost.map((l) => l.id), activeIntervalMs: NODE_ACTIVE_INTERVAL_MS,
+    }, reqId);
     for (const l of lost) emit(conn, 'task.lease-lost', l);
     for (const out of outs) out.notify();
   }
@@ -900,8 +931,8 @@ export function createRenderQueue(options = {}) {
     let lockNotify = null;
     let dualNotify = null;
     if (lockId) {
-      if (lock) produced(lock, node.profile);
-      else lockNotify = changeLock(lockId.key, () => setLock(lockId.key, lockId.fp, 'claim', node.profile), task);
+      if (lock) produced(lock, node.profile, node.nodeId);
+      else lockNotify = changeLock(lockId.key, () => setLock(lockId.key, lockId.fp, 'claim', node.profile, node.nodeId), task);
       // M7 D1：这张卡归了这个指纹，切分方多出的另一份（dual）作废
       dualNotify = supersedeDual(lockId.key, lockId.fp);
     }
@@ -949,7 +980,7 @@ export function createRenderQueue(options = {}) {
     // M7 D2：续约也算锁定方还在产出（一段重卡在浏览器上要十几秒，产出中不该被判闲置）
     const lockId = lockIdOf(task);
     const lock = lockId ? locks.get(lockId.key) : undefined;
-    if (lock && lock.envFingerprint === lockId.fp) produced(lock, nodeOf(conn)?.profile ?? null);
+    if (lock && lock.envFingerprint === lockId.fp) produced(lock, nodeOf(conn)?.profile ?? null, conn.nodeId);
     emit(conn, 'task.renewed', { id: task.id, token: claim.token, leaseUntil: claim.leaseUntil }, reqId);
   }
 
@@ -965,7 +996,7 @@ export function createRenderQueue(options = {}) {
     const lock = lockId ? locks.get(lockId.key) : undefined;
     if (lock) {
       lock.touchedAt = at;
-      if (lock.envFingerprint === lockId.fp) produced(lock, nodeOf(conn)?.profile ?? null);
+      if (lock.envFingerprint === lockId.fp) produced(lock, nodeOf(conn)?.profile ?? null, conn.nodeId);
     }
     emit(conn, 'task.completed', { id: task.id }, reqId);
     // 没有订阅者时一条 task.done 也不发（F7.2）
@@ -1016,6 +1047,16 @@ export function createRenderQueue(options = {}) {
     if (dualNotify) dualNotify();
   }
 
+  /**
+   * `node.active`（M7 D2 补充〔裁〕）：节点还在、在忙。只记时刻与忙什么，不回包、不改任务与锁；
+   * 锁闲置怎么算见 lockLastActive。消息很频繁（每个忙着的页面每 10 s 一条），所以连 reqId 也不回。
+   */
+  function onNodeActive(conn, body) {
+    const node = nodeOf(conn);
+    node.activeAt = at;
+    node.activeBusy = body.busy ?? null;
+  }
+
   const HANDLERS = new Map([
     ['node.hello', onNodeHello],
     ['publisher.hello', onPublisherHello],
@@ -1028,6 +1069,7 @@ export function createRenderQueue(options = {}) {
     ['task.complete', onComplete],
     ['task.release', onRelease],
     ['task.fail', onFail],
+    ['node.active', onNodeActive],
   ]);
 
   // ---------- 对外接口 ----------
@@ -1167,6 +1209,8 @@ export function createRenderQueue(options = {}) {
           cardLockedRejects: rejects, throttled: C.PREFILTER && rejects > C.THROTTLE_REJECTS,
           // M7 第 7 节诊断：节点的用户（带设备）、指纹、此刻持有的认领数；票据之类一律不出现
           userId: n.userId ?? null, envFingerprint: n.envFingerprint ?? null, claims: claimsByNode.get(n.nodeId) ?? 0,
+          // M7 D2 补充：报过 node.active 的节点才有这两项（旧节点的 describe 形状不变）
+          ...(typeof n.activeAt === 'number' ? { activeAt: n.activeAt, activeBusy: n.activeBusy ?? null } : {}),
         };
       }),
       publishers: [...publishers.values()].sort((a, b) => byId(a.publisherId, b.publisherId)).map((p) => ({

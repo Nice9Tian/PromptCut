@@ -17,7 +17,22 @@ import { isExportMode } from "../../kernel/clock";
  *
  * 计时用 `__pcRealNow`（舞台把 `performance.now` 换成了虚拟时钟，用它会空转到死）。
  */
-function ProbeSlowCard({ params, t }: CardProps<{ burnMs: number; label: string }>) {
+/**
+ * `padNodes`:在橙块里多画这么多个小点(每个一个绝对定位的 `<span>`),只为把这一层的快照做大 —— 在线按拍换快照的
+ * 换帧成本按快照大小估(`src/render/beatSwap.mjs` 的 `swapCostOfSize`),`c10-browser-probe` 要一层「真的换不过来」的重层。
+ * 缺省 0:一个节点都不多,画面与快照和以前逐字相同。
+ */
+function PadDots({ n }: { n: number }) {
+  const dots = [];
+  for (let i = 0; i < n; i++) {
+    dots.push(
+      <span key={i} style={{ position: "absolute", left: 488 + (i % 20) * 15, top: 428 + Math.floor(i / 20) * 11, width: 6, height: 6, borderRadius: 3, background: "rgba(255,255,255,0.35)" }} />,
+    );
+  }
+  return <>{dots}</>;
+}
+
+function ProbeSlowCard({ params, t }: CardProps<{ burnMs: number; label: string; padNodes?: number }>) {
   const burn = Math.max(0, Number(params.burnMs) || 0);
   if (burn > 0) {
     const now = (window as unknown as { __pcRealNow?: () => number }).__pcRealNow ?? (() => Date.now());
@@ -38,11 +53,12 @@ function ProbeSlowCard({ params, t }: CardProps<{ burnMs: number; label: string 
       >
         {params.label}
       </div>
+      {Number(params.padNodes) > 0 ? <PadDots n={Math.min(2000, Math.floor(Number(params.padNodes)))} /> : null}
     </div>
   );
 }
 
-export const probeSlowCard: CardDef<{ burnMs: number; label: string }> = {
+export const probeSlowCard: CardDef<{ burnMs: number; label: string; padNodes?: number }> = {
   id: "probe-slow",
   name: "探针卡 · 可调成本",
   description: "K6 的判例:每次渲染烧掉 burnMs 毫秒(用 __pcRealNow 忙等),用来人为把一张卡的每拍成本拉高",
@@ -66,7 +82,7 @@ export const probeSlowCard: CardDef<{ burnMs: number; label: string }> = {
  * **只在舞台里、每个新时刻烧一次时间**(导出页 / 预渲染间里不烧;被抑制、t 冻住时的重渲染不烧):成本是给「舞台上活渲装不下」用的;预渲染间推一帧要渲好几次、
  * 推帧卡还要从入点推到目标帧,在那里也烧就会把预渲染拖到协议超时。画面与烧不烧无关。
  */
-function ProbeSlowSteppedCard(props: CardProps<{ burnMs: number; label: string }>) {
+function ProbeSlowSteppedCard(props: CardProps<{ burnMs: number; label: string; padNodes?: number }>) {
   // 每个新的时刻只烧一次:被抑制(t 冻住)时的重渲染不算这张卡在活渲
   const last = useRef<number | null>(null);
   const fresh = last.current !== (props.t ?? 0);
@@ -75,7 +91,7 @@ function ProbeSlowSteppedCard(props: CardProps<{ burnMs: number; label: string }
   return <ProbeSlowCard {...props} params={{ ...props.params, burnMs }} />;
 }
 
-export const probeSlowSteppedCard: CardDef<{ burnMs: number; label: string }> = {
+export const probeSlowSteppedCard: CardDef<{ burnMs: number; label: string; padNodes?: number }> = {
   ...probeSlowCard,
   id: "probe-slow-stepped",
   name: "探针卡 · 可调成本(推帧)",

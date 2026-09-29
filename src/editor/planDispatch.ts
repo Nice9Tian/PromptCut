@@ -52,6 +52,8 @@ let judged: PipelinePlan | null = null;
  * (`planPipelines` 的 `opts.deadMs`),与播放时 `beatSwap.mjs` 的 `fitBeatSwaps` 同一个数。null = 桌面的 `DEAD_MS`。
  */
 let deadMs: number | null = null;
+/** 每张重卡各自的换帧成本(宿主给:`swapCost.ts` 的 `layerSwapMs`,按卡种);null = 每张 `deadMs` */
+let deadMsOf: ((project: Project, clipId: string) => number) | null = null;
 /** 上一次真的发出去的那份表的序列化结果，用来省掉「没变还发一遍」 */
 let sentWire = "";
 let scheduled = false;
@@ -83,7 +85,9 @@ function recompute(): void {
   }
   const { identityKeys, frameModes } = clipIdentityOf(project);
   const fps = Math.max(1, project.fps || 30);
-  const dead = deadMs !== null ? { deadMs } : {};
+  const at = project;
+  const of = deadMsOf;
+  const dead = deadMs !== null ? { deadMs: of ? (clipId: string) => of(at, clipId) : deadMs } : {};
   /*
    * 两边都没有定义的卡片段(未知卡片)舞台不画:不当重卡、不进预渲染集合(桌面与在线一致;`knownCardsOnly`)。
    * 不去掉的话它们没有身份、没有成本记录,会按声明兜底判重,进清单计划与低内存档补渲。
@@ -206,11 +210,16 @@ export function planLowMemoryLight(): ReadonlySet<string> | null {
   return lowMemoryLight;
 }
 
-/** L4:在线普通档把分派的每拍重卡成本换成实测换帧成本(`null` 回到桌面的 `DEAD_MS`)。变了才重算重发 */
-export function setPlanDeadMs(ms: number | null): void {
+/**
+ * L4:在线普通档把分派的每拍重卡成本换成实测换帧成本(`null` 回到桌面的 `DEAD_MS`)。变了才重算重发。
+ * `of` 给了就按片段各取各的(按卡种,与播放时 `fitBeatSwaps` 的每层成本同一个数),`ms` 只作它给不出数时的兜底。
+ */
+export function setPlanDeadMs(ms: number | null, of: ((project: Project, clipId: string) => number) | null = null): void {
   const next = ms !== null && Number.isFinite(ms) && ms >= 0 ? ms : null;
-  if (next === deadMs) return;
+  const nextOf = next !== null ? of : null;
+  if (next === deadMs && nextOf === deadMsOf) return;
   deadMs = next;
+  deadMsOf = nextOf;
   schedule();
 }
 
@@ -240,6 +249,7 @@ export function resetPlanDispatch(): void {
   lowMemoryLight = null;
   judged = null;
   deadMs = null;
+  deadMsOf = null;
   project = null;
   costs = [];
   tuning = resolveTuning(null);

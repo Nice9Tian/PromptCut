@@ -22,8 +22,11 @@ export interface PipelinePlan {
 export type ClipIndex<V> = Readonly<Record<string, V>> | ReadonlyMap<string, V>;
 
 export interface PlanPipelinesOptions {
-  /** 一个重卡每拍贴一帧死素材的固定成本（ms）。缺省 `DEAD_MS`；只有 L4 换成实测换帧成本。 */
-  deadMs?: number;
+  /**
+   * 一个重卡每拍贴一帧死素材的固定成本（ms）。缺省 `DEAD_MS`；只有 L4 换成实测换帧成本：
+   * 数字每张一样，函数按片段各取各的（给不出非负数的按 `DEAD_MS`）。
+   */
+  deadMs?: number | ((clipId: string) => number);
   /** 可调系数的覆盖值，或已经 `resolveTuning` 过的一份。两端必须一样。 */
   tuning?: PipelineTuning | PipelineTuningOverrides;
   /** clipId → `cardCostKey` 的结果（见 `clipCostIndex`）。缺的片段按「没有记录」兜底。 */

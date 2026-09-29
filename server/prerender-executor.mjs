@@ -16,6 +16,9 @@
  *                    流任务(M6c X1):对回这一版的流(内容键、结果键、分段范围),交给 `renderStreamRange` 按段产出;
  *                    对不上同样抛 `plan-mismatch`;本机不能产流(开关关着、没有编码器)抛 `no-streams`(不可重试)。
  *                    回 `null`:产物在帧库 / 流库里,sink 自己读(`collectSnapshotResult` / `collectStreamResult`)。
+ *                    共享档卡在本机快照库里记过超限帧(`index.json` 的 `oversize`,R6-14)的,交给切分的 control 标
+ *                    `snapshotOversize: true`(见 `markSnapshotOversize`),切分据此不给纯浏览器另出一份(M7 契约第 13 节
+ *                    「探针之后的更正」第 6 条;`claude/queue-maint` 任务 E)。
  *   afterSplit(planTask, { tasks })  (M7 契约 D12)local-node 切分完成、发布回包都回来之后调:按最终发布成功的细任务
  *                    记下每张卡实际出键的指纹(`pipeline.recordSplitCandidates`),带片段清单的 plan 再写一次这一版的层表 v 3
  *                    (候选按实际出键;独立渲染主机用 `publishLayerMap` 选项写,PC 用管线自己的推送队列写)。层表只在切分完成后写,
@@ -32,6 +35,54 @@ import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { isListPlan } from './render-queue/index.mjs';
 import { splitCandidatesOf } from './artifact-transfer.mjs';
+
+/** `cardLocks`(Map、普通对象或缺省)→ `(lockKey) => 锁指纹 | null`(同 `split.mjs` 的读法) */
+function lockReader(cardLocks) {
+  const fp = value => (typeof value === 'string' && value !== '' ? value : null);
+  if (cardLocks == null) return () => null;
+  if (typeof cardLocks.get === 'function') return key => fp(cardLocks.get(key));
+  if (typeof cardLocks === 'object') return key => (Object.prototype.hasOwnProperty.call(cardLocks, key) ? fp(cardLocks[key]) : null);
+  return () => null;
+}
+
+/**
+ * 按本机快照库给共享档卡标 `snapshotOversize`(`claude/queue-maint` 任务 E):这张卡在本机快照库里有超限帧的记录
+ * (`index.json` 的 `oversize` 非空;本机渲过它时 A3c 判超限记下的,或从素材服务拉回它的清单时同样判出来的)就标。
+ * 看两个键:本机指纹的键(`control.snapshotKey`),以及这张卡锁在别的环境上时锁定方指纹的键(`cardLocks`)。
+ * 标在整张卡上,不按段:一张卡的快照只出自一种环境(卡片级指纹锁),浏览器认领其中一段就锁住整张卡,
+ * 超限的那几段它做了也是白做、别的环境又被锁挡住 —— 所以有一帧超限,整张卡都不给浏览器。
+ * 本地档不看(纯浏览器只做共享档);画布卡不看(切分本来就不给浏览器)。回新的 cardPlan 数组(标了的 control 是新对象,
+ * 缓存里的上下文不动),没有要标的回原数组。读不到快照库(测试替身、库坏了)一律当没有记录。
+ */
+export async function markSnapshotOversize(pipeline, context) {
+  const cardPlan = Array.isArray(context?.cardPlan) ? context.cardPlan : [];
+  let store = null;
+  try { store = typeof pipeline?.snapshots === 'function' ? pipeline.snapshots() : null; } catch { store = null; }
+  if (!store || typeof store.snapshotIndex !== 'function') return { cardPlan, marked: [] };
+  const lockOf = lockReader(context?.cardLocks);
+  const marked = [];
+  const out = [];
+  for (const control of cardPlan) {
+    const tier = control?.tier || snapshotTier(control?.capabilities);
+    if (!control || control.snapshotOversize === true || tier !== 'shared' || !control.contentKey || control.capabilities?.canvasHeavy === true) {
+      out.push(control);
+      continue;
+    }
+    const keys = new Set([control.snapshotKey]);
+    const locked = lockOf(`snapshot:${control.contentKey}`);
+    if (locked) keys.add(resultKeyOf(control.contentKey, locked));
+    let over = false;
+    for (const key of keys) {
+      if (typeof key !== 'string' || !key) continue;
+      try {
+        const index = await store.snapshotIndex({ tier: 'shared', key });
+        if (Array.isArray(index?.oversize) && index.oversize.length > 0) { over = true; break; }
+      } catch { /* 读不到当没有记录 */ }
+    }
+    if (over) { marked.push(control.clipId); out.push({ ...control, snapshotOversize: true }); } else out.push(control);
+  }
+  return { cardPlan: marked.length ? out : cardPlan, marked };
+}
 
 /** 按版本缓存的上下文条数(附件第 3 节:LRU 约 4 条) */
 export const PLAN_CACHE_SIZE = 4;
@@ -123,7 +174,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
     // 层表不在这里写:切分完成后按实际出键写(afterSplit,M7 D12)
     say('executor.plan', { version: id, entryKey: entry.key, controls: context.cardPlan.length, locks: context.cardLocks?.size ?? 0 });
-    return context;
+    // 任务 E:本机快照库记过超限帧的卡标 snapshotOversize(每次切分现读:超限记录会随本机渲染、拉取变多,不进按版本的缓存)
+    const { cardPlan, marked } = await markSnapshotOversize(pipeline, context);
+    if (!marked.length) return context;
+    say('executor.oversize', { version: id, clips: marked.length });
+    return { ...context, cardPlan };
   }
 
   /** 附件第 3 节「把任务对回 control」:对不上的每一项都记进 `why`,有就抛 `plan-mismatch` */

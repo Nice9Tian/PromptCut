@@ -104,3 +104,60 @@ test("C10-BF-02 装不下的重层这一拍摘掉快照(占位);按从上到下�
   const mounted = stage.calls.flatMap((c) => Object.entries(c.patch)).filter(([id, v]) => id === "b" && typeof v === "string");
   assert.equal(mounted.length, 0, "b 从头到尾没挂上");
 });
+
+/* ---------------------------------------------------------------- 每层的换帧成本(swap-tuning 任务 A) */
+
+test("ST-A-08 宿主给了每层成本(按卡种):按各层成本装箱;还没投过的层按卡种", async () => {
+  const p = project([
+    { id: "top", name: "top", clips: [card("a", 0, 10)] },
+    { id: "mid", name: "mid", clips: [card("b", 0, 10), card("c", 0, 10)] },
+  ]);
+  plan = { segments: [{ fromSec: 0, toSec: 1000, heavy: new Set(["a", "b", "c"]), light: new Set() }] };
+  for (const id of ["a", "b", "c"]) src.push({ type: "layer", clipId: id, kind: "html", key: `k-${id}`, ranges: [[0, 300]] });
+  const stage = fakeStage();
+  // deadMs 10:a(画布 6)+ c(DOM 2)= 8,再加 b(Lottie 20)超了
+  const kindCost = { a: 6, b: 20, c: 2 };
+  setBeatSwap(true, { swapMs: 3, occupied: () => 23.333333 - 10, costOf: (_p, id) => kindCost[id] });
+  // 取字节那一轮还没有任何一层投过:全按卡种
+  await deliverSnapshots(stage, "front", { project: p, t: 1, playing: true });
+  const d = beatSwapDebug().last;
+  assert.deepEqual(d.swap, ["a", "c"]);
+  assert.deepEqual(d.placeholder, ["b"]);
+  assert.equal(d.usedMs, 8);
+  assert.equal(beatSwapDebug().perLayer, true);
+});
+
+test("ST-A-09 已知这一层快照的大小:按大小估(文本每 KB 贵、位图每 KB 便宜);不开每层成本时大小不起作用", async () => {
+  const { SWAP_COST_MODEL, swapCostOfSize } = await import("../render/beatSwap.mjs");
+  const big = "<div>" + "x".repeat(400 * 1024) + "</div>";                        // 约 400 KB 文本
+  const bmp = '<img src="data:image/webp;base64,' + "A".repeat(400 * 1024) + '">'; // 约 400 KB 位图
+  src.fetchSnapshot = async (_kind, key) => (key === "k-t" ? big : key === "k-m" ? bmp : "<i>small</i>");
+  const p = project([{ id: "t1", name: "t1", clips: [card("m", 0, 10)] }, { id: "t2", name: "t2", clips: [card("t", 0, 10)] }]);
+  plan = { segments: [{ fromSec: 0, toSec: 1000, heavy: new Set(["m", "t"]), light: new Set() }] };
+  for (const id of ["m", "t"]) src.push({ type: "layer", clipId: id, kind: "html", key: `k-${id}`, ranges: [[0, 300]] });
+  const stage = fakeStage();
+  // deadMs 10;卡种估都是 3:两层都装得下,第一次投递把两层都投出去、记下大小
+  setBeatSwap(true, { swapMs: 3, occupied: () => 23.333333 - 10, costOf: () => 3 });
+  await warm(stage, { project: p, t: 1, playing: true });
+  await deliverSnapshots(stage, "front", { project: p, t: 1, playing: true });
+  assert.equal(beatSwapDebug().knownSizes, 2);
+  const mMs = swapCostOfSize({ bytes: bmp.length, bitmap: true });
+  const tMs = swapCostOfSize({ bytes: big.length, bitmap: false });
+  assert.ok(Math.abs(mMs - (SWAP_COST_MODEL.baseMs + SWAP_COST_MODEL.bitmapMsPerKB * bmp.length / 1024)) < 1e-9);
+  assert.ok(tMs > mMs * 3, `同样大小,文本比位图贵得多:${tMs} vs ${mMs}`);
+  // 下一拍:m(位图,约 4.4 ms)在上、t(文本,约 17 ms)在下;deadMs 10 → 只装得下 m
+  now += 40;
+  await deliverSnapshots(stage, "front", { project: p, t: 1 + 1 / FPS, playing: true });
+  const d = beatSwapDebug().last;
+  assert.deepEqual(d.swap, ["m"]);
+  assert.deepEqual(d.placeholder, ["t"]);
+  assert.ok(Math.abs(d.usedMs - mMs) < 1e-9);
+  // 不开每层成本(旧调用):大小不起作用,两层按 swapMs 3 都装得下
+  setBeatSwap(true, { swapMs: 3, costOf: null });
+  now += 40;
+  await deliverSnapshots(stage, "front", { project: p, t: 1 + 2 / FPS, playing: true });
+  assert.deepEqual(beatSwapDebug().last.swap, ["m", "t"]);
+  assert.equal(beatSwapDebug().perLayer, false);
+  assert.equal(swapCostOfSize({ bytes: 0 }), null);
+  assert.equal(swapCostOfSize(undefined), null);
+});

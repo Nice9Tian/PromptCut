@@ -55,6 +55,7 @@
  *   - `--test-fingerprint`:给主机设 `PROMPTCUT_TEST_ENV_FINGERPRINT`(本机自测时让主机与页面的环境不同;跨机不用)。
  *   - 环境变量 `PROBE_MAIL_TOKEN`:协调口开了信箱时 KV 要它(`coordClient` 自动带,不打印)。
  *
+ *   - `PC_CHROME_ARGS` 只把参数原样透传给探针起的 Chrome(典型用途:云端 Linux 以 root 运行要 `--no-sandbox`);不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则对远端站点的探针在证书有问题时照样通过,掩盖真问题。
  *   - 云端 Linux 另要 `NODE_USE_ENV_PROXY=1`、`PC_CHROME_ARGS=--no-sandbox`(原样传给子进程)。主机环境里没有 ffmpeg 照常起:
  *     在线页面计划切出的是卡片快照任务(HTML 快照与 PNG 小尺寸,用 Chrome),不用 ffmpeg;轨道流(要 H.264 编码器)在
  *     render-host 缺省关着(`PROMPTCUT_STREAMS=0`),开了也会按「探不到编码器」报 `streams: false`。结果行记 `ffmpeg`(找没找到)、
@@ -1464,7 +1465,12 @@ try {
     const extras = [];
     for (let i = 0; i < spec.extra; i++) {
       const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: 1 });
-      S.actions.setClipParams(c.id, { burnMs: 40, label: 'x' });
+      /*
+       * padNodes:把这一层的快照做到约 70 KB(swap-tuning:在线换帧成本按快照大小估,`0.8 + 0.04 × KB` ≈ 3.6 ms;
+       * 原来这几层快照约 12 KB、只有 1.3 ms,9 层加起来装得下一拍,A4 的「装不下显示占位」就验不到了)。
+       * 9 层 ≈ 1.3 + 8 × 3.6 ms > 23.3 ms:装得下 7 层、2 层占位,与改之前按一律 3 ms 算的一样。
+       */
+      S.actions.setClipParams(c.id, { burnMs: 40, label: 'x', padNodes: 60 });
       extras.push(c.id);
     }
     // --user-card:一张仓库用户卡(在线页面跑不了它的代码,只能贴渲染节点的产物)
@@ -1598,6 +1604,8 @@ try {
   // A1:播放含重卡的 10 秒时间轴:主文档长任务 0,重层按拍换快照
   await P(member, () => { window.__pcLongTasks.length = 0; });
   const beatBefore = (await previewDiag(member))?.beatSwap ?? {};
+  // 任务 C(swap-tuning):播放前记下播放态互换的发起判断,播完核「自然进场不发起」
+  const entryBefore = (await previewDiag(member))?.swapPlaying ?? null;
   await P(member, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); });
   const samples = [];
   let placeholderSeen = null;
@@ -1615,6 +1623,21 @@ try {
   }
   const longTasks = await P(member, () => window.__pcLongTasks.slice());
   const beatAfter = (await previewDiag(member))?.beatSwap ?? {};
+  {
+    /*
+     * 任务 C(swap-tuning):从 0 秒连续播放,`probe-typewriter`(入点 2 秒,判轻、(b) 档、vtOk = false)是逐拍自然进场的,
+     * 不该发起播放态互换,也不该走估时(以前在它的入点附近估一次、记 skip-rate)。起播那一刻已经挂着的卡(入点 0)照旧走估时,只报不判。
+     */
+    const sp = (await previewDiag(member))?.swapPlaying ?? null;
+    state.typewriter = await P(member, () => window.__pcStore.getState().project.tracks.flatMap((tr) => tr.clips).find((c) => c.cardId === 'probe-typewriter')?.id ?? null);
+    const beforeAt = entryBefore?.lastPlan?.at ?? -1;
+    const plansInPlay = (sp?.plans ?? []).filter((x) => x.at > beforeAt);
+    const typewriterPlanned = plansInPlay.filter((x) => (x.ids ?? []).includes(state.typewriter));
+    out.steps.playEntry = { natural: { typewriter: state.typewriter, naturalSkipped: sp?.naturalSkipped ?? null, naturalSkips: sp?.naturalSkips ?? null, playRun: sp?.playRun ?? null,
+      plansInPlay: plansInPlay.map((x) => ({ t: x.t, ids: x.ids, ok: x.ok, reason: x.reason ?? null })) } };
+    check(state.typewriter && (sp?.naturalSkipped ?? []).includes(state.typewriter) && typewriterPlanned.length === 0 && sp?.playRun?.breaks === 0,
+      '任务 C:从 0 秒连续播放,自然进场的 (b) 档轻卡不发起播放态互换、不走估时(拍序号连续、没有断开)', out.steps.playEntry.natural);
+  }
   const playing = samples.filter((s) => s.playing);
   const mainSigs = playing.filter((s) => s.t >= 1).map((s) => s.wraps.find((w) => w.id === state.main)).filter((w) => w?.suppressed && w.plane).map((w) => w.planeSig);
   const worstLong = longTasks.slice().sort((a, b) => b.ms - a.ms).slice(0, 3);
@@ -1665,6 +1688,27 @@ try {
   const stillLive = await stageSample(member);
   check(stillLive && stillLive.wraps.filter((w) => w.id === state.main || state.extras.includes(w.id)).every((w) => !w.suppressed && !w.plane && !w.placeholder),
     'A4:占位撤下后不再盖回(3 秒后仍是活渲)', stillLive?.wraps?.slice(0, 4));
+  {
+    // 任务 C(swap-tuning):跳到 typewriter 中间(3 秒)再播 —— 从卡中间开始播放,照旧交给估时(发起与否由 planPlayingSwap 定)
+    const before = (await previewDiag(member))?.swapPlaying ?? null;
+    const seekAt3 = await P(member, () => { window.__pcStore.actions.seek(3); return Math.round(performance.now()); });
+    // 等 3 秒处的暂停态第二路做完再播(它跑着时父页不判播放态互换:`swapInFlight`)
+    await until('跳到 3 秒后暂停态第二路做完', async () => {
+      const d = await previewDiag(member);
+      return d && !d.swapInFlight && (d.swapLog ?? []).some((e) => Math.abs(e.t - 3) < 1e-6 && e.at >= seekAt3) ? true : null;
+    }, 90_000, 300);
+    await P(member, () => window.__pcStore.actions.play());
+    const seekPlan = await until('跳到卡中间再播:第一拍附近走估时', async () => {
+      const sp = (await previewDiag(member))?.swapPlaying ?? null;
+      const lp = (sp?.plans ?? []).find((x) => x.at > (before?.lastPlan?.at ?? -1) && (x.ids ?? []).includes(state.typewriter));
+      return lp && lp.t >= 3 && lp.t < 3.5 ? { ...sp, lastPlan: lp } : null;
+    }, 5_000, 100);
+    await P(member, () => window.__pcStore.actions.pause());
+    await until('停下', () => P(member, () => !window.__pcStore.getState().playing), 5_000, 100);
+    out.steps.playEntry = { ...(out.steps.playEntry ?? {}), seekMiddle: { lastPlan: seekPlan?.lastPlan ?? null, playRun: seekPlan?.playRun ?? null, naturalSkips: seekPlan?.naturalSkips ?? null } };
+    check(seekPlan, '任务 C:跳到卡中间再播,typewriter 照旧按估时决定(发起判断的 t 在 3～3.5 秒)', out.steps.playEntry.seekMiddle);
+    say('play-entry', out.steps.playEntry);
+  }
   const pd = await previewDiag(member);
   out.steps.settle = { settled: !!settled, stillLive: !!stillLive, feedSettled: pd?.snapshotFeed?.settled?.length ?? null, backWork: pd?.backWork, probeFrames: pd?.probeFrames };
   check(pd?.probeFrames?.gzFrames > 0 && pd.probeFrames.htmlBytes === 0, 'A1/第 2 节:后台舞台的探针帧压成可转移的 ArrayBuffer 交出', pd?.probeFrames);

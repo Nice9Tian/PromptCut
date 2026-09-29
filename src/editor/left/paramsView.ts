@@ -5,7 +5,7 @@
  * 从源码静态解析出的名字、说明、默认值与控件,没有组件;C10 契约第 9 节「片段照常可以改参数」)。两边都没有回 undefined。
  */
 import type { CardDef, Control } from "../../kernel/types";
-import type { SyncedCardView } from "../../kernel/registry";
+import type { SkippedControl, SyncedCardView } from "../../kernel/registry";
 import { onlineUnsupported } from "../../online/pageFlag";
 
 /** 面板要的那几样:能跑的定义与同步来的视图都满足 */
@@ -16,6 +16,8 @@ export interface ParamsCardView {
   controls: Control[];
   /** 只有同步视图有:源码里有控件没认出来 */
   controlsIncomplete?: boolean;
+  /** 只有同步视图有:没认出来的控件逐条 */
+  skippedControls?: SkippedControl[];
 }
 
 export function paramsCardView(
@@ -51,6 +53,29 @@ export const ONLINE_PARAMS_REST_ENTRY = "修改这张卡的其余参数";
 export function paramsPartialText(view: ParamsCardView | undefined): string | null {
   if (!view?.controlsIncomplete || !Array.isArray(view.controls) || view.controls.length === 0) return null;
   return onlineUnsupported(ONLINE_PARAMS_REST_ENTRY);
+}
+
+/** 面板上最多逐条列几个没认出的控件(其余的说「等 N 条」) */
+export const SKIPPED_LIST_MAX = 5;
+
+/** 一个没认出的控件在面板上怎么称呼:「标签」(key),没有就用 key,再没有就说「一个控件」 */
+function skippedName(s: SkippedControl): string {
+  if (s.label && s.key) return `「${s.label}」(${s.key})`;
+  if (s.label) return `「${s.label}」`;
+  if (s.key) return s.key;
+  return "一个控件";
+}
+
+/**
+ * 同步来的卡有控件没认出来时,在「在线浏览器模式暂不支持修改…」那句下面说明是哪几条、为什么(C10 契约第 9 节〔裁〕2026-09-30);
+ * 没有逐条记录(旧页面、能跑的定义)回 null。
+ */
+export function paramsSkippedText(view: ParamsCardView | undefined): string | null {
+  const list = view?.controlsIncomplete && Array.isArray(view.skippedControls) ? view.skippedControls : [];
+  if (!list.length) return null;
+  const shown = list.slice(0, SKIPPED_LIST_MAX).map((s) => `${skippedName(s)}:${s.reason}`);
+  const more = list.length > SKIPPED_LIST_MAX ? `;等 ${list.length} 条` : "";
+  return `没认出的参数:${shown.join(";")}${more}`;
 }
 
 /** 时间轴副标题:第一个文字控件的当前值 → 卡片说明 → 空 */

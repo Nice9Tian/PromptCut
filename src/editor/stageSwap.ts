@@ -27,10 +27,14 @@
  * 旧 `front` 发 `pause({ atSec: T })` **武装停**，收到 `frame.sec === T`（按拍序号比，不比浮点）
  * 再做 (4)(5)，(5) 末尾改成 `play(T)` + `setPlaying(true)`。可见舞台先走到了 `T`（回 `passed`）
  * 就重取 `T' = store.t + 上次预估 × 2`，对 `back` 续推（不带 `jump`）再武装一次；两次仍追不上按 K6 降级。
+ *
+ * 只给**从卡中间开始播放**的卡发起：这一轮播放中逐拍走过挂载帧、自然进场的卡不发起（`playingSwapTargets`，
+ * 规则见 `src/render/playEntry.mjs`）。
  */
 import { getState } from "../store/project";
 import type { Project } from "../kernel/project";
-import { cardMountedAt } from "../render/frameWindow.mjs";
+import { cardMountedAt, mountFrameOf } from "../render/frameWindow.mjs";
+import { createPlayRun, enteredNaturally, notePlayBeat, notePlaySeam, notePlayStart } from "../render/playEntry.mjs";
 import { catchUpEstimateMs, playingLeadMs, sceneCatchUpCost } from "../render/catchUpEstimate.mjs";
 import { clipWeight, pipelineAt } from "../render/pipelinePlan.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
@@ -237,6 +241,59 @@ export function playingCatchUpTargets(project: Project, t: number): string[] {
     if (record.vtOk === true) continue;    // 在可见舞台里自己追（K5 第一路的机制）
     if (clipWeight(record, frameModes[clip.id], fps, currentTuning()).tier !== "catchup-b") continue;
     out.push(clip.id);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ 自然进场与从卡中间开始播放 */
+
+/**
+ * 这一轮播放的起点与报到哪一拍了（`src/render/playEntry.mjs`）。播放态互换只给「从卡中间开始播放」的卡：
+ * 连续播放中逐拍走过挂载帧、自然进场的 (b) 档 `vtOk = false` 轻卡，可见舞台按全局时钟逐拍推、在自己的挂载帧挂上，
+ * 状态本来就对，不发起互换（`AGENT-pause-precise.md`「没做的与观察」第 1 条）。
+ */
+const playRun = createPlayRun();
+/** 诊断：因为自然进场而没发起播放态互换的次数与最近一次 */
+let naturalSkips = 0;
+let lastNaturalSkip: { t: number; ids: string[] } | null = null;
+/** 诊断：这一轮播放里因为自然进场而没发起的卡（完整 clipId；起播时清空） */
+let naturalSkipped = new Set<string>();
+
+function projectFps(): number {
+  return Math.max(1, getState().project?.fps || 30);
+}
+
+/** 按下播放（或换了舞台重起节拍）：这一轮播放从 `fromSec` 起。宿主在发 `play(fromSec)` 之前调 */
+export function notePlayRunStart(fromSec: number): void {
+  notePlayStart(playRun, fromSec, projectFps());
+  naturalSkipped = new Set();
+}
+
+/** 可见舞台报来一拍（`frame` 事件）。宿主在算播放态互换的目标之前调；回这一拍算连续、重复还是断开 */
+export function notePlayFrame(sec: number): "continuous" | "repeat" | "break" {
+  return notePlayBeat(playRun, sec, projectFps());
+}
+
+/**
+ * 播放中这一拍**要发起**播放态互换的卡：`playingCatchUpTargets` 里去掉这一轮播放中自然进场的。
+ * 暂停态第二路（`staleOnBackCatchUp`）不经这里，照旧收全部 (b) 档 `vtOk = false` 的轻卡。
+ */
+export function playingSwapTargets(project: Project, t: number): string[] {
+  const all = playingCatchUpTargets(project, t);
+  if (!all.length) return all;
+  const fps = Math.max(1, project.fps || 30);
+  const clipOf = new Map(activeCardClips(project, t).map((c) => [c.id, c]));
+  const out: string[] = [];
+  const natural: string[] = [];
+  for (const id of all) {
+    const clip = clipOf.get(id);
+    if (clip && enteredNaturally(playRun, mountFrameOf(clip, fps))) natural.push(id);
+    else out.push(id);
+  }
+  if (natural.length) {
+    naturalSkips++;
+    lastNaturalSkip = { t, ids: natural };
+    for (const id of natural) naturalSkipped.add(id);
   }
   return out;
 }
@@ -549,7 +606,9 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
    * 以前照样发起,整场景补跑白占后台舞台十几秒,最后「武装停已过」两次再降级。
    */
   const plan = planPlayingSwap(project, pendingIds, getState().t);
-  lastPlayingPlan = { at: Math.round(performance.now()), t: getState().t, ...plan };
+  lastPlayingPlan = { at: Math.round(performance.now()), t: getState().t, ids: [...pendingIds], ...plan };
+  playingPlans.push(lastPlayingPlan);
+  if (playingPlans.length > 20) playingPlans.shift();
   if (!plan.ok) {
     trace({ op: "playing", t: getState().t, ids: pendingIds.map((id) => id.slice(0, 8)), out: `skip-${plan.reason}`, backlogMs: Math.round(plan.backlogMs), ratePerSec: Math.round(plan.ratePerSec) });
     return false;
@@ -616,7 +675,10 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
       if (playingAbort === abort) playingAbort = null;
       // 互换之后新 front 的 H(T) 里没有它们(它们判轻),所以这一份要先清掉
       setExtraSuppressed([]);
-      return !!(await swapAndDress(target, true));
+      const swapped = !!(await swapAndDress(target, true));
+      // 换上来的新可见舞台在 T 那一帧是整场景精确的，从 T 接着报拍：算连续（起点不变）
+      if (swapped) notePlaySeam(playRun, target, fps);
+      return swapped;
     }
     return giveUp();
   } finally {
@@ -645,8 +707,11 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
 
 /** 诊断:最近一次播放态互换的发起判断(领先量、积压、速率,或为什么不发起)与让路次数(探针看) */
 let lastPlayingPlan: Record<string, unknown> | null = null;
+/** 诊断:最近 20 次发起判断(含完整 clipId) */
+const playingPlans: Record<string, unknown>[] = [];
 export function stageSwapPlayingDebug() {
-  return { lastPlan: lastPlayingPlan, preemptCount, orphan: !!orphanRender };
+  return { lastPlan: lastPlayingPlan, plans: playingPlans.slice(), preemptCount, orphan: !!orphanRender,
+    playRun: { ...playRun }, naturalSkips, lastNaturalSkip, naturalSkipped: [...naturalSkipped] };
 }
 
 /** 测试用 */
@@ -661,4 +726,11 @@ export function resetStageSwap(): void {
   owner = 0;
   preemptCount = 0;
   lastPlayingPlan = null;
+  playRun.startFrame = null;
+  playRun.lastFrame = null;
+  playRun.breaks = 0;
+  naturalSkips = 0;
+  lastNaturalSkip = null;
+  naturalSkipped = new Set();
+  playingPlans.length = 0;
 }

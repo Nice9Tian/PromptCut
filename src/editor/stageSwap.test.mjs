@@ -541,3 +541,91 @@ test("低内存档:暂停态、播放态的补跑与互换一步都不走(不排
   host.lowMemory = () => false;
   assert.equal(swap.swapBlockedByLowMemory(), false, "普通档照旧");
 });
+
+/* ---------------------------------------------------------------- 自然进场与从卡中间开始播放(swap-tuning 任务 C) */
+
+/** 起播在 `fromSec`,逐拍报到 `toSec`(含),每拍问一次这一拍要发起互换的卡,回每拍的结果里非空的那些 */
+function playAndAsk(p, fromSec, toSec) {
+  const { notePlayRunStart, notePlayFrame, playingSwapTargets } = swap;
+  notePlayRunStart(fromSec);
+  const asked = [];
+  for (let f = Math.round(fromSec * FPS) + 1; f <= Math.round(toSec * FPS); f++) {
+    notePlayFrame(f / FPS);
+    const ids = playingSwapTargets(p, f / FPS);
+    if (ids.length) asked.push([f, ids]);
+  }
+  return asked;
+}
+
+test("ST-C-11 播放中逐拍跨过挂载帧、自然进场的 (b) 档轻卡:不发起播放态互换;暂停态第二路照旧收它", () => {
+  const p = project([card("b", 2, 8)]);
+  Object.assign(state, { project: p, playing: true });
+  plan = segments([]);
+  withRecord("b", REC_B);
+  assert.deepEqual(playAndAsk(p, 0, 3), []);
+  assert.deepEqual(playingCatchUpTargets(p, 3), ["b"], "判据本身不变");
+  assert.deepEqual(staleOnBackCatchUp(p, 3), ["b"], "停下时照旧整场景补跑");
+  assert.equal(swap.stageSwapPlayingDebug().naturalSkips > 0, true);
+});
+
+test("ST-C-12 跳到卡中间再播 / 暂停后在卡中间继续播:第一拍就照旧交给估时(发起与否由 planPlayingSwap 定)", () => {
+  const p = project([card("b", 2, 8)]);
+  Object.assign(state, { project: p, playing: true });
+  plan = segments([]);
+  withRecord("b", REC_B);
+  const seek = playAndAsk(p, 3, 3.1);
+  assert.deepEqual(seek[0], [91, ["b"]]);
+  // 先连续播过挂载帧,暂停在 4 秒,再继续播
+  assert.deepEqual(playAndAsk(p, 0, 4), []);
+  assert.deepEqual(playAndAsk(p, 4, 4.1)[0], [121, ["b"]]);
+});
+
+test("ST-C-13 恰好停在挂载帧起播:照旧交给估时;停在挂载帧前一帧起播:自然进场", () => {
+  const p = project([card("b", 2, 8)]);   // 挂载帧 59
+  Object.assign(state, { project: p, playing: true });
+  plan = segments([]);
+  withRecord("b", REC_B);
+  assert.deepEqual(playAndAsk(p, 59 / FPS, 61 / FPS)[0], [60, ["b"]]);
+  assert.deepEqual(playAndAsk(p, 58 / FPS, 61 / FPS), []);
+});
+
+test("ST-C-14 同一拍两张:从中间开始的那张交给估时,自然进场的那张不发起", () => {
+  const p = project([card("old", 0, 8), card("new", 2, 8)]);
+  Object.assign(state, { project: p, playing: true });
+  plan = segments([]);
+  withRecord("old", REC_B);
+  withRecord("new", REC_B);
+  const asked = playAndAsk(p, 1, 2.5);
+  assert.ok(asked.length > 0);
+  for (const [, ids] of asked) assert.deepEqual(ids, ["old"]);
+});
+
+test("ST-C-15 掉帧:拍序号不缺(慢帧就等)算连续;拍序号跳过挂载帧算断开,交给估时", () => {
+  const p = project([card("b", 2, 8)]);
+  Object.assign(state, { project: p, playing: true });
+  plan = segments([]);
+  withRecord("b", REC_B);
+  const { notePlayRunStart, notePlayFrame, playingSwapTargets } = swap;
+  notePlayRunStart(0);
+  for (let f = 1; f <= 55; f++) notePlayFrame(f / FPS);
+  assert.equal(notePlayFrame(62 / FPS), "break");
+  assert.deepEqual(playingSwapTargets(p, 62 / FPS), ["b"]);
+});
+
+test("ST-C-16 播放态互换换上来的新舞台从 T 接着报拍:之后挂载的卡仍是自然进场", async () => {
+  const p = project([card("b", 0, 10), card("late", 3, 10)]);
+  Object.assign(state, { project: p, t: 1, playing: true });
+  plan = segments([]);
+  withRecord("b", REC_B);
+  withRecord("late", REC_B);
+  const { notePlayRunStart, notePlayFrame, playingSwapTargets } = swap;
+  notePlayRunStart(1);
+  notePlayFrame(31 / FPS);
+  assert.deepEqual(playingSwapTargets(p, 31 / FPS), ["b"]);
+  assert.equal(await runPlayingSwap(["b"]), true);
+  const T = 33 / 30;
+  assert.equal(swap.stageSwapPlayingDebug().playRun.lastFrame, Math.round(T * FPS));
+  // 新舞台从 T 的下一拍接着报,走到 late 的挂载帧(89)之后
+  for (let f = Math.round(T * FPS) + 1; f <= 95; f++) assert.equal(notePlayFrame(f / FPS), "continuous");
+  assert.deepEqual(playingSwapTargets(p, 95 / FPS), ["b"], "b 仍是从中间开始的(去重由宿主的 swapTried 做)");
+});
