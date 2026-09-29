@@ -26,7 +26,7 @@ import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
 import { currentReadyIndex, deliverSnapshots, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
-import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
+import { notePlayFrame, notePlayRunStart, playingSwapTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
@@ -1281,10 +1281,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         /*
          * K3(b) 的 `vtOk = false` 轻卡:播放头刚进入它时整场景在后台补跑后互换。
          * 每张卡这一轮播放只发起一次 —— 补跑一次要几百毫秒,每拍发一次只会互相掐。
+         * 只给从它中间开始播放的卡:这一轮播放中逐拍走过挂载帧、自然进场的不发起(`playingSwapTargets`)。
+         * 拍序号先记下(连续、重复还是断开),再算目标。
          */
+        notePlayFrame(e.sec);
         // 只有双舞台才有后台舞台可换;在线页面的单舞台、低内存档都不走(c10a 第 8 节「不追活渲」)
         if (dualRef.current && !lowMemRef.current && !swapInFlight()) {
-          const targets = playingCatchUpTargets(getState().project, e.sec).filter((id) => !swapTriedRef.current.has(id));
+          const targets = playingSwapTargets(getState().project, e.sec).filter((id) => !swapTriedRef.current.has(id));
           if (targets.length) {
             for (const id of targets) swapTriedRef.current.add(id);
             void runPlayingSwap(targets);
@@ -1603,7 +1606,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
            */
           await syncProject("front", getState().project);
           if (!alive) return;
-          const reply = await s.play(playStartOf());
+          const from = playStartOf();
+          // 这一轮播放的起点:起播那一刻已经挂着的卡算「从中间开始」,之后逐拍挂上的算自然进场(播放态互换只给前者)
+          notePlayRunStart(from);
+          const reply = await s.play(from);
           if (!alive) return;
           // 首拍的到达间隔以 `play()` 回包时刻为起点(K4)
           if (reply.ok) lastFrameAtRef.current = performance.now();
