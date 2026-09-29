@@ -227,10 +227,20 @@ async function newSession(browser, url) {
   /** 等 window.__pcReady。受帧控制的页面不自己出帧,等的时候要一直发空拍(不画不截) */
   const waitReady = async () => {
     const t0 = Date.now();
+    let slowNoted = 0;
     for (;;) {
       await beginFrame({ noDisplayUpdates: true }).catch(() => {});
-      if (await page.evaluate(() => window.__pcReady === true).catch(() => false)) return;
-      if (Date.now() - t0 > 60000) throw new Error('导出页 60 秒没就绪(window.__pcReady 一直不是 true)');
+      if (await page.evaluate(() => window.__pcReady === true).catch(() => false)) {
+        if (slowNoted) console.warn(`[bakery] ready.slow-done ${JSON.stringify({ ms: Date.now() - t0 })}`);
+        return;
+      }
+      // 排障(只写日志):等了 5 秒以上还没就绪,每 5 秒记一次在途请求
+      if (Date.now() - t0 > 5000 * (slowNoted + 1)) {
+        slowNoted++;
+        console.warn(`[bakery] ready.slow ${JSON.stringify({ ms: Date.now() - t0, inflight: inflight.size, sample: [...inflight.values()].slice(0, 4) })}`);
+      }
+      // 排障:超时时带上还在途的请求(同 waitNet 的写法),看得出是卡在取模块还是页面自己没装好
+      if (Date.now() - t0 > 60000) throw new Error(`导出页 60 秒没就绪(window.__pcReady 一直不是 true)${inflight.size ? `;在途请求 ${inflight.size} 个:${[...inflight.values()].slice(0, 3).join(' | ')}` : ''}`);
       await new Promise((r) => setTimeout(r, 10));
     }
   };

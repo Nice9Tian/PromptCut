@@ -2323,7 +2323,7 @@ export class FramePipeline {
         await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
         await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
         const t1 = clock?.();
-        if (timing) { add('resetMs', t1 - t0); add('smallMs', (this.smallStats.ms ?? 0) - small0); timing.batches = (timing.batches ?? 0) + 1; }
+        if (timing) { add('resetMs', t1 - t0); add('smallMs', (this.smallStats.ms ?? 0) - small0); timing.batches = (timing.batches ?? 0) + 1; timing.resetMaxMs = Math.max(timing.resetMaxMs ?? 0, t1 - t0); }
         const produced = [];
         const baked = await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
           snapshotOnly: false, fullFrame: true, writeFrames: false, signal,

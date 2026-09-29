@@ -227,6 +227,8 @@ function shellEnv(dir, { autoOff }) {
     TEMP: tmp, TMP: tmp, TMPDIR: tmp,
   });
   if (autoOff) env.PROMPTCUT_AUTO_RENDER_NODE = '0';
+  // 排障(`--prerender-log`):预渲染进程的全部输出另存一份(壳不设这个变量;只影响日志)
+  if (argv.includes('--prerender-log')) env.PROMPTCUT_PRERENDER_LOG = path.join(OUT, `${path.basename(dir)}-prerender.log`);
   return env;
 }
 
