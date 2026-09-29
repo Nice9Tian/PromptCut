@@ -22,7 +22,7 @@
 
 - **R0**：仓库根 dev server 的冷启动量测没做。（`scripts/verify-unified-frames.mjs` 已整条通过；快照重放和整帧导出的残差查到只剩三处快照这一侧修不了的，见 `docs/archive/restructure_planning/reports/replay-mismatch-report.md` §12、§13。）
 - **R7b 没做成的**：只预渲染重卡集合那一条只停了快照、没停 PNG；R7b 报告第 4 节的 8 条更正没折回 `docs/archive/restructure_planning/r2-r7-task.md`。
-- **see_frames 回包附实体矩形**：原云端计划第 8 步，协议在 `docs/archive/restructure_planning/r2-r7-task.md` 的 D3，归 R 系列，可与云端计划并行推进。
+- **〔已做〕see_frames 回包附实体矩形**（2026-09-24，`8124996d`：预渲染在 `captureSnapshot` 的 `afterFonts` 钩子里量 `rectsWithBounds(pixels: "all")`，每帧结果带 `rects: [{ clipId, box, solid }]`，工具结果的文字部分按 clipId 一行；2026-09-30 核对时补记）原文：原云端计划第 8 步，协议在 `docs/archive/restructure_planning/r2-r7-task.md` 的 D3，归 R 系列，可与云端计划并行推进。
 - **待用户定**：播放停顿期间要不要加音频看门狗，让音频立刻停。
 - **〔已修〕**（2026-09-28，`claude/perf-encode-2`，main `501a7dd7`：只改 `server/bakery/ffmpeg.mjs` 的编码参数装配，产出逐字节不变；全案最终基线笔记本 p50 207～224 ms；2026-09-30 最终合流 G0-R 笔记本 p50 261 ms，仍过线，见 `REPORT-M5-M8.md` 第 7.5 节、`REPORT-post-M8.md` 第 2 轮）原文：- **性能缺陷，M8 之前必修**（2026-09-27）：1080p 全幅流 15 帧分段编码在笔记本上 355～397 ms，门槛 300 ms（`stream-produce-probe`，C10a 报告第 2.13 节）。笔记本是性能基准机（`guide_files/verification.md`），在笔记本上修到过线，或经用户确认改门槛。
 - **维护项：在线构建剪掉置灰入口背后的调用**（C10 集成，2026-09-28）：在线页面上置灰的入口（导入媒体、语音识别、配音、改卡等，`docs/plan/c10-contract.md` 第 10 节）点了不发请求，但调用代码仍在在线构建的产物里，`/api` 棘轮清单（`server/test/c10a-online-api-paths.json`，120 条）因此一条没少。按编译期常量把这些调用剪掉，让清单变短；清单只许减不许增。
