@@ -15,6 +15,8 @@
 | `6f8b32b1` | 帧库探针 ③a（跑着时放遗留，核下一次检查清掉）；`?detail=1` 带 `lastLeftoverSweep` |
 | `0cacc4a2` | 「存储」一块按十进制 GB 显示与提交；用户点的清理缓存标「上次清理缓存」 |
 | `e32a43f0` | 没有中间文件时的文案 |
+| `7c22addb` | 报告（第一轮） |
+| `61dea3a6` | 第二轮：GB 按 1024³；`GET /api/storage` 过时后台量、开始页自动重取；单测与探针 U8 |
 | 本提交 | 报告 |
 
 ## 做了什么
@@ -96,7 +98,7 @@
 
 ## 没做成的、没做的
 
-- 帧库的字节数滞后：新写的键要等下一次检查（启动 2 分钟宽限后一次、之后最多每 5 分钟一次）才量，这期间开始页显示的帧库占用偏小。G0-R 那台跑完探针后第一次看是「0 B」，等到下一轮节拍才是 86.3M。这是 storage-cap 定的节拍，没改；若要「打开开始页就看到新数」，可以让 `GET /api/storage` 在距上次检查超过某个时长时顺手触发一次检查，请主会话定。
+- ~~帧库的字节数滞后~~：第二轮已处理，见下「第二轮」。
 - `/api/exports*` 的错误回包没加 `code`（见上表），没改。
 - 独立渲染主机 / 用户 PC 第一次运行的淘汰问题（storage-cap 报告「需要主会话定的事」1、2）没动。
 
@@ -106,13 +108,43 @@
 2. **遗留形态**补全（storage-leaks 报告第 1 条）：`<键>/mov/full-<pid>.tmp.mov`、`controls/<键>/mov/full-<pid>.tmp.mov`、`<键>/mov/playback-<pid>-<uuid>.mov`、`<键>/html-cache/live-<pid>-*`、`<键>/preview-<pid>.tmp.mp4`、`tracks/<键>/preview-<pid>.tmp.mp4`；pid 所指进程已不在才算。旧版不带 pid 的 `playback-<uuid>.mov` **1 小时**没动算遗留（不是 storage-cap 原来的 10 分钟）。
 3. **`leftovers.bytes`** 是按上面同一套规则计的、清完之后还剩的（删不掉的、属主还活着的不算）。
 4. **导出产物的目录名**：`export-YYYYMMDD-HHMMSS`，同一秒重名依次加 `-2`、`-3`……；列表、`/api/storage` 的导出一栏、导出完成后的收拾是同一套规则，只认导出目录直接下面的真目录，不跟链接。
-5. **单位**：帧库上限的 GB 一律十进制（1 GB = 10^9 字节），「存储」一块的大小显示也按十进制。
+5. **单位**（第二轮按主会话定改）：**GB 按 1024³ 字节**。缺省上限 50 × 1024³（53687091200）、下限 5 × 1024³、「磁盘总容量小于 500 GB 取 10%」的 500 GB 也是 500 × 1024³（所以标称 500 GB、512 GB 的盘都算小盘）；「存储」一块的显示与输入都按 1024（填 20 发 20 × 1024³）。
+9. **占用数字的新鲜度**（第二轮）：`GET /api/storage` 时若上一次检查或量早于 **60 秒**，后台量一次（并进别的进程的使用、清遗留、增量量，**不淘汰**、不动淘汰的节拍），这次回包立刻回、`frameLibrary.scanning: true`；开始页见到 `scanning` 隔 **3 秒**再取，直到为 false，最多再取 **10 次**。
 6. **推送队列**：段的键目录被淘汰（或清理缓存删掉）后，这一段丢掉、不重试（日志 `push.evicted`），换机取用时那一段就没有了，需要时由持有它的机器重新预渲染。
 7. **盘上布局**（storage-cap 报告第 7 条照旧）：帧库根下 `usage.json`、`.storage/`（`owner.json`、`touch/<pid>.json`、`trash/`）；遗留清理与淘汰都不碰 `.storage/`。
 8. 接口约定（`docs/plan/storage-plan.md` 第 4 节）可补：`GET /api/storage?detail=1` 另带 `units`、`lastEvictDetail`、`lastLeftoverSweep`；`lastEvict.reason` 为 `cap` 或 `clear`；`/api/exports` 的 `running` 与 409 回包（storage-ui 报告已提）。
 
+## 第二轮（主会话审过后定的两处，提交 `61dea3a6`）
+
+### 1. 单位统一按 1024
+
+- 服务端 `frame-library-storage.mjs`：`GB = 1024 ** 3`，于是 `DEFAULT_CAP_BYTES = 50 × 1024³ = 53687091200`、`MIN_CAP_BYTES = 5 × 1024³`、`SMALL_DISK_BYTES = 500 × 1024³`。接口回包里的 `capBytes`、`minCapBytes` 随之变（例：`"capBytes":53687091200`）。
+- 界面 `StartPage.tsx`：「存储」一块改回用 `humanSize`（1024），`GB = 1024 ** 3`；第一轮加的十进制 `storageSize` 去掉（留作 `humanSize` 的别名）。缺省上限显示「50.0G」，填 20 发 `21474836480`。
+- 单测：`GB === 1024 ** 3`、`DEFAULT_CAP_BYTES === 53687091200`、256 GB 盘取 `floor(256 × 1024³ × 0.1)`、标称 500e9 的盘算小盘。探针：`storage-cap-probe` 的缺省上限期望按 1024³；`storage-ui-probe` 的 U5、U7 按 1024³。
+- 第一轮上表「GB 口径（改了）」那一行作废：现在两端都是 1024³。
+
+### 2. 占用数字过期
+
+- 管理器新方法 `refreshIfStale({ maxAgeMs = SUMMARY_STALE_MS = 60 s })`：距上一次检查或量超过 60 秒就在串行链上发起一次 `measureNow()`（成为主进程、索引缺失时重扫、清遗留、并进别的进程的使用、增量量、落盘），**不淘汰**，也不改 `lastCheckAt`（启动 2 分钟宽限与每 5 分钟最多一次的淘汰检查照旧，不会因为有人看开始页就提前淘汰）；在量时再调不重复发起。`summary().scanning` = 重扫中或这一趟在量。
+- `GET /api/storage`（`storage-routes.mjs`）先调 `refreshIfStale()` 再取 `summary()`，不等量完。
+- 开始页：回包 `scanning: true` 时隔 3 秒再取，直到 false，最多 10 次（`STORAGE_RESCAN_MS`、`STORAGE_RESCAN_TRIES`）；自动重取时上限输入框只在上限变了才更新，不冲掉用户正在填的数。
+- 单测（`frame-library-storage.test.mjs` 新两条）：新写的键在检查前数字是旧的；`refreshIfStale()` 回 true、`summary().scanning` 为 true、在量时再调不重复；量完 `bytes` 是真实值、`scanning` false；上限远低于总量也不删、`lastEvict` 仍为 null；60 秒内不再发起、过了再发起。路由：GET 调一次、回包 `scanning` 照实，POST 不调。
+- 探针 `storage-ui-probe` 新 U8（最先跑）：就绪后往帧库写一批 5 帧共 5 MiB，等满 60 秒不发请求，再打开开始页。结果 `{"first":"0 B / 上限 50.0G（缺省）","settled":"5.0M / 上限 50.0G（缺省）","elapsedMs":4272,"serverBytes":5242880,"scanning":false}`——打开时是旧数，4.3 秒后自动变成真实值。截图 `scratchpad\storage-merge\ui-shots2\u8-fresh-bytes.png`（看过：「5.0M / 上限 50.0G（缺省）」）。
+
+### 第二轮验证
+
+| 项 | 结果 |
+|---|---|
+| `node --test server/test/frame-library-storage.test.mjs` | 29/29 过 |
+| `npx tsc -b --force` | 退出 0 |
+| `npm test` | tests 3952、pass 3950、fail 0、skipped 2，退出 0；没有挂的文件 |
+| `npm run build` | 退出 0 |
+| `node scripts/probes/storage-cap-probe.mjs --port 5700`（真接口） | `ok: true`、`fails: []`；`start.capBytes 53687091200`（50 × 1024³，缺省）；③a `leftoverSweep.last.removed 2`、`leftovers.bytes 0`；淘汰 `p1,p1,p2,p2,p3,p3`、`busy:busy`；清理缓存 `freedBytes 100000000` |
+| `node scripts/probes/storage-ui-probe.mjs --port 5703 --out <scratch>\ui-shots2`（真接口，U5 另有一段拦截） | `ok: true`、`fails: []`；U8 见上；U7 改上限 `sentBytes 21474836480`、服务端 `capBytes 21474836480`、回显「上限 20.0G」，缺省「上限 50.0G（缺省）」 |
+
+G0-R 没重跑：第二轮只改了存储管理器的量与单位、`/api/storage` 路由和开始页，不碰预渲染、导出与渲染路径。跑完 5700～5709 无监听，没有命令行含 `storage-merge` 的 node 进程。
+
 ## 需要主会话定的事
 
-1. 界面 GB 口径改成十进制是一级可见的变化（数字从「46.6G」变「50.0G」，填的数按 10^9 算）。我按语义与服务端的「50 GB」对齐了；若要改成全按 1024，需要服务端缺省、下限一起改。
-2. 帧库字节数滞后（见「没做成的」第 1 条）要不要处理。
-3. 合并：本分支在 `abd6ee56`（四支合入之后）之上，只动了 `server/storage-leftovers.mjs`、`server/exports-list.mjs`、`server/frame-library-storage.mjs`、`server/artifact-push.mjs`、`src/StartPage.tsx`、两个探针、三个测试文件与一个新测试文件。
+1. ~~GB 口径~~、~~字节数滞后~~：第二轮已按主会话定的做完。
+2. 合并：本分支在 `abd6ee56`（四支合入之后）之上，只动了 `server/storage-leftovers.mjs`、`server/exports-list.mjs`、`server/frame-library-storage.mjs`、`server/artifact-push.mjs`、`src/StartPage.tsx`、两个探针、三个测试文件与一个新测试文件。
