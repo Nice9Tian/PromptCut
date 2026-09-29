@@ -255,9 +255,10 @@ test('ARN-08 编辑器进程的日志里看得到自动渲染节点的起停与�
     '[artifact-push] push.started {"docservice":"page","asset":"https://site.example/media/api/asset"}',
     '[artifact-push] push.skip {"reason":"disabled"}',
     '[queue-node] render-node.teardown {"reason":"page-left","released":0}',
+    '[queue-node] queue.skip {"reason":"no-environment"}',
     '[queue-node] queue.started {"nodeId":"x"}',
     '[artifact-push] push.retry {"id":"x"}',
     '',
   ].join('\n'));
-  assert.deepEqual(out.map((l) => l.split(' ')[1]), ['render-node.bind', 'push.asset-base', 'push.started', 'push.skip', 'render-node.teardown']);
+  assert.deepEqual(out.map((l) => l.split(' ')[1]), ['render-node.bind', 'push.asset-base', 'push.started', 'push.skip', 'render-node.teardown', 'queue.skip']);
 });

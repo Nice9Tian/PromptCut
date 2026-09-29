@@ -139,8 +139,11 @@ function selectAssetClient({ node, endpoint, origin, ticket, createAssetClient, 
   return { client, stop: () => { try { stop(); } catch { /* 已经停了 */ } }, base: () => currentBase };
 }
 
-/** `resolveDocservice` 这几种结果算「连得上文档服务」;`editor` 是 J.3 新加的(编辑器里挂的文档服务);`shared` 是 M6a 的共享项目配置 */
-const DOCSERVICE_MODES = new Set(["remote", "local", "editor", "shared"]);
+/**
+ * `resolveDocservice` 这几种结果算「连得上文档服务」;`editor` 是 J.3 新加的(编辑器里挂的文档服务);`shared` 是 M6a 的共享项目配置;
+ * `page` 是自动渲染节点(页面交来的共享配置,`auto-render-node.mjs`)
+ */
+const DOCSERVICE_MODES = new Set(["remote", "local", "editor", "shared", "page"]);
 
 type DocLink = { mode: string; url: string; tried?: any[]; protocols?: () => Promise<string[]>; shared: boolean; projectId?: string | null };
 
