@@ -22,6 +22,11 @@
  * 让路:播放开始 → `yieldFor('play')`,拖动开始 → `'drag'`(当前帧做完就放回);更急的后台活来了(生成快照那个单飞活收到 abort)
  * → `'urgent'`;页面隐藏或父页 rAF 断档 → `'hidden'`(不等当前帧,立即放回)。
  *
+ * # 报忙(M7 D2 补充〔裁〕,`claude/queue-maint`)
+ *
+ * 手里没有认领、单飞队列里有更急的后台活(补跑、测量、探针)时,`busy()` 回 `'stage'`,节点据此按队列给的间隔发 `node.active`,
+ * 它锁着的卡不因页面只是忙被别的节点接手。页面隐藏、父页 rAF 断档时回 null(那时后台活停着,锁照旧按产出算闲置)。
+ *
  * # 一帧(第 4.3～4.5 节,D3、D5、D7)
  *
  * 认领到的第一帧开一个单飞活 `bake`(最不急),`pushProject('back', 隔离单卡工程, { reset })` 灌进后台舞台(走 stageBridge 的基线),
@@ -409,6 +414,13 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     return true;
   };
 
+  /** 报忙(M7 D2 补充):手里没有认领时,后台舞台有没有更急的活在排着或跑着 */
+  const busy = (): string | null => {
+    const bw = backWorkDiag();
+    if (!bw.on && (bw.reason === "hidden" || bw.reason === "raf-gap")) return null;
+    return urgentBackJobs() > 0 ? "stage" : null;
+  };
+
   let wasPlaying = !!getState().playing;
   const offStore = subscribe(() => {
     const playing = !!getState().playing;
@@ -512,7 +524,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     setReady("pending");
     node = createBrowserNode({
       nodeId, projectId, userId: me().userId ?? "", codeVersion: deps.eligibility().codeVersion ?? null, environment: pageEnvironment(),
-      now: Date.now, isIdle,
+      now: Date.now, isIdle, busy,
       send: (m) => ep?.send(m) ?? false,
       keptProject: (rev) => kept.get(rev) ?? null,
       fetchSnapshot, bakeFrame, finishTask, lookupResult,

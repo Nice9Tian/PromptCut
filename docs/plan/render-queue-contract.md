@@ -134,6 +134,7 @@ taskIdOf({ kind, resultKey, range })
 | `task.complete` | `id`、`token`、`result?: { ranges?: any }` | `task.completed { id }` |
 | `task.release` | `id`、`token`、`reason?: string` | `task.released { id }` |
 | `task.fail` | `id`、`token`、`error?: string`、`retryable?: boolean`（缺省 `true`） | `task.fail-ack { id, state }`（`state` 是处理后的状态：`open`、`failed`，或没有订阅者被删时的 `removed`） |
+| `node.active`〔裁，M7 D2 补充，`claude/queue-maint`〕 | `busy?: string`（≤ 32 字，只作诊断） | 不回包（带了 `reqId` 也不回）；只记这个节点的 `activeAt`。锁闲置怎么算见 F.9 |
 
 - **格式错误**（缺必填字段、类型不对、`id` 与 `taskIdOf` 不符、`plan` 的 `resultKey` 与 `source` 不符、未知 `type`、消息不是对象）：回 `error { reqId, reason: 'bad-message', detail: string }`，**整条消息不生效**，状态不变（C6）。
 - **令牌不符**：`progress` / `complete` / `release` / `fail` 的 `id` 不存在，或任务不是 `claimed`，或 `token !== claim.token`，或发消息的节点不是当前认领者：回 `task.lease-lost { id, token, reason: 'token' }`，状态不变。
@@ -275,7 +276,7 @@ claim = null
 
 所有出站消息都带 `epoch`（C6）。回包带入站的 `reqId`（有的话）。
 
-`node.welcome`、`publisher.welcome`、`queue.snapshot`、`task.published`、`task.unsubscribed`、`task.claimed`、`task.claim-rejected`、`task.renewed`、`task.completed`、`task.released`、`task.fail-ack`、`task.lease-lost`、`task.opened`、`task.taken`、`task.closed`、`task.done`、`task.failed`、`error`。
+`node.welcome`（M7 D2 补充〔裁〕起多带 `activeIntervalMs`，见 F.9）、`publisher.welcome`、`queue.snapshot`、`task.published`、`task.unsubscribed`、`task.claimed`、`task.claim-rejected`、`task.renewed`、`task.completed`、`task.released`、`task.fail-ack`、`task.lease-lost`、`task.opened`、`task.taken`、`task.closed`、`task.done`、`task.failed`、`error`。
 
 ### A.12 收回原因与丢认领的诊断（2026-09-28，`claude/stall-phases`）〔裁〕
 
@@ -911,6 +912,8 @@ export async function probeBrowserEnvironment({ browser, page }, { platform = pr
 
 **`describe()`**：新增 `locks: [{ lockKey, envFingerprint, source, since, touchedAt }]`，按 `lockKey` 排序。
 
+**锁闲置按「最后一次产出或报忙」算（F.9）**：M7 D2 的 `lockIdleMs` 起初是「此刻减最后一次产出」，页面只是忙也会被接手；F.9 补上报忙。
+
 ### F.2 节点（`server/render-node/`，Pipeline/Node 的 Node 部分）
 
 **`fingerprint.mjs` 的 `normalizeOs`**：在现有精确匹配之后，按前缀补三条（小写后比）：
@@ -1144,6 +1147,16 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
    - L10：本机已齐、没有锁文件的卡，后台那一趟之后锁归本机，此后页面测量帧回 `CARD_LOCKED`。
 
 ---
+
+### F.9 页面只是忙不算闲置（2026-09-30，`claude/queue-maint`）〔裁〕
+
+M7 D2（`m7-contract.md` 第 3.4 节）让切分方在锁定方闲置超 30 s、这张卡又没做完时接手；「闲置」起初只看产出（认领、续约、完成、`card.lock`）。
+M7 实测里浏览器锁着一张卡、手里在做别的段，这张卡 30 s 没产出就被接手，已做的帧白费。试过的路：只按「节点连着」判（断网之外一直连着的页面会永远不被接手，页面隐藏几小时也一样，不行）；按「节点在任何任务上产出」判（覆盖不了测量、补跑这些没有认领的忙，且旧页面行为会变，不行）。定为节点显式报忙：
+
+- **队列**：锁多记一项 `nodeId`（最后一次经认领、续约、完成为它产出的节点；`card.lock`、接手建的锁不记）。节点记录多记 `activeAt`、`activeBusy`（最后一次 `node.active` 的时刻与内容）。回包（发布回包、认领回包）的 `lockIdleMs = now - max(producedAt, activeAt)`，其中 `activeAt` 只在那个节点此刻连着（`conn` 在）、`envFingerprint` 仍等于锁的指纹时才算；否则 `lockIdleMs = now - producedAt`（与改前相同）。`node.welcome` 多带 `activeIntervalMs`（`NODE_ACTIVE_INTERVAL_MS` = 10 s，`constants.mjs`；不进 A.2 的 `QUEUE_DEFAULTS`）。`describe()` 的 `nodes[]` 在节点报过忙时多带 `activeAt`、`activeBusy`，别的节点形状不变。
+- **节点**（纯浏览器，`src/online/browserNode.ts`）：welcome 带 `activeIntervalMs` 才发 `node.active`；手里有认领报 `'bake'`，否则宿主报后台舞台单飞队列里有更急的活时报 `'stage'`；每次报到后第一拍即可发，此后不比间隔更勤。页面隐藏、父页 rAF 断档、闲着、只是在播放或拖动而后台没活时不发。
+- **兼容**：`node.active` 是新类型，旧队列会回 `bad-message`，所以节点只在 welcome 带 `activeIntervalMs` 时发；旧页面不发，新队列行为不变；切分方（pc、host 的 `idleLockTakeover`）不改。
+- **测试**：`server/test/queue-maint-d2-busy.test.mjs`（QM-D-01～10）、`src/online/browserNodeActive.test.mjs`（QM-D-P1～P4）。
 
 ## G. M5a：网络层、集群令牌与服务地址登记（文档服务通用化）
 
