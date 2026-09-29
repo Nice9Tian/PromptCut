@@ -380,6 +380,7 @@ function StorageSection(): JSX.Element {
   const saveCap = async () => {
     const gb = Number(capGb);
     if (!Number.isFinite(gb) || gb < CAP_MIN_BYTES / GB || gb > capMaxGb) {
+      setNotice("");
       setError(`上限要在 ${CAP_MIN_BYTES / GB} GB 到 ${Number.isFinite(capMaxGb) ? `${capMaxGb} GB（磁盘总容量）` : "磁盘总容量"}之间。`);
       return;
     }
