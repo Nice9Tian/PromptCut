@@ -15,6 +15,8 @@
  *   U4 开始页上点标题栏「文件 → 存储…」滚到「存储」;从编辑器(`?editor`)点也回到开始页并滚到「存储」;
  *   U5 用拦截模拟 `/api/storage*`:显示占用与上限,「清理缓存」后显示腾出多少、数字变小,改上限发出的请求与回显对;
  *   U6 接口的路径校验:`..`、`export-vision-*` 回 400(不点真的「打开所在目录」,那会在桌面上弹资源管理器)。
+ *   U7 (三支合并后)不拦截:真的 `/api/storage` 与 `/api/exports` 都 ok,导出一栏 = 列表合计(删一份、只删中间文件之后马上跟上);
+ *      页面上真的「清理缓存」与改上限落到服务端(帧库、`storage.json` 都在临时目录)。U1 此时要求缓存那一行显示数字。
  * 结果最后一行是一行 JSON(`ok`、`fails`),截图在 --out。
  */
 import '../lib/no-user-dirs.mjs';
@@ -118,6 +120,19 @@ try {
     return r.status === 200;
   }, 120_000, 300);
 
+  // 合并后 `/api/storage*` 是真的(编辑器进程转给预渲染进程):等预渲染进程起来、答得上再开页面
+  const storageJson = async (p, init) => {
+    const r = await fetch(ORIGIN + p, { ...init, signal: AbortSignal.timeout(30_000) });
+    const body = await r.json().catch(() => null);
+    return { status: r.status, body };
+  };
+  await until('真的 /api/storage 答 ok', async () => (await storageJson('/api/storage')).body?.ok === true, 180_000, 500);
+  const exportsSum = async () => {
+    const r = await storageJson('/api/exports');
+    const items = r.body?.items ?? [];
+    return { ok: r.body?.ok === true, bytes: items.reduce((s, it) => s + it.bytes, 0), count: items.length, intermediateBytes: items.reduce((s, it) => s + it.intermediateBytes, 0) };
+  };
+
   browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   const pageErrors = [];
   const newPage = async () => {
@@ -157,8 +172,22 @@ try {
   check(r1[2].text.includes('成片') && r1[2].text.includes('透明层') && r1[2].text.includes('中间文件'), 'U1 完整的那份列出成片、透明层、中间文件', r1[2].text);
   const unavailable = await page.$('[data-pc="storage-cache-unavailable"]');
   out.U1.storageApi = unavailable ? 'unavailable' : 'present';
+  check(!unavailable, 'U1 合并后 /api/storage 是真的,缓存那一行显示数字');
   if (unavailable) {
     check(await page.$eval('[data-pc="storage-clear-cache"]', (b) => b.disabled), 'U1 取不到时「清理缓存」置灰');
+  }
+  // U7a 真的 /api/storage 与 /api/exports:都 ok,导出一栏与列表同一套规则(vision 不算),数字对得上
+  {
+    const s = await storageJson('/api/storage');
+    const e = await exportsSum();
+    const f = s.body?.frameLibrary;
+    out.U7 = { storage: s.body, exportsList: e, cacheText: await page.$eval('[data-pc="storage-cache-bytes"]', (el) => el.textContent).catch(() => null) };
+    check(s.status === 200 && s.body?.ok === true, 'U7 GET /api/storage ok', s);
+    check(e.ok, 'U7 GET /api/exports ok');
+    check(f && Number.isFinite(f.bytes) && Number.isFinite(f.capBytes) && Number.isFinite(f.diskBytes) && ['default', 'user'].includes(f.capSource), 'U7 frameLibrary 字段齐', f);
+    check(Number.isFinite(s.body?.leftovers?.bytes), 'U7 leftovers.bytes 是数', s.body?.leftovers);
+    check(JSON.stringify(s.body?.exports) === JSON.stringify({ bytes: e.bytes, count: e.count, intermediateBytes: e.intermediateBytes }) && e.count === 3,
+      'U7 /api/storage 的导出一栏 = /api/exports 列表的合计(3 份,vision 不算)', { storage: s.body?.exports, list: e });
   }
   check(!(await page.$('[data-pc="storage-error"]')), 'U1 页面上没有报错条');
   await page.$eval('[data-pc="start-storage"]', (el) => el.scrollIntoView());
@@ -182,6 +211,38 @@ try {
   check(!fs.existsSync(path.join(EXPORTS, HALF)), 'U3 磁盘上那一份没了');
   check(fs.existsSync(path.join(EXPORTS, 'export-vision-probe-1')), 'U3 vision 目录不动');
   await page.screenshot({ path: path.join(OUT, 'u3-deleted.png') });
+  // U7b 删了一份、只删了中间文件之后,/api/storage 的导出一栏马上跟上(不回 60 秒前的缓存)
+  {
+    const s = await storageJson('/api/storage');
+    const e = await exportsSum();
+    out.U7.afterDelete = { storage: s.body?.exports, list: e };
+    check(s.body?.ok === true && JSON.stringify(s.body?.exports) === JSON.stringify({ bytes: e.bytes, count: e.count, intermediateBytes: e.intermediateBytes }) && e.count === 2,
+      'U7 删除与只删中间文件之后导出一栏与列表一致', out.U7.afterDelete);
+  }
+  // U7c 真的「清理缓存」与改上限(帧库、数据目录都在临时目录里)
+  {
+    const sent = [];
+    const onReq = (req) => { if (req.url().includes('/api/storage/')) sent.push({ path: new URL(req.url()).pathname, body: req.postData() ?? null }); };
+    page.on('request', onReq);
+    await page.$eval('[data-pc="start-storage"]', (el) => el.scrollIntoView());
+    await page.click('[data-pc="storage-clear-cache"]');
+    await until('真的清理缓存的提示', () => page.$eval('[data-pc="storage-notice"]', (el) => el.textContent.includes('腾出')), 60_000);
+    out.U7.clearNotice = await page.$eval('[data-pc="storage-notice"]', (el) => el.textContent);
+    await page.screenshot({ path: path.join(OUT, 'u7-real-cleared.png') });
+    await page.$eval('[data-pc="storage-cap-input"]', (el) => { el.select(); });
+    await page.type('[data-pc="storage-cap-input"]', '20');
+    await page.click('[data-pc="storage-cap-save"]');
+    await until('真的改上限的提示', () => page.$eval('[data-pc="storage-notice"]', (el) => el.textContent.includes('上限已改')), 30_000);
+    page.off('request', onReq);
+    const capReq = sent.find((x) => x.path === '/api/storage/cap');
+    const sentBytes = capReq ? JSON.parse(capReq.body || '{}').bytes : null;
+    const after = await storageJson('/api/storage');
+    out.U7.cap = { sentBytes, capBytes: after.body?.frameLibrary?.capBytes, capSource: after.body?.frameLibrary?.capSource, text: await page.$eval('[data-pc="storage-cache-bytes"]', (el) => el.textContent) };
+    check(sent.some((x) => x.path === '/api/storage/clear-cache'), 'U7 点「清理缓存」发出真的请求');
+    check(Number.isSafeInteger(sentBytes) && after.body?.frameLibrary?.capBytes === sentBytes && after.body?.frameLibrary?.capSource === 'user', 'U7 改上限落到服务端', out.U7.cap);
+    check(fs.existsSync(path.join(DATA, 'storage.json')), 'U7 上限写在临时数据目录的 storage.json');
+    await page.screenshot({ path: path.join(OUT, 'u7-real-cap.png') });
+  }
 
   // ── U4 标题栏「存储…」──
   await page.$eval('.sp-main', (el) => { el.scrollTop = 0; });

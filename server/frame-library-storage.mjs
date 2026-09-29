@@ -41,7 +41,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { snapshotTier } from './snapshot-tier.mjs';
-import { isDeadSpillDir, leftoverFileKind, pidAlive as leftoverPidAlive, sweepFrameLibrary } from './storage-leftovers.mjs';
+import { isDeadSpillDir, isExportDirName, leftoverFileKind, pidAlive as leftoverPidAlive, sweepFrameLibrary } from './storage-leftovers.mjs';
 import { summarizeExports } from './exports-list.mjs';
 
 /** 容量按十进制 GB 算（磁盘厂商标的「500 GB」「512 GB」就是这个口径） */
@@ -883,13 +883,33 @@ export async function closeStorage(root) {
  * 与 `GET /api/exports` 的列表同一套：只认 `export-YYYYMMDD-HHMMSS[-n]` 的真目录、不含 `export-vision-*`、不跟链接。
  */
 export function createExportSummary(exportDir, { maxAgeMs = 60_000, now = () => Date.now(), summarize = summarizeExports } = {}) {
-  let value = null, at = 0, pending = null;
-  const refresh = () => (pending ||= summarize(exportDir).then(result => { value = result; at = now(); return result; }).finally(() => { pending = null; }));
+  let value = null, valueSig = null, at = 0, pending = null;
+  const refresh = () => (pending ||= (async () => {
+    const sig = await exportDirSignature(exportDir);
+    const result = await summarize(exportDir);
+    value = result; valueSig = sig; at = now();
+    return result;
+  })().finally(() => { pending = null; }));
   return {
     async get({ fresh = false } = {}) {
       if (!value || fresh) return refresh();
+      // 导出列表那边(编辑器进程)删了一份、只删了中间文件、或新导出了一份:顶层目录的名字或修改时刻变了,马上重算,
+      // 不回 60 秒前的旧数(只看顶层,很便宜)
+      if ((await exportDirSignature(exportDir)) !== valueSig) return refresh();
       if (now() - at > maxAgeMs) void refresh().catch(() => {});
       return value;
     },
   };
+}
+
+/** 导出目录下各份导出(名字认得的真目录)的名字与修改时刻,串成一个签名 */
+async function exportDirSignature(exportDir) {
+  let items = [];
+  try { items = await fs.readdir(exportDir, { withFileTypes: true }); } catch { return ''; }
+  const parts = [];
+  for (const item of items) {
+    if (!item.isDirectory() || !isExportDirName(item.name)) continue;
+    try { parts.push(`${item.name}:${(await fs.lstat(path.join(exportDir, item.name))).mtimeMs}`); } catch { /* 刚没了 */ }
+  }
+  return parts.sort().join('|');
 }

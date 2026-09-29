@@ -479,6 +479,26 @@ test('合并:/api/storage 的导出一栏(createExportSummary)与 /api/exports �
   assert.deepEqual(summary, { bytes: 1612, count: 3, intermediateBytes: 1300 });
 });
 
+test('合并:导出列表删了一份、只删了中间文件,/api/storage 的导出一栏马上跟上(不等 60 秒缓存)', async t => {
+  const { dir } = await tempRoot(t);
+  const exportsDir = path.join(dir, 'exports');
+  const { deleteExport, pruneExport } = await import('../exports-list.mjs');
+  for (const [id, extra] of [['export-20260929-101010', 1000], ['export-20260929-121212', 300]]) {
+    await fs.mkdir(path.join(exportsDir, id, 'frames'), { recursive: true });
+    await fs.writeFile(path.join(exportsDir, id, 'preview.mp4'), Buffer.alloc(100));
+    await fs.writeFile(path.join(exportsDir, id, 'frames', '0.png'), Buffer.alloc(extra));
+  }
+  let clock = Date.now();
+  const summary = createExportSummary(exportsDir, { now: () => clock });
+  assert.deepEqual(await summary.get(), { bytes: 1500, count: 2, intermediateBytes: 1300 });
+  assert.equal((await pruneExport(exportsDir, 'export-20260929-101010')).ok, true);
+  assert.deepEqual(await summary.get(), { bytes: 500, count: 2, intermediateBytes: 300 }, '只删中间文件之后');
+  assert.equal((await deleteExport(exportsDir, 'export-20260929-121212')).ok, true);
+  assert.deepEqual(await summary.get(), { bytes: 100, count: 1, intermediateBytes: 0 }, '删一份之后');
+  clock += 1000;
+  assert.deepEqual(await summary.get(), { bytes: 100, count: 1, intermediateBytes: 0 }, '没变就用缓存');
+});
+
 test('relOfPath:帧库里的文件归到它的键目录', () => {
   const root = path.join(os.tmpdir(), 'x', 'frame-library');
   const k = key('r');
