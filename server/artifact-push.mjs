@@ -13,6 +13,8 @@
  *         块级在这一段轮到之前读帧库算(`index.json` 的 `oversize`,帧文件的 `data:image` 占比)。
  *   执行:并发 `concurrency` 段;每段 `collect*` → `pushResult` → `content.put` 清单。失败的段按指数退避重试
  *         (5 s、30 s、120 s,之后每 10 min),不放弃。清单超过 256 KiB 的段永远写不进内容库,记日志后丢掉。
+ *         段的键目录已不在帧库里(按上限淘汰或「清理缓存」删了,`frame-library-storage.mjs`)的,推之前、推空了、
+ *         推失败时各判一次,不在就丢掉、记 `push.evicted`,不重试(存储占用计划 `docs/plan/storage-plan.md`)。
  *   落盘:`<dir>/push-queue.json`(`dir` 是帧库根),每次进队、完成时经 `atomic` 写回;重启时读回接着推;
  *         已完成的段不留在文件里。
  *
@@ -114,6 +116,29 @@ export async function blockPriorityOf(pipeline, unit) {
 }
 
 /**
+ * 这一段在帧库里的键目录:快照 = `snapshots().dir(...)`(共享档 `controls-html/<dirKey>`、本地档
+ * `controls-local/<entryKey>/<dirKey>`);流 = `<帧库>/streams/<resultKey>`。算不出回 null(不判,当它在)。
+ */
+export function unitDirOf(pipeline, unit) {
+  try {
+    if (unit.kind === 'stream') return typeof pipeline?.root === 'string' && pipeline.root ? path.join(pipeline.root, 'streams', unit.resultKey) : null;
+    const dir = pipeline?.snapshots?.()?.dir?.({ tier: unit.tier, entryKey: unit.tier === 'local' ? unit.entryKey : undefined, key: unit.dirKey });
+    return typeof dir === 'string' && dir ? dir : null;
+  } catch { return null; }
+}
+
+/**
+ * 这一段的键目录是不是已经不在了(帧库按上限淘汰、或「清理缓存」删掉了它,`frame-library-storage.mjs`)。
+ * 只有确实 ENOENT 才算不在;别的错(没权限、被占)不算,照常重试。
+ */
+export async function unitEvicted(pipeline, unit) {
+  const dir = unitDirOf(pipeline, unit);
+  if (!dir) return false;
+  try { await fsSync.promises.lstat(dir); return false; }
+  catch (error) { return error?.code === 'ENOENT'; }
+}
+
+/**
  * @param {object} options
  * @param {any} options.pipeline  `FramePipeline`(用它的帧库 `snapshots()` 与 `root`)
  * @param {any} options.client  素材服务客户端(`put` / `has` / `get`)
@@ -165,7 +190,7 @@ export function createPushQueue({
   const inflight = new Set();
   const waiters = [];
   const counters = { enqueued: 0, merged: 0, pushed: 0, failures: 0, uploaded: 0, skipped: 0, manifests: 0, dropped: 0, restored: 0, layerMaps: 0,
-    outOfScope: 0, layerMapsOutOfScope: 0, deferredDropped: 0 };
+    outOfScope: 0, layerMapsOutOfScope: 0, deferredDropped: 0, evicted: 0 };
   /** 判不了范围、先扣着的段:id → { unit, priority }(只在内存里;按进队先后,满了丢最早的) */
   const deferred = new Map();
   /** 范围判定:true 进队、false 不进、null 扣着;没给 scope 一律 true */
@@ -313,9 +338,24 @@ export function createPushQueue({
     inflight.add(work);
   }
 
+  /**
+   * 键目录被淘汰了:这一段在本机已经没有可推的,丢掉、不重试,也不挡队里别的段。日志只记前几条和之后每 100 条一条
+   * (一次淘汰可能带走很多段)。
+   */
+  let evictedLogged = 0;
+  function dropEvicted(item) {
+    counters.evicted++;
+    if (evictedLogged < 3 || counters.evicted % 100 === 0) {
+      evictedLogged++;
+      say('push.evicted', { id: item.id, count: counters.evicted });
+    }
+    finish(item, { dropped: true });
+  }
+
   async function pushOne(item) {
     const { unit } = item;
     const priority = PRIORITY_NAMES[effective(item)];
+    if (await unitEvicted(pipeline, unit)) { dropEvicted(item); return; }
     try {
       const task = { kind: unit.kind, tier: unit.tier, resultKey: unit.resultKey, range: unit.range, input: { canvasHeavy: unit.canvasHeavy === true } };
       const collected = unit.kind === 'snapshot'
@@ -325,6 +365,7 @@ export function createPushQueue({
       const empty = result.kind === 'snapshot' ? !result.frames.length : !Object.keys(result.segments ?? {}).length;
       if (empty) {
         // 帧库里这一段什么都没有(被清掉了,或者进队的只是超出实际长度的空段):没有可推的,不写空清单
+        if (await unitEvicted(pipeline, unit)) { dropEvicted(item); return; }
         finish(item, { dropped: true });
         say('push.empty', { id: item.id });
         return;
@@ -350,6 +391,8 @@ export function createPushQueue({
         finish(item, { dropped: true });
         return;
       }
+      // 推到一半键目录被淘汰(文件读不到、流清单没了):丢掉,不按失败无限重试
+      if (await unitEvicted(pipeline, unit)) { dropEvicted(item); return; }
       counters.failures++;
       item.attempts++;
       const delay = delays[Math.min(item.attempts - 1, delays.length - 1)];
