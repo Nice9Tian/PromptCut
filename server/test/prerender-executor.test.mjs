@@ -9,8 +9,11 @@
  *   - `server/bakery/index.mjs` 整个换成假的（`mock.module`）。假 `openBakery` 回一个假预渲染间：
  *     `page.evaluate` 回这一套场景的 browserPlan（`{ graph, sourceVersions, environment }`，即 `window.__pcCardPlan()` 的形状），
  *     `loadProject` / `reset` / `page.setViewport` / `client.send` / `close` 都是空操作。
- *     假 `bakeFrames` 记下每次调用（`out`、`targetFrames`、`snapshotFrames`、三个开关），对 `targetFrames` 调 `onFrame`、
- *     对 `snapshotFrames` 调 `onSnapshot`；`onSnapshot` 的产物只由（片段、帧号）决定，与帧库在哪无关：
+ *     假 `bakeFrames` 记下每次调用（`out`、`targetFrames`、`snapshotFrames`、三个开关），按真 `bakeFrames`
+ *     （`server/bakery/bake.mjs`）的顺序逐帧走：每帧开头看 `signal`，已中止就抛 `{ cancelled: true }`（取消只在两帧之间生效）；
+ *     这一帧要快照就先调 `onSnapshot`，再对 `targetFrames` 里的帧调 `onFrame`（这一帧的快照在截图之前生成）；
+ *     `onBakeFrame(rec, frame, phase)` 在每帧开头（`'start'`）和快照之后、截图之前（`'shot'`）各调一次（中止用例用）。
+ *     `onSnapshot` 的产物只由（片段、帧号）决定，与帧库在哪无关：
  *     隔离单卡那一路（`out` 在 `<root>/controls/` 下）每张卡一项、帧号原样；整场景那一路按片段起点换成本地帧。
  *   - `FramePipeline` 注入 `environment`，不探测；`dataRoot` 指向临时目录（成本读不到，预渲染集合按声明兜底）；
  *     `interactive: false`。PNG 那一支（`entry.cardCache` 的 `hasComplete` / `put` / `finish`）换成桩。
@@ -33,6 +36,8 @@ import path from 'node:path';
 const bakeLog = [];
 /** 每次 bakeFrames 开始时调用（中止用例用它在渲染中途 abort） */
 let onBake = null;
+/** bakeFrames 里每帧调两次：`(rec, frame, 'start')` 在看 signal 之前，`(rec, frame, 'shot')` 在快照之后、截图之前 */
+let onBakeFrame = null;
 /** 当前场景：假 openBakery 开出来的预渲染间按它回 browserPlan、造快照产物 */
 let scene = null;
 const opened = [];
@@ -70,10 +75,16 @@ mock.module(new URL('../bakery/index.mjs', import.meta.url).href, {
       };
       bakeLog.push(rec);
       if (onBake) await onBake(rec);
-      for (const frame of rec.targetFrames) await opts.onFrame?.(frame, Buffer.from(`png-${frame}`));
-      for (const frame of rec.snapshotFrames) {
-        const items = bakery?.itemsFor ? bakery.itemsFor(frame, rec) : [];
-        await opts.onSnapshot?.(frame, '<div data-pc-scene=""></div>', items);
+      const targets = new Set(rec.targetFrames), snaps = new Set(rec.snapshotFrames);
+      for (const frame of [...new Set([...targets, ...snaps])].sort((a, b) => a - b)) {
+        if (onBakeFrame) await onBakeFrame(rec, frame, 'start');
+        if (opts.signal?.aborted) throw Object.assign(new Error('已取消'), { cancelled: true });
+        if (snaps.has(frame)) {
+          const items = bakery?.itemsFor ? bakery.itemsFor(frame, rec) : [];
+          await opts.onSnapshot?.(frame, '<div data-pc-scene=""></div>', items);
+        }
+        if (onBakeFrame) await onBakeFrame(rec, frame, 'shot');
+        if (targets.has(frame)) await opts.onFrame?.(frame, Buffer.from(`png-${frame}`));
       }
     },
   },
@@ -322,7 +333,7 @@ test('J8 plan：取不到快照时抛 { code: no-snapshot, retryable: true }，�
 
 /* ================================================================== J9 */
 
-test('J9 render（共享档）：按 60 帧一段逐段渲整张卡，与 fillCardControls 一次渲完相比，bakeFrames 调用记录与落盘文件相同；进度回调', { timeout: 45_000 }, async (t) => {
+test('J9 render（共享档，逐批：关掉一段一趟顺推）：按 60 帧一段逐段渲整张卡，与 fillCardControls 一次渲完相比，bakeFrames 调用记录与落盘文件相同；进度回调', { timeout: 45_000 }, async (t) => {
   t.after(cleanupRoots);
   // 对照：帧库 A，现有的 fillCardControls 一次渲完 clip-a
   const rootA = await tmpRoot();
@@ -341,6 +352,7 @@ test('J9 render（共享档）：按 60 帧一段逐段渲整张卡，与 fillCa
   // 执行器：帧库 B，plan 之后逐段 render
   const rootB = await tmpRoot();
   const B = newPipeline(rootB);
+  B.queueSinglePassOff = true; // 逐批这条路（canvas 重卡、播放头要的段、开关关掉时）
   t.after(() => B.close());
   const { executor } = await executorFor(B);
   const ctx = await executor.plan(planView(), { signal: signalNone() });
@@ -375,6 +387,106 @@ test('J9 render（共享档）：按 60 帧一段逐段渲整张卡，与 fillCa
     assert.ok(seen.every((v) => Number.isFinite(v) && v >= 0 && v <= n), `${task.id}：进度在 0..${n}：${seen}`);
     assert.ok(seen.every((v, i) => i === 0 || v >= seen[i - 1]), `${task.id}：进度不倒退：${seen}`);
     assert.ok(seen.at(-1) > 0, `${task.id}：最后的进度大于 0`);
+  }
+});
+
+/** PNG 那一支用真的 CardFrameCache（假 PNG 原样落在 `controls/<key>/mov/frames/`），只把要 ffmpeg 的 finish 换成桩 */
+function realPng(entry) {
+  entry.cardCache.finish = async () => {};
+}
+const pngTreeOf = (root, key) => treeOf(path.join(root, 'controls', key, 'mov', 'frames'));
+const pngNames = (tree) => Object.keys(tree).filter((n) => n.endsWith('.png'));
+const htmlFramesOf = (tree) => Object.keys(tree).filter((n) => n.endsWith('.html')).map((n) => Number(n.slice(0, -5))).sort((a, b) => a - b);
+const pngFramesOf = (tree) => pngNames(tree).map((n) => Number(n.slice(0, -4))).sort((a, b) => a - b);
+const span = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+/** 按 4 帧一交时这一段的进度序列：4、8、…、n */
+const progressBy4 = (n) => Array.from({ length: Math.ceil(n / 4) }, (_, i) => Math.min(4 * (i + 1), n));
+
+/** 对照组：帧库 A，现有的 fillCardControls 一次渲完 clip-a（快照与 PNG 都真落盘） */
+async function oneShotClipA() {
+  const rootA = await tmpRoot();
+  const A = newPipeline(rootA);
+  await A.ensureCardLocks();
+  const entryA = await A.entry(projectJson());
+  A.recordCardPlan(entryA, entryA.cardCache.plan(browserPlanOf()));
+  realPng(entryA);
+  const ctlA = entryA.cardPlan.find((c) => c.clipId === 'clip-a');
+  const mark = bakeLog.length;
+  await A.fillCardControls(entryA, fakeBakery(), null, [ctlA]);
+  const recs = normalize(rootA, bakeLog.slice(mark));
+  const html = await treeOf(path.join(rootA, 'controls-html', ctlA.snapshotKey));
+  const png = await pngTreeOf(rootA, ctlA.key);
+  return { ctlA, recs, html, png };
+}
+
+/** 帧库 B 上的执行器，一段一趟顺推（缺省开着）；记下快照库每次入库的帧 */
+async function singlePassExecutor() {
+  const rootB = await tmpRoot();
+  const B = newPipeline(rootB);
+  assert.notEqual(B.queueSinglePassOff, true, '缺省开着一段一趟顺推');
+  const { executor } = await executorFor(B);
+  const ctx = await executor.plan(planView(), { signal: signalNone() });
+  const entryB = B.entries.get(ctx.entryKey);
+  realPng(entryB);
+  const store = B.snapshots();
+  const commits = [];
+  const commit = store.commitSnapshots.bind(store);
+  store.commitSnapshots = (args) => { commits.push(args.items.map((item) => item.localFrame)); return commit(args); };
+  const ctlB = entryB.cardPlan.find((c) => c.clipId === 'clip-a');
+  const tasks = tasksOf(ctx, 'clip-a');
+  for (const task of tasks) assert.equal(B.queueSinglePass(ctlB, task.range), true, `${task.id}：这一段走顺推`);
+  return { rootB, B, executor, ctx, ctlB, tasks, commits };
+}
+
+test('J9b render（共享档，一段一趟顺推）：每段 bakeFrames 只调一次、帧集合与逐批的并集相同；快照与 PNG 落盘与 fillCardControls 一次渲完逐字节相同；入库与进度仍按 4 帧', { timeout: 45_000 }, async (t) => {
+  t.after(cleanupRoots);
+  const A = await oneShotClipA();
+  assert.equal(A.recs.length, 38, '夹具：对照组 150 帧按 4 帧一批是 38 批');
+  assert.equal(Object.keys(A.html).length, 151, '对照组：150 帧 + index.json');
+  assert.equal(pngNames(A.png).length, 150, '对照组：150 帧 PNG');
+
+  const { rootB, executor, ctlB, tasks, commits } = await singlePassExecutor();
+  assert.deepEqual(tasks.map((x) => [x.range.from, x.range.to]), [[0, 59], [60, 119], [120, 149]]);
+  assert.equal(tasks[0].resultKey, A.ctlA.snapshotKey, '两边的快照键相同');
+  assert.equal(ctlB.key, A.ctlA.key, '两边的 PNG 缓存键相同');
+
+  const mark = bakeLog.length;
+  const progress = [];
+  for (const task of tasks) {
+    const seen = [];
+    const out = await executor.render(view(task), { signal: signalNone(), progress: (done) => seen.push(done) });
+    assert.equal(out, null, 'render 返回 null（sink 自己读磁盘）');
+    progress.push({ task, seen });
+  }
+  const recB = normalize(rootB, bakeLog.slice(mark));
+  assert.equal(recB.length, 3, '三段各一次 bakeFrames');
+  const { targetFrames: _t, snapshotFrames: _s, ...rest } = A.recs[0];
+  tasks.forEach((task, i) => {
+    assert.deepEqual(recB[i].targetFrames, span(task.range.from, task.range.to), `${task.id}：targetFrames 是整段`);
+    assert.deepEqual(recB[i].snapshotFrames, span(task.range.from, task.range.to), `${task.id}：snapshotFrames 是整段（都缺）`);
+    const { targetFrames: _tb, snapshotFrames: _sb, ...restB } = recB[i];
+    assert.deepEqual(restB, rest, `${task.id}：out 与三个开关照逐批`);
+  });
+  assert.deepEqual(recB.flatMap((r) => r.targetFrames), A.recs.flatMap((r) => r.targetFrames), 'targetFrames 的并集与逐批相同');
+  assert.deepEqual(recB.flatMap((r) => r.snapshotFrames), A.recs.flatMap((r) => r.snapshotFrames), 'snapshotFrames 的并集与逐批相同');
+
+  const html = await treeOf(path.join(rootB, 'controls-html', tasks[0].resultKey));
+  assert.deepEqual(Object.keys(html), Object.keys(A.html), '快照文件名相同');
+  for (const name of Object.keys(A.html)) assert.ok(A.html[name].equals(html[name]), `快照 ${name} 逐字节相同`);
+  const png = await pngTreeOf(rootB, ctlB.key);
+  assert.deepEqual(pngNames(png), pngNames(A.png), 'PNG 文件名相同');
+  for (const name of pngNames(A.png)) assert.ok(A.png[name].equals(png[name]), `PNG ${name} 逐字节相同`);
+
+  // 入库仍每 4 帧交一次：每次交的是按 4 帧对齐的一组
+  assert.deepEqual(commits.flat(), span(0, 149), '入库的帧合起来是整张卡、按顺序');
+  for (const frames of commits) {
+    assert.ok(frames.length >= 1 && frames.length <= 4, `一次入库不超过 4 帧：${frames}`);
+    assert.equal(frames[0] % 4, 0, `一次入库从 4 帧边界起：${frames}`);
+    assert.deepEqual(frames, span(frames[0], frames[0] + frames.length - 1), `一次入库是连续的一组：${frames}`);
+  }
+  for (const { task, seen } of progress) {
+    const n = task.range.to - task.range.from + 1;
+    assert.deepEqual(seen, progressBy4(n), `${task.id}：进度按 4 帧报`);
   }
 });
 
@@ -497,11 +609,12 @@ test('J10 render：任务对不上计划时抛 plan-mismatch（不可重试）�
   assert.equal(bakeLog.length, mark, '对不上的任务一帧都不渲');
 });
 
-test('J10 render：中途中止 → 拒绝、停在批次边界、不再写后面的帧；之后用新信号重渲能补齐', { timeout: 30_000 }, async (t) => {
+test('J10 render（逐批：关掉一段一趟顺推）：中途中止 → 拒绝、停在批次边界、不再写后面的帧；之后用新信号重渲能补齐', { timeout: 30_000 }, async (t) => {
   t.after(cleanupRoots);
   t.after(() => { onBake = null; });
   const rootB = await tmpRoot();
   const B = newPipeline(rootB);
+  B.queueSinglePassOff = true; // 逐批这条路（canvas 重卡、播放头要的段、开关关掉时）
   t.after(() => B.close());
   const { executor } = await executorFor(B);
   const ctx = await executor.plan(planView(), { signal: signalNone() });
@@ -524,6 +637,62 @@ test('J10 render：中途中止 → 拒绝、停在批次边界、不再写后�
   await executor.render(view(first), { signal: signalNone(), progress: () => {} });
   const after = Object.keys(await treeOf(dir)).filter((n) => n.endsWith('.html')).length;
   assert.equal(after, 60, '重渲补齐这一段');
+});
+
+test('J10b render（一段一趟顺推）：中途中止 → 拒绝、中止点之后的快照与 PNG 都不写、已入库的快照只到 4 帧边界；之后用新信号重渲能补齐，整张卡落盘与一次渲完逐字节相同', { timeout: 45_000 }, async (t) => {
+  t.after(cleanupRoots);
+  t.after(() => { onBakeFrame = null; });
+  const A = await oneShotClipA();
+  const { rootB, executor, ctlB, tasks, commits } = await singlePassExecutor();
+  const [first, ...others] = tasks;
+  const htmlDir = path.join(rootB, 'controls-html', first.resultKey);
+
+  // 第 15 帧的快照已经生成、截图之前中止：12～15 这一组的快照都生成了，但交库（第 15 帧截完图时）在中止之后，不该入库
+  const ABORT_AT = 15;
+  const controller = new AbortController();
+  onBakeFrame = async (_rec, frame, phase) => { if (frame === ABORT_AT && phase === 'shot') controller.abort(); };
+  const seen = [];
+  let mark = bakeLog.length;
+  const err = await rejectionOf(executor.render(view(first), { signal: controller.signal, progress: (done) => seen.push(done) }));
+  onBakeFrame = null;
+  assert.ok(err, '中止后 render 拒绝');
+  assert.notEqual(err.code, 'plan-mismatch', '不是 plan-mismatch');
+  assert.equal(err.cancelled, true, `按取消拒绝：${err?.message}`);
+  const aborted = bakeLog.slice(mark);
+  assert.equal(aborted.length, 1, '顺推：这一段只调了一次 bakeFrames');
+  assert.deepEqual(aborted[0].targetFrames, span(0, 59));
+
+  const html = await treeOf(htmlDir);
+  assert.deepEqual(htmlFramesOf(html), span(0, 11), '快照只写到中止点之前交过的那几组（12～15 生成了但中止在交库之前）');
+  const index = JSON.parse(html['index.json'].toString('utf8'));
+  assert.deepEqual(index.frames, [[0, 11]], `index.json 只含完整的 4 帧组：${JSON.stringify(index)}`);
+  assert.equal(index.count, 12);
+  for (const n of htmlFramesOf(html)) assert.ok(html[`${n}.html`].equals(A.html[`${n}.html`]), `已写的快照 ${n} 与一次渲完相同`);
+  assert.deepEqual(commits, [span(0, 3), span(4, 7), span(8, 11)], '入库三次，每次一组 4 帧');
+  assert.deepEqual(seen, [4, 8, 12], '进度只报到交过的那几组');
+
+  const png = await pngTreeOf(rootB, ctlB.key);
+  assert.deepEqual(pngFramesOf(png), span(0, ABORT_AT - 1), 'PNG 只写到中止点之前（中止那一帧及之后不写）');
+  for (const name of pngNames(png)) assert.ok(png[name].equals(A.png[name]), `已写的 PNG ${name} 完整、与一次渲完相同`);
+
+  // 新信号重渲这一段：从头再推一趟，快照只补缺的 12～59
+  mark = bakeLog.length;
+  const seen2 = [];
+  await executor.render(view(first), { signal: signalNone(), progress: (done) => seen2.push(done) });
+  const retry = bakeLog.slice(mark);
+  assert.equal(retry.length, 1, '重渲这一段仍是一趟');
+  assert.deepEqual(retry[0].targetFrames, span(0, 59), '重渲：PNG 那一支照旧要整段');
+  assert.deepEqual(retry[0].snapshotFrames, span(12, 59), '重渲：快照只补缺的');
+  assert.deepEqual(htmlFramesOf(await treeOf(htmlDir)), span(0, 59), '重渲补齐这一段');
+  assert.deepEqual(seen2, progressBy4(60), '重渲的进度仍按 4 帧报');
+
+  for (const task of others) await executor.render(view(task), { signal: signalNone(), progress: () => {} });
+  const htmlAll = await treeOf(htmlDir);
+  assert.deepEqual(Object.keys(htmlAll), Object.keys(A.html), '整张卡：快照文件名与一次渲完相同');
+  for (const name of Object.keys(A.html)) assert.ok(A.html[name].equals(htmlAll[name]), `整张卡：快照 ${name} 逐字节相同`);
+  const pngAll = await pngTreeOf(rootB, ctlB.key);
+  assert.deepEqual(pngNames(pngAll), pngNames(A.png), '整张卡：PNG 文件名与一次渲完相同');
+  for (const name of pngNames(A.png)) assert.ok(A.png[name].equals(pngAll[name]), `整张卡：PNG ${name} 逐字节相同`);
 });
 
 /* ================================================================== J11 */
