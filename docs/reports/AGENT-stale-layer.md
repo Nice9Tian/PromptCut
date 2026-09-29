@@ -117,3 +117,53 @@
 3. 第 3 节的两处原有闪烁（暂停时旧层与沙漏交替、播放中快照与占位交替）要不要另立任务。
 4. 卡片源码变化是否也要纳入判据（需要动 `card-sync` 一路）。
 5. 合并与否。
+
+## 8. 追加：c10-browser-probe 用户卡回归的排查（主会话 2026-09-29 派，按交接要求停在这里）
+
+背景：主会话在 `claude/r2-merge`（`2e4b9d48`，stale-layer 与 push-scope 合在一起）上跑 `c10-browser-probe.mjs --user-card --only-a4 --no-video` 挂了。成员页一直没贴上桌面节点渲的用户卡层（`got: null`，最后是图标加徽标，在线来源里没有这一层）；0.7.2 上同一探针是过的。怀疑是输入签名两边对不上。
+
+### 在本分支上的结果：不挂
+
+- 命令：`node scripts/probes/c10-browser-probe.mjs --user-card --only-a4 --no-video --base-port 5750 --dist out/dist-online`
+  - 在线构建出自本分支；
+  - 另开环境变量 `PC_SIG_DUMP`，配合临时调试补丁（没提交），节点和页面两边都把 `clipInputs` 与签名写到同一个文件。
+- 结果：退出码 0，`ok: true, fails: []`。用户卡在 `tU` 之后 521.8 s 贴上，这一层出自创建者的桌面节点（指纹 `258acaaa7c5fe509`，ready 91 帧）。
+- 签名对照：节点写层表时给用户卡算的签名 20 次都是 `i1-7d741a8c3803f58e`，成员页按自己 store 里的项目算出的也是 `i1-7d741a8c3803f58e`。页面在线来源的 `stale` 为空，用户卡那一层在可用层里。
+
+### 在 r2-merge 上：复现没跑完
+
+- 做法：本 worktree 临时切到 `2e4b9d48`（detached），带同样的调试补丁，外加 `putLayerMap` 的范围判定记录，构建 `out/dist-online-r2` 后跑同一探针。
+- 跑到一半接到交接指令，停掉了，没有最终结果。
+- 停之前已看到的：
+  - 节点给用户卡写的签名仍是 `i1-7d741a8c3803f58e`，成员页算的相同，`stale` 为空；
+  - 成员页在线来源的可用层里**有**用户卡（`c-mummy8vh-1h`）；
+  - `putLayerMap` 的范围判定一次都没触发。这条路径是环境变量 `PROMPTCUT_SHARED_CONFIG` 的老路径，配置里没写 `contentId`，所以 `scope` 为 null、不限范围，层表照常写。
+- 停之前工作区已恢复到 `claude/stale-layer`，调试补丁丢弃。停掉的自己起的进程有：探针，以及它起的创建者 vite（5755）、render-worker、舞台 vite，都结束了。5750～5759 没有残留监听。
+
+### 结论与怀疑点
+
+- **不是签名两边对不上**：本分支与 r2-merge 上两边算出的签名都相同，页面也没把这一层判成过期。
+- 签名的输入只取项目数据里的片段字段。节点侧的加工不改签名：`renderProject` 改写素材地址、管线 `entry()` 给素材加 `_frameSourceStamp`、`structuredClone`。已补单测 SIG-7 覆盖这一点。
+- 主会话看到的「在线来源里没有这一层」，在 r2-merge 上这一轮至少到停下时不成立（层在）。更可能是没有**可贴的字节或清单**。本分支上端到端要 520 s 左右，接近探针 1200 s 时限的一半，机器有负载时容易超时。另一种可能：push-scope 那支对推送、补推的改动让用户卡的段迟推或被扣住。它的 `accepts(unit)` 对共享档快照要找「绑定项目里有一版 entry 的 cardPlan 用到这个快照键」；老路径没写 `contentId` 时不限，这一层不会被扣。但自动渲染节点路径（`auto.contentId` 还没交来时先扣着）在别的探针里有可能被扣。这些都没验证。
+- 主会话看到的 `online: null`，读的是 `onlineDiag(member).layers`，它只列可用层，过期的层也不在里面。下一轮复现时请同时看 `__pcOnlineSnapshots().stale` 与 `skipped`，就能分清：是过期（签名问题）、这一档不认（`skipped`），还是层表里本来就没有。
+
+### 已改
+
+- `src/render/layerInputSig.test.mjs` 新增 SIG-7（节点侧对项目的加工不改签名），7/7 通过。签名算法本身没改（没找到两边不一致的输入）。
+
+### 没验
+
+- r2-merge 上这个探针的完整结果（中途停了）。
+- 改完单测之后的 `npx tsc -b --force`、`npm test` 没重跑。只加了一个单测，没动运行代码。上一轮在本分支跑过：tsc 0 错误，npm test 3864/3867，唯一的失败单独重跑通过。
+- 没动渲染代码，G0-R 没重跑。
+
+### 下一步建议
+
+1. 在 r2-merge 上重跑 `c10-browser-probe --user-card --only-a4 --no-video`。失败时取下面几样判断卡在哪一段：
+   - 成员页 `__pcOnlineSnapshots()` 的 `layers`、`stale`、`skipped`，以及用户卡那层的 `ready`；
+   - 创建者 `GET /api/frames/queue`（或推送队列 `stats()`）里的 `outOfScope`、`deferred`、`layerMapsOutOfScope`。
+2. 调试补丁的做法（没入库，照做即可）：
+   - `layerMapOf` 里在 `clipInputSig` 之后，把 `{ clipId, sig, inputs: clipInputs(project, clipId) }` 追加写到 `process.env.PC_SIG_DUMP`；
+   - 探针等用户卡的循环里，把成员页 `window.__pcStore.getState().project` 的同一份东西也写进去；
+   - 两边逐字段比。
+3. 如果确是 push-scope 扣住了段（自动节点路径 `contentId` 迟到），按 push-scope 报告里 `rescope()` 的时机去查，不是本分支的范围。
