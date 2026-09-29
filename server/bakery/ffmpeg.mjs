@@ -7,7 +7,6 @@
 import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
-import fsp from 'fs/promises';
 import { spawn } from 'child_process';
 
 /** 本机的 ffmpeg:PATH 上有就用它,没有就退到 winget 装的那一份 */
@@ -71,11 +70,7 @@ export function streamPngVideo(ffmpeg, file, fps) {
         throw new Error(`${file}: wrote ${written} frames but ffmpeg encoded ${progress.frame ?? 'unknown'} (drop=${progress.drop_frames}, dup=${progress.dup_frames}) ${stderr}`);
       }
     },
-    // 中止 = 这份输出作废:等 ffmpeg 退出(Windows 上它退了才放开文件)再删掉写了一半的文件
-    async abort() {
-      proc.stdin.destroy(); proc.kill(); await done.catch(() => {});
-      await fsp.rm(file, { force: true, maxRetries: 3, retryDelay: 50 }).catch(() => {});
-    },
+    async abort() { proc.stdin.destroy(); proc.kill(); await done.catch(() => {}); },
   };
 }
 
