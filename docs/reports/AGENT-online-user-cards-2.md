@@ -176,3 +176,104 @@
 
 - 审查后合并，还是返工上面「与任务书不一致」的几处。
 - 「换项目之后测量门不再关」要不要另开任务补。
+
+## 续做（2026-09-29，主会话转达用户要求：遗留全部修掉）
+
+接着 `8d25fed4` 做，同一分支。
+
+### 提交
+
+| 提交 | 内容 |
+|---|---|
+| `0ef61804` | 第 3 项：参数面板读不全的参数给提示 |
+| `76e61b99` | 第 2 项：两边都没有定义的未知卡不测、不进预渲染集合、不进清单计划 |
+| `55377f68` | 第 1 项：换项目时测量门重新关上 |
+| `79db9e49` | 测量门诊断加 `links`；探针加换项目与未知卡两段 |
+| （本次） | 报告续做一节 |
+
+### 1. 换项目时测量门重新关上
+
+- `src/editor/measureGate.ts` 改成**按连接算**：门记下是为哪条共享项目连接开的（`openFor`）。连接由 `setMeasureGateLink` 给：在线页面的 `Preview` 接到 `currentSharedLink()`，和卡片源码同步用的是同一个取法。
+- 问门时（`measureGateOpen` / `whenMeasureGateOpen`），如果此刻的连接不是 null、又不是门开时那一条，就重新关上，重新计时 `MEASURE_GATE_MAX_MS`。换项目、重连到另一个项目、离开再进都走这条。
+  - 新连接的卡片源码第一次同步有了结果就开（`releaseMeasureGate(ok, link)`），失败也开，满上限自己开。
+  - 旧连接晚到的结果不算。
+  - 门开着时新连接的卡片源码先同步完了（还没人问门），直接记下门为它开过，之后不再为它关。
+  - 没连着（null）时不关；桌面从不关。
+- `OnlineCardSources`：连接换了，新连接的第一轮再叫一次 `onFirstSettled(ok, link)`，带上那一轮用的连接。
+- `probeRunner.ts`：
+  - 等门从 `runLoop` 开头挪进**每一轮**开头；
+  - 一轮里门又关上了就收摊（`gen !== generation || !measureGateOpen()`），下一轮开头再等门。
+- 诊断：`measureGateDiag()` 多了三项。`holds` 是关过几次门；`links` 是门为几条连接开过；`confirmedAt` 是最近一次卡片源码同步有结果的时刻。
+- 单测 `measureGate.test.mjs` 8/8，新增两条：
+  - MG-07：换连接重新关、旧结果不算、满上限开、失败开、先同步完不关、没连着不关、桌面不关；
+  - MG-08：`OnlineCardSources` 每条连接叫一次。
+- 探针：乙在页面里点「首页」，用同一张表单加入项目二（不刷新页面）。项目二由丁先摆好同步卡片段 `ouc2-s`，卡片源码是另一张同步卡 `probe-synced-card-b`。
+  - 断言一：测量门为新连接开过（`links` 1→2），而且是在项目二的卡片源码同步完之后（`confirmedAt` 更新了，`reason: synced`）；
+  - 断言二：`ouc2-s` 没被测过。
+  - **说明**：这一轮实测里项目二的卡片源码在测量问门之前就同步完了（`holds` 仍是 1），走的是「门开着、记下为新连接开过」那条路。「问门时新连接还没同步完 → 重新关上 → 等」那条路浏览器里没碰上，由 MG-07 单测覆盖。
+  - 另外第 2 项之后，同步表到之前被当成未知 id 的同步卡本来就没有测量身份，测不到。测量门这一层是双保险。
+
+### 2. 两边都没有定义的未知卡：不测、不进预渲染集合、不进清单计划
+
+- `src/kernel/registry.ts`：新增两个函数。
+  - `isKnownCardId(id)`：注册表里有定义，或者是用户卡（构建时登记的、同步来的）；
+  - `unknownCardClipIds(clips)`：写了 `cardId`、两边都不认得的片段。只有 `nodeId` 的图卡片段、素材段不算。
+- `src/editor/costIdentity.ts`：桌面与在线都去掉未知卡片段的身份，常驻探针和低内存档界限搜索按身份挑卡，于是都不挑它。
+  - 记忆化的键在桌面也带上注册表与同步表的代数：卡片定义到了（热更新、同步到了），未知卡变成认得的卡，身份跟着给。
+- `src/editor/planDispatch.ts`：新增 `knownCardsOnly(project)`，喂给 `planPipelines` 之前去掉未知卡片段。
+  - 结果：它们不在分派表的任何段里，不当重卡，不进 `prerenderSet`；
+  - 页面发的清单计划与低内存档补渲都按 `prerenderSet` 取片段，随之不含它们；
+  - 另加 `onCardsUpdated(() => schedule())`：卡片代码换了就重算表。
+- 单测：`onlineUserCards.test.mjs` 7/7，新增 OU-05：桌面与在线、普通档与低内存档的两张表都不含未知卡；定义到了以后照常给身份、按声明判重。
+- **改了的老测试**（原因都是夹具里的卡没注册，以前被当成「没有身份的重卡」）：
+  - `src/render/c10-cost-plan.test.mjs` 的 CP-02、`src/render/c10a-l17-lowmem.test.mjs` 的 C10A-L17-H2：夹具片段的 `card-a` / `card-b` / `card-c` 从没注册过，现在是未知卡、会被去掉。补上注册以后，断言一字未改。
+  - `onlineUserCards.test.mjs` 的 OU-01：原来断言桌面上未知 id 有身份，按新规矩改成没有身份。
+- **桌面预渲染进程这一侧（核对，没改）**：
+  - 页面只少掉未知卡，而舞台本来就不画它，所以什么都没少。
+  - 预渲染进程自己的预渲染集合（`server/prerender-set.mjs`，用 `card-cache.mjs` 的 card plan）照旧含未知卡。它在图里有节点，能力按没有定义算：`stateful`、要预渲染。
+  - 以前页面测过它、写了一条很轻的成本记录，两端键相同，预渲染进程因此判它轻；现在页面不测，那边查不到记录，按声明判重，会**多**预渲染一段空画面。页面不贴它（它不在页面的预渲染集合里），不影响画面，只是多花点算力。K2（两端各算一张表、应当逐字段相同）对未知卡不再一致。
+  - 要彻底一致，得让 card plan 跳过没有定义的卡。那一层挨着生成快照的键，这次没动，建议另开任务。
+- 探针：甲、乙两页的测量从头到尾没测过 `ouc-x`；两页的清单计划 `lastClips` 都不含它；低内存档补渲在等的片段与日志里也没有它。
+
+### 3. 读不全的参数给提示
+
+- `src/editor/left/paramsView.ts` 新增 `paramsPartialText`：同步卡的控件只认出一部分时（`controlsIncomplete` 为 true、`controls` 非空），回 `onlineUnsupported("修改这张卡的其余参数")`；其余情形回 null。一个都没认出的，照旧走空态那句。
+- `ParamsForm.tsx`：认出的控件照常画，下面加一行提示（`data-pc="params-partial"`）。
+- 单测 `paramsView.test.mjs` 4/4，新增 PV-04。
+
+### 验证（笔记本，2026-09-29）
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc -b --force` | 退出码 0，零输出 |
+| 改到的单测 | `paramsView` 4/4、`onlineUserCards` 7/7、`measureGate` 8/8、`c10-cost-plan` 6/6、`c10a-l17-lowmem` 7/7 |
+| `npm test` | 3835 条：通过 3833、失败 0、跳过 2，退出码 0 |
+| 在线构建 `npx vite build --mode online --outDir <tmp>/dist-online --emptyOutDir` | 退出码 0 |
+| `online-user-cards-probe`（5744～5748） | 退出码 0，`ok:true`，`fails:[]` |
+| `c10-ui-probe`（5740～5743） | 退出码 0，`ok:true`，`fails:[]`，A8 `status 501` |
+| `preview-fallback-probe`（dev server 起在 5747，舞台 5748/5749，跑完停掉） | 退出码 0，`PASS`，`fails:[]`；313 拍、透明拍 0；沙漏不计这一层缩放是 28 屏幕像素；后台舞台 0 个占位节点；生成快照不带占位节点 |
+
+`online-user-cards-probe` 最后一行 JSON（节选）：
+
+```
+{"ok":true,"fails":[],
+ "sizes":{"column_s2":{"screen":{"w":156.6,"h":62.2}},"icon_s4":{"screen":{"w":52,"h":40}},"icon_s5":{"screen":{"w":52,"h":40}},"row_s6":{"screen":{"w":194.6,"h":40}},"hourglass_s7":{"screen":{"w":28,"h":28}}},
+ "dense":{"samples":13,"firstMapAt":1807,"firstS2IconAt":2474,"firstSnapAt":2474,"bad":[]},
+ "params":{"text":"synced","size":"48","side":"left","tint":"#ff8800"},"paramsRemote":{"text":"ouc edited"},
+ "measure":{"a":{"probed":[{"clipId":"ouc-b"}],"gate":{"reason":"synced","holds":1,"links":1}},"b":{"probed":[{"clipId":"ouc-b"}],"gate":{"reason":"synced"}}},
+ "switchProject":{"gateBefore":{"links":1,"confirmedAt":1790643499621},"gate":{"reason":"synced","holds":1,"links":2,"confirmedAt":1790643510179},"probed":[{"clipId":"ouc-b"}]},
+ "unknownX":{"a":{"probed":[{"clipId":"ouc-b"}],"plan":["ouc-s1","ouc-s2","ouc-s3","ouc-s4","ouc-s5","ouc-s6","ouc-s7","ouc-u"]},"b":{"probed":[{"clipId":"ouc-b"}],"plan":["ouc2-s"]}},
+ "lowmem":{"backfill":{"waiting":["ouc-s3","ouc-s4","ouc-s5","ouc-s6","ouc-s7"]}}}
+```
+
+### 续做后的遗留
+
+- 预渲染进程对未知卡按声明判重、多预渲染一段空画面（见第 2 项）。没改，建议另开任务：让 card plan 跳过没有定义的卡。
+- 换项目时「重新关门再等」那条路只有单测覆盖，浏览器里新项目的卡片源码都赶在问门之前同步完了（见第 1 项）。
+- 导出像素基线仍待主会话在 PC 上跑。
+
+### 建议主会话补进契约第 9 节的句子（续）
+
+- 「识别」再补：两边都没有定义的未知卡，不测、不进预渲染集合、不进清单计划与补渲，桌面与在线一致。
+- 「测量」那条补：测量门按连接算，换项目、重连到另一个项目、离开再进时重新等新项目的卡片源码第一次同步有结果，上限同样约 10 秒。
+- 参数面板：同步卡的控件只认出一部分时，照常画认出的，下面提示「在线浏览器模式暂不支持修改这张卡的其余参数」。
