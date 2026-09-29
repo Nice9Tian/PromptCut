@@ -514,7 +514,8 @@ try {
   dense.firstSnapAt = samples.find((x) => x.st?.[ID.u]?.snapshot && x.st?.[ID.s1]?.snapshot)?.at ?? null;
   dense.bad = bad.slice(0, 10);
   n.dense = dense;
-  check(samples.length >= 10, '乙:页面一打开就密集采样(≥ 10 次)', dense);
+  // 采到最终状态为止(层表到得快时次数自然少):至少 3 次、最后一次已到最终状态,才算这一段真的采过
+  check(samples.length >= 3 && !!(last?.st?.[ID.u]?.snapshot && last?.st?.[ID.s1]?.snapshot), '乙:页面一打开就密集采样(每 100 ms 一次,采到最终状态为止,至少 3 次)', dense);
   check(bad.length === 0, '乙:有层的 u、s1 任何一次采样都没有图标、没有徽标;s2、s3 层表取到之前不出图标、不出徽标', dense);
   check(last?.st?.[ID.u]?.snapshot && last?.st?.[ID.s1]?.snapshot, '乙:u、s1 最后贴上快照', last?.st);
   check(last?.st?.[ID.s2]?.reason === 'unsupported' && last?.st?.[ID.s3]?.reason === 'unsupported' && last?.tl?.[ID.s2]?.badge && last?.tl?.[ID.s3]?.badge,
