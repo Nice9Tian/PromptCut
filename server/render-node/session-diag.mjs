@@ -132,6 +132,13 @@ export const SESSION_LINE_RE = /^\[(?:queue-node|artifact-push)\] docservice\.(s
 export const TASK_LINE_RE = /^\[queue-node\] (node\.task-(?:lost|failed|discarded|completed|dedup)|sink\.(?:incomplete|has-miss|has-pushed|has-push-failed)|manifest\.(?:get|put)-failed)\b/;
 
 /**
+ * 自动渲染节点的起停行(`docs/reports/AGENT-desktop-auto-node.md`):`[queue-node] render-node.<事件> {…}`(交接、起停、补推、等页面)
+ * 与推送队列的建队 / 跳过 / 选定素材服务 `[artifact-push] push.(started|skip|asset-base) {…}`。安装版的用户只交得出编辑器进程的日志,
+ * 「这台桌面有没有成为渲染节点、推到了哪台素材服务」要在那里看得到。行里只有文档服务 / 素材服务的地址与项目 id,不带票据。
+ */
+export const AUTO_NODE_LINE_RE = /^\[(?:queue-node\] (render-node\.[a-z-]+)|artifact-push\] (push\.(?:started|skip|asset-base)))\b/;
+
+/**
  * 按行转发子进程输出里的会话事件行(编辑器进程收预渲染进程的 stdout / stderr 用)。块可能在行中间断开,
  * 不完整的尾巴留到下一块;单行超过 `maxLine` 字符截断。源头(预渲染进程)已按事件节流,这里再兜一层:
  * 每种事件每个窗口最多 `burst` 行,压下的条数随下一行带出(行尾 ` (suppressed N)`)。
@@ -140,7 +147,7 @@ export const TASK_LINE_RE = /^\[queue-node\] (node\.task-(?:lost|failed|discarde
  */
 export function createSessionLineForwarder(write, {
   throttle = createLogThrottle({ burst: 10, windowMs: 60_000 }), maxLine = 2000, re = SESSION_LINE_RE,
-  taskRe = TASK_LINE_RE, taskThrottle = createLogThrottle({ burst: 60, windowMs: 60_000 }),
+  taskRe = TASK_LINE_RE, taskThrottle = createLogThrottle({ burst: 60, windowMs: 60_000 }), autoRe = AUTO_NODE_LINE_RE,
 } = {}) {
   let tail = '';
   return (chunk) => {
@@ -151,8 +158,9 @@ export function createSessionLineForwarder(write, {
     for (const raw of lines) {
       const m = re.exec(raw);
       const t = m ? null : (taskRe ? taskRe.exec(raw) : null);
-      if (!m && !t) continue;
-      const got = m ? throttle.take(m[1]) : taskThrottle.take(t[1]);
+      const a = m || t || !autoRe ? null : autoRe.exec(raw);
+      if (!m && !t && !a) continue;
+      const got = m ? throttle.take(m[1]) : t ? taskThrottle.take(t[1]) : taskThrottle.take(a[1] ?? a[2]);
       if (!got) continue;
       const line = raw.length > maxLine ? `${raw.slice(0, maxLine)}…` : raw;
       write(got.suppressed > 0 ? `${line} (suppressed ${got.suppressed})` : line);

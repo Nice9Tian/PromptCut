@@ -244,3 +244,20 @@ test('RLY-03 配置记忆:不记票据;按项目撤', () => {
   assert.equal(m.clear(), true, '不给项目 id 一律撤');
   assert.equal(m.clear(), false);
 });
+
+test('ARN-08 编辑器进程的日志里看得到自动渲染节点的起停与推送目标(不转 queue.started 这类别的行)', async () => {
+  const { createSessionLineForwarder } = await import('../render-node/session-diag.mjs');
+  const out = [];
+  const fwd = createSessionLineForwarder((line) => out.push(line));
+  fwd([
+    '[queue-node] render-node.bind {"projectId":"P1","url":"wss://site.example/hosted/"}',
+    '[artifact-push] push.asset-base {"source":"page","base":"https://site.example/media/api/asset","for":"push"}',
+    '[artifact-push] push.started {"docservice":"page","asset":"https://site.example/media/api/asset"}',
+    '[artifact-push] push.skip {"reason":"disabled"}',
+    '[queue-node] render-node.teardown {"reason":"page-left","released":0}',
+    '[queue-node] queue.started {"nodeId":"x"}',
+    '[artifact-push] push.retry {"id":"x"}',
+    '',
+  ].join('\n'));
+  assert.deepEqual(out.map((l) => l.split(' ')[1]), ['render-node.bind', 'push.asset-base', 'push.started', 'push.skip', 'render-node.teardown']);
+});
