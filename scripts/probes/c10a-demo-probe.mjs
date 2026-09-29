@@ -39,6 +39,8 @@
  * 每次顶层导航与意外重载次数。
  *
  * 输出:过程写 stderr(一行一条 JSON);stdout 最后一行是一行 JSON `{ ok, fails, … }`,`ok` 为假时退出码 1。
+ *
+ * `PC_CHROME_ARGS` 只把参数原样透传给探针起的 Chrome(典型用途:云端 Linux 以 root 运行要 `--no-sandbox`);不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则对远端站点的探针在证书有问题时照样通过,掩盖真问题。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync } from 'node:child_process';
