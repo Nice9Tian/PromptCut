@@ -1128,7 +1128,7 @@ async function runHost(r) {
     if (noLan) {
       const nl = await noLan.stop();
       r.set({ noLan: nl });
-      r.check('no-lan-tcp', nl.tcpOk, { ip: noLanIp, samples: nl.samples, maxTcp: nl.maxTcp, seen: nl.seen });
+      r.check('no-lan-tcp', nl.tcpOk, { ip: noLanIp, samples: nl.samples, maxTcp: nl.maxTcp, seen: nl.seen, maxOther: nl.maxOther, seenOther: nl.seenOther });
       r.check('no-lan-discovery', nl.discoveryOk, nl.discovery);
     }
     // e2 / C1 的受害方:被扣住的任务在断线期间执行失败是预期的(旧认领随后作废),不算这台主机的失败

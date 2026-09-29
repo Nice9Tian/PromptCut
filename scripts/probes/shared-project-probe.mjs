@@ -635,7 +635,7 @@ async function runMember() {
   check(result.taskDone >= expectTasks, `完成至少 ${expectTasks} 个任务（实际 ${result.taskDone}）`);
   if (noLan) {
     result.noLan = await noLan.stop();
-    check(result.noLan.tcpOk, `全程没有到 ${noLanIp} 的 TCP 连接（采样 ${result.noLan.samples} 次，最多 ${result.noLan.maxTcp} 条）`);
+    check(result.noLan.tcpOk, `全程没有到 ${noLanIp} 的已建立 TCP 连接（采样 ${result.noLan.samples} 次，最多 ${result.noLan.maxTcp} 条）`);
     check(result.noLan.discoveryOk, `3 s 局域网发现 0 条（实际 ${result.noLan.discovery?.hosts ?? result.noLan.discovery?.error}）`);
   }
   return done();
