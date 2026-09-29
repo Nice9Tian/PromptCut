@@ -51,6 +51,7 @@ import { pageEnvironment } from "./pageEnvironment.mjs";
 import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.mjs";
 import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
+import { layerSwapMs } from "./swapCost";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
 import { pageL2 } from "../online/l2";
 import { l2CostBackend } from "../online/l2Costs";
@@ -332,13 +333,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   }, [lowMem]);
   /*
    * L4(C10 契约第 6 节、第 18 节第 1 条):在线普通档没有流,重层每拍换一次 HTML 快照 —— 播放中的投递不受 33 ms 节流;
-   * 换帧成本 `swapMs` 进每拍预算,分派时每张重卡每拍的固定成本也换成它(两边同一个预算)。
+   * 换帧成本进每拍预算,分派时每张重卡每拍的固定成本也换成它(两边同一个预算)。
    */
   useEffect(() => {
     const on = ONLINE && !lowMem;
-    setBeatSwap(on, { swapMs: SWAP_MS, occupied: lightCostAt });
-    setPlanDeadMs(on ? SWAP_MS : null);
-    return () => { setBeatSwap(false); setPlanDeadMs(null); };
+    // 每层的换帧成本按卡种取(swap-tuning 实测,`beatSwap.mjs` 的 `SWAP_MS_BY_KIND`);认不出卡种的按缺省 `SWAP_MS`
+    setBeatSwap(on, { swapMs: SWAP_MS, occupied: lightCostAt, costOf: on ? layerSwapMs : null });
+    setPlanDeadMs(on ? SWAP_MS : null, on ? layerSwapMs : null);
+    return () => { setBeatSwap(false, { costOf: null }); setPlanDeadMs(null); };
   }, [lowMem]);
   /* C10 契约第 3 节:在线普通档的成本记录存进 L2 的 `costs` 表(`mode=build`,关掉再开不重测) */
   useEffect(() => {
