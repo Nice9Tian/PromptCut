@@ -47,7 +47,7 @@
  * 小尺寸几帧、舞台每帧耗时 p50 / p95 与被门挡住的时长、连接状态、最近一次错误。
  */
 import { browserNodeEligibility, createBrowserNode, type BrowserNode, type EligibilityInput, type FrameRecord, type NodeTask } from "../online/browserNode";
-import { bakeInputOf, isolatedCardProject, manifestBlocks, manifestCovers, manifestKey, snapshotManifest, type BakeInput } from "../online/bakeTask";
+import { manifestBlocks, manifestCovers, manifestKey, snapshotManifest } from "../online/bakeTask";
 import { createSnapUploader, type SnapUploader } from "../online/snapUploader";
 import { pageL2 } from "../online/l2";
 import { pageEnvironment } from "./pageEnvironment.mjs";
@@ -59,7 +59,7 @@ import { isScrubbing, subscribeScrub } from "./timeline/useScrub";
 import { docRequest, remoteAssetBase } from "./media/assetTiers";
 import { currentSharedUrl, me, pageSession } from "./sync/syncManager";
 import type { Project } from "../kernel/project";
-import type { BakeFrameReply, StageEvent, StageRpcClient } from "../render/stageRpc";
+import { createStageBaker } from "./stageBake";
 // @ts-expect-error 无类型声明的 .mjs(浏览器与 Node 通用,只用 WebSocket 与计时器)
 import { createDocEndpoint as createDocEndpointUntyped } from "../../server/render-node/session-link.mjs";
 
@@ -146,19 +146,6 @@ async function gunzip(buf: ArrayBuffer): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** 这一段的「活」:单飞队列里那个 `bake` 活,段收尾时交还 */
-interface Lease {
-  taskId: string;
-  isolated: Project;
-  input: BakeInput;
-  stage: StageRpcClient;
-  /** 这台舞台灌过这一段的隔离单卡工程没有 */
-  pushedTo: StageRpcClient | null;
-  /** 已经先发给舞台的下一帧(父页推上一帧的两档时舞台接着推这一帧,见 `bakeFrame`) */
-  ahead: { frame: number; stage: StageRpcClient; reply: Promise<BakeFrameReply> } | null;
-  close: () => void;
-}
-
 export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   let stopped = false;
   let fatal: string | null = null;
@@ -208,100 +195,25 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
 
   /* ---------------- 生成快照的活 ---------------- */
 
-  let lease: Lease | null = null;
-  /** 舞台发来的 `bake-frame`:会话号 + 本地帧 → 事件 */
-  const bakeEvents = new Map<string, Extract<StageEvent, { type: "bake-frame" }>>();
-  const offStage = onStageEvent((e) => {
-    if (e.type !== "bake-frame") return;
-    bakeEvents.set(`${e.session}#${e.localFrame}`, e);
-    if (bakeEvents.size > 16) bakeEvents.delete(bakeEvents.keys().next().value as string);
+  /**
+   * 活与每帧的舞台往返在 `stageBake.ts`(任务 F 拆出):单飞队列里的 `bake` 活、每帧前核后台位置(换了人就重灌)、
+   * 顺推时先发下一帧、一帧中途换了人就在新舞台上重做。这里接着做一帧的后半段:解压、推素材服务、进页面内快照库。
+   */
+  const baker = createStageBaker({
+    runBackJob: (kind, run) => runBackJob(kind, run),
+    backStage, pushProject, onStageEvent,
+    onUrgent: () => { node?.yieldFor("urgent"); },
+    isIdle: () => isIdle(),
+    mode: BAKE_MODE,
+    now: () => performance.now(),
+    notePhase: (k, ms) => notePhase(k, ms),
+    noteError: (reason) => { stage.errors[reason] = (stage.errors[reason] ?? 0) + 1; },
   });
-
-  const closeLease = () => {
-    const l = lease;
-    lease = null;
-    if (!l) return;
-    try { void l.stage.bakeCancel().catch(() => {}); } catch { /* 舞台换了 */ }
-    l.close();
-  };
-
-  /** 开这一段的活:排进单飞队列(最不急),拿到后台舞台才回 */
-  const openLease = (task: NodeTask, project: unknown): Promise<Lease> => {
-    const input = bakeInputOf(task);
-    if (!input) return Promise.reject(Object.assign(new Error("任务没有 input.bake / clipId(切分方没给浏览器那一份的参数)"), { retryable: false }));
-    let isolated: Project;
-    try { isolated = isolatedCardProject(project as Project, input); } catch (e) { return Promise.reject(Object.assign(e as Error, { retryable: false })); }
-    return new Promise<Lease>((resolve, reject) => {
-      let got = false;
-      void runBackJob("bake", async (ctx) => {
-        let release!: () => void;
-        const done = new Promise<void>((r) => { release = r; });
-        const l: Lease = { taskId: task.id, isolated, input, stage: ctx.stage, pushedTo: null, ahead: null, close: () => release() };
-        // 更急的活来了(补跑、测量、探针):当前帧做完就放回(D8)
-        ctx.signal.addEventListener("abort", () => { node?.yieldFor("urgent"); }, { once: true });
-        got = true;
-        resolve(l);
-        await done;
-      }).catch((e) => { if (!got) reject(e); });
-    });
-  };
+  const closeLease = () => baker.close();
 
   const bakeFrame = async ({ task, project, localFrame, signal }: { task: NodeTask; project: unknown; localFrame: number; signal: AbortSignal }) => {
     const t0 = performance.now();
-    if (!lease || lease.taskId !== task.id) {
-      closeLease();
-      const l = await openLease(task, project);
-      if (signal.aborted) { l.close(); throw Object.assign(new Error("已中止"), { retryable: true }); }
-      lease = l;
-    }
-    const l = lease;
-    // 舞台互换或 iframe 重载之后,后台位置上换了人:在新的后台舞台上重开(做到哪一帧记在节点里)
-    const cur = backStage();
-    if (cur && cur !== l.stage) { l.stage = cur; l.pushedTo = null; l.ahead = null; }
-    if (l.pushedTo !== l.stage) {
-      await pushProject("back", l.isolated, { reset: true });
-      l.pushedTo = l.stage;
-    }
-    const session = task.id;
-    const tRpc = performance.now();
-    notePhase("lease", tRpc - t0);
-    const onAbort = () => { void l.stage.bakeCancel().catch(() => {}); };
-    signal.addEventListener("abort", onAbort, { once: true });
-    // 上一帧推两档时已经先发给舞台的这一帧:直接等它的回包;对不上(跳了帧、换了舞台)就照常发,新的一帧作废在飞的那一帧
-    const ahead = l.ahead;
-    l.ahead = null;
-    let reply: BakeFrameReply;
-    try {
-      reply = ahead && ahead.frame === localFrame && ahead.stage === l.stage
-        ? await ahead.reply
-        : await l.stage.bakeFrame({ session, clipId: l.input.clipId, localFrame, mode: BAKE_MODE, small: true });
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
-    notePhase("rpc", performance.now() - tRpc);
-    /*
-     * 先发下一帧(顺推时):推素材服务是网络往返(在线站点上每块至少一次 `GET chunks`),舞台在另一个进程里,
-     * 两件事并行,每帧的耗时从「舞台 + 往返」降到两者取大。这一帧仍然两档都推成功才回(c10a 第 9 节);
-     * 下一帧的回包只在节点真来要它时才用。让路、放回、丢认领时 `closeLease` 的 `bakeCancel` 把它停在帧边界。
-     * 不闲(要让路)或已中止时不先发。
-     */
-    const range = task.range;
-    if (reply.ok && BAKE_MODE === "seq" && range && localFrame + 1 <= range.to && !signal.aborted && isIdle() && lease === l) {
-      const next = localFrame + 1;
-      const p = l.stage.bakeFrame({ session, clipId: l.input.clipId, localFrame: next, mode: BAKE_MODE, small: true })
-        .catch((e): BakeFrameReply => ({ ok: false, reason: "cancelled", detail: String((e as Error)?.message ?? e).slice(0, 200) }));
-      l.ahead = { frame: next, stage: l.stage, reply: p };
-    }
-    if (!reply.ok) {
-      stage.errors[reply.reason] = (stage.errors[reply.reason] ?? 0) + 1;
-      // 不可重试:再做一遍结果一样。`not-ready`(就绪闸超时)按可重试交回,同桌面 waitFrameReady 抛错的处理
-      const finalReasons = new Set(["lossy", "no-clip", "no-control", "frame-mismatch", "unsupported"]);
-      if (reply.reason === "role" || reply.reason === "no-project") l.pushedTo = null;
-      throw Object.assign(new Error(`生成快照没成:${reply.reason}${reply.detail ? `(${reply.detail})` : ""}`), { retryable: !finalReasons.has(reply.reason) });
-    }
-    const ev = bakeEvents.get(`${session}#${localFrame}`);
-    bakeEvents.delete(`${session}#${localFrame}`);
-    if (!ev || ev.hash !== reply.hash) throw Object.assign(new Error("舞台的 bake-frame 事件没到"), { retryable: true });
+    const { reply, event: ev } = await baker.bakeFrame({ task, project, localFrame, signal });
     stage.frames++;
     stage.ms.push(reply.ms);
     stage.readyMs.push(reply.readyMs);
@@ -597,6 +509,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
         idle: node ? isIdle() : false,
         stage: {
           frames: stage.frames, remounts: stage.remounts, pausedMs: Math.round(stage.pausedMs), errors: { ...stage.errors },
+          // 换过几次后台舞台、一帧中途换了人重做几次、灌了几次隔离单卡工程(stageBake.ts)
+          restage: baker.diag(),
           frameMs: { p50: quantile(ms, 0.5), p95: quantile(ms, 0.95) },
           smallFrames: stage.small, smallMs: { p50: quantile(sm, 0.5), p95: quantile(sm, 0.95) },
           phases: Object.fromEntries(PHASES.map((k) => { const a = [...phases[k]].sort((x, y) => x - y); return [k, { n: a.length, p50: quantile(a, 0.5), p95: quantile(a, 0.95) }]; })),
@@ -615,7 +529,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     stopped = true;
     clearInterval(timer);
     teardown("unmount");
-    offStage();
+    baker.dispose();
     offStore();
     offScrub();
     if (typeof document !== "undefined") {

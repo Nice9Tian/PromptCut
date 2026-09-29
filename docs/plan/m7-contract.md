@@ -137,6 +137,7 @@
   - 每帧生成快照，取本控件的 `html`；有读不出像素的画布（`lossy`）这一段 `fail`（不可重试，同 `server/bakery/bake.mjs:225`）；
   - 每帧发事件 `bake-frame { clipId, localFrame, hash, bytes, htmlGz, small? }`：`hash` 是原始 HTML 字节的 sha256（舞台里用 WebCrypto 算），`htmlGz` 随消息转移。
 - 舞台互换（K5）时生成快照跟着后台位置走：互换前单飞队列已让补跑先行、生成快照停在帧边界；互换后在新的后台舞台上重开，做到哪一帧记在父页。
+  - 〔裁，2026-09-30，`claude/queue-maint` 任务 F〕互换剧本 `src/editor/stageBake.test.mjs`（QM-F-01～05）查出：一帧**在飞时**后台位置换了人（没有补跑先行的互换、iframe 重载、补跑刚完就开出的活），旧舞台回 `cancelled` / `role`，或帧做完了而 `bake-frame` 事件在互换后才到、被按角色滤掉，宿主原来按可重试失败交回（计一次失败）。改为：后台位置确实换了人就在新后台上重灌、重做这一帧，每帧最多 2 次（`SWAP_REDO_MAX`，三级数字），不计失败；没换人照旧交回失败。活与每帧的舞台往返从 `browserNodeHost.ts` 拆到 `src/editor/stageBake.ts`（行为不变，只多这一条）。
 
 ### 4.4 小尺寸（D5 建议选项 a）
 
