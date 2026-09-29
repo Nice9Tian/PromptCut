@@ -22,12 +22,14 @@ import { VoiceSettingsDialog } from "./voice/VoiceSettingsDialog";
 import { openVoiceSettings, useVoiceSettingsState } from "./ai/voiceSettingsStore";
 import { getVoiceConfig } from "./ai/voice";
 import { JoinForm } from "./editor/sync/JoinForm";
+import { STORAGE_EVENT, takeStorageRequest } from "./ui/WindowTitleBar";
 
-/** 字节数写成人看的样子 */
+/** 字节数写成人看的样子。导出产物、预渲染缓存动辄几十 GB,所以到 G 为止 */
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
-  return `${(bytes / 1024 / 1024).toFixed(1)}M`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}M`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)}G`;
 }
 
 /** 秒 → mm:ss */
@@ -47,10 +49,21 @@ function humanDate(iso: string): string {
     : `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
+/** humanDate 之外再带上时分:同一天导出好几次,只有日期分不出来 */
+function humanDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const date = humanDate(iso);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return date === hm ? date : `${date} ${hm}`;
+}
+
 /**
  * 开始页面。进软件先看到这里,选了才进编辑器。
  *
- * 四块:开始创作、加入别人的项目、拓展功能、本地草稿。没有左侧栏,也没有那排圆形入口。
+ * 五块:开始创作、加入别人的项目、拓展功能、本地草稿、存储。没有左侧栏,也没有那排圆形入口。
+ * 「存储」(`workflow/project.md`「开始」)显示预渲染缓存与导出产物的占用、改缓存上限、清理缓存、逐份管理导出产物;
+ * 标题栏菜单「存储…」直达这里(`WindowTitleBar.tsx` 的 `open-storage`)。
  *
  * 在线浏览器模式(C10a 契约第 2 节「首屏」):只有「加入别人的项目」—— 在线页面里新建项目、本机草稿、拓展功能
  * 都要编辑器进程(`/api/*`),C10a 不提供(新建与草稿随 C10 其余)。在线构建里只留 `OnlineStartPage`,桌面那一页
@@ -219,6 +232,8 @@ function DesktopStartPage(props: { onEnterEditor: () => void }): JSX.Element {
             ))}
           </div>
         </section>
+
+        <StorageSection />
       </main>
 
       <input
@@ -229,6 +244,307 @@ function DesktopStartPage(props: { onEnterEditor: () => void }): JSX.Element {
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void openFile(f); }}
       />
     </div>
+  );
+}
+
+/*
+ * ── 存储 ───────────────────────────────────────────────
+ * 接口约定见 `docs/plan/storage-plan.md` 第 4 节:`/api/storage*`(帧库占用、上限、清理缓存,编辑器进程转发给预渲染进程)
+ * 与 `/api/exports*`(导出产物,`server/vite-plugin-exports-list.ts`)。`/api/storage` 取不到(比如那一半还没装上、
+ * 预渲染进程没起来)时这一块照常显示导出产物,缓存那一行写「暂时取不到」,不报错。
+ * 只在桌面开始页里;在线构建连同这些调用一起剪掉(`StartPage` 在线构建里是 `OnlineStartPage`)。
+ */
+
+const GB = 1024 * 1024 * 1024;
+/** 缓存上限的下限(`mechanism/platforms.md`「帧库」:用户可在 5 GB 到磁盘总容量之间改) */
+const CAP_MIN_BYTES = 5 * GB;
+
+interface StorageInfo {
+  frameLibrary: {
+    bytes: number;
+    capBytes: number;
+    capSource: "default" | "user";
+    diskBytes: number;
+    pinnedBytes?: number;
+    scannedAt?: string | number | null;
+    lastEvict?: { at: string | number; freedBytes: number; removed: number; skipped: number } | null;
+  };
+}
+
+interface ExportItem {
+  id: string;
+  projectName: string | null;
+  projectId: string | null;
+  at: string | null;
+  finished: boolean;
+  running?: boolean;
+  bytes: number;
+  deliverables: Array<{ name: string; bytes: number }>;
+  intermediateBytes: number;
+}
+
+const DELIVERABLE_LABEL: Record<string, string> = { "preview.mp4": "成片", "overlay.mov": "透明层" };
+
+/**
+ * 读一个 JSON 接口。接口不存在时开发服务器可能回首页的 HTML(200)、也可能 404,两种都当取不到;
+ * `{ ok: false, error }` 把 error 抛出来给界面显示。
+ */
+async function storageJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { cache: "no-store", ...init });
+  const type = res.headers.get("content-type") || "";
+  if (!type.includes("application/json")) throw new Error(res.ok ? "接口不可用" : `HTTP ${res.status}`);
+  const body = await res.json() as { ok?: boolean; error?: string } & T;
+  if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+function StorageSection(): JSX.Element {
+  const sectionRef = useRef<HTMLElement>(null);
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
+  const [storageState, setStorageState] = useState<"loading" | "ok" | "unavailable">("loading");
+  const [items, setItems] = useState<ExportItem[]>([]);
+  const [exportsLoading, setExportsLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState("");
+  const [capGb, setCapGb] = useState("");
+
+  const loadStorage = useCallback(async () => {
+    try {
+      const s = await storageJson<StorageInfo>("/api/storage");
+      if (!s.frameLibrary || typeof s.frameLibrary.bytes !== "number") throw new Error("回包不对");
+      setStorage(s);
+      setStorageState("ok");
+      setCapGb(String(Math.round(s.frameLibrary.capBytes / GB)));
+    } catch {
+      setStorage(null);
+      setStorageState("unavailable");
+    }
+  }, []);
+
+  const loadExports = useCallback(async () => {
+    setExportsLoading(true);
+    try {
+      const r = await storageJson<{ items: ExportItem[] }>("/api/exports");
+      setItems(Array.isArray(r.items) ? r.items : []);
+    } catch (e) {
+      setError(`读取导出产物失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExportsLoading(false);
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setError("");
+    await Promise.all([loadStorage(), loadExports()]);
+  }, [loadStorage, loadExports]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  // 标题栏「存储…」:从编辑器回来时开始页刚挂上,从开始页点时直接收到事件。
+  // 上面几块(草稿、拓展)是异步读出来的,读完会把这一块往下推,所以头一两秒里跟着再滚一次
+  useEffect(() => {
+    const focus = () => {
+      const el = sectionRef.current;
+      if (!el) return;
+      el.scrollIntoView({ block: "start" });
+      const main = el.parentElement;
+      if (!main || typeof ResizeObserver === "undefined") return;
+      const ro = new ResizeObserver(() => el.scrollIntoView({ block: "start" }));
+      for (const child of Array.from(main.children)) ro.observe(child);
+      window.setTimeout(() => ro.disconnect(), 1500);
+    };
+    if (takeStorageRequest()) focus();
+    window.addEventListener(STORAGE_EVENT, focus);
+    return () => window.removeEventListener(STORAGE_EVENT, focus);
+  }, []);
+
+  const clearCache = async () => {
+    if (!confirm("清理缓存会删掉预渲染结果（正在打开的项目用到的除外），之后用到时要重新预渲染。继续？")) return;
+    setBusy("clear-cache");
+    setError("");
+    setNotice("");
+    try {
+      const r = await storageJson<{ freedBytes: number; removed?: number; skipped?: number }>("/api/storage/clear-cache", { method: "POST" });
+      setNotice(`清理完成，腾出 ${humanSize(r.freedBytes || 0)}${r.skipped ? `；${r.skipped} 项正被使用，没删` : ""}。`);
+      await loadStorage();
+    } catch (e) {
+      setError(`清理缓存失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const fl = storage?.frameLibrary;
+  const capMaxGb = fl && fl.diskBytes > 0 ? Math.floor(fl.diskBytes / GB) : Infinity;
+  const saveCap = async () => {
+    const gb = Number(capGb);
+    if (!Number.isFinite(gb) || gb < CAP_MIN_BYTES / GB || gb > capMaxGb) {
+      setNotice("");
+      setError(`上限要在 ${CAP_MIN_BYTES / GB} GB 到 ${Number.isFinite(capMaxGb) ? `${capMaxGb} GB（磁盘总容量）` : "磁盘总容量"}之间。`);
+      return;
+    }
+    setBusy("cap");
+    setError("");
+    setNotice("");
+    try {
+      const r = await storageJson<{ capBytes: number }>("/api/storage/cap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bytes: Math.round(gb * GB) }),
+      });
+      setNotice(`缓存上限已改为 ${humanSize(r.capBytes)}。`);
+      await loadStorage();
+    } catch (e) {
+      setError(`改上限失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const act = async (item: ExportItem, action: "delete" | "prune" | "reveal") => {
+    const who = `${item.projectName || "未知项目"}（${item.at ? humanDateTime(item.at) : item.id}）`;
+    if (action === "delete" && !confirm(`删除导出「${who}」？这会删掉磁盘上的文件（${humanSize(item.bytes)}），包括成片与透明层，不能撤销。`)) return;
+    if (action === "prune" && !confirm(`只删「${who}」的中间文件（${humanSize(item.intermediateBytes)}）？成片与透明层留着。这会删掉磁盘上的文件，不能撤销。`)) return;
+    setBusy(`${action}:${item.id}`);
+    setError("");
+    setNotice("");
+    try {
+      const r = await storageJson<{ freedBytes?: number }>(`/api/exports/${encodeURIComponent(item.id)}/${action}`, { method: "POST" });
+      if (action !== "reveal") {
+        setNotice(`${action === "delete" ? "已删除" : "已删中间文件"}，腾出 ${humanSize(r.freedBytes || 0)}。`);
+        await loadExports();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      if (action !== "reveal") await loadExports();
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const exportBytes = items.reduce((s, it) => s + it.bytes, 0);
+  const exportMid = items.reduce((s, it) => s + it.intermediateBytes, 0);
+  const pct = fl && fl.capBytes > 0 ? Math.min(100, (fl.bytes / fl.capBytes) * 100) : 0;
+
+  return (
+    <section ref={sectionRef} className="sp-section" data-pc="start-storage" id="storage">
+      <div className="sp-section-head">
+        <h2 className="sp-section-title">存储</h2>
+        <div className="sp-section-actions">
+          <button className="sp-ghost-btn" onClick={() => void refresh()} disabled={!!busy}>刷新</button>
+        </div>
+      </div>
+
+      {error && <div className="sp-error" data-pc="storage-error">{error}</div>}
+      {notice && <div className="sp-storage-notice" data-pc="storage-notice">{notice}</div>}
+
+      <div className="sp-storage-cards">
+        <div className="sp-storage-card" data-pc="storage-cache">
+          <div className="sp-storage-label">预渲染缓存</div>
+          {storageState === "loading" && <div className="sp-muted">读取中…</div>}
+          {storageState === "unavailable" && (
+            <div className="sp-muted" data-pc="storage-cache-unavailable">暂时取不到。预渲染进程起来后点「刷新」再看。</div>
+          )}
+          {storageState === "ok" && fl && (
+            <>
+              <div className="sp-storage-figure" data-pc="storage-cache-bytes">
+                {humanSize(fl.bytes)} <span className="sp-muted">/ 上限 {humanSize(fl.capBytes)}{fl.capSource === "default" ? "（缺省）" : ""}</span>
+              </div>
+              <div className="sp-storage-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></div>
+              {fl.lastEvict && (
+                <div className="sp-muted">
+                  上次自动清理 {humanDateTime(new Date(fl.lastEvict.at).toISOString())}，腾出 {humanSize(fl.lastEvict.freedBytes)}
+                </div>
+              )}
+              <div className="sp-storage-row">
+                <label className="sp-muted" htmlFor="sp-cap-input">上限</label>
+                <input
+                  id="sp-cap-input"
+                  className="sp-storage-input"
+                  data-pc="storage-cap-input"
+                  type="number"
+                  min={CAP_MIN_BYTES / GB}
+                  max={Number.isFinite(capMaxGb) ? capMaxGb : undefined}
+                  step={1}
+                  value={capGb}
+                  onChange={(e) => setCapGb(e.target.value)}
+                />
+                <span className="sp-muted">GB</span>
+                <button className="sp-ghost-btn" data-pc="storage-cap-save" disabled={!!busy} onClick={() => void saveCap()}>设定</button>
+              </div>
+            </>
+          )}
+          <div className="sp-storage-row">
+            <button
+              className="sp-ghost-btn"
+              data-pc="storage-clear-cache"
+              disabled={storageState !== "ok" || !!busy}
+              onClick={() => void clearCache()}
+            >
+              {busy === "clear-cache" ? "清理中…" : "清理缓存"}
+            </button>
+          </div>
+        </div>
+
+        <div className="sp-storage-card" data-pc="storage-exports-total">
+          <div className="sp-storage-label">导出产物</div>
+          {exportsLoading && items.length === 0
+            ? <div className="sp-muted">读取中…</div>
+            : (
+              <>
+                <div className="sp-storage-figure">{humanSize(exportBytes)} <span className="sp-muted">· {items.length} 份</span></div>
+                <div className="sp-muted">其中中间文件 {humanSize(exportMid)}，可以只删它们、留下成片与透明层。</div>
+              </>
+            )}
+        </div>
+      </div>
+
+      {!exportsLoading && items.length === 0 && !error && (
+        <div className="sp-empty">还没有导出。导出完成后每次导出会列在这里。</div>
+      )}
+
+      {items.length > 0 && (
+        <ul className="sp-export-list" data-pc="storage-exports">
+          {items.map((it) => {
+            const rowBusy = busy.endsWith(`:${it.id}`);
+            return (
+              <li key={it.id} className="sp-export-row" data-pc="storage-export" data-export-id={it.id}>
+                <div className="sp-export-main">
+                  <div className="sp-export-name" title={it.projectId ? `项目 ${it.projectId}` : it.id}>
+                    {it.projectName || <span className="sp-muted">未知项目</span>}
+                    {it.running
+                      ? <span className="sp-export-tag">进行中</span>
+                      : !it.finished && <span className="sp-export-tag is-warn">未完成</span>}
+                  </div>
+                  <div className="sp-draft-sub">
+                    <span title={it.id}>{it.at ? humanDateTime(it.at) : it.id}</span>
+                    {" · "}<span data-pc="storage-export-bytes">{humanSize(it.bytes)}</span>
+                    {it.deliverables.map((d) => (
+                      <span key={d.name}> · {DELIVERABLE_LABEL[d.name] ?? d.name} {humanSize(d.bytes)}</span>
+                    ))}
+                    {it.intermediateBytes > 0 && <span data-pc="storage-export-mid"> · 中间文件 {humanSize(it.intermediateBytes)}</span>}
+                  </div>
+                </div>
+                <div className="sp-export-actions">
+                  <button className="sp-ghost-btn" data-pc="storage-export-reveal" disabled={rowBusy} onClick={() => void act(it, "reveal")}>打开所在目录</button>
+                  {it.intermediateBytes > 0 && !it.running && (
+                    <button className="sp-ghost-btn" data-pc="storage-export-prune" disabled={!!busy} onClick={() => void act(it, "prune")}>
+                      {busy === `prune:${it.id}` ? "删除中…" : "只删中间文件"}
+                    </button>
+                  )}
+                  {!it.running && (
+                    <button className="sp-ghost-btn sp-danger-btn" data-pc="storage-export-delete" disabled={!!busy} onClick={() => void act(it, "delete")}>
+                      {busy === `delete:${it.id}` ? "删除中…" : "删除"}
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 
