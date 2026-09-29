@@ -29,6 +29,12 @@ import { stagePortsPlugin } from "./server/vite-plugin-stage-ports";
 import { docservicePlugin } from "./server/vite-plugin-docservice";
 import { rawEolPlugin } from "./server/raw-eol.mjs";
 import { onlineCatalogPlugin } from "./server/online-catalog.mjs";
+import { watchIgnored, DEP_SCAN_ENTRIES } from "./server/vite-scan-ignore.mjs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** 项目根:本文件所在目录。监听忽略按相对它的路径判断(`server/vite-scan-ignore.mjs`)。 */
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 // 无头实例(scripts/headless.mjs)和用户手里那份 vite 跑在同一个项目根上,
 // 依赖预构建缓存分开放,免得两个进程同时写 node_modules/.vite 互相踩。
@@ -85,6 +91,8 @@ const desktopConfig: UserConfig = {
   // docservicePlugin(本地文档服务)总是注册;无头实例里它进入停用模式(不建文档服务、/docservice 回 503),
   // 因为无头实例是 Skill 的临时副本,不能自己发 projectRev。停用逻辑在插件里。
   plugins: [lanHostPlugin(), apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), exportsListPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), rawEolPlugin(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
+  // 依赖扫描入口只找真正的页面:缺省的 `**/*.html` 会把 out/frame-library 下成千上万个快照 .html 当入口读一遍(`server/vite-scan-ignore.mjs`)
+  optimizeDeps: { entries: DEP_SCAN_ENTRIES },
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,
@@ -107,11 +115,12 @@ const desktopConfig: UserConfig = {
            * - .pc-projects / .pc-work / .pc-chats:草稿、任务目录、会话历史。都是运行时数据,
            *   改一下就触发一次 HMR 纯属浪费,而且草稿是自动保存的,等于每次保存都重载。
            */
-          ignored: [
-            "**/desktop/**", "**/out/**", "**/python/**", "**/node_modules/**",
-            "**/*.lock",
-            "**/.pc-projects/**", "**/.pc-work/**", "**/.pc-chats/**",
-          ],
+          /*
+           * 不用「任意深度 out 目录」这类 glob 字符串:chokidar 拿 picomatch 的缺省选项(dot: false)匹配绝对路径,
+           * 根路径里只要有以点开头的一段(worktree 在 `.worktrees/` 下)就一条都不生效。
+           * 名单与原因见 `server/vite-scan-ignore.mjs`;另外还挡 `.worktrees/`(在仓库根起服务时别的 worktree 不是源码)。
+           */
+          ignored: [watchIgnored(ROOT)],
         },
       },
 };
@@ -145,6 +154,9 @@ const onlineConfig = async (): Promise<UserConfig> => {
     plugins: [rawEolPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss({ optimize: false }), onlineCatalogPlugin(process.cwd())],
     define: { "import.meta.env.VITE_PC_ONLINE": JSON.stringify("1"), __PC_CODE_VERSION__: JSON.stringify(codeVersion) },
     build: { outDir: "dist-online", emptyOutDir: true, cssMinify: false },
+    // 构建用不上;有人拿 `vite --mode online` 起开发服务时,监听与依赖扫描同桌面那份,不去翻 out/ 与别的 worktree
+    optimizeDeps: { entries: DEP_SCAN_ENTRIES },
+    server: { watch: { ignored: [watchIgnored(ROOT)] } },
   };
 };
 
