@@ -28,3 +28,7 @@
 - `node --test server/test/storage-leftovers.test.mjs`：退出码 0，tests 11、pass 11、fail 0。
 - `node -e "import('./server/frame-code.mjs').then(m=>console.log(m.snapshotCode(process.cwd()), m.captureCode(process.cwd())))"`：`00a5264bf8a062ff6e0b5ed0516cccd1 86e443cb6fa838aef64788af6822fd68`，与要求一致。
 - 按任务书没跑 `npm test` 全量与 `npx tsc`。
+
+## J9 / J10 与顺推
+
+（进行中）任务：`server/test/prerender-executor.test.mjs` 的 J9、J10 中止用例在 uc-latency 的「一段一趟顺推」下挂了；逐批断言保留（关掉顺推照跑），另加顺推模式的 J9b、J10b，并查顺推下中止语义有没有真问题。
