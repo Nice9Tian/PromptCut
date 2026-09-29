@@ -17,6 +17,11 @@
  *
  * 2. **导出目录的中间文件**（`pruneExportDir`）：导出成功后只留成片、透明层与 `project.json`；
  *    取消或失败时也删中间文件，已有的成片 / 透明层照留（列表显示用）。
+ *
+ * 3. **导出目录命名**（`claimExportDir`）：同一秒两次导出不复用同一个目录。
+ *
+ * 帧库的启动清理由 `FramePipeline` 在本进程第一次建帧服务时发起（`frame-pipeline.mjs`），
+ * 导出目录的由 `vite-plugin-export.ts` 在 dev server 起来时发起。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
