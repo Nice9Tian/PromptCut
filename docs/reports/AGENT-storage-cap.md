@@ -75,12 +75,75 @@
 
 ## 验证
 
-（验证结果见下，逐项补。）
+PC 上跑，机器有负载。dev server 都是本分支自己起的（5710，舞台 5711、5712；`ready-index-probe` 自己起 5713～5715），跑完已停；预渲染子进程的端口由 `freePort()` 随机取，不在 5710～5719 段内（现有机制，没改）。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 单测（本分支） | `node --test server/test/frame-library-storage.test.mjs` | 21 条全过 |
+| 类型检查 | `npx tsc -b --force` | 退出 0，零错误 |
+| 全量测试 | `npm test` | 第一次（加启动宽限之前）：tests 3896、pass 3894、fail 0、skipped 2，退出 0；最终代码（`84d9b24c`）：tests 3897、pass 3895、fail 0、skipped 2，退出 0。两次都没有挂的文件，不需要单独重跑 |
+| 本任务探针 | `node scripts/probes/storage-cap-probe.mjs --port 5710` | 跑了两次（`16587346` 与最终代码），都退出 0，`ok: true`、`fails: []`（最后一行 JSON 见下） |
+| G0-R 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5710/?export=1"` | 1800/1800 相同，退出 0 |
+| G0-R 像素基线 | `node <scratchpad>\compare-frames.mjs …\pc-g0r-base\out\verify-a\frames …\storage-cap\out\verify-a\frames` | total 1800、identical 1800、different 0、missing 0、extra 0 |
+| G0-R 快照重放 | `node scripts/verify-unified-frames.mjs --origin http://127.0.0.1:5710` | PASS |
+| 预渲染探针 | `node scripts/probes/ready-index-probe.mjs --port 5713` | 退出 0，`fails: []` |
+| 预渲染探针 | `stream-produce-probe --origin http://127.0.0.1:5710`、`--group` | 两次都 PASS，`fails: []` |
+| 预渲染探针 | `preview-fallback-probe --origin http://127.0.0.1:5710`、`--page-preload` | 两次都退出 0、PASS；各段与合计 `transparentBeats` 全是 0 |
+
+说明：
+
+- 第一次跑 `verify-unified-frames` 时 dev server 带着 `PROMPTCUT_EXPORT_DIR=<scratchpad>`，脚本把测试视频写在 `<worktree>/out/media`、页面却从导出目录的 `media` 取，回 404（`Video decode failed`）——是环境不匹配，不是本分支的改动。去掉 `PROMPTCUT_EXPORT_DIR` 重起 5710（帧库落在 `<worktree>/out/frame-library`）后 PASS；之后的预渲染探针都在这台上跑。导出确定性与像素基线是在带 `PROMPTCUT_EXPORT_DIR` 的那台上跑的（与导出目录无关）。建议 `compare-pitfalls.md` 记一句：`verify-unified-frames` 要求 dev server 用缺省导出目录。
+- 跑完之后在那台 dev server 上 `GET /api/storage`：`bytes 80339049、capBytes 50000000000、capSource default、diskBytes 1999249600512、pinnedBytes 80339049、owner true、scanning false`——预渲染探针开的项目都记为使用、在保护窗里。
+
+探针最后一行（第一次跑）：
+
+```json
+{"ok":true,"fails":[],"port":5710,"createdBytes":163000000,"start":{"bytes":163000000,"capBytes":50000000000,"capSource":"default","diskBytes":1999249600512,"owner":true,"exports":{"bytes":6002,"count":1,"intermediateBytes":5000},"leftovers":{"bytes":0}},"projectEntry":"105b291e23f6","projectUnits":[{"unit":"entry:105b291e23f660ffd0d7","bytes":0,"pinned":true},{"unit":"tracks/105b291e23f660ffd0d","bytes":0,"pinned":true},{"unit":"controls/2be282b083fd93919","bytes":0,"pinned":true},{"unit":"controls-html/8dd41890d083","bytes":0,"pinned":true},{"unit":"streams/435a8675e9f61d7c57","bytes":0,"pinned":true}],"projectBytes":7483765,"evict":{"total":170483765,"cap":122204183,"target":109983764,"measured":true,"removed":["p1","p1","p2","p2","p3","p3"],"skipped":["busy:busy"],"after":107483765,"capSource":"user","detail":{"before":170483765,"after":107483765,"targetBytes":109983764,"lastRemoved":5000000}},"clear":{"before":107483765,"after":7483765,"ok":true,"freedBytes":100000000,"removed":9,"skipped":0}}
+```
+
+（`projectUnits` 的 `bytes: 0` 是打开之后、下一次检查之前的样子：刚记使用的键在检查时才量，探针随后先设一次大上限触发检查，量完才算目标。）
+
+探针最后一行（最终代码）：
+
+```json
+{"ok":true,"fails":[],"port":5710,"createdBytes":163000000,"start":{"bytes":163000000,"capBytes":50000000000,"capSource":"default","diskBytes":1999249600512,"owner":true,"exports":{"bytes":6002,"count":1,"intermediateBytes":5000},"leftovers":{"bytes":0}},"projectEntry":"105b291e23f6","projectUnits":[{"unit":"entry:105b291e23f660ffd0d7","bytes":3567043,"pinned":true},{"unit":"tracks/105b291e23f660ffd0d","bytes":1023811,"pinned":true},{"unit":"controls/2be282b083fd93919","bytes":2446768,"pinned":true},{"unit":"controls-html/8dd41890d083","bytes":431091,"pinned":true},{"unit":"streams/435a8675e9f61d7c57","bytes":15050,"pinned":true}],"projectBytes":7483763,"evict":{"total":170483763,"cap":122204181,"target":109983762,"measured":true,"removed":["p1","p1","p2","p2","p3","p3"],"skipped":["busy:busy"],"after":107483763,"capSource":"user","detail":{"before":170483763,"after":107483763,"targetBytes":109983762,"lastRemoved":5000000}},"clear":{"before":107483763,"after":7483763,"ok":true,"freedBytes":100000000,"removed":9,"skipped":0}}
+```
+
+（这一次打开项目后 `bytes` 已经有数：启动检查推迟到宽限期之后，preload 后台那一趟做完的 `afterBatch` 成了第一次检查，顺带量了。）
+
+G0-R 各项跑在 `6bec8c85`（含启动宽限）上；之后的 `84d9b24c` 只改了导出汇总认目录的正则，不涉及渲染。`preview-fallback-probe` 两次跑时 dev server 已按 `84d9b24c` 重载。
 
 ## 没做成的及原因
 
-（见下。）
+- 遗留文件只计不删：计划第 3.3 节写「启动时与每次淘汰时一并清掉」，任务书把启动清理划给 storage-leaks，本分支没有删它们的代码，只把字节算进 `leftovers.bytes`。合并后若要「每次淘汰时一并清掉」，在 `checkNow()` 里调 storage-leaks 的清理函数即可。
+- 别的进程内存里的状态：淘汰只清主进程自己管线里指着被删目录的 entry、就绪索引挂着的键、流清单缓存。非主进程（例如无头实例的预渲染进程）若内存里还留着 30 分钟以上没用过的 entry，回到那一版时会按缺帧重渲（快照读不到按 404 处理），没有做跨进程通知。
+- 推送队列（C6.4，连得上素材服务时）里还没推完的段如果属于被淘汰的键，推送会读不到文件；没有专门处理，也没测（这台桌面没有 `push-queue.json`）。
 
 ## 与计划第 3.3 节不一致之处、需要主会话定的事
 
-（见下。）
+与第 3.3 节的出入（数字、时机、盘上布局），合并写语义时请据此改：
+
+1. **启动宽限 2 分钟**：第 3.3 节写「启动扫完后」检查。实现是索引缺失时马上重扫（只量不删），第一次判淘汰等 2 分钟——不然用户昨天开着的项目可能在页面重发 preload 之前就被判成最久没用的删掉。
+2. **检查时机**：「每次预加载或预渲染一批做完后」落实为「preload 后台那一趟做完」加每 5 分钟的节拍，最多每 5 分钟一次；队列细任务每一批之后没有单独挂钩（节拍兜底）。
+3. **正在打开的项目显式保护**：除 30 分钟窗口外，淘汰与清理缓存都跳过「开着」的项目的键（就绪索引里有订阅者或 10 分钟内发过 preload 的会话）。
+4. **淘汰单元**：整场景目录与它的 `controls-local/<entryKey>` 是一个单元；最近使用取两者较大的。
+5. **全量重扫**：除索引缺失外，每 24 小时全量重扫一次校正字节数（新数字）。
+6. **GB 按十进制**（1e9）：「50 GB」「500 GB」「5 GB」都是十进制，与磁盘标称一致。
+7. **盘上布局**：帧库根下除 `usage.json` 外还有 `.storage/`（`owner.json` 主进程锁、`touch/<pid>.json` 别的进程的使用、`trash/` 删到一半的垃圾目录）；`storage.json` 的字段名 `frameLibraryCapBytes`。
+8. **开关**：`PROMPTCUT_STORAGE_EVICT=0` 只记只量不删；`PROMPTCUT_TEST_STORAGE_MIN_CAP` 仅测试。
+9. **接口**：`GET /api/storage` 多了 `scanning`、`owner`、`minCapBytes` 与 `?detail=1`；`exports` 的目录规则已按主会话转来的界面那一支口径改（只认 `export-YYYYMMDD-HHMMSS` 与同秒后缀 `-n` 的真目录、排除 `export-vision-*`、中间文件 = 总量减 `preview.mp4` / `overlay.mov` / `project.json`、不跟链接），合并时主会话改成直接引 `server/exports-list.mjs` 的 `summarizeExports`。
+
+需要主会话（和用户）定的事：
+
+1. **用户那台 PC 上的第一次运行**：合并、装上之后，桌面版预渲染进程第一次起来会全量重扫约 282 GB（几分钟的磁盘读），2 分钟宽限后按缺省 50 GB 上限（2 TB 盘不算小盘）删到 45 GB，也就是一次删掉约 230 GB 的预渲染结果（删之前先改名进垃圾目录，删的过程在后台）。这是语义要的行为，但不可逆；要不要先让用户在开始页设好上限、或先带 `PROMPTCUT_STORAGE_EVICT=0` 跑一版，请定。主工作区 `npm run dev`（5190）的 `out/frame-library` 同理。
+2. **独立渲染主机 / 云端渲染节点**：它们也跑同一个预渲染进程，也会按 50 GB 淘汰。要不要在那里缺省关掉（`PROMPTCUT_STORAGE_EVICT=0`）。
+3. **与 storage-leaks、storage-ui 的衔接**：见上「没做成的」第一条与「接口」第 9 条。
+
+## 事故：碰了主工作区（已查明）
+
+主会话报告主工作区出现一个 0 字节的 `server/test/frame-library-storage.test.mjs`（主会话已删）。原因：本分支早先有两条 PowerShell 命令用 `[IO.File]::ReadAllText('server\…')` 这种**相对路径**，.NET 按进程的当前目录（主工作区）解析，而不是 PowerShell 的 `cd`：
+
+- 改测试文件那一条：读主工作区里不存在的同名文件失败，随后的 `WriteAllText` 把空内容写成了主工作区里的 0 字节文件；
+- 更早改 `vite-plugin-frames.ts` 的那一条：读到了主工作区的 `server/vite-plugin-frames.ts`，替换没匹配上（换行是 CRLF），原样写了回去——内容逐字节不变（主工作区 `git status` 干净），但修改时刻变成 19:25:06。用户常驻的 5190 dev server 可能因此重载过一次这个插件。
+
+之后所有读写与命令都只用 worktree 下的绝对路径，没有再用 .NET 的相对路径 API。
