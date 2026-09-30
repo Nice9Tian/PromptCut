@@ -2,7 +2,6 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } fr
 import { createPortal } from "react-dom";
 import { useAgentTabs } from "../../ai/agentTabs";
 import { RemoteAgentsStrip } from "../right/RemoteAgentsStrip";
-import { useLayoutMode } from "../layoutMode";
 import { onCaptionsRequest } from "../left/captionsBus";
 import { LibrarySection } from "../left/LibrarySection";
 // 必须静态导入:AnimationsSection → cardGroups → CardCell → previewZoom → prewarmBoxes,window.__pcPreviewBoxes 靠这条链挂上
@@ -54,13 +53,11 @@ const goImport = () => activateRailItem("library", { expand: true });
  * 所以这里的 React 树从不因为拖动、切换、收起、换布局模式而改变:portal 的 key 是项 id,容器节点按 id 固定。
  * 两侧宿主(DockHost)只挪 DOM 节点,正在跑的 AI 对话、分区的滚动位置 / 搜索词 / 草稿都不受影响。
  *
- * 挂载时机:剧本页和 AiPanel 一开始就挂(对话要在后台照跑);分区在传统式布局下一开始就挂(和改版前左栏五个分区常驻一致),
- * 对话式布局下一个都不挂(rail 只放剧本 / Agent,分区不会显示,照旧不去跑素材库、卡片预览那一套),
- * 切回传统式才挂,挂上之后再也不卸载。
+ * 挂载时机:剧本页和 AiPanel 一开始就挂(对话要在后台照跑);分区在布局里有位置的一开始就挂(和改版前左栏五个分区常驻一致),
+ * 挂上之后再也不卸载。
  */
 export function DockPages({ mcpConnected }: { mcpConnected: boolean }) {
   const layout = useRailLayout();
-  const mode = useLayoutMode();
   const { tabs } = useAgentTabs();
   const collapsed = { left: useRailCollapsed("left"), right: useRailCollapsed("right") };
 
@@ -78,8 +75,7 @@ export function DockPages({ mcpConnected }: { mcpConnected: boolean }) {
   );
 
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SectionId>>(() => new Set());
-  // 不能按「这一侧显示着」判断:对话式下某一侧只要有 AI 项就算显示,隐藏的分区会在后台被提前挂上
-  const due: SectionId[] = mode === "chat" ? [] : SECTION_IDS.filter((id) => !!sideOf(layout, id));
+  const due: SectionId[] = SECTION_IDS.filter((id) => !!sideOf(layout, id));
   let sections = mountedSections;
   if (due.some((id) => !mountedSections.has(id))) {
     sections = new Set([...mountedSections, ...due]);
@@ -107,7 +103,7 @@ export function DockPages({ mcpConnected }: { mcpConnected: boolean }) {
 
   const shown = (id: ItemId) => {
     const side = sideOf(layout, id);
-    return !!side && effectiveActive(layout, side, mode) === id;
+    return !!side && effectiveActive(layout, side) === id;
   };
   const portal = (id: ItemId, content: ReactNode) =>
     createPortal(<DockPageContext.Provider value={id}>{content}</DockPageContext.Provider>, pageNode(id), id);
@@ -118,14 +114,14 @@ export function DockPages({ mcpConnected }: { mcpConnected: boolean }) {
    */
   const hidden = (id: SectionId) => {
     const side = sideOf(layout, id);
-    return !side || collapsed[side] || effectiveActive(layout, side, mode) !== id;
+    return !side || collapsed[side] || effectiveActive(layout, side) !== id;
   };
   const section = (id: SectionId, content: ReactNode) =>
     sections.has(id) ? portal(id, <StoreHold value={hidden(id)}>{content}</StoreHold>) : null;
 
   return (
     <>
-      {/* 停车位:宿主没挂载的一侧(对话式下整列不显示)的页面节点停在这里,不脱离文档 */}
+      {/* 停车位:宿主没挂载的一侧的页面节点停在这里,不脱离文档 */}
       <div ref={parkRef} className="pc-dock-park" data-pc-dock-park="" aria-hidden="true" style={{ display: "none" }} />
       {/* rail 上 Agent 项的「跑完 / 中断,等你查看」标记 */}
       <AgentAttentionTracker />

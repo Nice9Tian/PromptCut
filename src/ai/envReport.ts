@@ -33,10 +33,10 @@ export interface EnvMediaItem {
 }
 
 export interface EnvInput {
-  /** 布局模式:传统式 / 对话式 */
-  layout: 'classic' | 'chat' | string;
+  /** 旧字段:原来记布局(传统式 / 对话式);对话式布局已去掉,不再传,旧报告里可能还有 */
+  layout?: string;
   /** SKILL 模式;没开就传 null 或 { active:false } */
-  skill?: { active: boolean; jobId?: string | null; jobDir?: string | null; procPath?: string | null; since?: string | null } | null;
+  skill?: { active: boolean; since?: string | null } | null;
   /** AI 栏开着几个 Agent 页签(多 Agent;含 spawn_agent 拉起的子 Agent) */
   agentTabs?: number;
   /** 当前项目;没有就传 null */
@@ -77,7 +77,7 @@ const VALUE_LIMIT = 200;
  */
 const VALUE_SAFE = new Set([
   "aiProvider", "aiShowThinking", "aiViewMode", "aiSetupFace", "aiSetupDone",
-  "pc.layout.mode", "pc.volume", "pc.muted", "pc.deps.sttDismissed", "pc.agentTabs.active",
+  "pc.volume", "pc.muted", "pc.deps.sttDismissed", "pc.agentTabs.active",
 ]);
 /**
  * 这些前缀下存的都是枚举 / 开关 / 数字(驱动名、模型名、思考档、布局标签页、面板宽度),
@@ -99,10 +99,8 @@ function safeToShow(key: string): boolean {
 
 /** 一句人话说清「现在是哪个模式」,省得从三个布尔值里推 */
 export function describeMode(input: EnvInput): string {
-  const layout = input.layout === 'chat' ? '对话式' : input.layout === 'classic' ? '传统式' : `未知(${input.layout})`;
-  const bits = [layout];
-  // SKILL 一开就压过布局:那时项目交给无头实例上的 agent 改,这边是只读的
-  if (input.skill?.active) bits.push('SKILL 模式(项目正交给桌面版 agent 改,本窗口只读)');
+  // 两种工作方式(user-workflow.md「工作方式」):传统式 / SKILL(桌面 APP 的 Agent 经 MCP 接入同一个项目,AI 栏照常可用)
+  const bits = [input.skill?.active ? 'SKILL 模式(桌面 APP 的 Agent 经 MCP 改这个项目,AI 栏照常可用)' : '传统式'];
   if ((input.agentTabs ?? 1) > 1) bits.push(`多 Agent(${input.agentTabs} 个页签)`);
   return bits.join(' + ');
 }
@@ -157,7 +155,7 @@ export function buildEnvReport(input: EnvInput): Record<string, unknown> {
   return {
     说明: '出问题那一刻这台机器的现场。用来分清「产品的 bug」和「这台机器的环境问题」——只有对话本身的话,两者一条都排除不掉。',
     mode: {
-      layout: input.layout,
+      mode: input.skill?.active ? 'skill' : 'classic',
       skillActive: !!input.skill?.active,
       skill: input.skill?.active ? input.skill : null,
       agentTabs: input.agentTabs ?? 1,

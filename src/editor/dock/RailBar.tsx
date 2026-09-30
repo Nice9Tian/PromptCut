@@ -3,7 +3,6 @@ import { closeTab, useAgentTabs } from "../../ai/agentTabs";
 import { MAIN_TAB } from "../../ai/liveChat";
 import { useScript } from "../../ai/script";
 import { IconBubblePlus } from "../../ui/icons";
-import { useLayoutMode } from "../layoutMode";
 import { RailIconAnimations, RailIconCaptions, RailIconEdit, RailIconEffects, RailIconLibrary } from "../left/railIcons";
 import { IconScript, glyphOf, shortLabel, tabTooltip } from "../right/chat/RightRail";
 import { useRailCollapsed } from "../sideRails";
@@ -37,7 +36,7 @@ const SECTION_META: Record<SectionId, { label: string; Icon: ComponentType }> = 
 };
 
 /**
- * 一条竖向 rail(左右共用)。项的顺序、在哪一侧、选中哪一项都来自 railStore;对话式布局下只画 AI 类项(剧本 / Agent)。
+ * 一条竖向 rail(左右共用)。项的顺序、在哪一侧、选中哪一项都来自 railStore。
  *
  *   点另一项 = 切过去并展开这一侧;点这一侧此刻选中的项 = 收起 / 展开(sideRails)。
  *   按住拖动超过 4px = 拖动(railDrag.ts),可以在同一条 rail 里调顺序,也可以拖到另一条 rail。
@@ -57,7 +56,6 @@ export type RailPart = "head" | "tail";
 
 export function RailBar({ side, part = "head" }: { side: Side; part?: RailPart }) {
   const layout = useRailLayout();
-  const mode = useLayoutMode();
   const collapsed = useRailCollapsed(side);
   const { tabs } = useAgentTabs();
   const script = useScript();
@@ -69,8 +67,8 @@ export function RailBar({ side, part = "head" }: { side: Side; part?: RailPart }
   const [menuOpen, setMenuOpen] = useState(false);
   const moreRef = useRef<HTMLButtonElement>(null);
 
-  const all = visibleItems(layout[side], mode);
-  const active = effectiveActive(layout, side, mode);
+  const all = visibleItems(layout[side]);
+  const active = effectiveActive(layout, side);
   const anchor = plusAnchor(all);
   // 剪辑组和排在它后面的项画在时间轴旁边那截(tail),前面的画在上面(head)。没有剪辑组时整条都在 head
   const cut = all.indexOf(CUTS_ITEM);

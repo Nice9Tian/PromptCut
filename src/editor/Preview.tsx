@@ -14,10 +14,8 @@ import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, liveStage, singleLiveStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
-import { MiniScrubber } from "./preview/MiniScrubber";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
 import { getCard, onSyncedUserCardsChanged, syncedUserCards } from "../kernel/registry";
-import { useLayoutMode } from "./layoutMode";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
@@ -124,10 +122,7 @@ try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("p
  *
  * 视频层:按 videoClipAt 找当前该播的素材段,src 变了换源,时间对不上(>0.2s)就 seek。
  */
-export function Preview({ chatLayout }: { chatLayout?: boolean }) {
-  const layoutMode = useLayoutMode();
-  // prop 是显式覆盖用的，平时不传就按当前 layoutMode 是否为 chat 决定
-  const showMiniScrubber = chatLayout !== undefined ? chatLayout : layoutMode === "chat";
+export function Preview() {
 
   const project = useStore((s) => s.project);
   // C6.6:两档素材的换档集合(预览挂着时每 2 秒问一次当前素材服务)
@@ -2078,7 +2073,6 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       </div>
 
       <ControlBar />
-      {showMiniScrubber && <MiniScrubber />}
       
       {contextMenu && (
         <PreviewContextMenu

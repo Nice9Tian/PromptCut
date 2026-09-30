@@ -63,8 +63,7 @@ const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; co
     items: [
       { label: "皮肤…", command: "open-skin" },
       { label: "配音设置…", command: "open-voice", desktopOnly: "配音" },
-      { label: "合并 Skill 结果…", command: "merge-project", separator: true, desktopOnly: "合并 Skill 结果" },
-      { label: "语音识别引擎（库目录）", command: "open-pylibs", desktopOnly: "语音识别" },
+      { label: "语音识别引擎（库目录）", command: "open-pylibs", separator: true, desktopOnly: "语音识别" },
       { label: "语音模型目录", command: "open-models", desktopOnly: "语音识别" },
       { label: "重置 Python 库", command: "reset-pylibs", desktopOnly: "语音识别" },
     ],

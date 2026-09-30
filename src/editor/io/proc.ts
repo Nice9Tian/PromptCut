@@ -11,19 +11,15 @@ import { getSkillSnapshot } from "../../skill/skillMode";
 
 /**
  * 存盘时给项目盖一个「这是 SKILL 模式下的产物」的戳。不在 SKILL 模式就不写这一段。
- *
- * 一度打算让 /api/skill/start 那边在建任务时注入,由我这边只读不写 —— 后来那条线的
- * 所有权作废了(有第三方在重构 vite-plugin-skill.ts),所以还是在这里写。
- * 只有一个写入方,不会出现两处各写各的。
  */
 /** 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」):在线页面没有 SKILL 模式,不盖戳 */
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
-function skillStamp(): { active: boolean; jobId?: string | null; at?: string } | undefined {
+function skillStamp(): { active: boolean; at?: string } | undefined {
   if (ONLINE_BUILD) return undefined;
   const { state } = getSkillSnapshot();
   if (!state.active) return undefined;
-  return { active: true, jobId: state.jobId, at: new Date().toISOString() };
+  return { active: true, at: new Date().toISOString() };
 }
 
 /**
@@ -64,11 +60,11 @@ export interface ProcFile {
    */
   ai?: ProjectAi;
   /**
-   * 这份编排是不是在 SKILL 模式下产生的,以及属于哪个任务。
+   * 这份编排是不是在 SKILL 模式下存的。`jobId` 是旧版(无头实例的任务号,已归档)写的,读得进来,不再写。
    *
    * 只是**留在项目文件里的痕迹**,不是运行时开关 —— 真正决定"现在能不能操作"的是
-   * server/skill-gate.mjs 那个状态文件。理由:无头实例、Rust 壳、用户这份是三个进程,
-   * 而 .proc 随时可能被另存到别处、被拷走;拿一份会跑的文件当三方共享状态,
+   * server/skill-gate.mjs 那个状态文件。理由:Rust 壳和编辑器是两个进程,
+   * 而 .proc 随时可能被另存到别处、被拷走;拿一份会跑的文件当共享状态,
    * 迟早出现两边看到的模式不一样。这里记下来是为了事后看得出"这段是谁改的"。
    */
   skill?: { active: boolean; jobId?: string | null; at?: string };

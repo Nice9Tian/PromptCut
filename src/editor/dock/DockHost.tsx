@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
 import { playEnter } from "../enterMotion";
-import { useLayoutMode } from "../layoutMode";
 import { useRailCollapsed } from "../sideRails";
 import { peekPageNode, placePages, registerDockHost } from "./pageNodes";
 import { effectiveActive, hasPages, visibleItems, type Side } from "./railLayout";
@@ -20,10 +19,9 @@ import "./dock.css";
  */
 export function DockHost({ side }: { side: Side }) {
   const layout = useRailLayout();
-  const mode = useLayoutMode();
   const collapsedFlag = useRailCollapsed(side);
-  const collapsed = collapsedFlag || !hasPages(visibleItems(layout[side], mode));
-  const active = effectiveActive(layout, side, mode);
+  const collapsed = collapsedFlag || !hasPages(visibleItems(layout[side]));
+  const active = effectiveActive(layout, side);
   const ref = useRef<HTMLDivElement>(null);
 
   // 登记宿主;卸载时注销并再放一次,把这一侧的节点收回停车位(否则节点会跟着宿主一起脱离文档)

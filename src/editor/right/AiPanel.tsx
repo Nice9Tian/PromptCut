@@ -6,7 +6,6 @@ import { useAiChat } from "../../ai/useAiChat";
 import { conversationReport } from "../../ai/debug";
 import { collectEnvironment } from "../../ai/envCollect";
 import { ReportDialog } from "./ReportDialog";
-import { SkillLock } from "./SkillLock";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
 import { MAIN_TAB } from "../../ai/liveChat";
@@ -23,6 +22,7 @@ import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { QueueList } from "./chat/QueueList";
 import { AgentEventLog } from "../sync/AgentEventLog";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
+import { DesktopSessionsStrip } from "./DesktopSessionsStrip";
 import { Composer } from "./chat/Composer";
 import type { RewindHandlers } from "./chat/UserBubble";
 import type { ChatAttachment } from "../../ai/types";
@@ -493,7 +493,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   return (
     <aside className="panel panel-right ai-panel" data-inactive={active ? undefined : "1"} aria-hidden={active ? undefined : true}>
       {/* SKILL 模式下整块盖住:项目正交给无头实例上的 agent 改,两边同时写会互相覆盖 */}
-      <SkillLock />
       <ChatHeader
         title={tabTitle}
         mcpConnected={props.mcpConnected}
@@ -524,6 +523,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
 
       {/* 共享项目里别的成员那边的 Agent 在改哪儿(A3 第二阶段,经文档服务的在场状态) */}
       <RemoteAgentsStrip />
+      {/* 桌面 APP 的会话(SKILL,计划 A4):每个会话单独一组,厂商 + 正在进行的操作 + 进度报告 */}
+      <DesktopSessionsStrip />
       <MessageList
         messages={messages}
         view={view}
