@@ -53,6 +53,9 @@
 
 各步的详细状态见 `docs/archive/restructure_planning/hand_off.md`；独立复核的结论见 `docs/archive/restructure_planning/hunman_read.md`。
 
+## 性能方向（未排期）
+
+- **canvas 卡的预渲染产物经 WebCodecs 直出，不再经截图与三次 PNG 往返**（2026-10-01 用户加，档位未定）。现状：canvas 卡的像素先在生成快照时读回 CPU、`toDataURL()` 压成 PNG、把 canvas 换成 `<img>` 写进快照（`src/render/snapshot/rasterizeCanvas.ts`）；预渲染进程再把快照在 Chrome 里重放、整帧截图成 PNG，管道给 ffmpeg 编成 ProRes MOV 或 H.264 轨道流（`server/bakery/ffmpeg.mjs`）。一张 canvas 卡的像素因此走了「GPU 画布 → 读回 → PNG → HTML → Chrome 重渲 → 截图 → PNG → ffmpeg 解 PNG → 编码」，中间三次 PNG 编解码是纯开销，画布越大越慢。方向：canvas 卡的画面本来就在画布里，可以 `new VideoFrame(canvas)` 直接送 `VideoEncoder`（在线导出 `src/export/frameCompositor.ts` 已经这样用），共享 WebGL 渲染器（R9）落地后画布卡的像素来自 Worker 交回的位图，改造点集中在 `rasterizeCanvas.ts` 与产物那一侧。留意两处：① 轨道流要带 alpha，WebCodecs 编 H.264 不带 alpha，上下拼合那一步得在画布里自己做（做法同现在）；② 快照仍要生成，DOM 卡与判重靠它，canvas 卡改直出只是产物不再经截图，快照里那张 PNG 缩略可留作占位。验收：同一张 canvas 卡两条路的产物逐像素比对（允许编码器差异时先比 PNG 阶段）、预渲染耗时前后对比在笔记本量（`guide_files/verification.md`「性能基准机」）、G0-R 全过、像素基线不变（导出整帧仍走截图，不在本项范围）。
 ## 语义与代码的差距
 
 `docs/semantics/` 已经定下、代码还没跟上的地方。按 `suggested_agent_behavior.md` 原则 2，这些都算代码要改。2026-09-30 按 M5～M8 与之后的合入更新（笔记本主会话）；M8 收尾时的逐条对照见 `docs/reports/REPORT-M5-M8.md` 第 6.3 节。
