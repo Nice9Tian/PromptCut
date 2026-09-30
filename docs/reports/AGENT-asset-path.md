@@ -16,7 +16,8 @@
 | `43fbe58e` | 修复：两条测量经素材服务的 HTTP 接口取字节 |
 | `cf058edd` | 测试：`audio-asset-path.test.mjs` |
 | `5727e09a` | 测试：探针 `asset-path-probe.mjs`；`custom-measure-probe.mjs` 端口检查放宽 |
-| （本次） | 测试：用例改名 AR-（原 AP- 与 `agent-project` 那组的用例号撞名）；文档：报告 |
+| `a65f0d7e` | 测试：用例改名 AR-（原 AP- 与 `agent-c65-pagestate.test.mjs` 的用例号撞名）；文档：报告写完 |
+| （本次） | 文档：报告提交表补全 |
 
 ## 做了什么
 
