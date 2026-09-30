@@ -530,3 +530,74 @@
 ### 7.9 顾问调用记录
 
 本轮没有调 codex 或 Gemini：各段第一轮就做成，没有卡住的语义问题。子 Agent：`opus-dev` 四个（asset-path、query-render-2、tray 的续做、asset-path-2）；join-error 是 M8 时期的分支，本轮只审与合。
+
+## 第 8 轮：Agent 读写素材全部走素材服务、认领闸按批让路，出 0.7.8（托管端重部署）；线上 nginx 开压缩（2026-09-30，笔记本主会话）
+
+接第 7 轮。本轮代号：`px` = 素材服务里存像素产物（卡片快照等）的命名空间；按批让路 = Agent 专用实例做队列任务时每 4 帧检查一次、有 Agent 任务就先做它。
+
+### 8.1 做了什么
+
+| 项 | 分支（子 Agent） | 做法 |
+|---|---|---|
+| 感知工具与写入工具走素材服务 | `claude/asset-path-2`（`opus-dev`） | `detect_shots`、`track_points`、`detect_subjects` 只发素材标识、服务端经素材服务取字节（Python 老包认不了地址时流到临时文件），请求体里的 `path` 不再读盘（堵掉一个任意读文件的口子）；`voice_generate`、`collect_download` 先落临时目录再经用户导入同一条入库路；三种试听落缓存；提示词不再说「磁盘路径」。合流 `claude/r7-merge` → main `fb144d56` |
+| `bake_card` 走素材服务 | `claude/bake-asset`（`opus-dev`） | 卡片快照写进 `px`（地址 `/api/asset/px/<内容哈希>`），输入哈希到内容哈希的索引由产出方本机记着、命中以素材服务的对账为准；老项目里的 `/@media/bake-….png` 照常能取、首次命中时迁移；共享项目写入后推一份到远程，别的成员的本机素材服务按需拉取（核 sha256、防成环）。主会话要求补本机 `px` 的容量淘汰（10 GiB、小盘 2%、按最近使用删到 90%、30 分钟保护）：以前这些快照在素材目录里有页面预算管着，改走素材服务后不能没人管上限 |
+| 维护四项与按批让路 | `claude/maint-3`（`opus-dev`） | legacy 方案 B（不再编没人用的 `preview.mp4`、整场景 `full.mov`）；响度逐秒曲线加 `asetpts`（复现 100 次缺 13 次 → 三种配置各 100 次 0 次）；配音复刻源文件走素材服务；认领闸的端到端探针。探针暴露认领闸让 Agent 查询等了 38 s（专用实例接了一整项 60 帧的任务），主会话要求在同一分支修掉：按批让路后等待 1.2 s、整次请求 40.6 s → 6.1 s |
+| 语义与计划 | 主会话 | `mechanism/asset-service.md` 补单张快照的缓存、按需拉取、「预渲染产物的容量」一节；`mechanism/rendering.md` 补按批让路一条（三级〔裁〕，`4d2de8f8`）；TODO 按合流更新，另记托管端与远程素材服务的产物容量、偶发的探针页面打不开（第四次）；`docs/plan/hosting-migration.md` 补 nginx 一步（`7f83bc37`） |
+
+合流：`claude/r8-merge`（main 起）合 bake-asset、maint-3（`vite-plugin-frames.ts` 自动合并，核对过），合入 main `ec983fc0`，报告附审查归档（`56169372`；`AGENT-query-render-2.md` 注〔裁 6〕已被按批让路取代）。
+
+**0.7.8**：版本号 0.7.7 → 0.7.8（外壳仍 0.2.6，`f683de74`），main = release = origin。从干净检出出在线构建 `index-BrSSa29i.js`（`index.html` sha256 `ad6093797761…`，82 个 assets），嵌代码版本 `8de56638db7d…`；共享快照键与捕获代码不变；`/api` 仍只有登记过的 4 个。自 0.7.7 起托管端改了三个文件（`asset-service.ts`、`vite-plugin-media.ts`、新的 `asset-store/px-evict.mjs`；托管组合注入自己的数据层，所以托管端既不按需拉取、也不开淘汰），先备份 `/root/*-20260930-078*` 三份，再 `deploy-hosted --editor … --save`（重启次数 19 → 20）。桌面补丁指令改为 PC-078-1（PC 辅助整轮不在线）。
+
+**线上 nginx 开压缩**（8.5 节第一条）：备份 `/root/nginx.conf.bak-20260930-gzip` 后打开 `gzip_vary`、`gzip_proxied any`、`gzip_comp_level 6` 与 `gzip_types`（JS、CSS、JSON、XML、SVG、wasm），`nginx -t` 通过后重载。在线页面主脚本线上传输 4.26 MB → 1.33 MB，三个源的加载 26 / 46 / 15 s → 4.7 / 2.9 / 1.6 s。
+
+### 8.2 验证
+
+| 项 | 提交 | 命令 | 结果 |
+|---|---|---|---|
+| r7 整套 | `claude/r7-merge` `e4f6e8df` | tsc；`npm test`；在线构建；G0-R；探针八项；新功能探针六项（`asset-path-probe --port 5950`） | 0 错误；4131 / 4129 / 0 / 2；G0-R 全过（流式编码 p50 279 ms，屏保在跑）；`c10-ui-probe` 第一跑遇到偶发的页面打不开（120 s），带网络日志重跑 3 遍都过；M7 本机 A4 22.8 s、A5 662 ms、A12 长任务 0；其余全过，`asset-path-probe` 29 项 |
+| r8 整套 | `claude/r8-merge` `4d2de8f8` | 同上，加 `bake-asset-probe --port 5970`、`claim-gate-probe --port 5990` | 0 错误；4167 / 4165 / 0 / 2；G0-R 全过（确定性 1800 / 1800、与基准逐像素 1800 相同、快照重放的新断言也过、流式编码 p50 270 ms）；`bake-asset-probe` 33 项、`claim-gate-probe` 退出 0；M7 本机第一跑页面落在单舞台（`reason: single-stage`、`nodeHello: 0`，A12 记到 3 个约 123 ms 的长任务），空闲重跑 16 项 pass、只剩 W7，A4 22.5 s、A5 667 ms、A12 0；其余全过 |
+| 合入与 release | main `fb144d56`、`e1949a31`、`ec983fc0`、`56169372`、`f683de74` | `npm run build` | 都成功；合并结果的代码与验证过的集成分支相同；release 快进，已推送 |
+| 托管服务重部署 | `f683de74` | `deploy-hosted --editor … --save` | 重启次数 20；文档服务与素材服务健康；外网两个 healthz 200、匿名 WebSocket 升级 401 |
+| `/editor` | 同上 | `verify-editor.mjs 8de56638db7d` | 三处都 200、都发 `index-BrSSa29i.js`、都含代码版本；无头打开页面错误 0、控制台错误 0 |
+| 阿里云真机路径（开压缩前） | 同上 | `desktop-auto-node-probe --remote … --base-port 5620 --skip-off` | **没过**：A3「在线页面贴出 U1 的层」等满 902 s、A4 多步超时；服务端日志里成员页面连上后再没登记成渲染节点与计划发布者（0.7.7 那次 8 s 内就登记了）；截图里 H 卡挂着「需要本地 PC 渲染辅助」、两张用户卡没画出来；项目已删 |
+| 阿里云真机路径（开压缩后） | 同上 | `… --base-port 5640 …` | 退出 0、`ok: true`、`fails: []`，526 s；A2 24.9 s、A3 124.3 s、A4 71.5 s、A5 4.2 s；项目已删 |
+
+### 8.3 〔裁〕（本轮主会话定，待用户审）
+
+1. asset-path-2、bake-asset（1～7）、maint-3（1～6）的〔裁〕照子 Agent 定的留（全文在归档报告里）。
+2. 三级语义四条（素材服务三条、渲染一条）。
+3. **给线上 nginx 开压缩**：托管服务器的配置由主会话维护，这是性能配置、可随时还原（备份在服务器上），不涉及你本机网络，也不花钱。
+4. r7 合入后不单独出版本，与 r8 一起出 0.7.8，少一轮线上部署。
+
+### 8.4 与计划、对齐时不一致的地方
+
+- bake-asset 原任务书没要求容量淘汰，主会话审查时加上（理由见 8.1）。
+- maint-3 原任务书没有按批让路，认领闸探针暴露 38 s 的等待后加上。
+
+### 8.5 新发现、记入遗留
+
+- **慢网络下在线页面永久退回单舞台、当不了纯浏览器节点**：两个舞台在独立的源上，各要下载一遍主脚本；首次握手的计时从编辑台挂上起算、固定 20 s，到点没握上就永久单舞台（`src/editor/Preview.tsx`、`src/online/stageOrigins.ts`）。开压缩治标；治本交 `claude/stage-handshake` 在做：每一台的 20 s 从那一台 iframe 的 `load` 起算，另设自打开起的总上限。这也可能解释本机验证链里几次「页面打不开 / 单舞台」的偶发（本机探针的舞台也是独立的源）。
+- 偶发的探针页面打不开又出了两次（r7 的 C10 界面、r8 的 M7 单舞台），重跑都过。验证链期间起了 TIME_WAIT 采样（每 5 s 一次），这段里最高 1197（动态端口 16384 个），端口耗尽的猜测没得到支持。
+- **用户真机缺陷：图卡视频源 0.5 倍慢放导出节奏不均**（另一个会话按你的决定写进 TODO：根因是 seek 目标落在帧边界时被截断到微秒、取到前一帧；修法、节奏探针、像素基线的硬规则、真机验收都已写定）。已派 `claude/video-cadence`（`opus-dev-high`）在做；真机验收要你把项目打成 `.procp` 发给本会话。
+- 用户的屏保程序运行时占约 80% CPU，本轮带耗时门槛的项大多在它运行时跑的，都在门槛内。
+
+### 8.6 在做与留在分支上的
+
+- `claude/stage-handshake`（首次握手按舞台自己的加载进度计时）、`claude/video-cadence`（慢放节奏）在做。
+- A4 + A5（`claude/skill-mcp`、`claude/tray`）照旧留在分支，等 PC 出完整安装包、你实测。
+
+### 8.7 待跨机复核
+
+- W7 真跨机（沿用）；PC-078-1 出 0.7.8 补丁；A4 + A5 的完整安装包。
+
+### 8.8 待用户项
+
+1. **装 0.7.8 补丁**（PC 上线打出来后再通知，附路径与 SHA-256）；0.7.3～0.7.7 的补丁都不用装。**装上后的第一次运行会清缓存**：帧库约 282 GB，启动约 2 分钟后按 50 GB 上限清掉约 230 GB 最久没用的预渲染缓存（需要时重新预渲染，不可撤销）；想留更多，装完先在开始页「存储」把上限调大。
+2. **慢放缺陷的真机验收**：把 `9tian666.proc` 那个项目在顶栏「打包保存…」打成 `.procp`（编排 + 素材），直接发给本会话；本会话导入到自己的测试数据目录验，不碰你的 `Videos\PromptCut`。
+3. A4 + A5 的完整安装包出来后按清单实测；「登记到 Claude Code / Codex」要你自己点。
+4. 第 7 轮 7.8 节列的几项决定（legacy 整帧通道 C / D / E、「文件 → 退出」、A4 的两条语义、`product/document-service.md` 补「在场状态」、音频计划第 6 节六条），以及本轮 8.3 节与各归档报告里的〔裁〕。
+5. 托管端与远程素材服务的产物（`px`、`snap`）没有容量管理，要按托管端的成本另定（TODO）。
+
+### 8.9 顾问调用记录
+
+本轮没有调 codex 或 Gemini：各段第一轮就做成；线上真机路径的失败靠服务端日志、截图与下载测速查到根因，没有卡在语义上。子 Agent：`opus-dev` 四个（asset-path-2、bake-asset、maint-3、stage-handshake），`opus-dev-high` 一个（video-cadence）。
