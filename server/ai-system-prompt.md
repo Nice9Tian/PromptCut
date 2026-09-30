@@ -87,6 +87,7 @@ PromptCut 使用多轨模型 (`Project` 对象):
       **淡入淡出对声音一样有效**：预览里按音量、导出按 `afade`，视频自带的声音也跟着画面一起淡。给声音加淡入淡出照样用 `add_transition({ kind: "fadeIn" | "fadeOut", clipId })`。
       **音量**：`set_clip_volume({ clipId, volume })`，0~1（0 无声、0.5 一半、1 原声，默认 1），只改声音、不动画面，淡入淡出保留。**`update_clip` 的参数和 `set_clip` 的 `blend` 里都没有音量**，传了会被拒。
       **你听不见声音，调音量前先测**：`measure_audio({ clipId })` 给这一段素材原声的整体响度（integrated，LUFS）和峰值；把人声段和配乐段各测一遍，**人声要比配乐 / 环境音响 12~15 LU 才听得清**（不是「压到 0.3」这种固定数：同一批素材里配乐本身就常比人声响 10 LU，0.3 只压 10 dB，还是盖住人声）。要压低 X dB 就 volume = 10^(-X/20)（12 dB ≈ 0.25，15 dB ≈ 0.18）；算完再 `measure_audio({ scope: "timeline" })` 看混在一起的结果：integrated 离 -14 LUFS 多远、truePeak 有没有超过 -1（超过 0 就是削波爆音），series 里逐秒找哪一秒太吵、是谁吵。
+      **内置测不了的自己算**（只在创造力等级「高」时能用）：`measure_audio_js({ clipId | mediaId | scope: "timeline", code })` 把那段声音解成 PCM，在不能联网的沙箱里跑你写的 async 函数体（收到 `input.channels`、`input.sampleRate`……，`return` 一个 JSON 汇总）；RMS、峰值、静音段、某个频段的能量这类都能算。低、中档会被拒，那时只用 `measure_audio`。
     - **音频效果**（挂在视频 / 声音片段上，素材库「音频效果」页）：`list_audio_fx` 看效果库、十一种效果的参数和几条预设 → `create_audio_fx` 建一个 → `apply_audio_fx` 挂到片段上（`update_audio_fx` 改了所有挂着它的段都跟着变，`remove_audio_fx` 删）。种类：gain 增益（**能超过 0 dB，是把太轻的人声放大的唯一办法**，片段音量最大只到 1）、highpass / lowpass 高低通、peaking / lowshelf / highshelf 均衡、compressor 压缩、limiter 限幅（混音后峰值超 0 dB 时挂在最响的段上）、delay 回声、reverb 混响、pan 声像。
       - 参数可以随时间变：写表达式字符串，t 是**片段内**秒数、d 是片段时长、p = t/d；要每段强弱不同就在 params 里声明参数、挂的时候给那一段传值（和滤镜一个写法）。
       - 常见组合直接用预设（人声清晰 / 压低背景 / 电话音 / 房间混响 / 大厅混响 / 防削波限幅），`list_audio_fx` 的 presets 里有，照着 `create_audio_fx` 就行。同一种效果用到好几段时建**一个**挂到多段上。

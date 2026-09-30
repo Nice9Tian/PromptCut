@@ -4,7 +4,7 @@ import { timelineDigest } from "../tools/toolEcho";
 import { generateVoice, getVoiceConfig } from "../../ai/voice";
 import { importAudioFromServer } from "../../editor/io";
 
-import { clipGuard, audioFxTools, measureAudio } from "../common";
+import { clipGuard, audioFxTools, measureAudio, measureAudioJs } from "../common";
 
 export const audioHandlers = {
   listAudioFx: () => audioFxTools.listAudioFx(),
@@ -13,6 +13,7 @@ export const audioHandlers = {
   removeAudioFx: (args) => { const r = audioFxTools.removeAudioFx(args); clipGuard.noteMutation(); return r; },
   applyAudioFx: (args) => { const r = audioFxTools.applyAudioFx(args); clipGuard.noteMutation(); return r; },
   measureAudio: (args) => measureAudio(args),
+  measureAudioJs: (args) => measureAudioJs(args),
   setClipVolume: (args) => {
     const result = actions.setClipVolume(String(args.clipId), args.volume);
     if (!result.ok) throw new Error(result.error);

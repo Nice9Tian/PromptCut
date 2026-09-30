@@ -12,7 +12,8 @@
  *   CR-7 create_card 按卡在不在判:同名用户卡已存在(整篇重写)= 中,不存在 = 高;非法 id 不去问文件系统;
  *   CR-8 被拒的报错写明当前等级、要的等级、怎么调;
  *   CR-9 会话登记表:对话覆盖优先于项目默认;没覆盖跟项目;没登记的 / 无头实例 = 桌面 APP 会话跟项目;
- *   CR-10 旧项目缺字段按「高」;不认识的值按「高」。
+ *   CR-10 旧项目缺字段按「高」;不认识的值按「高」;
+ *   CR-11 自定义测量 measure_audio_js(计划 A6)只在「高」放行,低、中档回统一格式的越级错误,内置的 measure_audio 三档都放行。
  *
  * 跑:node --test server/test/creativity-gate.test.mjs
  */
@@ -175,6 +176,7 @@ test('CR-6 三档 × 对照表', () => {
     ['update_clip', { clipId: 'c1', params: { text: 'x' } }, true, true, true],
     ['add_part', { clipId: 'c1', partId: 'text' }, true, true, true],
     ['measure_audio', { clipId: 'c1' }, true, true, true],
+    ['measure_audio_js', { clipId: 'c1', code: 'return 1' }, false, false, true],
     ['get_project', {}, true, true, true],
   ];
   for (const [tool, args, low, medium, high] of table) {
@@ -276,4 +278,23 @@ test('CR-10 旧项目缺字段按「高」;不认识的值按「高」', () => {
   s.register('c', { type: 'cli' });
   const level = s.creativityOf('c', projectCreativity({ name: '旧项目' })).level;
   assert.equal(checkCreativity('create_card', { id: 'n' }, level).ok, true);
+});
+
+/* ------------------------------------------------------------------ CR-11 自定义测量(计划 A6) */
+
+test('CR-11 measure_audio_js 只在「高」放行,低、中档回统一格式的越级错误', () => {
+  const args = { scope: 'timeline', code: 'return input.frames' };
+  assert.deepEqual(requiredCreativity('measure_audio_js', args), { level: 'high', what: '写自定义测量代码' });
+  for (const level of ['low', 'medium']) {
+    const r = checkCreativity('measure_audio_js', args, level, { source: '这个对话单独设的等级' });
+    assert.equal(r.ok, false, level);
+    assert.deepEqual(r.creativity, { current: level, required: 'high', tool: 'measure_audio_js' });
+    assert.match(r.error, /measure_audio_js 没有执行/);
+    assert.match(r.error, /写自定义测量代码要「高」/);
+    assert.match(r.error, /停下来告诉用户/);
+  }
+  assert.match(checkCreativity('measure_audio_js', args, 'low').error, /测量只用内置方法/);
+  assert.equal(checkCreativity('measure_audio_js', args, 'high').ok, true);
+  for (const level of CREATIVITY_LEVELS) assert.equal(checkCreativity('measure_audio', { clipId: 'c1' }, level).ok, true, `measure_audio @${level}`);
+  assert.equal(toolDef('measure_audio_js')?.side, 'agent');
 });
