@@ -2,10 +2,14 @@
 
 分支 `claude/nav-hang`（worktree `.worktrees/nav-hang`，起点 main `8d3a22c5`）。端口段 6090～6109。没有改语义，没有改产品代码（`src/`、`server/` 一行未动）。
 
+## 状态
+
+完成，待主会话审查。探针侧修复与压测、取证工具都在本分支；产品侧没有改动，要不要加看门狗见文末。
+
 ## 结论（先看这里）
 
 - **复现了，根因在探针用的浏览器配置，不是在线页面的初始化代码。** puppeteer 下载的 Chrome for Testing 缺省套用 Chromium 的「实验配置」（fieldtrial testing config：几十个在试的功能一起打开，网络日志常量 `activeFieldTrialGroups` 列出 91 个），与用户手里的正式版 Chrome 不同。在这套配置下，站点服务用分块传输（没有 `Content-Length`）发出的在线构建入口脚本 `index-*.js`（4.26 MB）会偶发**永远加载不完**：网络层几十毫秒就从连接上收完了全部 4,263,498 字节，渲染进程却一直没把这个脚本收下，页面停在 `readyState: 'interactive'`、DOMContentLoaded 永远不来（多等 120 秒也不来）。
-- **压测里约 1%～3% 的新开页面中招**（不带任何开关的 Chrome for Testing：5 轮合计 1,337 次、23 次卡死）；**关掉实验配置（`--disable-field-trial-config`）350 次 0 次**，换 chrome-headless-shell 200 次 0 次，换本机正式版 Chrome 154 300 次 0 次，站点服务改发 `Content-Length` 500 次 0 次。
+- **压测里约 1%～3% 的新开页面中招**（不带任何开关的 Chrome for Testing：5 轮合计 1,213 次、23 次卡死）；**关掉实验配置（`--disable-field-trial-config`）合计 1,250 次 0 次**（其中修后验证 900 次，与之并发的对照组 150 次卡 3 次），换 chrome-headless-shell 200 次 0 次，换本机正式版 Chrome 154 300 次 0 次，站点服务改发 `Content-Length` 500 次 0 次。
 - 7 次历史现场里的 1～5、7（`goto` 等不到 DOMContentLoaded）就是它；第 6 次（页面落在单舞台、`nodeHello: 0`）也对得上：压测的网络日志里抓到舞台 iframe 里的同一个入口脚本卡住 118 秒（舞台页永远起不来，页面 20 秒后按规则退回单舞台）。
 - **修法（探针侧）**：新文件 `scripts/probes/probe-chrome.mjs` 导出 `PROBE_CHROME_ARGS = ['--disable-field-trial-config']`，18 个打开在线页的探针的 `puppeteer.launch` 参数以它打头。这不是重试，也不掩盖产品问题：它让探针的浏览器回到正式版 Chrome 的缺省功能集。修后压测见「验证」。
 - **需要主会话决定的**：真实用户会不会碰上，取决于用户的 Chrome 有没有被 Google 分到触发它的那个实验；线上 nginx 对浏览器发的是 gzip + 分块传输（本次 `curl` 实测），同样没有 `Content-Length`。压测里「gzip 分块 + 实验配置」300 次 0 次、「正式版 Chrome + 分块」300 次 0 次，风险看不出来但排除不了。要不要给在线页加一道「入口脚本卡住就自动刷新一次」的看门狗，见文末。
@@ -18,7 +22,8 @@
 | `268473e0` | 加压测探针 `scripts/probes/online-nav-stress-probe.mjs`（超时当场取证） |
 | `ac8d2faa` | 压测加 Content-Length、headless-shell 形态；加网络日志取证小工具 `scripts/probes/netlog-request.cjs` |
 | `31a890f6` | 修复：`scripts/probes/probe-chrome.mjs`，18 个在线探针的 Chrome 带 `--disable-field-trial-config`；压测加 `--gzip`、`--fixed` |
-| （本提交） | 报告 |
+| `8b46dd40` | 报告初稿 |
+| （本提交） | 报告定稿（验证数据） |
 
 ## 复现方法
 
@@ -42,18 +47,18 @@ node scripts/probes/online-nav-stress-probe.mjs --dist <目录> --base-port 6090
 | r1-fresh | 每次新起浏览器 | 同上 | 分块 | 300 | 9 |
 | r1-ctx-s0 | 同 r1-ctx，运行配置 404（单舞台） | 同上 | 分块 | 63（中途停） | 1 |
 | r6-fresh-base | 每次新起浏览器 | 同上 | 分块 | 300 | 3 |
-| v-fresh-control | 同上（与修后验证并发的对照） | 同上 | 分块 | 见「验证」 | |
+| v-fresh-control | 同上（与修后验证并发的对照） | 同上 | 分块 | 150（验证跑完即停） | 3 |
 | r1-same | 同一浏览器、同一缺省上下文、留 5 页 | 同上 | 分块 | 258（中途停） | 0（入口脚本走磁盘缓存，不再从网络取） |
 | r2-fresh-noftc | 每次新起浏览器 | `--disable-field-trial-config` | 分块 | 150 | 0 |
 | r3-fresh-noftc-brf | 同上 | `--disable-field-trial-config --enable-features=BackgroundResourceFetch` | 分块 | 200 | 0 |
 | r5-fresh-shell | 同上 | chrome-headless-shell（产品的预渲染、导出用它） | 分块 | 200 | 0 |
 | r8-fresh-stable | 同上 | 本机正式版 Chrome 154（临时用户目录） | 分块 | 300 | 0 |
 | r6 / r7-fresh-cl | 同上 | Chrome for Testing，缺省 | 带 Content-Length | 200 + 300 | 0 |
-| r8-fresh-gzip | 同上 | Chrome for Testing，缺省 | gzip + 分块（线上 nginx 的样子） | 300 | 见「验证」 |
+| r8-fresh-gzip | 同上 | Chrome for Testing，缺省 | gzip + 分块（线上 nginx 的样子） | 300 | 0 |
 | r2-fresh-nobrf / r3-ctx-nobrf | | `--disable-features=BackgroundResourceFetch` | 分块 | 150 / 51 | 0 / 2 |
 | 按名字关实验（二分） | | 分组 `--disable-features=`（线程调度、内存分配器、磁盘缓存、网络等 5～20 个一组） | 分块 | 各 40～200 | 有的组 0、有的组 1～2，前后矛盾 |
 
-统计上：缺省配置合计 1,363 次卡 20 次（约 1.5%，各轮 1%～3%，机器越忙越高）；`--disable-field-trial-config` 350 次 0 次（按 1.5% 算，0 次的机会约 0.5%）。
+统计上：缺省配置（分块、从网络取）合计 1,213 次卡 23 次（约 1.9%，各轮 1%～3%，机器越忙越高）；带 `--disable-field-trial-config` 合计 1,250 次 0 次（按 1.9% 算，碰巧 0 次的机会小于十亿分之一）。gzip 分块 300 次 0 次、正式版 Chrome 300 次 0 次，按同一概率算碰巧的机会各约 0.3%，比较可信但不如前者硬。
 
 ## 失败现场（每次都一样）
 
@@ -85,7 +90,31 @@ node scripts/probes/online-nav-stress-probe.mjs --dist <目录> --base-port 6090
 
 ## 验证
 
-（修后压测、基线、探针复跑的结果见下，全部完成后填写。）
+修后压测（`--fixed 1`，即各探针现在的启动参数），与一个不带开关的对照组同时跑，另开 8 线程空转占 CPU、同机还有别的子 Agent：
+
+| 轮次 | 形态 | 次数 | 卡死 | goto 耗时 p50 / p99 / 最慢 |
+|---|---|---|---|---|
+| v-ctx-fixed | 同一浏览器、每页新上下文、留 5 页、进编辑器 | 300 | 0 | 617 / 935 / 1116 ms |
+| v-ctx-fixed2 | 同上 | 300 | 0 | 591 / 942 / 1078 ms |
+| v-fresh-fixed | 每次新起浏览器、进编辑器 | 300 | 0 | 596 / 1045 / 1711 ms |
+| v-fresh-control | 同上，`--fixed 0`（改前的样子） | 150 | 3（签名与上面相同：入口脚本挂着、`readyState: interactive`、120 秒不来） | |
+
+加上改前的 `--disable-field-trial-config` 两轮 350 次，合计 1,250 次 0 次卡死。
+
+改过的探针复跑（在线构建 = 本分支 `npx vite build --mode online` 到临时目录，端口 6090～6094）：
+
+| 探针 | 命令要点 | 结果 |
+|---|---|---|
+| 舞台看守 | `online-stage-watch-probe --base-port 6090` | 退出 0，`ok: true`（W1～W4 全过，W2 重载 18.4 s 握回） |
+| 在线用户卡 | `online-user-cards-probe --base-port 6090` | 退出 0，`ok: true`，`fails: []` |
+| C10 界面 | `c10-ui-probe --proxy-port 6090 --proxy2-port 6091 --doc-port 6092 --asset-port 6093` | 退出 0，`ok: true`，`fails: []` |
+
+基线：
+
+- `npx tsc -b --force`：退出 0，0 错误。
+- `npm test`：退出 0；4199 项，通过 4197，失败 0，跳过 2。（第一遍是在 4 个压测 + 8 线程占 CPU 时跑的，3 项带时限的用例超时失败：C66-I2-01、「大文件导入期间主服务 100 ms 内答别的请求」、UE-S7；它们不引用任何探针文件，机器空下来重跑全过。）
+- 没有改页面、渲染或产品代码，代码指纹（`snapshotCode` / `captureCode`）与 G0-R 不受影响，没跑。
+- 其余 40 来个没改的探针没有复跑。
 
 ## 需要主会话决定的事
 
