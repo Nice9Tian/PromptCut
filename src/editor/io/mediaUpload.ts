@@ -250,14 +250,166 @@ export function startTierBackfill(): () => void {
     lastMedia = media;
     // 打开项目的那一阵先让路(测量、首帧),稍后再问
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { timer = null; void backfillSmallTiers(); }, 1500);
+    // 没有哈希的老素材先补入库(老项目自己愈合),再补转素材小尺寸;补入库写回素材表会再触发一次 check,新补上的视频也会被问到
+    timer = setTimeout(() => { timer = null; void ingestUnhashedMedia({ background: true }).catch(() => {}); void backfillSmallTiers(); }, 1500);
   };
   const unsub = subscribe(check);
   check();
   return () => { unsub(); if (timer) clearTimeout(timer); };
 }
 
+/* ---------------- 补入库:没有哈希、但本机还取得到字节的老素材 ---------------- */
+
+/*
+ * 老项目里有一批素材只有 `path`、地址是 `/api/media/file?path=…` 或 `/@media/<文件名>`,没有内容哈希
+ * (0.7.7 之前生成的配音、迁移期导入的素材)。按哈希挑素材的两处 —— 打包保存 `.procp`(procp.ts 的 mediaEntries)
+ * 和开启「放云端」时交给上传队列(assetTiers.ts 的 existingMediaItems)—— 都只认哈希,这些素材就被悄悄漏掉了。
+ * 语义 `product/asset-service.md`「入库这一步不能省」:这里把它们补进本地内容库。
+ *
+ * 怎么补:能指到素材目录里那个文件的(有 `path`,或地址里带 `path=`),走 `adoptServerMedia`
+ * (服务端就地算哈希、硬链接进内容库,一份字节都不往回传);服务端不收那条路径(不在素材目录内、换了机器
+ * 路径对不上)时,经现有读接口(`/api/media/file?path=…`、`/@media/<文件名>`)取回字节再走 `uploadMediaFile` 入库。
+ * 结果用 `applyUploadedMedia` 写回素材表(换新对象,不原地改)。
+ *
+ * 三处调用:打包前、放云端交给上传队列之前、打开项目后在后台(`startTierBackfill` 同一时机)。
+ * 在线构建与只读页面不做(没有本机内容库、不改项目)。
+ */
+
+const HASH_RE = /^[0-9a-f]{64}$/i;
+const MISSING_PREFIX = "(缺失) ";
+
+/** 这条素材有合法的内容哈希 */
+export function hasMediaHash(m: { hash?: string } | null | undefined): boolean {
+  return HASH_RE.test(String(m?.hash ?? ""));
+}
+
+/** 一条素材在本机可能取得到字节的地方:先试的路径(adopt)、再试的读地址(取字节再入库) */
+export function localSourcesOf(m: Pick<MediaAsset, "path" | "url" | "name">): { paths: string[]; urls: string[] } {
+  const paths: string[] = [];
+  const urls: string[] = [];
+  const addPath = (p: string | null | undefined) => { if (p && !paths.includes(p)) paths.push(p); };
+  const addUrl = (u: string) => { if (u && !urls.includes(u)) urls.push(u); };
+  const url = String(m.url || "");
+  if (url.startsWith("/api/media/file?")) {
+    try { addPath(new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("path")); } catch { /* 地址坏了就只看 path */ }
+  }
+  addPath(m.path);
+  if (url.startsWith("/api/media/file?")) addUrl(url);
+  else if (url.startsWith("/@media/") && !HASH_RE.test(url.slice("/@media/".length).split(/[.?]/)[0])) addUrl(url.split("?")[0]);
+  for (const p of paths) addUrl(`/api/media/file?path=${encodeURIComponent(p)}`);
+  for (const p of paths) {
+    const base = p.split(/[/\\]/).pop();
+    if (base) addUrl(`/@media/${encodeURIComponent(base)}`);
+  }
+  return { paths, urls };
+}
+
+/** 地址本身就是 `/@media/<hash>`(内容寻址)时的那个哈希 */
+function hashInUrl(url: string | undefined): string | null {
+  const u = String(url || "");
+  if (!u.startsWith("/@media/")) return null;
+  const h = u.slice("/@media/".length).split(/[.?/]/)[0];
+  return HASH_RE.test(h) ? h.toLowerCase() : null;
+}
+
+function uploadNameOf(m: Pick<MediaAsset, "name" | "path">): string {
+  const fromPath = m.path ? m.path.split(/[/\\]/).pop() : "";
+  const name = (m.name || "").startsWith(MISSING_PREFIX) ? m.name.slice(MISSING_PREFIX.length) : m.name || "";
+  return fromPath || name || "media";
+}
+
+/** 补一条:能 adopt 就 adopt,不行再取字节上传。都不行给 null */
+async function ingestOne(m: MediaAsset): Promise<UploadedMedia | null> {
+  const { paths, urls } = localSourcesOf(m);
+  for (const p of paths) {
+    const up = await adoptServerMedia(p);
+    if (up) return up;
+  }
+  for (const u of urls) {
+    try {
+      const res = await fetch(u);
+      if (!res.ok) continue;
+      // 兜底:落到页面回退(index.html)的不是素材
+      if (/text\/html/i.test(res.headers.get("content-type") || "")) continue;
+      const blob = await res.blob();
+      const up = await uploadMediaFile(new File([blob], uploadNameOf(m)));
+      if (up) return up;
+    } catch { /* 下一个地址 */ }
+  }
+  return null;
+}
+
+export interface IngestResult {
+  /** 这次补上哈希的素材 id */
+  ingested: string[];
+  /** 本机取不到字节、补不上的素材(文件真的不在了) */
+  failed: { id: string; name: string }[];
+}
+
+/** 同一来源正在补的(打包与后台同时触发时只补一次) */
+const ingestInflight = new Map<string, Promise<UploadedMedia | null>>();
+/** 后台补过、没补上的来源:同一会话里后台不再反复试(打包、放云端照样再试一次) */
+const ingestBackgroundFailed = new Set<string>();
+
+/**
+ * 把素材表里没有合法哈希、本机还取得到字节的条目补进本地内容库,并写回哈希。
+ * 还在导入(`pending`)的不动:入库由导入那一路负责。回补上了哪些、哪些补不上。
+ * `background`:打开项目后在后台做,补不上的记下来,同一会话里后台不再试。
+ */
+export async function ingestUnhashedMedia(opts: { background?: boolean } = {}): Promise<IngestResult> {
+  const out: IngestResult = { ingested: [], failed: [] };
+  if (ONLINE_BUILD || isViewOnly()) return out;
+  const media = getState().project.media ?? [];
+  const byId = new Map(media.map((m) => [m.id, m]));
+  // 同一来源(同一文件)的几条记录一起补
+  const groups = new Map<string, MediaAsset[]>();
+  for (const m of media) {
+    if (m.pending || hasMediaHash(m)) continue;
+    // 「只要声音」的那份和源视频指着同一个文件:源视频有哈希就直接用它的
+    const src = m.soundOf ? byId.get(m.soundOf) : undefined;
+    const direct = src && hasMediaHash(src) ? String(src.hash).toLowerCase() : hashInUrl(m.url);
+    if (direct) {
+      const fresh = getState().project.media.find((x) => x.id === m.id);
+      if (fresh && !hasMediaHash(fresh)) {
+        actions.updateMedia(m.id, { hash: direct, url: `/@media/${direct}`, pending: undefined, ...(src && hasMediaHash(src) && src.ext ? { ext: src.ext } : {}) });
+        out.ingested.push(m.id);
+      }
+      continue;
+    }
+    const { paths, urls } = localSourcesOf(m);
+    const key = paths[0] ?? urls[0] ?? "";
+    if (!key) { out.failed.push({ id: m.id, name: m.name }); continue; }
+    const g = groups.get(key);
+    if (g) g.push(m); else groups.set(key, [m]);
+  }
+  for (const [key, list] of groups) {
+    if (opts.background && ingestBackgroundFailed.has(key)) continue;
+    let p = ingestInflight.get(key);
+    if (!p) {
+      p = ingestOne(list[0]).finally(() => ingestInflight.delete(key));
+      ingestInflight.set(key, p);
+    }
+    const up = await p;
+    if (!up) {
+      if (opts.background) ingestBackgroundFailed.add(key);
+      for (const m of list) out.failed.push({ id: m.id, name: m.name });
+      continue;
+    }
+    ingestBackgroundFailed.delete(key);
+    for (const m of list) {
+      const fresh = getState().project.media.find((x) => x.id === m.id);
+      if (!fresh || hasMediaHash(fresh)) continue; // 期间被删了,或别处已经补上
+      // 派生的声音不挂视频的两档
+      applyUploadedMedia(m.id, fresh.soundOf ? { ...up, tiers: undefined, smallState: undefined } : up);
+      out.ingested.push(m.id);
+    }
+  }
+  return out;
+}
+
 /** 单测用 */
 export function resetTierBackfillForTest(): void {
   backfillAsked.clear();
+  ingestBackgroundFailed.clear();
+  ingestInflight.clear();
 }

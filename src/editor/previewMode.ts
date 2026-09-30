@@ -85,6 +85,17 @@ export function dualStage(): boolean {
 }
 
 /**
+ * 在线普通档首次握手的过渡期(`stageHandshake.ts` 的 `interim`):按同源单舞台出画面,两个跨源舞台在隐藏的 iframe 里预热。
+ * 条件与双舞台相同(有舞台源、不是低内存档……),只是握手处在 `interim`。
+ */
+export function interimStage(): boolean {
+  if (!ONLINE) return false;
+  const st = onlineStageState();
+  if (st.handshake !== "interim") return false;
+  return stageLayout({ lowMemory: lowMemoryMode(true), origins: st.origins, handshake: "pending", pageOrigin: typeof location === "undefined" ? undefined : location.origin }) === "dual";
+}
+
+/**
  * 在线浏览器模式的**单舞台 live 预览**(`docs/plan/c10a-contract.md` 第 8.1 节):同源单舞台 A 按 live 变体渲
  * (素材层画进舞台、六个平面生效,相当于双舞台里 `&preview=stage` 的那一份),A 就是可见舞台,没有 B。
  * 普通档与低内存档都走它;`?preview=legacy` 在在线页面上不认(没有预渲染进程给整帧)。
@@ -111,8 +122,9 @@ export function liveStage(): boolean {
  * 而 legacy 正是靠舞台做命中测试和实体框的。端口没起来的退回**不传**:那不是回滚,
  * 是双舞台开不出来,舞台内容应当照缺省走。
  */
-export function stageSrc(id: StageId): string {
-  const dual = dualStage();
+export function stageSrc(id: StageId, opts: { dual?: boolean } = {}): string {
+  // `opts.dual`:按双舞台 / 单舞台的形状给地址,不看此刻的布局(过渡期的预热 iframe 与换回那一下的衔接要用)
+  const dual = opts.dual ?? dualStage();
   const origins = dual ? stageOrigins() : null;
   const mode = dual || singleLiveStage() ? "&preview=stage" : previewMode() === "legacy" ? "&preview=legacy" : "";
   // 在线浏览器模式还没有运行期判据,先由编辑页地址上的 `platform=browser` 显式打开、转给舞台(`unsupported` 占位)
