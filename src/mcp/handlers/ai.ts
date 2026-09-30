@@ -6,6 +6,7 @@ import { EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
 import { validateCardParams } from "../../kernel/cardParams";
 import { captionsFromTranscript, captionsOf, describeCaption, formatCaptions } from "../../kernel/captions";
+import { mediaReadyForServer, perceptionMediaRef } from "../../ai/perceptionMedia";
 import { findClip, subjectForRange, subjectSampleTimes, suggestPosition, MAX_SUBJECT_TIMES } from "../../kernel/project";
 import { sttStatus, transcribeMedia } from "../../editor/io/stt";
 import { runAutoWorkflow, getAutoWorkflowStatus } from "../tools/autoWorkflow";
@@ -31,7 +32,7 @@ export const aiHandlers = {
     const media = getState().project.media.find((m) => m.id === args.mediaId);
     if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
     if (media.kind !== "video") throw new Error(`${media.name} 不是视频,没有镜头可分`);
-    if (!media.path) throw new Error(`${media.name} 没有服务端可读的路径,重新导入一次再试`);
+    if (!mediaReadyForServer(media)) throw new Error(`${media.name} 还没进素材服务(上传没完成或失败),稍后再试或重新导入`);
     if (media.shots && !args.force) {
       return {
         reused: true, mediaId: args.mediaId, engine: media.shots.engine,
@@ -39,7 +40,7 @@ export const aiHandlers = {
         hint: "这个素材已经检测过了,直接用 list_shots 取结果;要重测传 force:true",
       };
     }
-    const jobId = await startShotDetection(media.path, media.id);
+    const jobId = await startShotDetection(perceptionMediaRef(media));
     shotJobs.set(args.mediaId, { jobId, percent: 0, engine: "scdet" });
     waitForShots(jobId, (percent, engine) => shotJobs.set(args.mediaId, { jobId, percent, engine }))
       .then((result) => {
@@ -147,12 +148,12 @@ export const aiHandlers = {
     const media = getState().project.media.find((m) => m.id === args.mediaId);
     if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
     if (media.kind !== "video") throw new Error(`${media.name} 不是视频,没有运动可追`);
-    if (!media.path) throw new Error(`${media.name} 没有服务端可读的路径,重新导入一次再试`);
+    if (!mediaReadyForServer(media)) throw new Error(`${media.name} 还没进素材服务(上传没完成或失败),稍后再试或重新导入`);
     if (!Array.isArray(args.points) || args.points.length === 0) {
       throw new Error("points 至少要有一个点,写成 [[帧号, x, y], ...]");
     }
 
-    const jobId = await startTracking(media.path, media.id, args.points);
+    const jobId = await startTracking(perceptionMediaRef(media), args.points);
     trackJobs.set(args.mediaId, { jobId, percent: 0 });
     waitForTrack(jobId, (percent, engine) =>
       trackJobs.set(args.mediaId, { jobId, percent, engine }))
@@ -285,7 +286,7 @@ export const aiHandlers = {
     const media = getState().project.media.find((m) => m.id === args.mediaId);
     if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
     if (media.kind === "audio") throw new Error(`${media.name} 是音频,没有画面可看`);
-    if (!media.path) throw new Error(`${media.name} 没有服务端可读的路径,重新导入一次再试`);
+    if (!mediaReadyForServer(media)) throw new Error(`${media.name} 还没进素材服务(上传没完成或失败),稍后再试或重新导入`);
 
     const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
     const promptChanged = !!media.subjects && prompt !== (media.subjects.prompt ?? "");
@@ -335,7 +336,7 @@ export const aiHandlers = {
     const msPerFrame = engine === "full" ? 3000 : engine === "light" ? 500 : 0;
     const etaSeconds = engine ? Math.ceil((times.length * msPerFrame) / 1000) + 5 : undefined;
 
-    const jobId = await startSubjectDetection(media.path, media.id, times, prompt || undefined);
+    const jobId = await startSubjectDetection(perceptionMediaRef(media), times, prompt || undefined);
     // 旧的 error 记录要先清掉:不清的话新作业和上一次的失败状态串味,
     // list_shots 会拿着一条陈年错误报「上次主体检测失败」。
     subjectJobs.delete(args.mediaId);

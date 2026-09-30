@@ -74,7 +74,8 @@ export const audioHandlers = {
       text: args.text, provider: args.provider, voiceId: args.voiceId,
       speed: args.speed, emotion: args.emotion, name: args.name,
     });
-    const mediaId = await importAudioFromServer({ url: r.url, path: r.path, name: r.name });
+    // 服务端已经经素材服务的入库接口把这段语音送进内容库(server/vite-plugin-voice.ts),这里按回来的标识登记
+    const mediaId = await importAudioFromServer({ url: r.url, name: r.name, uploaded: r.media ?? null });
     const media = getState().project.media.find((m) => m.id === mediaId);
     let clipId: string | undefined;
     if (typeof args.start === "number") {

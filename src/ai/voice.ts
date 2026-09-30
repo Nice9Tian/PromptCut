@@ -2,6 +2,7 @@
  * 配音的前端胶水:读写设置、合成、管理「我的音色」、音色设计 / 复刻。
  * 服务端在 server/vite-plugin-voice.ts,API Key 只在服务端,这边只看得到后四位。
  */
+import type { UploadedMedia } from "../editor/io/mediaUpload";
 
 export type Provider = "minimax" | "kling" | "vidu";
 
@@ -39,8 +40,14 @@ export interface VoicePresets {
 
 export interface VoiceResult {
   name: string;
-  path: string;
+  /** 只有试听(preview)才有:固定文件名的那份。正式合成经素材服务入库,不回磁盘路径 */
+  path?: string;
+  /** 正式合成:/@media/<hash>(入库后的地址);试听:/@media/<文件名> */
   url: string;
+  /** 正式合成:内容哈希 */
+  hash?: string;
+  /** 正式合成:素材服务入库接口的回包(和用户导入拿到的是同一种),页面据它登记素材 */
+  media?: UploadedMedia;
   bytes: number;
   provider: Provider;
   model: string;

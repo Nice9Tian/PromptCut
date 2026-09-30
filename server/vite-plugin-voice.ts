@@ -4,7 +4,8 @@
  *   GET  /api/voice/config          设置 + 静态数据(服务商、模型、系统音色、情绪、字数上限)
  *   POST /api/voice/config          局部更新设置;带 apiKey 就换 API Key
  *   POST /api/voice/clear-key       删 API Key
- *   POST /api/voice/generate        合成一段,落到素材目录;preview: true 写固定的试听文件
+ *   POST /api/voice/generate        合成一段,先落临时目录、再经素材服务的入库接口进内容库(和用户导入同一条路),
+ *                                   回 /@media/<hash>;preview: true 写固定的试听文件(不进素材库)
  *   POST /api/voice/custom          往「我的音色」里手填一条
  *   POST /api/voice/custom/remove   从「我的音色」里移除(只删本地记录,服务商那边不动)
  *   POST /api/voice/design          MiniMax 音色设计(新音色首次合成收 ¥9.9)
@@ -22,6 +23,9 @@ import { readBody } from "./vite-plugin-stt";
 import { mediaDir } from "./vite-plugin-media";
 import { isInside } from "./http-guard.mjs";
 import { findFfmpeg } from "./ai-visual.mjs";
+import { AssetSourceError } from "./audio-source.mjs";
+import { assetServiceOrigin } from "./asset-client";
+import { ingestFile } from "./media-ingest.mjs";
 import {
   readVoiceConfig, writeVoiceConfig, clearVoiceKey, publicVoiceConfig, addCustomVoice, removeCustomVoice,
 } from "./voice/voice-config.mjs";
@@ -55,6 +59,7 @@ async function readJson(req: Connect.IncomingMessage): Promise<Record<string, an
 function fail(res: ServerResponse, e: unknown): void {
   if (e instanceof VoiceError) return sendJson(res, e.status && e.status >= 500 ? 502 : 400, { ok: false, error: e.message });
   if (e instanceof SyntaxError) return sendJson(res, 400, { ok: false, error: "请求体不是合法的 JSON" });
+  if (e instanceof AssetSourceError) return sendJson(res, 502, { ok: false, kind: "asset-service", error: e.message });
   sendJson(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });
 }
 
@@ -104,16 +109,27 @@ export function voicePlugin(): Plugin {
             return sendJson(res, 200, { ok: true, config: publicVoiceConfig(clearVoiceKey()) });
           }
           if (url === "/api/voice/generate") {
-            const out = await generateVoice({
-              cfg: readVoiceConfig(),
-              args: {
-                text: body.text, provider: body.provider, voiceId: body.voiceId,
-                speed: body.speed, emotion: body.emotion, name: body.name,
-              },
-              outDir: mediaDir(root),
-              preview: body.preview === true,
-            });
-            return sendJson(res, 200, { ok: true, ...out });
+            const args = {
+              text: body.text, provider: body.provider, voiceId: body.voiceId,
+              speed: body.speed, emotion: body.emotion, name: body.name,
+            };
+            if (body.preview === true) {
+              // 试听:固定文件名、覆盖上一次,不进素材库(设置面板里听一下就扔),照旧
+              const out = await generateVoice({ cfg: readVoiceConfig(), args, outDir: mediaDir(root), preview: true });
+              return sendJson(res, 200, { ok: true, ...out });
+            }
+            // 正式合成(voice_generate):先落这一次自己的临时目录,再经素材服务的入库接口进内容库,
+            // 和用户导入素材走同一条路(docs/semantics/product/asset-service.md「入库这一步不能省」)。
+            // 回的是入库后的标识(/@media/<hash>、哈希、入库记录),不回临时路径 —— 回完它就删了。
+            const stage = fs.mkdtempSync(path.join(os.tmpdir(), "pc-voice-"));
+            try {
+              const out = await generateVoice({ cfg: readVoiceConfig(), args, outDir: stage, preview: false });
+              const media = await ingestFile({ file: out.path, name: out.name, origin: assetServiceOrigin });
+              const { path: _staged, ...rest } = out;
+              return sendJson(res, 200, { ok: true, ...rest, url: media.url, hash: media.hash, bytes: media.bytes, media });
+            } finally {
+              fs.rm(stage, { recursive: true, force: true }, () => {});
+            }
           }
           if (url === "/api/voice/custom") {
             if (!PROVIDERS.includes(body.provider)) throw new VoiceError(`provider 只能是 ${PROVIDERS.join(" / ")}`);
