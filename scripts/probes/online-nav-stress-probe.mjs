@@ -16,7 +16,9 @@
  *   --recycle N   ctx / same 形态每 N 次换一个浏览器(网络日志按浏览器分文件,没出事的那份删掉)。
  *   --burn N      另起 N 个线程空转占 CPU(模拟机器忙)。
  *   --content-length 1  静态文件带 Content-Length(像 nginx);缺省用分块传输(与各在线探针的站点服务一样)。
+ *   --gzip 1            静态文件按 Accept-Encoding 现压 gzip、分块传输(线上 nginx 的样子)。
  *   --headless shell    用 chrome-headless-shell;缺省 true(新 headless,完整 Chrome)。
+ *   --fixed 1     与各探针一样带 probe-chrome.mjs 的 PROBE_CHROME_ARGS(缺省);--fixed 0 不带,复现卡死用。
  *   --netlog 1    每个浏览器带 `--log-net-log`,只留出过超时的那份(在 --out 下)。
  *
  * 端口:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务(缺省 6090～6094)。
@@ -29,11 +31,13 @@ import os from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { Worker } from 'node:worker_threads';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -51,9 +55,13 @@ const LATE = Number(arg('--late', 120_000));
 const RECYCLE = Number(arg('--recycle', 25));
 const BURN = Number(arg('--burn', 0));
 const NETLOG = arg('--netlog', '1') === '1';
+/** 1(缺省):与各探针一样带 `PROBE_CHROME_ARGS`(probe-chrome.mjs);0:不带,复现 Chrome for Testing 缺省配置下的卡死 */
+const FIXED = arg('--fixed', '1') === '1';
 const HEADLESS = arg('--headless', 'true');
 /** 静态文件带 Content-Length(像 nginx);缺省 0 = 与各在线探针一样用分块传输 */
 const CONTENT_LENGTH = arg('--content-length', '0') === '1';
+/** 静态文件按请求的 Accept-Encoding 现压 gzip、分块传输(线上 nginx 开了 gzip 的样子) */
+const GZIP = arg('--gzip', '0') === '1';
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4 };
 const SITE = `http://127.0.0.1:${PORTS.editor}`;
 const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
@@ -110,6 +118,11 @@ function makeProxy(port) {
     if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
     const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
     const sendFile = (file, cache) => {
+      if (GZIP && /gzip/.test(String(req.headers['accept-encoding'] ?? ''))) {
+        res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding', ...sec });
+        fs.createReadStream(file).on('error', (e) => { rec.err = String(e.message); res.destroy(e); }).pipe(zlib.createGzip({ level: 1 })).pipe(res);
+        return;
+      }
       const len = CONTENT_LENGTH ? { 'Content-Length': fs.statSync(file).size } : {};
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...len, ...sec });
       fs.createReadStream(file).on('error', (e) => { rec.err = String(e.message); res.destroy(e); }).pipe(res);
@@ -173,7 +186,7 @@ async function launch() {
   browserSeq++;
   browserNetlog = NETLOG ? path.join(OUT, `netlog-b${browserSeq}-${stamp}.json`) : null;
   browserFailed = false;
-  const args = ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process'];
+  const args = [...(FIXED ? PROBE_CHROME_ARGS : []), '--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process'];
   if (browserNetlog) args.push(`--log-net-log=${browserNetlog}`);
   if (process.env.PC_CHROME_ARGS) args.push(...process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean));
   browser = await puppeteer.launch({ headless: HEADLESS === 'false' ? false : HEADLESS === 'shell' ? 'shell' : true, protocolTimeout: 600_000, args });
@@ -345,7 +358,7 @@ const ok = results.filter((r) => !r.navErr);
 const sorted = ok.map((r) => r.gotoMs).sort((a, b) => a - b);
 const pct = (q) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null;
 say({
-  summary: { mode: MODE, join: JOIN, stages: STAGES, keep: KEEP, burn: BURN, headless: HEADLESS, contentLength: CONTENT_LENGTH, chromeArgs: process.env.PC_CHROME_ARGS ?? '', iters: results.length, fails: fails.length, joinErrs: results.filter((r) => r.joinErr).length,
+  summary: { mode: MODE, join: JOIN, stages: STAGES, keep: KEEP, burn: BURN, headless: HEADLESS, contentLength: CONTENT_LENGTH, gzip: GZIP, fixed: FIXED, executable: process.env.PUPPETEER_EXECUTABLE_PATH ?? null, chromeArgs: process.env.PC_CHROME_ARGS ?? '', iters: results.length, fails: fails.length, joinErrs: results.filter((r) => r.joinErr).length,
     gotoMs: { p50: pct(0.5), p90: pct(0.9), p99: pct(0.99), max: sorted.at(-1) ?? null }, minutes: Math.round((Date.now() - tStart) / 6000) / 10,
     failFiles: fails.map((f) => f.forensics?.file), cpus: os.cpus().length },
 });
