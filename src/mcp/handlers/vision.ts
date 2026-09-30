@@ -5,6 +5,7 @@ import { prerenderUrl } from "../../render/prerender";
 import { getState, actions } from "../../store/project";
 import { subjectForRange } from "../../kernel/project";
 import { mediaCardUrl, isImageMedia } from "../../ai/mediaRef";
+import { mediaReadyForServer, perceptionMediaRef } from "../../ai/perceptionMedia";
 
 import { shotJobs, subjectDigest } from "../common";
 import { apiUrl } from "../apiUrl";
@@ -96,12 +97,13 @@ export const visionHandlers = {
       };
     }
     if (media.kind !== "video") throw new Error(`${media.name} 不是视频,没有画面可看`);
-    // 刚导入的素材,服务端路径要等上传完才写进来(import_media 一返回模型就可能接着调这里):最多等 15 秒
-    for (let i = 0; i < 30 && !media.path; i++) {
+    // 刚导入的素材要等入库完(import_media 一返回模型就可能接着调这里):最多等 15 秒。
+    // 镜头识别经素材服务取字节,看的是 pending / 哈希 / 地址,不是磁盘路径(见 ai/perceptionMedia.ts)
+    for (let i = 0; i < 30 && !mediaReadyForServer(media); i++) {
       await new Promise((r) => setTimeout(r, 500));
       media = getState().project.media.find((m) => m.id === args.mediaId) ?? media;
     }
-    if (!media.path) throw new Error(`${media.name} 没有服务端可读的路径(上传没完成或失败),稍后再试或重新导入`);
+    if (!mediaReadyForServer(media)) throw new Error(`${media.name} 还没进素材服务(上传没完成或失败),稍后再试或重新导入`);
     const notes: string[] = [];
     let shots = media.shots ?? null;
     if (!shots) {
@@ -109,7 +111,7 @@ export const visionHandlers = {
       try {
         let jobId = pending && !pending.error ? pending.jobId : "";
         if (!jobId) {
-          jobId = await startShotDetection(media.path, media.id);
+          jobId = await startShotDetection(perceptionMediaRef(media));
           shotJobs.set(args.mediaId, { jobId, percent: 0, engine: "scdet" });
         }
         const result = await waitForShots(jobId, (percent, engine) => shotJobs.set(args.mediaId, { jobId, percent, engine }));

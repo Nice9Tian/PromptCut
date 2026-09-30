@@ -7,6 +7,7 @@
  * 而追踪的查询点每次现指，存了只会让工程文件无限膨胀。
  */
 import { readSseStream } from "../editor/io/stt";
+import type { PerceptionMediaRef } from "./perceptionMedia";
 import type { Subjects, SubjectSample } from "../kernel/project";
 
 export interface SubjectJobState {
@@ -44,16 +45,16 @@ export async function subjectStatus(): Promise<{
   return r.json();
 }
 
+/** 只发素材标识,服务端经素材服务取字节(见 perceptionMedia.ts) */
 export async function startSubjectDetection(
-  mediaPath: string,
-  mediaId: string,
+  media: PerceptionMediaRef,
   times: number[],
   prompt?: string,
 ): Promise<string> {
   const r = await fetch("/api/subject/detect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: mediaPath, mediaId, times, ...(prompt ? { prompt } : null) }),
+    body: JSON.stringify({ mediaId: media.id, media, times, ...(prompt ? { prompt } : null) }),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.ok) throw new Error(data.error || "主体检测没能启动");

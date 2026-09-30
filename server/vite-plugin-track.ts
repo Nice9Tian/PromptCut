@@ -11,7 +11,6 @@
  */
 import type { Plugin, ServerResponse } from "vite";
 import type { Connect } from "vite";
-import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -21,6 +20,13 @@ import {
   pipeToSse,
   readBody,
 } from "./vite-plugin-stt";
+import { createAssetSourceResolver } from "./audio-source.mjs";
+import { assetServiceOrigin } from "./asset-client";
+import { mediaSourceOf } from "./vision/ffmpeg-frames";
+import { pythonInput, resolveMediaSource } from "./perception-source.mjs";
+
+/** 素材记录 → 素材服务上的 HTTP 地址。写法与 vite-plugin-shots.ts 相同,见 server/perception-source.mjs */
+const resolveSource = createAssetSourceResolver({ origin: assetServiceOrigin, toUrl: (m, origin) => mediaSourceOf(m, origin) });
 
 type TrackEngine = "bootstapir" | "template";
 
@@ -58,29 +64,50 @@ function sendJson(res: ServerResponse, code: number, data: unknown): void {
   res.end(JSON.stringify(data));
 }
 
-/** 跑一次追踪。stdout 一行一个 JSON，按 event 分派。 */
+/**
+ * 跑一次追踪。stdout 一行一个 JSON，按 event 分派。
+ * video 是素材服务上的 HTTP 地址;Python 包认地址就递地址,老包先流到临时文件(见 server/perception-source.mjs),跑完删。
+ */
 function runTracking(
   root: string,
   job: TrackJob,
   video: string,
   points: number[][],
+  ref: Record<string, string>,
 ): Promise<void> {
-  return new Promise(async (resolve) => {
+  return new Promise(async (resolveRun) => {
     const python = findPython(root);
     if (!python) {
       job.status = "error";
       job.message = "没有可用的 Python，无法运行追踪拓展。";
-      return resolve();
+      return resolveRun();
     }
     const env = await buildEnv(root, python);
+    let input: { input: string; cleanup: () => void };
+    try {
+      input = await pythonInput({ src: video, ref, python, env, pkg: "promptcut_track", spawnPython });
+    } catch (e) {
+      job.status = "error";
+      job.message = (e as Error).message;
+      return resolveRun();
+    }
+    const resolve = () => { input.cleanup(); resolveRun(); };
     // 不能加 -I：隔离模式会忽略 PYTHONPATH，promptcut_track 就 import 不到了。
     // 只有 install 用 -I（那一步不需要我们的包在 path 上）。
-    const child = spawnPython(
-      python,
-      ["-m", "promptcut_track", "track", "--video", video,
-       "--points", JSON.stringify(points)],
-      env,
-    );
+    let child: ReturnType<typeof spawnPython>;
+    try {
+      child = spawnPython(
+        python,
+        ["-m", "promptcut_track", "track", "--video", input.input,
+         "--points", JSON.stringify(points)],
+        env,
+      );
+    } catch (e) {
+      // 起不来(例如 .cmd 解释器拒绝带元字符的参数)也要收尾:临时文件要删,作业要落到 error
+      job.status = "error";
+      job.message = (e as Error).message;
+      return resolve();
+    }
 
     // stderr 要留着：Python 侧那些「给人看的话」和真正的崩溃栈都在这里。
     // 只读 stdout 的话，进程一崩就只剩一个退出码，没法查。
@@ -198,14 +225,11 @@ export function trackPlugin(): Plugin {
           return pipeToSse(spawnPython(python, ["-m", "promptcut_track", "install"], env), res);
         }
 
-        // POST /api/track/track —— 起一个后台作业
+        // POST /api/track/track { mediaId, media: { id, name, kind, url, hash }, points } —— 起一个后台作业。
+        // 素材经素材服务取(见 server/perception-source.mjs):没有这份素材回 404,素材服务不可达回 502;请求体里的 path 不看。
         if (req.method === "POST" && url === "/api/track/track") {
           try {
             const body = JSON.parse((await readBody(req)).toString("utf-8") || "{}");
-            const video: string | undefined = body.path;
-            if (!video || !existsSync(video)) {
-              return sendJson(res, 400, { ok: false, error: `找不到视频文件：${video ?? "(未提供)"}` });
-            }
             const points = body.points;
             if (!Array.isArray(points) || points.length === 0
                 || !points.every((p: unknown) => Array.isArray(p) && p.length === 3
@@ -216,15 +240,19 @@ export function trackPlugin(): Plugin {
               });
             }
 
+            const source = await resolveMediaSource(body, resolveSource);
+            if (!source.ok) return sendJson(res, source.status, { ok: false, error: source.error, ...(source.kind ? { kind: source.kind } : null) });
+            const video = source.src;
+
             const job: TrackJob = {
               id: randomUUID().slice(0, 8),
-              mediaId: body.mediaId,
+              mediaId: body.mediaId ?? source.media.id,
               status: "running",
               percent: 0,
             };
             jobs.set(job.id, job);
             // 不 await：立刻把 jobId 回给前端，进度靠轮询
-            void runTracking(root, job, video, points).catch((e) => {
+            void runTracking(root, job, video, points, source.media).catch((e) => {
               job.status = "error";
               job.message = e instanceof Error ? e.message : String(e);
             });
