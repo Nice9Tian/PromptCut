@@ -75,8 +75,8 @@ test('CM-3 ffmpeg 参数:单文件按窗口截;时间轴混音图与测响度同
   const measure = timelineMeasureArgs(entries, 5);
   const pcm = timelinePcmArgs(entries, { total: 5, sampleRate: 16000, channels: 2 });
   const graph = (args) => args[args.indexOf('-filter_complex') + 1];
-  // 同一张混音图:测响度在 amix 后接 ebur128,这里接输出
-  assert.equal(graph(measure).replace(',ebur128=peak=true[aout]', ''), graph(pcm).replace('[aout]', ''));
+  // 同一张混音图:测响度在 amix 后重打时间戳再接 ebur128(amix 偶发 NOPTS,见 audio-measure.mjs),这里接输出
+  assert.equal(graph(measure).replace(',asetpts=N/SR/TB,ebur128=peak=true[aout]', ''), graph(pcm).replace('[aout]', ''));
   const win = timelinePcmArgs(entries, { total: 5, offset: 1, duration: 2, sampleRate: 16000, channels: 2 });
   assert.match(graph(win), /atrim=0:5,atrim=start=1:duration=2,asetpts=PTS-STARTPTS\[aout\]$/);
 });

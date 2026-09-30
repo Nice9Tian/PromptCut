@@ -56,10 +56,13 @@ export function timelineMixParts(entries, duration) {
 export function timelineMeasureArgs(entries, duration) {
   // duration:时间轴时长(秒),混音在这里截断,和导出(-t duration)测的是同一段;不传就测到最后一段结束。
   // -nostats:进度行是 \r 分隔、和 ebur128 的逐帧行挤在一起,解析会吞掉整秒的点
+  // asetpts=N/SR/TB:按样本序号重打时间戳,再交给 ebur128。有一段先于结尾结束时,ffmpeg 9 的 amix 偶发给之后的帧
+  // 打 NOPTS,ebur128 的逐帧行就成了 t: -192153584101141.06(INT64_MIN / 48000),逐秒曲线在那之后缺点
+  // (实测约 1～13%,AGENT-maint-3)。正常时 amix 的输出从 0 连续,这一步是恒等的;响度只看样本,汇总值不受影响
   const { inputs, filters, mix } = timelineMixParts(entries, duration);
   return [
     "-hide_banner", "-nostats", ...inputs,
-    "-filter_complex", [...filters, `${mix},ebur128=peak=true[aout]`].join(";"),
+    "-filter_complex", [...filters, `${mix},asetpts=N/SR/TB,ebur128=peak=true[aout]`].join(";"),
     "-map", "[aout]", "-f", "null", "-",
   ];
 }

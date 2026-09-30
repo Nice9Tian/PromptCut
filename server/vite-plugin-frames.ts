@@ -1555,10 +1555,10 @@ export function framesPlugin(): Plugin {
             const lane = input.lane === "agent" ? "agent" : input.lane === "background" ? "background" : "user";
             if (lane === "user") noteInteraction(root);   // M6c X5:拖动取帧是交互帧请求
             const frames = await service.see_frames(project, input.times || [0], { lane, signal: requestSignal(req, res) });
-            const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
+            // `mov` 恒为 null:整场景的 full.mov 已不再产(legacy 整帧通道方案 B〔裁〕),字段留着给旧页面与探针认形状
             return json(200, { key: entry.key, incomplete: [...frames.values()].some((value: any) => value.incomplete),
               frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, incomplete: !!value.incomplete, missing: value.missing || [],
-                url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
+                url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: null });
           }
           // 会话「当前版本」的唯一来源(Item 4):页面的 preload 带着它的 `{ session, localRev }`
           if (url.pathname === "/preload" && !servesPrerender) {
@@ -1597,11 +1597,10 @@ export function framesPlugin(): Plugin {
             return json(200, { key: entry.key, snapshots, localOnly: snapshots === null });
           } else if (url.pathname !== "/status") return json(404, { error: "Unknown frame operation" });
           await entry.mov?.ready;
-          const videoReady = await fsp.access(path.join(entry.dir, "preview.mp4")).then(() => true, () => false);
-          const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
+          // `video`、`mov` 恒为 null:preview.mp4 与整场景的 full.mov 已不再产、也从来没有消费方
+          // (legacy 整帧通道方案 B〔裁〕,AGENT-maint-3)。字段不删,旧页面与探针见到的回包形状不变
           return json(200, { key: entry.key, status: entry.status, sampled: entry.html.size, movSampled: entry.mov ? [...(entry.mov.frames || [])].length : 0, total: Math.max(1, Math.floor(project.duration * (project.fps || 30))), error: entry.error,
-            video: videoReady ? `/api/frames/${entry.key}/preview.mp4` : null,
-            mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
+            video: null, mov: null });
         } catch (error: any) {
           const timedOut = Boolean(error?.timedOut || error?.code === "PRERENDER_TIMEOUT");
           const cancelled = Boolean(error?.cancelled || error?.name === "AbortError");

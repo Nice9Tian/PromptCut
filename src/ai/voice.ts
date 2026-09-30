@@ -109,7 +109,10 @@ export async function designVoice(args: { prompt: string; previewText: string; n
   return post("/api/voice/design", args, 90_000);
 }
 
-/** 复刻:先把源文件原样传进素材目录,再让服务端转音频、上传、建音色 */
+/**
+ * 复刻:先把源文件原样入库,再只递素材标识(哈希、地址、名字),服务端经素材服务取字节、转音频、上传、建音色。
+ * 不递本地路径:服务端不再按路径读内容库(字节一律经素材服务取)。
+ */
 export async function cloneVoiceFromFile(
   file: File,
   args: { name?: string; previewText?: string; voiceId?: string },
@@ -117,6 +120,7 @@ export async function cloneVoiceFromFile(
   const upName = `voice-clone-src-${Date.now()}-${file.name}`;
   const up = await fetch(`/api/media/upload/${encodeURIComponent(upName)}`, { method: "POST", body: file });
   const data = await up.json().catch(() => ({}));
-  if (!up.ok || !data.path) throw new Error(data.error || `上传源文件失败(HTTP ${up.status})`);
-  return post("/api/voice/clone", { ...args, path: data.path, consent: true }, 180_000);
+  if (!up.ok || !(data.hash || data.url)) throw new Error(data.error || `上传源文件失败(HTTP ${up.status})`);
+  const media = { hash: data.hash, url: data.url, name: file.name };
+  return post("/api/voice/clone", { ...args, media, consent: true }, 180_000);
 }
