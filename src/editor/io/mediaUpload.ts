@@ -246,7 +246,10 @@ export function startTierBackfill(hooks: BackfillHooks = {}): () => void {
   if (ONLINE_BUILD) return () => {};
   const background = async () => {
     // 本机取不到文件的标「(缺失)」(共享项目里不标,见 BackfillHooks.shared)
-    const r = await ingestUnhashedMedia({ background: true, markMissing: !hooks.shared?.() });
+    const local = !hooks.shared?.();
+    const r = await ingestUnhashedMedia({ background: true, markMissing: local });
+    // 带哈希、本地内容库里却没有的(另一台机器存的 .proc)同样标;共享项目里本机没有是常态,不判
+    if (local) await checkHashedMedia();
     await hooks.afterIngest?.(r);
   };
   let lastMedia: unknown = null;
@@ -442,6 +445,54 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
   return out;
 }
 
+/** 问过、本地内容库里有的素材原尺寸哈希(哈希不可变,有了就一直有;没有的每轮再问,期间可能被导入进来) */
+const hashPresent = new Set<string>();
+
+/**
+ * 带哈希的素材在本地内容库里有没有这份字节(`GET /api/media/local?hashes=…`,素材服务的现有接口)。只在本机项目里调:
+ * 共享项目里本机没有是常态(按需从远程素材服务拉)。
+ * - 没有的标「(缺失)」(同 markMediaMissing:清空地址、名字加标记;哈希留着,下次打开照样按哈希找);
+ * - 以前标过、现在有了的(导入了同样内容的文件、打开了带这份字节的包)去掉标记、换回 `/@media/<hash>`。
+ * 编辑器进程答不上来时什么都不改。回标了哪些、恢复了哪些。
+ */
+export async function checkHashedMedia(): Promise<{ missing: string[]; restored: string[] }> {
+  const out = { missing: [] as string[], restored: [] as string[] };
+  if (ONLINE_BUILD || isViewOnly()) return out;
+  const hashOf = (m: MediaAsset) => String(m.tiers?.original || m.hash || "").toLowerCase();
+  const ask = [...new Set((getState().project.media ?? [])
+    .filter((m) => !m.pending && hasMediaHash(m))
+    .map(hashOf)
+    .filter((h) => HASH_RE.test(h) && !hashPresent.has(h)))];
+  const answered = new Set<string>();
+  for (let i = 0; i < ask.length; i += 40) {
+    const part = ask.slice(i, i + 40);
+    try {
+      const res = await fetch(`/api/media/local?hashes=${part.join(",")}`, { cache: "no-store" });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { hashes?: unknown };
+      if (!Array.isArray(body?.hashes)) continue;
+      for (const h of body.hashes) hashPresent.add(String(h).toLowerCase());
+      for (const h of part) answered.add(h);
+    } catch { /* 编辑器进程不在:这一批不判 */ }
+  }
+  for (const m of getState().project.media ?? []) {
+    if (m.pending || !hasMediaHash(m)) continue;
+    const h = hashOf(m);
+    if (hashPresent.has(h)) {
+      if (m.name.startsWith(MISSING_PREFIX) || !m.url) {
+        actions.updateMedia(m.id, { name: m.name.startsWith(MISSING_PREFIX) ? m.name.slice(MISSING_PREFIX.length) : m.name, url: m.url || `/@media/${String(m.hash).toLowerCase()}` });
+        out.restored.push(m.id);
+      }
+    } else if (answered.has(h)) {
+      if (m.url === "" && m.name.startsWith(MISSING_PREFIX)) continue;
+      console.warn(`[io] 缺失素材: ${m.name} (${m.hash})`);
+      actions.updateMedia(m.id, { url: "", name: m.name.startsWith(MISSING_PREFIX) ? m.name : `${MISSING_PREFIX}${m.name}` });
+      out.missing.push(m.id);
+    }
+  }
+  return out;
+}
+
 /** 标「(缺失)」:清空地址、名字加标记(换新对象写回;已经标过的不重复加) */
 function markMediaMissing(mediaId: string): void {
   const fresh = getState().project.media.find((x) => x.id === mediaId);
@@ -457,4 +508,5 @@ export function resetTierBackfillForTest(): void {
   backfillAsked.clear();
   ingestBackgroundFailed.clear();
   ingestInflight.clear();
+  hashPresent.clear();
 }

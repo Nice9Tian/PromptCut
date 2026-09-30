@@ -3,6 +3,7 @@
  *
  *   MP-M1～M4  只有路径、本机取不到文件的素材,打开后(后台补入库那一轮)标「(缺失)」;取得到的不标;说不清的不标;
  *              共享项目里不标;以前标过、现在取到了的去掉标记
+ *   MP-M5～M6  带哈希、本地内容库里没有这份字节的(另一台机器存的 .proc):本机项目里同样标;有了去掉标记;共享项目不判
  *   MP-U1～U4  项目已经「放云端」时,后台补上哈希的素材交给上传队列(图片、音频也交);补不上的列给用户、只列一次;
  *              不是共享项目、等不到上传目标时什么都不做
  *
@@ -14,7 +15,7 @@ import test, { beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
 const { actions, getState } = await import(srcUrl("store/project.ts"));
-const { ingestUnhashedMedia, resetTierBackfillForTest, startTierBackfill } = await import(srcUrl("editor/io/mediaUpload.ts"));
+const { checkHashedMedia, ingestUnhashedMedia, resetTierBackfillForTest, startTierBackfill } = await import(srcUrl("editor/io/mediaUpload.ts"));
 const T = await import(srcUrl("editor/media/assetTiers.ts"));
 
 const H = (c) => c.repeat(64);
@@ -128,6 +129,72 @@ test("MP-M4 以前在别的机器上标过「(缺失)」、这台机器取得到
   assert.equal(get(m.id).hash, H("7"));
   assert.equal(get(m.id).url, `/@media/${H("7")}`);
   assert.equal(get(m.id).name, "voice-back.mp3");
+});
+
+test("MP-M5 带哈希、本地内容库里没有这份字节的素材标「(缺失)」(哈希留着);有的不标;答不上来时不改", async () => {
+  actions.newProject("带哈希");
+  const have = actions.addMedia({ kind: "video", name: "have.mp4", url: `/@media/${H("a")}`, hash: H("a"), path: "C:/A/out/media/x.mp4" });
+  const lack = actions.addMedia({ kind: "audio", name: "lack.mp3", url: `/@media/${H("b")}`, hash: H("b"), path: "C:/A/out/media/y.mp3" });
+  const tiered = actions.addMedia({ kind: "video", name: "tiered.mp4", url: `/@media/${H("c")}`, hash: H("c"), tiers: { original: H("c"), small: H("d") } });
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.startsWith("/api/media/local?")) {
+      asked.push(new URL(u, "http://x").searchParams.get("hashes").split(","));
+      return Response.json({ ok: true, hashes: [H("a"), H("c")] });
+    }
+    throw new Error(`没料到的请求 ${u}`);
+  };
+  const r = await checkHashedMedia();
+  assert.deepEqual(asked, [[H("a"), H("b"), H("c")]]);
+  assert.deepEqual(r, { missing: [lack.id], restored: [] });
+  assert.equal(get(lack.id).url, "");
+  assert.equal(get(lack.id).name, "(缺失) lack.mp3");
+  assert.equal(get(lack.id).hash, H("b"), "哈希留着:下次打开照样按哈希找");
+  assert.equal(get(have.id).url, `/@media/${H("a")}`);
+  assert.equal(get(tiered.id).name, "tiered.mp4");
+  // 有的记住了:下一轮只问没有的那个;标过的不重复标
+  const r2 = await checkHashedMedia();
+  assert.deepEqual(asked[1], [H("b")]);
+  assert.deepEqual(r2, { missing: [], restored: [] });
+  // 编辑器进程不在:不改
+  actions.newProject("带哈希-离线");
+  const off = actions.addMedia({ kind: "audio", name: "off.mp3", url: `/@media/${H("e")}`, hash: H("e") });
+  globalThis.fetch = async () => { throw new TypeError("fetch failed"); };
+  assert.deepEqual(await checkHashedMedia(), { missing: [], restored: [] });
+  assert.equal(get(off.id).url, `/@media/${H("e")}`);
+});
+
+test("MP-M6 标过「(缺失)」的带哈希素材,内容库里有了之后去掉标记、换回按哈希的地址;后台检查在共享项目里不判带哈希的", async () => {
+  actions.newProject("带哈希-回来");
+  const m = actions.addMedia({ kind: "audio", name: "(缺失) back.mp3", url: "", hash: H("f") });
+  globalThis.fetch = async (url) => String(url).startsWith("/api/media/local?") ? Response.json({ ok: true, hashes: [H("f")] }) : new Response(null, { status: 404 });
+  assert.deepEqual(await checkHashedMedia(), { missing: [], restored: [m.id] });
+  assert.equal(get(m.id).name, "back.mp3");
+  assert.equal(get(m.id).url, `/@media/${H("f")}`);
+  // 共享项目:后台检查不问 /api/media/local
+  resetTierBackfillForTest();
+  actions.newProject("共享-带哈希");
+  const s = actions.addMedia({ kind: "audio", name: "remote.mp3", url: `/@media/${H("9")}`, hash: H("9") });
+  const urls = [];
+  globalThis.fetch = async (url) => { urls.push(String(url)); return String(url).startsWith("/api/media/local?") ? Response.json({ ok: true, hashes: [] }) : new Response(null, { status: 404 }); };
+  let seen = null;
+  const stop = startTierBackfill({ shared: () => true, afterIngest: (r) => { seen = r; } });
+  try {
+    await waitFor(() => seen);
+    assert.ok(!urls.some((u) => u.startsWith("/api/media/local?")), "共享项目里不判");
+    assert.equal(get(s.id).url, `/@media/${H("9")}`);
+  } finally { stop(); }
+  // 本机项目:后台检查会判
+  resetTierBackfillForTest();
+  actions.newProject("本机-带哈希");
+  const l = actions.addMedia({ kind: "audio", name: "gone.mp3", url: `/@media/${H("8")}`, hash: H("8") });
+  seen = null;
+  const stop2 = startTierBackfill({ shared: () => false, afterIngest: (r) => { seen = r; } });
+  try {
+    await waitFor(() => seen);
+    assert.equal(get(l.id).name, "(缺失) gone.mp3");
+  } finally { stop2(); }
 });
 
 /** 让「编辑器进程拿到带 rw 票据的上传目标」成立(同 enqueueExisting.test.mjs 的 EQE-2) */
