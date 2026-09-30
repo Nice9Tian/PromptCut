@@ -211,7 +211,7 @@ node --test desktop/test/make-extension.test.mjs
 ## 外壳在 SKILL 模式里做的三件事（0.2.10 新增）
 
 SKILL 模式是「把当前项目交给桌面版的 Claude Code / Codex 去改」。整条链路的主体在 Node
-那半（`server/vite-plugin-skill*.ts`、`scripts/headless.mjs`），外壳只负责三件**只有原生
+那半（`server/vite-plugin-skill*.ts`、`server/mcp-server.mjs`），外壳只负责三件**只有原生
 一侧做得到**的事。三件全都能降级 —— 老外壳上不报错，只是少一个便利，所以这次外壳只进末位。
 
 1. **`.proc` 文件关联**（`tauri.conf.json` 的 `bundle.fileAssociations`）
@@ -226,14 +226,9 @@ SKILL 模式是「把当前项目交给桌面版的 Claude Code / Codex 去改�
    死锁。顺序是先 Node 后外壳。前端调用处 `src/editor/io/procLock.ts` 全程可选链，
    浏览器里跑就只有 Node 那一层，够用，只是少了「被强杀也能自动解锁」。
 
-3. **主窗收成悬浮图标**（`src/skill_shell.rs` + `ui/overlay.html`）
-   SKILL 模式期间 agent 在另一份看不见的实例上干活，主窗留着占地方。盯 Node 写的状态文件，
-   进模式就把主窗收成右上角的小图标，双击叫回来；这期间点关闭不是退出（真退出会把
-   sidecar 和 agent 的连接一起带走）。老外壳上主窗照常留着，功能不缺。
-
-**无头实例**（`scripts/headless.mjs`）不归外壳管：它是另起的一份 vite + 一张看不见的
-puppeteer 页面，自己的端口、自己的草稿目录。为什么必须有页面 —— 这个软件的渲染内核就是
-React + DOM，项目状态住在页面的 store 里，离开浏览器什么工具都没有。
+3. **编辑界面收起、转入后台运行**（见下文「后台运行」）
+   进 SKILL 模式时编辑界面缺省收起，桌面 APP 里的 Agent 经 MCP 直接改用户这份项目
+   （A4，`server/mcp-server.mjs`），页面必须一直活着。老外壳上主窗照常留着，功能不缺。
 
 ## 菜单栏到导航栏的颜色过渡
 
@@ -244,31 +239,52 @@ React + DOM，项目状态住在页面的 store 里，离开浏览器什么工�
 `--pc-menubar`，在编辑器和开始页顶部铺 10px 的渐变（`.pc-bar-fade`）过渡到导航栏底色；
 窗口重新拿到焦点、页面重新可见时再采一次，系统换主题也跟得上。浏览器里跑时没有壳，这条高度为 0。
 
-## SKILL 悬浮窗上的启动进度
+## 后台运行：托盘图标、悬浮窗、关窗不退出（A5）
 
-用户在 Skill 对话框点「开始」的**那一刻**主窗就收成悬浮窗（前端 `SkillDialog.tsx` 建完任务立刻调
-`openSkillMode`，不等实例就绪；服务端 `/api/skill/jobs` 给刚点的任务标 `starting`，
-`skillMode.ts` 把它和活着的任务同等看待，模式不会被下一秒的轮询关掉）。
-快照 → 起无头实例 → 写说明并拉起桌面 app → 实例就绪 这四步不再画在对话框里，而是画在悬浮窗上：
+语义见 `docs/semantics/user-workflow.md`「后台运行」：关闭编辑界面不退出，软件转为托盘图标和悬浮窗
+继续运行；点托盘图标或悬浮窗重新打开编辑界面；只有在托盘图标或悬浮窗上右键选「关闭」才退出。
+代码在 `src-tauri/src/background.rs`（状态机、托盘、收起与挪回）和 `src-tauri/src/skill_shell.rs`（悬浮窗）。
 
-- 壳的 watcher 每秒读任务目录（`project.proc` 所在目录）的 `job.json`，`phase` / `launch` 变了就推
-  `pc-skill-progress`；`launch.status === "launching"`（实例已就绪、还在拉桌面 app 并替用户回车，
-  这一段动辄几十秒）显示成状态行，「实例就绪」那一格已经亮着，不会看起来像卡住。
-- 走完（就绪 / 失败 / 停止）之后进度块再留 4 秒收起（`pc-skill-steps`），窗口高度按正在显示的块算
-  （`overlay_height`：卡片 72 + 进度块 108 + 预览块 152，各加 8 间距），位置始终在右上角。
+| 操作 | 结果 |
+|---|---|
+| 点主窗的 ×（或 Alt+F4） | 编辑界面收起，出悬浮窗，托盘图标照常在 |
+| 进 SKILL 模式（状态文件变成 `active: true`） | 编辑界面收起；之后用户自己打开的不会再被收回 |
+| 回到传统式（`active: false`），此时编辑界面收着 | 编辑界面打开 |
+| 托盘左键单击 / 单击悬浮窗 / 菜单「打开编辑界面」/ 再启动一次 | 编辑界面打开并拿到焦点 |
+| 托盘右键或悬浮窗右键 →「关闭」（标题栏菜单「退出」同路） | 真退出：sidecar 整棵树清掉、`.proc` 锁释放（`RunEvent` 里做，和原来一样） |
 
-## SKILL 悬浮窗下面的「上一步动作」预览
+**收起不是 `hide()`。** WebView2 被 `hide()` 后会停渲染，页面侧的 Agent 工具（`side: "page"`）、悬浮窗的
+「上一步动作」预览都跟着停。所以主窗留着「可见」，只是挪到所有显示器最左边再往左一个窗宽加 256 像素
+（`offscreen_position`，不用 -32000：那是 Windows 给最小化窗口的坐标）、不进任务栏、不抢焦点；挪回来
+时回到记下的位置（显示器没了就居中），收起前是最大化的再最大化。WebView2 的启动参数
+（`agent_webview::browser_args`，主窗、agent 子 webview、悬浮窗三处共用）另外关掉了 Chromium 的遮挡判断
+（`CalculateNativeWinOcclusion`）和后台降频，防的是屏幕外的窗口被当成「被挡住」而降频。
 
-SKILL 模式的悬浮图标（`ui/overlay.html`，`src-tauri/src/skill_shell.rs`）现在会在卡片下面显示
-agent **上一次做成的时间轴动作**那一刻的画面——没有时间轴、没有控件，只回答「它刚才那一步做出来是什么样」：
+**主窗口要按 `get_window("main")` 查。** 主窗口里加了 agent 的子 webview 之后它就不再是
+`WebviewWindow`，`get_webview_window("main")` 返回 None —— 以前 SKILL 收起用的 `main.hide()`、
+第二次启动时的「叫回窗口」就是这样悄悄失效的。
 
-- 无头实例的页面里，时间轴类工具（add_clip / update_clip / set_rect / fill_captions 等，见
-  `src/ai/mcpExecutor.ts` 的 `TIMELINE_TOOLS`）成功后按 `see_frames` 那条路渲染那张卡中点的整屏，
-  POST 到自己的 `/api/skill-mode/last-action`，写到 `~/Documents/PromptCut-Skill/last-action.{png,json}`
-  （先写临时文件再改名）。只有 `PROMPTCUT_HEADLESS=1` 的实例会写，用户自己那份的动作不算。
-- 壳的 watcher 每秒看一眼 `last-action.json` 的修改时间，变了就把 png 读成 data URL 推给悬浮页
-  （事件 `pc-skill-preview`），第一张到的时候把悬浮窗撑高（见上一节的 `overlay_height`）。
-- 连着改十张卡只渲染最后那次（同一时刻只有一张在渲染，后来的覆盖排队的）。
+**退出前把主窗挪回原位。** window-state 插件在退出时记窗口位置，收起状态下直接退会记下屏幕外的坐标。
+所以退出路径先把主窗藏起来、挪回收起前的位置再退；插件也不再记「可见」这一位（`lib.rs`）。
+收起前是最大化的，退出时只还原位置、不再最大化（藏着的窗口一最大化就会显示，而且退出那一刻来不及生效），
+下次启动是普通窗口。
+
+**悬浮窗**（`ui/overlay.html`、`ui/overlay-summary.js`）：编辑界面收起时出现，第一次收起时才建，
+之后只显示 / 隐藏；右上角，可拖（按下后挪超过 4 像素才算拖，交给外壳 `startDragging`），单击打开
+编辑界面，右键弹外壳的原生菜单。页面加载完发 `pc-overlay-ready`，外壳把手上的状态重推一遍。
+
+- 非 SKILL：写「PromptCut 在后台运行」。
+- SKILL：外壳每秒取一次编辑器进程的 `GET /api/agent/desktop`（A4 的桌面会话分组，只挑厂商、正在做的、
+  上一步几个字段），悬浮窗写「Claude Code 正在改卡片」「Codex 上一步：读项目」之类；编辑器连不上时写明。
+- SKILL 下「上一步动作」的画面：用户这份页面渲好交回 `/api/skill-mode/last-action`，写到
+  `~/Documents/PromptCut-Skill/last-action.{png,json}`；外壳盯 json 的修改时间，变了就读成 data URL 推给
+  悬浮页（`pc-skill-preview`），第一张到的时候把悬浮窗撑高（卡片 72 + 间距 8 + 预览块 152）。
+
+事件：悬浮页 → 外壳 `pc-overlay-open`（单击）、`pc-overlay-menu`（右键）、`pc-overlay-ready`；
+外壳 → 悬浮页 `pc-overlay-state`、`pc-skill-preview`。两头的名字由 `desktop/test/overlay-summary.test.mjs` 对着。
+
+纯逻辑的单测：状态机、屏幕外坐标、菜单项、HTTP 回应拆包、状态文件解析在 `cargo test --lib`；
+悬浮窗文字在 `node --test desktop/test/overlay-summary.test.mjs`。
 
 ## Agent 的浏览器:主窗口里的子 webview
 
@@ -341,6 +357,8 @@ npm run smoke
 
 ### 使用
 
+- 点窗口的关闭按钮不会退出，软件收到托盘和右上角的悬浮窗里继续运行（Agent 照常干活）；
+  点托盘图标或悬浮窗打开，右键托盘图标或悬浮窗选「关闭」才真退出。
 - 导出的视频成品保存在 `%USERPROFILE%\Videos\PromptCut`。
 - 语音识别的引擎和模型在首次使用时在线下载，保存在 `%APPDATA%\com.promptcut.desktop`。
 
@@ -370,7 +388,8 @@ desktop/
   THIRD-PARTY-LICENSES.md
   .gitignore
   ui/index.html                   启动等待页
-  ui/overlay.html                 SKILL 模式下主窗收起来后的右上角悬浮图标(双击叫回主窗)
+  ui/overlay.html                 编辑界面收起后右上角的悬浮窗(单击打开、右键菜单、SKILL 进度与预览)
+  ui/overlay-summary.js           悬浮窗上那两行字怎么写(node 单测直接跑这份)
   scripts/
     prepare-runtime.mjs           组装 runtime/
     prepare-python.mjs            组装内置 Python（由 python-runtime 任务提供）
@@ -392,6 +411,7 @@ desktop/
     smoke-all.mjs                 全流程冒烟
   test/
     make-extension.test.mjs       拓展表/许可证硬闸/manifest 的单测(node --test)
+    overlay-summary.test.mjs      悬浮窗文字、与外壳的事件名对照
   src-tauri/
     Cargo.toml
     build.rs
@@ -401,7 +421,8 @@ desktop/
     src/main.rs
     src/lib.rs
     src/proc_lock.rs              .proc 的内核级独占锁(Windows 共享模式 0;进程一死内核就收)
-    src/skill_shell.rs            SKILL 模式:盯状态文件,主窗收成悬浮图标 / 叫回来
+    src/background.rs             后台运行:打开/收起/退出的状态机、托盘、主窗挪到屏幕外与挪回
+    src/skill_shell.rs            悬浮窗;盯 SKILL 状态文件(变成 SKILL 时收起编辑界面)、推进度与预览
     icons/icon-source.svg         图标源文件
     binaries/                     (git ignored) node sidecar
     runtime/                      (git ignored) 运行时组件
