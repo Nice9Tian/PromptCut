@@ -39,6 +39,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { findFfmpeg } from '../../server/ai-visual.mjs';
 import { measureArgs, parseEbur128 } from '../../server/audio-measure.mjs';
 import { filePcmArgs, decodePcm } from '../../server/audio-pcm.mjs';
@@ -253,7 +254,7 @@ try {
   if (!(await startEditor())) throw new Error('编辑器进程没起来');
   check(fs.readdirSync(MEDIA_DIR).length === 0, '开始时编辑器的素材目录是空的', fs.readdirSync(MEDIA_DIR));
 
-  browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run'] });
+  browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run'] });
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));

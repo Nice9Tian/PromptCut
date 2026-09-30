@@ -32,6 +32,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -218,7 +219,7 @@ try {
   const DOC_URL = `ws://127.0.0.1:${DOC_PORT}`;
 
   browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
 
   // 1. A:远端,产并推送
   const A = await startEditor('a', PORT_A, { PROMPTCUT_DOCSERVICE_URL: DOC_URL, PROMPTCUT_PUSH: '1' });

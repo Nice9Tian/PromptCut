@@ -37,6 +37,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -196,7 +197,7 @@ try {
   out.prerender = prerender?.url ?? null;
   const PRE = String(prerender?.url || EDITOR).replace(/\/+$/, '');
 
-  browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run'] });
+  browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run'] });
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));

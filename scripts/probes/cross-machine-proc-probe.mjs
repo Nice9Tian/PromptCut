@@ -27,6 +27,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startDevServer } from '../lib/dev-server.mjs';
 import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 
@@ -130,7 +131,7 @@ try {
   const voice = path.join(src, `voice-${RUN}.mp3`);
   run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '2', '-c:a', 'libmp3lame', '-b:a', '128k', '-metadata', `comment=${RUN}`, voice]);
 
-  browser = await puppeteer.launch({ headless: true, protocolTimeout: 900000, args: ['--disable-field-trial-config', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
+  browser = await puppeteer.launch({ headless: true, protocolTimeout: 900000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
 
   // ── 实例 A:建项目、存成 .proc ──
   log(`起实例 A(${PORT_A})`);

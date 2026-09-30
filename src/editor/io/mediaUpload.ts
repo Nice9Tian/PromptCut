@@ -129,7 +129,7 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
  * 地方炸(见 importAssets.ts 的说明)。素材留空地址、pending 落回 false,
  * 素材层就是透明的,用户重新导入即可。
  */
-export function applyUploadedMedia(mediaId: string, up: UploadedMedia | null): void {
+export function applyUploadedMedia(mediaId: string, up: UploadedMedia | null, { imported = true }: { imported?: boolean } = {}): void {
   const media = getState().project.media.find((m) => m.id === mediaId);
   if (!media) return;
   const patch: Partial<Omit<MediaAsset, "id">> = { pending: undefined, path: up?.path ?? media.path ?? "" };
@@ -143,7 +143,15 @@ export function applyUploadedMedia(mediaId: string, up: UploadedMedia | null): v
   }
   actions.updateMedia(mediaId, patch);
   if (up?.tiers && !up.tiers.small && up.smallState === "pending") watchSmallTier(mediaId, up.tiers.original);
+  // 导入完成(所有导入路径都汇到这里):共享项目里按哈希交给上传队列,上传目标还没就绪的先记下(见 BackfillHooks.afterImport)
+  if (up && imported && importHook) {
+    const fresh = getState().project.media.find((m) => m.id === mediaId);
+    if (fresh) { try { void Promise.resolve(importHook(fresh)).catch(() => {}); } catch { /* 挂的事出错不影响导入 */ } }
+  }
 }
+
+/** `startTierBackfill` 挂上的 `hooks.afterImport`;没挂(在线构建、单测)就不做 */
+let importHook: ((media: MediaAsset) => unknown) | null = null;
 
 /** 素材小尺寸在本机后台转码,每隔这么久问一次 */
 const SMALL_POLL_MS = 2000;
@@ -244,6 +252,8 @@ function writeSmallTier(mediaId: string, original: string, small: string): void 
  */
 export function startTierBackfill(hooks: BackfillHooks = {}): () => void {
   if (ONLINE_BUILD) return () => {};
+  const myImportHook = hooks.afterImport ?? null;
+  importHook = myImportHook;
   const background = async () => {
     // 本机取不到文件的标「(缺失)」(共享项目里不标,见 BackfillHooks.shared)
     const local = !hooks.shared?.();
@@ -265,7 +275,7 @@ export function startTierBackfill(hooks: BackfillHooks = {}): () => void {
   };
   const unsub = subscribe(check);
   check();
-  return () => { unsub(); if (timer) clearTimeout(timer); };
+  return () => { unsub(); if (timer) clearTimeout(timer); if (importHook === myImportHook) importHook = null; };
 }
 
 /* ---------------- 补入库:没有哈希、但本机还取得到字节的老素材 ---------------- */
@@ -374,6 +384,12 @@ export interface BackfillHooks {
   shared?: () => boolean;
   /** 后台补入库做完之后(放云端时把补上哈希的交给上传队列、补不上的列给用户) */
   afterIngest?: (r: IngestResult) => unknown;
+  /**
+   * 一条素材导入完成、写回了哈希之后(`applyUploadedMedia`;用户导入、配音、素材收集都经这里)。共享项目里用它把
+   * 素材按哈希交给上传队列:打开共享项目后、编辑器进程拿到上传目标之前导入的,编辑器进程那一侧的入队看到的是本机目标、
+   * 当空操作丢掉,要由页面记下、就绪后补交(`media/assetTiers.ts` 的 queueImportedMedia)。
+   */
+  afterImport?: (media: MediaAsset) => unknown;
 }
 
 /** 同一来源正在补的(打包与后台同时触发时只补一次) */
@@ -436,7 +452,8 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
       const fresh = getState().project.media.find((x) => x.id === m.id);
       if (!fresh || hasMediaHash(fresh)) continue; // 期间被删了,或别处已经补上
       // 派生的声音不挂视频的两档
-      applyUploadedMedia(m.id, fresh.soundOf ? { ...up, tiers: undefined, smallState: undefined } : up);
+      // 补上哈希的交给上传队列走 hooks.afterIngest(queueBackfilledMedia),这里不再按「导入」交一遍
+      applyUploadedMedia(m.id, fresh.soundOf ? { ...up, tiers: undefined, smallState: undefined } : up, { imported: false });
       // 以前在别的机器上被标过「(缺失)」、现在取到了:去掉标记
       if (fresh.name.startsWith(MISSING_PREFIX)) actions.updateMedia(m.id, { name: fresh.name.slice(MISSING_PREFIX.length) });
       out.ingested.push(m.id);
@@ -505,6 +522,7 @@ function markMediaMissing(mediaId: string): void {
 
 /** 单测用 */
 export function resetTierBackfillForTest(): void {
+  importHook = null;
   backfillAsked.clear();
   ingestBackgroundFailed.clear();
   ingestInflight.clear();

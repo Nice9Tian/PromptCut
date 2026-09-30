@@ -30,6 +30,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -135,7 +136,7 @@ try {
     return { ok: r.body?.ok === true, bytes: items.reduce((s, it) => s + it.bytes, 0), count: items.length, intermediateBytes: items.reduce((s, it) => s + it.intermediateBytes, 0) };
   };
 
-  browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+  browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--no-sandbox'] });
   const pageErrors = [];
   const newPage = async () => {
     const page = await browser.newPage();
