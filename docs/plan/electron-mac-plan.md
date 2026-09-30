@@ -1,5 +1,7 @@
 # 计划：下一个大版本支持 macOS——换 Electron，但只换「壳」这一层；预渲染那条路一字不动
 
+**顺序（2026-10-01 用户定）**：先证明 paint 取帧确实可行，再执行换壳。理由：paint 可行与否决定换壳的收益有多大（同一内核、省掉 PNG 编解码），先拿到这个事实再投两天以上的壳重写。
+
 2026-10-01 用户定方向：下一个大版本支持 Mac，桌面壳从 Tauri v2 迁到 Electron。本文是评估与计划，尚未排期、未动工。规则见 `docs/semantics/guide_files/`；平台承诺见 `docs/semantics/product/platforms.md`。
 
 ## 两个被推翻的前提
@@ -29,6 +31,12 @@
 
 ## 步骤
 
+0. **先证明 paint 取帧可行**（在这台 PC 上做，不用 Mac，预计 2～3 天）：
+   - 做什么：一个最小 Electron 程序，离屏 `BrowserWindow` 加载正在跑的 dev-test 导出页（`?export=1`），把 `server/bakery/bake.mjs` 的驱动抽成接口（现在拿的是 `{ page, client, beginFrame, waitNet }`），加 Electron 后端：`executeJavaScript` 代 `page.evaluate`，`webContents.debugger` 的 Network 域代 `waitNet`，`invalidate()` + 下一次 `paint` 代 `beginFrame({ screenshot })`；位图以 rawvideo 直接灌 ffmpeg，不经 PNG。
+   - 握手：设第 n 帧 → 等就绪（沿用现有 `__pcFrameReady` 与视频出画判断）→ 推一拍 rAF → `invalidate()` → 取下一次 paint。paint 不保证「下一次 paint 就是这次 invalidate 的结果」（视频元素出画也会触发合成），所以每帧在画面里带帧标记，**运行期逐帧核对**，对不上就再等一次 paint；这是正确性的一部分，不是测试辅助。
+   - 完成的标志（四条都要过，任一条不过就回到「换壳但预渲染不动」）：① 导出确定性：基线项目 1800 帧导两遍逐像素相同；② 运行期帧标记核对零失败；③ 与 chrome-headless-shell 后端同一项目的产物逐帧比对，每一处差异都能解释（预期是抗锯齿、字体栅格化这类合成路径差异，不允许出现错帧、漏帧、视频帧取错）；④ 耗时：同一项目两个后端各导三遍，取中位数，paint 后端不慢于现在；数字在笔记本量（`guide_files/verification.md`「性能基准机」）。
+   - 边界：paint 只能是第二个取帧后端，不是替换。探针、`verify-determinism`、云端渲染节点、Linux Agent 端都在没有 Electron 的纯 Node 里跑，仍靠 puppeteer + chrome-headless-shell；渲染节点的结果键已乘环境指纹（M4），两个后端并存不会串产物，但桌面渲的与云端渲的不再共享。像素基线按后端各一份。
+   - 产出：`docs/reports/REPORT-paint-backend.md`，四条结果与数字都贴进去；代码留在分支，不合入。
 1. **Windows 上先做 Electron 壳原型**（预计 1～2 天）：主进程起现有的 Node 侧（vite 中间件那套）、加载编辑器、三个舞台源、Agent 子窗口带调试端口。完成的标志：编辑器能开、能预渲染、能导出；G0 与 G0-R 在 Windows 上全过、像素基线 0 差异。这一步不碰 Mac，先证明「壳换了、管线没变」。
 2. **Rust 壳的平台专用逻辑改写成 Electron 等价物**：`desktop/src-tauri/src/` 里 6 处 `#[cfg(windows)]`（进程锁、关窗杀进程、Agent 子窗口、标题栏颜色），加托盘与悬浮窗。产出：Electron 主进程模块一一对应。
 3. **Mac 上跑同一套**：装 `mac_arm` 的 chrome-headless-shell、Mac 版 ffmpeg 与内置 Python（wheel 按 Mac ABI 用自带解释器重下，`desktop/README.md`「wheel 用自带解释器 pip download」）。完成的标志：Mac 上 G0-R 全过。**像素基线按平台各一份**：Mac 的首版基线由 Mac 首次导出定，与 Windows 那份不互比；这条要写进 `guide_files/verification.md`。
@@ -47,16 +55,12 @@
 
 ## 第一步（半小时）
 
-在 PC 上写一个 30 行的 Electron 主进程，`npx electron .` 直接加载正在跑的 dev-test（5203），看编辑器能不能开、三个舞台源能不能起、控制台有没有报错。不改仓库任何文件；结果决定第 1 步值不值得投两天。
+在 PC 上写一个 30 行的 Electron 主进程：`offscreen: true` 的 `BrowserWindow` 加载正在跑的 dev-test 导出页（5203，`?export=1`），监听 `paint` 事件，把第一张 `NativeImage` 存成 PNG 看画面对不对、控制台有没有报错。不改仓库任何文件；结果决定第 0 步值不值得投两三天。
 
-## 第二阶段：paint 取帧后端（壳迁完、第一阶段验收过之后的独立实验，未排期）
+## 外部建议的处理
 
-- **做什么**：把 `server/bakery/bake.mjs` 的驱动抽成接口（现在拿的是 `{ page, client, beginFrame, waitNet }`），加一个 Electron 离屏窗口后端：`executeJavaScript` 代 `page.evaluate`，`webContents.debugger` 的 Network 域代 `waitNet`，`invalidate()` + 下一次 `paint` 代 `beginFrame({ screenshot })`。位图以 rawvideo 直接灌 ffmpeg，省掉 PNG 编解码。
-- **握手的正确性要求**：paint 不保证「下一次 paint 就是这次 invalidate 的结果」（视频元素出画也会触发合成）。每帧在画面里带帧标记，**运行期逐帧核对**，对不上就再等一次 paint；这是正确性的一部分，不是测试辅助。
-- **不能替换 headless-shell 的原因**：探针、`verify-determinism`、云端渲染节点、Linux Agent 端都没有 Electron。两个后端并存：渲染节点的结果键已乘环境指纹（M4），不会串产物，但桌面渲的与云端渲的不再共享。
-- **代价**：合成路径换了，导出像素基线整个重定（每个后端各一份）；导出确定性要在 GPU 合成下重新证明。
-- **验收**：导出确定性 1800/1800；运行期帧标记核对零失败；同一项目两个后端的产物逐帧比对，每一处差异都能解释；预渲染耗时前后对比在笔记本量（`verification.md`「性能基准机」）；G0 全过。
-- 建议出处：用户 2026-10-01 转来的外部建议（离屏窗口对照表与握手四步），其中「多带约 100 MB 的 headless-shell」不对（实测 270 MB）、「帧号只在测试阶段核对」不够、「不用额外带 headless-shell」只对桌面包成立，其余采纳。
+用户 2026-10-01 转来的外部建议（离屏窗口对照表与握手四步）：其中「多带约 100 MB 的 headless-shell」不对（实测 270 MB）、「帧号只在测试阶段核对」不够（要运行期核）、「不用额外带 headless-shell」只对桌面包成立，其余采纳，已并入第 0 步。
+
 ## 顾问调用记录
 
 Gemini（agy）讨论一轮，2026-10-01：提出三条替代路线（Tauri+CEF 未核实；全 Wasm 导出管线，成本极高且动基线，不采纳；Electron 并砍掉打包的 Chrome，采纳），指出薄弱环节（两个内核破坏所见即所得，采纳），对 paint 与 WKWebView 的判断已按上文标注核实或标未核实。它称「利用 Electron 隐藏的 BrowserWindow 挂载 CDP 跑导出」与代码注释矛盾（beginFrame 只在 chrome-headless-shell 里有），不采纳。
