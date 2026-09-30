@@ -1456,7 +1456,7 @@ export default function vitePluginAi(): Plugin {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         res.setHeader('Cache-Control', 'no-store');
         const b = agentBinding;
-        sendJson(res, 200, b ? { ok: true, bound: true, mode: b.mode, url: b.url, ...b.side.describe() } : { ok: true, bound: false });
+        sendJson(res, 200, b ? { ok: true, bound: true, mode: b.mode, url: b.url, ...b.side.describe(), presence: presenceBridge?.describe() ?? null, editing: userEditingBoard.describe() } : { ok: true, bound: false });
       });
 
       server.middlewares.use('/api/mcp/status', (req, res) => {

@@ -260,7 +260,10 @@ async function phase2() {
   const seenB = await waitFor(async () => pageB.evaluate(async (id) => (await import('/src/store/project.ts')).getState().project.tracks.some((t) => t.clips.some((c) => c.id === id)), ids.a), 30000, 500);
   check(!!seenB, 'X1 乙的页面看得到甲放的卡', seenB);
 
-  /* X2 乙按住拖动 → 甲的 Agent 读它带「用户 bob 正在编辑」 */
+  /* X2 乙按住拖动 → 甲的 Agent 读它带「用户 bob 正在编辑」。机器有负载时开场的卡片测量(probe-gate)要很久,等它撤掉、卡出现在时间轴上 */
+  const gateGone = await waitFor(async () => pageB.evaluate((id) => !document.querySelector('[data-pc="probe-gate"]') && !!document.querySelector(`[data-clip-id="${id}"]`), ids.a), 600000, 1000);
+  check(!!gateGone, 'X2 乙的编辑台挂好了(卡片测量结束、卡出现在时间轴上)', gateGone);
+  await waitFor(async () => pageA.evaluate(() => !document.querySelector('[data-pc="probe-gate"]')), 600000, 1000);
   await pageB.evaluate((id) => document.querySelector(`[data-clip-id="${id}"]`)?.scrollIntoView({ block: 'center', inline: 'center' }), ids.a);
   await sleep(300);
   const box = await pageB.$eval(`[data-clip-id="${ids.a}"]`, (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
@@ -274,6 +277,12 @@ async function phase2() {
     const r = await callA('get_clip', { clipId: ids.a }, AGENT);
     return Array.isArray(r?.userEditing) && r.userEditing.some((e) => e.clipId === ids.a && e.who === 'bob') ? r : null;
   }, 10000, 400);
+  if (!read) {
+    const st = await getJson(`${devA.origin}/api/agent/status`);
+    console.log('DIAG A status', JSON.stringify({ presence: st.presence, editing: st.editing }));
+    console.log('DIAG B presence', JSON.stringify(await pageB.evaluate(async () => (await import('/src/editor/sync/presence.ts')).presenceStatus())));
+    console.log('DIAG B editing', JSON.stringify(await pageB.evaluate(async () => (await import('/src/editor/userEditing.ts')).userEditingSnapshot())));
+  }
   check(!!read, 'X2 甲的 Agent 读乙正在拖的卡,结果带 userEditing(who: bob)', read?.userEditing);
   check(typeof read?.notice === 'string' && read.notice.startsWith(`用户 bob 正在编辑片段 ${ids.a}(拖动中)`), 'X2 提示「用户 bob 正在编辑……」', read?.notice);
   const other = await callA('get_clip', { clipId: ids.b }, AGENT);

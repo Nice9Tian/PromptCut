@@ -6,7 +6,7 @@ A3 = 计划 `docs/plan/agent-workflow-plan.md` 第 2 节表里的第三段「多
 
 ## 状态
 
-**代码与单测完成，等「可以跑重活」之后跑基线与探针**（见「验证」）。没有二级语义改动；三级〔裁〕18 条（见「〔裁〕清单」）。托管端（文档服务）**需要重新部署**才有跨设备提示（新增在场状态模块）；不部署也不坏：客户端对旧版文档服务平稳退回（单测 MA-X5）。
+**完成，基线全绿、探针两个阶段都过**（见「验证」）。主会话已审过 18 条〔裁〕并认可；计划 A3 验收措辞由主会话改；`product/document-service.md` 补「在场状态」先不写、列给用户定。没有二级语义改动；三级〔裁〕18 条（见「〔裁〕清单」）。托管端（文档服务）**需要重新部署**才有跨设备提示（新增在场状态模块）；不部署也不坏：客户端对旧版文档服务平稳退回（单测 MA-X5）。
 
 ## 提交
 
@@ -16,7 +16,11 @@ A3 = 计划 `docs/plan/agent-workflow-plan.md` 第 2 节表里的第三段「多
 | `d864374a` | 第一阶段：`spawn_agent`、公告板搬到编辑器进程、被覆盖方得知、写进别人范围双方提示、归档分工模式 |
 | `2a90648c` | 第二阶段：文档服务的在场状态模块、编辑器进程的桥、页面发布编辑状态与显示别的成员的 Agent |
 | `5e8cb041` | 探针 `scripts/probes/multi-agent-probe.mjs` |
-| （之后） | 公告板小修、报告 |
+| `a19f1f69` | 报告草稿；公告板 `touch` 不记空对话 ID |
+| `e48f6be8` | 修：交给在场状态的 `userId` 可能是 null（tsc 拦下） |
+| `9ae3eac2` | 修：`spawn_agent` 的角色常量挪进不引 Node 内置模块的 `server/agent/spawn-roles.mjs`（工具表被页面静态引入，之前经 `agent-roles.mjs` 把 `node:fs` 带进页面依赖链，开发服务器会整页白屏；`src/pageNodeImports.test.mjs` 拦下） |
+| `9f3757c1` | 修：不认识的驱动名不再让 AI 栏整页报错（`src/ai/modelOptions.ts` 加 `capabilityOf`，查不到给一张「什么都不支持」的能力表；探针里子 Agent 页签沿用 `probe-none` 时暴露） |
+| （本提交） | 探针第二阶段等编辑台挂好再拖；`/api/agent/status` 带在场状态与编辑看板的诊断；报告补验证 |
 
 ## 做了什么
 
@@ -85,9 +89,31 @@ A3 = 计划 `docs/plan/agent-workflow-plan.md` 第 2 节表里的第三段「多
 
 ## 验证
 
-（等主会话发「可以跑重活」后补：`npx tsc -b --force`、`npm test`、两个代码指纹、探针与截图。）
+收到「可以跑重活」之后（机器上同时有 A6 的子 Agent 在跑重活）：
 
-已跑（重活禁令期间，一次一个测试文件，都在 worktree 里，ffmpeg 在 PATH）：
+| 项 | 跑了几遍 | 结果 |
+|---|---|---|
+| `npx tsc -b --force` | 3 | 第 1 遍 1 个错（`syncManager.ts` 把可能为 null 的 `userId` 交给 `setPresenceLink`），修后第 2、3 遍（最后一遍在全部修完之后）退出码 0、0 错误 |
+| `npm test` | 3 | 第 1 遍 4074 项 4071 过、1 败、跳过 2：`src/pageNodeImports.test.mjs`「页面的静态依赖链里没有 Node 内置模块」—— 真问题，见提交 `9ae3eac2`；修后第 2 遍、第 3 遍（全部修完之后）都是 4074 项 **4072 过、0 败、跳过 2**，退出码 0 |
+| 代码指纹 `snapshotCode` / `captureCode` | 2 | `00a5264bf8a062ff6e0b5ed0516cccd1` / `86e443cb6fa838aef64788af6822fd68`，与任务书给的一致，没碰渲染 |
+| 探针第一阶段 `node scripts/probes/multi-agent-probe.mjs --phase 1`（自起编辑器 5840，舞台 5841/5842） | 2 | 第 1 遍 17 过 7 败：子 Agent 页签沿用 `probe-none` 驱动，`ModelBar` 查能力表 `CAPABILITIES['probe-none']` 得 undefined，页面抛错（「Cannot read properties of undefined (reading 'efforts')」）、编辑台断开，之后的投递、页签名、再拉起都失败 —— 真问题，见提交 `9f3757c1`；修后第 2 遍 **24 过 0 败**，退出码 0 |
+| 探针第二阶段 `--phase 2`（托管组合 5850/5851，成员甲编辑器 5843、成员乙编辑器 5846） | 3 | 前 2 遍各 3 败：负载下乙的页面过了 2 分钟还在开场的「正在测量卡片」遮罩里（截图为证），编辑台没挂上，拖不到卡、也没画 AI 栏 —— 探针等待太短（原来 120 秒、超时不报）；改成等遮罩撤掉、卡出现在时间轴上（最多 10 分钟，并作为一项检查）后第 3 遍 **11 过 0 败**，退出码 0 |
+
+探针要点（第一阶段 M1～M6、第二阶段 X0～X3 的实测值）：
+- 主对话调 `spawn_agent` 回 `sub-PdYr-QziiOhv`，角色「剪辑导演」、等级「中」（父对话此刻的等级）、驱动沿用 `probe-none`；页面出现页签「剪辑导演」，登记表 `role: director`、`parent: <主对话>`；任务作为来自主对话的消息由子页签发出。
+- 父子各写一处：公告板改动记录里两条，写入身份分别是主对话与子 Agent。
+- `send_message` 给空闲的子 Agent 由它的页签自动发出；给没有页签的会话，下一次 `get_clip` 结果里带 `messages` 与「别的 Agent 给你的消息」。
+- 子 Agent 覆盖父写的片段：子这次结果带 `overwrote`（「Agent <主对话>(probe-none)刚改过」），父下一次结果带 `overwrittenBy`（「被 Agent sub-…(probe-none) 覆盖」）；父写进子声明的范围：父这次 `scopeClash`，子下一次 `scopeChanges`；页签名跟着范围变成「剪辑导演 · 剪辑1->序列 1」。
+- 子 Agent 再拉起回「不能再拉起（深度上限 1）」；再拉 3 个共 4 个成功，第 5 个回「上限 4」，页面上正好 4 个子 Agent 页签。
+- 第二阶段：乙（bob）的页面按住拖动一张卡，甲编辑器进程里的 Agent 读它：`userEditing: [{ kind: 'drag', who: 'bob' }]`，提示「用户 bob 正在编辑片段 c-…(拖动中)。这是提示不是禁止……」；读别的卡不带；甲的 Agent 声明「剪辑1->序列1」后，乙的页面 AI 栏顶上出现「成员 alice 的 Agent(probe-none)正在改:剪辑1->序列1」。两个页面都没有未捕获的异常。
+
+看过的截图（都在 scratchpad 的 `ma/shots1`、`ma/shots2`）：
+- `tabs.png`：右侧栏在「Agent 1」下面多了「剪辑导演」页签。
+- `child-tab.png`：右侧栏有「剪辑导演」和三个「特效助理」页签（带角标），Agent 操作记录里是 5 条 `spawn_agent` 和几次读写。探针用 `activateTab` 切页签没有改变右侧栏显示的那一页（显示哪一页由侧栏布局管），所以这张图显示的仍是 Agent 1 的对话，不是子页签的对话；子页签收到任务消息是按 chat store 断言的（M2、M4）。
+- `b-dragging.png`（第 2 遍）：乙的页面还在「正在测量卡片 7 / 11」遮罩里 —— 前两遍失败的原因。
+- `b-remote-agents.png`（第 3 遍）：乙的页面顶栏「成员：2 人」，AI 栏顶上一行「成员 alice 的 Agent(probe-none)正在改:剪辑1->序列1」，时间轴上被拖动的那张卡带选中框。
+
+重活禁令期间已跑的单测（一次一个测试文件，都在 worktree 里，ffmpeg 在 PATH）：
 
 | 命令 | 结果 |
 |---|---|
@@ -130,7 +156,7 @@ A3 = 计划 `docs/plan/agent-workflow-plan.md` 第 2 节表里的第三段「多
 
 ## 需要主会话决定的事
 
-- 审上面 18 条〔裁〕与三份 dry run（计划验收的措辞、`product/document-service.md` 是否补「在场状态」、`mechanism/agent.md`）。
+- 18 条〔裁〕主会话已认可；计划验收措辞由主会话改；`product/document-service.md` 是否补「在场状态」列给用户定；`mechanism/agent.md` 的 dry run 待定。
 - 合并 `claude/multi-agent`（`--no-ff`），或返工。
 - **托管端重新部署**（文档服务多了在场状态模块）由主会话做；本分支没有部署任何东西。不部署时线上只是没有跨设备提示。
 - 顺带说明：我起初把几个临时脚本（`uac.py`、`comp.py`、`ml.py`、`env.py`、`roles.py`、`sp.py`、`ss.py`、`ai3.py`）直接写在会话共用的 scratchpad 根目录，后来都挪进了 `scratchpad/ma/`；若主会话在根目录原本也有同名文件，可能被我覆盖过（我没有看到先前的内容）。
