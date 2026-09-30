@@ -66,6 +66,12 @@ const USER_RENDER_TIMEOUT_MS = Math.max(1000, Number(process.env.PROMPTCUT_USER_
 export const PRELOAD_STALE_MS = 8000;
 /** Agent lane 的 Chrome 空闲这么久就关,下次查询再拉起(cloud-task.md I1) */
 export const AGENT_IDLE_MS = 10 * 60 * 1000;
+/**
+ * Agent 专用实例做完一个 Agent 任务之后,至少空这么久才接普通预渲染(`kickAgentIdle`)。Agent 的一次工具调用常常是
+ * 前后脚的几个任务(`see_frames` 的一批渲完才排「量实体框」),空档里接一批卡批(一批要换页、推 4 帧,几秒)会让
+ * 紧跟着的那个任务白等一批。这段时间里专用实例什么都不接,到点再判。
+ */
+export const AGENT_GRACE_MS = 1000;
 
 const roundBox = b => ({ left: Math.round(b.left), top: Math.round(b.top), width: Math.round(b.width), height: Math.round(b.height) });
 
@@ -287,6 +293,10 @@ export class FramePipeline {
      */
     this.agentPending = 0;
     this.agentUnit = null;
+    /** 最近一个 Agent 任务做完的时刻;`agentGraceMs` 之内专用实例不接预渲染(测试给 0) */
+    this.agentDoneAt = 0;
+    this.agentGraceMs = AGENT_GRACE_MS;
+    this.agentGraceTimer = null;
     /** 后台那一趟正在做的那张卡还没开工的批(`fillCardControls` 的 `share`),Agent 专用实例空闲时从这里取 */
     this.cardBatchPool = null;
     this.background = Promise.resolve();
@@ -511,8 +521,9 @@ export class FramePipeline {
     if (refused) return Promise.reject(refused);
     // 专用实例正借去做一项普通预渲染(`kickAgentIdle`)时,这个任务排在那一项之后:不打断它,做完就轮到这里
     this.agentPending++;
+    const queuedAt = Date.now();
     const task = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(async () => {
-      this.noteSched('agent', 'agent');
+      this.noteSched('agent', 'agent', Date.now() - queuedAt);
       let leased = false;
       const lease = async (project, { asIs = false } = {}) => {
         leased = true;
@@ -523,7 +534,7 @@ export class FramePipeline {
       try { return await work(lease); }
       finally { if (leased) this.release('agent'); }
     });
-    const settled = task.finally(() => { this.agentPending--; this.kickAgentIdle(); });
+    const settled = task.finally(() => { this.agentPending--; this.agentDoneAt = Date.now(); this.kickAgentIdle(); });
     this.laneChains.set('agent', settled.catch(() => {}));
     return task;
   }
@@ -547,7 +558,7 @@ export class FramePipeline {
    */
   runQueueTask(work, signal, { front = false, agentOk = !front, tag = null, scaleLane = 'queue', kind = 'queue' } = {}) {
     return new Promise((resolve, reject) => {
-      const item = { work, signal, front, agentOk, tag, scaleLane, kind, resolve, reject };
+      const item = { work, signal, front, agentOk, tag, scaleLane, kind, resolve, reject, queuedAt: Date.now() };
       if (front) {
         const at = this.queueTasks.findIndex(other => !other.front);
         if (at < 0) this.queueTasks.push(item); else this.queueTasks.splice(at, 0, item);
@@ -564,7 +575,7 @@ export class FramePipeline {
     if (at < 0) return;
     const [item] = this.queueTasks.splice(at, 1);
     this.queueRunning = item;
-    this.noteSched(item.kind, 'queue');
+    this.noteSched(item.kind, 'queue', Date.now() - item.queuedAt);
     item.run = this.runQueueItem(item, 'queue').then(item.resolve, item.reject)
       .finally(() => { this.queueRunning = null; this.pumpQueue(); this.kickAgentIdle(); });
   }
@@ -609,7 +620,8 @@ export class FramePipeline {
    *   - Agent 队列空(`agentPending === 0`),手里也没有别的预渲染项(`agentUnit`);
    *   - 专用实例的预渲染间**已经开着、还没到空闲关闭**(`lanes.get('agent')`,且没标 `expired`):
    *     不为接预渲染去开 Chrome,Agent 最近 `AGENT_IDLE_MS` 用过它才接;
-   *   - 不在播放让路期间(同后台那一趟)。
+   *   - 不在播放让路期间(同后台那一趟);
+   *   - 离最近一个 Agent 任务做完已经过了 `agentGraceMs`(`AGENT_GRACE_MS`):还没到就定个计时器,到点再判。
    *
    * 接哪一项:先是普通预渲染队列里第一个 `agentOk`、且和 `'queue'` 预渲染间手里那一项不同 `tag` 的;没有就从后台那一趟
    * 正在做的那张卡里取一批(`cardBatchPool`)。**一次只接一项**,接的那一项挂在 `laneChains.get('agent')` 链尾:
@@ -622,6 +634,14 @@ export class FramePipeline {
     const session = this.lanes.get('agent');
     if (!session || session.expired) return;
     if (this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) return;
+    const wait = this.agentDoneAt + this.agentGraceMs - Date.now();
+    if (wait > 0) {
+      if (!this.agentGraceTimer) {
+        this.agentGraceTimer = setTimeout(() => { this.agentGraceTimer = null; this.kickAgentIdle(); }, wait);
+        this.agentGraceTimer.unref?.();
+      }
+      return;
+    }
     const unit = this.takeAgentUnit();
     if (!unit) return;
     this.agentUnit = unit;
@@ -650,7 +670,7 @@ export class FramePipeline {
     const at = this.queueTasks.findIndex(item => item.agentOk && (!item.tag || item.tag !== busy));
     if (at >= 0) {
       const [item] = this.queueTasks.splice(at, 1);
-      this.noteSched(item.kind, 'agent');
+      this.noteSched(item.kind, 'agent', Date.now() - item.queuedAt);
       const giveBack = () => { this.queueTasks.splice(Math.min(at, this.queueTasks.length), 0, item); this.pumpQueue(); };
       return {
         tag: item.tag, source: 'queue', giveBack,
@@ -671,13 +691,14 @@ export class FramePipeline {
   /**
    * 调度记录(只给诊断看,`diagnostics().scheduler`):`kind` 是哪种活(`'agent'` = Agent 任务,`'queue'` / `'preview'` /
    * `'prerender'` = 普通预渲染队列的项,`'card-batch'` = 后台那一趟的一批),`worker` 是在哪个实例上开工
-   * (`'agent'` = Agent 专用实例,`'queue'` = `'queue'` lane 的预渲染间)。计数一直累加,明细留最近 64 条。
+   * (`'agent'` = Agent 专用实例,`'queue'` = `'queue'` lane 的预渲染间),`waitMs` 是从排进来到开工等了多久
+   * (Agent 任务等专用实例手里那一项做完;普通预渲染等排在它前面的)。计数一直累加,明细留最近 64 条。
    */
-  noteSched(kind, worker) {
+  noteSched(kind, worker, waitMs = null) {
     const stats = (this.schedStats ||= { counts: {}, recent: [] });
     const key = `${kind}@${worker}`;
     stats.counts[key] = (stats.counts[key] ?? 0) + 1;
-    stats.recent.push({ kind, worker, at: Date.now() });
+    stats.recent.push({ kind, worker, at: Date.now(), ...(waitMs === null ? {} : { waitMs }) });
     while (stats.recent.length > 64) stats.recent.shift();
   }
   /** 普通预渲染队列做完:待办清空、两个实例手里都没有它的项(`closeNow` 等它) */
@@ -3336,6 +3357,7 @@ export class FramePipeline {
     await this.stopPlayback();
     clearTimeout(this.backgroundLeaseTimer);
     clearTimeout(this.timer);
+    clearTimeout(this.agentGraceTimer);
     for (const timer of this.cardLockTimers ?? []) clearTimeout(timer);
     this.cardLockTimers?.clear();
     this.userGenerationController?.abort();

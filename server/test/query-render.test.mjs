@@ -75,9 +75,11 @@ test.after(() => { for (const dir of tmpRoots) fs.rmSync(dir, { recursive: true,
  * `agentOpen`:Agent 专用实例的预渲染间是不是已经开着(Agent 最近用过)。`'queue'` lane 的预渲染间总是预先放好。
  * `readFramesCore` 换成「借一下、记下是哪条 lane、在哪个预渲染间上」。
  */
-function harness({ agentOpen = false, interactive = true } = {}) {
+function harness({ agentOpen = false, interactive = true, graceMs = 0 } = {}) {
   const log = [];
   const svc = new FramePipeline({ root: tmpRoot(), origin: () => 'http://127.0.0.1:1', interactive });
+  // Agent 任务做完之后的空档(`AGENT_GRACE_MS`)只在 QR-G2-10 里量,其余用例给 0
+  svc.agentGraceMs = graceMs;
   const bakeries = { queue: fakeBakery('queue', log), agent: fakeBakery('agent', log) };
   svc.lanes.set('queue', { bakery: bakeries.queue });
   if (agentOpen) svc.lanes.set('agent', { bakery: bakeries.agent });
@@ -343,6 +345,7 @@ test('QR-G2-6 空闲计时器在专用实例借去做预渲染时到点:不在�
 function cardHarness({ agentOpen = true } = {}) {
   const log = [];
   const svc = new FramePipeline({ root: tmpRoot(), origin: () => 'http://127.0.0.1:1', environment: { fingerprint: '0123456789abcdef' } });
+  svc.agentGraceMs = 0;
   const bakeries = { background: fakeBakery('background', log), agent: fakeBakery('agent', log) };
   if (agentOpen) svc.lanes.set('agent', { bakery: bakeries.agent });
   svc.isolatedCardProject = () => ({ width: 64, height: 36, fps: 30, duration: 2, tracks: [], media: [] });
@@ -418,4 +421,28 @@ test('QR-G2-9 没有开着的专用实例时 share 与不传完全相同:全部�
   assert.deepEqual(shared, plain);
   assert.ok(shared.every(e => e.startsWith('background:')));
   assert.equal(shared.length, 8);
+});
+
+test('QR-G2-10 Agent 任务做完后空 AGENT_GRACE_MS 才接预渲染:紧跟着的下一个 Agent 任务不用等一批', async () => {
+  const { AGENT_GRACE_MS } = await import('../frame-pipeline.mjs');
+  assert.equal(AGENT_GRACE_MS, 1000);
+  const { svc, log, task } = harness({ agentOpen: true, graceMs: 80 });
+  try {
+    const holdA = gate();
+    const a = task('A', { hold: holdA });
+    await until(() => log.includes('A:start@queue'));
+    await svc.runAgentTask(async lease => { await lease(project); log.push('X1'); });
+    const b = task('B');
+    await sleep(20);
+    assert.ok(!log.some(e => e.startsWith('B')), '空档之内专用实例不接 B');
+    // 空档之内又来一个 Agent 任务:马上做,不用等任何预渲染
+    const t0 = Date.now();
+    await svc.runAgentTask(async lease => { await lease(project); log.push('X2'); });
+    assert.ok(Date.now() - t0 < 60, `X2 没等(${Date.now() - t0} ms)`);
+    await b;
+    assert.ok(log.includes('B:start@agent'), '空档过了专用实例接 B');
+    assert.ok(log.indexOf('X2') < log.indexOf('B:start@agent'));
+    holdA.open();
+    await a;
+  } finally { await svc.close(); }
 });
