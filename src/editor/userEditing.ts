@@ -16,8 +16,14 @@ import { createEditingTracker, type EditingEntity } from "./userEditingCore";
 /** 这个页面的会话号(服务端按它整份替换这个页面报的状态) */
 const session = `ue-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-function send(entities: EditingEntity[]) {
-  // 不等回包、不读 body:它是一份提示,晚一拍到也只是少提示一次
+/** 在线构建的编译期常量,写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」 */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
+/**
+ * 在线页面没有编辑器进程(C10a 契约第 2 节),也就没有本机 Agent 可提示:不发,在线构建里连同这条 /api 路径一起剪掉。
+ * 桌面 / 本机:不等回包、不读 body —— 它是一份提示,晚一拍到也只是少提示一次。
+ */
+const send: (entities: EditingEntity[]) => void = ONLINE_BUILD ? () => {} : (entities) => {
   try {
     void fetch("/api/agent/editing", {
       method: "POST",
@@ -26,7 +32,7 @@ function send(entities: EditingEntity[]) {
       keepalive: true,
     }).catch(() => {});
   } catch { /* 发不出去就等下一次 */ }
-}
+};
 
 const tracker = createEditingTracker({ send });
 
