@@ -9,7 +9,7 @@
 
 ## 状态
 
-轻量部分做完：四项的代码、单测、探针脚本都已提交；单个测试文件逐个跑过。**重活还没跑**（主会话在同机跑带耗时门槛的整套验证，按任务书的重活禁令等放行）：`npx tsc -b --force`、`npm test`、G0-R（第 1 项改到预渲染要跑的一组渲染验收）、第 4 项探针的真跑。
+四项做完，主会话审过、〔裁〕认可。放行后重活全部跑过：类型检查 0 错误；全量测试 4145 条，0 失败、跳过 2；代码指纹不变；G0-R（第 1 项改到预渲染要跑的一组渲染验收）功能判定全过；认领闸探针真跑一遍全过。唯一一项跑了两遍的是流式生产（非组流）的编码耗时门槛：第一遍 p50 363 ms 超了 300 ms 门槛，重跑 272 ms 过；当时 bake-asset 子 Agent 在同机跑重活，这一项只作参考、待笔记本复核。
 
 用户看不出区别：第 1 项删的两个文件从来没人读；`/status` 回包形状不变。没有需要停下的用户可见影响。
 
@@ -23,6 +23,8 @@
 | `4999fa65` | 测试：CM-3 的混音图比对认多出的 `asetpts` |
 | `2ec60323` | 修复：配音复刻的源文件经素材服务取字节（单测 MNT3-V-1～3） |
 | `a7cea78a` | 探针：认领闸端到端探针 `claim-gate-probe`（判定单测 MNT3-C-1～3） |
+| `8c826de5` | 文档：报告写到轻量部分做完 |
+| （本次） | 文档：补重活的验证结果 |
 
 用例编号前缀 `MNT3-` 是本任务新起的（B = 方案 B，L = 响度，V = 配音复刻，C = 认领闸），仓库里原来没有。
 
@@ -55,7 +57,7 @@
 - `node --experimental-test-module-mocks --test server/test/maint-3-legacy-mov.test.mjs`：6 / 6 通过。
 - 相关旧单测逐个跑：`frame-cache-validation` 14、`frame-archive` 15、`frame-preload` 3、`card-lock-pipeline` 21、`frame-playback` 12、`query-render-2` 11、`frame-user-watchdog` 4，全部通过、0 失败。
 - 代码指纹：`00a5264bf8a062ff6e0b5ed0516cccd1 86e443cb6fa838aef64788af6822fd68`，不变（改的文件都不在 `SNAPSHOT_FILES` / `CAPTURE_FILES` 里；`frame-pipeline.mjs` 只进 `frameCode`，那个指纹本来就随管线改动变）。
-- G0-R：**没跑**，等放行。
+- G0-R：见「验证」，全过。
 
 ## 2. 时间轴档测响度的逐秒曲线偶发缺点
 
@@ -102,7 +104,7 @@
   - 两趟都判 ready、细任务全部 done、没有失败。
 - 端口：趟 1 编辑器 5990（+1、+2 舞台）、文档服务 5993；趟 2 编辑器 5994～5996、文档服务 5997。预渲染进程的端口由编辑器按系统分配的空闲端口挑（同现有探针）。
 - 判定单测 `maint-3-claim-gate-judge` 3 / 3；`bakery-deps.test.mjs` 的例外表登记了这个新测试（测 `scripts/` 的测试要显式列出）。
-- **探针还没真跑**，等放行。
+- **真跑过一遍，`ok: true`、`fails: []`，退出码 0**（明细见「验证」）。
 
 ## 〔裁〕
 
@@ -112,17 +114,47 @@
 
 没有改二级语义；语义文件没动。
 
-## 验证（到目前为止）
+## 验证
+
+每条命令都在本 worktree 里跑，PATH 里加了 ffmpeg 9.0.1。端口只用了 5990～5997、6003～6008；dev server 带 `PROMPTCUT_NO_PORT_FILE=1`，跑完我按进程树结束了自己起的进程，最后核过 5990～6009 上没有残留监听。当时 bake-asset 子 Agent 在同机跑重活（5970～5989）。
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 新单测 | `node --experimental-test-module-mocks --test server/test/maint-3-*.test.mjs`（逐个） | B 6/6、L 2/2、V 3/3、C 3/3 |
-| 相关旧单测 | 见各节，逐个跑 | 全部通过 |
-| 代码指纹 | `node -e 'import("./server/frame-code.mjs")…'` | 不变 |
-| 类型检查 | `npx tsc -b --force` | **没跑**（重活禁令） |
-| 全量测试 | `npm test` | **没跑**（重活禁令） |
-| G0-R | 确定性、与基准逐像素、快照重放、流式生产两种、预览退回两种、就绪索引、查询渲染 | **没跑**（重活禁令） |
-| 认领闸探针 | `node scripts/probes/claim-gate-probe.mjs` | **没跑**（重活禁令） |
+| 类型检查 | `npx tsc -b --force` | 退出码 0 |
+| 全量测试 | `npm test` | tests 4145 / pass 4143 / fail 0 / skipped 2，退出码 0 |
+| 新单测 | `server/test/maint-3-*.test.mjs`（逐个，也在全量里） | B 6/6、L 2/2、V 3/3、C 3/3 |
+| 代码指纹 | `node -e 'import("./server/frame-code.mjs")…'` | `00a5264bf8a062ff6e0b5ed0516cccd1 86e443cb6fa838aef64788af6822fd68`，不变 |
+| 导出确定性 | 6003 这台，`node scripts/verify-determinism.mjs --url "http://127.0.0.1:6003/?export=1"` | Identical 1800 / Different 0，退出码 0 |
+| 与基准逐像素 | 自写比较脚本（放在我的临时目录）逐帧解码比 RGBA：`.worktrees/main-g0r/out/verify-a/frames` 对本分支 `out/verify-a/frames` | baseline 1800、candidate 1800、same 1800、diff 0、missing 0 |
+| 快照重放一致 | `PC_FRAME_TEST_URL=http://127.0.0.1:6003 node scripts/verify-unified-frames.mjs` | PASS（含新断言：PNG 表与 `frames/` 各 10 帧，没有 `preview.mp4`、`full.mov`），退出码 0 |
+| 流式生产 | `stream-produce-probe.mjs --origin …6003` | 第 1 遍退出码 1：唯一一条失败是耗时门槛（1080p 全幅流 15 帧分段编码 p50 363 ms > 300 ms），功能项全过；**重跑第 2 遍** `fails: []`、退出码 0，p50 272 ms |
+| 流式生产（组流） | 同上加 `--group` | 1 遍，`fails: []`、退出码 0 |
+| 预览退回 | `preview-fallback-probe.mjs --origin …6003`，另跑一遍加 `--page-preload` | 两种各 1 遍，都 `fails: []`、`transparentBeats: 0`、`pageErrors: []`；taskP90 为 33.1 / 33.8 ms |
+| 就绪索引 | `ready-index-probe.mjs --port 6003`（自起 dev server） | 1 遍，`fails: []`，退出码 0 |
+| 查询渲染 | `query-render-probe.mjs --port 6006` | 1 遍，`fails: []`，退出码 0；`card-batch@agent` 39、那一趟 `status: ready`、Agent 任务等待 `[2519, 0]` ms |
+| 认领闸 | `node scripts/probes/claim-gate-probe.mjs --port 5990 --doc-port 5993` | 1 遍，`ok: true`、`fails: []`，退出码 0（明细见下） |
+
+跑的过程中有两次是我自己起错了环境，与代码无关：
+
+- 第一次把 dev server 起在 6000：Chrome 认 6000 为不安全端口（`ERR_UNSAFE_PORT`），导出页打不开。改用 6003。**6000 在分配的 5990～6009 段里，但不能用作页面端口**（6000 是 X11 端口，Chrome 拒连）。
+- 第一次跑快照重放时，我给 dev server 设了临时的 `PROMPTCUT_EXPORT_DIR`，脚本把测试素材写进工作副本的 `out/media`，dev server 却去临时目录找，素材 404、解码失败。去掉这个变量（缺省就在工作副本的 `out/` 下）重起后通过。确定性那一遍用的是前一台 dev server，导出页不读素材，结果有效。
+
+### 认领闸探针明细
+
+| | 趟 1「专用实例没开」 | 趟 2「专用实例开着」 |
+|---|---|---|
+| 模式 | full | full |
+| 细任务 | 9 个快照，全部 done，没有失败 | 9 个快照，全部 done，没有失败 |
+| 后台那一趟 | ready，168.6 s | ready，153.6 s |
+| 采样数（每 150 ms） | 950 | 863 |
+| 最大持有数 `queue.held` | 1 | 2（持有两项的样本 293 个） |
+| 多出的那一格开过 | 否 | 是 |
+| 专用实例开过 | 否 | 是（preload 前模型先看了一帧） |
+| 调度计数 | `queue@queue` 10 | `queue@queue` 6、`queue@agent` 4、`agent@agent` 4 |
+
+**Agent 任务不排在后面**：趟 2 里看到专用实例在做一项队列任务时（那一项在发请求前 102 ms 开工），模型再看一帧。这次请求的第一个 Agent 任务在 38.4 s 后开工（`agentWaitMs` 38347），开工之前专用实例上没有再开工任何普通预渲染（`jumped: []`）；它一做完，下一个就是这个 Agent 任务，排着的队列任务在它之后（39.1 s 才在 queue lane 上开工下一项）。请求总耗时 40.6 s。
+
+这 38 s 就是〔裁 6〕（`AGENT-query-render-2.md` 第 6 节：多认领的一项到手时专用实例被占，就等手里那一项做完，至多一项）写明的上界：一项快照细任务是 60 帧一段，这台机器此时约 38 s。行为符合现有语义「不打断，做完就轮到 Agent」，但用户在这种时刻问一帧要等半分多钟。要不要把「专用实例上的队列任务按批让出」提上日程，请主会话判断（见「需要主会话决定的事」）。
 
 ## 更正建议（dry run，没改任何文件）
 
@@ -134,6 +166,7 @@
 
 ## 需要主会话决定的事
 
-1. 放行后跑重活：`tsc`、`npm test`、G0-R、认领闸探针。
-2. 〔裁 1〕～〔裁 3〕是否照留。
-3. 上面几条更正建议要不要另开小项。
+1. 合并 `claude/maint-3`，还是返工。
+2. 流式生产那一遍超时（重跑过了）按惯例待笔记本复核。
+3. 认领闸让专用实例做一整项快照细任务时，同一时刻来的 Agent 查询要等这一项做完（这次实测 38 s）。现有语义与〔裁 6〕允许，但用户能感到慢；要不要另开一项「专用实例上的队列任务按批（4 帧）让出给 Agent」。
+4. 上面几条更正建议要不要另开小项；另外建议在 `multi_agent.md` 分配端口段时避开 6000（Chrome 的不安全端口）。
