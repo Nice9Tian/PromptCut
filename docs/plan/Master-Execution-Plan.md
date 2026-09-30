@@ -41,7 +41,7 @@
 | 角色 | 实际调用 | 职责 | 不做什么 |
 |---|---|---|---|
 | **主会话（Master / Coordinator）** | 笔记本上的会话「PromptCut M5～M8 开发交接」（2026-09-30 第七次修订起〔裁：用户定的交接〕；此前：第六次至第七次修订之间在 PC 上的「PromptCut 主会话（PC）」，第五次至第六次修订之间在笔记本上的本会话，第四次至第五次修订之间在 PC 上的本会话，第三次至第四次修订之间在笔记本，2026-09-27 第二次修订至第三次修订之间在 PC，2026-09-26 第二轮起在笔记本，更早在 PC） | 状态流转；定稿每阶段的契约节；派活与回收；逐个读 diff；在集成分支上重跑基线；执行回退梯次；向用户汇报、申请合并与部署；经跨会话消息给 PC 辅助节点派活、经信箱给云端会话下发跨机指令并收回执（第七次修订起辅助节点是 PC，笔记本辅助待命，第 6 节） | 不在主工作区改业务代码；不写生产代码和测试；契约与计划文档除外 |
-| **工程主力 Sonnet 5.5**（2026-10-01 用户改定，取代 Opus 5.5；此前各阶段表里写的 `opus-dev` / `opus-dev-high` 是当时的记录，不改） | Agent 工具，四档各一个定义，主会话**按任务难度选档**（2026-10-01 用户改定，取代原来的两档）：`sonnet-dev`（medium）、`sonnet-dev-high`（high）、`sonnet-dev-xhigh`（xhigh）、`sonnet-dev-max`（max）。思考等级**不低于 medium**。选档标准见下面「Claude 子 Agent 按难度选档」。`opus-dev` / `opus-dev-high` 的定义留着，只在用户点名时用 | 写代码、重构、写测试、跑基线。每个任务一个 worktree，建在 `.worktrees/<分支名去掉 claude/ 前缀>`，一个分支 | 不推送、不合并、不部署远端、不装依赖 |
+| **工程主力 Claude 子 Agent**（2026-10-01 用户看过官方模型测评后改定：只留两个；此前各阶段表里写的 `opus-dev` / `opus-dev-high` 是当时的记录，不改） | Agent 工具，两个定义：`sonnet-dev-high`（Sonnet 5.5、effort high，日常）与 `opus-dev`（Opus 5.5、effort medium，核心难点）。选哪个见下面「Claude 子 Agent 怎么选」。`opus-dev` / `opus-dev-high` 的定义留着，只在用户点名时用 | 写代码、重构、写测试、跑基线。每个任务一个 worktree，建在 `.worktrees/<分支名去掉 claude/ 前缀>`，一个分支 | 不推送、不合并、不部署远端、不装依赖 |
 | **查资料与攻坚 GPT / codex** | `/subagent-gpt`（`gpt-manager`），模型**强制** `gpt-6.1-sol`，推理 `high`。<br>查资料用只读模式，允许联网检索；攻坚用 worktree 模式 | **查资料**：写契约前查外部规范与平台行为，交付「解决路径」（0.2 节「查资料先行」）。<br>**攻坚**：接手需要反复试错的问题，在交给它的 worktree 分支上自己改、自己跑，直到该用例通过且基线不变红（0.2 节第 2 级）。worktree 模式下 manager 只传话、替它提交，不干预 | 不碰没交给它的分支；不做架构决策；不写各阶段 `*-tests` 分支 |
 | **交互、文案与发散 Gemini** | `/subagent-agy`（`agy-manager`），模型**强制** `gemini-3.1-pro-high`；只用内置读取工具，产出写文件交付到 scratchpad | **用户体验**：交互流程稿与界面文案（C6.5、C10 的用户侧流程，C6.5 设计稿里「用户感知到的撤销 / 重做行为」一节）。<br>**发散**：卡死时给出至少三条彼此不同的解法，每条写清前提和代价，不做取舍（0.2 节第 3 级） | 不改代码；**不做架构审查**。产出一律当假设：主会话先验证、核对与语义一致，再进计划或交 Opus 实现；改语义按 `suggested_agent_behavior.md`「对齐」 |
 | **云端会话（渲染节点 Worker）** | Anthropic 云端容器里的 Claude 会话，只能出网；经阿里云上的 HTTP 信箱与主会话收发（第 6 节） | 只按主会话下发的指令 `git pull`、装依赖、以独立渲染主机或观察端身份跑节点、页面与探针，原样回传输出 | 不改代码、不提交、不推送；指令外的操作一律不做 |
@@ -50,15 +50,13 @@
 用户的全局约定写的是「Ultracode 时执行层一律用 `agy-manager`，但我当场指定了模型或子 Agent 类型以我的指令为准」。本系列任务按用户当场的指定：执行层是 Opus 5.5，不是 `agy-manager`。
 
 **分工**（用户 2026-09-26 重定，取代原来的「检索与排错攻坚 GPT」「架构外脑 Gemini」两行）：
-- **Sonnet 5.5**（2026-10-01 起，取代 Opus）：写代码、写测试、跑基线，是工程主力。各阶段的 `*-tests` 分支仍由单独的 Sonnet 子 Agent 做，不交 codex。
-- **Claude 子 Agent 按难度选档**（2026-10-01 用户定）：主会话派活时按下表选，选哪一档、为什么写在派活指令里；拿不准取高的一档；做下来发现选低了（同一处改了两轮仍不过）就换高一档重派，不在原档上硬磨。最低 medium。
+- **Claude 子 Agent**：写代码、写测试、跑基线，是工程主力。各阶段的 `*-tests` 分支仍由单独的 Claude 子 Agent 做，不交 codex。
+- **Claude 子 Agent 怎么选**（2026-10-01 用户定：只需要 Sonnet high 与 Opus medium 两个）：主会话派活时按下表选，选哪个、为什么写在派活指令里；拿不准选 `opus-dev`；用 `sonnet-dev-high` 做下来同一处改了两轮仍不过，就换 `opus-dev` 重派，不硬磨。
 
-  | 档 | 定义 | 用于 |
+  | 定义 | 模型与档 | 用于 |
   |---|---|---|
-  | medium | `sonnet-dev` | 边界清楚的单模块实现；照契约写测试；页面与文案改动；维护项、探针判法、文档 |
-  | high | `sonnet-dev-high` | 跨模块的实现；契约落地；复杂状态管理；要读懂两三个模块才能改对的缺陷 |
-  | xhigh | `sonnet-dev-xhigh` | 渲染管线、预渲染与快照、队列与同步、鉴权这些核心逻辑；并发与时序问题；会动像素基线或对外接口的改动 |
-  | max | `sonnet-dev-max` | 最难的核心任务；解法表里三级层自己的候选试完仍不过的卡点（`guide_files/solution_table.md`）；根因不明、已经查过一轮没查出来的缺陷 |
+  | `sonnet-dev-high` | Sonnet 5.5、effort high | 日常：单模块与跨模块的实现、契约落地、照契约写测试、页面与文案、维护项、探针、文档 |
+  | `opus-dev` | Opus 5.5、effort medium | 核心难点：渲染管线、预渲染与快照、队列与同步、鉴权；并发与时序；会动像素基线或对外接口的改动；根因不明的缺陷；解法表里的卡点（`guide_files/solution_table.md`） |
 - **GPT / codex**：查资料；接手需要反复试错的攻坚，在分支上自己迭代。
 - **Gemini**：交互流程、文案，卡死时的发散方案；产出一律先验证再采纳，不做架构审查。
 - **独立评估不变**：外部模型的建议和改动，都由主会话核实后决定采纳、修正或否决（11.1 节第 3 条）。
@@ -113,7 +111,7 @@
 **先读**：`docs/semantics/developer_guide.md` 及它索引的 `guide_files/` 全部；本文第 0、4、6、7、10 节；`docs/reports/PAUSE-2026-09-26.md` 第 3 节（恢复顺序）；当前阶段的契约与设计稿（C6.6：`c66-design.md`；HT-a：`http-transport-contract.md` 开头与第 14、15 节，以及 `origin/claude/http-transport` 上的 `docs/reports/HANDOFF-http-transport.md` 第 7、8 节，其中「代理不支持 WebSocket」已被 2026-09-27 实测推翻）。
 
 **自检**（逐项把结果贴在对话里；令牌、密钥的值一律不打印；不过的项先报用户，不绕过）：
-1. **子 Agent 技能先于一切**：`/subagent-gpt` 与 `/subagent-agy` 各答一句最简单的问话，确认 codex 与 agy 能跑；`~/.claude/agents` 下有 `sonnet-dev`、`sonnet-dev-high`、`sonnet-dev-xhigh`、`sonnet-dev-max`、`gpt-manager`、`agy-manager` 六个定义（2026-10-01 起四个 Sonnet 档取代 `opus-dev`、`opus-dev-high`；没有就照 `opus-dev` 的定义另存四份，改 `name`、`model: claude-sonnet-5-5`、`effort` 分别为 medium / high / xhigh / max），用 Agent 工具各派一个只回「ok」的空任务确认能起。任何一项不通，先报用户，不往下走。
+1. **子 Agent 技能先于一切**：`/subagent-gpt` 与 `/subagent-agy` 各答一句最简单的问话，确认 codex 与 agy 能跑；`~/.claude/agents` 下有 `sonnet-dev-high`、`opus-dev`、`gpt-manager`、`agy-manager` 四个定义（2026-10-01 改定；`sonnet-dev-high` 没有就照 `opus-dev` 的定义另存，改 `name`、`model: claude-sonnet-5-5`、`effort: high`），用 Agent 工具各派一个只回「ok」的空任务确认能起。任何一项不通，先报用户，不往下走。
 2. 仓库在 main、与 origin/main 一致、工作区干净。
 3. 基线：类型检查零错误；全量测试零失败，记下总条数。
 4. （并入第 1 项）
