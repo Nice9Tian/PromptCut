@@ -36,6 +36,7 @@
  * 输出 JSON 结论到 stdout;任何一条不过就以非零退出。
  */
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { serve, closeAll, devOrigin } from './probe-connect.mjs';
 
 const args = process.argv.slice(2);
@@ -97,7 +98,7 @@ const hostServer = await serve(0, (req, res) => {
   res.end(hostHtml(originA, originB));
 }, '127.0.0.1');
 const hostUrl = `http://127.0.0.1:${hostServer.address().port}${HOST_PATH}`;
-const browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
+const browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
 const out = { mode: legacy ? 'legacy' : 'cross-origin', originA, originB, host: hostUrl };
 try {
   const page = await browser.newPage();

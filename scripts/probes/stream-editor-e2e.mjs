@@ -22,6 +22,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
 
 const args = process.argv.slice(2);
@@ -47,7 +48,7 @@ async function until(label, fn, timeoutMs, everyMs = 1000) {
 const out = { origin, seconds: SECONDS };
 await fs.mkdir(OUT, { recursive: true });
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });

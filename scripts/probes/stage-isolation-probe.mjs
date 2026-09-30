@@ -20,6 +20,7 @@
  * 多个 Agent 同时在跑时耗时不可信,默认跑 3 遍报中位数。
  */
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg, listTargets, devOrigin } from './probe-connect.mjs';
 
 const origin = devOrigin();
@@ -40,7 +41,7 @@ const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
  */
 const browser = await puppeteer.launch({
   headless: false,
-  args: ['--window-position=-32000,-32000', '--window-size=900,600', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--window-size=900,600', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-gpu-vsync', '--disable-frame-rate-limit',
     '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling'],
 });

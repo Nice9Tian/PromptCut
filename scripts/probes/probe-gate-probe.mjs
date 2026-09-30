@@ -41,6 +41,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 import { stagePortsOf } from '../../server/stage-ports.mjs';
 
@@ -160,7 +161,7 @@ const BUILD_PROJECT = async ({ want, pinned }) => {
 
 const browser = await puppeteer.launch({
   headless: true,
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     /*
      * R2 的报告:这台机器不带这两个就量不到主线程停顿 —— rAF 被垂直同步钉在 16.7 ms,

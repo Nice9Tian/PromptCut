@@ -19,6 +19,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -45,7 +46,7 @@ async function until(fn, timeoutMs, everyMs = 250) {
 await fs.mkdir(OUT, { recursive: true });
 const out = { origin, config: CONFIG || null, T, T2 };
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 180000,
-  args: ['--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
+  args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1200 });
