@@ -11,11 +11,12 @@
  *
  * 界面在 `CollabSection.tsx`；连接、进入、创建者操作在 `syncManager.ts`。
  */
-import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, whenSaved, type AdminError } from "./syncManager";
+import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, pushToast, whenSaved, type AdminError } from "./syncManager";
 import { errorStatus, route, type SharedMode, type Where } from "./sharedApi";
 import { getState } from "../../store/project";
 import { originalHashOf } from "../../render/mediaTier";
 import { enqueueExistingMedia, type EnqueueExistingResult } from "../media/assetTiers";
+import { ingestUnhashedMedia } from "../io/mediaUpload";
 import { ONLINE } from "../../online/mode";
 import { inviteLinkOf } from "../../online/invite";
 
@@ -211,13 +212,43 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
    * connectSharedAssets 设的上传目标),再按哈希交给上传队列,之后照 C6.6 的队列规则逐个素材、先小后大地传。
    * 不挡开启:传的进度由上传队列管,缺的(本机内容库里没有)记一笔。
    */
-  void enqueueExistingMedia(getState().project.media ?? [], { post: postEnqueue }).then((r) => {
-    if (!r) console.warn("[collab] 已有素材没交给上传队列(等不到上传目标,或没有本机编辑器)");
-    else if (r.missing.length) console.warn("[collab] 这些素材本机内容库里没有,传不上去:", r.missing);
-  });
+  void queueExistingMedia();
   const inv = await createInvite(o.creator.password);
   // 项目已经建好、进去了；邀请码没签成只少了链接，设置里可以再点「作废并重新生成」
   return { ok: true, invite: inv.ok ? inv.invite : null };
+}
+
+/**
+ * 开启「放云端」后把项目里已有的素材交给上传队列:先把没有哈希、本机还取得到字节的老素材补入库
+ * (`ingestUnhashedMedia`,写回素材表并同步到文档服务),再按哈希入队。补不上的、本机内容库里没有的
+ * 传不上去,别的成员拿不到:用气泡把这些素材的名字列给用户(控制台那一行不算告知)。
+ */
+async function queueExistingMedia(): Promise<void> {
+  if (ONLINE) return;
+  try { await ingestUnhashedMedia(); } catch (e) { console.warn("[collab] 补入库没做完:", (e as Error)?.message); }
+  const media = getState().project.media ?? [];
+  const r = await enqueueExistingMedia(media, { post: postEnqueue });
+  if (!r) { console.warn("[collab] 已有素材没交给上传队列(等不到上传目标,或没有本机编辑器)"); return; }
+  const nameOfHash = new Map<string, string>();
+  for (const m of media) {
+    const h = String(m.tiers?.original || m.hash || "").toLowerCase();
+    if (h && !nameOfHash.has(h)) nameOfHash.set(h, m.name);
+  }
+  const names = [
+    ...(r.skipped ?? []).filter((s) => !s.pending).map((s) => s.name),
+    ...r.missing.map((h) => nameOfHash.get(String(h).toLowerCase()) ?? String(h)),
+  ];
+  if (!names.length) return;
+  console.warn("[collab] 这些素材传不上去:", names);
+  pushToast(uploadMissingMessage(names), "warn", Infinity);
+}
+
+/** 放云端时传不上去的素材:给用户的那句话(名字去重,太多时只列前面若干条) */
+export function uploadMissingMessage(names: readonly string[], limit = 8): string {
+  const uniq = [...new Set(names.map((n) => String(n || "").replace(/^\(缺失\) /, "")).filter(Boolean))];
+  const shown = uniq.slice(0, limit).join("、");
+  const more = uniq.length > limit ? ` 等 ${uniq.length} 条` : "";
+  return `这些素材本机找不到文件，没有传到云端，其他成员看不到：${shown}${more}`;
 }
 
 /**
