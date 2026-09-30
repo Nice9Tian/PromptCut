@@ -6,7 +6,7 @@
 
 ## 1. 状态
 
-**轻量部分完成，重验证待跑。** 代码、单测、探针都写完并提交；按主会话的重活禁令，`npx tsc -b --force`、`npm test`、探针、截图还没跑（只跑了单个测试文件，见第 6 节）。收到「可以跑重活」后补跑并把结果补进第 6 节。
+**完成，验证全绿，停在分支上不合入。** 主会话定：A4 与 A5 同发，A5 在本分支之上接着做，两段等 PC 出完整安装包、实机测过后一起合入。
 
 ## 2. 提交
 
@@ -97,14 +97,28 @@
 | `node --experimental-test-module-mocks --test src/editor/dock/railLayout.test.mjs` | 20 过 |
 | 改过的 `.ts/.tsx` 逐个用 TypeScript 转译检查语法 | 0 个语法错误（不是类型检查） |
 
-**待跑（等「可以跑重活」）**：`npx tsc -b --force`；`npm test`；`snapshotCode` / `captureCode`（本段没碰 `server/bakery/`、`src/render/` 与 `frame-pipeline.mjs`，预期不变）；探针 `node scripts/probes/skill-mcp-probe.mjs --shots <目录>`（端口 5880～5882）并看截图 `skill-dialog.png`、`ai-bar-groups.png`、`ai-bar-busy.png`；`server/test/c10a-online-build.test.mjs`（要 `vite build`，C10-MERGE-01 已改成「两份产物里都没有合并 Skill 结果」）。
+**重验证（主会话放行后跑；机器上主会话同时在合并、构建、部署，有负载）**：
+
+| 命令 | 跑了几遍 | 结果 |
+|---|---|---|
+| `npx tsc -b --force` | 1 | 退出码 0，0 行输出 |
+| `npm test`（ffmpeg 已放进 PATH） | 1 | 退出码 0；tests 4065，pass 4064，fail 0，skipped 1（`集成:/api/cards/layout 对真实项目返回整数框`，原来就跳过；原来的 `skill-gate.test.mjs` 是要手动开的集成测试、会计进跳过，现在换成单测，跳过少了一条），84 s。含 `c10a-online-build.test.mjs`：C10A-API-01～06、C10-MERGE-01（两份产物里都没有「合并 Skill 结果」）、C10-TITLEBAR-01 全过；在线构建的 `/api` 清单与棘轮一致 |
+| `snapshotCode` / `captureCode` | 1 | `00a5264bf8a062ff6e0b5ed0516cccd1` / `86e443cb6fa838aef64788af6822fd68`，与任务书给的相同 |
+| `node scripts/probes/skill-mcp-probe.mjs --shots …`（端口 5880～5882） | 2 | 两遍都是 35 过 0 败（K0～K9）。第 1 遍看截图发现 SKILL 对话框里 Codex 那张卡被长路径撑出对话框右边，给登记卡加 `min-width: 0` 后跑第 2 遍，截图正常 |
+
+看过的截图（第 2 遍，存在会话临时目录 `scratchpad/skill-mcp/shots2`）：
+- `skill-dialog.png`：两张登记卡并排，状态「未登记（还没有这个配置文件，登记时会新建）」，路径是探针的临时目录；「接进来的会话」一行 Claude Code，上一步失败 update_clip（传统式下被闸拦下的那次）；AI 栏里那组显示闸的拒绝说明。
+- `ai-bar-groups.png`：AI 栏顶上两组——Codex（本轮小结：已完成、问题）与 Claude Code（阶段 · 粗剪），厂商标签、会话短号、「上一步 处理 · report_progress」。
+- `ai-bar-busy.png`：Claude Code 那组描强调色边框，写「正在等待 · wait」，报告卡照常。
+
+截图里另见到：AI 栏下方原有的「Agent 操作记录」（文档服务的事件日志）把桌面会话记成「Agent『第 N 个对话』」，没写厂商——那是文档服务事件里的对话序号，本段没改，列入第 7 节。
 
 ## 7. 没做成的及原因
 
-- 重验证没跑：重活禁令（第 6 节）。
 - 真的登记到用户的 Claude Code / Codex、真的用桌面 APP 连过来试：要写用户配置，按任务书不做，列为待用户项。
 - `desktop/README.md` 的 SKILL 悬浮窗几节、`docs/` 里提到无头实例的旧报告没改：不在本段的文件清单；`desktop/README.md` 已在 `docs/plan/TODO.md`「文档」里挂着。
-- Rust 外壳没动：SKILL 模式下桌面版仍会 `hide()` 主窗（`skill_shell.rs` 的 `enter`），WebView2 被隐藏后页面侧工具可能停摆——这是 A5（后台运行）的事，计划第 3 节 A5 验收已写。**A4 单独发布时，桌面版用户进 SKILL 后页面侧工具（看画面等）可能不响应**，建议 A4 与 A5 同发，或 A5 之前先把 `enter` 改成挪到屏幕外。
+- Rust 外壳没动：SKILL 模式下桌面版仍会 `hide()` 主窗（`skill_shell.rs` 的 `enter`），WebView2 被隐藏后页面侧工具可能停摆。主会话已定 A4 与 A5 同发、由 A5 解决，本段不做临时绕法。
+- AI 栏下方「Agent 操作记录」对桌面会话只写「Agent『第 N 个对话』」，没带厂商（文档服务事件里的对话序号）；分组里有厂商，这里没改，可在 A5 或之后顺手补。
 
 ## 8. 对计划或语义的更正建议（dry run，语义文件没改）
 
@@ -132,10 +146,9 @@
 1. 在 PromptCut 顶栏点「SKILL」→「登记」到 Claude Code（写 `~/.claude.json`）与 Codex（写 `~/.codex/config.toml`），各自新开一个会话，让它调一次 PromptCut 的工具，看 AI 栏里是否出现对应厂商的分组；试完可在同一处「撤销登记」。
 2. 在 Codex 里确认两件没法离线核实的事：它会不会把 MCP `instructions` 交给模型（不交也没关系，有 `get_skill_guide`）；工具调用是否每次都弹批准（本段没替用户设成自动批准）。
 
-## 10. 需要主会话决定的事
+## 10. 主会话的决定（2026-09-30）与剩下要定的
 
-1. 合并与否；合并前按第 6 节补跑重验证。
-2. 「合并 Skill 结果…」菜单删掉是否接受（计划点名归档三方合并，但它是用户看得见的菜单项）。
-3. `scripts/pc-tool.mjs` 一并归档是否接受（它也能 `--port` 连普通实例，但定位是给任务目录里的 agent 用）。
-4. A4 是否与 A5 同发（第 7 节：桌面版进 SKILL 会隐藏主窗）。
-5. 第 8 节的语义补充。
+1. 删「合并 Skill 结果…」菜单项：认可（语义里的 SKILL 是桌面 APP 经 MCP 直接改同一个项目，没有「合并」这一步）。
+2. 删 `scripts/pc-tool.mjs`：认可。全仓 grep（含 `docs/`、`desktop/`、`scripts/README.md`；`server/skill-templates.mjs` 已随本段删掉）确认除 `docs/archive/` 里的历史记录、本报告与 SM-13 棘轮外没有别处引用。
+3. A4 与 A5 同发：同意；本段停在分支上不合入，A5 在本分支之上接着做。
+4. 语义：三级「桌面 APP 接入」一节主会话合入时写；二级「传统式下桌面 APP 的调用被拒」与一级「在软件里一键登记到桌面 APP」先不写进语义文件，列给用户定（第 8 节第 2、3 条的 dry run 保留）。

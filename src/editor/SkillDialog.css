@@ -19,6 +19,8 @@
   gap: 10px;
 }
 .pc-skill-provider {
+  /* 网格项缺省 min-width:auto,长路径会把卡撑出对话框 */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
