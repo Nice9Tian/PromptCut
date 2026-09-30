@@ -271,7 +271,7 @@ export function packMissingMessage(missing: readonly PackMissing[], limit = 12):
   if (!names.length) return "";
   const shown = names.slice(0, limit).map((n) => `· ${n}`).join("\n");
   const more = names.length > limit ? `\n……另有 ${names.length - limit} 条` : "";
-  return `包已保存，但下面 ${names.length} 条素材本机找不到文件，没有装进包里（换机器打开时它们会显示为缺失）：\n${shown}${more}`;
+  return `包已保存，但下面 ${names.length} 条素材本机找不到文件，没有装进包里（换台机器打开这个包，这些素材放不出来）：\n${shown}${more}`;
 }
 
 /** 这些哈希里哪些已经在本地内容库(拆包时用来跳过已有素材) */
@@ -293,6 +293,8 @@ export interface UnpackResult {
   stored: number;
   /** 库里已经有、跳过的素材数 */
   deduped: number;
+  /** 这个包带来的、现在确实在本地内容库里的素材哈希(新写的 + 本来就有的) */
+  landed: string[];
 }
 
 /**
@@ -313,9 +315,10 @@ export async function unpackProcp(file: Blob): Promise<UnpackResult> {
 
   let stored = 0;
   let deduped = 0;
+  const landed = new Set<string>();
   for (const entry of media) {
     const hash = hashOf(entry.name);
-    if (have.has(hash)) { deduped += 1; continue; }
+    if (have.has(hash)) { deduped += 1; landed.add(hash); continue; }
     const name = entry.name.slice(MEDIA_PREFIX.length);
     try {
       const body = await inflate(entry);
@@ -323,16 +326,40 @@ export async function unpackProcp(file: Blob): Promise<UnpackResult> {
       if (!res.ok) { console.warn(`[procp] 素材落库失败: ${name}`); continue; }
       const data = await res.json();
       if (data?.deduped) deduped += 1; else stored += 1;
+      if (typeof data?.hash === "string") landed.add(data.hash.toLowerCase());
     } catch (err) {
       console.warn(`[procp] 素材落库异常: ${name}`, err);
     }
   }
-  return { procText, stored, deduped };
+  return { procText, stored, deduped, landed: [...landed] };
+}
+
+/**
+ * 包里带着字节的素材,去掉打包那台机器上的 `path`。
+ *
+ * `path` 是素材在**打包方**本地内容库里的绝对路径,换一台机器就指不到东西;而导出那一侧
+ * (`server/vite-plugin-export.ts`)见到 `path` 就把地址改写成 `/api/media/file?path=…`,
+ * 于是在另一台机器上打开包、导出,会去读一个不存在的文件(视频解码失败、配音静音)。
+ * 字节既然已经按哈希落进本机内容库,这些素材只认 `/@media/<hash>` 就够了。
+ * 不在包里的素材(打包时就缺的)原样留着,由 restoreMediaUrls 照老规矩处理。
+ */
+export function dropPackedPaths(project: Project, landed: Iterable<string>): Project {
+  const have = new Set([...landed].map((h) => String(h).toLowerCase()));
+  if (!have.size || !project.media?.length) return project;
+  let changed = false;
+  const media = project.media.map((m) => {
+    if (!m.path || !have.has(String(m.hash || "").toLowerCase())) return m;
+    changed = true;
+    const { path: _drop, ...rest } = m;
+    void _drop;
+    return rest as typeof m;
+  });
+  return changed ? { ...project, media } : project;
 }
 
 /** 拆包并载入(和打开 .proc 走同一条路,素材地址由 restoreMediaUrls 按 hash 还原) */
 export async function loadProcpFile(file: Blob): Promise<Project> {
-  const { procText } = await unpackProcp(file);
+  const { procText, landed } = await unpackProcp(file);
   const { loadProc } = await import("./proc.ts");
-  return loadProc(procText);
+  return dropPackedPaths(loadProc(procText), landed);
 }

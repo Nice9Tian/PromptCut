@@ -733,6 +733,7 @@ ${summarizeCombine(report)}
             type="button"
             role="menuitem"
             className="pc-proj-item"
+            data-pc="menu-pack"
             disabled={viewOnly || ONLINE_BUILD}
             title={ONLINE_BUILD ? ONLINE_OFF("打包保存") : viewOnly ? "只读查看模式:改不了这个项目" : "编排和素材打成一个包,换台机器直接打开"}
             onClick={() => { setProjOpen(false); void savePackedProject(); }}

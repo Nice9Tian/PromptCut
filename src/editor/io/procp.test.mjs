@@ -352,3 +352,41 @@ test("取不到字节的有哈希素材(内容库里没有)也列进 missing,每
     fake.restore();
   }
 });
+
+test("打开包:包里带着字节的素材去掉打包方机器上的 path(导出不再去读另一台机器的文件),不在包里的原样留着", async () => {
+  const { dropPackedPaths } = await import("./procp.ts");
+  const H1 = "1".repeat(64);
+  const H2 = "2".repeat(64);
+  const project = { name: "p", media: [
+    { id: "a", kind: "video", name: "a.mp4", hash: H1, url: `/@media/${H1}`, path: "C:\Users\admin\Videos\PromptCut\media\a.mp4" },
+    { id: "b", kind: "audio", name: "b.mp3", hash: H2, url: `/@media/${H2}`, path: "C:\other\b.mp3" },
+    { id: "c", kind: "audio", name: "c.mp3", url: "/api/media/file?path=x", path: "C:\old\c.mp3" },
+  ] };
+  const out = dropPackedPaths(project, [H1.toUpperCase()]);
+  assert.notEqual(out, project, "换新对象");
+  assert.equal(project.media[0].path.endsWith("a.mp4"), true, "不改入参");
+  assert.equal("path" in out.media[0], false);
+  assert.equal(out.media[1].path, "C:\other\b.mp3", "包里没带字节的不动");
+  assert.equal(out.media[2].path, "C:\old\c.mp3");
+  assert.equal(dropPackedPaths(project, []), project);
+});
+
+test("拆包回报这个包带来的哈希(新写的 + 本来就有的)", async () => {
+  const packer = fakeStore();
+  let blob, hashA, hashB;
+  try {
+    hashA = packer.put(CLIP_A, "mp4");
+    hashB = packer.put(CLIP_B, "png");
+    ({ blob } = await packProcpFrom(PROC_TEXT, projectWith(hashA, hashB)));
+  } finally {
+    packer.restore();
+  }
+  const other = fakeStore();
+  try {
+    other.put(CLIP_A, "mp4");
+    const r = await unpackProcp(blob);
+    assert.deepEqual(r.landed.sort(), [hashA, hashB].sort());
+  } finally {
+    other.restore();
+  }
+});
