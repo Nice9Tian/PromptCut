@@ -269,3 +269,10 @@
 1. 合并 `claude/maint-3`，还是返工。
 2. 〔裁 4〕～〔裁 6〕（第 5 项）是否照留。
 3. 上面几条更正建议要不要另开小项，以及 `mechanism/rendering.md` 那一句要不要随合入写进语义。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过方案 B（不再编没人用的 `preview.mp4`、整场景 `full.mov`，`/status` 与 `/see` 的字段留着恒为 `null`）、响度的 `asetpts`、配音复刻源文件经素材服务取字节、认领闸探针。
+- 探针暴露认领闸让 Agent 查询等 38 s（专用实例接了一整项 60 帧的任务），主会话要求在本分支修掉：专用实例上的队列任务按批（4 帧）给 Agent 让路，实测等待 38.3 s → 1.2 s、整次请求 40.6 s → 6.1 s。〔裁 1～6〕照留，待用户审；`AGENT-query-render-2.md` 的〔裁 6〕（等待上界是一项）被本分支第 5 项取代。
+- 采纳语义：`mechanism/rendering.md` 补专用实例按批让路一条（三级〔裁〕）。
+- 主会话在 `claude/r8-merge` 上重跑整套，`claim-gate-probe` 退出 0；其余见 `docs/reports/REPORT-post-M8.md` 第 8 轮。合入 main `ec983fc0`。
