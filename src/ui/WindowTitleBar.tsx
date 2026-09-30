@@ -31,7 +31,7 @@ type MenuId = "file" | "edit" | "view" | "help";
 /**
  * `desktopOnly`:在线页面做不成的项,值是悬停说明里的入口名(`onlineUnsupported(入口名)`)。
  * 依据:`product/platforms.md`「在线浏览器模式」只加入、不新建、不存草稿(新建、打开、保存);C10 契约第 10 节置灰清单
- * (配音、语音识别、合并 Skill 结果);其余是桌面壳的命令(打开本机目录、看运行日志、退出),在线页面没有桌面壳。
+ * (配音、语音识别);其余是桌面壳的命令(打开本机目录、看运行日志、退出),在线页面没有桌面壳。
  */
 const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; command?: string; shortcut?: string; separator?: boolean; desktopOnly?: string }> }> = [
   {

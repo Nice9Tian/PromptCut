@@ -150,8 +150,7 @@ export default function Editor() {
     // 刷新前这个标签页开着共享项目(`?editor` 直接进编辑器的页面):接上本机之后回到那个共享项目
     void startSync().then(() => resumeShared());
     const p = getState().project;
-    // 无头实例(?headless=1,scripts/headless.mjs 开的页面)不塞演示卡:
-    // 那会把一份空快照悄悄变成 10 张演示卡,合并回去时全算成 agent 新加的。
+    // 自动化页面(?headless=1,探针与测试开的页面)不塞演示卡:测的是它们自己放进去的内容。
     // ?join= 加入已有本机项目的页面也不塞:内容以文档服务为准,塞了就成了往别人的项目里加 10 张卡
     const headless = new URLSearchParams(location.search).has("headless");
     if (!headless && !isJoinPage() && p.tracks.every((t) => t.clips.length === 0)) {
