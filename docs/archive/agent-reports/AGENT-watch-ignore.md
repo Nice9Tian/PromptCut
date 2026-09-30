@@ -75,3 +75,9 @@
 
 - 「`server.watch.ignored` 没起作用」只对 worktree 成立：在仓库根起服务时 `**/out/**` 应当是生效的（推断）。真正的大头是依赖扫描入口和 Tailwind，监听修好对冷启动几乎没有贡献（190.8 s 对 222.4 s），但它是正确性问题（worktree 里 desktop/python/.pc-* 的改动会进监听、仓库根会监听全部 worktree），照样该修。
 - 在仓库根起的 dev server 也有第 3 条：Tailwind 的目录遍历不看 `@source not`，所以 `.worktrees/` 下全部 worktree（连同它们各自的 out/ 帧库）每次冷启动、每次热更新都会被走一遍。`src/index.css` 那处改动对仓库根同样有用。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过 `server/vite-scan-ignore.mjs`：入口清单与原来 `**/*.html` 实际找到的页面相同；忽略函数与根的绝对路径无关。新文件放在 `server/` 下认可（不在 frameCode 里）。
+- 主会话在本分支上跑 G0-R：导出确定性 1800 / 1800、与 main 像素 1800 相同、快照重放 PASS、轨道流两种、预览兜底缺省过；`--page-preload` 第一次挂「跳转：舞台记下了逐拍分级」、单独重跑两遍都过（偶发）；就绪索引过。合入 main。
+- `src/index.css` 的 Tailwind 扫描源改动（剩下约 10 s）没合：它进 frameCode，留给下一批本来就要换代码版本的改动一起做〔裁〕。

@@ -20,7 +20,7 @@
 
 ## 已做步骤的遗留
 
-- **R0**：仓库根 dev server 的冷启动量测没做。（`scripts/verify-unified-frames.mjs` 已整条通过；快照重放和整帧导出的残差查到只剩三处快照这一侧修不了的，见 `docs/archive/restructure_planning/reports/replay-mismatch-report.md` §12、§13。）
+- **R0**（2026-09-30 查清并修大半，`claude/watch-ignore`，报告 `docs/archive/agent-reports/AGENT-watch-ignore.md`）：帧库落在 Vite 根下时冷启动慢，原因是依赖扫描把帧库里的快照 .html 当入口、worktree 路径下 glob 监听忽略失效、Tailwind 遍历整棵树；修了前两处（15 万文件时编辑器可用 222 s → 20.6 s；帧库在根外——桌面版就是这样——本来就不慢）。剩下 Tailwind 那约 10 s 要改 `src/index.css` 的扫描源（进 frameCode），随下一批换代码版本的改动做。原文：仓库根 dev server 的冷启动量测没做。（`scripts/verify-unified-frames.mjs` 已整条通过；快照重放和整帧导出的残差查到只剩三处快照这一侧修不了的，见 `docs/archive/restructure_planning/reports/replay-mismatch-report.md` §12、§13。）
 - **R7b 没做成的**：只预渲染重卡集合那一条只停了快照、没停 PNG；R7b 报告第 4 节的 8 条更正没折回 `docs/archive/restructure_planning/r2-r7-task.md`。
 - **〔已做〕see_frames 回包附实体矩形**（2026-09-24，`8124996d`：预渲染在 `captureSnapshot` 的 `afterFonts` 钩子里量 `rectsWithBounds(pixels: "all")`，每帧结果带 `rects: [{ clipId, box, solid }]`，工具结果的文字部分按 clipId 一行；2026-09-30 核对时补记）原文：原云端计划第 8 步，协议在 `docs/archive/restructure_planning/r2-r7-task.md` 的 D3，归 R 系列，可与云端计划并行推进。
 - **待用户定**：播放停顿期间要不要加音频看门狗，让音频立刻停。
