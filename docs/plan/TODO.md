@@ -14,6 +14,7 @@
 | HT-b：文档服务的 HTTP 长轮询传输（会话层之下的第二种传输） | `docs/plan/http-transport-contract.md` 第 2 版的 HTTP 部分；第 1 版代码在 `claude/http-transport`，HT-a 后保留不接线 | 2026-09-27 从 HT 拆出，未开始；触发条件：出现被代理挡住 WebSocket 的成员（2026-09-27 实测云端容器的 Node 不被挡）。**后续项**（HT-a 集成时记下，契约第 17 节）：① 仍用旧 `createWsEndpoint`、没接会话层的调用方——`server/card-sync.mjs`（编辑器进程与主机的卡片源码同步）、`scripts/probes/shared-project-lan.mjs`、`render-host-probe.mjs`、`c66-t9-probe.mjs` 的页面连接——对新服务端是旧客户端，行为不变、断一次就断线，接会话层时一并做——**已在 M8 计划 D9 做完**（分支 `claude/m8-session-legacy`，2026-09-28，待合入）：卡片源码同步、素材地址登记（含托管组合的管理连接）、`shared-project-lan.mjs`、`render-host-probe.mjs`、`c10a-demo-probe.mjs` 改用 `createDocEndpoint`；`c66-t9-probe.mjs`（归 `claude/m8-e2e`）与 `shared-project-probe.mjs` 的令牌连接（归 `claude/m8-migrate`）留给各自分支，理由见契约第 17.6 节；② 节点端第 1 版 HTTP 客户端 `server/render-node/http-transport.mjs` 按第 2 版协议与第 14 节的错误归类改写、重写测试；③ 第 6 节补 409 `superseded` / `busy` 与 `bad-ack` 的回法（第 17.3 节第 9 条） |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有素材原尺寸的云端素材补转素材小尺寸；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
+| Agent 与工作方式：创造力等级、「用户正在编辑」、多 Agent、SKILL 经 MCP 直连、后台运行（托盘与悬浮窗）、Agent 用 JS 自定义测量 | `docs/plan/agent-workflow-plan.md`（2026-09-30 写，A1～A6） | 2026-09-30 开工：A1 起；A5 改 Rust 外壳，完整安装包要在 PC 上打 |
 | 存储占用（二级功能项）：桌面版帧库设上限、按项目最近使用淘汰、给「清理缓存」入口；导出产物目录有列表、大小与删除 | `docs/plan/storage-plan.md`（2026-09-29 写，含语义 dry run 与接口约定）；排在 M8 之后、团队测试之前（主计划第 4 节） | 2026-09-29 用户加：帧库 `Videos\PromptCut\frame-library` 已长到 273 GB，没有上限也没有淘汰；导出产物每次一整份，连导三次就三份，没有清理入口。计划已写，按用户 2026-09-29 的 goal 不等确认开工（〔裁〕见计划第 3 节）。**已合入 main**（`fe62c17f`，2026-09-30，`docs/reports/REPORT-post-M8.md` 第 2 轮），随 0.7.3 发布（`/editor` 已部署，桌面补丁待 PC 上线） |
 
 **路线 B**（2026-09-24 用户定）：素材服务是字节的唯一读写出口，素材服务在本机时也经它，Agent 进程和预渲染进程同样只走它的 HTTP API；预渲染产物（HTML 快照、PNG、MOV、轨道流）生成后一律推送到素材服务；两个服务部署不设限、可任意组合，素材服务允许局域网跨源访问，文档服务预留连接发现 / 信令接口；第 5 步只建素材服务空壳与底层 API 契约，A1 的其余部分、A5、A3b 在第 6 步；`uploaded` 字段废除，同步状态只问素材服务；原第 8 步移交 R 系列。
@@ -36,7 +37,7 @@
 
 - **工作方式**：去掉对话式布局；SKILL 改为桌面 APP 经 MCP 直接接入同一个项目（现在是把项目快照进独立任务目录、由无头实例改副本、最后三方合并）；关闭编辑界面转为托盘和悬浮窗后台运行。
 - **Agent**：三档创造力等级（项目默认、对话可改）；主 Agent 拉起子 Agent 并附加角色，现有的分工模式归档；Agent 用 JS 自定义测量；看或改用户正在编辑的内容时返回「用户正在编辑」。
-- **查询渲染**：Agent 专用渲染实例的优先通道、AI 栏操作预览的插队只有雏形。
+- **查询渲染**：Agent 专用渲染实例的优先通道、AI 栏操作预览的插队只有雏形（2026-09-30 `claude/query-render` 在做：用户点开的操作预览不占 Agent 实例、插到普通预渲染待办之前，Agent 实例空闲时接普通预渲染）。预渲染进程的三种模式（Agent / User / Full，`mechanism/rendering.md`）没做：现在总是三条 lane 都建，相当于一直是 Full 模式。
 - **会话与传输**：会话模型（双向序号与确认、中断后在保留期内接续）已随 HT-a 合入；HTTP 长轮询传输（HT-b）按触发条件再做，见上文「未开始的计划」。只能经 TLS 中间人代理出网的浏览器连不上 WebSocket（加入不了项目、当不了节点），同归 HT-b。
 - **只记录、或要用户定的出入**：桌面发布的 plan 领不到环境不同的独立主机（X4）；`claude/join-error`（加入时连接没建成就断被报成「用户名或密码不对」，修复待审）；低内存档判轻的卡播放时一直占位（要不要改成判轻的也补小尺寸）；刷新后回到刷新前打开的共享项目（代码已做，建议补一级语义）；纯浏览器节点只收独立卡（D4）。出处与现状见 `REPORT-M5-M8.md` 第 6.3 节。
 - **已做、从本节删去的**（2026-09-30）：共享项目（M6、SP、C6.5）；多用户协作（C10a）；在线浏览器模式（C10a、C10）；文档服务持有项目真身、Agent 直接写文档服务（C6.5）；素材服务的两档素材与产物入库（C5、C6.2、C6.4、C6.6）；本机按真正的发起方判断（HT-a）；渲染任务队列与渲染节点（M5b～M8）；加入共享项目的桌面应用自动成为渲染节点（0.7.2）；手动截短总时长的入口（项目设置对话框的「总时长（秒）」，走 `setDurationManual` 的截断规则，`8936e9af`；原先这里与 `REPORT-M5-M8.md` 第 6.3 节都误记为没有）；在线舞台握手后又断的退回（0.7.4）。
