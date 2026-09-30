@@ -3,19 +3,19 @@
  * 测响度 `measure_audio`(`/api/audio/measure`)与自定义测量 `measure_audio_js`(`/api/audio/measure-js`)
  * 经素材服务的 HTTP 接口取字节,不按素材目录找文件。
  *
- * 用例 AP-1～AP-8:
- *   AP-1  解析器:取不到素材服务地址 / 连不上 / 拒绝读取 → AssetSourceError(写明地址与原因);404 → null;2xx → 地址;
- *   AP-2  素材记录 → 地址(vite-plugin-audio.ts 的 audioMediaUrl):哈希、文件名、老绝对路径、导出目录;请求体里的 path 不用来读盘;
+ * 用例 AR-1～AR-8:
+ *   AR-1  解析器:取不到素材服务地址 / 连不上 / 拒绝读取 → AssetSourceError(写明地址与原因);404 → null;2xx → 地址;
+ *   AR-2  素材记录 → 地址(vite-plugin-audio.ts 的 audioMediaUrl):哈希、文件名、老绝对路径、导出目录;请求体里的 path 不用来读盘;
  *   ── 以下起真的素材服务(server/asset-service.ts + 媒体中间件,fs 内容库)与真的 ffmpeg ──
- *   AP-3  测响度:素材 / 片段 / 时间轴三档,经素材服务取的与直接读文件(改前的读法)回包逐字相同;
+ *   AR-3  测响度:素材 / 片段 / 时间轴三档,经素材服务取的与直接读文件(改前的读法)回包逐字相同;
  *         素材记录里的 path 指向不存在的目录(素材目录不可读),照常出结果;素材服务确实被请求过(Range);
- *   AP-4  自定义测量:解出的 PCM 与直接读文件的逐字节相同(单文件、片段窗口、时间轴混音、mono);经沙箱的 measureJs 结果相同;
- *   AP-5  大文件与分段取:约 35 MB 的 wav(5 个分片入库),片段档测 150 秒处 2 秒,经素材服务传过来的字节远小于整个文件;
- *   AP-6  素材服务不可达:测响度回 502 与写明原因的错,自定义测量回 kind asset-service;时间轴档也不当成「跳过」;
- *   AP-7  素材服务上没有这份素材(404):仍是「素材文件不存在」/ no-media,时间轴档跳过那一段;
- *   AP-8  单进程形态:素材服务就在本进程里,ffprobe 走异步,不卡事件循环(测量期间本进程的定时器照常转)。
+ *   AR-4  自定义测量:解出的 PCM 与直接读文件的逐字节相同(单文件、片段窗口、时间轴混音、mono);经沙箱的 measureJs 结果相同;
+ *   AR-5  大文件与分段取:约 35 MB 的 wav(5 个分片入库),片段档测 150 秒处 2 秒,经素材服务传过来的字节远小于整个文件;
+ *   AR-6  素材服务不可达:测响度回 502 与写明原因的错,自定义测量回 kind asset-service;时间轴档也不当成「跳过」;
+ *   AR-7  素材服务上没有这份素材(404):仍是「素材文件不存在」/ no-media,时间轴档跳过那一段;
+ *   AR-8  单进程形态:素材服务就在本进程里,ffprobe 走异步,不卡事件循环(测量期间本进程的定时器照常转)。
  *
- * 跑:node --test server/test/audio-asset-path.test.mjs(要 ffmpeg;找不到时 AP-3 起跳过)
+ * 跑:node --test server/test/audio-asset-path.test.mjs(要 ffmpeg;找不到时 AR-3 起跳过)
  */
 import assert from 'node:assert/strict';
 import { test, before, after } from 'node:test';
@@ -43,9 +43,9 @@ const listen = (handler) => new Promise((resolve) => {
 });
 const closeServer = (s) => new Promise((resolve) => { s.closeAllConnections?.(); s.close(() => resolve()); });
 
-/* ------------------------------------------------------------------ AP-1 / AP-2 */
+/* ------------------------------------------------------------------ AR-1 / AR-2 */
 
-test('AP-1 解析器:不可达、拒绝、404、2xx 分得清', async () => {
+test('AR-1 解析器:不可达、拒绝、404、2xx 分得清', async () => {
   const toUrl = (m, o) => (m?.hash ? `${o}/@media/${m.hash}` : null);
   // 取不到地址
   const noOrigin = createAssetSourceResolver({ origin: () => null, toUrl });
@@ -77,7 +77,7 @@ test('AP-1 解析器:不可达、拒绝、404、2xx 分得清', async () => {
   await closeServer(svc.server);
 });
 
-test('AP-2 素材记录 → 素材服务上的地址;请求体里的 path 不用来读盘', async () => {
+test('AR-2 素材记录 → 素材服务上的地址;请求体里的 path 不用来读盘', async () => {
   let mod;
   try {
     mod = await import(harness.compileTs(path.join(ROOT, 'server', 'vite-plugin-audio.ts')));
@@ -175,7 +175,7 @@ const viaService = () => createAssetSourceResolver({ origin: () => service.origi
 /** 改前的读法:直接交本地文件路径(原来 mediaFileOf 返回的就是这个) */
 const direct = (m) => files[Object.keys(files).find((k) => hashes[k] === m?.hash)] ?? null;
 
-test('AP-3 测响度:三档经素材服务的回包与直接读文件的逐字相同;素材目录不可读照常出结果', { skip, timeout: 180_000 }, async () => {
+test('AR-3 测响度:三档经素材服务的回包与直接读文件的逐字相同;素材目录不可读照常出结果', { skip, timeout: 180_000 }, async () => {
   assert.equal(fs.existsSync(GONE), false);
   const bodies = [
     ...['wav', 'mp3', 'm4a', 'mono', 'mp4'].map((k) => ({ scope: 'media', media: mediaOf(k), series: true })),
@@ -206,7 +206,7 @@ test('AP-3 测响度:三档经素材服务的回包与直接读文件的逐字�
   }
 });
 
-test('AP-4 自定义测量:解出的 PCM 与直接读文件的逐字节相同;经沙箱的结果相同', { skip, timeout: 180_000 }, async () => {
+test('AR-4 自定义测量:解出的 PCM 与直接读文件的逐字节相同;经沙箱的结果相同', { skip, timeout: 180_000 }, async () => {
   const resolve = viaService();
   const same = async (label, argsOf, fmt) => {
     const a = await decodePcm(FFMPEG, argsOf((k) => files[k]), fmt);
@@ -256,7 +256,7 @@ test('AP-4 自定义测量:解出的 PCM 与直接读文件的逐字节相同;�
   }
 });
 
-test('AP-5 大文件与分段取:片段档只取需要的那几段', { skip, timeout: 180_000 }, async (t) => {
+test('AR-5 大文件与分段取:片段档只取需要的那几段', { skip, timeout: 180_000 }, async (t) => {
   const size = fs.statSync(files.big).size;
   assert.ok(size > 4 * 8 * 1024 * 1024, `大文件 ${size} 字节,多于 4 个分片`);
   const body = { scope: 'clip', media: mediaOf('big'), offset: 150, duration: 2, series: true };
@@ -277,7 +277,7 @@ test('AP-5 大文件与分段取:片段档只取需要的那几段', { skip, tim
   assert.ok(Buffer.from(a[0].buffer).equals(Buffer.from(b[0].buffer)) && Buffer.from(a[1].buffer).equals(Buffer.from(b[1].buffer)));
 });
 
-test('AP-6 素材服务不可达:回写明原因的错,不当成文件不存在或跳过', { skip, timeout: 60_000 }, async () => {
+test('AR-6 素材服务不可达:回写明原因的错,不当成文件不存在或跳过', { skip, timeout: 60_000 }, async () => {
   const gone = await listen(() => {});
   await closeServer(gone.server);
   const resolve = createAssetSourceResolver({ origin: () => gone.origin, toUrl: (m, o) => `${o}/@media/${m.hash}` });
@@ -299,7 +299,7 @@ test('AP-6 素材服务不可达:回写明原因的错,不当成文件不存在�
   assert.equal(ran, 0);
 });
 
-test('AP-7 素材服务上没有这份素材:仍是「素材文件不存在」,时间轴档跳过那一段', { skip, timeout: 60_000 }, async () => {
+test('AR-7 素材服务上没有这份素材:仍是「素材文件不存在」,时间轴档跳过那一段', { skip, timeout: 60_000 }, async () => {
   const ghost = { id: 'g', name: '没入库.wav', hash: 'ee'.repeat(32), path: files.wav };
   const r = await measureLoudness({ body: { scope: 'media', media: ghost }, resolveSource: viaService(), ffmpeg: FFMPEG, ffprobe: FFPROBE });
   assert.deepEqual(r, { status: 400, body: { ok: false, error: '素材文件不存在' } }, '就算 path 指着一个真实存在的文件也不读它');
@@ -315,7 +315,7 @@ test('AP-7 素材服务上没有这份素材:仍是「素材文件不存在」,�
   assert.equal(j.body.kind, 'no-media');
 });
 
-test('AP-8 单进程形态:素材服务在本进程里,ffprobe 走异步,事件循环照常转', { skip, timeout: 60_000 }, async () => {
+test('AR-8 单进程形态:素材服务在本进程里,ffprobe 走异步,事件循环照常转', { skip, timeout: 60_000 }, async () => {
   const url = `${service.origin}/@media/${hashes.mp3}`;
   let ticks = 0;
   const timer = setInterval(() => { ticks += 1; }, 20);
