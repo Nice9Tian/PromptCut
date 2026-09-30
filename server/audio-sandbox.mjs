@@ -152,7 +152,8 @@ window.__runMeasure = async (o) => {
 };
 </script>`;
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 不挡进程退出的等待(兜底用的上限,不该让编辑器进程或测试多挂几秒) */
+const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
 
 /** 规整时限:缺省 / 夹到 [1 秒, 最长] */
 export function clampTimeout(ms, limits = SANDBOX_LIMITS) {
@@ -231,6 +232,7 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
     const ctx = await browser.createBrowserContext();
     let crashed;
     const crash = new Promise((r) => { crashed = r; });
+    let watchdog = null;
     try {
       const page = await ctx.newPage();
       page.on("error", (e) => crashed(e));
@@ -257,7 +259,10 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
           timeoutMs, maxTimeoutMs: limits.maxTimeoutMs, maxResultBytes: limits.maxResultBytes, heapMb: limits.heapMb,
         }),
         crash.then(() => ({ ok: false, kind: "crashed", error: `沙箱页面崩溃了(多半是内存超过上限 ${limits.heapMb} MB);缩小要测的范围,别一次建太大的数组` })),
-        sleep(timeoutMs + limits.graceMs + chunks * 1000).then(() => { throw new SandboxError("hung", `沙箱在 ${(timeoutMs + limits.graceMs) / 1000} 秒内没有回话,已重启`); }),
+        new Promise((_, reject) => {
+          watchdog = setTimeout(() => reject(new SandboxError("hung", `沙箱在 ${(timeoutMs + limits.graceMs) / 1000} 秒内没有回话,已重启`)), timeoutMs + limits.graceMs + chunks * 1000);
+          watchdog.unref?.();
+        }),
       ]);
       return { verdict, blocked };
     } catch (e) {
@@ -270,7 +275,10 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
       }
       throw new SandboxError("internal", "沙箱内部出错:" + msg.slice(0, 300));
     } finally {
-      await Promise.race([ctx.close().catch(() => {}), sleep(5_000)]);
+      clearTimeout(watchdog);
+      let t;
+      await Promise.race([ctx.close().catch(() => {}), new Promise((r) => { t = setTimeout(r, 5_000); t.unref?.(); })]);
+      clearTimeout(t);
     }
   }
 
