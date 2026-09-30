@@ -75,16 +75,19 @@ export async function measureJs({ body, resolveFile, ffmpeg, ffprobe, sandbox, p
   } else if (body.scope === "timeline") {
     const entries = [];
     const skipped = [];
+    let monoSources = 0;
     for (const e of Array.isArray(body.entries) ? body.entries : []) {
       const file = resolveFile(e?.media);
-      if (!file || !probeChannels(file, ffprobe)) { skipped.push(e?.media?.name || e?.clipId || "未知片段"); continue; }
+      const n = file ? probeChannels(file, ffprobe) : 0;
+      if (!n) { skipped.push(e?.media?.name || e?.clipId || "未知片段"); continue; }
+      if (n === 1) monoSources += 1;
       entries.push({ ...e, file });
     }
     if (skipped.length) notes.push(`有 ${skipped.length} 段没有音频流或文件不存在,已跳过:${skipped.join("、")}`);
     if (!entries.length) return bad("时间轴上没有能解码的声音", "no-audio");
     channels = mono ? 1 : 2;
     // 与导出一致(server/bakery/audio-mix.mjs 每段 -ac 2):单声道素材摊到立体声时每路低 3 dB
-    notes.push("混音按导出的做法是立体声:单声道素材摊到两个声道,每路低 3 dB(ffmpeg 缺省的中置混音系数)");
+    if (monoSources) notes.push(`混音按导出的做法是立体声:${monoSources} 段单声道素材摊到两个声道,每路低 3 dB(ffmpeg 缺省的中置混音系数)`);
     const total = num(body.total) > 0 ? num(body.total) : undefined;
     let win;
     try { win = windowOf({ baseOffset: 0, baseDuration: total, start: body.start, duration: body.length }); } catch (e) { return bad(e.message); }
