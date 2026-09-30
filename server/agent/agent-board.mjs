@@ -223,7 +223,7 @@ export function createAgentBoard({ now = () => Date.now(), labelOf = () => null,
 
     /** 这个对话调了一次工具 */
     touch(key) {
-      if (typeof key !== 'string') return;
+      if (typeof key !== 'string' || !key) return;
       entry(key).lastActive = now();
     },
 
