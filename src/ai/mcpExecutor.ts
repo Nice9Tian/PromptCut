@@ -99,6 +99,8 @@ export interface EditorApi {
   applyAudioFx(args: { clipId: string; fxId: string; params?: Record<string, number> }): any;
   /** 测响度:服务端 ffmpeg ebur128(server/vite-plugin-audio.ts) */
   measureAudio(args: { clipId?: string; mediaId?: string; scope?: string; series?: boolean }): Promise<any>;
+  /** 自定义测量(计划 A6):PCM 交专用 Chrome 的沙箱跑 Agent 写的 JS(server/audio-measure-js.mjs) */
+  measureAudioJs(args: { code: string; clipId?: string; mediaId?: string; scope?: string; start?: number; duration?: number; sampleRate?: number; mono?: boolean; timeoutMs?: number }): Promise<any>;
   // 多条剪辑(时间轴)。其余 clip / 序列工具都只作用于当前激活的那条
   listCuts(): any;
   switchCut(args: { cutId?: string; name?: string }): any;

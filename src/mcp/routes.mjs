@@ -77,6 +77,7 @@ export const TOOL_ROUTES = {
   remove_audio_fx: { method: "removeAudioFx", passArgs: true, awaited: false },
   apply_audio_fx: { method: "applyAudioFx", passArgs: true, awaited: false },
   measure_audio: { method: "measureAudio", passArgs: true, awaited: true },
+  measure_audio_js: { method: "measureAudioJs", passArgs: true, awaited: true },
   seek: { method: "seek", passArgs: true, awaited: false },
   play: { method: "play", passArgs: false, awaited: false },
   pause: { method: "pause", passArgs: false, awaited: false },

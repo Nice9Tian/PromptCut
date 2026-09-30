@@ -26,6 +26,27 @@ export const audioTools = [
     side: "agent"
   },
   {
+    name: "measure_audio_js",
+    description: "自定义测量:内置的 measure_audio 测不了的(RMS、峰值、过零率、某个频段的能量、静音段、节拍、两段的相关性……),自己写一段 JS 算。**只在创造力等级「高」时能用**;低、中档会被拒,那时只用 measure_audio。测谁和 measure_audio 一样:clipId 测时间轴上那一段用到的素材原声,mediaId 测整个素材,scope:'timeline' 测整条时间轴的混音(含片段音量和淡入淡出,不含音频效果);start / duration 在那段声音里再截一个窗口(秒)。服务端把声音解成 32 位浮点 PCM(缺省 16000 Hz,sampleRate 可调 8000~48000;最多 2 声道,mono:true 混成单声道;所有声道合计最多 1200 万个样本),在隔离的沙箱里(无头 Chrome 的 Worker,不能联网、没有 Node 能力)执行 code。code 是一个 async 函数体,参数 input = { channels: Float32Array[](每声道一个,值域约 -1~1), sampleRate, duration(秒), frames, numberOfChannels, scope, start, clipId?, mediaId? },用 return 返回可 JSON 序列化的汇总(不超过 256 KB,不要返回原始样本)。时限缺省 10 秒(timeoutMs 最多 30000),超时、抛错、语法错、结果不能序列化或太大都回 ok:false 与 error(带报错文字和行号),改代码重试。例:code:'const x = input.channels[0]; let s = 0, pk = 0; for (const v of x) { s += v * v; pk = Math.max(pk, Math.abs(v)); } return { rmsDb: 10 * Math.log10(s / x.length), peakDb: 20 * Math.log10(pk) };'",
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: { type: "string", maxLength: 20000, description: "async 函数体,收到 input,用 return 返回结果" },
+        clipId: { type: "string", description: "测时间轴上这一段" },
+        mediaId: { type: "string", description: "测整个素材" },
+        scope: { type: "string", enum: ["clip", "media", "timeline"], description: "不传就按给了 clipId 还是 mediaId 判,都没给测时间轴" },
+        start: { type: "number", minimum: 0, description: "在那段声音里从第几秒开始(缺省 0)" },
+        duration: { type: "number", exclusiveMinimum: 0, description: "只测这么多秒(缺省测到结尾)" },
+        sampleRate: { type: "number", minimum: 8000, maximum: 48000, description: "解码的采样率,缺省 16000" },
+        mono: { type: "boolean", description: "true 就混成单声道" },
+        timeoutMs: { type: "number", minimum: 1000, maximum: 30000, description: "代码的时限,缺省 10000" }
+      },
+      required: ["code"]
+    },
+    side: "agent",
+    timeoutMs: 90000
+  },
+  {
     name: "create_audio",
     description: "把视频变成声音。两种用法:给 mediaId —— 在素材库里派生出一份「只有声音」的素材(和源视频同一个文件,不转码,所以是瞬间的),之后 add_clip 用这个 mediaId 就是纯音频段;给 clipId —— 把时间轴上**这一段**就地转成声音,画面没了、位置长度素材内偏移淡入淡出全留着,素材库里同时也留一份。同一段视频只会派生一份声音素材,重复调返回同一个 mediaId。图片没有声音会被拒;本来就是声音的原样返回。淡入淡出对声音一样有效(预览按音量、导出按 afade),要给声音加淡入淡出用 add_transition。",
     inputSchema: {

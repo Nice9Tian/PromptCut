@@ -15,9 +15,8 @@
  * | `create_filter`、`create_pixel_map`、`create_audio_fx` | 高 | 新建效果 |
  * | `update_filter`、`update_pixel_map`、`update_audio_fx`(动到定义) | 中 | 改效果的表达式 / 步骤 / 参数声明,挂着它的片段全跟着变 |
  * | `update_*`(只改 name、description) | 低 | 只改库里显示的名字和说明,不碰效果本身 |
+ * | `measure_audio_js` | 高 | 写自定义测量代码(计划 A6;语义 `user-workflow.md`「创造力等级」:低档「测量只用内置方法」) |
  * | 其余(含 `apply_card`、`apply_*`、组合卡的部件工具、`measure_audio`) | 低 | 用已有的卡片 / 效果 / 部件、改参数、内置测量 |
- *
- * 以后的「自定义测量代码」工具(计划 A6)进表时标「高」。
  */
 import { CREATIVITY_HINT, CREATIVITY_LABEL, creativityAllows, normalizeCreativity } from '../../src/kernel/creativity.mjs';
 
@@ -58,6 +57,7 @@ export const TOOL_CREATIVITY = Object.freeze({
   update_filter: effectUpdate(EFFECT_UPDATE_ID.update_filter),
   update_pixel_map: effectUpdate(EFFECT_UPDATE_ID.update_pixel_map),
   update_audio_fx: effectUpdate(EFFECT_UPDATE_ID.update_audio_fx),
+  measure_audio_js: { level: 'high', what: '写自定义测量代码' },
 });
 
 /** 这次调用需要的等级 */

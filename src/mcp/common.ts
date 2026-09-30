@@ -183,11 +183,10 @@ export const audioFxTools = createAudioFxTools({ getState, actions });
 export const pixelMapTools = createPixelMapTools({ getState, actions });
 
 /**
- * 测响度(measure_audio):素材、时间轴片段、或整条时间轴的混音。ffmpeg 在服务端跑(server/vite-plugin-audio.ts),
- * 这里只把「测谁、从第几秒到第几秒」算清楚。timeline 档把 kernel/audioPlan 的清单整份发过去,回来的逐秒曲线
- * 再按同一份清单标上那一秒谁在出声 —— Agent 拿到「第 19 秒 -8 LUFS,出声的是配乐 + 配音 04」才能归因。
+ * 「测谁」:measure_audio 与 measure_audio_js 共用。回服务端要的那几项(素材、片段在素材里的起点和长度、时间轴的混音清单),
+ * timeline 档另回 kernel/audioPlan 的清单(给逐秒曲线标出声的是谁);时间轴上没有会出声的片段回 empty。
  */
-export async function measureAudio(args: { clipId?: string; mediaId?: string; scope?: string; series?: boolean }) {
+function audioTargetOf(args: { clipId?: string; mediaId?: string; scope?: string }) {
   const p = getState().project;
   const scope = args.scope || (args.clipId ? "clip" : args.mediaId ? "media" : "timeline");
   const mediaOf = (id: string) => {
@@ -196,24 +195,72 @@ export async function measureAudio(args: { clipId?: string; mediaId?: string; sc
     if (m.kind === "image") throw new Error(`「${m.name}」是图片,没有声音`);
     return { id: m.id, name: m.name, kind: m.kind, url: m.url, path: (m as { path?: string }).path };
   };
-  let body: Record<string, unknown>;
-  let plan: ReturnType<typeof audioPlanOf> | null = null;
   if (scope === "clip") {
     const hit = findClip(p, String(args.clipId || ""));
     if (!hit) throw new Error(`当前剪辑里没有片段 ${args.clipId || "(没给 clipId)"}`);
     if (!hit.clip.mediaId || hit.clip.cardId) throw new Error("卡片没有声音;要测的是视频 / 声音片段");
-    body = { scope, media: mediaOf(hit.clip.mediaId), offset: hit.clip.mediaOffset ?? 0, duration: hit.clip.end - hit.clip.start, series: !!args.series };
-  } else if (scope === "media") {
-    body = { scope, media: mediaOf(String(args.mediaId || "")), series: !!args.series };
-  } else {
-    plan = audioPlanOf(p);
-    if (!plan.length) return { ok: true, scope, empty: true, note: "时间轴上没有会出声的片段(隐藏 / 静音的序列和静音的片段不算)" };
-    body = {
+    return { scope, plan: null, body: { scope, media: mediaOf(hit.clip.mediaId), offset: hit.clip.mediaOffset ?? 0, duration: hit.clip.end - hit.clip.start } as Record<string, unknown> };
+  }
+  if (scope === "media") {
+    return { scope, plan: null, body: { scope, media: mediaOf(String(args.mediaId || "")) } as Record<string, unknown> };
+  }
+  const plan = audioPlanOf(p);
+  if (!plan.length) return { scope, plan, body: null, empty: true };
+  return {
+    scope,
+    plan,
+    body: {
       scope: "timeline",
       duration: p.duration,
       entries: plan.map((e) => ({ clipId: e.clipId, media: mediaOf(e.mediaId), start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut })),
-    };
+    } as Record<string, unknown>,
+  };
+}
+
+const NO_SOUND_NOTE = "时间轴上没有会出声的片段(隐藏 / 静音的序列和静音的片段不算)";
+
+/**
+ * 自定义测量(measure_audio_js,计划 A6;只在创造力等级「高」开放,闸在 server/agent/creativity-gate.mjs)。
+ * 「测谁」与 measure_audio 相同;服务端把那段声音解成 PCM,在专用 Chrome 的沙箱里跑 Agent 写的函数体,只回 JSON
+ * (server/audio-measure-js.mjs、server/audio-sandbox.mjs)。代码自己的错(语法、抛错、超时、结果太大)原样回给 Agent,不当成工具故障。
+ */
+export async function measureAudioJs(args: {
+  code: string; clipId?: string; mediaId?: string; scope?: string;
+  start?: number; duration?: number; sampleRate?: number; mono?: boolean; timeoutMs?: number;
+}) {
+  const target = audioTargetOf(args);
+  if (!target.body) return { ok: true, scope: target.scope, empty: true, note: NO_SOUND_NOTE };
+  const tb = target.body;
+  const body = {
+    ...tb,
+    // timeline 档的 duration 是时间轴时长,换个名字,duration 留给片段
+    ...(target.scope === "timeline" ? { duration: undefined, total: tb.duration } : null),
+    start: args.start, length: args.duration, sampleRate: args.sampleRate, mono: args.mono, timeoutMs: args.timeoutMs,
+    code: args.code,
+    meta: { clipId: args.clipId, mediaId: target.scope === "media" ? args.mediaId : (tb.media as { id?: string } | undefined)?.id },
+  };
+  const res = await fetch(apiUrl("/api/audio/measure-js"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(85000) });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data) throw new Error(data?.error || `自定义测量失败(HTTP ${res.status})`);
+  const out: Record<string, unknown> = { ...data, scope: target.scope };
+  if (target.plan) {
+    const withFx = target.plan.filter((e) => e.fx).map((e) => e.clipId);
+    if (withFx.length) out.notes = [...(Array.isArray(data.notes) ? data.notes : []), `${withFx.join("、")} 挂着音频效果,这里测的不含效果`];
   }
+  return out;
+}
+
+/**
+ * 测响度(measure_audio):素材、时间轴片段、或整条时间轴的混音。ffmpeg 在服务端跑(server/vite-plugin-audio.ts),
+ * 这里只把「测谁、从第几秒到第几秒」算清楚。timeline 档把 kernel/audioPlan 的清单整份发过去,回来的逐秒曲线
+ * 再按同一份清单标上那一秒谁在出声 —— Agent 拿到「第 19 秒 -8 LUFS,出声的是配乐 + 配音 04」才能归因。
+ */
+export async function measureAudio(args: { clipId?: string; mediaId?: string; scope?: string; series?: boolean }) {
+  const target = audioTargetOf(args);
+  const scope = target.scope;
+  if (!target.body) return { ok: true, scope, empty: true, note: NO_SOUND_NOTE };
+  const plan = target.plan;
+  const body: Record<string, unknown> = scope === "timeline" ? target.body : { ...target.body, series: !!args.series };
   const res = await fetch(apiUrl("/api/audio/measure"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(55000) });
   const data = await res.json().catch(() => null);
   if (!res.ok || !data || data.ok === false) throw new Error(data?.error || `测响度失败(HTTP ${res.status})`);
