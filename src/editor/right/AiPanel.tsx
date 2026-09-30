@@ -591,6 +591,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         providers={providers}
         onSetProvider={setProvider}
         config={config}
+        tabId={tabId}
         menu={{
           teamMode,
           teamModeHint,

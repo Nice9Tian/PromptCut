@@ -4,6 +4,7 @@ import { useBackdropClose } from "../ui/backdropClose";
 import { actions, useStore } from "../store/project";
 import "./ProjectSettingsDialog.css";
 import { CollabSection, type CollabHandle } from "./sync/CollabSection";
+import { CREATIVITY_HINT, CREATIVITY_LABEL, CREATIVITY_LEVELS, CREATIVITY_SHORT, DEFAULT_CREATIVITY, normalizeCreativity, projectCreativity, type CreativityLevel } from "../kernel/creativity.mjs";
 
 export interface ProjectSettingsDialogProps {
   open: boolean;
@@ -60,6 +61,7 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   const curFps = useStore((s) => s.project.fps);
   const curDuration = useStore((s) => s.project.duration);
   const curGlRoute = useStore((s) => s.project.glRoute);
+  const curCreativity = useStore((s) => projectCreativity(s.project));
 
   const [name, setName] = useState("");
   const [ratio, setRatio] = useState<AspectRatio>("16:9");
@@ -68,6 +70,8 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   const [duration, setDuration] = useState("");
   /** R9:canvas 卡的共享 WebGL 渲染器走哪条路线;空串 = 按宿主能力(低内存档 shared,否则 perDocument) */
   const [glRoute, setGlRoute] = useState<"" | "perDocument" | "shared">("");
+  /** 创造力等级的项目默认(user-workflow.md「创造力等级」):AI 栏每个对话默认取它,桌面 APP 的会话跟随它 */
+  const [creativity, setCreativity] = useState<CreativityLevel>(DEFAULT_CREATIVITY);
   const durationInputRef = useRef<HTMLInputElement>(null);
   const collabRef = useRef<CollabHandle>(null);
 
@@ -87,6 +91,8 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       fps,
       // 切了路线:两个舞台按新的生效路线重建连接;`device` 串跟着变,probeRunner 重挡遮罩、重测(同切 fps)
       glRoute: glRoute || undefined,
+      // 出厂的「高」不落字段:旧项目没有这个字段,存盘结果和从没改过一样
+      creativity: creativity === DEFAULT_CREATIVITY ? undefined : creativity,
     });
     if (requestedDuration !== curDuration) actions.setDurationManual(requestedDuration);
     // 多用户协作:勾上并保存 = 开启,取消勾选并保存 = 关闭;这一段在忙时对话框不关
@@ -116,8 +122,9 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       setFps(asFps(curFps));
       setDuration(String(curDuration));
       setGlRoute(curGlRoute ?? "");
+      setCreativity(curCreativity);
     }
-  }, [open, curW, curH, curName, curFps, curDuration, curGlRoute]);
+  }, [open, curW, curH, curName, curFps, curDuration, curGlRoute, curCreativity]);
 
   useEffect(() => {
     if (!open) return;
@@ -229,6 +236,21 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
               <option value="">自动(按本机内存)</option>
               <option value="perDocument">每个舞台各一个</option>
               <option value="shared">两个舞台共用一个(省内存)</option>
+            </select>
+          </div>
+          <div className="pc-dialog-row">
+            <label className="pc-dialog-label" htmlFor="pc-proj-creativity">创造力等级</label>
+            <select
+              id="pc-proj-creativity"
+              data-pc="creativity-select"
+              className="pc-dialog-select"
+              value={creativity}
+              title={`${CREATIVITY_LABEL[creativity]}:${CREATIVITY_HINT[creativity]}。AI 栏每个对话默认取这个等级,可以单独改;桌面 APP 的会话跟随它`}
+              onChange={(e) => setCreativity(normalizeCreativity(e.target.value) ?? DEFAULT_CREATIVITY)}
+            >
+              {CREATIVITY_LEVELS.map((lv) => (
+                <option key={lv} value={lv} title={CREATIVITY_HINT[lv]}>{CREATIVITY_LABEL[lv]} · {CREATIVITY_SHORT[lv]}</option>
+              ))}
             </select>
           </div>
           <div className="pc-dialog-row">

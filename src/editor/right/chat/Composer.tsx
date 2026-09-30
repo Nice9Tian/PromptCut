@@ -59,6 +59,8 @@ export interface ComposerProps {
   onSetProvider: (p: AiProvider) => void;
   config: PublicAiConfig | null;
   menu: ComposerMenuProps;
+  /** 这一页的 id:运行选项里的创造力等级按页存 */
+  tabId?: string;
 }
 
 function providerLabel(p: ProviderInfo): string {
@@ -257,6 +259,7 @@ export function Composer(props: ComposerProps) {
     onSetProvider,
     config,
     menu,
+    tabId,
   } = props;
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -351,7 +354,7 @@ export function Composer(props: ComposerProps) {
               </option>
             ))}
           </select>
-          <ModelBar provider={provider} config={config} disabled={streaming} />
+          <ModelBar provider={provider} config={config} disabled={streaming} tabId={tabId} />
         </div>
         {streaming ? (
           <>
