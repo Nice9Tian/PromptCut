@@ -39,6 +39,10 @@
  *   A6 同样建项目放云端,等 40 秒:不起节点(`nodes` 空)、不推送(日志没有 `push.started`,云端没有这个项目的层表)
  *
  * 输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, … }`。不打印口令、邀请码、票据。
+ *
+ * 环境变量 `PC_CHROME_ARGS`(空格分隔)只把参数原样透传给探针起的 Chrome,排障取证用,例如 `--log-net-log=<文件>` 抓网络日志
+ * (r4、r5 两次合流里探针新开的页面偶发 120～180 s 打不开在线页,见 `docs/plan/TODO.md`)、云端 Linux 以 root 运行时的 `--no-sandbox`。
+ * 不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则证书有问题时探针照样通过,掩盖真问题。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import { spawn, spawnSync } from 'node:child_process';
@@ -368,7 +372,7 @@ async function launchBrowser() {
   const { default: puppeteer } = await import('puppeteer');
   return puppeteer.launch({
     headless: true, protocolTimeout: 900_000, defaultViewport: { width: 1600, height: 1000 },
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu'],
+    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])],
   });
 }
 const P = (page, fn, ...a) => page.evaluate(fn, ...a);
