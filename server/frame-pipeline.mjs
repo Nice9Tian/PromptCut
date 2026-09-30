@@ -1,11 +1,10 @@
 import fs from 'node:fs/promises';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
-import { openBakery, bakeFrames, findFfmpeg } from './bakery/index.mjs';
+import { openBakery, bakeFrames } from './bakery/index.mjs';
 // 直接按文件名引,不走 index:既有测试用 mock.module 替换整个 index,替身里没有这个出口
 import { probeBrowserEnvironment } from './bakery/environment.mjs';
 import { captureSnapshot } from './bakery/capture-snapshot.mjs';
-import { frameVideo } from './bakery/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
 import { cardEntryCode } from './card-code.mjs';
 import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
@@ -818,7 +817,7 @@ export class FramePipeline {
       const cold = createFrameArchive({ spillDir: path.join(entry.dir, 'html-cache') });
       entry.html = cold.frames; entry.controls = cold.controls;
       entry.createControl = cold.createControl; entry.disposeArchive = cold.dispose;
-      entry.mov = new MovFrameStore({ dir: entry.dir, fps: project.fps || 30 });
+      entry.mov = new MovFrameStore({ dir: entry.dir, fps: project.fps || 30, movie: false });
       // A removed or replaced full-scene frame must not stay published in the
       // playback movie: put that sample back to transparent.
       entry.mov.onEvict = frame => entry.playbackMovie?.evict(frame);
@@ -1337,23 +1336,9 @@ export class FramePipeline {
   }
   async writeMov(entry, frame, buf, signature = null) {
     if (!entry.mov) return;
-    // Store the random-access copy first. Starting ffmpeg for an isolated
-    // high-numbered request would leave a pipe waiting forever for frame 0.
+    // 整场景这一份只存逐帧 PNG(随机取用的那一侧)。以前这里顺手起 ffmpeg 把连续前缀编成
+    // `mov/full.mov`,那个文件只被判过存在、没有人读内容,已不再产(legacy 整帧通道方案 B)。
     await entry.mov.put(frame, buf, signature);
-    // During playback the append-only PNG MOV is the sink. Do not start an
-    // additional ffmpeg stream competing for the same CPU budget.
-    if ((this.playback?.playing || this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) && entry.stage !== 'required') return;
-    if (entry.mov.writer || entry.mov.writerError || await exists(entry.mov.movieFile)) return;
-    try {
-      if (frame === entry.mov.nextFrame) {
-        const ffmpeg = await findFfmpeg();
-        await entry.mov.start(ffmpeg);
-      }
-    } catch (error) {
-      // MOV is a secondary cache; preserve the PNG/HTML result if the local
-      // encoder is unavailable or exits unexpectedly.
-      entry.mov.writerError ||= error;
-    }
   }
   /** `options.anchors`:锚帧那一趟(`fillAnchorSnapshots`)记的帧。只在队列模式下有区别,见 `recordSnapshots` */
   record(entry, n, html, controls = [], options = undefined) {
@@ -1736,12 +1721,16 @@ export class FramePipeline {
     });
     return entry;
   }
+  /**
+   * 整场景逐帧 PNG 补齐(含素材的整帧,`readFramesCore` 第一步查的就是它)。以前以 `mov/full.mov` 在不在
+   * 判「做过了」、并把 PNG 编成那个文件;方案 B 起不再编,`renderMovFrames` 自己跳过表里已有且有效的帧,
+   * 所以第二趟只读一遍各帧的产出记录,不重渲。
+   */
   async fillMov(entry, signal, bakery) {
-    if (!entry.mov || await exists(entry.mov.movieFile)) return;
+    if (!entry.mov) return;
     const fps = entry.project.fps || 30;
     const count = Math.max(1, Math.floor(entry.project.duration * fps));
     if (signal?.aborted) throw new Error('Cancelled');
-    await entry.mov.start(await findFfmpeg());
     await this.renderMovFrames(entry, Array.from({ length: count }, (_, i) => i), bakery, signal);
     await entry.mov.finish();
   }
@@ -3216,39 +3205,31 @@ export class FramePipeline {
     } finally { if (!lease) this.release(lane); }
     return out;
   }
+  /**
+   * 后台那一趟的最后一步:按轨道前缀逐帧栅格化(`tracks/<前缀>/NNNNNN.png`,`rasterPrefix` 的缓存),
+   * 最后一个前缀的结果抄进 `<键>/frames/`(`readFramesCore` 的兼容读法、播放的暖帧都读它)。
+   *
+   * legacy 整帧通道方案 B(AGENT-maint-3):以前每个前缀还编一个 `preview.mp4`、整场景再抄一份,
+   * 没有任何消费方,不再产;旧版本留下的这些文件在这里顺手删掉。
+   */
   async prerender(entry, bakery, signal) {
     const prefixes = this.prefixes(entry);
-    const ffmpeg = await findFfmpeg();
     const frames = [...entry.html.keys()].sort((a, b) => a - b);
     for (let i = 0; i < prefixes.length; i++) {
       if (signal.aborted) throw new Error('Cancelled');
       const prefix = prefixes[i];
       const dir = path.join(this.root, 'tracks', prefix.key);
-      const video = path.join(dir, 'preview.mp4');
       const final = i === prefixes.length - 1;
-      if (!(await exists(video))) {
-        await fs.mkdir(dir, { recursive: true });
-        const temp = path.join(dir, `preview-${process.pid}.tmp.mp4`);
-        const stream = frameVideo(ffmpeg, temp, entry.project.fps || 30);
-        try {
-          for (const frame of frames) {
-            if (signal.aborted) throw new Error('Cancelled');
-            const buf = await this.rasterPrefix(entry, bakery, frame, i, prefixes);
-            await stream.write(buf);
-          }
-          await stream.finish();
-          await fs.rename(temp, video);
-        } catch (e) { await stream.abort().catch(() => {}); await fs.rm(temp, { force: true }).catch(() => {}); throw e; }
+      await fs.rm(path.join(dir, 'preview.mp4'), { force: true }).catch(() => {});
+      for (const frame of frames) {
+        if (signal.aborted) throw new Error('Cancelled');
+        await this.rasterPrefix(entry, bakery, frame, i, prefixes);
       }
       if (final) {
         for (const frame of frames) {
           await atomic(path.join(entry.dir, 'frames', `${pad(frame)}.png`), await fs.readFile(path.join(dir, `${pad(frame)}.png`)));
         }
-        const temp = path.join(entry.dir, `preview-${process.pid}.tmp.mp4`);
-        try {
-          await fs.copyFile(video, temp);
-          await fs.rename(temp, path.join(entry.dir, 'preview.mp4'));
-        } catch (e) { await fs.rm(temp, { force: true }).catch(() => {}); throw e; }
+        await fs.rm(path.join(entry.dir, 'preview.mp4'), { force: true }).catch(() => {});
       }
     }
   }

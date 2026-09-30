@@ -54,15 +54,21 @@ try {
   assert.equal(entry.status, 'ready', entry.error);
   const prerendered = (await service.see_frames(project, [.8])).get(8).buf;
   assert.ok(PNG.sync.read(prerendered).data.equals(aFrame), 'C must exactly match the A pipeline');
-  const probe = JSON.parse(execFileSync(ffmpeg.replace(/ffmpeg(\.exe)?$/, 'ffprobe$1'), ['-v', 'error', '-count_frames', '-show_entries', 'stream=nb_read_frames', '-of', 'json', path.join(entry.dir, 'preview.mp4')], { encoding: 'utf8' }));
-  assert.equal(Number(probe.streams[0].nb_read_frames), 10);
+  // 后台那一趟的产物覆盖全部 10 帧:整场景逐帧 PNG 表(readFramesCore 第一步查的)与 C 趟抄出的 frames/。
+  // legacy 整帧通道方案 B(AGENT-maint-3)起不再编 preview.mp4 与整场景的 mov/full.mov,这里断言它们确实没了。
+  const exists = file => fs.access(file).then(() => true, () => false);
+  assert.deepEqual([...Array(10).keys()].filter(n => !entry.mov.has(n)), [], 'full-scene PNG table must hold every frame');
+  const rastered = (await fs.readdir(path.join(entry.dir, 'frames'))).filter(n => /^\d{6}\.png$/.test(n));
+  assert.equal(rastered.length, 10, 'C must raster every frame into frames/');
+  assert.equal(await exists(path.join(entry.dir, 'preview.mp4')), false, 'preview.mp4 is no longer produced');
+  assert.equal(await exists(path.join(entry.dir, 'mov', 'full.mov')), false, 'full-scene full.mov is no longer produced');
   // 导出页自己不知道要渲哪个项目,得经 ?timeline= 带进去(同 verify-export-frame-content.mjs);
   // 不带的话它渲的是页面默认项目,和这里的 320×180 对不上。
   const exportUrl = `${origin}/?export=1&timeline=${encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(project)))}`;
   const exported = await exportUnified(project, { url: exportUrl, out: path.join(root, 'exported'), targetFrames: [8] });
   const exportedFrame = PNG.sync.read(await fs.readFile(path.join(exported.framesDir, '000008.png'))).data;
   assert.ok(exportedFrame.equals(aFrame), 'export must exactly match see_frames');
-  console.log('PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; streamed video contains all 10 frames.');
+  console.log('PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; PNG table and frames/ hold all 10 frames; no preview.mp4 / full.mov.');
   console.log('Artifacts:', root);
 } finally {
   await bakery?.close(); await service.close();
