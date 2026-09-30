@@ -33,7 +33,8 @@
  *            - --save：成功后 pm2 save。
  *            - --editor <目录>（C10a 契约第 3 节）：把在线构建（`npx vite build --mode online` 的 dist-online/）拷成
  *              <部署目录>/.incoming-editor，远端再整体换名成 <部署目录>/editor/；旧版 assets/ 保留一代（server/hosted/deploy.mjs 的
- *              editorSwapLines）。nginx 的 /editor 路由由主会话手工加；
+ *              editorSwapLines）。拷之前在本机暂存目录里给 assets/ 下大于 1 KB 的 js/mjs/css/json/svg/wasm 生成同名 .gz
+ *              （stageEditorBuild；nginx 的 /editor/assets/ 开 gzip_static，带 Content-Length 发、不分块）。nginx 的 /editor 路由由主会话手工加；
  *            - --doc-public-url / --asset-public-url（C10a 契约第 3 节）：写进 PM2 配置的两个公网地址（阿里云上是
  *              wss://<域名>/hosted/ 与 https://<域名>/media/api/asset）；不给才按 PROMPTCUT_PUBLIC_HOST 拼 ws://…:8787、http://…:8788/api/asset。
  *              文档服务公网地址的源也是邀请链接的源（<源>/editor#invite=…）。
@@ -57,7 +58,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { checkTokenFormat } from '../../server/docservice/auth.mjs';
 import { stageHostedFiles } from '../../server/hosted/files.mjs';
-import { hostedInstance, hostedPm2Config, hostedDeployScript, checkPublicUrl, checkStageOrigins, shq } from '../../server/hosted/deploy.mjs';
+import { hostedInstance, hostedPm2Config, hostedDeployScript, checkPublicUrl, checkStageOrigins, stageEditorBuild, shq } from '../../server/hosted/deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = process.env.PROMPTCUT_REMOTE;
@@ -257,9 +258,11 @@ function deployHosted() {
     const scp = spawnSync('scp', [...baseOpts, '-r', '-q', '.incoming', `${target}:${inst.dir}/`], { cwd: stage, stdio: 'inherit', timeout: 180_000 });
     if (scp.status !== 0) return scp.status ?? 1;
     if (editorDir) {
-      // 在线构建：先拷成 .incoming-editor，远端脚本再整体换名（C10a 契约第 3 节）
+      // 在线构建：先在本机暂存目录里拷一份、给 assets/ 生成 .gz（stageEditorBuild），再拷成 .incoming-editor，远端脚本再整体换名（C10a 契约第 3 节）
+      const { gz } = stageEditorBuild(editorDir, path.join(stage, '.incoming-editor'));
+      console.log(`== 预压缩 ${gz.length} 个 assets（.gz）`);
       console.log(`== scp 在线构建 ${editorDir} -> ${target}:${inst.dir}/.incoming-editor`);
-      const up = spawnSync('scp', [...baseOpts, '-r', '-q', path.basename(editorDir), `${target}:${inst.dir}/.incoming-editor`], { cwd: path.dirname(editorDir), stdio: 'inherit', timeout: 180_000 });
+      const up = spawnSync('scp', [...baseOpts, '-r', '-q', '.incoming-editor', `${target}:${inst.dir}/.incoming-editor`], { cwd: stage, stdio: 'inherit', timeout: 180_000 });
       if (up.status !== 0) return up.status ?? 1;
     }
   } finally {

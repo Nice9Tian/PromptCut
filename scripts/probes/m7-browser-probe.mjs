@@ -1457,13 +1457,14 @@ async function tapPage(page, name) {
 
 async function launchBrowser(cfg) {
   const { default: puppeteer } = await import('puppeteer');
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
   const origins = [cfg.site, ...cfg.stageOrigins];
   const loopback = origins.every((o) => /^https:\/\//.test(o) || /^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(o));
   const exe = arg('--chrome', process.env.PUPPETEER_EXECUTABLE_PATH || null);
   return puppeteer.launch({
     headless: !flag('--headful'), protocolTimeout: 900_000, defaultViewport: { width: 1600, height: 1000 },
     ...(exe ? { executablePath: exe } : {}),
-    args: [...(process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu',
+    args: [...PROBE_CHROME_ARGS, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu',
       ...(flag('--headful') ? [] : ['--window-position=-32000,-32000']),
       // 跨机（W7）时站点是局域网的 http：WebCrypto 等要安全上下文，按测试源放行（只放行这三个源）
       ...(loopback ? [] : [`--unsafely-treat-insecure-origin-as-secure=${origins.join(',')}`]),

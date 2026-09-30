@@ -9,6 +9,7 @@ import { applyUploadedMedia, uploadMediaFile, type UploadedMedia } from "./media
 import { prerenderBase } from "../../render/prerender";
 import { exportGate } from "../media/assetTiers";
 import { awaitingUploaderMessage } from "../../render/mediaTier";
+import { parseExportSkipped, type ExportSkipped } from "./exportSkipped";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
@@ -331,7 +332,7 @@ export async function exportVideo(
     /** 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方 */
     onStart?: (id: string) => void;
   } & OnlineExportOptions = {},
-): Promise<{ outDir: string; id: string; written?: boolean }> {
+): Promise<{ outDir: string; id: string; written?: boolean; skippedMedia?: ExportSkipped[] }> {
   // c10a 第 11.1 节:在线页面没有预渲染进程,在浏览器里逐帧导出。
   // `ONLINE` 按需取:`mode.ts` 读 `import.meta.env`,Node 单测里载入本模块时没有它
   if ((await import("../../online/mode")).ONLINE) return exportVideoOnline(opts);
@@ -385,7 +386,11 @@ export async function exportVideo(
     throw new Error(text);
   }
 
-  const { id, outDir } = await res.json();
+  const started = await res.json();
+  const { id, outDir } = started;
+  // 已标「(缺失)」、本机取不到文件的老素材:它们所在的片段没进这次导出(预渲染进程的 dropSkippedMediaClips),完成时告诉用户
+  const skippedMedia = parseExportSkipped(started.skippedMedia);
+  if (skippedMedia.length) console.warn("[io] 导出跳过缺失素材所在的片段:", skippedMedia.map((m) => m.name || m.id));
   jobBase.set(id, base);
   opts.onStart?.(id);
 
@@ -405,7 +410,7 @@ export async function exportVideo(
       } else if (data.status === "done") {
         finish(() => {
           opts.onProgress?.(data.total, data.total);
-          resolve({ outDir, id });
+          resolve(skippedMedia.length ? { outDir, id, skippedMedia } : { outDir, id });
         });
       } else if (data.status === "cancelled") {
         finish(() => reject(Object.assign(new Error("已取消导出"), { cancelled: true })));

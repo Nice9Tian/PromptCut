@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg, serve, closeAll } from './probe-connect.mjs';
 
 const ROOT = path.resolve(flagArg('root', process.cwd()));
@@ -55,7 +56,7 @@ if (URL_ARG || fs.existsSync(path.join(DIST, 'index.html'))) {
     res.setHeader('Origin-Agent-Cluster', '?1');
     res.end(fs.readFileSync(file));
   }, '127.0.0.1');
-  const browser = await puppeteer.launch({ headless: true, args: ['--disable-gpu'] });
+  const browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--disable-gpu'] });
   try {
     const page = await browser.newPage();
     const pageErrors = [];
