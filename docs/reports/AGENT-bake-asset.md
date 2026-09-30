@@ -13,7 +13,7 @@
 
 ## 状态
 
-轻量部分做完：代码、单测、探针脚本都已提交，单个测试文件逐个跑过（见「验证」）。**重的验证还没跑**：`npx tsc -b --force`、`npm test`、G0-R（导出与预渲染的整套像素与探针验收，项目见下）、`bake-asset-probe` 要起 dev server 和 Chrome，按主会话的禁令等「可以跑重活」之后再跑。
+全部做完，验证全过。代码、单测、探针、〔裁〕7（`px` 的容量淘汰）都已提交；类型检查、全量测试、代码指纹、G0-R 全套、新探针 `bake-asset-probe` 都跑过，每项一遍就过（结果见「验证」）。〔裁〕1～7 已由主会话审过认可。
 
 ## 提交
 
@@ -109,12 +109,33 @@
 - BKA-13：快照被淘汰后再要，索引问对账得到「没有」，删索引条目，回到重渲那条路；
 - BKA-14：注入了自己的 `px` 数据层、`pxEvict: null`、`PROMPTCUT_PX_EVICT=0` 时都不开。
 
-还没跑，等「可以跑重活」：
+重的验证（主会话发「可以跑重活」之后，提交 `c86d6b4b`；另一个子 Agent maint-3 同时在这台机器上用 5990～6009 跑重活，带耗时门槛的项只作参考）：
 
-- `npx tsc -b --force`（`tsconfig.json` 只 `include: ["src"]`，服务端的 TS 不在类型检查里；这次 `src/` 只改了注释）；
-- `npm test`；
-- G0-R：`verify-determinism`（同一段导两遍逐像素相同）、与基准逐像素比对（`D:\VectorMPEG7\PromptCut\.worktrees\main-g0r\out\verify-a\frames`，1800 帧）、`verify-unified-frames`、`stream-produce-probe` 两种、`preview-fallback-probe` 两种、`ready-index-probe`、`query-render-probe`；
-- `node scripts/probes/bake-asset-probe.mjs --port 5970`（端口 5970～5972 加 5975）。
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 0 错误，退出码 0 |
+| 全量测试 | `npm test` | tests 4145、pass 4143、fail 0、cancelled 0、skipped 2，退出码 0 |
+| 代码指纹 | `snapshotCode` / `captureCode` | `00a5264bf8a062ff6e0b5ed0516cccd1` / `86e443cb6fa838aef64788af6822fd68`，不变 |
+| G0-R 导出确定性 | 自己起 dev server（5980，`PROMPTCUT_NO_PORT_FILE=1`），`node scripts/verify-determinism.mjs --url "http://127.0.0.1:5980/?export=1"` | 1800 / 1800 相同，退出码 0（单遍导出 210.7 s，整段 609 s） |
+| G0-R 与基准逐像素 | 本分支的 `out/verify-a/frames` 与 `.worktrees/main-g0r/out/verify-a/frames` 逐帧解码比 RGBA | 1800 帧相同，不同 0、缺 0、多 0 |
+| G0-R 快照重放 | `PC_FRAME_TEST_URL=http://127.0.0.1:5980 node scripts/verify-unified-frames.mjs` | PASS，退出码 0 |
+| G0-R 流式生产 | `stream-produce-probe --origin …5980`；再加 `--group` | 两种都 PASS、`fails: []`、退出码 0；分段编码 p50 279 ms（门槛 300 ms，参考） |
+| G0-R 预览退回 | `preview-fallback-probe --origin …5980`；再加 `--page-preload` | 两种都 PASS、`fails: []`、透明拍 0，退出码 0 |
+| G0-R 就绪索引 | `ready-index-probe --port 5984` | `fails: []`，退出码 0 |
+| 查询渲染 | `query-render-probe --port 5987` | `fails: []`，退出码 0 |
+| 新探针 | `bake-asset-probe --port 5970`（远程计数服务 5975） | 通过 33、失败 0，退出码 0 |
+
+`bake-asset-probe` 的要点：
+
+- P1：`bake_card` 回 `/api/asset/px/b8633179…`，渲一张 11.2 s。预渲染进程的推送队列建起来了（`push.started {"docservice":"editor","asset":"http://127.0.0.1:5975/api/asset"}`），计数的远程素材服务收到了这一块的分片与收尾，从它那儿读回的字节相同。素材目录里没有 `bake-*.png`，索引记着这个内容哈希。
+- P2：同样的参数再要，`cached`，32 ms。
+- P3：3D 视图那条路（编辑器进程）也推到了远程（日志 `bake.pushed`），页面加载得出图。
+- P4：预取的盘点、批量、淘汰都照常；淘汰之后字节仍取得到。
+- P5：老地址照常能取；同一个键再要走读时迁移，123 ms，不重渲，内容哈希就是旧文件的。
+- P6：scene-3d 贴上 px 地址的贴图后，渲出来与不贴时不同（`60786e76…` 对 `ad52e7d8…`），渲染器取到了贴图。
+- P7：只在远程上的 PNG，页面按 `/api/asset/px/<hash>` 加载得出来，是 40×30；第二次是本机命中。
+
+跑完只停了自己起的进程：5980 的 dev server 用 `taskkill /T` 结束，探针各自收尾；5970～5989 上没有残留监听。
 
 ## 没做成的、局限
 
@@ -122,7 +143,7 @@
 - 淘汰器的锁与使用记录都放在 `px` 目录里，是按目录的；如果以后本机素材服务的 `px` 换成非 fs 的数据层（没有 `list`），淘汰不开，要另写。
 - **在线浏览器模式**（没有本机编辑器进程）：卡片参数里的 `/api/asset/px/<hash>` 不会被换成远程素材服务的绝对地址（`mediaTier.ts` 的 `remoteMediaUrl` 只认 `/@media/<hash>`）。改前的 `/@media/bake-….png` 在那种模式下同样取不到，所以不是这次改坏的，只是没顺手补上。
 - 推送没有持久队列（〔裁〕5）：进程在推完之前退出，下次命中这个键时才补推。别的成员如果先要这一块，在补推之前看不到。
-- 探针 P1 的「远程收到推送」依赖预渲染进程建起推送队列：要 `PROMPTCUT_PUSH=1` 加上编辑器里挂的文档服务（J.12，渲染队列契约里「编辑器里的文档服务只在显式打开推送时才算」那一条）。还没实跑确认。
+- 探针 P1 的「远程收到推送」依赖预渲染进程建起推送队列：要 `PROMPTCUT_PUSH=1` 加上编辑器里挂的文档服务（J.12，渲染队列契约里「编辑器里的文档服务只在显式打开推送时才算」那一条）。实跑确认建起来了（`push.started`）。缺省的开发环境不设 `PROMPTCUT_PUSH`，只有共享项目或显式打开时才推，这一点与 C6.4 的口径一致。
 
 ## 更正建议（语义文件没改，以下是 dry run）
 
@@ -141,5 +162,5 @@
 
 ## 需要主会话决定的事
 
-1. `px` 的回收：主会话第一轮审查定了走容量淘汰，已在本分支补上（〔裁〕7）。请审〔裁〕7 的数字（10 GiB / 2%、30 分钟、2 分钟、5 分钟、3 分钟死锁）；托管端的容量要不要另开一项。
-2. 重的验证等「可以跑重活」。跑完后再决定合并（`--no-ff`）还是返工。
+1. `px` 的回收：已按主会话第一轮审查补上容量淘汰（〔裁〕7），数字已认可；托管端、远程素材服务的容量由主会话另记 TODO。
+2. 合并（`--no-ff`）还是返工。
