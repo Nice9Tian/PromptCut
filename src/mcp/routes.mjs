@@ -129,9 +129,6 @@ export const TOOL_ROUTES = {
 /**
  * 不走路由表的浏览器侧工具。它们在 mcpExecutor 里各有各的特殊处理,留在表外:
  *
- *   - declare_scope / list_agents / send_message / check_messages:
- *     多 Agent 协调的公告板(src/ai/agentBus.ts),根本不碰编辑台,而且要吃一个
- *     EditorApi 方法拿不到的入参 —— 发起这次调用的 Agent 对话 id。
  *   - see_frames:一个工具两种画面 —— source="media" 走 seeSequences、
  *     source="timeline" 或不给走 seePreview;还要先剥掉 source 字段,并对缺 mediaId、
  *     非法 source 两种情况回错误对象(不是抛错)。一对一的表表达不了。
@@ -144,10 +141,6 @@ export const TOOL_ROUTES = {
  * 要么在这里,多一个少一个都算漏登记。
  */
 export const SPECIAL_TOOLS = [
-  "declare_scope",
-  "list_agents",
-  "send_message",
-  "check_messages",
   "see_frames",
   "get_gif",
   "web_open",

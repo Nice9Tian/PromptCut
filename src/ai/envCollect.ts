@@ -1,7 +1,7 @@
 import { buildEnvReport, type EnvInput } from "./envReport";
 import { getLayoutMode } from "../editor/layoutMode";
 import { getSkillSnapshot } from "../skill/skillMode";
-import { isTeamMode } from "./teamMode";
+import { getTabs } from "./agentTabs";
 import { getState } from "../store/project";
 
 /**
@@ -24,7 +24,7 @@ function clientInput(): EnvInput {
   return {
     layout: getLayoutMode(),
     skill: (() => { try { return getSkillSnapshot().state; } catch { return null; } })(),
-    teamMode: (() => { try { return isTeamMode(); } catch { return false; } })(),
+    agentTabs: (() => { try { return getTabs().length; } catch { return 1; } })(),
     project: {
       name: p.name,
       filePath: st.filePath,

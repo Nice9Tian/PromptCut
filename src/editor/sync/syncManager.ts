@@ -24,6 +24,7 @@ import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } fr
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
 import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
+import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 
 /**
@@ -531,6 +532,8 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     offs.push(() => clearInterval(tick));
   }
   cur = { link, kind, docProjectId, url, unbind, offs };
+  // 在场状态(A3 第二阶段):这个页面「正在编辑」的片段经这条连接发布,别的成员那边 Agent 的范围经它收
+  setPresenceLink(link, docProjectId, me().userId ?? "");
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
   // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
@@ -552,6 +555,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
 function detach() {
   const prev = cur;
   cur = null;
+  setPresenceLink(null, null, "");
   if (prev) {
     for (const off of prev.offs) off();
     prev.unbind();
@@ -783,6 +787,11 @@ function onSideMessage(msg: AnyMsg) {
       return;
     case "events.listing":
       for (const it of Array.isArray(msg.items) ? msg.items : []) rememberEvent(it as Record<string, unknown>);
+      return;
+    case "presence.update":
+    case "presence.state":
+    case "presence.message":
+      receivePresence(msg as Record<string, unknown>);
       return;
     default:
       return;

@@ -367,6 +367,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
    * 没有 Agent 连着的时候,编辑页自己的预览也得能画。判据从「连着 MCP 桥」换成「页面角色是编辑页」。
    */
   startDataMirror();
+  // 多 Agent:页签变了就报给编辑器进程的公告板(A3)
+  const stopTabReports = agentBus.startTabReports();
 
   const connect = () => {
     if (!active) return;
@@ -376,6 +378,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
 
     source.onopen = () => {
       onStatus?.({ connected: true });
+      // 编辑器进程可能刚重启:页签再报一次,公告板的名单才齐(A3)
+      agentBus.resendTabs();
     };
 
     source.onmessage = async (e) => {
@@ -403,6 +407,12 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           window.dispatchEvent(new CustomEvent("ai-chat-error", { detail: "另一个编辑台页面接管了 AI 连接" }));
           active = false;
         }
+      } else if (ev.type === "agent.board") {
+        // 多 Agent 公告板(编辑器进程里的那份)变了:页签名跟着范围改、标未读(A3)
+        agentBus.applyBoard(ev.agents);
+      } else if (ev.type === "agent.spawn") {
+        // spawn_agent 拉起子 Agent:开一个带角色名的新页签(A3)
+        void agentBus.handleSpawn(ev);
       } else if (ev.type === "agent.ticket") {
         // Agent 服务端要一张 agent 角色的连接票据(共享项目;server/vite-plugin-ai.ts 的 requestTicket)
         void issueAgentTicket(ev);
@@ -431,7 +441,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         const args = ev.args as any;
         // 多 Agent:服务端把发起这次调用的 Agent 对话 ID 带过来(走 agy 或外部命令行的没有)
         const agent: string | null = typeof ev.agent === "string" && ev.agent ? ev.agent : null;
-        // 时间轴操作前后各看一眼项目,算出这次改了哪几条「剪辑->序列」,记到公告板上给别的 Agent 看
+        // 时间轴操作前后各看一眼项目,算出这次改了哪几条「剪辑->序列」,随回包带给服务端的公告板(没接文档服务时用)
         const before = TIMELINE_TOOLS.has(tool) ? getState().project : null;
         // 聊天栏要画「改之前」的那张卡:只有改卡 / 删卡的工具才拍这一份
         const visualBefore = CLIP_EDIT_TOOLS.has(tool) || tool === "remove_clip" ? cloneProject(getState().project) : null;
@@ -453,14 +463,10 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           if (missing.length > 0) {
             throw new Error(`缺少必填参数：${missing.join("、")}。请补齐后重试。`);
           }
-          // 多 Agent 协调的四个工具不碰编辑台,直接在公告板(agentBus)上办
-          if (tool === "declare_scope") result = agentBus.declareScope(agent, args);
-          else if (tool === "list_agents") result = agentBus.listAgents(agent);
-          else if (tool === "send_message") result = agentBus.sendMessage(agent, args);
-          else if (tool === "check_messages") result = agentBus.checkMessages(agent);
           // 一对一转发 EditorApi 的那一百来个工具走路由表(src/mcp/routes.mjs)。
           // await 与否照抄原分发链:表里说 awaited 才 await,不做统一。
-          else if (route) {
+          // (多 Agent 的公告板工具在编辑器进程里答,不再到页面来,计划 agent-workflow-plan.md A3)
+          if (route) {
             result = route.passArgs ? api[route.method](args) : api[route.method]();
             if (route.awaited) result = await result;
           }
@@ -502,18 +508,20 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         try { await flushDataMirror(); } catch { /* 推不上不影响这次结果;服务端没有新镜像时会退回经页面执行 */ }
 
         const opIds = pageOpIdsSince(opMark);
+        // 这次改了哪几条「剪辑->序列」随回包带回去:没接文档服务时,服务端的公告板靠它记改动(A3;接了就由提交流记)
+        let scopes: string[] = [];
+        if (ok && before) {
+          try { scopes = agentBus.diffScopes(before, getState().project); } catch { scopes = []; }
+        }
         fetch("/api/mcp/result", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id, ok, result, error, ...(opIds.length ? { opIds } : {}) })
+          body: JSON.stringify({ id, ok, result, error, ...(opIds.length ? { opIds } : {}), ...(scopes.length ? { scopes } : {}) })
         }).catch(() => {});
 
         // 做成了一次时间轴动作 → 给 SKILL 悬浮窗刷一张预览(只在无头实例里生效,失败静默)
         if (ok) {
           try { reportLastAction(api, tool, args, result); } catch { /* 预览是附带的,不影响结果 */ }
-          if (before) {
-            try { agentBus.noteToolChange(agent, tool, before, getState().project); } catch { /* 公告板是附带的 */ }
-          }
         }
       }
     };
@@ -531,6 +539,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
 
   return () => {
     active = false;
+    stopTabReports();
     if (source) {
       source.close();
       source = null;
