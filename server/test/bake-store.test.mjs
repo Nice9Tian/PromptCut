@@ -1,0 +1,257 @@
+/**
+ * `bake_card` 的卡片快照(预渲染的产物)经素材服务存取(`server/bake-store.mjs`;报告 `docs/reports/AGENT-bake-asset.md`;
+ * 语义 `docs/semantics/product/asset-service.md`「预渲染的产物」「职责」、`product/agent.md`「素材与产物」)。
+ *
+ * 用例(BKA = bake asset,卡片快照经素材服务):
+ *   BKA-1  写入与读回:PNG 经素材服务写进 `px`,地址 `/api/asset/px/<sha256>`,经 HTTP 取回的字节相同;同一个键再查命中;
+ *          素材目录里不出现它直接写的文件(没有 `bake-*.png`),索引目录里只有 `<键>.json`;
+ *   BKA-2  命中要问素材服务:索引里有、素材服务上没有这一块 → 当没渲过,索引条目删掉;
+ *   BKA-3  老地址:素材目录里以前落下的 `bake-<clip>-<键>.png` 经素材服务的老读路由照常能取;读时迁移把它推进 `px`
+ *          (字节相同)、记进索引,旧文件不动;不是 PNG 的不迁;
+ *   BKA-4  素材服务不可达 / 拒绝:取不到地址、连不上、HTTP 401 都抛 BakeStoreError,消息写明素材服务地址与原因;
+ *   BKA-5  盘点与淘汰:盘点只报收全的;淘汰只删索引里对得上的键(路径样的键碰不到别的文件),字节留在素材服务里;
+ *   BKA-6  共享项目:登记了远程素材服务时写入后再推一份过去,索引记 `pushed`;推失败的下次命中时补推;
+ *   BKA-7  源码守门:bake.ts / bake-cache.ts 不再引素材目录(`mediaDir`)、不再直接读写文件系统(`node:fs/promises`)。
+ *
+ * 跑:node --test server/test/bake-store.test.mjs(起的是真 HTTP 的素材服务,fs 实现落在临时目录;不要 Chrome、不要 ffmpeg)
+ */
+import assert from 'node:assert/strict';
+import { test, after } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import http from 'node:http';
+import crypto from 'node:crypto';
+import { createAssetHarness, ROOT } from './fake-asset-service.mjs';
+import { BakeStoreError, bakeUrlOf, createBakeStore, setBakeRemote, bakeRemote } from '../bake-store.mjs';
+import { createAssetClient } from '../asset-store/client.mjs';
+
+const harness = createAssetHarness();
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-bake-store-test-'));
+after(async () => {
+  setBakeRemote(null);
+  await harness.cleanup();
+  fs.rmSync(TMP, { recursive: true, force: true });
+});
+
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let seq = 0;
+const indexDir = () => path.join(TMP, `index-${++seq}`);
+/** 一张像样的 PNG:8 字节签名 + 随机尾巴(素材服务不解码,只看字节) */
+const png = (n = 2048) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), crypto.randomBytes(n)]);
+const listen = (handler) => new Promise((resolve) => {
+  const s = http.createServer(handler);
+  s.listen(0, '127.0.0.1', () => resolve({ server: s, origin: `http://127.0.0.1:${s.address().port}` }));
+});
+const closeServer = (s) => new Promise((resolve) => { s.closeAllConnections?.(); s.close(() => resolve()); });
+async function until(fn, ms = 5000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > end) return v;
+    await sleep(25);
+  }
+}
+/** 目录里递归列出的文件名 */
+function walk(dir) {
+  const out = [];
+  if (!fs.existsSync(dir)) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...walk(p)); else out.push(p);
+  }
+  return out;
+}
+
+test('BKA-1 写入与读回:PNG 经素材服务进 px,地址按内容哈希,取回字节相同;素材目录里没有它直接写的文件', async () => {
+  const srv = await harness.serve({ stores: 'default' }); // fs 实现:media → <root>/out/media,px → <root>/out/asset-store/px
+  const dir = indexDir();
+  const store = createBakeStore({ indexDir: dir, origin: () => srv.origin, remote: () => null });
+  const key = 'a1b2c3d4e5f6';
+  assert.equal(await store.lookup(key), null, '没渲过');
+  const bytes = png();
+  const e = await store.put(key, bytes, { width: 512, height: 512, clipId: 'c1', name: `bake-c1-${key}.png` });
+  assert.equal(e.hash, sha256(bytes));
+  assert.equal(e.url, bakeUrlOf(e.hash));
+  assert.match(e.url, /^\/api\/asset\/px\/[0-9a-f]{64}$/);
+  assert.equal(e.bytes, bytes.length);
+
+  const res = await fetch(`${srv.origin}${e.url}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), bytes, '经素材服务取回的字节相同');
+
+  const hit = await store.lookup(key);
+  assert.equal(hit?.hash, e.hash, '再查命中');
+  assert.equal(hit.url, e.url);
+
+  const mediaFiles = walk(path.join(srv.root, 'out', 'media')).map((f) => path.basename(f));
+  assert.deepEqual(mediaFiles.filter((n) => /^bake-/.test(n)), [], '素材目录里没有 bake-*.png');
+  assert.ok(!mediaFiles.some((n) => n.startsWith(e.hash)), '也不在素材(media)命名空间里');
+  assert.deepEqual(fs.readdirSync(dir), [`${key}.json`], '索引目录里只有 <键>.json');
+  const idx = JSON.parse(fs.readFileSync(path.join(dir, `${key}.json`), 'utf8'));
+  assert.equal(idx.hash, e.hash);
+  assert.equal(idx.clipId, 'c1');
+  // 素材服务那一侧确实收全了(对账是唯一事实来源)
+  const st = await (await fetch(`${srv.base}/px/${e.hash}/chunks`)).json();
+  assert.equal(st.complete, true);
+  await srv.close();
+});
+
+test('BKA-2 命中要问素材服务:索引里有、素材服务上没有 → 当没渲过,索引条目删掉', async () => {
+  const srv = await harness.serve(); // memory 实现
+  const dir = indexDir();
+  const store = createBakeStore({ indexDir: dir, origin: () => srv.origin, remote: () => null });
+  fs.mkdirSync(dir, { recursive: true });
+  const key = 'bbbbbbbbbbbb';
+  fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify({ key, hash: 'cd'.repeat(32), bytes: 10 }));
+  assert.equal(await store.lookup(key), null);
+  assert.ok(!fs.existsSync(path.join(dir, `${key}.json`)), '过期的索引条目删掉');
+  // 坏条目(不是 JSON / 键对不上)当没有
+  fs.writeFileSync(path.join(dir, `${key}.json`), '{oops');
+  assert.equal(await store.lookup(key), null);
+  assert.equal(await store.lookup('../../etc/x'), null, '不合格的键不碰文件系统');
+  await srv.close();
+});
+
+test('BKA-3 老地址照常能取;读时迁移经素材服务把旧文件推进 px,旧文件不动;不是 PNG 的不迁', async () => {
+  const srv = await harness.serve({ stores: 'default' });
+  const media = path.join(srv.root, 'out', 'media');
+  const key = 'c0ffee123456';
+  const name = `bake-clip_1-${key}.png`;
+  const old = png(4096);
+  fs.writeFileSync(path.join(media, name), old); // 以前的 bake_card 落下的文件(测试布置现场,不是被测代码写的)
+
+  // 老项目参数里存着的 /@media/bake-….png:素材服务的老读路由照常答
+  const legacy = await fetch(`${srv.origin}/@media/${encodeURIComponent(name)}`);
+  assert.equal(legacy.status, 200);
+  assert.deepEqual(Buffer.from(await legacy.arrayBuffer()), old);
+
+  const seen = [];
+  const counting = (url, init) => { seen.push(String(url)); return fetch(url, init); };
+  const store = createBakeStore({ indexDir: indexDir(), origin: () => srv.origin, fetchImpl: counting, remote: () => null });
+  assert.equal(await store.lookup(key), null, '索引里还没有');
+  const moved = await store.migrateLegacy(key, name, { width: 800, height: 450, clipId: 'clip_1' });
+  assert.ok(moved?.migrated, '迁移了');
+  assert.equal(moved.hash, sha256(old));
+  assert.ok(seen.some((u) => u.endsWith(`/@media/${encodeURIComponent(name)}`)), '旧文件经素材服务的老读路由取');
+  const back = await fetch(`${srv.origin}${moved.url}`);
+  assert.deepEqual(Buffer.from(await back.arrayBuffer()), old, 'px 里的字节与旧文件相同');
+  assert.ok(fs.existsSync(path.join(media, name)), '旧文件不删');
+  assert.equal((await store.lookup(key))?.hash, moved.hash, '之后直接命中');
+  const again = await fetch(`${srv.origin}/@media/${encodeURIComponent(name)}`);
+  assert.equal(again.status, 200, '老地址迁移之后照样能取');
+
+  // 没有旧文件:回 null;不是 PNG 的:不迁
+  assert.equal(await store.migrateLegacy('dddddddddddd', 'bake-x-dddddddddddd.png'), null);
+  fs.writeFileSync(path.join(media, 'bake-x-eeeeeeeeeeee.png'), 'not a png');
+  assert.equal(await store.migrateLegacy('eeeeeeeeeeee', 'bake-x-eeeeeeeeeeee.png'), null);
+  // 名字不像老格式的不去取(不拿它当任意文件的读口)
+  assert.equal(await store.migrateLegacy('ffffffffffff', '../secret.png'), null);
+  assert.equal(await store.migrateLegacy('ffffffffffff', 'foo.mp4'), null);
+  await srv.close();
+});
+
+test('BKA-4 素材服务不可达 / 拒绝:回清楚的错(写明地址与原因)', async () => {
+  const none = createBakeStore({ indexDir: indexDir(), origin: () => null, remote: () => null });
+  await assert.rejects(none.put('aaaaaaaaaaaa', png()), (e) => e instanceof BakeStoreError && e.kind === 'asset-service' && /素材服务不可达.*取不到素材服务的地址/.test(e.message));
+
+  const s = await listen(() => {});
+  const closed = s.origin;
+  await closeServer(s.server);
+  const down = createBakeStore({ indexDir: indexDir(), origin: () => closed, remote: () => null, retries: 0, timeoutMs: 3000 });
+  await assert.rejects(down.put('aaaaaaaaaaaa', png()), (e) => e instanceof BakeStoreError && e.message.includes(`素材服务不可达(${closed}/api/asset)`) && /写入/.test(e.message));
+  await assert.rejects(down.migrateLegacy('aaaaaaaaaaaa', 'bake-a-aaaaaaaaaaaa.png'), (e) => e instanceof BakeStoreError && e.message.includes(closed));
+  // 索引里有的键,问对账时连不上:也是清楚的错,不当成「没渲过」
+  const dir = indexDir();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'aaaaaaaaaaaa.json'), JSON.stringify({ key: 'aaaaaaaaaaaa', hash: 'ab'.repeat(32), bytes: 5 }));
+  const down2 = createBakeStore({ indexDir: dir, origin: () => closed, remote: () => null, retries: 0, timeoutMs: 3000 });
+  await assert.rejects(down2.lookup('aaaaaaaaaaaa'), (e) => e instanceof BakeStoreError && /素材服务不可达/.test(e.message));
+  assert.ok(fs.existsSync(path.join(dir, 'aaaaaaaaaaaa.json')), '连不上时不删索引');
+
+  // 拒绝(非本机、没票据 → 401)
+  const srv = await harness.serve({ isTrusted: () => false, tickets: null });
+  const denied = createBakeStore({ indexDir: indexDir(), origin: () => srv.origin, remote: () => null, retries: 0 });
+  await assert.rejects(denied.put('aaaaaaaaaaaa', png()), (e) => e instanceof BakeStoreError && e.status === 401 && e.message.includes(`素材服务拒绝了写入(${srv.base},HTTP 401)`));
+  await srv.close();
+});
+
+test('BKA-5 盘点只报收全的;淘汰只删索引里对得上的键,字节留在素材服务里', async () => {
+  const srv = await harness.serve();
+  const dir = indexDir();
+  const store = createBakeStore({ indexDir: dir, origin: () => srv.origin, remote: () => null });
+  const a = await store.put('111111111111', png(100));
+  const b = await store.put('222222222222', png(200));
+  fs.writeFileSync(path.join(dir, '333333333333.json'), JSON.stringify({ key: '333333333333', hash: 'ef'.repeat(32), bytes: 7 }));
+  const st = await store.status(['111111111111', '222222222222', '333333333333', '444444444444', 'nope']);
+  assert.deepEqual([...st.keys()].sort(), ['111111111111', '222222222222']);
+  assert.equal(st.get('111111111111').url, a.url);
+  assert.ok(!fs.existsSync(path.join(dir, '333333333333.json')), '素材服务里没有的,索引条目当场删掉');
+
+  const list = await store.list();
+  assert.equal(list.length, 2);
+  fs.writeFileSync(path.join(TMP, 'victim.txt'), 'keep me');
+  const ev = await store.evict(['111111111111', '../victim', '/etc/passwd', 42, 'zzzzzzzzzzzz']);
+  assert.deepEqual(ev.deleted, ['111111111111']);
+  assert.equal(ev.freedBytes, a.bytes);
+  assert.ok(fs.existsSync(path.join(TMP, 'victim.txt')), '路径样的键碰不到别的文件');
+  assert.equal(await store.lookup('111111111111'), null, '淘汰后不再命中');
+  assert.equal((await store.lookup('222222222222'))?.hash, b.hash);
+  const still = await fetch(`${srv.origin}${a.url}`);
+  assert.equal(still.status, 200, '字节留在素材服务里(没有删除接口)');
+  // 同一张图再写一次:只是一次对账,不重传
+  const client = createAssetClient({ base: srv.base });
+  assert.equal((await client.put('px', await (await fetch(`${srv.origin}${a.url}`)).arrayBuffer().then((x) => Buffer.from(x)))).uploaded, false);
+  await srv.close();
+});
+
+test('BKA-6 共享项目:登记了远程素材服务时写入后再推一份过去;推失败的下次命中时补推', async () => {
+  const local = await harness.serve();
+  const remote = await harness.serve();
+  const dir = indexDir();
+  const events = [];
+  let remoteClient = createAssetClient({ base: remote.base });
+  setBakeRemote(() => remoteClient);
+  assert.equal(bakeRemote(), remoteClient);
+  const store = createBakeStore({ indexDir: dir, origin: () => local.origin, log: (ev, f) => events.push({ ev, ...f }) });
+  const bytes = png(300);
+  const e = await store.put('555555555555', bytes);
+  const pushed = await until(async () => (await fetch(`${remote.base}/px/${e.hash}/chunks`).then((r) => r.json())).complete === true);
+  assert.ok(pushed, '远程素材服务收全了');
+  const got = await fetch(`${remote.origin}${e.url}`);
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()), bytes, '远程取回的字节相同');
+  assert.ok(await until(() => JSON.parse(fs.readFileSync(path.join(dir, '555555555555.json'), 'utf8')).pushed === remote.base), '索引记下推到哪一台');
+
+  // 推失败(远程连不上):写入照常成功;换回能连的远程后,下次命中时补推
+  const s = await listen(() => {});
+  const closed = s.origin;
+  await closeServer(s.server);
+  remoteClient = createAssetClient({ base: `${closed}/api/asset`, retries: 0, timeoutMs: 2000 });
+  const f = await store.put('666666666666', png(400));
+  assert.ok(await until(() => events.some((x) => x.ev === 'bake.push-failed' && x.key === '666666666666')), '推失败记日志,不抛');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '666666666666.json'), 'utf8')).pushed, undefined);
+  remoteClient = createAssetClient({ base: remote.base });
+  assert.equal((await store.lookup('666666666666'))?.hash, f.hash);
+  assert.ok(await until(async () => (await fetch(`${remote.base}/px/${f.hash}/chunks`).then((r) => r.json())).complete === true), '命中时补推上去了');
+  setBakeRemote(null);
+  assert.equal(bakeRemote(), null);
+  await local.close();
+  await remote.close();
+});
+
+test('BKA-7 源码守门:bake.ts / bake-cache.ts 不再引素材目录、不再直接读写文件系统', () => {
+  for (const f of ['server/vision/bake.ts', 'server/vision/bake-cache.ts']) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    assert.doesNotMatch(src, /\bmediaDir\b/, `${f} 不引 mediaDir`);
+    assert.doesNotMatch(src, /from "node:fs(\/promises)?"/, `${f} 不直接读写文件系统`);
+    assert.doesNotMatch(src, /vite-plugin-media/, `${f} 不引媒体插件`);
+  }
+  const bake = fs.readFileSync(path.join(ROOT, 'server/vision/bake.ts'), 'utf8');
+  assert.match(bake, /store\.put\(key, r\.buf/, '渲好的字节经 bake-store 入库');
+  assert.match(bake, /store\.lookup\(key\)/, '命中经 bake-store 问');
+  assert.match(bake, /store\.migrateLegacy\(key, name/, '单张那条路做读时迁移');
+  assert.match(bake, /store\.migrateLegacy\(tg\.key, tg\.name/, '批量那条路做读时迁移');
+});
