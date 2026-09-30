@@ -21,7 +21,7 @@ export type StageLayout = "dual" | "single";
 export const RUNTIME_CONFIG_FILE = "runtime-config.json";
 /** 取运行配置的时限 */
 export const RUNTIME_CONFIG_TIMEOUT_MS = 5000;
-/** 两个舞台都握上手的时限;过了算握手失败,退回同源单舞台 */
+/** 每个舞台从自己 iframe 的 `load` 起等握手的时限;过了算握手失败,退回同源单舞台(计时与总上限见 `stageHandshake.ts`) */
 export const STAGE_HANDSHAKE_TIMEOUT_MS = 20_000;
 
 /** 一个源:`http(s)://host[:port]`,不带路径、查询与片段 */

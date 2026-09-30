@@ -53,7 +53,8 @@ import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.
 import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { layerSwapMs } from "./swapCost";
-import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
+import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages } from "../online/stageOrigins";
+import { createStageHandshake, type StageHandshake } from "../online/stageHandshake";
 import { createStageWatch, type StageWatch } from "../online/stageWatch";
 import { builtinSourceExports } from "../cards/builtinSourceExports";
 import { pageL2 } from "../online/l2";
@@ -247,6 +248,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const handshookRef = useRef(new Set<StageId>());
   /** 在线双舞台握手之后的看守(心跳断 → 重载那一台 → 重载也握不回来就退回单舞台;`src/online/stageWatch.ts`) */
   const stageWatchRef = useRef<StageWatch | null>(null);
+  /** 在线双舞台的首次握手计时(每台从自己 iframe 的 `load` 起算,另有总上限;`src/online/stageHandshake.ts`) */
+  const handshakeRef = useRef<StageHandshake | null>(null);
+  /**
+   * 在线双舞台:后台舞台 B 等可见舞台 A 的 iframe `load` 之后才挂〔裁:2026-09-30 `claude/stage-handshake`〕。
+   * 两个舞台各在自己的源上、各下一遍主脚本,同时下载就平分带宽;慢网络下让 A 先独占带宽,用户先看到画面,
+   * B 的握手时限从 B 自己的 `load` 起算,不吃亏。桌面(本机)不受影响,照旧一起挂。
+   */
+  const [backStageMount, setBackStageMount] = useState(false);
   /**
    * 下面那一堆(拖动、命中、心跳、节拍)问的都是**可见舞台**。
    *
@@ -604,6 +613,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         // 回包发给这个 iframe 此刻真实的源(换源重载的过渡期里 `stageTargetOrigin` 可能已经是另一个)
         const client = createStageRpc(win, e.origin && e.origin !== "null" ? e.origin : stageTargetOrigin(id));
         handshookRef.current.add(id);
+        handshakeRef.current?.ready(id);
         if (ONLINE && dualRef.current && handshookRef.current.has("A") && handshookRef.current.has("B")) markStageHandshake("ok");
         stageWatchRef.current?.ready(id);
         rpcRef.current[id] = client;
@@ -640,15 +650,38 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [glPortTo]);
 
+  /*
+   * 首次握手(C10 契约第 2 节;〔裁〕2026-09-30 `claude/stage-handshake`):每台的 20 秒从那一台 iframe 的 `load` 起算
+   * (慢网络下舞台页光下载就要几十秒,不再算作握手失败),自挂上起另有总上限;到点没都握上照旧退回同源单舞台。
+   */
   useEffect(() => {
     if (!ONLINE || !dual) return;
     handshookRef.current = new Set();
-    const timer = window.setTimeout(() => {
-      const got = [...handshookRef.current];
-      if (got.length < 2) markStageHandshake("failed", `握上手的舞台:${got.join("、") || "无"}`);
-    }, STAGE_HANDSHAKE_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
+    const hs = createStageHandshake({
+      ids: STAGE_IDS,
+      fail: (reason) => {
+        console.warn(`[preview] ${reason},退回同源单舞台`);
+        markStageHandshake("failed", reason);
+      },
+      ok: () => markStageHandshake("ok"),
+    });
+    handshakeRef.current = hs;
+    // 这一轮已经握过手的舞台(effect 晚于握手跑到时)照样记上
+    for (const id of STAGE_IDS) if (rpcRef.current[id]) hs.ready(id);
+    const w = window as unknown as { __pcStageHandshake?: () => unknown };
+    w.__pcStageHandshake = () => hs.status();
+    return () => {
+      hs.dispose();
+      if (handshakeRef.current === hs) handshakeRef.current = null;
+      // 退回之后留着观察口(探针核退回的原因与时刻)
+      if (hs.phase !== "failed") delete w.__pcStageHandshake;
+    };
   }, [dual]);
+  /** 舞台 iframe 的 `load`(跨源也触发):首次握手按它起算;A 加载完才挂 B */
+  const onStageFrameLoad = useCallback((id: StageId) => {
+    handshakeRef.current?.loaded(id);
+    if (id === "A") setBackStageMount(true);
+  }, []);
 
   /*
    * 握手之后又断(C10 契约第 2 节「握手之后又断」〔裁〕):已握手的舞台心跳断了(卡死、跨源 iframe 的渲染进程崩了),
@@ -1978,6 +2011,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                  * 不是要看构图草图。代理只活在 3D 视图里,而且只是预渲染没跟上时的过渡。
                  */
                 src={stageSrc("A")}
+                onLoad={() => onStageFrameLoad("A")}
                 style={{
                   position: "absolute",
                   inset: 0,
@@ -2001,12 +2035,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                   ...(frontId === "A" ? null : { pointerEvents: "none" as const }),
                 }}
               />}
-              {dual && !stagesPending && (
+              {dual && !stagesPending && (!ONLINE || backStageMount) && (
                 <iframe
                   ref={frameRefOf.B}
                   data-pc="stage-frame-back"
                   title="后台舞台"
                   src={stageSrc("B")}
+                  onLoad={() => onStageFrameLoad("B")}
                   style={{
                     position: "absolute",
                     inset: 0,
