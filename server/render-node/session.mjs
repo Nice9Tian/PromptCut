@@ -50,8 +50,13 @@ export function createNodeSession({
   projects = 'all',
   onTask = () => {},
   onLost = () => {},
-  // 这个任务此刻能不能开工(契约 A.12〔裁〕:独立渲染主机只在预渲染间空着时认领快照,见 host.mjs);缺省都能
+  // 这个任务此刻能不能开工(契约 A.12〔裁〕:独立渲染主机只在预渲染间空着时认领快照,见 host.mjs);缺省都能。
+  // 第二个参数 `{ held }` 是此刻的持有数:认领闸(下一项)多给的那一格只接特定的任务时用它区分
   canClaim = () => true,
+  // 此刻最多持有几项(认领闸,`mechanism/rendering.md`「Agent 优先只是插队」):缺省恒为 `maxConcurrent`。
+  // 本机节点在 Agent 专用实例开着且空闲时给 `maxConcurrent + 1`,多认领一项交给它做(`vite-plugin-frames.ts`)。
+  // `node.hello` 报的仍是 `maxConcurrent`
+  claimLimit = null,
 }) {
   const settings = { ...QUEUE_DEFAULTS, ...constants };
   /** 本地看到的 open 任务:id → TaskView */
@@ -240,10 +245,15 @@ export function createNodeSession({
       hold.lastSentAt = at;
       send(progressMessage(hold));
     }
-    if (inflight || !isIdle() || holds.size >= maxConcurrent || at < throttledUntil) return;
+    let limit = maxConcurrent;
+    if (typeof claimLimit === 'function') {
+      try { const n = Number(claimLimit()); limit = Number.isInteger(n) && n >= 0 ? n : maxConcurrent; } catch { limit = maxConcurrent; }
+    }
+    if (inflight || !isIdle() || holds.size >= limit || at < throttledUntil) return;
+    const held = holds.size;
     for (const [id, until] of deferred) if (until <= at || !open.has(id)) deferred.delete(id);
     const candidates = filterClaimable(known0().filter(task => !holds.has(task.id) && !deferred.has(task.id)), filterNode())
-      .filter(task => { try { return canClaim(task) !== false; } catch { return false; } });
+      .filter(task => { try { return canClaim(task, { held }) !== false; } catch { return false; } });
     const task = pickCandidate(candidates, { k: settings.PICK_K, random, lastProjectId });
     if (!task) return;
     inflight = { id: task.id, projectId: task.source?.projectId ?? null };

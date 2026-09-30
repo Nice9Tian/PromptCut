@@ -1,9 +1,10 @@
 /**
  * `POST /api/audio/measure-js` 的主体(自定义测量 `measure_audio_js`,计划 `docs/plan/agent-workflow-plan.md` A6):
- * 按「测谁」找到素材文件 → ffmpeg 解成 PCM(`audio-pcm.mjs`)→ 交沙箱跑 Agent 写的 JS(`audio-sandbox.mjs`)→ 只回 JSON。
+ * 按「测谁」在素材服务上找到素材 → ffmpeg 解成 PCM(`audio-pcm.mjs`)→ 交沙箱跑 Agent 写的 JS(`audio-sandbox.mjs`)→ 只回 JSON。
  *
- * 不依赖 vite:素材文件怎么找(`resolveFile`,和 `measure_audio` 同一个 `mediaFileOf`)、ffmpeg 在哪、沙箱,都由调用方注入,
- * `server/test/audio-measure-js.test.mjs` 直接测它。
+ * 不依赖 vite:素材从哪儿读(`resolveSource`,和 `measure_audio` 同一个解析器:素材服务上的 HTTP 地址,见 `audio-source.mjs`)、
+ * ffmpeg 在哪、沙箱,都由调用方注入,`server/test/custom-measure.test.mjs`、`audio-asset-path.test.mjs` 直接测它。
+ * 素材服务不可达或拒绝读取时回 `kind: 'asset-service'`。
  *
  * body(由 `src/mcp/common.ts` 的 `measureAudioJs` 拼):
  *   { scope: 'clip'|'media'|'timeline', media?, offset?, duration?, entries?, total?,
@@ -12,9 +13,10 @@
  * start / length 是在这段声音里再截的窗口(秒)。
  */
 import { execFileSync } from "node:child_process";
+import { AssetSourceError, probeAudioChannelsAsync } from "./audio-source.mjs";
 import { PCM_LIMITS, pcmFormat, sampleBudgetError, windowOf, filePcmArgs, timelinePcmArgs, decodePcm } from "./audio-pcm.mjs";
 
-/** 第一条音频流的声道数;没有音频流回 0 */
+/** 第一条音频流的声道数;没有音频流回 0。同步版,只给单测和本地文件用;测量走 `probeAudioChannelsAsync`(输入是 HTTP 地址时同步会卡住事件循环) */
 export function probeAudioChannels(file, ffprobe) {
   try {
     const out = execFileSync(
@@ -34,15 +36,27 @@ const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : undefined)
 /**
  * @param {object} p
  * @param {object} p.body
- * @param {(media: any) => string | null} p.resolveFile 素材 → 素材目录里的真实文件(越界或不存在回 null)
+ * @param {(media: any) => (string | null | Promise<string | null>)} [p.resolveSource] 素材 → ffmpeg 的输入(素材服务上的 HTTP 地址);
+ *   没有这份素材回 null;素材服务不可达抛 `AssetSourceError`
+ * @param {(media: any) => string | null} [p.resolveFile] 旧名,同 resolveSource(单测给本地文件用)
  * @param {string} p.ffmpeg
  * @param {string} p.ffprobe
  * @param {{ run: Function }} p.sandbox
  * @param {typeof PCM_LIMITS} [p.pcmLimits]
- * @param {(file: string, ffprobe: string) => number} [p.probeChannels]
+ * @param {(src: string, ffprobe: string) => (number | Promise<number>)} [p.probeChannels]
  * @returns {Promise<{ status: number, body: object }>}
  */
-export async function measureJs({ body, resolveFile, ffmpeg, ffprobe, sandbox, pcmLimits = PCM_LIMITS, probeChannels = probeAudioChannels }) {
+export async function measureJs({ body, resolveSource, resolveFile, ffmpeg, ffprobe, sandbox, pcmLimits = PCM_LIMITS, probeChannels = probeAudioChannelsAsync }) {
+  const resolve = resolveSource ?? resolveFile;
+  try {
+    return await measureJsInner({ body, resolve, ffmpeg, ffprobe, sandbox, pcmLimits, probeChannels });
+  } catch (e) {
+    if (e instanceof AssetSourceError) return { status: 200, body: { ok: false, kind: "asset-service", error: e.message } };
+    throw e;
+  }
+}
+
+async function measureJsInner({ body, resolve, ffmpeg, ffprobe, sandbox, pcmLimits, probeChannels }) {
   const bad = (error, kind = "invalid") => ({ status: 200, body: { ok: false, kind, error } });
   if (!body || typeof body !== "object") return bad("请求体不对");
   const code = body.code;
@@ -55,9 +69,9 @@ export async function measureJs({ body, resolveFile, ffmpeg, ffprobe, sandbox, p
   let expected;
   let source;
   if (body.scope === "clip" || body.scope === "media") {
-    const file = resolveFile(body.media);
+    const file = await resolve(body.media);
     if (!file) return bad("素材文件不存在", "no-media");
-    const n = probeChannels(file, ffprobe);
+    const n = await probeChannels(file, ffprobe);
     if (!n) return bad("该文件没有音频流", "no-audio");
     channels = mono ? 1 : Math.min(pcmLimits.maxChannels, n);
     if (!mono && n > pcmLimits.maxChannels) notes.push(`源有 ${n} 个声道,混成了立体声`);
@@ -77,8 +91,8 @@ export async function measureJs({ body, resolveFile, ffmpeg, ffprobe, sandbox, p
     const skipped = [];
     let monoSources = 0;
     for (const e of Array.isArray(body.entries) ? body.entries : []) {
-      const file = resolveFile(e?.media);
-      const n = file ? probeChannels(file, ffprobe) : 0;
+      const file = await resolve(e?.media);
+      const n = file ? await probeChannels(file, ffprobe) : 0;
       if (!n) { skipped.push(e?.media?.name || e?.clipId || "未知片段"); continue; }
       if (n === 1) monoSources += 1;
       entries.push({ ...e, file });

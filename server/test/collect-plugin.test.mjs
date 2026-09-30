@@ -7,7 +7,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
+import crypto from 'node:crypto';
+import http from 'node:http';
+import { createAssetHarness } from './fake-asset-service.mjs';
 import { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -30,6 +33,8 @@ function compile(srcRel, outName, rewrites = []) {
 
 compile('server/vite-plugin-stt.ts', 'stt.mjs');
 compile('server/vite-plugin-media.ts', 'media.mjs');
+compile('server/asset-client.ts', 'asset-client.mjs');
+const ingestUrl = pathToFileURL(path.join(ROOT, 'server', 'media-ingest.mjs')).href;
 compile('server/vite-plugin-web.ts', 'web.mjs', [
   ['from "./vite-plugin-stt"', 'from "./stt.mjs"'],
 ]);
@@ -39,6 +44,8 @@ const guardUrl = pathToFileURL(path.join(ROOT, 'server', 'http-guard.mjs')).href
 const collectUrl = compile('server/vite-plugin-collect.ts', 'collect.mjs', [
   ['from "./vite-plugin-stt"', 'from "./stt.mjs"'],
   ['from "./vite-plugin-media"', 'from "./media.mjs"'],
+  ['from "./asset-client"', 'from "./asset-client.mjs"'],
+  ['from "./media-ingest.mjs"', `from "${ingestUrl}"`],
   ['from "./vite-plugin-web"', 'from "./web.mjs"'],
   ['from "./collect-cookies.mjs"', `from "${cookiesUrl}"`],
   ['from "./collect-qr-login.mjs"', `from "${qrLoginUrl}"`],
@@ -54,6 +61,15 @@ process.env.PROMPTCUT_PYTHON = path.join(ROOT, 'server', 'test', 'fake-collect.c
 // 项目根用临时目录:buildEnv 会在 <root>/out 下建 pylibs / models
 const FAKE_ROOT = path.join(OUT, 'root');
 fs.mkdirSync(FAKE_ROOT, { recursive: true });
+
+// 下载结果经素材服务的入库接口进内容库(server/media-ingest.mjs):起一台真的素材服务(fs 内容库 + 媒体中间件),
+// 编辑器进程的素材服务地址指向它(asset-client.ts 的 assetServiceOrigin 先看 PROMPTCUT_EDITOR_URL)
+const harness = createAssetHarness();
+const assetSvc = await harness.serve({ stores: 'default' });
+process.env.PROMPTCUT_EDITOR_URL = assetSvc.origin;
+after(async () => { await harness.cleanup(); delete process.env.PROMPTCUT_EDITOR_URL; });
+/** fake-collect.cmd 写进 --out-dir 的那份内容(echo 带 CRLF) */
+const FAKE_BYTES = Buffer.from('fake video bytes\r\n');
 
 const { collectPlugin } = await import(collectUrl);
 
@@ -147,13 +163,13 @@ test('probe 失败:ok:false 且 error 是 Python 报的那句', async () => {
   }
 });
 
-test('download:立刻回 jobId;轮到 done 时 items 带 /@media/ 地址、percent 100、notes 有重试记录', async () => {
+test('MI-5 download:立刻回 jobId;轮到 done 时 items 带入库后的 /@media/<hash>、percent 100、notes 有重试记录;素材目录里没有绕过入库的文件', async () => {
   const fn = handlerOf();
   const started = await call(fn, 'POST', '/api/collect/download', { url: 'BV1FAKE00000', quality: 720 });
   assert.equal(started.status, 200);
   assert.equal(started.json.ok, true);
   assert.match(started.json.jobId, /^[\w-]{8}$/);
-  assert.equal(started.json.outDir, path.resolve(FAKE_ROOT, 'out', 'media'), '要下到素材目录,和上传同一个');
+  assert.equal(started.json.outDir, undefined, '不再回素材目录:下载先落临时目录,再经素材服务入库');
 
   const job = await waitJob(fn, started.json.jobId);
   assert.equal(job.status, 'done', JSON.stringify(job));
@@ -164,7 +180,18 @@ test('download:立刻回 jobId;轮到 done 时 items 带 /@media/ 地址、perce
   assert.equal(job.items.length, 1);
   const item = job.items[0];
   assert.equal(item.filename, 'Fake Video [BV1FAKE00000].mp4');
-  assert.equal(item.url, '/@media/' + encodeURIComponent('Fake Video [BV1FAKE00000].mp4'));
+  const hash = crypto.createHash('sha256').update(FAKE_BYTES).digest('hex');
+  assert.equal(item.hash, hash, '内容哈希是素材服务入库时算的');
+  assert.equal(item.url, `/@media/${hash}`);
+  assert.equal(item.media?.hash, hash, '入库回包原样带给页面');
+  assert.equal(item.path, undefined, '不再给临时文件的磁盘路径');
+  // 字节确实在素材服务的内容库里,经它的接口取得到
+  const got = await fetch(`${assetSvc.origin}/@media/${hash}`);
+  assert.equal(got.status, 200);
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()), FAKE_BYTES);
+  // 编辑器自己的素材目录里没有绕过入库落下的文件
+  const own = path.join(FAKE_ROOT, 'out', 'media');
+  assert.deepEqual(fs.existsSync(own) ? fs.readdirSync(own) : [], [], '素材目录里不该出现下载直接落下的文件');
   assert.equal(item.vcodec, 'h264');
   assert.equal(item.width, 1920);
   assert.ok(job.notes.some((n) => /412/.test(n)), '412 重试要记进 notes:' + JSON.stringify(job.notes));
@@ -183,6 +210,30 @@ test('download:done 事件之后进程还没退,轮询看到的仍是 running;�
   } finally {
     delete process.env.PROMPTCUT_FAKE_LINGER;
   }
+});
+
+test('MI-6 download:素材服务不可达时作业报错(写明素材服务地址),素材目录与临时目录都不留文件', async () => {
+  const fn = handlerOf();
+  const gone = await new Promise((resolve) => {
+    const srv = http.createServer(() => {});
+    srv.listen(0, '127.0.0.1', () => { const o = `http://127.0.0.1:${srv.address().port}`; srv.close(() => resolve(o)); });
+  });
+  const privateTmp = fs.mkdtempSync(path.join(OUT, 'os-tmp-'));
+  const saved = { url: process.env.PROMPTCUT_EDITOR_URL, TEMP: process.env.TEMP, TMP: process.env.TMP };
+  Object.assign(process.env, { PROMPTCUT_EDITOR_URL: gone, TEMP: privateTmp, TMP: privateTmp });
+  try {
+    const r = await call(fn, 'POST', '/api/collect/download', { url: 'BV1FAKE00030' });
+    const job = await waitJob(fn, r.json.jobId);
+    assert.equal(job.status, 'error', JSON.stringify(job));
+    assert.ok(job.message.includes(`素材服务不可达(${gone})`), job.message);
+    assert.equal(job.items.length, 0);
+  } finally {
+    Object.assign(process.env, { PROMPTCUT_EDITOR_URL: saved.url, TEMP: saved.TEMP, TMP: saved.TMP });
+  }
+  const own = path.join(FAKE_ROOT, 'out', 'media');
+  assert.deepEqual(fs.existsSync(own) ? fs.readdirSync(own) : [], []);
+  for (let i = 0; i < 50 && fs.readdirSync(privateTmp).some((n) => n.startsWith('pc-collect-')); i++) await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(fs.readdirSync(privateTmp).filter((n) => n.startsWith('pc-collect-')), [], '作业的临时目录要删掉');
 });
 
 test('download:清晰度不在白名单里就退回 1080;site 不认识退回 auto', async () => {

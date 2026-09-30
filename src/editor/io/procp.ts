@@ -193,22 +193,43 @@ export function inflate(entry: ReadEntry): Blob | Promise<Blob> {
 
 /* ------------------------------ 装包 / 拆包 ------------------------------ */
 
-/** 项目里每条素材的 <hash>.<ext>(按哈希去重) */
-function mediaEntries(project: Project): { hash: string; file: string }[] {
-  const seen = new Map<string, string>();
+/** 进不了包的一条素材(补入库之后仍没有哈希,或内容库里取不到它的字节):调用方据此把名字列给用户 */
+export interface PackMissing { id: string; name: string }
+
+/**
+ * 项目里每条素材的 <hash>.<ext>(按哈希去重),以及**没有合法哈希、因此装不进包的条目**。
+ * 没哈希的不许悄悄跳过:它们一律出现在 `unhashed` 里,由装包的返回值带给调用方(打包结束时提示用户)。
+ */
+export function mediaEntries(project: Project): { entries: { hash: string; file: string; ids: string[] }[]; unhashed: PackMissing[] } {
+  const seen = new Map<string, { file: string; ids: string[] }>();
+  const unhashed: PackMissing[] = [];
   for (const m of project.media || []) {
-    if (!m.hash || seen.has(m.hash)) continue;
+    const hash = String(m.hash || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash)) { unhashed.push({ id: m.id, name: m.name }); continue; }
+    const hit = seen.get(hash);
+    if (hit) { hit.ids.push(m.id); continue; }
     const ext = (m.ext || (m.name || "").split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    seen.set(m.hash, ext ? `${m.hash}.${ext}` : m.hash);
+    seen.set(hash, { file: ext ? `${hash}.${ext}` : hash, ids: [m.id] });
   }
-  return [...seen].map(([hash, file]) => ({ hash, file }));
+  return { entries: [...seen].map(([hash, v]) => ({ hash, file: v.file, ids: v.ids })), unhashed };
+}
+
+export interface PackResult {
+  blob: Blob;
+  /** 包里缺的素材(文件真的不在了):打包结束时把名字列给用户 */
+  missing: PackMissing[];
 }
 
 /**
- * 当前项目 → .procp 包。素材从本地内容库按 /@media/<hash> 取回来装进去;
- * 取不到的那条跳过(包里缺它,拆包方会当成缺失素材),不让一条坏素材毁掉整次导出。
+ * 当前项目 → .procp 包。
+ *
+ * 先把没有哈希、本机还取得到字节的老素材补入库(`ingestUnhashedMedia`,写回素材表),再序列化编排 ——
+ * 包里的 `project.proc` 因此也带哈希,对面按哈希还原。素材从本地内容库按 /@media/<hash> 取回来装进去;
+ * 取不到的那条不让它毁掉整次打包,但一定出现在返回值的 `missing` 里。
  */
-export async function packProcp(): Promise<Blob> {
+export async function packProcp(): Promise<PackResult> {
+  const { ingestUnhashedMedia } = await import("./mediaUpload.ts");
+  await ingestUnhashedMedia();
   const { serializeProc } = await import("./proc.ts");
   const { getState } = await import("../../store/project.ts");
   // 桌面:本地内容库的 /@media/<hash>;在线页面:远程素材服务上的原尺寸(带只读票据),还没就绪给 ""(跳过)
@@ -220,20 +241,37 @@ export async function packProcp(): Promise<Blob> {
  * 装包本体。和 store 分开是为了能单测(见 procp.test.mjs)—— 它只认一份编排文本
  * 和一份 Project,素材从 /@media/<hash> 取。
  */
-export async function packProcpFrom(procText: string, project: Project, urlOf: (hash: string) => string = (hash) => `/@media/${hash}`): Promise<Blob> {
+export async function packProcpFrom(procText: string, project: Project, urlOf: (hash: string) => string = (hash) => `/@media/${hash}`): Promise<PackResult> {
   const entries: PackEntry[] = [{ name: PROC_ENTRY, blob: new Blob([procText], { type: "application/json" }) }];
-  for (const { hash, file } of mediaEntries(project)) {
+  const { entries: media, unhashed } = mediaEntries(project);
+  const missing: PackMissing[] = [...unhashed];
+  const nameOf = new Map((project.media || []).map((m) => [m.id, m.name]));
+  for (const { hash, file, ids } of media) {
+    let ok = false;
     try {
       const url = urlOf(hash);
-      if (!url) { console.warn(`[procp] 素材服务还没就绪,跳过 ${hash}`); continue; }
-      const res = await fetch(url);
-      if (!res.ok) { console.warn(`[procp] 本地内容库里没有 ${hash},跳过`); continue; }
-      entries.push({ name: MEDIA_PREFIX + file, blob: await res.blob() });
+      if (!url) console.warn(`[procp] 素材服务还没就绪,跳过 ${hash}`);
+      else {
+        const res = await fetch(url);
+        if (!res.ok) console.warn(`[procp] 本地内容库里没有 ${hash},跳过`);
+        else { entries.push({ name: MEDIA_PREFIX + file, blob: await res.blob() }); ok = true; }
+      }
     } catch (err) {
       console.warn(`[procp] 取素材失败 ${hash}`, err);
     }
+    if (!ok) for (const id of ids) missing.push({ id, name: nameOf.get(id) ?? "" });
   }
-  return writeZip(entries);
+  if (missing.length) console.warn("[procp] 这些素材没进包:", missing.map((m) => m.name));
+  return { blob: await writeZip(entries), missing };
+}
+
+/** 打包结束时给用户的那句话:包里缺哪些素材(名字去重,太多时只列前面若干条) */
+export function packMissingMessage(missing: readonly PackMissing[], limit = 12): string {
+  const names = [...new Set(missing.map((m) => (m.name || m.id).replace(/^\(缺失\) /, "")))];
+  if (!names.length) return "";
+  const shown = names.slice(0, limit).map((n) => `· ${n}`).join("\n");
+  const more = names.length > limit ? `\n……另有 ${names.length - limit} 条` : "";
+  return `包已保存，但下面 ${names.length} 条素材本机找不到文件，没有装进包里（换台机器打开这个包，这些素材放不出来）：\n${shown}${more}`;
 }
 
 /** 这些哈希里哪些已经在本地内容库(拆包时用来跳过已有素材) */
@@ -255,6 +293,8 @@ export interface UnpackResult {
   stored: number;
   /** 库里已经有、跳过的素材数 */
   deduped: number;
+  /** 这个包带来的、现在确实在本地内容库里的素材哈希(新写的 + 本来就有的) */
+  landed: string[];
 }
 
 /**
@@ -275,9 +315,10 @@ export async function unpackProcp(file: Blob): Promise<UnpackResult> {
 
   let stored = 0;
   let deduped = 0;
+  const landed = new Set<string>();
   for (const entry of media) {
     const hash = hashOf(entry.name);
-    if (have.has(hash)) { deduped += 1; continue; }
+    if (have.has(hash)) { deduped += 1; landed.add(hash); continue; }
     const name = entry.name.slice(MEDIA_PREFIX.length);
     try {
       const body = await inflate(entry);
@@ -285,16 +326,40 @@ export async function unpackProcp(file: Blob): Promise<UnpackResult> {
       if (!res.ok) { console.warn(`[procp] 素材落库失败: ${name}`); continue; }
       const data = await res.json();
       if (data?.deduped) deduped += 1; else stored += 1;
+      if (typeof data?.hash === "string") landed.add(data.hash.toLowerCase());
     } catch (err) {
       console.warn(`[procp] 素材落库异常: ${name}`, err);
     }
   }
-  return { procText, stored, deduped };
+  return { procText, stored, deduped, landed: [...landed] };
+}
+
+/**
+ * 包里带着字节的素材,去掉打包那台机器上的 `path`。
+ *
+ * `path` 是素材在**打包方**本地内容库里的绝对路径,换一台机器就指不到东西;而导出那一侧
+ * (`server/vite-plugin-export.ts`)见到 `path` 就把地址改写成 `/api/media/file?path=…`,
+ * 于是在另一台机器上打开包、导出,会去读一个不存在的文件(视频解码失败、配音静音)。
+ * 字节既然已经按哈希落进本机内容库,这些素材只认 `/@media/<hash>` 就够了。
+ * 不在包里的素材(打包时就缺的)原样留着,由 restoreMediaUrls 照老规矩处理。
+ */
+export function dropPackedPaths(project: Project, landed: Iterable<string>): Project {
+  const have = new Set([...landed].map((h) => String(h).toLowerCase()));
+  if (!have.size || !project.media?.length) return project;
+  let changed = false;
+  const media = project.media.map((m) => {
+    if (!m.path || !have.has(String(m.hash || "").toLowerCase())) return m;
+    changed = true;
+    const { path: _drop, ...rest } = m;
+    void _drop;
+    return rest as typeof m;
+  });
+  return changed ? { ...project, media } : project;
 }
 
 /** 拆包并载入(和打开 .proc 走同一条路,素材地址由 restoreMediaUrls 按 hash 还原) */
 export async function loadProcpFile(file: Blob): Promise<Project> {
-  const { procText } = await unpackProcp(file);
+  const { procText, landed } = await unpackProcp(file);
   const { loadProc } = await import("./proc.ts");
-  return loadProc(procText);
+  return dropPackedPaths(loadProc(procText), landed);
 }

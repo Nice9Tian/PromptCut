@@ -330,7 +330,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 ### I4 本机：一个进程，Agent 优先；分进程降为可选开关
 
-> 〔2026-09-30 实现注〕(b)、(b2) 的实际做法与下文不同，以 `docs/archive/agent-reports/AGENT-query-render.md` 第 2、3 节与第 8.2 节为准：专用实例空闲时接的是普通预渲染队列的一项或后台那一趟 `fillCardControls` 的一批（4 帧），等待上界是一批而不是一帧；操作预览不在批边界抢后台预渲染间，而是插到 `'queue'` lane 的待办之前、在 `'queue'` 预渲染间上渲（本机模式下它平时空着，不用等）。(a) 的三种模式还没做。
+> 〔2026-09-30 实现注〕(b)、(b2) 的实际做法与下文不同，以 `docs/archive/agent-reports/AGENT-query-render.md` 第 2、3 节与第 8.2 节为准：专用实例空闲时接的是普通预渲染队列的一项或后台那一趟 `fillCardControls` 的一批（4 帧），等待上界是一批而不是一帧；操作预览不在批边界抢后台预渲染间，而是插到 `'queue'` lane 的待办之前、在 `'queue'` 预渲染间上渲（本机模式下它平时空着，不用等）。(a) 已做（`claude/query-render-2`，2026-09-30）：缺省 `full`；`agent` 模式暂仍传 `PROMPTCUT_EDITOR_URL`，等 I2 的推送与 I3 的素材服务地址落地；(c)、(d) 没做。
 
 **(a) 拉起。** 编辑器进程只拉起**一个**预渲染进程：本机配置了 Agent（今天 `vite-plugin-ai.ts` 的服务端工具就在编辑器进程里，即 Agent 在本地）时以 `full` 模式起，没有本机 Agent 时以 `user` 模式起。`vite-plugin-prerender.ts:80-88` 的 env 多两项：`PROMPTCUT_PRERENDER_MODE`，以及 `user` / `full` 模式才有的 `PROMPTCUT_EDITOR_URL`（A7 回拉整份项目和 `costs` 都靠它；`agent` 模式不传）。
 
@@ -361,7 +361,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 `prerender.ts` 的单份缓存（`base` / `checkedAt` / `asking` / `firstAsk`、`invalidatePrerenderBase`、`usePrerenderBase`）按角色各一份，`ask()` 从 `url` 和 `agent.url` 各取各的。这样**拆不拆分对调用方透明**。第 6 步把 `MIRRORED_TOOLS` 搬去 Agent 服务端之后：Agent 服务端在本机时 base URL 就是 `/api/prerender/info` 里的 `agent.url`，在云端时是 Agent 云端环境自己的 `agent` 进程；两条路的工具语义完全一样。
 
-**(d) 可选拆分 `PROMPTCUT_PRERENDER_SPLIT=1`（缺省关）。** 编辑器进程拉起 `user` + `agent` 两个进程：`vite-plugin-prerender.ts` 的 `start()` 按角色参数化成 `start('user')` / `start('agent')`，`child` / `closing` / `tail` 和 `:108` 的退出重启（`MAX_RESTARTS` = 5，`:23`）每个角色各一份；`stop` 对两个角色都置 `closing` 并 `killTree`（否则编辑器退出时 `agent` 进程和它的 Chrome 成孤儿）。`agent` 那份的 env 是 `PROMPTCUT_PRERENDER_MODE: 'agent'`，端口另 `freePort()`（`:25`），同样 `PRIORITY_BELOW_NORMAL`、同样传 `PROMPTCUT_CORS_ORIGINS`，**不传 `PROMPTCUT_EDITOR_URL`**（项目由 Agent 服务端推，I2）。
+**(d) 可选拆分 `PROMPTCUT_PRERENDER_SPLIT=1`（缺省关）。** 编辑器进程拉起 `user` + `agent` 两个进程：`vite-plugin-prerender.ts` 的 `start()` 按角色参数化成 `start('user')` / `start('agent')`，`child` / `closing` / `tail` 和 `:108` 的退出重启（`MAX_RESTARTS` = 5，`:23`）每个角色各一份；`stop` 对两个角色都置 `closing` 并 `killTree`（否则编辑器退出时 `agent` 进程和它的 Chrome 成孤儿）。`agent` 那份的 env 是 `PROMPTCUT_PRERENDER_MODE: 'agent'`，端口另 `freePort()`（`:25`），同样 `PRIORITY_BELOW_NORMAL`、同样传 `PROMPTCUT_CORS_ORIGINS`，**不传 `PROMPTCUT_EDITOR_URL`**（项目由 Agent 服务端推，I2；以 I2 的推送与 I3 的素材服务地址落地为前提）。
 
 三处不能共用的东西：`vite.prerender.config.ts` 的 `cacheDir` 按模式再分一份 `node_modules/.vite-prerender-agent`（两个进程同时写一个依赖预构建缓存会互相踩）；`frame-library` 分开——`agent` lane 的条目必落盘，两个进程写同一棵会互相踩，`agent` 进程改成同一个 `PROMPTCUT_EXPORT_DIR` 下的 `frame-library-agent`，F1 的 GC 两棵各扫各的；**两个进程都不碰素材目录**，只经素材服务的 HTTP API 取字节（I3）。`agent` 进程没就绪或挂了，Agent 工具回 `PRERENDER_UNAVAILABLE`，**不退回 `user` 进程**，等编辑器进程按 `MAX_RESTARTS` 拉起。重启后的恢复见 r2-r7 的 F5（任一模式都适用，不只拆分模式）。
 

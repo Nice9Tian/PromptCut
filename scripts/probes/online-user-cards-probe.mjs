@@ -40,6 +40,10 @@
  *     - 乙在页面里点「首页」、加入另一个带同步卡的项目(丁先摆好片段):测量门按新连接等卡片源码同步完,新项目的同步卡没被测过。
  *   低内存档(仿手机):`__pcBackfill()` 在等的片段含 s3;舞台上 u、s1 贴小尺寸(`px/` 请求 > 0),s3 是图标。
  * 不打印口令;结果最后一行是一行 JSON(`ok`、`fails`、各项数字),截图在 --out。
+ *
+ * 环境变量 `PC_CHROME_ARGS`(空格分隔)只把参数原样透传给探针起的 Chrome,排障取证用,例如 `--log-net-log=<文件>` 抓网络日志
+ * (r4、r5 两次合流里探针新开的页面偶发 120～180 s 打不开在线页,见 `docs/plan/TODO.md`)、云端 Linux 以 root 运行时的 `--no-sandbox`。
+ * 不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则证书有问题时探针照样通过,掩盖真问题。
  */
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
@@ -208,7 +212,7 @@ async function wsAsCreator(projectId = made.projectId) {
 }
 
 /* ------------------------------------------------------------------ 浏览器 */
-const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process'] });
+const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
 async function newPage(label, { mobile = false } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();

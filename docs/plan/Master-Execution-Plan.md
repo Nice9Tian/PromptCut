@@ -1072,7 +1072,7 @@ W6 需要用户配合的物理操作：笔记本切到手机热点。阿里云�
 | 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:<端口>/?export=1"` | 1800/1800 帧逐像素相同 |
 | 快照重放一致 | `node scripts/verify-unified-frames.mjs` | PASS |
 | 导出像素基线 | 临时起 main 的 worktree，逐像素比两边导出 | **0 不同、0 缺失**；要变须事先经用户确认 |
-| 预渲染探针 | `ready-index-probe`、`stream-produce-probe`（含 `--group`）、`preview-fallback-probe`（含 `--page-preload`） | 全部退出码 0 |
+| 预渲染探针 | `ready-index-probe`、`stream-produce-probe`（含 `--group`）、`preview-fallback-probe`（含 `--page-preload`）；改到取帧、解码、图卡视频源、`src/render/frameMedia.ts` 时另跑 `video-source-cadence-probe`（视频取帧节奏的回归基线，2026-09-30 起） | 全部退出码 0；`video-source-cadence-probe` 另要 `fails: []` |
 
 ---
 

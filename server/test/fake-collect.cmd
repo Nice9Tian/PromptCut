@@ -46,6 +46,16 @@ exit /b 0
 
 :download
 if defined PROMPTCUT_FAKE_FAIL goto download_fail
+REM Write the reported file into --out-dir (the plugin's per-job temp dir):
+REM after the process exits the plugin ingests it through the asset service.
+set "OUTDIR="
+:scan_args
+if "%~1"=="" goto scanned_args
+if "%~1"=="--out-dir" set "OUTDIR=%~2"
+shift
+goto scan_args
+:scanned_args
+if defined OUTDIR echo fake video bytes>"%OUTDIR%\Fake Video [BV1FAKE00000].mp4"
 echo {"event":"start","url":"BV1FAKE00000","out_dir":"C:\\fake\\media","quality":1080,"audio_only":false,"all_parts":false}
 echo {"event":"retry","attempt":1,"wait":1.5,"message":"HTTP Error 412: Precondition Failed"}
 echo {"event":"info","id":"BV1FAKE00000","title":"Fake Video \u6d4b\u8bd5","duration":12.5,"uploader":"tester","site":"bilibili","url":"https://www.bilibili.com/video/BV1FAKE00000"}

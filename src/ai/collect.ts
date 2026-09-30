@@ -1,10 +1,11 @@
 /**
  * 素材收集的前端胶水：探拓展、装拓展、探链接、起下载作业、轮询。
  *
- * 下载跑在服务端（python/promptcut_collect，yt-dlp 封装），文件直接落到素材目录，
- * 这边只负责等；等到 done 之后由调用方用 importVideoFromServer 把文件登记成素材。
+ * 下载跑在服务端（python/promptcut_collect，yt-dlp 封装），文件先落服务端的临时目录、再经素材服务的入库接口进内容库，
+ * 这边只负责等；等到 done 之后由调用方用 importVideoFromServer 按入库回来的标识把它登记成素材。
  */
 import { readSseStream } from "../editor/io/stt";
+import type { UploadedMedia } from "../editor/io/mediaUpload";
 
 /** 某个站点存盘的登录态 */
 export interface SiteCookieStatus {
@@ -166,9 +167,13 @@ export interface CollectProbe {
 export interface CollectItem {
   id?: string;
   title?: string;
-  path: string;
   filename: string;
+  /** 入库后的地址 /@media/<hash> */
   url: string;
+  /** 内容哈希 */
+  hash?: string;
+  /** 素材服务入库接口的回包(和用户导入拿到的是同一种) */
+  media?: UploadedMedia;
   bytes?: number;
   duration?: number;
   width?: number;
@@ -187,7 +192,8 @@ export interface CollectJob {
   site?: string;
   quality: number;
   status: "running" | "done" | "error";
-  stage: "starting" | "video" | "audio" | "merge" | "transcode" | "done";
+  /** ingest:都下好了,正在送进素材库 */
+  stage: "starting" | "video" | "audio" | "merge" | "transcode" | "ingest" | "done";
   percent: number;
   stagePercent?: number;
   speed?: number | null;
@@ -301,7 +307,7 @@ export async function probeLink(url: string, opts: { site?: string; quality?: nu
   return data as CollectProbe;
 }
 
-export async function startDownload(url: string, opts: DownloadOptions = {}): Promise<{ jobId: string; reused?: boolean; outDir?: string }> {
+export async function startDownload(url: string, opts: DownloadOptions = {}): Promise<{ jobId: string; reused?: boolean }> {
   const r = await fetch("/api/collect/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -309,7 +315,7 @@ export async function startDownload(url: string, opts: DownloadOptions = {}): Pr
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.ok) throw new Error(data.error || "下载没能启动");
-  return { jobId: data.jobId as string, reused: !!data.reused, outDir: data.outDir };
+  return { jobId: data.jobId as string, reused: !!data.reused };
 }
 
 export async function pollDownload(jobId: string): Promise<CollectJob> {

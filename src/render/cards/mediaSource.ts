@@ -11,6 +11,20 @@ function cardMediaUrl(url: string): string {
   return p.remote ? remoteMediaUrl(url, p.remote) : "";
 }
 
+/**
+ * seek 目标比要取的时刻 t 晚一点点(秒)。规则是「取素材里时间戳不超过 t 的最后一帧;t 正好落在帧边界时取边界上这一帧」:
+ * 原样把 t 设给 `currentTime`,落在帧边界上的 t(慢放、变速、片段起点不在 0 时常见)经浮点误差和浏览器换算成微秒时的截断,
+ * 会比那一帧的时间戳早不到一微秒,取到的是前一帧 —— 取前一帧还是本帧随误差摆,慢放段因此一顿一顿。
+ * 统一加 2 ms,不依赖素材帧率:小于任何常见素材的一帧(500 fps 以下),和 `src/render/frameMedia.ts` 同一个数。
+ */
+export const CARD_SEEK_LEAD = 0.002;
+
+/** 取时刻 `time` 那一帧时实际设给 `currentTime` 的值:加 `CARD_SEEK_LEAD`,夹在 [0, 时长 − 0.1 ms] 里(时长未知时不夹上限)。 */
+export function cardSeekTarget(time: number, duration: number): number {
+  const target = Math.max(0, time) + CARD_SEEK_LEAD;
+  return Number.isFinite(duration) ? Math.min(target, Math.max(0, duration - .0001)) : target;
+}
+
 /** A decoder belongs to one card canvas. Seeking it never touches a timeline
  * media element or another card's source cursor. GPU registration can therefore
  * sample video locally without a server round trip or per-frame PNG transfer. */
@@ -36,7 +50,7 @@ export class CardMediaSource {
     const source = await this.sources.get(media.url)!;
     if (this.disposed || signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
     if (source instanceof HTMLVideoElement) {
-      const target = Math.max(0, Math.min(Number.isFinite(source.duration) ? Math.max(0, source.duration - .0001) : time, time));
+      const target = cardSeekTarget(time, source.duration);
       if (Math.abs(source.currentTime - target) > .00001) await new Promise<void>((resolve, reject) => {
         const cleanup = () => { source.removeEventListener('seeked', done); source.removeEventListener('error', failed); signal?.removeEventListener('abort', cancelled); };
         const done = () => { cleanup(); resolve(); };

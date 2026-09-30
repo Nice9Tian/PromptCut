@@ -22,7 +22,7 @@ import { abortOnClose, originOf, outRoot, resolveMediaUrls, sendJson } from "./h
 import { enqueue, maxConcurrentRenders, renderRunning } from "./render-queue";
 import { renderFrames, renderOneFrame } from "./render";
 import { bakeClip, bakeOne, bakeTarget } from "./bake";
-import { evictBakes, listBakes } from "./bake-cache";
+import { bakedOf, evictBakes, listBakes } from "./bake-cache";
 import { renderWorkers } from "./worker-pool";
 import { createUiRenderer } from "./ui-renderer";
 
@@ -264,7 +264,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
 
       server.middlewares.use("/api/ai/visual", (req, res) => {
         const url = String(req.url || "/").split("?")[0];
-        const fail = (e: any) => sendJson(res, e?.status || 500, { ok: false, error: e?.message || String(e) });
+        // `code`:模式不接时(预渲染进程的 `NO_AGENT_LANE` / `NO_PRERENDER`,`prerender-mode.mjs`)原样带出,调用方分得清
+        const fail = (e: any) => sendJson(res, e?.status || 500, { ok: false, error: e?.message || String(e), ...(typeof e?.code === "string" ? { code: e.code } : {}) });
 
         if (req.method === "GET") {
           (async () => {
@@ -487,10 +488,11 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
       });
 
       /**
-       * POST /api/vision/bake { project, clipId, t, size } —— 把一张卡预渲染成透明底 PNG 存进素材库。
+       * POST /api/vision/bake { project, clipId, t, size } —— 把一张卡预渲染成透明底 PNG,经素材服务存进 `px`。
        *
        * 和 /snapshot 是同一条渲染管线(isolateClip + renderOneFrame),差别只有两点:
-       * 不缩图(纹理要原尺寸),以及把结果**落盘**成 `/@media/<name>.png` 而不是塞进上下文给模型看。
+       * 不缩图(纹理要原尺寸),以及把结果**经素材服务入库**成 `/api/asset/px/<内容哈希>` 而不是塞进上下文给模型看
+       * (`bake.ts` 的 bakeOne、`server/bake-store.mjs`)。素材服务不可达时回 500,`error` 写明地址与原因。
        *
        * # 为什么这条路不会让预览和导出分叉
        *
@@ -508,8 +510,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
        * POST /api/vision/bake-batch { project, clips: [{clipId, t}], size, bg } —— 一次问一批。
        *
        * 给 3D 视图用的(不是 MCP 工具,Agent 那边用单张的 bake_card 就够)。
-       * 实现上就是**顺着渲**,快在缓存:文件名按「输入」算哈希(卡片内容 + t + size + bg),
-       * 所以同一张卡同样的参数只会真渲一次,之后开多少次 3D 视图都是文件已存在、直接返回。
+       * 实现上就是**顺着渲**,快在缓存:缓存键按「输入」算哈希(卡片内容 + t + size + bg),
+       * 所以同一张卡同样的参数只会真渲一次,之后开多少次 3D 视图都是索引命中、直接返回。
        *
        * 试过把 N 张摊进一个项目的 N 个时间槽、一趟渲完,实测 4 张 18.7 秒,而单张 4.7~6.5 秒 ——
        * 一点没快:瓶颈不是起 Chrome,是那条路要**逐帧走完整条时间轴**(4 张卡摊开就是 120 帧),
@@ -574,12 +576,12 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
       /**
        * POST /api/vision/bake-status { project, clips: [{clipId, t}], size, bg } —— 预渲染的「盘点」。
        *
-       * 只查不渲:告诉调度器**哪些已经渲好了、各自多大**,以及磁盘上还躺着哪些
-       * 这个项目里已经用不到的旧文件(orphans)。
+       * 只查不渲:告诉调度器**哪些已经渲好了、各自多大**,以及索引里还记着哪些
+       * 这个项目里已经用不到的旧快照(orphans)。
        *
-       * 为什么必须由服务端来答:缓存在磁盘上,而浏览器关一次页面就全忘了 ——
-       * 上次开编辑器预渲染出来的文件,前端一个都不认识。要是让前端只按自己这次的记录算占用,
-       * 那 out/media 会一直涨,因为没人认领的文件永远不会被数到,也就永远不会被删。
+       * 为什么必须由服务端来答:缓存记在服务端(字节在素材服务,「输入哈希 → 内容哈希」在索引),而浏览器关一次页面
+       * 就全忘了 —— 上次开编辑器预渲染出来的,前端一个都不认识。
+       * 「渲好了」要索引里有、且素材服务上这一块收全(`bakedOf`,同步状态只问素材服务);素材服务不可达时回 500。
        *
        * 键的算法只有 bakeTarget 一处(预渲染、盘点、清理三方共用),所以不会出现
        * 「明明预渲染过却当成没渲」或者「把正在用的文件删了」这种对不上账的事。
@@ -601,18 +603,24 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             for (const c of Array.isArray(clips) ? clips : []) {
               if (!c || typeof c.clipId !== "string") continue;
               try {
-                const { key, name, url } = bakeTarget(resolved, c.clipId, Number(c.t), size, bg, "box");
+                const { key, name } = bakeTarget(resolved, c.clipId, Number(c.t), size, bg, "box");
                 mine.add(key);
-                const hit = onDisk.get(key);
-                items.push({ clipId: c.clipId, t: Number(c.t), key, name, url, bytes: hit ? hit.bytes : null });
+                items.push({ clipId: c.clipId, t: Number(c.t), key, name, url: null, bytes: null });
               } catch (e: any) {
                 // 素材段之类渲不了的,如实报出来,别让调度器一直重试
                 items.push({ clipId: c.clipId, t: Number(c.t), key: null, bytes: null, error: e?.message || String(e) });
               }
             }
+            // 这个项目要的那些键里哪些渲好了:索引里有、且素材服务上收全(素材服务里没了的,索引条目当场删掉)
+            const baked = await bakedOf(root, [...mine]);
+            for (const it of items) {
+              const hit = it.key ? baked.get(it.key) : undefined;
+              if (hit) { it.url = hit.url; it.bytes = hit.bytes; }
+              else if (it.key) onDisk.delete(it.key);
+            }
             /*
-             * 这个项目当前用不到的文件。绝大多数是**改过参数之后留下的旧版本** ——
-             * 缓存键是卡片内容的哈希,改一次参数就多一个文件,旧的再也不会被命中。
+             * 这个项目当前用不到的快照。绝大多数是**改过参数之后留下的旧版本** ——
+             * 缓存键是卡片内容的哈希,改一次参数就多一条,旧的再也不会被命中。
              * 编辑期这才是文件数增长的主因,比「片子太长装不下」常见得多。
              */
             const orphans = [...onDisk.values()].filter((f) => !mine.has(f.key));
@@ -642,10 +650,10 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
       });
 
       /**
-       * POST /api/vision/bake-evict { keys: ["a1b2c3d4e5f6", ...] } —— 删掉这些预渲染文件。
+       * POST /api/vision/bake-evict { keys: ["a1b2c3d4e5f6", ...] } —— 淘汰这些卡片快照。
        *
-       * 传的是键(12 位哈希),不是路径:要删哪个文件由服务端列目录比对,
-       * 所以这个口子碰不到 out/media 以外的东西,也碰不到预渲染以外的文件。
+       * 传的是键(12 位哈希),不是路径:要删哪条由服务端拿自己的索引比对,删的只是索引条目,
+       * 碰不到索引以外的文件。字节留在素材服务里(没有删除接口),见 bake-cache.ts 的 evictBakes。
        */
       server.middlewares.use("/api/vision/bake-evict", (req, res) => {
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });

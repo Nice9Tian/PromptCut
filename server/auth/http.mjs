@@ -8,6 +8,13 @@
  * | `POST shared/challenge` | 取进入挑战；200 / 400 / 404 / 429 |
  * | `POST shared/invite/resolve` | 凭邀请码查项目（C10a）：200 / 404 `invite-invalid` / 429 |
  * | `POST shared/invite/redeem` | 凭邀请码兑换（C10a）：200 / 400 / 401 `banned` / 404 `invite-invalid` / 429 |
+ * | `POST shared/verify` | 〔裁〕核对一份进入证明（`claude/join-error`）：200 / 400 / 401 / 429 |
+ *
+ * `shared/verify`〔裁〕：体 `{ protocols: [...] }` 就是 WebSocket 握手要给的子协议列表，其中必须有证明
+ * （`promptcut.auth.…`），交给与握手**同一个** `authenticate` 核对：过了回 200 `{ ok: true }`，不过回 401 `unauthorized`
+ * （与握手一样不说原因）。证明里的 nonce 照样用掉、失败照样计入限速。用处：浏览器里 WebSocket 握手被 401 拒和根本没连上
+ * 看起来一样（都是 1006），页面进不去时拿一份新证明来问一次，分清「用户名或密码不对」与「连不上服务器」。
+ * 组装方不给 `authenticate` 时本端点回 404（与没有这个端点的旧服务一样）。
  *
  * 独立模式挂在文档服务自己的 http 服务器上（路径 `/shared/…`），挂载模式挂在 `<WS 路径>/shared/…`
  * （vite 里是 `/docservice/shared/…`）。本模块只认调用方给的前缀，其余路径一概不碰。
@@ -28,7 +35,7 @@
  */
 import { createHmac } from 'node:crypto';
 import {
-  KEY_BYTES, SALT_BYTES, isProjectId, isProjectName, isUsername, isDeviceId, isB64Bytes, isKdf,
+  AUTH_PREFIX, KEY_BYTES, SALT_BYTES, isProjectId, isProjectName, isUsername, isDeviceId, isB64Bytes, isKdf,
 } from './protocol.mjs';
 import { credentialFor } from './handshake.mjs';
 import { isInviteCode, inviteDigest, inviteActive, redeemOn } from './invite.mjs';
@@ -152,6 +159,7 @@ export function fakeSalt(serverSecret, projectId, username) {
  * @param {number} [options.maxProjects]
  * @param {number} [options.maxBody]
  * @param {(projectId: string) => void} [options.onCreate]
+ * @param {(req) => object | null} [options.authenticate] 握手鉴权（`createHandshakeAuth().authenticate`）；给了才答 `shared/verify`
  */
 export function createSharedHttp({
   store,
@@ -166,6 +174,7 @@ export function createSharedHttp({
   maxProjects = SHARED_HTTP_DEFAULTS.MAX_PROJECTS,
   maxBody = SHARED_HTTP_DEFAULTS.MAX_BODY,
   onCreate = () => {},
+  authenticate = null,
 }) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedHttp: mode 只能是 'hosted' 或 'lan'");
   const storeOf = typeof store === 'function' ? store : () => store;
@@ -265,6 +274,35 @@ export function createSharedHttp({
     const salt = cred ? cred.salt : fakeSalt(st.serverSecret, projectId, username);
     const nonce = challenges.issue(['join', projectId, username, deviceId, as]);
     send(res, 200, { ok: true, nonce, salt, kdf: { ...rec.kdf }, mode: rec.mode });
+  }
+
+  /** `POST shared/verify { protocols }`〔裁〕：见文件头 */
+  async function verify(req, res) {
+    const remote = remoteOf(req);
+    const loopback = loopbackOf(req);
+    if (!loopback && limiter.blocked(remote)) {
+      req.resume();
+      return tooMany(res, remote, { withBody: true });
+    }
+    const body = await jsonBody(req, res);
+    if (body === undefined) return;
+    const list = isObj(body) ? body.protocols : undefined;
+    if (!Array.isArray(list) || list.length === 0 || list.length > 8
+      || !list.every((p) => typeof p === 'string' && p.length > 0 && !p.includes(','))
+      || !list.some((p) => p.startsWith(AUTH_PREFIX))) {
+      return fail(res, 400, 'bad-request');
+    }
+    // 与这次请求同一个来源、同一套请求头，只把子协议换成体里给的：限速、回环信任都与握手一致
+    const probe = { method: req.method, url: req.url, socket: req.socket, headers: { ...req.headers, 'sec-websocket-protocol': list.join(', ') } };
+    let principal = null;
+    try {
+      principal = authenticate(probe);
+    } catch {
+      principal = null;
+    }
+    if (principal && typeof principal.userId === 'string') return send(res, 200, { ok: true });
+    if (!loopback && limiter.blocked(remote)) return tooMany(res, remote, { withBody: true });
+    return fail(res, 401, 'unauthorized');
   }
 
   /**
@@ -384,6 +422,10 @@ export function createSharedHttp({
       if (route === 'challenge') {
         if (method !== 'POST') return fail(res, 405, 'method');
         return challenge(req, res, st);
+      }
+      if (route === 'verify' && typeof authenticate === 'function') {
+        if (method !== 'POST') return fail(res, 405, 'method');
+        return verify(req, res);
       }
       if (route === 'invite/resolve' || route === 'invite/redeem') {
         if (method !== 'POST') return fail(res, 405, 'method');

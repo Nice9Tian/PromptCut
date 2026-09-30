@@ -113,6 +113,46 @@ async function authHeaders() {
   return typeof t === 'string' && t ? { authorization: `Bearer ${t}` } : {};
 }
 
+/** 产物按需拉取的时限(一块 PNG,整件读完) */
+export const ARTIFACT_PULL_TIMEOUT_MS = 30_000;
+/** 按需拉取发出的请求带这个头;收到它的素材服务不再往下拉(`asset-service.ts`) */
+export const ARTIFACT_PULL_HEADER = 'x-promptcut-pull';
+/** 产物按需拉取整件进内存,只收这么大以内的(卡片快照最大 2048² 的 PNG,远小于它) */
+export const ARTIFACT_PULL_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 产物命名空间(`px`)的按需拉取(claude/bake-asset):本机素材服务的 `GET px/<hash>` 在本机没有这一块时,
+ * 向**当前连接的远程素材服务**整件取一次 `GET <base>/<ns>/<hash>`(带只读票据),校验 sha256 后交回调用方入库
+ * (`asset-service.ts` 的 `pullArtifactInto`)。共享项目里别的成员推上去的卡片快照(`/api/asset/px/<hash>`)
+ * 因此在本机也取得到。与素材不同:产物很小,不做边落盘边服务,不进预取队列。
+ * 没连远程、远程 404、不是 2xx、超大、校验不符都回 null(调用方照旧回 404);不抛。
+ * @param {'px' | 'snap'} ns
+ * @param {string} hash
+ * @returns {Promise<{ bytes: Buffer, contentType: string } | null>}
+ */
+export async function fetchRemoteArtifact(ns, hash, { timeoutMs = ARTIFACT_PULL_TIMEOUT_MS, maxBytes = ARTIFACT_PULL_MAX_BYTES } = {}) {
+  const key = String(hash || '').toLowerCase();
+  if ((ns !== 'px' && ns !== 'snap') || !HASH.test(key)) return null;
+  const remote = state().remote;
+  if (!remote) return null;
+  note('artifact.pull', { ns, hash: key });
+  try {
+    // 带上「这是按需拉取」的头:对面若也是本仓库的素材服务,不再替这个请求往它自己连的远程拉(防互指成环)
+    const res = await fetch(`${remote.base}/${ns}/${key}`, { headers: { ...(await authHeaders()), [ARTIFACT_PULL_HEADER]: '1' }, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) { await res.body?.cancel().catch(() => {}); note('artifact.miss', { ns, hash: key, status: res.status }); return null; }
+    const len = Number(res.headers.get('content-length'));
+    if (Number.isSafeInteger(len) && len > maxBytes) { await res.body?.cancel().catch(() => {}); return null; }
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length === 0 || bytes.length > maxBytes) return null;
+    if (crypto.createHash('sha256').update(bytes).digest('hex') !== key) { note('artifact.mismatch', { ns, hash: key }); return null; }
+    note('artifact.done', { ns, hash: key, bytes: bytes.length });
+    return { bytes, contentType: res.headers.get('content-type') || 'application/octet-stream' };
+  } catch (err) {
+    note('artifact.fail', { ns, hash: key, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
 /** 最近的事件(拷贝);探针与单测看拉取顺序用 */
 export function pullLog() {
   return state().log.map((e) => ({ ...e }));

@@ -1,11 +1,10 @@
 import fs from 'node:fs/promises';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
-import { openBakery, bakeFrames, findFfmpeg } from './bakery/index.mjs';
+import { openBakery, bakeFrames } from './bakery/index.mjs';
 // 直接按文件名引,不走 index:既有测试用 mock.module 替换整个 index,替身里没有这个出口
 import { probeBrowserEnvironment } from './bakery/environment.mjs';
 import { captureSnapshot } from './bakery/capture-snapshot.mjs';
-import { frameVideo } from './bakery/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
 import { cardEntryCode } from './card-code.mjs';
 import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
@@ -35,6 +34,7 @@ export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { createSmallRenderer, SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
 import { layerMapOf } from './artifact-transfer.mjs';
+import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServesAgent, modeServesPrerender } from './prerender-mode.mjs';
 
 /**
  * C6.4 推送与换机取用按什么段长切段:与渲染任务队列的切分(`render-node/split.mjs`)完全一致 ——
@@ -72,6 +72,11 @@ export const AGENT_IDLE_MS = 10 * 60 * 1000;
  * 紧跟着的那个任务白等一批。这段时间里专用实例什么都不接,到点再判。
  */
 export const AGENT_GRACE_MS = 1000;
+/**
+ * 专用实例做队列任务、中途给 Agent 让路时,每隔这么久报一次「还在干活」(执行器的 `heartbeat` → 会话的工作计数),
+ * 免得 Agent 连着几个任务做得久、队列按停滞(`STALL_MS`,120 s)把手里这一项收回(AGENT-maint-3)。
+ */
+export const AGENT_YIELD_BEAT_MS = 20_000;
 
 const roundBox = b => ({ left: Math.round(b.left), top: Math.round(b.top), width: Math.round(b.width), height: Math.round(b.height) });
 
@@ -210,7 +215,7 @@ export class FramePipeline {
    * `fingerprint`)。给了就不探测、直接用(测试,以及以后环境已知的独立渲染主机);不给就等第一个
    * 预渲染间开起来时探测一次(`ensureEnvironment`)。
    */
-  constructor({ root, origin, code = () => '', cardSources = () => ({}), captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null }) {
+  constructor({ root, origin, code = () => '', cardSources = () => ({}), captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null, mode = PRERENDER_MODE.FULL }) {
     this.root = root;
     /**
      * 存储计划 A 部分:启动时清掉死进程留在帧库里的临时文件(`storage-leftovers.mjs` 文件头列了认哪几种)。
@@ -264,6 +269,12 @@ export class FramePipeline {
     this.cardSources = cardSources;
     this.captureCode = captureCode;
     this.interactive = interactive !== false;
+    /**
+     * 预渲染进程的模式(`prerender-mode.mjs`;`mechanism/rendering.md`「查询渲染与预渲染进程」):`'user'` 不建 Agent lane,
+     * `'agent'` 只建 Agent lane、不预渲染,`'full'` 都建(缺省,和加模式之前相同)。认不得的值按 `'full'`。
+     * 只对 `interactive: true` 的实例(预渲染进程)有意义;编辑器进程本来就没有这些 lane。
+     */
+    this.mode = parsePrerenderMode(mode) ?? PRERENDER_MODE.FULL;
     this.playhead = playhead;
     /**
      * 素材戳(`_frameSourceStamp`,进 `frameIdentity`):有哈希就是哈希,没有就问素材服务的 `HEAD`,
@@ -280,7 +291,8 @@ export class FramePipeline {
     // The human preview, Agent and background bake each own an independent
     // serialized queue.  A long Agent render must never hold the hot user Chrome.
     this.foreground = Promise.resolve();
-    this.laneChains = new Map([['user', Promise.resolve()], ['agent', Promise.resolve()], ['background', Promise.resolve()]]);
+    // 按模式建(`lanesOfMode`):`user` 模式没有 `'agent'`,`agent` 模式只有 `'agent'`
+    this.laneChains = new Map(['user', 'agent', 'background'].filter(lane => lanesOfMode(this.mode).includes(lane)).map(lane => [lane, Promise.resolve()]));
     /**
      * 普通预渲染队列(`'queue'` lane 的待办,见 `runQueueTask`):按先后排,AI 栏的操作预览插在所有待办之前。
      * `queueRunning` 是 `'queue'` 预渲染间上正在跑的那一项(至多一项)。
@@ -293,6 +305,8 @@ export class FramePipeline {
      */
     this.agentPending = 0;
     this.agentUnit = null;
+    /** 专用实例做队列任务时给 Agent 让路的记录(诊断 `scheduler.yields`):批边界让路次数、做了几个 Agent 任务、让路总耗时、最近一次 */
+    this.agentYieldStats = { count: 0, tasks: 0, ms: 0, last: null };
     /** 最近一个 Agent 任务做完的时刻;`agentGraceMs` 之内专用实例不接预渲染(测试给 0) */
     this.agentDoneAt = 0;
     this.agentGraceMs = AGENT_GRACE_MS;
@@ -409,7 +423,8 @@ export class FramePipeline {
    * 编辑器进程不产流;`streams` 开关关着(`PROMPTCUT_STREAMS=0`)时它在,但什么都不做。
    */
   streamProducer() {
-    if (!this.interactive || this.closed) return null;
+    // `agent` 模式不产流(不预渲染)
+    if (!this.interactive || this.closed || !modeServesPrerender(this.mode)) return null;
     return this._streams ||= new StreamProducer(this);
   }
   /**
@@ -498,7 +513,8 @@ export class FramePipeline {
    * 走到这里就回 `503 NO_AGENT_LANE`,不在编辑器这一侧开 Chrome。
    */
   laneRefused(lane) {
-    if (this.interactive) return null;
+    // 预渲染进程按模式拒(`modeRefusal`):`user` 模式拒 Agent 的查询,`agent` 模式拒预渲染的各条 lane
+    if (this.interactive) return modeRefusal(this.mode, lane);
     if (lane === 'agent') return Object.assign(new Error('这个进程没有 Agent lane:Agent 的查询只在预渲染进程里跑。'), { status: 503, code: 'NO_AGENT_LANE', retryable: true });
     if (lane !== 'user' && lane !== 'playback') return null;
     return Object.assign(new Error('交互帧请求请直接打预渲染进程。'), { status: 503, code: 'USE_PRERENDER' });
@@ -522,7 +538,7 @@ export class FramePipeline {
     // 专用实例正借去做一项普通预渲染(`kickAgentIdle`)时,这个任务排在那一项之后:不打断它,做完就轮到这里
     this.agentPending++;
     const queuedAt = Date.now();
-    const task = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(async () => {
+    const body = async () => {
       this.noteSched('agent', 'agent', Date.now() - queuedAt);
       let leased = false;
       const lease = async (project, { asIs = false } = {}) => {
@@ -533,7 +549,19 @@ export class FramePipeline {
       };
       try { return await work(lease); }
       finally { if (leased) this.release('agent'); }
-    });
+    };
+    /*
+     * 专用实例正借去做一项普通预渲染队列的项(`kickAgentIdle` 取的 `source: 'queue'`)时,不排在它整项之后:
+     * 放进它的收件箱,由它在下一个批边界(4 帧)停下来先做(`drainAgentInbox`),做完再接着做它自己的
+     * (AGENT-maint-3)。那一项的工作不在批边界停时(计划、预览这类),收件箱在它开工前、做完后各清一次。
+     */
+    const unit = this.agentUnit;
+    if (unit?.inbox && !unit.inboxClosed) {
+      const task = new Promise((resolve, reject) => { unit.inbox.push({ body, resolve, reject }); unit.wake?.(); });
+      task.catch(() => {}).finally(() => { this.agentPending--; this.agentDoneAt = Date.now(); this.kickAgentIdle(); });
+      return task;
+    }
+    const task = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(body);
     const settled = task.finally(() => { this.agentPending--; this.agentDoneAt = Date.now(); this.kickAgentIdle(); });
     this.laneChains.set('agent', settled.catch(() => {}));
     return task;
@@ -557,6 +585,9 @@ export class FramePipeline {
    *   - `kind`:只给诊断看(`diagnostics().scheduler`):`'queue'`(细任务)/ `'preview'` / `'prerender'`。
    */
   runQueueTask(work, signal, { front = false, agentOk = !front, tag = null, scaleLane = 'queue', kind = 'queue' } = {}) {
+    // `agent` 模式不做预渲染:队列任务、操作预览、贴图预取一律当场回 `503 NO_PRERENDER`,不排队、不挂住
+    const refused = this.laneRefused('queue');
+    if (refused) return Promise.reject(refused);
     return new Promise((resolve, reject) => {
       const item = { work, signal, front, agentOk, tag, scaleLane, kind, resolve, reject, queuedAt: Date.now() };
       if (front) {
@@ -584,15 +615,79 @@ export class FramePipeline {
    * `'agent'` 借 Agent 专用实例那个已经开着的预渲染间(`resetAgentFor`),不还、不动它的空闲计时器 ——
    * 那个计时器只按 Agent 自己的任务算。
    */
-  async runQueueItem(item, worker) {
+  async runQueueItem(item, worker, unit = null) {
     if (this.closed || item.signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
-    let leased = false;
+    let leased = false, session = null;
     const lease = async project => {
       leased = true;
-      return worker === 'agent' ? this.resetAgentFor(project, item.scaleLane) : this.acquire('queue', project, { scaleLane: item.scaleLane });
+      if (worker !== 'agent') return this.acquire('queue', project, { scaleLane: item.scaleLane });
+      const bakery = await this.resetAgentFor(project, item.scaleLane);
+      session = this.lanes.get('agent') ?? null;
+      return bakery;
     };
-    try { return await item.work(lease); }
+    /*
+     * 第二个参数(AGENT-maint-3):在哪个实例上做,以及专用实例上的让路口。`work` 不认它时行为不变。
+     *   `shouldYield()`  此刻有 Agent 任务在等这个实例(收件箱不空);
+     *   `yieldPoint({ heartbeat })`  在批边界调:有 Agent 任务就先把它们做完(连着来的一次做完)再回来,回 true。
+     *                   页面被 Agent 任务换过,下一批开头自己会按队列任务的状态 `reset`。专用实例在让路时被换掉
+     *                   (Agent 任务重开了 Chrome)抛 `agentGone`,这一项交还 `'queue'` 预渲染间接着做(已交的帧不重做)。
+     */
+    const ctx = worker === 'agent' && unit?.inbox ? {
+      worker,
+      shouldYield: () => unit.inbox.length > 0,
+      yieldPoint: async ({ heartbeat } = {}) => {
+        if (!unit.inbox.length) return false;
+        await this.drainAgentInbox(unit, { heartbeat, reason: 'batch' });
+        if (this.closed || item.signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
+        if (session && this.lanes.get('agent') !== session) throw Object.assign(new Error('Agent 专用实例在让路时换掉了'), { agentGone: true });
+        return true;
+      },
+    } : { worker, shouldYield: () => false, yieldPoint: async () => false };
+    try { return await item.work(lease, ctx); }
     finally { if (leased && worker === 'queue') this.release('queue'); }
+  }
+  /**
+   * 把专用实例收件箱里的 Agent 任务按先后做完(做的时候又来的也接着做:「连着来的一次做完再切回」),
+   * 期间每 `AGENT_YIELD_BEAT_MS` 调一次 `heartbeat`(队列任务的工作计数,租约不因让路被当成停滞)。记进 `agentYieldStats`。
+   * 批边界让路时,收件箱清空后再等 `agentGraceMs`(1 秒)看有没有紧跟着的:Agent 的一次工具调用常是前后脚的几个任务
+   * (`see_frames` 渲完才排「量实体框」),不等的话中间要切回队列任务一次(一次换页加一个 4 帧块)才轮到下一个〔裁〕。
+   * `reason`:`'batch'` = 队列任务在批边界让路;`'start'` / `'end'` = 那一项开工前、做完后清收件箱。回做了几个。
+   */
+  async drainAgentInbox(unit, { heartbeat = null, reason = 'batch' } = {}) {
+    if (!unit?.inbox?.length) return 0;
+    const t0 = Date.now();
+    let tasks = 0;
+    const beat = () => { try { heartbeat?.(); } catch { /* 心跳出错不影响让路 */ } };
+    beat();
+    const timer = heartbeat ? setInterval(beat, AGENT_YIELD_BEAT_MS) : null;
+    timer?.unref?.();
+    const grace = reason === 'batch' ? Math.max(0, Number(this.agentGraceMs) || 0) : 0;
+    const next = () => new Promise(resolve => {
+      if (unit.inbox.length || !grace || this.closed) return resolve();
+      const timer = setTimeout(() => { unit.wake = null; resolve(); }, grace);
+      unit.wake = () => { clearTimeout(timer); unit.wake = null; resolve(); };
+    });
+    try {
+      for (;;) {
+        while (unit.inbox.length) {
+          const job = unit.inbox.shift();
+          tasks++;
+          try { job.resolve(await job.body()); } catch (error) { job.reject(error); }
+        }
+        await next();
+        if (!unit.inbox.length) break;
+      }
+    } finally {
+      if (timer) clearInterval(timer);
+      beat();
+    }
+    const ms = Date.now() - t0;
+    const stats = this.agentYieldStats;
+    if (reason === 'batch') stats.count++;
+    stats.tasks += tasks;
+    stats.ms += ms;
+    stats.last = { at: t0, ms, tasks, reason };
+    return tasks;
   }
   /**
    * 把 Agent 专用实例那个开着的预渲染间按 `project` 重置,交给一项普通预渲染用。专用实例已经关了、或重置失败
@@ -631,6 +726,8 @@ export class FramePipeline {
    */
   kickAgentIdle() {
     if (this.closed || !this.interactive || this.agentPending > 0 || this.agentUnit) return;
+    // 只有 `full` 模式两样都有:`user` 模式没有专用实例,`agent` 模式没有预渲染可接
+    if (!modeServesAgent(this.mode) || !modeServesPrerender(this.mode)) return;
     const session = this.lanes.get('agent');
     if (!session || session.expired) return;
     if (this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) return;
@@ -646,6 +743,8 @@ export class FramePipeline {
     if (!unit) return;
     this.agentUnit = unit;
     const run = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(async () => {
+      // 排进来到开工之间到的 Agent 任务先做(它们进了收件箱,不排在这一项之后)
+      await this.drainAgentInbox(unit, { reason: 'start' });
       const current = this.lanes.get('agent');
       if (!current || current !== session || this.closed) { unit.giveBack(); return; }
       current.unitRunning = true;
@@ -658,7 +757,13 @@ export class FramePipeline {
           void Promise.resolve(current.bakery.close?.()).catch(() => {});
         }
       }
-    }).finally(() => { this.agentUnit = null; this.pumpQueue(); this.kickAgentIdle(); });
+    }).finally(async () => {
+      // 收件箱里剩下的(最后一批之后才到的)做完再放手;清空的那一刻关上收件箱,之后到的照常排链
+      try { await this.drainAgentInbox(unit, { reason: 'end' }); } finally {
+        if (unit.inbox) unit.inboxClosed = true;
+        this.agentUnit = null; this.pumpQueue(); this.kickAgentIdle();
+      }
+    });
     this.laneChains.set('agent', run.catch(() => {}));
   }
   /**
@@ -672,10 +777,12 @@ export class FramePipeline {
       const [item] = this.queueTasks.splice(at, 1);
       this.noteSched(item.kind, 'agent', Date.now() - item.queuedAt);
       const giveBack = () => { this.queueTasks.splice(Math.min(at, this.queueTasks.length), 0, item); this.pumpQueue(); };
-      return {
+      const unit = {
         tag: item.tag, source: 'queue', giveBack,
+        /** 等这个实例的 Agent 任务(`runAgentTask` 放进来,`drainAgentInbox` 做) */
+        inbox: [],
         run: async () => {
-          try { item.resolve(await this.runQueueItem(item, 'agent')); }
+          try { item.resolve(await this.runQueueItem(item, 'agent', unit)); }
           catch (error) {
             // 借不到专用实例的预渲染间:这一项没做成,交还 `'queue'` 预渲染间,不算失败
             if (error?.agentGone && !this.closed && !item.signal?.aborted) giveBack();
@@ -683,10 +790,29 @@ export class FramePipeline {
           }
         },
       };
+      return unit;
     }
     const batch = this.cardBatchPool?.take() ?? null;
     if (batch) this.noteSched('card-batch', 'agent');
     return batch;
+  }
+  /**
+   * **队列模式的认领闸**(`mechanism/rendering.md`「Agent 优先只是插队」;`AGENT-query-render.md` 第 7 节第 2 条):
+   * 此刻 Agent 专用实例能不能再接一项普通预渲染 —— 本机渲染节点据此在 `maxConcurrent` 之外多认领一项快照任务给它做。
+   *
+   * 条件与 `kickAgentIdle` 接活的条件相同(`full` 模式、专用实例开着且没到空闲关闭、Agent 队列空、手里没有预渲染项、
+   * 不在播放让路),外加普通预渲染队列里没有它能接的待办(有的话它自己会接,不用多认领)。**不看 1 秒空档**:
+   * 认领要一个来回,任务到手时空档多半已过;没过的话 `kickAgentIdle` 自己等到点再接。
+   * 专用实例没开时回 false —— 不为接预渲染开新实例。
+   */
+  agentSpareSlot() {
+    if (this.closed || !this.interactive || !modeServesAgent(this.mode) || !modeServesPrerender(this.mode)) return false;
+    if (this.agentPending > 0 || this.agentUnit) return false;
+    const session = this.lanes.get('agent');
+    if (!session || session.expired) return false;
+    if (this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) return false;
+    const busy = this.queueRunning?.tag ?? null;
+    return !this.queueTasks.some(item => item.agentOk && (!item.tag || item.tag !== busy));
   }
   /**
    * 调度记录(只给诊断看,`diagnostics().scheduler`):`kind` 是哪种活(`'agent'` = Agent 任务,`'queue'` / `'preview'` /
@@ -731,7 +857,11 @@ export class FramePipeline {
       cardLocks: this.cardLockStore?.list() ?? [],
       // 查询渲染的调度(`noteSched`):Agent 任务、普通预渲染各在哪个实例上开工;此刻 Agent 队列与普通预渲染队列的长度
       scheduler: { ...(this.schedStats ?? { counts: {}, recent: [] }), agentPending: this.agentPending, queueWaiting: this.queueTasks.length,
-        queueRunning: this.queueRunning?.kind ?? null, agentUnit: this.agentUnit?.source ?? null, agentOpen: this.lanes.has('agent') },
+        queueRunning: this.queueRunning?.kind ?? null, agentUnit: this.agentUnit?.source ?? null, agentOpen: this.lanes.has('agent'), agentSpare: this.agentSpareSlot(),
+        // 专用实例做队列任务时给 Agent 让路(AGENT-maint-3):批边界让路次数、做了几个 Agent 任务、让路总耗时、最近一次
+        yields: { ...this.agentYieldStats } },
+      // 预渲染进程的模式与它建的 lane(`prerender-mode.mjs`);编辑器进程(`interactive: false`)没有这些 lane
+      mode: { mode: this.mode, lanes: this.interactive ? lanesOfMode(this.mode) : [] },
       // C6.4:只在配了推送队列时才有这两项(没配时诊断的形状不变)
       ...(this.pushQueue ? { push: this.pushQueue.stats?.() ?? null, adoption: this.lastAdoption ?? null } : {}) };
   }
@@ -783,7 +913,7 @@ export class FramePipeline {
       const cold = createFrameArchive({ spillDir: path.join(entry.dir, 'html-cache') });
       entry.html = cold.frames; entry.controls = cold.controls;
       entry.createControl = cold.createControl; entry.disposeArchive = cold.dispose;
-      entry.mov = new MovFrameStore({ dir: entry.dir, fps: project.fps || 30 });
+      entry.mov = new MovFrameStore({ dir: entry.dir, fps: project.fps || 30, movie: false });
       // A removed or replaced full-scene frame must not stay published in the
       // playback movie: put that sample back to transparent.
       entry.mov.onEvict = frame => entry.playbackMovie?.evict(frame);
@@ -864,6 +994,10 @@ export class FramePipeline {
    * 贴图预取时给 `'preview'`(1 倍,同它们原来在 Agent lane 上的缩放)。
    */
   async acquire(lane, project, { scaleLane = lane } = {}) {
+    // 模式不接这条 lane(`agent` 模式的 `'background'` / `'queue'`,`user` 模式的 `'agent'`):不开 Chrome,当场拒。
+    // `'background'` 同时标 `cancelled`,后台那一趟照「让路」收手(cloud-task.md I1)
+    const refused = this.interactive ? modeRefusal(this.mode, lane) : null;
+    if (refused) throw Object.assign(refused, lane === 'background' ? { cancelled: true } : {});
     // 只有后台那一趟在借预渲染间时给播放让路。`'queue'` lane 不在这里让路(M6c 集成裁定,语义 product/platforms.md
     // 「手里在做的那一批做完为止」):到这里的队列任务已经认领在手,做完为止;不认领新的由本机节点的闲时门槛管
     // (`queue-idle.mjs`)。M5b 时这里连 `'queue'` 一起抛,认领在手的任务会被当成可重试失败放回去。
@@ -905,8 +1039,8 @@ export class FramePipeline {
     return this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
   }
   async prewarmUser(project = {}) {
-    // D5:`interactive: false` 的实例(R7 之后的编辑器进程)不养热 Chrome
-    if (!this.interactive) return;
+    // D5:`interactive: false` 的实例(R7 之后的编辑器进程)不养热 Chrome;`agent` 模式也不养(不服务用户的交互帧)
+    if (!this.interactive || !modeServesPrerender(this.mode)) return;
     if (this.userPrewarm) return this.userPrewarm;
     this.userPrewarm = (async () => {
       while (!this.closed && this.userPool.filter(s => !s.dead).length < this.userPoolSize) {
@@ -996,6 +1130,11 @@ export class FramePipeline {
     // Agent 的专用实例;`prerender` = 普通的预渲染(3D 视图的空闲贴图预取),排队尾,Agent 专用实例空闲时可以接。
     lane = lane === 'playback' ? lane : lane === 'inter_face' || lane === 'user' ? 'user' : lane === 'background' ? 'background'
       : lane === 'preview' || lane === 'prerender' ? lane : 'agent';
+    // 模式不接这条 lane:当场回错(`user` 模式的 Agent 查询 → NO_AGENT_LANE,`agent` 模式的预渲染 → NO_PRERENDER),不进批处理
+    if (this.interactive) {
+      const refused = modeRefusal(this.mode, lane);
+      if (refused) throw refused;
+    }
     const generation = lane === 'user' ? ++this.userGeneration : 0;
     const generationController = lane === 'user' ? new AbortController() : null;
     if (generationController) {
@@ -1293,23 +1432,9 @@ export class FramePipeline {
   }
   async writeMov(entry, frame, buf, signature = null) {
     if (!entry.mov) return;
-    // Store the random-access copy first. Starting ffmpeg for an isolated
-    // high-numbered request would leave a pipe waiting forever for frame 0.
+    // 整场景这一份只存逐帧 PNG(随机取用的那一侧)。以前这里顺手起 ffmpeg 把连续前缀编成
+    // `mov/full.mov`,那个文件只被判过存在、没有人读内容,已不再产(legacy 整帧通道方案 B)。
     await entry.mov.put(frame, buf, signature);
-    // During playback the append-only PNG MOV is the sink. Do not start an
-    // additional ffmpeg stream competing for the same CPU budget.
-    if ((this.playback?.playing || this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) && entry.stage !== 'required') return;
-    if (entry.mov.writer || entry.mov.writerError || await exists(entry.mov.movieFile)) return;
-    try {
-      if (frame === entry.mov.nextFrame) {
-        const ffmpeg = await findFfmpeg();
-        await entry.mov.start(ffmpeg);
-      }
-    } catch (error) {
-      // MOV is a secondary cache; preserve the PNG/HTML result if the local
-      // encoder is unavailable or exits unexpectedly.
-      entry.mov.writerError ||= error;
-    }
   }
   /** `options.anchors`:锚帧那一趟(`fillAnchorSnapshots`)记的帧。只在队列模式下有区别,见 `recordSnapshots` */
   record(entry, n, html, controls = [], options = undefined) {
@@ -1578,6 +1703,8 @@ export class FramePipeline {
    * @param {{ session?: string, localRev?: unknown, adopt?: boolean, owner?: string, ticket?: number, queue?: boolean }} [options]
    */
   async preload(project, { session = DEFAULT_READY_SESSION, localRev, adopt = true, owner: as = undefined, ticket: issued = undefined, queue = undefined } = {}) {
+    // `agent` 模式不预渲染(cloud-task.md I1):什么都不排,回 `{ skipped: 'agent' }`,路由照回给调用方
+    if (this.interactive && !modeServesPrerender(this.mode)) return { skipped: this.mode };
     session = typeof session === 'string' ? session : DEFAULT_READY_SESSION;
     // `ticket`:HTTP 入口在等镜像之前就替它领了号(按到达顺序,不按算完的顺序,审查 #6)
     const ticket = adopt ? (issued ?? this.ready.request(session)) : undefined;
@@ -1690,12 +1817,16 @@ export class FramePipeline {
     });
     return entry;
   }
+  /**
+   * 整场景逐帧 PNG 补齐(含素材的整帧,`readFramesCore` 第一步查的就是它)。以前以 `mov/full.mov` 在不在
+   * 判「做过了」、并把 PNG 编成那个文件;方案 B 起不再编,`renderMovFrames` 自己跳过表里已有且有效的帧,
+   * 所以第二趟只读一遍各帧的产出记录,不重渲。
+   */
   async fillMov(entry, signal, bakery) {
-    if (!entry.mov || await exists(entry.mov.movieFile)) return;
+    if (!entry.mov) return;
     const fps = entry.project.fps || 30;
     const count = Math.max(1, Math.floor(entry.project.duration * fps));
     if (signal?.aborted) throw new Error('Cancelled');
-    await entry.mov.start(await findFfmpeg());
     await this.renderMovFrames(entry, Array.from({ length: count }, (_, i) => i), bakery, signal);
     await entry.mov.finish();
   }
@@ -2335,7 +2466,11 @@ export class FramePipeline {
    *
    * `frames` = 本地档索引里任一本地档卡缺的**全局**帧的并集。
    */
-  async renderLocalSnapshots(entry, frames, bakery, signal) {
+  /**
+   * `options.shouldStop`(AGENT-maint-3,只有做在 Agent 专用实例上的队列细任务传):每交 4 帧问一次,为真就在这一帧之后停下,
+   * 已攒的批照常收尾发层,回停下的那一帧(全局帧号);没停回 undefined。
+   */
+  async renderLocalSnapshots(entry, frames, bakery, signal, { shouldStop = null } = {}) {
     const targets = this.snapshotTargets(entry);
     if (!targets?.size) return;
     const locals = new Map([...targets].filter(([, target]) => target.tier === 'local'));
@@ -2344,8 +2479,11 @@ export class FramePipeline {
     const capabilities = new Map((entry.cardPlan ?? []).map(control => [control.clipId, control.capabilities]));
     /** clipId → 快照库的攒批写(#9:写帧 + 判体积 + 并 index 一步做,A3c / R6-14 的超限帧记进 `oversize`) */
     const batches = new Map();
+    const stop = shouldStop ? new AbortController() : null;
+    let stoppedAfter, seen = 0;
+    try {
     await bakeFrames(bakery, {
-      out: entry.dir, targetFrames: list, snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
+      out: entry.dir, targetFrames: list, snapshotOnly: false, fullFrame: true, writeFrames: false, signal: stop ? AbortSignal.any([signal, stop.signal].filter(Boolean)) : signal,
       snapshotFrames: new Set(list),
       // `__pcCreateSnapshot` 的产物每项只有 id(= clipId)/ frame / html,**不含共享键** ——
       // 键用 card plan 的 `control.clipId` ↔ `control.snapshotKey` 反查。
@@ -2358,14 +2496,20 @@ export class FramePipeline {
           try { await batches.get(item.id).add(item.frame, item.html); }
           catch { continue; }
         }
+        seen++;
+        if (stop && seen % 4 === 0 && _frame < list[list.length - 1] && shouldStop()) { stoppedAfter = _frame; stop.abort(); }
       },
     });
+    } catch (error) {
+      if (!(stop?.signal.aborted && !signal?.aborted && stoppedAfter !== undefined)) throw error;
+    }
     // 中途取消:已经交掉的批都在 index 里(盘面和 index 一致),没交的几帧丢掉,下一趟补
     if (signal?.aborted) return;
     for (const [clipId, batch] of batches) {
       const index = await batch.close();
       if (index && batch.written) this.publishLayer(entry, { clipId, snapshotKey: batch.key }, 'local', index.frames);
     }
+    return stoppedAfter;
   }
   /**
    * 整场景路要渲哪些**全局**帧:某一档的卡在这一帧还缺快照,这一帧就得渲(并集 ——
@@ -2485,9 +2629,13 @@ export class FramePipeline {
    *   `share`   后台那一趟传 `true`:每张卡还没开工的批让 Agent 专用实例空闲时借走(`openCardBatchPool`,
    *             `mechanism/rendering.md`「Agent 优先只是插队」的「Agent 队列空时接普通预渲染任务」)。
    *             没有开着、空着的专用实例时没人来借,行为与不传相同。和 `range` 不同时用。
+   *   `yieldPoint` / `shouldYield`  队列细任务做在 Agent 专用实例上时由 `runQueueItem` 给(AGENT-maint-3):批边界
+   *             (4 帧)问 `shouldYield()`,有 Agent 任务在等就 `await yieldPoint()` 让它先做。逐批跑时就在两批之间;
+   *             一趟顺推(`singlePass`)时在交完一个 4 帧块之后停下这一趟(取消只在两帧之间生效,页面不在半路上),
+   *             让完从下一个没做的批起再顺推 —— 起点仍按 4 帧对齐,和逐批跑的批一模一样,已交的帧不重做。
    * 不传时逐字节是原来的行为。
    */
-  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null, timing = null, singlePass = false, share = false } = {}) {
+  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null, timing = null, singlePass = false, share = false, yieldPoint = null, shouldYield = null } = {}) {
     // 诊断(不改行为):给了 `timing` 就把换页、推帧、入库各花了多久累进去(队列细任务的分段耗时,`prerender-executor.mjs` 记进 executor.render)
     const clock = timing ? () => Date.now() : null;
     const add = (k, ms) => { if (timing) timing[k] = (timing[k] ?? 0) + ms; };
@@ -2604,7 +2752,9 @@ export class FramePipeline {
        * 一批(或 `oneBatch` 的一整段)在给定的预渲染间上做完:换页、推帧、入库、发层。后台那一趟(`share`)时
        * Agent 专用实例空闲可以借走其中还没开工的批(`openCardBatchPool`),在它自己的预渲染间上跑同一个函数。
        */
-      const runBatch = async (bkr, first, lastFirst) => {
+      /** 一趟顺推在这一帧交完之后停下(给 Agent 让路);null = 没停 */
+      let stoppedAfter = null;
+      const runBatch = async (bkr, first, lastFirst, stop = null) => {
         const localFrames = Array.from({ length: Math.min(lastFirst + 4, control.count) - first }, (_, n) => first + n);
         // C2:帧集合收窄成**本卡缺的那些帧**(按该键 `index.json` 已有区间扣除)。
         // PNG 那一支照旧要全部帧(`targetFrames` 不动),只有生成快照这一支收窄。
@@ -2634,9 +2784,17 @@ export class FramePipeline {
           await commitProduced();
           const frames = shotChunk.splice(0);
           if (frames.length && onBatch && !signal?.aborted) onBatch({ control, first: frames[0], frames, snapshotFrames: frames.filter(n => missing.includes(n)) });
+          // 给 Agent 让路:交完这一块、后面还有帧时停下这一趟(下一帧开头就不再推了)
+          if (stop && frames.length && frames[frames.length - 1] < localFrames[localFrames.length - 1] && shouldYield?.()) {
+            stoppedAfter = frames[frames.length - 1];
+            stop.abort();
+          }
         };
-        const baked = await bakeFrames(bkr, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
-          snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
+        const bakeSignal = stop ? AbortSignal.any([signal, stop.signal].filter(Boolean)) : signal;
+        let baked;
+        try {
+          baked = await bakeFrames(bkr, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
+          snapshotOnly: false, fullFrame: true, writeFrames: false, signal: bakeSignal,
           snapshotFrames: new Set(missing),
           onFrame: async (frame, png) => {
             const put = await entry.cardCache.put(control.key, frame, png, () => !signal?.aborted);
@@ -2653,6 +2811,11 @@ export class FramePipeline {
             if (!own || !Number.isInteger(own.frame)) return;
             produced.push({ localFrame: own.frame, html: own.html });
           } });
+        } catch (error) {
+          // 让路停下的这一趟:已交的块都在库里;停下那一刻之后没有再推过帧(取消只在两帧之间生效)
+          if (stop?.signal.aborted && !signal?.aborted && stoppedAfter !== null) { produced.length = 0; shotChunk.length = 0; return; }
+          throw error;
+        }
         const t2 = clock?.();
         if (timing) { add('bakeMs', t2 - t1); add('advancedFrames', Number(baked?.advancedFrames) || 0); add('shotFrames', localFrames.length); }
         if (oneBatch) await flushChunk();
@@ -2669,10 +2832,21 @@ export class FramePipeline {
           if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
           // 剩下的批都在 Agent 专用实例手里:等其中一批落定(借走的批出错会交还到 `pending`,这里接着做)
           if (!pending.size) { await Promise.race([...stolen].map(item => item.done)); continue; }
+          // 批边界:有 Agent 任务在等这个实例就让它先做(只有队列细任务做在专用实例上时才有 `yieldPoint`)
+          if (yieldPoint && shouldYield?.()) {
+            const y0 = clock?.();
+            await yieldPoint();
+            if (timing) { add('yieldMs', clock() - y0); timing.yields = (timing.yields ?? 0) + 1; }
+            if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
+          }
           const first = oneBatch ? Math.min(...pending) : this.nextBatchStart(pending, control);
           const lastFirst = oneBatch ? Math.max(...pending) : first;
+          const all = oneBatch ? [...pending] : null;
           if (oneBatch) pending.clear(); else pending.delete(first);
-          await runBatch(bakery, first, lastFirst);
+          stoppedAfter = null;
+          await runBatch(bakery, first, lastFirst, oneBatch && yieldPoint ? new AbortController() : null);
+          // 顺推停下来让路:没做的批(起点在停下那一帧之后)放回去,下一圈先让路再从它们接着顺推
+          if (stoppedAfter !== null) for (const f of all) if (f > stoppedAfter) pending.add(f);
         }
       } finally {
         if (pool) this.closeCardBatchPool(pool);
@@ -2942,14 +3116,16 @@ export class FramePipeline {
     }
     return true;
   }
-  async renderCardSnapshotRange(entry, control, range, { signal, progress, timing = null } = {}) {
+  /** `heartbeat`:专用实例给 Agent 让路期间定时调(执行器的阶段回调 → 会话的工作计数,租约不被当成停滞) */
+  async renderCardSnapshotRange(entry, control, range, { signal, progress, timing = null, heartbeat = null } = {}) {
     const locked = () => Object.assign(new Error(`片段 ${control.clipId} 这张卡锁在别的环境上`), { code: 'card-locked-local', retryable: false });
     if (control.cardLock?.foreign === true) throw locked();
     let done = 0;
     // 诊断(不改行为):`timing` 给了就记各步用时(排队等 lane、借预渲染间、推帧各项、收尾画小尺寸)
     const queuedAt = Date.now();
-    await this.runQueueTask(async lease => {
+    await this.runQueueTask(async (lease, ctx) => {
       if (timing) timing.laneWaitMs = Date.now() - queuedAt;
+      if (timing && ctx?.worker) timing.worker = ctx.worker;
       // c10a 第 9 节:这一段里已有原尺寸、缺小尺寸的帧先记下,借出预渲染间的换页、各批的换页会把它们画掉
       try { await this.scheduleMissingSmall(entry, control, range); } catch { /* 读不了帧库:完成条件那一关会拦下 */ }
       const l0 = Date.now();
@@ -2959,6 +3135,7 @@ export class FramePipeline {
         range,
         timing,
         singlePass: this.queueSinglePass(control, range),
+        ...(ctx?.worker === 'agent' ? { shouldYield: ctx.shouldYield, yieldPoint: () => ctx.yieldPoint({ heartbeat }) } : {}),
         onBatch: ({ frames }) => {
           done += frames.filter(n => n >= range.from && n <= range.to).length;
           try { progress?.(done); } catch { /* 进度回调出错不影响渲染 */ }
@@ -2976,7 +3153,7 @@ export class FramePipeline {
    * 本地档快照任务的一段(契约 J.4,附件第 3 节):本地帧换成全局帧,照 `missingSnapshotFrames` 的条件挑出
    * 这张卡在这一段里缺的帧,交给 `renderLocalSnapshots`(一趟整场景服务该帧上的全部本地档卡)。回 `null`。
    */
-  async renderSceneSnapshotRange(entry, control, range, { signal, progress } = {}) {
+  async renderSceneSnapshotRange(entry, control, range, { signal, progress, heartbeat = null } = {}) {
     const fps = Number(entry.project.fps) || 30;
     const index = await this.snapshots().snapshotIndex({ tier: 'local', entryKey: entry.key, key: control.snapshotKey });
     const frames = [];
@@ -2990,9 +3167,20 @@ export class FramePipeline {
     let missingSmall = 0;
     try { missingSmall = await this.scheduleMissingSmall(entry, control, range); } catch { /* 完成条件那一关会拦下 */ }
     if (frames.length || missingSmall) {
-      await this.runQueueTask(async lease => {
-        const bakery = await lease(entry.project);
-        if (frames.length) await this.renderLocalSnapshots(entry, frames, bakery, signal);
+      await this.runQueueTask(async (lease, ctx) => {
+        let bakery = await lease(entry.project);
+        // 做在 Agent 专用实例上时每 4 帧问一次要不要让路(AGENT-maint-3):停下、让 Agent 先做,再把页面按这一版重置,
+        // 从没做的帧接着做(`renderLocalSnapshots` 本来就收任意帧集合,中途起步从挂载帧回放)
+        const yielding = ctx?.worker === 'agent' ? ctx : null;
+        let rest = frames;
+        while (rest.length) {
+          const stopped = await this.renderLocalSnapshots(entry, rest, bakery, signal, yielding ? { shouldStop: ctx.shouldYield } : undefined);
+          if (stopped == null || signal?.aborted) break;
+          rest = rest.filter(n => n > stopped);
+          if (!rest.length) break;
+          await yielding.yieldPoint({ heartbeat });
+          bakery = await lease(entry.project);
+        }
         if (!signal?.aborted) await this.flushPendingSmall(bakery, entry.project);
       }, signal, { tag: `scene:${entry.key}` });
     }
@@ -3170,39 +3358,31 @@ export class FramePipeline {
     } finally { if (!lease) this.release(lane); }
     return out;
   }
+  /**
+   * 后台那一趟的最后一步:按轨道前缀逐帧栅格化(`tracks/<前缀>/NNNNNN.png`,`rasterPrefix` 的缓存),
+   * 最后一个前缀的结果抄进 `<键>/frames/`(`readFramesCore` 的兼容读法、播放的暖帧都读它)。
+   *
+   * legacy 整帧通道方案 B(AGENT-maint-3):以前每个前缀还编一个 `preview.mp4`、整场景再抄一份,
+   * 没有任何消费方,不再产;旧版本留下的这些文件在这里顺手删掉。
+   */
   async prerender(entry, bakery, signal) {
     const prefixes = this.prefixes(entry);
-    const ffmpeg = await findFfmpeg();
     const frames = [...entry.html.keys()].sort((a, b) => a - b);
     for (let i = 0; i < prefixes.length; i++) {
       if (signal.aborted) throw new Error('Cancelled');
       const prefix = prefixes[i];
       const dir = path.join(this.root, 'tracks', prefix.key);
-      const video = path.join(dir, 'preview.mp4');
       const final = i === prefixes.length - 1;
-      if (!(await exists(video))) {
-        await fs.mkdir(dir, { recursive: true });
-        const temp = path.join(dir, `preview-${process.pid}.tmp.mp4`);
-        const stream = frameVideo(ffmpeg, temp, entry.project.fps || 30);
-        try {
-          for (const frame of frames) {
-            if (signal.aborted) throw new Error('Cancelled');
-            const buf = await this.rasterPrefix(entry, bakery, frame, i, prefixes);
-            await stream.write(buf);
-          }
-          await stream.finish();
-          await fs.rename(temp, video);
-        } catch (e) { await stream.abort().catch(() => {}); await fs.rm(temp, { force: true }).catch(() => {}); throw e; }
+      await fs.rm(path.join(dir, 'preview.mp4'), { force: true }).catch(() => {});
+      for (const frame of frames) {
+        if (signal.aborted) throw new Error('Cancelled');
+        await this.rasterPrefix(entry, bakery, frame, i, prefixes);
       }
       if (final) {
         for (const frame of frames) {
           await atomic(path.join(entry.dir, 'frames', `${pad(frame)}.png`), await fs.readFile(path.join(dir, `${pad(frame)}.png`)));
         }
-        const temp = path.join(entry.dir, `preview-${process.pid}.tmp.mp4`);
-        try {
-          await fs.copyFile(video, temp);
-          await fs.rename(temp, path.join(entry.dir, 'preview.mp4'));
-        } catch (e) { await fs.rm(temp, { force: true }).catch(() => {}); throw e; }
+        await fs.rm(path.join(entry.dir, 'preview.mp4'), { force: true }).catch(() => {});
       }
     }
   }
@@ -3253,6 +3433,11 @@ export class FramePipeline {
     }
   }
   async updatePlayback(project, input, { borrow = async () => false, release = async () => {} } = {}) {
+    // `agent` 模式不服务用户的播放:当场回 NO_PRERENDER
+    if (this.interactive) {
+      const refused = modeRefusal(this.mode, 'playback');
+      if (refused) throw refused;
+    }
     const work = (this.playbackChain || Promise.resolve()).catch(() => {}).then(() => this.updatePlaybackNow(project, input, { borrow, release }));
     this.playbackChain = work;
     return work;

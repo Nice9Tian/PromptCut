@@ -2,6 +2,7 @@
  * 配音的前端胶水:读写设置、合成、管理「我的音色」、音色设计 / 复刻。
  * 服务端在 server/vite-plugin-voice.ts,API Key 只在服务端,这边只看得到后四位。
  */
+import type { UploadedMedia } from "../editor/io/mediaUpload";
 
 export type Provider = "minimax" | "kling" | "vidu";
 
@@ -39,8 +40,14 @@ export interface VoicePresets {
 
 export interface VoiceResult {
   name: string;
-  path: string;
+  /** 只有试听(preview)才有:固定文件名的那份。正式合成经素材服务入库,不回磁盘路径 */
+  path?: string;
+  /** 正式合成:/@media/<hash>(入库后的地址);试听:/@media/<文件名> */
   url: string;
+  /** 正式合成:内容哈希 */
+  hash?: string;
+  /** 正式合成:素材服务入库接口的回包(和用户导入拿到的是同一种),页面据它登记素材 */
+  media?: UploadedMedia;
   bytes: number;
   provider: Provider;
   model: string;
@@ -102,7 +109,10 @@ export async function designVoice(args: { prompt: string; previewText: string; n
   return post("/api/voice/design", args, 90_000);
 }
 
-/** 复刻:先把源文件原样传进素材目录,再让服务端转音频、上传、建音色 */
+/**
+ * 复刻:先把源文件原样入库,再只递素材标识(哈希、地址、名字),服务端经素材服务取字节、转音频、上传、建音色。
+ * 不递本地路径:服务端不再按路径读内容库(字节一律经素材服务取)。
+ */
 export async function cloneVoiceFromFile(
   file: File,
   args: { name?: string; previewText?: string; voiceId?: string },
@@ -110,6 +120,7 @@ export async function cloneVoiceFromFile(
   const upName = `voice-clone-src-${Date.now()}-${file.name}`;
   const up = await fetch(`/api/media/upload/${encodeURIComponent(upName)}`, { method: "POST", body: file });
   const data = await up.json().catch(() => ({}));
-  if (!up.ok || !data.path) throw new Error(data.error || `上传源文件失败(HTTP ${up.status})`);
-  return post("/api/voice/clone", { ...args, path: data.path, consent: true }, 180_000);
+  if (!up.ok || !(data.hash || data.url)) throw new Error(data.error || `上传源文件失败(HTTP ${up.status})`);
+  const media = { hash: data.hash, url: data.url, name: file.name };
+  return post("/api/voice/clone", { ...args, media, consent: true }, 180_000);
 }

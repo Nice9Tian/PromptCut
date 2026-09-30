@@ -10,6 +10,15 @@ import { unpackFrameArchive } from "./frame-archive.mjs";
 import { overLimit } from "./http-guard.mjs";
 import { prerenderState, proxyToPrerender } from "./prerender-client.mjs";
 import { isPrerender } from "./render-role.mjs";
+import { prerenderModeOf, modeServesPrerender } from "./prerender-mode.mjs";
+
+/**
+ * 本进程的预渲染模式(`prerender-mode.mjs`;`PROMPTCUT_PRERENDER_MODE`,由编辑器进程拉起时传)。只在预渲染进程里有意义;
+ * 编辑器进程恒为 `full`(它的管线 `interactive: false`,本来就没有这些 lane)。
+ */
+const prerenderMode = isPrerender ? prerenderModeOf(process.env) : "full";
+/** 本进程做不做预渲染:`agent` 模式不做 —— 不起渲染节点、不建推送队列、`/preload` 回 `skipped` */
+const servesPrerender = modeServesPrerender(prerenderMode);
 import { ensureMirror } from "./vite-plugin-mirror";
 
 import { latestPlayhead, ensureMirror as ensureMirrorVersion, reportReadySession } from "./vite-plugin-mirror";
@@ -25,6 +34,7 @@ import { createCardCodeIndex } from "./card-code.mjs";
 import { cardCodeIdentityOf, onCardSourceChange, overridesRoot } from "./card-overrides.mjs";
 import { autoRenderNodeOffReason, createAutoRenderNode } from "./auto-render-node.mjs";
 import { foreignAssetEndpoints, selectAssetClient as selectAssetClientImpl } from "./asset-select.mjs";
+import { setBakeRemote } from "./bake-store.mjs";
 import { ALL as SCOPE_ALL, createPushScope } from "./push-scope.mjs";
 import { closeStorage, createExportSummary, storageDataDir, storageFor } from "./frame-library-storage.mjs";
 import { createStorageHandler, storageRouteOf } from "./storage-routes.mjs";
@@ -178,7 +188,14 @@ async function startArtifactPush(root: string, service: FramePipeline, auto: Aut
   const queue = createPushQueue({ pipeline: service, client, content, dir: scoped && link.projectId ? pushDirOf(service, link.url, link.projectId) : service.root,
     log: pushLog, settleMs: 1500, scope });
   queue.start();
+  /*
+   * 卡片快照(bake_card、3D 视图的贴图)也是预渲染产物:写进本机素材服务之后再推一份到这一台(`bake-store.mjs`)。
+   * 选定的就是本机素材服务时 bake-store 自己跳过。
+   */
+  const bakeRemote = { get base() { return assets.base(); }, put: (ns: string, bytes: Buffer, o?: any) => client.put(ns, bytes, o) };
+  setBakeRemote(() => bakeRemote);
   pushTeardowns.set(root, async () => {
+    setBakeRemote(null);
     try { await queue.stop(); } catch {}
     if ((service as any).pushQueue === queue) (service as any).pushQueue = null;
     assets.stop();
@@ -410,6 +427,12 @@ async function startQueueNode(root: string, service: FramePipeline, auto: AutoLi
    * 不再等 preload 到 ready。播放、拖动时不认领新的,手里在做的做完(不再 yieldAll)。
    */
   const idleGate = createQueueIdleGate({ pipeline: service, lastInteractionAt: () => lastInteraction.get(root) ?? -Infinity });
+  /**
+   * 认领闸(`queue-agent-spare.mjs`;`mechanism/rendering.md`「Agent 优先只是插队」):Agent 专用实例开着且空闲、
+   * `'queue'` 预渲染间正做着一项时,多认领一项快照任务交给专用实例做。专用实例没开时不多认领。
+   */
+  const { createAgentSpareGate }: any = await import("./queue-agent-spare.mjs");
+  const spareGate = createAgentSpareGate({ pipeline: service, base: 1 });
   /** X5 的证据(诊断 `queue.firstClaims`):第一次认领 plan / 细任务时 preload 各代际的状态 */
   const firstClaims: { plan: object | null, fine: object | null } = { plan: null, fine: null };
   const preloadStatuses = () => [...((service as any).generations?.values?.() ?? [])].map((g: any) => ({
@@ -469,7 +492,8 @@ async function startQueueNode(root: string, service: FramePipeline, auto: AutoLi
       node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities, maxConcurrent: 1, cardSourceVersions: cardCode(root).view,
         // 仅供测试(M7 契约 D15):PROMPTCUT_TEST_PLAN_ONLY=1 时只认领 plan、不认领细任务(节点侧过滤规则 8),验收时不和纯浏览器抢卡;生产不设
         ...(testPlanOnly ? { planOnly: true } : {}) },
-      endpoint, now: Date.now, isIdle: () => idleGate.idle(), maxConcurrent: 1, codeVersion, executor, sink,
+      endpoint, now: Date.now, isIdle: () => idleGate.idle(), maxConcurrent: 1, codeVersion, executor: spareGate.wrap(executor), sink,
+      claimLimit: spareGate.claimLimit, canClaim: spareGate.canClaim,
       // M7 D2:队列锁的锁定方闲置严格超 30 s、这张卡又没做完,切分时带 takeover 按本机指纹接手整张卡
       takeoverLocked: node.idleLockTakeover,
       onEvent: (event: any) => {
@@ -658,6 +682,8 @@ async function startQueueNode(root: string, service: FramePipeline, auto: AutoLi
         stats: { ...stats },
         // M6c X5:闲时门槛此刻的判定(null = 能认领)与第一次认领时 preload 的状态
         idle: { reason: idleGate.reason(), lastInteractionAt: Number.isFinite(idleGate.lastInteractionAt) ? idleGate.lastInteractionAt : null },
+        // 认领闸:此刻多出的那一格开不开、执行器手里几项快照
+        spare: spareGate.describe(),
         firstClaims: { ...firstClaims },
         local: { nodeId, claimed: [...mine.claimed], completed: [...mine.completed], dedup: [...mine.dedup], failed: [...mine.failed] },
         claims: claimLog.slice(),
@@ -1027,6 +1053,8 @@ export function frameService(root: string, origin: string) {
        * 页面侧的热渲染是可见舞台 iframe,和 Node 侧的热池不是一回事(总规则倒数第二条)。
        */
       interactive: isPrerender,
+      /** 预渲染进程的模式(`user` / `agent` / `full`,见 `prerender-mode.mjs`) */
+      mode: prerenderMode,
       /** C4:`wanted` 从镜像插件读(frame-pipeline 是 .mjs,镜像插件是 .ts) */
       playhead: () => latestPlayhead(),
       /** 没有内容哈希的素材打戳时向素材服务发 HEAD 的地址(基址按 asset-client.ts 定,不读素材目录) */
@@ -1046,9 +1074,11 @@ export function frameService(root: string, origin: string) {
      */
     void service.rescanSnapshots().catch(() => {});
     /* C6.4:连得上素材服务和文档服务时建推送队列(只在预渲染进程里;连不上就什么都不建) */
-    void startArtifactPush(root, service).catch(error => pushLog("push.skip", { reason: "error", message: String(error?.message ?? error) }));
+    /* `agent` 模式不预渲染:不建推送队列、不起渲染节点(下面两处) */
+    if (servesPrerender) void startArtifactPush(root, service).catch(error => pushLog("push.skip", { reason: "error", message: String(error?.message ?? error) }));
+    else console.info(`[frames] 预渲染进程是 ${prerenderMode} 模式:只接 Agent 的查询,不预渲染、不起渲染节点`);
     /* J.5:`PROMPTCUT_QUEUE_NODE=1` 又连得上文档服务时起本机渲染节点(开关关着时这里立即返回,什么都不建) */
-    if (queueNodeSwitch()) void startQueueNode(root, service).catch(error => queueLog("queue.skip", { reason: "error", message: String(error?.message ?? error) }));
+    if (servesPrerender && queueNodeSwitch()) void startQueueNode(root, service).catch(error => queueLog("queue.skip", { reason: "error", message: String(error?.message ?? error) }));
   }
   return service;
 }
@@ -1290,6 +1320,8 @@ export function framesPlugin(): Plugin {
             return json(200, r);
           }
           if (off) return json(200, { ok: true, enabled: false, reason: off });
+          // `agent` 模式不预渲染,也就不当渲染节点
+          if (!servesPrerender) return json(200, { ok: true, enabled: false, reason: `prerender-mode-${prerenderMode}` });
           try {
             const r = autoNodeFor(root, origin).bind(input, { ticket: input?.ticket });
             return json(200, { enabled: true, ...r });
@@ -1522,12 +1554,16 @@ export function framesPlugin(): Plugin {
             const lane = input.lane === "agent" ? "agent" : input.lane === "background" ? "background" : "user";
             if (lane === "user") noteInteraction(root);   // M6c X5:拖动取帧是交互帧请求
             const frames = await service.see_frames(project, input.times || [0], { lane, signal: requestSignal(req, res) });
-            const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
+            // `mov` 恒为 null:整场景的 full.mov 已不再产(legacy 整帧通道方案 B〔裁〕),字段留着给旧页面与探针认形状
             return json(200, { key: entry.key, incomplete: [...frames.values()].some((value: any) => value.incomplete),
               frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, incomplete: !!value.incomplete, missing: value.missing || [],
-                url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
+                url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: null });
           }
           // 会话「当前版本」的唯一来源(Item 4):页面的 preload 带着它的 `{ session, localRev }`
+          if (url.pathname === "/preload" && !servesPrerender) {
+            // `agent` 模式不预渲染(cloud-task.md I1):明说跳过了,不排活、不登记会话版本
+            return json(200, { ok: true, skipped: prerenderMode, key: entry.key });
+          }
           if (url.pathname === "/preload") {
             /*
              * J.5 队列模式:节点连着文档服务时,先替页面报摘要、传快照、发布 `plan`,成了就让这一版的快照交给队列产
@@ -1560,11 +1596,10 @@ export function framesPlugin(): Plugin {
             return json(200, { key: entry.key, snapshots, localOnly: snapshots === null });
           } else if (url.pathname !== "/status") return json(404, { error: "Unknown frame operation" });
           await entry.mov?.ready;
-          const videoReady = await fsp.access(path.join(entry.dir, "preview.mp4")).then(() => true, () => false);
-          const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
+          // `video`、`mov` 恒为 null:preview.mp4 与整场景的 full.mov 已不再产、也从来没有消费方
+          // (legacy 整帧通道方案 B〔裁〕,AGENT-maint-3)。字段不删,旧页面与探针见到的回包形状不变
           return json(200, { key: entry.key, status: entry.status, sampled: entry.html.size, movSampled: entry.mov ? [...(entry.mov.frames || [])].length : 0, total: Math.max(1, Math.floor(project.duration * (project.fps || 30))), error: entry.error,
-            video: videoReady ? `/api/frames/${entry.key}/preview.mp4` : null,
-            mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
+            video: null, mov: null });
         } catch (error: any) {
           const timedOut = Boolean(error?.timedOut || error?.code === "PRERENDER_TIMEOUT");
           const cancelled = Boolean(error?.cancelled || error?.name === "AbortError");

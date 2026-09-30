@@ -1024,16 +1024,12 @@ export default function vitePluginAi(): Plugin {
                 return line;
               }).join('\n');
             }
+            // 附件也**不给磁盘路径**(和上面素材库那几条同一个理由):Agent 经接口读写字节,不读任何存储目录
+            // (docs/semantics/product/agent.md「素材与产物」),磁盘路径它读不了,只会被引着去读。
+            // 要剪辑、转写、配动效,先用 import_media 把「站内地址」装进素材库(import_media 的工具说明写着这条路)。
             if (userFiles.length > 0) {
-              finalPrompt += '\n\n附件:\n' + userFiles.map((a: any) => {
+              finalPrompt += '\n\n附件(在对话的工作目录里,不在素材库;要剪辑、转写或配动效,先用 import_media 传它的站内地址装进素材库):\n' + userFiles.map((a: any) => {
                 let line = `- [${a.kind === 'video' ? '视频' : a.kind}] ${a.name} · 站内地址 ${a.url}`;
-                if (a.path) line += ` · 磁盘路径 ${a.path}`;
-                if (a.url && !a.path) {
-                  const diskPath = path.join(server.config.root, 'public', decodeURIComponent(a.url.split('?')[0]));
-                  if (diskPath.startsWith(path.join(server.config.root, 'public'))) {
-                    line += ` · 磁盘路径 ${diskPath}`;
-                  }
-                }
                 if (a.durationSec) line += ` · 时长 ${a.durationSec} 秒`;
                 if (a.text) line += `\n\`\`\`\n${a.text}\n\`\`\``;
                 return line;
