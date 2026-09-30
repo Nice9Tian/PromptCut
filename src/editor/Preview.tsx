@@ -24,6 +24,7 @@ import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
+import { backfillHooks } from "./sync/backfillUpload";
 import { currentReadyIndex, deliverSnapshots, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { notePlayFrame, notePlayRunStart, playingSwapTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
@@ -142,7 +143,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   useEffect(() => { setNoEditorProcess(ONLINE); return startAssetTiers(); }, []);
   // C6.6 设计稿第 9 节第 2 条:打开项目时,缺素材小尺寸、本地有素材原尺寸的视频在后台补转
   // 在线页面没有本机转码(C6.6 的补转走编辑器进程),不补
-  useEffect(() => (ONLINE ? undefined : startTierBackfill()), []);
+  // 同一时机补入库没有哈希的老素材;本机取不到的标「(缺失)」,放云端时补上哈希的交给上传队列(backfillUpload.ts)
+  useEffect(() => (ONLINE ? undefined : startTierBackfill(backfillHooks)), []);
   const t = useStore((s) => s.t);
   const playing = useStore((s) => s.playing);
   const playToken = useStore((s) => s.playToken);
