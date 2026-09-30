@@ -65,6 +65,10 @@ function allowedMediaRoots(root: string): string[] {
  *   `render-project.mjs`、`vite-plugin-vision.ts` 同一条规矩)。不看 `path`:那是导入那台机器上的落点,
  *   在另一台机器上直接打开带对方路径的 `.proc` 再导出,按路径读会解码失败(2026-09-30 `claude/pack-hash` 发现)。
  *   地址本来就是这份哈希的(`/@media/<hash>` 或带扩展名的写法)原样留着。
+ * - **没有哈希、地址为空的**(打开项目后本机取不到文件、已标「(缺失)」的老素材,见 `src/editor/io/mediaUpload.ts`):
+ *   地址留空,不再按 `path` 读 —— 那台机器上的路径在这里读不到,读了导出页会解码失败、整次导出作废。回在 `skipped` 里,
+ *   由 `dropSkippedMediaClips` 从这次导出的时间轴上去掉引用它的片段,并告诉用户(`/api/export` 回包的 `skippedMedia`)。
+ *   上传中(`pending`)的不在此列,照旧。
  * - **没有哈希的**(迁移期老素材):照旧按 `path` 走受保护的读接口 `/api/media/file?path=…`;
  *   路径在 PromptCut 的素材目录里、文件又在的,用解析后的绝对路径(老 `.proc` 可能同时带着过期的短地址 `/@media/<文件名>`)。
  * - 浏览器上传进暂存区的(`/@export/media/<文件>`)换成这次导出目录里的地址。
@@ -76,8 +80,9 @@ export async function normalizeExportMedia(
   root: string,
   id: string,
   opts: { roots?: string[]; exists?: (file: string) => Promise<boolean> } = {},
-): Promise<void> {
-  if (!project?.media || !Array.isArray(project.media)) return;
+): Promise<{ skipped: Array<{ id: string; name: string }> }> {
+  const skipped: Array<{ id: string; name: string }> = [];
+  if (!project?.media || !Array.isArray(project.media)) return { skipped };
   const roots = opts.roots ?? allowedMediaRoots(root);
   const exists = opts.exists ?? (async (file: string) => { try { await fs.access(file); return true; } catch { return false; } });
   for (const m of project.media) {
@@ -86,6 +91,12 @@ export async function normalizeExportMedia(
     if (hash) {
       const url = String(m.url || "");
       if (hashFromUrl(url) !== hash || !url.includes(hash)) m.url = `/@media/${hash}`;
+      continue;
+    }
+    if (!String(m.url || "") && !m.pending) {
+      // 已标缺失:地址留空,不按 path 读(见函数头)
+      m.url = "";
+      skipped.push({ id: String(m.id ?? ""), name: String(m.name ?? "") });
       continue;
     }
     const rawPath = typeof m.path === "string" ? m.path : "";
@@ -103,6 +114,27 @@ export async function normalizeExportMedia(
       if (fileName) m.url = `/@export/${id}/media/${fileName}`;
     }
   }
+  return { skipped };
+}
+
+/**
+ * 从这次导出的项目(导出自己的那份 JSON,就地改)里去掉引用 `skipped` 素材的片段,跳过这一段而不是让导出页解码失败。
+ * 回真的被去掉了片段的素材(同一条素材只列一次,带去掉的片段数);没有片段引用的缺失素材不影响导出,不列。
+ */
+export function dropSkippedMediaClips(project: any, skipped: Array<{ id: string; name: string }>): Array<{ id: string; name: string; clips: number }> {
+  if (!skipped.length || !Array.isArray(project?.tracks)) return [];
+  const byId = new Map(skipped.map((m) => [m.id, m]));
+  const hits = new Map<string, number>();
+  for (const tr of project.tracks) {
+    if (!tr || !Array.isArray(tr.clips)) continue;
+    tr.clips = tr.clips.filter((c: any) => {
+      const mid = c?.mediaId;
+      if (typeof mid !== "string" || !byId.has(mid)) return true;
+      hits.set(mid, (hits.get(mid) ?? 0) + 1);
+      return false;
+    });
+  }
+  return skipped.filter((m) => hits.has(m.id)).map((m) => ({ ...m, clips: hits.get(m.id)! }));
 }
 
 async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerResponse, root: string) {
@@ -188,8 +220,10 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         // staging dir might not exist, ignore
       }
       
-      // 素材地址:有哈希按哈希、没哈希才按路径(规则见 normalizeExportMedia)
-      await normalizeExportMedia(project, root, id);
+      // 素材地址:有哈希按哈希、没哈希才按路径;已标缺失的跳过它所在的片段并告诉用户(规则见 normalizeExportMedia)
+      const { skipped } = await normalizeExportMedia(project, root, id);
+      const skippedMedia = dropSkippedMediaClips(project, skipped);
+      if (skippedMedia.length) console.warn(`[export] 跳过缺失素材所在的片段:${skippedMedia.map((m) => `${m.name || m.id}×${m.clips}`).join("、")}`);
       
       const projectJsonPath = path.resolve(outDir, "project.json");
       await fs.writeFile(projectJsonPath, JSON.stringify(project, null, 2));
@@ -295,7 +329,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       });
       
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ id, outDir: relOutDir }));
+      res.end(JSON.stringify({ id, outDir: relOutDir, skippedMedia }));
     } catch (err: unknown) {
       res.statusCode = 500;
       res.end(err instanceof Error ? err.message : String(err));

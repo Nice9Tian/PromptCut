@@ -9,6 +9,10 @@
  *      导出成片:有画面(视频帧不是一片纯色)、有音轨且 440 Hz 那段不是静音。
  *   3. **实例 C**(数据目录为空、内容库里也没有这些字节):打开同一个 `.proc`,打开后的后台检查把两条素材标「(缺失)」
  *      (地址清空、名字加标记、哈希留着)。
+ *   4. **实例 C,缺失的老视频导出时跳过**(`docs/reports/AGENT-maint-4.md` 第 3 项):新建项目,放一条 C 里导入的视频(0～3 s)、
+ *      一条 C 里入库的 660 Hz 音频(0.5～2.5 s),再放一条**老形态只有 `path`** 的视频(A 的文件路径、没有哈希,1～2 s);
+ *      等后台检查把它标「(缺失)」(地址清空)。从顶栏「导出视频」导出(没有另存为的 API,留在产物目录):导出完成、不报解码失败;
+ *      完成对话框里列出被跳过的那条素材;成片三个时刻都有画面、音频那段是 660 Hz;导出用的 project.json 里没有引用它的片段。
  *
  *   node scripts/probes/cross-machine-proc-probe.mjs [--port-a 6070] [--port-b 6075] [--port-c 6080] [--out <临时目录>] [--keep]
  *
@@ -126,7 +130,7 @@ try {
   const voice = path.join(src, `voice-${RUN}.mp3`);
   run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '2', '-c:a', 'libmp3lame', '-b:a', '128k', '-metadata', `comment=${RUN}`, voice]);
 
-  browser = await puppeteer.launch({ headless: true, protocolTimeout: 900000, args: ['--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
+  browser = await puppeteer.launch({ headless: true, protocolTimeout: 900000, args: ['--disable-field-trial-config', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
 
   // ── 实例 A:建项目、存成 .proc ──
   log(`起实例 A(${PORT_A})`);
@@ -253,6 +257,93 @@ try {
     check(HASH.test(String(m.hash)), `C:${m.kind} 哈希留着`, m);
   }
   check(!eventsC.some((e) => e.type === 'pageerror'), 'C:页面没有报错', eventsC);
+
+  // ── 实例 C:缺失的老视频导出时跳过这一段,其余画面与音轨正常,完成对话框里列出它 ──
+  const video2 = path.join(src, `clip2-${RUN}.mp4`);
+  run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', '-metadata', `comment=d-${RUN}`, video2]);
+  const voice2 = path.join(src, `voice2-${RUN}.mp3`);
+  run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:sample_rate=44100', '-t', '2', '-c:a', 'libmp3lame', '-b:a', '128k', '-metadata', `comment=d-${RUN}`, voice2]);
+  const oldVideo = setup.media.find((m) => m.kind === 'video');
+  const oldName = `old-${path.basename(video)}`;
+  const setupD = await pageC.evaluate(async (o) => {
+    const b64ToFile = (b64, name, type) => {
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return new File([arr], name, { type });
+    };
+    const { actions, getState } = await import('/src/store/project.ts');
+    const io = await import('/src/editor/io/index.ts');
+    const { uploadMediaFile } = await import('/src/editor/io/mediaUpload.ts');
+    actions.newProject('cross-missing-' + o.run);
+    actions.seek(0);
+    await io.importVideoFiles([b64ToFile(o.video, o.videoName, 'video/mp4')]);
+    for (let i = 0; i < 150 && getState().project.media.some((m) => m.pending || !m.url); i++) await new Promise((r) => setTimeout(r, 200));
+    const up = await uploadMediaFile(b64ToFile(o.voice, o.voiceName, 'audio/mpeg'));
+    if (!up) throw new Error('入库接口没收下音频');
+    const mVoice = actions.addMedia({ kind: 'audio', name: o.voiceName, url: up.url, hash: up.hash, ext: up.ext, size: up.bytes, path: up.path, duration: 2 });
+    const ta = actions.addTrack('配音');
+    if (!actions.addMediaClip(mVoice.id, 0.5, { trackId: ta.id, duration: 2 })) throw new Error('音频放不上时间轴');
+    // 老形态:只有 path(另一台机器 A 的文件)、没有哈希,地址是打开老项目时还原出来的按路径地址
+    const mOld = actions.addMedia({ kind: 'video', name: o.oldName, url: '/api/media/file?path=' + encodeURIComponent(o.oldPath), path: o.oldPath, duration: 3, width: 640, height: 360 });
+    const tv = actions.addTrack('老视频');
+    if (!actions.addMediaClip(mOld.id, 1, { trackId: tv.id, duration: 1 })) throw new Error('老视频放不上时间轴');
+    const p = getState().project;
+    return { oldId: mOld.id, tracks: p.tracks.map((t) => ({ id: t.id, clips: t.clips.map((c) => ({ id: c.id, mediaId: c.mediaId ?? null, start: c.start, end: c.end })) })), duration: p.duration };
+  }, {
+    run: RUN,
+    video: (await fs.readFile(video2)).toString('base64'), videoName: path.basename(video2),
+    voice: (await fs.readFile(voice2)).toString('base64'), voiceName: path.basename(voice2),
+    oldName, oldPath: oldVideo.path,
+  });
+  out.d = { setup: setupD };
+  let oldD = null;
+  for (let i = 0; i < 80; i++) {
+    oldD = (await mediaOf(pageC)).find((m) => m.id === setupD.oldId);
+    if (oldD && String(oldD.name).startsWith(MISSING) && oldD.url === '') break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  out.d.old = oldD;
+  check(oldD && String(oldD.name).startsWith(MISSING) && oldD.url === '' && !oldD.hash, 'D:只有路径的老视频标「(缺失)」、地址清空、没有哈希', oldD);
+  log('C:缺失老视频的项目从顶栏导出');
+  const exportsBefore = new Set(await fs.readdir(C.exportDir));
+  await pageC.evaluate(() => {
+    window.showSaveFilePicker = undefined; // 没有另存为:成片留在产物目录(顶栏的兜底路)
+    window.dispatchEvent(new CustomEvent('pc-titlebar-command', { detail: 'export-video' }));
+  });
+  const dialog = await pageC.waitForFunction(() => {
+    const t = document.querySelector('.pc-export-dialog .pc-export-title')?.textContent?.trim();
+    return t === '导出完成' || t === '导出失败' || t === '已取消导出' ? t : null;
+  }, { timeout: 900000, polling: 1000 }).then((h) => h.jsonValue()).catch((e) => `等不到结果:${e.message}`);
+  const note = await pageC.evaluate(() => ({
+    skipped: document.querySelector('[data-pc="export-skipped"]')?.textContent ?? null,
+    err: document.querySelector('.pc-export-dialog .pc-export-err')?.textContent ?? null,
+  }));
+  const shot = path.join(OUT, `D-export-dialog-${RUN}.png`);
+  await pageC.screenshot({ path: shot }).catch(() => {});
+  out.d.dialog = { title: dialog, ...note, shot };
+  check(dialog === '导出完成', 'D:导出完成(不因缺失的老视频解码失败)', { dialog, err: note.err });
+  check(!!note.skipped && note.skipped.includes(oldName) && note.skipped.includes('跳过'), 'D:完成对话框里列出被跳过的那条素材', note);
+  const newDirs = (await fs.readdir(C.exportDir)).filter((d) => d.startsWith('export-') && !exportsBefore.has(d));
+  const expDir = newDirs.length ? path.join(C.exportDir, newDirs.sort().pop()) : null;
+  if (check(expDir, 'D:产物目录里有这次导出', newDirs)) {
+    const keptD = path.join(OUT, `D-export-${RUN}.mp4`);
+    await fs.copyFile(path.join(expDir, 'preview.mp4'), keptD);
+    const pj = JSON.parse(await fs.readFile(path.join(expDir, 'project.json'), 'utf8'));
+    const clipsOfOld = (pj.tracks || []).flatMap((t) => t.clips || []).filter((c) => c.mediaId === setupD.oldId);
+    const oldInJson = (pj.media || []).find((m) => m.id === setupD.oldId);
+    const streamsD = JSON.parse(String(run(ffprobe, ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,duration', '-of', 'json', keptD]))).streams;
+    const framesD = [0.5, 1.5, 2.5].map((t) => ({ t, ...frameStats(keptD, t) }));
+    const segD = audioStats(keptD, 0.7, 1.5);
+    out.d.export = { file: keptD, streams: streamsD, frames: framesD, seg: segD, clipsOfOld: clipsOfOld.length, oldUrl: oldInJson?.url ?? null };
+    check(clipsOfOld.length === 0, 'D:导出用的 project.json 里没有引用缺失老视频的片段', clipsOfOld);
+    check(oldInJson && oldInJson.url === '', 'D:导出用的 project.json 里缺失老视频的地址为空(没按路径读)', oldInJson);
+    check(streamsD.some((x) => x.codec_type === 'video'), 'D:有视频流', streamsD);
+    check(framesD.every((f) => f.std > 20), 'D:三个时刻都有画面(含被跳过那段 1～2 s,底下的视频照常)', framesD);
+    check(streamsD.some((x) => x.codec_type === 'audio'), 'D:有音轨', streamsD);
+    check(segD.rmsDb > -40 && Math.abs(segD.hz - 660) <= 40, 'D:音频那段不是静音、是 660 Hz', segD);
+  }
+  check(!eventsC.some((e) => e.type === 'pageerror'), 'D:页面没有报错', eventsC);
 } catch (e) {
   fails.push('探针异常:' + (e?.stack || e));
 } finally {
