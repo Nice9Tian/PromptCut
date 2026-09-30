@@ -533,7 +533,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   }
   cur = { link, kind, docProjectId, url, unbind, offs };
   // 在场状态(A3 第二阶段):这个页面「正在编辑」的片段经这条连接发布,别的成员那边 Agent 的范围经它收
-  setPresenceLink(link, docProjectId, me().userId);
+  setPresenceLink(link, docProjectId, me().userId ?? "");
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
   // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
