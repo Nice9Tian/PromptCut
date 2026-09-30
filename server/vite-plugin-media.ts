@@ -451,8 +451,7 @@ const tiersLog = (event: string, fields: object = {}) => {
 };
 
 /**
- * 取(必要时建)这个根的两档服务。`withQueue: false` 只生成两档、不建上传队列(无头实例:它是临时副本,
- * 不往共享服务写东西)。惰性 import:好几个单测把本文件单独转译到临时目录,静态 import 兄弟模块会解析失败。
+ * 取(必要时建)这个根的两档服务。`withQueue: false` 只生成两档、不建上传队列。惰性 import:好几个单测把本文件单独转译到临时目录,静态 import 兄弟模块会解析失败。
  */
 export function mediaTierService(root: string, { withQueue = true }: { withQueue?: boolean } = {}): Promise<TierService> {
   const services = tierServices();
@@ -520,7 +519,7 @@ export function mediaTierService(root: string, { withQueue = true }: { withQueue
 
 /** 导入(`?tiers=1`)之后:视频做重封装判定、排素材小尺寸;回包字段 */
 async function prepareTiers(root: string, stored: StoredMedia) {
-  const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+  const service = await mediaTierService(root, { withQueue: true });
   const out = await service.manager.prepareImport(stored);
   return out as { stored: StoredMedia; tiers: { original: string; small: string | null } | null; small: string | null; remux: any };
 }
@@ -774,7 +773,7 @@ export function mediaMiddleware(root: string) {
       try {
         const body = await readJsonBody(req);
         const list = (Array.isArray(body?.items) ? body.items : []).slice(0, 200);
-        const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+        const service = await mediaTierService(root, { withQueue: true });
         const items: Record<string, unknown> = {};
         for (const it of list) {
           const hash = String(it?.hash || "").toLowerCase();
@@ -797,7 +796,7 @@ export function mediaMiddleware(root: string) {
       const query = new URL(req.url, "http://promptcut.local").searchParams;
       const asked = (query.get("hashes") || "").split(",").map((h) => h.trim().toLowerCase()).filter(isMediaHash).slice(0, 200);
       try {
-        const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+        const service = await mediaTierService(root, { withQueue: true });
         res.setHeader("Content-Type", "application/json");
         return res.end(JSON.stringify({ ok: true, items: service.manager.status(asked) }));
       } catch (err) {
@@ -811,7 +810,7 @@ export function mediaMiddleware(root: string) {
     // (C10a:开启「放云端」时项目里已有的素材也要上云;只收本地有的,回 queued / missing,见 upload-queue.mjs 的 enqueueLocalMedia)
     if (req.url.startsWith("/api/media/upload-queue")) {
       try {
-        const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+        const service = await mediaTierService(root, { withQueue: true });
         if (req.method === "POST" && req.url.split("?")[0] === "/api/media/upload-queue/enqueue") {
           const body = await readJsonBody(req);
           res.setHeader("Content-Type", "application/json");
@@ -909,10 +908,9 @@ export function mediaPlugin(): Plugin {
       const handler = mediaMiddleware(root);
       server.middlewares.use((req, res, next) => { void asset(req, res, () => { void handler(req, res, next); }); });
 
-      // 两档素材与上传队列(C6.6):只在编辑器进程(ui)里跑。预渲染进程不导入素材;无头实例是临时副本,
-      // 和用户的编辑器共用同一个 out/,不接着转别人的素材小尺寸、不起上传队列(它导入时照样生成素材小尺寸,见 prepareTiers)。
+      // 两档素材与上传队列(C6.6):只在编辑器进程(ui)里跑。预渲染进程不导入素材。
       const { isPrerender } = await import("./render-role.mjs");
-      if (!isPrerender && process.env.PROMPTCUT_HEADLESS !== "1") {
+      if (!isPrerender) {
         void mediaTierService(root).then((service) => {
           service.manager.resume();
           service.queue?.start();

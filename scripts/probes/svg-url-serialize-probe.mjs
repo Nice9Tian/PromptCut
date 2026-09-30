@@ -10,7 +10,7 @@
  * 跑法:node scripts/probes/svg-url-serialize-probe.mjs
  * (自己起 vite 5208;用户的编辑台在 5190 / 验证在 5197,别碰。)
  *
- * 启动参数抄 scripts/headless.mjs:204-216 那一套(headless:true + swiftshader),
+ * 启动参数抄当时 scripts/headless.mjs(已归档)那一套(headless:true + swiftshader),
  * 不用 server/bakery/chrome.mjs 的 CHROME_ARGS:那边的 --enable-begin-frame-control 要靠 CDP
  * 手动发 BeginFrame 才出帧,页面里的 rAF 会挂住。fill 的序列化形式和出帧管线无关。
  */

@@ -250,11 +250,6 @@ test('CR-9 会话登记表:对话覆盖优先于项目默认;没覆盖跟项目;
   // 桌面 APP 会话不收覆盖值
   s.register('desk', { type: 'desktop', vendor: 'claude', creativity: 'high' });
   assert.equal(s.creativityOf('desk', 'low').level, 'low');
-  // 无头实例:AI 栏式的登记也不生效,一律跟项目
-  const h = createAgentSessions({ headless: true });
-  h.register('conv-A', { type: 'cli', vendor: 'claude', creativity: 'high' });
-  assert.equal(h.creativityOf('conv-A', 'low').level, 'low');
-  assert.equal(h.get('conv-A').type, 'desktop');
   // 不认识的覆盖值当没设
   s.register('conv-D', { type: 'cli', creativity: 'ultra' });
   assert.equal(s.creativityOf('conv-D', 'medium').level, 'medium');

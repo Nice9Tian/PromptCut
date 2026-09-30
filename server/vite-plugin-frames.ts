@@ -67,7 +67,6 @@ const pushLog = (event: string, fields: object = {}) => {
  *      探针能在同一个工作副本里反复跑。`remote`、`local`(显式设了地址、或起了独立文档服务)照旧建。
  *   3. `PROMPTCUT_PUSH=0`:一律不建,不管哪种模式。
  *
- * 无头实例(`PROMPTCUT_HEADLESS === "1"`)不建:它是临时副本,不往共享服务写东西(同 C6.3 的口径)。
  * 内容库客户端 `createContentClient` 在 `render-node/index.mjs` 里(C6.4 节点侧);取不到这个函数也不建。
  * 任何一步出错都只打日志,不影响预渲染进程。
  */
@@ -138,7 +137,7 @@ const sessionDiag = (endpoint: any) => sessionDiagOf(endpoint);
 const pushModeAllowed = (mode: unknown) => mode === "remote" || mode === "local" || mode === "shared"
   || (mode === "editor" && (process.env.PROMPTCUT_QUEUE_NODE === "1" || process.env.PROMPTCUT_PUSH === "1"));
 async function startArtifactPush(root: string, service: FramePipeline, auto: AutoLink | null = null) {
-  if (!isPrerender || process.env.PROMPTCUT_HEADLESS === "1") return;
+  if (!isPrerender) return;
   if (process.env.PROMPTCUT_PUSH === "0") return pushLog("push.skip", { reason: "disabled" });
   // M6b:独立渲染主机没有页面、不做 preload,产物由各项目节点的 sink 推(契约 render-host-contract 第 3 节「产物」)
   if (hostProfile()) return pushLog("push.skip", { reason: "host-profile" });
@@ -327,7 +326,7 @@ async function nodeCapabilities(service: FramePipeline) {
  */
 async function startQueueNode(root: string, service: FramePipeline, auto: AutoLink | null = null) {
   // 自动渲染节点(页面交来的共享配置)不看 `PROMPTCUT_QUEUE_NODE`:它由 `auto-render-node.mjs` 的开关管
-  if (!isPrerender || (!auto && !queueNodeSwitch()) || process.env.PROMPTCUT_HEADLESS === "1") return;
+  if (!isPrerender || (!auto && !queueNodeSwitch())) return;
   const stale = () => services.get(root) !== service || (service as any).closed || (auto !== null && !auto.alive());
   const origin = assetServiceOrigin();
   if (!origin) return queueLog("queue.skip", { reason: "no-asset-service" });

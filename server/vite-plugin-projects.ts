@@ -23,7 +23,7 @@ export function isValidDraftId(id: string): boolean {
 }
 
 function projectsDir(root: string): string {
-  // 无头实例(scripts/headless.mjs)把草稿目录指向它的任务目录,和用户的草稿隔离
+  // PROMPTCUT_PROJECTS_DIR:测试与探针把草稿目录指到临时目录,和用户的草稿隔离
   const dir = process.env.PROMPTCUT_PROJECTS_DIR || path.join(root, DIR);
   fs.mkdirSync(dir, { recursive: true });
   return dir;

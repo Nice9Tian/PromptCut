@@ -20,8 +20,7 @@
  *
  * 开关(开发者用,缺省开):`PROMPTCUT_AUTO_RENDER_NODE=0` 关掉自动成为渲染节点与自动推送(给观察端,C6.6 T9)。
  * 环境变量已经把这个进程配成节点或推送方(`PROMPTCUT_SHARED_CONFIG`、`PROMPTCUT_QUEUE_NODE=1`、`PROMPTCUT_PUSH=1`、
- * `PROMPTCUT_NODE_PROFILE=host`)时不接动态交接,由环境变量那一套管(探针、独立渲染主机);`PROMPTCUT_PUSH=0` 与
- * 无头实例(`PROMPTCUT_HEADLESS=1`)一律不接。
+ * `PROMPTCUT_NODE_PROFILE=host`)时不接动态交接,由环境变量那一套管(探针、独立渲染主机);`PROMPTCUT_PUSH=0` 一律不接。
  */
 import { ticketExpiry } from './auth/client.mjs';
 
@@ -40,7 +39,6 @@ const MAX_TICKET = 2048;
  */
 export function autoRenderNodeOffReason(env = process.env) {
   if (env[AUTO_RENDER_NODE_ENV] === '0') return 'disabled';
-  if (env.PROMPTCUT_HEADLESS === '1') return 'headless';
   if (env.PROMPTCUT_PUSH === '0') return 'push-disabled';
   if (env.PROMPTCUT_NODE_PROFILE === 'host') return 'host-profile';
   if (env.PROMPTCUT_SHARED_CONFIG || env.PROMPTCUT_QUEUE_NODE === '1' || env.PROMPTCUT_PUSH === '1') return 'env-configured';

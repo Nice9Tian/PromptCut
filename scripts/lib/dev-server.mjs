@@ -56,7 +56,7 @@ export async function tripleFree(port) {
 
 /**
  * 挑一个三连号都空着的编辑器端口。从 20000 以上随机挑:Node 的 fetch 和 Chrome 都拒绝
- * 「坏端口」黑名单(最大的是 10080),按构造绕开(见 scripts/headless.mjs 的 freePort)。
+ * 「坏端口」黑名单(最大的是 10080),按构造绕开(从 20000 以上挑)。
  */
 export async function pickPort(tries = 50) {
   for (let i = 0; i < tries; i++) {

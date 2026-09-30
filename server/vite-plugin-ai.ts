@@ -9,6 +9,7 @@ import { overLimit } from './http-guard.mjs';
 import { stagePortsOf } from './stage-ports.mjs';
 import { createCallPairing } from './agent/call-pairing.mjs';
 import { createAgentSessions } from './agent/agent-sessions.mjs';
+import { createDesktopActivity } from './agent/desktop-activity.mjs';
 import { createAgentBoards } from './agent/agent-board.mjs';
 import { attachLink, createMultiAgent } from './agent/multi-agent.mjs';
 import { createPresenceBridge } from './agent/presence-bridge.mjs';
@@ -51,8 +52,6 @@ function sendJson(res: ServerResponse, code: number, data: any) {
 
 export default function vitePluginAi(): Plugin {
   let editorRes: ServerResponse | null = null;
-  /** 当前编辑台宣示的所有权令牌。空 = 普通页面,谁都能接管(和以前一样) */
-  let editorOwner = '';
   let nextCallId = 1;
   const pendingCalls = new Map<number, (result: any) => void>();
   const activeRuns = new Map<string, { abort: () => void, finished: boolean, provider?: string, fail?: (message: string) => void }>();
@@ -84,11 +83,10 @@ export default function vitePluginAi(): Plugin {
     name: 'vite-plugin-ai',
     configureServer(server) {
       server.httpServer?.on('listening', () => {
-        // 无头实例(PROMPTCUT_HEADLESS=1)不写这个锁文件:它是给没指定端口的 mcp-server 兜底的,
-        // 被无头实例盖掉会把用户自己那份 AI 面板指到错误的端口上。
-        // 测试与探针起的编辑器(PROMPTCUT_NO_PORT_FILE=1)同理不写:公共入口 scripts/lib/no-user-dirs.mjs
-        // 与 npm test 的全局准备把它设上;桌面版和用户自己 `npm run dev` 起的编辑器照旧写
-        if (process.env.PROMPTCUT_HEADLESS === '1' || process.env.PROMPTCUT_NO_PORT_FILE === '1') return;
+        // 这个文件是桌面 APP 的会话(server/mcp-server.mjs)找「用户正在用的那个实例」的依据,被别的实例盖掉就会
+        // 把用户的桌面 APP 引到错误的端口上。测试与探针起的编辑器(PROMPTCUT_NO_PORT_FILE=1)不写:公共入口
+        // scripts/lib/no-user-dirs.mjs 与 npm test 的全局准备把它设上;桌面版和用户自己 `npm run dev` 起的编辑器照旧写
+        if (process.env.PROMPTCUT_NO_PORT_FILE === '1') return;
         try {
           const addr = server.httpServer?.address();
           if (addr && typeof addr !== 'string') {
@@ -256,9 +254,9 @@ export default function vitePluginAi(): Plugin {
        * 这里记下(带过期时刻)。Agent 读或写到这些片段时工具结果带 userEditing 和一句提示;只提示,不拦。
        */
       const userEditingBoard = createUserEditingBoard();
-      /** 对话 id → 给人看的厂商名(覆盖提示里「Agent <身份> 刚改过」用;登记表在下面) */
+      /** 对话 id → 给人看的厂商名(覆盖提示里「Agent <身份>(<厂商>)刚改过」用;桌面 APP 的会话用「Claude Code」这样的名字;登记表在下面) */
       const agentLabelOf = (key: string): string | null => {
-        try { return agentSessions.get(key)?.vendor ?? null; } catch { return null; }
+        try { const e = agentSessions.get(key); return e?.label ?? e?.vendor ?? null; } catch { return null; }
       };
 
       type AgentBinding = { projectId: string; mode: string; url: string; side: any; detachBoard?: () => void };
@@ -376,9 +374,47 @@ export default function vitePluginAi(): Plugin {
 
       /*
        * Agent 会话登记表(server/agent/agent-sessions.mjs):对话 ID → 类型、厂商、角色、创造力等级的覆盖值。
-       * /api/ai/chat 每次发消息登记一次;SKILL 无头实例里一律按桌面 APP 会话(跟项目)。
+       * /api/ai/chat 每次发消息登记一次;桌面 APP 的会话每次调用在 /api/mcp/call 登记(类型 desktop,跟项目)。
        */
-      const agentSessions = createAgentSessions({ headless: process.env.PROMPTCUT_HEADLESS === '1' });
+      const agentSessions = createAgentSessions();
+      /*
+       * 桌面 APP 会话在 AI 栏里的分组(A4,server/agent/desktop-activity.mjs):厂商、正在进行的操作、交上来的进度报告。
+       * 变了就把整份快照经 SSE(agent.desktop)推给页面,节流 100 毫秒。
+       */
+      let desktopPushTimer: ReturnType<typeof setTimeout> | null = null;
+      const pushDesktop = () => {
+        if (desktopPushTimer) return;
+        desktopPushTimer = setTimeout(() => {
+          desktopPushTimer = null;
+          if (!editorRes) return;
+          try { editorRes.write(`data: ${JSON.stringify({ type: 'agent.desktop', sessions: desktopActivity.snapshot() })}\n\n`); } catch { /* 页面走了 */ }
+        }, 100);
+      };
+      const desktopActivity = createDesktopActivity({ onChange: pushDesktop });
+      /** /api/mcp/call 的 caller 字段:只认 mcp-server.mjs 报的桌面会话身份,形状不对就当没带 */
+      const desktopCallerOf = (c: any): { key: string; vendor: string | null; label: string | null; client: { name: string; version: string } | null } | null => {
+        if (!c || typeof c !== 'object' || c.type !== 'desktop') return null;
+        if (typeof c.key !== 'string' || !/^desk-[A-Za-z0-9_-]{1,59}$/.test(c.key)) return null;
+        const str = (v: any, n: number) => (typeof v === 'string' && v ? v.slice(0, n) : null);
+        const client = c.client && typeof c.client === 'object' && typeof c.client.name === 'string'
+          ? { name: c.client.name.slice(0, 64), version: typeof c.client.version === 'string' ? c.client.version.slice(0, 32) : '' }
+          : null;
+        return { key: c.key, vendor: str(c.vendor, 64), label: str(c.label, 64), client };
+      };
+      /**
+       * SKILL 悬浮窗下面的「上一步做成的动作」预览(desktop/src-tauri/src/skill_shell.rs 盯 skillRoot/last-action.*):
+       * 桌面会话做成一次操作、SKILL 模式开着时,让页面渲一张那一刻的画面交回来(页面只对时间轴操作照做,失败静默)。
+       * 原来这件事由无头实例的页面做,无头实例归档之后由用户这份页面做。
+       */
+      const requestSkillPreview = (tool: string, args: any, result: any) => {
+        if (!editorRes || (result && typeof result === 'object' && result.ok === false)) return;
+        void import(new URL('./skill-gate.mjs', import.meta.url).href).then((gate: any) => {
+          if (!gate.readState().active || !editorRes) return;
+          const clipId = typeof args?.clipId === 'string' ? args.clipId : typeof result?.clip?.id === 'string' ? result.clip.id : null;
+          const start = typeof args?.start === 'number' ? args.start : null;
+          try { editorRes.write(`data: ${JSON.stringify({ type: 'skill.preview', tool, clipId, start })}\n\n`); } catch { /* 页面走了 */ }
+        }).catch(() => {});
+      };
       /** 页面发消息时顺手报上来的项目默认等级:服务端读不到项目(没绑副本、没有镜像)时用它 */
       let projectCreativityHint: string | null = null;
       /**
@@ -494,15 +530,14 @@ export default function vitePluginAi(): Plugin {
         }
 
         /*
-         * SKILL 模式的闸门(server/skill-gate.mjs)。
-         *
-         * 只在无头实例上拦,而且**拦在执行之前** —— 用户点了「关闭 SKILL 模式」就是收回了
-         * 控制权,agent 那边可能正跑在半路并不知情。执行完再回滚是收拾不干净的:见过画面的
-         * 卡片、写过的文件都追不回来。放行与否只看那一个状态文件,和这条调用是谁发起的无关。
+         * SKILL 模式的闸门(server/skill-gate.mjs),按调用方类型拦(A4):登记过的桌面 APP 会话在 SKILL 模式关着时
+         * 什么都不做,AI 栏的 Agent 不受它管。**拦在执行之前** —— 用户切回传统式就是收回了桌面 APP 的手,
+         * 那边的会话可能正跑在半路并不知情;执行完再回滚是收拾不干净的。没登记过、也没报身份的调用按 unknown,不拦。
          */
+        const callerEntry = agentSessions.get(agent);
         const gate = await import(new URL('./skill-gate.mjs', import.meta.url).href);
-        const verdict = gate.checkGate(tool);
-        if (!verdict.ok) return { ok: false, skillClosed: true, message: verdict.message };
+        const verdict = gate.checkGate(tool, callerEntry.registeredAt ? callerEntry.type : 'unknown');
+        if (!verdict.ok) return { ok: false, skillClosed: true, error: verdict.message, message: verdict.message };
 
         /*
          * 堵口子(计划 agent-workflow-plan.md A1):set_project_meta 带了 schema 没声明的字段就整次拒绝。
@@ -605,7 +640,8 @@ export default function vitePluginAi(): Plugin {
        */
       async function callEditorPage(tool: string, args: any, agent: string | undefined, limit: number): Promise<any> {
         if (!editorRes) {
-          throw new Error('编辑台没有打开:没有页面连着 /api/mcp/events');
+          // 桌面 APP 的会话最常碰到这一条(SKILL 模式默认关着编辑界面;后台运行是计划 A5):说清是什么、该怎么办
+          throw new Error(`编辑台没有打开:没有页面连着 /api/mcp/events。${tool} 要在 PromptCut 的编辑界面里执行,请用户打开编辑界面后再试,不要反复重试。`);
         }
 
         const id = nextCallId++;
@@ -1058,7 +1094,8 @@ export default function vitePluginAi(): Plugin {
               serverName: "promptcut",
               command: process.execPath,
               args: [fileURLToPath(new URL('./mcp-server.mjs', import.meta.url))],
-              env: { PROMPTCUT_PORT: String(editorPort), ...(agentId ? { PROMPTCUT_AGENT: agentId } : {}) }
+              // PROMPTCUT_CALLER=cli:这份 MCP 是 AI 栏起的,不是桌面 APP 的会话(mcp-server.mjs 据此不报桌面身份)
+              env: { PROMPTCUT_CALLER: 'cli', PROMPTCUT_PORT: String(editorPort), ...(agentId ? { PROMPTCUT_AGENT: agentId } : {}) }
             };
 
             const cwd = path.join(server.config.root, 'exports', 'ai-workspace');
@@ -1242,39 +1279,12 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/mcp/events', (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
 
-        /*
-         * 谁能当编辑台:先来后到,但**正在干活的实例不许被踢**。
-         *
-         * 这个位置只有一个(editorRes),后连的会把前一个挤掉。平时这是对的 —— 用户刷新
-         * 页面就得靠它重新接管。但 Skill 模式下会出事:agent 拿自己的浏览器打开编辑台
-         * 想「看一眼」布局,一连上就把无头实例那个页面踢了,之后它的所有工具调用全部失败,
-         * 而被踢的那一方是**永久放弃**的(mcpExecutor 里 active=false),不会自己回来。
-         * 实测过:Claude 桌面版自带的浏览器打开 127.0.0.1 就能接管这个位置。
-         *
-         * 所以给「正在干活的那个」发一把钥匙:无头实例的页面带 owner=<令牌> 连进来,
-         * 之后没有同一把钥匙的连接一律**拒绝**(而不是接管)。普通用户那份不带 owner,
-         * 行为和以前一模一样,刷新照样能接管 —— 这道锁只在有人明确宣示所有权时才生效。
-         */
-        const url = new URL(req.url || '/', 'http://localhost');
-        const owner = url.searchParams.get('owner') || '';
-        if (editorOwner && owner !== editorOwner) {
-          res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-          return res.end(JSON.stringify({
-            ok: false,
-            error: '编辑台已被一个正在运行的实例占用',
-            // 别让人去猜该加什么后缀:钥匙在环境变量里,直接把能用的那条链接给出去
-            hint: process.env.PROMPTCUT_VIEW_TOKEN
-              ? `这个端口上有 Skill 任务在跑。想看画面请打开这条只读链接(钥匙已在里面):http://${req.headers.host || '127.0.0.1'}/?draft=project&view=${encodeURIComponent(process.env.PROMPTCUT_VIEW_TOKEN)}`
-              : '这个端口上有 Skill 任务在跑。想看画面请用只读方式打开:在地址后面加 ?observe=1,那样不会抢走它的连接。',
-          }));
-        }
-
+        // 这个位置只有一个(editorRes),后连的把前一个挤掉:用户刷新页面就靠它重新接管
         if (editorRes) {
           editorRes.write(`data: ${JSON.stringify({ type: "replaced" })}\n\n`);
           editorRes.end();
         }
 
-        editorOwner = owner;
         editorRes = res;
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
@@ -1285,15 +1295,12 @@ export default function vitePluginAi(): Plugin {
         
         const port = (server.httpServer?.address() as any)?.port || 5195;
         res.write(`data: ${JSON.stringify({ type: 'hello', port })}\n\n`);
-        // 公告板的现状(页签上的范围名、未读)先推一份(A3)
+        // 公告板的现状(页签上的范围名、未读)先推一份(A3);桌面 APP 会话的分组也推一份(A4)
         pushBoard();
-        
+        pushDesktop();
+
         req.on('close', () => {
-          if (editorRes === res) {
-            editorRes = null;
-            // 主人走了,锁跟着放 —— 否则实例崩了之后这个端口永远没人能连上
-            editorOwner = '';
-          }
+          if (editorRes === res) editorRes = null;
         });
       });
 
@@ -1327,7 +1334,7 @@ export default function vitePluginAi(): Plugin {
         req.on('end', async () => {
           if (over) return;
           try {
-            const { tool, args, agent, callId, pair } = JSON.parse(body);
+            const { tool, args, agent, callId, pair, caller } = JSON.parse(body);
             // callId:Claude Code 经 MCP 的 _meta["claudecode/toolUseId"] 带来(server/mcp-server.mjs 转过来),事件带上它
             let call: string | undefined = typeof callId === 'string' && callId.length <= 128 ? callId : undefined;
             /*
@@ -1337,7 +1344,26 @@ export default function vitePluginAi(): Plugin {
             if (!call && agentBinding && pair && typeof pair.scope === 'string' && pair.scope.length <= 160) {
               call = await callPairing.claim(pair.scope, tool, args ?? {}, typeof pair.hint === 'string' && pair.hint.length <= 128 ? pair.hint : undefined);
             }
-            const result = await callToolInternal(tool, args, typeof agent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(agent) ? agent : undefined, call);
+            /*
+             * 桌面 APP 的会话(A4):mcp-server.mjs 报来 caller { type: 'desktop', key, vendor, label, client }。
+             * 每次调用登记一次(类型 desktop、跟项目的创造力等级),用它的 key 当对话 ID —— 写入身份(文档服务按对话开连接)、
+             * 公告板、「用户正在编辑」与覆盖提示都按它区分,和 AI 栏的 Agent 走同一条路。AI 栏的调用带 agent,不带 caller。
+             */
+            const desk = desktopCallerOf(caller);
+            const agentKey = desk ? desk.key : (typeof agent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(agent) ? agent : undefined);
+            if (desk) agentSessions.register(desk.key, { type: 'desktop', vendor: desk.vendor, label: desk.label, client: desk.client, role: null });
+            const handle = desk ? desktopActivity.begin(desk.key, desk, String(tool), args) : null;
+            let result: any;
+            try {
+              result = await callToolInternal(tool, args, agentKey, call);
+            } catch (e) {
+              if (handle) desktopActivity.end(handle, null, e);
+              throw e;
+            }
+            if (handle) {
+              desktopActivity.end(handle, result, null);
+              requestSkillPreview(String(tool), args, result);
+            }
             sendJson(res, 200, { ok: true, result });
           } catch (e: any) {
             if (e.code === 'UNKNOWN_TOOL') {
@@ -1452,6 +1478,20 @@ export default function vitePluginAi(): Plugin {
         const b = board();
         sendJson(res, 200, { ok: true, project: currentProjectKey(), agents: b.snapshot(), list: b.listRaw(''), sessions: agentSessions.list(), changes: b._changes().slice(-50) });
       });
+      /*
+       * 桌面 APP 会话的分组(A4):GET /api/agent/desktop → { ok, sessions }(页面刚连上时取一次,之后收 SSE 的 agent.desktop;
+       * 探针也读它)。每个会话:id、厂商、正在进行的操作、最近的调用、交上来的进度报告,以及登记表里的类型与生效的创造力等级。
+       */
+      server.middlewares.use('/api/agent/desktop', (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        res.setHeader('Cache-Control', 'no-store');
+        const level = currentProjectCreativity();
+        const sessions = desktopActivity.snapshot().map((s: any) => {
+          const c = agentSessions.creativityOf(s.id, level);
+          return { ...s, type: c.entry.type, creativity: c.level };
+        });
+        sendJson(res, 200, { ok: true, sessions });
+      });
       server.middlewares.use('/api/agent/status', (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         res.setHeader('Cache-Control', 'no-store');
@@ -1466,8 +1506,6 @@ export default function vitePluginAi(): Plugin {
         for (const st of activeRuns.values()) if (!st.finished) activeRunCount++;
         sendJson(res, 200, {
           editorConnected: !!editorRes,
-          // 有主 = 这个端口被一个正在跑的实例占着,别的页面连不上(只能 ?observe=1 只读打开)
-          editorOwned: !!editorOwner,
           pending: pendingCalls.size,
           /*
            * 还有几轮对话正在跑。装补丁的脚本(desktop/scripts/apply-patch.ps1)靠它决定

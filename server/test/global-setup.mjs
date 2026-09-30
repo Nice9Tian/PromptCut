@@ -33,7 +33,7 @@ import { scrubUserDirEnv, markNoPortFile } from '../../scripts/lib/user-dirs.mjs
 
 /**
  * WHATWG fetch 规范「bad port」名单里 ≥ 1024 的部分（低于 1024 的系统不会当临时端口发）。
- * 最大的是 10080；`scripts/headless.mjs` 的 `freePort` 因此从 20000 以上挑。
+ * 最大的是 10080；自动挑端口的脚本因此从 20000 以上挑。
  */
 export const FETCH_BAD_PORTS = Object.freeze([
   1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566,

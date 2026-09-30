@@ -6,16 +6,16 @@ import path from "node:path";
 /**
  * SKILL 模式的开关接口,外加 .proc 的独占锁。
  *
- * 单独一个插件而不是并进 vite-plugin-skill.ts:那个文件另一个会话正在改(Codex 深链那条线),
- * 往同一个文件里加东西两边都容易被覆盖。这里的东西也确实是另一件事 —— 那边管「怎么把任务
- * 交出去」,这边管「交出去期间谁说了算」。
+ * 和 vite-plugin-skill.ts 分开:那边管「桌面 APP 怎么接进来」(登记),这边管「SKILL 开没开」(闸门的状态,
+ * server/skill-gate.mjs)。
  *
- * 三组接口:
- *   GET  /api/skill-mode          现在是不是 SKILL 模式(前端每秒问一次,Rust 壳直接读文件)
- *   POST /api/skill-mode/open     开(Skill 任务起来时)
- *   POST /api/skill-mode/close    关(用户点「关闭 SKILL 模式」)
- *   POST /api/skill-lock/acquire   .proc 独占锁:非 SKILL 模式打开项目时抢
- *   POST /api/skill-lock/release   放锁
+ * 接口:
+ *   GET  /api/skill-mode              现在是不是 SKILL 模式(前端每秒问一次,Rust 壳直接读文件)
+ *   POST /api/skill-mode/open         开(用户在顶栏切到 SKILL)
+ *   POST /api/skill-mode/close        关(用户切回传统式)
+ *   POST /api/skill-mode/last-action  页面交回桌面会话上一步动作的画面,给 SKILL 悬浮窗
+ *   POST /api/skill-lock/acquire      .proc 独占锁:打开项目时抢
+ *   POST /api/skill-lock/release      放锁
  */
 
 function sendJson(res: ServerResponse, code: number, data: unknown) {
@@ -66,11 +66,8 @@ function pidAlive(pid: number): boolean {
  * 抢一份 .proc 的独占锁。
  *
  * 为什么要独占:两个 PromptCut 同时开着同一个 .proc,各自按自己内存里的状态往回写,
- * 后写的把先写的整份盖掉 —— 不是合并,是丢。所以非 SKILL 模式下一个文件只许一个实例写。
- *
- * **SKILL 模式下不加锁**,这是有意的:那时候无头实例在写 job 的 project.proc,而 Rust 壳
- * 和用户那份都要读它来更新状态。加了独占就读不了了。丢改动的风险由「只有 agent 一个人写」
- * 来保证 —— 用户那份在 Skill 模式下是锁住的,不会同时往同一个文件写。
+ * 后写的把先写的整份盖掉 —— 不是合并,是丢。所以一个文件只许一个实例写。SKILL 模式下也一样:
+ * 桌面 APP 的会话改的就是这个实例里的项目,不另开副本。
  *
  * # 两层判据,顺序不能反
  *
@@ -230,31 +227,18 @@ export function skillStatePlugin(): Plugin {
         try {
           const gate = await import(new URL("./skill-gate.mjs", import.meta.url).href);
           if (!action && req.method === "GET") {
-            const state = gate.readState();
-            // 顺带把 agent 那边的进度报回去:壳和面板都想显示「改到哪了」
-            let proc: { updatedAt: string; clips: number } | null = null;
-            if (state.procPath && fs.existsSync(state.procPath)) {
-              try {
-                const doc = JSON.parse(fs.readFileSync(state.procPath, "utf8"));
-                const tracks = doc?.project?.tracks ?? [];
-                proc = {
-                  updatedAt: fs.statSync(state.procPath).mtime.toISOString(),
-                  clips: tracks.reduce((n: number, t: { clips?: unknown[] }) => n + (t.clips?.length ?? 0), 0),
-                };
-              } catch { /* 正在写到一半,下一秒再问 */ }
-            }
-            return sendJson(res, 200, { ok: true, state, proc });
+            return sendJson(res, 200, { ok: true, state: gate.readState() });
           }
           if (action === "open" && req.method === "POST") {
-            const body = JSON.parse((await readBody(req)) || "{}");
-            return sendJson(res, 200, { ok: true, state: gate.openGate(body) });
+            await readBody(req);
+            return sendJson(res, 200, { ok: true, state: gate.openGate() });
           }
-          // 无头实例上报「上一步做成的时间轴动作」的画面:写到 skillRoot/last-action.{png,json},
-          // 壳的 watcher(desktop/src-tauri/src/skill_shell.rs)盯着 json 的修改时间推给悬浮窗。
-          // 只收无头实例的:用户自己那份 PromptCut 的动作不是 agent 的,不该出现在悬浮窗里。
+          // 页面交回「桌面会话上一步做成的时间轴动作」的画面(编辑器进程经 SSE 的 skill.preview 要的):
+          // 写到 skillRoot/last-action.{png,json},壳的 watcher(desktop/src-tauri/src/skill_shell.rs)盯着 json 的
+          // 修改时间推给悬浮窗。SKILL 模式关着时不收 —— 悬浮窗只在 SKILL 模式下存在。
           if (action === "last-action" && req.method === "POST") {
-            if (process.env.PROMPTCUT_HEADLESS !== "1") {
-              return sendJson(res, 200, { ok: true, skipped: "not-headless" });
+            if (!gate.readState().active) {
+              return sendJson(res, 200, { ok: true, skipped: "skill-off" });
             }
             const body = JSON.parse((await readBody(req)) || "{}");
             const base64 = typeof body.base64 === "string" ? body.base64 : "";
@@ -272,7 +256,6 @@ export function skillStatePlugin(): Plugin {
               tool: typeof body.tool === "string" ? body.tool.slice(0, 64) : null,
               clipId: typeof body.clipId === "string" ? body.clipId.slice(0, 64) : null,
               t: typeof body.t === "number" && Number.isFinite(body.t) ? body.t : null,
-              jobId: gate.readState().jobId ?? null,
               at: new Date().toISOString(),
             };
             const jsonPath = path.join(root, "last-action.json");
@@ -284,7 +267,7 @@ export function skillStatePlugin(): Plugin {
             const body = JSON.parse((await readBody(req)) || "{}");
             const state = gate.closeGate(body.by || "user");
             // 记一行到 sidecar 日志:用户报「关闭中…卡死」时,先看这里有没有收到请求
-            console.log(`[skill-mode] close by=${body.by || "user"} job=${state.jobId ?? "-"} at=${state.closedAt}`);
+            console.log(`[skill-mode] close by=${body.by || "user"} at=${state.closedAt}`);
             return sendJson(res, 200, { ok: true, state });
           }
           return sendJson(res, 404, { ok: false, error: "没有这个接口" });
@@ -313,9 +296,6 @@ export function skillStatePlugin(): Plugin {
           if (!raw) return sendJson(res, 400, { ok: false, error: "path 或 draftId 必填" });
           const target = path.resolve(String(raw));
           if (action === "acquire") {
-            const gate = await import(new URL("./skill-gate.mjs", import.meta.url).href);
-            // SKILL 模式下不加锁 —— 壳和用户那份都要读无头实例正在写的那个文件
-            if (gate.readState().active) return sendJson(res, 200, { ok: true, skipped: "skill-mode" });
             const out = acquireLock(target);
             if (out.ok) held.add(target);
             // 把解析出的真实路径回给前端:桌面壳那层要拿它去独占内核句柄

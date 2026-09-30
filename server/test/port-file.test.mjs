@@ -12,7 +12,7 @@
  *   2. `npm test` 的全局准备设了它；
  *   3. `vite-plugin-ai.ts` 认它，而且在写文件之前就返回；
  *   4. `scripts/` 下每个起编辑器（默认配置的 vite dev server）的脚本都带上它：第一个 import 是
- *      `no-user-dirs.mjs`，或者起进程时显式设；产品入口另有办法（无头实例、渲染主机）；
+ *      `no-user-dirs.mjs`，或者起进程时显式设；产品入口另有办法（渲染主机）；
  *   5. 桌面版与 `npm run dev` 不设它，照旧写。
  * 只读仓库文件、起一个不连网的 node 子进程，不碰公共的 port.json。
  */
@@ -70,7 +70,6 @@ test('port-file:vite-plugin-ai.ts 认 PROMPTCUT_NO_PORT_FILE=1,在写 port.json 
   assert.ok(write > at, 'listening 回调里找不到写 port.json 的地方');
   const guard = src.slice(at, write);
   assert.match(guard, /process\.env\.PROMPTCUT_NO_PORT_FILE === '1'[^\n]*\)\s*return;/, '写文件之前要按 PROMPTCUT_NO_PORT_FILE 返回');
-  assert.match(guard, /process\.env\.PROMPTCUT_HEADLESS === '1'/, '无头实例照旧不写');
   assert.equal(src.split("'port.json'").length - 1, 1, 'vite-plugin-ai.ts 里只有一处写 port.json');
 });
 
@@ -81,7 +80,6 @@ const IN_PROCESS_EDITOR = /createServer\(\{\s*configFile\s*:\s*(?!false\b)(?![^}
 
 /** 产品入口:不引 no-user-dirs.mjs,用自己的办法不写公共的 port.json */
 const PRODUCT_ENTRIES = new Map([
-  ['scripts/headless.mjs', /PROMPTCUT_HEADLESS:\s*["']1["']/],
   ['scripts/render-host.mjs', /TEMP/],
 ]);
 
@@ -114,7 +112,7 @@ test('port-file:scripts/ 下起编辑器的脚本都带 PROMPTCUT_NO_PORT_FILE=1
     if (!viaEntry && !explicit) offenders.push(`${rel}:会起编辑器,第一个 import 不是 no-user-dirs.mjs,也没显式设 PROMPTCUT_NO_PORT_FILE: '1'`);
   }
   assert.ok(checked.length >= 25, `扫描到的脚本太少(${checked.length}),识别规则可能坏了:${checked.join(', ')}`);
-  for (const must of ['scripts/lib/dev-server.mjs', 'scripts/probes/ready-index-probe.mjs', 'scripts/probes/cold-start-probe.mjs', 'scripts/probes/m8/procs.mjs', 'scripts/headless.mjs']) {
+  for (const must of ['scripts/lib/dev-server.mjs', 'scripts/probes/ready-index-probe.mjs', 'scripts/probes/cold-start-probe.mjs', 'scripts/probes/m8/procs.mjs']) {
     assert.ok(checked.includes(must), `${must} 起编辑器,识别规则却没认出来`);
   }
   assert.deepEqual(offenders, [], '这些脚本起的编辑器会覆盖公共的 %TEMP%\\promptcut\\port.json');

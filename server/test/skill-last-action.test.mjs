@@ -1,5 +1,5 @@
-// SKILL 悬浮窗预览的落盘路由:无头实例 POST /api/skill-mode/last-action,
-// 写 skillRoot/last-action.{png,json};用户自己那份(非无头)什么都不写。
+// SKILL 悬浮窗预览的落盘路由:SKILL 模式开着时页面 POST /api/skill-mode/last-action(桌面会话上一步动作的画面,
+// 编辑器进程经 SSE 的 skill.preview 要的),写 skillRoot/last-action.{png,json};SKILL 模式关着时什么都不写。
 // 顺带锁住 close 路由的返回形状。跑法:node --test server/test/skill-last-action.test.mjs
 import fs from 'node:fs';
 import os from 'node:os';
@@ -62,8 +62,10 @@ const PNG_1x1 = Buffer.from(
   'base64',
 );
 
-test('无头实例上报:png 和 json 都落到 skillRoot,json 带工具名 / 时间点 / 时刻', async () => {
-  process.env.PROMPTCUT_HEADLESS = '1';
+const gate = await import(gateUrl);
+
+test('SKILL-LA-1 SKILL 模式开着时上报:png 和 json 都落到 skillRoot,json 带工具名 / 时间点 / 时刻', async () => {
+  gate.openGate();
   try {
     const fn = handlerOf();
     const r = await call(fn, 'POST', '/last-action', { tool: 'add_clip', clipId: 'c-1', t: 3.5, base64: PNG_1x1.toString('base64') });
@@ -84,32 +86,32 @@ test('无头实例上报:png 和 json 都落到 skillRoot,json 带工具名 / �
     assert.ok(!fs.existsSync(path.join(SKILL_DIR, 'last-action.png.tmp')));
     assert.ok(!fs.existsSync(path.join(SKILL_DIR, 'last-action.json.tmp')));
   } finally {
-    delete process.env.PROMPTCUT_HEADLESS;
+    gate.closeGate('test');
   }
 });
 
-test('不是 png 的内容拒收', async () => {
-  process.env.PROMPTCUT_HEADLESS = '1';
+test('SKILL-LA-2 不是 png 的内容拒收', async () => {
+  gate.openGate();
   try {
     const fn = handlerOf();
     const r = await call(fn, 'POST', '/last-action', { tool: 'add_clip', base64: Buffer.from('hello').toString('base64') });
     assert.equal(r.status, 400);
     assert.match(r.json.error, /png/);
   } finally {
-    delete process.env.PROMPTCUT_HEADLESS;
+    gate.closeGate('test');
   }
 });
 
-test('用户自己那份(非无头)上报被跳过,不写文件', async () => {
+test('SKILL-LA-3 SKILL 模式关着时上报被跳过,不写文件', async () => {
   fs.rmSync(SKILL_DIR, { recursive: true, force: true });
   const fn = handlerOf();
   const r = await call(fn, 'POST', '/last-action', { tool: 'add_clip', base64: PNG_1x1.toString('base64') });
   assert.equal(r.json.ok, true);
-  assert.equal(r.json.skipped, 'not-headless');
+  assert.equal(r.json.skipped, 'skill-off');
   assert.ok(!fs.existsSync(path.join(SKILL_DIR, 'last-action.png')));
 });
 
-test('close 路由:返回 ok 和关掉之后的状态,closedBy 记的是谁关的', async () => {
+test('SKILL-LA-4 close 路由:返回 ok 和关掉之后的状态,closedBy 记的是谁关的', async () => {
   const fn = handlerOf();
   const r = await call(fn, 'POST', '/close', { by: 'user' });
   assert.equal(r.status, 200);
