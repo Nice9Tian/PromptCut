@@ -13,7 +13,7 @@
 
 ```text
 你是 PromptCut 的主会话，运行在笔记本上。先用 get_session self 报出你的会话标题和 ID。
-按 docs/plan/Master-Execution-Plan.md 第 0.4 节开工：先读、自检（第一项先验子 Agent 技能与四个定义）、接手动作、第一件事。接手时从 docs/reports/HANDOFF-〔日期〕.md 记的那一步继续。
+按 docs/plan/Master-Execution-Plan.md 第 0.4 节开工：先读、自检（第一项先验子 Agent 技能与六个定义）、接手动作、第一件事。接手时从 docs/reports/HANDOFF-〔日期〕.md 记的那一步继续。
 跨机会话在 ListAgents 里以标题出现，句柄和它自己报的 local_ ID 不同；给别的会话发消息一律按标题找、用列表里的句柄发。
 等辅助节点报到后回执。自检结果和报到贴给我，我再钉 goal。
 ```
