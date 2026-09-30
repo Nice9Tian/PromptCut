@@ -21,7 +21,7 @@ import { mediaSourceOf } from "./vision/ffmpeg-frames";
  *
  * 请求体里递进来的 `path` 不再用来读盘:地址只由哈希、文件名或上面两种路由拼成,边界由素材服务那一侧守。
  */
-function audioMediaUrl(m: any, origin: string): string | null {
+export function audioMediaUrl(m: any, origin: string): string | null {
   const url = String(m?.url || "");
   if (/^\/@export\/[^/?#]+\/media\/[^/?#]+$/.test(url)) return `${origin}${url}`;
   return mediaSourceOf(m, origin);
