@@ -41,6 +41,10 @@ export const SANDBOX_LIMITS = Object.freeze({
   idleCloseMs: 60_000,
   /** 排队的测量最多几个(含正在跑的) */
   maxQueue: 4,
+  /** 心跳:每隔多久问一次页面、每次等多久、连续几次没回话判卡死 */
+  heartbeatEveryMs: 1_000,
+  heartbeatTimeoutMs: 2_000,
+  heartbeatMisses: 3,
   /** PCM 按块交给页面,每块字节数 */
   chunkBytes: 4 * 1024 * 1024,
 });
@@ -233,6 +237,7 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
     let crashed;
     const crash = new Promise((r) => { crashed = r; });
     let watchdog = null;
+    let heartbeat = null;
     try {
       const page = await ctx.newPage();
       page.on("error", (e) => crashed(e));
@@ -259,6 +264,25 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
           timeoutMs, maxTimeoutMs: limits.maxTimeoutMs, maxResultBytes: limits.maxResultBytes, heapMb: limits.heapMb,
         }),
         crash.then(() => ({ ok: false, kind: "crashed", error: `沙箱页面崩溃了(多半是内存超过上限 ${limits.heapMb} MB);缩小要测的范围,别一次建太大的数组` })),
+        /*
+         * 心跳:Worker 里的死循环不挡页面主线程,页面照样应答;内存炸弹不一样 —— 实测 Worker 堆到上限后整个渲染进程卡死
+         * (页面主线程不再跑定时器,也不报 crash 事件),只能等看门狗。所以每秒问页面一次,连续 heartbeatMisses 次没回话
+         * 就判「内存超限卡死」,不必等满时限。
+         */
+        new Promise((_, reject) => {
+          let misses = 0;
+          heartbeat = setInterval(() => {
+            let t;
+            Promise.race([page.evaluate(() => 1), new Promise((r) => { t = setTimeout(() => r("miss"), limits.heartbeatTimeoutMs); })])
+              .catch(() => "miss")
+              .then((v) => {
+                clearTimeout(t);
+                misses = v === 1 ? 0 : misses + 1;
+                if (misses >= limits.heartbeatMisses) reject(new SandboxError("crashed", `沙箱卡死了(多半是内存超过上限 ${limits.heapMb} MB),已重启;缩小要测的范围,别一次建太大的数组`));
+              });
+          }, limits.heartbeatEveryMs);
+          heartbeat.unref?.();
+        }),
         new Promise((_, reject) => {
           watchdog = setTimeout(() => reject(new SandboxError("hung", `沙箱在 ${(timeoutMs + limits.graceMs) / 1000} 秒内没有回话,已重启`)), timeoutMs + limits.graceMs + chunks * 1000);
           watchdog.unref?.();
@@ -276,6 +300,7 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
       throw new SandboxError("internal", "沙箱内部出错:" + msg.slice(0, 300));
     } finally {
       clearTimeout(watchdog);
+      clearInterval(heartbeat);
       let t;
       await Promise.race([ctx.close().catch(() => {}), new Promise((r) => { t = setTimeout(r, 5_000); t.unref?.(); })]);
       clearTimeout(t);

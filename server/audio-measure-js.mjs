@@ -70,7 +70,7 @@ export async function measureJs({ body, resolveFile, ffmpeg, ffprobe, sandbox, p
       });
     } catch (e) { return bad(e.message); }
     expected = win.duration;
-    args = filePcmArgs({ file, offset: win.offset, duration: win.duration, sampleRate, channels });
+    args = filePcmArgs({ file, offset: win.offset, duration: win.duration, sampleRate, channels, sourceChannels: n });
     source = { scope: body.scope, start: win.offset, ...(win.duration !== undefined ? { requestedDuration: +win.duration.toFixed(3) } : null) };
   } else if (body.scope === "timeline") {
     const entries = [];
@@ -83,6 +83,8 @@ export async function measureJs({ body, resolveFile, ffmpeg, ffprobe, sandbox, p
     if (skipped.length) notes.push(`有 ${skipped.length} 段没有音频流或文件不存在,已跳过:${skipped.join("、")}`);
     if (!entries.length) return bad("时间轴上没有能解码的声音", "no-audio");
     channels = mono ? 1 : 2;
+    // 与导出一致(server/bakery/audio-mix.mjs 每段 -ac 2):单声道素材摊到立体声时每路低 3 dB
+    notes.push("混音按导出的做法是立体声:单声道素材摊到两个声道,每路低 3 dB(ffmpeg 缺省的中置混音系数)");
     const total = num(body.total) > 0 ? num(body.total) : undefined;
     let win;
     try { win = windowOf({ baseOffset: 0, baseDuration: total, start: body.start, duration: body.length }); } catch (e) { return bad(e.message); }

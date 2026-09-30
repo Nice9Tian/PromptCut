@@ -61,12 +61,24 @@ export function windowOf({ baseOffset = 0, baseDuration, start, duration }) {
 
 const pcmOut = ({ sampleRate, channels }) => ["-ac", String(channels), "-ar", String(sampleRate), "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"];
 
-/** 单个文件(素材 / 片段)解码成 PCM 的 ffmpeg 参数 */
-export function filePcmArgs({ file, offset, duration, sampleRate, channels }) {
+/**
+ * 混成单声道 = 各声道取平均。ffmpeg 的 `-ac 1` 缺省按功率混(立体声每路乘 0.707),两路相同的正弦波混出来比原来响 3 dB,
+ * Agent 拿去和单声道素材比会差 3 dB;这里显式按平均混。
+ */
+export function averagePan(sourceChannels) {
+  const n = Math.max(1, Math.floor(sourceChannels));
+  const w = +(1 / n).toFixed(6);
+  return "pan=mono|c0=" + Array.from({ length: n }, (_, i) => `${w}*c${i}`).join("+");
+}
+
+/** 单个文件(素材 / 片段)解码成 PCM 的 ffmpeg 参数。sourceChannels:源的声道数,mono 且源多于一个声道时按平均混 */
+export function filePcmArgs({ file, offset, duration, sampleRate, channels, sourceChannels = channels }) {
   const args = ["-hide_banner", "-nostats", "-v", "error"];
   if (offset !== undefined && offset > 0) args.push("-ss", String(offset));
   if (duration !== undefined) args.push("-t", String(duration));
-  args.push("-i", file, "-map", "0:a:0", "-vn", ...pcmOut({ sampleRate, channels }));
+  args.push("-i", file, "-map", "0:a:0", "-vn");
+  if (channels === 1 && sourceChannels > 1) args.push("-af", averagePan(sourceChannels));
+  args.push(...pcmOut({ sampleRate, channels }));
   return args;
 }
 
@@ -81,6 +93,8 @@ export function timelinePcmArgs(entries, { total, offset = 0, duration, sampleRa
   if (offset > 0 || duration !== undefined) {
     tail = `,atrim=start=${offset}${duration !== undefined ? `:duration=${duration}` : ""},asetpts=PTS-STARTPTS`;
   }
+  // 混音的声道数随输入(单声道素材混出单声道);要单声道时先统一成立体声再按平均混
+  if (channels === 1) tail += `,aformat=channel_layouts=stereo,${averagePan(2)}`;
   return [
     "-hide_banner", "-nostats", "-v", "error", ...inputs,
     "-filter_complex", [...filters, `${mix}${tail}[aout]`].join(";"),

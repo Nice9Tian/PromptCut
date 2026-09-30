@@ -9,9 +9,9 @@
  *   CM-5  measureJs 的前置检查(空代码、素材不存在、没有音频流、无效 scope)不解码、不进沙箱;
  *   ── 以下起真的 ffmpeg 与专用 Chrome ──
  *   CM-6  正常测量:ffmpeg lavfi 生成的 1 kHz 正弦波(振幅 0.5),RMS 与峰值与理论值一致(-9.03 / -6.02 dBFS);
- *         片段档按窗口截、mono、timeline 混音档(音量 0.5 → 再低 6.02 dB);
+ *         片段档按窗口截、mono(按平均混,响度不变)、timeline 混音档(音量 0.5 → 再低 6.02 dB,单声道同样);
  *   CM-7  死循环在时限内被终止,编辑器进程(本进程)的事件循环照常转;
- *   CM-8  内存炸弹回清楚的错误(崩溃 / 内存上限),之后的测量照常;
+ *   CM-8  内存炸弹回清楚的错误(心跳判卡死 / 分配失败),几秒内回来,之后的测量照常;
  *   CM-9  联网尝试失败:fetch / XHR / WebSocket / importScripts 抛「沙箱里不能联网」;本机回环上的 HTTP 服务一次都没被打到;
  *   CM-10 抛异常带报错文字和行号;语法错误也回清楚的话;
  *   CM-11 结果超大被拒;
@@ -64,6 +64,10 @@ test('CM-3 ffmpeg 参数:单文件按窗口截;时间轴混音图与测响度同
   assert.deepEqual(a.slice(a.indexOf('-ss'), a.indexOf('-ss') + 4), ['-ss', '1.5', '-t', '2']);
   assert.ok(a.join(' ').endsWith('-ac 1 -ar 16000 -f f32le -acodec pcm_f32le pipe:1'));
   assert.ok(!filePcmArgs({ file: 'x.wav', offset: 0, sampleRate: 8000, channels: 2 }).includes('-ss'));
+  // 混成单声道按平均(不用 ffmpeg -ac 1 缺省的功率混,那样两路相同的声音会响 3 dB)
+  const m = filePcmArgs({ file: 'x.wav', sampleRate: 8000, channels: 1, sourceChannels: 2 });
+  assert.equal(m[m.indexOf('-af') + 1], 'pan=mono|c0=0.5*c0+0.5*c1');
+  assert.ok(!filePcmArgs({ file: 'x.wav', sampleRate: 8000, channels: 1, sourceChannels: 1 }).includes('-af'));
   const entries = [
     { file: 'a.wav', start: 0, dur: 3, offset: 0, volume: 1, fadeIn: 0, fadeOut: 0 },
     { file: 'b.wav', start: 1, dur: 2, offset: 4, volume: 0.5, fadeIn: 0.5, fadeOut: 0 },
@@ -191,7 +195,8 @@ test('CM-6 正常测量:正弦波的 RMS 与峰值与理论值一致', { skip, t
   assert.ok(Math.abs(c.body.value.channels[0].rmsDb - RMS) < 0.05);
   assert.equal(c.body.input.start, 1);
 
-  // 时间轴混音档:单声道素材在第 1 秒起放 2 秒、音量 0.5,时间轴 3 秒;只测 1～3 秒这一窗口 → 再低 6.02 dB
+  // 时间轴混音档:单声道素材在第 1 秒起放 2 秒、音量 0.5,时间轴 3 秒;只测 1～3 秒这一窗口 → 再低 6.02 dB;
+  // 单声道素材在混音里按导出的做法(server/bakery/audio-mix.mjs 的 -ac 2)摊到两个声道,每路再低 3.01 dB
   const t = await run({
     scope: 'timeline', total: 3, start: 1, length: 2,
     entries: [{ clipId: 'c1', media: media(SINE_MONO), start: 1, dur: 2, offset: 0, volume: 0.5, fadeIn: 0, fadeOut: 0 }],
@@ -199,8 +204,17 @@ test('CM-6 正常测量:正弦波的 RMS 与峰值与理论值一致', { skip, t
   });
   assert.equal(t.body.ok, true, JSON.stringify(t.body));
   assert.equal(t.body.value.channels.length, 2);
-  const HALF = RMS + 20 * Math.log10(0.5);
+  const HALF = RMS + 20 * Math.log10(0.5) + 20 * Math.log10(Math.SQRT1_2);
   assert.ok(Math.abs(t.body.value.channels[0].rmsDb - HALF) < 0.1, `混音 RMS ${t.body.value.channels[0].rmsDb} vs ${HALF}`);
+  assert.ok(t.body.notes.some((n) => /每路低 3 dB/.test(n)), JSON.stringify(t.body.notes));
+  // 同一段混音要单声道:两路相同,按平均混,响度不变
+  const tm = await run({
+    scope: 'timeline', total: 3, start: 1, length: 2, mono: true,
+    entries: [{ clipId: 'c1', media: media(SINE_MONO), start: 1, dur: 2, offset: 0, volume: 0.5, fadeIn: 0, fadeOut: 0 }],
+    code: RMS_PEAK,
+  });
+  assert.equal(tm.body.value.channels.length, 1);
+  assert.ok(Math.abs(tm.body.value.channels[0].rmsDb - HALF) < 0.1, `单声道混音 RMS ${tm.body.value.channels[0].rmsDb} vs ${HALF}`);
 });
 
 test('CM-7 死循环在时限内被终止,本进程的事件循环照常转', { skip, timeout: 60_000 }, async () => {
@@ -224,7 +238,10 @@ test('CM-7 死循环在时限内被终止,本进程的事件循环照常转', { 
 });
 
 test('CM-8 内存炸弹回清楚的错误,之后的测量照常', { skip, timeout: 120_000 }, async () => {
+  const t0 = Date.now();
   const bomb = await run({ scope: 'media', media: media(SINE_MONO), sampleRate: 8000, timeoutMs: 30000, code: 'const keep = []; for (;;) keep.push(new Array(1e6).fill(Math.random()));' });
+  // 实测 Worker 堆到上限后整个渲染进程卡死、不报 crash;心跳连续 3 次没回话就判,不等满 30 秒的时限
+  assert.ok(Date.now() - t0 < 20000, `内存炸弹 ${Date.now() - t0} ms 才回来`);
   assert.equal(bomb.body.ok, false, JSON.stringify(bomb.body));
   assert.ok(['crashed', 'exception', 'timeout'].includes(bomb.body.kind), bomb.body.kind);
   assert.match(bomb.body.error, /内存|memory|heap|allocation/i, bomb.body.error);
