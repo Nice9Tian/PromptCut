@@ -31,6 +31,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 import { stagePortsOf } from '../../server/stage-ports.mjs';
 
@@ -231,7 +232,7 @@ async function openEditor(browser, url, { dual = true } = {}) {
 const launchOpts = {
   headless: !headed,
   protocolTimeout: 240000,
-  args: ['--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
+  args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'],
 };
 if (headed) {
@@ -242,7 +243,7 @@ if (headed) {
 } else {
   // R2 报告:不带这两个,这台机器上无头 Chrome 的 rAF 退到 10 Hz,节拍循环根本等不到帧
   launchOpts.args.push('--disable-gpu-vsync', '--disable-frame-rate-limit');
-  launchOpts.args.unshift('--window-position=-32000,-32000');
+  launchOpts.args.splice(PROBE_CHROME_ARGS.length, 0, '--window-position=-32000,-32000'); // 仍以 PROBE_CHROME_ARGS 打头
 }
 
 const browser = await puppeteer.launch(launchOpts);

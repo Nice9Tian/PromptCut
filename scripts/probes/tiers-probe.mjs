@@ -150,7 +150,8 @@ try {
   // 之后挂 PerformanceObserver('longtask'),并每 120 ms 做一次编辑(拖播放头、挪片段、改参数、改标签)。
   // 窗口 = 第一个导入请求发出 → 上传队列清空;窗口里的长任务原样记进 out.t4。
   const { default: puppeteer } = await import('puppeteer');
-  browser = await puppeteer.launch({ headless: true, defaultViewport: { width: 1440, height: 900 }, args: ['--no-first-run', '--hide-scrollbars'] });
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
+  browser = await puppeteer.launch({ headless: true, defaultViewport: { width: 1440, height: 900 }, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars'] });
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 300)));

@@ -33,6 +33,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg } from './probe-connect.mjs';
 import { startDevServer } from '../lib/dev-server.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
@@ -92,7 +93,7 @@ async function writeWithReread(call, agent, clipId, args) {
 }
 
 const own = [];
-const browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
+const browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
 async function openEditor(origin, label) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();

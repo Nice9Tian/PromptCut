@@ -23,6 +23,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { findFfmpeg } from '../../server/ai-visual.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -123,7 +124,7 @@ try {
   check(gen.status === 0 && fs.existsSync(wav), 'M1 ffmpeg lavfi 生成了正弦波', { status: gen.status, stderr: String(gen.stderr || '').slice(0, 200) });
 
   if (!(await startEditor())) throw new Error('编辑器进程没起来');
-  browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run'] });
+  browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run'] });
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));

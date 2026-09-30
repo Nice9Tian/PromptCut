@@ -21,6 +21,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg, sleep } from './probe-connect.mjs';
 
 const PORT = Number(flagArg('port', '5713'));
@@ -93,7 +94,7 @@ for (let r = 1; r <= ROUNDS; r++) for (const conc of CONC) {
     res.end(PAGE);
   });
   await new Promise((ok) => proxy.listen(PORT, '127.0.0.1', ok));
-  const browser = await puppeteer.launch({ headless: true, args: ['--disable-gpu'] });
+  const browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--disable-gpu'] });
   try {
     const wl = winLoad();
     const page = await browser.newPage();

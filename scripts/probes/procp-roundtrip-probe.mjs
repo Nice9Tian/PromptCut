@@ -24,6 +24,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startDevServer } from '../lib/dev-server.mjs';
 import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 
@@ -149,7 +150,7 @@ try {
   log(`起实例 A(${PORT_A})`);
   const srvA = await startDevServer({ port: PORT_A, env: envOf(A), logFile: path.join(OUT, 'vite-A.log'), log });
   servers.push(srvA);
-  browser = await puppeteer.launch({ headless: true, protocolTimeout: 900000, args: ['--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
+  browser = await puppeteer.launch({ headless: true, protocolTimeout: 900000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
   const dialogsA = [];
   const pageA = await openEditor(browser, srvA.origin, dialogsA);
   const setup = await pageA.evaluate(async (o) => {

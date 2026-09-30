@@ -45,6 +45,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg, serve, closeAll, sleep } from './probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -94,7 +95,7 @@ async function launch(head, extra = []) {
     ignoreDefaultArgs: ignore,
     defaultViewport: null,
     protocolTimeout: 300000,
-    args: [...(GPU ? [] : ['--disable-gpu']), '--window-size=1100,820', '--window-position=40,40', `--host-resolver-rules=MAP *.pc.test 127.0.0.1`, `--unsafely-treat-insecure-origin-as-secure=${secure}`, ...extra],
+    args: [...PROBE_CHROME_ARGS, ...(GPU ? [] : ['--disable-gpu']), '--window-size=1100,820', '--window-position=40,40', `--host-resolver-rules=MAP *.pc.test 127.0.0.1`, `--unsafely-treat-insecure-origin-as-secure=${secure}`, ...extra],
   });
 }
 

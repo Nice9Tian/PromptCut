@@ -36,6 +36,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { serve, closeAll, devOrigin } from './probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -132,7 +133,7 @@ const hostServer = await serve(0, (req, res) => {
 const hostUrl = `http://127.0.0.1:${hostServer.address().port}${HOST_PATH}`;
 const browser = await puppeteer.launch({
   headless: true, protocolTimeout: 300000,
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--autoplay-policy=no-user-gesture-required'],
 });
 const out = { mode: sameOrigin ? 'same-origin' : 'cross-origin', originA, originB, host: hostUrl, media };

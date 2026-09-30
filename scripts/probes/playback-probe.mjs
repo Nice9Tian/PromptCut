@@ -33,6 +33,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 import { stagePortsOf } from '../../server/stage-ports.mjs';
 
@@ -261,7 +262,7 @@ const browser = await puppeteer.launch({
   headless: true,
   // 一次 evaluate 里可能要等舞台跑完一整趟补跑,缺省 180 秒不够
   protocolTimeout: 240000,
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     // R2 报告:不带这两个,这台机器上无头 Chrome 的 rAF 退到 10 Hz,节拍循环根本等不到帧
     '--disable-gpu-vsync', '--disable-frame-rate-limit'],

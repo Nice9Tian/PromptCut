@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const PORT = 5208;
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
@@ -58,7 +59,7 @@ try {
 
   browser = await puppeteer.launch({
     headless: true, protocolTimeout: 120000,
-    args: ['--window-position=-32000,-32000', '--hide-scrollbars', '--no-first-run',
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--hide-scrollbars', '--no-first-run',
       '--disable-gpu', '--enable-unsafe-swiftshader'],
   });
   const page = await browser.newPage();
