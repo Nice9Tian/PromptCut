@@ -3,6 +3,9 @@
  * `scripts/remote/docservice.mjs deploy-hosted` / `status-hosted` 用它；本模块没有副作用，单测直接 import（`server/**` 不许引 `scripts/`，所以放在这里；它随部署清单一起拷到远端，但入口不引它）。
  * 只引 Node 内置模块。
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib';
 
 /** 两个实例的参数（契约第 2 节）。部署目录与数据目录可由环境变量覆盖 */
 export function hostedInstance(name = 'main', env = process.env) {
@@ -114,6 +117,45 @@ export function hostedPm2Config(inst, publicHost, urls = {}) {
     + `module.exports = { apps: [${JSON.stringify(app, null, 2)}] };\n`;
 }
 
+/**
+ * 在线构建的静态资源预压缩（nginx 的 `location ^~ /editor/assets/` 开 `gzip_static on;`，见 `docs/plan/hosting-migration.md` 第 2 节）：
+ * 动态 gzip 用分块传输发，部分 Chrome 配置下入口脚本分块发时页面会卡死（`docs/archive/agent-reports/AGENT-nav-hang.md`）；
+ * 预压缩的 `.gz` 由 nginx 带 `Content-Length` 发，不再分块。
+ * 取 `assets/` 下（含子目录）大于 1 KB、扩展名在下表里的文件，生成同名 `.gz`（gzip 最高压缩级别）。
+ */
+export const PRECOMPRESS_EXTS = ['.js', '.mjs', '.css', '.json', '.svg', '.wasm'];
+export const PRECOMPRESS_MIN_BYTES = 1024;
+
+/** 给 `assetsDir` 下符合条件的文件生成 `.gz`，mtime 与原文件相同；回生成的 `.gz` 相对路径（`/` 分隔、排序） */
+export function precompressAssets(assetsDir) {
+  const out = [];
+  const walk = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, ent.name);
+      if (ent.isDirectory()) { walk(abs); continue; }
+      if (!ent.isFile() || !PRECOMPRESS_EXTS.includes(path.extname(ent.name).toLowerCase())) continue;
+      const st = fs.statSync(abs);
+      if (st.size <= PRECOMPRESS_MIN_BYTES) continue;
+      const gz = zlib.gzipSync(fs.readFileSync(abs), { level: zlib.constants.Z_BEST_COMPRESSION });
+      fs.writeFileSync(`${abs}.gz`, gz);
+      fs.utimesSync(`${abs}.gz`, st.atime, st.mtime);
+      out.push(path.relative(assetsDir, `${abs}.gz`).split(path.sep).join('/'));
+    }
+  };
+  walk(assetsDir);
+  return out.sort();
+}
+
+/**
+ * `--editor`：把在线构建 `srcDir`（`dist-online/`）原样拷到本机暂存目录 `outDir`（部署脚本随后整个 scp 成 `.incoming-editor`），
+ * 再给 `outDir/assets/` 预压缩（`precompressAssets`）。在本机做〔裁〕：远端只换名，不依赖远端的 gzip，也能在本机单测；不改 `srcDir`。
+ */
+export function stageEditorBuild(srcDir, outDir) {
+  fs.cpSync(srcDir, outDir, { recursive: true, preserveTimestamps: true });
+  const assets = path.join(outDir, 'assets');
+  return { gz: fs.existsSync(assets) ? precompressAssets(assets) : [] };
+}
+
 /** bash 单引号转义 */
 export const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
@@ -121,6 +163,8 @@ export const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
  * 在线构建（`--editor`，C10a 契约第 3 节）换上去的几行：本机已把 `dist-online/` 拷成 `<部署目录>/.incoming-editor`。
  * - 旧版的 `assets/` 保留一代：上一代自己的文件清单在 `editor/.assets-own` 里，逐个补进新版的 `assets/`（新版已有的不盖），
  *   正在用旧页面的人刷新前还取得到旧资源；再往前的几代不补，所以只留一代；
+ * - 预压缩的 `.gz`（`stageEditorBuild` 在本机生成）是本代的普通文件，写进 `.assets-own`，下一代照样随原文件保留；
+ *   补某个原文件时它旁边若有同名 `.gz` 也一并补（清单里没记 `.gz` 的老一代，如服务器上手工生成的，也不丢）；
  * - 新版自己的清单写成新的 `.assets-own`（在补进旧文件之前记）；
  * - 整个目录换名换上去（先把旧的挪成 `editor.prev` 再删），nginx 不会读到拷了一半的目录。
  * nginx 的 `/editor` 路由由主会话在服务器上手工加（契约第 2 节），这里不碰。
@@ -135,7 +179,10 @@ export function editorSwapLines() {
     '  kept=0',
     '  while IFS= read -r f; do',
     '    [ -n "$f" ] || continue',
-    '    if [ -f "editor/assets/$f" ] && [ ! -e ".incoming-editor/assets/$f" ]; then cp -p "editor/assets/$f" ".incoming-editor/assets/$f"; kept=$((kept + 1)); fi',
+    '    for g in "$f" "$f.gz"; do',
+    '      case "$f" in *.gz) [ "$g" = "$f" ] || continue ;; esac',
+    '      if [ -f "editor/assets/$g" ] && [ ! -e ".incoming-editor/assets/$g" ]; then cp -p "editor/assets/$g" ".incoming-editor/assets/$g"; kept=$((kept + 1)); fi',
+    '    done',
     '  done < editor/.assets-own',
     '  echo "editor: 保留上一代 assets $kept 个"',
     'fi',
