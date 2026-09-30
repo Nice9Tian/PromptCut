@@ -6,7 +6,7 @@
 
 ## 1. 状态
 
-**代码完成，本机能做的验证全绿，停在分支上不合入。** 完整安装包与实机验收只能在 PC 上做，列在第 7 节。外壳版本号没改，建议见第 8 节。
+**代码完成，本机能做的验证全绿，停在分支上不合入。** 主会话审过：「文件 → 退出」保留、列给用户定；防节流参数保留；版本号合入时由主会话改（应用末位 +1、外壳 0.2.6 → 0.2.7）；第 3 条（更新补丁）已在本分支补上（4.7）。 完整安装包与实机验收只能在 PC 上做，列在第 7 节。外壳版本号没改，建议见第 8 节。
 
 ## 2. 提交
 
@@ -16,11 +16,12 @@
 | `da9f0e5b` | 功能：托盘、关窗收起、悬浮窗与 SKILL 解耦、右键关闭才退出；WebView2 启动参数；单测 |
 | `0d244ecf` | 修：主窗口按 `Window` 查（见 4.4）；最大化状态的退出与挪回 |
 | `a0a8f1e9` | 文档：`desktop/README.md` 的 SKILL 悬浮窗几节改写为「后台运行」 |
-| （本提交） | 报告 |
+| `71138a46` | 报告 |
+| （本提交） | 主会话第 3 条决定：外壳认 `--quit`，更新补丁先请求干净退出；单测、实跑、报告 |
 
 ## 3. 改了哪些文件
 
-`desktop/src-tauri/src/background.rs`（新）、`skill_shell.rs`（重写）、`lib.rs`、`agent_webview.rs`、`Cargo.toml`（tauri 开 `tray-icon` 特性，`Cargo.lock` 不用变：`tray-icon` 已在锁里）、`desktop/ui/overlay.html`（重写）、`desktop/ui/overlay-summary.js`（新）、`desktop/test/overlay-summary.test.mjs`（新）、`desktop/README.md`。仓库根目录的代码一行没动，`capabilities/` 没动（悬浮窗沿用 `skill-overlay` 这个窗口标签，权限清单里本来就放行了它和 `start-dragging`）。
+`desktop/src-tauri/src/background.rs`（新）、`skill_shell.rs`（重写）、`lib.rs`、`agent_webview.rs`、`Cargo.toml`（tauri 开 `tray-icon` 特性，`Cargo.lock` 不用变：`tray-icon` 已在锁里）、`desktop/ui/overlay.html`（重写）、`desktop/ui/overlay-summary.js`（新）、`desktop/test/overlay-summary.test.mjs`（新）、`desktop/README.md`；主会话追加的 `desktop/scripts/apply-patch.ps1`。仓库根目录的代码一行没动，`capabilities/` 没动（悬浮窗沿用 `skill-overlay` 这个窗口标签，权限清单里本来就放行了它和 `start-dragging`）。
 
 ## 4. 做了什么
 
@@ -59,6 +60,11 @@
 
 关窗拦截、第二次启动、标题栏「退出」都改走状态机；启动时装菜单处理、托盘（建不出来只记日志，悬浮窗仍能叫回与关闭）、状态文件 watcher。
 
+### 4.7 `--quit` 与更新补丁（主会话第 3 条决定）
+
+- 外壳：单实例插件的回调里解析第二次启动的参数（纯函数 `second_launch`），带 `--quit`（不分大小写）就走和托盘「关闭」同一条退出路径（收起状态下先把主窗挪回原位、sidecar 清理、`.proc` 锁释放）；同时带着 `.proc` 也按退出办。不带的行为不变（唤回编辑界面、打开 `.proc`）。带 `--quit` 却没有别的实例在跑时（启动流程走到了 setup），本进程直接退出 0，不反过来起一份新的。
+- `desktop/scripts/apply-patch.ps1`：关 PromptCut 时先 `Start-Process <安装目录>\promptcut.exe --quit`，每 0.5 秒看一次、最多等 10 秒；还在的再按原来的 `CloseMainWindow` + 2 秒 + `Stop-Process -Force` 兜底。脚本注释写明：0.2.6 及更早的外壳不认 `--quit`，当成普通的第二次启动只唤回窗口，等满 10 秒后照旧强杀，不比以前差；0.2.7 起 `CloseMainWindow` 只会收起，兜底靠强杀。
+
 ## 5. 〔裁〕清单（三级）
 
 1. **收起用「挪到屏幕外」而不是 `hide()`，也不把页面侧工具的绑定挪到服务端。** 理由：`hide()` 会让 WebView2 停渲染（计划与 `agent_webview.rs` 都记着）；挪到屏幕外是仓库里已经用过的做法（agent 子 webview 停在 x = -4000），改动只在外壳，不动 Node 与页面；把 `side: "page"` 的绑定移到服务端会牵动 A4 的工具分工与渲染（悬浮窗预览本身就要页面渲），范围远超本段。本机实测收起后页面 `visibilityState` 仍是 `visible`、rAF 与计时器不降（第 6 节）。
@@ -87,7 +93,7 @@ GNU 工具链编 tauri 缺两样：`dlltool` 要调的汇编器 `as`、资源编
 | 命令 | 结果 |
 |---|---|
 | `cargo check`（`desktop/src-tauri`，上述包装） | 退出码 0，0 条警告 |
-| `cargo test --lib`（编出测试 exe；Windows 要 Common-Controls 6 的清单，放了旁置 `.manifest` 再跑） | 20 过 0 败：状态机 7 条、屏幕外坐标与还原 4 条、菜单 id、HTTP 拆包 3 条、状态文件解析、会话字段裁剪、悬浮窗高度、WebView2 参数、原有 `chrome_path` 1 条 |
+| `cargo test --lib`（编出测试 exe；Windows 要 Common-Controls 6 的清单，放了旁置 `.manifest` 再跑） | 24 过 0 败：状态机 7 条、屏幕外坐标与还原 4 条、菜单 id、HTTP 拆包 3 条、状态文件解析、会话字段裁剪、悬浮窗高度、WebView2 参数、`--quit` 参数解析 4 条、原有 `chrome_path` 1 条 |
 | `cargo clippy` | 没跑：本机工具链没装 clippy 组件（装要改用户的 rustup，没做） |
 | `node --test desktop/test/*.test.mjs` | 23 过 0 败（新增 OV-1～OV-7，原有 16 条） |
 | `npx tsc -b --force` | 退出码 0 |
@@ -110,6 +116,8 @@ GNU 工具链编 tauri 缺两样：`dlltool` 要调的汇编器 `as`、资源编
 | 最大化 → 关窗 → 单击悬浮窗 | 收起时还原并挪走；打开时回原位并重新最大化 |
 | 收起状态下 `desktop_titlebar_command('quit')`（与右键「关闭」同一条路） | 进程退出码 0，替身 sidecar 被 taskkill；`.window-state.json` 里主窗是收起前的位置，不是屏幕外坐标 |
 | 收起状态下再启动一次 | 第二个进程退出码 0，原来的主窗回到屏上 |
+| 没有实例在跑时 `promptcut.exe --quit` | 立刻退出 0，没有留下进程、没起窗口 |
+| 收起状态下再启动一次带 `--quit`（更新补丁的做法） | 发参数的进程退出 0；原来那份退出 0，sidecar 替身被清；`.window-state.json` 在退出那一刻重写，主窗位置是收起前的屏上坐标 |
 | 去掉 4.3 那几项 WebView2 参数重编再测 | 屏幕外照样 `visible`、rAF 240、计时器 20（见〔裁〕3） |
 
 踩到并修掉的：`get_webview_window("main")` 为 None（4.4）；最大化状态下退出与挪回时 window-state 记到屏幕外坐标（〔裁〕7、8；用修之前留下的坏状态启动一次，取消最大化时窗口确实跑到了屏幕外，修之后的状态文件里「最大化之前的位置」在屏上）。
@@ -127,7 +135,7 @@ GNU 工具链编 tauri 缺两样：`dlltool` 要调的汇编器 `as`、资源编
 5. **右键关闭才退出**：托盘右键 →「关闭」→ 托盘图标、悬浮窗消失，`promptcut.exe`、`node.exe`、`ffmpeg.exe` 都不在了；再开一次、收起后悬浮窗右键 →「关闭」→ 同上；再开，窗口出现在上次关之前的位置（不是屏幕外）。
 6. **SKILL**：顶栏切到 SKILL → 编辑界面收起，悬浮窗写「SKILL 模式」和会话状态；让 Claude Code 连进来做事，悬浮窗写「Claude Code 正在……」；单击悬浮窗打开编辑界面，SKILL 仍开着、不会自己再收回；切回传统式 → 悬浮窗不再显示 SKILL。
 7. **多显示器**（有的话）：副屏排在主屏左边，收起后副屏上不应看到窗口的任何一部分。
-8. **更新补丁的关闭**：`apply-patch.ps1` 用 `CloseMainWindow()` 请软件退出，现在这只会收起，要等 2 秒后的 `Stop-Process -Force` 才真关——确认补丁照样装得上（`.proc` 锁由内核收走，Node 那层走 pid 兜底）。
+8. **补丁脚本经 `--quit` 干净退出**：装好 0.2.7 的完整安装包，开着 PromptCut（开一个 `.proc`、再把编辑界面收到后台），运行一份更新补丁（同代次、`--from-head` 出的即可）。看：补丁输出「正在关闭 PromptCut…」后几秒内就「已关闭」（不是等 10 秒再强杀）；补丁装完再开 PromptCut，窗口在收起前的位置；那份 `.proc` 旁边没有残留的 `.proc.lock`。再在 0.2.6 的机器上跑同一份补丁：窗口先被唤回，约 10 秒后被强杀，补丁照样装上。
 
 ## 8. 外壳版本号建议（没改，主会话合入时定）
 
@@ -137,7 +145,7 @@ GNU 工具链编 tauri 缺两样：`dlltool` 要调的汇编器 `as`、资源编
 
 1. **（一级，问用户）标题栏菜单「文件 → 退出」留不留。** 语义写「只有在托盘图标或悬浮窗上右键选择关闭，软件才退出」。现在它还在，退出时与右键「关闭」同一条路（先挪回原位、清子进程、放锁）。选项：a) 删掉（删用户看得见的功能，一级）；b) 保留并在语义里补一句「标题栏菜单的退出同右键关闭」（一级 dry run 见第 10 节第 2 条）。本段倾向 b，没改。
 2. 〔裁〕3 的 WebView2 参数要不要保留（本机 A/B 没差别）。
-3. `desktop/scripts/apply-patch.ps1` 的 `CloseMainWindow()` 现在只会收起，要不要改成先请求真退出（不在本段文件清单里，没动；见第 7 节第 8 步）。
+3. ~~`apply-patch.ps1` 的关闭方式~~：主会话已定，本分支加了 `--quit`（4.7）。
 4. 窗口标题栏 × 的无障碍名还是「关闭」（`src/ui/WindowTitleBar.tsx`，不在本段文件清单），是否改成「收到后台」之类，由主会话定。
 
 ## 10. 对计划与语义的更正建议（dry run，语义文件没改）

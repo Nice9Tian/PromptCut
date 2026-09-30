@@ -41,6 +41,33 @@ fn proc_arg<I: Iterator<Item = String>>(args: I) -> Option<String> {
         .find(|a| std::path::Path::new(a).is_file())
 }
 
+/// 启动参数里的 `--quit`:让已经在跑的那一份干净退出(更新补丁 apply-patch.ps1 用)。
+/// 第一个参数是 exe 自己,不算。
+const QUIT_ARG: &str = "--quit";
+
+/// 第二次启动交给已在跑的实例做什么。
+#[derive(Debug, PartialEq, Eq)]
+enum SecondLaunch {
+    /// 带 `--quit`:走和托盘「关闭」同一条退出路径
+    Quit,
+    /// 其它:唤回编辑界面,带着 .proc 的话顺带打开
+    Open(Option<String>),
+}
+
+/// 解析第二次启动的参数(不含 exe 本身)。`--quit` 优先:更新补丁要的是关掉,不是打开文件。
+fn second_launch<I: Iterator<Item = String>>(args: I) -> SecondLaunch {
+    let args: Vec<String> = args.collect();
+    if has_quit_arg(args.iter().cloned()) {
+        SecondLaunch::Quit
+    } else {
+        SecondLaunch::Open(proc_arg(args.into_iter()))
+    }
+}
+
+fn has_quit_arg<I: Iterator<Item = String>>(mut args: I) -> bool {
+    args.any(|a| a.eq_ignore_ascii_case(QUIT_ARG))
+}
+
 /// 最小的百分号编码:除了字母数字和 -_.~ 全部转义,前端 URLSearchParams 解得开。
 /// 不引 url 编码的 crate,就这一处用。
 fn percent_encode(s: &str) -> String {
@@ -250,12 +277,21 @@ pub fn run() {
     // -- Plugins ----------------------------------------------------------
     let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // 第二次启动 = 打开编辑界面(收起在后台的话挪回来)
-            background::dispatch(app, background::UiEvent::OpenRequested);
-            // 第二次启动多半是双击了一个 .proc:交给已经开着的窗口去开
-            // (前端收到 pc-open-file 后走「复制一份再读」那条路)
-            if let Some(p) = proc_arg(args.into_iter().skip(1)) {
-                let _ = app.emit("pc-open-file", p);
+            match second_launch(args.into_iter().skip(1)) {
+                // `promptcut.exe --quit`(更新补丁):和托盘「关闭」同一条路 —— 收起状态下先把
+                // 主窗挪回原位再退,sidecar 清理与 .proc 锁释放在 RunEvent 里做
+                SecondLaunch::Quit => {
+                    background::dispatch(app, background::UiEvent::QuitRequested);
+                }
+                SecondLaunch::Open(proc) => {
+                    // 第二次启动 = 打开编辑界面(收起在后台的话挪回来)
+                    background::dispatch(app, background::UiEvent::OpenRequested);
+                    // 多半是双击了一个 .proc:交给已经开着的窗口去开
+                    // (前端收到 pc-open-file 后走「复制一份再读」那条路)
+                    if let Some(p) = proc {
+                        let _ = app.emit("pc-open-file", p);
+                    }
+                }
             }
         }))
         // 窗口边框不交给 window-state 记:旧版本存下的 "decorated": true 会在启动时
@@ -293,6 +329,11 @@ pub fn run() {
             chrome_color::menu_bar_color
         ])
         .setup(|app| {
+            // 带 `--quit` 却走到了这里,说明没有别的实例在跑(有的话单实例插件已经把参数交过去、
+            // 本进程早退了)。要退出的东西不在,也就不该反过来起一份新的。
+            if has_quit_arg(env::args().skip(1)) {
+                std::process::exit(0);
+            }
             let handle = app.handle().clone();
 
             // 双击 .proc 启动时,把路径挂在编辑器地址上带给前端
@@ -698,4 +739,45 @@ fn show_about(handle: &tauri::AppHandle, runtime_dir: &PathBuf) {
         .set_description(&text)
         .set_level(rfd::MessageLevel::Info)
         .show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> std::vec::IntoIter<String> {
+        v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn quit_arg_wins() {
+        assert_eq!(second_launch(args(&["--quit"])), SecondLaunch::Quit);
+        assert_eq!(second_launch(args(&["--QUIT"])), SecondLaunch::Quit);
+        // 同时带着 .proc 也是退出:更新补丁要的是关掉
+        assert_eq!(second_launch(args(&[r"C:\x\a.proc", "--quit"])), SecondLaunch::Quit);
+    }
+
+    #[test]
+    fn plain_second_launch_opens() {
+        assert_eq!(second_launch(args(&[])), SecondLaunch::Open(None));
+        // 不存在的 .proc 不算(proc_arg 只认真实文件);像 --quit 却不是的参数也不算
+        assert_eq!(second_launch(args(&[r"Z:\nope\a.proc", "--quitx", "quit"])), SecondLaunch::Open(None));
+    }
+
+    #[test]
+    fn existing_proc_is_passed_through() {
+        let dir = std::env::temp_dir().join(format!("pc-second-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.proc");
+        std::fs::write(&f, "{}").unwrap();
+        let p = f.to_string_lossy().to_string();
+        assert_eq!(second_launch(args(&[&p])), SecondLaunch::Open(Some(p.clone())));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn has_quit_arg_ignores_exe_position_by_caller() {
+        assert!(!has_quit_arg(args(&["promptcut.exe"]).skip(1)));
+        assert!(has_quit_arg(args(&["promptcut.exe", "--quit"]).skip(1)));
+    }
 }
