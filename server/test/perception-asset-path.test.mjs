@@ -456,3 +456,41 @@ test('MI-4 配音时素材服务不可达:回 502 与 kind asset-service,素材�
     process.env.PROMPTCUT_EDITOR_URL = service.origin;
   }
 });
+
+test('MI-7 配音的试听与音色设计的试听:落试听缓存目录、经 /api/voice/preview/ 回放,不写素材目录;文件名跑不出缓存目录', { skip }, async () => {
+  const srv = await voiceServer();
+  const real = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const u = String(input instanceof Request ? input.url : input);
+    if (/^http:\/\/127\.0\.0\.1[:/]/.test(u)) return real(input, init);
+    // 音色设计回 voice_id + trial_audio;合成回 data.audio(都是 hex 494433 = "ID3")
+    const body = /voice_design/.test(u)
+      ? { voice_id: 'ttv-voice/1', trial_audio: '494433', base_resp: { status_code: 0 } }
+      : { data: { audio: '494433' }, base_resp: { status_code: 0 } };
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  try {
+    const r = await post(srv.origin, '/api/voice/generate', { text: '试听', preview: true });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.url, '/api/voice/preview/voice-preview-minimax.mp3');
+    assert.equal(r.json.path, undefined, '不回磁盘路径');
+    const got = await real(srv.origin + r.json.url);
+    assert.equal(got.status, 200);
+    assert.equal(Buffer.from(await got.arrayBuffer()).toString('latin1'), 'ID3', '页面照回来的地址播得到');
+    assert.ok(fs.existsSync(path.join(process.env.PROMPTCUT_DATA_DIR, 'cache', 'voice-preview', 'voice-preview-minimax.mp3')), '落在数据目录下的试听缓存');
+
+    const d = await post(srv.origin, '/api/voice/design', { prompt: '年轻男声', previewText: '你好' });
+    assert.equal(d.status, 200, JSON.stringify(d.json));
+    assert.equal(d.json.previewUrl, '/api/voice/preview/voice-design-ttv-voice_1.mp3', '服务商给的音色 id 拼进文件名前洗掉斜杠');
+    const dg = await real(srv.origin + d.json.previewUrl);
+    assert.equal(Buffer.from(await dg.arrayBuffer()).toString('latin1'), 'ID3');
+
+    for (const bad of ['..%2F..%2Fpackage.json', '..%5Cai.json', 'x.txt', '']) {
+      const b = await real(`${srv.origin}/api/voice/preview/${bad}`);
+      assert.equal(b.status, 404, bad);
+    }
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.deepEqual(listDir(voiceMediaDir()), [], '素材目录里没有试听文件');
+});

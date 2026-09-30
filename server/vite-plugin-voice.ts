@@ -5,7 +5,8 @@
  *   POST /api/voice/config          局部更新设置;带 apiKey 就换 API Key
  *   POST /api/voice/clear-key       删 API Key
  *   POST /api/voice/generate        合成一段,先落临时目录、再经素材服务的入库接口进内容库(和用户导入同一条路),
- *                                   回 /@media/<hash>;preview: true 写固定的试听文件(不进素材库)
+ *                                   回 /@media/<hash>;preview: true 写固定的试听文件(不进素材库,落试听缓存目录)
+ *   GET  /api/voice/preview/<文件名> 试听文件(合成试听、音色设计与复刻的试听),从试听缓存目录回放
  *   POST /api/voice/custom          往「我的音色」里手填一条
  *   POST /api/voice/custom/remove   从「我的音色」里移除(只删本地记录,服务商那边不动)
  *   POST /api/voice/design          MiniMax 音色设计(新音色首次合成收 ¥9.9)
@@ -19,8 +20,8 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { spawnSync } from "child_process";
-import { readBody } from "./vite-plugin-stt";
-import { mediaDir } from "./vite-plugin-media";
+import { dataDir, readBody } from "./vite-plugin-stt";
+import { mediaDir, serveFile } from "./vite-plugin-media";
 import { isInside } from "./http-guard.mjs";
 import { findFfmpeg } from "./ai-visual.mjs";
 import { AssetSourceError } from "./audio-source.mjs";
@@ -63,6 +64,30 @@ function fail(res: ServerResponse, e: unknown): void {
   sendJson(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });
 }
 
+/**
+ * 试听文件(合成试听、音色设计与复刻的试听)放哪儿:数据目录下的缓存 `cache/voice-preview/`,**不是素材服务的存储目录**。
+ * 它们只在设置面板里听一下、不进素材库,所以不入库;但也不该写进素材目录绕过素材服务
+ * (`docs/semantics/product/asset-service.md`「职责」)。由 `GET /api/voice/preview/<文件名>` 回放,页面照回来的地址播。
+ */
+function previewDir(root: string): string {
+  return path.join(dataDir(root), "cache", "voice-preview");
+}
+/** 试听文件名:只认字母数字和 . _ -(音色 id 来自服务商,拼进文件名前先洗一遍) */
+const PREVIEW_NAME = /^[\w.-]+\.(mp3|wav|flac|pcm)$/;
+function previewName(raw: string): string {
+  return raw.replace(/[^\w.-]/g, "_");
+}
+function previewUrl(name: string): string {
+  return `/api/voice/preview/${encodeURIComponent(name)}`;
+}
+/** 写一份试听文件,回它的播放地址 */
+function writePreview(root: string, rawName: string, buf: Buffer): string {
+  const name = previewName(rawName);
+  fs.mkdirSync(previewDir(root), { recursive: true });
+  fs.writeFileSync(path.join(previewDir(root), name), buf);
+  return previewUrl(name);
+}
+
 let ffmpegBin: string | null | undefined;
 
 /**
@@ -99,6 +124,14 @@ export function voicePlugin(): Plugin {
           if (method === "GET" && url === "/api/voice/config") {
             return sendJson(res, 200, { ok: true, config: publicVoiceConfig(), presets: PRESETS });
           }
+          if ((method === "GET" || method === "HEAD") && url.startsWith("/api/voice/preview/")) {
+            let name = "";
+            try { name = decodeURIComponent(url.slice("/api/voice/preview/".length)); } catch { /* 下面按不认处理 */ }
+            // 文件名被正则限死(不含路径分隔符),拼出来的路径跑不出试听缓存目录
+            if (!PREVIEW_NAME.test(name)) return sendJson(res, 404, { ok: false, error: "没有这个试听文件" });
+            res.setHeader("Cache-Control", "no-store");
+            return serveFile(path.join(previewDir(root), name), req, res);
+          }
           if (method !== "POST") return sendJson(res, 405, { ok: false, error: "只接受 POST" });
           const body = await readJson(req);
 
@@ -114,9 +147,10 @@ export function voicePlugin(): Plugin {
               speed: body.speed, emotion: body.emotion, name: body.name,
             };
             if (body.preview === true) {
-              // 试听:固定文件名、覆盖上一次,不进素材库(设置面板里听一下就扔),照旧
-              const out = await generateVoice({ cfg: readVoiceConfig(), args, outDir: mediaDir(root), preview: true });
-              return sendJson(res, 200, { ok: true, ...out });
+              // 试听:固定文件名、覆盖上一次,不进素材库(设置面板里听一下就扔);落试听缓存目录,不写素材目录
+              const out = await generateVoice({ cfg: readVoiceConfig(), args, outDir: previewDir(root), preview: true });
+              const { path: _cached, ...rest } = out;
+              return sendJson(res, 200, { ok: true, ...rest, url: previewUrl(out.name) });
             }
             // 正式合成(voice_generate):先落这一次自己的临时目录,再经素材服务的入库接口进内容库,
             // 和用户导入素材走同一条路(docs/semantics/product/asset-service.md「入库这一步不能省」)。
@@ -143,18 +177,13 @@ export function voicePlugin(): Plugin {
           if (url === "/api/voice/design") {
             const cfg = readVoiceConfig();
             const r = await designVoice({ baseUrl: cfg.effectiveBaseUrl, apiKey: cfg.apiKey }, { prompt: body.prompt, previewText: body.previewText });
-            let previewUrl = "";
-            if (r.trial) {
-              const name = `voice-design-${r.voiceId}.mp3`;
-              fs.mkdirSync(mediaDir(root), { recursive: true });
-              fs.writeFileSync(path.join(mediaDir(root), name), r.trial);
-              previewUrl = `/@media/${encodeURIComponent(name)}`;
-            }
+            let trialUrl = "";
+            if (r.trial) trialUrl = writePreview(root, `voice-design-${r.voiceId}.mp3`, r.trial);
             const next = addCustomVoice({
               provider: "minimax", voiceId: r.voiceId, name: body.name || "设计的音色", kind: "design",
               note: String(body.prompt || "").slice(0, 200),
             });
-            return sendJson(res, 200, { ok: true, voiceId: r.voiceId, previewUrl, config: publicVoiceConfig(next) });
+            return sendJson(res, 200, { ok: true, voiceId: r.voiceId, previewUrl: trialUrl, config: publicVoiceConfig(next) });
           }
           if (url === "/api/voice/clone") {
             if (body.consent !== true) throw new VoiceError("复刻别人的声音要先得到本人同意；勾选确认后再提交。");
@@ -173,11 +202,7 @@ export function voicePlugin(): Plugin {
                 audio: fs.readFileSync(prepared.file), filename: "voice.wav", voiceId, previewText: body.previewText,
               });
               let demoUrl = "";
-              if (r.demo) {
-                const name = `voice-clone-${voiceId}.mp3`;
-                fs.writeFileSync(path.join(mediaDir(root), name), r.demo);
-                demoUrl = `/@media/${encodeURIComponent(name)}`;
-              }
+              if (r.demo) demoUrl = writePreview(root, `voice-clone-${voiceId}.mp3`, r.demo);
               const next = addCustomVoice({
                 provider: "minimax", voiceId, name: body.name || "复刻的音色", kind: "clone",
                 note: `源文件 ${path.basename(src)}，${prepared.seconds.toFixed(1)} 秒`,
