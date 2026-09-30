@@ -557,7 +557,7 @@ export class FramePipeline {
      */
     const unit = this.agentUnit;
     if (unit?.inbox && !unit.inboxClosed) {
-      const task = new Promise((resolve, reject) => unit.inbox.push({ body, resolve, reject }));
+      const task = new Promise((resolve, reject) => { unit.inbox.push({ body, resolve, reject }); unit.wake?.(); });
       task.catch(() => {}).finally(() => { this.agentPending--; this.agentDoneAt = Date.now(); this.kickAgentIdle(); });
       return task;
     }
@@ -649,6 +649,8 @@ export class FramePipeline {
   /**
    * 把专用实例收件箱里的 Agent 任务按先后做完(做的时候又来的也接着做:「连着来的一次做完再切回」),
    * 期间每 `AGENT_YIELD_BEAT_MS` 调一次 `heartbeat`(队列任务的工作计数,租约不因让路被当成停滞)。记进 `agentYieldStats`。
+   * 批边界让路时,收件箱清空后再等 `agentGraceMs`(1 秒)看有没有紧跟着的:Agent 的一次工具调用常是前后脚的几个任务
+   * (`see_frames` 渲完才排「量实体框」),不等的话中间要切回队列任务一次(一次换页加一个 4 帧块)才轮到下一个〔裁〕。
    * `reason`:`'batch'` = 队列任务在批边界让路;`'start'` / `'end'` = 那一项开工前、做完后清收件箱。回做了几个。
    */
   async drainAgentInbox(unit, { heartbeat = null, reason = 'batch' } = {}) {
@@ -659,11 +661,21 @@ export class FramePipeline {
     beat();
     const timer = heartbeat ? setInterval(beat, AGENT_YIELD_BEAT_MS) : null;
     timer?.unref?.();
+    const grace = reason === 'batch' ? Math.max(0, Number(this.agentGraceMs) || 0) : 0;
+    const next = () => new Promise(resolve => {
+      if (unit.inbox.length || !grace || this.closed) return resolve();
+      const timer = setTimeout(() => { unit.wake = null; resolve(); }, grace);
+      unit.wake = () => { clearTimeout(timer); unit.wake = null; resolve(); };
+    });
     try {
-      while (unit.inbox.length) {
-        const job = unit.inbox.shift();
-        tasks++;
-        try { job.resolve(await job.body()); } catch (error) { job.reject(error); }
+      for (;;) {
+        while (unit.inbox.length) {
+          const job = unit.inbox.shift();
+          tasks++;
+          try { job.resolve(await job.body()); } catch (error) { job.reject(error); }
+        }
+        await next();
+        if (!unit.inbox.length) break;
       }
     } finally {
       if (timer) clearInterval(timer);

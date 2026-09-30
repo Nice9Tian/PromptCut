@@ -10,6 +10,7 @@
  *   MNT3-Y-4  `drainAgentInbox`:Agent 任务连着来的一次做完;做的时候每 `AGENT_YIELD_BEAT_MS` 调一次心跳,前后各一次;
  *   MNT3-Y-5  租约(真队列 + 真节点编排 + 真执行器):队列任务中途让路 200 s(超过 STALL_MS 120 s),执行器的心跳让它不被判停滞、
  *             一次完成、没有 lease-lost;不带心跳的同一场景照旧按 stalled 收回(说明这条用例真的测到了停滞规则);
+ *   MNT3-Y-7  Agent 任务前后脚来(第二个在第一个做完后 1 秒内到):同一次让路里一起做完,中间不切回队列任务;
  *   MNT3-Y-6  整场景(本地档)那一路:`renderLocalSnapshots` 的 `shouldStop` 每 4 帧问一次,停下时已攒的批照常收尾、回停下的帧。
  *
  * 不起 Chrome:`server/bakery/index.mjs` 换成假的,假 `bakeFrames` 与真的一样在两帧之间看 `signal`、一帧的快照先于它的截图。
@@ -196,6 +197,7 @@ test('MNT3-Y-3 管线整合:专用实例做快照细任务时来了 Agent 任务
 test('MNT3-Y-4 drainAgentInbox:连着来的一次做完;做的时候定时调心跳,前后各一次', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   const svc = new FramePipeline({ root: os.tmpdir(), origin: () => 'http://127.0.0.1:1', interactive: true, mode: 'full' });
+  svc.agentGraceMs = 0;   // 宽限期另见 Y-7
   const beats = [];
   let release;
   const gateP = new Promise(resolve => { release = resolve; });
@@ -342,5 +344,45 @@ test('MNT3-Y-6 整场景那一路:renderLocalSnapshots 每 4 帧问一次 should
     const whole = await svc.renderLocalSnapshots(entry, frames.filter(n => n > 7), fakeBakery('b'), null, { shouldStop: () => false });
     assert.equal(whole, undefined, '没停回 undefined');
     await svc.close().catch(() => {});
+  });
+});
+
+test('MNT3-Y-7 前后脚的 Agent 任务:第二个在宽限期内到,同一次让路里做完,中间不切回队列任务', async () => {
+  await withTmp(async root => {
+    bakeLog.length = 0;
+    const { pipeline, entry, control } = await setup(root, { interactive: true });
+    pipeline.agentGraceMs = 0;
+    const log = [];
+    pipeline.lanes.set('queue', { bakery: fakeBakery('queue', log) });
+    pipeline.lanes.set('agent', { bakery: fakeBakery('agent', log) });
+    let openHold;
+    const hold = new Promise(resolve => { openHold = resolve; });
+    try {
+      const a = pipeline.runQueueTask(async lease => { await lease(project); log.push('A:start'); await hold; }, undefined, { tag: 'card:other' });
+      await until(() => log.includes('A:start'));
+      let first = null, second = null;
+      beforeFrame = (frame, rec) => {
+        if (rec.bakery === 'agent' && frame === 2 && !first) {
+          // 从这里起宽限期按 200 ms 算(开头那 0 是为了让快照任务先被专用实例接走)
+          pipeline.agentGraceMs = 200;
+          first = pipeline.runAgentTask(async lease => {
+            await lease(project); log.push(`X1 after ${bakeLog.at(-1)?.events.at(-1)}`);
+            // 做完 20 ms 后第二个到(模拟 see_frames 渲完才排「量实体框」)
+            setTimeout(() => { second = pipeline.runAgentTask(async l => { await l(project); log.push(`X2 after ${bakeLog.at(-1)?.events.at(-1)}`); return 2; }); }, 20);
+            return 1;
+          });
+        }
+      };
+      await pipeline.renderCardSnapshotRange(entry, control, { from: 0, to: 23 }, {});
+      assert.equal(await first, 1);
+      assert.equal(await second, 2);
+      assert.deepEqual(log.filter(e => e.startsWith('X')), ['X1 after shot 3', 'X2 after shot 3'], '两个之间队列任务没有再推帧');
+      const y = pipeline.diagnostics().scheduler.yields;
+      assert.equal(y.count, 1, '只让了一次路');
+      assert.equal(y.tasks, 2);
+      assert.deepEqual(bakeLog.filter(r => r.bakery === 'agent').map(r => r.targetFrames[0]), [0, 4]);
+      openHold();
+      await a;
+    } finally { beforeFrame = null; openHold?.(); await pipeline.close().catch(() => {}); }
   });
 });
