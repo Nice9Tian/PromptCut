@@ -13,7 +13,7 @@ import { mediaDir } from "../vite-plugin-media";
 import { cardCodeHash } from "../card-overrides.mjs";
 import { enqueue } from "./render-queue";
 import { nextCounter, renderFrames, renderOneFrame } from "./render";
-import type { FrameResult } from "./render";
+import type { FrameResult, RenderOpts } from "./render";
 import type { Runner } from "./worker-pool";
 
 /**
@@ -239,8 +239,11 @@ export async function bakeOne(
    * 两条路各写一套的话,迟早会出现「单张渲的和批量渲的不是同一张图」,而且不报错。
    */
   pre?: FrameResult,
-  /** signal:调用方断开就取消;runner:谁来跑(不给是渲染池,界面的热备渲染器会传自己的) */
-  o: { signal?: AbortSignal; runner?: Runner } = {},
+  /**
+   * signal:调用方断开就取消;runner:谁来跑(不给是渲染池,界面的热备渲染器会传自己的);
+   * lane:FramePipeline 那条路排哪条队(见 render.ts 的 `RenderOpts.lane`),缺省 Agent 专用实例(bake_card)
+   */
+  o: { signal?: AbortSignal; runner?: Runner; lane?: RenderOpts["lane"] } = {},
 ): Promise<any> {
   const { target, at, askedT, rgb, key, name, url, renderBox } = bakeTarget(project, clipId, t, size, bg, fit);
   const dir = mediaDir(root);
@@ -307,7 +310,7 @@ export async function bakeOne(
   const post = { bg: rgb ? rgb[1].toLowerCase() : null, stats: true };
   const r = pre ?? (o.runner
     ? await renderOneFrame(root, origin, target, at, [], priority, { signal: o.signal, runner: o.runner, post })
-    : await enqueue(() => renderOneFrame(root, origin, target, at, [], priority, { signal: o.signal, post }), priority, 0, o.signal));
+    : await enqueue(() => renderOneFrame(root, origin, target, at, [], priority, { signal: o.signal, post, lane: o.lane }), priority, 0, o.signal));
 
   /*
    * 先写临时名再改名。改名在同一个卷上是原子的,所以**读的人要么看不到这个文件、
@@ -345,7 +348,7 @@ export async function bakeClip(
   bg: unknown,
   fit: "square" | "box" = "square",
   priority = 0,
-  o: { signal?: AbortSignal; runner?: Runner } = {},
+  o: { signal?: AbortSignal; runner?: Runner; lane?: RenderOpts["lane"] } = {},
 ): Promise<any[]> {
   const uniq = [...new Set(times.map(Number).filter(Number.isFinite))];
   if (uniq.length <= 1) {
@@ -374,7 +377,7 @@ export async function bakeClip(
   const atList = missing.map((m) => m.at);
   const shots = o.runner
     ? await renderFrames(root, origin, target, atList, [], priority, { signal: o.signal, runner: o.runner, post })
-    : await enqueue(() => renderFrames(root, origin, target, atList, [], priority, { signal: o.signal, post }), priority, 0, o.signal);
+    : await enqueue(() => renderFrames(root, origin, target, atList, [], priority, { signal: o.signal, post, lane: o.lane }), priority, 0, o.signal);
 
   // 渲好的按帧号交回 bakeOne,缓存键、落盘、返回值全走那一套
   const byT = new Map<number, FrameResult>();
