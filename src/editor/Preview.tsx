@@ -11,7 +11,7 @@ import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
 import { frontStage, onStageEvent, pushProject, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
 import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
-import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, liveStage, singleLiveStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
+import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleLiveStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { MiniScrubber } from "./preview/MiniScrubber";
@@ -53,7 +53,13 @@ import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.
 import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { layerSwapMs } from "./swapCost";
-import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
+import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages } from "../online/stageOrigins";
+import { createStageHandshake, type StageHandshake } from "../online/stageHandshake";
+
+/** 换回双舞台时盖板最多留多久(〔裁〕2026-09-30 `claude/stage-handshake`) */
+const STAGE_HANDOVER_MAX_MS = 3000;
+/** 新的可见舞台第一次 `setTime` 回包(或报来第一拍)之后再等这么久撤盖板,让它把这一帧画到屏上 */
+const STAGE_HANDOVER_SETTLE_MS = 150;
 import { createStageWatch, type StageWatch } from "../online/stageWatch";
 import { builtinSourceExports } from "../cards/builtinSourceExports";
 import { pageL2 } from "../online/l2";
@@ -159,6 +165,23 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const stagesPending = ONLINE && onlineStages.config !== "done";
   const dual = dualStage();
   /**
+   * 首次握手的过渡期(`stageHandshake.ts` 的 `interim`,〔裁〕2026-09-30 `claude/stage-handshake`):可见舞台 A 挂上 20 秒还没握上,
+   * 先按同源单舞台出画面(`dual` 为假,和退回单舞台同一条路),原来那两个跨源 iframe 不拆,改作隐藏的预热 iframe 继续加载;
+   * 两台都握上手就换回双舞台(只换一次)。
+   */
+  const interim = interimStage();
+  /** 首次握手这一轮还在进行(双舞台等握手,或过渡期):计时器跨过「双舞台 → 过渡期 → 换回双舞台」不重建 */
+  const handshakeRound = dual || interim;
+  /**
+   * 换回双舞台那一下的画面衔接〔裁〕:过渡期的同源单舞台留在原位当盖板(不再连 RPC,停在最后一帧),新的可见舞台
+   * 先不露出来;等它按新项目画好当前这一帧(第一次 `setTime` 回包之后一小会儿,或播放中报来第一拍)再一次换过来,
+   * 最多等 `STAGE_HANDOVER_MAX_MS`。
+   */
+  const [handoverDone, setHandoverDone] = useState(false);
+  const handover = ONLINE && dual && onlineStages.interimAt !== null && !handoverDone;
+  const handoverRef = useRef(handover);
+  handoverRef.current = handover;
+  /**
    * 可见舞台渲 live 变体:双舞台,或在线页面的同源单舞台(`docs/plan/c10a-contract.md` 第 8.1 节)。
    * 播放头跟舞台的 `frame`、快照 / 抑制经 RPC 投递、素材层在舞台里 —— 这些按 `live` 判;
    * 只和后台舞台 B 有关的(互换、补跑、页面触发预渲染)仍按 `dual` 判。
@@ -247,6 +270,24 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const handshookRef = useRef(new Set<StageId>());
   /** 在线双舞台握手之后的看守(心跳断 → 重载那一台 → 重载也握不回来就退回单舞台;`src/online/stageWatch.ts`) */
   const stageWatchRef = useRef<StageWatch | null>(null);
+  /** 在线双舞台的首次握手计时(每台从自己 iframe 的 `load` 起算,另有总上限;`src/online/stageHandshake.ts`) */
+  const handshakeRef = useRef<StageHandshake | null>(null);
+  /**
+   * 在线双舞台:后台舞台 B 等可见舞台 A 的 iframe `load` 之后才挂〔裁:2026-09-30 `claude/stage-handshake`〕。
+   * 两个舞台各在自己的源上、各下一遍主脚本,同时下载就平分带宽;慢网络下让 A 先独占带宽,用户先看到画面,
+   * B 的握手时限从 B 自己的 `load` 起算,不吃亏。桌面(本机)不受影响,照旧一起挂。
+   */
+  const [backStageMount, setBackStageMount] = useState(false);
+  /** 过渡期里预热的两个跨源 iframe(同一个元素,换回双舞台时直接接任 A / B,不重新加载) */
+  const warmRef = useRef<Record<StageId, HTMLIFrameElement | null>>({ A: null, B: null });
+  const warmRefOf = useMemo(() => ({
+    A: (el: HTMLIFrameElement | null) => { warmRef.current.A = el; },
+    B: (el: HTMLIFrameElement | null) => { warmRef.current.B = el; },
+  }), []);
+  /** 每个舞台窗口最近一次的 `pc-stage-ready`(预热期间收到的握手,换回双舞台时照它补一遍握手) */
+  const readyByWinRef = useRef(new WeakMap<object, { origin: string; caps: HostCapabilities | null }>());
+  /** 握手处理本体(消息 effect 里建;换回双舞台时补握手也走它) */
+  const processReadyRef = useRef<(id: StageId, win: Window, origin: string, caps: HostCapabilities | null) => void>(() => {});
   /**
    * 下面那一堆(拖动、命中、心跳、节拍)问的都是**可见舞台**。
    *
@@ -589,9 +630,21 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         return;
       }
       if (type !== "pc-stage-ready") return;
+      if (e.source) readyByWinRef.current.set(e.source, { origin: e.origin, caps: (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null });
+      // 过渡期里预热的跨源舞台握上手了:只记进首次握手的计时(不建 RPC;换回双舞台时再补握手)
+      for (const id of STAGE_IDS) {
+        const warm = warmRef.current[id]?.contentWindow;
+        if (warm && e.source === warm) { handshakeRef.current?.ready(id); return; }
+      }
       for (const id of STAGE_IDS) {
         const win = frames[id].current?.contentWindow;
         if (!win || e.source !== win) continue;
+        processReadyRef.current(id, win, e.origin, (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null);
+        return;
+      }
+    };
+    processReadyRef.current = (id, win, origin, caps) => {
+      {
         /*
          * 这个实例此刻该是什么角色。**不能一律照 `INITIAL_ROLE_OF` 走** ——
          * K5 的互换之后 A 可能已经是后台那一个了,它热重载一次就会顶着 `front` 回来、
@@ -602,12 +655,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         noteStageFresh(id);
         rpcRef.current[id]?.dispose();
         // 回包发给这个 iframe 此刻真实的源(换源重载的过渡期里 `stageTargetOrigin` 可能已经是另一个)
-        const client = createStageRpc(win, e.origin && e.origin !== "null" ? e.origin : stageTargetOrigin(id));
+        const client = createStageRpc(win, origin && origin !== "null" ? origin : stageTargetOrigin(id));
         handshookRef.current.add(id);
+        // 过渡期的同源单舞台握手不算首次握手(那是 A 的另一个 iframe)
+        if (dualRef.current) handshakeRef.current?.ready(id);
         if (ONLINE && dualRef.current && handshookRef.current.has("A") && handshookRef.current.has("B")) markStageHandshake("ok");
         stageWatchRef.current?.ready(id);
         rpcRef.current[id] = client;
-        const caps = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
         hostCapsRef.current[id] = caps;
         // R9 端口转交协议:路线 2 下,握手之后、发任何 RPC(含下面的 setRole)之前先把 GL 端口交过去
         glPortTo(id, win, caps);
@@ -624,7 +678,6 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         if (onlineBrowserMode()) { missingSentRef.current[id] = undefined; pushMissingRef.current(); }
         // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
         if (role === "front") setStageReady((n) => n + 1);
-        return;
       }
     };
     window.addEventListener("message", onMessage);
@@ -640,15 +693,74 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [glPortTo]);
 
+  /*
+   * 首次握手(C10 契约第 2 节;〔裁〕2026-09-30 `claude/stage-handshake`):每台的 20 秒从那一台 iframe 的 `load` 起算
+   * (慢网络下舞台页光下载就要几十秒,不再算作握手失败),自挂上起另有总上限;到点没都握上照旧退回同源单舞台。
+   */
   useEffect(() => {
-    if (!ONLINE || !dual) return;
+    if (!ONLINE || !handshakeRound) return;
+    // 这一轮只从 `pending` 开始计时(过渡期、换回之后都不重建;真走到这里说明布局被别的原因打断过,按失败收场)
+    if (onlineStageState().handshake !== "pending") {
+      if (onlineStageState().handshake === "interim") markStageHandshake("failed", "过渡期的首次握手计时中断");
+      return;
+    }
     handshookRef.current = new Set();
-    const timer = window.setTimeout(() => {
-      const got = [...handshookRef.current];
-      if (got.length < 2) markStageHandshake("failed", `握上手的舞台:${got.join("、") || "无"}`);
-    }, STAGE_HANDSHAKE_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [dual]);
+    const hs = createStageHandshake({
+      ids: STAGE_IDS,
+      fail: (reason) => {
+        console.warn(`[preview] ${reason},退回同源单舞台`);
+        markStageHandshake("failed", reason);
+      },
+      ok: () => markStageHandshake("ok"),
+      interim: (reason) => {
+        console.warn(`[preview] ${reason}`);
+        markStageHandshake("interim", reason);
+      },
+    });
+    handshakeRef.current = hs;
+    // 这一轮已经握过手的舞台(effect 晚于握手跑到时)照样记上
+    for (const id of STAGE_IDS) if (rpcRef.current[id]) hs.ready(id);
+    const w = window as unknown as { __pcStageHandshake?: () => unknown };
+    w.__pcStageHandshake = () => hs.status();
+    return () => {
+      hs.dispose();
+      if (handshakeRef.current === hs) handshakeRef.current = null;
+      // 退回、换回之后留着观察口(探针核原因与时刻)
+      if (hs.phase !== "failed" && hs.phase !== "ok") delete w.__pcStageHandshake;
+    };
+  }, [handshakeRound]);
+  /** 跨源舞台 iframe 的 `load`(跨源也触发;预热期间也是它):首次握手按它起算;A 加载完才挂 B */
+  const onStageFrameLoad = useCallback((id: StageId) => {
+    handshakeRef.current?.loaded(id);
+    if (id === "A") setBackStageMount(true);
+  }, []);
+  /*
+   * 过渡期之后换回双舞台(只换一次):两个预热 iframe 已经接任 A / B(同一个元素,没重新加载),照它们预热时发来的
+   * `pc-stage-ready` 补一遍握手(建 RPC、定角色、灌项目);同源单舞台留作盖板,直到新的可见舞台画好当前这一帧。
+   */
+  const handoverTimerRef = useRef<number | null>(null);
+  /** 诊断:换回那一下从哪一刻开始、因为什么撤的盖板(`setTime` / `frame` / `cap`)、撤盖板时离开始多久 */
+  const handoverInfoRef = useRef<{ startedAt: number | null; by: string | null; ms: number | null }>({ startedAt: null, by: null, ms: null });
+  const endHandover = useCallback((by: string) => {
+    const info = handoverInfoRef.current;
+    if (info.by === null && info.startedAt !== null) handoverInfoRef.current = { ...info, by, ms: Math.round(performance.now() - info.startedAt) };
+    setHandoverDone(true);
+  }, []);
+  const finishHandover = useCallback((delayMs: number, by: string) => {
+    if (!handoverRef.current || handoverTimerRef.current !== null) return;
+    handoverTimerRef.current = window.setTimeout(() => { handoverTimerRef.current = null; endHandover(by); }, delayMs);
+  }, [endHandover]);
+  useEffect(() => {
+    if (!handover) return;
+    for (const id of STAGE_IDS) {
+      const win = (id === "A" ? frameARef : frameBRef).current?.contentWindow;
+      const msg = win ? readyByWinRef.current.get(win) : undefined;
+      if (win && msg && !rpcRef.current[id]) processReadyRef.current(id, win, msg.origin, msg.caps);
+    }
+    handoverInfoRef.current = { startedAt: performance.now(), by: null, ms: null };
+    const cap = window.setTimeout(() => endHandover("cap"), STAGE_HANDOVER_MAX_MS);
+    return () => window.clearTimeout(cap);
+  }, [handover, endHandover]);
 
   /*
    * 握手之后又断(C10 契约第 2 节「握手之后又断」〔裁〕):已握手的舞台心跳断了(卡死、跨源 iframe 的渲染进程崩了),
@@ -1306,6 +1418,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       // C10:在线双舞台、按拍换快照、后台活开关、探针帧的可转移字节
       dual: dualRef.current,
       onlineStages: onlineStageState(),
+      // 首次握手过渡期之后换回双舞台那一下(盖板因为什么、多久撤下)
+      handover: { ...handoverInfoRef.current },
       beatSwap: beatSwapDebug(),
       backWork: backWorkDiag(),
       probeFrames: probeFrameDiag(),
@@ -1327,6 +1441,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     switch (e.type) {
       case "frame": {
         // K4:可见舞台每渲完一拍报一次 t,播放头跟它走(那时 Preview 的 rAF 循环不启动)
+        if (handoverRef.current) finishHandover(STAGE_HANDOVER_SETTLE_MS, "frame");
         const now = performance.now();
         const prev = lastFrameAtRef.current;
         lastFrameAtRef.current = now;
@@ -1534,6 +1649,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       markBaselineReset("front");
       return;
     }
+    // 换回双舞台的衔接:新的可见舞台按新项目落好这一帧了,稍等它画到屏上再撤盖板
+    if (handoverRef.current && s === stage()) finishHandover(STAGE_HANDOVER_SETTLE_MS, "setTime");
     void refreshRects();
     void pumpRef.current();
     /*
@@ -1968,67 +2085,94 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
             <div style={{ position: "relative", width: project.width, height: project.height }}>
               {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
               <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={tierList} />
-              {!stagesPending && <iframe
-                ref={frameRefOf.A}
-                data-pc="stage-frame"
-                title="预览舞台"
-                /*
-                 * 这里**不加 proxy=1**:2D 预览的契约是「预览所见 = 导出所得」,
-                 * 播放时换成色块就把这条破了 —— 用户按播放是要看成片长什么样,
-                 * 不是要看构图草图。代理只活在 3D 视图里,而且只是预渲染没跟上时的过渡。
-                 */
-                src={stageSrc("A")}
-                style={{
-                  position: "absolute",
+              {/*
+                * 舞台 iframe 按槽位挂:同源单舞台(`single`)、跨源的 A(`dualA`)、跨源的 B(`dualB`),顺序固定、按槽位作 key。
+                * 首次握手的过渡期(〔裁〕2026-09-30 `claude/stage-handshake`)里三个同时在:`single` 当可见舞台 A,`dualA` / `dualB`
+                * 改作隐藏的预热 iframe;换回双舞台时 `dualA` / `dualB` **还是同一个元素**(key 不变、顺序不变,React 不会挪动它,
+                * iframe 不会重新加载)直接接任 A / B,`single` 留作盖板直到新的可见舞台画好当前这一帧。
+                */}
+              {!stagesPending && (() => {
+                const base = {
+                  position: "absolute" as const,
                   inset: 0,
                   width: project.width,
                   height: project.height,
                   border: 0,
                   display: "block",
                   background: "transparent",
-                  colorScheme: "normal",
-                  /*
-                   * R7:**舞台露出来**(D5)。可见的那一个不再是全透明的,用户看到的
-                   * 就是舞台 iframe 本身,不再是主文档里那张整帧 `<img>`。
-                   *
-                   * 判据是 `dual` 而不是「`?preview=stage`」:舞台页只有在 `dual` 时才
-                   * 带上 `&preview=stage`(见 `stageSrc`),也才渲 `FrameScene` 的 live 变体、
-                   * 才把素材层画在自己里面。端口被占退回同源单舞台时那一份还是 placeholder 内容,
-                   * 露出来会是一张没有素材的画面 —— 那时候要继续用 `UnifiedPreview` 的整帧。
-                   */
-                  opacity: live && frontId === "A" ? 1 : 0,
-                  // 后台那个还要挡掉指针 —— K5 互换之后 A 可能就是后台那一个
-                  ...(frontId === "A" ? null : { pointerEvents: "none" as const }),
-                }}
-              />}
-              {dual && !stagesPending && (
-                <iframe
-                  ref={frameRefOf.B}
-                  data-pc="stage-frame-back"
-                  title="后台舞台"
-                  src={stageSrc("B")}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    width: project.width,
-                    height: project.height,
-                    border: 0,
-                    display: "block",
-                    background: "transparent",
-                    colorScheme: "normal",
+                  colorScheme: "normal" as const,
+                };
+                const hidden = { opacity: 0, pointerEvents: "none" as const };
+                const out: React.ReactNode[] = [];
+                const showSingle = !dual || handover;
+                if (showSingle) {
+                  const cover = dual && handover;
+                  out.push(<iframe
+                    key="single"
+                    ref={cover ? undefined : frameRefOf.A}
+                    data-pc={cover ? "stage-frame-cover" : "stage-frame"}
+                    title="预览舞台"
                     /*
-                     * 后台舞台**只能这么藏**(K5 (4)):`display: none` 会让里面的
-                     * `<video>` 和 rAF 停掉、布局全归零,补跑出来的画面和可见舞台对不上;
-                     * `visibility: hidden` 会让 `solid.ts` 的 `isSolid` 判它不是实体,
-                     * 量出来的实体框退回整屏。`opacity: 0` 保留布局和渲染,只是看不见。
-                     *
-                     * R7:互换之后 B 可能是可见的那一个,那时它跟着露出来。
+                     * 这里**不加 proxy=1**:2D 预览的契约是「预览所见 = 导出所得」,
+                     * 播放时换成色块就把这条破了 —— 用户按播放是要看成片长什么样,
+                     * 不是要看构图草图。代理只活在 3D 视图里,而且只是预渲染没跟上时的过渡。
                      */
-                    opacity: frontId === "B" ? 1 : 0,
-                    ...(frontId === "B" ? null : { pointerEvents: "none" as const }),
-                  }}
-                />
-              )}
+                    src={stageSrc("A", { dual: false })}
+                    style={{
+                      ...base,
+                      /*
+                       * R7:**舞台露出来**(D5)。可见的那一个不再是全透明的,用户看到的
+                       * 就是舞台 iframe 本身,不再是主文档里那张整帧 `<img>`。
+                       *
+                       * 判据是 `live`:在线页面的同源单舞台也渲 live 变体(`stageSrc` 带 `&preview=stage`)。
+                       * 桌面端口被占退回同源单舞台时那一份还是 placeholder 内容,
+                       * 露出来会是一张没有素材的画面 —— 那时候要继续用 `UnifiedPreview` 的整帧。
+                       * 换回双舞台的盖板照样露着(停在最后一帧),挡掉指针。
+                       */
+                      ...(cover ? { opacity: 1, pointerEvents: "none" as const } : { opacity: live ? 1 : 0 }),
+                    }}
+                  />);
+                }
+                if (dual || interim) {
+                  const warm = !dual;
+                  out.push(<iframe
+                    key="dualA"
+                    ref={warm ? warmRefOf.A : frameRefOf.A}
+                    data-pc={warm ? "stage-frame-warm" : "stage-frame"}
+                    title={warm ? "预热舞台" : "预览舞台"}
+                    src={stageSrc("A", { dual: true })}
+                    onLoad={() => onStageFrameLoad("A")}
+                    style={{
+                      ...base,
+                      // 后台那个还要挡掉指针 —— K5 互换之后 A 可能就是后台那一个;换回双舞台的衔接期间先不露出来
+                      ...(!warm && live && frontId === "A" && !handover ? { opacity: 1 } : hidden),
+                    }}
+                  />);
+                  if (!ONLINE || backStageMount) {
+                    out.push(<iframe
+                      key="dualB"
+                      ref={warm ? warmRefOf.B : frameRefOf.B}
+                      data-pc={warm ? "stage-frame-warm" : "stage-frame-back"}
+                      title={warm ? "预热舞台" : "后台舞台"}
+                      src={stageSrc("B", { dual: true })}
+                      onLoad={() => onStageFrameLoad("B")}
+                      style={{
+                        ...base,
+                        /*
+                         * 后台舞台**只能这么藏**(K5 (4)):`display: none` 会让里面的
+                         * `<video>` 和 rAF 停掉、布局全归零,补跑出来的画面和可见舞台对不上;
+                         * `visibility: hidden` 会让 `solid.ts` 的 `isSolid` 判它不是实体,
+                         * 量出来的实体框退回整屏。`opacity: 0` 保留布局和渲染,只是看不见。
+                         *
+                         * R7:互换之后 B 可能是可见的那一个,那时它跟着露出来。
+                         */
+                        ...(!warm && frontId === "B" && !handover ? { opacity: 1 } : hidden),
+                      }}
+                    />);
+                  }
+                }
+                return out;
+              })()}
               {/*
                 * R7(D5):整帧 `<img>` / `MovPlayer` canvas **只留在 legacy 分支**。
                 * 露出舞台之后再画一层整帧,等于把舞台盖住,而且那一层要等 HTTP
