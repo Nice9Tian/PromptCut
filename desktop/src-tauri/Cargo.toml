@@ -17,7 +17,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # unstable:一个窗口里放多个 webview(agent 的浏览器是主窗口里的子 webview,见 agent_webview.rs)
-tauri = { version = "2", features = ["unstable"] }
+# tray-icon:后台运行的托盘图标(见 background.rs)
+tauri = { version = "2", features = ["unstable", "tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"

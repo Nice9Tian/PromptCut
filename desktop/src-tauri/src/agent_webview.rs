@@ -78,8 +78,18 @@ pub fn pick_port() -> u16 {
 /// 给 WebView2 的启动参数。**主窗口和子 webview 必须传一模一样的一串**:同一个用户数据
 /// 目录下,第二个 webview 的参数和第一个不一样,WebView2 会直接拒绝创建。
 /// 前面三个 feature 是 wry 默认关掉的(Edge 自己的 UI 小玩意),自己给了参数就得自己带上。
+///
+/// 后面几项是给后台运行(background.rs)的:编辑界面收起时主窗挪在屏幕外,Chromium 自己的
+/// 遮挡判断(CalculateNativeWinOcclusion)会把它当成被挡住、把页面标成隐藏,计时器降频、
+/// 不再出帧,页面侧的 Agent 工具和悬浮窗预览就跟着停了。关掉遮挡判断和后台降频,页面照常跑。
+/// 悬浮窗(skill_shell.rs)也用这一串,三处必须一致。
 pub fn browser_args(port: u16) -> String {
-    let mut s = String::from("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+    let mut s = String::from(concat!(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion",
+        " --disable-background-timer-throttling",
+        " --disable-renderer-backgrounding",
+        " --disable-backgrounding-occluded-windows",
+    ));
     if port != 0 {
         s.push_str(&format!(" --remote-debugging-port={port}"));
     }
@@ -214,5 +224,26 @@ pub fn agent_webview_info<R: Runtime>(
         ready: state.port != 0 && app.get_webview(LABEL).is_some(),
         visible: *state.visible.lock().unwrap(),
         muted: *state.muted.lock().unwrap(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_args_keep_background_pages_running() {
+        let a = browser_args(0);
+        assert!(!a.contains("  "), "参数之间只留一个空格: {a}");
+        for flag in [
+            "CalculateNativeWinOcclusion",
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows",
+        ] {
+            assert!(a.contains(flag), "{flag}");
+        }
+        assert!(!a.contains("remote-debugging-port"));
+        assert!(browser_args(5905).ends_with(" --remote-debugging-port=5905"));
     }
 }

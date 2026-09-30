@@ -2,18 +2,18 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>PromptCut · SKILL</title>
+<title>PromptCut</title>
 <style>
   /*
-   * SKILL 模式的悬浮图标。整个窗口是透明无边框的,所以这里画的圆角卡片就是用户看到的全部。
-   * 唯一的交互是双击 —— 单击不算,免得拖动或者误触就把窗口弹出来。
+   * 后台运行的悬浮窗(编辑界面收起时出现,见 desktop/src-tauri/src/background.rs)。
+   * 整个窗口透明无边框,这里画的圆角卡片就是用户看到的全部。
+   *   单击:打开编辑界面;按住拖:挪位置;右键:「打开编辑界面 / 关闭」菜单(外壳弹的原生菜单)。
+   * SKILL 模式下多显示桌面 APP 会话在做什么,和「上一步动作」的画面。
    */
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
   body {
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-    /* 整块可拖:无边框窗口没有标题栏,不给拖拽区用户就挪不动它 */
-    -webkit-app-region: drag;
     user-select: none;
     cursor: default;
     display: flex; flex-direction: column; gap: 8px;
@@ -26,28 +26,35 @@
     padding: 0 14px;
     border-radius: 12px;
     background: rgba(24, 26, 34, 0.94);
-    border: 1px solid #00DBDB;
+    border: 1px solid rgba(0, 219, 219, 0.55);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
     color: #e6edf6;
+    cursor: pointer;
   }
+  .card.is-skill { border-color: #00DBDB; }
   .dot {
     width: 10px; height: 10px; border-radius: 50%;
-    background: #00DBDB; flex: 0 0 auto;
-    animation: pulse 1.8s ease-in-out infinite;
+    background: #56719b; flex: 0 0 auto;
   }
+  .card.is-skill .dot { background: #00DBDB; }
+  .card.is-busy .dot { animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .text { min-width: 0; flex: 1 1 auto; }
-  .title { font-size: 12px; font-weight: 600; color: #00DBDB; }
+  .title { font-size: 12px; font-weight: 600; color: #00DBDB; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sub {
     font-size: 11px; color: #8da4c8; margin-top: 2px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .hint { font-size: 10px; color: #56719b; margin-top: 1px; }
 
-  /* 卡片下面的块共用的壳 */
-  .block {
+  /*
+   * 「上一步动作」预览(只在 SKILL 下)。壳只在第一张图到了之后才把窗口撑高,所以没有图的时候
+   * 这块根本不占地方。不放任何控件:它只回答一个问题 —— agent 刚才那一步做出来是什么样。
+   */
+  .preview {
     display: none;
     flex-direction: column;
+    gap: 4px;
     border-radius: 10px;
     background: rgba(24, 26, 34, 0.94);
     border: 1px solid rgba(0, 219, 219, 0.45);
@@ -55,42 +62,7 @@
     padding: 6px;
     overflow: hidden;
   }
-  .block.is-on { display: flex; }
-
-  /*
-   * 启动进度。用户点「开始」的那一刻主窗就收起来了,快照 → 起实例 → 拉桌面 app → 就绪
-   * 这四步在这里走:做完的亮起来,正在做的那一步呼吸,失败的变红。壳(skill_shell.rs)
-   * 在流程走完几秒后把这块收掉,卡片还是原来那一条。
-   */
-  .steps { flex: 0 0 108px; height: 108px; gap: 3px; padding: 7px 10px; }
-  .step {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 11px; line-height: 18px; color: #56719b;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    transition: color 240ms;
-  }
-  .step i {
-    width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
-    background: currentColor; opacity: 0.55;
-    transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1), opacity 240ms;
-  }
-  .step.is-done { color: #e6edf6; }
-  .step.is-done i { opacity: 1; transform: scale(0.9); }
-  .step.is-active { color: #00DBDB; }
-  .step.is-active i { opacity: 1; animation: pulse 1.2s ease-in-out infinite; transform: scale(1.25); }
-  .step.is-failed { color: #ff6b6b; }
-  .step.is-failed i { opacity: 1; }
-  .steps .status {
-    margin-top: 3px; font-size: 10px; line-height: 14px; color: #8da4c8;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .steps .status.is-failed { color: #ff6b6b; }
-
-  /*
-   * 「上一步动作」预览。壳只在第一张图到了之后才把窗口撑高,所以没有图的时候这块
-   * 根本不占地方。不放时间轴、不放任何控件:它只回答一个问题 —— agent 刚才那一步做出来是什么样。
-   */
-  .preview { gap: 4px; }
+  .preview.is-on { display: flex; }
   .preview img {
     display: block;
     width: 100%;
@@ -98,6 +70,7 @@
     object-fit: contain;
     background: #000;
     border-radius: 6px;
+    pointer-events: none;
   }
   .preview .cap {
     font-size: 10px; color: #8da4c8;
@@ -105,132 +78,97 @@
   }
   .preview .cap b { color: #00DBDB; font-weight: 600; }
 </style>
+<script src="overlay-summary.js"></script>
 </head>
 <body>
-  <div class="card" id="card" title="双击回到 PromptCut">
+  <div class="card" id="card" title="单击打开编辑界面，右键可关闭 PromptCut">
     <div class="dot"></div>
     <div class="text">
-      <div class="title">SKILL 模式</div>
-      <div class="sub" id="sub">正在启动…</div>
-      <div class="hint">双击回到软件</div>
+      <div class="title" id="title">PromptCut 在后台运行</div>
+      <div class="sub" id="sub">编辑界面已收起，Agent 照常工作</div>
+      <div class="hint">单击打开 · 右键关闭</div>
     </div>
   </div>
-  <div class="block steps" id="steps" title="启动进度">
-    <div class="step" data-phase="snapshot"><i></i><span>快照当前项目</span></div>
-    <div class="step" data-phase="booting"><i></i><span>起一份无头实例</span></div>
-    <div class="step" data-phase="launching"><i></i><span>写入说明,拉起桌面 app</span></div>
-    <div class="step" data-phase="ready"><i></i><span>实例就绪</span></div>
-    <div class="status" id="steps-status"></div>
-  </div>
-  <div class="block preview" id="preview" title="AI 上一步做成的时间轴动作,那一刻的画面">
+  <div class="preview" id="preview" title="AI 上一步做成的时间轴动作，那一刻的画面">
     <img id="preview-img" alt="上一步动作的画面">
     <div class="cap" id="preview-cap"></div>
   </div>
 
 <script>
-  // 双击才叫回主窗。拖动这张卡的时候浏览器也会派发 click,所以只认 dblclick。
-  document.getElementById('card').addEventListener('dblclick', function () {
-    var t = window.__TAURI__;
-    if (t && t.event && t.event.emit) t.event.emit('pc-skill-restore');
+  var T = window.__TAURI__;
+  function emit(name) {
+    if (T && T.event && T.event.emit) T.event.emit(name);
+  }
+
+  /*
+   * 单击打开、按住拖动。无边框窗口没有标题栏,拖动交给外壳(startDragging);
+   * 按下后挪了超过几个像素才算拖,松开时没拖过才算单击 —— 免得拖一下就把编辑界面弹出来。
+   * 整张卡和预览块都算(预览块也是悬浮窗的一部分)。
+   */
+  var DRAG_PX = 4;
+  var press = null;
+  document.body.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0) return;
+    press = { x: e.screenX, y: e.screenY, dragged: false };
+  });
+  document.body.addEventListener('pointermove', function (e) {
+    if (!press || press.dragged) return;
+    if (Math.abs(e.screenX - press.x) + Math.abs(e.screenY - press.y) < DRAG_PX) return;
+    press.dragged = true;
+    var w = T && T.window && T.window.getCurrentWindow && T.window.getCurrentWindow();
+    if (w && w.startDragging) w.startDragging();
+  });
+  document.body.addEventListener('pointerup', function (e) {
+    if (e.button !== 0 || !press) return;
+    var clicked = !press.dragged;
+    press = null;
+    if (clicked) emit('pc-overlay-open');
+  });
+  // 右键:外壳弹原生菜单(打开编辑界面 / 关闭)。浏览器自己的右键菜单不要。
+  document.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    press = null;
+    emit('pc-overlay-menu');
   });
 
-  var launched = false;
-
-  // 壳每秒推一次进度(只在真的变了的时候推)
-  var t = window.__TAURI__;
-  if (t && t.event && t.event.listen) {
-    t.event.listen('pc-skill-overlay', function (e) {
-      var d = (e && e.payload) || {};
-      var sub = document.getElementById('sub');
-      if (typeof d.clips === 'number') {
-        var when = d.updated_at ? new Date(Number(d.updated_at) * 1000) : null;
-        var hhmm = when
-          ? String(when.getHours()).padStart(2, '0') + ':' + String(when.getMinutes()).padStart(2, '0')
-          : '';
-        sub.textContent = d.clips + ' 张卡' + (hhmm ? ' · ' + hhmm : '');
-      } else if (d.job_id && launched) {
-        sub.textContent = d.job_id;
-      }
-    });
-
-    // 启动进度(skill_shell.rs 读任务目录的 job.json 推过来)
-    var ORDER = ['snapshot', 'booting', 'launching', 'ready'];
-    t.event.listen('pc-skill-progress', function (e) {
-      var d = (e && e.payload) || {};
-      var phase = d.phase || 'snapshot';
-      var cur = ORDER.indexOf(phase);
-      var rows = document.querySelectorAll('#steps .step');
-      for (var i = 0; i < rows.length; i++) {
-        var me = ORDER.indexOf(rows[i].getAttribute('data-phase'));
-        var cls = 'step';
-        if (d.failed) {
-          // 失败停在哪一步:phase 记的是失败前那一步,它变红,前面的算做完
-          cls += me < cur ? ' is-done' : me === cur ? ' is-failed' : '';
-        } else if (phase === 'stopped') {
-          cls += ' is-done';
-        } else if (me < cur) {
-          cls += ' is-done';
-        } else if (me === cur) {
-          // 实例就绪之后还在拉桌面 app 的话,「实例就绪」已经算做完,状态行说明还在拉
-          cls += phase === 'ready' ? ' is-done' : ' is-active';
-        }
-        rows[i].className = cls;
-      }
-      var status = document.getElementById('steps-status');
-      var text = '';
-      if (d.failed) text = d.error || d.launch_detail || '启动失败';
-      else if (phase === 'ready' && d.launch_status === 'launching') text = d.launch_detail || '正在拉起桌面 app…';
-      else if (phase === 'ready') text = d.launch_detail || '就绪,等 AI 助手动手';
-      else if (phase === 'stopped') text = '实例已停止';
-      status.textContent = text;
-      status.className = 'status' + (d.failed ? ' is-failed' : '');
-      var sub = document.getElementById('sub');
-      if (d.failed) sub.textContent = '启动失败';
-      else if (!d.done) sub.textContent = '正在启动…';
-      else if (!launched) sub.textContent = '正在等 AI 助手…';
-      if (d.done && !d.failed) launched = true;
-    });
-
-    // 进度块显示 / 收起(窗口高度由壳撑,这里只切显示)
-    t.event.listen('pc-skill-steps', function (e) {
-      var on = !!(e && e.payload);
-      document.getElementById('steps').classList.toggle('is-on', on);
-    });
+  function hhmmss(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    function p(n) { return String(n).padStart(2, '0'); }
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   }
-</script>
-<script>
-  // 壳推「上一步动作」的预览图(desktop/src-tauri/src/skill_shell.rs 的 watcher):
-  // json 的修改时间变了才推一次,所以这里不用去重。窗口高度由壳撑,这里只负责显示。
-  var tp = window.__TAURI__;
-  if (tp && tp.event && tp.event.listen) {
-    tp.event.listen('pc-skill-preview', function (e) {
+
+  if (T && T.event && T.event.listen) {
+    // 外壳推的状态(只在变了的时候推)
+    T.event.listen('pc-overlay-state', function (e) {
+      var s = window.pcOverlay.summarize((e && e.payload) || {});
+      document.getElementById('title').textContent = s.title;
+      document.getElementById('sub').textContent = s.sub;
+      var card = document.getElementById('card');
+      card.classList.toggle('is-skill', s.skill);
+      card.classList.toggle('is-busy', s.busy);
+      // 出了 SKILL,预览收起(窗口高度由壳缩回去)
+      if (!s.skill) document.getElementById('preview').classList.remove('is-on');
+    });
+
+    // 「上一步动作」的预览图:json 的修改时间变了才推一次,所以这里不用去重
+    T.event.listen('pc-skill-preview', function (e) {
       var d = (e && e.payload) || {};
       if (!d.data_url) return;
-      var box = document.getElementById('preview');
-      var img = document.getElementById('preview-img');
+      document.getElementById('preview-img').src = d.data_url;
+      var c = window.pcOverlay.previewCaption(d, hhmmss);
       var cap = document.getElementById('preview-cap');
-      img.src = d.data_url;
-      var names = {
-        add_clip: '加了一张卡', update_clip: '改了一张卡', remove_clip: '删了一张卡',
-        duplicate_clip: '复制了一张卡', split_clip: '切开了一张卡', fill_captions: '灌了字幕',
-        set_position: '挪了位置', set_rect: '放进了矩形', align: '对齐了', nudge: '微调了',
-        attach_clip_motion: '绑了跟随', detach_clip_motion: '解了跟随', add_track: '加了序列',
-        remove_track: '删了序列', update_track: '改了序列', move_track: '挪了序列',
-        create_filter: '建了滤镜', update_filter: '改了滤镜', remove_filter: '删了滤镜', apply_filter: '挂了滤镜',
-        create_audio_fx: '建了音频效果', update_audio_fx: '改了音频效果', remove_audio_fx: '删了音频效果', apply_audio_fx: '挂了音频效果',
-        measure_audio: '测了响度',
-        switch_cut: '切换了剪辑', add_cut: '新建了剪辑', set_theme: '换了主题',
-      };
-      var what = names[d.tool] || (d.tool || '上一步');
-      var when = d.at ? new Date(d.at) : null;
-      var hhmm = when && !isNaN(when.getTime())
-        ? String(when.getHours()).padStart(2, '0') + ':' + String(when.getMinutes()).padStart(2, '0') + ':' + String(when.getSeconds()).padStart(2, '0')
-        : '';
-      var at = typeof d.t === 'number' ? ' · ' + d.t.toFixed(1) + 's' : '';
-      cap.innerHTML = '<b>上一步</b> ' + what + at + (hhmm ? ' · ' + hhmm : '');
-      box.classList.add('is-on');
+      cap.textContent = '';
+      var b = document.createElement('b');
+      b.textContent = '上一步';
+      cap.appendChild(b);
+      cap.appendChild(document.createTextNode(' ' + c.what + c.rest));
+      document.getElementById('preview').classList.add('is-on');
     });
   }
+
+  // 告诉外壳页面好了:悬浮窗第一次收起时才建,之前推的状态都没收到,让它重推一遍
+  emit('pc-overlay-ready');
 </script>
 </body>
 </html>
