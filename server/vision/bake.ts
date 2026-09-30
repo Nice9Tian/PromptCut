@@ -2,17 +2,21 @@
  * 单卡预渲染:算缓存键(`bakeTarget`)、渲单张(`bakeOne`)、渲同一张卡的一批时刻(`bakeClip`)。
  * 从 server/vite-plugin-vision.ts 逐字搬来。
  *
- * **这份模块状态只有这里能写**:`bakeInFlight`(同一个键正在飞的那一趟)。
+ * **这份模块状态只有这里能写**:`bakeInFlight`(同一个键正在飞的那一趟)、`stores`(每个根一份卡片快照存取)。
+ *
+ * 产物(PNG)经素材服务的接口写进 `px` 命名空间,缓存键 → 内容哈希记在小索引里(`server/bake-store.mjs`),
+ * 不再直接写、列、删素材目录(`docs/semantics/product/asset-service.md`「预渲染的产物」)。
  * 依赖方向:bake → render / render-queue,单向。
  */
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { isolateClip } from "../vision-project.mjs";
-import { mediaDir } from "../vite-plugin-media";
 import { cardCodeHash } from "../card-overrides.mjs";
+import { assetServiceOrigin } from "../asset-client";
+import { BAKE_INDEX_DIR, createBakeStore } from "../bake-store.mjs";
+import { outRoot } from "./http";
 import { enqueue } from "./render-queue";
-import { nextCounter, renderFrames, renderOneFrame } from "./render";
+import { renderFrames, renderOneFrame } from "./render";
 import type { FrameResult, RenderOpts } from "./render";
 import type { Runner } from "./worker-pool";
 
@@ -30,6 +34,23 @@ const BAKE_LEAD = 0.5;
  * 并行池之前不需要它(串行天然错开),之后才需要 —— 见 bakeOne 里的说明。
  */
 const bakeInFlight = new Map<string, { promise: Promise<any>; priority: number }>();
+
+/** 每个根一份卡片快照存取(索引在 `<outRoot>/bake-index`,字节经素材服务) */
+const stores = new Map<string, ReturnType<typeof createBakeStore>>();
+const bakeLog = (event: string, fields: object = {}) => {
+  try { console.info("[bake-store]", event, JSON.stringify(fields)); } catch { console.info("[bake-store]", event); }
+};
+
+/** 这个根的卡片快照存取:编辑器进程和预渲染进程各一份实例,共用同一个索引目录 */
+export function bakeStoreFor(root: string) {
+  const key = path.resolve(root);
+  let s = stores.get(key);
+  if (!s) {
+    s = createBakeStore({ indexDir: path.join(outRoot(root), BAKE_INDEX_DIR), origin: assetServiceOrigin, log: bakeLog });
+    stores.set(key, s);
+  }
+  return s;
+}
 
 /**
  * 这张图卡片段用到的全部图卡源码指纹(自己 + 上游整条链)。
@@ -190,9 +211,12 @@ export function bakeTarget(
   const key = createHash("sha1")
     .update(JSON.stringify({ clip: plainClip, graph: iso.clip.nodeId ? { nodes: project.cardNodes, media: project.media, tracks: project.tracks, style: project.style } : undefined, theme: project.themeId, at, renderBox, fit, bg: rgb ? rgb[1].toLowerCase() : null, code: cardCodeHash(iso.clip.cardId), graphCode: graphCardCode(project, iso.clip.nodeId) }))
     .digest("hex").slice(0, 12);
-  // 文件名带上 clipId 只是为了在素材目录里认得出来;真正保证唯一的是后面那段输入哈希
+  /*
+   * 老格式的文件名(以前落在素材目录里的 `bake-<clipId>-<键>.png`)。现在字节在素材服务的 `px` 里、地址按内容哈希
+   * (`/api/asset/px/<sha256>`,渲出来才知道);这个名字只留给读时迁移:老项目渲过的,经素材服务的老读路由取回来推进 `px`,
+   * 不用重渲(`bake-store.mjs` 的 `migrateLegacy`)。
+   */
   const name = `bake-${clipId.replace(/[^\w.-]/g, "_")}-${key}.png`;
-  const url = `/@media/${encodeURIComponent(name)}`;
   /**
    * 渲这一趟用的项目。**只在这里拼一次**:渲单张和渲一批以前各拼一份,
    * 两处都要记得改 duration、改 tracks、按 renderBox 排版 —— 漏一处就是
@@ -209,7 +233,7 @@ export function bakeTarget(
     duration: BAKE_LEAD + len + 1 / fps,
     tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map((c: any) => c.id === clipId ? plainClip : c) })),
   };
-  return { iso, plainClip, renderBox, target, at, askedT, rgb, key, name, url };
+  return { iso, plainClip, renderBox, target, at, askedT, rgb, key, name };
 }
 
 
@@ -217,7 +241,7 @@ export function bakeTarget(
  * 把一张卡预渲染成图片,**按输入做缓存**。单张 bake_card 和 3D 视图的批量都走这里。
  *
  * 缓存键是「输入」的哈希 —— 卡片内容 + 时刻 + 尺寸 + 底色 + 主题。所以同一张卡同样的参数
- * 只会真渲一次(4.7~6.5 秒),之后命中就是一次 fs.access,零成本。
+ * 只会真渲一次(4.7~6.5 秒),之后命中是查一次索引、问一次素材服务「这一块收全没有」,几乎零成本。
  * 这正是「一般来说用户都是预渲染好的、不用代理」能成立的前提:代理只覆盖第一次那几秒。
  *
  * 键里**不能**用输出的哈希:那要先渲出来才知道叫什么,等于永远不命中。
@@ -245,37 +269,34 @@ export async function bakeOne(
    */
   o: { signal?: AbortSignal; runner?: Runner; lane?: RenderOpts["lane"] } = {},
 ): Promise<any> {
-  const { target, at, askedT, rgb, key, name, url, renderBox } = bakeTarget(project, clipId, t, size, bg, fit);
-  const dir = mediaDir(root);
-  await fsp.mkdir(dir, { recursive: true });
-  const file = path.join(dir, name);
+  const { target, at, askedT, rgb, key, name, renderBox } = bakeTarget(project, clipId, t, size, bg, fit);
+  const store = bakeStoreFor(root);
 
   const hint = rgb
     ? "不透明贴图:贴上去是「实心物体表面印着这张卡」。把 url 填进 scene-3d 的 texture 参数。"
     : "透明底贴图:贴上去物体在卡片没画的地方也是透空的,内容像浮在空间里(适合标志 / 招牌)。想要「实心立方体表面印着这张卡」就重新渲染一次并传 bg(比如 bg:\"#0b0f17\")。";
   const note = "这是一张**快照**:卡片的动画定格在 t 这一帧,之后改卡片参数贴图不会跟着变,要重新渲染一次。";
 
-  // 缓存命中:同样的输入渲过了,直接给 URL
-  try {
-    const st = await fsp.stat(file);
-    return { clipId, url, t: askedT, width: renderBox.width, height: renderBox.height, bytes: st.size, cached: true, hint, note };
-  } catch { /* 没预渲染过,往下渲 */ }
+  /*
+   * 缓存命中:同样的输入渲过了(索引里有、素材服务上这一块收全了),直接给 URL。
+   * 素材服务不可达时这里抛 BakeStoreError(写明地址与原因),调用方原样回给 Agent / 页面。
+   */
+  const hit = await store.lookup(key);
+  if (hit) return { clipId, url: hit.url, t: askedT, width: renderBox.width, height: renderBox.height, bytes: hit.bytes, cached: true, hint, note };
 
   /*
    * **同一个键正在渲,就等它,别再渲一遍。**
    *
    * 渲染改成并行池之后才需要这个:以前是串行的,同一个键的第二个请求必然排在第一个之后,
-   * 那时文件已经落盘 → 走上面的缓存命中。现在它们可以同时在飞,于是都 stat 落空、
-   * 都起一个 Chrome、最后都往**同一个路径** writeFile。
+   * 那时已经入库 → 走上面的缓存命中。现在它们可以同时在飞,于是都查不到、都起一个 Chrome。
    *
-   * 实测:同时发 4 个完全一样的请求 → 真渲了 4 次,白烧 3 个 Chrome(每个约 4 秒)。
-   * 更糟的是那几个 write 会重叠,中间有个窗口能被读到半张 —— 而浏览器正好可能在这时候
-   * 来取这张图,拿到半张 PNG 就是贴不上,表现成「这块板子怎么一直是色块」。
+   * 实测(改走素材服务之前):同时发 4 个完全一样的请求 → 真渲了 4 次,白烧 3 个 Chrome(每个约 4 秒)。
+   * 入库本身不怕重复:素材服务按内容寻址,同一张图的第二次写入只是一次对账;收尾校验过才对外可取,读不到半张。
    */
   /*
    * 搭车等同键的那一趟,有两个例外:
    *   - **自己更急就不搭**:Agent 的 bake_card(优先级 1)撞上一趟排在队尾的预渲染(优先级 0)时,
-   *     跟着等就是排在所有预渲染后面、直到工具超时 —— 优先级倒挂。自己渲一趟,落盘是原子改名,两份不冲突。
+   *     跟着等就是排在所有预渲染后面、直到工具超时 —— 优先级倒挂。自己渲一趟,两份写进素材服务是同一个内容哈希,不冲突。
    *   - **那一趟被取消了**(是它的请求方断开,不是这张图渲不出来):再看一眼,别的等待者可能已经接着渲了,
    *     有就跟那一趟;没有才自己来。见过的就不再跟,免得在同一个已经失败的 promise 上打转。
    */
@@ -301,11 +322,19 @@ export async function bakeOne(
 
   async function bakeAndWrite() {
   /*
+   * 老项目渲过的(以前落在素材目录里的 `bake-<clipId>-<键>.png`):经素材服务的老读路由取回来推进 `px`,不用重渲。
+   * 批量那条路(pre 已给)在 bakeClip 里先迁过了。
+   */
+  if (!pre) {
+    const moved = await store.migrateLegacy(key, name, { width: renderBox.width, height: renderBox.height, clipId });
+    if (moved) return { clipId, url: moved.url, t: askedT, width: renderBox.width, height: renderBox.height, bytes: moved.bytes, cached: true, hint, note };
+  }
+  /*
    * 底色决定贴上去是什么观感,而这个选择只该在**预渲染的时候**做一次:
    *   不传 bg → 透明底,物体在卡片没画的地方也透空(挖空观感,适合标志 / 招牌);
    *   传了 bg → 压平成不透明,实心物体表面印着这张卡。
    * 压底色和数透明像素都在渲染 worker 里做(post.bg / post.stats,见 server/png-post.mjs),
-   * 这个进程只收字节、落盘。
+   * 这个进程只收字节、经素材服务入库。
    */
   const post = { bg: rgb ? rgb[1].toLowerCase() : null, stats: true };
   const r = pre ?? (o.runner
@@ -313,15 +342,12 @@ export async function bakeOne(
     : await enqueue(() => renderOneFrame(root, origin, target, at, [], priority, { signal: o.signal, post, lane: o.lane }), priority, 0, o.signal));
 
   /*
-   * 先写临时名再改名。改名在同一个卷上是原子的,所以**读的人要么看不到这个文件、
-   * 要么看到完整的一张**,不会读到写了一半的。直接往目标名写会留一个能读到半张的窗口,
-   * 而半张 PNG 贴不上,看起来就是「这块板子一直是色块」,还查不出原因。
+   * 经素材服务的接口写进 `px`(分片、收尾时按 sha256 校验,校验过才对外可取,所以读的人拿不到半张),
+   * 再记进「输入哈希 → 内容哈希」的索引。地址是 `/api/asset/px/<内容哈希>`。
    */
-  const tmp = `${file}.${process.pid}-${nextCounter()}.tmp`;
-  await fsp.writeFile(tmp, r.buf);
-  await fsp.rename(tmp, file);
+  const stored = await store.put(key, r.buf, { width: r.width ?? renderBox.width, height: r.height ?? renderBox.height, clipId, name });
   return {
-    clipId, url, t: askedT, width: r.width ?? renderBox.width, height: r.height ?? renderBox.height, bytes: r.buf.length, cached: false,
+    clipId, url: stored.url, t: askedT, width: r.width ?? renderBox.width, height: r.height ?? renderBox.height, bytes: r.buf.length, cached: false,
     ...(r.transparentRatio !== undefined ? { transparentRatio: r.transparentRatio } : {}),
     hint, note,
   };
@@ -355,12 +381,17 @@ export async function bakeClip(
     return [await bakeOne(root, origin, project, clipId, uniq[0], size, bg, fit, priority, undefined, o)];
   }
 
-  // 哪几个时刻还没落盘。已经有的不进这一趟 —— 它们在 bakeOne 里一次 fs.access 就返回了
-  const dir = mediaDir(root);
+  /*
+   * 哪几个时刻还没入库。已经有的不进这一趟 —— 它们在 bakeOne 里查一次索引就返回了;
+   * 老项目渲过的(素材目录里的旧文件)在这里先经素材服务迁进 `px`,也不进这一趟。
+   */
+  const store = bakeStoreFor(root);
   const missing: { t: number; at: number }[] = [];
   for (const t of uniq) {
     const tg = bakeTarget(project, clipId, t, size, bg, fit);
-    try { await fsp.stat(path.join(dir, tg.name)); } catch { missing.push({ t, at: tg.at }); }
+    const have = await store.lookup(tg.key)
+      ?? await store.migrateLegacy(tg.key, tg.name, { width: tg.renderBox.width, height: tg.renderBox.height, clipId });
+    if (!have) missing.push({ t, at: tg.at });
   }
   if (missing.length < 2) {
     return await Promise.all(uniq.map((t) => bakeOne(root, origin, project, clipId, t, size, bg, fit, priority, undefined, o)));
@@ -379,7 +410,7 @@ export async function bakeClip(
     ? await renderFrames(root, origin, target, atList, [], priority, { signal: o.signal, runner: o.runner, post })
     : await enqueue(() => renderFrames(root, origin, target, atList, [], priority, { signal: o.signal, post, lane: o.lane }), priority, 0, o.signal);
 
-  // 渲好的按帧号交回 bakeOne,缓存键、落盘、返回值全走那一套
+  // 渲好的按帧号交回 bakeOne,缓存键、入库、返回值全走那一套
   const byT = new Map<number, FrameResult>();
   for (const m of missing) {
     const f = Math.max(0, Math.round(m.at * fps));

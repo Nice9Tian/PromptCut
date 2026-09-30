@@ -34,6 +34,7 @@ import { createCardCodeIndex } from "./card-code.mjs";
 import { cardCodeIdentityOf, onCardSourceChange, overridesRoot } from "./card-overrides.mjs";
 import { autoRenderNodeOffReason, createAutoRenderNode } from "./auto-render-node.mjs";
 import { foreignAssetEndpoints, selectAssetClient as selectAssetClientImpl } from "./asset-select.mjs";
+import { setBakeRemote } from "./bake-store.mjs";
 import { ALL as SCOPE_ALL, createPushScope } from "./push-scope.mjs";
 import { closeStorage, createExportSummary, storageDataDir, storageFor } from "./frame-library-storage.mjs";
 import { createStorageHandler, storageRouteOf } from "./storage-routes.mjs";
@@ -188,7 +189,14 @@ async function startArtifactPush(root: string, service: FramePipeline, auto: Aut
   const queue = createPushQueue({ pipeline: service, client, content, dir: scoped && link.projectId ? pushDirOf(service, link.url, link.projectId) : service.root,
     log: pushLog, settleMs: 1500, scope });
   queue.start();
+  /*
+   * 卡片快照(bake_card、3D 视图的贴图)也是预渲染产物:写进本机素材服务之后再推一份到这一台(`bake-store.mjs`)。
+   * 选定的就是本机素材服务时 bake-store 自己跳过。
+   */
+  const bakeRemote = { get base() { return assets.base(); }, put: (ns: string, bytes: Buffer, o?: any) => client.put(ns, bytes, o) };
+  setBakeRemote(() => bakeRemote);
   pushTeardowns.set(root, async () => {
+    setBakeRemote(null);
     try { await queue.stop(); } catch {}
     if ((service as any).pushQueue === queue) (service as any).pushQueue = null;
     assets.stop();
@@ -1547,10 +1555,10 @@ export function framesPlugin(): Plugin {
             const lane = input.lane === "agent" ? "agent" : input.lane === "background" ? "background" : "user";
             if (lane === "user") noteInteraction(root);   // M6c X5:拖动取帧是交互帧请求
             const frames = await service.see_frames(project, input.times || [0], { lane, signal: requestSignal(req, res) });
-            const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
+            // `mov` 恒为 null:整场景的 full.mov 已不再产(legacy 整帧通道方案 B〔裁〕),字段留着给旧页面与探针认形状
             return json(200, { key: entry.key, incomplete: [...frames.values()].some((value: any) => value.incomplete),
               frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, incomplete: !!value.incomplete, missing: value.missing || [],
-                url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
+                url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: null });
           }
           // 会话「当前版本」的唯一来源(Item 4):页面的 preload 带着它的 `{ session, localRev }`
           if (url.pathname === "/preload" && !servesPrerender) {
@@ -1589,11 +1597,10 @@ export function framesPlugin(): Plugin {
             return json(200, { key: entry.key, snapshots, localOnly: snapshots === null });
           } else if (url.pathname !== "/status") return json(404, { error: "Unknown frame operation" });
           await entry.mov?.ready;
-          const videoReady = await fsp.access(path.join(entry.dir, "preview.mp4")).then(() => true, () => false);
-          const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
+          // `video`、`mov` 恒为 null:preview.mp4 与整场景的 full.mov 已不再产、也从来没有消费方
+          // (legacy 整帧通道方案 B〔裁〕,AGENT-maint-3)。字段不删,旧页面与探针见到的回包形状不变
           return json(200, { key: entry.key, status: entry.status, sampled: entry.html.size, movSampled: entry.mov ? [...(entry.mov.frames || [])].length : 0, total: Math.max(1, Math.floor(project.duration * (project.fps || 30))), error: entry.error,
-            video: videoReady ? `/api/frames/${entry.key}/preview.mp4` : null,
-            mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
+            video: null, mov: null });
         } catch (error: any) {
           const timedOut = Boolean(error?.timedOut || error?.code === "PRERENDER_TIMEOUT");
           const cancelled = Boolean(error?.cancelled || error?.name === "AbortError");

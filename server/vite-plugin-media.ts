@@ -476,6 +476,16 @@ export function mediaTierService(root: string, { withQueue = true }: { withQueue
       current = { base, client };
       tiersLog("upload.target", { base });
     };
+    /*
+     * 卡片快照(热备渲染器那条 `ui-render/bake-batch` 在编辑器进程里渲)写进本机素材服务之后,再推一份到当前连接的
+     * 素材服务(`bake-store.mjs`);连的是本机时 `current` 为 null,不推。惰性 import,理由同上。
+     */
+    if (withQueue) {
+      try {
+        const { setBakeRemote }: any = await import("./bake-store.mjs");
+        setBakeRemote(() => (current ? { base: current.base, put: (ns: string, bytes: Buffer, o?: any) => current!.client.put(ns, bytes, o) } : null));
+      } catch { /* 没有就不推 */ }
+    }
     if (withQueue) {
       const { createUploadQueue }: any = await import("./upload-queue.mjs");
       const { sharedBandwidthGate, pushQueueFileProbe }: any = await import("./bandwidth-gate.mjs");

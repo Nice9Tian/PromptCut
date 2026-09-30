@@ -63,9 +63,15 @@ export function signatureMatches(recorded, expected) {
  * render" until a second render confirms it really is empty.
  */
 export class MovFrameStore {
-  constructor({ dir, fps = 30 } = {}) {
+  /**
+   * `movie`(缺省 true):要不要把连续的 PNG 前缀编成 `mov/full.mov`。整场景那一份(`entry.mov`)传 false:
+   * 那个文件只被判过存在、没有人读内容(legacy 整帧通道方案 B,AGENT-maint-3),PNG 表照旧是它的全部用途。
+   * 传 false 时 `start()` 什么也不做,载入时把旧版本留下的 `full.mov` 删掉。独立卡的那一份(`card-cache.mjs`)不变。
+   */
+  constructor({ dir, fps = 30, movie = true } = {}) {
     this.dir = dir;
     this.fps = Number(fps) || 30;
+    this.movie = movie !== false;
     this.movDir = path.join(dir, 'mov');
     this.frameDir = path.join(this.movDir, 'frames');
     this.tableFile = path.join(this.movDir, 'frames.json');
@@ -88,6 +94,7 @@ export class MovFrameStore {
   }
 
   async load() {
+    if (!this.movie) await fs.rm(this.movieFile, { force: true }).catch(() => {});
     const movieExists = await exists(this.movieFile);
     try {
       const doc = JSON.parse(await fs.readFile(this.tableFile, 'utf8'));
@@ -212,7 +219,7 @@ export class MovFrameStore {
     if (!this.tableDirty) return;
     // An index only; render records live in the PNGs.
     await atomic(this.tableFile, JSON.stringify({ version: 2, fps: this.fps, frames: [...this.frames].sort((a, b) => a - b),
-      movie: path.basename(this.movieFile) }));
+      movie: this.movie ? path.basename(this.movieFile) : null }));
     this.tableDirty = false;
   }
 
@@ -321,6 +328,7 @@ export class MovFrameStore {
   async startNow(ffmpeg, streamFactory) {
     const epoch = this.streamEpoch;
     await this.ready;
+    if (!this.movie) return;
     if (this.writer || this.writerError || await exists(this.movieFile)) return;
     try {
       const create = streamFactory || (await import('./bakery/index.mjs')).streamPngVideo;

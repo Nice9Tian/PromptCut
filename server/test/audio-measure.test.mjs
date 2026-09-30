@@ -95,7 +95,8 @@ test("timelineMeasureArgs filter chain matches mux-audio", () => {
   for (let i = 0; i < entries.length; i++) {
     expectedMxAmix = expectedMxAmix.replace("[a" + (i+1) + "]", "[a" + i + "]");
   }
-  expectedMxAmix = expectedMxAmix.replace("[aout]", ",ebur128=peak=true[aout]");
+  // 测响度在混音之后多一步 asetpts=N/SR/TB(amix 偶发 NOPTS 时逐秒曲线缺点,见 audio-measure.mjs),混音本身与导出相同
+  expectedMxAmix = expectedMxAmix.replace("[aout]", ",asetpts=N/SR/TB,ebur128=peak=true[aout]");
   assert.equal(mAmix, expectedMxAmix);
 });
 
@@ -113,7 +114,7 @@ test("parseEbur128:\r 分隔的进度行混进来也不丢整秒的点;timeline 
   assert.deepEqual(r.series.map((p) => p.t), [0, 1, 2]);
   assert.deepEqual(r.series.map((p) => p.lufs), [-20, -21, -22]);
   const withTrim = timelineMeasureArgs([{ file: "a.wav", start: 0, dur: 30, offset: 0, volume: 1, fadeIn: 0, fadeOut: 0 }], 24);
-  assert.match(withTrim[withTrim.indexOf("-filter_complex") + 1], /amix=[^,]+,atrim=0:24,ebur128/);
+  assert.match(withTrim[withTrim.indexOf("-filter_complex") + 1], /amix=[^,]+,atrim=0:24,asetpts=N\/SR\/TB,ebur128/);
   assert.ok(withTrim.includes("-nostats"));
   const noTrim = timelineMeasureArgs([{ file: "a.wav", start: 0, dur: 30, offset: 0, volume: 1, fadeIn: 0, fadeOut: 0 }]);
   assert.doesNotMatch(noTrim[noTrim.indexOf("-filter_complex") + 1], /atrim/);
