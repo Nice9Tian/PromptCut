@@ -108,3 +108,10 @@
 
 - 审上面 8 条〔裁〕与 dry run，决定是否写进 `mechanism/agent.md`。
 - 合并 `claude/user-editing`（`--no-ff`），或返工。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过页面汇总与节流（`userEditingCore.ts`）、「动过」只认本页面经 `setProject` 落地的修改（`onLocalCommit`）、Agent 让页面执行期间不算、服务端看板与 `annotateResult`、`agent-exec` 把 `overwrote` 放进结果、在线构建剪掉推送。8 条〔裁〕照留，待用户审。
+- 采纳语义 dry run：`mechanism/agent.md` 新增「用户正在编辑与覆盖提示」（`628b7d42`，三级〔裁〕，措辞略缩，把被覆盖一方得知也记成 A3 的尾巴）。
+- 主会话在集成分支 `claude/r4-merge` 上重跑 `user-editing-probe --shots`：18 项全过；看过 `dragging.png`：被拖的卡选中、已从 1 秒拖到约 1.6 秒，AI 栏操作记录里有 Agent 的那次 `get_clip`。基线与其余探针见 `docs/reports/REPORT-post-M8.md` 第 5 轮。
+- 跨设备的「正在编辑」与被覆盖一方得知转到 A3（`claude/multi-agent`）。合入 main `41713bf9`。

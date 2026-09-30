@@ -180,3 +180,11 @@
 ### 8.3 TODO
 
 `docs/plan/TODO.md`「语义与代码的差距」里「查询渲染：Agent 专用渲染实例的优先通道、AI 栏操作预览的插队只有雏形」一条，合入后可以改成只剩第 7 节的第 2、3 条（队列模式的认领闸、锚帧等不可借）和 D10（三种模式）。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过调度改动：`'queue'` lane 改成显式待办、插队只改待办顺序（`runQueueTask` 的 `front`）；专用实例只在开着且空闲时经 `kickAgentIdle` 接一项、Agent 任务之后空 1 秒；`fillCardControls` 的 `share` 防同一张卡两个实例同时渲；vision 路由按谁要的分 lane（用户点开 → `'preview'`，模型 → `'agent'`）。
+- 采纳第 8 节：8.1 写进 `mechanism/rendering.md`「查询渲染与预渲染进程」两条（`afabcab7`，三级〔裁〕）；8.2 写成 `docs/plan/cloud-task.md` I4 的实现注；8.3 与第 7 节第 2、3 条、D10 写进 `docs/plan/TODO.md`「查询渲染」一条（`36405da5`）。
+- 主会话在集成分支 `claude/r4-merge`（本分支加 A2）上、空闲的笔记本上重跑：`npx tsc -b --force` 0 错误；`npm test` 4083 / 4081 / 0 / 2；G0-R 全过（确定性 1800 / 1800 相同、与 main `701a27c0` 逐像素 1800 相同、快照重放 PASS、流式生产两种与预览退回两种与就绪索引都 `fails: []`）；`query-render-probe` `fails: []`；其余探针见 `docs/reports/REPORT-post-M8.md` 第 5 轮。
+- G3（Tailwind 只扫源码）之后补测 R0 冷启动（删 Vite 依赖缓存后起 dev server）：树内帧库 15 万个文件时 HTTP 3.0 s、页面可用 10.0 s，与空帧库（3.0 s / 9.8 s）相同；0.7.4 是 17 s / 180 s。
+- 合入 main `41713bf9`。
