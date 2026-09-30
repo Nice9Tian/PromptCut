@@ -1,4 +1,7 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+@source "../src";
+@source "../server";
+@source "../index.html";
 
 /* Tailwind 自动扫描项目文件找类名。开发服务里，扫到的非模块文件（.md、.py、.json 等）一改，
    @tailwindcss/vite 会不打日志地让所有打开的页面整页重载：会话写文档、提交报告时，用户常驻的

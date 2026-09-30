@@ -330,6 +330,8 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 ### I4 本机：一个进程，Agent 优先；分进程降为可选开关
 
+> 〔2026-09-30 实现注〕(b)、(b2) 的实际做法与下文不同，以 `docs/archive/agent-reports/AGENT-query-render.md` 第 2、3 节与第 8.2 节为准：专用实例空闲时接的是普通预渲染队列的一项或后台那一趟 `fillCardControls` 的一批（4 帧），等待上界是一批而不是一帧；操作预览不在批边界抢后台预渲染间，而是插到 `'queue'` lane 的待办之前、在 `'queue'` 预渲染间上渲（本机模式下它平时空着，不用等）。(a) 的三种模式还没做。
+
 **(a) 拉起。** 编辑器进程只拉起**一个**预渲染进程：本机配置了 Agent（今天 `vite-plugin-ai.ts` 的服务端工具就在编辑器进程里，即 Agent 在本地）时以 `full` 模式起，没有本机 Agent 时以 `user` 模式起。`vite-plugin-prerender.ts:80-88` 的 env 多两项：`PROMPTCUT_PRERENDER_MODE`，以及 `user` / `full` 模式才有的 `PROMPTCUT_EDITOR_URL`（A7 回拉整份项目和 `costs` 都靠它；`agent` 模式不传）。
 
 **(b) Agent 优先的调度（`full` 模式）。** **Agent 请求只在一个 Chrome 里走优先，「优先」= 可以插队，不是进程优先级更高**（不动 `os.setPriority`，所有 Chrome 同一优先级）。`agent` lane 独占它那一个 bakery（`acquire('agent', …)`）；这个专用 Chrome 每做完一个任务，先从 Agent 任务队列里按先后取下一个。

@@ -120,11 +120,32 @@ export function getProjectSync(): ProjectSyncHooks | null {
 let lastMerge: { key: string; at: number; project: Project } | null = null;
 export const MERGE_WINDOW_MS = 300;
 
+/**
+ * 本页面自己的修改(经 setProject 落地的;远端来的改动、撤销 / 重做不经这里)。
+ * 「用户正在编辑」(src/editor/userEditing.ts)据此判「选中的片段刚被用户动过」。
+ */
+type LocalCommitListener = (prev: Project, next: Project) => void;
+const localCommitListeners = new Set<LocalCommitListener>();
+
+export function onLocalCommit(fn: LocalCommitListener): () => void {
+  localCommitListeners.add(fn);
+  return () => { localCommitListeners.delete(fn); };
+}
+
+function noteLocalCommit(prev: Project, next: Project) {
+  if (prev === next) return;
+  for (const fn of localCommitListeners) {
+    try { fn(prev, next); } catch { /* 旁听的出错不影响修改 */ }
+  }
+}
+
 /** 改项目文档(会进撤销栈) */
 export function setProject(next: Project, opts: SetProjectOptions = {}) {
+  const prev = state.project;
   if (projectSync) {
     const landed = projectSync.commit(state.project, next, opts);
     set({ project: landed, dirty: true });
+    noteLocalCommit(prev, landed);
     return;
   }
   if (opts.undoable !== false) {
@@ -139,6 +160,7 @@ export function setProject(next: Project, opts: SetProjectOptions = {}) {
     lastMerge = opts.mergeKey ? { key: opts.mergeKey, at: now, project: next } : null;
   }
   set({ project: next, dirty: true });
+  noteLocalCommit(prev, next);
 }
 
 /** 把一条转场写下的淡化擦掉(片段可能已经不在了,擦不到就跳过) */

@@ -197,8 +197,15 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
        *   GET  /gif/<key>.gif       一张卡的 8 帧动图
        *
        * 动图**用户点开时才渲**:POST 只存「怎么渲」(那张卡当时的样子,isolateClip 之后的迷你工程),
-       * 第一次 GET 才排队渲染、编码、落盘,之后读缓存。渲染走后台优先级(0),不和模型正阻塞等着的
-       * see_frames 抢槽位 —— Agent 调工具只多一次本地写文件。get_gif 是模型自己要的,走前台优先级(1)。
+       * 第一次 GET 才渲染、编码、落盘,之后读缓存 —— Agent 调工具只多一次本地写文件。
+       *
+       * 谁要的决定排哪条队(`docs/semantics/product/rendering.md`「AI 栏的操作预览可以插队」、
+       * `mechanism/rendering.md`「查询渲染与预渲染进程」):
+       *   - 用户点开的 GET 是**用户触发的**:`lane: "preview"`,插在普通预渲染队列(FramePipeline 的 `'queue'` lane)所有待办之前,
+       *     正在跑的那一项不打断;**不占用 Agent 的专用实例**,也不经 vision 的优先级队列(那是另一个队列,
+       *     排在它前面插不到预渲染待办之前,导出期间还会把优先级 0 整个停住)。
+       *   - 模型的 get_gif(`/render`)是 Agent 自己要的:照旧走 Agent 专用实例(`lane: "agent"`),vision 队列前台优先级(1)。
+       * 两边同一个 key 同时在渲时共用那一趟(`gifInflight`):后到的一方等先开工的那一趟,不再另渲一遍。
        */
       // 搬进 server/vision/ 之后这条相对路径要多退一级(原文件在 server/ 下,写的是 "./ai-visual.mjs")
       const visualLib = () => import(new URL("../ai-visual.mjs", import.meta.url).href);
@@ -225,7 +232,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
         return { key, clip: iso.clip, gif: `/api/ai/visual/gif/${key}.gif` };
       }
 
-      function ensureGif(key: string, priority: number) {
+      function ensureGif(key: string, who: "user" | "model") {
         const running = gifInflight.get(key);
         if (running) return running;
         const job = (async () => {
@@ -241,7 +248,9 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
           const fps = spec.project.fps || 30;
           const maxFrame = Math.max(0, Math.floor((spec.project.duration || 0) * fps) - 1);
           const frameOf = (t: number) => Math.min(maxFrame, Math.max(0, Math.round(t * fps)));
-          const frames = await enqueue(() => renderFrames(root, originOf(server), spec.project, spec.times, notes, priority), priority, priority > 0 ? 25000 : 0);
+          const frames = who === "user"
+            ? await renderFrames(root, originOf(server), spec.project, spec.times, notes, 0, { lane: "preview" })
+            : await enqueue(() => renderFrames(root, originOf(server), spec.project, spec.times, notes, 1, { lane: "agent" }), 1, 25000);
           const bufs = spec.times.map((t: number) => frames.get(frameOf(t))?.buf).filter(Boolean) as Buffer[];
           if (!bufs.length) throw new Error("一帧都没渲出来");
           // 给用户看的动图裁到这张卡出现过的区域(整屏缩到一百来像素宽字就看不清了);交给 Agent 的拼图照旧整屏
@@ -276,7 +285,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
               return fs.createReadStream(file).pipe(res);
             }
             if ((m = /^\/gif\/([0-9a-f]{16})\.gif$/.exec(url))) {
-              const g = await ensureGif(m[1], 0);
+              const g = await ensureGif(m[1], "user");
               res.setHeader("Content-Type", "image/gif");
               res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
               return fs.createReadStream(g.gif).pipe(res);
@@ -303,7 +312,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             try {
               const { key } = JSON.parse(raw || "{}");
               if (typeof key !== "string" || !/^[0-9a-f]{16}$/.test(key)) return sendJson(res, 400, { ok: false, error: "缺少合法的 key" });
-              const g = await ensureGif(key, 1);
+              const g = await ensureGif(key, "model");
               const grid = (await fsp.readFile(g.grid)).toString("base64");
               sendJson(res, 200, { ok: true, times: g.times, gifUrl: `/api/ai/visual/gif/${key}.gif`, grid });
             } catch (e: any) {
@@ -522,6 +531,12 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             const baked: any[] = [];
             const failed: any[] = [];
             const pri = Number(priority) > 0 ? 1 : 0;
+            /*
+             * 3D 视图的贴图不是 Agent 的请求,不进 Agent 专用实例(`mechanism/rendering.md`「Agent 优先只是插队」):
+             * 空闲预取(优先级 0)是普通预渲染,排普通预渲染队列的队尾,Agent 专用实例空闲时可以接;
+             * 用户正等着看的(优先级 1)插在普通预渲染待办之前。
+             */
+            const lane = pri > 0 ? "preview" : "prerender";
             // 预渲染那边一换计划就会掐掉在飞的批次:断开之后这一批还没开渲的全部摘掉,别占着 Chrome
             const signal = abortOnClose(res);
             /*
@@ -543,7 +558,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
              * 一张失败不拖垮整批,所以用 allSettled —— 3D 视图那边拿到几张就先贴几张。
              */
             const settled = await Promise.allSettled(
-              [...byClip].map(([clipId, ts]) => bakeClip(root, originOf(server), resolved, clipId, ts, size, bg, "box", pri, { signal })
+              [...byClip].map(([clipId, ts]) => bakeClip(root, originOf(server), resolved, clipId, ts, size, bg, "box", pri, { signal, lane })
                 .then((r) => r, (e) => { throw Object.assign(e instanceof Error ? e : new Error(String(e)), { clipId }); })),
             );
             for (const s of settled) {

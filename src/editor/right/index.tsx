@@ -5,6 +5,7 @@ import { DockPages } from "../dock/DockPages";
 import { RailBar } from "../dock/RailBar";
 import { useSideVisible } from "../dock/railStore";
 import { connectMcpExecutor } from "../../ai/mcpExecutor";
+import { startUserEditing } from "../userEditing";
 import { VoiceSettingsDialog } from "../../voice/VoiceSettingsDialog";
 
 import { CollectLoginDialog } from "./CollectLoginDialog";
@@ -22,7 +23,9 @@ export function RightPanel() {
     // 在线浏览器模式没有编辑器进程:不连 Agent 的工具通道(C10a 契约第 2 节);在线构建里连同工具执行器一起剪掉
     if (ONLINE_BUILD) return;
     const cleanup = connectMcpExecutor(() => editorApi, (s) => setMcpConnected(s.connected));
-    return cleanup;
+    // 「用户正在编辑」推给同一个编辑器进程(A2),Agent 读写到这些片段时工具结果带提示
+    const stopEditing = startUserEditing();
+    return () => { stopEditing(); cleanup(); };
   }, []);
 
   // 右栏整列:左边一张宿主卡片(显示右侧 rail 选中项的页面),右边贴窗口边缘的竖向 rail(侧边自由布局,editor/dock/)。

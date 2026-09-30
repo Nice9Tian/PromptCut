@@ -15,6 +15,7 @@
  */
 import { createAgentLink } from './doc-link.mjs';
 import { createAgentExecutor } from './agent-exec.mjs';
+import { annotateError, annotateResult, userEditingFor } from './user-editing.mjs';
 
 /** 向页面要只读页面状态用的内部工具名(不在工具表里,Agent 看不到;页面 `src/ai/mcpExecutor.ts` 认它) */
 export const PAGE_STATE_TOOL = '__page_state';
@@ -30,6 +31,9 @@ export const PAGE_STATE_TOOL = '__page_state';
  *   经页面执行一个工具。回 `{ result, opIds }`(`pageResult: 'wrapped'`)或直接回结果(缺省);失败就抛
  * @param {(tool: string, args: object) => Promise<any>} [o.callServer]
  * @param {'wrapped' | 'plain'} [o.pageResult]
+ * @param {() => Array<{ clipId: string, kind: string }>} [o.userEditing] 此刻用户正在编辑的片段(`user-editing.mjs` 的
+ *   `createUserEditingBoard().current`);给了就在读到 / 写到这些片段的工具结果里带 `userEditing` 与提示(A2,只提示不拦)
+ * @param {(key: string) => string | null} [o.agentLabel] 对话 id → 厂商名,覆盖提示「Agent <身份> 刚改过」里用
  */
 export function createAgentSide({
   projectId,
@@ -47,6 +51,8 @@ export function createAgentSide({
   log = () => {},
   linkOptions = {},
   execLimits = {},
+  userEditing = null,
+  agentLabel = null,
 } = {}) {
   if (!Array.isArray(tools)) throw new TypeError('createAgentSide: 要 tools(工具表)');
   if (typeof callPage !== 'function') throw new TypeError('createAgentSide: 要 callPage');
@@ -68,6 +74,7 @@ export function createAgentSide({
     toolGroups,
     log,
     limits: execLimits,
+    agentLabel,
     // 只读的页面状态:经同一条页面通道要一次
     pageState: async (tool, args, keys) => {
       const { result } = await viaPage(PAGE_STATE_TOOL, { tool, args, keys: [...keys] }, '');
@@ -101,7 +108,19 @@ export function createAgentSide({
       const toolDef = byName.get(tool);
       if (!toolDef) throw Object.assign(new Error(`Unknown tool: ${tool}`), { code: 'UNKNOWN_TOOL' });
       const key = typeof agent === 'string' ? agent : '';
-      return executor.track(tool, args, key, (ctx) => dispatch(tool, args, key, toolDef, ctx), { callId });
+      let seen = null;
+      const editingNow = () => {
+        if (typeof userEditing !== 'function') return [];
+        try { return userEditing() ?? []; } catch { return []; }
+      };
+      try {
+        const result = await executor.track(tool, args, key, (ctx) => { seen = ctx; return dispatch(tool, args, key, toolDef, ctx); }, { callId });
+        // 用户正在编辑的片段被这次读到或写到:结果带 userEditing 与一句提示(A2;只提示,不拦)
+        const hit = userEditingFor({ tool, args, written: seen?.write?.clipIds ?? [], editing: editingNow() });
+        return annotateResult(result, { userEditing: hit });
+      } catch (err) {
+        throw annotateError(err, userEditingFor({ tool, args, editing: editingNow() }));
+      }
     },
 
     /** 某个对话 id 在本进程里的对话号(写入身份里的 `conversation`) */
