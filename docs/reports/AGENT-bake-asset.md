@@ -1,7 +1,127 @@
 # AGENT-bake-asset：`bake_card` 的卡片快照改走素材服务
 
-分支 `claude/bake-asset`（起点 `claude/r7-merge` 的 `e4f6e8df`）。
+分支 `claude/bake-asset`（起点 `claude/r7-merge` 的 `e4f6e8df`）。任务来自 `docs/plan/TODO.md`「语义与代码的差距」的「Agent 读素材的路径」剩下的最大一条，起点是 `docs/reports/AGENT-asset-path-2.md` 里 `bake_card` 的 dry run。
+
+## 先看这里：接口与数据格式的改动
+
+没有新增素材服务的 HTTP 接口，没有改二级语义。下面几处算改了对外可见的行为或数据格式，都按三级办、标〔裁〕（理由见「〔裁〕」一节）：
+
+1. `bake_card` 与 3D 视图、预取拿到的快照地址从 `/@media/bake-<clipId>-<输入哈希>.png` 变成 `/api/asset/px/<内容哈希>`。工具描述没改（仍说「存进素材库，返回 URL」），用户看不出区别。〔裁〕1
+2. 本机素材服务的 `GET /api/asset/px/<hash>`：本机没有这一块、且编辑器连着共享项目的远程素材服务时，先向远程取一次、校验入库再答；以前直接 404。路由、状态码、回包不变。按需拉取发出的请求带一个内部头 `x-promptcut-pull: 1`，收到它的素材服务不再往下拉（防两台互指成环）。〔裁〕4
+3. `/api/vision/bake-status` 回包里没渲过的项 `url` 为 `null`（以前总给算出来的 `/@media/…` 地址，页面只在 `bytes` 是数时才用它，所以页面不用改）。〔裁〕6
 
 ## 状态
 
-进行中：已建报告，正在读代码。
+轻量部分做完：代码、单测、探针脚本都已提交，单个测试文件逐个跑过（见「验证」）。**重的验证还没跑**：`npx tsc -b --force`、`npm test`、G0-R（导出与预渲染的整套像素与探针验收，项目见下）、`bake-asset-probe` 要起 dev server 和 Chrome，按主会话的禁令等「可以跑重活」之后再跑。
+
+## 提交
+
+| 提交 | 内容 |
+|---|---|
+| `ad4777a1` | 文档：建本报告 |
+| `b6541a04` | 修复：`bake_card` 的快照经素材服务写进 `px`、读回、盘点；「输入哈希 → 内容哈希」记在 `out/bake-index`；不再直接写、列、删素材目录；老地址不动，同键再要时读时迁移。测试 BKA-1～BKA-7 |
+| `937ea76d` | 修复：共享项目里快照推到连着的素材服务；本机素材服务的 `px` 在本机没有时向远程按需拉取（带防成环的头）。测试 BKA-8、BKA-9 |
+| `fe87fef7` | 文档：页面预取的注释跟上（`useBakePrefetch.ts`、`bakePlan.ts`，只改注释） |
+| `89099fbb` | 测试：探针 `scripts/probes/bake-asset-probe.mjs`（P1～P7） |
+
+## 做了什么
+
+### 字节与索引（`server/bake-store.mjs`，新文件）
+
+- 快照 PNG 经素材服务客户端（`asset-store/client.mjs` 的 `put`）写进 `px` 命名空间，地址 `/api/asset/px/<sha256>`。素材服务按内容寻址：同一张图只存一份，第二次写入只是一次对账。
+- 缓存键仍是 `bakeTarget` 算的 12 位输入哈希。它不等于内容哈希，所以另记一张小索引 `<导出目录>/bake-index/<键>.json`，内容是 `{ key, hash, bytes, width, height, clipId, name, at, pushed? }`。一个键一个文件，原子改名写入。编辑器进程（热备渲染器那条 `ui-render/bake-batch`）和预渲染进程共用它。
+- **命中要问素材服务**：索引里有、且 `GET px/<hash>/chunks` 报 `complete` 才算命中（`mechanism/asset-service.md`「同步状态只问素材服务」）。素材服务里已经没有的，当场删掉索引条目，按没渲过处理。
+- 盘点（`status`）限 8 个并发问素材服务；淘汰（`evict`）只删索引里对得上的键。
+- 素材服务不可达或拒绝时抛 `BakeStoreError`（`kind: 'asset-service'`），消息写明地址与原因，例如 `素材服务不可达(http://127.0.0.1:5970/api/asset),卡片快照没能写入:…`、`素材服务拒绝了写入(…,HTTP 401):…`、`素材服务不可达:取不到素材服务的地址,卡片快照没能写入`。路由原样回 500 `{ ok:false, error }`，Agent 看得到原因。
+
+### 预渲染一侧（`server/vision/bake.ts`、`bake-cache.ts`、`routes.ts`）
+
+- `bakeOne`：命中查 `store.lookup`；没命中先做读时迁移（见「兼容」），再渲，渲好的字节经 `store.put` 入库。同键在飞合并（`bakeInFlight`）、优先级规则都不变。函数签名不变（`query-render.test.mjs` 按源码核对的那几行照旧对得上）。
+- `bakeClip`：「哪些时刻还没有」改问索引加素材服务，老文件先迁，剩下的合成一趟渲。
+- `bakeTarget` 不再回 `url`（地址要渲出来才知道），`name` 只留给读时迁移。
+- `bake-cache.ts`：`listBakes` / `evictBakes` 改成读写索引，新增 `bakedOf`（盘点用）；不再 `import` 素材目录和 `node:fs`。
+- `bake-status`：先按项目算出这次要的键，再问 `bakedOf`；`orphans`、`totalBytes`、`fileCount` 按索引算。`bake-evict` 删索引条目。`bake`、`bake-batch` 的回包形状不变。
+
+### 共享项目（〔裁〕4、〔裁〕5）
+
+- **推**：本进程登记了连着的远程素材服务时（`setBakeRemote`），快照写进本机素材服务之后再推一份过去，成功后在索引里记 `pushed: <基址>`；没推成的，下次命中时补推。预渲染进程登记的是推送队列按 D7 规则选定的那台（`vite-plugin-frames.ts` 的 `startArtifactPush`；D7 是渲染队列契约里「推送用哪一台素材服务」的选择顺序），编辑器进程登记的是上传队列的目标（`vite-plugin-media.ts` 的 `mediaTierService`）。选定的就是本机素材服务时不推。
+- **拉**：别的成员的编辑器拿到卡片参数里的 `/api/asset/px/<hash>` 时，本机素材服务没有这一块，就向当前连接的远程取（`media-pull.mjs` 新增 `fetchRemoteArtifact`，带只读票据），校验 sha256 后经数据层入库再答（`asset-service.ts` 的 `pullArtifactInto`，同一哈希只拉一次）。非本机、没票据的读先被拒，不会替它去远程拉。
+
+### 页面
+
+`useBakePrefetch.ts`、`Scene3DView.tsx`、`bakePlan.ts` 只把 `url` 当不透明地址用，功能上不用改；只改了两处讲「磁盘上的 `out/media`」的注释。贴图地址是同源相对地址：编辑器进程挂着素材服务；预渲染进程的 `/api/asset/*` 经 `assetProxyPlugin` 转给编辑器，所以导出用的渲染器也取得到。
+
+## 〔裁〕
+
+- 〔裁〕1（三级）快照地址改成 `/api/asset/px/<内容哈希>`。语义要求预渲染产物进素材服务，`px` 是像素产物的命名空间（`artifact-transfer-contract.md` 第 1 节）。换成 `media` 命名空间也能跑，但会把产物混进素材索引，所以没选。
+- 〔裁〕2（三级）「输入哈希 → 内容哈希」的索引放在 `<导出目录>/bake-index/`。按 dry run 的建议放在预渲染一侧：它只是缓存记录，不是字节，也不在素材服务的存储目录里。另一个方案是放在素材服务上的元数据里，但那要加接口，所以没选。
+- 〔裁〕3（三级）淘汰只删索引条目，字节留在素材服务里。现有接口里素材服务没有删除接口，也没有容量淘汰（`BlobStore` 数据层有 `remove`，但不对外）。加删除接口算改对外接口；而且同一张图可能被多个键、多个成员引用，删字节要先有引用计数，改动超出本任务。代价见「需要主会话决定的事」第 1 条。
+- 〔裁〕4（三级）本机素材服务的 `px` 按需拉取，外加防成环的内部头。没有它，其它成员拿到 `/api/asset/px/<hash>` 只会 404，满足不了「共享项目里其它成员看得到同一份快照」。做法照 `media` 已有的按需拉取（`media-pull.mjs`），只是产物小，整件取、不边落盘边服务。
+- 〔裁〕5（三级）推送是「写入后顺手推一份，失败了下次命中时补推」，没有持久队列。预渲染进程已有的推送队列（`artifact-push.mjs`）按帧库的段组织，快照不在帧库里，塞进去要改它的数据格式。
+- 〔裁〕6（三级）`bake-status` 没渲过的项 `url: null`，理由见文首。
+
+## 兼容（老项目里存着的 `/@media/bake-….png`）
+
+- 素材目录里以前落下的 `bake-*.png` 一个不删、一个不动。素材服务的老读路由 `/@media/<文件名>`（`vite-plugin-media.ts`）照旧答它们，所以老项目参数里的地址照常能取，导出也照常能取（预渲染进程经代理走同一条路由）。
+- **读时迁移**：同一个键再被要时（Agent 再调 `bake_card`、3D 视图、预取），先经素材服务的老读路由 `GET /@media/bake-<clipId>-<键>.png` 取一次。这是走接口，不是读目录。取到的是 PNG，就推进 `px`、记进索引，回新地址，不重渲。取不到（404）或不是 PNG 才渲。只认 `bake-…png` 形状的名字，不能拿来读任意文件。
+- 这些旧文件不再计入盘点，也不再被淘汰删掉（以前 `evictBakes` 会删），会一直留在素材目录里。
+
+## 验证
+
+已跑（每次只跑一个测试文件，`node --test`，需要的带 `--experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs`，与 `npm test` 的参数相同）：
+
+| 项 | 结果 |
+|---|---|
+| `server/test/bake-store.test.mjs`（新，BKA-1～BKA-9） | 9 过 0 失败 0 跳过，退出码 0 |
+| `query-render.test.mjs` | 16 过 0 失败 |
+| `asset-namespaces` / `asset-service` / `media-pull` / `asset-client` / `asset-store-http` / `c66-fetch` / `c66-upload` | 6 / 12 / 11 / 6 / 6 / 9 / 4 过，均 0 失败 |
+| `artifact-push` / `media-tiers` / `queue-node-wiring` / `query-render-2` / `m7-uploader` / `local-origin` / `env-fingerprint-keys` / `media-hash` / `vision-media-source` / `render-host` / `ai-visual-shared` / `audio-asset-path` / `collect-plugin` / `c66-integ` / `artifact-transfer` | 7 / 14 / 11 / 11 / 4 / 6 / 18 / 11 / 3 / 11 / 3 / 8 / 17 / 6 / 8 过，均 0 失败 0 跳过 |
+| 代码指纹 `snapshotCode` / `captureCode` | `00a5264bf8a062ff6e0b5ed0516cccd1` / `86e443cb6fa838aef64788af6822fd68`，与基准相同 |
+| 改到的服务端 TS 用 typescript 逐个转译（查语法）、`.mjs` 用 `node --check` | 全部通过 |
+
+单测用例（BKA = bake asset）：
+
+- BKA-1：PNG 经真 HTTP 的素材服务（fs 实现）写进 `px`，地址按 sha256，取回字节相同，再查命中；素材目录里没有 `bake-*.png`，索引目录里只有 `<键>.json`；
+- BKA-2：索引里有、素材服务里没有，按没渲过处理，并删掉索引条目；
+- BKA-3：老地址照常能取；读时迁移经老读路由把旧文件推进 `px`，字节相同，旧文件不动；不是 PNG 的不迁；名字不像老格式的不去取；
+- BKA-4：素材服务不可达、拒绝时回清楚的错，分三种：取不到地址、连不上、401；
+- BKA-5：盘点只报收全的；淘汰只删对得上的键，字节还在；
+- BKA-6：写入后推到远程；推失败时下次命中补推；
+- BKA-7：源码守门，`bake.ts` / `bake-cache.ts` 不引 `mediaDir`，也不引 `node:fs`；
+- BKA-8：另一个成员的本机素材服务按需拉取；远程也没有时照旧 404；拉回的字节不对时不入库；`pullArtifact: null` 能关掉；非本机、没票据的读先 401；防成环（远程那台自己也指着自己，不等超时）；
+- BKA-9：登记的「远程」就是本机时不推。
+
+还没跑，等「可以跑重活」：
+
+- `npx tsc -b --force`（`tsconfig.json` 只 `include: ["src"]`，服务端的 TS 不在类型检查里；这次 `src/` 只改了注释）；
+- `npm test`；
+- G0-R：`verify-determinism`（同一段导两遍逐像素相同）、与基准逐像素比对（`D:\VectorMPEG7\PromptCut\.worktrees\main-g0r\out\verify-a\frames`，1800 帧）、`verify-unified-frames`、`stream-produce-probe` 两种、`preview-fallback-probe` 两种、`ready-index-probe`、`query-render-probe`；
+- `node scripts/probes/bake-asset-probe.mjs --port 5970`（端口 5970～5972 加 5975）。
+
+## 没做成的、局限
+
+- **`px` 的字节没有上限**：见〔裁〕3。以前页面的预算（`defaultBudgetBytes`）限的是素材目录里 `bake-*.png` 的总量；现在限的是本机索引记着的量，素材服务的存储目录 `out/asset-store/px` 会随不同内容的快照增长。
+- **在线浏览器模式**（没有本机编辑器进程）：卡片参数里的 `/api/asset/px/<hash>` 不会被换成远程素材服务的绝对地址（`mediaTier.ts` 的 `remoteMediaUrl` 只认 `/@media/<hash>`）。改前的 `/@media/bake-….png` 在那种模式下同样取不到，所以不是这次改坏的，只是没顺手补上。
+- 推送没有持久队列（〔裁〕5）：进程在推完之前退出，下次命中这个键时才补推。别的成员如果先要这一块，在补推之前看不到。
+- 探针 P1 的「远程收到推送」依赖预渲染进程建起推送队列：要 `PROMPTCUT_PUSH=1` 加上编辑器里挂的文档服务（J.12，渲染队列契约里「编辑器里的文档服务只在显式打开推送时才算」那一条）。还没实跑确认。
+
+## 更正建议（语义文件没改，以下是 dry run）
+
+- `docs/plan/TODO.md`「Agent 读素材的路径」
+  - 改前：剩 `bake_card`（产物直接写素材目录）……
+  - 改后：`bake_card` 已改（`claude/bake-asset`：产物进 `px`、输入哈希到内容哈希的索引在 `out/bake-index`、老地址读时迁移）；剩配音试听、音色设计 / 复刻试听；另记「`px` 没有容量淘汰」一条待定。
+- `docs/semantics/mechanism/asset-service.md`「本地内容库」之后加一条（三级）
+  - 改前：（无）
+  - 改后：「本机素材服务在本机没有某块预渲染产物、且连着远程素材服务时，向远程整件取一次、校验入库再答；按需拉取发出的请求带标记，收到的素材服务不再往下拉。」
+- `docs/semantics/mechanism/asset-service.md`「预渲染的产物」加一条（三级）
+  - 改前：（只有「认领任务的渲染节点先推送再报完成」）
+  - 改后：加「不经任务队列的单张卡片快照（`bake_card`、3D 视图的贴图）按输入哈希缓存，输入哈希到内容哈希的对应由产出方本机记着，命中仍以素材服务的对账为准。」
+
+## 需要主会话决定的事
+
+1. **`px` 的回收**（〔裁〕3）。三条路：
+   - (a) 维持现状，字节只增不减；
+   - (b) 素材服务加容量淘汰（按最近取用时刻清 `px`，三级机制，要在 `mechanism/asset-service.md` 写上限与判据）；
+   - (c) 加一个受限的删除接口（改对外接口，还要引用计数）。
+   我倾向 (b)，另开一项。
+2. 重的验证等「可以跑重活」。跑完后再决定合并（`--no-ff`）还是返工。
