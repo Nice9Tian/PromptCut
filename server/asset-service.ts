@@ -527,6 +527,11 @@ export interface AssetServiceOptions {
    * (`media-pull.mjs` 的 `fetchRemoteArtifact`,没连远程就是没有);null 关掉。
    */
   pullArtifact?: ((ns: "px", hash: string) => Promise<{ bytes: Buffer; contentType?: string } | null>) | null;
+  /**
+   * `px` 的容量淘汰(claude/bake-asset,`asset-store/px-evict.mjs`):缺省在 `px` 用缺省 fs 数据层时开
+   * (环境变量 `PROMPTCUT_PX_EVICT=0` 关);null 关掉;给对象可改上限与时机(单测用)。注入了自己的 `px` 数据层且没给这一项时不开。
+   */
+  pxEvict?: { capBytes?: number; options?: Record<string, number>; start?: boolean } | null;
 }
 
 /**
@@ -582,7 +587,26 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     return defaultTickets;
   };
   const isTrusted = typeof opts.isTrusted === "function" ? opts.isTrusted : isLoopbackRequest;
-  // px 的按需拉取:缺省惰性加载 media-pull(当前连接的远程素材服务);好几个单测把本文件单独转译,静态 import 兄弟模块会解析失败
+  /*
+   * px 的容量淘汰:在本进程内部做,不对外开删除接口。只拿 px 这一个数据层,media / snap 碰不到。
+   * 惰性 import(好几个单测把本文件单独转译,静态 import 兄弟模块会解析失败)。
+   */
+  const pxEvictor: Promise<any> | null = (() => {
+    if (opts.pxEvict === null || process.env.PROMPTCUT_PX_EVICT === "0") return null;
+    if (opts.stores?.px && !opts.pxEvict) return null;
+    const pxStore: any = storeOf("px");
+    if (typeof pxStore.list !== "function") return null;
+    const p = import("./asset-store/px-evict.mjs").then((mod: any) => {
+      const ev = mod.createPxEvictor({
+        dir: artifactStoreDir(root, "px"), store: pxStore, capBytes: opts.pxEvict?.capBytes, options: opts.pxEvict?.options,
+        log: (event: string, fields: object = {}) => { try { console.info("[px-evict]", event, JSON.stringify(fields)); } catch { /* 不影响 */ } },
+      });
+      if (opts.pxEvict?.start !== false) ev.start();
+      return ev;
+    }).catch(() => null);
+    return p;
+  })();
+  const touchPx = (hash: string) => { if (pxEvictor) void pxEvictor.then((ev) => ev?.touch(hash)); };  // px 的按需拉取:缺省惰性加载 media-pull(当前连接的远程素材服务);好几个单测把本文件单独转译,静态 import 兄弟模块会解析失败
   const pullArtifact: NonNullable<AssetServiceOptions["pullArtifact"]> | null = opts.pullArtifact === null ? null
     : opts.pullArtifact ?? (async (ns, hash) => {
       try {
@@ -604,7 +628,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     reject(req, res, access.status, { ok: false, error: access.error });
     return false;
   };
-  return async function assetService(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
+  const handler = async function assetService(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
     if (isAssetMergePath(req.url)) return answerMerge(req, res);
     if (!isAssetCorsPath(req.url)) return next();
     applyCors(req, res);
@@ -634,17 +658,22 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
         // px 本机没有这一块:向当前连接的远程素材服务取一次再答(共享项目里别的成员推上去的卡片快照)
         // 带 x-promptcut-pull 的是别的素材服务替它的页面来拉的:不再往下拉,防两台互指成环
         if (ns === "px" && pullArtifact && !req.headers["x-promptcut-pull"] && !(await store.stat(hash))) await pullArtifactInto(store, hash, pullArtifact);
+        if (ns === "px") touchPx(hash);
         return await serveBlob(req, res, store, hash);
       }
       if (tail === "chunks") {
         if (method !== "GET") return sendJson(res, 405, { ok: false, error: "method" });
         if (!(await admit(req, res, false))) return;
+        // 对账也算用过(卡片快照的索引每次命中、页面每轮盘点都问它):还在被用着的块不会被当成最久没用的淘汰掉
+        if (ns === "px") touchPx(hash);
         return sendJson(res, 200, await store.chunks(hash));
       }
       if (tail === "complete") {
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
         if (!(await admit(req, res, true))) return;
-        return await handleComplete(res, store, hash, ns);
+        await handleComplete(res, store, hash, ns);
+        if (ns === "px" && pxEvictor) { touchPx(hash); void pxEvictor.then((ev) => ev?.onStored()); }
+        return;
       }
       if (method !== "PUT") return reject(req, res, 405, { ok: false, error: "method" });
       if (!(await admit(req, res, true))) return;
@@ -655,6 +684,8 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
   };
+  /** 单测、排查用:这个中间件的 px 淘汰器(没开是 null) */
+  return Object.assign(handler, { pxEvictor: () => pxEvictor ?? Promise.resolve(null) });
 }
 
 /**

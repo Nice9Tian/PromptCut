@@ -334,3 +334,118 @@ test('BKA-9 登记的「远程」就是本机素材服务时不推', async () =>
     await local.close();
   }
 });
+
+/* ------------------------------------------------------------------ px 的容量淘汰(asset-store/px-evict.mjs) */
+
+test('BKA-10 淘汰计划:超上限按最近使用从旧到新删到上限的 90%;保护期内的不删;没超不删', async () => {
+  const { planPxEviction, pxCapBytes, PX_EVICT_DEFAULTS } = await import('../asset-store/px-evict.mjs');
+  const now = 10_000_000;
+  const blobs = [
+    { hash: 'a', size: 30, lastUsed: now - 5_000_000 },
+    { hash: 'b', size: 30, lastUsed: now - 4_000_000 },
+    { hash: 'c', size: 30, lastUsed: now - 3_000_000 },
+    { hash: 'd', size: 30, lastUsed: now - 10 }, // 刚用过
+  ];
+  const p = planPxEviction(blobs, { capBytes: 100, now, protectMs: 60_000 });
+  assert.equal(p.total, 120);
+  assert.equal(p.target, 90);
+  assert.deepEqual(p.victims.map((v) => v.hash), ['a'], '删最旧的一个就到 90 以下');
+  const q = planPxEviction(blobs, { capBytes: 40, now, protectMs: 60_000 });
+  assert.deepEqual(q.victims.map((v) => v.hash), ['a', 'b', 'c'], '保护期内的 d 再超也不删');
+  assert.deepEqual(planPxEviction(blobs, { capBytes: 120, now }).victims, [], '没超上限不删');
+  // 上限:环境变量优先;磁盘小于 500 GiB 取 2%;否则 10 GiB
+  assert.equal(pxCapBytes({ env: { PROMPTCUT_PX_CAP_BYTES: '1234' } }), 1234);
+  assert.equal(pxCapBytes({ env: {}, diskTotal: 100 * 1024 ** 3 }), Math.floor(100 * 1024 ** 3 * 0.02));
+  assert.equal(pxCapBytes({ env: {}, diskTotal: 2048 * 1024 ** 3 }), PX_EVICT_DEFAULTS.capBytes);
+  assert.equal(pxCapBytes({ env: {}, diskTotal: null }), 10 * 1024 ** 3);
+});
+
+/** 真的素材服务(fs 数据层,px 带淘汰器,不自动起)挂在 http 上 */
+async function serveWithEvict(pxEvict) {
+  const a = await harness.asset();
+  const root = path.join(TMP, `evict-${++seq}`);
+  fs.mkdirSync(path.join(root, 'out', 'media'), { recursive: true });
+  const saved = process.env.PROMPTCUT_EXPORT_DIR;
+  delete process.env.PROMPTCUT_EXPORT_DIR;
+  const mw = a.assetServiceMiddleware(root, { pxEvict: { start: false, ...pxEvict } });
+  if (saved !== undefined) process.env.PROMPTCUT_EXPORT_DIR = saved;
+  const s = await listen((req, res) => { void mw(req, res, () => { res.statusCode = 404; res.end('no route'); }); });
+  return { ...s, root, base: `${s.origin}/api/asset`, pxDir: path.join(root, 'out', 'asset-store', 'px'), evictor: await mw.pxEvictor() };
+}
+
+test('BKA-11 本机素材服务的 px 超上限时按最近使用删到 90%:media 一个字节不碰,最近用过的留下', async () => {
+  const srv = await serveWithEvict({ capBytes: 10_000, options: { protectMs: 0 } });
+  assert.ok(srv.evictor, '缺省 fs 数据层时淘汰器开着');
+  const client = createAssetClient({ base: srv.base });
+  // 素材原件:比上限大得多,也不许被删
+  const movie = crypto.randomBytes(50_000);
+  const { hash: mediaHash } = await client.put('media', movie, { ext: 'mp4' });
+  const hashes = [];
+  for (let i = 0; i < 5; i++) { hashes.push((await client.put('px', png(3000 - 8))).hash); await sleep(15); } // 5 × 3000 = 15000 > 10000
+  await sleep(15);
+  // 最早写的那块刚被取过一次:它变成最近用的
+  assert.equal((await fetch(`${srv.base}/px/${hashes[0]}`)).status, 200);
+  const r = await srv.evictor.evictNow();
+  assert.equal(r.ran, true);
+  assert.equal(r.total, 15000);
+  assert.deepEqual(r.removed, [hashes[1], hashes[2]], '从最久没用的删起,删到 9000 以下为止(15000 → 9000)');
+  for (const h of r.removed) assert.equal((await fetch(`${srv.base}/px/${h}/chunks`).then((x) => x.json())).complete, false);
+  for (const h of [hashes[0], hashes[3], hashes[4]]) assert.equal((await fetch(`${srv.base}/px/${h}`)).status, 200, '剩下的照常取得到');
+  const m = await fetch(`${srv.base}/media/${mediaHash}`);
+  assert.equal(m.status, 200);
+  assert.deepEqual(Buffer.from(await m.arrayBuffer()), movie, 'media 不被删');
+  assert.ok(fs.existsSync(path.join(srv.pxDir, '.usage.json')), '使用时刻记在 px 目录的 .usage.json');
+  assert.equal((await srv.evictor.evictNow()).removed.length, 0, '已经在上限以下,不再删');
+  await srv.evictor.stop();
+  await closeServer(srv.server);
+});
+
+test('BKA-12 保护期内用过的不删;同一时刻只有拿到锁的那一个做淘汰,死锁 3 分钟后接手', async () => {
+  const srv = await serveWithEvict({ capBytes: 1000 }); // 缺省保护期 30 分钟
+  const client = createAssetClient({ base: srv.base });
+  const h = (await client.put('px', png(3000))).hash;
+  let r = await srv.evictor.evictNow();
+  assert.deepEqual(r.removed, [], '刚写进去(30 分钟内用过)的不删,哪怕超了上限');
+  assert.equal((await fetch(`${srv.base}/px/${h}`)).status, 200);
+  // 锁:别的进程正拿着 → 这一轮跳过
+  const lock = path.join(srv.pxDir, '.evict-lock');
+  fs.writeFileSync(lock, JSON.stringify({ pid: 1, at: Date.now() }));
+  r = await srv.evictor.evictNow();
+  assert.equal(r.ran, false, '拿不到锁就跳过');
+  assert.ok(fs.existsSync(lock), '别人的锁不动');
+  // 锁超过 3 分钟没更新:算死锁,删掉接手
+  const old = new Date(Date.now() - 4 * 60_000);
+  fs.utimesSync(lock, old, old);
+  r = await srv.evictor.evictNow();
+  assert.equal(r.ran, true, '死锁接手');
+  assert.ok(!fs.existsSync(lock), '做完放锁');
+  await srv.evictor.stop();
+  await closeServer(srv.server);
+});
+
+test('BKA-13 快照被淘汰后再要:索引问对账得到「没有」,删掉索引条目,回到重渲那条路', async () => {
+  const srv = await serveWithEvict({ capBytes: 0, options: { protectMs: 0 } });
+  const dir = indexDir();
+  const store = createBakeStore({ indexDir: dir, origin: () => srv.origin, remote: () => null });
+  const e = await store.put('888888888888', png(500));
+  assert.equal((await store.lookup('888888888888'))?.hash, e.hash, '淘汰前命中');
+  const r = await srv.evictor.evictNow();
+  assert.deepEqual(r.removed, [e.hash]);
+  assert.equal(await store.lookup('888888888888'), null, '淘汰后不再命中(bakeOne 拿到 null 就去渲)');
+  assert.ok(!fs.existsSync(path.join(dir, '888888888888.json')), '索引条目删掉');
+  // 重渲之后再写回:又能命中
+  const again = await store.put('888888888888', png(500));
+  assert.equal((await store.lookup('888888888888'))?.hash, again.hash);
+  await srv.evictor.stop();
+  await closeServer(srv.server);
+});
+
+test('BKA-14 注入了自己的 px 数据层、或 pxEvict: null、或 PROMPTCUT_PX_EVICT=0 时不开淘汰', async () => {
+  const a = await harness.asset();
+  const root = path.join(TMP, `noevict-${++seq}`);
+  const own = a.assetServiceMiddleware(root, { stores: { px: await harness.memoryStore() } });
+  assert.equal(await own.pxEvictor(), null);
+  assert.equal(await a.assetServiceMiddleware(root, { pxEvict: null }).pxEvictor(), null);
+  process.env.PROMPTCUT_PX_EVICT = '0';
+  try { assert.equal(await a.assetServiceMiddleware(root, {}).pxEvictor(), null); } finally { delete process.env.PROMPTCUT_PX_EVICT; }
+});
