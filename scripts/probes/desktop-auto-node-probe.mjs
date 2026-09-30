@@ -370,9 +370,10 @@ async function layerCovered(conn, docId, clipId, { notResultKey = null } = {}) {
 let browser = null;
 async function launchBrowser() {
   const { default: puppeteer } = await import('puppeteer');
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
   return puppeteer.launch({
     headless: true, protocolTimeout: 900_000, defaultViewport: { width: 1600, height: 1000 },
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])],
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])],
   });
 }
 const P = (page, fn, ...a) => page.evaluate(fn, ...a);

@@ -46,6 +46,7 @@
  * 不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则证书有问题时探针照样通过,掩盖真问题。
  */
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
@@ -212,7 +213,7 @@ async function wsAsCreator(projectId = made.projectId) {
 }
 
 /* ------------------------------------------------------------------ 浏览器 */
-const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
+const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
 async function newPage(label, { mobile = false } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();

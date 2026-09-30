@@ -357,9 +357,10 @@ try {
   /* ---------------------------------------------------------------- 0. 创建者(桌面)建项目、放两张卡、放云端 */
   await startEditor();
   const { default: puppeteer } = await import('puppeteer');
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
   browser = await puppeteer.launch({
     headless: true, protocolTimeout: 600_000, defaultViewport: { width: 1600, height: 1000 },
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'],
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'],
   });
   const creatorCtx = await browser.createBrowserContext();
   const creator = await newPage(creatorCtx);

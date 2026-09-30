@@ -22,6 +22,7 @@
  *   截图写进 `--out`（缺省 `out/c10a-online-probe`）：`s1-start.png`、`s2-invalid.png`、`s3-valid.png`、`s5-deep.png`。
  */
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -112,7 +113,7 @@ const ORIGIN = `http://127.0.0.1:${PORT}`;
 
 const browser = await puppeteer.launch({
   headless: !flag('headful'),
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'],
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'],
 });
 const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36';
 
