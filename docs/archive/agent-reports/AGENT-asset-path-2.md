@@ -159,3 +159,10 @@
 2. 合并本分支（`--no-ff`）还是返工。
 
 已由主会话在第一轮审查定下的：要真 Python 的检查挪进探针（已做）；试听改落缓存（已做，〔裁〕4）；`bake_card` 另开任务（本段只留 dry run）；托管部署的票据问题本段不改（上一节）。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过 `server/perception-source.mjs`（照 `audio-source.mjs` 的试探分清 400 / 404 / 502）、Python 包的 `ACCEPTS_URL` 与老包走临时文件、`server/media-ingest.mjs`（配音与素材收集先落临时目录，再经 `/api/media/upload` 入库，与用户导入同一条路）、试听改落缓存与新路由的目录穿越防护、提示词措辞。〔裁〕照留，待用户审。
+- 主会话要求把依赖带 numpy 的 Python 的断言挪进探针（单测的跳过数不随机器变）、试听不落素材目录，都已做。
+- 主会话在集成分支 `claude/r7-merge` 上、笔记本上重跑整套：`npx tsc -b --force` 0 错误；`npm test` 4131 / 4129 / 0 / 2；G0-R 全过（流式编码 p50 279 ms，屏保在跑）；八项探针与新功能探针全过，`asset-path-probe --port 5950` 29 项；`c10-ui-probe` 第一跑遇到那种偶发的页面打不开（120 s），带网络日志重跑 3 遍都过，见 `docs/reports/REPORT-post-M8.md` 第 8 轮。
+- 这台机器没有感知模型的权重，模型本身没真跑（兜底档与取字节那一步真跑了）。`bake_card` 另开 `claude/bake-asset`。合入 main。
