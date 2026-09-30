@@ -157,3 +157,10 @@
 2. 〔裁〕7（心跳判卡死：1 秒一次、单次 2 秒、连续 3 次）与〔裁〕8（`mono` 取平均、时间轴按导出口径）是否接受。
 3. 越出任务书文件清单的小改动：`src/ai/mcpExecutor.ts`（A3 的目录）加了一行 `EditorApi.measureAudioJs` 声明。`side: "agent"` 的工具必须在 `EditorApi` 上有方法（`mcp-routes.test.mjs` 读这份接口对账），没有别的挂法。另外 `src/mcp/common.ts`、`src/mcp/handlers/audio.ts`、`server/audio-measure.mjs`、`server/vite-plugin-audio.ts`、`server/test/tool-schema.test.mjs` 也有改动。合并时如果和 A3 在 `mcpExecutor.ts` 同一处冲突，两边都保留即可。
 4. 「素材与产物」那条出入：主会话已记进 TODO，另开任务。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过沙箱（专用 chrome-headless-shell、每次新的无痕上下文与 Worker、四道断网、心跳判卡死、崩溃与卡死整个重开）、PCM 解码（与 `measure_audio` 共用取声音与混音图）、对照表登记为「高」、在线构建剪枝。8 条〔裁〕照留：1～6 主会话先认可；7（心跳判卡死）、8（单声道取平均、时间轴按导出口径）在验证中新定，也认可。待用户审。
+- 采纳语义 dry run：`mechanism/agent.md`「创造力等级的判定」末句与新增「自定义测量」一节（`a77855df`，三级〔裁〕，措辞略缩）；计划 A6 行与第 5 节风险按实现更正（专用无头 Chrome，不与预渲染共用浏览器）。
+- 主会话在集成分支 `claude/r5-merge`（本分支加 A3）上重跑：`npx tsc -b --force` 0 错误；`npm test` 4089 / 4087 / 0 / 2；G0-R 全过；`custom-measure-probe` 21 项全过；其余探针见 `docs/reports/REPORT-post-M8.md` 第 6 轮。
+- 「`measure_audio` 绕过素材服务」记进 `docs/plan/TODO.md`。合入 main `dc51de8c`。

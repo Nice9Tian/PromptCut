@@ -160,3 +160,10 @@ A3 = 计划 `docs/plan/agent-workflow-plan.md` 第 2 节表里的第三段「多
 - 合并 `claude/multi-agent`（`--no-ff`），或返工。
 - **托管端重新部署**（文档服务多了在场状态模块）由主会话做；本分支没有部署任何东西。不部署时线上只是没有跨设备提示。
 - 顺带说明：我起初把几个临时脚本（`uac.py`、`comp.py`、`ml.py`、`env.py`、`roles.py`、`sp.py`、`ss.py`、`ai3.py`）直接写在会话共用的 scratchpad 根目录，后来都挪进了 `scratchpad/ma/`；若主会话在根目录原本也有同名文件，可能被我覆盖过（我没有看到先前的内容）。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过 `spawn_agent`（登记表的 `parent`、深度与并发上限、等级不高于父对话）、本机服务里的公告板（提交流喂改动记录、页面替 Agent 执行的写入按 `opIds` 归属）、下一次工具结果里的四种提示、分工模式归档与棘轮检查、文档服务的在场状态模块（按空间隔离，托管端一个共享项目一个空间，与事件模块同一信任模型；旧文档服务回 `unsupported` 时停发）。新加的本机 `/api/agent/*` 路径都在 `/api/**` 同源守卫之下。18 条〔裁〕照留，待用户审。
+- 采纳：`mechanism/agent.md` 改「用户正在编辑与覆盖提示」末条、新增「多 Agent」一节（`a77855df`，三级〔裁〕）；计划第 3 节 A3 验收按二级语义更正（没重读就写仍按 `product/document-service.md` 被拒）。`product/document-service.md` 补「在场状态」（二级）没写，列给用户定。
+- 主会话在 `claude/r5-merge` 上重跑 `multi-agent-probe --phase all --shots`：35 项全过；看过 `tabs.png`（右栏多出「剪辑导演」页签，操作记录里有 `spawn_agent`）与 `b-remote-agents.png`（成员 B 的 AI 栏顶上「成员 alice 的 Agent(probe-none)正在改：剪辑1->序列1」，顶栏「成员：2 人」）。基线与其余探针见 `docs/reports/REPORT-post-M8.md` 第 6 轮。
+- 托管端重新部署后才有跨设备提示（随 0.7.6）。合入 main `dc51de8c`。
