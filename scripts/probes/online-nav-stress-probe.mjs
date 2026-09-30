@@ -15,6 +15,8 @@
  *   --stages 2    运行配置给两个跨源舞台源;0 时运行配置回 404(同源单舞台)。
  *   --recycle N   ctx / same 形态每 N 次换一个浏览器(网络日志按浏览器分文件,没出事的那份删掉)。
  *   --burn N      另起 N 个线程空转占 CPU(模拟机器忙)。
+ *   --content-length 1  静态文件带 Content-Length(像 nginx);缺省用分块传输(与各在线探针的站点服务一样)。
+ *   --headless shell    用 chrome-headless-shell;缺省 true(新 headless,完整 Chrome)。
  *   --netlog 1    每个浏览器带 `--log-net-log`,只留出过超时的那份(在 --out 下)。
  *
  * 端口:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务(缺省 6090～6094)。
@@ -50,6 +52,8 @@ const RECYCLE = Number(arg('--recycle', 25));
 const BURN = Number(arg('--burn', 0));
 const NETLOG = arg('--netlog', '1') === '1';
 const HEADLESS = arg('--headless', 'true');
+/** 静态文件带 Content-Length(像 nginx);缺省 0 = 与各在线探针一样用分块传输 */
+const CONTENT_LENGTH = arg('--content-length', '0') === '1';
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4 };
 const SITE = `http://127.0.0.1:${PORTS.editor}`;
 const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
@@ -106,7 +110,8 @@ function makeProxy(port) {
     if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
     const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
     const sendFile = (file, cache) => {
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
+      const len = CONTENT_LENGTH ? { 'Content-Length': fs.statSync(file).size } : {};
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...len, ...sec });
       fs.createReadStream(file).on('error', (e) => { rec.err = String(e.message); res.destroy(e); }).pipe(res);
     };
     if (url.pathname === '/editor/runtime-config.json') {
@@ -340,7 +345,7 @@ const ok = results.filter((r) => !r.navErr);
 const sorted = ok.map((r) => r.gotoMs).sort((a, b) => a - b);
 const pct = (q) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null;
 say({
-  summary: { mode: MODE, join: JOIN, stages: STAGES, keep: KEEP, burn: BURN, iters: results.length, fails: fails.length, joinErrs: results.filter((r) => r.joinErr).length,
+  summary: { mode: MODE, join: JOIN, stages: STAGES, keep: KEEP, burn: BURN, headless: HEADLESS, contentLength: CONTENT_LENGTH, chromeArgs: process.env.PC_CHROME_ARGS ?? '', iters: results.length, fails: fails.length, joinErrs: results.filter((r) => r.joinErr).length,
     gotoMs: { p50: pct(0.5), p90: pct(0.9), p99: pct(0.99), max: sorted.at(-1) ?? null }, minutes: Math.round((Date.now() - tStart) / 6000) / 10,
     failFiles: fails.map((f) => f.forensics?.file), cpus: os.cpus().length },
 });
