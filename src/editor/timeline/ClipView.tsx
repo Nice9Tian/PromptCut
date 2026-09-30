@@ -13,6 +13,7 @@ import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from ".
 import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
+import { useUserEditing } from "../userEditing";
 import { ContextMenu } from "./ContextMenu";
 import { clipTrackKind } from "../../kernel/trackKind";
 import { describeTransition, timingLock, transitionsOfClip } from "../../kernel/transitions";
@@ -68,6 +69,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
   const [dragState, setDragState] = useState<{ start: number; end: number; trackId: string; forbidden: boolean } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  // 拖动 / 改时长中:告诉 Agent 用户正在编辑这一段(A2;真的动起来才算,只点一下不算)
+  useUserEditing(`timeline-clip:${clip.id}`, dragState ? clip.id : null, "drag");
 
   const displayStart = dragState ? dragState.start : clip.start;
   const displayEnd = dragState ? dragState.end : clip.end;

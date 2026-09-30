@@ -9,6 +9,7 @@ import { TOOL_ROUTES } from "../mcp/routes.mjs";
 import { getState } from "../store/project";
 import { prerenderUrl } from "../render/prerender";
 import { flushDataMirror, startDataMirror } from "../render/dataMirror";
+import { beginAgentTool, endAgentTool } from "../editor/userEditing";
 import { issueAgentTicket, pageOpIdsSince, pageOpMark } from "../editor/sync/syncManager";
 import { trackJobs, trackResults } from "../mcp/common";
 
@@ -442,6 +443,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         let error: string | undefined;
         // 这次调用期间本页面发出的提交(留在页面的写工具):回包里带 opIds,Agent 服务端据此推进这个对话读到的版本
         const opMark = pageOpMark();
+        // 这次调用期间本页面的修改是 Agent 让做的,不算「用户动过」(src/editor/userEditing.ts,A2)
+        beginAgentTool();
 
         try {
           const missing = missingRequired(tool, args);
@@ -484,6 +487,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           } else {
             error = String(err);
           }
+        } finally {
+          endAgentTool();
         }
 
         if (ok && tool !== "get_gif") result = await withVisual(tool, args, result, visualBefore);
