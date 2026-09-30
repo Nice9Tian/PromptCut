@@ -141,3 +141,10 @@
 2. 〔裁 1〕～〔裁 5〕是否认可；语义 dry run 要不要写、写进哪本。
 3. 是否另开一项修「放云端项目里新导入的图片、音频不进上传队列」（`server/media-tiers.mjs` 的 `prepareImport` 非视频不 `handToQueue`；或在页面导入完成后按哈希入队）。
 4. 是否让导出尊重「没有哈希、地址为空 = 已标缺失，跳过」，免得标了「(缺失)」的老视频在导出时仍按路径读、解码失败。
+
+## 主会话审查（2026-10-01，笔记本主会话）
+
+- 审过导出的 `normalizeExportMedia`（有合法哈希走 `/@media/<素材原尺寸哈希>`，没有才按路径）、打开后的缺失判定（只认明确的否定回答）、`queueBackfilledMedia` 与 `backfillUpload.ts`。〔裁 1～5〕照留，待用户审。
+- 更正（`claude/maint-4` 指出）：本报告「做了什么」第 2 节写的「地址清空（预览、导出跳过）」对导出不成立——导出并不跳过空地址的素材层，跳过改由 `claude/maint-4` 的 `dropSkippedMediaClips` 负责。
+- 流式编码门槛在本分支三遍都超是机器负载所致（开跑前整机 CPU 约 60%）：主会话在集成分支 `claude/r10-merge` 的空闲机器上复核，见 `docs/reports/REPORT-post-M8.md` 第 10 轮。
+- 采纳三级语义（判缺失只认明确的否定回答、放云端后入队），`mechanism/asset-service.md`（`f1050002`）；二级那句（打开项目时标缺失、导出跳过）列给用户定。合入 main `f454490d`。
