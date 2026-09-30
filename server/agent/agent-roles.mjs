@@ -11,15 +11,9 @@
  */
 import fs from 'node:fs';
 
-/** 能被拉起的预设角色(`spawn_agent` 的 `role` 可选值),顺序即工具说明里的顺序 */
-export const SPAWN_ROLE_IDS = Object.freeze(['director', 'fx-assistant', 'collector']);
+import { SPAWN_ROLE_IDS, SPAWN_ROLE_HINTS } from './spawn-roles.mjs';
 
-/** 工具表里给模型看的一句话说明(工具表是静态的,不在加载时读文件) */
-export const SPAWN_ROLE_HINTS = Object.freeze({
-  director: '剪辑导演:看齐素材,排顺序放上时间轴,编排剧本',
-  'fx-assistant': '特效助理:给视频配字幕,按内容配动效卡',
-  collector: '素材收集员:把网页链接里的视频抓进素材库',
-});
+export { SPAWN_ROLE_IDS, SPAWN_ROLE_HINTS };
 
 const ROLES_DIR = new URL('../../src/ai/roles/', import.meta.url);
 

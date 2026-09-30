@@ -1,4 +1,4 @@
-import { SPAWN_ROLE_IDS, SPAWN_ROLE_HINTS } from "../agent/agent-roles.mjs";
+import { SPAWN_ROLE_IDS, SPAWN_ROLE_HINTS } from "../agent/spawn-roles.mjs";
 
 // 多 Agent(计划 docs/plan/agent-workflow-plan.md A3):五个工具都在编辑器进程里答(side: "server"),
 // 公告板按项目一份(server/agent/agent-board.mjs),所有 Agent 看到同一份;拉起子 Agent 见 server/agent/multi-agent.mjs。
