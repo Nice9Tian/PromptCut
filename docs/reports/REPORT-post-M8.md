@@ -274,3 +274,90 @@
 ### 4.8 顾问调用记录
 
 本轮没有调 codex 或 Gemini：三条子任务都是实现与测量，第一轮就做成；站点模式的两项判定查到根因在已知的模式局限（接手只在重新切分时发生、经公网慢），没有卡住。子 Agent：`opus-dev-high` 两个（swap-tuning、queue-maint），`opus-dev` 一个（misc-maint）。
+
+## 第 5 轮：回到 TODO——R0 冷启动、Agent 工作方式 A1 与 A2、查询渲染，出 0.7.5（2026-09-30，笔记本主会话）
+
+按 goal「之后回到 `docs/plan/TODO.md` 与主计划继续」。先把 TODO「语义与代码的差距」按 M5～M8 之后的合入更新（`6ac9018d`），核出两条早已做完的（手动截短总时长的入口、`see_frames` 回包附实体矩形，`27c01466`、`a6663d56`）；剩下的「工作方式」「Agent」两大块排成计划 `docs/plan/agent-workflow-plan.md`（`1ef55bb2`，A1～A6 六段，按主计划第 10 节发给用户、不等）。本轮用到的代号：R0 = TODO 里「dev server 冷启动慢」那一条；A1～A6 = 该计划第 2 节的六段；G1～G3 = 查询渲染任务的三处差距（AI 栏操作预览插队、Agent 专用实例空闲时接预渲染、Tailwind 扫描源）；D10 = 预渲染进程的三种模式（Agent / User / Full）。
+
+### 5.1 做了什么
+
+| 项 | 分支（子 Agent） | 做法 |
+|---|---|---|
+| R0 冷启动 | `claude/watch-ignore`（`opus-dev`），Tailwind 那处随 `claude/query-render` | 查出三处原因：依赖扫描把帧库里的快照 `.html` 当入口（大头，约 170 s）；worktree 路径里的 `.worktrees` 点段让监听忽略的 glob 整张失效；Tailwind 遍历整棵树（约 10 s）。前两处改成 `server/vite-scan-ignore.mjs`（依赖扫描入口只认页面，监听忽略按仓库根算），两份 Vite 配置共用（合入 `adb856b0`，报告归档 `d23d97cf`）；Tailwind 那处要改 `src/index.css`（进代码版本），搭查询渲染一起做（`source(none)` 加三行 `@source`） |
+| A1 创造力等级 | `claude/creativity`（`opus-dev`） | 项目设置里选等级（出厂「高」），AI 栏按对话覆盖，桌面 APP 会话跟项目；所有工具调用的总入口按对照表拒绝越级；`set_project_meta` 只收 schema 声明的字段（`name`、`width`、`height`、`fps`、`duration`、`themeId`），Agent 写不进等级、也不能借它改项目别的内容；Agent 会话登记表（合入 `74f3b3ae`，报告归档 `7e3c27e3`） |
+| 查询渲染 | `claude/query-render`（`opus-dev-high`） | 差距清单 D1～D13。G1：用户点开的操作预览走 `'preview'` lane，插到普通预渲染待办之前，不占 Agent 专用实例（以前正相反）；G2：专用实例开着且空闲时接一项普通预渲染（队列里的一项，或后台那一趟的一批卡），Agent 任务之后先空 1 秒；3D 视图的贴图预取移出 Agent 队列；G3 见 R0 |
+| A2 用户正在编辑（本机） | `claude/user-editing`（`opus-dev`） | 页面把拖动中、文字编辑中、选中后 30 秒内动过的片段节流推给本机服务；Agent 读写到这些片段时结果带 `userEditing` 与一句提示（只提示不拦）；文档服务回的 `overwrote` 进结果（「用户刚改过」/「Agent <对话>（<厂商>）刚改过」）；在线构建剪掉推送 |
+| 语义与计划 | 主会话 | `mechanism/agent.md` 两节（「创造力等级的判定」`53629a63`、「用户正在编辑与覆盖提示」`628b7d42`）；`mechanism/rendering.md` 查询渲染两条（`afabcab7`）；TODO 两条与 `cloud-task.md` I4 实现注（`36405da5`） |
+
+合流：A1 先单独合入 main（`74f3b3ae`）。查询渲染与 A2 在集成分支 `claude/r4-merge` 上合（无冲突），主会话写两处三级语义，在空闲的笔记本上验证（5.2 节），全过后 `--no-ff` 合入 main `41713bf9`；两份报告附审查后归档（`a668d358`）。
+
+**0.7.5**：版本号 0.7.4 → 0.7.5（外壳仍 0.2.6，`ed8484d1`），main = release = origin。从 `ed8484d1` 的干净检出出在线构建 `index-Bg2luIDZ.js`（`index.html` sha256 `b7d3a4d05383…`，82 个 assets），嵌代码版本 `dc21934c0c52…`；共享快照键 `00a5264bf8a0…` 与捕获代码不变，用户已有的共享快照照常可用；在线构建里的 `/api` 只剩登记过的 4 个（没有 A2 的推送路径）。**托管服务没动**：自 0.7.4 部署以来托管端清单（`server/hosted/files.mjs`）里的文件一个没改。换 `/editor` 前在服务器备份 `/root/editor-backup-20260930-075.tgz`（换下的 `index-CkR3pv-2.js` 那一代）与 `/root/editor-runtime-config-20260930-075.json`；新构建经 tar 传到 `.incoming-editor`，执行 `editorSwapLines()`：保留上一代 assets 7 个与运行配置，本代 82 个、在位 89 个。桌面补丁指令改为 PC-075-1（取代没发出的 PC-074-1；PC 辅助整轮不在线，记为待办）。
+
+同时派出 A3、A6 两个子 Agent（5.6 节）。
+
+### 5.2 验证
+
+全部在笔记本上跑（PC 辅助整轮不在线）。集成分支上的一整套是主会话串行跑的；跑的时候 A3、A6 两个子 Agent 只读代码、写代码、一次跑一个测试文件（重活禁令，等主会话放行）。
+
+| 项 | 提交 | 命令 | 结果 |
+|---|---|---|---|
+| 类型检查、全量测试 | `claude/r4-merge` `628b7d42` | `npx tsc -b --force`；`npm test` | 0 错误；4083 / 4081 / 0 / 2（main 上 4046 条，新增 37 条） |
+| 代码指纹 | 同上 | `snapshotCode()`、`captureCode()`、`frameCode()` | `00a5264bf8a0…`、`86e443cb6fa8…` 不变；代码版本 `dc21934c0c52…` |
+| G0-R | 同上 | `g0r.sh`（5800）：`verify-determinism` / 与 main `701a27c0` 逐像素 / `verify-unified-frames` / `stream-produce` 两种 / `preview-fallback` 两种 / `ready-index` | 全过：1800 / 1800 相同；像素 1800 相同；快照重放 PASS；其余 `fails: []` |
+| C10 A4 场景 | 同上 | `c10-browser-probe --only-a4 --no-video --base-port 5600 --dist <在线构建>` | 退出 0、`ok: true`；自然进场的卡跳过 121 次，300 拍连续没断 |
+| 用户卡那一步 | 同上 | `c10-browser-probe --user-card --only-a4 --no-video` | 退出 0、`ok: true` |
+| 在线用户卡 | 同上 | `online-user-cards-probe` | 退出 0、`fails: []` |
+| 舞台看守 | 同上 | `online-stage-watch-probe --base-port 5720` | 退出 0；弄崩 B 19.2 s 重载、19.7 s 握回来仍双舞台；弄崩 A 34.8 s 退回同源单舞台并画出画面 |
+| M7 本机（计时作数） | 同上 | `m7-browser-probe --role all --timing-authoritative --base-port 5710` | 第一跑退出 1：node 角色打开 `<站点>/editor` 180 s 没等到 DOMContentLoaded，后面各项都没走到（见 5.5 节）；机器空下来单独重跑：M7-A1～A12、D9、D10、D14、D1-D2-D12 全过，**A4 最慢锚点段 22.3 s**（门槛 30 s，第 4 轮 22.2 s），A5 拖动让路后 682 ms 恢复，A12 长任务 0；只剩 W7 真跨机待复核（退出码 3） |
+| 桌面自动成为渲染节点 | 同上 | `desktop-auto-node-probe --base-port 5620` | 退出 0、`ok: true`（616 s） |
+| C10 界面、旧层 | 同上 | `c10-ui-probe`；`online-stale-layer-probe` | 都退出 0、`fails: []` |
+| 查询渲染 | 同上 | `query-render-probe --port 5756` | 退出 0、`fails: []` |
+| 创造力等级 | 同上 | `creativity-probe --shots` | 15 项全过 |
+| 用户正在编辑 | 同上 | `user-editing-probe --shots` | 18 项全过；看过 `dragging.png`（被拖的卡选中、从 1 秒拖到约 1.6 秒，AI 栏操作记录里有 Agent 的那次 `get_clip`） |
+| R0 冷启动 | 同上 | `r0-coldstart`（删 Vite 依赖缓存后起 dev server，量到 `/` 回 200 与编辑器可用）：空帧库两遍、树内 15 万个文件两遍 | 空帧库 3.0 s / 9.8 s；15 万个文件 3.0 s / 10.0 s，两者相同（0.7.4：17 s / 180 s；只修前两处时 20.6 s） |
+| 合入与 release | main `41713bf9`、`a668d358`、`ed8484d1` | `npm run build`（合入后、改版本号后各一次） | 都成功；合并结果与验证过的集成分支内容相同；release 两次快进，已推送 |
+| 0.7.5 在线构建 | `ed8484d1` 干净检出 | `npx vite build --mode online` | 成功；`index-Bg2luIDZ.js`，嵌 `dc21934c0c52` |
+| `/editor` 三个地址与无头打开 | 同上 | `verify-editor.mjs dc21934c0c52` | 主站与 `s1.` / `s2.` 都 200、都发 `index-Bg2luIDZ.js`、都含代码版本；运行配置保留；无头 200、页面错误 0、控制台错误 0 |
+| 阿里云真机路径 | 同上 | `desktop-auto-node-probe --remote https://8-219-80-16.sslip.io --base-port 5620 --skip-off` | 退出 0、`ok: true`、`fails: []`，972 s（那段时间 A3、A6 两个子 Agent 在跑重活，A7 用了 604 s）；A2 22.5 s、A3 97.7 s、A4 70.5 s、A5 4.5 s；页面错误 0；项目已删（`shared.admin.ok`） |
+
+### 5.3 〔裁〕（本轮主会话定，待用户审）
+
+1. A1 的九条〔裁〕、A2 的八条〔裁〕照子 Agent 定的留（全文在两份归档报告里）；计划 A1 行的白名单措辞按 schema 更正（`53629a63`）。
+2. `mechanism/agent.md` 两节与 `mechanism/rendering.md` 查询渲染两条（三级），措辞在子 Agent 的 dry run 上略缩。
+3. 查询渲染的实际做法与 `cloud-task.md` I4(b)、(b2) 不同：操作预览插在 `'queue'` lane 的待办之前，而不是在后台那一趟的批边界抢后台预渲染间；专用实例空闲时接一批（4 帧）而不是一帧。照子 Agent 的做法，计划加实现注。代价：专用实例开着时用户点开预览会多开一个 Chrome（以前两者共用一个），空闲 30 秒关。
+4. 0.7.5 只换 `/editor`、不重部署托管服务（托管端文件没变）。
+5. 计划第 4 节的三条〔裁〕（「正在编辑」的口径、子 Agent 深度 1 且至多 4 个、创造力等级存在项目里）已按原样落实。
+
+### 5.4 与计划、对齐时不一致的地方
+
+- 计划 A1 行把 `set_project_meta` 的白名单写成含三维透视与渲染路线，实际 schema 只有六个字段，已按实现更正（`53629a63`）。
+- 计划第 3 节 A3 的验收「并行写入不再互相被拒」字面上与二级语义冲突（`product/document-service.md`：Agent 的写操作带期望版本，不符就拒、由它重读再改）。A3 子 Agent 按语义做（各记各的身份，读后再写不被对方误伤，没重读就写照样被拒），计划措辞随 A3 合入改。
+- R0 原本打算分两次出，Tailwind 那一处搭查询渲染一起进了 0.7.5。
+
+### 5.5 新发现、记入遗留
+
+- `measure_audio` 在编辑器进程里按素材目录直接找文件交给 ffmpeg，没经素材服务的接口，与 `product/agent.md`「素材与产物」不符（A6 子 Agent 发现）。要和 A6 的 `measure_audio_js` 一起改，记进 TODO。
+- M7 本机第一跑 node 角色的页面 180 s 没等到 DOMContentLoaded。同一份在线构建在其它 10 个探针里都正常加载，机器空下来重跑全过；当时两个子 Agent 只在轻量阶段。没能复现，先记为偶发；再出现就查探针站点服务与页面的请求拦截。
+- 查询渲染报告第 7 节：队列模式的认领闸（节点在专用实例空着时多认领一项）、后台那一趟的锚帧 / 整场景 / MOV 专用实例借不到、Agent 请求碰上专用实例在做卡批时要等一批（本机 2.4～2.8 s）；D10 三种模式没做。都已写进 TODO「查询渲染」一条。
+- 编辑界面顶上仍有「传统式 / 对话式 / SKILL」三档；TODO「工作方式」里「去掉对话式布局」一条还没做，排在 A4 前后。
+
+### 5.6 在做
+
+- **A3 多 Agent**（`claude/multi-agent`，`opus-dev`，端口 5840～5859）：`spawn_agent`（新页签、新身份、预设角色；深度 1、每个主 Agent 至多 4 个开着的子 Agent）；公告板搬到本机服务、改动记录由文档服务的提交流喂；被覆盖的一方和「正在改」的双方都在下一次工具结果里得知；分工模式归档；跨设备（文档服务新模块「在场状态」`presence.*`，合入后要重部署托管端；旧文档服务回 `unsupported` 时平稳退回）。代码与单测已写完，主会话放行后正在跑基线与探针。
+- **A6 JS 自定义测量**（`claude/custom-measure`，`opus-dev`，端口 5860～5869）：`measure_audio_js`，专用无头 Chrome 沙箱（限时、限内存、断网四道），只在「高」档开放。代码与单测已写完，正在跑基线与探针。
+
+### 5.7 待跨机复核
+
+- W7 真跨机（PC 当创建者、笔记本当纯浏览器节点，经阿里云），沿用第 4 轮。
+- PC-075-1 出 0.7.5 补丁；用户装上后的真机复测。
+
+### 5.8 待用户项
+
+1. **装 0.7.5 补丁**（PC 上线打出来后再通知，附路径与 SHA-256）；0.7.3、0.7.4 的补丁都不用装。
+2. **装上后的第一次运行会清缓存**：帧库约 282 GB，启动约 2 分钟后按 50 GB 上限清掉约 230 GB 最久没用的预渲染缓存（需要时重新预渲染，不可撤销）；想留更多，装完先在开始页「存储」把上限调大。
+3. 审 5.3 节，以及 A1、A2 两份归档报告里的〔裁〕。
+4. 沿用第 4 轮：`product/platforms.md` 要不要写「同步来的用户卡照常能改参数」（二级）；播放停顿期间要不要加音频看门狗。
+
+### 5.9 顾问调用记录
+
+本轮没有调 codex 或 Gemini：各段第一轮就做成，没有卡住的语义问题。子 Agent：`opus-dev` 五个（watch-ignore、creativity、user-editing，以及在跑的 A3、A6），`opus-dev-high` 一个（query-render），`Explore` 一个（为写计划摸清现有 Agent 架构）。
