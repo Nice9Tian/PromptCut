@@ -88,12 +88,13 @@ function bridgeTimeoutMs(tool) {
  * pair:codex、agy 不带可用的 id,只带配对线索(见 pairingOf),编辑器拿它和 runner 报到的调用配对
  * (server/agent/call-pairing.mjs)。
  */
-async function callBridge(tool, args, callId, pair, meta) {
+async function callBridge(tool, args, callId, pair, meta, { schemaOnly = false } = {}) {
   const { port, hosts } = getTargets();
-  // AI 栏的命令行工具:带这一页的对话 ID(vite-plugin-ai 起 CLI 时塞的环境变量);桌面 APP 的会话:带会话身份与厂商
+  // AI 栏的命令行工具:带这一页的对话 ID(vite-plugin-ai 起 CLI 时塞的环境变量);桌面 APP 的会话:带会话身份与厂商。
+  // 列工具时顺手取卡片 / 部件清单拼 schema(schemaOnly):那不是会话自己的操作,不报身份 —— 不进 AI 栏的分组、不受 SKILL 闸管
   const who = CLI_CALLER
     ? { agent: process.env.PROMPTCUT_AGENT || undefined }
-    : { caller: desktopCaller(meta) };
+    : schemaOnly ? {} : { caller: desktopCaller(meta) };
   for (const host of hosts) {
     try {
       const res = await fetch(`http://${host}:${port}/api/mcp/call`, {
@@ -203,7 +204,7 @@ async function handleMessage(line) {
     try {
       // 这里要按 controls 生成 params 的 anyOf schema,所以必须要完整版;
       // list_cards 不带参数返回的是摘要(没有 controls)。
-      const res = await callBridge('list_cards', { detail: 'full' });
+      const res = await callBridge('list_cards', { detail: 'full' }, undefined, undefined, undefined, { schemaOnly: true });
       if (res.ok) {
         const out = await res.json();
         if (out.ok && out.result) {
@@ -219,7 +220,7 @@ async function handleMessage(line) {
 
     // 部件同理:add_part / set_part 的 params、add_composite 的 parts 换成按 partId 分支的真实 schema
     try {
-      const res = await callBridge('list_parts', { detail: 'full' });
+      const res = await callBridge('list_parts', { detail: 'full' }, undefined, undefined, undefined, { schemaOnly: true });
       if (res.ok) {
         const out = await res.json();
         if (out.ok && out.result) injectPartParams(pubTools, out.result);

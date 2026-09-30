@@ -128,6 +128,8 @@ test('SM-3 两个桌面会话(Claude Code、Codex)各记各的身份与厂商;in
 
     const l1 = await claude.call('tools/list', {});
     assert.equal(l1.result.tools[0].name, GUIDE_TOOL.name, '桌面会话多一个 get_skill_guide');
+    const schemaCalls = ed.bodies.filter((b) => b.tool === 'list_cards' || b.tool === 'list_parts');
+    assert.ok(schemaCalls.length >= 2 && schemaCalls.every((b) => !('caller' in b)), '列工具时取卡片清单拼 schema 不报桌面身份(不进分组、不受闸管)');
     const l3 = await cli.call('tools/list', {});
     assert.equal(l3.result.tools.some((t) => t.name === GUIDE_TOOL.name), false);
     assert.equal(l3.result.tools.some((t) => t.name === 'submit_merge'), false, 'submit_merge 已归档');
