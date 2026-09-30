@@ -14,7 +14,11 @@
 
 export type StageLetter = "A" | "B";
 export type StageOrigins = Record<StageLetter, string>;
-export type Handshake = "pending" | "ok" | "failed";
+/**
+ * 首次握手的进度。`interim`:可见舞台 A 挂上 20 秒还没握上手,先按同源单舞台出画面,同时在隐藏的 iframe 里预热两个舞台源;
+ * 两台都加载完、握上手就换回双舞台(`ok`,只换一次),总上限到点还没好就 `failed`(`stageHandshake.ts`)。
+ */
+export type Handshake = "pending" | "interim" | "ok" | "failed";
 export type StageLayout = "dual" | "single";
 
 /** 运行配置的文件名(相对在线构建的 base,即 `/editor/`) */
@@ -73,7 +77,7 @@ export function stageLayout({ lowMemory, origins, handshake, pageOrigin }: { low
   if (lowMemory) return "single";
   if (!origins) return "single";
   if (pageOrigin && (origins.A === pageOrigin || origins.B === pageOrigin)) return "single";
-  if (handshake === "failed") return "single";
+  if (handshake === "failed" || handshake === "interim") return "single";
   return "dual";
 }
 
@@ -100,9 +104,11 @@ interface State {
   handshake: Handshake;
   /** 握手失败时的原因(诊断) */
   reason: string | null;
+  /** 什么时候进的 `interim`(`Date.now()`);没进过为 null。换回双舞台之后仍留着(Preview 据此做换回那一下的画面衔接) */
+  interimAt: number | null;
 }
 
-let state: State = { config: "idle", origins: null, handshake: "pending", reason: null };
+let state: State = { config: "idle", origins: null, handshake: "pending", reason: null, interimAt: null };
 const listeners = new Set<() => void>();
 let loading: Promise<StageOrigins | null> | null = null;
 
@@ -148,16 +154,24 @@ export function loadStageConfig({ base = "/editor/", fetchImpl, timeoutMs = RUNT
   return loading;
 }
 
-/** 舞台握手的结果(Preview 报):失败就退回同源单舞台,本页会话内不再试 */
+/**
+ * 舞台握手的结果(Preview 报):失败就退回同源单舞台,本页会话内不再试。
+ * `interim` 只能从 `pending` 进(换回双舞台之后再出问题不回 `interim`,照看守走 `failed`,不来回切)。
+ */
 export function markStageHandshake(result: Exclude<Handshake, "pending">, reason: string | null = null): void {
   if (state.handshake === result) return;
   if (state.handshake === "failed") return;
-  set({ handshake: result, reason });
+  if (result === "interim") {
+    if (state.handshake !== "pending") return;
+    set({ handshake: result, reason, interimAt: Date.now() });
+    return;
+  }
+  set({ handshake: result, reason: result === "ok" ? null : reason });
 }
 
 /** 测试用 */
 export function resetOnlineStagesForTest(next: Partial<State> = {}): void {
   loading = null;
-  state = { config: "idle", origins: null, handshake: "pending", reason: null, ...next };
+  state = { config: "idle", origins: null, handshake: "pending", reason: null, interimAt: null, ...next };
   listeners.clear();
 }

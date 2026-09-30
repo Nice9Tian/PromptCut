@@ -9,12 +9,14 @@
  *   node scripts/probes/online-stage-handshake-probe.mjs --dist <在线构建目录> [--out <截图目录>] [--base-port 6010] [--stage-delay-ms 40000]
  *
  * 端口:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务(缺省 6010～6014)。
- * 每个场景一个新的浏览器上下文(无缓存),以成员身份加入同一个放云端的项目。
+ * 每个场景一个新的浏览器上下文(无缓存),以成员身份加入同一个放云端的项目。代理给 `/editor/assets/` 回 `Cache-Control: public, max-age=31536000, immutable`
+ * (线上 nginx 同样如此,主会话 2026-09-30 核实)。
  *
  * 断言:
- *   S1 慢加载:两个舞台源的主脚本各压 40 秒。挂上 25 秒时仍在等(没退回);A 约 40 秒 load、随即握手,B 在 A load 之后才请求、
- *      约 40 秒后 load、握手;最终 handshake ok、dual 真、可见舞台画出片段;`__pcBrowserNode()` 的资格不因 `single-stage` 被拒
- *      (能当纯浏览器节点)。记下挂上到可见舞台第一次画出片段的时长(等待期间的空白时长),它应在 A 握手之后、不等 B。
+ *   S4 只压可见舞台 A 的主脚本 40 秒:约 20 秒进过渡期,同源单舞台画出片段(挂上到第一次画出 ≤ 24 秒),跨源的 A / B 改作隐藏的预热 iframe
+ *      继续加载;A 约 40 秒 load、B 随后 load、两台握上 → 换回双舞台:预热的 iframe 直接接任(跨源舞台页各只请求一次),盖板撤下后
+ *      跨源 A 画出片段;出画面之后(含换回那一下)可见舞台空白不超过 1 秒;`__pcBrowserNode()` 资格恢复(能当纯浏览器节点)。
+ *   S1 慢加载:两个舞台源的主脚本各压 40 秒。同 S4,只是 B 也压、约 80 秒才握上。
  *   S2 舞台 A 的源坏了(舞台页回 503):错误页照样 load,约 20 秒后退回同源单舞台(原因「舞台 A 加载完 20 秒没握上手」),
  *      只剩一个舞台 iframe、在编辑器页的源上,画出片段;从挂上到退回、到画出的时长记在结果里。
  *   S3 舞台 B 的源坏了:A 正常握手,B 在 A load 之后挂、错误页 load,约 20 秒后退回,单舞台画出片段。
@@ -39,7 +41,7 @@ const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), 'online-stage-handshake-shots')));
 const BASE = Number(arg('--base-port', 6010));
 const DELAY = Number(arg('--stage-delay-ms', 40_000));
-const ONLY = (arg('--only', 'S1,S2,S3')).split(',');
+const ONLY = (arg('--only', 'S4,S1,S2,S3')).split(',');
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4 };
 const SITE = `http://127.0.0.1:${PORTS.editor}`;
 const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
@@ -197,7 +199,7 @@ async function openMember(tag, username) {
     ctx, page, pageErrors, consoleWarn, stageFrames,
     shot: (name) => page.screenshot({ path: path.join(OUT, `${name}.png`) }).catch(() => {}),
     hs: () => page.evaluate(() => window.__pcStageHandshake?.() ?? null),
-    preview: () => page.evaluate(() => { const d = window.__pcPreviewDiag?.(); return d ? { dual: d.dual, frontId: d.frontId, onlineStages: d.onlineStages } : null; }),
+    preview: () => page.evaluate(() => { const d = window.__pcPreviewDiag?.(); return d ? { dual: d.dual, frontId: d.frontId, onlineStages: d.onlineStages, handover: d.handover } : null; }),
     node: () => page.evaluate(() => { const n = window.__pcBrowserNode?.(); return n ? { eligibility: n.eligibility, state: n.state, reason: n.reason, nodeId: n.nodeId } : null; }),
     /** 可见舞台里画没画出片段(包裹层在、有子节点) */
     async visibleDrawn() {
@@ -217,48 +219,78 @@ const firstAfter = (m, port, t) => (m.get(port) ?? []).find((x) => x >= t) ?? nu
 const rel = (t, t0) => (t === null || t0 === null ? null : t - t0);
 
 try {
-  /* ============================================================ S1 慢加载:两台主脚本各压 40 秒 */
-  if (ONLY.includes('S1')) {
-    cfg.slow = new Set([PORTS.stageA, PORTS.stageB]); cfg.broken = new Set();
+  /*
+   * 慢加载场景(S1 两台都压、S4 只压 A):约 20 秒同源单舞台出画面(过渡期),预热的两个跨源 iframe 继续加载;
+   * 两台都握上手后换回双舞台(同一个 iframe 元素接任,舞台页不重新请求),盖板撤下,能当纯浏览器节点。
+   * 从挂上起每 100 ms 看一次可见舞台画没画出片段,记第一次画出的时刻和之后最长的一段空白(换回那一下的闪烁)。
+   */
+  async function slowScenario(tag, slowPorts, username) {
+    const key = tag.toLowerCase();
+    cfg.slow = new Set(slowPorts); cfg.broken = new Set();
     const tStart = Date.now();
-    const m = await openMember('S1', 'm1');
-    const tMount = await until('S1 舞台 A 的舞台页请求', () => firstAfter(log.page, PORTS.stageA, tStart), 60_000);
-    // 从挂上起一直看可见舞台什么时候第一次画出片段(等待期间的空白时长)
+    const hits0 = { a: log.page.get(PORTS.stageA)?.length ?? 0, b: log.page.get(PORTS.stageB)?.length ?? 0, e: log.page.get(PORTS.editor)?.length ?? 0 };
+    const m = await openMember(tag, username);
+    const tMount = await until(`${tag} 舞台 A 的舞台页请求`, () => firstAfter(log.page, PORTS.stageA, tStart), 60_000);
     let tFirstDrawn = null;
-    const drawWatch = (async () => { while (tFirstDrawn === null && Date.now() - tMount < DELAY * 2 + 60_000) { if (await m.visibleDrawn()) tFirstDrawn = Date.now(); else await sleep(250); } })();
-    // 挂上 25 秒(旧做法的 20 秒已过):仍在等,没退回
+    let lastDrawn = null;
+    let maxGap = 0;
+    let stop = false;
+    const drawWatch = (async () => {
+      while (!stop && Date.now() - tMount < DELAY * 2 + 90_000) {
+        const d = await m.visibleDrawn();
+        const now = Date.now();
+        if (d) {
+          if (tFirstDrawn === null) tFirstDrawn = now;
+          if (lastDrawn !== null) maxGap = Math.max(maxGap, now - lastDrawn);
+          lastDrawn = now;
+        }
+        await sleep(100);
+      }
+    })();
+    // 挂上 25 秒:已进过渡期、同源单舞台出了画面,没失败
     await sleep(Math.max(0, tMount + 25_000 - Date.now()));
-    out.s1at25 = { hs: await m.hs(), preview: await m.preview() };
-    check(out.s1at25.hs?.phase === 'waiting' && out.s1at25.preview?.onlineStages?.handshake === 'pending' && out.s1at25.preview?.dual === true, 'S1 挂上 25 秒时仍在等握手、没退回', out.s1at25);
-    check(firstAfter(log.page, PORTS.stageB, tStart) === null, 'S1 A 还没 load 时 B 没挂(没请求 B 的舞台页)', { bHits: log.page.get(PORTS.stageB)?.length ?? 0 });
-    await m.shot('s1-waiting-25s');
-    const ok = await until('S1 两个舞台都握上手', async () => { const h = await m.hs(); return h && h.phase === 'ok' ? h : null; }, DELAY * 2 + 60_000, 500);
-    out.s1hs = ok;
-    out.s1preview = await m.preview();
+    const at25 = { hs: await m.hs(), preview: await m.preview(), drawn: await m.visibleDrawn(), warm: await m.page.$$eval('[data-pc="stage-frame-warm"]', (a) => a.length).catch(() => -1) };
+    out[`${key}at25`] = at25;
+    check(at25.hs?.phase === 'interim' && at25.preview?.onlineStages?.handshake === 'interim' && at25.preview?.dual === false, `${tag} 挂上 25 秒时在过渡期(同源单舞台)、没失败`, at25);
+    check(!!at25.drawn && at25.drawn.url.startsWith(`${SITE}/`), `${tag} 过渡期里同源单舞台画出片段`, at25.drawn);
+    check(at25.warm >= 1, `${tag} 过渡期里有隐藏的预热 iframe`, at25.warm);
+    check(tFirstDrawn !== null && tFirstDrawn - tMount <= 24_000, `${tag} 约 20 秒出画面(挂上到第一次画出 ≤ 24 秒)`, { firstDrawn: rel(tFirstDrawn, tMount) });
+    await m.shot(`${key}-interim-25s`);
+    const ok = await until(`${tag} 预热的两台都握上手`, async () => { const h = await m.hs(); return h && h.phase === 'ok' ? h : null; }, DELAY * 2 + 60_000, 250);
+    const tOk = ok ? Date.now() : null;
+    const handed = await until(`${tag} 换回双舞台、盖板撤下、跨源 A 画出片段`, async () => {
+      const cover = await m.page.$$eval('[data-pc="stage-frame-cover"]', (a) => a.length).catch(() => -1);
+      const d = await m.visibleDrawn();
+      return cover === 0 && d && d.url.startsWith(`${STAGE_ORIGINS[0]}/`) ? d : null;
+    }, 30_000, 100);
+    const tHanded = handed ? Date.now() : null;
+    await sleep(3000);
+    stop = true;
     await drawWatch;
-    const drawn = tFirstDrawn !== null;
-    const tDrawn = tFirstDrawn;
-    const tBpage = firstAfter(log.page, PORTS.stageB, tStart);
-    out.s1times = {
-      aEntryDone: rel(firstAfter(log.entryDone, PORTS.stageA, tStart), tMount),
-      bPage: rel(tBpage, tMount),
-      bEntryDone: rel(firstAfter(log.entryDone, PORTS.stageB, tStart), tMount),
-      drawn: rel(tDrawn, tMount),
-      slots: ok?.slots ?? null,
+    const preview = await m.preview();
+    const hits = { a: (log.page.get(PORTS.stageA)?.length ?? 0) - hits0.a, b: (log.page.get(PORTS.stageB)?.length ?? 0) - hits0.b, e: (log.page.get(PORTS.editor)?.length ?? 0) - hits0.e };
+    out[key] = {
+      firstDrawn: rel(tFirstDrawn, tMount), interimAt: ok?.interimAt ?? null, ok: rel(tOk, tMount), handed: rel(tHanded, tMount), handoverMs: tOk && tHanded ? tHanded - tOk : null,
+      maxGapAfterFirstDrawn: maxGap, slots: ok?.slots ?? null, stagePageHits: hits, preview,
+      aEntryDone: rel(firstAfter(log.entryDone, PORTS.stageA, tStart), tMount), bPage: rel(firstAfter(log.page, PORTS.stageB, tStart), tMount),
     };
-    check(out.s1preview?.dual === true && out.s1preview?.onlineStages?.handshake === 'ok', 'S1 最终是双舞台、handshake ok', out.s1preview);
-    check((ok?.slots?.A?.loadedAt ?? 0) >= DELAY - 1000, 'S1 A 的 load 在压住的时长之后', ok?.slots);
-    check(tBpage !== null && tBpage >= (firstAfter(log.entryDone, PORTS.stageA, tStart) ?? Infinity) - 50, 'S1 B 在 A 的主脚本回完之后才挂', out.s1times);
-    check(drawn, 'S1 可见舞台画出片段');
-    check(tDrawn !== null && (ok?.slots?.B?.readyAt == null || tDrawn - tMount < ok.slots.B.readyAt), 'S1 A 握手后就出画面,不等 B', out.s1times);
-    const node = await until('S1 页面能当纯浏览器节点(资格通过)', async () => { const n = await m.node(); return n && n.eligibility?.ok ? n : null; }, 60_000, 500);
-    out.s1node = node ?? await m.node();
-    check(out.s1node?.eligibility?.reason !== 'single-stage', 'S1 资格不因 single-stage 被拒', out.s1node);
-    out.s1warn = m.consoleWarn.slice(-6);
-    out.s1errors = m.pageErrors.slice(0, 5);
-    await m.shot('s1-dual');
+    check(preview?.dual === true && preview?.onlineStages?.handshake === 'ok', `${tag} 最终是双舞台、handshake ok`, preview);
+    check((ok?.slots?.A?.loadedAt ?? 0) >= DELAY - 1000, `${tag} A 的 load 在压住的时长之后`, ok?.slots);
+    check(hits.a === 1 && hits.b === 1 && hits.e === 1, `${tag} 换回时预热的 iframe 直接接任,跨源舞台页各只请求一次(同源单舞台一次)`, hits);
+    check(maxGap <= 1000, `${tag} 出画面之后(含换回那一下)可见舞台空白不超过 1 秒`, { maxGap });
+    const node = await until(`${tag} 页面能当纯浏览器节点(资格通过)`, async () => { const n = await m.node(); return n && n.eligibility?.ok ? n : null; }, 60_000, 500);
+    out[`${key}node`] = node ?? await m.node();
+    check(!!node, `${tag} 换回双舞台后资格恢复`, out[`${key}node`]);
+    out[`${key}warn`] = m.consoleWarn.slice(-6);
+    out[`${key}errors`] = m.pageErrors.slice(0, 5);
+    await m.shot(`${key}-dual`);
     await m.close();
   }
+
+  /* ============================================================ S1 慢加载:两台主脚本各压 40 秒 */
+  if (ONLY.includes('S1')) await slowScenario('S1', [PORTS.stageA, PORTS.stageB], 'm1');
+  /* ============================================================ S4 只压可见舞台 A 的主脚本 40 秒 */
+  if (ONLY.includes('S4')) await slowScenario('S4', [PORTS.stageA], 'm4');
 
   /* ============================================================ S2 舞台 A 的源坏了 */
   if (ONLY.includes('S2')) {
