@@ -4,7 +4,7 @@ import { useBackdropClose } from "../ui/backdropClose";
 import { actions, useStore } from "../store/project";
 import "./ProjectSettingsDialog.css";
 import { CollabSection, type CollabHandle } from "./sync/CollabSection";
-import { CREATIVITY_HINT, CREATIVITY_LABEL, CREATIVITY_LEVELS, DEFAULT_CREATIVITY, normalizeCreativity, projectCreativity, type CreativityLevel } from "../kernel/creativity.mjs";
+import { CREATIVITY_HINT, CREATIVITY_LABEL, CREATIVITY_LEVELS, CREATIVITY_SHORT, DEFAULT_CREATIVITY, normalizeCreativity, projectCreativity, type CreativityLevel } from "../kernel/creativity.mjs";
 
 export interface ProjectSettingsDialogProps {
   open: boolean;
@@ -249,7 +249,7 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
               onChange={(e) => setCreativity(normalizeCreativity(e.target.value) ?? DEFAULT_CREATIVITY)}
             >
               {CREATIVITY_LEVELS.map((lv) => (
-                <option key={lv} value={lv}>{CREATIVITY_LABEL[lv]}:{CREATIVITY_HINT[lv]}</option>
+                <option key={lv} value={lv} title={CREATIVITY_HINT[lv]}>{CREATIVITY_LABEL[lv]} · {CREATIVITY_SHORT[lv]}</option>
               ))}
             </select>
           </div>

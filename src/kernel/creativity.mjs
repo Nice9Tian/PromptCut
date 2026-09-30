@@ -22,6 +22,9 @@ export const DEFAULT_CREATIVITY = 'high';
 /** 给人看的名字 */
 export const CREATIVITY_LABEL = Object.freeze({ low: '低', medium: '中', high: '高' });
 
+/** 选项上的短说明(下拉框放不下整句) */
+export const CREATIVITY_SHORT = Object.freeze({ low: '只改参数', medium: '可改代码和表达式', high: '可新建卡片和效果' });
+
 /** 每一档允许什么(项目设置、AI 栏的提示和闸门的报错共用这几句) */
 export const CREATIVITY_HINT = Object.freeze({
   low: '只用已有的卡片和效果,只改参数;测量只用内置方法',
