@@ -176,14 +176,16 @@ export function createBakeStore({ indexDir, origin, fetchImpl = globalThis.fetch
 
   /**
    * 推一份到连着的远程素材服务(共享项目)。后台跑,不挡调用方;成功在索引里记 `pushed`。
-   * 远程就是本机素材服务时(推送队列还没等到登记,`asset-select.mjs` 回本机)也照推 —— 一次对账就回,不重传。
+   * 远程就是本机素材服务时(推送队列还没等到登记,`asset-select.mjs` 回本机)不推。
    */
   function pushRemote(entry, bytes) {
     let client;
     try { client = remote(); } catch { client = null; }
     if (!client || typeof client.put !== 'function') return null;
-    const base = String(client.base || '');
+    const base = String(client.base || '').replace(/\/+$/, '');
     if (base && entry.pushed === base) return null;
+    // 选定的就是本机素材服务(推送队列还没等到别的登记时会回落本机):已经写在那儿了,不推
+    try { if (base && base === current('读取').base) return null; } catch { /* 取不到本机地址就照推 */ }
     return (async () => {
       try {
         const buf = bytes ?? await current('读取').client.get(BAKE_NS, entry.hash);

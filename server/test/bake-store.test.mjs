@@ -255,3 +255,82 @@ test('BKA-7 源码守门:bake.ts / bake-cache.ts 不再引素材目录、不再�
   assert.match(bake, /store\.migrateLegacy\(key, name/, '单张那条路做读时迁移');
   assert.match(bake, /store\.migrateLegacy\(tg\.key, tg\.name/, '批量那条路做读时迁移');
 });
+
+test('BKA-8 共享项目的另一个成员:本机素材服务没有这块 px 时向当前连接的远程素材服务取一次、校验入库再答', async () => {
+  const pull = await import('../media-pull.mjs');
+  const a = await harness.asset();
+  const remote = await harness.serve();
+  const bytes = png(1500);
+  const { hash } = await createAssetClient({ base: remote.base }).put('px', bytes, { ext: 'png' });
+
+  /** 本机素材服务:memory 数据层,pullArtifact 走缺省(media-pull 的当前远程) */
+  const stores = { media: await harness.memoryStore(), snap: await harness.memoryStore(), px: await harness.memoryStore() };
+  const serveWith = async (opts) => {
+    const mw = a.assetServiceMiddleware(path.join(TMP, `local-${++seq}`), { stores, ...opts });
+    const s = await listen((req, res) => { void mw(req, res, () => { res.statusCode = 404; res.end('no route'); }); });
+    return s;
+  };
+  const local = await serveWith({});
+  try {
+    pull.resetPullStateForTest();
+    // 没连远程:照旧 404
+    assert.equal((await fetch(`${local.origin}/api/asset/px/${hash}`)).status, 404);
+
+    pull.setRemoteAssetService({ base: remote.base });
+    const res = await fetch(`${local.origin}/api/asset/px/${hash}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), bytes, '取回的字节相同');
+    assert.equal((await stores.px.chunks(hash)).complete, true, '入了本机素材服务');
+    const pulls = () => pull.pullLog().filter((e) => e.event === 'artifact.pull' && e.hash === hash).length;
+    assert.equal(pulls(), 1);
+    assert.equal((await fetch(`${local.origin}/api/asset/px/${hash}`)).status, 200);
+    assert.equal(pulls(), 1, '第二次是本机命中,不再问远程');
+    // 远程也没有的:404(远程那台的 media-pull 也指着它自己 —— 按需拉取带的头让它不再往下拉,不成环、不等超时)
+    assert.equal((await fetch(`${local.origin}/api/asset/px/${'ab'.repeat(32)}`)).status, 404);
+  } finally {
+    pull.resetPullStateForTest();
+    await closeServer(local.server);
+  }
+
+  // 拉回来的字节不对(内容哈希对不上):不入库,404
+  const liar = await serveWith({ pullArtifact: async () => ({ bytes: png(10), contentType: 'image/png' }) });
+  const other = 'cd'.repeat(32);
+  assert.equal((await fetch(`${liar.origin}/api/asset/px/${other}`)).status, 404);
+  assert.equal((await stores.px.chunks(other)).complete, false);
+  await closeServer(liar.server);
+  // pullArtifact: null 关掉
+  let asked = 0;
+  const off = await serveWith({ pullArtifact: null });
+  pull.setRemoteAssetService({ base: remote.base });
+  const fresh = png(20);
+  const fh = (await createAssetClient({ base: remote.base }).put('px', fresh)).hash;
+  assert.equal((await fetch(`${off.origin}/api/asset/px/${fh}`)).status, 404);
+  pull.resetPullStateForTest();
+  await closeServer(off.server);
+  // 非本机、没票据的读:先拒(401),不会替它去远程拉
+  const guarded = await serveWith({ isTrusted: () => false, tickets: null, pullArtifact: async () => { asked++; return null; } });
+  assert.equal((await fetch(`${guarded.origin}/api/asset/px/${fh}`)).status, 401);
+  assert.equal(asked, 0);
+  await closeServer(guarded.server);
+  await remote.close();
+});
+
+test('BKA-9 登记的「远程」就是本机素材服务时不推', async () => {
+  const local = await harness.serve();
+  let puts = 0;
+  const client = createAssetClient({ base: local.base });
+  setBakeRemote(() => ({ base: `${local.base}/`, put: (...x) => { puts++; return client.put(...x); } }));
+  try {
+    const store = createBakeStore({ indexDir: indexDir(), origin: () => local.origin });
+    const e = await store.put('777777777777', png(50));
+    await sleep(100);
+    assert.equal(puts, 0);
+    assert.equal((await store.lookup('777777777777'))?.hash, e.hash);
+    await sleep(100);
+    assert.equal(puts, 0);
+  } finally {
+    setBakeRemote(null);
+    await local.close();
+  }
+});

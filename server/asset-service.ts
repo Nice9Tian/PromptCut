@@ -20,6 +20,9 @@
  * 两处按命名空间区分:收尾回包的 `url`,`media` 是 `/@media/<hash>`,另两个是 `/api/asset/<ns>/<hash>`;
  * `X-Media-Type` 反查扩展名时,`text/html → html`、`video/iso.segment → m4s` 只对 `snap` / `px` 生效,
  * `media` 的反查表不动。
+ * `px` 的取回多一步按需拉取(claude/bake-asset):本机没有这一块、且编辑器连着共享项目的远程素材服务时,先向远程整件取一次、
+ * 校验入库再答(`pullArtifact`,缺省 `media-pull.mjs` 的 `fetchRemoteArtifact`);没连远程或远程也没有,照旧 404。
+ * 卡片快照(`bake_card` 与 3D 视图的贴图,地址 `/api/asset/px/<hash>`)靠它让别的成员也取得到。
  *
  * # API 契约(第 5 步)
  *
@@ -107,8 +110,9 @@
  */
 import type { Connect } from "vite";
 import type { IncomingMessage, ServerResponse } from "http";
-import type { Readable } from "stream";
+import { Readable } from "stream";
 import path from "path";
+import { createHash } from "crypto";
 import { apiPath, isAssetServicePath, clientAddressOf, isLocalOrigin } from "./http-guard.mjs";
 import { createBlobStore, candidateFileResolver } from "./asset-store/index.mjs";
 import {
@@ -518,6 +522,42 @@ export interface AssetServiceOptions {
   store?: AssetBlobStore;
   tickets?: AssetTicketVerifier | null;
   isTrusted?: (req: IncomingMessage) => boolean;
+  /**
+   * `px` 的按需拉取(claude/bake-asset):本机没有这一块时向哪里取。缺省是当前连接的远程素材服务
+   * (`media-pull.mjs` 的 `fetchRemoteArtifact`,没连远程就是没有);null 关掉。
+   */
+  pullArtifact?: ((ns: "px", hash: string) => Promise<{ bytes: Buffer; contentType?: string } | null>) | null;
+}
+
+/**
+ * `px` 的按需拉取:取回来的整件(已由拉取方校验 sha256,这里再核一次)经数据层分片写入、收尾入库,之后就是本机命中。
+ * 同一个哈希同时只拉一次。任何一步不成都当没有(调用方照旧回 404),不抛。
+ */
+const artifactPulls = new WeakMap<AssetBlobStore, Map<string, Promise<void>>>();
+async function pullArtifactInto(store: AssetBlobStore, hash: string, pull: NonNullable<AssetServiceOptions["pullArtifact"]>): Promise<void> {
+  let pulls = artifactPulls.get(store);
+  if (!pulls) { pulls = new Map(); artifactPulls.set(store, pulls); }
+  const flying = pulls.get(hash);
+  if (flying) return flying;
+  const job = (async () => {
+    try {
+      const got = await pull("px", hash);
+      if (!got?.bytes?.length) return;
+      if (createHash("sha256").update(got.bytes).digest("hex") !== hash) return;
+      const mime = String(got.contentType || "").split(";")[0].trim().toLowerCase();
+      const ext = ARTIFACT_MIME_TO_EXT[mime] && ARTIFACT_EXTS.includes(ARTIFACT_MIME_TO_EXT[mime]) ? ARTIFACT_MIME_TO_EXT[mime] : "";
+      const size = got.bytes.length;
+      const count = chunkCount(size, store.chunkSize);
+      for (let n = 0; n < count; n++) {
+        const part = got.bytes.subarray(n * store.chunkSize, Math.min(size, (n + 1) * store.chunkSize));
+        const r = await store.putChunk(hash, n, { size, ext }, Readable.from([part]));
+        if (r.status !== "ok") return; // "complete":别的请求已经入库了;其余:当没有
+      }
+      await store.complete(hash);
+    } catch { /* 当没有 */ }
+  })();
+  pulls.set(hash, job);
+  try { await job; } finally { pulls.delete(hash); }
 }
 
 export function assetServiceMiddleware(root: string, opts: AssetServiceOptions = {}) {
@@ -542,6 +582,14 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     return defaultTickets;
   };
   const isTrusted = typeof opts.isTrusted === "function" ? opts.isTrusted : isLoopbackRequest;
+  // px 的按需拉取:缺省惰性加载 media-pull(当前连接的远程素材服务);好几个单测把本文件单独转译,静态 import 兄弟模块会解析失败
+  const pullArtifact: NonNullable<AssetServiceOptions["pullArtifact"]> | null = opts.pullArtifact === null ? null
+    : opts.pullArtifact ?? (async (ns, hash) => {
+      try {
+        const mod: any = await import("./media-pull.mjs");
+        return typeof mod.fetchRemoteArtifact === "function" ? await mod.fetchRemoteArtifact(ns, hash) : null;
+      } catch { return null; }
+    });
   /** 放不放行;不放行时已经回了 401 / 403 */
   const admit = async (req: IncomingMessage, res: ServerResponse, write: boolean): Promise<boolean> => {
     // 带查询串票据的响应:不缓存、不带 Referer 出去(契约第 8 节)
@@ -583,6 +631,9 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       if (tail === undefined) {
         if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { ok: false, error: "method" });
         if (!(await admit(req, res, false))) return;
+        // px 本机没有这一块:向当前连接的远程素材服务取一次再答(共享项目里别的成员推上去的卡片快照)
+        // 带 x-promptcut-pull 的是别的素材服务替它的页面来拉的:不再往下拉,防两台互指成环
+        if (ns === "px" && pullArtifact && !req.headers["x-promptcut-pull"] && !(await store.stat(hash))) await pullArtifactInto(store, hash, pullArtifact);
         return await serveBlob(req, res, store, hash);
       }
       if (tail === "chunks") {
