@@ -43,6 +43,16 @@ export function judgeAgentOrder(recent, sentAt) {
 }
 
 /**
+ * Agent 查询的等待(AGENT-maint-3 第 5 项):专用实例上的队列任务按批(4 帧)让路,Agent 任务至多等手里那一批加一次切换
+ * (让路后恢复队列任务的那次页面重置在 Agent 做完之后,不算在等待里)。`limitMs` 是这个量级的上界(探针缺省 15 s;
+ * 改前整项 60 帧要等约 38 s)。回不满足的条目(空 = 过)。
+ */
+export function judgeAgentWait(order, limitMs) {
+  if (!order || order.agentWaitMs == null) return ['没有量到 Agent 任务的等待时间'];
+  return order.agentWaitMs <= limitMs ? [] : [`Agent 任务等了 ${order.agentWaitMs} ms,超过一批加一次切换的量级(上界 ${limitMs} ms)`];
+}
+
+/**
  * 一趟的判定。`withAgent`:这一趟先让 Agent 用过专用实例(它开着)。
  *   - 开着:见过持有两项(`maxHeld >= 2`)、见过多出的那一格开(`spareSeen`)、专用实例上做过队列任务(`queue@agent >= 1`);
  *   - 没开:持有数从没超过 1、多出的那一格从没开、专用实例从没开过、专用实例上一项队列任务都没做。

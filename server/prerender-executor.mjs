@@ -265,9 +265,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     };
     // 诊断(不改行为):共享档这一段各步的用时(排队、借预渲染间、换页、推帧、入库、画小尺寸),记进 executor.render
     const timing = {};
+    // 做在 Agent 专用实例上、中途给 Agent 让路时定时报一步(会话的工作计数),租约不被队列当成停滞(AGENT-maint-3)
+    const heartbeat = () => say('agent-yield');
     await onLane(pipeline, () => (task.tier === 'shared'
-      ? pipeline.renderCardSnapshotRange(entry, control, range, { signal, progress: tracked, timing })
-      : pipeline.renderSceneSnapshotRange(entry, control, range, { signal, progress: tracked })));
+      ? pipeline.renderCardSnapshotRange(entry, control, range, { signal, progress: tracked, timing, heartbeat })
+      : pipeline.renderSceneSnapshotRange(entry, control, range, { signal, progress: tracked, heartbeat })));
     say('executor.render', { id: task.id, tier: task.tier, clipId: control.clipId, ms: Date.now() - started });
     // 上面那个 `say` 是阶段回调(这一行照旧);分段耗时另记一行日志(`log`),编辑器进程的转发器放行它
     note('executor.render-timing', { id: task.id, tier: task.tier, clipId: control.clipId, ms: Date.now() - started, ...timing });

@@ -15,7 +15,9 @@
  *     - 专用实例上做过快照任务(`queue@agent >= 1`):多认领的那一项交给了它;
  *     - **Agent 任务不排在它后面**:看到专用实例正做着一项队列任务(`scheduler.agentUnit === 'queue'`)时,模型再看一帧;
  *       这次请求的第一个 Agent 任务开工之前,专用实例上不许再开工新的普通预渲染(`claim-gate-judge.mjs` 的 `judgeAgentOrder`),
- *       它只等手里那一项做完(输出 `agentWaitMs`)。
+ *       它只等手里那一批(4 帧)做完:专用实例上的队列任务按批让路(AGENT-maint-3 第 5 项)。输出 `agentWaitMs`,
+ *       判它不超过「一批加一次切换」的量级(`--agent-wait-limit-ms`,缺省 15000;改前整项 60 帧要等约 38 s);
+ *       诊断 `scheduler.yields` 记过让路。
  *   两趟都要:后台那一趟以 ready 结束、细任务全部 done、没有失败。
  *
  *   node scripts/probes/claim-gate-probe.mjs [--port 5990] [--doc-port 5993] [--only off|on] [--timeout-min 20] [--keep]
@@ -33,7 +35,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { summarizeSamples, judgeAgentOrder, judgeRun } from './claim-gate-judge.mjs';
+import { summarizeSamples, judgeAgentOrder, judgeAgentWait, judgeRun } from './claim-gate-judge.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -43,6 +45,7 @@ const DOC_PORT = Number(arg('--doc-port', 5993));
 const ONLY = arg('--only', null);
 const KEEP = args.includes('--keep');
 const TIMEOUT_MS = Number(arg('--timeout-min', 20)) * 60_000;
+const AGENT_WAIT_LIMIT_MS = Number(arg('--agent-wait-limit-ms', 15000));
 const STAMP = Date.now().toString(36);
 
 const fails = [];
@@ -216,6 +219,7 @@ async function runOnce(label, { withAgent, port, docPort }) {
     }
     const dEnd = await diag();
     run.counts = dEnd.scheduler?.counts ?? {};
+    run.yields = dEnd.scheduler?.yields ?? null;
     run.summary = summarizeSamples(samples);
     for (const f of judgeRun({ withAgent, summary: run.summary, counts: run.counts })) fails.push(`[${label}] ${f}`);
     if (withAgent) {
@@ -224,6 +228,8 @@ async function runOnce(label, { withAgent, port, docPort }) {
       if (order) {
         check(!order.error && order.status === 200 && order.ok !== false, `[${label}] 专用实例忙着时模型再看一帧,照常返回`, { status: order.status, error: order.error });
         check(order.ok !== false && order.jumped?.length === 0 && order.agentAt !== null, `[${label}] Agent 任务不排在排队中的预渲染后面`, { reason: order.reason, jumped: order.jumped });
+        for (const f of judgeAgentWait(order, AGENT_WAIT_LIMIT_MS)) fails.push(`[${label}] ${f}`);
+        check((run.yields?.count ?? 0) >= 1, `[${label}] 专用实例上的队列任务在批边界让过路(scheduler.yields.count >= 1)`, run.yields);
       }
     }
     return run;

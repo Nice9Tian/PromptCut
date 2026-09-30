@@ -3,11 +3,12 @@
  *
  *   MNT3-C-1  judgeAgentOrder:Agent 任务开工前专用实例没接新的普通预渲染 → 过;接了 → 不过并列出来;没有这次的 Agent 任务 → 不过;
  *   MNT3-C-2  summarizeSamples:最大持有数、多出的格子、专用实例开没开、专用实例在做队列任务的样本数;
- *   MNT3-C-3  judgeRun:专用实例开着 / 没开两种各自的通过与不通过条件。
+ *   MNT3-C-3  judgeRun:专用实例开着 / 没开两种各自的通过与不通过条件;
+ *   MNT3-C-4  judgeAgentWait:Agent 任务的等待不超过「一批加一次切换」的上界。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { judgeAgentOrder, summarizeSamples, judgeRun } from '../../scripts/probes/claim-gate-judge.mjs';
+import { judgeAgentOrder, judgeAgentWait, summarizeSamples, judgeRun } from '../../scripts/probes/claim-gate-judge.mjs';
 
 test('MNT3-C-1 judgeAgentOrder:发请求那一刻已在做的那一项不算,之后专用实例再接普通预渲染才算插到 Agent 前面', () => {
   const t0 = 10_000;
@@ -55,4 +56,11 @@ test('MNT3-C-3 judgeRun:开着要见到多认领并交给专用实例;没开不�
   assert.deepEqual(judgeRun({ withAgent: false, summary: off, counts: { 'queue@queue': 9 } }), []);
   const offBad = judgeRun({ withAgent: false, summary: { maxHeld: 2, spareSeen: true, agentOpenSeen: true }, counts: { 'queue@agent': 1 } });
   assert.equal(offBad.length, 4);
+});
+
+test('MNT3-C-4 judgeAgentWait:等一批加一次切换以内过;像改前那样等整项(38 s)不过;没量到不过', () => {
+  assert.deepEqual(judgeAgentWait({ agentWaitMs: 4200 }, 15000), []);
+  assert.equal(judgeAgentWait({ agentWaitMs: 38347 }, 15000).length, 1);
+  assert.equal(judgeAgentWait({ agentWaitMs: null }, 15000).length, 1);
+  assert.equal(judgeAgentWait(null, 15000).length, 1);
 });
