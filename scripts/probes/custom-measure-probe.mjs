@@ -1,7 +1,7 @@
 /**
  * 自定义测量(measure_audio_js)的端到端探针(计划 `docs/plan/agent-workflow-plan.md` A6;报告 `docs/reports/AGENT-custom-measure.md`)。
  *
- *   node scripts/probes/custom-measure-probe.mjs [--port 5860] [--keep]
+ *   node scripts/probes/custom-measure-probe.mjs [--port 5860] [--keep]   (端口段由派活的一方分,例如 5860、5920)
  *
  * 自己起一个编辑器 dev server(`--port`,缺省 5860,舞台另占 +1、+2;带 PROMPTCUT_NO_PORT_FILE=1,不写公共的 port.json),
  * 产物与素材落在新建的临时目录(PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR),再用 puppeteer 打开编辑台,依次:
@@ -29,7 +29,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const args = process.argv.slice(2);
 const PORT = Number(args.includes('--port') ? args[args.indexOf('--port') + 1] : 5860);
 const KEEP = args.includes('--keep');
-if (!(PORT >= 5860 && PORT <= 5867)) throw new Error(`这支探针的端口段是 5860～5869(编辑器 + 两个舞台端口),--port ${PORT} 不在段内`);
+// 编辑器 + 两个舞台端口占 PORT～PORT+2,要落在同一个 10 口的段里;用户常驻的 5190～5192 与 5580～5599 不用
+const clashes = (p) => (p >= 5190 && p <= 5192) || (p >= 5580 && p <= 5599);
+if (!(PORT >= 1024 && PORT % 10 <= 7) || [PORT, PORT + 1, PORT + 2].some(clashes)) throw new Error(`--port ${PORT} 不行:要在一个 10 口段的前 8 个里(占 PORT～PORT+2),且不碰 5190～5192、5580～5599`);
 const EDITOR = `http://127.0.0.1:${PORT}`;
 const EXPORT_DIR = path.join(os.tmpdir(), `pc-custom-measure-probe-${Date.now().toString(36)}`);
 const DATA_DIR = path.join(EXPORT_DIR, 'data');
