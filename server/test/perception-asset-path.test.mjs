@@ -8,23 +8,21 @@
  *
  * 用例(PK = perception,感知工具读素材;MI = media ingest,生成的素材入库):
  *   PK-1  请求体 → 素材标识:只取 id / name / kind / url / hash,path 一概不取;没有标识 400、素材服务上没有 404、不可达 502;
- *   PK-2  Python 包认不认地址:ACCEPTS_URL 标记;问不出来按不认;问的那行代码不带 cmd 元字符;
- *   PK-3  流到临时文件:字节相同、cleanup 连目录删;404 / 连不上抛 AssetSourceError 且不留临时目录;
+ *   PK-2  Python 包认不认地址:答 1 才算认,其余一律按不认;问的那行代码不带 cmd 元字符(用假的解释器,不要本机 Python);
+ *   PK-3  给 Python 的输入:认地址递地址,不认先流到临时文件(字节相同、用完删);404 / 连不上抛 AssetSourceError 且不留临时目录;
  *   ── 以下起真的素材服务(fs 内容库 + 媒体中间件,前面挂一个计数的转发)与真的 ffmpeg,插件经 typescript 转译后直接挂到 http 上 ──
  *   PK-4  镜头识别(scdet 档,不要 Python):素材目录不可读、素材服务可达时照常出结果,转场时刻、时长、帧率与直接读文件的 scdet 相同,
  *         缩略图与直接读文件抽的逐字节相同;字节确实经素材服务来(Range 请求);
  *   PK-5  三条接口:请求体带任意 path(指着真实存在的文件)不会被读;没有标识 400、素材服务上没有 404、素材服务不可达 502,分得清;
- *   PK-6  运动追踪(模板匹配档,要一个带 numpy 的 Python):经素材服务的地址追出来的点与直接读文件的逐项相同;
- *   PK-7  老的 Python 包(没有 ACCEPTS_URL):先把字节流到临时文件再递路径,结果照样相同,临时目录用完删掉;
- *   PK-8  主体检测:地址过得了 Python 的入口检查(不再报「找不到视频文件」);抽帧那一步经地址与读文件解出的像素逐字节相同;
+ *   (要真 Python 的检查 —— 三个包答 ACCEPTS_URL、运动追踪经地址与读文件结果相同、老包走临时文件、主体检测抽帧像素相同 ——
+ *    在探针 scripts/probes/asset-path-probe.mjs 的 P6～P11,单测不随机器上有没有 Python 而多出跳过)
  *   MI-1  入库:字节进内容库、哈希是内容的 sha256、同样内容第二次去重;
  *   MI-2  入库失败分得清:取不到地址 / 连不上 / 拒绝(HTTP 500) → AssetSourceError;要入库的文件不见了 → 普通错误;
  *   MI-3  配音:合成结果经入库接口进内容库,回 /@media/<hash> 与入库回包,不回临时路径;素材目录里没有绕过入库的文件;临时目录删掉;
  *   MI-4  配音时素材服务不可达:回 502 与 kind asset-service,素材目录与临时目录都不留东西。
  *
  * 跑:node --test server/test/perception-asset-path.test.mjs
- *   要 ffmpeg(找不到时 PK-4 起跳过);PK-6～PK-8 另要一个带 numpy 的 Python(PATH 上的 python,或 PROMPTCUT_TEST_PYTHON 指定),找不到时跳过。
- *   这台机器上没有 TransNetV2 / BootsTAPIR / YuNet 等模型,真的模型推理不在本文件里跑。
+ *   要 ffmpeg(找不到时 PK-4 起跳过)。不要 Python:镜头识别走 scdet 兜底档,追踪与主体检测只测接口的取素材那一步。
  */
 import assert from 'node:assert/strict';
 import { test, before, after } from 'node:test';
@@ -105,53 +103,53 @@ test('PK-1 请求体 → 素材标识:path 一概不取;没有标识 400、没�
   assert.ok(down.error.includes(`素材服务不可达(${gone})`), down.error);
 });
 
-/** 带 numpy 的 Python:PROMPTCUT_TEST_PYTHON,或 PATH 上的 python / python3(要真实存在的可执行文件,findPython 只认存在的路径) */
-function findTestPython() {
-  const cands = [SAVED_ENV.PROMPTCUT_TEST_PYTHON, 'python', 'python3'].filter(Boolean);
-  for (const cmd of cands) {
-    try {
-      const r = spawnSync(cmd, ['-c', 'import sys, numpy; sys.stdout.write(sys.executable)'], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
-      const exe = String(r.stdout || '').trim();
-      if (r.status === 0 && exe && fs.existsSync(exe)) return exe;
-    } catch { /* 下一个 */ }
-  }
-  return null;
-}
-const PY = findTestPython();
-const skipPy = PY ? false : '没有带 numpy 的 Python';
-/** 让 Python 找得到仓库里的包(和 vite-plugin-stt 的 buildEnv 对普通解释器的做法相同) */
-const pyEnv = (pylibs = process.env.PROMPTCUT_PYLIBS) => ({ ...process.env, PYTHONPATH: pylibs + path.delimiter + path.join(ROOT, 'python'), PYTHONNOUSERSITE: '1', PYTHONUTF8: '1', PROMPTCUT_PYLIBS: pylibs });
-const spawnPy = (python, args, env) => spawn(python, args, { env, windowsHide: true });
+/**
+ * 假的「Python」:不管递什么参数,都起一个 node 子进程把 answer 写到 stdout 后退出(退出码 code)。
+ * 单测不依赖本机有没有 Python(依赖真 Python 的检查在 scripts/probes/asset-path-probe.mjs 的 P9～P11)。
+ */
+const fakePython = (answer, code = 0) => () => spawn(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(answer)}); process.exit(${code})`], { windowsHide: true });
 
-test('PK-2 Python 包认不认地址:三个包都带 ACCEPTS_URL;问不出来按不认;问的那行代码不带 cmd 元字符', { skip: skipPy }, async () => {
+test('PK-2 Python 包认不认地址:答 1 才算认;答 0、退出码非 0、解释器起不来、spawn 抛错都按不认;问的那行代码不带 cmd 元字符', async () => {
   for (const pkg of ['promptcut_shots', 'promptcut_track', 'promptcut_subject']) {
-    assert.ok(!/[&|<>^"%]/.test(acceptsUrlCode(pkg)), '.cmd 解释器会拒绝带元字符的参数');
-    assert.equal(await pythonAcceptsUrl({ python: PY, env: pyEnv(), pkg, spawnPython: spawnPy }), true, pkg);
+    const code = acceptsUrlCode(pkg);
+    assert.ok(!/[&|<>^"%]/.test(code), '.cmd 解释器会拒绝带元字符的参数');
+    assert.ok(code.includes(`'${pkg}'`) && code.includes('ACCEPTS_URL'));
   }
-  assert.equal(await pythonAcceptsUrl({ python: PY, env: pyEnv(), pkg: 'promptcut_no_such_pkg', spawnPython: spawnPy }), false, 'import 失败按不认');
-  assert.equal(await pythonAcceptsUrl({ python: path.join(TMP, 'no-python.exe'), env: pyEnv(), pkg: 'promptcut_track', spawnPython: spawnPy }), false, '解释器起不来按不认');
-  assert.equal(await pythonAcceptsUrl({ python: PY, env: pyEnv(), pkg: 'promptcut_track', spawnPython: () => { throw new Error('refuse'); } }), false, 'spawn 抛错按不认');
+  const ask = (spawnPython, python = 'python') => pythonAcceptsUrl({ python, env: process.env, pkg: 'promptcut_track', spawnPython });
+  assert.equal(await ask(fakePython('1')), true);
+  assert.equal(await ask(fakePython('0')), false);
+  assert.equal(await ask(fakePython('1', 3)), false, '退出码非 0 按不认');
+  assert.equal(await ask((python, args, env) => spawn(python, args, { env, windowsHide: true }), path.join(TMP, 'no-python.exe')), false, '解释器起不来按不认');
+  assert.equal(await ask(() => { throw new Error('refuse'); }), false, 'spawn 抛错按不认');
+  // 问的时候递的参数:-c 加那一行代码
+  let seenArgs = null;
+  await ask((python, args) => { seenArgs = args; return fakePython('1')(); });
+  assert.deepEqual(seenArgs, ['-c', acceptsUrlCode('promptcut_track')]);
 });
 
-test('PK-3 流到临时文件:字节相同、cleanup 连目录删;404 与连不上抛 AssetSourceError,不留临时目录', async () => {
+test('PK-3 给 Python 的输入:认地址递地址;不认就流到临时文件(字节相同、用完删);404 与连不上抛 AssetSourceError,不留临时目录', async () => {
   const body = crypto.randomBytes(300_000);
   const svc = await listen((req, res) => {
     if (req.url === '/missing') { res.statusCode = 404; return res.end('no'); }
     res.writeHead(200, { 'Content-Length': body.length }); res.end(body);
   });
   const root = fs.mkdtempSync(path.join(TMP, 'dl-'));
-  const t = await downloadToTemp(`${svc.origin}/ok`, { name: '镜头.MP4' }, { tmpRoot: root });
-  assert.equal(path.extname(t.file), '.mp4', '扩展名照素材名');
-  assert.deepEqual(fs.readFileSync(t.file), body);
-  t.cleanup();
-  assert.deepEqual(fs.readdirSync(root), []);
+  const src = `${svc.origin}/ok`;
+  const viaUrl = await pythonInput({ src, ref: {}, python: 'py', env: {}, pkg: 'promptcut_track', spawnPython: fakePython('1'), tmpRoot: root });
+  assert.deepEqual([viaUrl.via, viaUrl.input], ['url', src], '新包:原样递地址');
+  const viaTemp = await pythonInput({ src, ref: { name: '镜头.MP4' }, python: 'py', env: {}, pkg: 'promptcut_track', spawnPython: fakePython('0'), tmpRoot: root });
+  assert.equal(viaTemp.via, 'temp', '老包:先流到临时文件');
+  assert.equal(path.extname(viaTemp.input), '.mp4', '扩展名照素材名');
+  assert.deepEqual(fs.readFileSync(viaTemp.input), body);
+  viaTemp.cleanup();
+  assert.deepEqual(fs.readdirSync(root), [], 'cleanup 连目录删');
   await assert.rejects(downloadToTemp(`${svc.origin}/missing`, {}, { tmpRoot: root }), (e) => e instanceof AssetSourceError && /HTTP 404/.test(e.message));
   assert.deepEqual(fs.readdirSync(root), [], '失败也不留临时目录');
   await closeServer(svc.server);
   const gone = await closedOrigin();
-  await assert.rejects(downloadToTemp(`${gone}/x`, {}, { tmpRoot: root }), (e) => e instanceof AssetSourceError && /取字节失败/.test(e.message));
+  await assert.rejects(pythonInput({ src: `${gone}/x`, ref: {}, python: 'py', env: {}, pkg: 'x', spawnPython: fakePython('0'), tmpRoot: root }), (e) => e instanceof AssetSourceError && /取字节失败/.test(e.message));
   assert.deepEqual(fs.readdirSync(root), []);
-  // 地址以外的输入原样递(解析器只拼 http 地址,这条只是兜底)
+  // 地址以外的输入原样递(解析器只拼 http 地址,这条只是兜底),也不去问 Python
   const passthrough = await pythonInput({ src: 'C:\\x.mp4', ref: {}, python: 'none', env: {}, pkg: 'x', spawnPython: () => { throw new Error('不该问'); } });
   assert.equal(passthrough.input, 'C:\\x.mp4');
 });
@@ -244,12 +242,6 @@ if (FFMPEG) {
     '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=25:d=1',
     '-f', 'lavfi', '-i', 'color=c=green:s=160x90:r=25:d=1',
     '-filter_complex', '[0][1][2]concat=n=3:v=1:a=0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-  ]);
-  // 黑底上一块向右匀速移动的白方块(160x120、10 fps、2 秒):模板匹配追它的中心
-  files.move = gen(path.join(TMP, 'move.mp4'), [
-    '-f', 'lavfi', '-i', 'color=c=black:s=160x120:r=10:d=2',
-    '-f', 'lavfi', '-i', 'color=c=white:s=16x16:r=10:d=2',
-    '-filter_complex', "[0][1]overlay=x='20+t*30':y=50", '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '5',
   ]);
 }
 
@@ -345,149 +337,6 @@ test('PK-5 三条接口:任意 path 不会被读;没有标识 400、没有这份
     process.env.PROMPTCUT_EDITOR_URL = service.origin;
   }
 });
-
-/** 改前的读法:直接对本地文件跑 promptcut_track(模板匹配档),取 result 事件 */
-function trackDirect(file, points, pylibs) {
-  const r = spawnSync(PY, ['-m', 'promptcut_track', 'track', '--video', file, '--points', JSON.stringify(points)], { env: pyEnv(pylibs), encoding: 'utf8', windowsHide: true, timeout: 120_000 });
-  const line = String(r.stdout).split(/\r?\n/).find((l) => l.includes('"event": "result"') || l.includes('"event":"result"'));
-  assert.ok(line, '直接跑追踪没有 result:' + r.stdout + r.stderr);
-  const ev = JSON.parse(line);
-  return { engine: ev.engine, width: ev.width, height: ev.height, frames: ev.frames, points: ev.points };
-}
-
-const POINTS = [[0, 28, 58]];
-const skipTrack = skip || skipPy;
-
-test('PK-6 运动追踪(模板匹配档):经素材服务的地址追出来的与直接读文件的逐项相同', { skip: skipTrack }, async () => {
-  process.env.PROMPTCUT_PYTHON = PY;
-  try {
-    service.reset();
-    const r = await post(trackSrv.origin, '/api/track/track', { mediaId: 'm-move', media: refOf('move'), path: path.join(GONE, 'move.mp4'), points: POINTS });
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    const job = await waitJob(trackSrv.origin, '/api/track', r.json.jobId);
-    assert.equal(job.status, 'done', JSON.stringify(job));
-    assert.equal(job.engine, 'template', '这台机器没有 BootsTAPIR,走模板匹配');
-    const direct = trackDirect(files.move, POINTS);
-    assert.deepEqual({ engine: job.engine, width: job.width, height: job.height, frames: job.frames, points: job.points }, direct);
-    assert.equal(job.frames, 20);
-    const dx = job.points[0].xy.at(-1)[0] - job.points[0].xy[0][0];
-    assert.ok(dx > 40 && dx < 70, `方块应右移约 57 像素,追到 ${dx}`);
-    const gets = service.mediaGets(hashes.move);
-    assert.ok(gets.length >= 2, '字节经素材服务来:' + JSON.stringify(gets));
-    assert.ok(gets.slice(1).some((g) => g.range !== 'bytes=0-0'), '除了探测还有 ffmpeg 自己的读取');
-  } finally {
-    delete process.env.PROMPTCUT_PYTHON;
-  }
-});
-
-/** 造一份「老包」:照仓库里的 promptcut_track 拷一份,去掉 ACCEPTS_URL 与地址放行,放进 pylibs(PYTHONPATH 里排在仓库之前) */
-function makeOldTrackPackage(pylibs) {
-  const src = path.join(ROOT, 'python', 'promptcut_track');
-  const dst = path.join(pylibs, 'promptcut_track');
-  fs.cpSync(src, dst, { recursive: true, filter: (s) => !s.includes('__pycache__') });
-  const init = path.join(dst, '__init__.py');
-  const initSrc = fs.readFileSync(init, 'utf8');
-  assert.ok(initSrc.includes('ACCEPTS_URL = True'));
-  fs.writeFileSync(init, initSrc.replace('ACCEPTS_URL = True', ''));
-  const main = path.join(dst, '__main__.py');
-  let mainSrc = fs.readFileSync(main, 'utf8');
-  for (const [a, b] of [
-    ['from . import __version__, is_media_url', 'from . import __version__'],
-    ['if not (is_media_url(args.video) or os.path.isfile(args.video)):', 'if not os.path.isfile(args.video):'],
-  ]) {
-    assert.ok(mainSrc.includes(a), a);
-    mainSrc = mainSrc.replace(a, b);
-  }
-  fs.writeFileSync(main, mainSrc);
-}
-
-test('PK-7 老的 Python 包(没有 ACCEPTS_URL):先流到临时文件再递路径,结果相同,临时目录用完删掉', { skip: skipTrack }, async () => {
-  const oldLibs = path.join(TMP, 'pylibs-old');
-  makeOldTrackPackage(oldLibs);
-  // 老包见到地址确实会拒绝(这正是要兜底的情形)
-  const refused = spawnSync(PY, ['-m', 'promptcut_track', 'track', '--video', `${service.origin}/@media/${hashes.move}`, '--points', JSON.stringify(POINTS)], { env: pyEnv(oldLibs), encoding: 'utf8', windowsHide: true, timeout: 60_000 });
-  assert.match(refused.stdout, /找不到视频文件/, '老包应拒绝地址');
-  assert.equal(await pythonAcceptsUrl({ python: PY, env: pyEnv(oldLibs), pkg: 'promptcut_track', spawnPython: spawnPy }), false);
-
-  const privateTmp = path.join(TMP, 'os-tmp');
-  fs.mkdirSync(privateTmp, { recursive: true });
-  const saved = { PYLIBS: process.env.PROMPTCUT_PYLIBS, TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
-  Object.assign(process.env, { PROMPTCUT_PYTHON: PY, PROMPTCUT_PYLIBS: oldLibs, TEMP: privateTmp, TMP: privateTmp, TMPDIR: privateTmp });
-  try {
-    service.reset();
-    const r = await post(trackSrv.origin, '/api/track/track', { mediaId: 'm-move', media: refOf('move'), points: POINTS });
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    const job = await waitJob(trackSrv.origin, '/api/track', r.json.jobId);
-    assert.equal(job.status, 'done', JSON.stringify(job));
-    assert.deepEqual({ engine: job.engine, width: job.width, height: job.height, frames: job.frames, points: job.points }, trackDirect(files.move, POINTS));
-    const gets = service.mediaGets(hashes.move);
-    assert.ok(gets.some((g) => g.range === null && g.status === 200), '整份取了一次(流到临时文件):' + JSON.stringify(gets));
-    assert.deepEqual(fs.readdirSync(privateTmp).filter((n) => n.startsWith('pc-perception-')), [], '临时目录用完删掉');
-  } finally {
-    for (const [k, v] of Object.entries({ PROMPTCUT_PYLIBS: saved.PYLIBS, TEMP: saved.TEMP, TMP: saved.TMP, TMPDIR: saved.TMPDIR })) {
-      if (v === undefined) delete process.env[k]; else process.env[k] = v;
-    }
-    delete process.env.PROMPTCUT_PYTHON;
-  }
-});
-
-test('PK-8 主体检测:地址过得了 Python 的入口检查;抽帧那一步经地址与读文件解出的像素逐字节相同', { skip: skipTrack }, async () => {
-  process.env.PROMPTCUT_PYTHON = PY;
-  try {
-    service.reset();
-    const r = await post(subjectSrv.origin, '/api/subject/detect', { mediaId: 'm-move', media: refOf('move'), path: path.join(GONE, 'move.mp4'), times: [0.5, 1.2] });
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    const job = await waitJob(subjectSrv.origin, '/api/subject', r.json.jobId, 180_000);
-    assert.doesNotMatch(String(job.message || ''), /找不到视频文件/, '地址要过得了入口检查');
-    if (job.status === 'done') {
-      // 装了模型的机器上真的跑完了:样本形状照常
-      assert.equal(job.samples.length, 2);
-      assert.deepEqual([job.width, job.height], [160, 120]);
-    } else {
-      // 没装主体检测拓展(这台机器的情形):停在「未就绪」,不是读素材失败
-      assert.match(job.message, /未就绪/, JSON.stringify(job));
-    }
-  } finally {
-    delete process.env.PROMPTCUT_PYTHON;
-  }
-  // 取字节那一步:frames.probe_size + grab_frame 经素材服务地址与直接读文件,宽高与 BGR 像素逐字节相同
-  const script = path.join(TMP, 'frames_check.py');
-  fs.writeFileSync(script, [
-    'import sys, json, hashlib',
-    'from promptcut_subject import frames as F',
-    'ff = sys.argv[1]',
-    'out = []',
-    'for v in sys.argv[2:]:',
-    '    w, h = F.probe_size(ff, v)',
-    '    fw, fh = F.target_size(w, h, 640)',
-    '    rows = []',
-    '    for t in (0.0, 0.5, 1.2):',
-    '        fr = F.grab_frame(ff, v, t, fw, fh)',
-    '        rows.append([list(fr.shape), hashlib.sha256(fr.tobytes()).hexdigest()])',
-    '    out.append({"size": [w, h], "frames": rows})',
-    'print(json.dumps(out))',
-  ].join('\n'));
-  service.reset();
-  const url = `${service.origin}/@media/${hashes.move}`;
-  // 必须异步跑:素材服务就在本测试进程里,spawnSync 会卡住事件循环,ffprobe 发来的请求没人答
-  const c = await runAsync(PY, [script, FFMPEG, url, files.move], pyEnv());
-  assert.equal(c.status, 0, c.stderr);
-  const [viaUrl, viaFile] = JSON.parse(c.stdout.trim().split(/\r?\n/).at(-1));
-  assert.deepEqual(viaUrl, viaFile);
-  assert.deepEqual(viaUrl.size, [160, 120]);
-  assert.ok(service.mediaGets(hashes.move).length >= 4, '抽帧经素材服务取字节');
-});
-
-function runAsync(cmd, args, env, timeoutMs = 120_000) {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { env, windowsHide: true });
-    let stdout = '', stderr = '';
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }); });
-  });
-}
 
 /* ------------------------------------------------------------------ MI:生成的素材经入库接口进内容库 */
 
