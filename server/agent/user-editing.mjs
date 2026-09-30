@@ -13,7 +13,10 @@
  * 2. **覆盖了别人刚写的**:文档服务对一次提交回的 `overwrote`(10 分钟内覆盖了别的写入身份写的实体)
  *    放进工具结果:写入方是页面的标成「用户刚改过」,别的 Agent 标成「Agent <身份> 刚改过」。
  *
- * 跨设备(共享项目里别的成员正在编辑)不在这里:要文档服务加一条「编辑状态」的协议,计划 A3 一起做。
+ * 3. **跨设备**(计划 A3 第二阶段):共享项目里别的成员的页面经文档服务的在场状态(`presence.*`,
+ *    `../docservice/modules/presence.mjs`)发布自己正在编辑的片段,编辑器进程收到后记成**另一个来源**
+ *    (`reportRemote`,带成员名与过期时刻),Agent 读写到时提示「用户 <成员>正在编辑」。本机页面自己也经文档服务发布一份,
+ *    按页面会话号认出来、不重复算(`reportRemote` 跳过本机报过的会话)。
  */
 
 export const USER_EDITING_DEFAULTS = Object.freeze({
@@ -46,11 +49,19 @@ export function createUserEditingBoard(options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => Date.now();
   /** session → Map(clipId → { clipId, kind, since, expiresAt }) */
   const sessions = new Map();
+  /** 共享项目别的成员(经文档服务):远端会话 → { who, entries: Map(clipId → …) } */
+  const remote = new Map();
+  /** 本机页面报过的会话号:它们经文档服务回来的那一份不再算(`reportRemote` 跳过) */
+  const localSeen = new Set();
 
   function prune(t = now()) {
     for (const [session, list] of sessions) {
       for (const [id, e] of list) if (e.expiresAt <= t) list.delete(id);
       if (!list.size) sessions.delete(session);
+    }
+    for (const [key, r] of remote) {
+      for (const [id, e] of r.entries) if (e.expiresAt <= t) r.entries.delete(id);
+      if (!r.entries.size) remote.delete(key);
     }
   }
 
@@ -83,7 +94,46 @@ export function createUserEditingBoard(options = {}) {
       sessions.delete(session);
       if (next.size) sessions.set(session, next);
       while (sessions.size > o.maxSessions) sessions.delete(sessions.keys().next().value);
+      localSeen.add(session);
+      if (localSeen.size > 256) localSeen.delete(localSeen.values().next().value);
+      remote.delete(session);
       return next.size;
+    },
+
+    /**
+     * 共享项目别的成员的页面经文档服务报上来的一份(整份替换这个远端会话)。
+     * `session` 是那个页面的会话号(本机报过的跳过);`who` 是成员名;`expiresAt` 是文档服务给的过期时刻。
+     * 回记下的条数(跳过的回 0)。
+     */
+    reportRemote(session, entities, { who = null, expiresAt } = {}) {
+      if (typeof session !== 'string' || !SESSION_RE.test(session)) return 0;
+      if (localSeen.has(session)) return 0;
+      const t = now();
+      const until = Number.isFinite(expiresAt) ? Math.min(expiresAt, t + o.ttlMs) : t + o.ttlMs;
+      const prev = remote.get(session)?.entries;
+      const next = new Map();
+      for (const raw of Array.isArray(entities) ? entities : []) {
+        if (next.size >= o.maxEntities) break;
+        if (!isPlainObject(raw) || typeof raw.clipId !== 'string' || !CLIP_ID_RE.test(raw.clipId) || !EDITING_KINDS.includes(raw.kind)) continue;
+        let end = until;
+        if (raw.kind === 'recent') {
+          const left = Number(raw.remainingMs);
+          if (!Number.isFinite(left) || left <= 0) continue;
+          end = Math.min(until, t + Math.min(left, o.recentMaxMs));
+        }
+        const old = next.get(raw.clipId);
+        if (old && KIND_RANK[old.kind] <= KIND_RANK[raw.kind]) continue;
+        const same = prev?.get(raw.clipId);
+        next.set(raw.clipId, { clipId: raw.clipId, kind: raw.kind, since: same && same.kind === raw.kind ? same.since : t, expiresAt: end });
+      }
+      remote.delete(session);
+      if (next.size) remote.set(session, { who: typeof who === 'string' && who ? who.slice(0, 64) : null, entries: next });
+      while (remote.size > o.maxSessions) remote.delete(remote.keys().next().value);
+      return next.size;
+    },
+
+    clearRemote(session) {
+      remote.delete(session);
     },
 
     /** 页面走了(或测试):清掉这个会话 */
@@ -91,7 +141,10 @@ export function createUserEditingBoard(options = {}) {
       sessions.delete(session);
     },
 
-    /** 此刻「正在编辑」的片段:每个片段一条(几个会话都报了的,取最强的那种),按片段 id 排 */
+    /**
+     * 此刻「正在编辑」的片段:每个片段一条(几个会话都报了的,取最强的那种;一样强时本机的优先),按片段 id 排。
+     * 共享项目别的成员正在编辑的带 `who`(成员名)。
+     */
     current() {
       const t = now();
       prune(t);
@@ -102,13 +155,19 @@ export function createUserEditingBoard(options = {}) {
           if (!old || KIND_RANK[e.kind] < KIND_RANK[old.kind]) merged.set(e.clipId, e);
         }
       }
+      for (const r of remote.values()) {
+        for (const e of r.entries.values()) {
+          const old = merged.get(e.clipId);
+          if (!old || KIND_RANK[e.kind] < KIND_RANK[old.kind]) merged.set(e.clipId, r.who ? { ...e, who: r.who } : e);
+        }
+      }
       return [...merged.values()]
         .sort((a, b) => (a.clipId < b.clipId ? -1 : a.clipId > b.clipId ? 1 : 0))
-        .map((e) => ({ clipId: e.clipId, kind: e.kind, forMs: Math.max(0, t - e.since) }));
+        .map((e) => ({ clipId: e.clipId, kind: e.kind, forMs: Math.max(0, t - e.since), ...(e.who ? { who: e.who } : {}) }));
     },
 
     describe() {
-      return { sessions: sessions.size, entities: this.current() };
+      return { sessions: sessions.size, remote: remote.size, entities: this.current() };
     },
   };
 }
@@ -169,17 +228,26 @@ export function readsWholeProject(tool, args) {
  */
 export function userEditingFor({ tool, args, written = [], editing = [] }) {
   if (!Array.isArray(editing) || !editing.length) return [];
-  if (readsWholeProject(tool, args)) return editing.map((e) => ({ clipId: e.clipId, kind: e.kind }));
+  const view = (e) => ({ clipId: e.clipId, kind: e.kind, ...(e.who ? { who: e.who } : {}) });
+  if (readsWholeProject(tool, args)) return editing.map(view);
   const touched = new Set([...clipIdsOfArgs(args), ...(Array.isArray(written) ? written : [])]);
-  return editing.filter((e) => touched.has(e.clipId)).map((e) => ({ clipId: e.clipId, kind: e.kind }));
+  return editing.filter((e) => touched.has(e.clipId)).map(view);
 }
 
 /** 给模型看的那句话 */
 export function userEditingNotice(list, limits = USER_EDITING_DEFAULTS) {
   if (!Array.isArray(list) || !list.length) return '';
-  const shown = list.slice(0, limits.showMax).map((e) => `片段 ${e.clipId}(${KIND_TEXT[e.kind] ?? e.kind})`);
-  const more = list.length > shown.length ? ` 等 ${list.length} 个` : '';
-  return `用户正在编辑${shown.join('、')}${more}。这是提示不是禁止:用户可能正是在这里给你下指令;要改之前先确认不会覆盖用户手上的修改,拿不准就停下问用户。`;
+  const capped = list.slice(0, limits.showMax);
+  const more = list.length > capped.length ? ` 等 ${list.length} 个` : '';
+  // 本机用户一句;共享项目里别的成员各一句「用户 <成员>正在编辑……」(A3 第二阶段)
+  const groups = new Map();
+  for (const e of capped) {
+    const who = typeof e.who === 'string' && e.who ? e.who : '';
+    if (!groups.has(who)) groups.set(who, []);
+    groups.get(who).push(`片段 ${e.clipId}(${KIND_TEXT[e.kind] ?? e.kind})`);
+  }
+  const parts = [...groups].map(([who, items]) => `${who ? `用户 ${who} ` : '用户'}正在编辑${items.join('、')}`);
+  return `${parts.join(';')}${more}。这是提示不是禁止:用户可能正是在这里给你下指令;要改之前先确认不会覆盖用户手上的修改,拿不准就停下问用户。`;
 }
 
 /**

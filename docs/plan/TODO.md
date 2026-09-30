@@ -36,7 +36,7 @@
 `docs/semantics/` 已经定下、代码还没跟上的地方。按 `suggested_agent_behavior.md` 原则 2，这些都算代码要改。2026-09-30 按 M5～M8 与之后的合入更新（笔记本主会话）；M8 收尾时的逐条对照见 `docs/reports/REPORT-M5-M8.md` 第 6.3 节。
 
 - **工作方式**：去掉对话式布局；SKILL 改为桌面 APP 经 MCP 直接接入同一个项目（现在是把项目快照进独立任务目录、由无头实例改副本、最后三方合并）；关闭编辑界面转为托盘和悬浮窗后台运行。
-- **Agent**：三档创造力等级（项目默认、对话可改）已合入（2026-09-30，计划 A1）；本机的「用户正在编辑」与覆盖提示已合入（同日，A2）。还没做：主 Agent 拉起子 Agent 并附加角色、现有的分工模式归档、共享项目里跨设备的「正在编辑」、被覆盖的一方得知（A3）；Agent 用 JS 自定义测量（A6）。计划见 `docs/plan/agent-workflow-plan.md`。
+- **Agent**：计划 `docs/plan/agent-workflow-plan.md` 的 A1（三档创造力等级）、A2（本机的「用户正在编辑」与覆盖提示）、A3（主 Agent 拉起子 Agent 并附加角色、分工模式归档、公告板搬到本机服务、双方都知道覆盖、跨设备的在场状态）、A6（Agent 用 JS 自定义测量）都已合入（2026-09-30）。剩下的 SKILL 经 MCP 直连（A4）与后台运行（A5）见上一条「工作方式」。
 - **查询渲染**：2026-09-30 合入 `claude/query-render`：用户点开的操作预览不占 Agent 专用实例、插到普通预渲染待办之前；Agent 专用实例开着且空闲时接普通预渲染（队列里的一项，或后台那一趟的一批卡）。还没做：预渲染进程的三种模式（Agent / User / Full，`mechanism/rendering.md`），现在总是三条 lane 都建，相当于一直是 Full；队列模式的认领闸（节点在专用实例空着时多认领一项）；后台那一趟的锚帧、整场景、MOV 绑死在后台实例上，专用实例借不到。出处 `docs/archive/agent-reports/AGENT-query-render.md` 第 7 节。
 - **Agent 读素材的路径**：`measure_audio`（以及 A6 的 `measure_audio_js`）在编辑器进程里按素材目录直接找文件交给 ffmpeg，没经素材服务的接口，与 `product/agent.md`「素材与产物」不符。两条一起改：经素材服务的接口取字节再交 ffmpeg。2026-09-30 A6 子 Agent 发现。
 - **会话与传输**：会话模型（双向序号与确认、中断后在保留期内接续）已随 HT-a 合入；HTTP 长轮询传输（HT-b）按触发条件再做，见上文「未开始的计划」。只能经 TLS 中间人代理出网的浏览器连不上 WebSocket（加入不了项目、当不了节点），同归 HT-b。

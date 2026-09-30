@@ -1,5 +1,5 @@
 {
- "note": "仅供测试。C10 契约第 10 节「/api 棘轮清单只许减不许增」的基线：claude/c10a-integ 5b2fccc 上 server/test/c10a-online-api-paths.json 的 paths 原样拷来（2026-09-27）。c10-ui-gates.test.mjs 断言那份清单始终是这里的子集。C10a 合入前若那份清单又改过，由集成方按合入时的内容更新本文件（假设 K9）。",
+ "note": "仅供测试。C10 契约第 10 节「/api 棘轮清单只许减不许增」的基线：claude/c10a-integ 5b2fccc 上 server/test/c10a-online-api-paths.json 的 paths 原样拷来（2026-09-27）。c10-ui-gates.test.mjs 断言那份清单始终是这里的子集。C10a 合入前若那份清单又改过，由集成方按合入时的内容更新本文件（假设 K9）。2026-09-30 计划 agent-workflow-plan.md A3 归档分工模式：路由 /api/ai/plan、/api/ai/triage 从代码里删掉，基线随之删去这两条（只减不增）。",
  "source": "claude/c10a-integ@5b2fccc:server/test/c10a-online-api-paths.json",
  "paths": [
   "/api/agent/bind",
@@ -14,11 +14,9 @@
   "/api/ai/install",
   "/api/ai/machine-code",
   "/api/ai/models",
-  "/api/ai/plan",
   "/api/ai/providers",
   "/api/ai/quota",
   "/api/ai/setup",
-  "/api/ai/triage",
   "/api/ai/visual",
   "/api/ai/visual/",
   "/api/ai/visual/render",

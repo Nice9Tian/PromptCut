@@ -25,7 +25,7 @@ export function RoleAvatar(props: { roleId?: string; size?: number }) {
   const role = roleId ? ALL_ROLES.find((r) => r.id === roleId) : undefined;
 
   // 没有角色（普通对话、或者角色卡被删了）就退回一个中性的助手头像，
-  // 不要因为找不到角色就不显示——那样分工模式和普通模式的气泡会长得不一样高。
+  // 不要因为找不到角色就不显示——那样带角色和不带角色的气泡会长得不一样高。
   const name = role?.name ?? "AI";
   const seed = role?.id ?? "assistant";
   const hue = hueOf(seed);

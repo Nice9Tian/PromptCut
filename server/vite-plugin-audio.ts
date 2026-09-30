@@ -8,6 +8,8 @@ import { isInside } from "./http-guard.mjs";
 import { findFfmpeg } from "./ai-visual.mjs";
 import { readBody } from "./vite-plugin-stt";
 import { measureArgs, timelineMeasureArgs, parseEbur128 } from "./audio-measure.mjs";
+import { measureJs } from "./audio-measure-js.mjs";
+import { getAudioSandbox } from "./audio-sandbox.mjs";
 
 function hasAudioStream(file: string, ffprobeCmd: string): boolean {
   try {
@@ -169,6 +171,18 @@ export function audioPlugin(): Plugin {
 
           } catch (e: any) {
             sendJson(res, 500, { ok: false, error: e.message || String(e) });
+          }
+        } else if (req.method === "POST" && req.url === "/api/audio/measure-js") {
+          // 自定义测量(measure_audio_js,计划 A6):解码成 PCM,在专用 Chrome 的沙箱里跑 Agent 写的 JS,只回 JSON。见 server/audio-measure-js.mjs
+          try {
+            const body = JSON.parse((await readBody(req)).toString("utf-8"));
+            const ffmpeg = findFfmpeg();
+            if (!ffmpeg) return sendJson(res, 400, { ok: false, error: "找不到 ffmpeg" });
+            const ffprobe = path.join(path.dirname(ffmpeg), "ffprobe" + path.extname(ffmpeg));
+            const out = await measureJs({ body, resolveFile: (m: any) => mediaFileOf(root, m), ffmpeg, ffprobe, sandbox: getAudioSandbox() });
+            sendJson(res, out.status, out.body);
+          } catch (e: any) {
+            sendJson(res, 500, { ok: false, error: e?.message || String(e) });
           }
         } else {
           next();

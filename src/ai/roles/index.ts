@@ -6,6 +6,9 @@
  * 拆成角色而不是一整段长提示词,是因为这两步要的东西不一样 ——
  * 排片得先看全部素材,配特效得先有文字稿 —— 混在一轮里模型容易顾此失彼。
  *
+ * 多 Agent 的 `spawn_agent`(计划 agent-workflow-plan.md A3)也从这个目录取预设角色的提示词,
+ * 服务端按同样的规则读(`server/agent/agent-roles.mjs`)。
+ *
  * 文件名用 ASCII,中文名写在文件里的一级标题上:这些名字会进构建产物和
  * 打包脚本,ASCII 路径在 Windows 的各种命令行环境里最不容易出岔子。
  */
@@ -28,7 +31,7 @@ export interface Role {
 }
 
 /** 角色对模型的要求。新增档位时同步 resolveModelFor 的注释。 */
-export type Capability = "planning" | "execution" | "triage";
+export type Capability = "planning" | "execution";
 
 /**
  * 跑的顺序。没列进来的文件仍然会被读出来(可以单独调用),但不进「一键配特效」。
@@ -73,8 +76,8 @@ export const ALL_ROLES: Role[] = Object.entries(files)
  * 按角色的能力档位挑模型。**现在是占位实现：一律返回 null，表示「用用户选的那个」。**
  *
  * 留这个函数是为了把「谁来干」和「用哪个模型」这两件事分开。以后要让
- * 规划类角色走强模型、执行类走快模型，只改这里一处；调用方（编排器）已经
- * 在按角色问它了，那时不用回头改每个角色，也不用改编排逻辑。
+ * 规划类角色走强模型、执行类走快模型，只改这里一处；以后按角色选模型的调用方
+ * 都问它，不用回头改每个角色。
  *
  * 返回 provider id（'claude' | 'codex' | 'agy' | 'api'），null 表示不指定。
  */
@@ -82,7 +85,6 @@ export function resolveModelFor(capability: Capability): string | null {
   // 将来大概会是这样：
   //   planning  → 强模型（拆解和取舍错了，后面全白跑）
   //   execution → 快模型（步骤直白，胜在便宜和快）
-  //   triage    → 最快最便宜的（它的全部价值就是比 manager 便宜）
   void capability;
   return null;
 }

@@ -9,6 +9,10 @@ import { overLimit } from './http-guard.mjs';
 import { stagePortsOf } from './stage-ports.mjs';
 import { createCallPairing } from './agent/call-pairing.mjs';
 import { createAgentSessions } from './agent/agent-sessions.mjs';
+import { createAgentBoards } from './agent/agent-board.mjs';
+import { attachLink, createMultiAgent } from './agent/multi-agent.mjs';
+import { createPresenceBridge } from './agent/presence-bridge.mjs';
+import { loadRole } from './agent/agent-roles.mjs';
 import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from './agent/user-editing.mjs';
 import { effectiveIsFile } from './card-overrides.mjs';
 import { CREATIVITY_HINT, CREATIVITY_LABEL, normalizeCreativity, projectCreativity } from '../src/kernel/creativity.mjs';
@@ -44,83 +48,6 @@ function sendJson(res: ServerResponse, code: number, data: any) {
 }
 
 /* 请求体超限的 413:实现挪去 server/http-guard.mjs 了,vision 那边也要用同一份 */
-
-/**
- * 一次「无工具、无历史」的最小补全。分工模式的编排阶段全都走它。
- *
- * 为什么不走 /api/ai/chat：那条路会带上 30 个工具的 schema 和整段历史，而
- * 编排阶段(拆任务、划依赖、分角色)一个工具都不需要用。省下的不只是 token，
- * 还有模型「看到工具就想调一下」而多花的那几轮往返。
- *
- * 只支持 API 直连：CLI 驱动每次都要起进程，做这种小调用是净亏损。
- * 拿不到配置就抛，由调用方决定怎么降级。
- */
-async function oneShotCompletion(
-  system: string, prompt: string, maxTokens: number, timeoutMs = 60000,
-): Promise<string> {
-  const configModule = await import(new URL('./ai-config.mjs', import.meta.url).href);
-  const cfg = (configModule as any).readConfig()?.api || {};
-  if (!cfg.apiKey || !String(cfg.apiKey).trim()) throw new Error('没有配置 API 直连');
-  const providerModule = await import(
-    new URL(`./harness/providers/${cfg.vendor || 'anthropic'}.mjs`, import.meta.url).href
-  );
-  // 编排阶段这几次小调用也走中转,一样会撞上「upstream load is saturated」。
-  // 撞上就整个编排失败,而它其实只要等几秒。包一层自动重试,规则和主对话那条路同源。
-  const { createRetryingFetch } = await import(new URL('./harness/retry-fetch.mjs', import.meta.url).href);
-  const provider = (providerModule as any).createProvider(
-    { ...cfg, maxTokens },
-    {
-      fetchImpl: (createRetryingFetch as any)(
-        (u: string, o: RequestInit) => fetch(u, { ...o, signal: AbortSignal.timeout(timeoutMs) }),
-        { onRetry: (i: any) => console.error(`[oneshot] ${i.reason},${i.delayMs}ms 后重试(第 ${i.attempt}/${i.of} 次)`) },
-      ),
-    },
-  );
-  let text = '';
-  for await (const ev of provider.stream(
-    [{ role: 'user', content: [{ type: 'text', text: prompt }] }], [], system, undefined,
-  )) {
-    if (ev.type === 'text_delta') text += ev.text;
-  }
-  return text;
-}
-
-
-/**
- * 用 CLI 驱动做一次一问一答。给 /api/ai/plan 在没有 API 直连时兜底。
- *
- * **不给 callTool**：规划阶段一个工具都不该调，不接 MCP 桥就从根上断了这个念头，
- * 顺带也不需要编辑台开着。CLI 起进程要几秒，所以这条路只用于规划那三次
- * （用户已经决定要编排了），不用于 triage 闸（那个必须极便宜）。
- */
-function oneShotViaCli(
-  runners: any, provider: string, system: string, prompt: string, timeoutMs = 120000,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let text = '';
-    let settled = false;
-    const finish = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
-    let run: any;
-    const timer = setTimeout(
-      () => finish(() => { try { run?.abort(); } catch {} reject(new Error('规划调用超时')); }),
-      timeoutMs,
-    );
-    try {
-      run = runners.startRun({
-        provider,
-        prompt,
-        systemPrompt: system,
-        onEvent: (ev: any) => {
-          if (ev.type === 'text' && ev.delta) text += ev.delta;
-          else if (ev.type === 'error') finish(() => { clearTimeout(timer); reject(new Error(ev.message || '规划调用失败')); });
-          else if (ev.type === 'done') finish(() => { clearTimeout(timer); resolve(text); });
-        },
-      });
-    } catch (e: any) {
-      finish(() => { clearTimeout(timer); reject(e); });
-    }
-  });
-}
 
 export default function vitePluginAi(): Plugin {
   let editorRes: ServerResponse | null = null;
@@ -334,7 +261,7 @@ export default function vitePluginAi(): Plugin {
         try { return agentSessions.get(key)?.vendor ?? null; } catch { return null; }
       };
 
-      type AgentBinding = { projectId: string; mode: string; url: string; side: any };
+      type AgentBinding = { projectId: string; mode: string; url: string; side: any; detachBoard?: () => void };
       let agentBinding: AgentBinding | null = null;
       let ticketSeq = 0;
       const ticketWaiters = new Map<string, { resolve: (ticket: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -399,11 +326,37 @@ export default function vitePluginAi(): Plugin {
             if (!out.ok) throw new Error(out.error);
             return { result: out.result || out, opIds: out.opIds };
           },
-          callServer: (tool: string, args: any) => runServerTool(tool, args),
+          callServer: (tool: string, args: any, ctx: any) => runServerTool(tool, args, ctx?.agent || ''),
           userEditing: () => userEditingBoard.current(),
           agentLabel: agentLabelOf,
+          onPageWrites: (agent: string, opIds: string[]) => boards.boardFor(projectId).attributeOps(agent, opIds),
         });
-        agentBinding = { projectId, mode, url, side };
+        // 公告板的改动记录由这条连接的提交流喂;发给各对话连接的 project.overwritten 记给被覆盖的那个 Agent(A3)
+        const detachLink = attachLink(side.link, () => boards.boardFor(projectId));
+        /*
+         * 跨设备(A3 第二阶段):经文档服务的在场状态收别的成员正在编辑的片段(进 A2 看板)、别的成员那边 Agent 的范围与消息
+         * (进公告板),发本机 Agent 的范围与发给他们的消息。旧版文档服务不认识这些消息就停发,不报错。
+         */
+        const bridge = createPresenceBridge({
+          link: side.link,
+          board: () => boards.boardFor(projectId),
+          editing: userEditingBoard,
+          conversationNumberOf: (key: string) => side.conversationNumber(key),
+          labelOf: agentLabelOf,
+          infoOf: (key: string) => ({ role: agentSessions.get(key).role }),
+          log: agentLog,
+        });
+        presenceBridge = bridge;
+        boards.boardFor(projectId).onDeclare = (key: string) => { void bridge.publishAgent(key); };
+        void bridge.start();
+        const detachBoard = () => {
+          detachLink();
+          bridge.close();
+          if (presenceBridge === bridge) presenceBridge = null;
+          const b = boards.boardFor(projectId);
+          b.onDeclare = null;
+        };
+        agentBinding = { projectId, mode, url, side, detachBoard };
         agentLog("agent.bind", { projectId, mode, url });
         return agentBinding;
       }
@@ -412,6 +365,7 @@ export default function vitePluginAi(): Plugin {
         const b = agentBinding;
         if (!b) return;
         agentBinding = null;
+        try { b.detachBoard?.(); } catch { /* 已经解了 */ }
         try { b.side.close(); } catch { /* 已经关了 */ }
         agentLog("agent.unbind", { projectId: b.projectId, reason });
       }
@@ -442,6 +396,76 @@ export default function vitePluginAi(): Plugin {
       function userCardExists(id: string): boolean {
         return effectiveIsFile(server.config.root, path.join(server.config.root, 'src', 'cards', 'user', `${id}.tsx`));
       }
+
+      /*
+       * ---------------- 多 Agent(计划 agent-workflow-plan.md A3) ----------------
+       *
+       * 公告板(server/agent/agent-board.mjs)按项目一份,在这个进程里:declare_scope / list_agents / send_message /
+       * check_messages 在这里答(side: "server"),所有 Agent 看到同一份。改动记录由文档服务的提交流喂(绑了项目副本时,
+       * attachLink),没绑时由页面执行器算好范围随结果带回来、在下面 dispatchTool 里记。
+       * spawn_agent(server/agent/multi-agent.mjs)经 SSE 让页面开新页签(agent.spawn),页面 POST /api/agent/spawned 回话。
+       * 页签上的范围名、未读标记经同一条 SSE 推给页面(agent.board);页面空闲时 POST /api/agent/inbox 取走消息发出。
+       */
+      /** 当前项目:绑了副本用副本的项目 id,否则用镜像里的项目 id,都没有是 ''(本机那一份) */
+      const currentProjectKey = (): string => {
+        const b = agentBinding;
+        if (b) return b.projectId;
+        const id = (latestMirror() as any)?.project?.id;
+        return typeof id === 'string' ? id : '';
+      };
+      let lastTabs: any[] = [];
+      let presenceBridge: any = null;
+      let boardPushTimer: ReturnType<typeof setTimeout> | null = null;
+      const pushBoard = () => {
+        if (boardPushTimer) return;
+        boardPushTimer = setTimeout(() => {
+          boardPushTimer = null;
+          if (!editorRes) return;
+          try { editorRes.write(`data: ${JSON.stringify({ type: 'agent.board', agents: board().snapshot() })}\n\n`); } catch { /* 页面走了 */ }
+        }, 50);
+      };
+      const boards = createAgentBoards(() => ({
+        labelOf: agentLabelOf,
+        // 收件方在共享项目别的成员那边:经文档服务转过去(A3 第二阶段;没绑项目副本、旧版文档服务时转不出去)
+        forwardRemote: (msg: any) => presenceBridge?.forward(msg) ?? false,
+        infoOf: (key: string) => {
+          const e = agentSessions.get(key);
+          return { role: e.role, roleName: e.role && e.role !== 'main' ? loadRole(e.role)?.name ?? null : null, parent: e.parent };
+        },
+      }));
+      const boardKeys = new Set<string>();
+      /** 当前项目的公告板;第一次用到时订阅(变了就推给页面)并补上页面最近报的页签 */
+      function board() {
+        const key = currentProjectKey();
+        const b = boards.boardFor(key);
+        if (!boardKeys.has(key)) {
+          boardKeys.add(key);
+          b.subscribe(() => { if (currentProjectKey() === key) pushBoard(); });
+          if (lastTabs.length) b.setTabs(lastTabs);
+        }
+        return b;
+      }
+      let spawnSeq = 0;
+      const spawnWaiters = new Map<string, { resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+      /** 让页面开一个子 Agent 的页签,等它回话(8 秒) */
+      function openAgentTab(spec: any): Promise<void> {
+        return new Promise((resolve, reject) => {
+          if (!editorRes) return reject(new Error('编辑台没有打开,没有页签可开'));
+          const reqId = `s${++spawnSeq}`;
+          const timer = setTimeout(() => {
+            spawnWaiters.delete(reqId);
+            reject(new Error('页面 8 秒内没有开出页签'));
+          }, 8_000);
+          spawnWaiters.set(reqId, { resolve, reject, timer });
+          editorRes.write(`data: ${JSON.stringify({ type: 'agent.spawn', reqId, ...spec })}\n\n`);
+        });
+      }
+      const multiAgent = createMultiAgent({
+        sessions: agentSessions,
+        board,
+        openTab: openAgentTab,
+        projectCreativity: () => currentProjectCreativity(),
+      });
 
       async function callToolInternal(tool: string, args: any, agent?: string, callId?: string): Promise<any> {
         const { tools } = await import(new URL('./mcp-tools.mjs', import.meta.url).href);
@@ -506,15 +530,21 @@ export default function vitePluginAi(): Plugin {
          * side: "agent" 在副本上执行(D1 / D4),"page" 经页面,"server" 就地(runServerTool)。
          * 没绑:和以前一样,不发事件。
          */
-        const binding = agentBinding;
-        if (binding) return binding.side.callTool(tool, args, { agent: agent || '', callId });
-        // 没绑副本:写经页面执行,写到哪些片段这里不知道,按参数点名的片段提示(绑了的在 agent-side 里按实际写到的算)
-        try {
-          const out = await dispatchTool(tool, args, agent, toolDef);
-          return annotateResult(out, { userEditing: userEditingFor({ tool, args, editing: userEditingBoard.current() }) });
-        } catch (err) {
-          throw annotateError(err, userEditingFor({ tool, args, editing: userEditingBoard.current() }));
-        }
+        /*
+         * 多 Agent(A3):包一层 —— 调用期间公告板知道「谁在跑什么工具」,调用完把要告诉它的(别的 Agent 给它的消息、
+         * 别人动了它声明的范围、它写的被覆盖了、它写进了别人声明的范围)放进结果,notice 在最前。
+         */
+        return multiAgent.wrap(agent || '', tool, async () => {
+          const binding = agentBinding;
+          if (binding) return binding.side.callTool(tool, args, { agent: agent || '', callId });
+          // 没绑副本:写经页面执行,写到哪些片段这里不知道,按参数点名的片段提示(绑了的在 agent-side 里按实际写到的算)
+          try {
+            const out = await dispatchTool(tool, args, agent, toolDef);
+            return annotateResult(out, { userEditing: userEditingFor({ tool, args, editing: userEditingBoard.current() }) });
+          } catch (err) {
+            throw annotateError(err, userEditingFor({ tool, args, editing: userEditingBoard.current() }));
+          }
+        });
       }
 
       async function dispatchTool(tool: string, args: any, agent: string | undefined, toolDef: any): Promise<any> {
@@ -524,14 +554,18 @@ export default function vitePluginAi(): Plugin {
          */
         const mirrored = await runMirroredTool(tool, args, toolDef);
         if (mirrored !== undefined) return mirrored;
-        if (toolDef.side === 'server') return runServerTool(tool, args);
+        if (toolDef.side === 'server') return runServerTool(tool, args, agent);
         const out = await callEditorPage(tool, args, agent, toolDef.timeoutMs || 60000);
+        // 没接文档服务时公告板的改动记录由这里记:页面执行器算好这次改了哪几条「剪辑->序列」随回包带回来(A3)
+        if (Array.isArray(out?.scopes) && out.scopes.length && !agentBinding) board().noteChange(agent || '', tool, out.scopes);
         if (out.ok) return out.result || out;
         throw new Error(out.error);
       }
 
       /** side: "server" 的工具(不碰项目、不过浏览器桥) */
-      async function runServerTool(tool: string, args: any): Promise<any> {
+      async function runServerTool(tool: string, args: any, agent?: string): Promise<any> {
+        // 多 Agent 的五个工具(A3):公告板与拉起子 Agent,在这个进程里答
+        if (multiAgent.isTool(tool)) return multiAgent.handle(tool, args, agent || '');
 
         /*
          * side: "server" 的工具就地执行,不过浏览器桥。
@@ -845,96 +879,6 @@ export default function vitePluginAi(): Plugin {
         } catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }
       });
 
-      /**
-       * POST /api/ai/triage —— 一句话分类：这个请求值不值得走分工编排。
-       *
-       * 「分工模式」勾上以后每条提问都要过 manager，可 manager → DAG → JSON 是
-       * 三轮模型往返。给「现在几点了」也走一遍，这个本来为了提速的功能反而更慢。
-       * 所以先花一次**极便宜**的调用把简单请求筛掉。
-       *
-       * 便宜体现在三处，缺一不可：不带任何工具（正常对话要带 30 个工具的 schema）、
-       * 不带历史、maxTokens 压到 16。答案只要一个词。
-       *
-       * 只走 API 直连：CLI 驱动光启动进程就要好几秒，用它做这道闸是净亏损。
-       * 没配 API 就返回 available:false，由前端退回本地启发式。
-       */
-      server.middlewares.use('/api/ai/triage', async (req, res) => {
-        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
-        let body = '';
-        let over = false;
-        req.on('data', (c) => { if (over) return; body += c; over = overLimit(req, res, body.length, 8192, '请求体超过 8KB'); });
-        req.on('end', async () => {
-          if (over) return;
-          try {
-            const { query } = JSON.parse(body || '{}');
-            if (typeof query !== 'string' || !query.trim()) {
-              return sendJson(res, 400, { ok: false, error: 'query 必填' });
-            }
-            const system = '你是一个分类器。只回一个词，不要解释。';
-            const prompt = [
-              '下面这句话是用户对视频编辑软件提的要求。判断它能不能拆成多个',
-              '互不依赖、可以同时进行的子任务。',
-              '能拆并且确实值得并行 → 回 PARALLEL',
-              '只是一句提问、一个小改动、或者天然只能一步步来 → 回 SIMPLE',
-              '',
-              `用户：${query.slice(0, 500)}`,
-            ].join('\n');
-            const text = await oneShotCompletion(system, prompt, 16, 15000);
-            const parallel = /PARALLEL/i.test(text);
-            sendJson(res, 200, { ok: true, available: true, parallel, raw: text.trim().slice(0, 40) });
-          } catch (e: any) {
-            // 闸门失败不该拖垮提问：回 available:false，前端退回本地启发式
-            sendJson(res, 200, { ok: true, available: false, reason: String(e?.message ?? e) });
-          }
-        });
-      });
-
-      /**
-       * POST /api/ai/plan —— 编排阶段用的通用「无工具单次补全」。
-       *
-       * 分工模式的三步(拆任务 / 划依赖 / 分角色)都打这里。之所以不复用
-       * /api/ai/chat：那条路带 30 个工具的 schema 和整段历史，而这三步一个
-       * 工具都不用。省的不只是 token，还有模型「看见工具就想调一下」多花的往返。
-       */
-      server.middlewares.use('/api/ai/plan', async (req, res) => {
-        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
-        let body = '';
-        let over = false;
-        req.on('data', (c) => { if (over) return; body += c; over = overLimit(req, res, body.length, 200_000, '请求体超过 200KB'); });
-        req.on('end', async () => {
-          if (over) return;
-          try {
-            const { system, prompt, maxTokens } = JSON.parse(body || '{}');
-            if (typeof prompt !== 'string' || !prompt.trim()) {
-              return sendJson(res, 400, { ok: false, error: 'prompt 必填' });
-            }
-            const cap = Number.isFinite(maxTokens) ? Math.min(Math.max(maxTokens, 16), 4096) : 1500;
-            const sys = typeof system === 'string' ? system : '';
-            let text: string;
-            let via: string;
-            try {
-              text = await oneShotCompletion(sys, prompt, cap);
-              via = 'api';
-            } catch (apiErr) {
-              // 没配 API 直连就退回 CLI。
-              //
-              // 起进程要几秒，做 triage 那种「必须极便宜」的闸确实不划算，
-              // 但规划这三次是用户已经决定要编排之后的事，几秒占比小得多。
-              // 一开始我把 triage 的理由套到了这里，结果是 CLI 用户根本用不了
-              // 分工模式——而那是大多数用户。
-              const { provider } = JSON.parse(body || '{}');
-              if (!provider) throw apiErr;
-              text = await oneShotViaCli(await getRunner(), provider, sys, prompt);
-              via = provider;
-            }
-            sendJson(res, 200, { ok: true, text, via });
-          } catch (e: any) {
-            // 没配 API 直连是最常见的一种，调用方要能区分出来好降级
-            sendJson(res, 200, { ok: false, error: String(e?.message ?? e) });
-          }
-        });
-      });
-
       server.middlewares.use('/api/ai/config', async (req, res) => {
         try {
           const { publicConfig, writeConfig, clearKey } = await import(new URL('./ai-config.mjs', import.meta.url).href);
@@ -1005,12 +949,16 @@ export default function vitePluginAi(): Plugin {
         req.on('end', async () => {
           if (over) return;
           let hasDone = false;
+          // 公告板上这一轮开始了(A3):无论怎么结束都要记一次结束,否则这个对话一直算「忙」
+          let runBegun = false;
+          let runAgentId = '';
           try {
             const runners = await getRunner();
             const data = JSON.parse(body);
             const { provider, prompt, sessionId, model, effort, fast, attachments, script, schemaCompat, deepAuto } = data;
             // 多 Agent 分页:这一页的对话 ID。只认会话 id 的字符集,别的一律当没带
             const agentId: string = typeof data.conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(data.conversationId) ? data.conversationId : '';
+            runAgentId = agentId;
 
             let systemPrompt = '';
             try {
@@ -1069,6 +1017,25 @@ export default function vitePluginAi(): Plugin {
               creativity: normalizeCreativity(data.creativity),
             });
             const { level: convCreativity, source: convCreativitySource } = agentSessions.creativityOf(agentId, currentProjectCreativity());
+
+            /*
+             * 多 Agent(A3):
+             *   - spawn_agent 拉起的子 Agent:每一轮系统提示词都拼上它的角色提示词(多轮跑下来最容易忘了自己是谁);
+             *   - 别的 Agent 的动态(改了什么范围、信箱里到顶没自动投递的消息)拼在这一轮提示词前面,只进模型;
+             *   - hops:这条是第几层自动投递(页面投递别的 Agent 的消息时带上),公告板据此给连锁封顶。
+             */
+            const sess = agentSessions.get(agentId);
+            if (agentId && sess.parent && sess.role) {
+              const role = loadRole(sess.role);
+              if (role) {
+                systemPrompt += `\n\n## 你的角色:${role.name}\n\n你是 Agent ${sess.parent} 用 spawn_agent 拉起的子 Agent,对话 ID ${agentId}。` +
+                  '只做它交给你的那部分;开工先 declare_scope,做完用 report_progress 交代,再用 send_message 把结果告诉拉起你的 Agent。' +
+                  `你不能再拉起别的 Agent。\n\n${role.prompt}`;
+              }
+            }
+            const agentNotes = agentId ? board().consumeNotes(agentId) : '';
+            if (agentNotes) finalPrompt = `${agentNotes}\n\n${finalPrompt}`;
+            const runHops = Number.isSafeInteger(data.hops) && data.hops > 0 ? data.hops : 0;
 
             const editorPort = (server.httpServer?.address() as any)?.port || 5195;
             const editorState = editorRes ? "编辑台已连接" : "未连接";
@@ -1131,6 +1098,7 @@ export default function vitePluginAi(): Plugin {
               pendingText = '';
             };
 
+            if (agentId) { board().beginRun(agentId, runHops); runBegun = true; }
             const run = runners.startRun({
               provider,
               prompt: finalPrompt,
@@ -1224,6 +1192,8 @@ export default function vitePluginAi(): Plugin {
               res.write(`data: ${JSON.stringify({ type: 'error', message: String(e) })}\n\n`);
               res.end();
             }
+          } finally {
+            if (runBegun) board().endRun(runAgentId);
           }
         });
       });
@@ -1315,6 +1285,8 @@ export default function vitePluginAi(): Plugin {
         
         const port = (server.httpServer?.address() as any)?.port || 5195;
         res.write(`data: ${JSON.stringify({ type: 'hello', port })}\n\n`);
+        // 公告板的现状(页签上的范围名、未读)先推一份(A3)
+        pushBoard();
         
         req.on('close', () => {
           if (editorRes === res) {
@@ -1437,11 +1409,54 @@ export default function vitePluginAi(): Plugin {
           } catch (e: any) { sendJson(res, 400, { ok: false, error: e?.message || String(e) }); }
         });
       });
+      /*
+       * 多 Agent(A3):
+       *   POST /api/agent/tabs    { tabs: [{ conversationId, title, busy }] } → { ok }   页面的页签(整份),公告板的名单与并发名额用
+       *   POST /api/agent/inbox   { conversationId, onlyAuto? } → { ok, messages }       页面空闲时取走投给这一页的消息,作为一条用户消息发出
+       *   POST /api/agent/spawned { reqId, ok, error? } → { ok }                         页面开好(或开不出)spawn_agent 要的页签
+       *   GET  /api/agent/board → { ok, agents, list }                                   诊断、探针
+       */
+      server.middlewares.use('/api/agent/tabs', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        readJsonBody(req, res, 64 * 1024, (data) => {
+          lastTabs = Array.isArray(data?.tabs) ? data.tabs.slice(0, 64) : [];
+          board().setTabs(lastTabs);
+          sendJson(res, 200, { ok: true });
+        });
+      });
+      server.middlewares.use('/api/agent/inbox', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        readJsonBody(req, res, 8192, (data) => {
+          const key = typeof data?.conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(data.conversationId) ? data.conversationId : null;
+          if (!key) return sendJson(res, 400, { ok: false, error: 'conversationId 不合法' });
+          const b = board();
+          b.markSeen(key);
+          sendJson(res, 200, { ok: true, messages: b.takeInbox(key, data?.onlyAuto !== false) });
+        });
+      });
+      server.middlewares.use('/api/agent/spawned', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        readJsonBody(req, res, 8192, (data) => {
+          const w = typeof data?.reqId === 'string' ? spawnWaiters.get(data.reqId) : undefined;
+          if (!w) return sendJson(res, 404, { ok: false, error: '没有在等这个页签' });
+          spawnWaiters.delete(data.reqId);
+          clearTimeout(w.timer);
+          if (data.ok === true) w.resolve();
+          else w.reject(new Error(typeof data.error === 'string' ? data.error.slice(0, 300) : '页面没开出页签'));
+          sendJson(res, 200, { ok: true });
+        });
+      });
+      server.middlewares.use('/api/agent/board', (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        res.setHeader('Cache-Control', 'no-store');
+        const b = board();
+        sendJson(res, 200, { ok: true, project: currentProjectKey(), agents: b.snapshot(), list: b.listRaw(''), sessions: agentSessions.list(), changes: b._changes().slice(-50) });
+      });
       server.middlewares.use('/api/agent/status', (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         res.setHeader('Cache-Control', 'no-store');
         const b = agentBinding;
-        sendJson(res, 200, b ? { ok: true, bound: true, mode: b.mode, url: b.url, ...b.side.describe() } : { ok: true, bound: false });
+        sendJson(res, 200, b ? { ok: true, bound: true, mode: b.mode, url: b.url, ...b.side.describe(), presence: presenceBridge?.describe() ?? null, editing: userEditingBoard.describe() } : { ok: true, bound: false });
       });
 
       server.middlewares.use('/api/mcp/status', (req, res) => {

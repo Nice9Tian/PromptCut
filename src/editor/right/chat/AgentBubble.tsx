@@ -379,7 +379,7 @@ export function AgentBubble(props: {
     <div className="ai-message assistant">
       {/*
         这条回复是哪个角色产出的。普通对话没有 roleId 就不显示——
-        每条回复顶上都挂一个「AI 助手」只是噪音，反而让分工模式下
+        每条回复顶上都挂一个「AI 助手」只是噪音，反而让带角色的回复里
         真正的角色名不显眼。
       */}
       {m.roleId && <div className="pc-role-header"><RoleName roleId={m.roleId} /></div>}

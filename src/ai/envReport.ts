@@ -37,8 +37,8 @@ export interface EnvInput {
   layout: 'classic' | 'chat' | string;
   /** SKILL 模式;没开就传 null 或 { active:false } */
   skill?: { active: boolean; jobId?: string | null; jobDir?: string | null; procPath?: string | null; since?: string | null } | null;
-  /** 分工模式(制片主管拆任务) */
-  teamMode?: boolean;
+  /** AI 栏开着几个 Agent 页签(多 Agent;含 spawn_agent 拉起的子 Agent) */
+  agentTabs?: number;
   /** 当前项目;没有就传 null */
   project?: {
     name?: string;
@@ -76,7 +76,7 @@ const VALUE_LIMIT = 200;
  * 排查时「哪些设置存在、各多长」本身就够用,原文并不需要。
  */
 const VALUE_SAFE = new Set([
-  "aiProvider", "aiShowThinking", "aiViewMode", "aiTeamMode", "aiSetupFace", "aiSetupDone",
+  "aiProvider", "aiShowThinking", "aiViewMode", "aiSetupFace", "aiSetupDone",
   "pc.layout.mode", "pc.volume", "pc.muted", "pc.deps.sttDismissed", "pc.agentTabs.active",
 ]);
 /**
@@ -103,7 +103,7 @@ export function describeMode(input: EnvInput): string {
   const bits = [layout];
   // SKILL 一开就压过布局:那时项目交给无头实例上的 agent 改,这边是只读的
   if (input.skill?.active) bits.push('SKILL 模式(项目正交给桌面版 agent 改,本窗口只读)');
-  if (input.teamMode) bits.push('分工模式');
+  if ((input.agentTabs ?? 1) > 1) bits.push(`多 Agent(${input.agentTabs} 个页签)`);
   return bits.join(' + ');
 }
 
@@ -160,7 +160,7 @@ export function buildEnvReport(input: EnvInput): Record<string, unknown> {
       layout: input.layout,
       skillActive: !!input.skill?.active,
       skill: input.skill?.active ? input.skill : null,
-      teamMode: !!input.teamMode,
+      agentTabs: input.agentTabs ?? 1,
       说明: describeMode(input),
     },
     project: input.project

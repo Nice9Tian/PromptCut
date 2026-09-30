@@ -27,7 +27,8 @@ test("三种模式都要说得出人话,而不是让人去推三个布尔值", (
   assert.equal(describeMode({ layout: "classic" }), "传统式");
   assert.equal(describeMode({ layout: "chat" }), "对话式");
   assert.match(describeMode({ layout: "chat", skill: { active: true } }), /SKILL/);
-  assert.match(describeMode({ layout: "classic", teamMode: true }), /分工/);
+  assert.match(describeMode({ layout: "classic", agentTabs: 3 }), /多 Agent\(3 个页签\)/);
+  assert.equal(describeMode({ layout: "classic", agentTabs: 1 }), "传统式");
 });
 
 test("没保存过的项目要**显式**说出来 —— 素材在临时目录的怪事都是从这儿来的", () => {
