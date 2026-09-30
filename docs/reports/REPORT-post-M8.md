@@ -361,3 +361,90 @@
 ### 5.9 顾问调用记录
 
 本轮没有调 codex 或 Gemini：各段第一轮就做成，没有卡住的语义问题。子 Agent：`opus-dev` 五个（watch-ignore、creativity、user-editing，以及在跑的 A3、A6），`opus-dev-high` 一个（query-render），`Explore` 一个（为写计划摸清现有 Agent 架构）。
+
+## 第 6 轮：A3 多 Agent 与 A6 自定义测量合入，出 0.7.6（托管端重部署）；A4 做完留在分支，A5 在做（2026-09-30，笔记本主会话）
+
+接第 5 轮。本轮代号：A3、A4、A5、A6 = 计划 `docs/plan/agent-workflow-plan.md` 第 2 节的四段（多 Agent；SKILL 改为桌面 APP 经 MCP 直连；后台运行；Agent 用 JS 自定义测量）；「在场状态」= A3 在文档服务里加的模块，转发共享项目里成员正在编辑的内容、Agent 的范围与消息。
+
+### 6.1 做了什么
+
+| 段 | 分支（子 Agent） | 做法 |
+|---|---|---|
+| A6 自定义测量 | `claude/custom-measure`（`opus-dev`） | 新工具 `measure_audio_js`：与 `measure_audio` 同样取声音（片段原声、整个素材、时间轴混音），解码成 PCM 后在**专用**无头 Chrome 的 Worker 里跑 Agent 写的 JS（每次新的无痕上下文，限时、限内存、四道断网，心跳判卡死），只回 JSON；只在「高」档开放。验证中修了两处真问题：内存炸弹要 36 s 才回来且报错含糊（加心跳后约 6 s、报「内存超限」）；`mono` 比原声响 3 dB（改为各声道取平均） |
+| A3 多 Agent | `claude/multi-agent`（`opus-dev`） | `spawn_agent`（新页签、新身份、预设角色；深度 1、每个主 Agent 至多 4 个开着的子 Agent，等级不高于父对话）；公告板从页面内存搬到本机服务，改动记录由文档服务的提交流喂；被覆盖方与「正在改」的双方在下一次工具结果里得知；分工模式归档（`teamMode`、`orchestrate*`、`triage`、`runRoleTask`、两条路由与菜单项）；文档服务加在场状态模块（`presence.*`，只在内存里转发、带过期、按空间隔离），跨设备的「正在编辑」、Agent 的范围与消息经它转发，旧文档服务回 `unsupported` 时停发。验证中修了三处真问题：在场状态的 `userId` 可能为空（tsc）；角色常量经 `agent-roles.mjs` 把 `node:fs` 带进页面（开发服务器会整页白屏，守门测试抓到）；拉起的页签沿用页面不认识的驱动名时 `ModelBar` 整页报错 |
+| A4 SKILL 经 MCP 直连 | `claude/skill-mcp`（`opus-dev`） | 做完、验证全绿，**按计划留在分支、不合入**（6.6 节） |
+| A5 后台运行 | `claude/tray`（`opus-dev`，在 A4 之上） | 在做 |
+| 语义与计划 | 主会话 | `mechanism/agent.md`：「创造力等级的判定」末句、新增「自定义测量」「多 Agent」两节、「用户正在编辑与覆盖提示」的跨设备与被覆盖方两条（`a77855df`，三级〔裁〕）；计划 A3 验收按二级语义更正、A6 沙箱位置按实现更正；TODO 刷新（`4152cd4a`：分布式预渲染 M0～M8 已合入、云端计划只剩 I 节、R0 修完、Agent 与工作方式进度、记偶发的探针页面打不开） |
+
+合流：`claude/r5-merge`（main `ed8484d1` 起）依次合 A6、A3（三处两边都改过的文件自动合并，核对过合并结果），主会话写语义后在笔记本上验证（6.2 节），合入 main `dc51de8c`；两份报告附审查后归档（`4152cd4a`）。
+
+**0.7.6**：版本号 0.7.5 → 0.7.6（外壳仍 0.2.6，`2ef4f083`），main = release = origin。从干净检出出在线构建 `index-DKNBZ4FD.js`（`index.html` sha256 `179b9cb24a64…`，82 个 assets），嵌代码版本 `fc7191841c6e…`；共享快照键 `00a5264bf8a0…` 与捕获代码不变；`/api` 仍只有登记过的 4 个。先在服务器备份 `/root/hosted-app-backup-20260930-076.tgz`、`/root/editor-backup-20260930-076.tgz`（换下的 `index-Bg2luIDZ.js` 那一代）、`/root/editor-runtime-config-20260930-076.json`，再 `deploy-hosted --editor <在线构建> --doc-public-url … --asset-public-url … --save`：托管服务重载（`promptcut-hosted` 重启次数 17 → 18），`/editor` 换代保留运行配置。桌面补丁指令改为 PC-076-1（PC 辅助整轮不在线，记为待办）。
+
+### 6.2 验证
+
+全部在笔记本上跑。集成分支一整套由主会话串行跑；跑的时候 A4 子 Agent 在轻量阶段（只读、写代码、一次跑一个测试文件）。
+
+| 项 | 提交 | 命令 | 结果 |
+|---|---|---|---|
+| 类型检查、全量测试 | `claude/r5-merge` `a77855df` | `npx tsc -b --force`；`npm test` | 0 错误；4089 / 4087 / 0 / 2（第 5 轮 4083 条，A6 加 15 条，A3 删减后净少 9 条） |
+| 代码指纹 | 同上 | `snapshotCode()`、`captureCode()`、`frameCode()` | `00a5264bf8a0…`、`86e443cb6fa8…` 不变；代码版本 `fc7191841c6e…` |
+| G0-R | 同上 | `g0r.sh`（5800） | 全过：确定性 1800 / 1800 相同；与 main `701a27c0` 逐像素 1800 相同；快照重放 PASS；流式生产两种、预览退回两种、就绪索引 `fails: []` |
+| C10 A4 场景 | 同上 | `c10-browser-probe --only-a4 --no-video --base-port 5600 --dist <在线构建>` | 退出 0、`ok: true` |
+| 用户卡那一步 | 同上 | `c10-browser-probe --user-card --only-a4 --no-video` | 第一跑退出 1（舞台 A 的能力表为空、播放没起来，那段时间一个遗留的 `grep` 进程占着一个核和 7 GB 内存，见 6.5 节）；机器安静后重跑退出 0、`ok: true`（274 s） |
+| 在线用户卡 | 同上 | `online-user-cards-probe --base-port 5650` | 前三次退出 1：给第 5 个成员新开的页面打开 `<站点>/editor` 120 s 等不到 DOMContentLoaded；之后同一份构建连过 6 次（都是 34～35 s，其中 4 次带 Chrome 网络日志）。二分见 6.5 节 |
+| 舞台看守 | 同上 | `online-stage-watch-probe --base-port 5720` | 退出 0、`ok: true` |
+| M7 本机（计时作数） | 同上 | `m7-browser-probe --role all --timing-authoritative --base-port 5710` | M7-A1～A12、D9、D10、D14、D1-D2-D12 全过，**A4 最慢锚点段 25.1 s**（门槛 30 s；第 5 轮 22.3 s，这一跑时用户的屏保程序在占 CPU）；A5 让路后 700 ms 恢复；A12 长任务 0；只剩 W7 真跨机待复核（退出码 3） |
+| 桌面自动成为渲染节点 | 同上 | `desktop-auto-node-probe --base-port 5620` | 退出 0、`ok: true`（604 s） |
+| C10 界面、旧层 | 同上 | `c10-ui-probe`；`online-stale-layer-probe` | 都退出 0、`fails: []` |
+| 查询渲染、创造力、用户正在编辑 | 同上 | `query-render-probe`；`creativity-probe --shots`；`user-editing-probe --shots` | `fails: []`；15 项全过；18 项全过 |
+| 多 Agent | 同上 | `multi-agent-probe --phase all --shots`（第二阶段两个成员共用本地托管组合） | 35 项全过；看过 `tabs.png` 与 `b-remote-agents.png`（审查记在归档报告里） |
+| 自定义测量 | 同上 | `custom-measure-probe --port 5860` | 21 项全过（1 kHz、振幅 0.5 的正弦波 RMS −9.0309 dBFS，与理论值相同） |
+| 合入与 release | main `dc51de8c`、`4152cd4a`、`2ef4f083` | `npm run build`（合入后、改版本号后各一次） | 都成功；合并结果的代码与验证过的集成分支相同；release 两次快进，已推送 |
+| 0.7.6 在线构建 | `2ef4f083` 干净检出 | `npx vite build --mode online` | 成功；`index-DKNBZ4FD.js`，嵌 `fc7191841c6e` |
+| 托管服务重部署 | 同上 | `deploy-hosted --editor … --save` | 重载完成，重启次数 18；服务器本机文档服务 healthz 的模块列表含 `presence`、新 epoch；外网 `/hosted/healthz` 与 `/media/healthz` 200、匿名 WebSocket 升级 401 |
+| `/editor` 三个地址与无头打开 | 同上 | `verify-editor.mjs fc7191841c6e` | 三处都 200、都发 `index-DKNBZ4FD.js`、都含代码版本；运行配置保留；无头 200、页面错误 0、控制台错误 0 |
+| 阿里云真机路径 | 同上 | `desktop-auto-node-probe --remote https://8-219-80-16.sslip.io --base-port 5620 --skip-off` | 退出 0、`ok: true`、`fails: []`，592 s（那段时间 A5 子 Agent 在编 Rust，A7 用了 333 s）；A2 22.5 s、A3 96.4 s、A4 63.4 s、A5 4.4 s；页面错误 0；项目已删（`shared.admin.ok`） |
+
+### 6.3 〔裁〕（本轮主会话定，待用户审）
+
+1. A6 的 8 条、A3 的 18 条〔裁〕照子 Agent 定的留（全文在两份归档报告里）。
+2. `mechanism/agent.md` 的「自定义测量」「多 Agent」两节与相关两条（三级）。
+3. **A4 与 A5 一起合入**：A4 进 SKILL 后外壳仍会隐藏主窗，WebView2 隐藏后页面侧工具可能停摆，要 A5 的后台运行一起解决；A5 改 Rust 外壳，完整安装包只能在 PC 上打。所以 A4、A5 做完先留在分支上，等 PC 上线出包实测后一起合入，不让 release 带着半截的 SKILL。
+4. A4 删掉「合并 Skill 结果…」菜单项与 `scripts/pc-tool.mjs`：它们只为三方合并与任务目录存在，语义里的 SKILL 是桌面 APP 经 MCP 直接改同一个项目，没有「合并」这一步。
+5. 0.7.6 同时重部署托管服务（在场状态模块）与换 `/editor`；自 0.7.4 起托管端只多了这一个模块。
+
+### 6.4 与计划、对齐时不一致的地方
+
+- 计划第 3 节 A3 验收「并行写入不再互相被拒」按二级语义更正（第 5 轮 5.4 节已预告）。
+- 计划 A6 行与第 5 节风险写的是「在预渲染 Chrome 里跑」，实现改为专用无头 Chrome（内存上限是整个浏览器的启动参数，混用会伤渲染或限不住内存炸弹），按实现更正。
+- A4 原计划随本轮合入，改为与 A5 同发（6.3 节第 3 条）。
+
+### 6.5 新发现、记入遗留
+
+- **一个遗留的 `grep` 进程占了一个核和 7 GB 内存约一小时**：主会话为查子 Agent 类型对整份会话记录跑的 `grep`（正则里 `{0,20000}` 回溯过重），外层命令被停掉后它没跟着退出，从 11:45 一直跑到 12:46（本地时间），与 r5 合流的 G0-R 前半、C10 用户卡第一跑重叠。已结束。另有三个更早的 `--line-buffered` grep（父进程已不在、各几 MB、不耗 CPU），不能确定是本会话起的，按规矩没动。
+- **在线用户卡探针的页面打不开**（6.2 节）：二分过——A6、A3 各自的分支单独跑、两者合在一起（0.7.4 与只改版本号的 0.7.5）都过；与失败时逐字节相同的 r5 构建之后连过 6 次；r4 合流时 M7 本机第一跑也出过一次同类（180 s），那时还没有 A3、A6。结论：与本轮代码无关的偶发。通过的几次 Chrome 网络日志里，同一主机的 6 个连接会用满、请求排队（`SOCKET_POOL_STALLED_MAX_SOCKETS_PER_GROUP` 约 30 次），疑为运气不好时 6 个连接都被长连接占住；失败那次没抓到日志。已记进 `docs/plan/TODO.md`，再出现时带网络日志复现。
+- 用户的屏保程序（OLED Care Screensaver）运行时占约 57% CPU；带耗时门槛的项在用户离开时跑，会受它影响（本轮 M7 A4 锚点段 25.1 s，仍在门槛内）。不是本会话的进程，不动它。
+- A4 顺带发现：AI 栏下方的「Agent 操作记录」把桌面会话只记成「Agent『第 N 个对话』」，不带厂商（文档服务事件里的对话序号），留给 A5 之后顺手补。
+
+### 6.6 在做与留在分支上的
+
+- **A4**（`claude/skill-mcp` `19dee607`）：MCP 直连（每个桌面会话一个身份：Claude Code 按一个 MCP 进程一个会话、Codex 按每次调用带的线程号；厂商按 `clientInfo`）；SKILL 提示词放在 MCP 的 `instructions` 并加本地工具 `get_skill_guide`，不写用户级 skill 文件；「登记到 Claude Code / Codex」（写用户级 MCP 配置，条目名固定 `promptcut`，写前整份备份，能撤销，测试只写临时目录——主会话只读核过用户真实的 `~/.claude.json` 与 `~/.codex/config.toml` 没被写过）；AI 栏按桌面会话分组显示厂商与当前操作；SKILL 闸按调用方类型；归档无头实例、任务目录、`submit_merge`、三方合并；去掉对话式布局。验证：tsc 0；`npm test` 4064 / 0 失败 / 1 跳过；指纹不变；`skill-mcp-probe` 两遍都 35 项全过。
+- **A5**（`claude/tray`）：托盘、关窗不退出、悬浮窗与 SKILL 解耦、收起时页面照常干活；笔记本上能做 `cargo check` 与纯逻辑的 `cargo test`，完整安装包与实机验收要 PC。
+
+### 6.7 待跨机复核
+
+- W7 真跨机（沿用）。
+- PC-076-1 出 0.7.6 补丁；用户装上后的真机复测。
+- A4 + A5：PC 上出完整安装包（改了外壳，不是 `--patch-only`）与实机验收。
+
+### 6.8 待用户项
+
+1. **装 0.7.6 补丁**（PC 上线打出来后再通知，附路径与 SHA-256）；0.7.3～0.7.5 的补丁都不用装。
+2. **装上后的第一次运行会清缓存**：帧库约 282 GB，启动约 2 分钟后按 50 GB 上限清掉约 230 GB 最久没用的预渲染缓存（需要时重新预渲染，不可撤销）；想留更多，装完先在开始页「存储」把上限调大。
+3. A4、A5 合入后：在 PromptCut 里点「登记到 Claude Code / Codex」，各开一个新会话连过来，看 AI 栏有没有对应分组；试完可在同一处撤销登记（写的是用户级配置，本会话不替你写）。Codex 会不会把 `instructions` 交给模型、调工具是否每次要批准，也要真机上看。
+4. 审 6.3 节与 A3、A6 两份归档报告里的〔裁〕；A4 报告第 8 节的两条语义 dry run 要你定：二级「传统式下桌面 APP 的调用被拒」、一级「在软件里一键登记到桌面 APP」；A3 报告建议的 `product/document-service.md` 补「在场状态」（二级）。
+5. 沿用：`product/platforms.md` 要不要写「同步来的用户卡照常能改参数」（二级）；播放停顿期间要不要加音频看门狗。
+
+### 6.9 顾问调用记录
+
+本轮没有调 codex 或 Gemini：各段第一轮就做成；在线用户卡的偶发失败靠二分与网络日志排除了代码原因，没有卡在语义上。子 Agent：`opus-dev` 四个（custom-measure、multi-agent、skill-mcp、在跑的 tray）。
