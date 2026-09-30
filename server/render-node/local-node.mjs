@@ -214,7 +214,8 @@ function lockInfoOf(result) {
  *   发布被 card-locked 拒绝时要不要接手(契约 F.7):缺省 false,照锁定方的指纹重发;pc 与独立渲染主机传
  *   `idleLockTakeover`(M7 D2)
  * @param {(event: object) => void} [options.onEvent]  诊断用
- * @param {(task: object) => boolean} [options.canClaim]  这个任务此刻能不能开工(会话认领前过一遍;独立渲染主机用,契约 A.12〔裁〕)
+ * @param {(task: object, info: { held: number }) => boolean} [options.canClaim]  这个任务此刻能不能开工(会话认领前过一遍;独立渲染主机用,契约 A.12〔裁〕)
+ * @param {() => number} [options.claimLimit]  此刻最多持有几项(认领闸;缺省恒为 maxConcurrent,见 session.mjs)
  * @returns {LocalNode}
  */
 export function createLocalNode({
@@ -234,6 +235,7 @@ export function createLocalNode({
   takeoverLocked = false,
   onEvent = noop,
   canClaim,
+  claimLimit,
 }) {
   /** 在等回包的发布:reqId → { run, message, resolve, reject } */
   const publishes = new Map();
@@ -259,6 +261,7 @@ export function createLocalNode({
   if (maxConcurrent !== undefined) sessionOptions.maxConcurrent = maxConcurrent;
   if (projects !== undefined) sessionOptions.projects = projects;
   if (canClaim !== undefined) sessionOptions.canClaim = canClaim;
+  if (claimLimit !== undefined) sessionOptions.claimLimit = claimLimit;
   session = createNodeSession(sessionOptions);
 
   /**

@@ -20,6 +20,10 @@
  *      无冲突的离线修改恢复时「已恢复连接，正在提交离线时的修改…」/「离线时的修改已全部提交。」;素材服务断开 →「连不上素材服务…」。
  *   A8 `POST merge/<projectId>/<共享键>` 回 501。
  * 不打印口令;结果最后一行是一行 JSON(`ok`、`fails`、各项数字),截图在 --out。
+ *
+ * 环境变量 `PC_CHROME_ARGS`(空格分隔)只把参数原样透传给探针起的 Chrome,排障取证用,例如 `--log-net-log=<文件>` 抓网络日志
+ * (r4、r5 两次合流里探针新开的页面偶发 120～180 s 打不开在线页,见 `docs/plan/TODO.md`)、云端 Linux 以 root 运行时的 `--no-sandbox`。
+ * 不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则证书有问题时探针照样通过,掩盖真问题。
  */
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
@@ -161,7 +165,7 @@ async function wsAsCreator() {
 }
 
 /* ------------------------------------------------------------------ 浏览器 */
-const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required'] });
+const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
 async function newPage(label) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();

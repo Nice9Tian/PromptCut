@@ -14,6 +14,7 @@ import { listenSafe } from "./safe-port.mjs";
 import { createSessionLineForwarder } from "./render-node/session-diag.mjs";
 import { autoRenderNodeOffReason, normalizeBinding, ticketOk } from "./auto-render-node.mjs";
 import { createBindingMemory, createTicketRelay } from "./render-node-relay.mjs";
+import { localPrerenderMode } from "./prerender-mode.mjs";
 
 /**
  * 拉起并看护预渲染进程(docs/archive/topics/decoupling-plan.md 第 3 节「预渲染」,阶段 2)。
@@ -94,8 +95,16 @@ export function prerenderPlugin(): Plugin {
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.setHeader("Cache-Control", "no-store");
         const s = prerenderState();
-        res.end(JSON.stringify({ ok: true, url: s.url, ready: s.ready, error: s.error }));
+        // `mode`:拉起时给它的模式(`prerender-mode.mjs`),只多一个键
+        res.end(JSON.stringify({ ok: true, url: s.url, ready: s.ready, error: s.error, mode }));
       });
+
+      /*
+       * 预渲染进程的模式(docs/semantics/mechanism/rendering.md「查询渲染与预渲染进程」;cloud-task.md I4(a)):
+       * 用户机缺省一个进程,本机有 Agent 时 `full`、没有时 `user`。编辑器进程总挂着本机 Agent(`vite-plugin-ai`),
+       * 所以缺省 `full`;编辑器的环境里显式给了 `PROMPTCUT_PRERENDER_MODE` 就照它(`localPrerenderMode`)。
+       */
+      const mode = localPrerenderMode(process.env);
 
       let child: ChildProcess | null = null;
       let closing = false;
@@ -206,12 +215,17 @@ export function prerenderPlugin(): Plugin {
           env: {
             ...process.env,
             PROMPTCUT_ROLE: "prerender",
+            PROMPTCUT_PRERENDER_MODE: mode,
             PROMPTCUT_CORS_ORIGINS: editorOrigins(server).join(","),
             /*
              * 编辑器那一端的地址,给镜像插件回拉整份项目用(A7)。帧请求的 body 里只有
              * `{session, localRev}`,转发丢了或者这个进程刚起来的时候,它就按这个键
              * 去 `GET /api/data/project?session=&localRev=` 把那一版要回来。
-             * (将来 `agent` 模式的预渲染进程不带它 —— 那一份的项目由 Agent 服务端推,I2。)
+             *
+             * 〔裁〕三种模式都带。计划(cloud-task.md I1、I4(a))写的是 `agent` 模式不带、项目由 Agent 服务端推(I2),
+             * 但 I2 的推送还没有:今天本机 Agent 的查询只带 `{session, localRev}`,靠这个地址回拉;素材服务的基址
+             * (`asset-client.ts` 的 `assetServiceOrigin`)也还是它。本机拉起的 `agent` 模式不带它就一张图都查不出来。
+             * 等 I2 的推送与 I3 的「拉起时告诉它素材服务地址」落地,再按计划去掉。
              */
             PROMPTCUT_EDITOR_URL: editorOrigins(server)[0],
           },

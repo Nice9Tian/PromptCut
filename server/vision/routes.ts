@@ -264,7 +264,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
 
       server.middlewares.use("/api/ai/visual", (req, res) => {
         const url = String(req.url || "/").split("?")[0];
-        const fail = (e: any) => sendJson(res, e?.status || 500, { ok: false, error: e?.message || String(e) });
+        // `code`:模式不接时(预渲染进程的 `NO_AGENT_LANE` / `NO_PRERENDER`,`prerender-mode.mjs`)原样带出,调用方分得清
+        const fail = (e: any) => sendJson(res, e?.status || 500, { ok: false, error: e?.message || String(e), ...(typeof e?.code === "string" ? { code: e.code } : {}) });
 
         if (req.method === "GET") {
           (async () => {

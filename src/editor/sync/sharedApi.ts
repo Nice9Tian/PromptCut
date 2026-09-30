@@ -78,6 +78,8 @@ interface ClientApi {
   resolveInvite(o: { base: string; code: string }): Promise<{ projectId: string; name: string; mode: SharedMode }>;
   /** C10a：凭邀请码兑换；自由进入另回项目口令的 K */
   redeemInvite(o: { base: string; code: string; username: string; deviceId: string }): Promise<{ projectId: string; name: string; mode: SharedMode; kdf?: Kdf; key?: string }>;
+  /** 〔裁〕`shared/verify`：服务端认不认这份证明(401 回 false,别的错误抛) */
+  verifyProtocols(o: { base: string; protocols: string[] }): Promise<boolean>;
 }
 
 interface RouteApi {

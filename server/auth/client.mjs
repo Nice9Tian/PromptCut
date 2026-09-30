@@ -210,6 +210,21 @@ export async function buildAuthProtocols({
   return [PROTOCOL, AUTH_PREFIX + b64urlEncode(utf8(JSON.stringify(payload)))];
 }
 
+/**
+ * `POST shared/verify`〔裁〕（`claude/join-error`）：拿一份新证明（`buildAuthProtocols` 的结果）问服务端认不认。
+ * 认回 true，401 回 false；别的（404 旧服务没有这个端点、429、连不上）抛 `callJson` 的错误（带 `status`，连不上时没有）。
+ * 用在 WebSocket 没建成之后：浏览器里握手被拒与没连上分不出，靠它分清。
+ */
+export async function verifyProtocols({ base, protocols, fetch }) {
+  try {
+    await postJson(fetch, `${httpBaseOf(base)}/shared/verify`, { protocols });
+    return true;
+  } catch (err) {
+    if (err?.status === 401) return false;
+    throw err;
+  }
+}
+
 /** 凭连接票据进入的子协议（第 5 节） */
 export const ticketProtocols = (ticket) => [PROTOCOL, TICKET_PREFIX + ticket];
 
