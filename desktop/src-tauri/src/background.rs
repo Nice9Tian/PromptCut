@@ -221,7 +221,15 @@ pub fn on_close_requested<R: Runtime>(app: &AppHandle<R>) -> bool {
     dispatch(app, UiEvent::CloseRequested) != UiAction::AllowClose
 }
 
-fn monitors_of<R: Runtime>(w: &tauri::WebviewWindow<R>) -> Vec<Rect> {
+/// 主窗口。**不能用 `get_webview_window("main")`**:主窗口里加了 agent 的子 webview
+/// (agent_webview.rs)之后它就不再是「一个窗口一个 webview」的 WebviewWindow,那个查法
+/// 返回 None —— 老的 SKILL 收起(`main.hide()`)和第二次启动时的「叫回窗口」就是这样
+/// 悄悄失效的。窗口层的操作都在 `Window` 上,按窗口查就对了。
+fn main_window<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::Window<R>> {
+    app.get_window("main")
+}
+
+fn monitors_of<R: Runtime>(w: &tauri::Window<R>) -> Vec<Rect> {
     w.available_monitors()
         .unwrap_or_default()
         .iter()
@@ -249,7 +257,7 @@ fn take_saved<R: Runtime>(app: &AppHandle<R>) -> Option<Saved> {
 
 /// 收起:记下位置,主窗挪到屏幕外(仍「可见」,页面照常跑),不进任务栏、不抢焦点;出悬浮窗。
 fn collapse<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = main_window(app) {
         if main.is_minimized().unwrap_or(false) {
             let _ = main.unminimize();
         }
@@ -281,11 +289,18 @@ fn collapse<R: Runtime>(app: &AppHandle<R>) {
 fn restore<R: Runtime>(app: &AppHandle<R>) {
     crate::skill_shell::hide_overlay(app);
     let saved = take_saved(app);
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = main_window(app) {
         let _ = main.set_focusable(true);
         let _ = main.set_skip_taskbar(false);
         match saved.and_then(|s| restore_position(s.rect, &monitors_of(&main)).map(|p| (p, s))) {
             Some(((x, y), s)) => {
+                if s.maximized {
+                    // window-state 插件把「最大化之前的位置」记成最后一次 Moved 之前的坐标(prev_x)。
+                    // 还原位置恰好等于最大化后的坐标时,maximize 不发 Moved,prev 就会停在屏幕外的
+                    // 那个坐标上,下次启动再取消最大化窗口就看不见了(笔记本上实测踩到)。先挪到旁边
+                    // 一个像素再挪回来,让 prev 一定落在屏幕上。
+                    let _ = main.set_position(PhysicalPosition::new(x + 1, y));
+                }
                 let _ = main.set_position(PhysicalPosition::new(x, y));
                 if s.maximized {
                     let _ = main.maximize();
@@ -305,7 +320,7 @@ fn restore<R: Runtime>(app: &AppHandle<R>) {
 }
 
 fn focus_main<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = main_window(app) {
         let _ = main.show();
         let _ = main.unminimize();
         let _ = main.set_focus();
@@ -317,14 +332,14 @@ fn focus_main<R: Runtime>(app: &AppHandle<R>) {
 /// 和原来标题栏「退出」走同一条路。
 fn exit<R: Runtime>(app: &AppHandle<R>) {
     if let Some(saved) = take_saved(app) {
-        if let Some(main) = app.get_webview_window("main") {
-            // 先藏再挪,屏幕上不闪一下;window-state 不记「可见」(lib.rs 里去掉了那一位)
+        if let Some(main) = main_window(app) {
+            // 先藏再挪,屏幕上不闪一下;window-state 不记「可见」(lib.rs 里去掉了那一位)。
+            // 收起前是最大化的,这里只还原到最大化之前的位置,不再最大化:藏着的窗口一最大化
+            // 就会显示出来,而且实测(笔记本上的开发构建)退出那一刻最大化还没生效,
+            // window-state 记下的是最大化的坐标加普通尺寸,下次启动窗口歪在左上角。
+            // 代价是这种情况下下次启动不是最大化。
             let _ = main.hide();
             let _ = main.set_position(PhysicalPosition::new(saved.rect.x, saved.rect.y));
-            if saved.maximized {
-                // 最大化只能在显示着的时候做;退出前那一瞬会亮一下,换来下次启动还是最大化
-                let _ = main.maximize();
-            }
         }
     }
     crate::skill_shell::hide_overlay(app);
