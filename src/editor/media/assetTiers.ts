@@ -614,31 +614,41 @@ export function whenUploadTargetReady(timeoutMs = 30_000): Promise<string | null
   });
 }
 
-type ExistingMedia = { name?: string; hash?: string; tiers?: { original?: string; small?: string } | null };
+type ExistingMedia = { id?: string; name?: string; hash?: string; pending?: boolean; tiers?: { original?: string; small?: string } | null };
+
+/** 没法按哈希交给上传队列的一条素材(没有合法哈希):调用方据此提示用户;`pending` 是还在导入、入库后由导入那一路上传 */
+export interface SkippedMedia { id?: string; name: string; pending?: boolean }
 
 /**
  * 项目里已有的素材 → 按哈希入队的请求体:一个素材一项,视频两档(`tiers.small`、`tiers.original`),
- * 图片、音频只有素材原尺寸一档;没有哈希的(迁移期老素材、还在入库的)不算。同一素材原尺寸只列一次。
+ * 图片、音频只有素材原尺寸一档;同一素材原尺寸只列一次。没有哈希的(迁移期老素材、还在入库的)进不了队列,
+ * **不许悄悄跳过**:一律出现在 `skipped` 里(调用方先补入库,补不上的列给用户)。
  */
-export function existingMediaItems(media: readonly ExistingMedia[]): { name: string; original: string; small?: string }[] {
+export function existingMediaItems(media: readonly ExistingMedia[]): { items: { name: string; original: string; small?: string }[]; skipped: SkippedMedia[] } {
   const seen = new Set<string>();
-  const out: { name: string; original: string; small?: string }[] = [];
+  const items: { name: string; original: string; small?: string }[] = [];
+  const skipped: SkippedMedia[] = [];
   for (const m of media) {
     const original = String(m?.tiers?.original || m?.hash || "").toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(original) || seen.has(original)) continue;
+    if (!/^[0-9a-f]{64}$/.test(original)) {
+      skipped.push({ ...(m?.id ? { id: m.id } : {}), name: String(m?.name ?? ""), ...(m?.pending ? { pending: true } : {}) });
+      continue;
+    }
+    if (seen.has(original)) continue;
     seen.add(original);
     const small = String(m?.tiers?.small || "").toLowerCase();
-    out.push({ name: String(m?.name ?? ""), original, ...(/^[0-9a-f]{64}$/.test(small) && small !== original ? { small } : {}) });
+    items.push({ name: String(m?.name ?? ""), original, ...(/^[0-9a-f]{64}$/.test(small) && small !== original ? { small } : {}) });
   }
-  return out;
+  return { items, skipped };
 }
 
-export interface EnqueueExistingResult { queued: string[]; missing: string[]; local?: boolean }
+export interface EnqueueExistingResult { queued: string[]; missing: string[]; local?: boolean; skipped?: SkippedMedia[] }
 
 /**
  * 开启多用户协作「放云端」之后调:等编辑器进程拿到远程上传目标与 rw 票据,再把项目里已有的素材按哈希交给
  * 上传队列(`deps.post` 发 `POST /api/media/upload-queue/enqueue`,只收本地内容库里有的,缺的回 `missing`)。
  * 之后照 C6.6 队列规则逐个素材、先小后大地传。没有本机编辑器(在线浏览器模式)、等不到目标时回 null。
+ * 没有哈希、进不了队列的素材放在结果的 `skipped` 里(调用方应先 `ingestUnhashedMedia` 补入库再调这里)。
  * `post` 由调用方给(`collab.ts` 按编译期的 `ONLINE` 给,在线构建里连同接口地址一起被剪掉)。
  */
 export async function enqueueExistingMedia(
@@ -646,10 +656,11 @@ export async function enqueueExistingMedia(
   deps: { post: ((body: unknown) => Promise<EnqueueExistingResult | null>) | null; timeoutMs?: number },
 ): Promise<EnqueueExistingResult | null> {
   if (!deps.post) return null;
-  const items = existingMediaItems(media);
-  if (!items.length) return { queued: [], missing: [] };
+  const { items, skipped } = existingMediaItems(media);
+  if (!items.length) return { queued: [], missing: [], skipped };
   if (!(await whenUploadTargetReady(deps.timeoutMs ?? 30_000))) return null;
-  return deps.post({ items });
+  const r = await deps.post({ items });
+  return r ? { ...r, skipped } : null;
 }
 
 /** 探针与单测的观察口 */

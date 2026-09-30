@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { actions, getState, useStore } from "../store/project";
 import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
-import { PROCP_EXT, isProcpFile, loadProcpFile, packProcp } from "./io/procp";
+import { PROCP_EXT, isProcpFile, loadProcpFile, packMissingMessage, packProcp } from "./io/procp";
 import { ExportDialog, type ExportState } from "./ExportDialog";
 import { exportGateNow } from "./media/assetTiers";
 import { awaitingUploaderMessage } from "../render/mediaTier";
@@ -384,7 +384,8 @@ export function TopBar() {
     }
     try {
       await settledOrExplain();
-      const blob = await packProcp();
+      // 没有哈希的老素材先补入库;补完仍进不了包的(文件真的不在了)在最后列给用户,不许悄悄漏掉
+      const { blob, missing } = await packProcp();
       if (target) {
         const writable = await target.createWritable();
         await writable.write(blob);
@@ -398,6 +399,7 @@ export function TopBar() {
         URL.revokeObjectURL(a.href);
         alert(`当前环境不支持选择目录，已保存到浏览器的下载位置：${fileName}`);
       }
+      if (missing.length) alert(packMissingMessage(missing));
     } catch (e) {
       alert(String((e as Error).message));
     }
