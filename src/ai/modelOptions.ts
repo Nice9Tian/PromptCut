@@ -275,6 +275,15 @@ export function agyGroups(models: string[]): AgyModelGroup[] {
 }
 
 /**
+ * 这家的能力表;不认识的驱动名(比如拉起的子 Agent 页签沿用了一个本机没有的驱动,A3)给一张「什么都不支持」的表,
+ * 界面照常画、控件灰掉,不因为查不到而整页报错。
+ */
+const UNKNOWN_CAPABILITY: ProviderCapability = { efforts: [], fast: false, suggestedModels: "", modelsHint: "" };
+export function capabilityOf(provider: string): ProviderCapability {
+  return (CAPABILITIES as Record<string, ProviderCapability | undefined>)[provider] ?? UNKNOWN_CAPABILITY;
+}
+
+/**
  * 选中这个模型之后,「思考」下拉框该给哪几档。
  *
  * agy 之外还是各家那张固定表。agy 这边:
@@ -287,7 +296,7 @@ export function effortsFor(
   model: string,
   config: { api?: { model?: string }; cliModels?: Partial<Record<string, string>> } | null | undefined,
 ): EffortLevel[] {
-  if (provider !== "agy") return CAPABILITIES[provider].efforts;
+  if (provider !== "agy") return capabilityOf(provider).efforts;
   if (!model) return CAPABILITIES.agy.efforts;
   const group = agyGroups(parseModelList(config?.cliModels?.agy)).find((g) => g.base === model);
   return group ? group.efforts : CAPABILITIES.agy.efforts;

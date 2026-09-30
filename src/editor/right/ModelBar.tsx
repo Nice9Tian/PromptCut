@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { JSX } from "react";
 import type { AiProvider, PublicAiConfig } from "../../ai/types";
 import {
-  CAPABILITIES,
+  capabilityOf,
   EFFORT_LABEL,
   modelsFor,
   effortsFor,
@@ -61,7 +61,7 @@ export function ModelBar(props: {
   }, [provider]);
 
   if (!provider) return null;
-  const cap = CAPABILITIES[provider];
+  const cap = capabilityOf(provider);
 
   // 和 useAiChat 发请求时用的是同一个函数 —— 下拉框显示什么,请求里就得是什么
   const models = modelsFor(provider, config);
