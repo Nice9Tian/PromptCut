@@ -108,3 +108,9 @@
 2. `user-workflow.md`「创造力等级」表里「只改参数」可以补一句口径，避免后续对 `update_*` 的参数声明、组合卡拼装各自理解。建议放三级（`mechanism/agent.md`）而不是一级：
    - 修改前：（`mechanism/agent.md` 无此条）
    - 修改后（新增一节「创造力等级的判定」）：「工具需要的等级集中在 `server/agent/creativity-gate.mjs` 的对照表：新建卡片 / 效果要高；改已有卡片源码、整篇重写已有卡片、改效果定义（表达式、步骤、参数声明）要中；其余（用已有卡片 / 效果 / 部件、改片段参数、只改效果名字说明、内置测量）要低。没登记的调用方按桌面 APP 会话，跟随项目等级。」
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过闸门（`creativity-gate.mjs` 对照表、`callToolInternal` 接法）与堵口子（`strict-args.mjs` 只管 `set_project_meta`、处理函数白名单与 schema 一致）。九条〔裁〕照留，待用户审。
+- 主会话在本分支上重跑 `creativity-probe --shots`：15 项全过；看过项目设置「创造力等级」下拉与 AI 栏运行选项「创造力」的截图，样式与现有一致。
+- 采纳语义建议：`mechanism/agent.md` 新增「创造力等级的判定」（三级〔裁〕）；计划 A1 的白名单措辞按 schema 更正。合入 main。
