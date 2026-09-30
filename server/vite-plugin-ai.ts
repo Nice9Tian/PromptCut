@@ -9,6 +9,7 @@ import { overLimit } from './http-guard.mjs';
 import { stagePortsOf } from './stage-ports.mjs';
 import { createCallPairing } from './agent/call-pairing.mjs';
 import { createAgentSessions } from './agent/agent-sessions.mjs';
+import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from './agent/user-editing.mjs';
 import { effectiveIsFile } from './card-overrides.mjs';
 import { CREATIVITY_HINT, CREATIVITY_LABEL, normalizeCreativity, projectCreativity } from '../src/kernel/creativity.mjs';
 /*
@@ -323,6 +324,16 @@ export default function vitePluginAi(): Plugin {
        *   - mode "ticket":共享项目(托管端、局域网成员),经 SSE 向页面要一张连接票据(k:'conn', r:'agent', c:<n>),
        *     页面用 POST /api/agent/ticket 交回。
        */
+      /*
+       * 「用户正在编辑」(计划 agent-workflow-plan.md A2):编辑页把正在编辑的片段节流推到 POST /api/agent/editing,
+       * 这里记下(带过期时刻)。Agent 读或写到这些片段时工具结果带 userEditing 和一句提示;只提示,不拦。
+       */
+      const userEditingBoard = createUserEditingBoard();
+      /** 对话 id → 给人看的厂商名(覆盖提示里「Agent <身份> 刚改过」用;登记表在下面) */
+      const agentLabelOf = (key: string): string | null => {
+        try { return agentSessions.get(key)?.vendor ?? null; } catch { return null; }
+      };
+
       type AgentBinding = { projectId: string; mode: string; url: string; side: any };
       let agentBinding: AgentBinding | null = null;
       let ticketSeq = 0;
@@ -389,6 +400,8 @@ export default function vitePluginAi(): Plugin {
             return { result: out.result || out, opIds: out.opIds };
           },
           callServer: (tool: string, args: any) => runServerTool(tool, args),
+          userEditing: () => userEditingBoard.current(),
+          agentLabel: agentLabelOf,
         });
         agentBinding = { projectId, mode, url, side };
         agentLog("agent.bind", { projectId, mode, url });
@@ -495,7 +508,13 @@ export default function vitePluginAi(): Plugin {
          */
         const binding = agentBinding;
         if (binding) return binding.side.callTool(tool, args, { agent: agent || '', callId });
-        return dispatchTool(tool, args, agent, toolDef);
+        // 没绑副本:写经页面执行,写到哪些片段这里不知道,按参数点名的片段提示(绑了的在 agent-side 里按实际写到的算)
+        try {
+          const out = await dispatchTool(tool, args, agent, toolDef);
+          return annotateResult(out, { userEditing: userEditingFor({ tool, args, editing: userEditingBoard.current() }) });
+        } catch (err) {
+          throw annotateError(err, userEditingFor({ tool, args, editing: userEditingBoard.current() }));
+        }
       }
 
       async function dispatchTool(tool: string, args: any, agent: string | undefined, toolDef: any): Promise<any> {
@@ -1399,6 +1418,23 @@ export default function vitePluginAi(): Plugin {
           if (typeof data.ticket === 'string' && data.ticket.length > 0 && data.ticket.length <= 2048) w.resolve(data.ticket);
           else w.reject(new Error(typeof data.error === 'string' ? `页面没签出票据:${data.error}` : '页面交回的票据不合法'));
           sendJson(res, 200, { ok: true });
+        });
+      });
+      /*
+       * 「用户正在编辑」(A2):
+       *   POST /api/agent/editing { session, entities: [{ clipId, kind: "drag" | "text" | "recent", remainingMs? }] } → { ok, count }
+       *     编辑页(src/editor/userEditing.ts)推的整份状态,变了就推(节流)、非空时心跳续期;
+       *   GET  /api/agent/editing → { ok, entities }(诊断、探针)
+       */
+      server.middlewares.use('/api/agent/editing', (req, res) => {
+        res.setHeader('Cache-Control', 'no-store');
+        if (req.method === 'GET') return sendJson(res, 200, { ok: true, entities: userEditingBoard.current() });
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'GET / POST only' });
+        readJsonBody(req, res, 64 * 1024, (data) => {
+          try {
+            const count = userEditingBoard.report(data?.session, data?.entities);
+            sendJson(res, 200, { ok: true, count });
+          } catch (e: any) { sendJson(res, 400, { ok: false, error: e?.message || String(e) }); }
         });
       });
       server.middlewares.use('/api/agent/status', (req, res) => {

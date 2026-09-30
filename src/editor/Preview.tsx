@@ -29,6 +29,7 @@ import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "
 import { notePlayFrame, notePlayRunStart, playingSwapTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
+import { useUserEditing } from "./userEditing";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
 import { resolveGlRoute } from "../render/costDevice.mjs";
 import { ONLINE } from "../online/mode";
@@ -231,6 +232,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   
   // 记录拖动工具过程中的位移预览状态
   const [dragPreview, setDragPreview] = useState<{ clipId: string; dx: number; dy: number } | null>(null);
+  // 舞台上拖动 / 改字中:告诉 Agent 用户正在编辑这张卡(A2)
+  useUserEditing("stage-move", dragPreview?.clipId ?? null, "drag");
+  useUserEditing("stage-text", editingText?.clipId ?? null, "text");
 
   /**
    * 舞台的 RPC 客户端(E0):一个 iframe 实例一个,`pc-stage-ready` 握手到了就换新的、旧的 dispose。
