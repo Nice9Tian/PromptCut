@@ -69,6 +69,7 @@
 |---|---|---|---|
 | `POST shared/create` | `{ name, mode, kdf, creator: { username, salt, key }, project?: { salt, key }, list?: [{ username, salt, key }] }` | 201 `{ ok: true, projectId, name, mode }` | 400 `bad-request`；409 `name-taken`；429 `rate-limited`；403 `forbidden`（见下） |
 | `GET shared/lookup?name=<名>` | — | 200 `{ ok: true, projectId, name, mode }` | 404 `no-project` |
+| `POST shared/verify` | `{ protocols: [...] }`（WebSocket 握手要给的子协议列表，其中必须有证明项 `promptcut.auth.…`） | 200 `{ ok: true }` | 400 `bad-request`；401 `unauthorized`（与握手一样不说原因）；429 `rate-limited`；组装方不给鉴权时 404。与握手同一套核对：nonce 照样用掉、失败照样计入限速。用处：浏览器里握手被拒与没连上分不出，页面进不去时拿一份新证明问一次（2026-09-30 随 `claude/join-error` 合入） |
 | `POST shared/challenge` | `{ projectId, username, deviceId, as: 'member' \| 'creator' }` | 200 `{ ok: true, nonce, salt, kdf, mode }` | 404 `no-project`；400 `bad-request`；429 `rate-limited` |
 
 - **谁能建**〔裁〕：
