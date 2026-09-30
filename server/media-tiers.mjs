@@ -368,16 +368,30 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
     catch (error) { say('tiers.enqueue-failed', { hash, message: String(error?.message ?? error) }); }
   }
 
+  /** 不是视频的素材(图片、音频):没有素材小尺寸,只把素材原尺寸交给上传队列;不登记进 items(那是两档的转码状态) */
+  async function handOriginalToQueue(stored) {
+    if (!queue) return;
+    const hash = String(stored.hash).toLowerCase();
+    const ext = String(stored.ext || '').toLowerCase().replace(/^\./, '');
+    try { await queue.enqueue({ name: stored.name || '', tiers: [{ tier: 'original', hash, ext }] }); }
+    catch (error) { say('tiers.enqueue-failed', { hash, message: String(error?.message ?? error) }); }
+  }
+
   return {
     get file() { return file; },
     /**
      * 导入之后调(`stored` 是 `storeMediaStream` / `adoptMediaFile` 的结果)。视频:缺 faststart 就重封装(原地等它做完,
-     * 回包里的哈希就是重封装后的),再排素材小尺寸;不是视频原样回。
+     * 回包里的哈希就是重封装后的),再排素材小尺寸;不是视频(图片、音频)原样回,只把素材原尺寸交给上传队列(连远程素材服务时传过去,共享项目别的成员才取得到)。
      * 回 `{ stored, tiers: { original, small } | null, small: 'pending' | 'ready' | 'failed' | 'none' | null, remux }`。
      */
     async prepareImport(stored, { remux = true } = {}) {
       const ext = String(stored?.ext || '').toLowerCase();
-      if (!stored || !HASH.test(String(stored.hash)) || !isVideoExt(ext)) return { stored, tiers: null, small: null, remux: null };
+      if (!stored || !HASH.test(String(stored.hash))) return { stored, tiers: null, small: null, remux: null };
+      if (!isVideoExt(ext)) {
+        // 图片、音频只有素材原尺寸一档:照样交给上传队列(连远程素材服务时传过去,别的成员才取得到;连本机时队列是空操作)
+        await handOriginalToQueue(stored);
+        return { stored, tiers: null, small: null, remux: null };
+      }
       let current = stored;
       let remuxInfo = { state: 'skipped', reason: 'disabled' };
       if (remux && REMUX_EXTS.includes(ext)) {
