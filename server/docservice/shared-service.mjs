@@ -120,6 +120,7 @@ export function createSharedDocService({
     createPerHour: limits.createPerHour,
     maxProjects: limits.maxProjects,
     ...(typeof onCreate === 'function' ? { onCreate } : {}),
+    authenticate: auth.authenticate,
   });
   const prefix = mode === 'hosted' ? '' : wsPath.replace(/\/+$/, '');
 
