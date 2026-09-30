@@ -1,4 +1,10 @@
 /**
+ * 视频 seek 目标比要求的时刻晚 2 ms,不依赖素材帧率;和 `src/render/cards/mediaSource.ts` 的 `CARD_SEEK_LEAD` 同一个数,
+ * 也是下面出画判断的容差。不从那里 import:这个模块要在 React 之前装好,不拉素材分档那一串依赖。
+ */
+const SEEK_LEAD = 0.002;
+
+/**
  * 这一帧的素材(视频 seek / 图片加载)。
  *
  * 原来写在 `server/bakery/frame-media.mjs`(当时在 `scripts/`)、由 puppeteer 的 `evaluateOnNewDocument` 注入;现在是页面
@@ -56,7 +62,9 @@ export function installFrameMedia(): void {
         const check = () => {
           if (v.error) return finish(new Error(`Video decode failed: ${v.dataset.pcMediaSrc} (${v.error.code})`));
           if (v.readyState < 1) return;
-          const requested = Number(v.dataset.pcMediaTime);
+          // seek 目标加 SEEK_LEAD:取「时间戳不超过要求时刻的最后一帧」,要求时刻正好落在帧边界上时取边界上这一帧
+          // (同 `src/render/cards/mediaSource.ts` 的 CARD_SEEK_LEAD;原样 seek 时浮点误差 + 浏览器按微秒截断会取到前一帧)
+          const requested = Math.max(0, Number(v.dataset.pcMediaTime)) + SEEK_LEAD;
           target = Math.max(0, Math.min(requested, Number.isFinite(v.duration) ? Math.max(0, v.duration - 0.000001) : requested));
           if (!sought) {
             sought = true;
@@ -80,8 +88,8 @@ export function installFrameMedia(): void {
         const onPresented: VideoFrameRequestCallback = (_now, meta) => {
           if (finished) return;
           // A frame may be presented before check() has seen metadata.
-          const want = target ?? Math.max(0, Number(v.dataset.pcMediaTime));
-          if (meta.mediaTime <= want + 0.002 && want - meta.mediaTime < 0.25) { presented = true; check(); }
+          const want = target ?? Math.max(0, Number(v.dataset.pcMediaTime)) + SEEK_LEAD;
+          if (meta.mediaTime <= want + SEEK_LEAD && want - meta.mediaTime < 0.25) { presented = true; check(); }
           else {
             rejected.push(`${meta.mediaTime.toFixed(3)}@rs${v.readyState}${v.seeking ? "S" : ""}`);
             frameRequest = v.requestVideoFrameCallback(onPresented);
