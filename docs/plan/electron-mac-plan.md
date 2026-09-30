@@ -4,7 +4,7 @@
 
 ## 两个被推翻的前提
 
-- **Electron 离屏渲染的 paint 替代不了 beginFrame，也不需要替代。** 预渲染与导出不在壳的 WebView 里做，是另起 puppeteer 驱动的 chrome-headless-shell，用 `HeadlessExperimental.beginFrame`「帧时间由我们给」逐帧截图（`server/bakery/chrome.mjs` 头注：「HeadlessExperimental 域只在它里面有」）。这条路与壳无关，换壳后照旧。Electron 的 paint 是合成器按墙钟出帧，文档原话「When nothing is happening on a webpage, no frames are generated」「the frame has to be copied from the GPU to the CPU bitmap」，没有虚拟时间，只能得到「此刻画成什么样」，得不到「第 n 帧应该是什么样」，会动导出像素基线。
+- **Electron 离屏渲染的 paint 替代不了 beginFrame，也不需要替代。** 预渲染与导出不在壳的 WebView 里做，是另起 puppeteer 驱动的 chrome-headless-shell，用 `HeadlessExperimental.beginFrame`「帧时间由我们给」逐帧截图（`server/bakery/chrome.mjs` 头注：「HeadlessExperimental 域只在它里面有」）。这条路与壳无关，换壳后照旧。**更正（2026-10-01 第二次评估）**：页面早已自己钉时间——`performance.now`、rAF、`document.timeline`、随机数与墙上时钟由 `src/kernel/exportClock.ts`、`src/render/stageClock.ts`、`src/render/pinAnimations.ts`、`src/kernel/pinEntropy.ts` 钉死（`chrome.mjs` 头注：「beginFrame 给的帧时间只要求单调递增，画面不读它」；在线浏览器导出带 `rafControl=1` 手动推 rAF，没有 beginFrame 也在跑）。所以 beginFrame 在本项目只承担「现在合成一帧、画完把图给我」的同步，Electron 离屏 paint 加一套握手（设第 n 帧 → 等就绪 → 推一拍 rAF → `webContents.invalidate()` → 取下一次 paint）**能做到同样的事**，但只能作为第二个取帧后端，不是替换：探针、验证脚本、云端渲染节点、Linux 上的 Agent 端都在没有 Electron 的纯 Node 里跑，仍靠 puppeteer + chrome-headless-shell。见文末「第二阶段：paint 取帧后端」。
 - **支持 Mac 不必换壳；换壳的真正理由是内核一致与调试协议。** `@puppeteer/browsers` 支持 `mac` 与 `mac_arm`，chrome-headless-shell 在 Mac 上有得装。Tauri 在 Mac 上用系统的 WKWebView（Tauri 文档：「older macOS versions don't receive WebKit updates」），而编辑器、Agent 上网、舞台隔离都是按 Chromium 做的。
 
 ## 假设
@@ -25,7 +25,7 @@
 |---|---|
 | Tauri 留着、Mac 用 WKWebView | UI 与导出两个内核：字体、滤镜、画布边缘会出肉眼可见差异；预渲染产物是 Chromium 画的、贴回 WebKit 页面里对不上（`src/export/frameCompositor.ts` 头注：预渲染、导出与页面是「同一份页面与钉时间的办法」）；Agent 上网没有调试协议；`showSaveFilePicker` 不支持（有回退）；舞台的进程隔离靠 `Origin-Agent-Cluster: ?1`（`server/vite-plugin-stage-ports.ts`），只在 Chrome 152 实测过，WebKit 下是否真隔离未核实 |
 | Tauri 留着、Mac 底层换 CEF 插件 | Gemini 讨论第 1 轮提的；「tauri-plugin-cef」是否存在、成熟度如何未核实，不当候选 |
-| Electron 离屏 paint 替代 beginFrame | 见「两个被推翻的前提」；另外 paint 缺省是 CPU 拷贝模式，共享纹理要自写原生模块 |
+| Electron 离屏 paint 替代 beginFrame | 第一阶段不做：它是第二个后端而非替换（见更正），且会整个重定像素基线；作为第二阶段独立实验，见文末 |
 
 ## 步骤
 
@@ -49,6 +49,14 @@
 
 在 PC 上写一个 30 行的 Electron 主进程，`npx electron .` 直接加载正在跑的 dev-test（5203），看编辑器能不能开、三个舞台源能不能起、控制台有没有报错。不改仓库任何文件；结果决定第 1 步值不值得投两天。
 
+## 第二阶段：paint 取帧后端（壳迁完、第一阶段验收过之后的独立实验，未排期）
+
+- **做什么**：把 `server/bakery/bake.mjs` 的驱动抽成接口（现在拿的是 `{ page, client, beginFrame, waitNet }`），加一个 Electron 离屏窗口后端：`executeJavaScript` 代 `page.evaluate`，`webContents.debugger` 的 Network 域代 `waitNet`，`invalidate()` + 下一次 `paint` 代 `beginFrame({ screenshot })`。位图以 rawvideo 直接灌 ffmpeg，省掉 PNG 编解码。
+- **握手的正确性要求**：paint 不保证「下一次 paint 就是这次 invalidate 的结果」（视频元素出画也会触发合成）。每帧在画面里带帧标记，**运行期逐帧核对**，对不上就再等一次 paint；这是正确性的一部分，不是测试辅助。
+- **不能替换 headless-shell 的原因**：探针、`verify-determinism`、云端渲染节点、Linux Agent 端都没有 Electron。两个后端并存：渲染节点的结果键已乘环境指纹（M4），不会串产物，但桌面渲的与云端渲的不再共享。
+- **代价**：合成路径换了，导出像素基线整个重定（每个后端各一份）；导出确定性要在 GPU 合成下重新证明。
+- **验收**：导出确定性 1800/1800；运行期帧标记核对零失败；同一项目两个后端的产物逐帧比对，每一处差异都能解释；预渲染耗时前后对比在笔记本量（`verification.md`「性能基准机」）；G0 全过。
+- 建议出处：用户 2026-10-01 转来的外部建议（离屏窗口对照表与握手四步），其中「多带约 100 MB 的 headless-shell」不对（实测 270 MB）、「帧号只在测试阶段核对」不够、「不用额外带 headless-shell」只对桌面包成立，其余采纳。
 ## 顾问调用记录
 
 Gemini（agy）讨论一轮，2026-10-01：提出三条替代路线（Tauri+CEF 未核实；全 Wasm 导出管线，成本极高且动基线，不采纳；Electron 并砍掉打包的 Chrome，采纳），指出薄弱环节（两个内核破坏所见即所得，采纳），对 paint 与 WKWebView 的判断已按上文标注核实或标未核实。它称「利用 Electron 隐藏的 BrowserWindow 挂载 CDP 跑导出」与代码注释矛盾（beginFrame 只在 chrome-headless-shell 里有），不采纳。
