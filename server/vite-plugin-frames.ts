@@ -34,6 +34,7 @@ import { createCardCodeIndex } from "./card-code.mjs";
 import { cardCodeIdentityOf, onCardSourceChange, overridesRoot } from "./card-overrides.mjs";
 import { autoRenderNodeOffReason, createAutoRenderNode } from "./auto-render-node.mjs";
 import { foreignAssetEndpoints, selectAssetClient as selectAssetClientImpl } from "./asset-select.mjs";
+import { setBakeRemote } from "./bake-store.mjs";
 import { ALL as SCOPE_ALL, createPushScope } from "./push-scope.mjs";
 import { closeStorage, createExportSummary, storageDataDir, storageFor } from "./frame-library-storage.mjs";
 import { createStorageHandler, storageRouteOf } from "./storage-routes.mjs";
@@ -188,7 +189,14 @@ async function startArtifactPush(root: string, service: FramePipeline, auto: Aut
   const queue = createPushQueue({ pipeline: service, client, content, dir: scoped && link.projectId ? pushDirOf(service, link.url, link.projectId) : service.root,
     log: pushLog, settleMs: 1500, scope });
   queue.start();
+  /*
+   * 卡片快照(bake_card、3D 视图的贴图)也是预渲染产物:写进本机素材服务之后再推一份到这一台(`bake-store.mjs`)。
+   * 选定的就是本机素材服务时 bake-store 自己跳过。
+   */
+  const bakeRemote = { get base() { return assets.base(); }, put: (ns: string, bytes: Buffer, o?: any) => client.put(ns, bytes, o) };
+  setBakeRemote(() => bakeRemote);
   pushTeardowns.set(root, async () => {
+    setBakeRemote(null);
     try { await queue.stop(); } catch {}
     if ((service as any).pushQueue === queue) (service as any).pushQueue = null;
     assets.stop();
