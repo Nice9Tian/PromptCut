@@ -40,7 +40,7 @@ $PROMPTCUT_DATA_DIR/
    - 装 Node ≥ 22 和 PM2；
    - 云控制台的安全组放行 TCP 8787、8788（或新地址上选定的端口）；
    - 服务器自己的 UFW 放行 22 和这两个端口。
-   - nginx：`/editor` 的三个源（编辑器页与两个舞台，都带 `Origin-Agent-Cluster: ?1`）、`/hosted`、`/media` 的反向代理与 TLS，照旧服务器的 `/etc/nginx/sites-enabled/promptcut`、`promptcut-stages` 抄；`/etc/nginx/nginx.conf` 要打开 `gzip_types`（JS、CSS、JSON、SVG 等）。不开的话在线页面的主脚本按原样传（4 MB 多），两个舞台各下载一遍，慢网络下首次握手超时、页面永久退回单舞台、当不了纯浏览器节点（2026-09-30 实测，开压缩后 1.3 MB）。
+   - nginx：`/editor` 的三个源（编辑器页与两个舞台，都带 `Origin-Agent-Cluster: ?1`）、`/hosted`、`/media` 的反向代理与 TLS，照旧服务器的 `/etc/nginx/sites-enabled/promptcut`、`promptcut-stages` 抄；`/etc/nginx/nginx.conf` 要打开 `gzip_types`（JS、CSS、JSON、SVG 等）。不开的话在线页面的主脚本按原样传（4 MB 多），两个舞台各下载一遍，慢网络下首次握手超时、页面永久退回单舞台、当不了纯浏览器节点（2026-09-30 实测，开压缩后 1.3 MB）。两份站点配置（`promptcut`、`promptcut-stages`）的 `location ^~ /editor/assets/` 里还要有 `gzip_static on;`：部署脚本 `deploy-hosted --editor` 会给 `assets/` 下大于 1 KB 的 JS、CSS、JSON、SVG、WASM 生成同名 `.gz`，nginx 直接带 `Content-Length` 发这份预压缩文件；只靠动态 gzip 时响应是分块传输的，部分 Chrome 配置下入口脚本分块发时页面会卡死（2026-10-01 查明，见 `docs/archive/agent-reports/AGENT-nav-hang.md`）。
 2. **部署代码**：用部署脚本（`scripts/remote/docservice.mjs`，SP 起同时部署两个服务）指向新服务器，先不启动。
 3. **旧服务器停写**：`pm2 stop` 两个服务。这时成员会断开，客户端显示「托管端不可达」。
 4. **拷数据**：把旧服务器的 `PROMPTCUT_DATA_DIR` 整个打包、拷到新服务器（`tar` 或 `rsync -a`），再核对两边的文件数和总字节数一致。

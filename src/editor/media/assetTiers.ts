@@ -663,6 +663,48 @@ export async function enqueueExistingMedia(
   return r ? { ...r, skipped } : null;
 }
 
+/** 已经列给用户看过的「补不上」素材 id:同一页面会话里不反复弹 */
+const backfillNotified = new Set<string>();
+
+/**
+ * 打开项目后在后台补入库(`io/mediaUpload.ts` 的 `ingestUnhashedMedia`)做完之后调:项目这时已经「放云端」
+ * (编辑器进程有带 rw 票据的远程上传目标)的,把这次补上哈希的素材按哈希交给上传队列 —— 图片、音频的入库
+ * 不会自己进队列(`server/media-tiers.mjs` 的 prepareImport 只管视频),不交就只在本机,别的成员拿不到;
+ * 视频重复交无妨(队列按素材去重)。补不上的、本机内容库里没有的,照开启放云端时的做法用 `deps.notify` 列给用户
+ * (同一条素材一个会话里只列一次)。
+ * 不是共享项目(`deps.shared` 为假)、或等不到上传目标(本机就是主机、没有本机编辑器)时什么都不做,回 null。
+ */
+export async function queueBackfilledMedia(
+  r: { ingested: readonly string[]; failed: readonly { id?: string; name: string }[] },
+  media: readonly ExistingMedia[],
+  deps: {
+    post: ((body: unknown) => Promise<EnqueueExistingResult | null>) | null;
+    shared: () => boolean;
+    notify?: (names: string[]) => void;
+    timeoutMs?: number;
+  },
+): Promise<EnqueueExistingResult | null> {
+  if (!deps.post || !deps.shared()) return null;
+  if (!r.ingested.length && !r.failed.some((f) => !f.id || !backfillNotified.has(f.id))) return null;
+  if (!(await whenUploadTargetReady(deps.timeoutMs ?? 30_000))) return null;
+  const ids = new Set(r.ingested);
+  const picked = media.filter((m) => m?.id && ids.has(m.id));
+  let res: EnqueueExistingResult | null = { queued: [], missing: [] };
+  if (picked.length) res = await enqueueExistingMedia(picked, deps);
+  const nameOfHash = new Map<string, { id?: string; name: string }>();
+  for (const m of picked) {
+    const h = String(m.tiers?.original || m.hash || "").toLowerCase();
+    if (h && !nameOfHash.has(h)) nameOfHash.set(h, { id: m.id, name: String(m.name ?? "") });
+  }
+  const list = [
+    ...r.failed,
+    ...(res?.missing ?? []).map((h) => nameOfHash.get(String(h).toLowerCase()) ?? { name: String(h) }),
+  ].filter((f) => !f.id || !backfillNotified.has(f.id));
+  for (const f of list) if (f.id) backfillNotified.add(f.id);
+  if (list.length) deps.notify?.(list.map((f) => f.name));
+  return res;
+}
+
 /** 探针与单测的观察口 */
 export function assetTiersDebug() {
   return { remote: remote?.base ?? null, known, complete: [...complete].sort(), snapshot: [...snapshot] };
@@ -670,6 +712,7 @@ export function assetTiersDebug() {
 
 /** 单测用 */
 export function resetAssetTiersForTest(): void {
+  backfillNotified.clear();
   uploadTargetReadyBase = null;
   uploadTargetWaiters.clear();
   remote = null;

@@ -255,7 +255,7 @@ export function uploadMissingMessage(names: readonly string[], limit = 8): strin
  * 编辑器进程的「按哈希入队」(`server/vite-plugin-media.ts`)。在线构建里 `ONLINE` 是常量 true,这一支连同接口地址被剪掉
  * (在线页面没有编辑器进程;也不会走到放云端的开启,那在桌面版里做)。
  */
-const postEnqueue = ONLINE ? null : async (body: unknown): Promise<EnqueueExistingResult | null> => {
+export const postEnqueue = ONLINE ? null : async (body: unknown): Promise<EnqueueExistingResult | null> => {
   try {
     const r = await fetch("/api/media/upload-queue/enqueue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = (await r.json()) as { ok?: boolean } & EnqueueExistingResult;

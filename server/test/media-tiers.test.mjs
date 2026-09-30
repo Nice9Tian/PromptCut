@@ -366,6 +366,42 @@ test('T2-1 经插件接线:连远程素材服务,传到素材原尺寸第 2 片�
   assert.deepEqual(qfile.items, []);
 });
 
+test('T2-3 连远程素材服务时新导入的图片、音频也进上传队列(只有素材原尺寸一档),远端 complete、字节一致;不登记两档状态', { timeout: 30_000 }, async () => {
+  const rootR = path.join(OUT, 'remote-still');
+  fs.mkdirSync(media.mediaDir(rootR), { recursive: true });
+  const remote = await listen(serviceHandler(rootR));
+  const rootC = path.join(OUT, 'importer-c');
+  fs.mkdirSync(media.mediaDir(rootC), { recursive: true });
+  const originC = await listen(serviceHandler(rootC));
+  const service = await media.mediaTierService(rootC);
+  service.queue.start();
+  after(() => service.queue.stop());
+  const set = await fetch(`${originC}/api/media/upload-queue/target`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base: `${remote}/api/asset`, ticket: 'test-ticket-3' }) });
+  assert.equal(set.status, 200);
+  const files = [];
+  for (const [name, size] of [['still.png', 40_000], ['voice.mp3', 9 * 1024 * 1024]]) {
+    const f = path.join(OUT, `t23-${name}`);
+    fs.writeFileSync(f, crypto.randomBytes(size));
+    files.push({ name, f, hash: sha256File(f) });
+  }
+  for (const it of files) {
+    const body = await importFile(originC, it.f, it.name);
+    assert.equal(body.hash, it.hash);
+    assert.equal('tiers' in body, false, '不是视频:回包照旧不带 tiers');
+    assert.equal(service.manager.status([it.hash])[it.hash].state, 'unknown', '不登记两档状态');
+  }
+  let guard;
+  await Promise.race([service.queue.drain(), new Promise((_, rej) => { guard = setTimeout(() => rej(new Error('队列 20 s 没清空')), 20_000); })])
+    .finally(() => clearTimeout(guard));
+  for (const it of files) {
+    const c = await chunksOf(`${remote}/api/asset`, it.hash);
+    assert.equal(c.complete, true, `${it.name} 在远端 complete`);
+    const got = Buffer.from(await (await fetch(`${remote}/api/asset/media/${it.hash}`)).arrayBuffer());
+    assert.equal(crypto.createHash('sha256').update(got).digest('hex'), it.hash, `${it.name} 远端字节一致`);
+  }
+  assert.ok(service.queue.stats().done >= 2);
+});
+
 test('T2-2 重启续传:断网时停掉队列(留在 upload-queue.json 里),新建的队列读回来接着传,只补缺片', { timeout: 30_000 }, async () => {
   const rootR = path.join(OUT, 'remote-2');
   fs.mkdirSync(media.mediaDir(rootR), { recursive: true });
