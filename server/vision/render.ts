@@ -62,6 +62,14 @@ export interface RenderOpts {
    * 预渲染贴图、动图这些不缩图的调用方不付这一趟。只在 FramePipeline 那条路上有,`runner` 旁路不量。
    */
   rects?: boolean;
+  /**
+   * FramePipeline 那条路上排哪条队(`mechanism/rendering.md`「查询渲染与预渲染进程」)。缺省 `"agent"`:Agent 的查询,
+   * 只在 Agent 专用实例上走(`see_frames`、`get_gif` 的 `/render`、`bake_card`)。
+   *   - `"preview"`:用户在 AI 栏点开的操作预览 —— 插在普通预渲染队列所有待办之前,不占用 Agent 的专用实例;
+   *   - `"prerender"`:普通的预渲染(3D 视图的空闲贴图预取)—— 排普通预渲染队列的队尾,Agent 专用实例空闲时可以接。
+   * `runner` 旁路不看它。
+   */
+  lane?: "agent" | "preview" | "prerender";
 }
 
 const fmtBox = (b: readonly number[] | null) => (b ? `[${b.join(", ")}]` : "null");
@@ -132,7 +140,7 @@ export async function renderFrames(root: string, origin: string, project: any, t
     const service = frameService(root, origin);
     const normalized = renderProject(project);
     const entry = await service.entry(normalized);
-    const frames = await service.see_frames(normalized, times, { signal: o.signal, lane: "agent" });
+    const frames = await service.see_frames(normalized, times, { signal: o.signal, lane: o.lane ?? "agent" });
     const result = new Map<number, FrameResult>();
     for (const [frame, value] of frames) {
       if (value.incomplete) throw new Error(`画面尚未就绪：${(value.missing || []).join("、")}`);
