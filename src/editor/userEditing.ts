@@ -12,6 +12,7 @@ import { useEffect } from "react";
 import { getState, subscribe, onLocalCommit } from "../store/project";
 import type { Project } from "../kernel/project";
 import { createEditingTracker, type EditingEntity } from "./userEditingCore";
+import { publishEditing } from "./sync/presence";
 
 /** 这个页面的会话号(服务端按它整份替换这个页面报的状态) */
 const session = `ue-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -23,7 +24,7 @@ const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.V
  * 在线页面没有编辑器进程(C10a 契约第 2 节),也就没有本机 Agent 可提示:不发,在线构建里连同这条 /api 路径一起剪掉。
  * 桌面 / 本机:不等回包、不读 body —— 它是一份提示,晚一拍到也只是少提示一次。
  */
-const send: (entities: EditingEntity[]) => void = ONLINE_BUILD ? () => {} : (entities) => {
+const sendLocal: (entities: EditingEntity[]) => void = ONLINE_BUILD ? () => {} : (entities) => {
   try {
     void fetch("/api/agent/editing", {
       method: "POST",
@@ -32,6 +33,15 @@ const send: (entities: EditingEntity[]) => void = ONLINE_BUILD ? () => {} : (ent
       keepalive: true,
     }).catch(() => {});
   } catch { /* 发不出去就等下一次 */ }
+};
+
+/**
+ * 另外经这个页面的文档服务连接发布一份(A3 第二阶段,src/editor/sync/presence.ts):共享项目里别的成员的编辑器进程
+ * 据此提示他们的 Agent「用户 <成员>正在编辑」。在线页面也走这条(它没有编辑器进程,只有文档服务连接)。
+ */
+const send = (entities: EditingEntity[]) => {
+  sendLocal(entities);
+  try { publishEditing(session, entities); } catch { /* 在场状态是附带的 */ }
 };
 
 const tracker = createEditingTracker({ send });

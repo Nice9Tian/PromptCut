@@ -22,6 +22,7 @@ import { MessageList } from "./chat/MessageList";
 import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { QueueList } from "./chat/QueueList";
 import { AgentEventLog } from "../sync/AgentEventLog";
+import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { Composer } from "./chat/Composer";
 import type { RewindHandlers } from "./chat/UserBubble";
 import type { ChatAttachment } from "../../ai/types";
@@ -101,8 +102,9 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     const convId = history.conversationId;
     let alive = true;
     const deliver = () => {
-      // 用户自己排的队优先:队列里还有(暂停着也算)就先不投递,等用户那几句发完或删掉
-      if (!alive || isBusy() || getQueue(tabId).length > 0) return;
+      // 用户自己排的队优先:队列里还有(暂停着也算)就先不投递,等用户那几句发完或删掉;
+      // 驱动还没定下来(刚开的子 Agent 页签,驱动列表还在取)也先不取,取走了发不出去就丢了
+      if (!alive || !provider || isBusy() || getQueue(tabId).length > 0) return;
       if (!agentBus.hasAutoDeliverable(convId)) return;
       void agentBus.takeInbox(convId, true).then((msgs) => {
         if (!msgs.length) return;
@@ -125,7 +127,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       offQueue();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streaming, history.conversationId]);
+  }, [streaming, history.conversationId, provider]);
   // 关掉分页时这一页的队列跟着丢:队列只放内存,不跨分页、不跨刷新
   useEffect(() => () => clearQueue(tabId), [tabId]);
 
@@ -520,6 +522,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         </div>
       )}
 
+      {/* 共享项目里别的成员那边的 Agent 在改哪儿(A3 第二阶段,经文档服务的在场状态) */}
+      <RemoteAgentsStrip />
       <MessageList
         messages={messages}
         view={view}

@@ -32,6 +32,7 @@ import { endpointsModule } from './modules/endpoints.mjs';
 import { projectModule } from './modules/project.mjs';
 import { contentModule } from './modules/content.mjs';
 import { costsModule } from './modules/costs.mjs';
+import { presenceModule } from './modules/presence.mjs';
 import { eventsModule } from './modules/events.mjs';
 import { sharedModule } from './modules/shared.mjs';
 import { createFileStore, createMemoryStore } from './store/index.mjs';
@@ -155,7 +156,11 @@ export function createSharedDocService({
       const project = projectModule({ store: storeForSpace(space) });
       const content = contentModule({ store: storeForSpace(space) });
       // 成本记录（C10 其余第 3 节）：和内容库共用这个空间的存储，按项目空间隔离
-      b = { project, content, events: eventsModule({ project, content }), costs: costsModule({ space, store: storeForSpace(space) }) };
+      b = {
+        project, content, events: eventsModule({ project, content }), costs: costsModule({ space, store: storeForSpace(space) }),
+        // 在场状态(A3 第二阶段):成员页面的「正在编辑」、Agent 的范围与消息,只在内存里转发,借项目频道广播
+        presence: presenceModule({ project }),
+      };
       bundles.set(space, b);
     }
     return b;
@@ -164,6 +169,7 @@ export function createSharedDocService({
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).content }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).costs }));
+  service.mount(spacedModule({ create: (space) => bundleForSpace(space).presence }));
   service.mount(sharedModule({
     store: storeOf,
     challenges: adminChallenges,

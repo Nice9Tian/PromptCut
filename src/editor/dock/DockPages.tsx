@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAgentTabs } from "../../ai/agentTabs";
+import { RemoteAgentsStrip } from "../right/RemoteAgentsStrip";
 import { useLayoutMode } from "../layoutMode";
 import { onCaptionsRequest } from "../left/captionsBus";
 import { LibrarySection } from "../left/LibrarySection";
@@ -36,6 +37,8 @@ const ScriptPageMemo = memo(ScriptPage);
 function OnlineAgentPlaceholder(_props: { tabId: string; active: boolean; mcpConnected: boolean }) {
   return (
     <div className="pc-online-agent-off" data-pc="online-agent-off" style={{ padding: 16, color: "var(--ui-text-dim, #888)", fontSize: 13, lineHeight: 1.6 }}>
+      {/* 在线页面没有自己的 Agent,但看得到共享项目里别的成员那边的 Agent 在改哪儿(A3 第二阶段) */}
+      <RemoteAgentsStrip />
       {onlineUnsupported("AI 助手")}
     </div>
   );

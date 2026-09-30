@@ -11,6 +11,7 @@ import { createCallPairing } from './agent/call-pairing.mjs';
 import { createAgentSessions } from './agent/agent-sessions.mjs';
 import { createAgentBoards } from './agent/agent-board.mjs';
 import { attachLink, createMultiAgent } from './agent/multi-agent.mjs';
+import { createPresenceBridge } from './agent/presence-bridge.mjs';
 import { loadRole } from './agent/agent-roles.mjs';
 import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from './agent/user-editing.mjs';
 import { effectiveIsFile } from './card-overrides.mjs';
@@ -331,7 +332,30 @@ export default function vitePluginAi(): Plugin {
           onPageWrites: (agent: string, opIds: string[]) => boards.boardFor(projectId).attributeOps(agent, opIds),
         });
         // 公告板的改动记录由这条连接的提交流喂;发给各对话连接的 project.overwritten 记给被覆盖的那个 Agent(A3)
-        const detachBoard = attachLink(side.link, () => boards.boardFor(projectId));
+        const detachLink = attachLink(side.link, () => boards.boardFor(projectId));
+        /*
+         * 跨设备(A3 第二阶段):经文档服务的在场状态收别的成员正在编辑的片段(进 A2 看板)、别的成员那边 Agent 的范围与消息
+         * (进公告板),发本机 Agent 的范围与发给他们的消息。旧版文档服务不认识这些消息就停发,不报错。
+         */
+        const bridge = createPresenceBridge({
+          link: side.link,
+          board: () => boards.boardFor(projectId),
+          editing: userEditingBoard,
+          conversationNumberOf: (key: string) => side.conversationNumber(key),
+          labelOf: agentLabelOf,
+          infoOf: (key: string) => ({ role: agentSessions.get(key).role }),
+          log: agentLog,
+        });
+        presenceBridge = bridge;
+        boards.boardFor(projectId).onDeclare = (key: string) => { void bridge.publishAgent(key); };
+        void bridge.start();
+        const detachBoard = () => {
+          detachLink();
+          bridge.close();
+          if (presenceBridge === bridge) presenceBridge = null;
+          const b = boards.boardFor(projectId);
+          b.onDeclare = null;
+        };
         agentBinding = { projectId, mode, url, side, detachBoard };
         agentLog("agent.bind", { projectId, mode, url });
         return agentBinding;
@@ -390,6 +414,7 @@ export default function vitePluginAi(): Plugin {
         return typeof id === 'string' ? id : '';
       };
       let lastTabs: any[] = [];
+      let presenceBridge: any = null;
       let boardPushTimer: ReturnType<typeof setTimeout> | null = null;
       const pushBoard = () => {
         if (boardPushTimer) return;
@@ -401,6 +426,8 @@ export default function vitePluginAi(): Plugin {
       };
       const boards = createAgentBoards(() => ({
         labelOf: agentLabelOf,
+        // 收件方在共享项目别的成员那边:经文档服务转过去(A3 第二阶段;没绑项目副本、旧版文档服务时转不出去)
+        forwardRemote: (msg: any) => presenceBridge?.forward(msg) ?? false,
         infoOf: (key: string) => {
           const e = agentSessions.get(key);
           return { role: e.role, roleName: e.role && e.role !== 'main' ? loadRole(e.role)?.name ?? null : null, parent: e.parent };
