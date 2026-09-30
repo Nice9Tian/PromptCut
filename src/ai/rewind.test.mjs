@@ -42,7 +42,7 @@ test("最后一条用户消息后面还没有回复(刚发出去就回退)也行
   assert.deepEqual(ids(r.removed), ["u2"]);
 });
 
-test("分工模式一问多答:带 roleId 的几条 Agent 回复一起移除", () => {
+test("一问多答:带 roleId 的几条 Agent 回复一起移除", () => {
   const list = [
     u("u1"), a("a1"),
     u("u2", "拆成几步做"),

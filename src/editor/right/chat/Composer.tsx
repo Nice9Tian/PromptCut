@@ -18,10 +18,6 @@ import "./chat.css";
 
 /** 「✦」菜单里的几样:不常点、但一点就改变这一轮怎么跑的东西,原来挤在顶栏上 */
 export interface ComposerMenuProps {
-  teamMode: boolean;
-  /** 「分工模式」那一项的悬停说明;没配 API 直连时是降级说明(见 AiPanel 里 teamModeHint 的注释) */
-  teamModeHint: string;
-  onSetTeamMode: (on: boolean) => void;
   /** 「一键配特效」依次跑的角色,只用来写悬停说明 */
   workflowRoles: Role[];
   onRunWorkflow: () => void;
@@ -69,9 +65,9 @@ function providerLabel(p: ProviderInfo): string {
 
 /** 工具条上的「✦」菜单 */
 function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
-  const { teamMode, teamModeHint, onSetTeamMode, workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming } = props;
+  const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming } = props;
   const pop = usePopover();
-  /** 点了一项就收起菜单。「分工模式」是开关,不走这里 —— 留着让用户看见勾上了 */
+  /** 点了一项就收起菜单 */
   const pick = (fn: () => void) => () => {
     pop.setOpen(false);
     fn();
@@ -85,26 +81,12 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
         aria-haspopup="menu"
         aria-expanded={pop.open}
         aria-label="更多操作"
-        title={teamMode ? "更多操作(分工模式开着)" : "更多操作:分工模式、一键配特效、诊断报告、新对话"}
+        title="更多操作:一键配特效、诊断报告、新对话"
         onClick={pop.toggle}
       >
         <span aria-hidden="true">✦</span>
-        {/* 分工模式收进菜单之后就看不见了,开着的时候在按钮上挂个点 */}
-        {teamMode && <i className="ai-bar-dot" aria-hidden="true" />}
       </button>
       <div className="ai-pop ai-menu" role="menu" aria-label="更多操作" data-pop style={{ display: pop.open ? undefined : "none" }}>
-        <button
-          type="button"
-          role="menuitemcheckbox"
-          aria-checked={teamMode}
-          className="ai-menu-item"
-          data-pc="ai-team-mode"
-          title={teamModeHint}
-          onClick={() => onSetTeamMode(!teamMode)}
-        >
-          <span className="ai-menu-icon" aria-hidden="true">{teamMode ? "✓" : ""}</span>
-          分工模式
-        </button>
         <button
           type="button"
           role="menuitem"

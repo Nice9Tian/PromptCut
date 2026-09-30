@@ -34,6 +34,8 @@ export const PAGE_STATE_TOOL = '__page_state';
  * @param {() => Array<{ clipId: string, kind: string }>} [o.userEditing] 此刻用户正在编辑的片段(`user-editing.mjs` 的
  *   `createUserEditingBoard().current`);给了就在读到 / 写到这些片段的工具结果里带 `userEditing` 与提示(A2,只提示不拦)
  * @param {(key: string) => string | null} [o.agentLabel] 对话 id → 厂商名,覆盖提示「Agent <身份> 刚改过」里用
+ * @param {(agent: string, opIds: string[]) => void} [o.onPageWrites] 页面替某个 Agent 执行了写入(A3 公告板把这些提交记到它名下)
+ * `callServer(tool, args, { agent })`:`side: "server"` 的工具(`wait`、`report_progress`、A3 的多 Agent 协调工具)。
  */
 export function createAgentSide({
   projectId,
@@ -53,6 +55,7 @@ export function createAgentSide({
   execLimits = {},
   userEditing = null,
   agentLabel = null,
+  onPageWrites = null,
 } = {}) {
   if (!Array.isArray(tools)) throw new TypeError('createAgentSide: 要 tools(工具表)');
   if (typeof callPage !== 'function') throw new TypeError('createAgentSide: 要 callPage');
@@ -87,11 +90,15 @@ export function createAgentSide({
       const done = await executor.execute(tool, args, agent, toolDef, ctx);
       if (done !== undefined) return done;
     } else if (toolDef.side === 'server') {
-      return callServer(tool, args);
+      return callServer(tool, args, { agent });
     }
     const { result, opIds } = await viaPage(tool, args, agent);
     const own = opIds.filter((x) => typeof x === 'string');
-    if (own.length) await executor.notePageWrites(agent, own).catch(() => {});
+    if (own.length) {
+      // 页面替这个 Agent 执行的写入以页面身份提交:告诉公告板这几次提交是它的(A3)
+      try { onPageWrites?.(agent, own); } catch { /* 公告板是附带的 */ }
+      await executor.notePageWrites(agent, own).catch(() => {});
+    }
     return result;
   }
 

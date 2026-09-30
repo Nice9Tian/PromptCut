@@ -1,10 +1,8 @@
 import React, { useRef, useLayoutEffect, useReducer } from "react";
 import type { ChatMessage } from "../../../ai/types";
-import type { OrchestrationState } from "../../../ai/orchestrateGraph";
 import type { useInstallJobs } from "../../../ai/sttInstallStore";
 import { UserBubble, type RewindHandlers } from "./UserBubble";
 import { AgentBubble } from "./AgentBubble";
-import { OrchestrationBlock } from "../OrchestrationBlock";
 import { RoleAvatar } from "../RoleAvatar";
 import { playEnter } from "../../enterMotion";
 import type { ViewMode } from "./viewPrefs";
@@ -69,7 +67,7 @@ const MAX_ENTER_ROWS = 2;
 
 /**
  * 一条消息大概发生在什么时候。助手消息有 startedAt;用户消息没有,
- * 但它的 id 就是发送那一刻的 Date.now()(分工模式的是 `时间戳-任务id`,parseInt 取得到前缀)。
+ * 但它的 id 就是发送那一刻的 Date.now()(旧记录里多角色回复的是 `时间戳-任务id`,parseInt 取得到前缀)。
  * 只认像毫秒时间戳的数,别把随手起的短 id 当成 1970 年。
  */
 function timeOf(m: ChatMessage): number | null {
@@ -129,7 +127,7 @@ const MessageRow = /* @__PURE__ */ React.memo(function MessageRow(props: Message
       </div>
     );
   }
-  // Agent 消息靠左:28px 圆形头像 + 气泡。分工模式下有 roleId,头像按角色取色取字;普通对话就是「AI」
+  // Agent 消息靠左:28px 圆形头像 + 气泡。带 roleId 的(旧记录里的角色回复)头像按角色取色取字;普通对话就是「AI」
   return (
     <div className="ai-row ai-row--assistant" data-pc-msg={m.id}>
       <span className="ai-row-avatar">
@@ -163,7 +161,6 @@ export interface MessageListProps {
   expanded: Set<string>;
   openRuns: Set<string>;
   rowHandlers: RowHandlers;
-  orchestration: OrchestrationState | null;
   /** 空对话时点了示例句:把那句填进输入框 */
   onPickExample: (text: string) => void;
   /** 用户气泡上「回退到这里」的回调(稳定引用,见 UserBubble 的 RewindHandlers);不给就不显示回退入口 */
@@ -171,7 +168,7 @@ export interface MessageListProps {
 }
 
 /** 列表里的一条:消息气泡、时间分隔行、「收到其他 Agent 的消息」小字、编排折叠块。每条渲染出来恰好是滚动区的一个直接子元素 */
-type EntryKind = "user" | "assistant" | "time" | "note" | "orch";
+type EntryKind = "user" | "assistant" | "time" | "note";
 interface Entry {
   key: string;
   kind: EntryKind;
@@ -179,7 +176,7 @@ interface Entry {
 }
 
 /** 没量过的条先按这些高度估;同类量满几条后改按它们的平均值(HeightBook) */
-const DEFAULT_HEIGHTS: Record<EntryKind, number> = { user: 60, assistant: 200, time: 20, note: 20, orch: 44 };
+const DEFAULT_HEIGHTS: Record<EntryKind, number> = { user: 60, assistant: 200, time: 20, note: 20 };
 /** 最近点过、按过键的几条保持渲染,气泡自己的状态(翻到哪一页、确认层开着)不因滚远被卸载而丢 */
 const PIN_CAP = 8;
 /** 还没量到滚动区高度时(第一次渲染)按这么高算窗口 */
@@ -209,7 +206,7 @@ const overscanFor = (h: number) => Math.max(300, h / 2);
  * 上面的条换了高度、占位换了估计、窗口挪了,在绘制之前把它挪回原处;贴底时照旧滚到底。
  */
 export function MessageList(props: MessageListProps) {
-  const { messages, view, showThinking, installJobs, expanded, openRuns, rowHandlers, orchestration, onPickExample, rewind } = props;
+  const { messages, view, showThinking, installJobs, expanded, openRuns, rowHandlers, onPickExample, rewind } = props;
   const messagesScrollRef = useRef<HTMLDivElement>(null);
 
   /**
@@ -385,11 +382,6 @@ export function MessageList(props: MessageListProps) {
     for (const id of fresh) playEnter(box.querySelector(`[data-pc-msg="${CSS.escape(id)}"]`), "pc-enter-rise");
   }, [messages]);
 
-  // 编排折叠块插在「最后一条用户消息」后面。编排发生在提问之后、角色回复之前，
-  // 放这个位置读下来才是「提问 → 怎么分的工 → 各角色的回复」。挂在消息流末尾的话
-  // 它会排到自己产出的那些回复下面，因果顺序是反的。
-  const lastUserIdx = orchestration ? messages.map((m) => m.role).lastIndexOf("user") : -1;
-
   /** 到上一条为止最晚的时间点;新一轮(用户消息)离它超过 TIME_GAP_MS 就插时间行 */
   let lastAt: number | null = null;
 
@@ -427,7 +419,7 @@ export function MessageList(props: MessageListProps) {
   /*
    * 没交本轮小结的回复,下一轮接着累计在它的气泡里(简洁模式):一组从一条 Agent 回复开始,
    * 后面的回复都并进来,直到某一轮交了 final 报告才收口,再下一条回复另起一组。
-   * 分工模式里不同角色的回复不合并;一组并满 MAX_GROUP_ROUNDS 轮或前几轮合计 MAX_GROUP_TOOLS 次操作,下一条另起一组。
+   * 不同角色(roleId)的回复不合并;一组并满 MAX_GROUP_ROUNDS 轮或前几轮合计 MAX_GROUP_TOOLS 次操作,下一条另起一组。
    * 中间用户说的话照常在原位置显示;并进去的那几条自己不再画气泡。
    */
   const followersOf = new Map<string, ChatMessage[]>();
@@ -516,11 +508,6 @@ export function MessageList(props: MessageListProps) {
           />
         ),
       });
-    }
-    // 编排块挂在「最后一条用户消息」后面;那条是收到的 Agent 消息、自己不画时也照样挂,编排进度和错误才看得到
-    if (i === lastUserIdx && orchestration) {
-      const state = orchestration;
-      entries.push({ key: `${m.id}:orch`, kind: "orch", render: () => <OrchestrationBlock key={`${m.id}:orch`} state={state} /> });
     }
   });
 

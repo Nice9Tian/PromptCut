@@ -14,7 +14,6 @@ import * as agentBus from "../../ai/agentBus";
 import { setTabBusy, setTabConversation, useAgentTabs } from "../../ai/agentTabs";
 import { getChat } from "../../ai/chatStore";
 import { useInstallJobs } from "../../ai/sttInstallStore";
-import { isTeamMode, setTeamMode, subscribeTeamMode } from "../../ai/teamMode";
 import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
 import { useViewPrefs, setShowThinking } from "./chat/viewPrefs";
 import { ChatHeader } from "./chat/ChatHeader";
@@ -67,7 +66,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return false;
     }
   })();
-  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, clearKey, setupOpen, openSetup, closeSetup, orchestration, isBusy, pumpQueue, rewindTo } = useAiChat({ mock, tabId, getConversationId: () => convRef.current });
+  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, clearKey, setupOpen, openSetup, closeSetup, isBusy, pumpQueue, rewindTo } = useAiChat({ mock, tabId, getConversationId: () => convRef.current });
   const history = useChatHistory({ provider, messages, sessionId: undefined, storageKey: tabId === MAIN_TAB ? undefined : `pcChatId:${tabId}` });
   convRef.current = history.conversationId;
 
@@ -76,7 +75,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const tabTitle = tabs.find((t) => t.id === tabId)?.title ?? "AI 助手";
 
   // 页签上要知道这一页的对话 ID(给模型看的 Agent ID)和忙不忙
-  useEffect(() => { setTabConversation(tabId, history.conversationId); agentBus.markSeen(history.conversationId); }, [tabId, history.conversationId]);
+  useEffect(() => { setTabConversation(tabId, history.conversationId); }, [tabId, history.conversationId]);
   useEffect(() => { setTabBusy(tabId, streaming); }, [tabId, streaming]);
 
   // 刷新页面回来:非主页的对话不在 .proc 里,从会话归档按 id 找回
@@ -92,31 +91,36 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   }, [tabId]);
 
   /*
-   * 别的 Agent 用 send_message 投来的消息:这一页空闲时就当一条用户消息发出去,
-   * 忙着就等这一轮跑完(streaming 翻回 false 时再来一次)。自动连锁有层数上限(agentBus.MAX_AUTO_HOPS),
-   * 到顶的消息留在信箱里,用户下次发消息时一并带上,不会两个 Agent 自己聊个没完。
+   * 别的 Agent 用 send_message 投来的消息(以及 spawn_agent 交给子 Agent 的任务):公告板在编辑器进程里
+   * (server/agent/agent-board.mjs),推来的 agent.board 说这一页有可自动投递的消息时,这一页空闲就取走、
+   * 当一条用户消息发出去;忙着就等这一轮跑完(streaming 翻回 false 时再来一次)—— 跑的途中它的工具结果里也会带上。
+   * 自动连锁有层数上限(agentBus.MAX_AUTO_HOPS),到顶的消息留在信箱里,用户下次发消息时一并带上。
    */
   useEffect(() => {
     if (streaming) return;
     const convId = history.conversationId;
+    let alive = true;
     const deliver = () => {
-      /*
-       * 用户自己排的队优先:队列里还有(暂停着也算)就先不投递,等用户那几句发完或删掉。
-       * 还在忙(分工模式过闸、排着一次自动续跑)也不投 —— streaming 这时可能已经是 false。
-       */
-      if (isBusy() || getQueue(tabId).length > 0) return;
+      // 用户自己排的队优先:队列里还有(暂停着也算)就先不投递,等用户那几句发完或删掉
+      if (!alive || isBusy() || getQueue(tabId).length > 0) return;
       if (!agentBus.hasAutoDeliverable(convId)) return;
-      const msgs = agentBus.takeInbox(convId, true);
-      if (msgs.length === 0) return;
-      agentBus.beginRun(convId, Math.max(...msgs.map((m) => m.hops)));
-      // 模型读 formatInbound 的全文;界面认 inbound 字段(不画成用户气泡,放进回复的操作详细预览控件)
-      void send(agentBus.formatInbound(msgs), undefined, { inbound: msgs.map((x) => ({ from: x.from ?? "未知", text: x.text })) });
+      void agentBus.takeInbox(convId, true).then((msgs) => {
+        if (!msgs.length) return;
+        if (!alive || isBusy() || getQueue(tabId).length > 0) {
+          // 取走的这一小会儿里这一页又忙了(用户刚发了一句):先放回页面这边,这一轮跑完再送
+          agentBus.stash(convId, msgs);
+          return;
+        }
+        // 模型读 formatInbound 的全文;界面认 inbound 字段(不画成用户气泡,放进回复的操作详细预览控件)
+        void send(agentBus.formatInbound(msgs), undefined, { inbound: msgs.map((x) => ({ from: x.fromLabel ?? x.from ?? "未知", text: x.text })), hops: Math.max(...msgs.map((m) => m.hops)) });
+      });
     };
     deliver();
     const offBus = agentBus.subscribeBus(deliver);
     // 队列被删空 / 编辑走最后一条时,攒着的消息接着投
     const offQueue = subscribeQueue(deliver);
     return () => {
+      alive = false;
       offBus();
       offQueue();
     };
@@ -124,8 +128,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   }, [streaming, history.conversationId]);
   // 关掉分页时这一页的队列跟着丢:队列只放内存,不跨分页、不跨刷新
   useEffect(() => () => clearQueue(tabId), [tabId]);
-  // 用户自己发的那一轮层数归零;一轮结束也清掉
-  useEffect(() => { if (!streaming) agentBus.endRun(history.conversationId); }, [streaming, history.conversationId]);
 
   const installJobs = useInstallJobs();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -288,28 +290,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     hasDraft: () => rewindImplRef.current?.hasDraft() ?? false,
     onRewind: (id) => rewindImplRef.current?.onRewind(id),
   }), []);
-
-  // 分工模式的开关放在 ai/teamMode 里:编排器那边也要读它,放这儿会变成两份状态
-  const [teamMode, setTeamModeState] = useState(isTeamMode);
-  useEffect(() => subscribeTeamMode(setTeamModeState), []);
-
-  /*
-   * 没配 API 直连时的降级说明，折在「✦」菜单里「分工模式」那一项的 tooltip 里，不单独占一条横幅。
-   *
-   * 这个降级的实际后果是「该并行的偶尔没并行」：不阻断操作、不产生错误结果，
-   * 用户甚至察觉不到——本来就没人知道那一次「本可以更快」。横幅是界面上最重的
-   * 一档提示，该留给「挡住你做事」或「结果可能是错的」。拿它说一件「有时会慢
-   * 一点」的事，代价是用户学会忽略横幅，等哪天编排真失败了那条也会被一起忽略。
-   *
-   * 能跑的和不能跑的要分清：/api/ai/plan 没 API 会退回 CLI，编排照跑；
-   * API-only 的只有前面那道 triage 闸，它必须比 manager 便宜才有存在意义。
-   * 闸不可用时退回 looseTriage：一处并列词 + 句子不太短就编排（a12fb7c 放宽的，
-   * 原来的门槛实测会让 CLI 用户的分工模式静默失效）。所以提示语别说得太保守，
-   * 门槛其实相当低——说成「只认明显多步」会让用户以为自己那句话不够格。
-   */
-  const teamModeHint = config && !config.api.apiKey.set
-    ? "复杂请求先由制片主管拆成多个任务,能并行的同时跑。没配「API 直连」时,判断值不值得分工的那道闸用不了,改用本地规则:句子里出现「然后」「分别」「同时」这类词就分工,看不出多步的按单线处理。"
-    : "复杂请求先由制片主管拆成多个任务,能并行的同时跑。简单提问会自动跳过,不多花这道工序";
 
   /**
    * 把这段对话连同每一步的执行事件收成一份 JSON,摆进子窗口。
@@ -548,7 +528,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         expanded={expanded}
         openRuns={openRuns}
         rowHandlers={rowHandlers}
-        orchestration={orchestration}
         onPickExample={setInputText}
         rewind={rewindHandlers}
       />
@@ -593,9 +572,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         config={config}
         tabId={tabId}
         menu={{
-          teamMode,
-          teamModeHint,
-          onSetTeamMode: setTeamMode,
           workflowRoles,
           onRunWorkflow: () => void runWorkflow(),
           canDiagnose: messages.length > 0,

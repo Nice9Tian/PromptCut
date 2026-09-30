@@ -223,7 +223,7 @@ export interface ChatMessage {
    */
   inbound?: InboundAgentMessage[];
   /**
-   * 分工模式下,这条回复是哪个角色产出的(角色卡的 id,如 director)。
+   * 这条回复是哪个角色产出的(角色的 id,如 director;旧记录里分工模式的角色回复带它)。
    * 界面用它取头像和角色名;普通对话没有这个字段,退回中性的「AI 助手」。
    */
   roleId?: string;
