@@ -224,3 +224,18 @@ R2～R6 都在同一条分支上、都藏在 `?preview=legacy`（默认开）后
 - 在可见舞台里让用户看到推帧过程（Motion / CSS 的跳转和拖动只看死素材）。
 - 不在预渲染集合里的卡产快照或流；该位置判重的卡在播放或拖动中活跑（暂停态的精确活渲见 K5）；播放中为等死素材停住播放头（缺就透明）。
 - 按声明（`frameMode`）而不是实测分派管线（声明只在探针结果到达前兜底）；把分派表在两端之间传（只传 `costs`）。
+
+## 2026-09-30 按 R7b 报告补的更正
+
+出处：`docs/archive/restructure_planning/reports/r7b-report.md` 第 4 节（R7b = R7 之后那一轮「六条必修」的修复分支，报告写了 8 条对本任务书与相关文档的更正建议，当时没折回来）。本节逐条折回；正文原文不删，和正文冲突时以本节和代码为准。核对的代码是 main `82294fea`（分支 `claude/query-render-2`），报告与代码对不上的以代码为准，已在各条里写明。
+
+1. **A3a「进入循环前把不在并集里的 control 剔掉」（第 88 行）只说了一处。** 实现是每个会产快照、流或发就绪层的消费点各自先过 `prerenderPicked(entry, clipId)`（`server/frame-pipeline.mjs`）。R7b 报告写的是四处（`snapshotTargets`、`missingSnapshotFrames`、`fillCardControls`、`adoptCardPlan` 的索引认领）；现在的代码里不止四处，还有 `claimSessions`（快照层与流层）、`publishLayer`、`publishRelocked`、`publishLayerMap`、`adoptFromManifests`、`planForQueue`、`retryDeferredCards`、`planDiagnostics`，以及 `server/prerender-executor.mjs` 的补渲判定。更正为：「不在预渲染集合里的卡，凡是产快照、产流、发就绪层、切队列任务的消费点都先过 `prerenderPicked` 跳过」，不写成某一个循环前剔一次。
+2. **渲染 9（不在预渲染集合里的卡不产快照、不产流）只管快照 / 流 / 就绪索引，不管 PNG。** 任务书没说 `entry.cardCache`（每张卡的 PNG 与 MOV）要不要一起停；R7b 没停，现在的代码仍没停：`fillCardControls` 对判轻的卡把快照档记成 `'none'`、不写快照，但照样逐帧渲 PNG 进 `entry.cardCache`（`server/frame-pipeline.mjs` 的 `fillCardControls` 定档那一段）。所以渲染 9 省下的是快照的存储与传输，不是这份 CPU。PNG 这一支还有谁在用、删了影响谁，见 `docs/reports/AGENT-query-render-2.md`（归档后在 `docs/archive/agent-reports/`）「legacy 整帧通道」一节的调查与 dry run，要不要删由用户定。
+3. **K4 的 `mediaStalled`（第 157 行）「相邻两条 `frame` 到达间隔 > 40 ms」是 24 / 25 fps 误判的来源。** 代码已按「超出一拍名义时长 40 ms」判：`src/editor/Preview.tsx` 的 `MEDIA_STALL_MS = 40`，`overBeat = now - prev - 1000 / fps`，`overBeat > 40` 才算停顿（那一段的注释写了 24 fps 的 50 ms 拍只超出 8.3 ms）。更正为「到达间隔**超出一拍名义时长** 40 ms」，它和 pinned 架构 10「停顿超过约 40 毫秒」是同一件事。
+4. **K3(b)（第 156 行）「实际要追的帧数按 pinned 渲染 4 的公式取」没说 `t_oc` 取哪个字段。** 代码在 `src/render/catchUpEstimate.mjs`：`t_oc` = 成本记录的 `stepMaxMs`（单帧最差），没有就退回 `stepMs`（p90）；按位置估算的结果封顶在整段 `catchUpMs` 上，算不出位置时退回整段 `catchUpMs`。这只影响「追多少」，K2 的轻重分派仍按整段最差判。
+5. **D5 / F2 的 `?preview=legacy`「合并已有的同名开关」。** R7b 时 `previewMode.ts` 文件头写着「`Preview` 从来不把 `preview` 参数传进 iframe」，和本任务书冲突；R7b 按任务书改了代码（R7-6）并改了注释。现在 `src/editor/previewMode.ts` 的 `stageSrc` 在 legacy 下把 `&preview=legacy` 一并传进舞台，文件头已改成「R7-6 之前从来不传，现在传」。「有意不传」那句作废，只作历史。
+6. **A3c 只写了「超限帧照常落盘、不进索引」，没写下一趟怎么不再重渲。** 代码给每个快照键的 `index.json` 加了 `oversize` 字段（`server/snapshot-store.mjs` 文件头的契约：`oversize: [[from, to], …]`，A3c 判超限、被丢掉的那些帧）；`missingSnapshotFrames` 与 `fillCardControls` 不把 `oversize` 里的帧算「缺」（R6-14）。更正：A3c 补一句「超限帧记进 `index.json` 的 `oversize`，之后各趟不再为它重渲」。
+7. **导出基线对账的 fixture 复现不了。** R7b 说的 `docs/export-baseline-compare.md` 现在在 `docs/archive/topics/export-baseline-compare.md`；它第 1 节提到的 `make-fixture.mjs`（生成 `<scratch>/export-fixture/project.json`）仍不在仓库里。素材 `pc-baseline-fixture.mp4` 可以照那一节的 `ffmpeg -f lavfi -i "testsrc2=…"` 命令重造，项目文件造不出来。`scripts/probes/export-baseline-compare.mjs` 只管跑导出与逐帧比对，不生成 fixture。建议仍是把 fixture 生成脚本收进 `scripts/probes/`（本次没做，不在本分支范围）。
+8. **`docs/archive/restructure_planning/hunman_read.md` 的两处，以代码为准：**
+   - R5-6「判据是事后的，停顿进行中音频照播」：属实，现在仍是这样。`Preview.tsx` 只在下一条 `frame` 到了之后算 `overBeat` 置 stalled，没有播放中的看门狗定时器；要不要加属于 pinned 意图的范围，仍待用户定。24 / 25 fps 的误判那一半已由第 3 条的改法解决。
+   - R6-14「超限帧照常落盘（下一次不用重渲）不成立」：落盘那一半本来成立；「不用重渲」那一半 R7b 用第 6 条的 `oversize` 名单修好了，现在成立。

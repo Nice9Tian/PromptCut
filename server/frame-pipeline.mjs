@@ -35,6 +35,7 @@ export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { createSmallRenderer, SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
 import { layerMapOf } from './artifact-transfer.mjs';
+import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServesAgent, modeServesPrerender } from './prerender-mode.mjs';
 
 /**
  * C6.4 推送与换机取用按什么段长切段:与渲染任务队列的切分(`render-node/split.mjs`)完全一致 ——
@@ -210,7 +211,7 @@ export class FramePipeline {
    * `fingerprint`)。给了就不探测、直接用(测试,以及以后环境已知的独立渲染主机);不给就等第一个
    * 预渲染间开起来时探测一次(`ensureEnvironment`)。
    */
-  constructor({ root, origin, code = () => '', cardSources = () => ({}), captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null }) {
+  constructor({ root, origin, code = () => '', cardSources = () => ({}), captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null, mode = PRERENDER_MODE.FULL }) {
     this.root = root;
     /**
      * 存储计划 A 部分:启动时清掉死进程留在帧库里的临时文件(`storage-leftovers.mjs` 文件头列了认哪几种)。
@@ -264,6 +265,12 @@ export class FramePipeline {
     this.cardSources = cardSources;
     this.captureCode = captureCode;
     this.interactive = interactive !== false;
+    /**
+     * 预渲染进程的模式(`prerender-mode.mjs`;`mechanism/rendering.md`「查询渲染与预渲染进程」):`'user'` 不建 Agent lane,
+     * `'agent'` 只建 Agent lane、不预渲染,`'full'` 都建(缺省,和加模式之前相同)。认不得的值按 `'full'`。
+     * 只对 `interactive: true` 的实例(预渲染进程)有意义;编辑器进程本来就没有这些 lane。
+     */
+    this.mode = parsePrerenderMode(mode) ?? PRERENDER_MODE.FULL;
     this.playhead = playhead;
     /**
      * 素材戳(`_frameSourceStamp`,进 `frameIdentity`):有哈希就是哈希,没有就问素材服务的 `HEAD`,
@@ -280,7 +287,8 @@ export class FramePipeline {
     // The human preview, Agent and background bake each own an independent
     // serialized queue.  A long Agent render must never hold the hot user Chrome.
     this.foreground = Promise.resolve();
-    this.laneChains = new Map([['user', Promise.resolve()], ['agent', Promise.resolve()], ['background', Promise.resolve()]]);
+    // 按模式建(`lanesOfMode`):`user` 模式没有 `'agent'`,`agent` 模式只有 `'agent'`
+    this.laneChains = new Map(['user', 'agent', 'background'].filter(lane => lanesOfMode(this.mode).includes(lane)).map(lane => [lane, Promise.resolve()]));
     /**
      * 普通预渲染队列(`'queue'` lane 的待办,见 `runQueueTask`):按先后排,AI 栏的操作预览插在所有待办之前。
      * `queueRunning` 是 `'queue'` 预渲染间上正在跑的那一项(至多一项)。
@@ -409,7 +417,8 @@ export class FramePipeline {
    * 编辑器进程不产流;`streams` 开关关着(`PROMPTCUT_STREAMS=0`)时它在,但什么都不做。
    */
   streamProducer() {
-    if (!this.interactive || this.closed) return null;
+    // `agent` 模式不产流(不预渲染)
+    if (!this.interactive || this.closed || !modeServesPrerender(this.mode)) return null;
     return this._streams ||= new StreamProducer(this);
   }
   /**
@@ -498,7 +507,8 @@ export class FramePipeline {
    * 走到这里就回 `503 NO_AGENT_LANE`,不在编辑器这一侧开 Chrome。
    */
   laneRefused(lane) {
-    if (this.interactive) return null;
+    // 预渲染进程按模式拒(`modeRefusal`):`user` 模式拒 Agent 的查询,`agent` 模式拒预渲染的各条 lane
+    if (this.interactive) return modeRefusal(this.mode, lane);
     if (lane === 'agent') return Object.assign(new Error('这个进程没有 Agent lane:Agent 的查询只在预渲染进程里跑。'), { status: 503, code: 'NO_AGENT_LANE', retryable: true });
     if (lane !== 'user' && lane !== 'playback') return null;
     return Object.assign(new Error('交互帧请求请直接打预渲染进程。'), { status: 503, code: 'USE_PRERENDER' });
@@ -557,6 +567,9 @@ export class FramePipeline {
    *   - `kind`:只给诊断看(`diagnostics().scheduler`):`'queue'`(细任务)/ `'preview'` / `'prerender'`。
    */
   runQueueTask(work, signal, { front = false, agentOk = !front, tag = null, scaleLane = 'queue', kind = 'queue' } = {}) {
+    // `agent` 模式不做预渲染:队列任务、操作预览、贴图预取一律当场回 `503 NO_PRERENDER`,不排队、不挂住
+    const refused = this.laneRefused('queue');
+    if (refused) return Promise.reject(refused);
     return new Promise((resolve, reject) => {
       const item = { work, signal, front, agentOk, tag, scaleLane, kind, resolve, reject, queuedAt: Date.now() };
       if (front) {
@@ -631,6 +644,8 @@ export class FramePipeline {
    */
   kickAgentIdle() {
     if (this.closed || !this.interactive || this.agentPending > 0 || this.agentUnit) return;
+    // 只有 `full` 模式两样都有:`user` 模式没有专用实例,`agent` 模式没有预渲染可接
+    if (!modeServesAgent(this.mode) || !modeServesPrerender(this.mode)) return;
     const session = this.lanes.get('agent');
     if (!session || session.expired) return;
     if (this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) return;
@@ -689,6 +704,24 @@ export class FramePipeline {
     return batch;
   }
   /**
+   * **队列模式的认领闸**(`mechanism/rendering.md`「Agent 优先只是插队」;`AGENT-query-render.md` 第 7 节第 2 条):
+   * 此刻 Agent 专用实例能不能再接一项普通预渲染 —— 本机渲染节点据此在 `maxConcurrent` 之外多认领一项快照任务给它做。
+   *
+   * 条件与 `kickAgentIdle` 接活的条件相同(`full` 模式、专用实例开着且没到空闲关闭、Agent 队列空、手里没有预渲染项、
+   * 不在播放让路),外加普通预渲染队列里没有它能接的待办(有的话它自己会接,不用多认领)。**不看 1 秒空档**:
+   * 认领要一个来回,任务到手时空档多半已过;没过的话 `kickAgentIdle` 自己等到点再接。
+   * 专用实例没开时回 false —— 不为接预渲染开新实例。
+   */
+  agentSpareSlot() {
+    if (this.closed || !this.interactive || !modeServesAgent(this.mode) || !modeServesPrerender(this.mode)) return false;
+    if (this.agentPending > 0 || this.agentUnit) return false;
+    const session = this.lanes.get('agent');
+    if (!session || session.expired) return false;
+    if (this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) return false;
+    const busy = this.queueRunning?.tag ?? null;
+    return !this.queueTasks.some(item => item.agentOk && (!item.tag || item.tag !== busy));
+  }
+  /**
    * 调度记录(只给诊断看,`diagnostics().scheduler`):`kind` 是哪种活(`'agent'` = Agent 任务,`'queue'` / `'preview'` /
    * `'prerender'` = 普通预渲染队列的项,`'card-batch'` = 后台那一趟的一批),`worker` 是在哪个实例上开工
    * (`'agent'` = Agent 专用实例,`'queue'` = `'queue'` lane 的预渲染间),`waitMs` 是从排进来到开工等了多久
@@ -731,7 +764,9 @@ export class FramePipeline {
       cardLocks: this.cardLockStore?.list() ?? [],
       // 查询渲染的调度(`noteSched`):Agent 任务、普通预渲染各在哪个实例上开工;此刻 Agent 队列与普通预渲染队列的长度
       scheduler: { ...(this.schedStats ?? { counts: {}, recent: [] }), agentPending: this.agentPending, queueWaiting: this.queueTasks.length,
-        queueRunning: this.queueRunning?.kind ?? null, agentUnit: this.agentUnit?.source ?? null, agentOpen: this.lanes.has('agent') },
+        queueRunning: this.queueRunning?.kind ?? null, agentUnit: this.agentUnit?.source ?? null, agentOpen: this.lanes.has('agent'), agentSpare: this.agentSpareSlot() },
+      // 预渲染进程的模式与它建的 lane(`prerender-mode.mjs`);编辑器进程(`interactive: false`)没有这些 lane
+      mode: { mode: this.mode, lanes: this.interactive ? lanesOfMode(this.mode) : [] },
       // C6.4:只在配了推送队列时才有这两项(没配时诊断的形状不变)
       ...(this.pushQueue ? { push: this.pushQueue.stats?.() ?? null, adoption: this.lastAdoption ?? null } : {}) };
   }
@@ -864,6 +899,10 @@ export class FramePipeline {
    * 贴图预取时给 `'preview'`(1 倍,同它们原来在 Agent lane 上的缩放)。
    */
   async acquire(lane, project, { scaleLane = lane } = {}) {
+    // 模式不接这条 lane(`agent` 模式的 `'background'` / `'queue'`,`user` 模式的 `'agent'`):不开 Chrome,当场拒。
+    // `'background'` 同时标 `cancelled`,后台那一趟照「让路」收手(cloud-task.md I1)
+    const refused = this.interactive ? modeRefusal(this.mode, lane) : null;
+    if (refused) throw Object.assign(refused, lane === 'background' ? { cancelled: true } : {});
     // 只有后台那一趟在借预渲染间时给播放让路。`'queue'` lane 不在这里让路(M6c 集成裁定,语义 product/platforms.md
     // 「手里在做的那一批做完为止」):到这里的队列任务已经认领在手,做完为止;不认领新的由本机节点的闲时门槛管
     // (`queue-idle.mjs`)。M5b 时这里连 `'queue'` 一起抛,认领在手的任务会被当成可重试失败放回去。
@@ -905,8 +944,8 @@ export class FramePipeline {
     return this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
   }
   async prewarmUser(project = {}) {
-    // D5:`interactive: false` 的实例(R7 之后的编辑器进程)不养热 Chrome
-    if (!this.interactive) return;
+    // D5:`interactive: false` 的实例(R7 之后的编辑器进程)不养热 Chrome;`agent` 模式也不养(不服务用户的交互帧)
+    if (!this.interactive || !modeServesPrerender(this.mode)) return;
     if (this.userPrewarm) return this.userPrewarm;
     this.userPrewarm = (async () => {
       while (!this.closed && this.userPool.filter(s => !s.dead).length < this.userPoolSize) {
@@ -996,6 +1035,11 @@ export class FramePipeline {
     // Agent 的专用实例;`prerender` = 普通的预渲染(3D 视图的空闲贴图预取),排队尾,Agent 专用实例空闲时可以接。
     lane = lane === 'playback' ? lane : lane === 'inter_face' || lane === 'user' ? 'user' : lane === 'background' ? 'background'
       : lane === 'preview' || lane === 'prerender' ? lane : 'agent';
+    // 模式不接这条 lane:当场回错(`user` 模式的 Agent 查询 → NO_AGENT_LANE,`agent` 模式的预渲染 → NO_PRERENDER),不进批处理
+    if (this.interactive) {
+      const refused = modeRefusal(this.mode, lane);
+      if (refused) throw refused;
+    }
     const generation = lane === 'user' ? ++this.userGeneration : 0;
     const generationController = lane === 'user' ? new AbortController() : null;
     if (generationController) {
@@ -1578,6 +1622,8 @@ export class FramePipeline {
    * @param {{ session?: string, localRev?: unknown, adopt?: boolean, owner?: string, ticket?: number, queue?: boolean }} [options]
    */
   async preload(project, { session = DEFAULT_READY_SESSION, localRev, adopt = true, owner: as = undefined, ticket: issued = undefined, queue = undefined } = {}) {
+    // `agent` 模式不预渲染(cloud-task.md I1):什么都不排,回 `{ skipped: 'agent' }`,路由照回给调用方
+    if (this.interactive && !modeServesPrerender(this.mode)) return { skipped: this.mode };
     session = typeof session === 'string' ? session : DEFAULT_READY_SESSION;
     // `ticket`:HTTP 入口在等镜像之前就替它领了号(按到达顺序,不按算完的顺序,审查 #6)
     const ticket = adopt ? (issued ?? this.ready.request(session)) : undefined;
@@ -3253,6 +3299,11 @@ export class FramePipeline {
     }
   }
   async updatePlayback(project, input, { borrow = async () => false, release = async () => {} } = {}) {
+    // `agent` 模式不服务用户的播放:当场回 NO_PRERENDER
+    if (this.interactive) {
+      const refused = modeRefusal(this.mode, 'playback');
+      if (refused) throw refused;
+    }
     const work = (this.playbackChain || Promise.resolve()).catch(() => {}).then(() => this.updatePlaybackNow(project, input, { borrow, release }));
     this.playbackChain = work;
     return work;
