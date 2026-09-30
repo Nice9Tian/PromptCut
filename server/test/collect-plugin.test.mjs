@@ -9,6 +9,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import { createAssetHarness } from './fake-asset-service.mjs';
 import { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -209,6 +210,30 @@ test('download:done 事件之后进程还没退,轮询看到的仍是 running;�
   } finally {
     delete process.env.PROMPTCUT_FAKE_LINGER;
   }
+});
+
+test('MI-6 download:素材服务不可达时作业报错(写明素材服务地址),素材目录与临时目录都不留文件', async () => {
+  const fn = handlerOf();
+  const gone = await new Promise((resolve) => {
+    const srv = http.createServer(() => {});
+    srv.listen(0, '127.0.0.1', () => { const o = `http://127.0.0.1:${srv.address().port}`; srv.close(() => resolve(o)); });
+  });
+  const privateTmp = fs.mkdtempSync(path.join(OUT, 'os-tmp-'));
+  const saved = { url: process.env.PROMPTCUT_EDITOR_URL, TEMP: process.env.TEMP, TMP: process.env.TMP };
+  Object.assign(process.env, { PROMPTCUT_EDITOR_URL: gone, TEMP: privateTmp, TMP: privateTmp });
+  try {
+    const r = await call(fn, 'POST', '/api/collect/download', { url: 'BV1FAKE00030' });
+    const job = await waitJob(fn, r.json.jobId);
+    assert.equal(job.status, 'error', JSON.stringify(job));
+    assert.ok(job.message.includes(`素材服务不可达(${gone})`), job.message);
+    assert.equal(job.items.length, 0);
+  } finally {
+    Object.assign(process.env, { PROMPTCUT_EDITOR_URL: saved.url, TEMP: saved.TEMP, TMP: saved.TMP });
+  }
+  const own = path.join(FAKE_ROOT, 'out', 'media');
+  assert.deepEqual(fs.existsSync(own) ? fs.readdirSync(own) : [], []);
+  for (let i = 0; i < 50 && fs.readdirSync(privateTmp).some((n) => n.startsWith('pc-collect-')); i++) await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(fs.readdirSync(privateTmp).filter((n) => n.startsWith('pc-collect-')), [], '作业的临时目录要删掉');
 });
 
 test('download:清晰度不在白名单里就退回 1080;site 不认识退回 auto', async () => {
