@@ -5,8 +5,10 @@
  *   - 探拓展装没装(/status)、装拓展(/install,SSE 回 pip 日志);
  *   - 同步探测一条链接(/probe,几秒钟,拿标题时长清晰度);
  *   - 起下载作业(/download 立刻回 jobId,/job/<id> 轮询进度,DELETE 取消);
- *   - 文件直接下到 out/media —— 和拖拽导入上传的是同一个目录,所以下完的文件
- *     用 /@media/<文件名> 就能取到,前端拿它登记成素材,不用再上传一遍。
+ *   - 文件先下到这一个作业自己的临时目录,进程退出后逐个经素材服务的入库接口送进内容库
+ *     (`server/media-ingest.mjs`,和用户导入素材走同一条路;`docs/semantics/product/asset-service.md`
+ *     「入库这一步不能省」),作业结果里给入库后的 /@media/<hash> 与入库回包,前端按它登记成素材;临时目录随后删掉。
+ *     原来是直接下进素材目录、再由前端请服务端就地补算哈希,绕过了入库。
  *
  * 登录态(/login、/login/check、/cookies)走 server/web/ 那个给 agent 用的浏览器:
  * 把登录页挪到用户面前扫码,扫完从 CDP 取 cookie 存成 cookies.txt,之后探测和下载
@@ -17,11 +19,13 @@
 import type { Plugin, ViteDevServer } from "vite";
 import type { ServerResponse } from "http";
 import path from "path";
-import { existsSync } from "fs";
+import os from "os";
+import fs from "fs";
 import { spawn, type ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { buildEnv, dataDir, findPython, pipeToSse, readBody, spawnPython, PYTHON_MISSING } from "./vite-plugin-stt";
-import { mediaDir } from "./vite-plugin-media";
+import { assetServiceOrigin } from "./asset-client";
+import { ingestFile } from "./media-ingest.mjs";
 import { findBundledChrome } from "./vite-plugin-web";
 import {
   SITES, siteNames, assessLogin, saveCookies, savedCookieStatus, forgetCookies, pickCookies,
@@ -29,15 +33,32 @@ import {
 import { qrLogin } from "./collect-qr-login.mjs";
 import { isInside } from "./http-guard.mjs";
 
-export type CollectStage = "starting" | "video" | "audio" | "merge" | "transcode" | "done";
+/** ingest:文件都下好了,正在经素材服务的入库接口送进内容库 */
+export type CollectStage = "starting" | "video" | "audio" | "merge" | "transcode" | "ingest" | "done";
+
+/** 素材服务入库接口的回包(`server/media-ingest.mjs` 的 ingestFile),前端按它登记素材 */
+export interface IngestedMedia {
+  hash: string;
+  ext: string;
+  name: string;
+  url: string;
+  bytes: number;
+  deduped: boolean;
+  path?: string;
+  tiers?: { original: string; small: string | null };
+  small?: string;
+}
 
 export interface CollectItem {
   id?: string;
   title?: string;
-  path: string;
   filename: string;
-  /** 站内地址,前端用它取文件登记成素材 */
+  /** 入库后的地址 /@media/<hash>,前端用它取文件登记成素材 */
   url: string;
+  /** 内容哈希 */
+  hash?: string;
+  /** 入库回包 */
+  media?: IngestedMedia;
   bytes?: number;
   duration?: number;
   width?: number;
@@ -181,7 +202,22 @@ function cookieOverview(root: string): Record<string, unknown> {
 async function runDownload(root: string, job: CollectJob, body: Record<string, unknown>): Promise<void> {
   const boot = await bootstrap(root);
   if (!boot) { job.status = "error"; job.message = PYTHON_MISSING; job.finishedAt = Date.now(); return; }
-  const outDir = mediaDir(root);
+  // 这一个作业自己的临时目录:yt-dlp 落在这里,入库之后连目录一起删(见文件头)
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "pc-collect-"));
+  try {
+    await downloadInto(boot, outDir, job, body, root);
+  } finally {
+    fs.rm(outDir, { recursive: true, force: true }, () => {});
+  }
+}
+
+async function downloadInto(
+  boot: { python: string; env: NodeJS.ProcessEnv },
+  outDir: string,
+  job: CollectJob,
+  body: Record<string, unknown>,
+  root: string,
+): Promise<void> {
   const args = [
     "-m", "promptcut_collect", "download",
     "--url", job.url,
@@ -203,6 +239,8 @@ async function runDownload(root: string, job: CollectJob, body: Record<string, u
   procs.set(job.id, child);
   let lastError: Record<string, unknown> | undefined;
   let sawDone = false;
+  /** Python 报上来的文件,进程退出后逐个入库 */
+  const staged: Record<string, unknown>[] = [];
 
   const code = await runLines(child, (ev) => {
     const type = ev.event;
@@ -227,13 +265,7 @@ async function runDownload(root: string, job: CollectJob, body: Record<string, u
       else if (p != null) job.percent = Math.round(p * 0.9);
       if (typeof ev.note === "string") job.notes.push(ev.note);
     } else if (type === "item") {
-      const filename = String(ev.filename ?? path.basename(String(ev.path ?? "")));
-      job.items.push({
-        ...(ev as Omit<CollectItem, "url">),
-        path: String(ev.path),
-        filename,
-        url: `/@media/${encodeURIComponent(filename)}`,
-      });
+      staged.push(ev);
     } else if (type === "done") {
       // 先记下,等进程退出后和 finishedAt 一起改:轮询方看到 done 时 finishedAt 必须已经有了,进程也已经退出
       sawDone = true;
@@ -243,6 +275,29 @@ async function runDownload(root: string, job: CollectJob, body: Record<string, u
   }, job.stderrTail);
 
   procs.delete(job.id);
+  if (job.status === "running" && sawDone) {
+    // 入库:只认临时目录里这一层的文件(按 Python 报的文件名取最后一段),别处的路径一概不传
+    job.stage = "ingest";
+    for (const ev of staged) {
+      if (job.status !== "running") break; // 入库期间被取消
+      const filename = path.basename(String(ev.filename ?? "") || String(ev.path ?? ""));
+      const file = path.join(outDir, filename);
+      if (!filename || !fs.existsSync(file)) {
+        job.status = "error";
+        job.message = `下载进程报了文件「${filename || "(没有文件名)"}」,临时目录里却没有它`;
+        break;
+      }
+      try {
+        const media = await ingestFile({ file, name: filename, origin: assetServiceOrigin }) as IngestedMedia;
+        const { path: _staged, ...rest } = ev as Record<string, unknown>;
+        job.items.push({ ...(rest as Partial<CollectItem>), filename, url: media.url, hash: media.hash, bytes: media.bytes, media });
+      } catch (e) {
+        job.status = "error";
+        job.message = `下载好了但没能送进素材库:${e instanceof Error ? e.message : String(e)}`;
+        break;
+      }
+    }
+  }
   job.finishedAt = Date.now();
   if (job.status === "running" && sawDone) {
     job.status = "done";
@@ -505,7 +560,7 @@ export function collectPlugin(): Plugin {
             job.message = e instanceof Error ? e.message : String(e);
             job.finishedAt = Date.now();
           });
-          return sendJson(res, 200, { ok: true, jobId: job.id, outDir: mediaDir(root) });
+          return sendJson(res, 200, { ok: true, jobId: job.id });
         }
 
         // GET /api/collect/jobs —— 全部作业(界面列表用)

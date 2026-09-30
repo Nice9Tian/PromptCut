@@ -1,6 +1,7 @@
 /**
  * Agent 读素材的路径的端到端探针(`docs/reports/AGENT-asset-path.md`;语义 `docs/semantics/product/agent.md`「素材与产物」):
- * 证明 `measure_audio` 与 `measure_audio_js` 在编辑器进程里是**经素材服务的接口**取的字节,不是按素材目录找文件。
+ * 证明 `measure_audio` 与 `measure_audio_js`,以及三个感知工具 `detect_shots` / `track_points` / `detect_subjects`
+ * (`docs/reports/AGENT-asset-path-2.md`)在编辑器进程里是**经素材服务的接口**取的字节,不是按素材目录找文件。
  *
  *   node scripts/probes/asset-path-probe.mjs [--port 5920] [--keep]
  *
@@ -16,6 +17,14 @@
  *   P4 断开远程(回到本机空间):这时素材只在本地内容库里、按哈希存(`<hash>.<ext>`),素材记录的 url 不带扩展名,
  *      按目录拼文件名(改前的 `mediaFileOf`)找不到它,只有素材服务按哈希能找到;两条工具照常出结果、数值不变,远程一次也没被打到;
  *   P5 一份哪儿都没有的素材:两条工具回清楚的错(素材文件不存在 / no-media),不崩。
+ *   ── 下面是感知工具(视频也只放在远程素材服务上;P7～P11 要一个带 numpy 的 Python,编辑器经 PROMPTCUT_PYTHON 用它) ──
+ *   P6 detect_shots(scdet 兜底档):转场时刻与直接对本地文件跑 scdet 的相同;远程素材服务被请求过这段视频;
+ *   P7 track_points(模板匹配档):经素材服务追出来的与直接对本地文件跑 promptcut_track 的逐项相同;
+ *   P8 detect_subjects:地址过得了 Python 的入口检查(这台机器没装模型,停在「未就绪」,不是「找不到视频文件」);
+ *   P9 三个 Python 包都答 ACCEPTS_URL;
+ *   P10 老包(没有 ACCEPTS_URL)拒绝地址,Node 改走临时文件:字节相同、结果相同、用完删;
+ *   P11 主体检测抽帧那一步:经地址与读本地文件解出的像素逐字节相同。
+ *   这台机器没有 TransNetV2 / BootsTAPIR / YuNet 等模型,真的模型推理不在探针里跑。
  *
  * 结束时只停自己起的进程(编辑器进程树、计数服务、探针的 puppeteer Chrome);`--keep` 不关、不删临时目录。
  */
@@ -33,6 +42,7 @@ import puppeteer from 'puppeteer';
 import { findFfmpeg } from '../../server/ai-visual.mjs';
 import { measureArgs, parseEbur128 } from '../../server/audio-measure.mjs';
 import { filePcmArgs, decodePcm } from '../../server/audio-pcm.mjs';
+import { pythonAcceptsUrl, pythonInput } from '../../server/perception-source.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -52,6 +62,56 @@ const GONE = path.join(EXPORT_DIR, '不存在的素材目录');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 fs.mkdirSync(SRC_DIR, { recursive: true });
+
+/* ---- P6～P11 用的 Python 辅助(claude/asset-path-2)---- */
+/** 带 numpy 的 Python:PROMPTCUT_TEST_PYTHON,或 PATH 上的 python / python3;找不到时 P7～P11 记为失败(探针不静默跳过) */
+function findTestPython() {
+  for (const cmd of [process.env.PROMPTCUT_TEST_PYTHON, 'python', 'python3'].filter(Boolean)) {
+    try {
+      const r = spawnSync(cmd, ['-c', 'import sys, numpy; sys.stdout.write(sys.executable)'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+      const exe = String(r.stdout || '').trim();
+      if (r.status === 0 && exe && fs.existsSync(exe)) return exe;
+    } catch { /* 下一个 */ }
+  }
+  return null;
+}
+const PY = findTestPython();
+const PYLIBS = path.join(EXPORT_DIR, 'pylibs');
+const MODELS = path.join(EXPORT_DIR, 'models');
+fs.mkdirSync(PYLIBS, { recursive: true });
+/** 让 Python 找得到仓库里的包(和 vite-plugin-stt 的 buildEnv 对普通解释器的做法相同) */
+const pyEnv = (pylibs) => ({ ...process.env, PYTHONPATH: pylibs + path.delimiter + path.join(ROOT, 'python'), PYTHONNOUSERSITE: '1', PYTHONUTF8: '1', PROMPTCUT_PYLIBS: pylibs });
+const spawnPy = (python, a, env) => spawn(python, a, { env, windowsHide: true });
+/** 异步跑子进程:计数的远程素材服务就在探针进程里,spawnSync 会卡住事件循环、ffmpeg 发来的请求没人答 */
+function runAsync(cmd, a, env, timeoutMs = 180000) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, a, { env, windowsHide: true });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', (e) => { stderr += String(e); });
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }); });
+  });
+}
+/** promptcut_track 的 result 事件 → 与 get_track(full) 比对的那几项 */
+function trackResult(r) {
+  const line = String(r.stdout).split(/\r?\n/).find((l) => /"event":\s*"result"/.test(l));
+  if (!line) return { error: (r.stdout + r.stderr).slice(-400) };
+  const ev = JSON.parse(line);
+  return { engine: ev.engine, width: ev.width, height: ev.height, frames: ev.frames, points: ev.points };
+}
+/** 造一份「老包」:照仓库里的 promptcut_track 拷一份,去掉 ACCEPTS_URL 与地址放行(桌面版只打 Node 补丁时运行时里的包就是这样) */
+function makeOldTrackPackage(pylibs) {
+  const dst = path.join(pylibs, 'promptcut_track');
+  fs.cpSync(path.join(ROOT, 'python', 'promptcut_track'), dst, { recursive: true, filter: (s) => !s.includes('__pycache__') });
+  const init = path.join(dst, '__init__.py');
+  fs.writeFileSync(init, fs.readFileSync(init, 'utf8').replace('ACCEPTS_URL = True', ''));
+  const main = path.join(dst, '__main__.py');
+  fs.writeFileSync(main, fs.readFileSync(main, 'utf8')
+    .replace('from . import __version__, is_media_url', 'from . import __version__')
+    .replace('if not (is_media_url(args.video) or os.path.isfile(args.video)):', 'if not os.path.isfile(args.video):'));
+}
 
 const fails = [];
 const passes = [];
@@ -85,7 +145,8 @@ const editorLog = [];
 async function startEditor() {
   editor = spawn(process.execPath, [viteBin(), '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'],
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
-      env: { ...process.env, PROMPTCUT_EXPORT_DIR: EXPORT_DIR, PROMPTCUT_DATA_DIR: DATA_DIR, PROMPTCUT_NO_PORT_FILE: '1' } });
+      env: { ...process.env, PROMPTCUT_EXPORT_DIR: EXPORT_DIR, PROMPTCUT_DATA_DIR: DATA_DIR, PROMPTCUT_NO_PORT_FILE: '1',
+        PROMPTCUT_PYLIBS: PYLIBS, PROMPTCUT_MODELS: MODELS, ...(PY ? { PROMPTCUT_PYTHON: PY } : {}) } });
   const keep = (c) => { editorLog.push(c.toString()); if (editorLog.length > 400) editorLog.shift(); };
   editor.stdout.on('data', keep);
   editor.stderr.on('data', keep);
@@ -107,7 +168,7 @@ const remote = http.createServer((req, res) => {
   if (!file || (req.method !== 'GET' && req.method !== 'HEAD')) { res.statusCode = 404; return res.end('Not found'); }
   const size = fs.statSync(file).size;
   const r = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
-  const head = { 'Content-Type': 'audio/wav', 'Accept-Ranges': 'bytes' };
+  const head = { 'Content-Type': file.endsWith('.mp4') ? 'video/mp4' : 'audio/wav', 'Accept-Ranges': 'bytes' };
   if (r) {
     const start = r[1] === '' ? Math.max(0, size - Number(r[2])) : Number(r[1]);
     const end = r[1] !== '' && r[2] !== '' ? Math.min(size - 1, Number(r[2])) : size - 1;
@@ -241,6 +302,103 @@ try {
   check(hitsOf(sine.hash) >= 1, `P3 远程素材服务被请求过正弦波素材(${hitsOf(sine.hash)} 次 GET)`);
   const clipJs = await mcpCall('measure_audio_js', { clipId: placed.clipId, mono: true, sampleRate: 48000, code: RMS_PEAK_FNV }, conv);
   check(clipJs?.ok === true && near(clipJs.value?.channels?.[0]?.rmsDb, RMS, 0.05), 'P3 片段档(mono、48 kHz)照常', clipJs && { ok: clipJs.ok, error: clipJs.error, v: clipJs.value?.channels });
+
+  /* ---- P6～P11 三个感知工具(claude/asset-path-2):字节经素材服务来,结果与直接读本地文件相同 ---- */
+  const cuts = gen('cuts.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=160x90:r=25:d=1', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=25:d=1',
+    '-f', 'lavfi', '-i', 'color=c=green:s=160x90:r=25:d=1', '-filter_complex', '[0][1][2]concat=n=3:v=1:a=0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const move = gen('move.mp4', ['-f', 'lavfi', '-i', 'color=c=black:s=160x120:r=10:d=2', '-f', 'lavfi', '-i', 'color=c=white:s=16x16:r=10:d=2',
+    '-filter_complex', "[0][1]overlay=x='20+t*30':y=50", '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '5']);
+  out.hashes.cuts = cuts.hash;
+  out.hashes.move = move.hash;
+  const vids = await page.evaluate(async ({ cuts, move, gone }) => {
+    const m = await import('/src/store/project.ts');
+    const a = m.actions.addMedia({ id: 'm-cuts', kind: 'video', name: 'cuts.mp4', url: `/@media/${cuts}`, hash: cuts, path: `${gone}\\cuts.mp4`, duration: 3, width: 160, height: 90 });
+    const b = m.actions.addMedia({ id: 'm-move', kind: 'video', name: 'move.mp4', url: `/@media/${move}`, hash: move, path: `${gone}\\move.mp4`, duration: 2, width: 160, height: 120 });
+    return { cuts: a.id, move: b.id };
+  }, { cuts: cuts.hash, move: move.hash, gone: GONE });
+
+  // P6 detect_shots(编辑器没有 Python 模型,走 scdet 兜底档):转场时刻与直接对本地文件跑 scdet 的相同
+  const scdetDirect = [...String(spawnSync(ffmpeg, ['-hide_banner', '-i', cuts.file, '-vf', 'scdet=threshold=10', '-f', 'null', '-'], { encoding: 'utf8', windowsHide: true }).stderr)
+    .matchAll(/lavfi\.scd\.time:\s*([0-9.]+)/g)].map((x) => Number(x[1]));
+  const started = await mcpCall('detect_shots', { mediaId: vids.cuts });
+  const shots = await until('list_shots 出结果', async () => {
+    const r = await mcpCall('list_shots', { mediaId: vids.cuts });
+    return r && (r.running === false || r.error) ? r : null;
+  }, 120000, 1000);
+  out.shots = shots && { engine: shots.engine, transitions: shots.transitions?.map((t) => t.time), error: shots.error, started };
+  check(shots?.running === false && JSON.stringify(shots.transitions.map((t) => t.time)) === JSON.stringify(scdetDirect) && scdetDirect.length === 2,
+    'P6 detect_shots:转场时刻与直接对本地文件跑 scdet 的相同(两次硬切)', { now: shots?.transitions?.map((t) => t.time), direct: scdetDirect, error: shots?.error });
+  check(hitsOf(cuts.hash) >= 1, `P6 远程素材服务被请求过这段视频(${hitsOf(cuts.hash)} 次 GET)`);
+
+  if (!PY) {
+    fails.push('P7～P11 要一个带 numpy 的 Python(PATH 上的 python,或 PROMPTCUT_TEST_PYTHON),这台机器上没找到');
+  } else {
+    // P7 track_points(模板匹配档):追出来的与直接对本地文件跑 promptcut_track 的逐项相同
+    const POINTS = [[0, 28, 58]];
+    const direct = trackResult(await runAsync(PY, ['-m', 'promptcut_track', 'track', '--video', move.file, '--points', JSON.stringify(POINTS)], pyEnv(PYLIBS)));
+    const moveHits0 = hitsOf(move.hash);
+    const tStart = await mcpCall('track_points', { mediaId: vids.move, points: POINTS });
+    const track = await until('get_track 出结果', async () => {
+      const r = await mcpCall('get_track', { mediaId: vids.move, full: true });
+      return r && (r.running === false || r.error) ? r : null;
+    }, 120000, 1000);
+    const trackNow = track && { engine: track.engine, width: track.width, height: track.height, frames: track.frames, points: track.points };
+    check(track?.engine === 'template' && JSON.stringify(trackNow) === JSON.stringify(direct),
+      'P7 track_points(模板匹配档):经素材服务追出来的与直接读本地文件的逐项相同', { now: trackNow && { ...trackNow, points: trackNow.points?.map((p) => [p.xy[0], p.xy.at(-1)]) }, direct: direct && direct.points?.map((p) => [p.xy[0], p.xy.at(-1)]), error: track?.error, started: tStart });
+    // 页面登记素材后,本地素材服务可能已经按预取清单把整份从远程拉进本地内容库(P7 开始前),所以这里只看远程总共被请求过没有:
+    // 编辑器的素材目录一开始是空的、素材记录的 path 指向不存在的目录,字节只可能经素材服务来
+    check(hitsOf(move.hash) >= 1, `P7 远程素材服务被请求过这段视频(共 ${hitsOf(move.hash)} 次 GET,其中 P7 期间 ${hitsOf(move.hash) - moveHits0} 次)`);
+
+    // P8 detect_subjects:这台机器没有主体检测的模型;地址要过得了 Python 的入口检查,停在「未就绪」而不是「找不到视频文件」
+    const sStart = await mcpCall('detect_subjects', { mediaId: vids.move, times: [0.5, 1.2] });
+    const subj = await until('list_subjects 结束', async () => {
+      const r = await mcpCall('list_subjects', { mediaId: vids.move });
+      return r && (r.running === false || r.error) ? r : null;
+    }, 180000, 1000);
+    out.subjects = { started: sStart, result: subj && (subj.error || { engine: subj.engine, samples: subj.samples?.length }) };
+    check(subj && !/找不到视频文件/.test(String(subj.error || '')) && (subj.running === false ? subj.samples?.length === 2 : /未就绪/.test(String(subj.error))),
+      'P8 detect_subjects:地址过了入口检查(装了模型就出两个样本;没装停在「未就绪」)', out.subjects);
+
+    // P9 三个 Python 包都答 ACCEPTS_URL(Node 据此递地址)
+    for (const pkg of ['promptcut_shots', 'promptcut_track', 'promptcut_subject']) {
+      check(await pythonAcceptsUrl({ python: PY, env: pyEnv(PYLIBS), pkg, spawnPython: spawnPy }), `P9 ${pkg} 答 ACCEPTS_URL`);
+    }
+
+    // P10 老包(拷一份仓库里的 promptcut_track,去掉 ACCEPTS_URL 与地址放行):拒绝地址;Node 改走临时文件,结果相同,临时文件用完删
+    const oldLibs = path.join(EXPORT_DIR, 'pylibs-old');
+    makeOldTrackPackage(oldLibs);
+    const url = `http://127.0.0.1:${REMOTE_PORT}/api/asset/media/${move.hash}`;
+    const refused = await runAsync(PY, ['-m', 'promptcut_track', 'track', '--video', url, '--points', JSON.stringify(POINTS)], pyEnv(oldLibs));
+    check(/找不到视频文件/.test(refused.stdout), 'P10 老包确实拒绝地址', refused.stdout.slice(-300));
+    const input = await pythonInput({ src: url, ref: { name: 'move.mp4' }, python: PY, env: pyEnv(oldLibs), pkg: 'promptcut_track', spawnPython: spawnPy, tmpRoot: EXPORT_DIR });
+    check(input.via === 'temp' && fs.readFileSync(input.input).equals(fs.readFileSync(move.file)), 'P10 老包:Node 先把字节流到临时文件(与原文件逐字节相同)', { via: input.via });
+    const viaTemp = trackResult(await runAsync(PY, ['-m', 'promptcut_track', 'track', '--video', input.input, '--points', JSON.stringify(POINTS)], pyEnv(oldLibs)));
+    input.cleanup();
+    check(JSON.stringify(viaTemp) === JSON.stringify(direct) && !fs.existsSync(input.input), 'P10 老包经临时文件追出来的与直接读文件相同,临时文件已删');
+
+    // P11 主体检测取字节那一步:frames.probe_size + grab_frame 经地址与读本地文件,宽高与 BGR 像素逐字节相同
+    const script = path.join(EXPORT_DIR, 'frames_check.py');
+    fs.writeFileSync(script, [
+      'import sys, json, hashlib',
+      'from promptcut_subject import frames as F',
+      'ff = sys.argv[1]',
+      'out = []',
+      'for v in sys.argv[2:]:',
+      '    w, h = F.probe_size(ff, v)',
+      '    fw, fh = F.target_size(w, h, 640)',
+      '    rows = []',
+      '    for t in (0.0, 0.5, 1.2):',
+      '        fr = F.grab_frame(ff, v, t, fw, fh)',
+      '        rows.append([list(fr.shape), hashlib.sha256(fr.tobytes()).hexdigest()])',
+      '    out.append({"size": [w, h], "frames": rows})',
+      'print(json.dumps(out))',
+    ].join('\n'));
+    const fc = await runAsync(PY, [script, ffmpeg, url, move.file], pyEnv(PYLIBS));
+    let pair = null;
+    try { pair = JSON.parse(fc.stdout.trim().split(/\r?\n/).at(-1)); } catch { /* 下面报 */ }
+    check(pair && JSON.stringify(pair[0]) === JSON.stringify(pair[1]) && JSON.stringify(pair[0].size) === '[160,120]',
+      'P11 主体检测抽帧:经素材服务地址与读本地文件解出的像素逐字节相同', pair ?? fc.stderr.slice(-400));
+  }
 
   /* ---- P4 回到本机空间:只剩本地内容库,按哈希存 ---- */
   await until('远程拉完、进了本地内容库', async () => {

@@ -12,10 +12,20 @@ import type { ServerResponse } from "http";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 import { buildEnv, dataDir, findPython, pipeToSse, readBody, spawnPython } from "./vite-plugin-stt";
+import { createAssetSourceResolver } from "./audio-source.mjs";
+import { assetServiceOrigin } from "./asset-client";
+import { mediaSourceOf } from "./vision/ffmpeg-frames";
+import { pythonInput, resolveMediaSource } from "./perception-source.mjs";
+
+/**
+ * 素材记录 → 素材服务上的 HTTP 地址(ffprobe / ffmpeg / Python 的输入)。和看画面的素材层、音频测量同一条
+ * (`mediaSourceOf`,本地素材服务的 `/@media/<hash>` 在共享项目里会向远程素材服务拉)。请求体里的 `path` 不看,
+ * 见 `server/perception-source.mjs`。
+ */
+const resolveSource = createAssetSourceResolver({ origin: assetServiceOrigin, toUrl: (m, origin) => mediaSourceOf(m, origin) });
 
 export type TransitionKind = "cut" | "dissolve";
 
@@ -147,8 +157,11 @@ async function grabThumbs(env: NodeJS.ProcessEnv, video: string, outDir: string,
   }
 }
 
-/** 跑一次检测。优先 TransNetV2，不可用就退回 scdet。 */
-async function runDetection(root: string, job: ShotsJob, video: string): Promise<void> {
+/**
+ * 跑一次检测。优先 TransNetV2，不可用就退回 scdet。
+ * video 是素材服务上的 HTTP 地址:ffprobe、scdet、抓缩略图直接吃地址;Python 那一半按包认不认地址决定递地址还是临时文件。
+ */
+async function runDetection(root: string, job: ShotsJob, video: string, ref: Record<string, string>): Promise<void> {
   const python = findPython(root);
   const env = python ? await buildEnv(root, python) : { ...process.env };
 
@@ -179,9 +192,17 @@ async function runDetection(root: string, job: ShotsJob, video: string): Promise
   job.engine = useTransNet ? "transnetv2" : "scdet";
 
   if (useTransNet) {
+    let input: { input: string; cleanup: () => void };
+    try {
+      input = await pythonInput({ src: video, ref, python: python!, env, pkg: "promptcut_shots", spawnPython });
+    } catch (e) {
+      job.status = "error";
+      job.message = (e as Error).message;
+      return;
+    }
     await new Promise<void>((resolve) => {
       const child = spawnPython(python!, [
-        "-m", "promptcut_shots", "detect", video, "--fps", String(meta.fps),
+        "-m", "promptcut_shots", "detect", input.input, "--fps", String(meta.fps),
       ], env);
       let buf = "";
       child.stdout.on("data", (d) => {
@@ -224,7 +245,7 @@ async function runDetection(root: string, job: ShotsJob, video: string): Promise
         }
         resolve();
       });
-    });
+    }).finally(() => input.cleanup());
   } else {
     const times: number[] = [];
     try {
@@ -300,24 +321,24 @@ export function shotsPlugin(): Plugin {
           return pipeToSse(spawnPython(python, ["-m", "promptcut_shots", "install"], env), res);
         }
 
-        // POST /api/shots/detect —— 起一个后台作业
+        // POST /api/shots/detect { mediaId, media: { id, name, kind, url, hash } } —— 起一个后台作业。
+        // 素材经素材服务取(见 server/perception-source.mjs):没有这份素材回 404,素材服务不可达回 502;请求体里的 path 不看。
         if (req.method === "POST" && url === "/api/shots/detect") {
           try {
             const body = JSON.parse((await readBody(req)).toString("utf-8") || "{}");
-            const video: string | undefined = body.path;
-            if (!video || !existsSync(video)) {
-              return sendJson(res, 400, { ok: false, error: `找不到视频文件：${video ?? "(未提供)"}` });
-            }
+            const source = await resolveMediaSource(body, resolveSource);
+            if (!source.ok) return sendJson(res, source.status, { ok: false, error: source.error, ...(source.kind ? { kind: source.kind } : null) });
+            const video = source.src;
             const job: ShotsJob = {
               id: randomUUID().slice(0, 8),
-              mediaId: body.mediaId,
+              mediaId: body.mediaId ?? source.media.id,
               status: "running",
               engine: "scdet",
               percent: 0,
             };
             jobs.set(job.id, job);
             // 不 await：立刻把 jobId 回给前端，进度靠轮询
-            void runDetection(root, job, video).catch((e) => {
+            void runDetection(root, job, video, source.media).catch((e) => {
               job.status = "error";
               job.message = e instanceof Error ? e.message : String(e);
             });
