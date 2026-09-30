@@ -60,3 +60,9 @@
 ## 提交
 
 见 `git log main..claude/join-error`。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 本分支 M8 时期做完后一直「修复待审」（`REPORT-M5-M8.md` 第 6.3 节）。主会话读过 diff：`shared/verify` 与握手用同一个 `authenticate`、nonce 照样用掉、失败计入限速、参数校验严格；页面侧的判定抽成纯函数 `classifyEnterFailure`，旧服务端回 404 / 405 时退回原来的判法，不比以前差。〔裁〕（新增端点）照留，待用户审；`docs/plan/auth-contract.md` 第 4 节端点表已补这一行（`cd37c8ed`）。
+- 分叉点较老（`3ab63cf0`），合到当时的 main 之上自动合并（`syncManager.ts`、`shared-service.mjs` 两处与 A3 的改动都在）；在 `claude/r6-merge` 上随整套验证通过（`c10-ui-probe`、`online-user-cards-probe` 都走加入表单）。
+- 报告提到的代价照记：一次输错密码会记两次失败（握手一次、verify 一次），限速早一倍触发。线上生效要托管端重新部署（随 0.7.7）。合入 main `8237849f`。

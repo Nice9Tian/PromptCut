@@ -120,3 +120,9 @@
 2. 排查清单第 2～7 项是否另开任务，按什么顺序（建议先做 2～4，它们在共享项目里直接不可用；5、6 是写入绕过入库；7 牵动产物推送，最大）。
 3. 时间轴逐秒曲线的 ffmpeg 偶发要不要另开一项修。
 4. 托管部署下编辑器进程自己读 `/@media` 要票据的问题（见「没做成的」第二条）。
+
+## 主会话审查（2026-09-30，笔记本主会话）
+
+- 审过 `server/audio-source.mjs`（先发 1 字节的 Range 试探，分清有这份素材、404、素材服务不可达）、测响度主体搬到 `server/audio-loudness.mjs`、ffprobe 改异步（同进程时不再自己卡住自己）、请求体里的 `path` 不再读盘。4 条〔裁〕照留，待用户审。
+- 主会话在集成分支 `claude/r6-merge`（本分支加 `claude/join-error`、`claude/query-render-2`）上重跑：`npx tsc -b --force` 0 错误；`npm test` 4120 / 4118 / 0 / 2；G0-R 全过；`asset-path-probe` 17 项、`custom-measure-probe` 21 项全过；其余探针见 `docs/reports/REPORT-post-M8.md` 第 7 轮。
+- 排查清单的后几条（三个感知工具、两个写入绕过入库、`bake_card`、提示词的「磁盘路径」）已写进 `docs/plan/TODO.md`，前两类与提示词交 `claude/asset-path-2` 在做。时间轴逐秒曲线的偶发缺点记进 TODO。合入 main `8237849f`。
