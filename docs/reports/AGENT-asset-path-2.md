@@ -6,7 +6,7 @@
 
 ## 状态
 
-轻量部分做完、已提交，第一轮审查的四条决定也已处理；重的验证（`npx tsc -b --force`、`npm test`、代码指纹、真起编辑器的探针）按任务书的重活禁令**还没跑**，等主会话发「可以跑重活」。
+完成，待主会话审查。第一轮审查的四条决定已处理；收到「可以跑重活」后跑了类型检查（0 错误）、全量测试（4131 条：4129 通过、0 失败、2 跳过）、代码指纹（不变）和扩过的探针（29 项全过），见「验证」。
 
 - 三个感知工具（`detect_shots` 镜头识别、`track_points` 运动追踪、`detect_subjects` 主体检测）：页面只发素材标识，服务端经素材服务的 HTTP 地址取字节，请求体里的 `path` 不再读盘。
 - 两个写入工具（`voice_generate` 配音、`collect_download` 素材收集）：先落临时目录，再经素材服务的入库接口 `POST /api/media/upload/<文件名>?tiers=1`（用户导入素材走的同一条）进内容库，回入库后的标识，页面按它登记。
@@ -26,7 +26,8 @@
 | `021d75a5` | 文档：报告（轻量部分） |
 | `5d0a2521` | 测试：要真 Python 的检查挪进探针 `asset-path-probe.mjs`（P6～P11），单测 PK-2、PK-3 改用假的解释器 |
 | `35b26d3a` | 修复：配音试听、音色设计与复刻的试听改落试听缓存（MI-7） |
-| （本次） | 文档：报告按第一轮审查更新 |
+| `e9a5b55c` | 文档：报告按第一轮审查更新 |
+| （本次） | 测试：探针 P7 的远程计数改看总数；文档：补重的验证结果 |
 
 代号说明：PK-n 是本任务感知工具那一组单测的用例号（PK = perception，感知）；MI-n 是写入工具那一组（MI = media ingest，入库）；P6～P11 是探针 `asset-path-probe.mjs` 里本任务加的检查项（P1～P5 是上一段的）。AR-n 是上一段 `claude/asset-path` 的用例号。
 
@@ -67,10 +68,10 @@
 | 本任务单测 | `node --test server/test/perception-asset-path.test.mjs` | 退出码 0：10 通过、0 失败、0 跳过，约 2.4 秒（第一轮审查后：去掉要真 Python 的 PK-6～PK-8，PK-2 / PK-3 改用假解释器，加 MI-7）。挪之前那一版 12 条也全过，其中 PK-6～PK-8 的检查现已搬进探针 |
 | 素材收集插件 | `node --test server/test/collect-plugin.test.mjs` | 退出码 0：17 通过、0 失败、0 跳过（含 MI-5、MI-6） |
 | 相关单测 | `node --test server/test/voice.test.mjs`；`server/test/media-hash.test.mjs`；`src/kernel/subject.test.mjs` | 18 / 11 / 29 通过，0 失败 |
-| 类型检查 | `npx tsc -b --force` | **未跑**（重活禁令） |
-| 全量测试 | `npm test` | **未跑**（重活禁令） |
-| 代码指纹 | `node -e 'import("./server/frame-code.mjs")…'` | **未跑**；本任务没动 `server/frame-*`、`src/render/`、卡片，预期不变 |
-| 探针 | 扩 `asset-path-probe.mjs` 或新写 | **未写未跑**（要起 dev server，属重活） |
+| 类型检查 | `npx tsc -b --force` | 退出码 0，0 错误，跑 1 遍 |
+| 全量测试 | `npm test` | 退出码 0：tests 4131、pass 4129、fail 0、cancelled 0、skipped 2（原有的两条：`/api/cards/layout` 集成、SKILL 闸门集成，都要自己起的 dev server），约 87 秒；跑 1 遍，一次过（主会话同时在做合并、构建与部署） |
+| 代码指纹 | `node -e 'import("./server/frame-code.mjs").then(m=>console.log(m.snapshotCode(process.cwd()),m.captureCode(process.cwd())))'` | `00a5264bf8a062ff6e0b5ed0516cccd1 86e443cb6fa838aef64788af6822fd68`，与任务书给的相同 |
+| 探针 | `node scripts/probes/asset-path-probe.mjs --port 5950`（编辑器 5950～5952，远程素材服务 5955，`PROMPTCUT_NO_PORT_FILE=1`） | 跑 2 遍。第 1 遍退出码 1：28 项过、1 项失败，失败的是 P7 的「P7 期间远程被请求过」——页面登记素材后，本地素材服务已按预取清单把整段视频从远程拉进本地内容库，P7 开始时远程不会再被请求。这是探针自己的判据写错了，不是时限偶发：改成看远程总共被请求过没有（编辑器的素材目录一开始是空的、素材记录的 path 指向不存在的目录，字节只可能经素材服务来）。第 2 遍退出码 0，「探针通过:29 项」 |
 
 单测用例（`server/test/perception-asset-path.test.mjs`；插件经 typescript 转译后直接挂在 http 上，素材服务是真的：fs 内容库 + 媒体中间件，前面挂一个计数的转发；**不依赖本机 Python**，没有 ffmpeg 时 PK-4 起跳过，与上一段 AR 用例同一个做法）：
 
@@ -87,7 +88,7 @@
 - MI-6（同上）素材服务不可达：作业报错并写明地址，`items` 为空，素材目录与 `pc-collect-*` 临时目录都不留文件。
 - MI-7 配音试听：回 `/api/voice/preview/voice-preview-minimax.mp3`，不回磁盘路径，经这个地址取回的就是合成的字节；音色设计的试听同理，服务商给的音色 id `ttv-voice/1` 拼进文件名时斜杠洗成下划线；`..%2F..%2Fpackage.json`、`..%5Cai.json`、`x.txt`、空名都回 404；素材目录里没有试听文件。
 
-挪进探针的检查（第一轮审查前在单测里跑过、全部通过；现在是探针的 P7～P11，**还没在探针里跑**）：
+挪进探针的检查（第一轮审查前在单测里跑过、全部通过；现在是探针的 P7～P11，探针第 2 遍全过）：
 
 - P7（原 PK-6）运动追踪（模板匹配档）：经地址追出来的 `engine / width / height / frames / points` 与直接对本地文件跑 `promptcut_track` 的逐项相同；20 帧，方块右移约 57 像素。
 - P8（原 PK-8 前半）主体检测：这台机器没装主体检测拓展，作业停在「未就绪」而不是「找不到视频文件」（地址过了入口检查）。
@@ -96,14 +97,23 @@
 - P11（原 PK-8 后半）`frames.probe_size` + `grab_frame`：经素材服务地址与读文件在 0、0.5、1.2 秒解出的 BGR 像素 sha256 相同、宽高 160×120。
 - 另加 P6：`detect_shots` 在真的编辑器里（scdet 档）转场时刻与直接读文件相同，远程素材服务被请求过这段视频。
 
+探针第 2 遍的结果（P1～P5 是上一段的检查，照常全过）：
+
+- P6 `detect_shots`：转场时刻 `[1, 2]`，与直接对本地文件跑 scdet 的相同；远程素材服务收到这段视频 1 次 GET。
+- P7 `track_points`：`engine: template`、160×120、20 帧，点从 `[28, 58]` 追到 `[83.97, 58.2]`，与直接对本地文件跑 `promptcut_track` 的逐项相同（`get_track` 的 `full: true` 整份比对）；远程共被请求 1 次。
+- P8 `detect_subjects`：作业结束于「主体检测拓展未就绪」，不是「找不到视频文件」。
+- P9 三个包都答 `ACCEPTS_URL`。
+- P10 老包拒绝地址（`找不到视频文件：http://127.0.0.1:5955/…`）；Node 改走临时文件（`via: temp`，与原文件逐字节相同），追出来的与直接读文件相同，临时文件已删。
+- P11 经素材服务地址与读本地文件，0、0.5、1.2 秒三帧的 BGR 像素 sha256 两两相同，宽高 160×120。
+- 结束时只停了自己起的编辑器进程树和计数服务，5950～5969 之后没有残留监听。
+
 哪几项真跑了模型：**都没有**。这台机器上没有 TransNetV2、BootsTAPIR、YuNet / RT-DETR、Grounding DINO 的权重和运行库（`onnxruntime`、`torch` 都没装）。真跑的是 scdet（镜头识别的兜底档）、模板匹配（运动追踪的兜底档，numpy）和主体检测的取字节那一步。
 
 单测不再依赖本机 Python，`npm test` 的跳过数不随机器变。探针要一个带 numpy 的 Python（PATH 上的 `python`，或 `PROMPTCUT_TEST_PYTHON`），找不到时 P7～P11 记为失败而不是静默跳过。
 
 ## 没做成的
 
-- 重的验证（类型检查、全量测试、代码指纹、探针）等「可以跑重活」。
-- 探针还没写：计划扩 `scripts/probes/asset-path-probe.mjs`，在 5950～5969 起编辑器（`PROMPTCUT_NO_PORT_FILE=1`）和一台计数的远程素材服务，素材只放远程，三个感知工具各调一次（镜头识别出结果；运动追踪用模板匹配出结果；主体检测证明取字节那一步与作业走到「未就绪」），再调一次 `voice_generate`（截服务商）或直接打 `/api/voice/generate` 看入库。
+- 探针没覆盖 `voice_generate` 与 `collect_download` 的入库：编辑器进程里截不了服务商的请求，也没有 yt-dlp；两者经真的素材服务入库由单测 MI-3、MI-5 覆盖（插件同一份代码）。
 - `bake_card` 只写了 dry run（下一节），主会话已定另开任务。
 - 配音复刻的**源文件**仍经素材目录的路径读：页面先把源文件经 `/api/media/upload` 入库，再把回包里的 `path`（本地内容库里的绝对路径）交给 `/api/voice/clone`，服务端 `isInside(src, mediaDir(root))` 后直接读。这是设置面板的功能，不是 Agent 工具，本段没改。改法：`/api/voice/clone` 收哈希，服务端用本段的解析器经素材服务的地址交 ffmpeg 转音频（`prepareCloneAudio` 的 `-i` 本来就能吃地址，要把 `spawnSync` 换成异步，理由同上一段〔裁〕4），页面 `src/ai/voice.ts` 的 `cloneVoice` 改发 `hash`；牵动两个文件，可以另开小项。
 
@@ -145,8 +155,7 @@
 
 ## 需要主会话决定的事
 
-1. 发「可以跑重活」之后，我跑类型检查、全量测试、代码指纹和探针（`node scripts/probes/asset-path-probe.mjs --port 5950`，远程素材服务占 5955），再更新本报告。
-2. 配音复刻的源文件仍按路径读本地内容库（见「没做成的」），要不要另开小项。
-3. 合并本分支（`--no-ff`）还是返工。
+1. 配音复刻的源文件仍按路径读本地内容库（见「没做成的」），要不要另开小项。
+2. 合并本分支（`--no-ff`）还是返工。
 
 已由主会话在第一轮审查定下的：要真 Python 的检查挪进探针（已做）；试听改落缓存（已做，〔裁〕4）；`bake_card` 另开任务（本段只留 dry run）；托管部署的票据问题本段不改（上一节）。

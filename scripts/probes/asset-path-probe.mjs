@@ -345,7 +345,9 @@ try {
     const trackNow = track && { engine: track.engine, width: track.width, height: track.height, frames: track.frames, points: track.points };
     check(track?.engine === 'template' && JSON.stringify(trackNow) === JSON.stringify(direct),
       'P7 track_points(模板匹配档):经素材服务追出来的与直接读本地文件的逐项相同', { now: trackNow && { ...trackNow, points: trackNow.points?.map((p) => [p.xy[0], p.xy.at(-1)]) }, direct: direct && direct.points?.map((p) => [p.xy[0], p.xy.at(-1)]), error: track?.error, started: tStart });
-    check(hitsOf(move.hash) > moveHits0, `P7 远程素材服务被请求过这段视频(${hitsOf(move.hash) - moveHits0} 次 GET)`);
+    // 页面登记素材后,本地素材服务可能已经按预取清单把整份从远程拉进本地内容库(P7 开始前),所以这里只看远程总共被请求过没有:
+    // 编辑器的素材目录一开始是空的、素材记录的 path 指向不存在的目录,字节只可能经素材服务来
+    check(hitsOf(move.hash) >= 1, `P7 远程素材服务被请求过这段视频(共 ${hitsOf(move.hash)} 次 GET,其中 P7 期间 ${hitsOf(move.hash) - moveHits0} 次)`);
 
     // P8 detect_subjects:这台机器没有主体检测的模型;地址要过得了 Python 的入口检查,停在「未就绪」而不是「找不到视频文件」
     const sStart = await mcpCall('detect_subjects', { mediaId: vids.move, times: [0.5, 1.2] });
