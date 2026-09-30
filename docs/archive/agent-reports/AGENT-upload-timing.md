@@ -69,3 +69,10 @@
 1. 审三级〔裁〕那一句（`mechanism/asset-service.md`），可推翻。
 2. `enqueueExistingMedia` 在「上传目标已就绪时导入」也会交一次，与服务端 `prepareImport` 的入队重复（队列合并，探针里 `merged 2` 就是这个）。代价是每次导入多一个小 POST；如果嫌多余，可以改成只在「导入请求发出时目标未就绪」才交，但需要把导入开始时刻带进 `applyUploadedMedia`，改动面更大，这次没做。
 3. 服务端生成的素材（配音、素材收集）也经 `applyUploadedMedia`，所以一并覆盖；Agent 工具若将来有不经 `applyUploadedMedia` 直接写素材表的路，需要另外挂。
+
+## 主会话审查（2026-10-01，笔记本主会话）
+
+- 审过页面一侧的记下与补交：`queueImportedMedia` 在上传目标未就绪时按素材原尺寸哈希记下，`setUploadTargetReady`（首次推成功与每次续签）时经开启放云端同一个入队口子 `enqueueExistingMedia` 补交；已就绪当场交一次；补交没成留到下次续签；离开项目丢弃；本机就是主机时不记；后台补入库那一路带 `{ imported: false }`，仍走 `afterIngest`，不重复交。改前改后对照（UT 单测改前 5 个全挂；`shared-import-upload-probe` 新步骤改前 4 项挂）坐实了缺口和修复。
+- 采纳三级〔裁〕那一句（`mechanism/asset-service.md`「本地内容库」）。
+- 「需要主会话决定的事」第 2 条：上传目标已就绪时导入也当场交一次，维持——队列按素材去重合并，代价是每次导入多一个小请求；改成只在导入发出时未就绪才交，要把导入开始时刻带进 `applyUploadedMedia`，不值得。第 3 条：现有的服务端生成素材（配音、素材收集）都经 `applyUploadedMedia`，已覆盖；将来若有不经它直接写素材表的路，再另挂。
+- 44 个探针只动启动参数、不动判定；集成分支 `claude/r11-merge` 的整套里全部探针以新参数跑过，见 `docs/reports/REPORT-post-M8.md` 第 11 轮。第 10 轮〔裁〕第 5 条（其余探针暂不加 `--disable-field-trial-config`）由此改为全加。合入 main `a76640d0`。
