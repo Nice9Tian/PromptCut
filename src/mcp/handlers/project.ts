@@ -4,6 +4,29 @@ import { findClip } from "../../kernel/project";
 import { cameraFor, clampFov, DEFAULT_FOV_DEG, MAX_FOV_DEG, MIN_FOV_DEG } from "../../kernel/space3d";
 import { mediaCardUrl } from "../../ai/mediaRef";
 
+/**
+ * `set_project_meta` 收的字段,和 `server/tools/project.mjs` 里它的 inputSchema.properties 一一对应
+ * (`server/test/creativity-gate.test.mjs` CR-2 核对两边一致)。三维透视走 `set_camera3d`、主题也可走 `set_theme`;
+ * 三维渲染路线(`glRoute`)和创造力等级(`creativity`)只在项目设置里改,Agent 不写。
+ */
+export const SET_PROJECT_META_FIELDS = ["name", "width", "height", "fps", "duration", "themeId"] as const;
+
+/** 参数里不认的键(按出现顺序) */
+export function undeclaredProjectMetaKeys(args: unknown): string[] {
+  if (args === undefined || args === null) return [];
+  if (typeof args !== "object" || Array.isArray(args)) return ["(参数不是对象)"];
+  return Object.keys(args).filter((k) => !(SET_PROJECT_META_FIELDS as readonly string[]).includes(k));
+}
+
+export function projectMetaRejection(unknown: string[]): string {
+  const creativity = unknown.includes("creativity")
+    ? "创造力等级只能由用户在项目设置或 AI 栏里改,Agent 不能写。"
+    : "";
+  return `set_project_meta 不认这些字段:${unknown.join("、")}。这次调用整个没有执行,一个字段都没写。` +
+    `它只收 ${SET_PROJECT_META_FIELDS.join("、")}。${creativity}` +
+    "三维透视用 set_camera3d;别的项目内容用对应的工具改,不能经 set_project_meta 直接写。";
+}
+
 
 export const projectHandlers = {
   getProject: () => {
@@ -56,8 +79,14 @@ export const projectHandlers = {
   /**
    * 总时长不走 setProjectMeta:直接写进项目会被时间轴立刻按内容末尾改回去。
    * 走手动截断那条路,和用户手动缩短是同一个规则(kernel/duration.ts)。
+   *
+   * 只收 `set_project_meta` schema 里声明的字段(`SET_PROJECT_META_FIELDS`),带了别的键整次拒绝、一个都不写。
+   * 以前 `...rest` 原样交给 `setProjectMeta`,Agent 能借它改项目的任意字段(tracks、media、创造力等级……),
+   * 违反「Agent 不能绕过工具直接改项目」(`user-workflow.md`「保护」)。页面和 Agent 服务端(ssr-host)跑的都是这一份。
    */
   setProjectMeta: (args) => {
+    const unknown = undeclaredProjectMetaKeys(args);
+    if (unknown.length) throw new Error(projectMetaRejection(unknown));
     const { duration, ...rest } = args ?? {};
     if (Object.keys(rest).length) actions.setProjectMeta(rest);
     if (typeof duration === "number" && Number.isFinite(duration)) actions.setDurationManual(duration);

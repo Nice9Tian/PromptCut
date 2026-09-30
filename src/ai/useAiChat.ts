@@ -13,6 +13,8 @@ import { shouldOrchestrate } from "./triage";
 import { buildPlan, runOrchestration, type OrchestrationState } from "./orchestrate";
 import { runRoleTask } from "./runRoleTask";
 import { getState } from "../store/project";
+import { getTabCreativity } from "./agentTabs";
+import { projectCreativity } from "../kernel/creativity.mjs";
 import { mediaCardUrl } from "./mediaRef";
 import { buildHandoff } from "./handoff";
 import { getQueueState, remove as removeQueued } from "./chatQueue";
@@ -507,6 +509,8 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
             prompt,
             // 分工出去的角色也算这一页的:不带的话它调 declare_scope 会被服务端拒(实测报告里就是这么失败的)
             conversationId: opts?.getConversationId?.(),
+            // 同一页的等级跟着带上:不带的话服务端登记表会把这一页的覆盖值当成「跟项目」
+            creativity: getTabCreativity(tabId),
             roleId: task.roleId,
             signal: ac.signal,
             hooks: {
@@ -777,6 +781,10 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
           // 剧本每一轮都带上,由服务端拼进系统提示词 —— 多轮跑下来最容易跑偏,
           // 只在第一条消息里说一次是拉不住的。
           script: getScript(),
+          // 创造力等级:这一页单独设的(null = 跟项目)和项目这一刻的默认等级。服务端的闸门按它们判越级调用,
+          // 项目默认以服务端读到的项目为准,读不到才用这里报的(server/vite-plugin-ai.ts 的 currentProjectCreativity)
+          creativity: getTabCreativity(tabId),
+          projectCreativity: projectCreativity(getState().project),
         }),
         signal: ac.signal,
       });

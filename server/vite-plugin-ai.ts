@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { overLimit } from './http-guard.mjs';
 import { stagePortsOf } from './stage-ports.mjs';
 import { createCallPairing } from './agent/call-pairing.mjs';
+import { createAgentSessions } from './agent/agent-sessions.mjs';
+import { effectiveIsFile } from './card-overrides.mjs';
+import { CREATIVITY_HINT, CREATIVITY_LABEL, normalizeCreativity, projectCreativity } from '../src/kernel/creativity.mjs';
 /*
  * 必须静态 import:vite 打包配置时,别的插件静态引入的 prerender-client.mjs 被打进同一个包里,
  * 状态(预渲染的地址、就绪没有)在那一份上。这里要是换成 import(new URL(...)) 动态加载,拿到的是
@@ -404,6 +407,29 @@ export default function vitePluginAi(): Plugin {
       /** 审查环路走 CLI 时的只读锁:null = 不锁;Set = 只放行这些工具(空 Set = 全拦)。见下面 callToolInternal */
       let loopToolLock: Set<string> | null = null;
 
+      /*
+       * Agent 会话登记表(server/agent/agent-sessions.mjs):对话 ID → 类型、厂商、角色、创造力等级的覆盖值。
+       * /api/ai/chat 每次发消息登记一次;SKILL 无头实例里一律按桌面 APP 会话(跟项目)。
+       */
+      const agentSessions = createAgentSessions({ headless: process.env.PROMPTCUT_HEADLESS === '1' });
+      /** 页面发消息时顺手报上来的项目默认等级:服务端读不到项目(没绑副本、没有镜像)时用它 */
+      let projectCreativityHint: string | null = null;
+      /**
+       * 项目当前的默认等级。按新鲜程度:绑了项目副本就读副本(文档服务的最新版本),
+       * 否则读页面推来的镜像,再没有用页面发消息时报的那个,都没有按出厂的「高」。
+       */
+      function currentProjectCreativity(): string {
+        const replica = (agentBinding as any)?.side?.link?.replica?.project;
+        if (replica && typeof replica === 'object') return projectCreativity(replica);
+        const mirrored = latestMirror()?.project;
+        if (mirrored && typeof mirrored === 'object') return projectCreativity(mirrored);
+        return normalizeCreativity(projectCreativityHint) ?? projectCreativity(null);
+      }
+      /** create_card 的等级按「这张用户卡在不在」判(整篇重写已有的 = 中,新建 = 高);按生效的那一份判,改动层优先 */
+      function userCardExists(id: string): boolean {
+        return effectiveIsFile(server.config.root, path.join(server.config.root, 'src', 'cards', 'user', `${id}.tsx`));
+      }
+
       async function callToolInternal(tool: string, args: any, agent?: string, callId?: string): Promise<any> {
         const { tools } = await import(new URL('./mcp-tools.mjs', import.meta.url).href);
         const toolDef = tools.find((t: any) => t.name === tool);
@@ -440,6 +466,27 @@ export default function vitePluginAi(): Plugin {
         const gate = await import(new URL('./skill-gate.mjs', import.meta.url).href);
         const verdict = gate.checkGate(tool);
         if (!verdict.ok) return { ok: false, skillClosed: true, message: verdict.message };
+
+        /*
+         * 堵口子(计划 agent-workflow-plan.md A1):set_project_meta 带了 schema 没声明的字段就整次拒绝。
+         * 实现那一层(src/mcp/handlers/project.ts)也拦,这里是两条入口共同的一道。
+         */
+        const strict = await import(new URL('./agent/strict-args.mjs', import.meta.url).href);
+        const unknownArgs = strict.undeclaredArgs(tool, toolDef, args);
+        if (unknownArgs.length) return { ok: false, error: strict.undeclaredArgsError(tool, toolDef, unknownArgs) };
+
+        /*
+         * 创造力等级的闸门(server/agent/creativity-gate.mjs,对照表在那里)。这个对话生效的等级:
+         * AI 栏的对话取它自己的覆盖值,没有就跟项目;桌面 APP 会话(没登记过的对话 ID)跟项目。拦在执行之前。
+         */
+        const creativityGate = await import(new URL('./agent/creativity-gate.mjs', import.meta.url).href);
+        const { level: creativity, source: creativitySource } = agentSessions.creativityOf(agent, currentProjectCreativity());
+        const allowed = creativityGate.checkCreativity(tool, args, creativity, { cardExists: userCardExists, source: creativitySource });
+        if (!allowed.ok) {
+          agentLog('agent.creativity-denied', { tool, agent: agent || '', ...allowed.creativity });
+          return { ok: false, error: allowed.error, creativity: allowed.creativity };
+        }
+        agentSessions.touch(agent);
 
         /*
          * 绑了项目副本(C6.5):交给 server/agent/agent-side.mjs —— 每个工具调用前后各发一条事件(D2,带 callId),
@@ -990,9 +1037,25 @@ export default function vitePluginAi(): Plugin {
               }).join('\n');
             }
 
+            /*
+             * 登记这个对话(server/agent/agent-sessions.mjs):类型、厂商、角色、创造力等级的覆盖值。
+             * creativity 是这个页签单独设的等级,null / 不带 = 跟项目;projectCreativity 是页面这一刻的项目默认,
+             * 服务端读不到项目时才用。每条消息都登记:用户可能在两条消息之间换了驱动或等级。
+             */
+            if (typeof data.projectCreativity === 'string') projectCreativityHint = normalizeCreativity(data.projectCreativity);
+            agentSessions.register(agentId, {
+              type: provider === 'api' ? 'api' : 'cli',
+              vendor: provider === 'api' ? String((await import(new URL('./ai-config.mjs', import.meta.url).href)).publicConfig()?.api?.vendor || 'api') : String(provider || ''),
+              role: 'main',
+              creativity: normalizeCreativity(data.creativity),
+            });
+            const { level: convCreativity, source: convCreativitySource } = agentSessions.creativityOf(agentId, currentProjectCreativity());
+
             const editorPort = (server.httpServer?.address() as any)?.port || 5195;
             const editorState = editorRes ? "编辑台已连接" : "未连接";
-            finalPrompt += `\n\n当前端口 ${editorPort};${editorState}` + (agentId ? `;你的 Agent 对话 ID:${agentId}` : '');
+            finalPrompt += `\n\n当前端口 ${editorPort};${editorState}` + (agentId ? `;你的 Agent 对话 ID:${agentId}` : '') +
+              `;创造力等级「${CREATIVITY_LABEL[convCreativity as keyof typeof CREATIVITY_LABEL]}」(${convCreativitySource}):` +
+              `${CREATIVITY_HINT[convCreativity as keyof typeof CREATIVITY_HINT]}。越级的工具调用会被拒绝,被拒就停下告诉用户,不要绕`;
 
             res.writeHead(200, {
               'Content-Type': 'text/event-stream',

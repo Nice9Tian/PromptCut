@@ -12,6 +12,8 @@
  */
 import type { ChatMessage, MessagePart, RunEvent } from "./types";
 import { parseSseChunks } from "./sse";
+import { getState } from "../store/project";
+import { projectCreativity } from "../kernel/creativity.mjs";
 
 export interface RoleTaskHooks {
   /** 建一条属于这个角色的空气泡，返回它的 id */
@@ -74,8 +76,10 @@ export async function runRoleTask(opts: {
   signal?: AbortSignal;
   /** 发起这次分工的那一页的对话 ID:带上它,角色调 declare_scope 之类的工具才记得到页签上 */
   conversationId?: string;
+  /** 那一页单独设的创造力等级(null = 跟项目),和 useAiChat 发的一致 */
+  creativity?: string | null;
 }): Promise<string> {
-  const { provider, prompt, roleId, hooks, signal, conversationId } = opts;
+  const { provider, prompt, roleId, hooks, signal, conversationId, creativity = null } = opts;
   const msgId = hooks.createMessage(roleId);
 
   const res = await fetch("/api/ai/chat", {
@@ -83,7 +87,7 @@ export async function runRoleTask(opts: {
     headers: { "Content-Type": "application/json" },
     // 故意不传 sessionId：每个并行任务要一个干净的会话，否则几段对话会
     // 交错进同一个上下文，CLI 驱动尤其明显。
-    body: JSON.stringify({ provider, prompt, conversationId }),
+    body: JSON.stringify({ provider, prompt, conversationId, creativity, projectCreativity: projectCreativity(getState().project) }),
     signal,
   });
   if (!res.ok || !res.body) throw new Error(`角色 ${roleId} 的请求失败（HTTP ${res.status}）`);
