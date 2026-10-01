@@ -91,4 +91,32 @@ A10 抢卡这一步拆成三条判定，判法本身不放宽：
 
 ## 6. 验证
 
+日志都在 scratchpad `m7race/`（`run0-before*`、`run1*`～`run6*`、`claimgate.*`、`autonode.*`、`tsc.log`、`npmtest.log`）。
+
+- `npx tsc -b --force`：退出 0，零错误。
+- `npm test`：退出 0；tests 4231，pass 4229，fail 0，skipped 2。（只跑相关文件时：`m7-queue`、`render-node-logic`、`render-node-session`、`c10-cost-queue`、`c10a-l17-queue` 共 159 个全过，含新加的 `M7Q-PICK-2`。）
+- 在线构建：`npx vite build --mode online --outDir out/dist-online --emptyOutDir` 改前、改后各出一次，退出 0。
+- `m7-browser-probe --role all --timing-authoritative --base-port 6300 --dist out/dist-online`：
+
+| 遍 | 产品代码 | 探针 | 退出码 | `fails` | 切分 `splitMs` | 加卡到两张都做完一段 `raceMs` | 抢卡这一步（接手判过 → 抢卡判出） | w1 / w2 由谁做完 | `page-layer-switched` | `A4-timing-on-laptop` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0（改前对照） | main | 新判定 | 1 | `server-race-split-promptly`、`server-race-done-in-time` | 超 90 s（+88 s 时计划仍 open、排 pc 可认领 20 个任务里第 14 名；pc 在做 h3 段） | 超 180 s（两张都 0 段） | 182 s 后判出 | — / — | 过 | 过（24125 ms） |
+| 1 | 改后 | 改前一版 | 3 | 无 | 14707 ms | 32840 ms | 33 s | 浏览器 / 浏览器 | 过（ready 60） | 过（23871） |
+| 2 | 改后 | 改前一版 | 1 | `page-layer-switched`（ready 0） | 14767 | 32878 | 33 s | 浏览器 / 浏览器 | **挂**，见第 3.2 节末条 | 过（24164） |
+| 3 | 改后 | 改前一版 | 3 | 无 | 14276 | 34393 | 34 s | 浏览器 / 浏览器 | 过（ready 60） | 过（22864） |
+| 4 | 改后 | 最终版 | 3 | 无 | 15250 | 33389 | 33 s | 浏览器 / 浏览器 | 过（等了 10.1 s，ready 60） | 过（24281） |
+| 5 | 改后 | 最终版 | 3 | 无 | 14736 | 39880 | 40 s | 浏览器 / 浏览器 | 过（ready 61） | 过（23988） |
+| 6 | 改后 | 最终版 | 3 | 无 | 14746 | 32894 | 33 s | 浏览器 / 浏览器 | 过（ready 1） | 过（23507） |
+
+  退出码 3 = 只剩 `W7/cross-machine` 待办（本机替身跑不了跨机），正常。第 4～6 遍是最终提交上的连跑 3 遍。改前这一步实测 214～311 s，改后 33～40 s。
+- 改到了节点代码，另跑：
+  - `claim-gate-probe --port 6320 --doc-port 6323`：退出 0，`"ok": true, "fails": []`。
+  - `desktop-auto-node-probe --base-port 6330 --dist out/dist-online`（本机模式）：退出 0，`"fails": []`，用时 517 s。
+- 没跑 G0-R：不涉及渲染代码（按任务书）。跑完后 6300～6349 没有残留监听。
+
 ## 7. 没做成的与建议
+
+- **w1、w2 现在都由浏览器做完**：改后 6 遍里两张卡都是 b2 拿到（pc 那时还在做接手来的 h、z 段，`maxConcurrent` 用满）。这符合「谁先谁得卡」，判定也只要求一卡一环境；但「pc 与浏览器各得一张」这种分布本探针现在看不到。要专门测 pc 抢到，得让 pc 在加卡时空着（例如加卡前等接手的段做完），那是另一种场景，没加。
+- **`sink-incomplete`（推产物偶发 400）**：四次旧日志与本次各遍里都有，每次 1～4 段：`素材服务 POST px/<hash>/complete 回 400：incomplete`，180 块只推上 179 块，重领后在清单阶段判重通过（说明那一块后来到了，像是最后一块的 PUT 还没落地就发了 complete）。每次白费一次认领、约 13 s。不是本卡点的主因，未查、未改（不在可改清单里）；建议另开任务查推送端 complete 前是否等齐了所有块。
+- **`plan@3` 的「文档服务上没有项目快照 @3」**：每次都有、三次后进 failed，与本问题无关，未查。
+- **契约**：`docs/plan/render-queue-contract.md` B.3 待主会话按第 4 节补一句。
