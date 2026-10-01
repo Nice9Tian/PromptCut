@@ -308,13 +308,26 @@ try {
     if (remote) await tiers(`T.setRemoteAssets({ base: args[0], ticket: async () => 'probe-ticket' });`, REMOTE_BASE);
     return r;
   };
-  const setupProjectOnly = (pair, name) => store(`
-    actions.newProject(args[0]);
+  const setupProjectOnly = async (pair, name) => {
+    await store('actions.newProject(args[0]);', name);
+    // 远程素材来自共享项目。只改素材服务地址却仍留在本机空间，会让
+    // 本机缺失检查按正常规则清空尚未拉到的原尺寸地址，干扰换档观察。
+    // 用真实协作入口建立隔离的共享项目，再由场景控制远程素材服务。
+    const shared = await page.evaluate(async (name) => {
+      const { enableCollab } = await import('/src/editor/sync/collab.ts');
+      const result = await enableCollab({ where: 'lan', mode: 'free', name,
+        creator: { username: 'tier-probe', password: 'isolated-tier-probe-creator' },
+        projectPassword: 'isolated-tier-probe-project' });
+      return { ok: result.ok, error: result.ok ? null : result.error };
+    }, name);
+    if (!shared.ok) throw new Error(`换档探针共享项目初始化失败: ${shared.error}`);
+    return store(`
     const m = actions.addMedia({ kind: 'video', name: args[0] + '.' + args[4], url: '/@media/' + args[1], hash: args[1], ext: args[4], size: args[3],
       tiers: { original: args[1], small: args[2] }, duration: 6, width: 1280, height: 720 });
     const c = actions.addMediaClip(m.id, 0, { duration: 6 });
     actions.seek(2.5);
     return { mediaId: m.id, clipId: c && c.id };`, name, pair.orig.hash, pair.small.hash, pair.orig.bytes.length, pair.ext);
+  };
 
   /* ============================================================ T5a:暂停中换档 */
   if (want('T5a')) {
