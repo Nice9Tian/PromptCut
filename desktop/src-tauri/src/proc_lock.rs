@@ -21,6 +21,8 @@
 //!   * Node 那边 `open(lock,'r+')` 拿到 EBUSY 就知道有人持有,而且这个信号来自内核,
 //!     不需要判活、不会误判;
 //!   * 实测持有期间别的进程连**删都删不掉**,想偷锁都偷不走。
+//!   * 持有句柄带 DELETE_ON_CLOSE:正常退出或被终止时,内核删除自己的旁路文件。
+//!     外壳退出会强制结束 sidecar,不能依赖 Node 的 exit 回调做这一步。
 //!
 //! # SKILL 模式下不加锁
 //!
@@ -62,6 +64,10 @@ fn open_exclusive(path: &Path) -> std::io::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        // GENERIC_READ | GENERIC_WRITE | DELETE。最后一个独占句柄关闭时由内核删掉
+        // 旁路文件,无需在 drop 之后按路径删除(那样可能撞上下一位持有者)。
+        .access_mode(0xc0010000)
+        .custom_flags(0x04000000) // FILE_FLAG_DELETE_ON_CLOSE
         // 0 = 谁都别想再打开这个文件,读写删全挡。这就是「独占」的全部实现,
         // 不需要 LockFileEx,也不需要任何第三方 crate。
         .share_mode(0)
@@ -92,7 +98,7 @@ pub fn acquire(locks: &ProcLocks, proc_path: &str) -> Result<(), String> {
     }
 }
 
-/// 放锁。句柄 drop 掉,内核那一刻就把文件放开了。
+/// 放锁。句柄 drop 掉,内核同时放锁并删除本进程持有的旁路文件。
 pub fn release(locks: &ProcLocks, proc_path: &str) {
     if let Ok(mut held) = locks.0.lock() {
         held.remove(&PathBuf::from(proc_path));
