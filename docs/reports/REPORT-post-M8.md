@@ -732,3 +732,68 @@
 ### 10.9 顾问调用记录
 
 本轮没有调 codex 或 Gemini：导航超时靠压测与网络日志查到根因，其余各段第一轮就做成。子 Agent：`opus-dev` 两个（media-path、maint-4），`opus-dev-high` 一个（nav-hang）。
+
+## 第 11 轮：放云端的时序缺口补上、探针统一关掉实验配置，出 0.7.11；子 Agent 换 Sonnet 按难度选档，codex 换 gpt-6.1-sol（2026-10-01，笔记本主会话）
+
+接第 10 轮。本轮代号：上传目标 = 共享项目里编辑器进程往远程素材服务上传时用的地址与票据；解法表 = 用户 2026-10-01 新定的 `guide_files/solution_table.md`（按现有语义做不下去时逐层穷尽解法的做法）；rollout 日志 = codex 每次运行写在 `~/.codex/sessions/<日期>/` 下的会话记录，记着实际用的模型。
+
+### 11.1 做了什么
+
+| 项 | 分支（子 Agent） | 做法 |
+|---|---|---|
+| 放云端的时序缺口 | `claude/upload-timing`（`opus-dev`，06:22 派出，早于换 Sonnet） | 打开共享项目后、上传目标交到编辑器进程之前导入的素材，由页面按素材原尺寸哈希记下，上传目标就绪后经开启放云端时同一个入队口子补交；已就绪时当场交一次（队列按素材去重合并）；补交没成留到下次续签；离开项目丢弃；本机就是主机时不记。改前 UT 单测 5 个全挂、`shared-import-upload-probe` 新步骤 4 项挂，改后全过。服务端没动 |
+| 探针统一关掉实验配置 | 同上 | `scripts/probes/` 下其余 44 个起 Chrome 的探针，启动参数都以 `PROBE_CHROME_ARGS` 打头；只动启动参数，不动判定 |
+| 子 Agent 与顾问配置（用户交办） | 主会话 | 用户同日三改（`2bf76f54` → `a0911c81` → `f5742154`，以最后一次为准）：Claude 子 Agent 只留两个——照 `opus-dev.md` 另存 `sonnet-dev-high`（`claude-sonnet-5-5`、effort high，description 的用途照主计划 0.2 节「Claude 子 Agent 怎么选」表的日常一行，正文与 `opus-dev.md` 逐字相同），`opus-dev`（Opus 5.5、medium）不动；按中间那次建过的 `sonnet-dev`、`sonnet-dev-xhigh`、`sonnet-dev-max` 已移到回收站；`opus-dev-high` 留着。用户 `16b14c34`：npm 全局装 codex 0.159.2，`subagent-gpt` 技能（`codex-run.ps1`、`agents/manager.md`、`SKILL.md`）与 `gpt-manager.md` 里的 `gpt-6-sol` 全部换成 `gpt-6.1-sol`（小写 10 处，另有 SKILL.md 描述里大写的 2 处），改前各文件备份在会话 scratchpad |
+| 规则 | 用户 | `577c58fd` 解法表（一级卡死改为记未达成、做下一项）；`f921b8ad`「子分支与集成分支各跑什么」本轮起照办：upload-timing 子分支只跑了类型检查、全量测试与点名的探针，整套在集成分支跑一次；`ba6f57df`、`8dad2250` codex 攻坚的推理档按难度一次选定 high / xhigh / max（不低于 high，难的直接 max，不逐档重交，报「思路穷尽」就算穷尽；查资料仍 high），从下一轮派活起照办 |
+
+合流：`claude/r11-merge`（main `df81ae5d` 起，`bfb34123`）合 upload-timing（无冲突），整套验证后合入 main `a76640d0`（合并结果的代码与验证过的集成分支逐字相同，只多了用户当天改的规则文档），报告附审查归档、TODO 更新（`52f0b252`）。
+
+**0.7.11**：版本号 0.7.10 → 0.7.11（外壳仍 0.2.6，`d20b6aad`），main = release = origin。从干净检出出在线构建 `index-DdRMKpuF.js`（`index.html` sha256 `1f1c106d862c…`，82 个 assets），嵌代码版本 `aaea7dfb7416…`；共享快照键与捕获代码不变；`/api` 仍只有登记过的 4 个。托管端自 0.7.8 起只改了部署用的 `server/hosted/deploy.mjs`（服务运行时不用），不重启托管服务、只换 `/editor`：暂存目录里生成 `.gz` 14 个，本代 96 个（含 `.gz`），保留上一代 13 个，备份 `/root/editor-backup-20261001-0711.tgz`。桌面补丁指令改为 PC-0711-1（PC 辅助仍不在线）。
+
+### 11.2 验证
+
+| 项 | 提交 | 命令 | 结果 |
+|---|---|---|---|
+| r11 整套（集成分支，按新规则只跑这一遍） | `claude/r11-merge` `bfb34123` | tsc；`npm test`；在线构建；G0-R；探针八项；新功能探针十三项；导航压测 200 次 | 0 错误；4223 / 4221 / 0 / 2；G0-R 全过（确定性 1800 / 1800、逐像素 1800 相同、**流式编码 p50 239 ms**）；M7 本机 `fails: []`、A4 22.2 s；导航压测 200 次 0 失败（p50 253 ms）；`shared-import-upload-probe`（含本轮新步骤）、`cross-machine-proc-probe` 退出 0。**唯一没过的是 `video-source-cadence-probe`**：用例①rate 0.5 offset 0.35 第 51 帧取到源帧 35、应为 36（目标 1.2 s 正落在帧边界），其余约 420 帧全对 |
+| 定位（按新规则单跑挂的那一项） | 改前 `3784b6ca`（0.7.10）/ 改后 `bfb34123`（代码与 `claude/upload-timing` 相同） | `video-source-cadence-probe --port 6030`，两边交替各 5 遍 | 10 遍全过、`fails: []`。本轮没动渲染代码，改前改后同样全过 → 判为原有的偶发（那次紧接在最忙的认领闸探针之后），不挡本轮合入；记进 TODO，派 `claude/cadence-race`（`opus-dev`）修 |
+| 合入与 release | main `a76640d0`、`52f0b252`、`d20b6aad` | `npm run build` | 两次都成功；合并结果的代码与验证过的集成分支逐字相同；release 快进，已推送 |
+| `/editor` | `d20b6aad` | `verify-editor.mjs aaea7dfb7416`；curl | 三处都 200、都发 `index-DdRMKpuF.js`、都含代码版本，无头打开无错误；主站与舞台源的主脚本都是 `Content-Encoding: gzip` + `Content-Length: 1341425` |
+| 阿里云真机路径 | `d20b6aad` | `desktop-auto-node-probe --remote https://8-219-80-16.sslip.io --base-port 5620 --skip-off` | 前两次都撞上 `claude/cadence-race` 的压测（16 个 node 满载进程，CPU 100%），没判成：第一次本机预渲染进程 240 s 没起来；第二次 1350 s 超时，慢在字节上云（创建 161 s、A4 等 U2 字节上云 395 s，上一轮 A4 全程 63 s）。托管端与上一版相同、`/editor` 核验已过；第四次在机器空下来后跑（10:26～10:35）：**退出 0、`ok: true`、`fails: []`，529 s**；A2 21.9 s、A3 108.3 s、A4 64.8 s、A5 4.0 s、A7 251 s；测试项目已删、端口全放（前三次的测试项目也都由探针自己删了，第一次没走到建项目） |
+| codex 配置 | — | `codex --version`；`codex-run.ps1 -Prompt "1+1 等于几？只回数字"`（不带 `-Model` / `-Effort`，即缺省参数） | PATH 上的 codex 是 `codex-cli 0.159.2`；运行 COMPLETED、回答「2」；rollout 日志 `rollout-2026-10-01T07-00-27-01a0f455-….jsonl` 里 `turn_context.model = gpt-6.1-sol`、`effort = high`、`cli_version = 0.159.2` |
+
+### 11.3 〔裁〕（本轮主会话定，待用户审）
+
+1. upload-timing 的三级语义一句（`mechanism/asset-service.md`「本地内容库」：上传目标就绪之前导入的素材由页面记下、就绪后按哈希补交）。
+2. 上传目标已就绪时导入也当场交一次，与服务端入队重复、由队列合并——维持，不为省一个小请求扩大改动面。
+3. 第 10 轮〔裁〕第 5 条（其余探针暂不加 `--disable-field-trial-config`）改为全加。
+
+### 11.4 与计划、对齐时不一致的地方
+
+- 本会话认不得新建的 `sonnet-dev-high`（要新开会话）。本会话里派日常活用 `opus-dev-high` 加 `model: sonnet`（它的 effort 是 high、正文与 `opus-dev` 逐字相同，等同 `sonnet-dev-high`），核心难点用 `opus-dev`；新开会话后直接用 `sonnet-dev-high`。
+- 0.4 节写的另存法只改 `name`、`model`、`effort` 三项，照做的话 description 会仍写「Opus 5.5、effort medium、用于核心架构重构……」，与新选法矛盾；这次 description 也跟着改成 Sonnet 5.5、high、日常用途，用户可改回。
+- `subagent-gpt` 的 `SKILL.md`「已验证的机制备忘」仍写「PromptCut 自带（PATH 第一）和 npm 全局（2026-09-24 都升到 0.156.1）」，与现状不符：npm 全局前缀已是 `%LOCALAPPDATA%\npm-global`（PATH 第一，0.159.2），`%APPDATA%\npm` 与 `%LOCALAPPDATA%\promptcut\cli\codex` 下都已没有 codex，Codex 桌面版是 0.157.1。`codex-run.ps1` 按版本挑中 npm 那份，经 `codex.cmd` 起（原生 `codex.exe` 的候选路径还指着 `%APPDATA%\npm`，现在不存在）。实跑正常；只按交代换了模型名，这两处没改，列给用户。
+
+### 11.5 新发现、记入遗留
+
+- **装了 npm 全局 codex 之后，main 的 `npm test` 在本机有 4 个失败**：`server/test/codex-desktop.test.mjs` 只 mock 了 `spawn`，codex 从哪儿解析取决于本机——装的是原生 `codex.exe` 时过，npm 版（`codex.cmd`，`cliCommand` 改写成 `node codex.js`）时参数前多一个脚本路径就挂。产品行为是对的，是测试不封闭。r11 的 `npm test`（06:45）在装 codex（06:58）之前，所以 0.7.11 的判定不受影响。修在 `claude/codex-test-env`（Sonnet，按选法表「日常」）：用假可执行文件让结果与本机无关，另把 `agy-stdin`、`claude-prompt-file` 两个同类测试一并改了；`npm test` 4226 / 4224 / 0 / 2，PATH 去掉 npm-global 也全过。随第 12 轮合入。
+- 导出时图卡的视频源偶发取到上一帧（见 11.2 的定位一行）：疑为 `seeked` 发出时视频元素的当前帧还没换成新帧就取图的时序竞争，时间轴视频片段的 `frameMedia.ts` 同类写法；记进 TODO，修在 `claude/cadence-race`。
+
+### 11.6 在做与留在分支上的
+
+- 图卡视频源偶发取到上一帧：`claude/cadence-race`（`opus-dev`）修好了——根因是 Chrome 里 `seeked` 先于帧槽换帧（两条线程），改为 `seeked` 后用 `VideoFrame` 核对帧时间戳再取图；最小复现探针改前 312 000 次 seek 错 22 次、改后 396 000 次 0 错，G0-R 全过、像素基线不变。审查时发现它的报告提交 `9da8e62a` 把两个源文件误还原成改前版本（做耗时对照时检出的旧文件被一并提交），已让它恢复、在分支末端重跑验证并更正报告；完成后与 `claude/codex-test-env` 一起进第 12 轮集成分支跑整套。
+- A4 + A5：`claude/a45-merge`（对齐到 0.7.9，健康）；PC 上线后按 PC-A45-1 模板刷新到最新 main、改版本号出完整安装包，用户装上实测后合入。
+
+### 11.7 待跨机复核
+
+- W7 真跨机（沿用）；PC-0711-1 出 0.7.11 补丁（取代没发出的 PC-0710-1）；A4 + A5 的完整安装包。
+
+### 11.8 待用户项
+
+1. **装 0.7.11 补丁**（PC 上线打出来后再通知，附路径与 SHA-256）；0.7.3～0.7.10 的补丁都不用装。**装上后的第一次运行会清缓存**：帧库约 282 GB，启动约 2 分钟后按 50 GB 上限清掉约 230 GB 最久没用的预渲染缓存（需要时重新预渲染，不可撤销）；想留更多，装完先在开始页「存储」把上限调大。
+2. 这一版的变化：共享项目里刚打开就导入的素材（上传目标还没就绪那几秒里导入的），别的成员也拿得到了。
+3. 第 9 轮的打包保存真机验收（装上后重新「打包保存…」，包里应有 9 份素材）。
+4. 要你定的：`subagent-gpt` 机制备忘里过时的两处要不要我改（11.4）；以及前几轮列的待定事项（legacy 整帧通道 C / D、「文件→退出」、A4 的两条语义、在场状态、用户卡、音频计划第 6 节、「素材找不到标缺失」写不写进二级、入口卡住看门狗、托管端产物容量）。
+
+### 11.9 顾问调用记录
+
+本轮没有调 codex 或 Gemini 做工程顾问：upload-timing 第一轮就做成。codex 只按用户交代做了一次配置自检（「1+1 等于几」，缺省参数）。子 Agent：`opus-dev` 两个（upload-timing；cadence-race，按选法表「核心难点」一行选的）；Sonnet 一个（codex-test-env，按选法表「日常」，本会话里用 `opus-dev-high` 加 `model: sonnet`）。选哪个、为什么都写在派活指令里。
