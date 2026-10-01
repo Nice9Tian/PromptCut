@@ -12,7 +12,7 @@ import fs from "fs";
 import path from "path";
 import { execSync, spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { fileURLToPath, pathToFileURL } from "url";
+import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIR = path.resolve(__dirname, "..");
@@ -779,7 +779,25 @@ function main() {
   })}`);
 }
 
+/**
+ * 本文件是不是被当入口直接执行的(而不是被单测 import)。
+ *
+ * 不能拿 `import.meta.url` 和 `argv[1]` 拼出来的 URL 逐字比:Node 会把入口解析成真实路径,
+ * 而 argv[1] 保持用户敲的样子 —— 路径里有目录联接 / 符号链接,或者盘符、目录大小写不同,
+ * 就对不上,main() 不跑,prepare-runtime 悄无声息地什么也不做,出包时很难发现。
+ * 所以两边都取真实路径(取不到就退回 path.resolve),win32 上不分大小写比。
+ */
+export function isDirectRun(metaUrl = import.meta.url, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  const real = (p) => {
+    try { return fs.realpathSync.native(p); } catch { /* 退回下面 */ }
+    try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+  };
+  const norm = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
+  return norm(real(fileURLToPath(metaUrl))) === norm(real(argv1));
+}
+
 // 只有被当脚本直接执行时才跑;被单测 import 时(desktop/test/prepare-runtime-filter.test.mjs)不动手
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun()) {
   main();
 }

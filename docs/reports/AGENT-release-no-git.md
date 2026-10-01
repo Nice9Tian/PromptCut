@@ -46,3 +46,11 @@
 
 - 没有真实 worktree 端到端出包验证(笔记本无运行时)。PC 下次出包请核对 `manifest-<版本>.json` 的 `files` 里没有 `.git`,且 `runtime/app/.git` 不存在。
 - 对任务书的更正:原有测试数是 16 条,不是 23 条。
+
+## 审查后加固(主会话意见:「是否直接执行」的比法)
+
+原判断 `import.meta.url === pathToFileURL(path.resolve(argv[1])).href` 逐字比,遇到目录联接 / 符号链接或盘符、目录大小写不同会对不上,main() 悄无声息地不跑。改为导出的 `isDirectRun(metaUrl, argv1)`:两边都取真实路径(`fs.realpathSync.native`,失败退 `realpathSync`,再失败退 `path.resolve`),win32 上小写后比较;`argv[1]` 为空返回 false。末尾 `if (isDirectRun()) main();`。
+
+单测新增第 5 条(合计 21 条):win32 上把脚本路径整条改大写再把盘符改回小写后直接 `node <该路径> --check`,断言输出出现 `PromptCut prepare-runtime (--check)`(main 起来了,不要求退出 0);并直接断言 `isDirectRun` 对原路径与大小写变体为 true、对 `make-patch.mjs` 与空参数为 false。手动确认过变体路径确实和真实路径不同(`d:\VECTORMPEG7\...\DESKTOP\SCRIPTS\PREPARE-RUNTIME.mjs`),且 main 照跑(报 Sidecar not found,笔记本无运行时,预期)。目录联接 / 符号链接那种情形没有单测(建联接需要权限且清理有风险),靠 realpath 逻辑保证。
+
+复验:`npx tsc -b --force` 退出码 0;`npm test` 4244 条、通过 4242、失败 0、跳过 2;`cd desktop && node --test test/*.test.mjs` 21 条全过。

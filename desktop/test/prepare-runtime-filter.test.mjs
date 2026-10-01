@@ -9,9 +9,9 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { shouldCopyApp, copyRecursive } from '../scripts/prepare-runtime.mjs';
+import { shouldCopyApp, copyRecursive, isDirectRun } from '../scripts/prepare-runtime.mjs';
 
 /** 递归列出目录下所有文件的相对路径(正斜杠,已排序) */
 function listFiles(dir, base = '') {
@@ -91,4 +91,19 @@ test('当脚本直接执行时 main 照跑(--check 只读,退出码取决于本�
   const script = fileURLToPath(new URL('../scripts/prepare-runtime.mjs', import.meta.url));
   const r = spawnSync(process.execPath, [script, '--check'], { encoding: 'utf8', timeout: 120_000 });
   assert.match(r.stdout, /PromptCut prepare-runtime \(--check\)/);
+});
+
+test('换个大小写写法(盘符小写、目录大写)直接执行,main 照跑;isDirectRun 对不同写法同样认得', () => {
+  const script = fileURLToPath(new URL('../scripts/prepare-runtime.mjs', import.meta.url));
+  // win32:整条路径改大写再把盘符改回小写;其它平台没有这种别名,原样跑(这条退化成「路径原样」)
+  const variant = process.platform === 'win32'
+    ? script.toUpperCase().replace(/\.MJS$/, '.mjs').replace(/^[A-Z]:/, (d) => d.toLowerCase())
+    : script;
+  const r = spawnSync(process.execPath, [variant, '--check'], { encoding: 'utf8', timeout: 120_000 });
+  assert.match(r.stdout, /PromptCut prepare-runtime \(--check\)/);
+  const metaUrl = pathToFileURL(script).href;
+  assert.equal(isDirectRun(metaUrl, script), true);
+  assert.equal(isDirectRun(metaUrl, variant), true);
+  assert.equal(isDirectRun(metaUrl, path.join(path.dirname(script), 'make-patch.mjs')), false);
+  assert.equal(isDirectRun(metaUrl, undefined), false);
 });
