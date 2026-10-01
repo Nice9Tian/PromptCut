@@ -1024,7 +1024,7 @@
 | R7 | 草稿锁与实际拓展包 BOM 过；真补丁待用户 | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 是独立拓展包的临时执行脚本。实际 `node desktop/scripts/make-extension.mjs stt --keep-stage` 退出 0（19.5 s），NSIS 收集 payload 中脚本 BOM=True、PowerShell 5.1.26100.9444 ParseFile=0；script SHA-256 A644898DAEF50829B9ED4664C86D827D1104DFAC16F09E113D51F854A1EADCAD。未安装可选能力，不把源解析冒充随包结果；补丁中的 apply-patch.ps1 与真安装仍待 R5 |
 | R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
 
-### 15.4 集成整套验证（执行中）
+### 15.4 集成整套验证（本机项完成；W7 为 PC 窗口项）
 
 `claude/a45-merge` 代码验证起点 47bb49fb 合流后的内容；其后变更只有用户决定的纯文档和 Rust 子测试夹具。G0：`npx tsc -b --force` 0；`npm test` 4224 / 4223 / 0 / 1（80.13 s）；桌面脚本 31/31。较 main 少的测试随 A4 删除旧被测路径，沿用第 14 轮已说明的原因，没有删现行路径测试。Rust MSVC `cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml` 27 过、0 失败、1 子入口忽略；外壳 release 编译通过。
 
@@ -1112,11 +1112,11 @@ G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.j
 
 ### 15.5 发版、部署、未跑与〔裁〕（执行中）
 
-正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，已把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1，待重试。该测试构建不构成正式发布通过。
+正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1 后，重试通过，详见下一段。该测试构建不构成正式发布通过。
 
 NSIS 工具缓存已核对能报告 v3.11。`cd desktop && npx tauri build` 测试构建重试退出 0，Rust release 编译 2.96 s，其后完成安装包压缩。测试包 PromptCut-0.7.14-a45-retest-setup.exe 为 432441826 字节，SHA-256 `3E68F7EEA5EBEF4DD51FA3751D00F156F8B6CA23B45FDCF224DAF09775E6C177`；已用真实安装向导完成本机重装，安装的 promptcut.exe 与目标 Rust 产物 SHA-256 相同（`902AF6463A1DE85F864248B1D8DF7664C1EC22DE6D7AC8ED2286424E25315358`）。有一条 `__TAURI_BUNDLE_TYPE` 标记缺失警告，保留日志；源码没有 updater 插件，本轮仍用已有的自有补丁安装器。这个测试包不构成正式 release 命令通过。部署前只读检查：主站与两个舞台源 `/editor/` 均 200，主站 `/hosted/healthz` 200，托管服务 online、重启计数 21。托管清单只变 `vite-plugin-media.ts` 的旧无头实例队列判断；托管组合实际调用的素材函数未变，只需换静态编辑器页。
 
-main 尚未写；release 在 fec9130b，条件不齐不推进。/editor 尚未部署。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。其它项目仍执行中。
+合入前 `npm run build`（先 tsc，再 Vite 普通网页构建）退出 0，Vite 1.79 s；提交 d3bbb625，工作区干净。main 随后按本轮明确授权 `--no-ff` 合流并推送；实际提交号与 /editor 部署结果补在下文。立即判定 release：桌面壳与运行时布局涉及本轮改动，正式发版构建未成功，三项合入条件未同时满足，因此保留 fec9130b，不能用测试 NSIS 包代替正式构建。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。
 
 R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1.0.0.exe`，83991737 字节，SHA-256 `4A8099784FC60FADB95C9B124D914B002293359FF4E8C96A1EF22EAB3ABAB582`。保留的 `.cache/ext-stage/PromptCut-ext-stt-1.0.0/` 为成功 NSIS `File /r` 收入的真实 payload；本轮只做随包编码核验，没有安装或发布该可选能力。
 
