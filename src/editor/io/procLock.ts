@@ -90,8 +90,15 @@ export async function acquireDraftLock(draftId: string): Promise<LockOutcome> {
   return out;
 }
 
-/** 放掉当前持有的锁。换草稿、回首页、新建项目、关页面都要调 */
-export async function releaseDraftLock(): Promise<void> {
+/**
+ * 放掉当前持有的锁。换草稿、回首页、新建项目、关页面都要调。
+ *
+ * 给了 `onlyId` 就只在当前持有的正是这一份时才放:「换草稿时放上一份」的调用点
+ * 用它 —— 那一刻手里可能已经是刚抢到的新草稿的锁了(先 openDraft 再记 activeDraftId),
+ * 不带 id 一放就把新锁放掉,正在编辑的草稿就没人锁着了。
+ */
+export async function releaseDraftLock(onlyId?: string): Promise<void> {
+  if (onlyId !== undefined && heldDraftId !== onlyId) return;
   const id = heldDraftId;
   const file = heldPath;
   heldDraftId = null;
