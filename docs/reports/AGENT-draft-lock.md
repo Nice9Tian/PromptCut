@@ -85,3 +85,9 @@
 
 - goHome 放锁：见上节，待主会话定。
 - 预先存在、这次没动的小时序：`setActiveDraftId` 里的放锁不 await。如果马上又抢同一份（例如开着 A 时 startNew，紧接着回首页再开 A），release 和 acquire 两个请求可能乱序到达服务端，把刚抢到的锁删掉。现实中要在几毫秒内完成两次界面操作，概率很低；要彻底修，可以让 procLock 内部把 acquire 串在未完成的 release 之后。
+
+## 接手主会话审查（2026-10-02）
+
+合入前在本分支重跑 `npx tsc -b --force`：退出 0；`npm test`：4251 条、通过 4249、失败 0、跳过 2，84.043 s；`node --experimental-test-module-mocks --test src/editor/io/draftLock.test.mjs`：7/7。核对全部调用路径后审查通过，以 `ae1310c1` 合入 `claude/a45-merge`。
+
+用户已定：回首页时不放锁，维持当前行为。持有锁的后果是另一个实例在本窗口回首页后仍不能打开该草稿；若未来改成回首页就释放，另一实例可打开，而本窗口再开同一草稿必须重新抢锁，失败时不能恢复编辑。这是后续待用户项，本轮不改。GUI 复验记录在 `REPORT-post-M8.md` 第十五轮。

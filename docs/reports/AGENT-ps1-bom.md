@@ -157,3 +157,9 @@ exit 1
 - 根目录整套 `npm test` 未跑（按任务要求）。
 
 `apply-patch.cmd` 里 chcp 之前的中文 rem 注释维持不动，「没处理的」第 1 条保留。上面「没处理的」第 2 条现已处理。
+
+## 接手主会话审查（2026-10-02）
+
+合入前在本分支重跑 `npx tsc -b --force`：退出 0；`npm test`：4245 条、通过 4243、失败 0、跳过 2，82.279 s。`cd desktop && npm test` 19/19，`node --test server/test/claude-desktop.test.mjs` 16/16，`node --check scripts/probes/m8-outbound-probe.mjs` 退出 0。本机 Windows PowerShell 5.1 的 ParseFile 对三份随包脚本均为 0 错误。
+
+审查通过，以 `8656c850` 合入 `claude/a45-merge`。合并时 `server/claude-desktop.ts` 与其测试发生修改/删除冲突：A4 已删除外部桌面会话驱动，保留集成分支的删除；随包脚本与仍在使用的探针 BOM 修复保留。安装产物的复验记录在 `REPORT-post-M8.md` 第十五轮，真补丁部分待 PC 出包。
