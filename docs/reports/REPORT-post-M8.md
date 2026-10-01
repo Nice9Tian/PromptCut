@@ -926,3 +926,62 @@
 ### 13.9 顾问调用记录
 
 本轮没有调 codex 或 Gemini：两个卡点都由子 Agent 用日志与复现探针直接坐实根因、三级层第一条就过。子 Agent：`opus-dev` 两个（m7-race、push-incomplete）。选哪个、为什么都写在派活指令里。
+
+## 第 14 轮：PC 上线——出 0.7.13 补丁、W7 真跨机复核、A4 + A5 完整安装包（2026-10-02，笔记本主会话）
+
+接第 13 轮。本轮代号：PC 窗口项 = 要 PC 辅助节点才能做的验收与出包（主计划 6.4 节）；站点模式 = M7 探针的 `--site` 跑法，两端都经阿里云的托管服务与协调口；A4 + A5 = SKILL 经 MCP 直连（A4）与托盘后台运行（A5），改了 Rust 外壳，只能出完整安装包。
+
+### 14.1 做了什么
+
+| 项 | 谁做 | 做法与结果 |
+|---|---|---|
+| PC 握手 | PC 辅助节点 / 主会话 | PC 报到（HEAD `729ce7f6`、bypassPermissions、Node v24.19.0、Chrome 154、ffmpeg 9.0.1、RTX 3080、局域网 192.168.50.96，像素基准 `pc-g0r-base@d70fce77`），主会话回执，积压的三项 PC 窗口项按序发出 |
+| PC-0713-1 出 0.7.13 补丁 | PC | 从 release 提交 `fec9130b` 打（PC 报到时 main 多一个纯文档提交）：`PromptCut-patch-0.7.13.exe`，13 455 096 字节，SHA-256 `F1E4C3C967F60A371FEB7F67826A7F1DC0B594BD9168E575A32A7DE026E1D5AD`；基准 0.7.2、外壳代次 0.2、依赖不发（`0c3aa690…`）、37 个点名文件都在、已删的 4 个标为删除。PC 报的疑点：`files` 里有 `.git`——查明是 `--from-head` 的临时 worktree 里 `.git` 是指针文件，`prepare-runtime.mjs` 的排除名单只对目录生效；运行时代码不调 git，不影响功能，补丁照装，打包排除另修（`claude/release-no-git`） |
+| PC-W7-1 W7 真跨机 | PC（创建者）+ 笔记本（纯浏览器节点） | M7 探针站点模式，run `m7w1002a`，经 `https://8-219-80-16.sslip.io`（托管端与 `/editor` 都是 0.7.13）：W7 跨机通过（DESKTOP-GS40TCK 当创建者、LAPTOP-A56T03FK 当节点、计时以笔记本为准）；M7-A1、A2、A5～A10（接手 6.0 s）、A12，D1-D2-D12、D9、D10、D14 全过；A3 服务端那半外网看不到认领者、由节点侧判（8 个禁止任务 60 s 0 认领）过；A11 票据过期一项外网判不了（照旧另验）；**A4 经公网 54.3 s**，按 M8 定的判法只作观察（30 s 门槛以笔记本本机替身为准，本机 22～24 s 过），比 9-28 的观察值 37.4 s 慢，记观察项 |
+| A4 + A5 对齐 main 与测试版本号 | 主会话 | `claude/a45-merge` 合 main 到 0.7.13（`b60f4b0e`）：一处冲突——`server/test/codex-desktop.test.mjs` 在 A4 里随被测模块 `server/codex-desktop.ts` 一起删了、main 上上一轮改过，保持删除；改测试版本号应用 0.7.14、外壳 0.2.7（`71f7a9ed`，6 个文件，与上次外壳升版同形）；推到 origin |
+| PC-A45-1 A4 + A5 完整安装包 | PC | 从 `71f7a9ed` 出（445 s，PC 数）：`PromptCut-0.7.14-setup.exe` 433 679 525 字节，SHA-256 `26397283BBBAC5D9A28681B992A4E32A865FEB05CAADA9CD7E0FC3A6C59AC32C`；补丁 `PromptCut-patch-0.7.14.exe` 13 423 544 字节，SHA-256 `BEC610B4246448647C12630253DB6379C1E19D4EB3DBEB47C362718D89D82349`（测试构建，补丁不发给用户）；外壳 0.2.7 用 MSVC 工具链编过，只有 1 条 `linker_messages`、没有代码警告。PC 提的两点：① `minShellVersion` 0.2.0——按 tray 报告第 8 节「老外壳上能降级运行」（没有托盘、关窗照旧退出，`apply-patch.ps1` 对不认 `--quit` 的老外壳退回原关窗方式）不抬，测试只给完整安装包；② 打包后 `desktop/src-tauri/Cargo.toml` 被 tauri CLI 同步依赖特性时写回成 LF、显示被改（内容不变），用 `.gitattributes` 定 `eol=lf` 修 |
+| 打包卫生 | `claude/release-no-git`（`sonnet-dev-high`：维护项，选法表「日常」） | `prepare-runtime.mjs` 的排除名单只对目录生效，`--from-head` 临时 worktree 里 `.git` 是指针文件、被拷进运行时目录与补丁清单（0.7.13、0.7.14 的 manifest 都有）：改为 `.git` 文件与目录都跳过，`make-patch.mjs` 收集清单时每层也排除（PC 上旧运行时目录里已有的也挡住）；脚本「是否直接执行」改为真实路径、win32 不分大小写比较（主会话审查时要求的加固：逐字比较在目录联接或盘符大小写不同时会让 prepare-runtime 悄悄不干活）；`.gitattributes` 给 `desktop/src-tauri` 的 `Cargo.toml`、`Cargo.lock` 定 `text eol=lf`。验证：tsc 0 错误、`npm test` 4244 / 4242 / 0 / 2、外壳单测 21 / 21、模拟工具按 LF 写回后工作区干净。只动打包工具，留在分支上，下次集成一起合入 |
+
+### 14.2 验证
+
+| 项 | 提交 | 命令 | 结果 |
+|---|---|---|---|
+| A4 + A5 集成分支 | `claude/a45-merge` `71f7a9ed` | tsc；`npm test`；`node --test desktop/test/*.test.mjs`；在线构建；`skill-mcp-probe`；`multi-agent-probe`；首次握手；舞台看守；C10 界面 | 0 错误；4217 / 4216 / 0 / 1（比 main 少的是 A4 删旧 SKILL 路径时一起删的测试）；外壳测试 23 / 23；其余都退出 0（MCP 35 项、多 Agent 35 项）。Rust 侧自上次 `cargo test` 24 条全过后只改了版本号；笔记本 GNU 工具链缺 `dlltool` / `as`，这次没重跑，外壳能否编过以 PC 完整构建为准 |
+| W7 | run `m7w1002a` | 见 14.1 | 见 14.1 |
+| PC 完整构建 | `71f7a9ed` | `cd desktop && npm ci && npm run release -- --from-head` | 退出 0（445 s，PC 数）；外壳 0.2.7 编过；安装包、补丁、清单见 14.1 |
+
+### 14.3 〔裁〕（本轮主会话定，待用户审）
+
+1. W7 的 A4 经公网 54.3 s 照 M8 定的判法记观察项，不算 W7 失败。
+2. 0.7.13 补丁里的 `.git` 指针文件判为无害、补丁照装，打包排除另修。
+3. a45-merge 合并冲突：`codex-desktop.test.mjs` 保持删除（被测模块已随 A4 删掉）。
+
+### 14.4 与计划、对齐时不一致的地方
+
+- 0.7.14 是 A4 + A5 的测试构建，不进 release；正式版等用户实测通过、在集成分支跑过整套合入 main 后，从 main 重新出（那时连同打包卫生的修复，manifest 里不再有 `.git`）。
+- 笔记本这次没重跑 cargo（GNU 工具链缺 `dlltool` / `as`），外壳能否编过以 PC 完整构建为准——编过。
+
+### 14.5 新发现、记入遗留
+
+- 站点模式 A4 观察值变慢：9-28 37.4 s → 本次 54.3 s（经公网，非门槛）。下次站点复测再看是网络时段还是代码；本机替身照过。
+- 打包把 `--from-head` 临时 worktree 的 `.git` 指针文件带进运行时目录（`claude/release-no-git` 修）。
+
+### 14.6 在做与留在分支上的
+
+- A4 + A5：完整安装包已出（0.7.14 / 外壳 0.2.7），等用户装上按 tray 报告第 7 节的 8 步清单实测；通过后在集成分支跑整套，连同 `claude/release-no-git` 合入 main，合入时按 `git_and_release.md` 定正式版本号（按第 8 节建议：应用末位 +1、外壳 0.2.7，补丁与完整安装包都出）。合入后 PC 主工作区要重新检出一次 `desktop/src-tauri/Cargo.toml`、`Cargo.lock`，`eol=lf` 才生效。
+- 打包卫生：`claude/release-no-git`（已验证，待集成）。
+
+### 14.7 待跨机复核
+
+- A11 票据过期在托管端用测试钩子另验（沿用）。
+
+### 14.8 待用户项
+
+1. **装 0.7.13 补丁**：PC 上 `C:\Users\admin\Documents\PromptCut\desktop\release\PromptCut-patch-0.7.13.exe`（13 455 096 字节，SHA-256 `F1E4C3C9…E1D5AD`）；0.7.3～0.7.12 的补丁都不用装。**装上后的第一次运行会清缓存**：帧库约 282 GB，启动约 2 分钟后按 50 GB 上限清掉约 230 GB 最久没用的预渲染缓存（需要时重新预渲染，不可撤销）；想留更多，装完先在开始页「存储」把上限调大。
+2. **实测 A4 + A5（测试构建，装不装由你）**：PC 上 `C:\Users\admin\Documents\PromptCut\desktop\release\PromptCut-0.7.14-setup.exe`（433 679 525 字节，SHA-256 `26397283…59AC32C`）。它已含 0.7.13 的全部修复，装它就不用另装 0.7.13 补丁；装上后的第一次运行同样会清缓存（同上）。装上后按 tray 报告第 7 节的 8 步清单实测：关窗不退出、收起时页面侧工具照常（含 5 分钟后再调一次）、托盘与悬浮窗唤回、悬浮窗拖动、右键关闭才退出（promptcut.exe、node.exe、ffmpeg.exe 都不在）、SKILL、多显示器、补丁经 `--quit` 干净退出；另在 PromptCut 里点「登记到 Claude Code / Codex」各开一个会话连过来，看 AI 栏有没有对应分组。另外「文件 → 退出」菜单项留不留由你定。
+3. 第 9 轮的打包保存真机验收（装上后重新「打包保存…」，包里应有 9 份素材）。
+4. 要你定的：前几轮列的待定事项（同第 13 轮）。
+
+### 14.9 顾问调用记录
+
+本轮没有调 codex 或 Gemini。子 Agent：Sonnet 一个（release-no-git，选法表「日常」，返工两次：加固「是否直接执行」、加 Cargo 行尾规则）。PC 辅助节点三项窗口项（PC-0713-1、PC-W7-1、PC-A45-1）。
