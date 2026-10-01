@@ -8,6 +8,14 @@
 - 只读页面独有状态（当前选中、播放头交互、面板界面）的工具在编辑界面里执行。
 - 工具的清单和参数由卡片定义等数据自动生成，加卡片不需要改工具。
 
+## 桌面 APP 接入
+
+- 桌面工具经 stdio MCP 服务 `server/mcp-server.mjs` 接入。找实例的优先级为 `--port`、`PROMPTCUT_PORT`、`--port-file` / `PROMPTCUT_PORT_FILE`、公共 `%TEMP%\promptcut\port.json`；每次调用重新找。找不到、进程已退出或端口无人监听时返回说明。
+- Claude Code 按 MCP 进程区分会话，Codex 按 `tools/call` 的 `_meta.threadId`（兼容旧字段 `x-codex-turn-metadata.thread_id`）区分；多个 Codex 线程共用一个 MCP 进程时仍分别登记。厂商由 `initialize.clientInfo` 识别，登记类型为 `desktop`，创造力等级跟项目。
+- SKILL 做法由 MCP 初始化的短 `instructions` 和桌面会话本地工具 `get_skill_guide` 提供，不写用户级 skill 文件。
+- 登记项名为 `promptcut`，写 Claude Code 的 `~/.claude.json` 或 Codex 的 `~/.codex/config.toml`，只写命令与脚本，不写端口。整份配置先备份到 `<skillRoot>/mcp-register/`；撤销只还原该条目，用户改过条目或无法安全识别 TOML 写法时拒绝覆盖。
+- 桌面调用在服务端按登记身份经过 SKILL 闸；AI 栏里的 Agent 与未报桌面身份的调用不经过这道闸。AI 栏按桌面会话分组：每个会话保留最近 20 次调用、30 份报告，界面显示最近 5 份报告；最多 16 个会话，2 小时无活动且没有调用在跑的不显示，推送节流 100 毫秒，只存内存。SKILL 下草稿的独占锁照常持有；悬浮窗的上一步画面由用户这份页面渲染，只记录时间轴操作。〔裁：2026-10-02 接手 A4 收口，`docs/reports/REPORT-post-M8.md` 第 15.8 节卡点 1 第 1 行；承接归档 `AGENT-skill-mcp.md` 第 5、8、10 节〕
+
 ## 创造力等级的判定
 
 - 工具需要的等级集中在一张对照表（`server/agent/creativity-gate.mjs`），在所有工具调用的总入口、执行之前判：新建卡片、新建效果要「高」；改已有卡片的源码（含整篇重写已有的卡）、改效果的定义（表达式、步骤、参数声明）要「中」；其余（用已有的卡片、效果、部件拼装，改片段参数，只改效果的名字和说明，内置测量）「低」就能用。自定义测量代码（`measure_audio_js`）要「高」。

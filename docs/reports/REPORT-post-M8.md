@@ -986,7 +986,7 @@
 
 本轮没有调 codex 或 Gemini。子 Agent：Sonnet 一个（release-no-git，选法表「日常」，返工两次：加固「是否直接执行」、加 Cargo 行尾规则）。PC 辅助节点三项窗口项（PC-0713-1、PC-W7-1、PC-A45-1）。
 
-## 第 15 轮：Codex 接手 A4 + A5 真机验收与正式发布（2026-10-02，笔记本主会话，执行中）
+## 第 15 轮：Codex 接手 A4 + A5 真机验收与正式发布（2026-10-02，笔记本主会话；main 与网页完成，正式桌面包待发布配置）
 
 任务书是 `docs/plan/a45-acceptance-test-plan.md`（d391883f）；用户本轮补充指示取代其中「只测、不改代码、不合入、不出包」的旧范围。本轮授权包括写 main、出完整安装包、部署 /editor；PC 的用户安装不动，真补丁和多屏仍待用户。所有带耗时门槛的项在笔记本串行跑，取帧竞态按规定三实例并行。
 
@@ -1021,7 +1021,7 @@
 | R4 | 过（保留初测失败） | 初测进程归零但 64 字节锁残留。修复后的实际安装版打开 A，A 锁 64 字节；展开 Rect=240,54 2422x1453；收起后镜像 0.39 s 发 --quit、1.35 s wait=0、3.48 s final=0、fallback=False，完整进程表安装目录名下为 0，A/B 正文保留、锁消失，重开 Rect 相同。r4-final-open-a.png、r4-final-overlay.png、r4-final-quit-test.log、r4-final-reopen.png。最后一轮输入桌面在 Screen-saver，使用真实 WebView 截图与原生 PrintWindow，未伪造桌面图 |
 | R5 | 待用户 | 真补丁的 PC 基准清单不可达。PC 上从本轮最终 main 出 `cd desktop && npm run release -- --from-head --patch-only`，将真实补丁拷到笔记本后补测 0.2.7 的退出/装补丁/重开，以及允许的先降装 0.7.13（外壳 0.2.6）同补丁强杀兜底，再装回本轮版本。没有动 PC 的用户安装，也没用镜像冒充真补丁 |
 | R6 | 待用户在 PC 验 | 副屏放在主屏左边，收起后两屏上都不应出现主窗任何一部分；重点核对主窗虽仍 visible，计算出的屏外坐标是否确在所有屏幕之外。单屏不等于通过 |
-| R7 | 草稿锁与实际拓展包 BOM 过；真补丁待用户 | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 是独立拓展包的临时执行脚本。实际 `node desktop/scripts/make-extension.mjs stt --keep-stage` 退出 0（19.5 s），NSIS 收集 payload 中脚本 BOM=True、PowerShell 5.1.26100.9444 ParseFile=0；script SHA-256 A644898DAEF50829B9ED4664C86D827D1104DFAC16F09E113D51F854A1EADCAD。未安装可选能力，不把源解析冒充随包结果；补丁中的 apply-patch.ps1 与真安装仍待 R5 |
+| R7 | 待用户（草稿锁与实际拓展包编码已过） | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 是独立拓展包的临时执行脚本。实际 `node desktop/scripts/make-extension.mjs stt --keep-stage` 退出 0（19.5 s），NSIS 收集 payload 中脚本 BOM=True、PowerShell 5.1.26100.9444 ParseFile=0；script SHA-256 A644898DAEF50829B9ED4664C86D827D1104DFAC16F09E113D51F854A1EADCAD。未安装可选能力，不把源解析冒充随包结果；补丁中的 apply-patch.ps1 与真安装仍待 R5 |
 | R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
 
 ### 15.4 集成整套验证（本机项完成；W7 为 PC 窗口项）
@@ -1110,18 +1110,50 @@ G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.j
 
 合流后集成 G0 复验：代码 17f515c2，之后仅报告、计划更正、R4 证据。类型检查 0、10.3 s；全量测试 4224 / 4223 / 0 / 1、82.2 s；桌面脚本 35/35、1.3 s。日志 `out/a45-validation/branch-results.json`。集成换档复验同一命令退出 0、70.7 s、fails=[]；T5a 黑帧 0、1940 ms；T5b 换槽后黑帧 0、4099 ms、帧误差 -0.39；T5c 慢原尺寸源黑帧 0、16359 ms；T5e 重载后黑帧 0、2120 ms。门槛与产品代码均未改，结果在 `out/a45-validation/tier-fix-first/`。
 
-### 15.5 发版、部署、未跑与〔裁〕（执行中）
+### 15.5 发版、部署、未跑与〔裁〕
 
 正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1 后，重试通过，详见下一段。该测试构建不构成正式发布通过。
 
 NSIS 工具缓存已核对能报告 v3.11。`cd desktop && npx tauri build` 测试构建重试退出 0，Rust release 编译 2.96 s，其后完成安装包压缩。测试包 PromptCut-0.7.14-a45-retest-setup.exe 为 432441826 字节，SHA-256 `3E68F7EEA5EBEF4DD51FA3751D00F156F8B6CA23B45FDCF224DAF09775E6C177`；已用真实安装向导完成本机重装，安装的 promptcut.exe 与目标 Rust 产物 SHA-256 相同（`902AF6463A1DE85F864248B1D8DF7664C1EC22DE6D7AC8ED2286424E25315358`）。有一条 `__TAURI_BUNDLE_TYPE` 标记缺失警告，保留日志；源码没有 updater 插件，本轮仍用已有的自有补丁安装器。这个测试包不构成正式 release 命令通过。部署前只读检查：主站与两个舞台源 `/editor/` 均 200，主站 `/hosted/healthz` 200，托管服务 online、重启计数 21。托管清单只变 `vite-plugin-media.ts` 的旧无头实例队列判断；托管组合实际调用的素材函数未变，只需换静态编辑器页。
 
-合入前 `npm run build`（先 tsc，再 Vite 普通网页构建）退出 0，Vite 1.79 s；提交 d3bbb625，工作区干净。main 随后按本轮明确授权 `--no-ff` 合流并推送；实际提交号与 /editor 部署结果补在下文。立即判定 release：桌面壳与运行时布局涉及本轮改动，正式发版构建未成功，三项合入条件未同时满足，因此保留 fec9130b，不能用测试 NSIS 包代替正式构建。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。
+合入前 `npm run build`（先 tsc，再 Vite 普通网页构建）退出 0，Vite 1.79 s；提交 d3bbb625，工作区干净。`git fetch origin` 后 main 仍为 f119a66d，按本轮明确授权 `git merge --no-ff claude/a45-merge` 得到 `c4d9f0fe0bb50dce64398306d4512edce2eda670`；与验证过的集成末端 db565958 整棵树相同，已 `git push origin main`。集成快进到该合并提交，连同 release-no-git、r4-lock-cleanup、ps1-process-count、tier-switch-baseline 推送。立即判定 release：桌面壳与运行时布局涉及本轮改动，正式发版构建未成功，三项合入条件未同时满足，因此保留 `fec9130b2373deb1c13d201212e92519423a1a87`，不能用测试 NSIS 包代替正式构建。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。
+
+`/editor` 从已提交的 main c4d9f0fe 构建：`npm run build -- --mode online --outDir out/a45-validation/dist-online-final` 退出 0，Vite 1.67 s。`node out/a45-validation/deploy-editor.mjs` 退出 0；它直接复用仓库 `server/hosted/deploy.mjs` 的 stageEditorBuild / editorSwapLines，先备份 `/opt/promptcut-hosted/.a45-backups/editor-before-c4d9f0fe0bb5.tar.gz`，上传预压缩后的暂存目录，再换代；14 个 gzip、本代 96 个 assets、保留上一代 15 个，111 个在位，runtime-config.json 原样保留。托管后端使用的模块相对 0.7.13 未变，不重启 PM2。
+
+`node out/a45-validation/verify-editor.mjs` 退出 0：主站 `https://8-219-80-16.sslip.io/editor/` 与 s1 / s2 两个舞台源均 200，均发 `/editor/assets/index-RvNdCRPh.js`，含本轮 frameCode `f2b39909cf8cf38a4844436777faf817187e5385e50ea8b33dd61f6af0ba96bb`；index SHA-256 均为 `8651922ea1b83bc8df3a4472515d8ae2eecf6edddaa30f5b544a10fdf699f4dd`，入口 JS SHA-256 均为 `fc527e7bb616decd85cae7d1ea2c0167e1404c05ec0ccce33172989a119dbb98`。三处浏览器页面/控制台错误数组均空，主脚本 Content-Encoding=gzip、Content-Length=1338211；运行配置 v=1、两个舞台源正确。主站 hosted / media 两个 healthz 均 200；promptcut-hosted 仍 online、PID 110031、重启计数 21。截图 `out/a45-validation/editor-<域名>.png`，部署/核验元数据为 editor-deployment.json / editor-after.json；真实公网渲染路径复验结果另补。
 
 R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1.0.0.exe`，83991737 字节，SHA-256 `4A8099784FC60FADB95C9B124D914B002293359FF4E8C96A1EF22EAB3ABAB582`。保留的 `.cache/ext-stage/PromptCut-ext-stt-1.0.0/` 为成功 NSIS `File /r` 收入的真实 payload；本轮只做随包编码核验，没有安装或发布该可选能力。
 
-本轮暂未新增〔裁〕：退出清锁只修实现；菜单保留来自用户明确决定；草稿锁政策依用户决定维持。未把出包守门删掉或把真补丁要求降成镜像。
+真实公网路径：`node scripts/probes/desktop-auto-node-probe.mjs --remote https://8-219-80-16.sslip.io --base-port 5620 --skip-off --out out/a45-validation/editor-remote-final` 退出 0、490.1 s、ok=true、fails=[]。A2 补推原有重卡层 22.5 s、120 帧/120 块齐；A7 219.4 s、另一项目 120 块泄漏 0、云端无其层表、绑定未打断；A3 100.7 s，在线成员显示 U1、桌面与线上项目文档 id 相同、代码版本相同；A4 66.5 s，关闭桌面页面后节点切分并完成在线新改内容的 6 个段，编辑到显示 52.0 s；A5 4.7 s，重开交接后离开共享项目，nodes=[]、推送停止。桌面与成员页错误数组均空；本轮测试项目已 shared.admin.ok 删除，cleanup.listening=[]。截图 a3-online-u1.png、a4-online-u2-before.png / after.png 已直接贴进对话；日志与产物目录在 out/a45-validation/。整个探针使用隔离的数据、项目、工作与 TEMP 目录，启动器设置 PROMPTCUT_NO_PORT_FILE=1；未写用户数据。
+
+本轮〔裁〕两条：补齐上一任交接时留下的三级「桌面 APP 接入」和「桌面应用后台运行」机制说明，均指向 15.8 节卡点 1 第 1 行；内容依据已经通过的实现及 A4/A5 归档报告，不改一二级行为。原 A4 的九条实现选择、A5 的十条实现选择仍完整保留在对应归档报告第 5 节，没有伪造它们的历史解法表。退出清锁（归档 AGENT-r4-lock-cleanup 卡点 1 第 1 行）、PowerShell 单进程计数（归档 AGENT-ps1-process-count 卡点 1 第 1 行）、共享项目换档夹具（归档 AGENT-tier-switch-baseline 卡点 1 第 6 行）只修实现，没有新增语义裁决。菜单保留来自用户明确决定；草稿锁政策依用户决定维持。未把出包守门删掉或把真补丁要求降成镜像。
 
 ### 15.6 顾问调用记录
 
 没有调用顾问或子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；所有工作由 Codex 主会话完成，任务未派给 PC，也未向任何外部会话发消息。
+
+### 15.7 待用户项与未跑项
+
+1. **正式出包的阻塞项**：笔记本没有 PC 的原有发布配置（VITE_DIAG_SUBMIT_URL / VITE_DIAG_SUBMIT_TOKEN）。解法表 `docs/reports/AGENT-a45-build-config.md` 卡点 1 第 1～7 行：本地配置、编译产物、交接记录与管理凭证来源均扫空，换角度重新列候选也没有新路；第 5 行需要用户把 PC 的原 `.env.local` 安全复制到笔记本 `D:\VectorMPEG7\PromptCut\.env.local`，不把值发进对话。随后主会话只把所需 VITE_ 键复制进忽略的构建 worktree，再从已提交 main 执行正式 release 命令，核对产物和安装，按规则重判并快进 release。正式包的路径与 SHA-256 当前尚不存在；上面的测试包只用来完成独立验收。
+2. **R5 真补丁 / R7 真补丁内脚本**：PC 构建检出同步到本轮 main 后，在仓库根执行原命令 `cd desktop && npm run release -- --from-head --patch-only`，将补丁和 SHA-256 带到笔记本。基准清单只在 PC 的 desktop/release，笔记本不伪造它。用户已授权笔记本降装 0.7.13 / 外壳 0.2.6 测同一补丁，再装回本轮版本；现无真补丁，尚未降装。待测：0.2.7 几秒内干净退出、进程与锁清零、窗口位置恢复；0.2.6 约 10 秒后兜底强杀、补丁仍成功安装，最后恢复本轮版本。
+3. **R6 多屏**：笔记本只有一块屏。PC 上把副屏排在主屏左边，再收起主窗口，检查两屏任何位置都没有主窗露出。现场主窗 x=-2678；实现按所有屏幕的最左边计算外侧位置，源码与 Rust 左副屏用例通过，物理双屏仍待用户。
+4. **M7 W7 真跨机本轮复核**：PC 不可达，本轮本机替身的所有断言通过、fails=[]，退出 3 仅标 W7 pending。第 14 轮 m7w1002a 的 PC/笔记本证据仍在 14.1，本轮没有重新运行；按主计划 6.4 / 6.8 节列为待跨机复核，不记成退出 0，不用 PC 数字取代笔记本性能判据。历史 M8 物理断网、迁移和多端验收没有重跑：本轮任务是 A4+A5，且用户明确禁止改网络；现行本机整套命令详列 15.4.1，未把整个 probes 目录中的历史实验和辅助模块混称全跑。
+5. **草稿锁政策复核**：本轮按用户决定维持回首页持锁。保留会阻止另一个实例接手 A，直到切草稿/新建/退出；改成回首页释放会允许立即接手，但返回 A 需要重新抢锁并可能被拒。此政策仍列待用户项，当前行为不改。「文件→退出」用户已明确决定保留，已落实，无需再拍板。
+6. **配置恢复**：Claude Code 与 Codex 均已撤销 PromptCut 登记；最新 `node desktop/.cache/a45-install/check-registration.mjs` 为 false / false / true / true。Codex 登记后新增桌面配置另存于忽略文件 `desktop/.cache/a45-install/codex-after-unregister-before-restore.toml`，原登记前备份已逐字节恢复；备份内容从未输出或入库。
+
+R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所有 R 项的图和命令输出已直接贴进对话；完整证据目录保留在集成 worktree，不因报告归档而删掉。
+
+归档时承接的旧待定：AGENT-skill-mcp 第 8 / 10 节的二级「传统式下桌面 APP 调用被拒」及一级「软件里一键登记」表述建议仍为 dry run，未写入对应产品/用户工作流程章节；既有接入模式表已经把桌面 APP 对应到 SKILL，本轮只补实现机制。AGENT-tray 第 9 节的菜单项已由用户决定保留，防节流参数依上一主会话决定保留；标题栏 × 的无障碍名仍为「关闭」，是否改成「收到后台」未改，列为后续文案复核。本轮不展开无关 TODO。
+
+### 15.8 三级机制说明收口解法表
+
+卡点 1：上一任归档报告明确留下「主会话合入时写」，但机制册仍没有 A4 桌面接入和 A5 后台运行说明。尺子：`rg -n '^## 桌面 APP 接入|后台运行由外壳状态机' docs/semantics/mechanism/agent.md docs/semantics/mechanism/platforms.md` 两处均存在；逐条对照 stdio 身份、端口优先级、登记与撤销、分组限额、窗口状态机和退出代码；`node --experimental-test-module-mocks --test server/test/skill-mcp.test.mjs desktop/test/overlay-summary.test.mjs` 零失败；MSVC `cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib` 零失败，现场 R1 / R3 / R4 证据不变。这是本轮真实补写与复核过程，不追写上一任未提供的搜索历史。
+
+| # | 轮 | 层 | 父 | 候选 | 改善机制 | g | h | f | 验证 | 状态 | 结果 / 学到 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1 | 三级 | — | 把已验证的接入与后台实现补进机制册 | 填上语义索引下的实现说明，不改变产品承诺、入口或默认行为 | 1 | 1 | 2 | 上述命令、源逐条核对、R1/R3/R4 | 已试·过 | 两处文字齐；Node 21/21、零跳过，1.72 s；Rust 27 过、0 失败、1 子入口忽略，0.02 s。Codex 多线程共享 MCP 的机制按实际代码写，未照抄「每会话起一份进程」的不准确描述 |
+| 2 | 1 | 三级 | — | 只保留归档报告当机制说明 | 报告记录存在，但主机制册仍空缺 | 1 | 3 | 4 | 原机制册读取 | 关闭·剪（无机制） | 无法填补交接明确要求补写的正文位置 |
+| 3 | 1 | 二级 | — | 同时写入桌面 APP 调用闸的产品表述 | 增加产品册里的可见限制表述 | 1 | 2 | 3 | 原 dry run | 待用户 | 三级第 1 行已经达成；没有升层，此处承接原报告的待定建议 |
+| 4 | 1 | 一级 | — | 顺带写一键登记的用户工作流程 | 更改一级入口流程正文 | 1 | 2 | 3 | 本轮一级禁令 | 关闭·剪（禁止） | 原建议仍保留在 dry run，不在本轮自行改 |
+
+第 1 行即达成，没有层扫空，不需要额外顾问；按用户本轮改写的流程由主会话自己核对。两处机制条目标〔裁〕并指回这一行。纯文档改动不重复整套性能验证，21 项 Node 与 27 项 Rust 是这两段说明的对应尺子，未重写测试或放宽门槛。
