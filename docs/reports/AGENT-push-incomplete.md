@@ -65,7 +65,21 @@ node scripts/probes/push-race-probe.mjs --store <flat|shard|memory> --rounds 30
 
 ## 验证
 
-（见下方，跑完填）
+按 `verification.md`「子分支与集成分支各跑什么」，子分支跑类型检查、全量测试与点名的探针；没动渲染代码，不跑 G0-R。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出 0，零错误 |
+| 全量测试 | `npm test` | 退出 0；tests 4243、pass 4241、fail 0、skipped 2 |
+| 相关单测（改后） | `node --test` 跑 blob-store-concurrent-push、blob-store-conformance、asset-store-http、asset-service、asset-client、asset-namespaces、asset-client-resync | 90 条全过（新单测改前 9/9 失败） |
+| 尺子 | `push-race-probe.mjs --store shard/flat/memory --rounds 30` | 改前 shard 38/60 次推送失败（109 次 incomplete）、flat 5/60（5 次）；改后三种都是 0/60、0 次 |
+| 在线构建 | `npx vite build --mode online --outDir out/dist-online --emptyOutDir` | 退出 0 |
+| M7 | `m7-browser-probe --role all --timing-authoritative --base-port 6400 --dist out/dist-online` | 退出 3，`fails: []`，pending 只有「W7 真跨机待复核」（本机替身的常态）；用时 1105 s |
+| M7 编辑器日志 | 在 `editor-6403.log` 里数 | `incomplete` 0 次、`sink-incomplete` 0、`sink.incomplete` 0、`sink.has-push-failed` 0、`staging-discarded` 0；`node.task-completed` 21。改前旧日志每遍 1～4 次 `sink.incomplete`（m7race run0 2 行、cadence-race 4 行、codex-test-env 6 行、r12-merge 8 行，每次失败两行）。这遍里的 21 次 `node.task-failed` 全是开头「文档服务上没有项目快照 …@1/2/3」，旧日志里同样有，与本缺陷无关 |
+| 共享导入上传 | `shared-import-upload-probe.mjs --doc-port 6420 --asset-port 6421 --port-a 6410 --port-b 6415` | 退出 0，`fails: []` |
+| 桌面自动节点 | `desktop-auto-node-probe.mjs --base-port 6430`（本机模式） | 退出 0，`fails: []` |
+
+只跑了一遍 M7：改前每遍都有 1～4 次，这遍 0 次能对上，但一遍不算统计意义上的证明；可靠的对照是上面的尺子。
 
 ## 语义改动与〔裁〕
 
