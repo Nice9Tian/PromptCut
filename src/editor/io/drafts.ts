@@ -88,8 +88,10 @@ let activeDraftId: string | null = null;
 
 export function setActiveDraftId(id: string | null): void {
   // 换草稿(含设成 null:新建项目、从文件打开)就把上一份的锁放掉。
+  // 只放上一份(带 id):开草稿是先 openDraft(id) 抢到新锁、再来这里记 id 的,
+  // 不带 id 会把刚抢到的那把放掉(换草稿后正在编辑的草稿失锁)。
   // 不 await:调用点大多在用户手势里,放锁慢一点不该卡住界面;放锁本身是幂等的。
-  if (activeDraftId && activeDraftId !== id) void releaseDraftLock();
+  if (activeDraftId && activeDraftId !== id) void releaseDraftLock(activeDraftId);
   activeDraftId = id;
 }
 
