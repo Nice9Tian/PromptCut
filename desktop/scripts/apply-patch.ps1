@@ -204,7 +204,7 @@ function Get-ActiveAiRuns {
     }
 }
 
-$running = Get-TargetProcesses
+$running = @(Get-TargetProcesses)
 if ($running.Count -gt 0) {
     <#
         先问一句「有没有对话正在跑」。
@@ -252,20 +252,20 @@ if ($running.Count -gt 0) {
             Write-Warn "发不出退出请求（$($_.Exception.Message)），改用关窗口 + 强制结束。"
         }
         $deadline = (Get-Date).AddSeconds(10)
-        while ((Get-TargetProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) {
+        while (@(Get-TargetProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) {
             Start-Sleep -Milliseconds 500
         }
     }
     foreach ($p in Get-TargetProcesses) {
         try { $null = $p.Proc.CloseMainWindow() } catch { }
     }
-    if ((Get-TargetProcesses).Count -gt 0) { Start-Sleep -Seconds 2 }
+    if (@(Get-TargetProcesses).Count -gt 0) { Start-Sleep -Seconds 2 }
     foreach ($p in Get-TargetProcesses) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
     }
     # node 子进程未必跟着外壳退，而它才是握着 runtime\app 的那个。
     Start-Sleep -Seconds 2
-    $left = Get-TargetProcesses
+    $left = @(Get-TargetProcesses)
     if ($left.Count -gt 0) {
         $names = ($left | ForEach-Object { "$($_.Name)($($_.Id))" }) -join '、'
         Fail "PromptCut 关不掉（还剩：$names）。请手动退出后再运行本更新。"
