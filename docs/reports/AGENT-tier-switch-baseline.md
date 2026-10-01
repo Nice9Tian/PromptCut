@@ -29,4 +29,4 @@
 
 原始命令 `node scripts/probes/tier-switch-probe.mjs --origin http://127.0.0.1:6350 --remote-port 6355 --out out/a45-validation/tier-fix-first` 退出 0、fails=[]。T5a 1944 ms、black=0、始终帧号 75；T5b 从 153 到 154、frameError=0、afterSwapBlack=0；T5c 慢字节 16342 ms、black=0；T5e 2147 ms、black=0、对齐回调 errFrames=0。未修改黑帧、超时、帧误差、CfT 参数。
 
-类型检查与全量测试待串行完成。只改测试夹具，不触及渲染、预渲染、导出或卡片，子分支 G0-R 不重复；集成已有整套和 main 零像素差异证据，合流后再复验换档。
+类型检查退出 0（10.0 s），全量测试 4244 / 4242 / 0 / 2（82.5 s），桌面脚本 21/21。只改测试夹具，不触及渲染、预渲染、导出或卡片，子分支 G0-R 不重复；集成已有整套和 main 零像素差异证据，合流后再复验换档。
