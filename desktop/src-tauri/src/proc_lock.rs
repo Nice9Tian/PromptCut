@@ -207,7 +207,7 @@ mod tests {
     fn r4_killed_holder_removes_lock_without_node_cleanup() {
         let p=project_path("killed");
         let mut child=Command::new(std::env::current_exe().unwrap())
-            .args(["--ignored","--exact","tests::r4_child_holds_lock","--nocapture"])
+            .args(["--ignored","r4_child_holds_lock","--nocapture"])
             .env("PROMPTCUT_LOCK_TEST_CHILD",&p)
             .stdout(Stdio::piped()).spawn().unwrap();
         let ready=BufReader::new(child.stdout.take().unwrap()).lines()

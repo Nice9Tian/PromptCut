@@ -23,3 +23,5 @@
 2026-10-02：`npx tsc -b --force` 退出码 0；`npm test` 共 4217，过 4216、失败 0、跳过 1，80.09 s。日志在本 worktree 的 `out/a45-validation/`。
 
 上述 Rust 测试先在未修代码上确认 3 项都失败；修复后 3 项通过、失败 0，另 1 项是被父测试调用的忽略子进程入口。覆盖单锁释放、全量释放和重新获取、持有进程被强杀后由内核删除锁文件；测试草稿正文保持。真实安装包 R4 复测待集成构建后补齐。
+
+集成 `cargo test` 发现测试夹具的 `--exact tests::r4_child_holds_lock` 只适用于直接编译本文件：Cargo 下全名是 `proc_lock::tests::r4_child_holds_lock`，子进程选中了 0 条测试。改用唯一的函数名筛选，生产实现不变；用带 `mod proc_lock` 的独立 Rust harness 复现 Cargo 命名后，3 项通过、1 个子入口忽略。再次 `npx tsc -b --force` 退出 0、`npm test` 4217 / 4216 / 0 / 1（91.88 s）。
