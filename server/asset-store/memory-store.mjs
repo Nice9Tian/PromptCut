@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import {
   BLOB_CHUNK_SIZE, normalizeHash, normalizeExt, checkChunkArgs, chunkCountOf, chunkLengthOf,
-  createKeyedLock, drainSource, toBuffer, minimalContentType,
+  createKeyedLock, drainSource, countSource, toBuffer, minimalContentType,
 } from './blob-store.mjs';
 
 /** 单件上限：memory 实现只供测试，size 超过它回 `size-mismatch`（契约第 8 节第 7 条） */
@@ -89,10 +89,17 @@ export function createMemoryStore({ chunkSize = BLOB_CHUNK_SIZE, now = Date.now 
         } else if (!st.ext && wantExt) {
           st.ext = wantExt;
         }
-        st.received.delete(n);
+        // 已收到的片再传：不重写、不撤标记（见 blob-store.mjs 文件头）
+        if (st.received.has(n)) return { have: st };
         return st;
       });
       if (pre === 'complete') { await drainSource(source); return { status: 'complete' }; }
+      if ('have' in pre) {
+        const got = await countSource(source);
+        if (got === expected) return { status: 'ok', bytes: got };
+        await withLock(key, async () => { pre.have.received.delete(n); });
+        return { status: 'length', expected, got };
+      }
       if (!('parts' in pre)) return { status: 'size-mismatch', size: pre.conflict };
 
       const st = pre;
@@ -105,7 +112,8 @@ export function createMemoryStore({ chunkSize = BLOB_CHUNK_SIZE, now = Date.now 
         bytes += part.length;
       }
       if (bytes !== expected) return { status: 'length', expected, got: bytes };
-      if (staging.get(key) !== st) return { status: 'discarded' };
+      // 写的途中另一路先收尾入库了：这一片的字节已在全件里，回 complete
+      if (staging.get(key) !== st) return blobs.has(key) ? { status: 'complete' } : { status: 'discarded' };
       st.parts.set(n, buf);
       st.received.add(n);
       return { status: 'ok', bytes };
