@@ -211,6 +211,14 @@ test("VC-09 帧时间戳始终对不上 currentTime 的素材:每帧最多等一
     const t1 = performance.now();
     await source.frame(MEDIA, 1.0); // 放弃后退回只等 seeked(此时假元素的帧槽还没换,取到的是旧帧,和修之前一样)
     assert.ok(performance.now() - t1 < 200, "放弃核对后不再等");
+    assert.equal(source.settleWaits, 2);
+    // 某一帧当场对上就恢复核对
+    video.tsOffset = 0;
+    await new Promise((r) => setTimeout(r, 20));
+    await source.frame(MEDIA, 1.0); // 同一时刻不再 seek,帧槽已换好,当场对上
+    video.tsOffset = 10_000_000;
+    await source.frame(MEDIA, 1.5);
+    assert.equal(source.settleWaits, 3);
     source.dispose();
   }));
 });

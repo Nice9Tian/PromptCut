@@ -28,7 +28,10 @@ export function cardSeekTarget(time: number, duration: number): number {
 /** seek 之后等新帧成为元素当前帧:每次复查间隔(ms)与单帧最多等多久(ms)。见 `CardMediaSource.frame` 的注释。 */
 const SETTLE_POLL_MS = 1;
 const SETTLE_LIMIT_MS = 500;
-/** 同一个素材连续这么多帧等满 `SETTLE_LIMIT_MS` 仍对不上,就认定这份素材的帧时间戳不可核对,此后不再等(退回只等 seeked)。 */
+/**
+ * 同一个素材连续这么多帧等满 `SETTLE_LIMIT_MS` 仍对不上,就暂停等待(退回只等 seeked),直到某一帧当场对上再恢复。
+ * 例如视频轨比素材时长短、目标落在最后一帧之后:帧槽一直是最后一帧,怎么等都对不上,不该每帧白等。
+ */
 const SETTLE_GIVE_UP = 2;
 
 /**
@@ -57,7 +60,7 @@ export class CardMediaSource {
   private sources = new Map<string, Promise<HTMLVideoElement | HTMLImageElement>>();
   /** 每个视频元素一条取帧队列:seek → 取帧必须整段独占元素,两次取帧交错会互相拿到对方的帧 */
   private queues = new Map<string, Promise<unknown>>();
-  /** 每个素材连续等满上限的次数;到 `SETTLE_GIVE_UP` 后记为 Infinity,不再核对 */
+  /** 每个素材连续等满上限的次数 */
   private settleMisses = new Map<string, number>();
   private disposed = false;
   /** 诊断用(`scripts/probes/video-seek-race-probe.mjs` 读):seeked 之后帧槽里还不是目标帧、多等了的次数 */
@@ -107,21 +110,23 @@ export class CardMediaSource {
       source.addEventListener('seeked', done, { once: true }); source.addEventListener('error', failed, { once: true }); signal?.addEventListener('abort', cancelled, { once: true });
       if (Math.abs(source.currentTime - target) > .00001) source.currentTime = target;
     });
-    if ((this.settleMisses.get(url) ?? 0) < SETTLE_GIVE_UP) {
+    const misses = this.settleMisses.get(url) ?? 0;
+    let covered = currentFrameCovers(source);
+    if (covered === false && misses < SETTLE_GIVE_UP) {
+      this.settleWaits++;
       const start = performance.now();
-      let covered = currentFrameCovers(source);
-      if (covered === false) this.settleWaits++;
       while (covered === false && performance.now() - start < SETTLE_LIMIT_MS) {
         await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
         if (this.disposed || signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
         covered = currentFrameCovers(source);
       }
       if (covered === false) {
-        const misses = (this.settleMisses.get(url) ?? 0) + 1;
-        this.settleMisses.set(url, misses);
-        if (misses >= SETTLE_GIVE_UP) console.warn(`图卡视频源的帧时间戳对不上 currentTime,此后不再核对:${url}`);
-      } else if (covered === true) this.settleMisses.set(url, 0);
+        this.settleMisses.set(url, misses + 1);
+        if (misses + 1 >= SETTLE_GIVE_UP) console.warn(`图卡视频源的帧时间戳连续对不上 currentTime,暂停核对直到再次对上:${url}`);
+      }
     }
+    // 对上一次就清零(放弃核对期间也照常看一眼,对上了就恢复核对)
+    if (covered === true && misses) this.settleMisses.set(url, 0);
     return createImageBitmap(source, { premultiplyAlpha: 'none' });
   }
   dispose() {
