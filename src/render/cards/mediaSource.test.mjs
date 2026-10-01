@@ -120,3 +120,97 @@ test("VC-05 cardSeekTarget:加 2 ms,夹在 [0, 时长 − 0.1 ms];时长未知�
     source.dispose();
   });
 });
+
+/**
+ * seeked 先于帧槽换帧(Chrome 里两路跨线程送达,机器忙时主线程先收到 seeked;
+ * `scripts/probes/video-seek-race-probe.mjs` 在真 Chrome 里复现)。假元素:seek 后 `seekMs` 发 seeked,
+ * `slotMs` 后帧槽(createImageBitmap / VideoFrame 读到的那一帧)才换成新帧。
+ */
+class LaggyVideo extends FakeVideo {
+  constructor(fps, duration, { seekMs = 1, slotMs = 6, tsOffset = 0 } = {}) {
+    super(fps, duration);
+    this.seekMs = seekMs; this.slotMs = slotMs; this.tsOffset = tsOffset; this.slot = 0; this.seeking = false;
+  }
+  get currentTime() { return this._time; }
+  set currentTime(value) {
+    this._time = value; this.seeks.push(value); this.seeking = true;
+    const frame = shownFrame(value, this.fps, this.duration);
+    setTimeout(() => { if (this._time === value) { this.seeking = false; this.dispatchEvent(new Event("seeked")); } }, this.seekMs);
+    setTimeout(() => { if (this._time === value) this.slot = frame; }, this.slotMs);
+  }
+  get frameIndex() { return this.slot; }
+}
+class FakeVideoFrame {
+  constructor(v) { this.timestamp = Math.round((v.frameIndex * 1e6) / v.fps) + v.tsOffset; this.duration = Math.round(1e6 / v.fps); }
+  close() {}
+}
+const withVideoFrame = async (fn) => {
+  globalThis.VideoFrame = FakeVideoFrame;
+  try { await fn(); } finally { delete globalThis.VideoFrame; }
+};
+const RATE_HALF = range(60).map((n) => 0.35 + (0.5 * n) / 30);
+const RATE_HALF_WANT = RATE_HALF.map((t) => Math.floor(t * 30 + 1e-6));
+
+test("VC-06 seeked 先于帧槽换帧:等帧槽里的帧时间戳覆盖 currentTime 再取,不取 seek 之前那一帧", async () => {
+  await withSource(async (mod) => {
+    // 没有 WebCodecs 时退回只等 seeked —— 假元素先确认复现了缺陷
+    video = new LaggyVideo(30, 3);
+    let source = new mod.CardMediaSource();
+    const stale = [];
+    for (const t of RATE_HALF) stale.push((await source.frame(MEDIA, t)).frame);
+    source.dispose();
+    assert.notDeepEqual(stale, RATE_HALF_WANT);
+    await withVideoFrame(async () => {
+      video = new LaggyVideo(30, 3);
+      source = new mod.CardMediaSource();
+      const got = [];
+      for (const t of RATE_HALF) got.push((await source.frame(MEDIA, t)).frame);
+      assert.deepEqual(got, RATE_HALF_WANT);
+      assert.ok(source.settleWaits > 0);
+      source.dispose();
+    });
+  });
+});
+
+test("VC-07 同一素材的两次取帧并发:排队各取各的帧", async () => {
+  await withSource(async (mod) => withVideoFrame(async () => {
+    video = new LaggyVideo(30, 3);
+    const source = new mod.CardMediaSource();
+    const times = [0.4, 1.2, 0.1, 2.5];
+    const got = await Promise.all(times.map((t) => source.frame(MEDIA, t)));
+    assert.deepEqual(got.map((b) => b.frame), times.map((t) => Math.floor(t * 30 + 1e-6)));
+    source.dispose();
+  }));
+});
+
+test("VC-08 取帧被取消、seek 还在路上时再取同一时刻:等 seeked 和新帧,不当场取旧帧", async () => {
+  await withSource(async (mod) => withVideoFrame(async () => {
+    video = new LaggyVideo(30, 3, { seekMs: 20, slotMs: 25 });
+    const source = new mod.CardMediaSource();
+    await source.frame(MEDIA, 0.1);
+    const controller = new AbortController();
+    const first = source.frame(MEDIA, 1.2, controller.signal);
+    await new Promise((r) => setTimeout(r, 5));
+    controller.abort();
+    await assert.rejects(first, { name: "AbortError" });
+    assert.equal(video.seeking, true);
+    assert.equal((await source.frame(MEDIA, 1.2)).frame, 36);
+    source.dispose();
+  }));
+});
+
+test("VC-09 帧时间戳始终对不上 currentTime 的素材:每帧最多等一会儿,连续两帧等满后不再等,照常出帧", async () => {
+  await withSource(async (mod) => withVideoFrame(async () => {
+    video = new LaggyVideo(30, 3, { tsOffset: 10_000_000 });
+    const source = new mod.CardMediaSource();
+    const t0 = performance.now();
+    await source.frame(MEDIA, 0.4);
+    await source.frame(MEDIA, 0.5);
+    const waited = performance.now() - t0;
+    assert.ok(waited >= 900, `前两帧各等满约 500 ms,实际 ${waited.toFixed(0)} ms`);
+    const t1 = performance.now();
+    await source.frame(MEDIA, 1.0); // 放弃后退回只等 seeked(此时假元素的帧槽还没换,取到的是旧帧,和修之前一样)
+    assert.ok(performance.now() - t1 < 200, "放弃核对后不再等");
+    source.dispose();
+  }));
+});

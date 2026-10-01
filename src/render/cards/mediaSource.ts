@@ -25,12 +25,43 @@ export function cardSeekTarget(time: number, duration: number): number {
   return Number.isFinite(duration) ? Math.min(target, Math.max(0, duration - .0001)) : target;
 }
 
+/** seek 之后等新帧成为元素当前帧:每次复查间隔(ms)与单帧最多等多久(ms)。见 `CardMediaSource.frame` 的注释。 */
+const SETTLE_POLL_MS = 1;
+const SETTLE_LIMIT_MS = 500;
+/** 同一个素材连续这么多帧等满 `SETTLE_LIMIT_MS` 仍对不上,就认定这份素材的帧时间戳不可核对,此后不再等(退回只等 seeked)。 */
+const SETTLE_GIVE_UP = 2;
+
+/**
+ * 视频元素此刻的「当前帧」(`createImageBitmap(video)` 取到的那一帧)是不是 `currentTime` 所在的那一帧。
+ * 帧的起止取自 `new VideoFrame(video)` 的 `timestamp` / `duration`(微秒);`currentTime` 按 Chrome 的做法截断到微秒,
+ * 两边各留 1 µs 给四舍五入。返回 true / false;没法判断时(没有 WebCodecs、元素读不出帧、帧没有时长而时间戳又不晚于
+ * 目标)返回 null,调用方按「对上了」处理,即退回只等 seeked 的老行为。
+ */
+export function currentFrameCovers(video: HTMLVideoElement): boolean | null {
+  if (typeof VideoFrame === "undefined") return null;
+  let frame: VideoFrame;
+  try { frame = new VideoFrame(video); } catch { return null; }
+  try {
+    const at = Math.trunc(video.currentTime * 1e6);
+    const start = frame.timestamp, length = frame.duration;
+    if (start > at + 1) return false;
+    if (!length) return null;
+    return at < start + length + 1;
+  } finally { frame.close(); }
+}
+
 /** A decoder belongs to one card canvas. Seeking it never touches a timeline
  * media element or another card's source cursor. GPU registration can therefore
  * sample video locally without a server round trip or per-frame PNG transfer. */
 export class CardMediaSource {
   private sources = new Map<string, Promise<HTMLVideoElement | HTMLImageElement>>();
+  /** 每个视频元素一条取帧队列:seek → 取帧必须整段独占元素,两次取帧交错会互相拿到对方的帧 */
+  private queues = new Map<string, Promise<unknown>>();
+  /** 每个素材连续等满上限的次数;到 `SETTLE_GIVE_UP` 后记为 Infinity,不再核对 */
+  private settleMisses = new Map<string, number>();
   private disposed = false;
+  /** 诊断用(`scripts/probes/video-seek-race-probe.mjs` 读):seeked 之后帧槽里还不是目标帧、多等了的次数 */
+  settleWaits = 0;
   async frame(media: { url: string; kind?: string; type?: string; duration?: number }, time: number, signal?: AbortSignal): Promise<ImageBitmap> {
     if (this.disposed || signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
     if (!this.sources.has(media.url)) {
@@ -49,16 +80,47 @@ export class CardMediaSource {
     }
     const source = await this.sources.get(media.url)!;
     if (this.disposed || signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
-    if (source instanceof HTMLVideoElement) {
-      const target = cardSeekTarget(time, source.duration);
-      if (Math.abs(source.currentTime - target) > .00001) await new Promise<void>((resolve, reject) => {
-        const cleanup = () => { source.removeEventListener('seeked', done); source.removeEventListener('error', failed); signal?.removeEventListener('abort', cancelled); };
-        const done = () => { cleanup(); resolve(); };
-        const failed = () => { cleanup(); reject(new Error('Card video seek failed')); };
-        const cancelled = () => { cleanup(); reject(new DOMException('Cancelled', 'AbortError')); };
-        source.addEventListener('seeked', done, { once: true }); source.addEventListener('error', failed, { once: true }); signal?.addEventListener('abort', cancelled, { once: true });
-        source.currentTime = target;
-      });
+    if (!(source instanceof HTMLVideoElement)) return createImageBitmap(source, { premultiplyAlpha: 'none' });
+    const prior = this.queues.get(media.url) ?? Promise.resolve();
+    const turn = prior.catch(() => {}).then(() => this.videoFrame(media.url, source, time, signal));
+    this.queues.set(media.url, turn);
+    return turn;
+  }
+  /**
+   * 设 currentTime → 等 seeked → 等新帧成为元素的当前帧 → 取帧。
+   *
+   * 只等 seeked 不够:Chrome 里 seek 完成后,新解出的那一帧由媒体线程分两路送出 —— 一路投给合成用的帧槽
+   * (`createImageBitmap(video)` 读的就是它),一路通知主线程发 seeked。两路各走各的线程,机器忙时主线程可能先收到
+   * seeked,当场取帧拿到的还是 seek 之前那一帧(`scripts/probes/video-seek-race-probe.mjs` 满载下约万分之一)。
+   * 所以 seeked 之后再用 `currentFrameCovers` 核对帧槽里的帧是不是 currentTime 所在那一帧,不是就隔 `SETTLE_POLL_MS`
+   * 再看。核对只读帧的时间戳,不依赖合成器出帧(导出页由 beginFrame 控制出帧,等合成器回调可能和导出器互相等住)。
+   */
+  private async videoFrame(url: string, source: HTMLVideoElement, time: number, signal?: AbortSignal): Promise<ImageBitmap> {
+    if (this.disposed || signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    const target = cardSeekTarget(time, source.duration);
+    // 上一次取帧被取消时 seek 可能还在路上:currentTime 已是目标,但新帧还没到,也要等 seeked
+    if (source.seeking || Math.abs(source.currentTime - target) > .00001) await new Promise<void>((resolve, reject) => {
+      const cleanup = () => { source.removeEventListener('seeked', done); source.removeEventListener('error', failed); signal?.removeEventListener('abort', cancelled); };
+      const done = () => { cleanup(); resolve(); };
+      const failed = () => { cleanup(); reject(new Error('Card video seek failed')); };
+      const cancelled = () => { cleanup(); reject(new DOMException('Cancelled', 'AbortError')); };
+      source.addEventListener('seeked', done, { once: true }); source.addEventListener('error', failed, { once: true }); signal?.addEventListener('abort', cancelled, { once: true });
+      if (Math.abs(source.currentTime - target) > .00001) source.currentTime = target;
+    });
+    if ((this.settleMisses.get(url) ?? 0) < SETTLE_GIVE_UP) {
+      const start = performance.now();
+      let covered = currentFrameCovers(source);
+      if (covered === false) this.settleWaits++;
+      while (covered === false && performance.now() - start < SETTLE_LIMIT_MS) {
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
+        if (this.disposed || signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+        covered = currentFrameCovers(source);
+      }
+      if (covered === false) {
+        const misses = (this.settleMisses.get(url) ?? 0) + 1;
+        this.settleMisses.set(url, misses);
+        if (misses >= SETTLE_GIVE_UP) console.warn(`图卡视频源的帧时间戳对不上 currentTime,此后不再核对:${url}`);
+      } else if (covered === true) this.settleMisses.set(url, 0);
     }
     return createImageBitmap(source, { premultiplyAlpha: 'none' });
   }
@@ -69,5 +131,6 @@ export class CardMediaSource {
       if (source instanceof HTMLVideoElement) source.load();
     }, () => {});
     this.sources.clear();
+    this.queues.clear();
   }
 }
