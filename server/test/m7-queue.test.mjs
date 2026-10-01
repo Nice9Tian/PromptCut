@@ -915,3 +915,23 @@ test('M7Q-PICK-1 锚帧段（50）与普通段（10）同时可认领：pickCand
   const rest = tasks.filter((x) => x.priority === 10);
   assert.equal(pickCandidate(rest, { k: 4, random: () => 0.99 }).id, 'h3:60');
 });
+
+test('M7Q-PICK-2 同一档里计划先于细任务（AGENT-m7-race）：积压的锚帧段、普通段都排在后来发布的清单计划之后；补渲计划仍在全部 normal 之后', async () => {
+  const { pickCandidate, rankCandidates } = await import('../render-node/pick.mjs');
+  const t = (id, priority, publishedAt, kind = 'snapshot') => ({ id, kind, priority, source: { projectId: 'p1', publishedAt } });
+  // pc 手里积压着接手来的重卡段（50、10），之后页面为新加的卡发布清单计划（'normal'，名次 0），还有一份补渲计划
+  const backlog = [t('z1:0', 50, 1), t('h1:60', 10, 2), t('h2:120', 10, 3), t('h3:180', 10, 4), t('z1:60', 10, 5)];
+  const plan = t('plan:p@5#clips:w', 'normal', 9, 'plan');
+  const backfillPlan = t('plan:p@5#backfill:w', 'backfill', 8, 'plan');
+  const backfillFine = t('lite:0', 'backfill', 0);
+  const all = [...backlog, backfillFine, backfillPlan, plan];
+  for (const r of [0, 0.3, 0.6, 0.99]) assert.equal(pickCandidate(all, { k: 4, random: () => r }).id, plan.id, `random=${r}`);
+  assert.deepEqual(rankCandidates(all).map((x) => x.id), [plan.id, 'z1:0', 'h1:60', 'h2:120', 'h3:180', 'z1:60', backfillPlan.id, 'lite:0']);
+  // 计划认领走了：细任务照旧锚帧段先
+  assert.equal(pickCandidate([...backlog, backfillPlan], { k: 4, random: () => 0.99 }).id, 'z1:0');
+  // 两份 normal 计划：照发布先后；只在计划里挑，不混进细任务
+  const plan4 = t('plan:p@4#clips:x', 'normal', 7, 'plan');
+  assert.deepEqual(new Set([0, 0.99].map((r) => pickCandidate([...backlog, plan, plan4], { k: 4, random: () => r }).id)), new Set([plan4.id, plan.id]));
+  // normal 都没了才轮到补渲：补渲计划先于补渲细任务
+  assert.equal(pickCandidate([backfillFine, backfillPlan], { k: 4, random: () => 0.99 }).id, backfillPlan.id);
+});

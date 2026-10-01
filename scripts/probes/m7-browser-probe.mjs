@@ -74,6 +74,11 @@ const TIMEOUT_MS = Number(arg('--timeout-min', 120)) * 60_000;
 const deadline = Date.now() + TIMEOUT_MS;
 const NODE_WAIT_MS = Number(arg('--node-wait-s', 60)) * 1000;
 const A3_MS = Number(arg('--a3-seconds', 60)) * 1000;
+/** A10 抢卡：加卡到 w1、w2 都切出细任务的上限；加卡到两张卡各做完一段的上限（依据见 pageServerSide 的 A10 末段） */
+const A10_SPLIT_MS = Number(arg('--a10-split-seconds', 90)) * 1000;
+const A10_RACE_MS = Number(arg('--a10-race-seconds', 180)) * 1000;
+/** A10 抢卡判完之后，b2 页面上 z1 那一层换到 pc 环境、有就绪帧的上限（依据见 nodeRole 的 A10 末段） */
+const A10_LAYER_MS = Number(arg('--a10-layer-seconds', 240)) * 1000;
 /** 本机替身里素材服务每个请求的附加延迟（毫秒，模拟在线站点的往返；缺省 0） */
 const MEDIA_DELAY_MS = Math.max(0, Number(arg('--media-delay-ms', 0)) || 0);
 
@@ -1326,14 +1331,62 @@ async function pageServerSide(ctx) {
   book.judge('M7-A10', 'server-idle-takeover', !!took, { clip: z.clip, took, takeoverMs: took ? Date.now() - tTake : null, lockHistory: god.lockOf(`snapshot:${lockKeyZ}`)?.history ?? null, plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan').slice(-4).map((t) => ({ user: String(t.source?.userId ?? '').split('@')[0], rev: t.source?.projectRev, clips: t.input?.clips, state: god.tasks.get(t.id)?.state })) });
   // 宿主全开、b2 在线时加两张新卡：两份任务谁先谁得卡、每张卡只出自一种环境
   ctx.rev = await addCards(ctx.aConn, projectId, [['w1', 'probe-slow-stepped', { burnMs: 40, label: 'w1' }], ['w2', 'probe-slow-stepped', { burnMs: 40, label: 'w2' }]], ctx.run);
+  const tAdd = Date.now();
+  const wTasks = (clip) => [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
+  // 切分要及时（AGENT-m7-race）：w1、w2 的细任务只在 pc 切分含它们的清单计划之后才有，纯浏览器节点不切分（规则 6）。
+  // 计划排在 pc 自己积压的细任务（这一步前接手的 h1～h3、z1 约 20 段重卡）后面时，要等积压做完才切，实测 214～311 s，b2 全程没活可接。
+  // 上限依据：pc 手里那一段做完（笔记本上一段重卡最长约 19 s）+ 页面测量新卡、发计划（数秒）+ 切分（约 1 s），留约 3 倍余量
+  const splitMs = await until(() => (['w1', 'w2'].every((c) => wTasks(c).length > 0) ? Date.now() - tAdd : null), A10_SPLIT_MS, 500);
+  book.judge('M7-A10', 'server-race-split-promptly', splitMs !== null, { splitMs, limitMs: A10_SPLIT_MS, ...(splitMs === null ? await a10Stall(ctx, ['w1', 'w2']) : {}) });
+  // 两张卡各要有一段做完；超时单独报，不算进「一张卡出自几种环境」。
+  // 上限依据（从加卡算起，两张卡共用）：切分（上一条的上限 90 s）+ pc 那一张的第一段（约 12～19 s）+ 推产物偶发 400 重领一次（约 13 s），约 120 s，留 1.5 倍
+  const doneFps = (clip) => [...new Set(wTasks(clip).filter((t) => god.tasks.get(t.id)?.state === 'done').map((t) => t.requires?.envFingerprint))];
   const race = {};
+  const timedOut = [];
   for (const clip of ['w1', 'w2']) {
-    await until(() => [...watcher.bodies.values()].some((t) => t.input?.clipId === clip && god.tasks.get(t.id)?.state === 'done'), 300_000, 1000);
-    const done = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip && god.tasks.get(t.id)?.state === 'done');
-    race[clip] = [...new Set(done.map((t) => t.requires?.envFingerprint))];
+    const ok = await until(() => doneFps(clip).length > 0, Math.max(1000, tAdd + A10_RACE_MS - Date.now()), 1000);
+    race[clip] = doneFps(clip);
+    if (!ok) timedOut.push(clip);
   }
-  book.judge('M7-A10', 'server-race-one-env-per-card', Object.values(race).every((fps) => fps.length === 1), race);
+  const raceMs = Date.now() - tAdd;
+  book.judge('M7-A10', 'server-race-done-in-time', timedOut.length === 0, { raceMs, limitMs: A10_RACE_MS, splitMs, timedOut, race, ...(timedOut.length ? await a10Stall(ctx, timedOut) : {}) });
+  const finished = Object.fromEntries(Object.entries(race).filter(([clip]) => !timedOut.includes(clip)));
+  if (Object.keys(finished).length === 0) book.pending('M7-A10', 'server-race-one-env-per-card', '两张卡都没在上限内做完一段（见 server-race-done-in-time）', race);
+  else book.judge('M7-A10', 'server-race-one-env-per-card', Object.values(finished).every((fps) => fps.length === 1), { ...race, raceMs, envOf: Object.fromEntries(Object.entries(race).map(([c, fps]) => [c, fps.map((fp) => (fp === ctx.pcFp ? 'pc' : fp === pageFp ? 'browser' : fp))])) });
   await kv.signal('a10.server-done', { race, took: !!took });
+}
+
+/**
+ * A10 抢卡这一步等超时的现场：每张卡的锁在谁手里、它的任务各是什么状态由谁认领；含它的清单计划的去向；
+ * pc 此刻持有什么、按 pc 的过滤与排序排在前面的是哪些（排在含新卡的计划前面的，就是让它干等的）。
+ */
+async function a10Stall(ctx, clips) {
+  const M = await mods();
+  const { rankCandidates } = await import('../../server/render-node/pick.mjs');
+  const { god, watcher } = ctx;
+  const who = (nodeId) => (nodeId == null ? null : nodeId === ctx.pcNodeId ? 'pc' : String(nodeId).slice(0, 24));
+  const short = (id) => String(id).slice(0, 40);
+  const cards = {};
+  for (const clip of clips) {
+    const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
+    const ck = ts[0]?.input?.contentKey ?? null;
+    const lock = ck ? god.lockOf(`snapshot:${ck}`) : null;
+    cards[clip] = {
+      lock: lock ? { fp: lock.envFingerprint === ctx.pcFp ? 'pc' : lock.envFingerprint, history: lock.history } : null,
+      tasks: ts.slice(0, 12).map((t) => { const g = god.tasks.get(t.id); return { id: short(t.id), env: t.requires?.envFingerprint === ctx.pcFp ? 'pc' : t.requires?.envFingerprint ?? null, priority: t.priority, state: g?.state ?? null, attempts: g?.attempts ?? null, lastError: g?.lastError ?? null, claimedBy: (g?.claimedBy ?? []).map((c) => who(c.nodeId)) }; }),
+      plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan' && (t.input?.clips ?? []).includes(clip)).map((t) => { const g = god.tasks.get(t.id); return { rev: t.source?.projectRev, priority: t.priority, state: g?.state ?? null, firstSeenAgoMs: g?.firstSeen ? Date.now() - g.firstSeen : null, states: (g?.states ?? []).map((x) => x.state), claimedBy: (g?.claimedBy ?? []).map((c) => who(c.nodeId)), lastError: g?.lastError ?? null }; }),
+    };
+  }
+  const pcDiag = await ctx.editor?.e?.queue().catch(() => null);
+  const pcNode = { nodeId: pcDiag?.nodeId ?? ctx.pcNodeId, profile: 'pc', envFingerprint: ctx.pcFp, codeVersions: pcDiag?.codeVersion ? [pcDiag.codeVersion] : [], capabilities: {}, editing: false };
+  const openForPc = [...watcher.bodies.values()].filter((t) => god.tasks.get(t.id)?.state === 'open' && (t.requires?.envFingerprint == null || t.requires.envFingerprint === ctx.pcFp));
+  let ahead = null;
+  try {
+    const ranked = rankCandidates(M.filterClaimable(openForPc.map((t) => ({ ...t, version: god.tasks.get(t.id)?.version ?? 1 })), pcNode));
+    const firstPlan = ranked.findIndex((t) => t.kind === 'plan' && clips.some((c) => (t.input?.clips ?? []).includes(c)));
+    ahead = { claimable: ranked.length, planRank: firstPlan, head: ranked.slice(0, 6).map((t) => ({ id: short(t.id), kind: t.kind, clip: t.input?.clipId ?? null, priority: t.priority })) };
+  } catch (e) { ahead = { error: errText(e) }; }
+  return { stall: { cards, pc: pcDiag ? { held: (pcDiag.held ?? []).map(short), running: (pcDiag.running ?? []).map(short), idle: pcDiag.idle ?? null } : null, ahead } };
 }
 
 /* ================================================================== node：页面一侧 */
@@ -1891,9 +1944,13 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   await until(() => b2.tap.nodeState().isNode, NODE_WAIT_MS, 250);
   await kv.signal('a10.b2-ready', { isNode: b2.tap.nodeState().isNode });
   await waitSignal(kv, 'a10.server-done');
-  const od2 = await onlineDiag(b2.page);
-  const zl = od2?.layers?.find((l) => l.clipId === zClaim.task.clipId);
-  book.judge('M7-A10', 'page-layer-switched', zl?.envFingerprint === cfg.pcFp && (zl?.ready ?? 0) > 0, { clip: zClaim.task.clipId, fp: zl?.envFingerprint ?? null, pcFp: cfg.pcFp, ready: zl?.ready ?? null });
+  // pc 接手 z1 后要把它的段做完、页面取到才有 ready。抢卡一步原来要等 pc 积压做完（约 5 分钟），顺带给足了这段时间；
+  // 计划先切分之后抢卡约 35 s 就判完，z1 的段可能还排在 h1～h3 的锚帧段后面（AGENT-m7-race 第 3 遍里 pc 只做了两段 h2）。
+  // 所以这里等到条件成立，判法不变。上限依据：接手后约 8 段锚帧段（50）随机先后，每段最长约 19 s，z1 的锚帧段最晚约 150 s 轮到，留余量取 240 s
+  const tLayer = Date.now();
+  const layerOf = async () => (await onlineDiag(b2.page))?.layers?.find((l) => l.clipId === zClaim.task.clipId) ?? null;
+  const zl = (await until(async () => { const l = await layerOf(); return l?.envFingerprint === cfg.pcFp && (l?.ready ?? 0) > 0 ? l : null; }, A10_LAYER_MS, 2000)) ?? (await layerOf());
+  book.judge('M7-A10', 'page-layer-switched', zl?.envFingerprint === cfg.pcFp && (zl?.ready ?? 0) > 0, { clip: zClaim.task.clipId, fp: zl?.envFingerprint ?? null, pcFp: cfg.pcFp, ready: zl?.ready ?? null, waitedMs: Date.now() - tLayer, limitMs: A10_LAYER_MS });
 }
 
 /* ================================================================== all */
