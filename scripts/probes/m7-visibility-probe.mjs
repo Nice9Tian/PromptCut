@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { acceptUpgrade } from '../../server/docservice/ws.mjs';
 import { flagArg, sleep } from './probe-connect.mjs';
 
@@ -91,7 +92,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'm7-vis-profile-'));
 const defaults = await puppeteer.defaultArgs({ headless: false });
 const ignore = ['--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', ...defaults.filter((a) => a.startsWith('--disable-features='))];
 const browser = await puppeteer.launch({ headless: false, executablePath: exe ?? undefined, userDataDir: profile, ignoreDefaultArgs: ignore, defaultViewport: null, protocolTimeout: 900000,
-  args: ['--window-size=900,700', '--window-position=60,60', '--no-first-run', '--no-default-browser-check', ...(OCCLUSION ? [] : ['--disable-backgrounding-occluded-windows'])] });
+  args: [...PROBE_CHROME_ARGS, '--window-size=900,700', '--window-position=60,60', '--no-first-run', '--no-default-browser-check', ...(OCCLUSION ? [] : ['--disable-backgrounding-occluded-windows'])] });
 const version = await browser.version();
 log(`chrome ${version} (${exe ?? 'puppeteer bundled'}) profile ${profile}`);
 const page = await browser.newPage();

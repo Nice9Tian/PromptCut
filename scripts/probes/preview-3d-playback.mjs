@@ -23,6 +23,7 @@
  * 免得同一台 server 上前几趟留下的成本记录(`out/card-costs.json`)串进来。
  */
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { devOrigin } from './probe-connect.mjs';
 
 const args = process.argv.slice(2);
@@ -32,7 +33,7 @@ const fails = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra !== undefined ? ' :: ' + JSON.stringify(extra) : '')); return cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
+const browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
 const out = { origin, runTag };
 try {
   const page = await browser.newPage();

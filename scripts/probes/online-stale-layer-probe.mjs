@@ -23,6 +23,7 @@
  * 不打印口令;结果最后一行是一行 JSON(`ok`、`fails`、各段时延),截图在 --out。
  */
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
@@ -182,7 +183,7 @@ async function wsAsCreator(projectId = made.projectId) {
 }
 
 /* ------------------------------------------------------------------ 浏览器 */
-const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process'] });
+const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process'] });
 async function newPage(label) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();

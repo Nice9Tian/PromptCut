@@ -31,6 +31,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
 import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 
@@ -123,7 +124,7 @@ const reqsOf = (ns, hash) => requests.filter((r) => r.ns === ns && (!hash || r.h
 /* ------------------------------------------------------------------ 页面(手机仿真) */
 const out = { ok: false, origin, run: RUN, out: OUT, G1: {}, G2: {}, G3: {}, G4: {} };
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600000,
-  args: ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required'] });
+  args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required'] });
 try {
   const page = await browser.newPage();
   await page.emulate({

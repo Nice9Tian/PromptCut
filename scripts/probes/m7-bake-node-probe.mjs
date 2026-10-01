@@ -45,6 +45,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg, serve, closeAll, sleep } from './probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -104,7 +105,7 @@ async function launch(head, extra = []) {
   const ignore = ['--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     ...defaults.filter((a) => a.startsWith('--disable-features='))];
   return puppeteer.launch({ headless: head === 'headless', ignoreDefaultArgs: ignore, defaultViewport: null, protocolTimeout: 600000,
-    args: ['--disable-gpu', '--window-size=1100,820', '--window-position=40,40', ...extra] });
+    args: [...PROBE_CHROME_ARGS, '--disable-gpu', '--window-size=1100,820', '--window-position=40,40', ...extra] });
 }
 
 /* ------------------------------------------------------------------ desktop */

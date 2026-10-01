@@ -37,6 +37,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
 import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 
@@ -135,7 +136,7 @@ const publish = (x, complete, holdUntil = 0) => remoteFiles.set(x.hash, { bytes:
 /* ------------------------------------------------------------------ 页面 */
 const out = { ok: false, origin, run: RUN, out: OUT, T5a: {}, T5b: {}, T5c: {}, T5e: {}, T6: {}, T7: {} };
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });

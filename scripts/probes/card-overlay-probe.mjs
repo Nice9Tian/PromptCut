@@ -20,6 +20,7 @@
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -157,7 +158,7 @@ try {
   browser = await puppeteer.launch({
     headless: true,
     defaultViewport: { width: 1440, height: 900 },
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'],
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'],
   });
   const page = await browser.newPage();
   page.on('pageerror', (e) => say('pageerror', { message: String(e?.message ?? e).slice(0, 300) }));

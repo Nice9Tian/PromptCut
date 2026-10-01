@@ -7,6 +7,7 @@
 | 文件 | 管什么 |
 |---|---|
 | `guide_files/suggested_agent_behavior.md` | 协作闭环：原则，以及对齐、执行、验证、汇报的工作流程 |
+| `guide_files/solution_table.md` | 按现有语义做不下去时怎么穷尽解法：解法表、分层、顾问、什么时候停 |
 | `guide_files/constraints.md` | 改代码时必须守的硬性约束 |
 | `guide_files/verification.md` | 基线由哪几项组成、什么改动必跑哪项、验证环境 |
 | `guide_files/multi_agent.md` | 用了子 Agent 之后的协议 |

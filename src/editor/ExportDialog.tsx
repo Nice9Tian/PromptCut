@@ -122,6 +122,11 @@ export function ExportDialog(props: {
           </div>
         )}
 
+        {/* 完成但有素材因缺失被跳过(TopBar 用 exportSkippedMessage 写进 message):照列出来,不静默 */}
+        {state.phase === "done" && state.message && (
+          <div className="pc-export-err" data-pc="export-skipped" style={{ whiteSpace: "pre-line" }}>{state.message}</div>
+        )}
+
         {/* 取消是用户自己按的,标题已经说了「已取消导出」,这里再复述一遍没有信息量,
             改成说清楚现场留下了什么 */}
         {state.phase === "cancelled" && (

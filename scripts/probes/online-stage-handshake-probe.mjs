@@ -24,6 +24,7 @@
  * 结果最后一行是一行 JSON(`ok`、`fails`、各项数字),截图在 --out。
  */
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
@@ -160,7 +161,7 @@ await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator,
 const CLIP = 'osh-b';
 
 /* ------------------------------------------------------------------ 浏览器 */
-const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
+const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
 
 /** 一个场景:新的浏览器上下文,以成员身份加入,返回页面与工具 */
 async function openMember(tag, username) {

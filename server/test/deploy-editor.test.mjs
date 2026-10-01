@@ -11,7 +11,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { hostedInstance, hostedPm2Config, hostedDeployScript, editorSwapLines, checkPublicUrl } from '../hosted/deploy.mjs';
+import crypto from 'node:crypto';
+import zlib from 'node:zlib';
+import { hostedInstance, hostedPm2Config, hostedDeployScript, editorSwapLines, checkPublicUrl, stageEditorBuild, PRECOMPRESS_EXTS } from '../hosted/deploy.mjs';
 
 const pm2Env = (text) => {
   const mod = { exports: {} };
@@ -127,4 +129,75 @@ test('DEP-4 换名脚本真跑两次：新版换上，旧版 assets 只保留一
   const bad = spawnSync(bashExe, ['-s', dir.replace(/\\/g, '/')], { input: script, encoding: 'utf8' });
   assert.equal(bad.status, 4);
   assert.match(fs.readFileSync(path.join(dir, 'editor', 'index.html'), 'utf8'), /v3/, '旧版原样在位');
+});
+
+test('DEP-5 暂存在线构建：assets 下大于 1 KB 的 js/mjs/css/json/svg/wasm 都有 .gz，解压后与原文件逐字相同；别的不压，源目录不动', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-editor-stage-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const src = path.join(dir, 'dist-online');
+  fs.mkdirSync(path.join(src, 'assets', 'sub'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'catalog'), { recursive: true });
+  const big = (seed) => Buffer.from(Array.from({ length: 4000 }, (_, i) => `${seed}-${i % 97};`).join(''));
+  const want = [];
+  for (const ext of PRECOMPRESS_EXTS) {
+    fs.writeFileSync(path.join(src, 'assets', `a-x1${ext}`), big(ext));
+    want.push(`a-x1${ext}.gz`);
+  }
+  fs.writeFileSync(path.join(src, 'assets', 'UP.JS'), big('upper'));
+  want.push('UP.JS.gz');
+  fs.writeFileSync(path.join(src, 'assets', 'sub', 'w.wasm'), crypto.randomBytes(5000));
+  want.push('sub/w.wasm.gz');
+  fs.writeFileSync(path.join(src, 'assets', 'small.js'), Buffer.alloc(1024, 97)); // 恰好 1 KB：不压
+  fs.writeFileSync(path.join(src, 'assets', 'pic.png'), crypto.randomBytes(5000)); // 扩展名不在表里
+  fs.writeFileSync(path.join(src, 'assets', 'font.woff2'), crypto.randomBytes(5000));
+  fs.writeFileSync(path.join(src, 'catalog', 'big.json'), big('catalog')); // 不在 assets/ 下
+  fs.writeFileSync(path.join(src, 'index.html'), '<!doctype html>');
+  const before = fs.readdirSync(path.join(src, 'assets')).sort();
+
+  const out = path.join(dir, 'stage', '.incoming-editor');
+  const { gz } = stageEditorBuild(src, out);
+  assert.deepEqual(gz, want.sort());
+  for (const rel of gz) {
+    const orig = fs.readFileSync(path.join(out, 'assets', rel.replace(/\.gz$/, '')));
+    const packed = fs.readFileSync(path.join(out, 'assets', rel));
+    assert.ok(orig.equals(zlib.gunzipSync(packed)), `${rel} 解压后与原文件逐字相同`);
+  }
+  // 最高压缩级别：与 level 9 的结果同样大小（gzip 头的时间戳为 0，逐字相同）
+  const js = fs.readFileSync(path.join(out, 'assets', 'a-x1.js'));
+  assert.ok(fs.readFileSync(path.join(out, 'assets', 'a-x1.js.gz')).equals(zlib.gzipSync(js, { level: 9 })));
+  for (const f of ['small.js.gz', 'pic.png.gz', 'font.woff2.gz']) assert.ok(!fs.existsSync(path.join(out, 'assets', f)), `${f} 不该有`);
+  assert.ok(!fs.existsSync(path.join(out, 'catalog', 'big.json.gz')));
+  assert.ok(fs.existsSync(path.join(out, 'index.html')) && fs.existsSync(path.join(out, 'catalog', 'big.json')), '其余文件原样拷过去');
+  assert.deepEqual(fs.readdirSync(path.join(src, 'assets')).sort(), before, '源目录不动');
+});
+
+test('DEP-6 换名脚本对 .gz：本代的 .gz 进清单、下一代随原文件保留一代；清单里没记 .gz 的老一代也随原文件补上', (t) => {
+  const found = findGnuBash();
+  if (!found.bash) return t.skip(found.reason);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-editor-swapgz-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const script = `set -euo pipefail\ncd "$1"\n${editorSwapLines().join('\n')}\n`;
+  const deploy = (gen, files) => {
+    const inc = path.join(dir, '.incoming-editor');
+    fs.mkdirSync(path.join(inc, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(inc, 'index.html'), `<!doctype html><title>${gen}</title>`);
+    for (const f of files) fs.writeFileSync(path.join(inc, 'assets', f), `${gen}:${f}`);
+    const r = spawnSync(found.bash, ['-s', dir.replace(/\\/g, '/')], { input: script, encoding: 'utf8' });
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  };
+  const assets = () => fs.readdirSync(path.join(dir, 'editor', 'assets')).sort();
+  // v0：老一代，清单里没有 .gz；之后像服务器上那样手工补一个 .gz（不在 .assets-own 里）
+  deploy('v0', ['index-000.js']);
+  fs.writeFileSync(path.join(dir, 'editor', 'assets', 'index-000.js.gz'), 'manual');
+  deploy('v1', ['index-aaa.js', 'index-aaa.js.gz', 'index-aaa.css', 'index-aaa.css.gz']);
+  assert.deepEqual(assets(), ['index-000.js', 'index-000.js.gz', 'index-aaa.css', 'index-aaa.css.gz', 'index-aaa.js', 'index-aaa.js.gz'],
+    '老一代手工生成的 .gz 随原文件补上');
+  const own1 = fs.readFileSync(path.join(dir, 'editor', '.assets-own'), 'utf8').trim().split('\n');
+  assert.deepEqual(own1, ['index-aaa.css', 'index-aaa.css.gz', 'index-aaa.js', 'index-aaa.js.gz'], '本代的 .gz 写进清单，补进来的上一代不写');
+  deploy('v2', ['index-bbb.js', 'index-bbb.js.gz', 'index-aaa.css', 'index-aaa.css.gz']);
+  assert.deepEqual(assets(), ['index-aaa.css', 'index-aaa.css.gz', 'index-aaa.js', 'index-aaa.js.gz', 'index-bbb.js', 'index-bbb.js.gz'],
+    'v1 的 js 与 .gz 保留一代，v0 的不再保留');
+  assert.equal(fs.readFileSync(path.join(dir, 'editor', 'assets', 'index-aaa.css.gz'), 'utf8'), 'v2:index-aaa.css.gz', '同名的 .gz 用新版');
+  deploy('v3', ['index-ccc.js']);
+  assert.deepEqual(assets(), ['index-aaa.css', 'index-aaa.css.gz', 'index-bbb.js', 'index-bbb.js.gz', 'index-ccc.js']);
 });

@@ -4,6 +4,7 @@ import { actions, getState, useStore } from "../store/project";
 import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
 import { PROCP_EXT, isProcpFile, loadProcpFile, packMissingMessage, packProcp } from "./io/procp";
+import { exportSkippedMessage } from "./io/exportSkipped";
 import { ExportDialog, type ExportState } from "./ExportDialog";
 import { exportGateNow } from "./media/assetTiers";
 import { awaitingUploaderMessage } from "../render/mediaTier";
@@ -440,7 +441,7 @@ export function TopBar() {
     });
 
     try {
-      const { outDir, id, written } = await exportVideo({
+      const { outDir, id, written, skippedMedia } = await exportVideo({
         // 在线浏览器模式(c10a 第 11.1 节)边编边写进这个落点,回 written: true;桌面那一路不看它
         target,
         onStart: (jobId) => {
@@ -463,7 +464,9 @@ export function TopBar() {
           throw error;
         }
       }
-      setExportState((s) => (s ? { ...s, phase: "done", outDir, done: s.total || 1, total: s.total || 1 } : s));
+      // 因素材缺失跳过的片段:完成的对话框里列出来(不静默)
+      const skippedNote = skippedMedia?.length ? exportSkippedMessage(skippedMedia) : "";
+      setExportState((s) => (s ? { ...s, phase: "done", outDir, done: s.total || 1, total: s.total || 1, ...(skippedNote ? { message: skippedNote } : {}) } : s));
     } catch (e) {
       const err = e as Error & { cancelled?: boolean };
       setExportState((s) =>

@@ -9,11 +9,16 @@
  * 直接 spawn ENAMETOOLONG —— 也就是「原生工具被拒 → 改用文本协议重试」这条兜底路
  * 从来没成功过,一进去就炸。claude.mjs / codex.mjs 早就走 stdin 了,agy 是唯一的例外。
  */
-import { test, mock } from 'node:test';
+import { test, mock, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import * as realChildProcess from 'node:child_process';
+import { useFakeCliHome } from './fake-cli-home.mjs';
+
+// claude / agy 解析到临时目录里的假 .exe,断言 spawn 实参时不受本机装法(npm 垫片等)影响
+const fakeCli = useFakeCliHome();
+after(() => fakeCli.dispose());
 
 /** Windows 一条命令行(含 exe 路径和所有参数)的硬上限 */
 const WINDOWS_CMDLINE_LIMIT = 32767;

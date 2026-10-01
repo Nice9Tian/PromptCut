@@ -366,14 +366,15 @@ export function filterClaimable(tasks, node) // → task[]（保持原顺序）
 ### B.3 `pick.mjs`（设计 4.3 末段、第 7 节「公平性」）
 
 ```js
-export function rankCandidates(tasks)                              // 新数组：优先级档（normal 先于 backfill）→ 档内整数 priority 降序 → source.publishedAt 升序 → id 升序；pickCandidate 只在排头那一档里挑
+export function rankCandidates(tasks)                              // 新数组：优先级档（normal 先于 backfill）→ 计划先于细任务（`kind: 'plan'` 在前）→ 档内整数 priority 降序 → source.publishedAt 升序 → id 升序；pickCandidate 只在排头那一档、排头那一类里挑
 export function pickCandidate(tasks, { k = 4, random = Math.random, lastProjectId = null } = {})   // → task | null
 ```
 
 `pickCandidate`：
 
 1. 空数组回 `null`；
-2. 取 `rankCandidates` 里与第一名同档、**同整数 priority** 的那些，再取其前 `k` 个；
+2. 取 `rankCandidates` 里与第一名同档、同类（计划 / 细任务）、**同整数 priority** 的那些，再取其前 `k` 个；
+   〔裁〕2026-10-01（主会话据 `claude/m7-race`）：加「同类」，同一档里计划排在细任务前面。原来计划记名次 0、排在节点自己积压的细任务后面，新改的卡要等积压做完才有细任务，不会切分的纯浏览器节点没活可接（M7-A10 实测 224～295 s）；切分只要一两秒。出处 `docs/archive/agent-reports/AGENT-m7-race.md`。
    〔裁〕2026-09-28（主会话）：原文是「取 `rankCandidates` 的前 `k` 个」。为什么改：前 `k` 个里锚帧段（50）和普通段（10）混在一起随机挑，锚帧优先几乎不起作用——笔记本跑 M7-A4 时页面认领顺序是 h3:0-59、h1:0-59、h2:120-179、h2:240-299、h2:180-239、h1:120-179、最后才 h2:0-59，最差 85.3 s（`docs/archive/agent-reports/AGENT-lowmem-latency.md`「段的顺序基本随机」是同一件事）。改成：先取最高那一个整数名次，只在它的前 `k` 个里随机（同名次内保留随机，多节点照旧错开）；这一名次认领完才轮到下一名次。代码向语义「锚帧优先」靠，语义不改。
 3. 若给了 `lastProjectId`，且前 `k` 个里有和第一名**同优先级**、但 `source.projectId !== lastProjectId` 的，候选只留这些（同优先级里按项目轮转）；
 4. 在候选里取 `candidates[Math.floor(random() * candidates.length)]`（`random()` 返回 `[0, 1)`）。
