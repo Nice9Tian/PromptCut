@@ -1021,14 +1021,14 @@
 | R4 | 初测没过，修复后复测执行中 | 退出 1.35 s 后进程 0、不走强杀，文件旁仍有 64 字节锁；r4-collapsed.png、quit-test.log、r4-reopen.png。修复与专项证据见 15.1、15.2 |
 | R5 | 待用户 | 真补丁的 PC 基准清单不可达。PC 上从本轮最终 main 出 `cd desktop && npm run release -- --from-head --patch-only`，将真实补丁拷到笔记本后补测 0.2.7 的退出/装补丁/重开，以及允许的先降装 0.7.13（外壳 0.2.6）同补丁强杀兜底，再装回本轮版本。没有动 PC 的用户安装，也没用镜像冒充真补丁 |
 | R6 | 待用户在 PC 验 | 副屏放在主屏左边，收起后两屏上都不应出现主窗任何一部分；重点核对主窗虽仍 visible，计算出的屏外坐标是否确在所有屏幕之外。单屏不等于通过 |
-| R7 | 执行中 | 子分支 7/7 与三份 PowerShell 解析已过；新测试安装的「新建→首页→开 A」「A→首页→开 B」锁文件现场复测待补 |
-| R8 | 执行中 | 最后撤销 Claude Code 和 Codex 两边登记，对 PromptCut 条目恢复备份作结构比较；Codex 配置作整文件字节比较。最后退出 SKILL、留测试草稿 A，检查进程 |
+| R7 | 草稿锁过；随包脚本与真补丁待补 | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。本次测试安装包来自缺发布配置而中断的 runtime 组装，安装目录未找到 apply-extension.ps1，不能用源文件解析冒充随包复验；完整正式包与 R5 真补丁到齐后补验 |
+| R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
 
 ### 15.4 集成整套验证（执行中）
 
 `claude/a45-merge` 代码验证起点 47bb49fb 合流后的内容；其后变更只有用户决定的纯文档和 Rust 子测试夹具。G0：`npx tsc -b --force` 0；`npm test` 4224 / 4223 / 0 / 1（80.13 s）；桌面脚本 31/31。较 main 少的测试随 A4 删除旧被测路径，沿用第 14 轮已说明的原因，没有删现行路径测试。Rust MSVC `cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml` 27 过、0 失败、1 子入口忽略；外壳 release 编译通过。
 
-G0-R 与全部探针逐项命令、结果将在整套结束后由 `out/a45-validation/suite-results.json` 补入。已过：main 全长 1800 帧、候选两遍 1800/1800 相同、快照重放、就绪索引、流式生产及 group（全幅编码 p50 242 ms，门槛 300 ms）、预览 page-preload、视频节奏、取帧竞态三实例合计 108000 次且 stale/wrongPixel 都为 0。普通预览兜底仅「跳转:舞台记下了逐拍分级」失败，待按规则在子分支定位。像素比较启动器误写脚本文件名，尚未实际比较，待用正确命令补齐。
+G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.json` 保留。已过：main 全长 1800 帧、候选两遍 1800/1800 相同、快照重放、就绪索引、流式生产及 group（全幅编码 p50 242 ms，门槛 300 ms）、预览 page-preload、视频节奏、取帧竞态三实例合计 108000 次且 stale/wrongPixel 都为 0。普通预览兜底仅「跳转:舞台记下了逐拍分级」失败，按规则在各子分支独立目录与实例上逐个定位。像素比较启动器误写脚本文件名，现已补齐，结果见下文。
 
 首套 45 个命令已执行完：40 个退出 0，M7 退出 3 仅 W7 真跨机待复核；另有上述像素比较命令错误、普通预览回退、C10 界面、换档三项失败。M7 最慢锚点段 24028 ms，低于本机 30000 ms 门槛。真实跨机沿用第 14 轮已有证据，本轮没有重跑，按主计划 6.4 节列为 PC 窗口项，不混称退出 0。导航 200 次通过；两种存储布局各 30 轮、60 次推送，均零失败。C10 点击前下载数为 2：默认下载目录存在 9 月 28 日的两份测试 JSON，保留原文件，改用各次独立目录复跑原断言。换档失败包括采样空档与素材原尺寸到齐后的切换超时，待逐分支定位。
 
@@ -1040,7 +1040,7 @@ G0-R 与全部探针逐项命令、结果将在整套结束后由 `out/a45-valid
 
 正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，已把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1，待重试。该测试构建不构成正式发布通过。
 
-NSIS 工具缓存已核对能报告 v3.11。测试构建重试 Rust release 编译退出 0（2.96 s），正在压缩安装包；有一条 `__TAURI_BUNDLE_TYPE` 标记缺失警告，保留日志。源码没有 updater 插件，本轮仍用已有的自有补丁安装器；最终以构建退出码和现场安装验收判断测试包。部署前只读检查：主站与两个舞台源 `/editor/` 均 200，主站 `/hosted/healthz` 200，托管服务 online、重启计数 21。托管清单只变 `vite-plugin-media.ts` 的旧无头实例队列判断；托管组合实际调用的素材函数未变，只需换静态编辑器页。
+NSIS 工具缓存已核对能报告 v3.11。`cd desktop && npx tauri build` 测试构建重试退出 0，Rust release 编译 2.96 s，其后完成安装包压缩。测试包 PromptCut-0.7.14-a45-retest-setup.exe 为 432441826 字节，SHA-256 `3E68F7EEA5EBEF4DD51FA3751D00F156F8B6CA23B45FDCF224DAF09775E6C177`；已用真实安装向导完成本机重装，安装的 promptcut.exe 与目标 Rust 产物 SHA-256 相同（`902AF6463A1DE85F864248B1D8DF7664C1EC22DE6D7AC8ED2286424E25315358`）。有一条 `__TAURI_BUNDLE_TYPE` 标记缺失警告，保留日志；源码没有 updater 插件，本轮仍用已有的自有补丁安装器。这个测试包不构成正式 release 命令通过。部署前只读检查：主站与两个舞台源 `/editor/` 均 200，主站 `/hosted/healthz` 200，托管服务 online、重启计数 21。托管清单只变 `vite-plugin-media.ts` 的旧无头实例队列判断；托管组合实际调用的素材函数未变，只需换静态编辑器页。
 
 main 尚未写；release 在 fec9130b，条件不齐不推进。/editor 尚未部署。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。其它项目仍执行中。
 
