@@ -4,22 +4,6 @@
  */
 const SEEK_LEAD = 0.002;
 
-/** 帧时长读不到时,判「呈现的是不是目标那一帧」用的宽窗(秒):容得下 4 fps 以上的素材 */
-const LOOSE_WINDOW = 0.25;
-/** 只有宽窗认可、严窗(按帧时长)不认可的呈现,等这么久(ms)仍没有严窗认可的呈现就照宽窗收下,不卡死 */
-const LOOSE_ACCEPT_MS = 1000;
-
-/** 视频元素当前帧的时长(秒);读不到(没有 WebCodecs、帧没有时长)给 null。素材帧率不变时每帧一样。 */
-function frameSpan(v: HTMLVideoElement): number | null {
-  if (typeof VideoFrame === "undefined") return null;
-  try {
-    const frame = new VideoFrame(v);
-    const length = frame.duration;
-    frame.close();
-    return length ? length / 1e6 : null;
-  } catch { return null; }
-}
-
 /**
  * 这一帧的素材(视频 seek / 图片加载)。
  *
@@ -64,14 +48,13 @@ export function installFrameMedia(): void {
           return;
         }
         const v = el as HTMLVideoElement;
-        let sought = false, finished = false, presented = false, frameRequest = 0, looseTimer = 0;
+        let sought = false, finished = false, presented = false, frameRequest = 0;
         let target: number | null = null;
         const events = ["loadedmetadata", "loadeddata", "seeked", "canplay", "error"];
         const finish = (error?: Error) => {
           if (finished) return;
           finished = true;
           clearTimeout(timer);
-          clearTimeout(looseTimer);
           v.cancelVideoFrameCallback?.(frameRequest);
           events.forEach((e) => v.removeEventListener(e, check));
           error ? reject(error) : resolve();
@@ -100,29 +83,17 @@ export function installFrameMedia(): void {
         // the callback runs: the sought frame can be presented before `seeked`
         // (observed: mediaTime 12.095 for target 12.1 while readyState was 1),
         // and a paused video presents nothing afterwards. The frame covering the
-        // target starts at or just before it, less than one frame duration before
-        // (read from the current VideoFrame). A wider window let a stale frame through:
-        // a reloaded element first presents frame 0, which passed for any target under
-        // 0.25 s even when `seeked` fired before the sought frame reached the
-        // compositor. Without a readable duration the old 0.25 s window (sources down
-        // to 4 fps) still applies; a presentation only the wide window admits is taken
-        // after LOOSE_ACCEPT_MS so odd durations (a video track shorter than the clip)
-        // cannot stall the export.
+        // target starts at or just before it; 0.25 s admits sources down to 4 fps.
         const rejected: string[] = [];
         const onPresented: VideoFrameRequestCallback = (_now, meta) => {
           if (finished) return;
           // A frame may be presented before check() has seen metadata.
           const want = target ?? Math.max(0, Number(v.dataset.pcMediaTime)) + SEEK_LEAD;
-          const before = want - meta.mediaTime;
-          const span = frameSpan(v);
-          const strict = meta.mediaTime <= want + SEEK_LEAD && before < (span ?? LOOSE_WINDOW) + 0.000002;
-          if (strict) { clearTimeout(looseTimer); presented = true; check(); return; }
-          rejected.push(`${meta.mediaTime.toFixed(3)}@rs${v.readyState}${v.seeking ? "S" : ""}`);
-          if (meta.mediaTime <= want + SEEK_LEAD && before < LOOSE_WINDOW) {
-            clearTimeout(looseTimer);
-            looseTimer = window.setTimeout(() => { if (!finished) { presented = true; check(); } }, LOOSE_ACCEPT_MS);
+          if (meta.mediaTime <= want + SEEK_LEAD && want - meta.mediaTime < 0.25) { presented = true; check(); }
+          else {
+            rejected.push(`${meta.mediaTime.toFixed(3)}@rs${v.readyState}${v.seeking ? "S" : ""}`);
+            frameRequest = v.requestVideoFrameCallback(onPresented);
           }
-          frameRequest = v.requestVideoFrameCallback(onPresented);
         };
         frameRequest = v.requestVideoFrameCallback(onPresented);
         const timer = setTimeout(() => {
