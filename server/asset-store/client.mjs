@@ -12,6 +12,9 @@
  * - `has`：`chunks` 的 `complete`。
  * - `putFile`（C6.6）：同 `put`，但从磁盘文件逐片读，不整件进内存；每片发出前可 `await` 一个闸（`beforeChunk`）。
  * - `chunks`：原样回 `chunks` 的对账结果。
+ * - `complete` 回 400 `incomplete`（`put` / `putFile`）：等一会儿（100 ms、200 ms）重问 `chunks`，已 `complete` 就算成；
+ *   否则补传 `received` 里缺的片、再 `complete`，至多补 2 轮，仍不齐照 4xx 抛。为的是两路同时推同一内容时，
+ *   老的素材服务会把另一路已答过「收到」的片撤掉（claude/push-incomplete）；新的素材服务不再这样，这一步只是兜底。
  * - 超时：每个请求（含读完回包）各自计时，缺省 30 s（`timeoutMs`），到点用 AbortController 中止；
  *   超时算网络错误，照常重试，重试用完抛出的错误带 `code: 'timeout'`（契约第 10 节第 5 条）。
  * - 重试：网络错误、超时和 5xx 重试，最多 `retries` 次，间隔 200 ms、400 ms、800 ms（再往后继续翻倍）。
@@ -30,6 +33,9 @@ const HASH = /^[0-9a-f]{64}$/;
 const EXT = /^[a-z0-9]{1,8}$/;
 /** setTimeout 能表示的最长时限；超过它（含 Infinity）就当不限时，否则 Node 会把它当 1 ms 立刻触发 */
 const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** `complete` 回 400 `incomplete` 之后至多补传几轮 */
+export const INCOMPLETE_RESYNC_ROUNDS = 2;
 
 const sha256Hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -183,6 +189,26 @@ export function createAssetClient({
     };
   }
 
+  /**
+   * `POST <ns>/<hash>/complete`；回 400 `incomplete` 时重问 `chunks`、经 `resend(have)` 补传缺的片再收尾（见文件头）。
+   * @param {string} ns
+   * @param {string} hash
+   * @param {(have: Set<number>) => Promise<void>} resend
+   */
+  async function completeWithResync(ns, hash, resend) {
+    const rel = `${ns}/${hash}/complete`;
+    for (let round = 0; ; round++) {
+      const r = await request('POST', rel);
+      if (r.status >= 200 && r.status < 300) return;
+      const incomplete = r.status === 400 && r.body && typeof r.body === 'object' && r.body.error === 'incomplete';
+      if (!incomplete || round >= INCOMPLETE_RESYNC_ROUNDS) throw httpError(`POST ${rel}`, r.status, r.body);
+      await sleep(100 * 2 ** round);
+      const st = await chunkState(ns, hash);
+      if (st.complete) return;
+      await resend(new Set(st.received));
+    }
+  }
+
   return {
     base: root,
 
@@ -210,18 +236,18 @@ export function createAssetClient({
 
       const cs = st.chunkSize;
       const count = Math.max(1, Math.ceil(size / cs));
-      const have = new Set(st.received);
       const headers = { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(size) };
       if (extName) headers['X-Media-Ext'] = extName;
-      for (let n = 0; n < count; n++) {
-        if (have.has(n)) continue;
-        const rel = `${ns}/${hash}/${n}`;
-        const part = buf.subarray(n * cs, Math.min(size, (n + 1) * cs));
-        ensureOk(`PUT ${rel}`, await request('PUT', rel, { headers, body: part }));
-      }
-
-      const rel = `${ns}/${hash}/complete`;
-      ensureOk(`POST ${rel}`, await request('POST', rel));
+      const sendMissing = async (have) => {
+        for (let n = 0; n < count; n++) {
+          if (have.has(n)) continue;
+          const rel = `${ns}/${hash}/${n}`;
+          const part = buf.subarray(n * cs, Math.min(size, (n + 1) * cs));
+          ensureOk(`PUT ${rel}`, await request('PUT', rel, { headers, body: part }));
+        }
+      };
+      await sendMissing(new Set(st.received));
+      await completeWithResync(ns, hash, sendMissing);
       return { hash, size, uploaded: true };
     },
 
@@ -259,12 +285,11 @@ export function createAssetClient({
       }
       const cs = st.chunkSize;
       const count = Math.max(1, Math.ceil(size / cs));
-      const have = new Set(st.received);
       const headers = { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(size) };
       if (extName) headers['X-Media-Ext'] = extName;
       const sent = [];
       const fh = await open(filePath, 'r');
-      try {
+      const sendMissing = async (have) => {
         for (let n = 0; n < count; n++) {
           if (have.has(n)) continue;
           const start = n * cs;
@@ -285,11 +310,13 @@ export function createAssetClient({
           }
           sent.push(n);
         }
+      };
+      try {
+        await sendMissing(new Set(st.received));
+        await completeWithResync(ns, key, sendMissing);
       } finally {
         await fh.close();
       }
-      const rel = `${ns}/${key}/complete`;
-      ensureOk(`POST ${rel}`, await request('POST', rel));
       return { hash: key, size, uploaded: true, sent };
     },
 
