@@ -124,6 +124,10 @@ function listPayloadFiles(dir = APP_DIR, base = "") {
   const out = [];
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (base === "" && RUNTIME_STATE.has(ent.name)) continue;
+    // `.git`(worktree 里是指针文件,普通检出里是目录)任何层、任何形态都不进补丁。
+    // prepare-runtime 已经不拷它了;这里再挡一道,是因为 runtime/app 可能是旧版本留下的,
+    // 而 make-patch 可以 --skip-runtime 直接吃现成的 runtime/app。
+    if (ent.name === ".git") continue;
     // 文件级黑名单在**每一层**都查:.env.local 之类不是只会出现在根上
     if (!ent.isDirectory() && RUNTIME_STATE_FILES.some((re) => re.test(ent.name))) continue;
     const rel = base ? `${base}/${ent.name}` : ent.name;

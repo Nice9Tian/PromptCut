@@ -12,7 +12,7 @@ import fs from "fs";
 import path from "path";
 import { execSync, spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIR = path.resolve(__dirname, "..");
@@ -63,7 +63,7 @@ function mkdirp(d) {
   fs.mkdirSync(d, { recursive: true });
 }
 
-function copyRecursive(src, dest, filter) {
+export function copyRecursive(src, dest, filter) {
   mkdirp(dest);
   for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, ent.name);
@@ -141,6 +141,20 @@ const SKIP_DIRS = new Set([
   "work",             // Local agent reviews, fixtures and acceptance evidence.
   "__pycache__",
 ]);
+/**
+ * 不论是目录还是**文件**都按名字跳过的名字。
+ *
+ * `.git` 必须在这里:它在普通检出里是目录,但在 git worktree(`build-release --from-head`
+ * 开的 desktop/.cache/release-src 就是一棵)和子模块里是一个 `gitdir: …` 指针**文件**。
+ * 只对目录生效的 SKIP_DIRS 拦不住它,这个指向打包机路径的文件就进了 runtime/app、
+ * 补丁清单和安装包(0.7.13 的 manifest 里第一个键就是 ".git")。
+ *
+ * SKIP_DIRS 里其它名字没有同样处理:它们(node_modules、out、dist、target、release、work、
+ * exports、desktop 等)都是普通英文词,只在「目录」形态下才是构建产物/本机状态;
+ * 同名的**源码文件**理应拷贝,不能按名字一刀切。`git ls-files` 里也没有任何一个同名文件。
+ * 往这里加名字之前先想清楚这一点。
+ */
+const SKIP_ANY_KIND = new Set([".git"]);
 const SKIP_FILE_PATTERNS = [
   /^\.env($|\.)/,      // .env / .env.local / .env.production —— 里面是密钥
   // wrangler 读本地密钥就用这个固定文件名,里面正是 ADMIN_KEY / FEISHU_WEBHOOK / SUBMIT_TOKEN。
@@ -285,7 +299,8 @@ function writeRuntimeEnv(appDir, viteEnv) {
   console.log(`  写入 runtime .env.local:${keys.join(", ")}`);
 }
 
-function shouldCopyApp(name, fullPath, isDir) {
+export function shouldCopyApp(name, fullPath, isDir) {
+  if (SKIP_ANY_KIND.has(name)) return false;
   if (isDir && SKIP_DIRS.has(name)) return false;
   if (!isDir) {
     for (const re of SKIP_FILE_PATTERNS) {
@@ -764,4 +779,7 @@ function main() {
   })}`);
 }
 
-main();
+// 只有被当脚本直接执行时才跑;被单测 import 时(desktop/test/prepare-runtime-filter.test.mjs)不动手
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main();
+}
