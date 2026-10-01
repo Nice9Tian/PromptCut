@@ -1030,11 +1030,17 @@
 
 G0-R 与全部探针逐项命令、结果将在整套结束后由 `out/a45-validation/suite-results.json` 补入。已过：main 全长 1800 帧、候选两遍 1800/1800 相同、快照重放、就绪索引、流式生产及 group（全幅编码 p50 242 ms，门槛 300 ms）、预览 page-preload、视频节奏、取帧竞态三实例合计 108000 次且 stale/wrongPixel 都为 0。普通预览兜底仅「跳转:舞台记下了逐拍分级」失败，待按规则在子分支定位。像素比较启动器误写脚本文件名，尚未实际比较，待用正确命令补齐。
 
+首套 45 个命令已执行完：40 个退出 0，M7 退出 3 仅 W7 真跨机待复核；另有上述像素比较命令错误、普通预览回退、C10 界面、换档三项失败。M7 最慢锚点段 24028 ms，低于本机 30000 ms 门槛。真实跨机沿用第 14 轮已有证据，本轮没有重跑，按主计划 6.4 节列为 PC 窗口项，不混称退出 0。导航 200 次通过；两种存储布局各 30 轮、60 次推送，均零失败。C10 点击前下载数为 2：默认下载目录存在 9 月 28 日的两份测试 JSON，保留原文件，改用各次独立目录复跑原断言。换档失败包括采样空档与素材原尺寸到齐后的切换超时，待逐分支定位。
+
+像素对比已补齐。先发现命令行 main 导出默认 4 个进程、`verify-determinism` 用单进程，保留旧产物后从同一份 main `f119a66d` 重新以 `--workers 1 --fps 30 --no-video` 导出全长到 `a45-baseline-single-30`（189.0 s、1800 帧）。`node scripts/probes/export-baseline-compare.mjs compare --baseline <main worktree>/out/a45-baseline-single-30/frames --candidate out/verify-a/frames` 退出 0，1800/1800 逐字节相同、零不同、零缺失，没有改像素基线。两边 `snapshotCode` 均为 `00a5264bf8a062ff6e0b5ed0516cccd1`，`captureCode` 均为 `86e443cb6fa838aef64788af6822fd68`。
+
 验证启动器第一次把 Windows Path 属性大小写写错，导致测试子进程找不到 PowerShell/taskkill。结束本启动器进程树、修正环境传递后全量通过；失败日志保留为 g0-test-harness-path-failure.log，未当代码缺陷处理。导出日志的 1440 是第一个分片，汇总为 1800；重新读取汇总已纠正口径。
 
 ### 15.5 发版、部署、未跑与〔裁〕（执行中）
 
 正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，已把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1，待重试。该测试构建不构成正式发布通过。
+
+NSIS 工具缓存已核对能报告 v3.11。测试构建重试 Rust release 编译退出 0（2.96 s），正在压缩安装包；有一条 `__TAURI_BUNDLE_TYPE` 标记缺失警告，保留日志。源码没有 updater 插件，本轮仍用已有的自有补丁安装器；最终以构建退出码和现场安装验收判断测试包。部署前只读检查：主站与两个舞台源 `/editor/` 均 200，主站 `/hosted/healthz` 200，托管服务 online、重启计数 21。托管清单只变 `vite-plugin-media.ts` 的旧无头实例队列判断；托管组合实际调用的素材函数未变，只需换静态编辑器页。
 
 main 尚未写；release 在 fec9130b，条件不齐不推进。/editor 尚未部署。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。其它项目仍执行中。
 
