@@ -9,7 +9,7 @@
 - 根因已查明，在 Chrome 里。seek 完成后，新解出的帧要送两个地方：一路进视频元素的帧槽（`createImageBitmap(video)` 读的就是它），另一路通知主线程发 `seeked`。两路走不同的线程。机器忙时主线程可能先收到 `seeked`，这时当场取帧，拿到的还是 seek 之前那一帧。
 - 修法：图卡取帧在 `seeked` 之后，再用 `new VideoFrame(video)` 读帧槽里那一帧的 `timestamp` 和 `duration`，核对它覆盖了 `currentTime` 才取；没覆盖就隔 1 ms 再看。核对只读时间戳，不等合成器回调，所以不会和 beginFrame 控制的导出器互相等住。
 - 时间轴视频片段那条路（`src/render/frameMedia.ts`）有同类的漏洞，一并收紧了。
-- 量化结果：最小复现探针在改前每两万次 seek 左右错一帧（312 000 次错 22 次），改后 396 000 次 0 错；其间核对当场拦下帧槽未换好 21 次，都等到了新帧。整套导出探针在满载下改前 20 遍挂 1 遍，改后 20 遍 0 挂。G0-R 全过，像素基线不变，导出不变慢。
+- 量化结果：最小复现探针在改前每两万次 seek 左右错一帧（312 000 次错 22 次），改后 396 000 次 0 错；其间核对当场拦下帧槽未换好 21 次，都等到了新帧。整套导出探针在满载下改前 20 遍挂 1 遍，改后 20 遍 0 挂。G0-R 在恢复后的末端重跑全过，像素基线不变，导出不变慢。中途有一次报告提交误把两个源文件还原成旧版，已恢复，受影响的验证已重做，见「验证」。
 
 ## 尺子
 
@@ -93,39 +93,66 @@ seeked 和 fixed 是交替跑的，负载条件相同。按改前的错帧率，
 - `scripts/probes/video-source-cadence-probe.mjs`：没改，判定没有放宽。
 - `docs/semantics/mechanism/cards.md`：「图卡的视频输入源取帧」一节加一句，标〔裁〕，见下。
 - `docs/reports/AGENT-cadence-race.md`：本报告。
+- 提交 `6d0e6aaf`：恢复被 `9da8e62a` 误覆盖的两个源文件，见「验证」第一节。
 
 ## 验证
+
+### 事故：报告提交误把两个源文件还原成旧版（已恢复）
+
+- 提交 `9da8e62a`（10:08:33，报告提交）把 `src/render/cards/mediaSource.ts`、`src/render/frameMedia.ts` 一起还原成了 `a76640d0` 的版本（两文件 +16 −113）。
+- 经过：那时我正在跑一个改前改后耗时对照的脚本，它用 `git checkout a76640d0 -- <两文件>` 换成旧代码。这个命令不只改工作区，也改暂存区。我提交报告时只 `git add` 了报告，但暂存区里已经留着那两个旧文件，于是一并进了提交。随后脚本的「恢复」一步 `git checkout HEAD -- <两文件>` 恢复到的是这个已被还原的 HEAD，worktree 从此也是旧代码。
+- 处理：`6d0e6aaf` 把两文件恢复成 `c4f1a017` 的版本，`git diff c4f1a017 -- src/` 为空。
+- 以后的做法：改前改后对照一律在另一个 worktree 里跑旧代码，不再检出到本 worktree。这次重做用的是 `.worktrees/rel-0711`，即 `d20b6aad`，两个源文件与 `a76640d0` 逐字相同。
+
+### 各项验证跑的是哪份代码
+
+修复代码在 `cee1968b`（09:14:31）进入分支，最终版在 `c4f1a017`（09:16:12）。代码在 09:16～10:08 之间是修复版；10:08:33～10:30 之间是旧版；`6d0e6aaf`（10:30）之后又是修复版，且与 `c4f1a017` 逐字相同。
+
+判断依据：dev server 按工作区的源文件现场编译，所以每一项跑的是当时工作区里的代码。时间取自提交时间、日志文件的修改时间、命令前后打印的时刻。
+
+| 项 | 时间 | 跑的代码 | 是否作数 |
+|---|---|---|---|
+| 尺子二 fixed，早期版本（180 000 次） | `cee1968b` 提交前后（约 09:00～09:14） | 修复版早期写法（工作区里的代码，即 `cee1968b` 那一版，还没有「暂停后恢复」那一改） | 作数，属早期版本 |
+| 尺子一 改后，20 遍 16 负载 | 约 09:17～09:32:51 | 修复版 | 作数 |
+| 尺子二 fixed / seeked 交替三轮（fixed 216 000 次） | 约 09:33～09:45 | 修复版 | 作数 |
+| 节奏探针空闲 5 遍（第一次） | 约 09:45 | 修复版 | 作数 |
+| exportMs 改前改后交替两轮 | 约 09:46～09:49 | 改前用 `git checkout a76640d0 -- 两文件`，改后用 `git checkout HEAD -- 两文件`，当时 HEAD 是 `e42bf329`，即修复版 | 作数。但正是这种做法后来闯了祸，已弃用 |
+| `npm test` | 09:49～09:50:49 | 修复版 | 作数 |
+| G0-R 第一次（端口 6200） | 09:51～10:06:44 | 按时间推断是修复版，但没有不依赖推断的证据 | 不再引用，已在末端重跑 |
+| determinism 改前改后对照（552 s / 544 s） | 10:07～10:26 | **两遍都是旧代码** | **作废**，已重做 |
+
+### 在恢复后的末端（`6d0e6aaf`）重跑
 
 | 项 | 命令 | 结果 |
 |---|---|---|
 | 类型检查 | `npx tsc -b --force` | 退出 0，0 错误 |
 | 本模块单测 | `node --test src/render/cards/mediaSource.test.mjs` | 9/9 过 |
-| 全量测试 | `npm test` | 退出 1：4227 个，过 4221，挂 4，跳过 2。挂的 4 个都在 `server/test/codex-desktop.test.mjs`，与本改动无关，见下 |
-| 尺子二 改后 | `video-seek-race-probe.mjs --mode fixed …`（见上表） | 396 000 次 seek 0 错 |
-| 尺子一 改后 | `video-source-cadence-stress.mjs --port 6210 --runs 20 --hogs 16` | 退出 0，20/20 过（改前 19/20） |
-| 节奏探针空闲单跑 5 遍 | `video-source-cadence-stress.mjs --runs 5 --hogs 0` | 5/5 过，exportMs 13572 / 13031 / 13079 / 14654 / 12949 |
-| G0-R | `g0r.sh …cadence-race 6200 <scratchpad>/g0r-cadence …main-g0r/out/verify-a/frames` | 全部退出 0，明细见下 |
+| 节奏探针空闲 5 遍 | `video-source-cadence-stress.mjs --port 6210 --runs 5 --hogs 0` | 5/5 过，exportMs 12856 / 12927 / 12709 / 13998 / 12832 |
+| 尺子二 fixed，三实例并行一轮 | `video-seek-race-probe.mjs --mode fixed --busy --settle 0 --loops 300`，端口 6211（`--hogs 16`）、6212、6213 | 3 × 36 000 次 seek，stale 0、wrongPixel 0；`coversCheck` 都是 true；`settleWaits` 2 / 0 / 3，即核对拦下帧槽未换好 5 次 |
+| G0-R 全套 | `g0r.sh …cadence-race 6200 <scratchpad>/g0r-cadence2 …main-g0r/out/verify-a/frames`，10:41:55～10:56:05；开跑前和跑完后都确认 `currentFrameCovers` 在源文件里出现 4 处 | 全部退出 0，明细见下 |
+| determinism 改前改后对照 | 改前：`.worktrees/rel-0711`（`d20b6aad`，`currentFrameCovers` 0 处），端口 6210，10:56:26～11:05:37。改后：`cadence-race`（`6d0e6aaf`，4 处），端口 6213，11:05:40～11:14:54。两个 worktree 的源文件都没动，跑完 `git status` 都是干净的 | 改前 547 s，改后 550 s，两次都是 1800/1800 一致 |
 
-G0-R 各项：
+G0-R（末端重跑）各项：
 
-- determinism：Identical 1800 / Different 0，用时 566 s。
+- determinism：Identical 1800 / Different 0，用时 549 s。
 - pixels：与基准逐像素比，total 1800、identical 1800、different 0、missing 0、extra 0。像素基线不变。
 - unified：PASS。
 - stream：PASS。stream-group：PASS。
 - fallback：PASS。fallback-preload：PASS。
 - ready-index：fails []。
 
-`codex-desktop.test.mjs` 的 4 个失败：用例 mock 了 `spawn`，断言参数是 `['app-server','--stdio']`，而本机解析出的 codex 是 npm 全局目录里的 `codex.js`，参数前面多了一个脚本路径。本分支相对 main 没有改 `server/` 下任何文件（`git diff a76640d0 --stat` 只有上面列的 7 个文件），单跑这个文件同样 0/4。主会话 r11-merge 整套验证（scratchpad `r11v/summary.txt`）里的全量 `npm test` 是过的，推测是那之后本机的 codex 安装方式变了。建议主会话在 main 上复核；这不在本任务范围内，我没有动它。
+### 其它（修复版上跑过的，见上表时间）
+
+- 尺子二改后合计 396 000 次 seek 0 错。末端重跑的 108 000 次另计，也是 0 错。
+- 尺子一改后 20/20 过，改前 19/20。
+- `npm test`（09:50，修复版）：退出 1，4227 个，过 4221，挂 4，跳过 2。挂的 4 个都在 `server/test/codex-desktop.test.mjs`：用例 mock 了 `spawn`，断言参数是 `['app-server','--stdio']`，而本机解析出的 codex 是 npm 全局目录里的 `codex.js`，参数前面多了一个脚本路径。本分支没有改 `server/`。主会话说明由另一个分支修，这里照实记下。
 
 ### 导出耗时
 
-节奏探针 `exportMs`，空闲，同一台机器上改前改后交替各跑 3 遍、共两轮。改前做法是临时把两个源文件检出到 `a76640d0`，跑完立刻恢复：
-
-- 改前：13485、13755、12975、14147、13294、13402，均值约 13 510 ms。
-- 改后：13438、12667、12630、13496、13318、12751，均值约 13 050 ms。
-- 改后没有变慢，差别在噪声以内。
-
-G0-R determinism 一步（两遍导出 1800 帧，再逐帧比对）：本次 566 s。参照：之前 `g0r-cand` 那次是 520 s（9-30，代码更早、机器负载不同）。G0-R 跑完后，又在端口 6210 上自起 dev server，用同一个 `verify-determinism.mjs` 做了一次改前改后对照（改前临时检出两个源文件，跑完恢复）：改前 552 s，改后 544 s，两次都是 1800/1800 一致。修法没有拖慢导出。
+- 节奏探针 `exportMs`，空闲：
+  - 改前改后交替两轮（09:46～09:49，见上表）：改前 13485、13755、12975、14147、13294、13402，均值约 13 510 ms；改后 13438、12667、12630、13496、13318、12751，均值约 13 050 ms。
+  - 末端重跑 5 遍，均值约 13 060 ms。
+- G0-R determinism 一步：末端重跑 549 s。改前改后对照（分 worktree 跑）：改前 547 s，改后 550 s。差 3 s，约 0.5%，在噪声以内，修法没有拖慢导出。
 
 ## 语义改动与〔裁〕
 
