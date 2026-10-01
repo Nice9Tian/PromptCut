@@ -978,7 +978,7 @@
 ### 14.8 待用户项
 
 1. **装 0.7.13 补丁**：PC 上 `C:\Users\admin\Documents\PromptCut\desktop\release\PromptCut-patch-0.7.13.exe`（13 455 096 字节，SHA-256 `F1E4C3C9…E1D5AD`）；0.7.3～0.7.12 的补丁都不用装。**装上后的第一次运行会清缓存**：帧库约 282 GB，启动约 2 分钟后按 50 GB 上限清掉约 230 GB 最久没用的预渲染缓存（需要时重新预渲染，不可撤销）；想留更多，装完先在开始页「存储」把上限调大。
-2. **实测 A4 + A5（测试构建，装不装由你）**：PC 上 `C:UsersadminDocumentsPromptCutdesktopeleasePromptCut-0.7.14-setup.exe`（433 679 525 字节，SHA-256 `26397283…59AC32C`）。它已含 0.7.13 的全部修复，装它就不用另装 0.7.13 补丁；装上后的第一次运行同样会清缓存（同上）。装上后按 tray 报告第 7 节的 8 步清单实测：关窗不退出、收起时页面侧工具照常（含 5 分钟后再调一次）、托盘与悬浮窗唤回、悬浮窗拖动、右键关闭才退出（promptcut.exe、node.exe、ffmpeg.exe 都不在）、SKILL、多显示器、补丁经 `--quit` 干净退出；另在 PromptCut 里点「登记到 Claude Code / Codex」各开一个会话连过来，看 AI 栏有没有对应分组。另外「文件 → 退出」菜单项留不留由你定。
+2. **实测 A4 + A5（测试构建，装不装由你）**：PC 上 `C:\Users\admin\Documents\PromptCut\desktop\release\PromptCut-0.7.14-setup.exe`（433 679 525 字节，SHA-256 `26397283…59AC32C`）。它已含 0.7.13 的全部修复，装它就不用另装 0.7.13 补丁；装上后的第一次运行同样会清缓存（同上）。装上后按 tray 报告第 7 节的 8 步清单实测：关窗不退出、收起时页面侧工具照常（含 5 分钟后再调一次）、托盘与悬浮窗唤回、悬浮窗拖动、右键关闭才退出（promptcut.exe、node.exe、ffmpeg.exe 都不在）、SKILL、多显示器、补丁经 `--quit` 干净退出；另在 PromptCut 里点「登记到 Claude Code / Codex」各开一个会话连过来，看 AI 栏有没有对应分组。另外「文件 → 退出」菜单项留不留由你定。
 3. 第 9 轮的打包保存真机验收（装上后重新「打包保存…」，包里应有 9 份素材）。
 4. 要你定的：前几轮列的待定事项（同第 13 轮）。
 
