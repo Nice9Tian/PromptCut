@@ -1011,17 +1011,17 @@
 
 ### 15.3 R1～R8 现场验收
 
-本轮截图与脚本在集成 worktree 的 `desktop/.cache/a45-install/`；截图、MCP 输出、进程表和命令结果已直接贴进对话。R4/R7/R8 下列执行中项在结束前补齐。
+本轮截图与脚本在集成 worktree 的 `desktop/.cache/a45-install/`；截图、MCP 输出、进程表和命令结果已直接贴进对话。
 
 | 项 | 结论（当前） | 实测与证据文件 |
 |---|---|---|
 | R1 | 过 | Codex 原生登记 MCP 读项目并 split_clip，rev 7→8；AI 栏出现 Codex 分组，悬浮窗有「上一步：切开卡片」与画面；抓到「Codex 正在 see_frames」；展开超过 60 s 仍保持 SKILL；传统式收起显示后台运行，桌面 Claude get_project 回 skillClosed、无项目改动。r1-ai-top.png、r1-collapsed.png、r1-working-c-60.png、r1-open-60-start.png / end.png、r1-traditional-collapsed.png、r1-failed-group.png |
 | R2 | 过 | 实际 Windows 右键托盘菜单成功，打开后回原位置、前台，输入框接受打字；r2-tray-menu.png、r2-open-result.png、r2-type.png |
 | R3 | 过 | 托盘和悬浮窗两种右键关闭均使应用及 sidecar 进程为 0；本会话的 stdio MCP 客户端单列、结束后重测，不当成 sidecar。再开主窗仍为 (240,54)、2422×1453，状态文件记的是屏上坐标；r3-tray-clean-menu.png / quit.png、r3-overlay-menu.png / quit.png、r3-reopen-position.png |
-| R4 | 初测没过，修复后复测执行中 | 退出 1.35 s 后进程 0、不走强杀，文件旁仍有 64 字节锁；r4-collapsed.png、quit-test.log、r4-reopen.png。修复与专项证据见 15.1、15.2 |
+| R4 | 过（保留初测失败） | 初测进程归零但 64 字节锁残留。修复后的实际安装版打开 A，A 锁 64 字节；展开 Rect=240,54 2422x1453；收起后镜像 0.39 s 发 --quit、1.35 s wait=0、3.48 s final=0、fallback=False，完整进程表安装目录名下为 0，A/B 正文保留、锁消失，重开 Rect 相同。r4-final-open-a.png、r4-final-overlay.png、r4-final-quit-test.log、r4-final-reopen.png。最后一轮输入桌面在 Screen-saver，使用真实 WebView 截图与原生 PrintWindow，未伪造桌面图 |
 | R5 | 待用户 | 真补丁的 PC 基准清单不可达。PC 上从本轮最终 main 出 `cd desktop && npm run release -- --from-head --patch-only`，将真实补丁拷到笔记本后补测 0.2.7 的退出/装补丁/重开，以及允许的先降装 0.7.13（外壳 0.2.6）同补丁强杀兜底，再装回本轮版本。没有动 PC 的用户安装，也没用镜像冒充真补丁 |
 | R6 | 待用户在 PC 验 | 副屏放在主屏左边，收起后两屏上都不应出现主窗任何一部分；重点核对主窗虽仍 visible，计算出的屏外坐标是否确在所有屏幕之外。单屏不等于通过 |
-| R7 | 草稿锁过；拓展包 payload 与真补丁待补 | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 由 make-extension.mjs 放入独立拓展包，NSIS 从临时插件目录执行，完整安装的目录里没有它是正常行为。需按实际拓展包 payload 复验，源文件解析不冒充随包验证；真补丁待 R5 到齐 |
+| R7 | 草稿锁与实际拓展包 BOM 过；真补丁待用户 | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 是独立拓展包的临时执行脚本。实际 `node desktop/scripts/make-extension.mjs stt --keep-stage` 退出 0（19.5 s），NSIS 收集 payload 中脚本 BOM=True、PowerShell 5.1.26100.9444 ParseFile=0；script SHA-256 A644898DAEF50829B9ED4664C86D827D1104DFAC16F09E113D51F854A1EADCAD。未安装可选能力，不把源解析冒充随包结果；补丁中的 apply-patch.ps1 与真安装仍待 R5 |
 | R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
 
 ### 15.4 集成整套验证（执行中）
@@ -1108,6 +1108,8 @@ G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.j
 
 另发现 Windows PowerShell 5.1 函数只输出一个 PSCustomObject 时为标量，Count=null。专用 `claude/ps1-process-count` 修正真实补丁关闭段四处计数，避免仅剩一个时跳过退出或误报干净；真实关闭代码段在隔离假进程/时钟中执行四种情形全过。类型检查 0、全量 4224 / 4223 / 0 / 1（81.9 s）、桌面脚本 35/35、源三份随包 PowerShell ParseFile 各 0 错且 BOM 均有；c4d4ed8d 合流。两项都不改渲染，子分支不重复 G0-R，集成合流后补跑 G0、桌面脚本及换档。
 
+合流后集成 G0 复验：代码 17f515c2，之后仅报告、计划更正、R4 证据。类型检查 0、10.3 s；全量测试 4224 / 4223 / 0 / 1、82.2 s；桌面脚本 35/35、1.3 s。日志 `out/a45-validation/branch-results.json`。换档复验仍在原门槛下串行。
+
 ### 15.5 发版、部署、未跑与〔裁〕（执行中）
 
 正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，已把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1，待重试。该测试构建不构成正式发布通过。
@@ -1115,6 +1117,8 @@ G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.j
 NSIS 工具缓存已核对能报告 v3.11。`cd desktop && npx tauri build` 测试构建重试退出 0，Rust release 编译 2.96 s，其后完成安装包压缩。测试包 PromptCut-0.7.14-a45-retest-setup.exe 为 432441826 字节，SHA-256 `3E68F7EEA5EBEF4DD51FA3751D00F156F8B6CA23B45FDCF224DAF09775E6C177`；已用真实安装向导完成本机重装，安装的 promptcut.exe 与目标 Rust 产物 SHA-256 相同（`902AF6463A1DE85F864248B1D8DF7664C1EC22DE6D7AC8ED2286424E25315358`）。有一条 `__TAURI_BUNDLE_TYPE` 标记缺失警告，保留日志；源码没有 updater 插件，本轮仍用已有的自有补丁安装器。这个测试包不构成正式 release 命令通过。部署前只读检查：主站与两个舞台源 `/editor/` 均 200，主站 `/hosted/healthz` 200，托管服务 online、重启计数 21。托管清单只变 `vite-plugin-media.ts` 的旧无头实例队列判断；托管组合实际调用的素材函数未变，只需换静态编辑器页。
 
 main 尚未写；release 在 fec9130b，条件不齐不推进。/editor 尚未部署。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。其它项目仍执行中。
+
+R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1.0.0.exe`，83991737 字节，SHA-256 `4A8099784FC60FADB95C9B124D914B002293359FF4E8C96A1EF22EAB3ABAB582`。保留的 `.cache/ext-stage/PromptCut-ext-stt-1.0.0/` 为成功 NSIS `File /r` 收入的真实 payload；本轮只做随包编码核验，没有安装或发布该可选能力。
 
 本轮暂未新增〔裁〕：退出清锁只修实现；菜单保留来自用户明确决定；草稿锁政策依用户决定维持。未把出包守门删掉或把真补丁要求降成镜像。
 
