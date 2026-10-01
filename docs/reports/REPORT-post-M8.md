@@ -985,3 +985,61 @@
 ### 14.9 顾问调用记录
 
 本轮没有调 codex 或 Gemini。子 Agent：Sonnet 一个（release-no-git，选法表「日常」，返工两次：加固「是否直接执行」、加 Cargo 行尾规则）。PC 辅助节点三项窗口项（PC-0713-1、PC-W7-1、PC-A45-1）。
+
+## 第 15 轮：Codex 接手 A4 + A5 真机验收与正式发布（2026-10-02，笔记本主会话，执行中）
+
+任务书是 `docs/plan/a45-acceptance-test-plan.md`（d391883f）；用户本轮补充指示取代其中「只测、不改代码、不合入、不出包」的旧范围。本轮授权包括写 main、出完整安装包、部署 /editor；PC 的用户安装不动，真补丁和多屏仍待用户。所有带耗时门槛的项在笔记本串行跑，取帧竞态按规定三实例并行。
+
+### 15.1 已执行与用户决定
+
+- main 起点 f119a66d；release 起点 fec9130b（应用 0.7.13 / 外壳 0.2.6）。集成分支同步 main 后依次 `--no-ff` 合入 ps1-bom、draft-lock、release-no-git。ps1-bom 的两处修改/删除冲突保持 A4 已删除的旧 Claude 桌面驱动及其测试，编码修复保留在现存脚本上。
+- R4 镜像退出脚本实际测到草稿锁残留，修复在独立 worktree/分支 `claude/r4-lock-cleanup`：Windows 持锁句柄关闭时由内核删除旁路文件，正常退出和强杀都不用等 Node 清理回调。见 `AGENT-r4-lock-cleanup.md` 卡点 1 第 1 行；只修实现，没有语义变更。已合流。Cargo 下子测试全名不同造成的夹具失败也已修复。
+- 用户已定：「文件 → 退出」保留，已同步 `docs/semantics/user-workflow.md`；回首页维持持锁。维持持锁会让其它实例在这个窗口回到首页后仍不能打开 A，直到切换草稿/新建/退出；若改成回首页放锁，其它实例能立刻接手 A，但返回 A 时要重新抢锁，也可能因为别人已经打开而被拒。本轮不改，政策复核列入待用户项。
+- R6 的 x=-2678 是单屏现场坐标。实际代码按 `available_monitors` 中最左屏位置减去窗口宽度和 256 像素计算，没有写死该值；Rust「副屏在主屏左边」测试通过。仍不能替代 PC 双屏实测，不宣称 R6 已过。
+- 正式命令因缺 VITE_DIAG_* 本地发布配置退出 1。解法表见 `AGENT-a45-build-config.md`；继续独立项，不把缺配置的测试构建当正式包。版本号沿用本轮已提交的应用 0.7.14 / 外壳 0.2.7，正式产物必须重新从正式 HEAD 出。
+
+### 15.2 子分支验证
+
+均由本主会话执行，依赖向上解析，没有创建 node_modules junction。ffmpeg 路径按本机 docs/local.md 就位；日志在对应 worktree 的 out/a45-validation/。令牌与密钥值未输出。
+
+| 分支 | 命令 | 结果 |
+|---|---|---|
+| ps1-bom 1398e237 | `npx tsc -b --force`；`npm test`；`node --test desktop/test/*.test.mjs`；`node --test server/test/claude-desktop.test.mjs`；Windows PowerShell 5.1 ParseFile 三份随包 .ps1；`node --check scripts/probes/m8-outbound-probe.mjs` | 0；4245 / 4243 / 0 / 2；19/19；16/16；三份各 0 解析错误；0 |
+| draft-lock c47f2abf | tsc 同上；`npm test`；`node --experimental-test-module-mocks --test src/editor/io/draftLock.test.mjs` | 0；4251 / 4249 / 0 / 2；7/7 |
+| release-no-git 913f223e | 审查实际 diff；`node --test desktop/test/prepare-runtime-filter.test.mjs`；集成分支全量 | 5/5；完整基线结果见下一节 |
+| r4-lock-cleanup 2e8c68c3 / d87821a9 | tsc 同上；`npm test`；直接编译 proc_lock.rs 和带 mod proc_lock 的 Rust 测试 harness | 0；4217 / 4216 / 0 / 1；修复前 3 项失败、修复后 3 项过，另 1 个忽略子入口；夹具修正后再次全量同样全过 |
+
+### 15.3 R1～R8 现场验收
+
+本轮截图与脚本在集成 worktree 的 `desktop/.cache/a45-install/`；截图、MCP 输出、进程表和命令结果已直接贴进对话。R4/R7/R8 下列执行中项在结束前补齐。
+
+| 项 | 结论（当前） | 实测与证据文件 |
+|---|---|---|
+| R1 | 过 | Codex 原生登记 MCP 读项目并 split_clip，rev 7→8；AI 栏出现 Codex 分组，悬浮窗有「上一步：切开卡片」与画面；抓到「Codex 正在 see_frames」；展开超过 60 s 仍保持 SKILL；传统式收起显示后台运行，桌面 Claude get_project 回 skillClosed、无项目改动。r1-ai-top.png、r1-collapsed.png、r1-working-c-60.png、r1-open-60-start.png / end.png、r1-traditional-collapsed.png、r1-failed-group.png |
+| R2 | 过 | 实际 Windows 右键托盘菜单成功，打开后回原位置、前台，输入框接受打字；r2-tray-menu.png、r2-open-result.png、r2-type.png |
+| R3 | 过 | 托盘和悬浮窗两种右键关闭均使应用及 sidecar 进程为 0；本会话的 stdio MCP 客户端单列、结束后重测，不当成 sidecar。再开主窗仍为 (240,54)、2422×1453，状态文件记的是屏上坐标；r3-tray-clean-menu.png / quit.png、r3-overlay-menu.png / quit.png、r3-reopen-position.png |
+| R4 | 初测没过，修复后复测执行中 | 退出 1.35 s 后进程 0、不走强杀，文件旁仍有 64 字节锁；r4-collapsed.png、quit-test.log、r4-reopen.png。修复与专项证据见 15.1、15.2 |
+| R5 | 待用户 | 真补丁的 PC 基准清单不可达。PC 上从本轮最终 main 出 `cd desktop && npm run release -- --from-head --patch-only`，将真实补丁拷到笔记本后补测 0.2.7 的退出/装补丁/重开，以及允许的先降装 0.7.13（外壳 0.2.6）同补丁强杀兜底，再装回本轮版本。没有动 PC 的用户安装，也没用镜像冒充真补丁 |
+| R6 | 待用户在 PC 验 | 副屏放在主屏左边，收起后两屏上都不应出现主窗任何一部分；重点核对主窗虽仍 visible，计算出的屏外坐标是否确在所有屏幕之外。单屏不等于通过 |
+| R7 | 执行中 | 子分支 7/7 与三份 PowerShell 解析已过；新测试安装的「新建→首页→开 A」「A→首页→开 B」锁文件现场复测待补 |
+| R8 | 执行中 | 最后撤销 Claude Code 和 Codex 两边登记，对 PromptCut 条目恢复备份作结构比较；Codex 配置作整文件字节比较。最后退出 SKILL、留测试草稿 A，检查进程 |
+
+### 15.4 集成整套验证（执行中）
+
+`claude/a45-merge` 代码验证起点 47bb49fb 合流后的内容；其后变更只有用户决定的纯文档和 Rust 子测试夹具。G0：`npx tsc -b --force` 0；`npm test` 4224 / 4223 / 0 / 1（80.13 s）；桌面脚本 31/31。较 main 少的测试随 A4 删除旧被测路径，沿用第 14 轮已说明的原因，没有删现行路径测试。Rust MSVC `cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml` 27 过、0 失败、1 子入口忽略；外壳 release 编译通过。
+
+G0-R 与全部探针逐项命令、结果将在整套结束后由 `out/a45-validation/suite-results.json` 补入。已过：main 全长 1800 帧、候选两遍 1800/1800 相同、快照重放、就绪索引、流式生产及 group（全幅编码 p50 242 ms，门槛 300 ms）、预览 page-preload、视频节奏、取帧竞态三实例合计 108000 次且 stale/wrongPixel 都为 0。普通预览兜底仅「跳转:舞台记下了逐拍分级」失败，待按规则在子分支定位。像素比较启动器误写脚本文件名，尚未实际比较，待用正确命令补齐。
+
+验证启动器第一次把 Windows Path 属性大小写写错，导致测试子进程找不到 PowerShell/taskkill。结束本启动器进程树、修正环境传递后全量通过；失败日志保留为 g0-test-harness-path-failure.log，未当代码缺陷处理。导出日志的 1440 是第一个分片，汇总为 1800；重新读取汇总已纠正口径。
+
+### 15.5 发版、部署、未跑与〔裁〕（执行中）
+
+正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，已把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1，待重试。该测试构建不构成正式发布通过。
+
+main 尚未写；release 在 fec9130b，条件不齐不推进。/editor 尚未部署。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。其它项目仍执行中。
+
+本轮暂未新增〔裁〕：退出清锁只修实现；菜单保留来自用户明确决定；草稿锁政策依用户决定维持。未把出包守门删掉或把真补丁要求降成镜像。
+
+### 15.6 顾问调用记录
+
+没有调用顾问或子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；所有工作由 Codex 主会话完成，任务未派给 PC，也未向任何外部会话发消息。
