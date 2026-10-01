@@ -54,3 +54,21 @@
 单测新增第 5 条(合计 21 条):win32 上把脚本路径整条改大写再把盘符改回小写后直接 `node <该路径> --check`,断言输出出现 `PromptCut prepare-runtime (--check)`(main 起来了,不要求退出 0);并直接断言 `isDirectRun` 对原路径与大小写变体为 true、对 `make-patch.mjs` 与空参数为 false。手动确认过变体路径确实和真实路径不同(`d:\VECTORMPEG7\...\DESKTOP\SCRIPTS\PREPARE-RUNTIME.mjs`),且 main 照跑(报 Sidecar not found,笔记本无运行时,预期)。目录联接 / 符号链接那种情形没有单测(建联接需要权限且清理有风险),靠 realpath 逻辑保证。
 
 复验:`npx tsc -b --force` 退出码 0;`npm test` 4244 条、通过 4242、失败 0、跳过 2;`cd desktop && node --test test/*.test.mjs` 21 条全过。
+
+## 追加:Cargo.toml / Cargo.lock 的行尾(.gitattributes)
+
+现象:PC 出 0.7.14 完整安装包后,主工作区 `desktop/src-tauri/Cargo.toml` 显示被改,`git diff --ignore-cr-at-eol` 为 0 行,只是 CRLF 变 LF。原因:入库是 LF、`core.autocrlf=true` 检出成 CRLF(原 `.gitattributes` 只有 `* text=auto`),tauri CLI 按 tauri.conf.json 同步依赖特性时、cargo 更新 Cargo.lock 时都按 LF 写回。
+
+改动:`.gitattributes` 末尾追加(文件本身是 CRLF 检出,新增行沿用)
+```
+desktop/src-tauri/Cargo.toml text eol=lf
+desktop/src-tauri/Cargo.lock text eol=lf
+```
+并带一行注释,其它规则没动。提交里只有 `.gitattributes` 的 4 行新增(含空行与注释),入库内容没变。
+
+验证(都在本 worktree):
+1. `git check-attr text eol`:两个文件 `text: set`、`eol: lf`,其它文件不变。删掉两个文件后 `git checkout --` 重新检出:`git ls-files --eol` 显示 `i/lf w/lf attr/text eol=lf`;提交后 `git status --porcelain` 为空。
+2. 用 node 把 Cargo.toml、Cargo.lock 读出再原样(LF)写回:`git status --porcelain` 仍为空。
+3. `npx tsc -b --force` 退出码 0;`npm test` 4244 条、通过 4242、失败 0、跳过 2;`cd desktop && node --test test/*.test.mjs` 21 条全过。
+
+主会话/PC 注意:这条规则只在文件下次被检出时才改变工作区行尾。PC 主工作区若现在 Cargo.toml 还是 CRLF,合入 main 后需要重新检出一次(`git checkout -- desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock`,或 `git add --renormalize` 无需,内容本来就是 LF),之后出包就不会再显示 M。
