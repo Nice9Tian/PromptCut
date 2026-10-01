@@ -1021,7 +1021,7 @@
 | R4 | 初测没过，修复后复测执行中 | 退出 1.35 s 后进程 0、不走强杀，文件旁仍有 64 字节锁；r4-collapsed.png、quit-test.log、r4-reopen.png。修复与专项证据见 15.1、15.2 |
 | R5 | 待用户 | 真补丁的 PC 基准清单不可达。PC 上从本轮最终 main 出 `cd desktop && npm run release -- --from-head --patch-only`，将真实补丁拷到笔记本后补测 0.2.7 的退出/装补丁/重开，以及允许的先降装 0.7.13（外壳 0.2.6）同补丁强杀兜底，再装回本轮版本。没有动 PC 的用户安装，也没用镜像冒充真补丁 |
 | R6 | 待用户在 PC 验 | 副屏放在主屏左边，收起后两屏上都不应出现主窗任何一部分；重点核对主窗虽仍 visible，计算出的屏外坐标是否确在所有屏幕之外。单屏不等于通过 |
-| R7 | 草稿锁过；随包脚本与真补丁待补 | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。本次测试安装包来自缺发布配置而中断的 runtime 组装，安装目录未找到 apply-extension.ps1，不能用源文件解析冒充随包复验；完整正式包与 R5 真补丁到齐后补验 |
+| R7 | 草稿锁过；拓展包 payload 与真补丁待补 | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 由 make-extension.mjs 放入独立拓展包，NSIS 从临时插件目录执行，完整安装的目录里没有它是正常行为。需按实际拓展包 payload 复验，源文件解析不冒充随包验证；真补丁待 R5 到齐 |
 | R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
 
 ### 15.4 集成整套验证（执行中）
