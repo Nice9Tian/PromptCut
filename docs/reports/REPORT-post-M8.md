@@ -1108,7 +1108,7 @@ G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.j
 
 另发现 Windows PowerShell 5.1 函数只输出一个 PSCustomObject 时为标量，Count=null。专用 `claude/ps1-process-count` 修正真实补丁关闭段四处计数，避免仅剩一个时跳过退出或误报干净；真实关闭代码段在隔离假进程/时钟中执行四种情形全过。类型检查 0、全量 4224 / 4223 / 0 / 1（81.9 s）、桌面脚本 35/35、源三份随包 PowerShell ParseFile 各 0 错且 BOM 均有；c4d4ed8d 合流。两项都不改渲染，子分支不重复 G0-R，集成合流后补跑 G0、桌面脚本及换档。
 
-合流后集成 G0 复验：代码 17f515c2，之后仅报告、计划更正、R4 证据。类型检查 0、10.3 s；全量测试 4224 / 4223 / 0 / 1、82.2 s；桌面脚本 35/35、1.3 s。日志 `out/a45-validation/branch-results.json`。换档复验仍在原门槛下串行。
+合流后集成 G0 复验：代码 17f515c2，之后仅报告、计划更正、R4 证据。类型检查 0、10.3 s；全量测试 4224 / 4223 / 0 / 1、82.2 s；桌面脚本 35/35、1.3 s。日志 `out/a45-validation/branch-results.json`。集成换档复验同一命令退出 0、70.7 s、fails=[]；T5a 黑帧 0、1940 ms；T5b 换槽后黑帧 0、4099 ms、帧误差 -0.39；T5c 慢原尺寸源黑帧 0、16359 ms；T5e 重载后黑帧 0、2120 ms。门槛与产品代码均未改，结果在 `out/a45-validation/tier-fix-first/`。
 
 ### 15.5 发版、部署、未跑与〔裁〕（执行中）
 
