@@ -73,7 +73,6 @@ const STARTS_PROCESS = /vite\.js|viteBin\(|startDevServer\(|hosted\/main|hosted'
 
 /** 产品入口:要的就是用户的目录,不摘 */
 const PRODUCT_ENTRIES = new Map([
-  ['scripts/headless.mjs', '编辑器的 Skill 拉起的无头实例,跟随宿主的目录'],
   ['scripts/render-host.mjs', '独立渲染主机,按 --data 显式设 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR'],
   ['scripts/lib/user-dirs.mjs', '本身'],
   ['scripts/lib/no-user-dirs.mjs', '本身'],

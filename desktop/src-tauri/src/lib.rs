@@ -15,6 +15,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 
 mod agent_webview;
+mod background;
 mod chrome_color;
 mod chrome_path;
 mod kill_on_close;
@@ -38,6 +39,33 @@ const STAGE_PORTS: [u16; 2] = [EDITOR_PORT + 1, EDITOR_PORT + 2];
 fn proc_arg<I: Iterator<Item = String>>(args: I) -> Option<String> {
     args.filter(|a| a.to_lowercase().ends_with(".proc"))
         .find(|a| std::path::Path::new(a).is_file())
+}
+
+/// 启动参数里的 `--quit`:让已经在跑的那一份干净退出(更新补丁 apply-patch.ps1 用)。
+/// 第一个参数是 exe 自己,不算。
+const QUIT_ARG: &str = "--quit";
+
+/// 第二次启动交给已在跑的实例做什么。
+#[derive(Debug, PartialEq, Eq)]
+enum SecondLaunch {
+    /// 带 `--quit`:走和托盘「关闭」同一条退出路径
+    Quit,
+    /// 其它:唤回编辑界面,带着 .proc 的话顺带打开
+    Open(Option<String>),
+}
+
+/// 解析第二次启动的参数(不含 exe 本身)。`--quit` 优先:更新补丁要的是关掉,不是打开文件。
+fn second_launch<I: Iterator<Item = String>>(args: I) -> SecondLaunch {
+    let args: Vec<String> = args.collect();
+    if has_quit_arg(args.iter().cloned()) {
+        SecondLaunch::Quit
+    } else {
+        SecondLaunch::Open(proc_arg(args.into_iter()))
+    }
+}
+
+fn has_quit_arg<I: Iterator<Item = String>>(mut args: I) -> bool {
+    args.any(|a| a.eq_ignore_ascii_case(QUIT_ARG))
 }
 
 /// 最小的百分号编码:除了字母数字和 -_.~ 全部转义,前端 URLSearchParams 解得开。
@@ -113,9 +141,10 @@ fn desktop_titlebar_command(handle: tauri::AppHandle, command: String) {
             }
         }
         "about" => show_about(&handle, &runtime_dir),
+        // 标题栏菜单的「退出」和托盘、悬浮窗右键的「关闭」走同一条路(background.rs):
+        // 收起状态下先把主窗挪回原位再退,sidecar 清理与锁释放在 RunEvent 里做
         "quit" => {
-            kill_sidecar_tree(&handle);
-            handle.exit(0);
+            background::dispatch(&handle, background::UiEvent::QuitRequested);
         }
         _ => {}
     }
@@ -248,25 +277,33 @@ pub fn run() {
     // -- Plugins ----------------------------------------------------------
     let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // Second instance: bring the existing window to front.
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-            // 第二次启动多半是双击了一个 .proc:交给已经开着的窗口去开
-            // (前端收到 pc-open-file 后走「复制一份再读」那条路)
-            if let Some(p) = proc_arg(args.into_iter().skip(1)) {
-                let _ = app.emit("pc-open-file", p);
+            match second_launch(args.into_iter().skip(1)) {
+                // `promptcut.exe --quit`(更新补丁):和托盘「关闭」同一条路 —— 收起状态下先把
+                // 主窗挪回原位再退,sidecar 清理与 .proc 锁释放在 RunEvent 里做
+                SecondLaunch::Quit => {
+                    background::dispatch(app, background::UiEvent::QuitRequested);
+                }
+                SecondLaunch::Open(proc) => {
+                    // 第二次启动 = 打开编辑界面(收起在后台的话挪回来)
+                    background::dispatch(app, background::UiEvent::OpenRequested);
+                    // 多半是双击了一个 .proc:交给已经开着的窗口去开
+                    // (前端收到 pc-open-file 后走「复制一份再读」那条路)
+                    if let Some(p) = proc {
+                        let _ = app.emit("pc-open-file", p);
+                    }
+                }
             }
         }))
         // 窗口边框不交给 window-state 记:旧版本存下的 "decorated": true 会在启动时
         // 把系统标题栏装回来,和皮肤标题栏叠成两条。边框只由建窗口时的 decorations(false) 决定。
+        // 「可见」也不记:后台运行退出前会先把主窗藏起来再挪回原位(background.rs 的 exit),
+        // 记下「不可见」的话下次启动主窗就出不来了。主窗启动时总是显示。
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
                     tauri_plugin_window_state::StateFlags::all()
-                        & !tauri_plugin_window_state::StateFlags::DECORATIONS,
+                        & !tauri_plugin_window_state::StateFlags::DECORATIONS
+                        & !tauri_plugin_window_state::StateFlags::VISIBLE,
                 )
                 .build(),
         )
@@ -276,6 +313,8 @@ pub fn run() {
     // -- Setup ------------------------------------------------------------
     builder
         .manage(proc_lock::ProcLocks::new())
+        // 后台运行的状态机(编辑界面开着 / 收起 / 正在退出),见 background.rs
+        .manage(background::Background::new())
         // agent 浏览器的调试端口启动时就定下来:主窗口和子 webview 的启动参数都要带它
         .manage(agent_webview::AgentBrowser::new(agent_webview::pick_port()))
         .invoke_handler(tauri::generate_handler![
@@ -290,6 +329,11 @@ pub fn run() {
             chrome_color::menu_bar_color
         ])
         .setup(|app| {
+            // 带 `--quit` 却走到了这里,说明没有别的实例在跑(有的话单实例插件已经把参数交过去、
+            // 本进程早退了)。要退出的东西不在,也就不该反过来起一份新的。
+            if has_quit_arg(env::args().skip(1)) {
+                std::process::exit(0);
+            }
             let handle = app.handle().clone();
 
             // 双击 .proc 启动时,把路径挂在编辑器地址上带给前端
@@ -412,19 +456,22 @@ pub fn run() {
                 eprintln!("[promptcut] agent webview 没建起来: {e}");
             }
 
-            // ── SKILL 模式:主窗收起来变成右上角的悬浮图标 ─────────────
-            // 盯住状态文件(Node 那边写)。返回的开关给下面的关窗拦截用 —— 关窗时再去
-            // 读一次文件太慢,而且那一刻要立刻决定拦不拦。
-            let skill_active = skill_shell::spawn_watcher(handle.clone());
-            let skill_flag = skill_active.clone();
-            let skill_handle = handle.clone();
+            // ── 后台运行:托盘图标、悬浮窗、关窗不退出(background.rs、skill_shell.rs) ──
+            // 托盘或悬浮窗右键菜单的点击都从 app 级的菜单事件进来
+            background::install_menu_handler(&handle);
+            // 托盘建不出来只记日志:还有悬浮窗能叫回编辑界面、右键关闭
+            if let Err(e) = background::install_tray(&handle) {
+                eprintln!("[promptcut] 托盘图标没建起来: {e}");
+            }
+            // 盯 SKILL 状态文件(变成 SKILL 时收起编辑界面),收起时给悬浮窗推进度
+            skill_shell::spawn_watcher(handle.clone());
+            let close_handle = handle.clone();
             win.on_window_event(move |event| {
-                // SKILL 模式下点关闭不是退出,是缩回悬浮图标 —— 无头实例还在干活,
-                // 这时候真退出会把整条链路(sidecar、agent 的连接)一起带走。
+                // 点关闭不是退出,是收起编辑界面转入后台 —— 页面、sidecar、Agent 的连接都还在跑。
+                // 只有托盘或悬浮窗右键「关闭」(以及标题栏菜单「退出」)才真退出。
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    if skill_shell::is_active(&skill_flag) {
+                    if background::on_close_requested(&close_handle) {
                         api.prevent_close();
-                        skill_shell::back_to_overlay(&skill_handle);
                     }
                 }
             });
@@ -692,4 +739,45 @@ fn show_about(handle: &tauri::AppHandle, runtime_dir: &PathBuf) {
         .set_description(&text)
         .set_level(rfd::MessageLevel::Info)
         .show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> std::vec::IntoIter<String> {
+        v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn quit_arg_wins() {
+        assert_eq!(second_launch(args(&["--quit"])), SecondLaunch::Quit);
+        assert_eq!(second_launch(args(&["--QUIT"])), SecondLaunch::Quit);
+        // 同时带着 .proc 也是退出:更新补丁要的是关掉
+        assert_eq!(second_launch(args(&[r"C:\x\a.proc", "--quit"])), SecondLaunch::Quit);
+    }
+
+    #[test]
+    fn plain_second_launch_opens() {
+        assert_eq!(second_launch(args(&[])), SecondLaunch::Open(None));
+        // 不存在的 .proc 不算(proc_arg 只认真实文件);像 --quit 却不是的参数也不算
+        assert_eq!(second_launch(args(&[r"Z:\nope\a.proc", "--quitx", "quit"])), SecondLaunch::Open(None));
+    }
+
+    #[test]
+    fn existing_proc_is_passed_through() {
+        let dir = std::env::temp_dir().join(format!("pc-second-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.proc");
+        std::fs::write(&f, "{}").unwrap();
+        let p = f.to_string_lossy().to_string();
+        assert_eq!(second_launch(args(&[&p])), SecondLaunch::Open(Some(p.clone())));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn has_quit_arg_ignores_exe_position_by_caller() {
+        assert!(!has_quit_arg(args(&["promptcut.exe"]).skip(1)));
+        assert!(has_quit_arg(args(&["promptcut.exe", "--quit"]).skip(1)));
+    }
 }

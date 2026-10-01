@@ -2,9 +2,8 @@ import { useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useAgentTabs } from "../../ai/agentTabs";
 import { getChatStore } from "../../ai/liveChat";
 import type { ChatMessage } from "../../ai/types";
-import { useLayoutMode } from "../layoutMode";
 import { useRailCollapsed } from "../sideRails";
-import { agentItem, effectiveActive, sideOf, sideVisible } from "./railLayout";
+import { agentItem, effectiveActive, sideOf } from "./railLayout";
 import { useRailLayout } from "./railStore";
 
 /**
@@ -67,7 +66,6 @@ function lastAssistant(tabId: string): ChatMessage | undefined {
 export function AgentAttentionTracker(): null {
   const { tabs } = useAgentTabs();
   const layout = useRailLayout();
-  const mode = useLayoutMode();
   const leftCollapsed = useRailCollapsed("left");
   const rightCollapsed = useRailCollapsed("right");
   const wasBusy = useRef(new Map<string, boolean>());
@@ -77,9 +75,9 @@ export function AgentAttentionTracker(): null {
     const viewing = (tabId: string) => {
       const item = agentItem(tabId);
       const side = sideOf(layout, item);
-      if (!side || !sideVisible(layout, side, mode)) return false;
+      if (!side) return false;
       if (side === "left" ? leftCollapsed : rightCollapsed) return false;
-      return effectiveActive(layout, side, mode) === item;
+      return effectiveActive(layout, side) === item;
     };
 
     for (const t of tabs) {

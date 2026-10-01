@@ -19,7 +19,7 @@
  *   - `npm test`：`server/test/global-setup.mjs` 在测试运行器主进程里摘一次，各测试文件的子进程都继承摘过的环境；
  *   - 守门：`server/test/no-user-dirs.test.mjs`。
  *
- * 产品入口（`scripts/headless.mjs` 由编辑器的 Skill 拉起、`scripts/render-host.mjs` 自己按 `--data` 显式设、
+ * 产品入口（`scripts/render-host.mjs` 自己按 `--data` 显式设、
  * `scripts/prune-prerender-cache.mjs` 本来就是清用户帧库的维护工具）不用它：它们要的就是用户的目录。
  *
  * 同一个入口顺带设 `PROMPTCUT_NO_PORT_FILE=1`（`markNoPortFile`）：编辑器一起来就把端口写进公共的

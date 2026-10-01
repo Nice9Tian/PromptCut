@@ -21,6 +21,8 @@
 //!   * Node 那边 `open(lock,'r+')` 拿到 EBUSY 就知道有人持有,而且这个信号来自内核,
 //!     不需要判活、不会误判;
 //!   * 实测持有期间别的进程连**删都删不掉**,想偷锁都偷不走。
+//!   * 持有句柄带 DELETE_ON_CLOSE:正常退出或被终止时,内核删除自己的旁路文件。
+//!     外壳退出会强制结束 sidecar,不能依赖 Node 的 exit 回调做这一步。
 //!
 //! # SKILL 模式下不加锁
 //!
@@ -62,6 +64,10 @@ fn open_exclusive(path: &Path) -> std::io::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        // GENERIC_READ | GENERIC_WRITE | DELETE。最后一个独占句柄关闭时由内核删掉
+        // 旁路文件,无需在 drop 之后按路径删除(那样可能撞上下一位持有者)。
+        .access_mode(0xc0010000)
+        .custom_flags(0x04000000) // FILE_FLAG_DELETE_ON_CLOSE
         // 0 = 谁都别想再打开这个文件,读写删全挡。这就是「独占」的全部实现,
         // 不需要 LockFileEx,也不需要任何第三方 crate。
         .share_mode(0)
@@ -92,7 +98,7 @@ pub fn acquire(locks: &ProcLocks, proc_path: &str) -> Result<(), String> {
     }
 }
 
-/// 放锁。句柄 drop 掉,内核那一刻就把文件放开了。
+/// 放锁。句柄 drop 掉,内核同时放锁并删除本进程持有的旁路文件。
 pub fn release(locks: &ProcLocks, proc_path: &str) {
     if let Ok(mut held) = locks.0.lock() {
         held.remove(&PathBuf::from(proc_path));
@@ -139,5 +145,79 @@ pub fn is_locked_by_other(locks: &ProcLocks, proc_path: &str) -> bool {
     match probe_exclusive(&lock_path(&target)) {
         None => false,
         Some(r) => r.is_err(),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn project_path(label: &str) -> PathBuf {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        std::env::temp_dir().join(format!("promptcut-lock-{label}-{}-{stamp}.proc", std::process::id()))
+    }
+
+    #[test]
+    fn r4_release_removes_only_owned_sidecar() {
+        let p = project_path("release");
+        std::fs::write(&p, b"project must survive").unwrap();
+        let locks = ProcLocks::new();
+        acquire(&locks, p.to_str().unwrap()).unwrap();
+        assert!(lock_path(&p).exists());
+        assert!(is_locked_by_other(&ProcLocks::new(), p.to_str().unwrap()));
+        assert!(std::fs::read(lock_path(&p)).is_err(), "held file remains exclusive");
+        release(&locks, p.to_str().unwrap());
+        let remains = lock_path(&p).exists();
+        assert_eq!(std::fs::read(&p).unwrap(), b"project must survive");
+        std::fs::remove_file(&p).unwrap();
+        if remains { std::fs::remove_file(lock_path(&p)).unwrap(); }
+        assert!(!remains, "R4: release must remove the sidecar lock");
+    }
+
+    #[test]
+    fn r4_release_all_removes_both_locks_and_allows_reacquire() {
+        let a = project_path("all-a");
+        let b = project_path("all-b");
+        let locks = ProcLocks::new();
+        for p in [&a, &b] { acquire(&locks, p.to_str().unwrap()).unwrap(); }
+        release_all(&locks);
+        let remains = [lock_path(&a),lock_path(&b)].iter().filter(|p| p.exists()).count();
+        for p in [&a,&b] { if lock_path(p).exists() { std::fs::remove_file(lock_path(p)).unwrap(); } }
+        assert_eq!(remains,0,"R4: exit must remove every owned sidecar lock");
+        acquire(&locks,a.to_str().unwrap()).unwrap();
+        release_all(&locks);
+        assert!(!lock_path(&a).exists());
+    }
+
+    #[test]
+    #[ignore]
+    fn r4_child_holds_lock() {
+        let Ok(p) = std::env::var("PROMPTCUT_LOCK_TEST_CHILD") else { return; };
+        let locks=ProcLocks::new();
+        acquire(&locks,&p).unwrap();
+        println!("LOCK_READY");
+        std::io::stdout().flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn r4_killed_holder_removes_lock_without_node_cleanup() {
+        let p=project_path("killed");
+        let mut child=Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored","r4_child_holds_lock","--nocapture"])
+            .env("PROMPTCUT_LOCK_TEST_CHILD",&p)
+            .stdout(Stdio::piped()).spawn().unwrap();
+        let ready=BufReader::new(child.stdout.take().unwrap()).lines()
+            .any(|s| s.unwrap().contains("LOCK_READY"));
+        assert!(ready);
+        assert!(is_locked_by_other(&ProcLocks::new(),p.to_str().unwrap()));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let remains=lock_path(&p).exists();
+        if remains { std::fs::remove_file(lock_path(&p)).unwrap(); }
+        assert!(!remains,"R4: kernel must clean up after holder termination");
     }
 }

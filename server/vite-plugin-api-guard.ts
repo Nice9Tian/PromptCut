@@ -17,7 +17,8 @@ import { originOk, jsonContentType, apiPath, isAssetServicePath, fromLocalClient
  * apiKey 就沿用旧的 —— 用户真实的 Key 原样留着,下一次对话连着 Key 一起打到攻击者服务器。
  * 攻击者全程不需要读到任何响应。同类的还有任意文件读(`/api/chats/attach/import`、
  * `/api/skill/open-path`)、任意写(`/api/media/upload/`)、强制弹资源管理器
- * (`/api/ai/diagnostics/save`)、递归删目录(`/api/skill/jobs/<id>/delete`)。
+ * (`/api/ai/diagnostics/save`)、递归删目录(当时 Skill 任务目录的删除接口,已归档)、改用户级 MCP 配置
+ * (`/api/skill/desktop-register`)。
  * (注:上一行的路径别写成星号通配 —— 那会在块注释里造出一个 `*` 加 `/`,把注释提前闭合。)
  *
  * # 为什么放在一个中间件里,而不是每个 handler 开头加一句

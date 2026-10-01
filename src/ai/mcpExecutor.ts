@@ -5,6 +5,7 @@ import { tools as RAW_TOOL_SPECS } from "../../server/mcp-tools.mjs";
 import { webOpen, webView, webClick, webType, webScroll, webRead, webHandoff, webClose } from "./web";
 import { requestAgentBrowser, closeAgentBrowser } from "./agentBrowserStore";
 import * as agentBus from "./agentBus";
+import { applyDesktopSessions } from "./desktopSessions";
 import { TOOL_ROUTES } from "../mcp/routes.mjs";
 import { getState } from "../store/project";
 import { prerenderUrl } from "../render/prerender";
@@ -255,33 +256,26 @@ async function getGif(args: { clipId: string }) {
   };
 }
 
-function isHeadlessPage(): boolean {
-  try { return new URLSearchParams(location.search).has("headless"); } catch { return false; }
-}
-
 /** 同一时刻只渲染一张:agent 连着改十张卡,预览跟着渲染十次没意义,只留最后那次 */
 let lastActionBusy = false;
 let lastActionPending: (() => Promise<void>) | null = null;
 
 /**
- * SKILL 模式的悬浮窗下面显示「agent 上一步做成的动作」的画面。
+ * SKILL 模式的悬浮窗下面显示「桌面 APP 会话上一步做成的动作」的画面。
  *
- * 只在无头实例的页面里做(它才是被 agent 操控的那份):动作成功后按 see_frames 那条路
- * 把那一刻的整屏渲染成 png,POST 给自己的服务端写到 skillRoot/last-action.{png,json},
- * 壳的 watcher 盯着那两个文件,变了就推给悬浮窗。全程失败静默 —— 预览是锦上添花,
- * 不能反过来影响工具调用。
+ * 编辑器进程在桌面会话做成一次操作、SKILL 模式开着时经 SSE 发 `skill.preview`(server/vite-plugin-ai.ts 的
+ * requestSkillPreview);这里只对时间轴操作照做:按 see_frames 那条路把那一刻的整屏渲染成 png,POST 给服务端写到
+ * skillRoot/last-action.{png,json},壳的 watcher 盯着那两个文件,变了就推给悬浮窗。全程失败静默 —— 预览是锦上添花,
+ * 不能反过来影响工具调用。(原来由无头实例的页面做,A4 归档无头实例之后由用户这份页面做。)
  */
-function reportLastAction(api: EditorApi, tool: string, args: any, result: any): void {
-  if (!isHeadlessPage() || !TIMELINE_TOOLS.has(tool)) return;
+function reportLastAction(api: EditorApi, tool: string, clipId: string | null, start: number | null): void {
+  if (!TIMELINE_TOOLS.has(tool)) return;
   const run = async () => {
-    // 时间点:优先这次动作涉及的那张卡的中点(add/update 的返回里有 clip 或 timeline),
-    // 都没有就让服务端用当前播放头。
+    // 时间点:优先这次动作涉及的那张卡的中点,都没有就让服务端用当前播放头
     let t: number | undefined;
-    const clipId: string | undefined = result?.clip?.id ?? args?.clipId ?? result?.clipId;
-    const clip = result?.clip
-      ?? (clipId ? (result?.timeline as any[] | undefined)?.flatMap((tr: any) => tr?.clips ?? [])?.find((c: any) => c?.id === clipId) : undefined);
+    const clip = clipId ? getState().project.tracks.flatMap((tr) => tr.clips).find((c) => c.id === clipId) : undefined;
     if (clip && typeof clip.start === "number" && typeof clip.end === "number") t = (clip.start + clip.end) / 2;
-    else if (typeof args?.start === "number") t = args.start + 0.5;
+    else if (typeof start === "number") t = start + 0.5;
     const shot = await api.seePreview(t == null ? {} : { t });
     const base64 = shot?.__image?.base64;
     if (!base64) return;
@@ -334,24 +328,13 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
   let active = true;
 
   /*
-   * 三个 URL 参数决定这个页面和 MCP 桥的关系:
-   *
-   *   ?view=<钥匙>   只读浏览。页面照常渲染项目,但**不连桥**。Skill 任务会把一条带这把
-   *                  钥匙的完整链接交给 agent(instance.json 的 viewUrl),它照常打开就行 ——
-   *                  不用记「要加什么后缀」。没有这把钥匙的话,连页面都打不开
-   *                  (server/vite-plugin-view-gate.ts 那道)。
-   *   ?observe=1     同一件事的老写法,留着不动。用户自己那份 PromptCut 没有钥匙这套,
-   *                  想只读打开时只有它可用。
-   *   ?owner=<令牌>  宣示所有权。带着它连上之后,服务端会拒绝一切没有同一把钥匙的连接,
-   *                  别人抢不走。无头实例用它保住自己。
-   *
-   * 都不带 = 普通用户的编辑台,行为和以前一模一样(先来后到、刷新可接管)。
+   * `?observe=1`:只读观看。页面照常渲染项目,但**不连桥**(不会把编辑台从工具通道上挤掉)。
+   * 不带 = 编辑台(先来后到、刷新可接管)。
    */
   const params = (() => {
     try { return new URLSearchParams(location.search); } catch { return new URLSearchParams(); }
   })();
-  const observeOnly = params.has("observe") || !!params.get("view");
-  const ownerToken = params.get("owner") || "";
+  const observeOnly = params.has("observe");
 
   if (observeOnly) {
     // 明确告诉界面「没连桥」,免得状态点显示成绿的、让人以为工具能用
@@ -361,7 +344,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
 
   /*
    * 这个页面是「编辑台」,由它把项目镜像给服务端(数据管理的只读镜像,见 src/render/dataMirror.ts)。
-   * 只读观看页(observe / view)上面已经 return 了,不会走到这里 —— 两个页面同时推会互相覆盖。
+   * 只读观看页(observe)上面已经 return 了,不会走到这里 —— 两个页面同时推会互相覆盖。
    *
    * **不再等桥连上**(A7):帧请求的 body 里只有 `{session, localRev}`,项目由服务端从镜像取 ——
    * 没有 Agent 连着的时候,编辑页自己的预览也得能画。判据从「连着 MCP 桥」换成「页面角色是编辑页」。
@@ -372,9 +355,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
 
   const connect = () => {
     if (!active) return;
-    source = new EventSource(
-      ownerToken ? `/api/mcp/events?owner=${encodeURIComponent(ownerToken)}` : "/api/mcp/events",
-    );
+    source = new EventSource("/api/mcp/events");
 
     source.onopen = () => {
       onStatus?.({ connected: true });
@@ -396,20 +377,17 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         if (source) source.close();
         source = null;
         onStatus?.({ connected: false });
-        if (ownerToken) {
-          /*
-           * 有令牌的页面被踢掉,只可能是同一把钥匙的另一个连接(比如自己刚重载过一次,
-           * 旧连接还没断)。这种情况**要抢回来** —— 无头实例被踢就等于整个任务哑了,
-           * 而它是没人会去手动刷新的那一个。等两秒再连,避开两个连接互相顶的抖动。
-           */
-          window.setTimeout(connect, 2000);
-        } else {
-          window.dispatchEvent(new CustomEvent("ai-chat-error", { detail: "另一个编辑台页面接管了 AI 连接" }));
-          active = false;
-        }
+        window.dispatchEvent(new CustomEvent("ai-chat-error", { detail: "另一个编辑台页面接管了 AI 连接" }));
+        active = false;
       } else if (ev.type === "agent.board") {
         // 多 Agent 公告板(编辑器进程里的那份)变了:页签名跟着范围改、标未读(A3)
         agentBus.applyBoard(ev.agents);
+      } else if (ev.type === "agent.desktop") {
+        // 桌面 APP 会话的分组(A4):厂商、正在进行的操作、进度报告,整份替换
+        applyDesktopSessions(ev.sessions);
+      } else if (ev.type === "skill.preview") {
+        // 桌面会话做成了一次操作、SKILL 模式开着:给悬浮窗刷一张预览(失败静默)
+        try { reportLastAction(getApi(), String(ev.tool), typeof ev.clipId === "string" ? ev.clipId : null, typeof ev.start === "number" ? ev.start : null); } catch { /* 预览是附带的 */ }
       } else if (ev.type === "agent.spawn") {
         // spawn_agent 拉起子 Agent:开一个带角色名的新页签(A3)
         void agentBus.handleSpawn(ev);
@@ -519,10 +497,6 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           body: JSON.stringify({ id, ok, result, error, ...(opIds.length ? { opIds } : {}), ...(scopes.length ? { scopes } : {}) })
         }).catch(() => {});
 
-        // 做成了一次时间轴动作 → 给 SKILL 悬浮窗刷一张预览(只在无头实例里生效,失败静默)
-        if (ok) {
-          try { reportLastAction(api, tool, args, result); } catch { /* 预览是附带的,不影响结果 */ }
-        }
       }
     };
 

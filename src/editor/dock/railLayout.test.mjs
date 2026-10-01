@@ -2,7 +2,7 @@
  * 侧边 rail 自由布局的纯逻辑。
  * 跑:node --experimental-test-module-mocks --test src/editor/dock/railLayout.test.mjs
  *
- * 钉死:读出来的布局怎么校验、拖动之后顺序和选中项怎么变、「+」画在哪、一侧拖空 / 对话式下哪些项看得见。
+ * 钉死:读出来的布局怎么校验、拖动之后顺序和选中项怎么变、「+」画在哪、一侧拖空时哪些项看得见。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -18,7 +18,6 @@ import {
   plusAnchor,
   visibleItems,
   effectiveActive,
-  sideVisible,
   syncAgents,
   gapToFullIndex,
   insertAgent,
@@ -154,11 +153,11 @@ test("move:源侧被拖空 → emptied,active 置 null,空 rail 仍然在", () =
   assert.equal(back.emptied, null);
 });
 
-test("move:改选相邻项时优先看得见的(对话式下跳过分区)", () => {
+test("move:改选相邻项时优先看得见的(调用方给的可见判断)", () => {
   const base = L(["script", "library", "edit", A("main")], [A("t2")], { left: A("main") });
-  const chatVisible = (id) => id === "script" || id.startsWith("agent:");
-  const r = moveItem(base, A("main"), "right", 1, chatVisible);
-  assert.equal(r.layout.active.left, "script", "上面紧挨着的 edit / library 是分区,对话式下看不见,跳到 script");
+  const aiOnly = (id) => id === "script" || id.startsWith("agent:");
+  const r = moveItem(base, A("main"), "right", 1, aiOnly);
+  assert.equal(r.layout.active.left, "script", "上面紧挨着的 edit / library 看不见,跳到 script");
   const classic = moveItem(base, A("main"), "right", 1);
   assert.equal(classic.layout.active.left, "edit");
 });
@@ -210,30 +209,22 @@ test("关掉 Agent:拿掉那一项;是选中项就改选相邻项;那一侧空�
   assert.equal(syncAgents(unchanged, ["main"]).layout, unchanged, "没变化返回同一个对象");
 });
 
-test("对话式:rail 只显示 AI 类项;没有 AI 类项的一侧整列不显示;选中项退到看得见的第一项", () => {
+test("rail 上画全部项;选中项记下的就是显示的;拖空的一侧没有选中项", () => {
   const layout = L(["library", A("t2"), "edit"], ["script", "captions", A("main")], { left: "edit", right: A("main") });
-  assert.deepEqual(visibleItems(layout.left, "chat"), [A("t2")]);
-  assert.deepEqual(visibleItems(layout.left, "classic"), ["library", A("t2"), "edit"]);
-  assert.equal(effectiveActive(layout, "left", "chat"), A("t2"));
-  assert.equal(effectiveActive(layout, "left", "classic"), "edit");
-  assert.equal(effectiveActive(layout, "right", "chat"), A("main"));
-
-  const noAiLeft = L([...SECTION_IDS], ["script", A("main")]);
-  assert.equal(sideVisible(noAiLeft, "left", "chat"), false);
-  assert.equal(sideVisible(noAiLeft, "right", "chat"), true);
-  assert.equal(sideVisible(noAiLeft, "left", "classic"), true, "传统式两侧都显示");
-  assert.equal(sideVisible(L([], ["script"]), "left", "classic"), true, "拖空的 rail 在传统式下也留着");
-  assert.equal(effectiveActive(L([], ["script"]), "left", "classic"), null);
+  assert.deepEqual(visibleItems(layout.left), ["library", A("t2"), "edit"]);
+  assert.equal(effectiveActive(layout, "left"), "edit");
+  assert.equal(effectiveActive(layout, "right"), A("main"));
+  assert.equal(effectiveActive(L([], ["script"]), "left"), null);
 });
 
-test("落点下标换算:对话式下只数画出来的项,隐藏的分区不跟着挪", () => {
+test("落点下标换算:只数画出来的项", () => {
   const full = ["library", "script", A("a"), "animations"];
   const shown = ["script", A("a")];
   assert.equal(gapToFullIndex(full, shown, 0), 1);
   assert.equal(gapToFullIndex(full, shown, 1), 2);
   assert.equal(gapToFullIndex(full, shown, 2), 3, "落在最后 = 最后一个画出来的项后面");
   assert.equal(gapToFullIndex(full, [], 0), 4);
-  assert.equal(gapToFullIndex(full, full, 4), 4, "传统式就是原样");
+  assert.equal(gapToFullIndex(full, full, 4), 4, "全部画出来时就是原样");
 
   // 换算完交给 moveItem:script 拖到最后
   const layout = L(full, [A("b")], { left: "script" });
@@ -255,13 +246,11 @@ test("剪辑组:不是页面,永远不当选中项;只剩它的一侧算空", ()
   // 存下来的 active 指着剪辑组(不该出现,但要兜住):退回那一侧第一个页面项
   const v = validateLayout({ left: [CUTS_ITEM, "library"], right: ["script", A("main")], active: { left: CUTS_ITEM } }, ["main"]);
   assert.equal(v.active.left, "library");
-  assert.equal(effectiveActive(L([CUTS_ITEM], ["script"], { left: CUTS_ITEM }), "left", "classic"), null);
-  assert.equal(effectiveActive(L([CUTS_ITEM, "edit"], ["script"], { left: null }), "left", "classic"), "edit");
+  assert.equal(effectiveActive(L([CUTS_ITEM], ["script"], { left: CUTS_ITEM }), "left"), null);
+  assert.equal(effectiveActive(L([CUTS_ITEM, "edit"], ["script"], { left: null }), "left"), "edit");
   assert.equal(withActive(L(["library", CUTS_ITEM], ["script"]), CUTS_ITEM).active.left, "library");
   assert.equal(hasPages([CUTS_ITEM]), false);
   assert.equal(hasPages([CUTS_ITEM, "script"]), true);
-  // 对话式下时间轴不显示,剪辑组跟分区一样藏起来
-  assert.deepEqual(visibleItems([CUTS_ITEM, "script"], "chat"), ["script"]);
 });
 
 test("剪辑组:整组拖到另一侧,两侧选中项都不变;源侧只剩它时报空", () => {

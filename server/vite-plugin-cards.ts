@@ -1448,9 +1448,9 @@ export default function vitePluginCards(): Plugin[] {
        *     - cardIds:项目用到的卡,其中的用户卡与改过的内置卡(连同它们用到的文件)服务上还没有的会传上去。
        *   POST /api/cards/sync/unbind  回到本机空间
        *   GET  /api/cards/sync/status  诊断:绑定、记账、最近的通知
-       * 页面没绑之前挂在本机空间(编辑器一起来就连)。预渲染进程与无头实例不同步(无头实例停用了文档服务)。
+       * 页面没绑之前挂在本机空间(编辑器一起来就连)。预渲染进程不同步。
        */
-      const syncEnabled = !isPrerender && process.env.PROMPTCUT_HEADLESS !== '1' && process.env.PROMPTCUT_CARD_SYNC !== '0';
+      const syncEnabled = !isPrerender && process.env.PROMPTCUT_CARD_SYNC !== '0';
       // 记账跟着改动层走:装机版的改动层在数据目录里(补丁整个覆盖 runtime/app 时不丢),记账也放那儿,两者才对得上
       const overTop = overridesRoot();
       const syncDir = overTop ? path.join(path.dirname(overTop), 'card-sync') : path.join(server.config.root, '.pc-work', 'card-sync');

@@ -4,7 +4,6 @@ import Editor from "./Editor";
 import { StartPage } from "./StartPage";
 import { openDraft, setActiveDraftId } from "./editor/io/drafts";
 import { openProcPath } from "./editor/io/openPath";
-import { installHeadlessHooks } from "./headless";
 import { WindowTitleBar } from "./ui/WindowTitleBar";
 import { useSkin } from "./skins/useSkin";
 import { peekCapturedInvite } from "./online/invite";
@@ -19,12 +18,12 @@ import { newProject } from "./editor/io/proc";
  *
  * 几个启动参数:
  *   `?editor`          直接进编辑器:导出、自动化脚本和老书签都还指着这条路;
- *   `?draft=<id>`      打开某份草稿再进编辑器。无头实例用它开任务目录里的 project.proc;
+ *   `?draft=<id>`      打开某份草稿再进编辑器;
  *   `?open=<路径>`     按磁盘路径打开一份 .proc(桌面壳双击文件时带过来),会先复制一份再读;
- *   `?headless=1`      装上 window.__pcHeadless,给 scripts/headless.mjs 的自动写回用。
+ *   `?headless=1`      自动化页面(探针、测试):不塞演示卡、不接文档服务、不弹素材迁移框(各处自己认这个参数)。
  *
- * 在线浏览器模式(C10a 契约第 2 节)不认这几个参数:它们都要编辑器进程(草稿、磁盘路径、无头实例);
- * 打开就是开始页,从「加入别人的项目」进编辑器。在线构建里这几条连同草稿、按路径打开、无头钩子一起剪掉
+ * 在线浏览器模式(C10a 契约第 2 节)不认这几个参数:它们都要编辑器进程(草稿、磁盘路径);
+ * 打开就是开始页,从「加入别人的项目」进编辑器。在线构建里这几条连同草稿、按路径打开一起剪掉
  * (`ONLINE_BUILD`,写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」;M8 遗留 L24)。
  */
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
@@ -85,7 +84,6 @@ export function Shell(): JSX.Element {
     } catch {
       return;
     }
-    if (q.has("headless")) installHeadlessHooks();
     const draft = q.get("draft");
     const open = q.get("open");
     if (draft) {

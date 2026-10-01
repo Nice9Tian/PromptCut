@@ -1,19 +1,25 @@
-//! SKILL 模式下外壳的形态切换。
+//! 悬浮窗,以及 SKILL 模式在外壳这一侧的投影。
 //!
-//! 进了 SKILL 模式,项目交给无头实例上的 agent 去改,主窗口就没必要占着屏幕了 ——
-//! 收起来变成右上角一枚悬浮图标,双击才重新展开。图标上顺带显示 agent 改到哪了。
+//! 悬浮窗是「后台运行」的一半(另一半是托盘,见 background.rs):编辑界面收起时就出现,
+//! 不管是不是 SKILL 模式。单击它打开编辑界面,右键出「打开编辑界面 / 关闭」菜单,
+//! 拖得动。SKILL 模式下它额外显示桌面 APP 会话在做什么、以及「上一步动作」的画面。
 //!
-//! 状态从哪来:`~/Documents/PromptCut-Skill/skill-state.json`,由 Node 那边写
-//! (server/skill-gate.mjs)。这里**轮询**它,不走前端事件:
-//!   * 网页可能正在重载、可能还没加载完,事件会丢;文件一直在;
-//!   * SKILL 模式本来就可能被另一个进程(无头实例)改掉,只有文件是三方共同的约定;
-//!   * 一秒一次读一个几百字节的 JSON,代价可以忽略。
-//! 一句话:**以文件为准**,窗口形态只是它的投影。
+//! 状态从哪来:
+//!   * SKILL 开没开:`~/Documents/PromptCut-Skill/skill-state.json` 的 `active`,由 Node 那边写
+//!     (server/skill-gate.mjs)。这里**轮询**它,不走前端事件 —— 页面可能正在重载、事件会丢,
+//!     文件一直在。变成 active 的那一下收起编辑界面(SKILL 缺省关闭编辑界面),变回来的那一下
+//!     打开编辑界面;中间用户自己打开、关上都随用户。
+//!   * 会话在做什么:编辑器进程的 `GET /api/agent/desktop`(A4 的分组数据),只在收起且 SKILL
+//!     开着时每秒取一次。
+//!   * 「上一步动作」的画面:页面渲好交回编辑器进程,写到 skillRoot 下的 last-action.png / .json
+//!     (server/vite-plugin-skill-state.ts)。这里盯 json 的修改时间,变了就把图读进来推给悬浮页。
 //!
 //! 为什么不放 %LOCALAPPDATA%:PromptCut 有可能跑在 MSIX 容器里,那时对 %LOCALAPPDATA%
 //! 的写入会被重定向进包私有目录,壳和 Node 看到的就不是同一个文件了。Documents 不会。
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -21,77 +27,45 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::webview::WebviewWindowBuilder;
-use tauri::{Emitter, Listener, Manager, WebviewUrl};
+use tauri::{AppHandle, Emitter, Listener, Manager, Runtime, WebviewUrl};
 
-/// 悬浮图标那个窗口的标签。capabilities/default.json 里要放行它,否则页面上
-/// `window.__TAURI__` 是空的,双击事件发不出来。
+use crate::background::{self, UiEvent};
+
+/// 悬浮窗的窗口标签。capabilities/*.json 里要放行它,否则页面上 `window.__TAURI__`
+/// 是空的,单击、右键、拖动都发不出来。名字是 SKILL 专用时代留下的,没改是为了不动权限清单。
 pub const OVERLAY_LABEL: &str = "skill-overlay";
 
 const OVERLAY_W: f64 = 232.0;
 const OVERLAY_H: f64 = 72.0;
 /// 「上一步动作」预览块的高度:预览(232 宽按 16:9 是 130)+ 说明一行 + 内边距
 const PREVIEW_BLOCK_H: f64 = 130.0 + 22.0;
-/// 启动进度块的高度:四步 + 一行状态
-const STEPS_BLOCK_H: f64 = 108.0;
 const BLOCK_GAP: f64 = 8.0;
-/// 启动完成之后进度块再留这么久才收起来,让用户看见「实例就绪」亮起来
-const STEPS_LINGER: Duration = Duration::from_secs(4);
+/// 离屏幕右上角的边距
+const OVERLAY_MARGIN: f64 = 16.0;
+/// 编辑器进程的端口(与 lib.rs 的 EDITOR_PORT 相同)
+const EDITOR_PORT: u16 = 5210;
 
-/// 悬浮窗高度 = 卡片 + 正在显示的块。位置不动(还是右上角),只往下长。
-fn overlay_height(steps: bool, preview: bool) -> f64 {
-    let mut h = OVERLAY_H;
-    if steps {
-        h += BLOCK_GAP + STEPS_BLOCK_H;
-    }
+/// 悬浮窗高度 = 卡片 + 预览块(有的话)。位置不动(右上角),只往下长。
+pub fn overlay_height(preview: bool) -> f64 {
     if preview {
-        h += BLOCK_GAP + PREVIEW_BLOCK_H;
+        OVERLAY_H + BLOCK_GAP + PREVIEW_BLOCK_H
+    } else {
+        OVERLAY_H
     }
-    h
 }
 
-/// 启动进度:任务目录里 job.json 的 phase / launch。用户点「开始」的那一刻主窗就收成
-/// 悬浮窗了,快照 → 起实例 → 拉桌面 app → 就绪这几步就在悬浮窗上走,
-/// 不再是 Skill 对话框里的内容(见 src/editor/SkillDialog.tsx)。
-#[derive(Serialize, Clone, Default, PartialEq)]
-pub struct ProgressInfo {
-    pub phase: Option<String>,
-    pub error: Option<String>,
-    pub launch_status: Option<String>,
-    pub launch_detail: Option<String>,
-    /// 启动流程走完了(成功或失败),悬浮页据此决定进度块要不要收
-    pub done: bool,
-    pub failed: bool,
+fn skill_root() -> PathBuf {
+    if let Ok(v) = std::env::var("PROMPTCUT_SKILL_DIR") {
+        if !v.trim().is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".into());
+    PathBuf::from(home).join("Documents").join("PromptCut-Skill")
 }
 
-/// 读任务目录(project.proc 所在目录)里的 job.json。读不到就 None:老任务、目录被删都算正常。
-fn read_progress(proc: &PathBuf) -> Option<ProgressInfo> {
-    let dir = proc.parent()?;
-    let text = fs::read_to_string(dir.join("job.json")).ok()?;
-    let v = serde_json::from_str::<serde_json::Value>(&text).ok()?;
-    let str_of = |x: Option<&serde_json::Value>| x.and_then(|s| s.as_str()).map(str::to_string);
-    let phase = str_of(v.get("phase"));
-    let error = str_of(v.get("error"));
-    let launch = v.get("launch");
-    let launch_status = str_of(launch.and_then(|l| l.get("status")));
-    let launch_detail = str_of(launch.and_then(|l| l.get("detail")));
-    let failed = phase.as_deref() == Some("failed") || launch_status.as_deref() == Some("failed");
-    let done = failed
-        || phase.as_deref() == Some("stopped")
-        || (phase.as_deref() == Some("ready") && launch_status.as_deref() != Some("launching"));
-    Some(ProgressInfo { phase, error, launch_status, launch_detail, done, failed })
-}
-
-/// 悬浮窗下面那张预览图。agent 每做成一次时间轴动作,无头实例就把那一刻的画面渲染出来
-/// 写到 skillRoot 下的 last-action.png / .json(见 server/vite-plugin-skill-state.ts),
-/// 这里盯着 json 的修改时间,变了就把图读进来推给悬浮页。
-#[derive(Serialize, Clone, Default)]
-pub struct PreviewInfo {
-    pub tool: Option<String>,
-    pub clip_id: Option<String>,
-    pub t: Option<f64>,
-    pub at: Option<String>,
-    /// data:image/png;base64,… 直接给 <img> 用
-    pub data_url: Option<String>,
+fn state_path() -> PathBuf {
+    skill_root().join("skill-state.json")
 }
 
 fn last_action_json() -> PathBuf {
@@ -100,6 +74,138 @@ fn last_action_json() -> PathBuf {
 
 fn last_action_png() -> PathBuf {
     skill_root().join("last-action.png")
+}
+
+/// 状态文件里外壳关心的部分。读不到、坏了都按「关着」处理 —— 拿不准的时候别把用户的窗口收起来。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SkillState {
+    pub active: bool,
+    pub since: Option<String>,
+}
+
+pub fn parse_state(text: &str) -> SkillState {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return SkillState::default();
+    };
+    SkillState {
+        active: v.get("active").and_then(|x| x.as_bool()).unwrap_or(false),
+        since: v.get("since").and_then(|x| x.as_str()).map(str::to_string),
+    }
+}
+
+fn read_state() -> SkillState {
+    fs::read_to_string(state_path()).map(|t| parse_state(&t)).unwrap_or_default()
+}
+
+/// 推给悬浮窗的状态。会话只留悬浮窗用得上的几个字段(厂商、正在做的、上一步),
+/// 报告正文之类不带,免得每秒往悬浮页塞几十 KB。
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct OverlayState {
+    /// 是不是 SKILL 模式:决定悬浮窗写「SKILL 模式」还是「后台运行中」
+    pub skill: bool,
+    pub since: Option<String>,
+    /// 编辑器进程连得上吗(连不上时悬浮窗写一句,别让人以为 Agent 在干活)
+    pub editor_up: bool,
+    pub sessions: Vec<serde_json::Value>,
+}
+
+/// 从 `/api/agent/desktop` 的回应里挑出悬浮窗要的字段。
+pub fn trim_sessions(body: &str) -> Option<Vec<serde_json::Value>> {
+    let v = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let list = v.get("sessions")?.as_array()?;
+    Some(
+        list.iter()
+            .map(|s| {
+                let mut o = serde_json::Map::new();
+                for k in ["id", "vendor", "label", "current", "lastSeen"] {
+                    if let Some(x) = s.get(k) {
+                        o.insert(k.into(), x.clone());
+                    }
+                }
+                if let Some(last) = s.get("last") {
+                    let mut l = serde_json::Map::new();
+                    for k in ["tool", "ok", "at"] {
+                        if let Some(x) = last.get(k) {
+                            l.insert(k.into(), x.clone());
+                        }
+                    }
+                    o.insert("last".into(), serde_json::Value::Object(l));
+                }
+                serde_json::Value::Object(o)
+            })
+            .collect(),
+    )
+}
+
+/// 拆一份 HTTP/1.1 回应:状态码 + 正文(认 Content-Length 与 chunked)。拆不开就 None。
+pub fn parse_http_response(raw: &[u8]) -> Option<(u16, Vec<u8>)> {
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let head = std::str::from_utf8(&raw[..split]).ok()?;
+    let body = &raw[split + 4..];
+    let mut lines = head.split("\r\n");
+    let status = lines.next()?.split_whitespace().nth(1)?.parse::<u16>().ok()?;
+    let mut chunked = false;
+    let mut length: Option<usize> = None;
+    for l in lines {
+        let Some((k, v)) = l.split_once(':') else { continue };
+        let (k, v) = (k.trim().to_ascii_lowercase(), v.trim());
+        if k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked") {
+            chunked = true;
+        } else if k == "content-length" {
+            length = v.parse().ok();
+        }
+    }
+    if chunked {
+        let mut out = Vec::new();
+        let mut rest = body;
+        loop {
+            let eol = rest.windows(2).position(|w| w == b"\r\n")?;
+            let size_str = std::str::from_utf8(&rest[..eol]).ok()?;
+            let size = usize::from_str_radix(size_str.split(';').next()?.trim(), 16).ok()?;
+            rest = &rest[eol + 2..];
+            if size == 0 {
+                return Some((status, out));
+            }
+            if rest.len() < size {
+                return None;
+            }
+            out.extend_from_slice(&rest[..size]);
+            rest = rest.get(size + 2..)?;
+        }
+    }
+    match length {
+        Some(n) if body.len() >= n => Some((status, body[..n].to_vec())),
+        Some(_) => None,
+        None => Some((status, body.to_vec())),
+    }
+}
+
+/// 向编辑器进程要一次 JSON。最多读 1 MiB;超时、连不上都返回 None。
+fn http_get(path: &str, timeout: Duration) -> Option<String> {
+    let addr = format!("127.0.0.1:{EDITOR_PORT}").parse().ok()?;
+    let mut s = TcpStream::connect_timeout(&addr, timeout).ok()?;
+    s.set_read_timeout(Some(timeout)).ok()?;
+    s.set_write_timeout(Some(timeout)).ok()?;
+    let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAccept: application/json\r\n\r\n");
+    s.write_all(req.as_bytes()).ok()?;
+    let mut buf = Vec::new();
+    let _ = s.take(1 << 20).read_to_end(&mut buf);
+    let (status, body) = parse_http_response(&buf)?;
+    if status != 200 {
+        return None;
+    }
+    String::from_utf8(body).ok()
+}
+
+/// 悬浮窗下面那张预览图。
+#[derive(Serialize, Clone, Default)]
+pub struct PreviewInfo {
+    pub tool: Option<String>,
+    pub clip_id: Option<String>,
+    pub t: Option<f64>,
+    pub at: Option<String>,
+    /// data:image/png;base64,… 直接给 <img> 用
+    pub data_url: Option<String>,
 }
 
 /// 读预览。返回 (json 的修改时间戳, 内容);读不到就 None —— 没预览是常态,不是错。
@@ -132,83 +238,9 @@ fn read_preview() -> Option<(u128, PreviewInfo)> {
         },
     ))
 }
-/// 离屏幕右上角的边距
-const OVERLAY_MARGIN: f64 = 16.0;
 
-fn skill_root() -> PathBuf {
-    if let Ok(v) = std::env::var("PROMPTCUT_SKILL_DIR") {
-        if !v.trim().is_empty() {
-            return PathBuf::from(v);
-        }
-    }
-    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".into());
-    PathBuf::from(home).join("Documents").join("PromptCut-Skill")
-}
-
-fn state_path() -> PathBuf {
-    skill_root().join("skill-state.json")
-}
-
-/// 推给悬浮图标的一小段状态。字段名和网页里那份对齐,省得两边各起一套。
-#[derive(Serialize, Clone, Default)]
-pub struct OverlayInfo {
-    pub active: bool,
-    pub job_id: Option<String>,
-    /// agent 改出来的卡片数
-    pub clips: Option<u64>,
-    /// project.proc 上次被写的时间,给「还在动吗」一个交代
-    pub updated_at: Option<String>,
-}
-
-/// 读状态文件。读不到、坏了都按「关着」处理 —— 拿不准的时候别把用户的窗口藏起来。
-fn read_state() -> (bool, Option<String>, Option<PathBuf>) {
-    let Ok(text) = fs::read_to_string(state_path()) else {
-        return (false, None, None);
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return (false, None, None);
-    };
-    let active = v.get("active").and_then(|x| x.as_bool()).unwrap_or(false);
-    let job = v.get("jobId").and_then(|x| x.as_str()).map(str::to_string);
-    let proc = v
-        .get("procPath")
-        .and_then(|x| x.as_str())
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from);
-    (active, job, proc)
-}
-
-/// 读 agent 那份 project.proc,数一下有几张卡、什么时候写的。
-/// 它正被另一个进程写,读到半截 JSON 很正常 —— 解析失败就当这一轮没读到,下一秒再来。
-fn read_proc_progress(proc: &PathBuf) -> (Option<u64>, Option<String>) {
-    let Ok(meta) = fs::metadata(proc) else {
-        return (None, None);
-    };
-    let updated = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs().to_string());
-    let clips = fs::read_to_string(proc)
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| {
-            v.get("project")
-                .and_then(|p| p.get("tracks"))
-                .and_then(|t| t.as_array())
-                .map(|tracks| {
-                    tracks
-                        .iter()
-                        .filter_map(|t| t.get("clips").and_then(|c| c.as_array()))
-                        .map(|c| c.len() as u64)
-                        .sum()
-                })
-        });
-    (clips, updated)
-}
-
-/// 把悬浮图标摆到主显示器右上角。拿不到显示器信息就放个保守的位置,总比不显示强。
-fn place_top_right(win: &tauri::WebviewWindow) {
+/// 把悬浮窗摆到主显示器右上角。拿不到显示器信息就放个保守的位置,总比不显示强。
+fn place_top_right<R: Runtime>(win: &tauri::WebviewWindow<R>) {
     let (sw, scale) = win
         .primary_monitor()
         .ok()
@@ -220,182 +252,205 @@ fn place_top_right(win: &tauri::WebviewWindow) {
     let _ = win.set_position(tauri::LogicalPosition::new(x, OVERLAY_MARGIN));
 }
 
-fn overlay(handle: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
-    handle.get_webview_window(OVERLAY_LABEL)
+fn overlay<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    app.get_webview_window(OVERLAY_LABEL)
 }
 
-/// 进 SKILL 模式:主窗收起来,右上角浮一枚图标。
-pub fn enter(handle: &tauri::AppHandle) {
-    if let Some(main) = handle.get_webview_window("main") {
-        let _ = main.hide();
-    }
-    if let Some(w) = overlay(handle) {
+/// 悬浮窗这一次显示有没有被用户拖过:拖过就不再摆回右上角
+static OVERLAY_PLACED: AtomicBool = AtomicBool::new(false);
+
+/// 编辑界面收起:出悬浮窗(第一次用时才建)。
+pub fn show_overlay<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(w) = overlay(app) {
         let _ = w.show();
-        place_top_right(&w);
+        if !OVERLAY_PLACED.swap(true, Ordering::SeqCst) {
+            place_top_right(&w);
+        }
         return;
     }
-    match WebviewWindowBuilder::new(handle, OVERLAY_LABEL, WebviewUrl::App("overlay.html".into()))
-        .title("PromptCut · SKILL")
+    // 启动参数必须和主窗口一模一样:同一个 WebView2 用户数据目录下参数不同,第二个 webview
+    // 会建不出来(agent_webview::browser_args 的说明)。以前这里没带,悬浮窗可能根本起不来。
+    let port = app.state::<crate::agent_webview::AgentBrowser>().port;
+    match WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("overlay.html".into()))
+        .title("PromptCut")
         .inner_size(OVERLAY_W, OVERLAY_H)
         .resizable(false)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
-        // 不进任务栏:它是个挂件,不是一个「窗口」。Alt+Tab 里多一项反而让人迷惑
+        // 不进任务栏:它是个挂件,不是一个「窗口」
         .skip_taskbar(true)
         .shadow(false)
+        .additional_browser_args(&crate::agent_webview::browser_args(port))
         .build()
     {
-        Ok(w) => place_top_right(&w),
+        Ok(w) => {
+            place_top_right(&w);
+            OVERLAY_PLACED.store(true, Ordering::SeqCst);
+        }
         Err(e) => {
-            // 悬浮窗建不出来就别把主窗留在隐藏状态 —— 那等于软件凭空消失了
-            eprintln!("[skill] 悬浮图标创建失败,恢复主窗口: {e}");
-            if let Some(main) = handle.get_webview_window("main") {
-                let _ = main.show();
-                let _ = main.set_focus();
-            }
+            // 悬浮窗建不出来还有托盘图标能叫回编辑界面,不至于「软件凭空消失」;记日志就够
+            eprintln!("[overlay] 悬浮窗创建失败(托盘图标仍可用): {e}");
         }
     }
 }
 
-/// 出 SKILL 模式:图标收掉,主窗回来。
-pub fn leave(handle: &tauri::AppHandle) {
-    if let Some(w) = overlay(handle) {
-        let _ = w.close();
-    }
-    if let Some(main) = handle.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.unminimize();
-        let _ = main.set_focus();
-    }
-}
-
-/// 双击图标:把软件叫回来,但**不退出 SKILL 模式** —— 那是 AI 面板里那个按钮的事。
-/// 用户这时候看到的是一个锁着 AI 面板的正常界面,可以照常翻时间轴、看素材。
-pub fn restore_window(handle: &tauri::AppHandle) {
-    if let Some(w) = overlay(handle) {
+/// 编辑界面打开:收悬浮窗。不销毁,下次收起直接显示。
+pub fn hide_overlay<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(w) = overlay(app) {
         let _ = w.hide();
     }
-    if let Some(main) = handle.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.unminimize();
-        let _ = main.set_focus();
-    }
 }
 
-/// SKILL 模式还开着,但用户把主窗关掉/最小化了 —— 缩回悬浮图标,别真退出。
-pub fn back_to_overlay(handle: &tauri::AppHandle) {
-    if let Some(main) = handle.get_webview_window("main") {
-        let _ = main.hide();
-    }
-    if let Some(w) = overlay(handle) {
-        let _ = w.show();
-        place_top_right(&w);
-    } else {
-        enter(handle);
-    }
-}
+/// 起一个后台线程:盯状态文件,收起时把进度推给悬浮窗;并接上悬浮窗发来的单击、右键。
+pub fn spawn_watcher(app: AppHandle) {
+    // 悬浮页每次加载完都说一声,这边把手上的状态重推一遍(悬浮窗是第一次收起时才建的,
+    // 建好之前推的都丢了)
+    let resend = Arc::new(AtomicBool::new(true));
+    let r = resend.clone();
+    app.listen_any("pc-overlay-ready", move |_| r.store(true, Ordering::SeqCst));
 
-/// 现在是不是 SKILL 模式。给 lib.rs 里「关窗要不要拦」用。
-pub fn is_active(flag: &Arc<AtomicBool>) -> bool {
-    flag.load(Ordering::SeqCst)
-}
+    // 单击悬浮窗 → 打开编辑界面
+    let h = app.clone();
+    app.listen_any("pc-overlay-open", move |_| {
+        background::dispatch(&h, UiEvent::OpenRequested);
+    });
 
-/// 起一个后台线程盯住状态文件,顺带把进度推给悬浮图标。
-///
-/// 返回一个共享的开关,别处(比如关窗拦截)要判断当前模式时读它,不用再去读文件。
-pub fn spawn_watcher(handle: tauri::AppHandle) -> Arc<AtomicBool> {
-    let active = Arc::new(AtomicBool::new(false));
-    let flag = active.clone();
-
-    // 双击图标 → 叫回主窗。页面用 window.__TAURI__.event.emit 发过来
-    let h = handle.clone();
-    handle.listen_any("pc-skill-restore", move |_| restore_window(&h));
+    // 右键悬浮窗 → 弹「打开编辑界面 / 关闭」;点了什么由 background::install_menu_handler 处理
+    let h = app.clone();
+    app.listen_any("pc-overlay-menu", move |_| {
+        if let Some(w) = overlay(&h) {
+            match background::build_menu(&h) {
+                Ok(menu) => {
+                    let _ = w.popup_menu(&menu);
+                }
+                Err(e) => eprintln!("[overlay] 右键菜单建不出来: {e}"),
+            }
+        }
+    });
 
     std::thread::spawn(move || {
         let mut last_active = false;
-        let mut last_info = String::new();
+        let mut last_state: Option<OverlayState> = None;
         let mut last_preview: u128 = 0;
-        let mut last_progress: Option<ProgressInfo> = None;
-        // 进度块什么时候走完的:走完之后再留 STEPS_LINGER 才收
-        let mut done_at: Option<std::time::Instant> = None;
-        let mut steps_shown = false;
-        let mut size_key = (false, false);
+        let mut has_preview = false;
+        let mut size_key: Option<bool> = None;
         loop {
-            let (is_on, job_id, proc) = read_state();
+            let st = read_state();
 
-            if is_on != last_active {
-                last_active = is_on;
-                flag.store(is_on, Ordering::SeqCst);
-                if is_on {
-                    enter(&handle);
-                } else {
-                    leave(&handle);
-                }
-                // 网页那边也想知道(AI 面板的锁其实自己在轮询,这条只是让它更跟手)
-                let _ = handle.emit("pc-skill-mode-changed", is_on);
+            if st.active != last_active {
+                last_active = st.active;
+                background::dispatch(&app, if st.active { UiEvent::SkillOn } else { UiEvent::SkillOff });
+                // 网页那边也想知道(让界面更跟手;页面自己也在轮询)
+                let _ = app.emit("pc-skill-mode-changed", st.active);
             }
 
-            if is_on {
-                let (clips, updated_at) = proc.as_ref().map(read_proc_progress).unwrap_or((None, None));
-                let info = OverlayInfo { active: true, job_id, clips, updated_at };
-                // 没变就不推:悬浮窗每秒重渲染一次纯属浪费,数字还会闪
-                let digest = format!("{:?}|{:?}|{:?}", info.job_id, info.clips, info.updated_at);
-                if digest != last_info {
-                    last_info = digest;
-                    let _ = handle.emit_to(OVERLAY_LABEL, "pc-skill-overlay", info);
-                }
-                // 启动进度:job.json 变了才推。走完之后再留几秒,然后把进度块收掉
-                let progress = proc.as_ref().and_then(read_progress);
-                if progress != last_progress {
-                    if let Some(pg) = &progress {
-                        if pg.done {
-                            if done_at.is_none() {
-                                done_at = Some(std::time::Instant::now());
-                            }
-                        } else {
-                            done_at = None;
-                        }
-                        let _ = handle.emit_to(OVERLAY_LABEL, "pc-skill-progress", pg.clone());
-                    }
-                    last_progress = progress.clone();
-                }
-                let show_steps = match (&progress, done_at) {
-                    (Some(_), None) => true,
-                    (Some(_), Some(t)) => t.elapsed() < STEPS_LINGER,
-                    (None, _) => false,
-                };
-                if show_steps != steps_shown {
-                    steps_shown = show_steps;
-                    let _ = handle.emit_to(OVERLAY_LABEL, "pc-skill-steps", show_steps);
-                }
-                // 「上一步动作」的预览图:json 的修改时间变了才读、才推
-                if let Some((stamp, preview)) = read_preview() {
-                    if stamp != last_preview {
-                        last_preview = stamp;
-                        let _ = handle.emit_to(OVERLAY_LABEL, "pc-skill-preview", preview);
-                    }
-                }
-                // 窗口高度跟着正在显示的块走(位置不动,还是右上角)
-                let key = (show_steps, last_preview != 0);
-                if key != size_key {
-                    size_key = key;
-                    if let Some(w) = overlay(&handle) {
-                        let _ = w.set_size(tauri::LogicalSize::new(OVERLAY_W, overlay_height(key.0, key.1)));
-                    }
-                }
-            } else {
-                last_info.clear();
+            if resend.swap(false, Ordering::SeqCst) {
+                last_state = None;
                 last_preview = 0;
-                last_progress = None;
-                done_at = None;
-                steps_shown = false;
-                size_key = (false, false);
+                size_key = None;
+            }
+
+            if background::is_collapsed(&app) {
+                let (editor_up, sessions) = if st.active {
+                    match http_get("/api/agent/desktop", Duration::from_millis(800)) {
+                        Some(body) => (true, trim_sessions(&body).unwrap_or_default()),
+                        None => (false, Vec::new()),
+                    }
+                } else {
+                    (true, Vec::new())
+                };
+                let state = OverlayState { skill: st.active, since: st.since.clone(), editor_up, sessions };
+                // 没变就不推:悬浮窗每秒重渲染一次纯属浪费,文字还会闪
+                if last_state.as_ref() != Some(&state) {
+                    let _ = app.emit_to(OVERLAY_LABEL, "pc-overlay-state", state.clone());
+                    last_state = Some(state);
+                }
+                if st.active {
+                    // 「上一步动作」的预览图:json 的修改时间变了才读、才推
+                    if let Some((stamp, preview)) = read_preview() {
+                        if stamp != last_preview {
+                            last_preview = stamp;
+                            has_preview = true;
+                            let _ = app.emit_to(OVERLAY_LABEL, "pc-skill-preview", preview);
+                        }
+                    }
+                }
+                // 窗口高度跟着预览块走(只在 SKILL 下显示预览)
+                let key = st.active && has_preview;
+                if size_key != Some(key) {
+                    size_key = Some(key);
+                    if let Some(w) = overlay(&app) {
+                        let _ = w.set_size(tauri::LogicalSize::new(OVERLAY_W, overlay_height(key)));
+                    }
+                }
+            }
+            if !st.active {
+                // 出了 SKILL,下一次进来的预览从头算(上一轮的图不该冒出来)
+                last_preview = 0;
+                has_preview = false;
             }
 
             std::thread::sleep(Duration::from_millis(1000));
         }
     });
+}
 
-    active
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_file_parsing_defaults_to_closed() {
+        assert_eq!(parse_state(""), SkillState::default());
+        assert_eq!(parse_state("{not json"), SkillState::default());
+        assert_eq!(parse_state(r#"{"active":"yes"}"#).active, false);
+        let s = parse_state(r#"{"active":true,"since":"2026-09-30T01:02:03Z","closedAt":null}"#);
+        assert!(s.active);
+        assert_eq!(s.since.as_deref(), Some("2026-09-30T01:02:03Z"));
+    }
+
+    #[test]
+    fn http_content_length() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{\"ok\":true}";
+        assert_eq!(parse_http_response(raw), Some((200, b"{\"ok\":true}".to_vec())));
+        // 正文没读全
+        let short = b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{\"ok\":true}";
+        assert_eq!(parse_http_response(short), None);
+    }
+
+    #[test]
+    fn http_chunked() {
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n{\"ok\"\r\n6;x=y\r\n:true}\r\n0\r\n\r\n";
+        assert_eq!(parse_http_response(raw), Some((200, b"{\"ok\":true}".to_vec())));
+        assert_eq!(parse_http_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab"), None);
+    }
+
+    #[test]
+    fn http_status_and_garbage() {
+        assert_eq!(parse_http_response(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"), Some((404, vec![])));
+        assert_eq!(parse_http_response(b"garbage"), None);
+    }
+
+    #[test]
+    fn sessions_are_trimmed() {
+        let body = r#"{"ok":true,"sessions":[{"id":"desk-1","vendor":"claude","label":"Claude Code","client":"claude-code",
+            "current":{"tool":"update_clip","since":1},"last":{"tool":"get_project","ok":true,"at":2,"ms":5,"error":"x"},
+            "recent":[1,2,3],"reports":[{"big":"text"}],"lastSeen":3}]}"#;
+        let s = trim_sessions(body).unwrap();
+        assert_eq!(s.len(), 1);
+        let o = s[0].as_object().unwrap();
+        assert_eq!(o["label"], "Claude Code");
+        assert_eq!(o["current"]["tool"], "update_clip");
+        assert_eq!(o["last"]["tool"], "get_project");
+        assert!(o["last"].get("error").is_none());
+        assert!(o.get("reports").is_none() && o.get("recent").is_none() && o.get("client").is_none());
+        assert_eq!(trim_sessions("{}"), None);
+    }
+
+    #[test]
+    fn height_grows_only_with_preview() {
+        assert_eq!(overlay_height(false), OVERLAY_H);
+        assert!(overlay_height(true) > OVERLAY_H + PREVIEW_BLOCK_H);
+    }
 }

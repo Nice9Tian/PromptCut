@@ -1,111 +1,45 @@
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+/**
+ * PromptCut 的 stdio MCP 服务。两类调用方共用这一份:
+ *
+ *   - **AI 栏的命令行工具**(claude / codex / agy。编辑器起它们时在 MCP 的环境变量里塞 `PROMPTCUT_CALLER=cli`、
+ *     `PROMPTCUT_PORT`、`PROMPTCUT_AGENT`):调用带上这一页的对话 ID,和以前一样;
+ *   - **桌面 APP 的会话**(计划 `docs/plan/agent-workflow-plan.md` A4。用户在 PromptCut 里点「登记到 Claude Code / Codex」
+ *     之后,那边每个会话起一份本进程):按 `%TEMP%\promptcut\port.json` 找用户正在用的实例;每个会话一个身份
+ *     (Claude Code 一个进程一个会话,Codex 按 `_meta.threadId` 分线程,见 `server/agent/desktop-mcp.mjs`),
+ *     厂商从 `initialize` 的 `clientInfo` 认;`instructions` 与本地工具 `get_skill_guide` 是 SKILL 提示词。
+ *
+ * 两类都把调用 POST 给编辑器的 `/api/mcp/call`,工具、权限、创造力等级、SKILL 闸、写入身份都在编辑器那边判。
+ */
 import * as readline from 'node:readline';
-import { fileURLToPath } from 'node:url';
 import { tools } from './mcp-tools.mjs';
 import { injectCardParams, injectPartParams } from './card-params-schema.mjs';
+import { GUIDE_TOOL, SKILL_INSTRUCTIONS, desktopSessionKey, discoverEditor, newProcessSession, skillGuide, threadOf, vendorOf } from './agent/desktop-mcp.mjs';
 
+/** 这个进程是 AI 栏的命令行工具起的(否则就是桌面 APP 的会话) */
+const CLI_CALLER = process.env.PROMPTCUT_CALLER === 'cli' || !!process.env.PROMPTCUT_AGENT;
+/** 这个进程自己的会话号(Claude Code 一个会话一个进程) */
+const PROCESS_SESSION = newProcessSession();
+/** initialize 时认出来的客户端;没发 initialize 就是未知 */
+let client = vendorOf(null);
+
+/** 这次调用打到哪个编辑器:每次调用重新找一遍(用户可能重开过 PromptCut,端口变了) */
 function getTargets() {
-  let port = 5195;
-  let lockHost = null;
-  if (process.env.PROMPTCUT_PORT) {
-    port = parseInt(process.env.PROMPTCUT_PORT, 10);
-  }
-  try {
-    const p = path.join(os.tmpdir(), 'promptcut', 'port.json');
-    if (fs.existsSync(p)) {
-      const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-      if (!process.env.PROMPTCUT_PORT && data.port) port = data.port;
-      if (data.host) lockHost = data.host;
-    }
-  } catch {
-    // ignore
-  }
-
-  const hostsSet = new Set();
-  
-  if (lockHost) {
-    let host = lockHost;
-    if (host === '::' || host === '0.0.0.0') {
-      host = '127.0.0.1';
-    } else if (host.includes(':') && !host.startsWith('[')) {
-      host = `[${host}]`;
-    }
-    hostsSet.add(host);
-  }
-  
-  hostsSet.add('127.0.0.1');
-  
-  return { port, hosts: Array.from(hostsSet) };
+  const found = discoverEditor();
+  if (!found.ok) throw Object.assign(new Error(found.message), { noEditor: true });
+  return found;
 }
 
-/*
- * Skill 任务目录里才有的工具:submit_merge。
- *
- * 这份脚本被复制进 <任务目录>/tools/ 跑的时候,上一级就是任务目录(有 job.json)。
- * agent 改完项目想并回用户手里那份,没法自己动手 —— 用户的 PromptCut 在另一个端口、
- * 另一个进程,agent 连它的地址都不该知道。所以走文件:往任务目录写 merge-request.json,
- * 用户那份 PromptCut 每秒轮询任务列表,看到请求就在自己页面里做三方合并(和对话框里
- * 「强制并入」同一套代码),把结果写成 merge-result.json,这里等到它就把结果回给 agent。
- * 像 git worktree 合回主分支,只是仲裁的一方是用户正在开着的编辑台。
- */
-const JOB_DIR = (() => {
-  try {
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const dir = path.resolve(here, "..");
-    return fs.existsSync(path.join(dir, "job.json")) ? dir : null;
-  } catch {
-    return null;
-  }
-})();
-
-const SUBMIT_MERGE = {
-  name: "submit_merge",
-  description: "把这个任务目录里的项目改动并回用户正在编辑的那份 PromptCut 项目(三方合并:以启动时的快照为基线,两边都改的保留用户的)。像 git worktree 合回主分支。会先等实例把改动写回 project.proc,再等用户那边的 PromptCut 完成合并(它每秒检查一次),返回合并报告。用户那边没开 PromptCut 或已关闭 SKILL 模式时会超时,请如实告诉用户让他在 Skill 对话框里点「强制并入」。",
-  inputSchema: {
-    type: "object",
-    properties: {
-      note: { type: "string", description: "一句话说明这次并入了什么(会显示给用户)" },
-    },
-  },
-};
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function waitWriteBack(dir) {
-  const file = path.join(dir, "instance.json");
-  const t0 = Date.now();
-  let inst = null;
-  for (let i = 0; i < 30; i++) {
-    await sleep(500);
-    try {
-      const st = fs.statSync(file);
-      inst = JSON.parse(fs.readFileSync(file, "utf8"));
-      // 必须等到一份这次调用之后写出来的样本,不然读到的是改动前的旧 dirty=false
-      if (st.mtimeMs >= t0 && inst.dirty === false && inst.ready) return { ok: true, inst };
-    } catch { /* 正在写,下一轮再读 */ }
-  }
-  return { ok: false, inst };
-}
-
-async function submitMerge(args) {
-  if (!JOB_DIR) return { ok: false, error: "这不是 Skill 任务目录,没有可并回的目标" };
-  const wb = await waitWriteBack(JOB_DIR);
-  if (!wb.ok) return { ok: false, error: "15 秒内实例没把改动写回 project.proc(实例可能已经停了),先确认实例还在跑" };
-  const seq = Date.now();
-  const note = typeof args.note === "string" ? args.note.slice(0, 400) : "";
-  const resultFile = path.join(JOB_DIR, "merge-result.json");
-  try { fs.unlinkSync(resultFile); } catch {}
-  fs.writeFileSync(path.join(JOB_DIR, "merge-request.json"), JSON.stringify({ seq, note, requestedAt: new Date().toISOString() }), "utf8");
-  for (let i = 0; i < 120; i++) {
-    await sleep(500);
-    try {
-      const r = JSON.parse(fs.readFileSync(resultFile, "utf8"));
-      if (r && r.seq === seq) return r;
-    } catch { /* 还没有 */ }
-  }
-  return { ok: false, error: "60 秒内用户那边的 PromptCut 没有响应合并请求:可能没开着、或者 SKILL 模式已关闭。请用户在 Skill 对话框的历史任务里点「强制并入」。" };
+/** 桌面会话这次调用的身份(编辑器据此登记) */
+function desktopCaller(meta) {
+  const thread = threadOf(meta);
+  return {
+    type: 'desktop',
+    key: desktopSessionKey({ processSession: PROCESS_SESSION, thread, vendor: client.vendor }),
+    vendor: client.vendor,
+    label: client.label,
+    client: client.client,
+    ...(thread ? { thread } : {}),
+  };
 }
 
 let lastBridgeHost = null;
@@ -154,16 +88,19 @@ function bridgeTimeoutMs(tool) {
  * pair:codex、agy 不带可用的 id,只带配对线索(见 pairingOf),编辑器拿它和 runner 报到的调用配对
  * (server/agent/call-pairing.mjs)。
  */
-async function callBridge(tool, args, callId, pair) {
+async function callBridge(tool, args, callId, pair, meta, { schemaOnly = false } = {}) {
   const { port, hosts } = getTargets();
+  // AI 栏的命令行工具:带这一页的对话 ID(vite-plugin-ai 起 CLI 时塞的环境变量);桌面 APP 的会话:带会话身份与厂商。
+  // 列工具时顺手取卡片 / 部件清单拼 schema(schemaOnly):那不是会话自己的操作,不报身份 —— 不进 AI 栏的分组、不受 SKILL 闸管
+  const who = CLI_CALLER
+    ? { agent: process.env.PROMPTCUT_AGENT || undefined }
+    : schemaOnly ? {} : { caller: desktopCaller(meta) };
   for (const host of hosts) {
     try {
       const res = await fetch(`http://${host}:${port}/api/mcp/call`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // 多 Agent 分页:这个 MCP 进程是哪一页的 Agent 起的(vite-plugin-ai 起 CLI 时塞的环境变量),
-        // 编辑台拿它记「谁改了哪儿」;没有就不带
-        body: JSON.stringify({ tool, args, agent: process.env.PROMPTCUT_AGENT || undefined, callId: callId || undefined, pair: pair || undefined }),
+        body: JSON.stringify({ tool, args, ...who, callId: callId || undefined, pair: pair || undefined }),
         signal: AbortSignal.timeout(bridgeTimeoutMs(tool)),
       });
       if (lastBridgeHost !== host) {
@@ -238,10 +175,13 @@ async function handleMessage(line) {
     if (clientProtocolVersion !== "2025-03-26") {
       clientProtocolVersion = "2025-03-26";
     }
+    // 桌面 APP 的会话:认厂商(Claude Code 报 claude-code,Codex 报 codex-mcp-client),回 SKILL 提示词的短版
+    client = vendorOf(req.params?.clientInfo);
     sendResponse(req.id, {
       protocolVersion: clientProtocolVersion,
       capabilities: { tools: {} },
-      serverInfo: { name: "promptcut", version: "0.1.0" }
+      serverInfo: { name: "promptcut", version: "0.2.0" },
+      ...(CLI_CALLER ? {} : { instructions: SKILL_INSTRUCTIONS }),
     });
     return;
   }
@@ -257,13 +197,14 @@ async function handleMessage(line) {
       description: t.description,
       inputSchema: t.inputSchema
     }));
-    if (JOB_DIR) pubTools.push(SUBMIT_MERGE);
+    // 桌面会话多一个本地工具:完整的 SKILL 做法(编辑器没开也能读)
+    if (!CLI_CALLER) pubTools.unshift({ ...GUIDE_TOOL });
 
     // Fetch cards to dynamically update the schema for add_clip and update_clip
     try {
       // 这里要按 controls 生成 params 的 anyOf schema,所以必须要完整版;
       // list_cards 不带参数返回的是摘要(没有 controls)。
-      const res = await callBridge('list_cards', { detail: 'full' });
+      const res = await callBridge('list_cards', { detail: 'full' }, undefined, undefined, undefined, { schemaOnly: true });
       if (res.ok) {
         const out = await res.json();
         if (out.ok && out.result) {
@@ -279,7 +220,7 @@ async function handleMessage(line) {
 
     // 部件同理:add_part / set_part 的 params、add_composite 的 parts 换成按 partId 分支的真实 schema
     try {
-      const res = await callBridge('list_parts', { detail: 'full' });
+      const res = await callBridge('list_parts', { detail: 'full' }, undefined, undefined, undefined, { schemaOnly: true });
       if (res.ok) {
         const out = await res.json();
         if (out.ok && out.result) injectPartParams(pubTools, out.result);
@@ -296,22 +237,20 @@ async function handleMessage(line) {
     const tool = req.params.name;
     const args = req.params.arguments || {};
 
-    if (tool === SUBMIT_MERGE.name) {
-      const out = await submitMerge(args);
-      sendResponse(req.id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }], isError: !out.ok });
+    if (!CLI_CALLER && tool === GUIDE_TOOL.name) {
+      sendResponse(req.id, { content: [{ type: "text", text: skillGuide({ vendorLabel: client.label }) }] });
       return;
     }
-    
+
     let res;
     try {
       const meta = req.params._meta;
       const callId = meta && typeof meta === 'object' && typeof meta['claudecode/toolUseId'] === 'string' ? meta['claudecode/toolUseId'] : undefined;
-      res = await callBridge(tool, args, callId, callId ? undefined : pairingOf(meta));
+      res = await callBridge(tool, args, callId, callId ? undefined : pairingOf(meta), meta);
     } catch (e) {
       if (e.allRefused || isConnRefused(e)) {
-        const p = e.port || getTargets().port;
         sendResponse(req.id, {
-          content: [{ type: "text", text: "PromptCut 没在运行(端口 " + p + " 没有服务)" }],
+          content: [{ type: "text", text: `PromptCut 没在运行(端口 ${e.port} 没有服务)。请先打开 PromptCut,再回来重试;不要反复重试。` }],
           isError: true
         });
       } else {

@@ -25,9 +25,6 @@ export type AgentItemId = `agent:${string}`;
 export const CUTS_ITEM = "cuts";
 export type ItemId = SectionId | "script" | AgentItemId | typeof CUTS_ITEM;
 
-/** 和 editor/layoutMode.ts 的 LayoutMode 同形;这里不 import,好让测试不拖进 React */
-export type DockMode = "classic" | "chat";
-
 export interface RailLayout {
   left: ItemId[];
   right: ItemId[];
@@ -58,7 +55,7 @@ export function isPageItem(item: string): boolean {
   return item !== CUTS_ITEM;
 }
 
-/** AI 类项:剧本和 Agent。对话式布局下 rail 只显示这一类 */
+/** AI 类项:剧本和 Agent */
 export function isAiItem(item: string): boolean {
   return item === "script" || isAgentItem(item);
 }
@@ -73,25 +70,19 @@ export function sideOf(layout: RailLayout, item: string): Side | null {
   return null;
 }
 
-/** 这一侧 rail 上实际画出来的项:对话式只留 AI 类项,传统式全部 */
-export function visibleItems(items: readonly ItemId[], mode: DockMode): ItemId[] {
-  return mode === "chat" ? items.filter(isAiItem) : items.slice();
+/**
+ * 这一侧 rail 上画出来的项(全部;两侧永远显示,拖空的 rail 也留着当落点)。
+ */
+export function visibleItems(items: readonly ItemId[]): ItemId[] {
+  return items.slice();
 }
 
 /**
- * 这一侧整列显不显示。传统式两侧永远显示(拖空的 rail 也留着当落点);
- * 对话式下一侧一个 AI 类项都没有,整列不显示。
+ * 这一侧此刻真正选中(抽屉里显示)的项。记下的 active 不在这一侧(或是没有页面的剪辑组)时,
+ * 退到这一侧第一个有页面的项 —— 只是显示上退,不改记下的值。
  */
-export function sideVisible(layout: RailLayout, side: Side, mode: DockMode): boolean {
-  return mode !== "chat" || layout[side].some(isAiItem);
-}
-
-/**
- * 这一侧此刻真正选中(抽屉里显示)的项。记下的 active 在当前模式下看不见(对话式下选中的是分区)时,
- * 退到这一侧第一个看得见的项 —— 只是显示上退,不改记下的值,切回传统式还是原来那一项。
- */
-export function effectiveActive(layout: RailLayout, side: Side, mode: DockMode): ItemId | null {
-  const shown = visibleItems(layout[side], mode).filter(isPageItem);
+export function effectiveActive(layout: RailLayout, side: Side): ItemId | null {
+  const shown = visibleItems(layout[side]).filter(isPageItem);
   const want = layout.active[side];
   return want && shown.includes(want) ? want : (shown[0] ?? null);
 }

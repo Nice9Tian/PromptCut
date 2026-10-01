@@ -102,7 +102,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 
 ### 给探针起的 Chrome 加启动参数
 
-`PC_CHROME_ARGS="--flag-a --flag-b"` 只把参数原样透传给探针（以及 `headless.mjs`、预渲染）起的 Chrome，不做别的。典型用途是云端 Linux 以 root 运行要 `--no-sandbox`。不要用它关 TLS 校验（如 `--ignore-certificate-errors`）：对远端站点的探针会在证书有问题时照样通过，掩盖真问题；代理重新签发证书的环境按信任代理的 CA 办。
+`PC_CHROME_ARGS="--flag-a --flag-b"` 只把参数原样透传给探针（以及预渲染）起的 Chrome，不做别的。典型用途是云端 Linux 以 root 运行要 `--no-sandbox`。不要用它关 TLS 校验（如 `--ignore-certificate-errors`）：对远端站点的探针会在证书有问题时照样通过，掩盖真问题；代理重新签发证书的环境按信任代理的 CA 办。
 
 ### 长时间真跑审查环路
 

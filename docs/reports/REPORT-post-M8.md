@@ -985,3 +985,143 @@
 ### 14.9 顾问调用记录
 
 本轮没有调 codex 或 Gemini。子 Agent：Sonnet 一个（release-no-git，选法表「日常」，返工两次：加固「是否直接执行」、加 Cargo 行尾规则）。PC 辅助节点三项窗口项（PC-0713-1、PC-W7-1、PC-A45-1）。
+
+## 第 15 轮：Codex 接手 A4 + A5 真机验收与正式发布（2026-10-02，笔记本主会话，执行中）
+
+任务书是 `docs/plan/a45-acceptance-test-plan.md`（d391883f）；用户本轮补充指示取代其中「只测、不改代码、不合入、不出包」的旧范围。本轮授权包括写 main、出完整安装包、部署 /editor；PC 的用户安装不动，真补丁和多屏仍待用户。所有带耗时门槛的项在笔记本串行跑，取帧竞态按规定三实例并行。
+
+### 15.1 已执行与用户决定
+
+- main 起点 f119a66d；release 起点 fec9130b（应用 0.7.13 / 外壳 0.2.6）。集成分支同步 main 后依次 `--no-ff` 合入 ps1-bom、draft-lock、release-no-git。ps1-bom 的两处修改/删除冲突保持 A4 已删除的旧 Claude 桌面驱动及其测试，编码修复保留在现存脚本上。
+- R4 镜像退出脚本实际测到草稿锁残留，修复在独立 worktree/分支 `claude/r4-lock-cleanup`：Windows 持锁句柄关闭时由内核删除旁路文件，正常退出和强杀都不用等 Node 清理回调。见 `AGENT-r4-lock-cleanup.md` 卡点 1 第 1 行；只修实现，没有语义变更。已合流。Cargo 下子测试全名不同造成的夹具失败也已修复。
+- 用户已定：「文件 → 退出」保留，已同步 `docs/semantics/user-workflow.md`；回首页维持持锁。维持持锁会让其它实例在这个窗口回到首页后仍不能打开 A，直到切换草稿/新建/退出；若改成回首页放锁，其它实例能立刻接手 A，但返回 A 时要重新抢锁，也可能因为别人已经打开而被拒。本轮不改，政策复核列入待用户项。
+- R6 的 x=-2678 是单屏现场坐标。实际代码按 `available_monitors` 中最左屏位置减去窗口宽度和 256 像素计算，没有写死该值；Rust「副屏在主屏左边」测试通过。仍不能替代 PC 双屏实测，不宣称 R6 已过。
+- 正式命令因缺 VITE_DIAG_* 本地发布配置退出 1。解法表见 `AGENT-a45-build-config.md`；继续独立项，不把缺配置的测试构建当正式包。版本号沿用本轮已提交的应用 0.7.14 / 外壳 0.2.7，正式产物必须重新从正式 HEAD 出。
+
+### 15.2 子分支验证
+
+均由本主会话执行，依赖向上解析，没有创建 node_modules junction。ffmpeg 路径按本机 docs/local.md 就位；日志在对应 worktree 的 out/a45-validation/。令牌与密钥值未输出。
+
+| 分支 | 命令 | 结果 |
+|---|---|---|
+| ps1-bom 1398e237 | `npx tsc -b --force`；`npm test`；`node --test desktop/test/*.test.mjs`；`node --test server/test/claude-desktop.test.mjs`；Windows PowerShell 5.1 ParseFile 三份随包 .ps1；`node --check scripts/probes/m8-outbound-probe.mjs` | 0；4245 / 4243 / 0 / 2；19/19；16/16；三份各 0 解析错误；0 |
+| draft-lock c47f2abf | tsc 同上；`npm test`；`node --experimental-test-module-mocks --test src/editor/io/draftLock.test.mjs` | 0；4251 / 4249 / 0 / 2；7/7 |
+| release-no-git 913f223e | 审查实际 diff；`node --test desktop/test/prepare-runtime-filter.test.mjs`；集成分支全量 | 5/5；完整基线结果见下一节 |
+| r4-lock-cleanup 2e8c68c3 / d87821a9 | tsc 同上；`npm test`；直接编译 proc_lock.rs 和带 mod proc_lock 的 Rust 测试 harness | 0；4217 / 4216 / 0 / 1；修复前 3 项失败、修复后 3 项过，另 1 个忽略子入口；夹具修正后再次全量同样全过 |
+
+### 15.3 R1～R8 现场验收
+
+本轮截图与脚本在集成 worktree 的 `desktop/.cache/a45-install/`；截图、MCP 输出、进程表和命令结果已直接贴进对话。
+
+| 项 | 结论（当前） | 实测与证据文件 |
+|---|---|---|
+| R1 | 过 | Codex 原生登记 MCP 读项目并 split_clip，rev 7→8；AI 栏出现 Codex 分组，悬浮窗有「上一步：切开卡片」与画面；抓到「Codex 正在 see_frames」；展开超过 60 s 仍保持 SKILL；传统式收起显示后台运行，桌面 Claude get_project 回 skillClosed、无项目改动。r1-ai-top.png、r1-collapsed.png、r1-working-c-60.png、r1-open-60-start.png / end.png、r1-traditional-collapsed.png、r1-failed-group.png |
+| R2 | 过 | 实际 Windows 右键托盘菜单成功，打开后回原位置、前台，输入框接受打字；r2-tray-menu.png、r2-open-result.png、r2-type.png |
+| R3 | 过 | 托盘和悬浮窗两种右键关闭均使应用及 sidecar 进程为 0；本会话的 stdio MCP 客户端单列、结束后重测，不当成 sidecar。再开主窗仍为 (240,54)、2422×1453，状态文件记的是屏上坐标；r3-tray-clean-menu.png / quit.png、r3-overlay-menu.png / quit.png、r3-reopen-position.png |
+| R4 | 过（保留初测失败） | 初测进程归零但 64 字节锁残留。修复后的实际安装版打开 A，A 锁 64 字节；展开 Rect=240,54 2422x1453；收起后镜像 0.39 s 发 --quit、1.35 s wait=0、3.48 s final=0、fallback=False，完整进程表安装目录名下为 0，A/B 正文保留、锁消失，重开 Rect 相同。r4-final-open-a.png、r4-final-overlay.png、r4-final-quit-test.log、r4-final-reopen.png。最后一轮输入桌面在 Screen-saver，使用真实 WebView 截图与原生 PrintWindow，未伪造桌面图 |
+| R5 | 待用户 | 真补丁的 PC 基准清单不可达。PC 上从本轮最终 main 出 `cd desktop && npm run release -- --from-head --patch-only`，将真实补丁拷到笔记本后补测 0.2.7 的退出/装补丁/重开，以及允许的先降装 0.7.13（外壳 0.2.6）同补丁强杀兜底，再装回本轮版本。没有动 PC 的用户安装，也没用镜像冒充真补丁 |
+| R6 | 待用户在 PC 验 | 副屏放在主屏左边，收起后两屏上都不应出现主窗任何一部分；重点核对主窗虽仍 visible，计算出的屏外坐标是否确在所有屏幕之外。单屏不等于通过 |
+| R7 | 草稿锁与实际拓展包 BOM 过；真补丁待用户 | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 是独立拓展包的临时执行脚本。实际 `node desktop/scripts/make-extension.mjs stt --keep-stage` 退出 0（19.5 s），NSIS 收集 payload 中脚本 BOM=True、PowerShell 5.1.26100.9444 ParseFile=0；script SHA-256 A644898DAEF50829B9ED4664C86D827D1104DFAC16F09E113D51F854A1EADCAD。未安装可选能力，不把源解析冒充随包结果；补丁中的 apply-patch.ps1 与真安装仍待 R5 |
+| R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
+
+### 15.4 集成整套验证（本机项完成；W7 为 PC 窗口项）
+
+`claude/a45-merge` 代码验证起点 47bb49fb 合流后的内容；其后变更只有用户决定的纯文档和 Rust 子测试夹具。G0：`npx tsc -b --force` 0；`npm test` 4224 / 4223 / 0 / 1（80.13 s）；桌面脚本 31/31。较 main 少的测试随 A4 删除旧被测路径，沿用第 14 轮已说明的原因，没有删现行路径测试。Rust MSVC `cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml` 27 过、0 失败、1 子入口忽略；外壳 release 编译通过。
+
+G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.json` 保留。已过：main 全长 1800 帧、候选两遍 1800/1800 相同、快照重放、就绪索引、流式生产及 group（全幅编码 p50 242 ms，门槛 300 ms）、预览 page-preload、视频节奏、取帧竞态三实例合计 108000 次且 stale/wrongPixel 都为 0。普通预览兜底仅「跳转:舞台记下了逐拍分级」失败，按规则在各子分支独立目录与实例上逐个定位。像素比较启动器误写脚本文件名，现已补齐，结果见下文。
+
+首套 45 个命令已执行完：40 个退出 0，M7 退出 3 仅 W7 真跨机待复核；另有上述像素比较命令错误、普通预览回退、C10 界面、换档三项失败。M7 最慢锚点段 24028 ms，低于本机 30000 ms 门槛。真实跨机沿用第 14 轮已有证据，本轮没有重跑，按主计划 6.4 节列为 PC 窗口项，不混称退出 0。导航 200 次通过；两种存储布局各 30 轮、60 次推送，均零失败。C10 点击前下载数为 2：默认下载目录存在 9 月 28 日的两份测试 JSON，保留原文件，改用各次独立目录复跑原断言。换档失败包括采样空档与素材原尺寸到齐后的切换超时，待逐分支定位。
+
+像素对比已补齐。先发现命令行 main 导出默认 4 个进程、`verify-determinism` 用单进程，保留旧产物后从同一份 main `f119a66d` 重新以 `--workers 1 --fps 30 --no-video` 导出全长到 `a45-baseline-single-30`（189.0 s、1800 帧）。`node scripts/probes/export-baseline-compare.mjs compare --baseline <main worktree>/out/a45-baseline-single-30/frames --candidate out/verify-a/frames` 退出 0，1800/1800 逐字节相同、零不同、零缺失，没有改像素基线。两边 `snapshotCode` 均为 `00a5264bf8a062ff6e0b5ed0516cccd1`，`captureCode` 均为 `86e443cb6fa838aef64788af6822fd68`。
+
+验证启动器第一次把 Windows Path 属性大小写写错，导致测试子进程找不到 PowerShell/taskkill。结束本启动器进程树、修正环境传递后全量通过；失败日志保留为 g0-test-harness-path-failure.log，未当代码缺陷处理。导出日志的 1440 是第一个分片，汇总为 1800；重新读取汇总已纠正口径。
+
+### 15.4.1 首套命令逐项记录
+
+下表保留首跑原始退出码；后面的定位、补测结果另记，不覆盖失败证据。路径占位符指对应 worktree，命令中的端口为实际使用值。G0 全量命令是 npm test 的展开；在线构建是 npm run build 中的 Vite 阶段。
+
+| 项 | 实际命令 | 退出码 | 秒 |
+|---|---|---:|---:|
+| g0-tsc | `node <repo>/node_modules\typescript\bin\tsc -b --force` | 0 | 7.6 |
+| g0-test | `node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs` | 0 | 80.2 |
+| desktop-test | `node --test desktop/test/*.test.mjs` | 0 | 2.4 |
+| online-build | `node <repo>/node_modules\vite\bin\vite.js build --mode online --outDir <integration worktree>\out\a45-validation\dist-online` | 0 | 3.2 |
+| main-pixels | `node scripts/export-frames.mjs --url http://127.0.0.1:5206/?export=1 --out <main worktree>\out\a45-baseline --no-video` | 0 | 153.4 |
+| main-pixels | `node scripts/export-frames.mjs --url http://127.0.0.1:5206/?export=1 --fps 30 --out <main worktree>\out\a45-baseline-30 --no-video` | 0 | 192 |
+| determinism | `node scripts/verify-determinism.mjs --url http://127.0.0.1:5203/?export=1 --fps 30` | 0 | 502.2 |
+| pixel-compare | `node scripts\probes\export-baseline-compare-probe.mjs compare --baseline <main worktree>\out\a45-baseline-30\frames --candidate <integration worktree>\out\verify-a\frames` | 1 | 0.1 |
+| unified-frames | `node scripts/verify-unified-frames.mjs --origin http://127.0.0.1:5203` | 0 | 15.1 |
+| ready-index | `node scripts\probes\ready-index-probe.mjs --port 5260` | 0 | 98.3 |
+| stream-produce | `node scripts\probes\stream-produce-probe.mjs --origin http://127.0.0.1:5203` | 0 | 57.6 |
+| stream-group | `node scripts\probes\stream-produce-probe.mjs --origin http://127.0.0.1:5203 --group` | 0 | 33.9 |
+| preview-fallback | `node scripts\probes\preview-fallback-probe.mjs --origin http://127.0.0.1:5203` | 1 | 82.2 |
+| preview-preload | `node scripts\probes\preview-fallback-probe.mjs --origin http://127.0.0.1:5203 --page-preload` | 0 | 38.9 |
+| video-cadence | `node scripts\probes\video-source-cadence-probe.mjs --port 6030` | 0 | 19.1 |
+| seek-race-1 | `node scripts\probes\video-seek-race-probe.mjs --port 6211 --mode fixed --busy --settle 0 --loops 300` | 0 | 92.9 |
+| seek-race-3 | `node scripts\probes\video-seek-race-probe.mjs --port 6231 --mode fixed --busy --settle 0 --loops 300` | 0 | 93.3 |
+| seek-race-2 | `node scripts\probes\video-seek-race-probe.mjs --port 6221 --mode fixed --busy --settle 0 --loops 300` | 0 | 93.4 |
+| c10-browser | `node scripts\probes\c10-browser-probe.mjs --only-a4 --no-video --base-port 5600 --dist <integration worktree>\out\a45-validation\dist-online` | 0 | 181.9 |
+| c10-user-card | `node scripts\probes\c10-browser-probe.mjs --user-card --only-a4 --no-video --base-port 5600 --dist <integration worktree>\out\a45-validation\dist-online` | 0 | 343.4 |
+| online-user-cards | `node scripts\probes\online-user-cards-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 5650` | 0 | 33.9 |
+| online-stage-watch | `node scripts\probes\online-stage-watch-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 5720` | 0 | 143 |
+| m7-browser | `node scripts\probes\m7-browser-probe.mjs --role all --timing-authoritative --base-port 5710` | 3 | 831.1 |
+| desktop-auto-node | `node scripts\probes\desktop-auto-node-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 5620` | 0 | 464.8 |
+| c10-ui | `node scripts\probes\c10-ui-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --proxy-port 5660 --doc-port 5661 --asset-port 5662 --proxy2-port 5663` | 1 | 167.1 |
+| online-stale-layer | `node scripts\probes\online-stale-layer-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 5610` | 0 | 41.8 |
+| query-render | `node scripts\probes\query-render-probe.mjs --port 5756` | 0 | 167.9 |
+| creativity | `node scripts\probes\creativity-probe.mjs --origin http://127.0.0.1:5203` | 0 | 8.7 |
+| user-editing | `node scripts\probes\user-editing-probe.mjs --origin http://127.0.0.1:5203` | 0 | 4.7 |
+| multi-agent | `node scripts\probes\multi-agent-probe.mjs --phase all` | 0 | 57.6 |
+| custom-measure | `node scripts\probes\custom-measure-probe.mjs --port 5860` | 0 | 23.4 |
+| asset-path | `node scripts\probes\asset-path-probe.mjs --port 5920` | 0 | 28.4 |
+| bake-asset | `node scripts\probes\bake-asset-probe.mjs --port 5970` | 0 | 155.7 |
+| claim-gate | `node scripts\probes\claim-gate-probe.mjs --port 5990 --doc-port 5993` | 0 | 339.3 |
+| tiers | `node scripts\probes\tiers-probe.mjs --port-a 6020 --port-r 6023` | 0 | 34.1 |
+| tier-switch | `node scripts\probes\tier-switch-probe.mjs --origin http://127.0.0.1:5203 --remote-port 6025` | 1 | 93.8 |
+| storage-cap | `node scripts\probes\storage-cap-probe.mjs --port 5670` | 0 | 31.2 |
+| storage-ui | `node scripts\probes\storage-ui-probe.mjs --port 5680` | 0 | 84.8 |
+| cross-machine-proc | `node scripts\probes\cross-machine-proc-probe.mjs --port-a 6070 --port-b 6075 --port-c 6080` | 0 | 124.8 |
+| shared-import-upload | `node scripts\probes\shared-import-upload-probe.mjs --doc-port 6120 --asset-port 6121 --port-a 6110 --port-b 6115` | 0 | 31.7 |
+| skill-mcp | `node scripts\probes\skill-mcp-probe.mjs --port 5880` | 0 | 23.7 |
+| online-stage-handshake | `node scripts\probes\online-stage-handshake-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 6010` | 0 | 174 |
+| online-nav-stress | `node scripts\probes\online-nav-stress-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 6090 --iters 200 --out <integration worktree>\out\a45-validation\nav-stress` | 0 | 268.2 |
+| push-race-shard | `node scripts\probes\push-race-probe.mjs --port 6440 --rounds 30 --store shard` | 0 | 25.5 |
+| push-race-flat | `node scripts\probes\push-race-probe.mjs --port 6440 --rounds 30 --store flat` | 0 | 66.9 |
+
+### 15.4.2 首跑失败项定位与补测
+
+按 verification.md 在七个子分支/集成分支逐个单跑，dev 端口依次 6240、6250、6260、6270、6280、6290、6300；换档远端 6345；C10 每次独立在线构建，proxy/doc/asset/proxy2 端口 6340/6341/6342/6343。每次给唯一的 `--out` 与数据目录，原断言保留；命令全文和耗时在 `out/a45-validation/locate/results.json`。
+
+| 分支 | preview-fallback（码 / 秒） | tier-switch（码 / 秒） | online build（码 / 秒） | c10-ui（码 / 秒） |
+|---|---|---|---|---|
+| skill-mcp | 0 / 96.2 | 0 / 64.6 | 0 / 3.0 | 0 / 163.6 |
+| tray | 0 / 97.5 | 0 / 62.0 | 0 / 3.0 | 0 / 175.3 |
+| release-no-git | 0 / 95.0 | 1 / 93.2 | 0 / 3.0 | 0 / 172.2 |
+| ps1-bom | 0 / 96.7 | 1 / 93.4 | 0 / 3.0 | 0 / 172.0 |
+| draft-lock | 0 / 96.7 | 1 / 94.0 | 0 / 2.9 | 0 / 168.5 |
+| r4-lock-cleanup | 0 / 97.2 | 1 / 95.6 | 0 / 3.0 | 0 / 174.3 |
+| a45-merge | 0 / 47.5 | 1 / 100.3 | 0 / 3.3 | 0 / 167.0 |
+
+换档回到 release-no-git 所含的新基线独立定位，专用分支 `claude/tier-switch-baseline`。只读 RPC/DOM 诊断保留原断言，两轮重现失败：同一项目素材 url 被本机缺失检查清空，两个槽位真实一起隐藏，前台角色与媒体时刻未改变。原探针只调用 setRemoteAssets 却未进入共享空间；main bb21d84b 新增的本机缺失检查是在错误夹具中正常执行。按真实 enableCollab 入口建立隔离共享项目后添加测试素材，再由原场景控制远程服务；产品代码和黑帧、帧误差、超时断言不动。解法表 `AGENT-tier-switch-baseline.md` 卡点 1 第 6 行（三级，无〔裁〕）。
+
+子分支 `node scripts/probes/tier-switch-probe.mjs --origin http://127.0.0.1:6350 --remote-port 6355 --out out/a45-validation/tier-fix-first` 0、71.0 s、fails=[]；T5a/T5c/T5e 黑帧全为 0、播放换档误差为 0 帧。类型检查 0、全量 4244 / 4242 / 0 / 2（82.5 s）、桌面脚本 21/21。按规则先合回 release-no-git（6295c387），再合入 a45-merge（17f515c2）。
+
+另发现 Windows PowerShell 5.1 函数只输出一个 PSCustomObject 时为标量，Count=null。专用 `claude/ps1-process-count` 修正真实补丁关闭段四处计数，避免仅剩一个时跳过退出或误报干净；真实关闭代码段在隔离假进程/时钟中执行四种情形全过。类型检查 0、全量 4224 / 4223 / 0 / 1（81.9 s）、桌面脚本 35/35、源三份随包 PowerShell ParseFile 各 0 错且 BOM 均有；c4d4ed8d 合流。两项都不改渲染，子分支不重复 G0-R，集成合流后补跑 G0、桌面脚本及换档。
+
+合流后集成 G0 复验：代码 17f515c2，之后仅报告、计划更正、R4 证据。类型检查 0、10.3 s；全量测试 4224 / 4223 / 0 / 1、82.2 s；桌面脚本 35/35、1.3 s。日志 `out/a45-validation/branch-results.json`。集成换档复验同一命令退出 0、70.7 s、fails=[]；T5a 黑帧 0、1940 ms；T5b 换槽后黑帧 0、4099 ms、帧误差 -0.39；T5c 慢原尺寸源黑帧 0、16359 ms；T5e 重载后黑帧 0、2120 ms。门槛与产品代码均未改，结果在 `out/a45-validation/tier-fix-first/`。
+
+### 15.5 发版、部署、未跑与〔裁〕（执行中）
+
+正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1 后，重试通过，详见下一段。该测试构建不构成正式发布通过。
+
+NSIS 工具缓存已核对能报告 v3.11。`cd desktop && npx tauri build` 测试构建重试退出 0，Rust release 编译 2.96 s，其后完成安装包压缩。测试包 PromptCut-0.7.14-a45-retest-setup.exe 为 432441826 字节，SHA-256 `3E68F7EEA5EBEF4DD51FA3751D00F156F8B6CA23B45FDCF224DAF09775E6C177`；已用真实安装向导完成本机重装，安装的 promptcut.exe 与目标 Rust 产物 SHA-256 相同（`902AF6463A1DE85F864248B1D8DF7664C1EC22DE6D7AC8ED2286424E25315358`）。有一条 `__TAURI_BUNDLE_TYPE` 标记缺失警告，保留日志；源码没有 updater 插件，本轮仍用已有的自有补丁安装器。这个测试包不构成正式 release 命令通过。部署前只读检查：主站与两个舞台源 `/editor/` 均 200，主站 `/hosted/healthz` 200，托管服务 online、重启计数 21。托管清单只变 `vite-plugin-media.ts` 的旧无头实例队列判断；托管组合实际调用的素材函数未变，只需换静态编辑器页。
+
+合入前 `npm run build`（先 tsc，再 Vite 普通网页构建）退出 0，Vite 1.79 s；提交 d3bbb625，工作区干净。main 随后按本轮明确授权 `--no-ff` 合流并推送；实际提交号与 /editor 部署结果补在下文。立即判定 release：桌面壳与运行时布局涉及本轮改动，正式发版构建未成功，三项合入条件未同时满足，因此保留 fec9130b，不能用测试 NSIS 包代替正式构建。R5 真补丁与老外壳降装因 PC 真实补丁未到而未跑；R6 无第二屏；正式出包因本地构建配置缺失。
+
+R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1.0.0.exe`，83991737 字节，SHA-256 `4A8099784FC60FADB95C9B124D914B002293359FF4E8C96A1EF22EAB3ABAB582`。保留的 `.cache/ext-stage/PromptCut-ext-stt-1.0.0/` 为成功 NSIS `File /r` 收入的真实 payload；本轮只做随包编码核验，没有安装或发布该可选能力。
+
+本轮暂未新增〔裁〕：退出清锁只修实现；菜单保留来自用户明确决定；草稿锁政策依用户决定维持。未把出包守门删掉或把真补丁要求降成镜像。
+
+### 15.6 顾问调用记录
+
+没有调用顾问或子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；所有工作由 Codex 主会话完成，任务未派给 PC，也未向任何外部会话发消息。

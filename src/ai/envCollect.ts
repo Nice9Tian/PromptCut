@@ -1,5 +1,4 @@
 import { buildEnvReport, type EnvInput } from "./envReport";
-import { getLayoutMode } from "../editor/layoutMode";
 import { getSkillSnapshot } from "../skill/skillMode";
 import { getTabs } from "./agentTabs";
 import { getState } from "../store/project";
@@ -22,7 +21,6 @@ function clientInput(): EnvInput {
   const st = getState();
   const p = st.project;
   return {
-    layout: getLayoutMode(),
     skill: (() => { try { return getSkillSnapshot().state; } catch { return null; } })(),
     agentTabs: (() => { try { return getTabs().length; } catch { return 1; } })(),
     project: {

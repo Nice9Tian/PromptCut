@@ -48,7 +48,6 @@ test('ARN-01 开关与环境变量', () => {
   assert.equal(autoRenderNodeOffReason({}), null);
   assert.equal(autoRenderNodeOffReason({ PROMPTCUT_AUTO_RENDER_NODE: '1' }), null);
   assert.equal(autoRenderNodeOffReason({ PROMPTCUT_AUTO_RENDER_NODE: '0' }), 'disabled');
-  assert.equal(autoRenderNodeOffReason({ PROMPTCUT_HEADLESS: '1' }), 'headless');
   assert.equal(autoRenderNodeOffReason({ PROMPTCUT_PUSH: '0' }), 'push-disabled');
   assert.equal(autoRenderNodeOffReason({ PROMPTCUT_NODE_PROFILE: 'host' }), 'host-profile');
   assert.equal(autoRenderNodeOffReason({ PROMPTCUT_SHARED_CONFIG: 'x.json' }), 'env-configured');

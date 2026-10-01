@@ -1,4 +1,4 @@
-<#
+﻿<#
     PromptCut 更新补丁安装器。
 
     随补丁包一起发出去，在用户机器上运行（不是构建脚本）。它把补丁里的
@@ -204,7 +204,7 @@ function Get-ActiveAiRuns {
     }
 }
 
-$running = Get-TargetProcesses
+$running = @(Get-TargetProcesses)
 if ($running.Count -gt 0) {
     <#
         先问一句「有没有对话正在跑」。
@@ -232,16 +232,40 @@ if ($running.Count -gt 0) {
         if ((Read-Host "  现在关掉它？(y/N)") -notmatch '^[yY]') { Write-Host "  已取消。"; exit 0 }
     }
     Write-Step "正在关闭 PromptCut…"
-    foreach ($p in $running) {
+    <#
+        先请它自己干净退出:对安装目录里的外壳 exe 发一次 `--quit`。已经在跑的那一份由单实例
+        插件收到参数,走和托盘「关闭」同一条路(sidecar 整棵树清掉、.proc 锁释放、收在后台的
+        主窗先挪回屏幕内再记位置);发参数的这个进程自己马上退出。
+
+        外壳 0.2.7 起才认 `--quit`。0.2.6 及更早的外壳把它当成普通的第二次启动 —— 只是把编辑
+        界面唤回到前面,不退出;那样等满 10 秒后照旧走下面的 CloseMainWindow + 强杀,和以前一样,
+        不会更差。
+
+        CloseMainWindow 在 0.2.7 起的外壳上只会把编辑界面收到后台(关窗不退出),真正兜底的是
+        后面的 Stop-Process -Force(sidecar 在 kill-on-close 的 job 里,外壳一死跟着走;
+        .proc 的内核锁随进程收走,Node 那层走 pid 兜底)。
+    #>
+    if (Test-Path -LiteralPath $shellExe) {
+        try {
+            $null = Start-Process -FilePath $shellExe -ArgumentList '--quit' -PassThru -ErrorAction Stop
+        } catch {
+            Write-Warn "发不出退出请求（$($_.Exception.Message)），改用关窗口 + 强制结束。"
+        }
+        $deadline = (Get-Date).AddSeconds(10)
+        while (@(Get-TargetProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    foreach ($p in Get-TargetProcesses) {
         try { $null = $p.Proc.CloseMainWindow() } catch { }
     }
-    Start-Sleep -Seconds 2
+    if (@(Get-TargetProcesses).Count -gt 0) { Start-Sleep -Seconds 2 }
     foreach ($p in Get-TargetProcesses) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
     }
     # node 子进程未必跟着外壳退，而它才是握着 runtime\app 的那个。
     Start-Sleep -Seconds 2
-    $left = Get-TargetProcesses
+    $left = @(Get-TargetProcesses)
     if ($left.Count -gt 0) {
         $names = ($left | ForEach-Object { "$($_.Name)($($_.Id))" }) -join '、'
         Fail "PromptCut 关不掉（还剩：$names）。请手动退出后再运行本更新。"

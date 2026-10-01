@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from "react";
 import { activateTab, addTab, getActiveTabId, getTabs, subscribeTabs } from "../../ai/agentTabs";
-import { getLayoutMode } from "../layoutMode";
 import { setRailCollapsed, toggleRailCollapsed } from "../sideRails";
 import { writeStored } from "../left/stored";
 import {
@@ -11,18 +10,15 @@ import {
   effectiveActive,
   gapToFullIndex,
   hasPages,
-  isAiItem,
   isPageItem,
   isSectionItem,
   moveItem,
   sameLayout,
   sideOf,
-  sideVisible,
   syncAgents,
   validateLayout,
   visibleItems,
   withActive,
-  type DockMode,
   type ItemId,
   type RailLayout,
   type Side,
@@ -104,15 +100,6 @@ export function useRailLayout(): RailLayout {
   return useSyncExternalStore(subscribeRailLayout, getRailLayout, getRailLayout);
 }
 
-/**
- * 这一侧整列显不显示(railLayout.sideVisible)。只订阅这一个布尔值:Editor / RightPanel 这种大组件
- * 不该因为 rail 上点了一下(只改选中项)就整个重渲。
- */
-export function useSideVisible(side: Side, mode: DockMode): boolean {
-  const read = () => sideVisible(layout, side, mode);
-  return useSyncExternalStore(subscribeRailLayout, read, read);
-}
-
 /** 这一项在哪一侧(不在布局里返回 null) */
 export function railSideOf(item: ItemId): Side | null {
   return sideOf(layout, item);
@@ -138,7 +125,7 @@ export function activateRailItem(item: ItemId, opts: { expand?: boolean } = {}):
 
 /** rail 上点一项:点的是这一侧此刻选中的项 = 收起 / 展开;点别的项 = 切过去并展开 */
 export function clickRailItem(side: Side, item: ItemId): void {
-  if (effectiveActive(layout, side, getLayoutMode()) === item) {
+  if (effectiveActive(layout, side) === item) {
     toggleRailCollapsed(side);
     return;
   }
@@ -150,10 +137,9 @@ export function clickRailItem(side: Side, item: ItemId): void {
  * 放下之后:被拖项成为目标侧选中项、展开目标侧;源侧改选相邻一项,源侧空了收起源侧。
  */
 export function moveRailItem(item: ItemId, side: Side, shownGap: number): void {
-  const mode = getLayoutMode();
   const full = layout[side];
-  const gap = gapToFullIndex(full, visibleItems(full, mode), shownGap);
-  const res = moveItem(layout, item, side, gap, mode === "chat" ? (id) => isAiItem(id) : undefined);
+  const gap = gapToFullIndex(full, visibleItems(full), shownGap);
+  const res = moveItem(layout, item, side, gap);
   if (!res) return;
   commit(res.layout);
   noteActivated(item);
