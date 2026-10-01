@@ -51,7 +51,13 @@
  * - 分片数 `max(1, ceil(size / chunkSize))`；除最后一片外每片恰好 `chunkSize` 字节。
  * - `ext` 以最先登记的非空值为准。
  * - 同一哈希的登记、收尾、删除串行执行；分片字节的写入不排队。
- * - 写一片之前先撤掉它的「收到」标记，写完、长度核对无误再补上。
+ * - 没收到的片：写完、长度核对无误才补上「收到」标记；中途失败、断流、长度不符都不补。
+ *   登记时判过「没有标记」之后不再删标记：此后冒出来的标记只能是另一路刚写完补上的。
+ * - 已收到的片再传（两路同时推同一内容、或重试与原传赛跑）：不重写、不撤标记，把 `source` 读完核对长度；
+ *   长度对回 `ok`，长度不对才撤掉标记回 `length`，读的途中断流照原样抛、标记保留（存着的字节没被碰过）。
+ *   原来一律先撤标记再写：另一路已经答过「收到」、正要收尾，就会被这里撤掉的标记弄成 `incomplete`
+ *   （claude/push-incomplete〔裁〕）。
+ * - 写完补标记时暂存已被收尾入库（另一路先收尾了）：回 `complete`，不回 `discarded`。
  * - 收尾按片号顺序算全件 sha256：不符丢弃全部暂存；相符入库。
  */
 
@@ -137,6 +143,16 @@ export function drainSource(source) {
   return (async () => {
     try { for await (const _ of source) { /* 丢掉 */ } } catch { /* 当读完 */ }
   })();
+}
+
+/**
+ * 把 `source` 读完扔掉，回读到的字节数；读的途中出错照原样抛（与 `drainSource` 不同）。
+ * 给「已收到的片再传」用：不落盘，只核对长度。
+ */
+export async function countSource(source) {
+  let bytes = 0;
+  for await (const chunk of source) bytes += toBuffer(chunk).length;
+  return bytes;
 }
 
 /** 把一段数据变成 Buffer（字符串按 utf8） */

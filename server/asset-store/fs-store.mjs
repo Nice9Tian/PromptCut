@@ -6,6 +6,7 @@
  * - 暂存：`<dir>/.chunks/<hash>/`，里面是 `meta.json`（size、ext）、`data`（按偏移原位写的全件）、
  *   `<n>.ok`（这一片完整落盘的标记）。
  * 写一片之前先删它的标记，写完、长度对了才补上 —— 断电、断线、写到一半失败都只会让这一片算「没收到」。
+ * 已有标记的片再传不重写、不删标记，只读完核对长度（规则见 `blob-store.mjs` 文件头）。
  * 收尾时只读一遍 `data` 算哈希，再直接改名成全件，不再拷一遍。
  *
  * 本模块不引 `vite-plugin-media.ts`：找已入库文件（兼容老的整件导入）、入库后写媒体索引、
@@ -28,7 +29,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
   BLOB_CHUNK_SIZE, normalizeHash, normalizeExt, checkChunkArgs, chunkCountOf, chunkLengthOf,
-  extOfName, createKeyedLock, drainSource, toBuffer, minimalContentType,
+  extOfName, createKeyedLock, drainSource, countSource, toBuffer, minimalContentType,
 } from './blob-store.mjs';
 
 /**
@@ -262,14 +263,21 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       if (n >= count) return { status: 'out-of-range', count };
       const expected = chunkLengthOf(size, n, chunkSize);
 
-      // 登记（串行）：已入库就幂等放过；size 对不上拒掉；先删这一片的标记，写完再补
+      // 登记（串行）：已入库就幂等放过；size 对不上拒掉；这一片已收到就不重写（见 blob-store.mjs 文件头）；
+      // 否则写完再补标记。只在还没登记过（没有 meta.json）时删一次这一片的标记，清掉来历不明的残留；
+      // 登记过的不删：上面刚判过「没有标记」，此时冒出来的标记只能是另一路刚写完补上的，删了它，
+      // 那一路已经答过 200、正要收尾，就会收到 incomplete（claude/push-incomplete）
       const pre = await withLock(lockKey(key), async () => {
         if (await resolveFile(key)) return 'complete';
         const meta = await readMeta(key);
         if (meta && meta.size !== size) return { conflict: meta.size };
-        if (!meta || (!meta.ext && wantExt)) await writeMeta(key, { size, ext: meta?.ext || wantExt });
         const d = stagingDir(key);
-        await fs.rm(path.join(d, `${n}.ok`), { force: true });
+        if (meta && await exists(path.join(d, `${n}.ok`))) {
+          if (!meta.ext && wantExt) await writeMeta(key, { size, ext: wantExt });
+          return 'have';
+        }
+        if (!meta) await fs.rm(path.join(d, `${n}.ok`), { force: true });
+        if (!meta || (!meta.ext && wantExt)) await writeMeta(key, { size, ext: meta?.ext || wantExt });
         // data 不存在就建一个空的；已经存在的不截断（别的片可能已经写进去了）
         await (await fs.open(path.join(d, 'data'), 'a')).close();
         return 'ok';
@@ -278,6 +286,13 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       if (typeof pre === 'object') return { status: 'size-mismatch', size: pre.conflict };
 
       const d = stagingDir(key);
+      if (pre === 'have') {
+        // 已收到的片再传：存着的字节不碰，只读完核对长度；断流照原样抛，标记保留
+        const got = await countSource(source);
+        if (got === expected) return { status: 'ok', bytes: got };
+        await withLock(lockKey(key), () => fs.rm(path.join(d, `${n}.ok`), { force: true }));
+        return { status: 'length', expected, got };
+      }
       let bytes = 0;
       const counter = new Transform({
         transform(chunk, _enc, cb) {
@@ -293,9 +308,10 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       // 出错（断线等）原样抛给调用方，这一片的标记没补，对账时报「没收到」
       await pipeline(source, counter, createWriteStream(path.join(d, 'data'), { flags: 'r+', start: n * chunkSize }));
       if (bytes !== expected) return { status: 'length', expected, got: bytes };
-      // 标记落在暂存目录里；这期间要是被收尾丢弃了，目录不在，标记也就不写
+      // 标记落在暂存目录里；这期间要是被收尾丢弃了，目录不在，标记也就不写。
+      // 目录不在是因为另一路先收尾入库了（两路同时推同一内容）：这一片的字节已在全件里，回 complete
       try { await fs.writeFile(path.join(d, `${n}.ok`), ''); }
-      catch { return { status: 'discarded' }; }
+      catch { return (await resolveFile(key)) ? { status: 'complete' } : { status: 'discarded' }; }
       return { status: 'ok', bytes };
     },
 
