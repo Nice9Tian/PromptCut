@@ -1036,6 +1036,58 @@ G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.j
 
 验证启动器第一次把 Windows Path 属性大小写写错，导致测试子进程找不到 PowerShell/taskkill。结束本启动器进程树、修正环境传递后全量通过；失败日志保留为 g0-test-harness-path-failure.log，未当代码缺陷处理。导出日志的 1440 是第一个分片，汇总为 1800；重新读取汇总已纠正口径。
 
+### 15.4.1 首套命令逐项记录
+
+下表保留首跑原始退出码；后面的定位、补测结果另记，不覆盖失败证据。路径占位符指对应 worktree，命令中的端口为实际使用值。G0 全量命令是 npm test 的展开；在线构建是 npm run build 中的 Vite 阶段。
+
+| 项 | 实际命令 | 退出码 | 秒 |
+|---|---|---:|---:|
+| g0-tsc | `node <repo>/node_modules\typescript\bin\tsc -b --force` | 0 | 7.6 |
+| g0-test | `node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs` | 0 | 80.2 |
+| desktop-test | `node --test desktop/test/*.test.mjs` | 0 | 2.4 |
+| online-build | `node <repo>/node_modules\vite\bin\vite.js build --mode online --outDir <integration worktree>\out\a45-validation\dist-online` | 0 | 3.2 |
+| main-pixels | `node scripts/export-frames.mjs --url http://127.0.0.1:5206/?export=1 --out <main worktree>\out\a45-baseline --no-video` | 0 | 153.4 |
+| main-pixels | `node scripts/export-frames.mjs --url http://127.0.0.1:5206/?export=1 --fps 30 --out <main worktree>\out\a45-baseline-30 --no-video` | 0 | 192 |
+| determinism | `node scripts/verify-determinism.mjs --url http://127.0.0.1:5203/?export=1 --fps 30` | 0 | 502.2 |
+| pixel-compare | `node scripts\probes\export-baseline-compare-probe.mjs compare --baseline <main worktree>\out\a45-baseline-30\frames --candidate <integration worktree>\out\verify-a\frames` | 1 | 0.1 |
+| unified-frames | `node scripts/verify-unified-frames.mjs --origin http://127.0.0.1:5203` | 0 | 15.1 |
+| ready-index | `node scripts\probes\ready-index-probe.mjs --port 5260` | 0 | 98.3 |
+| stream-produce | `node scripts\probes\stream-produce-probe.mjs --origin http://127.0.0.1:5203` | 0 | 57.6 |
+| stream-group | `node scripts\probes\stream-produce-probe.mjs --origin http://127.0.0.1:5203 --group` | 0 | 33.9 |
+| preview-fallback | `node scripts\probes\preview-fallback-probe.mjs --origin http://127.0.0.1:5203` | 1 | 82.2 |
+| preview-preload | `node scripts\probes\preview-fallback-probe.mjs --origin http://127.0.0.1:5203 --page-preload` | 0 | 38.9 |
+| video-cadence | `node scripts\probes\video-source-cadence-probe.mjs --port 6030` | 0 | 19.1 |
+| seek-race-1 | `node scripts\probes\video-seek-race-probe.mjs --port 6211 --mode fixed --busy --settle 0 --loops 300` | 0 | 92.9 |
+| seek-race-3 | `node scripts\probes\video-seek-race-probe.mjs --port 6231 --mode fixed --busy --settle 0 --loops 300` | 0 | 93.3 |
+| seek-race-2 | `node scripts\probes\video-seek-race-probe.mjs --port 6221 --mode fixed --busy --settle 0 --loops 300` | 0 | 93.4 |
+| c10-browser | `node scripts\probes\c10-browser-probe.mjs --only-a4 --no-video --base-port 5600 --dist <integration worktree>\out\a45-validation\dist-online` | 0 | 181.9 |
+| c10-user-card | `node scripts\probes\c10-browser-probe.mjs --user-card --only-a4 --no-video --base-port 5600 --dist <integration worktree>\out\a45-validation\dist-online` | 0 | 343.4 |
+| online-user-cards | `node scripts\probes\online-user-cards-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 5650` | 0 | 33.9 |
+| online-stage-watch | `node scripts\probes\online-stage-watch-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 5720` | 0 | 143 |
+| m7-browser | `node scripts\probes\m7-browser-probe.mjs --role all --timing-authoritative --base-port 5710` | 3 | 831.1 |
+| desktop-auto-node | `node scripts\probes\desktop-auto-node-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 5620` | 0 | 464.8 |
+| c10-ui | `node scripts\probes\c10-ui-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --proxy-port 5660 --doc-port 5661 --asset-port 5662 --proxy2-port 5663` | 1 | 167.1 |
+| online-stale-layer | `node scripts\probes\online-stale-layer-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 5610` | 0 | 41.8 |
+| query-render | `node scripts\probes\query-render-probe.mjs --port 5756` | 0 | 167.9 |
+| creativity | `node scripts\probes\creativity-probe.mjs --origin http://127.0.0.1:5203` | 0 | 8.7 |
+| user-editing | `node scripts\probes\user-editing-probe.mjs --origin http://127.0.0.1:5203` | 0 | 4.7 |
+| multi-agent | `node scripts\probes\multi-agent-probe.mjs --phase all` | 0 | 57.6 |
+| custom-measure | `node scripts\probes\custom-measure-probe.mjs --port 5860` | 0 | 23.4 |
+| asset-path | `node scripts\probes\asset-path-probe.mjs --port 5920` | 0 | 28.4 |
+| bake-asset | `node scripts\probes\bake-asset-probe.mjs --port 5970` | 0 | 155.7 |
+| claim-gate | `node scripts\probes\claim-gate-probe.mjs --port 5990 --doc-port 5993` | 0 | 339.3 |
+| tiers | `node scripts\probes\tiers-probe.mjs --port-a 6020 --port-r 6023` | 0 | 34.1 |
+| tier-switch | `node scripts\probes\tier-switch-probe.mjs --origin http://127.0.0.1:5203 --remote-port 6025` | 1 | 93.8 |
+| storage-cap | `node scripts\probes\storage-cap-probe.mjs --port 5670` | 0 | 31.2 |
+| storage-ui | `node scripts\probes\storage-ui-probe.mjs --port 5680` | 0 | 84.8 |
+| cross-machine-proc | `node scripts\probes\cross-machine-proc-probe.mjs --port-a 6070 --port-b 6075 --port-c 6080` | 0 | 124.8 |
+| shared-import-upload | `node scripts\probes\shared-import-upload-probe.mjs --doc-port 6120 --asset-port 6121 --port-a 6110 --port-b 6115` | 0 | 31.7 |
+| skill-mcp | `node scripts\probes\skill-mcp-probe.mjs --port 5880` | 0 | 23.7 |
+| online-stage-handshake | `node scripts\probes\online-stage-handshake-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 6010` | 0 | 174 |
+| online-nav-stress | `node scripts\probes\online-nav-stress-probe.mjs --dist <integration worktree>\out\a45-validation\dist-online --base-port 6090 --iters 200 --out <integration worktree>\out\a45-validation\nav-stress` | 0 | 268.2 |
+| push-race-shard | `node scripts\probes\push-race-probe.mjs --port 6440 --rounds 30 --store shard` | 0 | 25.5 |
+| push-race-flat | `node scripts\probes\push-race-probe.mjs --port 6440 --rounds 30 --store flat` | 0 | 66.9 |
+
 ### 15.5 发版、部署、未跑与〔裁〕（执行中）
 
 正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，已把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1，待重试。该测试构建不构成正式发布通过。
