@@ -276,7 +276,8 @@ async function runHost(out) {
   out.proxy = { url: redactProxy(PROXY), external: EXTERNAL, addrs: [...proxyAddrs] };
   out.env = { NODE_USE_ENV_PROXY: process.env.NODE_USE_ENV_PROXY, NO_PROXY: process.env.NO_PROXY, node: process.version };
   const tcpScript = path.join(OUT, 'tcp-sample.ps1');
-  fs.writeFileSync(tcpScript, TCP_PS1);
+  // 带 UTF-8 BOM:TCP_PS1 里有中文注释，中文 Windows 的 PowerShell 5.1 读无 BOM 脚本按 GBK 解码
+  fs.writeFileSync(tcpScript, '\uFEFF' + TCP_PS1);
   let child = null;
   let lines = [];
   let sampler = null;

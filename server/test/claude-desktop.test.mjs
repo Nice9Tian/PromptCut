@@ -269,3 +269,16 @@ test('归档核对的期限从回车之后起算:UIA 那段拖了很久也不会
   assert.equal(r.sessionCwd, dir, '回车之后才开始核对,应该看得到这条会话');
   assert.doesNotMatch(r.detail, /没在会话归档里看到/);
 });
+
+test('writePsScript:写出的 .ps1 以 UTF-8 BOM 开头(中文系统上 PowerShell 5.1 按 GBK 读无 BOM 脚本会解析失败),内容其余原样、CRLF 换行', async () => {
+  const { writePsScript } = await import('../claude-desktop.ts');
+  const dir = path.join(tmp(), '任务目录');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'send-prompt.ps1');
+  const lines = ["$name = '补丁任务'", 'Write-Output "SENT"'];
+  writePsScript(file, lines);
+  const buf = fs.readFileSync(file);
+  assert.deepEqual([...buf.subarray(0, 3)], [0xef, 0xbb, 0xbf], '文件必须以 EF BB BF 开头');
+  assert.notDeepEqual([...buf.subarray(3, 6)], [0xef, 0xbb, 0xbf], '只能有一个 BOM');
+  assert.equal(buf.subarray(3).toString('utf8'), lines.join('\r\n'), 'BOM 之后与原内容一字不差');
+});

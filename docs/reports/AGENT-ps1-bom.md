@@ -96,3 +96,64 @@ exit 1
 ## 没做成的
 
 无。
+
+## 续做：运行时写出的 .ps1 一律带 BOM
+
+主会话续派：把「没处理的」第 2 条一并修掉。
+
+### 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `server/claude-desktop.ts` | 新增并导出 `writePsScript(file, lines)`：写文件时前置 `"﻿"`，内容其余不变；`runPs` 改调它。脚本内容和调用方式（`powershell.exe -File`）没动 |
+| `scripts/probes/m8-outbound-probe.mjs` | `tcp-sample.ps1` 写出时前置 `'﻿'`（`TCP_PS1` 里有 31 个非 ASCII 字符，是中文注释） |
+| `server/test/claude-desktop.test.mjs` | 加一条 `writePsScript` 的测试 |
+
+源码里用的是 `﻿` 转义，不是肉眼看不见的字面 BOM 字符。
+
+### 全仓盘点（运行时生成 .ps1 再交给 powershell 跑的地方）
+
+对 `server/ desktop/ src/ scripts/` 里 `.ps1`、`-File`、`powershell|pwsh` 逐个看过：
+
+- `server/claude-desktop.ts` `runPs`：已修。
+- `scripts/probes/m8-outbound-probe.mjs` `tcp-sample.ps1`：已修。
+- `server/runners/setup.mjs`：把官方 `install.ps1` 用 `Invoke-WebRequest -OutFile` 下载到 `installers/` 再执行，文件内容来自对方服务器，不是我们生成的，不动；它外层走 `-EncodedCommand`，不落 .ps1。
+- `server/runners/cli-runtime.mjs`、`install.mjs`：`-EncodedCommand`，或只是 URL 字符串，不落 .ps1。
+- `server/codex-desktop.ts`、`scripts/probes/*` 其余、`desktop/scripts/smoke-procs.mjs` 等：都是 `-Command` 单行，不写文件。
+- `desktop/src-tauri/nsis/hooks.nsh` 的 `pc-kill-leftovers.ps1`（NSIS 逐行 `FileWrite`）：内容全是 ASCII，不需要 BOM（上一轮已核）。
+
+### 测试先红后绿
+
+`server/test/claude-desktop.test.mjs` 新测试 `writePsScript:写出的 .ps1 以 UTF-8 BOM 开头…`：目录名含中文，断言文件前 3 字节是 EF BB BF、只有一个 BOM、BOM 之后与 `lines.join('\r\n')` 一字不差。
+
+红（临时把 `"﻿" + lines` 改成 `"" + lines`）：
+
+```
+✖ writePsScript:写出的 .ps1 以 UTF-8 BOM 开头(…)
+  AssertionError [ERR_ASSERTION]: 文件必须以 EF BB BF 开头
+ℹ pass 15  ℹ fail 1
+```
+
+绿（还原）：`ℹ pass 16  ℹ fail 0`。
+
+### 本机 ParseFile（PowerShell 5.1，只解析不执行）
+
+样本由新代码 `writePsScript` 写在含中文的路径下（`...\scratchpad\中文目录\send-prompt.ps1`），内容仿 `sendPromptViaUia` 里拼进去的 `psStr(path.basename(dir))` 和 `psStr(prompt)`（含中文目录名、中文提示）；对照组是旧写法（`writeFileSync(file, lines.join("\r\n"), "utf8")`，无 BOM）。没有执行 `sendPromptViaUia`，那会真去操作窗口。
+
+| 文件 | ParseFile 错误数 | 中文字符串字面量 `'补丁任务目录'` 解析出的值 |
+|---|---|---|
+| 旧写法，无 BOM | 0 | **乱码**（U+741B U+30E4 U+7AF5 …），与原文不等 |
+| 新代码，带 BOM | 0 | 正确（U+8865 U+4E01 U+4EFB U+52A1 U+76EE U+5F55），与原文相等 |
+| `TCP_PS1`（探针）无 BOM / 带 BOM | 0 / 0 | 只有注释含中文，无字面量可比 |
+
+说明：这些样本在 GBK 下语法上碰巧仍然合法，所以错误数前后都是 0，没有拿到「前 N 个错、后 0 个错」的对照。真正的后果是字符串被读成乱码：`sendPromptViaUia` 拿任务目录名去匹配界面上的「目录芯片」按钮，无 BOM 时目录名含中文就匹配不上，表现为 `NOCHIP` 而不是解析失败。上一节三份发布脚本的 5 / 13 / 4 个错是它们里面有会被 GBK 吃掉的字符，那是另一类现象。
+
+### 验证
+
+- 根目录 `npx tsc --noEmit`：退出码 0，无输出。
+- `node --test server/test/claude-desktop.test.mjs`：tests 16，pass 16，fail 0。
+- `cd desktop && npm test`：tests 19，pass 19，fail 0。
+- `node --check scripts/probes/m8-outbound-probe.mjs`：通过。
+- 根目录整套 `npm test` 未跑（按任务要求）。
+
+`apply-patch.cmd` 里 chcp 之前的中文 rem 注释维持不动，「没处理的」第 1 条保留。上面「没处理的」第 2 条现已处理。

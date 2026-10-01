@@ -303,12 +303,21 @@ export function openUrl(url: string): Promise<void> {
   });
 }
 
+/**
+ * 把 PowerShell 脚本写成文件。**一律带 UTF-8 BOM**:Windows PowerShell 5.1 读不带 BOM 的 .ps1 按系统 ANSI
+ * 代码页解码、不看 chcp,中文系统上是 GBK —— 脚本里拼进了任务目录名或提示文本,只要含中文就会读成乱码、
+ * 解析失败(或悄悄吃掉引号和换行)。带 BOM 的 .ps1 在 PowerShell 5.1 和 7 上都按 UTF-8 读。
+ */
+export function writePsScript(file: string, lines: string[]): void {
+  fs.writeFileSync(file, "\uFEFF" + lines.join("\r\n"), "utf8");
+}
+
 /** 跑一段 PowerShell(脚本落在任务目录的 .pc/ 里,不走 shell 引号),拿回 stdout */
 function runPs(dir: string, name: string, lines: string[]): Promise<string> {
   const scriptDir = path.join(dir, ".pc");
   fs.mkdirSync(scriptDir, { recursive: true });
   const file = path.join(scriptDir, name);
-  fs.writeFileSync(file, lines.join("\r\n"), "utf8");
+  writePsScript(file, lines);
   return new Promise((resolve) => {
     let out = "";
     // -WindowStyle Hidden 是必须的:光给 spawn 传 windowsHide,powershell.exe 照样会闪一下黑窗
