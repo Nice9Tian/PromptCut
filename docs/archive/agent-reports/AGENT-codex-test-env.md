@@ -52,3 +52,8 @@ agy-stdin、claude-prompt-file 的改法：新增测试辅助 `server/test/fake-
 ## 提交
 
 见 `git log claude/codex-test-env`：开工报告一次，测试改动一次，终稿报告一次。不推送、不合并、未删 worktree。
+
+## 主会话审查（2026-10-01，笔记本主会话）
+
+- 起因是主会话按用户交代 npm 全局装了 codex 0.159.2 之后，main 的 `npm test` 在本机多出 4 个失败：`codex-desktop.test.mjs` 只 mock 了 `spawn`，codex 从哪儿解析取决于本机。产品行为（npm 版经 `cliCommand` 改写成 `node codex.js` 起）是对的，只改测试。
+- 审过：每个用例显式设 `PROMPTCUT_CODEX_EXE` 指向临时目录里的假 exe、跑完恢复；`fake-cli-home.mjs` 把 `PROMPTCUT_CLI_HOME` 指到临时目录，`agy-stdin`、`claude-prompt-file` 两个同类测试一并改成与本机无关；只写临时目录，不碰用户配置。采纳任务书的更正（npm 版解析到的是 `codex.cmd`，不是 `codex.js`）。合入 main `1e17d9fa`。
