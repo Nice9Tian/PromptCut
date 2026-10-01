@@ -77,6 +77,8 @@ const A3_MS = Number(arg('--a3-seconds', 60)) * 1000;
 /** A10 抢卡：加卡到 w1、w2 都切出细任务的上限；加卡到两张卡各做完一段的上限（依据见 pageServerSide 的 A10 末段） */
 const A10_SPLIT_MS = Number(arg('--a10-split-seconds', 90)) * 1000;
 const A10_RACE_MS = Number(arg('--a10-race-seconds', 180)) * 1000;
+/** A10 抢卡判完之后，b2 页面上 z1 那一层换到 pc 环境、有就绪帧的上限（依据见 nodeRole 的 A10 末段） */
+const A10_LAYER_MS = Number(arg('--a10-layer-seconds', 240)) * 1000;
 /** 本机替身里素材服务每个请求的附加延迟（毫秒，模拟在线站点的往返；缺省 0） */
 const MEDIA_DELAY_MS = Math.max(0, Number(arg('--media-delay-ms', 0)) || 0);
 
@@ -1942,9 +1944,13 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   await until(() => b2.tap.nodeState().isNode, NODE_WAIT_MS, 250);
   await kv.signal('a10.b2-ready', { isNode: b2.tap.nodeState().isNode });
   await waitSignal(kv, 'a10.server-done');
-  const od2 = await onlineDiag(b2.page);
-  const zl = od2?.layers?.find((l) => l.clipId === zClaim.task.clipId);
-  book.judge('M7-A10', 'page-layer-switched', zl?.envFingerprint === cfg.pcFp && (zl?.ready ?? 0) > 0, { clip: zClaim.task.clipId, fp: zl?.envFingerprint ?? null, pcFp: cfg.pcFp, ready: zl?.ready ?? null });
+  // pc 接手 z1 后要把它的段做完、页面取到才有 ready。抢卡一步原来要等 pc 积压做完（约 5 分钟），顺带给足了这段时间；
+  // 计划先切分之后抢卡约 35 s 就判完，z1 的段可能还排在 h1～h3 的锚帧段后面（AGENT-m7-race 第 3 遍里 pc 只做了两段 h2）。
+  // 所以这里等到条件成立，判法不变。上限依据：接手后约 8 段锚帧段（50）随机先后，每段最长约 19 s，z1 的锚帧段最晚约 150 s 轮到，留余量取 240 s
+  const tLayer = Date.now();
+  const layerOf = async () => (await onlineDiag(b2.page))?.layers?.find((l) => l.clipId === zClaim.task.clipId) ?? null;
+  const zl = (await until(async () => { const l = await layerOf(); return l?.envFingerprint === cfg.pcFp && (l?.ready ?? 0) > 0 ? l : null; }, A10_LAYER_MS, 2000)) ?? (await layerOf());
+  book.judge('M7-A10', 'page-layer-switched', zl?.envFingerprint === cfg.pcFp && (zl?.ready ?? 0) > 0, { clip: zClaim.task.clipId, fp: zl?.envFingerprint ?? null, pcFp: cfg.pcFp, ready: zl?.ready ?? null, waitedMs: Date.now() - tLayer, limitMs: A10_LAYER_MS });
 }
 
 /* ================================================================== all */
