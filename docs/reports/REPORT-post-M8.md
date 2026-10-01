@@ -1088,6 +1088,26 @@ G0-R 与全部探针逐项命令、结果由 `out/a45-validation/suite-results.j
 | push-race-shard | `node scripts\probes\push-race-probe.mjs --port 6440 --rounds 30 --store shard` | 0 | 25.5 |
 | push-race-flat | `node scripts\probes\push-race-probe.mjs --port 6440 --rounds 30 --store flat` | 0 | 66.9 |
 
+### 15.4.2 首跑失败项定位与补测
+
+按 verification.md 在七个子分支/集成分支逐个单跑，dev 端口依次 6240、6250、6260、6270、6280、6290、6300；换档远端 6345；C10 每次独立在线构建，proxy/doc/asset/proxy2 端口 6340/6341/6342/6343。每次给唯一的 `--out` 与数据目录，原断言保留；命令全文和耗时在 `out/a45-validation/locate/results.json`。
+
+| 分支 | preview-fallback（码 / 秒） | tier-switch（码 / 秒） | online build（码 / 秒） | c10-ui（码 / 秒） |
+|---|---|---|---|---|
+| skill-mcp | 0 / 96.2 | 0 / 64.6 | 0 / 3.0 | 0 / 163.6 |
+| tray | 0 / 97.5 | 0 / 62.0 | 0 / 3.0 | 0 / 175.3 |
+| release-no-git | 0 / 95.0 | 1 / 93.2 | 0 / 3.0 | 0 / 172.2 |
+| ps1-bom | 0 / 96.7 | 1 / 93.4 | 0 / 3.0 | 0 / 172.0 |
+| draft-lock | 0 / 96.7 | 1 / 94.0 | 0 / 2.9 | 0 / 168.5 |
+| r4-lock-cleanup | 0 / 97.2 | 1 / 95.6 | 0 / 3.0 | 0 / 174.3 |
+| a45-merge | 0 / 47.5 | 1 / 100.3 | 0 / 3.3 | 0 / 167.0 |
+
+换档回到 release-no-git 所含的新基线独立定位，专用分支 `claude/tier-switch-baseline`。只读 RPC/DOM 诊断保留原断言，两轮重现失败：同一项目素材 url 被本机缺失检查清空，两个槽位真实一起隐藏，前台角色与媒体时刻未改变。原探针只调用 setRemoteAssets 却未进入共享空间；main bb21d84b 新增的本机缺失检查是在错误夹具中正常执行。按真实 enableCollab 入口建立隔离共享项目后添加测试素材，再由原场景控制远程服务；产品代码和黑帧、帧误差、超时断言不动。解法表 `AGENT-tier-switch-baseline.md` 卡点 1 第 6 行（三级，无〔裁〕）。
+
+子分支 `node scripts/probes/tier-switch-probe.mjs --origin http://127.0.0.1:6350 --remote-port 6355 --out out/a45-validation/tier-fix-first` 0、71.0 s、fails=[]；T5a/T5c/T5e 黑帧全为 0、播放换档误差为 0 帧。类型检查 0、全量 4244 / 4242 / 0 / 2（82.5 s）、桌面脚本 21/21。按规则先合回 release-no-git（6295c387），再合入 a45-merge（17f515c2）。
+
+另发现 Windows PowerShell 5.1 函数只输出一个 PSCustomObject 时为标量，Count=null。专用 `claude/ps1-process-count` 修正真实补丁关闭段四处计数，避免仅剩一个时跳过退出或误报干净；真实关闭代码段在隔离假进程/时钟中执行四种情形全过。类型检查 0、全量 4224 / 4223 / 0 / 1（81.9 s）、桌面脚本 35/35、源三份随包 PowerShell ParseFile 各 0 错且 BOM 均有；c4d4ed8d 合流。两项都不改渲染，子分支不重复 G0-R，集成合流后补跑 G0、桌面脚本及换档。
+
 ### 15.5 发版、部署、未跑与〔裁〕（执行中）
 
 正式构建首试：`cd desktop && npm run release -- --from-head` 组装 runtime 因缺发布配置退出 1。测试用 `npx tauri build` 已编过 Rust；NSIS 工具解压后的 rename 报 os error 17，已把它复制到 Tauri 预期缓存位置、下载附加插件并核对官方 SHA-1，待重试。该测试构建不构成正式发布通过。

@@ -233,6 +233,8 @@
   - 「开 A → 返回首页 → 开 B」后 B 的锁在、A 的锁不在。
 - BOM：新包安装目录里的 `apply-extension.ps1`、补丁里的 `apply-patch.ps1`，用 `parse-as.ps1` 或 ParseFile 在笔记本上解析都是 0 错误。然后按 R5.3 真打一次补丁。
 
+2026-10-02 接手核对包结构后的更正：`apply-extension.ps1` 属于独立拓展包，由 `make-extension.mjs` 复制到包 payload，`extension-installer.nsi` 从临时插件目录执行，完整安装目录不留它。BOM 复验应从实际拓展包解出的 payload，或成功打包并用 `--keep-stage` 保留的真实 NSIS 收集目录取它；不以源文件或完整安装目录的不存在来判随包结果。真补丁仍按 R5 执行。
+
 ### R8　收尾 [授权]
 
 - 撤销登记（默认测完撤销，用户要留着就跳过）：
