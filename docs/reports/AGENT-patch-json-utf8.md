@@ -18,4 +18,9 @@
 
 ## 验证记录
 
-待填：新增真脚本编码回归、类型检查、全量测试、桌面脚本、集成复验、PC 重打补丁及笔记本真包实测。
+- `node --test desktop/test/ps1-json-utf8.test.mjs`：2/2 通过，0 失败，1088 ms。真实 PS 5.1 执行两类安装器的 WhatIf；修前两项均复现 ConvertFrom-Json 错误。测试子进程隔离 APPDATA、LOCALAPPDATA 和 PSModulePath，避免继承 PowerShell 7 的模块目录；没有改系统配置。
+- `node .../typescript/bin/tsc -b --force`：退出 0，8.2 s。
+- 全量 `node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs`（与 npm test 相同）：退出 0，76.9 s；4224 项，4223 过、0 失败、1 跳过。
+- `node --test desktop/test/*.test.mjs`：退出 0，1.2 s；37/37 通过。
+- 子分支结果：`out/a45-validation/branch-results.json`；上述结果直接贴进对话。仅改安装器四处编码读取，未修改 src、server、render、Rust 或像素基线，子分支不重复无关渲染性能项。
+- 后续待填：集成 G0 复验、PC 从新 main 重打真补丁、笔记本在两种外壳上实际安装；真实包通过之前不把第 1 行写成全部通过。
