@@ -57,7 +57,7 @@ Write-Host ""
 # ── 1. 读补丁清单 ─────────────────────────────────────────────────────
 $manifestPath = Join-Path $PatchRoot 'patch.json'
 if (-not (Test-Path $manifestPath)) { Fail "补丁包不完整，找不到 patch.json。请重新下载。" }
-$patch = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+$patch = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
 if ($patch.format -ne 'promptcut-patch/1') { Fail "补丁格式不认识（$($patch.format)）。请下载与本程序匹配的补丁。" }
 
 $payloadDir = Join-Path $PatchRoot 'payload'
@@ -78,7 +78,7 @@ Write-Step "安装位置：$InstallDir"
 
 # ── 3. 版本检查 ───────────────────────────────────────────────────────
 $installed = $null
-if (Test-Path $versionsPath) { $installed = Get-Content -Raw -LiteralPath $versionsPath | ConvertFrom-Json }
+if (Test-Path $versionsPath) { $installed = Get-Content -Raw -Encoding UTF8 -LiteralPath $versionsPath | ConvertFrom-Json }
 
 # 内核代次 = 外壳版本的前两段（0.2.x 里的 0.2）。内核（Rust 外壳、Chrome、
 # ffmpeg、内置 Python）动了就进位中间那一位，于是「中间那位不一样 = 必须用

@@ -45,7 +45,7 @@ Write-Host ""
 
 $manifestPath = Join-Path $PackRoot 'extension.json'
 if (-not (Test-Path $manifestPath)) { Fail "包不完整，缺 extension.json。请重新下载。" }
-$m = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+$m = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
 if ($m.format -ne 'promptcut-extension/1') { Fail "包格式不认识（$($m.format)）。" }
 
 Step "拓展：$($m.label) $($m.version)"
@@ -83,7 +83,7 @@ function Compare-Version {
 
 $versionsPath = Join-Path $InstallDir 'runtime\VERSIONS.json'
 if ($m.requiresApp -and (Test-Path $versionsPath)) {
-    $appVersion = (Get-Content -Raw -LiteralPath $versionsPath | ConvertFrom-Json).app
+    $appVersion = (Get-Content -Raw -Encoding UTF8 -LiteralPath $versionsPath | ConvertFrom-Json).app
     if ($appVersion -and (Compare-Version $appVersion $m.requiresApp) -lt 0) {
         Fail ("你的 PromptCut 是 $appVersion，这个拓展需要 $($m.requiresApp) 或更新。" +
               "先用更新补丁（或完整安装包）升级，再装这个拓展。")
