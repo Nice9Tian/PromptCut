@@ -47,4 +47,4 @@
 
 正式命令 `cd desktop && npm run release -- --from-head` 首次因默认 GNU Rust 工具链缺 dlltool 退出 1；已有 MSVC 工具链可用，仅给构建子进程设置 RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc，不改全局工具链。重试退出 0、839 s，完整 NSIS 包与补丁均产出；日志 formal-release-msvc.log，结果 formal-release-msvc-result.json，源 HEAD=d4da0fffa022383faecf1f368ff244ee1f6eb291。日志先对输入值及其转义形式脱敏，没有回显配置内容。守门保留，没有新增〔裁〕。
 
-真补丁运行随后暴露另一个独立编码问题，见 AGENT-patch-json-utf8 卡点 1；发布配置已就位，正式包将在该修复合入后再从已提交 HEAD 构建。本配置卡点关闭，release 是否推进仍以完整验收及最终构建结果为准。
+真补丁随后暴露独立编码问题，见AGENT-patch-json-utf8卡点1，另有旧壳唤回见AGENT-legacy-patch-wake。本配置卡点关闭，阶段结果不覆盖原失败。最终从已提交591b1f03运行正式cd desktop && npm run release -- --from-head，exit0/812 s；实际安装向导exit0、app0.7.14/PE0.2.7，正式2338 payload hash全过、安装exe等于该包内exe，两个发布键仅核对存在/非空。功能合入main b90100db后，release三项全绿并从main快进推送；完整包SHA和证据见REPORT-post-M8第15.13节。没有删守门或新增〔裁〕。
