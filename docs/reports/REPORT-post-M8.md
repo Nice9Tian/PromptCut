@@ -1130,7 +1130,7 @@ R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1
 
 ### 15.6 顾问调用记录
 
-没有调用顾问或子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；所有工作由 Codex 主会话完成，任务未派给 PC，也未向任何外部会话发消息。
+没有调用工程顾问或本机子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；代码修改和笔记本验证由 Codex 主会话完成，任务未派给 PC。用户随后明确授权云端工作节点，主会话仅经 HTTP 信箱派出只读配置审计，详见 15.10；没有把笔记本性能门槛移到云端。
 
 ### 15.7 待用户项与未跑项
 
@@ -1139,7 +1139,7 @@ R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1
 3. **R6 多屏**：笔记本只有一块屏。PC 上把副屏排在主屏左边，再收起主窗口，检查两屏任何位置都没有主窗露出。现场主窗 x=-2678；实现按所有屏幕的最左边计算外侧位置，源码与 Rust 左副屏用例通过，物理双屏仍待用户。
 4. **M7 W7 真跨机本轮复核**：PC 不可达，本轮本机替身的所有断言通过、fails=[]，退出 3 仅标 W7 pending。第 14 轮 m7w1002a 的 PC/笔记本证据仍在 14.1，本轮没有重新运行；按主计划 6.4 / 6.8 节列为待跨机复核，不记成退出 0，不用 PC 数字取代笔记本性能判据。历史 M8 物理断网、迁移和多端验收没有重跑：本轮任务是 A4+A5，且用户明确禁止改网络；现行本机整套命令详列 15.4.1，未把整个 probes 目录中的历史实验和辅助模块混称全跑。
 5. **草稿锁政策复核**：本轮按用户决定维持回首页持锁。保留会阻止另一个实例接手 A，直到切草稿/新建/退出；改成回首页释放会允许立即接手，但返回 A 需要重新抢锁并可能被拒。此政策仍列待用户项，当前行为不改。「文件→退出」用户已明确决定保留，已落实，无需再拍板。
-6. **配置恢复**：Claude Code 与 Codex 均已撤销 PromptCut 登记；最新 `node desktop/.cache/a45-install/check-registration.mjs` 为 false / false / true / true。Codex 登记后新增桌面配置另存于忽略文件 `desktop/.cache/a45-install/codex-after-unregister-before-restore.toml`，原登记前备份已逐字节恢复；备份内容从未输出或入库。
+6. **配置恢复**：Claude Code 与 Codex 均已撤销 PromptCut 登记；最新 `node desktop/.cache/a45-install/check-registration.mjs` 为 false / false / true / true。Codex 登记后新增桌面配置另存于忽略文件 `desktop/.cache/a45-install/codex-after-unregister-before-restore.toml`，原登记前备份已逐字节恢复；备份内容从未输出或入库。用户继续本会话后，18:05 的 Codex 配置再次增加桌面工具/插件键，复查为 2818 字节；只比键名确认没有 PromptCut 登记、没有删除或更改原有键。18:13 先另存 `codex-before-final-restore-20261002-181332.toml`，再按原授权恢复 207 字节备份，复核四布尔值仍为 false / false / true / true；桌面应用后续可能再补写自身设置，与 PromptCut 撤销登记分开判断。
 
 R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所有 R 项的图和命令输出已直接贴进对话；完整证据目录保留在集成 worktree，不因报告归档而删掉。
 
@@ -1169,3 +1169,11 @@ R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所�
 | origin/claude/m7-probe-exp | 8b15dfed、66fa49c2、1d2abc7c、ef4b45b7、87d3461d、1058b4ca | 2026-09-28 的就绪闸与逐拍渲染实验，涉及 StageView、stageRpc、m7NodeProbe、渲染节点引入；未顺带合入，符合本轮不展开其它 TODO 的范围 |
 
 凭证包内存检查退出 0：4 个文件为集群环境、SSH 私钥、local.md 摘要、README。SSH 和集群凭证与本机已有副本逐字节一致；各文件均无 VITE_DIAG_SUBMIT_URL / VITE_DIAG_SUBMIT_TOKEN，附带说明也没有诊断服务内容。包内文本与凭证值未输出，未展开、未提交；附带文件只作凭证来源参考，没有当作新的工作指令。已有凭证已用于本轮 SSH 部署，它们不能替代诊断 Worker 的提交配置。正式出包仍停在 15.7 第 1 项，补充解法表为 AGENT-a45-build-config 卡点 1 第 8 行。
+
+### 15.10 用户授权的云端配置审计
+
+云端会话「PromptCut M5～M8 云端工作节点」只能经阿里云 HTTP 信箱通信。2026-10-02 08:55:15 UTC 的报到为 to-local #36，seenToCloudSeq=31；主会话回 to-cloud #32 receipt（ref=36），再发 #33 instruction，编号 A45-CLOUD-CONFIG-01。指令指定 origin/main 052d54784f27626289bc1d3b95d63969755c92c5、独立 worktree/分支 a45-cloud-config-audit，要求 HEAD 精确一致，仅查云端环境、忽略配置文件和独有分支提交，不改已有工作树，不提交、不推送、不写 main。报告由信箱回执替代仓库提交，遵从用户对云端的明确限制。
+
+命令使用 main 的 `scripts/probes/probe-coord.mjs send` / `wait`，X-Mail-Token 只经 PROBE_MAIL_TOKEN 子进程环境传入；没有把令牌写进命令行、新文件、信箱正文或日志。等待状态位于仓库外 `%TEMP%/promptcut-a45-cloud-mail-state.json`，9 分钟后台长轮询；暂时错误由脚本退避重试，超时退出 3 后重挂。指令正文只含变量名和元数据输出要求；找到配置也只报告存在和路径，不通过信箱传值。
+
+云端没有 ffmpeg，Chromium 的 WSS 升级受代理限制，因此未派纯浏览器 W7，也未关闭 TLS 校验。当前等待审计回执，结果与「收工」确认随后补记；正式出包不能将等待当作配置已经存在。
