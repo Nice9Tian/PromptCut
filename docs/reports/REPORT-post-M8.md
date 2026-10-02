@@ -1176,4 +1176,18 @@ R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所�
 
 命令使用 main 的 `scripts/probes/probe-coord.mjs send` / `wait`，X-Mail-Token 只经 PROBE_MAIL_TOKEN 子进程环境传入；没有把令牌写进命令行、新文件、信箱正文或日志。等待状态位于仓库外 `%TEMP%/promptcut-a45-cloud-mail-state.json`，9 分钟后台长轮询；暂时错误由脚本退避重试，超时退出 3 后重挂。指令正文只含变量名和元数据输出要求；找到配置也只报告存在和路径，不通过信箱传值。
 
-云端没有 ffmpeg，Chromium 的 WSS 升级受代理限制，因此未派纯浏览器 W7，也未关闭 TLS 校验。当前等待审计回执，结果与「收工」确认随后补记；正式出包不能将等待当作配置已经存在。
+云端没有 ffmpeg，Chromium 的 WSS 升级受代理限制，因此未派纯浏览器 W7，也未关闭 TLS 校验。追加 to-cloud #34 instruction（ref=33，编号 A45-CLOUD-CONFIG-02），补查 .dev.vars 与 Wrangler 配置文件，仅返回键存在与非占位布尔值。两轮 9 分钟等待均没有收到新消息，已按用户协议重新挂起；外层 PowerShell 将非零子退出映成 1，前两轮未捕获原始 Node 退出码，不把它当云端任务失败。第三轮包装器打印子退出码并在 PowerShell 显式保留 LASTEXITCODE。
+
+09:26:53 UTC 收到 to-local #37 receipt（ref=34，覆盖两条指令），随后 #38 receipt（ref=33）指向同一结果。各命令退出 0；专用 HEAD 精确为 052d54784f27626289bc1d3b95d63969755c92c5。云端根目录初始 main a8fda45b 干净；只有根目录和本次新 worktree 两个位置。环境中两个诊断键与四个 Cloudflare 管理变量均不存在；.env/dev.vars 扫描 0 个文件、0 读取错误；.dev.vars / Wrangler 扫描两份仓库内 wrangler.jsonc，均无所需键。既有会话记录从未用过这两个诊断键，也没有已知安全存放位置或管理能力。
+
+云端先发现浅克隆边界会误报独有提交，已用 `git fetch --unshallow origin` 补对象后重算，未返回作废清单。144 个引用中独有引用仅 c10-accept、c10-integ、m7-probe-exp，与 15.9 笔记本结果一致。云端没有回传 c10-integ 合并提交的第一父路径，最终路径采用本机已完成的 7c8ad867 diff-tree 核对，不把「无非合并提交」写成没有改动。没有云端专有的未合入打包/诊断修复。
+
+完整非敏感回执 JSON 与各命令结果已直接贴进对话，保存在 `out/a45-validation/cloud-config-receipt.json`；首次 Python 父进程使用 Windows 默认输出编码造成中文显示损坏，改为显式 UTF-8 后只读取回 #37，原服务端数据完整，不是新跑一次审计。信箱客户端子退出码 0。主会话回 to-cloud #35 receipt（ref=37），再发 #36 instruction 明确「收工」。09:31:08 UTC 收到 to-local #39 receipt（ref=36）：干净 worktree 无依赖或链接风险，`git worktree remove .worktrees/a45-cloud-config-audit` 退出 0、未用 force；审计分支本地引用保留且未推送。根目录 main 仍 a8fda45baad2a197fbf4aeb4903a3ce788da1875，status 干净；云端明确「收工，停止监听」，不再挂 wait，不动共享协调服务及其它进程。
+
+收工回执同时披露云端本机 `.git/info/exclude` 新增 `.worktrees/` 和 `.claude/settings.local.json` 两行，只有本机忽略规则变化、不入库；它与首次审计的「当时没改 exclude」是不同时间状态。没有把 status 干净扩大宣称为所有本机配置毫无变化；tracked 内容与本地 main 未改、未提交、未推送。收工完整回执也已直接贴进对话。此来源关闭为无改善，解法表第 9 行；正式出包仍需 PC 原配置，未降级发布。
+
+### 15.11 PC 协助通知与安全交付需求
+
+收到 PC Codex 会话「查找笔记本中的会话 A5+A6」的通知，工作目录为 `C:\Users\admin\Documents\PromptCut`，可以由用户协调辅助。主会话已在对话提出具体需求：只读查根目录及各 worktree 的 .env* 是否含两个诊断发布键，只报告路径与存在；找到则提取所需两键，经已有安全文件通道交到笔记本根目录 .env.local。若 PC 已有阿里云 SSH 能力，可在服务器私有临时目录交付，目录 700、文件 600，由笔记本取回后删除临时副本。没有把值写进对话/信箱，也没有要求 PC 更改正在使用的安装、进程或数据。
+
+这是解除正式出包卡点的新增三级来源，解法表 AGENT-a45-build-config 第 10 行；云端来源是第 9 行，现已完成审计并确认收工、没有找到配置。`node out/a45-validation/check-release-handoff.mjs` 退出 0，只读 SSH 元数据确认约定的服务器交付文件 exists=false，没有回显内容。当前尚未收到 PC 配置，不写成正式发布完成。真补丁仍按 15.7 第 2 项由 PC 基准清单构建；没有因协助通知就假定补丁已产出或双屏已验。
