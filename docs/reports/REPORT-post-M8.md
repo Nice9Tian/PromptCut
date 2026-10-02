@@ -1130,7 +1130,7 @@ R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1
 
 ### 15.6 顾问调用记录
 
-没有调用顾问或子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；所有工作由 Codex 主会话完成，任务未派给 PC，也未向任何外部会话发消息。
+没有调用工程顾问或本机子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；代码修改和笔记本验证由 Codex 主会话完成，任务未派给 PC。用户随后明确授权云端工作节点，主会话仅经 HTTP 信箱派出只读配置审计，详见 15.10；没有把笔记本性能门槛移到云端。
 
 ### 15.7 待用户项与未跑项
 
@@ -1169,3 +1169,11 @@ R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所�
 | origin/claude/m7-probe-exp | 8b15dfed、66fa49c2、1d2abc7c、ef4b45b7、87d3461d、1058b4ca | 2026-09-28 的就绪闸与逐拍渲染实验，涉及 StageView、stageRpc、m7NodeProbe、渲染节点引入；未顺带合入，符合本轮不展开其它 TODO 的范围 |
 
 凭证包内存检查退出 0：4 个文件为集群环境、SSH 私钥、local.md 摘要、README。SSH 和集群凭证与本机已有副本逐字节一致；各文件均无 VITE_DIAG_SUBMIT_URL / VITE_DIAG_SUBMIT_TOKEN，附带说明也没有诊断服务内容。包内文本与凭证值未输出，未展开、未提交；附带文件只作凭证来源参考，没有当作新的工作指令。已有凭证已用于本轮 SSH 部署，它们不能替代诊断 Worker 的提交配置。正式出包仍停在 15.7 第 1 项，补充解法表为 AGENT-a45-build-config 卡点 1 第 8 行。
+
+### 15.10 用户授权的云端配置审计
+
+云端会话「PromptCut M5～M8 云端工作节点」只能经阿里云 HTTP 信箱通信。2026-10-02 08:55:15 UTC 的报到为 to-local #36，seenToCloudSeq=31；主会话回 to-cloud #32 receipt（ref=36），再发 #33 instruction，编号 A45-CLOUD-CONFIG-01。指令指定 origin/main 052d54784f27626289bc1d3b95d63969755c92c5、独立 worktree/分支 a45-cloud-config-audit，要求 HEAD 精确一致，仅查云端环境、忽略配置文件和独有分支提交，不改已有工作树，不提交、不推送、不写 main。报告由信箱回执替代仓库提交，遵从用户对云端的明确限制。
+
+命令使用 main 的 `scripts/probes/probe-coord.mjs send` / `wait`，X-Mail-Token 只经 PROBE_MAIL_TOKEN 子进程环境传入；没有把令牌写进命令行、新文件、信箱正文或日志。等待状态位于仓库外 `%TEMP%/promptcut-a45-cloud-mail-state.json`，9 分钟后台长轮询；暂时错误由脚本退避重试，超时退出 3 后重挂。指令正文只含变量名和元数据输出要求；找到配置也只报告存在和路径，不通过信箱传值。
+
+云端没有 ffmpeg，Chromium 的 WSS 升级受代理限制，因此未派纯浏览器 W7，也未关闭 TLS 校验。当前等待审计回执，结果与「收工」确认随后补记；正式出包不能将等待当作配置已经存在。
