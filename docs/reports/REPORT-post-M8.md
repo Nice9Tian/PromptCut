@@ -1139,7 +1139,7 @@ R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1
 3. **R6 多屏**：笔记本只有一块屏。PC 上把副屏排在主屏左边，再收起主窗口，检查两屏任何位置都没有主窗露出。现场主窗 x=-2678；实现按所有屏幕的最左边计算外侧位置，源码与 Rust 左副屏用例通过，物理双屏仍待用户。
 4. **M7 W7 真跨机本轮复核**：PC 不可达，本轮本机替身的所有断言通过、fails=[]，退出 3 仅标 W7 pending。第 14 轮 m7w1002a 的 PC/笔记本证据仍在 14.1，本轮没有重新运行；按主计划 6.4 / 6.8 节列为待跨机复核，不记成退出 0，不用 PC 数字取代笔记本性能判据。历史 M8 物理断网、迁移和多端验收没有重跑：本轮任务是 A4+A5，且用户明确禁止改网络；现行本机整套命令详列 15.4.1，未把整个 probes 目录中的历史实验和辅助模块混称全跑。
 5. **草稿锁政策复核**：本轮按用户决定维持回首页持锁。保留会阻止另一个实例接手 A，直到切草稿/新建/退出；改成回首页释放会允许立即接手，但返回 A 需要重新抢锁并可能被拒。此政策仍列待用户项，当前行为不改。「文件→退出」用户已明确决定保留，已落实，无需再拍板。
-6. **配置恢复**：Claude Code 与 Codex 均已撤销 PromptCut 登记；最新 `node desktop/.cache/a45-install/check-registration.mjs` 为 false / false / true / true。Codex 登记后新增桌面配置另存于忽略文件 `desktop/.cache/a45-install/codex-after-unregister-before-restore.toml`，原登记前备份已逐字节恢复；备份内容从未输出或入库。
+6. **配置恢复**：Claude Code 与 Codex 均已撤销 PromptCut 登记；最新 `node desktop/.cache/a45-install/check-registration.mjs` 为 false / false / true / true。Codex 登记后新增桌面配置另存于忽略文件 `desktop/.cache/a45-install/codex-after-unregister-before-restore.toml`，原登记前备份已逐字节恢复；备份内容从未输出或入库。用户继续本会话后，18:05 的 Codex 配置再次增加桌面工具/插件键，复查为 2818 字节；只比键名确认没有 PromptCut 登记、没有删除或更改原有键。18:13 先另存 `codex-before-final-restore-20261002-181332.toml`，再按原授权恢复 207 字节备份，复核四布尔值仍为 false / false / true / true；桌面应用后续可能再补写自身设置，与 PromptCut 撤销登记分开判断。
 
 R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所有 R 项的图和命令输出已直接贴进对话；完整证据目录保留在集成 worktree，不因报告归档而删掉。
 
