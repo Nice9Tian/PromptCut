@@ -986,9 +986,9 @@
 
 本轮没有调 codex 或 Gemini。子 Agent：Sonnet 一个（release-no-git，选法表「日常」，返工两次：加固「是否直接执行」、加 Cargo 行尾规则）。PC 辅助节点三项窗口项（PC-0713-1、PC-W7-1、PC-A45-1）。
 
-## 第 15 轮：Codex 接手 A4 + A5 真机验收与正式发布（2026-10-02，笔记本主会话；main 与网页完成，正式桌面包待发布配置）
+## 第 15 轮：Codex 接手 A4 + A5 真机验收与正式发布（2026-10-02～03，笔记本主会话）
 
-任务书是 `docs/plan/a45-acceptance-test-plan.md`（d391883f）；用户本轮补充指示取代其中「只测、不改代码、不合入、不出包」的旧范围。本轮授权包括写 main、出完整安装包、部署 /editor；PC 的用户安装不动，真补丁和多屏仍待用户。所有带耗时门槛的项在笔记本串行跑，取帧竞态按规定三实例并行。
+任务书是 `docs/plan/a45-acceptance-test-plan.md`（d391883f）；用户本轮补充指示取代其中「只测、不改代码、不合入、不出包」的旧范围。本轮授权包括写 main、出完整安装包、部署 /editor 和联络 PC 会话；PC 的用户安装、进程与数据不改。所有带耗时门槛的项在笔记本串行跑，取帧竞态按规定三实例并行。15.4、15.5 与 15.9～15.11 保留各阶段当时的失败、待交付状态；发布配置和真补丁已收到，W7 本轮真跨机复核也已过，后续结果见 15.12，不把历史状态当当前阻塞。
 
 ### 15.1 已执行与用户决定
 
@@ -1024,7 +1024,7 @@
 | R7 | 待用户（草稿锁与实际拓展包编码已过） | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 是独立拓展包的临时执行脚本。实际 `node desktop/scripts/make-extension.mjs stt --keep-stage` 退出 0（19.5 s），NSIS 收集 payload 中脚本 BOM=True、PowerShell 5.1.26100.9444 ParseFile=0；script SHA-256 A644898DAEF50829B9ED4664C86D827D1104DFAC16F09E113D51F854A1EADCAD。未安装可选能力，不把源解析冒充随包结果；补丁中的 apply-patch.ps1 与真安装仍待 R5 |
 | R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
 
-### 15.4 集成整套验证（本机项完成；W7 为 PC 窗口项）
+### 15.4 集成整套验证（首套原始记录，后续失败项按规则定位复验）
 
 `claude/a45-merge` 代码验证起点 47bb49fb 合流后的内容；其后变更只有用户决定的纯文档和 Rust 子测试夹具。G0：`npx tsc -b --force` 0；`npm test` 4224 / 4223 / 0 / 1（80.13 s）；桌面脚本 31/31。较 main 少的测试随 A4 删除旧被测路径，沿用第 14 轮已说明的原因，没有删现行路径测试。Rust MSVC `cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml` 27 过、0 失败、1 子入口忽略；外壳 release 编译通过。
 
@@ -1130,7 +1130,7 @@ R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1
 
 ### 15.6 顾问调用记录
 
-没有调用工程顾问或本机子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；代码修改和笔记本验证由 Codex 主会话完成，任务未派给 PC。用户随后明确授权云端工作节点，主会话仅经 HTTP 信箱派出只读配置审计，详见 15.10；没有把笔记本性能门槛移到云端。
+没有调用工程顾问或本机子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；代码修改和笔记本验证由 Codex 主会话完成。用户授权联络既有 PC 会话后，PC 承担只读配置交付、真补丁构建与 W7 的 creator，后续还承担无耗时门槛的修复分支 G0。原生发送工具直接尝试未暴露，改经官方桌面 UI 发送自包含任务；用户也帮助发过一条恢复指令。云端工作节点仅经 HTTP 信箱做只读配置审计，详见 15.10，已收工。没有把笔记本性能门槛移到 PC 或云端。
 
 ### 15.7 待用户项与未跑项
 
@@ -1195,3 +1195,21 @@ R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所�
 后续自动继续时再次核对：根目录 .env.local 不存在、进程环境中两个诊断键不存在、服务器交付文件仍不存在。当前 main 98560f8e 相对最后验证的代码 17f515c2 只有 docs/ 路径变化；重新 Get-FileHash 得到的验收安装包 SHA-256 仍为 3E68F7EE…75E6C177。未为相同代码重复性能测试或重复失败构建。
 
 新增可交给 PC 会话执行的 `docs/reports/A45-PC-CONFIG-HANDOFF.md`：包含仅提取两键的临时文件/SSH 上传脚本、服务器权限和不覆盖已有交付文件的检查、完成后的本机临时文件清理，以及旧外壳完整包与 0.7.13 真补丁的交付需求。从文档提取脚本到忽略目录，用真实 Windows PowerShell 5.1.26100.9444 Parser::ParseFile 核对，ParseErrors=0；只做语法检查，没有执行凭证传输或声称 PC 上传成功。只读 GitHub Releases API 回 200、releases=[]，没有可直接下载的正式旧安装包；后续降装文件仍待 PC，未提前改变安装现场。当前会话没有可调用的跨设备 thread 工具，继续由用户协调，不发送未经明确授权的跨会话消息。
+
+### 15.12 PC 交付、中文 JSON 修复与本轮 W7 真跨机结果
+
+用户随后明确授权先尝试 sendmessage 直联 PC，再恢复工作。主会话直接调用原生 send_message_to_thread 返回不是函数，工具目录也无可用线程发送工具；经官方 Codex 桌面 UI 发送任务，PC 用原生消息回执。PC 工作限于 C:/Users/admin/Documents/PromptCut/.worktrees/a45-pc-patch 的 codex/a45-pc-patch；根 main 保持 729ce7f65dc5da468e211f68c31ae4ba3da55b90、干净；不退出用户进程、不安装补丁、不改网络、不提交推送。指令含编号、精确 HEAD、环境变量名、逐命令和期望结果，凭证值不进消息。PC 根目录的两个已有诊断键经私有 SSH 文件通道交付，笔记本只提取白名单键到根目录与构建 worktree 的忽略 .env.local；服务器及本机暂存文件已精确删除。元数据 release-input-receipt.json，配置解法表第 10 行已过，第 5 行手工交付需求已解除。
+
+先从 main d4da0fff 正式构建：默认 GNU 工具链缺 dlltool 失败；已有 MSVC 可用，仅对子进程设 RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc，重试退出 0、839 s，不改全局工具链。随后真实 NSIS 补丁两次在 PS 5.1 读取无 BOM 中文 UTF-8 patch.json 时失败，BOM/脚本 Parser 本身都过。新分支 codex/patch-json-utf8 修复补丁与拓展共四处 Get-Content 为显式 UTF8；真实 WhatIf 回归修前两项都失败、修后 2/2 过。分支 tsc 0、8.2 s；全量 4224/4223/0/1、76.9 s；桌面 37/37、1.2 s。以 --no-ff 合流 430e64cf，集成复验 tsc 0、8.9 s；全量相同、76.3 s；桌面 37/37、2.4 s；npm run build -- --outDir out/a45-validation/dist-json-final 退出 0、Vite 1.70 s。主 main 合并为 96d308959a822aa7dea41772066d22cdb16ae235，已推送。d4da0fff 到 96d30895 仅四处 PS 编码读取、新回归测试和报告；渲染、Rust、snapshotCode/captureCode 与像素基线不变，不把首套结果说成在该 HEAD 又全部重跑。
+
+从已提交且干净的 96d30895 执行正式 cd desktop && npm run release -- --from-head，退出 0、831 s。此阶段完整包 433777937 字节，SHA-256 54DDA0C4054B0B387ADA3642C9B5DA95D2CC21B01D4876D5E932ABDB475FE664；本机因无历史清单，顺带生成含依赖补丁 77775636 字节，SHA-256 19E960BEC5FEB46AD2A16BE58B4B161BAFAA7E2D4A15FCC8E6E9BB3E6BD2C849。R5 用的是 PC 从同一 main 的真实基准 0.7.13 出的无依赖补丁，13491324 字节，SHA-256 48D21F4F07BCFBAF5DEA437DFBB87525787CA57228517EFD3A55DA6DBF3756FB，不与本机含依赖包混淆。PC 原命令 cd desktop && npm run release -- --from-head --patch-only 退出 0、12.807 s；app 0.7.14、base 0.7.13、shellGeneration 0.2、minShellVersion 0.2.0，实际 stage 脚本等于源，BOM=True、PS 5.1 Parser=0、2337 payload hash 全过。两端长度/SHA 相同，服务器精确文件已删除。
+
+上述真补丁在 0.2.7 实际安装退出 0：5.309 s 进程和锁归零；23.153 s 显示更新成功；2337 hash 一致、29 删除项全不在；重开 Rect=240,54 2422×1453。旧包没有原 0.7.13 完整包，按 AGENT-patch-json-utf8 卡点 2 第 3 行用原 0.7.0 完整包恢复 PE 0.2.6，再按已逐文件验证的原 0.7.13 payload 恢复 Node 应用；两份实际依赖段 fingerprint 完全相同，2334 payload hash 全过，A/B 草稿 SHA 未变。旧壳更新也退出 0、2337 hash 全过，但最小化和正常被遮挡两次均没有观察到先唤回，且强制退出后旧壳留锁；不把此子项判过。另取得 PC 用户安装的只读 PE 副本，shell 0.2.6、实际 app 字段 0.7.1，未冒称 0.7.13；诊断换 PE 启动页面为空，不作为旧草稿验收。回到已真实打开测试草稿的原完整包 PE 后，在专用 codex/legacy-patch-wake 修安装器旧壳还原路径；直接源函数的真实 PS 5.1 probe 退出 0、Min=True→False、Foreground=True、原位恢复，解法表卡点 1 第 1 行。该修复合流后需重出最终正式包；上面的阶段包 SHA 不是最后交付 SHA。
+
+实际拓展包重新出包：node desktop/scripts/make-extension.mjs stt --keep-stage 退出 0、6.4 s；83992439 字节，SHA-256 B048A5A189A9AF34ECEBF5053334B2393E12EC83216942A0709D2C97363FEA46。真实 NSIS stage 的 apply-extension.ps1 SHA-256 B5142C5A45F3E1C3806D0A57B9FDC3FB703DE839A5DD105BA0B49A2371A64243，BOM=True、PS 5.1 ParseFile=0；原脚本在安装版上 WhatIf 退出 0、正确显示中文、无写入。不安装或发布可选语音能力。
+
+W7 本轮新 run=m7a45final1003a，双方代码 96d30895。PC creator 命令：node scripts/probes/m7-browser-probe.mjs --role creator --bind 0.0.0.0 --public-host 192.168.50.96 --base-port 6520 --run m7a45final1003a --timeout-min 60 --out out/a45-pc-w7-final。笔记本 node 命令：node scripts/probes/m7-browser-probe.mjs --role node --coord http://192.168.50.96:6526 --base-port 6530 --run m7a45final1003a --timing-authoritative --timeout-min 60 --out out/a45-validation/w7-final-node。临时 LAN 协调口不继承真实云端 PROBE_MAIL_TOKEN，仅从自己的探针子环境移除；PROMPTCUT_NO_PORT_FILE=1，不改机器环境或网络。creator 退出 0、946797 ms，ok=true、fails=[]、pending=[]，17 项全部过。笔记本 node 页面 12 项全过，角色自身退出 3，剩余服务端项由 creator 汇总；外层 PowerShell 的 1 与 Node 的 3 分开记录。笔记本 A4 最慢 19706 ms<30000；A5 resumed 664 ms；A12 播放和预渲染长任务均 0。PC 不作性能基准，creator 的等待总时长也不是 A4 的时限。
+
+creator 原 JSON projectDeleted=true，没有 cleanup 字段；PC 退出后的另一次只读 OS 检查 listening=[]、hostedDirectoryExists=false、probeProcesses=[]，不往原 JSON 伪造 cleanup。真实完整 JSON 和原命令输出已直接通过原生消息贴入对话；本机派生摘要 w7-final-creator-receipt-summary.json 明确标为回执摘要，node 原结果 w7-final-node-result.json、原子退出记录 w7-final-node-exit.json。旧 run=m7a45final1002b 在会话间隔中退出，无最终 JSON/退出文件，不猜原因或码；自身目录边界和 reparse=0 已核对，但两次精确删除被命令策略拒绝，原测试租户目录保留，不能称已清理。新 run 的项目/端口与旧遗留分开说明。
+
+最后网页只读复核 node out/a45-validation/verify-editor.mjs 退出 0：主站和 s1/s2 均 200，index/入口 SHA 与 15.5 相同、gzip、frameCode 相同、页面和控制台 errors=[]；hosted/media health 均 200，PM2 PID110031 online、restart21。后续只有安装器脚本变动，不改已部署的静态编辑器内容或重启后端。
