@@ -181,6 +181,50 @@ function Get-TargetProcesses {
     $hits.ToArray()
 }
 
+function Restore-LegacyPatchWindow {
+    param([object[]] $Processes)
+    # 老外壳不认识 --quit；其单实例回调未必能还原最小化窗口。
+    # 只补齐老版本已定的唤回行为，不碰 0.2.7 的后台退出路径。
+    try {
+        if (-not ('PromptCutPatchWindow' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class PromptCutPatchWindow {
+    private delegate bool WindowCallback(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder name, int capacity);
+    [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+    public static void Restore(uint process) {
+        EnumWindows((window, parameter) => {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner != process) return true;
+            var name = new StringBuilder(256);
+            GetClassName(window, name, name.Capacity);
+            // MainWindowHandle 可能选到单实例插件的辅助窗，不能拿它还原。
+            if (name.ToString() != "Tauri Window") return true;
+            ShowWindowAsync(window, 9); // SW_RESTORE
+            SetForegroundWindow(window);
+            return true;
+        }, IntPtr.Zero);
+    }
+}
+'@
+        }
+        foreach ($p in $Processes) {
+            if ($p.Name -ne 'promptcut') { continue }
+            [PromptCutPatchWindow]::Restore([uint32]$p.Id)
+        }
+    } catch {
+        # 唤回不可用时，后面的 10 秒等待与兜底关闭照常执行。
+        Write-Warn "无法还原旧版本窗口，继续关闭并更新。"
+    }
+}
+
 # 问一下正在跑的那个实例：现在有几轮对话在进行中。
 # 取不到就返回 $null（程序没开、端口不对、老版本没有这个字段），那时不拦。
 function Get-ActiveAiRuns {
@@ -248,6 +292,9 @@ if ($running.Count -gt 0) {
     if (Test-Path -LiteralPath $shellExe) {
         try {
             $null = Start-Process -FilePath $shellExe -ArgumentList '--quit' -PassThru -ErrorAction Stop
+            if ($shellVersion -and (Compare-Version $shellVersion '0.2.7') -lt 0) {
+                Restore-LegacyPatchWindow -Processes $running
+            }
         } catch {
             Write-Warn "发不出退出请求（$($_.Exception.Message)），改用关窗口 + 强制结束。"
         }
