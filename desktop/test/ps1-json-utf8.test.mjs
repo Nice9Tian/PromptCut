@@ -43,9 +43,15 @@ for (const kind of ['patch', 'extension']) {
       const command = `$ErrorActionPreference='Stop'; [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false); & ${quote(script)} -InstallDir ${quote(installed)} -WhatIf; exit $LASTEXITCODE`;
       const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], {
         encoding: 'utf8', windowsHide: true, timeout: 15_000,
-        env: { ...process.env, APPDATA: path.join(dir, 'appdata'), LOCALAPPDATA: path.join(dir, 'localappdata'), PROMPTCUT_PATCH_NONINTERACTIVE: '1', PROMPTCUT_EXT_NONINTERACTIVE: '1' },
+        env: {
+          ...process.env,
+          // 从 PowerShell 7 起 Node 时会继承它的模块目录；真安装器经 Explorer 使用的是 PS 5.1 模块。
+          PSModulePath: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'),
+          APPDATA: path.join(dir, 'appdata'), LOCALAPPDATA: path.join(dir, 'localappdata'),
+          PROMPTCUT_PATCH_NONINTERACTIVE: '1', PROMPTCUT_EXT_NONINTERACTIVE: '1',
+        },
       });
-      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.status, 0, (result.stderr || result.stdout).slice(-2000));
       assert.match(result.stdout, kind === 'patch' ? /检查全部通过/ : /检查通过/);
       assert.equal(fs.readFileSync(versions, 'utf8'), versionsText);
       assert.deepEqual(fs.readdirSync(path.join(installed, 'runtime')).sort(), kind === 'patch' ? ['VERSIONS.json', 'app'] : ['VERSIONS.json', 'app', 'python']);
