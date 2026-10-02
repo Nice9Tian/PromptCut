@@ -996,11 +996,11 @@
 - R4 镜像退出脚本实际测到草稿锁残留，修复在独立 worktree/分支 `claude/r4-lock-cleanup`：Windows 持锁句柄关闭时由内核删除旁路文件，正常退出和强杀都不用等 Node 清理回调。见 `AGENT-r4-lock-cleanup.md` 卡点 1 第 1 行；只修实现，没有语义变更。已合流。Cargo 下子测试全名不同造成的夹具失败也已修复。
 - 用户已定：「文件 → 退出」保留，已同步 `docs/semantics/user-workflow.md`；回首页维持持锁。维持持锁会让其它实例在这个窗口回到首页后仍不能打开 A，直到切换草稿/新建/退出；若改成回首页放锁，其它实例能立刻接手 A，但返回 A 时要重新抢锁，也可能因为别人已经打开而被拒。本轮不改，政策复核列入待用户项。
 - R6 的 x=-2678 是单屏现场坐标。实际代码按 `available_monitors` 中最左屏位置减去窗口宽度和 256 像素计算，没有写死该值；Rust「副屏在主屏左边」测试通过。仍不能替代 PC 双屏实测，不宣称 R6 已过。
-- 正式命令因缺 VITE_DIAG_* 本地发布配置退出 1。解法表见 `AGENT-a45-build-config.md`；继续独立项，不把缺配置的测试构建当正式包。版本号沿用本轮已提交的应用 0.7.14 / 外壳 0.2.7，正式产物必须重新从正式 HEAD 出。
+- 首次正式命令因缺 VITE_DIAG_* 本地发布配置退出 1，解法表见 `AGENT-a45-build-config.md`；后续 PC 原配置交付已解决，阶段正式构建成功，见15.12。版本号沿用本轮已提交的应用0.7.14 / 外壳0.2.7；旧外壳窗口修复合流后最终正式包重新从已提交HEAD出，见15.13。
 
 ### 15.2 子分支验证
 
-均由本主会话执行，依赖向上解析，没有创建 node_modules junction。ffmpeg 路径按本机 docs/local.md 就位；日志在对应 worktree 的 out/a45-validation/。令牌与密钥值未输出。
+前四支由本主会话执行，依赖向上解析，没有创建 node_modules junction；后续安装器修复的部分无时限G0由已授权PC会话承担，表中分开注明。ffmpeg路径按本机docs/local.md就位；日志在对应worktree的out/a45-validation/。令牌与密钥值未输出。
 
 | 分支 | 命令 | 结果 |
 |---|---|---|
@@ -1008,6 +1008,8 @@
 | draft-lock c47f2abf | tsc 同上；`npm test`；`node --experimental-test-module-mocks --test src/editor/io/draftLock.test.mjs` | 0；4251 / 4249 / 0 / 2；7/7 |
 | release-no-git 913f223e | 审查实际 diff；`node --test desktop/test/prepare-runtime-filter.test.mjs`；集成分支全量 | 5/5；完整基线结果见下一节 |
 | r4-lock-cleanup 2e8c68c3 / d87821a9 | tsc 同上；`npm test`；直接编译 proc_lock.rs 和带 mod proc_lock 的 Rust 测试 harness | 0；4217 / 4216 / 0 / 1；修复前 3 项失败、修复后 3 项过，另 1 个忽略子入口；夹具修正后再次全量同样全过 |
+| codex/patch-json-utf8 15.12所列子分支 | tsc；全量；desktop/test；真实PS5.1两类WhatIf | 0、8.2 s；4224/4223/0/1、76.9 s；37/37、1.2 s；修前2项都失败、修后2/2过；笔记本执行 |
+| codex/legacy-patch-wake dc083909 | PC执行 `npx.cmd tsc -b --force`；`npm.cmd test`；`node --test desktop/test/*.test.mjs`；真实PS5.1 Parser/BOM；笔记本真实窗口函数与旧壳真补丁 | 0、7.569 s；4224/4223/0/1、50.049 s；37/37、1.982 s；Parser=0/BOM=True；真实窗口唤回与2338文件实际安装通过，最终两壳见15.13 |
 
 ### 15.3 R1～R8 现场验收
 
@@ -1019,9 +1021,9 @@
 | R2 | 过 | 实际 Windows 右键托盘菜单成功，打开后回原位置、前台，输入框接受打字；r2-tray-menu.png、r2-open-result.png、r2-type.png |
 | R3 | 过 | 托盘和悬浮窗两种右键关闭均使应用及 sidecar 进程为 0；本会话的 stdio MCP 客户端单列、结束后重测，不当成 sidecar。再开主窗仍为 (240,54)、2422×1453，状态文件记的是屏上坐标；r3-tray-clean-menu.png / quit.png、r3-overlay-menu.png / quit.png、r3-reopen-position.png |
 | R4 | 过（保留初测失败） | 初测进程归零但 64 字节锁残留。修复后的实际安装版打开 A，A 锁 64 字节；展开 Rect=240,54 2422x1453；收起后镜像 0.39 s 发 --quit、1.35 s wait=0、3.48 s final=0、fallback=False，完整进程表安装目录名下为 0，A/B 正文保留、锁消失，重开 Rect 相同。r4-final-open-a.png、r4-final-overlay.png、r4-final-quit-test.log、r4-final-reopen.png。最后一轮输入桌面在 Screen-saver，使用真实 WebView 截图与原生 PrintWindow，未伪造桌面图 |
-| R5 | 待用户 | 真补丁的 PC 基准清单不可达。PC 上从本轮最终 main 出 `cd desktop && npm run release -- --from-head --patch-only`，将真实补丁拷到笔记本后补测 0.2.7 的退出/装补丁/重开，以及允许的先降装 0.7.13（外壳 0.2.6）同补丁强杀兜底，再装回本轮版本。没有动 PC 的用户安装，也没用镜像冒充真补丁 |
+| R5 | 最终复验中（真补丁已到，无人手交付待项） | PC原0.7.13基准出真补丁；编码修复后0.2.7退出、安装、重开均过，0.2.6更新也过但未先唤回。新codex/legacy-patch-wake修复后，子分支真补丁在笔记本旧壳4.816 s唤回、15.434 s归零、实际exit=0、2338 hash全过；最终同一集成补丁的两壳复验与装回正式包见15.13。证据r5-026-r3-window-awake.png、r5-026-r3-patch-04.png、r5-026-r3-patch-observation.json、r5-026-r3-installed-verified.json |
 | R6 | 待用户在 PC 验 | 副屏放在主屏左边，收起后两屏上都不应出现主窗任何一部分；重点核对主窗虽仍 visible，计算出的屏外坐标是否确在所有屏幕之外。单屏不等于通过 |
-| R7 | 待用户（草稿锁与实际拓展包编码已过） | 新安装包现场「开始创作→首页→开 A」后 A.proc.lock 为 64 字节；「A→首页」保持 A 锁；打开 B 后 B 锁 64 字节、A 锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。更正早先的包位置判断：apply-extension.ps1 是独立拓展包的临时执行脚本。实际 `node desktop/scripts/make-extension.mjs stt --keep-stage` 退出 0（19.5 s），NSIS 收集 payload 中脚本 BOM=True、PowerShell 5.1.26100.9444 ParseFile=0；script SHA-256 A644898DAEF50829B9ED4664C86D827D1104DFAC16F09E113D51F854A1EADCAD。未安装可选能力，不把源解析冒充随包结果；补丁中的 apply-patch.ps1 与真安装仍待 R5 |
+| R7 | 过 | 新安装包现场「开始创作→首页→开A」后A.proc.lock为64字节；「A→首页」保持A锁；打开B后B锁64字节、A锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。真实NSIS补丁的apply-patch.ps1 BOM=True、PS5.1 ParseFile=0、脚本等于源且实际安装通过，见R5。apply-extension.ps1是独立拓展临时执行脚本；UTF8修复后重新实际出stt拓展包（6.4 s、exit0），真实stage脚本BOM=True、ParseFile=0、SHA B5142C5A…64243，实际WhatIf退出0，详见15.12。未安装或发布可选能力 |
 | R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
 
 ### 15.4 集成整套验证（首套原始记录，后续失败项按规则定位复验）
