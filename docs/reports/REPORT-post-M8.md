@@ -988,7 +988,7 @@
 
 ## 第 15 轮：Codex 接手 A4 + A5 真机验收与正式发布（2026-10-02～03，笔记本主会话）
 
-任务书是 `docs/plan/a45-acceptance-test-plan.md`（d391883f）；用户本轮补充指示取代其中「只测、不改代码、不合入、不出包」的旧范围。本轮授权包括写 main、出完整安装包、部署 /editor 和联络 PC 会话；PC 的用户安装、进程与数据不改。所有带耗时门槛的项在笔记本串行跑，取帧竞态按规定三实例并行。15.4、15.5 与 15.9～15.11 保留各阶段当时的失败、待交付状态；发布配置和真补丁已收到，W7 本轮真跨机复核也已过，后续结果见 15.12，不把历史状态当当前阻塞。
+任务书是 `docs/plan/a45-acceptance-test-plan.md`（d391883f）；用户本轮补充指示取代其中「只测、不改代码、不合入、不出包」的旧范围。本轮授权包括写 main、出完整安装包、部署 /editor 和联络 PC 会话；PC 的用户安装、进程与数据不改。所有带耗时门槛的项在笔记本串行跑，取帧竞态按规定三实例并行。15.4、15.5 与 15.9～15.11 保留各阶段当时的失败、待交付状态；发布配置和真补丁已收到，W7 本轮真跨机复核也已过，最终出包、真安装及发布结果见15.12～15.13，不把历史状态当当前阻塞。
 
 ### 15.1 已执行与用户决定
 
@@ -1021,10 +1021,10 @@
 | R2 | 过 | 实际 Windows 右键托盘菜单成功，打开后回原位置、前台，输入框接受打字；r2-tray-menu.png、r2-open-result.png、r2-type.png |
 | R3 | 过 | 托盘和悬浮窗两种右键关闭均使应用及 sidecar 进程为 0；本会话的 stdio MCP 客户端单列、结束后重测，不当成 sidecar。再开主窗仍为 (240,54)、2422×1453，状态文件记的是屏上坐标；r3-tray-clean-menu.png / quit.png、r3-overlay-menu.png / quit.png、r3-reopen-position.png |
 | R4 | 过（保留初测失败） | 初测进程归零但 64 字节锁残留。修复后的实际安装版打开 A，A 锁 64 字节；展开 Rect=240,54 2422x1453；收起后镜像 0.39 s 发 --quit、1.35 s wait=0、3.48 s final=0、fallback=False，完整进程表安装目录名下为 0，A/B 正文保留、锁消失，重开 Rect 相同。r4-final-open-a.png、r4-final-overlay.png、r4-final-quit-test.log、r4-final-reopen.png。最后一轮输入桌面在 Screen-saver，使用真实 WebView 截图与原生 PrintWindow，未伪造桌面图 |
-| R5 | 最终复验中（真补丁已到，无人手交付待项） | PC原0.7.13基准出真补丁；编码修复后0.2.7退出、安装、重开均过，0.2.6更新也过但未先唤回。新codex/legacy-patch-wake修复后，子分支真补丁在笔记本旧壳4.816 s唤回、15.434 s归零、实际exit=0、2338 hash全过；最终同一集成补丁的两壳复验与装回正式包见15.13。证据r5-026-r3-window-awake.png、r5-026-r3-patch-04.png、r5-026-r3-patch-observation.json、r5-026-r3-installed-verified.json |
+| R5 | 过（保留初测失败） | 同一最终PC真补丁6BBBDAE9…80DA5在两壳实测：0.7.13/0.2.6最小化后4.544 s唤回，15.124 s归零；正式0.7.14/0.2.7后台状态4.824 s干净归零。两次实际exit=0、2338 hash全过、29删除项零残留。最后重开原位、文件→退出、草稿保留且锁无。r5-026-r4-patch-observation.json、r5-026-r4-patch-04.png、r5-027-r3-patch-05.png、两份installed-verified.json及patch-exit.txt、r5-final-027-reopen.png；详见15.13 |
 | R6 | 待用户在 PC 验 | 副屏放在主屏左边，收起后两屏上都不应出现主窗任何一部分；重点核对主窗虽仍 visible，计算出的屏外坐标是否确在所有屏幕之外。单屏不等于通过 |
 | R7 | 过 | 新安装包现场「开始创作→首页→开A」后A.proc.lock为64字节；「A→首页」保持A锁；打开B后B锁64字节、A锁消失。r7-new.png、r7-new-home-dialog.png、r7-confirm-home.png、r7-home-open-a.png、r7-a-home.png、r7-home-open-b.png。真实NSIS补丁的apply-patch.ps1 BOM=True、PS5.1 ParseFile=0、脚本等于源且实际安装通过，见R5。apply-extension.ps1是独立拓展临时执行脚本；UTF8修复后重新实际出stt拓展包（6.4 s、exit0），真实stage脚本BOM=True、ParseFile=0、SHA B5142C5A…64243，实际WhatIf退出0，详见15.12。未安装或发布可选能力 |
-| R8 | 过 | SKILL 对话框实际撤销两张卡登记；Claude Code 当前与备份均没有 mcpServers.promptcut。Codex 撤销后还含登记以后增加的桌面工具与插件配置，首次整文件比较不一致；按本轮明确恢复授权，先将当前完整配置留本机忽略备份，再复制原登记备份，逐字节比较为 true。传统式「文件→退出」后安装目录名下进程 0，A/B 草稿 4554/4555 字节保留、锁均消失。r8-skill-dialog.png、r8-claude-confirm.png、r8-codex-confirm-desktop.png、r8-file-menu-desktop.png、r8-after-exit.png；check-registration.mjs 输出四个对应布尔值 false / false / true / true |
+| R8 | 过 | 两张登记卡已实际撤销。最终正式版文件→退出后安装目录名下进程0、A/B草稿4554/4555字节保留且锁均无；Codex本轮后增桌面/插件设置先留本机忽略备份codex-before-final-restore-20261003-023542.toml，再按授权恢复登记前207字节原备份。check-registration.mjs四布尔值false / false / true / true；r8-final-formal-file-menu.png、r8-final-formal-after-exit.png、out/a45-validation/r8-final-verified.json。Claude核对PromptCut键与原备份；Codex逐字节相同，内容未输出 |
 
 ### 15.4 集成整套验证（首套原始记录，后续失败项按规则定位复验）
 
@@ -1134,18 +1134,15 @@ R7 实际独立拓展测试包：`desktop/release/extensions/PromptCut-ext-stt-1
 
 没有调用工程顾问或本机子 Agent，用户把顾问流程改为主会话每层扫空后换角度重列候选；代码修改和笔记本验证由 Codex 主会话完成。用户授权联络既有 PC 会话后，PC 承担只读配置交付、真补丁构建与 W7 的 creator，后续还承担无耗时门槛的修复分支 G0。原生发送工具直接尝试未暴露，改经官方桌面 UI 发送自包含任务；用户也帮助发过一条恢复指令。云端工作节点仅经 HTTP 信箱做只读配置审计，详见 15.10，已收工。没有把笔记本性能门槛移到 PC 或云端。
 
-### 15.7 待用户项与未跑项
+### 15.7 待用户项与未跑项（最终状态）
 
-1. **正式出包的阻塞项**：笔记本没有 PC 的原有发布配置（VITE_DIAG_SUBMIT_URL / VITE_DIAG_SUBMIT_TOKEN）。解法表 `docs/reports/AGENT-a45-build-config.md` 卡点 1 第 1～7 行：本地配置、编译产物、交接记录与管理凭证来源均扫空，换角度重新列候选也没有新路；第 5 行需要用户把 PC 的原 `.env.local` 安全复制到笔记本 `D:\VectorMPEG7\PromptCut\.env.local`，不把值发进对话。随后主会话只把所需 VITE_ 键复制进忽略的构建 worktree，再从已提交 main 执行正式 release 命令，核对产物和安装，按规则重判并快进 release。正式包的路径与 SHA-256 当前尚不存在；上面的测试包只用来完成独立验收。
-2. **R5 真补丁 / R7 真补丁内脚本**：PC 构建检出同步到本轮 main 后，在仓库根执行原命令 `cd desktop && npm run release -- --from-head --patch-only`，将补丁和 SHA-256 带到笔记本。基准清单只在 PC 的 desktop/release，笔记本不伪造它。用户已授权笔记本降装 0.7.13 / 外壳 0.2.6 测同一补丁，再装回本轮版本；现无真补丁，尚未降装。待测：0.2.7 几秒内干净退出、进程与锁清零、窗口位置恢复；0.2.6 约 10 秒后兜底强杀、补丁仍成功安装，最后恢复本轮版本。
-3. **R6 多屏**：笔记本只有一块屏。PC 上把副屏排在主屏左边，再收起主窗口，检查两屏任何位置都没有主窗露出。现场主窗 x=-2678；实现按所有屏幕的最左边计算外侧位置，源码与 Rust 左副屏用例通过，物理双屏仍待用户。
-4. **M7 W7 真跨机本轮复核**：PC 不可达，本轮本机替身的所有断言通过、fails=[]，退出 3 仅标 W7 pending。第 14 轮 m7w1002a 的 PC/笔记本证据仍在 14.1，本轮没有重新运行；按主计划 6.4 / 6.8 节列为待跨机复核，不记成退出 0，不用 PC 数字取代笔记本性能判据。历史 M8 物理断网、迁移和多端验收没有重跑：本轮任务是 A4+A5，且用户明确禁止改网络；现行本机整套命令详列 15.4.1，未把整个 probes 目录中的历史实验和辅助模块混称全跑。
-5. **草稿锁政策复核**：本轮按用户决定维持回首页持锁。保留会阻止另一个实例接手 A，直到切草稿/新建/退出；改成回首页释放会允许立即接手，但返回 A 需要重新抢锁并可能被拒。此政策仍列待用户项，当前行为不改。「文件→退出」用户已明确决定保留，已落实，无需再拍板。
-6. **配置恢复**：Claude Code 与 Codex 均已撤销 PromptCut 登记；最新 `node desktop/.cache/a45-install/check-registration.mjs` 为 false / false / true / true。Codex 登记后新增桌面配置另存于忽略文件 `desktop/.cache/a45-install/codex-after-unregister-before-restore.toml`，原登记前备份已逐字节恢复；备份内容从未输出或入库。用户继续本会话后，18:05 的 Codex 配置再次增加桌面工具/插件键，复查为 2818 字节；只比键名确认没有 PromptCut 登记、没有删除或更改原有键。18:13 先另存 `codex-before-final-restore-20261002-181332.toml`，再按原授权恢复 207 字节备份，复核四布尔值仍为 false / false / true / true；桌面应用后续可能再补写自身设置，与 PromptCut 撤销登记分开判断。
+1. **R6 多屏，待用户在 PC 验**：笔记本只有一块屏。PC 上把副屏排在主屏左边，再收起主窗口，检查两屏任何位置都没有主窗露出。现场 x=-2678；收起采用移到屏幕外侧、保持渲染，并非真正隐藏。实现按全体屏幕 min-x 减窗口宽度和256像素，未写死该值；Rust左副屏用例已过，物理双屏仍待用户。PC用户安装未被本轮修改。
+2. **草稿锁政策，待用户后续复核**：按用户决定维持回首页持锁。保留会阻止另一实例接手A，直到切草稿/新建/退出；改成回首页释放会允许立即接手，但返回A需要重新抢锁，并可能被别人已打开而拒。本轮不改。「文件→退出」用户已明确决定保留，正式安装版已复核菜单和退出，无需再拍板。
+3. **旧跨机探针残留，待手工清理**：PC旧run=m7a45final1002b没有最终结果，不能冒充通过；自己的隔离租户目录 C:/Users/admin/Documents/PromptCut/.worktrees/a45-pc-patch/out/a45-pc-w7/hosted/docservice/tenants/sp_7fv2kfxazaz2qt75dpub2lvjyv 仍保留。已核对目录边界、reparse=0、原进程/端口不在；精确删除被自动审批审查拒绝两次，未给出具体原因，没有换工具绕过。新run=m7a45final1003a全17项已过、项目已删、OS只读检查端口与进程均无，见15.12。
+4. **未跑项及原因**：R6物理双屏没有设备；历史M8物理断网、迁移与多端历史实验未重跑，本轮任务A4+A5且用户禁止改网络；没有安装或发布可选stt能力，仅对真实拓展包、stage脚本和WhatIf作编码验收。首套当前计划全部命令与失败定位补测见15.4；不把整个probes目录的辅助模块及历史实验称为全跑。没有为最后仅安装器/报告变动重跑无关的像素或性能套件，相关G0及真安装另复核，像素基线未变。
+5. **已解除的原待项**：发布配置经授权PC会话交付，正式构建与安装完成；PC原0.7.13基准真补丁已经交付并在笔记本两种壳上实测；W7本轮真跨机复核全过。R2/R3.1托盘右键由主会话实际完成，不留手点项。Claude/Codex两张卡均已撤销，最终实际配置核对见15.13；没有凭证值进报告、日志或消息。
 
-R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所有 R 项的图和命令输出已直接贴进对话；完整证据目录保留在集成 worktree，不因报告归档而删掉。
-
-归档时承接的旧待定：AGENT-skill-mcp 第 8 / 10 节的二级「传统式下桌面 APP 调用被拒」及一级「软件里一键登记」表述建议仍为 dry run，未写入对应产品/用户工作流程章节；既有接入模式表已经把桌面 APP 对应到 SKILL，本轮只补实现机制。AGENT-tray 第 9 节的菜单项已由用户决定保留，防节流参数依上一主会话决定保留；标题栏 × 的无障碍名仍为「关闭」，是否改成「收到后台」未改，列为后续文案复核。本轮不展开无关 TODO。
+归档时承接的旧待定：AGENT-skill-mcp第8/10节的二级「传统式下桌面APP调用被拒」和一级「软件里一键登记」建议仍为dry run，本轮仅补机制说明；AGENT-tray的标题栏×无障碍名仍为「关闭」，文案复核留后续，防节流参数依已定保留。本轮不展开其它TODO。
 
 ### 15.8 三级机制说明收口解法表
 
@@ -1215,3 +1212,46 @@ W7 本轮新 run=m7a45final1003a，双方代码 96d30895。PC creator 命令：n
 creator 原 JSON projectDeleted=true，没有 cleanup 字段；PC 退出后的另一次只读 OS 检查 listening=[]、hostedDirectoryExists=false、probeProcesses=[]，不往原 JSON 伪造 cleanup。真实完整 JSON 和原命令输出已直接通过原生消息贴入对话；本机派生摘要 w7-final-creator-receipt-summary.json 明确标为回执摘要，node 原结果 w7-final-node-result.json、原子退出记录 w7-final-node-exit.json。旧 run=m7a45final1002b 在会话间隔中退出，无最终 JSON/退出文件，不猜原因或码；自身目录边界和 reparse=0 已核对，但两次精确删除被命令策略拒绝，原测试租户目录保留，不能称已清理。新 run 的项目/端口与旧遗留分开说明。
 
 最后网页只读复核 node out/a45-validation/verify-editor.mjs 退出 0：主站和 s1/s2 均 200，index/入口 SHA 与 15.5 相同、gzip、frameCode 相同、页面和控制台 errors=[]；hosted/media health 均 200，PM2 PID110031 online、restart21。后续只有安装器脚本变动，不改已部署的静态编辑器内容或重启后端。
+
+### 15.13 最终真补丁、正式安装与发布收口（2026-10-03）
+
+旧壳唤回修复专用分支 codex/legacy-patch-wake，代码 dc083909，以--no-ff合流为591b1f0322c0ecb4fca81b51a50e891f50df9f54。唯一产品变动是apply-patch.ps1的旧壳原生窗口还原，0.2.7路径、原10秒兜底、渲染与像素基线不变；没有新增〔裁〕。子分支G0与直接源函数、子分支真补丁旧壳结果见15.2和归档AGENT-legacy-patch-wake卡点1第1行，没有调用顾问。
+
+最终源码591b1f03集成复核与发版：
+
+| 执行机 | 实际命令 | 结果 |
+|---|---|---|
+| PC | npx.cmd tsc -b --force | exit0，7.020 s |
+| PC | npm.cmd test | exit0，49.753 s；4224项、4223过、0失败、1跳过；原duration_ms49416.3363 |
+| PC | node --test desktop/test/*.test.mjs | exit0，1.176 s；37/37、零跳过；原duration_ms1131.0585 |
+| PC | 真实Windows PS5.1 Parser::ParseFile与BOM检查 | 5.1.26100.9444；ParserErrors=0、BOM=True；源码/stage脚本SHA0800B2B8EF1981EEB866BB4ADCF490C18DAE4C8DBDBAE816890A921D6D95E8BB |
+| PC | cd desktop && npm run release -- --from-head --patch-only | exit0，13.321 s；真实原0.7.13基准、app0.7.14、includesDeps=false、shellGeneration0.2、minShellVersion0.2.0；2338 files/38123445 bytes，29 removed；stage逐文件hash及禁带目录检查全过 |
+| 笔记本 | npm run build -- --outDir out/a45-validation/dist-legacy-final | exit0，先tsc，Vite1.79 s；未改配置或门槛 |
+| 笔记本 | cd desktop && npm run release -- --from-head | 从已提交、开工时干净的591b1f03取源码；exit0，812 s；Rust release1m05s，随后NSIS完成。仅子环境RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc；原发布配置守门保留 |
+
+PC两文件经原私有SSH通道取回，两端大小/hash相同，服务器两个精确暂存文件已删除。PC根main仍729ce7f6、干净；没有改其用户安装、进程、数据、网络或提交推送。完整非敏感构建输出、G0统计、stage核验JSON经原生回执直接贴入对话；本机pc-integration-09-receipt-summary.json标明是回执摘要，pc-assets-new-receipt.json记录实际接收。PC本任务已通知收工；云端此前to-cloud36「收工」/to-local39回执后停止监听。
+
+最终交付产物均对应591b1f03源码（其后的变动只有报告/TODO状态及归档）：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| desktop/release/PromptCut-0.7.14-setup.exe，正式完整包 | 433747589 | FA20182AE7FEC4EF510CA746C3FA2B92B7D02C670CDC30EF99E9D4A82A50D369 |
+| desktop/release/PromptCut-patch-0.7.14.exe，本机无基准生成、含依赖 | 77783722 | 3463DAA8B5A3B2A492E7CDCB8847195ED90850B28F9447E916DE44D090A47E33 |
+| desktop/.cache/a45-install/pc-assets/PromptCut-patch-0.7.14.exe，R5同一真补丁、无依赖 | 13499508 | 6BBBDAE9EBDD5A91EDAEF69CA84FBA12944199B02B866F00B8D79D1056880DA5 |
+| desktop/.cache/a45-install/pc-assets/manifest-0.7.14.json，真实PC清单 | 257124 | 8814E132566804A7574FED12215095D0CBC4FDCBA2DF624B69543BC003C4A505 |
+
+绝对目录 D:/VectorMPEG7/PromptCut/.worktrees/a45-merge/；正式构建日志formal-release-legacy-final.log、结果formal-release-legacy-final-result.json，产物元数据formal-release-artifacts.json。本机含依赖补丁不冒充PC真补丁；原0.7.13基准未改，没有用0.7.14自比较或更改原锁清单。
+
+R5最终旧壳现场：原0.7.0完整包恢复0.2.6，再按真实0.7.13 payload离线恢复，2334 hash全过，四份依赖段fingerprint相同，草稿SHA不变；真实旧应用打开A并持64字节锁，主窗最小化。python desktop/.cache/a45-install/r5-observe-patch.py 026-r4观察到4.544 s Min=False/Foreground=True/Rect240,54 2422×1453，15.124 s名下进程归零，32.428 s更新成功；实际控制台回车后exit=0。node desktop/.cache/a45-install/verify-installed-patch.mjs 026-r4 exit0，2338文件hash零差异、29删除项零残留、BOM=True、实际脚本等于源，A/B4554/4555 bytes保留、锁均无。r5-026-r4-window-awake.png抓到关闭动画的透明帧，窗口表为实际首次唤回证据；同源函数/子分支真包的稳定主窗截图legacy-native-filtered-after.png、r5-026-r3-window-awake.png保留，不把动画帧说成完整稳定画面。
+
+随后用上述最终正式完整包的真实安装向导装回笔记本；不卸载草稿，末页取消自动运行/新增桌面快捷方式，再实际回车完成，r5-install-final-027-exit.txt为exit=0，各步截图r5-final-027-installer-*、no-uninstall、directory、install-*、finish-options。node out/a45-validation/verify-formal-install.mjs exit0：实际app0.7.14、PE0.2.7，2338正式payload hash零差异，.git不存在，发布配置只核对两键存在/非空，不输出值。安装的Rust exe SHA F762707503B10EE77C67446E78A12B5FA864107D5CF43A29281A60938DE2CABC，与从该正式NSIS解出的promptcut.exe完全相同。初次用target/release模板exe比较不一致，已更正为真实安装包内文件比较，没有把首个false改记成true。
+
+R5最终新壳现场从正式app0.7.14打开A，主窗×实际收到后台，悬浮窗在2508,24 348×108、主窗在-2678,0 2422×1453，A锁64 bytes。python desktop/.cache/a45-install/r5-observe-patch.py 027-r3运行同一真补丁；安装器原同版本覆盖路径（NSIS既有Force）实际执行，4.824 s进程/锁归零，不到10秒兜底；21.588 s显示成功，回车后exit=0。verify-installed-patch.mjs 027-r3 exit0，2338 hash全过、29删除项零残留、脚本BOM/源相同。重开实际Rect240,54 2422×1453、打开A；r5-final-027-reopen.png与原生窗口表已贴入对话。保留原先JSON编码失败与旧唤回失败记录，修后结果不覆盖失败证据。
+
+最后正式版「文件→退出」实际点击，安装目录名下promptcut/node/ffmpeg进程0，草稿正文保留、锁均消失；r8-final-formal-file-menu.png、r8-final-formal-after-exit.png。02:35:42的Codex配置复查为登记后自身桌面/插件设置2818 bytes，新增键名可读审计、原有键零删除/零变化且无PromptCut登记；先存本机忽略备份codex-before-final-restore-20261003-023542.toml，再按本轮授权复制原登记前207 bytes备份，逐字节相同。check-registration.mjs输出false/false/true/true，Claude仅比较PromptCut键（整个配置可能被Claude更新），r8-final-verified.json只记录元数据。R8通过；配置内容与凭证值从未输出。
+
+完整集成套件及失败定位补测见15.4，W7本轮真实跨机17/17及笔记本时限见15.12；最后仅安装器及纯文档变动重新跑G0/对应PS/真安装，不称全部45命令在591b1f03又重跑。像素snapshotCode/captureCode和渲染源码不变，1800帧零差异基线保留；所有时限以笔记本为准，不采用PC测试总耗时作为性能通过证据。
+
+根main从96d30895按授权git merge --no-ff claude/a45-merge，功能合并提交b90100dba4166489644e60582932c8d1d67c3eb6，git push origin main成功。立即判release：基线全绿、普通npm build成功、正式desktop release成功，三项同时满足；git checkout release && git merge --ff-only main && git push origin release成功，release由fec9130b前进到b90100db。随后返回main。最终报告与三个完成的AGENT归档仅纯文档，仍按--no-ff合回main，并依同一判据从main快进release；以最终收尾命令的远端引用为准，没有在release直接提交或改写历史。
+
+/editor已按15.5部署；15.12最后只读核验exit0，主站和s1/s2均200、gzip/长度与入口SHA一致、errors=[]，hosted/media health200，PM2 online/PID110031/restart21。591b1f03相对该在线客户端仅安装器和报告不同，不重复部署相同静态内容或重启后端。〔裁〕仍只有15.8卡点1第1行的两处三级机制说明；草稿锁/菜单按用户已定，本轮无新增二级/一级裁决。R1/R2/R3/R4/R5/R7/R8过，R6待用户，独立阻塞已解除；本轮收尾后停止其它TODO。
