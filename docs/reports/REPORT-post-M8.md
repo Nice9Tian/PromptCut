@@ -1157,3 +1157,15 @@ R2 / R3.1 托盘右键由本会话实际做完，没有留人手操作项。所�
 | 4 | 1 | 一级 | — | 顺带写一键登记的用户工作流程 | 更改一级入口流程正文 | 1 | 2 | 3 | 本轮一级禁令 | 关闭·剪（禁止） | 原建议仍保留在 dry run，不在本轮自行改 |
 
 第 1 行即达成，没有层扫空，不需要额外顾问；按用户本轮改写的流程由主会话自己核对。两处机制条目标〔裁〕并指回这一行。纯文档改动不重复整套性能验证，21 项 Node 与 27 项 Rust 是这两段说明的对应尺子，未重写测试或放宽门槛。
+
+### 15.9 用户提供凭证包后复核 worktree 与分支
+
+用户提示「独有改动可能在 worktree 或 branch」，并指定本机凭证 ZIP。`node out/a45-validation/audit-handoff-inputs.mjs` 退出 0：注册的 99 个 worktree 均无未提交/未跟踪改动；230 个本地与远端分支引用中，有独有提交的只剩下表 3 个远端引用。本轮已合入的 ps1-bom、draft-lock、release-no-git 及后续修复均被 main 包含。全仓连同忽略目录扫描只发现 .env.cluster，无诊断发布配置；Git 全引用历史中没有 .env* / .dev.vars* / *.env 文件 blob。审计 JSON 只含路径、提交号与键存在布尔值，不含值。
+
+| 分支 | 独有提交 | 内容与处理 |
+|---|---|---|
+| origin/claude/c10-accept | 38c33fd1、9614df01 | 2026-09-28 的 C10 验收报告，保留在原支，不属于本轮发布配置 |
+| origin/claude/c10-integ | 7c8ad867 | C10 探针修正的合并提交；多个 merge base 下三点 diff 的初次路径统计不作为最终独有改动清单，改用 `git diff-tree --no-commit-id --name-status -r 7c8ad867^1 7c8ad867` 核对，实际只有 AGENT-c10-site 报告和 c10-browser-probe；无发布配置或打包工具修复，保留原支 |
+| origin/claude/m7-probe-exp | 8b15dfed、66fa49c2、1d2abc7c、ef4b45b7、87d3461d、1058b4ca | 2026-09-28 的就绪闸与逐拍渲染实验，涉及 StageView、stageRpc、m7NodeProbe、渲染节点引入；未顺带合入，符合本轮不展开其它 TODO 的范围 |
+
+凭证包内存检查退出 0：4 个文件为集群环境、SSH 私钥、local.md 摘要、README。SSH 和集群凭证与本机已有副本逐字节一致；各文件均无 VITE_DIAG_SUBMIT_URL / VITE_DIAG_SUBMIT_TOKEN，附带说明也没有诊断服务内容。包内文本与凭证值未输出，未展开、未提交；附带文件只作凭证来源参考，没有当作新的工作指令。已有凭证已用于本轮 SSH 部署，它们不能替代诊断 Worker 的提交配置。正式出包仍停在 15.7 第 1 项，补充解法表为 AGENT-a45-build-config 卡点 1 第 8 行。
