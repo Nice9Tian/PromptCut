@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "actualComputerRestart": false,
+  "actualHostProcessRestart": true,
+  "actualMemberProcessRestart": true,
+  "roomId": "sp_e2uowvu7stzt3esqfeh7v4aj63",
+  "sameUsers": [
+    "creator:host",
+    "member:member"
+  ],
+  "bidirectionalEdits": true,
+  "ticketAsset": {
+    "ok": true,
+    "bytes": 50000
+  },
+  "emptyBrowserStorage": true,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-MH2SCg"
+}

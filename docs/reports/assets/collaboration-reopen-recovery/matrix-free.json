@@ -1,0 +1,82 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_pbdsbilnnf6c4kyro3xgsxowk7",
+      "where": "lan",
+      "mode": "free",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": true,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": true,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 6,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": true,
+      "creatorSecondDevice": true,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": true
+    }
+  ],
+  "matrix": {
+    "recoveredSettingsDoNotGeneratePasswords": true,
+    "crashRetainsOfflineQueue": true,
+    "conflictReplayUi": true,
+    "conflictDiscardUi": true,
+    "discardBackupPersisted": true,
+    "multipleWindowsBidirectional": true,
+    "newCollaborationDefaultPasswordsPreserved": true,
+    "lateIdentityAfterProjectSwitchIgnored": true,
+    "homeUiClearsResume": true,
+    "homeAfterSystemPathRefreshStaysHome": true,
+    "unknownFormatUiPreserved": true,
+    "legacyIdentityMigratedAcrossProcessRestart": true,
+    "legacySecretSettingsMigrated": true,
+    "invitedIdentitySurvivesRevokeAndExpiry": true,
+    "kickAndUnbanUi": true,
+    "projectPasswordUi": true,
+    "authenticationRateLimit": {
+      "observed": false,
+      "retryAfterSeconds": [],
+      "eventualReauthentication": true
+    },
+    "missingHostDataUiNoEmptyRoom": true,
+    "corruptVaultUiPreservesBytes": true,
+    "finalRevision": 12
+  },
+  "asset": {
+    "hash": "86471f9a294fb52a0798e356c232d96e25bfed908bd2e2c0920218ed50682fa6",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-PCEugx"
+}

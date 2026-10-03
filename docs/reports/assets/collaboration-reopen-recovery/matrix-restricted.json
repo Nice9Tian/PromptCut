@@ -1,0 +1,73 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_ocnq2jo36jsd33sdyja4aceypu",
+      "where": "lan",
+      "mode": "restricted",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": true,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": true,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 6,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": true,
+      "creatorSecondDevice": false,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": true
+    }
+  ],
+  "matrix": {
+    "crashRetainsOfflineQueue": true,
+    "conflictReplayUi": true,
+    "conflictDiscardUi": true,
+    "discardBackupPersisted": true,
+    "multipleWindowsBidirectional": true,
+    "lateIdentityAfterProjectSwitchIgnored": true,
+    "homeUiClearsResume": true,
+    "homeAfterSystemPathRefreshStaysHome": true,
+    "unknownFormatUiPreserved": true,
+    "legacyIdentityMigratedAcrossProcessRestart": true,
+    "kickAndUnbanUi": true,
+    "listRemovalUi": true,
+    "missingHostDataUiNoEmptyRoom": true,
+    "corruptVaultUiPreservesBytes": true,
+    "finalRevision": 12
+  },
+  "asset": {
+    "hash": "667df765c9b0f780b0b8ba0a748778da1ff01037113fa683d8a3bbb251ad7a01",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-6SMIVv"
+}

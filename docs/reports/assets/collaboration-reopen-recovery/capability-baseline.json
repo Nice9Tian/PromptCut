@@ -1,0 +1,50 @@
+{
+  "baseline": [
+    {
+      "capability": "project/version/account restart + member edit",
+      "status": "available",
+      "roomId": "sp_gemuxjkpyixq5w7wjwspgig3xe",
+      "actualProcessRestart": true,
+      "differentPid": true,
+      "version": 2,
+      "role": "creator/member"
+    },
+    {
+      "capability": "hosting/register",
+      "status": "needs implementation",
+      "http": 404
+    },
+    {
+      "capability": "hosting/challenge",
+      "status": "needs implementation",
+      "http": 404
+    },
+    {
+      "capability": "hosting/resolve",
+      "status": "needs implementation",
+      "http": 404
+    },
+    {
+      "capability": "hosting/relay",
+      "status": "needs implementation",
+      "http": 404
+    },
+    {
+      "capability": "deployed healthz",
+      "status": "reachable",
+      "http": 200
+    },
+    {
+      "capability": "deployed hosting/healthz",
+      "status": "absent",
+      "http": 404
+    },
+    {
+      "capability": "Windows DPAPI current user",
+      "status": "available",
+      "exitCode": 0
+    }
+  ],
+  "isolatedData": true,
+  "secretsPrinted": false
+}
