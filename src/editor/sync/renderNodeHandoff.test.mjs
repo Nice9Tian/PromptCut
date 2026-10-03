@@ -114,3 +114,72 @@ test("RNH-05 挑不到素材服务:等满就照交;等的时候离开照样撤",
   assert.equal(t4.cleared, true);
   assert.deepEqual(posts.at(-1), { path: "/api/render-node/unbind", body: { projectId: "P4", reason: "page-left" } });
 });
+
+test("RNH-06 已发出的旧绑定延迟完成，离开与新房间必须最后生效", async () => {
+  let release;
+  let backend = null;
+  const started = [];
+  H.setRenderNodeDeps({ post: async (path, body) => {
+    started.push({ path, body });
+    if (path.endsWith("/bind") && body.projectId === "SLOW") {
+      await new Promise(r => { release = r; });
+    }
+    if (path.endsWith("/bind")) backend = body.projectId;
+    if (path.endsWith("/unbind") && backend === body.projectId) backend = null;
+    return { ok: true };
+  }, setTimer: () => 0, clearTimer: () => {} });
+  H.bindRenderNode({ ...B, projectId: "SLOW" }, hooks);
+  H.noteRenderNodeAssetBase(null);
+  await flush();
+  assert.equal(typeof release, "function");
+  H.unbindRenderNode("SLOW");
+  H.bindRenderNode({ ...B, projectId: "NEW" }, hooks);
+  H.noteRenderNodeAssetBase(null);
+  await flush();
+  release();
+  await flush();
+  assert.equal(backend, "NEW", "旧 HTTP 不能晚到后把节点绑回旧房间");
+  assert.deepEqual(started.map(x => [x.path.split("/").at(-1), x.body.projectId]), [
+    ["bind", "SLOW"], ["unbind", "SLOW"], ["bind", "NEW"],
+  ]);
+  H.unbindRenderNode("NEW");
+  await flush();
+  assert.equal(backend, null);
+});
+
+test("RNH-07 旧房间签票据期间离开并重入同房间，旧票据不能交给新连接", async () => {
+  const late = [];
+  let release;
+  H.setRenderNodeDeps({ post: async (path, body) => { late.push({ path, body }); return { ok: true }; },
+    setTimer: () => 0, clearTimer: () => {} });
+  H.bindRenderNode({ ...B, projectId: "SAME" }, { ticket: async () => new Promise(r => { release = r; }) });
+  H.noteRenderNodeAssetBase(null);
+  await flush();
+  H.unbindRenderNode("SAME");
+  H.bindRenderNode({ ...B, projectId: "SAME" }, hooks);
+  H.noteRenderNodeAssetBase(null);
+  await flush();
+  release("old-session-ticket");
+  await flush();
+  assert.equal(late.filter(x => x.path.endsWith("/bind")).length, 1);
+  assert.ok(!JSON.stringify(late).includes("old-session-ticket"));
+  H.unbindRenderNode("SAME");
+  await flush();
+});
+
+test("RNH-08 旧连接的票据往返离开后不能交回或覆盖诊断", async () => {
+  const replies = [];
+  let release;
+  H.setRenderNodeDeps({ post: async (path, body) => { replies.push({ path, body }); return { ok: true }; },
+    setTimer: () => 0, clearTimer: () => {} });
+  H.bindRenderNode({ ...B, projectId: "OLD-REPLY" }, { ticket: async () => new Promise(r => { release = r; }) });
+  const before = H.renderNodeHandoffDiag().counters.tickets;
+  const pending = H.answerRenderNodeTicket({ reqId: "late-request", projectId: "OLD-REPLY" });
+  await flush();
+  H.unbindRenderNode("OLD-REPLY");
+  release("old-reply-ticket");
+  await pending;
+  await flush();
+  assert.equal(replies.filter(x => x.path.endsWith("/ticket")).length, 0);
+  assert.equal(H.renderNodeHandoffDiag().counters.tickets, before);
+});

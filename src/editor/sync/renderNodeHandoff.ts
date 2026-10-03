@@ -56,6 +56,10 @@ let hooks: RenderNodeHooks | null = null;
 let assetBase: string | null = null;
 /** 这个项目的共享配置交过没有;没交之前在等本页面挑素材服务(最多 ASSET_WAIT_MS) */
 let sent = false;
+/** 每次离开或换连接递增；房间 ID 相同也不能沿用旧连接的异步票据。 */
+let generation = 0;
+/** 先等已发出的旧绑定完成，再撤掉/交新绑定，避免 HTTP 完成顺序把节点拉回旧房间。 */
+let bindingWrite: Promise<void> = Promise.resolve();
 let waitTimer: unknown = null;
 let lastAnswer: { at: number; ok: boolean; error?: string } | null = null;
 const counters = { binds: 0, unbinds: 0, tickets: 0, ticketFailures: 0 };
@@ -76,15 +80,21 @@ async function sendBind(withTicket: boolean): Promise<void> {
   if (ONLINE_BUILD) return;
   const b = current;
   if (!b) return;
+  const epoch = generation;
+  const signer = hooks;
   let ticket: string | null = null;
-  if (withTicket && hooks) {
-    try { ticket = await hooks.ticket(b.projectId); } catch { ticket = null; /* 预渲染进程建会话时再来要 */ }
+  if (withTicket && signer) {
+    try { ticket = await signer.ticket(b.projectId); } catch { ticket = null; /* 预渲染进程建会话时再来要 */ }
   }
-  const now = current;
-  if (!now || now.url !== b.url || now.projectId !== b.projectId) return;
-  counters.binds++;
-  const r = await post("/api/render-node/bind", { url: now.url, projectId: now.projectId, contentId: now.contentId, ...(assetBase ? { assetBase } : {}), ...(ticket ? { ticket } : {}) });
-  if (r && r.ok === false) console.warn("[render-node] 共享配置没交给预渲染进程:", r.error ?? "无回包");
+  const write = bindingWrite.catch(() => undefined).then(async () => {
+    const now = current;
+    if (generation !== epoch || !now || now.url !== b.url || now.projectId !== b.projectId) return;
+    counters.binds++;
+    const r = await post("/api/render-node/bind", { url: now.url, projectId: now.projectId, contentId: now.contentId, ...(assetBase ? { assetBase } : {}), ...(ticket ? { ticket } : {}) });
+    if (r && r.ok === false) console.warn("[render-node] 共享配置没交给预渲染进程:", r.error ?? "无回包");
+  });
+  bindingWrite = write;
+  await write.catch(() => undefined);
 }
 
 /** 第一次交(带票据) */
@@ -108,6 +118,7 @@ export function bindRenderNode(b: RenderNodeBinding, h: RenderNodeHooks): void {
     return;
   }
   if (waitTimer !== null) { clearTimer(waitTimer); waitTimer = null; }
+  generation++;
   current = { ...b };
   assetBase = null;
   sent = false;
@@ -133,12 +144,13 @@ export function unbindRenderNode(projectId: string, reason = "page-left"): void 
   if (ONLINE_BUILD) return;
   if (!current || current.projectId !== projectId) return;
   if (waitTimer !== null) { clearTimer(waitTimer); waitTimer = null; }
+  generation++;
   current = null;
   assetBase = null;
   sent = false;
   // 还没交出去(在等素材服务)就离开了也照样撤:刷新之前的这个页面可能交过(撤一个没有的是空操作)
   counters.unbinds++;
-  void post("/api/render-node/unbind", { projectId, reason });
+  bindingWrite = bindingWrite.catch(() => undefined).then(async () => { await post("/api/render-node/unbind", { projectId, reason }); });
 }
 
 /** 预渲染进程要票据:本页面连着的正是这个项目才答(多个页面时第一个交回的算数) */
@@ -147,12 +159,16 @@ export async function answerRenderNodeTicket(d: Record<string, unknown>): Promis
   const reqId = typeof d.reqId === "string" ? d.reqId : null;
   const b = current;
   if (!reqId || !b || b.projectId !== d.projectId || !hooks) return;
+  const epoch = generation;
+  const signer = hooks;
   let reply: Record<string, unknown>;
   try {
-    reply = { reqId, ticket: await hooks.ticket(b.projectId) };
+    reply = { reqId, ticket: await signer.ticket(b.projectId) };
+    if (generation !== epoch || current?.projectId !== b.projectId || current.url !== b.url) return;
     counters.tickets++;
     lastAnswer = { at: Date.now(), ok: true };
   } catch (e) {
+    if (generation !== epoch || current?.projectId !== b.projectId || current.url !== b.url) return;
     reply = { reqId, error: (e as Error).message };
     counters.ticketFailures++;
     lastAnswer = { at: Date.now(), ok: false, error: (e as Error).message };

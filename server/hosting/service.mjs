@@ -201,9 +201,13 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
     const principal = accessOf(req, member?.[1]) ?? grantOf(req, member?.[1]);
     let bridge; try { bridge = openChannel(member[1], 'doc', req.socket.remoteAddress, JSON.stringify([member[1], principal.username, principal.deviceId])); } catch { return rejectUpgrade(socket, 503, 'Unavailable'); }
     const headers = { ...req.headers, 'x-forwarded-for': forwardedRemote(req), 'x-pc-stage-client': 'hosting-relay' }; delete headers.origin;
+    // 路由能力只给网关，不能交原服务；接续的原服务严格只认会话项。
+    headers['sec-websocket-protocol'] = String(headers['sec-websocket-protocol'] || '').split(',').map(s => s.trim()).filter(s => !s.startsWith(ROUTE_PROTOCOL)).join(', ');
     bridge.write(`GET / HTTP/1.1\r\n${Object.entries(headers).map(([k,v]) => `${k}: ${v}`).join('\r\n')}\r\n\r\n`);
     if (head.length) bridge.write(head); socket.pipe(bridge).pipe(socket);
     socket.on('error', () => {}); socket.on('close', () => bridge.destroy()); bridge.on('error', () => socket.destroy());
+    // 隧道销毁的是 Duplex，不会发 readable end；必须同时关成员 TCP，否则浏览器永远以为 WS 还在线。
+    bridge.on('close', () => socket.destroy());
   };
   server.on('upgrade', handleUpgrade);
   return { server, handle, handleUpgrade, online, async listen(port = 0, host = '127.0.0.1') { await new Promise((r, j) => { server.once('error', j); server.listen(port, host, r); }); return server.address(); },

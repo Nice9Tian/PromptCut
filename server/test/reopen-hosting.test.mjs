@@ -11,7 +11,8 @@ import { discoverRoom, relayFetch, authorizeRelayAsset } from '../hosting/client
 import { startHostedCombo } from '../hosted/combo.mjs';
 import { createSharedProject, buildAuthProtocols, adminProof, makeCredential } from '../auth/client.mjs';
 import { createAssetClient } from '../asset-store/client.mjs';
-import { wsClient, waitFor } from './fake-ws-kit.mjs';
+import { wsClient, waitFor, createTcpProxy } from './fake-ws-kit.mjs';
+import { createDocEndpoint } from '../render-node/session-link.mjs';
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-hosting-'));
 const key = () => randomBytes(32).toString('base64url');
 let seq = 0;
@@ -38,6 +39,20 @@ for (const mode of ['free', 'restricted']) test(`真实中继 ${mode}：登记�
   const discover = opts => discoverRoom({ service, roomId: p.projectId, username: 'member', deviceId: 'member-original-device-01', as: 'member', password: memberPassword, ...opts });
   await assert.rejects(discover({ password: key() }), e => e.status === 401);
   const route = await discover();
+  const proxy = await createTcpProxy({ target: addr.port }); t.after(() => proxy.close());
+  const relayUrl = new URL(route.base); relayUrl.port = String(proxy.port);
+  let resumed = 0, resumeChecks = 0; const resumeLogs = [];
+  const endpoint = createDocEndpoint({ url: relayUrl.href, transport: 'ws', renew: false,
+    protocols: async () => [...await buildAuthProtocols({ base: route.base, fetch: relayFetch(route.access), projectId: p.projectId, username: 'member', as: 'member', password: memberPassword, deviceId: 'member-original-device-01', deviceName: 'isolated-member' }), route.routeProtocol],
+    resumeProtocols: async () => { resumeChecks++; const fresh = await discover(); return [fresh.routeProtocol]; },
+    backoff: { baseMs: 10, factor: 2, maxMs: 20, jitter: 0 }, log: (event, fields = {}) => resumeLogs.push({ event, code: fields.code, closedCode: fields.closedCode }) });
+  t.after(() => endpoint.close()); endpoint.onResume(() => { resumed++; });
+  await waitFor(() => endpoint.connected, 5000, 'relay session opened');
+  proxy.cutAll();
+  try { await waitFor(() => resumed === 1, 5000, 'relay session resumed with fresh route capability'); }
+  catch { assert.fail(JSON.stringify({ resumeChecks, stats: endpoint.stats(), events: resumeLogs })); }
+  assert.ok(resumeChecks >= 1); assert.equal(endpoint.stats().opens, 1, '接续不新建会话或丢未确认队列');
+  endpoint.close();
   const protocols = await buildAuthProtocols({ base: route.base, fetch: relayFetch(route.access), projectId: p.projectId, username: 'member', as: 'member', password: memberPassword, deviceId: 'member-original-device-01', deviceName: 'isolated-member' });
   const member = wsClient(route.base.replace('http:', 'ws:'), [...protocols, route.routeProtocol]); await member.opened; t.after(() => member.close());
   assert.equal((await ask(member, { type: 'project.open', projectId: p.projectId })).rev, 1);
@@ -94,7 +109,13 @@ for (const mode of ['free', 'restricted']) test(`真实中继 ${mode}：登记�
   const newCreator = key(); await admin('set-creator-password', { creator: await makeCredential(newCreator, c.credentialStore.peek(p.projectId).kdf) });
   const creatorDiscover = password => discoverRoom({ service, roomId: p.projectId, username: 'host', as: 'creator', deviceId: 'creator-second-device-001', password });
   await assert.rejects(creatorDiscover(creatorPassword), e => e.status === 401); await creatorDiscover(newCreator);
+  const finalRoute = await creatorDiscover(newCreator); let terminal = null;
+  const deletedEndpoint = createDocEndpoint({ url: finalRoute.base, transport: 'ws', renew: false, backoff: { baseMs: 10, factor: 2, maxMs: 20, jitter: 0 },
+    protocols: async () => [...await buildAuthProtocols({ base: finalRoute.base, fetch: relayFetch(finalRoute.access), projectId: p.projectId, username: 'host', as: 'creator', password: newCreator, deviceId: 'creator-second-device-001', deviceName: 'isolated-second' }), finalRoute.routeProtocol],
+    resumeProtocols: async () => { try { return [(await creatorDiscover(newCreator)).routeProtocol]; } catch (e) { terminal = e.reason; deletedEndpoint.close(); throw e; } }, log: () => {} });
+  t.after(() => deletedEndpoint.close()); await waitFor(() => deletedEndpoint.connected, 5000, 'live member before deletion');
   await outgoing.stop({ deleted: true });
+  await waitFor(() => terminal === 'deleted', 5000, 'tunnel closure reaches member and trusted deletion stops resume');
   await assert.rejects(discover(), e => e.status === 410);
 });
 test('中继速率预算跨通道、双向与全局累计，而非每条流分别限速', () => {

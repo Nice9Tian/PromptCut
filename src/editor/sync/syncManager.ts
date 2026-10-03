@@ -19,7 +19,7 @@ import { entitiesOf, entityOfPath, type PathOp } from "../../kernel/diffProject"
 import type { Project } from "../../kernel/project";
 import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
-import { classifyEnterFailure } from "./enterFailure";
+import { classifyEnterFailure, classifyProtocolError } from "./enterFailure";
 import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
 import { currentAssociation, setAssociation, takeLoadedAssociation, type CollaborationDescriptor } from "./recoveryAssociation";
 // @ts-expect-error Browser-safe recovery state machine.
@@ -1107,13 +1107,27 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
   } catch (e) {
     const { status, retryAfter } = errorStatus(e);
     if (status === 429) return { ok: false, error: "rate-limited", retryAfter };
-    if (status === 404) return { ok: false, error: "no-project" };
+    const terminal = classifyProtocolError(e);
+    if (terminal) return { ok: false, error: terminal };
     return { ok: false, error: "unreachable" };
   }
   if (!current()) return { ok: false, error: "not-ready" };
   const wsUrl = candidate.ws ?? route.wsBaseOf(candidate.base);
   const outcome = await new Promise<"open" | CloseInfo>((resolve) => {
     let settled = false;
+    const endIdentity = (link: SyncLink, failure: "auth" | "kicked" | "removed" | "deleted") => {
+      if (cur?.link !== link || expectedClose === link) return;
+      if (failure === "kicked") rememberKicked(candidate.projectId, cred.username, true);
+      const descriptor = currentAssociation();
+      recoveryCoordinator.cancel(); cancelHostTask(descriptor);
+      clearSharedResume(); detach(); disconnectSharedAssets();
+      patch({ blocked: failure === "auth" ? null : failure, shared: null, members: [], reopenState: failure === "auth" ? "needs-auth" : failure === "deleted" ? "deleted" : "rejected" });
+      if (failure === "auth") pushToast("原协作身份已失效，请重新认证；本地内容已保留。", "warn", Infinity);
+      // 即便隧道在致命关闭帧到达前中断，可信发现接口的 deleted 也必须持久注销。
+      if (failure === "deleted" && descriptor && !ONLINE_BUILD && !ONLINE) {
+        void recoveryRequest("revoke", descriptor).catch(() => pushToast("房间已删除，但本机注销记录保存失败，请检查磁盘并重试。", "warn", Infinity));
+      }
+    };
     const link = new SyncLink({
       docSync: holding?.ds.projectId === candidate.projectId ? holding.ds : undefined,
       initialize: options.initialize === true,
@@ -1126,12 +1140,24 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
         }
         return make();
       },
+      resumeProtocols: candidate.access ? async () => {
+        const fresh = await discoverRoom({ service: candidate.service, roomId: candidate.projectId, username: cred.username, as: cred.as, deviceId: device.deviceId, key });
+        candidate.access = fresh.access; candidate.routeProtocol = fresh.routeProtocol;
+        return fresh.routeProtocol ? [fresh.routeProtocol] : [];
+      } : undefined,
       projectId: candidate.projectId,
       session,
       initial: getState().project,
       saveBackup: (b) => void saveBackup(b),
       onMessage: onSideMessage,
       onResponse: async msg => { if (msg.type === "auth.ticket.ok" && typeof msg.ticket === "string") await authorizeRelayAsset(candidate, msg.ticket); },
+      onProtocolError: error => {
+        if (!settled) return false;
+        const failure = classifyProtocolError(error);
+        if (!failure) return false;
+        endIdentity(link, failure === "no-project" ? "deleted" : failure);
+        return true;
+      },
       onOpen: () => { void (async () => {
         if (!current()) { link.stop(); resolve({ code: 0, reason: "cancelled", fatal: false, neverOpened: true }); return; }
         if (settled) {
@@ -1187,17 +1213,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
         // 自己删项目(取消多用户协作)时的 4004 是预料之中的,不弹阻断弹窗
         if (info.fatal && cur?.link === link && expectedClose !== link) {
           const blocked: Blocked = info.code === 4004 ? "deleted" : info.reason === "removed" ? "removed" : "kicked";
-          if (blocked === "kicked") rememberKicked(candidate.projectId, cred.username, true);
-          const descriptor = currentAssociation();
-          recoveryCoordinator.cancel(); cancelHostTask(descriptor);
-          clearSharedResume();
-          detach(); disconnectSharedAssets();
-          patch({ blocked, shared: null, members: [], reopenState: blocked === "deleted" ? "deleted" : "rejected" });
-          // Another creator device may delete the room. The original host must persist its
-          // cloud tombstone too; a normal offline unregister would otherwise leave members waiting forever.
-          if (blocked === "deleted" && descriptor && !ONLINE_BUILD && !ONLINE) {
-            void recoveryRequest("revoke", descriptor).catch(() => pushToast("房间已删除，但本机注销记录保存失败，请检查磁盘并重试。", "warn", Infinity));
-          }
+          endIdentity(link, blocked);
         }
         refreshStatus();
       },

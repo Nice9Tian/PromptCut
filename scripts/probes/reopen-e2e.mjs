@@ -20,7 +20,8 @@ const password = secret(); let creatorPassword = secret();
 const editors = new Set(); let browser, cloud; let phase = 'startup';
 const evidence = [];
 let createRequests = 0;
-let wan; const wanResults = [];
+let wan, secondCreator; const wanResults = [];
+let collector;
 const where = process.argv.includes('--hosted') ? 'hosted' : 'lan';
 const mode = process.argv.includes('--restricted') ? 'restricted' : 'free';
 async function stop(child) {
@@ -31,7 +32,7 @@ async function editor(who, port) {
   fs.mkdirSync(testData(who), { recursive: true });
   const child = spawn(process.execPath, [vite, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: process.cwd(), windowsHide: true,
     env: { ...process.env, PROMPTCUT_DATA_DIR: testData(who), PROMPTCUT_DOCSERVICE_DATA: path.join(testData(who), 'docservice'), PROMPTCUT_EXPORT_DIR: path.join(testData(who), 'export'),
-      PROMPTCUT_PROJECTS_DIR: path.join(testData(who), 'drafts'), PROMPTCUT_DEVICE_ID: `probe-${who}-device-000001`, PROMPTCUT_DEVICE_NAME: `isolated-${who}`,
+      PROMPTCUT_PROJECTS_DIR: path.join(testData(who), 'drafts'), PROMPTCUT_DEVICE_ID: who === 'host' && process.argv.includes('--keep-room') ? '' : `probe-${who}-device-000001`, PROMPTCUT_DEVICE_NAME: `isolated-${who}`,
       PROMPTCUT_AUTO_RENDER_NODE: process.argv.includes('--nodes') ? '1' : '0', PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_PUSH: process.argv.includes('--nodes') ? '' : '0', PROMPTCUT_LAN_HOST: '0', PROMPTCUT_NODE_PROFILE: 'user', PROMPTCUT_SHARED_CONFIG: '', PROMPTCUT_QUEUE_NODE: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   editors.add(child); child.stdout.resume(); child.stderr.resume();
   const base = `http://127.0.0.1:${port}`;
@@ -234,7 +235,9 @@ try {
     const secondResult = await second.evaluate(pw => window.probe.sync.authenticateRecovery('host', pw, 'creator'), creatorPassword); assert.equal(secondResult.ok, true);
     await connected(second, roomId, 'host');
     const role = await second.evaluate(async () => { await window.probe.sync.whenSaved(); const v = window.probe.sync.getSyncView(); const r = await window.probe.sync.recoveryRequest('select', v.association, { contentId: window.probe.store.getState().project.id }); return { creator: v.shared.creator, where: v.shared.where, hostBinding: !!r.host }; });
-    assert.deepEqual(role, { creator: true, where, hostBinding: false }); await second.close(); await stop(secondRuntime.child);
+    assert.deepEqual(role, { creator: true, where, hostBinding: false });
+    if (process.argv.includes('--delete-from-second')) secondCreator = second;
+    else { await second.close(); await stop(secondRuntime.child); }
   }
   phase = 'packed format and draft reopen';
   const packed = await member.evaluate(async () => { const p = await window.probe.pack.packProcp(); const { procText } = await window.probe.pack.unpackProcp(p.blob); return procText; });
@@ -251,19 +254,49 @@ try {
   await member.evaluate(async () => { const [sync, proc, store, collab, pack, drafts] = await Promise.all([import('/src/editor/sync/syncManager.ts'), import('/src/editor/io/proc.ts'), import('/src/store/project.ts'), import('/src/editor/sync/collab.ts'), import('/src/editor/io/procp.ts'), import('/src/editor/io/drafts.ts')]); window.probe = { sync, proc, store, collab, pack, drafts }; await sync.startSync(); await sync.resumeShared(); });
   await connected(member, roomId, 'member'); await sees(member, 'host-edit-after-reopen');
   if (where === 'hosted') assert.equal(await host.evaluate(() => window.probe.sync.getSyncView().shared.where), 'hosted');
+  if (process.argv.includes('--trust')) {
+    phase = 'tampered file roles, service and room cannot reuse another identity';
+    let requests = 0;
+    collector = (await import('node:http')).createServer((_req, res) => { requests++; res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"ok":false}'); });
+    await new Promise(r => collector.listen(0, '127.0.0.1', r));
+    const roleFile = JSON.parse(memberFile); roleFile.collaboration.creator = true; roleFile.collaboration.username = 'host'; roleFile.collaboration.as = 'creator';
+    await open(member, JSON.stringify(roleFile)); await connected(member, roomId, 'member');
+    assert.equal(await member.evaluate(() => window.probe.sync.getSyncView().shared.creator), false);
+    const changedService = JSON.parse(memberFile); changedService.collaboration.service = `http://127.0.0.1:${collector.address().port}`;
+    await open(member, JSON.stringify(changedService)); await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+    await new Promise(r => setTimeout(r, 300)); assert.equal(requests, 0, 'file address cannot receive cached credentials or automatic authentication traffic');
+    const changedRoom = JSON.parse(memberFile); changedRoom.collaboration.roomId = 'sp_aaaaaaaaaaaaaaaaaaaaaaaaaa';
+    await open(member, JSON.stringify(changedRoom)); await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+    await open(member, memberFile); await connected(member, roomId, 'member'); await sees(member, 'host-edit-after-reopen');
+    await new Promise(r => collector.close(r)); collector = null;
+  }
   phase = 'old-file tombstone';
   assert.equal(createRequests, 1, 'every reopen must reuse the original room without a create request');
-  const disabled = await host.evaluate(pw => window.probe.collab.disableCollab(pw), creatorPassword); assert.equal(disabled.ok, true);
+  if (process.argv.includes('--keep-room')) {
+    assert.equal(!!wan, false, 'reboot checkpoint requires the isolated local cloud process');
+    fs.writeFileSync(path.join(root, 'host.proc'), hostFile); fs.writeFileSync(path.join(root, 'member.proc'), memberFile);
+    const boot = await (await import('./reopen-reboot.mjs')).bootIdentity();
+    fs.writeFileSync(path.join(root, 'checkpoint.json'), JSON.stringify({ version: 1, roomId, where, mode, boot, docPort: cloud.docPort, assetPort: cloud.assetPort, hostPid: restoredRuntime.pid, memberPid: restoredMember.pid }, null, 2));
+  } else {
+  if (process.argv.includes('--delete-offline')) {
+    await member.evaluate(() => window.probe.sync.currentSharedLink().dropFor(1000));
+    await member.waitForFunction(() => !window.probe.sync.currentSharedLink().connected);
+  }
+  const disabled = await (secondCreator ?? host).evaluate(pw => window.probe.collab.disableCollab(pw), creatorPassword); assert.equal(disabled.ok, true);
   await member.waitForFunction(async () => {
     const v = window.probe.sync.getSyncView(); const agent = await (await fetch('/api/agent/status')).json();
     const cards = await (await fetch('/api/cards/sync/status')).json(); const render = await (await fetch('/api/render-node/status')).json();
     return v.reopenState === 'deleted' && !agent.bound && cards.local && !render.binding;
   }, { timeout: 15000 });
   await open(host, hostFile); await host.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'deleted');
+  if (where === 'lan') await waitFor(async () => (await fetch(`${service}/hosting/challenge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ roomId, username: 'member', deviceId: 'probe-member-device-000001', as: 'member' }) })).status === 410, 15000, 'cloud deletion tombstone');
   await host.screenshot({ path: path.join(root, 'recovery-deleted.png') });
+  }
   evidence.push({ roomId, where, mode, actualHostProcessRestart: true, actualMemberProcessRestart: true, actualCloudProcessRestart: !wan, hostOpenedWhileCloudOffline: !wan && where === 'lan', pidChanged: true, portChanged: true, emptyBrowserStorage: true, memberWaitThenAutoJoin: where === 'lan',
-    sameUsers: ['creator:host', 'member:member'], oldSnapshotsPreservedLatest: true, version: journal.rev, bidirectionalEdits: 4, formats: ['proc', 'procp', 'draft', 'system-path', 'refresh'], nativeOsDoubleClick: false, cancellationTombstone: true, recoveryCreateRequests: createRequests - 1, agentAndCardBindings: true, renderNodeStarted: process.argv.includes('--nodes'), nodeRolesAuthenticated: process.argv.includes('--nodes'), staleBindingsRemovedOnDelete: true, creatorPasswordReconnect: process.argv.includes('--password-change'), creatorSecondDevice: process.argv.includes('--roles') });
+    sameUsers: ['creator:host', 'member:member'], oldSnapshotsPreservedLatest: true, version: journal.rev, bidirectionalEdits: 4, formats: ['proc', 'procp', 'draft', 'system-path', 'refresh'], nativeOsDoubleClick: false, cancellationTombstone: !process.argv.includes('--keep-room'), recoveryCreateRequests: createRequests - 1, agentAndCardBindings: true, renderNodeStarted: process.argv.includes('--nodes'), nodeRolesAuthenticated: process.argv.includes('--nodes'), staleBindingsRemovedOnDelete: !process.argv.includes('--keep-room'), creatorPasswordReconnect: process.argv.includes('--password-change'), creatorSecondDevice: process.argv.includes('--roles'), deletedFromSecondCreator: !!secondCreator });
   const result = { ok: true, evidence, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
+  evidence[0].deletedWhileMemberOffline = process.argv.includes('--delete-offline');
+  evidence[0].tamperedAssociationsRejected = process.argv.includes('--trust');
   fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
 } catch (e) {
   if (browser) for (const [index, p] of (await browser.pages()).entries()) {
@@ -282,4 +315,4 @@ try {
     } catch {}
   }
   console.error(JSON.stringify({ ok: false, phase, error: String(e.message).replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]'), evidenceDirectory: root })); process.exitCode = 1;
-} finally { await browser?.close(); for (const child of [...editors]) await stop(child); await cloud?.close(); }
+} finally { await browser?.close(); for (const child of [...editors]) await stop(child); await cloud?.close(); if (collector) await new Promise(r => collector.close(r)); }

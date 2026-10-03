@@ -67,6 +67,7 @@ interface DocEndpoint {
 const createDocEndpoint = createDocEndpointUntyped as (options: {
   url: string;
   protocols: () => string[];
+  resumeProtocols?: () => Promise<string[]> | string[];
   WebSocket?: WsCtor;
   transport: "ws";
   renew: false;
@@ -86,6 +87,7 @@ export interface LinkOptions {
   initialize?: boolean;
   url: string;
   protocols: () => Promise<string[]> | string[];
+  resumeProtocols?: () => Promise<string[]> | string[];
   projectId: string;
   session: string;
   initial: Project;
@@ -97,6 +99,8 @@ export interface LinkOptions {
   /** 传输断过、在保留期内接续上了(会话没断,不用重新订阅) */
   onResume?: () => void;
   onClosed?: (info: CloseInfo) => void;
+  /** 重新取认证证明时接口明确拒绝；返回 true 终止此连接，不再盲目重试。 */
+  onProtocolError?: (error: unknown) => boolean;
   WebSocketImpl?: WsCtor;
   reconnect?: { minMs: number; maxMs: number };
 }
@@ -257,8 +261,10 @@ export class SyncLink {
     let protocols: string[];
     try {
       protocols = await this.o.protocols();
-    } catch {
+    } catch (error) {
       this.dialing = false;
+      if (this.stopped) return;
+      if (this.o.onProtocolError?.(error)) { this.stop(); return; }
       this.o.onClosed?.({ code: 0, reason: "protocols", fatal: false, neverOpened: !this.everOpened });
       this.scheduleRetry();
       return;
@@ -270,6 +276,13 @@ export class SyncLink {
       ep = createDocEndpoint({
         url: this.o.url,
         protocols: () => protocols,
+        resumeProtocols: this.o.resumeProtocols ? async () => {
+          try { return await this.o.resumeProtocols!(); }
+          catch (error) {
+            if (!this.stopped && this.ep === ep && this.o.onProtocolError?.(error)) this.stop();
+            throw error;
+          }
+        } : undefined,
         ...(this.o.WebSocketImpl ? { WebSocket: this.o.WebSocketImpl } : {}),
         transport: "ws",
         renew: false,

@@ -9,7 +9,7 @@ import { srcUrl } from "../../testing/registerTs.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { classifyEnterFailure } = await import(srcUrl("editor/sync/enterFailure.ts"));
+const { classifyEnterFailure, classifyProtocolError } = await import(srcUrl("editor/sync/enterFailure.ts"));
 
 /** 浏览器里握手被拒、证书不对、代理挡了升级、网络不通,看到的都是这个 */
 const NEVER_OPENED = { code: 1006, reason: "", fatal: false, neverOpened: true };
@@ -67,4 +67,13 @@ test("15 秒没连上也没断 → 连不上,不再去问;打开前收到 4004 �
   assert.deepEqual(await classifyEnterFailure({ code: 0, reason: "timeout", fatal: false, neverOpened: true }, t.d), { error: "unreachable" });
   assert.equal(t.calls.fresh, 0);
   assert.deepEqual(await classifyEnterFailure({ code: 4004, reason: "", fatal: true, neverOpened: true }, deps().d), { error: "no-project" });
+});
+
+test("重连挑战明确401/403/404/410必须终止；429、5xx和断网仍可重试", async () => {
+  for (const [status, expected] of [[401, "auth"], [403, "kicked"], [404, "no-project"], [410, "no-project"]]) {
+    const error = httpErr(status);
+    assert.equal(classifyProtocolError(error), expected);
+    assert.deepEqual(await classifyEnterFailure(NEVER_OPENED, deps({ fresh: async () => { throw error; } }).d), { error: expected });
+  }
+  for (const error of [httpErr(429), httpErr(503), new TypeError("network unavailable")]) assert.equal(classifyProtocolError(error), null);
 });

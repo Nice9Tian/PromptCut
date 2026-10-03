@@ -269,6 +269,34 @@ function fakeSocketClass() {
   return { FakeWs, sockets };
 }
 
+test('SL-resume-route 接续带新路由能力', async () => {
+  const { FakeWs, sockets } = fakeSocketClass();
+  let release, calls = 0;
+  const ep = createDocEndpoint({ url: 'ws://relay.test/', WebSocket: FakeWs, transport: 'ws', legacyProbeMs: -1,
+    resumeProtocols: () => { calls++; return new Promise(r => { release = r; }); },
+    backoff: { baseMs: 1, factor: 2, maxMs: 1, jitter: 0 } });
+  sockets[0].open();
+  assert.equal(ep.dropTransport(), true);
+  await waitFor(() => calls === 1, 1000, 'resume route requested');
+  release(['promptcut.route.fresh-route']); await waitFor(() => sockets.length === 2, 1000, 'resume socket');
+  assert.ok(sockets[1].protocols.includes('promptcut.route.fresh-route'));
+  assert.ok(sockets[1].protocols.some(p => p.startsWith('promptcut.session.')));
+  ep.close();
+});
+
+test('SL-resume-route-error 暂时路由失败保留会话重试；关闭后迟到结果不建连接', async () => {
+  const { FakeWs, sockets } = fakeSocketClass();
+  let release, calls = 0;
+  const ep = createDocEndpoint({ url: 'ws://relay.test/', WebSocket: FakeWs, transport: 'ws', legacyProbeMs: -1,
+    resumeProtocols: () => { calls++; if (calls === 1) throw new TypeError('network'); return new Promise(r => { release = r; }); },
+    backoff: { baseMs: 1, factor: 2, maxMs: 1, jitter: 0 } });
+  sockets[0].open(); ep.dropTransport();
+  await waitFor(() => calls === 2, 1000, 'route retry');
+  assert.equal(ep.connected, true); assert.equal(ep.stats().detached, true);
+  ep.close(); release(['promptcut.route.late']); await new Promise(r => setImmediate(r));
+  assert.equal(sockets.length, 1);
+});
+
 test('SL-ack-bytes 收到的未确认原文满 64 KiB 就立刻单发 session.ack，不等 1 s（〔裁〕2026-09-27，两端同一条）', () => {
   const { FakeWs, sockets } = fakeSocketClass();
   const ep = createDocEndpoint({ url: 'ws://doc.test/', WebSocket: FakeWs, transport: 'ws', log: () => {}, legacyProbeMs: -1 });
