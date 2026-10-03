@@ -1,4 +1,5 @@
 import { recordTrace } from './debug';
+import { refreshProviders, reportAuthFailure, subscribeProviders } from './providerState';
 import { appendTextPart, applyDeltas, isDeltaEvent } from './streamBatch';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob, KeyKind } from "./types";
@@ -146,8 +147,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       .then((data) => setConfig(data?.config ?? data))
       .catch(() => {});
 
-    fetch("/api/ai/providers")
-      .then((res) => res.json())
+    refreshProviders()
       .then((data: any) => {
         let list: ProviderInfo[] = [];
         let stt: SttInfo | null = null;
@@ -185,6 +185,11 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   }, [opts?.mock]);
 
   useEffect(() => {
+    if (opts?.mock) return;
+    return subscribeProviders(setProviders);
+  }, [opts?.mock]);
+
+  useEffect(() => {
     if (providers.length > 0 && !setupGateRef.current && !opts?.mock) {
       setupGateRef.current = true;
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
@@ -218,12 +223,8 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         }
         const finished = jobs.filter(j => j.state !== 'running').map(j => j.id + j.state).join(',');
         if (finished !== lastFinished) {
-          const r = await fetch('/api/ai/providers?refresh=1', { signal: AbortSignal.timeout(30000) });
-          if (r.ok) {
-            const d = await r.json();
-            if (!stopped) setProviders(d.providers || []);
-            lastFinished = finished;
-          }
+          await refreshProviders(true);
+          lastFinished = finished;
         }
       } catch (e) {
         if (!stopped) setSetupJobs(prev => prev.map(j => j.state === 'running' ? { ...j, message: '连接中断，正在重新获取进度…' } : j));
@@ -752,6 +753,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
               })
             );
           } else if (ev.type === "error" && ev.message) {
+            reportAuthFailure(ev);
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === asstMsgId ? { ...m, error: ev.message, pending: false, finishedAt: Date.now(), outcome: "error" } : m
@@ -769,7 +771,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
              * 一次不成就停在那儿,把错误留给用户看 —— 他知道的比我们多。
              * 用户自己发新消息时额度重置(见 send 开头)。
              */
-            if (ev.retryable && ev.retryPrompt && autoContinueLeftRef.current > 0) {
+            if (!ev.authReason && ev.retryable && ev.retryPrompt && autoContinueLeftRef.current > 0) {
               autoContinueLeftRef.current -= 1;
               const prompt = ev.retryPrompt;
               // 记下这次排着的续跑:发出去之前这一页仍算忙,输入队列不能抢在它前面(见 pumpQueue);

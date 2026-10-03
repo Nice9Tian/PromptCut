@@ -504,13 +504,13 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
 
       {needsLogin && (
         <div className="ai-banner">
-          <span>{showLoginPrompt ? "请先登录再发送" : `${pInfo.label} 还没登录`}</span>
+          <span>{pInfo.auth?.status === 'invalid' ? 'Codex 登录已失效，请重新登录' : showLoginPrompt ? "请先登录再发送" : `${pInfo.label} 还没登录`}</span>
           <button
             className="ai-banner-btn"
             onClick={() => { if (provider) login(provider); setShowLoginPrompt(false); }}
             disabled={st === "waiting"}
           >
-            {st === "waiting" ? "登录窗口已打开,等你完成…" : st === "timeout" ? "登录超时,可以再试一次" : "去登录"}
+            {st === "waiting" ? "登录窗口已打开,等你完成…" : st === "timeout" ? "登录超时,可以再试一次" : pInfo.auth?.status === 'invalid' ? '重新登录' : "去登录"}
           </button>
         </div>
       )}
@@ -518,6 +518,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       {!needsLogin && pInfo?.auth?.loggedIn === null && pInfo.auth.fixHint && (
         <div className="ai-banner">
           {pInfo.auth.fixHint}
+          <button className="ai-banner-btn" onClick={openSetup}>打开 AI 设置</button>
         </div>
       )}
 

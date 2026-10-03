@@ -182,6 +182,7 @@ export function runTextProtocolLoop({ startRun, opts, onEvent }) {
     : 8;
   let loopCount = 0;
   let finalAbort = () => {};
+  let aborted = false;
   
   const donePromise = new Promise(async (resolve, reject) => {
     try {
@@ -189,6 +190,7 @@ export function runTextProtocolLoop({ startRun, opts, onEvent }) {
       currentOpts.systemPrompt = currentOpts.systemPrompt + '\n\n' + protocolPrompt;
       
       while (loopCount < maxLoops) {
+        if (aborted) { resolve(); return; }
         loopCount++;
         let collectedText = '';
         // 每一轮都是一条新的输出流,过滤器不能跨轮复用(上一轮的半截标记会串味)
@@ -236,6 +238,7 @@ export function runTextProtocolLoop({ startRun, opts, onEvent }) {
         }
 
         // 流断了,把扣住的尾巴放出来(围栏没收尾的话这里会自己丢掉)
+        if (aborted) { resolve(); return; }
         const tail = fence.flush();
         if (tail) onEvent({ type: 'text', delta: tail });
         
@@ -286,7 +289,7 @@ export function runTextProtocolLoop({ startRun, opts, onEvent }) {
   });
   
   return {
-    abort: () => finalAbort(),
+    abort: () => { aborted = true; finalAbort(); },
     done: donePromise
   };
 }

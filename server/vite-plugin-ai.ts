@@ -682,6 +682,14 @@ export default function vitePluginAi(): Plugin {
         }
       });
 
+      // Bounded UI polling reads only the non-sensitive ledger, never launches a CLI.
+      server.middlewares.use('/api/ai/auth-state', async (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        const { codexAuthState } = await import('./runners/codex-auth-state.mjs');
+        const state = codexAuthState();
+        sendJson(res, 200, { ok: true, codex: { ...state.snapshot(), auth: state.effective() } });
+      });
+
       /**
        * 列出某家能用的模型。
        *
@@ -992,6 +1000,20 @@ export default function vitePluginAi(): Plugin {
             const runners = await getRunner();
             const data = JSON.parse(body);
             const { provider, prompt, sessionId, model, effort, fast, attachments, script, schemaCompat, deepAuto } = data;
+            if (provider === 'codex') {
+              const { codexAuthState, authFailureEvent } = await import('./runners/codex-auth-state.mjs');
+              const auth = codexAuthState().snapshot();
+              if (auth.state !== 'normal') {
+                // Before quota probes or task registration: no CLI executes known-invalid credentials.
+                const event = auth.state === 'invalid' ? authFailureEvent(auth.reason) : {
+                  type: 'error', message: 'Codex 登录状态待确认，请重新登录。', retryable: false,
+                  authProvider: 'codex', authReason: 'state_unknown', authGeneration: auth.revision,
+                };
+                res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+                res.end(`data: ${JSON.stringify(event)}\n\n`);
+                return;
+              }
+            }
             // 多 Agent 分页:这一页的对话 ID。只认会话 id 的字符集,别的一律当没带
             const agentId: string = typeof data.conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(data.conversationId) ? data.conversationId : '';
             runAgentId = agentId;
@@ -1174,9 +1196,9 @@ export default function vitePluginAi(): Plugin {
               // meta.callId:API 直连那条路的 tool_use id(server/harness/tools/index.mjs 传进来),事件带上它,AI 栏按它对上
               callTool: async (name: string, args: any, meta?: { callId?: string }) => await callToolInternal(name, args, agentId || undefined, typeof meta?.callId === 'string' ? meta.callId : undefined),
               onEvent: (ev: any) => {
-                if (ev.type === 'done') hasDone = true;
+                if (ev.type === 'done' || ev.type === 'error') hasDone = true;
                 if (ev.type === 'text' && typeof ev.delta === 'string') pendingText += ev.delta;
-                if (ev.type === 'tool_call' || ev.type === 'done') flushText();
+                if (ev.type === 'tool_call' || ev.type === 'done' || ev.type === 'error') flushText();
                 if (ev.type === 'text' && typeof ev.delta === 'string') replyBytes += Buffer.byteLength(ev.delta, 'utf8');
                 // The chat never reads a tool result's full output (get_project is the whole
                 // project); sending it made the editor parse and trace megabytes per result.
