@@ -579,8 +579,8 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     if (defaultTickets === undefined) {
       try {
         const { assetTicketVerifierFor } = await import("./auth/asset-tickets.mjs");
-        const { localDocumentDir } = await import("./recovery/paths.mjs");
-        defaultTickets = assetTicketVerifierFor(path.join(localDocumentDir(root), "auth")) as AssetTicketVerifier;
+        const { prepareLocalDocumentDir } = await import("./recovery/paths.mjs");
+        defaultTickets = assetTicketVerifierFor(path.join(prepareLocalDocumentDir(root), "auth")) as AssetTicketVerifier;
       } catch {
         defaultTickets = null;
       }

@@ -44,9 +44,10 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const crypt = protector || systemProtector(dir);
   const file = path.join(dir, 'identities.json');
-  let state = { version: 1, identities: {}, bindings: {}, revoked: {}, hosts: {}, journals: {}, settings: {} };
+  const empty = () => ({ version: 1, identities: {}, bindings: {}, revoked: {}, hosts: {}, journals: {}, settings: {}, unregister: {} });
+  let state = empty();
   const read = () => {
-    if (!fs.existsSync(file)) return;
+    if (!fs.existsSync(file)) { state = empty(); return; }
     try {
       const j = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (j.version !== 1 || j.protection !== crypt.kind || typeof j.payload !== 'string') throw new Error();
@@ -58,19 +59,47 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
     } catch { throw new Error('协作恢复数据损坏；保留原数据，请从备份恢复或重新认证'); }
   };
   read();
+  const lockFile = path.join(dir, 'identities.lock');
+  const acquire = () => {
+    for (let n = 0; n < 120; n++) {
+      const tmp = `${lockFile}.owner-${process.pid}-${randomBytes(6).toString('hex')}`;
+      try {
+        const fd = fs.openSync(tmp, 'wx', 0o600);
+        try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid })); fs.fsyncSync(fd); fs.linkSync(tmp, lockFile); return fd; }
+        catch (e) { fs.closeSync(fd); throw e; }
+        finally { fs.unlinkSync(tmp); }
+      }
+      catch (e) {
+        if (e.code !== 'EEXIST') throw e;
+        try {
+          const owner = JSON.parse(fs.readFileSync(lockFile, 'utf8')).pid;
+          if (Number.isSafeInteger(owner) && owner > 0) {
+            try { process.kill(owner, 0); } catch (err) { if (err.code === 'ESRCH') { fs.unlinkSync(lockFile); continue; } }
+          }
+        } catch { /* A partly written or damaged lock is never guessed away. */ }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+    }
+    throw new Error('协作恢复记录正在被另一个实例保存，请重试');
+  };
   const change = fn => {
+    const lock = acquire();
+    try {
+    read();
     const draft = structuredClone(state); fn(draft);
     const bytes = Buffer.from(JSON.stringify(draft));
     const encoded = JSON.stringify({ version: 1, protection: crypt.kind, digest: createHash('sha256').update(bytes).digest('hex'), payload: crypt.seal(bytes).toString('base64') });
     if (fs.existsSync(file)) write(`${file}.bak`, fs.readFileSync(file));
     write(file, encoded); state = draft;
+    } finally { fs.closeSync(lock); fs.unlinkSync(lockFile); }
   };
   return {
     protection: crypt.kind,
-    list: descriptor => Object.values(state.identities).filter(r => roomKey(r) === roomKey(descriptor)).map(r => structuredClone(r)),
+    list: descriptor => { read(); return Object.values(state.identities).filter(r => roomKey(r) === roomKey(descriptor)).map(r => structuredClone(r)); },
     select(descriptor, contentId) {
+      read();
       if (state.revoked[roomKey(descriptor)]) return { revoked: true, identities: [] };
-      const identities = this.list(descriptor);
+      const identities = Object.values(state.identities).filter(r => roomKey(r) === roomKey(descriptor)).map(r => structuredClone(r));
       const bound = state.bindings[JSON.stringify([roomKey(descriptor), contentId])];
       return { identities, selected: identities.find(r => identityKey(r) === bound) ?? (identities.length === 1 ? identities[0] : null), host: structuredClone(state.hosts[roomKey(descriptor)] ?? null), journal: structuredClone(state.journals[JSON.stringify([roomKey(descriptor), contentId])] ?? null) };
     },
@@ -79,21 +108,25 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
       const k = identityKey(record);
       change(s => { s.identities[k] = structuredClone(record); if (contentId) s.bindings[JSON.stringify([roomKey(record), contentId])] = k; });
     },
-    host(descriptor) { return structuredClone(state.hosts[roomKey(descriptor)] ?? null); },
-    settings(descriptor) { return structuredClone(state.settings[roomKey(descriptor)] ?? null); },
+    host(descriptor) { read(); return structuredClone(state.hosts[roomKey(descriptor)] ?? null); },
+    settings(descriptor) { read(); return structuredClone(state.settings[roomKey(descriptor)] ?? null); },
     saveSettings(descriptor, value) { change(s => { s.settings[roomKey(descriptor)] = structuredClone(value); }); },
     journal(descriptor, contentId, journal) {
       if (journal && (journal.version !== 1 || journal.projectId !== descriptor.roomId || !Array.isArray(journal.pending) || !Array.isArray(journal.project?.tracks))) throw new Error('离线操作记录无效');
       change(s => { s.journals[JSON.stringify([roomKey(descriptor), contentId])] = structuredClone(journal); });
     },
     bindHost(descriptor, deviceId) {
+      read();
       if (state.revoked[roomKey(descriptor)]) throw new Error('房间已注销');
       const prior = state.hosts[roomKey(descriptor)];
       if (prior && prior.deviceId !== deviceId) throw new Error('主机设备冲突');
-      if (!prior) change(s => { s.hosts[roomKey(descriptor)] = { deviceId, registrationKey: randomBytes(32).toString('base64url') }; });
+      if (!prior) change(s => {
+        if (s.revoked[roomKey(descriptor)] || s.hosts[roomKey(descriptor)] && s.hosts[roomKey(descriptor)].deviceId !== deviceId) throw new Error('房间已注销或主机冲突');
+        s.hosts[roomKey(descriptor)] ??= { deviceId, registrationKey: randomBytes(32).toString('base64url') };
+      });
       return this.host(descriptor);
     },
-    pendingUnregister() { return Object.values(state.unregister ?? {}).map(r => structuredClone(r)); },
+    pendingUnregister() { read(); return Object.values(state.unregister ?? {}).map(r => structuredClone(r)); },
     completeUnregister(descriptor) { change(s => { delete s.unregister?.[roomKey(descriptor)]; }); },
     revoke(descriptor) { change(s => {
       s.revoked[roomKey(descriptor)] = Date.now();

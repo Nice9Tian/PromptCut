@@ -11,7 +11,7 @@ export function mirrorOf(rec, direct = null) {
 export function startHostingHost({ service, roomId, hostKey, deviceId, instance, record, docBase, assetBase, direct = null, state = () => {}, renewMs = HOSTING.renewMs }) {
   const trusted = new URL(service); if (!['http:', 'https:'].includes(trusted.protocol) || trusted.username || trusted.password || trusted.search || trusted.hash) throw new Error('untrusted-hosting-service');
   const localDoc = new URL(docBase), localAsset = new URL(assetBase);
-  for (const u of [localDoc, localAsset]) if (!['127.0.0.1', '[::1]', 'localhost'].includes(u.hostname) || !['http:', 'https:'].includes(u.protocol)) throw new Error('host target must be loopback');
+  for (const u of [localDoc, localAsset]) if (!['127.0.0.1', '[::1]', 'localhost'].includes(u.hostname) || u.protocol !== 'http:' || u.username || u.password || u.search || u.hash) throw new Error('host target must be loopback HTTP');
   let stopped = false, timer, ws, delay = 500, connecting = false;
   const sockets = new Map();
   const base = service.replace(/\/+$/, '');
@@ -44,14 +44,22 @@ export function startHostingHost({ service, roomId, hostKey, deviceId, instance,
           socket.on('close', () => { sockets.delete(m.id); send({ type: 'close', id: m.id }); });
           socket.pcPrefix = m.kind === 'doc' ? localDoc.pathname.replace(/\/$/, '') : '';
           socket.pcFirst = true;
+          socket.pcHead = Buffer.alloc(0);
           return;
         }
         const socket = sockets.get(m.id); if (!socket) return;
         if (m.type === 'data') {
           let data = Buffer.from(m.data, 'base64');
           if (socket.pcFirst) {
-            socket.pcFirst = false;
-            if (socket.pcPrefix) data = Buffer.from(data.toString('latin1').replace(/^([A-Z]+) (\/\S*) HTTP\//, (_all, method, route) => `${method} ${socket.pcPrefix}${route === '/' ? '' : route} HTTP/`), 'latin1');
+            if (socket.pcPrefix) {
+              data = Buffer.concat([socket.pcHead, data]);
+              if (!data.includes('\r\n')) {
+                if (data.length > 8192) return socket.destroy();
+                socket.pcHead = data; return;
+              }
+              data = Buffer.from(data.toString('latin1').replace(/^([A-Z]+) (\/\S*) HTTP\//, (_all, method, route) => `${method} ${socket.pcPrefix}${route === '/' ? '' : route} HTTP/`), 'latin1');
+            }
+            socket.pcFirst = false; socket.pcHead = null;
           }
           socket.write(data);
         }

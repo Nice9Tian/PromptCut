@@ -3,9 +3,9 @@
  *
  * - **开启**：放云端向托管端 `POST shared/create`（地址缺省是内置托管地址，可改，沿用 C6.5）→ 以创建者身份进入、把当前项目
  *   以根替换写进去（`enterShared`，C6.5 的路径）→ `invite-create` → 界面显示邀请链接与二维码。放本机沿用 C6.5 的本机托管
- *   （本机文档服务 `/docservice/shared/create`，要编辑器以局域网主机方式启动），不向云端登记、不出邀请链接。
+ *   （本机文档服务 `/docservice/shared/create`），以原设备绑定向云端登记并保持出站隧道。
  * - **勾上时的缺省**：放本机、自由进入、创建者用户名取设备名；项目密码与创建者密码都自动生成（各 16 个字符）并存在本机〔裁，第 6 节〕。
- * - **邀请码**：原文只在签发时回给创建者，存在他本机（`pc.shared.local`）；服务端不存原文，别的成员取不到〔裁，第 6 节〕。
+ * - **邀请码**：原文只在签发时回给创建者，存在他本机保护存储；服务端不存原文，别的成员取不到〔裁，第 6 节〕。
  * - **取消**：放云端的先把项目真身与被引用的素材原尺寸全部拉回本机（预渲染产物可以再生，不拉），再以创建者身份 `delete`，
  *   本机项目回到 `local` 空间；中途失败就恢复为开启状态。放本机的停本机托管（删掉本机文档服务里的共享项目），回到 `local` 空间。
  *
@@ -312,7 +312,7 @@ async function pullOriginals(hashes: string[], onProgress?: (done: number, total
 
 /**
  * 取消多用户协作（创建者）：核对创建者密码 → 放云端的先把项目真身与素材原尺寸拉回本机 → `delete` → 回到本机空间。
- * 失败时什么都没删，调用方把勾选恢复成开启。
+ * 删除前失败保留开启；服务删除成功后即使本机注销记录写失败，也不能报成房间还在。
  */
 export async function disableCollab(creatorPassword: string, onProgress?: (done: number, total: number) => void): Promise<{ ok: true } | { ok: false; error: DisableError }> {
   const s = getSyncView().shared;
@@ -339,7 +339,10 @@ export async function disableCollab(creatorPassword: string, onProgress?: (done:
   }
   dropLocal(s.projectId);
   const descriptor = getSyncView().association;
-  if (descriptor) await recoveryRequest("revoke", descriptor);
+  if (descriptor) {
+    try { await recoveryRequest("revoke", descriptor); }
+    catch { pushToast("房间已经删除，但本机注销记录未能保存。请保留项目并检查磁盘；旧房间不会重新创建。", "warn", Infinity); }
+  }
   leaveSharedToLocal(project);
   return { ok: true };
 }

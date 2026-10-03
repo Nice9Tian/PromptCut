@@ -1,3 +1,4 @@
+import './lib/no-user-dirs.mjs';
 import fs from 'fs';
 import path from 'path';
 import { PNG } from 'pngjs';
@@ -12,15 +13,15 @@ async function verify() {
     else if (args[i] === '--fps') opts.fps = parseFloat(args[++i]);
   }
 
-  const outA = 'out/verify-a';
-  const outB = 'out/verify-b';
+  fs.mkdirSync('out', { recursive: true });
+  const isolatedRoot = fs.mkdtempSync(path.resolve('out', 'determinism-'));
+  const outA = path.join(isolatedRoot, 'verify-a');
+  const outB = path.join(isolatedRoot, 'verify-b');
   
   console.log('--- Exporting First Pass ---');
-  fs.rmSync(outA, { recursive: true, force: true });
   await exportFrames({ ...opts, out: outA, noVideo: true });
   
   console.log('\n--- Exporting Second Pass ---');
-  fs.rmSync(outB, { recursive: true, force: true });
   await exportFrames({ ...opts, out: outB, noVideo: true });
 
   console.log('\n--- Comparing Frames ---');

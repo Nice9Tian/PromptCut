@@ -35,7 +35,8 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
   const challenges = createChallenges({ now }); const rate = createRateLimiter({ now });
   const send = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(body)); };
   const fail = (res, code, error) => send(res, code, { ok: false, error });
-  const hostAllowed = (req, id) => rooms[id] && !rooms[id].deleted && equal(digest(bearer(req) ?? String(req.headers['sec-websocket-protocol'] || '').split(',').map(s => s.trim()).find(s => s.startsWith('promptcut.host.'))?.slice('promptcut.host.'.length)), rooms[id].hostVerifier);
+  const hostCredential = (req, id) => rooms[id] && equal(digest(bearer(req) ?? String(req.headers['sec-websocket-protocol'] || '').split(',').map(s => s.trim()).find(s => s.startsWith('promptcut.host.'))?.slice('promptcut.host.'.length)), rooms[id].hostVerifier);
+  const hostAllowed = (req, id) => rooms[id] && !rooms[id].deleted && hostCredential(req, id);
   const online = id => (leases.get(id)?.expires || 0) > now() && tunnels.has(id);
   const banned = (rec, user, device) => (rec.bans ?? []).some(b => b.username === user && b.deviceId === device);
   const accessOf = (req, id) => {
@@ -120,7 +121,7 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
         mirror = { name: mirror.name, mode: mirror.mode, kdf: { alg: mirror.kdf.alg, iter: mirror.kdf.iter }, creator: copyCredential(mirror.creator),
           ...(mirror.mode === 'free' ? { project: copyCredential(mirror.project) } : { list: mirror.list.map(copyCredential) }),
           generation: mirror.generation, bans: mirror.bans.map(b => ({ username: b.username, deviceId: b.deviceId })),
-          invite: mirror.invite && typeof mirror.invite.digest === 'string' && mirror.invite.digest.length <= 128 ? { digest: mirror.invite.digest, expires: mirror.invite.expires, revoked: !!mirror.invite.revoked } : null, direct: null };
+          invite: mirror.invite && typeof mirror.invite.digest === 'string' && mirror.invite.digest.length <= 128 ? { digest: mirror.invite.digest, expiresAt: mirror.invite.expiresAt, revokedAt: mirror.invite.revokedAt, maxUses: mirror.invite.maxUses, used: mirror.invite.used } : null, direct: null };
         if (rec?.deleted) return fail(res, 410, 'deleted');
         if (rec && !hostAllowed(req, b.roomId)) return fail(res, 403, 'host-auth');
         if (rec && rec.deviceId !== b.deviceId) return fail(res, 409, 'host-conflict');
@@ -131,7 +132,9 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
         return send(res, 200, { ok: true, leaseMs, online: online(b.roomId) });
       }
       if (p === '/hosting/unregister') {
-        if (!hostAllowed(req, b.roomId)) return fail(res, 403, 'host-auth');
+        if (!rec) return fail(res, 404, 'no-project');
+        if (!hostCredential(req, b.roomId)) return fail(res, 403, 'host-auth');
+        if (rec.deleted) return b.deleted ? send(res, 200, { ok: true }) : fail(res, 410, 'deleted');
         if (!b.deleted && leases.has(b.roomId) && leases.get(b.roomId).instance !== b.instance) return fail(res, 409, 'host-conflict');
         if (b.deleted) commit(s => { s[b.roomId].deleted = true; });
         leases.delete(b.roomId); tunnels.get(b.roomId)?.close(1001, 'unregistered'); tunnels.delete(b.roomId); return send(res, 200, { ok: true });

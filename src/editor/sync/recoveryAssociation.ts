@@ -12,14 +12,16 @@ export interface CollaborationDescriptor {
 }
 let pending: { contentId: string; descriptor: CollaborationDescriptor | null } | null = null;
 let active: CollaborationDescriptor | null = null;
+let recovering = false;
 
 export function noteLoadedAssociation(project: Project, value: unknown) {
   pending = { contentId: project.id!, descriptor: parseCollaboration(value) as CollaborationDescriptor | null };
 }
 export function takeLoadedAssociation(project: Project): CollaborationDescriptor | null {
   const value = pending && pending.contentId === project.id ? pending.descriptor : null;
-  pending = null; active = value;
+  pending = null; active = value; recovering = !!value;
   return value;
 }
 export function currentAssociation(): CollaborationDescriptor | null { return active; }
-export function setAssociation(value: CollaborationDescriptor | null) { active = value; }
+export function setAssociation(value: CollaborationDescriptor | null, restoring = false) { active = value; recovering = !!value && restoring; }
+export function isRecoveringAssociation(): boolean { return recovering; }

@@ -263,7 +263,7 @@ test('SPC1-4 数据目录布局：docservice/（auth/、tenants/<projectId>/）�
   }
   assert.ok(!files.some((f) => /^assets\/media\/[0-9a-f]{64}/.test(f)), '托管端不用平铺布局');
   const top = fs.readdirSync(o.dataDir).sort();
-  for (const d of top) assert.ok(['assets', 'docservice', 'secrets', 'hosting'].includes(d), `数据目录顶层只有 docservice/、assets/、secrets/、hosting/：${top}`);
+  for (const d of top) assert.ok(['assets', 'docservice', 'secrets', 'hosting', 'device.json'].includes(d), `数据目录顶层只有文档、素材、秘密、登记目录与稳定设备记录：${top}`);
   assert.deepEqual(fs.readdirSync(cwd), [], '工作目录没被写');
 });
 

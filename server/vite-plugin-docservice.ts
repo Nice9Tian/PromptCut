@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { Plugin } from "vite";
 import { apiPath, clientAddressOf, isLoopbackAddress, isLocalOrigin, remoteTagOf } from "./http-guard.mjs";
-import { localDocumentDir, recoveryDir } from "./recovery/paths.mjs";
+import { prepareLocalDocumentDir, recoveryDir } from "./recovery/paths.mjs";
 import { recoveryHttp } from "./recovery/http.mjs";
 
 /**
@@ -224,7 +224,7 @@ export function docservicePlugin(): Plugin {
           import("./auth/store.mjs"),
           import("./auth/device.mjs"),
         ]);
-        const dataDir = localDocumentDir(server.config.root);
+        const dataDir = prepareLocalDocumentDir(server.config.root);
         // 凭证存储:进程内单例,素材服务按同一个目录取到同一份
         let store: object | null = null;
         try {

@@ -229,6 +229,8 @@ interface Current {
   url: string;
   unbind: () => void;
   offs: (() => void)[];
+  /** Change the in-memory proof used by subsequent reconnects after a successful own-password update. */
+  updateAuthentication?: (key: string) => void;
 }
 
 let cur: Current | null = null;
@@ -722,7 +724,7 @@ export async function resumeShared(): Promise<boolean> {
   const descriptor = descriptorOf(r.candidate);
   if (view.association?.roomId === descriptor.roomId && holding) return true;
   recoveryCoordinator.cancel(); detach(); disconnectSharedAssets(); releaseHolding();
-  setAssociation(descriptor); patch({ association: descriptor, shared: null, reopenState: "recovering" });
+  setAssociation(descriptor, true); patch({ association: descriptor, shared: null, reopenState: "recovering" });
   holdRecovery(getState().project, descriptor);
   recoveryCoordinator.start(descriptor, getState().project.id);
   return true;
@@ -905,7 +907,7 @@ export async function startSync(): Promise<void> {
 export function isJoinPage(): boolean {
   // C10a:从开始页「加入别人的项目」进来的(已经连着共享项目),以及在线页面(只能从加入进编辑器),
   // 内容同样以文档服务为准:编辑器挂上时不塞演示卡,不然每个加入的人都往大家的项目里加一遍
-  if (ONLINE || cur?.kind === "shared" || hasSharedResume()) return true;
+  if (ONLINE || currentAssociation() || cur?.kind === "shared" || hasSharedResume()) return true;
   try {
     return new URLSearchParams(location.search).has("join");
   } catch {
@@ -1145,6 +1147,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
         const descriptor = descriptorOf(candidate);
         setAssociation(descriptor);
         bind(link, "shared", candidate.projectId, wsUrl);
+        if (cur?.link === link) cur.updateAuthentication = k => { key = k; };
         patch({
           shared: { projectId: candidate.projectId, name: candidate.name, mode: candidate.mode, where: candidate.where, base: candidate.base, username: cred.username, creator: cred.as === "creator", hostDeviceName: candidate.hostDeviceName },
           members: [],
@@ -1185,8 +1188,16 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
         if (info.fatal && cur?.link === link && expectedClose !== link) {
           const blocked: Blocked = info.code === 4004 ? "deleted" : info.reason === "removed" ? "removed" : "kicked";
           if (blocked === "kicked") rememberKicked(candidate.projectId, cred.username, true);
+          const descriptor = currentAssociation();
+          recoveryCoordinator.cancel(); cancelHostTask(descriptor);
           clearSharedResume();
-          patch({ blocked });
+          detach(); disconnectSharedAssets();
+          patch({ blocked, shared: null, members: [], reopenState: blocked === "deleted" ? "deleted" : "rejected" });
+          // Another creator device may delete the room. The original host must persist its
+          // cloud tombstone too; a normal offline unregister would otherwise leave members waiting forever.
+          if (blocked === "deleted" && descriptor && !ONLINE_BUILD && !ONLINE) {
+            void recoveryRequest("revoke", descriptor).catch(() => pushToast("房间已删除，但本机注销记录保存失败，请检查磁盘并重试。", "warn", Infinity));
+          }
         }
         refreshStatus();
       },
@@ -1252,6 +1263,12 @@ export async function recoveryRequest(endpoint: string, descriptor: Collaboratio
 function cancelHostTask(descriptor: CollaborationDescriptor | null) {
   if (!ONLINE_BUILD && !ONLINE && descriptor?.version === 1 && descriptor.where === "lan") void recoveryRequest("cancel-host", descriptor).catch(() => undefined);
 }
+if (!ONLINE_BUILD && !ONLINE && typeof window !== "undefined") window.addEventListener("pagehide", () => {
+  const descriptor = currentAssociation(); recoveryCoordinator.cancel();
+  if (descriptor?.version === 1 && descriptor.where === "lan") {
+    navigator.sendBeacon?.("/api/collaboration/cancel-host", new Blob([JSON.stringify({ descriptor, task: session, taskVersion: recoveryCoordinator.generation })], { type: "application/json" }));
+  }
+});
 async function saveRecoveryIdentity(descriptor: CollaborationDescriptor, record: RecoveryIdentity): Promise<void> {
   const { access: _access, routeProtocol: _route, originalHost: _host, ...candidate } = record.candidate;
   record = { ...record, candidate };
@@ -1294,9 +1311,10 @@ const recoveryCoordinator = new RecoveryCoordinator({
       }
       if (settings) cacheCollabSecrets(descriptor.roomId!, settings);
     }
-    if (!signal.aborted && result.journal && holding && holding.ds.projectId === descriptor.roomId && !holding.restored) {
-      try { holding.ds.restoreJournal(result.journal); holding.restored = true; }
+    if (!signal.aborted && result.selected && holding && holding.ds.projectId === descriptor.roomId && !holding.restored) {
+      try { if (result.journal) holding.ds.restoreJournal(result.journal); holding.restored = true; }
       catch { throw Object.assign(new Error("离线恢复数据损坏"), { reason: "recovery-storage" }); }
+      if (holding.ds.unconfirmed) persistJournal(holding.ds, descriptor, contentId);
     }
     return result;
   },
@@ -1304,9 +1322,12 @@ const recoveryCoordinator = new RecoveryCoordinator({
   discover: async (descriptor: CollaborationDescriptor, record: RecoveryIdentity, signal: AbortSignal) => {
     if (record.candidate.where === "hosted") return { ...record.candidate, projectId: descriptor.roomId };
     if (!ONLINE_BUILD && !ONLINE) {
-      const r = await fetch(`/api/docservice/lan-discover?name=${encodeURIComponent(record.candidate.name)}`, { signal });
-      const found = await r.json();
-      const room = found.hosts?.find((h: { projectId: string }) => h.projectId === descriptor.roomId);
+      let room;
+      try {
+        const r = await fetch(`/api/docservice/lan-discover?name=${encodeURIComponent(record.candidate.name)}`, { signal: AbortSignal.any([signal, AbortSignal.timeout(2000)]) });
+        const found = r.ok ? await r.json() : null;
+        room = found?.hosts?.find((h: { projectId: string }) => h.projectId === descriptor.roomId);
+      } catch { if (signal.aborted) throw signal.reason; /* Discovery failure must still permit the trusted relay. */ }
       if (room) {
         const direct = { ...record.candidate, base: room.docservice, asset: room.asset, projectId: descriptor.roomId };
         // A stale multicast answer is a hint, never a reason to keep retrying an unreachable route.
@@ -1343,7 +1364,7 @@ function holdRecovery(project: Project, descriptor: CollaborationDescriptor) {
   const ds = new DocSync(project, { projectId: descriptor.roomId!, session, initialize: false, send: msg => target.link?.send(msg as unknown as AnyMsg), saveBackup: b => void saveBackup(b) });
   const offStore = bindStore(ds, { load: onLoad });
   const offJournal = ds.on("project", () => {
-    if (ONLINE_BUILD || ONLINE) return;
+    if (ONLINE_BUILD || ONLINE || !holding?.restored || holding.ds !== ds) return;
     persistJournal(ds, descriptor, project.id ?? "");
   });
   holding = { ds, target, restored: false, off: () => { offStore(); offJournal(); } };
@@ -1438,6 +1459,7 @@ export async function adminOp(
     const replacement = op === "set-creator-password" && s.creator ? fields.creator : op === "set-password" && !s.creator ? fields.project : null;
     if (descriptor && lastIdentity && replacement && typeof (replacement as { key?: unknown }).key === "string") {
       const record = { ...lastIdentity.record, key: (replacement as { key: string }).key };
+      if (cur?.link === link) cur.updateAuthentication?.(record.key);
       lastIdentity = { descriptor, record }; identitySave = saveRecoveryIdentity(descriptor, record);
       rememberSharedResume(record);
       try { await identitySave; } catch { pushToast("新密码已生效，但本机恢复凭证保存失败；请重试保存。", "warn", Infinity); }
