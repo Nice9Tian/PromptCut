@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
@@ -106,7 +107,12 @@ async function build() {
   patches.push('unique single-instance and plugin storage identity; no bundle or file associations; test origin capability');
   copyTree(process.execPath, path.join(crate, 'binaries/node-x86_64-pc-windows-msvc.exe'), root);
   console.log(JSON.stringify({ phase: 'copy-dependencies', sourceCommit, fixtureDirectory: root }));
-  copyTree(path.join(repo, 'node_modules'), path.join(appA, 'node_modules'), root);
+  // A worktree may have only a partial node_modules and resolve Vite in the parent checkout.
+  // Copy the actual locked dependency tree used by this branch; never create a junction to it.
+  const require = createRequire(import.meta.url);
+  const dependencyRoot = path.dirname(path.dirname(require.resolve('vite/package.json')));
+  assert.equal(path.basename(dependencyRoot), 'node_modules');
+  copyTree(dependencyRoot, path.join(appA, 'node_modules'), root);
   for (const name of ['chrome', 'ffmpeg', 'python']) copyTree(path.join(resources, name), path.join(root, 'copy-A/runtime', name), root);
   console.log(JSON.stringify({ phase: 'compile-isolated-native', sourceCommit }));
   const cargo = path.join(os.homedir(), '.cargo/bin/cargo.exe');
