@@ -43,5 +43,15 @@
     "localApi": ["route", "status", "fixed phase", "fixed OS code", "elapsed milliseconds"],
     "browserJournal": ["revision", "pending count", "new pending count"],
     "rawMessagesPathsStacksPayloadsOrSecretsRecorded": false
+  },
+  "additionalReadOnlyAudit": {
+    "attemptedReads": 160,
+    "successfulReads": 160,
+    "failures": [],
+    "originalBytesPreserved": true,
+    "writesToProtectedStore": false,
+    "durationMs": 27774,
+    "historicalCauseEstablished": false,
+    "firstSetupAttempt": "requested a nonexistent saved file; corrected to the existing matrix fixture before reads"
   }
 }
