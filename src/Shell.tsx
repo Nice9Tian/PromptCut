@@ -49,6 +49,9 @@ export function Shell(): JSX.Element {
     const back = () => {
       // 回开始页之后再刷新就留在开始页
       forgetSharedResume();
+      const url = new URL(location.href);
+      for (const key of ["editor", "open", "draft", "join"]) url.searchParams.delete(key);
+      history.replaceState(null, "", url);
       setInEditor(false);
     };
     window.addEventListener("pc-go-home", back);

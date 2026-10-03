@@ -30,9 +30,20 @@ export function systemProtector(dir) {
     };
     return { kind: 'dpapi-current-user', seal: value => run('seal', value), open: value => run('open', value) };
   }
-  // Non-Windows deployments: a private device key, separated from the ciphertext. Never a hardware-derived key.
+  return privateDeviceProtector(dir);
+}
+/** Non-Windows deployments: a private device key separated from the ciphertext. */
+export function privateDeviceProtector(dir) {
   const file = path.join(dir, 'device.key');
-  if (!fs.existsSync(file)) atomic(file, randomBytes(32));
+  if (!fs.existsSync(file)) {
+    const tmp = `${file}.publish-${process.pid}-${randomBytes(6).toString('hex')}`;
+    const fd = fs.openSync(tmp, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, randomBytes(32)); fs.fsyncSync(fd);
+      // Exclusive publication: a competing first instance must never replace the winning key.
+      try { fs.linkSync(tmp, file); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    } finally { fs.closeSync(fd); fs.unlinkSync(tmp); }
+  }
   const key = fs.readFileSync(file); if (key.length !== 32) throw new Error('设备保护密钥损坏');
   return {
     kind: 'private-device-key',

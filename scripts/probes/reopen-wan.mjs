@@ -17,7 +17,7 @@ export async function startWanProbe() {
   if (!/^\/tmp\/pc-reopen-wan\.[A-Za-z0-9]+$/.test(dir)) throw new Error('unexpected isolated remote directory');
   const local = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-wan-upload-'));
   const archive = path.join(local, 'bundle.tar');
-  execFileSync('tar', ['-cf', archive, 'server', 'scripts/probes/reopen-wan-peer.mjs', 'scripts/lib/no-user-dirs.mjs', 'scripts/lib/user-dirs.mjs'], { windowsHide: true, timeout: 30000 });
+  execFileSync('tar', ['-cf', archive, 'server', 'scripts/probes/reopen-wan-peer.mjs', 'scripts/probes/reopen-public-tunnel.mjs', 'scripts/lib/no-user-dirs.mjs', 'scripts/lib/user-dirs.mjs'], { windowsHide: true, timeout: 30000 });
   execFileSync('scp', ['-i', key, '-o', 'BatchMode=yes', archive, `${host}:${dir}/bundle.tar`], { windowsHide: true, stdio: 'pipe', timeout: 30000 });
   run(`tar -xf ${dir}/bundle.tar -C ${dir}`);
   const remote = () => spawn('ssh', [...sshArgs, `cd ${dir} && node scripts/probes/reopen-wan-peer.mjs`], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -30,7 +30,29 @@ export async function startWanProbe() {
   });
   gateway.stdin.write(JSON.stringify({ op: 'gateway', dir }) + '\n');
   const address = await launched;
-  const ip = host.split('@').at(-1); let service = `http://${ip}:${address.port}`, proxy, publicHttp = true;
+  const ip = host.split('@').at(-1); let service = `http://${ip}:${address.port}`, proxy, publicHttp = true, publicTunnel;
+  const publicBinary = process.env.PC_REOPEN_PUBLIC_TUNNEL_BIN;
+  if (publicBinary) {
+    publicTunnel = spawn('ssh', [...sshArgs, `cd ${dir} && node scripts/probes/reopen-public-tunnel.mjs`], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const lines = readline.createInterface({ input: publicTunnel.stdout }); publicTunnel.stderr.resume();
+    const endpoint = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Temporary public ingress startup timeout')), 30000);
+      lines.once('line', line => { clearTimeout(timer); try { resolve(JSON.parse(line)); } catch { reject(new Error('Temporary public ingress failed')); } });
+      publicTunnel.once('exit', () => { clearTimeout(timer); reject(new Error('Temporary public ingress exited')); });
+    });
+    publicTunnel.stdin.write(JSON.stringify({ dir, binary: publicBinary, port: address.port }) + '\n');
+    try {
+      const result = await endpoint;
+      if (!/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(result.url)) throw new Error('Invalid temporary public URL');
+      service = result.url;
+      let healthy = false;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        try { healthy = (await fetch(`${service}/hosting/healthz`, { signal: AbortSignal.timeout(3000) })).ok; if (healthy) break; } catch {}
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      if (!healthy) throw new Error('Temporary HTTPS gateway not reachable from original device');
+    } catch (e) { publicTunnel.stdin.end(); gateway.stdin.end(); throw e; }
+  }
   try {
     const r = await fetch(`${service}/hosting/healthz`, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw new Error('isolated WAN gateway is not publicly reachable');
@@ -49,7 +71,7 @@ export async function startWanProbe() {
     if (!ready) { proxy.kill(); gateway.stdin.end(); throw new Error('isolated SSH test proxy failed'); }
   }
   return {
-    service, remoteDirectory: dir, gatewayPid: address.pid, publicHttp, path: publicHttp ? 'public-http' : 'existing-ssh-test-proxy',
+    service, remoteDirectory: dir, gatewayPid: address.pid, publicHttp, path: publicHttp && publicTunnel ? 'temporary-public-https-tunnel' : publicHttp ? 'public-http' : 'existing-ssh-test-proxy',
     hosting: { online: async () => { try { const r = await fetch(`${service}/hosting/healthz`, { signal: AbortSignal.timeout(2000) }); return (await r.json()).online > 0; } catch { return false; } } },
     peer: config => new Promise((resolve, reject) => {
       const child = remote(); let out = ''; child.stdout.on('data', b => { out += b; }); child.stderr.resume();
@@ -63,6 +85,11 @@ export async function startWanProbe() {
       await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
       if (gateway.exitCode === null) gateway.kill();
       if (proxy && proxy.exitCode === null) proxy.kill();
+      if (publicTunnel && publicTunnel.exitCode === null) {
+        const done = new Promise(r => publicTunnel.once('exit', r)); publicTunnel.stdin.end();
+        await Promise.race([done, new Promise(r => setTimeout(r, 5000))]);
+        if (publicTunnel.exitCode === null) publicTunnel.kill();
+      }
       // Keep the isolated evidence directory and protected member vault for review; no other remote paths touched.
     },
   };

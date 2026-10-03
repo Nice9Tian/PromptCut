@@ -736,7 +736,7 @@ export function forgetSharedResume(): void {
   cancelHostTask(currentAssociation());
   releaseHolding();
   detach(); disconnectSharedAssets();
-  patch({ reopenState: null });
+  patch({ reopenState: null, shared: null, members: [], blocked: null });
   clearSharedResume();
 }
 

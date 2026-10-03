@@ -21,7 +21,7 @@ const editors = new Set(); let browser, cloud; let phase = 'startup';
 const evidence = [];
 let createRequests = 0;
 let wan, secondCreator; const wanResults = [];
-let collector;
+let collector; let matrix;
 const where = process.argv.includes('--hosted') ? 'hosted' : 'lan';
 const mode = process.argv.includes('--restricted') ? 'restricted' : 'free';
 async function stop(child) {
@@ -92,7 +92,7 @@ try {
   const hostRuntime = await editor('host', 5203), memberRuntime = await editor('member', 5206);
   let host = await page(hostRuntime.base), member = await page(memberRuntime.base);
   phase = 'create original LAN room';
-  const created = await host.evaluate(async o => { window.probe.proc.newProject('isolated-reopen-file'); return window.probe.collab.enableCollab(o); }, { where, mode, name: `isolated-reopen-${Date.now()}`, creator: { username: 'host', password: creatorPassword }, projectPassword: password, list: [{ username: 'member', password }], hostedUrl: service });
+  const created = await host.evaluate(async o => { window.probe.proc.newProject('isolated-reopen-file'); return window.probe.collab.enableCollab(o); }, { where, mode, name: `isolated-reopen-${Date.now()}`, creator: { username: 'host', password: creatorPassword }, projectPassword: password, list: [{ username: 'member', password }, ...(wan ? [{ username: 'wan-member', password }] : [])], hostedUrl: service });
   assert.equal(created.ok, true, `isolated creation must succeed (${created.error || 'unknown'})`);
   const hostFile = await saved(host), descriptor = JSON.parse(hostFile).collaboration, roomId = descriptor.roomId;
   assert.equal(descriptor.service, service);
@@ -142,7 +142,7 @@ try {
     if (where === 'hosted') { cloud = await hostedProcess(previous.docPort, previous.assetPort); assert.notEqual(cloud.pid, previous.pid); }
   }
   await member.close(); await stop(memberRuntime.child);
-  const restoredMember = await editor('member', 5206);
+  let restoredMember = await editor('member', 5206);
   assert.notEqual(restoredMember.pid, memberRuntime.pid);
   member = await page(restoredMember.base); await open(member, memberFile);
   if (where === 'lan') {
@@ -151,7 +151,7 @@ try {
   }
   else await connected(member, roomId, 'member');
   phase = 'restart original host at new port and discard browser storage';
-  const restoredRuntime = await editor('host', 5209);
+  let restoredRuntime = await editor('host', 5209);
   assert.notEqual(restoredRuntime.pid, hostRuntime.pid);
   host = await page(restoredRuntime.base); await open(host, hostFile);
   await connected(host, roomId, 'host');
@@ -270,6 +270,12 @@ try {
     await open(member, memberFile); await connected(member, roomId, 'member'); await sees(member, 'host-edit-after-reopen');
     await new Promise(r => collector.close(r)); collector = null;
   }
+  if (process.argv.includes('--matrix')) {
+    ({ host, member, hostRuntime: restoredRuntime, memberRuntime: restoredMember, evidence: matrix } = await (await import('./reopen-matrix.mjs')).runRecoveryMatrix({
+      root, host, member, hostRuntime: restoredRuntime, memberRuntime: restoredMember, roomId, where, mode, hostFile, memberFile, password, creatorPassword,
+      editor, page, stop, open, saved, connected, name, sees, phase: value => { phase = value; },
+    }));
+  }
   phase = 'old-file tombstone';
   assert.equal(createRequests, 1, 'every reopen must reuse the original room without a create request');
   if (process.argv.includes('--keep-room')) {
@@ -294,7 +300,7 @@ try {
   }
   evidence.push({ roomId, where, mode, actualHostProcessRestart: true, actualMemberProcessRestart: true, actualCloudProcessRestart: !wan, hostOpenedWhileCloudOffline: !wan && where === 'lan', pidChanged: true, portChanged: true, emptyBrowserStorage: true, memberWaitThenAutoJoin: where === 'lan',
     sameUsers: ['creator:host', 'member:member'], oldSnapshotsPreservedLatest: true, version: journal.rev, bidirectionalEdits: 4, formats: ['proc', 'procp', 'draft', 'system-path', 'refresh'], nativeOsDoubleClick: false, cancellationTombstone: !process.argv.includes('--keep-room'), recoveryCreateRequests: createRequests - 1, agentAndCardBindings: true, renderNodeStarted: process.argv.includes('--nodes'), nodeRolesAuthenticated: process.argv.includes('--nodes'), staleBindingsRemovedOnDelete: !process.argv.includes('--keep-room'), creatorPasswordReconnect: process.argv.includes('--password-change'), creatorSecondDevice: process.argv.includes('--roles'), deletedFromSecondCreator: !!secondCreator });
-  const result = { ok: true, evidence, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
+  const result = { ok: true, evidence, matrix, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
   evidence[0].deletedWhileMemberOffline = process.argv.includes('--delete-offline');
   evidence[0].tamperedAssociationsRejected = process.argv.includes('--trust');
   fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
