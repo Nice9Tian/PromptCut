@@ -11,22 +11,40 @@ import { startHostingHost } from '../hosting/host.mjs';
 export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf, onClose }) {
   let vault;
   const hosts = new Map();
+  const tasks = new Map();
   const instance = randomBytes(32).toString('base64url');
   const getVault = () => vault ??= openRecoveryVault({ dir });
+  let closing = false, unregisterTimer, unregisterBusy = false;
+  async function flushUnregister() {
+    if (closing || unregisterBusy) return;
+    unregisterBusy = true;
+    try {
+      for (const item of getVault().pendingUnregister()) {
+        if (closing) break;
+        try {
+          const r = await fetch(`${item.descriptor.service}/hosting/unregister`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${item.registrationKey}` }, body: JSON.stringify({ roomId: item.descriptor.roomId, deleted: true }) });
+          if (r.ok || [404,410].includes(r.status)) getVault().completeUnregister(item.descriptor);
+        } catch { /* The protected tombstone survives process exit; never re-register this room. */ }
+      }
+    } catch { /* Reading damage is reported by the local recovery API, never overwritten. */ }
+    finally { unregisterBusy = false; if (!closing) { unregisterTimer = setTimeout(flushUnregister, 30000); unregisterTimer.unref(); } }
+  }
+  unregisterTimer = setTimeout(flushUnregister, 0); unregisterTimer.unref();
   const hostId = d => JSON.stringify([d.service, d.roomId]);
-  function activate(descriptor) {
+  function activate(descriptor, owner) {
     const id = hostId(descriptor);
-    if (hosts.has(id)) return hosts.get(id);
+    if (hosts.has(id)) { const entry = hosts.get(id); entry.owners.add(owner); return entry; }
     const h = getVault().host(descriptor);
     if (!h || h.deviceId !== device.deviceId || descriptor.where !== 'lan') throw new Error('not-original-host');
-    const entry = { state: 'pending', worker: null };
+    const entry = { state: 'pending', worker: null, owners: new Set([owner]) };
     entry.worker = startHostingHost({ service: descriptor.service, roomId: descriptor.roomId,
       hostKey: h.registrationKey, deviceId: device.deviceId, instance,
       record: () => store?.peek(descriptor.roomId), docBase: baseOf(), assetBase: assetBaseOf?.() ?? baseOf().replace(/\/docservice$/, ''),
       state: state => { entry.state = state; } });
     hosts.set(id, entry); return entry;
   }
-  onClose?.(() => { for (const entry of hosts.values()) void entry.worker.stop(); hosts.clear(); });
+  onClose?.(() => { closing = true; clearTimeout(unregisterTimer); for (const entry of hosts.values()) void entry.worker.stop(); hosts.clear(); });
   const reply = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
   return async (req, res, next) => {
     const p = String(req.url).split('?')[0];
@@ -38,17 +56,30 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
       const body = JSON.parse(raw); const descriptor = parseCollaboration(body.descriptor);
       if (!descriptor || descriptor.version !== 1) return reply(res, 400, { ok: false, error: 'unsupported' });
       const v = getVault();
+      const task = typeof body.task === 'string' && body.task.length <= 128 ? body.task : null;
+      const version = Number.isSafeInteger(body.taskVersion) && body.taskVersion >= 0 ? body.taskVersion : null;
+      if (p.endsWith('/cancel-host') || p.endsWith('/activate-host') || p.endsWith('/restore-host')) {
+        if (!task || version === null) return reply(res, 400, { ok: false, error: 'bad-task' });
+        if ((tasks.get(task) ?? -1) > version) return reply(res, 409, { ok: false, error: 'cancelled' });
+        tasks.set(task, version);
+      }
+      if (p.endsWith('/cancel-host')) {
+        const entry = hosts.get(hostId(descriptor));
+        entry?.owners.delete(task);
+        if (entry && !entry.owners.size) { hosts.delete(hostId(descriptor)); await entry.worker.stop(); }
+        return reply(res, 200, { ok: true });
+      }
       if (p.endsWith('/settings-read')) return reply(res, 200, { ok: true, settings: v.settings(descriptor) });
       if (p.endsWith('/settings-write')) { if (body.settings?.projectId !== descriptor.roomId) return reply(res, 400, { ok: false, error: 'bad-settings' }); v.saveSettings(descriptor, body.settings); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/journal')) { v.journal(descriptor, body.contentId, body.journal); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/identity')) { v.remember({ ...body.record, service: descriptor.service, roomId: descriptor.roomId }, body.contentId); return reply(res, 200, { ok: true }); }
-      if (p.endsWith('/select')) return reply(res, 200, { ok: true, ...v.select(descriptor, body.contentId), settings: v.settings(descriptor), protection: v.protection });
-      if (p.endsWith('/revoke')) { const entry = hosts.get(hostId(descriptor)); v.revoke(descriptor); await entry?.worker.stop({ deleted: true }); hosts.delete(hostId(descriptor)); return reply(res, 200, { ok: true }); }
+      if (p.endsWith('/select')) { const selected = v.select(descriptor, body.contentId); if (selected.host) selected.host = { deviceId: selected.host.deviceId }; return reply(res, 200, { ok: true, ...selected, settings: v.settings(descriptor), protection: v.protection }); }
+      if (p.endsWith('/revoke')) { const entry = hosts.get(hostId(descriptor)); v.revoke(descriptor); await entry?.worker.stop({ deleted: true }); hosts.delete(hostId(descriptor)); clearTimeout(unregisterTimer); void flushUnregister(); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/host-state')) return reply(res, 200, { ok: true, state: hosts.get(hostId(descriptor))?.state ?? 'inactive' });
       if (p.endsWith('/host-update')) { await hosts.get(hostId(descriptor))?.worker.update(); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/activate-host')) {
         if (!store?.peek(descriptor.roomId) || descriptor.where !== 'lan') return reply(res, 404, { ok: false, error: 'no-project' });
-        v.bindHost(descriptor, device.deviceId); activate(descriptor); return reply(res, 200, { ok: true });
+        v.bindHost(descriptor, device.deviceId); activate(descriptor, task); return reply(res, 200, { ok: true });
       }
       if (p.endsWith('/restore-host')) {
         const h = v.host(descriptor);
@@ -56,9 +87,8 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
         const rec = store?.peek(descriptor.roomId);
         if (!rec) return reply(res, 409, { ok: false, error: 'host-data-missing' });
         const projects = path.join(dataDir, 'tenants', descriptor.roomId, 'projects');
-        if (!fs.existsSync(path.join(projects, `${fileNameOf(descriptor.roomId)}.ndjson`))) return reply(res, 409, { ok: false, error: 'host-data-missing' });
-        activate(descriptor);
-        return reply(res, 200, { ok: true, candidate: { where: 'lan', projectId: rec.projectId, name: rec.name, mode: rec.mode, base: baseOf(), service: descriptor.service, hostDeviceName: device.deviceName } });
+        if (!fs.existsSync(path.join(projects, `${fileNameOf(descriptor.roomId)}.ops.ndjson`))) return reply(res, 409, { ok: false, error: 'host-data-missing' });
+        return reply(res, 200, { ok: true, candidate: { where: 'lan', projectId: rec.projectId, name: rec.name, mode: rec.mode, base: baseOf(), service: descriptor.service, hostDeviceName: device.deviceName, originalHost: true } });
       }
       reply(res, 404, { ok: false, error: 'no-endpoint' });
     } catch { reply(res, 503, { ok: false, error: 'recovery-storage', message: '无法可靠读取或保存协作恢复信息；原数据已保留，请重试或重新认证。' }); }

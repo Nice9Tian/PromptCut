@@ -30,7 +30,7 @@ import { serviceIdentity } from "../../../server/recovery/descriptor.mjs";
 import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/hosting/client.mjs";
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
-import { bindCardSync, noteProjectForCardSync } from "./cardSync";
+import { bindCardSync, noteProjectForCardSync, detachCardSync } from "./cardSync";
 import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
@@ -133,6 +133,7 @@ export interface EventRecord {
 }
 
 export interface SyncView {
+  hostRegistration: string | null;
   association: CollaborationDescriptor | null;
   reopenState: string | null;
   /** 页面接上了文档服务(不然 store 用快照栈) */
@@ -160,6 +161,7 @@ export interface SyncView {
 }
 
 let view: SyncView = {
+  hostRegistration: null,
   association: null,
   reopenState: null,
   active: false,
@@ -434,6 +436,7 @@ function tickOnline() {
 /* ---------------- Agent 服务端的项目副本(server/vite-plugin-ai.ts 的 /api/agent/bind) ---------------- */
 
 let agentBoundKey: string | null = null;
+let agentBindingWrite: Promise<unknown> = Promise.resolve();
 
 /**
  * 页面挂上 DocSync 之后告诉 Agent 服务端「我在编辑哪个项目、连的是哪个文档服务」(c65-integ2 接线;
@@ -446,7 +449,7 @@ function bindAgentSide(kind: "local" | "shared", docProjectId: string, url: stri
   const key = JSON.stringify(body);
   if (key === agentBoundKey) return;
   agentBoundKey = key;
-  fetch("/api/agent/bind", { method: "POST", headers: { "Content-Type": "application/json" }, body: key })
+  agentBindingWrite = agentBindingWrite.catch(() => undefined).then(() => fetch("/api/agent/bind", { method: "POST", headers: { "Content-Type": "application/json" }, body: key }))
     .then((r) => r.json().catch(() => null))
     .then((j) => {
       if (!j?.ok) {
@@ -548,6 +551,10 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   if (kind === "shared" && !ONLINE_BUILD && !ONLINE) {
     const descriptor = currentAssociation();
     if (descriptor) offs.push(link.ds.on("project", () => persistJournal(link.ds, descriptor, getState().project.id ?? "")));
+    if (descriptor?.where === "lan") {
+      const checkHost = () => { void recoveryRequest("host-state", descriptor).then(r => { if (cur?.link === link) patch({ hostRegistration: r.state === "inactive" ? null : r.state }); }, () => { if (cur?.link === link) patch({ hostRegistration: "pending" }); }); };
+      checkHost(); const timer = setInterval(checkHost, 2000); offs.push(() => clearInterval(timer));
+    }
   }
   // 在场状态(A3 第二阶段):这个页面「正在编辑」的片段经这条连接发布,别的成员那边 Agent 的范围经它收
   setPresenceLink(link, docProjectId, me().userId ?? "");
@@ -578,8 +585,13 @@ function detach() {
     prev.unbind();
     retire(prev.link);
     if (prev.kind === "shared" && !ONLINE_BUILD && !ONLINE) unbindRenderNode(prev.docProjectId, "left");
+    if (!ONLINE_BUILD && !ONLINE) {
+      agentBoundKey = null;
+      agentBindingWrite = agentBindingWrite.catch(() => undefined).then(() => fetch("/api/agent/unbind", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
+      detachCardSync();
+    }
   }
-  patch({ active: false, kind: "off", status: "idle", paused: null, offlineOpen: false, notice: null, unconfirmed: 0, recovery: null });
+  patch({ active: false, kind: "off", status: "idle", paused: null, offlineOpen: false, notice: null, unconfirmed: 0, recovery: null, hostRegistration: null });
 }
 
 /** 换下来的连接:等它手里没确认的提交落地(最多 5 s)再关 */
@@ -627,9 +639,11 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
 
 /** store 的载入(loadProject)交到这里:同一个本机项目是根替换,别的项目换连接 */
 function onLoad(project: Project): Project {
+  const previousAssociation = currentAssociation();
   identitySave = null; lastIdentity = null;
   releaseHolding();
   recoveryCoordinator.cancel();
+  cancelHostTask(previousAssociation);
   const association = takeLoadedAssociation(project);
   patch({ association, reopenState: null });
   if (association) {
@@ -682,7 +696,10 @@ function readSharedResume(): SharedResume | null {
 }
 
 function rememberSharedResume(r: SharedResume): void {
-  try { sessionStorage.setItem(SHARED_RESUME_KEY, JSON.stringify(r)); } catch { /* 存不了:刷新后回开始页 */ }
+  const { access: _access, routeProtocol: _route, originalHost: _host, ...candidate } = r.candidate;
+  // Desktop pointers contain no K. A valid legacy K is migrated only after trusted room matching.
+  const saved = ONLINE ? { ...r, candidate } : { candidate, as: r.as, username: r.username, key: "device-vault" };
+  try { sessionStorage.setItem(SHARED_RESUME_KEY, JSON.stringify(saved)); } catch { /* 存不了:刷新后回开始页 */ }
 }
 
 function clearSharedResume(): void {
@@ -702,15 +719,19 @@ export async function resumeShared(): Promise<boolean> {
   const r = readSharedResume();
   if (!r) return false;
   if (cur?.kind === "shared" && cur.docProjectId === r.candidate.projectId) return true;
-  const out = await enterShared(r.candidate, { as: r.as, username: r.username, password: "", key: r.key });
-  if (out.ok) return true;
-  if (out.error !== "unreachable" && out.error !== "not-ready" && out.error !== "rate-limited") clearSharedResume();
-  return false;
+  const descriptor = descriptorOf(r.candidate);
+  if (view.association?.roomId === descriptor.roomId && holding) return true;
+  recoveryCoordinator.cancel(); detach(); disconnectSharedAssets(); releaseHolding();
+  setAssociation(descriptor); patch({ association: descriptor, shared: null, reopenState: "recovering" });
+  holdRecovery(getState().project, descriptor);
+  recoveryCoordinator.start(descriptor, getState().project.id);
+  return true;
 }
 
 /** 回开始页(顶栏「回到首页」)之后再刷新,留在开始页:忘掉这条记录 */
 export function forgetSharedResume(): void {
   recoveryCoordinator.cancel();
+  cancelHostTask(currentAssociation());
   releaseHolding();
   detach(); disconnectSharedAssets();
   patch({ reopenState: null });
@@ -1140,6 +1161,10 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
           try { await identitySave; } catch { pushToast("协作身份未能可靠保存；请重试保存，否则下次打开需要重新认证。", "warn", Infinity); }
         }
         if (!current()) { link.stop(); resolve({ code: 0, reason: "cancelled", fatal: false, neverOpened: true }); return; }
+        if (candidate.originalHost && !ONLINE_BUILD && !ONLINE) {
+          try { await recoveryRequest("activate-host", descriptor); } catch { pushToast("本机房间已恢复，云端登记尚未恢复，请查看协作状态。", "warn"); }
+          if (!current()) { link.stop(); resolve({ code: 0, reason: "cancelled", fatal: false, neverOpened: true }); return; }
+        }
         link.send({ type: "shared.watch" });
         link.send({ type: "events.list", projectId: candidate.projectId });
         // C6.6:这个共享项目的素材服务(服务地址登记里的 asset)当作当前连接的远程素材服务
@@ -1199,7 +1224,7 @@ export function expectSharedClose(on = true) {
  * 项目真身拉回本机)。在线页面没有本机空间,只是断开。
  */
 export function leaveSharedToLocal(project: Project = getState().project): Project {
-  recoveryCoordinator.cancel(); setAssociation(null);
+  recoveryCoordinator.cancel(); cancelHostTask(currentAssociation()); setAssociation(null);
   releaseHolding();
   patch({ association: null, reopenState: null });
   clearSharedResume();
@@ -1219,13 +1244,16 @@ export function descriptorOf(candidate: Candidate): CollaborationDescriptor {
 export async function recoveryRequest(endpoint: string, descriptor: CollaborationDescriptor, fields: Record<string, unknown> = {}, signal?: AbortSignal): Promise<Record<string, any>> {
   if (ONLINE_BUILD) throw new Error("在线页面没有本机身份接口");
   const r = await fetch(`/api/collaboration/${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ descriptor, ...fields }), signal, redirect: "error" });
+    body: JSON.stringify({ descriptor, ...fields, task: session, taskVersion: recoveryCoordinator.generation }), signal, redirect: "error" });
   const body = await r.json();
   if (!r.ok || !body.ok) throw Object.assign(new Error("协作恢复失败"), { reason: body.error });
   return body;
 }
+function cancelHostTask(descriptor: CollaborationDescriptor | null) {
+  if (!ONLINE_BUILD && !ONLINE && descriptor?.version === 1 && descriptor.where === "lan") void recoveryRequest("cancel-host", descriptor).catch(() => undefined);
+}
 async function saveRecoveryIdentity(descriptor: CollaborationDescriptor, record: RecoveryIdentity): Promise<void> {
-  const { access: _access, routeProtocol: _route, ...candidate } = record.candidate;
+  const { access: _access, routeProtocol: _route, originalHost: _host, ...candidate } = record.candidate;
   record = { ...record, candidate };
   if (ONLINE) {
     // Existing browser entry only. Restrictive storage errors remain visible to the user.
@@ -1238,10 +1266,17 @@ async function saveRecoveryIdentity(descriptor: CollaborationDescriptor, record:
 const recoveryCoordinator = new RecoveryCoordinator({
   state: (reopenState: string) => patch({ reopenState }),
   identity: async (descriptor: CollaborationDescriptor, contentId: string, signal: AbortSignal) => {
+    if (ONLINE) {
+      const identities = Object.values(readJson<Record<string, RecoveryIdentity>>("pc.shared.identities", {})).filter(r => descriptorOf(r.candidate).service === descriptor.service && r.candidate.projectId === descriptor.roomId);
+      const resume = readSharedResume();
+      const selected = identities.find(r => r.as === resume?.as && r.username === resume?.username) ?? (identities.length === 1 ? identities[0] : null);
+      if (!selected && resume && descriptorOf(resume.candidate).service === descriptor.service && resume.candidate.projectId === descriptor.roomId && /^[A-Za-z0-9_-]{43}$/.test(resume.key)) return { identities: [resume], selected: resume };
+      return { identities, selected };
+    }
     let result = await recoveryRequest("select", descriptor, { contentId }, signal);
     if (!signal.aborted && !result.selected && !result.revoked) {
       const legacy = readSharedResume();
-      if (legacy && legacy.candidate.projectId === descriptor.roomId && descriptorOf(legacy.candidate).service === descriptor.service) {
+      if (legacy && /^[A-Za-z0-9_-]{43}$/.test(legacy.key) && legacy.candidate.projectId === descriptor.roomId && descriptorOf(legacy.candidate).service === descriptor.service) {
         await saveRecoveryIdentity(descriptor, legacy);
         result = await recoveryRequest("select", descriptor, { contentId }, signal);
       }
@@ -1260,18 +1295,24 @@ const recoveryCoordinator = new RecoveryCoordinator({
       if (settings) cacheCollabSecrets(descriptor.roomId!, settings);
     }
     if (!signal.aborted && result.journal && holding && holding.ds.projectId === descriptor.roomId && !holding.restored) {
-      holding.restored = true; holding.ds.restoreJournal(result.journal);
+      try { holding.ds.restoreJournal(result.journal); holding.restored = true; }
+      catch { throw Object.assign(new Error("离线恢复数据损坏"), { reason: "recovery-storage" }); }
     }
     return result;
   },
   host: async (descriptor: CollaborationDescriptor, signal: AbortSignal) => (await recoveryRequest("restore-host", descriptor, {}, signal)).candidate,
   discover: async (descriptor: CollaborationDescriptor, record: RecoveryIdentity, signal: AbortSignal) => {
-    if (ONLINE_BUILD) throw new Error("在线页面沿用加入入口");
     if (record.candidate.where === "hosted") return { ...record.candidate, projectId: descriptor.roomId };
-    const r = await fetch(`/api/docservice/lan-discover?name=${encodeURIComponent(record.candidate.name)}`, { signal });
-    const found = await r.json();
-    const room = found.hosts?.find((h: { projectId: string }) => h.projectId === descriptor.roomId);
-    if (room) return { ...record.candidate, base: room.docservice, asset: room.asset, projectId: descriptor.roomId };
+    if (!ONLINE_BUILD && !ONLINE) {
+      const r = await fetch(`/api/docservice/lan-discover?name=${encodeURIComponent(record.candidate.name)}`, { signal });
+      const found = await r.json();
+      const room = found.hosts?.find((h: { projectId: string }) => h.projectId === descriptor.roomId);
+      if (room) {
+        const direct = { ...record.candidate, base: room.docservice, asset: room.asset, projectId: descriptor.roomId };
+        // A stale multicast answer is a hint, never a reason to keep retrying an unreachable route.
+        try { await client.buildAuthProtocols({ base: direct.base, projectId: direct.projectId!, username: record.username, as: record.as, key: record.key, deviceId: view.device!.deviceId, deviceName: view.device!.deviceName, fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(2000)]) }) }); return direct; } catch { /* Try authenticated outbound relay. */ }
+      }
+    }
     // Kept only as a trusted device-owned hint; file-provided hints never receive a key.
     const device = await ensureDevice();
     if (!device) throw new Error("设备信息尚未就绪");
@@ -1292,6 +1333,8 @@ function sharedStateReady(link: SyncLink): Promise<void> {
     if (ready()) { resolve(); return; }
     const timeout = setTimeout(() => { off(); reject(new Error("服务状态未恢复")); }, 10000);
     const off = link.ds.on("status", () => { if (ready()) { clearTimeout(timeout); off(); resolve(); } });
+    // Initial root acknowledgement can leave status unchanged (online -> online).
+    void link.ds.whenSettled({ timeoutMs: 10000 }).then(() => { if (ready()) { clearTimeout(timeout); off(); resolve(); } }, () => undefined);
   });
 }
 function holdRecovery(project: Project, descriptor: CollaborationDescriptor) {
@@ -1309,18 +1352,18 @@ function releaseHolding() { holding?.off(); holding = null; }
 setProjectLoader(onLoad);
 
 /** A choice binds an existing device identity; file role fields never participate. */
-export async function recoveryIdentities(): Promise<{ as: "creator" | "member"; username: string }[]> {
+export async function recoveryIdentities(): Promise<{ as: "creator" | "member"; username: string; profile?: string }[]> {
   const descriptor = currentAssociation();
   if (!descriptor) return [];
   const saved = await recoveryRequest("select", descriptor, { contentId: getState().project.id });
-  return (saved.identities ?? []).map((r: RecoveryIdentity) => ({ as: r.as, username: r.username }));
+  return (saved.identities ?? []).map((r: RecoveryIdentity) => ({ as: r.as, username: r.username, profile: r.profile ?? "default" }));
 }
-export async function chooseRecoveryIdentity(as: string, username: string) {
+export async function chooseRecoveryIdentity(as: string, username: string, profile = "default") {
   const descriptor = currentAssociation();
   if (!descriptor) return;
   const contentId = getState().project.id;
   const saved = await recoveryRequest("select", descriptor, { contentId });
-  const selected = saved.identities?.find((r: RecoveryIdentity) => r.as === as && r.username === username);
+  const selected = saved.identities?.find((r: RecoveryIdentity) => r.as === as && r.username === username && (r.profile ?? "default") === profile);
   if (!selected || saved.revoked) throw new Error("这个身份无法恢复");
   await recoveryRequest("identity", descriptor, { contentId, record: selected });
   recoveryCoordinator.start(descriptor, contentId);
@@ -1392,6 +1435,13 @@ export async function adminOp(
   }
   if (reply.type === "shared.admin.ok") {
     const descriptor = currentAssociation();
+    const replacement = op === "set-creator-password" && s.creator ? fields.creator : op === "set-password" && !s.creator ? fields.project : null;
+    if (descriptor && lastIdentity && replacement && typeof (replacement as { key?: unknown }).key === "string") {
+      const record = { ...lastIdentity.record, key: (replacement as { key: string }).key };
+      lastIdentity = { descriptor, record }; identitySave = saveRecoveryIdentity(descriptor, record);
+      rememberSharedResume(record);
+      try { await identitySave; } catch { pushToast("新密码已生效，但本机恢复凭证保存失败；请重试保存。", "warn", Infinity); }
+    }
     if (descriptor && !ONLINE_BUILD && !ONLINE) void recoveryRequest("host-update", descriptor).catch(() => pushToast("云端权限登记待重试，本机权限已更新。", "warn"));
     return { ok: true, reply, key };
   }

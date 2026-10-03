@@ -24,6 +24,7 @@ export interface Candidate {
   service?: string;
   access?: string;
   routeProtocol?: string;
+  originalHost?: boolean;
   where: Where;
   /** 文档服务的 http 地址,以 `/` 结尾(契约第 11 节裁定) */
   base: string;

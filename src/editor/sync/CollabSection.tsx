@@ -38,7 +38,7 @@ export const COLLAB_TEXT = {
   cancelled: "多用户协作已关闭，内容已拉回本机。",
   cancelFailed: "拉回本机没有完成，已恢复为开启状态。检查网络后重试。",
   localNote: "你的电脑关机后其他人打不开，可在设置里搬到云端",
-  localLimit: "当前版本放本机只支持局域网内的成员加入；要让局域网外的人加入，请选放云端。",
+  localLimit: "放本机时，主机在线且云端登记成功后，其他成员可通过中继加入；临时网络故障会自动重试登记。",
 } as const;
 
 export interface CollabHandle {
@@ -60,6 +60,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const shared = useSync((v) => v.shared);
   const device = useSync((v) => v.device);
   const association = useSync((v) => v.association);
+  const hostRegistration = useSync((v) => v.hostRegistration);
   const isOn = !!shared || !!association;
   const [checked, setChecked] = useState(isOn);
   const [where, setWhere] = useState<Where>("lan");
@@ -83,7 +84,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
 
   const local = shared ? localCollab(shared.projectId) : null;
   const iAmCreator = !!shared?.creator;
-  const lanOk = !ONLINE && !!device?.localEditor && !!device?.lanHost;
+  const lanOk = !ONLINE && !!device?.localEditor;
 
   // 打开对话框时按当前状态重置；缺省值（第 6 节）：放本机、自由进入、创建者用户名取设备名、两样密码自动生成
   useEffect(() => {
@@ -238,7 +239,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
             <>
               <div className="pc-sync-warn">{COLLAB_TEXT.localNote}</div>
               <div className="pc-sync-hint">{COLLAB_TEXT.localLimit}</div>
-              {!lanOk && !ONLINE ? <LanRestartHint /> : null}
+              {!device?.lanHost && !ONLINE ? <LanRestartHint /> : null}
             </>
           ) : (
             <div className="pc-sync-field">
@@ -308,7 +309,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
           {shared.where === "lan" ? (
             <>
               <div className="pc-sync-warn">{COLLAB_TEXT.localNote}</div>
-              <div className="pc-sync-hint">{COLLAB_TEXT.localLimit}</div>
+              <div className="pc-sync-hint" data-pc="host-registration" data-state={hostRegistration ?? "member"}>{hostRegistration === "online" ? "原房间已登记上线，中继接入已就绪。" : hostRegistration === "host-conflict" ? "主机占用冲突，未自动接管。" : COLLAB_TEXT.localLimit}</div>
             </>
           ) : null}
           {shared.where === "hosted" && iAmCreator ? (

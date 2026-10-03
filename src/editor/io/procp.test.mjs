@@ -184,9 +184,12 @@ test("别的 zip 工具压出来的 deflate 条目也读得了", async (t) => {
     const zip = path.join(dir, "made-by-powershell.zip");
     fs.writeFileSync(src, text);
     try {
-      execFileSync("powershell.exe", ["-NoProfile", "-Command", `Compress-Archive -Path '${src}' -DestinationPath '${zip}' -Force`], { stdio: "pipe" });
+      // Use the OS zip implementation directly: Archive module autoload depends on the parent shell's module path.
+      const zipOutside = `${dir}-external.zip`;
+      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::CreateFromDirectory('${dir.replaceAll("'", "''")}', '${zipOutside.replaceAll("'", "''")}')`], { stdio: "pipe", windowsHide: true });
+      fs.renameSync(zipOutside, zip);
     } catch (err) {
-      t.skip(`这台机器上跑不了 Compress-Archive: ${err.message}`);
+      t.skip(`这台机器上跑不了系统 zip 实现: ${err.message}`);
       return;
     }
     const blob = new Blob([fs.readFileSync(zip)]);
@@ -194,7 +197,7 @@ test("别的 zip 工具压出来的 deflate 条目也读得了", async (t) => {
     const entries = await readZip(blob);
     const proc = entries.find((e) => e.name === "project.proc");
     assert.ok(proc, "PowerShell 压的包里应当有 project.proc");
-    assert.equal(proc.method, 8, "Compress-Archive 用的是 deflate,正好验到 method 8 那条路");
+    assert.equal(proc.method, 8, "系统 zip 用的是 deflate,正好验到 method 8 那条路");
     assert.equal(await (await inflate(proc)).text(), text);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

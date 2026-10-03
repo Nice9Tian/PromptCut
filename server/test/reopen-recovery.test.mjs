@@ -37,6 +37,12 @@ test('凭证分别保存服务、房间及身份，重启后绑定连续，第�
   reopened.revoke(descriptor);
   assert.equal(openRecoveryVault({ dir, protector: plain }).select(descriptor, 'content-one').revoked, true);
   assert.throws(() => reopened.bindHost(descriptor, 'device-one'));
+  const stopped = openRecoveryVault({ dir, protector: plain });
+  assert.equal(stopped.pendingUnregister().length, 1);
+  assert.equal(stopped.pendingUnregister()[0].registrationKey, original.registrationKey);
+  stopped.completeUnregister(descriptor);
+  assert.equal(openRecoveryVault({ dir, protector: plain }).pendingUnregister().length, 0);
+  assert.equal(stopped.select(descriptor, 'content-one').revoked, true, 'cloud acknowledgement never removes the local tombstone');
 });
 test('存盘失败不覆盖原身份，损坏必须明确拒绝，不创建空记录', () => {
   const dir = temp(); openRecoveryVault({ dir, protector: plain }).remember(record, 'content');

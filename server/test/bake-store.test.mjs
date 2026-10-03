@@ -368,10 +368,13 @@ async function serveWithEvict(pxEvict) {
   fs.mkdirSync(path.join(root, 'out', 'media'), { recursive: true });
   const saved = process.env.PROMPTCUT_EXPORT_DIR;
   delete process.env.PROMPTCUT_EXPORT_DIR;
-  const mw = a.assetServiceMiddleware(root, { pxEvict: { start: false, ...pxEvict } });
+  // These cases drive eviction explicitly; onStored must not race the pre-eviction assertion.
+  const mw = a.assetServiceMiddleware(root, { pxEvict: { start: false, ...pxEvict, options: { ...pxEvict.options, minIntervalMs: Number.MAX_SAFE_INTEGER } } });
   if (saved !== undefined) process.env.PROMPTCUT_EXPORT_DIR = saved;
   const s = await listen((req, res) => { void mw(req, res, () => { res.statusCode = 404; res.end('no route'); }); });
-  return { ...s, root, base: `${s.origin}/api/asset`, pxDir: path.join(root, 'out', 'asset-store', 'px'), evictor: await mw.pxEvictor() };
+  const evictor = await mw.pxEvictor();
+  after(async () => { await evictor?.stop(); await closeServer(s.server); });
+  return { ...s, root, base: `${s.origin}/api/asset`, pxDir: path.join(root, 'out', 'asset-store', 'px'), evictor };
 }
 
 test('BKA-11 本机素材服务的 px 超上限时按最近使用删到 90%:media 一个字节不碰,最近用过的留下', async () => {

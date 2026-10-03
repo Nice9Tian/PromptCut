@@ -54,7 +54,7 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
       if (createHash('sha256').update(bytes).digest('hex') !== j.digest) throw new Error();
       const v = JSON.parse(bytes);
       if (v.version !== 1 || !v.identities || !v.bindings || !v.revoked || !v.hosts) throw new Error();
-      state = { ...v, journals: v.journals ?? {}, settings: v.settings ?? {} };
+      state = { ...v, journals: v.journals ?? {}, settings: v.settings ?? {}, unregister: v.unregister ?? {} };
     } catch { throw new Error('协作恢复数据损坏；保留原数据，请从备份恢复或重新认证'); }
   };
   read();
@@ -93,6 +93,15 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
       if (!prior) change(s => { s.hosts[roomKey(descriptor)] = { deviceId, registrationKey: randomBytes(32).toString('base64url') }; });
       return this.host(descriptor);
     },
-    revoke(descriptor) { change(s => { s.revoked[roomKey(descriptor)] = Date.now(); delete s.hosts[roomKey(descriptor)]; for (const [k, r] of Object.entries(s.identities)) if (roomKey(r) === roomKey(descriptor)) delete s.identities[k]; }); },
+    pendingUnregister() { return Object.values(state.unregister ?? {}).map(r => structuredClone(r)); },
+    completeUnregister(descriptor) { change(s => { delete s.unregister?.[roomKey(descriptor)]; }); },
+    revoke(descriptor) { change(s => {
+      s.revoked[roomKey(descriptor)] = Date.now();
+      const host = s.hosts[roomKey(descriptor)];
+      if (host) { s.unregister ??= {}; s.unregister[roomKey(descriptor)] = { descriptor, registrationKey: host.registrationKey }; }
+      delete s.hosts[roomKey(descriptor)];
+      delete s.settings[roomKey(descriptor)];
+      for (const [k, r] of Object.entries(s.identities)) if (roomKey(r) === roomKey(descriptor)) delete s.identities[k];
+    }); },
   };
 }

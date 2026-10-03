@@ -24,11 +24,12 @@ export function startHostingHost({ service, roomId, hostKey, deviceId, instance,
   function tunnel() {
     if (ws?.readyState === 1 || ws?.readyState === 0 || stopped) return;
     const url = new URL(`${base}/hosting/tunnel/${roomId}`); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(url, ['promptcut.tunnel.v1', `promptcut.host.${hostKey}`]);
-    ws.addEventListener('open', () => { if (!stopped) state('online'); });
-    ws.addEventListener('error', () => {});
-    ws.addEventListener('close', () => { for (const s of sockets.values()) s.destroy(); sockets.clear(); if (!stopped) state('pending'); });
-    ws.addEventListener('message', event => {
+    const connection = new WebSocket(url, ['promptcut.tunnel.v1', `promptcut.host.${hostKey}`, `promptcut.instance.${instance}`]); ws = connection;
+    connection.addEventListener('open', () => { if (!stopped && ws === connection) state('online'); });
+    connection.addEventListener('error', () => {});
+    connection.addEventListener('close', () => { if (ws !== connection) return; for (const s of sockets.values()) s.destroy(); sockets.clear(); if (!stopped) state('pending'); });
+    connection.addEventListener('message', event => {
+      if (ws !== connection) return;
       try {
         const m = JSON.parse(String(event.data));
         if (m.type === 'open') {
@@ -77,7 +78,7 @@ export function startHostingHost({ service, roomId, hostKey, deviceId, instance,
   }
   async function stop({ deleted = false } = {}) {
     stopped = true; clearTimeout(timer); for (const socket of sockets.values()) socket.destroy(); sockets.clear(); ws?.close();
-    try { await post('unregister', { deleted }); } catch { /* lease expiry is authoritative after abnormal exit */ }
+    try { await post('unregister', { deleted, instance }); } catch { /* lease expiry is authoritative after abnormal exit */ }
   }
   void update();
   return { update, stop };
