@@ -5,6 +5,7 @@ import { getAgyProvider, startRun as startAgy } from './agy.mjs';
 import { getCodexProvider, startRun as startCodex } from './codex.mjs';
 
 import { resolveCli, cliCommand, cliEnv } from './cli-runtime.mjs';
+import { codexAuthState } from './codex-auth-state.mjs';
 
 export const resolveExe = resolveCli;
 
@@ -22,10 +23,12 @@ export function probeVersion(exePath, args = ['--version']) {
 
 let providersCache = null;
 let providersCacheTime = 0;
+let providersCacheKey = '';
 
 export async function listProviders(opts = {}) {
   const now = Date.now();
-  if (!opts.refresh && providersCache && now - providersCacheTime < 5000) {
+  const cacheKey = JSON.stringify([cliEnv('codex').CODEX_HOME, codexAuthState().snapshot().revision]);
+  if (!opts.refresh && providersCacheKey === cacheKey && providersCache && now - providersCacheTime < 5000) {
     return providersCache;
   }
   // Resolve paths afresh: installers can create launchers without updating this process's PATH.
@@ -70,8 +73,15 @@ export async function listProviders(opts = {}) {
     }
   }
 
-  providersCache = providers;
-  providersCacheTime = now;
+  // Compose at return time too: invalidation can happen while providers are probing.
+  const codex = providers.find(p => p.id === 'codex');
+  if (cacheKey !== JSON.stringify([cliEnv('codex').CODEX_HOME, codexAuthState().snapshot().revision]) && codexAuthState().snapshot().state === 'normal') return listProviders({ refresh: true });
+  if (codex) codex.auth = codexAuthState().effective(codex.auth);
+  if (cacheKey === JSON.stringify([cliEnv('codex').CODEX_HOME, codexAuthState().snapshot().revision])) {
+    providersCache = providers;
+    providersCacheTime = now;
+    providersCacheKey = cacheKey;
+  }
   return providersCache;
 }
 
@@ -160,6 +170,16 @@ export function spawnCli(exePath, args, opts, onEvent, providerName) {
   let stderrBuffer = '';
   let hasDone = false;
   let isAborted = false;
+  let closed = false;
+  let stopTimer;
+  const stopChild = () => {
+    if (closed || !child.pid) return;
+    if (process.platform === 'win32') {
+      const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+      killer.on('error', () => { if (!closed) child.kill('SIGKILL'); });
+      killer.on('exit', code => { if (code && !closed) child.kill('SIGKILL'); });
+    } else child.kill('SIGKILL');
+  };
   
   let resolveDone;
   const donePromise = new Promise(r => { resolveDone = r; });
@@ -176,12 +196,19 @@ export function spawnCli(exePath, args, opts, onEvent, providerName) {
     if (hasDone) return;
     hasDone = true;
     if (debounceTimer) clearTimeout(debounceTimer);
-    flushStderr();
+    if (ev?.authReason) stderrBuffer = '';
+    else flushStderr();
     if (ev && !isAborted) safeOnEvent(ev);
-    resolveDone();
+    if (opts.stopOnFinish && !closed) {
+      stopChild();
+      // The turn event can precede process exit; done waits for actual cleanup.
+      stopTimer = setTimeout(stopChild, 2000);
+      stopTimer.unref();
+    } else resolveDone();
   };
 
   child.stderr.on('data', (data) => {
+    if (hasDone || isAborted) return;
     stderrBuffer += data.toString('utf8');
     if (stderrBuffer.length > 2048) {
        stderrBuffer = truncate(stderrBuffer, 2048);
@@ -193,6 +220,9 @@ export function spawnCli(exePath, args, opts, onEvent, providerName) {
   });
 
   child.on('close', (code) => {
+    closed = true;
+    clearTimeout(stopTimer);
+    if (hasDone) { resolveDone(); return; }
     if (isAborted) {
       finish();
       return;
@@ -205,6 +235,7 @@ export function spawnCli(exePath, args, opts, onEvent, providerName) {
   });
 
   child.on('error', (err) => {
+      if (!child.pid) closed = true;
       if (!hasDone) finish({ type: 'error', message: `Spawn failed: ${err.message}` });
   });
 
@@ -215,18 +246,12 @@ export function spawnCli(exePath, args, opts, onEvent, providerName) {
     isAborted = true;
     safeOnEvent({ type: 'status', text: '已中止' });
     
-    try {
-      const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-      killer.on('error', () => {});
-    } catch {}
-    
-    // Fallback if taskkill fails
-    try { child.kill('SIGKILL'); } catch {}
+    try { stopChild(); } catch {}
 
     abortTimer = setTimeout(() => {
       if (!hasDone) {
-         hasDone = true;
-         resolveDone();
+         if (!opts.stopOnFinish) { hasDone = true; resolveDone(); }
+         else stopChild();
       }
     }, 2000);
   };
