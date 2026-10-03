@@ -18,6 +18,7 @@
 - `90dff9d9` 修复：保护首次设备密钥并补齐公开重开和异常验收。
 - `47458680` 修：保持恢复密码不变并验证限速和迟到回调。
 - `cad3a5c8` 修：区分暂时保护存储故障并保留安全恢复诊断。
+- `f950874e` 探针：验证各恢复阶段首页退出和真实协作开关取消。
 
 后续修复与报告提交可从本分支日志核对。证据目录为 [assets/collaboration-reopen-recovery](assets/collaboration-reopen-recovery/)，其中只收录非秘密结果、已检查截图和校验摘要；不包含保护存储、账户校验文件、邀请码、派生密钥或会话秘密。
 
@@ -34,7 +35,7 @@
 | 生命周期 | `link.ts`、`enterFailure.ts`、`server/render-node/session-link.mjs` 接续中继路由及终止错误；`cardSync.ts`、`renderNodeHandoff.ts` 与同步管理中的 Agent 绑定串行处理，迟到票据不得交给新连接。 |
 | 界面 | `RecoveryActions.tsx`、`SyncChips.tsx`、`CollabSection.tsx`、`MembersPanel.tsx` 区分协作已开启与瞬时连接状态，显示等待、认证、拒绝、删除、冲突及损坏；创建者改密码后更新本机记录与实时重连证明。 |
 | 语义 | `docs/semantics/workflow/project.md`、`product/document-service.md`、`product/hosting.md` 只补授权计划 §10 的重开承诺；`mechanism/hosting.md` 记录实际契约与实现边界。 |
-| 验证 | 新增 `scripts/probes/reopen-{capabilities,baseline,e2e,wan,wan-peer,online,reboot}.mjs`；新增恢复、格式、权限和竞态测试，修正现有隔离测试的目录、环境和压缩夹具。 |
+| 验证 | 新增 `scripts/probes/reopen-{capabilities,baseline,e2e,exit-matrix,wan,wan-peer,online,reboot}.mjs`；新增恢复、格式、权限和竞态测试，修正现有隔离测试的目录、环境和压缩夹具。 |
 
 完整修改文件清单见 [changed-files.txt](assets/collaboration-reopen-recovery/changed-files.txt)。测试与探针都使用各自临时目录和专用房间；独立编辑器使用 5203/5206/5209，第二创建者 5215，基线 5212，在线浏览器 5223，每个编辑器另占 +1/+2 舞台端口。遇占用不结束用户进程。测试服务结束后只停止本任务创建的子进程。
 
@@ -60,7 +61,7 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 
 初始类型检查退出 0。初始全量：4,251 项，4,249 通过、0 失败、2 跳过（舞台界面测试缺测试 URL；PowerShell 外部 deflate 夹具缺模块）。**两项初始跳过不算通过**。后续独立舞台提供 URL，deflate 夹具改用 .NET 并确认 ZIP 方法 8，最终没有跳过。
 
-最终代码基线对应已提交版本 `cad3a5c8098f8a3a2f104dcc9256f623c618b207`，见 [verification.json](assets/collaboration-reopen-recovery/verification.json)：`npx tsc -b --force` 退出 0；`npm test` 全量 4,286 项全部通过、0 失败、0 取消、0 跳过、0 todo，51,858.3375 毫秒。渲染附加基线（G0-R）两次导出帧 0–9：10 帧逐像素相同、0 不同；统一帧验证覆盖实际视频/卡片、随机重放、精确 seek、缓存和累计帧、PNG 帧表与 10 帧存储，全条退出 0。提交后的 `npm run build` 退出 0，1,830 模块；现有 native config/Lottie eval/动态导入/chunk size 提示是警告。PC 的功能结果不能证明笔记本的性能门槛通过。
+最终代码基线对应已提交版本 `f950874ebbc471d937582494a3601efff63b8e1b`，见 [verification.json](assets/collaboration-reopen-recovery/verification.json)：`npx tsc -b --force` 退出 0；`npm test` 全量 4,286 项全部通过、0 失败、0 取消、0 跳过、0 todo，52,554.7385 毫秒。渲染附加基线（G0-R）两次导出帧 0–9：10 帧逐像素相同、0 不同；统一帧验证覆盖实际视频/卡片、随机重放、精确 seek、缓存和累计帧、PNG 帧表与 10 帧存储，全条退出 0。提交后的 `npm run build` 退出 0，1,830 模块；现有 native config/Lottie eval/动态导入/chunk size 提示是警告。PC 的功能结果不能证明笔记本的性能门槛通过。
 
 初始能力证据见 [capability-baseline.json](assets/collaboration-reopen-recovery/capability-baseline.json)：
 
@@ -87,10 +88,14 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 | 桌面扩展矩阵·自由 | 离线日志跨真实成员进程重启，真实重放/丢弃界面与落盘备份、多窗口双向编辑、迟到身份回复取消、旧浏览器身份迁入后新进程自动恢复、踢出/解禁及改密码、损坏提示 | [matrix-free.json](assets/collaboration-reopen-recovery/matrix-free.json) |
 | 桌面扩展矩阵·限定 | 同上，加名单移除后真实认证；从系统路径打开后回首页并刷新留在首页，扩展操作后的持久版本 12 | [matrix-restricted.json](assets/collaboration-reopen-recovery/matrix-restricted.json) |
 | 云端自由扩展矩阵 | 邀请兑换加入、作废/过期拒绝旧码、成员真实重启后凭原身份重入；旧密码查看记录迁入保护存储并在真实 UI 核对；设置不生成新密码；暂时存储故障 2.016 秒后自动恢复，认证冷却 60.395 秒后重新认证，最终版本 11 | [matrix-hosted-free.json](assets/collaboration-reopen-recovery/matrix-hosted-free.json) |
+| 本机限定·首页退出及协作取消 | 身份读取、主机恢复、LAN 发现、接入并登记四个实际请求成功后延迟回复；实际点首页、迟到回复、刷新，旧连接及节点绑定均清除，主机登记撤销；恢复后真实关闭协作保留最新内容，旧文件不得重建房间 | [exit-lan-restricted.json](assets/collaboration-reopen-recovery/exit-lan-restricted.json) |
+| 云端自由·首页退出及协作取消 | 身份读取、成员挑战接入两个实际网络阶段逐项退出；身份未确认时协作开关禁用，确认创建者后真实取消保留最新内容并注销房间；云端没有本机主机恢复和 LAN 发现阶段，这两项不适用 | [exit-hosted-free.json](assets/collaboration-reopen-recovery/exit-hosted-free.json) |
 | 纯在线自由/限定 | 浏览器真实刷新后恢复同一成员；双向编辑、版本 4、托管仍 hosted；桌面本机接口请求数 0 | [online-free.json](assets/collaboration-reopen-recovery/online-free.json)、[online-restricted.json](assets/collaboration-reopen-recovery/online-restricted.json) |
 | 电脑重启夹具演练 | 真实主机/成员新进程、空浏览器、稳定设备/DPAPI、双向修改、50k 带票据素材哈希通过；`actualComputerRestart:false` | [reboot-dry-run.json](assets/collaboration-reopen-recovery/reboot-dry-run.json)，**不算电脑重启通过** |
 
 已检查等待主机、无凭证认证表单、连接成功、删除及纯在线恢复截图。另已逐张检查扩展矩阵的冲突重放/丢弃、踢出、未知版本、缺主机日志、坏保护记录、密码失效及暂时存储等待八张截图。认证截图密码输入为空；密码失效明确提示重新认证且本地内容保留；等待状态保留协作开关和本地内容，没有显示“未开启协作”。暂时存储等待明确显示保留原身份、自动重试；其恢复有独立 API 故障注入、单元和真实浏览器证据。
+
+另已检查实际首页退出和两种位置的协作取消画面；发布的 [本机取消截图](assets/collaboration-reopen-recovery/cancel-lan-restricted-ui.png) 与 [云端取消截图](assets/collaboration-reopen-recovery/cancel-hosted-free-ui.png) 显示关闭协作、保留最新项目及清除房间关联，密码输入为空。首页截图仅保留于隔离探针目录，不发布无关的扩展配置画面。
 
 ## 第 11 节逐项验收
 
@@ -112,11 +117,11 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 | 12 | 密码、名单、踢人、禁入 | **通过（真实服务和桌面界面）**。自由/限定中继旧凭证 401、禁入 403、代数失效旧票据；创建者实时改密码后重连，真实界面踢出/解禁、自由模式改项目密码及限定模式移除名单。旧文件不越权，凭证更新后要求真实重新认证。 |
 | 13 | 邀请过期/作废 | **现有邀请服务及桌面恢复通过；匿名 LAN 云端邀约流程未交付**。本机及云端自由模式真实正常 SDK 兑换并首次加入，保存文件及设备身份；作废旧码与十秒过期旧码均 404，实际停止成员进程后空浏览器读旧文件仍恢复原身份。见 `matrix-free.json`、`matrix-hosted-free.json`。新网关只覆盖已取得有效身份的恢复，不声称匿名邀请校验/兑换的公网流程完整。 |
 | 14 | 多窗口、重复打开、第二设备 | **通过（实际窗口及服务冲突）**。两独立浏览器窗口同时读旧文件，同身份同房间，分别修改后另一窗口和主机读回；重复打开零建房。二十身份双进程合并、同服务多身份、不同活动实例/第二设备拒绝主机占用；创建者第二设备真实连接，无主机私有绑定。 |
-| 15 | 恢复中换项目/首页/取消 | **单元及部分桌面通过**。身份读取、主机恢复、发现及接入的迟到结果均通过；取消清待重试定时器，节点迟到绑定/票据与离开后认证错误测试通过。桌面实际延迟身份请求后换项目、原生首页按钮清状态及系统路径首页后刷新留在首页，删除/取消清旧 Agent/card/render。恢复每个阶段逐项点首页/取消未测。 |
+| 15 | 恢复中换项目/首页/取消 | **通过（单元及实际桌面界面）**。单元覆盖四阶段迟到结果、重试定时器和节点迟到票据；实际延迟身份请求后换项目通过。本机限定逐项延迟身份读取、主机恢复、发现和接入登记的真实成功回复，再点实际首页，迟到回复不恢复旧连接，刷新仍留首页，Agent/card/render 清旧绑定且本机主机登记撤销。云端自由的两个实际网络阶段同样通过；本机主机恢复及 LAN 发现对云端不适用。未确认身份时取消房间控件禁用；确认创建者后两种位置的实际协作开关取消均成功。见两份 exit 证据；不声称所有模式与阶段的笛卡尔积都逐一实跑。 |
 | 16 | 保存/恢复崩溃、磁盘满 | **通过（实际子进程退出与故障注入）**。加密临时记录已写完刷盘、替换前子进程退出码 31，旧原记录逐字节不变、退出锁回收后重试成功；临时文件写入 16 字节后 ENOSPC，原文件不变且重试成功。桌面离线队列跨进程保留，跨进程写入合并。没有对宿主机造成断电或填满真实盘。 |
 | 17 | 篡改角色/地址/房间 | **通过（单元及真实桌面恶意关联）**。文件伪造 creator/用户名/as 后仍是普通成员；服务改为隔离恶意收集器后 needs-auth，收集器 HTTP 请求数为 0；换房间 ID 需认证，原文件再打开恢复正确身份。格式拒绝非法 URL/路径，房间作用域和禁止重定向另有单测。 |
 | 18 | 清空凭证、新设备打开 | **通过（独立测试设备）**。无记录明确 needs-auth，一次真实认证 UI 后持久保存；后续新进程/空浏览器自动恢复。没有清用户的真实凭证。 |
-| 19 | 删除/取消后打开旧文件 | **通过**。原主机及第二创建者两条删除路径，成员离线期间删除亦终止；旧主机文件为 deleted，云端挑战 410，零自动建房，旧节点绑定撤销。 |
+| 19 | 删除/取消后打开旧文件 | **通过**。原主机及第二创建者两条删除路径，成员离线期间删除亦终止。另在本机限定和云端自由实际关闭协作开关并确认：保留服务端最新内容，返回本地，保存文件无房间关联；旧主机文件为 deleted，云端挑战 410，零自动建房，旧节点绑定撤销。 |
 | 20 | 搬迁成功/中断后重开 | **部分服务验证，项目搬迁恢复未测/未交付流程**。现有 `sp-hosted.test.mjs`、`sp-hosting.test.mjs` 的复制服务目录、更址、版本连续、migrate-check 和缺产物拒绝测试通过；仓库当前没有项目级“搬云端/搬本机”操作及可信映射契约。本次没有按计划 §6 新增主机迁移用户流程，不能宣称该行完成。 |
 | 21 | 旧关联迁移/未知版本 | **通过（桌面及格式/存储）**。真实旧 sessionStorage 身份精确匹配后迁入保护存储，原浏览器记录变 device-vault；旧 localStorage 密码查看记录可靠迁入 settings 后才删除，并在真实密码查看 UI 中以布尔比较核对原值，未输出秘密。空浏览器和新进程可自动恢复。真实未知 v2 提示不支持、再次序列化完整保留；已有新状态不覆盖、旧目录保留，无关联旧文件不按名绑定。 |
 | 22 | 主机数据缺失/损坏 | **通过（实际桌面故障提示）**。停止原主机测试进程、暂移 ops 日志，重开显示 damaged，缺失文件不被初始化；恢复日志后原房间可连。另一次停止成员进程后写入损坏保护记录，界面 damaged，损坏字节不被覆写，恢复原测试备份后可连。未从不可信快照导入权限或生成房间。 |
@@ -206,7 +211,7 @@ g 表示实现与验证代价，h 表示预计剩余缺口，两者按 1–5 档
 3. 现有仓库没有项目级搬迁流程/可核验位置映射。本次保持云端项目仍在云端、第二设备不接管，保留服务搬迁基线；不自行创造计划 §6 排除的新迁移用户流程。
 4. 受控物理重启仍待用户。保留 `pc-reopen-e2e-MH2SCg` 临时夹具；它在用户本次开机后生成，所以先前重启不算这次夹具验收。待再次实际重启后从 worktree 运行 `node scripts/probes/reopen-reboot.mjs <该临时目录>`，不能带 `--allow-same-boot`。若测试端口被占，不结束用户进程。
 5. 公开测试入口已绕开占用限制：在已授权隔离测试主机只运行任务自有临时 tunnel 子进程，转发独立网关；免费、无账户、不修改 DNS、防火墙或系统代理，不安装常驻服务。官方二进制核对 GitHub release digest；关闭测试进程后入口失效。此结果不部署生产，生产登记/中继上线由用户最后审核。[Cloudflare 官方临时入口说明](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)。
-6. 原生双击需独立安装测试壳/文件关联或用户物理操作；本次只跑实际 open-path 后端，不安装到用户运行副本。
+6. 原生双击需独立测试壳/文件关联或用户物理操作；本次只跑实际 open-path 后端，不安装到用户运行副本。原生源码核查发现固定编辑器端口、同一应用标识、应用数据路径和默认导出目录；复制现有壳再启动不能保证隔离，可能复用已有服务或单实例转发。后续测试壳必须逐项隔离这些路径和端口，并拒绝端口占用，才可启动。
 7. 笔记本耗时门槛待基准机复核；PC 的功能通过和耗时记录不作笔记本验收。合入 main 前按仓库规则仍需整套集成门槛，本分支没有执行 main 合入。
 8. t6nM3X 的单次 damaged 来源仍未确定。已经区分 API/浏览器诊断，并修复独立可复现的暂时存储分类错误，但缺少该次请求的来源证据；后续三次完整探针和 160 次原隔离记录只读读取通过都不是原因证明。若再次发生，按新诊断定位。
 
@@ -226,6 +231,8 @@ node scripts/probes/reopen-e2e.mjs --wan --nodes
 node scripts/probes/reopen-e2e.mjs --matrix --nodes --trust
 node scripts/probes/reopen-e2e.mjs --restricted --matrix --nodes --trust --password-change
 node scripts/probes/reopen-e2e.mjs --hosted --matrix --nodes --trust --password-change --roles
+node scripts/probes/reopen-e2e.mjs --exit-matrix --cancel-ui --restricted --nodes --roles
+node scripts/probes/reopen-e2e.mjs --hosted --exit-matrix --cancel-ui --nodes --roles
 ```
 
 WAN 仅在环境变量提供已授权测试主机与密钥路径时运行，不将账号、地址或密钥路径写入报告。可选 `PC_REOPEN_PUBLIC_TUNNEL_BIN` 指向该主机独立临时目录里的已核对 cloudflared 二进制。没有公开入口时明确输出 `publicHttp:false`，不能转写为公开验证通过。临时公网工具仅用于测试，不是产品运行依赖。

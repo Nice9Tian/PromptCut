@@ -1,7 +1,11 @@
 docs/plan/collaboration-reopen-recovery-plan.md
 docs/reports/REPORT-collaboration-reopen-recovery.md
+docs/reports/assets/collaboration-reopen-recovery/cancel-hosted-free-ui.png
+docs/reports/assets/collaboration-reopen-recovery/cancel-lan-restricted-ui.png
 docs/reports/assets/collaboration-reopen-recovery/capability-baseline.json
 docs/reports/assets/collaboration-reopen-recovery/changed-files.txt
+docs/reports/assets/collaboration-reopen-recovery/exit-hosted-free.json
+docs/reports/assets/collaboration-reopen-recovery/exit-lan-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/hosted-free.json
 docs/reports/assets/collaboration-reopen-recovery/hosted-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/lan-free.json
@@ -37,6 +41,7 @@ docs/semantics/workflow/project.md
 scripts/probes/reopen-baseline.mjs
 scripts/probes/reopen-capabilities.mjs
 scripts/probes/reopen-e2e.mjs
+scripts/probes/reopen-exit-matrix.mjs
 scripts/probes/reopen-matrix.mjs
 scripts/probes/reopen-online.mjs
 scripts/probes/reopen-public-tunnel.mjs
