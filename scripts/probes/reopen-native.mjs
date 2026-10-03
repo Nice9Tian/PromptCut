@@ -3,6 +3,7 @@
  * Then run: node scripts/probes/reopen-native.mjs <fixture.json>
  * A native argument/IPC pass is not evidence of an OS default-file-association double click.
  */
+import '../lib/no-user-dirs.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
@@ -24,6 +25,14 @@ const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/
 const secret = () => randomBytes(32).toString('base64url');
 const password = secret(), creatorPassword = secret();
 const children = new Set(), nativeConnections = new Set();
+const isolatedSettings = {
+  PROMPTCUT_AI_CONFIG: path.join(root, 'settings/ai.json'),
+  PROMPTCUT_CLI_HOME: path.join(root, 'settings/cli'),
+  PROMPTCUT_AGY_SETTINGS: path.join(root, 'settings/agy.json'),
+  PROMPTCUT_CLAUDE_CONFIG: path.join(root, 'settings/claude.json'),
+  PROMPTCUT_CODEX_CONFIG: path.join(root, 'settings/codex.toml'),
+  PROMPTCUT_SKILL_DIR: path.join(root, 'skills'),
+};
 let browser, cloud, phase = 'start', createRequests = 0;
 async function freePort(p) {
   const server = net.createServer();
@@ -54,7 +63,7 @@ async function memberProcess() {
   for (const p of [5206, 5207, 5208]) await freePort(p);
   const data = path.join(root, 'member'); fs.mkdirSync(data, { recursive: true });
   const child = spawn(process.execPath, [vite, '--host', '127.0.0.1', '--port', '5206', '--strictPort'], { cwd: process.cwd(), windowsHide: true,
-    env: nativeTestEnv({ PROMPTCUT_DATA_DIR: data, PROMPTCUT_DOCSERVICE_DATA: path.join(data, 'docservice'), PROMPTCUT_EXPORT_DIR: path.join(data, 'export'), PROMPTCUT_PROJECTS_DIR: path.join(data, 'drafts'),
+    env: nativeTestEnv({ ...isolatedSettings, PROMPTCUT_DATA_DIR: data, PROMPTCUT_DOCSERVICE_DATA: path.join(data, 'docservice'), PROMPTCUT_EXPORT_DIR: path.join(data, 'export'), PROMPTCUT_PROJECTS_DIR: path.join(data, 'drafts'),
       PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_PUSH: '0', PROMPTCUT_QUEUE_NODE: '0', PROMPTCUT_LAN_HOST: '0', PROMPTCUT_NO_PORT_FILE: '1' }), stdio: ['ignore', 'pipe', 'pipe'] });
   children.add(child); child.stdout.resume(); child.stderr.resume();
   await waitFor(async () => { assert.equal(child.exitCode, null, 'own member exited'); try { return (await fetch('http://127.0.0.1:5206/api/docservice/device')).ok; } catch { return false; } }, 30000);
@@ -66,9 +75,18 @@ async function observe(p) {
   await p.evaluate(async () => {
     const [sync, proc, store, collab] = await Promise.all([import('/src/editor/sync/syncManager.ts'), import('/src/editor/io/proc.ts'), import('/src/store/project.ts'), import('/src/editor/sync/collab.ts')]);
     window.probe = { sync, proc, store, collab }; await sync.startSync();
-    [...document.querySelectorAll('.ais-dialog button')].find(b => b.textContent?.trim() === '关闭')?.click();
   });
+  assert.equal(await p.evaluate(async () => {
+    const data = await (await fetch('/api/ai/config')).json(), c = data.config ?? data;
+    return !c.api?.apiKey?.set && !c.keys?.custom?.set && !c.keys?.router?.set;
+  }), true, 'test app must not load user provider credentials');
   return p;
+}
+async function closeFirstRun(p) {
+  // The panel belongs to Editor, and appears after provider discovery. Home has no such panel.
+  await p.waitForSelector('.ais-dialog', { timeout: 60000 });
+  await p.evaluate(() => [...document.querySelectorAll('.ais-dialog button')].find(b => b.textContent?.trim() === '关闭')?.click());
+  await p.waitForSelector('.ais-dialog', { hidden: true });
 }
 async function native(copy, file = null) {
   phase = `native ${copy} test port preflight`;
@@ -77,7 +95,7 @@ async function native(copy, file = null) {
   assert.equal(fs.existsSync(profile), false, 'native restart must use an empty browser profile');
   const entry = fixture.copies[copy === 'A' ? 0 : 1];
   const child = spawn(entry.exe, file ? [file] : [], { cwd: path.dirname(entry.exe), windowsHide: true,
-    env: nativeTestEnv({ PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: profile, PROMPTCUT_RUNTIME_DIR: entry.runtime, PROMPTCUT_AGENT_CDP: String(cdpPort),
+    env: nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: profile, PROMPTCUT_RUNTIME_DIR: entry.runtime, PROMPTCUT_AGENT_CDP: String(cdpPort),
       PROMPTCUT_PROJECTS_DIR: path.join(root, 'data/drafts'), PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_PUSH: '0', PROMPTCUT_QUEUE_NODE: '0', PROMPTCUT_LAN_HOST: '0' }), stdio: ['ignore', 'pipe', 'pipe'] });
   children.add(child); child.stdout.resume(); child.stderr.resume();
   phase = `native ${copy} start and debugging endpoint`;
@@ -90,6 +108,7 @@ async function native(copy, file = null) {
   if (file) assert.equal(new URL(p.url()).searchParams.get('open'), file, 'native Rust argument must reach the original boot URL');
   phase = `native ${copy} real shell permissions`;
   await observe(p);
+  if (file) await closeFirstRun(p);
   assert.equal(await p.evaluate(() => !!window.__TAURI__?.core?.invoke), true, 'actual Tauri shell required');
   const info = await p.evaluate(() => window.__TAURI__.core.invoke('agent_webview_info'));
   assert.equal(info.port, cdpPort, 'only our shell debugging endpoint may be connected');
@@ -119,6 +138,8 @@ try {
   browser = await puppeteer.launch({ headless: true, userDataDir: path.join(root, 'member-browser'), args: ['--no-sandbox'] });
   const first = await native('A'); let host = first.p;
   await host.click('.sp-hero');
+  phase = 'close native first-run Editor panel'; await closeFirstRun(host);
+  phase = 'create original native room and member';
   const created = await host.evaluate(o => window.probe.collab.enableCollab(o), { where: 'lan', mode: 'restricted', name: 'isolated-native-reopen', creator: { username: 'host', password: creatorPassword }, projectPassword: password, list: [{ username: 'member', password }], hostedUrl: `http://127.0.0.1:${cloud.docPort}` });
   assert.equal(created.ok, true, 'isolated native room creation');
   const hostFile = await saved(host), descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId;
@@ -153,7 +174,7 @@ try {
   assert.equal(binding.creator && binding.hostBinding && binding.where === 'lan', true); assert(binding.rev >= 5);
   phase = 'native second launch IPC reopens original file in existing instance';
   await host.evaluate(async target => { window.nativeOpenEvents = 0; await window.__TAURI__.event.listen('pc-open-file', ev => { if (ev.payload === target) window.nativeOpenEvents++; }); }, filePath);
-  const ipc = spawn(second.entry.exe, [filePath], { cwd: path.dirname(second.entry.exe), windowsHide: true, env: nativeTestEnv({ PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: second.profile, PROMPTCUT_RUNTIME_DIR: second.entry.runtime }), stdio: 'ignore' });
+  const ipc = spawn(second.entry.exe, [filePath], { cwd: path.dirname(second.entry.exe), windowsHide: true, env: nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: second.profile, PROMPTCUT_RUNTIME_DIR: second.entry.runtime }), stdio: 'ignore' });
   children.add(ipc); assert.equal(await new Promise(resolve => ipc.once('exit', resolve)), 0); children.delete(ipc);
   await host.waitForFunction(() => window.nativeOpenEvents === 1); await connected(host, room, 'host'); await sees(host, 'native-host-after');
   phase = 'member ticket reads bytes through recovered cloud relay';
@@ -173,11 +194,11 @@ try {
   });
   assert.equal(createRequests, 0, 'native restoration must not create a room'); assert.equal(sha(filePath), fileHash, 'native path opening must not alter the original file');
   await host.screenshot({ path: path.join(root, 'native-restored.png') }); await quit(second);
-  const evidence = { sourceCommit: fixture.sourceCommit, nativeArgument: true, nativeSingleInstanceIpc: true, nativeNormalExit: true,
+  const evidence = { ok: true, sourceCommit: fixture.sourceCommit, nativeArgument: true, nativeSingleInstanceIpc: true, nativeNormalExit: true,
     runtimeCopyChanged: true, emptyBrowserProfiles: true, stableDevice: true, stableRoom: room, memberWaitThenAutomaticJoin: true,
     hostPidBefore: first.pid, hostPidAfter: second.pid, memberPidBefore: memberBefore.pid, memberPidAfter: memberAfter.pid,
     bidirectionalEdits: 4, binding, asset, originalFileUnchanged: true, recoveryCreateRequests: createRequests,
-    nativeOsDoubleClick: false, installerUpgrade: false, actualComputerRestart: false, fileAssociationsChanged: false, evidenceDirectory: root };
+    nativeOsDoubleClick: false, installerUpgrade: false, actualComputerRestart: false, fileAssociationsChanged: false, isolatedProviderConfiguration: true, evidenceDirectory: root };
   fs.writeFileSync(path.join(root, 'native-evidence.json'), JSON.stringify(evidence, null, 2)); console.log(JSON.stringify(evidence));
 } catch (e) {
   const primitive = x => x === null || ['boolean', 'number'].includes(typeof x) ? x : undefined;
