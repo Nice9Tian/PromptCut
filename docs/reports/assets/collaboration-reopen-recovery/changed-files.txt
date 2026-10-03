@@ -21,6 +21,8 @@ docs/reports/assets/collaboration-reopen-recovery/matrix-password-expired.png
 docs/reports/assets/collaboration-reopen-recovery/matrix-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/matrix-storage-waiting.png
 docs/reports/assets/collaboration-reopen-recovery/matrix-unsupported.png
+docs/reports/assets/collaboration-reopen-recovery/native-restored.png
+docs/reports/assets/collaboration-reopen-recovery/native.json
 docs/reports/assets/collaboration-reopen-recovery/online-free.json
 docs/reports/assets/collaboration-reopen-recovery/online-recovered.png
 docs/reports/assets/collaboration-reopen-recovery/online-restricted.json
@@ -43,6 +45,8 @@ scripts/probes/reopen-capabilities.mjs
 scripts/probes/reopen-e2e.mjs
 scripts/probes/reopen-exit-matrix.mjs
 scripts/probes/reopen-matrix.mjs
+scripts/probes/reopen-native-fixture.mjs
+scripts/probes/reopen-native.mjs
 scripts/probes/reopen-online.mjs
 scripts/probes/reopen-public-tunnel.mjs
 scripts/probes/reopen-reboot.mjs

@@ -1,0 +1,40 @@
+{
+  "ok": true,
+  "sourceCommit": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+  "nativeArgument": true,
+  "nativeSingleInstanceIpc": true,
+  "nativeNormalExit": true,
+  "runtimeCopyChanged": true,
+  "emptyBrowserProfiles": true,
+  "stableDevice": true,
+  "stableRoom": "sp_6gaxnlr6vkvodi4zcasvj35imd",
+  "memberWaitThenAutomaticJoin": true,
+  "hostPidBefore": 45416,
+  "hostPidAfter": 31344,
+  "memberPidBefore": 49580,
+  "memberPidAfter": 54108,
+  "bidirectionalEdits": 4,
+  "binding": {
+    "creator": true,
+    "where": "lan",
+    "hostBinding": true,
+    "rev": 5
+  },
+  "asset": {
+    "bytes": 50000,
+    "hash": "bf20fef1c31f3a801f9618e24bc6f769b52d1c5a63958d20ecbe2e0cfeda658e",
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "originalFileUnchanged": true,
+  "recoveryCreateRequests": 0,
+  "nativeOsDoubleClick": false,
+  "installerUpgrade": false,
+  "actualComputerRestart": false,
+  "fileAssociationsChanged": false,
+  "isolatedProviderConfiguration": true,
+  "evidenceDirectory": "test-temp:pc-reopen-native-Zb1XcA/run-RHTyGL"
+}
