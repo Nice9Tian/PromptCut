@@ -176,3 +176,36 @@ test('终止认证错误不会重试；未知版本不访问身份后端', async
   assert.deepEqual(states, ['recovering', 'needs-auth']); assert.equal(coordinator.timer, null); assert.equal(entries, 1);
   coordinator.start({ version: 9 }, 'content'); assert.equal(states.at(-1), 'unsupported'); coordinator.cancel();
 });
+test('限速保留原恢复身份，严格等 Retry-After 后自动重入；取消清除待重试任务', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let attempts = 0, entered = 0; const states = [];
+  const coordinator = new RecoveryCoordinator({ state: s => states.push(s), identity: async () => ({ selected: record }),
+    discover: async () => { if (++attempts === 1) throw Object.assign(new Error('isolated rate limit'), { reason: 'rate-limited', retryAfter: 2 }); return {}; },
+    enter: async (_candidate, recovered) => { assert.equal(recovered, record); entered++; return { ok: true }; } });
+  try {
+    coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r));
+    assert.equal(states.at(-1), 'waiting-host'); assert.equal(entered, 0);
+    t.mock.timers.tick(1999); await new Promise(r => setImmediate(r)); assert.equal(attempts, 1);
+    t.mock.timers.tick(1); await new Promise(r => setImmediate(r));
+    assert.equal(states.at(-1), 'connected'); assert.equal(attempts, 2); assert.equal(entered, 1);
+    attempts = 0; coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r));
+    coordinator.cancel(); const before = states.length;
+    t.mock.timers.tick(60000); await new Promise(r => setImmediate(r));
+    assert.equal(attempts, 1); assert.equal(states.length, before); assert.equal(coordinator.timer, null);
+  } finally { coordinator.cancel(); t.mock.timers.reset(); }
+});
+test('主机恢复、发现及接入的迟到结果在换项目后均不恢复旧状态', async () => {
+  for (const phase of ['host', 'discover', 'enter']) {
+    let resolve; const calls = [];
+    const wait = () => new Promise(r => { resolve = r; });
+    const coordinator = new RecoveryCoordinator({ state: s => calls.push(s),
+      identity: async () => ({ selected: record, host: phase === 'host' }),
+      host: async () => { calls.push('host'); return phase === 'host' ? wait() : {}; },
+      discover: async () => { calls.push('discover'); return phase === 'discover' ? wait() : {}; },
+      enter: async () => { calls.push('enter'); return phase === 'enter' ? wait() : { ok: true }; } });
+    coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r));
+    assert.equal(typeof resolve, 'function'); coordinator.cancel(); const before = [...calls];
+    resolve(phase === 'enter' ? { ok: true } : {}); await new Promise(r => setImmediate(r));
+    assert.deepEqual(calls, before); assert.equal(calls.includes('connected'), false);
+  }
+});

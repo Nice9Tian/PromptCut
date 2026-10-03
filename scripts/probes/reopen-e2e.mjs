@@ -54,12 +54,25 @@ async function hostedProcess(docPort = 0, assetPort = 0) {
 }
 async function page(base, openPath = null) {
   const context = await browser.createBrowserContext(), p = await context.newPage();
+  p.recoveryHttpEvidence = [];
+  p.on('response', res => { const route = new URL(res.url()).pathname;
+    if (/\/(?:shared\/(?:challenge|verify|invite\/(?:resolve|redeem))|hosting\/(?:challenge|resolve))$/.test(route)) {
+      const retryAfter = Number(res.headers()['retry-after']);
+      p.recoveryHttpEvidence.push({ route, status: res.status(), at: Date.now(), ...(retryAfter > 0 ? { retryAfter } : {}) }); if (p.recoveryHttpEvidence.length > 80) p.recoveryHttpEvidence.shift();
+    }
+  });
   p.on('request', req => { if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/shared/create')) createRequests++; });
   p.on('console', m => { if (/\[(collab|sync)\]/.test(m.text())) console.error(m.text().replace(/[A-Za-z0-9_-]{32,}/g, '[redacted]')); });
   await p.setViewport({ width: 1440, height: 1000 });
   await p.evaluateOnNewDocument(() => {
     window.recoverySockets = []; const Native = window.WebSocket;
     window.WebSocket = class extends Native { constructor(...args) { super(...args); window.recoverySockets.push(this); } };
+    window.recoveryPasswordGenerations = 0;
+    const random = crypto.getRandomValues.bind(crypto);
+    crypto.getRandomValues = bytes => {
+      if (new Error().stack?.includes('generatePassword')) window.recoveryPasswordGenerations++;
+      return random(bytes);
+    };
   });
   await p.goto(openPath ? `${base}/?nosetup=1&open=${encodeURIComponent(openPath)}` : `${base}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded' });
   await p.evaluate(async () => {
@@ -308,7 +321,8 @@ try {
   if (browser) for (const [index, p] of (await browser.pages()).entries()) {
     try {
       const state = await p.evaluate(async () => {
-        for (const input of document.querySelectorAll('input[type="password"]')) input.value = '';
+        for (const input of document.querySelectorAll('input[type="password"], #pc-collab-cpw, #pc-collab-ppw')) input.value = '';
+        for (const secret of document.querySelectorAll('[data-pc="collab-project-password"], [data-pc="collab-invite-link"], [data-pc="collab-qr"]')) secret.replaceChildren(document.createTextNode('[redacted]'));
         const v = window.probe?.sync.getSyncView();
         const diagnostics = {};
         for (const [key, url] of Object.entries({ agent: '/api/agent/status', cards: '/api/cards/sync/status', render: '/api/render-node/status', stage: '/api/frames/render-node' })) {
@@ -316,6 +330,7 @@ try {
         }
         return { url: location.href, reopen: v?.reopenState, diagnostics, recoveryEvidence: window.recoveryEvidence, buttons: [...document.querySelectorAll('[data-pc="recovery-auth-open"]')].map(el => ({ text: el.textContent, rect: JSON.stringify(el.getBoundingClientRect()), parent: el.parentElement?.tagName })), dialogs: [...document.querySelectorAll('[role="dialog"]')].map(el => ({ label: el.getAttribute('aria-label'), cls: el.className })), project: window.probe?.store.getState().project.id };
       });
+      state.http = p.recoveryHttpEvidence;
       fs.writeFileSync(path.join(root, `failure-page-${index}.json`), JSON.stringify(state, null, 2));
       await p.screenshot({ path: path.join(root, `failure-page-${index}.png`) });
     } catch {}

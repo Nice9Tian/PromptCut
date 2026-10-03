@@ -28,6 +28,9 @@ export async function runRecoveryMatrix(o) {
     await member.type('#pc-recovery-username', 'member'); await member.type('#pc-recovery-password', password);
     await member.click('form[aria-label="恢复原协作身份"] button[type="submit"]'); await connected(member, roomId, 'member');
   };
+  // Several deliberately invalid identities share this probe's source address. Preserve the
+  // production limiter and allow its advertised 60 s cooldown before judging authentication.
+  const needsAuth = () => member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth', { timeout: 120000 });
   const adminFlow = async text => {
     await host.locator('[data-pc="members-button"]').click();
     await host.waitForSelector('[data-pc="members-pop"]');
@@ -36,6 +39,16 @@ export async function runRecoveryMatrix(o) {
     await host.type('#pc-cv-pw', creatorPassword);
     await clickText(host, '[data-pc="creator-verify"] button', '验证');
   };
+
+  phase('existing collaboration settings never generate replacement passwords');
+  const generations = await host.evaluate(() => window.recoveryPasswordGenerations);
+  await host.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
+  try {
+    await host.waitForSelector('[data-pc="collab-section"]');
+    await host.waitForFunction(() => document.querySelector('[data-pc="collab-project-name"]'));
+  } finally { await clickText(host, '.pc-dialog button', '取消'); }
+  assert.equal(await host.evaluate(() => window.recoveryPasswordGenerations), generations);
+  evidence.recoveredSettingsDoNotGeneratePasswords = true;
 
   phase('offline edit survives real member process stop and conflict replay UI');
   await member.evaluate(() => window.probe.sync.currentSharedLink().dropFor(60000));
@@ -90,6 +103,17 @@ export async function runRecoveryMatrix(o) {
   await member.waitForFunction(() => !window.probe.sync.getSyncView().association && window.probe.sync.getSyncView().kind === 'local');
   await new Promise(r => setTimeout(r, 300));
   assert.equal(await member.evaluate(() => window.probe.store.getState().project.name), 'matrix-local-project');
+  phase('new collaboration still offers generated defaults in its actual creation UI');
+  const localGenerations = await member.evaluate(() => window.recoveryPasswordGenerations);
+  await member.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
+  try {
+    await member.waitForSelector('[data-pc="collab-section"]');
+    await member.click('[data-pc="collab-toggle"]');
+    await member.waitForFunction(() => document.querySelector('#pc-collab-cpw')?.value.length === 16 && document.querySelector('#pc-collab-ppw')?.value.length === 16);
+  } finally { await clickText(member, '.pc-dialog button', '取消'); }
+  assert.equal(await member.evaluate(() => window.recoveryPasswordGenerations > 0), true);
+  assert.equal(await member.evaluate(n => window.recoveryPasswordGenerations > n, localGenerations), true);
+  evidence.newCollaborationDefaultPasswordsPreserved = true;
   await open(member, memberFile); await connected(member, roomId, 'member');
   evidence.lateIdentityAfterProjectSwitchIgnored = true;
 
@@ -132,6 +156,14 @@ export async function runRecoveryMatrix(o) {
       const r = await sync.recoveryRequest('select', v.association, { contentId: window.probe.store.getState().project.id });
       return !JSON.parse(localStorage.getItem('pc.shared.local') ?? '{}')[roomId] && r.settings?.projectPassword === password;
     }, { roomId, password }), true, 'legacy secret view migrates only after reliable protected storage write');
+    if (mode === 'free') {
+      await legacyPage.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
+      try {
+        await legacyPage.waitForSelector('[data-pc="collab-project-password"]');
+        assert.equal(await legacyPage.evaluate(pw => document.querySelector('[data-pc="collab-project-password"] code')?.textContent === pw, password), true);
+      } finally { await clickText(legacyPage, '.pc-dialog button', '取消'); }
+      evidence.legacyPasswordViewPreserved = true;
+    }
   } finally { await legacyPage.close(); await stop(legacyRuntime.child); }
   const migratedRuntime = await editor('legacy-member', 5215), migratedPage = await page(migratedRuntime.base);
   try { await open(migratedPage, memberFile); await connected(migratedPage, roomId, 'member'); }
@@ -181,7 +213,8 @@ export async function runRecoveryMatrix(o) {
   phase('actual creator UI kicks the member and shows the refused identity');
   await host.locator('[data-pc="members-button"]').click(); await host.waitForSelector('[data-pc="members-pop"]');
   await host.evaluate(() => {
-    const row = [...document.querySelectorAll('.pc-members-row')].find(r => r.textContent?.includes('member') && !r.textContent?.includes('legacy'));
+    const actual = window.probe.sync.getSyncView().members.find(r => r.username === 'member' && r.deviceId === 'probe-member-device-000001');
+    const row = [...document.querySelectorAll('.pc-members-row')].find(r => r.querySelector('.pc-members-name')?.textContent?.trim() === actual?.displayName);
     const button = row?.querySelector('.pc-members-kick'); if (!button) throw new Error('No current member kick UI'); button.click();
   });
   await host.waitForSelector('[data-pc="creator-verify"]'); await host.type('#pc-cv-pw', creatorPassword);
@@ -205,11 +238,11 @@ export async function runRecoveryMatrix(o) {
       await clickText(host, '[data-pc="project-password"] button', '确认修改');
       await host.waitForFunction(() => !document.querySelector('[data-pc="project-password"]'));
       if (next === temporaryPassword) {
-        await open(member, memberFile); await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+        await open(member, memberFile); await needsAuth();
         await screenshot(member, 'matrix-password-expired');
       }
     }
-    await open(member, memberFile); await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+    await open(member, memberFile); await needsAuth();
     await authenticate(); evidence.projectPasswordUi = true;
   } else {
     await adminFlow('改名单'); await host.waitForSelector('[data-pc="list-dialog"]');
@@ -221,9 +254,19 @@ export async function runRecoveryMatrix(o) {
       const sync = window.probe.sync, cred = await sync.makeCredential(pw.password);
       return (await sync.adminOp('set-list', { password: pw.creatorPassword }, { list: [{ username: 'member', ...cred }] })).ok;
     }, { password, creatorPassword }); assert.equal(added, true);
-    await open(member, memberFile); await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+    await open(member, memberFile); await needsAuth();
     await authenticate(); evidence.listRemovalUi = true;
   }
+
+  const limited = member.recoveryHttpEvidence.filter(r => r.status === 429);
+  const cooldowns = limited.map(r => {
+    const next = member.recoveryHttpEvidence.find(n => n.route === r.route && n.status !== 204 && n.at > r.at);
+    assert.equal(r.retryAfter > 0 && !!next, true, 'observed cooldown must advertise a delay and eventually retry');
+    const elapsedMs = next.at - r.at;
+    assert.equal(elapsedMs >= r.retryAfter * 1000 - 200, true, 'automatic recovery must not retry before Retry-After');
+    return { retryAfterSeconds: r.retryAfter, observedDelayMs: elapsedMs };
+  });
+  evidence.authenticationRateLimit = { observed: limited.length > 0, cooldowns, eventualReauthentication: true };
 
   if (where === 'lan') {
     phase('missing original host operation log shows damaged and never seeds an empty room');

@@ -7,7 +7,7 @@
  *   邀请码状态、创建者操作（作废并重新生成邀请码，每次当场输入创建者密码；以及 C6.5 的改项目密码、改名单、踢人、删项目）。
  * - 取消勾选再「确定」：确认后放云端的先拉回本机再删云端项目，放本机的停本机托管；中途失败恢复为开启。
  *
- * 多用户协作不写进项目文档（第 6 节「位置」）：状态取自同步管理（`syncManager.ts`）与本机记下的东西（`collab.ts`）。
+ * 房间关联写进普通项目文件，凭证只在设备保护存储中；连接状态取自同步管理（`syncManager.ts`）与本机记录（`collab.ts`）。
  */
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 // @ts-expect-error 无类型声明的 .mjs(零依赖,浏览器里能跑,契约第 7 节)
@@ -86,7 +86,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const iAmCreator = !!shared?.creator;
   const lanOk = !ONLINE && !!device?.localEditor;
 
-  // 打开对话框时按当前状态重置；缺省值（第 6 节）：放本机、自由进入、创建者用户名取设备名、两样密码自动生成
+  // 打开对话框时按当前状态重置；只有尚未开启协作的创建表单生成缺省密码，恢复原房间不生成新密码。
   useEffect(() => {
     if (!open) return;
     setChecked(isOn);
@@ -97,8 +97,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setCopied(null);
     setWhere(ONLINE ? "hosted" : "lan");
     setMode("free");
-    setCreatorPw(generatePassword());
-    setProjectPw(generatePassword());
+    setCreatorPw(isOn ? "" : generatePassword());
+    setProjectPw(isOn ? "" : generatePassword());
     setList([]);
     setHostedUrl(readHostedUrl());
     void defaultCreatorName().then(setCreator);
@@ -224,7 +224,14 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     <div className="pc-collab" data-pc="collab-section">
       <label className="pc-collab-head">
         <input type="checkbox" data-pc="collab-toggle" checked={on} disabled={busy || (isOn && !iAmCreator) || (isOn && ONLINE)}
-          onChange={(e) => { setChecked(e.target.checked); setStatus(null); }} />
+          onChange={(e) => {
+            setChecked(e.target.checked); setStatus(null);
+            // 取消后仍留在同一设置窗口：再次明确创建时也保留默认密码生成能力。
+            if (e.target.checked && !isOn) {
+              if (!creatorPw) setCreatorPw(generatePassword());
+              if (!projectPw) setProjectPw(generatePassword());
+            }
+          }} />
         多用户协作
       </label>
 
