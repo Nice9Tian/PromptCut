@@ -1,6 +1,7 @@
 /** Native argument/IPC and runtime-copy recovery acceptance. Own fixture only, no installation.
  * First build: node scripts/probes/reopen-native-fixture.mjs --build
  * Then run: node scripts/probes/reopen-native.mjs <fixture.json>
+ * Add --member to exercise native member file arguments and IPC, with an isolated peer host.
  * A native argument/IPC pass is not evidence of an OS default-file-association double click.
  */
 import '../lib/no-user-dirs.mjs';
@@ -19,6 +20,7 @@ import { loadNativeFixture, nativeTestEnv } from './reopen-native-fixture.mjs';
 const fixture = loadNativeFixture(process.argv[2]);
 const { port } = fixture;
 const root = fs.mkdtempSync(path.join(fixture.root, 'run-'));
+const nativeMember = process.argv.includes('--member');
 assert.equal(port, 5203);
 const require = createRequire(import.meta.url);
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
@@ -85,8 +87,28 @@ async function observe(p) {
 async function closeFirstRun(p) {
   // The panel belongs to Editor, and appears after provider discovery. Home has no such panel.
   await p.waitForSelector('.ais-dialog', { timeout: 60000 });
-  await p.evaluate(() => [...document.querySelectorAll('.ais-dialog button')].find(b => b.textContent?.trim() === '关闭')?.click());
+  const buttons = await p.$$('.ais-dialog button');
+  const close = await Promise.all(buttons.map(b => b.evaluate(el => el.textContent?.trim() === '关闭')));
+  assert.equal(close.filter(Boolean).length, 1, 'one actual first-run close control');
+  await buttons[close.indexOf(true)].click();
   await p.waitForSelector('.ais-dialog', { hidden: true });
+}
+async function exposeRecoveryControl(p) {
+  // A fresh native profile shows the optional speech-engine notification. Dismiss it
+  // through its real Ignore control only when hit testing proves it covers recovery.
+  const blockedBySpeechPrompt = await p.evaluate(() => {
+    const b = document.querySelector('[data-pc="recovery-auth-open"]'), r = b?.getBoundingClientRect();
+    return !!r && !!document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('.dep-prompt');
+  });
+  if (blockedBySpeechPrompt) {
+    await p.click('.dep-prompt button.dep-prompt-btn:not(.is-primary)');
+    await p.waitForSelector('.dep-prompt', { hidden: true });
+  }
+  await p.waitForFunction(() => {
+    const b = document.querySelector('[data-pc="recovery-auth-open"]'), r = b?.getBoundingClientRect();
+    return !!r && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('[data-pc="recovery-auth-open"]') === b;
+  });
+  return blockedBySpeechPrompt;
 }
 async function native(copy, file = null) {
   phase = `native ${copy} test port preflight`;
@@ -136,47 +158,86 @@ try {
   phase = 'start isolated cloud'; cloud = await hosted();
   phase = 'start own member browser';
   browser = await puppeteer.launch({ headless: true, userDataDir: path.join(root, 'member-browser'), args: ['--no-sandbox'] });
-  const first = await native('A'); let host = first.p;
-  await host.click('.sp-hero');
-  phase = 'close native first-run Editor panel'; await closeFirstRun(host);
+  const first = await native('A');
+  await first.p.click('.sp-hero');
+  phase = 'close native first-run Editor panel'; await closeFirstRun(first.p);
+  const peerBefore = await memberProcess(), peer = await memberPage();
+  let host = nativeMember ? peer : first.p, member = nativeMember ? first.p : peer;
   phase = 'create original native room and member';
   const created = await host.evaluate(o => window.probe.collab.enableCollab(o), { where: 'lan', mode: 'restricted', name: 'isolated-native-reopen', creator: { username: 'host', password: creatorPassword }, projectPassword: password, list: [{ username: 'member', password }], hostedUrl: `http://127.0.0.1:${cloud.docPort}` });
   assert.equal(created.ok, true, 'isolated native room creation');
   const hostFile = await saved(host), descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId;
-  const filePath = path.join(root, 'original-host.proc'); fs.writeFileSync(filePath, hostFile);
-  const fileHash = sha(filePath), deviceFile = path.join(root, 'data/device.json'), deviceHash = sha(deviceFile);
+  phase = 'initial isolated host registration';
   await waitFor(() => cloud.online(), 10000);
-  const memberBefore = await memberProcess(); let member = await memberPage(); await open(member, hostFile);
+  phase = 'initial native member needs authentication';
+  await open(member, hostFile);
   await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+  phase = 'initial member actual authentication UI';
+  const optionalSpeechPromptDismissed = await exposeRecoveryControl(member);
+  await member.screenshot({ path: path.join(root, 'native-auth-before-click.png') });
+  await member.evaluate(() => {
+    window.nativeAuthClicks = [];
+    document.addEventListener('click', e => window.nativeAuthClicks.push({ button: !!e.target?.closest?.('[data-pc="recovery-auth-open"]'), tag: e.target?.tagName }), true);
+    const b = document.querySelector('[data-pc="recovery-auth-open"]'), rect = b?.getBoundingClientRect();
+    window.nativeAuthBefore = { count: document.querySelectorAll('[data-pc="recovery-auth-open"]').length,
+      rect: rect?.toJSON(), hit: !!rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest?.('[data-pc="recovery-auth-open"]') === b };
+  });
   await member.click('[data-pc="recovery-auth-open"]'); await member.waitForSelector('form[aria-label="恢复原协作身份"]');
   await member.type('form[aria-label="恢复原协作身份"] input[autocomplete="username"]', 'member');
   await member.type('form[aria-label="恢复原协作身份"] input[type="password"]', password);
+  assert.equal(await member.evaluate(pw => {
+    const form = document.querySelector('form[aria-label="恢复原协作身份"]');
+    return form?.querySelector('input[autocomplete="username"]')?.value === 'member' && form?.querySelector('input[type="password"]')?.value === pw;
+  }, password), true, 'actual UI inputs must receive authentication values');
   await member.click('form[aria-label="恢复原协作身份"] button[type="submit"]');
+  phase = 'initial member authenticated sync';
   await connected(member, room, 'member'); const memberFile = await saved(member);
+  const filePath = path.join(root, nativeMember ? 'original-member.proc' : 'original-host.proc');
+  fs.writeFileSync(filePath, nativeMember ? memberFile : hostFile);
+  const fileHash = sha(filePath), deviceFile = path.join(root, 'data/device.json'), deviceHash = sha(deviceFile);
+  const peerDeviceFile = path.join(root, 'member/device.json'), peerDeviceHash = sha(peerDeviceFile);
   await name(member, 'native-member-before'); await sees(host, 'native-member-before');
   await name(host, 'native-host-before'); await sees(member, 'native-host-before'); await saved(host); await saved(member);
   phase = 'normal native exit, stop member and cloud'; await quit(first);
+  if (!nativeMember) await waitFor(async () => !(await cloud.online()), 10000);
+  await peer.close(); await stop(peerBefore);
   await waitFor(async () => !(await cloud.online()), 10000);
-  await member.close(); await stop(memberBefore); const cloudBefore = cloud; await stop(cloud.child);
+  const cloudBefore = cloud; await stop(cloud.child);
   cloud = await hosted(cloudBefore.docPort, cloudBefore.assetPort); assert.notEqual(cloud.pid, cloudBefore.pid);
-  const memberAfter = await memberProcess(); assert.notEqual(memberAfter.pid, memberBefore.pid);
-  member = await memberPage(); await open(member, memberFile);
-  await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'waiting-host', { timeout: 15000 });
   phase = 'other runtime copy with native original file argument and empty WebView profile';
   createRequests = 0;
-  const second = await native('B', filePath); host = second.p; assert.notEqual(first.pid, second.pid);
+  let second, peerAfter;
+  if (nativeMember) {
+    second = await native('B', filePath); member = second.p;
+    await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'waiting-host', { timeout: 15000 });
+    peerAfter = await memberProcess(); host = await memberPage(); await open(host, hostFile);
+  } else {
+    peerAfter = await memberProcess(); member = await memberPage(); await open(member, memberFile);
+    await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'waiting-host', { timeout: 15000 });
+    second = await native('B', filePath); host = second.p;
+  }
+  assert.notEqual(first.pid, second.pid); assert.notEqual(peerAfter.pid, peerBefore.pid);
   await connected(host, room, 'host'); await waitFor(() => cloud.online(), 15000); await connected(member, room, 'member');
   assert.equal(sha(deviceFile), deviceHash, 'stable native device identity across runtime directories');
+  assert.equal(sha(peerDeviceFile), peerDeviceHash, 'stable peer identity across actual process restart');
   await sees(host, 'native-host-before'); await sees(member, 'native-host-before');
   await name(member, 'native-member-after'); await sees(host, 'native-member-after');
   await name(host, 'native-host-after'); await sees(member, 'native-host-after'); await saved(host); await saved(member);
-  const binding = await host.evaluate(async () => { const v = window.probe.sync.getSyncView(), r = await window.probe.sync.recoveryRequest('select', v.association, { contentId: window.probe.store.getState().project.id }); return { creator: v.shared.creator, where: v.shared.where, hostBinding: !!r.host, rev: r.journal.rev }; });
-  assert.equal(binding.creator && binding.hostBinding && binding.where === 'lan', true); assert(binding.rev >= 5);
+  const binding = await second.p.evaluate(async () => { const v = window.probe.sync.getSyncView(), r = await window.probe.sync.recoveryRequest('select', v.association, { contentId: window.probe.store.getState().project.id }); return { creator: v.shared.creator, where: v.shared.where, hostBinding: !!r.host, rev: r.journal.rev }; });
+  assert.equal(binding.creator, !nativeMember); assert.equal(binding.hostBinding, !nativeMember); assert.equal(binding.where, 'lan'); assert(binding.rev >= 5);
   phase = 'native second launch IPC reopens original file in existing instance';
-  await host.evaluate(async target => { window.nativeOpenEvents = 0; await window.__TAURI__.event.listen('pc-open-file', ev => { if (ev.payload === target) window.nativeOpenEvents++; }); }, filePath);
+  await second.p.evaluate(async target => {
+    window.nativeOpenEvents = 0; window.nativeIpcOriginalLink = window.probe.sync.currentSharedLink();
+    await window.__TAURI__.event.listen('pc-open-file', ev => { if (ev.payload === target) window.nativeOpenEvents++; });
+  }, filePath);
   const ipc = spawn(second.entry.exe, [filePath], { cwd: path.dirname(second.entry.exe), windowsHide: true, env: nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: second.profile, PROMPTCUT_RUNTIME_DIR: second.entry.runtime }), stdio: 'ignore' });
   children.add(ipc); assert.equal(await new Promise(resolve => ipc.once('exit', resolve)), 0); children.delete(ipc);
-  await host.waitForFunction(() => window.nativeOpenEvents === 1); await connected(host, room, 'host'); await sees(host, 'native-host-after');
+  phase = 'native IPC file loading and replacement sync complete';
+  await second.p.waitForFunction(() => window.nativeOpenEvents === 1);
+  // The IPC event is delivered before Shell finishes its asynchronous file read.
+  // Require the resulting new link, rather than observing the previous online link.
+  await second.p.waitForFunction(() => window.probe.sync.currentSharedLink() !== window.nativeIpcOriginalLink && window.probe.sync.getSyncView().reopenState === 'connected', { timeout: 30000 });
+  await connected(second.p, room, nativeMember ? 'member' : 'host'); await sees(second.p, 'native-host-after');
   phase = 'member ticket reads bytes through recovered cloud relay';
   const asset = await member.evaluate(async () => {
     const v = window.probe.sync.getSyncView(), link = window.probe.sync.currentSharedLink();
@@ -193,17 +254,32 @@ try {
     return { bytes: bytes.length, hash, namespaces: ['media', 'snap', 'px'] };
   });
   assert.equal(createRequests, 0, 'native restoration must not create a room'); assert.equal(sha(filePath), fileHash, 'native path opening must not alter the original file');
-  await host.screenshot({ path: path.join(root, 'native-restored.png') }); await quit(second);
+  await second.p.screenshot({ path: path.join(root, 'native-restored.png') }); await quit(second);
   const evidence = { ok: true, sourceCommit: fixture.sourceCommit, nativeArgument: true, nativeSingleInstanceIpc: true, nativeNormalExit: true,
     runtimeCopyChanged: true, emptyBrowserProfiles: true, stableDevice: true, stableRoom: room, memberWaitThenAutomaticJoin: true,
-    hostPidBefore: first.pid, hostPidAfter: second.pid, memberPidBefore: memberBefore.pid, memberPidAfter: memberAfter.pid,
+    nativeActor: nativeMember ? 'member' : 'host', actualInitialAuthenticationUi: true, optionalSpeechPromptDismissed,
+    hostPidBefore: nativeMember ? peerBefore.pid : first.pid, hostPidAfter: nativeMember ? peerAfter.pid : second.pid,
+    memberPidBefore: nativeMember ? first.pid : peerBefore.pid, memberPidAfter: nativeMember ? second.pid : peerAfter.pid,
     bidirectionalEdits: 4, binding, asset, originalFileUnchanged: true, recoveryCreateRequests: createRequests,
     nativeOsDoubleClick: false, installerUpgrade: false, actualComputerRestart: false, fileAssociationsChanged: false, isolatedProviderConfiguration: true, evidenceDirectory: root };
   fs.writeFileSync(path.join(root, 'native-evidence.json'), JSON.stringify(evidence, null, 2)); console.log(JSON.stringify(evidence));
 } catch (e) {
   const primitive = x => x === null || ['boolean', 'number'].includes(typeof x) ? x : undefined;
+  const states = [];
+  for (const connection of [...nativeConnections, ...(browser ? [browser] : [])]) {
+    for (const p of await connection.pages().catch(() => [])) {
+      const state = await p.evaluate(() => {
+        if (!window.probe) return null;
+        const v = window.probe.sync.getSyncView();
+        return { reopen: v.reopenState, status: v.status, room: v.shared?.projectId, username: v.shared?.username,
+          creator: v.shared?.creator, registration: v.hostRegistration, firstRunPanel: !!document.querySelector('.ais-dialog'), recoveryForm: !!document.querySelector('form[aria-label="恢复原协作身份"]'),
+          authBefore: window.nativeAuthBefore, authClicks: window.nativeAuthClicks?.slice(-4) };
+      }).catch(() => null);
+      if (state) states.push(state);
+    }
+  }
   console.error(JSON.stringify({ ok: false, phase, errorClass: e?.name || 'Error', errorCode: /^[A-Z_0-9]+$/.test(e?.code || '') ? e.code : undefined,
-    actual: primitive(e?.actual), expected: primitive(e?.expected), evidenceDirectory: root })); process.exitCode = 1;
+    actual: primitive(e?.actual), expected: primitive(e?.expected), states, evidenceDirectory: root })); process.exitCode = 1;
 } finally {
   for (const connection of nativeConnections) connection.disconnect();
   if (browser) await browser.close();
