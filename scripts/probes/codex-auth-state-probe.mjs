@@ -46,6 +46,7 @@ try {
   async function click(p,label) { await p.evaluate(label=>{const el=[...document.querySelectorAll('button')].find(e=>e.getBoundingClientRect().width>0&&(e.textContent.trim()===label||e.title===label||(label==='Codex'&&e.className.includes('ais-')&&e.textContent.includes('Codex'))));if(!el)throw new Error('button missing: '+label);el.click();},label); }
   async function settings(p) { await p.evaluate(()=>{const el=[...document.querySelectorAll('button')].find(e=>e.getBoundingClientRect().width>0&&(/AI 设置/.test(e.title)||e.getAttribute('aria-label')==='AI 设置'));if(!el)throw new Error('AI settings trigger missing');el.click();});await until(async()=> (await text(p)).includes('Codex')); }
   await until(async()=>await a.$('.ai-panel'));
+  await a.bringToFront();
   await a.click('[data-pc="agent-tab-add"][data-pc-dock-add="right"]');
   await until(async()=> (await a.$$('.ai-panel')).length===2);
   await settings(a);
@@ -76,15 +77,15 @@ try {
   await screenshot(a,'cancelled');check('cancel preserves invalidity',(await text(a)).includes('登录已失效'));
   write({loggedIn:true,loginOutcome:'fail'});await click(a,'重试登录');await until(async()=> (await text(a)).includes('登录未完成'));
   await screenshot(a,'failed');check('failed login recovery/device entry',(await text(a)).includes('改用设备码登录')&&(await text(a)).includes('登录已失效'));
-  write({loggedIn:true,loginDelay:250,scenario:'normal'});await click(a,'重试登录');await until(async()=> (await text(a)).includes('登录成功。')&&!(await text(a)).includes('登录已失效'));
+  write({loggedIn:true,loginDelay:250,scenario:'normal'});await click(a,'重试登录');await until(async()=> (await text(a)).includes('登录成功。')&&await a.evaluate(()=>[...document.querySelectorAll('.ais-status-ok')].some(e=>e.textContent==='已登录')&&![...document.querySelectorAll('.ai-banner')].some(e=>e.textContent.includes('登录已失效'))));
   await screenshot(a,'recovered');check('verified login updates settings',true);
-  await until(async()=>!(await text(b)).includes('登录已失效'));check('other editor recovers without reload',true);
+  await until(async()=>!await b.evaluate(()=>[...document.querySelectorAll('.ai-banner')].some(e=>e.textContent.includes('登录已失效'))));check('other editor recovers without reload',true);
   const executions=()=> fs.readFileSync(path.join(home,'calls.jsonl'),'utf8').trim().split('\n').map(JSON.parse).filter(c=>c.args?.[0]==='exec').length;
   check('recovery never automatically replays editing instruction',executions()===1);
   const short=await (await fetch(origin+'/api/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:'codex',prompt:'simulation short command'})})).text();
   check('new explicit simulated instruction succeeds',short.includes('"type":"done"')&&!short.includes('"type":"error"'));
   fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({results,serverPid:server.pid},null,2));
-} catch(e) { console.error(String(e.stack||e));if(browser)for(const p of await browser.pages()){await p.screenshot({path:path.join(out,'probe-error.png')});fs.writeFileSync(path.join(out,'probe-error.txt'),await p.evaluate(()=>document.body.innerText));}fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({results,error:String(e)},null,2));process.exitCode=1; }
+} catch(e) { console.error(String(e.stack||e));fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({results,error:String(e)},null,2));process.exitCode=1; }
 finally {
   await browser?.close();
   if(!keep||process.exitCode) {

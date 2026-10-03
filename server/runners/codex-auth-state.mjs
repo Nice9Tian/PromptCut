@@ -6,10 +6,11 @@ import { setupRoot } from './cli-runtime.mjs';
 
 export const AUTH_RECOVERY = 'Codex 登录已失效，请重新登录。登录成功后请自行重新发送或继续原指令。';
 const reasons = new Set(['token_revoked', 'refresh_token_invalid', 'openai_unauthorized']);
+const externalToolError = /\bmcp\b|mcp[_ :.-]|tools\/call|external tool/i;
 
 // Only CLI transport errors enter here. MCP tool results and model text never do.
 export function codexAuthReason(text) {
-  if (/\bmcp\b|mcp[_ :.-]|tools\/call|external tool/i.test(text)) return null;
+  if (externalToolError.test(text)) return null;
   if (/\btoken_revoked\b/i.test(text)) return 'token_revoked';
   if (/\b(?:refresh_token_reused|refresh_token_expired|refresh_token_invalidated|invalid_grant)\b/i.test(text)
       && /refresh|openai|oauth/i.test(text)) return 'refresh_token_invalid';
@@ -25,13 +26,21 @@ export function codexAuthReason(text) {
 export function authErrorDecoder(onReason) {
   const decoder = new StringDecoder('utf8');
   let tail = '';
+  let external = false;
   return chunk => {
     const lines = (tail + decoder.write(chunk)).split(/\r?\n/);
-    tail = lines.pop().slice(-16384);
-    for (const line of [...lines, tail]) {
+    const pending = lines.pop();
+    for (let i = 0; i < lines.length; i++) {
+      if (i === 0 && external) continue;
+      const line = lines[i];
       const reason = codexAuthReason(line);
       if (reason) { onReason(reason); return; }
     }
+    external = lines.length ? externalToolError.test(pending) : external || externalToolError.test(pending);
+    tail = pending.slice(-16384);
+    // Examine all newly received bytes before bounding retained parser memory.
+    const reason = external ? null : codexAuthReason(pending);
+    if (reason) onReason(reason);
   };
 }
 

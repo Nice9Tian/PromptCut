@@ -25,6 +25,7 @@ const { startRun } = await import('../runners/codex.mjs');
 const { listProviders } = await import('../runners/index.mjs');
 const { createSetupService } = await import('../runners/setup.mjs');
 const { startCliLoop } = await import('../runners/cli-loop.mjs');
+const { probeQuota } = await import('../runners/quota.mjs');
 let home;
 const write = patch => fs.writeFileSync(path.join(home, 'simulation.json'), JSON.stringify(patch));
 const calls = () => fs.existsSync(path.join(home, 'calls.jsonl')) ? fs.readFileSync(path.join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse) : [];
@@ -46,6 +47,8 @@ test('explicit OpenAI evidence only; split UTF8/data, untruncated tail; ordinary
   for(const text of ['token_revoked', 'Failed to refresh token: refresh_token_reused', '401 Unauthorized https://api.openai.com/v1/responses', 'workspace routing discovery unauthorized (401)']) assert.ok(codexAuthReason(text), text);
   for(const text of ['401 Unauthorized', 'network timeout', 'Failed to refresh token: connection reset', '429 https://api.openai.com', '503 https://api.openai.com', 'MCP external 401 token_revoked', '401 https://api.openai.com.evil.test']) assert.equal(codexAuthReason(text), null, text);
   const got=[];const decode=authErrorDecoder(r=>got.push(r));decode(Buffer.from('x'.repeat(4000)+' token_'));decode(Buffer.from('revoked'));assert.deepEqual(got,['token_revoked']);
+  const huge=[];authErrorDecoder(r=>huge.push(r))(Buffer.from('token_revoked '+'x'.repeat(20000)));assert.deepEqual(huge,['token_revoked']);
+  const external=[];const mcp=authErrorDecoder(r=>external.push(r));mcp(Buffer.from('MCP external '+'x'.repeat(20000)));mcp(Buffer.from(' token_revoked'));assert.deepEqual(external,[]);
 });
 
 test('runtime token_revoked overrides local login and both provider caches; repeated refresh cannot revive', async () => {
@@ -125,6 +128,7 @@ test('known invalid and corrupt states block CLI at server entry, including text
   invalidate();const before=calls().length;
   for(const toolProtocol of [false,true]) {const r=run({toolProtocol});await r.done;assert.equal(terminals(r.events).length,1);assert.equal(terminals(r.events)[0].authReason,'token_revoked');}
   assert.equal(calls().length,before);assert.equal((await probeAuth('agy',{refresh:true})).reason,undefined);
+  const beforeQuota=calls().length;assert.equal((await probeQuota('codex')).ok,false);assert.equal(calls().length,beforeQuota,'invalid quota probe must not start app-server');
   const corruptHome=fs.mkdtempSync(path.join(sandbox,'corrupt-'));fs.mkdirSync(path.join(corruptHome,'codex-home'));fs.writeFileSync(path.join(corruptHome,'codex-home','promptcut-auth-state.json'),'invalid');
   process.env.PROMPTCUT_CLI_HOME=corruptHome;const unknown=run();await unknown.done;assert.equal(terminals(unknown.events)[0].authReason,'state_unknown');
 });
@@ -136,6 +140,11 @@ test('auth error passes text protocol and permission fallback without executing 
     assert.equal(terminals(r.events).length,1);assert.equal(terminals(r.events)[0].authReason,'token_revoked');assert.equal(tools,0);
     assert.equal(calls().filter(c=>c.args?.[0]==='exec').length-before,1);assert.ok(!r.events.some(e=>e.text?.includes('文本协议重试')));
   }
+});
+
+test('immediate text-protocol cancel never starts CLI or executes queued tool blocks',async()=>{
+  write({scenario:'split'});let tools=0;const r=run({toolProtocol:true,callTool:()=>tools++});r.abort();await r.done;
+  assert.equal(calls().filter(c=>c.args?.[0]==='exec').length,0);assert.equal(tools,0);assert.equal(terminals(r.events).length,0);
 });
 
 test('review loop preserves auth metadata and never retries even if retryable was incorrectly set',async()=>{
