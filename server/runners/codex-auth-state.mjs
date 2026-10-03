@@ -53,6 +53,7 @@ export function createCodexAuthState(root, { io = fs } = {}) {
     const saved = JSON.parse(io.readFileSync(file, 'utf8'));
     if (saved.version !== 1 || typeof saved.generation !== 'string' || !saved.generation
         || !['normal', 'invalid', 'unknown'].includes(saved.state) || !Number.isFinite(saved.time)
+        || (saved.revision !== undefined && (typeof saved.revision !== 'string' || !saved.revision))
         || (saved.state === 'invalid' && !reasons.has(saved.reason))) throw new Error('invalid record');
     // Whitelist fields: never preserve unexpected account/log content.
     state = { version: 1, generation: saved.generation, revision: typeof saved.revision === 'string' && saved.revision ? saved.revision : randomUUID(), state: saved.state, reason: saved.state === 'invalid' ? saved.reason : null, time: saved.time };

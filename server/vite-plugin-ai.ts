@@ -686,7 +686,8 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/ai/auth-state', async (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         const { codexAuthState } = await import('./runners/codex-auth-state.mjs');
-        sendJson(res, 200, { ok: true, codex: codexAuthState().snapshot() });
+        const state = codexAuthState();
+        sendJson(res, 200, { ok: true, codex: { ...state.snapshot(), auth: state.effective() } });
       });
 
       /**

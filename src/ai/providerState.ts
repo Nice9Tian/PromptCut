@@ -7,8 +7,10 @@ let generation: string | undefined;
 let timer: number | undefined;
 const listeners = new Set<(list: ProviderInfo[]) => void>();
 const publish = (list: ProviderInfo[]) => {
+  const nextGeneration = list.find(p => p.id === 'codex')?.auth?.authGeneration;
+  if (nextGeneration && generation && nextGeneration !== generation) epoch++;
   providers = list;
-  generation = list.find(p => p.id === 'codex')?.auth?.authGeneration ?? generation;
+  generation = nextGeneration ?? generation;
   for (const listener of listeners) listener(list);
 };
 
@@ -45,6 +47,10 @@ async function poll() {
       else if (before === epoch && revision && revision !== generation) {
         epoch++;
         generation = revision;
+        if (data.codex.state !== 'normal' && data.codex.auth) {
+          // Negative evidence is available without waiting for any local CLI probe.
+          publish(providers.map(p => p.id === 'codex' ? { ...p, auth: { ...p.auth, ...data.codex.auth } } : p));
+        }
         // Refresh after every transition, including successful login and backend restart.
         await refreshProviders(true);
       }
