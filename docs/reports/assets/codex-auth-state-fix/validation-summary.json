@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-04",
+  "branch": "codex/codex-auth-state-fix",
+  "base": "6c8b8cbbad7f5da69998777a75ccd03d5d2d901b",
+  "testedHead": "3c3684cd",
+  "productionHead": "3c548bea",
+  "baseline": {
+    "typecheckExitCode": 0,
+    "tests": 4224,
+    "pass": 4222,
+    "fail": 0,
+    "skipped": 2,
+    "cancelled": 0
+  },
+  "final": {
+    "typecheckExitCode": 0,
+    "tests": 4251,
+    "pass": 4251,
+    "fail": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "exitCode": 0,
+    "durationMs": 50846.7056
+  },
+  "targeted": {
+    "tests": 64,
+    "pass": 64,
+    "fail": 0,
+    "skipped": 0,
+    "exitCode": 0
+  },
+  "browser": {
+    "checks": 15,
+    "pass": 15,
+    "fail": 0,
+    "exitCode": 0
+  },
+  "build": {
+    "exitCode": 0
+  },
+  "simulatedPlanCases": {
+    "total": 14,
+    "pass": 14
+  },
+  "realAccount": "pending user acceptance"
+}
