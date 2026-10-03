@@ -30,7 +30,10 @@ export async function runRecoveryMatrix(o) {
   };
   // Several deliberately invalid identities share this probe's source address. Preserve the
   // production limiter and allow its advertised 60 s cooldown before judging authentication.
-  const needsAuth = () => member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth', { timeout: 120000 });
+  const needsAuth = async () => {
+    await member.waitForFunction(() => ['needs-auth', 'damaged'].includes(window.probe.sync.getSyncView().reopenState), { timeout: 120000 });
+    assert.equal(await member.evaluate(() => window.probe.sync.getSyncView().reopenState), 'needs-auth');
+  };
   const adminFlow = async text => {
     await host.locator('[data-pc="members-button"]').click();
     await host.waitForSelector('[data-pc="members-pop"]');
@@ -49,6 +52,29 @@ export async function runRecoveryMatrix(o) {
   } finally { await clickText(host, '.pc-dialog button', '取消'); }
   assert.equal(await host.evaluate(() => window.recoveryPasswordGenerations), generations);
   evidence.recoveredSettingsDoNotGeneratePasswords = true;
+
+  phase('temporary local storage failure keeps the identity and retries through the actual editor');
+  await member.setRequestInterception(true); let storageAttempts = 0, firstStorageAt, retryStorageAt;
+  const storageIntercept = req => {
+    if (new URL(req.url()).pathname === '/api/collaboration/select') {
+      if (++storageAttempts === 1) {
+        firstStorageAt = Date.now();
+        void req.respond({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'recovery-storage-busy', retryAfter: 2 }) }).catch(() => {});
+        return;
+      }
+      retryStorageAt ??= Date.now();
+    }
+    void req.continue().catch(() => {});
+  };
+  member.on('request', storageIntercept);
+  try {
+    await open(member, memberFile);
+    await member.waitForSelector('[data-pc="collaboration-recovery"][data-kind="waiting-storage"]');
+    await screenshot(member, 'matrix-storage-waiting');
+    await connected(member, roomId, 'member');
+    assert.ok(storageAttempts >= 2); assert.ok(retryStorageAt - firstStorageAt >= 2000 - 100, 'storage retry must honor Retry-After');
+    evidence.transientStorageRetryUi = { identityPreserved: true, retryAfterSeconds: 2, observedDelayMs: retryStorageAt - firstStorageAt };
+  } finally { member.off('request', storageIntercept); await member.setRequestInterception(false); }
 
   phase('offline edit survives real member process stop and conflict replay UI');
   await member.evaluate(() => window.probe.sync.currentSharedLink().dropFor(60000));

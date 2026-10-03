@@ -31,7 +31,7 @@ export class RecoveryCoordinator {
         if (!current()) return;
         const terminal = { auth: 'needs-auth', unauthorized: 'needs-auth', kicked: 'rejected', banned: 'rejected', removed: 'rejected', deleted: 'deleted', 'no-project': 'deleted', 'host-conflict': 'host-conflict', 'host-data-missing': 'damaged', 'recovery-storage': 'damaged' }[e.reason];
         if (terminal) return state(terminal);
-        state('waiting-host');
+        state(e.reason === 'recovery-storage-busy' ? 'waiting-storage' : 'waiting-host');
         const wait = Math.max(delay, Number(e.retryAfter || 0) * 1000);
         delay = Math.min(30000, delay * 2);
         this.timer = setTimeout(() => { this.timer = null; void attempt(); }, wait);

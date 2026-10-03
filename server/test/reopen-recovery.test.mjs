@@ -5,8 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { parseCollaboration, serviceIdentity } from '../recovery/descriptor.mjs';
-import { openRecoveryVault, privateDeviceProtector } from '../recovery/vault.mjs';
+import { openRecoveryVault, privateDeviceProtector, recoveryStorageFailure } from '../recovery/vault.mjs';
 import { RecoveryCoordinator } from '../recovery/coordinator.mjs';
+import { recoveryHttp } from '../recovery/http.mjs';
 import { localDocumentDir, prepareLocalDocumentDir } from '../recovery/paths.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
 
@@ -208,4 +209,58 @@ test('主机恢复、发现及接入的迟到结果在换项目后均不恢复�
     resolve(phase === 'enter' ? { ok: true } : {}); await new Promise(r => setImmediate(r));
     assert.deepEqual(calls, before); assert.equal(calls.includes('connected'), false);
   }
+});
+
+test('暂时保护存储超时沿统一恢复退避，保留身份；真正损坏停止重试', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const dir = temp(); const initial = openRecoveryVault({ dir, protector: plain }); initial.remember(record, 'content');
+  const before = fs.readFileSync(path.join(dir, 'identities.json'));
+  let unavailable = false;
+  const v = openRecoveryVault({ dir, protector: { ...plain, open(bytes) {
+    if (unavailable) throw Object.assign(new Error('isolated provider timeout'), { code: 'ETIMEDOUT' });
+    return bytes;
+  } } });
+  const states = []; let attempts = 0, entered = 0;
+  const coordinator = new RecoveryCoordinator({ state: s => states.push(s), identity: async () => {
+    attempts++; try { return v.select(descriptor, 'content'); }
+    catch (e) { throw Object.assign(e, { reason: recoveryStorageFailure(e).error, retryAfter: 1 }); }
+  }, discover: async () => ({}), enter: async (_candidate, saved) => { assert.equal(saved.username, 'one'); entered++; return { ok: true }; } });
+  try {
+    unavailable = true; coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r));
+    assert.equal(states.at(-1), 'waiting-storage'); assert.equal(entered, 0);
+    assert.equal(fs.readFileSync(path.join(dir, 'identities.json')).equals(before), true);
+    unavailable = false; t.mock.timers.tick(999); await new Promise(r => setImmediate(r)); assert.equal(attempts, 1);
+    t.mock.timers.tick(1); await new Promise(r => setImmediate(r)); assert.equal(states.at(-1), 'connected'); assert.equal(entered, 1);
+    fs.writeFileSync(path.join(dir, 'identities.json'), '{broken');
+    coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r)); assert.equal(states.at(-1), 'damaged');
+    assert.equal(coordinator.timer, null); assert.equal(fs.readFileSync(path.join(dir, 'identities.json'), 'utf8'), '{broken');
+  } finally { coordinator.cancel(); t.mock.timers.reset(); }
+});
+
+test('本机恢复 API 区分暂时读取占用和数据损坏，诊断只返回固定类别', async t => {
+  const dir = temp(); openRecoveryVault({ dir }).remember(record, 'content');
+  let close; const handler = recoveryHttp({ dir, onClose: fn => { close = fn; } }); t.after(() => close());
+  const ask = async () => {
+    const req = { url: '/api/collaboration/select', method: 'POST', headers: { 'content-type': 'application/json' },
+      async *[Symbol.asyncIterator]() { yield JSON.stringify({ descriptor, contentId: 'content' }); } };
+    let status, result;
+    const res = { writeHead(code) { status = code; }, end(text) { result = JSON.parse(text); } };
+    await handler(req, res, () => assert.fail('recovery route must be handled')); return { status, result };
+  };
+  const file = path.join(dir, 'identities.json'), read = fs.readFileSync, before = read(file);
+  const fault = async code => {
+    fs.readFileSync = (name, ...args) => { if (name === file) throw Object.assign(new Error('ISOLATED_PRIVATE_MESSAGE'), { code, path: 'ISOLATED_PRIVATE_PATH' }); return read(name, ...args); };
+    try { return await ask(); } finally { fs.readFileSync = read; }
+  };
+  const busy = await fault('EBUSY');
+  assert.equal(busy.status, 503); assert.equal(busy.result.error, 'recovery-storage-busy'); assert.equal(busy.result.retryAfter, 1);
+  assert.equal(busy.result.storageDiagnostic.storagePhase, 'file-read'); assert.equal(busy.result.storageDiagnostic.code, 'EBUSY');
+  assert.equal(JSON.stringify(busy).includes('ISOLATED_PRIVATE'), false);
+  const unknown = await fault('ISOLATED_PRIVATE_CODE');
+  assert.equal(unknown.result.error, 'recovery-storage'); assert.equal(unknown.result.storageDiagnostic.code, 'OTHER');
+  assert.equal(JSON.stringify(unknown).includes('ISOLATED_PRIVATE'), false);
+  assert.equal(read(file).equals(before), true); assert.equal((await ask()).result.selected.username, 'one');
+  fs.writeFileSync(file, '{broken'); const damaged = await ask();
+  assert.equal(damaged.result.error, 'recovery-storage'); assert.equal(damaged.result.storageDiagnostic.storagePhase, 'envelope-parse');
+  assert.equal(read(file, 'utf8'), '{broken');
 });

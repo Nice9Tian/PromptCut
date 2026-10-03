@@ -1273,7 +1273,7 @@ export async function recoveryRequest(endpoint: string, descriptor: Collaboratio
   const r = await fetch(`/api/collaboration/${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ descriptor, ...fields, task: session, taskVersion: recoveryCoordinator.generation }), signal, redirect: "error" });
   const body = await r.json();
-  if (!r.ok || !body.ok) throw Object.assign(new Error("协作恢复失败"), { reason: body.error });
+  if (!r.ok || !body.ok) throw Object.assign(new Error("协作恢复失败"), { reason: body.error, retryAfter: body.retryAfter });
   return body;
 }
 function cancelHostTask(descriptor: CollaborationDescriptor | null) {

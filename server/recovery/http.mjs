@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { openRecoveryVault } from './vault.mjs';
+import { openRecoveryVault, recoveryStorageFailure } from './vault.mjs';
 import { parseCollaboration } from './descriptor.mjs';
 import { fileNameOf } from '../docservice/store/index.mjs';
 import { fromLocalClient, guard } from '../http-guard.mjs';
@@ -51,11 +51,12 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
     if (!p.startsWith('/api/collaboration/')) return next();
     if (!fromLocalClient(req) || !guard(req, res)) { if (!res.headersSent) reply(res, 403, { ok: false, error: 'forbidden' }); return; }
     if (req.method !== 'POST') return reply(res, 405, { ok: false, error: 'method' });
+    const began = Date.now(); let recoveryPhase = 'body-parse';
     try {
       let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 64 * 1024 * 1024) return reply(res, 413, { ok: false, error: 'too-large' }); }
-      const body = JSON.parse(raw); const descriptor = parseCollaboration(body.descriptor);
+      const body = JSON.parse(raw); recoveryPhase = 'descriptor-parse'; const descriptor = parseCollaboration(body.descriptor);
       if (!descriptor || descriptor.version !== 1) return reply(res, 400, { ok: false, error: 'unsupported' });
-      const v = getVault();
+      recoveryPhase = 'vault-open'; const v = getVault(); recoveryPhase = 'vault-operation';
       const task = typeof body.task === 'string' && body.task.length <= 128 ? body.task : null;
       const version = Number.isSafeInteger(body.taskVersion) && body.taskVersion >= 0 ? body.taskVersion : null;
       if (p.endsWith('/cancel-host') || p.endsWith('/activate-host') || p.endsWith('/restore-host')) {
@@ -91,6 +92,13 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
         return reply(res, 200, { ok: true, candidate: { where: 'lan', projectId: rec.projectId, name: rec.name, mode: rec.mode, base: baseOf(), service: descriptor.service, hostDeviceName: device.deviceName, originalHost: true } });
       }
       reply(res, 404, { ok: false, error: 'no-endpoint' });
-    } catch { reply(res, 503, { ok: false, error: 'recovery-storage', message: '无法可靠读取或保存协作恢复信息；原数据已保留，请重试或重新认证。' }); }
+    } catch (e) {
+      // Fixed categories only: never send paths, messages, stacks, project data or protected bytes.
+      const failure = recoveryStorageFailure(e), retryable = failure.error === 'recovery-storage-busy';
+      reply(res, 503, { ok: false, error: failure.error, ...(retryable ? { retryAfter: 1 } : {}), storageDiagnostic: {
+        phase: recoveryPhase, storagePhase: failure.storagePhase, code: failure.code,
+        elapsedMs: Date.now() - began,
+      }, message: retryable ? '协作恢复信息暂时无法读取或保存；原数据已保留，将自动重试。' : '无法可靠读取或保存协作恢复信息；原数据已保留，请从备份恢复或重新认证。' });
+    }
   };
 }

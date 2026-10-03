@@ -55,11 +55,21 @@ async function hostedProcess(docPort = 0, assetPort = 0) {
 async function page(base, openPath = null) {
   const context = await browser.createBrowserContext(), p = await context.newPage();
   p.recoveryHttpEvidence = [];
+  p.recoveryStorageEvidence = [];
   p.on('response', res => { const route = new URL(res.url()).pathname;
     if (/\/(?:shared\/(?:challenge|verify|invite\/(?:resolve|redeem))|hosting\/(?:challenge|resolve))$/.test(route)) {
       const retryAfter = Number(res.headers()['retry-after']);
       p.recoveryHttpEvidence.push({ route, status: res.status(), at: Date.now(), ...(retryAfter > 0 ? { retryAfter } : {}) }); if (p.recoveryHttpEvidence.length > 80) p.recoveryHttpEvidence.shift();
     }
+  });
+  p.on('response', async res => {
+    const route = new URL(res.url()).pathname;
+    if (!route.startsWith('/api/collaboration/') || res.status() < 400) return;
+    let error = null, diagnostic = null;
+    try { const body = await res.json(); if (/^[a-z-]{1,40}$/.test(body.error)) error = body.error;
+      if (body.storageDiagnostic) diagnostic = body.storageDiagnostic;
+    } catch {}
+    p.recoveryStorageEvidence.push({ route, status: res.status(), error, diagnostic, at: Date.now() });
   });
   p.on('request', req => { if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/shared/create')) createRequests++; });
   p.on('console', m => { if (/\[(collab|sync)\]/.test(m.text())) console.error(m.text().replace(/[A-Za-z0-9_-]{32,}/g, '[redacted]')); });
@@ -78,6 +88,12 @@ async function page(base, openPath = null) {
   await p.evaluate(async () => {
     const [sync, proc, store, collab, pack, drafts] = await Promise.all([import('/src/editor/sync/syncManager.ts'), import('/src/editor/io/proc.ts'), import('/src/store/project.ts'), import('/src/editor/sync/collab.ts'), import('/src/editor/io/procp.ts'), import('/src/editor/io/drafts.ts')]);
     window.probe = { sync, proc, store, collab, pack, drafts };
+    const { DocSync } = await import('/src/store/docsync.ts'); const restore = DocSync.prototype.restoreJournal;
+    window.recoveryJournalErrors = [];
+    DocSync.prototype.restoreJournal = function (journal) {
+      try { return restore.call(this, journal); }
+      catch (e) { window.recoveryJournalErrors.push({ rev: journal?.rev, pending: journal?.pending?.length, newPending: this.unconfirmed }); throw e; }
+    };
     await sync.startSync();
   });
   // Empty browser profiles show the first-run AI settings dialog. Close that UI only;
@@ -286,7 +302,7 @@ try {
   if (process.argv.includes('--matrix')) {
     ({ host, member, hostRuntime: restoredRuntime, memberRuntime: restoredMember, evidence: matrix } = await (await import('./reopen-matrix.mjs')).runRecoveryMatrix({
       root, host, member, hostRuntime: restoredRuntime, memberRuntime: restoredMember, roomId, where, mode, hostFile, memberFile, password, creatorPassword,
-      editor, page, stop, open, saved, connected, name, sees, phase: value => { phase = value; },
+      editor, page, stop, open, saved, connected, name, sees, phase: value => { phase = value; console.log(JSON.stringify({ phase })); },
     }));
   }
   phase = 'old-file tombstone';
@@ -328,9 +344,10 @@ try {
         for (const [key, url] of Object.entries({ agent: '/api/agent/status', cards: '/api/cards/sync/status', render: '/api/render-node/status', stage: '/api/frames/render-node' })) {
           try { const r = await (await fetch(url)).json(); diagnostics[key] = { bound: r.bound, projectId: r.projectId, enabled: r.enabled, off: r.off, binding: r.binding, started: r.started, starting: r.starting, lastError: r.lastError }; } catch {}
         }
-        return { url: location.href, reopen: v?.reopenState, diagnostics, recoveryEvidence: window.recoveryEvidence, buttons: [...document.querySelectorAll('[data-pc="recovery-auth-open"]')].map(el => ({ text: el.textContent, rect: JSON.stringify(el.getBoundingClientRect()), parent: el.parentElement?.tagName })), dialogs: [...document.querySelectorAll('[role="dialog"]')].map(el => ({ label: el.getAttribute('aria-label'), cls: el.className })), project: window.probe?.store.getState().project.id };
+        return { url: location.href, reopen: v?.reopenState, diagnostics, journalFailures: window.recoveryJournalErrors, recoveryEvidence: window.recoveryEvidence, buttons: [...document.querySelectorAll('[data-pc="recovery-auth-open"]')].map(el => ({ text: el.textContent, rect: JSON.stringify(el.getBoundingClientRect()), parent: el.parentElement?.tagName })), dialogs: [...document.querySelectorAll('[role="dialog"]')].map(el => ({ label: el.getAttribute('aria-label'), cls: el.className })), project: window.probe?.store.getState().project.id };
       });
       state.http = p.recoveryHttpEvidence;
+      state.storageFailures = p.recoveryStorageEvidence;
       fs.writeFileSync(path.join(root, `failure-page-${index}.json`), JSON.stringify(state, null, 2));
       await p.screenshot({ path: path.join(root, `failure-page-${index}.png`) });
     } catch {}

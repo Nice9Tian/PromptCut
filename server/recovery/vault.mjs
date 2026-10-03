@@ -5,6 +5,18 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import { identityKey, roomKey } from './descriptor.mjs';
 
+const transientStorageCodes = new Set(['ETIMEDOUT', 'EBUSY', 'EAGAIN', 'EINTR', 'EMFILE', 'ENFILE', 'RECOVERY_LOCK_BUSY']);
+const diagnosticCodes = new Set([...transientStorageCodes, 'INVALID', 'OTHER', 'DPAPI_FAILED', 'ENOSPC', 'EACCES', 'EPERM', 'ENOENT', 'EIO', 'EEXIST', 'ERR_OSSL_BAD_DECRYPT', 'ERR_CRYPTO_INVALID_AUTH_TAG']);
+const readPhases = new Set(['file-read', 'envelope-parse', 'protect-open', 'digest', 'state-parse']);
+/** Positive transient OS/provider evidence only; decrypt, digest and schema faults stay terminal. */
+export function recoveryStorageFailure(error) {
+  const rawCode = error.storageCode ?? error.code;
+  const phase = readPhases.has(error.storagePhase) ? error.storagePhase : null;
+  const retryable = transientStorageCodes.has(rawCode) && (!phase || phase === 'file-read' || phase === 'protect-open');
+  return { error: retryable ? 'recovery-storage-busy' : 'recovery-storage',
+    storagePhase: phase, code: diagnosticCodes.has(rawCode) ? rawCode : 'OTHER' };
+}
+
 function atomic(file, text) {
   const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
   try {
@@ -21,12 +33,14 @@ function atomic(file, text) {
 export function systemProtector(dir) {
   if (process.platform === 'win32') {
     const run = (mode, value) => {
-      const script = "Add-Type -AssemblyName System.Security; $j=[Console]::In.ReadToEnd()|ConvertFrom-Json; $b=[Convert]::FromBase64String($j.value); $e=[Text.Encoding]::UTF8.GetBytes('PromptCut-collaboration-v1'); if($j.mode -eq 'seal'){$r=[Security.Cryptography.ProtectedData]::Protect($b,$e,[Security.Cryptography.DataProtectionScope]::CurrentUser)}else{$r=[Security.Cryptography.ProtectedData]::Unprotect($b,$e,[Security.Cryptography.DataProtectionScope]::CurrentUser)}; [Console]::Write([Convert]::ToBase64String($r))";
+      const script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $j=[Console]::In.ReadToEnd()|ConvertFrom-Json; $b=[Convert]::FromBase64String($j.value); $e=[Text.Encoding]::UTF8.GetBytes('PromptCut-collaboration-v1'); if($j.mode -eq 'seal'){$r=[Security.Cryptography.ProtectedData]::Protect($b,$e,[Security.Cryptography.DataProtectionScope]::CurrentUser)}else{$r=[Security.Cryptography.ProtectedData]::Unprotect($b,$e,[Security.Cryptography.DataProtectionScope]::CurrentUser)}; [Console]::Write([Convert]::ToBase64String($r))";
       const p = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
         input: JSON.stringify({ mode, value: Buffer.from(value).toString('base64') }), windowsHide: true, encoding: 'utf8', timeout: 15000,
       });
-      if (p.status !== 0) throw new Error('系统保护存储不可用');
-      return Buffer.from(p.stdout.trim(), 'base64');
+      if (p.status !== 0) throw Object.assign(new Error('系统保护存储不可用'), { storageCode: p.error?.code ?? 'DPAPI_FAILED' });
+      const output = p.stdout.trim();
+      if (!output || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(output)) throw Object.assign(new Error('系统保护存储响应无效'), { storageCode: 'DPAPI_FAILED' });
+      return Buffer.from(output, 'base64');
     };
     return { kind: 'dpapi-current-user', seal: value => run('seal', value), open: value => run('open', value) };
   }
@@ -59,19 +73,25 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
   let state = empty();
   const read = () => {
     if (!fs.existsSync(file)) { state = empty(); return; }
+    let storagePhase = 'file-read';
     try {
-      const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const text = fs.readFileSync(file, 'utf8'); storagePhase = 'envelope-parse';
+      const j = JSON.parse(text);
       if (j.version !== 1 || j.protection !== crypt.kind || typeof j.payload !== 'string') throw new Error();
+      storagePhase = 'protect-open';
       const bytes = crypt.open(Buffer.from(j.payload, 'base64'));
+      storagePhase = 'digest';
       if (createHash('sha256').update(bytes).digest('hex') !== j.digest) throw new Error();
+      storagePhase = 'state-parse';
       const v = JSON.parse(bytes);
       if (v.version !== 1 || !v.identities || !v.bindings || !v.revoked || !v.hosts) throw new Error();
       state = { ...v, journals: v.journals ?? {}, settings: v.settings ?? {}, unregister: v.unregister ?? {} };
-    } catch { throw new Error('协作恢复数据损坏；保留原数据，请从备份恢复或重新认证'); }
+    } catch (e) { throw Object.assign(new Error('协作恢复数据损坏；保留原数据，请从备份恢复或重新认证'), { storagePhase, storageCode: e.storageCode ?? e.code ?? 'INVALID' }); }
   };
   read();
   const lockFile = path.join(dir, 'identities.lock');
   const acquire = () => {
+    let liveOwner = false;
     for (let n = 0; n < 120; n++) {
       const tmp = `${lockFile}.owner-${process.pid}-${randomBytes(6).toString('hex')}`;
       try {
@@ -83,15 +103,15 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
       catch (e) {
         if (e.code !== 'EEXIST') throw e;
         try {
-          const owner = JSON.parse(fs.readFileSync(lockFile, 'utf8')).pid;
+          liveOwner = false; const owner = JSON.parse(fs.readFileSync(lockFile, 'utf8')).pid;
           if (Number.isSafeInteger(owner) && owner > 0) {
-            try { process.kill(owner, 0); } catch (err) { if (err.code === 'ESRCH') { fs.unlinkSync(lockFile); continue; } }
+            try { process.kill(owner, 0); liveOwner = true; } catch (err) { if (err.code === 'ESRCH') { fs.unlinkSync(lockFile); continue; } }
           }
         } catch { /* A partly written or damaged lock is never guessed away. */ }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
       }
     }
-    throw new Error('协作恢复记录正在被另一个实例保存，请重试');
+    throw Object.assign(new Error('协作恢复记录正在被另一个实例保存，请重试'), { code: liveOwner ? 'RECOVERY_LOCK_BUSY' : 'INVALID' });
   };
   const change = fn => {
     const lock = acquire();
