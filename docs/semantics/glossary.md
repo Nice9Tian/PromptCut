@@ -27,7 +27,7 @@
 | 文档服务 | 项目文档的唯一修改入口 | 二 | `architecture.md`、product/document-service.md |
 | 素材服务 | 字节的唯一读写入口，按内容哈希寻址，位置无关；取代旧名「素材存储」「素材云」 | 二 | `architecture.md`、product/asset-service.md |
 | 成片渲染 | 把项目渲染成给人看的画面 | 二 | `architecture.md`、product/rendering.md |
-| 查询渲染 | 按 Agent 指定的时刻渲染画面，供 Agent 观察 | 二 | `architecture.md`、product/rendering.md |
+| 即时渲染 | 有人正等着看结果时按需当场渲染指定时刻的画面，结果从渲染所在的位置直接交给请求方，不进文档服务的任务队列，不经过素材服务；目前的请求方是 Agent。与「预渲染」相对；取代旧名「查询渲染」（代码标识符和旧文档里的 query-render、查询渲染指的就是它） | 二 | `architecture.md`、product/rendering.md |
 | 云端托管服务 | 常驻云端、所有多用户协作项目的公共入口，负责牵线（验证创建者机器的公网可达性；先验项目凭证与禁入表，通过才给主机地址）与中继；与云端文档服务、云端素材服务独立部署，不属于文档服务，不签发票据 | 二 | product/hosting.md |
 | 本地文档服务、云端文档服务 | 文档服务的两种部署：跑在创建者本机的，和跑在云端的 | 二 | product/document-service.md |
 | 本地素材服务、云端素材服务 | 素材服务的两种部署，同上。这两组词取代旧词「本地模式」「云端模式」「远程文档服务」「远程素材服务」 | 二 | product/document-service.md、product/asset-service.md |
@@ -97,7 +97,7 @@
 | 测量 | 打开项目或新加卡时实测每张卡的成本 | 二 | product/rendering.md |
 | 追帧 | 推帧卡跳转后，从起点推到目标帧 | 三 | mechanism/rendering.md |
 | 降级 | 播放中把最贵的轻卡改判为重卡 | 三 | mechanism/rendering.md |
-| 预渲染、预渲染结果 | 离屏预先渲染重卡，产出快照或轨道流 | 二 | product/rendering.md |
+| 预渲染、预渲染结果 | 没人等着看的时候离屏预先渲染重卡，产出快照或轨道流，推送到素材服务，供播放、拖动、导出时直接贴上；任务发布到文档服务的任务队列由渲染节点认领，连不上时本机自己做。与「即时渲染」相对 | 二 | product/rendering.md |
 | 预渲染集合 | 所有段里重卡的并集，只有它们会被预渲染 | 三 | mechanism/rendering.md |
 | 帧库 | 桌面版在本机存预渲染结果的目录，是可重新生成的缓存，有上限、按最近使用淘汰 | 三 | mechanism/platforms.md |
 | 成本记录 | 一张卡的活渲单帧耗时，按「卡片身份（不含测量机器）+ 环境指纹」存在文档服务，供低内存档排序 | 三 | mechanism/document-service.md、mechanism/rendering.md |
@@ -108,7 +108,7 @@
 | 实体框 | 卡片实际画出内容的最小矩形 | 二 | product/rendering.md、mechanism/rendering.md |
 | 兜底顺序 | 画面来不及时按满帧流 → 稀疏流 → 旧快照 → 占位符逐级退化，受算力预算约束 | 二 | product/rendering.md、mechanism/rendering.md |
 | 占位符 | 兜底顺序尽头在卡片位置显示的沙漏加噪点，只出现在预览里；在线浏览器模式下轮到本机渲染、又渲染不了的卡（用户卡、图卡且没有预渲染结果）另显示「需要本地 PC 渲染辅助」 | 二 | product/rendering.md |
-| 预渲染进程 | 做预渲染和查询渲染的进程，有 Agent、User、Full 三种模式；通常在本机，跑在独立渲染主机上时就是那台主机的渲染节点 | 三 | mechanism/rendering.md |
+| 预渲染进程 | 做预渲染和即时渲染的进程，有 Agent、User、Full 三种模式；通常在本机，跑在独立渲染主机上时就是那台主机的渲染节点 | 三 | mechanism/rendering.md |
 
 ## 开发
 
