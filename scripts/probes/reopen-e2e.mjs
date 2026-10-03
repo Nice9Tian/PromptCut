@@ -21,7 +21,7 @@ const editors = new Set(); let browser, cloud; let phase = 'startup';
 const evidence = [];
 let createRequests = 0;
 let wan, secondCreator; const wanResults = [];
-let collector; let matrix;
+let collector; let matrix; let exitMatrix;
 const where = process.argv.includes('--hosted') ? 'hosted' : 'lan';
 const mode = process.argv.includes('--restricted') ? 'restricted' : 'free';
 async function stop(child) {
@@ -305,6 +305,12 @@ try {
       editor, page, stop, open, saved, connected, name, sees, phase: value => { phase = value; console.log(JSON.stringify({ phase })); },
     }));
   }
+  if (process.argv.includes('--exit-matrix')) {
+    ({ host, member, evidence: exitMatrix } = await (await import('./reopen-exit-matrix.mjs')).runRecoveryExitMatrix({
+      root, where, roomId, host, member, hostFile, memberFile, hostRuntime: restoredRuntime, memberRuntime: restoredMember,
+      page, open, connected, cloud, phase: value => { phase = value; console.log(JSON.stringify({ phase })); },
+    }));
+  }
   phase = 'old-file tombstone';
   assert.equal(createRequests, 1, 'every reopen must reuse the original room without a create request');
   if (process.argv.includes('--keep-room')) {
@@ -317,7 +323,25 @@ try {
     await member.evaluate(() => window.probe.sync.currentSharedLink().dropFor(1000));
     await member.waitForFunction(() => !window.probe.sync.currentSharedLink().connected);
   }
-  const disabled = await (secondCreator ?? host).evaluate(pw => window.probe.collab.disableCollab(pw), creatorPassword); assert.equal(disabled.ok, true);
+  if (process.argv.includes('--cancel-ui')) {
+    phase = 'actual creator UI cancels collaboration after recovery'; console.log(JSON.stringify({ phase }));
+    assert.equal(!!secondCreator, false, 'UI cancellation uses the original creator');
+    await host.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
+    await host.waitForSelector('[data-pc="collab-toggle"]'); await host.click('[data-pc="collab-toggle"]');
+    const passwordInput = await host.$('#pc-collab-cancel-pw'); if (passwordInput) await passwordInput.type(creatorPassword);
+    host.once('dialog', d => void d.accept());
+    await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '确定').click());
+    await host.waitForFunction(() => !window.probe.sync.getSyncView().association && window.probe.sync.getSyncView().kind === 'local', { timeout: 15000 });
+    assert.equal(await host.evaluate(() => !!window.probe.sync.getSyncView().shared), false);
+    const localFile = JSON.parse(await saved(host)); assert.equal(localFile.collaboration == null, true);
+    assert.equal(localFile.project.name, 'host-edit-after-reopen', 'UI cancellation must retain the latest content rather than the old file snapshot');
+    await host.evaluate(() => { for (const i of document.querySelectorAll('input[type="password"], #pc-collab-cpw, #pc-collab-ppw')) i.value = ''; });
+    await host.screenshot({ path: path.join(root, 'cancel-collaboration-ui.png') });
+    await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '取消').click());
+    if (exitMatrix) exitMatrix.creatorCancelUi = { returnedToLocal: true, savedAssociationRemoved: true, originalContentPreserved: localFile.project.name === 'host-edit-after-reopen' };
+  } else {
+    const disabled = await (secondCreator ?? host).evaluate(pw => window.probe.collab.disableCollab(pw), creatorPassword); assert.equal(disabled.ok, true);
+  }
   await member.waitForFunction(async () => {
     const v = window.probe.sync.getSyncView(); const agent = await (await fetch('/api/agent/status')).json();
     const cards = await (await fetch('/api/cards/sync/status')).json(); const render = await (await fetch('/api/render-node/status')).json();
@@ -329,7 +353,7 @@ try {
   }
   evidence.push({ roomId, where, mode, actualHostProcessRestart: true, actualMemberProcessRestart: true, actualCloudProcessRestart: !wan, hostOpenedWhileCloudOffline: !wan && where === 'lan', pidChanged: true, portChanged: true, emptyBrowserStorage: true, memberWaitThenAutoJoin: where === 'lan',
     sameUsers: ['creator:host', 'member:member'], oldSnapshotsPreservedLatest: true, version: journal.rev, bidirectionalEdits: 4, formats: ['proc', 'procp', 'draft', 'system-path', 'refresh'], nativeOsDoubleClick: false, cancellationTombstone: !process.argv.includes('--keep-room'), recoveryCreateRequests: createRequests - 1, agentAndCardBindings: true, renderNodeStarted: process.argv.includes('--nodes'), nodeRolesAuthenticated: process.argv.includes('--nodes'), staleBindingsRemovedOnDelete: !process.argv.includes('--keep-room'), creatorPasswordReconnect: process.argv.includes('--password-change'), creatorSecondDevice: process.argv.includes('--roles'), deletedFromSecondCreator: !!secondCreator });
-  const result = { ok: true, evidence, matrix, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
+  const result = { ok: true, evidence, matrix, exitMatrix, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
   evidence[0].deletedWhileMemberOffline = process.argv.includes('--delete-offline');
   evidence[0].tamperedAssociationsRejected = process.argv.includes('--trust');
   fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
