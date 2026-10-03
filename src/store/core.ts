@@ -358,3 +358,7 @@ export function useStore<T>(selector: (s: EditorState) => T): T {
   last.current = { value };
   return value;
 }
+/** The UI owns project-opening policy; the store only calls its registered hook. */
+let projectLoader: ((project: Project) => Project) | null = null;
+export function setProjectLoader(loader: (project: Project) => Project) { projectLoader = loader; }
+export function getProjectLoader() { return projectLoader; }

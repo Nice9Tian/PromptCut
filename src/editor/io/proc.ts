@@ -8,6 +8,7 @@ import { restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
+import { currentAssociation, noteLoadedAssociation, type CollaborationDescriptor } from "../sync/recoveryAssociation";
 
 /**
  * 存盘时给项目盖一个「这是 SKILL 模式下的产物」的戳。不在 SKILL 模式就不写这一段。
@@ -78,6 +79,8 @@ export interface ProcFile {
   cards?: BundledCard[];
   /** Disposable frame deltas, encoded as one gzip/base64 block. */
   snapshots?: string;
+  /** Stable room association only. Authentication stays on each device. */
+  collaboration?: CollaborationDescriptor;
 }
 
 /** 当前项目 → .proc 文本 */
@@ -94,6 +97,7 @@ export function serializeProc(thumbnail: string | null = null): string {
     ai: collectProjectAi(),
     skill: skillStamp(),
     cards: cards.length ? cards : undefined,
+    collaboration: currentAssociation() ?? undefined,
   };
   return JSON.stringify(doc, null, 2);
 }
@@ -156,6 +160,7 @@ export function loadProc(text: string, opts: ParseProcOptions = {}): Project {
     /* parseProc 已经验过一遍,走到这儿说明是裸 Project,没有 ai 段 */
   }
   applyProjectAi(doc?.ai ?? null);
+  noteLoadedAssociation(project, doc?.collaboration);
   restoreSnapshots(project, doc?.snapshots);
   // 项目里带的定制卡装回本机。不等它:装完 vite 热更新,卡自己出现在舞台和卡库里
   if (doc) void restoreProjectCards(bundledCardsOf(doc), project.id ?? null);

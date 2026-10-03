@@ -201,6 +201,8 @@ export interface CommitOptions {
 }
 
 export interface DocSyncOptions {
+  /** Only explicit creation may initialize an empty service room. */
+  initialize?: boolean;
   projectId: string;
   /** 这个页面会话的 id,写进每次提交 */
   session: string;
@@ -304,6 +306,7 @@ export class DocSync {
   private readonly newOpId: () => string;
   private readonly now: () => number;
   private readonly saveBackup?: (backup: LocalBackup) => void;
+  private readonly initialize: boolean;
 
   private local: Project;
   private confirmed: Project | null = null;
@@ -339,6 +342,7 @@ export class DocSync {
     this.newOpId = opts.newOpId ?? (() => defaultOpId(opts.session));
     this.now = opts.now ?? (() => Date.now());
     this.saveBackup = opts.saveBackup;
+    this.initialize = opts.initialize !== false;
   }
 
   /* ---------- 读 ---------- */
@@ -358,6 +362,25 @@ export class DocSync {
    */
   get confirmedProject(): Project | null {
     return this.confirmed;
+  }
+
+  /** Device-owned crash recovery, never used as a root replacement on normal reentry. */
+  recoveryJournal() {
+    return { version: 1, projectId: this.projectId, project: this.local, rev: this.confirmedRev,
+      offlineRev: this.offlineRev, pending: this.pending.map(p => ({ ...p, sent: false })) };
+  }
+
+  restoreJournal(journal: ReturnType<DocSync["recoveryJournal"]>) {
+    if (journal.version !== 1 || journal.projectId !== this.projectId || !Number.isSafeInteger(journal.rev) || journal.rev < 0 || !Array.isArray(journal.project?.tracks)
+      || !Array.isArray(journal.pending) || journal.pending.some(p => typeof p.opId !== "string" || !Array.isArray(p.ops) || !Array.isArray(p.inverse))) throw new Error("离线操作恢复数据损坏");
+    const newer = this.pending;
+    let recovered = journal.project;
+    for (const p of newer) { const applied = applyOps(recovered, p.ops); if (!applied.ok) throw new Error("恢复期间的离线修改无法接续；请先保留独立备份"); recovered = applied.value; }
+    this.local = recovered;
+    this.confirmedRev = journal.rev;
+    this.offlineRev = journal.pending.length || newer.length ? journal.offlineRev ?? journal.rev : null;
+    this.pending = [...journal.pending.map(p => ({ ...p, sent: false })), ...newer];
+    this.emit("project", this.local, "state");
   }
 
   get status(): SyncStatus {
@@ -480,6 +503,12 @@ export class DocSync {
       this.gateOpId = null;
     }
     if (msg.project == null) {
+      if (!this.initialize) {
+        this.connected = false;
+        this.emit("notice", { kind: "resync", reason: "协作服务状态缺失，保留本地内容，请从原备份恢复。" });
+        this.emit("status", this.status);
+        return;
+      }
       // 文档服务还没有这个项目:把本地这一份(连同还没确认的修改)以根替换写进去
       const seed: Pending = { opId: this.newOpId(), ops: [{ op: "set", path: "", value: this.local }], inverse: [], sent: false };
       for (const p of this.pending) {

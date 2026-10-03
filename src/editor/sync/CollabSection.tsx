@@ -59,7 +59,8 @@ function when(ms: number | null): string {
 export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(function CollabSection({ open }, ref) {
   const shared = useSync((v) => v.shared);
   const device = useSync((v) => v.device);
-  const isOn = !!shared;
+  const association = useSync((v) => v.association);
+  const isOn = !!shared || !!association;
   const [checked, setChecked] = useState(isOn);
   const [where, setWhere] = useState<Where>("lan");
   const [mode, setMode] = useState<SharedMode>("free");

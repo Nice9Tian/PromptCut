@@ -126,7 +126,7 @@ export function createSharedDocService({
 
   const service = createDocService({
     ...serviceOptions,
-    ...(mode === 'lan' ? { server, path: wsPath } : { http: (req, res) => sharedHttp.handle(req, res, '') }),
+    ...(mode === 'lan' ? { server, path: wsPath } : { http: (req, res) => sharedHttp.handle(req, res, '') || serviceOptions?.http?.(req, res) === true }),
     authenticate: auth.authenticate,
     remoteOf,
     now,

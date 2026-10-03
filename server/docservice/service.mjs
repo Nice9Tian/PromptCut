@@ -249,6 +249,7 @@ export function createDocService(options = {}) {
    * - 写法不对、不止一项、接续项旁边还有鉴权项：400。
    */
   function onUpgrade(req, socket, head) {
+    if (typeof options.upgrade === 'function' && options.upgrade(req, socket, head) === true) return;
     const mine = pathnameOf(req) === path;
     if (attached && !mine) return;
     socket.on('error', () => {});

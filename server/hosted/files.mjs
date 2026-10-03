@@ -16,6 +16,8 @@ export const HOSTED_DEPLOY_DIRS = Object.freeze([
   'server/hosted',
   'server/docservice',
   'server/auth',
+  'server/hosting',
+  'server/recovery',
   'server/asset-store',
   'server/render-queue',
 ]);

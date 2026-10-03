@@ -82,6 +82,8 @@ const createDocEndpoint = createDocEndpointUntyped as (options: {
 export const PAGE_MAX_PENDING_BYTES = 32 * 1024 * 1024;
 
 export interface LinkOptions {
+  docSync?: DocSync;
+  initialize?: boolean;
   url: string;
   protocols: () => Promise<string[]> | string[];
   projectId: string;
@@ -89,6 +91,8 @@ export interface LinkOptions {
   initial: Project;
   saveBackup?: (b: LocalBackup) => void;
   onMessage?: (msg: AnyMsg) => void;
+  /** Validate delegated tickets before a caller can use them through a relay. */
+  onResponse?: (msg: AnyMsg) => Promise<void>;
   onOpen?: () => void;
   /** 传输断过、在保留期内接续上了(会话没断,不用重新订阅) */
   onResume?: () => void;
@@ -116,11 +120,12 @@ export class SyncLink {
   constructor(o: LinkOptions) {
     this.o = o;
     this.delay = o.reconnect?.minMs ?? 500;
-    this.ds = new DocSync(o.initial, {
+    this.ds = o.docSync ?? new DocSync(o.initial, {
       projectId: o.projectId,
       session: o.session,
       send: (msg) => this.send(msg as unknown as AnyMsg),
       saveBackup: o.saveBackup,
+      initialize: o.initialize,
     });
   }
 
@@ -305,7 +310,8 @@ export class SyncLink {
       if (w) {
         this.waiting.delete(String(msg.reqId));
         clearTimeout(w.timer);
-        w.resolve(msg);
+        if (this.o.onResponse) void this.o.onResponse(msg).then(() => w.resolve(msg), w.reject);
+        else w.resolve(msg);
         // project.* 的回包也要交给 DocSync(它不带 reqId 发,正常不会走到这里)
         if (!msg.type.startsWith("project.")) return;
       }

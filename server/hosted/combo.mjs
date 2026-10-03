@@ -30,6 +30,7 @@
  */
 import fs from 'node:fs';
 import http from 'node:http';
+import { createHostingService } from '../hosting/service.mjs';
 import path from 'node:path';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { registerTsResolve } from './ts-resolve.mjs';
@@ -278,6 +279,7 @@ export async function startHostedCombo({
     return !!m && timingSafeEqual(sha256(m[1]), tokenDigest);
   }
 
+  const hosting = createHostingService({ dir: path.join(root, 'hosting'), now });
   const { service } = createSharedDocService({
     mode: 'hosted',
     dataDir: paths.docservice,
@@ -289,7 +291,10 @@ export async function startHostedCombo({
     now,
     log: say,
     ...(limits ? { limits } : {}),
-    ...(serviceOptions ? { service: serviceOptions } : {}),
+    service: { ...serviceOptions,
+      http(req, res) { if (String(req.url).startsWith('/hosting/')) { void hosting.handle(req, res); return true; } return serviceOptions?.http?.(req, res); },
+      upgrade(req, socket, head) { if (String(req.url).startsWith('/hosting/')) { hosting.handleUpgrade(req, socket, head); return true; } return serviceOptions?.upgrade?.(req, socket, head); },
+    },
   });
 
   async function inventory() {
@@ -400,11 +405,13 @@ export async function startHostedCombo({
     announced: announceOk,
     service,
     stores,
+    hosting,
     get credentialStore() { return store; },
     inventory,
     async close() {
       if (closed) return;
       closed = true;
+      await hosting.close();
       try { announcer.stop(); } catch { /* 已停 */ }
       await new Promise((resolve) => {
         assetServer.close(() => resolve());

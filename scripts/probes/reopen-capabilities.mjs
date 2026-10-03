@@ -1,4 +1,5 @@
 /** Isolated pre-change capability audit. No real projects or credentials are read. */
+import '../lib/no-user-dirs.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,7 +31,7 @@ async function start() {
       for (;;) {
         const i = buf.indexOf('\n'); if (i < 0) break;
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
-        try { const j = JSON.parse(line); if (j.event === 'listen') { clearTimeout(timeout); resolve(j); } } catch { /* private diagnostics */ }
+        try { const j = JSON.parse(line); if (j.event === 'listen') { clearTimeout(timeout); resolve({ ...j, pid: child.pid }); } } catch { /* private diagnostics */ }
       }
     });
     child.stderr.resume();
@@ -75,7 +76,7 @@ try {
     ops: [{ op: 'set', path: '/name', value: 'member-edited' }] }); assert.equal(edited.rev, 2);
   assert.equal((await rpc(host, { type: 'project.open', projectId: room.projectId })).project.name, 'member-edited');
   results.push({ capability: 'project/version/account restart + member edit', status: 'available', roomId: room.projectId,
-    actualProcessRestart: true, differentPid: first !== second, version: edited.rev, role: 'creator/member' });
+    actualProcessRestart: true, differentPid: first.pid !== second.pid, version: edited.rev, role: 'creator/member' });
   host.close(); member.close();
   for (const endpoint of ['hosting/register', 'hosting/challenge', 'hosting/resolve', 'hosting/relay']) {
     const r = await fetch(`${base}/${endpoint}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(5000) });

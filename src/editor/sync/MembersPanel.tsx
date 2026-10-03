@@ -271,7 +271,7 @@ function PasswordDialog({ creator, v, onClose }: { creator: boolean; v: Verified
     if (!r.ok) return setErr(failText(r.error));
     // 项目设置「多用户协作」里显示的是本机记下的密码(C10a):改了就跟着换
     const pid = getSyncView().shared?.projectId;
-    if (pid) rememberPasswords(pid, creator ? { creatorPassword: a } : { projectPassword: a });
+    if (pid) await rememberPasswords(pid, creator ? { creatorPassword: a } : { projectPassword: a });
     pushToast(creator ? "创建者密码已修改，之后的项目管理要用新密码。" : "项目密码已修改。在线的人不受影响，下次进入要用新密码。", "info");
     onClose();
   };

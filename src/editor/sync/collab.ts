@@ -11,14 +11,15 @@
  *
  * 界面在 `CollabSection.tsx`；连接、进入、创建者操作在 `syncManager.ts`。
  */
-import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, pushToast, whenSaved, type AdminError } from "./syncManager";
-import { errorStatus, route, type SharedMode, type Where } from "./sharedApi";
+import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, pushToast, whenSaved, recoveryRequest, type AdminError } from "./syncManager";
+import { errorStatus, route, hosted, type SharedMode, type Where } from "./sharedApi";
 import { getState } from "../../store/project";
 import { originalHashOf } from "../../render/mediaTier";
 import { enqueueExistingMedia, type EnqueueExistingResult } from "../media/assetTiers";
 import { ingestUnhashedMedia } from "../io/mediaUpload";
 import { ONLINE } from "../../online/mode";
 import { inviteLinkOf } from "../../online/invite";
+import { cacheCollabSecrets, cachedCollabSecrets } from "./collabSecrets";
 
 /* ---------------- 本机记下的东西 ---------------- */
 
@@ -52,22 +53,24 @@ function readAll(): Record<string, LocalCollab> {
 }
 
 function writeAll(all: Record<string, LocalCollab>) {
-  try {
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(all));
-  } catch {
-    /* 存不了：只影响下次打开设置时能不能直接显示密码与链接 */
-  }
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(all));
 }
 
 export function localCollab(projectId: string): LocalCollab | null {
-  return readAll()[projectId] ?? null;
+  return cachedCollabSecrets<LocalCollab>(projectId) ?? readAll()[projectId] ?? null;
 }
 
-function saveLocal(rec: LocalCollab) {
-  writeAll({ ...readAll(), [rec.projectId]: rec });
+async function saveLocal(rec: LocalCollab) {
+  const descriptor = getSyncView().association;
+  if (ONLINE) { cacheCollabSecrets(rec.projectId, rec); return; }
+  if (!descriptor || descriptor.roomId !== rec.projectId) throw new Error("当前房间的秘密无法可靠保存");
+  await recoveryRequest("settings-write", descriptor, { settings: rec });
+  cacheCollabSecrets(rec.projectId, rec);
+  const all = readAll(); delete all[rec.projectId]; writeAll(all);
 }
 
 function dropLocal(projectId: string) {
+  cacheCollabSecrets(projectId, null);
   const all = readAll();
   delete all[projectId];
   writeAll(all);
@@ -124,7 +127,7 @@ export async function createInvite(creatorPassword: string): Promise<InviteResul
     maxUses: typeof r.reply.maxUses === "number" ? r.reply.maxUses : null,
   };
   const prev = localCollab(s.projectId);
-  saveLocal({ ...(prev ?? { projectId: s.projectId, where: s.where, mode: s.mode, name: s.name, creatorUsername: s.username }), invite });
+  await saveLocal({ ...(prev ?? { projectId: s.projectId, where: s.where, mode: s.mode, name: s.name, creatorUsername: s.username }), invite });
   return { ok: true, invite };
 }
 
@@ -189,14 +192,19 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
   }
   const device = getSyncView().device;
   const entered = await enterShared(
-    { where: made.where, base: made.base, projectId: made.projectId, name: made.name, mode: made.mode, ...(o.where === "lan" ? { hostDeviceName: device?.deviceName } : {}) },
+    { where: made.where, base: made.base, projectId: made.projectId, name: made.name, mode: made.mode, service: o.where === "lan" ? hosted.resolveHostedUrl({ ui: o.hostedUrl }) : made.base, ...(o.where === "lan" ? { hostDeviceName: device?.deviceName } : {}) },
     { as: "creator", username: o.creator.username, password: o.creator.password },
+    { initialize: true },
   );
   if (!entered.ok) {
     console.warn("[collab] 以创建者身份进入没成:", entered.error);
     return { ok: false, error: o.where === "hosted" ? "unreachable" : "lan-failed" };
   }
-  saveLocal({
+  if (o.where === "lan") {
+    const descriptor = getSyncView().association;
+    if (descriptor) await recoveryRequest("activate-host", descriptor);
+  }
+  await saveLocal({
     projectId: made.projectId,
     where: made.where,
     mode: made.mode,
@@ -330,13 +338,15 @@ export async function disableCollab(creatorPassword: string, onProgress?: (done:
     return { ok: false, error: del.error === "rate-limited" ? "rate-limited" : del.error === "forbidden" ? "forbidden" : "pull-failed" };
   }
   dropLocal(s.projectId);
+  const descriptor = getSyncView().association;
+  if (descriptor) await recoveryRequest("revoke", descriptor);
   leaveSharedToLocal(project);
   return { ok: true };
 }
 
 /** 创建者在成员浮层或设置里改了密码：本机记下的那份跟着换（这台设备上没开启过的不记） */
-export function rememberPasswords(projectId: string, p: { creatorPassword?: string; projectPassword?: string }) {
+export async function rememberPasswords(projectId: string, p: { creatorPassword?: string; projectPassword?: string }) {
   const prev = localCollab(projectId);
   if (!prev) return;
-  saveLocal({ ...prev, ...p });
+  await saveLocal({ ...prev, ...p });
 }

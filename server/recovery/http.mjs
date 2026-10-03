@@ -1,0 +1,66 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { openRecoveryVault } from './vault.mjs';
+import { parseCollaboration } from './descriptor.mjs';
+import { fileNameOf } from '../docservice/store/index.mjs';
+import { fromLocalClient, guard } from '../http-guard.mjs';
+import { randomBytes } from 'node:crypto';
+import { startHostingHost } from '../hosting/host.mjs';
+
+/** Local-only identity API. Its root and protection backend are owned by the app. */
+export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf, onClose }) {
+  let vault;
+  const hosts = new Map();
+  const instance = randomBytes(32).toString('base64url');
+  const getVault = () => vault ??= openRecoveryVault({ dir });
+  const hostId = d => JSON.stringify([d.service, d.roomId]);
+  function activate(descriptor) {
+    const id = hostId(descriptor);
+    if (hosts.has(id)) return hosts.get(id);
+    const h = getVault().host(descriptor);
+    if (!h || h.deviceId !== device.deviceId || descriptor.where !== 'lan') throw new Error('not-original-host');
+    const entry = { state: 'pending', worker: null };
+    entry.worker = startHostingHost({ service: descriptor.service, roomId: descriptor.roomId,
+      hostKey: h.registrationKey, deviceId: device.deviceId, instance,
+      record: () => store?.peek(descriptor.roomId), docBase: baseOf(), assetBase: assetBaseOf?.() ?? baseOf().replace(/\/docservice$/, ''),
+      state: state => { entry.state = state; } });
+    hosts.set(id, entry); return entry;
+  }
+  onClose?.(() => { for (const entry of hosts.values()) void entry.worker.stop(); hosts.clear(); });
+  const reply = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
+  return async (req, res, next) => {
+    const p = String(req.url).split('?')[0];
+    if (!p.startsWith('/api/collaboration/')) return next();
+    if (!fromLocalClient(req) || !guard(req, res)) { if (!res.headersSent) reply(res, 403, { ok: false, error: 'forbidden' }); return; }
+    if (req.method !== 'POST') return reply(res, 405, { ok: false, error: 'method' });
+    try {
+      let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 64 * 1024 * 1024) return reply(res, 413, { ok: false, error: 'too-large' }); }
+      const body = JSON.parse(raw); const descriptor = parseCollaboration(body.descriptor);
+      if (!descriptor || descriptor.version !== 1) return reply(res, 400, { ok: false, error: 'unsupported' });
+      const v = getVault();
+      if (p.endsWith('/settings-read')) return reply(res, 200, { ok: true, settings: v.settings(descriptor) });
+      if (p.endsWith('/settings-write')) { if (body.settings?.projectId !== descriptor.roomId) return reply(res, 400, { ok: false, error: 'bad-settings' }); v.saveSettings(descriptor, body.settings); return reply(res, 200, { ok: true }); }
+      if (p.endsWith('/journal')) { v.journal(descriptor, body.contentId, body.journal); return reply(res, 200, { ok: true }); }
+      if (p.endsWith('/identity')) { v.remember({ ...body.record, service: descriptor.service, roomId: descriptor.roomId }, body.contentId); return reply(res, 200, { ok: true }); }
+      if (p.endsWith('/select')) return reply(res, 200, { ok: true, ...v.select(descriptor, body.contentId), settings: v.settings(descriptor), protection: v.protection });
+      if (p.endsWith('/revoke')) { const entry = hosts.get(hostId(descriptor)); v.revoke(descriptor); await entry?.worker.stop({ deleted: true }); hosts.delete(hostId(descriptor)); return reply(res, 200, { ok: true }); }
+      if (p.endsWith('/host-state')) return reply(res, 200, { ok: true, state: hosts.get(hostId(descriptor))?.state ?? 'inactive' });
+      if (p.endsWith('/host-update')) { await hosts.get(hostId(descriptor))?.worker.update(); return reply(res, 200, { ok: true }); }
+      if (p.endsWith('/activate-host')) {
+        if (!store?.peek(descriptor.roomId) || descriptor.where !== 'lan') return reply(res, 404, { ok: false, error: 'no-project' });
+        v.bindHost(descriptor, device.deviceId); activate(descriptor); return reply(res, 200, { ok: true });
+      }
+      if (p.endsWith('/restore-host')) {
+        const h = v.host(descriptor);
+        if (!h || h.deviceId !== device.deviceId) return reply(res, 403, { ok: false, error: 'not-original-host' });
+        const rec = store?.peek(descriptor.roomId);
+        if (!rec) return reply(res, 409, { ok: false, error: 'host-data-missing' });
+        const projects = path.join(dataDir, 'tenants', descriptor.roomId, 'projects');
+        if (!fs.existsSync(path.join(projects, `${fileNameOf(descriptor.roomId)}.ndjson`))) return reply(res, 409, { ok: false, error: 'host-data-missing' });
+        activate(descriptor);
+        return reply(res, 200, { ok: true, candidate: { where: 'lan', projectId: rec.projectId, name: rec.name, mode: rec.mode, base: baseOf(), service: descriptor.service, hostDeviceName: device.deviceName } });
+      }
+      reply(res, 404, { ok: false, error: 'no-endpoint' });
+    } catch { reply(res, 503, { ok: false, error: 'recovery-storage', message: '无法可靠读取或保存协作恢复信息；原数据已保留，请重试或重新认证。' }); }
+  };
+}

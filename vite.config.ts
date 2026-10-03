@@ -65,7 +65,7 @@ const lanHostPlugin = (): Plugin => ({
  * 本地文档服务的日志(`<root>/out/docservice`,项目版本日志与内容库,含卡片源码)同理:
  * 只经文档服务的 WebSocket 读写,不经静态服务暴露。
  */
-const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/**", "**/out/docservice/**"];
+const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/**", "**/out/docservice/**", "**/out/collaboration/**"];
 
 /*
  * 卡片、部件文件不做 Fast Refresh(C6.6 集成 3b)。它们导出的是卡片定义(对象),不是纯组件,

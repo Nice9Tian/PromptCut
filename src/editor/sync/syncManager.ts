@@ -13,20 +13,28 @@
  * 组件用 `useSync(selector)` 读。
  */
 import { useSyncExternalStore } from "react";
-import { bindStore, type LocalBackup, type PausedInfo, type SyncNotice, type SyncStatus, type UndoResult, type Writer } from "../../store/docsync";
-import { actions, getState, subscribe } from "../../store/project";
+import { bindStore, DocSync, type LocalBackup, type PausedInfo, type SyncNotice, type SyncStatus, type UndoResult, type Writer } from "../../store/docsync";
+import { actions, getState, subscribe, setProjectLoader } from "../../store/project";
 import { entitiesOf, entityOfPath, type PathOp } from "../../kernel/diffProject";
 import type { Project } from "../../kernel/project";
 import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { classifyEnterFailure } from "./enterFailure";
-import { client, errorStatus, route, type Candidate, type SharedMode, type Where } from "./sharedApi";
+import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
+import { currentAssociation, setAssociation, takeLoadedAssociation, type CollaborationDescriptor } from "./recoveryAssociation";
+// @ts-expect-error Browser-safe recovery state machine.
+import { RecoveryCoordinator } from "../../../server/recovery/coordinator.mjs";
+// @ts-expect-error Browser-safe service identity validation.
+import { serviceIdentity } from "../../../server/recovery/descriptor.mjs";
+// @ts-expect-error Browser-safe hosting discovery and ticket delegation.
+import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/hosting/client.mjs";
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
 import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
+import { cacheCollabSecrets } from "./collabSecrets";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
@@ -125,6 +133,8 @@ export interface EventRecord {
 }
 
 export interface SyncView {
+  association: CollaborationDescriptor | null;
+  reopenState: string | null;
   /** 页面接上了文档服务(不然 store 用快照栈) */
   active: boolean;
   kind: "local" | "shared" | "off";
@@ -150,6 +160,8 @@ export interface SyncView {
 }
 
 let view: SyncView = {
+  association: null,
+  reopenState: null,
   active: false,
   kind: "off",
   status: "idle",
@@ -533,6 +545,10 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     offs.push(() => clearInterval(tick));
   }
   cur = { link, kind, docProjectId, url, unbind, offs };
+  if (kind === "shared" && !ONLINE_BUILD && !ONLINE) {
+    const descriptor = currentAssociation();
+    if (descriptor) offs.push(link.ds.on("project", () => persistJournal(link.ds, descriptor, getState().project.id ?? "")));
+  }
   // 在场状态(A3 第二阶段):这个页面「正在编辑」的片段经这条连接发布,别的成员那边 Agent 的范围经它收
   setPresenceLink(link, docProjectId, me().userId ?? "");
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
@@ -561,6 +577,7 @@ function detach() {
     for (const off of prev.offs) off();
     prev.unbind();
     retire(prev.link);
+    if (prev.kind === "shared" && !ONLINE_BUILD && !ONLINE) unbindRenderNode(prev.docProjectId, "left");
   }
   patch({ active: false, kind: "off", status: "idle", paused: null, offlineOpen: false, notice: null, unconfirmed: 0, recovery: null });
 }
@@ -610,6 +627,19 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
 
 /** store 的载入(loadProject)交到这里:同一个本机项目是根替换,别的项目换连接 */
 function onLoad(project: Project): Project {
+  identitySave = null; lastIdentity = null;
+  releaseHolding();
+  recoveryCoordinator.cancel();
+  const association = takeLoadedAssociation(project);
+  patch({ association, reopenState: null });
+  if (association) {
+    detach(); disconnectSharedAssets();
+    patch({ shared: null, members: [], blocked: null });
+    holdRecovery(project, association);
+    if (started) recoveryCoordinator.start(association, project.id);
+    return project;
+  }
+  if (!started && !cur) return project;
   if (ONLINE && !cur) return project;
   if (cur && cur.kind === "local" && project.id === cur.docProjectId) return cur.link.ds.load(project);
   if (cur?.kind === "shared") clearSharedResume();
@@ -680,6 +710,10 @@ export async function resumeShared(): Promise<boolean> {
 
 /** 回开始页(顶栏「回到首页」)之后再刷新,留在开始页:忘掉这条记录 */
 export function forgetSharedResume(): void {
+  recoveryCoordinator.cancel();
+  releaseHolding();
+  detach(); disconnectSharedAssets();
+  patch({ reopenState: null });
   clearSharedResume();
 }
 
@@ -834,6 +868,8 @@ export async function startSync(): Promise<void> {
   if (ONLINE) return;
   // 开始页上已经进了共享项目(「加入别人的项目」,C10a 第 4 节):不换回本机空间
   if (cur) return;
+  const association = currentAssociation();
+  if (association) { recoveryCoordinator.start(association, getState().project.id); return; }
   const join = q.get("join");
   if (join) {
     const link = newLocalLink(join, getState().project);
@@ -860,8 +896,12 @@ export function isJoinPage(): boolean {
 
 /** `.proc` 只在所有本地修改都拿到确认之后写(语义「项目文件」);没接文档服务时直接放行 */
 export async function whenSaved(timeoutMs = 10_000): Promise<void> {
+  if (identitySave) { try { await identitySave; } catch { if (!lastIdentity) throw new Error("协作身份未保存"); identitySave = saveRecoveryIdentity(lastIdentity.descriptor, lastIdentity.record); await identitySave; } }
+  if (currentAssociation() && !cur && view.reopenState !== "unsupported") throw new Error("协作身份尚未恢复；请等待主机或重新认证后保存。文件内容已保留。");
   if (!cur) return;
   await cur.link.ds.whenSettled({ timeoutMs });
+  const descriptor = currentAssociation();
+  if (descriptor && !ONLINE_BUILD && !ONLINE) { persistJournal(cur.link.ds, descriptor, getState().project.id ?? ""); await journalWrite; }
 }
 
 /* ---------------- 离线 ---------------- */
@@ -937,7 +977,7 @@ export function revertAgentOp(rec: AgentOp): UndoResult | null {
 
 /* ---------------- 共享项目 ---------------- */
 
-export type EnterError = "auth" | "rate-limited" | "unreachable" | "no-project" | "kicked" | "not-ready";
+export type EnterError = "auth" | "rate-limited" | "unreachable" | "no-project" | "kicked" | "not-ready" | "host-data-missing";
 
 export interface EnterCredentials {
   as: "member" | "creator";
@@ -1009,24 +1049,34 @@ export async function ensureDevice(): Promise<DeviceInfo | null> {
  * 进入共享项目:取挑战、凭证明连上;连上之后本页面改连这个项目的空间,项目内容以文档服务为准
  * (项目还空着时,DocSync 把当前这份以根替换写进去 —— 新建共享项目就是这样把当前项目带过去的)。
  */
-export async function enterShared(candidate: Candidate, cred: EnterCredentials): Promise<EnterResult> {
+export async function enterShared(candidate: Candidate, cred: EnterCredentials, options: { initialize?: boolean; current?: () => boolean } = {}): Promise<EnterResult> {
+  const current = options.current ?? (() => true);
   const device = await ensureDevice();
   if (!device) return { ok: false, error: "not-ready" };
   let key: string | undefined = cred.key;
-  const make = () =>
-    client.buildAuthProtocols({
+  let firstDial = true;
+  const make = async () => {
+    if (candidate.access && !firstDial) {
+      const fresh = await discoverRoom({ service: candidate.service, roomId: candidate.projectId, username: cred.username, as: cred.as, deviceId: device.deviceId, key });
+      candidate.access = fresh.access; candidate.routeProtocol = fresh.routeProtocol;
+    }
+    firstDial = false;
+    const protocols = await client.buildAuthProtocols({
       base: candidate.base,
       projectId: candidate.projectId,
       username: cred.username,
       deviceId: device.deviceId,
       deviceName: device.deviceName,
       as: cred.as,
+      ...(candidate.access ? { fetch: relayFetch(candidate.access) } : {}),
       ...(key ? { key } : { password: cred.password }),
       role: "page",
       onKey: (k) => {
         key = k;
       },
     });
+    return candidate.routeProtocol ? [...protocols, candidate.routeProtocol] : protocols;
+  };
   // 先取一次挑战:限速(429)、项目没了(404)、连不上,在这一步就分得清
   let first: string[] | null;
   try {
@@ -1037,10 +1087,13 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
     if (status === 404) return { ok: false, error: "no-project" };
     return { ok: false, error: "unreachable" };
   }
+  if (!current()) return { ok: false, error: "not-ready" };
   const wsUrl = candidate.ws ?? route.wsBaseOf(candidate.base);
   const outcome = await new Promise<"open" | CloseInfo>((resolve) => {
     let settled = false;
     const link = new SyncLink({
+      docSync: holding?.ds.projectId === candidate.projectId ? holding.ds : undefined,
+      initialize: options.initialize === true,
       url: wsUrl,
       protocols: () => {
         if (first) {
@@ -1055,14 +1108,21 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
       initial: getState().project,
       saveBackup: (b) => void saveBackup(b),
       onMessage: onSideMessage,
-      onOpen: () => {
+      onResponse: async msg => { if (msg.type === "auth.ticket.ok" && typeof msg.ticket === "string") await authorizeRelayAsset(candidate, msg.ticket); },
+      onOpen: () => { void (async () => {
+        if (!current()) { link.stop(); resolve({ code: 0, reason: "cancelled", fatal: false, neverOpened: true }); return; }
         if (settled) {
           // 重连上了:重新订阅成员变化
           link.send({ type: "shared.watch" });
           void connectSharedAssets(link, candidate.base, { online: ONLINE, fallback: lanAssetBaseOf(candidate) });
           return;
         }
+        try { await sharedStateReady(link); } catch { link.stop(); if (!settled) { settled = true; resolve({ code: 0, reason: "host-data-missing", fatal: false, neverOpened: true }); } return; }
+        if (!current() || settled) { if (!current()) link.stop(); return; }
         settled = true;
+        if (holding?.ds === link.ds) releaseHolding();
+        const descriptor = descriptorOf(candidate);
+        setAssociation(descriptor);
         bind(link, "shared", candidate.projectId, wsUrl);
         patch({
           shared: { projectId: candidate.projectId, name: candidate.name, mode: candidate.mode, where: candidate.where, base: candidate.base, username: cred.username, creator: cred.as === "creator", hostDeviceName: candidate.hostDeviceName },
@@ -1073,13 +1133,20 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
         if (cred.as === "creator") rememberCreator(candidate.projectId, cred.username);
         // 同一个标签页刷新之后回到这里(只存派生出的 K,不存口令;见 resumeShared)
         if (key) rememberSharedResume({ candidate, as: cred.as, username: cred.username, key });
+        patch({ association: descriptor, reopenState: "connected" });
+        if (key) {
+          lastIdentity = { descriptor, record: { candidate, as: cred.as, username: cred.username, key, profile: "default" } };
+          identitySave = saveRecoveryIdentity(descriptor, { candidate, as: cred.as, username: cred.username, key, profile: "default" });
+          try { await identitySave; } catch { pushToast("协作身份未能可靠保存；请重试保存，否则下次打开需要重新认证。", "warn", Infinity); }
+        }
+        if (!current()) { link.stop(); resolve({ code: 0, reason: "cancelled", fatal: false, neverOpened: true }); return; }
         link.send({ type: "shared.watch" });
         link.send({ type: "events.list", projectId: candidate.projectId });
         // C6.6:这个共享项目的素材服务(服务地址登记里的 asset)当作当前连接的远程素材服务
         // 在线浏览器模式:素材服务与本页同源,也要认(c10a;assetTiers.pickAssetEndpoint)
         void connectSharedAssets(link, candidate.base, { online: ONLINE, fallback: lanAssetBaseOf(candidate) });
         resolve("open");
-      },
+      })(); },
       onClosed: (info) => {
         if (!settled) {
           if (info.neverOpened && info.reason !== "protocols") {
@@ -1099,6 +1166,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
         refreshStatus();
       },
     });
+    if (holding?.ds === link.ds) holding.target.link = link;
     link.start();
     setTimeout(() => {
       if (settled) return;
@@ -1108,10 +1176,11 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
     }, 15_000);
   });
   if (outcome === "open") return { ok: true };
+  if (outcome.reason === "host-data-missing") return { ok: false, error: "host-data-missing" };
   // 打开前就断:浏览器里分不出握手被拒和没连上,拿新证明问一次 shared/verify 再定(enterFailure.ts)
   const failed = await classifyEnterFailure(outcome, {
     fresh: make,
-    verify: (protocols) => client.verifyProtocols({ base: candidate.base, protocols }),
+    verify: (protocols) => client.verifyProtocols({ base: candidate.base, protocols, ...(candidate.access ? { fetch: relayFetch(candidate.access) } : {}) }),
     wasKicked: () => wasKicked(candidate.projectId, cred.username),
   });
   return { ok: false, ...failed };
@@ -1130,11 +1199,146 @@ export function expectSharedClose(on = true) {
  * 项目真身拉回本机)。在线页面没有本机空间,只是断开。
  */
 export function leaveSharedToLocal(project: Project = getState().project): Project {
+  recoveryCoordinator.cancel(); setAssociation(null);
+  releaseHolding();
+  patch({ association: null, reopenState: null });
   clearSharedResume();
   patch({ shared: null, members: [], blocked: null });
   const out = switchToLocal(project, { load: true });
   expectedClose = null;
   return out;
+}
+
+let identitySave: Promise<void> | null = null;
+let lastIdentity: { descriptor: CollaborationDescriptor; record: RecoveryIdentity } | null = null;
+interface RecoveryIdentity { candidate: Candidate; as: "member" | "creator"; username: string; key: string; profile?: string }
+export function descriptorOf(candidate: Candidate): CollaborationDescriptor {
+  return { version: 1, roomId: candidate.projectId, where: candidate.where,
+    service: serviceIdentity(candidate.service ?? (candidate.where === "hosted" ? candidate.base : hosted.resolveHostedUrl())), hint: serviceIdentity(candidate.base) };
+}
+export async function recoveryRequest(endpoint: string, descriptor: CollaborationDescriptor, fields: Record<string, unknown> = {}, signal?: AbortSignal): Promise<Record<string, any>> {
+  if (ONLINE_BUILD) throw new Error("在线页面没有本机身份接口");
+  const r = await fetch(`/api/collaboration/${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ descriptor, ...fields }), signal, redirect: "error" });
+  const body = await r.json();
+  if (!r.ok || !body.ok) throw Object.assign(new Error("协作恢复失败"), { reason: body.error });
+  return body;
+}
+async function saveRecoveryIdentity(descriptor: CollaborationDescriptor, record: RecoveryIdentity): Promise<void> {
+  const { access: _access, routeProtocol: _route, ...candidate } = record.candidate;
+  record = { ...record, candidate };
+  if (ONLINE) {
+    // Existing browser entry only. Restrictive storage errors remain visible to the user.
+    const all = readJson<Record<string, RecoveryIdentity>>("pc.shared.identities", {});
+    localStorage.setItem("pc.shared.identities", JSON.stringify({ ...all, [JSON.stringify([descriptor.service, descriptor.roomId, record.as, record.username])]: record }));
+    return;
+  }
+  await recoveryRequest("identity", descriptor, { record, contentId: getState().project.id });
+}
+const recoveryCoordinator = new RecoveryCoordinator({
+  state: (reopenState: string) => patch({ reopenState }),
+  identity: async (descriptor: CollaborationDescriptor, contentId: string, signal: AbortSignal) => {
+    let result = await recoveryRequest("select", descriptor, { contentId }, signal);
+    if (!signal.aborted && !result.selected && !result.revoked) {
+      const legacy = readSharedResume();
+      if (legacy && legacy.candidate.projectId === descriptor.roomId && descriptorOf(legacy.candidate).service === descriptor.service) {
+        await saveRecoveryIdentity(descriptor, legacy);
+        result = await recoveryRequest("select", descriptor, { contentId }, signal);
+      }
+    }
+    if (!signal.aborted && result.selected && !result.revoked) {
+      let settings = result.settings;
+      if (!settings) {
+        const legacy = readJson<Record<string, unknown>>("pc.shared.local", {})[descriptor.roomId!];
+        if (legacy) {
+          await recoveryRequest("settings-write", descriptor, { settings: legacy }, signal);
+          settings = legacy;
+          const all = readJson<Record<string, unknown>>("pc.shared.local", {}); delete all[descriptor.roomId!];
+          localStorage.setItem("pc.shared.local", JSON.stringify(all));
+        }
+      }
+      if (settings) cacheCollabSecrets(descriptor.roomId!, settings);
+    }
+    if (!signal.aborted && result.journal && holding && holding.ds.projectId === descriptor.roomId && !holding.restored) {
+      holding.restored = true; holding.ds.restoreJournal(result.journal);
+    }
+    return result;
+  },
+  host: async (descriptor: CollaborationDescriptor, signal: AbortSignal) => (await recoveryRequest("restore-host", descriptor, {}, signal)).candidate,
+  discover: async (descriptor: CollaborationDescriptor, record: RecoveryIdentity, signal: AbortSignal) => {
+    if (ONLINE_BUILD) throw new Error("在线页面沿用加入入口");
+    if (record.candidate.where === "hosted") return { ...record.candidate, projectId: descriptor.roomId };
+    const r = await fetch(`/api/docservice/lan-discover?name=${encodeURIComponent(record.candidate.name)}`, { signal });
+    const found = await r.json();
+    const room = found.hosts?.find((h: { projectId: string }) => h.projectId === descriptor.roomId);
+    if (room) return { ...record.candidate, base: room.docservice, asset: room.asset, projectId: descriptor.roomId };
+    // Kept only as a trusted device-owned hint; file-provided hints never receive a key.
+    const device = await ensureDevice();
+    if (!device) throw new Error("设备信息尚未就绪");
+    return discoverRoom({ service: record.candidate.service ?? descriptor.service, roomId: descriptor.roomId, username: record.username, as: record.as, deviceId: device.deviceId, key: record.key });
+  },
+  enter: (candidate: Candidate, record: RecoveryIdentity, current: () => boolean) => enterShared(candidate, { ...record, password: "" }, { current }),
+});
+let holding: { ds: DocSync; target: { link: SyncLink | null }; off: () => void; restored: boolean } | null = null;
+let journalWrite: Promise<unknown> = Promise.resolve();
+function persistJournal(ds: DocSync, descriptor: CollaborationDescriptor, contentId: string) {
+  const journal = ds.recoveryJournal();
+  journalWrite = journalWrite.catch(() => undefined).then(() => recoveryRequest("journal", descriptor, { contentId, journal }));
+  void journalWrite.catch(() => pushToast("离线修改未能可靠保存，请保留当前页面并重试。", "warn", Infinity));
+}
+function sharedStateReady(link: SyncLink): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ready = () => !!link.ds.confirmedProject && (link.ds.status === "online" || link.ds.status === "paused");
+    if (ready()) { resolve(); return; }
+    const timeout = setTimeout(() => { off(); reject(new Error("服务状态未恢复")); }, 10000);
+    const off = link.ds.on("status", () => { if (ready()) { clearTimeout(timeout); off(); resolve(); } });
+  });
+}
+function holdRecovery(project: Project, descriptor: CollaborationDescriptor) {
+  if (descriptor.version !== 1) return;
+  const target: { link: SyncLink | null } = { link: null };
+  const ds = new DocSync(project, { projectId: descriptor.roomId!, session, initialize: false, send: msg => target.link?.send(msg as unknown as AnyMsg), saveBackup: b => void saveBackup(b) });
+  const offStore = bindStore(ds, { load: onLoad });
+  const offJournal = ds.on("project", () => {
+    if (ONLINE_BUILD || ONLINE) return;
+    persistJournal(ds, descriptor, project.id ?? "");
+  });
+  holding = { ds, target, restored: false, off: () => { offStore(); offJournal(); } };
+}
+function releaseHolding() { holding?.off(); holding = null; }
+setProjectLoader(onLoad);
+
+/** A choice binds an existing device identity; file role fields never participate. */
+export async function recoveryIdentities(): Promise<{ as: "creator" | "member"; username: string }[]> {
+  const descriptor = currentAssociation();
+  if (!descriptor) return [];
+  const saved = await recoveryRequest("select", descriptor, { contentId: getState().project.id });
+  return (saved.identities ?? []).map((r: RecoveryIdentity) => ({ as: r.as, username: r.username }));
+}
+export async function chooseRecoveryIdentity(as: string, username: string) {
+  const descriptor = currentAssociation();
+  if (!descriptor) return;
+  const contentId = getState().project.id;
+  const saved = await recoveryRequest("select", descriptor, { contentId });
+  const selected = saved.identities?.find((r: RecoveryIdentity) => r.as === as && r.username === username);
+  if (!selected || saved.revoked) throw new Error("这个身份无法恢复");
+  await recoveryRequest("identity", descriptor, { contentId, record: selected });
+  recoveryCoordinator.start(descriptor, contentId);
+}
+/** The user supplies a password after seeing the destination; no cached secret is sent to a file URL. */
+export async function authenticateRecovery(username: string, password: string, as: "creator" | "member"): Promise<EnterResult> {
+  const descriptor = currentAssociation();
+  const device = await ensureDevice();
+  if (!descriptor || descriptor.version !== 1 || !device) return { ok: false, error: "not-ready" };
+  recoveryCoordinator.cancel();
+  const generation = recoveryCoordinator.generation;
+  let key: string | undefined;
+  const candidate: Candidate = descriptor.where === "hosted"
+    ? { where: "hosted", projectId: descriptor.roomId!, base: descriptor.service!, service: descriptor.service!, name: getState().project.name, mode: "free" }
+    : await discoverRoom({ service: descriptor.service, roomId: descriptor.roomId, username, password, as, deviceId: device.deviceId, onKey: (k: string) => { key = k; } });
+  const result = await enterShared(candidate, { as, username, password, key }, { current: () => recoveryCoordinator.generation === generation });
+  if (!result.ok) patch({ reopenState: result.error === "auth" ? "needs-auth" : result.error === "kicked" ? "rejected" : "waiting-host" });
+  return result;
 }
 
 /** 当前是不是连着共享项目(项目设置「多用户协作」按它显示勾选状态) */
@@ -1186,7 +1390,11 @@ export async function adminOp(
   } catch {
     return { ok: false, error: "offline" };
   }
-  if (reply.type === "shared.admin.ok") return { ok: true, reply, key };
+  if (reply.type === "shared.admin.ok") {
+    const descriptor = currentAssociation();
+    if (descriptor && !ONLINE_BUILD && !ONLINE) void recoveryRequest("host-update", descriptor).catch(() => pushToast("云端权限登记待重试，本机权限已更新。", "warn"));
+    return { ok: true, reply, key };
+  }
   const reason = String(reply.reason ?? "");
   return { ok: false, error: reason === "forbidden" || reason === "rate-limited" || reason === "bad-message" ? (reason as AdminError) : "other" };
 }

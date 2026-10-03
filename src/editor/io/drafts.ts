@@ -38,6 +38,7 @@ export function newDraftId(): string {
 export async function saveDraft(id: string, thumbnail: string | null = null): Promise<DraftInfo> {
   // 只读查看的页面在这里就停住,不用等服务端拒了再报错 —— 报错文案也更像人话
   if (isViewOnly()) throw new Error("这是只读查看模式,改不了这个项目");
+  await (await import("../sync/syncManager")).whenSaved();
   return json<DraftInfo>(
     await fetch(`/api/projects/${encodeURIComponent(id)}`, {
       method: "PUT",
