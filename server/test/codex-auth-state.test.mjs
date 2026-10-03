@@ -22,7 +22,7 @@ mock.module(new URL('../runners/cli-runtime.mjs', import.meta.url).href, { named
 const { createCodexAuthState, codexAuthState, codexAuthReason, authErrorDecoder } = await import('../runners/codex-auth-state.mjs');
 const { probeAuth } = await import('../runners/auth.mjs');
 const { startRun } = await import('../runners/codex.mjs');
-const { listProviders } = await import('../runners/index.mjs');
+const { listProviders, startRun: startProvider } = await import('../runners/index.mjs');
 const { createSetupService } = await import('../runners/setup.mjs');
 const { startCliLoop } = await import('../runners/cli-loop.mjs');
 const { probeQuota } = await import('../runners/quota.mjs');
@@ -129,6 +129,8 @@ test('known invalid and corrupt states block CLI at server entry, including text
   for(const toolProtocol of [false,true]) {const r=run({toolProtocol});await r.done;assert.equal(terminals(r.events).length,1);assert.equal(terminals(r.events)[0].authReason,'token_revoked');}
   assert.equal(calls().length,before);assert.equal((await probeAuth('agy',{refresh:true})).reason,undefined);
   const beforeQuota=calls().length;assert.equal((await probeQuota('codex')).ok,false);assert.equal(calls().length,beforeQuota,'invalid quota probe must not start app-server');
+  const otherEvents=[];const other=startProvider({provider:'claude',cwd:home,systemPrompt:'',prompt:'simulation only',onEvent:e=>otherEvents.push(e)});await other.done;
+  assert.equal(calls().length,beforeQuota+1,'another provider can still start its simulated CLI');assert.ok(!otherEvents.some(e=>e.type==='error'));
   const corruptHome=fs.mkdtempSync(path.join(sandbox,'corrupt-'));fs.mkdirSync(path.join(corruptHome,'codex-home'));fs.writeFileSync(path.join(corruptHome,'codex-home','promptcut-auth-state.json'),'invalid');
   process.env.PROMPTCUT_CLI_HOME=corruptHome;const unknown=run();await unknown.done;assert.equal(terminals(unknown.events)[0].authReason,'state_unknown');
 });
