@@ -1,4 +1,3 @@
-import '../../scripts/lib/no-user-dirs.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -49,6 +48,24 @@ test('SILENT-3 显式隔离数据目录不被预加载清除，后代仍继承�
       const child=execFileSync(process.execPath,['--eval', 'if(!process.env.PROMPTCUT_DATA_DIR?.includes("pc-silent-contract-")) process.exit(1); else if(process.platform==="win32" && !process.env.NODE_OPTIONS.includes("test-silent-processes.mjs")) process.exit(2); else process.stdout.write("passed")'],{encoding:'utf8'});
       assert.equal(child,'passed'); process.stdout.write('passed');
     `,{...process.env,PROMPTCUT_DATA_DIR:dir});
+    assert.equal(output,'passed');
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('SILENT-4 原生 fork 后代保留 IPC 与静默设置',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pc-silent-fork-'));
+  try {
+    const file=path.join(dir,'child.mjs');
+    fs.writeFileSync(file,'process.send({silent:process.platform!=="win32" || process.env.NODE_OPTIONS.includes("test-silent-processes.mjs")});process.disconnect();');
+    const output=run(`
+      import assert from 'node:assert/strict';
+      import { fork } from 'node:child_process';
+      const child=fork(process.env.PC_SILENT_CHILD_FILE,[],{execArgv:[],stdio:['ignore','pipe','pipe','ipc']});
+      const message=await new Promise((resolve,reject)=>{child.once('message',resolve);child.once('error',reject);});
+      assert.equal(message.silent,true);
+      const code=await new Promise(resolve=>child.once('exit',resolve));
+      assert.equal(code,0);process.stdout.write('passed');
+    `,{...process.env,PC_SILENT_CHILD_FILE:file});
     assert.equal(output,'passed');
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });

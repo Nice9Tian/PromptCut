@@ -15,7 +15,7 @@ if (process.platform === 'win32') {
     while (args.at(-1) === undefined) args.pop();
     return target.apply(receiver, args);
   };
-  for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync']) {
+  for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'fork']) {
     const original = childProcess[name];
     const wrap = target => function (file, args, options, callback) {
       if (Array.isArray(args)) {
