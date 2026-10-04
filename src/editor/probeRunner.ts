@@ -511,6 +511,9 @@ async function probeCardOnce(
 /* ------------------------------------------------------------------ 主循环 */
 
 let currentProject: Project | null = null;
+let queuedIdentity: string | null = null;
+let queuedBackend: CostBackend | null = null;
+let queuedDeviceInputs = "";
 /** 项目变了就 +1：正在跑的那一轮据此收摊、按新项目重排 */
 let generation = 0;
 let settledGeneration = 0;
@@ -532,6 +535,25 @@ export function probeSettledFor(project: Project): boolean {
  */
 export function syncProbeRun(project: Project | null): void {
   if (project === currentProject) return;
+  queueProbeRun(project, identitySignature(project));
+}
+
+function identitySignature(project: Project | null): string | null {
+  if (!project) return null;
+  const { identityKeys, capabilities } = clipIdentityOf(project);
+  return JSON.stringify(Object.keys(identityKeys).sort().map((clipId) => {
+    const caps = capabilities.get(clipId) ?? {};
+    return [clipId, identityKeys[clipId], typeof caps.frameMode === "string" ? caps.frameMode : "stateful",
+      caps.canvasHeavy === true, caps.compositing === "independent"];
+  }));
+}
+
+function deviceInputs(project: Project | null): string {
+  const caps = stageCapabilities("back");
+  return JSON.stringify([!!caps?.lowMemory, !!caps?.offscreenGl, resolveGlRoute(project?.glRoute ?? null, !!caps?.lowMemory)]);
+}
+
+function queueProbeRun(project: Project | null, identity: string | null): void {
   /*
    * **切 fps 要重走遮罩**（pinned 架构 7 的项目选项 + 渲染 5 的「每次打开项目都测」）。
    * `cardCostKey` 把 fps 吃进了身份键，换帧率之后全部卡的记录都失配、一张都不能复用，
@@ -541,6 +563,9 @@ export function syncProbeRun(project: Project | null): void {
    */
   if (project && currentProject && Number(project.fps) !== Number(currentProject.fps)) firstPassDone = false;
   currentProject = project;
+  queuedIdentity = identity;
+  queuedBackend = backend;
+  queuedDeviceInputs = deviceInputs(project);
   generation++;
   if (!looping) void runLoop();
 }
@@ -550,12 +575,15 @@ export function syncProbeRun(project: Project | null): void {
  * 但 `syncProbeRun` 按项目引用早退、`clipIdentityOf` 按项目引用记忆化,都看不出来;
  * 卡片模块的热更新虽然沿导入链重跑了本模块,实测并不会重排(C6.6 探针)。
  * 这里清掉身份缓存、按当前项目重排一轮,身份键变了、没有记录的卡照现有规则补测(分派表在这一轮开头跟着重算)。
- * 由 `ProbeGate.tsx` 在收到页面事件 `pc-cards-synced` 时调(`src/editor/sync/cardSync.ts` 发)。
+ * 同一批热更新可能发多次通知:身份和测量环境相同的通知保留正在跑的测量,不递增代数。
+ * 由 `ProbeGate.tsx` 在注册表 `onCardsUpdated` 通知、舞台装上新版代码之后调用。
  */
 export function requeueProbeRun(project: Project | null): void {
   resetClipIdentityCache();
-  currentProject = null;
-  syncProbeRun(project);
+  const identity = identitySignature(project);
+  if (project === currentProject && identity === queuedIdentity && backend === queuedBackend
+    && deviceInputs(project) === queuedDeviceInputs && progress.failed.length === 0) return;
+  queueProbeRun(project, identity);
 }
 
 async function runLoop(): Promise<void> {
@@ -619,6 +647,7 @@ async function runLoop(): Promise<void> {
   } catch (err) {
     // 探针挂了不能把编辑器挡在遮罩后面：记一条诊断，放行
     console.error("[probeRunner] 探针这一轮出错", err);
+    queuedIdentity = null; // 暂时的 RPC/存储错误仍允许下一次通知重试。
     settledGeneration = generation;
     setProgress({ running: false, card: null });
     firstPassDone = true;
@@ -658,6 +687,9 @@ async function probeCard(job: ProbeJob, tuning: PipelineTuning, device: string, 
 /** 测试用：把驱动恢复成刚加载的样子 */
 export function resetProbeRunner(): void {
   currentProject = null;
+  queuedIdentity = null;
+  queuedBackend = null;
+  queuedDeviceInputs = "";
   generation = 0;
   settledGeneration = 0;
   firstPassDone = false;
