@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-04T16:03:29.858Z",
+  "generatedAt": "2026-10-04T17:01:44.824Z",
   "source": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
   "allRequiredAcceptancePassed": false,
   "phases": [
@@ -342,16 +342,16 @@
   ],
   "build": {
     "command": "npm run build",
-    "sourceCommit": "463b085bb597e873f028a35fb3992591bef585ff",
+    "sourceCommit": "b09885db74fa13091b9e3bf59969a0adeb2b1663",
     "code": 0,
-    "elapsedMs": 6800,
+    "elapsedMs": 7821,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
-      "file": "task-worktree:work/native-final-web-build.log",
-      "sha256": "588066fb7eef4c602a29c1f635be303346b0f9a6eea94b3a5bb2dfc709de0d34"
+      "file": "task-worktree:work/native-web-build-b09885db74fa13091b9e3bf59969a0adeb2b1663.log",
+      "sha256": "f030ac3fdf8857cecd8d3367413613933261941156419c3c718b0badc1ef3e34"
     }
   },
   "baselineFailure": {

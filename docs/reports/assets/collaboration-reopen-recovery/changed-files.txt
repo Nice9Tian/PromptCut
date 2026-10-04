@@ -52,6 +52,7 @@ docs/reports/assets/collaboration-reopen-recovery/matrix-unsupported.png
 docs/reports/assets/collaboration-reopen-recovery/native-final-baselines.json
 docs/reports/assets/collaboration-reopen-recovery/native-host-repeat-restored.png
 docs/reports/assets/collaboration-reopen-recovery/native-host-repeat.json
+docs/reports/assets/collaboration-reopen-recovery/native-laptop-preflight.json
 docs/reports/assets/collaboration-reopen-recovery/native-member-restored.png
 docs/reports/assets/collaboration-reopen-recovery/native-member.json
 docs/reports/assets/collaboration-reopen-recovery/native-os-handoff.json

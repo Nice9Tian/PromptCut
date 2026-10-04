@@ -1,0 +1,275 @@
+{
+  "capturedAt": "2026-10-05T01:41:12.4909826+09:00",
+  "readOnlyPreflight": true,
+  "targetProductCommit": "b09885db74fa13091b9e3bf59969a0adeb2b1663",
+  "targetNativeCommit": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
+  "repositories": {
+    "main": {
+      "head": "6c8b8cbbad7f5da69998777a75ccd03d5d2d901b",
+      "branch": "main",
+      "clean": true,
+      "statusExitCode": 0
+    },
+    "acceptance": {
+      "head": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "branch": "codex/reopen-laptop-stream-acceptance",
+      "clean": true,
+      "statusExitCode": 0
+    }
+  },
+  "targetObjects": [
+    {
+      "commit": "b09885db74fa13091b9e3bf59969a0adeb2b1663",
+      "present": false,
+      "exitCode": 128
+    },
+    {
+      "commit": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
+      "present": false,
+      "exitCode": 128
+    }
+  ],
+  "windows": {
+    "edition": "Enterprise",
+    "build": "26200",
+    "ubr": 9457
+  },
+  "virtualization": {
+    "sandboxExeExists": false,
+    "sandboxCommandFound": false,
+    "vmTools": [
+      {
+        "name": "VBoxManage.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "vmrun.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "vmware.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "qemu-system-x86_64.exe",
+        "found": false,
+        "invoked": false
+      }
+    ],
+    "knownVmToolPathsPresent": 0,
+    "vmmsServiceExists": false,
+    "vmmsServiceRunning": false,
+    "hyperVInventory": {
+      "attempted": false,
+      "vmCount": null,
+      "windowsGuestConfirmed": false,
+      "error": null
+    },
+    "virtualBoxDefaultHomePresent": false,
+    "vmwareDefaultHomePresent": false,
+    "runningVmProcessCount": 0,
+    "confirmedIndependentWindowsEnvironment": false,
+    "coverage": "Known installed executables, running VM service/process metadata and default VM home existence only; no guests/configs/user data opened, no service/VM launched."
+  },
+  "association": {
+    "readOnlyApi": "AssocQueryStringW(flags=0,ASSOCSTR_EXECUTABLE=2,.proc,open)",
+    "apiHresult": 0,
+    "effectiveExeBasename": "promptcut.exe",
+    "effectiveExeExists": true,
+    "userChoiceExists": false,
+    "userChoiceHasProgId": false,
+    "mergedExtensionRegistrationExists": true,
+    "userChoiceMatchesMergedExtension": null,
+    "effectiveExeHasExpectedTestShellBasename": false,
+    "commandOrSIDOrHashPrinted": false,
+    "actualExplorerDoubleClickTested": false,
+    "explorerCachedResolutionUnverified": true
+  },
+  "native": {
+    "tools": [
+      {
+        "name": "node.exe",
+        "found": true,
+        "invoked": false
+      },
+      {
+        "name": "cargo.exe",
+        "found": true,
+        "invoked": false
+      },
+      {
+        "name": "rustc.exe",
+        "found": true,
+        "invoked": false
+      },
+      {
+        "name": "cl.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "csc.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "dotnet.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "MSBuild.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "vswhere.exe",
+        "found": false,
+        "invoked": false
+      }
+    ],
+    "frameworkCscExists": true,
+    "readOnlyPInvokeCompilationSucceeded": true,
+    "knownFixtureDirectoryCount": 0,
+    "fixtureMetadata": [],
+    "localNativeProbeSourceExists": true,
+    "localNativeFixtureSourceExists": true,
+    "taskWorkNativeHelperCount": 0,
+    "developmentExeExists": false,
+    "verifiedIndependentTestShellAvailable": false,
+    "newTargetSourceAvailable": false,
+    "fixtureBuildOrProductLaunchPerformed": false,
+    "knownFixtureCoverage": "Only dedicated pc-reopen-native-* temporary directories and task work helper metadata; no .proc contents or credentials read."
+  },
+  "taskCommands": [
+    {
+      "name": "git HEAD",
+      "command": "git.exe rev-parse HEAD",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git branch",
+      "command": "git.exe branch --show-current",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git status",
+      "command": "git.exe status --porcelain",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git HEAD",
+      "command": "git.exe rev-parse HEAD",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git branch",
+      "command": "git.exe branch --show-current",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git status",
+      "command": "git.exe status --porcelain",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git target commit existence",
+      "command": "git.exe cat-file -e b09885db74fa13091b9e3bf59969a0adeb2b1663^{commit}",
+      "exitCode": 128,
+      "stderrPresent": true
+    },
+    {
+      "name": "git target commit existence",
+      "command": "git.exe cat-file -e 1ec99174139a3375270bb4edd046506c1ccb7b8c^{commit}",
+      "exitCode": 128,
+      "stderrPresent": true
+    }
+  ],
+  "unmeasured": [
+    "Actual Explorer default-association double click",
+    "Target b09885db/1ec99174 local source/probe validation",
+    "New target isolated test shell build and launch",
+    "VM guest usability and Windows guest identity",
+    "Default association registration or changes",
+    "Explorer cache behavior and actual executable launch",
+    "Room/identity recovery in native double click"
+  ],
+  "coordination": {
+    "targetThread": "01a102a0-9ace-7880-8e9c-13491eac48e5",
+    "sendMessageToolAvailable": false,
+    "messageSent": false,
+    "reason": "No read_thread/send_message_to_thread or tool-search capability exposed in current callable tool inventory; no bypass attempted."
+  },
+  "boundaries": {
+    "uiLaunched": false,
+    "productLaunched": false,
+    "serviceLaunched": false,
+    "componentInstalledOrEnabled": false,
+    "associationChanged": false,
+    "userShellEnded": false,
+    "computerUseInvoked": false,
+    "networkChanged": false,
+    "realProjectsOrCredentialsRead": false
+  },
+  "exitCode": 0,
+  "receivedVia": "Codex read_thread of completed laptop task",
+  "localRawArtifactVerified": false,
+  "remoteEvidence": {
+    "directory": "laptop-task-worktree:work/native-gate-preflight-1005/",
+    "files": [
+      {
+        "file": "assessment.md",
+        "bytes": 3612,
+        "sha256": "91942558c7a8d992f557859b7082308e50db6c90ba5008ccc4895b43543e5805"
+      },
+      {
+        "file": "execution-receipt.json",
+        "bytes": 1166,
+        "sha256": "bd2146a12066b8891837daf64de399953d2f62b65e1fa0a16005cc62707a4df9"
+      },
+      {
+        "file": "preflight.ps1",
+        "bytes": 10236,
+        "sha256": "66732912d9ad10ff3e9b20dcbc6462e1aa882a71f72ed7a90ec365b516b19a2e"
+      },
+      {
+        "file": "report.json",
+        "bytes": 6488,
+        "sha256": "e4a22d71c82b5ad0424b305891a35225dbf521b51e2b95b5e2bd2809c720b36c"
+      },
+      {
+        "file": "toolchain-supplement.json",
+        "bytes": 287,
+        "sha256": "61b18979c2a193665c2654631744934285abb1e07f85717a5f2862074b4b0cd5"
+      }
+    ],
+    "hashScope": "Hashes reported by remote task; local copies were not independently hashed."
+  },
+  "toolchainSupplement": {
+    "vcToolsInstallationVersion": "17.13.35919.96",
+    "vswhereStandardLocationExists": true,
+    "windowsSdkHeaderVersionCount": 1,
+    "compilerBuildTested": false,
+    "knownIndependentShellAvailable": false
+  },
+  "preliminaryFailures": [
+    {
+      "exitCode": 1,
+      "gitObjectExit": 129,
+      "cause": "PowerShell quoting caused a malformed initial git cat-file command; correctly quoted preflight separately returned 128 for missing target commits."
+    },
+    {
+      "exitCode": 1,
+      "cause": "Windows literal rg wildcard path error 123; subsequent explicit-file/glob searches succeeded."
+    }
+  ]
+}

@@ -2835,16 +2835,16 @@
   },
   "build": {
     "command": "npm run build",
-    "sourceCommit": "463b085bb597e873f028a35fb3992591bef585ff",
+    "sourceCommit": "b09885db74fa13091b9e3bf59969a0adeb2b1663",
     "code": 0,
-    "elapsedMs": 6800,
+    "elapsedMs": 7821,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
-      "file": "task-worktree:work/native-final-web-build.log",
-      "sha256": "588066fb7eef4c602a29c1f635be303346b0f9a6eea94b3a5bb2dfc709de0d34"
+      "file": "task-worktree:work/native-web-build-b09885db74fa13091b9e3bf59969a0adeb2b1663.log",
+      "sha256": "f030ac3fdf8857cecd8d3367413613933261941156419c3c718b0badc1ef3e34"
     }
   },
   "previousBuilds": [
@@ -2929,21 +2929,9 @@
       "installed": false,
       "rawLog": {
         "file": "task-worktree:work/native-final-web-build.log",
-        "sha256": "588066fb7eef4c602a29c1f635be303346b0f9a6eea94b3a5bb2dfc709de0d34"
-      }
-    },
-    {
-      "command": "npm run build",
-      "sourceCommit": "463b085bb597e873f028a35fb3992591bef585ff",
-      "code": 0,
-      "elapsedMs": 6800,
-      "built": true,
-      "modules": 1830,
-      "isolatedData": true,
-      "installed": false,
-      "rawLog": {
-        "file": "task-worktree:work/native-final-web-build.log",
-        "sha256": "588066fb7eef4c602a29c1f635be303346b0f9a6eea94b3a5bb2dfc709de0d34"
+        "sha256": "588066fb7eef4c602a29c1f635be303346b0f9a6eea94b3a5bb2dfc709de0d34",
+        "available": false,
+        "unavailableReason": "Private mutable log was overwritten by the b09885db build. Original recorded digest/result retained; raw log cannot be reverified."
       }
     }
   ],
@@ -3026,7 +3014,7 @@
     }
   ],
   "remaining": [
-    "Real default .proc double-click for host and member, including existing-window forwarding. Seven handoffs failed; exclusive attempts still routed to the installed app despite controlled API queries, flush/refresh and a unique leased ProgID. No matched launch receipt.",
+    "Real default .proc double-click for host and member, including existing-window forwarding. Fourteen handoff runs lack a matching receipt. Later failures include one late click, three time guards, one geometry error and two valid-window wrong-handler launches. Fresh APIs matched the fixture, including new-directory and fresh-Explorer probes, but real clicks still routed to the installed app. All leases restored.",
     "All-required gate must pass before authorized main merge, release build and installer overwrite.",
     "Production hosting deployment remains separately reviewed and was not performed."
   ],
