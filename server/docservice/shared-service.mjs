@@ -43,6 +43,7 @@ import { createSharedHttp } from '../auth/http.mjs';
 import { createChallenges } from '../auth/challenges.mjs';
 import { createRateLimiter } from '../auth/rate-limit.mjs';
 import { isProjectId } from '../auth/protocol.mjs';
+import { roomUnavailableReason } from '../recovery/relocation.mjs';
 
 /**
  * @param {object} options
@@ -126,6 +127,14 @@ export function createSharedDocService({
 
   const service = createDocService({
     ...serviceOptions,
+    gate(principal, type) {
+      const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
+      return reason ?? serviceOptions.gate?.(principal, type) ?? null;
+    },
+    resumeGate(principal) {
+      const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
+      return reason ?? serviceOptions.resumeGate?.(principal) ?? null;
+    },
     ...(mode === 'lan' ? { server, path: wsPath } : { http: (req, res) => sharedHttp.handle(req, res, '') || serviceOptions?.http?.(req, res) === true }),
     authenticate: auth.authenticate,
     remoteOf,

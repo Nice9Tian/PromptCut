@@ -21,7 +21,17 @@ export class RecoveryCoordinator {
         if (saved.revoked) return state('deleted');
         if (!saved.selected) return state(saved.identities?.length > 1 ? 'choose-identity' : 'needs-auth');
         const record = saved.selected;
-        const candidate = saved.host && descriptor.where === 'lan' && record.candidate?.where !== 'hosted' ? await this.hooks.host(descriptor, abort.signal) : await this.hooks.discover(descriptor, record, abort.signal);
+        let candidate;
+        if (saved.host && descriptor.where === 'lan' && record.candidate?.where !== 'hosted') {
+          try { candidate = await this.hooks.host(descriptor, abort.signal); }
+          catch (e) {
+            // A durable completed handoff revokes the old local host binding.
+            // Discover through the same trusted service; never restore the old snapshot.
+            if (!current()) return;
+            if (e.reason !== 'relocated') throw e;
+            candidate = await this.hooks.discover(descriptor, record, abort.signal);
+          }
+        } else candidate = await this.hooks.discover(descriptor, record, abort.signal);
         if (!current()) return;
         const result = await this.hooks.enter(candidate, record, current);
         if (!current()) return;
@@ -29,7 +39,7 @@ export class RecoveryCoordinator {
         const error = new Error(result.error); error.reason = result.error; error.retryAfter = result.retryAfter; throw error;
       } catch (e) {
         if (!current()) return;
-        const terminal = { auth: 'needs-auth', unauthorized: 'needs-auth', kicked: 'rejected', banned: 'rejected', removed: 'rejected', deleted: 'deleted', 'no-project': 'deleted', 'host-conflict': 'host-conflict', 'host-data-missing': 'damaged', 'recovery-storage': 'damaged' }[e.reason];
+        const terminal = { auth: 'needs-auth', unauthorized: 'needs-auth', kicked: 'rejected', banned: 'rejected', removed: 'rejected', deleted: 'deleted', 'no-project': 'deleted', 'host-conflict': 'host-conflict', 'host-data-missing': 'damaged', 'recovery-storage': 'damaged', 'relocation-damaged': 'damaged' }[e.reason];
         if (terminal) return state(terminal);
         state(e.reason === 'recovery-storage-busy' ? 'waiting-storage' : 'waiting-host');
         const wait = Math.max(delay, Number(e.retryAfter || 0) * 1000);

@@ -25,6 +25,7 @@ import {
   normalizeOwner, splitUserId,
 } from './protocol.mjs';
 import { verifyTicket } from './tickets.mjs';
+import { roomUnavailableReason } from '../recovery/relocation.mjs';
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{32,256}$/;
 
@@ -180,6 +181,8 @@ export function createHandshakeAuth({
       if (!isProjectId(projectId)) return reject('bad-format');
       const rec = storeOf()?.peek(projectId);
       if (!rec) return reject('no-project');
+      const unavailable = roomUnavailableReason(rec);
+      if (unavailable) return reject(unavailable);
       if (!localDevice || !isDeviceId(localDevice.deviceId)) return reject('no-credential');
       return memberPrincipal({
         projectId, username: 'local', deviceId: localDevice.deviceId, deviceName: localDevice.deviceName,
@@ -241,6 +244,8 @@ export function createHandshakeAuth({
     const st = storeOf();
     const rec = st?.peek(projectId);
     if (!rec) return reject('no-project');
+    const unavailable = roomUnavailableReason(rec);
+    if (unavailable) return reject(unavailable);
     const cred = credentialFor(rec, username, as);
     if (!cred) return fail('not-listed');
     const given = b64urlDecode(m);

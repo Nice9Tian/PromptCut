@@ -1,6 +1,7 @@
 /** Outbound host tunnel. Targets are fixed local services, never addresses supplied by a project file. */
 import net from 'node:net';
 import { HOSTING, hostingKey } from './protocol.mjs';
+import { roomUnavailableReason } from '../recovery/relocation.mjs';
 
 export function mirrorOf(rec, direct = null) {
   const credential = c => ({ ...(c.username ? { username: c.username } : {}), salt: c.salt, key: hostingKey(c.key, rec.projectId) });
@@ -74,8 +75,12 @@ export function startHostingHost({ service, roomId, hostKey, deviceId, instance,
     clearTimeout(timer);
     try {
       const rec = record(); if (!rec) { await stop({ deleted: true }); return; }
+      const unavailable = roomUnavailableReason(rec);
+      if (unavailable) { await stop(); state(unavailable); return; }
       await post('register', { deviceId, instance, mirror: mirrorOf(rec, direct) });
       if (stopped) return;
+      const changed = roomUnavailableReason(record());
+      if (changed) { await stop(); state(changed); return; }
       tunnel(); delay = 500; state(ws?.readyState === 1 ? 'online' : 'pending'); timer = setTimeout(update, renewMs);
     } catch (e) {
       if (stopped) return;

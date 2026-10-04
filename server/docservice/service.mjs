@@ -90,6 +90,8 @@ function jsonLog(event, fields) {
  *   独立模式：`/healthz` 之外的 HTTP 请求先交给它（共享项目端点），回 true 表示它处理了；挂载模式不用它
  * @param {number} [options.retainMs] 会话的传输断开后保留多久，缺省 60 s（`http-transport-contract.md` 第 4.2 节）
  * @param {number} [options.tombstoneMs] 结束的会话留墓碑多久（这段时间里拿它接续以 4410 关闭），缺省 2 分钟
+ * @param {(principal: object, type: string) => string | null} [options.gate] 组装层的逐消息权限检查
+ * @param {(principal: object) => string | null} [options.resumeGate] 接续前重新核对持久权限状态
  */
 export function createDocService(options = {}) {
   const {
@@ -135,6 +137,10 @@ export function createDocService(options = {}) {
     maxPendingBytes,
     // 管理身份只能发管理接口的消息（契约 auth-contract 第 5 节）；别的身份不在这里判
     gate(principal, type) {
+      if (typeof options.gate === 'function') {
+        const reason = options.gate(principal, type);
+        if (typeof reason === 'string') return reason;
+      }
       if (principal?.scope !== 'admin') return null;
       const allowed = adminTypes.some((t) => (t.endsWith('.') ? type.startsWith(t) : type === t));
       return allowed ? null : 'forbidden';
@@ -196,7 +202,7 @@ export function createDocService(options = {}) {
     if (mod.name === RENDER_QUEUE_MODULE) queueSlot.unmount = unmount;
   }
 
-  sessions = createSessionLayer({ router, nextConnId: () => `conn-${++seq}`, now, log, retainMs, tombstoneMs });
+  sessions = createSessionLayer({ router, nextConnId: () => `conn-${++seq}`, now, log, retainMs, tombstoneMs, resumeGate: options.resumeGate });
 
   const attached = hostServer !== undefined && hostServer !== null;
   if (attached && (typeof hostServer.on !== 'function' || typeof hostServer.off !== 'function')) {

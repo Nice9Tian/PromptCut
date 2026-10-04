@@ -38,6 +38,7 @@ import {
   AUTH_PREFIX, KEY_BYTES, SALT_BYTES, isProjectId, isProjectName, isUsername, isDeviceId, isB64Bytes, isKdf,
 } from './protocol.mjs';
 import { credentialFor } from './handshake.mjs';
+import { roomUnavailableReason } from '../recovery/relocation.mjs';
 import { isInviteCode, inviteDigest, inviteActive, redeemOn } from './invite.mjs';
 
 export const SHARED_HTTP_DEFAULTS = Object.freeze({
@@ -269,6 +270,8 @@ export function createSharedHttp({
       return fail(res, 400, 'bad-request');
     }
     const rec = st.peek(projectId);
+    const unavailable = roomUnavailableReason(rec);
+    if (unavailable) return fail(res, unavailable === 'relocated' ? 409 : 503, unavailable);
     if (!rec) return fail(res, 404, 'no-project');
     const cred = credentialFor(rec, username, as);
     const salt = cred ? cred.salt : fakeSalt(st.serverSecret, projectId, username);
@@ -353,6 +356,8 @@ export function createSharedHttp({
     if (!isInviteCode(body.code)) return invalid();
     const rec = st.peekByInviteDigest(inviteDigest(st.serverSecret, body.code));
     if (!rec || !rec.invite) return invalid();
+    const unavailable = roomUnavailableReason(rec);
+    if (unavailable) return fail(res, unavailable === 'relocated' ? 409 : 503, unavailable);
     const base = { ok: true, projectId: rec.projectId, name: rec.name, mode: rec.mode };
     if (which === 'resolve') {
       if (!inviteActive(rec.invite, at)) return invalid();

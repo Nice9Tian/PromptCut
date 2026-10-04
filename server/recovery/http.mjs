@@ -6,6 +6,7 @@ import { fileNameOf } from '../docservice/store/index.mjs';
 import { fromLocalClient, guard } from '../http-guard.mjs';
 import { randomBytes } from 'node:crypto';
 import { startHostingHost } from '../hosting/host.mjs';
+import { roomUnavailableReason } from './relocation.mjs';
 
 /** Local-only identity API. Its root and protection backend are owned by the app. */
 export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf, onClose }) {
@@ -80,6 +81,8 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
       if (p.endsWith('/host-update')) { await hosts.get(hostId(descriptor))?.worker.update(); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/activate-host')) {
         if (!store?.peek(descriptor.roomId) || descriptor.where !== 'lan') return reply(res, 404, { ok: false, error: 'no-project' });
+        const unavailable = roomUnavailableReason(store.peek(descriptor.roomId));
+        if (unavailable) return reply(res, 409, { ok: false, error: unavailable });
         v.bindHost(descriptor, device.deviceId); activate(descriptor, task); return reply(res, 200, { ok: true });
       }
       if (p.endsWith('/restore-host')) {
@@ -87,6 +90,8 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
         if (!h || h.deviceId !== device.deviceId) return reply(res, 403, { ok: false, error: 'not-original-host' });
         const rec = store?.peek(descriptor.roomId);
         if (!rec) return reply(res, 409, { ok: false, error: 'host-data-missing' });
+        const unavailable = roomUnavailableReason(rec);
+        if (unavailable) return reply(res, 409, { ok: false, error: unavailable });
         const projects = path.join(dataDir, 'tenants', descriptor.roomId, 'projects');
         if (!fs.existsSync(path.join(projects, `${fileNameOf(descriptor.roomId)}.ops.ndjson`))) return reply(res, 409, { ok: false, error: 'host-data-missing' });
         return reply(res, 200, { ok: true, candidate: { where: 'lan', projectId: rec.projectId, name: rec.name, mode: rec.mode, base: baseOf(), service: descriptor.service, hostDeviceName: device.deviceName, originalHost: true } });
