@@ -54,7 +54,7 @@ async function powershell(args, log, env) {
   return { code, elapsedMs: Date.now() - started, logSha256: sha(log) };
 }
 
-export async function upgradeNativeFixture(fixture, runRoot) {
+export async function upgradeNativeFixture(fixture, runRoot, { nsisWrapper = false } = {}) {
   assert.equal(process.platform, 'win32');
   assert.equal(git(['status', '--porcelain', '--untracked-files=no']), '', 'committed source required');
   assert.equal(path.dirname(fs.realpathSync(fixture.root)), fs.realpathSync(os.tmpdir()));
@@ -104,9 +104,44 @@ export async function upgradeNativeFixture(fixture, runRoot) {
   const installer = path.join(patchRoot, 'apply-patch.ps1');
   copy(path.resolve('desktop/scripts/apply-patch.ps1'), installer, fixture.root);
   const installerSha256 = sha(installer);
-  const applied = await powershell(['-File', installer, '-InstallDir', installDir], path.join(patchRoot, 'apply.log'), {
-    PROMPTCUT_PATCH_NONINTERACTIVE: '1', PROMPTCUT_PORT: String(fixture.port),
-  });
+  let applied, wrapper;
+  if (nsisWrapper) {
+    const compiler = path.join(process.env.LOCALAPPDATA, 'tauri/NSIS/Bin/makensis.exe');
+    assert(fs.existsSync(compiler), 'existing NSIS compiler required; this probe never installs it');
+    const wrapperSource = path.resolve('desktop/scripts/patch-installer.nsi');
+    const executable = path.join(runRoot, 'owned-patch.exe');
+    const buildLog = path.join(runRoot, 'nsis-build.log');
+    const buildStream = fs.createWriteStream(buildLog);
+    const child = spawn(compiler, [`-DVERSION=${appVersion}`, `-DSRCDIR=${patchRoot}`,
+      `-DOUTFILE=${executable}`, `-DICON=${path.resolve('desktop/src-tauri/icons/icon.ico')}`, wrapperSource], {
+      windowsHide: true, env: nativeTestEnv(), stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stdout.pipe(buildStream, { end: false }); child.stderr.pipe(buildStream, { end: false });
+    const buildStarted = Date.now();
+    const buildCode = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+    await new Promise(resolve => buildStream.end(resolve));
+    assert.equal(buildCode, 0, 'committed NSIS wrapper must compile');
+    const started = Date.now();
+    const systemShell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0');
+    const childEnv = nativeTestEnv({ PROMPTCUT_PATCH_NONINTERACTIVE: '1', PROMPTCUT_PORT: String(fixture.port) });
+    for (const key of Object.keys(childEnv)) if (key.toUpperCase() === 'PSMODULEPATH') delete childEnv[key];
+    childEnv.PSModulePath = path.join(systemShell, 'Modules');
+    const updater = spawn(executable, ['-InstallDir', installDir], {
+      windowsHide: true, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const applyLog = path.join(patchRoot, 'apply.log'), applyStream = fs.createWriteStream(applyLog);
+    updater.stdout.pipe(applyStream, { end: false }); updater.stderr.pipe(applyStream, { end: false });
+    const code = await new Promise((resolve, reject) => { updater.once('error', reject); updater.once('close', resolve); });
+    await new Promise(resolve => applyStream.end(resolve));
+    applied = { code, elapsedMs: Date.now() - started, logSha256: sha(applyLog) };
+    wrapper = { sourceSha256: sha(wrapperSource), executableSha256: sha(executable),
+      buildCode, buildElapsedMs: started - buildStarted, buildLogSha256: sha(buildLog),
+      noninteractiveConsoleHidden: true, command: '<owned-patch.exe> -InstallDir <owned copy-B>' };
+  } else {
+    applied = await powershell(['-File', installer, '-InstallDir', installDir], path.join(patchRoot, 'apply.log'), {
+      PROMPTCUT_PATCH_NONINTERACTIVE: '1', PROMPTCUT_PORT: String(fixture.port),
+    });
+  }
   assert.equal(applied.code, 0, 'real committed patch installer must succeed');
   assert.equal(sha(oldProbe), newProbeSha256, 'new runtime code must be installed');
   assert.equal(sha(entry.exe), fixture.exeSha256, 'native shell remains unchanged');
@@ -114,11 +149,11 @@ export async function upgradeNativeFixture(fixture, runRoot) {
   assert.deepEqual(protectedDirs.map(dir => inventory(dir)), before, 'device credentials and room service state must remain byte-identical during the update');
   const metadata = JSON.parse(fs.readFileSync(versions, 'utf8').replace(/^\uFEFF/, ''));
   assert.equal(metadata.app, appVersion); assert.equal(metadata.patchLockHash, lockHash);
-  const result = { ok: true, kind: 'committed-powershell-patch-installer', sourceCommit, oldRuntimeSource: fixture.sourceCommit,
+  const result = { ok: true, kind: nsisWrapper ? 'committed-nsis-patch-wrapper' : 'committed-powershell-patch-installer', sourceCommit, oldRuntimeSource: fixture.sourceCommit,
     appVersionBefore: appVersion, appVersionAfter: appVersion, sameVersionCodeUpdate: true, installerSha256,
     command: 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <owned patch>/apply-patch.ps1 -InstallDir <owned copy-B>',
     preflight: checked, applied, payloadFiles: Object.keys(files).length, oldProbeSha256, newProbeSha256,
-    protectedStateUnchanged: true, shellUnchanged: true, noProcessShutdown: true, nsisInstallerTested: false,
+    protectedStateUnchanged: true, shellUnchanged: true, noProcessShutdown: true, nsisInstallerTested: nsisWrapper, wrapper,
     userInstallationModified: false, fileAssociationModified: false };
   fs.writeFileSync(path.join(patchRoot, 'upgrade-evidence.json'), JSON.stringify(result, null, 2));
   return result;

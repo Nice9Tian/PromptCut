@@ -3,6 +3,7 @@
  * Then run: node scripts/probes/reopen-native.mjs <fixture.json>
  * Add --member to exercise native member file arguments and IPC, with an isolated peer host.
  * Add --patch-upgrade to run the committed patch installer on stopped copy-B before reopening.
+ * Add --nsis-patch-upgrade instead to build and run its committed NSIS wrapper silently.
  * The code update preserves the current version number and does not test an NSIS setup bundle.
  * --standalone-smoke verifies the private Explorer environment bootstrap via arguments only.
  * --os-double-click --allow-temporary-open-command requires explicit operator permission;
@@ -224,9 +225,9 @@ try {
   await peer.close(); await stop(peerBefore);
   await waitFor(async () => !(await cloud.online()), 10000);
   const cloudBefore = cloud; await stop(cloud.child);
-  if (process.argv.includes('--patch-upgrade')) {
+  if (process.argv.includes('--patch-upgrade') || process.argv.includes('--nsis-patch-upgrade')) {
     phase = 'apply committed installer to the stopped isolated runtime';
-    runtimeUpgrade = await upgradeNativeFixture(fixture, root);
+    runtimeUpgrade = await upgradeNativeFixture(fixture, root, { nsisWrapper: process.argv.includes('--nsis-patch-upgrade') });
   }
   cloud = await hosted(cloudBefore.docPort, cloudBefore.assetPort); assert.notEqual(cloud.pid, cloudBefore.pid);
   phase = 'other runtime copy with native original file argument and empty WebView profile';
