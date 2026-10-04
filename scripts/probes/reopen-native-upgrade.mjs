@@ -39,8 +39,14 @@ function inventory(dir, base = dir, files = {}) {
 }
 async function powershell(args, log, env) {
   const started = Date.now(), output = fs.createWriteStream(log);
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', ...args], {
-    windowsHide: true, env: nativeTestEnv(env), stdio: ['ignore', 'pipe', 'pipe'],
+  // A Node child inherits PowerShell 7's module path without its legacy-shell
+  // normalization. Use the Windows 5.1 modules in this child only.
+  const systemShell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0');
+  const childEnv = nativeTestEnv(env);
+  for (const key of Object.keys(childEnv)) if (key.toUpperCase() === 'PSMODULEPATH') delete childEnv[key];
+  childEnv.PSModulePath = path.join(systemShell, 'Modules');
+  const child = spawn(path.join(systemShell, 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', ...args], {
+    windowsHide: true, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.pipe(output, { end: false }); child.stderr.pipe(output, { end: false });
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
@@ -74,13 +80,16 @@ export async function upgradeNativeFixture(fixture, runRoot) {
   const newProbeSha256 = sha(path.join(payload, 'src/editor/probeRunner.ts'));
   assert.notEqual(oldProbeSha256, newProbeSha256, 'the fixture must actually contain older code');
   const shell = path.join(installDir, 'promptcut.exe');
-  assert(!fs.existsSync(shell), 'do not overwrite an existing fixture shell alias');
-  copy(entry.exe, shell, fixture.root);
+  if (!fs.existsSync(shell)) copy(entry.exe, shell, fixture.root);
   assert.equal(sha(shell), fixture.exeSha256);
   const versions = path.join(entry.runtime, 'VERSIONS.json');
-  assert(!fs.existsSync(versions), 'fresh owned runtime metadata required');
   const appVersion = JSON.parse(fs.readFileSync(path.join(payload, 'package.json'), 'utf8')).version;
-  fs.writeFileSync(versions, JSON.stringify({ app: appVersion, fixtureSource: fixture.sourceCommit, chrome: 'fixture', ffmpeg: 'fixture', python: 'fixture' }));
+  if (fs.existsSync(versions)) {
+    const previous = JSON.parse(fs.readFileSync(versions, 'utf8').replace(/^\uFEFF/, ''));
+    assert.equal(previous.fixtureSource, fixture.sourceCommit);
+    assert.equal(previous.app, appVersion);
+    assert(!previous.patchedAt, 'only an untouched preparation from a failed attempt may be reused');
+  } else fs.writeFileSync(versions, JSON.stringify({ app: appVersion, fixtureSource: fixture.sourceCommit, chrome: 'fixture', ffmpeg: 'fixture', python: 'fixture' }));
   const protectedDirs = ['data', 'member'].map(name => path.join(runRoot, name));
   const before = protectedDirs.map(dir => inventory(dir));
   assert(before[0]['device.json'] && Object.keys(before[0]).some(name => name.startsWith('collaboration/')), 'real persisted device and recovery state required');
