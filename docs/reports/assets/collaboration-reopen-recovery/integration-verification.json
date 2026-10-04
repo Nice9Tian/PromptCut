@@ -2349,6 +2349,342 @@
       ],
       "sourceAtPhaseStart": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
       "phaseAllPassed": true
+    },
+    {
+      "fixture": "rgIaPk",
+      "source": "422ee2e9a1ca3dff34c5eaebceed4d2637d24b45",
+      "startedAt": "2026-10-04T13:41:36.095Z",
+      "finishedAt": "2026-10-04T13:42:54.955Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "422ee2e9a1ca3dff34c5eaebceed4d2637d24b45",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 6874,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-rgIaPk/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "422ee2e9a1ca3dff34c5eaebceed4d2637d24b45",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 69566,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 69492.5451"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-rgIaPk/tests.log",
+            "sha256": "f0d004301eeaa53e78b0a9f89192cc9b007e92ac2d34f6c0e5590aa5a68324b4"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "H9uhIy",
+      "source": "18b7ebb7579182a7396b152d28abcfcfa0bb755c",
+      "startedAt": "2026-10-04T13:46:13.256Z",
+      "finishedAt": "2026-10-04T13:47:32.130Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "18b7ebb7579182a7396b152d28abcfcfa0bb755c",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5842,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-H9uhIy/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "18b7ebb7579182a7396b152d28abcfcfa0bb755c",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 71195,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 71111.8838"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-H9uhIy/tests.log",
+            "sha256": "ef2ac3e8c6c80cf9e61fed5765ddc7c4a57ef0f52a92a625135c69eec96251e9"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "iFQU7X",
+      "source": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+      "startedAt": "2026-10-04T13:52:02.288Z",
+      "finishedAt": "2026-10-04T13:53:19.866Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5709,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-iFQU7X/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 70334,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 70273.4713"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-iFQU7X/tests.log",
+            "sha256": "e89ac828d5ea2576aed95207ae400b482d6dda364fcb5987458bf737e8b35858"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "11gNrh",
+      "source": "2ade99915d30b54dffbf6519123c14b9bed6d9c7",
+      "startedAt": "2026-10-04T14:04:52.045Z",
+      "finishedAt": "2026-10-04T14:05:53.943Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "2ade99915d30b54dffbf6519123c14b9bed6d9c7",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5086,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-11gNrh/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "2ade99915d30b54dffbf6519123c14b9bed6d9c7",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 55170,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 55114.6635"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-11gNrh/tests.log",
+            "sha256": "6eac69ad922fb725b39970e6e3192b3a0a12255ea3a634f64c2d573da80e2fde"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "5XX9aG",
+      "source": "ccdf81136b77d9087ee807b4205f8867538c5bc7",
+      "startedAt": "2026-10-04T14:12:22.851Z",
+      "finishedAt": "2026-10-04T14:13:35.593Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "ccdf81136b77d9087ee807b4205f8867538c5bc7",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 4894,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-5XX9aG/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "ccdf81136b77d9087ee807b4205f8867538c5bc7",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 65974,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 65899.8139"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-5XX9aG/tests.log",
+            "sha256": "34a2d968d972a27128388dccf4d277a14a5eae7ef1730c546cfc7e427bb86291"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "XXUpQM",
+      "source": "7e8e46b0f7337f753d5e0fa919a8d233b0ed551d",
+      "startedAt": "2026-10-04T14:18:30.306Z",
+      "finishedAt": "2026-10-04T14:19:46.646Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "7e8e46b0f7337f753d5e0fa919a8d233b0ed551d",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5408,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-XXUpQM/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "7e8e46b0f7337f753d5e0fa919a8d233b0ed551d",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 68908,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 68845.8116"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-XXUpQM/tests.log",
+            "sha256": "42168b998e4d7b6918d996a7c75429f313935d290e98baf1626e06fa26579628"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "q1ehpz",
+      "source": "463b085bb597e873f028a35fb3992591bef585ff",
+      "startedAt": "2026-10-04T14:40:01.166Z",
+      "finishedAt": "2026-10-04T14:41:08.760Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "463b085bb597e873f028a35fb3992591bef585ff",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 4692,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-q1ehpz/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "463b085bb597e873f028a35fb3992591bef585ff",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 61706,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 61651.5695"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-q1ehpz/tests.log",
+            "sha256": "f38b3b2b7f06e88e301a2a7292e6ea116cfac93e1a75ecd568aa3169c4dc783e"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "bgLvtW",
+      "source": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
+      "startedAt": "2026-10-04T15:26:56.410Z",
+      "finishedAt": "2026-10-04T15:27:59.757Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5418,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-bgLvtW/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 56011,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 55947.5101"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-bgLvtW/tests.log",
+            "sha256": "d4fe044a937ade2f94c2a0551b0809aabb57740f18c90963542f1a0425768256"
+          }
+        }
+      ]
     }
   ],
   "fullLengthRender": {
@@ -2499,16 +2835,16 @@
   },
   "build": {
     "command": "npm run build",
-    "sourceCommit": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+    "sourceCommit": "463b085bb597e873f028a35fb3992591bef585ff",
     "code": 0,
-    "elapsedMs": 6290,
+    "elapsedMs": 6800,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
-      "file": "task-worktree:work/aba-web-build.log",
-      "sha256": "fe30e5cd419adad2e2e71694ec97379b491a57658b8b9c56f11edeb9a2a56779"
+      "file": "task-worktree:work/native-final-web-build.log",
+      "sha256": "588066fb7eef4c602a29c1f635be303346b0f9a6eea94b3a5bb2dfc709de0d34"
     }
   },
   "previousBuilds": [
@@ -2566,6 +2902,48 @@
       "rawLog": {
         "file": "task-worktree:work/fixed-web-build.log",
         "sha256": "3fc0cc17c7bcd08e80104fc4c8edf1874e7b90f93f20b0937d6192d5d00241f7"
+      }
+    },
+    {
+      "command": "npm run build",
+      "sourceCommit": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "code": 0,
+      "elapsedMs": 6290,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:work/aba-web-build.log",
+        "sha256": "fe30e5cd419adad2e2e71694ec97379b491a57658b8b9c56f11edeb9a2a56779"
+      }
+    },
+    {
+      "command": "npm run build",
+      "sourceCommit": "463b085bb597e873f028a35fb3992591bef585ff",
+      "code": 0,
+      "elapsedMs": 6800,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:work/native-final-web-build.log",
+        "sha256": "588066fb7eef4c602a29c1f635be303346b0f9a6eea94b3a5bb2dfc709de0d34"
+      }
+    },
+    {
+      "command": "npm run build",
+      "sourceCommit": "463b085bb597e873f028a35fb3992591bef585ff",
+      "code": 0,
+      "elapsedMs": 6800,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:work/native-final-web-build.log",
+        "sha256": "588066fb7eef4c602a29c1f635be303346b0f9a6eea94b3a5bb2dfc709de0d34"
       }
     }
   ],
@@ -2648,9 +3026,9 @@
     }
   ],
   "remaining": [
-    "System default .proc file association real double click in an isolated Windows environment; native argument and single-instance tests passed but are distinct",
-    "Installer target file/path and required all-green condition before conditional main merge/release/overwrite",
-    "Production hosting registration and relay deployment is a separate review/authorization item"
+    "Real default .proc double-click for host and member, including existing-window forwarding. Seven handoffs failed; exclusive attempts still routed to the installed app despite controlled API queries, flush/refresh and a unique leased ProgID. No matched launch receipt.",
+    "All-required gate must pass before authorized main merge, release build and installer overwrite.",
+    "Production hosting deployment remains separately reviewed and was not performed."
   ],
   "laptopFormalEvidence": {
     "stream": {
@@ -2677,5 +3055,10 @@
       "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
       "status": "pass"
     }
+  },
+  "nativeFinalEvidence": {
+    "upgrade": "native-upgrade.json",
+    "osHandoff": "native-os-handoff.json",
+    "baselines": "native-final-baselines.json"
   }
 }

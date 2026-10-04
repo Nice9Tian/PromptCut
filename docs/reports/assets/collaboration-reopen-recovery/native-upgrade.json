@@ -1,0 +1,204 @@
+{
+  "generatedAt": "2026-10-04T16:03:29.801Z",
+  "status": "pass-with-scope",
+  "allRequiredAcceptancePassed": false,
+  "host": {
+    "harnessSource": "18b7ebb7579182a7396b152d28abcfcfa0bb755c",
+    "nativeShellSource": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+    "actualExitCode": 0,
+    "result": {
+      "ok": true,
+      "sourceCommit": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+      "nativeArgument": true,
+      "nativeSingleInstanceIpc": true,
+      "nativeNormalExit": true,
+      "runtimeCopyChanged": true,
+      "emptyBrowserProfiles": true,
+      "stableDevice": true,
+      "stableRoom": "sp_dv7ja5b5hf4ywyn5zqdz4o6xb3",
+      "memberWaitThenAutomaticJoin": true,
+      "nativeActor": "host",
+      "actualInitialAuthenticationUi": true,
+      "optionalSpeechPromptDismissed": false,
+      "hostPidBefore": 18680,
+      "hostPidAfter": 352,
+      "memberPidBefore": 44832,
+      "memberPidAfter": 11152,
+      "bidirectionalEdits": 4,
+      "binding": {
+        "creator": true,
+        "where": "lan",
+        "hostBinding": true,
+        "rev": 5
+      },
+      "asset": {
+        "bytes": 50000,
+        "hash": "959ea962990d962d3005ba5a483910bdc3afb6bc7231ca713cc7730c232e7af3",
+        "namespaces": [
+          "media",
+          "snap",
+          "px"
+        ]
+      },
+      "originalFileUnchanged": true,
+      "recoveryCreateRequests": 0,
+      "nativeOsDoubleClick": false,
+      "installerUpgrade": true,
+      "runtimeUpgrade": {
+        "ok": true,
+        "kind": "committed-powershell-patch-installer",
+        "sourceCommit": "18b7ebb7579182a7396b152d28abcfcfa0bb755c",
+        "oldRuntimeSource": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+        "appVersionBefore": "0.7.14",
+        "appVersionAfter": "0.7.14",
+        "sameVersionCodeUpdate": true,
+        "installerSha256": "0800b2b8ef1981eeb866bb4adcf490c18dae4c8dbdbae816890a921d6d95e8bb",
+        "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <owned patch>/apply-patch.ps1 -InstallDir <owned copy-B>",
+        "preflight": {
+          "code": 0,
+          "elapsedMs": 1026,
+          "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "applied": {
+          "code": 0,
+          "elapsedMs": 17172,
+          "logSha256": "febe3bf3fedd092cc51574b94e800b43adf48a3a64ad6ae4963e4760be332b14"
+        },
+        "payloadFiles": 2044,
+        "oldProbeSha256": "aa6a6b28bf6f65ce00b206d5a09d391d69fd33f1a96cff15d5c3fb6b0b842ea7",
+        "newProbeSha256": "2d8421e9e54175d3868fb20284fdee4505ce21a67bee7a4e5d7c7424e8ba81b6",
+        "protectedStateUnchanged": true,
+        "shellUnchanged": true,
+        "noProcessShutdown": true,
+        "nsisInstallerTested": false,
+        "userInstallationModified": false,
+        "fileAssociationModified": false
+      },
+      "actualComputerRestart": false,
+      "fileAssociationsChanged": false,
+      "isolatedProviderConfiguration": true,
+      "evidenceDirectory": "<test-temp>\\pc-reopen-native-Zb1XcA\\run-7E23JV"
+    },
+    "rawResult": {
+      "file": "test-temp:pc-reopen-native-Zb1XcA/run-7E23JV/native-evidence.json",
+      "sha256": "83c8bf25b237332ede2a43088d7393dbeab4b5a5d69311f0457d5e373a9c4525"
+    },
+    "rawLog": {
+      "file": "task-worktree:work/native-upgrade-host-retry.log",
+      "sha256": "8a7ef5bf2cc2d6cdc535763079aec630474c567aed5cc249a3ab81bf200e9545"
+    }
+  },
+  "member": {
+    "harnessSource": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+    "nativeShellSource": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+    "actualExitCode": 0,
+    "result": {
+      "ok": true,
+      "sourceCommit": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+      "nativeArgument": true,
+      "nativeSingleInstanceIpc": true,
+      "nativeNormalExit": true,
+      "runtimeCopyChanged": true,
+      "emptyBrowserProfiles": true,
+      "stableDevice": true,
+      "stableRoom": "sp_y5ndjysjkx3f6elzxsei5r3frg",
+      "memberWaitThenAutomaticJoin": true,
+      "nativeActor": "member",
+      "actualInitialAuthenticationUi": true,
+      "optionalSpeechPromptDismissed": true,
+      "hostPidBefore": 39808,
+      "hostPidAfter": 12664,
+      "memberPidBefore": 21224,
+      "memberPidAfter": 22916,
+      "bidirectionalEdits": 4,
+      "binding": {
+        "creator": false,
+        "where": "lan",
+        "hostBinding": false,
+        "rev": 5
+      },
+      "asset": {
+        "bytes": 50000,
+        "hash": "47eb21a2de46b87f6b709b73aa953e2ec45e9e98dc797d1aed94f84c815ba052",
+        "namespaces": [
+          "media",
+          "snap",
+          "px"
+        ]
+      },
+      "originalFileUnchanged": true,
+      "recoveryCreateRequests": 0,
+      "nativeOsDoubleClick": false,
+      "installerUpgrade": true,
+      "runtimeUpgrade": {
+        "ok": true,
+        "kind": "committed-powershell-patch-installer",
+        "sourceCommit": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+        "oldRuntimeSource": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+        "appVersionBefore": "0.7.14",
+        "appVersionAfter": "0.7.14",
+        "sameVersionCodeUpdate": true,
+        "installerSha256": "0800b2b8ef1981eeb866bb4adcf490c18dae4c8dbdbae816890a921d6d95e8bb",
+        "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <owned patch>/apply-patch.ps1 -InstallDir <owned copy-B>",
+        "preflight": {
+          "code": 0,
+          "elapsedMs": 397,
+          "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "applied": {
+          "code": 0,
+          "elapsedMs": 8095,
+          "logSha256": "cc18d10598de7603f5f8b13b6fa5fae4ac52bff65fd0acf7bba0c3a676c8e8eb"
+        },
+        "payloadFiles": 2044,
+        "oldProbeSha256": "aa6a6b28bf6f65ce00b206d5a09d391d69fd33f1a96cff15d5c3fb6b0b842ea7",
+        "newProbeSha256": "2d8421e9e54175d3868fb20284fdee4505ce21a67bee7a4e5d7c7424e8ba81b6",
+        "protectedStateUnchanged": true,
+        "shellUnchanged": true,
+        "noProcessShutdown": true,
+        "nsisInstallerTested": false,
+        "userInstallationModified": false,
+        "fileAssociationModified": false
+      },
+      "actualComputerRestart": false,
+      "fileAssociationsChanged": false,
+      "isolatedProviderConfiguration": true,
+      "evidenceDirectory": "<test-temp>\\pc-reopen-native-Zb1XcA\\run-wlAMAa"
+    },
+    "rawResult": {
+      "file": "test-temp:pc-reopen-native-Zb1XcA/run-wlAMAa/native-evidence.json",
+      "sha256": "b64f560cb5f9cbd53bf6808c259d4e5fdd259c1f2a681390014b1d338f820aba"
+    },
+    "rawLog": {
+      "file": "task-worktree:work/native-upgrade-member-retry.log",
+      "sha256": "b82f6e739198e0c420b405bb2017d1b03826adc4392fd042f73d822415ad6f89"
+    }
+  },
+  "limitations": [
+    "Actual committed apply-patch.ps1 was run against owned installation copies. The NSIS wrapper was not run.",
+    "Application version stayed 0.7.14; this is an actual code update, not a fabricated version update.",
+    "No user installation or file association was modified by these two upgrade runs."
+  ],
+  "failures": [
+    {
+      "source": "422ee2e9a1ca3dff34c5eaebceed4d2637d24b45",
+      "actualExitCode": 1,
+      "fixture": "run-jdTSVC",
+      "cause": "Windows PowerShell 5.1 child inherited PowerShell 7 module paths; Get-FileHash was unavailable before any patch writes. Child-only module paths corrected in 18b7ebb7.",
+      "rawLog": {
+        "file": "task-worktree:work/native-upgrade-host.log",
+        "sha256": "02192a9f2b10e3d3ad92f20b33a563a4261ea79c1e759cdddefb1e0ec1e66936"
+      }
+    },
+    {
+      "source": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+      "actualExitCode": 1,
+      "fixture": "run-0Som6Q",
+      "cause": "Old Lua8eI fixture lacked Vite. No patch install ran; rerun used the complete owned Zb1XcA fixture.",
+      "rawLog": {
+        "file": "task-worktree:work/native-upgrade-member.log",
+        "sha256": "2e7b18d4be2dbd46293acf0b0cb9b1fa6a5e87d63c85e863d59d6b10847de824"
+      }
+    }
+  ]
+}
