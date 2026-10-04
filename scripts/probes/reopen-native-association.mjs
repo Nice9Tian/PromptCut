@@ -39,7 +39,11 @@ export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secon
   assert(process.argv.includes('--allow-temporary-open-command'),'explicit temporary association permission flag required');
   const {f,root,launchId}=prepareStandaloneLaunch(fixtureFile,entry,file,env);
   const pendingFile=path.resolve('work/native-association-pending.json');
-  const readyFile=path.join(root,`association-ready-${launchId}`);
+  // Keep later control writes outside Explorer's displayed project directory.
+  // A newly enumerated file can move the project between observation and click.
+  const controlRoot=path.join(root,'association-control');
+  fs.mkdirSync(controlRoot,{recursive:true});
+  const readyFile=path.join(controlRoot,`association-ready-${launchId}`);
   const pending={kind:'promptcut-native-double-click-v1',stage:'waiting-for-explorer',launchId,file,folder:root,readyFile,
     fixtureFile,exe:entry.exe,secondary,createdAt:new Date().toISOString()};
   const persist=()=>fs.writeFileSync(pendingFile,JSON.stringify(pending,null,2));persist();
@@ -47,7 +51,7 @@ export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secon
   const readyDeadline=Date.now()+300000;
   while(!fs.existsSync(readyFile)&&Date.now()<readyDeadline)await pause(100);
   assert(fs.existsSync(readyFile),'operator did not prepare Explorer');
-  const lease=await startAssociationLease(fixtureFile,entry,root,{allowDefault:true});
+  const lease=await startAssociationLease(fixtureFile,entry,controlRoot,{allowDefault:true});
   pending.stage='armed';pending.armedAt=new Date().toISOString();persist();
   let receipt, watcher, restored;
   try {
@@ -73,7 +77,7 @@ export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secon
       watcher.nativePid=receipt.pid;
       watcher.kill=()=>{execFileSync(ps,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-NativePid',String(receipt.pid),'-ExpectedExe',entry.exe,'-Mode','stop','-StartedTicks',identity.startedTicks],{windowsHide:true,env:watchEnv(),stdio:'pipe'});return true;};
     }
-    fs.writeFileSync(path.join(root,`association-launch-${launchId}.json`),JSON.stringify(result,null,2));
+    fs.writeFileSync(path.join(controlRoot,`association-launch-${launchId}.json`),JSON.stringify(result,null,2));
     return {child:watcher,receipt:result};
   } finally {
     if(!restored){await lease.restore();pending.stage='restored-after-error';pending.restoredAt=new Date().toISOString();persist();}
