@@ -1,0 +1,1253 @@
+{
+  "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+  "kind": "formal-physical-independent-host-C10",
+  "run": "c10aba-10042225",
+  "status": "pass",
+  "allRequiredAcceptancePassed": false,
+  "diagnosticOnly": false,
+  "testFingerprintOverride": false,
+  "roleScope": "Laptop creator runs actual Chrome152 and the PC independent Y host runs already cached actual Chrome150. X is the original protocol claimer, not an independent X render host.",
+  "probeSha256": "2186d0dfe27697b164084c99962bc39a5b73e4a77a11017c69d54fe70c87b9c7",
+  "wrapperSha256": "ccb25cb652556fbf341c46a8ef23eb908e90659d28a4b52d04f1a4ecf71c65c8",
+  "creator": {
+    "receipt": {
+      "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "role": "creator",
+      "run": "c10aba-10042225",
+      "actualExitCode": 0,
+      "status": "pass",
+      "prepareOnly": false,
+      "timingAuthoritative": true,
+      "startedAt": "2026-10-04T12:45:08.413Z",
+      "hostname": "<test-laptop>",
+      "testFingerprintOverride": false,
+      "ownTcpBridgeOnly": true,
+      "hostNetworkChanged": false,
+      "userRuntimeModified": false,
+      "ports": [
+        5480,
+        5481,
+        5482,
+        5483,
+        5484,
+        5485,
+        5486,
+        5487,
+        5488
+      ],
+      "nodeVersion": "v24.19.0",
+      "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+      "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "fails": [],
+      "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c10-browser-probe.mjs --role creator --run c10aba-10042225 --coord http://<test-PC-LAN>:5456 --out <test-temp>\\pc-c10-aba-creator-39810b243c984db0a98a129bf9e06492\\probe --keep-temp --timeout-min 25 --e6-reverse --base-port 5480",
+      "ownedProbePid": 27424,
+      "pending": [],
+      "ok": true,
+      "rawLogSha256": {
+        "stdout.log": "207186dcdde0db80bab81286201aff7c18203232c11276cc107c9e568326a695",
+        "stderr.log": "a0f6ca985adf4e16dd5e7ec4e217a88136e081cd1fe092b4b6a204e2cf0b5551"
+      },
+      "finishedAt": "2026-10-04T12:52:56.719Z"
+    },
+    "result": {
+      "ok": true,
+      "run": "c10aba-10042225",
+      "role": "creator",
+      "mode": "a1-a5+e6-reverse",
+      "target": "local",
+      "site": "http://127.0.0.1:5480",
+      "stageOrigins": [
+        "http://127.0.0.1:5481",
+        "http://127.0.0.1:5482"
+      ],
+      "out": "<test-temp>\\pc-c10-aba-creator-39810b243c984db0a98a129bf9e06492\\probe",
+      "steps": {
+        "creator": {
+          "ms": 149677,
+          "projectId": "sp_walw2ordoajaghsknk52gm334j",
+          "clips": {
+            "main": "c-muttdage-14",
+            "extras": 8,
+            "light": "c-muttdagd-y"
+          },
+          "creatorFp": "258acaaa7c5fe509",
+          "layer": {
+            "v": 3,
+            "contentKey": true,
+            "envFingerprint": "258acaaa7c5fe509",
+            "resultKey": "7f363a5b21c64c972c4bffb30176c8fb040643b1242e6626a6fb0b013bb5d179",
+            "count": 300,
+            "extras": 8
+          }
+        },
+        "playEntryFixture": {
+          "cardId": "chapter-bar",
+          "start": 2,
+          "duration": 6,
+          "stepMs": 1.4,
+          "catchUpMs": 179.5,
+          "vtOk": false,
+          "tier": "catchup-b",
+          "pipelineAt3": "light"
+        },
+        "playEntry": {
+          "natural": {
+            "clip": "c-muttdage-12",
+            "naturalSkipped": [
+              "c-muttdage-12",
+              "c-muttdagd-y"
+            ],
+            "naturalSkips": 241,
+            "playRun": {
+              "startFrame": 0,
+              "lastFrame": 299,
+              "breaks": 0
+            },
+            "plansInPlay": [
+              {
+                "t": 1,
+                "ids": [
+                  "c-muttdage-10"
+                ],
+                "ok": false,
+                "reason": "rate"
+              }
+            ]
+          },
+          "seekMiddle": {
+            "lastPlan": {
+              "at": 47019,
+              "t": 3.033333333333333,
+              "ids": [
+                "c-muttdage-12"
+              ],
+              "ok": false,
+              "reason": "rate",
+              "backlogMs": 13541,
+              "ratePerSec": 1257,
+              "leadMs": null
+            },
+            "playRun": {
+              "startFrame": 90,
+              "lastFrame": 91,
+              "breaks": 0
+            },
+            "naturalSkips": 241
+          }
+        },
+        "play": {
+          "ms": 22122,
+          "longTasks": 0,
+          "samples": 62,
+          "mainDistinctFrames": 53,
+          "deliveries": 256,
+          "placeholder": {
+            "t": 0.1,
+            "fit": 6,
+            "deadMs": 23.333333333333332,
+            "placeholder": [
+              "c-muttdagg-18",
+              "c-muttdagg-16",
+              "c-muttdage-14"
+            ],
+            "shown": [
+              "c-muttdage-14",
+              "c-muttdagg-16",
+              "c-muttdagg-18"
+            ]
+          }
+        },
+        "settleTrace": [
+          {
+            "at": 1766,
+            "op": "settle",
+            "t": 0,
+            "stale": 0,
+            "plan": true,
+            "costs": 0,
+            "cards": [
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "2c7d893f5c",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a0778f4652",
+                "record": false
+              }
+            ]
+          },
+          {
+            "at": 1766,
+            "op": "settle",
+            "t": 0,
+            "stale": 0,
+            "plan": true,
+            "costs": 0,
+            "cards": [
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "2c7d893f5c",
+                "record": false
+              },
+              {
+                "id": "c-muttda",
+                "pipeline": "heavy",
+                "identityPrefix": "a0778f4652",
+                "record": false
+              }
+            ]
+          },
+          {
+            "at": 6439,
+            "op": "settle",
+            "t": 0,
+            "stale": 10,
+            "plan": true,
+            "costs": 5
+          },
+          {
+            "at": 6439,
+            "op": "catchup-queued",
+            "t": 0
+          },
+          {
+            "at": 6442,
+            "op": "catchup-start",
+            "t": 0,
+            "back": true,
+            "sameAsFront": false
+          },
+          {
+            "at": 6892,
+            "op": "catchup-rendered",
+            "t": 0,
+            "aborted": false
+          },
+          {
+            "at": 12830,
+            "op": "playing",
+            "t": 1,
+            "ids": [
+              "c-muttda"
+            ],
+            "out": "skip-rate",
+            "backlogMs": 11030,
+            "ratePerSec": 1236
+          },
+          {
+            "at": 21843,
+            "op": "settle",
+            "t": 10,
+            "stale": 0,
+            "plan": true,
+            "costs": 5,
+            "cards": []
+          },
+          {
+            "at": 22456,
+            "op": "settle",
+            "t": 0.5,
+            "stale": 10,
+            "plan": true,
+            "costs": 5
+          },
+          {
+            "at": 22456,
+            "op": "catchup-queued",
+            "t": 0.5
+          },
+          {
+            "at": 22463,
+            "op": "catchup-start",
+            "t": 0.5,
+            "back": true,
+            "sameAsFront": false
+          },
+          {
+            "at": 28765,
+            "op": "catchup-rendered",
+            "t": 0.5,
+            "aborted": false
+          }
+        ],
+        "settleTiming": {
+          "stopAt": 22004,
+          "seekAt": 22013,
+          "swappedAt": 29112,
+          "seekToPreciseMs": 7099,
+          "swapPlaying": {
+            "lastPlan": {
+              "at": 12830,
+              "t": 1,
+              "ids": [
+                "c-muttdage-10"
+              ],
+              "ok": false,
+              "reason": "rate",
+              "backlogMs": 11030.1,
+              "ratePerSec": 1236,
+              "leadMs": null
+            },
+            "plans": [
+              {
+                "at": 12830,
+                "t": 1,
+                "ids": [
+                  "c-muttdage-10"
+                ],
+                "ok": false,
+                "reason": "rate",
+                "backlogMs": 11030.1,
+                "ratePerSec": 1236,
+                "leadMs": null
+              }
+            ],
+            "preemptCount": 0,
+            "orphan": false,
+            "playRun": {
+              "startFrame": 0,
+              "lastFrame": 299,
+              "breaks": 0
+            },
+            "naturalSkips": 241,
+            "lastNaturalSkip": {
+              "t": 9.966666666666667,
+              "ids": [
+                "c-muttdagd-y"
+              ]
+            },
+            "naturalSkipped": [
+              "c-muttdage-12",
+              "c-muttdagd-y"
+            ]
+          },
+          "costs": [
+            {
+              "k": "[redacted]",
+              "step": 40.4,
+              "stepMax": 40.4,
+              "catchUp": 12090.3,
+              "capped": true,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 0.6,
+              "stepMax": 0.8,
+              "catchUp": 23.7,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 41.3,
+              "stepMax": 41.3,
+              "catchUp": 1224.3,
+              "capped": true,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 1.4,
+              "stepMax": 1.5,
+              "catchUp": 179.5,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 1.8,
+              "stepMax": 3.4,
+              "catchUp": 66,
+              "vtOk": false,
+              "kind": "stepped"
+            }
+          ]
+        },
+        "settle": {
+          "settled": true,
+          "stillLive": true,
+          "feedSettled": 0,
+          "backWork": {
+            "on": true,
+            "reason": null,
+            "changes": 0,
+            "sent": 4,
+            "pauses": {}
+          },
+          "probeFrames": {
+            "frames": 3,
+            "gzFrames": 3,
+            "gzBytes": 10479,
+            "htmlBytes": 0
+          }
+        },
+        "member": {
+          "ms": 47181,
+          "stages": [
+            "http://127.0.0.1:5481",
+            "http://127.0.0.1:5482"
+          ],
+          "iframeTargets": [
+            "http://127.0.0.1:5481",
+            "http://127.0.0.1:5482",
+            "http://127.0.0.1:5486",
+            "http://127.0.0.1:5487"
+          ],
+          "caps": {
+            "A": {
+              "prerender": false,
+              "offscreenGl": true,
+              "lowMemory": false,
+              "measure": true,
+              "catchUp": true,
+              "stageId": "A"
+            },
+            "B": {
+              "prerender": false,
+              "offscreenGl": true,
+              "lowMemory": false,
+              "measure": true,
+              "catchUp": true,
+              "stageId": "B"
+            }
+          },
+          "requests": {
+            "px": 0,
+            "snap": 387,
+            "media": 11,
+            "mediaByFrameOrigin": {
+              "http://127.0.0.1:5480→http://127.0.0.1:5480": 5,
+              "http://127.0.0.1:5481→http://127.0.0.1:5481": 3,
+              "http://127.0.0.1:5482→http://127.0.0.1:5482": 3
+            }
+          },
+          "l2": {
+            "costs": 5,
+            "snapshots": 91,
+            "ranges": 2
+          },
+          "pageFp": "258acaaa7c5fe509",
+          "costPublish": {
+            "calls": 5,
+            "ok": 5,
+            "failed": 0,
+            "records": 5,
+            "lastError": null
+          },
+          "publisher": {
+            "measured": true,
+            "want": {
+              "projectId": "sp_walw2ordoajaghsknk52gm334j",
+              "projectRev": 1
+            },
+            "last": "plan:sp_walw2ordoajaghsknk52gm334j@1#clips:fpds3hycojal",
+            "lastClips": [
+              "c-muttdage-10",
+              "c-muttdage-14",
+              "c-muttdagg-16",
+              "c-muttdagg-18",
+              "c-muttdagh-1a",
+              "c-muttdagh-1c",
+              "c-muttdagi-1e",
+              "c-muttdagi-1g",
+              "c-muttdagj-1i",
+              "c-muttdagj-1k"
+            ],
+            "helloOk": true,
+            "nodeWaitMs": null,
+            "log": [
+              {
+                "at": 1791118069653,
+                "id": "plan:sp_walw2ordoajaghsknk52gm334j@1#clips:fpds3hycojal",
+                "clips": 10,
+                "ok": true,
+                "state": "open",
+                "node": "ready"
+              }
+            ]
+          }
+        },
+        "reopen": {
+          "ms": 21225,
+          "gateAgain": false,
+          "costs": {
+            "costs": 5,
+            "snapshots": 387,
+            "ranges": 3
+          },
+          "refetched": 0,
+          "l2Hits": 4
+        },
+        "publisher": {
+          "measured": true,
+          "want": {
+            "projectId": "sp_walw2ordoajaghsknk52gm334j",
+            "projectRev": 11
+          },
+          "last": "plan:sp_walw2ordoajaghsknk52gm334j@11#clips:fpds3hycojal",
+          "lastClips": [
+            "c-muttdage-10",
+            "c-muttdage-14",
+            "c-muttdagg-16",
+            "c-muttdagg-18",
+            "c-muttdagh-1a",
+            "c-muttdagh-1c",
+            "c-muttdagi-1e",
+            "c-muttdagi-1g",
+            "c-muttdagj-1i",
+            "c-muttdagj-1k"
+          ],
+          "helloOk": true,
+          "nodeWaitMs": null,
+          "log": [
+            {
+              "at": 1791118119088,
+              "id": "plan:sp_walw2ordoajaghsknk52gm334j@1#clips:fpds3hycojal",
+              "clips": 10,
+              "ok": true,
+              "state": "done",
+              "node": "ready"
+            },
+            {
+              "at": 1791118140936,
+              "id": "plan:sp_walw2ordoajaghsknk52gm334j@11#clips:fpds3hycojal",
+              "clips": 10,
+              "ok": true,
+              "state": "open",
+              "node": "ready"
+            }
+          ]
+        },
+        "a5host": {
+          "readyMs": 6157,
+          "platform": "win32",
+          "arch": "x64",
+          "testFingerprint": false,
+          "profile": "host",
+          "envFingerprint": "de57ec1a7cffba6b",
+          "codeVersion": "46d3c04676bd",
+          "differsFromPage": true,
+          "differsFromCreator": true,
+          "cut": null,
+          "ffmpeg": {
+            "found": true,
+            "via": "PATH",
+            "version": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg "
+          },
+          "capabilities": {
+            "userCards": true,
+            "graphCards": false,
+            "transcode": false,
+            "streams": false
+          }
+        },
+        "a5": {
+          "ms": 244960,
+          "published": {
+            "at": 1791118140936,
+            "id": "plan:sp_walw2ordoajaghsknk52gm334j@11#clips:fpds3hycojal",
+            "clips": 10,
+            "ok": true,
+            "state": "open",
+            "node": "ready",
+            "all": 2
+          },
+          "external": true,
+          "claimant": {
+            "profile": "host",
+            "envFingerprint": "de57ec1a7cffba6b",
+            "codeVersion": "46d3c04676bd",
+            "nodes": [
+              {
+                "nodeId": "host:<test-PC>:5203/p0",
+                "claimed": 2,
+                "completed": 1,
+                "failed": 0,
+                "transport": "ws",
+                "resumes": 0,
+                "legacy": false,
+                "opens": 1,
+                "connectFailed": 0
+              }
+            ],
+            "sessionLog": [
+              {
+                "event": "session.open",
+                "transport": "ws",
+                "retainMs": "60000"
+              }
+            ]
+          },
+          "cut": null,
+          "newLayer": {
+            "resultKey": "127e36f07a90",
+            "envFingerprint": "258acaaa7c5fe509",
+            "by": "page",
+            "ready": 60
+          },
+          "shown": {
+            "t": 2.3,
+            "planeSig": "12196:q3kl80"
+          },
+          "planeText": "main-v2",
+          "hostResult": {
+            "ok": true,
+            "fails": [],
+            "exitCode": 0,
+            "released": 0,
+            "ms": 497325
+          }
+        },
+        "e6r": {
+          "checks": [
+            {
+              "name": "Y-claimed-plan",
+              "ok": true,
+              "detail": {
+                "planId": "plan:sp_walw2ordoajaghsknk52gm334j@11#clips:fpds3hycojal",
+                "watcherTaken": 1,
+                "takenBeforeX": true,
+                "inYHeld": true,
+                "yAtPlanTaken": {
+                  "claimed": 1,
+                  "completed": 0,
+                  "envFingerprint": "de57ec1a7cffba6b"
+                },
+                "ownCopiesRequireY": 9,
+                "roundPlans": 2,
+                "how": "Y 的持有记录里有这个 plan"
+              }
+            },
+            {
+              "name": "derived-fingerprints",
+              "ok": true,
+              "detail": {
+                "tasks": 15,
+                "yFp": "de57ec1a7cffba6b",
+                "pageFp": "258acaaa7c5fe509",
+                "byFp": {
+                  "de57ec1a7cffba6b/dual": 6,
+                  "258acaaa7c5fe509/dual": 6,
+                  "de57ec1a7cffba6b": 3
+                },
+                "badOthers": []
+              }
+            },
+            {
+              "name": "X-online-while-work",
+              "ok": true,
+              "detail": {
+                "claimer": {
+                  "onlineAt": 1791118155736,
+                  "doneAfter": 9
+                },
+                "tasks": 9
+              }
+            },
+            {
+              "name": "X-claimed-0",
+              "ok": true,
+              "detail": {
+                "claimer": {
+                  "fingerprint": "258acaaa7c5fe509",
+                  "attempts": 4,
+                  "rejected": {
+                    "fingerprint-mismatch": 4
+                  },
+                  "claimed": 0,
+                  "sameFpSkipped": 5,
+                  "visibleRound": 6,
+                  "sample": [
+                    {
+                      "id": "snapshot:4d5af2ab932063dda5944e7c78c5d4481fe7a45f66bd310c2435c6e8c2b1232f:0-29",
+                      "at": 1791118156341,
+                      "type": "task.claim-rejected",
+                      "reason": "fingerprint-mismatch"
+                    },
+                    {
+                      "id": "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:0-59",
+                      "at": 1791118179672,
+                      "type": "task.claim-rejected",
+                      "reason": "fingerprint-mismatch"
+                    },
+                    {
+                      "id": "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:60-119",
+                      "at": 1791118179672,
+                      "type": "task.claim-rejected",
+                      "reason": "fingerprint-mismatch"
+                    },
+                    {
+                      "id": "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:120-179",
+                      "at": 1791118179672,
+                      "type": "task.claim-rejected",
+                      "reason": "fingerprint-mismatch"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "J-all-done",
+              "ok": true,
+              "detail": {
+                "ok": true,
+                "total": 9,
+                "done": 9,
+                "notDone": [],
+                "superseded": 6,
+                "badSuperseded": []
+              }
+            },
+            {
+              "name": "J-exactly-once",
+              "ok": true,
+              "detail": {
+                "ok": true,
+                "total": 11,
+                "epochs": [
+                  "c7b273ec-4a48-4113-8592-2562ee8d4021"
+                ],
+                "dup": [],
+                "missing": [],
+                "stray": 1
+              }
+            },
+            {
+              "name": "J-pure-layers",
+              "ok": true,
+              "detail": {
+                "ok": true,
+                "layers": 3,
+                "observed": 18,
+                "unknown": 0,
+                "mixed": [],
+                "attributed": 9,
+                "tasks": 9,
+                "byNode": {
+                  "Y": 4,
+                  "page": 5
+                },
+                "inferredPage": 5
+              }
+            },
+            {
+              "name": "layer-map-covers-done",
+              "ok": true,
+              "detail": {
+                "v": 3,
+                "cards": 3,
+                "uncovered": 0,
+                "primaryAllY": false,
+                "layers": [
+                  {
+                    "clip": "c-muttdagd-y",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": null
+                  },
+                  {
+                    "clip": "c-muttdage-10",
+                    "fp": "258acaaa7c5fe509",
+                    "candidates": [
+                      "258acaaa7c5fe509",
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": null
+                  },
+                  {
+                    "clip": "c-muttdage-12",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-muttdage-14",
+                    "fp": "258acaaa7c5fe509",
+                    "candidates": [
+                      "258acaaa7c5fe509",
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "258acaaa7c5fe509"
+                  },
+                  {
+                    "clip": "c-muttdagg-16",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-muttdagg-18",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-muttdagh-1a",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-muttdagh-1c",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-muttdagi-1e",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-muttdagi-1g",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-muttdagj-1i",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-muttdagj-1k",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "X-differs-from-Y",
+              "ok": true,
+              "detail": {
+                "yFp": "de57ec1a7cffba6b",
+                "xClaimerFp": "258acaaa7c5fe509",
+                "xHostFp": null,
+                "pageFp": "258acaaa7c5fe509"
+              }
+            }
+          ],
+          "planId": "plan:sp_walw2ordoajaghsknk52gm334j@11#clips:fpds3hycojal",
+          "roundPlans": 2,
+          "tasks": 15,
+          "live": 9,
+          "superseded": 6,
+          "doneByFp": {
+            "258acaaa7c5fe509": 5,
+            "de57ec1a7cffba6b": 4
+          },
+          "epochs": 1,
+          "y": {
+            "fp": "de57ec1a7cffba6b",
+            "claimedSeen": 5,
+            "done": 4
+          },
+          "x": {
+            "claimer": {
+              "fingerprint": "258acaaa7c5fe509",
+              "attempts": 4,
+              "rejected": {
+                "fingerprint-mismatch": 4
+              },
+              "claimed": 0,
+              "sameFpSkipped": 5,
+              "visibleRound": 6,
+              "sample": [
+                {
+                  "id": "snapshot:4d5af2ab932063dda5944e7c78c5d4481fe7a45f66bd310c2435c6e8c2b1232f:0-29",
+                  "at": 1791118156341,
+                  "type": "task.claim-rejected",
+                  "reason": "fingerprint-mismatch"
+                },
+                {
+                  "id": "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:0-59",
+                  "at": 1791118179672,
+                  "type": "task.claim-rejected",
+                  "reason": "fingerprint-mismatch"
+                },
+                {
+                  "id": "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:60-119",
+                  "at": 1791118179672,
+                  "type": "task.claim-rejected",
+                  "reason": "fingerprint-mismatch"
+                },
+                {
+                  "id": "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:120-179",
+                  "at": 1791118179672,
+                  "type": "task.claim-rejected",
+                  "reason": "fingerprint-mismatch"
+                }
+              ]
+            }
+          },
+          "pageFp": "258acaaa7c5fe509",
+          "pageDoneEvents": 12,
+          "pageFailedEvents": 6,
+          "l18": {
+            "note": "只记录不判(C10 契约第 18 节第 9 条、M8 计划 L18):桌面发布的 plan 不带片段清单,requires 带发布方指纹与 preferNode;host 档认领回 plan-profile,环境不同的主机领不到",
+            "desktopPlans": 1,
+            "desktopFingerprint": "258acaaa7c5fe509",
+            "hostClaim": [
+              {
+                "id": "plan:p-muttd66r-f85747bd@1",
+                "type": "task.claim-rejected",
+                "reason": "plan-profile",
+                "released": null
+              }
+            ]
+          },
+          "settled": true
+        }
+      },
+      "pending": [],
+      "memberDiag": {
+        "pageErrors": [],
+        "consoleErrors": []
+      },
+      "cleanup": {
+        "deleted": "shared.admin.ok",
+        "listening": []
+      },
+      "ms": 468040,
+      "fails": []
+    },
+    "rawResultSha256": "7a2f7123522ab399e7f23306151a0ece6186fd787c8a6ca93bd5deeba306f382"
+  },
+  "host": {
+    "receipt": {
+      "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "role": "host",
+      "run": "c10aba-10042225",
+      "actualExitCode": 0,
+      "status": "pass",
+      "prepareOnly": false,
+      "timingAuthoritative": false,
+      "startedAt": "2026-10-04T12:44:38.560Z",
+      "hostname": "<test-PC>",
+      "testFingerprintOverride": false,
+      "ownTcpBridgeOnly": true,
+      "hostNetworkChanged": false,
+      "userRuntimeModified": false,
+      "ports": [
+        5203,
+        5204,
+        5205,
+        5480
+      ],
+      "nodeVersion": "v24.19.0",
+      "chromeVersion": "Google Chrome for Testing 150.0.7871.24",
+      "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "fails": [],
+      "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c10-browser-probe.mjs --role host --run c10aba-10042225 --coord http://<test-PC-LAN>:5456 --out <test-temp>\\pc-reopen-c10-host-QTVGzn\\probe --keep-temp --timeout-min 25 --port 5203",
+      "ownedProbePid": 10280,
+      "pending": [],
+      "ok": true,
+      "rawLogSha256": {
+        "stdout.log": "f90bd6c452f68d5fb1d7c2c8da6db03f4e53af7ab2e6a53c627bd663bc82fb84",
+        "stderr.log": "5fa7bd453a12f31c115d93e8170aef9e1c670e76ba549c975cd59b456ce6137a"
+      },
+      "finishedAt": "2026-10-04T12:52:56.033Z"
+    },
+    "result": {
+      "ok": true,
+      "run": "c10aba-10042225",
+      "role": "host",
+      "mode": "a1-a5",
+      "target": "local",
+      "site": "http://127.0.0.1:5420",
+      "stageOrigins": [
+        "http://127.0.0.1:5421",
+        "http://127.0.0.1:5422"
+      ],
+      "out": "<test-temp>\\pc-reopen-c10-host-QTVGzn\\probe",
+      "steps": {},
+      "port": 5203,
+      "project": {
+        "projectId": "sp_walw2ordoajaghsknk52gm334j",
+        "hosted": "http://127.0.0.1:5480/hosted/"
+      },
+      "testFingerprint": false,
+      "ffmpeg": {
+        "found": true,
+        "via": "PATH",
+        "version": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg "
+      },
+      "e6Reverse": true,
+      "ready": {
+        "profile": "host",
+        "envFingerprint": "de57ec1a7cffba6b",
+        "codeVersion": "46d3c04676bd",
+        "maxConcurrent": 1,
+        "nodes": [
+          {
+            "nodeId": "host:<test-PC>:5203/p0",
+            "projectId": "sp_walw2ordoajaghsknk52gm334j",
+            "connected": true,
+            "claimed": 1,
+            "completed": 0,
+            "dedup": 0,
+            "failed": 0,
+            "lost": 0,
+            "released": 0,
+            "transport": "ws",
+            "resumes": 0,
+            "legacy": false,
+            "opens": 1,
+            "connectFailed": 0,
+            "assetBase": "http://127.0.0.1:5480/media/api/asset"
+          }
+        ],
+        "sessionLog": [
+          {
+            "event": "session.open",
+            "transport": "ws",
+            "retainMs": "60000"
+          }
+        ]
+      },
+      "finish": {
+        "reason": "fresh"
+      },
+      "last": {
+        "profile": "host",
+        "envFingerprint": "de57ec1a7cffba6b",
+        "codeVersion": "46d3c04676bd",
+        "maxConcurrent": 1,
+        "nodes": [
+          {
+            "nodeId": "host:<test-PC>:5203/p0",
+            "projectId": "sp_walw2ordoajaghsknk52gm334j",
+            "connected": true,
+            "claimed": 6,
+            "completed": 4,
+            "dedup": 0,
+            "failed": 0,
+            "lost": 0,
+            "released": 0,
+            "transport": "ws",
+            "resumes": 0,
+            "legacy": false,
+            "opens": 1,
+            "connectFailed": 0,
+            "assetBase": "http://127.0.0.1:5480/media/api/asset"
+          }
+        ],
+        "sessionLog": [
+          {
+            "event": "session.open",
+            "transport": "ws",
+            "retainMs": "60000"
+          }
+        ]
+      },
+      "didWork": true,
+      "ids": {
+        "claimed": [
+          "plan:sp_walw2ordoajaghsknk52gm334j@11#clips:fpds3hycojal",
+          "snapshot:4d5af2ab932063dda5944e7c78c5d4481fe7a45f66bd310c2435c6e8c2b1232f:0-29",
+          "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:0-59",
+          "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:120-179",
+          "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:60-119"
+        ],
+        "completed": [
+          "snapshot:4d5af2ab932063dda5944e7c78c5d4481fe7a45f66bd310c2435c6e8c2b1232f:0-29",
+          "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:0-59",
+          "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:120-179",
+          "snapshot:39d05b62288ba04bc6fc490dc3318295697f014aa6d56b689df4dc8b4f748a71:60-119"
+        ],
+        "dedup": [],
+        "lost": [],
+        "failed": []
+      },
+      "ffmpegMentions": [],
+      "capabilities": {
+        "userCards": true,
+        "graphCards": false,
+        "transcode": false,
+        "streams": false
+      },
+      "exitCode": 0,
+      "released": 0,
+      "ms": 497325,
+      "fails": []
+    },
+    "rawResultSha256": "731454a911c035aab937ae90b970906b3d730b4f76f7b16f7ef830df641ed3b2"
+  },
+  "acceptanceSummary": {
+    "target": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+    "role": "creator",
+    "run": "c10aba-10042225",
+    "actualExitCode": 0,
+    "status": "pass",
+    "ok": true,
+    "fails": [],
+    "pending": [],
+    "evidenceDirectory": "<test-temp>\\pc-c10-aba-creator-39810b243c984db0a98a129bf9e06492"
+  },
+  "transferManifest": [
+    {
+      "file": "receipt.json",
+      "bytes": 1377,
+      "sha256": "2fc6535a23cdc6e62a6576bfc9d3a3dca36e79f3c1881c711f2d578cb5180405"
+    },
+    {
+      "file": "result.json",
+      "bytes": 25041,
+      "sha256": "26758796099d52c63a652f0738b9d560ef84ebb335a53b2a22a1e54841f6bbd6"
+    },
+    {
+      "file": "runner-error.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "runner.log",
+      "bytes": 1565,
+      "sha256": "fae8cbe137ab7821a4067e33d0b3ed1e740daea46440e5acc768c6a6cd34dccb"
+    },
+    {
+      "file": "stderr.log",
+      "bytes": 6789,
+      "sha256": "a0f6ca985adf4e16dd5e7ec4e217a88136e081cd1fe092b4b6a204e2cf0b5551"
+    },
+    {
+      "file": "stdout.log",
+      "bytes": 13638,
+      "sha256": "207186dcdde0db80bab81286201aff7c18203232c11276cc107c9e568326a695"
+    }
+  ],
+  "transferredZip": {
+    "bytes": 6429,
+    "sha256": "3194caacc812c32218d29430391906c6af86476b0f97199ef0a2f87304d2e00d"
+  },
+  "previousFailuresRetained": true,
+  "publicationTransform": "Non-secret ten-hex card prefixes in settleTrace.cards are named identityPrefix. Source result hashes are preserved. Runtime measurement records and environment fingerprints were never overridden."
+}

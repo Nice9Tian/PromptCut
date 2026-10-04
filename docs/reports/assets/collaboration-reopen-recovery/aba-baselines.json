@@ -1,0 +1,103 @@
+{
+  "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+  "generatedAt": "2026-10-04T12:35:05.733Z",
+  "allRequiredAcceptancePassed": false,
+  "phases": [
+    {
+      "fixture": "LkKLqz",
+      "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "startedAt": "2026-10-04T12:20:22.139Z",
+      "finishedAt": "2026-10-04T12:21:24.358Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5023,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-LkKLqz/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 55428,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 55377.0695"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-LkKLqz/tests.log",
+            "sha256": "c500dc40e2c213732af1ac2c380640d3d85df687024f7880e1d11b1f9cbd29df"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "5uTRsB",
+      "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "startedAt": "2026-10-04T12:28:40.725Z",
+      "finishedAt": "2026-10-04T12:28:41.630Z",
+      "results": [
+        {
+          "name": "desktop-tests",
+          "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "command": "node --test desktop/test/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 885,
+          "counts": [
+            "ℹ tests 37",
+            "ℹ suites 0",
+            "ℹ pass 37",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 847.1371"
+          ],
+          "equivalentPackageCommand": "npm test --prefix desktop",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-5uTRsB/desktop-tests.log",
+            "sha256": "530045ee43459ad921ddb16803fdce4b44531685a5fd41c3dc6575b3cbdeb679"
+          }
+        }
+      ]
+    }
+  ],
+  "build": {
+    "command": "npm run build",
+    "sourceCommit": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+    "code": 0,
+    "elapsedMs": 6290,
+    "built": true,
+    "modules": 1830,
+    "isolatedData": true,
+    "installed": false,
+    "rawLog": {
+      "file": "task-worktree:work/aba-web-build.log",
+      "sha256": "fe30e5cd419adad2e2e71694ec97379b491a57658b8b9c56f11edeb9a2a56779"
+    }
+  },
+  "renderEvidence": {
+    "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+    "file": "fixed-baselines.json",
+    "status": "historical-product-tree-equivalent",
+    "twoExportsIdentical": 1800,
+    "baselineAndCandidateFrames": 1800,
+    "different": 0,
+    "missing": 0,
+    "sourceDifference": "Only scripts/probes/c66-t9-probe.mjs and scripts/probes/c10-browser-probe.mjs changed after 113. No render/product code changed. Prior render is not labelled an aba rerun."
+  }
+}

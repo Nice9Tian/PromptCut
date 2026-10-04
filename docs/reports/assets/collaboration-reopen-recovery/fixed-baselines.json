@@ -1,0 +1,219 @@
+{
+  "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+  "generatedAt": "2026-10-04T10:28:58.688Z",
+  "allRequiredAcceptancePassed": false,
+  "phases": [
+    {
+      "fixture": "CQRH0H",
+      "sourceAtPhaseStart": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "baselineSource": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "startedAt": "2026-10-04T09:57:11.327Z",
+      "finishedAt": "2026-10-04T09:58:13.603Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 4790,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-CQRH0H/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 55731,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 55678.1462"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-CQRH0H/tests.log",
+            "sha256": "02462146e9e0922e630fa337d51518420266ed7d0edec790c73b943e22ac3555"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "79TIAz",
+      "sourceAtPhaseStart": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "baselineSource": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "startedAt": "2026-10-04T10:04:06.096Z",
+      "finishedAt": "2026-10-04T10:13:24.610Z",
+      "phaseAllPassed": true,
+      "pixelFrameCounts": {
+        "baseline": 1800,
+        "candidate": 1800
+      },
+      "results": [
+        {
+          "name": "determinism-1800",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node scripts/verify-determinism.mjs --url http://127.0.0.1:5203/?export=1",
+          "actualExitCode": 0,
+          "elapsedMs": 315983,
+          "expectedFrames": 1800,
+          "frameCountVerified": true,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/determinism-1800.log",
+            "sha256": "14d42b1407d23680d656357cbcbdfdbdf18dde1ebf3e5b755e70363818fc3972"
+          }
+        },
+        {
+          "name": "unified",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node scripts/verify-unified-frames.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 8394,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/unified.log",
+            "sha256": "16e87d22ffe6f1b3b13108f19bc15c98a87509eab95d2a7e32656c40420255b1"
+          }
+        },
+        {
+          "name": "candidate-export",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node scripts/probes/export-baseline-compare.mjs run --tree <test-worktree> --origin http://127.0.0.1:5203 --project <test-temp>\\pc-reopen-integration-79TIAz\\project.json --out <test-temp>\\pc-reopen-integration-79TIAz\\candidate --workers 1",
+          "actualExitCode": 0,
+          "elapsedMs": 113709,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/candidate-export.log",
+            "sha256": "ea5680ead3b05cca309b15d88fc761382acfcc4119df0f7d2e73cc43d22b61c5"
+          }
+        },
+        {
+          "name": "main-export",
+          "source": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+          "command": "node scripts/probes/export-baseline-compare.mjs run --tree <main-baseline> --origin http://127.0.0.1:5206 --project <test-temp>\\pc-reopen-integration-79TIAz\\project.json --out <test-temp>\\pc-reopen-integration-79TIAz\\baseline --workers 1",
+          "actualExitCode": 0,
+          "elapsedMs": 114168,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/main-export.log",
+            "sha256": "e2945b16645b2902a06bdccdd42f35d6be3ba461cb3f9566e9b53962450f54c7"
+          }
+        },
+        {
+          "name": "pixel-baseline",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node scripts/probes/export-baseline-compare.mjs compare --baseline <test-temp>\\pc-reopen-integration-79TIAz\\baseline\\frames --candidate <test-temp>\\pc-reopen-integration-79TIAz\\candidate\\frames",
+          "actualExitCode": 0,
+          "elapsedMs": 288,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/pixel-baseline.log",
+            "sha256": "d13b58bba75fbaae3f83833902f77ef272b3e08435629099b06ac9af7cf77601"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "K9qGty",
+      "sourceAtPhaseStart": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "baselineSource": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "startedAt": "2026-10-04T10:23:20.539Z",
+      "finishedAt": "2026-10-04T10:23:21.441Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "desktop-tests",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node --test desktop/test/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 883,
+          "counts": [
+            "ℹ tests 37",
+            "ℹ suites 0",
+            "ℹ pass 37",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 842.0871"
+          ],
+          "equivalentPackageCommand": "npm test --prefix desktop",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-K9qGty/desktop-tests.log",
+            "sha256": "bfb87e33c8749c880a02efb6841ee9aeacfa00e461eaaf536056c11f0f42525e"
+          }
+        }
+      ]
+    }
+  ],
+  "build": {
+    "command": "npm run build",
+    "sourceCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+    "code": 0,
+    "elapsedMs": 6762,
+    "built": true,
+    "modules": 1830,
+    "isolatedData": true,
+    "installed": false,
+    "rawLog": {
+      "file": "task-worktree:work/fixed-web-build.log",
+      "sha256": "3fc0cc17c7bcd08e80104fc4c8edf1874e7b90f93f20b0937d6192d5d00241f7"
+    }
+  },
+  "regressions": [
+    {
+      "fixture": "red",
+      "rawLog": {
+        "file": "task-worktree:work/probe-requeue-red.log",
+        "sha256": "9c544195199413f4a35bdf3583790df33b21f43c87f610ac69ea77e763d6039e"
+      }
+    },
+    {
+      "fixture": "green-initial",
+      "rawLog": {
+        "file": "task-worktree:work/probe-requeue-green-initial.log",
+        "sha256": "db8770d1e7ada58e0786ff07bed47f7baa68f84b1130a3fe3e054d91737ec914"
+      }
+    },
+    {
+      "fixture": "green",
+      "rawLog": {
+        "file": "task-worktree:work/probe-requeue-green.log",
+        "sha256": "adf2ea594d4ddd79df60236ddeee30f7e54605a9f6c24a332be12c649c315c4b"
+      }
+    }
+  ],
+  "regressionCounts": {
+    "red": {
+      "tests": 3,
+      "pass": 1,
+      "fail": 2,
+      "actualExitCode": 1,
+      "durationMs": 552.4107
+    },
+    "green": {
+      "tests": 7,
+      "pass": 7,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "actualExitCode": 0,
+      "durationMs": 1160.5758
+    }
+  },
+  "render": {
+    "baselineSource": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+    "twoExportsIdentical": 1800,
+    "different": 0,
+    "baselineFrames": 1800,
+    "candidateFrames": 1800,
+    "baselineComparisonDifferent": 0,
+    "baselineComparisonMissing": 0
+  }
+}

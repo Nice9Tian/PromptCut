@@ -1,0 +1,1414 @@
+{
+  "sourceFromLaunchTaskRecord": "113b425c3053f6e9867499f9d305aad975d5846b",
+  "diagnosticOnly": true,
+  "allRequiredAcceptancePassed": false,
+  "cases": [
+    {
+      "fixture": "pc-c66-hmr-isolated-hme3QE",
+      "kind": "isolated",
+      "actualExitCodeFromTaskTranscript": 0,
+      "result": {
+        "diagnosticOnly": true,
+        "startedAt": "2026-10-04T11:40:14.501Z",
+        "events": [],
+        "states": [
+          {
+            "phase": "before",
+            "id": "P",
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "before",
+            "id": "A",
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "before",
+            "id": "B",
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "added",
+            "id": "P",
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791114024179,
+              "version": 1,
+              "events": [
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114024179,
+                  "version": 1
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114024179
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114024179
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114024179
+                }
+              ]
+            }
+          },
+          {
+            "phase": "added",
+            "id": "A",
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791114024179,
+              "version": 1,
+              "events": [
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114024179,
+                  "version": 1
+                }
+              ]
+            }
+          },
+          {
+            "phase": "added",
+            "id": "B",
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791114024179,
+              "version": 1,
+              "events": [
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114024179,
+                  "version": 1
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": "P",
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791114027912,
+              "version": 3,
+              "events": [
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114024179,
+                  "version": 1
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114024179
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114024179
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114024179
+                },
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114027909,
+                  "version": 2
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114027909
+                },
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114027912,
+                  "version": 3
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114027912
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114027909
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114027909
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114027912
+                },
+                {
+                  "at": 1767225600000,
+                  "receivedStageStamp": 1791114027912
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": "A",
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791114027912,
+              "version": 3,
+              "events": [
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114024179,
+                  "version": 1
+                },
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114027909,
+                  "version": 2
+                },
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114027912,
+                  "version": 3
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": "B",
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791114027912,
+              "version": 3,
+              "events": [
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114024179,
+                  "version": 1
+                },
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114027909,
+                  "version": 2
+                },
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791114027912,
+                  "version": 3
+                }
+              ]
+            }
+          }
+        ],
+        "console": [
+          {
+            "at": 1791114016779,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114016795,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791114019418,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114019431,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791114019445,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114019469,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791114021907,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114021907,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114021909,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114022069,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/index.css"
+          },
+          {
+            "at": 1791114022071,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/index.css"
+          },
+          {
+            "at": 1791114022071,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/index.css"
+          },
+          {
+            "at": 1791114022081,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114022081,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114022083,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114022083,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114022084,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114022084,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114027938,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114027938,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114027942,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114027942,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114027942,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114027942,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114027943,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114027943,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114027945,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114027945,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114027946,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114027946,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          }
+        ],
+        "network": [],
+        "status": "collected",
+        "finishedAt": "2026-10-04T11:40:34.287Z"
+      },
+      "rawResultSha256": "de6805d0f0f829b3c2bbec8c6b97cb16a48760c7974c4453a6ac134807211b2e",
+      "rawLogSha256": "b6f7b1938cfe4855d90479d44965a50a19f819cb244265e8b1624f5e64775b81"
+    },
+    {
+      "fixture": "pc-c66-hmr-project-4Z4lv0",
+      "kind": "project",
+      "actualExitCodeFromTaskTranscript": 1,
+      "result": {
+        "diagnosticOnly": true,
+        "startedAt": "2026-10-04T11:43:37.664Z",
+        "events": [],
+        "states": [],
+        "console": [
+          {
+            "at": 1791114219751,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114219805,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791114221464,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114221483,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791114221599,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114221614,
+            "type": "debug",
+            "text": "[vite] connected."
+          }
+        ],
+        "network": [],
+        "status": "diagnostic-error",
+        "error": "Navigation timeout of 30000 ms exceeded",
+        "finishedAt": "2026-10-04T11:44:09.288Z"
+      },
+      "rawResultSha256": "1d878e3f3861b051d54a1e95b5045620f78aceabc9d551399ec6135a6bf2a70d",
+      "rawLogSha256": "1c7d32a9801c1af9839023c78b609d5e05ce2f64cfe9ca11bb9dfd2d8230ae8d"
+    },
+    {
+      "fixture": "pc-c66-hmr-project-Qj3I65",
+      "kind": "project",
+      "actualExitCodeFromTaskTranscript": 0,
+      "result": {
+        "diagnosticOnly": true,
+        "startedAt": "2026-10-04T11:49:16.537Z",
+        "events": [],
+        "states": [
+          {
+            "phase": "before",
+            "id": null,
+            "state": {
+              "known": true,
+              "name": "v0",
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "before",
+            "id": "A",
+            "state": {
+              "known": true,
+              "name": "v0",
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "before",
+            "id": "B",
+            "state": {
+              "known": true,
+              "name": "v0",
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "added",
+            "id": null,
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791114565807,
+              "version": 2,
+              "events": [
+                {
+                  "at": 1791114563256,
+                  "stamp": 1791114565804,
+                  "version": 1
+                },
+                {
+                  "at": 1791114563302,
+                  "receivedStageStamp": 1791114565804
+                },
+                {
+                  "at": 1791114563340,
+                  "receivedStageStamp": 1791114565804
+                },
+                {
+                  "at": 1791114563340,
+                  "receivedStageStamp": 1791114565807
+                },
+                {
+                  "at": 1791114563340,
+                  "receivedStageStamp": 1791114565807
+                },
+                {
+                  "at": 1791114563342,
+                  "stamp": 1791114565807,
+                  "version": 2
+                }
+              ]
+            }
+          },
+          {
+            "phase": "added",
+            "id": "A",
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791114565807,
+              "version": 2,
+              "events": [
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791114565804,
+                  "version": 1
+                },
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791114565807,
+                  "version": 2
+                }
+              ]
+            }
+          },
+          {
+            "phase": "added",
+            "id": "B",
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791114565807,
+              "version": 2,
+              "events": [
+                {
+                  "at": 1767225607867,
+                  "stamp": 1791114565804,
+                  "version": 1
+                },
+                {
+                  "at": 1767225607867,
+                  "stamp": 1791114565807,
+                  "version": 2
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": null,
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791114569238,
+              "version": 4,
+              "events": [
+                {
+                  "at": 1791114563256,
+                  "stamp": 1791114565804,
+                  "version": 1
+                },
+                {
+                  "at": 1791114563302,
+                  "receivedStageStamp": 1791114565804
+                },
+                {
+                  "at": 1791114563340,
+                  "receivedStageStamp": 1791114565804
+                },
+                {
+                  "at": 1791114563340,
+                  "receivedStageStamp": 1791114565807
+                },
+                {
+                  "at": 1791114563340,
+                  "receivedStageStamp": 1791114565807
+                },
+                {
+                  "at": 1791114563342,
+                  "stamp": 1791114565807,
+                  "version": 2
+                },
+                {
+                  "at": 1791114569258,
+                  "stamp": 1791114569235,
+                  "version": 3
+                },
+                {
+                  "at": 1791114569303,
+                  "receivedStageStamp": 1791114569235
+                },
+                {
+                  "at": 1791114569341,
+                  "receivedStageStamp": 1791114569235
+                },
+                {
+                  "at": 1791114569341,
+                  "receivedStageStamp": 1791114569238
+                },
+                {
+                  "at": 1791114569341,
+                  "receivedStageStamp": 1791114569238
+                },
+                {
+                  "at": 1791114569344,
+                  "stamp": 1791114569238,
+                  "version": 4
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": "A",
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791114569238,
+              "version": 4,
+              "events": [
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791114565804,
+                  "version": 1
+                },
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791114565807,
+                  "version": 2
+                },
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791114569235,
+                  "version": 3
+                },
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791114569238,
+                  "version": 4
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": "B",
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791114569238,
+              "version": 4,
+              "events": [
+                {
+                  "at": 1767225607867,
+                  "stamp": 1791114565804,
+                  "version": 1
+                },
+                {
+                  "at": 1767225607867,
+                  "stamp": 1791114565807,
+                  "version": 2
+                },
+                {
+                  "at": 1767225607867,
+                  "stamp": 1791114569235,
+                  "version": 3
+                },
+                {
+                  "at": 1767225607867,
+                  "stamp": 1791114569238,
+                  "version": 4
+                }
+              ]
+            }
+          }
+        ],
+        "console": [
+          {
+            "at": 1791114558609,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114558672,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791114560380,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114560390,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791114560531,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791114560579,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791114563256,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114563256,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114563263,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114563263,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114563263,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114563263,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114563268,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114563268,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114563268,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114563268,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114563342,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114563343,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114569258,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114569258,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114569264,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114569264,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114569266,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114569266,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114569268,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114569268,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114569269,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114569270,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791114569344,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791114569344,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          }
+        ],
+        "network": [],
+        "status": "collected",
+        "finishedAt": "2026-10-04T11:49:35.682Z"
+      },
+      "rawResultSha256": "a1e3ece4be6e822be316c29102a015c20aadbc28dd2d2c5afd155dd42c802337",
+      "rawLogSha256": "ad3997629920a5946e798eb60d2a433fa776cf85399cd5e0d76d73f367c80504"
+    },
+    {
+      "fixture": "pc-c66-hmr-unknown-ujirHA",
+      "kind": "unknown",
+      "actualExitCodeFromTaskTranscript": 0,
+      "result": {
+        "diagnosticOnly": true,
+        "startedAt": "2026-10-04T12:00:32.062Z",
+        "events": [],
+        "states": [
+          {
+            "phase": "before",
+            "id": null,
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "before",
+            "id": "A",
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "before",
+            "id": "B",
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "events": []
+            }
+          },
+          {
+            "phase": "added",
+            "id": null,
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791115241820,
+              "version": 1,
+              "events": [
+                {
+                  "at": 1791115239296,
+                  "stamp": 1791115241820,
+                  "version": 1
+                },
+                {
+                  "at": 1791115239340,
+                  "receivedStageStamp": 1791115241820
+                },
+                {
+                  "at": 1791115239377,
+                  "receivedStageStamp": 1791115241820
+                }
+              ]
+            }
+          },
+          {
+            "phase": "added",
+            "id": "A",
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791115241820,
+              "version": 1,
+              "events": [
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791115241820,
+                  "version": 1
+                }
+              ]
+            }
+          },
+          {
+            "phase": "added",
+            "id": "B",
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791115241820,
+              "version": 1,
+              "events": [
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791115241820,
+                  "version": 1
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": null,
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791115245276,
+              "version": 3,
+              "events": [
+                {
+                  "at": 1791115239296,
+                  "stamp": 1791115241820,
+                  "version": 1
+                },
+                {
+                  "at": 1791115239340,
+                  "receivedStageStamp": 1791115241820
+                },
+                {
+                  "at": 1791115239377,
+                  "receivedStageStamp": 1791115241820
+                },
+                {
+                  "at": 1791115245300,
+                  "stamp": 1791115245273,
+                  "version": 2
+                },
+                {
+                  "at": 1791115245345,
+                  "receivedStageStamp": 1791115245273
+                },
+                {
+                  "at": 1791115245381,
+                  "receivedStageStamp": 1791115245273
+                },
+                {
+                  "at": 1791115245381,
+                  "receivedStageStamp": 1791115245276
+                },
+                {
+                  "at": 1791115245381,
+                  "receivedStageStamp": 1791115245276
+                },
+                {
+                  "at": 1791115245383,
+                  "stamp": 1791115245276,
+                  "version": 3
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": "A",
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791115245276,
+              "version": 3,
+              "events": [
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791115241820,
+                  "version": 1
+                },
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791115245273,
+                  "version": 2
+                },
+                {
+                  "at": 1767225602500,
+                  "stamp": 1791115245276,
+                  "version": 3
+                }
+              ]
+            }
+          },
+          {
+            "phase": "changed",
+            "id": "B",
+            "state": {
+              "known": true,
+              "name": "v2",
+              "stamp": 1791115245276,
+              "version": 3,
+              "events": [
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791115241820,
+                  "version": 1
+                },
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791115245273,
+                  "version": 2
+                },
+                {
+                  "at": 1767225600000,
+                  "stamp": 1791115245276,
+                  "version": 3
+                }
+              ]
+            }
+          }
+        ],
+        "console": [
+          {
+            "at": 1791115234674,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791115234696,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791115236380,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791115236397,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791115236516,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791115236538,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791115239283,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115239285,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115239290,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115239296,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115239296,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115239298,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115239298,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115239301,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115239301,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115239477,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/index.css"
+          },
+          {
+            "at": 1791115239477,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/index.css"
+          },
+          {
+            "at": 1791115239477,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/index.css"
+          },
+          {
+            "at": 1791115245300,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115245300,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115245308,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115245308,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115245308,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115245308,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115245311,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115245311,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115245311,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115245311,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115245383,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115245383,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          }
+        ],
+        "network": [],
+        "status": "collected",
+        "finishedAt": "2026-10-04T12:00:51.725Z"
+      },
+      "rawResultSha256": "0a288810bbe1fcce59456a9d75d063eb79d3c8e3db5f17d1cb0c3bed94c7f486",
+      "rawLogSha256": "7ef08a96469fb0dc53a4a21dc36bd6d481e891b74c02329554d39de517c9b763"
+    },
+    {
+      "fixture": "pc-c66-hmr-boot-lGkEaK",
+      "kind": "boot",
+      "actualExitCodeFromTaskTranscript": 1,
+      "result": {
+        "diagnosticOnly": true,
+        "startedAt": "2026-10-04T12:11:47.888Z",
+        "events": [],
+        "states": [
+          {
+            "phase": "before",
+            "id": null,
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "stageReady": "undefined",
+              "cardHotModules": [
+                {
+                  "path": "/src/cards/index.ts",
+                  "callbacks": 1
+                }
+              ],
+              "events": []
+            }
+          },
+          {
+            "phase": "before",
+            "id": "A",
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "stageReady": "undefined",
+              "cardHotModules": [],
+              "events": []
+            }
+          },
+          {
+            "phase": "before",
+            "id": "B",
+            "state": {
+              "known": false,
+              "stamp": 0,
+              "version": 0,
+              "stageReady": "undefined",
+              "cardHotModules": [],
+              "events": []
+            }
+          },
+          {
+            "phase": "added",
+            "id": null,
+            "state": {
+              "known": true,
+              "name": "v1",
+              "stamp": 1791115916389,
+              "version": 1,
+              "stageReady": "undefined",
+              "cardHotModules": [
+                {
+                  "path": "/src/cards/index.ts",
+                  "callbacks": 1
+                }
+              ],
+              "events": [
+                {
+                  "at": 1791115912835,
+                  "stamp": 1791115916389,
+                  "version": 1
+                }
+              ]
+            }
+          }
+        ],
+        "console": [
+          {
+            "at": 1791115910160,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791115910178,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791115911816,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791115911837,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791115911954,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791115911972,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791115912816,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115912836,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/render/cardSourceFiles.mjs"
+          },
+          {
+            "at": 1791115912836,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/cards/index.ts"
+          },
+          {
+            "at": 1791115913051,
+            "type": "debug",
+            "text": "[vite] hot updated: /src/index.css"
+          },
+          {
+            "at": 1791115916876,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791115916877,
+            "type": "debug",
+            "text": "[vite] connecting..."
+          },
+          {
+            "at": 1791115916888,
+            "type": "debug",
+            "text": "[vite] connected."
+          },
+          {
+            "at": 1791115916892,
+            "type": "debug",
+            "text": "[vite] connected."
+          }
+        ],
+        "network": [],
+        "status": "diagnostic-error",
+        "error": "Cannot read properties of undefined (reading 'hotModulesMap')",
+        "finishedAt": "2026-10-04T12:11:59.292Z"
+      },
+      "rawResultSha256": "b95eeee9adeda808763aeb03315d148dcbe8a0860d0c11707d0f25f8f589b755",
+      "rawLogSha256": "d89a89577a1db291a6807dae41ce4476b2c7bc81d2be65618eafdc78bc280b71"
+    }
+  ],
+  "budgetReplay": {
+    "runtimeCodeSource": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+    "actualExitCode": 0,
+    "result": {
+      "kind": "pure-budget-replay",
+      "diagnosticOnly": true,
+      "measuredScalarsSource": "c10seek10042016",
+      "deadMs": 2,
+      "budgetMs": 23.333333333333332,
+      "weights": [
+        {
+          "id": "target",
+          "pinned": false,
+          "w": 10,
+          "tier": "catchup-b"
+        },
+        {
+          "id": "base",
+          "pinned": false,
+          "w": 8.5,
+          "tier": "catchup-b"
+        },
+        {
+          "id": "type",
+          "pinned": false,
+          "w": 3.5,
+          "tier": "catchup-b"
+        },
+        {
+          "id": "main",
+          "pinned": true,
+          "w": null,
+          "tier": "capped"
+        }
+      ],
+      "old": {
+        "at3": "heavy",
+        "at6": "light"
+      },
+      "candidate": {
+        "at3": "light"
+      },
+      "actualBrowserAcceptance": false
+    },
+    "rawResultSha256": "67bbc3bc56e799ef483b0808e1be4033f9c0e615cd5eeff51e9e72c9c1a7db52",
+    "scalarsInputRawResultSha256": "0229cce0123ac7184ffcd2ec47005d8a5f9ca3cf00bbbaa7f349b68a230aa45a",
+    "actualBrowserAcceptance": false
+  },
+  "limits": "Local experiments do not meet physical two-device or laptop timing acceptance. The no-wait boot experiment ended with a diagnostic exception after navigation; it is retained as exit 1, not passed. The 30s navigation timeout case is retained separately. Pure replay uses observed cost scalars and never replaces runtime costs."
+}

@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-04T07:33:30.791Z",
-  "headWhenPublished": "be3d41e5d3e41f38cf647201bcceaee6edb2199f",
-  "sourceScope": "Product sources were unchanged c70b277f through d62cd2c3. Commit 8beb0622 then fixes the existing-media upload path waiting for pending small-tier conversion, and isolates the C6.6 observer. Commit e817f7ca changes only a desktop test fixture launch argument. Renderer/decoder/card/desktop product source paths remain unchanged; older observations retain their actual source and are not relabeled as reruns.",
+  "generatedAt": "2026-10-04T13:02:34.073Z",
+  "headWhenPublished": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+  "sourceScope": "Every historical phase retains its actual commit. The latest full unit/type and desktop baseline is aba4c1f9. 113 product render was rerun in full, and aba changes only two formal probe initialization fixtures; no product/render code was changed by aba. Physical reboot and WAN recovery retain their original committed sources. No historical run is relabelled.",
   "allRequiredAcceptancePassed": false,
   "mergePerformed": false,
   "installed": false,
@@ -330,7 +330,7 @@
       "startedAt": "2026-10-04T05:12:29.369Z",
       "finishedAt": "2026-10-04T05:18:59.858Z",
       "phaseAllPassed": false,
-      "exception": "Error: 端口 5203 / 5204 / 5205 没有全空着\n    at Module.startDevServer (file:///C:/Users/admin/Documents/PromptCut/.worktrees/collaboration-reopen-recovery/scripts/lib/dev-server.mjs:113:47)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async editor (file:///C:/Users/admin/Documents/PromptCut/.worktrees/collaboration-reopen-recovery/work/reopen-integration.mjs:39:15)\n    at async file:///C:/Users/admin/Documents/PromptCut/.worktrees/collaboration-reopen-recovery/work/reopen-integration.mjs:67:44",
+      "exception": "Error: 端口 5203 / 5204 / 5205 没有全空着\n    at Module.startDevServer (file:///<test-worktree>/scripts/lib/dev-server.mjs:113:47)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async editor (file:///<test-worktree>/work/reopen-integration.mjs:39:15)\n    at async file:///<test-worktree>/work/reopen-integration.mjs:67:44",
       "results": [
         {
           "name": "ready-index",
@@ -397,7 +397,7 @@
           },
           "fails": [
             "A 以创建者进入共享项目 :: {\"ok\":false,\"error\":\"host-data-missing\"}",
-            "探针异常:Error: A 进不去共享项目\n    at file:///C:/Users/admin/Documents/PromptCut/.worktrees/collaboration-reopen-recovery/scripts/probes/shared-import-upload-probe.mjs:194:49"
+            "探针异常:Error: A 进不去共享项目\n    at file:///<test-worktree>/scripts/probes/shared-import-upload-probe.mjs:194:49"
           ],
           "pending": [],
           "skippedDetails": []
@@ -1398,7 +1398,7 @@
             },
             "settleCosts": [
               {
-                "k": "1c78651c4d",
+                "identityPrefix": "1c78651c4d",
                 "step": 0.2,
                 "stepMax": 0.3,
                 "catchUp": 12.1,
@@ -1406,7 +1406,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "2c7d893f5c",
+                "identityPrefix": "2c7d893f5c",
                 "step": 40.3,
                 "stepMax": 40.3,
                 "catchUp": 12030.5,
@@ -1415,7 +1415,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "586f169a61",
+                "identityPrefix": "586f169a61",
                 "step": 0.6,
                 "stepMax": 0.9,
                 "catchUp": 121.5,
@@ -1423,7 +1423,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "a1fd11c3e1",
+                "identityPrefix": "a1fd11c3e1",
                 "step": 40.6,
                 "stepMax": 40.6,
                 "catchUp": 1212,
@@ -1534,7 +1534,7 @@
             },
             "settleCosts": [
               {
-                "k": "1c78651c4d",
+                "identityPrefix": "1c78651c4d",
                 "step": 0.2,
                 "stepMax": 0.2,
                 "catchUp": 11.7,
@@ -1542,7 +1542,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "2c7d893f5c",
+                "identityPrefix": "2c7d893f5c",
                 "step": 40.3,
                 "stepMax": 40.3,
                 "catchUp": 12059.8,
@@ -1551,7 +1551,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "586f169a61",
+                "identityPrefix": "586f169a61",
                 "step": 0.4,
                 "stepMax": 0.7,
                 "catchUp": 93.6,
@@ -1559,7 +1559,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "a1fd11c3e1",
+                "identityPrefix": "a1fd11c3e1",
                 "step": 40.7,
                 "stepMax": 40.7,
                 "catchUp": 1209.6,
@@ -1732,7 +1732,7 @@
             },
             "settleCosts": [
               {
-                "k": "1c78651c4d",
+                "identityPrefix": "1c78651c4d",
                 "step": 0.2,
                 "stepMax": 0.4,
                 "catchUp": 13.6,
@@ -1740,7 +1740,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "2c7d893f5c",
+                "identityPrefix": "2c7d893f5c",
                 "step": 40.4,
                 "stepMax": 40.4,
                 "catchUp": 12074.75,
@@ -1749,7 +1749,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "586f169a61",
+                "identityPrefix": "586f169a61",
                 "step": 0.4,
                 "stepMax": 0.6,
                 "catchUp": 65.2,
@@ -1757,7 +1757,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "a1fd11c3e1",
+                "identityPrefix": "a1fd11c3e1",
                 "step": 40.4,
                 "stepMax": 40.4,
                 "catchUp": 1209.4,
@@ -1766,7 +1766,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "a578059fac",
+                "identityPrefix": "a578059fac",
                 "step": 0.5,
                 "stepMax": 0.6,
                 "catchUp": 54.6,
@@ -1893,7 +1893,7 @@
             },
             "settleCosts": [
               {
-                "k": "1c78651c4d",
+                "identityPrefix": "1c78651c4d",
                 "step": 0.2,
                 "stepMax": 0.2,
                 "catchUp": 11.1,
@@ -1901,7 +1901,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "2c7d893f5c",
+                "identityPrefix": "2c7d893f5c",
                 "step": 40.3,
                 "stepMax": 40.3,
                 "catchUp": 12044.95,
@@ -1910,7 +1910,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "586f169a61",
+                "identityPrefix": "586f169a61",
                 "step": 0.5,
                 "stepMax": 0.7,
                 "catchUp": 94.6,
@@ -1918,7 +1918,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "a1fd11c3e1",
+                "identityPrefix": "a1fd11c3e1",
                 "step": 40.6,
                 "stepMax": 40.6,
                 "catchUp": 1209.7,
@@ -1927,7 +1927,7 @@
                 "kind": "stepped"
               },
               {
-                "k": "a578059fac",
+                "identityPrefix": "a578059fac",
                 "step": 0.6,
                 "stepMax": 1,
                 "catchUp": 72.6,
@@ -2126,6 +2126,229 @@
           ]
         }
       ]
+    },
+    {
+      "fixture": "CQRH0H",
+      "sourceAtPhaseStart": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "baselineSource": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "startedAt": "2026-10-04T09:57:11.327Z",
+      "finishedAt": "2026-10-04T09:58:13.603Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 4790,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-CQRH0H/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 55731,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 55678.1462"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-CQRH0H/tests.log",
+            "sha256": "02462146e9e0922e630fa337d51518420266ed7d0edec790c73b943e22ac3555"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "79TIAz",
+      "sourceAtPhaseStart": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "baselineSource": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "startedAt": "2026-10-04T10:04:06.096Z",
+      "finishedAt": "2026-10-04T10:13:24.610Z",
+      "phaseAllPassed": true,
+      "pixelFrameCounts": {
+        "baseline": 1800,
+        "candidate": 1800
+      },
+      "results": [
+        {
+          "name": "determinism-1800",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node scripts/verify-determinism.mjs --url http://127.0.0.1:5203/?export=1",
+          "actualExitCode": 0,
+          "elapsedMs": 315983,
+          "expectedFrames": 1800,
+          "frameCountVerified": true,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/determinism-1800.log",
+            "sha256": "14d42b1407d23680d656357cbcbdfdbdf18dde1ebf3e5b755e70363818fc3972"
+          }
+        },
+        {
+          "name": "unified",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node scripts/verify-unified-frames.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 8394,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/unified.log",
+            "sha256": "16e87d22ffe6f1b3b13108f19bc15c98a87509eab95d2a7e32656c40420255b1"
+          }
+        },
+        {
+          "name": "candidate-export",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node scripts/probes/export-baseline-compare.mjs run --tree <test-worktree> --origin http://127.0.0.1:5203 --project <test-temp>\\pc-reopen-integration-79TIAz\\project.json --out <test-temp>\\pc-reopen-integration-79TIAz\\candidate --workers 1",
+          "actualExitCode": 0,
+          "elapsedMs": 113709,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/candidate-export.log",
+            "sha256": "ea5680ead3b05cca309b15d88fc761382acfcc4119df0f7d2e73cc43d22b61c5"
+          }
+        },
+        {
+          "name": "main-export",
+          "source": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+          "command": "node scripts/probes/export-baseline-compare.mjs run --tree <main-baseline> --origin http://127.0.0.1:5206 --project <test-temp>\\pc-reopen-integration-79TIAz\\project.json --out <test-temp>\\pc-reopen-integration-79TIAz\\baseline --workers 1",
+          "actualExitCode": 0,
+          "elapsedMs": 114168,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/main-export.log",
+            "sha256": "e2945b16645b2902a06bdccdd42f35d6be3ba461cb3f9566e9b53962450f54c7"
+          }
+        },
+        {
+          "name": "pixel-baseline",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node scripts/probes/export-baseline-compare.mjs compare --baseline <test-temp>\\pc-reopen-integration-79TIAz\\baseline\\frames --candidate <test-temp>\\pc-reopen-integration-79TIAz\\candidate\\frames",
+          "actualExitCode": 0,
+          "elapsedMs": 288,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-79TIAz/pixel-baseline.log",
+            "sha256": "d13b58bba75fbaae3f83833902f77ef272b3e08435629099b06ac9af7cf77601"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "K9qGty",
+      "sourceAtPhaseStart": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "baselineSource": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "startedAt": "2026-10-04T10:23:20.539Z",
+      "finishedAt": "2026-10-04T10:23:21.441Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "desktop-tests",
+          "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "command": "node --test desktop/test/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 883,
+          "counts": [
+            "ℹ tests 37",
+            "ℹ suites 0",
+            "ℹ pass 37",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 842.0871"
+          ],
+          "equivalentPackageCommand": "npm test --prefix desktop",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-K9qGty/desktop-tests.log",
+            "sha256": "bfb87e33c8749c880a02efb6841ee9aeacfa00e461eaaf536056c11f0f42525e"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "LkKLqz",
+      "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "startedAt": "2026-10-04T12:20:22.139Z",
+      "finishedAt": "2026-10-04T12:21:24.358Z",
+      "results": [
+        {
+          "name": "types",
+          "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5023,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-LkKLqz/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 55428,
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 55377.0695"
+          ],
+          "equivalentPackageCommand": "npm test",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-LkKLqz/tests.log",
+            "sha256": "c500dc40e2c213732af1ac2c380640d3d85df687024f7880e1d11b1f9cbd29df"
+          }
+        }
+      ],
+      "sourceAtPhaseStart": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "phaseAllPassed": true
+    },
+    {
+      "fixture": "5uTRsB",
+      "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "startedAt": "2026-10-04T12:28:40.725Z",
+      "finishedAt": "2026-10-04T12:28:41.630Z",
+      "results": [
+        {
+          "name": "desktop-tests",
+          "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "command": "node --test desktop/test/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 885,
+          "counts": [
+            "ℹ tests 37",
+            "ℹ suites 0",
+            "ℹ pass 37",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 847.1371"
+          ],
+          "equivalentPackageCommand": "npm test --prefix desktop",
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-5uTRsB/desktop-tests.log",
+            "sha256": "530045ee43459ad921ddb16803fdce4b44531685a5fd41c3dc6575b3cbdeb679"
+          }
+        }
+      ],
+      "sourceAtPhaseStart": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "phaseAllPassed": true
     }
   ],
   "fullLengthRender": {
@@ -2142,7 +2365,9 @@
     "baselineFrames": 1800,
     "candidateFrames": 1800,
     "baselineComparisonDifferent": 0,
-    "baselineComparisonMissing": 0
+    "baselineComparisonMissing": 0,
+    "sourceCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+    "sourceScope": "Actual 113 full renderer run; retained source, not described as an aba rerun"
   },
   "streamMeasurements": {
     "firstConcurrentRun": {
@@ -2247,31 +2472,43 @@
     "laptopCertified": false
   },
   "browserNode": {
-    "actualProbeExitCode": 3,
-    "fails": [],
-    "pending": [
-      "M7-A4/page-within-30s: 待笔记本复核（这台机器上的计时只作参考）",
-      "M7-A5/page-resume-after-500ms: 待笔记本复核（这台机器上的计时只作参考）",
-      "M7-A12/play-10s-longtasks-0: 待笔记本复核（这台机器上的计时只作参考）",
-      "M7-A12/bake-longtasks-0: 待笔记本复核（这台机器上的计时只作参考）",
-      "W7/cross-machine: 本机替身（两个角色在同一台机器上），真跨机待复核（D17）",
-      "W7/A4-timing-on-laptop: 计时在笔记本判：这一轮 node 角色没带 --timing-authoritative"
-    ],
-    "sameMachineSubstitute": true,
-    "laptopCertified": false
+    "historical": {
+      "actualProbeExitCode": 3,
+      "fails": [],
+      "pending": [
+        "M7-A4/page-within-30s: 待笔记本复核（这台机器上的计时只作参考）",
+        "M7-A5/page-resume-after-500ms: 待笔记本复核（这台机器上的计时只作参考）",
+        "M7-A12/play-10s-longtasks-0: 待笔记本复核（这台机器上的计时只作参考）",
+        "M7-A12/bake-longtasks-0: 待笔记本复核（这台机器上的计时只作参考）",
+        "W7/cross-machine: 本机替身（两个角色在同一台机器上），真跨机待复核（D17）",
+        "W7/A4-timing-on-laptop: 计时在笔记本判：这一轮 node 角色没带 --timing-authoritative"
+      ],
+      "sameMachineSubstitute": true,
+      "laptopCertified": false
+    },
+    "latestFormal": {
+      "file": "laptop-w7-fixed.json",
+      "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "status": "pass",
+      "nodeActualExitCode": 3,
+      "nodePartsPass": 26,
+      "creatorOnlyPending": 5,
+      "creatorSummaryActualExitCode": 0
+    },
+    "sourceProvenance": "Earlier same-machine probe exit 3 / six pending is retained. Later real two-device creator executed all 17 items / 59 parts; laptop node executed 26 applicable parts, with five creator-only pending. Exact outputs and source are in laptop-w7-fixed.json."
   },
   "build": {
     "command": "npm run build",
-    "sourceCommit": "be3d41e5d3e41f38cf647201bcceaee6edb2199f",
+    "sourceCommit": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
     "code": 0,
-    "elapsedMs": 7310,
+    "elapsedMs": 6290,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
-      "file": "task-worktree:.final-build.log",
-      "sha256": "669e45326e9e72b1d6b29e9872040afd3c1fa99709f9323569eb06d5b9572a3d"
+      "file": "task-worktree:work/aba-web-build.log",
+      "sha256": "fe30e5cd419adad2e2e71694ec97379b491a57658b8b9c56f11edeb9a2a56779"
     }
   },
   "previousBuilds": [
@@ -2301,6 +2538,34 @@
       "rawLog": {
         "file": "task-worktree:work/baseline-da26/.final-build.log",
         "sha256": "51f5364d9e64fbbd6699c6b14fda271b0aa2803bba6495f99d5bcba73a364ec2"
+      }
+    },
+    {
+      "command": "npm run build",
+      "sourceCommit": "be3d41e5d3e41f38cf647201bcceaee6edb2199f",
+      "code": 0,
+      "elapsedMs": 7310,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:.final-build.log",
+        "sha256": "669e45326e9e72b1d6b29e9872040afd3c1fa99709f9323569eb06d5b9572a3d"
+      }
+    },
+    {
+      "command": "npm run build",
+      "sourceCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "code": 0,
+      "elapsedMs": 6762,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:work/fixed-web-build.log",
+        "sha256": "3fc0cc17c7bcd08e80104fc4c8edf1874e7b90f93f20b0937d6192d5d00241f7"
       }
     }
   ],
@@ -2383,10 +2648,34 @@
     }
   ],
   "remaining": [
-    "Native OS default file-association double click with isolated runtime",
-    "Laptop authoritative timing gates and true multi-device browser node",
-    "Any unfinished or failed probe listed above",
-    "Installer target path and all-green condition before main merge/release/overwrite",
-    "Production hosting registration and relay deployment requires separate review/authorization"
-  ]
+    "System default .proc file association real double click in an isolated Windows environment; native argument and single-instance tests passed but are distinct",
+    "Installer target file/path and required all-green condition before conditional main merge/release/overwrite",
+    "Production hosting registration and relay deployment is a separate review/authorization item"
+  ],
+  "laptopFormalEvidence": {
+    "stream": {
+      "file": "laptop-stream-fixed.json",
+      "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "status": "pass"
+    },
+    "w7": {
+      "file": "laptop-w7-fixed.json",
+      "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "status": "pass",
+      "nodeActualExitCode": 3,
+      "nodePartsPass": 26,
+      "creatorOnlyPending": 5,
+      "creatorSummaryActualExitCode": 0
+    },
+    "c66": {
+      "file": "laptop-c66-aba.json",
+      "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "status": "pass"
+    },
+    "c10": {
+      "file": "laptop-c10-aba.json",
+      "source": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "status": "pass"
+    }
+  }
 }
