@@ -1,0 +1,1020 @@
+{
+  "generatedAt": "2026-10-04T06:12:43.190Z",
+  "headWhenPublished": "985e41b14f22f32d4b3cd22e8c7444e5c611ce54",
+  "sourceScope": "Product src/server (excluding server/test)/vite/desktop/package sources unchanged since c70b277f; subsequent changes are tests, probes, test silence and documents. Passing renderer observations retain their actual source.",
+  "allRequiredAcceptancePassed": false,
+  "mergePerformed": false,
+  "installed": false,
+  "phases": [
+    {
+      "fixture": "6cpOzt",
+      "sourceAtPhaseStart": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+      "startedAt": "2026-10-04T04:59:41.514Z",
+      "finishedAt": "2026-10-04T05:11:35.095Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "determinism-1800",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/verify-determinism.mjs --url http://127.0.0.1:5203/?export=1",
+          "actualExitCode": 0,
+          "elapsedMs": 354744,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-6cpOzt/determinism-1800.log",
+            "sha256": "d354a039ad78c23f287c6cf8e161add206f38118c844c934e50c2cd2b2a16f60"
+          },
+          "expectedFrames": 1800,
+          "frameCountVerified": true
+        },
+        {
+          "name": "unified",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/verify-unified-frames.mjs",
+          "actualExitCode": 1,
+          "elapsedMs": 2034,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-6cpOzt/unified.log",
+            "sha256": "672da7cae1832f34d7f4ee62d7a9892254464cf1942aef884de5f8fe6462ac9d"
+          }
+        },
+        {
+          "name": "candidate-export",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/export-baseline-compare.mjs run --tree <worktree> --origin http://127.0.0.1:5203 --project <test-temp>\\pc-reopen-integration-6cpOzt\\project.json --out <test-temp>\\pc-reopen-integration-6cpOzt\\candidate --workers 1",
+          "actualExitCode": 0,
+          "elapsedMs": 176328,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-6cpOzt/candidate-export.log",
+            "sha256": "5fa2a458f758b5bc60f16ace45827ac3bcb0dd9039b15107a53fc0d94eaff881"
+          }
+        },
+        {
+          "name": "main-export",
+          "source": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+          "command": "node scripts/probes/export-baseline-compare.mjs run --tree <main-baseline> --origin http://127.0.0.1:5206 --project <test-temp>\\pc-reopen-integration-6cpOzt\\project.json --out <test-temp>\\pc-reopen-integration-6cpOzt\\baseline --workers 1",
+          "actualExitCode": 0,
+          "elapsedMs": 172228,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-6cpOzt/main-export.log",
+            "sha256": "26bd5c175dba5bbea2d452d01fa6afe73f3bb848a135d894a7b4bcf67aa7527d"
+          }
+        },
+        {
+          "name": "pixel-baseline",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/export-baseline-compare.mjs compare --baseline <test-temp>\\pc-reopen-integration-6cpOzt\\baseline\\frames --candidate <test-temp>\\pc-reopen-integration-6cpOzt\\candidate\\frames",
+          "actualExitCode": 0,
+          "elapsedMs": 969,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-6cpOzt/pixel-baseline.log",
+            "sha256": "fde3b21adcdcef60b37b63c189fab1fdc5be2fff3b38f59c0bbf09e3e6b5152b"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "7mD8vP",
+      "sourceAtPhaseStart": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+      "startedAt": "2026-10-04T05:01:23.071Z",
+      "finishedAt": "2026-10-04T05:02:28.266Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5053,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-7mD8vP/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 58674,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-7mD8vP/tests.log",
+            "sha256": "a078e96b56db52d224dcfb7e3c25f7f2cbaf640116c5350618a508d3501e13c7"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4316",
+            "ℹ suites 0",
+            "ℹ pass 4316",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 58606.5622"
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "kdUy7V",
+      "sourceAtPhaseStart": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+      "startedAt": "2026-10-04T05:01:57.976Z",
+      "finishedAt": "2026-10-04T05:02:39.272Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "scale-k1",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-scale-probe.mjs --role all --case k1 --out <test-temp>\\pc-reopen-integration-kdUy7V\\scale-k1",
+          "actualExitCode": 0,
+          "elapsedMs": 7168,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-kdUy7V/scale-k1.log",
+            "sha256": "22e20b47334a3c210b0ea56351bbafd0a5a3640f3ac7f5c5a07f218cab8648cb"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": []
+        },
+        {
+          "name": "scale-k1-control",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-scale-probe.mjs --role all --case k1 --prefilter off --out <test-temp>\\pc-reopen-integration-kdUy7V\\scale-k1-control",
+          "actualExitCode": 0,
+          "elapsedMs": 10149,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-kdUy7V/scale-k1-control.log",
+            "sha256": "7a89fc2e1ce81c89041c7dbd1c08e2c30b03ec7bdd4314c7036e76d2c42f8b95"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": []
+        },
+        {
+          "name": "scale-k1-steady",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-scale-probe.mjs --role all --case k1 --order lock-first --out <test-temp>\\pc-reopen-integration-kdUy7V\\scale-k1-steady",
+          "actualExitCode": 0,
+          "elapsedMs": 6878,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-kdUy7V/scale-k1-steady.log",
+            "sha256": "f61182e9b9e7d1fb1077102d5b3509e4e14ff0878788f31363741fef1b77aee2"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": []
+        },
+        {
+          "name": "scale-i1",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-scale-probe.mjs --role all --case i1 --out <test-temp>\\pc-reopen-integration-kdUy7V\\scale-i1",
+          "actualExitCode": 0,
+          "elapsedMs": 17094,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-kdUy7V/scale-i1.log",
+            "sha256": "2d179fff4d6f1503159d5f2744c98ab17253b25f9e9dc37c6bcf95f5ffa6db32"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": []
+        }
+      ]
+    },
+    {
+      "fixture": "fRHEY8",
+      "sourceAtPhaseStart": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+      "startedAt": "2026-10-04T05:03:00.068Z",
+      "finishedAt": "2026-10-04T05:18:01.141Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "m7-browser",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m7-browser-probe.mjs --role all --out <test-temp>\\pc-reopen-integration-fRHEY8\\m7-browser --timeout-min 120",
+          "actualExitCode": 3,
+          "elapsedMs": 901070,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-fRHEY8/m7-browser.log",
+            "sha256": "63f9ff4b1fcd223ab6b0e24e4f25234658f66ae25c76b619155e033d58996a39"
+          },
+          "fails": [],
+          "pending": [
+            "M7-A4/page-within-30s: 待笔记本复核（这台机器上的计时只作参考）",
+            "M7-A5/page-resume-after-500ms: 待笔记本复核（这台机器上的计时只作参考）",
+            "M7-A12/play-10s-longtasks-0: 待笔记本复核（这台机器上的计时只作参考）",
+            "M7-A12/bake-longtasks-0: 待笔记本复核（这台机器上的计时只作参考）",
+            "W7/cross-machine: 本机替身（两个角色在同一台机器上），真跨机待复核（D17）",
+            "W7/A4-timing-on-laptop: 计时在笔记本判：这一轮 node 角色没带 --timing-authoritative"
+          ],
+          "skippedDetails": [
+            {
+              "context": "root.planDump.pc.stats",
+              "reason": "720"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "UuLKRT",
+      "sourceAtPhaseStart": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+      "startedAt": "2026-10-04T05:04:51.814Z",
+      "finishedAt": "2026-10-04T05:31:22.016Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "m8-cloud-e3",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-e-probe.mjs --role all --case e3 --place cloud --out <test-temp>\\pc-reopen-integration-UuLKRT\\m8-cloud-e3",
+          "actualExitCode": 0,
+          "elapsedMs": 441329,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-UuLKRT/m8-cloud-e3.log",
+            "sha256": "ce8eef55c8e7a1be26ff8b1021df96c9c87e2feee6144025fc217c3544066008"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "sourceProvenance": "Original harness captured phase HEAD, not each later scenario HEAD. Product sources unchanged; e4 began after ba100b9e, e6/e1 used the new silent preload before 33d7106f."
+        },
+        {
+          "name": "m8-cloud-e2",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-e-probe.mjs --role all --case e2 --place cloud --out <test-temp>\\pc-reopen-integration-UuLKRT\\m8-cloud-e2",
+          "actualExitCode": 0,
+          "elapsedMs": 569488,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-UuLKRT/m8-cloud-e2.log",
+            "sha256": "a3de0622ccb50f94f895fe2b0e9910570ab2a4c066f61a67c2bf61489740fc98"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "sourceProvenance": "Original harness captured phase HEAD, not each later scenario HEAD. Product sources unchanged; e4 began after ba100b9e, e6/e1 used the new silent preload before 33d7106f."
+        },
+        {
+          "name": "m8-cloud-e4",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-e-probe.mjs --role all --case e4 --place cloud --out <test-temp>\\pc-reopen-integration-UuLKRT\\m8-cloud-e4",
+          "actualExitCode": 0,
+          "elapsedMs": 579071,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-UuLKRT/m8-cloud-e4.log",
+            "sha256": "679b6b099f993f329bbcaa75b730d4c3f28a8a632719590bb4c64d9204670ef1"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "sourceProvenance": "Original harness captured phase HEAD, not each later scenario HEAD. Product sources unchanged; e4 began after ba100b9e, e6/e1 used the new silent preload before 33d7106f."
+        },
+        {
+          "name": "m8-cloud-e6",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-e-probe.mjs --role all --case e6 --place cloud --out <test-temp>\\pc-reopen-integration-UuLKRT\\m8-cloud-e6",
+          "actualExitCode": 1,
+          "elapsedMs": 153,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-UuLKRT/m8-cloud-e6.log",
+            "sha256": "cee3c768d5854b70e7316fc2a2471a8f1ce6ab643d7afbcbdb2d82437e820e32"
+          },
+          "fails": [
+            "all 出错：托管组合没起来：[no-user-dirs] 不继承外部的 PROMPTCUT_DATA_DIR=<test-temp>\\pc-reopen-integration-UuLKRT\\m8-cloud-e6\\hosted\\hosted-data（测试与探针不写用户目录，见 scripts/lib/user-dirs.mjs） | {\"t\":\"2026-10-04T05:31:21.811Z\",\"event\":\"config.error\",\"reason\":\"data-dir\",\"detail\":\"unset\"} | {\"t\":\"2026-10-04T05:31:21.811Z\",\"event\":\"config.error\",\"reason\":\"data-dir\",\"detail\":\"unset\"}"
+          ],
+          "pending": [],
+          "skippedDetails": [],
+          "sourceProvenance": "Original harness captured phase HEAD, not each later scenario HEAD. Product sources unchanged; e4 began after ba100b9e, e6/e1 used the new silent preload before 33d7106f."
+        },
+        {
+          "name": "m8-cloud-e1",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/m8-e-probe.mjs --role all --case e1 --place cloud --out <test-temp>\\pc-reopen-integration-UuLKRT\\m8-cloud-e1",
+          "actualExitCode": 1,
+          "elapsedMs": 154,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-UuLKRT/m8-cloud-e1.log",
+            "sha256": "b7cd562ae2458b14276cb95423270da624017d6ea833d6bebd37642dc027b706"
+          },
+          "fails": [
+            "all 出错：托管组合没起来：[no-user-dirs] 不继承外部的 PROMPTCUT_DATA_DIR=<test-temp>\\pc-reopen-integration-UuLKRT\\m8-cloud-e1\\hosted\\hosted-data（测试与探针不写用户目录，见 scripts/lib/user-dirs.mjs） | {\"t\":\"2026-10-04T05:31:21.970Z\",\"event\":\"config.error\",\"reason\":\"data-dir\",\"detail\":\"unset\"} | {\"t\":\"2026-10-04T05:31:21.970Z\",\"event\":\"config.error\",\"reason\":\"data-dir\",\"detail\":\"unset\"}"
+          ],
+          "pending": [],
+          "skippedDetails": [],
+          "sourceProvenance": "Original harness captured phase HEAD, not each later scenario HEAD. Product sources unchanged; e4 began after ba100b9e, e6/e1 used the new silent preload before 33d7106f."
+        }
+      ]
+    },
+    {
+      "fixture": "Au6Wzj",
+      "sourceAtPhaseStart": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+      "startedAt": "2026-10-04T05:11:11.432Z",
+      "finishedAt": "2026-10-04T05:11:31.708Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "unified",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/verify-unified-frames.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 17792,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-Au6Wzj/unified.log",
+            "sha256": "c9a2fa7a401988d120c2445eb3b0c1c41868cb28eb91278928376f9d267fa970"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "utvIm6",
+      "sourceAtPhaseStart": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+      "startedAt": "2026-10-04T05:12:29.369Z",
+      "finishedAt": "2026-10-04T05:18:59.858Z",
+      "phaseAllPassed": false,
+      "exception": "Error: 端口 5203 / 5204 / 5205 没有全空着\n    at Module.startDevServer (file:///C:/Users/admin/Documents/PromptCut/.worktrees/collaboration-reopen-recovery/scripts/lib/dev-server.mjs:113:47)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async editor (file:///C:/Users/admin/Documents/PromptCut/.worktrees/collaboration-reopen-recovery/work/reopen-integration.mjs:39:15)\n    at async file:///C:/Users/admin/Documents/PromptCut/.worktrees/collaboration-reopen-recovery/work/reopen-integration.mjs:67:44",
+      "results": [
+        {
+          "name": "ready-index",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/ready-index-probe.mjs --port 5206 --out <test-temp>\\pc-reopen-integration-utvIm6\\ready-index",
+          "actualExitCode": 0,
+          "elapsedMs": 170120,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-utvIm6/ready-index.log",
+            "sha256": "e27ee823c26123421b1419b2a7193a755ed2ec55b5c5075b2d84635f9bc0c2c1"
+          }
+        },
+        {
+          "name": "streams",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5203 --out <test-temp>\\pc-reopen-integration-utvIm6\\streams --json <test-temp>\\pc-reopen-integration-utvIm6\\streams.json",
+          "actualExitCode": 1,
+          "elapsedMs": 71001,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-utvIm6/streams.log",
+            "sha256": "1cd816221a79108bf90c80cc9d41bcea958153a1e643990f3e4e6cf51eb69cc6"
+          }
+        },
+        {
+          "name": "streams-group",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5203 --out <test-temp>\\pc-reopen-integration-utvIm6\\streams-group --json <test-temp>\\pc-reopen-integration-utvIm6\\streams-group.json --group",
+          "actualExitCode": 0,
+          "elapsedMs": 44225,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-utvIm6/streams-group.log",
+            "sha256": "5cb76ce6995a558615ff5680ed15b1d0c75421085f5932cf4b3a7398967839c5"
+          }
+        },
+        {
+          "name": "fallback",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/preview-fallback-probe.mjs --origin http://127.0.0.1:5203 --out <test-temp>\\pc-reopen-integration-utvIm6\\fallback --json <test-temp>\\pc-reopen-integration-utvIm6\\fallback.json",
+          "actualExitCode": 0,
+          "elapsedMs": 99251,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-utvIm6/fallback.log",
+            "sha256": "90548f9d115c1b5a08100b4a1ca9721d81a65bac0c4da50a77d966528e33a046"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "eACAr5",
+      "sourceAtPhaseStart": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+      "startedAt": "2026-10-04T05:12:29.337Z",
+      "finishedAt": "2026-10-04T05:14:43.607Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "shared-import",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/shared-import-upload-probe.mjs --port-a 5215 --port-b 5218 --doc-port 5223 --asset-port 5224 --out <test-temp>\\pc-reopen-integration-eACAr5\\shared-import",
+          "actualExitCode": 1,
+          "elapsedMs": 23823,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-eACAr5/shared-import.log",
+            "sha256": "0c4af23027d5678c93153dff8b782df76d63384e4928628425b7b832dca56e3d"
+          },
+          "fails": [
+            "A 以创建者进入共享项目 :: {\"ok\":false,\"error\":\"host-data-missing\"}",
+            "探针异常:Error: A 进不去共享项目\n    at file:///C:/Users/admin/Documents/PromptCut/.worktrees/collaboration-reopen-recovery/scripts/probes/shared-import-upload-probe.mjs:194:49"
+          ],
+          "pending": [],
+          "skippedDetails": []
+        },
+        {
+          "name": "procp",
+          "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+          "command": "node scripts/probes/procp-roundtrip-probe.mjs --port-a 5215 --port-b 5218 --out <test-temp>\\pc-reopen-integration-eACAr5\\procp",
+          "actualExitCode": 0,
+          "elapsedMs": 110433,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-eACAr5/procp.log",
+            "sha256": "5dc4df7137d18d15e52a8433fa2c95235ca99b40444599a880bc70dd62c9bf3e"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": []
+        }
+      ]
+    },
+    {
+      "fixture": "BqVavJ",
+      "sourceAtPhaseStart": "ba100b9e94c1055e568c087a2bf7afc2f71d0002",
+      "startedAt": "2026-10-04T05:15:39.922Z",
+      "finishedAt": "2026-10-04T05:16:49.526Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "shared-import",
+          "source": "ba100b9e94c1055e568c087a2bf7afc2f71d0002",
+          "command": "node scripts/probes/shared-import-upload-probe.mjs --port-a 5229 --port-b 5232 --doc-port 5223 --asset-port 5224 --out <test-temp>\\pc-reopen-integration-BqVavJ\\shared-import",
+          "actualExitCode": 0,
+          "elapsedMs": 69601,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-BqVavJ/shared-import.log",
+            "sha256": "3a169481081caf18c427ec0e5c635190e41b4c57306eac233437c5b09ceb15cc"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": []
+        }
+      ]
+    },
+    {
+      "fixture": "ZANGP7",
+      "sourceAtPhaseStart": "ba100b9e94c1055e568c087a2bf7afc2f71d0002",
+      "startedAt": "2026-10-04T05:15:39.914Z",
+      "finishedAt": "2026-10-04T05:17:34.783Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "ba100b9e94c1055e568c087a2bf7afc2f71d0002",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 18398,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-ZANGP7/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "ba100b9e94c1055e568c087a2bf7afc2f71d0002",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 93269,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-ZANGP7/tests.log",
+            "sha256": "99d5db91621c123a23ba4cd1cd43b98e5e332dd09e2cbe74d99437bce1a116e4"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4316",
+            "ℹ suites 0",
+            "ℹ pass 4316",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 93138.3193"
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "FK2RDo",
+      "sourceAtPhaseStart": "ba100b9e94c1055e568c087a2bf7afc2f71d0002",
+      "startedAt": "2026-10-04T05:20:21.513Z",
+      "finishedAt": "2026-10-04T05:21:46.491Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "fallback-page",
+          "source": "ba100b9e94c1055e568c087a2bf7afc2f71d0002",
+          "command": "node scripts/probes/preview-fallback-probe.mjs --origin http://127.0.0.1:5209 --out <test-temp>\\pc-reopen-integration-FK2RDo\\fallback-page --json <test-temp>\\pc-reopen-integration-FK2RDo\\fallback-page.json --page-preload",
+          "actualExitCode": 0,
+          "elapsedMs": 83423,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-FK2RDo/fallback-page.log",
+            "sha256": "82786adb8fc1aad24b9054877557eb3b0c58195dc3dbbb6c2b063020ca5144ee"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "eQ80yr",
+      "sourceAtPhaseStart": "7823e939f97f6d3bbd54c36949c62f11220ce1ee",
+      "startedAt": "2026-10-04T05:32:11.438Z",
+      "finishedAt": "2026-10-04T05:33:13.948Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "types",
+          "source": "7823e939f97f6d3bbd54c36949c62f11220ce1ee",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5020,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-eQ80yr/types.log",
+            "sha256": "5830596259f71f44a33e4cc1311e27d3e39a49d8c130313279d409f8efc23978"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "7823e939f97f6d3bbd54c36949c62f11220ce1ee",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 1,
+          "elapsedMs": 56077,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-eQ80yr/tests.log",
+            "sha256": "8b7eda6ddfd5560abf5cd8510d0374513bffd69e4b37a902ec040c98afc0f67d"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4316",
+            "ℹ suites 0",
+            "ℹ pass 4291",
+            "ℹ fail 25",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 56012.271"
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "NlDxt8",
+      "sourceAtPhaseStart": "3da5b5b167c1e728e722e66cf804c582ef812dd7",
+      "startedAt": "2026-10-04T05:44:48.541Z",
+      "finishedAt": "2026-10-04T05:45:50.132Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "3da5b5b167c1e728e722e66cf804c582ef812dd7",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 4924,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-NlDxt8/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "3da5b5b167c1e728e722e66cf804c582ef812dd7",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 55565,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-NlDxt8/tests.log",
+            "sha256": "4bd8005522c7a9c62c56c3bdfe7bd8c2a03c7cc015e28694ffff5cb68154d535"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4316",
+            "ℹ suites 0",
+            "ℹ pass 4316",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 55507.1881"
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "KGyqwi",
+      "sourceAtPhaseStart": "33d7106f943e38a21d4db5a2e749d0d2a35915aa",
+      "startedAt": "2026-10-04T05:43:22.126Z",
+      "finishedAt": "2026-10-04T05:43:49.451Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "streams",
+          "source": "33d7106f943e38a21d4db5a2e749d0d2a35915aa",
+          "command": "node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5203 --out <test-temp>\\pc-reopen-integration-KGyqwi\\streams --json <test-temp>\\pc-reopen-integration-KGyqwi\\streams.json",
+          "actualExitCode": 1,
+          "elapsedMs": 25804,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-KGyqwi/streams.log",
+            "sha256": "dd955a95cb6b491adeaaee37abdd51eafeceea64748b1ce5ac7461d463ac61be"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "GwF0TQ",
+      "sourceAtPhaseStart": "ee896078c4d7286b2327e437bd523947f411be26",
+      "startedAt": "2026-10-04T05:46:45.235Z",
+      "finishedAt": null,
+      "phaseAllPassed": null,
+      "results": []
+    },
+    {
+      "fixture": "gF9Nab",
+      "sourceAtPhaseStart": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
+      "startedAt": "2026-10-04T05:48:10.657Z",
+      "finishedAt": "2026-10-04T05:48:56.682Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "streams",
+          "source": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
+          "command": "node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5203 --out <test-temp>\\pc-reopen-integration-gF9Nab\\streams --json <test-temp>\\pc-reopen-integration-gF9Nab\\streams.json",
+          "actualExitCode": 0,
+          "elapsedMs": 45001,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-gF9Nab/streams.log",
+            "sha256": "4acda24a4ee5dff62c37270e69e482526228caf36f3aec2bc9cb1a83fad0402e"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "lLMJeY",
+      "sourceAtPhaseStart": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
+      "startedAt": "2026-10-04T05:49:21.828Z",
+      "finishedAt": "2026-10-04T05:50:32.518Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 6313,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-lLMJeY/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 62616,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-lLMJeY/tests.log",
+            "sha256": "a36becb9446f90c43e2c637e2b8b3527e8fc905b33512b55a2f0b4404c3c7d17"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4316",
+            "ℹ suites 0",
+            "ℹ pass 4316",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 62550.8934"
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "SiLbcs",
+      "sourceAtPhaseStart": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
+      "startedAt": "2026-10-04T05:49:21.837Z",
+      "finishedAt": null,
+      "phaseAllPassed": null,
+      "results": [
+        {
+          "name": "m8-cloud-e6",
+          "source": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
+          "command": "node scripts/probes/m8-e-probe.mjs --role all --case e6 --place cloud --out <test-temp>\\pc-reopen-integration-SiLbcs\\m8-cloud-e6",
+          "actualExitCode": 0,
+          "elapsedMs": 446847,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-SiLbcs/m8-cloud-e6.log",
+            "sha256": "a0d2794013927f956585c3af4ccd30eb422c8c3b319d418f61e65451115c1ed2"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [
+            {
+              "context": "all",
+              "what": "reverse",
+              "reason": "反方向（主机先认领按清单发布的 plan，C10 契约第 18 节第 9 条、计划 L18）要在线页面发布不带指纹的 plan；本探针的发布方是桌面编辑器（plan 带发布方指纹，别的指纹的主机永远认领不到），不起在线页面。这一向用 c10-browser-probe.mjs 的跨机模式（--role host 带测试指纹）做"
+            },
+            {
+              "context": "creator",
+              "what": "reverse",
+              "reason": "反方向（主机先认领按清单发布的 plan，C10 契约第 18 节第 9 条、计划 L18）要在线页面发布不带指纹的 plan；本探针的发布方是桌面编辑器（plan 带发布方指纹，别的指纹的主机永远认领不到），不起在线页面。这一向用 c10-browser-probe.mjs 的跨机模式（--role host 带测试指纹）做"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "GcpH8X",
+      "sourceAtPhaseStart": "45bec73f032305055d8f66da4221bf74e0afbfaa",
+      "startedAt": "2026-10-04T05:55:22.769Z",
+      "finishedAt": "2026-10-04T05:56:29.836Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "types",
+          "source": "45bec73f032305055d8f66da4221bf74e0afbfaa",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5641,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-GcpH8X/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "45bec73f032305055d8f66da4221bf74e0afbfaa",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 1,
+          "elapsedMs": 59654,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-GcpH8X/tests.log",
+            "sha256": "72c47e24f8d449dbd11c809bb4614e7af2ffcba4519d8aa75af966075b90ff19"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4319",
+            "ℹ suites 0",
+            "ℹ pass 4318",
+            "ℹ fail 1",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 59594.0817"
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "qNv1GL",
+      "sourceAtPhaseStart": "985e41b14f22f32d4b3cd22e8c7444e5c611ce54",
+      "startedAt": "2026-10-04T06:05:42.282Z",
+      "finishedAt": "2026-10-04T06:06:50.214Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "985e41b14f22f32d4b3cd22e8c7444e5c611ce54",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 5864,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-qNv1GL/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "985e41b14f22f32d4b3cd22e8c7444e5c611ce54",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 60302,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-qNv1GL/tests.log",
+            "sha256": "39eac4d720798f86f669a3749bd1cd4176f18152204a610480e7222df0795c81"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4320",
+            "ℹ suites 0",
+            "ℹ pass 4320",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 60241.6589"
+          ]
+        }
+      ]
+    }
+  ],
+  "fullLengthRender": {
+    "source": "c70b277f3ab015d5f1ad3f928546db9e32007906",
+    "baselineSource": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+    "project": {
+      "duration": 60,
+      "fps": 30,
+      "width": 1920,
+      "height": 1080
+    },
+    "twoExportsIdentical": 1800,
+    "different": 0,
+    "baselineFrames": 1800,
+    "candidateFrames": 1800,
+    "baselineComparisonDifferent": 0,
+    "baselineComparisonMissing": 0
+  },
+  "streamMeasurements": {
+    "firstConcurrentRun": {
+      "actualExitCode": 1,
+      "fails": [
+        "1080p 全幅流 15 帧分段编码 ≤ 300 ms(无别的编码器争 CPU) :: {\"clipId\":\"clip-bg\",\"rect\":{\"x\":0,\"y\":0,\"w\":1920,\"h\":1080},\"captureMsFor15\":924,\"encodeMs\":[312,321,324],\"p50\":321,\"bytes\":427278,\"alpha\":{\"mean\":0.0957,\"max\":50}}"
+      ],
+      "bench": [
+        {
+          "clipId": "clip-bg",
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 1920,
+            "h": 1080
+          },
+          "captureMsFor15": 924,
+          "encodeMs": [
+            312,
+            321,
+            324
+          ],
+          "p50": 321,
+          "bytes": 427278,
+          "alpha": {
+            "mean": 0.0957,
+            "max": 50
+          }
+        },
+        {
+          "clipId": "clip-pill",
+          "rect": {
+            "x": 40,
+            "y": -7,
+            "w": 560,
+            "h": 374
+          },
+          "captureMsFor15": 485,
+          "encodeMs": [
+            401,
+            508,
+            908
+          ],
+          "p50": 508,
+          "bytes": 16355,
+          "alpha": {
+            "mean": 0.069,
+            "max": 54
+          }
+        }
+      ]
+    },
+    "latestQuietRun": {
+      "source": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
+      "actualExitCode": 0,
+      "fails": [],
+      "bench": [
+        {
+          "clipId": "clip-bg",
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 1920,
+            "h": 1080
+          },
+          "captureMsFor15": 591,
+          "encodeMs": [
+            177,
+            179,
+            204
+          ],
+          "p50": 179,
+          "bytes": 427278,
+          "alpha": {
+            "mean": 0.0957,
+            "max": 50
+          }
+        },
+        {
+          "clipId": "clip-pill",
+          "rect": {
+            "x": 40,
+            "y": -7,
+            "w": 560,
+            "h": 374
+          },
+          "captureMsFor15": 222,
+          "encodeMs": [
+            24,
+            29,
+            29
+          ],
+          "p50": 29,
+          "bytes": 16355,
+          "alpha": {
+            "mean": 0.069,
+            "max": 54
+          }
+        }
+      ]
+    },
+    "laptopCertified": false
+  },
+  "browserNode": {
+    "actualProbeExitCode": 3,
+    "fails": [],
+    "pending": [
+      "M7-A4/page-within-30s: 待笔记本复核（这台机器上的计时只作参考）",
+      "M7-A5/page-resume-after-500ms: 待笔记本复核（这台机器上的计时只作参考）",
+      "M7-A12/play-10s-longtasks-0: 待笔记本复核（这台机器上的计时只作参考）",
+      "M7-A12/bake-longtasks-0: 待笔记本复核（这台机器上的计时只作参考）",
+      "W7/cross-machine: 本机替身（两个角色在同一台机器上），真跨机待复核（D17）",
+      "W7/A4-timing-on-laptop: 计时在笔记本判：这一轮 node 角色没带 --timing-authoritative"
+    ],
+    "sameMachineSubstitute": true,
+    "laptopCertified": false
+  },
+  "build": {
+    "command": "npm run build",
+    "sourceCommit": "45bec73f032305055d8f66da4221bf74e0afbfaa",
+    "code": 0,
+    "elapsedMs": 13546,
+    "built": true,
+    "modules": 1830,
+    "isolatedData": true,
+    "installed": false,
+    "rawLog": {
+      "file": "task-worktree:.final-build.log",
+      "sha256": "8945b56635a86d96f6e52eb4cbb0241cf484529f132e301df2040025120c7c99"
+    }
+  },
+  "silentPreloadFailures": [
+    {
+      "source": "7823e939f97f6d3bbd54c36949c62f11220ce1ee",
+      "case": "full tests",
+      "actualExitCode": 1,
+      "tests": 4316,
+      "pass": 4291,
+      "fail": 25,
+      "skipped": 0,
+      "cause": "Preload incorrectly scrubbed explicit child data directories; fixed in 33d7106f.",
+      "fixture": "eQ80yr"
+    },
+    {
+      "source": "33d7106f943e38a21d4db5a2e749d0d2a35915aa",
+      "case": "stream decoding and independent promise-output check",
+      "actualExitCode": 1,
+      "cause": "Custom Node promisify result shape lost by wrapper.",
+      "fixture": "KGyqwi"
+    },
+    {
+      "source": "ee896078c4d7286b2327e437bd523947f411be26",
+      "case": "promise check and stream rerun",
+      "outcome": "Promise check emitted unsettled top-level await; own hung stream process tree was explicitly stopped, session exit 1.",
+      "cause": "Trailing undefined argument displaced the internal callback.",
+      "fixture": "GwF0TQ",
+      "correctedIn": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b"
+    }
+  ],
+  "silentWindowAcceptance": {
+    "guideCommit": "c06cdbacf86e2f6cc5e849ce187e437eeefaa0eb",
+    "fixCommit": "985e41b14f22f32d4b3cd22e8c7444e5c611ce54",
+    "actualOwnedWindowCount": 4,
+    "cleanedBy": "minimize only after checking test worker process chain, console birth burst and executable window title",
+    "missedEntry": "fork of render-worker.mjs in nested worker pool; test preload originally only wrapped spawn/exec",
+    "afterFixLiveChildCheck": {
+      "RootAlive": true,
+      "ChildAlive": true,
+      "ChildParentMatches": true,
+      "NewVisibleConsoleCount": 0,
+      "ExistingTestWindowsMinimized": 4
+    },
+    "childActualExitCode": 0,
+    "followupVisibleTerminalCount": 0,
+    "userProcessTerminated": false,
+    "globalTerminalSettingsModified": false
+  },
+  "addedTestHistory": [
+    {
+      "source": "45bec73f032305055d8f66da4221bf74e0afbfaa",
+      "actualExitCode": 1,
+      "tests": 4319,
+      "pass": 4318,
+      "fail": 1,
+      "cause": "New test statically imported scripts from server/test, violating the dependency gate; removed in 985e41b1."
+    },
+    {
+      "case": "fork regression fixture first attempt",
+      "actualExitCode": 1,
+      "pass": 6,
+      "fail": 1,
+      "cause": "Eval parent input-type flag was inherited by file-based fork; fixture corrected with execArgv:[], then 7/7 passed."
+    }
+  ],
+  "remaining": [
+    "Native OS default file-association double click with isolated runtime",
+    "Laptop authoritative timing gates and true multi-device browser node",
+    "Any unfinished or failed probe listed above",
+    "Installer target path and all-green condition before main merge/release/overwrite",
+    "Production hosting registration and relay deployment requires separate review/authorization"
+  ]
+}

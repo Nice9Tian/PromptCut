@@ -1,3 +1,4 @@
+docs/plan/TODO.md
 docs/plan/collaboration-relocation-contract.md
 docs/plan/collaboration-reopen-recovery-plan.md
 docs/reports/REPORT-collaboration-reopen-recovery.md
@@ -9,6 +10,7 @@ docs/reports/assets/collaboration-reopen-recovery/exit-hosted-free.json
 docs/reports/assets/collaboration-reopen-recovery/exit-lan-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/hosted-free.json
 docs/reports/assets/collaboration-reopen-recovery/hosted-restricted.json
+docs/reports/assets/collaboration-reopen-recovery/integration-verification.json
 docs/reports/assets/collaboration-reopen-recovery/lan-free.json
 docs/reports/assets/collaboration-reopen-recovery/lan-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/matrix-conflict-discard.png
@@ -33,6 +35,7 @@ docs/reports/assets/collaboration-reopen-recovery/online-free.json
 docs/reports/assets/collaboration-reopen-recovery/online-recovered.png
 docs/reports/assets/collaboration-reopen-recovery/online-restricted-latest.json
 docs/reports/assets/collaboration-reopen-recovery/online-restricted.json
+docs/reports/assets/collaboration-reopen-recovery/physical-reboot.json
 docs/reports/assets/collaboration-reopen-recovery/reboot-dry-run-latest.json
 docs/reports/assets/collaboration-reopen-recovery/reboot-dry-run.json
 docs/reports/assets/collaboration-reopen-recovery/reboot-probe-audit.json
@@ -54,11 +57,16 @@ docs/reports/assets/collaboration-reopen-recovery/wan-public-free.json
 docs/reports/assets/collaboration-reopen-recovery/wan-public-restricted-latest.json
 docs/reports/assets/collaboration-reopen-recovery/wan-public-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/wan.json
+docs/semantics/guide_files/verification.md
 docs/semantics/mechanism/hosting.md
 docs/semantics/product/document-service.md
 docs/semantics/product/hosting.md
 docs/semantics/workflow/project.md
+scripts/lib/test-silent-processes.mjs
 scripts/lib/user-dirs.mjs
+scripts/probes/c66-t9-probe.mjs
+scripts/probes/card-sync-probe.mjs
+scripts/probes/m8-e-probe.mjs
 scripts/probes/reopen-baseline.mjs
 scripts/probes/reopen-capabilities.mjs
 scripts/probes/reopen-e2e.mjs
@@ -72,6 +80,7 @@ scripts/probes/reopen-public-tunnel.mjs
 scripts/probes/reopen-reboot.mjs
 scripts/probes/reopen-wan-peer.mjs
 scripts/probes/reopen-wan.mjs
+scripts/probes/shared-import-upload-probe.mjs
 scripts/verify-determinism.mjs
 scripts/verify-unified-frames.mjs
 server/agent/doc-link.mjs
@@ -119,6 +128,7 @@ server/test/reopen-relocation-transfer.test.mjs
 server/test/reopen-relocation.test.mjs
 server/test/session-link.test.mjs
 server/test/sp-hosted.test.mjs
+server/test/test-silent-processes.test.mjs
 server/vite-plugin-docservice.ts
 src/Shell.tsx
 src/editor/ProjectSettingsDialog.tsx
