@@ -1,0 +1,28 @@
+{
+  "images": [
+    {
+      "file": "integration-card-sync-v2.png",
+      "source": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+      "fixture": "0wcEFQ",
+      "observed": "Member stage displays the v2 test marker and update notice after original-session resume.",
+      "visuallyInspected": true,
+      "sha256": "a29d5b4bfb4ab1758494c1c460a926e6a2b77bd4a6022d1e5f0baa6c5a9b002b"
+    },
+    {
+      "file": "integration-migration-entered.png",
+      "source": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+      "fixture": "StlFl3",
+      "observed": "Member entered the migrated project at the new address. Empty timeline belongs to this fixture; media and render inventory are verified separately.",
+      "visuallyInspected": true,
+      "sha256": "f56f904949312bbfb2a008a8dcc5c9854bb11d643e35612f26b34b2150fa27b1"
+    },
+    {
+      "file": "integration-t9-member-v2.png",
+      "source": "8beb06220594ae82d773cf1ba441869e744d653e",
+      "fixture": "RaCK22",
+      "observed": "Member stage shows test video at 2.5 seconds, and card source update notice. Frame 75 and absence of black frames are measured by the probe, not inferred from the screenshot.",
+      "visuallyInspected": true,
+      "sha256": "e23be5390158777d1dccbec46cb4e3c54cf9fab63fa3fd0c20d02a4235481cde"
+    }
+  ]
+}

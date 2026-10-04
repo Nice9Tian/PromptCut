@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-04T06:12:43.190Z",
-  "headWhenPublished": "985e41b14f22f32d4b3cd22e8c7444e5c611ce54",
-  "sourceScope": "Product src/server (excluding server/test)/vite/desktop/package sources unchanged since c70b277f; subsequent changes are tests, probes, test silence and documents. Passing renderer observations retain their actual source.",
+  "generatedAt": "2026-10-04T07:14:14.042Z",
+  "headWhenPublished": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+  "sourceScope": "Product sources were unchanged c70b277f through d62cd2c3. Commit 8beb0622 then fixes the existing-media upload path waiting for pending small-tier conversion, and isolates the C6.6 observer. Renderer/decoder/card source paths remain unchanged; older observations retain their actual source and are not relabeled as reruns.",
   "allRequiredAcceptancePassed": false,
   "mergePerformed": false,
   "installed": false,
@@ -299,6 +299,7 @@
           ],
           "pending": [],
           "skippedDetails": [],
+          "facts": {},
           "sourceProvenance": "Original harness captured phase HEAD, not each later scenario HEAD. Product sources unchanged; e4 began after ba100b9e, e6/e1 used the new silent preload before 33d7106f."
         }
       ]
@@ -684,8 +685,8 @@
       "fixture": "SiLbcs",
       "sourceAtPhaseStart": "45f5231a51d3182c6fb2d0d0f03fc8957f3aea6b",
       "startedAt": "2026-10-04T05:49:21.837Z",
-      "finishedAt": null,
-      "phaseAllPassed": null,
+      "finishedAt": "2026-10-04T06:23:28.044Z",
+      "phaseAllPassed": true,
       "results": [
         {
           "name": "m8-cloud-e6",
@@ -711,6 +712,50 @@
               "reason": "反方向（主机先认领按清单发布的 plan，C10 契约第 18 节第 9 条、计划 L18）要在线页面发布不带指纹的 plan；本探针的发布方是桌面编辑器（plan 带发布方指纹，别的指纹的主机永远认领不到），不起在线页面。这一向用 c10-browser-probe.mjs 的跨机模式（--role host 带测试指纹）做"
             }
           ]
+        },
+        {
+          "name": "m8-cloud-e1",
+          "source": "45bec73f032305055d8f66da4221bf74e0afbfaa",
+          "command": "node scripts/probes/m8-e-probe.mjs --role all --case e1 --place cloud --out <test-temp>\\pc-reopen-integration-SiLbcs\\m8-cloud-e1",
+          "actualExitCode": 0,
+          "elapsedMs": 1599319,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-SiLbcs/m8-cloud-e1.log",
+            "sha256": "70d9d8f576e559d314d7444fed919da5a0ec4bdbfb9b8c15226e78336220b79d"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "real": {
+              "planId": "plan:m8e-e1-muterr3wf0cc@1",
+              "tasks": 50,
+              "failed": 0,
+              "ms": 433944,
+              "pcCompleted": 15,
+              "pcDedup": 0
+            },
+            "realWork": {
+              "pc": 15,
+              "host-a": 18,
+              "host-b": 17
+            },
+            "identical": {
+              "identicalBytes": true,
+              "styleOrderOnly": 0,
+              "htmlFiles": 3000
+            },
+            "fake": {
+              "tasks": 50,
+              "allDone": true,
+              "work": {
+                "pc": 17,
+                "host-a": 16,
+                "host-b": 17
+              }
+            }
+          },
+          "sourceProvenance": "The entry HEAD was captured at launch; the test-only silent helper was extended to fork while this scenario was running. Product sources unchanged. Separate native live-window verification is recorded at 985e41b1; do not treat this scenario as proof of one immutable helper revision."
         }
       ]
     },
@@ -796,6 +841,1172 @@
             "ℹ skipped 0",
             "ℹ todo 0",
             "ℹ duration_ms 60241.6589"
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "StlFl3",
+      "sourceAtPhaseStart": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+      "startedAt": "2026-10-04T06:15:08.083Z",
+      "finishedAt": "2026-10-04T06:15:38.069Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "migration",
+          "source": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+          "command": "node scripts/probes/m8-migrate-probe.mjs --step local --ui --src-port 5223 --dst-port 5226 --editor-port 5203 --shots <test-temp>\\pc-reopen-integration-StlFl3\\migration-shots",
+          "actualExitCode": 0,
+          "elapsedMs": 29963,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-StlFl3/migration.log",
+            "sha256": "b95dd245ce41275147c81f4cbbcca5ba808bbdad088c6e42431331ffd89cd15d"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "projectId": "sp_2vcrpm2tcz6vehxb4meeri737e",
+            "revision": {
+              "inventory": 1,
+              "open": 1,
+              "afterEdit": 2
+            },
+            "renderReuse": {
+              "tasks": 4,
+              "done": 4,
+              "renders": 0,
+              "claimed": 4,
+              "completed": 0,
+              "dedup": 4,
+              "failed": 0,
+              "doneMsgs": 4,
+              "manifestsMatch": 4,
+              "created": 4
+            },
+            "assetInventory": {
+              "media": {
+                "count": 1,
+                "bytes": 262144
+              },
+              "snap": {
+                "count": 12,
+                "bytes": 1358
+              },
+              "px": {
+                "count": 0,
+                "bytes": 0
+              }
+            },
+            "readyLayers": 5,
+            "forbiddenRequests": 0,
+            "pageErrors": []
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "0wcEFQ",
+      "sourceAtPhaseStart": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+      "startedAt": "2026-10-04T06:29:12.975Z",
+      "finishedAt": "2026-10-04T06:29:45.072Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "card-sync",
+          "source": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+          "command": "node scripts/probes/card-sync-probe.mjs --doc-port 5223 --asset-port 5224 --a-port 5203 --b-port 5206 --cut-b 5226 --out <test-temp>\\pc-reopen-integration-0wcEFQ\\card-sync",
+          "actualExitCode": 0,
+          "elapsedMs": 32076,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-0wcEFQ/card-sync.log",
+            "sha256": "74343ef3638c90008a45a8cb214674f4b2a2b5290458c2fc8a78c47711cd9a08"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "projectId": "sp_yjbhxvvsmr5i5ovzf376tkhld2",
+            "cardRev": 2,
+            "installMs": 586,
+            "hmrMs": 1133,
+            "remeasureMs": 1801,
+            "stageMs": 1802,
+            "stageSwitch": {
+              "firstV2Ms": 1243,
+              "lastV1Ms": 1232,
+              "gapMs": 11,
+              "blankMs": 0,
+              "samples": 91,
+              "stageReloads": 0
+            },
+            "cut": {
+              "before": {
+                "connected": true,
+                "opens": 1,
+                "resumes": 0,
+                "link": {
+                  "transport": "ws",
+                  "detached": false,
+                  "detaches": 0,
+                  "resumes": 0,
+                  "legacy": false
+                },
+                "installed": []
+              },
+              "after": {
+                "connected": true,
+                "opens": 1,
+                "resumes": 1,
+                "link": {
+                  "transport": "ws",
+                  "detached": false,
+                  "detaches": 1,
+                  "resumes": 1,
+                  "legacy": false
+                },
+                "installed": [
+                  2
+                ]
+              }
+            },
+            "hostedHasV2": true,
+            "baseStillV1": true,
+            "aOverrideV2": true,
+            "bOverrideV2": true
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "sokEgk",
+      "sourceAtPhaseStart": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+      "startedAt": "2026-10-04T06:29:58.430Z",
+      "finishedAt": "2026-10-04T06:31:29.692Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "c66-local",
+          "source": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+          "command": "node scripts/probes/c66-t9-probe.mjs --role all --place cloud --hosted http://127.0.0.1:4277 --coord http://127.0.0.1:7033 --port-base 5203 --out <test-temp>\\pc-reopen-integration-sokEgk\\c66-local",
+          "actualExitCode": 1,
+          "elapsedMs": 90890,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-sokEgk/c66-local.log",
+            "sha256": "d1679d2082a81bf9257446624cedd017f7d141535c41a109372ef43bce8d5e04"
+          },
+          "fails": [
+            "creator: [creator] 暂停时托管端素材原尺寸还没 complete :: {\"at\":1791095410206,\"sinceImportMs\":3909,\"via\":\"chunks\",\"postStatus\":200,\"chunkSize\":8388608,\"originalBytes\":44130855,\"originalChunks\":6,\"originalReceived\":6,\"originalComplete\":true,\"smallComplete\":true}",
+            "creator: [creator] 暂停期间原尺寸停着、素材还在上传队列里 :: {\"originalReceived\":6,\"originalComplete\":true,\"queued\":1,\"target\":null}",
+            "creator: [creator] 上传队列日志:先小后大(暂停前小尺寸传完、原尺寸没传完;续传后原尺寸传完出队) :: [\"tier-start original\",\"tier-done original\",\"item-done\",\"tier-start small\",\"tier-done small\",\"tier-start original\",\"tier-done original\",\"retry\",\"tier-start small\",\"tier-done small\",\"tier-start original\",\"tier-done original\",\"item-done\"]",
+            "creator: [creator] plan 由发布方的本机节点认领",
+            "creator: 观察端 ok :: [\"[observer] 出第一帧时素材原尺寸还没 complete(创建方暂停着上传、还没续传) :: {\\\"paused\\\":{\\\"at\\\":1791095410206,\\\"skipped\\\":null,\\\"originalComplete\\\":true,\\\"originalReceived\\\":6,\\\"originalChunks\\\":6},\\\"resumedBefore\\\":false}\"]",
+            "creator: 各节点完成数之和 = 细任务数 :: {\"pc\":2,\"host\":3,\"tasks\":8}",
+            "creator ok :: {\"code\":1}",
+            "observer: [observer] 出第一帧时素材原尺寸还没 complete(创建方暂停着上传、还没续传) :: {\"paused\":{\"at\":1791095410206,\"skipped\":null,\"originalComplete\":true,\"originalReceived\":6,\"originalChunks\":6},\"resumedBefore\":false}",
+            "observer ok :: {\"code\":1}"
+          ],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "projectId": "sp_i4kxopz23htnth4fm33m7d56ad",
+            "pause": {
+              "at": 1791095410206,
+              "sinceImportMs": 3909,
+              "via": "chunks",
+              "postStatus": 200,
+              "chunkSize": 8388608,
+              "originalBytes": 44130855,
+              "originalChunks": 6,
+              "originalReceived": 6,
+              "originalComplete": true,
+              "smallComplete": true,
+              "after1500ms": {
+                "originalReceived": 6,
+                "originalComplete": true,
+                "queued": 1,
+                "target": null
+              }
+            },
+            "uploadOrder": [
+              "tier-start original",
+              "tier-done original",
+              "item-done",
+              "tier-start small",
+              "tier-done small",
+              "tier-start original",
+              "tier-done original",
+              "retry",
+              "tier-start small",
+              "tier-done small",
+              "tier-start original",
+              "tier-done original",
+              "item-done"
+            ],
+            "uploadSent": [
+              {
+                "tier": "original",
+                "attempt": 1,
+                "sent": 6
+              },
+              {
+                "tier": "small",
+                "attempt": 1,
+                "sent": 2
+              },
+              {
+                "tier": "original",
+                "attempt": 1,
+                "sent": 0
+              },
+              {
+                "tier": "small",
+                "attempt": 2,
+                "sent": 0
+              },
+              {
+                "tier": "original",
+                "attempt": 2,
+                "sent": 0
+              }
+            ],
+            "plan": {
+              "planId": "plan:p-mutfyjtf-1cc728f5@3",
+              "plans": 1,
+              "tasks": 8,
+              "done": 8,
+              "failed": 0,
+              "planDoneCount": 1,
+              "pcCompleted": 2,
+              "pcDedup": 0,
+              "pcPlanClaimed": false,
+              "publishToSettledMs": 54357,
+              "stats": {
+                "applied": 8,
+                "applyErrors": 0,
+                "fetched": 719
+              }
+            },
+            "completedByNode": {
+              "pc": 2,
+              "host": 3
+            },
+            "observer": {
+              "frameQueue": {
+                "nodes": 0,
+                "starting": false,
+                "profile": "pc"
+              },
+              "firstShown": {
+                "tier": "small",
+                "idx": 75,
+                "w": 800
+              },
+              "smallIdx": 75,
+              "original": {
+                "idx": 75,
+                "w": 1920
+              },
+              "swapMode": "covered",
+              "swapSamples": {
+                "n": 140,
+                "black": 0,
+                "idxSeen": [
+                  75
+                ],
+                "srcs": [
+                  "6ed7ccd2",
+                  "f28f765f"
+                ],
+                "smallBeforeSwap": 118,
+                "spanMs": 946,
+                "coversSwap": true,
+                "mode": "covered",
+                "swapGapMs": 844,
+                "sampleIntervalMs": 6
+              },
+              "installMs": 434,
+              "remeasureMs": 2891,
+              "pageErrors": [],
+              "ok": false
+            },
+            "host": {
+              "claimed": 3,
+              "completed": 3,
+              "dedup": 0,
+              "failed": 0,
+              "doneCounts": {
+                "tasks": 8,
+                "exactlyOnce": 8,
+                "missing": 0,
+                "duplicate": 0
+              },
+              "artifacts": {
+                "manifests": 8,
+                "missingManifests": 0,
+                "blocks": 480,
+                "missingBlocks": []
+              },
+              "exitCode": 0,
+              "ok": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "RaCK22",
+      "sourceAtPhaseStart": "8beb06220594ae82d773cf1ba441869e744d653e",
+      "startedAt": "2026-10-04T06:37:21.056Z",
+      "finishedAt": "2026-10-04T06:38:57.803Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "c66-local",
+          "source": "8beb06220594ae82d773cf1ba441869e744d653e",
+          "command": "node scripts/probes/c66-t9-probe.mjs --role all --place cloud --hosted http://127.0.0.1:11232 --coord http://127.0.0.1:11235 --port-base 5203 --out <test-temp>\\pc-reopen-integration-RaCK22\\c66-local",
+          "actualExitCode": 0,
+          "elapsedMs": 96373,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-RaCK22/c66-local.log",
+            "sha256": "ed2fb7c7207df80fad21fff37c58fee1dfcc11db0de441de1d617b3d896b5610"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "projectId": "sp_374x7v7vlzy773i4gwtt7vjumt",
+            "pause": {
+              "at": 1791095852092,
+              "sinceImportMs": 3442,
+              "via": "log",
+              "postStatus": 200,
+              "chunkSize": 8388608,
+              "originalBytes": 44096353,
+              "originalChunks": 6,
+              "originalReceived": 0,
+              "originalComplete": false,
+              "smallComplete": true,
+              "after1500ms": {
+                "originalReceived": 1,
+                "originalComplete": false,
+                "queued": 1,
+                "target": null
+              }
+            },
+            "uploadOrder": [
+              "tier-start small",
+              "tier-done small",
+              "tier-start original",
+              "retry",
+              "tier-start small",
+              "tier-done small",
+              "tier-start original",
+              "tier-done original",
+              "item-done"
+            ],
+            "uploadSent": [
+              {
+                "tier": "small",
+                "attempt": 1,
+                "sent": 2
+              },
+              {
+                "tier": "small",
+                "attempt": 2,
+                "sent": 0
+              },
+              {
+                "tier": "original",
+                "attempt": 2,
+                "sent": 5
+              }
+            ],
+            "plan": {
+              "planId": "plan:p-mutg816k-f602a492@2",
+              "plans": 1,
+              "tasks": 8,
+              "done": 8,
+              "failed": 0,
+              "planDoneCount": 1,
+              "pcCompleted": 4,
+              "pcDedup": 0,
+              "pcPlanClaimed": true,
+              "publishToSettledMs": 60447,
+              "stats": {
+                "applied": 8,
+                "applyErrors": 0,
+                "fetched": 479
+              }
+            },
+            "completedByNode": {
+              "pc": 4,
+              "host": 4
+            },
+            "observer": {
+              "frameQueue": {
+                "nodes": 0,
+                "starting": false,
+                "profile": "pc"
+              },
+              "firstShown": {
+                "tier": "small",
+                "idx": 75,
+                "w": 800
+              },
+              "smallIdx": 75,
+              "original": {
+                "idx": 75,
+                "w": 1920
+              },
+              "swapMode": "covered",
+              "swapSamples": {
+                "n": 817,
+                "black": 0,
+                "idxSeen": [
+                  75
+                ],
+                "srcs": [
+                  "3beb5776",
+                  "9f71d4b4"
+                ],
+                "smallBeforeSwap": 797,
+                "spanMs": 5003,
+                "coversSwap": true,
+                "mode": "covered",
+                "swapGapMs": 4884,
+                "sampleIntervalMs": 6
+              },
+              "installMs": 208,
+              "remeasureMs": 2160,
+              "pageErrors": [],
+              "ok": true
+            },
+            "host": {
+              "claimed": 4,
+              "completed": 4,
+              "dedup": 0,
+              "failed": 0,
+              "doneCounts": {
+                "tasks": 8,
+                "exactlyOnce": 8,
+                "missing": 0,
+                "duplicate": 0
+              },
+              "artifacts": {
+                "manifests": 8,
+                "missingManifests": 0,
+                "blocks": 480,
+                "missingBlocks": []
+              },
+              "exitCode": 0,
+              "ok": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "ijXt9C",
+      "sourceAtPhaseStart": "8beb06220594ae82d773cf1ba441869e744d653e",
+      "startedAt": "2026-10-04T06:39:17.670Z",
+      "finishedAt": "2026-10-04T06:45:49.296Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "c10-e6-reverse",
+          "source": "8beb06220594ae82d773cf1ba441869e744d653e",
+          "command": "node scripts/probes/c10-browser-probe.mjs --e6-reverse --base-port 5203 --coord http://127.0.0.1:10474 --out <test-temp>\\pc-reopen-integration-ijXt9C\\c10-e6-reverse",
+          "actualExitCode": 1,
+          "elapsedMs": 391592,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-ijXt9C/c10-e6-reverse.log",
+            "sha256": "5a0eb71eb134ffd7d80cc9e611d52f802925c3bff89c4e6209ebd8910a193596"
+          },
+          "fails": [
+            "任务 C:从 0 秒连续播放,自然进场的 (b) 档轻卡不发起播放态互换、不走估时(拍序号连续、没有断开) :: {\"typewriter\":\"c-mutgalhc-10\",\"naturalSkipped\":[],\"naturalSkips\":0,\"playRun\":{\"startFrame\":0,\"lastFrame\":299,\"breaks\":0},\"plansInPlay\":[{\"t\":1,\"ids\":[\"c-mutgalhc-y\"],\"ok\":false,\"reason\":\"rate\"}]}",
+            "超时:跳到卡中间再播:第一拍附近走估时",
+            "任务 C:跳到卡中间再播,typewriter 照旧按估时决定(发起判断的 t 在 3～3.5 秒) :: {\"lastPlan\":null,\"playRun\":null,\"naturalSkips\":null}"
+          ],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "e6ReverseChecks": [
+              {
+                "name": "Y-claimed-plan",
+                "ok": true
+              },
+              {
+                "name": "derived-fingerprints",
+                "ok": true
+              },
+              {
+                "name": "X-online-while-work",
+                "ok": true
+              },
+              {
+                "name": "X-claimed-0",
+                "ok": true
+              },
+              {
+                "name": "J-all-done",
+                "ok": true
+              },
+              {
+                "name": "J-exactly-once",
+                "ok": true
+              },
+              {
+                "name": "J-pure-layers",
+                "ok": true
+              },
+              {
+                "name": "layer-map-covers-done",
+                "ok": true
+              },
+              {
+                "name": "X-differs-from-Y",
+                "ok": true
+              }
+            ],
+            "playEntry": {
+              "natural": {
+                "typewriter": "c-mutgalhc-10",
+                "naturalSkipped": [],
+                "naturalSkips": 0,
+                "playRun": {
+                  "startFrame": 0,
+                  "lastFrame": 299,
+                  "breaks": 0
+                },
+                "plansInPlay": [
+                  {
+                    "t": 1,
+                    "ids": [
+                      "c-mutgalhc-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate"
+                  }
+                ]
+              },
+              "seekMiddle": {
+                "lastPlan": null,
+                "playRun": null,
+                "naturalSkips": null
+              }
+            },
+            "settleCosts": [
+              {
+                "k": "1c78651c4d",
+                "step": 0.2,
+                "stepMax": 0.3,
+                "catchUp": 12.1,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "2c7d893f5c",
+                "step": 40.3,
+                "stepMax": 40.3,
+                "catchUp": 12030.5,
+                "capped": true,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "586f169a61",
+                "step": 0.6,
+                "stepMax": 0.9,
+                "catchUp": 121.5,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "a1fd11c3e1",
+                "step": 40.6,
+                "stepMax": 40.6,
+                "catchUp": 1212,
+                "capped": true,
+                "vtOk": false,
+                "kind": "stepped"
+              }
+            ],
+            "ok": false
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "IBSEmz",
+      "sourceAtPhaseStart": "8beb06220594ae82d773cf1ba441869e744d653e",
+      "startedAt": "2026-10-04T06:48:02.022Z",
+      "finishedAt": "2026-10-04T06:49:07.902Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "8beb06220594ae82d773cf1ba441869e744d653e",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 6256,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-IBSEmz/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "8beb06220594ae82d773cf1ba441869e744d653e",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 58575,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-IBSEmz/tests.log",
+            "sha256": "1fae0db2bae4651331b966b50f88c695305808dea144892f863ffac5dc6e66e1"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4323",
+            "ℹ suites 0",
+            "ℹ pass 4323",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 58510.4267"
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "eOYjEj",
+      "sourceAtPhaseStart": "8beb06220594ae82d773cf1ba441869e744d653e",
+      "startedAt": "2026-10-04T06:54:19.764Z",
+      "finishedAt": "2026-10-04T06:56:39.642Z",
+      "phaseAllPassed": false,
+      "results": [
+        {
+          "name": "c10-main-a4",
+          "source": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+          "command": "node scripts/probes/c10-browser-probe.mjs --only-a4 --base-port 5203 --coord http://127.0.0.1:3397 --out <test-temp>\\pc-reopen-integration-eOYjEj\\c10-main-a4",
+          "actualExitCode": 1,
+          "elapsedMs": 139837,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-eOYjEj/c10-main-a4.log",
+            "sha256": "6d101b29723f80c487f2f2be6e17d921f9651e0aeb7716f51e2bc42e0817ac4f"
+          },
+          "fails": [
+            "任务 C:从 0 秒连续播放,自然进场的 (b) 档轻卡不发起播放态互换、不走估时(拍序号连续、没有断开) :: {\"typewriter\":\"c-mutgtxpk-10\",\"naturalSkipped\":[],\"naturalSkips\":0,\"playRun\":{\"startFrame\":0,\"lastFrame\":299,\"breaks\":0},\"plansInPlay\":[{\"t\":1,\"ids\":[\"c-mutgtxpk-y\"],\"ok\":false,\"reason\":\"rate\"}]}",
+            "超时:跳到卡中间再播:第一拍附近走估时",
+            "任务 C:跳到卡中间再播,typewriter 照旧按估时决定(发起判断的 t 在 3～3.5 秒) :: {\"lastPlan\":null,\"playRun\":null,\"naturalSkips\":null}"
+          ],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "playEntry": {
+              "natural": {
+                "typewriter": "c-mutgtxpk-10",
+                "naturalSkipped": [],
+                "naturalSkips": 0,
+                "playRun": {
+                  "startFrame": 0,
+                  "lastFrame": 299,
+                  "breaks": 0
+                },
+                "plansInPlay": [
+                  {
+                    "t": 1,
+                    "ids": [
+                      "c-mutgtxpk-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate"
+                  }
+                ]
+              },
+              "seekMiddle": {
+                "lastPlan": null,
+                "playRun": null,
+                "naturalSkips": null
+              }
+            },
+            "settleCosts": [
+              {
+                "k": "1c78651c4d",
+                "step": 0.2,
+                "stepMax": 0.2,
+                "catchUp": 11.7,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "2c7d893f5c",
+                "step": 40.3,
+                "stepMax": 40.3,
+                "catchUp": 12059.8,
+                "capped": true,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "586f169a61",
+                "step": 0.4,
+                "stepMax": 0.7,
+                "catchUp": 93.6,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "a1fd11c3e1",
+                "step": 40.7,
+                "stepMax": 40.7,
+                "catchUp": 1209.6,
+                "capped": true,
+                "vtOk": false,
+                "kind": "stepped"
+              }
+            ],
+            "ok": false,
+            "readOnlyLiveCostObservation": {
+              "method": "Connect to task-owned headless browser; match probeRun clipId/identityKey to L2 cost records without mutation",
+              "running": false,
+              "playing": false,
+              "natural": [],
+              "costs": [
+                {
+                  "cardId": "probe-slow-stepped",
+                  "step": 40.7,
+                  "catchUp": 1209.6,
+                  "vtOk": false,
+                  "seekOk": false,
+                  "seekMs": 40.2,
+                  "kind": "stepped"
+                },
+                {
+                  "cardId": "probe-slow-stepped",
+                  "step": 40.3,
+                  "catchUp": 12059.8,
+                  "vtOk": false,
+                  "seekOk": false,
+                  "seekMs": 40,
+                  "kind": "stepped"
+                },
+                {
+                  "cardId": "probe-typewriter",
+                  "step": 0.2,
+                  "catchUp": 11.7,
+                  "vtOk": false,
+                  "seekOk": false,
+                  "seekMs": 0.1,
+                  "kind": "stepped"
+                },
+                {
+                  "cardId": "chapter-bar",
+                  "step": 0.4,
+                  "catchUp": 93.6,
+                  "vtOk": false,
+                  "seekOk": false,
+                  "seekMs": 0.4,
+                  "kind": "stepped"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "UQshFZ",
+      "sourceAtPhaseStart": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+      "startedAt": "2026-10-04T06:58:02.288Z",
+      "finishedAt": "2026-10-04T07:04:43.926Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "c10-e6-reverse",
+          "source": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+          "command": "node scripts/probes/c10-browser-probe.mjs --e6-reverse --base-port 5203 --coord http://127.0.0.1:9050 --out <test-temp>\\pc-reopen-integration-UQshFZ\\c10-e6-reverse",
+          "actualExitCode": 0,
+          "elapsedMs": 401606,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-UQshFZ/c10-e6-reverse.log",
+            "sha256": "cf7377897837eb845c787ff923019dd6d1069e2c3f9a611c787d4ca9d51d1033"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "e6ReverseChecks": [
+              {
+                "name": "Y-claimed-plan",
+                "ok": true
+              },
+              {
+                "name": "derived-fingerprints",
+                "ok": true
+              },
+              {
+                "name": "X-online-while-work",
+                "ok": true
+              },
+              {
+                "name": "X-claimed-0",
+                "ok": true
+              },
+              {
+                "name": "J-all-done",
+                "ok": true
+              },
+              {
+                "name": "J-exactly-once",
+                "ok": true
+              },
+              {
+                "name": "J-pure-layers",
+                "ok": true
+              },
+              {
+                "name": "layer-map-covers-done",
+                "ok": true
+              },
+              {
+                "name": "X-differs-from-Y",
+                "ok": true
+              }
+            ],
+            "playEntryFixture": {
+              "cardId": "chapter-bar",
+              "start": 2,
+              "duration": 6,
+              "stepMs": 0.5,
+              "catchUpMs": 54.6,
+              "vtOk": false,
+              "tier": "catchup-b"
+            },
+            "playEntry": {
+              "natural": {
+                "clip": "c-mutgyp3y-12",
+                "naturalSkipped": [
+                  "c-mutgyp3y-12"
+                ],
+                "naturalSkips": 181,
+                "playRun": {
+                  "startFrame": 0,
+                  "lastFrame": 299,
+                  "breaks": 0
+                },
+                "plansInPlay": [
+                  {
+                    "t": 1,
+                    "ids": [
+                      "c-mutgyp3y-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate"
+                  }
+                ]
+              },
+              "seekMiddle": {
+                "lastPlan": {
+                  "at": 45227,
+                  "t": 3.033333333333333,
+                  "ids": [
+                    "c-mutgyp3y-12",
+                    "c-mutgyp3y-y"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 13437.199999999999,
+                  "ratePerSec": 1260,
+                  "leadMs": null
+                },
+                "playRun": {
+                  "startFrame": 90,
+                  "lastFrame": 91,
+                  "breaks": 0
+                },
+                "naturalSkips": 181
+              }
+            },
+            "settleCosts": [
+              {
+                "k": "1c78651c4d",
+                "step": 0.2,
+                "stepMax": 0.4,
+                "catchUp": 13.6,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "2c7d893f5c",
+                "step": 40.4,
+                "stepMax": 40.4,
+                "catchUp": 12074.75,
+                "capped": true,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "586f169a61",
+                "step": 0.4,
+                "stepMax": 0.6,
+                "catchUp": 65.2,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "a1fd11c3e1",
+                "step": 40.4,
+                "stepMax": 40.4,
+                "catchUp": 1209.4,
+                "capped": true,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "a578059fac",
+                "step": 0.5,
+                "stepMax": 0.6,
+                "catchUp": 54.6,
+                "vtOk": false,
+                "kind": "stepped"
+              }
+            ],
+            "ok": true
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "jD7gub",
+      "sourceAtPhaseStart": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+      "startedAt": "2026-10-04T07:04:55.791Z",
+      "finishedAt": "2026-10-04T07:05:40.973Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "shared-import",
+          "source": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+          "command": "node scripts/probes/shared-import-upload-probe.mjs --port-a 5215 --port-b 5218 --doc-port 5223 --asset-port 5224 --out <test-temp>\\pc-reopen-integration-jD7gub\\shared-import",
+          "actualExitCode": 0,
+          "elapsedMs": 18646,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-jD7gub/shared-import.log",
+            "sha256": "e91535dc5ab6f33b4414f7cb713f3ff10fc74ce339f6cc276a87fbb3f11f4749"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": []
+        },
+        {
+          "name": "procp",
+          "source": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+          "command": "node scripts/probes/procp-roundtrip-probe.mjs --port-a 5215 --port-b 5218 --out <test-temp>\\pc-reopen-integration-jD7gub\\procp",
+          "actualExitCode": 0,
+          "elapsedMs": 26496,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-jD7gub/procp.log",
+            "sha256": "129c59d8bea3be5051a1c3acb1394398c09609e9c5469405fb444401a910c8ee"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": []
+        }
+      ]
+    },
+    {
+      "fixture": "LHRR8b",
+      "sourceAtPhaseStart": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+      "startedAt": "2026-10-04T07:05:50.462Z",
+      "finishedAt": "2026-10-04T07:12:11.736Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "c10-a10",
+          "source": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+          "command": "node scripts/probes/c10-browser-probe.mjs --a10 --ticket-ttl-ms 20000 --base-port 5203 --coord http://127.0.0.1:4827 --out <test-temp>\\pc-reopen-integration-LHRR8b\\c10-a10",
+          "actualExitCode": 0,
+          "elapsedMs": 381242,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-LHRR8b/c10-a10.log",
+            "sha256": "4e1534502008b2f16f6fa1714a0f38ab0e5df0f8e2bf01c71723c75bfca32199"
+          },
+          "fails": [],
+          "pending": [],
+          "skippedDetails": [],
+          "facts": {
+            "playEntryFixture": {
+              "cardId": "chapter-bar",
+              "start": 2,
+              "duration": 6,
+              "stepMs": 0.6,
+              "catchUpMs": 72.6,
+              "vtOk": false,
+              "tier": "catchup-b"
+            },
+            "playEntry": {
+              "natural": {
+                "clip": "c-muth8py0-12",
+                "naturalSkipped": [
+                  "c-muth8py0-12"
+                ],
+                "naturalSkips": 181,
+                "playRun": {
+                  "startFrame": 0,
+                  "lastFrame": 299,
+                  "breaks": 0
+                },
+                "plansInPlay": [
+                  {
+                    "t": 1,
+                    "ids": [
+                      "c-muth8py0-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate"
+                  }
+                ]
+              },
+              "seekMiddle": {
+                "lastPlan": {
+                  "at": 45241,
+                  "t": 3.033333333333333,
+                  "ids": [
+                    "c-muth8py0-12",
+                    "c-muth8py0-y"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 13445.800000000001,
+                  "ratePerSec": 1266,
+                  "leadMs": null
+                },
+                "playRun": {
+                  "startFrame": 90,
+                  "lastFrame": 91,
+                  "breaks": 0
+                },
+                "naturalSkips": 181
+              }
+            },
+            "settleCosts": [
+              {
+                "k": "1c78651c4d",
+                "step": 0.2,
+                "stepMax": 0.2,
+                "catchUp": 11.1,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "2c7d893f5c",
+                "step": 40.3,
+                "stepMax": 40.3,
+                "catchUp": 12044.95,
+                "capped": true,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "586f169a61",
+                "step": 0.5,
+                "stepMax": 0.7,
+                "catchUp": 94.6,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "a1fd11c3e1",
+                "step": 40.6,
+                "stepMax": 40.6,
+                "catchUp": 1209.7,
+                "capped": true,
+                "vtOk": false,
+                "kind": "stepped"
+              },
+              {
+                "k": "a578059fac",
+                "step": 0.6,
+                "stepMax": 1,
+                "catchUp": 72.6,
+                "vtOk": false,
+                "kind": "stepped"
+              }
+            ],
+            "a10": {
+              "elapsedMs": 245036,
+              "ttlMs": 20000,
+              "originalsWaits": 5,
+              "export": {
+                "ms": 124588.5,
+                "frames": 300,
+                "error": null,
+                "waits": [],
+                "renewal": {
+                  "renewals": 9,
+                  "failures": 0,
+                  "exp": 1791097944163
+                },
+                "stats": {
+                  "frames": 300,
+                  "stepMs": 1163.7000000011176,
+                  "snapshotMs": 23218.60000000242,
+                  "mediaMs": 65838.09999998752,
+                  "rasterMs": 10488.600000016391,
+                  "heavyReplaced": 840,
+                  "mediaFrames": 600,
+                  "manualTicks": 920,
+                  "rafFallbacks": 0,
+                  "ticketSwaps": 18
+                }
+              }
+            },
+            "ok": true
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "r7bD5a",
+      "sourceAtPhaseStart": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+      "startedAt": "2026-10-04T07:12:20.602Z",
+      "finishedAt": "2026-10-04T07:13:23.939Z",
+      "phaseAllPassed": true,
+      "results": [
+        {
+          "name": "types",
+          "source": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "actualExitCode": 0,
+          "elapsedMs": 6612,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-r7bD5a/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "equivalentPackageCommand": "npx tsc -b --force"
+        },
+        {
+          "name": "tests",
+          "source": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "actualExitCode": 0,
+          "elapsedMs": 55078,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-r7bD5a/tests.log",
+            "sha256": "347433f86ec808bbd65c75eff86b74167f082925e88a54951b626a72aaedab6d"
+          },
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4323",
+            "ℹ suites 0",
+            "ℹ pass 4323",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 55024.4729"
           ]
         }
       ]
@@ -935,18 +2146,34 @@
   },
   "build": {
     "command": "npm run build",
-    "sourceCommit": "45bec73f032305055d8f66da4221bf74e0afbfaa",
+    "sourceCommit": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
     "code": 0,
-    "elapsedMs": 13546,
+    "elapsedMs": 7262,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
       "file": "task-worktree:.final-build.log",
-      "sha256": "8945b56635a86d96f6e52eb4cbb0241cf484529f132e301df2040025120c7c99"
+      "sha256": "bd26a60215ee354e5c5a0acd7f943ca9afb8dc5889689eecd973429aca4347c2"
     }
   },
+  "previousBuilds": [
+    {
+      "command": "npm run build",
+      "sourceCommit": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+      "code": 0,
+      "elapsedMs": 7262,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:work/baseline-d62/.final-build.log",
+        "sha256": "bd26a60215ee354e5c5a0acd7f943ca9afb8dc5889689eecd973429aca4347c2"
+      }
+    }
+  ],
   "silentPreloadFailures": [
     {
       "source": "7823e939f97f6d3bbd54c36949c62f11220ce1ee",
@@ -987,6 +2214,12 @@
       "ChildParentMatches": true,
       "NewVisibleConsoleCount": 0,
       "ExistingTestWindowsMinimized": 4
+    },
+    "liveIntegrationWindowCheck": {
+      "ObservedAt": "2026-10-04T06:38:21.7388534Z",
+      "Probe": "c66-local-after-fix",
+      "LiveOwnedProcessCount": 107,
+      "VisibleConsoleCount": 0
     },
     "childActualExitCode": 0,
     "followupVisibleTerminalCount": 0,

@@ -10,6 +10,10 @@ docs/reports/assets/collaboration-reopen-recovery/exit-hosted-free.json
 docs/reports/assets/collaboration-reopen-recovery/exit-lan-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/hosted-free.json
 docs/reports/assets/collaboration-reopen-recovery/hosted-restricted.json
+docs/reports/assets/collaboration-reopen-recovery/integration-card-sync-v2.png
+docs/reports/assets/collaboration-reopen-recovery/integration-images.json
+docs/reports/assets/collaboration-reopen-recovery/integration-migration-entered.png
+docs/reports/assets/collaboration-reopen-recovery/integration-t9-member-v2.png
 docs/reports/assets/collaboration-reopen-recovery/integration-verification.json
 docs/reports/assets/collaboration-reopen-recovery/lan-free.json
 docs/reports/assets/collaboration-reopen-recovery/lan-restricted.json
@@ -64,6 +68,7 @@ docs/semantics/product/hosting.md
 docs/semantics/workflow/project.md
 scripts/lib/test-silent-processes.mjs
 scripts/lib/user-dirs.mjs
+scripts/probes/c10-browser-probe.mjs
 scripts/probes/c66-t9-probe.mjs
 scripts/probes/card-sync-probe.mjs
 scripts/probes/m8-e-probe.mjs
@@ -129,7 +134,10 @@ server/test/reopen-relocation.test.mjs
 server/test/session-link.test.mjs
 server/test/sp-hosted.test.mjs
 server/test/test-silent-processes.test.mjs
+server/test/upload-enqueue-existing.test.mjs
+server/upload-queue.mjs
 server/vite-plugin-docservice.ts
+server/vite-plugin-media.ts
 src/Shell.tsx
 src/editor/ProjectSettingsDialog.tsx
 src/editor/io/drafts.ts
