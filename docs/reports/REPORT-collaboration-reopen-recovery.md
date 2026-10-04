@@ -100,7 +100,7 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 | 检查 | 实际结果和证据范围 |
 |---|---|
 | 类型与全量 | 最新 99859d06d6d0af2c3c6ec7d910ac2aac8c224e63：类型退出 0；全量 4,323/4,323、0 失败/0 取消/0 跳过/0 todo，55,024.4729 ms，退出 0。实际 Node 参数对应仓库 npx tsc -b --force 与 npm test。静默契约及依赖门槛先前独立 7/7；素材及补交专项 22/22、10,708.2512 ms，新加三例也纳入最新全量。 |
-| 网页构建 | d62cd2c3f56fcee36b397dc18c106afe1fdbf80e 已提交后实际 npm run build 退出 0、7,262 ms、1,830 模块。d62cd2c3 的上一轮构建退出 0、7,262 ms，原始日志另存 work/baseline-d62。没有发版或安装；发版构建须在所有必要验收通过及版本提交之后进行。 |
+| 网页构建 | da26b1c3d439f5e4d07abe5488638f36e4d9b618 已提交后实际 npm run build 退出 0、7,693 ms、1,830 模块。d62cd2c3 的上一轮构建退出 0、7,262 ms，原始日志另存 work/baseline-d62。没有发版或安装；发版构建须在所有必要验收通过及版本提交之后进行。 |
 | 全长导出确定性 | c70b277f：默认 60 秒、30 fps、1920×1080 项目，两遍完整 1,800/1,800 帧逐像素相同，0 不同，354,744 ms，退出 0。 |
 | 与 main 全长像素对账 | 独立只读 main 基准 worktree 为 adc3ae2a；candidate/main 各实际导出 1,800 帧，逐帧比较 0 不同、0 缺失，退出 0。不是十帧抽样。 |
 | 统一帧 | 素材根修正后 Au6Wzj 全条退出 0、17,792 ms，覆盖实际视频/卡片、seek、随机重放、缓存与帧表。初次错误根路径的 404 单列。 |
@@ -137,8 +137,8 @@ Windows 静默要求已经写入 guide_files/verification.md（完整提交 c06c
 | 跨设备外网中继 | Windows 原主机与远端 Linux 成员/隔离网关，三个新成员进程，版本 3→7→9，后两次读取原设备凭证，无密码交互，三命名空间哈希通过 | [wan.json](assets/collaboration-reopen-recovery/wan.json)；标明 `publicHttp:false` 时只证明实际 SSH 测试代理链路 |
 | 跨设备公开 HTTPS/WS·自由 | 独立临时公开入口；Windows 原主机与远端 Linux 成员均走公开入口，房间连续，版本 3→7→9；后两次新成员进程不输入密码，三命名空间各 50k 哈希通过 | [wan-public-free.json](assets/collaboration-reopen-recovery/wan-public-free.json)，`publicHttp:true`、`temporary-public-https-tunnel` |
 | 跨设备公开 HTTPS/WS·限定 | 独立名单中的远端成员，原主机重启后两次新进程凭原记录自动恢复；同房间与版本 3→7→9、双向编辑、三类票据素材核对 | [wan-public-restricted.json](assets/collaboration-reopen-recovery/wan-public-restricted.json)，`publicHttp:true` |
-| 当前产品源码·公开 HTTPS/WS·限定 | `sp_3xq3wmyogm4cm4qvvdwjrivp3j`，版本 3→7→9；远端成员三个独立 PID 149317/149397/149460，后两次凭原设备记录恢复；主机真实重启、双向编辑和三类 50k 素材核对通过 | [wan-public-restricted-latest.json](assets/collaboration-reopen-recovery/wan-public-restricted-latest.json)，源码 `5ece2b4e`，产品源码与 `ea9a22ed` 一致 |
-| 当前产品源码·公开 HTTPS/WS·自由 | `sp_dstshzdvkgx3ii6cxck2dsdzet`，版本 3→7→9；远端成员三个独立 PID 150252/150325/150387，后两次凭原设备记录恢复；主机真实重启、双向编辑、三类 50k 素材及节点认证通过；本轮测试服务的提供商配置隔离已实际断言 | [wan-public-free-latest.json](assets/collaboration-reopen-recovery/wan-public-free-latest.json)，源码 `4bd3087f`；真实点击命中且 `speechPromptDismissed:false` |
+| 恢复主体代码·公开 HTTPS/WS·限定 | `sp_3xq3wmyogm4cm4qvvdwjrivp3j`，版本 3→7→9；远端成员三个独立 PID 149317/149397/149460，后两次凭原设备记录恢复；主机真实重启、双向编辑和三类 50k 素材核对通过 | [wan-public-restricted-latest.json](assets/collaboration-reopen-recovery/wan-public-restricted-latest.json)，实际源码 `5ece2b4e`，当时产品源码与 `ea9a22ed` 一致；不改写为后续素材补交修改后的重跑 |
+| 恢复主体代码·公开 HTTPS/WS·自由 | `sp_dstshzdvkgx3ii6cxck2dsdzet`，版本 3→7→9；远端成员三个独立 PID 150252/150325/150387，后两次凭原设备记录恢复；主机真实重启、双向编辑、三类 50k 素材及节点认证通过；本轮测试服务的提供商配置隔离已实际断言 | [wan-public-free-latest.json](assets/collaboration-reopen-recovery/wan-public-free-latest.json)，实际源码 `4bd3087f`；真实点击命中且 `speechPromptDismissed:false`，来源范围同上 |
 | 桌面扩展矩阵·自由 | 离线日志跨真实成员进程重启，真实重放/丢弃界面与落盘备份、多窗口双向编辑、迟到身份回复取消、旧浏览器身份迁入后新进程自动恢复、踢出/解禁及改密码、损坏提示 | [matrix-free.json](assets/collaboration-reopen-recovery/matrix-free.json) |
 | 桌面扩展矩阵·限定 | 同上，加名单移除后真实认证；从系统路径打开后回首页并刷新留在首页，扩展操作后的持久版本 12 | [matrix-restricted.json](assets/collaboration-reopen-recovery/matrix-restricted.json) |
 | 云端自由扩展矩阵 | 邀请兑换加入、作废/过期拒绝旧码、成员真实重启后凭原身份重入；旧密码查看记录迁入保护存储并在真实 UI 核对；设置不生成新密码；暂时存储故障 2.016 秒后自动恢复，认证冷却 60.395 秒后重新认证，最终版本 11 | [matrix-hosted-free.json](assets/collaboration-reopen-recovery/matrix-hosted-free.json) |
@@ -356,15 +356,18 @@ g 表示实现与验证代价，h 表示预计剩余缺口，两者按 1–5 档
 4. 受控电脑重启已于 2026-10-04 实测通过。用户重启前建立的 `pc-reopen-e2e-MH2SCg` 检查点与当前启动标识不同；按默认模式执行，退出 0。原房间 `sp_e2uowvu7stzt3esqfeh7v4aj63` 保持，creator:host/member:member 认证、成员先等待后自动加入、登记 online、双向编辑及三类带票据 50k 素材均通过，服务版本 12→14，零建房。源提交 `33d7106f`，见 [physical-reboot.json](assets/collaboration-reopen-recovery/physical-reboot.json)。同开机演练与其失败历史仍单列，不改写成真实重启证据。
 5. 公开测试入口已绕开占用限制：在已授权隔离测试主机只运行任务自有临时 tunnel 子进程，转发独立网关；免费、无账户、不修改 DNS、防火墙或系统代理，不安装常驻服务。官方二进制核对 GitHub release digest；关闭测试进程后入口失效。此结果不部署生产，生产登记/中继上线由用户最后审核。[Cloudflare 官方临时入口说明](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)。
 6. 已生成并运行独立原生测试壳，逐项隔离固定端口、单实例标识、Node 数据、导出、日志、WebView2 和扩展设置；原生启动参数、单实例转发与运行副本切换已经通过。系统默认文件关联双击仍需用户物理操作/独立关联条件；没有安装到用户运行副本或改变现有文件关联。
-7. 笔记本耗时门槛待基准机复核；PC 的功能通过和耗时记录不作笔记本验收。合入 main 前按仓库规则仍需整套集成门槛，本分支没有执行 main 合入。
+7. 笔记本耗时门槛待基准机复核；PC 的功能通过和耗时记录不作笔记本验收。纯浏览器节点实际退出 3、6 项 pending：加载、闲置恢复、播放/预渲染长任务和真实跨设备观察仍待满足。在线 plan 反向指纹的本机协议 claimer 九项已通过，真实第二设备独立 host 仍未测。这些结果不合并成“全绿”，本分支没有执行 main 合入。
 8. t6nM3X 的单次 damaged 来源仍未确定。已经区分 API/浏览器诊断，并修复独立可复现的暂时存储分类错误，但缺少该次请求的来源证据；后续三次完整探针和 160 次原隔离记录只读读取通过都不是原因证明。若再次发生，按新诊断定位。
 9. 搬迁传输包含整个房间目录及所有已完成入库素材，并检查当前项目的明确引用；尚未穷举全部历史操作的语义素材引用，也没有把部分入库中的素材当完成件。这是完整性预检的范围限制，不声称可以补回源服务原本缺失的历史素材。
+10. 用户已授权验证成功后合并 main、构建并覆盖原安装包；所有必要门槛尚未通过，待覆盖安装包的确切文件或目录也尚未确定。保留审核 worktree 和待办，满足条件后再执行版本更新、合并及发版构建；本次网页构建只用于验证，没有覆盖安装包或用户运行副本。
 
 最终证据审计退出 0：34 份 JSON、3,750 个字段、170 个修改文件，所有报告链接和清单文件存在；已检查发布的截图，没有密码、派生 K、登记能力、邀请码或会话秘密。verification.json 保留 16f93bb0/4bd3087f 的原始历史来源，本轮最新基线、构建与全长渲染来源分别见 integration-verification.json；不将历史抽样改写成最新全长结果。纯报告/证据提交不改变产品代码，不重复无变化的检查。
 
 本次没有改产品桌面 Rust 壳、浏览器、ffmpeg 或内置 Python；只复制资源并在临时 Rust 测试副本中做上述隔离变换。没有发版、安装或改变用户运行目录。Node 服务读取的稳定数据目录及旧数据迁移已在隔离环境验证；桌面安装升级/系统文件关联的验收未执行。main 与 release 未前进，保持用户当前版本；本次网页及隔离调试壳构建成功不能替代合入后应执行的集成或桌面发版构建。
 
 可复跑命令：
+
+Windows 复跑下列 Node 命令时，在 `node` 后附加 `--import=./scripts/lib/test-silent-processes.mjs`，沿用本轮已验证的静默预加载入口；各探针仍须用独立目录、测试服务及必要的测试配置。实际本轮完整参数和来源记录在 integration-verification.json。
 
 ```text
 node scripts/probes/reopen-baseline.mjs --render

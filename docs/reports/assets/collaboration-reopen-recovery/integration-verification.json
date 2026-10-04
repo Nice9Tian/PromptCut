@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-04T07:14:14.042Z",
-  "headWhenPublished": "99859d06d6d0af2c3c6ec7d910ac2aac8c224e63",
+  "generatedAt": "2026-10-04T07:15:55.842Z",
+  "headWhenPublished": "da26b1c3d439f5e4d07abe5488638f36e4d9b618",
   "sourceScope": "Product sources were unchanged c70b277f through d62cd2c3. Commit 8beb0622 then fixes the existing-media upload path waiting for pending small-tier conversion, and isolates the C6.6 observer. Renderer/decoder/card source paths remain unchanged; older observations retain their actual source and are not relabeled as reruns.",
   "allRequiredAcceptancePassed": false,
   "mergePerformed": false,
@@ -2146,16 +2146,16 @@
   },
   "build": {
     "command": "npm run build",
-    "sourceCommit": "d62cd2c3f56fcee36b397dc18c106afe1fdbf80e",
+    "sourceCommit": "da26b1c3d439f5e4d07abe5488638f36e4d9b618",
     "code": 0,
-    "elapsedMs": 7262,
+    "elapsedMs": 7693,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
       "file": "task-worktree:.final-build.log",
-      "sha256": "bd26a60215ee354e5c5a0acd7f943ca9afb8dc5889689eecd973429aca4347c2"
+      "sha256": "51f5364d9e64fbbd6699c6b14fda271b0aa2803bba6495f99d5bcba73a364ec2"
     }
   },
   "previousBuilds": [
