@@ -1,5 +1,7 @@
 /** Build a test-only native shell. No installer, registry/file association, or existing runtime writes.
  * Usage: node scripts/probes/reopen-native-fixture.mjs --build
+ * Add --standalone-launch to allow a file-association launch with a private launch.json.
+ * This only builds the shell; it never changes an association or launches an app.
  * Source must be committed and clean. All executable outputs stay in a fresh OS temp fixture.
  */
 import fs from 'node:fs';
@@ -93,6 +95,64 @@ async function build() {
             let app_log_dir = fixture_root.join("logs");`, 1, 'stable test Node data and sidecar logs');
   patch('.title("PromptCut")\n                .inner_size', '.data_directory(PathBuf::from(env::var("PC_REOPEN_NATIVE_BROWSER_DIR").expect("test browser directory required")))\n                .title("PromptCut recovery test")\n                .inner_size', 1, 'isolated main WebView2 profile');
   fs.writeFileSync(lib, source);
+  const standaloneLaunch = process.argv.includes('--standalone-launch');
+  if (standaloneLaunch) {
+    // Explorer does not inherit the probe's private environment. This bootstrap
+    // belongs only to the generated fixture and leaves product opening/IPC intact.
+    const literal = value => 'r#"' + value + '"#';
+    const bootstrap = `
+fn recovery_fixture_launch() {
+    if env::var("PC_REOPEN_NATIVE_ROOT").is_ok() { return; }
+    let fixture = PathBuf::from(${literal(root)});
+    let read = std::fs::read(fixture.join("launch.json")).expect("owned launch configuration required");
+    let cfg: serde_json::Value = serde_json::from_slice(&read).expect("valid launch configuration required");
+    assert_eq!(cfg["kind"].as_str(), Some("promptcut-fixture-launch-v1"));
+    let run = PathBuf::from(cfg["env"]["PC_REOPEN_NATIVE_ROOT"].as_str().expect("run root required"));
+    assert!(run.starts_with(&fixture) && run != fixture && run.is_dir());
+    assert_eq!(std::fs::canonicalize(&run).unwrap(), run);
+    let file = proc_arg(env::args().skip(1)).expect("owned proc argument required");
+    let opened = std::fs::canonicalize(&file).expect("owned proc file must exist");
+    assert!(opened.starts_with(&run));
+    let exe = env::current_exe().unwrap();
+    assert!(exe.starts_with(&fixture));
+    let runtime = exe.parent().unwrap().join("runtime");
+    for (key, _) in env::vars() {
+        let k = key.to_uppercase();
+        if k.starts_with("PROMPTCUT_") || k.starts_with("PC_REOPEN_") || k.starts_with("VITE_") ||
+            k.starts_with("PUPPETEER_") || k == "NODE_OPTIONS" ||
+            ["KEY", "TOKEN", "PASSWORD", "SECRET"].iter().any(|part| k.contains(part)) { env::remove_var(key); }
+    }
+    for (key, value) in cfg["env"].as_object().expect("private environment required") {
+        let value = value.as_str().expect("string environment values required");
+        match key.as_str() {
+            "PC_REOPEN_NATIVE_ROOT" | "PC_REOPEN_NATIVE_BROWSER_DIR" | "PROMPTCUT_AI_CONFIG" |
+            "PROMPTCUT_CLI_HOME" | "PROMPTCUT_AGY_SETTINGS" | "PROMPTCUT_CLAUDE_CONFIG" |
+            "PROMPTCUT_CODEX_CONFIG" | "PROMPTCUT_SKILL_DIR" | "PROMPTCUT_PROJECTS_DIR" => {
+                let p = PathBuf::from(value);
+                assert!(p.starts_with(&run) && !p.components().any(|c| matches!(c, std::path::Component::ParentDir)));
+            }
+            "PROMPTCUT_RUNTIME_DIR" => assert_eq!(PathBuf::from(value), runtime),
+            "PROMPTCUT_AGENT_CDP" => assert!(value.parse::<u16>().unwrap() > 0),
+            "PROMPTCUT_NO_PORT_FILE" => assert_eq!(value, "1"),
+            "PROMPTCUT_AUTO_RENDER_NODE" | "PROMPTCUT_PUSH" | "PROMPTCUT_QUEUE_NODE" | "PROMPTCUT_LAN_HOST" => assert_eq!(value, "0"),
+            _ => panic!("unsupported fixture environment key"),
+        }
+        env::set_var(key, value);
+    }
+    let preload = runtime.join("app/scripts/lib/test-silent-processes.mjs");
+    assert!(preload.is_file());
+    env::set_var("NODE_OPTIONS", format!("--import={}", url::Url::from_file_path(preload).unwrap()));
+    let launch_id = cfg["launchId"].as_str().expect("launch identity required");
+    assert!(launch_id.len() == 32 && launch_id.bytes().all(|b| b.is_ascii_hexdigit()));
+    let receipt = serde_json::json!({ "kind": "promptcut-fixture-launched-v1", "launchId": launch_id,
+        "pid": std::process::id(), "exe": exe, "file": opened });
+    std::fs::write(fixture.join("launch-receipt.json"), serde_json::to_vec(&receipt).unwrap()).unwrap();
+}
+`;
+    source = replaceExact(source, 'pub fn run() {', bootstrap + '\npub fn run() {\n    recovery_fixture_launch();');
+    fs.writeFileSync(lib, source);
+    patches.push('test-only Explorer environment bootstrap; only owned proc files and fixed private directories');
+  }
   const agentSource = replaceExact(fs.readFileSync(agent, 'utf8').replace(/\r\n/g, '\n'), '.additional_browser_args(&browser_args(port))', '.data_directory(std::path::PathBuf::from(std::env::var("PC_REOPEN_NATIVE_BROWSER_DIR").expect("test browser directory required")))\n    .additional_browser_args(&browser_args(port))');
   fs.writeFileSync(agent, agentSource); patches.push('matching isolated agent WebView2 profile');
   const remoteFile = path.join(crate, 'capabilities/remote.json');
@@ -132,7 +192,7 @@ async function build() {
     copyTree(process.execPath, path.join(dir, 'node.exe'), root);
     copies.push({ exe: path.join(dir, 'promptcut-recovery-test.exe'), runtime: path.join(dir, 'runtime') });
   }
-  const fixture = { kind: 'promptcut-isolated-native-v1', root, sourceCommit, identifier, port: 5203, exeSha256: digest(exe), patches, copies,
+  const fixture = { kind: 'promptcut-isolated-native-v1', root, sourceCommit, identifier, port: 5203, exeSha256: digest(exe), patches, copies, standaloneLaunch,
     installerProduced: false, fileAssociationsChanged: false, existingRuntimeModified: false };
   const file = path.join(root, 'fixture.json'); fs.writeFileSync(file, JSON.stringify(fixture, null, 2));
   loadNativeFixture(file);
