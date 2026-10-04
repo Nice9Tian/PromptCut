@@ -60,9 +60,11 @@ async function resume(root) {
     assert.notEqual(hostRuntime.pid, checkpoint.hostPid); assert.notEqual(memberRuntime.pid, checkpoint.memberPid);
     for (const [p, user] of [[host, 'host'], [member, 'member']]) await p.waitForFunction((room, user) => { const v = window.rebootProbe.sync.getSyncView(); return v.shared?.projectId === room && v.shared.username === user && v.status === 'online'; }, { timeout: 30000 }, checkpoint.roomId, user);
     const before = JSON.parse(fs.readFileSync(path.join(resolved, 'evidence.json'), 'utf8'));
+    const savedVersion = before.version ?? before.evidence?.at(-1)?.version;
+    assert.ok(Number.isInteger(savedVersion) && savedVersion >= 0, 'checkpoint must contain its observed service version');
     await host.evaluate(() => window.rebootProbe.sync.whenSaved());
     const beforeRev = await host.evaluate(() => window.rebootProbe.sync.currentSharedLink().ds.rev);
-    assert.ok(beforeRev >= before.version, 'old snapshots must not reset the service version');
+    assert.ok(beforeRev >= savedVersion, 'old snapshots must not reset the service version');
     const roles = await host.evaluate(async () => {
       const response = await window.rebootProbe.sync.currentSharedLink().request({ type: 'shared.members' });
       return response.devices.filter(d => ['host', 'member'].includes(d.username)).map(d => ({ username: d.username, creator: d.creator, roles: d.conns.map(c => c.role) }));
