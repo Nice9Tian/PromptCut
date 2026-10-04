@@ -1,0 +1,258 @@
+{
+  "generatedAt": "2026-10-04T18:40:51.430Z",
+  "status": "pass-with-scope",
+  "allRequiredAcceptancePassed": false,
+  "roles": [
+    {
+      "actor": "host",
+      "actualExitCode": 0,
+      "harnessSource": "faf6b74b457930903e31ba49c02773785b7d606b",
+      "nativeShellSource": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+      "actualCommand": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-native.mjs <owned fixture.json> --nsis-patch-upgrade",
+      "actualWrapperCommand": "<owned-patch.exe> -InstallDir <owned copy-B>",
+      "outerCommandMetadataIncorrect": true,
+      "outerCommandCorrection": "The host raw metadata command named the underlying PowerShell script; its wrapper.command and this projection identify the actual NSIS executable.",
+      "result": {
+        "ok": true,
+        "sourceCommit": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+        "nativeArgument": true,
+        "nativeSingleInstanceIpc": true,
+        "nativeNormalExit": true,
+        "runtimeCopyChanged": true,
+        "emptyBrowserProfiles": true,
+        "stableDevice": true,
+        "stableRoom": "sp_wqbnzntzqx4cazqdphqsykc4k6",
+        "memberWaitThenAutomaticJoin": true,
+        "nativeActor": "host",
+        "actualInitialAuthenticationUi": true,
+        "optionalSpeechPromptDismissed": false,
+        "hostPidBefore": 50048,
+        "hostPidAfter": 20776,
+        "memberPidBefore": 43256,
+        "memberPidAfter": 51908,
+        "bidirectionalEdits": 4,
+        "binding": {
+          "creator": true,
+          "where": "lan",
+          "hostBinding": true,
+          "rev": 5
+        },
+        "asset": {
+          "bytes": 50000,
+          "hash": "5774840f38ef857db73661731cdec281d43140e2d4219e007994c738dea80f55",
+          "namespaces": [
+            "media",
+            "snap",
+            "px"
+          ]
+        },
+        "originalFileUnchanged": true,
+        "recoveryCreateRequests": 0,
+        "nativeOsDoubleClick": false,
+        "standaloneBootstrapTested": false,
+        "associationLaunches": [],
+        "installerUpgrade": true,
+        "runtimeUpgrade": {
+          "ok": true,
+          "kind": "committed-nsis-patch-wrapper",
+          "sourceCommit": "faf6b74b457930903e31ba49c02773785b7d606b",
+          "oldRuntimeSource": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+          "appVersionBefore": "0.7.14",
+          "appVersionAfter": "0.7.14",
+          "sameVersionCodeUpdate": true,
+          "installerSha256": "0800b2b8ef1981eeb866bb4adcf490c18dae4c8dbdbae816890a921d6d95e8bb",
+          "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <owned patch>/apply-patch.ps1 -InstallDir <owned copy-B>",
+          "preflight": {
+            "code": 0,
+            "elapsedMs": 367,
+            "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "applied": {
+            "code": 0,
+            "elapsedMs": 8699,
+            "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "payloadFiles": 2048,
+          "oldProbeSha256": "aa6a6b28bf6f65ce00b206d5a09d391d69fd33f1a96cff15d5c3fb6b0b842ea7",
+          "newProbeSha256": "2d8421e9e54175d3868fb20284fdee4505ce21a67bee7a4e5d7c7424e8ba81b6",
+          "protectedStateUnchanged": true,
+          "shellUnchanged": true,
+          "noProcessShutdown": true,
+          "nsisInstallerTested": true,
+          "wrapper": {
+            "sourceSha256": "dc0f931116d5c205786876dc0a33375a6e49138f369426bff154f80af6a2a479",
+            "executableSha256": "a48132982ae18f3915e9ebe00604df9a8e1f527e750b13047d841a3fc32cc46f",
+            "buildCode": 0,
+            "buildElapsedMs": 1096,
+            "buildLogSha256": "ff51c3cf2033255b8c474eb30051e87641810a3f97dab5f4acf953773f3bca63",
+            "noninteractiveConsoleHidden": true,
+            "command": "<owned-patch.exe> -InstallDir <owned copy-B>"
+          },
+          "userInstallationModified": false,
+          "fileAssociationModified": false
+        },
+        "actualComputerRestart": false,
+        "fileAssociationsChanged": false,
+        "isolatedProviderConfiguration": true,
+        "evidenceDirectory": "<test-temp>\\pc-reopen-native-Zb1XcA\\run-xQdu53"
+      },
+      "rawResult": {
+        "file": "test-temp:pc-reopen-native-Zb1XcA/run-xQdu53/native-evidence.json",
+        "sha256": "3ca4fe324732639c78baf0393e5d08845bf7e3d5bcf2b6a271bc7a7b19736ce2"
+      },
+      "rawLog": {
+        "file": "task-worktree:work/nsis-native-host-old-faf6b74b.log",
+        "sha256": "b10cdee3ce481d8d4927d4de08fb45eaa368ecce0b15bcb291397b25a6c544e1"
+      },
+      "rawBuildLog": {
+        "file": "test-temp:pc-reopen-native-Zb1XcA/run-xQdu53/nsis-build.log",
+        "sha256": "ff51c3cf2033255b8c474eb30051e87641810a3f97dab5f4acf953773f3bca63"
+      }
+    },
+    {
+      "actor": "member",
+      "actualExitCode": 0,
+      "harnessSource": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+      "nativeShellSource": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+      "actualCommand": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-native.mjs <owned fixture.json> --nsis-patch-upgrade --member",
+      "actualWrapperCommand": "<owned-patch.exe> -InstallDir <owned copy-B>",
+      "outerCommandMetadataIncorrect": false,
+      "outerCommandCorrection": "The host raw metadata command named the underlying PowerShell script; its wrapper.command and this projection identify the actual NSIS executable.",
+      "result": {
+        "ok": true,
+        "sourceCommit": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+        "nativeArgument": true,
+        "nativeSingleInstanceIpc": true,
+        "nativeNormalExit": true,
+        "runtimeCopyChanged": true,
+        "emptyBrowserProfiles": true,
+        "stableDevice": true,
+        "stableRoom": "sp_awcpjga2x3x6wu6v55bzg2ywqq",
+        "memberWaitThenAutomaticJoin": true,
+        "nativeActor": "member",
+        "actualInitialAuthenticationUi": true,
+        "optionalSpeechPromptDismissed": true,
+        "hostPidBefore": 27036,
+        "hostPidAfter": 12832,
+        "memberPidBefore": 28944,
+        "memberPidAfter": 50780,
+        "bidirectionalEdits": 4,
+        "binding": {
+          "creator": false,
+          "where": "lan",
+          "hostBinding": false,
+          "rev": 5
+        },
+        "asset": {
+          "bytes": 50000,
+          "hash": "926125b5cda583d7e5bba8230cdd0681491b4340431319adcd9f1d5df6bd1854",
+          "namespaces": [
+            "media",
+            "snap",
+            "px"
+          ]
+        },
+        "originalFileUnchanged": true,
+        "recoveryCreateRequests": 0,
+        "nativeOsDoubleClick": false,
+        "standaloneBootstrapTested": false,
+        "associationLaunches": [],
+        "installerUpgrade": true,
+        "runtimeUpgrade": {
+          "ok": true,
+          "kind": "committed-nsis-patch-wrapper",
+          "sourceCommit": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+          "oldRuntimeSource": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+          "appVersionBefore": "0.7.14",
+          "appVersionAfter": "0.7.14",
+          "sameVersionCodeUpdate": true,
+          "installerSha256": "0800b2b8ef1981eeb866bb4adcf490c18dae4c8dbdbae816890a921d6d95e8bb",
+          "command": "<owned-patch.exe> -InstallDir <owned copy-B>",
+          "preflight": {
+            "code": 0,
+            "elapsedMs": 792,
+            "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "applied": {
+            "code": 0,
+            "elapsedMs": 15654,
+            "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "payloadFiles": 2048,
+          "oldProbeSha256": "aa6a6b28bf6f65ce00b206d5a09d391d69fd33f1a96cff15d5c3fb6b0b842ea7",
+          "newProbeSha256": "2d8421e9e54175d3868fb20284fdee4505ce21a67bee7a4e5d7c7424e8ba81b6",
+          "protectedStateUnchanged": true,
+          "shellUnchanged": true,
+          "noProcessShutdown": true,
+          "nsisInstallerTested": true,
+          "wrapper": {
+            "sourceSha256": "dc0f931116d5c205786876dc0a33375a6e49138f369426bff154f80af6a2a479",
+            "executableSha256": "7685f920d6b1276f6c655861d6f1bd67b666685eaadc45aaa5539a0ea06b00cf",
+            "buildCode": 0,
+            "buildElapsedMs": 1634,
+            "buildLogSha256": "03535170016aafbbbc265dfedd48731c39375c4705e127fa0ddb1e1031885f99",
+            "noninteractiveConsoleHidden": true,
+            "command": "<owned-patch.exe> -InstallDir <owned copy-B>"
+          },
+          "userInstallationModified": false,
+          "fileAssociationModified": false
+        },
+        "actualComputerRestart": false,
+        "fileAssociationsChanged": false,
+        "isolatedProviderConfiguration": true,
+        "evidenceDirectory": "<test-temp>\\pc-reopen-native-Zb1XcA\\run-hqcKqp"
+      },
+      "rawResult": {
+        "file": "test-temp:pc-reopen-native-Zb1XcA/run-hqcKqp/native-evidence.json",
+        "sha256": "6df7cd6f061dff2b787b80f1ac93ba75c44ec34fcbb589c56e2ca56cb3186bd4"
+      },
+      "rawLog": {
+        "file": "task-worktree:work/nsis-native-member-4c5474e4.log",
+        "sha256": "15c17758b074bb1dd84bc54c636dac1500e73a4276a4133f7eb478c49e0e34c1"
+      },
+      "rawBuildLog": {
+        "file": "test-temp:pc-reopen-native-Zb1XcA/run-hqcKqp/nsis-build.log",
+        "sha256": "03535170016aafbbbc265dfedd48731c39375c4705e127fa0ddb1e1031885f99"
+      }
+    }
+  ],
+  "negative": {
+    "result": {
+      "kind": "nsis-exit-propagation-v1",
+      "startedAt": "2026-10-04T18:33:12.028Z",
+      "completedAt": "2026-10-04T18:33:13.677Z",
+      "sourceCommit": "faf6b74b457930903e31ba49c02773785b7d606b",
+      "wrapperSha256": "a48132982ae18f3915e9ebe00604df9a8e1f527e750b13047d841a3fc32cc46f",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "targetStillAbsent": true,
+      "userInstallationModified": false,
+      "command": "<owned-patch.exe> -InstallDir <owned missing directory>"
+    },
+    "commandExitCode": 0,
+    "rawResult": {
+      "file": "test-temp:pc-reopen-native-Zb1XcA/run-xQdu53/nsis-negative.json",
+      "sha256": "fcc4565fd3e70eccbd806a04b8203fa10f613a7a912967bde7651fff64f78c44"
+    },
+    "rawLog": {
+      "file": "task-worktree:work/nsis-negative-faf6b74b.log",
+      "sha256": "f5dbaeb88e26bbb14eaa8d6c7e61fab0f3818412d4e054c02330b8aaefdc707e"
+    }
+  },
+  "failedPreparation": {
+    "actualExitCode": 1,
+    "phase": "before installer",
+    "fixture": "run-ye98XG",
+    "reason": "PVGvB7 copy-A already had the same probeRunner code. The old/new code guard correctly aborted before manifest, PowerShell or NSIS execution. Switched to untouched 4f72d19e copy-A in Zb1XcA; no guard relaxed.",
+    "rawLog": {
+      "file": "task-worktree:work/nsis-native-host-faf6b74b.log",
+      "sha256": "3c18cc90df1e7bbb4c74b3df25bf34908dfebb0d4d305a8969831110a0b5add1"
+    }
+  },
+  "limitations": [
+    "This is the real committed NSIS patch wrapper, not the full setup installer.",
+    "Application version remained 0.7.14; actual code changed.",
+    "OS default double-click remains unpassed."
+  ],
+  "userInstallationModified": false
+}

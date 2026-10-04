@@ -1,3 +1,4 @@
+desktop/scripts/patch-installer.nsi
 desktop/test/ps1-json-utf8.test.mjs
 docs/plan/TODO.md
 docs/plan/collaboration-relocation-contract.md
@@ -49,12 +50,14 @@ docs/reports/assets/collaboration-reopen-recovery/matrix-password-expired.png
 docs/reports/assets/collaboration-reopen-recovery/matrix-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/matrix-storage-waiting.png
 docs/reports/assets/collaboration-reopen-recovery/matrix-unsupported.png
+docs/reports/assets/collaboration-reopen-recovery/native-default-query.json
 docs/reports/assets/collaboration-reopen-recovery/native-final-baselines.json
 docs/reports/assets/collaboration-reopen-recovery/native-host-repeat-restored.png
 docs/reports/assets/collaboration-reopen-recovery/native-host-repeat.json
 docs/reports/assets/collaboration-reopen-recovery/native-laptop-preflight.json
 docs/reports/assets/collaboration-reopen-recovery/native-member-restored.png
 docs/reports/assets/collaboration-reopen-recovery/native-member.json
+docs/reports/assets/collaboration-reopen-recovery/native-nsis-upgrade.json
 docs/reports/assets/collaboration-reopen-recovery/native-os-handoff.json
 docs/reports/assets/collaboration-reopen-recovery/native-restored.png
 docs/reports/assets/collaboration-reopen-recovery/native-upgrade.json

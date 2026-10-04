@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-04T13:02:34.073Z",
-  "headWhenPublished": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
-  "sourceScope": "Every historical phase retains its actual commit. The latest full unit/type and desktop baseline is aba4c1f9. 113 product render was rerun in full, and aba changes only two formal probe initialization fixtures; no product/render code was changed by aba. Physical reboot and WAN recovery retain their original committed sources. No historical run is relabelled.",
+  "generatedAt": "2026-10-04T18:40:51.409Z",
+  "headWhenPublished": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+  "sourceScope": "Every phase retains its actual commit. Latest type/full tests and desktop tests are 4c5474e4; webpage build also 4c5474e4. The new committed NSIS wrapper adds hidden noninteractive execution. Editor, services and renderer are unchanged; full rendering and laptop performance results retain their earlier sources.",
   "allRequiredAcceptancePassed": false,
   "mergePerformed": false,
   "installed": false,
@@ -2685,6 +2685,138 @@
           }
         }
       ]
+    },
+    {
+      "fixture": "4MtWVk",
+      "source": "faf6b74b457930903e31ba49c02773785b7d606b",
+      "startedAt": "2026-10-04T18:23:06.103Z",
+      "finishedAt": "2026-10-04T18:24:06.361Z",
+      "rawResult": {
+        "file": "test-temp:pc-reopen-integration-4MtWVk/results.json",
+        "sha256": "6e2e2d99e908317377b117f546d921f165d0e25b2c89e3f70895317f6b62595d"
+      },
+      "results": [
+        {
+          "name": "types",
+          "source": "faf6b74b457930903e31ba49c02773785b7d606b",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "elapsedMs": 5021,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "actualExitCode": 0,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-4MtWVk/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "faf6b74b457930903e31ba49c02773785b7d606b",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "elapsedMs": 53657,
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 53607.0186"
+          ],
+          "actualExitCode": 0,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-4MtWVk/tests.log",
+            "sha256": "8cf236e970011fffe5a2ccfe8403e0fc2d76c1e65ed2c70fe6909f1a385c5a10"
+          }
+        },
+        {
+          "name": "desktop-tests",
+          "source": "faf6b74b457930903e31ba49c02773785b7d606b",
+          "command": "node --import=./scripts/lib/test-silent-processes.mjs --test desktop/test/*.test.mjs",
+          "actualExitCode": 0,
+          "counts": [
+            "ℹ tests 37",
+            "ℹ suites 0",
+            "ℹ pass 37",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 900.5122"
+          ],
+          "rawLog": {
+            "file": "task-worktree:work/desktop-faf6b74b.log",
+            "sha256": "75eebb6c79525202d42eabd88f96719414c8e9bd7eef2a3ff4e5101433a952d7"
+          }
+        }
+      ]
+    },
+    {
+      "fixture": "n8geSJ",
+      "source": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+      "startedAt": "2026-10-04T18:29:57.819Z",
+      "finishedAt": "2026-10-04T18:31:11.269Z",
+      "rawResult": {
+        "file": "test-temp:pc-reopen-integration-n8geSJ/results.json",
+        "sha256": "d0e03d52a4e6fd92f465221b0f2321e47e7b0ba47b9dc186c4282feacbb73ea4"
+      },
+      "results": [
+        {
+          "name": "types",
+          "source": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "elapsedMs": 5583,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "actualExitCode": 0,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-n8geSJ/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "elapsedMs": 65494,
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 65414.4937"
+          ],
+          "actualExitCode": 0,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-n8geSJ/tests.log",
+            "sha256": "ccd51a86d82b8cca94b3bfec5665c8c29eb82f0886384cb92e2da6953ec21b4a"
+          }
+        },
+        {
+          "name": "desktop-tests",
+          "source": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+          "command": "node --import=./scripts/lib/test-silent-processes.mjs --test desktop/test/*.test.mjs",
+          "actualExitCode": 0,
+          "counts": [
+            "ℹ tests 37",
+            "ℹ suites 0",
+            "ℹ pass 37",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 826.9148"
+          ],
+          "rawLog": {
+            "file": "task-worktree:work/desktop-4c5474e4.log",
+            "sha256": "ef84e3cd114bed1e3fd23f2ad176879a100104440b8ec08890d432220110e4b5"
+          }
+        }
+      ]
     }
   ],
   "fullLengthRender": {
@@ -2835,17 +2967,17 @@
   },
   "build": {
     "command": "npm run build",
-    "sourceCommit": "b09885db74fa13091b9e3bf59969a0adeb2b1663",
-    "code": 0,
-    "elapsedMs": 7821,
+    "sourceCommit": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+    "elapsedMs": 6981,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
-      "file": "task-worktree:work/native-web-build-b09885db74fa13091b9e3bf59969a0adeb2b1663.log",
-      "sha256": "f030ac3fdf8857cecd8d3367413613933261941156419c3c718b0badc1ef3e34"
-    }
+      "file": "task-worktree:work/native-web-build-4c5474e43d38732319b95dcc706c0c4ab4922560-1791138952791.log",
+      "sha256": "5bacc5887946d5163f2b64e094e9bc15128f078380215565a97b9ccb25459865"
+    },
+    "actualExitCode": 0
   },
   "previousBuilds": [
     {
@@ -2933,6 +3065,34 @@
         "available": false,
         "unavailableReason": "Private mutable log was overwritten by the b09885db build. Original recorded digest/result retained; raw log cannot be reverified."
       }
+    },
+    {
+      "command": "npm run build",
+      "sourceCommit": "b09885db74fa13091b9e3bf59969a0adeb2b1663",
+      "code": 0,
+      "elapsedMs": 7821,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:work/native-web-build-b09885db74fa13091b9e3bf59969a0adeb2b1663.log",
+        "sha256": "f030ac3fdf8857cecd8d3367413613933261941156419c3c718b0badc1ef3e34"
+      }
+    },
+    {
+      "command": "npm run build",
+      "sourceCommit": "faf6b74b457930903e31ba49c02773785b7d606b",
+      "elapsedMs": 6713,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:work/native-web-build-faf6b74b457930903e31ba49c02773785b7d606b-1791138235433.log",
+        "sha256": "64a63e6919f347b4c84284c0f90525eeb550fc0913f266e5968f5340bd70f53b"
+      },
+      "actualExitCode": 0
     }
   ],
   "silentPreloadFailures": [
@@ -3014,7 +3174,7 @@
     }
   ],
   "remaining": [
-    "Real default .proc double-click for host and member, including existing-window forwarding. Sixteen handoff runs lack a matching receipt. Latest desktop quick runs had one incomplete post-arm new-Explorer navigation with no file input, and one valid-window real double-click that launched the installed app. All leases restored. Default-null/open and exact class paths were checked after restoration; click-instant routing cause remains unproven. User accepts desktop execution for this non-performance gate.",
+    "Real default .proc double-click for host and member, including OS existing-window forwarding. All sixteen handoffs lack a matching receipt. New actual-default API sampling passed before/after a directory refresh, but no file invocation occurred; cause remains unproven. User accepts desktop execution for this non-performance gate.",
     "All-required gate must pass before authorized main merge, release build and installer overwrite.",
     "Production hosting deployment remains separately reviewed and was not performed."
   ],
@@ -3047,6 +3207,8 @@
   "nativeFinalEvidence": {
     "upgrade": "native-upgrade.json",
     "osHandoff": "native-os-handoff.json",
-    "baselines": "native-final-baselines.json"
+    "baselines": "native-final-baselines.json",
+    "nsisUpgrade": "native-nsis-upgrade.json",
+    "defaultQueries": "native-default-query.json"
   }
 }

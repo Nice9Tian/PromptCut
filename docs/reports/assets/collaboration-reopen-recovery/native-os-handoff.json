@@ -19276,6 +19276,8 @@
   "userDecision": {
     "defaultDoubleClickOnDesktopSufficient": true,
     "laptopPerformanceBaselineStillApplicable": true,
-    "acceptanceThresholdWaived": false
-  }
+    "acceptanceThresholdWaived": false,
+    "desktopSufficientForNonPerformance": true
+  },
+  "actualDefaultDuringLeaseEvidence": "native-default-query.json"
 }

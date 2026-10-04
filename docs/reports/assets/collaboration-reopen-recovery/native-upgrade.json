@@ -175,9 +175,9 @@
     }
   },
   "limitations": [
-    "Actual committed apply-patch.ps1 was run against owned installation copies. The NSIS wrapper was not run.",
-    "Application version stayed 0.7.14; this is an actual code update, not a fabricated version update.",
-    "No user installation or file association was modified by these two upgrade runs."
+    "Earlier host/member runs used apply-patch.ps1 directly. Later real NSIS wrapper host/member recovery passed; see native-nsis-upgrade.json.",
+    "Application version stayed 0.7.14. Full setup installer not run.",
+    "Only owned runtime copies were updated; no user installation or association changed in these upgrade runs."
   ],
   "failures": [
     {
@@ -200,5 +200,6 @@
         "sha256": "2e7b18d4be2dbd46293acf0b0cb9b1fa6a5e87d63c85e863d59d6b10847de824"
       }
     }
-  ]
+  ],
+  "nsisWrapperEvidence": "native-nsis-upgrade.json"
 }

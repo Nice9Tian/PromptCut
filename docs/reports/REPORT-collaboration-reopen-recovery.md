@@ -50,6 +50,7 @@
 | Agent 重开 | `server/agent/doc-link.mjs` 更新中继接续的页面委托票据，取票或首次握手失败继续现有退避；网关核验后剥除专用票据，原服务仍严格验证会话。 |
 | 界面 | `RecoveryActions.tsx`、`SyncChips.tsx`、`CollabSection.tsx`、`MembersPanel.tsx` 区分协作已开启与瞬时连接状态，显示等待、认证、拒绝、删除、冲突及损坏；创建者改密码后更新本机记录与实时重连证明。 |
 | 语义 | `docs/semantics/workflow/project.md`、`product/document-service.md`、`product/hosting.md` 只补授权计划 §10 的重开承诺；`mechanism/hosting.md` 记录实际契约与实现边界。 |
+| 补丁静默执行 | desktop/scripts/patch-installer.nsi 在既有 PROMPTCUT_PATCH_NONINTERACTIVE 开关下以 nsExec 隐藏命令窗口，保留原交互入口；scripts/probes/reopen-native-upgrade.mjs 与 reopen-native.mjs 增加真实NSIS外壳更新验收。 |
 | 验证 | 新增 `scripts/probes/reopen-{capabilities,baseline,e2e,exit-matrix,wan,wan-peer,online,reboot,native,native-fixture}.mjs`；新增恢复、格式、权限和竞态测试，修正现有隔离测试的目录、环境和压缩夹具。 |
 
 完整修改文件清单见 [changed-files.txt](assets/collaboration-reopen-recovery/changed-files.txt)。测试与探针都使用各自临时目录和专用房间；独立编辑器使用 5203/5206/5209，第二创建者 5215，基线 5212，在线浏览器 5223，每个编辑器另占 +1/+2 舞台端口。遇占用不结束用户进程。测试服务结束后只停止本任务创建的子进程。
@@ -101,9 +102,9 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 
 | 检查 | 实际结果和证据范围 |
 |---|---|
-| 类型与全量 | 最新实际基线 1ec99174139a3375270bb4edd046506c1ccb7b8c：类型退出0、5418 ms；全量4330/4330，失败/取消/跳过/todo均0，55947.5101 ms，进程墙钟56011 ms。实际 Node 参数对应 npx tsc -b --force 和 npm test；准确命令/原日志摘要见 native-final-baselines.json。faa38f73首轮4329通过/1失败也单独保留。此前各轮与 aba 的4330/4330保留历史，不改写来源。 |
-| 桌面独立测试 | aba4c1f9 实际 node --test desktop/test/*.test.mjs（等价 npm test --prefix desktop）退出0；37/37、失败/取消/跳过/todo均0，847.1371 ms（墙钟885 ms）。仅在隔离临时目录用 -WhatIf，未覆盖运行副本。 |
-| 网页构建 | b09885db74fa13091b9e3bf59969a0adeb2b1663 已提交后实际 npm run build 退出0、7821 ms、1830模块；独立原日志 SHA f030ac3fdf8857cecd8d3367413613933261941156419c3c718b0badc1ef3e34，见 native-final-baselines.json。463b085b历史0/6800ms仍保留，但原始可变日志被本次构建覆盖，明确标不可再核验；不是通过复核的新证据。aba 的0/6290 ms及113的0/6762 ms与其它历史构建保留。没有发版、安装或覆盖安装包。 |
+| 类型与全量 | 最新实际基线 4c5474e43d38732319b95dcc706c0c4ab4922560：类型退出0、5583 ms；全量4330/4330，失败/取消/跳过/todo均0，65414.4937 ms，进程墙钟65494 ms。实际 Node 参数对应 npx tsc -b --force 和 npm test；准确命令/原日志摘要见 native-final-baselines.json。前一faf6b74b同样4330/4330（53607.0186 ms），此前1ec及faa首轮4329/1失败均保留原来源。 |
+| 桌面独立测试 | 4c5474e4 实际 node --import=./scripts/lib/test-silent-processes.mjs --test desktop/test/*.test.mjs 退出0，37/37、失败/取消/跳过/todo均0，826.9148 ms。faf6b74b的37/37（900.5122 ms）与aba历史另保留。用隔离目录和测试进程执行；没有覆盖用户运行副本。 |
+| 网页构建 | 4c5474e43d38732319b95dcc706c0c4ab4922560 已提交后实际 npm run build 退出0、6981 ms、1830模块，独立原日志SHA 5bacc5887946d5163f2b64e094e9bc15128f078380215565a97b9ccb25459865。faf6b74b的0/6713ms及b098历史0/7821ms保留。463b历史原日志被可变路径覆盖，仍明确不可再核验。没有覆盖原安装包。 |
 | 全长导出确定性 | 113b425c 实际默认60秒、30fps、1920×1080项目两遍完整1800/1800帧相同、0不同，315983 ms，退出0。aba仅修改两个探针，产品和 renderer 未变；不把113的实跑改写成aba复跑。 |
 | 与 main 全长像素对账 | 113b425c candidate 与只读 adc3ae2a main 基准各实际1800帧，0不同/0缺失，退出0。具体日志及来源见 fixed-baselines.json；不是十帧抽样。 |
 | 统一帧 | 113b425c 全条实际退出0、8394 ms，实际视频/卡片、seek、随机重放、缓存与帧表均覆盖。初次错误根路径404仍保留。 |
@@ -211,7 +212,13 @@ Codex max攻坚全文及各只读命令已由根Agent审阅，摘要在handoff J
 
 台式机快速补验又保留两轮实际退出1：run-wKJQ47于17:50:25.647Z arm后，由ComputerUse新建Explorer45208（17:50:25.812139Z），确实补到after-arm进程创建；但导航未完成，17:50:55.076Z时限检查挡住文件输入，没有双击、没有误启动，不能计产品路由失败或通过。run-iCv3sk先实际显示original-host文件，17:54:59.792Z arm，F5后观察17:55:00.185Z，17:55:11.725Z真实坐标双击；原安装版53240创建17:55:11.961963Z，17:55:25.800Z关联恢复，watchdog0，无匹配测试壳回执。这次11.933秒内的真实动作仍错路由，不能把快速操作或台式机替代笔记本本身视为通过。核验exe、创建时间及精确测试文件参数后，仅清理53240及两名直接子进程；累计误启动安装版八次，普通启动/草稿写入仍不声称未发生。测试壳二进制保留实际e2552d07来源，harness5998b9fd只含后续测试/报告修改；没有把旧二进制冒称新编译。主机首个OS handoff失败，成员及OS已有窗口转发未执行。证据见native-os-handoff.json的desktopQuickAttempts。
 
-第16轮后的只读核验两次实际退出0：.proc真实ProgID含一个空格，为PromptCut Project；HKCU/HKCR 32/64和fresh GetKey均选这个class，lease路径正确。真正NULL默认verb与显式open的COMMAND/EXE/PROGID及GetKey相同且S_OK；shell默认值为open，唯一定义verb也是open。空字符串查询COMMAND/EXE返回0x80070483，不能当作另一个默认动作。Applications中promptcut.exe和promptcut-recovery-test.exe根在HKCU/HKLM/HKCR的32/64视图均不存在，不凭不存在的路径提出替代修法。根Agent读完两份完整只读快照与实际命令记录，摘要及原文件SHA见handoff JSON的attack.currentRoutingVerification。它们是恢复态读数，不是点击一瞬；连续UI关联采样仍未执行，缓存唯一因果未证明。
+第16轮后的只读核验两次实际退出0：.proc真实ProgID含一个空格，为PromptCut Project；HKCU/HKCR 32/64和fresh GetKey均选这个class，lease路径正确。真正NULL默认verb与显式open的COMMAND/EXE/PROGID及GetKey相同且S_OK；shell默认值为open，唯一定义verb也是open。空字符串查询COMMAND/EXE返回0x80070483，不能当作另一个默认动作。Applications中promptcut.exe和promptcut-recovery-test.exe根在HKCU/HKLM/HKCR的32/64视图均不存在，不凭不存在的路径提出替代修法。根Agent读完两份完整只读快照与实际命令记录，摘要及原文件SHA见handoff JSON的attack.currentRoutingVerification。该组是恢复态读数，不是点击一瞬；后续租约内实际默认查询及F5取证见下段，缓存唯一因果仍未证明。
+
+本轮静默补丁提交faf6b74b457930903e31ba49c02773785b7d606b采用NSIS官方nsExec隐藏命令窗口，仅在脚本已有的非交互环境开关下启用；4c5474e43d38732319b95dcc706c0c4ab4922560纠正探针的实际入口命令元数据。[NSIS官方插件说明](https://nsis.sourceforge.io/NsExec_plug-in)。主机run-xQdu53、普通成员run-hqcKqp均实际编译并执行提交的补丁EXE后正常重开，退出0；NSIS编译1096/1634ms，更新8699/15654ms，载荷2048件。两轮均4f72d19e旧运行时变成当前代码、版本仍0.7.14，保护目录及外壳字节不变，原房间、原设备、正确creator/host与普通member角色、等待自动加入、版本5、4次双向编辑、三类50k票据素材均通过，恢复建房0。故意指定任务自有不存在的安装目录时EXE实际返回1，负例验证命令退出0且目录仍不存在。主机faf原回执的外层command误写下层PS命令，wrapper.command和新投影明确实际EXE入口；原始回执未改。首次run-ye98XG因PVG副本已含相同probeRunner代码被更新前保护检查挡住，退出1，未生成清单或执行安装器；改用未更新的Zb副本，没有放宽断言。见[native-nsis-upgrade.json](assets/collaboration-reopen-recovery/native-nsis-upgrade.json)。完整setup安装包仍未执行。
+
+实际默认解析新增三轮独立诊断，退出码0、1、0；不加入16次OS handoff的计数。DbytMa的0/8/16/24秒新PS查询、UbRPrF的相同时点及18:33:34.109–34.263Z真实F5刷新前后，真正NULL默认verb与显式open在flags0/noFixups下COMMAND/EXE均匹配测试壳，GetKey成功且四视图前后值匹配，结束后原值恢复/watchdog0。UbRPrF单击选择因关联已恢复被guard挡住，没有发出文件启动动作。jLqihq高频查询第11次退出1，前10项匹配，原stderr未保留，原因未知；其提前恢复让UI输入被guard挡住，不能当作关联覆写证据。只读AppDefaults日志启用、现存1936件，17:45–18:05UTC窗口无事件，不推断当时发生了默认关联重置。见[native-default-query.json](assets/collaboration-reopen-recovery/native-default-query.json)。新查询证明这几次采样中的默认解析已切换，不证明Explorer真实执行或点击瞬间；没有新增误启动。自有Explorer窗口已关闭、进程自然退出，用户Shell保留。
+
+补充只读身份核验退出0：当前Explorer11120与新隐藏PS32884的用户、登录身份、会话、integrity8192一致，均明确non-AppContainer，GetPackageFullName均返回15700（显式无package）。旧四份上下文只覆盖11120/50380，未覆盖后来已退出的新GUI进程，不能补判相同；Explorer线程token和package graph未读。私有helper现在独有文件保存未来错误stdout/stderr和SHA，恢复态复查0，未故意注入错误；不能找回jLqihq已丢失的原输出或宣布其原因已修。摘要见native-default-query.json的currentContext/queryFailureCapture。
 
 ## 第 11 节逐项验收
 
@@ -226,7 +233,7 @@ Codex max攻坚全文及各只读命令已由根Agent审阅，摘要在handoff J
 | 5 | 自由/限定、本机/云端 | **通过**。四组合独立专用房间；云端位置保持 hosted；第二创建者无本机主机绑定。 |
 | 6 | proc/procp/草稿/系统双击/刷新 | **部分验证**。proc、真实打包/解包、草稿、真实 open-path 后端及页面刷新通过；独立 Windows 原生壳启动参数 `?open`、已运行窗口实际 `pc-open-file` 事件转发与打开通过，原文件未改。系统默认文件关联16轮handoff均无匹配回执；新增一轮过期点击、三轮时间保护、一轮几何错误均未完成，两轮有效窗口的真实动作仍走安装版。前七轮的通知flush/目录刷新及独立类型也未通过。后台采样与参数/IPC通过均不替代OS动作。关联均恢复，主机/成员默认双击及OS已有窗口转发仍未通过。见native-os-handoff.json。纯在线不新增文件入口。 |
 | 7 | 主机离线打开后恢复网络 | **通过（应用层故障注入）**。云端测试进程实际停止，原主机本机修改；云端进程返回后自动登记，成员加入、编辑和带票据读素材。宿主网络未改。 |
-| 8 | 地址、端口、运行副本变化 | **通过（服务、独立原生运行副本及真实补丁脚本更新）**。端口变化、稳定路径/设备记录、旧目录迁移与不覆盖新数据测试通过；实际copy-A切换copy-B后新PID、空WebView2恢复。新增主机/普通成员两次真实apply-patch.ps1更新2044文件，保护状态与外壳字节不变，重开后同设备/房间/角色、成员等待加入、4次双向编辑及三类带票据素材均通过。见native-upgrade.json。应用版本未递增；NSIS外层和最终完整安装包未运行，不扩大该范围。 |
+| 8 | 地址、端口、运行副本变化 | **通过（服务、独立原生运行副本及真实补丁脚本更新）**。端口变化、稳定路径/设备记录、旧目录迁移与不覆盖新数据测试通过；实际copy-A切换copy-B后新PID、空WebView2恢复。新增主机/普通成员两次真实apply-patch.ps1更新2044文件，保护状态与外壳字节不变，重开后同设备/房间/角色、成员等待加入、4次双向编辑及三类带票据素材均通过。见native-upgrade.json。应用版本未递增；后续提交的真实NSIS补丁外层两角色亦通过（各2048件、0建房、4次双向编辑及三类50k票据素材），故意缺安装目录的退出码1正确传递，见native-nsis-upgrade.json；最终完整setup安装包未运行，不扩大该范围。 |
 | 9 | 无公网直连且外网成员 | **通过（真实公开中继）**。成员在另一机器，经独立临时公开 HTTPS/WS 入口与隔离网关双向编辑、两次凭证重入和三类票据素材读取。SSH 链路结果另存，未混为公开入口证据。IPv6 直连和打洞未实现/未测，按计划 §6 仅交付实际必需可达路径。 |
 | 10 | 主机/成员带旧快照重入 | **通过**。四组合旧文件不覆盖最新编辑，版本 5/6/9 连续；DocSync 单测零根替换、服务最新状态优先。 |
 | 11 | 离线修改与远端冲突 | **通过（单元及桌面实际交互）**。持久未确认队列后停止成员进程，空浏览器重入旧文件，远端冲突使同步暂停；真实点击重放后主机读回，另一轮丢弃后原离线项目及操作实际保存于备份 API。`reopenRecovery.test.mjs` 保留 expectRev 及身份读取期间新旧操作合并。 |
@@ -410,7 +417,7 @@ g 表示实现与验证代价，h 表示预计剩余缺口，两者按 1–5 档
 | 7 | 5 | 三级 | 4 | 租约生效后才导航到新测试目录 | 避免关联生效前已枚举的目录对象 | 2 | 2 | 4 | dBtkun有效点击 | 关闭·无改善 | 新目录在arm后观察，真实双击仍启动安装版；只关闭“提前枚举该目录”的窄解释 |
 | 8 | 6 | 三级 | 7 | 新建任务Explorer进程再进入新目录 | 区分前一目录进程残留 | 2 | 2 | 4 | fBmwWR有效坐标双击 | 关闭·无改善 | 3388新进程仍走安装版；它在arm前创建，不关闭第5行 |
 | 9 | 7 | 三级 | 4 | 0/8/16/24秒无UI租约直接值及推荐对象 | 查持续提前恢复或推荐对象固守旧身份 | 2 | 1 | 3 | association-delay-7gMv3m退出0 | 已试·部分 | 16项直接值和四次fresh推荐均测试壳，最后原值恢复；窄变化未复现，不代替点击时刻读数 |
-| 10 | 8 | 三级 | 9 | 真实点击期间连续只读值与即时前后时间 | 区分UI触发覆写和执行对象分歧 | 2 | 2 | 4 | 尚未运行 | 开放 | 须先避免再次向用户安装版路由的启动写入风险；不因采样稳定就盲点或认定缓存根因 |
+| 10 | 8 | 三级 | 9 | 真实点击期间连续只读值与即时前后时间 | 区分UI触发覆写和执行对象分歧 | 2 | 2 | 4 | 默认解析与F5前后取证 | 已试·部分 | DbytMa/UbRPrF真实default API及四视图均测试壳；只做F5，无文件invoke，不能关闭点击触发的解释；高频第11查询1且stderr缺失，原因未知，不认为已证明缓存 |
 
 Gemini两轮公开回答和manager静态窄审已完整读取；其建议不是事实证据。窄审提出部分创建残留及清理未完误报0，修后六步故障注入、超时、持有者退出及外部新增值保护实际自测通过。保留注册表复查/删除非事务的并发边界；没有以多个模型同意代替实际OS双击。攻坚顾问最终结果后续按实际证据补记。
 
@@ -427,9 +434,9 @@ Gemini两轮公开回答和manager静态窄审已完整读取；其建议不是�
 9. 搬迁传输包含整个房间目录及所有已完成入库素材，并检查当前项目的明确引用；尚未穷举全部历史操作的语义素材引用，也没有把部分入库中的素材当完成件。这是完整性预检的范围限制，不声称可以补回源服务原本缺失的历史素材。
 10. 用户已授权验证成功后合并main、构建并覆盖原安装包；所有必要门槛尚未通过。已经只读定位主仓库`desktop/release/`中与当前应用0.7.14匹配的最新原安装包；绝对位置只写忽略的本机记录。保留审核worktree和待办，满足条件后再备份原包、执行版本更新、合并及发版构建；本次网页构建只用于验证，没有覆盖安装包或用户运行代码。
 
-最终证据审计退出 0：57 份 JSON、118,119 个字段、203 个修改文件，所有报告链接和清单文件存在；审计实际核对93份基线/构建原日志摘要，另1份历史构建原日志被本次可变路径覆盖，明确不可再核验。已检查发布的截图，没有密码、派生 K、登记能力、邀请码或会话秘密。verification.json 保留 16f93bb0/4bd3087f 的原始历史来源，本轮最新基线、构建与全长渲染来源分别见 integration-verification.json；不将历史抽样改写成最新全长结果。纯报告/证据提交不改变产品代码，不重复无变化的检查。
+最终证据审计退出 0：59 份 JSON、123,754 个字段、206 个修改文件，所有报告链接和清单文件存在；审计实际核对101份基线/构建原日志摘要，另1份历史构建原日志被本次可变路径覆盖，明确不可再核验。已检查发布的截图，没有密码、派生 K、登记能力、邀请码或会话秘密。verification.json 保留 16f93bb0/4bd3087f 的原始历史来源，本轮最新基线、构建与全长渲染来源分别见 integration-verification.json；不将历史抽样改写成最新全长结果。纯报告/证据提交不改变产品代码，不重复无变化的检查。
 
-本次没有改产品桌面Rust壳、浏览器、ffmpeg或内置Python；只复制资源并在临时Rust测试副本中做上述隔离变换。没有发版、安装或覆盖用户运行代码。Node服务读取的稳定数据目录及旧数据迁移已在隔离环境验证；真实补丁脚本更新在两类隔离身份上通过，NSIS外层未跑，系统默认双击尚未通过。main与release未前进；误启动原安装版的八次经过已单列，不能宣称其启动写入不存在。本次网页及隔离调试壳构建成功不能替代合入后应执行的集成或桌面发版构建。
+本次没有改产品桌面Rust壳、浏览器、ffmpeg或内置Python；只复制资源并在临时Rust测试副本中做上述隔离变换。没有发版、安装或覆盖用户运行代码。Node服务读取的稳定数据目录及旧数据迁移已在隔离环境验证；真实补丁脚本及提交的NSIS补丁外层在两类隔离身份上均通过，完整setup安装包未跑，系统默认双击尚未通过。main与release未前进；误启动原安装版的八次经过已单列，不能宣称其启动写入不存在。本次网页及隔离调试壳构建成功不能替代合入后应执行的集成或桌面发版构建。
 
 可复跑命令：
 
