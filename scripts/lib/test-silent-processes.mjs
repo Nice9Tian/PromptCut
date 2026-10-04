@@ -1,5 +1,6 @@
-/** Test-only Windows console suppression, including command-line grandchildren. */
-import './no-user-dirs.mjs';
+/** Test-only Windows console suppression, including command-line grandchildren.
+ * This preload preserves explicit child data directories; callers isolate those before spawning.
+ */
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
