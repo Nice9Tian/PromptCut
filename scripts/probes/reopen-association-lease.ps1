@@ -18,7 +18,11 @@ function Same-State($a, $b) {
 function Notify-Association {
     if (-not $defaultKey) { return }
     Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ReopenAssociationNotify { [DllImport("shell32.dll")] public static extern void SHChangeNotify(uint e, uint f, IntPtr a, IntPtr b); }'
-    [ReopenAssociationNotify]::SHChangeNotify(0x08000000,0,[IntPtr]::Zero,[IntPtr]::Zero)
+    # SHCNF_IDLIST | SHCNF_FLUSH: wait for affected Shell components to receive
+    # the association notification before exposing the short operator window.
+    # This does not change UserChoice or establish that Explorer will route a
+    # subsequent click correctly; the native matching receipt remains required.
+    [ReopenAssociationNotify]::SHChangeNotify(0x08000000,0x1000,[IntPtr]::Zero,[IntPtr]::Zero)
 }
 if ($Mode -eq 'init-test') {
     if (-not $testKey -or (Read-State).keyExists) { throw 'Fresh owned test key required' }
