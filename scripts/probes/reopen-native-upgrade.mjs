@@ -151,7 +151,7 @@ export async function upgradeNativeFixture(fixture, runRoot, { nsisWrapper = fal
   assert.equal(metadata.app, appVersion); assert.equal(metadata.patchLockHash, lockHash);
   const result = { ok: true, kind: nsisWrapper ? 'committed-nsis-patch-wrapper' : 'committed-powershell-patch-installer', sourceCommit, oldRuntimeSource: fixture.sourceCommit,
     appVersionBefore: appVersion, appVersionAfter: appVersion, sameVersionCodeUpdate: true, installerSha256,
-    command: 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <owned patch>/apply-patch.ps1 -InstallDir <owned copy-B>',
+    command: nsisWrapper ? '<owned-patch.exe> -InstallDir <owned copy-B>' : 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <owned patch>/apply-patch.ps1 -InstallDir <owned copy-B>',
     preflight: checked, applied, payloadFiles: Object.keys(files).length, oldProbeSha256, newProbeSha256,
     protectedStateUnchanged: true, shellUnchanged: true, noProcessShutdown: true, nsisInstallerTested: nsisWrapper, wrapper,
     userInstallationModified: false, fileAssociationModified: false };
