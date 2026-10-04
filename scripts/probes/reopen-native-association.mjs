@@ -36,7 +36,8 @@ export function prepareStandaloneLaunch(fixtureFile, entry, file, env) {
   return {f,root,launchId};
 }
 export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secondary=false}={}) {
-  assert(process.argv.includes('--allow-temporary-open-command'),'explicit temporary association permission flag required');
+  const isolatedDefaultProgId=process.argv.includes('--isolated-default-progid');
+  assert(process.argv.includes(isolatedDefaultProgId?'--allow-temporary-default-progid':'--allow-temporary-open-command'),'explicit temporary association permission flag required');
   const {f,root,launchId}=prepareStandaloneLaunch(fixtureFile,entry,file,env);
   const pendingFile=path.resolve('work/native-association-pending.json');
   // Keep later control writes outside Explorer's displayed project directory.
@@ -51,7 +52,7 @@ export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secon
   const readyDeadline=Date.now()+300000;
   while(!fs.existsSync(readyFile)&&Date.now()<readyDeadline)await pause(100);
   assert(fs.existsSync(readyFile),'operator did not prepare Explorer');
-  const lease=await startAssociationLease(fixtureFile,entry,controlRoot,{allowDefault:true});
+  const lease=await startAssociationLease(fixtureFile,entry,controlRoot,{allowDefault:true,isolatedDefaultProgId});
   pending.stage='armed';pending.armedAt=new Date().toISOString();persist();
   let receipt, watcher, restored;
   try {
@@ -65,6 +66,7 @@ export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secon
     assert(Number.isInteger(receipt.pid)&&receipt.pid>0);
     // Restore immediately after the native bootstrap proves the OS passed the file.
     restored=await lease.restore();pending.stage='restored';pending.restoredAt=new Date().toISOString();persist();
+    if(isolatedDefaultProgId)assert.equal(restored.ownedProgIdRemoved,true,'temporary owned ProgID must be cleaned');
     const result={launchId,nativePid:receipt.pid,secondary,osFileLaunch:true,association:restored,
       armedAt:pending.armedAt,restoredAt:pending.restoredAt,secondaryExitCodeObserved:false};
     if(!secondary){

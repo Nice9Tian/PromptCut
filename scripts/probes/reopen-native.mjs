@@ -7,6 +7,9 @@
  * --standalone-smoke verifies the private Explorer environment bootstrap via arguments only.
  * --os-double-click --allow-temporary-open-command requires explicit operator permission;
  * it waits for real ComputerUse double clicks and restores the original open command.
+ * --isolated-default-progid --allow-temporary-default-progid instead creates a
+ * unique test ProgID and leases the existing .proc default string for <=30s.
+ * UserChoice is refused; the original ProgID command is never changed in this mode.
  * A native argument/IPC pass is not evidence of an OS default-file-association double click.
  */
 import '../lib/no-user-dirs.mjs';

@@ -31,7 +31,7 @@ function run(control, mode, allowFailure = false) {
   }
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-export async function startAssociationLease(fixtureFile, entry, runRoot, { allowDefault = false, ttlMs = 30000, testKey } = {}) {
+export async function startAssociationLease(fixtureFile, entry, runRoot, { allowDefault = false, ttlMs = 30000, testKey, isolatedDefaultProgId = false, faultAfterProbeStep } = {}) {
   const fixture = loadNativeFixture(fixtureFile);
   assert(fixture.standaloneLaunch, 'standalone fixture required');
   assert(fixture.copies.some(c => c.exe === entry.exe && c.runtime === entry.runtime));
@@ -39,10 +39,13 @@ export async function startAssociationLease(fixtureFile, entry, runRoot, { allow
   assert(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
   assert(testKey || allowDefault, 'temporary default open-command change requires explicit opt-in');
   assert(ttlMs > 0 && ttlMs <= 30000);
+  if(faultAfterProbeStep!==undefined)assert(testKey&&isolatedDefaultProgId&&Number.isInteger(faultAfterProbeStep)&&faultAfterProbeStep>=1&&faultAfterProbeStep<=6);
   const nonce = randomBytes(16).toString('hex');
   const control = path.join(runRoot, `association-${nonce}.json`);
+  const ownedProgId = isolatedDefaultProgId ? `PromptCut.ReopenTest.${nonce}` : null;
   const c = { kind: 'promptcut-association-lease-v1', ownerPid: process.pid, expiresAt: Date.now()+ttlMs,
-    key: testKey || 'Software\\Classes\\PromptCut Project\\shell\\open\\command', command: `"${entry.exe}" "%1"` };
+    key: testKey || (isolatedDefaultProgId ? 'Software\\Classes\\.proc' : 'Software\\Classes\\PromptCut Project\\shell\\open\\command'),
+    command: ownedProgId || `"${entry.exe}" "%1"`, ownedProgId, probeCommand: ownedProgId ? `"${entry.exe}" "%1"` : null, faultAfterProbeStep };
   const persist = () => fs.writeFileSync(control, JSON.stringify(c)); persist();
   if (testKey) run(control, 'init-test');
   c.original = run(control, 'read').result; c.expiresAt=Date.now()+ttlMs; persist();
@@ -53,18 +56,25 @@ export async function startAssociationLease(fixtureFile, entry, runRoot, { allow
   assert(fs.existsSync(readyFile),'watchdog ready required before changing a value');
   assert.equal(JSON.parse(fs.readFileSync(readyFile,'utf8')).pid,watchdog.pid);
   const armed = run(control,'arm',true);
-  if(armed.code!==0){fs.writeFileSync(control+'.stop','stop');await ended;throw new Error(`association arm refused (${armed.code})`);}
+  if(armed.code!==0){
+    fs.writeFileSync(control+'.stop','stop');const cleanupCode=await ended;
+    throw new Error(`association arm refused (${armed.code}); cleanup (${cleanupCode})`);
+  }
   let restored;
   return {control, watchdog, ended, originalCommandSha256:shaText(c.original.value),
     commandSha256:shaText(c.command), temporaryDefaultChanged:!testKey,
-    async restore(){
+    async restore({allowIncompleteCleanup=false}={}){
       restored=run(control,'restore',true);
       fs.writeFileSync(control+'.stop','stop');
       const watchdogCode=await ended;
-      assert.equal(restored.code,0,'restore must preserve original value');
-      assert.equal(watchdogCode,0,'watchdog must verify restoration');
+      const expectedCode=allowIncompleteCleanup?79:0;
+      assert.equal(restored.code,expectedCode,'restore must preserve original value and report cleanup failures');
+      assert.equal(watchdogCode,expectedCode,'watchdog must verify restoration and cleanup');
       assert.deepEqual(run(control,'read').result,c.original);
-      return {restored:true,watchdogCode,originalCommandSha256:shaText(c.original.value),commandSha256:shaText(c.command)};
+      return {restored:true,watchdogCode,target:isolatedDefaultProgId?'default-progid':'open-command',
+        originalValueSha256:shaText(c.original.value),temporaryValueSha256:shaText(c.command),
+        ...(isolatedDefaultProgId?{}:{originalCommandSha256:shaText(c.original.value),commandSha256:shaText(c.command)}),
+        ownedProgIdRemoved:restored.result.ownedProgIdRemoved};
     },
     async expired(){const code=await ended;return {code,restored:run(control,'read').result.value===c.original.value};},
     cleanupTest(){assert(testKey);run(control,'delete-test');},
@@ -92,9 +102,24 @@ async function selfTest(fixtureFile) {
   const key=()=>`Software\\PromptCut\\ReopenTests\\${randomBytes(16).toString('hex')}\\command`;
   const explicit=await startAssociationLease(fixtureFile,f.copies[1],root,{testKey:key(),ttlMs:15000});
   const normal=await explicit.restore();explicit.cleanupTest();
-  const timed=await startAssociationLease(fixtureFile,f.copies[1],root,{testKey:key(),ttlMs:1500});
+  const partialCreation=[];
+  for(let step=1;step<=6;step++){
+    const before=new Set(fs.readdirSync(root));
+    await assert.rejects(startAssociationLease(fixtureFile,f.copies[1],root,{testKey:key(),ttlMs:15000,isolatedDefaultProgId:true,faultAfterProbeStep:step}),/association arm refused \(1\); cleanup \(0\)/);
+    const control=path.join(root,fs.readdirSync(root).find(n=>!before.has(n)&&/^association-[a-f0-9]{32}\.json$/.test(n)));
+    const recovered=JSON.parse(fs.readFileSync(control+'.watchdog-result.json','utf8'));
+    assert(recovered.restored&&recovered.ownedProgIdRemoved&&recovered.cleanupComplete);run(control,'delete-test');
+    partialCreation.push({step,armExitCode:1,watchdogCode:recovered.code,entryRestored:recovered.restored,ownedProgIdRemoved:recovered.ownedProgIdRemoved});
+  }
+  const isolated=await startAssociationLease(fixtureFile,f.copies[1],root,{testKey:key(),ttlMs:15000,isolatedDefaultProgId:true});
+  const isolatedNormal=await isolated.restore();assert(isolatedNormal.ownedProgIdRemoved);isolated.cleanupTest();
+  const editedProbe=await startAssociationLease(fixtureFile,f.copies[1],root,{testKey:key(),ttlMs:15000,isolatedDefaultProgId:true});
+  run(editedProbe.control,'edit-probe-test');
+  const preservedProbe=await editedProbe.restore({allowIncompleteCleanup:true});assert.equal(preservedProbe.ownedProgIdRemoved,false);assert.equal(preservedProbe.watchdogCode,79);
+  run(editedProbe.control,'delete-probe-edit-test');editedProbe.cleanupTest();
+  const timed=await startAssociationLease(fixtureFile,f.copies[1],root,{testKey:key(),ttlMs:1500,isolatedDefaultProgId:true});
   const expired=await timed.expired();assert.equal(expired.code,0);assert(expired.restored);timed.cleanupTest();
-  const changed=await startAssociationLease(fixtureFile,f.copies[1],root,{testKey:key(),ttlMs:1500});
+  const changed=await startAssociationLease(fixtureFile,f.copies[1],root,{testKey:key(),ttlMs:1500,isolatedDefaultProgId:true});
   run(changed.control,'edit-test');
   const refused=await changed.expired();assert.equal(refused.code,71);assert.equal(run(changed.control,'read').result.value,'owned-external-change');changed.cleanupTest();
   const owner=spawn(process.execPath,[moduleFile,'--owner-exit-test',fixtureFile],{windowsHide:true,env:psEnv(),stdio:['ignore','pipe','pipe']});
@@ -106,7 +131,7 @@ async function selfTest(fixtureFile) {
   const restoredOwner=JSON.parse(fs.readFileSync(ownerReceipt.control+'.watchdog-result.json','utf8'));
   assert.equal(restoredOwner.code,0);assert(restoredOwner.restored);
   assert.equal(run(ownerReceipt.control,'read').result.value,'owned-original');run(ownerReceipt.control,'delete-test');
-  const result={ok:true,normal,timeoutRestored:expired.restored,timeoutWatchdogCode:expired.code,externalChangePreserved:true,
+  const result={ok:true,normal,partialCreation,isolatedNormal,changedProbeTreePreserved:true,changedProbeTreeWatchdogCode:79,timeoutRestored:expired.restored,timeoutWatchdogCode:expired.code,externalChangePreserved:true,
     ownerExitRestored:true,ownerExitWatchdogCode:restoredOwner.code,defaultAssociationChanged:false,evidenceDirectory:root};
   fs.writeFileSync(path.join(root,'self-test.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }
@@ -114,7 +139,7 @@ if (path.resolve(process.argv[1]||'')===moduleFile) {
   if(process.argv[2]==='--watch') await watch(process.argv[3]);
   else if(process.argv[2]==='--owner-exit-test') {
     const f=loadNativeFixture(process.argv[3]), root=fs.mkdtempSync(path.join(f.root,'lease-owner-exit-'));
-    const lease=await startAssociationLease(process.argv[3],f.copies[1],root,{testKey:`Software\\PromptCut\\ReopenTests\\${randomBytes(16).toString('hex')}\\command`,ttlMs:30000});
+    const lease=await startAssociationLease(process.argv[3],f.copies[1],root,{testKey:`Software\\PromptCut\\ReopenTests\\${randomBytes(16).toString('hex')}\\command`,ttlMs:30000,isolatedDefaultProgId:true});
     console.log(JSON.stringify({control:lease.control}));process.exit(0);
   }
   else {assert.equal(process.argv[2],'--self-test');await selfTest(process.argv[3]);}
