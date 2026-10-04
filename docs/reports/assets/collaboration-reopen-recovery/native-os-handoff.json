@@ -19546,5 +19546,38 @@
       "sha256": "9534ca43ff1c3f3b34904e4b9552da1d4bf72f5110fa1af3a5b203c5292a356a"
     },
     "securityPromptActionTaken": false
+  },
+  "extendedOwnedExplorerCleanup": {
+    "actualExitCode": 0,
+    "result": {
+      "kind": "owned-test-explorer-cleanup-v1",
+      "source": "2f2650b32cf47f0560654cfe724724c10bbefd16",
+      "ownedPid": 8688,
+      "ownedCreatedAt": "2026-10-04T19:03:36.8244700Z",
+      "ownedExeMatched": true,
+      "rootLaunchEventAt": "2026-10-04T19:03:36.687Z",
+      "onlyOneReturnedExplorerWindow": true,
+      "startedAt": "2026-10-04T19:16:14.2208063+00:00",
+      "securityUiActionTaken": false,
+      "userShellPid": 11120,
+      "userShellTerminated": false,
+      "processObjectStartedAt": "2026-10-04T19:03:36.8244702Z",
+      "startTimePrecisionDifferenceTicks": 2,
+      "maxCimPrecisionDifferenceTicks": 10,
+      "ownedProcessStopped": true,
+      "userShellPreserved": true,
+      "completedAt": "2026-10-04T19:16:14.4046430+00:00"
+    },
+    "initialAttemptExitCode": 1,
+    "initialAttemptStoppedAnyProcess": false,
+    "initialFailure": "Exact equality rejected a 2-tick (200ns) CIM vs Process-object precision difference. CIM identity stayed exact; process-object comparison now permits only one microsecond. Corrected owned-only cleanup succeeded.",
+    "rawResult": {
+      "file": "task-worktree:work/owned-extended-explorer-cleanup.json",
+      "sha256": "6dbfcc7aaf006dcba6d350b4b25ed228578003a317fc5f26dea18eb4e8582a38"
+    },
+    "rawLog": {
+      "file": "task-worktree:work/owned-extended-explorer-cleanup.log",
+      "sha256": "98e7ad8929c82f9eca296aef5218cf0b159d4332f2cd04fec33840c88252fec1"
+    }
   }
 }

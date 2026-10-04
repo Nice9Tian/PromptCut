@@ -1,7 +1,7 @@
 {
   "generatedAt": "2026-10-04T19:11:47.207Z",
   "headWhenPublished": "4c5474e43d38732319b95dcc706c0c4ab4922560",
-  "sourceScope": "Latest types/full tests and desktop tests are 2f2650b3. Only test association timing changed after 4c5474e4; editor/services/renderer and real NSIS wrapper are unchanged. Web build retains its actual source. OS default double-click remains unpassed.",
+  "sourceScope": "Types/full and desktop tests: 2f2650b3. Web build: committed clean b7ccb0df (only report changes since 2f). Editor/services/renderer and NSIS wrapper unchanged. Historical rendering/laptop/NSIS runs retain their sources. Default OS double-click unpassed.",
   "allRequiredAcceptancePassed": false,
   "mergePerformed": false,
   "installed": false,
@@ -3032,15 +3032,15 @@
   },
   "build": {
     "command": "npm run build",
-    "sourceCommit": "4c5474e43d38732319b95dcc706c0c4ab4922560",
-    "elapsedMs": 6981,
+    "sourceCommit": "b7ccb0dfbc59c4cb3629612ddf586ccd574936b8",
+    "elapsedMs": 6425,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
-      "file": "task-worktree:work/native-web-build-4c5474e43d38732319b95dcc706c0c4ab4922560-1791138952791.log",
-      "sha256": "5bacc5887946d5163f2b64e094e9bc15128f078380215565a97b9ccb25459865"
+      "file": "task-worktree:work/native-web-build-b7ccb0dfbc59c4cb3629612ddf586ccd574936b8-1791141201362.log",
+      "sha256": "b23c61fdcf644ef1bfdbd0da9f4efdee35d0a5183971e4ecb5dcb99cca0ee5d3"
     },
     "actualExitCode": 0
   },
@@ -3156,6 +3156,20 @@
       "rawLog": {
         "file": "task-worktree:work/native-web-build-faf6b74b457930903e31ba49c02773785b7d606b-1791138235433.log",
         "sha256": "64a63e6919f347b4c84284c0f90525eeb550fc0913f266e5968f5340bd70f53b"
+      },
+      "actualExitCode": 0
+    },
+    {
+      "command": "npm run build",
+      "sourceCommit": "4c5474e43d38732319b95dcc706c0c4ab4922560",
+      "elapsedMs": 6981,
+      "built": true,
+      "modules": 1830,
+      "isolatedData": true,
+      "installed": false,
+      "rawLog": {
+        "file": "task-worktree:work/native-web-build-4c5474e43d38732319b95dcc706c0c4ab4922560-1791138952791.log",
+        "sha256": "5bacc5887946d5163f2b64e094e9bc15128f078380215565a97b9ccb25459865"
       },
       "actualExitCode": 0
     }
