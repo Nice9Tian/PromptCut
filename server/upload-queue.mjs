@@ -60,24 +60,34 @@ export const ENQUEUE_MAX_ITEMS = 2000;
  *   图片、音频只有一档,只给 `original`)。也收 `hashes: string[]`(每个当作只有素材原尺寸一档)。
  * - 只收本地有的:素材原尺寸本地没有 → 整个素材不进队,素材原尺寸哈希记进 `missing`;素材小尺寸本地没有 → 只传素材原尺寸,素材小尺寸哈希记进 `missing`。
  * - 进队照队列本来的规则:逐个素材、先小后大、两档都 complete 才出队;同一素材原尺寸已在队里就合并档位。
+ * - 已登记的小尺寸仍在转码时,交给持久的两档管理器完成后入队,回 deferred,不提前传原尺寸。
+ *   小尺寸已经生成、页面还没写回哈希时,从本机两档登记补上,仍按先小后大入队。
  * - 当前连的是本机素材服务(队列是空操作)时回 `local: true`,什么都不进。
  *
  * @param {{ enqueue(raw: object): Promise<{ queued: boolean, reason?: string }> }} queue
  * @param {{ items?: unknown, hashes?: unknown }} body
  * @param {(hash: string) => (string | null | Promise<string | null>)} resolveFile
- * @returns {Promise<{ queued: string[], missing: string[], bad: number, local: boolean }>}
+ * @param {{ getTiers?: (hash: string) => any, isLocal?: () => boolean }} [options]
+ * @returns {Promise<{ queued: string[], missing: string[], bad: number, local: boolean, deferred?: string[] }>}
  */
-export async function enqueueLocalMedia(queue, body, resolveFile) {
+export async function enqueueLocalMedia(queue, body, resolveFile, { getTiers = () => null, isLocal = () => false } = {}) {
   const raw = Array.isArray(body?.items) ? body.items
     : Array.isArray(body?.hashes) ? body.hashes.map((h) => ({ original: h })) : [];
   const out = { queued: [], missing: [], bad: 0, local: false };
   const extOf = (file) => path.extname(String(file)).slice(1).toLowerCase();
   for (const it of raw.slice(0, ENQUEUE_MAX_ITEMS)) {
     const original = String(it?.original ?? '').toLowerCase();
-    const small = it?.small ? String(it.small).toLowerCase() : '';
+    let small = it?.small ? String(it.small).toLowerCase() : '';
     if (!HASH.test(original) || (small && !HASH.test(small))) { out.bad++; continue; }
     const origFile = await resolveFile(original);
     if (!origFile) { out.missing.push(original); continue; }
+    if (isLocal()) { out.local = true; break; }
+    const known = getTiers(original);
+    if (known?.state === 'pending') {
+      (out.deferred ??= []).push(original);
+      continue;
+    }
+    if (!small && known?.state === 'ready' && HASH.test(String(known.small ?? ''))) small = known.small;
     const tiers = [];
     if (small && small !== original) {
       const smallFile = await resolveFile(small);

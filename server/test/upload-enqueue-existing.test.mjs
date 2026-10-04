@@ -52,3 +52,33 @@ test('UQE-4 当前连的是本机素材服务(队列空操作):回 local,什么�
   assert.deepEqual(r.queued, []);
   assert.equal(q.stats().items.length, 0);
 });
+
+test('UQE-5 小尺寸转码中补交原尺寸:等待持久两档管理器,不提前上传;生成后页面尚未写回也先小后大', async () => {
+  const q = queueWith();
+  let known = { state: 'pending' };
+  const options = { getTiers: () => known };
+  const body = { items: [{ original: V_ORIG }] };
+  const pending = await enqueueLocalMedia(q, body, resolveFile, options);
+  assert.deepEqual(pending, { queued: [], deferred: [V_ORIG], missing: [], bad: 0, local: false });
+  assert.equal(q.stats().items.length, 0, '补交不能抢在两档管理器之前上传原尺寸');
+  known = { state: 'ready', small: V_SMALL };
+  await enqueueLocalMedia(q, body, resolveFile, options);
+  assert.deepEqual(q.stats().items.map(i => i.tiers), [['small', 'original']]);
+});
+
+test('UQE-6 转码失败或没有两档登记的素材仍上传原尺寸,不无限等待', async () => {
+  for (const state of ['failed', 'none', 'unknown']) {
+    const q = queueWith();
+    const r = await enqueueLocalMedia(q, { hashes: [V_ORIG] }, resolveFile, { getTiers: () => ({ state }) });
+    assert.deepEqual(r.queued, [V_ORIG]);
+    assert.deepEqual(q.stats().items.map(i => i.tiers), [['original']]);
+  }
+});
+
+test('UQE-7 先报告原尺寸明确缺失;本机目标不记远程转码待办', async () => {
+  const q = queueWith({ remote: false });
+  const options = { isLocal: () => true, getTiers: () => ({ state: 'pending' }) };
+  const r = await enqueueLocalMedia(q, { hashes: [GONE, V_ORIG] }, resolveFile, options);
+  assert.deepEqual(r, { queued: [], missing: [GONE], bad: 0, local: true });
+  assert.equal(q.stats().items.length, 0);
+});

@@ -213,7 +213,9 @@ function editorEnv(dir, extra = {}) {
   for (const d of [tmp, path.join(dir, 'data'), path.join(dir, 'card-overrides')]) fs.mkdirSync(d, { recursive: true });
   return {
     ...env, PROMPTCUT_EXPORT_DIR: dir, PROMPTCUT_DATA_DIR: path.join(dir, 'data'), PROMPTCUT_CARD_OVERRIDES: path.join(dir, 'card-overrides'),
-    PROMPTCUT_STREAMS: '0', TEMP: tmp, TMP: tmp, TMPDIR: tmp, ...extra,
+    // This probe counts only the explicitly configured creator and render host.
+    // The observer must not create an additional automatic desktop render node.
+    PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_STREAMS: '0', TEMP: tmp, TMP: tmp, TMPDIR: tmp, ...extra,
   };
 }
 
