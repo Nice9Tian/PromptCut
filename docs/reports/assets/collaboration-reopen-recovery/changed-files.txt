@@ -1,3 +1,4 @@
+desktop/test/ps1-json-utf8.test.mjs
 docs/plan/TODO.md
 docs/plan/collaboration-relocation-contract.md
 docs/plan/collaboration-reopen-recovery-plan.md
