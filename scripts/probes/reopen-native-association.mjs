@@ -36,6 +36,10 @@ export function prepareStandaloneLaunch(fixtureFile, entry, file, env) {
   return {f,root,launchId};
 }
 export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secondary=false}={}) {
+  // Slow ComputerUse round trips are not a product performance assertion.
+  // An explicit opt-in allows one bounded 90s lease; normal callers retain 30s.
+  const allowExtendedLease=process.argv.includes('--allow-extended-association-lease');
+  const ttlMs=allowExtendedLease?90000:30000;
   const isolatedDefaultProgId=process.argv.includes('--isolated-default-progid');
   assert(process.argv.includes(isolatedDefaultProgId?'--allow-temporary-default-progid':'--allow-temporary-open-command'),'explicit temporary association permission flag required');
   const {f,root,launchId}=prepareStandaloneLaunch(fixtureFile,entry,file,env);
@@ -52,11 +56,12 @@ export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secon
   const readyDeadline=Date.now()+300000;
   while(!fs.existsSync(readyFile)&&Date.now()<readyDeadline)await pause(100);
   assert(fs.existsSync(readyFile),'operator did not prepare Explorer');
-  const lease=await startAssociationLease(fixtureFile,entry,controlRoot,{allowDefault:true,isolatedDefaultProgId});
-  pending.stage='armed';pending.armedAt=new Date().toISOString();persist();
+  const lease=await startAssociationLease(fixtureFile,entry,controlRoot,{allowDefault:true,isolatedDefaultProgId,ttlMs,allowExtendedLease});
+  pending.stage='armed';pending.armedAt=new Date().toISOString();pending.leaseTtlMs=ttlMs;pending.leaseExpiresAt=new Date(lease.expiresAt).toISOString();pending.receiptDeadlineAt=new Date(lease.expiresAt-5000).toISOString();persist();
   let receipt, watcher, restored;
   try {
-    const deadline=Date.now()+25000, receiptFile=path.join(f.root,'launch-receipt.json');
+    const deadline=Date.parse(pending.receiptDeadlineAt), receiptFile=path.join(f.root,'launch-receipt.json');
+    assert(Date.now()<deadline,'lease startup left no receipt window');
     while(Date.now()<deadline){
       if(fs.existsSync(receiptFile)){try{const r=JSON.parse(fs.readFileSync(receiptFile,'utf8'));if(r.launchId===launchId){receipt=r;break;}}catch{}}
       await pause(50);
@@ -68,7 +73,7 @@ export async function explorerNativeLaunch(fixtureFile, entry, file, env, {secon
     restored=await lease.restore();pending.stage='restored';pending.restoredAt=new Date().toISOString();persist();
     if(isolatedDefaultProgId)assert.equal(restored.ownedProgIdRemoved,true,'temporary owned ProgID must be cleaned');
     const result={launchId,nativePid:receipt.pid,secondary,osFileLaunch:true,association:restored,
-      armedAt:pending.armedAt,restoredAt:pending.restoredAt,secondaryExitCodeObserved:false};
+      armedAt:pending.armedAt,restoredAt:pending.restoredAt,leaseTtlMs:ttlMs,secondaryExitCodeObserved:false};
     if(!secondary){
       watcher=spawn(ps,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-NativePid',String(receipt.pid),'-ExpectedExe',entry.exe,'-Mode','watch'],{
         windowsHide:true,env:watchEnv(),stdio:['ignore','pipe','pipe'],

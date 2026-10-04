@@ -8,6 +8,8 @@
  * --standalone-smoke verifies the private Explorer environment bootstrap via arguments only.
  * --os-double-click --allow-temporary-open-command requires explicit operator permission;
  * it waits for real ComputerUse double clicks and restores the original open command.
+ * --allow-extended-association-lease explicitly permits a bounded 90s lease for
+ * slow ComputerUse round trips; the default remains 30s. This is not a speed test.
  * --isolated-default-progid --allow-temporary-default-progid instead creates a
  * unique test ProgID and leases the existing .proc default string for <=30s.
  * UserChoice is refused; the original ProgID command is never changed in this mode.
