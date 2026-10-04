@@ -109,10 +109,12 @@ fn recovery_fixture_launch() {
     assert_eq!(cfg["kind"].as_str(), Some("promptcut-fixture-launch-v1"));
     let run = PathBuf::from(cfg["env"]["PC_REOPEN_NATIVE_ROOT"].as_str().expect("run root required"));
     assert!(run.starts_with(&fixture) && run != fixture && run.is_dir());
-    assert_eq!(std::fs::canonicalize(&run).unwrap(), run);
+    let real_run = std::fs::canonicalize(&run).unwrap();
+    let real_fixture = std::fs::canonicalize(&fixture).unwrap();
+    assert!(real_run.starts_with(&real_fixture) && real_run != real_fixture);
     let file = proc_arg(env::args().skip(1)).expect("owned proc argument required");
     let opened = std::fs::canonicalize(&file).expect("owned proc file must exist");
-    assert!(opened.starts_with(&run));
+    assert!(opened.starts_with(&real_run));
     let exe = env::current_exe().unwrap();
     assert!(exe.starts_with(&fixture));
     let runtime = exe.parent().unwrap().join("runtime");
@@ -141,7 +143,7 @@ fn recovery_fixture_launch() {
     }
     let preload = runtime.join("app/scripts/lib/test-silent-processes.mjs");
     assert!(preload.is_file());
-    env::set_var("NODE_OPTIONS", format!("--import={}", url::Url::from_file_path(preload).unwrap()));
+    env::set_var("NODE_OPTIONS", format!("--import={}", tauri::Url::from_file_path(preload).unwrap()));
     let launch_id = cfg["launchId"].as_str().expect("launch identity required");
     assert!(launch_id.len() == 32 && launch_id.bytes().all(|b| b.is_ascii_hexdigit()));
     let receipt = serde_json::json!({ "kind": "promptcut-fixture-launched-v1", "launchId": launch_id,
