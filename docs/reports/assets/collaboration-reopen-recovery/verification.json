@@ -1,5 +1,6 @@
 {
-  "sourceCommit": "14d32af9d251a0e9eaebbd1e2ed216c2f1fa3606",
+  "sourceCommit": "ea9a22ed1f6a64ce692ff79eafb4babbaf799fbb",
+  "generatedAtCommit": "dc8b2412806b0bb715b4a93db1ef2a841f297974",
   "baselineTypesExitCode": 0,
   "finalTypesExitCode": 0,
   "finalTestsExitCode": 0,
@@ -10,11 +11,15 @@
   "logs": [
     {
       "file": ".baseline-types.log",
+      "sourceCommit": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "exitCode": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "counts": {}
     },
     {
       "file": ".baseline-tests.log",
+      "sourceCommit": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "exitCode": 0,
       "sha256": "63111e01210610f6dde9dd18179a5d44ea6c2ec3a922d87a98a5665f8361c0de",
       "counts": {
         "tests": 4251,
@@ -28,38 +33,48 @@
     },
     {
       "file": ".final-types.log",
+      "sourceCommit": "ea9a22ed1f6a64ce692ff79eafb4babbaf799fbb",
+      "exitCode": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "counts": {}
     },
     {
       "file": ".final-tests.log",
-      "sha256": "bda92d08079eab848fe157365f540fe9516e0f007558193b1b4ad041df0614c0",
+      "sourceCommit": "ea9a22ed1f6a64ce692ff79eafb4babbaf799fbb",
+      "exitCode": 0,
+      "sha256": "46167f6d49d5a7fd7c2b32caf7a0b5844fc1c54bd059e601bc26f1331a59f04d",
       "counts": {
-        "tests": 4286,
-        "pass": 4286,
+        "tests": 4316,
+        "pass": 4316,
         "fail": 0,
         "cancelled": 0,
         "skipped": 0,
         "todo": 0,
-        "duration_ms": 52190.099
+        "duration_ms": 54911.0132
       }
     },
     {
       "file": ".final-determinism.log",
-      "sha256": "70cbcec8ed2d9588109f58199062770e212715da548c92f5365e69188037a58d",
+      "sourceCommit": "ea9a22ed1f6a64ce692ff79eafb4babbaf799fbb",
+      "exitCode": 0,
+      "sha256": "e22286f87592654158a858c2d849c9fc65dac6506e275c8446d5b7066480c76c",
       "counts": {},
       "identicalFrames": 10,
       "differentFrames": 0
     },
     {
       "file": ".final-unified.log",
-      "sha256": "32948eedaf921e2452f8f3bb639e93ee3160f6a804ad7c7959f7030e6828951d",
+      "sourceCommit": "ea9a22ed1f6a64ce692ff79eafb4babbaf799fbb",
+      "exitCode": 0,
+      "sha256": "9e1aa466b4d4b670b34a5f9d851389cbf207eaa93c01128787651fdcd163bc8b",
       "counts": {},
       "functionalPass": true
     },
     {
       "file": ".final-build.log",
-      "sha256": "157cb88c8931201fb535fbe3167da422a2a4c016a0b5c2e4b2b8fb0b43b544cf",
+      "sourceCommit": "dc8b2412806b0bb715b4a93db1ef2a841f297974",
+      "exitCode": 0,
+      "sha256": "0a27bc4efe94c3aad36a049f6b6ea55d3182f0e5a1dd7b17814df5b0ca295211",
       "counts": {},
       "built": true,
       "warnings": [
