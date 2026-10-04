@@ -323,7 +323,7 @@ export function sharedModule({
         if (!opts) throw new Refused('bad-message', 'expiresInSec 要正整数秒，maxUses 要正整数或 null');
         const { code, invite } = issueInvite(st.serverSecret, opts, clock(ctx));
         // 整条换掉：旧摘要随之从索引里拿掉，旧链接立刻失效（store.mjs 的邀请码索引）
-        st.update(space, (d) => { d.invite = invite; });
+        st.update(space, (d) => { d.invite = invite; delete d.inviteDigestSecret; });
         ctx.log('shared.admin', { connId, projectId: space, op });
         reply(ctx, connId, { type: 'shared.admin.ok', op, code, expiresAt: invite.expiresAt, maxUses: invite.maxUses, linkOrigin }, reqId);
         return;

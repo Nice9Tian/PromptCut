@@ -7,12 +7,15 @@ import { fromLocalClient, guard } from '../http-guard.mjs';
 import { randomBytes } from 'node:crypto';
 import { startHostingHost } from '../hosting/host.mjs';
 import { roomUnavailableReason } from './relocation.mjs';
+import { prepareRelocationSnapshot } from './relocation-files.mjs';
+import { transferRelocationToHosted } from './relocation-transfer.mjs';
 
 /** Local-only identity API. Its root and protection backend are owned by the app. */
-export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf, onClose }) {
+export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf, assets, onClose }) {
   let vault;
   const hosts = new Map();
   const tasks = new Map();
+  const moves = new Map(); const moveAbort = new AbortController(); let moveTimer;
   const instance = randomBytes(32).toString('base64url');
   const getVault = () => vault ??= openRecoveryVault({ dir });
   let closing = false, unregisterTimer, unregisterBusy = false;
@@ -45,7 +48,36 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
       state: state => { entry.state = state; } });
     hosts.set(id, entry); return entry;
   }
-  onClose?.(() => { closing = true; clearTimeout(unregisterTimer); for (const entry of hosts.values()) void entry.worker.stop(); hosts.clear(); });
+  function startMove(descriptor, txnId) {
+    const prior = moves.get(descriptor.roomId);
+    if (prior?.running || prior?.state === 'complete' || prior?.terminal || prior?.retryAt > Date.now()) return prior;
+    const h = getVault().host(descriptor);
+    if (!h || h.deviceId !== device.deviceId || !assets) throw Object.assign(new Error('Source host required'), { reason: 'not-original-host' });
+    const rec = store.peek(descriptor.roomId), target = { service: descriptor.service, where: 'hosted', deviceId: null };
+    const snapshot = prepareRelocationSnapshot({ dataDir, store, roomId: descriptor.roomId, txnId, expectedEpoch: rec.relocation?.epoch ?? rec.hostingEpoch ?? 1, target, assets });
+    const move = { state: 'moving', txnId, running: true, delay: prior?.delay ?? 500, retryAt: 0, terminal: false, error: null };
+    moves.set(descriptor.roomId, move);
+    const entry = hosts.get(hostId(descriptor)); hosts.delete(hostId(descriptor)); void entry?.worker.stop();
+    void transferRelocationToHosted({ snapshot, service: descriptor.service, trustedService: descriptor.service, registrationKey: h.registrationKey, store, signal: moveAbort.signal }).then(() => {
+      move.state = 'complete'; move.error = null;
+    }, error => {
+      move.state = 'waiting'; move.error = error.reason ?? 'relocation-network';
+      move.terminal = !error.retryable && !['relocation-network', 'relocation-storage', 'cancelled'].includes(move.error);
+      move.retryAt = Date.now() + move.delay; move.delay = Math.min(30000, move.delay * 2);
+    }).finally(() => { move.running = false; });
+    return move;
+  }
+  function resumeMoves() {
+    if (closing) return;
+    if (store && assets) for (const item of store.list()) {
+      const rec = store.peek(item.projectId), move = rec?.relocation;
+      if (move?.phase !== 'frozen' || move.target?.where !== 'hosted') continue;
+      try { startMove({ version: 1, roomId: rec.projectId, service: move.target.service, where: 'lan' }, move.txnId); } catch { /* Keep the durable source restriction; explicit status returns the cause. */ }
+    }
+    moveTimer = setTimeout(resumeMoves, 1000); moveTimer.unref();
+  }
+  moveTimer = setTimeout(resumeMoves, 0); moveTimer.unref();
+  onClose?.(() => { closing = true; moveAbort.abort(); clearTimeout(moveTimer); clearTimeout(unregisterTimer); for (const entry of hosts.values()) void entry.worker.stop(); hosts.clear(); });
   const reply = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
   return async (req, res, next) => {
     const p = String(req.url).split('?')[0];
@@ -60,7 +92,7 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
       recoveryPhase = 'vault-open'; const v = getVault(); recoveryPhase = 'vault-operation';
       const task = typeof body.task === 'string' && body.task.length <= 128 ? body.task : null;
       const version = Number.isSafeInteger(body.taskVersion) && body.taskVersion >= 0 ? body.taskVersion : null;
-      if (p.endsWith('/cancel-host') || p.endsWith('/activate-host') || p.endsWith('/restore-host')) {
+      if (p.endsWith('/cancel-host') || p.endsWith('/activate-host') || p.endsWith('/restore-host') || p.endsWith('/move-hosted')) {
         if (!task || version === null) return reply(res, 400, { ok: false, error: 'bad-task' });
         if ((tasks.get(task) ?? -1) > version) return reply(res, 409, { ok: false, error: 'cancelled' });
         tasks.set(task, version);
@@ -72,6 +104,21 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
         return reply(res, 200, { ok: true });
       }
       if (p.endsWith('/settings-read')) return reply(res, 200, { ok: true, settings: v.settings(descriptor) });
+      if (p.endsWith('/move-hosted') || p.endsWith('/move-status')) {
+        if (descriptor.where !== 'lan') return reply(res, 409, { ok: false, error: 'not-original-host' });
+        const h = v.host(descriptor);
+        if (!h || h.deviceId !== device.deviceId) return reply(res, 403, { ok: false, error: 'not-original-host' });
+        const rec = store?.peek(descriptor.roomId);
+        if (!rec) return reply(res, 409, { ok: false, error: 'host-data-missing' });
+        const unavailable = roomUnavailableReason(rec);
+        if (unavailable === 'relocated') return reply(res, 200, { ok: true, state: 'complete', descriptor: { ...descriptor, where: rec.relocation.target.where } });
+        try {
+          let move = moves.get(descriptor.roomId);
+          if (p.endsWith('/move-hosted')) move = startMove(descriptor, rec.relocation?.txnId ?? `move_${randomBytes(16).toString('hex')}`);
+          return reply(res, 200, { ok: true, state: move?.state ?? (unavailable ? 'waiting' : 'idle'), error: move?.error ?? null,
+            terminal: move?.terminal ?? false, descriptor: { ...descriptor, where: 'hosted' } });
+        } catch (e) { return reply(res, 409, { ok: false, error: e.reason ?? 'relocation-storage', ...(e.missingCount ? { missingCount: e.missingCount } : {}) }); }
+      }
       if (p.endsWith('/settings-write')) { if (body.settings?.projectId !== descriptor.roomId) return reply(res, 400, { ok: false, error: 'bad-settings' }); v.saveSettings(descriptor, body.settings); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/journal')) { v.journal(descriptor, body.contentId, body.journal); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/identity')) { v.remember({ ...body.record, service: descriptor.service, roomId: descriptor.roomId }, body.contentId); return reply(res, 200, { ok: true }); }

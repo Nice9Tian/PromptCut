@@ -233,7 +233,7 @@ function artifactContentType(ext: string): string {
 
 /** 产物命名空间的 fs 目录:`<root>/out/asset-store/<ns>`(契约第 1 节) */
 export function artifactStoreDir(root: string, ns: "snap" | "px"): string {
-  return path.resolve(root, "out", "asset-store", ns);
+  return process.env.PROMPTCUT_ARTIFACT_DIR ? path.resolve(process.env.PROMPTCUT_ARTIFACT_DIR, ns) : path.resolve(root, "out", "asset-store", ns);
 }
 
 /**

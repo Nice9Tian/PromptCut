@@ -16,7 +16,7 @@ import { ONLINE } from "../../online/mode";
 import { hosted, type SharedMode, type Where } from "./sharedApi";
 import { ListEditor, LanRestartHint, readHostedUrl, writeHostedUrl } from "./SharedDialogs";
 import { CreatorFlow, type Flow } from "./MembersPanel";
-import { useSync } from "./syncManager";
+import { useSync, moveSharedToHosted } from "./syncManager";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
   type InviteInfo, type InviteStatus,
@@ -75,6 +75,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const [hostedUrl, setHostedUrl] = useState(readHostedUrl());
   const [status, setStatus] = useState<{ text: string; tone: "ok" | "err" | "info" } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [movingHosted, setMovingHosted] = useState(false);
   const [invite, setInvite] = useState<InviteInfo | null>(null);
   const [inviteStatus, setInviteStatus] = useState<InviteStatus | null>(null);
   const [regenPw, setRegenPw] = useState<string | null>(null);
@@ -85,6 +86,11 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const local = shared ? localCollab(shared.projectId) : null;
   const iAmCreator = !!shared?.creator;
   const lanOk = !ONLINE && !!device?.localEditor;
+  useEffect(() => {
+    if (movingHosted && shared?.where === "hosted") {
+      setMovingHosted(false); setStatus({ text: "已搬到云端，仍是原房间。", tone: "ok" });
+    }
+  }, [movingHosted, shared?.where]);
 
   // 打开对话框时按当前状态重置；只有尚未开启协作的创建表单生成缺省密码，恢复原房间不生成新密码。
   useEffect(() => {
@@ -213,6 +219,13 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setInviteStatus({ active: true, expiresAt: r.invite.expiresAt, maxUses: r.invite.maxUses, used: 0, revokedAt: null });
     setStatus({ text: COLLAB_TEXT.regenDone, tone: "ok" });
   };
+  const moveHosted = async () => {
+    setMovingHosted(true); setBusy(true); setStatus({ text: "正在搬到云端，完成后自动连接原房间…", tone: "info" });
+    const result = await moveSharedToHosted(); setBusy(false);
+    if (!result.ok) { setMovingHosted(false); setStatus({ text: result.error === "not-original-host" ? "请在当前实际主机上执行搬到云端。"
+      : result.error === "relocation-materials-missing" ? "有项目引用的素材尚未入库，补齐后重试；原房间和身份已保留。"
+        : "搬迁暂未完成，原房间信息已保留。检查连接或存储后重试。", tone: "err" }); }
+  };
 
   const copied$ = (key: string) => (copied === key ? <span className="pc-sync-hint">{COLLAB_TEXT.copied}</span> : null);
   const copyBtn = (key: string, text: string) => (
@@ -317,6 +330,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
             <>
               <div className="pc-sync-warn">{COLLAB_TEXT.localNote}</div>
               <div className="pc-sync-hint" data-pc="host-registration" data-state={hostRegistration ?? "member"}>{hostRegistration === "online" ? "原房间已登记上线，中继接入已就绪。" : hostRegistration === "host-conflict" ? "主机占用冲突，未自动接管。" : COLLAB_TEXT.localLimit}</div>
+              {!ONLINE ? <button type="button" className="pc-dialog-opt" data-pc="collab-move-hosted" disabled={busy} onClick={() => void moveHosted()}>搬到云端</button> : null}
             </>
           ) : null}
           {shared.where === "hosted" && iAmCreator ? (

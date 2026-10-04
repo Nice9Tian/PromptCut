@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
 import { pathToFileURL } from 'node:url';
 import { waitFor } from '../../server/test/fake-ws-kit.mjs';
+import { hostedPorts } from '../../server/test/sp-kit.mjs';
 
 const require = createRequire(import.meta.url);
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
@@ -33,6 +34,7 @@ async function editor(who, port) {
   const child = spawn(process.execPath, [vite, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: process.cwd(), windowsHide: true,
     env: { ...process.env, PROMPTCUT_DATA_DIR: testData(who), PROMPTCUT_DOCSERVICE_DATA: path.join(testData(who), 'docservice'), PROMPTCUT_EXPORT_DIR: path.join(testData(who), 'export'),
       PROMPTCUT_PROJECTS_DIR: path.join(testData(who), 'drafts'), PROMPTCUT_DEVICE_ID: who === 'host' && process.argv.includes('--keep-room') ? '' : `probe-${who}-device-000001`, PROMPTCUT_DEVICE_NAME: `isolated-${who}`,
+      PROMPTCUT_ARTIFACT_DIR: path.join(testData(who), 'artifacts'),
       PROMPTCUT_AUTO_RENDER_NODE: process.argv.includes('--nodes') ? '1' : '0', PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_PUSH: process.argv.includes('--nodes') ? '' : '0', PROMPTCUT_LAN_HOST: '0', PROMPTCUT_NODE_PROFILE: 'user', PROMPTCUT_SHARED_CONFIG: '', PROMPTCUT_QUEUE_NODE: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   editors.add(child); child.stdout.resume(); child.stderr.resume();
   const base = `http://127.0.0.1:${port}`;
@@ -40,6 +42,7 @@ async function editor(who, port) {
   return { child, base, pid: child.pid };
 }
 async function hostedProcess(docPort = 0, assetPort = 0) {
+  if (!docPort || !assetPort) { const ports = await hostedPorts(); docPort ||= ports.docPort; assetPort ||= ports.assetPort; }
   fs.mkdirSync(testData('cloud'), { recursive: true });
   const comboUrl = pathToFileURL(path.resolve('server/hosted/combo.mjs')).href;
   const code = `import { startHostedCombo } from ${JSON.stringify(comboUrl)};
@@ -311,6 +314,35 @@ try {
       page, open, connected, cloud, phase: value => { phase = value; console.log(JSON.stringify({ phase })); },
     }));
   }
+  let relocation = null;
+  if (process.argv.includes('--move-hosted')) {
+    assert.equal(where, 'lan'); assert.equal(!!matrix || !!exitMatrix || !!wan, false, 'movement has its own isolated acceptance');
+    phase = 'actual settings UI moves the original room to hosted service'; console.log(JSON.stringify({ phase }));
+    await host.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings'))); await host.waitForSelector('[data-pc="collab-move-hosted"]');
+    await host.click('[data-pc="collab-move-hosted"]'); await connected(host, roomId, 'host');
+    await host.waitForFunction(() => window.probe.sync.getSyncView().shared?.where === 'hosted', { timeout: 30000 });
+    await host.evaluate(() => { for (const el of document.querySelectorAll('[data-pc="collab-project-password"], [data-pc="collab-invite-link"], [data-pc="collab-qr"]')) el.replaceChildren(document.createTextNode('[redacted]')); });
+    await host.screenshot({ path: path.join(root, 'relocation-hosted-ui.png') });
+    await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '取消').click());
+    // The member's old file still says LAN and must follow the authenticated new location.
+    await open(member, memberFile); await connected(member, roomId, 'member'); assert.equal(await member.evaluate(() => window.probe.sync.getSyncView().shared.where), 'hosted');
+    await name(member, 'member-after-relocation'); await sees(host, 'member-after-relocation');
+    await name(host, 'host-after-relocation'); await sees(member, 'host-after-relocation');
+    const reads = await member.evaluate(async ({ hash, size, base }) => {
+      const ticket = await window.probe.sync.currentSharedLink().request({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+      for (const ns of ['media', 'snap', 'px']) { const response = await fetch(`${base}/${ns}/${hash}`, { headers: { authorization: `Bearer ${ticket.ticket}` } }); if (!response.ok) throw new Error('relocated material read rejected'); const bytes = await response.arrayBuffer(); const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(n => n.toString(16).padStart(2, '0')).join(''); if (bytes.byteLength !== size || digest !== hash) throw new Error('relocated material mismatch'); }
+      return { namespaces: ['media', 'snap', 'px'], size, hash, ticketRead: true };
+    }, { ...asset, base: `http://127.0.0.1:${cloud.assetPort}/api/asset` });
+    const movedFile = JSON.parse(await saved(host)); assert.equal(movedFile.collaboration.where, 'hosted'); assert.equal(movedFile.collaboration.roomId, roomId);
+    const previousCloud = cloud; await cloud.close(); cloud = await hostedProcess(previousCloud.docPort, previousCloud.assetPort); assert.notEqual(cloud.pid, previousCloud.pid);
+    await open(host, hostFile); await connected(host, roomId, 'host'); await open(member, memberFile); await connected(member, roomId, 'member');
+    await sees(host, 'host-after-relocation'); await sees(member, 'host-after-relocation');
+    assert.equal(await host.evaluate(() => window.probe.sync.getSyncView().shared.where), 'hosted');
+    relocation = { roomId, actualSettingsAction: true, source: 'lan', destination: 'hosted', oldFilesFollowNewLocation: true, savedLocation: 'hosted', actualCloudRestart: true,
+      bidirectionalEdits: 2, asset: reads, recoveryCreateRequests: createRequests - 1 };
+    // Preserve subsequent deletion assertions' existing expected project name.
+    await name(host, 'host-edit-after-reopen'); await sees(member, 'host-edit-after-reopen');
+  }
   phase = 'old-file tombstone';
   assert.equal(createRequests, 1, 'every reopen must reuse the original room without a create request');
   if (process.argv.includes('--keep-room')) {
@@ -353,7 +385,7 @@ try {
   }
   evidence.push({ roomId, where, mode, actualHostProcessRestart: true, actualMemberProcessRestart: true, actualCloudProcessRestart: !wan, hostOpenedWhileCloudOffline: !wan && where === 'lan', pidChanged: true, portChanged: true, emptyBrowserStorage: true, memberWaitThenAutoJoin: where === 'lan',
     sameUsers: ['creator:host', 'member:member'], oldSnapshotsPreservedLatest: true, version: journal.rev, bidirectionalEdits: 4, formats: ['proc', 'procp', 'draft', 'system-path', 'refresh'], nativeOsDoubleClick: false, cancellationTombstone: !process.argv.includes('--keep-room'), recoveryCreateRequests: createRequests - 1, agentAndCardBindings: true, renderNodeStarted: process.argv.includes('--nodes'), nodeRolesAuthenticated: process.argv.includes('--nodes'), staleBindingsRemovedOnDelete: !process.argv.includes('--keep-room'), creatorPasswordReconnect: process.argv.includes('--password-change'), creatorSecondDevice: process.argv.includes('--roles'), deletedFromSecondCreator: !!secondCreator });
-  const result = { ok: true, evidence, matrix, exitMatrix, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
+  const result = { ok: true, evidence, matrix, exitMatrix, relocation, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
   evidence[0].deletedWhileMemberOffline = process.argv.includes('--delete-offline');
   evidence[0].tamperedAssociationsRejected = process.argv.includes('--trust');
   fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));

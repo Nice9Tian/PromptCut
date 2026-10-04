@@ -1336,7 +1336,25 @@ const recoveryCoordinator = new RecoveryCoordinator({
   },
   host: async (descriptor: CollaborationDescriptor, signal: AbortSignal) => (await recoveryRequest("restore-host", descriptor, {}, signal)).candidate,
   discover: async (descriptor: CollaborationDescriptor, record: RecoveryIdentity, signal: AbortSignal) => {
-    if (record.candidate.where === "hosted") return { ...record.candidate, projectId: descriptor.roomId };
+    if (record.candidate.where === "hosted") {
+      const service = record.candidate.service ?? descriptor.service;
+      const relayBase = `${service!.replace(/\/+$/, "")}/hosting/relay/${descriptor.roomId}/doc`;
+      // A persisted relay address never contains a current route capability; discover it afresh.
+      if (record.candidate.base.replace(/\/+$/, "") !== relayBase) {
+        const device = await ensureDevice(); if (!device) throw new Error("设备信息尚未就绪");
+        try {
+          await client.buildAuthProtocols({ base: record.candidate.base, projectId: descriptor.roomId!, username: record.username, as: record.as, key: record.key,
+            deviceId: device.deviceId, deviceName: device.deviceName,
+            fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(2000)]) }) });
+          return { ...record.candidate, projectId: descriptor.roomId };
+        } catch (e) {
+          if (signal.aborted || (e as { reason?: string }).reason !== "relocated") throw e;
+          // Only the durably sealed old service may redirect recovery to its trusted authority.
+        }
+      }
+      const device = await ensureDevice(); if (!device) throw new Error("设备信息尚未就绪");
+      return discoverRoom({ service, roomId: descriptor.roomId, username: record.username, as: record.as, deviceId: device.deviceId, key: record.key });
+    }
     if (!ONLINE_BUILD && !ONLINE) {
       let room;
       try {
@@ -1404,6 +1422,22 @@ export async function chooseRecoveryIdentity(as: string, username: string, profi
   if (!selected || saved.revoked) throw new Error("这个身份无法恢复");
   await recoveryRequest("identity", descriptor, { contentId, record: selected });
   recoveryCoordinator.start(descriptor, contentId);
+}
+/** Explicit movement runs in the original host's service; reopening follows the same coordinator. */
+export async function moveSharedToHosted(): Promise<{ ok: true } | { ok: false; error: string }> {
+  const descriptor = currentAssociation(), original = cur?.link;
+  if (ONLINE_BUILD || ONLINE || !descriptor || descriptor.where !== "lan" || !original || cur?.kind !== "shared") return { ok: false, error: "not-original-host" };
+  try {
+    await whenSaved(10000); await identitySave;
+    if (cur?.link !== original || currentAssociation() !== descriptor) return { ok: false, error: "cancelled" };
+    await recoveryRequest("move-hosted", descriptor);
+    if (cur?.link !== original || currentAssociation() !== descriptor) return { ok: false, error: "cancelled" };
+    const project = structuredClone(getState().project);
+    recoveryCoordinator.cancel(); cancelHostTask(descriptor); releaseHolding(); detach(); disconnectSharedAssets();
+    setAssociation(descriptor, true); patch({ association: descriptor, shared: null, members: [], blocked: null, reopenState: "waiting-host" });
+    holdRecovery(project, descriptor); recoveryCoordinator.start(descriptor, project.id);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e as { reason?: string }).reason ?? "relocation-network" }; }
 }
 /** The user supplies a password after seeing the destination; no cached secret is sent to a file URL. */
 export async function authenticateRecovery(username: string, password: string, as: "creator" | "member"): Promise<EnterResult> {

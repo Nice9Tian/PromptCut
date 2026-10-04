@@ -91,7 +91,7 @@ async function ask(c, message) {
   try { return await c.next(m => m.reqId === reqId); } catch { throw new Error('isolated fence reply timed out; secrets omitted'); }
 }
 test('真实服务：封禁即时阻止旧页面/Agent/渲染节点写入、新连接及旧素材票据，服务重开后仍有效', { timeout: 15000 }, async t => {
-  const root = temporary(); let combo = await startHostedCombo({ dataDir: root, trustLoopback: true, localDevice: { deviceId: 'source-original-device-01', deviceName: 'isolated-source' }, log: () => {} });
+  const root = temporary(); let combo = await startHostedCombo({ dataDir: root, docPort: 0, assetPort: 0, host: '127.0.0.1', trustLoopback: true, localDevice: { deviceId: 'source-original-device-01', deviceName: 'isolated-source' }, log: () => {} });
   t.after(() => combo.close());
   const rec = create(combo.credentialStore), roomId = rec.projectId, base = `http://127.0.0.1:${combo.docPort}`;
   const protocols = () => buildAuthProtocols({ base, projectId: roomId, username: 'host', as: 'creator', key: rec.creator.key, deviceId: 'source-original-device-01', deviceName: 'isolated-source' });
@@ -135,13 +135,13 @@ test('真实服务：封禁即时阻止旧页面/Agent/渲染节点写入、新�
   assert.equal(combo.credentialStore.peek(roomId).invite.used, 0);
   for (const c of [host, ...roles]) c.close();
   const authDir = path.join(combo.paths.docservice, 'auth'); await combo.close(); forgetCredentialStore(authDir);
-  combo = await startHostedCombo({ dataDir: root, trustLoopback: false, clusterToken: secret(), log: () => {} });
+  combo = await startHostedCombo({ dataDir: root, docPort: 0, assetPort: 0, host: '127.0.0.1', trustLoopback: false, clusterToken: secret(), log: () => {} });
   assert.equal(roomUnavailableReason(combo.credentialStore.peek(roomId)), 'relocating');
   const response = await fetch(`http://127.0.0.1:${combo.docPort}/shared/challenge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: roomId, username: 'host', as: 'creator', deviceId: 'source-original-device-01' }) });
   assert.equal(response.status, 503); assert.equal((await response.json()).error, 'relocating'); assert.equal(hash(fs.readFileSync(opFile)), logBefore);
 });
 test('真实会话：封禁后不能用原会话秘密接续，脱开并保留的会话也重新检查持久状态', { timeout: 10000 }, async t => {
-  const root = temporary(), combo = await startHostedCombo({ dataDir: root, trustLoopback: false, clusterToken: secret(), log: () => {} }); t.after(() => combo.close());
+  const root = temporary(), combo = await startHostedCombo({ dataDir: root, docPort: 0, assetPort: 0, host: '127.0.0.1', trustLoopback: false, clusterToken: secret(), log: () => {} }); t.after(() => combo.close());
   const rec = create(combo.credentialStore), roomId = rec.projectId, base = `http://127.0.0.1:${combo.docPort}`;
   const proxy = await createTcpProxy({ target: combo.docPort }); t.after(() => proxy.close());
   const endpoint = createDocEndpoint({ url: `ws://127.0.0.1:${proxy.port}`, transport: 'ws', renew: false,

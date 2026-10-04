@@ -477,6 +477,7 @@ export function createDocService(options = {}) {
     closeConn(connId, code, reason) {
       return sessions.close(connId, code, reason);
     },
+    closeSpace(space, code = 1012, reason = 'relocating') { sessions.closeSpace(space, code, reason); },
 
     /**
      * 丢掉一个空间在各模块里的实例（删共享项目时，`auth-contract.md` 第 7 节）。只调挂着的、有 `dropSpace` 的模块

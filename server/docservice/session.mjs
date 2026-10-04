@@ -681,6 +681,9 @@ export function createSessionLayer({
     /**
      * 关停：所有会话以 `code` 结束（脱开的也结束），旧客户端关掉它的传输。回全部注销完成的 Promise。
      */
+    closeSpace(space, code, reason) {
+      for (const s of [...byConn.values()]) if (s.principal?.tenantId === space) endSession(s, code, reason);
+    },
     closeAll(code, reason) {
       const waits = [];
       for (const s of [...byConn.values()]) {

@@ -5,20 +5,21 @@
 import { isDeviceId, isProjectId } from '../auth/protocol.mjs';
 import { serviceIdentity } from './descriptor.mjs';
 
-const isTxn = value => typeof value === 'string' && /^move_[a-f0-9]{32}$/.test(value);
+export const isRelocationId = value => typeof value === 'string' && /^move_[a-f0-9]{32}$/.test(value);
 const isDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const fail = reason => { throw Object.assign(new Error('Room relocation rejected'), { reason }); };
-function targetOf(value) {
+export function relocationTarget(value) {
   if (!value || !['lan', 'hosted'].includes(value.where) || typeof value.service !== 'string') return null;
   let service; try { service = serviceIdentity(value.service); } catch { return null; }
   if (service !== value.service || (value.where === 'lan' ? !isDeviceId(value.deviceId) : value.deviceId !== null)) return null;
   return { service, where: value.where, deviceId: value.deviceId };
 }
-function manifestOf(value) {
+export function relocationManifest(value) {
   return value && Number.isSafeInteger(value.rev) && value.rev >= 0 && isDigest(value.logDigest) && isDigest(value.assetDigest)
     ? { rev: value.rev, logDigest: value.logDigest, assetDigest: value.assetDigest } : null;
 }
+const isTxn = isRelocationId, targetOf = relocationTarget, manifestOf = relocationManifest;
 function validFence(rec) {
   const r = rec?.relocation;
   return r && r.version === 1 && isProjectId(rec.projectId) && r.roomId === rec.projectId && isTxn(r.txnId)

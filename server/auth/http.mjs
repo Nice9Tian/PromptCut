@@ -354,7 +354,7 @@ export function createSharedHttp({
     };
     // 形状不对的邀请码也按「无效」回，同样计数：猜码的人从回包里分不出是格式错还是没有这个码
     if (!isInviteCode(body.code)) return invalid();
-    const rec = st.peekByInviteDigest(inviteDigest(st.serverSecret, body.code));
+    const rec = typeof st.peekByInviteCode === 'function' ? st.peekByInviteCode(body.code) : st.peekByInviteDigest(inviteDigest(st.serverSecret, body.code));
     if (!rec || !rec.invite) return invalid();
     const unavailable = roomUnavailableReason(rec);
     if (unavailable) return fail(res, unavailable === 'relocated' ? 409 : 503, unavailable);

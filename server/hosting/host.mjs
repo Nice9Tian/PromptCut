@@ -77,7 +77,7 @@ export function startHostingHost({ service, roomId, hostKey, deviceId, instance,
       const rec = record(); if (!rec) { await stop({ deleted: true }); return; }
       const unavailable = roomUnavailableReason(rec);
       if (unavailable) { await stop(); state(unavailable); return; }
-      await post('register', { deviceId, instance, mirror: mirrorOf(rec, direct) });
+      await post('register', { deviceId, instance, hostingEpoch: rec.hostingEpoch ?? 1, mirror: mirrorOf(rec, direct) });
       if (stopped) return;
       const changed = roomUnavailableReason(record());
       if (changed) { await stop(); state(changed); return; }

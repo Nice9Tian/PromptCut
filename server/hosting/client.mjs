@@ -13,7 +13,8 @@ export async function discoverRoom({ service, roomId, username, deviceId, as, ke
   const r = await post(service, 'resolve', { roomId, username, deviceId, as, nonce: ch.nonce, proof });
   if (r.roomId !== roomId || r.relay !== `/hosting/relay/${roomId}` || !/^[A-Za-z0-9_-]{43}$/.test(r.access || '')) throw Object.assign(new Error('房间身份不匹配'), { reason: 'auth' });
   const base = `${service.replace(/\/+$/, '')}${r.relay}/doc`;
-  return { where: 'lan', projectId: roomId, service, name: r.name, mode: r.mode, base, access: r.access,
+  if (r.where !== undefined && !['lan', 'hosted'].includes(r.where)) throw Object.assign(new Error('房间位置不匹配'), { reason: 'auth' });
+  return { where: r.where ?? 'lan', projectId: roomId, service, name: r.name, mode: r.mode, base, access: r.access,
     asset: `${service.replace(/\/+$/, '')}${r.relay}/asset/api/asset`, routeProtocol: ROUTE_PROTOCOL + r.access };
 }
 export function relayFetch(access) {

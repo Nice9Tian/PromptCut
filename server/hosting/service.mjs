@@ -10,6 +10,8 @@ import { createRateLimiter } from '../auth/rate-limit.mjs';
 import { isProjectId, isUsername, isDeviceId, isKdf } from '../auth/protocol.mjs';
 import { HOSTING, ROUTE_PROTOCOL, hostingProof } from './protocol.mjs';
 import { createBandwidth } from './bandwidth.mjs';
+import { createRelocationDirectory, relocationPending } from './relocation.mjs';
+import { serviceIdentity } from '../recovery/descriptor.mjs';
 
 const digest = s => createHash('sha256').update(String(s)).digest('hex');
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -20,7 +22,8 @@ const isSalt = k => typeof k === 'string' && /^[A-Za-z0-9_-]{22}$/.test(k);
 const credential = c => c && isSalt(c.salt) && isKey(c.key);
 // Even a member on the directory machine must authenticate at the host. Never tunnel loopback trust.
 const forwardedRemote = req => /^(?:::ffff:)?127\.|^::1$/.test(req.socket.remoteAddress || '') ? '198.51.100.1' : req.socket.remoteAddress;
-export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.leaseMs, bytesPerSecond = HOSTING.bytesPerSecond, totalBytesPerSecond = 16 * 1024 * 1024 } = {}) {
+export function createHostingService({ dir, authorityService = null, now = Date.now, leaseMs = HOSTING.leaseMs, bytesPerSecond = HOSTING.bytesPerSecond, totalBytesPerSecond = 16 * 1024 * 1024 } = {}) {
+  let authority = authorityService ? serviceIdentity(authorityService) : null;
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, 'directory.json');
   let rooms = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
@@ -37,22 +40,29 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
   const fail = (res, code, error) => send(res, code, { ok: false, error });
   const hostCredential = (req, id) => rooms[id] && equal(digest(bearer(req) ?? String(req.headers['sec-websocket-protocol'] || '').split(',').map(s => s.trim()).find(s => s.startsWith('promptcut.host.'))?.slice('promptcut.host.'.length)), rooms[id].hostVerifier);
   const hostAllowed = (req, id) => rooms[id] && !rooms[id].deleted && hostCredential(req, id);
-  const online = id => (leases.get(id)?.expires || 0) > now() && tunnels.has(id);
+  const online = id => !relocationPending(rooms[id]) && (leases.get(id)?.expires || 0) > now() && tunnels.has(id);
   const banned = (rec, user, device) => (rec.bans ?? []).some(b => b.username === user && b.deviceId === device);
   const accessOf = (req, id) => {
     const protocols = String(req.headers['sec-websocket-protocol'] ?? req.headers['x-promptcut-protocols'] ?? '').split(',').map(s => s.trim());
     const token = req.headers['x-pc-hosting-access'] ?? protocols.find(p => p.startsWith(ROUTE_PROTOCOL))?.slice(ROUTE_PROTOCOL.length);
     const access = accesses.get(digest(token)); const rec = rooms[id];
-    if (!access || access.roomId !== id || access.expires <= now() || !rec || rec.deleted || rec.generation !== access.generation || banned(rec, access.username, access.deviceId)) return null;
+    if (!access || access.roomId !== id || access.expires <= now() || !rec || rec.deleted || (rec.hostingEpoch ?? 1) !== (access.hostingEpoch ?? 1) || rec.generation !== access.generation || banned(rec, access.username, access.deviceId)) return null;
     return access;
   };
   const grantOf = (req, id) => {
     const raw = String(req.headers.authorization || '');
     const ticket = /^Bearer (\S{1,4096})$/.exec(raw)?.[1] ?? new URL(req.url, 'http://localhost').searchParams.get('t') ?? String(req.headers['sec-websocket-protocol'] || '').split(',').map(s => s.trim()).find(s => s.startsWith('promptcut.ticket.'))?.slice('promptcut.ticket.'.length);
     const grant = assetGrants.get(digest(ticket)), rec = rooms[id];
-    return grant && grant.roomId === id && grant.expires > now() && rec && !rec.deleted && grant.generation === rec.generation && !banned(rec, grant.username, grant.deviceId) ? grant : null;
+    return grant && grant.roomId === id && grant.expires > now() && rec && !rec.deleted && (rec.hostingEpoch ?? 1) === (grant.hostingEpoch ?? 1) && grant.generation === rec.generation && !banned(rec, grant.username, grant.deviceId) ? grant : null;
   };
   async function bodyOf(req) { let raw = ''; for await (const b of req) { raw += b; if (raw.length > 65536) throw new Error('too-large'); } return JSON.parse(raw); }
+  function retire(roomId) {
+    leases.delete(roomId); tunnels.get(roomId)?.close(1012, 'relocating'); tunnels.delete(roomId);
+    for (const [key, access] of accesses) if (access.roomId === roomId) accesses.delete(key);
+    for (const [key, grant] of assetGrants) if (grant.roomId === roomId) assetGrants.delete(key);
+    for (const ch of channels.values()) if (ch.roomId === roomId) ch.socket.destroy();
+  }
+  const relocation = createRelocationDirectory({ peek: id => rooms[id], commit, retire });
   const timeout = setInterval(() => {
     bandwidth.prune();
     for (const [id, lease] of leases) if (lease.expires <= now()) { leases.delete(id); tunnels.get(id)?.close(1001, 'lease-expired'); tunnels.delete(id); }
@@ -111,6 +121,22 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
     if (req.method !== 'POST') return fail(res, 404, 'no-endpoint');
     try {
       const b = await bodyOf(req), rec = rooms[b.roomId], remote = req.socket.remoteAddress;
+      if (p.startsWith('/hosting/relocation/')) {
+        if (!rec || rec.deleted) return fail(res, rec ? 410 : 404, rec ? 'deleted' : 'no-project');
+        const sourceAllowed = hostCredential(req, b.roomId) || b.txnId === rec.move?.txnId && equal(digest(bearer(req)), rec.move?.sourceVerifier);
+        const targetAllowed = b.txnId === rec.move?.txnId && equal(digest(bearer(req)), rec.move?.targetVerifier);
+        const which = p.slice('/hosting/relocation/'.length);
+        if (which === 'ready' ? !targetAllowed : which === 'state' ? !sourceAllowed && !targetAllowed : !sourceAllowed) return fail(res, 403, 'host-auth');
+        try {
+          if (which === 'begin' && (!authority || b.target?.service !== authority)) return fail(res, 400, 'bad-relocation');
+          const result = which === 'begin' ? relocation.begin(b) : which === 'ready' ? relocation.ready(b)
+            : which === 'publish' ? relocation.publish(b) : which === 'state' ? relocation.status(b.roomId) : null;
+          return result ? send(res, 200, { ok: true, ...result }) : fail(res, 404, 'no-endpoint');
+        } catch (e) {
+          if (!e.reason) { res.setHeader('Retry-After', '1'); return fail(res, 503, 'relocation-storage'); }
+          return fail(res, e.reason === 'deleted' ? 410 : 409, e.reason);
+        }
+      }
       if (p === '/hosting/register') {
         let mirror = b.mirror;
         if (!isProjectId(b.roomId) || !isDeviceId(b.deviceId) || !isKey(b.instance) || !isKey(bearer(req)) || !mirror || !isKdf(mirror.kdf) || !credential(mirror.creator) || !isUsername(mirror.creator.username)
@@ -124,6 +150,8 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
           invite: mirror.invite && typeof mirror.invite.digest === 'string' && mirror.invite.digest.length <= 128 ? { digest: mirror.invite.digest, expiresAt: mirror.invite.expiresAt, revokedAt: mirror.invite.revokedAt, maxUses: mirror.invite.maxUses, used: mirror.invite.used } : null, direct: null };
         if (rec?.deleted) return fail(res, 410, 'deleted');
         if (rec && !hostAllowed(req, b.roomId)) return fail(res, 403, 'host-auth');
+        if (rec && relocationPending(rec)) return fail(res, 409, 'relocating');
+        if ((rec?.hostingEpoch ?? 1) !== (b.hostingEpoch ?? 1)) return fail(res, 409, 'relocation-conflict');
         if (rec && rec.deviceId !== b.deviceId) return fail(res, 409, 'host-conflict');
         const lease = leases.get(b.roomId);
         if (lease && lease.expires > now() && (lease.deviceId !== b.deviceId || lease.instance !== b.instance && tunnels.has(b.roomId))) return fail(res, 409, 'host-conflict');
@@ -152,14 +180,14 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
         if (banned(rec, b.username, b.deviceId)) return fail(res, 403, 'banned');
         if (challenges.check(b.nonce, fields.slice(0, 4)) !== 'ok' || !c || !equal(b.proof, hostingProof(c.key, fields))) { rate.fail(remote); return fail(res, 401, 'unauthorized'); }
         if (!online(b.roomId)) return fail(res, 503, 'host-offline');
-        const access = secret(); accesses.set(digest(access), { roomId: b.roomId, username: b.username, deviceId: b.deviceId, generation: rec.generation, expires: now() + HOSTING.accessMs });
+        const access = secret(); accesses.set(digest(access), { roomId: b.roomId, username: b.username, deviceId: b.deviceId, generation: rec.generation, hostingEpoch: rec.hostingEpoch ?? 1, expires: now() + HOSTING.accessMs });
         return send(res, 200, { ok: true, roomId: b.roomId, name: rec.mirror.name, mode: rec.mirror.mode, access, expires: now() + HOSTING.accessMs,
-          direct: rec.mirror.direct ?? null, relay: `/hosting/relay/${b.roomId}` });
+          direct: rec.mirror.direct ?? null, relay: `/hosting/relay/${b.roomId}`, ...(rec.location ? { where: rec.location.target.where, epoch: rec.hostingEpoch } : {}) });
       }
       if (p === '/hosting/authorize-asset') {
         const access = accessOf(req, b.roomId);
         if (!access || typeof b.ticket !== 'string' || b.ticket.length > 4096) return fail(res, 401, 'unauthorized');
-        assetGrants.set(digest(b.ticket), { roomId: b.roomId, username: access.username, deviceId: access.deviceId, generation: rec.generation, expires: Math.min(access.expires, now() + HOSTING.accessMs) }); return send(res, 200, { ok: true });
+        assetGrants.set(digest(b.ticket), { roomId: b.roomId, username: access.username, deviceId: access.deviceId, generation: rec.generation, hostingEpoch: rec.hostingEpoch ?? 1, expires: Math.min(access.expires, now() + HOSTING.accessMs) }); return send(res, 200, { ok: true });
       }
       fail(res, 404, 'no-endpoint');
     } catch { if (!res.headersSent) fail(res, 400, 'bad-request'); else res.destroy(); }
@@ -210,6 +238,20 @@ export function createHostingService({ dir, now = Date.now, leaseMs = HOSTING.le
     bridge.on('close', () => socket.destroy());
   };
   server.on('upgrade', handleUpgrade);
-  return { server, handle, handleUpgrade, online, async listen(port = 0, host = '127.0.0.1') { await new Promise((r, j) => { server.once('error', j); server.listen(port, host, r); }); return server.address(); },
+  return { server, handle, handleUpgrade, online,
+    setAuthority(service) { const identity = serviceIdentity(service); if (authority && authority !== identity) throw new Error('hosting-authority-conflict'); authority = identity; },
+    get authorityService() { return authority; },
+    relocationView(roomId) { return relocation.status(roomId); },
+    relocationSourceAllowed({ roomId, txnId, registrationKey }) {
+      const rec = rooms[roomId];
+      return !!rec && !rec.deleted && isKey(registrationKey) && (equal(digest(registrationKey), rec.hostVerifier)
+        || txnId === rec.move?.txnId && equal(digest(registrationKey), rec.move?.sourceVerifier));
+    },
+    relocationReady(body, registrationKey) {
+      const rec = rooms[body.roomId];
+      if (!rec || rec.deleted || !isKey(registrationKey) || rec.move?.txnId !== body.txnId || !equal(digest(registrationKey), rec.move?.targetVerifier)) throw Object.assign(new Error('Relocation rejected'), { reason: rec?.deleted ? 'deleted' : 'host-auth' });
+      return relocation.ready(body);
+    },
+    async listen(port = 0, host = '127.0.0.1') { await new Promise((r, j) => { server.once('error', j); server.listen(port, host, r); }); if (!authority && (host === '127.0.0.1' || host === '::1')) authority = `http://${host === '::1' ? '[::1]' : host}:${server.address().port}`; return server.address(); },
     async close() { clearInterval(timeout); for (const ws of tunnels.values()) ws.close(1001, 'shutdown'); for (const ch of channels.values()) ch.socket.destroy(); for (const socket of rawSockets) socket.destroy(); if (server.listening) await new Promise(r => { server.close(r); server.closeAllConnections(); }); } };
 }

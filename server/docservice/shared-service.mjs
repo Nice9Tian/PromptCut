@@ -208,6 +208,11 @@ export function createSharedDocService({
     },
   }));
 
+  /** Import into an old, durably moved space must discard both sessions and replay caches. */
+  service.reloadSpace = space => {
+    if (!isProjectId(space) || !roomUnavailableReason(storeOf()?.peek(space))) throw new Error('Room must be fenced before reload');
+    service.closeSpace(space); service.dropSpace(space); spaceStores.delete(space); bundles.delete(space);
+  };
   return {
     service,
     /** 凭证存储（可能是 null） */

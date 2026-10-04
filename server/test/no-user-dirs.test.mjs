@@ -37,17 +37,18 @@ test('user-dirs:用户导出目录的判定(假 home)', () => {
   }
 });
 
-test('user-dirs:摘掉两个变量、别的不动;显式指到用户目录时抛', () => {
-  assert.deepEqual([...USER_DIR_ENV_KEYS].sort(), ['PROMPTCUT_DATA_DIR', 'PROMPTCUT_EXPORT_DIR']);
+test('user-dirs:摘掉产物与数据目录变量、别的不动;显式指到用户目录时抛', () => {
+  assert.deepEqual([...USER_DIR_ENV_KEYS].sort(), ['PROMPTCUT_ARTIFACT_DIR', 'PROMPTCUT_DATA_DIR', 'PROMPTCUT_EXPORT_DIR']);
   const videos = userExportDir();
-  const env = { PROMPTCUT_EXPORT_DIR: videos, PROMPTCUT_DATA_DIR: 'C:/x/data', PROMPTCUT_STREAMS: '0', PATH: 'p' };
+  const env = { PROMPTCUT_EXPORT_DIR: videos, PROMPTCUT_DATA_DIR: 'C:/x/data', PROMPTCUT_ARTIFACT_DIR: 'C:/x/artifacts', PROMPTCUT_STREAMS: '0', PATH: 'p' };
   const removed = scrubUserDirEnv(env);
-  assert.deepEqual(removed.map((r) => r.key).sort(), ['PROMPTCUT_DATA_DIR', 'PROMPTCUT_EXPORT_DIR']);
+  assert.deepEqual(removed.map((r) => r.key).sort(), ['PROMPTCUT_ARTIFACT_DIR', 'PROMPTCUT_DATA_DIR', 'PROMPTCUT_EXPORT_DIR']);
   assert.deepEqual(env, { PROMPTCUT_STREAMS: '0', PATH: 'p' });
   assert.deepEqual(scrubUserDirEnv(env), [], '再摘一次什么都没有');
 
   assert.throws(() => assertNoUserExportDir({ PROMPTCUT_EXPORT_DIR: path.join(videos, 'frame-library') }), /不得写那里/);
   assert.throws(() => assertNoUserExportDir({ PROMPTCUT_DATA_DIR: videos }), /PROMPTCUT_DATA_DIR/);
+  assert.throws(() => assertNoUserExportDir({ PROMPTCUT_ARTIFACT_DIR: videos }), /PROMPTCUT_ARTIFACT_DIR/);
   assert.doesNotThrow(() => assertNoUserExportDir({ PROMPTCUT_EXPORT_DIR: path.join(os.tmpdir(), 'e2e'), PROMPTCUT_DATA_DIR: path.join(REPO, 'out') }));
   assert.doesNotThrow(() => assertNoUserExportDir({}));
 });

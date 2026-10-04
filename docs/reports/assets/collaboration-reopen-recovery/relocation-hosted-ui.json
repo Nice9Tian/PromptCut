@@ -1,0 +1,77 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_4b2edsfn4cndukr3vpu2l2oo67",
+      "where": "lan",
+      "mode": "restricted",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": true,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": true,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 6,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": false,
+      "nodeRolesAuthenticated": false,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": false,
+      "creatorSecondDevice": false,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": false
+    }
+  ],
+  "relocation": {
+    "roomId": "sp_4b2edsfn4cndukr3vpu2l2oo67",
+    "actualSettingsAction": true,
+    "source": "lan",
+    "destination": "hosted",
+    "oldFilesFollowNewLocation": true,
+    "savedLocation": "hosted",
+    "actualCloudRestart": true,
+    "bidirectionalEdits": 2,
+    "asset": {
+      "namespaces": [
+        "media",
+        "snap",
+        "px"
+      ],
+      "size": 50000,
+      "hash": "7061cd85965d411c05303f3af7c4bbceec1a6821827b18cf689f60b82c731c34",
+      "ticketRead": true
+    },
+    "recoveryCreateRequests": 0
+  },
+  "asset": {
+    "hash": "7061cd85965d411c05303f3af7c4bbceec1a6821827b18cf689f60b82c731c34",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-rkKToZ"
+}
