@@ -438,6 +438,13 @@ async function openEditorPage(browser, origin, label, pageErrors) {
   const online = await until(`[${label}] 页面同步接上`, () => P(page, () => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 180_000, 500);
   if (!online) throw new Error(`${label} 页面没接上同步`);
   await until(`[${label}] 页面舞台起来、测量遮罩退下`, () => P(page, () => document.querySelectorAll('iframe').length >= 2 && !document.querySelector('[data-pc="probe-gate"]')), 300_000, 500);
+  // iframe 存在时其入口模块可能还在加载，卡片 HMR 回调尚未注册。
+  // 各舞台完成握手后再进入共享项目，避免同步源码的首轮更新被启动中的舞台漏接。
+  const stagesReady = await until(`[${label}] 两个舞台完成实际握手`, () => P(page, () => {
+    const d = window.__pcPreviewDiag?.();
+    return !!d?.hostCaps?.A && !!d?.hostCaps?.B;
+  }), 180_000, 100);
+  if (!stagesReady) throw new Error(`${label} 两个舞台没有完成握手`);
   await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
   return page;
 }

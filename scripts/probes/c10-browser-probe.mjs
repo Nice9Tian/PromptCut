@@ -1459,11 +1459,12 @@ try {
   const clips = await P(creator, async (spec) => {
     const S = await import('/src/store/project.ts');
     if (spec.mediaId) S.actions.addMediaClip(spec.mediaId, 0, { duration: spec.seconds });
-    const light = S.actions.addClipOnNewTrack({ index: 0, cardId: 'chapter-bar', start: 0, duration: spec.seconds });
+    const light = S.actions.addClipOnNewTrack({ index: 0, cardId: 'chapter-bar', start: 8, duration: 2 });
     // 独立的轻卡:测量的快照趟会推出探针帧(验「大块产出压成可转移的 ArrayBuffer」)
-    S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-typewriter', start: 2, duration: 4 });
+    S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-typewriter', start: 0, duration: 2 });
     // 打字机在快 PC 上整段追帧能落进 (a) 档，不能假定它会经过播放态互换的 (b) 档。
-    // 另放一张较长的推帧卡，并在成员实际测量后核对档位；不改成本记录或产品阈值。
+    // 另放一张较长的推帧卡；其它轻卡不与它重叠，避免 K2 按位置贪心把跳转夹具挤成重卡。
+    // 0～1 秒的九重卡压力、主重卡和十秒播放保持；核对实测档位与实际轻管线，不改成本或阈值。
     const playEntry = S.actions.addClipOnNewTrack({ index: 0, cardId: 'chapter-bar', start: 2, duration: 6 });
     const main = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: spec.seconds });
     S.actions.setClipParams(main.id, { burnMs: 40, label: 'main' });
@@ -1575,6 +1576,12 @@ try {
   const entryWeight = entryRecord ? clipWeight(entryRecord, 'stateful', FPS) : null;
   out.steps.playEntryFixture = { cardId: 'chapter-bar', start: 2, duration: 6, stepMs: entryRecord?.stepMs ?? null, catchUpMs: entryRecord?.catchUpMs ?? null, vtOk: entryRecord?.vtOk ?? null, tier: entryWeight?.tier ?? null };
   check(entryRecord?.vtOk === false && entryWeight?.tier === 'catchup-b', '任务 C 夹具:实际测量为 (b) 档且 vtOk=false', out.steps.playEntryFixture);
+  const entryPipeline = await until('任务 C 夹具在 3 秒实际判轻', async () => {
+    const f = await frontFrame(member);
+    return f?.evaluate(id => window.__pcStagePipelineAt?.(id, 3) === 'light', state.playEntry).catch(() => false);
+  }, 15_000, 100);
+  out.steps.playEntryFixture.pipelineAt3 = entryPipeline === true ? 'light' : 'not-confirmed';
+  check(entryPipeline === true, '任务 C 夹具:3 秒处的实际舞台管线为轻卡', out.steps.playEntryFixture);
   // 第 3 节 + 第 18 节第 7 条(集成接线):在线普通档测完的记录当场转写进文档服务(onCostRecords → publishSharedCosts)
   // 等在途的转写都回了(calls = ok + failed)、条数够了再判;只看 ok > 0 会在外网延迟下读到还在途的那一条
   const costPublish = await until('成员页测完的成本记录写进了文档服务', () => P(member, (costs) => { const d = window.__pcCostPublish?.(); return d && d.calls > 0 && d.ok + d.failed === d.calls && d.records >= costs ? d : null; }, costs1?.costs ?? 0), 30_000, 500);
