@@ -9,9 +9,10 @@ import { startHostingHost } from '../hosting/host.mjs';
 import { roomUnavailableReason } from './relocation.mjs';
 import { prepareRelocationSnapshot } from './relocation-files.mjs';
 import { transferRelocationToHosted } from './relocation-transfer.mjs';
+import { pullRelocationToLocal } from './relocation-pull.mjs';
 
 /** Local-only identity API. Its root and protection backend are owned by the app. */
-export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf, assets, onClose }) {
+export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf, assets, reloadSpace, onClose }) {
   let vault;
   const hosts = new Map();
   const tasks = new Map();
@@ -50,7 +51,7 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
   }
   function startMove(descriptor, txnId) {
     const prior = moves.get(descriptor.roomId);
-    if (prior?.running || prior?.state === 'complete' || prior?.terminal || prior?.retryAt > Date.now()) return prior;
+    if (prior?.running || prior?.txnId === txnId && (prior.state === 'complete' || prior.terminal || prior.retryAt > Date.now())) return prior;
     const h = getVault().host(descriptor);
     if (!h || h.deviceId !== device.deviceId || !assets) throw Object.assign(new Error('Source host required'), { reason: 'not-original-host' });
     const rec = store.peek(descriptor.roomId), target = { service: descriptor.service, where: 'hosted', deviceId: null };
@@ -67,6 +68,22 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
     }).finally(() => { move.running = false; });
     return move;
   }
+  function startLocalMove(pending) {
+    const prior = moves.get(pending.descriptor.roomId);
+    if (prior?.running || prior?.txnId === pending.txnId && (prior.state === 'complete' || prior.terminal || prior.retryAt > Date.now())) return prior;
+    if (pending.deviceId !== device.deviceId || !pending.record || !assets) throw Object.assign(new Error('Destination identity required'), { reason: 'auth' });
+    const move = { state: 'moving', txnId: pending.txnId, running: true, delay: prior?.delay ?? 500, retryAt: 0, terminal: false, error: null };
+    moves.set(pending.descriptor.roomId, move);
+    void pullRelocationToLocal({ dataDir, store, assets, reloadSpace, move: pending, identity: pending.record, device, signal: moveAbort.signal,
+      current: () => getVault().pendingLocalMoves().some(item => item.txnId === pending.txnId && !!item.record) }).then(authority => {
+      getVault().completeLocalMove(pending, authority, baseOf()); move.state = 'complete'; move.error = null;
+    }).catch(error => {
+      move.state = 'waiting'; move.error = error.reason ?? 'relocation-storage';
+      move.terminal = !error.retryable && !['relocation-network', 'relocation-storage', 'cancelled', 'recovery-storage-busy'].includes(move.error);
+      move.retryAt = Date.now() + move.delay; move.delay = Math.min(30000, move.delay * 2);
+    }).finally(() => { move.running = false; });
+    return move;
+  }
   function resumeMoves() {
     if (closing) return;
     if (store && assets) for (const item of store.list()) {
@@ -74,6 +91,7 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
       if (move?.phase !== 'frozen' || move.target?.where !== 'hosted') continue;
       try { startMove({ version: 1, roomId: rec.projectId, service: move.target.service, where: 'lan' }, move.txnId); } catch { /* Keep the durable source restriction; explicit status returns the cause. */ }
     }
+    if (store && assets) try { for (const pending of getVault().pendingLocalMoves()) startLocalMove(pending); } catch { /* Preserve protected jobs; no empty replacement. */ }
     moveTimer = setTimeout(resumeMoves, 1000); moveTimer.unref();
   }
   moveTimer = setTimeout(resumeMoves, 0); moveTimer.unref();
@@ -92,7 +110,7 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
       recoveryPhase = 'vault-open'; const v = getVault(); recoveryPhase = 'vault-operation';
       const task = typeof body.task === 'string' && body.task.length <= 128 ? body.task : null;
       const version = Number.isSafeInteger(body.taskVersion) && body.taskVersion >= 0 ? body.taskVersion : null;
-      if (p.endsWith('/cancel-host') || p.endsWith('/activate-host') || p.endsWith('/restore-host') || p.endsWith('/move-hosted')) {
+      if (p.endsWith('/cancel-host') || p.endsWith('/activate-host') || p.endsWith('/restore-host') || p.endsWith('/move-hosted') || p.endsWith('/move-lan')) {
         if (!task || version === null) return reply(res, 400, { ok: false, error: 'bad-task' });
         if ((tasks.get(task) ?? -1) > version) return reply(res, 409, { ok: false, error: 'cancelled' });
         tasks.set(task, version);
@@ -104,6 +122,18 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
         return reply(res, 200, { ok: true });
       }
       if (p.endsWith('/settings-read')) return reply(res, 200, { ok: true, settings: v.settings(descriptor) });
+      if (p.endsWith('/move-lan') || p.endsWith('/move-lan-status')) {
+        if (descriptor.where !== 'hosted' || !store || !assets) return reply(res, 409, { ok: false, error: 'not-ready' });
+        try {
+          let pending = v.pendingLocalMoves().find(item => item.descriptor.roomId === descriptor.roomId && item.descriptor.service === descriptor.service);
+          if (!pending && p.endsWith('/move-lan')) {
+            v.beginLocalMove(descriptor, device.deviceId, body.contentId); pending = v.pendingLocalMoves().find(item => item.descriptor.roomId === descriptor.roomId && item.descriptor.service === descriptor.service);
+          }
+          if (p.endsWith('/move-lan') && pending && moves.get(descriptor.roomId)?.terminal) { moves.get(descriptor.roomId).terminal = false; moves.get(descriptor.roomId).retryAt = 0; }
+          const move = pending ? startLocalMove(pending) : moves.get(descriptor.roomId);
+          return reply(res, 200, { ok: true, state: move?.state ?? 'idle', terminal: move?.terminal ?? false, error: move?.error ?? null, descriptor: { ...descriptor, where: 'lan', hint: baseOf() } });
+        } catch (e) { return reply(res, 409, { ok: false, error: e.reason ?? 'relocation-storage' }); }
+      }
       if (p.endsWith('/move-hosted') || p.endsWith('/move-status')) {
         if (descriptor.where !== 'lan') return reply(res, 409, { ok: false, error: 'not-original-host' });
         const h = v.host(descriptor);
@@ -122,7 +152,12 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
       if (p.endsWith('/settings-write')) { if (body.settings?.projectId !== descriptor.roomId) return reply(res, 400, { ok: false, error: 'bad-settings' }); v.saveSettings(descriptor, body.settings); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/journal')) { v.journal(descriptor, body.contentId, body.journal); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/identity')) { v.remember({ ...body.record, service: descriptor.service, roomId: descriptor.roomId }, body.contentId); return reply(res, 200, { ok: true }); }
-      if (p.endsWith('/select')) { const selected = v.select(descriptor, body.contentId); if (selected.host) selected.host = { deviceId: selected.host.deviceId }; return reply(res, 200, { ok: true, ...selected, settings: v.settings(descriptor), protection: v.protection }); }
+      if (p.endsWith('/select')) { const selected = v.select(descriptor, body.contentId); if (selected.host) selected.host = { deviceId: selected.host.deviceId };
+        const pending = v.pendingLocalMoves().find(item => item.descriptor.roomId === descriptor.roomId && item.descriptor.service === descriptor.service);
+        const active = moves.get(descriptor.roomId);
+        const move = pending && active?.txnId !== pending.txnId ? { state: 'moving', terminal: false, error: null } : active;
+        return reply(res, 200, { ok: true, ...selected, settings: v.settings(descriptor), protection: v.protection,
+          recoveryMove: move ? { state: move.state, terminal: move.terminal, error: move.error } : null }); }
       if (p.endsWith('/revoke')) { const entry = hosts.get(hostId(descriptor)); v.revoke(descriptor); await entry?.worker.stop({ deleted: true }); hosts.delete(hostId(descriptor)); clearTimeout(unregisterTimer); void flushUnregister(); return reply(res, 200, { ok: true }); }
       if (p.endsWith('/host-state')) return reply(res, 200, { ok: true, state: hosts.get(hostId(descriptor))?.state ?? 'inactive' });
       if (p.endsWith('/host-update')) { await hosts.get(hostId(descriptor))?.worker.update(); return reply(res, 200, { ok: true }); }

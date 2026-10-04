@@ -1307,6 +1307,8 @@ const recoveryCoordinator = new RecoveryCoordinator({
       return { identities, selected };
     }
     let result = await recoveryRequest("select", descriptor, { contentId }, signal);
+    if (result.recoveryMove?.terminal) throw Object.assign(new Error("房间搬迁需要处理"), { reason: result.recoveryMove.error === "auth" ? "auth"
+      : result.recoveryMove.error === "deleted" ? "deleted" : result.recoveryMove.error === "host-auth" || result.recoveryMove.error === "host-conflict" ? "host-conflict" : "relocation-damaged" });
     if (!signal.aborted && !result.selected && !result.revoked) {
       const legacy = readSharedResume();
       if (legacy && /^[A-Za-z0-9_-]{43}$/.test(legacy.key) && legacy.candidate.projectId === descriptor.roomId && descriptorOf(legacy.candidate).service === descriptor.service) {
@@ -1436,6 +1438,21 @@ export async function moveSharedToHosted(): Promise<{ ok: true } | { ok: false; 
     recoveryCoordinator.cancel(); cancelHostTask(descriptor); releaseHolding(); detach(); disconnectSharedAssets();
     setAssociation(descriptor, true); patch({ association: descriptor, shared: null, members: [], blocked: null, reopenState: "waiting-host" });
     holdRecovery(project, descriptor); recoveryCoordinator.start(descriptor, project.id);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e as { reason?: string }).reason ?? "relocation-network" }; }
+}
+export async function moveSharedToLan(): Promise<{ ok: true } | { ok: false; error: string }> {
+  const descriptor = currentAssociation(), original = cur?.link;
+  if (ONLINE_BUILD || ONLINE || !descriptor || descriptor.where !== "hosted" || !original || cur?.kind !== "shared") return { ok: false, error: "not-ready" };
+  try {
+    await whenSaved(10000); await identitySave;
+    if (cur?.link !== original || currentAssociation() !== descriptor) return { ok: false, error: "cancelled" };
+    const result = await recoveryRequest("move-lan", descriptor, { contentId: getState().project.id });
+    if (cur?.link !== original || currentAssociation() !== descriptor) return { ok: false, error: "cancelled" };
+    const project = structuredClone(getState().project), destination = result.descriptor as CollaborationDescriptor;
+    recoveryCoordinator.cancel(); releaseHolding(); detach(); disconnectSharedAssets();
+    setAssociation(destination, true); patch({ association: destination, shared: null, members: [], blocked: null, reopenState: "waiting-host" });
+    holdRecovery(project, destination); recoveryCoordinator.start(destination, project.id);
     return { ok: true };
   } catch (e) { return { ok: false, error: (e as { reason?: string }).reason ?? "relocation-network" }; }
 }

@@ -259,6 +259,7 @@ export function docservicePlugin(): Plugin {
         server.middlewares.use(recoveryHttp({
           dir: recoveryDir(server.config.root), dataDir, store, device: localDeviceInfo(),
           assets: { media: { root: mediaDir(server.config.root), shard: false }, snap: { root: artifactStoreDir(server.config.root, "snap"), shard: false }, px: { root: artifactStoreDir(server.config.root, "px"), shard: false } },
+          reloadSpace: built.service.reloadSpace,
           baseOf: () => `http://127.0.0.1:${(httpServer.address() as { port: number }).port}/docservice`,
           onClose: (close: () => void) => httpServer.once("close", close),
         }));

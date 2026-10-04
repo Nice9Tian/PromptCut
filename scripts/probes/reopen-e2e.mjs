@@ -321,6 +321,7 @@ try {
     await host.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings'))); await host.waitForSelector('[data-pc="collab-move-hosted"]');
     await host.click('[data-pc="collab-move-hosted"]'); await connected(host, roomId, 'host');
     await host.waitForFunction(() => window.probe.sync.getSyncView().shared?.where === 'hosted', { timeout: 30000 });
+    await host.waitForFunction(() => document.querySelector('[data-pc="collab-status"]')?.textContent.includes('已搬到云端'));
     await host.evaluate(() => { for (const el of document.querySelectorAll('[data-pc="collab-project-password"], [data-pc="collab-invite-link"], [data-pc="collab-qr"]')) el.replaceChildren(document.createTextNode('[redacted]')); });
     await host.screenshot({ path: path.join(root, 'relocation-hosted-ui.png') });
     await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '取消').click());
@@ -341,6 +342,41 @@ try {
     relocation = { roomId, actualSettingsAction: true, source: 'lan', destination: 'hosted', oldFilesFollowNewLocation: true, savedLocation: 'hosted', actualCloudRestart: true,
       bidirectionalEdits: 2, asset: reads, recoveryCreateRequests: createRequests - 1 };
     // Preserve subsequent deletion assertions' existing expected project name.
+    await name(host, 'host-edit-after-reopen'); await sees(member, 'host-edit-after-reopen');
+  }
+  let relocationBack = null;
+  if (process.argv.includes('--move-lan')) {
+    assert.equal(where === 'hosted' || !!relocation, true); assert.equal(!!matrix || !!exitMatrix || !!wan, false);
+    phase = 'actual settings UI pulls the same room back to this device'; console.log(JSON.stringify({ phase }));
+    const previousHostedFile = await saved(host), beforeRev = await host.evaluate(() => window.probe.sync.currentSharedLink().ds.rev);
+    await host.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings'))); await host.waitForSelector('[data-pc="collab-move-lan"]');
+    await host.click('[data-pc="collab-move-lan"]'); await host.waitForFunction(() => window.probe.sync.getSyncView().shared?.where === 'lan', { timeout: 30000 }); await connected(host, roomId, 'host');
+    await host.waitForFunction(() => document.querySelector('[data-pc="collab-status"]')?.textContent.includes('已搬回本机'));
+    await host.evaluate(() => { for (const el of document.querySelectorAll('[data-pc="collab-project-password"], [data-pc="collab-invite-link"], [data-pc="collab-qr"]')) el.replaceChildren(document.createTextNode('[redacted]')); });
+    await host.screenshot({ path: path.join(root, 'relocation-lan-ui.png') });
+    await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '取消').click());
+    await open(member, memberFile); await connected(member, roomId, 'member'); assert.equal(await member.evaluate(() => window.probe.sync.getSyncView().shared.where), 'lan');
+    await name(member, 'member-after-move-back'); await sees(host, 'member-after-move-back'); await name(host, 'host-after-move-back'); await sees(member, 'host-after-move-back');
+    const reads = await member.evaluate(async ({ hash, size }) => {
+      const sync = window.probe.sync, issued = await sync.currentSharedLink().request({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+      const base = sync.getSyncView().shared.base.replace(/\/doc$/, '/asset/api/asset');
+      for (const ns of ['media', 'snap', 'px']) { const response = await fetch(`${base}/${ns}/${hash}`, { headers: { authorization: `Bearer ${issued.ticket}` } }); if (!response.ok) throw new Error('move-back material rejected'); const bytes = await response.arrayBuffer(); const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(n => n.toString(16).padStart(2, '0')).join(''); if (bytes.byteLength !== size || digest !== hash) throw new Error('move-back material mismatch'); }
+      return { namespaces: ['media', 'snap', 'px'], size, hash, ticketRead: true };
+    }, asset);
+    const localFile = JSON.parse(await saved(host)); assert.equal(localFile.collaboration.where, 'lan'); assert.equal(localFile.collaboration.roomId, roomId);
+    const afterRev = await host.evaluate(() => window.probe.sync.currentSharedLink().ds.rev); assert.equal(afterRev > beforeRev, true);
+    phase = 'move-back destination process restart and old hosted file';
+    const oldRuntime = restoredRuntime; await host.close(); await stop(oldRuntime.child); restoredRuntime = await editor('host', 5209); assert.notEqual(restoredRuntime.pid, oldRuntime.pid);
+    host = await page(restoredRuntime.base); await open(host, previousHostedFile); await connected(host, roomId, 'host'); assert.equal(await host.evaluate(() => window.probe.sync.getSyncView().shared.where), 'lan');
+    await connected(member, roomId, 'member'); await sees(host, 'host-after-move-back'); await sees(member, 'host-after-move-back');
+    if (process.argv.includes('--nodes')) { phase = 'move-back Agent and render roles after destination restart'; await host.waitForFunction(async () => {
+      const response = await window.probe.sync.currentSharedLink().request({ type: 'shared.members' });
+      window.relocationRoles = response.devices.map(d => ({ username: d.username, deviceId: d.deviceId, roles: d.conns.map(c => c.role) }));
+      return ['host', 'member'].every(user => ['agent', 'render'].every(role => response.devices.some(d => d.username === user && d.conns.some(c => c.role === role))));
+    }, { timeout: 30000 });
+    }
+    relocationBack = { roomId, actualSettingsAction: true, source: 'hosted', destination: 'lan', sourceActor: 'creator:host', oldHostedFileRestoresActualHost: true, savedLocation: 'lan',
+      actualDestinationProcessRestart: true, beforeRev, afterRev, bidirectionalEdits: 2, asset: reads, recoveryCreateRequests: createRequests - 1, nodeRolesAuthenticated: process.argv.includes('--nodes') };
     await name(host, 'host-edit-after-reopen'); await sees(member, 'host-edit-after-reopen');
   }
   phase = 'old-file tombstone';
@@ -385,7 +421,7 @@ try {
   }
   evidence.push({ roomId, where, mode, actualHostProcessRestart: true, actualMemberProcessRestart: true, actualCloudProcessRestart: !wan, hostOpenedWhileCloudOffline: !wan && where === 'lan', pidChanged: true, portChanged: true, emptyBrowserStorage: true, memberWaitThenAutoJoin: where === 'lan',
     sameUsers: ['creator:host', 'member:member'], oldSnapshotsPreservedLatest: true, version: journal.rev, bidirectionalEdits: 4, formats: ['proc', 'procp', 'draft', 'system-path', 'refresh'], nativeOsDoubleClick: false, cancellationTombstone: !process.argv.includes('--keep-room'), recoveryCreateRequests: createRequests - 1, agentAndCardBindings: true, renderNodeStarted: process.argv.includes('--nodes'), nodeRolesAuthenticated: process.argv.includes('--nodes'), staleBindingsRemovedOnDelete: !process.argv.includes('--keep-room'), creatorPasswordReconnect: process.argv.includes('--password-change'), creatorSecondDevice: process.argv.includes('--roles'), deletedFromSecondCreator: !!secondCreator });
-  const result = { ok: true, evidence, matrix, exitMatrix, relocation, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
+  const result = { ok: true, evidence, matrix, exitMatrix, relocation, relocationBack, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
   evidence[0].deletedWhileMemberOffline = process.argv.includes('--delete-offline');
   evidence[0].tamperedAssociationsRejected = process.argv.includes('--trust');
   fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
@@ -400,7 +436,7 @@ try {
         for (const [key, url] of Object.entries({ agent: '/api/agent/status', cards: '/api/cards/sync/status', render: '/api/render-node/status', stage: '/api/frames/render-node' })) {
           try { const r = await (await fetch(url)).json(); diagnostics[key] = { bound: r.bound, projectId: r.projectId, enabled: r.enabled, off: r.off, binding: r.binding, started: r.started, starting: r.starting, lastError: r.lastError }; } catch {}
         }
-        return { url: location.href, reopen: v?.reopenState, diagnostics, journalFailures: window.recoveryJournalErrors, recoveryEvidence: window.recoveryEvidence, buttons: [...document.querySelectorAll('[data-pc="recovery-auth-open"]')].map(el => ({ text: el.textContent, rect: JSON.stringify(el.getBoundingClientRect()), parent: el.parentElement?.tagName })), dialogs: [...document.querySelectorAll('[role="dialog"]')].map(el => ({ label: el.getAttribute('aria-label'), cls: el.className })), project: window.probe?.store.getState().project.id };
+        return { url: location.href, reopen: v?.reopenState, diagnostics, relocationRoles: window.relocationRoles, journalFailures: window.recoveryJournalErrors, recoveryEvidence: window.recoveryEvidence, buttons: [...document.querySelectorAll('[data-pc="recovery-auth-open"]')].map(el => ({ text: el.textContent, rect: JSON.stringify(el.getBoundingClientRect()), parent: el.parentElement?.tagName })), dialogs: [...document.querySelectorAll('[role="dialog"]')].map(el => ({ label: el.getAttribute('aria-label'), cls: el.className })), project: window.probe?.store.getState().project.id };
       });
       state.http = p.recoveryHttpEvidence;
       state.storageFailures = p.recoveryStorageEvidence;

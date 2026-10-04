@@ -69,7 +69,7 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const crypt = protector || systemProtector(dir);
   const file = path.join(dir, 'identities.json');
-  const empty = () => ({ version: 1, identities: {}, bindings: {}, revoked: {}, hosts: {}, journals: {}, settings: {}, unregister: {} });
+  const empty = () => ({ version: 1, identities: {}, bindings: {}, revoked: {}, hosts: {}, journals: {}, settings: {}, unregister: {}, moves: {} });
   let state = empty();
   const read = () => {
     if (!fs.existsSync(file)) { state = empty(); return; }
@@ -85,7 +85,7 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
       storagePhase = 'state-parse';
       const v = JSON.parse(bytes);
       if (v.version !== 1 || !v.identities || !v.bindings || !v.revoked || !v.hosts) throw new Error();
-      state = { ...v, journals: v.journals ?? {}, settings: v.settings ?? {}, unregister: v.unregister ?? {} };
+      state = { ...v, journals: v.journals ?? {}, settings: v.settings ?? {}, unregister: v.unregister ?? {}, moves: v.moves ?? {} };
     } catch (e) { throw Object.assign(new Error('协作恢复数据损坏；保留原数据，请从备份恢复或重新认证'), { storagePhase, storageCode: e.storageCode ?? e.code ?? 'INVALID' }); }
   };
   read();
@@ -158,11 +158,40 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
       return this.host(descriptor);
     },
     pendingUnregister() { read(); return Object.values(state.unregister ?? {}).map(r => structuredClone(r)); },
+    beginLocalMove(descriptor, deviceId, contentId) {
+      const selected = this.select(descriptor, contentId);
+      if (selected.revoked || !selected.selected) throw Object.assign(new Error('Existing identity required'), { reason: 'auth' });
+      const key = roomKey(descriptor); let result;
+      change(s => {
+        if (s.revoked[key]) throw Object.assign(new Error('Room revoked'), { reason: 'deleted' });
+        if (s.moves[key] && s.moves[key].deviceId !== deviceId) throw Object.assign(new Error('Destination conflict'), { reason: 'host-conflict' });
+        s.moves[key] ??= { version: 1, descriptor: structuredClone(descriptor), deviceId, identity: identityKey(selected.selected), txnId: `move_${randomBytes(16).toString('hex')}`,
+          registrationKey: randomBytes(32).toString('base64url'), sourceCapability: randomBytes(32).toString('base64url') };
+        result = structuredClone(s.moves[key]);
+      }); return result;
+    },
+    pendingLocalMoves() {
+      read(); return Object.values(state.moves).map(move => ({ ...structuredClone(move), record: structuredClone(state.identities[move.identity] ?? null) }));
+    },
+    completeLocalMove(move, authority, base) {
+      const key = roomKey(move.descriptor);
+      change(s => {
+        const pending = s.moves[key];
+        if (s.revoked[key] || !pending || pending.txnId !== move.txnId || pending.registrationKey !== move.registrationKey
+          || authority.roomId !== move.descriptor.roomId || authority.txnId !== move.txnId || authority.target?.where !== 'lan'
+          || authority.target.deviceId !== move.deviceId || authority.target.service !== move.descriptor.service) throw Object.assign(new Error('Move authority changed'), { reason: 'cancelled' });
+        s.hosts[key] = { deviceId: move.deviceId, registrationKey: pending.registrationKey };
+        for (const identity of Object.values(s.identities)) if (roomKey(identity) === key) identity.candidate = { ...identity.candidate, where: 'lan', service: move.descriptor.service, base };
+        delete s.moves[key];
+      });
+    },
     completeUnregister(descriptor) { change(s => { delete s.unregister?.[roomKey(descriptor)]; }); },
     revoke(descriptor) { change(s => {
       s.revoked[roomKey(descriptor)] = Date.now();
       const host = s.hosts[roomKey(descriptor)];
-      if (host) { s.unregister ??= {}; s.unregister[roomKey(descriptor)] = { descriptor, registrationKey: host.registrationKey }; }
+      const pending = s.moves[roomKey(descriptor)];
+      if (host || pending) { s.unregister ??= {}; s.unregister[roomKey(descriptor)] = { descriptor, registrationKey: pending?.registrationKey ?? host.registrationKey }; }
+      delete s.moves[roomKey(descriptor)];
       delete s.hosts[roomKey(descriptor)];
       delete s.settings[roomKey(descriptor)];
       for (const [k, r] of Object.entries(s.identities)) if (roomKey(r) === roomKey(descriptor)) delete s.identities[k];

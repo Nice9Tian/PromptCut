@@ -300,6 +300,13 @@ export function createAgentLink({
       },
     };
 
+    const retryFeed = () => {
+      if (feedConv !== n || closed || conn.state === 'closed' || conn.retryTimer) return;
+      replica.hasState = false;
+      const wait = reconnectMs[Math.min(conn.retry, reconnectMs.length - 1)]; conn.retry++;
+      conn.retryTimer = setTimeout(() => { conn.retryTimer = null; conn.open().catch(() => {}); }, wait);
+      conn.retryTimer.unref?.();
+    };
     conn.open = () => {
       if (closed) return Promise.reject(linkError('closed', '到文档服务的连接已关闭'));
       if (conn.state === 'open') return Promise.resolve();
@@ -322,6 +329,13 @@ export function createAgentLink({
             ep = createDocEndpoint({
               url: urlFor(n),
               protocols: () => protocols,
+              resumeProtocols: async () => {
+                // The gateway cannot route a bare retained session. Renew a
+                // page-delegated ticket without giving the Agent the user's K.
+                const url = new URL(urlFor(n));
+                if (!/^\/hosting\/relay\/sp_[a-z2-7]{26}\/doc\/?$/.test(url.pathname)) return [];
+                return (await protocolsFor(n)).filter(p => p.startsWith('promptcut.ticket.'));
+              },
               WebSocket: WebSocketImpl,
               renew: false,
               log: (event, fields) => {
@@ -372,15 +386,7 @@ export function createAgentLink({
               return;
             }
             say('agent.link.close', { conversation: n });
-            if (feedConv === n && !closed) {
-              // 订阅连接断了：副本在重新 open 之前不再可信
-              replica.hasState = false;
-              const delays = reconnectMs;
-              const wait = delays[Math.min(conn.retry, delays.length - 1)];
-              conn.retry += 1;
-              conn.retryTimer = setTimeout(() => { conn.retryTimer = null; conn.open().catch(() => {}); }, wait);
-              conn.retryTimer.unref?.();
-            }
+            retryFeed();
           };
           // 会话结束（服务端关、接续不上），或第一次就建不成（握手被拒、网络不通）
           ep.onClose(down);
@@ -388,7 +394,9 @@ export function createAgentLink({
         });
         conn.opening = null;
       })();
-      conn.opening.catch(() => { conn.opening = null; });
+      // A retry may itself fail before opening (page not ready to sign, or the
+      // host still starting). Keep the subscription's automatic retry alive.
+      conn.opening.catch(() => { conn.opening = null; retryFeed(); });
       return conn.opening;
     };
 

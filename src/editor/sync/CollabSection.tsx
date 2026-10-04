@@ -16,7 +16,7 @@ import { ONLINE } from "../../online/mode";
 import { hosted, type SharedMode, type Where } from "./sharedApi";
 import { ListEditor, LanRestartHint, readHostedUrl, writeHostedUrl } from "./SharedDialogs";
 import { CreatorFlow, type Flow } from "./MembersPanel";
-import { useSync, moveSharedToHosted } from "./syncManager";
+import { useSync, moveSharedToHosted, moveSharedToLan } from "./syncManager";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
   type InviteInfo, type InviteStatus,
@@ -76,6 +76,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const [status, setStatus] = useState<{ text: string; tone: "ok" | "err" | "info" } | null>(null);
   const [busy, setBusy] = useState(false);
   const [movingHosted, setMovingHosted] = useState(false);
+  const [movingLan, setMovingLan] = useState(false);
   const [invite, setInvite] = useState<InviteInfo | null>(null);
   const [inviteStatus, setInviteStatus] = useState<InviteStatus | null>(null);
   const [regenPw, setRegenPw] = useState<string | null>(null);
@@ -91,6 +92,11 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
       setMovingHosted(false); setStatus({ text: "已搬到云端，仍是原房间。", tone: "ok" });
     }
   }, [movingHosted, shared?.where]);
+  useEffect(() => {
+    if (movingLan && shared?.where === "lan") {
+      setMovingLan(false); setStatus({ text: "已搬回本机，仍是原房间。", tone: "ok" });
+    }
+  }, [movingLan, shared?.where]);
 
   // 打开对话框时按当前状态重置；只有尚未开启协作的创建表单生成缺省密码，恢复原房间不生成新密码。
   useEffect(() => {
@@ -226,6 +232,11 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
       : result.error === "relocation-materials-missing" ? "有项目引用的素材尚未入库，补齐后重试；原房间和身份已保留。"
         : "搬迁暂未完成，原房间信息已保留。检查连接或存储后重试。", tone: "err" }); }
   };
+  const moveLan = async () => {
+    setMovingLan(true); setBusy(true); setStatus({ text: "正在搬回本机，完成后自动连接原房间…", tone: "info" });
+    const result = await moveSharedToLan(); setBusy(false);
+    if (!result.ok) { setMovingLan(false); setStatus({ text: "搬迁暂未完成，房间和本机恢复信息已保留。请检查连接、身份或存储后重试。", tone: "err" }); }
+  };
 
   const copied$ = (key: string) => (copied === key ? <span className="pc-sync-hint">{COLLAB_TEXT.copied}</span> : null);
   const copyBtn = (key: string, text: string) => (
@@ -312,6 +323,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
             <span className="pc-collab-key">放在</span>
             <span>{shared.where === "hosted" ? "云端" : "本机"} · {shared.mode === "free" ? "自由进入" : "限定进入"}</span>
           </div>
+          {shared.where === "hosted" && !ONLINE ? <button type="button" className="pc-dialog-opt" data-pc="collab-move-lan" disabled={busy} onClick={() => void moveLan()}>搬回本机</button> : null}
           <div className="pc-collab-row" data-pc="collab-project-name">
             <span className="pc-collab-key">项目名</span>
             <code>{shared.name}</code>

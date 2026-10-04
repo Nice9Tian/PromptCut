@@ -98,6 +98,37 @@ test('实际系统保护后端跨存储实例读取，磁盘没有明文凭证',
   assert.equal(text.includes(record.key), false);
   assert.equal(openRecoveryVault({ dir }).select(descriptor, 'content').selected.username, 'one');
 });
+test('搬回本机的设备保护事务跨存储重开保留同一能力及目标密钥，完成后原子轮换主机绑定', () => {
+  const dir = temp(), hosted = { ...descriptor, where: 'hosted' }, v = openRecoveryVault({ dir });
+  v.remember({ ...record, candidate: { where: 'hosted', projectId: descriptor.roomId, service: descriptor.service, base: descriptor.service } }, 'content');
+  const first = v.beginLocalMove(hosted, 'isolated-target-device-01', 'content'), reopened = openRecoveryVault({ dir });
+  const repeat = reopened.beginLocalMove(hosted, 'isolated-target-device-01', 'content');
+  assert.equal(repeat.txnId === first.txnId && repeat.registrationKey === first.registrationKey && repeat.sourceCapability === first.sourceCapability, true);
+  const bytes = fs.readFileSync(path.join(dir, 'identities.json'), 'utf8'); assert.equal([first.registrationKey, first.sourceCapability, record.key].some(secret => bytes.includes(secret)), false);
+  const authority = { roomId: descriptor.roomId, txnId: first.txnId, target: { service: descriptor.service, where: 'lan', deviceId: first.deviceId } };
+  reopened.completeLocalMove(first, authority, 'http://127.0.0.1:5203/docservice');
+  const saved = openRecoveryVault({ dir }).select(hosted, 'content');
+  assert.equal(saved.host.registrationKey === first.registrationKey, true); assert.equal(saved.selected.username, record.username); assert.equal(saved.selected.candidate.where, 'lan');
+  assert.equal(saved.selected.candidate.base, 'http://127.0.0.1:5203/docservice'); assert.equal(openRecoveryVault({ dir }).pendingLocalMoves().length, 0);
+});
+test('目标绑定保存 ENOSPC 保留保护事务与旧主机密钥，重开后同事务可以完成', () => {
+  const dir = temp(), hosted = { ...descriptor, where: 'hosted' }, v = openRecoveryVault({ dir, protector: plain }); v.remember(record, 'content');
+  const original = v.bindHost(descriptor, 'isolated-target-device-01'), move = v.beginLocalMove(hosted, 'isolated-target-device-01', 'content');
+  const file = path.join(dir, 'identities.json'), bytes = fs.readFileSync(file);
+  const broken = openRecoveryVault({ dir, protector: plain, write() { throw Object.assign(new Error('isolated full disk'), { code: 'ENOSPC' }); } });
+  const authority = { roomId: descriptor.roomId, txnId: move.txnId, target: { service: descriptor.service, where: 'lan', deviceId: move.deviceId } };
+  assert.throws(() => broken.completeLocalMove(move, authority, 'http://127.0.0.1:5203/docservice'), e => e.code === 'ENOSPC'); assert.equal(fs.readFileSync(file).equals(bytes), true);
+  const recovered = openRecoveryVault({ dir, protector: plain }); assert.equal(recovered.host(descriptor).registrationKey === original.registrationKey, true); assert.equal(recovered.pendingLocalMoves().length, 1);
+  recovered.completeLocalMove(move, authority, 'http://127.0.0.1:5203/docservice'); assert.equal(recovered.host(descriptor).registrationKey === move.registrationKey, true);
+});
+test('注销清除待搬迁能力，迟到完成不能恢复身份或主机；目标注销密钥保留在可靠待办', () => {
+  const dir = temp(), v = openRecoveryVault({ dir, protector: plain }); v.remember(record, 'content');
+  const move = v.beginLocalMove({ ...descriptor, where: 'hosted' }, 'isolated-target-device-01', 'content'); v.revoke(descriptor);
+  const reopened = openRecoveryVault({ dir, protector: plain }), before = fs.readFileSync(path.join(dir, 'identities.json'));
+  assert.equal(reopened.pendingLocalMoves().length, 0); assert.equal(reopened.pendingUnregister()[0].registrationKey === move.registrationKey, true);
+  assert.throws(() => reopened.completeLocalMove(move, { roomId: descriptor.roomId, txnId: move.txnId, target: { service: descriptor.service, where: 'lan', deviceId: move.deviceId } }, 'http://127.0.0.1:5203/docservice'), e => e.reason === 'cancelled');
+  assert.equal(fs.readFileSync(path.join(dir, 'identities.json')).equals(before), true); assert.equal(reopened.select(descriptor, 'content').revoked, true); assert.equal(reopened.host(descriptor), null);
+});
 
 test('独立运行进程同时更新保护存储时保留双方记录，异常退出的锁可回收', async () => {
   const dir = temp(), module = new URL('../recovery/vault.mjs', import.meta.url).href;
@@ -176,6 +207,39 @@ test('终止认证错误不会重试；未知版本不访问身份后端', async
   coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r));
   assert.deepEqual(states, ['recovering', 'needs-auth']); assert.equal(coordinator.timer, null); assert.equal(entries, 1);
   coordinator.start({ version: 9 }, 'content'); assert.equal(states.at(-1), 'unsupported'); coordinator.cancel();
+});
+
+test('搬迁未提交时即使旧主机可达也不接入，提交后旧云端文件恢复设备上的新主机', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let complete = false, hosts = 0, discoveries = 0, entries = 0; const states = [];
+  const coordinator = new RecoveryCoordinator({ state: s => states.push(s), identity: async () => ({
+    selected: { ...record, candidate: { ...record.candidate, where: complete ? 'lan' : 'hosted' } }, host: true,
+    recoveryMove: { state: complete ? 'complete' : 'moving', terminal: false, error: null },
+  }), host: async () => { hosts++; return { where: 'lan' }; },
+  discover: async () => { discoveries++; return { where: 'hosted' }; },
+  enter: async candidate => { assert.equal(candidate.where, 'lan'); entries++; return { ok: true }; } });
+  try {
+    coordinator.start({ ...descriptor, where: 'hosted' }, 'content'); await new Promise(r => setImmediate(r));
+    assert.equal(states.at(-1), 'waiting-host'); assert.equal(discoveries, 0); assert.equal(hosts, 0); assert.equal(entries, 0);
+    complete = true; t.mock.timers.tick(500); await new Promise(r => setImmediate(r));
+    assert.equal(states.at(-1), 'connected'); assert.equal(hosts, 1); assert.equal(discoveries, 0); assert.equal(entries, 1);
+  } finally { coordinator.cancel(); t.mock.timers.reset(); }
+});
+
+test('搬迁终止和取消优先于可达的旧服务，旧任务不得再接入', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let terminal = false, revoked = false, connections = 0; const states = [];
+  const coordinator = new RecoveryCoordinator({ state: s => states.push(s), identity: async () => ({ selected: record, revoked,
+    recoveryMove: { state: 'waiting', terminal, error: terminal ? 'auth' : 'relocation-network' } }),
+  discover: async () => { connections++; return {}; }, enter: async () => ({ ok: true }) });
+  try {
+    coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r)); assert.equal(states.at(-1), 'waiting-host');
+    terminal = true; t.mock.timers.tick(500); await new Promise(r => setImmediate(r));
+    assert.equal(states.at(-1), 'needs-auth'); assert.equal(coordinator.timer, null); assert.equal(connections, 0);
+    revoked = true; coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r)); assert.equal(states.at(-1), 'deleted');
+    terminal = false; revoked = false; coordinator.start(descriptor, 'content'); await new Promise(r => setImmediate(r));
+    coordinator.cancel(); t.mock.timers.tick(60000); await new Promise(r => setImmediate(r)); assert.equal(connections, 0);
+  } finally { coordinator.cancel(); t.mock.timers.reset(); }
 });
 test('限速保留原恢复身份，严格等 Retry-After 后自动重入；取消清除待重试任务', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -263,4 +327,19 @@ test('本机恢复 API 区分暂时读取占用和数据损坏，诊断只返回
   fs.writeFileSync(file, '{broken'); const damaged = await ask();
   assert.equal(damaged.result.error, 'recovery-storage'); assert.equal(damaged.result.storageDiagnostic.storagePhase, 'envelope-parse');
   assert.equal(read(file, 'utf8'), '{broken');
+});
+
+test('服务刚重开、后台续传尚未启动时，公开恢复状态仍等待持久搬迁且不暴露事务能力', async t => {
+  const dir = temp(), v = openRecoveryVault({ dir }), hosted = { ...descriptor, where: 'hosted' };
+  v.remember({ ...record, candidate: { ...record.candidate, where: 'hosted' } }, 'content');
+  const pending = v.beginLocalMove(hosted, 'isolated-destination-001', 'content');
+  let close; const handler = recoveryHttp({ dir, onClose: fn => { close = fn; } }); t.after(() => close());
+  const req = { url: '/api/collaboration/select', method: 'POST', headers: { 'content-type': 'application/json' },
+    async *[Symbol.asyncIterator]() { yield JSON.stringify({ descriptor: hosted, contentId: 'content' }); } };
+  let status, result;
+  await handler(req, { writeHead(code) { status = code; }, end(text) { result = JSON.parse(text); } }, () => assert.fail('handled locally'));
+  assert.equal(status, 200); assert.equal(result.selected.username, record.username);
+  assert.deepEqual(result.recoveryMove, { state: 'moving', terminal: false, error: null });
+  assert.equal(JSON.stringify(result).includes(pending.sourceCapability), false);
+  assert.equal(JSON.stringify(result).includes(pending.registrationKey), false);
 });

@@ -13,6 +13,7 @@ import { createSharedProject, buildAuthProtocols, adminProof, makeCredential } f
 import { createAssetClient } from '../asset-store/client.mjs';
 import { wsClient, waitFor, createTcpProxy } from './fake-ws-kit.mjs';
 import { createDocEndpoint } from '../render-node/session-link.mjs';
+import { createAgentLink } from '../agent/doc-link.mjs';
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-hosting-'));
 const key = () => randomBytes(32).toString('base64url');
 let seq = 0;
@@ -82,6 +83,25 @@ for (const mode of ['free', 'restricted']) test(`真实中继 ${mode}：登记�
     assert.equal((await ask(node, { type: 'project.open', projectId: 'sp_aaaaaaaaaaaaaaaaaaaaaaaaaa' })).project, null, 'another room is not visible inside this authenticated tenant');
     node.close();
   }
+  let agentTickets = 0, failAgentTicketOnce = false;
+  const agent = createAgentLink({ url: relayUrl.href, projectId: p.projectId, protocolsFor: async conversation => {
+    agentTickets++;
+    if (failAgentTicketOnce) { failAgentTicketOnce = false; throw new Error('isolated page temporarily offline'); }
+    const delegated = await ask(member, { type: 'auth.ticket', kind: 'conn', role: 'agent', conversation });
+    assert.equal(delegated.type, 'auth.ticket.ok'); await authorizeRelayAsset(route, delegated.ticket);
+    return ['promptcut.v1', `promptcut.ticket.${delegated.ticket}`];
+  }, log: () => {} }); t.after(() => agent.close());
+  const agentConversation = agent.conversation(1); await agentConversation.open(); await agent.ready(5000);
+  const agentEndpoint = agentConversation.ep; proxy.cutAll();
+  await waitFor(() => agentTickets >= 2 && !agentEndpoint.stats().detached, 5000, 'actual delegated Agent session resumed');
+  assert.equal(agentConversation.ep === agentEndpoint, true, 'Agent retains its original session endpoint');
+  assert.equal(agentEndpoint.stats().opens, 1); assert.equal(agentEndpoint.stats().resumes, 1);
+  await ask(host, { type: 'project.op', projectId: p.projectId, opId: key(), ops: [{ op: 'set', path: '/name', value: 'agent-resumed' }] });
+  await waitFor(() => agent.replica.project?.name === 'agent-resumed', 5000, 'Agent subscription reads edit after TCP reset');
+  const ticketsBefore = agentTickets; failAgentTicketOnce = true; agentEndpoint.close();
+  await waitFor(() => agentTickets >= ticketsBefore + 2 && agentConversation.state === 'open', 5000, 'Agent automatically retries a temporarily unavailable page ticket');
+  await agent.ready(5000); assert.equal(agent.replica.project.name, 'agent-resumed');
+  agent.close();
   const registry = fs.readFileSync(path.join(dir, 'directory.json'), 'utf8');
   assert.equal(registry.includes('host-edit'), false); assert.equal(registry.includes(creatorPassword), false); assert.equal(registry.includes(hostKey), false);
   const admin = async (op, fields = {}) => {

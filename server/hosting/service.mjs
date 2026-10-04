@@ -230,7 +230,10 @@ export function createHostingService({ dir, authorityService = null, now = Date.
     let bridge; try { bridge = openChannel(member[1], 'doc', req.socket.remoteAddress, JSON.stringify([member[1], principal.username, principal.deviceId])); } catch { return rejectUpgrade(socket, 503, 'Unavailable'); }
     const headers = { ...req.headers, 'x-forwarded-for': forwardedRemote(req), 'x-pc-stage-client': 'hosting-relay' }; delete headers.origin;
     // 路由能力只给网关，不能交原服务；接续的原服务严格只认会话项。
-    headers['sec-websocket-protocol'] = String(headers['sec-websocket-protocol'] || '').split(',').map(s => s.trim()).filter(s => !s.startsWith(ROUTE_PROTOCOL)).join(', ');
+    const offered = String(headers['sec-websocket-protocol'] || '').split(',').map(s => s.trim());
+    const resuming = offered.some(s => s.startsWith('promptcut.session.') && s !== 'promptcut.session.new');
+    headers['sec-websocket-protocol'] = offered.filter(s => !s.startsWith(ROUTE_PROTOCOL)
+      && !(resuming && s.startsWith('promptcut.ticket.'))).join(', ');
     bridge.write(`GET / HTTP/1.1\r\n${Object.entries(headers).map(([k,v]) => `${k}: ${v}`).join('\r\n')}\r\n\r\n`);
     if (head.length) bridge.write(head); socket.pipe(bridge).pipe(socket);
     socket.on('error', () => {}); socket.on('close', () => bridge.destroy()); bridge.on('error', () => socket.destroy());

@@ -19,10 +19,19 @@ export class RecoveryCoordinator {
         const saved = await this.hooks.identity(descriptor, contentId, abort.signal);
         if (!current()) return;
         if (saved.revoked) return state('deleted');
+        // An explicit handoff can begin while the old host is still reachable.
+        // Wait for the protected job to commit before accepting any route.
+        if (saved.recoveryMove && saved.recoveryMove.state !== 'complete') {
+          const error = new Error('Room relocation pending');
+          error.reason = saved.recoveryMove.terminal ? saved.recoveryMove.error === 'auth' ? 'auth'
+            : saved.recoveryMove.error === 'deleted' ? 'deleted'
+            : ['host-auth', 'host-conflict'].includes(saved.recoveryMove.error) ? 'host-conflict' : 'relocation-damaged' : 'relocating';
+          throw error;
+        }
         if (!saved.selected) return state(saved.identities?.length > 1 ? 'choose-identity' : 'needs-auth');
         const record = saved.selected;
         let candidate;
-        if (saved.host && descriptor.where === 'lan' && record.candidate?.where !== 'hosted') {
+        if (saved.host && record.candidate?.where !== 'hosted') {
           try { candidate = await this.hooks.host(descriptor, abort.signal); }
           catch (e) {
             // A durable completed handoff revokes the old local host binding.
