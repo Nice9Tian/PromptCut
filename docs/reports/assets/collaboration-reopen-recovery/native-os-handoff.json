@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-04T17:01:44.795Z",
+  "generatedAt": "2026-10-04T18:04:20.787Z",
   "status": "not-accepted-routing-failure",
   "allRequiredAcceptancePassed": false,
   "bootstrapSmoke": {
@@ -5022,7 +5022,51 @@
       "contextHypothesisNotProven": true
     },
     "candidate": "ui-linked-immediate-command-reading-with-protected-runtime",
-    "notExhausted": true
+    "notExhausted": true,
+    "currentRoutingVerification": {
+      "source": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "rootReadFullSnapshots": true,
+      "actualExitCodes": [
+        0,
+        0
+      ],
+      "phase": "restored-state-not-click-instant",
+      "defaultProgId": "PromptCut Project",
+      "containsOneSpace": true,
+      "leaseTargetsActualDefaultClass": true,
+      "defaultNullAndExplicitOpenSame": true,
+      "defaultShellVerb": "open",
+      "onlyDefinedShellVerb": "open",
+      "emptyStringCommandAndExecutableHresult": "0x80070483",
+      "emptyStringNotInterpretedAsDefaultVerb": true,
+      "applicationsRootsMissingInSixViewsPerExecutable": true,
+      "userChoiceAbsent": true,
+      "registryWrites": false,
+      "applicationsLaunched": false,
+      "uiInputs": false,
+      "processesEnded": false,
+      "rawFiles": [
+        {
+          "file": "task-worktree:work/native-handler-attack/current-routing-5998.json",
+          "sha256": "a2baa2dad91af5188acc1b60980a0014fa5f4c7f926c2a5a237953a99a18a791"
+        },
+        {
+          "file": "task-worktree:work/native-handler-attack/current-routing-command-record.json",
+          "sha256": "fcdb2929f3441c80998b8de089662fa5bf92c515945c5387a889e416e0b14fdf"
+        },
+        {
+          "file": "task-worktree:work/native-handler-attack/default-verb-5998-round16.json",
+          "sha256": "2c722ab78797adb4474016a4539efae4b3a193654121ea03921d336f1739e6d3"
+        },
+        {
+          "file": "task-worktree:work/native-handler-attack/default-verb-command-record.json",
+          "sha256": "52ea4fd26c90fc6d5dcdc5e4c2baccf4211833aadc324b3bb1f7925c7aed8ff7"
+        }
+      ],
+      "firstDiagnosticPassExcludedFromConclusions": true,
+      "clickLinkedContinuousSamplingNotPerformed": true,
+      "cacheCauseNotProven": true
+    }
   },
   "finding": "All seven handoffs lack a matched native launch receipt. The first four had concurrent user desktop operations; attempts five through seven had an exclusive desktop and still launched the installed application. Attempt six used SHCNF_FLUSH plus F5; attempt seven leased a unique owned default ProgID while leaving the original command untouched. Both failed, and all temporary values were restored. A cached handler remains a hypothesis, not a proven cause.",
   "conservativeProbeCorrection": {
@@ -19018,6 +19062,30 @@
         "exactIdentityVerified": true,
         "directChildren": 2,
         "parentStillRunning": false
+      },
+      {
+        "run": "run-iCv3sk",
+        "source": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+        "pid": 53240,
+        "createdAt": "2026-10-04T17:55:11.9619630Z",
+        "ownedFixtureArgumentVerified": true,
+        "exeIdentityVerified": true,
+        "userRuntimeCodeChanged": false,
+        "userDataNotClaimedUntouched": true,
+        "ownedDirectChildren": [
+          {
+            "name": "msedgewebview2.exe",
+            "pid": 12036,
+            "createdAt": "2026-10-04T17:55:14.8788450Z"
+          },
+          {
+            "name": "node.exe",
+            "pid": 35080,
+            "createdAt": "2026-10-04T17:55:15.1439700Z"
+          }
+        ],
+        "cleaned": true,
+        "finishedAt": "2026-10-04T17:56:07.4528737Z"
       }
     ],
     "exactOwnedProcessIdentityVerifiedBeforeCleanup": true,
@@ -19073,5 +19141,141 @@
       "file": "task-worktree:work/association-lease-self-test-full.log",
       "sha256": "e7df5acdb61b4c90e35f49f559d1a7fee9c0fb859b30c4553897e05832c374be"
     }
+  },
+  "safeTimingRehearsal": {
+    "source": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+    "result": {
+      "kind": "native-shell-timing-no-association-no-file-launch-v1",
+      "referenceAt": 1791134059661,
+      "events": [
+        {
+          "event": "initial-snapshot",
+          "utc": "2026-10-04T17:14:20.799Z",
+          "elapsedMs": 1138
+        },
+        {
+          "event": "activated-snapshot",
+          "utc": "2026-10-04T17:14:43.576Z",
+          "elapsedMs": 23915
+        },
+        {
+          "event": "pre-navigation-budget-check",
+          "utc": "2026-10-04T17:15:25.354Z",
+          "elapsedMs": 65693
+        }
+      ],
+      "directoryNavigationAttempted": false,
+      "fileDoubleClickIssued": false,
+      "associationChanged": false,
+      "productLaunched": false,
+      "windowId": 8130930,
+      "ownedExplorerPid": 50936,
+      "ownedExplorerCreatedAt": "2026-10-04T17:14:19.7458460Z",
+      "userShellPid": 11120,
+      "conclusion": "This trial reached a trustworthy activated snapshot at 23915ms, before directory navigation. It does not establish reliable completion within the 25s receipt window.",
+      "ownedWindowClosed": true,
+      "completedAt": "2026-10-04T17:15:25.527Z"
+    },
+    "rawResult": {
+      "file": "task-worktree:work/native-shell-timing-no-click.json",
+      "sha256": "f46df58bd7bb5e50a24303716f81b37c874aff96cd37ea212075c5a97ce64a88"
+    },
+    "scope": "One UI timing rehearsal only. No association lease, directory navigation, file double-click, app or service launch. The observed latency does not prove all optimized paths cannot complete under 25 seconds. User Shell was preserved; owned window closed and process exited naturally."
+  },
+  "desktopQuickAttempts": [
+    {
+      "fixture": "run-wKJQ47",
+      "harnessSource": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "actualExitCode": 1,
+      "matchedLaunchReceipt": false,
+      "realDoubleClickIssued": false,
+      "outcome": "post-arm-fresh-explorer-navigation-not-completed-no-file-input",
+      "trace": {
+        "run": "run-wKJQ47",
+        "readyAt": "2026-10-04T17:50:24.867Z",
+        "events": [
+          {
+            "event": "fresh-explorer-observed",
+            "at": "2026-10-04T17:50:26.893Z"
+          },
+          {
+            "event": "directory-observed",
+            "at": "2026-10-04T17:50:42.896Z"
+          },
+          {
+            "event": "stopped-before-file-input",
+            "at": "2026-10-04T17:50:55.076Z",
+            "stage": "restored-after-error"
+          }
+        ],
+        "armedAt": "2026-10-04T17:50:25.647Z",
+        "pendingFinalStage": "restored-after-error",
+        "fileDoubleClickIssued": false
+      },
+      "rawTrace": {
+        "file": "task-worktree:work/native-desktop-quick-trace.json",
+        "sha256": "9ba43285af1e860608f8bb2ef45c714eefd1bb8fcbdac8c911807532c8ea5083"
+      },
+      "rawLog": {
+        "file": "task-worktree:work/native-os-doubleclick-host-desktop-quick.log",
+        "sha256": "0c07cde96dc6f25c06645939ce41a4b2f705f76373ea8d009d2f5cedf01f607e"
+      },
+      "restoration": {
+        "code": 0,
+        "restored": true,
+        "sha256": "6089d40414413bca559d8fd764249d02190e14df947a3fc4aa971878ab85bb14"
+      },
+      "ownedExplorerPid": 45208,
+      "ownedExplorerCreatedAt": "2026-10-04T17:50:25.812139Z",
+      "userShellPid": 11120,
+      "userShellNotTerminated": true
+    },
+    {
+      "fixture": "run-iCv3sk",
+      "harnessSource": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "actualExitCode": 1,
+      "matchedLaunchReceipt": false,
+      "realDoubleClickIssued": true,
+      "outcome": "valid-window-desktop-wrong-handler",
+      "trace": {
+        "run": "run-iCv3sk",
+        "directoryObservedAt": "2026-10-04T17:54:59.035Z",
+        "events": [
+          {
+            "event": "post-arm-directory-observed",
+            "at": "2026-10-04T17:55:00.185Z"
+          }
+        ],
+        "armedAt": "2026-10-04T17:54:59.792Z",
+        "clickAt": "2026-10-04T17:55:11.725Z",
+        "fileDoubleClickIssued": true,
+        "finalStage": "restored-after-error",
+        "restoredAt": "2026-10-04T17:55:25.800Z"
+      },
+      "rawTrace": {
+        "file": "task-worktree:work/native-desktop-ready-trace.json",
+        "sha256": "9513b79ffd577058b1acff20328905898472a44343687d9a48be632fbf907d32"
+      },
+      "rawLog": {
+        "file": "task-worktree:work/native-os-doubleclick-host-desktop-ready.log",
+        "sha256": "b88afeff017ad45ef963ed4c7cbca34105b3b480c210a2f0ee1c7d341cde30ab"
+      },
+      "restoration": {
+        "code": 0,
+        "restored": true,
+        "sha256": "6089d40414413bca559d8fd764249d02190e14df947a3fc4aa971878ab85bb14"
+      },
+      "ownedExplorerPid": 45208,
+      "ownedExplorerCreatedAt": "2026-10-04T17:50:25.812139Z",
+      "userShellPid": 11120,
+      "userShellNotTerminated": true
+    }
+  ],
+  "allHandoffAttempts": 16,
+  "acceptedHandoffAttempts": 0,
+  "userDecision": {
+    "defaultDoubleClickOnDesktopSufficient": true,
+    "laptopPerformanceBaselineStillApplicable": true,
+    "acceptanceThresholdWaived": false
   }
 }
