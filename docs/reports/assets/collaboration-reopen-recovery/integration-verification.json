@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-04T18:40:51.409Z",
+  "generatedAt": "2026-10-04T19:11:47.207Z",
   "headWhenPublished": "4c5474e43d38732319b95dcc706c0c4ab4922560",
-  "sourceScope": "Every phase retains its actual commit. Latest type/full tests and desktop tests are 4c5474e4; webpage build also 4c5474e4. The new committed NSIS wrapper adds hidden noninteractive execution. Editor, services and renderer are unchanged; full rendering and laptop performance results retain their earlier sources.",
+  "sourceScope": "Latest types/full tests and desktop tests are 2f2650b3. Only test association timing changed after 4c5474e4; editor/services/renderer and real NSIS wrapper are unchanged. Web build retains its actual source. OS default double-click remains unpassed.",
   "allRequiredAcceptancePassed": false,
   "mergePerformed": false,
   "installed": false,
@@ -2817,6 +2817,71 @@
           }
         }
       ]
+    },
+    {
+      "source": "2f2650b32cf47f0560654cfe724724c10bbefd16",
+      "startedAt": "2026-10-04T19:08:01.210Z",
+      "finishedAt": "2026-10-04T19:09:04.884Z",
+      "rawResult": {
+        "file": "test-temp:pc-reopen-integration-q64H6z/results.json",
+        "sha256": "520e6a2e3e3964c7235c12abf2de2ed9b607ed95c2ad0f88059d02bf77986a44"
+      },
+      "results": [
+        {
+          "name": "types",
+          "source": "2f2650b32cf47f0560654cfe724724c10bbefd16",
+          "command": "node <repository>\\node_modules\\typescript\\bin\\tsc -b --force",
+          "elapsedMs": 5149,
+          "equivalentPackageCommand": "npx tsc -b --force",
+          "actualExitCode": 0,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-q64H6z/types.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        {
+          "name": "tests",
+          "source": "2f2650b32cf47f0560654cfe724724c10bbefd16",
+          "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs",
+          "elapsedMs": 57417,
+          "equivalentPackageCommand": "npm test",
+          "counts": [
+            "ℹ tests 4330",
+            "ℹ suites 0",
+            "ℹ pass 4330",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 57362.7036"
+          ],
+          "actualExitCode": 0,
+          "rawLog": {
+            "file": "test-temp:pc-reopen-integration-q64H6z/tests.log",
+            "sha256": "78d39b24908a1d295bede2e9362990b3c396c8607e57008c5d0d8c4dec6c5b1e"
+          }
+        },
+        {
+          "name": "desktop-tests",
+          "source": "2f2650b32cf47f0560654cfe724724c10bbefd16",
+          "command": "node --import=./scripts/lib/test-silent-processes.mjs --test desktop/test/*.test.mjs",
+          "actualExitCode": 0,
+          "counts": [
+            "ℹ tests 37",
+            "ℹ suites 0",
+            "ℹ pass 37",
+            "ℹ fail 0",
+            "ℹ cancelled 0",
+            "ℹ skipped 0",
+            "ℹ todo 0",
+            "ℹ duration_ms 907.8663"
+          ],
+          "rawLog": {
+            "file": "task-worktree:work/desktop-2f2650b3.log",
+            "sha256": "6a87378e8c4bc043673fe9ad28771bff84480b29c7072c6c06910f3b4dbd221e"
+          }
+        }
+      ]
     }
   ],
   "fullLengthRender": {
@@ -3174,7 +3239,7 @@
     }
   ],
   "remaining": [
-    "Real default .proc double-click for host and member, including OS existing-window forwarding. All sixteen handoffs lack a matching receipt. New actual-default API sampling passed before/after a directory refresh, but no file invocation occurred; cause remains unproven. User accepts desktop execution for this non-performance gate.",
+    "Host default .proc double-click remains unpassed; member OS double-click and OS forwarding to an existing window not run. Nineteen handoffs have no matching receipt. Three new rounds issued no file invocation (two time guards and one security prompt observation). Desktop is accepted for this non-performance gate.",
     "All-required gate must pass before authorized main merge, release build and installer overwrite.",
     "Production hosting deployment remains separately reviewed and was not performed."
   ],
@@ -3210,5 +3275,6 @@
     "baselines": "native-final-baselines.json",
     "nsisUpgrade": "native-nsis-upgrade.json",
     "defaultQueries": "native-default-query.json"
-  }
+  },
+  "source": "2f2650b32cf47f0560654cfe724724c10bbefd16"
 }

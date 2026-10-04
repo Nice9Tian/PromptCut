@@ -6080,5 +6080,281 @@
       "file": "task-worktree:work/native-handler-attack/default-association-failure-capture-restored.command-record.json",
       "sha256": "7b6139dad63385247237436f51db41be7a1470b1d2d5b91178553db29cee65c7"
     }
+  },
+  "globalDefaultRegistrations": {
+    "source": "26a46bbe7e46a3e5cf1db5588e3200ccac8ef8b1",
+    "actualExitCode": 0,
+    "startedAt": "2026-10-04T18:50:40.1378612+00:00",
+    "completedAt": "2026-10-04T18:50:40.3603652+00:00",
+    "elapsedMs": 223,
+    "rootReadCompleteSnapshot": true,
+    "views": [
+      "Registry32",
+      "Registry64"
+    ],
+    "hives": [
+      "CurrentUser",
+      "LocalMachine",
+      "ClassesRoot"
+    ],
+    "perceivedTypePresent": false,
+    "staticVerbRecords": 32,
+    "contextMenuHandlerRecords": 72,
+    "inprocRecords": 92,
+    "inprocOk": 72,
+    "inprocMissing": 20,
+    "distinctInprocBasenames": 15,
+    "directReferenceCandidates": 0,
+    "missingKeys": 50,
+    "missingValues": 98,
+    "readErrors": 0,
+    "truncated": 0,
+    "registryWrites": false,
+    "comActivated": false,
+    "menuMethodsCalled": false,
+    "applicationLaunches": false,
+    "uiInputs": false,
+    "scope": "No registered global static command directly references the installed or fixture executable. Registration presence does not prove dynamic extensions alter default invocation. Registry-string hashes are not DLL-content hashes. No invocation or routing proof.",
+    "rawResult": {
+      "file": "task-worktree:work/native-handler-attack/global-defaults-71f4f794-fd8b-48cb-8cf6-fda6dd2e1b8e/result.json",
+      "sha256": "857827c1c5d11fd3b91721ff1c2a935cc99becac02026ad64596f33d44e950e2"
+    },
+    "rawCommandRecord": {
+      "file": "task-worktree:work/native-handler-attack/global-defaults-71f4f794-fd8b-48cb-8cf6-fda6dd2e1b8e/command-record.json",
+      "sha256": "aa931f302ed9744643d31a111ccaf414f740e385e1989d9a21b3a52e158e889a"
+    },
+    "privateReport": {
+      "file": "task-worktree:work/native-handler-attack/global-defaults-71f4f794-fd8b-48cb-8cf6-fda6dd2e1b8e/report.md",
+      "sha256": "a218a6aa6d31c8c7a7c1803bdc4314ceb829d7f3cae96e9b78d6b43018b4c93d"
+    },
+    "helperSha256": "32ebe064a16e3c79e24c31f5bb2cc29802c432cfdaf5c9273178ef576794ff22",
+    "wrapperSha256": "1b73820995302f7d086938d0b32f8c15425a668fbb3b40da7d782fb0880ed060"
+  },
+  "extendedDirectorySampling": {
+    "harnessSource": "9a17a7785566af578ba76aba471cd34428a37936",
+    "actualCommand": "node work/click-default-sampler.mjs <previous owned run directory>",
+    "actualExitCode": 0,
+    "samples": [
+      {
+        "at": "2026-10-04T19:03:37.142Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:03:37.0354188+00:00",
+        "queryCompletedAt": "2026-10-04T19:03:37.1215921+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:03:42.113Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:03:42.0215336+00:00",
+        "queryCompletedAt": "2026-10-04T19:03:42.0908958+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:03:47.120Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:03:47.0392437+00:00",
+        "queryCompletedAt": "2026-10-04T19:03:47.1009400+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:03:52.094Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:03:52.0124523+00:00",
+        "queryCompletedAt": "2026-10-04T19:03:52.0729005+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:03:57.129Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:03:57.0408639+00:00",
+        "queryCompletedAt": "2026-10-04T19:03:57.1084161+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:02.097Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:02.0148189+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:02.0772188+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:07.099Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:07.0151783+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:07.0785292+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:12.119Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:12.0352487+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:12.0980247+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:17.088Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:17.0064202+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:17.0675647+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:22.118Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:22.0288003+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:22.0966545+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:27.099Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:27.0167355+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:27.0788287+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:32.101Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:32.0185063+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:32.0811155+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:37.106Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:37.0211585+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:37.0850536+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:42.107Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:42.0233436+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:42.0861842+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:47.104Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:47.0209107+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:47.0830618+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:52.102Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:52.0186973+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:52.0827177+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:04:57.116Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:04:57.0282221+00:00",
+        "queryCompletedAt": "2026-10-04T19:04:57.0933494+00:00",
+        "registryBeforeAllExpected": true,
+        "registryAfterAllExpected": true,
+        "defaultCommandMatchesFixture": true,
+        "defaultExecutableMatchesFixture": true,
+        "defaultExecutableMatchesInstalled": false
+      },
+      {
+        "at": "2026-10-04T19:05:02.115Z",
+        "stage": "armed",
+        "queryStartedAt": "2026-10-04T19:05:02.0307304+00:00",
+        "queryCompletedAt": "2026-10-04T19:05:02.0946966+00:00",
+        "registryBeforeAllExpected": false,
+        "registryAfterAllExpected": false,
+        "defaultCommandMatchesFixture": false,
+        "defaultExecutableMatchesFixture": false,
+        "defaultExecutableMatchesInstalled": true
+      },
+      {
+        "at": "2026-10-04T19:05:07.081Z",
+        "stage": "restored-after-error",
+        "queryStartedAt": "2026-10-04T19:05:07.0002582+00:00",
+        "queryCompletedAt": "2026-10-04T19:05:07.0608019+00:00",
+        "registryBeforeAllExpected": false,
+        "registryAfterAllExpected": false,
+        "defaultCommandMatchesFixture": false,
+        "defaultExecutableMatchesFixture": false,
+        "defaultExecutableMatchesInstalled": true
+      }
+    ],
+    "errors": [],
+    "rootReadCompleteSnapshot": true,
+    "rawResult": {
+      "file": "test-temp:pc-reopen-native-PVGvB7/run-Ams3k6/association-control/default-click-samples.json",
+      "sha256": "d9f887037a28c0b9922c22c2c6fd72356570c44c5f44a4064fff92738af92123"
+    },
+    "rawLog": {
+      "file": "task-worktree:work/default-click-sampler-9a17a778.log",
+      "sha256": "1f3b55615f167b002b98d218a18b3223bf84d6d01b665571a84fba0059b316a3"
+    },
+    "scope": "Fresh default queries during directory navigation, at 5s intervals. No file invocation occurred. Does not prove click-instant values or dynamic menu routing."
   }
 }

@@ -5068,7 +5068,7 @@
       "cacheCauseNotProven": true
     }
   },
-  "finding": "All seven handoffs lack a matched native launch receipt. The first four had concurrent user desktop operations; attempts five through seven had an exclusive desktop and still launched the installed application. Attempt six used SHCNF_FLUSH plus F5; attempt seven leased a unique owned default ProgID while leaving the original command untouched. Both failed, and all temporary values were restored. A cached handler remains a hypothesis, not a proven cause.",
+  "finding": "Nineteen attempted handoffs lack a matching fixture receipt. The three latest rounds issued no file double-click. Last directory became visible inside the extended lease, but root stopped on observing Windows Security. A later close-tab input was blocked twice by PickerHost; no security action was taken. Prompt ownership and originating Node process remain unknown, and its persistence after test exit does not prove a test-listener cause. No new accidental user-install launch.",
   "conservativeProbeCorrection": {
     "source": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
     "controlFilesOutsideDisplayedFolder": true,
@@ -19271,7 +19271,7 @@
       "userShellNotTerminated": true
     }
   ],
-  "allHandoffAttempts": 16,
+  "allHandoffAttempts": 19,
   "acceptedHandoffAttempts": 0,
   "userDecision": {
     "defaultDoubleClickOnDesktopSufficient": true,
@@ -19279,5 +19279,272 @@
     "acceptanceThresholdWaived": false,
     "desktopSufficientForNonPerformance": true
   },
-  "actualDefaultDuringLeaseEvidence": "native-default-query.json"
+  "actualDefaultDuringLeaseEvidence": "native-default-query.json",
+  "extendedWindowAttempts": [
+    {
+      "fixture": "run-f1ZM64",
+      "harnessSource": "26a46bbe7e46a3e5cf1db5588e3200ccac8ef8b1",
+      "nativeShellSource": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+      "actualCommand": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-native.mjs <owned fixture.json> --os-double-click --allow-temporary-open-command",
+      "actualExitCode": 1,
+      "matchedLaunchReceipt": false,
+      "realDoubleClickIssued": false,
+      "outcome": "navigation-time-guard-no-file-input",
+      "leaseLimitMs": 30000,
+      "leaseExpiresAt": "2026-10-04T18:55:03.396Z",
+      "trace": {
+        "folder": "<test-temp>\\pc-reopen-native-PVGvB7\\run-f1ZM64",
+        "events": [
+          {
+            "event": "launch-explorer-issued",
+            "at": "2026-10-04T18:54:33.871Z"
+          },
+          {
+            "event": "navigation-blocked-by-time-guard",
+            "at": "2026-10-04T18:55:26.598Z"
+          }
+        ],
+        "armedAt": "2026-10-04T18:54:33.786Z"
+      },
+      "restoration": {
+        "code": 0,
+        "restored": true,
+        "alreadyOriginal": true,
+        "ownedProgIdRemoved": null,
+        "cleanupComplete": true
+      },
+      "rawTrace": {
+        "file": "task-worktree:work/native-os-fresh-ui-trace.json",
+        "sha256": "d1ee1502fea83697a1b458775d84f9a7730bbe971bd92b3ecc575e87ecaa25f5"
+      },
+      "rawLog": {
+        "file": "task-worktree:work/native-os-fresh-window-26a46bbe.log",
+        "sha256": "c95d827b71f3eecc9403bb8521861fcc6809d97292d926a79474f01cc863554c"
+      },
+      "rawRestoration": {
+        "file": "test-temp:pc-reopen-native-PVGvB7/run-f1ZM64/association-control/association-de17f3f33b1149a0ff1780f40322c277.json.watchdog-result.json",
+        "sha256": "6089d40414413bca559d8fd764249d02190e14df947a3fc4aa971878ab85bb14"
+      },
+      "ownedExplorerPidKnown": false,
+      "userShellNotTerminated": true
+    },
+    {
+      "fixture": "run-89RaFa",
+      "harnessSource": "26a46bbe7e46a3e5cf1db5588e3200ccac8ef8b1",
+      "nativeShellSource": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+      "actualCommand": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-native.mjs <owned fixture.json> --os-double-click --allow-temporary-open-command",
+      "actualExitCode": 1,
+      "matchedLaunchReceipt": false,
+      "realDoubleClickIssued": false,
+      "outcome": "navigation-submit-time-guard-no-file-input",
+      "leaseLimitMs": 30000,
+      "leaseExpiresAt": "2026-10-04T18:57:40.237Z",
+      "trace": {
+        "folder": "<test-temp>\\pc-reopen-native-PVGvB7\\run-89RaFa",
+        "events": [
+          {
+            "event": "launch-explorer-issued",
+            "at": "2026-10-04T18:57:10.719Z"
+          },
+          {
+            "event": "navigation-submit-blocked",
+            "at": "2026-10-04T18:57:39.243Z"
+          }
+        ],
+        "armedAt": "2026-10-04T18:57:10.638Z"
+      },
+      "restoration": {
+        "code": 0,
+        "restored": true,
+        "alreadyOriginal": true,
+        "ownedProgIdRemoved": null,
+        "cleanupComplete": true
+      },
+      "rawTrace": {
+        "file": "task-worktree:work/native-os-fresh-retry-ui-trace.json",
+        "sha256": "a2f5e99acfd8dd3c2f33fedbe9a6b6655ef493869e9a7c3f81eb63e24a3f7a16"
+      },
+      "rawLog": {
+        "file": "task-worktree:work/native-os-fresh-window-26a46bbe-retry.log",
+        "sha256": "e87b3e5397e49bc1bb2c7d0ce4907fb3e0b625cb8627bb420712d0b828eac626"
+      },
+      "rawRestoration": {
+        "file": "test-temp:pc-reopen-native-PVGvB7/run-89RaFa/association-control/association-21442a21250db6163c484fac1ce2679a.json.watchdog-result.json",
+        "sha256": "6089d40414413bca559d8fd764249d02190e14df947a3fc4aa971878ab85bb14"
+      },
+      "ownedExplorerPidKnown": false,
+      "userShellNotTerminated": true
+    },
+    {
+      "fixture": "run-Ams3k6",
+      "harnessSource": "9a17a7785566af578ba76aba471cd34428a37936",
+      "nativeShellSource": "e2552d079a24fdb5c6bad18e341d01b603810b9b",
+      "actualCommand": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-native.mjs <owned fixture.json> --os-double-click --allow-temporary-open-command --allow-extended-association-lease",
+      "actualExitCode": 1,
+      "matchedLaunchReceipt": false,
+      "realDoubleClickIssued": false,
+      "outcome": "security-prompt-observed-no-file-input",
+      "leaseLimitMs": 90000,
+      "leaseExpiresAt": "2026-10-04T19:05:06.291Z",
+      "trace": {
+        "folder": "<test-temp>\\pc-reopen-native-PVGvB7\\run-Ams3k6",
+        "events": [
+          {
+            "event": "launch-explorer-issued",
+            "at": "2026-10-04T19:03:36.715Z"
+          },
+          {
+            "event": "directory-enter-observed",
+            "at": "2026-10-04T19:04:03.146Z"
+          },
+          {
+            "event": "directory-settled-observed",
+            "at": "2026-10-04T19:04:12.143Z"
+          },
+          {
+            "event": "windows-security-prompt-observed-no-input",
+            "at": "2026-10-04T19:04:39.479Z"
+          }
+        ],
+        "armedAt": "2026-10-04T19:03:36.687Z"
+      },
+      "restoration": {
+        "code": 0,
+        "restored": true,
+        "alreadyOriginal": true,
+        "ownedProgIdRemoved": null,
+        "cleanupComplete": true
+      },
+      "rawTrace": {
+        "file": "task-worktree:work/native-os-extended-ui-trace.json",
+        "sha256": "31ee5426e52d9765dfc8c9f6e7c9b7eeae724ccd2894d5fab427b870938269b0"
+      },
+      "rawLog": {
+        "file": "task-worktree:work/native-os-extended-9a17a778.log",
+        "sha256": "865e2e34607aa370ec7cddff8b48d9d35a146e8b2cb4825b8d6eacfb6d01245f"
+      },
+      "rawRestoration": {
+        "file": "test-temp:pc-reopen-native-PVGvB7/run-Ams3k6/association-control/association-363e437fd6f52bdfc631db8a440bd15c.json.watchdog-result.json",
+        "sha256": "6089d40414413bca559d8fd764249d02190e14df947a3fc4aa971878ab85bb14"
+      },
+      "ownedExplorerPidKnown": false,
+      "userShellNotTerminated": true
+    }
+  ],
+  "extendedLeaseSafety": {
+    "source": "2f2650b32cf47f0560654cfe724724c10bbefd16",
+    "actualCommand": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-association-lease.mjs --self-test <owned fixture.json>",
+    "actualExitCode": 0,
+    "result": {
+      "ok": true,
+      "normal": {
+        "restored": true,
+        "watchdogCode": 0,
+        "target": "open-command",
+        "originalValueSha256": "3d7b98b1811fe7b8763db359e3677df6b56d10ab57b346737f9c6448d40f754a",
+        "temporaryValueSha256": "43e9b2751966e52df9a9600a239631130abb23d3d0d5c544447e02d02e623180",
+        "originalCommandSha256": "3d7b98b1811fe7b8763db359e3677df6b56d10ab57b346737f9c6448d40f754a",
+        "commandSha256": "43e9b2751966e52df9a9600a239631130abb23d3d0d5c544447e02d02e623180",
+        "ownedProgIdRemoved": null
+      },
+      "extendedNormal": {
+        "restored": true,
+        "watchdogCode": 0,
+        "target": "open-command",
+        "originalValueSha256": "3d7b98b1811fe7b8763db359e3677df6b56d10ab57b346737f9c6448d40f754a",
+        "temporaryValueSha256": "43e9b2751966e52df9a9600a239631130abb23d3d0d5c544447e02d02e623180",
+        "originalCommandSha256": "3d7b98b1811fe7b8763db359e3677df6b56d10ab57b346737f9c6448d40f754a",
+        "commandSha256": "43e9b2751966e52df9a9600a239631130abb23d3d0d5c544447e02d02e623180",
+        "ownedProgIdRemoved": null
+      },
+      "extendedLeaseOptInRequired": true,
+      "extendedLeaseUpperBoundMs": 90000,
+      "partialCreation": [
+        {
+          "step": 1,
+          "armExitCode": 1,
+          "watchdogCode": 0,
+          "entryRestored": true,
+          "ownedProgIdRemoved": true
+        },
+        {
+          "step": 2,
+          "armExitCode": 1,
+          "watchdogCode": 0,
+          "entryRestored": true,
+          "ownedProgIdRemoved": true
+        },
+        {
+          "step": 3,
+          "armExitCode": 1,
+          "watchdogCode": 0,
+          "entryRestored": true,
+          "ownedProgIdRemoved": true
+        },
+        {
+          "step": 4,
+          "armExitCode": 1,
+          "watchdogCode": 0,
+          "entryRestored": true,
+          "ownedProgIdRemoved": true
+        },
+        {
+          "step": 5,
+          "armExitCode": 1,
+          "watchdogCode": 0,
+          "entryRestored": true,
+          "ownedProgIdRemoved": true
+        },
+        {
+          "step": 6,
+          "armExitCode": 1,
+          "watchdogCode": 0,
+          "entryRestored": true,
+          "ownedProgIdRemoved": true
+        }
+      ],
+      "isolatedNormal": {
+        "restored": true,
+        "watchdogCode": 0,
+        "target": "default-progid",
+        "originalValueSha256": "3d7b98b1811fe7b8763db359e3677df6b56d10ab57b346737f9c6448d40f754a",
+        "temporaryValueSha256": "cc314bea930d0f119bb52b89fe38976859ca97b57d8238cf9c23a2c6b54b3ae6",
+        "ownedProgIdRemoved": true
+      },
+      "changedProbeTreePreserved": true,
+      "changedProbeTreeWatchdogCode": 79,
+      "timeoutRestored": true,
+      "timeoutWatchdogCode": 0,
+      "externalChangePreserved": true,
+      "ownerExitRestored": true,
+      "ownerExitWatchdogCode": 0,
+      "ownerExitCases": [
+        {
+          "ttlMs": 30000,
+          "restored": true,
+          "watchdogCode": 0
+        },
+        {
+          "ttlMs": 90000,
+          "restored": true,
+          "watchdogCode": 0
+        }
+      ],
+      "defaultAssociationChanged": false,
+      "evidenceDirectory": "<test-temp>\\pc-reopen-native-PVGvB7\\lease-test-Dkep8o"
+    },
+    "rawLog": {
+      "file": "task-worktree:work/association-lease-self-test-2f2650b3.log",
+      "sha256": "3bac71fd0089be51b9a42e3561e580f952cb665426ba1f6ba804d0e9670818ed"
+    },
+    "defaultLeaseUnchangedMs": 30000,
+    "explicitOptInUpperBoundMs": 90000,
+    "receiptDeadlineAnchoredToActualExpiry": true,
+    "receiptSafetyMarginMs": 5000,
+    "staticReview": {
+      "file": "task-worktree:work/native-handler-attack/static-lease-review-9a17a778-190243.md",
+      "sha256": "9534ca43ff1c3f3b34904e4b9552da1d4bf72f5110fa1af3a5b203c5292a356a"
+    },
+    "securityPromptActionTaken": false
+  }
 }
