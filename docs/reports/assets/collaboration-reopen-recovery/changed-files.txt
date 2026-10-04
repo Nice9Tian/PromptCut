@@ -28,8 +28,10 @@ docs/reports/assets/collaboration-reopen-recovery/native-member-restored.png
 docs/reports/assets/collaboration-reopen-recovery/native-member.json
 docs/reports/assets/collaboration-reopen-recovery/native-restored.png
 docs/reports/assets/collaboration-reopen-recovery/native.json
+docs/reports/assets/collaboration-reopen-recovery/online-free-latest.json
 docs/reports/assets/collaboration-reopen-recovery/online-free.json
 docs/reports/assets/collaboration-reopen-recovery/online-recovered.png
+docs/reports/assets/collaboration-reopen-recovery/online-restricted-latest.json
 docs/reports/assets/collaboration-reopen-recovery/online-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/reboot-dry-run.json
 docs/reports/assets/collaboration-reopen-recovery/recovery-auth-empty.png
@@ -44,7 +46,10 @@ docs/reports/assets/collaboration-reopen-recovery/relocation-roundtrip-lan-ui.pn
 docs/reports/assets/collaboration-reopen-recovery/relocation-roundtrip-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/storage-failure-audit.json
 docs/reports/assets/collaboration-reopen-recovery/verification.json
+docs/reports/assets/collaboration-reopen-recovery/wan-free-auth-click-failure.json
+docs/reports/assets/collaboration-reopen-recovery/wan-public-free-latest.json
 docs/reports/assets/collaboration-reopen-recovery/wan-public-free.json
+docs/reports/assets/collaboration-reopen-recovery/wan-public-restricted-latest.json
 docs/reports/assets/collaboration-reopen-recovery/wan-public-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/wan.json
 docs/semantics/mechanism/hosting.md
@@ -55,6 +60,7 @@ scripts/lib/user-dirs.mjs
 scripts/probes/reopen-baseline.mjs
 scripts/probes/reopen-capabilities.mjs
 scripts/probes/reopen-e2e.mjs
+scripts/probes/reopen-editor-env.mjs
 scripts/probes/reopen-exit-matrix.mjs
 scripts/probes/reopen-matrix.mjs
 scripts/probes/reopen-native-fixture.mjs
