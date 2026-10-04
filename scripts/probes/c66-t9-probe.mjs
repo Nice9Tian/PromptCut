@@ -554,7 +554,8 @@ async function runCreator(out) {
       proto.request = function (msg, ...rest) { if (msg?.type === 'service.watch') window.__t9AssetLink = this; return orig.call(this, msg, ...rest); };
       proto.__t9Wrapped = true;
     });
-    const entered = await P(page, async (candidate, cred) => (await import('/src/editor/sync/syncManager.ts')).enterShared(candidate, cred),
+    // This is the fixture's creation step, distinct from the observer's later entry.
+    const entered = await P(page, async (candidate, cred) => (await import('/src/editor/sync/syncManager.ts')).enterShared(candidate, cred, { initialize: true }),
       { where: shared.where, base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode }, { as: 'creator', username: 'creator', password: creatorPw });
     if (!entered?.ok) throw new Error(`创建者进不去共享项目:${JSON.stringify(entered)}`);
     const pushed = await until('[creator] 用户卡传上内容库', async () => {
