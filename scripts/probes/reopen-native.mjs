@@ -4,6 +4,9 @@
  * Add --member to exercise native member file arguments and IPC, with an isolated peer host.
  * Add --patch-upgrade to run the committed patch installer on stopped copy-B before reopening.
  * The code update preserves the current version number and does not test an NSIS setup bundle.
+ * --standalone-smoke verifies the private Explorer environment bootstrap via arguments only.
+ * --os-double-click --allow-temporary-open-command requires explicit operator permission;
+ * it waits for real ComputerUse double clicks and restores the original open command.
  * A native argument/IPC pass is not evidence of an OS default-file-association double click.
  */
 import '../lib/no-user-dirs.mjs';
@@ -19,11 +22,14 @@ import puppeteer from 'puppeteer';
 import { waitFor } from '../../server/test/fake-ws-kit.mjs';
 import { loadNativeFixture, nativeTestEnv } from './reopen-native-fixture.mjs';
 import { upgradeNativeFixture } from './reopen-native-upgrade.mjs';
+import { explorerNativeLaunch, prepareStandaloneLaunch } from './reopen-native-association.mjs';
 
 const fixture = loadNativeFixture(process.argv[2]);
 const { port } = fixture;
 const root = fs.mkdtempSync(path.join(fixture.root, 'run-'));
 const nativeMember = process.argv.includes('--member');
+const osDoubleClick = process.argv.includes('--os-double-click');
+const associationLaunches = [];
 assert.equal(port, 5203);
 const require = createRequire(import.meta.url);
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
@@ -119,9 +125,18 @@ async function native(copy, file = null) {
   const cdpPort = await freePort(0), profile = path.join(root, `browser-${copy}`);
   assert.equal(fs.existsSync(profile), false, 'native restart must use an empty browser profile');
   const entry = fixture.copies[copy === 'A' ? 0 : 1];
-  const child = spawn(entry.exe, file ? [file] : [], { cwd: path.dirname(entry.exe), windowsHide: true,
-    env: nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: profile, PROMPTCUT_RUNTIME_DIR: entry.runtime, PROMPTCUT_AGENT_CDP: String(cdpPort),
-      PROMPTCUT_PROJECTS_DIR: path.join(root, 'data/drafts'), PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_PUSH: '0', PROMPTCUT_QUEUE_NODE: '0', PROMPTCUT_LAN_HOST: '0' }), stdio: ['ignore', 'pipe', 'pipe'] });
+  const launchEnv = nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: profile, PROMPTCUT_RUNTIME_DIR: entry.runtime, PROMPTCUT_AGENT_CDP: String(cdpPort),
+    PROMPTCUT_PROJECTS_DIR: path.join(root, 'data/drafts'), PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_PUSH: '0', PROMPTCUT_QUEUE_NODE: '0', PROMPTCUT_LAN_HOST: '0' });
+  let child;
+  if (file && osDoubleClick) {
+    const launched = await explorerNativeLaunch(process.argv[2], entry, file, launchEnv);
+    child = launched.child; associationLaunches.push(launched.receipt);
+  } else {
+    const standaloneSmoke = file && process.argv.includes('--standalone-smoke');
+    if (standaloneSmoke) prepareStandaloneLaunch(process.argv[2],entry,file,launchEnv);
+    child = spawn(entry.exe, file ? [file] : [], { cwd: path.dirname(entry.exe), windowsHide: true,
+      env: standaloneSmoke ? nativeTestEnv() : launchEnv, stdio: ['ignore','pipe','pipe'] });
+  }
   children.add(child); child.stdout.resume(); child.stderr.resume();
   phase = `native ${copy} start and debugging endpoint`;
   let connection;
@@ -137,7 +152,7 @@ async function native(copy, file = null) {
   assert.equal(await p.evaluate(() => !!window.__TAURI__?.core?.invoke), true, 'actual Tauri shell required');
   const info = await p.evaluate(() => window.__TAURI__.core.invoke('agent_webview_info'));
   assert.equal(info.port, cdpPort, 'only our shell debugging endpoint may be connected');
-  return { child, p, connection, pid: child.pid, profile, entry };
+  return { child, p, connection, pid: child.nativePid ?? child.pid, profile, entry, cdpPort };
 }
 async function quit(n) {
   const ended = new Promise(resolve => n.child.once('exit', resolve));
@@ -237,8 +252,16 @@ try {
     window.nativeOpenEvents = 0; window.nativeIpcOriginalLink = window.probe.sync.currentSharedLink();
     await window.__TAURI__.event.listen('pc-open-file', ev => { if (ev.payload === target) window.nativeOpenEvents++; });
   }, filePath);
-  const ipc = spawn(second.entry.exe, [filePath], { cwd: path.dirname(second.entry.exe), windowsHide: true, env: nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: second.profile, PROMPTCUT_RUNTIME_DIR: second.entry.runtime }), stdio: 'ignore' });
-  children.add(ipc); assert.equal(await new Promise(resolve => ipc.once('exit', resolve)), 0); children.delete(ipc);
+  if (osDoubleClick) {
+    const launched = await explorerNativeLaunch(process.argv[2], second.entry, filePath, { ...isolatedSettings,
+      PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: second.profile, PROMPTCUT_RUNTIME_DIR: second.entry.runtime,
+      PROMPTCUT_AGENT_CDP: String(second.cdpPort), PROMPTCUT_PROJECTS_DIR: path.join(root,'data/drafts'),
+      PROMPTCUT_NO_PORT_FILE:'1',PROMPTCUT_AUTO_RENDER_NODE:'0',PROMPTCUT_PUSH:'0',PROMPTCUT_QUEUE_NODE:'0',PROMPTCUT_LAN_HOST:'0'}, {secondary:true});
+    associationLaunches.push(launched.receipt);
+  } else {
+    const ipc = spawn(second.entry.exe, [filePath], { cwd: path.dirname(second.entry.exe), windowsHide: true, env: nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: second.profile, PROMPTCUT_RUNTIME_DIR: second.entry.runtime }), stdio: 'ignore' });
+    children.add(ipc); assert.equal(await new Promise(resolve => ipc.once('exit', resolve)), 0); children.delete(ipc);
+  }
   phase = 'native IPC file loading and replacement sync complete';
   await second.p.waitForFunction(() => window.nativeOpenEvents === 1);
   // The IPC event is delivered before Shell finishes its asynchronous file read.
@@ -268,7 +291,10 @@ try {
     hostPidBefore: nativeMember ? peerBefore.pid : first.pid, hostPidAfter: nativeMember ? peerAfter.pid : second.pid,
     memberPidBefore: nativeMember ? first.pid : peerBefore.pid, memberPidAfter: nativeMember ? second.pid : peerAfter.pid,
     bidirectionalEdits: 4, binding, asset, originalFileUnchanged: true, recoveryCreateRequests: createRequests,
-    nativeOsDoubleClick: false, installerUpgrade: !!runtimeUpgrade, runtimeUpgrade, actualComputerRestart: false, fileAssociationsChanged: false, isolatedProviderConfiguration: true, evidenceDirectory: root };
+    nativeOsDoubleClick: osDoubleClick, standaloneBootstrapTested:process.argv.includes('--standalone-smoke'),
+    associationLaunches, installerUpgrade: !!runtimeUpgrade, runtimeUpgrade, actualComputerRestart: false,
+    fileAssociationsChanged: osDoubleClick, fileAssociationsRestored: osDoubleClick ? associationLaunches.every(x=>x.association.restored) : undefined,
+    isolatedProviderConfiguration: true, evidenceDirectory: root };
   fs.writeFileSync(path.join(root, 'native-evidence.json'), JSON.stringify(evidence, null, 2)); console.log(JSON.stringify(evidence));
 } catch (e) {
   const primitive = x => x === null || ['boolean', 'number'].includes(typeof x) ? x : undefined;

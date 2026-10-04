@@ -1,4 +1,4 @@
-param([string] $ControlFile, [ValidateSet('read','arm','restore','init-test','delete-test')] [string] $Mode)
+param([string] $ControlFile, [ValidateSet('read','arm','restore','init-test','edit-test','delete-test')] [string] $Mode)
 $ErrorActionPreference = 'Stop'
 $c = Get-Content -LiteralPath $ControlFile -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($c.kind -ne 'promptcut-association-lease-v1') { throw 'Unexpected control format' }
@@ -24,6 +24,10 @@ if ($Mode -eq 'init-test') {
     if (-not $testKey -or (Read-State).keyExists) { throw 'Fresh owned test key required' }
     $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($c.key)
     try {$k.SetValue('', 'owned-original', [Microsoft.Win32.RegistryValueKind]::String)} finally {$k.Close()}
+} elseif ($Mode -eq 'edit-test') {
+    if (-not $testKey) { throw 'Owned test key required' }
+    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($c.key,$true)
+    try {$k.SetValue('', 'owned-external-change', [Microsoft.Win32.RegistryValueKind]::String)} finally {$k.Close()}
 } elseif ($Mode -eq 'delete-test') {
     if (-not $testKey) { throw 'Owned test key required' }
     [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree(($c.key -replace '\\command$',''),$false)
