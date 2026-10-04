@@ -11,6 +11,7 @@ import puppeteer from 'puppeteer';
 import { pathToFileURL } from 'node:url';
 import { waitFor } from '../../server/test/fake-ws-kit.mjs';
 import { hostedPorts } from '../../server/test/sp-kit.mjs';
+import { reopenEditorEnv } from './reopen-editor-env.mjs';
 
 const require = createRequire(import.meta.url);
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
@@ -32,10 +33,10 @@ async function stop(child) {
 async function editor(who, port) {
   fs.mkdirSync(testData(who), { recursive: true });
   const child = spawn(process.execPath, [vite, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: process.cwd(), windowsHide: true,
-    env: { ...process.env, PROMPTCUT_DATA_DIR: testData(who), PROMPTCUT_DOCSERVICE_DATA: path.join(testData(who), 'docservice'), PROMPTCUT_EXPORT_DIR: path.join(testData(who), 'export'),
+    env: reopenEditorEnv(testData(who), {
       PROMPTCUT_PROJECTS_DIR: path.join(testData(who), 'drafts'), PROMPTCUT_DEVICE_ID: who === 'host' && process.argv.includes('--keep-room') ? '' : `probe-${who}-device-000001`, PROMPTCUT_DEVICE_NAME: `isolated-${who}`,
       PROMPTCUT_ARTIFACT_DIR: path.join(testData(who), 'artifacts'),
-      PROMPTCUT_AUTO_RENDER_NODE: process.argv.includes('--nodes') ? '1' : '0', PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_PUSH: process.argv.includes('--nodes') ? '' : '0', PROMPTCUT_LAN_HOST: '0', PROMPTCUT_NODE_PROFILE: 'user', PROMPTCUT_SHARED_CONFIG: '', PROMPTCUT_QUEUE_NODE: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      PROMPTCUT_AUTO_RENDER_NODE: process.argv.includes('--nodes') ? '1' : '0', PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_PUSH: process.argv.includes('--nodes') ? '' : '0', PROMPTCUT_LAN_HOST: '0', PROMPTCUT_NODE_PROFILE: 'user', PROMPTCUT_SHARED_CONFIG: '', PROMPTCUT_QUEUE_NODE: '0' }), stdio: ['ignore', 'pipe', 'pipe'] });
   editors.add(child); child.stdout.resume(); child.stderr.resume();
   const base = `http://127.0.0.1:${port}`;
   await waitFor(async () => { if (child.exitCode !== null) throw new Error('isolated editor exited'); try { const r = await fetch(`${base}/api/docservice/device`, { signal: AbortSignal.timeout(1000) }); return r.ok; } catch { return false; } }, 30000, 'isolated editor');
@@ -49,7 +50,7 @@ async function hostedProcess(docPort = 0, assetPort = 0) {
     const c = await startHostedCombo({ dataDir: process.env.PROMPTCUT_DATA_DIR, docPort: Number(process.env.PC_PROBE_DOC_PORT), assetPort: Number(process.env.PC_PROBE_ASSET_PORT), host: '127.0.0.1', trustLoopback: false, clusterToken: process.env.PROMPTCUT_CLUSTER_TOKEN, log: () => {} });
     console.log(JSON.stringify({ docPort: c.docPort, assetPort: c.assetPort }));
     process.stdin.resume(); process.stdin.on('end', () => c.close().then(() => process.exit(0)));`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', code], { windowsHide: true, env: { ...process.env, PROMPTCUT_DATA_DIR: testData('cloud'), PROMPTCUT_CLUSTER_TOKEN: secret(), PC_PROBE_DOC_PORT: String(docPort), PC_PROBE_ASSET_PORT: String(assetPort) }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code], { windowsHide: true, env: reopenEditorEnv(testData('cloud'), { PROMPTCUT_CLUSTER_TOKEN: secret(), PC_PROBE_DOC_PORT: String(docPort), PC_PROBE_ASSET_PORT: String(assetPort) }), stdio: ['pipe', 'pipe', 'pipe'] });
   editors.add(child); child.stderr.resume();
   let ports, output = ''; child.stdout.on('data', b => { output += b; if (output.includes('\n') && !ports) { try { ports = JSON.parse(output.split('\n')[0]); } catch {} } });
   await waitFor(() => { if (child.exitCode !== null) throw new Error('isolated hosted process exited'); return ports; }, 15000, 'isolated hosted process');
@@ -106,7 +107,27 @@ async function page(base, openPath = null) {
     const close = [...document.querySelectorAll('.ais-dialog button')].find(b => b.textContent?.trim() === '关闭');
     close?.click();
   });
+  assert.equal(await p.evaluate(async () => {
+    const response = await (await fetch('/api/ai/config')).json(), c = response.config ?? response;
+    return !c.api?.apiKey?.set && !c.keys?.custom?.set && !c.keys?.router?.set;
+  }), true, 'isolated editor must not load user provider credentials');
   return p;
+}
+async function exposeRecoveryControl(p) {
+  let speechPromptDismissed = false;
+  await waitFor(async () => {
+    const point = await p.evaluate(() => {
+      const b = document.querySelector('[data-pc="recovery-auth-open"]'), r = b?.getBoundingClientRect();
+      const hit = r && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { ready: !!b && hit?.closest('[data-pc="recovery-auth-open"]') === b, speech: !!hit?.closest('.dep-prompt') };
+    });
+    if (point.speech) {
+      await p.click('.dep-prompt button.dep-prompt-btn:not(.is-primary)');
+      await p.waitForSelector('.dep-prompt', { hidden: true }); speechPromptDismissed = true;
+    }
+    return point.ready;
+  }, 10000, 'actual recovery control hit target');
+  return { hitConfirmed: true, speechPromptDismissed };
 }
 async function connected(p, roomId, username) {
   try { await p.waitForFunction((room, user) => { const v = window.probe.sync.getSyncView(); return v.shared?.projectId === room && v.shared.username === user && v.status === 'online'; }, { timeout: 30000 }, roomId, username); }
@@ -133,13 +154,15 @@ try {
   phase = 'member first authentication';
   await open(member, hostFile);
   await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+  const firstAuthenticationControl = await exposeRecoveryControl(member);
   await member.evaluate(() => {
     const records = window.recoveryEvidence = [];
     const log = (kind, value) => records.push({ t: performance.now(), kind, ...value });
     const snapshot = () => ({ state: window.probe.sync.getSyncView().reopenState,
       buttons: [...document.querySelectorAll('[data-pc="recovery-auth-open"]')].map(el => {
         const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-        return { connected: el.isConnected, rect: r.toJSON(), hit: hit?.tagName, hitButton: hit?.closest('[data-pc="recovery-auth-open"]') === el };
+        return { connected: el.isConnected, rect: r.toJSON(), hit: hit?.tagName, hitClass: typeof hit?.className === 'string' ? hit.className : null,
+          speechPrompt: !!hit?.closest('.dep-prompt'), hitButton: hit?.closest('[data-pc="recovery-auth-open"]') === el };
       }), form: !!document.querySelector('form[aria-label="恢复原协作身份"]') });
     window.recoverySnapshot = snapshot;
     log('before-click', snapshot());
@@ -422,6 +445,7 @@ try {
   evidence.push({ roomId, where, mode, actualHostProcessRestart: true, actualMemberProcessRestart: true, actualCloudProcessRestart: !wan, hostOpenedWhileCloudOffline: !wan && where === 'lan', pidChanged: true, portChanged: true, emptyBrowserStorage: true, memberWaitThenAutoJoin: where === 'lan',
     sameUsers: ['creator:host', 'member:member'], oldSnapshotsPreservedLatest: true, version: journal.rev, bidirectionalEdits: 4, formats: ['proc', 'procp', 'draft', 'system-path', 'refresh'], nativeOsDoubleClick: false, cancellationTombstone: !process.argv.includes('--keep-room'), recoveryCreateRequests: createRequests - 1, agentAndCardBindings: true, renderNodeStarted: process.argv.includes('--nodes'), nodeRolesAuthenticated: process.argv.includes('--nodes'), staleBindingsRemovedOnDelete: !process.argv.includes('--keep-room'), creatorPasswordReconnect: process.argv.includes('--password-change'), creatorSecondDevice: process.argv.includes('--roles'), deletedFromSecondCreator: !!secondCreator });
   const result = { ok: true, evidence, matrix, exitMatrix, relocation, relocationBack, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
+  result.testIsolation = { providerConfiguration: true, firstAuthenticationControl };
   evidence[0].deletedWhileMemberOffline = process.argv.includes('--delete-offline');
   evidence[0].tamperedAssociationsRejected = process.argv.includes('--trust');
   fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));

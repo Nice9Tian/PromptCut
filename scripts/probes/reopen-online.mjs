@@ -12,6 +12,7 @@ import puppeteer from 'puppeteer';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 import { wsClient, waitFor } from '../../server/test/fake-ws-kit.mjs';
+import { reopenEditorEnv } from './reopen-editor-env.mjs';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-online-'));
 const mode = process.argv.includes('--restricted') ? 'restricted' : 'free';
 const secret = () => randomBytes(32).toString('base64url');
@@ -32,7 +33,7 @@ try {
   fs.writeFileSync(config, `import config from ${JSON.stringify(pathToFileURL(path.resolve('vite.config.ts')).href)};
     export default async () => { const c = await config({ mode: 'online', command: 'serve' }); return { ...c, root: ${JSON.stringify(process.cwd())}, server: { ...c.server, host: '127.0.0.1', port: ${port}, strictPort: true, proxy: { '/hosted': { target: ${JSON.stringify(direct)}, ws: true, rewrite: p => p.replace(/^\\/hosted/, '') } } } }; };`);
   const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
-  child = spawn(process.execPath, [vite, '--config', config], { windowsHide: true, env: { ...process.env, PROMPTCUT_DATA_DIR: path.join(root, 'desktop-data'), PROMPTCUT_EXPORT_DIR: path.join(root, 'export'), PROMPTCUT_NO_PORT_FILE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] }); child.stdout.resume(); child.stderr.resume();
+  child = spawn(process.execPath, [vite, '--config', config], { windowsHide: true, env: reopenEditorEnv(path.join(root, 'desktop-data'), { PROMPTCUT_EXPORT_DIR: path.join(root, 'export') }), stdio: ['ignore', 'pipe', 'pipe'] }); child.stdout.resume(); child.stderr.resume();
   await waitFor(async () => { if (child.exitCode !== null) throw new Error('isolated online editor exited'); try { return (await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; } }, 30000, 'online editor');
   browser = await puppeteer.launch({ headless: true, userDataDir: path.join(root, 'browser'), args: ['--no-sandbox'] });
   const page = await browser.newPage(); let localApiRequests = 0;

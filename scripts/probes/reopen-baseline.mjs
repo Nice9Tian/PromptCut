@@ -6,9 +6,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { waitFor } from '../../server/test/fake-ws-kit.mjs';
+import { reopenEditorEnv } from './reopen-editor-env.mjs';
 const require = createRequire(import.meta.url), root = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-baseline-'));
 const port = Number(process.env.PC_REOPEN_BASELINE_PORT || 5212);
-const env = { ...process.env, PROMPTCUT_DATA_DIR: path.join(root, 'data'), PROMPTCUT_DOCSERVICE_DATA: path.join(root, 'data', 'docservice'), PROMPTCUT_EXPORT_DIR: path.join(root, 'export'), PROMPTCUT_PROJECTS_DIR: path.join(root, 'projects'), PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_PUSH: '0', PC_STAGE_TEST_URL: `http://127.0.0.1:${port}`, PC_FRAME_TEST_URL: `http://127.0.0.1:${port}` };
+const env = reopenEditorEnv(path.join(root, 'data'), { PROMPTCUT_EXPORT_DIR: path.join(root, 'export'), PROMPTCUT_PROJECTS_DIR: path.join(root, 'projects'), PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_PUSH: '0', PC_STAGE_TEST_URL: `http://127.0.0.1:${port}`, PC_FRAME_TEST_URL: `http://127.0.0.1:${port}` });
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
 let editor;
 async function run(args, file, command = args[0].includes('tsc') ? 'npx tsc -b --force' : 'npm test') {
