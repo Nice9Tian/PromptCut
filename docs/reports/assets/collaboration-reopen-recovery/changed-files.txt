@@ -33,7 +33,9 @@ docs/reports/assets/collaboration-reopen-recovery/online-free.json
 docs/reports/assets/collaboration-reopen-recovery/online-recovered.png
 docs/reports/assets/collaboration-reopen-recovery/online-restricted-latest.json
 docs/reports/assets/collaboration-reopen-recovery/online-restricted.json
+docs/reports/assets/collaboration-reopen-recovery/reboot-dry-run-latest.json
 docs/reports/assets/collaboration-reopen-recovery/reboot-dry-run.json
+docs/reports/assets/collaboration-reopen-recovery/reboot-probe-audit.json
 docs/reports/assets/collaboration-reopen-recovery/recovery-auth-empty.png
 docs/reports/assets/collaboration-reopen-recovery/recovery-connected.png
 docs/reports/assets/collaboration-reopen-recovery/recovery-deleted.png

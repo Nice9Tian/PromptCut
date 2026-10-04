@@ -1,0 +1,58 @@
+{
+  "fixture": "test-temp:pc-reopen-e2e-MH2SCg",
+  "failedRuns": [
+    {
+      "sourceCommit": "724e98b4e3b9a2fc87631332063c05460a315430",
+      "actualExitCode": 1,
+      "phase": "original host rejoins original room after boot",
+      "error": "old snapshots must not reset the service version",
+      "recordedShape": "evidence array final step",
+      "incorrectShape": "root version field",
+      "observedFixtureVersion": 6,
+      "fixedIn": "b1d41be7",
+      "productRegressionProven": false
+    },
+    {
+      "sourceCommit": "b1d41be76ccc0e17a81d2939090859d39711fe6b",
+      "actualExitCode": 1,
+      "phase": "bidirectional post-boot editing",
+      "error": "Expected values to be strictly equal: false !== true",
+      "namespaceStatusesNotCaptured": true,
+      "observedLegacyArtifactsInTaskWorktree": [
+        "snap",
+        "px"
+      ],
+      "isolatedDestinationInitiallyMissing": true,
+      "remedy": "copy verified original fixture artifacts before physical reboot; no fallback copy in recovery",
+      "productRegressionProven": false
+    }
+  ],
+  "preservedArtifacts": [
+    {
+      "namespace": "snap",
+      "bytes": 50000,
+      "sourceSha256Verified": true,
+      "destinationSha256Verified": true,
+      "originalFileRetained": true,
+      "copiedOnlyThisFixtureHash": true
+    },
+    {
+      "namespace": "px",
+      "bytes": 50000,
+      "sourceSha256Verified": true,
+      "destinationSha256Verified": true,
+      "originalFileRetained": true,
+      "copiedOnlyThisFixtureHash": true
+    }
+  ],
+  "noProjectOrCredentialChangesDuringPreparation": true,
+  "defaultBootGate": {
+    "actualProbeExitCode": 2,
+    "actualComputerRestart": false,
+    "startsServices": false,
+    "preservedFixture": true,
+    "actualExitCodeObserved": true
+  },
+  "successfulRerun": "reboot-dry-run-latest.json",
+  "physicalRebootPassed": false
+}

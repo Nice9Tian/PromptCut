@@ -27,6 +27,7 @@
 - `11061e98` 修复：完整流式传输、本机到云端设置入口及持久中断恢复。
 - `ea9a22ed` 修复：云端到本机成员授权、加密续传任务、启动等待及 Agent 重试。
 - `4bd3087f` 探针：隔离普通浏览器服务的 AI/CLI/技能配置，核对认证按钮实际命中。
+- `724e98b4`、`b1d41be7`、`16f93bb0` 探针：重启验收复用配置隔离，读取夹具实际版本并核对服务端角色、云端登记和三类素材；前两次演练失败独立列明。
 
 后续修复与报告提交可从本分支日志核对。证据目录为 [assets/collaboration-reopen-recovery](assets/collaboration-reopen-recovery/)，其中只收录非秘密结果、已检查截图和校验摘要；不包含保护存储、账户校验文件、邀请码、派生密钥或会话秘密。
 
@@ -73,11 +74,13 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 
 初始类型检查退出 0。初始全量：4,251 项，4,249 通过、0 失败、2 跳过（舞台界面测试缺测试 URL；PowerShell 外部 deflate 夹具缺模块）。**两项初始跳过不算通过**。后续独立舞台提供 URL，deflate 夹具改用 .NET 并确认 ZIP 方法 8，最终没有跳过。
 
-最终分支基线对应已提交版本 `4bd3087f`，其产品源码与 `ea9a22ed` 相同，只补探针隔离及实际命中检查。见 [verification.json](assets/collaboration-reopen-recovery/verification.json)：`npx tsc -b --force` 退出 0；`npm test` 全量 4,316 项全部通过、0 失败、0 取消、0 跳过、0 todo，54,708.7969 毫秒。渲染附加基线（G0-R）在新隔离环境重跑，两次导出帧 0–9：10 帧逐像素相同、0 不同；统一帧验证覆盖实际视频/卡片、随机重放、精确 seek、缓存和累计帧、PNG 帧表与 10 帧存储，全条退出 0。各原始日志对应的提交、实际退出码和 SHA-256 分别记录于 verification.json，不把初始、历史及最终日志混写为一个版本。PC 的功能结果不能证明笔记本的性能门槛通过。
+最终类型与全量基线对应已提交版本 `16f93bb0`，其产品源码与 `ea9a22ed` 相同，只补重启探针隔离及证据核对。见 [verification.json](assets/collaboration-reopen-recovery/verification.json)：`npx tsc -b --force` 退出 0；`npm test` 全量 4,316 项全部通过、0 失败、0 取消、0 跳过、0 todo，54,847.4761 毫秒。渲染附加基线（G0-R）来自 `4bd3087f` 的隔离环境：两次导出帧 0–9，10 帧逐像素相同、0 不同；统一帧验证覆盖实际视频/卡片、随机重放、精确 seek、缓存和累计帧、PNG 帧表与 10 帧存储，全条退出 0。后续只改未被渲染加载的重启探针，渲染源码不变，没有重写为新提交的渲染结果。各原始日志对应的提交、实际退出码和 SHA-256 分别记录于 verification.json，不把初始、历史及最终日志混写为一个版本。PC 的功能结果不能证明笔记本的性能门槛通过。
 
-提交后 `npm run build` 对应 `4bd3087f`，退出 0，实际耗时 7,593 毫秒，1,830 模块。构建使用隔离配置、数据、导出和素材目录，没有安装产物；native config/Lottie eval/动态导入/chunk size 及 doc plugin 扩展名解析提示均为警告。
+提交后 `npm run build` 对应 `16f93bb0`，退出 0，实际耗时 7,972 毫秒，1,830 模块。构建使用隔离配置、数据、导出和素材目录，没有安装产物；native config/Lottie eval/动态导入/chunk size 及 doc plugin 扩展名解析提示均为警告。
 
 阶段历史另保留：`14d32af9` 全量 4,286/4,286，52,190.099 毫秒；原生普通成员及打开修复后 `d1dab4c4` 4,286/4,286，52,795.4009 毫秒；源搬迁封锁版本 `8061db90` 4,294/4,294，52,784.1366 毫秒；本机到云端版本 `11061e98` 4,308/4,308，53,758.1702 毫秒；双向搬迁产品版本 `ea9a22ed` 4,316/4,316，54,911.0132 毫秒，报告提交 `dc8b2412` 构建退出 0、7,616 毫秒。五轮全量均零失败/取消/跳过/todo；这些记录只证明各自版本，不代替当前基线。前一组最终原始日志另保留于忽略目录 `work/baseline-ea9/`。
+
+重启探针补充前的 `4bd3087f` 全量 4,316/4,316、54,708.7969 毫秒、零失败/跳过，构建退出 0、7,593 毫秒；其类型/测试/渲染/构建原始日志与来源表另保留于忽略目录 `work/baseline-4bd/`。
 
 初始能力证据见 [capability-baseline.json](assets/collaboration-reopen-recovery/capability-baseline.json)：
 
@@ -116,6 +119,7 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 | 纯在线自由/限定 | 浏览器真实刷新后恢复同一成员；双向编辑、版本 4、托管仍 hosted；桌面本机接口请求数 0 | [online-free.json](assets/collaboration-reopen-recovery/online-free.json)、[online-restricted.json](assets/collaboration-reopen-recovery/online-restricted.json) |
 | 新配置隔离后的纯在线自由/限定 | `4bd3087f` 两种模式分别实际刷新，原身份、双向编辑、版本 4 和 hosted 连续；桌面本机 API 请求数都为 0 | [online-free-latest.json](assets/collaboration-reopen-recovery/online-free-latest.json)、[online-restricted-latest.json](assets/collaboration-reopen-recovery/online-restricted-latest.json) |
 | 电脑重启夹具演练 | 真实主机/成员新进程、空浏览器、稳定设备/DPAPI、双向修改、50k 带票据素材哈希通过；`actualComputerRestart:false` | [reboot-dry-run.json](assets/collaboration-reopen-recovery/reboot-dry-run.json)，**不算电脑重启通过** |
+| 最新重启夹具演练及默认门槛 | `16f93bb0`，同房间 `sp_e2uowvu7stzt3esqfeh7v4aj63`，服务端角色 creator:host/member:member；版本 10→12、双方编辑、云端登记 online、零建房、三命名空间各 50k 票据读取 200/哈希通过、空浏览器且未加载真实提供商凭证。默认模式实际退出 2 并保留夹具，没有启动服务 | [reboot-dry-run-latest.json](assets/collaboration-reopen-recovery/reboot-dry-run-latest.json)、[reboot-probe-audit.json](assets/collaboration-reopen-recovery/reboot-probe-audit.json)；仍为 `actualComputerRestart:false`，**不算电脑重启通过** |
 
 已检查等待主机、无凭证认证表单、连接成功、删除及纯在线恢复截图。另已逐张检查扩展矩阵的冲突重放/丢弃、踢出、未知版本、缺主机日志、坏保护记录、密码失效及暂时存储等待八张截图。认证截图密码输入为空；密码失效明确提示重新认证且本地内容保留；等待状态保留协作开关和本地内容，没有显示“未开启协作”。暂时存储等待明确显示保留原身份、自动重试；其恢复有独立 API 故障注入、单元和真实浏览器证据。
 
@@ -191,6 +195,8 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 | 搬回界面 mcucd1/Vx9G29/9PmKpK 在目标重启后节点超时 | 实际目标绑定、编辑和角色取证显示成员 page/render 存在而成员 Agent 缺失。网关取票接续修复的 RST 单测先通过，但完整界面仍失败；进一步复现首次取票失败后重试停止。补自动重试后 mGeGBQ 完整自由云端搬回、真实目标重启及两端全部节点认证通过；不把先前仅完成搬迁步骤算整条通过。 |
 | 新 Agent 取票暂缺测试首次 2 失败、1 通过 | 强制结束原会话，再使首个新票据请求暂时失败；两个模式都在 5 秒期限内未恢复，复现订阅重试未继续。修后真实自由/限定网关及会话 25 项全部通过，完整界面结果另列。 |
 | 当前公开自由探针 0YZfEU 在本机成员首次认证阶段失败 | 成员 needs-auth、按钮存在，物理点击前后均未命中按钮，捕获事件为 DIV，没有创建表单或认证请求，存储/日志诊断无失败。原诊断未记录该 DIV 的具体类名，不能认定唯一原因。补实际命中等待、仅在阻挡时真实忽略可选提示及完整配置隔离后，3QnEa0 全部通过；本次并未需要关闭语音提示，故不能倒推原失败就是语音提示。见 [失败取证](assets/collaboration-reopen-recovery/wan-free-auth-click-failure.json)。 |
+| 重启演练 `724e98b4` 在版本断言失败，退出 1 | 探针误读根层 version；原夹具实际将版本 6 保存在 evidence 数组最后一项。修为校验实际层级，不将 undefined 比较失败认定为服务版本回退。见 [重启探针审计](assets/collaboration-reopen-recovery/reboot-probe-audit.json)。 |
+| 重启演练 `b1d41be7` 在三类素材断言失败，退出 1 | 初次失败未分别记录各命名空间状态。隔离目录取证确认旧夹具 snap/px 完成文件在任务 worktree 的 out/asset-store，新指定的夹具 artifacts 目录尚无这两件；逐件验证原 50k 字节与 SHA-256 后，仅复制该夹具哈希的两件产物并保留源文件，没有改项目或凭证。恢复探针没有自动回退/补文件逻辑。`16f93bb0` 新进程演练三类均 200；旧失败仍单列，不冒充电脑重启通过。 |
 
 ## 解法表与顾问调用
 
@@ -308,14 +314,14 @@ g 表示实现与验证代价，h 表示预计剩余缺口，两者按 1–5 档
 1. 初始探针证实云端登记/中继缺失，已纳入实现，而非假定部署支持。新增可审核组合服务和部署文件清单，生产仍旧版本；没有在现有公开端口覆盖它。
 2. 现有产品语义的匿名 LAN 邀请校验/兑换、IPv6 公网直连和打洞，比已加入身份重开的最小链路更广。本次新增中继交付已取得有效凭证的恢复，不把这些更广承诺标为完成。
 3. 实际代码缺少项目级搬迁流程，但 `workflow/project.md` 已规定「搬到云端」「搬回本机」。据此落实已有语义，修正先前将其误列为计划 §6 排除新流程的解释。已实施两个方向的真实远程传输、设置入口、可信位置切换和中断恢复，原生云端搬回和限定本机完整往返实际界面通过；没有缩减为内部文件复制。新增契约见 [collaboration-relocation-contract.md](../plan/collaboration-relocation-contract.md)。
-4. 受控物理重启仍待用户。保留 `pc-reopen-e2e-MH2SCg` 临时夹具；它在用户本次开机后生成，所以先前重启不算这次夹具验收。待再次实际重启后从 worktree 运行 `node scripts/probes/reopen-reboot.mjs <该临时目录>`，不能带 `--allow-same-boot`。若测试端口被占，不结束用户进程。
+4. 受控物理重启仍待用户。保留 `pc-reopen-e2e-MH2SCg` 临时夹具；它在用户本次开机后生成，所以先前重启不算这次夹具验收。本轮只读启动标识核对仍为同次开机；默认探针实测退出 2，在启动任何测试服务前保留夹具并拒绝计作通过。已经补齐配置隔离和原夹具两件产物的预先复制，保护记录、设备绑定、房间与检查点均保留。待再次实际重启后从 worktree 运行 `node scripts/probes/reopen-reboot.mjs <该临时目录>`，不能带 `--allow-same-boot`。若测试端口被占，不结束用户进程。
 5. 公开测试入口已绕开占用限制：在已授权隔离测试主机只运行任务自有临时 tunnel 子进程，转发独立网关；免费、无账户、不修改 DNS、防火墙或系统代理，不安装常驻服务。官方二进制核对 GitHub release digest；关闭测试进程后入口失效。此结果不部署生产，生产登记/中继上线由用户最后审核。[Cloudflare 官方临时入口说明](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)。
 6. 已生成并运行独立原生测试壳，逐项隔离固定端口、单实例标识、Node 数据、导出、日志、WebView2 和扩展设置；原生启动参数、单实例转发与运行副本切换已经通过。系统默认文件关联双击仍需用户物理操作/独立关联条件；没有安装到用户运行副本或改变现有文件关联。
 7. 笔记本耗时门槛待基准机复核；PC 的功能通过和耗时记录不作笔记本验收。合入 main 前按仓库规则仍需整套集成门槛，本分支没有执行 main 合入。
 8. t6nM3X 的单次 damaged 来源仍未确定。已经区分 API/浏览器诊断，并修复独立可复现的暂时存储分类错误，但缺少该次请求的来源证据；后续三次完整探针和 160 次原隔离记录只读读取通过都不是原因证明。若再次发生，按新诊断定位。
 9. 搬迁传输包含整个房间目录及所有已完成入库素材，并检查当前项目的明确引用；尚未穷举全部历史操作的语义素材引用，也没有把部分入库中的素材当完成件。这是完整性预检的范围限制，不声称可以补回源服务原本缺失的历史素材。
 
-最终证据审计退出 0：29 份 JSON、1,722 个字段、150 个修改文件，所有报告链接和清单文件存在；已检查发布的截图，没有密码、派生 K、登记能力、邀请码或会话秘密。最新类型/全量/渲染/构建日志的来源均是 `4bd3087f`；产品源码与 `ea9a22ed` 相同。最后补报告/证据的提交不改变产品代码，不重跑无变化的基线。
+最终证据审计退出 0：31 份 JSON、1,819 个字段、152 个修改文件，所有报告链接和清单文件存在；已检查发布的截图，没有密码、派生 K、登记能力、邀请码或会话秘密。最新类型/全量/构建日志来自 `16f93bb0`，渲染日志来自 `4bd3087f`；产品源码与 `ea9a22ed` 相同。最后补报告/证据的提交不改变产品代码，不重跑无变化的基线。
 
 本次没有改产品桌面 Rust 壳、浏览器、ffmpeg 或内置 Python；只复制资源并在临时 Rust 测试副本中做上述隔离变换。没有发版、安装或改变用户运行目录。Node 服务读取的稳定数据目录及旧数据迁移已在隔离环境验证；桌面安装升级/系统文件关联的验收未执行。main 与 release 未前进，保持用户当前版本；本次网页及隔离调试壳构建成功不能替代合入后应执行的集成或桌面发版构建。
 
