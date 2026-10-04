@@ -3,6 +3,7 @@
  */
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
+import { promisify } from 'node:util';
 
 if (process.platform === 'win32') {
   const directive = `--import=${import.meta.url}`;
@@ -12,21 +13,28 @@ if (process.platform === 'win32') {
   const hidden = options => ({ ...(options || {}), windowsHide: true });
   for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync']) {
     const original = childProcess[name];
-    childProcess[name] = function (file, args, options, callback) {
+    const wrap = target => function (file, args, options, callback) {
       if (Array.isArray(args)) {
-        if (typeof options === 'function') return original.call(this, file, args, hidden(), options);
-        return original.call(this, file, args, hidden(options), callback);
+        if (typeof options === 'function') return target.call(this, file, args, hidden(), options);
+        return target.call(this, file, args, hidden(options), callback);
       }
-      if (typeof args === 'function') return original.call(this, file, hidden(), args);
-      return original.call(this, file, hidden(args), options);
+      if (typeof args === 'function') return target.call(this, file, hidden(), args);
+      return target.call(this, file, hidden(args), options);
     };
+    const wrapped = wrap(original);
+    // execFile's custom promise returns { stdout, stderr } and exposes the child.
+    if (original[promisify.custom]) Object.defineProperty(wrapped, promisify.custom, { value: wrap(original[promisify.custom]) });
+    childProcess[name] = wrapped;
   }
   for (const name of ['exec', 'execSync']) {
     const original = childProcess[name];
-    childProcess[name] = function (command, options, callback) {
-      if (typeof options === 'function') return original.call(this, command, hidden(), options);
-      return original.call(this, command, hidden(options), callback);
+    const wrap = target => function (command, options, callback) {
+      if (typeof options === 'function') return target.call(this, command, hidden(), options);
+      return target.call(this, command, hidden(options), callback);
     };
+    const wrapped = wrap(original);
+    if (original[promisify.custom]) Object.defineProperty(wrapped, promisify.custom, { value: wrap(original[promisify.custom]) });
+    childProcess[name] = wrapped;
   }
   syncBuiltinESMExports();
 }
