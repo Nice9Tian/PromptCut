@@ -86,9 +86,10 @@ async function resume(root) {
       for (const ns of ['media', 'snap', 'px']) {
         const got = await fetch(`${base}/${ns}/${asset.hash}?t=${encodeURIComponent(r.ticket)}`); const bytes = await got.arrayBuffer();
         const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
-        reads.push({ namespace: ns, ok: got.ok && hash === asset.hash && bytes.byteLength === asset.size, bytes: bytes.byteLength });
+        reads.push({ namespace: ns, status: got.status, ok: got.ok && hash === asset.hash && bytes.byteLength === asset.size, bytes: bytes.byteLength });
       }
-      return { ok: reads.every(r => r.ok), reads }; }, { asset: before.asset, hostedBase: checkpoint.where === 'hosted' ? `http://127.0.0.1:${cloud.assetPort}/api/asset` : null }); assert.equal(asset.ok, true);
+      return { ok: reads.every(r => r.ok), reads }; }, { asset: before.asset, hostedBase: checkpoint.where === 'hosted' ? `http://127.0.0.1:${cloud.assetPort}/api/asset` : null });
+    assert.equal(asset.ok, true, `post-boot asset reads: ${JSON.stringify(asset.reads)}`);
     const afterRev = await host.evaluate(() => window.rebootProbe.sync.currentSharedLink().ds.rev);
     assert.ok(afterRev >= beforeRev + 2, 'post-boot edits must advance the service version');
     assert.equal(recoveryCreateRequests, 0, 'post-boot recovery must not create a room');
