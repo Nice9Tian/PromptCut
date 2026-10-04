@@ -11,7 +11,8 @@
  * --allow-extended-association-lease explicitly permits a bounded 90s lease for
  * slow ComputerUse round trips; the default remains 30s. This is not a speed test.
  * --isolated-default-progid --allow-temporary-default-progid instead creates a
- * unique test ProgID and leases the existing .proc default string for <=30s.
+ * unique test ProgID and leases the existing .proc default string for 30s by default
+ * (90s only with the explicit extended-lease opt-in).
  * UserChoice is refused; the original ProgID command is never changed in this mode.
  * A native argument/IPC pass is not evidence of an OS default-file-association double click.
  */
