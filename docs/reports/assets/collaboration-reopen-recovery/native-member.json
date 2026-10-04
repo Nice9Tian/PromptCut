@@ -1,0 +1,43 @@
+{
+  "ok": true,
+  "sourceCommit": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+  "nativeArgument": true,
+  "nativeSingleInstanceIpc": true,
+  "nativeNormalExit": true,
+  "runtimeCopyChanged": true,
+  "emptyBrowserProfiles": true,
+  "stableDevice": true,
+  "stableRoom": "sp_sj3cwhe2yaliev4tkfncxpclzx",
+  "memberWaitThenAutomaticJoin": true,
+  "nativeActor": "member",
+  "actualInitialAuthenticationUi": true,
+  "optionalSpeechPromptDismissed": true,
+  "hostPidBefore": 31176,
+  "hostPidAfter": 40536,
+  "memberPidBefore": 35096,
+  "memberPidAfter": 36972,
+  "bidirectionalEdits": 4,
+  "binding": {
+    "creator": false,
+    "where": "lan",
+    "hostBinding": false,
+    "rev": 5
+  },
+  "asset": {
+    "bytes": 50000,
+    "hash": "45a4a4ff1ff198c7b85397201829920b56537b7c738a25edd004778477fe2fe6",
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "originalFileUnchanged": true,
+  "recoveryCreateRequests": 0,
+  "nativeOsDoubleClick": false,
+  "installerUpgrade": false,
+  "actualComputerRestart": false,
+  "fileAssociationsChanged": false,
+  "isolatedProviderConfiguration": true,
+  "evidenceDirectory": "test-temp:pc-reopen-native-Zb1XcA/run-mb05jB"
+}

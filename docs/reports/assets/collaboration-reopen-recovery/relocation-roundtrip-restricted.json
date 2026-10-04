@@ -1,0 +1,102 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_xtra4kb4fr54z2cyvujhmb6u3m",
+      "where": "lan",
+      "mode": "restricted",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": true,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": true,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 6,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": false,
+      "creatorSecondDevice": false,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": false
+    }
+  ],
+  "relocation": {
+    "roomId": "sp_xtra4kb4fr54z2cyvujhmb6u3m",
+    "actualSettingsAction": true,
+    "source": "lan",
+    "destination": "hosted",
+    "oldFilesFollowNewLocation": true,
+    "savedLocation": "hosted",
+    "actualCloudRestart": true,
+    "bidirectionalEdits": 2,
+    "asset": {
+      "namespaces": [
+        "media",
+        "snap",
+        "px"
+      ],
+      "size": 50000,
+      "hash": "c1a2539776ef5c577b230228386fcc9cb70ba4fd0be65571c6216e9bc266ef41",
+      "ticketRead": true
+    },
+    "recoveryCreateRequests": 0
+  },
+  "relocationBack": {
+    "roomId": "sp_xtra4kb4fr54z2cyvujhmb6u3m",
+    "actualSettingsAction": true,
+    "source": "hosted",
+    "destination": "lan",
+    "sourceActor": "creator:host",
+    "oldHostedFileRestoresActualHost": true,
+    "savedLocation": "lan",
+    "actualDestinationProcessRestart": true,
+    "beforeRev": 9,
+    "afterRev": 11,
+    "bidirectionalEdits": 2,
+    "asset": {
+      "namespaces": [
+        "media",
+        "snap",
+        "px"
+      ],
+      "size": 50000,
+      "hash": "c1a2539776ef5c577b230228386fcc9cb70ba4fd0be65571c6216e9bc266ef41",
+      "ticketRead": true
+    },
+    "recoveryCreateRequests": 0,
+    "nodeRolesAuthenticated": true
+  },
+  "asset": {
+    "hash": "c1a2539776ef5c577b230228386fcc9cb70ba4fd0be65571c6216e9bc266ef41",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-sW4WQ5"
+}

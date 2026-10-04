@@ -1,0 +1,43 @@
+{
+  "ok": true,
+  "sourceCommit": "4f72d19e415c8681f0f92a41f36f38c96a2ad348",
+  "nativeArgument": true,
+  "nativeSingleInstanceIpc": true,
+  "nativeNormalExit": true,
+  "runtimeCopyChanged": true,
+  "emptyBrowserProfiles": true,
+  "stableDevice": true,
+  "stableRoom": "sp_l47bcyc5rghylvo2p2vcjmovhz",
+  "memberWaitThenAutomaticJoin": true,
+  "nativeActor": "host",
+  "actualInitialAuthenticationUi": true,
+  "optionalSpeechPromptDismissed": false,
+  "hostPidBefore": 19248,
+  "hostPidAfter": 38656,
+  "memberPidBefore": 48228,
+  "memberPidAfter": 29524,
+  "bidirectionalEdits": 4,
+  "binding": {
+    "creator": true,
+    "where": "lan",
+    "hostBinding": true,
+    "rev": 5
+  },
+  "asset": {
+    "bytes": 50000,
+    "hash": "bd9bd446af4221d7c29fac9a61f4cd71edef91613d6d19f8cb22b4e8f8f1b919",
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "originalFileUnchanged": true,
+  "recoveryCreateRequests": 0,
+  "nativeOsDoubleClick": false,
+  "installerUpgrade": false,
+  "actualComputerRestart": false,
+  "fileAssociationsChanged": false,
+  "isolatedProviderConfiguration": true,
+  "evidenceDirectory": "test-temp:pc-reopen-native-Zb1XcA/run-zM8OTr"
+}

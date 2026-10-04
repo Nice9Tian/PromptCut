@@ -22,6 +22,10 @@
 - `7ab1d09b` 探针：生成不安装不改关联的隔离原生测试壳。
 - `4f72d19e` 探针：运行原生启动与单实例打开并核对实际依赖路径。
 - `14d32af9` 探针：隔离原生测试设置并等待实际首启界面。
+- `d1dab4c4` 探针：补原生普通成员及单实例打开验收。
+- `8061db90` 修复：持久封锁搬迁源和切换目录代数，保护旧连接。
+- `11061e98` 修复：完整流式传输、本机到云端设置入口及持久中断恢复。
+- `ea9a22ed` 修复：云端到本机成员授权、加密续传任务、启动等待及 Agent 重试。
 
 后续修复与报告提交可从本分支日志核对。证据目录为 [assets/collaboration-reopen-recovery](assets/collaboration-reopen-recovery/)，其中只收录非秘密结果、已检查截图和校验摘要；不包含保护存储、账户校验文件、邀请码、派生密钥或会话秘密。
 
@@ -36,6 +40,8 @@
 | 云端登记与中继 | `server/hosting/{service,host,client,protocol,bandwidth,main}.mjs` 实现原设备登记、独占在线租约、认证发现、出站 HTTP/WS 流式中继、票据摘要授权、权限代数与禁入镜像、删除墓碑。 |
 | 服务接线 | `server/hosted/{combo,files}.mjs`、`vite-plugin-docservice.ts`、`asset-service.ts`、`docservice/{service,shared-service}.mjs` 与 `vite.config.ts` 接入登记、稳定目录和素材鉴权；补齐部署文件清单，但没有部署生产服务。 |
 | 生命周期 | `link.ts`、`enterFailure.ts`、`server/render-node/session-link.mjs` 接续中继路由及终止错误；`cardSync.ts`、`renderNodeHandoff.ts` 与同步管理中的 Agent 绑定串行处理，迟到票据不得交给新连接。 |
+| 显式搬迁 | `server/recovery/relocation*.mjs`、`server/hosting/relocation*.mjs` 和 `server/hosted/relocation.mjs` 实现目录事务、源封锁、完整私有暂存及 HTTP 双向传输；`vault.mjs` 保护目标设备续传任务，设置页复用统一恢复。 |
+| Agent 重开 | `server/agent/doc-link.mjs` 更新中继接续的页面委托票据，取票或首次握手失败继续现有退避；网关核验后剥除专用票据，原服务仍严格验证会话。 |
 | 界面 | `RecoveryActions.tsx`、`SyncChips.tsx`、`CollabSection.tsx`、`MembersPanel.tsx` 区分协作已开启与瞬时连接状态，显示等待、认证、拒绝、删除、冲突及损坏；创建者改密码后更新本机记录与实时重连证明。 |
 | 语义 | `docs/semantics/workflow/project.md`、`product/document-service.md`、`product/hosting.md` 只补授权计划 §10 的重开承诺；`mechanism/hosting.md` 记录实际契约与实现边界。 |
 | 验证 | 新增 `scripts/probes/reopen-{capabilities,baseline,e2e,exit-matrix,wan,wan-peer,online,reboot,native,native-fixture}.mjs`；新增恢复、格式、权限和竞态测试，修正现有隔离测试的目录、环境和压缩夹具。 |
@@ -60,11 +66,15 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 
 云端托管项目仍由云端实际托管，恢复创建者/成员连接。创建者第二设备只能恢复创建者权限，不自动接管本机主机。
 
+显式搬迁落实现有项目工作流程，自动重开仍只跟随可信位置。房间 ID、账户和操作版本不变，目录代数递增；源先可靠封锁，完整目标 ready 后才 publish。本机到云端只由实际源设备启动；云端到本机首次由已有成员或创建者证明目标设备，云端源实际导出和发布，不增加创建者的第四项特权。目标事务、源传输能力和新登记密钥在请求前加密落盘；云端只存能力摘要，同事务中断续传不要求已封锁源再签挑战。任务完成前协调器等待，完成后设备目标绑定优先于旧文件提示。删除/取消清任务并留注销待办，迟到完成不能复活。完整契约见 [collaboration-relocation-contract.md](../plan/collaboration-relocation-contract.md)。
+
 ## 基线与开工能力探针
 
 初始类型检查退出 0。初始全量：4,251 项，4,249 通过、0 失败、2 跳过（舞台界面测试缺测试 URL；PowerShell 外部 deflate 夹具缺模块）。**两项初始跳过不算通过**。后续独立舞台提供 URL，deflate 夹具改用 .NET 并确认 ZIP 方法 8，最终没有跳过。
 
-最终代码基线对应已提交版本 `14d32af9`，见 [verification.json](assets/collaboration-reopen-recovery/verification.json)：`npx tsc -b --force` 退出 0；`npm test` 全量 4,286 项全部通过、0 失败、0 取消、0 跳过、0 todo，52,190.099 毫秒。渲染附加基线（G0-R）两次导出帧 0–9：10 帧逐像素相同、0 不同；统一帧验证覆盖实际视频/卡片、随机重放、精确 seek、缓存和累计帧、PNG 帧表与 10 帧存储，全条退出 0。提交后的 `npm run build` 退出 0，1,830 模块；现有 native config/Lottie eval/动态导入/chunk size 提示是警告。PC 的功能结果不能证明笔记本的性能门槛通过。
+最终代码基线对应已提交版本 `ea9a22ed`，见 [verification.json](assets/collaboration-reopen-recovery/verification.json)：`npx tsc -b --force` 退出 0；`npm test` 全量 4,316 项全部通过、0 失败、0 取消、0 跳过、0 todo，54,911.0132 毫秒。渲染附加基线（G0-R）在该版本重跑，两次导出帧 0–9：10 帧逐像素相同、0 不同；统一帧验证覆盖实际视频/卡片、随机重放、精确 seek、缓存和累计帧、PNG 帧表与 10 帧存储，全条退出 0。提交后的构建结果与各原始日志对应的提交、实际退出码和 SHA-256 分别记录于 verification.json，不把初始、历史及最终日志混写为一个版本。PC 的功能结果不能证明笔记本的性能门槛通过。
+
+阶段历史另保留：`14d32af9` 全量 4,286/4,286，52,190.099 毫秒；原生普通成员及打开修复后 `d1dab4c4` 4,286/4,286，52,795.4009 毫秒；源搬迁封锁版本 `8061db90` 4,294/4,294，52,784.1366 毫秒；本机到云端版本 `11061e98` 4,308/4,308，53,758.1702 毫秒。四轮均零失败/取消/跳过/todo；这些记录只证明各自版本，不代替当前 4,316 项基线。
 
 初始能力证据见 [capability-baseline.json](assets/collaboration-reopen-recovery/capability-baseline.json)：
 
@@ -94,6 +104,10 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 | 本机限定·首页退出及协作取消 | 身份读取、主机恢复、LAN 发现、接入并登记四个实际请求成功后延迟回复；实际点首页、迟到回复、刷新，旧连接及节点绑定均清除，主机登记撤销；恢复后真实关闭协作保留最新内容，旧文件不得重建房间 | [exit-lan-restricted.json](assets/collaboration-reopen-recovery/exit-lan-restricted.json) |
 | 云端自由·首页退出及协作取消 | 身份读取、成员挑战接入两个实际网络阶段逐项退出；身份未确认时协作开关禁用，确认创建者后真实取消保留最新内容并注销房间；云端没有本机主机恢复和 LAN 发现阶段，这两项不适用 | [exit-hosted-free.json](assets/collaboration-reopen-recovery/exit-hosted-free.json) |
 | 独立原生壳·启动参数及单实例转发 | 本机限定房间 `sp_6gaxnlr6vkvodi4zcasvj35imd`，版本 5；真实正常退出后 PID 45416→31344，从另一运行目录以原文件启动、空 WebView2 配置、稳定设备身份；成员 PID 49580→54108，先等待后自动加入；四次双向编辑、三命名空间 50k 哈希、原文件不变、零恢复建房；实际第二启动事件正确转发给已有窗口 | [native.json](assets/collaboration-reopen-recovery/native.json)；系统默认文件关联双击和安装升级未操作 |
+| 独立原生壳·普通成员 | 房间 `sp_sj3cwhe2yaliev4tkfncxpclzx`，版本 5；原生成员 PID 35096→36972，主机 PID 31176→40536；真实首轮认证 UI，之后旧文件/空 WebView2 及运行副本切换自动恢复普通成员，creator/hostBinding 均 false；四次编辑、三类 50k 素材、原文件不变及零建房 | [native-member.json](assets/collaboration-reopen-recovery/native-member.json)；[已检查截图](assets/collaboration-reopen-recovery/native-member-restored.png) |
+| 独立原生壳·主机复跑 | 房间 `sp_l47bcyc5rghylvo2p2vcjmovhz`，版本 5；主机 PID 19248→38656，成员 PID 48228→29524，真实首轮认证；原主机绑定、等待后加入、四次编辑和三类 50k 素材连续 | [native-host-repeat.json](assets/collaboration-reopen-recovery/native-host-repeat.json)；[已检查截图](assets/collaboration-reopen-recovery/native-host-repeat-restored.png) |
+| 原生云端自由房间·设置页搬回本机 | `sp_mruimbzao2upcus5ti2wcdv72v`，版本 5→7；实际点击设置动作，旧 hosted 文件恢复真正目标主机，保存位置 lan；真实停止/重启目标服务后双方 Agent/render 认证，双方各改一次、三类 50k 素材哈希一致；恢复建房 0 | [relocation-lan-free-nodes.json](assets/collaboration-reopen-recovery/relocation-lan-free-nodes.json)；[已检查设置完成截图](assets/collaboration-reopen-recovery/relocation-lan-free-ui.png) |
+| 限定本机房间·完整往返及节点 | `sp_xtra4kb4fr54z2cyvujhmb6u3m`，原恢复版本 6，搬到云端后原文件跟随 hosted、真实云端重启；再搬回原设备版本 9→11，旧 hosted 文件恢复主机、真实目标重启、双方 Agent/render 认证；每方向双方各改一次、三类 50k 素材哈希一致，恢复建房 0 | [relocation-roundtrip-restricted.json](assets/collaboration-reopen-recovery/relocation-roundtrip-restricted.json)；[已检查云端完成截图](assets/collaboration-reopen-recovery/relocation-roundtrip-hosted-ui.png)、[本机完成截图](assets/collaboration-reopen-recovery/relocation-roundtrip-lan-ui.png) |
 | 纯在线自由/限定 | 浏览器真实刷新后恢复同一成员；双向编辑、版本 4、托管仍 hosted；桌面本机接口请求数 0 | [online-free.json](assets/collaboration-reopen-recovery/online-free.json)、[online-restricted.json](assets/collaboration-reopen-recovery/online-restricted.json) |
 | 电脑重启夹具演练 | 真实主机/成员新进程、空浏览器、稳定设备/DPAPI、双向修改、50k 带票据素材哈希通过；`actualComputerRestart:false` | [reboot-dry-run.json](assets/collaboration-reopen-recovery/reboot-dry-run.json)，**不算电脑重启通过** |
 
@@ -104,6 +118,8 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 已检查并发布 [原生恢复截图](assets/collaboration-reopen-recovery/native-restored.png)：原生主窗口显示恢复后的最新项目，首启设置已关闭；画面中的缺少语音引擎提示属于隔离壳现有扩展状态，未安装扩展或执行账户操作。首轮被设置弹窗遮挡的截图没有发布；其设置读取未覆盖到探针隔离，后续以专用 AI/CLI/技能配置路径补齐，并在真实测试实例断言未加载用户提供商凭证。
 
 原生壳来自干净提交 `4f72d19e` 的跟踪源码，`cargo build --locked --offline` 在新临时目录编译成功，49.05 秒；二进制 SHA-256 为 `6dbd26160cd06e296e49c65b3ef70c51c02a22ee943d2af4c12a84c1123b6e27`。探针 `14d32af9` 对该副本做验收，二者间只改探针，不改产品源码。生成器只在临时源码中替换端口、目录、浏览器配置与测试来源权限，使用独立应用标识隔离单实例及插件状态，拒绝复用占用端口。文件启动/事件转发/项目打开/恢复业务代码保持原逻辑；没有生成安装包或改变系统文件关联。生成副本中的未使用变量/函数提示及链接器信息不影响编译退出 0。
+
+补充普通成员和主机复跑使用同一 `4f72d19e` 原生二进制与其运行时副本，探针来自 `d1dab4c4`；是原生打开及核心恢复的历史证据，不将其扩大为后来新增搬迁代码的原生壳验收。补充截图中的语音扩展建议属于隔离壳现有首启 UI，测试只关闭提示，没有安装引擎或调用真实提供商；普通成员实际首轮认证及新连接已分别断言，未把已有窗口的旧连接当单实例打开成功。
 
 ## 第 11 节逐项验收
 
@@ -130,10 +146,10 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 | 17 | 篡改角色/地址/房间 | **通过（单元及真实桌面恶意关联）**。文件伪造 creator/用户名/as 后仍是普通成员；服务改为隔离恶意收集器后 needs-auth，收集器 HTTP 请求数为 0；换房间 ID 需认证，原文件再打开恢复正确身份。格式拒绝非法 URL/路径，房间作用域和禁止重定向另有单测。 |
 | 18 | 清空凭证、新设备打开 | **通过（独立测试设备）**。无记录明确 needs-auth，一次真实认证 UI 后持久保存；后续新进程/空浏览器自动恢复。没有清用户的真实凭证。 |
 | 19 | 删除/取消后打开旧文件 | **通过**。原主机及第二创建者两条删除路径，成员离线期间删除亦终止。另在本机限定和云端自由实际关闭协作开关并确认：保留服务端最新内容，返回本地，保存文件无房间关联；旧主机文件为 deleted，云端挑战 410，零自动建房，旧节点绑定撤销。 |
-| 20 | 搬迁成功/中断后重开 | **部分通过，继续实施**。已增加源服务持久封锁、目录代数/精确事务切换、完整暂存、安装故障重试及服务重开；独立 HTTP 本机到云端部分传输后两端停止重开、续传、成员中继双向编辑与三类 50k 票据素材通过。实际设置页「搬到云端」、主机/成员旧文件跟随云端、云端重启、版本连续及零恢复建房通过：[relocation-hosted-ui.json](assets/collaboration-reopen-recovery/relocation-hosted-ui.json)。内部 LAN 目标安装通过，但远程「搬回本机」适配/界面及完整往返尚未完成，不计整条通过。 |
+| 20 | 搬迁成功/中断后重开 | **通过（隔离 HTTP、故障注入及实际设置页）**。本机到云端、原生云端到本机及完整往返保持房间/身份/版本；HTTP 两个方向均在部分传输后实际停止两端，再凭同事务续传、成员双向编辑与三类 50k 素材；准备/安装故障、删除及旧登记能力拒绝另有测试。实际设置页搬到云端和云端重启见 [relocation-hosted-ui.json](assets/collaboration-reopen-recovery/relocation-hosted-ui.json)；原生云端搬回、旧 hosted 文件恢复目标主机及目标重启见 [relocation-lan-free-nodes.json](assets/collaboration-reopen-recovery/relocation-lan-free-nodes.json)。搬迁新增公开 WAN、原生壳动作及所有故障组合未逐一实跑，不扩大此层级。 |
 | 21 | 旧关联迁移/未知版本 | **通过（桌面及格式/存储）**。真实旧 sessionStorage 身份精确匹配后迁入保护存储，原浏览器记录变 device-vault；旧 localStorage 密码查看记录可靠迁入 settings 后才删除，并在真实密码查看 UI 中以布尔比较核对原值，未输出秘密。空浏览器和新进程可自动恢复。真实未知 v2 提示不支持、再次序列化完整保留；已有新状态不覆盖、旧目录保留，无关联旧文件不按名绑定。 |
 | 22 | 主机数据缺失/损坏 | **通过（实际桌面故障提示）**。停止原主机测试进程、暂移 ops 日志，重开显示 damaged，缺失文件不被初始化；恢复日志后原房间可连。另一次停止成员进程后写入损坏保护记录，界面 damaged，损坏字节不被覆写，恢复原测试备份后可连。未从不可信快照导入权限或生成房间。 |
-| 23 | Agent/渲染节点/素材 | **通过（恢复和删除链路）**。实际自动节点启动，主机/成员 Agent 与 render 角色认证同房间，card 绑定正确；media/snap/px 读回和哈希通过，删除清旧绑定；8 项节点竞态测试与真实中继 RST 会话接续通过。全渲染任务调度及故障组合未扩成所有无关探针。 |
+| 23 | Agent/渲染节点/素材 | **通过（恢复、搬回及删除链路）**。实际自动节点启动，主机/成员 Agent 与 render 认证同房间，card 绑定正确；media/snap/px 读回和哈希通过，删除清旧绑定；8 项节点竞态及真实中继 RST 会话接续通过。搬回并真实重启目标后两侧节点认证见 `relocation-lan-free-nodes.json`；专门注入首次重试取票失败后仍自动恢复，相关网关/会话 25 项全部通过（10,975.3284 毫秒）。全渲染任务调度及所有故障组合未扩成无关探针。 |
 
 ## 失败、跳过与未测记录
 
@@ -164,6 +180,10 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 | 原生首轮云端进程退出 1、随后 sidecar 缺 Vite | 两次启动阶段取证表明隔离数据目录未先创建，尚未启动原生窗口；补目录后原生 sidecar 报 Cannot find module，实际依赖从父检出解析而 worktree 只有缓存。按托管组合既有 data-dir 契约和实际 require.resolve 结果修正夹具，复制实际依赖而不做 junction，重新编译；失败均不计通过。 |
 | 原生首启画面被设置弹窗遮挡，补等待后一次超时 | 首轮功能断言通过但截图被晚到的首次设置遮挡，未将该截图发布；补配置隔离和未加载用户凭证断言。等待误放在首页，而设置只在进入编辑器后出现；一次 run-RjSffY 超时，未建测试房间。将等待移到实际编辑器阶段后，run-RHTyGL 完整验收及截图通过；没有改产品弹窗逻辑。 |
 | 原生新增探针后全量 4,285 过、1 失败 | 唯一失败为 no-user-dirs 守门，缺规定的首个副作用 import；补齐后相关五项全过（64.8045 毫秒），最终全量 4,286 过、0 失败/跳过。失败原始日志保留于忽略目录 work。 |
+| 原生普通成员 x0sgBi/F9E2mb/dJZXTs/X7d2zi 失败 | 首轮缺具体阶段、随后真实认证被语音扩展提示遮挡，命中截图取证后只关闭隔离提示。单实例探针一度把已有连接当新打开成功，改为等待共享连接对象实际替换且 connected；mb05jB 普通成员及 zM8OTr 主机复跑分别通过。早期失败仍保留，不修产品首启提示。 |
+| 搬迁界面 mmvxCe 在打包入口失败 | 根 Agent 在活跃探针期间编辑了加载的依赖，触发 Vite 页面上下文失效，`window.probe` 不再存在；不计通过。固定源码后 wocUll 限定完整往返通过。 |
+| 搬回界面 mcucd1/Vx9G29/9PmKpK 在目标重启后节点超时 | 实际目标绑定、编辑和角色取证显示成员 page/render 存在而成员 Agent 缺失。网关取票接续修复的 RST 单测先通过，但完整界面仍失败；进一步复现首次取票失败后重试停止。补自动重试后 mGeGBQ 完整自由云端搬回、真实目标重启及两端全部节点认证通过；不把先前仅完成搬迁步骤算整条通过。 |
+| 新 Agent 取票暂缺测试首次 2 失败、1 通过 | 强制结束原会话，再使首个新票据请求暂时失败；两个模式都在 5 秒期限内未恢复，复现订阅重试未继续。修后真实自由/限定网关及会话 25 项全部通过，完整界面结果另列。 |
 
 ## 解法表与顾问调用
 
@@ -215,11 +235,72 @@ g 表示实现与验证代价，h 表示预计剩余缺口，两者按 1–5 档
 
 只读顾问 A 会话 `e1292b7e-a898-484b-b2f8-f3893642fec9`，退出 0、30.3359006 秒；B `ab6b5b98-3817-4af4-abef-a611a73e4cf5`，退出 0、30.9267246 秒。两位 Gemini Pro High 均未调用工具；主 Agent 已阅读完整原文及元数据。manager 核查指出：DocSync.restoreJournal 位于浏览器身份 hook，不在 recovery HTTP catch 中；节点解绑来自加载前生命周期，不能证明损坏清理因果；事后持久记录有效不能证明当时内存/请求正常。上述纠正和原始意见均保留在忽略目录 `work/agy/storage-damaged/manager-storage/`，未把假设当结论。
 
+### 卡点 7：原生普通成员认证及单实例打开
+
+尺子：独立原生壳以普通成员首次实际认证，正常退出后切换运行副本，以空 WebView2 打开旧文件；主机后上线，成员自动加入，四次双向编辑及三类 50k 素材通过。单实例事件必须出现新的共享连接对象并实际 connected。
+
+| 行 | 层 | 候选与原因 | g | h | f | 状态与实测 |
+|---|---|---|---|---|---|---|---|
+| 1 | 三级 | 记录真实按钮命中对象、点击及表单生命周期，区分遮罩和组件重挂 | 1 | 2 | 3 | 已试·过：实际语音扩展提示拦截，关闭隔离提示后真实认证通过 |
+| 2 | 三级 | 等待新共享连接而非已有窗口仍 connected | 1 | 1 | 2 | 已试·过：普通成员 mb05jB 与主机 zM8OTr 新 PID、原身份、原房间均通过 |
+| 3 | 三级 | 将焦点/DPI 或组件重挂当原因并改产品表单 | — | — | — | 关闭·剪：截图/事件证明遮罩，稳定最终 DOM 也不能证明从未重挂，未采用无证据产品改动 |
+
+只读顾问 A `4e0543f8-c949-4089-9817-c4a66d3fbc80`，退出 0，24.9126402 秒，输入/输出/思考/缓存/总 token 为 18,340/2,742/1,836/0/21,082；B `f6d19d69-0d0e-4178-8b63-39eb9b921226`，退出 0，26.8095018 秒，18,232/2,972/1,882/0/21,204。均无工具调用；manager、原始回答、元数据和提示保留 `work/agy/native-member-auth/manager-native/`，根 Agent 全文读取后用真实点击取证裁定。
+
+### 卡点 8：已有搬迁语义缺实际事务、运输器及用户入口
+
+尺子：`node --test server/test/reopen-relocation*.test.mjs server/test/reopen-recovery.test.mjs`；两个方向在部分传输后真实停止两端、同事务续传，源拒绝旧认证、目标发布后成员编辑和三类 50k 素材；实际设置往返及目标重启原房间连续、恢复建房 0。
+
+| 行 | 层 | 候选与原因 | g | h | f | 状态与实测 |
+|---|---|---|---|---|---|---|---|
+| 1 | 三级 | 目录 CAS、精确事务/代数/目标/清单及可靠源封锁，完整私有暂存后发布 | 3 | 2 | 5 | 已试·过：旧登记/票据/邀请码/接续拒绝，部分安装保持不可接入、重试不覆盖后续编辑，显式删除最终 410 |
+| 2 | 三级 | 固定已信任服务的服务器间 HTTP 流式运输与启动续传，源实际参与 | 3 | 2 | 5 | 已试·过：三个真实 HTTP 测试全过（5,495.1287 毫秒），两个方向部分传输后两端重启；普通成员可显式搬回，不凭文件接管 |
+| 3 | 三级 | 首次请求前加密保存目标任务；任务完成前统一恢复等待，完成后可信目标绑定优先 | 2 | 1 | 3 | 已试·过：恢复 25 项全过（9,459.3889 毫秒），含 ENOSPC、跨实例读取、注销/迟到完成、启动扫描前等待及终止错误；实际自由云端搬回与限定完整往返通过 |
+| 4 | 三级 | 用本机身份日志或旧文件快照代替完整服务/素材搬迁 | — | — | — | 关闭·剪：日志不含完整服务器账户、租户和素材；不等价于已有语义 |
+| 5 | 二级 | 规定所有搬迁仅创建者可做，或所有本机离线打开必须先访问目录 | — | — | — | 关闭·剪：无语义依据新增第四特权或破坏正常离线使用；源设备参与与用户角色分别核验 |
+
+顾问调用沿用 A `fea9c404-8f0f-4c13-a26b-2b7ce12f404c`、B `19538716-2f28-47df-aeaa-1b9799bbed89`、C `ab7ffe1d-4b8c-4803-b280-48cbec283a6b`，模型 Gemini 3.1 Pro High。三轮均仅回答、无工具/服务/测试/账户访问，全部退出 0；原始响应、元数据、执行流和 manager 核查完整保留 `work/agy/project-relocation/manager-relocation/`，根 Agent 已全文读取。
+
+| 会话/轮 | CLI 记录秒数 | 输入/输出/思考/缓存/总 token |
+|---|---|---|
+| A/1 | 23.5229334 | 18,303/2,695/1,805/0/20,998 |
+| B/1 | 32.3433552 | 18,169/3,348/1,924/0/21,517 |
+| C/1 | 25.2005923 | 18,168/2,916/1,666/0/21,084 |
+| A/2 | 192.0880402 | 27,274/5,726/3,827/16,694/33,000 |
+| B/2 | 192.2647097 | 27,715/6,526/3,919/16,781/34,241 |
+| C/2 | 186.8011949 | 73,455/5,310/3,145/8,203/78,765 |
+| A/3 | 3,030.1654774 | 95,778/9,609/6,499/16,694/105,387 |
+| B/3 | 3,045.2898811 | 93,218/12,218/8,037/16,781/105,436 |
+| C/3 | 3,028.8733399 | 95,066/9,035/5,503/16,689/104,101 |
+
+第三轮耗时按 CLI 元数据原值记录，可能含持续会话累计时间，不推定为该轮独立运行耗时。分歧与裁定如下；顾问成功退出不等于其主张得到验证。
+
+| 意见 | 核验与裁定 |
+|---|---|
+| 正常 source stop 会删除事务，或 publish 可复活已删除房间 | 正常 stop 的 deleted 缺省 false 保留事务；显式 deleted:true 为最终 410，测试覆盖准备/ready 后删除。没有全局屏蔽真正删除。 |
+| 新目标摘要可冒充登记密钥 | 真实端点拒绝传入校验摘要或错误原密钥；新登记原文为 43 字符服务器能力，只有摘要进入目录/页面。 |
+| 同步安装存在异步毫秒窗口、Buffer 邀请密钥双重编码、Windows 反斜线绕过 | 先可靠 staging 且安装同步执行；实际失败注入后不可认证。原 store 暴露 raw Buffer，搬迁前邀请码在新服务仍能兑换。传输清单使用明确 `/`，路径逃逸/链接/重复/摘要篡改测试拒绝；未按无证据假设扩大协议。 |
+| 清单全件等于所有语义引用一定完整 | 不等价。已增加当前项目明确引用的 original/small/CAS 缺素材预检，缺失时源仍可编辑；未穷举全部历史操作中的语义素材引用，属于完整性范围限制。 |
+| 只有内部复制，缺远程运输/设置动作/持久控制器 | 评审当时成立；后续实现两个方向真实 HTTP 运输及设置动作，实际服务中断、UI 往返证据分别验证。 |
+| 必须增加创建者第四特权或让正常本机打开依赖在线目录 | 现有三项特权及离线语义不支持；保持显式动作、源物理参与、目标设备证明和正常离线恢复。 |
+
+### 卡点 9：搬回后成员 Agent 缺失
+
+尺子：`node --test server/test/reopen-hosting.test.mjs server/test/session-link.test.mjs`；实际目标服务重启后主机/成员各有 page、Agent 和 render 认证；票据、素材和双向编辑仍正确。
+
+| 行 | 层 | 候选与原因 | g | h | f | 状态与实测 |
+|---|---|---|---|---|---|---|---|
+| 1 | 三级 | Agent 接续从页面重新取委托票据，网关核验后剥除专用票据 | 2 | 1 | 3 | 已试·部分：真实 RST 两模式通过，但 9PmKpK 完整目标重启仍缺成员 Agent，不能宣布修完 |
+| 2 | 三级 | 新订阅在取票或首次握手失败时继续现有退避，关闭/解绑仍取消 | 2 | 1 | 3 | 已试·过：新增暂缺取票断言先在两模式失败，修后 25 项全过；mGeGBQ 自由云端搬回及 sW4WQ5 限定往返均实际目标重启、全部节点认证通过 |
+| 3 | 三级 | 放宽原服务接续认证或认定固定节点开关/4404 无限重试就是原因 | — | — | — | 关闭·剪：page/render 已认证排除 blanket 配置错误；现有会话层处理 4404/4410，保留严格认证，无证据不改 |
+
+只读顾问 A `481a76ad-6c24-4af9-8878-fb3869777d96`，退出 0，25.7663979 秒，输入/输出/思考/缓存/总 token 为 18,795/2,572/1,438/0/21,367；B `98fdb85b-4fa4-4f03-a30f-e6b20d433c86`，退出 0，46.958611 秒，18,804/5,089/3,822/0/23,893。无工具调用，完整原文/提示/执行流/元数据保留 `work/agy/relocation-agent-resume/manager-agent/`。两位均提出取票/初次握手未持续重试的假设，实际故障注入证实这个代码缺口；原失败界面没有细分当时究竟哪一种先发生，不反推唯一原因。B 的无限接续及其它位置假设未获实证，不采用。
+
 ## 与计划的差异和仍需条件
 
 1. 初始探针证实云端登记/中继缺失，已纳入实现，而非假定部署支持。新增可审核组合服务和部署文件清单，生产仍旧版本；没有在现有公开端口覆盖它。
 2. 现有产品语义的匿名 LAN 邀请校验/兑换、IPv6 公网直连和打洞，比已加入身份重开的最小链路更广。本次新增中继交付已取得有效凭证的恢复，不把这些更广承诺标为完成。
-3. 实际代码缺少项目级搬迁流程，但 `workflow/project.md` 已规定「搬到云端」「搬回本机」。据此落实已有语义，修正先前将其误列为计划 §6 排除新流程的解释。已实施本机到云端入口、可信位置切换和故障恢复；搬回本机和完整往返继续实施，未缩减验收范围。新增契约见 [collaboration-relocation-contract.md](../plan/collaboration-relocation-contract.md)。
+3. 实际代码缺少项目级搬迁流程，但 `workflow/project.md` 已规定「搬到云端」「搬回本机」。据此落实已有语义，修正先前将其误列为计划 §6 排除新流程的解释。已实施两个方向的真实远程传输、设置入口、可信位置切换和中断恢复，原生云端搬回和限定本机完整往返实际界面通过；没有缩减为内部文件复制。新增契约见 [collaboration-relocation-contract.md](../plan/collaboration-relocation-contract.md)。
 4. 受控物理重启仍待用户。保留 `pc-reopen-e2e-MH2SCg` 临时夹具；它在用户本次开机后生成，所以先前重启不算这次夹具验收。待再次实际重启后从 worktree 运行 `node scripts/probes/reopen-reboot.mjs <该临时目录>`，不能带 `--allow-same-boot`。若测试端口被占，不结束用户进程。
 5. 公开测试入口已绕开占用限制：在已授权隔离测试主机只运行任务自有临时 tunnel 子进程，转发独立网关；免费、无账户、不修改 DNS、防火墙或系统代理，不安装常驻服务。官方二进制核对 GitHub release digest；关闭测试进程后入口失效。此结果不部署生产，生产登记/中继上线由用户最后审核。[Cloudflare 官方临时入口说明](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)。
 6. 已生成并运行独立原生测试壳，逐项隔离固定端口、单实例标识、Node 数据、导出、日志、WebView2 和扩展设置；原生启动参数、单实例转发与运行副本切换已经通过。系统默认文件关联双击仍需用户物理操作/独立关联条件；没有安装到用户运行副本或改变现有文件关联。
@@ -244,6 +325,9 @@ node scripts/probes/reopen-e2e.mjs --restricted --matrix --nodes --trust --passw
 node scripts/probes/reopen-e2e.mjs --hosted --matrix --nodes --trust --password-change --roles
 node scripts/probes/reopen-e2e.mjs --exit-matrix --cancel-ui --restricted --nodes --roles
 node scripts/probes/reopen-e2e.mjs --hosted --exit-matrix --cancel-ui --nodes --roles
+node scripts/probes/reopen-e2e.mjs --hosted --move-lan --nodes
+node scripts/probes/reopen-e2e.mjs --restricted --move-hosted --move-lan --nodes
+node --test server/test/reopen-relocation*.test.mjs
 node scripts/probes/reopen-native-fixture.mjs --build
 node scripts/probes/reopen-native.mjs <生成的fixture.json>
 ```
