@@ -2,6 +2,8 @@
  * First build: node scripts/probes/reopen-native-fixture.mjs --build
  * Then run: node scripts/probes/reopen-native.mjs <fixture.json>
  * Add --member to exercise native member file arguments and IPC, with an isolated peer host.
+ * Add --patch-upgrade to run the committed patch installer on stopped copy-B before reopening.
+ * The code update preserves the current version number and does not test an NSIS setup bundle.
  * A native argument/IPC pass is not evidence of an OS default-file-association double click.
  */
 import '../lib/no-user-dirs.mjs';
@@ -16,6 +18,7 @@ import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
 import { waitFor } from '../../server/test/fake-ws-kit.mjs';
 import { loadNativeFixture, nativeTestEnv } from './reopen-native-fixture.mjs';
+import { upgradeNativeFixture } from './reopen-native-upgrade.mjs';
 
 const fixture = loadNativeFixture(process.argv[2]);
 const { port } = fixture;
@@ -35,7 +38,7 @@ const isolatedSettings = {
   PROMPTCUT_CODEX_CONFIG: path.join(root, 'settings/codex.toml'),
   PROMPTCUT_SKILL_DIR: path.join(root, 'skills'),
 };
-let browser, cloud, phase = 'start', createRequests = 0;
+let browser, cloud, phase = 'start', createRequests = 0, runtimeUpgrade;
 async function freePort(p) {
   const server = net.createServer();
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(p, '127.0.0.1', resolve); });
@@ -203,6 +206,10 @@ try {
   await peer.close(); await stop(peerBefore);
   await waitFor(async () => !(await cloud.online()), 10000);
   const cloudBefore = cloud; await stop(cloud.child);
+  if (process.argv.includes('--patch-upgrade')) {
+    phase = 'apply committed installer to the stopped isolated runtime';
+    runtimeUpgrade = await upgradeNativeFixture(fixture, root);
+  }
   cloud = await hosted(cloudBefore.docPort, cloudBefore.assetPort); assert.notEqual(cloud.pid, cloudBefore.pid);
   phase = 'other runtime copy with native original file argument and empty WebView profile';
   createRequests = 0;
@@ -261,7 +268,7 @@ try {
     hostPidBefore: nativeMember ? peerBefore.pid : first.pid, hostPidAfter: nativeMember ? peerAfter.pid : second.pid,
     memberPidBefore: nativeMember ? first.pid : peerBefore.pid, memberPidAfter: nativeMember ? second.pid : peerAfter.pid,
     bidirectionalEdits: 4, binding, asset, originalFileUnchanged: true, recoveryCreateRequests: createRequests,
-    nativeOsDoubleClick: false, installerUpgrade: false, actualComputerRestart: false, fileAssociationsChanged: false, isolatedProviderConfiguration: true, evidenceDirectory: root };
+    nativeOsDoubleClick: false, installerUpgrade: !!runtimeUpgrade, runtimeUpgrade, actualComputerRestart: false, fileAssociationsChanged: false, isolatedProviderConfiguration: true, evidenceDirectory: root };
   fs.writeFileSync(path.join(root, 'native-evidence.json'), JSON.stringify(evidence, null, 2)); console.log(JSON.stringify(evidence));
 } catch (e) {
   const primitive = x => x === null || ['boolean', 'number'].includes(typeof x) ? x : undefined;
