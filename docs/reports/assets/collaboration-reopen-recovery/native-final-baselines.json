@@ -751,5 +751,15 @@
       "actualExitCode": 0
     }
   ],
-  "sourceScope": "Types/full and desktop tests: 2f2650b3. Web build: committed clean b7ccb0df (only report changes since 2f). Editor/services/renderer and NSIS wrapper unchanged. Historical rendering/laptop/NSIS runs retain their sources. Default OS double-click unpassed."
+  "sourceScope": "Types/full and desktop tests: 2f2650b3. Web build: committed clean b7ccb0df (only report changes since 2f). Editor/services/renderer and NSIS wrapper unchanged. Historical rendering/laptop/NSIS runs retain their sources. Default OS double-click unpassed.",
+  "desktopCandidateBuild": {
+    "sourceCommit": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+    "actualExitCode": 0,
+    "elapsedMs": 548956,
+    "evidence": "desktop-candidate-build.json",
+    "candidateOnly": true,
+    "installed": false,
+    "productionConfigUsed": false,
+    "originalInstallerOverwritten": false
+  }
 }

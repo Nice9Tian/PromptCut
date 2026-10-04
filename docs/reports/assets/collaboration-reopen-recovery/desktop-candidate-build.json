@@ -1,0 +1,299 @@
+{
+  "kind": "isolated-full-desktop-candidate-build-v1",
+  "status": "candidate-build-passed-not-installed",
+  "sourceCommit": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+  "startedAt": "2026-10-04T19:52:36.661Z",
+  "finishedAt": "2026-10-04T20:02:15.080Z",
+  "actualExitCode": 0,
+  "actualCommand": "node <npm-cli.js> run release -- --from-head (cwd: isolated source/desktop)",
+  "equivalentPackageCommand": "cd desktop && npm run release -- --from-head",
+  "elapsedMs": 548956,
+  "steps": [
+    {
+      "name": "python-source-refresh",
+      "actualExitCode": 0,
+      "elapsedMs": 389,
+      "actualCommand": "node desktop/scripts/prepare-python.mjs"
+    },
+    {
+      "name": "python-check",
+      "actualExitCode": 0,
+      "elapsedMs": 162,
+      "actualCommand": "node desktop/scripts/prepare-python.mjs --check"
+    },
+    {
+      "name": "desktop-release-from-head",
+      "actualExitCode": 0,
+      "elapsedMs": 548956,
+      "actualCommand": "node <npm-cli.js> run release -- --from-head"
+    },
+    {
+      "name": "runtime-check",
+      "actualExitCode": 0,
+      "elapsedMs": 1446,
+      "actualCommand": "node desktop/scripts/prepare-runtime.mjs --check"
+    }
+  ],
+  "candidateOnly": true,
+  "productionConfigUsed": false,
+  "diagnosticConfig": "explicit isolated loopback test configuration; this package is not a release candidate for distribution",
+  "gitMetadataIsolated": true,
+  "installed": false,
+  "originalInstallerOverwritten": false,
+  "mainMerged": false,
+  "protectedOriginalsUnchanged": true,
+  "sourceStillMatchesLatestProductBaseline": true,
+  "payload": {
+    "manifestFiles": 2497,
+    "allManifestHashesMatched": true,
+    "includesDeps": true,
+    "installerSourceFromCommitMatched": true,
+    "appVersion": "0.7.14",
+    "shellGeneration": "0.2",
+    "minShellVersion": "0.2.0"
+  },
+  "runtimeVersions": {
+    "node": "v24.19.0",
+    "chrome": "152.0.7977.75",
+    "ffmpeg": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+    "python": "Python 3.11.9",
+    "app": "0.7.14",
+    "appSrcHash": "f5e2f141555c10fb54fc5a8a9ac703ce2004df3ed60410256ae0b58f4b1257cb",
+    "builtAt": "2026-10-04T19:53:13.714Z"
+  },
+  "outputs": [
+    {
+      "name": "PromptCut-0.7.14-setup.exe",
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/source/desktop/release/PromptCut-0.7.14-setup.exe",
+      "sha256": "23c0463c3ad1650c3f232b845b3bc8a546986018283db98f0463425d034a5377",
+      "bytes": 437642888
+    },
+    {
+      "name": "PromptCut-patch-0.7.14.exe",
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/source/desktop/release/PromptCut-patch-0.7.14.exe",
+      "sha256": "5721402a7fc09e14fc6e15810697846575bf567e223a968fbcebca9e78712818",
+      "bytes": 82126019
+    },
+    {
+      "name": "manifest-0.7.14.json",
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/source/desktop/release/manifest-0.7.14.json",
+      "sha256": "58a9d82121d33eaaf971f36ec8f2484b42a603135a882f3b81452de51944da2d",
+      "bytes": 277258
+    }
+  ],
+  "rawLogs": [
+    {
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/python-source-refresh.stdout.log",
+      "sha256": "88f34df9a427a1a685b61f7d5e452a4578036d385411a20c052f3c8c5a725372",
+      "bytes": 2543
+    },
+    {
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/python-source-refresh.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/python-check.stdout.log",
+      "sha256": "1fde915c9e5b7da68140b287826e7481cdab59acfab2389c518720075d35a23f",
+      "bytes": 694
+    },
+    {
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/python-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/desktop-release-from-head.stdout.log",
+      "sha256": "bff07bc2eb425cc67c660c073a61723ad84b5f3a84cda6873e87e97625b15646",
+      "bytes": 10016
+    },
+    {
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/desktop-release-from-head.stderr.log",
+      "sha256": "62f9eb7b5d1a2cee4387a9f5850074746f311a51a2de556c00bce11b85895a55",
+      "bytes": 25848
+    },
+    {
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/runtime-check.stdout.log",
+      "sha256": "420ad80ce1b5926218e2b55833c3b2616bf00a1d614f41e6a7cc7a60cf4f4569",
+      "bytes": 1199
+    },
+    {
+      "file": "test-temp:pc-reopen-desktop-build-SvTFDl/runtime-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  ],
+  "silentWindowSamples": [
+    {
+      "kind": "owned-full-build-window-readonly-audit-v1",
+      "sampledAt": "2026-10-04T19:38:34.0571029+00:00",
+      "source": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+      "rootPid": 31764,
+      "ownedProcesses": 13,
+      "ownedProcessNames": [
+        "node.exe",
+        "powershell.exe",
+        "conhost.exe",
+        "cmd.exe",
+        "makensis.exe"
+      ],
+      "visibleOwnedWindows": [],
+      "securityUiActionTaken": false,
+      "windowStateChanged": false,
+      "attempt": "initial-wait-incomplete",
+      "raw": {
+        "file": "task-worktree:work/full-build-window-audit-1791142714073.json",
+        "sha256": "06560d4811e09f76d16ef6b4c2b28dad8d82553059954c19824fb96e49eddd8a"
+      }
+    },
+    {
+      "kind": "owned-full-build-window-readonly-audit-v1",
+      "sampledAt": "2026-10-04T19:40:09.1895112+00:00",
+      "source": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+      "rootPid": 31764,
+      "ownedProcesses": 13,
+      "ownedProcessNames": [
+        "node.exe",
+        "powershell.exe",
+        "conhost.exe",
+        "cmd.exe",
+        "makensis.exe"
+      ],
+      "visibleOwnedWindows": [],
+      "securityUiActionTaken": false,
+      "windowStateChanged": false,
+      "attempt": "initial-wait-incomplete",
+      "raw": {
+        "file": "task-worktree:work/full-build-window-audit-1791142809200.json",
+        "sha256": "a8ad3690be806be9bf6cdf40b387188f8f45c5e64e5c2426e60bd3e495be5875"
+      }
+    },
+    {
+      "kind": "owned-full-build-window-readonly-audit-v1",
+      "sampledAt": "2026-10-04T19:54:12.1389262+00:00",
+      "source": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+      "rootPid": 44832,
+      "rootCreatedAt": "2026-10-04T19:52:36.2606300Z",
+      "ownedProcesses": 13,
+      "ownedProcessNames": [
+        "node.exe",
+        "powershell.exe",
+        "conhost.exe",
+        "cmd.exe",
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "visibleOwnedWindows": [],
+      "securityUiActionTaken": false,
+      "windowStateChanged": false,
+      "attempt": "corrected-retry",
+      "raw": {
+        "file": "task-worktree:work/full-build-window-audit-1791143652155.json",
+        "sha256": "404e30f34fd7b72bdc0958539c3fd24fbfe28075c68ceed3ab8d9ce5e3ea023d"
+      }
+    },
+    {
+      "kind": "owned-full-build-window-readonly-audit-v1",
+      "sampledAt": "2026-10-04T19:57:03.5776937+00:00",
+      "source": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+      "rootPid": 44832,
+      "rootCreatedAt": "2026-10-04T19:52:36.2606300Z",
+      "ownedProcesses": 13,
+      "ownedProcessNames": [
+        "node.exe",
+        "powershell.exe",
+        "conhost.exe",
+        "cmd.exe",
+        "makensis.exe"
+      ],
+      "visibleOwnedWindows": [],
+      "securityUiActionTaken": false,
+      "windowStateChanged": false,
+      "attempt": "corrected-retry",
+      "raw": {
+        "file": "task-worktree:work/full-build-window-audit-1791143823590.json",
+        "sha256": "d09bfcb71914c79d652cf81899bfa0bcfaa0496a1052664e52e2a43d658ade87"
+      }
+    }
+  ],
+  "previousAttempt": {
+    "sourceCommit": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+    "startedAt": "2026-10-04T19:36:01.814Z",
+    "finishedAt": "2026-10-04T19:51:20.760Z",
+    "status": "test-launcher-wait-incomplete-not-passed",
+    "actualHarnessExitCode": 1,
+    "terminatedOwnedLauncherExitCode": 4294967295,
+    "buildCliExitCodeObserved": false,
+    "buildLogReachedCompletion": true,
+    "originalsPreserved": true,
+    "rawLogs": [
+      {
+        "file": "test-temp:pc-reopen-desktop-build-LRxEtx/python-source-refresh.stdout.log",
+        "sha256": "03a08c0115e624dc798811daa2a2c5f0d8e04542846a4c771de31c9693123a63",
+        "bytes": 2543
+      },
+      {
+        "file": "test-temp:pc-reopen-desktop-build-LRxEtx/python-source-refresh.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "file": "test-temp:pc-reopen-desktop-build-LRxEtx/python-check.stdout.log",
+        "sha256": "40e59b57c1a93eef421474fd0624ee8522188daa51ae47e22847bd1b9222ab4c",
+        "bytes": 694
+      },
+      {
+        "file": "test-temp:pc-reopen-desktop-build-LRxEtx/python-check.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "file": "test-temp:pc-reopen-desktop-build-LRxEtx/desktop-release-from-head.stdout.log",
+        "sha256": "72df6583d9b6a18068fb0a221a26c30078df8409b125809adba056eff8fd758b",
+        "bytes": 10016
+      },
+      {
+        "file": "test-temp:pc-reopen-desktop-build-LRxEtx/desktop-release-from-head.stderr.log",
+        "sha256": "ddf930cfe4634147011e8e24c497258ad1e7725b75effa0480b0475b415b69aa",
+        "bytes": 25847
+      }
+    ],
+    "cleanup": {
+      "file": "task-worktree:work/owned-build-wait-cleanup.log",
+      "sha256": "d9a0c8f4bf7570d70ef1c2dad381eddee95a075f1a0dc96fdaf6b08d00aff9ee"
+    },
+    "reason": "Start-Process -Wait remained waiting after npm and its build children exited. Only the identity-checked task launcher was stopped; the npm exit code was not recovered. This run is not counted as passing."
+  },
+  "waitCorrection": {
+    "mode": "direct-process-handle",
+    "selfTest": {
+      "actualExitCode": 0,
+      "cases": [
+        {
+          "expected": 0,
+          "exited": true,
+          "actual": 0,
+          "childPid": 44964
+        },
+        {
+          "expected": 7,
+          "exited": true,
+          "actual": 7,
+          "childPid": 49164
+        }
+      ],
+      "raw": {
+        "file": "task-worktree:work/hidden-wait-self-test.log",
+        "sha256": "693bd64742ecb84e9266741b08465ed0ba6e426e1637bf35f906791e92b49a51"
+      }
+    }
+  },
+  "validation": {
+    "rawLogsHashed": 8,
+    "outputsHashed": 3,
+    "payloadManifestHashesAllMatched": true,
+    "installerSourceFromCommitMatched": true
+  },
+  "allRequiredAcceptancePassed": false,
+  "remainingGate": "real OS default double-click for host, member, and already-open window forwarding remains unpassed; Windows Security prompt needs manual cancellation"
+}

@@ -19579,5 +19579,53 @@
       "file": "task-worktree:work/owned-extended-explorer-cleanup.log",
       "sha256": "98e7ad8929c82f9eca296aef5218cf0b159d4332f2cd04fec33840c88252fec1"
     }
+  },
+  "securityBlockRechecks": {
+    "sourceCommit": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+    "status": "still-requires-manual-dismissal",
+    "observations": [
+      {
+        "at": "2026-10-04T19:21:57.127Z",
+        "ownedObserverPid": 17400,
+        "windowsSecurityPromptVisible": true,
+        "actualExitCode": 0,
+        "ownedObserverCleaned": true,
+        "raw": {
+          "file": "task-worktree:work/owned-resume-observer-cleanup.json",
+          "sha256": "668162c3c9d45c851d5a3a089bba37fef43f856034ac3c42e5efa0f4a3c6fb50"
+        }
+      },
+      {
+        "at": "2026-10-04T19:32:30.849Z",
+        "ownedObserverPid": 15964,
+        "windowsSecurityPromptVisible": true,
+        "actualExitCode": 0,
+        "ownedObserverCleaned": true,
+        "raw": {
+          "file": "task-worktree:work/owned-build-observer-cleanup.json",
+          "sha256": "22e0e375bd303a3baef7ec38311d4bc8671281184b2ce1d72b347fa6f887a088"
+        }
+      },
+      {
+        "captureStartedAfter": "2026-10-04T20:12:01.779Z",
+        "captureCompletedBefore": "2026-10-04T20:13:32.4341410+00:00",
+        "ownedObserverPid": 8528,
+        "windowsSecurityPromptVisible": true,
+        "actualExitCode": 0,
+        "ownedObserverCleaned": true,
+        "windowScreenshotSucceeded": true,
+        "fullDesktopCaptureAvailable": false,
+        "uiInputSent": false,
+        "newOSFileInvocations": 0,
+        "raw": {
+          "file": "task-worktree:work/owned-desktop-observer-cleanup.json",
+          "sha256": "3adf4a5816e148794fb4e9f7620bb88f7ee833e6a9de23a7ea3cac176833048c"
+        }
+      }
+    ],
+    "uiInputSent": false,
+    "newOSFileInvocations": 0,
+    "securityUiActionTaken": false,
+    "userShellPreserved": true
   }
 }

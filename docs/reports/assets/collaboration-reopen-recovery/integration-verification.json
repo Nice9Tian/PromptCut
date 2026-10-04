@@ -3290,5 +3290,15 @@
     "nsisUpgrade": "native-nsis-upgrade.json",
     "defaultQueries": "native-default-query.json"
   },
-  "source": "2f2650b32cf47f0560654cfe724724c10bbefd16"
+  "source": "2f2650b32cf47f0560654cfe724724c10bbefd16",
+  "desktopCandidateBuild": {
+    "sourceCommit": "fb1d2ab06a23da6328a18e0aedb2d2a9592091fa",
+    "actualExitCode": 0,
+    "elapsedMs": 548956,
+    "evidence": "desktop-candidate-build.json",
+    "candidateOnly": true,
+    "installed": false,
+    "productionConfigUsed": false,
+    "originalInstallerOverwritten": false
+  }
 }

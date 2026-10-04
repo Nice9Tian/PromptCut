@@ -10,6 +10,7 @@ docs/reports/assets/collaboration-reopen-recovery/cancel-hosted-free-ui.png
 docs/reports/assets/collaboration-reopen-recovery/cancel-lan-restricted-ui.png
 docs/reports/assets/collaboration-reopen-recovery/capability-baseline.json
 docs/reports/assets/collaboration-reopen-recovery/changed-files.txt
+docs/reports/assets/collaboration-reopen-recovery/desktop-candidate-build.json
 docs/reports/assets/collaboration-reopen-recovery/exit-hosted-free.json
 docs/reports/assets/collaboration-reopen-recovery/exit-lan-restricted.json
 docs/reports/assets/collaboration-reopen-recovery/fixed-baselines.json
