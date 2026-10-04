@@ -46,13 +46,12 @@ export async function startAssociationLease(fixtureFile, entry, runRoot, { allow
   const persist = () => fs.writeFileSync(control, JSON.stringify(c)); persist();
   if (testKey) run(control, 'init-test');
   c.original = run(control, 'read').result; c.expiresAt=Date.now()+ttlMs; persist();
-  const watchdog = spawn(process.execPath, [moduleFile, '--watch', control], {windowsHide:true,env:psEnv(),stdio:['ignore','pipe','pipe']});
-  let ready = false, out = '', err = '';
-  watchdog.stdout.on('data', b => {out += b; if (out.includes('watchdog-ready')) ready=true;});
-  watchdog.stderr.on('data', b => {err += b;});
+  const watchdog = spawn(process.execPath, [moduleFile, '--watch', control], {windowsHide:true,detached:true,env:psEnv(),stdio:'ignore'});
+  const readyFile=control+'.watchdog-ready.json';
   const ended = new Promise((resolve,reject) => {watchdog.once('error',reject);watchdog.once('close',code=>resolve(code));});
-  for(let i=0;!ready&&i<100;i++){assert.equal(watchdog.exitCode,null);await sleep(20);}
-  assert(ready,'watchdog ready required before changing a value');
+  for(let i=0;!fs.existsSync(readyFile)&&i<100;i++){assert.equal(watchdog.exitCode,null);await sleep(20);}
+  assert(fs.existsSync(readyFile),'watchdog ready required before changing a value');
+  assert.equal(JSON.parse(fs.readFileSync(readyFile,'utf8')).pid,watchdog.pid);
   const armed = run(control,'arm',true);
   if(armed.code!==0){fs.writeFileSync(control+'.stop','stop');await ended;throw new Error(`association arm refused (${armed.code})`);}
   let restored;
@@ -67,7 +66,7 @@ export async function startAssociationLease(fixtureFile, entry, runRoot, { allow
       assert.deepEqual(run(control,'read').result,c.original);
       return {restored:true,watchdogCode,originalCommandSha256:shaText(c.original.value),commandSha256:shaText(c.command)};
     },
-    async expired(){const code=await ended;return {code,output:out,error:err,restored:run(control,'read').result.value===c.original.value};},
+    async expired(){const code=await ended;return {code,restored:run(control,'read').result.value===c.original.value};},
     cleanupTest(){assert(testKey);run(control,'delete-test');},
   };
 }
@@ -78,7 +77,7 @@ async function watch(control) {
   assert.equal(c.kind,'promptcut-association-lease-v1');
   assert(Number.isInteger(c.ownerPid)&&c.ownerPid>0&&Number.isFinite(c.expiresAt));
   assert(c.expiresAt-Date.now()<=30000);
-  console.log('watchdog-ready');
+  fs.writeFileSync(control+'.watchdog-ready.json',JSON.stringify({pid:process.pid}));
   while(Date.now()<c.expiresAt&&!fs.existsSync(control+'.stop')) {
     try {process.kill(c.ownerPid,0);} catch {break;}
     await sleep(100);
