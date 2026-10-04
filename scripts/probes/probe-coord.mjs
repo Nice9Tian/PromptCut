@@ -15,7 +15,7 @@
  *   开了信箱时 `/kv/*` 也要同一个令牌（`coordClient` 自动从环境变量 `PROBE_MAIL_TOKEN` 取）；`/healthz` 不要。
  *
  * 命令行（令牌只从环境变量 `PROBE_MAIL_TOKEN` 取，不收命令行参数，免得进进程列表与历史）：
- *   node scripts/probes/probe-coord.mjs serve --port 8799 [--host 0.0.0.0] [--mail-file <文件>]
+ *   node scripts/probes/probe-coord.mjs serve --port 8799 [--host 0.0.0.0] [--mail-file <文件>] [--health minimal]
  *   node scripts/probes/probe-coord.mjs send --base <url> --queue to-cloud --from local --kind instruction [--ref <seq>] (--body <文本> | --body-file <文件>)
  *   node scripts/probes/probe-coord.mjs wait --base <url> --queue to-local [--after <seq> | --state <文件>] [--timeout-min 0]
  *     `wait` 反复长轮询，收到至少一条就打印（一行一条 JSON）并退出 0；`--state` 记最后读到的 seq，下次从它之后读；
@@ -194,9 +194,10 @@ export function createMailbox({
  * @param {string} [o.host] 缺省 127.0.0.1；跨机时给 0.0.0.0
  * @param {(req, res, url: URL, send: typeof sendJson) => Promise<boolean> | boolean} [o.extra] 别的路径；认了回 true
  * @param {Parameters<typeof createMailbox>[0]} [o.mail] 给了就开信箱（`/mail/*`），不给回 404 `mail-disabled`
+ * @param {'full' | 'minimal'} [o.healthMode] `minimal` 时 `/healthz` 只回 `{ ok: true }`（不公开 KV 键名与信箱摘要）；缺省 `full`，行为不变
  * @returns {Promise<{ server: http.Server, port: number, url: string, kv: Map<string, unknown>, close: () => Promise<void> }>} 绑不上时 reject
  */
-export function startCoordServer({ port, host = '127.0.0.1', extra, mail } = {}) {
+export function startCoordServer({ port, host = '127.0.0.1', extra, mail, healthMode = 'full' } = {}) {
   const kv = new Map();
   const waiters = new Map();
   const mailbox = mail ? createMailbox(mail) : null;
@@ -204,6 +205,7 @@ export function startCoordServer({ port, host = '127.0.0.1', extra, mail } = {})
     try {
       const url = new URL(req.url ?? '/', 'http://coord.local');
       if (req.method === 'GET' && url.pathname === '/healthz') {
+        if (healthMode === 'minimal') return sendJson(res, 200, { ok: true });
         return sendJson(res, 200, { ok: true, keys: [...kv.keys()], ...(mailbox ? { mail: mailbox.summary() } : {}) });
       }
       if (url.pathname === '/mail' || url.pathname.startsWith('/mail/')) {
@@ -335,7 +337,7 @@ async function cli(argv) {
   if (cmd === 'serve') {
     if (!token) { console.error('缺环境变量 PROBE_MAIL_TOKEN'); return 2; }
     const c = await startCoordServer({
-      port: Number(arg('--port', '8799')), host: arg('--host', '127.0.0.1'),
+      port: Number(arg('--port', '8799')), host: arg('--host', '127.0.0.1'), healthMode: arg('--health', 'full') === 'minimal' ? 'minimal' : 'full',
       mail: { token, file: arg('--mail-file', null), log: (event, fields) => out({ t: new Date().toISOString(), event, ...fields }) },
     });
     out({ t: new Date().toISOString(), event: 'coord.listen', port: c.port, mail: c.mailbox.summary() });

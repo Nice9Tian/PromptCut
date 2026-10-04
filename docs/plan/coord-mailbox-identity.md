@@ -1,6 +1,6 @@
 # 会话信箱身份认证与寻址扩展（v2）设计
 
-状态：设计与实现在分支 `claude/peaceful-meitner-ef78de`，未部署。生产部署、nginx 入口、真实凭据、OAuth 授权、改安全配置都等用户批准（第 9 节）。
+状态：设计与实现（`scripts/probes/probe-coord-v2.mjs`、测试 `server/test/probe-coord-v2.test.mjs`）在分支 `claude/peaceful-meitner-ef78de`，未部署。生产部署、nginx 入口、真实凭据、OAuth 授权、改安全配置都等用户批准（第 9 节）。
 
 ## 1. 现状（据代码与部署记录，不假定服务器副本与仓库一致）
 
@@ -67,3 +67,47 @@
 ## 9. 需要用户批准才做的事
 
 生产部署（复制文件到服务器、建 pm2 应用）；nginx 加 `/coord/v2/` 或改 `/coord/healthz`；设管理口令；建主体、签发真实令牌、批准设备授权；任何安全配置改动；旧信箱下线或旧令牌轮换。
+
+## 10. 部署步骤（草案，每一步都等用户批准；以下都不含任何秘密值）
+
+1. 只读核对服务器副本：`sha256sum /opt/probe-coord/probe-coord.mjs`，与仓库各提交比对，记下实际部署的是哪版（现在没有记录）。v2 不改这个文件。
+2. 建目录 `/opt/probe-coord-v2/`（0700），放 `probe-coord-v2.mjs`；pm2 新应用 `probe-coord-v2`：
+   `node probe-coord-v2.mjs serve --port 8800 --host 127.0.0.1 --store /opt/probe-coord-v2/store.json --audit /opt/probe-coord-v2/audit.jsonl --admin-socket /opt/probe-coord-v2/admin.sock --public-base https://8-219-80-16.sslip.io/coord/v2`。不需要任何环境变量里的秘密。
+3. nginx 加（`proxy_read_timeout` 保持在 60 s 以上，长轮询挂 25 s）：
+   ```nginx
+   location /coord/v2/ {
+     proxy_pass http://127.0.0.1:8800/v2/;
+     proxy_set_header Host $host;
+     proxy_read_timeout 60s;
+     client_max_body_size 1m;
+   }
+   ```
+   `nginx -t && systemctl reload nginx`（reload 不断旧连接）。
+4. 设管理口令（在服务器上，口令只走标准输入，不进命令行历史）：`node probe-coord-v2.mjs admin --socket /opt/probe-coord-v2/admin.sock passphrase-set`，然后输入一行口令。
+5. 建主体，例如：
+   `admin … principal-add --id doger --kind doger --max-scopes status,inbox:read,send --send-to codex-laptop`
+   `admin … principal-add --id codex-laptop --kind codex --max-scopes status,inbox:read,send --send-to doger,claude-cloud`
+   `admin … principal-add --id claude-cloud --kind claude --max-scopes status,inbox:read,send --send-to codex-laptop`
+6. 给不能走浏览器的会话（云端 Claude、本地 Codex）签发令牌：`admin … token-issue --principal claude-cloud --scopes status,inbox:read,send --send-to codex-laptop --ttl-days 14 --token-out /root/claude-cloud.token`，再由用户本人把文件内容填进该会话的环境变量 `PROBE_MAIL_V2_TOKEN`，之后删掉服务器上的这个文件。
+7. （可选）收口旧 `/coord/healthz`：见第 3 节 (a) 或 (b)。
+- 回滚：第 8 节。
+
+## 11. doger 的最小接入步骤（部署与建主体之后）
+
+1. 拉仓库，Node 22 以上。
+2. `node scripts/probes/probe-coord-v2.mjs login --base https://8-219-80-16.sslip.io/coord/v2 --principal doger --scopes status,inbox:read --token-file ~/.config/promptcut/doger.token`（要发消息再加 `send` 与 `--send-to codex-laptop`）。
+3. 终端显示地址和 8 位代码；用户在自己的浏览器打开地址、登录、输入代码、核对权限后批准。
+4. 客户端自己把令牌写进 0600 的令牌文件，不打印。之后：
+   - 看身份：`… whoami --base … --token-file …`
+   - 等消息：`… wait --base … --token-file … --state ~/.config/promptcut/doger.cursor --timeout-min 9`
+   - 报状态：`… state --base … --token-file … --id <消息 id> --state received|processed|failed`
+   - 发消息（有 send 时）：`… send --base … --token-file … --to codex-laptop --kind receipt --reply-to <id> --body-file <文件>`
+5. 不用了就请用户在服务器上 `admin … token-revoke --token-id <id>`（`whoami` 的 `tokenId` 就是它）。
+
+## 12. 已知限制
+
+- 设备码申请不要令牌（RFC 8628 本来如此）：同时待批的码上限 20 个，超出回 429；恶意大量申请只会让 doger 稍后重试，拿不到任何权限。
+- 登录失败全局计数：连续 10 次失败锁 15 分钟，也会把真管理员一起锁住（不信任代理转来的客户端地址，换来不被伪造地址绕过）。
+- 没有按令牌的发送速率限制；消息大小 256 KiB、请求体 512 KiB 有上限。
+- 存储是单个 JSON 文件整份重写，适合几个主体、几百条消息的量。
+- 设备授权中的待批码只在内存，v2 进程重启就作废，客户端重新 `login` 即可。
