@@ -103,7 +103,7 @@ Windows 凭证由当前用户 DPAPI 保护；非 Windows 使用独立私有设�
 |---|---|
 | 类型与全量 | 最新 e817f7caa96bc43f822973b3beb3c9ee47eaa9ae：类型退出 0；全量 4,323/4,323、0 失败/0 取消/0 跳过/0 todo，54,355.8488 ms，退出 0。实际 Node 参数对应仓库 npx tsc -b --force 与 npm test。静默契约及依赖门槛先前独立 7/7；素材及补交专项 22/22、10,708.2512 ms，新加三例也纳入最新全量。 |
 | 桌面独立测试 | e817f7caa96bc43f822973b3beb3c9ee47eaa9ae 实际 node --test desktop/test/*.test.mjs（等价 npm test --prefix desktop），退出 0；37/37、0 失败/0 取消/0 跳过/0 todo，797.6066 ms。仅在临时安装目录使用 -WhatIf，没有覆盖运行副本。 |
-| 网页构建 | da26b1c3d439f5e4d07abe5488638f36e4d9b618 已提交后实际 npm run build 退出 0、7,693 ms、1,830 模块。d62cd2c3 与 da26b1c3 的先前构建分别退出 0、7,262/7,693 ms，原始日志另存 work/baseline-d62 与 work/baseline-da26。没有发版或安装；发版构建须在所有必要验收通过及版本提交之后进行。 |
+| 网页构建 | be3d41e5d3e41f38cf647201bcceaee6edb2199f 已提交后实际 npm run build 退出 0、7,310 ms、1,830 模块。d62cd2c3 与 da26b1c3 的先前构建分别退出 0、7,262/7,693 ms，原始日志另存 work/baseline-d62 与 work/baseline-da26。没有发版或安装；发版构建须在所有必要验收通过及版本提交之后进行。 |
 | 全长导出确定性 | c70b277f：默认 60 秒、30 fps、1920×1080 项目，两遍完整 1,800/1,800 帧逐像素相同，0 不同，354,744 ms，退出 0。 |
 | 与 main 全长像素对账 | 独立只读 main 基准 worktree 为 adc3ae2a；candidate/main 各实际导出 1,800 帧，逐帧比较 0 不同、0 缺失，退出 0。不是十帧抽样。 |
 | 统一帧 | 素材根修正后 Au6Wzj 全条退出 0、17,792 ms，覆盖实际视频/卡片、seek、随机重放、缓存与帧表。初次错误根路径的 404 单列。 |

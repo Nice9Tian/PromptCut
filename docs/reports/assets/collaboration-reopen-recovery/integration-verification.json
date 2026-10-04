@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-04T07:32:45.541Z",
-  "headWhenPublished": "e817f7caa96bc43f822973b3beb3c9ee47eaa9ae",
+  "generatedAt": "2026-10-04T07:33:30.791Z",
+  "headWhenPublished": "be3d41e5d3e41f38cf647201bcceaee6edb2199f",
   "sourceScope": "Product sources were unchanged c70b277f through d62cd2c3. Commit 8beb0622 then fixes the existing-media upload path waiting for pending small-tier conversion, and isolates the C6.6 observer. Commit e817f7ca changes only a desktop test fixture launch argument. Renderer/decoder/card/desktop product source paths remain unchanged; older observations retain their actual source and are not relabeled as reruns.",
   "allRequiredAcceptancePassed": false,
   "mergePerformed": false,
@@ -2262,16 +2262,16 @@
   },
   "build": {
     "command": "npm run build",
-    "sourceCommit": "da26b1c3d439f5e4d07abe5488638f36e4d9b618",
+    "sourceCommit": "be3d41e5d3e41f38cf647201bcceaee6edb2199f",
     "code": 0,
-    "elapsedMs": 7693,
+    "elapsedMs": 7310,
     "built": true,
     "modules": 1830,
     "isolatedData": true,
     "installed": false,
     "rawLog": {
       "file": "task-worktree:.final-build.log",
-      "sha256": "51f5364d9e64fbbd6699c6b14fda271b0aa2803bba6495f99d5bcba73a364ec2"
+      "sha256": "669e45326e9e72b1d6b29e9872040afd3c1fa99709f9323569eb06d5b9572a3d"
     }
   },
   "previousBuilds": [
@@ -2352,7 +2352,7 @@
       "VisibleConsoleCount": 0
     },
     "latestCompletedCheck": {
-      "checkedAtUtc": "2026-10-04T07:30:23.3890339Z",
+      "checkedAtUtc": "2026-10-04T07:33:30.4406467Z",
       "OwnedProcessCount": 0,
       "VisibleOwnedConsoleCount": 0,
       "VisibleConsoleCount": 0,
