@@ -1,0 +1,52 @@
+{
+  "kind": "checks-after-merging-main-2026-10-06",
+  "mergeCommit": "6ee262a2f36e6f8fd220f0b17bbf67e20a003299",
+  "parents": ["9befe65ce767f17a3b898be086edb157ea48d708", "f951553cc9f1bd8507f50c0e840a2b96eac25ad8"],
+  "probeFixCommit": "6d269dc842b16cb4b8e7f456859c022f457a5c55",
+  "probeFixChanges": "scripts/probes/reopen-matrix.mjs only",
+  "conflictsResolved": ["server/test/bakery-deps.test.mjs: both sides kept, 16 entries", "docs/plan/TODO.md: both sides kept"],
+  "pc": {
+    "silentPreload": "every command ran under --import=./scripts/lib/test-silent-processes.mjs",
+    "baseline": [
+      { "commit": "6ee262a2", "types": { "exitCode": 0, "elapsedMs": 8815 }, "tests": { "command": "node scripts/test-suite.mjs (npm test)", "exitCode": 0, "tests": 4348, "pass": 4348, "fail": 0, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 89708.5043 }, "desktopTests": { "exitCode": 0, "tests": 37, "pass": 37 } },
+      { "commit": "6d269dc8", "types": { "exitCode": 0, "elapsedMs": 5665 }, "tests": { "exitCode": 0, "tests": 4348, "pass": 4348, "fail": 0, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 59122.0574 }, "webBuild": { "command": "npm run build", "exitCode": 0 } }
+    ],
+    "g0r": { "commit": "6ee262a2", "mainBaseline": "f951553c", "results": [
+      { "name": "export determinism", "exitCode": 0, "elapsedMs": 566853, "frames": 1800, "identical": 1800, "different": 0 },
+      { "name": "export equals snapshot replay", "exitCode": 0, "elapsedMs": 18763, "result": "PASS" },
+      { "name": "full-length pixel comparison with main", "exitCodes": [0, 0, 0], "elapsedMs": [183168, 196725, 848], "frames": { "baseline": 1800, "candidate": 1800 }, "result": "byte-identical over the full length" },
+      { "name": "ready-index-probe", "exitCode": 0, "elapsedMs": 103970, "fails": [] },
+      { "name": "stream-produce-probe (normal mode; timing not authoritative on the PC)", "exitCode": 0, "elapsedMs": 70295, "fails": [] },
+      { "name": "stream-produce-probe --group", "exitCode": 0, "elapsedMs": 28610, "fails": [] },
+      { "name": "preview-fallback-probe", "exitCode": 0, "elapsedMs": 74669, "fails": [] },
+      { "name": "preview-fallback-probe --page-preload", "exitCode": 0, "elapsedMs": 74262, "fails": [] }
+    ] },
+    "probes": [
+      { "name": "reopen-baseline --render", "commit": "6ee262a2", "exitCode": 0, "seconds": 90 },
+      { "name": "reopen-e2e --restricted --nodes --password-change --roles", "commit": "6ee262a2", "exitCode": 0, "seconds": 100 },
+      { "name": "reopen-e2e --nodes --roles --delete-from-second --delete-offline", "commit": "6ee262a2", "exitCode": 0, "seconds": 95 },
+      { "name": "reopen-e2e --hosted --restricted --nodes --password-change --roles", "commit": "6ee262a2", "exitCode": 0, "seconds": 86 },
+      { "name": "reopen-e2e --hosted --nodes --password-change --roles", "commit": "6ee262a2", "exitCode": 0, "seconds": 114 },
+      { "name": "reopen-online", "commit": "6ee262a2", "exitCode": 0, "seconds": 13 },
+      { "name": "reopen-online --restricted", "commit": "6ee262a2", "exitCode": 0, "seconds": 10 },
+      { "name": "reopen-e2e --exit-matrix --cancel-ui --restricted --nodes --roles", "commit": "6ee262a2", "exitCode": 0, "seconds": 122 },
+      { "name": "reopen-e2e --hosted --exit-matrix --cancel-ui --nodes --roles", "commit": "6ee262a2", "exitCode": 0, "seconds": 93 },
+      { "name": "reopen-e2e --exit-matrix --cancel-ui --nodes --roles", "commit": "6ee262a2", "exitCode": 0, "seconds": 150 },
+      { "name": "reopen-e2e --hosted --restricted --exit-matrix --cancel-ui --nodes --roles", "commit": "6ee262a2", "exitCode": 0, "seconds": 95 },
+      { "name": "reopen-e2e --hosted --move-lan --nodes", "commit": "6ee262a2", "exitCode": 0, "seconds": 110 },
+      { "name": "reopen-e2e --restricted --move-hosted --move-lan --nodes", "commit": "6ee262a2", "exitCode": 0, "seconds": 158 },
+      { "name": "reopen-relocation unit tests through scripts/test-suite.mjs", "commit": "6ee262a2", "exitCode": 0, "seconds": 6 },
+      { "name": "reopen-e2e --matrix --nodes --trust", "runs": [{ "commit": "6ee262a2", "exitCode": 0, "seconds": 331 }, { "commit": "6ee262a2", "exitCode": 1, "seconds": 145, "phase": "conflict discard" }, { "commit": "6d269dc8", "exitCode": 0, "seconds": 279 }, { "commit": "6d269dc8", "exitCode": 0, "seconds": 288 }] },
+      { "name": "reopen-e2e --restricted --matrix --nodes --trust --password-change", "runs": [{ "commit": "6ee262a2", "exitCode": 0, "seconds": 343 }, { "commit": "6d269dc8", "exitCode": 1, "seconds": 309, "phase": "old-file tombstone", "error": "fetch failed" }, { "commit": "6d269dc8", "exitCode": 1, "seconds": 303, "phase": "old-file tombstone", "error": "fetch failed" }, { "commit": "6d269dc8", "exitCode": 0, "seconds": 281, "note": "with an uncommitted change that only prints more about a failure" }, { "commit": "6d269dc8", "exitCode": 0, "seconds": 276, "note": "same" }] },
+      { "name": "reopen-e2e --hosted --matrix --nodes --trust --password-change --roles", "runs": [{ "commit": "6ee262a2", "exitCode": 1, "seconds": 123, "phase": "conflict discard" }, { "commit": "6ee262a2", "exitCode": 1, "seconds": 129, "phase": "conflict discard" }, { "commit": "b6e0d627 (before the merge)", "exitCode": 1, "seconds": 120, "phase": "conflict discard", "error": "local storage query failed" }, { "commit": "6d269dc8", "exitCode": 0, "seconds": 292 }] },
+      { "name": "reopen-e2e --wan --nodes", "commit": "6d269dc8", "exitCode": 0, "seconds": 146, "publicHttp": true, "externalMemberConnections": 3, "assets": "3 namespaces, 50000 bytes each, digests verified", "earlierAttempts": "GNU tar from Git Bash once; the temporary entry process exited four times when started from Git Bash; from PowerShell the entry was not reachable once, then passed" },
+      { "name": "reopen-native-fixture --build", "commit": "6d269dc8", "exitCode": 0, "seconds": 88 },
+      { "name": "reopen-native <fixture>", "commit": "6d269dc8", "exitCode": 0, "seconds": 88 },
+      { "name": "reopen-native <fixture> --member", "commit": "6d269dc8", "exitCode": 0, "seconds": 90 },
+      { "name": "reopen-native --patch-upgrade / --member --patch-upgrade / --nsis-patch-upgrade / --member --nsis-patch-upgrade", "shellFrom": "20d28fbd", "patchFrom": "6d269dc8", "exitCodes": [0, 0, 0, 0], "seconds": [97, 95, 109, 96], "earlierAttempts": "seven runs failed its own preconditions: shell built from the current commit, then one older shell shared by all four" }
+    ],
+    "conflictWindowTiming": { "journalPendingMs": 1705, "hostSavedMs": 3379, "offlineWindowMsBefore": 1200, "offlineWindowMsAfter": 8000, "pcLoadPercent": "22-38" }
+  },
+  "laptop": { "item": "stream-produce-probe, normal mode, 300 ms limit", "commit": "6ee262a2f36e6f8fd220f0b17bbf67e20a003299", "protocol": "session idle, detached script, idle gate, one round, fixed in advance", "branch": { "exitCode": 0, "encodeMs": [229, 230, 239], "p50": 230, "gate": [3.6, 5, 5.4, 4.3], "percentProcessorPerformanceMedianUnderLoad": 107.1, "screensaver": "started late in the run, 1.3% on average" }, "main": { "commit": "f951553cc9f1bd8507f50c0e840a2b96eac25ad8", "exitCode": 0, "encodeMs": [252, 294, 326], "p50": 294, "gate": [8.8, 10.7, 8.7, 11.9], "percentProcessorPerformanceMedianUnderLoad": 106.6, "screensaver": "running throughout, 3.4% on average" } },
+  "notRerun": ["system double click on a really installed build (needs the new installer on the laptop)", "recovery after a real reboot", "cloud node as an external member", "gate probes of the master plan that do not belong to this task"]
+}

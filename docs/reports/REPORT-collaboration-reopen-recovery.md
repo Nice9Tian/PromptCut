@@ -638,6 +638,55 @@ node scripts/probes/reopen-native.mjs <生成的fixture.json>
 
 WAN 仅在环境变量提供已授权测试主机与密钥路径时运行，不将账号、地址或密钥路径写入报告。可选 `PC_REOPEN_PUBLIC_TUNNEL_BIN` 指向该主机独立临时目录里的已核对 cloudflared 二进制。没有公开入口时明确输出 `publicHttp:false`，不能转写为公开验证通过。临时公网工具仅用于测试，不是产品运行依赖。
 
+## 合并 main 之后的复验（2026-10-06）
+
+用户定的做法：把 origin/main（`f951553c`）合进分支，在合并后的提交上重跑类型检查、全量测试、G0-R 和本任务的探针，全过后才合入 main。合并提交是 `6ee262a2`（父提交 `9befe65c` 与 `f951553c`）。两处冲突都是两边在同一位置各加了条目，两边的都保留：`server/test/bakery-deps.test.mjs` 的守门名单（本分支两条加 main 一条，共 16 条），`docs/plan/TODO.md`「已做步骤的遗留」。复验中查出矩阵探针自己的一个时序问题，修在 `6d269dc8`，它相对 `6ee262a2` 只改了 `scripts/probes/reopen-matrix.mjs`。机器可读的记录在 [merge-verification.json](assets/collaboration-reopen-recovery/merge-verification.json)。
+
+基线与 G0-R：
+
+| 项 | 在哪跑、对应提交 | 结果 |
+|---|---|---|
+| 类型检查 `npx tsc -b --force` | PC，`6ee262a2`；`6d269dc8` 上再跑一遍 | 都退出 0（8,815 ms；5,665 ms） |
+| 全量测试 `npm test`（main 合入后由 `scripts/test-suite.mjs` 启动） | PC，`6ee262a2`；`6d269dc8` 上再跑一遍 | 都是 4348 项全过，失败、取消、跳过、todo 都是 0，末行「npm test 最终结果：零失败」（89,709 ms；59,122 ms）。比合并前多的 6 项是 main 带来的 |
+| 桌面测试 `npm test --prefix desktop` | PC，`6ee262a2` | 37 项全过 |
+| 网页构建 `npm run build` | PC，`6d269dc8` | 退出 0 |
+| 导出确定性 | PC，`6ee262a2` | 两遍各 1800 帧，1800 相同、0 不同，566,853 ms |
+| 导出与快照重放一致 | PC，`6ee262a2` | PASS，18,763 ms |
+| 与 main 的全长像素对账 | PC，候选 `6ee262a2` 对 main `f951553c` | 两边各 1800 帧，逐字节相同 |
+| `ready-index-probe`、`stream-produce-probe`（普通与 `--group`）、`preview-fallback-probe`（普通与 `--page-preload`） | PC，`6ee262a2` | 五项都退出 0，`fails: []`（103,970 / 70,295 / 28,610 / 74,669 / 74,262 ms）。集成脚本仍在流探针之后停下，预览兜底两项单独补跑 |
+| `stream-produce-probe` 普通模式的耗时门槛（以笔记本为准） | 笔记本，`6ee262a2`，对照 main `f951553c` | 分支退出 0，p50 230 ms（229 / 230 / 239）；main 也退出 0，p50 294 ms（252 / 294 / 326）。会话静止的量法，规程与判法事先定死，只做一轮；两次重负载时频率读数的中位都在 106% 以上。分支那次屏保基本不在，main 那次屏保全程在 |
+
+本任务的探针（PC；命令都是 `node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/<探针> <参数>`）：
+
+| 探针与参数 | 提交 | 结果 |
+|---|---|---|
+| `reopen-baseline.mjs --render` | `6ee262a2` | 退出 0，90 s |
+| `reopen-e2e.mjs --restricted --nodes --password-change --roles` | `6ee262a2` | 退出 0，100 s |
+| `reopen-e2e.mjs --nodes --roles --delete-from-second --delete-offline` | `6ee262a2` | 退出 0，95 s |
+| `reopen-e2e.mjs --hosted --restricted --nodes --password-change --roles` | `6ee262a2` | 退出 0，86 s |
+| `reopen-e2e.mjs --hosted --nodes --password-change --roles` | `6ee262a2` | 退出 0，114 s |
+| `reopen-online.mjs`，以及加 `--restricted` | `6ee262a2` | 都退出 0，13 s、10 s |
+| `reopen-e2e.mjs --exit-matrix --cancel-ui …` 四种组合（本机限定、云端自由、本机自由、云端限定） | `6ee262a2` | 都退出 0，122 / 93 / 150 / 95 s |
+| `reopen-e2e.mjs --hosted --move-lan --nodes` | `6ee262a2` | 退出 0，110 s |
+| `reopen-e2e.mjs --restricted --move-hosted --move-lan --nodes` | `6ee262a2` | 退出 0，158 s |
+| `server/test/reopen-relocation*.test.mjs`（经 `scripts/test-suite.mjs`） | `6ee262a2` | 退出 0 |
+| `reopen-e2e.mjs --matrix --nodes --trust`（本机自由） | `6ee262a2`；`6d269dc8` | `6ee262a2` 上先过一次（331 s），之后同一提交再跑不过；`6d269dc8` 上两次都过（279 s、288 s；279 s 那次是提交前带着同样的改动跑的） |
+| `reopen-e2e.mjs --restricted --matrix --nodes --trust --password-change`（本机限定） | `6ee262a2`；`6d269dc8` | `6ee262a2` 上过（343 s）；`6d269dc8` 上四次：两次不过、两次过，见下 |
+| `reopen-e2e.mjs --hosted --matrix --nodes --trust --password-change --roles`（云端自由） | `6ee262a2`；`6d269dc8` | `6ee262a2` 上两次不过；`6d269dc8` 上过（292 s） |
+| `reopen-e2e.mjs --wan --nodes`（经任务自有的临时公开入口） | `6d269dc8` | 退出 0，146 s：`publicHttp: true`，外部成员三次连接都成功，后两次用它自己设备上的恢复记录，三类带票据素材各 50,000 字节摘要一致。之前几次没起来，见下 |
+| `reopen-native-fixture.mjs --build`，再 `reopen-native.mjs <fixture.json>`，以及加 `--member` | `6d269dc8` | 构建退出 0（88 s）；主机、成员两个角色都退出 0（88 s、90 s）：原生参数启动、单实例转发、换运行副本后恢复原房间原身份 |
+| `reopen-native.mjs` 加 `--patch-upgrade`、`--nsis-patch-upgrade`，各配主机与 `--member` | 测试壳来自 `20d28fbd`，补丁来自 `6d269dc8` | 四条都退出 0（97 / 95 / 109 / 96 s）。头一轮用法不对，见下 |
+
+没过的各次与处置，都保留：
+
+- **矩阵探针「冲突丢弃」一步的时序。** 云端自由模式在 `6ee262a2` 上两次、合并前的 `b6e0d627` 上一次、本机自由模式再跑一次，都在这一步等不到「暂停」。给探针加计时后看到：成员的离线修改落盘用了 1.7 秒，主机的修改保存在 3.4 秒，而探针只让成员离线 1.2 秒，成员早已重连，冲突没有发生，页面是正常的在线状态。产品行为是对的，是探针的窗口在机器忙时不够；当时这台 PC 上别的工作占着 22%～38% 的 CPU。`6d269dc8` 把窗口放宽到 8 秒，并自检成员在主机保存前没有重连；进入暂停、出现对话框、丢弃后留有备份这三条断言没有动。合并没有带来这个问题：同样的机器状态下合并前的提交一样不过。
+- **同一条探针另有两次不同的失败。** 合并前的提交那一次报的是「协作恢复失败」，出在等离线日志落盘时的本机存储查询；另一次诊断用的改法在更早的一步等这条日志超时。`6d269dc8` 让这条查询在时限内失败后再查。这两次的原因没有进一步查明，之后没有再出现。
+- **本机限定模式的矩阵探针在最后一步报网络请求失败。** `6d269dc8` 上四次里两次：核对删除后的墓碑时，探针从 Node 发给本机测试服务的请求报 `fetch failed`。失败时页面一侧的状态是对的（已删除，墓碑接口回 410）。随后两次带着只多打印错误原因的诊断改动重跑都通过，没有抓到原因；按暂时性故障重试处理，诊断改动没有提交。
+- **外网探针前几次没起来。** 在 Git Bash 里跑时先是系统里的 GNU tar 把盘符当成了远端主机，换成系统自带的 tar 后临时入口的进程一启动就退出，连着四次；测试主机上手工跑同一个隧道程序是通的。改从 PowerShell 启动后第一次报入口从本机连不上，第二次通过。测试主机上没有留下本任务的进程，没有部署任何东西。
+- **原生壳的补丁升级头一轮四条都不过，是用法不对。** 这四条要求测试壳来自更早的提交、工作区里有网页构建产物，而且一个测试壳只能升级一次；我先用当前提交的壳去跑，之后又让四条共用一个旧壳。按要求各配一个从 `20d28fbd` 新构建的壳之后四条都通过。
+
+这一轮没有重跑的：真实安装版的系统双击（要在笔记本上装新包，等 0.7.15 覆盖安装）、真实重启后的恢复（要重启电脑）、云端节点当外网成员；主执行计划第 8 节里不属于本任务的门槛探针这次也没有重跑，用户指定的范围是基线、G0-R 和本任务的探针，那一整套上一轮（2026-10-04）跑过。
+
 ## 0.7.15 发版说明
 
 应用版本 0.7.14 → 0.7.15，外壳仍是 0.2.7。这一版只动了 Node 那一半和补丁的安装脚本，没有改 Rust 外壳、Chrome、ffmpeg 和内置 Python，装更新补丁即可；同时出完整安装包。
