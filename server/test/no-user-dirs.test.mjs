@@ -59,7 +59,10 @@ test('npm test 的全局准备摘掉 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR',
   const body = src.slice(src.indexOf('export async function globalSetup'));
   assert.match(body.slice(0, body.indexOf('\n}')), /scrubUserDirEnv\(process\.env\)/, 'globalSetup 里要摘本进程的环境');
   const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
-  assert.match(pkg.scripts.test, /--test-global-setup=server\/test\/global-setup\.mjs/, 'npm test 要走这份全局准备');
+  // npm test 经 scripts/test-suite.mjs 起全量命令（见该文件头），全局准备的参数写在那里
+  assert.equal(pkg.scripts.test, 'node scripts/test-suite.mjs', 'npm test 的入口是包装脚本');
+  const suite = fs.readFileSync(path.join(REPO, 'scripts', 'test-suite.mjs'), 'utf8');
+  assert.match(suite, /--test-global-setup=server\/test\/global-setup\.mjs/, 'npm test 要走这份全局准备');
 
   // 在全局准备之下运行(它设的 PROMPTCUT_TEST_BAD_PORTS_HELD 在)时,本进程的环境已经摘过
   if (process.env.PROMPTCUT_TEST_BAD_PORTS_HELD !== undefined) {
