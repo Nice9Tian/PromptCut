@@ -42,7 +42,7 @@
 
 ## 与「前后端解耦与渲染调度演进计划」的关系（2026-10-05 评估）
 
-那份计划在 Gemini 的工作区里、**未入库**：`~/.gemini/antigravity/worktrees/PromptCut/check_frontend_backend_separation/docs/plan/render-dispatch-and-separation-plan.md`（M1 概念统一已合入 main；M2 共享目录、M3 后端独立、M4 渲染调度、M5 舞台规整未做）。
+那份计划在 Antigravity 的工作区里（作者不详）、**未入库**：`~/.gemini/antigravity/worktrees/PromptCut/check_frontend_backend_separation/docs/plan/render-dispatch-and-separation-plan.md`（M1 概念统一已合入 main；M2 共享目录、M3 后端独立、M4 渲染调度、M5 舞台规整未做）。
 
 结论：**不要等整个分离做完再做云端 Agent；只把其中一小块提前，并在那份计划里补一条。**
 
