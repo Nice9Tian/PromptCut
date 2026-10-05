@@ -39,6 +39,10 @@ test('RIL-3 进程号被别的程序重用时不认它当父进程;来不及读�
   assert.deepEqual(launchReceipt(row({ parentCreatedAt: '2026-10-05T12:00:06.000Z' }), expected).reasons, ['parent is younger than the launched process']);
   assert.deepEqual(launchReceipt({ pid: 77, exitedBeforeQuery: true }, expected).ok, false);
   assert.deepEqual(launchReceipt(null, expected), { ok: false, reasons: ['no process'] });
+  // 探针自己请资源管理器打开时,认它启动的那个帮手进程号;帮手已退出、查不到名字也认,别的进程号不认
+  assert.deepEqual(launchReceipt(row({ parentName: null, parentCreatedAt: null, parentPid: 555 }), { ...expected, parentPid: 555 }), { ok: true, reasons: [] });
+  assert.deepEqual(launchReceipt(row({ parentName: null, parentCreatedAt: null, parentPid: 556 }), { ...expected, parentPid: 555 }).reasons, ['parent is unknown, not explorer.exe']);
+  assert.deepEqual(launchReceipt(row({ parentPid: 555, commandLine: '' }), { ...expected, parentPid: 555 }).reasons, ['command line lacks the file']);
   const all = launchReceipt(row({ exe: 'C:/x/y.exe', commandLine: '', createdAt: '2026-10-05T11:00:00Z', parentName: 'cmd.exe' }), expected).reasons;
   assert.equal(all.length, 4, '每个不成立的条件都列出来');
 });

@@ -17,6 +17,9 @@
  *   --seal-dir <dir>        owned directory of the seal key / member password, when they were prepared
  *                           beforehand with reopen-sealed.mjs (default <run dir>/seal)
  *   --click-timeout-ms <n>  how long to wait for each double click (default 900000)
+ *   --shell-open            stand-in when nobody can double-click: the probe asks Explorer to open the file
+ *                           through the registered association. It proves the association and what follows,
+ *                           not the double click itself, and the evidence says so.
  *   --rehearse-fixture <fixture.json>   no installed build: drive the isolated test shell and start it
  *                           with the file as argument. A rehearsal is not double-click evidence.
  * Files exchanged through --control: host-public-key.json and external-member.sealed (host role with
@@ -38,12 +41,14 @@ import puppeteer from 'puppeteer';
 import { waitFor } from '../../server/test/fake-ws-kit.mjs';
 import { loadNativeFixture, nativeTestEnv } from './reopen-native-fixture.mjs';
 import { reopenEditorEnv } from './reopen-editor-env.mjs';
-import { handoffWriter, installedIdentity, launchReceipt, queryAssociation, queryProcesses, sha256File, watchLaunches } from './reopen-installed-lib.mjs';
+import { handoffWriter, installedIdentity, launchReceipt, openThroughExplorer, queryAssociation, queryProcesses, sha256File, watchLaunches } from './reopen-installed-lib.mjs';
 import { ownedMemberSecret, ownedSealKeys, seal, unseal } from './reopen-sealed.mjs';
 
 const arg = name => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : undefined; };
 const flag = name => process.argv.includes(name);
-const memberRole = flag('--member'), externalMember = flag('--external-member'), rehearsal = arg('--rehearse-fixture');
+const memberRole = flag('--member'), externalMember = flag('--external-member'), rehearsal = arg('--rehearse-fixture'), shellOpen = flag('--shell-open');
+assert(!(rehearsal && shellOpen), '--shell-open needs a really installed build');
+const launchMode = rehearsal ? 'argument-start' : shellOpen ? 'shell-open' : 'explorer-double-click';
 const clickTimeoutMs = Number(arg('--click-timeout-ms') ?? 900000), peerPort = Number(arg('--peer-port') ?? 5206);
 assert.equal(process.platform, 'win32', 'Windows only');
 // Explorer hands the application the long form of a path; keep the run directory in that form.
@@ -191,7 +196,7 @@ function target() {
   assert.equal(identity.ok, true, `the installed program for .proc is not the build under test: ${identity.reasons.join('; ')}`);
   return { rehearsal: false, exe: identity.exe, port: 5210, parentName: 'explorer.exe', firstRunWaitMs: 15000, identity, association,
     // Explorer starts the program with the user's ordinary environment; a child of this probe would inherit test settings.
-    startPlain: () => { spawn('explorer.exe', [identity.exe], { windowsHide: true, stdio: 'ignore' }).unref(); } };
+    startPlain: () => { openThroughExplorer(identity.exe); } };
 }
 
 /** Attach to a running instance through the debugging port its own shell opened for the agent webview. */
@@ -229,23 +234,24 @@ async function explorerLaunch(file, { secondary = false } = {}) {
   const watcher = await watchLaunches(app.exe), rejected = [];
   try {
     const armedAt = new Date().toISOString();
-    handoff.write({ stage: 'awaiting-double-click', file, folder: path.dirname(file), secondary, armedAt, deadlineAt: new Date(Date.now() + clickTimeoutMs).toISOString(), rehearsal: app.rehearsal });
-    if (app.rehearsal) app.simulateDoubleClick(file, secondary);
+    handoff.write({ stage: launchMode === 'explorer-double-click' ? 'awaiting-double-click' : 'probe-opens-the-file', launchMode, file, folder: path.dirname(file), secondary, armedAt, deadlineAt: new Date(Date.now() + clickTimeoutMs).toISOString() });
+    let helperPid;
+    if (app.rehearsal) app.simulateDoubleClick(file, secondary); else if (shellOpen) helperPid = openThroughExplorer(file).pid;
     let row;
     try {
       await waitFor(() => {
         for (const r of watcher.rows.splice(0)) {
-          const verdict = launchReceipt(r, { exe: app.exe, file, armedAt, parentName: app.parentName });
+          const verdict = launchReceipt(r, { exe: app.exe, file, armedAt, parentName: app.parentName, parentPid: helperPid });
           if (verdict.ok) { row = r; return true; }
           rejected.push({ pid: r.pid, createdAt: r.createdAt, parentName: r.parentName, exitedBeforeQuery: !!r.exitedBeforeQuery, reasons: verdict.reasons });
           // A second launch can end before its details are read; ask for it again instead of guessing.
-          handoff.write({ stage: 'awaiting-double-click', retry: true, file, folder: path.dirname(file), secondary, armedAt, rejected: rejected.length });
+          if (launchMode === 'explorer-double-click') handoff.write({ stage: 'awaiting-double-click', retry: true, file, folder: path.dirname(file), secondary, armedAt, rejected: rejected.length });
         }
         return false;
       }, clickTimeoutMs, 'a double click that starts the build under test with this file');
     } finally { rejectedLaunches.push(...rejected.map(r => ({ ...r, secondary }))); }
     const receipt = { secondary, pid: row.pid, createdAt: row.createdAt, armedAt, parentName: row.parentName, parentPid: row.parentPid, parentCreatedAt: row.parentCreatedAt,
-      installedExecutable: true, fileOnCommandLine: true, simulated: app.rehearsal, rejectedBefore: rejected.length };
+      installedExecutable: true, fileOnCommandLine: true, via: launchMode, explorerHelperPid: helperPid, rejectedBefore: rejected.length };
     launches.push(receipt); handoff.write({ stage: 'launched', file, secondary, pid: row.pid });
     return receipt;
   } finally { watcher.stop(); }
@@ -395,7 +401,7 @@ try {
   }
   const result = memberRole ? await memberRole_() : await hostRole();
   const evidence = { ok: true, kind: 'promptcut-installed-reopen-v1', ...result, service: ownCloud ? 'own-loopback-directory' : service,
-    osDoubleClick: !app.rehearsal, rehearsal: app.rehearsal, sourceCommit: app.sourceCommit,
+    launchMode, osDoubleClick: launchMode === 'explorer-double-click', osShellOpen: launchMode === 'shell-open', rehearsal: app.rehearsal, sourceCommit: app.sourceCommit,
     installed: app.identity && { exeSha256: app.identity.exeSha256, versions: app.identity.versions, payload: app.identity.payload, progId: app.association.progId, userChoice: !!app.association.userChoice },
     launches, rejectedLaunches, fileAssociationsChanged: false, evidenceDirectory: root };
   fs.writeFileSync(path.join(root, 'installed-evidence.json'), JSON.stringify(evidence, null, 2)); console.log(JSON.stringify(evidence));

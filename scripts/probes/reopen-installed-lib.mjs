@@ -9,7 +9,8 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'reopen-installed-query.ps1');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const script = path.join(here, 'reopen-installed-query.ps1'), openScript = path.join(here, 'reopen-installed-open.ps1');
 const shellDir = path.join(process.env.SystemRoot || 'C:/Windows', 'System32/WindowsPowerShell/v1.0');
 const powershell = path.join(shellDir, 'powershell.exe');
 const queryArgs = extra => ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...extra];
@@ -30,13 +31,15 @@ export function debuggingPort(commandLine) {
 
 /** Does this process row prove that the shell started the expected program with the expected file?
  * @returns {{ ok: boolean, reasons: string[] }} every failed condition, so a wrong launch is explained */
-export function launchReceipt(row, { exe, file, armedAt, parentName }) {
+export function launchReceipt(row, { exe, file, armedAt, parentName, parentPid }) {
   const reasons = [];
   if (!row || !Number.isInteger(row.pid) || row.pid <= 0) return { ok: false, reasons: ['no process'] };
   if (!row.exe || !same(row.exe, exe)) reasons.push('another executable');
   if (!String(row.commandLine ?? '').toLowerCase().includes(String(file).toLowerCase())) reasons.push('command line lacks the file');
   const created = Date.parse(row.createdAt), armed = Date.parse(armedAt);
   if (!(created >= armed)) reasons.push('started before the hand-off was armed');
+  // When this probe asked Explorer itself to open the file, the helper it started is known by id and may already be gone.
+  if (Number.isInteger(parentPid) && row.parentPid === parentPid) return { ok: reasons.length === 0, reasons };
   if (String(row.parentName ?? '').toLowerCase() !== String(parentName).toLowerCase()) reasons.push(`parent is ${row.parentName ?? 'unknown'}, not ${parentName}`);
   // A recycled process id can make an unrelated program look like the parent.
   else if (!(Date.parse(row.parentCreatedAt) <= created)) reasons.push('parent is younger than the launched process');
@@ -73,6 +76,10 @@ export function installedIdentity(association, { manifest, appSrcHash }) {
     payload: payload && { files: payload.files, missing: payload.missing.length, mismatched: payload.mismatched.length, sample: [...payload.missing, ...payload.mismatched].slice(0, 10) } };
 }
 
+/** Have Explorer open a program or a file as it would for the user; returns the helper process it started. */
+export function openThroughExplorer(target) {
+  return JSON.parse(execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', openScript, '-Path', target], { windowsHide: true, env: queryEnv(), encoding: 'utf8' }).trim());
+}
 export function queryAssociation() {
   return JSON.parse(execFileSync(powershell, queryArgs(['-Mode', 'assoc']), { windowsHide: true, env: queryEnv(), encoding: 'utf8' }).trim());
 }
