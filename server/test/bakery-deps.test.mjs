@@ -40,10 +40,11 @@ const BAKERY = path.join(SERVER, 'bakery');
  *   - `asset-lan-discover.test.mjs` 测 `scripts/probes/asset-lan-discover.mjs`(`asset-lan-probe` 按局域网发现找放本机项目的素材服务地址);
  *   - `m8-judges.test.mjs` 测 `scripts/probes/m8/lib.mjs` 里 `cloud-untouched` 与 `real:tasks` 的判法。
  *   - `maint-3-claim-gate-judge.test.mjs` 测 `scripts/probes/claim-gate-judge.mjs`(认领闸端到端探针的判定:多认领、Agent 任务不排在预渲染后面)。
+ *   - `test-suite-policy.test.mjs` 测 `scripts/test-suite-policy.mjs` 与 `scripts/test-event-reporter.mjs` 的测试进程异常重跑判定。
  *
  * 多一条都要在这里显式写出来,加不进来就说明依赖方向真的破了。
  */
-const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs', 'server/test/port-file.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/m8-judges.test.mjs', 'server/test/maint-3-claim-gate-judge.test.mjs']);
+const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs', 'server/test/port-file.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/m8-judges.test.mjs', 'server/test/maint-3-claim-gate-judge.test.mjs', 'server/test/test-suite-policy.test.mjs']);
 
 const CODE = /\.(mjs|mts|ts|tsx)$/;
 

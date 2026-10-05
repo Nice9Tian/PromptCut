@@ -22,6 +22,7 @@
 
 ## 已做步骤的遗留
 
+- **搁置：把 Node 换到带 nodejs/node#65778 的版本，然后拆掉 `npm test` 的包装**（2026-10-05，`claude/busy-mclean-a6cd97`，用户定先不升级）：Node v24.19.0 在 Windows 上测试子进程偶发以 0xC0000005 原生崩溃（nodejs/node#65756），现在靠 `scripts/test-suite.mjs` 兜底（打印退出码、单独重跑崩溃的文件）。带修复的只有 v26.10.0；v24 要等回移 nodejs/node#66168 发版，2026-10-05 核对时还没合。本机 Node 是 winget 装的系统级 v24.19.0，桌面版打包会把当前这份 Node 装进安装包，所以升级要连同外壳版本一起考虑。升级后：加压循环确认崩溃消失，再删 `scripts/test-suite.mjs`、`test-suite-policy.mjs`、`test-event-reporter.mjs` 与对应单测，`package.json` 的 `test` 改回原命令，`no-user-dirs.test.mjs` 的守门跟着改回。详见 `docs/reports/AGENT-busy-mclean-a6cd97.md`。
 - **打包卫生，待集成**（2026-10-02，`claude/release-no-git`，已验证）：`--from-head` 临时 worktree 里的 `.git` 指针文件被拷进运行时目录与补丁清单（0.7.13、0.7.14 的 manifest 都有，运行时代码不调 git、无害）；打包后 `desktop/src-tauri/Cargo.toml` 被 tauri CLI 写回成 LF、显示被改。前者改排除规则，后者 `.gitattributes` 定 `eol=lf`；下次集成一起合入，合入后 PC 主工作区重新检出那两个文件一次。
 - **观察：站点模式 M7-A4 变慢**（经公网，非门槛）：9-28 37.4 s → 10-02 54.3 s（run `m7w1002a`）；30 s 门槛以笔记本本机替身为准，照过。下次站点复测再看是网络时段还是代码。
 - **〔已修，随 0.7.9 发，`claude/pack-hash`〕用户真机缺陷，随下一个发布的版本修（0.7.8 之后的那一版，按现在的编号是 0.7.9），与下一条慢放缺陷同批**（2026-09-30 用户定）：**「打包保存…」把没有哈希的素材悄悄跳过，配音没进 `.procp`。** 复现：用户项目 `9tian666.proc` 有 9 条素材，1 条视频带哈希，8 条配音（桌面版 0.7.0 / 0.7.1 时生成）只有 `path`、地址是 `/api/media/file?path=…`、没有 `hash`；打出来的包里只有视频，界面没有任何提示。
