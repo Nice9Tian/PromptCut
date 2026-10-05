@@ -11,6 +11,9 @@ import { assetProxyPlugin } from "./server/asset-client";
 import vitePluginCards from "./server/vite-plugin-cards";
 import { visionPlugin } from "./server/vite-plugin-vision";
 import { rawEolPlugin } from "./server/raw-eol.mjs";
+import { watchIgnored, DEP_SCAN_ENTRIES } from "./server/vite-scan-ignore.mjs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * 预渲染进程的 Vite(docs/archive/topics/decoupling-plan.md 第 3 节「预渲染」)。
@@ -72,18 +75,15 @@ export default defineConfig({
   // 依赖预构建缓存和编辑器那一份分开,两个进程同时写 node_modules/.vite 会互相踩
   cacheDir: process.env.PROMPTCUT_HEADLESS === "1" ? "node_modules/.vite-prerender-headless" : "node_modules/.vite-prerender",
   clearScreen: false,
+  // 依赖扫描入口只找真正的页面,不把 out/frame-library 下的快照 .html 当入口(`server/vite-scan-ignore.mjs`)
+  optimizeDeps: { entries: DEP_SCAN_ENTRIES },
   // 跨源守卫要排在所有接口前面(中间件按 configureServer 的调用顺序注册)
   plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), mediaRoutes(), vitePluginCards(), rawEolPlugin(), visionPlugin()],
   server: {
     // 渲染页每一趟都是全新的页面,用不着热更新;源码改了照样重新变换(watcher 还开着)
     hmr: false,
     fs: { deny: fsDeny },
-    watch: {
-      ignored: [
-        "**/desktop/**", "**/out/**", "**/python/**", "**/node_modules/**",
-        "**/*.lock",
-        "**/.pc-projects/**", "**/.pc-work/**", "**/.pc-chats/**",
-      ],
-    },
+    // 按相对项目根的路径段判断,不用 glob 字符串(worktree 路径里的 `.worktrees` 会让 glob 全部失效),名单见 `server/vite-scan-ignore.mjs`
+    watch: { ignored: [watchIgnored(path.dirname(fileURLToPath(import.meta.url)))] },
   },
 });

@@ -22,7 +22,7 @@
 
 ## 0. 过程
 
-- 契约第 1 版由 PC 主会话定稿（起草是主会话派的只读调查子 Agent），第 13 节逐条裁定 D1～D18，发给用户不等；C10 合入 main 之后开工。
+- 契约第 1 版由 PC 主会话定稿（起草是主会话派的只读调查子 Agent），第 13 节逐条裁定 D1～D18，发给用户不等。契约定的开工顺序是「C10 合入 main 之后」（契约第 12、13 节）；按 git 历史，各分支的起点是 C10 集成分支 `24c2c57`（2026-09-28 05:15，已合 `c10-browser`、`c10-a4` 与带 M7 契约的 main `a038948`，C10-A1～A10 本机验收已跑过），各分支首个提交在 05:31，C10 快进进 main（`51f01c4`）是 08:06，即 C10 合入 main 之前开工；集成分支到 `313b27c` 合 main `3ab63cf` 才带上已合入 main 的 C10。
 - 先派可行性探针 `claude/m7-probe`（起点 `24c2c57`，报告 `docs/archive/agent-reports/AGENT-m7-probe.md`）答 P1～P6；要改产品代码的实验放在 `claude/m7-probe-exp`（不合并）。主会话据探针的更正建议写「探针之后的更正」十条（契约第 13 节末）。
 - 实现三个分支并行：`claude/rq-m7-tests`（照契约独立写测试）、`claude/rq-m7-queue`（队列与切分方、凭证、层表写入）、`claude/rq-m7-node`（页面节点、舞台生成快照、小尺寸、上传与清单）；另派验收探针 `claude/m7-accept-probe`。
 - 验收探针在本机、笔记本、外网各跑几轮，查出 A5 / A6 让路、A10 锁接手、D1 合并补 dual、切分候选落盘、锚帧段优先五处缺陷（第 4 节），都在各自分支修好再并进来。
@@ -33,7 +33,7 @@
 
 | 分支 | Agent | 起点 | 内容 | 报告 |
 |---|---|---|---|---|
-| `claude/m7-probe` | `opus-dev` | `24c2c57` | 可行性探针 P1～P6，四个探针脚本 | `docs/archive/agent-reports/AGENT-m7-probe.md`（从 `claude/m7-probe` `26ea790` 取来归档；该分支的探针脚本没并进集成分支，见第 12 节） |
+| `claude/m7-probe` | `opus-dev` | `24c2c57` | 可行性探针 P1～P6，四个探针脚本 | `docs/archive/agent-reports/AGENT-m7-probe.md`（从 `claude/m7-probe` `26ea790` 取来归档；该分支的四个探针脚本没并进集成分支，M7 合入后由 main `e86a754` 合入，见第 12 节） |
 | `claude/m7-probe-exp` | 同上 | `24c2c57` | 实验提交 `8b15dfe`、`66fa49c`、`1d2abc7`、`ef4b45b`、`87d3461`、`1058b4c`，不合并 | 同上「做了什么」 |
 | `claude/rq-m7-tests` | `opus-dev` | `24c2c57` | 契约测试 47 条（K1～K11），不看实现 | `docs/archive/agent-reports/AGENT-rq-m7-tests.md` |
 | `claude/rq-m7-queue` | `opus-dev-high` | `24c2c57` | D1、D2、D4、D9、D10、D11 的一半、D12、D14；第二、三轮修 A10、D1、锚帧段优先 | `docs/archive/agent-reports/AGENT-rq-m7-queue.md` |
@@ -50,7 +50,7 @@
 5. `4047133`：合验收探针（外网模式、`--role all` 转发 `--base-port` 与 `--timing-authoritative`、D1 判据「每段恰好一份有效」、成员进不了项目时记 WebSocket 实情、收尾删自己的项目）。
 6. `88e70e3`：合验收探针（D1-D2-D12 按出键分组判，判定抽成纯函数 `m7-judge.mjs` 加单测，`ca49299`）。
 
-还没合入 main。
+已合入 main：快进，main 指到 `a52344a`（按 `git log --first-parent` 核）。集成最终代码 `88e70e3` 之后，main 上又有 `e86a754` 合 `claude/m7-probe`、`8cd21c1` 合 `claude/m7-report`，以及三次只改文档的提交 `4540315`（删掉合并 `claude/m7-probe` 时带进 `docs/reports/` 的那份 `AGENT-m7-probe.md`）、`76d6c02`、`a52344a`（改本报告）。
 
 ## 2. 各分支做了什么（摘要，证据在各自报告）
 
@@ -248,8 +248,8 @@
 本分支挪进 `docs/archive/agent-reports/` 的（`git mv`）：`AGENT-rq-m7-queue.md`、`AGENT-rq-m7-node.md`、`AGENT-rq-m7-tests.md`、`AGENT-m7-accept-probe.md`。`AGENT-m7-probe.md` 不在集成分支上，从 `claude/m7-probe` `26ea790` 原样取来放进同一目录。
 
 - `docs/plan/m7-contract.md` 第 13 节末两处引用随改到新路径。
-- 仍写着旧路径 `docs/reports/AGENT-…` 的地方（本分支只写文档，没改）：`server/test/m7-kit.mjs` 文件头注释；各归档报告正文里互相引用的旧路径（历史原文，不改）。
-- `claude/m7-probe` 的四个探针脚本（`m7-build-probe.mjs`、`m7-bake-probe.mjs`、`m7-upload-probe.mjs`、`m7-visibility-probe.mjs`）没并进集成分支；集成分支上有页面节点版 `m7-bake-node-probe.mjs`。要不要并进由主会话定。
+- 仍写着旧路径（`docs/reports/` 下的 `AGENT-…`）的地方（本分支只写文档，没改）：`server/test/m7-kit.mjs` 文件头注释；各归档报告正文里互相引用的旧路径（历史原文，不改）。
+- `claude/m7-probe` 的四个探针脚本（`m7-build-probe.mjs`、`m7-bake-probe.mjs`、`m7-upload-probe.mjs`、`m7-visibility-probe.mjs`）没并进集成分支（集成分支上有页面节点版 `m7-bake-node-probe.mjs`）；M7 快进进 main 后，由 main `e86a754`「合并 claude/m7-probe」合入。
 - 没挪的：`docs/reports/AGENT-join-error.md` 在 `claude/join-error` 上，随它合入时再归档。
 
 ## 13. 占位清单

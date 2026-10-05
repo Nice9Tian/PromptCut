@@ -1,4 +1,3 @@
-import { getLayoutMode } from "../layoutMode";
 import { SIDES, effectiveActive, isSectionItem, type ItemId, type Side } from "./railLayout";
 import { getRailLayout } from "./railStore";
 
@@ -15,7 +14,7 @@ import { getRailLayout } from "./railStore";
  *     同一个同步任务里拔出再插入,<video> 不会被暂停。
  * ResizeObserver 自己会在新位置报一次新尺寸,瀑布流(Masonry)照常重排,不用管。
  *
- * 一侧的宿主没挂载(对话式下这一侧整列不显示)时,节点停在 DockPages 里一个 display:none 的停车位。
+ * 一侧的宿主没挂载时,节点停在 DockPages 里一个 display:none 的停车位。
  */
 
 const nodes = new Map<ItemId, HTMLElement>();
@@ -151,14 +150,13 @@ function moveNode(node: HTMLElement, target: HTMLElement, show: boolean) {
 
 /**
  * 把每一页的节点放到它该在的地方:所在一侧的宿主(没挂载就停车位),并只显示这一侧此刻选中的那一页。
- * 幂等,谁都可以随时调:宿主挂载 / 卸载、布局或布局模式变化后都调一次。
+ * 幂等,谁都可以随时调:宿主挂载 / 卸载、布局变化后都调一次。
  */
 export function placePages(): void {
   const layout = getRailLayout();
-  const mode = getLayoutMode();
   for (const side of SIDES) {
     const host = hosts[side];
-    const active = host ? effectiveActive(layout, side, mode) : null;
+    const active = host ? effectiveActive(layout, side) : null;
     for (const id of layout[side]) {
       const node = nodes.get(id);
       if (!node) continue;

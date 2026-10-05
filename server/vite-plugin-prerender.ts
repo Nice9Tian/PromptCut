@@ -12,6 +12,9 @@ import { repushMirror, replayReadySessions } from "./vite-plugin-mirror";
 import { stageOriginsOf } from "./stage-ports.mjs";
 import { listenSafe } from "./safe-port.mjs";
 import { createSessionLineForwarder } from "./render-node/session-diag.mjs";
+import { autoRenderNodeOffReason, normalizeBinding, ticketOk } from "./auto-render-node.mjs";
+import { createBindingMemory, createTicketRelay } from "./render-node-relay.mjs";
+import { localPrerenderMode } from "./prerender-mode.mjs";
 
 /**
  * 拉起并看护预渲染进程(docs/archive/topics/decoupling-plan.md 第 3 节「预渲染」,阶段 2)。
@@ -92,12 +95,114 @@ export function prerenderPlugin(): Plugin {
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.setHeader("Cache-Control", "no-store");
         const s = prerenderState();
-        res.end(JSON.stringify({ ok: true, url: s.url, ready: s.ready, error: s.error }));
+        // `mode`:拉起时给它的模式(`prerender-mode.mjs`),只多一个键
+        res.end(JSON.stringify({ ok: true, url: s.url, ready: s.ready, error: s.error, mode }));
       });
+
+      /*
+       * 预渲染进程的模式(docs/semantics/mechanism/rendering.md「查询渲染与预渲染进程」;cloud-task.md I4(a)):
+       * 用户机缺省一个进程,本机有 Agent 时 `full`、没有时 `user`。编辑器进程总挂着本机 Agent(`vite-plugin-ai`),
+       * 所以缺省 `full`;编辑器的环境里显式给了 `PROMPTCUT_PRERENDER_MODE` 就照它(`localPrerenderMode`)。
+       */
+      const mode = localPrerenderMode(process.env);
 
       let child: ChildProcess | null = null;
       let closing = false;
       const tail: string[] = [];
+
+      /*
+       * ---------------- 桌面应用自动成为共享项目的渲染节点(编辑器进程一侧,`server/render-node-relay.mjs`) ----------------
+       *
+       *   POST /api/render-node/bind            页面:进入共享项目 { url, projectId, assetBase?, contentId?, ticket? };记下(票据不记)转给预渲染进程
+       *   POST /api/render-node/unbind          页面:离开项目 / 取消协作 { projectId };转过去撤掉
+       *   POST /api/render-node/ticket          页面:交回连接票据 { reqId, ticket | error }
+       *   POST /api/render-node/ticket-request  预渲染进程(本机、不带 Origin):{ projectId } → { ticket };经 HMR `pc:render-node` 向页面要
+       *   GET  /api/render-node/status          诊断(不含票据)
+       * 预渲染进程崩溃重启、健康检查通过后,照记下的配置再转一次(不带票据)。
+       * 开关 `PROMPTCUT_AUTO_RENDER_NODE=0`(或环境变量已经配好节点)时 bind 回 `{ enabled: false, reason }`,什么都不转。
+       */
+      const rnLog = (event: string, fields: object = {}) => {
+        try { console.info("[render-node]", event, JSON.stringify(fields)); } catch { console.info("[render-node]", event); }
+      };
+      const rnMemory = createBindingMemory();
+      const rnRelay = createTicketRelay({
+        send: (data: object) => server.ws.send({ type: "custom", event: "pc:render-node", data }),
+        hasPage: () => { const n = (server.ws as any)?.clients?.size; return typeof n === "number" ? n > 0 : true; },
+      });
+      const rnSend = (res: any, status: number, data: unknown) => {
+        res.statusCode = status;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store");
+        res.end(JSON.stringify(data));
+      };
+      const rnBody = (req: any, limit = 16 * 1024) => new Promise<any>((resolve, reject) => {
+        let body = "";
+        req.on("data", (c: Buffer) => { body += c; if (body.length > limit) { req.destroy(); reject(new Error("请求体太大")); } });
+        req.on("end", () => { try { resolve(JSON.parse(body || "{}")); } catch { reject(new Error("请求体不是 JSON")); } });
+        req.on("error", reject);
+      });
+      /** 转给预渲染进程;它没就绪就算了(就绪后照记下的再转) */
+      const rnForward = async (pathname: string, body: object) => {
+        const s = prerenderState();
+        if (!s.ready || !s.url) return { ok: true, pending: true };
+        try {
+          const r = await fetch(s.url + pathname, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
+          return await r.json().catch(() => ({ ok: false, error: `预渲染进程回了非 JSON(HTTP ${r.status})` }));
+        } catch (e: any) {
+          return { ok: false, pending: true, error: String(e?.message ?? e) };
+        }
+      };
+      const rnDeliverRemembered = () => {
+        const b = rnMemory.get();
+        if (!b) return;
+        void rnForward("/api/frames/render-node", b).then((r: any) => rnLog("replay", { projectId: b.projectId, action: r?.action ?? null, ok: r?.ok !== false }));
+      };
+      server.middlewares.use("/api/render-node", (req, res, next) => {
+        const route = (req.url || "/").split("?")[0];
+        if (req.method === "GET" && route === "/status") {
+          return rnSend(res, 200, { ok: true, enabled: autoRenderNodeOffReason(process.env) === null, off: autoRenderNodeOffReason(process.env), binding: rnMemory.get(), relay: rnRelay.stats() });
+        }
+        if (req.method !== "POST") return next();
+        void (async () => {
+          let input: any;
+          try { input = await rnBody(req); } catch (e: any) { return rnSend(res, 400, { ok: false, error: e?.message || String(e) }); }
+          if (route === "/bind") {
+            const off = autoRenderNodeOffReason(process.env);
+            if (off) return rnSend(res, 200, { ok: true, enabled: false, reason: off });
+            let binding;
+            try { binding = normalizeBinding(input); } catch (e: any) { return rnSend(res, 400, { ok: false, error: e?.message || String(e) }); }
+            const prev = rnMemory.get();
+            rnMemory.set(binding);
+            if (!prev || prev.projectId !== binding.projectId || prev.url !== binding.url) rnLog("bind", { projectId: binding.projectId, url: binding.url, assetBase: binding.assetBase, contentId: binding.contentId });
+            const r = await rnForward("/api/frames/render-node", { ...binding, ...(ticketOk(input.ticket) ? { ticket: input.ticket } : {}) });
+            return rnSend(res, 200, { enabled: true, ...r });
+          }
+          if (route === "/unbind") {
+            const projectId = typeof input?.projectId === "string" ? input.projectId : null;
+            const cleared = rnMemory.clear(projectId);
+            if (cleared) rnLog("unbind", { projectId, reason: typeof input?.reason === "string" ? input.reason.slice(0, 40) : null });
+            const r = await rnForward("/api/frames/render-node/unbind", { projectId, reason: typeof input?.reason === "string" ? input.reason.slice(0, 40) : "page-left" });
+            return rnSend(res, 200, { cleared, ...r });
+          }
+          if (route === "/ticket") {
+            return rnSend(res, rnRelay.answer(input) ? 200 : 404, { ok: true });
+          }
+          if (route === "/ticket-request") {
+            // 只给本机的预渲染进程(不带 Origin 的服务端请求);浏览器里的页面发来的一律拒(api 守卫之外再挡一道)
+            if (req.headers.origin) return rnSend(res, 403, { ok: false, error: "只给本机进程" });
+            const projectId = typeof input?.projectId === "string" ? input.projectId : "";
+            const b = rnMemory.get();
+            if (!b || b.projectId !== projectId) return rnSend(res, 409, { ok: false, code: "not-bound", error: "编辑器没有绑这个项目" });
+            try {
+              const ticket = await rnRelay.request(projectId);
+              return rnSend(res, 200, { ok: true, ticket });
+            } catch (e: any) {
+              return rnSend(res, 503, { ok: false, code: e?.code ?? "no-ticket", error: e?.message || String(e) });
+            }
+          }
+          return rnSend(res, 404, { ok: false, error: "Unknown render-node operation" });
+        })();
+      });
 
       const start = async () => {
         const port = await freePort();
@@ -110,12 +215,17 @@ export function prerenderPlugin(): Plugin {
           env: {
             ...process.env,
             PROMPTCUT_ROLE: "prerender",
+            PROMPTCUT_PRERENDER_MODE: mode,
             PROMPTCUT_CORS_ORIGINS: editorOrigins(server).join(","),
             /*
              * 编辑器那一端的地址,给镜像插件回拉整份项目用(A7)。帧请求的 body 里只有
              * `{session, localRev}`,转发丢了或者这个进程刚起来的时候,它就按这个键
              * 去 `GET /api/data/project?session=&localRev=` 把那一版要回来。
-             * (将来 `agent` 模式的预渲染进程不带它 —— 那一份的项目由 Agent 服务端推,I2。)
+             *
+             * 〔裁〕三种模式都带。计划(cloud-task.md I1、I4(a))写的是 `agent` 模式不带、项目由 Agent 服务端推(I2),
+             * 但 I2 的推送还没有:今天本机 Agent 的查询只带 `{session, localRev}`,靠这个地址回拉;素材服务的基址
+             * (`asset-client.ts` 的 `assetServiceOrigin`)也还是它。本机拉起的 `agent` 模式不带它就一张图都查不出来。
+             * 等 I2 的推送与 I3 的「拉起时告诉它素材服务地址」落地,再按计划去掉。
              */
             PROMPTCUT_EDITOR_URL: editorOrigins(server)[0],
           },
@@ -137,6 +247,16 @@ export function prerenderPlugin(): Plugin {
         child.stderr?.on("data", keep);
         child.stdout?.on("data", forwardOut);
         child.stderr?.on("data", forwardErr);
+        /*
+         * 排障用(缺省不开):`PROMPTCUT_PRERENDER_LOG=<文件>` 时把预渲染进程的全部输出原样追加进这个文件,
+         * 每块前带收到的时刻(`docs/archive/agent-reports/AGENT-uc-latency.md` 查换页卡住用)。不设就什么都不做。
+         */
+        const fullLog = String(process.env.PROMPTCUT_PRERENDER_LOG || "").trim();
+        if (fullLog) {
+          const tee = (c: Buffer) => { try { fs.appendFileSync(fullLog, `@${Date.now()} ${c.toString()}`); } catch { /* 写不了就算了 */ } };
+          child.stdout?.on("data", tee);
+          child.stderr?.on("data", tee);
+        }
         setPrerender({ url, ready: false, error: null });
 
         const me = child;
@@ -169,7 +289,9 @@ export function prerenderPlugin(): Plugin {
               void repushMirror(url)
                 .then(() => replayReadySessions(url, () => child === me))
                 .then((results) => { if (results.length) console.log(`[prerender] 重启后重放 preload:${JSON.stringify(results)}`); })
-                .catch(() => {});
+                .catch(() => {})
+                // 页面交过共享配置(自动渲染节点):它刚起来,手里没有,照记下的再转一次(不带票据,建会话时它自己来要)
+                .then(() => { if (child === me) rnDeliverRemembered(); });
               return;
             }
           } catch { /* 还没起来 */ }

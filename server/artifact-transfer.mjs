@@ -28,6 +28,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { rangeHas } from './snapshot-store.mjs';
+import { clipInputSig } from '../src/render/layerInputSig.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { MovFrameStore, signatureMatches } from './frame-mov.mjs';
 import { readRenderRecord } from './png-record.mjs';
@@ -178,6 +179,8 @@ export const LAYER_MAP_PREFIX = 'layers:';
  * v 3(M7 契约 D12,第 13 节裁定):每层另带 `candidates: [{ envFingerprint, resultKey, key, dirKey }]` —— 切分方双份出键之后
  * 一层可能有两套键(切分方自己的、纯浏览器的),哪一份活着由页面按 `task.done` 与清单认定;层上的 v 2 字段等于第一个候选,
  * 读 v 2 的页面照旧能用(当作一个候选)。
+ * 〔裁〕stale-layer:v 3 的层可另带 `inputSig`(生成这一层的片段输入的签名,`src/render/layerInputSig.mjs`)。不加版本号 ——
+ * 旧页面不读这一项,照旧贴;新页面遇到没有这一项的层(旧节点写的)也照旧贴。
  */
 export const LAYER_MAP_VERSION = 3;
 export const layerMapKeyOf = projectId => (typeof projectId === 'string' && projectId ? LAYER_MAP_PREFIX + projectId : null);
@@ -229,8 +232,12 @@ export function layerMapOf(entry, { picked = () => true, fingerprint = null, spa
       });
     }
     const primary = candidates[0] ?? { envFingerprint: fp, resultKey, key, dirKey: control.snapshotKey };
+    // 〔裁〕stale-layer:输入签名(`src/render/layerInputSig.mjs`)—— 生成这一层的那一版片段输入。页面按当前项目算同一个签名,
+    // 对不上就是旧参数的层,不贴(C10 契约第 9 节)。算不出(片段不在这一版项目里)不写这一项,页面照旧贴
+    const inputSig = clipInputSig(project, control.clipId);
     layers.push({ clipId: control.clipId, kind, key: primary.key, tier, resultKey: primary.resultKey, dirKey: primary.dirKey,
-      entryKey: tier === 'local' ? entry.key : null, firstFrame, count, contentKey, envFingerprint: primary.envFingerprint, candidates });
+      entryKey: tier === 'local' ? entry.key : null, firstFrame, count, contentKey, envFingerprint: primary.envFingerprint, candidates,
+      ...(inputSig ? { inputSig } : {}) });
   }
   return {
     v: LAYER_MAP_VERSION, kind: 'layer-map', projectId: project.id ?? null, entryKey: entry?.key ?? null,
@@ -487,24 +494,34 @@ function resultBlocks(result) {
 
 /**
  * 把清单里的每个块 `client.put` 一次(快照进 `snap`、流进 `px`;`put` 自己会跳过素材服务上已有的块)。
- * 全部成功才返回 `{ result, uploaded, skipped }`;任何一块失败就抛(第一处错误)。
+ * 全部成功才返回 `{ result, uploaded, skipped, bytes }`;任何一块失败就抛(第一处错误,带 `stats`:推到哪儿了)。
+ * `onBlock({ blocks, pushed, bytes })`(可选,诊断):开推时报一次总块数,之后每推完一块报一次(`bytes` 是已推块的字节数)。
  */
-export async function pushResult(client, result, readBlob) {
+export async function pushResult(client, result, readBlob, { onBlock } = {}) {
   if (!result || result.v !== RESULT_VERSION) throw fail('不认识的任务清单', { retryable: false });
   if (typeof readBlob !== 'function') throw fail('pushResult 需要 readBlob', { retryable: false });
   assertResultSize(result);
   const blocks = resultBlocks(result);
-  let uploaded = 0, skipped = 0;
+  let uploaded = 0, skipped = 0, bytesDone = 0;
+  const tell = () => { try { onBlock?.({ blocks: blocks.length, pushed: uploaded + skipped, bytes: bytesDone }); } catch { /* 诊断回调出错不影响推送 */ } };
+  tell();
   const settled = await settleLimited(blocks, TRANSFER_CONCURRENCY, async ({ ns, hash, ext }) => {
     const bytes = await readBlob(hash);
     if (!bytes || sha256(bytes) !== hash) throw fail(`块 ${hash} 的内容和清单对不上(本机文件在清单之后被改过)`);
     const put = await client.put(ns, Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes), { ext });
     if (put?.hash && put.hash !== hash) throw fail(`素材服务回的哈希 ${put.hash} 和清单里的 ${hash} 不同`);
     if (put?.uploaded) uploaded++; else skipped++;
+    bytesDone += bytes.length;
+    tell();
   });
   const failed = settled.find(item => item.status === 'rejected');
-  if (failed) throw failed.reason;
-  return { result, uploaded, skipped };
+  if (failed) {
+    const reason = failed.reason;
+    const stats = { blocks: blocks.length, pushed: uploaded + skipped, failed: settled.filter(item => item.status === 'rejected').length, bytes: bytesDone };
+    if (reason && typeof reason === 'object') { try { reason.stats = stats; } catch { /* 冻结的错误对象 */ } }
+    throw reason;
+  }
+  return { result, uploaded, skipped, bytes: bytesDone };
 }
 
 /** 本机帧库是否覆盖了这一段(快照:`frames ∪ oversize` 盖住每一帧;流:每个分段和它的 init 都在清单里) */
@@ -573,6 +590,39 @@ export async function blocksPresent(client, result) {
   return !missing && present === blocks.length;
 }
 
+/**
+ * 诊断用:清单里的块在素材服务上的情况 `{ total, present, missing, errors, sample, error }`,逐个问完不提前停
+ * (只在 `has` 回 false 的路上用,那条路接下来就是整段重渲,多问几次不算成本)。`sample` 是前两个缺块的哈希前缀,
+ * `error` 是第一处问不到的原因。
+ */
+async function blocksStatus(client, result) {
+  if (typeof client?.has !== 'function') return { total: null, present: 0, missing: null, errors: 0, sample: [], error: 'client-has-missing' };
+  let blocks;
+  try { blocks = resultBlocks(result); } catch (error) { return { total: null, present: 0, missing: null, errors: 0, sample: [], error: String(error?.message ?? error).slice(0, 120) }; }
+  let present = 0, errors = 0, firstError = null;
+  const sample = [];
+  await settleLimited(blocks, TRANSFER_CONCURRENCY, async ({ ns, hash }) => {
+    try {
+      if ((await client.has(ns, hash)) === true) { present++; return; }
+    } catch (error) {
+      errors++;
+      firstError ??= `${error?.code ?? error?.status ?? ''} ${String(error?.message ?? error)}`.trim().slice(0, 160);
+    }
+    if (sample.length < 2) sample.push(`${ns}/${hash.slice(0, 12)}`);
+  });
+  return { total: blocks.length, present, missing: blocks.length - present, errors, sample, error: firstError };
+}
+
+/** 诊断用:内容库取回的清单为什么当不了这一段用(`manifestMatches` 回 false 时):第一处对不上的字段 */
+function manifestMismatch(body, ref) {
+  if (!body || typeof body !== 'object') return 'no-body';
+  if (body.v !== RESULT_VERSION) return `v:${body.v}`;
+  if (body.kind !== ref?.kind) return `kind:${body.kind}`;
+  if (body.resultKey !== ref?.resultKey) return `resultKey:${String(body.resultKey).slice(0, 16)}`;
+  if (body.range?.from !== ref?.range?.from || body.range?.to !== ref?.range?.to) return `range:${body.range?.from}-${body.range?.to}`;
+  return `shape:${body.kind}`;
+}
+
 /** 把一段的清单写进内容库。写失败、清单超限只记日志,回 false(C6.4 第 3 节:内容库清单只是给以后复用的) */
 export async function writeManifest(content, result, log = () => {}) {
   const kind = manifestKindOf(result?.kind);
@@ -600,11 +650,20 @@ function safeLog(log, event, fields) {
 /**
  * D.1 的产物库(`sink`),素材服务实现(C6.2 契约第 4 节、第 11 节第 3、7 条;C6.4 `manifest-contract.md` 第 3 节)。
  *
- *   - `has(ref)`:
- *       1. 本机帧库覆盖了整个 `range` → true(同 C6.2);
+ *   - `has(ref, { report }?)`:
+ *       1. 本机帧库覆盖了整个 `range`:素材服务上也得齐才算有(语义「节点先把产物推送到素材服务,再向文档服务报完成」,
+ *          `docs/archive/agent-reports/AGENT-sink-has.md`)。按本机帧库列清单,`pushResult` 逐块「先问 chunks、有了就跳过」,
+ *          缺的块用本机字节补推(不重渲),推齐后把清单写进内容库、回 true;补推出错回 false(记 `sink.has-push-failed`),
+ *          交给执行 → `put` 再推。`report` 同 `put` 的,补推时每处理完一块报一次(节点据此算进度);
+ *          本机覆盖了原尺寸、开着小尺寸却缺小尺寸(按别的节点的清单拉来的帧 —— `applyResult` 不拉小尺寸):只认内容库里
+ *          **两档都齐**、块都在素材服务上的清单(回 true、记下它);否则回 false,交给执行器从本机原尺寸补画小尺寸
+ *          (`docs/archive/agent-reports/AGENT-xnode-dedup.md`);
  *       2. 给了 `content`:按 `<resultKey>:<from>-<to>` 查内容库里的清单。清单在、清单覆盖整段、清单里每个块
  *          在素材服务上都有(逐个 `client.has`),三条都满足 → true,并把清单记在 sink 里(`resultFor` 回它);
- *       3. 其它 → false。
+ *       3. 其它 → false。回 false 前记一行 `sink.has-miss { reason, covered, … }`(诊断,不改行为):`reason` 是
+ *          `no-content` / `no-key` / `manifest-get-failed` / `manifest-missing` / `manifest-mismatch`(带 `field`)/
+ *          `manifest-incomplete`(带 `listed`)/ `blocks-missing`(带 `total`、`present`、`missing`、`errors`、`sample`)/
+ *          `local-small-missing`;本机覆盖而补推出错的仍记 `sink.has-push-failed`。
  *   - `resultFor(ref)`:`has` 回 true 之后拿清单(M5b 的 local-node 以去重方式完成时放进 `result`)。本机覆盖的由
  *     `collect*` 现算;查内容库得到的回记下的那份;都不是回 null。
  *   - `put({ ...ref, artifacts, meta })`:`artifacts` 本阶段忽略,字节以本机帧库为准。`collect*` 再
@@ -620,61 +679,135 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
   /** 查内容库得到的清单:清单键 → 清单 */
   const remembered = new Map();
   const collect = ref => (ref?.kind === 'snapshot' ? collectSnapshotResult(pipeline, ref) : collectStreamResult(pipeline, ref));
+  /**
+   * 查内容库里这一段的清单能不能直接当结果用:清单在、对得上、覆盖整段、(`requireSmall` 时)小尺寸也列全、块都在素材服务上。
+   * 能用回 `{ ok: true, body }` 并记下(`resultFor` 回它);不能用回 `{ ok: false, reason, fields }`(`sink.has-miss` 的原因)。
+   */
+  async function lookup(ref, { requireSmall }) {
+    if (!content || typeof content.get !== 'function') return { ok: false, reason: 'no-content', fields: {} };
+    const kind = manifestKindOf(ref?.kind);
+    const key = manifestKeyOf(ref);
+    if (!kind || !key) return { ok: false, reason: 'no-key', fields: {} };
+    let item;
+    try {
+      item = await content.get(kind, key);
+    } catch (error) {
+      safeLog(log, 'manifest.get-failed', { kind, key, code: error?.code ?? null, message: String(error?.message ?? error) });
+      return { ok: false, reason: 'manifest-get-failed', fields: { code: error?.code ?? null, message: String(error?.message ?? error).slice(0, 160) } };
+    }
+    const body = item?.body;
+    if (!item || body === undefined) return { ok: false, reason: 'manifest-missing', fields: {} };
+    if (!manifestMatches(body, ref)) return { ok: false, reason: 'manifest-mismatch', fields: { field: manifestMismatch(body, ref) } };
+    if (!resultComplete(body)) {
+      const listed = body.kind === 'snapshot' ? body.frames.length : Object.keys(body.segments ?? {}).length;
+      return { ok: false, reason: 'manifest-incomplete', fields: { listed } };
+    }
+    if (requireSmall && !smallComplete(body)) return { ok: false, reason: 'no-small', fields: { small: smallFramesOf(body).length } };
+    if (!(await blocksPresent(client, body))) {
+      let status;
+      try { status = await blocksStatus(client, body); } catch (error) { status = { error: String(error?.message ?? error).slice(0, 160) }; }
+      return { ok: false, reason: 'blocks-missing', fields: status };
+    }
+    remembered.set(key, body);
+    return { ok: true, body };
+  }
   return {
-    async has(ref) {
-      /*
-       * c10a 第 9 节:开着小尺寸时,本机帧库覆盖了整段、而这一段还缺小尺寸,就不算已有 —— 交给执行器补上小尺寸再推。
-       * 这时也不去查内容库:那里的清单多半是本机推送队列边渲边写的,原尺寸齐、小尺寸缺,认了它这一段就永远缺小尺寸。
-       */
-      try {
-        if (await coversRange(pipeline, ref)) {
-          if (!wantsSmall(pipeline, ref)) return true;
-          const { result } = await collect(ref);
-          return resultComplete(result) && smallComplete(result);
-        }
-      } catch { /* 当本机没有 */ }
-      if (!content || typeof content.get !== 'function') return false;
-      const kind = manifestKindOf(ref?.kind);
-      const key = manifestKeyOf(ref);
-      if (!kind || !key) return false;
-      try {
-        const item = await content.get(kind, key);
-        const body = item?.body;
-        if (!manifestMatches(body, ref) || !resultComplete(body)) return false;
-        if (!(await blocksPresent(client, body))) return false;
-        remembered.set(key, body);
-        return true;
-      } catch (error) {
-        safeLog(log, 'manifest.get-failed', { kind, key, code: error?.code ?? null, message: String(error?.message ?? error) });
+    async has(ref, { report } = {}) {
+      /** 回 false 前记一行 `sink.has-miss`(为什么没走去重;诊断,不改行为) */
+      const miss = (reason, fields = {}) => {
+        safeLog(log, 'sink.has-miss', { resultKey: String(ref?.resultKey ?? '').slice(0, 16), kind: ref?.kind ?? null, range: ref?.range ?? null, reason, ...fields });
         return false;
+      };
+      /*
+       * c10a 第 9 节:开着小尺寸时,本机帧库覆盖了整段、而这一段还缺小尺寸,本机这份就不算已有。这时只认内容库里**两档都齐**、
+       * 块都在素材服务上的清单(AGENT-xnode-dedup:别的节点产的一段,本机按清单只拉了原尺寸 —— `applyResult` 不拉小尺寸 ——
+       * 重启后本机领到它时应走去重);清单缺小尺寸就交给执行器从本机原尺寸补画小尺寸再推(不重渲原尺寸)。不认缺小尺寸的清单:
+       * 那多半是本机推送队列边渲边写的,原尺寸齐、小尺寸缺,认了它这一段就永远缺小尺寸。
+       */
+      let covered = false;
+      try { covered = await coversRange(pipeline, ref); } catch { covered = false; /* 当本机没有 */ }
+      if (covered) {
+        let collected;
+        try { collected = await collect(ref); } catch { collected = null; }
+        if (collected && resultComplete(collected.result) && (!wantsSmall(pipeline, ref) || smallComplete(collected.result))) {
+          // 本机有,素材服务上也得齐:推到一半丢了认领、又被自己重新认领时,这里补齐缺的块,不然别的成员按清单取不到
+          const tell = (fields) => { try { report?.(fields); } catch { /* 诊断回调出错不影响推送 */ } };
+          tell({ stage: 'has-push' });
+          try {
+            const pushed = await pushResult(client, collected.result, collected.readBlob, { onBlock: (p) => tell(p) });
+            if (content) await writeManifest(content, collected.result, log);
+            if (pushed.uploaded > 0) {
+              safeLog(log, 'sink.has-pushed', { resultKey: String(ref.resultKey ?? '').slice(0, 16), range: ref.range ?? null, uploaded: pushed.uploaded, skipped: pushed.skipped });
+            }
+            return true;
+          } catch (error) {
+            safeLog(log, 'sink.has-push-failed', { resultKey: String(ref.resultKey ?? '').slice(0, 16), range: ref.range ?? null,
+              code: error?.code ?? error?.status ?? null, message: String(error?.message ?? error).slice(0, 200), ...(error?.stats ?? {}) });
+            return false;
+          }
+        }
+        // 本机覆盖了、清单却不全(缺小尺寸,c10a 第 9 节):内容库里两档齐的清单才认(见上),否则交给执行器补上再推
+        if (collected && wantsSmall(pipeline, ref)) {
+          const found = await lookup(ref, { requireSmall: true });
+          if (found.ok) return true;
+          if (found.reason === 'blocks-missing') return miss('blocks-missing', { covered: true, ...found.fields });
+          return miss('local-small-missing', { covered: true, manifest: found.reason, ...found.fields });
+        }
       }
+      const found = await lookup(ref, { requireSmall: false });
+      return found.ok ? true : miss(found.reason, { covered, ...found.fields });
     },
     async resultFor(ref) {
       try {
         if (await coversRange(pipeline, ref)) {
           const { result } = await collect(ref);
-          return resultComplete(result) && (!wantsSmall(pipeline, ref) || smallComplete(result)) ? result : null;
+          if (resultComplete(result) && (!wantsSmall(pipeline, ref) || smallComplete(result))) return result;
+          // 本机这份缺小尺寸:`has` 认的是内容库里两档齐的那份(记下了),回它
         }
       } catch { /* 退到记下的清单 */ }
       const key = manifestKeyOf(ref);
       return key && remembered.has(key) ? remembered.get(key) : null;
     },
-    async put(ref) {
+    /**
+     * 第二个参数(可选,诊断):`report({ stage, blocks, pushed, bytes })` —— `stage` 是 `collect`(列清单)/ `push`(推块);
+     * 推块时每推完一块报一次。没收全时回包另带 `reason`(为什么)与 `stats`(`{ blocks, pushed, bytes, ms }`),
+     * 并记一行 `sink.incomplete`;收全时回包带 `stats`。
+     */
+    async put(ref, { report } = {}) {
+      const started = Date.now();
+      const tell = (fields) => { try { report?.(fields); } catch { /* 诊断回调出错不影响推送 */ } };
+      let progress = { blocks: null, pushed: 0, bytes: 0 };
+      let stage = 'collect';
+      const stats = () => ({ ...progress, ms: Date.now() - started });
+      const incomplete = (reason, extra = {}) => {
+        const out = { complete: false, reason, stats: stats() };
+        safeLog(log, 'sink.incomplete', { resultKey: String(ref?.resultKey ?? '').slice(0, 16), range: ref?.range ?? null, reason, ...out.stats, ...extra });
+        return out;
+      };
       try {
-        if (ref?.kind !== 'snapshot' && ref?.kind !== 'stream') return { complete: false };
+        if (ref?.kind !== 'snapshot' && ref?.kind !== 'stream') return incomplete('bad-kind');
+        tell({ stage: 'collect' });
         const collected = await collect(ref);
-        if (!resultComplete(collected.result)) return { complete: false };
+        if (!resultComplete(collected.result)) {
+          const listed = ref.kind === 'snapshot' ? collected.result.frames.length : Object.keys(collected.result.segments ?? {}).length;
+          return incomplete('range-missing', { listed });
+        }
         // c10a 第 9 节:两档都推送成功才算完成;缺小尺寸回 incomplete,节点按可重试失败交回,重做时补上
         if (wantsSmall(pipeline, ref) && !smallComplete(collected.result)) {
           safeLog(log, 'sink.small-incomplete', { resultKey: String(ref.resultKey ?? '').slice(0, 16), range: ref.range ?? null,
             frames: collected.result.frames.length, small: smallFramesOf(collected.result).length });
-          return { complete: false };
+          return incomplete('small-missing', { frames: collected.result.frames.length, small: smallFramesOf(collected.result).length });
         }
-        await pushResult(client, collected.result, collected.readBlob);
+        stage = 'push';
+        tell({ stage });
+        await pushResult(client, collected.result, collected.readBlob, {
+          onBlock: (p) => { progress = p; tell(p); },
+        });
         if (content) await writeManifest(content, collected.result, log);
-        return { complete: true, result: collected.result };
-      } catch {
-        return { complete: false };
+        return { complete: true, result: collected.result, stats: stats() };
+      } catch (error) {
+        const code = error?.code ?? error?.status ?? null;
+        return incomplete(`${stage}-failed${code !== null ? `:${String(code).slice(0, 40)}` : ''}`, { message: String(error?.message ?? error).slice(0, 200) });
       }
     },
   };

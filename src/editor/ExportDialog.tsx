@@ -118,15 +118,20 @@ export function ExportDialog(props: {
 
         {state.phase === "done" && (
           <div className="pc-export-ok">
-            视频已保存。其余产物（overlay.mov、逐帧 PNG）在产物目录里；默认导出帧与视频共用 Chrome FrameScene。
+            视频已保存。只含卡片的透明层（overlay.mov）在产物目录里。
           </div>
+        )}
+
+        {/* 完成但有素材因缺失被跳过(TopBar 用 exportSkippedMessage 写进 message):照列出来,不静默 */}
+        {state.phase === "done" && state.message && (
+          <div className="pc-export-err" data-pc="export-skipped" style={{ whiteSpace: "pre-line" }}>{state.message}</div>
         )}
 
         {/* 取消是用户自己按的,标题已经说了「已取消导出」,这里再复述一遍没有信息量,
             改成说清楚现场留下了什么 */}
         {state.phase === "cancelled" && (
           <div className="pc-export-ok">
-            渲染已停止。产物目录里可能留有部分帧，重新导出会覆盖它们。
+            渲染已停止。中间文件已清掉；重新导出会另建一个产物目录。
           </div>
         )}
 

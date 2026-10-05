@@ -20,6 +20,7 @@
  * 注意:创建者的 dev server 跑在本工作区上,跑的期间不要改工作区里的文件(见 `c10a-demo-probe.mjs` 文件头)。
  * 不打印令牌、口令、邀请码原文。输出:过程写 stderr;stdout 最后一行是 `{ ok, fails, … }`,`ok` 为假时退出码 1。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -265,9 +266,10 @@ async function adminDelete(M, projectId, creator) {
 let browser = null;
 async function launchBrowser() {
   const { default: puppeteer } = await import('puppeteer');
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
   return puppeteer.launch({
     headless: true, protocolTimeout: 900_000, defaultViewport: { width: 1440, height: 900 },
-    args: [...(arg('--debug-port', null) ? [`--remote-debugging-port=${arg('--debug-port', null)}`] : []), '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'],
+    args: [...PROBE_CHROME_ARGS, ...(arg('--debug-port', null) ? [`--remote-debugging-port=${arg('--debug-port', null)}`] : []), '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'],
   });
 }
 const P = (page, fn, ...a) => page.evaluate(fn, ...a);
@@ -309,7 +311,7 @@ async function stageSample(page) {
         suppressed: w.classList.contains('pc-suppressed'),
         small: !!w.querySelector(':scope > [data-pc-snapshot-plane] img[data-pc-small-snapshot]'),
         placeholder: !!slot && !slot.hidden,
-        unsupported: !!w.querySelector(':scope > [data-pc-placeholder-fixed]'),
+        unsupported: !!slot && !slot.hidden && slot.getAttribute('data-pc-placeholder-reason') === 'unsupported', // 2026-09-29 起 unsupported 进显隐调度(不再常驻)
       };
     });
     return { playing: !!d.beatRunning, wraps, lowMemLive: d.lowMemLive ?? [], role: d.role ?? null, job: d.job ?? null, stageSuppressed: d.suppressed ?? null };

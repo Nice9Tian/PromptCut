@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { PNG } from 'pngjs';
 import { normalizePixelMapDef, mapRgba, classifyPixelMap } from '../../src/kernel/pixelMap.mjs';
 
@@ -87,7 +88,7 @@ const CASES = [
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-pmgl-'));
 const vite = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx',
   ['vite', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'],
-  { cwd: ROOT, env: { ...process.env, TEMP: tmp, TMP: tmp }, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+  { cwd: ROOT, env: { ...process.env, TEMP: tmp, TMP: tmp, PROMPTCUT_NO_PORT_FILE: '1' }, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
 let viteLog = '';
 vite.stdout.on('data', (d) => { viteLog += d; });
 vite.stderr.on('data', (d) => { viteLog += d; });
@@ -124,7 +125,7 @@ try {
   await waitHttp(`http://127.0.0.1:${PORT}/`, 120000);
   browser = await puppeteer.launch({
     headless: true, protocolTimeout: 300000,
-    args: ['--window-position=-32000,-32000', '--hide-scrollbars', '--no-first-run',
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--hide-scrollbars', '--no-first-run',
       '--autoplay-policy=no-user-gesture-required'],
   });
   const page = await browser.newPage();

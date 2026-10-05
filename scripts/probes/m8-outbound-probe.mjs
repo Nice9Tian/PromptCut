@@ -64,6 +64,7 @@
  *   （`PROMPTCUT_TEST_ENV_FINGERPRINT`，C10 集成）进了两台的检出，在两台的两个终端里设同一个值；在那之前，creator 改在笔记本
  *   上跑（第一个实例，`--port 5792`），PC 只看结果。阿里云上文档服务、素材服务、协调口同在 `8-219-80-16.sslip.io:443` 后面，
  *   代理记录按 host:port 分不开三者，proxy-covers-* 两条只证「都经代理」，分不出谁是谁（字节数仍在）。
+ *   `PC_CHROME_ARGS` 只把参数原样透传给探针起的 Chrome(典型用途:云端 Linux 以 root 运行要 `--no-sandbox`);不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则对远端站点的探针在证书有问题时照样通过,掩盖真问题。
  *   云端容器当主机（真「只能出网」，容器已有 HTTPS_PROXY；另要 PC_CHROME_ARGS=--no-sandbox）：
  *     node scripts/probes/m8-outbound-probe.mjs --role host --proxy env --hosted https://8-219-80-16.sslip.io/hosted  *       --coord https://8-219-80-16.sslip.io/coord --run <id>
  *   指纹的限制同上（容器与 creator 那台的指纹几乎一定不同）。
@@ -71,6 +72,7 @@
  * 输出：过程写 stderr；stdout 最后一行一行 JSON `{ probe, role, run, ok, checks, fails, … }`，`ok` 为假退出码 1，参数不对 2。
  * 口令、令牌不进 stdout / stderr；代理记录不含路径、查询串与请求头。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, fork, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -274,7 +276,8 @@ async function runHost(out) {
   out.proxy = { url: redactProxy(PROXY), external: EXTERNAL, addrs: [...proxyAddrs] };
   out.env = { NODE_USE_ENV_PROXY: process.env.NODE_USE_ENV_PROXY, NO_PROXY: process.env.NO_PROXY, node: process.version };
   const tcpScript = path.join(OUT, 'tcp-sample.ps1');
-  fs.writeFileSync(tcpScript, TCP_PS1);
+  // 带 UTF-8 BOM:TCP_PS1 里有中文注释，中文 Windows 的 PowerShell 5.1 读无 BOM 脚本按 GBK 解码
+  fs.writeFileSync(tcpScript, '\uFEFF' + TCP_PS1);
   let child = null;
   let lines = [];
   let sampler = null;

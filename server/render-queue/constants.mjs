@@ -37,3 +37,11 @@ export const QUEUE_ENV = Object.freeze({
  * 文件系统，节点侧不能引，所以在这里另记一份，单测核对两边相等。不是 QUEUE_DEFAULTS 的一项：队列本体不用它。
  */
 export const LOCK_IDLE_TAKEOVER_MS = 30_000;
+
+/**
+ * 节点报「还在、在忙」（`node.active`，M7 D2 补充〔裁〕，`claude/queue-maint`）的间隔：队列在 `node.welcome` 里以
+ * `activeIntervalMs` 告诉节点，节点忙着（生成别的卡的快照、后台舞台在测量或补跑）又没有这张卡的认领时按它报。
+ * 必须明显小于 `LOCK_IDLE_TAKEOVER_MS`：两次之间锁的闲置最多长到这么久，远不到接手的门槛（三级数字，沿用续约间隔）。
+ * 不是 QUEUE_DEFAULTS 的一项（那张表的键被契约 A.2 列死）。
+ */
+export const NODE_ACTIVE_INTERVAL_MS = 10_000;

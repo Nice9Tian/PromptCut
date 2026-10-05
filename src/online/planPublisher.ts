@@ -111,7 +111,7 @@ export interface PlanPublisher {
   /** 本页的纯浏览器节点报到状态变了(M7):等着的那一版马上发 */
   nodeChanged(): void;
   dispose(): void;
-  debug(): { measured: boolean; want: Version | null; last: string | null; helloOk: boolean; nodeWaitMs: number | null; log: { at: number; id: string; clips: number; ok: boolean; error?: string; state?: string; waitedMs?: number; node?: string }[] };
+  debug(): { measured: boolean; want: Version | null; last: string | null; lastClips: string[]; helloOk: boolean; nodeWaitMs: number | null; log: { at: number; id: string; clips: number; ok: boolean; error?: string; state?: string; waitedMs?: number; node?: string }[] };
 }
 
 /** endpoint → request:按 reqId 等回包 */
@@ -146,6 +146,8 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
   let measuredOk = false;
   let want: Version | null = null;
   let last: string | null = null;
+  /** 上一次发成的那一份清单(探针核「清单含哪些片段」;任务 id 里只有签名) */
+  let lastClips: string[] = [];
   let helloOk = false;
   let timer: unknown = null;
   let busy = false;
@@ -196,6 +198,7 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
       const r = results.find((x) => x?.id === task.id);
       if (!r || r.error) throw new Error(`task.publish:${r?.error ?? "no-result"}`);
       last = task.id;
+      lastClips = [...task.input.clips];
       note({ at: now(), id: task.id, clips: clips.length, ok: true, state: r.state, node, ...(waitedMs !== undefined ? { waitedMs } : {}) });
     } catch (e) {
       const error = String((e as Error)?.message ?? e);
@@ -232,6 +235,6 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
       timer = null;
       over?.stop();
     },
-    debug: () => ({ measured: measuredOk, want, last, helloOk, nodeWaitMs: waitSince === null ? null : now() - waitSince, log: log.slice() }),
+    debug: () => ({ measured: measuredOk, want, last, lastClips: [...lastClips], helloOk, nodeWaitMs: waitSince === null ? null : now() - waitSince, log: log.slice() }),
   };
 }

@@ -30,6 +30,7 @@
  * 令牌：集群令牌与协调口令牌现场生成，只进子进程环境，不打印。
  * 输出：过程写 stderr；stdout 最后一行是结果行（`lib.mjs` 的形状），ok 为假退出码 1，参数不对 2。
  */
+import '../../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

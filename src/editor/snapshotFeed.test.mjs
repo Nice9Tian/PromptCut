@@ -327,38 +327,46 @@ test("低内存档:一层的就绪表有缺口(清单缺几帧小尺寸)时,有�
 
 /* ---------------------------------------------------------------- C10 第 9 节:在线的用户卡、图卡 */
 
-test("在线浏览器模式:用户卡、图卡不进 heavy、不选帧、不报缺口、不取字节;桌面照旧(C10 契约第 9 节 + 第 18 节第 6 条)", async () => {
+test("在线浏览器模式:用户卡、图卡(含同步来的)一律按重卡,照常选帧、报缺口、取字节;停下不认「已精确」;桌面照旧(C10 契约第 9 节,2026-09-29)", async () => {
   const registry = await import(srcUrl("kernel/registry.ts"));
   const host = await import(srcUrl("render/placeholderHost.ts"));
   registry.registerCards([{ id: "graphish", card: () => null, params: {} }]);
   registry.setUserCardSources({ "mine.tsx": "" }, { mine: "mine.tsx" });
+  registry.setSyncedUserCards([{ id: "synced", name: "同步卡" }]);
   const clips = [
     { ...card("u", 0, 10), cardId: "mine" },
     { ...card("g", 0, 10), cardId: "graphish" },
+    { ...card("s", 0, 10), cardId: "synced" },
     card("b", 0, 10),
   ];
   const p = project(clips);
+  // 分派表只判 u、g、b 重:同步卡 s 表里没判重(本机测不了它)
   plan = heavyEverywhere("u", "g", "b");
-  for (const id of ["u", "g", "b"]) src.push(layer(id, [[0, 299]]));
+  for (const id of ["u", "g", "s", "b"]) src.push(layer(id, [[0, 299]]));
   try {
-    // 桌面:三张都是重卡,照常选帧、取字节
+    // 桌面:按分派表,同步表不起作用
     host.setOnlineBrowserMode(false);
     assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, ["b", "g", "u"]);
-    // 在线:只剩内置卡
+    // 在线:四张都按重卡
     host.setOnlineBrowserMode(true);
     resetSnapshotFeed(); src = fakeSource(); setSnapshotSource(src); syncSnapshotSubscription(() => {});
-    for (const id of ["u", "g", "b"]) src.push(layer(id, [[0, 100]]));
+    for (const id of ["u", "g", "s", "b"]) src.push(layer(id, [[0, 100]]));
     const got = planFeed({ project: p, t: 5, playing: true });
-    assert.deepEqual(got.heavy, ["b"]);
-    assert.deepEqual([...got.picks.keys()], ["b"]);
-    assert.deepEqual(got.wanted.map((w) => w.clipId), ["b"], "缺口只报内置卡");
-    assert.deepEqual(suppressedAt({ project: p, t: 5, playing: true }), ["b"]);
+    assert.deepEqual(got.heavy, ["b", "g", "s", "u"]);
+    assert.deepEqual([...got.picks.keys()].sort(), ["b", "g", "s", "u"], "照常选帧(回溯到 100)");
+    assert.deepEqual(got.wanted.map((w) => w.clipId).sort(), ["b", "g", "s", "u"], "照常报缺口");
+    assert.deepEqual(suppressedAt({ project: p, t: 5, playing: true }), ["b", "g", "s", "u"], "播放中一律抑制");
     const stage = fakeStage();
     await deliverSnapshots(stage, "front", { project: p, t: 1, playing: true });
     await settle();
-    assert.ok(src.fetched.length > 0 && src.fetched.every((id) => id.includes("k-b")), `只为内置卡取字节:${src.fetched.join(",")}`);
+    for (const id of ["u", "g", "s", "b"]) assert.ok(src.fetched.some((f) => f.includes(`k-${id}`)), `${id} 照常取字节:${src.fetched.join(",")}`);
+    // 暂停态:舞台报了 settled(停下追到精确)的内置卡不再投;本机跑不了的卡停下不追,照常选帧
+    noteSettled("front", ["b", "u", "s"]);
+    const paused = planFeed({ project: p, t: 1, playing: false });
+    assert.deepEqual([...paused.picks.keys()].sort(), ["g", "s", "u"]);
   } finally {
     host.setOnlineBrowserMode(false);
+    registry.setSyncedUserCards([]);
     registry.setUserCardSources({}, {});
   }
 });

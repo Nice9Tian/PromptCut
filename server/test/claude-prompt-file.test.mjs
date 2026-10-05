@@ -8,12 +8,17 @@
  * 原生工具一被拒就改走文本协议重试,工具清单拼进系统提示词后 48,000 字符,超过 Windows
  * 单条命令行 32767 的上限,当场 `spawn ENAMETOOLONG`。agy 那边同样的坑见 agy-stdin.test.mjs。
  */
-import { test, mock } from 'node:test';
+import { test, mock, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import * as realChildProcess from 'node:child_process';
+import { useFakeCliHome } from './fake-cli-home.mjs';
+
+// claude / agy 解析到临时目录里的假 .exe,断言 spawn 实参时不受本机装法(npm 垫片等)影响
+const fakeCli = useFakeCliHome();
+after(() => fakeCli.dispose());
 
 const WINDOWS_CMDLINE_LIMIT = 32767;
 

@@ -6,6 +6,8 @@
  *        [--ticket-ttl-ms 20000]
  *        [--no-video]            不导入视频(只验卡片)
  *        [--only-a4]             只跑到 A4(播放、暂停追活渲)为止,跳过 A2 的重开与 A5(排障用)
+ *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`),验端到端:成员页发布的清单计划含它,桌面渲染节点渲出来、
+ *                                写进层表,成员页贴上快照、没有「需要本地 PC 渲染辅助」的图标与徽标(C10 契约第 9 节,2026-09-29)
  *        [--base-port 5420]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
  *                                (A5 里创建者关掉之后,独立渲染主机用同一段)
  *
@@ -53,6 +55,7 @@
  *   - `--test-fingerprint`:给主机设 `PROMPTCUT_TEST_ENV_FINGERPRINT`(本机自测时让主机与页面的环境不同;跨机不用)。
  *   - 环境变量 `PROBE_MAIL_TOKEN`:协调口开了信箱时 KV 要它(`coordClient` 自动带,不打印)。
  *
+ *   - `PC_CHROME_ARGS` 只把参数原样透传给探针起的 Chrome(典型用途:云端 Linux 以 root 运行要 `--no-sandbox`);不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则对远端站点的探针在证书有问题时照样通过,掩盖真问题。
  *   - 云端 Linux 另要 `NODE_USE_ENV_PROXY=1`、`PC_CHROME_ARGS=--no-sandbox`(原样传给子进程)。主机环境里没有 ffmpeg 照常起:
  *     在线页面计划切出的是卡片快照任务(HTML 快照与 PNG 小尺寸,用 Chrome),不用 ffmpeg;轨道流(要 H.264 编码器)在
  *     render-host 缺省关着(`PROMPTCUT_STREAMS=0`),开了也会按「探不到编码器」报 `streams: false`。结果行记 `ffmpeg`(找没找到)、
@@ -130,6 +133,7 @@
  *   abort          creator 出错收尾时写;host 看到就退出
  *   host           host 的结果行(`e6Reverse` 时带 `ids`,同 host.progress)
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { fork, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -147,6 +151,7 @@ const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const A10 = argv.includes('--a10');
 const ONLY_A4 = argv.includes('--only-a4');
+const USER_CARD = argv.includes('--user-card');
 const KEEP = argv.includes('--keep-temp');
 const VIDEO = !argv.includes('--no-video');
 const BASE = Number(arg('--base-port', 5420));
@@ -256,6 +261,8 @@ function pidOnPort(port) {
 
 let combo = null;
 const proxies = [];
+/** 代理上升级过的连接(两头的 socket),收尾时一起掐掉 */
+const upgraded = new Set();
 const docHeaders = [];
 async function startLocalSite() {
   for (const p of [PORTS.editor, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
@@ -315,6 +322,8 @@ async function startLocalSite() {
       const url = new URL(req.url, origin);
       if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
       const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
+      upgraded.add(socket);
+      socket.on('close', () => upgraded.delete(socket));
       const up = net.connect(PORTS.doc, '127.0.0.1', () => {
         const lines = [`${req.method} ${target} HTTP/1.1`];
         for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
@@ -323,6 +332,9 @@ async function startLocalSite() {
         up.pipe(socket);
         socket.pipe(up);
       });
+      upgraded.add(up);
+      up.on('close', () => { upgraded.delete(up); socket.destroy(); });
+      socket.on('close', () => up.destroy());
       up.on('error', () => socket.destroy());
       socket.on('error', () => up.destroy());
     });
@@ -1068,9 +1080,10 @@ async function adminOp(M, projectId, creator, op, fields = {}) {
 let browser = null;
 async function launchBrowser() {
   const { default: puppeteer } = await import('puppeteer');
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
   return puppeteer.launch({
     headless: true, protocolTimeout: 900_000, defaultViewport: { width: 1600, height: 1000 },
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu'],
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu'],
   });
 }
 const P = (page, fn, ...a) => page.evaluate(fn, ...a);
@@ -1453,12 +1466,19 @@ try {
     const extras = [];
     for (let i = 0; i < spec.extra; i++) {
       const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: 1 });
-      S.actions.setClipParams(c.id, { burnMs: 40, label: 'x' });
+      /*
+       * padNodes:把这一层的快照做到约 70 KB(swap-tuning:在线换帧成本按快照大小估,`0.8 + 0.04 × KB` ≈ 3.6 ms;
+       * 原来这几层快照约 12 KB、只有 1.3 ms,9 层加起来装得下一拍,A4 的「装不下显示占位」就验不到了)。
+       * 9 层 ≈ 1.3 + 8 × 3.6 ms > 23.3 ms:装得下 7 层、2 层占位,与改之前按一律 3 ms 算的一样。
+       */
+      S.actions.setClipParams(c.id, { burnMs: 40, label: 'x', padNodes: 60 });
       extras.push(c.id);
     }
+    // --user-card:一张仓库用户卡(在线页面跑不了它的代码,只能贴渲染节点的产物)
+    const user = spec.userCard ? S.actions.addClipOnNewTrack({ index: 0, cardId: 'mu-animated-shiny-text', start: 0, duration: spec.seconds }) : null;
     S.actions.seek(1);
-    return { light: light?.id ?? null, main: main?.id ?? null, extras };
-  }, { mediaId: state.media?.id ?? null, seconds: SECONDS, extra: EXTRA_HEAVY });
+    return { light: light?.id ?? null, main: main?.id ?? null, extras, userClip: user?.id ?? null };
+  }, { mediaId: state.media?.id ?? null, seconds: SECONDS, extra: EXTRA_HEAVY, userCard: USER_CARD });
   Object.assign(state, clips);
   check(state.main && state.extras.length === EXTRA_HEAVY, '创建者放好卡片', clips);
   state.docId = await P(creator, async () => (await import('/src/store/project.ts')).getState().project.id);
@@ -1468,6 +1488,9 @@ try {
   await creator.waitForSelector('[data-pc="collab-section"]', { visible: true, timeout: 20_000 });
   await creator.click('[data-pc="collab-toggle"]');
   await creator.waitForSelector('[data-pc="collab-where-hosted"]', { visible: true });
+  // 创建者用户名的缺省值(设备名)是异步填的:等它填上;填不上就自己写一个(不然提交时报「创建者用户名和密码不能为空」)
+  const nameFilled = await until('创建者用户名的缺省值填上', () => creator.$eval('#pc-collab-creator', (i) => i.value.trim()).catch(() => ''), 10_000, 200);
+  if (!nameFilled) { fails.pop(); await typeInto(creator, '#pc-collab-creator', `c10b-creator-${RUN}`.slice(0, 32)); }
   const creatorCred = { username: await creator.$eval('#pc-collab-creator', (i) => i.value), password: await creator.$eval('#pc-collab-cpw', (i) => i.value) };
   state.creatorCred = creatorCred;
   state.projectPassword = await creator.$eval('#pc-collab-ppw', (i) => i.value);
@@ -1582,6 +1605,8 @@ try {
   // A1:播放含重卡的 10 秒时间轴:主文档长任务 0,重层按拍换快照
   await P(member, () => { window.__pcLongTasks.length = 0; });
   const beatBefore = (await previewDiag(member))?.beatSwap ?? {};
+  // 任务 C(swap-tuning):播放前记下播放态互换的发起判断,播完核「自然进场不发起」
+  const entryBefore = (await previewDiag(member))?.swapPlaying ?? null;
   await P(member, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); });
   const samples = [];
   let placeholderSeen = null;
@@ -1599,6 +1624,21 @@ try {
   }
   const longTasks = await P(member, () => window.__pcLongTasks.slice());
   const beatAfter = (await previewDiag(member))?.beatSwap ?? {};
+  {
+    /*
+     * 任务 C(swap-tuning):从 0 秒连续播放,`probe-typewriter`(入点 2 秒,判轻、(b) 档、vtOk = false)是逐拍自然进场的,
+     * 不该发起播放态互换,也不该走估时(以前在它的入点附近估一次、记 skip-rate)。起播那一刻已经挂着的卡(入点 0)照旧走估时,只报不判。
+     */
+    const sp = (await previewDiag(member))?.swapPlaying ?? null;
+    state.typewriter = await P(member, () => window.__pcStore.getState().project.tracks.flatMap((tr) => tr.clips).find((c) => c.cardId === 'probe-typewriter')?.id ?? null);
+    const beforeAt = entryBefore?.lastPlan?.at ?? -1;
+    const plansInPlay = (sp?.plans ?? []).filter((x) => x.at > beforeAt);
+    const typewriterPlanned = plansInPlay.filter((x) => (x.ids ?? []).includes(state.typewriter));
+    out.steps.playEntry = { natural: { typewriter: state.typewriter, naturalSkipped: sp?.naturalSkipped ?? null, naturalSkips: sp?.naturalSkips ?? null, playRun: sp?.playRun ?? null,
+      plansInPlay: plansInPlay.map((x) => ({ t: x.t, ids: x.ids, ok: x.ok, reason: x.reason ?? null })) } };
+    check(state.typewriter && (sp?.naturalSkipped ?? []).includes(state.typewriter) && typewriterPlanned.length === 0 && sp?.playRun?.breaks === 0,
+      '任务 C:从 0 秒连续播放,自然进场的 (b) 档轻卡不发起播放态互换、不走估时(拍序号连续、没有断开)', out.steps.playEntry.natural);
+  }
   const playing = samples.filter((s) => s.playing);
   const mainSigs = playing.filter((s) => s.t >= 1).map((s) => s.wraps.find((w) => w.id === state.main)).filter((w) => w?.suppressed && w.plane).map((w) => w.planeSig);
   const worstLong = longTasks.slice().sort((a, b) => b.ms - a.ms).slice(0, 3);
@@ -1649,6 +1689,27 @@ try {
   const stillLive = await stageSample(member);
   check(stillLive && stillLive.wraps.filter((w) => w.id === state.main || state.extras.includes(w.id)).every((w) => !w.suppressed && !w.plane && !w.placeholder),
     'A4:占位撤下后不再盖回(3 秒后仍是活渲)', stillLive?.wraps?.slice(0, 4));
+  {
+    // 任务 C(swap-tuning):跳到 typewriter 中间(3 秒)再播 —— 从卡中间开始播放,照旧交给估时(发起与否由 planPlayingSwap 定)
+    const before = (await previewDiag(member))?.swapPlaying ?? null;
+    const seekAt3 = await P(member, () => { window.__pcStore.actions.seek(3); return Math.round(performance.now()); });
+    // 等 3 秒处的暂停态第二路做完再播(它跑着时父页不判播放态互换:`swapInFlight`)
+    await until('跳到 3 秒后暂停态第二路做完', async () => {
+      const d = await previewDiag(member);
+      return d && !d.swapInFlight && (d.swapLog ?? []).some((e) => Math.abs(e.t - 3) < 1e-6 && e.at >= seekAt3) ? true : null;
+    }, 90_000, 300);
+    await P(member, () => window.__pcStore.actions.play());
+    const seekPlan = await until('跳到卡中间再播:第一拍附近走估时', async () => {
+      const sp = (await previewDiag(member))?.swapPlaying ?? null;
+      const lp = (sp?.plans ?? []).find((x) => x.at > (before?.lastPlan?.at ?? -1) && (x.ids ?? []).includes(state.typewriter));
+      return lp && lp.t >= 3 && lp.t < 3.5 ? { ...sp, lastPlan: lp } : null;
+    }, 5_000, 100);
+    await P(member, () => window.__pcStore.actions.pause());
+    await until('停下', () => P(member, () => !window.__pcStore.getState().playing), 5_000, 100);
+    out.steps.playEntry = { ...(out.steps.playEntry ?? {}), seekMiddle: { lastPlan: seekPlan?.lastPlan ?? null, playRun: seekPlan?.playRun ?? null, naturalSkips: seekPlan?.naturalSkips ?? null } };
+    check(seekPlan, '任务 C:跳到卡中间再播,typewriter 照旧按估时决定(发起判断的 t 在 3～3.5 秒)', out.steps.playEntry.seekMiddle);
+    say('play-entry', out.steps.playEntry);
+  }
   const pd = await previewDiag(member);
   out.steps.settle = { settled: !!settled, stillLive: !!stillLive, feedSettled: pd?.snapshotFeed?.settled?.length ?? null, backWork: pd?.backWork, probeFrames: pd?.probeFrames };
   check(pd?.probeFrames?.gzFrames > 0 && pd.probeFrames.htmlBytes === 0, 'A1/第 2 节:后台舞台的探针帧压成可转移的 ArrayBuffer 交出', pd?.probeFrames);
@@ -1664,6 +1725,41 @@ try {
   out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp, costPublish: state.costPublish,
     publisher: await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null) };
   say('step1.done', out.steps.member);
+
+  if (USER_CARD) {
+    /* ---------------------------------------------------------------- 用户卡端到端(C10 契约第 9 节,2026-09-29 用户改语义) */
+    const tU = Date.now();
+    check(!!state.userClip, '用户卡:创建者放好了用户卡片段', state.userClip);
+    const planU = await until('用户卡:成员页发布的清单计划含用户卡片段', async () => {
+      const d = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
+      return d?.lastClips?.includes(state.userClip) ? d : null;
+    }, 120_000, 1000);
+    check(!!planU, '用户卡:成员页发布的清单计划含用户卡片段(页面一律按重卡)', planU?.lastClips);
+    const userStage = async () => {
+      const f = await frontFrame(member);
+      return f ? f.evaluate((id) => {
+        const w = document.querySelector(`[data-pc-clip="${id}"]:not([data-pc-media])`);
+        const slot = w?.querySelector(':scope > [data-pc-placeholder-slot]');
+        const plane = w?.querySelector(':scope > [data-pc-snapshot-plane]');
+        return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null } : null;
+      }, state.userClip).catch(() => null) : null;
+    };
+    const firstLook = { stage: await userStage(), badge: await P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null) };
+    await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); });
+    const got = await until('用户卡:成员页贴出桌面渲染节点产的快照,图标与徽标撤掉', async () => {
+      await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); }).catch(() => {});
+      const o = await onlineDiag(member);
+      const l = o?.layers?.find((x) => x.clipId === state.userClip);
+      const st = await userStage();
+      const badge = await P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null);
+      return l && l.ready > 0 && st?.snapshot && !st.placeholder && badge === false ? { layer: l, stage: st, ms: Date.now() - tU } : null;
+    }, 1_200_000, 5000);
+    check(!!got, '用户卡端到端:桌面节点渲出、成员页贴上快照,没有图标与徽标', { got, firstLook, last: { stage: await userStage(), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null } });
+    if (got) check(got.layer.envFingerprint === state.creatorFp, '用户卡:那一层出自创建者的桌面节点', { layer: got.layer.envFingerprint, creator: state.creatorFp });
+    await shot(member, 'user-card-e2e');
+    out.steps.userCard = { ms: Date.now() - tU, clip: state.userClip, planClips: planU?.lastClips ?? null, firstLook, got };
+    say('user-card.done', out.steps.userCard);
+  }
 
   if (A10) {
     /* ---------------------------------------------------------------- A10. 逐帧导出跨过票据时限 */
@@ -1936,8 +2032,11 @@ try {
   try { fs.writeFileSync(path.join(OUT, 'creator-editor.log'), editorLog.join('\n')); fs.writeFileSync(path.join(OUT, 'host.log'), hostLog.join('\n')); } catch { /* 写不了 */ }
   await stopHost().catch(() => {});
   await stopEditor().catch(() => {});
-  for (const s of proxies) await new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); });
-  try { await combo?.close(); } catch { /* 已关 */ }
+  // 升级过的 WebSocket 连接不归 http 服务器管,close 的回调会一直等它们:先全部掐掉,再限时等(以前会在这里挂住、不出结果行)
+  for (const sock of upgraded) { try { sock.destroy(); } catch { /* 已断 */ } }
+  const within = (p, ms) => Promise.race([p, delay(ms)]);
+  for (const s of proxies) await within(new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); }), 5000);
+  try { await within(combo?.close(), 10_000); } catch { /* 已关 */ }
   out.cleanup = { deleted, listening: [PORTS.editor, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset, PORTS.node, PORTS.node + 1, PORTS.node + 2].filter((p) => pidOnPort(p)) };
   if (!KEEP) {
     for (const d of fs.readdirSync(TMP)) {

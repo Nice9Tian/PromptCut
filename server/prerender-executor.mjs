@@ -16,10 +16,17 @@
  *                    流任务(M6c X1):对回这一版的流(内容键、结果键、分段范围),交给 `renderStreamRange` 按段产出;
  *                    对不上同样抛 `plan-mismatch`;本机不能产流(开关关着、没有编码器)抛 `no-streams`(不可重试)。
  *                    回 `null`:产物在帧库 / 流库里,sink 自己读(`collectSnapshotResult` / `collectStreamResult`)。
+ *                    共享档卡在本机快照库里记过超限帧(`index.json` 的 `oversize`,R6-14)的,交给切分的 control 标
+ *                    `snapshotOversize: true`(见 `markSnapshotOversize`),切分据此不给纯浏览器另出一份(M7 契约第 13 节
+ *                    「探针之后的更正」第 6 条;`claude/queue-maint` 任务 E)。
  *   afterSplit(planTask, { tasks })  (M7 契约 D12)local-node 切分完成、发布回包都回来之后调:按最终发布成功的细任务
  *                    记下每张卡实际出键的指纹(`pipeline.recordSplitCandidates`),带片段清单的 plan 再写一次这一版的层表 v 3
  *                    (候选按实际出键;独立渲染主机用 `publishLayerMap` 选项写,PC 用管线自己的推送队列写)。层表只在切分完成后写,
  *                    不再在切分之前按本机视图写(D12 的时机)。
+ *
+ * 诊断(`docs/archive/agent-reports/AGENT-stall-phases.md`):`render` 经 runner 给的 `phase(name, fields)` 报它此刻在哪一步 ——
+ * `project`(取项目快照、算这一版的计划)、`lane`(交给管线了、这一段的第一批还没交;`ahead` 是当时这条管线上
+ * 已经在跑的 `'queue'` lane 工作数,大于 0 就是在排队)、`frames`(在出批)、`finish`(帧都交了,在收尾:补小尺寸、换页)。
  *
  * M6c 起执行器不再有 `isIdle()`(J.4 原有):PC 节点的闲时门槛改为 `queue-idle.mjs`(X5),独立渲染主机本来就
  * 只看全局并发闸,这个判据已经没人用(集成裁定,`docs/plan/m6c-contract.md`「集成时的裁定」)。
@@ -29,10 +36,74 @@ import { snapshotTier } from './snapshot-tier.mjs';
 import { isListPlan } from './render-queue/index.mjs';
 import { splitCandidatesOf } from './artifact-transfer.mjs';
 
+/** `cardLocks`(Map、普通对象或缺省)→ `(lockKey) => 锁指纹 | null`(同 `split.mjs` 的读法) */
+function lockReader(cardLocks) {
+  const fp = value => (typeof value === 'string' && value !== '' ? value : null);
+  if (cardLocks == null) return () => null;
+  if (typeof cardLocks.get === 'function') return key => fp(cardLocks.get(key));
+  if (typeof cardLocks === 'object') return key => (Object.prototype.hasOwnProperty.call(cardLocks, key) ? fp(cardLocks[key]) : null);
+  return () => null;
+}
+
+/**
+ * 按本机快照库给共享档卡标 `snapshotOversize`(`claude/queue-maint` 任务 E):这张卡在本机快照库里有超限帧的记录
+ * (`index.json` 的 `oversize` 非空;本机渲过它时 A3c 判超限记下的,或从素材服务拉回它的清单时同样判出来的)就标。
+ * 看两个键:本机指纹的键(`control.snapshotKey`),以及这张卡锁在别的环境上时锁定方指纹的键(`cardLocks`)。
+ * 标在整张卡上,不按段:一张卡的快照只出自一种环境(卡片级指纹锁),浏览器认领其中一段就锁住整张卡,
+ * 超限的那几段它做了也是白做、别的环境又被锁挡住 —— 所以有一帧超限,整张卡都不给浏览器。
+ * 本地档不看(纯浏览器只做共享档);画布卡不看(切分本来就不给浏览器)。回新的 cardPlan 数组(标了的 control 是新对象,
+ * 缓存里的上下文不动),没有要标的回原数组。读不到快照库(测试替身、库坏了)一律当没有记录。
+ */
+export async function markSnapshotOversize(pipeline, context) {
+  const cardPlan = Array.isArray(context?.cardPlan) ? context.cardPlan : [];
+  let store = null;
+  try { store = typeof pipeline?.snapshots === 'function' ? pipeline.snapshots() : null; } catch { store = null; }
+  if (!store || typeof store.snapshotIndex !== 'function') return { cardPlan, marked: [] };
+  const lockOf = lockReader(context?.cardLocks);
+  const marked = [];
+  const out = [];
+  for (const control of cardPlan) {
+    const tier = control?.tier || snapshotTier(control?.capabilities);
+    if (!control || control.snapshotOversize === true || tier !== 'shared' || !control.contentKey || control.capabilities?.canvasHeavy === true) {
+      out.push(control);
+      continue;
+    }
+    const keys = new Set([control.snapshotKey]);
+    const locked = lockOf(`snapshot:${control.contentKey}`);
+    if (locked) keys.add(resultKeyOf(control.contentKey, locked));
+    let over = false;
+    for (const key of keys) {
+      if (typeof key !== 'string' || !key) continue;
+      try {
+        const index = await store.snapshotIndex({ tier: 'shared', key });
+        if (Array.isArray(index?.oversize) && index.oversize.length > 0) { over = true; break; }
+      } catch { /* 读不到当没有记录 */ }
+    }
+    if (over) { marked.push(control.clipId); out.push({ ...control, snapshotOversize: true }); } else out.push(control);
+  }
+  return { cardPlan: marked.length ? out : cardPlan, marked };
+}
+
 /** 按版本缓存的上下文条数(附件第 3 节:LRU 约 4 条) */
 export const PLAN_CACHE_SIZE = 4;
 
 const fail = (code, message, retryable) => Object.assign(new Error(message), { code, retryable });
+
+/**
+ * 每条管线上经执行器交给 `'queue'` lane 的工作(快照的一段、plan 的取计划):管线 → 在跑的个数。
+ * lane 是串行的(`FramePipeline.runQueueTask`),同一条管线由主机的几个项目节点的执行器共用,所以记在模块里、按管线分。
+ * 只计数,不排队、不改管线的行为。
+ */
+const laneWork = new WeakMap();
+async function onLane(pipeline, work) {
+  laneWork.set(pipeline, (laneWork.get(pipeline) ?? 0) + 1);
+  try { return await work(); }
+  finally { laneWork.set(pipeline, Math.max(0, (laneWork.get(pipeline) ?? 1) - 1)); }
+}
+/** 这条管线上此刻经执行器交给 `'queue'` lane、还没落定的工作数 */
+export function laneBusy(pipeline) {
+  return laneWork.get(pipeline) ?? 0;
+}
 
 /**
  * @param {object} options
@@ -51,6 +122,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   /** `projectId@projectRev` → Promise<{ entry, context }>;Map 的插入顺序就是 LRU 顺序 */
   const cache = new Map();
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响执行 */ } };
+  /** 同 `say`;`render` 里的 `say` 被阶段回调遮住了,那里用这个名字记日志 */
+  const note = say;
 
   const versionOf = task => {
     const projectId = task?.source?.projectId;
@@ -82,7 +155,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       if (!Array.isArray(project?.tracks) || !Number.isFinite(project?.duration) || project.duration <= 0) {
         throw fail('bad-snapshot', `项目快照 ${version} 不是能渲的项目`, false);
       }
-      return pipeline.planForQueue(project, { signal });
+      return onLane(pipeline, () => pipeline.planForQueue(project, { signal }));
     })();
     cache.set(id, work);
     while (cache.size > PLAN_CACHE_SIZE) cache.delete(cache.keys().next().value);
@@ -101,7 +174,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
     // 层表不在这里写:切分完成后按实际出键写(afterSplit,M7 D12)
     say('executor.plan', { version: id, entryKey: entry.key, controls: context.cardPlan.length, locks: context.cardLocks?.size ?? 0 });
-    return context;
+    // 任务 E:本机快照库记过超限帧的卡标 snapshotOversize(每次切分现读:超限记录会随本机渲染、拉取变多,不进按版本的缓存)
+    const { cardPlan, marked } = await markSnapshotOversize(pipeline, context);
+    if (!marked.length) return context;
+    say('executor.oversize', { version: id, clips: marked.length });
+    return { ...context, cardPlan };
   }
 
   /** 附件第 3 节「把任务对回 control」:对不上的每一项都记进 `why`,有就抛 `plan-mismatch` */
@@ -166,9 +243,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return null;
   }
 
-  async function render(task, { signal, progress } = {}) {
+  async function render(task, { signal, progress, phase } = {}) {
+    const say = (name, fields) => { try { phase?.(name, fields); } catch { /* 诊断回调出错不影响执行 */ } };
     if (task?.kind === 'stream') return renderStream(task, { signal, progress });
     if (task?.kind !== 'snapshot') throw fail('bad-task', `不认识的任务 kind:${task?.kind}`, false);
+    say('project');
     const { entry } = await contextFor(task, signal);
     const control = matchControl(task, entry);
     // c10a 契约第 17 节:补渲细任务的片段在本机可能判轻(不在预渲染集合里,管线会跳过它);按任务把它记成补渲再渲。
@@ -178,9 +257,22 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
     const range = { from: task.range.from, to: task.range.to };
     const started = Date.now();
-    if (task.tier === 'shared') await pipeline.renderCardSnapshotRange(entry, control, range, { signal, progress });
-    else await pipeline.renderSceneSnapshotRange(entry, control, range, { signal, progress });
+    const total = range.to - range.from + 1;
+    say('lane', { ahead: laneBusy(pipeline) });
+    const tracked = done => {
+      say(done >= total ? 'finish' : 'frames', { done, total });
+      progress?.(done);
+    };
+    // 诊断(不改行为):共享档这一段各步的用时(排队、借预渲染间、换页、推帧、入库、画小尺寸),记进 executor.render
+    const timing = {};
+    // 做在 Agent 专用实例上、中途给 Agent 让路时定时报一步(会话的工作计数),租约不被队列当成停滞(AGENT-maint-3)
+    const heartbeat = () => say('agent-yield');
+    await onLane(pipeline, () => (task.tier === 'shared'
+      ? pipeline.renderCardSnapshotRange(entry, control, range, { signal, progress: tracked, timing, heartbeat })
+      : pipeline.renderSceneSnapshotRange(entry, control, range, { signal, progress: tracked, heartbeat })));
     say('executor.render', { id: task.id, tier: task.tier, clipId: control.clipId, ms: Date.now() - started });
+    // 上面那个 `say` 是阶段回调(这一行照旧);分段耗时另记一行日志(`log`),编辑器进程的转发器放行它
+    note('executor.render-timing', { id: task.id, tier: task.tier, clipId: control.clipId, ms: Date.now() - started, ...timing });
     return null;
   }
 
@@ -203,5 +295,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
   }
 
-  return { plan, render, afterSplit, forget: () => cache.clear() };
+  /**
+   * 独立渲染主机的闲时认领(契约 A.12〔裁〕,`render-node/host.mjs`):任务要用哪条串行 lane —— 快照与 plan 用 `'queue'`
+   * (`runQueueTask`,一次只做一件),流用流预渲染间池,不算(回 null)。`laneBusy()` 是这条管线上此刻经执行器交给
+   * `'queue'` lane、还没落定的工作数(包括已经被中止、管线还没收手的那一件)。
+   */
+  const laneOf = task => (task?.kind === 'snapshot' || task?.kind === 'plan' ? 'queue' : null);
+  return { plan, render, afterSplit, forget: () => cache.clear(), laneOf, laneBusy: () => laneBusy(pipeline) };
 }

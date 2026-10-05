@@ -29,6 +29,7 @@
  * member-lottie-stage.png、member-particles-stage.png（可见舞台 iframe）。不打印令牌、口令、邀请码原文。
  * 输出：过程写 stderr；stdout 最后一行一行 JSON `{ ok, fails, checks, catalogRequests, … }`。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -356,9 +357,10 @@ try {
   /* ---------------------------------------------------------------- 0. 创建者(桌面)建项目、放两张卡、放云端 */
   await startEditor();
   const { default: puppeteer } = await import('puppeteer');
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
   browser = await puppeteer.launch({
     headless: true, protocolTimeout: 600_000, defaultViewport: { width: 1600, height: 1000 },
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'],
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'],
   });
   const creatorCtx = await browser.createBrowserContext();
   const creator = await newPage(creatorCtx);

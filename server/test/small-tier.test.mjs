@@ -374,7 +374,9 @@ test('ST12 sink:开着小尺寸时缺一张小尺寸就不算完成(put 回 inco
   assert.ok(manifests.size, '内容库里已有上面那份(原尺寸齐、小尺寸缺)');
   assert.equal(await sink.has(ref), false);
   assert.equal(await sink.resultFor(ref), null);
-  assert.deepEqual(await sink.put(ref), { complete: false });
+  const miss = await sink.put(ref);
+  assert.equal(miss.complete, false);
+  assert.equal(miss.reason, 'small-missing', '回包说明为什么没收全(AGENT-stall-phases 的诊断)');
   // 补上那一张:两档一起推,清单每帧都有小尺寸
   await fs.writeFile(path.join(dir, `0${SMALL_SUFFIX}`), fakeWebp(800, 450, 0));
   assert.equal(await sink.has(ref), true);

@@ -498,7 +498,11 @@ test('S-4 随机操作序列（固定种子、3000 步）下的不变量：至�
         const c = C.get(id);
         if (c && c.state === 'claimed') continue;
         const holder = nodeById[p.claim.nodeId];
-        if (holder?.conn) add(expected, holder.conn, `lease-lost|${id}|${p.claim.token}|expired`);
+        // reason 是回收原因（契约 A.12〔裁〕）：任务还在就是它的 lastError；没人订阅被删了就按 A.8 的扫描顺序推
+        const reason = c ? c.lastError
+          : now > p.claim.leaseUntil ? 'lease-expired'
+            : p.claim.progress?.done !== null && now - p.claim.progress?.changedAt > STALL ? 'stalled' : 'disconnected';
+        if (holder?.conn) add(expected, holder.conn, `lease-lost|${id}|${p.claim.token}|${reason}`);
       }
     }
 
@@ -516,8 +520,8 @@ test('S-4 随机操作序列（固定种子、3000 步）下的不变量：至�
       if (!cm || cm.kind !== 'node' || cm.actor.profile !== 'browser') continue;
       const m = e.message;
       // 对它自己请求的回绝（认领被拒、拿着别人 id 的令牌操作 / resume 回的 lease-lost）只回显它给的 id，不携带任务内容；
-      // 队列主动推的回收通知（reason 'expired'）才算「别人任务的消息」
-      if (m.type === 'task.claim-rejected' || (m.type === 'task.lease-lost' && m.reason !== 'expired')) continue;
+      // 队列主动推的回收通知（reason 是回收原因 lease-expired / stalled / disconnected）才算「别人任务的消息」
+      if (m.type === 'task.claim-rejected' || (m.type === 'task.lease-lost' && !['lease-expired', 'stalled', 'disconnected'].includes(m.reason))) continue;
       const ids = m.type === 'queue.snapshot' ? m.tasks.map(t => t.id) : m.type === 'task.opened' ? [m.task.id] : m.id ? [m.id] : [];
       for (const id of ids) assert.equal(owner[id], cm.actor.userId, `${where}：纯浏览器 ${e.connId} 收到别人任务 ${id} 的 ${m.type}`);
       if (m.type === 'task.opened') assert.equal(m.task.source.userId, cm.actor.userId);

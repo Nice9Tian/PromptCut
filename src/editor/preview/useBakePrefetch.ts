@@ -18,9 +18,10 @@ import { prerenderUrl } from "../../render/prerender";
  *
  * # 为什么盘点要问服务端
  *
- * 缓存在磁盘上,浏览器关一次页面就全忘了 —— 上次开编辑器预渲染出来的文件,前端一个都不认识。
- * 所以每轮先问一次 /api/vision/bake-status:哪些已经有了、各自多大、还有哪些是没人认领的旧文件。
- * 不问的话占用永远算不准,out/media 只会一直涨。
+ * 缓存记在服务端(字节在素材服务的 `px` 里,「输入哈希 → 内容哈希」在预渲染一侧的小索引里,见 server/bake-store.mjs),
+ * 浏览器关一次页面就全忘了 —— 上次开编辑器预渲染出来的,前端一个都不认识。
+ * 所以每轮先问一次 /api/vision/bake-status:哪些已经有了、各自多大、还有哪些是没人认领的旧快照。
+ * 不问的话占用永远算不准。
  *
  * 顺带解决了另一件事:**键只认服务端算的那一个**。预渲染、盘点、清理三方共用 `bakeTarget`,
  * 前端不自己算一套 —— 两处各算各的,迟早会「明明预渲染过却当成没渲」,而且不报错。
@@ -329,7 +330,7 @@ export function useBakePrefetch({
           /* ③ 先删再渲:腾出来的空间这一轮就能用上 */
           let evicted = 0;
           if (plan.evict.length) {
-            // 键全是服务端给的,它那边还会再拿目录比对一次,删不到 out/media 以外的东西
+            // 键全是服务端给的,它那边还会再拿自己的索引比对一次,删的只是索引条目(字节留在素材服务里)
             const gone = await post("/api/vision/bake-evict", { keys: plan.evict });
             evicted = gone.deleted?.length ?? 0;
             for (const k of gone.deleted ?? []) known.delete(k);

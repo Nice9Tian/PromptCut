@@ -6,7 +6,7 @@
  * 测试方没看实现（`claude/c10a-web`、`claude/c10a-lowmem`）。
  *
  * 契约没写死的模块路径、函数名、参数与回包形状全部集中在本文件，集成时对账只改这里。
- * 每一处假设用「假设 K<n>」标出，报告 `docs/reports/AGENT-c10a-tests.md` 按同样的编号列出。
+ * 每一处假设用「假设 K<n>」标出，报告 `docs/archive/agent-reports/AGENT-c10a-tests.md` 按同样的编号列出。
  *
  * # 实现不在时怎么办
  *
@@ -55,7 +55,7 @@
  *   K7  单舞台（契约第 8.1 节）：仍由 `src/editor/previewMode.ts` 定开几个舞台——`ONLINE` 时 `dualStage()` 恒为 false，
  *       `stageSrc('A')` 是同源地址并带 `preview=stage`（舞台据此渲 live 变体）。探测：`src/online/lowMemory.ts` 存在。
  *
- * # 集成对账（`claude/c10a-integ`，2026-09-27；逐条理由见 `docs/reports/AGENT-c10a-integ.md`）
+ * # 集成对账（`claude/c10a-integ`，2026-09-27；逐条理由见 `docs/archive/agent-reports/AGENT-c10a-integ.md`）
  *
  *   K1  与实现一致，未改。
  *   K2  判定是 `lowMemoryMode(online, { probe, override, session })`（`online` 由调用方传，判定按会话定一次），

@@ -13,6 +13,8 @@
  *         块级在这一段轮到之前读帧库算(`index.json` 的 `oversize`,帧文件的 `data:image` 占比)。
  *   执行:并发 `concurrency` 段;每段 `collect*` → `pushResult` → `content.put` 清单。失败的段按指数退避重试
  *         (5 s、30 s、120 s,之后每 10 min),不放弃。清单超过 256 KiB 的段永远写不进内容库,记日志后丢掉。
+ *         段的键目录已不在帧库里(按上限淘汰或「清理缓存」删了,`frame-library-storage.mjs`)的,推之前、推空了、
+ *         推失败时各判一次,不在就丢掉、记 `push.evicted`,不重试(存储占用计划 `docs/plan/storage-plan.md`)。
  *   落盘:`<dir>/push-queue.json`(`dir` 是帧库根),每次进队、完成时经 `atomic` 写回;重启时读回接着推;
  *         已完成的段不留在文件里。
  *
@@ -31,6 +33,8 @@ export const PUSH_PRIORITY = Object.freeze({ normal: 0, low: 1, lowest: 2 });
 const PRIORITY_NAMES = ['normal', 'low', 'lowest'];
 /** 失败后的退避:第 1、2、3 次失败后等 5 s、30 s、120 s,之后每次 10 min */
 export const PUSH_BACKOFF_MS = Object.freeze([5_000, 30_000, 120_000, 600_000]);
+/** 判不了范围、先扣在内存里的段最多这么多(满了丢最早的) */
+export const PUSH_DEFERRED_MAX = 5000;
 /** 队列文件名(在帧库根下) */
 export const PUSH_QUEUE_FILE = 'push-queue.json';
 const FILE_VERSION = 1;
@@ -112,6 +116,29 @@ export async function blockPriorityOf(pipeline, unit) {
 }
 
 /**
+ * 这一段在帧库里的键目录:快照 = `snapshots().dir(...)`(共享档 `controls-html/<dirKey>`、本地档
+ * `controls-local/<entryKey>/<dirKey>`);流 = `<帧库>/streams/<resultKey>`。算不出回 null(不判,当它在)。
+ */
+export function unitDirOf(pipeline, unit) {
+  try {
+    if (unit.kind === 'stream') return typeof pipeline?.root === 'string' && pipeline.root ? path.join(pipeline.root, 'streams', unit.resultKey) : null;
+    const dir = pipeline?.snapshots?.()?.dir?.({ tier: unit.tier, entryKey: unit.tier === 'local' ? unit.entryKey : undefined, key: unit.dirKey });
+    return typeof dir === 'string' && dir ? dir : null;
+  } catch { return null; }
+}
+
+/**
+ * 这一段的键目录是不是已经不在了(帧库按上限淘汰、或「清理缓存」删掉了它,`frame-library-storage.mjs`)。
+ * 只有确实 ENOENT 才算不在;别的错(没权限、被占)不算,照常重试。
+ */
+export async function unitEvicted(pipeline, unit) {
+  const dir = unitDirOf(pipeline, unit);
+  if (!dir) return false;
+  try { await fsSync.promises.lstat(dir); return false; }
+  catch (error) { return error?.code === 'ENOENT'; }
+}
+
+/**
  * @param {object} options
  * @param {any} options.pipeline  `FramePipeline`(用它的帧库 `snapshots()` 与 `root`)
  * @param {any} options.client  素材服务客户端(`put` / `has` / `get`)
@@ -128,11 +155,15 @@ export async function blockPriorityOf(pipeline, unit) {
  * @param {boolean} [options.attach]  建好后挂到 `pipeline.pushQueue`(管线的钩子只认这一个),缺省 true
  * @param {any} [options.gate]  带宽闸(C6.6,`bandwidth-gate.mjs`),缺省本进程共用的那一个;`false` 不接。
  *        产物从不等闸,只登记「在推」与「还有几段等着推」,让素材上传队列排在后面
+ * @param {{ accepts(unit: object): boolean | null, acceptsProject(projectId: string): boolean | null, describe?(): any } | null} [options.scope]
+ *        只推绑定项目的(`push-scope.mjs`):进队时判这一段属不属于绑定项目,不属于的不进队(留在本机);
+ *        判不了(null,绑定项目的文档 id 还没到)的先扣在内存里,`rescope()` 时再判(最多扣 `PUSH_DEFERRED_MAX` 段)。
+ *        层表同样按项目 id 判。不给 = 不限(原来的行为)。重启时从队列文件读回的段不再判(文件按项目分目录)
  */
 export function createPushQueue({
   pipeline, client, content = null, dir, log = () => {}, concurrency = 2,
   backoff = PUSH_BACKOFF_MS, settleMs = 0, clock = null,
-  now: nowOpt, setTimeout: setTimeoutOpt, clearTimeout: clearTimeoutOpt, attach = true, gate: gateOpt,
+  now: nowOpt, setTimeout: setTimeoutOpt, clearTimeout: clearTimeoutOpt, attach = true, gate: gateOpt, scope = null,
 } = /** @type {any} */ ({})) {
   if (!pipeline) throw new TypeError('createPushQueue needs a pipeline');
   if (!client || typeof client.put !== 'function') throw new TypeError('createPushQueue needs an asset client');
@@ -158,7 +189,24 @@ export function createPushQueue({
   let pumpQueued = false;
   const inflight = new Set();
   const waiters = [];
-  const counters = { enqueued: 0, merged: 0, pushed: 0, failures: 0, uploaded: 0, skipped: 0, manifests: 0, dropped: 0, restored: 0, layerMaps: 0 };
+  const counters = { enqueued: 0, merged: 0, pushed: 0, failures: 0, uploaded: 0, skipped: 0, manifests: 0, dropped: 0, restored: 0, layerMaps: 0,
+    outOfScope: 0, layerMapsOutOfScope: 0, deferredDropped: 0, evicted: 0 };
+  /** 判不了范围、先扣着的段:id → { unit, priority }(只在内存里;按进队先后,满了丢最早的) */
+  const deferred = new Map();
+  /** 范围判定:true 进队、false 不进、null 扣着;没给 scope 一律 true */
+  const judge = unit => {
+    if (!scope || typeof scope.accepts !== 'function') return true;
+    try { const v = scope.accepts(unit); return v === true ? true : v === false ? false : null; } catch { return false; }
+  };
+  let outOfScopeLogged = 0;
+  const noteOutOfScope = unit => {
+    counters.outOfScope++;
+    // 别的项目边渲边写,每批都会来一次:只记前几条和之后每 500 条一条
+    if (outOfScopeLogged < 3 || counters.outOfScope % 500 === 0) {
+      outOfScopeLogged++;
+      say('push.out-of-scope', { id: unitId(unit), count: counters.outOfScope });
+    }
+  };
   let lastError = null;
 
   const effective = item => Math.max(item.priority, unitFloor(item.unit), item.block ?? 0);
@@ -290,9 +338,24 @@ export function createPushQueue({
     inflight.add(work);
   }
 
+  /**
+   * 键目录被淘汰了:这一段在本机已经没有可推的,丢掉、不重试,也不挡队里别的段。日志只记前几条和之后每 100 条一条
+   * (一次淘汰可能带走很多段)。
+   */
+  let evictedLogged = 0;
+  function dropEvicted(item) {
+    counters.evicted++;
+    if (evictedLogged < 3 || counters.evicted % 100 === 0) {
+      evictedLogged++;
+      say('push.evicted', { id: item.id, count: counters.evicted });
+    }
+    finish(item, { dropped: true });
+  }
+
   async function pushOne(item) {
     const { unit } = item;
     const priority = PRIORITY_NAMES[effective(item)];
+    if (await unitEvicted(pipeline, unit)) { dropEvicted(item); return; }
     try {
       const task = { kind: unit.kind, tier: unit.tier, resultKey: unit.resultKey, range: unit.range, input: { canvasHeavy: unit.canvasHeavy === true } };
       const collected = unit.kind === 'snapshot'
@@ -302,6 +365,7 @@ export function createPushQueue({
       const empty = result.kind === 'snapshot' ? !result.frames.length : !Object.keys(result.segments ?? {}).length;
       if (empty) {
         // 帧库里这一段什么都没有(被清掉了,或者进队的只是超出实际长度的空段):没有可推的,不写空清单
+        if (await unitEvicted(pipeline, unit)) { dropEvicted(item); return; }
         finish(item, { dropped: true });
         say('push.empty', { id: item.id });
         return;
@@ -327,6 +391,8 @@ export function createPushQueue({
         finish(item, { dropped: true });
         return;
       }
+      // 推到一半键目录被淘汰(文件读不到、流清单没了):丢掉,不按失败无限重试
+      if (await unitEvicted(pipeline, unit)) { dropEvicted(item); return; }
       counters.failures++;
       item.attempts++;
       const delay = delays[Math.min(item.attempts - 1, delays.length - 1)];
@@ -408,6 +474,20 @@ ${layerMapSig(job.body)}`;
       if (!normalized) { say('push.bad-unit', { unit: unit ?? null }); return Promise.resolve(); }
       const id = unitId(normalized);
       const level = priorityOf(priority);
+      // 只推绑定项目的:已经在队里的段不再判(进队时判过);不在队里的先判范围
+      if (!items.has(id)) {
+        const verdict = judge(normalized);
+        if (verdict === false) { deferred.delete(id); noteOutOfScope(normalized); return Promise.resolve(); }
+        if (verdict === null) {
+          const held = deferred.get(id);
+          deferred.delete(id);
+          deferred.set(id, { unit: held?.unit.canvasHeavy && normalized.kind === 'snapshot' ? { ...normalized, canvasHeavy: true } : normalized,
+            priority: Math.max(level, held?.priority ?? 0) });
+          while (deferred.size > PUSH_DEFERRED_MAX) { deferred.delete(deferred.keys().next().value); counters.deferredDropped++; }
+          return Promise.resolve();
+        }
+        deferred.delete(id);
+      }
       const t = now();
       const existing = items.get(id);
       if (existing) {
@@ -464,12 +544,35 @@ ${layerMapSig(job.body)}`;
     putLayerMap(projectId, body) {
       const key = layerMapKeyOf(projectId);
       if (!content || typeof content.put !== 'function' || !key || !body) return false;
+      // 只写绑定项目的层表(判不了的也不写:知道项目文档 id 之后补推时会再写一次)
+      if (scope && typeof scope.acceptsProject === 'function') {
+        let v = null;
+        try { v = scope.acceptsProject(projectId); } catch { v = false; }
+        if (v !== true) { counters.layerMapsOutOfScope++; return false; }
+      }
       layerMap = { key, body };
       armLayerMap(300);
       return true;
     },
     /** 立即重排一次(测试或调用方拨快了时钟之后用) */
     poke() { schedule(); },
+    /**
+     * 扣着的段再判一次范围(绑定项目的文档 id 到了之后调):属于的进队,不属于的丢掉,仍判不了的继续扣着。
+     * 回 `{ queued, dropped, held }`。
+     */
+    rescope() {
+      let queued = 0, dropped = 0;
+      for (const [id, held] of [...deferred]) {
+        const verdict = judge(held.unit);
+        if (verdict === null) continue;
+        deferred.delete(id);
+        if (verdict === false) { dropped++; noteOutOfScope(held.unit); continue; }
+        void queue.enqueue(held.unit, held.priority);
+        queued++;
+      }
+      if (queued || dropped) say('push.rescope', { queued, dropped, held: deferred.size });
+      return { queued, dropped, held: deferred.size };
+    },
     /** 等队列空(全部推完或丢掉);已停止的队列立即返回 */
     drain() {
       if (!items.size || stopped) return Promise.resolve();
@@ -483,7 +586,8 @@ ${layerMapSig(job.body)}`;
         byPriority[PRIORITY_NAMES[effective(item)]]++;
         if (!item.inflight && item.nextAt > t) backingOff++;
       }
-      return { running, pending: items.size - inflight.size, inflight: inflight.size, backingOff, byPriority, ...counters, lastError,
+      return { running, pending: items.size - inflight.size, inflight: inflight.size, backingOff, byPriority, ...counters, deferred: deferred.size, lastError,
+        scope: scope && typeof scope.describe === 'function' ? scope.describe() : null,
         items: [...items.values()].sort((a, b) => a.seq - b.seq).map(item => ({ id: item.id, priority: PRIORITY_NAMES[effective(item)], attempts: item.attempts, inflight: item.inflight })) };
     },
   };

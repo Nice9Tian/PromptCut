@@ -16,6 +16,7 @@
  * 输出最后一行是一行 JSON:`{ ok, cards, frames, identical, differentFrames, styleOrderOnly, fails }`;`ok` 为假时退出码 1。
  * `ok` 的条件:10 张卡(或 `--cards` 给的张数)每张两边都有快照、帧集合相同、逐帧 sha256 相同。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';

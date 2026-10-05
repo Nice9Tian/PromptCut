@@ -22,6 +22,7 @@
  * 队列里这一段 `done`、另一份(切分方指纹那一份)作废(`superseded`)。
  * 不打印令牌、口令。输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, … }`。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawnSync } from 'node:child_process';
 import crypto, { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -251,9 +252,10 @@ try {
 
   /* ---------------------------------------------------------------- 1. 成员进入(普通档) */
   const { default: puppeteer } = await import('puppeteer');
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
   browser = await puppeteer.launch({
     headless: true, protocolTimeout: 900_000, defaultViewport: { width: 1600, height: 1000 },
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--disable-gpu'],
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--disable-gpu'],
   });
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();

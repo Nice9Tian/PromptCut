@@ -63,7 +63,7 @@ function mkdirp(d) {
   fs.mkdirSync(d, { recursive: true });
 }
 
-function copyRecursive(src, dest, filter) {
+export function copyRecursive(src, dest, filter) {
   mkdirp(dest);
   for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, ent.name);
@@ -141,6 +141,20 @@ const SKIP_DIRS = new Set([
   "work",             // Local agent reviews, fixtures and acceptance evidence.
   "__pycache__",
 ]);
+/**
+ * 不论是目录还是**文件**都按名字跳过的名字。
+ *
+ * `.git` 必须在这里:它在普通检出里是目录,但在 git worktree(`build-release --from-head`
+ * 开的 desktop/.cache/release-src 就是一棵)和子模块里是一个 `gitdir: …` 指针**文件**。
+ * 只对目录生效的 SKIP_DIRS 拦不住它,这个指向打包机路径的文件就进了 runtime/app、
+ * 补丁清单和安装包(0.7.13 的 manifest 里第一个键就是 ".git")。
+ *
+ * SKIP_DIRS 里其它名字没有同样处理:它们(node_modules、out、dist、target、release、work、
+ * exports、desktop 等)都是普通英文词,只在「目录」形态下才是构建产物/本机状态;
+ * 同名的**源码文件**理应拷贝,不能按名字一刀切。`git ls-files` 里也没有任何一个同名文件。
+ * 往这里加名字之前先想清楚这一点。
+ */
+const SKIP_ANY_KIND = new Set([".git"]);
 const SKIP_FILE_PATTERNS = [
   /^\.env($|\.)/,      // .env / .env.local / .env.production —— 里面是密钥
   // wrangler 读本地密钥就用这个固定文件名,里面正是 ADMIN_KEY / FEISHU_WEBHOOK / SUBMIT_TOKEN。
@@ -285,7 +299,8 @@ function writeRuntimeEnv(appDir, viteEnv) {
   console.log(`  写入 runtime .env.local:${keys.join(", ")}`);
 }
 
-function shouldCopyApp(name, fullPath, isDir) {
+export function shouldCopyApp(name, fullPath, isDir) {
+  if (SKIP_ANY_KIND.has(name)) return false;
   if (isDir && SKIP_DIRS.has(name)) return false;
   if (!isDir) {
     for (const re of SKIP_FILE_PATTERNS) {
@@ -764,4 +779,25 @@ function main() {
   })}`);
 }
 
-main();
+/**
+ * 本文件是不是被当入口直接执行的(而不是被单测 import)。
+ *
+ * 不能拿 `import.meta.url` 和 `argv[1]` 拼出来的 URL 逐字比:Node 会把入口解析成真实路径,
+ * 而 argv[1] 保持用户敲的样子 —— 路径里有目录联接 / 符号链接,或者盘符、目录大小写不同,
+ * 就对不上,main() 不跑,prepare-runtime 悄无声息地什么也不做,出包时很难发现。
+ * 所以两边都取真实路径(取不到就退回 path.resolve),win32 上不分大小写比。
+ */
+export function isDirectRun(metaUrl = import.meta.url, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  const real = (p) => {
+    try { return fs.realpathSync.native(p); } catch { /* 退回下面 */ }
+    try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+  };
+  const norm = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
+  return norm(real(fileURLToPath(metaUrl))) === norm(real(argv1));
+}
+
+// 只有被当脚本直接执行时才跑;被单测 import 时(desktop/test/prepare-runtime-filter.test.mjs)不动手
+if (isDirectRun()) {
+  main();
+}

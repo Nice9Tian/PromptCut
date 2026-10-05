@@ -1,17 +1,19 @@
 /**
- * 多 Agent 公告板(agentBus)的单测。跑:node --test src/ai/agentBus.test.mjs
+ * 多 Agent 公告板的页面一侧(agentBus)的单测。跑:node --test src/ai/agentBus.test.mjs
  *
- * 钉死三件事:范围差分算得对;send_message 的自动投递有层数上限,不会两个 Agent 互相唤醒到天亮;
- * consumeNotes 只给「别人的、上次之后的」动态,而且取走即已读。
+ * 公告板本身搬到了编辑器进程(server/agent/agent-board.mjs,单测在 server/test/multi-agent.test.mjs);
+ * 页面这边钉死:范围差分(页面与服务端共用 src/kernel/agentScopes.mjs)算得对;SSE 推来的 agent.board 改页签名、标未读;
+ * spawn_agent 开的页签带角色名、对话 ID 是服务端给的那个、驱动沿用父对话;投递消息的排版。用例 MA-P1～MA-P5。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 
 // 浏览器里才有的东西:agentTabs 读 localStorage、react 的 useSyncExternalStore 只是引用
-globalThis.localStorage = (() => {
-  const m = new Map();
-  return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
-})();
+const store = new Map();
+globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+// handleSpawn 回话用的 fetch:记下来,不真的发
+const posted = [];
+globalThis.fetch = async (url, init) => { posted.push({ url, body: JSON.parse(init.body) }); return { json: async () => ({ ok: true, messages: [] }) }; };
 
 const bus = await import("./agentBus.ts");
 const tabs = await import("./agentTabs.ts");
@@ -26,76 +28,65 @@ function project(tracks, activeCutId = "c1") {
 }
 const track = (id, name, clips = []) => ({ id, name, clips });
 
-test("diffScopes:只报 clips 数组换了引用的那几条序列,格式是「剪辑->序列」", () => {
+test("MA-P1 diffScopes:只报 clips 数组换了引用的那几条序列,格式是「剪辑->序列」;切剪辑整条算;删序列标出来;只调顺序记序列顺序", () => {
   const a = [track("t1", "序列 1", []), track("t2", "序列 2", [])];
   const before = project(a);
-  const after = project([a[0], track("t2", "序列 2", [{ id: "x" }])]);
+  const after = project([a[0], { ...a[1], clips: [{ id: "x" }] }]);
   assert.deepEqual(bus.diffScopes(before, after), ["剪辑 1->序列 2"]);
+  assert.deepEqual(bus.diffScopes(before, project(a, "c2")), ["剪辑 2"]);
+  assert.deepEqual(bus.diffScopes(before, project([a[0]])), ["剪辑 1->序列 2(已删)"]);
+  assert.deepEqual(bus.diffScopes(before, project([a[1], a[0]])), ["剪辑 1->序列顺序"]);
+  assert.deepEqual(bus.diffScopes(before, before), []);
 });
 
-test("diffScopes:切换剪辑整条剪辑算范围;删序列标出来", () => {
-  const a = [track("t1", "序列 1"), track("t2", "序列 2")];
-  assert.deepEqual(bus.diffScopes(project(a, "c1"), project(a, "c2")), ["剪辑 2"]);
-  assert.deepEqual(bus.diffScopes(project(a), project([a[0]])), ["剪辑 1->序列 2(已删)"]);
+test("MA-P2 agent.board:页签名跟着范围改,页签上标未读;可自动投递的条数决定 hasAutoDeliverable", () => {
+  const t = tabs.addTab();
+  tabs.setTabConversation(t.id, "conv-p2");
+  bus.applyBoard([{ id: "conv-p2", scope: "剪辑1->序列2", unread: 2, deliverable: 1, busy: false }]);
+  const now = tabs.findTabByConversation("conv-p2");
+  assert.equal(now.title, "剪辑1->序列2");
+  assert.equal(now.unread, 2);
+  assert.equal(bus.hasAutoDeliverable("conv-p2"), true);
+  bus.applyBoard([{ id: "conv-p2", scope: null, unread: 0, deliverable: 0, busy: false }]);
+  assert.equal(bus.hasAutoDeliverable("conv-p2"), false);
+  assert.equal(tabs.findTabByConversation("conv-p2").unread, 0);
 });
 
-test("declare_scope 改页签名;范围重叠给 warning", () => {
-  bus._resetBus();
-  tabs.setTabConversation("main", "c-a");
-  const t2 = tabs.addTab();
-  tabs.setTabConversation(t2.id, "c-b");
-  const r1 = bus.declareScope("c-a", { scope: "剪辑1->序列2" });
-  assert.equal(r1.ok, true);
-  assert.equal(tabs.getTabs().find((t) => t.id === "main").title, "剪辑1->序列2");
-  const r2 = bus.declareScope("c-b", { scope: "剪辑1->序列2, 剪辑1->序列3" });
-  assert.match(r2.warning, /c-a/);
-  assert.throws(() => bus.declareScope("c-a", {}), /scope 必填/);
-  tabs.closeTab(t2.id);
+test("MA-P3 agent.spawn:开一页带角色名、对话 ID 是服务端给的、驱动与等级沿用父对话,不抢焦点;回话给服务端", async () => {
+  const active = tabs.getActiveTabId();
+  await bus.handleSpawn({ reqId: "s1", conversationId: "sub-abc", role: "director", roleName: "剪辑导演", parent: "conv-main", provider: "claude", creativity: "medium" });
+  const t = tabs.findTabByConversation("sub-abc");
+  assert.ok(t, "开了页");
+  assert.equal(t.title, "剪辑导演");
+  assert.equal(t.role, "director");
+  assert.equal(t.parent, "conv-main");
+  assert.equal(t.provider, "claude");
+  assert.equal(t.creativity, "medium");
+  assert.equal(tabs.getTabProvider(t.id), "claude");
+  assert.equal(localStorage.getItem(`pcChatId:${t.id}`), "sub-abc", "页面挂上时 useChatHistory 读到这个对话 ID");
+  assert.equal(tabs.getActiveTabId(), active, "不抢当前页的焦点");
+  assert.deepEqual(posted.find((p) => p.url === "/api/agent/spawned")?.body, { reqId: "s1", ok: true });
+  // 同角色第二个编号;声明范围后页签名是「角色 · 范围」
+  await bus.handleSpawn({ reqId: "s2", conversationId: "sub-def", role: "director", roleName: "剪辑导演", parent: "conv-main", provider: "claude", creativity: "high" });
+  assert.equal(tabs.findTabByConversation("sub-def").title, "剪辑导演 2");
+  tabs.setScopeByConversation("sub-abc", "剪辑1->序列1");
+  assert.equal(tabs.findTabByConversation("sub-abc").title, "剪辑导演 · 剪辑1->序列1");
+  tabs.setScopeByConversation("sub-abc", null);
+  assert.equal(tabs.findTabByConversation("sub-abc").title, "剪辑导演");
+  // 对话 ID 不合法:回话 ok:false
+  await bus.handleSpawn({ reqId: "s3", conversationId: "bad id!", role: "director", roleName: "剪辑导演" });
+  assert.equal(posted.find((p) => p.body.reqId === "s3")?.body.ok, false);
 });
 
-test("send_message:空闲对方自动投递,层数到顶就攒着;consumeNotes 取走即已读", () => {
-  bus._resetBus();
-  tabs.setTabConversation("main", "c-a");
-  const t2 = tabs.addTab();
-  tabs.setTabConversation(t2.id, "c-b");
-
-  // 用户发起的那一轮(层数 0)里 a 给 b 发:b 能自动收到
-  bus.beginRun("c-a", 0);
-  const r = bus.sendMessage("c-a", { to: "c-b", text: "序列2 我来改" });
-  assert.deepEqual(r.delivered, ["c-b"]);
-  assert.equal(bus.hasAutoDeliverable("c-b"), true);
-  assert.equal(tabs.getTabs().find((t) => t.id === t2.id).unread, 1);
-  const got = bus.takeInbox("c-b", true);
-  assert.equal(got.length, 1);
-  assert.equal(got[0].hops, 1);
-  assert.match(bus.formatInbound(got), /【来自 Agent c-a 的消息】/);
-
-  // b 在第 MAX_AUTO_HOPS-1 层跑时再发回 a:这一条到顶,不自动投递
-  bus.beginRun("c-b", bus.MAX_AUTO_HOPS - 1);
-  bus.sendMessage("c-b", { to: "c-a", text: "好" });
-  assert.equal(bus.hasAutoDeliverable("c-a"), false);
-  assert.equal(bus.takeInbox("c-a", true).length, 0, "到顶的不能被自动取走");
-
-  // a 下一次发消息时的动态里带着这条,取走之后第二次就是空的
-  const notes = bus.consumeNotes("c-a");
-  assert.match(notes, /Agent c-b 给你的消息:好/);
-  assert.match(notes, /你的 Agent 对话 ID:c-a/);
-  assert.equal(bus.consumeNotes("c-a"), "");
-
-  assert.throws(() => bus.sendMessage("c-a", { to: "nobody", text: "x" }), /没有这个 Agent/);
-  tabs.closeTab(t2.id);
+test("MA-P4 formatInbound:每条标出是谁发的", () => {
+  const text = bus.formatInbound([{ from: "conv-a", text: "序列2 我来", hops: 1 }, { from: null, fromLabel: "Agent x(成员 bob 那边)", text: "好", hops: 1 }]);
+  assert.equal(text, "【来自 Agent conv-a 的消息】\n序列2 我来\n\n【来自 Agent x(成员 bob 那边) 的消息】\n好");
 });
 
-test("noteToolChange:别人的改动进动态,自己的不进;没改到序列不记", () => {
-  bus._resetBus();
-  const a = [track("t1", "序列 1"), track("t2", "序列 2")];
-  const before = project(a);
-  bus.markSeen("c-a");
-  bus.noteToolChange("c-b", "add_clip", before, project([a[0], track("t2", "序列 2", [{ id: "x" }])]));
-  bus.noteToolChange("c-a", "add_clip", before, project([track("t1", "序列 1", [{ id: "y" }]), a[1]]));
-  bus.noteToolChange("c-b", "seek", before, before);
-  const notes = bus.consumeNotes("c-a");
-  assert.match(notes, /Agent c-b.*用 add_clip 改了 剪辑 1->序列 2/);
-  assert.doesNotMatch(notes, /序列 1/, "自己的改动不用通报给自己");
-  assert.equal(bus.getChanges().length, 2);
+test("MA-P5 取走又忙了:stash 放回页面这边,下次先送它们", async () => {
+  bus.stash("conv-p5", [{ from: "a", text: "t", hops: 1 }]);
+  assert.equal(bus.hasAutoDeliverable("conv-p5"), true);
+  const got = await bus.takeInbox("conv-p5");
+  assert.deepEqual(got.map((m) => m.text), ["t"]);
+  assert.equal(bus.hasAutoDeliverable("conv-p5"), false);
 });

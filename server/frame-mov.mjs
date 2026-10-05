@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PNG } from 'pngjs';
@@ -62,9 +63,15 @@ export function signatureMatches(recorded, expected) {
  * render" until a second render confirms it really is empty.
  */
 export class MovFrameStore {
-  constructor({ dir, fps = 30 } = {}) {
+  /**
+   * `movie`(缺省 true):要不要把连续的 PNG 前缀编成 `mov/full.mov`。整场景那一份(`entry.mov`)传 false:
+   * 那个文件只被判过存在、没有人读内容(legacy 整帧通道方案 B,AGENT-maint-3),PNG 表照旧是它的全部用途。
+   * 传 false 时 `start()` 什么也不做,载入时把旧版本留下的 `full.mov` 删掉。独立卡的那一份(`card-cache.mjs`)不变。
+   */
+  constructor({ dir, fps = 30, movie = true } = {}) {
     this.dir = dir;
     this.fps = Number(fps) || 30;
+    this.movie = movie !== false;
     this.movDir = path.join(dir, 'mov');
     this.frameDir = path.join(this.movDir, 'frames');
     this.tableFile = path.join(this.movDir, 'frames.json');
@@ -87,6 +94,7 @@ export class MovFrameStore {
   }
 
   async load() {
+    if (!this.movie) await fs.rm(this.movieFile, { force: true }).catch(() => {});
     const movieExists = await exists(this.movieFile);
     try {
       const doc = JSON.parse(await fs.readFile(this.tableFile, 'utf8'));
@@ -211,7 +219,7 @@ export class MovFrameStore {
     if (!this.tableDirty) return;
     // An index only; render records live in the PNGs.
     await atomic(this.tableFile, JSON.stringify({ version: 2, fps: this.fps, frames: [...this.frames].sort((a, b) => a - b),
-      movie: path.basename(this.movieFile) }));
+      movie: this.movie ? path.basename(this.movieFile) : null }));
     this.tableDirty = false;
   }
 
@@ -320,6 +328,7 @@ export class MovFrameStore {
   async startNow(ffmpeg, streamFactory) {
     const epoch = this.streamEpoch;
     await this.ready;
+    if (!this.movie) return;
     if (this.writer || this.writerError || await exists(this.movieFile)) return;
     try {
       const create = streamFactory || (await import('./bakery/index.mjs')).streamPngVideo;
@@ -396,9 +405,24 @@ export class MovFrameStore {
     await writer?.abort().catch(() => {});
     await this.starting;
     await this.writeChain.catch(() => {});
+    // 中止的流不会再接着写(下一次 start 从第 0 帧重来),写了一半的临时 MOV 就地删掉
+    await fs.rm(this.tempMovie, { force: true }).catch(() => {});
     this.nextFrame = 0; this.pending = new Set(this.frames);
     await this.persist();
   }
+}
+
+/**
+ * 本进程还开着的播放 MOV。进程正常退出时同步删掉;强杀来不及,靠下次启动时
+ * `storage-leftovers.mjs` 按文件名里的 pid 清。
+ */
+const livePlaybackFiles = new Set();
+let exitHookInstalled = false;
+function trackPlaybackFile(file) {
+  livePlaybackFiles.add(file);
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once('exit', () => { for (const f of livePlaybackFiles) { try { unlinkSync(f); } catch {} } });
 }
 
 const u32 = (...values) => { const b = Buffer.alloc(values.length * 4); values.forEach((v, i) => b.writeUInt32BE(v >>> 0, i * 4)); return b; };
@@ -414,7 +438,8 @@ export class PlaybackMovStore {
   constructor({ dir, width, height, fps = 30, count }) {
     this.fps = fps; this.count = count;
     this.width = width; this.height = height;
-    this.name = `playback-${randomUUID()}.mov`;
+    // 名字带 pid:属主进程被强杀时,下次启动据此认出它是遗留(storage-leftovers.mjs)
+    this.name = `playback-${process.pid}-${randomUUID()}.mov`;
     this.movieFile = path.join(dir, 'mov', this.name);
     this.samples = new Map();
     this.writeChain = Promise.resolve();
@@ -451,6 +476,7 @@ export class PlaybackMovStore {
     }
     await fs.mkdir(path.dirname(this.movieFile), { recursive: true });
     this.file = await fs.open(this.movieFile, 'wx+');
+    trackPlaybackFile(this.movieFile);
     await this.writeAt(header, 0); await this.writeAt(transparent, header.length);
     this.end = header.length + transparent.length;
   }
@@ -504,4 +530,14 @@ export class PlaybackMovStore {
     return { fps: this.fps, count: this.count, width: this.width, height: this.height, placeholder: this.placeholder, frames };
   }
   async close() { await this.ready; await this.writeChain; this.closed = true; await this.file?.close(); }
+  /** 播放会话用完:关掉并删掉文件。它只是播放时的中转,不是缓存(帧在 MovFrameStore 的 PNG 里)。 */
+  async dispose() {
+    this.closed = true;
+    await this.ready.catch(() => {});
+    await this.writeChain.catch(() => {});
+    await this.file?.close().catch(() => {});
+    this.file = null;
+    livePlaybackFiles.delete(this.movieFile);
+    await fs.rm(this.movieFile, { force: true, maxRetries: 3, retryDelay: 50 }).catch(() => {});
+  }
 }

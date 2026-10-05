@@ -62,6 +62,7 @@
  * `--keep` 不删两边的临时帧库(调试用)。输出最后一行是一行 JSON:
  * `{ ok, tasks, done, identical, differentFrames: [...], fails }`,另带一些诊断字段;`ok` 为假时退出码 1。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';

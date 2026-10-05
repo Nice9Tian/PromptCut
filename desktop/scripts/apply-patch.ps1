@@ -1,4 +1,4 @@
-<#
+﻿<#
     PromptCut 更新补丁安装器。
 
     随补丁包一起发出去，在用户机器上运行（不是构建脚本）。它把补丁里的
@@ -57,7 +57,7 @@ Write-Host ""
 # ── 1. 读补丁清单 ─────────────────────────────────────────────────────
 $manifestPath = Join-Path $PatchRoot 'patch.json'
 if (-not (Test-Path $manifestPath)) { Fail "补丁包不完整，找不到 patch.json。请重新下载。" }
-$patch = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+$patch = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
 if ($patch.format -ne 'promptcut-patch/1') { Fail "补丁格式不认识（$($patch.format)）。请下载与本程序匹配的补丁。" }
 
 $payloadDir = Join-Path $PatchRoot 'payload'
@@ -78,7 +78,7 @@ Write-Step "安装位置：$InstallDir"
 
 # ── 3. 版本检查 ───────────────────────────────────────────────────────
 $installed = $null
-if (Test-Path $versionsPath) { $installed = Get-Content -Raw -LiteralPath $versionsPath | ConvertFrom-Json }
+if (Test-Path $versionsPath) { $installed = Get-Content -Raw -Encoding UTF8 -LiteralPath $versionsPath | ConvertFrom-Json }
 
 # 内核代次 = 外壳版本的前两段（0.2.x 里的 0.2）。内核（Rust 外壳、Chrome、
 # ffmpeg、内置 Python）动了就进位中间那一位，于是「中间那位不一样 = 必须用
@@ -181,6 +181,50 @@ function Get-TargetProcesses {
     $hits.ToArray()
 }
 
+function Restore-LegacyPatchWindow {
+    param([object[]] $Processes)
+    # 老外壳不认识 --quit；其单实例回调未必能还原最小化窗口。
+    # 只补齐老版本已定的唤回行为，不碰 0.2.7 的后台退出路径。
+    try {
+        if (-not ('PromptCutPatchWindow' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class PromptCutPatchWindow {
+    private delegate bool WindowCallback(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder name, int capacity);
+    [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+    public static void Restore(uint process) {
+        EnumWindows((window, parameter) => {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner != process) return true;
+            var name = new StringBuilder(256);
+            GetClassName(window, name, name.Capacity);
+            // MainWindowHandle 可能选到单实例插件的辅助窗，不能拿它还原。
+            if (name.ToString() != "Tauri Window") return true;
+            ShowWindowAsync(window, 9); // SW_RESTORE
+            SetForegroundWindow(window);
+            return true;
+        }, IntPtr.Zero);
+    }
+}
+'@
+        }
+        foreach ($p in $Processes) {
+            if ($p.Name -ne 'promptcut') { continue }
+            [PromptCutPatchWindow]::Restore([uint32]$p.Id)
+        }
+    } catch {
+        # 唤回不可用时，后面的 10 秒等待与兜底关闭照常执行。
+        Write-Warn "无法还原旧版本窗口，继续关闭并更新。"
+    }
+}
+
 # 问一下正在跑的那个实例：现在有几轮对话在进行中。
 # 取不到就返回 $null（程序没开、端口不对、老版本没有这个字段），那时不拦。
 function Get-ActiveAiRuns {
@@ -204,7 +248,7 @@ function Get-ActiveAiRuns {
     }
 }
 
-$running = Get-TargetProcesses
+$running = @(Get-TargetProcesses)
 if ($running.Count -gt 0) {
     <#
         先问一句「有没有对话正在跑」。
@@ -232,16 +276,43 @@ if ($running.Count -gt 0) {
         if ((Read-Host "  现在关掉它？(y/N)") -notmatch '^[yY]') { Write-Host "  已取消。"; exit 0 }
     }
     Write-Step "正在关闭 PromptCut…"
-    foreach ($p in $running) {
+    <#
+        先请它自己干净退出:对安装目录里的外壳 exe 发一次 `--quit`。已经在跑的那一份由单实例
+        插件收到参数,走和托盘「关闭」同一条路(sidecar 整棵树清掉、.proc 锁释放、收在后台的
+        主窗先挪回屏幕内再记位置);发参数的这个进程自己马上退出。
+
+        外壳 0.2.7 起才认 `--quit`。0.2.6 及更早的外壳把它当成普通的第二次启动 —— 只是把编辑
+        界面唤回到前面,不退出;那样等满 10 秒后照旧走下面的 CloseMainWindow + 强杀,和以前一样,
+        不会更差。
+
+        CloseMainWindow 在 0.2.7 起的外壳上只会把编辑界面收到后台(关窗不退出),真正兜底的是
+        后面的 Stop-Process -Force(sidecar 在 kill-on-close 的 job 里,外壳一死跟着走;
+        .proc 的内核锁随进程收走,Node 那层走 pid 兜底)。
+    #>
+    if (Test-Path -LiteralPath $shellExe) {
+        try {
+            $null = Start-Process -FilePath $shellExe -ArgumentList '--quit' -PassThru -ErrorAction Stop
+            if ($shellVersion -and (Compare-Version $shellVersion '0.2.7') -lt 0) {
+                Restore-LegacyPatchWindow -Processes $running
+            }
+        } catch {
+            Write-Warn "发不出退出请求（$($_.Exception.Message)），改用关窗口 + 强制结束。"
+        }
+        $deadline = (Get-Date).AddSeconds(10)
+        while (@(Get-TargetProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    foreach ($p in Get-TargetProcesses) {
         try { $null = $p.Proc.CloseMainWindow() } catch { }
     }
-    Start-Sleep -Seconds 2
+    if (@(Get-TargetProcesses).Count -gt 0) { Start-Sleep -Seconds 2 }
     foreach ($p in Get-TargetProcesses) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
     }
     # node 子进程未必跟着外壳退，而它才是握着 runtime\app 的那个。
     Start-Sleep -Seconds 2
-    $left = Get-TargetProcesses
+    $left = @(Get-TargetProcesses)
     if ($left.Count -gt 0) {
         $names = ($left | ForEach-Object { "$($_.Name)($($_.Id))" }) -join '、'
         Fail "PromptCut 关不掉（还剩：$names）。请手动退出后再运行本更新。"

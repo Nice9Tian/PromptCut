@@ -8,6 +8,8 @@ import { spawn } from "child_process";
 import type { AddressInfo } from "net";
 import { exportBegin, exportEnd } from "./render-pool-state.mjs";
 import { exportOriginalsGate } from "./export-originals";
+import { hashFromUrl, originalHashOf } from "../src/render/mediaTier";
+import { EXPORT_KEEP, claimExportDir, pruneExportDir, sweepExportRoot } from "./storage-leftovers.mjs";
 
 interface ExportJob {
   id: string;
@@ -57,31 +59,82 @@ function allowedMediaRoots(root: string): string[] {
 }
 
 /**
- * Make the project used by the export page address every legacy asset through
- * the guarded media endpoint.  Older .proc files may still contain /@media
- * URLs even though `path` points at the shared desktop media directory; the
- * export page runs in the source checkout, so that short URL would otherwise
- * resolve to the wrong directory.
+ * 导出页拿到的项目里,每条素材该用哪个地址(写回 `project.media[].url`,就地改的是这次导出自己的那份 JSON)。
+ *
+ * - **有合法哈希的**:哈希就是素材的身份,只认素材服务的按哈希地址 `/@media/<素材原尺寸哈希>`(与
+ *   `render-project.mjs`、`vite-plugin-vision.ts` 同一条规矩)。不看 `path`:那是导入那台机器上的落点,
+ *   在另一台机器上直接打开带对方路径的 `.proc` 再导出,按路径读会解码失败(2026-09-30 `claude/pack-hash` 发现)。
+ *   地址本来就是这份哈希的(`/@media/<hash>` 或带扩展名的写法)原样留着。
+ * - **没有哈希、地址为空的**(打开项目后本机取不到文件、已标「(缺失)」的老素材,见 `src/editor/io/mediaUpload.ts`):
+ *   地址留空,不再按 `path` 读 —— 那台机器上的路径在这里读不到,读了导出页会解码失败、整次导出作废。回在 `skipped` 里,
+ *   由 `dropSkippedMediaClips` 从这次导出的时间轴上去掉引用它的片段,并告诉用户(`/api/export` 回包的 `skippedMedia`)。
+ *   上传中(`pending`)的不在此列,照旧。
+ * - **没有哈希的**(迁移期老素材):照旧按 `path` 走受保护的读接口 `/api/media/file?path=…`;
+ *   路径在 PromptCut 的素材目录里、文件又在的,用解析后的绝对路径(老 `.proc` 可能同时带着过期的短地址 `/@media/<文件名>`)。
+ * - 浏览器上传进暂存区的(`/@export/media/<文件>`)换成这次导出目录里的地址。
+ *
+ * `opts` 给单测:素材目录与「文件在不在」可以换掉。
  */
-async function normalizeExportMedia(project: any, root: string, id: string): Promise<void> {
-  if (!project?.media || !Array.isArray(project.media)) return;
-  const roots = allowedMediaRoots(root);
+export async function normalizeExportMedia(
+  project: any,
+  root: string,
+  id: string,
+  opts: { roots?: string[]; exists?: (file: string) => Promise<boolean> } = {},
+): Promise<{ skipped: Array<{ id: string; name: string }> }> {
+  const skipped: Array<{ id: string; name: string }> = [];
+  if (!project?.media || !Array.isArray(project.media)) return { skipped };
+  const roots = opts.roots ?? allowedMediaRoots(root);
+  const exists = opts.exists ?? (async (file: string) => { try { await fs.access(file); return true; } catch { return false; } });
   for (const m of project.media) {
-    if (m?.url && String(m.url).startsWith("/@export/media/")) {
+    if (!m || typeof m !== "object") continue;
+    const hash = originalHashOf(m);
+    if (hash) {
+      const url = String(m.url || "");
+      if (hashFromUrl(url) !== hash || !url.includes(hash)) m.url = `/@media/${hash}`;
+      continue;
+    }
+    if (!String(m.url || "") && !m.pending) {
+      // 已标缺失:地址留空,不按 path 读(见函数头)
+      m.url = "";
+      skipped.push({ id: String(m.id ?? ""), name: String(m.name ?? "") });
+      continue;
+    }
+    const rawPath = typeof m.path === "string" ? m.path : "";
+    if (rawPath) {
+      // Projects from the desktop media library carry an absolute path,
+      // while the export page only knows HTTP URLs. Route it through the
+      // guarded media endpoint so legacy projects render their real files.
+      const file = path.resolve(rawPath);
+      const usable = roots.some((dir) => inside(file, dir)) && await exists(file);
+      m.url = `/api/media/file?path=${encodeURIComponent(usable ? file : rawPath)}`;
+      continue;
+    }
+    if (m.url && String(m.url).startsWith("/@export/media/")) {
       const fileName = String(m.url).split("/").pop();
       if (fileName) m.url = `/@export/${id}/media/${fileName}`;
     }
-    const rawPath = typeof m?.path === "string" ? m.path : "";
-    if (!rawPath) continue;
-    const file = path.resolve(rawPath);
-    if (!roots.some((dir) => inside(file, dir))) continue;
-    try {
-      await fs.access(file);
-    } catch {
-      continue;
-    }
-    m.url = `/api/media/file?path=${encodeURIComponent(file)}`;
   }
+  return { skipped };
+}
+
+/**
+ * 从这次导出的项目(导出自己的那份 JSON,就地改)里去掉引用 `skipped` 素材的片段,跳过这一段而不是让导出页解码失败。
+ * 回真的被去掉了片段的素材(同一条素材只列一次,带去掉的片段数);没有片段引用的缺失素材不影响导出,不列。
+ */
+export function dropSkippedMediaClips(project: any, skipped: Array<{ id: string; name: string }>): Array<{ id: string; name: string; clips: number }> {
+  if (!skipped.length || !Array.isArray(project?.tracks)) return [];
+  const byId = new Map(skipped.map((m) => [m.id, m]));
+  const hits = new Map<string, number>();
+  for (const tr of project.tracks) {
+    if (!tr || !Array.isArray(tr.clips)) continue;
+    tr.clips = tr.clips.filter((c: any) => {
+      const mid = c?.mediaId;
+      if (typeof mid !== "string" || !byId.has(mid)) return true;
+      hits.set(mid, (hits.get(mid) ?? 0) + 1);
+      return false;
+    });
+  }
+  return skipped.filter((m) => hits.has(m.id)).map((m) => ({ ...m, clips: hits.get(m.id)! }));
 }
 
 async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerResponse, root: string) {
@@ -105,6 +158,23 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ url: `/@export/media/${encodeURIComponent(safeName)}` }));
   });
+}
+
+/**
+ * 导出进程退出后收拾产物目录:只留成片、透明层与 project.json(`storage-leftovers.mjs` 的 `pruneExportDir`)。
+ * 成功、取消、失败都做 —— 取消和失败留下的 frames / parts 同样是大块的废料;已有的成片、透明层照留,
+ * 列表里能看到这次导出。取消时 Chrome / ffmpeg 孙进程可能比渲染进程晚一点退、还占着文件,
+ * 删不掉的隔一会儿再试几次。
+ */
+async function cleanupExportDir(dir: string, { framesOnly = false } = {}) {
+  // --no-video 的导出只有逐帧 PNG,那就是产物,不删
+  const keep = framesOnly ? [...EXPORT_KEEP, "frames"] : EXPORT_KEEP;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const report = await pruneExportDir(dir, { keep, log: (m: string) => console.log(m) });
+    if (!report.skipped.some((s: { reason: string }) => s.reason !== "link")) return report;
+    await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+  }
+  return null;
 }
 
 async function handleExportStart(req: Connect.IncomingMessage, res: ServerResponse, server: ViteDevServer, root: string) {
@@ -135,9 +205,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         return;
       }
 
-      const now = new Date();
-      const id = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
-      const outDir = path.resolve(outRoot(root), `export-${id}`);
+      const { id, outDir } = await claimExportDir(outRoot(root));
       const mediaDir = path.resolve(outDir, "media");
       await fs.mkdir(mediaDir, { recursive: true });
       
@@ -152,25 +220,10 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         // staging dir might not exist, ignore
       }
       
-      // Rewrite media URLs in project
-      if (project.media && Array.isArray(project.media)) {
-        for (const m of project.media) {
-          // Projects from the desktop media library carry an absolute path,
-          // while the export page only knows HTTP URLs. Route it through the
-          // guarded media endpoint so legacy projects render their real files.
-          if (m.path) m.url = `/api/media/file?path=${encodeURIComponent(String(m.path))}`;
-          if (m.url && m.url.startsWith("/@export/media/")) {
-            const fileName = m.url.split("/").pop();
-            if (fileName) {
-              m.url = `/@export/${id}/media/${fileName}`;
-            }
-          }
-        }
-      }
-      // Old projects can carry a valid absolute `path` together with the
-      // stale short /@media URL.  Resolve those paths before writing the
-      // timeline consumed by the export Chrome page.
-      await normalizeExportMedia(project, root, id);
+      // 素材地址:有哈希按哈希、没哈希才按路径;已标缺失的跳过它所在的片段并告诉用户(规则见 normalizeExportMedia)
+      const { skipped } = await normalizeExportMedia(project, root, id);
+      const skippedMedia = dropSkippedMediaClips(project, skipped);
+      if (skippedMedia.length) console.warn(`[export] 跳过缺失素材所在的片段:${skippedMedia.map((m) => `${m.name || m.id}×${m.clips}`).join("、")}`);
       
       const projectJsonPath = path.resolve(outDir, "project.json");
       await fs.writeFile(projectJsonPath, JSON.stringify(project, null, 2));
@@ -254,8 +307,10 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         if (stderrLog.length > 10) stderrLog.shift();
       });
       
-      child.on("close", (code) => {
+      child.on("close", async (code) => {
         job.child = undefined;
+        // 先收拾目录再报结束:界面看到「完成」时目录已经是最终的样子(成片与透明层不动,取件不受影响)
+        await cleanupExportDir(outDir, { framesOnly: !!noVideo }).catch(() => {});
         if (job.cancelled) {
           job.status = "cancelled";
           job.message = "已取消";
@@ -274,7 +329,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       });
       
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ id, outDir: relOutDir }));
+      res.end(JSON.stringify({ id, outDir: relOutDir, skippedMedia }));
     } catch (err: unknown) {
       res.statusCode = 500;
       res.end(err instanceof Error ? err.message : String(err));
@@ -451,6 +506,8 @@ export function exportPlugin(): Plugin {
     name: "vite-plugin-export",
     configureServer(server) {
       const root = server.config.root;
+      // 启动清理:死进程留下的视觉工具临时导出 `export-vision-<pid>-*`(只认这一种形态)
+      void sweepExportRoot(outRoot(root), { log: (m: string) => console.log(m) }).catch(() => {});
       server.middlewares.use(async (req, res, next) => {
         if (!req.url) return next();
         

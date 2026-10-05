@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions } from "../../store/project";
 import { useDrag } from "./useDrag";
+import { useUserEditing } from "../userEditing";
 import { ContextMenu } from "./ContextMenu";
 import { captionsOf, captionBounds, MIN_CAPTION_DUR, type CaptionLine } from "../../kernel/captions";
 import type { TrackClip } from "../../kernel/project";
@@ -122,6 +123,10 @@ function CaptionBlock({
     dragRef.current = v;
     setDrag(v);
   };
+
+  // 字幕条拖动中 / 双击改字中:告诉 Agent 用户正在编辑这个字幕片段(A2)
+  useUserEditing(`caption-drag:${clipId}:${index}`, drag ? clipId : null, "drag");
+  useUserEditing(`caption-text:${clipId}:${index}`, editing ? clipId : null, "text");
 
   const start = drag ? drag.start : line.start;
   const end = drag ? drag.end : line.end;

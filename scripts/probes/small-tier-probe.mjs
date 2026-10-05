@@ -14,6 +14,7 @@
  *   S4 原尺寸不受影响:`--small-tier-off`(`PROMPTCUT_SMALL_TIER=0`)再跑一遍,两边的 `<帧>.html` 与 `index.json` 逐字节相同。
  * 输出:最后一行一行 JSON。小位图拷一张到 `--out` 看。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';

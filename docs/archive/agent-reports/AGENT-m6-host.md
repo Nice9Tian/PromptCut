@@ -1,6 +1,6 @@
 # M6b 实现报告（claude/m6-host）
 
-契约：`docs/plan/render-host-contract.md`。依据：`docs/plan/auth-contract.md`（M6a）、`docs/reports/AGENT-m6-auth.md`、主执行计划第 7 节 M6、第 12 节。
+契约：`docs/plan/render-host-contract.md`。依据：`docs/plan/auth-contract.md`（M6a）、`docs/archive/agent-reports/AGENT-m6-auth.md`、主执行计划第 7 节 M6、第 12 节。
 worktree：`.worktrees/m6-host`，分支 `claude/m6-host`（基于 `claude/m6` 的 `df2a5d8`）。端口只用了 5400～5409，单测用端口 0。
 
 ## 1. 做了什么（按契约节号）

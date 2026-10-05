@@ -1,4 +1,4 @@
-import type { CardDef } from "./types";
+import type { CardDef, Control } from "./types";
 import { cardCapabilities } from "./frameMode.mjs";
 
 const map = new Map<string, CardDef<any>>();
@@ -97,4 +97,181 @@ export function setUserCardSources(files: Record<string, string>, fileOf: Record
 
 export function userCardSources(): { files: Record<string, string>; fileOf: Record<string, string>; dependencies: Record<string, string> } {
   return userSources;
+}
+
+/*
+ * 「已知但本机不能运行」的用户卡(C10 契约第 9 节「识别」,2026-09-29 用户改语义)。
+ *
+ * 在线包的卡片表是构建时从 `src/cards/user` 生成的,桌面版卡片库里的卡、经内容库同步的卡都不在表里。在线页面经自己的
+ * 文档服务连接读本项目内容库的卡片源码(`kind: 'card-source'`),从源码里解析出卡片的 id 与名字,记在这张表里
+ * (舞台是另一份文档,由父页经 RPC 发一份过去)。这张表**不进主注册表**:`allCards()` 的使用方(卡片库面板、工具、
+ * 源码版本表)看不到它们,`getCard(id)` 对它们回 undefined —— 本机没有它们的代码。
+ *
+ * 和构建时卡片 id 撞车的条目在查询时忽略(内置赢,同 `cards/index.ts` 的 `taken` 规则;构建时的用户卡本来就算用户卡)。
+ * 桌面运行环境不设这张表,恒为空。
+ */
+export interface SyncedUserCard {
+  id: string;
+  name: string;
+  /** 来源键(内容库里那份源码的键,形如 `src/cards/user/x.tsx`);诊断用 */
+  source?: string;
+  /** 源码里的说明(字面量才有;时间轴副标题的兜底) */
+  description?: string;
+  /** 源码里认得出的参数默认值(`cardSourceParse`;认不出的键已丢掉) */
+  defaults?: Record<string, unknown>;
+  /** 源码里认得出的参数控件(逐个解析,认不出的跳过) */
+  controls?: Control[];
+  /** 有控件没认出来(或整个 `controls` 不是字面量):参数面板据此说明「在线改不了」 */
+  controlsIncomplete?: boolean;
+  /** 被跳过的控件逐条(认得出的 key / label / type 与原因):参数面板说明是哪一条 */
+  skippedControls?: SkippedControl[];
+}
+
+/** 同步来的卡里没认出来的一个控件(`cardSourceParse` 的 `skippedControls`) */
+export interface SkippedControl {
+  key?: string;
+  label?: string;
+  type?: string;
+  reason: string;
+}
+
+/**
+ * 同步来的用户卡给界面看的只读视图:长得像 `CardDef`(名字、说明、默认值、控件),**没有组件**,本机不能运行它。
+ * 参数面板、时间轴副标题先查 `getCard`,查不到再用它(`syncedCardView`)。
+ */
+export interface SyncedCardView {
+  id: string;
+  name: string;
+  description?: string;
+  defaults: Record<string, unknown>;
+  controls: Control[];
+  controlsIncomplete: boolean;
+  /** 被跳过的控件逐条(没有时为空表) */
+  skippedControls: SkippedControl[];
+  /** 恒为 true:看的人据此知道这是同步来的视图,不是能跑的定义 */
+  synced: true;
+}
+
+let synced = new Map<string, SyncedUserCard>();
+/** 每条同步条目的视图,换表时一并建好:同一张卡没变就回同一个对象(界面按引用判改动) */
+let views = new Map<string, SyncedCardView>();
+let syncedGen = 0;
+const syncedListeners = new Set<() => void>();
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** 条目的签名(判「内容没变」) */
+function entrySig(e: SyncedUserCard): string {
+  return JSON.stringify([e.name, e.source ?? null, e.description ?? null, e.defaults ?? null, e.controls ?? null, !!e.controlsIncomplete, e.skippedControls ?? null]);
+}
+
+/**
+ * 整份换掉同步来的用户卡。同一 id 多条时取第一条。内容没变回 false、不通知;变了 `syncedUserCardsGen()` 加一并通知订阅方。
+ */
+export function setSyncedUserCards(entries: Iterable<SyncedUserCard>): boolean {
+  const next = new Map<string, SyncedUserCard>();
+  for (const e of entries ?? []) {
+    if (!e || typeof e.id !== "string" || !e.id || next.has(e.id)) continue;
+    next.set(e.id, {
+      id: e.id, name: typeof e.name === "string" ? e.name : "",
+      ...(typeof e.source === "string" && e.source ? { source: e.source } : {}),
+      ...(typeof e.description === "string" ? { description: e.description } : {}),
+      ...(isRecord(e.defaults) ? { defaults: e.defaults } : {}),
+      ...(Array.isArray(e.controls) ? { controls: e.controls.filter((c) => isRecord(c) && typeof c.key === "string" && typeof c.type === "string") } : {}),
+      ...(e.controlsIncomplete ? { controlsIncomplete: true } : {}),
+      ...(Array.isArray(e.skippedControls) && e.skippedControls.length
+        ? { skippedControls: e.skippedControls.filter((c) => isRecord(c) && typeof c.reason === "string") } : {}),
+    });
+  }
+  const same = next.size === synced.size && [...next].every(([id, e]) => {
+    const cur = synced.get(id);
+    return !!cur && entrySig(cur) === entrySig(e);
+  });
+  if (same) return false;
+  const nextViews = new Map<string, SyncedCardView>();
+  for (const [id, e] of next) {
+    const prev = synced.get(id);
+    const prevView = views.get(id);
+    if (prev && prevView && entrySig(prev) === entrySig(e)) { nextViews.set(id, prevView); continue; }
+    nextViews.set(id, Object.freeze({
+      id, name: e.name, ...(e.description !== undefined ? { description: e.description } : {}),
+      defaults: e.defaults ?? {}, controls: e.controls ?? [], controlsIncomplete: !!e.controlsIncomplete,
+      skippedControls: e.skippedControls ?? [], synced: true as const,
+    }));
+  }
+  synced = next;
+  views = nextViews;
+  syncedGen++;
+  for (const l of [...syncedListeners]) {
+    try { l(); } catch (err) { console.warn("[registry] 同步用户卡的订阅方出错", err); }
+  }
+  return true;
+}
+
+/** 此刻的同步用户卡表(含撞车的条目;查询请用 `isUserCardId` / `knownCardName`) */
+export function syncedUserCards(): ReadonlyMap<string, SyncedUserCard> {
+  return synced;
+}
+
+/** 同步表每变一次加一(按「哪些卡是用户卡」记忆化的一方拿它当键) */
+export function syncedUserCardsGen(): number {
+  return syncedGen;
+}
+
+export function onSyncedUserCardsChanged(cb: () => void): () => void {
+  syncedListeners.add(cb);
+  return () => { syncedListeners.delete(cb); };
+}
+
+/** 这条同步条目生效吗:和构建时的卡(注册表里有的)撞车的忽略 */
+function syncedEntry(id: string): SyncedUserCard | undefined {
+  if (map.has(id)) return undefined;
+  return synced.get(id);
+}
+
+/**
+ * 这个 id 是不是用户卡:构建时的定制卡登记(`userCardSources().fileOf`),或同步来的用户卡(撞车的不算)。
+ * 替代各处就地写的 `hasOwnProperty(userCardSources().fileOf, id)`。
+ */
+export function isUserCardId(id: string | undefined | null): boolean {
+  if (typeof id !== "string" || !id) return false;
+  if (Object.prototype.hasOwnProperty.call(userSources.fileOf, id)) return true;
+  return !!syncedEntry(id);
+}
+
+/**
+ * 同步来的用户卡的只读视图(见 `SyncedCardView`)。**不进主注册表**:`getCard`、`allCards()` 照旧看不到它们;
+ * 和构建时的卡撞车的、没同步来的 id 回 undefined。
+ */
+export function syncedCardView(id: string | undefined | null): SyncedCardView | undefined {
+  if (typeof id !== "string" || !id || !syncedEntry(id)) return undefined;
+  return views.get(id);
+}
+
+/** 这张卡的显示名:构建时定义的名字 → 同步表里的名字 → null(未知卡片) */
+export function knownCardName(id: string | undefined | null): string | null {
+  if (typeof id !== "string" || !id) return null;
+  const def = map.get(id);
+  if (def) return def.name;
+  return syncedEntry(id)?.name ?? null;
+}
+
+/**
+ * 这张卡认不认得:构建时的注册表里有定义,或是用户卡(构建时登记的、在线页面从内容库同步来的)。
+ * 两边都没有的是「未知卡片」:舞台不画,时间轴标「未知卡片」。
+ */
+export function isKnownCardId(id: string | undefined | null): boolean {
+  if (typeof id !== "string" || !id) return false;
+  return map.has(id) || isUserCardId(id);
+}
+
+/**
+ * 两边都没有定义的卡片段(未知卡片;桌面与在线一致)。舞台本来就不画它们,所以测量不测(不给身份)、
+ * 分派表不把它们当重卡、不进预渲染集合,页面发的清单计划与低内存档补渲也就不含它们。
+ * 只看写了 `cardId` 的片段(只有 `nodeId` 的图卡片段、素材段不算)。
+ */
+export function unknownCardClipIds(clips: Iterable<{ id: string; cardId?: string }>): Set<string> {
+  const out = new Set<string>();
+  for (const c of clips) if (c && typeof c.cardId === "string" && c.cardId && !isKnownCardId(c.cardId)) out.add(c.id);
+  return out;
 }

@@ -46,7 +46,9 @@
  * - 结束时 creator 以创建者身份删掉这个共享项目(免得局域网主机以后启动时还在广播);`--keep` 不删。
  * 结果:过程每步一行 JSON,最后一行 `{ ok, role, mode, projectId, rev, memberEditSeenMs | creatorEditSeenMs, ..., fails }`;有失败退出码 1。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -92,7 +94,7 @@ async function waitFor(fn, ms = 10_000, what = '条件') {
 const browser = await puppeteer.launch({
   headless: true,
   defaultViewport: { width: 1440, height: 900 },
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'],
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'],
 });
 
 /**

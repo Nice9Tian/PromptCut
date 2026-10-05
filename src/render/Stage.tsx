@@ -17,13 +17,11 @@ import { ensurePlaneStyle } from "./planeStyle";
 import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
 /* 占位组件(product/rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
-import { PlaceholderPlane, PLACEHOLDER_CSS, maxAnimated } from "./placeholder";
-import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
-import { PLACEHOLDER_FIXED_ATTR, type PlaceholderReason } from "./placeholder/contract";
-import { userCardSources } from "../kernel/registry";
+import { PlaceholderPlane, PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, maxAnimated } from "./placeholder";
+import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, localOnlyReason, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholderFitFor, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
+import type { PlaceholderReason } from "./placeholder/contract";
 
 setMaxAnimated(maxAnimated);
-const isUserCard = (cardId: string): boolean => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
 
 // Keep direct-evaluation cards at the requested time while other cards replay.
 // Their CSS/DOM stays in the same stacking tree (including paper/glass styles),
@@ -121,7 +119,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    */
   const placeholders = usesPlanes && placeholdersEnabled();
   useEffect(() => {
-    if (placeholders) ensurePlaceholderStyle(PLACEHOLDER_CSS);
+    // 在线浏览器模式另加「需要本地 PC 渲染辅助」图标的排法规则(这种图标只在这个模式下出现)
+    if (placeholders) ensurePlaceholderStyle(onlineBrowserMode() ? PLACEHOLDER_CSS + PLACEHOLDER_ONLINE_CSS : PLACEHOLDER_CSS);
   }, [placeholders]);
 
   /*
@@ -231,16 +230,22 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
         {active.map((clip, i) => {
           const def = getCard(clip.cardId);
           /*
+           * 这台设备跑不了这张卡(在线浏览器模式下的用户卡、图卡;同步来的用户卡本机连定义都没有):卡片代码不跑,
+           * 包裹层照内置重卡的路子挂快照平面、流平面,兜底顺序什么都贴不上时占位符显示 `unsupported`(C10 契约第 9 节)。
+           * 模式关着(桌面、导出、预渲染、Agent 看到的画面)恒为 false,下面每一支和以前逐字相同。
+           */
+          const localOnly = onlineBrowserMode() && unsupportedHere(clip.cardId, def);
+          /*
            * 三道都在取 def 这一格剔掉,不放到分支里:
            *  - 定义没了(用户卡文件被删)——图卡的 def 在注册表里必然取得到,挡不住下面两种;
            *  - 既没有 card 也没有 Component:音频图卡万一带着 cardId 进来也不炸;
            *  - 图卡但没有图(projectCardGraph 抛了):没有图解不出输入,画不出东西。
+           * 这台设备跑不了的卡不看这三道:它不挂组件,只贴预渲染结果。
            */
-          if (!def || (!def.card && !def.Component) || (def.card && !timeline.graph)) return null;
-          const C = def.Component!;
+          if (!localOnly && (!def || (!def.card && !def.Component) || (def.card && !timeline.graph))) return null;
+          const C = def?.Component!;
           const cardT = timeOf(clip);
-          // 这台设备渲染不了这张卡(在线浏览器模式下的用户卡 / 图卡):只挂 `unsupported` 占位,其余平面都不挂
-          const unsupported = placeholders && unsupportedHere(clip.cardId, def, isUserCard);
+          const unsupported = localOnly;
 
           // 绑了轨迹的 clip 整层跟着目标平移。平移放在**外层**而不是交给卡片：
           // 卡片不知道自己被绑了，也不该知道——换一张卡，跟随照样生效。
@@ -289,7 +294,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            * 这一拍画不画(M3):「在 `suppressed` 里」和「在 `snapshots` 里且不在 `settling` 里」的不画 ——
            * 前者在贴流,后者在贴快照且没在追。尺寸 = 片段实体框。
            */
-          const glContract = def.canvas && def.canvas.kind !== "dom2d" ? def.canvas : null;
+          const glContract = !unsupported && def?.canvas && def.canvas.kind !== "dom2d" ? def.canvas : null;
           const glBox = glContract ? frameBox(clip.frame, timeline) : null;
           // 组流的成员:没有自己的流平面,`hitTest` / `bounds` 对它们退回包裹层框(G1「组流平面的命中与实体框」)
           const groupMember = streamPlanes?.some((g) => g.clipIds.length > 1 && g.clipIds.includes(clip.id)) ?? false;
@@ -331,34 +336,29 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 正常情况下它一项都不会补 —— 补上了就说明 clip 缺参数。
               */}
               {unsupported ? (
-                /*
-                  本机渲染不了的卡(在线浏览器模式下的用户卡 / 图卡,product/platforms.md):卡片代码不跑,
-                  只挂常驻的 `unsupported` 占位(槽位带 `PLACEHOLDER_FIXED_ATTR`,显隐调度跳过它)。
-                */
-                <div {...{ [PLACEHOLDER_SLOT_ATTR]: "", [PLACEHOLDER_FIXED_ATTR]: "" }} style={{ position: "absolute", inset: 0 }}>
-                  <PlaceholderPlane clipId={clip.id} geometry={geometryFor(clip.id, frameBox(clip.frame, timeline))} reason="unsupported" />
-                </div>
+                /* 这台设备跑不了的卡:卡片代码不跑,不挂组件(快照 / 流平面与占位槽位照常挂在下面) */
+                null
               ) : clip.cardId === "composite" && clip.parts?.length ? (
                 // 组合卡:部件实例树逐级渲染,画布尺寸就是这张卡的框(没有框 = 整个舞台)
                 <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={localTOf(clip, t)} playToken={gen} />
-              ) : def.card ? (
+              ) : def!.card ? (
                 // 图卡:经 Stage、有包裹层,hitTest / rects / 快照 / 抑制全部照常
-                <GraphCard def={def} clip={clip} graph={timeline.graph} fps={timeline.fps}
-                  t={localTOf(clip, cardT)} params={{ ...def.defaults, ...clip.params }} stage={stageInfo} />
+                <GraphCard def={def!} clip={clip} graph={timeline.graph} fps={timeline.fps}
+                  t={localTOf(clip, cardT)} params={{ ...def!.defaults, ...clip.params }} stage={stageInfo} />
               ) : clipFrameMode(clip, def) === 'direct' ? (
-                <DirectCard def={def} params={clip.params} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
+                <DirectCard def={def!} params={clip.params} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
               ) : (
-                <C params={{ ...def.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
+                <C params={{ ...def!.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
               )}
               {/*
                 gl 平面(R9,E7 的第五种兄弟平面)。它是**活渲的一部分**,不进四条平面选择器的放过名单 ——
                 藏子树时它和子树一起被藏。**不加 `data-pc-clip`**(`isSolid` 会把它当包裹层跳过)。
                 位图由 `glHost` 在 `done` 时贴上,这里只登记这一拍要画什么。
               */}
-              {!unsupported && glContract && glBox ? (
+              {glContract && glBox ? (
                 <GlPlane clipId={clip.id} cardId={clip.cardId} contract={glContract}
                   w={glBox.width} h={glBox.height} t={localTOf(clip, cardT)} frame={localFrame}
-                  params={{ ...def.defaults, ...clip.params }} gen={gen}
+                  params={{ ...def!.defaults, ...clip.params }} gen={gen}
                   skip={supNow.has(clip.id) || (snapshotHtml !== undefined && !isSettling)} stage={stageInfo} />
               ) : null}
               {/*
@@ -394,7 +394,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 不改名的话 SVG 的 `url(#id)` 会解析到第一个,后挂的那片渐变整片错掉。
                 C4 换成同一片段的另一帧就是这个平面 innerHTML 的原子替换,前后两张不共存。
               */}
-              {!unsupported && snapshotHtml !== undefined ? (
+              {snapshotHtml !== undefined ? (
                 <div data-pc-snapshot-plane="" style={{ position: "absolute", inset: 0 }}
                   dangerouslySetInnerHTML={snapshotProp(clip.id, snapshotHtml)} />
               ) : null}
@@ -406,7 +406,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 位置和尺寸由 `streamPlayer` 按流的清单设(流的矩形上界,可能比框大一圈、也可能在框外一点);
                 清单到之前先铺满包裹层(背板 0×0、透明)—— 被抑制的卡子树藏着,这一小段时间里点它也要点得中。
               */}
-              {!unsupported && ownStream ? (
+              {ownStream ? (
                 <canvas data-pc-stream-plane="" width={0} height={0}
                   style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%" }} />
               ) : null}
@@ -416,12 +416,21 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 不经 React 提交 —— `hidden` 这个 prop 恒为 true,React 不会把手动切过的值冲掉。
                 放在最后:同一包裹层里它盖在快照 / 流平面上面(显示它的时候那两样本来就没画面)。
               */}
-              {placeholders && !unsupported ? (
-                <div {...{ [PLACEHOLDER_SLOT_ATTR]: "" }} hidden style={{ position: "absolute", inset: 0 }}>
-                  <PlaceholderPlane clipId={clip.id} geometry={geometryFor(clip.id, frameBox(clip.frame, timeline))}
-                    reason={placeholderReasonOf(clip.id)} />
-                </div>
-              ) : null}
+              {placeholders ? (() => {
+                /*
+                 * 在屏幕上多大(`placeholderFit.ts`):沙漏只抵消预览缩放;「需要本地 PC 渲染辅助」图标同时抵消这一层的缩放、
+                 * 按框换排法;都不超出这一层的框。预览缩放由父页经 `setViewScale` 发来(桌面与在线都发)。
+                 */
+                const size = frameBox(clip.frame, timeline);
+                const geometry = geometryFor(clip.id, size);
+                const reason = unsupported ? localOnlyReason(clip.id) : placeholderReasonOf(clip.id);
+                return (
+                  <div {...{ [PLACEHOLDER_SLOT_ATTR]: "" }} hidden style={{ position: "absolute", inset: 0 }}>
+                    <PlaceholderPlane clipId={clip.id} geometry={geometry} reason={reason}
+                      fit={placeholderFitFor(clip.id, reason, geometry, size, clip.frame?.scale ?? 1)} />
+                  </div>
+                );
+              })() : null}
             </div>
           );
         })}

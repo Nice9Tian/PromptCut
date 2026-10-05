@@ -36,6 +36,7 @@
  * 同一台机器上跑：成员经本机局域网地址（不是回环）连编辑器，服务端看到的来源是局域网地址，走的是局域网成员的路径。
  * 口令只写在 state 目录与协调口里（探针自建的一次性项目），不打到输出里。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';

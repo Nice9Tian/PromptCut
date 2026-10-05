@@ -1,15 +1,24 @@
 # M5～M8 全案验收总报告
 
-状态：**骨架**（2026-09-28，由 PC 主会话「PromptCut 主会话（PC）」派出的子智能体起草，只写文档）。目录照 `m8-plan.md` 第 6.1 节（该文件现在只在分支 `claude/m8-plan` 上；主会话裁定 D8：两份报告，本文是全案总账，M8 自己的阶段报告另见 `REPORT-render-queue-m8.md`）。
+状态：**定稿**（2026-09-28，由 PC 主会话「PromptCut 主会话（PC）」派出的子智能体起草骨架；同日再派子智能体（分支 `claude/total-report`）补进 C10 其余与 M7；2026-09-29 由笔记本主会话「PromptCut M5～M8 开发交接」派同一分支的子智能体填 M8 部分，同日第三轮按定稿的 M8 报告填完剩下的部分，只写文档）。目录照 `m8-plan.md` 第 6.1 节（主会话裁定 D8：两份报告，本文是全案总账，M8 自己的阶段报告另见 `REPORT-render-queue-m8.md`）。
 
-- 已合入 main 的阶段（M5、M6、SP、C6.5、C6.6、C10a、HT-a）按各阶段报告逐项填了「验收项、结果、证据出处」，只引报告文件名与小节，不抄原文。
-- C10 其余、M7、M8 还没合入，只留占位和待填清单。
-- 拿不准的状态一律标「待核」，没有猜。
-- 核对基准：main `c718be6`（2026-09-28，含 `claude/hygiene`、`claude/host-diag`、`ceab9e4` 撤销刷新修复、`claude/perf-t4`）。
+- 已合入 main 的阶段（M5、M6、SP、C6.5、C6.6、C10a、HT-a、**C10 其余、M7**）按各阶段报告逐项填了「验收项、结果、证据出处」，只引报告文件名与小节，不抄原文。
+- **C10 其余、M7 已合入 main**（C10：main 快进到 `51f01c4`；M7：main 快进到 `a52344a`）。
+- **M8 部分**（第 0 节、第 2.10 节、第 3.1 节、第 4 节、第 5 节，以及第 3.2、3.3、6、7、8、9、10 节与附录里的 M8 汇总行）2026-09-29 照 `REPORT-render-queue-m8.md` 填：第二轮照 `claude/m8-report` @ `3715a072`，第三轮照定稿 `f1871c45` 填完 1080p 分段编码、全案最终基线、阿里云探针项目清理与第 0 节结论。数字、run 号、提交哈希照那份报告抄，那份报告没有的不写。
+- 数字只从各阶段报告里抄，每处注明出处；拿不准的状态一律标「待核」，没有猜。
+- 核对基准：main `0cabcfb0`（2026-09-28，C10、M7 合入之后，另含 M8 期间合入的 `claude/site-bake`、`claude/m8-e6r`、`claude/stall-phases`、`claude/m7-a6-race`、`claude/sink-has` 等）。第 2.1～2.7 节与第 3.2 节「当前状态」一栏是骨架按 main `c718be6` 核的，本次只改了与 C10、M7 有关的行。
 
 ## 0. 结论
 
-〔待填：M8 收尾时写一段话——终极目标是否达成；main 与 release 的提交；未达成的项与去处。〕
+M5～M8 各阶段都已合入 main。M8（多端物理联调）的验收项按 `REPORT-render-queue-m8.md` 逐条判过（逐条见第 3.1 节）：
+
+- **E1～E6**：放云端全过（E5 的 A1～A3 过、A4 按 M7 口径记经公网的观察项；E6 测试开关那遍首轮差一个任务，停滞误判修复后复跑全过；另有反方向由云端当真不同环境的主机，过）。放本机先在笔记本上做本机替身，PC 辅助节点恢复后由 PC 当局域网主机、笔记本经组播发现加入，**真跨机全过**；其中 E3 放本机本机替身查出跨节点去重的缺陷，修复（main `e27fa520`）后真跨机两轮过。E5 放本机按语义不做（浏览器只进放云端的项目）。
+- **K1-X、I1-X** 过（K1 判据按跨机传播窗口改写，〔裁〕）；**异地接入**按替代做法过（PC 创建者、笔记本远程成员，全程到 PC 局域网地址的连接 0），真手机热点是待用户项；**M8-X1～X3** 过，**M8-X4** 按语义不做；**换机迁移演练**过（阿里云第二份实例，`projectRev` 连续、块逐一相符、已就绪的层 0 次重渲）；**混沌 C1～C5** 放云端、放本机都过（C1 放云端首轮没过，修复后复跑过）。
+- **带耗时门槛的项**（笔记本判）：后台上传期间长任务、M7-A4、T9「改卡后 5 s 内重测」过；**1080p 分段编码**收尾前在 main `9cf43f1f` 上贴线没过（五轮中位数 302 ms，门槛 300 ms），按性能缺陷修（`claude/perf-encode-2`，产出逐字节不变，main `501a7dd7`），全案最终基线上连续 5 轮 p50 207～224 ms（中位数 208），过。
+- M8 期间修了三处代码与语义不一致的缺陷（停滞误判、产物库缺块、跨节点去重），另修纯浏览器节点推送提速、编码余量，并按用户要求堵上测试与探针写用户 `Videos\PromptCut` 的两条路，都合入 main。M8 没改 `docs/semantics/` 下的语义；〔裁〕11 条待用户审，另 1 条（1080p）已了结（第 6.1 节）。阿里云主实例上探针留下的 15 个项目都已删掉（第 5.1 节）。
+- 仍未能真跨机的项见第 3.3 节；待用户项见第 8 节；需要用户决定的事见第 10 节。
+
+**M8 验收全过，M5～M8 全案验收完成**：代码的最终提交是 main = release = `501a7dd7`（之后只合文档；全案最终基线在它上面跑，全绿，第 4.2 节）；文档合入后的最终提交见合并记录（`REPORT-render-queue-m8.md` 第 0、9 节）。
 
 ### 代号表
 
@@ -36,13 +45,27 @@
 | 待用户项 | 要人在机器旁、要花钱或要用户拍板，会话绕不过的事（主计划第 10 节） |
 | M8-X1～X4 | `m8-plan.md` 第 2.4 节给各阶段留下的待跨机复核项在 M8 里编的号 |
 | L1～L26 | `m8-plan.md` 第 5 节「要在 M8 之内修的遗留」的编号 |
+| K1-X / I1-X | K1、I1 在真实多端环境下的复测（M8） |
+| C1～C5 | M8 的五个混沌项：节点断网 30 s、重启阿里云托管组合、代理扰动 10% 的数据块、重启放本机项目的主机、传输中断后会话接续（`m8-plan.md` 第 2.6 节） |
+| J-全完 / J-恰一 / J-纯层 | M8 各多端项共用的三条判据：发布的任务全部完成；每个任务恰好一次 `task.done`（按 epoch 数）；没有一层混了两种指纹 |
+| P-C1 / P-C3 | M8 的两项预检（`m8-plan.md` 第 4 节）；P-C1 已作废 |
+| 本机替身 / 真跨机（M8 放本机） | 本机替身：第五次修订后 PC 待命时，笔记本一台机器同时当局域网主机与加入方；真跨机：PC 辅助节点恢复后由 PC 当局域网主机、笔记本经局域网加入 |
+| 第五次修订 | 2026-09-28 ~11:15Z 用户定的交接：主会话由 PC 移到笔记本（「PromptCut M5～M8 开发交接」），PC 待命，云端当第二台机器；15:48Z 前后用户又恢复了 PC 辅助节点 |
+| run `m8e1c2` 等 | M8 各项每次运行的轮号（`m8e…` E 系列、`m8c…` 混沌、`m8k1…` / `m8i1…` 压测、`t9lan…`、`htwlan…`、`m8xreal…`、`e6r0928L`、`m7w0928f` / `L`），每轮是本机替身还是真跨机见第 3.1 节 |
+| PC-M8-0～5 / E6R-1 / RMT-1 | M8 给 PC 辅助节点的六条指令 / 经信箱发给云端的两条指令（E6 反方向、异地接入补跑） |
+| C10-A1～A10 | `c10-contract.md` 第 20 节的十条验收（C10 其余） |
+| C10-T1 / ENC-1 / ENC-2 | C10 带耗时门槛各项在笔记本（性能基准机）上的复核 / 1080p 分段编码修复分支与 main 交替比较 / 修复合入后的 main 再跑（`REPORT-C10.md` 代号节） |
+| M7-A1～A12 / W7 | `m7-contract.md` 第 10 节的十二条验收 / 同节的跨机验收（PC 当用户 A、笔记本 Chrome 当成员 B） |
+| D1～D18（M7） | `m7-contract.md` 第 11 节的十八个待定点，第 13 节逐条裁定；与 `m8-plan.md` 末的 D1～D12 是两组 |
+| M7-T1 / T1b / T1c | 笔记本上 M7 带耗时门槛各项的第一、二、三轮复核（`REPORT-M7.md` 代号节） |
+| run `c10s0928b`～`e`、`m7w0928e` | C10 外网四轮（云端当独立渲染主机）、W7 真跨机那一轮的轮号（经阿里云协调口 KV 对接） |
 
 ## 1. 范围与依据
 
-- **计划**：`Master-Execution-Plan.md`（2026-09-24 定稿，文件头列了 2026-09-26 起的各次修订，最近一次是 2026-09-28 第四次修订与同日补充：云端工作节点归档）；任务书 `TASK-distributed-prerender-queue.md`；设计 `distributed-prerender-queue.md`；`cloud-task.md` 第 5、6、10 步；M8 执行计划 `m8-plan.md`（分支 `claude/m8-plan`）。
+- **计划**：`Master-Execution-Plan.md`（2026-09-24 定稿，文件头列了 2026-09-26 起的各次修订，最近一次是 2026-09-28 第四次修订与同日补充：云端工作节点归档）；任务书 `TASK-distributed-prerender-queue.md`；设计 `distributed-prerender-queue.md`；`cloud-task.md` 第 5、6、10 步；M8 执行计划 `m8-plan.md`（已在 main）。
 - **各阶段契约**：`render-queue-contract.md`（G～J 节）、`asset-store-contract.md`、`artifact-transfer-contract.md`、`docservice-contract.md`、`manifest-contract.md`、`queue-executor-design.md`、`auth-contract.md`、`render-host-contract.md`、`m6c-contract.md`、`shared-project-contract.md`、`hosting-migration.md`、`c65-design.md`、`c65-ops-spec.md`、`c66-design.md`、`c10a-contract.md`、`http-transport-contract.md`、`c10-contract.md`、`m7-contract.md`。
 - **规则**：`developer_guide.md` 索引下的 `guide_files/`（尤其 `verification.md`「性能基准机」、`multi_agent.md`）。
-- **本报告读过的报告**：`docs/reports/` 下全部 `REPORT-*.md`、`HANDOFF-*.md`、`PAUSE-2026-09-26.md`、`CLOUD-NODE-STATUS-2026-09-26.md`、`CODEX-*.md`、`REVIEW-c6-agy.md`、当前留在 `docs/reports/` 的六份 `AGENT-*.md`；`docs/archive/agent-reports/` 里与验收证据或顾问调用有关的几份；`docs/plan/TODO.md`。
+- **本报告读过的报告**：`docs/reports/` 下全部 `REPORT-*.md`（C10 其余、M7 两节据 `REPORT-C10.md`、`REPORT-M7.md`）、`HANDOFF-*.md`、`PAUSE-2026-09-26.md`、`CLOUD-NODE-STATUS-2026-09-26.md`、`CODEX-*.md`、`REVIEW-c6-agy.md`、当前留在 `docs/reports/` 的六份 `AGENT-*.md`；`docs/archive/agent-reports/` 里与验收证据或顾问调用有关的几份；`docs/plan/TODO.md`。
 - **不在本报告范围**：M1～M4 与卡片级指纹锁（`REPORT-render-queue-m1.md`、`REPORT-render-queue-m3.md`、`REPORT-render-queue-m4.md`、`REPORT-render-queue-card-lock.md`，是 M5 的起点）；M5 之前的专项（`REPORT-preview-degrade-sync.md`、`REPORT-item4-session-isolation.md`、`REPORT-placeholder-plane.md`、`REPORT-preview-smoke-flaky.md`、`REPORT-architecture-agent-prerender.md`）。
 
 ## 2. 各阶段结论
@@ -118,7 +141,7 @@
 | K3、K4 | 契约测试全过（场景与判据见测试方报告）；**实验组与对照组的原始数字没进阶段报告** | 同上；`docs/archive/agent-reports/AGENT-m5b-queue-tests.md` |
 | W3 换机不重渲 | 过（0 次渲染，拉取 240 帧） | `REPORT-render-queue-m5b.md` 第 1 节「跨机 W3、W4」 |
 | W4 笔记本真实渲染 | 过（3 个任务） | 同上 |
-| 跨机版 E1、E2、E6、K1（主计划第 6.6 节 W4 行） | **报告没有**：两台机器指纹相同，前提不成立（待核；归 M8 的 E 系列与 K1-X） | `REPORT-render-queue-m5a.md`「W0 引出的两件事」第 2 条 |
+| 跨机版 E1、E2、E6、K1（主计划第 6.6 节 W4 行） | M5b 报告没有：两台机器指纹相同，前提不成立；归 M8 的 E 系列与 K1-X，M8 里都跨机做了、都过（第 3.1、3.2 节第 3 条） | `REPORT-render-queue-m5a.md`「W0 引出的两件事」第 2 条 |
 | 顾问调用记录 | **没有这一节** | — |
 
 ### 2.2 M6（M6a、M6b、M6c）
@@ -227,90 +250,242 @@
 
 ### 2.8 C10 其余
 
-〔占位：还没合入 main。集成分支 `claude/c10-integ`（`24c2c57`，已合 main `a038948`）；另有在修分支 `claude/c10-a4`、`claude/pause-precise`、`claude/c10-site`。〕
+阶段报告 `REPORT-C10.md`；契约 `c10-contract.md`（第 18 节是开工后的裁定，第 20 节是 C10-A1～A10）。集成分支 `claude/c10-integ` 合入 main 是快进，main 指到 `51f01c4`（`REPORT-C10.md` 第 3 节 G0 表写的「合入提交 `62850af`」是同一份代码，`51f01c4` 只多两次改报告的提交 `15ccbf7`、`51f01c4`；合入方式按 `git log --first-parent` 核）。
 
-待填清单：
-- [ ] 合并提交与阶段报告文件名（`HANDOFF-2026-09-28.md` 第 2.3 节第 5 条定的是 REPORT-C10，文件尚未建）
-- [ ] G0（跳过数回到 2）；G0-R 六项（PC）；带耗时门槛的项（笔记本）
-- [ ] 契约 `c10-contract.md` 第 20 节 C10-A1～A10 逐条（交接时：A1、A2、A3、A5 过，A4 一半，A9、A10 没跑，见 `HANDOFF-2026-09-28.md` 第 2.1 节）
-- [ ] C10 契约第 18 节第 9 条（页面 plan 带片段清单）进 main
-- [ ] 部署：两个舞台子域的专用 nginx 站点、OAC 头、`--stage-origins`
-- [ ] 外网复验（M8-X3）与同轮的 HT9（M8-X2）
-- [ ] c10-ui 四个三级数字写进 `mechanism/platforms.md`
-- [ ] 顾问调用记录（交接前的见 `HANDOFF-2026-09-27-pc.md` 第 7 节）
-- [ ] 归档 `AGENT-c10-*`、`AGENT-tier-reload-seek.md`、`AGENT-c10-probe.md`
+| 合并提交 | G0 | G0-R | 阶段验收 | 跨机 | 报告 |
+|---|---|---|---|---|---|
+| main 快进到 `51f01c4`（报告定稿 `62850af`，集成最终代码 `82d1a33`） | `62850af`：tsc 0；3634 / 3632 / 0 / 2（`82d1a33` 头一轮 1 条 AU1 回环 `ETIMEDOUT` 偶发，单跑两遍 7/7、全量重跑全过）；`npm run build` 与在线构建在 `82d1a33` 上 0 | `2f7f821`（合 `pause-precise` 之后）全过：确定性 1800 / 1800、与 `pc-g0r-base` 逐像素 1800 相同、重放 PASS、`ready-index-probe` fails []、`stream-produce-probe --group` PASS、兜底透明拍 0；带耗时门槛的两项笔记本过（C10-T1、ENC-1 / ENC-2） | C10-A1～A10 与成本一项本机全过 | A5 外网过（run `c10s0928e`，同时算 HT9 / M8-X2）；W-HT-a 云端一侧过；其余 A 项外网复验归 M8-X3 | `REPORT-C10.md` 第 3、5、7、10a 节 |
+
+**C10 其余验收**（契约第 20 节与主计划第 7 节 C10）
+
+| 验收项 | 结果 | 证据出处 |
+|---|---|---|
+| G0 | 过：`ebd78e3` 3551 / 3549 / 0 / 2；`8bb0cbe` 3553 / 3551 / 0 / 2；`2f7f821` 3632 / 3630 / 0 / 2；合入提交 `62850af` 3634 / 3632 / 0 / 2；跳过的 2 条是 main 原有的两条；C10-T 60 条门全开、0 失败 0 跳过 | `REPORT-C10.md` 第 3 节「G0」 |
+| G0-R（不带耗时门槛） | 过（`ebd78e3`、`76dab6f`、`2f7f821` 三轮；之后并入的 catalog 修复与外网探针不碰桌面渲染路径，不重跑） | `REPORT-C10.md` 第 3 节「G0-R」 |
+| 带耗时门槛：1080p 分段编码 ≤ 300 ms | 笔记本过：ENC-1 修复版 p50 中位数 290 ms（main 403 ms、五轮都挂），ENC-2 合入后的 main `211695d` 283 ms；PC 上 579 / 573 ms 不作数 | `REPORT-C10.md` 第 3 节「带耗时门槛的项」、第 7 节 |
+| 带耗时门槛：`tiers-probe` T4 | 笔记本过（C10-T1，`51f01c4`）：`longtasksOver50` 0 | 同上 |
+| A1 两个跨源舞台、OAC、主文档长任务 0 | 本机过（`8bb0cbe`）；长任务 0 笔记本复核过（C10-T1：0 / 0）；子域舞台只在外网验 | `REPORT-C10.md` 第 5 节 A1 行、第 10a 节 |
+| A2 L2、测完写进文档服务、重开不重取 | 本机过：写进 4 次、失败 0；重开重新请求 0 | `REPORT-C10.md` 第 5 节 A2 行 |
+| A3 普通档取原尺寸、层表 v2 | 本机过：`snap/` 342、`px/` 0 | `REPORT-C10.md` 第 5 节 A3 行 |
+| A4 按拍换快照、停下就精确 | 本机过（`c10-a4` 修「停下那次被吞」之后）；点停到精确笔记本 6915 / 6915 ms（C10-T1），`pause-precise` 修后 PC 上 6905 / 6916 ms | `REPORT-C10.md` 第 5 节 A4 行、第 4 节第 3 条、第 10 节 |
+| A5 页面发布清单计划、独立渲染主机认领 | 本机过；外网过（run `c10s0928e`，云端当独立渲染主机：认领 3、完成 1、失败 0，新层指纹 `0326290ea8e62e3d`、就绪 42、播放中 `main-v2`） | `REPORT-C10.md` 第 5 节 A5 行、第 7 节 |
+| A6 用户卡、图卡不贴别人的快照 | 本机过（`c10-ui-probe` `ok: true`） | `REPORT-C10.md` 第 5 节 A6 行 |
+| A7 置灰入口、离线提示、本地备份 | 本机过；`/api` 棘轮 120 = 120，在线剪枝后 120 → 19 | `REPORT-C10.md` 第 5 节 A7 行、第 10 节「online-prune」 |
+| A8 合并分发回 501 | 本机过 | `REPORT-C10.md` 第 5 节 A8 行 |
+| A9 低内存档 | 本机过（`small-tier-probe`、`lowmem-online-probe`、`c10a-demo-probe --local`）；外网 `c10a-demo-probe` 随 M8-X3 | `REPORT-C10.md` 第 5 节 A9 行、第 10a 节 |
+| A10 逐帧导出续签 | 本机过：`ecb8cd2` 续签 6 次、`2f7f821` 续签 17 次，失败都是 0 | `REPORT-C10.md` 第 5 节 A10 行、第 10a 节 |
+| 成本记录与界限搜索（契约第 3 节） | 本机过：手机 16 条记录、测 6 次、9 轻 7 重、补渲正好 7 张 | `REPORT-C10.md` 第 5 节「成本」行、第 10a 节 |
+| 契约第 18 节第 9 条（页面 plan 带片段清单、`host` 可认领）进 main | 已进（`ee00efd`，随集成分支）；桌面发布的 plan 仍按 X4，留作记录（L18） | `REPORT-C10.md` 第 1 节、第 6 节第 19 行 |
+| 部署：两个舞台子域专用 nginx 站点、OAC、`--stage-origins` | 做完：2026-09-28 部署 `2f7f821` 服务端与在线构建、`d29a7ba` 的在线构建；三个源 `/editor/` 200 且带 OAC | `REPORT-C10.md` 第 7 节部署行 |
+| 外网复验 C10-A1～A10（M8-X3） | 只做完 A5 部分；其余由 M8 补做，见 `REPORT-render-queue-m8.md` 第 5 节 | `REPORT-C10.md` 第 7 节 |
+| HT9（M8-X2） | 过（run `c10s0928e`），已补进 `REPORT-HT-a.md` | `REPORT-C10.md` 第 7 节；`REPORT-HT-a.md` 第 2 节 HT9 行 |
+| W-HT-a 云端一侧（服务器侧掐连接） | 过（run `c10s0928d`、`e`，掐阿里云上 nginx 到文档服务的上游 8787；`c` 按出口地址掐没掐中） | `REPORT-C10.md` 第 7 节 |
+| 放本机的项目从浏览器进入（M8-X4） | 没做，归 M8 | `REPORT-C10.md` 第 7 节末行 |
+| c10-ui 四个三级数字写进 `mechanism/platforms.md` | 已写（`ebd78e3`） | `REPORT-C10.md` 第 6 节第 24 行 |
+| 手机真机四项 | 没做，待用户项 | `REPORT-C10.md` 第 9 节 |
+| 与计划不一致、〔裁〕 | 29 条 | `REPORT-C10.md` 第 6 节 |
+| 远端操作记录 | 有（部署、nginx `/catalog/`、服务器侧 `ss -K`） | `REPORT-C10.md` 第 7 节 |
+| 顾问调用记录 | 有（写契约前 codex、Gemini 各一次；派活后没调） | `REPORT-C10.md` 第 8 节 |
+| AGENT 报告归档 | 12 份已进 `docs/archive/agent-reports/` | `REPORT-C10.md` 第 12 节 |
+
+后并入集成分支的四条：`claude/pause-precise`（L21）、`claude/c10-site`（外网探针）、`claude/online-prune`（L24）、`claude/c10-catalog`（在线构建缺 `/catalog/`），见 `REPORT-C10.md` 第 10 节。
 
 ### 2.9 M7
 
-〔占位：契约第 1 版 `m7-contract.md` 已在 main（`1e7c940`，第 13 节是主会话对 D1～D18 的裁定与 D18 的语义 dry run）；分支 `claude/rq-m7-node`（开工占位）、`claude/rq-m7-queue`、`claude/rq-m7-tests`、`claude/m7-probe` 在做。〕
+阶段报告 `REPORT-M7.md`；契约 `m7-contract.md`（第 1 版在 main `1e7c940`；第 13 节是主会话对 D1～D18 的裁定、D18 的语义 dry run 与「探针之后的更正」十条）。集成分支 `claude/rq-m7`（最终代码 `88e70e3`）合入 main 是快进，之后在 main 上又合 `claude/m7-probe`（`e86a754`）、`claude/m7-report`（`8cd21c1`）与两次改报告，main 指到 `a52344a`（按 `git log --first-parent` 核）。
 
-待填清单：
-- [ ] 合并提交、阶段报告文件名（未定）
-- [ ] G0；是否动渲染（生成快照）→ G0-R
-- [ ] 契约 M7-A1～A12（E5、B2、L1 的 30 秒锚帧与拖动让路、M7-A12 主文档长任务 0）
-- [ ] W7（笔记本 Chrome 当成员 B 的纯浏览器节点；M7-A4 计时在笔记本）
-- [ ] 开工前的 `createSnapshot` 平方复杂度维护项（`bb01107` 已做，待核是否即契约所指）
-- [ ] D18 语义改动的用户确认记录（待核）
-- [ ] 顾问调用记录
+| 合并提交 | G0 | G0-R | 阶段验收 | 跨机 | 报告 |
+|---|---|---|---|---|---|
+| main 快进到 `a52344a`（集成最终代码 `88e70e3`） | `88e70e3`：tsc 0；3758 / 3756 / 0 / 2；`npm run build` 与在线构建在 `4540315`（= `88e70e3` + 可行性探针脚本 + 报告）上通过 | 动了生成快照，跑了：`88e70e3` 确定性 1800 / 1800、与 `pc-g0r-base` 逐像素 1800 相同（0 不同、0 缺、0 多）、重放 PASS、`ready-index-probe` fails []、`stream-produce-probe --group` PASS、兜底透明拍 0 | M7-A1～A12、D9 / D10 / D14、D1-D2-D12 全过（笔记本 M7-T1b、M7-T1c） | W7 真跨机过（run `m7w0928e`） | `REPORT-M7.md` 第 3、5、7 节 |
+
+**M7 验收**（契约第 10 节）
+
+| 验收项 | 结果 | 证据出处 |
+|---|---|---|
+| G0 | 过：`313b27c` 3754 / 3752 / 0 / 2；`88e70e3` 3758 / 3756 / 0 / 2；M7 契约测试 39 条门全开 | `REPORT-M7.md` 第 3 节「G0」 |
+| G0-R | 过（`313b27c`、`88e70e3` 两轮）；`313b27c` 之后并入的只有队列选段、探针修正与判定纯函数，不碰桌面导出路径 | `REPORT-M7.md` 第 3 节「G0-R」 |
+| A1、A2（E5：只见本人任务、认领） | 本机、笔记本、W7 外网都过 | `REPORT-M7.md` 第 5 节、第 7.1 节 |
+| A3（B2：只认领 light / medium 共享档快照） | 本机、笔记本过；W7 页面侧过，服务端那条外网模式看不到 | 同上 |
+| A4（L1：30 秒内出锚帧） | 笔记本过：M7-T1b 26.8 s、M7-T1c 27.6 s；M7-T1 挂在 85.3 s（锚帧段优先级被冲淡，`fdbf19f` 修）；W7 经公网 63.0 s 只作观察 | `REPORT-M7.md` 第 5 节 A4 行与 M7-T1c 行、第 4 节第 5 条、第 7.1 节 |
+| A5 拖动让路 | 笔记本过：M7-T1b 626 ms、M7-T1c 695 ms | `REPORT-M7.md` 第 5 节 |
+| A6 播放、隐藏、更急的活让路 | 过（让路修复 `7329780` 之后） | `REPORT-M7.md` 第 5 节、第 4 节第 1 条 |
+| A7～A9（低内存档与单舞台不当节点、产物互通、小尺寸） | 本机、笔记本过 | `REPORT-M7.md` 第 5 节 |
+| A10 共存与锁闲置接手 | 过（第 4 节第 2～4 条修后） | 同上 |
+| A11 凭证 | 本机、笔记本过；W7 外网看不到其中两条 | 同上；第 7.1 节 |
+| A12 主文档长任务 0 | 笔记本过（M7-T1b、M7-T1c 都是 0） | `REPORT-M7.md` 第 5 节 |
+| D9、D10、D14；D1-D2-D12 | 过；D1-D2-D12 判据改为按出键分组后 M7-T1c 过〔裁〕 | `REPORT-M7.md` 第 5 节、第 4 节第 7 条 |
+| W7 真跨机（PC 当用户 A、笔记本 Chrome 当成员 B） | 过（run `m7w0928e`，阿里云部署 `4047133` 的构建） | `REPORT-M7.md` 第 7.1 节 |
+| 云端当纯浏览器节点 | 走不通：出站代理的中间人路径不支持 WebSocket 升级；归 HT-b | `REPORT-M7.md` 第 7.2 节 |
+| 开工前的 `createSnapshot` 平方复杂度维护项 | `bb01107`（生成快照 id 改名线性化）已在 main；与契约所指是否同一项 `REPORT-M7.md` 没写（待核）；样式内联代价（L13）由 M7-A12 长任务 0 覆盖 | 第 7.1 节本表；`REPORT-C10.md` 第 11 节 |
+| D18 语义改动 | 两句三级语义已写进 `mechanism/rendering.md`「舞台」、`mechanism/platforms.md`「渲染节点」，都标〔裁〕；定计划时在契约第 13 节做过 dry run，发给用户不等，用户确认的记录报告里没写（待用户审） | `REPORT-M7.md` 第 10 节、第 0 节 |
+| 与计划不一致、〔裁〕 | 30 条（另 `claude/join-error` 1 条不在本阶段） | `REPORT-M7.md` 第 6 节 |
+| 顾问调用记录 | 有：本阶段没调 codex、Gemini，写了理由 | `REPORT-M7.md` 第 8 节 |
+| AGENT 报告归档 | 5 份已进 `docs/archive/agent-reports/` | `REPORT-M7.md` 第 12 节 |
 
 ### 2.10 M8（多端联调，详见 `REPORT-render-queue-m8.md`）
 
-〔占位：前置（C10、M7 合入并部署；1080p 编码在笔记本过线）未齐。探针分支 `claude/m8-kit`、`claude/m8-migrate`、`claude/m8-session-legacy` 已开。〕
+阶段报告 `REPORT-render-queue-m8.md`；执行计划 `m8-plan.md`（末尾「主会话裁定」D1～D12）。前置（`REPORT-render-queue-m8.md` 第 1.1 节）：C10 其余（main `51f01c4`）、M7（main `a52344a`）都已合入，阿里云主实例 2026-09-28 04:59Z 部署 M7 合入后的在线构建（含 C10）；进跨机前要合的遗留 L1、L4、L5、L10、L14、L16、L17 都已合入；四个探针分支都已合入。
 
-待填清单：
-- [ ] 合并提交（集成分支 `claude/rq-m8`）
-- [ ] G0（探针分支只改探针与文档，G0-R 不跑，写明）
-- [ ] E1～E6 × 两种放法、K1-X、I1-X、异地接入、M8-X1～X4、迁移演练、混沌 C1～C5、耗时项的结论（逐条在 M8 阶段报告）
+M8 没有集成分支（总报告骨架预想的 `claude/rq-m8` 没有出现在 M8 报告里）：探针、遗留修复与 M8 期间查出的缺陷修复逐条合入 main，每次合入 main 与 release 同步前进。按 `REPORT-render-queue-m8.md` 第 1.1、9、12a 节：
+
+| 合并提交 | G0 | G0-R | 阶段验收 | 跨机 | 报告 |
+|---|---|---|---|---|---|
+| 逐条合入，代码最后在 main `501a7dd7`（合 `claude/perf-encode-2`，release 同步；之后只合文档）；逐条见下表 | 每次合入都跑；最后三次（PC 辅助节点跑）：`e27fa520` tsc 0、3785 / 3783 / 0 / 2，`efcaec60` tsc 0、3790 / 3788 / 0 / 2，`501a7dd7` tsc 0、3793 / 3791 / 0 / 2 | 改到预渲染的合入跑：`c15d693`、`0cabcfb0`、`e27fa520`、`501a7dd7` 四次全过；只改探针与测试的不跑（如 `9cf43f1f`、`efcaec60`），写明 | 见第 3.1 节，全过 | 放云端各项全过；放本机由 PC 辅助节点当局域网主机真跨机全过 | `REPORT-render-queue-m8.md` 第 2～9、12a 节 |
+
+**M8 期间合入 main 的分支**
+
+| 分支 | 内容 | main 提交 | 出处 |
+|---|---|---|---|
+| `claude/eol-eperm` | L10（拼卡片源码统一换行）、L16（Windows 改名偶发 `EPERM`） | `2fa0c1a6` | `REPORT-render-queue-m8.md` 第 1.1 节 |
+| （L17，`AGENT-host-diag.md`） | 主机端点 `session.*` 日志转出来 | `96e69cb` | 同上 |
+| （L1，`AGENT-undo-refresh.md`） | 撤销后时间轴刷新 | `ceab9e4` | 同上 |
+| `claude/card-overlay` | L4、L5（用户卡写进检出目录、`create_card` 被旧版盖住） | `2e957270` | 同上 |
+| `claude/m8-session-legacy` | L14：`server/card-sync.mjs` 接会话层（裁定 D9） | `278eeb9d` | 同上 |
+| `claude/m8-kit`、`claude/m8-migrate`、`claude/m8-scale`、`claude/m8-e2e` | M8 的四个探针分支 | `fdf515e3`、`6d516f32`、`b18256e1`、`4538ec42` | 同上 |
+| （`AGENT-m8-connect-proxy.md`） | 「只能出网的节点」一侧的本机 CONNECT 代理替身 `m8-outbound-probe` | `8f92683` | 第 5 节末 |
+| `claude/site-bake` | 纯浏览器节点推送提速（代码版本 `ddf69b5e…` → `21c62981…`） | `5649236` | 第 12a 节 |
+| `claude/m8-nolan` | 探针：异地接入的 `--assert-no-lan` | `f550b02` | 第 12a 节 |
+| `claude/m8-e6r` | 探针：`c10-browser-probe --e6-reverse` | `42e691c` | 第 12a 节 |
+| `claude/m7-a6-race` | 探针：M7-A6 等这一段出过帧再触发 | `21eaeb8f` | 第 2 节 E5、第 12a 节 |
+| `claude/stall-phases`、`claude/sink-has` | 活着在干活的节点不再被判停滞；产物库核对素材服务、缺块补推（与 A6 探针修正叠在一起，main 到 `0cabcfb0`） | `0cabcfb0`（停滞修复的 G0-R 在 `c15d693`） | 第 12a 节 |
+| `claude/m8-e3-page` | 探针：e3 补「在线页面恢复同步、重启前最后一次提交可读」 | `9cf43f1f` | 第 12a 节 |
+| `claude/xnode-dedup` | 跨节点去重（代码版本 `21c62981…` → `f979b95e…`） | `e27fa520` | 第 12a 节 |
+| `claude/no-user-videos` | 测试与探针不写用户的 `Videos\PromptCut`：`npm test` 全局设置与 51 个脚本摘掉继承的 `PROMPTCUT_EXPORT_DIR` / `PROMPTCUT_DATA_DIR`，`export-e2e --media-lib` 改硬链接拷贝，守门测试 `no-user-dirs`；没动 `src/` 与进代码版本的文件 | `efcaec60` | 第 12a 节；第 11 节 PC-M8-8、PC-M8-9 |
+| `claude/perf-encode-2` | 1080p 分段编码再提速，产出逐字节不变（代码版本 `f979b95e…` → `b38706791f86…`） | `501a7dd7` | 第 8 节、第 12a 节 |
+
+阿里云上的部署：04:59Z M7 合入后的在线构建；09:18Z main `5649236` 的在线构建；10:28Z 服务端 main `0cabcfb0`（编辑器页不换）；17:54:33Z、20:26:28Z 在线编辑器页先后换成 main `e27fa520`、`501a7dd7` 的构建（托管组合都不重启）；18:2xZ、18:56Z 删掉探针留下的 15 个项目。逐次见第 5.1 节。
+
+M8 各项验收见第 3.1 节；G0、G0-R 见第 4 节。
 
 ## 3. 跨机复核结果
 
 ### 3.1 M8 验收逐条
 
-〔占位：结果与证据位置从 `REPORT-render-queue-m8.md` 第 2～8 节汇总，一行一项：E1～E6（放云端、放本机）、K1-X、I1-X、异地接入、迁移演练、C1～C5、耗时项。〕
+照 `REPORT-render-queue-m8.md` 第 2～9 节汇总，一行一项；「证据」一栏写那份报告的小节，结果行原文在那里。放本机各项先做本机替身（笔记本一台机器兼局域网主机与加入方），PC 辅助节点恢复后由 PC 当局域网主机、笔记本经局域网加入做真跨机；两者都列，以真跨机为准。
+
+| 项 | 放法 / 遍 | 结果 | 证据（`REPORT-render-queue-m8.md`） |
+|---|---|---|---|
+| E1 抢活 | 放云端 | 过（run `m8e1c2`）：真实细任务 50 个全完（PC 6、host-a 22、host-b 22），与同指纹单机重渲逐字节相同；假任务 50 个全完 | 第 2 节 E1 前两行 |
+| E1 抢活 | 放本机 | 本机替身过（`m8e1lanL`）；**真跨机过**（`m8e1lanP`）：20 个细任务全完，两台主机只靠组播发现进入，与单机重渲逐字节相同，阿里云连接数前后不变 | 第 2 节 E1 后两行 |
+| E2 断网接手（半开） | 放云端 | 过（`m8e2c`）：33.9 s 放回、44.1 s 被认领（别的节点槽位满）；轻负载复跑（`m8e2d`）34.0 s 放回、34.2 s 被认领，按字面「≤ 37 s 被认领」过 | 第 2 节 E2 前两行 |
+| E2 断网接手（半开） | 放本机 | 本机替身过（`m8e2lanM`）；**真跨机过**（`m8e2lanP`）：34.5 s 放回、36.9 s 被认领 | 第 2 节 E2 后两行 |
+| E3 文档服务重启（兼 C2） | 放云端 | 过（`m8e3cL`）：`pm2 restart promptcut-hosted` 后 epoch 变了、30/30、重启前完成的 5 个重渲 0 次、页面副本 1.9 s 重连且最后一次提交可读 | 第 2 节 E3；第 7 节 C2 |
+| E3（兼 C4） | 放本机 | 本机替身（`m8e3lanM`）挂 `no-rerender-of-done`，查出跨节点去重缺陷，`claude/xnode-dedup` 修（main `e27fa520`）；**真跨机两轮过**（`m8e3lanP`、`m8e3lanQ`），只挂 `cloud-untouched`，按阿里云日志查证与本轮无关、判过 | 第 2 节 E3；第 7 节 C4 |
+| E4 Agent 突发修改 | 放云端 | 过（`m8e4c`）：间隔 0 / 200 / 900 ms 三轮各 50 次全落地、三份摘要相同，后台 50 个细任务全完 | 第 2 节 E4 |
+| E4 Agent 突发修改 | 放本机 | 本机替身过（`m8e4lanL`）；**真跨机过**（`m8e4lanP`） | 第 2 节 E4 |
+| E5 纯浏览器节点只见本人任务 | 放云端 | A1、A2、A3（节点侧判）过（W7 站点复测 `m7w0928f`、`m7w0928L`）；A4 经公网 33.3 s 记观察项、A10 以 `m7w0928f` 为准〔裁〕。W7 的真跨机（M7 的 D17：PC 当用户 A、笔记本 Chrome 当成员 B）由 `m7w0928e`、`m7w0928f` 跑过；第 2 轮两个角色都在笔记本上，是因为第五次修订后 PC 待命、云端的无头 Chromium 又过不了它的代理的 WebSocket 升级，当不了成员 B | 第 2 节 E5 |
+| E5 | 放本机 | **按语义不做**：`product/platforms.md`「在线浏览器模式」只让浏览器进放云端的项目（主会话更正裁定 D6） | 第 2 节 E5；第 13.3 节 |
+| E6 两种指纹 | 放云端（测试开关） | 首轮（`m8e6c`）核心判据过、J-全完差一个（停滞误判）；`claude/stall-phases` 修后复跑（`m8e6d`）全过：指纹 `e6f00d00e6f00d00` 的主机认领 0 | 第 2 节 E6 第 1 行 |
+| E6 两种指纹 | 放云端（反方向，云端当真不同环境） | 过（`e6r0928L`）：云端（Linux、Chromium 141，指纹 `0326290ea8e62e3d`，不用测试开关）先认领页面发布的清单 plan，另一种指纹对它的细任务试认领 9 次全被拒；判据改写〔裁〕 | 第 2 节 E6 第 2 行 |
+| E6 两种指纹 | 放云端（纯浏览器节点当第二种指纹，裁定 D12） | 随 W7 跑过；「纯浏览器节点天然不同指纹」同机不成立〔裁〕，真实第二种环境由反方向那一遍补上 | 第 2 节 E6 第 3 行 |
+| E6 两种指纹 | 放本机 | 本机替身过（`m8e6lanL`）；**真跨机过**（`m8e6lanP`）：指纹不同的笔记本主机认领 0 | 第 2 节 E6 后两行 |
+| K1-X 实验组 | 放云端，两种顺序 | 过：`join-first`（`m8k1a`）稳态拒绝 0、竞态 8（上限 8）；`lock-first`（`m8k1b`）稳态 0、竞态 0；判据改写〔裁〕 | 第 3 节 |
+| K1-X 对照组 | 本机（裁定 D4） | 有基数：过滤关时 `card-locked` 拒绝 400、不匹配节点收到已锁卡 `task.opened` 400 条，与 M5b 一致 | 第 3 节 |
+| I1-X | 演练实例、主实例 | 都过（`m8i1d`、`m8i1m`）：跨项目消息 0；`task.closed(done)` 投递 5000 = 应投递 5000；500/500 | 第 3 节 |
+| 异地接入：关掉局域网路径 | 应用层计数 | 做到：两轮成员到 PC 局域网地址的 TCP 连接 0、局域网发现 0 | 第 4 节第 1 行 |
+| 异地接入：假任务一轮 | 放云端 | 首轮（PC 创建者、笔记本成员）挂在探针时序（成员认领 0）；补跑（云端当远程成员，指令 RMT-1）过：不设集群令牌、凭项目凭证进入，认领 6、完成 6、各恰好一次 | 第 4 节第 2 行 |
+| 异地接入：真实渲染一轮 | 放云端 | 过（`m8xrealR`）：PC 创建者、笔记本两台主机凭成员凭证经 443 进入并完成真实细任务，`noLan` maxTcp 0、发现 0；前两轮（`m8xrealP`、`m8xrealQ`）只挂 `--assert-no-lan` 的一半，原因查明不在被测系统；原〔裁〕（由云端当远程成员）撤销 | 第 4 节第 3 行 |
+| 异地接入：模拟移动网络（补充） | 放云端 | 过（经代理加 150 ms 时延、5% 扣块）；只作补充，真热点是待用户项 | 第 4 节第 4、5 行 |
+| M8-X1 放本机版 T9 | 放本机 | 本机替身过（`t9lanM`，观察端限速 1 MB/s〔裁〕）；**真跨机过**（`t9lanP`）：观察端先小后大、黑帧 0，改卡后 2247 ms 重测 | 第 5 节 |
+| M8-X2 HT9 | 放云端 | 过（`c10s0928e`，云端当独立渲染主机） | 第 5 节 |
+| M8-X3 C10 外网复验 | 放云端 | 过：A1～A5 在 `e6r0928L` 里全过（A1 长任务 0 在笔记本本机判）；A8 对站点核过；A9 用 `c10a-demo-probe` 在站点跑、过；A6、A7、A10 以 C10 阶段本机替身为准 | 第 5 节 |
+| M8-X4 浏览器进放本机的项目 | — | **按语义不做**（同 E5 放本机） | 第 5 节；第 13.3 节 |
+| 只能出网的节点一侧（裁定 D5） | 本机替身、云端 | 本机 CONNECT 代理替身四轮过（main `8f92683`）；云端容器本身只能经代理出网，`c10s0928c` / `d` / `e` 经代理认领并完成；真云端代理多出口地址的怪癖仍待跨机复核 | 第 5 节末 |
+| 换机迁移演练 | 阿里云第二份实例 8777 / 8778 | 过：`projectRev` 16 个项目全等、种子项目迁移后改一处 = 迁移前 + 1；36 089 块逐块 sha256 相符；经服务取回 300 + 12 块 100%；已就绪的层 0 次重渲；两台客户端都进得去；三处〔裁〕 | 第 6 节 |
+| 预检 P-C1 / P-C3 | — | P-C1 作废（约束「不动宿主机的网络」）；P-C3 已做（`ss -K` 可用、`sch_netem` 在） | 第 7.0 节 |
+| C1 节点断网 30 s（应用层） | 放云端 | 首轮（`m8c1c`）没过：停滞误判，丢认领、1 个任务永久失败；`claude/stall-phases` 修后复跑（`m8c1d`）过：结局 `resumed-done`，两台主机丢认领 0、失败 0 | 第 7 节 C1 |
+| C1 | 放本机 | 本机替身过（`m8c1lanL`，结局被接手、30.0 s 放回）；**真跨机过**（`m8c1lanP`，结局 `resumed-done`） | 第 7 节 C1 |
+| C2 重启阿里云托管组合 | 放云端 | 同 E3 放云端（`m8e3cL`），过 | 第 7 节 C2 |
+| C3 代理扰动 10% 的数据块 | 放云端 | 过（`m8c3e`）：20/20、0 失败、两台主机丢认领 0；首轮 `m8c3c` 中止（交接时被收口），原因未查、重跑没复现；无扰动对照没跑，耗时比没记 | 第 7 节 C3 |
+| C3 | 放本机 | 本机替身过（`m8c3lanL`）；**真跨机过**（`m8c3lanP`）；内核层真丢包按约束作废 | 第 7 节 C3 |
+| C4 放本机项目的主机重启 | 放本机 | 同 E3 放本机，**真跨机两轮过**；素材地址经局域网发现 1.7 s / 2.0 s 重新拿到（≤ 10 s）；重启后对局域网素材服务跑 `asset-lan-probe`，分片续传与鉴权各步过 | 第 7 节 C4 |
+| C5-1 服务器侧切 | 放云端 | 过（`c10s0928e`）：云端当主机，掐阿里云上 nginx 到文档服务的上游连接后 `resumes` 0→1、`opens` 不变；`c` 按出口地址掐没掐中（云端代理多出口） | 第 7 节 C5 |
+| C5-2 代理侧切 | 放本机 | 本机替身过（`htwlanL`）；**真跨机过**（`htwlanP`）：763 ms 后接续原会话，持有的那段没被放回 | 第 7 节 C5 |
+| 带耗时门槛：1080p 全幅流 15 帧分段编码 ≤ 300 ms | 笔记本 | **过**（修复后，全案最终基线）：main `501a7dd7`（`claude/perf-encode-2` 合入，产出逐字节不变）上第二组连续 5 轮 p50 207 / 224 / 214 / 208 / 207 ms（中位数 208，每轮 `fails []`）；第一组 5 轮 215 / 320 / 217 / 214 / 258，320 那一轮截图 1199 ms、比平时慢四分之一，三次编码 294 / 320 / 445，记为外来负载下的离群值，按「五轮全过」另跑第二组。修复前：收尾前在 main `9cf43f1f` 上有效 5 轮中位数 302 ms 没过（编码路径自 `211695d` 没改过，是余量不够），按规矩算真挂、门槛不动 | 第 8 节第 1 行；第 12a 节 |
+| 带耗时门槛：后台上传期间无 > 50 ms 长任务 | 笔记本 | 过：全案最终基线（main `501a7dd7`）三轮长任务都是 0；此前 main `9cf43f1f` 上也是三轮 0 | 第 8 节第 2 行 |
+| 带耗时门槛：M7-A4 纯浏览器 30 s 内出锚帧 | 笔记本 | 过（M7 合入时笔记本本机 M7-T1c 27.6 s）；经公网 37.4 s / 33.3 s 只作观察 | 第 8 节第 3 行 |
+| 带耗时门槛：C6.6 T9「改卡后 5 s 内重测」 | 笔记本 | 过（`t9lanM` 3652 ms，1 MB/s 限速） | 第 8 节第 4 行 |
+| 只记录：C10a 第 3 步「新的小尺寸到手机」（L22） | 站点 | 记了时刻分解：新键 6952 ms、新小尺寸产出 11 026 ms、手机取到新的小位图 293 963 ms 等；不设门槛 | 第 8 节第 5 行 |
+| G0、G0-R、全案最终基线 | PC 辅助节点、笔记本 | 全绿，见第 4 节 | 第 9 节 |
 
 ### 3.2 各阶段「待跨机复核」
 
-从各阶段报告与交接文件逐条收，共 **18 条**。「M8 归属」照 `m8-plan.md` 第 3.1 节对照表；该表没有的标「m8-plan 未列」，并进本文末「骨架里发现的缺口」。
+从各阶段报告与交接文件逐条收，共 **18 条**。「M8 归属」照 `m8-plan.md` 第 3.1 节对照表；该表没有的标「m8-plan 未列」，并进本文末「骨架里发现的缺口」。「当前状态」一栏 2026-09-29 按 `REPORT-render-queue-m8.md` 更新了受 M8 影响的第 1～5、8、9、12～15、18 条（「M8 归属」一栏保留骨架时的写法）。
 
 | # | 来源 | 项 | 当前状态 | M8 归属 |
 |---|---|---|---|---|
-| 1 | `REPORT-render-queue-m5a.md` 第 1 节 X6 | 物理断网后接手：按用户「物理环境自治」改用笔记本本机代理模拟拔网，没真断网 | 替代做法已过（34.00 s）；真断网没做 | m8-plan 未列；混沌 C1（笔记本断网 30 s）可覆盖 |
-| 2 | `REPORT-render-queue-m5a.md`「W0 引出的两件事」第 2 条 | 两台机器指纹相同，E6、K1～K3、W4「两种指纹」的前提在真机上不成立 | M5b 的 K 系列只在单机用注入指纹跑；跨机两种真实指纹一直没有 | m8-plan 未列入第 3.1 节；E6 按裁定 D12 用测试开关与纯浏览器节点两种做，K1-X 用给定指纹的假节点 |
-| 3 | 主计划第 6.6 节 W4 行 | 跨机版 E1、E2、E6、K1 | M5b 报告只报了 W3、W4 真实渲染，这四条**没报**（待核） | m8-plan 未列；E1、E2、E6、K1-X 覆盖 |
-| 4 | `REPORT-M6.md` 第 2 节 | H5、H6、H9、H10 只有单进程测试 | 没跨机 | 可选顺带：E1 放云端那一遍加 `render-host-probe.mjs --role auth-check` |
-| 5 | `REPORT-SP.md` 第 4、6 节 | SP8 放云端「笔记本在手机热点下」用同局域网走公网代替〔裁〕 | 替代已过；真热点没做 | 第 2.3 节异地接入（仍是替代做法，裁定 D11 算过）；真热点记待用户项 |
+| 1 | `REPORT-render-queue-m5a.md` 第 1 节 X6 | 物理断网后接手：按用户「物理环境自治」改用笔记本本机代理模拟拔网，没真断网 | 替代做法已过（34.00 s）；真断网没做。M8 C1 按约束「不动宿主机的网络」改在应用层做（经代理 `stall` 30 s）：放云端修复后复跑 `m8c1d` 过、放本机真跨机 `m8c1lanP` 过；物理断网不再做（`REPORT-render-queue-m8.md` 第 7 节 C1） | m8-plan 未列；混沌 C1（笔记本断网 30 s）可覆盖 |
+| 2 | `REPORT-render-queue-m5a.md`「W0 引出的两件事」第 2 条 | 两台机器指纹相同，E6、K1～K3、W4「两种指纹」的前提在真机上不成立 | M5b 的 K 系列只在单机用注入指纹跑。M8 里：E6 反方向（`e6r0928L`）由云端当真不同环境的主机（Linux、Chromium 141，指纹 `0326290ea8e62e3d`，不用测试开关）补上「两台真不同指纹的机器」；K1-X 用给定两种指纹的节点跨机跑过（`m8k1a`、`m8k1b`）（`REPORT-render-queue-m8.md` 第 2 节 E6、第 3 节） | m8-plan 未列入第 3.1 节；E6 按裁定 D12 用测试开关与纯浏览器节点两种做，K1-X 用给定指纹的假节点 |
+| 3 | 主计划第 6.6 节 W4 行 | 跨机版 E1、E2、E6、K1 | M5b 报告只报了 W3、W4 真实渲染，这四条没报；M8 里都跨机做了、都过：E1、E2、E6 放云端与放本机真跨机，K1-X 两种顺序（`REPORT-render-queue-m8.md` 第 2、3 节） | m8-plan 未列；E1、E2、E6、K1-X 覆盖 |
+| 4 | `REPORT-M6.md` 第 2 节 | H5、H6、H9、H10 只有单进程测试 | 没跨机；`REPORT-render-queue-m8.md` 没有这一项（可选的顺带没做） | 可选顺带：E1 放云端那一遍加 `render-host-probe.mjs --role auth-check` |
+| 5 | `REPORT-SP.md` 第 4、6 节 | SP8 放云端「笔记本在手机热点下」用同局域网走公网代替〔裁〕 | 替代已过；真热点没做。M8 异地接入按替代做法过（真实渲染一轮 `m8xrealR`：PC 创建者、笔记本远程成员，全程到 PC 局域网地址的连接 0；另有模拟移动网络一轮作补充），真热点仍是待用户项（`REPORT-render-queue-m8.md` 第 4 节） | 第 2.3 节异地接入（仍是替代做法，裁定 D11 算过）；真热点记待用户项 |
 | 6 | `REPORT-C6.6.md` 第 10 节 | T9-X2（观察端在原尺寸还在路上时先小后大） | **已补做**，T9-X3 全过 | 不需要 |
-| 7 | `REPORT-C6.6.md` 第 10 节 | 云端当独立渲染主机（覆盖原 HT9 的硬验收） | 云端已归档，不再做；并入第 10 条 | HT9（M8-X2） |
-| 8 | `REPORT-C6.6.md` 第 10 节 | 放本机版 T9：PC 当主机、笔记本经局域网直连加入 | 没做 | M8-X1 |
-| 9 | `HANDOFF-http-transport.md` 第 2 节 | HT 第 1 版的 HT6「部署后云端节点接入并认领任务」 | 没做，被 HT-a 的 HT9 取代（待核是否另有要求） | 随 M8-X2 |
-| 10 | `REPORT-HT-a.md` 第 1.7、4 节；`HANDOFF-2026-09-28.md` 第 5 节 | HT9：在线页面发布带片段清单的 plan，独立渲染主机认领并完成 | 两轮没过；等 C10 部署后做 | M8-X2（笔记本当主机，同时算 C10-A5 外网复验） |
-| 11 | `REPORT-HT-a.md` 第 1.6 节 | W-HT-a 的云端一侧（服务器侧切断） | 没做 | 混沌 C5-1（笔记本当主机、阿里云上 `ss -K` 切） |
-| 12 | 主计划文件头 2026-09-28 同日补充；`m8-plan.md` 裁定 D5 | 「只能出网的节点」那一侧（经 HTTP 代理出网的节点的会话接续与认领） | 云端归档，无真节点 | 笔记本仿一个经 CONNECT 代理出网的节点当替身；真那一侧仍待跨机复核（第 3.3 节） |
-| 13 | `HANDOFF-2026-09-28.md` 第 5 节 | C10 外网复验 C10-A1～A10 | C10 未合入、未部署 | M8-X3 |
-| 14 | `c10-contract.md` 第 13 节；`HANDOFF-2026-09-28.md` 第 5 节 | 放本机的项目从浏览器进入（手填主机地址或桌面版给的局域网链接） | 没做，实现归属未定 | M8-X4；裁定 D6 记待跨机复核，E5 放本机那一遍依赖它 |
-| 15 | `m7-contract.md` 第 10 节 | W7：笔记本 Chrome 当成员 B 的纯浏览器节点；M7-A4 计时在笔记本 | M7 未合入 | E5（放云端） |
+| 7 | `REPORT-C6.6.md` 第 10 节 | 云端当独立渲染主机（覆盖原 HT9 的硬验收） | 并入第 10 条；实际由云端当独立渲染主机做完（run `c10s0928e`，`REPORT-C10.md` 第 7 节） | HT9（M8-X2），已完成 |
+| 8 | `REPORT-C6.6.md` 第 10 节 | 放本机版 T9：PC 当主机、笔记本经局域网直连加入 | **已过**：本机替身 `t9lanM`，PC 辅助节点恢复后真跨机 `t9lanP`（PC 当局域网主机，笔记本观察端先小后大、改卡后 2247 ms 重测）（`REPORT-render-queue-m8.md` 第 5 节） | M8-X1 |
+| 9 | `HANDOFF-http-transport.md` 第 2 节 | HT 第 1 版的 HT6「部署后云端节点接入并认领任务」 | 没做，被 HT-a 的 HT9 取代（待核是否另有要求）；HT9 已由 M8-X2 过（`c10s0928e`） | 随 M8-X2 |
+| 10 | `REPORT-HT-a.md` 第 1.7、4 节；`HANDOFF-2026-09-28.md` 第 5 节 | HT9：在线页面发布带片段清单的 plan，独立渲染主机认领并完成 | **已过**（run `c10s0928e`，改由云端当独立渲染主机；同时算 C10-A5 外网复验），已补进 `REPORT-HT-a.md` 第 2 节（`REPORT-C10.md` 第 7 节） | M8-X2，已完成 |
+| 11 | `REPORT-HT-a.md` 第 1.6 节 | W-HT-a 的云端一侧（服务器侧切断） | **已过**：云端当主机，run `c10s0928d`、`e` 掐阿里云上 nginx 到文档服务的上游 8787，会话接续、恰好一次；run `c` 按出口地址掐没掐中（`REPORT-C10.md` 第 7 节） | 混沌 C5-1 |
+| 12 | 主计划文件头 2026-09-28 同日补充；`m8-plan.md` 裁定 D5 | 「只能出网的节点」那一侧（经 HTTP 代理出网的节点的会话接续与认领） | 云端容器本身只能经代理出网，run `c10s0928c` / `d` / `e` 里经代理认领并完成，C10 报告记「云端已复核」；本机 CONNECT 代理替身 `m8-outbound-probe` 四轮过（main `8f92683`）（`REPORT-C10.md` 第 7 节）。M8 结论：经代理出网时会话接续与认领正常已由这两路证明；真云端代理有多个出口地址的怪癖（按出口地址掐线可能掐不中）仍记待跨机复核，是否在团队测试时补列为待用户项（`REPORT-render-queue-m8.md` 第 5 节末、第 13.4 节第 8 条） | 结论由 M8 定（第 3.3 节） |
+| 13 | `HANDOFF-2026-09-28.md` 第 5 节 | C10 外网复验 C10-A1～A10 | **已过**：A5 在 `c10s0928e`；A1～A5 在 `e6r0928L`（站点模式）里全过，A8 对站点核过，A9 用 `c10a-demo-probe` 在站点跑、过；A6、A7、A10 以 C10 阶段本机替身为准（`REPORT-render-queue-m8.md` 第 5 节 M8-X3） | M8-X3 |
+| 14 | `c10-contract.md` 第 13 节；`HANDOFF-2026-09-28.md` 第 5 节 | 放本机的项目从浏览器进入（手填主机地址或桌面版给的局域网链接） | **按语义不做**：`product/platforms.md`「在线浏览器模式」（用户 2026-09-27 定）只让浏览器进放云端的项目，契约第 13 节写于这条决定之前、被它取代；原裁定 D6 作废，E5 放本机同样不做（`REPORT-render-queue-m8.md` 第 5 节、第 13.3 节） | M8-X4；裁定 D6 记待跨机复核，E5 放本机那一遍依赖它 |
+| 15 | `m7-contract.md` 第 10 节 | W7：笔记本 Chrome 当成员 B 的纯浏览器节点；M7-A4 计时在笔记本 | **已过**：W7 run `m7w0928e`；M7-A4 笔记本 M7-T1b 26.8 s、M7-T1c 27.6 s（`REPORT-M7.md` 第 5、7.1 节）。M8 E5 放云端的站点复测（`m7w0928f`、`m7w0928L`）A1、A2、A3（节点侧）过，A4 经公网记观察项〔裁〕（`REPORT-render-queue-m8.md` 第 2 节 E5） | E5（放云端）仍由 M8 跑 |
 | 16 | `REPORT-C10a.md` 第 5 节 | 真手机扫码；iOS 逐帧导出的最长时长与体积 | 没做 | 不能由会话替代，记待用户项；可选笔记本 Chrome 手机视口加节流跑 `c10a-demo-probe.mjs` 作参考 |
 | 17 | `HANDOFF-2026-09-27-pc.md` 第 5 节 | W-C10a 可选的无头手机视口预检 | **已由演示探针的手机仿真覆盖** | 不需要（m8-plan 未列，也不必列） |
-| 18 | `HANDOFF-2026-09-28.md` 第 6 节；`TODO.md`「已做步骤的遗留」 | 待笔记本复核（性能基准机）：1080p 分段编码 ≤ 300 ms；`tiers-probe.mjs` T4；T9「改卡后 5 s 内重测」只在不限速与 1 MB/s 下判 | T4 已过（`a038948`，笔记本空闲时 3 轮全过）；1080p 在 `claude/perf-encode`（`7cbf70a`）待笔记本复核；T9 那条只记录 | `m8-plan.md` 第 2.7 节耗时项 |
+| 18 | `HANDOFF-2026-09-28.md` 第 6 节；`TODO.md`「已做步骤的遗留」 | 待笔记本复核（性能基准机）：1080p 分段编码 ≤ 300 ms；`tiers-probe.mjs` T4；T9「改卡后 5 s 内重测」只在不限速与 1 MB/s 下判 | T4 已过（`a038948` 笔记本 3 轮；C10-T1 在 `51f01c4` 再过；M8 在 main `9cf43f1f` 三轮再过）；1080p 当时过（ENC-1 290 ms、ENC-2 合入后的 main `211695d` 283 ms），M8 收尾前在 main `9cf43f1f` 上贴线没过（五轮中位数 302 ms），`claude/perf-encode-2` 修后全案最终基线（main `501a7dd7`）连续 5 轮中位数 208 ms，**过**；T4 在 `501a7dd7` 上三轮再过；T9 那条 M8 在 1 MB/s 下判过（`t9lanM` 3652 ms、`t9lanP` 2247 ms）（`REPORT-C10.md` 第 3、7 节；`REPORT-render-queue-m8.md` 第 8 节） | `m8-plan.md` 第 2.7 节耗时项 |
 
 ### 3.3 仍未能真跨机的项与原因
 
-〔占位：M8 收尾时填。已知会落在这里的：「只能出网的节点」一侧（上表第 12 条，云端已归档）；真手机（第 16 条）；真手机热点（第 5 条）。〕
+M8 之后，放本机各项的本机替身都已由 PC 当局域网主机的真跨机补过（第 3.1 节）。仍没有真跨机、或只用了替代做法的：
+
+| 项 | 做到哪一步 | 为什么没能真跨机 | 去处 | 出处 |
+|---|---|---|---|---|
+| 真手机扫码、iOS Safari 与微信内置浏览器、蜂窝网络、iOS 逐帧导出（第 3.2 节第 16 条） | 演示探针的手机仿真、`c10a-demo-probe` 在站点跑过（M8-X3 的 A9） | 要人拿真手机，会话替代不了 | 待用户项（第 8 节第 10、11、24 条） | `REPORT-C10a.md` 第 5 节；`REPORT-render-queue-m8.md` 第 13.4 节第 2 条 |
+| 笔记本在真手机热点下异地接入（第 5 条） | 替代做法过：同一家宽出口走公网（`m8xrealR` 等），另加模拟移动网络一轮 | 没有移动网络的 NAT、时延与 MTU；要人在机器旁开热点 | 待用户项（第 8 节第 22 条） | `REPORT-render-queue-m8.md` 第 4 节末行、第 13.1 节 |
+| 「只能出网的节点」一侧的真云端代理怪癖（第 12 条） | 本机 CONNECT 代理替身四轮过；云端经代理出网跑过 `c10s0928c` / `d` / `e` | 云端出站代理有多个出口地址，按出口地址在服务器侧掐线掐不中（C5-1 改掐 nginx 上游） | 仍记待跨机复核；是否在团队测试时补是待用户项（第 8 节第 22 条） | `REPORT-render-queue-m8.md` 第 5 节末、第 7 节 C5、第 13.4 节第 8 条 |
+| 云端当纯浏览器节点（W7 的真跨机本身已由 `m7w0928e`、`m7w0928f` 跑过：PC 当用户 A、笔记本 Chrome 当成员 B） | 站点复测 `m7w0928f`（PC 创建者、笔记本节点）过；`m7w0928L` 两个角色同在笔记本 | 云端的无头 Chromium 过不了它的代理（TLS 中间人）的 WebSocket 升级 | 归 HT-b（M8 之后） | `REPORT-render-queue-m8.md` 第 2 节 E5；`REPORT-M7.md` 第 7.2 节 |
+| E3、E4 里的「页面」 | 按页面同一条协议维持的 Node 副本（成员、`role: page`） | 不是浏览器页面，探针按协议判 | 只记录 | `REPORT-render-queue-m8.md` 第 13.1 节 |
+| 迁移演练第 8 步的两台客户端 | 都在笔记本上跑（第二台是同机另一进程、独立临时数据目录）〔裁〕 | 第五次修订后 PC 待命；判据只走协议 | 只记录 | `REPORT-render-queue-m8.md` 第 6 节第 8 步 |
+| M6 的 H5、H6、H9、H10（第 4 条） | 单进程测试覆盖 | M8 没做可选的顺带（`render-host-probe --role auth-check`） | 只记录 | `REPORT-M6.md` 第 2 节 |
+| 浏览器进放本机的项目（M8-X4）、E5 放本机 | — | 不是没能做，是按语义不做（只让浏览器进放云端的项目） | 要做须先改语义，待用户定（第 8 节第 35 条） | `REPORT-render-queue-m8.md` 第 13.3 节 |
 
 ## 4. 最终基线
 
-〔占位：`m8-plan.md` 第 2.8 节「全案最终基线」〕
+### 4.1 M8 期间每次合入的 G0 / G0-R
+
+照 `REPORT-render-queue-m8.md` 第 9、11、12a 节。M8 期间合入前的 G0 由主会话或 PC 辅助节点跑；`9cf43f1f`、`e27fa520`、`efcaec60`、`501a7dd7` 四次由 PC 辅助节点跑（指令 PC-M8-1、PC-M8-3、PC-M8-8 / 9、PC-M8-10）。全量测试写成「总条数 / 通过 / 失败 / 跳过」，跳过的两条都是要设 `PROMPTCUT_BASE` 才跑的集成测试。
+
+| 合入 | main 提交 | G0 | G0-R | 出处 |
+|---|---|---|---|---|
+| `claude/site-bake` | `5649236` | tsc 0；3758 / 3756 / 0 / 2；`npm run build`、`vite build --mode online` 成功 | M8 报告没写 G0-R 六项；改的是纯浏览器节点，合并后另跑 `m7-browser-probe --role all --no-a10 --no-twin`（run `mukz7q6d6b84`）`fails []` | 第 12a 节 |
+| `claude/m8-nolan` | `f550b02` | 3763 / 3761 / 0 / 2（单测 5 条过，守门名单加 `m8-no-lan.test.mjs`） | 只改探针与测试，不跑 | 第 12a 节 |
+| `claude/m8-e6r` | `42e691c` | 3763 / 3761 / 0 / 2（首轮 `sp-store.test.mjs` 整份加载失败一次，单独 9/9、全量重跑全绿） | 只改探针，不跑 | 第 12a 节 |
+| `claude/stall-phases` | G0-R 在 `c15d693` | tsc 0；3774 / 3772 / 0 / 2；构建成功 | 导出确定性 1800/1800；与 PC 基准逐像素 1800 相同；快照重放一致 PASS；`ready-index-probe` `fails []`；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（288、289 拍） | 第 12a 节 |
+| 停滞修复、A6 探针修正与 `claude/sink-has` 叠在一起 | `0cabcfb0` | tsc 0；3778 / 3776 / 0 / 2；构建成功 | 同上六项全过（透明拍 0，286、285 拍） | 第 12a 节 |
+| `claude/m8-e3-page` | `9cf43f1f` | tsc 0；3779 / 3777 / 0 / 2；构建成功（PC-M8-1、PC-M8-2） | 只改探针与测试，不跑 | 第 9 节；第 11 节 |
+| `claude/xnode-dedup` | `e27fa520` | tsc 0；3785 / 3783 / 0 / 2；`npm run build` 成功（PC-M8-3） | 导出确定性 1800/1800；与 PC 像素基准（`.worktrees/pc-g0r-base`，`d70fce77`）逐像素 1800 相同；快照重放一致 PASS；`ready-index-probe` `fails []`；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（286、287 拍） | 第 9 节；第 11 节 |
+| `claude/no-user-videos` | `efcaec60` | tsc 0；3790 / 3788 / 0 / 2；守门测试 `no-user-dirs` 过、`[no-user-dirs]` 提示行 0（PC-M8-8）；`npm run build` 成功（PC-M8-9，release 判用） | 没动 `src/` 与进代码版本的文件，不跑 | 第 11、12a 节 |
+| `claude/perf-encode-2` | `501a7dd7` | tsc 0；3793 / 3791 / 0 / 2；构建成功（PC-M8-10） | 全过，像素基准 1800 相同（即第 4.2 节全案最终基线的 PC 部分） | 第 9、11、12a 节 |
+| 其余（L1、L4、L5、L10、L14、L16、L17 的遗留修复，四个探针分支，CONNECT 代理替身，`claude/m7-a6-race`） | 见第 2.10 节 | `REPORT-render-queue-m8.md` 没逐次记数字（见各合并提交信息与归档的 AGENT 报告；`m7-a6-race` 只记了本机替身 A6 `fails []`） | — | 第 1.1、12a 节 |
+
+### 4.2 全案最终基线
+
+`m8-plan.md` 第 2.8 节：在最终 main 上，PC 跑 G0 与 G0-R 里不带耗时门槛的六项，笔记本跑带耗时门槛的（第 2.7 节）；像素比较用同一台机器的基准（PC：`.worktrees/pc-g0r-base`，笔记本：`.worktrees/main-g0r`）。
+
+全案最终基线在代码的最终提交 main `501a7dd7`（`claude/perf-encode-2` 合入，之后只合文档）上跑，**全绿**（`REPORT-render-queue-m8.md` 第 8、9 节）。
 
 | 项 | 机器 | 命令 | 结果 | 证据 |
 |---|---|---|---|---|
-| main 提交 | — | `git rev-parse main` | 待填 | 待填 |
-| 类型检查 | PC | `npx tsc -b --force` | 待填 | 待填 |
-| 全量测试（跳过 ≤ 2） | PC | `npm test` | 待填 | 待填 |
-| 导出确定性 1800/1800 | PC | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:<端口>/?export=1"` | 待填 | 待填 |
-| 导出像素与 PC 基准逐像素相同 | PC | 与 `.worktrees/pc-g0r-base` 的帧比 | 待填 | 待填 |
-| 快照重放 | PC | `node scripts/verify-unified-frames.mjs` | 待填 | 待填 |
-| 预渲染探针 | PC | `ready-index-probe.mjs`、`stream-produce-probe.mjs --group`、`preview-fallback-probe.mjs`（两种） | 待填 | 待填 |
-| 带耗时门槛的项 | 笔记本 | `stream-produce-probe.mjs`（不带 `--group`）、`tiers-probe.mjs` T4 等（`m8-plan.md` 第 2.7 节） | 待填 | 待填 |
+| main 提交 | — | `git rev-parse main` | `501a7dd7`（= release；之后只合文档）；代码版本 `b38706791f86…` | PC-M8-10 回执 |
+| 类型检查 | PC | `npx tsc -b --force` | 0 错误 | PC-M8-10 回执 |
+| 全量测试（跳过 ≤ 2） | PC | `npm test` | 3793 / 3791 / 0 失败 / 2 跳过（跳过的两条都是要设 `PROMPTCUT_BASE` 才跑的集成测试） | PC-M8-10 回执 |
+| 导出确定性 1800/1800 | PC | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:<端口>/?export=1"` | 1800/1800 | PC-M8-10 回执 |
+| 导出像素与 PC 基准逐像素相同 | PC | 与 `.worktrees/pc-g0r-base` 的帧比 | 逐像素 1800 相同 | PC-M8-10 回执 |
+| 快照重放 | PC | `node scripts/verify-unified-frames.mjs` | PASS | PC-M8-10 回执 |
+| 预渲染探针 | PC | `ready-index-probe.mjs`、`stream-produce-probe.mjs --group`、`preview-fallback-probe.mjs`（两种） | `ready-index-probe` `fails []`；`stream-produce-probe --group` PASS；`preview-fallback-probe` 两种透明拍 0（287、285 拍） | PC-M8-10 回执 |
+| 构建 | PC | `npm run build` | 成功 | PC-M8-10 回执 |
+| 带耗时门槛：1080p 分段编码 | 笔记本 | `stream-produce-probe.mjs`（不带 `--group`） | 连续 5 轮 p50 207 / 224 / 214 / 208 / 207 ms（中位数 208），过；第一组里 320 ms 那一轮是外来负载下的离群值、另跑第二组（第 3.1 节） | `REPORT-render-queue-m8.md` 第 8 节 |
+| 带耗时门槛：后台上传期间长任务（T4） | 笔记本 | `tiers-probe.mjs` ×3 | 三轮开跑前 CPU 3.2% / 1.2% / 3.8%，> 50 ms 长任务都是 0，过 | 同上 |
+| 主工作区 | — | `git status` | 干净（主工作区快进到 `501a7dd7`；文档合入后主会话再核一次） | `REPORT-render-queue-m8.md` 第 9 节 |
 
 ## 5. 阿里云
 
@@ -333,7 +508,21 @@
 | 2026-09-27T14:07Z、14:09Z | HT-a 部署（`PROMPTCUT_TRUST_LOOPBACK=0`）；nginx `/hosted` 补两项 | `REPORT-HT-a.md` 第 1.5 节 |
 | 2026-09-28 | 证书扩到 `s1.`、`s2.` 两个舞台子域 | `HANDOFF-2026-09-28.md` 第 7 节 |
 | 2026-09-28 | M8 预检 P-C3（只读：`ss -K` 与 netem 可用） | `m8-plan.md` 第 4 节「预检结果」 |
-| 待填 | C10 部署（舞台子域专用站点）、M7 部署、M8 各混沌项与迁移演练 | — |
+| 2026-09-28 约 07:05 JST | C10：部署 `2f7f821` 的服务端与在线构建（`deploy-hosted --save`，`--stage-origins` 两个舞台源 `s1.`、`s2.`，专用 nginx 站点三方带 OAC） | `REPORT-C10.md` 第 7 节部署行 |
+| 2026-09-28 约 07:35 JST | C10：以 `d29a7ba` 的在线构建重新部署编辑器（带 `catalog/`）；nginx 主站与两个舞台源各加 `location ^~ /catalog/`（先备份，`nginx -t` 通过） | 同上 |
+| 2026-09-28 | C10 外网四轮：run `c10s0928d`、`e` 在阿里云上 `ss -K dport 8787` 掐 nginx 到文档服务的上游连接 | `REPORT-C10.md` 第 7 节 |
+| 2026-09-28 | M7：W7 时阿里云部署 `4047133` 的构建（部署命令与时间报告没写，待核）；残留三个探针项目未删（M8 收尾时已删，见下面 2026-09-28 18:56Z 一行） | `REPORT-M7.md` 第 7.1、9 节 |
+| 2026-09-28 04:59Z 前后 | M8：部署 M7 合入后的在线构建（主实例，`deploy-hosted --save … --stage-origins …`），托管组合重启一次 | `REPORT-render-queue-m8.md` 第 10 节 |
+| 2026-09-28 09:18Z 前后 | M8：部署纯浏览器节点推送提速后的在线构建（main `5649236`，代码版本 `21c62981…`），托管组合重启（`restarts` 13 → 14） | 同上 |
+| 2026-09-28 09:19:28Z、09:20Z | M8 迁移演练准备：备份两份 `pm2.config.cjs` 与 `dump.pm2`（`*.bak-20260928-m8`）、`pm2 delete` HT 第 1 版的 `promptcut-drill`、旧数据挪成 `drill.old-20260928-m8`；部署演练实例（8777 / 8778），UFW 临时放行（裁定 D7） | 同上 |
+| 2026-09-28 10:28Z 前后 | M8：重新部署服务端（main `0cabcfb0`，停滞修复与产物库修复），主实例与演练实例都重启，编辑器页不换 | 同上 |
+| 2026-09-28 12:00:02Z | M8：`pm2 restart probe-coord` 清掉上一轮异地接入的全局键（信箱落盘不受影响） | 同上 |
+| 2026-09-28 15:00:40Z | M8 C2（兼 E3 放云端）：`pm2 restart promptcut-hosted`（`restarts` 15 → 16），在线会话 8 条断开重连 | 同上；第 7 节 C2 |
+| 2026-09-28 15:15Z～15:37:22Z | M8 迁移演练：管理端口经 SSH 转发；主实例停写 15:17:53Z～15:29:20Z（11 分 27 秒）、rsync、起演练实例；服务器上逐块重算 sha256（只读）；`--sample all` 跑不动被停；收尾停演练实例、UFW 两条（连 v6 共 4 条）删掉、`pm2 save` | 同上；第 6 节 |
+| 2026-09-28 17:54:33Z | M8：在线编辑器页换代（main `e27fa520`，代码版本 `21c62981…` → `f979b95e…`），只换 `/editor/` 静态文件、托管组合不重启；`runtime-config.json` 先备份为 `/root/runtime-config.bak-20260928-m8enc` | 同上 |
+| 2026-09-28 18:2xZ | M8：删迁移种子项目（`sp_vfuwa4grkhyqqaw6sveotuytn2`）：笔记本凭种子文件里的创建者口令走 `shared.challenge` → `adminProof(op delete)` → `shared.admin { op: delete }`，`deleted true` | `REPORT-render-queue-m8.md` 第 10 节 |
+| 2026-09-28 18:56:37Z～18:56:38Z | M8：删主实例上探针留下的其余 14 个项目（含 E1 留作迁移演练用的 `m8e-e1-m8e1c2`、C3 首轮的 `m8e-e1-m8c3c`、M7 残留的 `m7ap-m7w0928a`、`m7ap-m7w0928b`、`m7ap-m7wlocal1` 等）。用户定由主会话自己删；创建者口令不在笔记本、不能经消息传，就在服务器上删：先备份到 `/root/m8-probe-projects-backup-20260928.tar.gz`（980 915 字节），`pm2 stop promptcut-hosted`，用部署目录里的 `server/auth/store.mjs` 删项目记录、`rm -rf tenants/<id>`，再 `pm2 start`；停服约 1 s，没有成员在线，`restarts` 仍 16；之后记录 0 份、租户目录 0 个。块按内容寻址共用，删项目不删块。演练实例的数据目录没删（待用户项，第 8 节第 33 条） | 同上 |
+| 2026-09-28 20:26:28Z | M8：在线编辑器页再换一代（main `501a7dd7`，代码版本 `f979b95e…` → `b38706791f86…`，`claude/perf-encode-2` 改的 `server/bakery/ffmpeg.mjs` 进代码版本）；做法同 17:54:33Z，`runtime-config.json` 先备份为 `/root/runtime-config.bak-20260928-m8enc2`，托管组合不重启 | 同上 |
 
 ### 5.2 资源
 
@@ -343,31 +532,43 @@
 | 2026-09-27（C6.6 前自检） | 4.2G / 40G | 约 1 GB 可用 | 负载接近 0 | `HANDOFF-2026-09-27.md` 第 6 节 |
 | 2026-09-27T10:5x | 4.3G / 40G | 用 629 / 1613 MB | 负载约 0.3 | `HANDOFF-2026-09-27-pc.md` 第 6 节 |
 | 2026-09-27T18:09Z | 4.5G / 40G | 用 666 / 1613 MB | 负载约 0.03 | `HANDOFF-2026-09-28.md` 第 7 节 |
-| M8 峰值 | 待填 | 待填 | CPU、流量（I1-X 期间采样） | `REPORT-render-queue-m8.md` 第 3 节 |
+| M8 I1-X 演练实例（run `m8i1d`，2026-09-28 09:22:41Z） | 数据目录（主实例）36 154 个文件、2 156 913 130 字节（迁移演练第 4 步时） | `promptcut-drill` 峰值 120 MB；可用内存最低 900 MiB | CPU 峰值 12.8%、重启 0；eth0 17 s 里出 4.9 MB、进 1.0 MB；负载 0.08（每 15 s 采一次，只采到 2 个样本） | `REPORT-render-queue-m8.md` 第 3 节 I1-X 第 1 行；第 6 节第 4 步 |
+| M8 I1-X 主实例（run `m8i1m`，09:23:36Z） | 同上 | `promptcut-hosted` 峰值 119 MB（采样峰值 124.8 MB 含其它时刻） | CPU 峰值 16.6%、重启次数不变（14）；eth0 18 s 里出 5.8 MB、进 1.1 MB | `REPORT-render-queue-m8.md` 第 3 节 I1-X 第 2 行 |
 
 ### 5.3 迁移演练
 
-〔占位：命令、耗时、数据量、抽查结果，见 `REPORT-render-queue-m8.md` 第 6 节。SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3 节）。〕
+SP 阶段只在本机两份托管组合上演练过（SP7，`REPORT-SP.md` 第 3 节）。M8 在同一台阿里云上的第二份实例（`promptcut-drill`，8777 / 8778）照 `hosting-migration.md` 第 2 节做了一遍，**过**（`REPORT-render-queue-m8.md` 第 6 节）：
+
+| 项 | 结果 |
+|---|---|
+| 命令 | 照 `hosting-migration.md` 第 2 节；实际命令补在该节末「M8 演练的实际命令」（与 M8 报告第 6 节同一提交），第 9 步旧实例保留期写 7 天（裁定 D7） |
+| 数据量 | 36 154 个文件、2 156 913 130 字节（约 2.16 GB）；共享项目 15、空间 16、项目 16；media 42 个、snap 2738 个、px 33 309 个 |
+| 耗时 | 种子 6.4 s；基线库存 30.6 s；rsync 36 s；启动后核对 292 s；主实例停写 11 分 27 秒（其中约 10 分钟花在后来停掉的 `--sample all` 上；真正换机时停写约等于拷数据加启动自检，几分钟） |
+| 一致性 | 两边文件数与字节数相同；`projectRev` 16/16 相等、归零 0、落后 0；快照 13、内容库条目 214 一致；三个命名空间哈希集合与字节数一致；新实例登记的素材地址是它自己的 |
+| 抽查 | 〔裁〕`--sample all` 经 SSH 转发约 150 KB/s、跑不动，改三件合判：服务器上逐块重算 sha256（media 42/42、snap 2738/2738、px 33 309/33 309 相符，另 3 个是没传完的分块上传暂存、不计）；与库存哈希集合对账缺 0、多 0；经服务按哈希取回 300 个 100% 相符，种子项目的 12 块 12/12 |
+| 不重新预渲染 | 种子项目重发同一批细任务，4/4 `task.done`、`render` 0 次、去重 4；层表不变；迁移后改一处 `projectRev` 1 → 2（= 迁移前 + 1） |
+| 切客户端 | 两台都进得去（第一台经界面改托管地址后加入，第二台凭项目口令）；两台都在笔记本〔裁〕 |
+| 收尾 | 主实例 15:29:20Z 恢复；演练实例 15:37:22Z 停下，UFW 放行收回；演练实例的数据目录留着，删不删是待用户项（第 8 节第 33 条） |
 
 ## 6. 与计划、语义不一致之处
 
 ### 6.1 各阶段的〔裁〕汇总
 
-〔占位：逐条编号汇总。下表先列各阶段的〔裁〕记在哪里，数量与「用户是否审过」待逐条核。〕
+下表逐阶段列〔裁〕记在哪、条数、用户是否审过。条数照各报告自己给的总数抄；报告没给总数的，按报告正文里的〔裁〕记号数，数不清的标「待核」。「用户是否审过」按报告写的抄，报告没写的写「待用户审」。
 
-| 阶段 | 〔裁〕所在 | 用户是否审过 |
-|---|---|---|
-| M5 | `REPORT-render-queue-m5a.md` 第 2 节（令牌经跨机消息下发、多改三个文件）；`REPORT-c6-4.md` 第 2 节第 4 条（推送优先级取三者最低）；各段「与计划不一致」 | 待核 |
-| M6 | `REPORT-M6.md` 第 1 节（编码基准判负载）、第 3 节 | 待核 |
-| SP | `REPORT-SP.md` 第 6 节三条；第 7 节 `fsync` 只对 `complete` | 待核 |
-| C6.5 | 设计稿 `c65-design.md` 第 8、9、13、14 节 | 设计稿「发给用户但不等」，用户没插话视为通过（`REPORT-C6.5.md` 开头） |
-| C6.6 | `REPORT-C6.6.md` 第 4 节末（人工钉死重卡）、第 5 节八条；设计稿第 9 节 | 待核 |
-| C10a | `REPORT-C10a.md` 第 0、1、2、2.9、2.12、2.13 节；契约第 16、17 节 | 第 2.13 节「编码耗时=机器差异」**已被用户推翻**（`d70fce7`）；其余待审（`REPORT-C10a.md` 第 5 节） |
-| HT-a | `REPORT-HT-a.md` 第 0、1 节；契约第 16、17 节 | 待审（`REPORT-HT-a.md` 第 4 节） |
-| C10 其余 | `c10-contract.md` 第 18 节第 1～9 条 | 待审（`HANDOFF-2026-09-28.md` 第 8 节） |
-| M7 | `m7-contract.md` 第 13 节 D1～D18 | 待核 |
-| M8 | `m8-plan.md` 末「主会话裁定」D1～D12 | 待审 |
-| 主计划 | 文件头第三、四次修订（用户定的交接）；第 6.4 节派活顺序；第 9 节端口 | 待核 |
+| 阶段 | 〔裁〕所在 | 条数 | 用户是否审过 |
+|---|---|---|---|
+| M5 | `REPORT-render-queue-m5a.md` 第 2 节（令牌经跨机消息下发、多改三个文件）；`REPORT-c6-4.md` 第 2 节第 4 条（推送优先级取三者最低）；各段「与计划不一致」 | 待核（M5 各报告正文里没有〔裁〕记号，上面几处是骨架按内容认的） | 待用户审（报告没写） |
+| M6 | `REPORT-M6.md` 第 1 节（编码基准判负载）、第 3 节 | 报告正文记号 1 处（第 1 节）；第 3 节的不一致未标记号（待核） | 第 1 节那条已被用户规则推翻（`d70fce7`，性能验收以笔记本为基准机）；其余待用户审 |
+| SP | `REPORT-SP.md` 第 4、6 节；第 7 节 `fsync` 只对 `complete` | 报告正文记号 3 处（第 4 节 1、第 6 节 2）；骨架另记第 6 节三条与第 7 节一条（待核是否重合） | 待用户审（报告没写） |
+| C6.5 | 设计稿 `c65-design.md` 第 8、9、13、14 节 | 待核 | 设计稿「发给用户但不等」，用户没插话视为通过（`REPORT-C6.5.md` 开头） |
+| C6.6 | `REPORT-C6.6.md` 第 4 节末（人工钉死重卡）、第 5 节八条；设计稿第 9 节 | 第 5 节 8 条；另第 4 节末 1 处、设计稿若干（待核） | 待用户审（报告没写） |
+| C10a | `REPORT-C10a.md` 第 0、1、2、2.9、2.12、2.13 节；契约第 16、17 节 | 报告正文记号至少 7 处（其中一处含多条，未逐条数，待核） | 第 2.13 节「编码耗时=机器差异」**已被用户推翻**（`d70fce7`）；其余待审（`REPORT-C10a.md` 第 5 节） |
+| HT-a | `REPORT-HT-a.md` 第 0、1 节；契约第 16、17 节 | 报告正文记号 5 处；契约两节未数（待核） | 待审（`REPORT-HT-a.md` 第 4 节） |
+| C10 其余 | `REPORT-C10.md` 第 6 节（总表，含 `c10-contract.md` 第 2～10 节、第 18 节第 1～9 条、集成期间的裁定、主会话认可的分支偏离、第 10 节在线剪枝两条、`pause-precise` 一条）；三级语义三处（`mechanism/platforms.md`「在线浏览器模式」、`mechanism/rendering.md`、`mechanism/document-service.md`「成本记录」） | **29 条**（契约 19、集成期间 4、分支偏离 2 组、集成方提请 1、定稿前新增 3；`REPORT-C10.md` 第 6 节开头） | 待用户审（`REPORT-C10.md` 第 9 节：尤其第 18 行二级观察、第 19 行 X4 修改） |
+| M7 | `REPORT-M7.md` 第 6 节（总表，含 `m7-contract.md` 第 13 节 D1～D18 与「探针之后的更正」十条、`render-queue-contract.md` B.3、验收夹具改述、队列侧与契约原文不同的四处等）；D18 两句三级语义（`mechanism/rendering.md`「舞台」、`mechanism/platforms.md`「渲染节点」，`REPORT-M7.md` 第 10 节） | **30 条**（D1～D18 共 18、之后 12；另 `claude/join-error` 的 `shared/verify` 1 条不在本阶段、未合入；「探针之后的更正」十条里除第 4 条外九条照契约那张表、不另列；`REPORT-M7.md` 第 6 节开头） | 待用户审（`REPORT-M7.md` 第 9 节：尤其第 20、22～25、27 行，以及 `claude/join-error` 合不合） |
+| M8 | `REPORT-render-queue-m8.md` 第 13.2 节（总表）；计划期的在 `m8-plan.md` 末「主会话裁定」D1～D12（其中 D1 因约束「不动宿主机的网络」作废，D6 更正为「按语义不做」） | **12 条（第 12 条已了结），撤销 1 条**：第 1～8 条是验收判法或做法（E6 反方向判据、K1 判据、E5 的 A4 / A10、D12 纯浏览器节点指纹、放本机 T9 限速、迁移抽查、迁移两台客户端同机、迁移不用 E1 真实项目判），非语义；第 9～11 条改在契约里（`render-queue-contract.md` A.12 与 `render-host-contract.md` 第 3 节；`artifact-transfer-contract.md` 第 4 节 `has` 与 `manifest-contract.md`；`artifact-transfer-contract.md` 第 4 节 2026-09-29），M8 报告标「契约级（机制；`docs/semantics/` 未改）」；第 12 条（1080p 编码提速若只能靠改产出字节的办法由用户定）已了结：逐字节不变的修法就凑够了余量（`claude/perf-encode-2`），没有改产出字节、没有改门槛；撤销的是「异地接入真实渲染由云端当远程成员」 | 第 9～11 条主会话审过、同意（`REPORT-render-queue-m8.md` 第 12a 节）；全部待用户审（同报告第 13.4 节第 1 条；本文第 8 节第 30 条） |
+| 主计划 | 文件头第三、四次修订（用户定的交接）；第 6.4 节派活顺序；第 9 节端口 | 待核 | 待核 |
 
 ### 6.2 语义改动汇总
 
@@ -378,21 +579,33 @@
 | `4a82441` | 在线浏览器模式只加入不新建不存草稿；低内存档不测量；约束「不原地改 store 里的项目对象」；机制补「人工钉死为重卡」 | 一级（用户定）、二级（用户认）、规则、三级 | 用户定 | `HANDOFF-2026-09-27-pc.md` 第 1 节 |
 | `2a3d763` | 低内存档规则、补渲排在本机判重之后、成本记录与界限搜索 | 一级、二级、三级 | 定计划阶段，dry run 贴给用户、用户确认 | `REPORT-C10a.md` 第 2.12 节 |
 | `d70fce7` | 规则：性能验收以笔记本为基准机 | 规则 | 用户提交 | `HANDOFF-2026-09-28.md` 第 1 节 |
-| `8ccdac8`（在 C10 分支，未进 main） | c10-cost 写的三级语义：界限搜索的数字与做法、成本记录「最新」口径与上限 | 三级 | 主会话看过认可，待用户审 | `HANDOFF-2026-09-28.md` 第 2.1、8 节 |
-| `1e7c940` | M7 契约 D18 的语义 dry run | 待核 | 待核 | `m7-contract.md` 第 13 节 |
-| 待填 | C10 集成时 c10-ui 的四个三级数字写进 `mechanism/platforms.md` | 三级 | — | `HANDOFF-2026-09-28.md` 第 2.2 节第 5 条 |
+| `8ccdac8`（随 C10 进 main） | c10-cost 写的三级语义：`mechanism/rendering.md`「低内存档」界限搜索的数字与做法、「过渡（C10a）」注明退出；`mechanism/document-service.md`「成本记录」的「最新」口径、指纹由文档服务算、500 / 20000 / 5000 条上限、成员才能读写、持久 | 三级 | 执行中写，主会话看过认可（`REPORT-C10.md` 第 6 节第 25 行），待用户审 | `REPORT-C10.md` 第 6 节末「本阶段的语义改动」；`HANDOFF-2026-09-28.md` 第 2.1、8 节 |
+| `ed04c09`（`c10-browser`，随 `c69b096` 进集成分支） | `mechanism/platforms.md` 新增「在线浏览器模式」一节：两个舞台、后台节拍、L2 的三级数字；`mechanism/rendering.md` 在线普通档按拍换快照与 `swapMs` 缺省 3 ms（按卡种实测没做） | 三级 | 执行中写，标〔裁〕（`REPORT-C10.md` 第 6 节第 2、4、6 行），待用户审 | `REPORT-C10.md` 第 6 节末「本阶段的语义改动」；提交号按 `git log -- docs/semantics/` 核 |
+| `ebd78e3` | c10-ui 的四个三级数字写进 `mechanism/platforms.md`「连接状态与离线提示」 | 三级 | 主会话认可（`REPORT-C10.md` 第 6 节第 24 行），待用户审 | `REPORT-C10.md` 第 6 节第 24 行 |
+| — | C10 其余一级、二级语义没改；第 6 节第 18 行（低内存档判轻的卡播放时一直占位）作为二级观察交用户，没改语义 | — | 待用户定 | `REPORT-C10.md` 第 6 节第 18 行、第 9 节 |
+| `331d2f2`（随 `8cd21c1` 合 `claude/m7-report` 进 main） | M7 D18 两句三级语义：`mechanism/rendering.md`「舞台」加「在线浏览器模式（普通档）下，后台舞台还在闲时为认领到的快照任务逐帧生成快照」；`mechanism/platforms.md`「渲染节点」加「纯浏览器节点的环境指纹由文档服务按页面报来的原始值算；一期只在 Chromium 内核的浏览器上当节点」；都标〔裁〕 | 三级 | 定计划时在 `m7-contract.md` 第 13 节做了「修改前 / 修改后」dry run，契约发给用户不等；用户确认的记录报告里没写，待用户审 | `REPORT-M7.md` 第 10 节、第 8 节第 2 条 |
+| `d3b674d` | 规则：约束「不动宿主机的网络」（模拟断线只在应用层做） | 规则 | 待核（`REPORT-C10.md`、`REPORT-M7.md` 没写；按提交信息，C10 集成分支在 `82d1a33` 合 main `9cf6525` 时带进来） | 提交信息 |
+| — | M8 没改 `docs/semantics/` 下的语义（计划与语义冲突的两项按语义不做，语义没改）。M8 的三条〔裁〕改在契约里：`render-queue-contract.md` A.12、`render-host-contract.md` 第 3 节（停滞按帧数或工作计数重新计时、收回原因如实下发）；`artifact-transfer-contract.md` 第 4 节 `has`、`manifest-contract.md`（本机帧库覆盖整段时核对素材服务、缺块补推）；`artifact-transfer-contract.md` 第 4 节（2026-09-29：本机缺小尺寸时认内容库里两档齐的清单、主机也产小尺寸）。另 `hosting-migration.md` 第 2 节末补了演练的实际命令、第 9 步保留 7 天（计划文档） | 契约级（机制；`docs/semantics/` 未改） | 执行中改、标〔裁〕，主会话审过同意，待用户审 | `REPORT-render-queue-m8.md` 第 6 节、第 12a 节、第 13.2、13.3 节 |
 
 ### 6.3 代码与语义仍有出入的地方
 
 | 出入 | 现状 | 出处 |
 |---|---|---|
-| 桌面发布的 plan 领不到环境不同的独立主机（X4 与 J.3） | 只记录；页面发布的 plan 按 C10 契约第 18 节第 9 条放开 | `REPORT-HT-a.md` 第 1.7、4 节；`m8-plan.md` L18 |
-| `server/card-sync.mjs` 等旧客户端没接会话层，断一次就断线 | M8 里修（裁定 D9，分支 `claude/m8-session-legacy`） | `REPORT-HT-a.md` 第 4 节；`TODO.md` HT-b 条目 |
+| 桌面发布的 plan 领不到环境不同的独立主机（X4 与 J.3；语义比 X4 宽） | 只记录；页面发布的 plan 按 C10 契约第 18 节第 9 条放开，C10 在 main。M8 E6 两个方向都记了现象：桌面发布的 plan 对 host 档回 `plan-profile`（`REPORT-render-queue-m8.md` 第 2 节 E6、第 13.5 节）。C10 报告另记：若用户认为 X4 属于二级语义，这处〔裁〕要补「codex 与 Gemini 各出一轮」的说明 | `REPORT-HT-a.md` 第 1.7、4 节；`REPORT-C10.md` 第 6 节第 19 行、第 8 节末条；`m8-plan.md` L18 |
+| `server/card-sync.mjs` 等旧客户端没接会话层，断一次就断线 | 已修：M8 里做（裁定 D9），`claude/m8-session-legacy` 合入 main `278eeb9d`（`REPORT-render-queue-m8.md` 第 1.1 节） | `REPORT-HT-a.md` 第 4 节；`TODO.md` HT-b 条目 |
 | 服务端没有会话层时客户端怎么退化，语义没写 | 只记录 | `REPORT-HT-a.md` 第 4 节 |
-| 主机把本来没有的用户卡写进检出目录 | 在修（`claude/card-overlay`） | `REPORT-C6.6.md` 第 5、11 节 |
+| 主机把本来没有的用户卡写进检出目录 | 已修：`claude/card-overlay` 合入 main `2e957270`（L4、L5；`REPORT-render-queue-m8.md` 第 1.1 节） | `REPORT-C6.6.md` 第 5、11 节 |
 | 「加入共享项目的桌面应用自动成为渲染节点」 | 代码靠启动时环境变量，没做到「自动」 | `TODO.md`「语义与代码的差距」 |
 | 手动截短总时长的入口 | 编辑界面没有 | 同上 |
 | 刷新后回到刷新前打开的共享项目 | 代码已做，语义没写，建议补一级语义 | `REPORT-C10a.md` 第 2.9 节 |
+| 低内存档判轻的卡播放时一直占位（照现有语义做，二级观察） | 没改；要改成「判轻的也补小尺寸」由用户定 | `REPORT-C10.md` 第 6 节第 18 行、第 9 节 |
+| 在线舞台握手成功后又断，沿用 iframe 重载，没有另做退回 | 只记录；`m8-plan.md` 第 5 节没有这一条，记在第 7.4 节 | `REPORT-C10.md` 第 11 节 |
+| 纯浏览器节点只收独立卡（D4），比二级「只认领……快照任务」更窄 | 按节点自选处理，不改语义 | `REPORT-M7.md` 第 6 节第 4 行 |
+| 只能经 TLS 中间人代理出网的浏览器连不上 WebSocket，加入不了项目、当不了节点（语义里「只能出网的节点」这一侧对浏览器做不到） | 归 HT-b（HTTP 长轮询传输，M8 之后） | `REPORT-M7.md` 第 7.2 节、第 11 节 |
+| 加入项目时连接没建成就断，页面报成「用户名或密码不对」 | 修复 `claude/join-error`（新增 `shared/verify`〔裁〕）未合入，待用户审 | `REPORT-M7.md` 第 4 节第 8 条、第 9 节 |
+| 浏览器进放本机的项目（`c10-contract.md` 第 13 节「手填主机地址或桌面版给的局域网链接」；主计划第 7 节 M8 要的 E5 放本机） | 计划与语义冲突：`product/platforms.md`「在线浏览器模式」（用户 2026-09-27 定）只让浏览器进放云端的项目。M8-X4 与 E5 放本机按语义不做，原裁定 D6 作废；2026-09-28 用户在对话里把「C10 里手填主机地址进入」列进可做的一批，主会话说明了冲突、没有做；要做须先改那条语义（一级 / 二级，由用户定），语义没改 | `REPORT-render-queue-m8.md` 第 13.3 节 |
+| M8 查出、已修的三处代码与语义出入：① 队列的停滞规则只认帧数，比语义「既没报进度也没报完成才收回」严（推产物、在预渲染间排队时被误收回）；② 推到一半丢认领、又被自己重新认领时以去重完成、素材服务上缺块，违反「节点先把产物推送到素材服务，再向文档服务报完成」；③ 独立渲染主机不产小尺寸、去重检查在本机缺小尺寸时不查内容库，别的节点领到做完的段只补画小尺寸、以「完成」收尾，违反「已经在素材服务里的结果不用重做」 | 都已修：① `claude/stall-phases`、② `claude/sink-has`（main `0cabcfb0`），③ `claude/xnode-dedup`（main `e27fa520`） | `REPORT-render-queue-m8.md` 第 12a 节 |
+| 新旧版本混跑时，旧版独立渲染主机仍不产小尺寸 | 只记录（新旧混跑时别的节点领到它做完的段只能补画小尺寸） | `REPORT-render-queue-m8.md` 第 12a、13.5 节 |
 
 ## 7. 遗留
 
@@ -414,8 +627,24 @@
 | — | 换档依赖无关的重渲染 | 已修 | `d011783`（`AGENT-tier-reload-seek.md`） |
 | — | 生成快照 id 改名线性化 | 已修 | `bb01107` |
 | — | Tailwind 扫描让改文档整页重载 | 已修 | `94fb419` |
+| L20 | 1080p 分段编码超门槛 | 已修，在 main；笔记本 ENC-1 修复版 p50 中位数 290 ms、ENC-2 合入后 283 ms；M8 收尾前在 main `9cf43f1f` 上又贴线没过（中位数 302 ms），**M8 收尾再修后过**：`claude/perf-encode-2`（main `501a7dd7`，产出逐字节不变）后全案最终基线连续 5 轮中位数 208 ms | `211695d`（`REPORT-C10.md` 第 3、11 节）；`501a7dd7`（`REPORT-render-queue-m8.md` 第 8、12a 节） |
+| L21 | 停下到精确活渲太慢（C10-A4 两条后续） | 已修，随 C10 进 main；PC 上 8541 ms → 6905 / 6916 ms；「区分自然进场与从卡中间开始播放」另记维护项（没有编号） | `2f7f821`（`REPORT-C10.md` 第 10 节、第 6 节第 29 行） |
+| L24 | 在线构建按编译期 `ONLINE` 剪掉置灰入口背后的调用 | 已修，随 C10 进 main；`/api` 棘轮清单 120 → 19，在线构建少 384 KB | `97bda2b`（`REPORT-C10.md` 第 10 节「online-prune」） |
+| — | 在线构建缺 `/catalog/`，内置 Lottie、粒子卡全 404 | 已修，随 C10 进 main；nginx 三个源放行 `/catalog/` | `cc1d137`（`REPORT-C10.md` 第 10 节「catalog 修复」） |
+| — | M7 验收查出的五处：A5 / A6 让路、A10 锁不接手、D1 合并不补 dual、切分候选只在内存、锚帧段优先级被冲淡 | 已修，随 M7 进 main | `7329780`、`119d42a`、`d047ff2` / `a0d751b`、`11bbe53`、`fdbf19f`（`REPORT-M7.md` 第 4 节） |
+| L4、L5 | 主机把本来没有的用户卡写进检出目录；`create_card` 带 overwrite 被改动层旧版盖住 | 已修，M8 跨机前合入 | `2e957270`（`claude/card-overlay`，`AGENT-card-overlay.md`） |
+| L10、L16 | 拼卡片源码不统一换行；Windows 改名偶发 `EPERM` | 已修，M8 跨机前合入 | `2fa0c1a6`（`claude/eol-eperm`，`AGENT-eol-eperm.md`） |
+| L14 | `server/card-sync.mjs` 等旧客户端没接会话层（裁定 D9） | 已修 | `278eeb9d`（`claude/m8-session-legacy`，`AGENT-m8-session-legacy.md`） |
+| — | 纯浏览器节点每帧两次串行推送（W7 经公网锚点段 63 s） | 已修，推送改并行、下一帧先交给后台舞台；经公网锚点段降到 37.4 s / 33.3 s | `5649236`（`claude/site-bake`；`REPORT-render-queue-m8.md` 第 12a 节） |
+| — | 活着、在干活的节点被判停滞（C1 放云端首轮、E6 放云端首轮失败的原因） | 已修，C1、E6 复跑全过 | `0cabcfb0`（`claude/stall-phases`；同上） |
+| — | 推到一半丢认领后自己重新认领时以去重完成、素材服务上缺块 | 已修 | `0cabcfb0`（`claude/sink-has`；同上） |
+| — | 跨节点去重：独立渲染主机不产小尺寸，别的节点领到做完的段只补画小尺寸（E3 放本机本机替身挂的原因） | 已修，E3 / C4 放本机真跨机两轮过 | `e27fa520`（`claude/xnode-dedup`；同上） |
+| — | 探针三处：M7-A6 触发时序、e3 补在线页面恢复同步判据、异地接入 `--assert-no-lan` | 已修 | `21eaeb8f`、`9cf43f1f`、`f550b02`（同上） |
+| — | 测试与探针可能写进用户的 `Videos\PromptCut`（继承桌面版环境变量时 12 个探针或脚本的帧库落进 Videos；`export-e2e --media-lib` 的 junction 写进用户素材目录） | 已修；PC 上只读核对没发现测试或探针写过 Videos（PC-M8-7） | `efcaec60`（`claude/no-user-videos`；同上） |
 
-未修或在修的（M8 收尾时更新）：L3（随 `claude/m8-e2e`）、L4 与 L5（`claude/card-overlay`）、L10 与 L16（`claude/eol-eperm`）、L12（待核：hygiene 六项里没有 Tailwind 守门测试）、L13（随 M7）、L14（`claude/m8-session-legacy`）、L15（随 C10）、L19（随 `claude/m8-kit`）、L20（`claude/perf-encode`，待笔记本复核）、L21（`claude/pause-precise`）、L22（未查）、L23（裁定 D10：不做）、L24（未修）。
+上表 L20 以下至 M7 一行是按 main `0cabcfb0` 与 `REPORT-C10.md`、`REPORT-M7.md` 补的；L4 起各行是 2026-09-29 按 `REPORT-render-queue-m8.md` 第 1.1、12a 节补的。
+
+其余各条（2026-09-29 按 `REPORT-render-queue-m8.md` 更新；那份报告没提到的标「M8 报告没写」）：L3（已修：随 `claude/m8-e2e` 合入 `4538ec42`，T9 缺省用确定判重的探针卡 `probe-slow-stepped`，人工钉死只作对照模式；`REPORT-render-queue-m8.md` 第 1.1 节）、L4 与 L5、L10 与 L16（已修，见上表）、L12（已修：`claude/tailwind-guard` 由 main `0d114df` 合入，按 `git log` 核）、L13（id 改名的平方复杂度已由 `bb01107` 修；样式内联代价 M7 报告没单列，M7-A12 在笔记本长任务 0，是否算修完待核；`REPORT-C10.md` 第 11 节、`REPORT-M7.md` 第 5 节）、L14（已修，见上表）、L15（C10 已合入，「合入后 grep 核一遍」`REPORT-C10.md` 没写结果，待核）、L18（只记录；M8 E6 两个方向都记了现象）、L19（缓解：随 `claude/m8-kit` 合入 `fdf515e3`，`m8/kv.mjs` 遇 401 记下状态码与响应体、隔 500 ms 重试一次；M8 各轮 `kv-no-401` 都是 0；原因没查明，同上）、L22（`REPORT-M7.md` 第 4 节第 5 条把 M7-A4 85.3 s 的根因「锚帧段优先级被冲淡」记为与 L22 同一件事，`fdbf19f` 已修；M8 在站点上记了时刻分解：新键 6952 ms、新小尺寸产出 11 026 ms、手机播放中挂上新层 11 287 ms、手机取到新的小位图 293 963 ms、整段重渲 242 974 ms，只记录、不设门槛，`REPORT-render-queue-m8.md` 第 8 节）、L23（裁定 D10：不做）；L20 在 M8 收尾前又贴线没过、再修后过，见上表。
 
 ### 7.2 推迟到 M8 之后的
 
@@ -435,10 +664,49 @@
 | codex、agy 两路的 callId（L26）：`d2c66de` 已由编辑器配对补上，宁可不配、不许配错；待核是否还算限制 | `REPORT-C6.5.md` 第 8 节；`REPORT-C6.6.md` 第 9 节 |
 | 票据与会话在公网明文（S4 延续，用户已接受） | 主计划第 9 节风险表 |
 | direct 卡在低内存档过渡期播放时一直占位 | `REPORT-C10a.md` 第 2.12 节 |
+| L2 的 LRU 是近似的（读命中不落盘），不是缺陷 | `REPORT-C10.md` 第 11 节 |
+| 界限搜索之后的新卡不重拉记录（主会话已定不做） | `REPORT-C10.md` 第 11 节、第 6 节第 25 行 |
+| 快照里留着 `will-change`（pill 14 / 60 帧只差它、像素相同），去掉会让现有快照键失效一次，下一次动快照代码时一起定 | `REPORT-M7.md` 第 6 节第 27 行、第 11 节 |
+| 云端不能当纯浏览器节点（出站代理不支持 WebSocket 升级），要等 HT-b | `REPORT-M7.md` 第 7.2 节 |
+| M8 新留下的限制与遗留见第 7.5 节 | `REPORT-render-queue-m8.md` 第 13.5 节 |
+
+### 7.4 C10 其余、M7 新留下、还没有 M8 编号的遗留
+
+| 遗留 | 出处 | 去向 |
+|---|---|---|
+| `SWAP_MS` 按卡种实测没做，仍是缺省 3 ms | `REPORT-C10.md` 第 11 节 | 没有 M8 计划编号，记在本节（`REPORT-C10.md` 第 11 节已改成指向这里） |
+| 在线舞台握手成功后又断，沿用 iframe 重载 | 同上 | 没有 M8 计划编号，记在本节（同上） |
+| 「区分自然进场与从卡中间开始播放」（`pause-precise` 的维护项） | `REPORT-C10.md` 第 6 节第 29 行 | `m8-plan.md` 第 5 节没有这一条，记在本节（`REPORT-C10.md` 第 6 节第 29 行已改成指向这里） |
+| 页面只是忙也会被 D2 接手，已做的帧白费 | `REPORT-M7.md` 第 11 节 | M8 维护或另立 |
+| 执行器不标 `snapshotOversize`，切分只按卡种挡浏览器 | 同上 | M8 维护或另立 |
+| 舞台互换时生成快照跟着后台位置走，没有专门的互换剧本验 | 同上 | M8 维护 |
+| 探针的 `PC_CHROME_ARGS` 别用来关 TLS 校验 | 同上 | 探针用法说明 |
+| 阿里云上残留三个 M7 探针项目 `m7ap-m7w0928a`、`m7ap-m7w0928b`、`m7ap-m7wlocal1` | `REPORT-M7.md` 第 9、11 节 | 已删：M8 收尾时随其余探针项目在服务器上删掉（2026-09-28 18:56Z，第 5.1 节） |
+| `claude/join-error` 未合入 | `REPORT-M7.md` 第 4 节第 8 条 | 待用户审 |
+| `claude/m7-probe` 的四个可行性探针脚本 | `REPORT-M7.md` 第 12 节写「没并进集成分支、由主会话定」 | 已由 main `e86a754` 合入（按 `git log` 核），`REPORT-M7.md` 第 1、12 节已照此回改 |
+| 归档后仍写旧路径（`docs/reports/` 下的 `AGENT-…`）的代码注释与文件头 | `REPORT-C10.md` 第 12 节；`REPORT-M7.md` 第 12 节 | `.md` 里的已由分支 `claude/total-report` 改成新路径；代码文件里的 41 处没改（改 `src/` 连注释也会变代码版本），逐条列在 `AGENT-total-report.md`，是否统一改由主会话定 |
+| 粒子卡在编辑器预览里停住时画面空白（与 `/catalog/` 无关） | `REPORT-C10.md` 第 10 节「catalog 修复」 | 已修：`claude/particles-blank` 由 main `edffbc60` 合入（2026-09-28 01:19Z，C10 阶段，不属于 M8）：粒子卡暂停时不再全透明，导出像素基线不变（`AGENT-particles-blank.md`，已由本分支归档） |
+
+### 7.5 M8 新留下的
+
+照 `REPORT-render-queue-m8.md` 第 8、12a、13.5 节与第 13.4 节里属遗留的几条。
+
+| 遗留 | 现状 | 去向 | 出处 |
+|---|---|---|---|
+| 1080p 全幅流 15 帧分段编码（L20）收尾前在笔记本贴线没过：main `9cf43f1f` 有效 5 轮中位数 302 ms（门槛 300 ms）；编码路径自 `211695d` 没改过，是当时余量不够 | **已修**：`claude/perf-encode-2`（main `501a7dd7`）只改 `server/bakery/ffmpeg.mjs` 与两份单测，产出逐字节不变、`encoderParamsHash` 不变；全案最终基线连续 5 轮 p50 207～224 ms（中位数 208）；没有改产出字节、没有改门槛（〔裁〕第 12 条了结）。代价：代码版本变了，已有的预渲染快照按新键重做 | — | 第 8 节第 1 行、第 12a 节、第 13.2 节第 12 条 |
+| 新旧版本混跑时，旧版独立渲染主机仍不产小尺寸，别的节点领到它做完的段只能补画小尺寸 | 只记录 | — | 第 12a、13.5 节；`AGENT-xnode-dedup.md` |
+| 跨节点去重的代价：主机每段多推约 60 块（约 0.3 MB），段用时 30～38 s（原约 35 s） | 只记录 | — | 第 12a 节 |
+| 放本机项目的素材服务地址经局域网发现带回、不进 `service.endpoints`；`asset-lan-probe` 不给 `--asset` 时按老写法等 `service.endpoints`，对放本机项目会超时 | 探针待改：按发现取地址 | 探针维护 | 第 7 节 C4、第 13.5 节 |
+| 探针判法的三处弱点：`cloud-untouched` 数阿里云总连接数（别人进出就误判，宜改按本轮用户查）；`--assert-no-lan` 的 TCP 采样不分连接状态（上一项的 TIME_WAIT 会被数进去）；`real:tasks>=50` 的标签是固定写法（门槛按片段数缩放） | 只记录；这几轮都靠日志或重跑判清 | 探针维护 | 第 4 节、第 7 节 C4、第 13.5 节 |
+| 纯浏览器节点经公网的锚点段 33～37 s | 观察项，门槛以笔记本本机为准（M7-T1c 27.6 s） | — | 第 2 节 E5、第 8 节、第 13.5 节 |
+| 云端工作节点的检出停在 `29e6e837`（代码版本 `21c62981…`） | 再派它当渲染主机前要先检出当前 main | 下次用云端时 | 第 13.5 节 |
+| C3 放云端首轮 `m8c3c`（PC 创建者）两台主机 17 分钟没领到任务 | 原因未查；笔记本重跑没复现 | 只记录 | 第 7 节 C3 |
+| 阿里云上探针留下的项目、演练实例的数据目录 | 探针项目**已删**：迁移种子项目用创建者证明删；其余 14 个由主会话按用户要求在服务器上删（先备份到 `/root/m8-probe-projects-backup-20260928.tar.gz`，停服约 1 s，用部署的 `store.mjs` 删记录与租户目录）。演练实例的数据目录（约 2 GB 以上）还在 | 探针项目：已解决；演练数据目录：待用户项（第 8 节第 33 条） | 第 10 节 18:2xZ、18:56Z 两行；第 13.4 节第 9 条 |
+| 代码注释里 41 处仍指向归档前的 `docs/reports/AGENT-…` 路径 | 见第 7.4 节倒数第二行 | 下次改 `src/` 时顺带 | 第 13.5 节；`AGENT-total-report.md` |
 
 ## 8. 待用户项
 
-从各阶段报告与交接文件逐条收，共 **22 条**；「是否仍有效」按 main `c718be6` 与后来的文件判，拿不准的标待核。
+从各阶段报告与交接文件逐条收，M8 之前共 **29 条**（骨架 22 条，按 `REPORT-C10.md` 第 9 节、`REPORT-M7.md` 第 9 节补 7 条）；2026-09-29 并进 `REPORT-render-queue-m8.md` 第 13.4 节的 10 条：与已有重复的 5 条并进原条（第 13.4 节第 2 条并进第 10、11、22、24 条，第 5 条并进第 26 条，第 6 条并进第 28 条，第 7 条并进第 19 条，第 8 条并进第 22 条），新的 6 条编为第 30～35 条（第 13.4 节第 1、3、4、9、10 条，第 9 条拆成两条），共 **35 条**；第 21、22、27 条按 M8 结果改了状态，第 34 条按定稿的 M8 报告标已解决。「是否仍有效」骨架按 main `c718be6` 判，第 15、17、18、21 条与新增各条按 main `0cabcfb0` 与两份报告判，拿不准的标待核。
 
 | # | 来源 | 内容 | 是否仍有效 |
 |---|---|---|---|
@@ -451,25 +719,38 @@
 | 7 | `REPORT-C6.6.md` 第 12 节 | 修 skill-gate 之前，测试可能关开过用户编辑器的 SKILL 模式（告知） | **已修**（`6be10d9`），仅告知 |
 | 8 | `REPORT-C6.6.md` 第 12 节；`HANDOFF-2026-09-28.md` 第 8 节 | 笔记本回收站里的凭证压缩包，可选清空 | 仍有效 |
 | 9 | 同上 | agy 配置里 145 条常驻 MCP 放行规则是否保留 | 仍有效 |
-| 10 | `REPORT-C10a.md` 第 5 节 | 真手机扫码（iPhone 相机、微信各一次） | 仍有效 |
-| 11 | 同上 | iOS 逐帧导出的最长时长与体积 | 仍有效 |
+| 10 | `REPORT-C10a.md` 第 5 节 | 真手机扫码（iPhone 相机、微信各一次） | 仍有效（M8 第 13.4 节第 2 条同此） |
+| 11 | 同上 | iOS 逐帧导出的最长时长与体积 | 仍有效（M8 第 13.4 节第 2 条同此） |
 | 12 | `REPORT-C10a.md` 第 5 节 | 审〔裁〕：第 2.12 节（维持兜底画面的读法、direct 卡的过渡期限制） | 仍有效 |
 | 13 | 同上 | 审〔裁〕：第 2.13 节（编码耗时判为机器相关） | **不再有效**：用户已推翻（`d70fce7`），改为性能缺陷待修 |
 | 14 | `REPORT-C10a.md` 第 2.9 节；`HANDOFF-2026-09-27-pc.md` 第 5 节 | 「刷新后回到共享项目」建议补一级语义；审「派生的 K 按标签页放 `sessionStorage`」 | 待核（没找到用户答复的记录） |
-| 15 | `HANDOFF-2026-09-27-pc.md` 第 5 节 | 审：C10 契约（L1 并入 M7、子域 + OAC、配额）；生成快照改名后快照键换一次；Tailwind 排除后 CSS 少 266 字节 | 待核（`HANDOFF-2026-09-28.md` 第 8 节只保留了 C10 契约第 18 节一项） |
+| 15 | `HANDOFF-2026-09-27-pc.md` 第 5 节 | 审：C10 契约（L1 并入 M7、子域 + OAC、配额）；生成快照改名后快照键换一次；Tailwind 排除后 CSS 少 266 字节 | C10 契约部分仍有效（`REPORT-C10.md` 第 9 节要审 C10 契约全文，L1 并入 M7、子域 + OAC、配额分别是第 6 节第 7、1、4 行）；后两项待核 |
 | 16 | `REPORT-HT-a.md` 第 4 节 | 审〔裁〕：HT 契约第 16、17 节（本机按真正的发起方判断、4410 按原码上报、按字节确认） | 仍有效 |
-| 17 | `HANDOFF-2026-09-28.md` 第 8 节 | 审〔裁〕：C10 契约第 18 节第 1～9 条（尤其第 9 条） | 仍有效 |
-| 18 | 同上 | 审：c10-ui 的偏离与四个三级数字；c10-cost 的三级语义（`8ccdac8`）与四条偏离 | 仍有效（C10 未合入） |
-| 19 | 同上 | 二级观察：低内存档判轻的卡播放时一直占位（照现有语义；要不要改成判轻的也补小尺寸） | 仍有效 |
+| 17 | `HANDOFF-2026-09-28.md` 第 8 节 | 审〔裁〕：C10 契约第 18 节第 1～9 条（尤其第 9 条） | 仍有效，并进第 23 条 |
+| 18 | 同上 | 审：c10-ui 的偏离与四个三级数字；c10-cost 的三级语义（`8ccdac8`）与四条偏离 | 仍有效：C10 已合入，并进第 23 条一起审（`REPORT-C10.md` 第 6 节第 24、25 行，第 9 节） |
+| 19 | 同上 | 二级观察：低内存档判轻的卡播放时一直占位（照现有语义；要不要改成判轻的也补小尺寸） | 仍有效（M8 第 13.4 节第 7 条同此） |
 | 20 | 同上 | T9「改卡后 5 s 内重测」只在不限速或 1 MB/s 下判（160 KB/s 下 5.2～7.1 s），门槛没改 | 仍有效 |
-| 21 | `TODO.md`「已做步骤的遗留」 | 1080p 编码门槛：修到笔记本过线，或经用户确认改门槛 | 仍有效（`claude/perf-encode` 待笔记本复核） |
-| 22 | `m8-plan.md` 第 8.3 节 | 真热点下的异地接入；PC 局域网主机要用新端口时的防火墙放行；「只能出网的节点」一侧是否在团队测试时补；审 m8-plan 的〔裁〕 | 仍有效（M8 未开始） |
+| 21 | `TODO.md`「已做步骤的遗留」 | 1080p 编码门槛：修到笔记本过线，或经用户确认改门槛 | **已解决**：修复合入 main `211695d` 时笔记本 ENC-2 p50 中位数 283 ms 过线；M8 收尾前在 main `9cf43f1f` 上又贴线没过（五轮中位数 302 ms），`claude/perf-encode-2` 再修（main `501a7dd7`，产出逐字节不变）后全案最终基线连续 5 轮中位数 208 ms 过；门槛没改，不需要用户决定（M8〔裁〕第 12 条了结）（`REPORT-C10.md` 第 3、9 节；`REPORT-render-queue-m8.md` 第 8 节、第 13.2 节第 12 条） |
+| 22 | `m8-plan.md` 第 8.3 节 | 真热点下的异地接入；PC 局域网主机要用新端口时的防火墙放行；「只能出网的节点」一侧是否在团队测试时补；审 m8-plan 的〔裁〕 | 真热点：仍有效（M8 异地接入只用了替代做法，M8 第 13.4 节第 2 条同此）；防火墙放行：**不再需要**（PC-M8-0 查明两台机器 node.exe 入站 TCP、UDP 都已放行，不用改防火墙，`REPORT-render-queue-m8.md` 第 1.3 节）；「只能出网的节点」：仍有效（M8 第 13.4 节第 8 条同此）；审 m8-plan 的〔裁〕：并进第 30 条 |
+| 23 | `REPORT-C10.md` 第 9 节 | 审〔裁〕：C10 契约（含第 10 节新增两条）与报告第 6 节 29 条，尤其第 18 行（二级观察）、第 19 行（X4 修改与留下的出入）、三级语义三处补写 | 仍有效 |
+| 24 | `REPORT-C10.md` 第 9 节 | 手机真机四项：扫码进入；iOS Safari 与微信内置浏览器各打开一次；蜂窝网络下打开与播放；iOS 逐帧导出的最长时长与体积（与第 10、11 条重叠，多了蜂窝网络一项） | 仍有效 |
+| 25 | `REPORT-M7.md` 第 9 节 | 审〔裁〕：契约第 13 节 D1～D18 与「探针之后的更正」、报告第 6 节 30 条，尤其第 22～25 行（队列侧与契约原文不同的四处）、第 20 行（B.3）、第 27 行（`will-change` 留着） | 仍有效 |
+| 26 | `REPORT-M7.md` 第 9 节 | 审 `claude/join-error`（新增服务端接口 `shared/verify`〔裁〕），决定合不合 | 仍有效（main `0cabcfb0` 上没有这条分支的合并；M8 第 13.4 节第 5 条同此，写 `a500c1b9`） |
+| 27 | `REPORT-M7.md` 第 9 节 | 阿里云上残留三个探针项目 `m7ap-m7w0928a`、`m7ap-m7w0928b`、`m7ap-m7wlocal1`，要在阿里云上按名删 | **已解决**：M8 收尾时随其余探针项目在服务器上删掉（2026-09-28 18:56Z，`REPORT-render-queue-m8.md` 第 10 节；本文第 5.1 节） |
+| 28 | `REPORT-M7.md` 第 10 节；第 6.2 节本表 | 审 D18 两句三级语义（定计划时 dry run、发给用户不等） | 仍有效（没有用户确认的记录；M8 第 13.4 节第 6 条同此） |
+| 29 | `REPORT-C10.md` 第 8 节末条 | 若用户认为 X4 属于二级语义，C10 第 6 节第 19 行要补「codex 与 Gemini 各出一轮」的说明 | 仍有效（随第 23 条一起定） |
+| 30 | `REPORT-render-queue-m8.md` 第 13.4 节第 1 条；`m8-plan.md` 第 8.3 节末条 | 审 M8 的〔裁〕：第 13.2 节第 1～11 条（第 12 条已了结），以及 `m8-plan.md` 末 D1～D12 的裁定 | 仍有效 |
+| 31 | 同上第 3 条 | 笔记本 `.env.cluster` 里的集群令牌与服务器上的不一致（迁移演练库存那一步回 401，改从服务器读），要同步笔记本的这份本机配置 | 仍有效 |
+| 32 | 同上第 4 条 | 笔记本辅助节点交接前留下的批次脚本在交接后继续跑完了第 5～9 项（W7 节点空等到超时、X3 重跑 `c10x0928b`、C10a 演示），占了笔记本 CPU、在阿里云上建过项目；主会话按约束没结束它，结果不作 M8 证据 | 告知类 |
+| 33 | 同上第 9 条前半 | 阿里云上演练实例的数据目录（`/var/lib/promptcut/drill`、`drill.deploy-20260928-m8`、`drill.old-20260928-m8`，合计约 2 GB 以上）删不删 | 仍有效 |
+| 34 | 同上第 9 条后半 | 探针留在阿里云主实例上的项目 | **已解决**：15 个都已删掉——迁移种子项目用创建者证明删；其余 14 个按用户「由主会话自己删」在服务器上删（先备份到 `/root/m8-probe-projects-backup-20260928.tar.gz`，停服约 1 s，用部署的 `store.mjs` 删记录与租户目录）（`REPORT-render-queue-m8.md` 第 10 节 18:2xZ、18:56Z 两行，第 13.4 节第 9 条） |
+| 35 | 同上第 10 条；第 13.3 节 | 浏览器进放本机的项目（`c10-contract.md` 第 13 节；用户 2026-09-28 提的「C10 里手填主机地址进入」）：要做须先改 `product/platforms.md`「在线浏览器模式」那条语义（一级 / 二级） | 仍有效 |
 
 另：`TODO.md`「待用户定：播放停顿期间要不要加音频看门狗」不属 M5～M8，不计入上表。
 
 ## 9. 顾问调用汇总
 
-从各阶段报告与交接文件逐次收，共 **20 次**（含一次连通性自检）。codex 一律 `gpt-6-sol` / `high`，Gemini 一律 `gemini-3.1-pro-high`。
+从各阶段报告与交接文件逐次收，全案共 **20 次**（含一次连通性自检；第 20 次是 M8 计划期的查资料，M8 执行期没调，见下面「没调顾问的阶段与理由」）。C10 其余的两次是第 18、19 次，都在写契约前；M7 没调（`REPORT-C10.md` 第 8 节、`REPORT-M7.md` 第 8 节）。codex 一律 `gpt-6-sol` / `high`，Gemini 一律 `gemini-3.1-pro-high`。
 
 | # | 阶段 | 何时 | 顾问 | 用途 | 为什么 | 结论 | 采纳 | 出处 |
 |---|---|---|---|---|---|---|---|---|
@@ -490,9 +771,9 @@
 | 15 | C10a | 2026-09-27 | codex | 查资料 | 7 题（低内存判定、后台节流、邀请码等） | `c10a-research.md` | 采纳（契约第 13 节） | `REPORT-C10a.md` 第 4 节；`HANDOFF-2026-09-27.md` 第 7 节 |
 | 16 | C10a | 2026-09-27 | Gemini | 交互与文案 | 加入表单、多用户协作、低内存档提示 | `c10a-ux-draft.md` | 核对后采纳（契约第 14 节） | 同上 |
 | 17 | C10a | 2026-09-27 | codex（worktree） | 攻坚 | 演示 R2：层表 900 s 不更新、相对地址 404 | 失活路径多处修复，WIP `050065d`，交 Opus 复核 | 采纳（复核后改三处） | `REPORT-C10a.md` 第 2.9、4 节 |
-| 18 | C10 其余 / M7 | 2026-09-27 | codex | 查资料 | IndexedDB 配额、明文 http 缺的 API、媒体鉴权、后台 iframe 节流、子协议凭证 | `c10-research.md` | 采纳（契约第 17 节；Q1 第 5 条被探针推翻） | `HANDOFF-2026-09-27-pc.md` 第 7 节 |
-| 19 | C10 其余 | 2026-09-27 | Gemini | 交互与文案 | 离线提示、素材导入、后台预渲染可见性、放本机从浏览器进入等 | `c10-ux-draft.md`（第 4 版） | 核对后采纳（契约第 17 节表 A） | 同上 |
-| 20 | M8 | 2026-09-28 | codex | 查资料 | Windows 新阻止规则对已建立 TCP 连接是否立刻生效 | 下一个包触发重新授权；长连接在一个心跳内生效 | 采纳，笔记本仍要实测 | `m8-plan.md` 第 4 节「预检结果」 |
+| 18 | C10 其余 / M7 | 2026-09-27 | codex | 查资料 | IndexedDB 配额、明文 http 缺的 API、媒体鉴权、后台 iframe 节流、子协议凭证 | `c10-research.md` | 采纳（契约第 17 节；Q1 第 5 条被探针 P1 推翻；Q5 归 M7） | `REPORT-C10.md` 第 8 节；`HANDOFF-2026-09-27-pc.md` 第 7 节 |
+| 19 | C10 其余 | 2026-09-27 | Gemini | 交互与文案 | 离线提示、素材导入、后台预渲染可见性、放本机从浏览器进入等 | `c10-ux-draft.md`（第 4 版） | 核对后部分采纳（契约第 17 节表 A；不采纳 1.6、第 3～5 节，理由在契约第 17 节） | 同上 |
+| 20 | M8 | 2026-09-28 | codex | 查资料 | Windows 新阻止规则对已建立 TCP 连接是否立刻生效 | 下一个包触发重新授权；长连接在一个心跳内生效 | 采纳，笔记本仍要实测（P-C1 后因约束「不动宿主机的网络」作废） | `m8-plan.md` 第 4 节「预检结果」；`REPORT-render-queue-m8.md` 第 12 节 |
 
 **没调顾问的阶段与理由**：
 
@@ -503,12 +784,26 @@
 | SP、M6、C6.5、C6.6 的 Gemini 发散 | 没走到回退第 3 级 | 各报告顾问节 |
 | HT-a | Opus 在回退第 1 级内解决 | `REPORT-HT-a.md` 第 3 节 |
 | C10a 后半（第 2.11～2.15 节） | 同上 | `REPORT-C10a.md` 第 4 节末 |
-| C10 其余派活到交接 | 主会话没调；各子报告里也没有 | `HANDOFF-2026-09-28.md` 第 9 节 |
-| M7 | 待核（`m7-contract.md` 里没查到顾问记录） | — |
+| C10 其余派活到交接，与 PC 接手后的集成、`c10-a4` | 笔记本主会话与各分支没调；PC 接手后也没调，A4 与 `ProbeGate` 两处缺陷在回退梯次第 1 级内由 Opus 查清修好；第 6 节第 19 行（X4）是改计划契约、没改语义，所以没走「codex 与 Gemini 各出一轮」 | `REPORT-C10.md` 第 8 节；`HANDOFF-2026-09-28.md` 第 9 节 |
+| M7 | 没调：五份 AGENT 报告与契约全文都没有 codex、Gemini、agy 的调用记录；契约由主会话派的只读调查子 Agent 起草；D18 是定计划时的 dry run，不是执行中卡住后的改动；B.3 改的是计划契约 | `REPORT-M7.md` 第 8 节 |
+| M8 执行期 | 攻坚没调 codex worktree：M8 的缺陷（停滞误判、产物库缺块、跨节点去重、探针时序）都由 Opus 子智能体在 worktree 里查因修复；发散没调 Gemini：M8 没有新的用户侧界面，按计划不调；交接前 PC 主会话那段的交接文件也没有 codex / Gemini 调用记录 | `REPORT-render-queue-m8.md` 第 12、12a 节 |
 
 ## 10. 需要用户决定的事
 
-〔占位：合并与 release 之外的。已知候选：审〔裁〕（第 6.1 节）；改门槛（1080p 编码，第 8 节第 21 条）；真换机时机；第 8 节里仍有效的各条。〕
+合并与 release 之外、要用户拍板的（编号指第 8 节）：
+
+1. **存储占用**（用户 2026-09-29 定的下一项功能，主计划第 4 节、`TODO.md`，分支 `claude/plan-storage`）：写语义前先 dry run 给用户确认。1080p 分段编码已在 M8 收尾时修好过线（第 8 节第 21 条），不再需要用户决定。
+2. **审〔裁〕**：C10 29 条、M7 30 条、M8 11 条（第 12 条已了结）与 `m8-plan.md` 的 D1～D12（第 6.1 节；第 8 节第 23、25、30 条）；审各阶段契约里未审的〔裁〕（第 12、16、17 条）。
+3. **`claude/join-error` 合不合**（新增服务端 `shared/verify` 端点，改了鉴权面；第 26 条）。
+4. **M7 D18 两句三级语义**的确认（第 28 条）。
+5. **低内存档判轻的卡要不要也补小尺寸**（二级观察；第 19 条）。
+6. **浏览器进放本机的项目要不要做**：要做须先改 `product/platforms.md` 那条语义（第 35 条；第 6.3 节）。
+7. **阿里云上的清理**：演练实例数据目录删不删（第 33 条）；探针项目（第 34 条）与 M7 残留的三个探针项目（第 27 条）已在 M8 收尾时删掉。
+8. **需要人在机器旁的**：真手机扫码、iOS 导出、蜂窝网络（第 10、11、24 条）；真热点下的异地接入（第 22 条）；「只能出网的节点」一侧是否在团队测试时补（第 22 条）。
+9. **笔记本 `.env.cluster` 同步**（第 31 条）。
+10. **真换机的时机**（第 7.2 节：等团队测试通过后）。
+11. **代码注释里 41 处旧路径**统一改不改、何时改（第 7.4 节）。
+12. 第 8 节里其余仍有效的各条（第 8、9、14、15、20、29 条）。
 
 ## 附录 A 跨机指令与回执原文索引
 
@@ -525,20 +820,43 @@
 | C6.6 | W-开工-2、L-1、T9-X1～X3；V-1 | `REPORT-C6.6.md` 第 7、9 节 |
 | HT-a | PC-4（W-HT-a 跨机）；HT9 两轮 | `REPORT-HT-a.md` 第 1.6、1.7 节 |
 | 交接期 | HT9-1（`to-cloud` seq 10）、交接通知 seq 11；PC-1～PC-5 | `HANDOFF-2026-09-28.md` 第 5 节 |
-| C10、M7、M8 | 待填 | — |
+| C10 其余 | 本机经协调口 KV 的 creator + host 一轮（run `c10loc0928a`） | `REPORT-C10.md` 第 10 节「c10-site」；`docs/archive/agent-reports/AGENT-c10-site.md` |
+| C10 其余 | 外网四轮 run `c10s0928b`～`e`（云端当独立渲染主机；含 HT9 / M8-X2、W-HT-a 云端一侧的服务器侧掐线） | `REPORT-C10.md` 第 7 节（主会话记录；报告里是摘要，没有指令与回执原文） |
+| C10 其余 | 笔记本 C10-T1、ENC-1、ENC-2 | `REPORT-C10.md` 第 3、7 节（主会话记录，同上） |
+| M7 | W7 真跨机 run `m7w0928e`；之前的外网试跑 `m7w0928a`、`m7w0928b`、`m7wlocal1` | `REPORT-M7.md` 第 7.1 节、代号节（主会话记录）；`docs/archive/agent-reports/AGENT-m7-accept-probe.md` 第四段 |
+| M7 | 笔记本 M7-T1、M7-T1b、M7-T1c | `REPORT-M7.md` 第 5 节（主会话记录） |
+| M7 | 云端当纯浏览器节点的尝试 | `REPORT-M7.md` 第 7.2 节（主会话记录） |
+| M8（交接前） | M8-B1～M8-B3b、W7-1～W7-4 等（笔记本辅助节点） | `HANDOFF-2026-09-28-pc.md` 第 5 节与各项证据栏；`REPORT-render-queue-m8.md` 第 1.3、11 节 |
+| M8 | 信箱 `to-cloud` 第 25 条（第五次修订后确认主会话）→ 回执 `to-local` 第 29 条（云端 HEAD 当时 `4047133b`） | `REPORT-render-queue-m8.md` 第 1.3、11 节 |
+| M8 | `to-cloud` 第 26 条 E6R-1（E6 反方向，云端当指纹 Y 的独立渲染主机，run `e6r0928L`，检出 `29e6e837`）→ 回执 `to-local` 第 30 条 | 同上第 2 节 E6、第 11 节 |
+| M8 | `to-cloud` 第 27 条 RMT-1（异地接入假任务一轮补跑，云端当远程成员）→ 回执 `to-local` 第 31 条 | 同上第 4 节、第 11 节 |
+| M8 | PC 辅助节点报到（跨会话消息，15:48Z 前后）；PC-M8-1（合并候选 `claude/merge-m8-e3-page` 的 G0，`9cf43f1f`） | 同上第 1.3、11 节 |
+| M8 | PC-M8-0（局域网 TCP 互探：PC `192.168.50.96`、笔记本 `192.168.50.247`） | 同上第 1.3、11 节 |
+| M8 | PC-M8-2（构建、局域网协调口 5789、放本机一串九项的创建者侧与异地接入真实渲染 `m8xrealP`；`9cf43f1f`） | 同上第 2、4、5、7、11 节 |
+| M8 | PC-M8-3（`claude/merge-xnode-dedup` 的 G0、G0-R 与构建，`e27fa520`） | 同上第 9、11 节 |
+| M8 | PC-M8-4（异地接入真实渲染 `m8xrealR` 与 C4 / E3 放本机 `m8e3lanP`）；PC-M8-5（C4 再跑 `m8e3lanQ`，补重启后的 `asset-lan-probe`） | 同上第 2 节 E3、第 4 节、第 7 节 C4、第 11 节 |
+| M8 | PC-M8-6（清理主实例上探针留下的 14 个项目：只读查找创建者配置，删除停在确认前，用户选「不让辅助节点删」，随后由主会话在服务器上删） | 同上第 10、11 节 |
+| M8 | PC-M8-7（只读核对 PC 上的 `Videos\PromptCut`：没有测试或探针写过的条目） | 同上第 11、12a 节 |
+| M8 | PC-M8-8（`claude/merge-no-user-videos` 的 G0，`efcaec60`）；PC-M8-9（`efcaec60` 的构建，release 判用） | 同上第 11 节 |
+| M8 | PC-M8-10（`claude/merge-perf-encode-2` 的 G0、G0-R 与构建，兼全案最终基线的 PC 部分，`501a7dd7`，代码版本 `b38706791f86…`） | 同上第 9、11 节 |
+| M8 | 阿里云上的操作（部署、C2 重启、迁移演练、两次编辑器页换代、删探针项目） | 同上第 10 节 |
 
 ## 附录 B 各阶段 AGENT 报告的归档位置
 
-- `docs/archive/agent-reports/`：66 份（M5b、M6、SP、C6.5、C6.6、C10a、HT-a 及同期维护分支）。
+- `docs/archive/agent-reports/`：分支 `claude/total-report`（起点 main `0cabcfb0` 之后）上共 **105 份**：main `0cabcfb0` 上的 87 份，加本次归档的 18 份（见下）。main `0cabcfb0` 上的 87 份：骨架时 66 份（M5b、M6、SP、C6.5、C6.6、C10a、HT-a 及同期维护分支）；之后进来 21 份：
+  - C10 其余 12 份：`AGENT-c10-a4.md`、`AGENT-c10-browser.md`、`AGENT-c10-cost.md`、`AGENT-c10-integ.md`、`AGENT-c10-probe.md`、`AGENT-c10-tests.md`、`AGENT-c10-ui.md`、`AGENT-tier-reload-seek.md`（`REPORT-C10.md` 第 12 节，提交 `7069423`），`AGENT-pause-precise.md`、`AGENT-c10-site.md`、`AGENT-c10-catalog.md`、`AGENT-online-prune.md`（定稿分支 `claude/c10-report-final`）；
+  - M7 5 份：`AGENT-rq-m7-queue.md`、`AGENT-rq-m7-node.md`、`AGENT-rq-m7-tests.md`、`AGENT-m7-accept-probe.md`、`AGENT-m7-probe.md`（`REPORT-M7.md` 第 12 节）；
+  - M8 期间 4 份：`AGENT-m8-e6r.md`、`AGENT-sink-has.md`、`AGENT-site-bake-slow.md`、`AGENT-stall-phases.md`（按 `git diff --name-status c718be6 0cabcfb0` 核；都是 M8 期间的分支，`REPORT-render-queue-m8.md` 第 12a 节）。
 - M5a、C5、C6.1～C6.4 的子报告**没有单独文件**：内容并进阶段报告，原文留在各子分支的提交里（各报告「过程记录」一节）。
-- 仍在 `docs/reports/`、待随 C10 或 M8 归档的：`AGENT-c10-probe.md`、`AGENT-tier-reload-seek.md`（随 C10）；`AGENT-host-diag.md`、`AGENT-hygiene.md`、`AGENT-perf-t4.md`、`AGENT-undo-refresh.md`（维护分支）。
-- 在修分支上还没进 main 的 AGENT 报告：C10、M7、M8 各分支与 `claude/card-overlay`、`claude/eol-eperm`、`claude/perf-encode` 等（待填）。
+- 2026-09-29 分支 `claude/total-report` 用 `git mv` 归档的 18 份（原在 `docs/reports/`，同名文件归档目录里都没有）：`AGENT-card-overlay.md`、`AGENT-eol-eperm.md`、`AGENT-evidence-audit.md`、`AGENT-host-diag.md`、`AGENT-hygiene.md`、`AGENT-lan-asset.md`、`AGENT-lowmem-latency.md`、`AGENT-m8-connect-proxy.md`、`AGENT-m8-e2e.md`、`AGENT-m8-kit.md`、`AGENT-m8-migrate.md`、`AGENT-m8-scale.md`、`AGENT-m8-session-legacy.md`、`AGENT-particles-blank.md`、`AGENT-perf-encode.md`、`AGENT-perf-t4.md`、`AGENT-tailwind-guard.md`、`AGENT-undo-refresh.md`。本分支的 `docs/reports/` 里只剩这次任务自己的 `AGENT-total-report.md`（随本分支合入后由主会话归档）。main 在本分支起点之后又进来的 `AGENT-m8-e3-page.md`（main `9cf43f1f`）不在本分支上，合入后仍在 `docs/reports/`，由主会话归档。
+- 还没进 main 的：`AGENT-join-error.md`（在 `claude/join-error` 上，随它合入时归档；`REPORT-M7.md` 第 12 节）。
+- **本轮收尾时由主会话再归档的 5 份**（归档后路径 `docs/archive/agent-reports/`）：`AGENT-m8-e3-page.md`（main `9cf43f1f` 带进 `docs/reports/`）、`AGENT-xnode-dedup.md`（main `e27fa520` 带进）、`AGENT-perf-encode-2.md`（main `501a7dd7` 带进）、`AGENT-no-user-videos.md`（main `efcaec60` 带进）、`AGENT-total-report.md`（本分支自己的报告）。M8 本阶段的 AGENT 报告另有本分支归档的 18 份里的 `AGENT-card-overlay.md`、`AGENT-eol-eperm.md`、`AGENT-host-diag.md`、`AGENT-m8-connect-proxy.md`、`AGENT-m8-e2e.md`、`AGENT-m8-kit.md`、`AGENT-m8-migrate.md`、`AGENT-m8-scale.md`、`AGENT-m8-session-legacy.md` 等。
 
 ## 骨架里发现的缺口
 
-写骨架时发现、需要主会话定怎么补的：
+写骨架时发现、需要主会话定怎么补的；2026-09-28 补 C10、M7 时逐条核过，已解决的标【已解决】并写怎么解决，没解决的原样留着。
 
-**一、阶段报告缺验收证据**
+**一、阶段报告缺验收证据**（都没解决：各阶段报告没有回改，本次也不改）
 
 1. **M5a**：「失败即关」「离线回落」两条验收在报告里没有结果；也没有「顾问调用记录」一节（`REPORT-render-queue-m5a.md`）。
 2. **C5**：「HTTP 端到端换成 `memory-store`」没写明；「HTTP 层 0 处文件系统引用」的守门测试没写；「Agent 与预渲染进程只经 HTTP」只以「早已在 main」带过（`REPORT-c5.md` 第 0、1 节）。
@@ -548,19 +866,32 @@
 6. **M5b**：任务书 E1～E4、E6，离线回落 O1，契约 F 节 Q/N/L/W 不改全过，这三类验收报告里没有逐条结果；K3、K4 只有契约测试「全过」，实验组与对照组的原始数字没进报告（主计划第 8 节 G0「压测与对照」要求贴原始数字）。
 7. **M5a、C6.1～C6.4、M5b** 六份报告都没有「顾问调用记录」一节（主计划第 8 节 G0「报告」要求有，没调也要写原因）；`REPORT-M5.md` 也没有汇总。C5 只在「过程记录」里带了一句 agy 审查。
 8. **M6**：H4 的五行「各测 20 次」、H8「抓握手全部消息无明文」只写由契约测试覆盖，没有逐行对应到 AU 编号的次数与结果。
-9. **C10a**：主计划要求的「手机 demo」只能由用户做，阶段报告以待用户项合入，没说演示探针的手机仿真算不算替代证据。
+9. **C10a**：主计划要求的「手机 demo」只能由用户做，阶段报告以待用户项合入，没说演示探针的手机仿真算不算替代证据。`REPORT-C10.md` 第 9 节把手机真机四项继续列为待用户项，同样没说。
 
-**二、待跨机复核项在 `m8-plan.md` 第 3.1 节里没有归宿**
+**二、待跨机复核项在 `m8-plan.md` 第 3.1 节里没有归宿**（五条都【已解决】：`m8-plan.md` 第 3.1 节末尾五行注明「总报告骨架查出的缺口，2026-09-28 补」或「2026-09-28 补」）
 
-1. 第 3.2 节第 1 条：M5a X6 用代理模拟拔网、没真断网——混沌 C1 可以覆盖，但对照表没列。
-2. 第 3.2 节第 2 条：两台机器指纹相同，「两种真实指纹」从未跨机验过——裁定 D12 覆盖 E6，但对照表没列这条来源；K1-X 用给定指纹的假节点，仍不是两种真实环境。
-3. 第 3.2 节第 3 条：主计划第 6.6 节 W4 要求的跨机版 E1、E2、E6、K1 在 M5b 报告里没有结果——M8 的 E 系列与 K1-X 会覆盖，但对照表没把它当作要补的旧账。
-4. 第 3.2 节第 9 条：HT 第 1 版的 HT6（云端节点经 HTTP 接入并认领）——HT-b 推迟后是否作废，没有明文。
-5. 第 3.2 节第 18 条里的「T9 改卡后 5 s 内重测只在不限速与 1 MB/s 下判」——`m8-plan.md` 第 2.7 节列了，但第 3.1 节没列来源。
+1. 【已解决】第 3.2 节第 1 条（M5a X6 用代理模拟拔网）：第 3.1 节已列，归 C1。
+2. 【已解决】第 3.2 节第 2 条（两台机器指纹相同）：第 3.1 节已列，归 E6（测试开关与纯浏览器节点两种，D12）；「真不同指纹的两台机器」仍记待跨机复核。
+3. 【已解决】第 3.2 节第 3 条（W4 要求的跨机 E1、E2、E6、K1）：第 3.1 节已列，归 E1、E2、E6、K1-X。
+4. 【已解决】第 3.2 节第 9 条（HT 第 1 版的 HT6）：第 3.1 节已列，归 HT-b（`TODO.md`），M8 不做。
+5. 【已解决】第 3.2 节第 18 条里的「T9 改卡后 5 s 内重测」：第 3.1 节已补来源，归第 2.7 节（笔记本判）。
 
 **三、其它**
 
-1. `m8-plan.md` 目前只在分支 `claude/m8-plan` 上，本文引用它的小节号以该分支 `9f13055` 为准；它进 main 后若改了节号要回头对。
-2. `m8-plan.md` 第 5 节对 L2、L12 写的是「疑在 `claude/hygiene`」：核对 `AGENT-hygiene.md`，L2（旧词）在 hygiene 第 3 项里、已合入；L12（Tailwind 非代码后缀的守门测试）**不在** hygiene 六项里，仍未修。
-3. `REPORT-C6.6.md` 第 11 节把「撤销后不刷新」的位置写成 `src/editor/sync/`，实际在 `src/store/docsync.ts`（`AGENT-undo-refresh.md`「更正建议」），阶段报告没回改。
-4. 主计划第 6.5、7 节多处写「云端」，2026-09-28 起云端已归档；本文与 M8 报告按「笔记本辅助节点」读，主计划正文没回改（文件头有说明）。
+1. 【已解决】`m8-plan.md` 已进 main；本文引用它的小节号（第 2.4、2.7、2.8、3.1、4 节「预检结果」、5、6.1、8.3 节与末「主会话裁定」）在 main `0cabcfb0` 上逐个核过，标题都在。
+2. 【已解决】L12（Tailwind 非代码后缀的守门测试）不在 hygiene 六项里，后来另开 `claude/tailwind-guard` 做了，main `0d114df` 合入（按 `git log` 核；`docs/archive/agent-reports/AGENT-tailwind-guard.md`）。`m8-plan.md` 第 5 节 L12 行仍写「疑在 `claude/hygiene`」，没回改。
+3. 【已解决】`REPORT-C6.6.md` 第 11 节已回改：位置写成 `src/store/docsync.ts`，注明原写 `src/editor/sync/` 有误。
+4. 主计划第 6.5、7 节多处写「云端」。2026-09-28 第四次修订一度把云端工作节点归档，同日第二次补充又恢复在线（主计划文件头；`m8-plan.md`「依据」）；C10 外网四轮实际由云端当独立渲染主机（`REPORT-C10.md` 第 0、7 节），M7 的 W7 由笔记本当成员 B、云端当不了纯浏览器节点（`REPORT-M7.md` 第 7 节）。本文第 3.2 节第 7、12 条与骨架时的「云端已归档」说法已按两份报告改；主计划正文没回改（没解决，留给主会话）。
+
+**四、补 C10、M7 时发现的，与各阶段报告对不上或报告自身前后不一的地方**（2026-09-29 由分支 `claude/total-report` 照现状改了对应报告与计划的字面，每条前标【已更正】并写改了哪里；第 9 条是待用户项，不改）
+
+1. 【已更正】`REPORT-C10.md` 第 0 节、第 1 节表与合入顺序、第 11 节 L21 行：两条后续分支改成已并入集成分支（`2f7f821`、`fb3aaa7`）、报告指向归档位置；「还没合入 main」删掉，合入顺序补到 `51f01c4`，写明 C10 快进进 main。原记：`REPORT-C10.md` 第 1 节末仍写「还没合入 main」、表里 `pause-precise`、`c10-site` 仍写「在做」；实际这两条已在第 10 节写明并入集成分支，C10 也已合入 main（快进到 `51f01c4`）。
+2. 【已更正】`REPORT-C10.md` 第 5 节开头：旧句删掉，改写成云端跑了外网四轮、`c10s0928e` 全过、A5 外网通过、其余归 M8-X3。原记：`REPORT-C10.md` 第 5 节开头写「外网一轮都还没跑（第 7 节）」，与同报告第 5 节 A5 行、第 7 节的外网结果（run `c10s0928e` 通过）矛盾，是定稿时没回改的旧句。
+3. 【已更正】`REPORT-C10.md` 第 3 节 G0 表：`62850af` 一行改叫「报告定稿」，写明 C10 快进进 main、main 停在 `51f01c4`；第 13 节同步。原记：`REPORT-C10.md` 第 3 节把 `62850af` 叫「合入提交」；按 `git log --first-parent`，C10 是快进进 main，`62850af` 是集成分支上的报告定稿提交，main 最后停在 `51f01c4`（之后两次只改报告）。本文第 2.8 节两个都写了。
+4. 【已更正】`REPORT-C10.md` 第 5 节 A9 行备注：补句号分成两句。原记：`REPORT-C10.md` 第 5 节 A9 行备注「外网 `c10a-demo-probe` 这一阶段没跑部署后外网复跑 `c10a-demo-probe` 定为随 M8-X3 做」少了标点，读起来是两句粘在一起。
+5. 【已更正】`REPORT-C10.md` 第 6 节第 29 行与第 11 节两行：`m8-plan.md` 第 5 节确实没有这三条，改成「没有 M8 计划编号，记在 `REPORT-M5-M8.md` 第 7.4 节」；本文第 7.4 节三行同步。原记：`REPORT-C10.md` 第 6 节第 29 行与第 11 节写「区分自然进场与从卡中间开始播放」「`SWAP_MS` 按卡种实测」「舞台握手后又断」待进 M8 遗留表或「没有对应编号」；`m8-plan.md` 第 5 节至今没有这三条（本文第 7.4 节暂记）。
+6. 【已更正】`REPORT-M7.md` 第 1 节末：「还没合入 main」改成已快进进 main、main 指到 `a52344a`，并列出之后 main 上的合并与文档提交。原记：`REPORT-M7.md` 第 1 节末仍写「还没合入 main」；实际 M7 已快进进 main（`a52344a`）。
+7. 【已更正】`REPORT-M7.md` 第 1 节表 `m7-probe` 行与第 12 节：改成四个探针脚本由 main `e86a754` 合入；本文第 7.4 节该行同步。原记：`REPORT-M7.md` 第 12 节写 `claude/m7-probe` 的四个探针脚本「没并进集成分支、要不要并进由主会话定」；main 上已有 `e86a754`「合并 claude/m7-probe：M7 可行性探针 P1～P6 脚本」，这句没回改。
+8. 【已更正】`REPORT-M7.md` 第 0 节：按 git 历史写准——契约定的是「C10 合入 main 之后」开工，实际各分支起点是 C10 集成分支 `24c2c57`（05:15），首个提交 05:31，早于 C10 快进进 main（`51f01c4`，08:06），即 C10 合入 main 之前开工，集成分支到 `313b27c` 才带上已合入 main 的 C10。原记：`REPORT-M7.md` 第 0 节写「C10 合入 main 之后开工」，但第 1 节的分支起点都是 C10 集成分支的 `24c2c57`（C10 合入 main 之前），集成分支到 `313b27c` 才合 main `3ab63cf` 带上 C10。「之后」指的是 C10 契约与集成定形之后还是真合入之后，报告没说清（待核）。
+9. 待用户项，不改。M7 D18 的语义改动：`REPORT-M7.md` 第 8 节说是「定计划时的 dry run」，但按 `suggested_agent_behavior.md`「对齐」，定计划时的语义 dry run 要用户确认后才写；报告只说契约「发给用户但不等」，没有用户确认的记录（本文第 8 节第 28 条记为待用户审）。
+10. 【已更正】`m8-plan.md` 第 1.1 节前置表：C10、M7 两行改成已合入（main `51f01c4`、`a52344a`），遗留一行补 L10/L16 `2fa0c1a6`、L4/L5 `2e957270`、L14 `278eeb9d`、L20 `211695d`，表下补探针分支 m8-kit `fdf515e3`、m8-migrate `6d516f32`、m8-scale `b18256e1`、m8-e2e `4538ec42`（每个提交都用 `git log -1` 与 `git merge-base --is-ancestor <提交> origin/main` 核过）；`REPORT-render-queue-m8.md` 那一半由主会话在另一分支改，本分支没动。原记：`m8-plan.md` 第 1.1 节前置表与 `REPORT-render-queue-m8.md`（main 上的旧版）第 1.1 节仍写 C10、M7「未合入」，`REPORT-render-queue-m8.md` 的「E5 纯浏览器节点只见本人任务」表写「M7 交付的探针（文件名待 M7 合入后填）」；这两份归 M8，由主会话收尾时改。

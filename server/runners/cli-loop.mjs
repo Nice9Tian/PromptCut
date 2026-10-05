@@ -112,7 +112,7 @@ export function cliBackend({ startProviderRun, baseOpts, setToolAccess, signal }
             const r = await runOnce({ role, systemPrompt, prompt: ask, sessionId });
             sessionId = r.sessionId || sessionId;
             if (!r.error) return { text: r.text, submitted: parseSubmission(r.text, submit), session: sessionId, usage: r.usage };
-            if (signal?.aborted || !r.error.retryable) throw new Error(r.error.message || 'CLI 报错');
+            if (signal?.aborted || r.error.authReason || !r.error.retryable) throw Object.assign(new Error(r.error.message || 'CLI 报错'), { runEvent: r.error });
             if (attempt >= RETRIES || !sessionId) {
               /*
                * 可续跑的中断,重试用完了:这一回合交不出东西,但**环路不该跟着作废**。
@@ -159,7 +159,7 @@ export function startCliLoop(opts, startProviderRun, deps = {}) {
       opts.onEvent({ type: 'done', usage: result.usage, outcome: result.outcome, completed: result.completed, failed: result.failed });
     } catch (err) {
       if (ac.signal.aborted) opts.onEvent({ type: 'status', text: '已中止' });
-      else opts.onEvent({ type: 'error', message: String(err?.message || err) });
+      else opts.onEvent(err.runEvent || { type: 'error', message: String(err?.message || err) });
     } finally {
       opts.setToolAccess?.(null);
     }

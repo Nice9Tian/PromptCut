@@ -5,10 +5,11 @@ import { resetProjectAi } from "../../ai/projectAi";
 import { getCard } from "../../kernel/registry";
 import { mediaUrlFromPath, restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
-import { adoptServerMedia, applyUploadedMedia, uploadMediaFile } from "./mediaUpload";
+import { applyUploadedMedia, uploadMediaFile, type UploadedMedia } from "./mediaUpload";
 import { prerenderBase } from "../../render/prerender";
 import { exportGate } from "../media/assetTiers";
 import { awaitingUploaderMessage } from "../../render/mediaTier";
+import { parseExportSkipped, type ExportSkipped } from "./exportSkipped";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
@@ -95,13 +96,13 @@ export async function importVideoFiles(files: FileList | File[]): Promise<string
 }
 
 /**
- * 登记一个**已经在服务端素材目录里**的文件(素材收集下载好的那种)。
+ * 登记一个**服务端已经入库**的视频(素材收集下载好的那种)。
  *
  * 和 importVideoFiles 走同一条登记路:探时长宽高、addMedia、登记 File、放到视频轨。
- * 唯一的差别是不再 POST 上传一遍 —— 文件本来就在 out/media 里,path 直接给,
- * 几十上百 MB 的视频再往服务端传一次纯属浪费。
+ * 唯一的差别是页面不再 POST 上传一遍 —— 服务端已经经素材服务的入库接口把它送进了内容库
+ * (和用户导入同一条路),`uploaded` 是入库回包,地址是 /@media/<hash>。
  */
-export async function importVideoFromServer(opts: { url: string; path: string; name?: string }): Promise<string> {
+export async function importVideoFromServer(opts: { url: string; name?: string; uploaded?: UploadedMedia | null }): Promise<string> {
   const res = await fetch(opts.url);
   if (!res.ok) throw new Error(`取文件失败(HTTP ${res.status}):${opts.url}`);
   const blob = await res.blob();
@@ -129,29 +130,27 @@ export async function importVideoFromServer(opts: { url: string; path: string; n
   const media = actions.addMedia({
     kind: "video",
     name,
-    // 文件本来就在素材目录里,先挂它的 /@media/<文件名> 地址(迁移期那条路由);
-    // 下面 adoptServerMedia 在服务端就地算出内容哈希后换成 /@media/<hash>。
-    // 补算失败就一直停在文件名这条路上 —— 能播,只是进不了 .procp、也不跨机器去重。
+    // 入库后的 /@media/<hash>;哈希、扩展名、两档由下面 applyUploadedMedia 照入库回包写回
     url: opts.url,
     duration: meta.duration,
     width: meta.videoWidth,
     height: meta.videoHeight,
   });
   mediaFiles.set(media.id, file);
-  actions.setMediaPath(media.id, opts.path);
-  applyUploadedMedia(media.id, await adoptServerMedia(opts.path));
+  applyUploadedMedia(media.id, opts.uploaded ?? null);
   const clip = actions.addMediaClip(media.id, getState().t);
   if (!clip) console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
   return media.id;
 }
 
 /**
- * 登记一个已经在服务端素材目录里的**音频**(配音生成的那种)。只进素材库,不放时间轴。
+ * 登记一个服务端已经入库的**音频**(配音生成的那种)。只进素材库,不放时间轴。
  *
- * 地址直接用 /@media/<文件名>(和 registerAsset 登记音频一个路数):渲染和导出进程
- * 够不着 blob:。File 仍然记进 mediaFiles,转写和导出要拿原文件时找得到。
+ * 服务端经素材服务的入库接口把它送进了内容库(和用户导入同一条路),`uploaded` 是入库回包:
+ * 地址是 /@media/<hash>,哈希、扩展名、字节数照 applyUploadedMedia 写回(和导入素材同一个写法)。
+ * File 仍然记进 mediaFiles,转写和导出要拿原文件时找得到。
  */
-export async function importAudioFromServer(opts: { url: string; path: string; name?: string }): Promise<string> {
+export async function importAudioFromServer(opts: { url: string; name?: string; uploaded?: UploadedMedia | null }): Promise<string> {
   const res = await fetch(opts.url);
   if (!res.ok) throw new Error(`取文件失败(HTTP ${res.status}):${opts.url}`);
   const blob = await res.blob();
@@ -165,8 +164,9 @@ export async function importAudioFromServer(opts: { url: string; path: string; n
     el.onerror = () => { window.clearTimeout(timer); console.warn(`[io] 探测音频失败: ${name}`); resolve(undefined); };
     el.src = opts.url;
   });
-  const media = actions.addMedia({ kind: "audio", name, url: opts.url, path: opts.path, duration });
+  const media = actions.addMedia({ kind: "audio", name, url: opts.url, duration });
   mediaFiles.set(media.id, file);
+  if (opts.uploaded) applyUploadedMedia(media.id, opts.uploaded);
   return media.id;
 }
 
@@ -332,7 +332,7 @@ export async function exportVideo(
     /** 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方 */
     onStart?: (id: string) => void;
   } & OnlineExportOptions = {},
-): Promise<{ outDir: string; id: string; written?: boolean }> {
+): Promise<{ outDir: string; id: string; written?: boolean; skippedMedia?: ExportSkipped[] }> {
   // c10a 第 11.1 节:在线页面没有预渲染进程,在浏览器里逐帧导出。
   // `ONLINE` 按需取:`mode.ts` 读 `import.meta.env`,Node 单测里载入本模块时没有它
   if ((await import("../../online/mode")).ONLINE) return exportVideoOnline(opts);
@@ -386,7 +386,11 @@ export async function exportVideo(
     throw new Error(text);
   }
 
-  const { id, outDir } = await res.json();
+  const started = await res.json();
+  const { id, outDir } = started;
+  // 已标「(缺失)」、本机取不到文件的老素材:它们所在的片段没进这次导出(预渲染进程的 dropSkippedMediaClips),完成时告诉用户
+  const skippedMedia = parseExportSkipped(started.skippedMedia);
+  if (skippedMedia.length) console.warn("[io] 导出跳过缺失素材所在的片段:", skippedMedia.map((m) => m.name || m.id));
   jobBase.set(id, base);
   opts.onStart?.(id);
 
@@ -406,7 +410,7 @@ export async function exportVideo(
       } else if (data.status === "done") {
         finish(() => {
           opts.onProgress?.(data.total, data.total);
-          resolve({ outDir, id });
+          resolve(skippedMedia.length ? { outDir, id, skippedMedia } : { outDir, id });
         });
       } else if (data.status === "cancelled") {
         finish(() => reject(Object.assign(new Error("已取消导出"), { cancelled: true })));

@@ -125,6 +125,7 @@ import { LOCK_IDLE_TAKEOVER_MS } from '../render-queue/constants.mjs';
  * @property {(reason?: string) => number} yieldAll
  * @property {() => void} stop
  * @property {() => string[]} running
+ * @property {() => { id: string, kind: string, phase: string }[]} occupying  还没走到推送的执行(契约 A.12〔裁〕)
  * @property {() => Promise<void>} settled
  * @property {ReturnType<typeof createNodeSession>} session
  */
@@ -213,6 +214,8 @@ function lockInfoOf(result) {
  *   发布被 card-locked 拒绝时要不要接手(契约 F.7):缺省 false,照锁定方的指纹重发;pc 与独立渲染主机传
  *   `idleLockTakeover`(M7 D2)
  * @param {(event: object) => void} [options.onEvent]  诊断用
+ * @param {(task: object, info: { held: number }) => boolean} [options.canClaim]  这个任务此刻能不能开工(会话认领前过一遍;独立渲染主机用,契约 A.12〔裁〕)
+ * @param {() => number} [options.claimLimit]  此刻最多持有几项(认领闸;缺省恒为 maxConcurrent,见 session.mjs)
  * @returns {LocalNode}
  */
 export function createLocalNode({
@@ -231,6 +234,8 @@ export function createLocalNode({
   sink,
   takeoverLocked = false,
   onEvent = noop,
+  canClaim,
+  claimLimit,
 }) {
   /** 在等回包的发布:reqId → { run, message, resolve, reject } */
   const publishes = new Map();
@@ -246,7 +251,7 @@ export function createLocalNode({
   // 细任务的编排在同构模块里(M7 D11);plan 的切分只在这里(要 split.mjs)
   // eslint-disable-next-line prefer-const
   let session;
-  const runner = createTaskRunner({ nodeId, session: () => session, executor, sink, emit, executePlan });
+  const runner = createTaskRunner({ nodeId, session: () => session, executor, sink, emit, executePlan, now });
   const { holding } = runner;
 
   // undefined 不传,让会话用它自己的缺省值
@@ -255,6 +260,8 @@ export function createLocalNode({
   if (isIdle !== undefined) sessionOptions.isIdle = isIdle;
   if (maxConcurrent !== undefined) sessionOptions.maxConcurrent = maxConcurrent;
   if (projects !== undefined) sessionOptions.projects = projects;
+  if (canClaim !== undefined) sessionOptions.canClaim = canClaim;
+  if (claimLimit !== undefined) sessionOptions.claimLimit = claimLimit;
   session = createNodeSession(sessionOptions);
 
   /**
@@ -430,6 +437,7 @@ export function createLocalNode({
     yieldAll,
     stop,
     running: runner.running,
+    occupying: runner.occupying,
     settled: runner.settled,
     get session() { return session; },
   };

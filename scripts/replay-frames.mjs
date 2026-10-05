@@ -25,6 +25,7 @@
  *
  * 用的是和导出同一个渲染器、同一套启动参数(openBakery),字体和样式表都来自导出页。
  */
+import './lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';

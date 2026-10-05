@@ -40,7 +40,7 @@
 | 删掉的规则 | 改前是谁让它生成的 | 被扫描的源码里有没有用 |
 |---|---|---|
 | `.animate-spin`、`--animate-spin`、`@keyframes spin` | `server/test/cards.test.mjs` | 没有（只有 `animate-spin-around`，那条在 `magicui-animations.css` 里，不受影响） |
-| `.left-10000` | `scripts/probes/c10-stage-probe.mjs`、`docs/reports/AGENT-c10-probe.md` | 没有 |
+| `.left-10000` | `scripts/probes/c10-stage-probe.mjs`、`docs/archive/agent-reports/AGENT-c10-probe.md` | 没有 |
 | `.flex-shrink` | `docs/archive/agent-reports/AGENT-chat-list-window.md` | 没有（卡片用的是 `flex-shrink-0`，仍在） |
 | `.flex-grow,.grow` | `server/test/*.test.mjs` | 没有 |
 | `.tab-1`、`.tab-9` | `server/test/docservice-*.test.mjs`、`docs/plan/distributed-prerender-queue.md` | 没有 |

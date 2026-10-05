@@ -19,6 +19,7 @@
  * 不依赖 vite:工具实现经 `loadHost()`(`ssr-host.mjs`)拿到,预渲染经 `prerenderPost` 问,都由调用方注入。
  */
 import { randomUUID } from 'node:crypto';
+import { annotateResult, clipIdsOfOps, overwroteView } from './user-editing.mjs';
 
 export const AGENT_EXEC_DEFAULTS = Object.freeze({
   /** 被拒(stale)后等副本追上文档服务的当前版本,Agent 马上重读就能读到最新的 */
@@ -195,6 +196,8 @@ export function createAgentExecutor({
   log = () => {},
   limits: limitsIn = {},
   newOpId = (session) => `${session}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`,
+  agentLabel = null,
+  now = () => Date.now(),
 } = {}) {
   if (!link) throw new TypeError('createAgentExecutor: 要 link');
   if (typeof loadHost !== 'function') throw new TypeError('createAgentExecutor: 要 loadHost');
@@ -380,10 +383,13 @@ export function createAgentExecutor({
       link.replica.offer(reply.rev, landedOps, { opId, actor: { role: 'agent', conversation: conv.n, session: conv.session }, session: conv.session });
       await link.replica.waitRev(reply.rev, limits.landWaitMs);
       markRead(conv, reply.rev);
-      ctx.write = { opId, rev: reply.rev, inverse, overwrote: reply.overwrote ?? [] };
-      say('agent.write', { tool, conversation: conv.n, opId, rev: reply.rev, ops: ops.length });
+      const overwrote = Array.isArray(reply.overwrote) ? reply.overwrote : [];
+      ctx.write = { opId, rev: reply.rev, inverse, overwrote, clipIds: clipIdsOfOps(ops) };
+      say('agent.write', { tool, conversation: conv.n, opId, rev: reply.rev, ops: ops.length, ...(overwrote.length ? { overwrote: overwrote.length } : {}) });
       const shown = await withVisual(tool, args, result, base, prepared.after);
-      return withRev(shown, reply.rev);
+      // 覆盖了别人 10 分钟内写过的实体(文档服务算的,A2):放进结果;写入方是页面的标「用户刚改过」,别的 Agent 标「Agent <身份> 刚改过」
+      const noted = overwrote.length ? annotateResult(shown, { overwrote: overwroteView(overwrote, { now: now(), agentLabel }) }) : shown;
+      return withRev(noted, reply.rev);
     }
     if (reply.type === 'project.op.rejected' && reply.reason === 'stale') {
       stats.stale += 1;

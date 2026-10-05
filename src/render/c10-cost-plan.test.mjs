@@ -40,6 +40,8 @@ test("CP-01 lowMemoryLight:判轻的卡在每个位置都判轻(同时 40 张也
 test("CP-02 planDispatch:判定表按搜索结果;搜索完成前全部判重、lowMemoryJudged=false;显示表一直全部判重", async () => {
   mock.module(srcUrl("editor/stageBridge.ts"), { exports: { frontStage: () => null, backStage: () => null } });
   mock.module(srcUrl("editor/costIdentity.ts"), { exports: { clipIdentityOf: () => ({ identityKeys: { a: "ka", b: "kb", c: "kc" }, frameModes: { a: "direct", b: "direct", c: "direct" } }) } });
+  // 夹具里的卡要在注册表里有定义:两边都没有定义的「未知卡片」不进分派表(2026-09-29 起,舞台不画它们)
+  (await import(srcUrl("kernel/registry.ts"))).registerCards(["a", "b", "c"].map((id) => ({ id: `card-${id}`, name: id, defaults: {}, controls: [], frameMode: "direct", Component: () => null })));
   const d = await import(srcUrl("editor/planDispatch.ts"));
   d.resetPlanDispatch();
   const settle = () => new Promise((r) => queueMicrotask(r));
@@ -71,13 +73,14 @@ const B = await import(srcUrl("editor/lowMemoryBackfill.ts"));
 test("CP-03 补渲只对判重又缺产物的层:判轻的卡不发;判重已有产物的不发", () => {
   const clip = (id, extra = {}) => ({ id, cardId: `card-${id}`, start: 0, end: 4, params: {}, ...extra });
   const p = { tracks: [{ id: "t", clips: [clip("h1"), clip("h2"), clip("l1"), clip("l2"), clip("u", { cardId: "user-card" })] }] };
+  // 用户卡 u 判重、没有产物:照样发(2026-09-29 起不再豁免,由桌面版等渲染节点渲)
   const missing = B.missingLayers({
-    project: p, layerClipIds: new Set(["h2", "l2"]), unsupported: (c) => c.cardId === "user-card",
+    project: p, layerClipIds: new Set(["h2", "l2"]),
     heavy: new Set(["h1", "h2", "u"]),
   });
-  assert.deepEqual(missing, ["h1"]);
+  assert.deepEqual(missing, ["h1", "u"]);
   // 没给 heavy(旧口径):全部按重
-  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(), unsupported: () => false }), ["h1", "h2", "l1", "l2", "u"]);
+  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set() }), ["h1", "h2", "l1", "l2", "u"]);
 });
 
 const O = await import(srcUrl("export/originals.ts"));

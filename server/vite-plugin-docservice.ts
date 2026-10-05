@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { Plugin } from "vite";
 import { apiPath, clientAddressOf, isLoopbackAddress, isLocalOrigin, remoteTagOf } from "./http-guard.mjs";
-import { rejectUpgrade } from "./docservice/ws.mjs";
 
 /**
  * 本地文档服务(契约 `docs/plan/docservice-contract.md` 第 5 节、第 10 节)。
@@ -34,11 +33,6 @@ import { rejectUpgrade } from "./docservice/ws.mjs";
  * **局域网主机**(契约 `docs/plan/shared-project-contract.md` 第 4、5 节):`PROMPTCUT_LAN_HOST=1` 时 `vite.config.ts` 让编辑器绑
  * `0.0.0.0`,文档服务与素材服务挂在同一个 http 服务器上,随之对局域网可达。编辑器绑了非回环地址、且有共享项目时,
  * 按 `lan/discovery.mjs` 在本网段广播与应答(`createLanHosting`);项目删光或编辑器退出时停。管理接口只认回环(上面第三条)。
- *
- * **停用模式**(`PROMPTCUT_HEADLESS === "1"`,`scripts/headless.mjs` 起的无头实例):无头实例是 Skill 的临时副本,
- * 不能自己发 `projectRev`,所以不建文档服务、不写日志;但插件照样注册,把两条路由明确答掉,
- * 免得页面的握手挂着没人回:`/docservice` 的升级回 `503` 并关掉 socket,`/api/docservice/healthz` 回
- * `503 { ok: false, disabled: true, reason: 'headless' }`。
  *
  * 文档服务只在编辑器进程里一份,预渲染进程(`vite.prerender.config.ts`)不挂。
  * 任何一步出错都只打日志,不影响编辑器启动。
@@ -102,22 +96,6 @@ function guardUpgradeSockets(httpServer: NonNullable<import("vite").ViteDevServe
 }
 
 /** 停用模式:不建文档服务,两条路由明确回 503 */
-function attachDisabled(server: import("vite").ViteDevServer, httpServer: NonNullable<import("vite").ViteDevServer["httpServer"]>) {
-  const onUpgrade = (req: IncomingMessage, socket: Duplex) => {
-    if (pathnameOf(req) !== WS_PATH) return;
-    socket.on("error", () => {});
-    rejectUpgrade(socket, 503, "Service Unavailable");
-  };
-  httpServer.on("upgrade", onUpgrade);
-  httpServer.once("close", () => httpServer.off("upgrade", onUpgrade));
-  server.middlewares.use((req, res, next) => {
-    if (apiPath(req.url) !== HEALTH_PATH) return next();
-    const method = String(req.method || "GET").toUpperCase();
-    sendJson(res, 503, { ok: false, disabled: true, reason: "headless" }, method === "HEAD");
-  });
-  log("docservice.disabled", { reason: "headless", path: WS_PATH });
-}
-
 /** 编辑器以局域网主机身份运行(`PROMPTCUT_LAN_HOST=1`,`vite.config.ts` 据此绑 `0.0.0.0`) */
 export const lanHostRequested = () => process.env.PROMPTCUT_LAN_HOST === "1";
 
@@ -230,13 +208,8 @@ export function docservicePlugin(): Plugin {
         log("docservice.skip", { reason: "no-http-server" });
         return;
       }
-      // 两种模式都挂:防止没人接的升级被对端重置时把 dev server 带崩
+      // 防止没人接的升级被对端重置时把 dev server 带崩
       guardUpgradeSockets(httpServer);
-
-      if (process.env.PROMPTCUT_HEADLESS === "1") {
-        attachDisabled(server, httpServer);
-        return;
-      }
 
       let service: { health(): object; close(): Promise<void> } | null = null;
       let handleShared: ((req: IncomingMessage, res: ServerResponse) => boolean) | null = null;

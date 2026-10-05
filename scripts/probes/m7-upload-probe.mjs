@@ -1,7 +1,7 @@
 /**
  * M7 契约第 8 节 P4(`docs/plan/m7-contract.md`):在线页面(父页、主文档)把一段生成的快照推到素材服务 ——
  * 60 块原尺寸 HTML(`snap/`)+ 60 张小尺寸 WebP(`px/`):WebCrypto 算 sha256、分片接口(`GET chunks` → `PUT …/0` → `POST complete`)、
- * 耗时、主文档长任务。报告:docs/reports/AGENT-m7-probe.md。
+ * 耗时、主文档长任务。报告:docs/archive/agent-reports/AGENT-m7-probe.md。
  *
  *   node scripts/probes/m7-upload-probe.mjs --frames <目录,里面是 <n>.html> --smalls <目录,里面是 <n>.small.webp 或 <clip>-<n>-*.webp>
  *        [--port 5713] [--doc-port 5718] [--asset-port 5719] [--concurrency 1,4] [--rounds 3]
@@ -21,6 +21,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg, sleep } from './probe-connect.mjs';
 
 const PORT = Number(flagArg('port', '5713'));
@@ -93,7 +94,7 @@ for (let r = 1; r <= ROUNDS; r++) for (const conc of CONC) {
     res.end(PAGE);
   });
   await new Promise((ok) => proxy.listen(PORT, '127.0.0.1', ok));
-  const browser = await puppeteer.launch({ headless: true, args: ['--disable-gpu'] });
+  const browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--disable-gpu'] });
   try {
     const wl = winLoad();
     const page = await browser.newPage();

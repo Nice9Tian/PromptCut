@@ -14,8 +14,14 @@ const PROFILES = new Set(['pc', 'host', 'browser']);
 /** 参与卡片级指纹锁的任务种类（F.1）：plan 不产结果，不锁 */
 const LOCK_KINDS = new Set(['snapshot', 'stream']);
 
-/** 只有节点连接能发的消息（A.5） */
-export const NODE_TYPES = new Set(['queue.watch', 'task.claim', 'task.progress', 'task.complete', 'task.release', 'task.fail']);
+/**
+ * 只有节点连接能发的消息（A.5）。`node.active`（M7 D2 补充〔裁〕，`claude/queue-maint`）：节点手里没有这张卡的认领、
+ * 但页面还在、在忙别的（生成别的卡的快照、后台舞台在测量或补跑）时按 `node.welcome.activeIntervalMs` 报一次，
+ * 它锁着的卡不因此被判闲置；不回包。
+ */
+export const NODE_TYPES = new Set(['queue.watch', 'task.claim', 'task.progress', 'task.complete', 'task.release', 'task.fail', 'node.active']);
+/** `node.active` 的 `busy`（忙什么，只作诊断）的长度上限 */
+export const NODE_ACTIVE_BUSY_MAX = 32;
 /**
  * 只有发布连接能发的消息（A.5）。`card.lock`（F.1）也在这里：文档服务按这个集合把消息路由给队列，
  * 加进来就不用改文档服务。
@@ -317,12 +323,19 @@ const PARSERS = new Map([
   })],
   ['task.claim', (m) => ({ id: str(m.id, 'id'), expectVersion: int(m.expectVersion, 'expectVersion') })],
   // done 可以是 null：节点会话在还没报过进度时续约，发的就是 done: null（契约 B.5）
-  ['task.progress', (m) => ({ ...tokenFields(m), done: optNumOrNull(m.done, 'done') })],
+  // step(可选):随节点的工作推进而变的计数(推块、换阶段、出批),变了也算报了进度(契约 A.12〔裁〕);旧节点不带
+  ['task.progress', (m) => ({ ...tokenFields(m), done: optNumOrNull(m.done, 'done'), step: optNumOrNull(m.step, 'step') })],
   ['task.complete', (m) => ({ ...tokenFields(m), result: absent(m.result) ? null : plainObject(m.result, 'result') })],
   ['task.release', (m) => ({ ...tokenFields(m), reason: optStr(m.reason, 'reason') })],
   ['task.fail', (m) => {
     if (m.retryable !== undefined && typeof m.retryable !== 'boolean') bad('retryable 必须是布尔值');
     return { ...tokenFields(m), error: optStr(m.error, 'error'), retryable: m.retryable !== false };
+  }],
+  // M7 D2 补充〔裁〕:节点还在、在忙(busy 只作诊断:页面报 'bake' / 'stage')
+  ['node.active', (m) => {
+    const busy = optStr(m.busy, 'busy');
+    if (busy !== null && busy.length > NODE_ACTIVE_BUSY_MAX) bad(`busy 不能超过 ${NODE_ACTIVE_BUSY_MAX} 个字符`);
+    return { busy };
   }],
 ]);
 

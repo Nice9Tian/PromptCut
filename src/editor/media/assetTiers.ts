@@ -18,6 +18,7 @@
 import { useSyncExternalStore } from "react";
 import type { Project } from "../../kernel/project";
 import { getState, subscribe } from "../../store/project";
+import { noteRenderNodeAssetBase } from "../sync/renderNodeHandoff";
 import {
   TIERS_KNOWN_LOCAL, TIERS_KNOWN_REMOTE, missingOriginals, originalHashOf, prefetchOrder, smallHashOf, type MissingOriginal,
 } from "../../render/mediaTier";
@@ -551,6 +552,11 @@ export function startUploadTarget(link: LinkLike | null, base: string | null, de
   let stopped = false;
   let timer: unknown = null;
   setUploadTargetReady(null);
+  // 本机就是主机(有连接、挑不到远程素材服务):导入就是写进这个项目的素材服务,导入的素材不用记;没有连接(离开共享项目)时记下的丢掉
+  uploadTargetLocal = !!link && !base;
+  if (!link || !base) deferredImports.clear();
+  // 自动渲染节点(`sync/renderNodeHandoff.ts`):预渲染进程推产物用同一个素材服务(本机就是主机时为 null,它推本机的)
+  noteRenderNodeAssetBase(link && base ? base : null);
   if (!link || !base) {
     void post({ base: null });
     return () => { /* 本来就是本机 */ };
@@ -597,6 +603,7 @@ function setUploadTargetReady(base: string | null): void {
   uploadTargetReadyBase = base;
   if (!base) return;
   for (const w of [...uploadTargetWaiters]) w(base);
+  if (deferredImports.size) void flushDeferredImports();
 }
 
 /** 等编辑器进程拿到带 rw 票据的远程上传目标(`startUploadTarget` 第一次带票据推成功);超时回 null */
@@ -611,31 +618,41 @@ export function whenUploadTargetReady(timeoutMs = 30_000): Promise<string | null
   });
 }
 
-type ExistingMedia = { name?: string; hash?: string; tiers?: { original?: string; small?: string } | null };
+type ExistingMedia = { id?: string; name?: string; hash?: string; pending?: boolean; tiers?: { original?: string; small?: string } | null };
+
+/** 没法按哈希交给上传队列的一条素材(没有合法哈希):调用方据此提示用户;`pending` 是还在导入、入库后由导入那一路上传 */
+export interface SkippedMedia { id?: string; name: string; pending?: boolean }
 
 /**
  * 项目里已有的素材 → 按哈希入队的请求体:一个素材一项,视频两档(`tiers.small`、`tiers.original`),
- * 图片、音频只有素材原尺寸一档;没有哈希的(迁移期老素材、还在入库的)不算。同一素材原尺寸只列一次。
+ * 图片、音频只有素材原尺寸一档;同一素材原尺寸只列一次。没有哈希的(迁移期老素材、还在入库的)进不了队列,
+ * **不许悄悄跳过**:一律出现在 `skipped` 里(调用方先补入库,补不上的列给用户)。
  */
-export function existingMediaItems(media: readonly ExistingMedia[]): { name: string; original: string; small?: string }[] {
+export function existingMediaItems(media: readonly ExistingMedia[]): { items: { name: string; original: string; small?: string }[]; skipped: SkippedMedia[] } {
   const seen = new Set<string>();
-  const out: { name: string; original: string; small?: string }[] = [];
+  const items: { name: string; original: string; small?: string }[] = [];
+  const skipped: SkippedMedia[] = [];
   for (const m of media) {
     const original = String(m?.tiers?.original || m?.hash || "").toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(original) || seen.has(original)) continue;
+    if (!/^[0-9a-f]{64}$/.test(original)) {
+      skipped.push({ ...(m?.id ? { id: m.id } : {}), name: String(m?.name ?? ""), ...(m?.pending ? { pending: true } : {}) });
+      continue;
+    }
+    if (seen.has(original)) continue;
     seen.add(original);
     const small = String(m?.tiers?.small || "").toLowerCase();
-    out.push({ name: String(m?.name ?? ""), original, ...(/^[0-9a-f]{64}$/.test(small) && small !== original ? { small } : {}) });
+    items.push({ name: String(m?.name ?? ""), original, ...(/^[0-9a-f]{64}$/.test(small) && small !== original ? { small } : {}) });
   }
-  return out;
+  return { items, skipped };
 }
 
-export interface EnqueueExistingResult { queued: string[]; missing: string[]; local?: boolean }
+export interface EnqueueExistingResult { queued: string[]; missing: string[]; local?: boolean; skipped?: SkippedMedia[] }
 
 /**
  * 开启多用户协作「放云端」之后调:等编辑器进程拿到远程上传目标与 rw 票据,再把项目里已有的素材按哈希交给
  * 上传队列(`deps.post` 发 `POST /api/media/upload-queue/enqueue`,只收本地内容库里有的,缺的回 `missing`)。
  * 之后照 C6.6 队列规则逐个素材、先小后大地传。没有本机编辑器(在线浏览器模式)、等不到目标时回 null。
+ * 没有哈希、进不了队列的素材放在结果的 `skipped` 里(调用方应先 `ingestUnhashedMedia` 补入库再调这里)。
  * `post` 由调用方给(`collab.ts` 按编译期的 `ONLINE` 给,在线构建里连同接口地址一起被剪掉)。
  */
 export async function enqueueExistingMedia(
@@ -643,10 +660,136 @@ export async function enqueueExistingMedia(
   deps: { post: ((body: unknown) => Promise<EnqueueExistingResult | null>) | null; timeoutMs?: number },
 ): Promise<EnqueueExistingResult | null> {
   if (!deps.post) return null;
-  const items = existingMediaItems(media);
-  if (!items.length) return { queued: [], missing: [] };
+  const { items, skipped } = existingMediaItems(media);
+  if (!items.length) return { queued: [], missing: [], skipped };
   if (!(await whenUploadTargetReady(deps.timeoutMs ?? 30_000))) return null;
-  return deps.post({ items });
+  const r = await deps.post({ items });
+  return r ? { ...r, skipped } : null;
+}
+
+/** 已经列给用户看过的「补不上」素材 id:同一页面会话里不反复弹 */
+const backfillNotified = new Set<string>();
+
+/**
+ * 打开项目后在后台补入库(`io/mediaUpload.ts` 的 `ingestUnhashedMedia`)做完之后调:项目这时已经「放云端」
+ * (编辑器进程有带 rw 票据的远程上传目标)的,把这次补上哈希的素材按哈希交给上传队列 —— 图片、音频的入库
+ * 不会自己进队列(`server/media-tiers.mjs` 的 prepareImport 只管视频),不交就只在本机,别的成员拿不到;
+ * 视频重复交无妨(队列按素材去重)。补不上的、本机内容库里没有的,照开启放云端时的做法用 `deps.notify` 列给用户
+ * (同一条素材一个会话里只列一次)。
+ * 不是共享项目(`deps.shared` 为假)、或等不到上传目标(本机就是主机、没有本机编辑器)时什么都不做,回 null。
+ */
+export async function queueBackfilledMedia(
+  r: { ingested: readonly string[]; failed: readonly { id?: string; name: string }[] },
+  media: readonly ExistingMedia[],
+  deps: {
+    post: ((body: unknown) => Promise<EnqueueExistingResult | null>) | null;
+    shared: () => boolean;
+    notify?: (names: string[]) => void;
+    timeoutMs?: number;
+  },
+): Promise<EnqueueExistingResult | null> {
+  if (!deps.post || !deps.shared()) return null;
+  if (!r.ingested.length && !r.failed.some((f) => !f.id || !backfillNotified.has(f.id))) return null;
+  if (!(await whenUploadTargetReady(deps.timeoutMs ?? 30_000))) return null;
+  const ids = new Set(r.ingested);
+  const picked = media.filter((m) => m?.id && ids.has(m.id));
+  let res: EnqueueExistingResult | null = { queued: [], missing: [] };
+  if (picked.length) res = await enqueueExistingMedia(picked, deps);
+  const nameOfHash = new Map<string, { id?: string; name: string }>();
+  for (const m of picked) {
+    const h = String(m.tiers?.original || m.hash || "").toLowerCase();
+    if (h && !nameOfHash.has(h)) nameOfHash.set(h, { id: m.id, name: String(m.name ?? "") });
+  }
+  const list = [
+    ...r.failed,
+    ...(res?.missing ?? []).map((h) => nameOfHash.get(String(h).toLowerCase()) ?? { name: String(h) }),
+  ].filter((f) => !f.id || !backfillNotified.has(f.id));
+  for (const f of list) if (f.id) backfillNotified.add(f.id);
+  if (list.length) deps.notify?.(list.map((f) => f.name));
+  return res;
+}
+
+/* ---------------- 上传目标就绪之前导入的素材:记下,就绪后补交 ---------------- */
+
+/*
+ * 打开共享项目后,上传目标是异步设上的(`connectSharedAssets` 先问服务地址登记,再签 rw 素材票据、推给编辑器进程)。
+ * 这之前导入的素材,编辑器进程那一侧(`server/media-tiers.mjs` 的 prepareImport)入队时看到的是本机目标,当空操作丢掉,
+ * 别的成员拿不到。页面一侧在导入完成时(`io/mediaUpload.ts` 的 applyUploadedMedia → hooks.afterImport)记下,
+ * 上传目标就绪(`setUploadTargetReady`)后按哈希补交给上传队列,走开启放云端时同一个入队口子(`enqueueExistingMedia`)。
+ * 上传目标已经就绪时导入的也当场交一次:服务端的入队与导入请求是并行的,赶不赶得上说不准;重复交无妨,队列按素材去重。
+ */
+
+/** 素材原尺寸哈希 → 那条素材(同一素材只记一次) */
+const deferredImports = new Map<string, ExistingMedia>();
+/** 最近一次记下时给的入队口子与提示(补交时用) */
+let deferredDeps: ImportQueueDeps | null = null;
+/** 当前共享项目本机就是主机(`startUploadTarget(link, null)`) */
+let uploadTargetLocal = false;
+let deferredFlushing = false;
+
+export interface ImportQueueDeps {
+  post: ((body: unknown) => Promise<EnqueueExistingResult | null>) | null;
+  shared: () => boolean;
+  notify?: (names: string[]) => void;
+}
+
+function importHashOf(m: ExistingMedia): string {
+  return String(m?.tiers?.original || m?.hash || "").toLowerCase();
+}
+
+async function handImported(list: ExistingMedia[], deps: ImportQueueDeps): Promise<EnqueueExistingResult | null> {
+  const r = deps.post ? await enqueueExistingMedia(list, { post: deps.post, timeoutMs: 0 }) : null;
+  if (!r) return null;
+  const nameOf = new Map(list.map((m) => [importHashOf(m), String(m.name ?? "")]));
+  const names = (r.missing ?? []).map((h) => nameOf.get(String(h).toLowerCase()) ?? String(h));
+  if (names.length) deps.notify?.(names);
+  return r;
+}
+
+async function flushDeferredImports(): Promise<void> {
+  const deps = deferredDeps;
+  if (deferredFlushing || !deps || !uploadTargetReadyBase) return;
+  if (!deps.post || !deps.shared()) { deferredImports.clear(); return; }
+  deferredFlushing = true;
+  const list = [...deferredImports.values()];
+  deferredImports.clear();
+  let r: EnqueueExistingResult | null = null;
+  try { r = await handImported(list, deps); } catch { r = null; }
+  finally { deferredFlushing = false; }
+  // 没交成(编辑器进程没回、期间上传目标又掉了):留着,下一次就绪(续签再推一次)再交;期间已经离开了共享项目的不留
+  if (!r && deps.shared() && !uploadTargetLocal) {
+    for (const m of list) { const h = importHashOf(m); if (!deferredImports.has(h)) deferredImports.set(h, m); }
+  }
+  if (deferredImports.size && uploadTargetReadyBase && r) void flushDeferredImports();
+}
+
+/**
+ * 一条素材导入完成之后调(`sync/backfillUpload.ts` 挂在 hooks.afterImport 上)。共享项目里:上传目标已就绪的当场按哈希
+ * 交给上传队列;还没就绪的先记下,就绪后补交;本机内容库里没有的(队列回 missing)用 `deps.notify` 列给用户。
+ * 不是共享项目、没有入队的口子(在线构建)、本机就是主机、没有合法哈希时什么都不做,回 null。
+ */
+export async function queueImportedMedia(media: ExistingMedia, deps: ImportQueueDeps): Promise<EnqueueExistingResult | null> {
+  if (!deps.post || !deps.shared() || uploadTargetLocal) return null;
+  const hash = importHashOf(media);
+  if (!/^[0-9a-f]{64}$/.test(hash)) return null;
+  deferredDeps = deps;
+  if (!uploadTargetReadyBase || deferredFlushing) {
+    deferredImports.set(hash, media);
+    return null;
+  }
+  const r = await handImported([media], deps);
+  if (!r && deps.shared() && !uploadTargetLocal) deferredImports.set(hash, media);
+  return r;
+}
+
+/** 单测用:还记着、等上传目标就绪的素材原尺寸哈希 */
+export function deferredImportsForTest(): string[] {
+  return [...deferredImports.keys()];
+}
+
+/** 单测用:编辑器进程已经拿到的上传目标基址 */
+export function uploadTargetReadyForTest(): string | null {
+  return uploadTargetReadyBase;
 }
 
 /** 探针与单测的观察口 */
@@ -656,6 +799,11 @@ export function assetTiersDebug() {
 
 /** 单测用 */
 export function resetAssetTiersForTest(): void {
+  backfillNotified.clear();
+  deferredImports.clear();
+  deferredDeps = null;
+  uploadTargetLocal = false;
+  deferredFlushing = false;
   uploadTargetReadyBase = null;
   uploadTargetWaiters.clear();
   remote = null;

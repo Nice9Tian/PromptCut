@@ -5,6 +5,10 @@ export interface AuthInfo {
   detail?: string;
   fixHint?: string;
   loginCommand?: string[];
+  status?: 'invalid' | 'unknown';
+  reason?: string;
+  authGeneration?: string;
+  persistenceWarning?: string;
 }
 
 export interface ProviderInfo {
@@ -138,7 +142,7 @@ export type RunEvent =
    * `retryPrompt` 是续跑时要发的那句话,**由驱动把中断原因拼进去**,前端原样发出去。
    * 这样模型不用自己开口问「刚才怎么了」,上下文直接摆在它面前。
    */
-  | { type: "error"; message: string; retryable?: boolean; retryPrompt?: string };
+  | { type: "error"; message: string; retryable?: boolean; retryPrompt?: string; authProvider?: 'codex'; authReason?: string; authGeneration?: string };
 
 export interface ChatAttachment {
   url: string;
@@ -223,7 +227,7 @@ export interface ChatMessage {
    */
   inbound?: InboundAgentMessage[];
   /**
-   * 分工模式下,这条回复是哪个角色产出的(角色卡的 id,如 director)。
+   * 这条回复是哪个角色产出的(角色的 id,如 director;旧记录里分工模式的角色回复带它)。
    * 界面用它取头像和角色名;普通对话没有这个字段,退回中性的「AI 助手」。
    */
   roleId?: string;

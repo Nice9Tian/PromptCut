@@ -1,4 +1,4 @@
-// C10 其余（在线浏览器模式 L1 后台舞台 / L2 页面内快照库）的可行性探针。报告：docs/reports/AGENT-c10-probe.md。
+// C10 其余（在线浏览器模式 L1 后台舞台 / L2 页面内快照库）的可行性探针。报告：docs/archive/agent-reports/AGENT-c10-probe.md。
 //
 // 四组实验，全部用 puppeteer 自带的 Chrome，自起静态服务（端口段 --port-base 起 10 个，缺省 5420～5429）：
 //
@@ -36,6 +36,7 @@
 //   算安全上下文（线上是 HTTPS）。
 // - 每个 P1 用例都新起一个浏览器，免得「这个源是不是 origin-keyed」的判定在 BrowsingInstance 里沿用（见 oac-probe.mjs）。
 // - 每个用例记系统 CPU 占用（os.cpus() 在测量窗口内的差值）；每轮开头记一次 Win32_Processor LoadPercentage。
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,6 +45,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg, serve, closeAll, sleep } from './probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -93,7 +95,7 @@ async function launch(head, extra = []) {
     ignoreDefaultArgs: ignore,
     defaultViewport: null,
     protocolTimeout: 300000,
-    args: [...(GPU ? [] : ['--disable-gpu']), '--window-size=1100,820', '--window-position=40,40', `--host-resolver-rules=MAP *.pc.test 127.0.0.1`, `--unsafely-treat-insecure-origin-as-secure=${secure}`, ...extra],
+    args: [...PROBE_CHROME_ARGS, ...(GPU ? [] : ['--disable-gpu']), '--window-size=1100,820', '--window-position=40,40', `--host-resolver-rules=MAP *.pc.test 127.0.0.1`, `--unsafely-treat-insecure-origin-as-secure=${secure}`, ...extra],
   });
 }
 
@@ -371,7 +373,7 @@ async function runP1() {
 
 async function runCalibrate() {
   // --ids：每个粒子带 id（p0、p1…），量整场景 id 改名的代价；sceneHash 是最后一帧整场景 html 的 FNV-1a，
-  // 改动前后对照输出是否逐字节相同（docs/reports/AGENT-snapshot-ids.md）
+  // 改动前后对照输出是否逐字节相同（docs/archive/agent-reports/AGENT-snapshot-ids.md）
   const IDS = process.argv.includes('--ids');
   const SNAP = await buildSnap();
   const servers = await startStatic(SNAP);

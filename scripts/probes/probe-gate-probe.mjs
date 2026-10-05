@@ -34,12 +34,14 @@
  * 量不到主线程停顿 —— rAF 被垂直同步钉在 16.7 ms，主线程被占住 10 ms 也看不出来。
  * 所以这里照做，两个参数都带上；带了之后 rAF 的间隔才反映真实的主线程可用度。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 import { stagePortsOf } from '../../server/stage-ports.mjs';
 
@@ -159,7 +161,7 @@ const BUILD_PROJECT = async ({ want, pinned }) => {
 
 const browser = await puppeteer.launch({
   headless: true,
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     /*
      * R2 的报告:这台机器不带这两个就量不到主线程停顿 —— rAF 被垂直同步钉在 16.7 ms,

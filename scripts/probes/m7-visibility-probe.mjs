@@ -1,7 +1,7 @@
 /**
  * M7 契约第 8 节 P5(`docs/plan/m7-contract.md`):真 Chrome 里页面隐藏、窗口最小化、页面被冻结(frozen)时,
  * 续约(`task.progress`,队列 `RENEW_INTERVAL_MS` = 10 s、`LEASE_MS` = 30 s)与会话(文档服务 30 s 一轮 ping / pong)
- * 会怎样;放回(`task.release`)能多快到服务端。报告:docs/reports/AGENT-m7-probe.md。
+ * 会怎样;放回(`task.release`)能多快到服务端。报告:docs/archive/agent-reports/AGENT-m7-probe.md。
  *
  *   node scripts/probes/m7-visibility-probe.mjs [--chrome installed|bundled] [--port 5717]
  *        [--scenarios tab,minimize,freeze30,freeze90] [--tab-min 6.5] [--min-min 2] [--ping-ms 5000] [--occlusion off|on]
@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { acceptUpgrade } from '../../server/docservice/ws.mjs';
 import { flagArg, sleep } from './probe-connect.mjs';
 
@@ -91,7 +92,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'm7-vis-profile-'));
 const defaults = await puppeteer.defaultArgs({ headless: false });
 const ignore = ['--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', ...defaults.filter((a) => a.startsWith('--disable-features='))];
 const browser = await puppeteer.launch({ headless: false, executablePath: exe ?? undefined, userDataDir: profile, ignoreDefaultArgs: ignore, defaultViewport: null, protocolTimeout: 900000,
-  args: ['--window-size=900,700', '--window-position=60,60', '--no-first-run', '--no-default-browser-check', ...(OCCLUSION ? [] : ['--disable-backgrounding-occluded-windows'])] });
+  args: [...PROBE_CHROME_ARGS, '--window-size=900,700', '--window-position=60,60', '--no-first-run', '--no-default-browser-check', ...(OCCLUSION ? [] : ['--disable-backgrounding-occluded-windows'])] });
 const version = await browser.version();
 log(`chrome ${version} (${exe ?? 'puppeteer bundled'}) profile ${profile}`);
 const page = await browser.newPage();

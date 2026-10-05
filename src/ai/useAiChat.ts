@@ -1,4 +1,5 @@
 import { recordTrace } from './debug';
+import { refreshProviders, reportAuthFailure, subscribeProviders } from './providerState';
 import { appendTextPart, applyDeltas, isDeltaEvent } from './streamBatch';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob, KeyKind } from "./types";
@@ -6,13 +7,10 @@ import { parseSseChunks } from "./sse";
 import { readChoice, compatToSend, normalizeModel, modelsFor, pairModelEffort, sanitizeEffort } from "./modelOptions";
 import { getScript } from "./script";
 import { useChatMessages, getChatStore, MAIN_TAB } from "./liveChat";
-import * as agentBus from "./agentBus";
-import { WORKFLOW_ROLES, ALL_ROLES } from "./roles";
-import { isTeamMode } from "./teamMode";
-import { shouldOrchestrate } from "./triage";
-import { buildPlan, runOrchestration, type OrchestrationState } from "./orchestrate";
-import { runRoleTask } from "./runRoleTask";
+import { WORKFLOW_ROLES } from "./roles";
 import { getState } from "../store/project";
+import { getTabCreativity, getTabProvider } from "./agentTabs";
+import { projectCreativity } from "../kernel/creativity.mjs";
 import { mediaCardUrl } from "./mediaRef";
 import { buildHandoff } from "./handoff";
 import { getQueueState, remove as removeQueued } from "./chatQueue";
@@ -92,28 +90,22 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   const [loginState, setLoginState] = useState<Partial<Record<AiProvider, LoginState>>>({});
   const [config, setConfig] = useState<PublicAiConfig | null>(null);
 
-  /** 分工模式这一轮的编排状态。界面(OrchestrationBlock)直接读它。 */
-  const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   /*
    * 一轮的生命周期,给输入队列用(见 chatQueue.ts、下面的 pumpQueue):
    * - sendSeqRef:每次 abort()(包括 send 开头那一次)加一。一轮落定时序号没变,
    *   才说明它既没被用户停掉、也没被新的一次发送顶掉;
-   * - busyRef:send 开始到这一轮落定之间为 true。和 streaming 不同,它是同步读的,
-   *   分工模式过入口闸那几秒也算在内;
+   * - busyRef:send 开始到这一轮落定之间为 true。和 streaming 不同,它是同步读的;
    * - autoContinueTimerRef:出错自动续跑已经排上、还没发出去的那一次;
-   * - orchEpochRef:编排状态的「代」。新的一次发送、回退都换代,旧编排晚到的状态更新一律丢掉;
-   *   用户点停止不换代,「已取消」照常显示;
    * - workflowRef:一键配特效正在串行跑,队列等它跑完再发。
    */
   const sendSeqRef = useRef(0);
   const busyRef = useRef(false);
   const autoContinueTimerRef = useRef<number | null>(null);
-  const orchEpochRef = useRef(0);
   const workflowRef = useRef(false);
   const unmountedRef = useRef(false);
   /** 最新一次渲染的 send。落定后发队首、自动续跑都用它:旧闭包里那份的 provider / config 可能已经换了 */
-  const sendRef = useRef<(text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean }) => Promise<boolean>>(async () => false);
+  const sendRef = useRef<(text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean; hops?: number }) => Promise<boolean>>(async () => false);
   // 这一页被关掉(多 Agent 分页关页)时把还在跑的请求掐掉:连接一断服务端就会 abort 那一轮
   useEffect(() => {
     unmountedRef.current = false;
@@ -155,8 +147,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       .then((data) => setConfig(data?.config ?? data))
       .catch(() => {});
 
-    fetch("/api/ai/providers")
-      .then((res) => res.json())
+    refreshProviders()
       .then((data: any) => {
         let list: ProviderInfo[] = [];
         let stt: SttInfo | null = null;
@@ -170,7 +161,11 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         setSttInfo(stt);
 
         const stored = localStorage.getItem("aiProvider") as AiProvider;
-        if (stored && list.some((p) => p.id === stored && p.available)) {
+        // spawn_agent 拉起的子 Agent 沿用父对话的驱动(A3):这一页拉起时就定下了,不跟全局的选择走
+        const preset = getTabProvider(tabId) as AiProvider | null;
+        if (preset) {
+          setProvider(preset);
+        } else if (stored && list.some((p) => p.id === stored && p.available)) {
           setProvider(stored);
         } else {
           const firstAvailable = list.find((p) => p.available);
@@ -187,6 +182,11 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
           setError("获取 AI 供应商失败");
         }
       });
+  }, [opts?.mock]);
+
+  useEffect(() => {
+    if (opts?.mock) return;
+    return subscribeProviders(setProviders);
   }, [opts?.mock]);
 
   useEffect(() => {
@@ -223,12 +223,8 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         }
         const finished = jobs.filter(j => j.state !== 'running').map(j => j.id + j.state).join(',');
         if (finished !== lastFinished) {
-          const r = await fetch('/api/ai/providers?refresh=1', { signal: AbortSignal.timeout(30000) });
-          if (r.ok) {
-            const d = await r.json();
-            if (!stopped) setProviders(d.providers || []);
-            lastFinished = finished;
-          }
+          await refreshProviders(true);
+          lastFinished = finished;
         }
       } catch (e) {
         if (!stopped) setSetupJobs(prev => prev.map(j => j.state === 'running' ? { ...j, message: '连接中断，正在重新获取进度…' } : j));
@@ -441,8 +437,6 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   const rewindTo = (userMessageId: string): RewindResult | null => {
     if (!rewindAt(store.get(), userMessageId)) return null;
     if (busyRef.current || autoContinueTimerRef.current !== null || abortControllerRef.current) abort();
-    orchEpochRef.current += 1;
-    setOrchestration(null);
     // abort() 会把还在跑的消息标成已中止,按标完之后的那份再算一遍
     const result = rewindAt(store.get(), userMessageId);
     if (!result) return null;
@@ -458,109 +452,24 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     return result;
   };
 
-  /**
-   * 分工模式：主管拆活 → 划依赖 → 按 DAG 并行派给各角色。
-   *
-   * 走到这里之前已经过了两道筛（teamMode 开着、shouldOrchestrate 说值得），
-   * 所以这里不再判断划不划算。任何一步出错都**退回普通提问**而不是报错终止——
-   * 编排只是加速手段，它失灵不该让用户连话都问不了。
-   */
-  const runTeamMode = async (text: string, epoch: number): Promise<boolean> => {
-    const manager = ALL_ROLES.find((r) => r.id === "manager");
-    if (!manager || !provider) return false;
-
-    /*
-     * 编排状态只认这一代:换过代(新的一次发送、回退)之后,这一轮编排晚到的更新
-     * (比如被打断后推上来的「已取消」)不再写回来 —— 否则会盖掉新一轮的编排块,
-     * 或者挂到回退后另一条用户消息的下面。
-     */
-    const setOrch: typeof setOrchestration = (s) => {
-      if (epoch === orchEpochRef.current) setOrchestration(s);
-    };
-
-    const ac = new AbortController();
-    abortControllerRef.current = ac;
-    setStreaming(true);
-    setOrch({
-      phase: "planning", query: text, plan: "", dag: "", tasks: [], waves: [],
-    });
-
-    try {
-      // 用户那句原话在 send() 里已经先进了消息流(编排块就画在它下面),这里不再追加
-      const plan = await buildPlan(text, { managerPrompt: manager.prompt, provider });
-
-      await runOrchestration(
-        plan,
-        text,
-        async (task, prompt, override) => {
-          // 角色可以被派到别家驱动上跑,记录要跟着**实际用的那家**走,
-          // 不是面板上选中的那家 —— 否则报告里整段对话看着都是同一个模型。
-          const runProvider = override ?? provider;
-          // override 来自角色卡,类型上是任意字符串。记录里只认已知的那几家,认不出就
-          // 退回面板上选中的这家 —— 报告里宁可写得保守,也别塞一个野值进去。
-          const recorded = (["claude", "agy", "codex", "api"] as const).find((p) => p === runProvider) ?? provider;
-          const runtime: MessageRuntime = {
-            provider: recorded, ...readChoice(recorded), toolProtocol: !!config?.toolProtocol,
-          };
-          return runRoleTask({
-            provider: runProvider,
-            prompt,
-            // 分工出去的角色也算这一页的:不带的话它调 declare_scope 会被服务端拒(实测报告里就是这么失败的)
-            conversationId: opts?.getConversationId?.(),
-            roleId: task.roleId,
-            signal: ac.signal,
-            hooks: {
-              createMessage: (roleId) => {
-                const id = `${Date.now()}-${task.id}`;
-                setMessages((prev) => [...prev, {
-                  id, role: "assistant", roleId, text: "",
-                  parts: [], tools: [], statuses: [], pending: true, startedAt: Date.now(), runtime,
-                }]);
-                return id;
-              },
-              updateMessage: (id, patch) =>
-                setMessages((prev) => prev.map((m) => (m.id === id ? patch(m) : m))),
-            },
-          });
-        },
-        setOrch,
-        ac.signal,
-      );
-      return true;
-    } catch (e) {
-      // 编排本身失败（多半是没配 API 直连）：把原因显示出来，然后照常问一遍
-      setOrch((s) =>
-        s ? { ...s, phase: "error", error: e instanceof Error ? e.message : String(e) } : s);
-      return false;
-    } finally {
-      /*
-       * streaming 不在这里放下。成功时由 send 在落定那一刻放下,和发队首在同一个同步段里,
-       * 界面上不会闪出一帧「空闲」让 agentBus 的投递插进来;失败时 send 紧接着走普通流程又会置上;
-       * 被停掉 / 被顶掉的那次,abort() 已经放过了 —— 在这里无条件放下反而会把新一轮的 streaming 关掉。
-       */
-      if (abortControllerRef.current === ac) abortControllerRef.current = null;
-    }
-  };
-
   // 第三个参数叫 sendOpts 不叫 opts:这个函数体里到处在读**外层 hook 的** opts
   // (opts.mock、opts.getConversationId),重名会把它整个遮住,而且遮得悄无声息 ——
   // 类型对不上才炸出来,不然就是运行时读到 undefined。
   //
   // 返回这一轮是否正常落定(没被停掉、没被新的发送顶掉);一键配特效据此决定还跑不跑下一个角色。
   // sendOpts.inbound:这条其实是其他 Agent 发来的消息(AiPanel 自动投递),原样挂到用户消息上给界面认
-  const send = async (text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean; inbound?: ChatMessage["inbound"] }): Promise<boolean> => {
+  // sendOpts.hops:这条是第几层自动投递(别的 Agent 的消息,A3),服务端的公告板据此给连锁封顶
+  const send = async (text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean; inbound?: ChatMessage["inbound"]; hops?: number }): Promise<boolean> => {
     if (!provider) return false;
     // 用户自己发的才重置额度;自动续跑那次不重置,否则「续跑 → 又错 → 再续」能一直转下去
     if (!sendOpts?.auto) autoContinueLeftRef.current = 1;
 
     abort();
-    // 这一次发送的序号和编排的「代」:每个 await 回来都对一下,对不上就是中途被停掉或被顶掉了
+    // 这一次发送的序号:每个 await 回来都对一下,对不上就是中途被停掉或被顶掉了
     const seq = sendSeqRef.current;
-    const epoch = ++orchEpochRef.current;
     busyRef.current = true;
 
-    // 用户那句话**发送的这一瞬间**就进消息流。以前分工模式下要等入口闸(可能打一次模型)
-    // 和主管三步拆解全回来才追加,那几秒到几十秒里界面纹丝不动,用户以为没发出去。
+    // 用户那句话**发送的这一瞬间**就进消息流
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
@@ -569,30 +478,6 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       ...(sendOpts?.inbound?.length ? { inbound: sendOpts.inbound } : {}),
     };
     setMessages((prev) => [...prev, userMsg]);
-
-    // 分工模式：先过便宜的闸，值得才编排；编排失败就落回下面的普通流程。
-    // 闸还在判的时候编排块就先挂上「正在拆解」—— 它画在最后一条用户消息下面,
-    // 用户能看见有东西在转;判定不值得编排就把块撤掉,走普通问答。
-    if (isTeamMode() && !attachments?.length) {
-      setOrchestration({ phase: "planning", query: text, plan: "", dag: "", tasks: [], waves: [] });
-      // 过闸那几秒也算在跑:「■ 停止」要在,这时再交的话要进队列,而不是再发一条把这条顶掉
-      setStreaming(true);
-      const verdict = await shouldOrchestrate(text);
-      if (seq !== sendSeqRef.current) {
-        // 过闸期间被用户停掉:撤掉「正在拆解」的块。被新的发送顶掉就别碰,那一轮有自己的编排状态
-        if (epoch === orchEpochRef.current) setOrchestration(null);
-        return false;
-      }
-      if (verdict.parallel && (await runTeamMode(text, epoch))) {
-        if (seq !== sendSeqRef.current) return false;
-        // 分工这一轮落定:放下 streaming、发队首在同一个同步段里(理由见 runTeamMode 的 finally)
-        setStreaming(false);
-        finishRun();
-        return true;
-      }
-      if (seq !== sendSeqRef.current) return false;
-      if (!verdict.parallel) setOrchestration(null);
-    }
 
     // 发送这一刻就把「这条用什么跑」定下来,而且**发出去的和记下来的是同一份**。
     // 分开各读一次的话,用户在流式过程中换了模型,记录就会和实际跑的对不上。
@@ -750,9 +635,8 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         catch { return sessionIds[provider]; }
       })();
       // 多 Agent:这一页的对话 ID 随请求带上,服务端把它塞给 MCP 进程,工具调用就知道是谁发的;
-      // 其他 Agent 的动态(范围变动、给它的消息)拼在提示词前面 —— 只进模型,不进屏幕上那条用户消息
+      // 其他 Agent 的动态(范围变动、给它的消息)由服务端的公告板拼在提示词前面(A3)—— 只进模型,不进屏幕上那条用户消息
       const agentId = opts?.getConversationId?.();
-      const notes = agentId ? agentBus.consumeNotes(agentId) : "";
       // 换了模型:把这家没见过的那几轮摘成「前情」一起带上(理由见 handoff.ts)。
       // 刚追加的这一问一答不算历史
       const handoff = buildHandoff(
@@ -765,8 +649,9 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider,
-          prompt: [notes, handoff, text].filter(Boolean).join("\n\n"),
+          prompt: [handoff, text].filter(Boolean).join("\n\n"),
           conversationId: agentId,
+          ...(sendOpts?.hops ? { hops: sendOpts.hops } : {}),
           sessionId,
           // 模型 / 推理强度 / 加速档:上面发送那一刻已经读好(choice),用户在面板上
           // 换完下一条立刻生效。哪家支持哪几样由 runner 端翻译,这里只管把选择传过去。
@@ -777,6 +662,10 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
           // 剧本每一轮都带上,由服务端拼进系统提示词 —— 多轮跑下来最容易跑偏,
           // 只在第一条消息里说一次是拉不住的。
           script: getScript(),
+          // 创造力等级:这一页单独设的(null = 跟项目)和项目这一刻的默认等级。服务端的闸门按它们判越级调用,
+          // 项目默认以服务端读到的项目为准,读不到才用这里报的(server/vite-plugin-ai.ts 的 currentProjectCreativity)
+          creativity: getTabCreativity(tabId),
+          projectCreativity: projectCreativity(getState().project),
         }),
         signal: ac.signal,
       });
@@ -864,6 +753,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
               })
             );
           } else if (ev.type === "error" && ev.message) {
+            reportAuthFailure(ev);
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === asstMsgId ? { ...m, error: ev.message, pending: false, finishedAt: Date.now(), outcome: "error" } : m
@@ -881,7 +771,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
              * 一次不成就停在那儿,把错误留给用户看 —— 他知道的比我们多。
              * 用户自己发新消息时额度重置(见 send 开头)。
              */
-            if (ev.retryable && ev.retryPrompt && autoContinueLeftRef.current > 0) {
+            if (!ev.authReason && ev.retryable && ev.retryPrompt && autoContinueLeftRef.current > 0) {
               autoContinueLeftRef.current -= 1;
               const prompt = ev.retryPrompt;
               // 记下这次排着的续跑:发出去之前这一页仍算忙,输入队列不能抢在它前面(见 pumpQueue);
@@ -970,13 +860,12 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     provider,
     setProvider: handleProviderChange,
     sessionIds,
-    orchestration,
     runWorkflow,
     workflowRoles: WORKFLOW_ROLES,
     streaming,
     send,
     abort,
-    /** 此刻算不算在跑(同步读,含分工模式过闸、排着的自动续跑);Composer 交上来的话据此决定直接发还是进队列 */
+    /** 此刻算不算在跑(同步读,含排着的自动续跑);Composer 交上来的话据此决定直接发还是进队列 */
     isBusy,
     /** 空闲且没暂停时发出输入队列的队首(队列「继续」用;一轮落定时内部自己会调) */
     pumpQueue,

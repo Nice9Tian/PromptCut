@@ -25,6 +25,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { PNG } from 'pngjs';
 import { flagArg, devOrigin } from './probe-connect.mjs';
 
@@ -75,7 +76,7 @@ const grid = (n, cols, over = () => ({})) => Array.from({ length: n }, (_, i) =>
 
 const browser = await puppeteer.launch({
   headless: true, protocolTimeout: 240000,
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     '--disable-gpu-vsync', '--disable-frame-rate-limit'],
 });

@@ -33,6 +33,13 @@
  * - `hidden`(页面隐藏、父页 rAF 断档):不等当前帧,中止它(`signal`)并立即放回;迟到的结果丢掉。
  * 让路之后认不认领由宿主的 `isIdle()` 定(不在播放、不在拖动、离上一次交互过了安静期……)。
  *
+ * # 报忙(M7 D2 补充〔裁〕,`claude/queue-maint`)
+ *
+ * 队列锁闲置超 30 s 会被切分方接手(D2)。页面锁着一张卡、手里却在做别的(生成别的卡的快照,或后台舞台在测量、补跑)时,
+ * 那张卡没有产出,但页面没走。`node.welcome` 带 `activeIntervalMs`(新队列)时,节点在这种时候按这个间隔发
+ * `node.active { busy }`(`busy`:手里有认领为 `'bake'`,否则问宿主的 `busy()`,如 `'stage'`);队列据此不把它锁着的卡判闲置。
+ * 闲着、页面隐藏、只是在播放或拖动而后台没活时不发:这些时候锁照旧按产出算闲置。旧队列不带 `activeIntervalMs`,一条也不发。
+ *
  * # 丢认领
  *
  * `task.lease-lost`、`node.welcome.lost`:中止这次生成快照、丢弃结果;已推的块不回收(按内容寻址,下一个认领者去重用得上)。
@@ -153,6 +160,11 @@ export interface BrowserNodeDeps {
   onFingerprint?: (envFingerprint: string) => void;
   /** 报到被文档服务拒了(`forbidden`、`not-chromium`、`bad-message`……):宿主结束会话,不重连 */
   onRefused?: (reason: string) => void;
+  /**
+   * 手里没有认领时,页面此刻在忙什么(报忙用,M7 D2 补充):后台舞台在测量、补跑回 `'stage'` 之类的短串;闲着、页面隐藏、
+   * 只是在播放或拖动而后台没活回 null。不给就只在手里有认领时报忙
+   */
+  busy?: () => string | null;
   random?: () => number;
   constants?: Record<string, unknown>;
 }
@@ -166,6 +178,8 @@ export interface BrowserNodeDebug {
   holding: { id: string; token: number; done: number; of: number; projectRev: number | null }[];
   counters: {
     claims: number; completed: number; dedup: number; failed: number; lost: number; bakedFrames: number;
+    /** 发了几条 `node.active`(报忙,M7 D2 补充) */
+    active: number;
     released: Record<string, number>;
     /** 被节点侧过滤挡掉的任务,按「规则号:原因」(每个任务 id 只记一次) */
     blocked: Record<string, number>;
@@ -270,12 +284,15 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
   let refused: string | null = null;
   let run: Run | null = null;
   let lastError: string | null = null;
+  /** 报忙的间隔(`node.welcome.activeIntervalMs`);旧队列不带,为 null,一条也不发 */
+  let activeEvery: number | null = null;
+  let lastActiveAt = -Infinity;
   /** 已做的帧:任务 id → 帧;按插入顺序淘汰 */
   const retained = new Map<string, Map<number, FrameRecord>>();
   const blockedSeen = new Set<string>();
   const frameMs: number[] = [];
   const counters = {
-    claims: 0, completed: 0, dedup: 0, failed: 0, lost: 0, bakedFrames: 0,
+    claims: 0, completed: 0, dedup: 0, failed: 0, lost: 0, bakedFrames: 0, active: 0,
     released: {} as Record<string, number>,
     blocked: {} as Record<string, number>,
   };
@@ -466,6 +483,28 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     },
   });
 
+  /** 此刻忙什么(报忙用):手里有认领就是在生成快照;否则问宿主(后台舞台的更急的活) */
+  const busyNow = (): string | null => {
+    const r = run;
+    if (r && !r.ended) return "bake";
+    try {
+      const b = deps.busy?.() ?? null;
+      return typeof b === "string" && b ? b.slice(0, 32) : null;
+    } catch { return null; }
+  };
+
+  /** 报忙(M7 D2 补充):新队列、报到过、忙着、离上一次过了间隔才发 */
+  const reportActive = () => {
+    if (activeEvery === null || !welcomed || stopped || refused) return;
+    const now = deps.now();
+    if (now - lastActiveAt < activeEvery) return;
+    const busy = busyNow();
+    if (!busy) return;
+    if (send({ type: "node.active", busy }) === false) return;
+    lastActiveAt = now;
+    counters.active++;
+  };
+
   /** 被节点侧过滤挡掉的任务按原因记一次(诊断;服务端与节点侧都挡,页面不另判) */
   const noteBlocked = () => {
     for (const task of session.known()) {
@@ -489,6 +528,10 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
       if (stopped || !message || typeof message !== "object") return;
       if (message.type === "node.welcome") {
         welcomed = true;
+        // 新队列认 node.active(M7 D2 补充):记下间隔;每次报到从头算,忙着就在下一拍报
+        const every = Number(message.activeIntervalMs);
+        activeEvery = Number.isFinite(every) && every > 0 ? every : null;
+        lastActiveAt = -Infinity;
         const fp = typeof message.envFingerprint === "string" && message.envFingerprint ? message.envFingerprint : null;
         if (fp && fp !== nodeDesc.envFingerprint) {
           nodeDesc.envFingerprint = fp;
@@ -511,6 +554,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
         abortAndRelease(r, `yield-${r.yieldCause}`);
       }
       session.tick();
+      reportActive();
     },
     yieldFor(cause) {
       const r = run;
@@ -558,7 +602,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
         })),
         counters: {
           claims: counters.claims, completed: counters.completed, dedup: counters.dedup, failed: counters.failed, lost: counters.lost,
-          bakedFrames: counters.bakedFrames,
+          bakedFrames: counters.bakedFrames, active: counters.active,
           released: { ...counters.released }, blocked: { ...counters.blocked },
           frameMs: { n: sorted.length, p50: quantile(sorted, 0.5), p95: quantile(sorted, 0.95) },
         },

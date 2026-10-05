@@ -84,8 +84,8 @@ Motion 靠 `Object.hasOwnProperty.call(Element.prototype, 'animate')` 判断浏�
 
 ## 8. 实验服务器别碰真实软件
 
-- 任何 dev server 启动时都会把自己的端口写进全局的 `%TEMP%\promptcut\port.json`(`server/vite-plugin-ai.ts`),没有指定端口的 MCP 客户端会照它去连。
-- 实验用的服务器要把 `TEMP` 指到 scratch 目录再启动,或者用 Vite 的 middlewareMode,不监听端口。
+- 任何 dev server 启动时都会把自己的端口写进全局的 `%TEMP%\promptcut\port.json`(`server/vite-plugin-ai.ts`),没有指定端口的 MCP 客户端会照它去连。设了 `PROMPTCUT_NO_PORT_FILE=1` 的不写:测试与探针的公共入口(`scripts/lib/no-user-dirs.mjs`、`npm test` 的全局准备)都设了它,所以只有桌面版和 `npm run dev` 起的会写。
+- 手动起 dev server 做验证时也带上 `PROMPTCUT_NO_PORT_FILE=1`;要么把 `TEMP` 指到 scratch 目录再启动,或者用 Vite 的 middlewareMode,不监听端口。
 - 用户的真实软件在 5210(`AppData\Local\PromptCut`),实验端口要避开它。
 
 ## 9. SVG url(#id) 序列化形式（探针结论）

@@ -31,7 +31,7 @@ type MenuId = "file" | "edit" | "view" | "help";
 /**
  * `desktopOnly`:在线页面做不成的项,值是悬停说明里的入口名(`onlineUnsupported(入口名)`)。
  * 依据:`product/platforms.md`「在线浏览器模式」只加入、不新建、不存草稿(新建、打开、保存);C10 契约第 10 节置灰清单
- * (配音、语音识别、合并 Skill 结果);其余是桌面壳的命令(打开本机目录、看运行日志、退出),在线页面没有桌面壳。
+ * (配音、语音识别);其余是桌面壳的命令(打开本机目录、看运行日志、退出),在线页面没有桌面壳。
  */
 const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; command?: string; shortcut?: string; separator?: boolean; desktopOnly?: string }> }> = [
   {
@@ -44,6 +44,7 @@ const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; co
       { label: "导出视频", command: "export-video", shortcut: "Ctrl E" },
       { label: "打开导出文件夹", command: "open-export", separator: true, desktopOnly: "打开导出文件夹" },
       { label: "打开数据目录", command: "open-data", desktopOnly: "打开数据目录" },
+      { label: "存储…", command: "open-storage", desktopOnly: "存储" },
       { label: "返回首页", command: "go-home", separator: true },
       { label: "退出", command: "quit", desktopOnly: "退出" },
     ],
@@ -62,8 +63,7 @@ const menus: Array<{ id: MenuId; label: string; items: Array<{ label: string; co
     items: [
       { label: "皮肤…", command: "open-skin" },
       { label: "配音设置…", command: "open-voice", desktopOnly: "配音" },
-      { label: "合并 Skill 结果…", command: "merge-project", separator: true, desktopOnly: "合并 Skill 结果" },
-      { label: "语音识别引擎（库目录）", command: "open-pylibs", desktopOnly: "语音识别" },
+      { label: "语音识别引擎（库目录）", command: "open-pylibs", separator: true, desktopOnly: "语音识别" },
       { label: "语音模型目录", command: "open-models", desktopOnly: "语音识别" },
       { label: "重置 Python 库", command: "reset-pylibs", desktopOnly: "语音识别" },
     ],
@@ -84,7 +84,39 @@ function tauriWindow(): WindowApi | null {
   return t?.window?.getCurrentWindow?.() ?? null;
 }
 
+/**
+ * 「存储…」(`workflow/project.md`「开始」):回到开始页并滚到「存储」一块。
+ *
+ * 照「返回首页」的路走:在编辑器里时把 `go-home` 交给顶栏(`TopBar.tsx`),有没保存的改动由它问一句,
+ * 确认了它发 `pc-go-home`、`Shell` 换到开始页。这里只在它**真的回去了**时留一个待办,开始页挂上时取走、滚过去;
+ * 用户在确认框里点了取消就不留,免得下次回首页莫名其妙滚到底。已经在开始页时没有顶栏接 `go-home`,
+ * 开始页自己听 `STORAGE_EVENT` 滚过去。
+ */
+export const STORAGE_EVENT = "pc-open-storage";
+const STORAGE_PENDING_KEY = "__pcOpenStoragePending";
+
+export function takeStorageRequest(): boolean {
+  const g = globalThis as Record<string, unknown>;
+  const pending = g[STORAGE_PENDING_KEY] === true;
+  g[STORAGE_PENDING_KEY] = false;
+  return pending;
+}
+
+function openStorage() {
+  let wentHome = false;
+  const mark = () => { wentHome = true; };
+  window.addEventListener("pc-go-home", mark);
+  try {
+    window.dispatchEvent(new CustomEvent("pc-titlebar-command", { detail: "go-home" }));
+  } finally {
+    window.removeEventListener("pc-go-home", mark);
+  }
+  if (wentHome) (globalThis as Record<string, unknown>)[STORAGE_PENDING_KEY] = true;
+  else window.dispatchEvent(new Event(STORAGE_EVENT));
+}
+
 function sendCommand(command: string) {
+  if (!ONLINE_BUILD && command === "open-storage") return openStorage();
   const t = (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
   if (!ONLINE_BUILD && ["open-export", "open-data", "open-pylibs", "open-models", "open-logs", "reset-pylibs", "about", "quit"].includes(command)) {
     const invoke = t?.core?.invoke;

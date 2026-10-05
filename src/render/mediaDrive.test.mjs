@@ -1,6 +1,6 @@
 /**
  * mediaDrive 的单测:元素重新加载(或元数据迟到)之后,被驱动的元素要自己回到最新的目标时刻,
- * 不能靠无关的重渲染再调一次 `driveMedia`(`docs/reports/AGENT-tier-reload-seek.md`)。
+ * 不能靠无关的重渲染再调一次 `driveMedia`(`docs/archive/agent-reports/AGENT-tier-reload-seek.md`)。
  * 跑:node --test src/render/mediaDrive.test.mjs
  *
  * 假元素照 HTMLMediaElement 的行为写了三条要紧的:

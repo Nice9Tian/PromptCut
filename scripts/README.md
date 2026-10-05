@@ -32,7 +32,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | `--no-video` | 跳过 ffmpeg 合成(帧照样只有卡片,除非 `--media chrome`) |
 | `PC_EXPORT_TRACE=1` | 每帧把页面时钟和全部动画状态记到 `<out>/trace.json`,排查确定性用 |
 | `PC_EXPORT_VERBOSE=1` | 每帧打印进度 |
-| `PC_CHROME_ARGS="…"` | 追加 Chrome 启动参数(排查用) |
+| `PC_CHROME_ARGS="…"` | 追加 Chrome 启动参数(排查用;只透传,不要用来关 TLS 校验,见「测法」) |
 
 不带 `--no-video` 时用 ffmpeg 合成:
 
@@ -99,6 +99,10 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 ### 导出端到端
 
 `node scripts/export-e2e.mjs --project <project.json> [--frames a-b] [--determinism] [--media-lib]`，用法和坑见文件头。
+
+### 给探针起的 Chrome 加启动参数
+
+`PC_CHROME_ARGS="--flag-a --flag-b"` 只把参数原样透传给探针（以及预渲染）起的 Chrome，不做别的。典型用途是云端 Linux 以 root 运行要 `--no-sandbox`。不要用它关 TLS 校验（如 `--ignore-certificate-errors`）：对远端站点的探针会在证书有问题时照样通过，掩盖真问题；代理重新签发证书的环境按信任代理的 CA 办。
 
 ### 长时间真跑审查环路
 

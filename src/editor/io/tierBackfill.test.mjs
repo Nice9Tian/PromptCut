@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const { actions, getState } = await import(srcUrl("store/project.ts"));
-const { backfillSmallTiers, resetTierBackfillForTest } = await import(srcUrl("editor/io/mediaUpload.ts"));
+const { backfillSmallTiers, resetTierBackfillForTest, startTierBackfill } = await import(srcUrl("editor/io/mediaUpload.ts"));
 
 const H = (c) => c.repeat(64);
 
@@ -70,6 +70,43 @@ test("C66-I2-04 没有本机编辑器(请求失败):什么都不写,下次还会
     await backfillSmallTiers();
     assert.equal(n, 2, "失败的不记成问过");
   } finally {
+    globalThis.fetch = realFetch;
+    resetTierBackfillForTest();
+  }
+});
+
+test("打开项目后在后台补入库:没有哈希、地址为 /api/media/file?path=… 的老配音经 adopt 补上哈希;补不上的同一会话里后台不再试", async () => {
+  resetTierBackfillForTest();
+  actions.newProject("后台补入库");
+  const ok = actions.addMedia({ kind: "audio", name: "voice-ok.mp3", url: `/api/media/file?path=${encodeURIComponent("C:/m/voice-ok.mp3")}` });
+  const gone = actions.addMedia({ kind: "audio", name: "voice-gone.mp3", url: `/api/media/file?path=${encodeURIComponent("C:/m/voice-gone.mp3")}` });
+  const realFetch = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.startsWith("/api/media/adopt")) {
+      const p = new URL(u, "http://x").searchParams.get("path");
+      asked.push(p);
+      if (p.endsWith("voice-ok.mp3")) return Response.json({ ok: true, hash: H("9"), ext: "mp3", name: "voice-ok.mp3", path: "C:/store/x.mp3", url: `/@media/${H("9")}`, bytes: 10 });
+      return new Response("ENOENT", { status: 500 });
+    }
+    return new Response(null, { status: 404 });
+  };
+  const stop = startTierBackfill();
+  try {
+    const get = (id) => getState().project.media.find((m) => m.id === id);
+    const t0 = Date.now();
+    while (!get(ok.id).hash && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(get(ok.id).hash, H("9"));
+    assert.equal(get(ok.id).url, `/@media/${H("9")}`);
+    assert.equal(get(gone.id).hash, undefined);
+    // 补上哈希写回素材表会再触发一轮(1.5 s 后);补不上的那条后台不再去 adopt
+    const goneTries = () => asked.filter((p) => p.endsWith("voice-gone.mp3")).length;
+    const before = goneTries();
+    await new Promise((r) => setTimeout(r, 2200));
+    assert.equal(goneTries(), before, "后台补不上的,同一会话里不反复试");
+  } finally {
+    stop();
     globalThis.fetch = realFetch;
     resetTierBackfillForTest();
   }

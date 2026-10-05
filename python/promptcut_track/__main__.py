@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 # 复用听写那套 JSONL：Windows 控制台的 UTF-8 和换行处理有坑，只想维护一份。
 from promptcut_stt.jsonl import emit, emit_error, emit_log, warn
 
-from . import __version__
+from . import __version__, is_media_url
 from .tracker import MODEL_FILENAME
 
 REQUIREMENTS = "requirements-track.txt"
@@ -222,7 +222,7 @@ def cmd_track(args: argparse.Namespace) -> int:
     if not paths["ffmpeg"]:
         emit_error("找不到 ffmpeg，无法解码视频。")
         return 2
-    if not os.path.isfile(args.video):
+    if not (is_media_url(args.video) or os.path.isfile(args.video)):
         emit_error(f"找不到视频文件：{args.video}")
         return 2
 

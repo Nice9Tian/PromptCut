@@ -17,6 +17,7 @@
  *   `ok` = 没有 fails 且至少一条 check。`--role all` 汇总时各角色的结果放在 `roles.<角色>`，checks 名前加 `<角色>:`。
  *   口令、令牌一律不进结果行。
  */
+import '../../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { createHash, randomBytes } from 'node:crypto';
 
 /* ================================================================== 角色与本轮 id */
@@ -66,7 +67,7 @@ const trimSlash = (s) => String(s).replace(/\/+$/, '');
  * @param {'cloud' | 'lan' | 'local'} place
  *   - cloud：项目在阿里云主实例；`hosted`、`coord` 缺省取 CLOUD；
  *   - lan：项目在 PC 的局域网主机编辑器上（`PROMPTCUT_LAN_HOST=1`）；必给 `lanHost`（`<ip>:<端口>`）与 `coord`；
- *     `cloudHealthz` 是托管端 `/healthz`（判「全程不连阿里云」：前后连接计数不变，同 SP4）；
+ *     `cloudHealthz` 是托管端 `/healthz`（前后总连接数只记录；「全程不连阿里云」按本轮查，见 `judgeCloudUntouched`）；
  *   - local：本机替身（本机临时托管组合）；必给 `hosted`（http://127.0.0.1:<端口>）与 `coord`。
  * @param {{ hosted?: string, coord?: string, lanHost?: string, docPlain?: string, media?: string }} [o]
  * @returns {{ place, hosted: string, ws: string, healthz: string, coord: string, docPlain: string | null, media: string | null, cloudHealthz: string | null }}
@@ -310,6 +311,39 @@ export function judgeEachWorked(workByNode, { min = 1, expectNodes = null, total
   return { ok: nodes.length > 0 && idle.length === 0 && sumOk, nodes: nodes.length, idle, sum, ...(total === null ? {} : { total }) };
 }
 
+/**
+ * E3（C2 / C4）「在线页面恢复同步、重启前最后一次提交可读」。
+ * @param {{ rev: number, digest: string, path?: string, value?: any } | null} lastCommit 页面角色在重启前最后一次提交
+ *   （提交后以 `project.open` 读回的版本与摘要；`path` / `value` 是这次提交写下的字段）
+ * @param {{ sessionsAfter: number, rev: number, seenAfter: { rev: number, digest: string | null }[], valueAt?: any } | null} page
+ *   主机侧副本在重启之后的观察：`sessionsAfter` = 重启之后建成并重读过的新会话数；`rev` = 最后的版本；
+ *   `seenAfter` = 这些新会话里重读、逐版应用见到的各版摘要（不含重启前内存里的）；`valueAt` = 最后内容里 `path` 处的值
+ * @returns {{ resync: { ok, … }, readable: { ok, … } }}
+ *   resync：重启之后以新会话重读过、并追到 rev ≥ lastCommit.rev。
+ *   readable：重启之后见到的 lastCommit.rev 那一版摘要与 lastCommit.digest 相同；重启后又有写入、没见到那一版时，
+ *   退回核对那次提交写下的值还在（`via: 'value'`）。
+ */
+export function judgeLastCommit(lastCommit, page) {
+  if (!lastCommit || !page) {
+    const why = !lastCommit ? '没有重启前最后一次提交' : '没有副本的观察';
+    return { resync: { ok: false, why }, readable: { ok: false, why } };
+  }
+  const resyncOk = page.sessionsAfter >= 1 && page.rev >= lastCommit.rev;
+  const resync = { ok: resyncOk, sessionsAfter: page.sessionsAfter, rev: page.rev, want: lastCommit.rev };
+  const at = (page.seenAfter ?? []).filter((x) => x.rev === lastCommit.rev);
+  let readable;
+  if (!resyncOk) readable = { ok: false, why: '重启后副本没重读或没追到那一版', rev: page.rev, want: lastCommit.rev };
+  else if (at.length) {
+    const match = at.every((x) => x.digest === lastCommit.digest);
+    readable = { ok: match, via: 'digest', rev: lastCommit.rev, digestMatch: match, seen: at.length };
+  } else {
+    const hasValue = lastCommit.path !== undefined && 'value' in lastCommit;
+    const match = hasValue && JSON.stringify(page.valueAt) === JSON.stringify(lastCommit.value);
+    readable = { ok: match, via: 'value', rev: page.rev, want: lastCommit.rev, digestMatch: null, valueMatch: hasValue ? match : null };
+  }
+  return { resync, readable };
+}
+
 /* ================================================================== 旁观节点的时间线 */
 
 /**
@@ -416,4 +450,39 @@ export function argsOf(argv = process.argv.slice(2)) {
     arg: (name, fallback = null) => (argv.includes(name) && argv[argv.indexOf(name) + 1] !== undefined ? argv[argv.indexOf(name) + 1] : fallback),
     flag: (name) => argv.includes(name),
   };
+}
+
+/**
+ * 「放本机全程不连阿里云」（`cloud-untouched`）按本轮查：本轮的项目（名字带本轮编号）在云端托管端查不到，
+ * 本轮的用户（项目成员）就不可能进过云端。以前数云端 `/healthz` 的总连接数，别人进出就误判；总数只留作参考、不判。
+ *
+ * @param {{ status: number, body?: any } | null} lookup  云端 `GET shared/lookup?name=<本轮项目名>` 的结果；连不上给 null
+ * @param {{ projectId?: string | null, name?: string | null }} mine  本轮的项目
+ * @param {{ before?: number | null, after?: number | null }} [connections]  云端 `/healthz` 前后的总连接数（只记录）
+ * @returns {{ ok: boolean, via: 'lookup' | 'unreachable', why?: string, status?: number, connections: object }}
+ *   404：本轮项目不在云端，过；200 且 projectId 是本轮的：不过；200 但 projectId 不同（重名，不是本轮的）：过、写明；
+ *   连不上或别的状态：记 `unreachable` 并放过（同以前「前后有一次读不到就不判」）。
+ */
+export function judgeCloudUntouched(lookup, mine, connections = {}) {
+  const conns = { before: connections.before ?? null, after: connections.after ?? null };
+  if (!mine?.name) return { ok: false, via: 'lookup', why: '没有本轮的项目名', connections: conns };
+  if (!lookup || typeof lookup.status !== 'number') return { ok: true, via: 'unreachable', why: '云端查不了（连不上）', connections: conns };
+  if (lookup.status === 404) return { ok: true, via: 'lookup', status: 404, connections: conns };
+  if (lookup.status === 200) {
+    const id = lookup.body?.projectId ?? null;
+    if (mine.projectId && id && id !== mine.projectId) return { ok: true, via: 'lookup', status: 200, why: `云端有同名项目 ${id}，不是本轮的`, connections: conns };
+    return { ok: false, via: 'lookup', status: 200, why: `本轮的项目出现在云端（${id ?? '没有 projectId'}）`, connections: conns };
+  }
+  return { ok: true, via: 'unreachable', status: lookup.status, why: `云端回 ${lookup.status}`, connections: conns };
+}
+
+/**
+ * e1 真实细任务数的门槛与检查名：每条时间轴 `seconds × fps / segFrames` 段，门槛 `min(cap, 条数 × 每条段数)`；
+ * 检查名按门槛写（`real:tasks>=<门槛>`），不再固定写 50。
+ * @returns {{ need: number, label: string, expected: number }}
+ */
+export function realTasksThreshold({ clips, seconds, fps = 30, segFrames = 60, cap = 50 }) {
+  const expected = clips * seconds * fps / segFrames;
+  const need = Math.ceil(Math.min(cap, expected));
+  return { need, label: `real:tasks>=${need}`, expected };
 }

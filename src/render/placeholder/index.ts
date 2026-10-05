@@ -2,6 +2,7 @@ import { PERF_DEGRADED } from "./placeholderStyle";
 
 export { PlaceholderPlane } from "./placeholderPlane";
 export { PLACEHOLDER_CSS, PERF_DEGRADED } from "./placeholderStyle";
+export { PLACEHOLDER_ONLINE_CSS } from "./placeholderStyle";
 
 /**
  * 同屏最多几个沙漏在转。降级(`PERF_DEGRADED`)时一个都不转;

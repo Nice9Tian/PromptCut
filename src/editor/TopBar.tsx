@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { actions, getState, useStore } from "../store/project";
 import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
-import { PROCP_EXT, isProcpFile, loadProcpFile, packProcp } from "./io/procp";
+import { PROCP_EXT, isProcpFile, loadProcpFile, packMissingMessage, packProcp } from "./io/procp";
+import { exportSkippedMessage } from "./io/exportSkipped";
 import { ExportDialog, type ExportState } from "./ExportDialog";
 import { exportGateNow } from "./media/assetTiers";
 import { awaitingUploaderMessage } from "../render/mediaTier";
@@ -15,7 +16,6 @@ import {
   IconNew,
   IconMore,
   IconPalette,
-  IconImport,
   IconOpen,
   IconRedo,
   IconSave,
@@ -29,7 +29,6 @@ import { AgentBrowserTab } from "./AgentBrowserTab";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import { SkinDialog } from "./SkinDialog";
 import { SkillDialog } from "./SkillDialog";
-import { applyCombine, summarizeCombine } from "./io/combineImport";
 import { isViewOnly } from "./io/viewOnly";
 import { SyncChips } from "./sync/SyncChips";
 import { BackupsDialog } from "./sync/BackupsDialog";
@@ -138,7 +137,6 @@ export function TopBar() {
   const canUndo = useStore(() => actions.canUndo());
   const canRedo = useStore(() => actions.canRedo());
   useSync((v) => v.notice);
-  const mergeInput = useRef<HTMLInputElement>(null);
   const [moreBtnRect, setMoreBtnRect] = useState<DOMRect | null>(null);
 
   /**
@@ -384,7 +382,8 @@ export function TopBar() {
     }
     try {
       await settledOrExplain();
-      const blob = await packProcp();
+      // 没有哈希的老素材先补入库;补完仍进不了包的(文件真的不在了)在最后列给用户,不许悄悄漏掉
+      const { blob, missing } = await packProcp();
       if (target) {
         const writable = await target.createWritable();
         await writable.write(blob);
@@ -398,6 +397,7 @@ export function TopBar() {
         URL.revokeObjectURL(a.href);
         alert(`当前环境不支持选择目录，已保存到浏览器的下载位置：${fileName}`);
       }
+      if (missing.length) alert(packMissingMessage(missing));
     } catch (e) {
       alert(String((e as Error).message));
     }
@@ -441,7 +441,7 @@ export function TopBar() {
     });
 
     try {
-      const { outDir, id, written } = await exportVideo({
+      const { outDir, id, written, skippedMedia } = await exportVideo({
         // 在线浏览器模式(c10a 第 11.1 节)边编边写进这个落点,回 written: true;桌面那一路不看它
         target,
         onStart: (jobId) => {
@@ -464,7 +464,9 @@ export function TopBar() {
           throw error;
         }
       }
-      setExportState((s) => (s ? { ...s, phase: "done", outDir, done: s.total || 1, total: s.total || 1 } : s));
+      // 因素材缺失跳过的片段:完成的对话框里列出来(不静默)
+      const skippedNote = skippedMedia?.length ? exportSkippedMessage(skippedMedia) : "";
+      setExportState((s) => (s ? { ...s, phase: "done", outDir, done: s.total || 1, total: s.total || 1, ...(skippedNote ? { message: skippedNote } : {}) } : s));
     } catch (e) {
       const err = e as Error & { cancelled?: boolean };
       setExportState((s) =>
@@ -514,29 +516,6 @@ export function TopBar() {
     window.dispatchEvent(new Event("pc-go-home"));
   };
 
-  /**
-   * 把一份 .proc(通常是 Skill 的结果)三方合并进当前项目。
-   *
-   * 这个入口**没有基线**(手头只有一个文件,不知道两边是从哪儿分岔的),合并退化成
-   * 「把对方多出来的加进来」:自己的一张卡都不动,同一个 id 上内容对不上就记冲突、保留自己的。
-   * 从 Skill 对话框里合并会带上启动时的真快照,那时才分得清「谁改的」和「谁删的」。
-   *
-   * (曾经这里是拿当前项目当基线的 —— 那样「我有、对方没有」的每张卡都被判成对方删掉的,
-   * 挑一份不相干的 .proc 会把整个项目清空替换。见 io/combineImport.ts。)
-   */
-  const mergeFromFile = ONLINE_BUILD ? async (_file: File) => {} : async (file: File) => {
-    try {
-      const report = applyCombine(await file.text(), null);
-      alert(`已把「${file.name}」合并到当前项目(记得保存):
-${summarizeCombine(report)}
-
-没有基线快照,所以只做了「加进来」:你原有的卡一张都没删。
-两边同一张卡改得不一样时保留的是你的,上面会列成冲突。`);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "合并失败");
-    }
-  };
-
   // 标题栏菜单和顶栏里的按钮共用同一套动作，避免维护两份文件/导出逻辑。
   // WindowTitleBar 只负责呈现菜单，通过这个事件把选择交回编辑器。
   useEffect(() => {
@@ -553,7 +532,6 @@ ${summarizeCombine(report)}
         case "redo": actions.redo(); break;
         case "open-skin": setSkinOpen(true); break;
         case "open-voice": if (!ONLINE_BUILD) openVoiceSettings(); break;
-        case "merge-project": if (!ONLINE_BUILD) mergeInput.current?.click(); break;
         case "shortcuts": alert("空格 播放/暂停\nCtrl/Cmd + Z 撤销\nCtrl/Cmd + Shift + Z 重做\nCtrl/Cmd + Y 重做\nDelete 删除选中片段"); break;
         case "about": alert("PromptCut\nAI 视频编辑器"); break;
       }
@@ -620,9 +598,8 @@ ${summarizeCombine(report)}
 
       {/*
         B · 模式与项目设置。
-        「传统式 / 对话式 / SKILL」是一个整体的三选一控件(ModeSwitch),不是下拉框 ——
-        三个模式互斥,滑块在哪一格就是哪一格,一眼看得出还有哪两个可以去;下拉框收起来
-        只看得见当前值。SKILL 也不该混进一个叫「布局」的下拉里,它根本不是布局。
+        「传统式 / SKILL」是一个整体的二选一控件(ModeSwitch),不是下拉框 ——
+        两种工作方式互斥,滑块在哪一格就是哪一格;下拉框收起来只看得见当前值。
         皮肤仍然只住在「⋯」里。
       */}
       {tier !== "narrow" && (
@@ -669,23 +646,6 @@ ${summarizeCombine(report)}
             <IconPalette />
             <span className="pc-btn-label">皮肤…</span>
           </button>
-          {/* Skill 模式已经挪到条上的三选一控件里了(ModeSwitch),这里不再重复 */}
-          <button
-            type="button"
-            className="pc-btn"
-            style={{ width: "100%", justifyContent: "flex-start" }}
-            data-pc="menu-merge-skill"
-            // 在线页面:合并要把 .proc 里带的卡装进本机卡片目录(编辑器进程),在线做不成(C10 契约第 10 节〔裁〕),置灰
-            disabled={ONLINE_BUILD}
-            title={ONLINE_BUILD ? ONLINE_OFF("合并 Skill 结果") : "挑一份 .proc,把它的改动三方合并进当前项目"}
-            onClick={() => {
-              setMenuOpen(false);
-              if (!ONLINE_BUILD) mergeInput.current?.click();
-            }}
-          >
-            <IconImport />
-            <span className="pc-btn-label">合并 Skill 结果…</span>
-          </button>
           {/* 模式开关只在窄档收进来,宽档它还在条上;项目设置已经住进「项目」菜单 */}
           {tier === "narrow" && (
             <div className="pc-more-menu-row">
@@ -731,6 +691,7 @@ ${summarizeCombine(report)}
             type="button"
             role="menuitem"
             className="pc-proj-item"
+            data-pc="menu-pack"
             disabled={viewOnly || ONLINE_BUILD}
             title={ONLINE_BUILD ? ONLINE_OFF("打包保存") : viewOnly ? "只读查看模式:改不了这个项目" : "编排和素材打成一个包,换台机器直接打开"}
             onClick={() => { setProjOpen(false); void savePackedProject(); }}
@@ -759,10 +720,9 @@ ${summarizeCombine(report)}
         <SyncChips />
       </div>
 
-      {/* 只读查看:告诉人这份是看的不是改的。真正拦住写盘的是服务端那道
-          (server/vite-plugin-view-gate.ts),这里只是别让人白点一下才发现 */}
+      {/* 只读查看(?observe=1):告诉人这份是看的不是改的,别让人白点一下才发现 */}
       {viewOnly && (
-        <span className="pc-viewonly-badge" title="这个页面是用只读链接打开的:能看,不能改。项目由 Skill 任务里的 agent 负责修改。">
+        <span className="pc-viewonly-badge" title="这个页面是用只读方式打开的(?observe=1):能看,不能改。">
           只读查看
         </span>
       )}
@@ -811,13 +771,6 @@ ${summarizeCombine(report)}
       <SkinDialog open={skinOpen} onClose={() => setSkinOpen(false)} />
       {/* 在线页面 SKILL 置灰(ModeSwitch),对话框打不开 */}
       {ONLINE_BUILD ? null : <SkillDialog open={skillOpen} onClose={() => setSkillOpen(false)} />}
-      <input
-        ref={mergeInput}
-        type="file"
-        accept={`${PROC_EXT},${PROCP_EXT},.json`}
-        hidden
-        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void mergeFromFile(f); }}
-      />
       <BackupsDialog open={backupsOpen} onClose={() => setBackupsOpen(false)} />
       <ProjectSettingsDialog
         open={settingsOpen}

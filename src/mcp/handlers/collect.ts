@@ -107,7 +107,8 @@ export const collectHandlers = {
           rec.job = job;
           for (const item of job.items) {
             try {
-              rec.mediaIds.push(await importVideoFromServer({ url: item.url, path: item.path, name: item.filename }));
+              // 服务端已经经素材服务的入库接口把文件送进内容库(server/vite-plugin-collect.ts),按回来的标识登记
+              rec.mediaIds.push(await importVideoFromServer({ url: item.url, name: item.filename, uploaded: item.media ?? null }));
             } catch (e: unknown) {
               rec.error = `下载好了但登记素材失败:${e instanceof Error ? e.message : String(e)}`;
             }
@@ -128,7 +129,7 @@ export const collectHandlers = {
 
   collectJob: async ({ jobId }) => {
     const rec = collectJobs.get(jobId);
-    if (!rec) throw new Error("找不到这个下载作业。它不是本页发起的,或者页面刷新过 —— 重新 collect_download 一次(已下好的文件会被复用)。");
+    if (!rec) throw new Error("找不到这个下载作业。它不是本页发起的,或者页面刷新过 —— 重新 collect_download 一次(同样内容的文件入库时按内容哈希去重,素材库里不会多出一份)。");
     const job = rec.job;
     if (rec.error) {
       return { jobId, status: "error", message: rec.error, notes: job?.notes ?? [], stage: job?.stage };
@@ -149,7 +150,7 @@ export const collectHandlers = {
       items: job.items.map((it, i) => {
         const m = media.find((x) => x.id === rec.mediaIds[i]);
         return {
-          mediaId: rec.mediaIds[i], title: it.title, path: it.path, bytes: it.bytes,
+          mediaId: rec.mediaIds[i], title: it.title, hash: it.hash, bytes: it.bytes,
           duration: m?.duration ?? it.duration, width: m?.width ?? it.width, height: m?.height ?? it.height,
           vcodec: it.vcodec, transcoded: !!it.transcoded, uploader: it.uploader, webpage_url: it.webpage_url,
         };

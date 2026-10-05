@@ -93,44 +93,23 @@ it('C10A-API-04 桌面构建照旧：base 是 /，不受在线模式影响', { t
   assert.equal(html.includes('/editor/'), false);
 });
 
-/** 产物里 `data-pc` 为 `menu-merge-skill` 的那个元素的属性段（到它的 children 为止）；没有回 null */
-function mergeItemProps(dir) {
-  for (const file of walkBundle(dir)) {
-    const text = fs.readFileSync(file, 'utf8');
-    const at = text.indexOf('menu-merge-skill');
-    if (at < 0) continue;
-    return { text, props: text.slice(Math.max(0, text.lastIndexOf('{', at)), text.indexOf('children', at)) };
-  }
-  return null;
-}
 const walkBundle = (dir) => fs.readdirSync(path.join(dir, 'assets')).filter((f) => f.endsWith('.js')).map((f) => path.join(dir, 'assets', f));
-const MERGE_DESKTOP_TITLE = '挑一份 .proc,把它的改动三方合并进当前项目';
 
-it('C10-MERGE-01 在线构建里「合并 Skill 结果…」置灰：disabled 为真，悬停说明是暂不支持；桌面构建照旧', { timeout: 240_000 }, async () => {
+it('C10-MERGE-01 「合并 Skill 结果…」随 SKILL 的三方合并归档(计划 agent-workflow-plan.md A4):在线、桌面两份产物里都没有这一项', { timeout: 240_000 }, async () => {
   await buildOnline();
-  const on = mergeItemProps(onlineDir);
-  assert.ok(on, '在线产物里找不到 data-pc="menu-merge-skill"');
-  // disabled 的值:字面量真,或一个在产物里被赋成真的常量(rolldown 保留 `ONLINE_BUILD=!0` 这种写法)
-  const d = on.props.match(/disabled:([A-Za-z_$][\w$]*|!0|!1|true|false)/);
-  assert.ok(d, `找不到 disabled:${on.props}`);
-  const truthy = d[1] === '!0' || d[1] === 'true' || new RegExp(`(^|[^\\w$])${d[1].replace(/\$/g, '\\$')}=(!0|true)(?![\\w$])`).test(on.text);
-  assert.ok(truthy, `在线产物里这一项的 disabled 不为真:${d[1]}`);
-  assert.ok(on.props.includes('合并 Skill 结果'), `悬停说明应是 onlineUnsupported("合并 Skill 结果"):${on.props}`);
-  assert.ok(!walkBundle(onlineDir).some((f) => fs.readFileSync(f, 'utf8').includes(MERGE_DESKTOP_TITLE)), '在线产物里不该还有桌面的悬停说明');
-
   await buildDesktop();
-  const desk = mergeItemProps(desktopDir);
-  assert.ok(desk, '桌面产物里找不到 data-pc="menu-merge-skill"');
-  assert.ok(desk.text.includes(MERGE_DESKTOP_TITLE), '桌面产物里应有原来的悬停说明');
-  assert.ok(!/disabled:(!0|true)\b/.test(desk.props), `桌面产物里这一项不该置灰:${desk.props}`);
+  for (const dir of [onlineDir, desktopDir]) {
+    const hit = walkBundle(dir).find((f) => /menu-merge-skill|合并 Skill 结果/.test(fs.readFileSync(f, 'utf8')));
+    assert.equal(hit, undefined, `${dir} 的产物里还有「合并 Skill 结果」:${hit}`);
+  }
 });
 
 /*
  * C10-TITLEBAR-01 标题栏菜单同顶栏（C10 契约第 10 节〔裁〕，2026-09-28）：`src/ui/WindowTitleBar.tsx` 在线页面上照样渲染，
  * 桌面才有的项在线构建里置灰（disabled 看 `desktopOnly`）、悬停说明用 `onlineUnsupported`、点了不动作，桌面壳命令那一支剪掉；
- * 桌面构建照旧。写法同 C10-MERGE-01：开关是编译期常量，就对产物核。
+ * 桌面构建照旧。开关是编译期常量，就对产物核。
  */
-const TITLEBAR_DESKTOP_ONLY = ['new-project', 'open-project', 'save-project', 'open-export', 'open-data', 'quit', 'open-voice', 'merge-project', 'open-pylibs', 'open-models', 'reset-pylibs', 'open-logs'];
+const TITLEBAR_DESKTOP_ONLY = ['new-project', 'open-project', 'save-project', 'open-export', 'open-data', 'quit', 'open-voice', 'open-pylibs', 'open-models', 'reset-pylibs', 'open-logs'];
 const TITLEBAR_ALWAYS = ['export-video', 'go-home', 'undo', 'redo', 'open-skin', 'shortcuts', 'about'];
 
 /** 产物里标题栏菜单项按钮的属性段（`titlebar-${…}` 那个元素，到它的 children 为止） */

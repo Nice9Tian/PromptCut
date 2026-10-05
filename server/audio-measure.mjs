@@ -21,20 +21,20 @@ export function measureArgs({ file, offset, duration }) {
 }
 
 /**
- * 拼装时间轴多段音频混音的 ffmpeg 参数 (和 mux-audio 一致)
- * @param {Array<{file: string, start: number, dur: number, offset: number, volume: number, fadeIn: number, fadeOut: number}>} entries 
- * @returns {string[]}
+ * 时间轴多段音频的混音图(和 mux-audio 一致):输入参数、每段的滤镜链、最后一步 amix(不带输出标签)。
+ * 测响度(timelineMeasureArgs)和自定义测量解码 PCM(audio-pcm.mjs)共用这一份,两边混出来的是同一段声音。
+ * @param {Array<{file: string, start: number, dur: number, offset: number, volume: number, fadeIn: number, fadeOut: number}>} entries
+ * @param {number} [duration] 时间轴时长(秒),混音在这里截断;不传就到最后一段结束
+ * @returns {{ inputs: string[], filters: string[], mix: string }}
  */
-export function timelineMeasureArgs(entries, duration) {
-  // duration:时间轴时长(秒),混音在这里截断,和导出(-t duration)测的是同一段;不传就测到最后一段结束。
-  // -nostats:进度行是 \r 分隔、和 ebur128 的逐帧行挤在一起,解析会吞掉整秒的点
-  const args = ["-hide_banner", "-nostats"];
+export function timelineMixParts(entries, duration) {
+  const inputs = [];
   const filters = [];
   entries.forEach((p, i) => {
-    args.push("-ss", String(p.offset), "-t", String(p.dur), "-i", p.file);
+    inputs.push("-ss", String(p.offset), "-t", String(p.dur), "-i", p.file);
     // 因为这里只测音频没有视频文件参与，输入文件全都是音频，所以输入索引从 0 开始。
     // 而 mux-audio.mjs 里有视频作为输入 0，所以那里的音频是从 1 开始的。
-    const k = i; 
+    const k = i;
     const chain = [`adelay=${Math.round(p.start * 1000)}:all=1`];
     if (p.fadeIn > 0) chain.push(`afade=t=in:st=${p.start.toFixed(3)}:d=${p.fadeIn}`);
     if (p.fadeOut > 0) {
@@ -45,9 +45,26 @@ export function timelineMeasureArgs(entries, duration) {
   });
   const labels = entries.map((_, i) => `[a${i}]`).join("");
   const trim = duration > 0 ? `,atrim=0:${duration}` : "";
-  filters.push(`${labels}amix=inputs=${entries.length}:normalize=0:dropout_transition=0${trim},ebur128=peak=true[aout]`);
-  args.push("-filter_complex", filters.join(";"), "-map", "[aout]", "-f", "null", "-");
-  return args;
+  return { inputs, filters, mix: `${labels}amix=inputs=${entries.length}:normalize=0:dropout_transition=0${trim}` };
+}
+
+/**
+ * 拼装时间轴多段音频混音的 ffmpeg 参数 (和 mux-audio 一致)
+ * @param {Array<{file: string, start: number, dur: number, offset: number, volume: number, fadeIn: number, fadeOut: number}>} entries 
+ * @returns {string[]}
+ */
+export function timelineMeasureArgs(entries, duration) {
+  // duration:时间轴时长(秒),混音在这里截断,和导出(-t duration)测的是同一段;不传就测到最后一段结束。
+  // -nostats:进度行是 \r 分隔、和 ebur128 的逐帧行挤在一起,解析会吞掉整秒的点
+  // asetpts=N/SR/TB:按样本序号重打时间戳,再交给 ebur128。有一段先于结尾结束时,ffmpeg 9 的 amix 偶发给之后的帧
+  // 打 NOPTS,ebur128 的逐帧行就成了 t: -192153584101141.06(INT64_MIN / 48000),逐秒曲线在那之后缺点
+  // (实测约 1～13%,AGENT-maint-3)。正常时 amix 的输出从 0 连续,这一步是恒等的;响度只看样本,汇总值不受影响
+  const { inputs, filters, mix } = timelineMixParts(entries, duration);
+  return [
+    "-hide_banner", "-nostats", ...inputs,
+    "-filter_complex", [...filters, `${mix},asetpts=N/SR/TB,ebur128=peak=true[aout]`].join(";"),
+    "-map", "[aout]", "-f", "null", "-",
+  ];
 }
 
 /**

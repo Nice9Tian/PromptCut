@@ -19,10 +19,13 @@ import { entitiesOf, entityOfPath, type PathOp } from "../../kernel/diffProject"
 import type { Project } from "../../kernel/project";
 import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
+import { classifyEnterFailure } from "./enterFailure";
 import { client, errorStatus, route, type Candidate, type SharedMode, type Where } from "./sharedApi";
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
+import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
+import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 
 /**
@@ -480,6 +483,19 @@ const cardSyncHooks = {
     actor ? writerLabel({ actor, session: typeof actor.session === "string" ? actor.session : undefined }, me(), displayNames()) : "别人",
 };
 
+/**
+ * 桌面应用自动成为共享项目的渲染节点(`renderNodeHandoff.ts`):预渲染进程建新会话时要的 render 连接票据,
+ * 在本页面的共享项目连接上签(`owner: { kind: 'user' }`:这是用户自己的桌面节点,能认领本项目任何成员的任务)。
+ */
+const renderNodeHooks = {
+  ticket: async (projectId: string): Promise<string> => {
+    if (!cur || cur.kind !== "shared" || cur.docProjectId !== projectId) throw new Error("本页面没有连着这个共享项目");
+    const r = await cur.link.request({ type: "auth.ticket", kind: "conn", role: "render", owner: { kind: "user" } });
+    if (r.type !== "auth.ticket.ok" || typeof r.ticket !== "string") throw new Error(String(r.reason ?? r.detail ?? r.type));
+    return r.ticket;
+  },
+};
+
 /** 留在页面的 Agent 工具执行前记个位置,执行后取这期间本页面发出的提交(回包里带 opIds,server/agent/agent-side.mjs 用) */
 export function pageOpMark(): number | null {
   return cur ? cur.link.ds.opMark() : null;
@@ -507,6 +523,8 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
       if (p === seenProject) return;
       seenProject = p;
       noteProjectForCardSync(p);
+      // 自动渲染节点:项目文档的 id(层表键用它)晚到时再交一次(同一个项目只换 id,不重建)
+      if (kind === "shared" && !ONLINE_BUILD && !ONLINE) bindRenderNode({ url, projectId: docProjectId, contentId: p.id || null }, renderNodeHooks);
     }),
   ];
   if (ONLINE) {
@@ -515,12 +533,21 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     offs.push(() => clearInterval(tick));
   }
   cur = { link, kind, docProjectId, url, unbind, offs };
+  // 在场状态(A3 第二阶段):这个页面「正在编辑」的片段经这条连接发布,别的成员那边 Agent 的范围经它收
+  setPresenceLink(link, docProjectId, me().userId ?? "");
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
   // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
   if (!ONLINE_BUILD && !ONLINE) {
     bindAgentSide(kind, docProjectId, url);
     bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
+    /*
+     * 桌面应用自动成为共享项目的渲染节点(语义 product/platforms.md「渲染节点」;`renderNodeHandoff.ts`):
+     * 离开共享项目(回本机空间、取消协作、换开别的项目)撤掉;接上共享项目把共享配置交给预渲染进程。
+     * 页面刚打开时先接本机空间(prev 为空)不算离开:别的标签页或上一次打开时交过的配置不动。
+     */
+    if (prev?.kind === "shared" && (kind !== "shared" || prev.docProjectId !== docProjectId)) unbindRenderNode(prev.docProjectId, kind === "shared" ? "switched" : "left");
+    if (kind === "shared") bindRenderNode({ url, projectId: docProjectId, contentId: getState().project.id || null }, renderNodeHooks);
   }
   if (prev && prev.link !== link) retire(prev.link);
 }
@@ -529,6 +556,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
 function detach() {
   const prev = cur;
   cur = null;
+  setPresenceLink(null, null, "");
   if (prev) {
     for (const off of prev.offs) off();
     prev.unbind();
@@ -760,6 +788,11 @@ function onSideMessage(msg: AnyMsg) {
       return;
     case "events.listing":
       for (const it of Array.isArray(msg.items) ? msg.items : []) rememberEvent(it as Record<string, unknown>);
+      return;
+    case "presence.update":
+    case "presence.state":
+    case "presence.message":
+      receivePresence(msg as Record<string, unknown>);
       return;
     default:
       return;
@@ -1075,8 +1108,13 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
     }, 15_000);
   });
   if (outcome === "open") return { ok: true };
-  if (outcome.reason === "timeout") return { ok: false, error: "unreachable" };
-  return { ok: false, error: wasKicked(candidate.projectId, cred.username) ? "kicked" : "auth" };
+  // 打开前就断:浏览器里分不出握手被拒和没连上,拿新证明问一次 shared/verify 再定(enterFailure.ts)
+  const failed = await classifyEnterFailure(outcome, {
+    fresh: make,
+    verify: (protocols) => client.verifyProtocols({ base: candidate.base, protocols }),
+    wasKicked: () => wasKicked(candidate.projectId, cred.username),
+  });
+  return { ok: false, ...failed };
 }
 
 /** 自己要关掉的那条共享项目连接(取消多用户协作时删项目会收到 4004,不算被删) */

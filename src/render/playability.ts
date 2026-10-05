@@ -190,7 +190,7 @@ export function probePlayable(hash: string, url: string, ext?: string, kind: "vi
        * 超时 = 这一次没等到,记「未知」(文件头第 3 步)。离屏元素不卸,接着等到「未知」的冷却结束:
        * 这期间首帧到了就是迟到的结论(上面 finish 的第二支)。冷却结束还没有结论才卸掉,并**主动通知**订阅方重判一次 ——
        * 否则重探只能搭别的重渲染的车:暂停着、集合也不变时一直没有重渲染,画面就永远停在小尺寸
-       * (跨机 T9 `ht9a0927`,`docs/reports/AGENT-tier-reload-seek.md`)。
+       * (跨机 T9 `ht9a0927`,`docs/archive/agent-reports/AGENT-tier-reload-seek.md`)。
        */
       realSetTimeout(() => {
         if (settled) return;

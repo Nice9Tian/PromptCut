@@ -24,6 +24,37 @@ const TURN_RULES = PERF_DEGRADED ? "" : `
 }
 @keyframes pc-ph-turn { from { transform: rotate(0deg); } to { transform: rotate(180deg); } }`;
 
+/**
+ * 在线浏览器模式追加的规则:「需要本地 PC 渲染辅助」图标的三种排法(舞台按预览缩放、这一层的缩放与框挑一种,
+ * `placeholderFit.ts`,组件写在根元素的 `data-pc-placeholder-layout` 上)。放大倍数写在组件的内联 `transform` 里。
+ * 单列一份、只在在线浏览器模式注入(`unsupported` 只在这个模式下出现)。
+ *   - `row`    图标加一行字(基础样式里的写法,这里不用再写);
+ *   - `column` 图标在上、字在下;
+ *   - `icon`   只留图标,字藏起来(`aria-label` 照旧是全文)。
+ * 铺满形态里,图标加字的外框与徽标形态同样大(内边距 6/10),居中,放不下被框裁掉(`overflow: hidden`)。
+ */
+export const PLACEHOLDER_ONLINE_CSS = `
+[data-pc-placeholder-plane][data-pc-placeholder-kind="unsupported"] {
+  overflow: hidden;
+}
+[data-pc-placeholder-plane][data-pc-placeholder-kind="unsupported"] > .pc-ph-unsupported {
+  flex: none;
+  flex-direction: row;
+  padding: 6px 10px;
+  transform-origin: 50% 50%;
+}
+[data-pc-placeholder-plane][data-pc-placeholder-layout="column"] > .pc-ph-unsupported,
+[data-pc-placeholder-plane][data-pc-placeholder-layout="column"] .pc-ph-unsupported {
+  flex-direction: column;
+  gap: 4px;
+}
+[data-pc-placeholder-plane][data-pc-placeholder-kind="unsupported-badge"][data-pc-placeholder-layout="column"] {
+  padding: 6px 10px;
+}
+[data-pc-placeholder-plane][data-pc-placeholder-layout="icon"] .pc-ph-unsupported-text {
+  display: none;
+}`;
+
 export const PLACEHOLDER_CSS = `
 [data-pc-placeholder-plane] {
   position: absolute;

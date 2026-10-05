@@ -30,6 +30,7 @@
  * 编辑器自己拉起的预渲染进程由系统给空端口(`vite-plugin-prerender.ts`)。结束时只结束本探针起的进程树。
  * 输出最后一行是一行 JSON:`{ ok, imports, queueOrder, remote, t4, fails }`。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -149,13 +150,14 @@ try {
   // 之后挂 PerformanceObserver('longtask'),并每 120 ms 做一次编辑(拖播放头、挪片段、改参数、改标签)。
   // 窗口 = 第一个导入请求发出 → 上传队列清空;窗口里的长任务原样记进 out.t4。
   const { default: puppeteer } = await import('puppeteer');
-  browser = await puppeteer.launch({ headless: true, defaultViewport: { width: 1440, height: 900 }, args: ['--no-first-run', '--hide-scrollbars'] });
+  const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
+  browser = await puppeteer.launch({ headless: true, defaultViewport: { width: 1440, height: 900 }, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars'] });
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 300)));
   await page.goto(`${A.origin}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded' });
   await until('[a] 页面与舞台起来', () => page.evaluate(() => document.querySelectorAll('iframe').length >= 2), 300_000);
-  // 测量遮罩在页面起来约 3 s 后才出现(docs/reports/AGENT-perf-t4.md「没做的与建议」第 3 条):只等「没有遮罩」
+  // 测量遮罩在页面起来约 3 s 后才出现(docs/archive/agent-reports/AGENT-perf-t4.md「没做的与建议」第 3 条):只等「没有遮罩」
   // 会在它出现之前就放行,测量和后面的静置、对照窗口叠在一起。所以先等测量开始(遮罩出现,或 probeRunner 报 running),
   // 再等它结束(遮罩退下且不再 running)。项目里没有要测的卡时测量根本不开始:等满 GATE_APPEAR_MS 没见到就照常往下走。
   const gateState = () => page.evaluate(async () => {

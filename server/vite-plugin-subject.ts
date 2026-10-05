@@ -15,11 +15,14 @@
  */
 import type { Plugin, ViteDevServer } from "vite";
 import type { ServerResponse } from "http";
-import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 
 import { buildEnv, findPython, pipeToSse, readBody, spawnPython } from "./vite-plugin-stt";
+import { createAssetSourceResolver } from "./audio-source.mjs";
+import { assetServiceOrigin } from "./asset-client";
+import { mediaSourceOf } from "./vision/ffmpeg-frames";
+import { pythonInput, resolveMediaSource } from "./perception-source.mjs";
 // 采样上限和前端共用同一个常数 —— 以前服务端写 200、kernel 那边没有上限,
 // 于是「不传 times 就自动算」这条默认路径在长素材上必然撞这个 400。
 import { MAX_SUBJECT_TIMES } from "../src/kernel/project";
@@ -76,6 +79,9 @@ export interface SubjectJob {
 
 const jobs = new Map<string, SubjectJob>();
 
+/** 素材记录 → 素材服务上的 HTTP 地址。写法与 vite-plugin-shots.ts 相同,见 server/perception-source.mjs */
+const resolveSource = createAssetSourceResolver({ origin: assetServiceOrigin, toUrl: (m, origin) => mediaSourceOf(m, origin) });
+
 /** 作业跑完(done/error)之后在表里留多久 —— 留一会儿是给最后一次轮询,再久就是纯泄漏 */
 const JOB_TTL_MS = 10 * 60 * 1000;
 
@@ -125,11 +131,16 @@ async function readStatus(root: string): Promise<
   });
 }
 
-/** 跑一次检测。engine 由 Python 侧挑，Node 只负责传参、收事件。 */
+/**
+ * 跑一次检测。engine 由 Python 侧挑，Node 只负责传参、收事件。
+ * video 是素材服务上的 HTTP 地址:新包直接递地址,每个采样时刻起一次 ffmpeg 按 Range 只取那一段;
+ * 老包先流到临时文件再递路径(见 server/perception-source.mjs),跑完删。
+ */
 async function runDetection(
   root: string,
   job: SubjectJob,
   video: string,
+  ref: Record<string, string>,
   times: number[],
   prompt: string | undefined,
   engine: string | undefined,
@@ -142,7 +153,32 @@ async function runDetection(
     return;
   }
   const env = await buildEnv(root, python);
+  let input: { input: string; cleanup: () => void };
+  try {
+    input = await pythonInput({ src: video, ref, python, env, pkg: "promptcut_subject", spawnPython });
+  } catch (e) {
+    job.status = "error";
+    job.message = (e as Error).message;
+    return;
+  }
+  // 取消走 killTree,close 回调照样会到;这里用 finally 保证临时文件无论怎么收尾都删
+  try {
+    await runDetectionOn(python, env, job, input.input, times, prompt, engine, maxSide);
+  } finally {
+    input.cleanup();
+  }
+}
 
+async function runDetectionOn(
+  python: string,
+  env: NodeJS.ProcessEnv,
+  job: SubjectJob,
+  video: string,
+  times: number[],
+  prompt: string | undefined,
+  engine: string | undefined,
+  maxSide: number | undefined,
+): Promise<void> {
   const args = ["-m", "promptcut_subject", "detect", video, "--times", times.join(",")];
   if (prompt) args.push("--prompt", prompt);
   if (engine) args.push("--engine", engine);
@@ -309,14 +345,11 @@ export function subjectPlugin(): Plugin {
           return pipeToSse(spawnPython(python, ["-m", "promptcut_subject", "install"], env), res);
         }
 
-        // POST /api/subject/detect —— 起一个后台作业
+        // POST /api/subject/detect { mediaId, media: { id, name, kind, url, hash }, times, prompt? } —— 起一个后台作业。
+        // 素材经素材服务取(见 server/perception-source.mjs):没有这份素材回 404,素材服务不可达回 502;请求体里的 path 不看。
         if (req.method === "POST" && url === "/api/subject/detect") {
           try {
             const body = JSON.parse((await readBody(req)).toString("utf-8") || "{}");
-            const video: string | undefined = body.path;
-            if (!video || !existsSync(video)) {
-              return sendJson(res, 400, { ok: false, error: `找不到视频文件：${video ?? "(未提供)"}` });
-            }
             const raw: unknown = body.times;
             if (!Array.isArray(raw) || raw.length === 0) {
               return sendJson(res, 400, { ok: false, error: "times 至少要有一个时刻(秒),写成 [1.2, 5.4]" });
@@ -334,9 +367,12 @@ export function subjectPlugin(): Plugin {
                 error: `一次最多 ${MAX_TIMES} 个采样时刻(收到 ${times.length} 个)，请分批`,
               });
             }
+            const source = await resolveMediaSource(body, resolveSource);
+            if (!source.ok) return sendJson(res, source.status, { ok: false, error: source.error, ...(source.kind ? { kind: source.kind } : null) });
+            const video = source.src;
             const job: SubjectJob = {
               id: randomUUID().slice(0, 8),
-              mediaId: body.mediaId,
+              mediaId: body.mediaId ?? source.media.id,
               status: "running",
               percent: 0,
               prompt: typeof body.prompt === "string" ? body.prompt : "",
@@ -344,7 +380,7 @@ export function subjectPlugin(): Plugin {
             jobs.set(job.id, job);
             // 不 await：立刻把 jobId 回给前端，进度靠轮询
             void runDetection(
-              root, job, video, times,
+              root, job, video, source.media, times,
               typeof body.prompt === "string" && body.prompt.trim() ? body.prompt : undefined,
               typeof body.engine === "string" ? body.engine : undefined,
               Number.isFinite(Number(body.maxSide)) ? Number(body.maxSide) : undefined,

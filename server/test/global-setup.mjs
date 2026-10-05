@@ -2,7 +2,13 @@
  * 仅供测试。`npm test` 的全局准备（`node --test --test-global-setup=server/test/global-setup.mjs`），
  * 在测试运行器的主进程里跑一次，早于所有测试文件的子进程。
  *
- * 做一件事：**在整个测试期间占住 fetch 规范里的「坏端口」**，让各测试文件 `listen(0)` 拿不到它们。
+ * 做两件事：
+ *
+ * 1. **不继承外部的 `PROMPTCUT_EXPORT_DIR` / `PROMPTCUT_DATA_DIR`**（`scripts/lib/user-dirs.mjs`）：桌面版把它们设成
+ *    `%USERPROFILE%\Videos\PromptCut` 与应用数据目录；从桌面版的环境里（例如桌面版里的 Agent）跑 `npm test`，
+ *    测试起的编辑器、预渲染进程、`FramePipeline` 会把帧库和成本记录写进用户目录。这里在主进程里摘掉，
+ *    各测试文件的子进程都继承摘过的环境，产物落在仓库 `out/` 或各测试自己设的临时目录。守门见 `no-user-dirs.test.mjs`。
+ * 2. **在整个测试期间占住 fetch 规范里的「坏端口」**，让各测试文件 `listen(0)` 拿不到它们。下面说的都是这一件。
  *
  * 为什么：Node 的 `fetch` 和内置 `WebSocket`（都是 undici）按 WHATWG fetch 规范拒绝连这些端口，
  * 报 `TypeError: fetch failed`（cause `bad port`）或 WebSocket 直接 error / 1006，连都不连。
@@ -23,10 +29,11 @@
  * `bad-ports.test.mjs` 核对的是「名单里每个端口都 listen 不到」，不论谁占着。
  */
 import net from 'node:net';
+import { scrubUserDirEnv, markNoPortFile } from '../../scripts/lib/user-dirs.mjs';
 
 /**
  * WHATWG fetch 规范「bad port」名单里 ≥ 1024 的部分（低于 1024 的系统不会当临时端口发）。
- * 最大的是 10080；`scripts/headless.mjs` 的 `freePort` 因此从 20000 以上挑。
+ * 最大的是 10080；自动挑端口的脚本因此从 20000 以上挑。
  */
 export const FETCH_BAD_PORTS = Object.freeze([
   1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566,
@@ -72,6 +79,11 @@ function stopRetry() {
 }
 
 export async function globalSetup() {
+  for (const { key, value } of scrubUserDirEnv(process.env)) {
+    console.error(`[global-setup] 不继承外部的 ${key}=${value}（测试不写用户目录，见 scripts/lib/user-dirs.mjs）`);
+  }
+  // 测试起的编辑器不写公共的 %TEMP%\promptcut\port.json（scripts/lib/user-dirs.mjs 的 markNoPortFile；守门 port-file.test.mjs）
+  markNoPortFile(process.env);
   const got = await holdAll();
   process.env.PROMPTCUT_TEST_BAD_PORTS_HELD = got.join(',');
   if (held.size >= TOTAL) return;

@@ -1,56 +1,38 @@
 /**
- * 预渲染产物在磁盘上的盘点与清理。从 server/vite-plugin-vision.ts 逐字搬来。
+ * 预渲染产物(卡片快照)的盘点与清理。
  *
- * 只认键、不认路径,所以它碰不到素材目录以外的东西。键怎么算在 bake.ts 的 `bakeTarget`,
- * 这里只负责「目录里现在有哪些、各自多大」。
+ * 原来直接列、删素材目录里的 `bake-*.png`;现在字节在素材服务的 `px` 里,这里只经 `bake-store.mjs`
+ * 读写「输入哈希 → 内容哈希」的索引(`docs/semantics/product/asset-service.md`「预渲染的产物」:
+ * 预渲染进程经素材服务的接口读写产物,不直接读它的存储目录)。键怎么算在 bake.ts 的 `bakeTarget`。
+ *
+ * 素材目录里以前落下的旧文件一个不动:老项目参数里的 `/@media/bake-….png` 靠它们照常能取,
+ * 同一个键再被要时由 bake.ts 经素材服务迁进 `px`。它们不再计入盘点、也不再被这里删。
  */
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { mediaDir } from "../vite-plugin-media";
+import { bakeStoreFor } from "./bake";
 
 /**
- * 磁盘上现有的预渲染文件。键就是文件名尾巴上那 12 位输入哈希(见 bakeTarget)。
+ * 索引里现有的卡片快照:键(12 位输入哈希)、老文件名、字节数、内容哈希。不问素材服务。
  *
  * 预渲染的调度要先知道「哪些已经有了、各自多大」才能排队和算占用 ——
- * 而这个答案只有服务端有:浏览器那边关一次页面就忘了,上次开着编辑器预渲染出来的文件
- * 它一个都不认识。
+ * 而这个答案只有服务端有:浏览器那边关一次页面就忘了。
  */
-export async function listBakes(root: string): Promise<{ key: string; name: string; bytes: number }[]> {
-  const dir = mediaDir(root);
-  let names: string[];
-  try { names = await fsp.readdir(dir); } catch { return []; }
-  const out: { key: string; name: string; bytes: number }[] = [];
-  for (const name of names) {
-    if (!/^bake-.*\.png$/.test(name)) continue;
-    /*
-     * 认不出键的也要收进来,**用文件名当键**。
-     *
-     * 键的格式换过(早先是 8 位哈希,现在 12 位),目录里现在就躺着 9 个老格式的文件。
-     * 要是只认当前格式,这些文件**永远列不出来、也就永远删不掉** —— 一个只进不出的角落。
-     * 收进来之后它们必然对不上任何一张卡,于是自动进 orphans,下一轮就被清掉。
-     */
-    const m = /^bake-.*-([0-9a-f]{12})\.png$/.exec(name);
-    try { out.push({ key: m ? m[1] : name, name, bytes: (await fsp.stat(path.join(dir, name))).size }); } catch { /* 刚被删掉,跳过 */ }
-  }
-  return out;
+export async function listBakes(root: string): Promise<{ key: string; name: string; bytes: number; hash: string; url: string }[]> {
+  return (await bakeStoreFor(root).list()).map((e: any) => ({ key: e.key, name: e.name || `${e.key}.png`, bytes: e.bytes, hash: e.hash, url: e.url }));
 }
 
 /**
- * 删掉指定的预渲染文件。**只认键,不认路径。**
- *
- * 客户端传来的键要和服务端**自己列出来的目录**逐个比对,只有对得上的才删。
- * 所以传什么进来都跑不出 out/media,也碰不到预渲染以外的文件 ——
- * 安全性来自「拿列表比对」,不来自对字符串长什么样的猜测。
+ * 这些键里哪些已经渲好:索引里有、且素材服务上这一块收全了(同步状态只问素材服务)。
+ * 素材服务不可达时抛(消息写明地址与原因)。
+ */
+export async function bakedOf(root: string, keys: string[]): Promise<Map<string, { key: string; bytes: number; hash: string; url: string }>> {
+  return await bakeStoreFor(root).status(keys);
+}
+
+/**
+ * 淘汰指定的卡片快照。**只认键,不认路径**:和自己列出来的索引逐个比对,只有对得上的才删,
+ * 删的是索引条目,碰不到索引以外的文件。字节留在素材服务里(素材服务没有删除接口,按内容寻址、写入后不可变),
+ * 回收交给素材服务那一侧;同一张图再渲时入库只是一次对账,不重复占空间。
  */
 export async function evictBakes(root: string, keys: unknown): Promise<{ deleted: string[]; freedBytes: number }> {
-  const want = new Set((Array.isArray(keys) ? keys : []).filter((k): k is string => typeof k === "string" && k.length > 0));
-  const deleted: string[] = [];
-  let freedBytes = 0;
-  if (!want.size) return { deleted, freedBytes };
-  const dir = mediaDir(root);
-  for (const f of await listBakes(root)) {
-    if (!want.has(f.key)) continue;
-    try { await fsp.unlink(path.join(dir, f.name)); deleted.push(f.key); freedBytes += f.bytes; } catch { /* 已经没了 */ }
-  }
-  return { deleted, freedBytes };
+  return await bakeStoreFor(root).evict(keys);
 }

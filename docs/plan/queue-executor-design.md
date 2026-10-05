@@ -63,7 +63,8 @@
 
 **共享档，可缓存的卡**：`renderCardSnapshotRange(entry, control, { from, to }, { signal, progress })`：
 - 在 queue lane 上调 `fillCardControls(entry, bakery, signal, [control], { range, onBatch })`，第 5 个参数是新加的可选参数，preload 从来不传；
-- 只改批次的起点（按 4 帧对齐），以及 `snapshotFrames`（只取范围内缺的帧），其余逐字不变；
+- 只改批次的起点（按 4 帧对齐），以及 `snapshotFrames`（只取范围内缺的帧）；
+- 〔裁 2026-09-30，笔记本主会话，uc-latency 收尾〕一段（`range`）之内的几批并成一趟顺推（`singlePass`）：只换一次页、从挂载帧回放一次，帧集合与逐批的并集相同，入库与进度仍每 4 帧交一次；canvas 重卡（`canvasHeavy`）与页面播放头正要的那一段仍逐批；`PROMPTCUT_QUEUE_SINGLE_PASS=0` 退回逐批。原来这里写「其余逐字不变」，改的理由：逐批每批从挂载帧回放时不截图，依赖 JS 帧循环的卡（实测 `mu-word-rotate`）的快照从第 32 帧起与导出（顺序活渲）对不上，顺推 84 帧里 79 帧与导出一致，更贴近语义 `product/rendering.md`「同一时刻同一帧」；19 张共享档卡里 14 张两种做法逐字节相同，`lottie` 像素相同；一段 60 帧 PC 上 22～27 s → 7～11 s。代价：桌面自己那一趟后台预渲染（整张卡，不给 `range`）仍逐批，这类卡同一个共享键两条路产出的字节不同，另立任务把后台那一趟也改成顺推或修掉回放不截图的相位落后（`docs/archive/agent-reports/AGENT-uc-latency.md` 第三、七节）；
 - 本机锁库里这张卡被别的环境锁住时，抛 `card-locked-local`（不可重试）。
 
 **本地档**：`renderSceneSnapshotRange(entry, control, range, …)`：把本地帧换算成全局帧，照 `renderLocalSnapshots` 原有的过滤条件挑出缺的帧，再调用它。

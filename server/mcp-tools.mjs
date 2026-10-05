@@ -9,7 +9,7 @@
 //              见 server/agent/agent-exec.mjs 的 PAGE_STATE_TOOLS。
 //   - "page": 只在页面执行:只读页面独有状态(选区、播放头、面板界面、页面里的作业表),或要用浏览器能力、
 //              在后台作业完成时才写项目,搬到服务端会丢状态或写不进同一次提交。
-//   - "server":在服务端就地执行,不碰项目(wait、report_progress)。
+//   - "server":在服务端就地执行,不碰项目(wait、report_progress、多 Agent 的 spawn_agent 与公告板四个工具)。
 import { projectTools } from "./tools/project.mjs";
 import { clipsTools } from "./tools/clips.mjs";
 import { layoutTools } from "./tools/layout.mjs";

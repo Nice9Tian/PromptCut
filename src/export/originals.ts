@@ -8,8 +8,11 @@
  * - 就绪:每张重卡每一段清单(`<resultKey>:<from>-<to>`)的 `frames` 盖满整段。原尺寸只认 `frames`,
  *   `small`(小尺寸)不算 —— 两档的就绪分开记。
  * - 取用:清单里这一帧的哈希 → 素材服务 `GET snap/<hash>`(凭只读票据)。一次只取当前这一帧,用完不留。
+ * - 旧输入的层(stale-layer):给了 `project` 时,层表里带输入签名、又和这一版片段对不上的层(改参数之前的结果)不取,
+ *   这张卡算缺 —— 等渲染节点按新输入重写层表、渲完再导。
  */
 import { LAYER_MAP_PREFIX, parseLayerMap, type LayerMap, type OnlineLayer } from "../render/snapshotSource";
+import { clipInputSig, inputSigStale } from "../render/layerInputSig.mjs";
 
 export interface OriginalsDeps {
   request(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
@@ -33,7 +36,7 @@ function segmentsOf(layer: OnlineLayer, span: number): Array<[number, number]> {
 }
 
 /** 读层表与每一段清单,核对原尺寸是否齐全 */
-export async function loadOriginalsIndex(projectId: string | null, deps: OriginalsDeps, { fallbackHeavy = [] as readonly string[], onlyClips = null as readonly string[] | null } = {}): Promise<OriginalsIndex> {
+export async function loadOriginalsIndex(projectId: string | null, deps: OriginalsDeps, { fallbackHeavy = [] as readonly string[], onlyClips = null as readonly string[] | null, project = null as unknown } = {}): Promise<OriginalsIndex> {
   const only = onlyClips ? new Set(onlyClips) : null;
   let map: LayerMap | null = null;
   if (projectId) {
@@ -50,6 +53,11 @@ export async function loadOriginalsIndex(projectId: string | null, deps: Origina
   const missing: string[] = [];
   for (const layer of map.layers) {
     if (only && !only.has(layer.clipId)) continue;
+    if (project && inputSigStale(layer.inputSig, clipInputSig(project, layer.clipId))) {
+      missing.push(layer.clipId);
+      byClip.set(layer.clipId, { layer, frames: new Map() });
+      continue;
+    }
     const frames = new Map<number, string>();
     let complete = true;
     for (const seg of segmentsOf(layer, map.span)) {

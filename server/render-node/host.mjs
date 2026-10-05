@@ -17,6 +17,14 @@
  * 与 `session.mjs` 的在飞规则一致。`tick()` 按顺序逐个节点推进,`send` 是同步的,前一个节点刚发的认领
  * 在后一个节点判闲时已经算进去,所以任何时刻持有 + 在飞都不超过上限。
  *
+ * # 闲时认领(契约 `render-queue-contract.md` A.12〔裁〕)
+ *
+ * 所有节点共用的预渲染管线里,快照与 `plan` 走同一条串行 lane(一次只做一件)。并发上限 2 时若一次认领两段快照,
+ * 第二段只能在 lane 里排队:帧数不动、工作计数也不动,排过 STALL_MS 就被队列当成卡死收回(M8 C1)。所以执行器给了
+ * `laneOf` 时再加一道:要用串行 lane 的任务,只在这条 lane 空着(执行器报 `laneBusy() === 0`)、全部节点手里也没有
+ * 还没走到推送的同 lane 任务(`local.occupying()`)、也没有在飞的同 lane 认领时才认领。推产物不占 lane:前一段推送时
+ * 下一段照样认领、渲染。执行器没给 `laneOf`(测试替身)时不加这道闸,行为同前。
+ *
  * # 只认领带片段清单的 `plan`
  *
  * 节点侧过滤 `filter.mjs` 规则 6:`profile: 'host'` 的节点见到不带片段清单的 `plan`(桌面发布方的)直接跳过,
@@ -165,6 +173,24 @@ export function createRenderHost({
 
   const emit = (event) => { try { onEvent(event); } catch { /* 诊断回调出错不影响节点 */ } };
 
+  /** 任务 id 的前缀就是 kind(`snapshot:` / `stream:` / `plan:`) */
+  const kindOfId = (id) => (typeof id === 'string' ? id.slice(0, id.indexOf(':')) : null);
+
+  /** 闲时认领(见文件头):这个任务要用的串行 lane 此刻空不空 */
+  function laneFree(m, task) {
+    const ex = m.executor;
+    if (typeof ex?.laneOf !== 'function') return true;
+    const lane = ex.laneOf(task);
+    if (lane === null || lane === undefined) return true;
+    if (typeof ex.laneBusy === 'function' && ex.laneBusy() > 0) return false;
+    for (const x of members) {
+      const laneOfX = (t) => (typeof x.executor?.laneOf === 'function' ? x.executor.laneOf(t) : null);
+      if (x.inflight !== null && laneOfX({ kind: kindOfId(x.inflight) }) === lane) return false;
+      for (const run of x.local?.occupying?.() ?? []) if (laneOfX(run) === lane) return false;
+    }
+    return true;
+  }
+
   /** 全部节点的持有数 + 在飞的认领数 */
   const busy = () => members.reduce((n, m) => n + (m.local ? m.local.session.held().length : 0) + (m.inflight !== null ? 1 : 0), 0);
 
@@ -234,6 +260,7 @@ export function createRenderHost({
       ...(random ? { random } : {}),
       ...(constants ? { constants } : {}),
       isIdle: () => busy() < cap,
+      canClaim: (task) => laneFree(m, task),
       maxConcurrent: cap,
       codeVersion: version,
       executor: m.executor,

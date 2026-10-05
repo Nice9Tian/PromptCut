@@ -1,15 +1,19 @@
 import { AudioWaveform } from "./AudioWaveform";
 import { ClipVolumeDialog } from "./ClipVolumeDialog";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
-import { getCard, userCardSources } from "../../kernel/registry";
-import { unsupportedHere } from "../../render/placeholderHost";
+import { getCard, knownCardName, onSyncedUserCardsChanged, syncedCardView, syncedUserCardsGen } from "../../kernel/registry";
+import { clipSubtitleOf, paramsCardView } from "../left/paramsView";
+import { onlineBrowserMode, unsupportedHere } from "../../render/placeholderHost";
+import { clipCoverage, subscribeCoverage } from "../onlineCoverage";
+import { clipCardLabel, showLocalPcBadge } from "./localPcBadge";
 import { ONLINE_CUSTOM_CARD_TEXT, onlinePage, onlineUnsupported } from "../../online/pageFlag";
 import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from "./utils";
 import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
+import { useUserEditing } from "../userEditing";
 import { ContextMenu } from "./ContextMenu";
 import { clipTrackKind } from "../../kernel/trackKind";
 import { describeTransition, timingLock, transitionsOfClip } from "../../kernel/transitions";
@@ -25,10 +29,20 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const selection = useStore((s) => s.selection);
   const isSelected = selection.includes(clip.id);
   const cardDef = clip.cardId ? getCard(clip.cardId) : null;
-  const label = clip.cardId ? (cardDef ? cardDef.name : "未知卡片") : clip.label;
-  // 在线浏览器模式下这台设备渲染不了的卡(用户卡、图卡;C10 契约第 9 节):片段里挂个小徽标,悬停出全文。
-  // 片段照常可选中、移动、删除、改参数(只是个提示,不挡任何操作)
-  const customCard = !!cardDef && unsupportedHere(clip.cardId, cardDef, (id) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, id));
+  // 副标题看的参数视图:先查定义,没有再看同步来的用户卡的只读视图(源码里解析出的默认值与控件)
+  const paramsView = clip.cardId ? paramsCardView(clip.cardId, { getCard, syncedCardView }) : undefined;
+  // 同步来的用户卡(在线页面从内容库卡片源码认出来的)表变了要重绘:标签换成真名
+  useSyncExternalStore(onSyncedUserCardsChanged, syncedUserCardsGen);
+  // 标签:构建时定义的名字 → 同步表里的名字 →「未知卡片」(C10 契约第 9 节)
+  const label = clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
+  /*
+   * 在线浏览器模式下这台设备跑不了的卡(用户卡、图卡、同步来的用户卡),预渲染结果又还没覆盖整段时:片段里挂个小徽标,
+   * 悬停出「需要本地 PC 渲染辅助」(与舞台上的图标同一句、同一条件;C10 契约第 9 节)。覆盖变了重绘,齐了撤掉。
+   * 两边都没有的 id 只标「未知卡片」,不挂徽标。片段照常可选中、移动、删除、改参数(只是个提示,不挡任何操作)。
+   */
+  const localOnly = !!clip.cardId && unsupportedHere(clip.cardId, cardDef ?? undefined);
+  const coverage = useSyncExternalStore(subscribeCoverage, () => (localOnly ? clipCoverage(clip.id) : null));
+  const customCard = showLocalPcBadge({ online: onlineBrowserMode(), localOnly, coverage });
   // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
   // 这一段是不是「有画面的素材」:只有它能转成声音(卡片、图片、已经是声音的都不行)
@@ -41,13 +55,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   let subtitle = "";
   if (isCaption) {
     subtitle = capCount > 0 ? `${capCount} 条字幕` : "还没有字幕,右键素材去转写";
-  } else if (clip.cardId && cardDef) {
-    const textControl = cardDef.controls.find((c) => c.type === "text");
-    if (textControl) {
-      const val = clip.params[textControl.key] ?? cardDef.defaults[textControl.key];
-      subtitle = val != null ? String(val).trim() : "";
-    }
-    if (!subtitle) subtitle = cardDef.description || "";
+  } else if (clip.cardId && paramsView) {
+    // 第一个文字控件的值 → 卡片说明;同步来的用户卡(在线页面没有定义)用源码里解析出的视图
+    subtitle = clipSubtitleOf(paramsView, clip.params);
   } else if (clip.mediaId) {
     subtitle = "时长 " + formatTime(clip.end - clip.start);
   }
@@ -59,6 +69,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
   const [dragState, setDragState] = useState<{ start: number; end: number; trackId: string; forbidden: boolean } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  // 拖动 / 改时长中:告诉 Agent 用户正在编辑这一段(A2;真的动起来才算,只点一下不算)
+  useUserEditing(`timeline-clip:${clip.id}`, dragState ? clip.id : null, "drag");
 
   const displayStart = dragState ? dragState.start : clip.start;
   const displayEnd = dragState ? dragState.end : clip.end;

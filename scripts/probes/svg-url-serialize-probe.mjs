@@ -10,15 +10,17 @@
  * 跑法:node scripts/probes/svg-url-serialize-probe.mjs
  * (自己起 vite 5208;用户的编辑台在 5190 / 验证在 5197,别碰。)
  *
- * 启动参数抄 scripts/headless.mjs:204-216 那一套(headless:true + swiftshader),
+ * 启动参数抄当时 SKILL 无头实例脚本(已归档)那一套(headless:true + swiftshader),
  * 不用 server/bakery/chrome.mjs 的 CHROME_ARGS:那边的 --enable-begin-frame-control 要靠 CDP
  * 手动发 BeginFrame 才出帧,页面里的 rAF 会挂住。fill 的序列化形式和出帧管线无关。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const PORT = 5208;
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
@@ -57,7 +59,7 @@ try {
 
   browser = await puppeteer.launch({
     headless: true, protocolTimeout: 120000,
-    args: ['--window-position=-32000,-32000', '--hide-scrollbars', '--no-first-run',
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--hide-scrollbars', '--no-first-run',
       '--disable-gpu', '--enable-unsafe-swiftshader'],
   });
   const page = await browser.newPage();

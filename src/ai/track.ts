@@ -9,6 +9,7 @@
  */
 
 import { readSseStream } from "../editor/io/stt";
+import type { PerceptionMediaRef } from "./perceptionMedia";
 
 export interface TrackPoint {
   /** 用户指定的查询点 [帧号, x, y]，原始像素 */
@@ -63,15 +64,15 @@ export async function trackStatus(): Promise<{
   return r.json();
 }
 
+/** 只发素材标识,服务端经素材服务取字节(见 perceptionMedia.ts) */
 export async function startTracking(
-  mediaPath: string,
-  mediaId: string,
+  media: PerceptionMediaRef,
   points: number[][],
 ): Promise<string> {
   const r = await fetch("/api/track/track", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: mediaPath, mediaId, points }),
+    body: JSON.stringify({ mediaId: media.id, media, points }),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.ok) throw new Error(data.error || "运动追踪没能启动");

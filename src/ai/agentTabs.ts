@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { MAIN_TAB, dropChatStore } from "./liveChat.ts";
+import { normalizeCreativity, type CreativityLevel } from "../kernel/creativity.mjs";
 
 /**
  * AI 助手面板的分页:每一页是一个独立的 Agent 对话,可以同时跑。
@@ -24,6 +25,19 @@ export interface AgentTab {
   /** 还没送达的其他 Agent 消息数(标在页签上) */
   unread: number;
   createdAt: number;
+  /**
+   * 这个对话单独设的创造力等级(`kernel/creativity.mjs`);null = 跟项目的默认等级。
+   * 只存在本机的页签里(计划 agent-workflow-plan.md 第 4 节第 3 条),不进项目文档;随每条聊天请求带给服务端。
+   */
+  creativity: CreativityLevel | null;
+  /**
+   * 多 Agent(计划 agent-workflow-plan.md A3):`spawn_agent` 拉起的子 Agent 带预设角色(id 与中文名)、父对话 ID,
+   * 以及拉起时沿用父对话的驱动(`provider`,这一页的驱动下拉框按它预选)。主对话与用户自己开的页都是 null。
+   */
+  role?: string | null;
+  roleName?: string | null;
+  parent?: string | null;
+  provider?: string | null;
 }
 
 interface TabsState {
@@ -50,6 +64,11 @@ function load(): TabsState {
         busy: false,
         unread: 0,
         createdAt: typeof t.createdAt === "number" ? t.createdAt : Date.now(),
+        creativity: normalizeCreativity(t.creativity),
+        role: typeof t.role === "string" ? t.role : null,
+        roleName: typeof t.roleName === "string" ? t.roleName : null,
+        parent: typeof t.parent === "string" ? t.parent : null,
+        provider: typeof t.provider === "string" ? t.provider : null,
       }));
     const a = localStorage.getItem(ACTIVE_KEY);
     if (a) activeId = a;
@@ -57,7 +76,7 @@ function load(): TabsState {
     /* 本地存储不可用就从一页开始 */
   }
   if (!tabs.some((t) => t.id === MAIN_TAB)) {
-    tabs.unshift({ id: MAIN_TAB, conversationId: null, title: "Agent 1", scope: null, busy: false, unread: 0, createdAt: 0 });
+    tabs.unshift({ id: MAIN_TAB, conversationId: null, title: "Agent 1", scope: null, busy: false, unread: 0, createdAt: 0, creativity: null });
   }
   if (!tabs.some((t) => t.id === activeId)) activeId = MAIN_TAB;
   return { tabs, activeId };
@@ -70,7 +89,7 @@ function persist() {
   try {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify(state.tabs.map(({ id, conversationId, title, scope, createdAt }) => ({ id, conversationId, title, scope, createdAt }))),
+      JSON.stringify(state.tabs.map(({ id, conversationId, title, scope, createdAt, creativity, role, roleName, parent, provider }) => ({ id, conversationId, title, scope, createdAt, creativity, role, roleName, parent, provider }))),
     );
     localStorage.setItem(ACTIVE_KEY, state.activeId);
   } catch {
@@ -107,9 +126,47 @@ export function addTab(): AgentTab {
     busy: false,
     unread: 0,
     createdAt: Date.now(),
+    creativity: null,
   };
   commit({ tabs: [...state.tabs, tab], activeId: tab.id });
   return tab;
+}
+
+/**
+ * `spawn_agent` 拉起的子 Agent 开一页(A3):对话 ID 由服务端定(= 它的新身份),先写进这一页记会话 id 的键,
+ * 页面挂上时 useChatHistory 就读到它;不抢当前页的焦点。同一个对话 ID 已经有页就回那一页。
+ */
+export function addSpawnedTab(spec: { conversationId: string; role: string; roleName: string; parent: string; provider: string | null; creativity: CreativityLevel | null }): AgentTab {
+  const hit = state.tabs.find((t) => t.conversationId === spec.conversationId);
+  if (hit) return hit;
+  const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  try {
+    localStorage.setItem(`pcChatId:${id}`, spec.conversationId);
+  } catch {
+    /* 存不了的话 useChatHistory 会另起一个 id,页签上的对话 ID 在下面这份里仍是对的 */
+  }
+  const same = state.tabs.filter((t) => t.roleName === spec.roleName).length;
+  const tab: AgentTab = {
+    id,
+    conversationId: spec.conversationId,
+    title: same ? `${spec.roleName} ${same + 1}` : spec.roleName,
+    scope: null,
+    busy: false,
+    unread: 0,
+    createdAt: Date.now(),
+    creativity: normalizeCreativity(spec.creativity),
+    role: spec.role,
+    roleName: spec.roleName,
+    parent: spec.parent,
+    provider: spec.provider,
+  };
+  commit({ ...state, tabs: [...state.tabs, tab] });
+  return tab;
+}
+
+/** 这一页拉起时定下的驱动(子 Agent 沿用父对话的);没有回 null */
+export function getTabProvider(id: string): string | null {
+  return state.tabs.find((x) => x.id === id)?.provider ?? null;
 }
 
 /** 关页。主页不能关;关掉的是当前页就切到左边那页 */
@@ -140,6 +197,18 @@ export function setTabBusy(id: string, busy: boolean): void {
   patchTab(id, { busy });
 }
 
+/** 这一页单独设创造力等级;null = 回到跟项目 */
+export function setTabCreativity(id: string, creativity: CreativityLevel | null): void {
+  const t = state.tabs.find((x) => x.id === id);
+  const next = normalizeCreativity(creativity);
+  if (!t || t.creativity === next) return;
+  patchTab(id, { creativity: next });
+}
+
+export function getTabCreativity(id: string): CreativityLevel | null {
+  return state.tabs.find((x) => x.id === id)?.creativity ?? null;
+}
+
 export function setTabUnread(id: string, unread: number): void {
   const t = state.tabs.find((x) => x.id === id);
   if (!t || t.unread === unread) return;
@@ -151,7 +220,10 @@ export function setScopeByConversation(conversationId: string, scope: string | n
   const t = state.tabs.find((x) => x.conversationId === conversationId);
   if (!t) return null;
   const idx = state.tabs.indexOf(t);
-  patchTab(t.id, { scope, title: scope || `Agent ${idx + 1}` });
+  if (t.scope === scope) return t;
+  // 子 Agent 的页签名以角色名打头,声明了范围再接上范围
+  const base = t.roleName ? (t.title.startsWith(t.roleName) ? t.title.split(" · ")[0] : t.roleName) : null;
+  patchTab(t.id, { scope, title: base ? (scope ? `${base} · ${scope}` : base) : scope || `Agent ${idx + 1}` });
   return state.tabs.find((x) => x.id === t.id) ?? null;
 }
 

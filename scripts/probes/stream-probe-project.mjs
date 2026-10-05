@@ -13,6 +13,7 @@
  * 当成同一个 id 销毁掉(容器 id 取自引擎的共享随机数;实测后挂那张一挂上,前一张的 `<canvas>` 就被
  * `CanvasManager.destroy` 摘掉)—— 这是 `particles.tsx` 既有的问题,导出里也一样,和轨道流无关,见报告。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { FramePipeline } from '../../server/frame-pipeline.mjs';
 
 export const PROJECT = {

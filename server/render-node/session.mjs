@@ -23,6 +23,12 @@ import { pickCandidate } from './pick.mjs';
  * (进程内联调就是这么接的)。所以这里**先改本地状态、再 `send`**:例如认领时先记在飞再发,
  * 否则同步回来的 `task.claimed` 会先清在飞、随后又被记上,节点从此再也不认领。
  *
+ * # 工作计数 step(契约 A.12〔裁〕)
+ *
+ * 持有的每个任务另记一个工作计数 `step`(起初没有):执行编排每推进一步(换阶段、出一批、推完一块)调 `advance(id)` 加一,
+ * 不单独发消息;下一次 `progress` 或按节拍的续约把它带上(`task.progress { done, step }`)。队列看到 step 变了也重起停滞计时,
+ * 所以推产物、换阶段这些帧数不变的阶段不会被当成卡死;执行器真卡死时 step 也不动,照旧按停滞收回。续约本身不加 step。
+ *
  * # 丢认领只通知一次
  *
  * `node.welcome.lost` 之后队列还会为同一个 id 补一条 `task.lease-lost`;持有已经移除,
@@ -44,11 +50,18 @@ export function createNodeSession({
   projects = 'all',
   onTask = () => {},
   onLost = () => {},
+  // 这个任务此刻能不能开工(契约 A.12〔裁〕:独立渲染主机只在预渲染间空着时认领快照,见 host.mjs);缺省都能。
+  // 第二个参数 `{ held }` 是此刻的持有数:认领闸(下一项)多给的那一格只接特定的任务时用它区分
+  canClaim = () => true,
+  // 此刻最多持有几项(认领闸,`mechanism/rendering.md`「Agent 优先只是插队」):缺省恒为 `maxConcurrent`。
+  // 本机节点在 Agent 专用实例开着且空闲时给 `maxConcurrent + 1`,多认领一项交给它做(`vite-plugin-frames.ts`)。
+  // `node.hello` 报的仍是 `maxConcurrent`
+  claimLimit = null,
 }) {
   const settings = { ...QUEUE_DEFAULTS, ...constants };
   /** 本地看到的 open 任务:id → TaskView */
   let open = new Map();
-  /** 持有的认领:id → { id, token, lastSentAt, done, projectId } */
+  /** 持有的认领:id → { id, token, lastSentAt, done, step, projectId } */
   const holds = new Map();
   /** 在飞的认领:{ id, projectId } | null */
   let inflight = null;
@@ -84,7 +97,7 @@ export function createNodeSession({
     for (const { id, token } of entries) {
       const hold = holds.get(id);
       if (hold) hold.token = token;
-      else holds.set(id, { id, token, lastSentAt: at, done: null, projectId: null });
+      else holds.set(id, { id, token, lastSentAt: at, done: null, step: null, projectId: null });
     }
     // 旧连接上在飞的认领和本地视图都作废:回包不会再来,视图等新的 queue.snapshot
     open = new Map();
@@ -115,7 +128,7 @@ export function createNodeSession({
     const existing = holds.get(id);
     if (existing) { existing.token = token; return; }
     const projectId = task?.source?.projectId ?? null;
-    holds.set(id, { id, token, lastSentAt: now(), done: null, projectId });
+    holds.set(id, { id, token, lastSentAt: now(), done: null, step: null, projectId });
     if (projectId != null) lastProjectId = projectId;
     // M7 D1：plan 的认领回包带同用户在线纯浏览器节点的指纹，原样交给编排（切分方据此给浏览器可做的卡另出一份）
     onTask(task, Array.isArray(message.browserFingerprints) ? { token, browserFingerprints: [...message.browserFingerprints] } : { token });
@@ -230,11 +243,17 @@ export function createNodeSession({
     for (const hold of [...holds.values()]) {
       if (holds.get(hold.id) !== hold || at - hold.lastSentAt < settings.RENEW_INTERVAL_MS) continue;
       hold.lastSentAt = at;
-      send({ type: 'task.progress', id: hold.id, token: hold.token, done: hold.done ?? null });
+      send(progressMessage(hold));
     }
-    if (inflight || !isIdle() || holds.size >= maxConcurrent || at < throttledUntil) return;
+    let limit = maxConcurrent;
+    if (typeof claimLimit === 'function') {
+      try { const n = Number(claimLimit()); limit = Number.isInteger(n) && n >= 0 ? n : maxConcurrent; } catch { limit = maxConcurrent; }
+    }
+    if (inflight || !isIdle() || holds.size >= limit || at < throttledUntil) return;
+    const held = holds.size;
     for (const [id, until] of deferred) if (until <= at || !open.has(id)) deferred.delete(id);
-    const candidates = filterClaimable(known0().filter(task => !holds.has(task.id) && !deferred.has(task.id)), filterNode());
+    const candidates = filterClaimable(known0().filter(task => !holds.has(task.id) && !deferred.has(task.id)), filterNode())
+      .filter(task => { try { return canClaim(task, { held }) !== false; } catch { return false; } });
     const task = pickCandidate(candidates, { k: settings.PICK_K, random, lastProjectId });
     if (!task) return;
     inflight = { id: task.id, projectId: task.source?.projectId ?? null };
@@ -246,12 +265,27 @@ export function createNodeSession({
     }
   }
 
+  /** 续约 / 报进度的消息:step 有了才带(没带的消息与原来一字不差) */
+  function progressMessage(hold) {
+    const msg = { type: 'task.progress', id: hold.id, token: hold.token, done: hold.done ?? null };
+    if (hold.step !== null && hold.step !== undefined) msg.step = hold.step;
+    return msg;
+  }
+
   function progress(id, done) {
     const hold = holds.get(id);
     if (!hold) return false;
     hold.done = done;
     hold.lastSentAt = now();
-    send({ type: 'task.progress', id, token: hold.token, done: done ?? null });
+    send(progressMessage(hold));
+    return true;
+  }
+
+  /** 工作推进了一步(见文件头「工作计数 step」):只记,不发 */
+  function advance(id) {
+    const hold = holds.get(id);
+    if (!hold) return false;
+    hold.step = (hold.step ?? 0) + 1;
     return true;
   }
 
@@ -288,6 +322,7 @@ export function createNodeSession({
     receive,
     tick,
     progress,
+    advance,
     complete,
     fail,
     yieldAll,

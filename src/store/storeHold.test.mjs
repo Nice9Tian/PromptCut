@@ -2,7 +2,7 @@
  * StoreHold(store/core.ts):停靠栏里看不见的分区页不跟 store 的更新,露出来时按当时的 store 重读。
  * 跑:node --test src/store/storeHold.test.mjs
  *
- * 来历:tiers-probe T4(docs/reports/AGENT-perf-t4.md)—— 以前每次编辑都把看不见的特效库、
+ * 来历:tiers-probe T4(docs/archive/agent-reports/AGENT-perf-t4.md)—— 以前每次编辑都把看不见的特效库、
  * 节点图整棵重渲,挤在编辑那个同步任务里。
  */
 import { srcUrl } from "../testing/registerTs.mjs";

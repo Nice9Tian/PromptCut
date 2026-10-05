@@ -11,24 +11,24 @@ import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
 import { frontStage, onStageEvent, pushProject, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
 import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
-import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, liveStage, singleLiveStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
+import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleLiveStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
-import { MiniScrubber } from "./preview/MiniScrubber";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
-import { getCard, userCardSources } from "../kernel/registry";
-import { useLayoutMode } from "./layoutMode";
+import { getCard, onSyncedUserCardsChanged, syncedUserCards } from "../kernel/registry";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
-import { currentReadyIndex, deliverSnapshots, exemptOnline, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { backfillHooks } from "./sync/backfillUpload";
+import { currentReadyIndex, deliverSnapshots, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
-import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
+import { notePlayFrame, notePlayRunStart, playingSwapTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
+import { useUserEditing } from "./userEditing";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
 import { resolveGlRoute } from "../render/costDevice.mjs";
 import { ONLINE } from "../online/mode";
@@ -37,7 +37,11 @@ import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
 import { assetAuthHeaders, docRequest, hasDocLink, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
-import { needsLocalPc, setOnlineBrowserMode } from "../render/placeholderHost";
+import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
+import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
+import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
+import { setCoverageSource, subscribeCoverage } from "./onlineCoverage";
+import { localOnlyMissingAt } from "./localOnlyMissing";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
 import { lowMemoryMeasuring, lowMemorySearchState, reclassify, runLowMemorySearch, type LowMemorySearchOutcome } from "./lowMemorySearch";
 import { LowMemoryGate } from "./LowMemoryGate";
@@ -47,14 +51,23 @@ import { pageEnvironment } from "./pageEnvironment.mjs";
 import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.mjs";
 import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
-import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
+import { layerSwapMs } from "./swapCost";
+import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages } from "../online/stageOrigins";
+import { createStageHandshake, type StageHandshake } from "../online/stageHandshake";
+
+/** 换回双舞台时盖板最多留多久(〔裁〕2026-09-30 `claude/stage-handshake`) */
+const STAGE_HANDOVER_MAX_MS = 3000;
+/** 新的可见舞台第一次 `setTime` 回包(或报来第一拍)之后再等这么久撤盖板,让它把这一帧画到屏上 */
+const STAGE_HANDOVER_SETTLE_MS = 150;
+import { createStageWatch, type StageWatch } from "../online/stageWatch";
+import { builtinSourceExports } from "../cards/builtinSourceExports";
 import { pageL2 } from "../online/l2";
 import { l2CostBackend } from "../online/l2Costs";
 import { createPlanPublisher } from "../online/planPublisher";
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { onCostRecords, onProbeProgress, probeFrameDiag, probeSettledFor, setCostBackend } from "./probeRunner";
+import { onCostRecords, onProbeProgress, probeFrameDiag, probeRunDiag, probeSettledFor, setCostBackend } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
@@ -94,8 +107,9 @@ function l2LowMemoryCostStore(): CostStore {
 
 /*
  * 父页的在线浏览器模式开关(C10 契约第 9 节):与舞台 `StageView` 同一个判据(在线构建,或编辑页地址上的
- * `platform=browser`,后者经 `stageSrc` 转给舞台)。`snapshotFeed` 据它豁免用户卡、图卡的选帧与投递,
- * 时间轴据它给这些片段挂「该模式暂不支持自定义卡」的徽标。
+ * `platform=browser`,后者经 `stageSrc` 转给舞台)。开着时这台设备跑不了的卡(用户卡、图卡)一律按重卡贴预渲染结果
+ * (`snapshotFeed` 的 `localOnlyOf`、`costIdentity.ts` 不给它们身份),时间轴在它们的结果没覆盖整段时挂
+ * 「需要本地 PC 渲染辅助」徽标。
  */
 try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location */ }
 
@@ -115,10 +129,7 @@ try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("p
  *
  * 视频层:按 videoClipAt 找当前该播的素材段,src 变了换源,时间对不上(>0.2s)就 seek。
  */
-export function Preview({ chatLayout }: { chatLayout?: boolean }) {
-  const layoutMode = useLayoutMode();
-  // prop 是显式覆盖用的，平时不传就按当前 layoutMode 是否为 chat 决定
-  const showMiniScrubber = chatLayout !== undefined ? chatLayout : layoutMode === "chat";
+export function Preview() {
 
   const project = useStore((s) => s.project);
   // C6.6:两档素材的换档集合(预览挂着时每 2 秒问一次当前素材服务)
@@ -127,7 +138,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   useEffect(() => { setNoEditorProcess(ONLINE); return startAssetTiers(); }, []);
   // C6.6 设计稿第 9 节第 2 条:打开项目时,缺素材小尺寸、本地有素材原尺寸的视频在后台补转
   // 在线页面没有本机转码(C6.6 的补转走编辑器进程),不补
-  useEffect(() => (ONLINE ? undefined : startTierBackfill()), []);
+  // 同一时机补入库没有哈希的老素材;本机取不到的标「(缺失)」,放云端时补上哈希的交给上传队列(backfillUpload.ts)
+  useEffect(() => (ONLINE ? undefined : startTierBackfill(backfillHooks)), []);
   const t = useStore((s) => s.t);
   const playing = useStore((s) => s.playing);
   const playToken = useStore((s) => s.playToken);
@@ -150,6 +162,23 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const stagesPending = ONLINE && onlineStages.config !== "done";
   const dual = dualStage();
   /**
+   * 首次握手的过渡期(`stageHandshake.ts` 的 `interim`,〔裁〕2026-09-30 `claude/stage-handshake`):可见舞台 A 挂上 20 秒还没握上,
+   * 先按同源单舞台出画面(`dual` 为假,和退回单舞台同一条路),原来那两个跨源 iframe 不拆,改作隐藏的预热 iframe 继续加载;
+   * 两台都握上手就换回双舞台(只换一次)。
+   */
+  const interim = interimStage();
+  /** 首次握手这一轮还在进行(双舞台等握手,或过渡期):计时器跨过「双舞台 → 过渡期 → 换回双舞台」不重建 */
+  const handshakeRound = dual || interim;
+  /**
+   * 换回双舞台那一下的画面衔接〔裁〕:过渡期的同源单舞台留在原位当盖板(不再连 RPC,停在最后一帧),新的可见舞台
+   * 先不露出来;等它按新项目画好当前这一帧(第一次 `setTime` 回包之后一小会儿,或播放中报来第一拍)再一次换过来,
+   * 最多等 `STAGE_HANDOVER_MAX_MS`。
+   */
+  const [handoverDone, setHandoverDone] = useState(false);
+  const handover = ONLINE && dual && onlineStages.interimAt !== null && !handoverDone;
+  const handoverRef = useRef(handover);
+  handoverRef.current = handover;
+  /**
    * 可见舞台渲 live 变体:双舞台,或在线页面的同源单舞台(`docs/plan/c10a-contract.md` 第 8.1 节)。
    * 播放头跟舞台的 `frame`、快照 / 抑制经 RPC 投递、素材层在舞台里 —— 这些按 `live` 判;
    * 只和后台舞台 B 有关的(互换、补跑、页面触发预渲染)仍按 `dual` 判。
@@ -171,6 +200,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   const [cam, setCam] = useState<View2D>({ scale: 0.4, tx: 0, ty: 0, auto: true });
   const scale = cam.scale;
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  /** 每台舞台上一次收到的「已确认没有结果」的片段(`setLocalOnlyMissing`,按 id 排好、用 `|` 连起来);变了才发 */
+  const missingSentRef = useRef<Partial<Record<StageId, string>>>({});
+  /** 按当前时刻重算并发出(真身在在线来源那段 effect 下面定义;握手时也叫) */
+  const pushMissingRef = useRef<() => void>(() => {});
   const camRef = useRef(cam);
   camRef.current = cam;
   /**
@@ -217,6 +252,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   
   // 记录拖动工具过程中的位移预览状态
   const [dragPreview, setDragPreview] = useState<{ clipId: string; dx: number; dy: number } | null>(null);
+  // 舞台上拖动 / 改字中:告诉 Agent 用户正在编辑这张卡(A2)
+  useUserEditing("stage-move", dragPreview?.clipId ?? null, "drag");
+  useUserEditing("stage-text", editingText?.clipId ?? null, "text");
 
   /**
    * 舞台的 RPC 客户端(E0):一个 iframe 实例一个,`pc-stage-ready` 握手到了就换新的、旧的 dispose。
@@ -227,6 +265,26 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const hostCapsRef = useRef<Record<StageId, HostCapabilities | null>>({ A: null, B: null });
   /** 在线双舞台这一轮握上手的舞台(C10 契约第 2 节:两个都握上才算成;超时算失败,退回同源单舞台) */
   const handshookRef = useRef(new Set<StageId>());
+  /** 在线双舞台握手之后的看守(心跳断 → 重载那一台 → 重载也握不回来就退回单舞台;`src/online/stageWatch.ts`) */
+  const stageWatchRef = useRef<StageWatch | null>(null);
+  /** 在线双舞台的首次握手计时(每台从自己 iframe 的 `load` 起算,另有总上限;`src/online/stageHandshake.ts`) */
+  const handshakeRef = useRef<StageHandshake | null>(null);
+  /**
+   * 在线双舞台:后台舞台 B 等可见舞台 A 的 iframe `load` 之后才挂〔裁:2026-09-30 `claude/stage-handshake`〕。
+   * 两个舞台各在自己的源上、各下一遍主脚本,同时下载就平分带宽;慢网络下让 A 先独占带宽,用户先看到画面,
+   * B 的握手时限从 B 自己的 `load` 起算,不吃亏。桌面(本机)不受影响,照旧一起挂。
+   */
+  const [backStageMount, setBackStageMount] = useState(false);
+  /** 过渡期里预热的两个跨源 iframe(同一个元素,换回双舞台时直接接任 A / B,不重新加载) */
+  const warmRef = useRef<Record<StageId, HTMLIFrameElement | null>>({ A: null, B: null });
+  const warmRefOf = useMemo(() => ({
+    A: (el: HTMLIFrameElement | null) => { warmRef.current.A = el; },
+    B: (el: HTMLIFrameElement | null) => { warmRef.current.B = el; },
+  }), []);
+  /** 每个舞台窗口最近一次的 `pc-stage-ready`(预热期间收到的握手,换回双舞台时照它补一遍握手) */
+  const readyByWinRef = useRef(new WeakMap<object, { origin: string; caps: HostCapabilities | null }>());
+  /** 握手处理本体(消息 effect 里建;换回双舞台时补握手也走它) */
+  const processReadyRef = useRef<(id: StageId, win: Window, origin: string, caps: HostCapabilities | null) => void>(() => {});
   /**
    * 下面那一堆(拖动、命中、心跳、节拍)问的都是**可见舞台**。
    *
@@ -321,13 +379,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   }, [lowMem]);
   /*
    * L4(C10 契约第 6 节、第 18 节第 1 条):在线普通档没有流,重层每拍换一次 HTML 快照 —— 播放中的投递不受 33 ms 节流;
-   * 换帧成本 `swapMs` 进每拍预算,分派时每张重卡每拍的固定成本也换成它(两边同一个预算)。
+   * 换帧成本进每拍预算,分派时每张重卡每拍的固定成本也换成它(两边同一个预算)。
    */
   useEffect(() => {
     const on = ONLINE && !lowMem;
-    setBeatSwap(on, { swapMs: SWAP_MS, occupied: lightCostAt });
-    setPlanDeadMs(on ? SWAP_MS : null);
-    return () => { setBeatSwap(false); setPlanDeadMs(null); };
+    // 每层的换帧成本按卡种取(swap-tuning 实测,`beatSwap.mjs` 的 `SWAP_MS_BY_KIND`);认不出卡种的按缺省 `SWAP_MS`
+    setBeatSwap(on, { swapMs: SWAP_MS, occupied: lightCostAt, costOf: on ? layerSwapMs : null });
+    setPlanDeadMs(on ? SWAP_MS : null, on ? layerSwapMs : null);
+    return () => { setBeatSwap(false, { costOf: null }); setPlanDeadMs(null); };
   }, [lowMem]);
   /* C10 契约第 3 节:在线普通档的成本记录存进 L2 的 `costs` 表(`mode=build`,关掉再开不重测) */
   useEffect(() => {
@@ -568,9 +627,21 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         return;
       }
       if (type !== "pc-stage-ready") return;
+      if (e.source) readyByWinRef.current.set(e.source, { origin: e.origin, caps: (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null });
+      // 过渡期里预热的跨源舞台握上手了:只记进首次握手的计时(不建 RPC;换回双舞台时再补握手)
+      for (const id of STAGE_IDS) {
+        const warm = warmRef.current[id]?.contentWindow;
+        if (warm && e.source === warm) { handshakeRef.current?.ready(id); return; }
+      }
       for (const id of STAGE_IDS) {
         const win = frames[id].current?.contentWindow;
         if (!win || e.source !== win) continue;
+        processReadyRef.current(id, win, e.origin, (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null);
+        return;
+      }
+    };
+    processReadyRef.current = (id, win, origin, caps) => {
+      {
         /*
          * 这个实例此刻该是什么角色。**不能一律照 `INITIAL_ROLE_OF` 走** ——
          * K5 的互换之后 A 可能已经是后台那一个了,它热重载一次就会顶着 `front` 回来、
@@ -581,11 +652,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         noteStageFresh(id);
         rpcRef.current[id]?.dispose();
         // 回包发给这个 iframe 此刻真实的源(换源重载的过渡期里 `stageTargetOrigin` 可能已经是另一个)
-        const client = createStageRpc(win, e.origin && e.origin !== "null" ? e.origin : stageTargetOrigin(id));
+        const client = createStageRpc(win, origin && origin !== "null" ? origin : stageTargetOrigin(id));
         handshookRef.current.add(id);
+        // 过渡期的同源单舞台握手不算首次握手(那是 A 的另一个 iframe)
+        if (dualRef.current) handshakeRef.current?.ready(id);
         if (ONLINE && dualRef.current && handshookRef.current.has("A") && handshookRef.current.has("B")) markStageHandshake("ok");
+        stageWatchRef.current?.ready(id);
         rpcRef.current[id] = client;
-        const caps = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
         hostCapsRef.current[id] = caps;
         // R9 端口转交协议:路线 2 下,握手之后、发任何 RPC(含下面的 setRole)之前先把 GL 端口交过去
         glPortTo(id, win, caps);
@@ -594,9 +667,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         void client.setRole(role).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
         // c10a 第 8 节:在线页面把取档策略(低内存档、远程素材服务)交给这一台舞台;桌面运行环境不发,舞台照缺省
         if (ONLINE) void pushMediaPolicyRef.current();
+        // C10 契约第 9 节:内容库同步来的用户卡(本机跑不了)交给这一台舞台;桌面运行环境不发
+        if (ONLINE) void client.setSyncedUserCards([...syncedUserCards().values()]).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
+        // 预览缩放倍数交给舞台:占位符(沙漏、「需要本地 PC 渲染辅助」图标)据此补偿,屏幕上看得清;桌面与在线都发
+        void client.setViewScale(scaleRef.current).catch(() => { /* 同上 */ });
+        // 在线浏览器模式:已确认此刻没有可贴结果的「本机跑不了」的片段(其余显示沙漏;刚打开页面时不闪图标)
+        if (onlineBrowserMode()) { missingSentRef.current[id] = undefined; pushMissingRef.current(); }
         // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
         if (role === "front") setStageReady((n) => n + 1);
-        return;
       }
     };
     window.addEventListener("message", onMessage);
@@ -612,14 +690,115 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [glPortTo]);
 
+  /*
+   * 首次握手(C10 契约第 2 节;〔裁〕2026-09-30 `claude/stage-handshake`):每台的 20 秒从那一台 iframe 的 `load` 起算
+   * (慢网络下舞台页光下载就要几十秒,不再算作握手失败),自挂上起另有总上限;到点没都握上照旧退回同源单舞台。
+   */
+  useEffect(() => {
+    if (!ONLINE || !handshakeRound) return;
+    // 这一轮只从 `pending` 开始计时(过渡期、换回之后都不重建;真走到这里说明布局被别的原因打断过,按失败收场)
+    if (onlineStageState().handshake !== "pending") {
+      if (onlineStageState().handshake === "interim") markStageHandshake("failed", "过渡期的首次握手计时中断");
+      return;
+    }
+    handshookRef.current = new Set();
+    const hs = createStageHandshake({
+      ids: STAGE_IDS,
+      fail: (reason) => {
+        console.warn(`[preview] ${reason},退回同源单舞台`);
+        markStageHandshake("failed", reason);
+      },
+      ok: () => markStageHandshake("ok"),
+      interim: (reason) => {
+        console.warn(`[preview] ${reason}`);
+        markStageHandshake("interim", reason);
+      },
+    });
+    handshakeRef.current = hs;
+    // 这一轮已经握过手的舞台(effect 晚于握手跑到时)照样记上
+    for (const id of STAGE_IDS) if (rpcRef.current[id]) hs.ready(id);
+    const w = window as unknown as { __pcStageHandshake?: () => unknown };
+    w.__pcStageHandshake = () => hs.status();
+    return () => {
+      hs.dispose();
+      if (handshakeRef.current === hs) handshakeRef.current = null;
+      // 退回、换回之后留着观察口(探针核原因与时刻)
+      if (hs.phase !== "failed" && hs.phase !== "ok") delete w.__pcStageHandshake;
+    };
+  }, [handshakeRound]);
+  /** 跨源舞台 iframe 的 `load`(跨源也触发;预热期间也是它):首次握手按它起算;A 加载完才挂 B */
+  const onStageFrameLoad = useCallback((id: StageId) => {
+    handshakeRef.current?.loaded(id);
+    if (id === "A") setBackStageMount(true);
+  }, []);
+  /*
+   * 过渡期之后换回双舞台(只换一次):两个预热 iframe 已经接任 A / B(同一个元素,没重新加载),照它们预热时发来的
+   * `pc-stage-ready` 补一遍握手(建 RPC、定角色、灌项目);同源单舞台留作盖板,直到新的可见舞台画好当前这一帧。
+   */
+  const handoverTimerRef = useRef<number | null>(null);
+  /** 诊断:换回那一下从哪一刻开始、因为什么撤的盖板(`setTime` / `frame` / `cap`)、撤盖板时离开始多久 */
+  const handoverInfoRef = useRef<{ startedAt: number | null; by: string | null; ms: number | null }>({ startedAt: null, by: null, ms: null });
+  const endHandover = useCallback((by: string) => {
+    const info = handoverInfoRef.current;
+    if (info.by === null && info.startedAt !== null) handoverInfoRef.current = { ...info, by, ms: Math.round(performance.now() - info.startedAt) };
+    setHandoverDone(true);
+  }, []);
+  const finishHandover = useCallback((delayMs: number, by: string) => {
+    if (!handoverRef.current || handoverTimerRef.current !== null) return;
+    handoverTimerRef.current = window.setTimeout(() => { handoverTimerRef.current = null; endHandover(by); }, delayMs);
+  }, [endHandover]);
+  useEffect(() => {
+    if (!handover) return;
+    for (const id of STAGE_IDS) {
+      const win = (id === "A" ? frameARef : frameBRef).current?.contentWindow;
+      const msg = win ? readyByWinRef.current.get(win) : undefined;
+      if (win && msg && !rpcRef.current[id]) processReadyRef.current(id, win, msg.origin, msg.caps);
+    }
+    handoverInfoRef.current = { startedAt: performance.now(), by: null, ms: null };
+    const cap = window.setTimeout(() => endHandover("cap"), STAGE_HANDOVER_MAX_MS);
+    return () => window.clearTimeout(cap);
+  }, [handover, endHandover]);
+
+  /*
+   * 握手之后又断(C10 契约第 2 节「握手之后又断」〔裁〕):已握手的舞台心跳断了(卡死、跨源 iframe 的渲染进程崩了),
+   * 先照原来的做法整页重载那一台;重载后 20 秒内没握回来(或反复断),走首次握不上手的同一条路退回同源单舞台,
+   * 退回之后看守作废、不再重载(`markStageHandshake("failed")` 之后 `dual` 变假,本 effect 收摊)。
+   */
   useEffect(() => {
     if (!ONLINE || !dual) return;
-    handshookRef.current = new Set();
-    const timer = window.setTimeout(() => {
-      const got = [...handshookRef.current];
-      if (got.length < 2) markStageHandshake("failed", `握上手的舞台:${got.join("、") || "无"}`);
-    }, STAGE_HANDSHAKE_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
+    const frames: Record<StageId, React.RefObject<HTMLIFrameElement | null>> = { A: frameARef, B: frameBRef };
+    const watch = createStageWatch({
+      ids: STAGE_IDS,
+      ping: (id) => rpcRef.current[id]?.size() ?? null,
+      reload: (id, reason) => {
+        const frame = frames[id].current;
+        const client = rpcRef.current[id];
+        if (client) {
+          releaseStageClient(client);
+          client.dispose();
+          rpcRef.current[id] = null;
+          hostCapsRef.current[id] = null;
+        }
+        console.warn(`[preview] 舞台 ${id} 断开(${reason}),整页重载它`);
+        if (frame) frame.src = frame.src;
+      },
+      fallback: (reason) => {
+        console.warn(`[preview] ${reason},退回同源单舞台`);
+        markStageHandshake("failed", reason);
+      },
+      hidden: () => typeof document !== "undefined" && document.hidden,
+    });
+    stageWatchRef.current = watch;
+    // 这一轮已经握过手的舞台(effect 晚于握手跑到时)照样看守
+    for (const id of STAGE_IDS) if (rpcRef.current[id]) watch.ready(id);
+    const w = window as unknown as { __pcStageWatch?: () => unknown };
+    w.__pcStageWatch = () => ({ A: watch.status("A"), B: watch.status("B"), reloads: watch.reloads, fellBack: watch.fellBack, handshake: onlineStageState().handshake, reason: onlineStageState().reason });
+    return () => {
+      watch.dispose();
+      if (stageWatchRef.current === watch) stageWatchRef.current = null;
+      // 退回之后留着观察口(探针核「退回后不再重载」),只把看守换成已作废的那一份
+      if (!watch.fellBack) delete w.__pcStageWatch;
+    };
   }, [dual]);
 
   /*
@@ -770,14 +949,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
      */
     const src = new OnlineSnapshotSource({
       request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders,
-      // 用户卡、图卡的层不取清单、不预取字节(C10 契约第 9 节,与选帧的豁免同一个判法)
-      skipLayer: (clipId) => {
-        for (const tr of getState().project.tracks) for (const c of tr.clips) if (c.id === clipId) return exemptOnline(c);
-        return false;
-      },
+      /*
+       * 用户卡、图卡的层与内置卡一样取清单与字节(C10 契约第 9 节,2026-09-29 起不再豁免);另外整段的清单都取,
+       * 时间轴据此判「预渲染结果覆盖整段没有」(徽标)。
+       */
+      coverageLayer: (clipId) => localOnlyOf(getState().project).has(clipId),
     }, { tier: lowMemRef.current ? "small" : "original", store: pageL2({ lowMemory: lowMemRef.current }) });
     onlineSourceRef.current = src;
     setActiveOnlineSource(src);
+    setCoverageSource(src);
     setSnapshotSource(src);
     // 投递时缺的那一帧取到之后也要重投一次(暂停着的页面没有别的事件会再投)
     setSnapshotArrive(() => { void pumpRef.current(); });
@@ -787,6 +967,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       if (m.type !== "done") void pumpRef.current();
     });
     src.setProject(getState().project.id || null);
+    src.setInputs(getState().project);
     src.focus(tRef.current, getState().project.fps || 30);
     const resume = () => {
       if (document.visibilityState === "visible") src.focus(tRef.current, getState().project.fps || 30);
@@ -811,9 +992,96 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       src.stop();
       onlineSourceRef.current = null;
       setActiveOnlineSource(null);
+      setCoverageSource(null);
       stopSnapshotFeed();
     };
   }, [online, lowMem]);
+  /*
+   * stale-layer:项目每变一次(本页改的、别的成员改了同步过来的)都把它交给在线来源。来源按它算各片段的输入签名,
+   * 与层表里每层记的 `inputSig` 比对:对不上的旧参数层马上撤掉(就绪区间发空,下一次投递就不再贴,用户卡、图卡显示沙漏,
+   * 内置重卡照在线普通档的兜底),渲染节点按新输入重写层表后新结果照常换上;改回原来的参数、原来那一层还在就照贴。
+   * 放在建来源那个 effect 之后:同一次提交里先建好来源再交项目。
+   */
+  useEffect(() => {
+    if (!online) return;
+    onlineSourceRef.current?.setInputs(project);
+  }, [online, lowMem, project]);
+  /*
+   * C10 契约第 9 节「识别」:在线页面经同一条文档服务连接读本项目内容库的卡片源码(`card-source`,键前缀 `src/cards/user/`),
+   * 解析出卡片的 id 与名字,进注册表作「已知但本机不能运行」的条目(`sync/onlineCardSources.ts`)。定时重取;连接换了
+   * (重连、换项目)清表重取。表变了发给两个舞台(舞台是另一份文档,有它自己的注册表)。
+   */
+  useEffect(() => {
+    if (!online) return;
+    /*
+     * 测量等卡片源码第一次同步完再开始(`measureGate.ts`):在那之前同步卡被当成未知 id,后台舞台可能把它测一次。
+     * 第一次同步有了结果(成功或失败)就开门;最多等 `MEASURE_GATE_MAX_MS`。桌面不关这道门。
+     */
+    const linkKey = () => (hasDocLink() ? currentSharedLink() : null);
+    // 门按连接算:换了项目 / 连接,问门时重新关上,等新连接的卡片源码同步完(`measureGate.ts`)
+    setMeasureGateLink(linkKey);
+    holdMeasureForCardSources();
+    const sources = new OnlineCardSources({
+      request: docRequest, linkKey,
+      // 用户卡源码从内置模块引进来的控件、默认值:用页面自己带着的那份(`src/cards/builtinSourceExports.ts`)
+      builtins: builtinSourceExports,
+      onFirstSettled: (ok, link) => releaseMeasureGate(ok, link),
+    });
+    const push = () => {
+      const entries = [...syncedUserCards().values()];
+      for (const id of STAGE_IDS) {
+        const c = rpcRef.current[id];
+        if (c) void c.setSyncedUserCards(entries).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
+      }
+    };
+    const offChange = onSyncedUserCardsChanged(push);
+    const timer = window.setInterval(() => { void sources.sync(); }, CARD_SOURCE_POLL_MS);
+    void sources.sync();
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcCardSources = () => sources.debug();
+    w.__pcCardSourcesSync = () => sources.sync();
+    return () => { window.clearInterval(timer); offChange(); sources.stop(); delete w.__pcCardSources; delete w.__pcCardSourcesSync; };
+  }, [online]);
+  /*
+   * 预览缩放倍数变了,发给两个舞台(占位符据此补偿:沙漏在屏幕上保持原大小,「需要本地 PC 渲染辅助」图标看得清)。
+   * 握手时另发一次(见 `pc-stage-ready` 那段)。桌面与在线都发。
+   */
+  useEffect(() => {
+    for (const id of STAGE_IDS) {
+      const c = rpcRef.current[id];
+      if (c) void c.setViewScale(scale).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
+    }
+  }, [scale]);
+  /*
+   * C10 契约第 9 节(刚打开页面不闪图标):这台设备跑不了的片段贴不上快照 / 流时,只有父页已确认这一帧没有可贴的结果
+   * (层表已取到、没有可用的层;或这一帧所在那一段的清单已取到、这一帧不在里面)才显示「需要本地 PC 渲染辅助」图标,
+   * 其余显示沙漏。这里按当前时刻算出「已确认」的那几张(`localOnlyMissing.ts`),变了才发给两个舞台。
+   * 时刻、项目、层表与清单(覆盖订阅)、同步表变了都重算;桌面(模式关着)什么都不发。
+   */
+  pushMissingRef.current = () => {
+    if (!onlineBrowserMode()) return;
+    const p = getState().project;
+    const src = onlineSourceRef.current;
+    const ids = localOnlyMissingAt({
+      clips: p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips),
+      t: tRef.current, fps: p.fps || 30, localOnly: localOnlyOf(p),
+      confirm: src ? (clipId, localFrame) => src.frameConfirmedMissing(clipId, localFrame) : null,
+    });
+    const key = ids.join("|");
+    for (const id of STAGE_IDS) {
+      const c = rpcRef.current[id];
+      if (!c || missingSentRef.current[id] === key) continue;
+      missingSentRef.current[id] = key;
+      void c.setLocalOnlyMissing(ids).catch(() => { missingSentRef.current[id] = undefined; });
+    }
+  };
+  useEffect(() => { pushMissingRef.current(); }, [t, project, online, lowMem]);
+  useEffect(() => {
+    if (!onlineBrowserMode()) return;
+    const offCoverage = subscribeCoverage(() => pushMissingRef.current());
+    const offSynced = onSyncedUserCardsChanged(() => pushMissingRef.current());
+    return () => { offCoverage(); offSynced(); };
+  }, [online]);
   /*
    * C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上。
    * M7 D12:task.done 的结果键认定活着、task.failed { error: 'superseded' } 是另一份活着(不是失败),在线来源据此选层表 v 3 的候选。
@@ -848,21 +1116,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   }, [online, lowMem]);
   /*
    * C10 契约第 7 节、第 18 节第 9 条:在线普通档自己发布清单计划 —— 测量落定后发、防抖、项目每次改动(文档服务确认的版本变了)
-   * 或清单变了就重发;清单是页面自己判重的片段(预渲染集合,去掉这台设备显示不了的用户卡、图卡)。没人认领不报错。
+   * 或清单变了就重发;清单是页面自己判重的片段(预渲染集合)。这台设备跑不了的用户卡、图卡一律判重(`costIdentity.ts`),
+   * 照样进清单,由桌面版等渲染节点认领(C10 契约第 9 节,2026-09-29 起不再去掉)。没人认领不报错。
    */
   useEffect(() => {
     if (!online || lowMem) return;
-    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
     const clips = () => {
       const plan = currentPlan();
       if (!plan) return [];
       const p = getState().project;
       const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
-      return [...plan.prerenderSet].filter((id) => {
-        const clip = byId.get(id);
-        // 只列卡片段(素材段不产快照),去掉这台设备显示不了的用户卡、图卡
-        return !!clip && !!clip.cardId && !needsLocalPc(clip.cardId, getCard(clip.cardId), isUserCard);
-      });
+      // 只列卡片段(素材段不产快照)
+      return [...plan.prerenderSet].filter((id) => !!byId.get(id)?.cardId);
     };
     const publisher = createPlanPublisher({
       request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION,
@@ -902,13 +1167,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   /*
    * 低内存档的补渲(c10a 契约第 17 节):判重的层在素材服务里没有产物(不在渲染节点写的层表里)时,
    * 向队列发布带片段清单的补渲计划任务(标 backfill)。同一批还在等的不重发;页面只发布,不认领。
-   * 用户卡、图卡不发(这台设备不显示它们)。经在线来源同一条文档服务连接发。
+   * 用户卡、图卡照样发(它们判重,由桌面版等渲染节点渲;2026-09-29 起不再豁免)。经在线来源同一条文档服务连接发。
    */
   useEffect(() => {
     if (!online || !lowMem) return;
     const publisher = new BackfillPublisher({ request: docRequest, publisherId: `lowmem-${pageSession()}` });
     let link: unknown = null;
-    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
     const check = () => {
       const src = onlineSourceRef.current;
       const layers = src?.layerClipIds() ?? null;
@@ -921,7 +1185,6 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         project: getState().project,
         layerClipIds: layers,
         heavy: judgedPlan()?.prerenderSet ?? new Set<string>(),
-        unsupported: (clip) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard),
       });
       void publisher.sync({ projectId: currentDocProjectId() || null, projectRev: shared.ds.rev || null, missing });
     };
@@ -944,10 +1207,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     // 本地复用接 L2(要在第一次界限搜索之前接上,否则那一轮用页面内存)
     setLowMemoryCostStore(l2LowMemoryCostStore());
     let disposed = false;
-    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
-    const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard);
+    // 这台设备跑不了的卡(用户卡、图卡)不测、一律判重(界限搜索的 `forcedHeavy`)
+    const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined);
     const tick = async () => {
       if (disposed) return;
+      // 测量等卡片源码第一次同步完(`measureGate.ts`):同步卡在那之前是未知 id,不能被当成普通卡去测
+      if (!measureGateOpen()) return;
       const shared = currentSharedLink();
       const projectId = currentDocProjectId();
       const s = frontStage();
@@ -1150,9 +1415,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       // C10:在线双舞台、按拍换快照、后台活开关、探针帧的可转移字节
       dual: dualRef.current,
       onlineStages: onlineStageState(),
+      // 首次握手过渡期之后换回双舞台那一下(盖板因为什么、多久撤下)
+      handover: { ...handoverInfoRef.current },
       beatSwap: beatSwapDebug(),
       backWork: backWorkDiag(),
       probeFrames: probeFrameDiag(),
+      // 常驻探针测过哪些片段、测量门什么时候开的(online-user-cards-probe 核对同步卡从没被测过)
+      probeRun: probeRunDiag(),
+      measureGate: measureGateDiag(),
       hostCaps: { ...hostCapsRef.current },
       snapshotFeed: snapshotFeedDebug({ project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current }),
     });
@@ -1168,6 +1438,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     switch (e.type) {
       case "frame": {
         // K4:可见舞台每渲完一拍报一次 t,播放头跟它走(那时 Preview 的 rAF 循环不启动)
+        if (handoverRef.current) finishHandover(STAGE_HANDOVER_SETTLE_MS, "frame");
         const now = performance.now();
         const prev = lastFrameAtRef.current;
         lastFrameAtRef.current = now;
@@ -1177,10 +1448,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         /*
          * K3(b) 的 `vtOk = false` 轻卡:播放头刚进入它时整场景在后台补跑后互换。
          * 每张卡这一轮播放只发起一次 —— 补跑一次要几百毫秒,每拍发一次只会互相掐。
+         * 只给从它中间开始播放的卡:这一轮播放中逐拍走过挂载帧、自然进场的不发起(`playingSwapTargets`)。
+         * 拍序号先记下(连续、重复还是断开),再算目标。
          */
+        notePlayFrame(e.sec);
         // 只有双舞台才有后台舞台可换;在线页面的单舞台、低内存档都不走(c10a 第 8 节「不追活渲」)
         if (dualRef.current && !lowMemRef.current && !swapInFlight()) {
-          const targets = playingCatchUpTargets(getState().project, e.sec).filter((id) => !swapTriedRef.current.has(id));
+          const targets = playingSwapTargets(getState().project, e.sec).filter((id) => !swapTriedRef.current.has(id));
           if (targets.length) {
             for (const id of targets) swapTriedRef.current.add(id);
             void runPlayingSwap(targets);
@@ -1372,6 +1646,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       markBaselineReset("front");
       return;
     }
+    // 换回双舞台的衔接:新的可见舞台按新项目落好这一帧了,稍等它画到屏上再撤盖板
+    if (handoverRef.current && s === stage()) finishHandover(STAGE_HANDOVER_SETTLE_MS, "setTime");
     void refreshRects();
     void pumpRef.current();
     /*
@@ -1499,7 +1775,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
            */
           await syncProject("front", getState().project);
           if (!alive) return;
-          const reply = await s.play(playStartOf());
+          const from = playStartOf();
+          // 这一轮播放的起点:起播那一刻已经挂着的卡算「从中间开始」,之后逐拍挂上的算自然进场(播放态互换只给前者)
+          notePlayRunStart(from);
+          const reply = await s.play(from);
           if (!alive) return;
           // 首拍的到达间隔以 `play()` 回包时刻为起点(K4)
           if (reply.ok) lastFrameAtRef.current = performance.now();
@@ -1803,67 +2082,94 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
             <div style={{ position: "relative", width: project.width, height: project.height }}>
               {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
               <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={tierList} />
-              {!stagesPending && <iframe
-                ref={frameRefOf.A}
-                data-pc="stage-frame"
-                title="预览舞台"
-                /*
-                 * 这里**不加 proxy=1**:2D 预览的契约是「预览所见 = 导出所得」,
-                 * 播放时换成色块就把这条破了 —— 用户按播放是要看成片长什么样,
-                 * 不是要看构图草图。代理只活在 3D 视图里,而且只是预渲染没跟上时的过渡。
-                 */
-                src={stageSrc("A")}
-                style={{
-                  position: "absolute",
+              {/*
+                * 舞台 iframe 按槽位挂:同源单舞台(`single`)、跨源的 A(`dualA`)、跨源的 B(`dualB`),顺序固定、按槽位作 key。
+                * 首次握手的过渡期(〔裁〕2026-09-30 `claude/stage-handshake`)里三个同时在:`single` 当可见舞台 A,`dualA` / `dualB`
+                * 改作隐藏的预热 iframe;换回双舞台时 `dualA` / `dualB` **还是同一个元素**(key 不变、顺序不变,React 不会挪动它,
+                * iframe 不会重新加载)直接接任 A / B,`single` 留作盖板直到新的可见舞台画好当前这一帧。
+                */}
+              {!stagesPending && (() => {
+                const base = {
+                  position: "absolute" as const,
                   inset: 0,
                   width: project.width,
                   height: project.height,
                   border: 0,
                   display: "block",
                   background: "transparent",
-                  colorScheme: "normal",
-                  /*
-                   * R7:**舞台露出来**(D5)。可见的那一个不再是全透明的,用户看到的
-                   * 就是舞台 iframe 本身,不再是主文档里那张整帧 `<img>`。
-                   *
-                   * 判据是 `dual` 而不是「`?preview=stage`」:舞台页只有在 `dual` 时才
-                   * 带上 `&preview=stage`(见 `stageSrc`),也才渲 `FrameScene` 的 live 变体、
-                   * 才把素材层画在自己里面。端口被占退回同源单舞台时那一份还是 placeholder 内容,
-                   * 露出来会是一张没有素材的画面 —— 那时候要继续用 `UnifiedPreview` 的整帧。
-                   */
-                  opacity: live && frontId === "A" ? 1 : 0,
-                  // 后台那个还要挡掉指针 —— K5 互换之后 A 可能就是后台那一个
-                  ...(frontId === "A" ? null : { pointerEvents: "none" as const }),
-                }}
-              />}
-              {dual && !stagesPending && (
-                <iframe
-                  ref={frameRefOf.B}
-                  data-pc="stage-frame-back"
-                  title="后台舞台"
-                  src={stageSrc("B")}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    width: project.width,
-                    height: project.height,
-                    border: 0,
-                    display: "block",
-                    background: "transparent",
-                    colorScheme: "normal",
+                  colorScheme: "normal" as const,
+                };
+                const hidden = { opacity: 0, pointerEvents: "none" as const };
+                const out: React.ReactNode[] = [];
+                const showSingle = !dual || handover;
+                if (showSingle) {
+                  const cover = dual && handover;
+                  out.push(<iframe
+                    key="single"
+                    ref={cover ? undefined : frameRefOf.A}
+                    data-pc={cover ? "stage-frame-cover" : "stage-frame"}
+                    title="预览舞台"
                     /*
-                     * 后台舞台**只能这么藏**(K5 (4)):`display: none` 会让里面的
-                     * `<video>` 和 rAF 停掉、布局全归零,补跑出来的画面和可见舞台对不上;
-                     * `visibility: hidden` 会让 `solid.ts` 的 `isSolid` 判它不是实体,
-                     * 量出来的实体框退回整屏。`opacity: 0` 保留布局和渲染,只是看不见。
-                     *
-                     * R7:互换之后 B 可能是可见的那一个,那时它跟着露出来。
+                     * 这里**不加 proxy=1**:2D 预览的契约是「预览所见 = 导出所得」,
+                     * 播放时换成色块就把这条破了 —— 用户按播放是要看成片长什么样,
+                     * 不是要看构图草图。代理只活在 3D 视图里,而且只是预渲染没跟上时的过渡。
                      */
-                    opacity: frontId === "B" ? 1 : 0,
-                    ...(frontId === "B" ? null : { pointerEvents: "none" as const }),
-                  }}
-                />
-              )}
+                    src={stageSrc("A", { dual: false })}
+                    style={{
+                      ...base,
+                      /*
+                       * R7:**舞台露出来**(D5)。可见的那一个不再是全透明的,用户看到的
+                       * 就是舞台 iframe 本身,不再是主文档里那张整帧 `<img>`。
+                       *
+                       * 判据是 `live`:在线页面的同源单舞台也渲 live 变体(`stageSrc` 带 `&preview=stage`)。
+                       * 桌面端口被占退回同源单舞台时那一份还是 placeholder 内容,
+                       * 露出来会是一张没有素材的画面 —— 那时候要继续用 `UnifiedPreview` 的整帧。
+                       * 换回双舞台的盖板照样露着(停在最后一帧),挡掉指针。
+                       */
+                      ...(cover ? { opacity: 1, pointerEvents: "none" as const } : { opacity: live ? 1 : 0 }),
+                    }}
+                  />);
+                }
+                if (dual || interim) {
+                  const warm = !dual;
+                  out.push(<iframe
+                    key="dualA"
+                    ref={warm ? warmRefOf.A : frameRefOf.A}
+                    data-pc={warm ? "stage-frame-warm" : "stage-frame"}
+                    title={warm ? "预热舞台" : "预览舞台"}
+                    src={stageSrc("A", { dual: true })}
+                    onLoad={() => onStageFrameLoad("A")}
+                    style={{
+                      ...base,
+                      // 后台那个还要挡掉指针 —— K5 互换之后 A 可能就是后台那一个;换回双舞台的衔接期间先不露出来
+                      ...(!warm && live && frontId === "A" && !handover ? { opacity: 1 } : hidden),
+                    }}
+                  />);
+                  if (!ONLINE || backStageMount) {
+                    out.push(<iframe
+                      key="dualB"
+                      ref={warm ? warmRefOf.B : frameRefOf.B}
+                      data-pc={warm ? "stage-frame-warm" : "stage-frame-back"}
+                      title={warm ? "预热舞台" : "后台舞台"}
+                      src={stageSrc("B", { dual: true })}
+                      onLoad={() => onStageFrameLoad("B")}
+                      style={{
+                        ...base,
+                        /*
+                         * 后台舞台**只能这么藏**(K5 (4)):`display: none` 会让里面的
+                         * `<video>` 和 rAF 停掉、布局全归零,补跑出来的画面和可见舞台对不上;
+                         * `visibility: hidden` 会让 `solid.ts` 的 `isSolid` 判它不是实体,
+                         * 量出来的实体框退回整屏。`opacity: 0` 保留布局和渲染,只是看不见。
+                         *
+                         * R7:互换之后 B 可能是可见的那一个,那时它跟着露出来。
+                         */
+                        ...(!warm && frontId === "B" && !handover ? { opacity: 1 } : hidden),
+                      }}
+                    />);
+                  }
+                }
+                return out;
+              })()}
               {/*
                 * R7(D5):整帧 `<img>` / `MovPlayer` canvas **只留在 legacy 分支**。
                 * 露出舞台之后再画一层整帧,等于把舞台盖住,而且那一层要等 HTTP
@@ -1913,7 +2219,6 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       </div>
 
       <ControlBar />
-      {showMiniScrubber && <MiniScrubber />}
       
       {contextMenu && (
         <PreviewContextMenu

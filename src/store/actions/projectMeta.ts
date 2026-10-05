@@ -4,7 +4,7 @@ import { contentEndOf, effectiveDuration, manualDurationFor } from "../../kernel
 import { state, set, setProject } from "../core";
 
 export const projectMeta = {
-  setProjectMeta(patch: Partial<Pick<Project, "name" | "width" | "height" | "fps" | "duration" | "themeId" | "camera3dFov" | "glRoute">>) {
+  setProjectMeta(patch: Partial<Pick<Project, "name" | "width" | "height" | "fps" | "duration" | "themeId" | "camera3dFov" | "glRoute" | "creativity">>) {
     setProject({ ...state.project, ...patch });
   },
   editCardProject(edit: (project: Project) => Project) {

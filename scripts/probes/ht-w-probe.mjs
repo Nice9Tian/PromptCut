@@ -36,6 +36,7 @@
  *
  * 环境变量:协调口开了信箱时 KV 要 `PROBE_MAIL_TOKEN`(`coordClient` 自动带,令牌不打印)。云端跑 host 另要
  * `NODE_USE_ENV_PROXY=1`、`PC_CHROME_ARGS=--no-sandbox`(脚本不管,原样传给子进程)。
+ * `PC_CHROME_ARGS` 只把参数原样透传给探针起的 Chrome(典型用途:云端 Linux 以 root 运行要 `--no-sandbox`);不要用它关 TLS 校验(如 `--ignore-certificate-errors`),否则对远端站点的探针在证书有问题时照样通过,掩盖真问题。
  * 输出:过程写 stderr(一行一条 JSON);stdout 最后一行一行 JSON `{ role, ok, checks: [{ name, ok, detail }], fails: [], … }`,
  * `ok` 为假退出码 1,参数不对退出码 2。口令只进 KV(`htw.<run>.config`)与各角色 `--out` 下的配置文件,不进 stdout / stderr。
  *
@@ -126,6 +127,7 @@
  *     看到 KV `htw.<id>.host.holding` 后,在服务器上杀掉这台主机到 nginx 443 的那条连接(见 AGENT-ht-w-probe 报告的 `ss -K` 条件),
  *     再 `PUT /coord/kv/htw.<id>.cut.done`(带 X-Mail-Token)。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn, spawnSync, fork } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';

@@ -46,8 +46,9 @@
  * - 转写要 Python(`desktop/src-tauri/runtime/python`,不入库)和 `out/pylibs`、`out/models`。
  *   worktree 里都没有:没有 Python 时一转写就失败,有 Python 缺库和模型时会现装(几个 GB)。
  *   要用主仓库那份,先设 `PROMPTCUT_PYTHON`、`PROMPTCUT_PYLIBS`、`PROMPTCUT_MODELS`。脚本启动时会提醒。
- * - `scripts/headless.mjs` 的无头实例在 SKILL 关着时拒绝一切工具,不能拿它测普通对话;所以这里自己开页面。
+ * - 这里自己开编辑台页面,不借别的实例。
  */
+import './lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -256,7 +257,7 @@ async function main() {
       '--hide-scrollbars',
       '--no-first-run',
       '--disable-gpu',
-      // 软件 WebGL:三维卡在无头里才不是空画布(同 scripts/headless.mjs)
+      // 软件 WebGL:三维卡在无头里才不是空画布
       '--enable-unsafe-swiftshader',
       // 整趟半小时,页面不能被当成后台降频
       '--disable-background-timer-throttling',

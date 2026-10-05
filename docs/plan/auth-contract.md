@@ -69,6 +69,7 @@
 |---|---|---|---|
 | `POST shared/create` | `{ name, mode, kdf, creator: { username, salt, key }, project?: { salt, key }, list?: [{ username, salt, key }] }` | 201 `{ ok: true, projectId, name, mode }` | 400 `bad-request`；409 `name-taken`；429 `rate-limited`；403 `forbidden`（见下） |
 | `GET shared/lookup?name=<名>` | — | 200 `{ ok: true, projectId, name, mode }` | 404 `no-project` |
+| `POST shared/verify` | `{ protocols: [...] }`（WebSocket 握手要给的子协议列表，其中必须有证明项 `promptcut.auth.…`） | 200 `{ ok: true }` | 400 `bad-request`；401 `unauthorized`（与握手一样不说原因）；429 `rate-limited`；组装方不给鉴权时 404。与握手同一套核对：nonce 照样用掉、失败照样计入限速。用处：浏览器里握手被拒与没连上分不出，页面进不去时拿一份新证明问一次（2026-09-30 随 `claude/join-error` 合入） |
 | `POST shared/challenge` | `{ projectId, username, deviceId, as: 'member' \| 'creator' }` | 200 `{ ok: true, nonce, salt, kdf, mode }` | 404 `no-project`；400 `bad-request`；429 `rate-limited` |
 
 - **谁能建**〔裁〕：
@@ -229,7 +230,9 @@
 - **节点侧传输 `createWsEndpoint`**：接受一个 `protocols()` 函数（每次连前调用，因为 `nonce` 只能用一次），不再接受 `token` 用于数据面。
 - **Node 进程怎么拿凭证**：预渲染进程、独立主机、探针读环境变量 `PROMPTCUT_SHARED_CONFIG`。
   - 它指向一个 JSON 文件：`{ url, projectId, username, deviceId, deviceName, as, password | key, role }`，也可以是这样的对象组成的数组（独立主机加入多个项目时）。
+  - 〔裁：`claude/push-scope`，报告 `docs/reports/AGENT-push-scope.md`（三级）〕每项可以另带可选的 `contentId`：这个共享项目的项目文档 id（项目 JSON 的 `id`）。写了，预渲染进程的推送队列与 `plan` 发布只认这个项目的产物，本机别的项目的帧留在本机（`render-queue-contract.md` J.14）；不写与原来相同。不合格（不是 1～256 字的字符串）按配置错处理。
   - 设了这个变量，就用它拼证明、连文档服务，并经 `auth.ticket` 取素材票据；没设就维持原来的做法：连回环地址时是本机身份，连不上就回落本机。
+  - 桌面版的预渲染进程不读配置文件（2026-09-29，落地语义「加入共享项目的桌面应用自动成为这个项目的渲染节点」，`claude/desktop-auto-node`，报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`）：页面进入共享项目时经编辑器进程交一张 render 角色的连接票据（页面在自己已认证的连接上以 `auth.ticket { kind: 'conn', role: 'render', owner: { kind: 'user' } }` 要来，票据由文档服务签发），之后每次建新会话经 HMR 向页面再要一张；不交项目口令，也不交 `K`。页面不在时已建的会话用到断开为止，之后等页面回来再续。
   - 集群令牌 `PROMPTCUT_CLUSTER_TOKEN` 只在管理用途上读取：`asset-announce` 登记地址、`scripts/remote/docservice.mjs`。
 - **素材客户端 `server/asset-store/client.mjs`**：接受 `ticket: () => string | Promise<string>` 取代 `token`，每个请求取一次；收到 401 时调一次 `ticket({ refresh: true })` 后重试一次。
 

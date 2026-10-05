@@ -43,7 +43,7 @@
  * ## --step remote-plan [--public-host 8.219.80.16] [--tunnel-base 18700] [--stamp 20260928]
  *
  *   打印阿里云上的演练命令清单（备份、演练实例部署、UFW 临时放行与收回、停写、拷数据、核对、切客户端、收尾），不连远端。
- *   同一份清单写在 `docs/reports/AGENT-m8-migrate.md`。
+ *   同一份清单写在 `docs/archive/agent-reports/AGENT-m8-migrate.md`。
  *
  * ## --step local [--ui] [--shots <目录>] [--keep]
  *
@@ -57,6 +57,7 @@
  *
  * 只用 Node 内置模块、puppeteer（`--ui`）与仓库里的服务端模块。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -534,7 +535,8 @@ async function clientUi({ hosted, oldHosted, project, expectName }) {
     }, 240_000, '桌面编辑器起来');
     log('ui.editor-up', { url: DESKTOP, pid: editor.pid });
     const { default: puppeteer } = await import('puppeteer');
-    browser = await puppeteer.launch({ headless: true, defaultViewport: { width: 1440, height: 900 }, args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
+    const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
+    browser = await puppeteer.launch({ headless: true, defaultViewport: { width: 1440, height: 900 }, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
     const page = await browser.newPage();
     const requests = [];
     page.on('request', (r) => requests.push(r.url()));

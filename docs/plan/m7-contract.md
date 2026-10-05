@@ -102,6 +102,12 @@
 - pc、host 切分时：`lockIdleMs > CARD_LOCK_IDLE_MS`（30 s，与本机锁库同一个数，`server/card-lock.mjs`）就带 `takeover` 按自己的指纹重发（给 `local-node.mjs` 的 `takeoverLocked` 传判定函数）。
 - 建议续约（`task.progress`）也刷新 `touchedAt`：一段 60 帧的重卡在浏览器上要几秒到几十秒（M7 探针 P1 实测：每帧烧 40 ms 的推帧卡顺推约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃，这类卡不派给浏览器，见第 13 节「探针之后的更正」第 6 条），产出中不该被判闲置。
 - 限制：接手只在有人重新切分时发生（有页面或编辑器发布新计划）。没人发布时，锁在走掉的浏览器身上的卡一直缺。M7 接受并写进报告，M8 混沌项复测。
+- **页面只是忙不算闲置**〔裁，2026-09-30，`claude/queue-maint`，报告 `docs/reports/AGENT-queue-maint.md` 任务 D〕：M7 实测（`REPORT-M7.md` 第 4 节第 7 条、第 11 节第 1 行）页面锁着卡 h1、手里在做别的锚帧段（经公网慢），这张卡 30 s 没有产出就被 pc 接手，已做的帧白费。只看产出分不出「页面还在、只是忙」与「页面走了」。改法（三级，形状向后兼容）：
+  - `node.welcome` 多带 `activeIntervalMs`（10 s，`NODE_ACTIVE_INTERVAL_MS`，三级数字，须明显小于 30 s）；
+  - 新的节点消息 `node.active { busy?: string ≤ 32 字 }`，不回包：页面手里有认领（`busy: 'bake'`）或后台舞台单飞队列里有更急的活（补跑、测量、探针，`'stage'`）时按间隔发；闲着、页面隐藏或父页 rAF 断档、只是在播放或拖动而后台没活时不发；
+  - 队列的锁记下最后为它产出（认领、续约、完成）的节点。回包的 `lockIdleMs` 改为「此刻减锁定方最后一次产出**或报忙**」：那个节点此刻连着、指纹仍是锁上的、报过 `node.active` 时，取它的 `activeAt` 与最后一次产出里晚的那个；断开（宽限期内也算断开）、停报、从没报过（旧页面）就只看产出，与改前相同。切分方的判定（`idleLockTakeover`）不改；
+  - 向后兼容：旧队列不带 `activeIntervalMs`，新页面一条也不发；旧页面不发，新队列按产出算，同改前；旧切分方读的还是 `lockIdleMs`，照样受益。别的节点（同指纹的另一个页面、别的用户）报忙不作数。
+  - 语义措辞建议（三级，未写，交主会话定）：见报告任务 D 的 dry run。
 
 ### 3.5 顺序与并发
 
@@ -131,6 +137,7 @@
   - 每帧生成快照，取本控件的 `html`；有读不出像素的画布（`lossy`）这一段 `fail`（不可重试，同 `server/bakery/bake.mjs:225`）；
   - 每帧发事件 `bake-frame { clipId, localFrame, hash, bytes, htmlGz, small? }`：`hash` 是原始 HTML 字节的 sha256（舞台里用 WebCrypto 算），`htmlGz` 随消息转移。
 - 舞台互换（K5）时生成快照跟着后台位置走：互换前单飞队列已让补跑先行、生成快照停在帧边界；互换后在新的后台舞台上重开，做到哪一帧记在父页。
+  - 〔裁，2026-09-30，`claude/queue-maint` 任务 F〕互换剧本 `src/editor/stageBake.test.mjs`（QM-F-01～05）查出：一帧**在飞时**后台位置换了人（没有补跑先行的互换、iframe 重载、补跑刚完就开出的活），旧舞台回 `cancelled` / `role`，或帧做完了而 `bake-frame` 事件在互换后才到、被按角色滤掉，宿主原来按可重试失败交回（计一次失败）。改为：后台位置确实换了人就在新后台上重灌、重做这一帧，每帧最多 2 次（`SWAP_REDO_MAX`，三级数字），不计失败；没换人照旧交回失败。活与每帧的舞台往返从 `browserNodeHost.ts` 拆到 `src/editor/stageBake.ts`（行为不变，只多这一条）。
 
 ### 4.4 小尺寸（D5 建议选项 a）
 
@@ -286,6 +293,7 @@ G0 + G0-R（改了预渲染与快照路径）；桌面导出像素基线不变�
   - 选项：(a) 层表每层带候选（切分方自己的、浏览器的），页面按 `task.done` 与清单认定哪一份活着，此后只用那一份；(b) 切分方在发布回包之后按最终出键重写层表；(c) 层表按片段拆成多条，由完成的节点写自己那一层。
   - 建议 M7 做 (a)，并在 (b) 的时机写（切分完成后写一次）；(c) 留到 M8 看多成员并发。
   - 级别：计划级（C10 契约第 5 节、第 18 节第 3 条的层表 v 2 升 v 3）。
+  - 补充〔裁，2026-09-29 stale-layer〕：v 3 的层可另带 `inputSig`（生成这一层的片段输入的签名），页面对不上就不贴这一层；不升版本号，见 C10 契约第 9 节「旧参数的层」、第 18 节 2026-09-29 那一条。
 - **D13 同键任务的归属**
   - 问题：任务 id 按内容定，先建的人的 `userId` 留在任务上。别的成员先切出同一个键的任务，本人的纯浏览器就认领不了，哪怕本人的计划也要它。
   - 选项：(a) 维持 Q2（按 `source.userId`）；(b) 队列记「请求过它的用户集合」，纯浏览器按集合判。
@@ -364,7 +372,7 @@ G0 + G0-R（改了预渲染与快照路径）；桌面导出像素基线不变�
 | 3 | 第 4.3 节 | 用逐帧顺推（DOM、Motion 卡与桌面等价且便宜 4～7 倍）；`canvasHeavy` 卡顺推不等价，节点侧 `filter.mjs` 的纯浏览器规则再挡一次 | 缺省 `mode: 'seq'`；`filter.mjs` 规则 7 加 `canvas-heavy`；切分也不给浏览器另出画布卡那一份 |
 | 4 | D1 (d)、D10 | 在线构建关掉 CSS 压缩，再用 `m7-bake-probe` 的 compare 比在线构建与桌面；`will-change` 若仍有差异照实报，是否在快照序列化里去掉它另定（会让现有快照键一次性失效） | `vite.config.ts` 在线构建 `build.cssMinify: false`，另关 Tailwind 插件的构建期优化（`optimize: false`：Lightning CSS 不压缩也把 `0.4` 改写成 `.4`）。compare 结果见 `docs/archive/agent-reports/AGENT-rq-m7-node.md`：ticker、slow 60/60 逐字节相同；pill 46/60 相同，其余 14 帧只差 `will-change`（未动） |
 | 5 | D5、第 4.4 节 | 小尺寸必须内嵌页面的全局样式表；外部字体的顾虑改述为「只影响用户卡」 | `src/render/bakeSmall.ts` 把舞台页的样式表整份放进 `foreignObject` |
-| 6 | 第 3.4 节 | 「60 帧 8～15 s」换成实测（40 ms 推帧卡约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃）；切分方不把这类卡（Lottie 素材卡、预计帧超体积上限的）派给纯浏览器 | `split.mjs` 的浏览器可做判定挡掉 `lottie` / `lottie-*`、画布卡、执行器标了 `snapshotOversize` 的卡（只出切分方那一份） |
+| 6 | 第 3.4 节 | 「60 帧 8～15 s」换成实测（40 ms 推帧卡约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃）；切分方不把这类卡（Lottie 素材卡、预计帧超体积上限的）派给纯浏览器 | `split.mjs` 的浏览器可做判定挡掉 `lottie` / `lottie-*`、画布卡、执行器标了 `snapshotOversize` 的卡（只出切分方那一份）。标记由执行器（`server/prerender-executor.mjs` 的 `markSnapshotOversize`）每次切分前按本机快照库现读：共享档卡在本机指纹的键、或锁定方指纹的键下有 `oversize` 记录就整张卡标（不按段：卡片级指纹锁下按段挡不住，浏览器认领任一段就锁住整张卡）；记录只在本机，别的机器渲过或拉回过才有（2026-09-30，`claude/queue-maint` 任务 E） |
 | 7 | （M7 之外） | 在线构建与托管端没带 `/catalog/`，Lottie 素材卡在线是空白 | 主会话另派人修；修之前第 2 条的就绪闸把这些段 `fail` 掉（实测 `not-ready: 控件尚未就绪 (lottie): HTTP 404`） |
 | 8 | 第 4.5 节 | 上传器按哈希单飞；`complete` 回 `incomplete` 时先重查 chunks 再重试 | `src/online/snapUploader.ts` |
 | 9 | 第 3.3 节 | 删掉「复用测量帧」这项优化 | 已删 |

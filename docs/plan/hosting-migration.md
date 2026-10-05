@@ -1,10 +1,10 @@
 # 托管组合的换机迁移
 
-状态：**目标流程**（2026-09-26）。托管组合现在还没有部署素材服务，所以这份流程还跑不起来。
+状态：**已演练**（2026-09-28，M8：同一台阿里云上的第二份实例，结果见 `docs/reports/REPORT-render-queue-m8.md` 第 6 节）。起草时（2026-09-26）托管组合还没有部署素材服务，下面几条是当时的安排：
 - 主执行计划的 SP 阶段负责把它做成真能跑：实现导出、导入，并在本机演练（验收 SP7）；
 - M8 验收「换机迁移后项目、素材、预渲染产物全部可用」：在同一台阿里云服务器上起第二份实例做演练，不临时租服务器；
 - 真正的换机，等团队测试通过、用户换新服务器时再按本文做一次；
-- 具体命令在 SP 合入时补进本文。
+- 具体命令见第 2 节末「M8 演练的实际命令」。
 
 托管组合指放云端的共享项目所在的那台服务器，现在是阿里云 `8.219.80.16`。上面跑两个服务：
 - 文档服务，公网端口 8787；
@@ -40,6 +40,7 @@ $PROMPTCUT_DATA_DIR/
    - 装 Node ≥ 22 和 PM2；
    - 云控制台的安全组放行 TCP 8787、8788（或新地址上选定的端口）；
    - 服务器自己的 UFW 放行 22 和这两个端口。
+   - nginx：`/editor` 的三个源（编辑器页与两个舞台，都带 `Origin-Agent-Cluster: ?1`）、`/hosted`、`/media` 的反向代理与 TLS，照旧服务器的 `/etc/nginx/sites-enabled/promptcut`、`promptcut-stages` 抄；`/etc/nginx/nginx.conf` 要打开 `gzip_types`（JS、CSS、JSON、SVG 等）。不开的话在线页面的主脚本按原样传（4 MB 多），两个舞台各下载一遍，慢网络下首次握手超时、页面永久退回单舞台、当不了纯浏览器节点（2026-09-30 实测，开压缩后 1.3 MB）。两份站点配置（`promptcut`、`promptcut-stages`）的 `location ^~ /editor/assets/` 里还要有 `gzip_static on;`：部署脚本 `deploy-hosted --editor` 会给 `assets/` 下大于 1 KB 的 JS、CSS、JSON、SVG、WASM 生成同名 `.gz`，nginx 直接带 `Content-Length` 发这份预压缩文件；只靠动态 gzip 时响应是分块传输的，部分 Chrome 配置下入口脚本分块发时页面会卡死（2026-10-01 查明，见 `docs/archive/agent-reports/AGENT-nav-hang.md`）。
 2. **部署代码**：用部署脚本（`scripts/remote/docservice.mjs`，SP 起同时部署两个服务）指向新服务器，先不启动。
 3. **旧服务器停写**：`pm2 stop` 两个服务。这时成员会断开，客户端显示「托管端不可达」。
 4. **拷数据**：把旧服务器的 `PROMPTCUT_DATA_DIR` 整个打包、拷到新服务器（`tar` 或 `rsync -a`），再核对两边的文件数和总字节数一致。
@@ -60,8 +61,51 @@ $PROMPTCUT_DATA_DIR/
 
    成员重新进入项目后，看到的项目、素材、已就绪的层都与迁移前一致，不重新预渲染。
 9. **收尾**：
-   - 旧服务器保留只读一段时间（M8 时定多久），确认没问题后再下线；
+   - 旧服务器保留只读 7 天（M8 定），确认没问题后再下线；
    - 下线前再核对一次，新服务器数据目录的文件数不少于旧的。
+
+### M8 演练的实际命令（2026-09-28）
+
+演练在同一台服务器上：源是 `promptcut-hosted`（8787 / 8788，数据目录 `/var/lib/promptcut/hosted`），目标是第二份实例 `promptcut-drill`（8777 / 8778，`/var/lib/promptcut/drill`）。整份命令清单由 `node scripts/probes/m8-migrate-probe.mjs --step remote-plan` 打印，下面只记实际跑的和与清单不同的地方。`$PROMPTCUT_REMOTE` 是 `user@host`（本机信息见 `docs/local.md`），`$W` 是本机放种子、库存、截图的临时目录，不进仓库。
+
+1. **备份、部署目标**（清单 A、B）：`pm2.config.cjs` 与 `~/.pm2/dump.pm2` 各备份一份 `*.bak-<日期>-m8`；删掉旧的演练进程、旧数据挪开；集群令牌在服务器上从源拷进目标的数据目录（不经本机；清单里的另一种做法是部署时带 `--write-token`）；然后部署（不加 `--save`），再把部署时建的数据目录挪开、换成空的，等第 3 步拷数据：
+   ```
+   ssh "$PROMPTCUT_REMOTE" 'pm2 delete promptcut-drill; mv /var/lib/promptcut/drill /var/lib/promptcut/drill.old-<日期>-m8; install -d -m 700 /var/lib/promptcut/drill/secrets && cp -a /var/lib/promptcut/hosted/secrets/cluster-token /var/lib/promptcut/drill/secrets/'
+   node scripts/remote/docservice.mjs deploy-hosted --instance drill --doc-public-url ws://8.219.80.16:8777 --asset-public-url http://8.219.80.16:8778/api/asset
+   ssh "$PROMPTCUT_REMOTE" 'pm2 stop promptcut-drill && mv /var/lib/promptcut/drill /var/lib/promptcut/drill.deploy-<日期>-m8 && install -d -m 700 /var/lib/promptcut/drill'
+   ssh "$PROMPTCUT_REMOTE" 'ufw allow 8777/tcp comment "m8-drill <日期>"; ufw allow 8778/tcp comment "m8-drill <日期>"'
+   ```
+2. **停写之前记库存**（清单 C）：管理接口只经 SSH 转发，集群令牌在服务器上读进本机进程的环境变量，不落盘、不打印：
+   ```
+   ssh -N -L 18787:127.0.0.1:8787 -L 18788:127.0.0.1:8788 -L 18777:127.0.0.1:8777 -L 18778:127.0.0.1:8778 "$PROMPTCUT_REMOTE"   # 另开一个终端挂着
+   export PROMPTCUT_CLUSTER_TOKEN=$(ssh "$PROMPTCUT_REMOTE" 'tr -d "\r\n" < /var/lib/promptcut/hosted/secrets/cluster-token')
+   node scripts/probes/m8-migrate-probe.mjs --step seed --hosted http://127.0.0.1:18787 --seed "$W/seed.json"
+   node scripts/probes/shared-project-probe.mjs --role inventory --hosted http://127.0.0.1:18787 --asset http://127.0.0.1:18788 --seed "$W/seed.json" --out "$W/inventory.json"
+   ```
+3. **停写、拷数据、起目标**（第 3～6 步，清单 D～F，一条 ssh 做完）：
+   ```
+   ssh "$PROMPTCUT_REMOTE" 'date -Is; pm2 stop promptcut-hosted; S=$(date +%s); rsync -a /var/lib/promptcut/hosted/ /var/lib/promptcut/drill/; echo "rsync $(( $(date +%s)-S ))s"; for d in hosted drill; do echo "$d files=$(find /var/lib/promptcut/$d -type f | wc -l) bytes=$(du -sb /var/lib/promptcut/$d | cut -f1)"; done; pm2 start promptcut-drill; sleep 3; curl -s http://127.0.0.1:8777/healthz; curl -s http://127.0.0.1:8778/healthz'
+   ```
+   实测：36 154 个文件、2.16 GB，rsync 36 s。
+4. **核对**（第 6、7 步，清单 G）。**`--sample all` 经 SSH 转发跑不动**（实测约 150 KB/s，2.16 GB 要几个小时），改为三件合起来：
+   ```
+   export PROMPTCUT_CLUSTER_TOKEN=$(ssh "$PROMPTCUT_REMOTE" 'tr -d "\r\n" < /var/lib/promptcut/drill/secrets/cluster-token')
+   node scripts/probes/shared-project-probe.mjs --role migrate-check --from-inventory "$W/inventory.json" --to http://127.0.0.1:18777 --to-asset http://127.0.0.1:18778 --seed "$W/seed.json" --sample 300
+   ssh "$PROMPTCUT_REMOTE" 'cd /var/lib/promptcut/drill/assets; for ns in media snap px; do find $ns -type f -print0 | xargs -0 sha256sum | awk -v ns=$ns "{ n=split(\$2,a,\"/\"); b=a[n]; sub(/\\.[^.]*\$/,\"\",b); if (b==\$1) ok++; else { bad++; if (bad<=5) print \"MISMATCH\", ns, \$2 > \"/dev/stderr\" } print ns, b > \"/tmp/m8-drill-hashes.txt.\" ns } END { print ns, \"ok=\" ok+0, \"mismatch=\" bad+0 }"; done; cat /tmp/m8-drill-hashes.txt.media /tmp/m8-drill-hashes.txt.snap /tmp/m8-drill-hashes.txt.px > /tmp/m8-drill-hashes.txt'
+   scp "$PROMPTCUT_REMOTE":/tmp/m8-drill-hashes.txt "$W/drill-hashes.txt"
+   ```
+   第一条核 rev、共享项目、三个命名空间的哈希集合与字节数，并按哈希取回 300 个；第二条在服务器上逐块重算 sha256、与文件名比（`px/.chunks/` 下是没传完的分块上传的暂存，不是块，报 mismatch 不计）；最后把 `drill-hashes.txt` 与库存文件里三个命名空间的 `hashes` 逐个对账，缺 0、多 0。演练时为了缩短停写，主实例在这一步之前就 `pm2 start` 恢复了；**真正换机时旧服务器不恢复写**，保持停写到第 9 步下线。
+5. **切客户端**（第 8 步，清单 H）：
+   ```
+   node scripts/probes/m8-migrate-probe.mjs --step client --hosted http://8.219.80.16:8777 --seed "$W/seed.json" --inventory "$W/inventory.json" --ui --old-hosted wss://8-219-80-16.sslip.io/hosted/ --editor-port <端口> --shots "$W/shots"
+   PROMPTCUT_HOSTED_URL=ws://8.219.80.16:8777 node scripts/probes/m8-migrate-probe.mjs --step client --hosted http://8.219.80.16:8777 --seed "$W/seed.json" --inventory "$W/inventory.json" --no-edit
+   ```
+6. **收尾**（第 9 步，清单 I）：
+   ```
+   ssh "$PROMPTCUT_REMOTE" 'pm2 stop promptcut-drill; ufw delete allow 8777/tcp; ufw delete allow 8778/tcp; ufw status | grep -E "8777|8778" || echo "8777/8778 已收回"; pm2 list'
+   ssh "$PROMPTCUT_REMOTE" 'pm2 save'   # 确认 promptcut-hosted online、promptcut-drill stopped 之后
+   ```
+   种子文件含口令，用完删；种子项目留在源实例里，由创建者删除。
 
 ## 3. 验收（M8）
 

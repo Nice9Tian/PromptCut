@@ -22,7 +22,9 @@
  * - `--origin`:改用外面现成的编辑器(不起进程);那台编辑器的会话目录要自己保证能写,探针经 `/api/chats/save` 写入会话。
  * 结果:每项一行 JSON(`{ check, ok, ... }`),最后一行 `{ summary }`;有失败退出码 1。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -216,7 +218,7 @@ try {
   browser = await puppeteer.launch({
     headless: true,
     defaultViewport: { width: 1440, height: VIEW_H },
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--force-device-scale-factor=1'],
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--force-device-scale-factor=1'],
   });
   page = await browser.newPage();
   const pageErrors = [];

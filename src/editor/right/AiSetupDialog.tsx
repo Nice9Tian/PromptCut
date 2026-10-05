@@ -441,6 +441,7 @@ export function AiSetupDialog(props: {
     if (isCliEntry(entry.id)) {
       const p = providers.find((x) => x.id === entry.provider);
       if (!p?.available) return { ok: false, label: "未安装", tone: "warn" };
+      if (p.auth?.status === 'invalid') return { ok: false, label: '登录已失效', tone: 'warn' };
       if (p.auth?.loggedIn === true) return { ok: true, label: "已登录", tone: "ok" };
       if (p.auth?.loggedIn === false) return { ok: false, label: "未登录", tone: "warn" };
       return { ok: false, label: "登录状态待确认", tone: "idle" };
@@ -489,12 +490,12 @@ export function AiSetupDialog(props: {
             <span className="ais-step-title">登录</span>
             {p.auth?.loggedIn === true
               ? <span className="ais-status-ok">已登录</span>
-              : <span className="ais-status-err">{p.auth?.loggedIn === false ? "未登录" : "待确认"}</span>}
+              : <span className="ais-status-err">{p.auth?.status === 'invalid' ? '登录已失效' : p.auth?.loggedIn === false ? "未登录" : "待确认"}</span>}
           </div>
-          {p.auth?.loggedIn !== true && (
+          {(
             <div className="ais-auth-action">
               <button className="ais-btn ais-primary-btn" disabled={!p.available || st === "waiting"} onClick={(e) => { e.preventDefault(); onLogin(p.id); }}>
-                {st === "waiting" ? "等待登录…" : st === "timeout" || st === "failed" ? "重试登录" : "登录"}
+                {st === "waiting" ? "等待登录…" : st === "timeout" || st === "failed" ? "重试登录" : p.auth?.loggedIn === true || p.auth?.status === 'invalid' ? '重新登录' : "登录"}
               </button>
               {!p.available && <span className="ais-detail">先装好再登录</span>}
             </div>
@@ -502,6 +503,7 @@ export function AiSetupDialog(props: {
           {p.id === "codex" && <div className="ais-detail">PromptCut 使用独立登录，不受 Codex 桌面应用配置影响。</div>}
           {p.auth?.loggedIn === null && p.auth.detail && <div className="ais-detail">{p.auth.detail}</div>}
           {p.auth?.fixHint && <div className="ais-fixhint">{p.auth.fixHint}</div>}
+          {p.auth?.persistenceWarning && <div className="ais-fixhint">{p.auth.persistenceWarning}</div>}
           {job && (
             <div className="ais-setup-progress" role="status" aria-live="polite">
               <div className={job.state === "failed" ? "ais-fixhint" : "ais-detail"}>{job.message}</div>

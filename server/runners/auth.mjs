@@ -1,6 +1,7 @@
-import { cliCommand, cliEnv } from './cli-runtime.mjs';
+import { cliCommand, cliEnv, resolveCli, setupRoot } from './cli-runtime.mjs';
 import { execFile } from 'node:child_process';
-import { resolveExe } from './index.mjs';
+import { codexAuthState } from './codex-auth-state.mjs';
+const resolveExe = resolveCli;
 
 const cache = new Map();
 
@@ -23,11 +24,14 @@ function runCommand(cmd, args, provider) {
 }
 
 export async function probeAuth(providerId, opts = {}) {
+  const state = providerId === 'codex' ? codexAuthState() : null;
+  const generation = state?.snapshot().revision;
+  const key = `${setupRoot()}:${providerId}:${generation || ''}`;
   const now = Date.now();
-  if (!opts.refresh && cache.has(providerId)) {
-    const cached = cache.get(providerId);
+  if (!opts.raw && !opts.refresh && cache.has(key)) {
+    const cached = cache.get(key);
     if (now - cached.time < 10000) {
-      return cached.result;
+      return state ? state.effective(cached.result) : cached.result;
     }
   }
 
@@ -88,8 +92,10 @@ export async function probeAuth(providerId, opts = {}) {
     result.loginCommand = ['agy', 'models'];
   }
 
-  cache.set(providerId, { time: now, result });
-  return result;
+  // A probe from before a login/invalidity transition must not seed the new cache.
+  if (!state || generation === state.snapshot().revision) cache.set(key, { time: now, result });
+  if (state && !opts.raw && generation !== state.snapshot().revision && state.snapshot().state === 'normal') return probeAuth(providerId, { refresh: true });
+  return opts.raw ? result : state ? state.effective(generation === state.snapshot().revision ? result : { loggedIn: null }) : result;
 }
 
 export function loginCommandFor(providerId) {

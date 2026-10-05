@@ -110,7 +110,7 @@ taskIdOf({ kind, resultKey, range })
 { id, kind, tier?, resultKey, range, source, input, weight, requires, priority, state, version, attempts }
 ```
 
-不含 `claim`、`subscribers`。
+不含 `claim`、`subscribers`。放弃过的任务另带 `lastError`（A.12〔裁〕）。
 
 ### A.5 连接角色
 
@@ -130,10 +130,11 @@ taskIdOf({ kind, resultKey, range })
 | `task.publish` | `tasks: TaskInput[]`（至少 1 个） | `task.published { results: [...] }`，见 A.7.1 |
 | `task.unsubscribe` | `ids?: string[]` 或 `projectId: string, projectRev?: int`（二选一） | `task.unsubscribed { ids: [实际移除了订阅的 id] }` |
 | `task.claim` | `id: string`、`expectVersion: int` | `task.claimed { id, token, version, leaseUntil, task: TaskView }` 或 `task.claim-rejected { id, reason, state?, version? }` |
-| `task.progress` | `id`、`token: int`、`done: number` | `task.renewed { id, token, leaseUntil }` |
+| `task.progress` | `id`、`token: int`、`done: number`、`step?: number`（A.12 第 4 条〔裁〕） | `task.renewed { id, token, leaseUntil }` |
 | `task.complete` | `id`、`token`、`result?: { ranges?: any }` | `task.completed { id }` |
 | `task.release` | `id`、`token`、`reason?: string` | `task.released { id }` |
 | `task.fail` | `id`、`token`、`error?: string`、`retryable?: boolean`（缺省 `true`） | `task.fail-ack { id, state }`（`state` 是处理后的状态：`open`、`failed`，或没有订阅者被删时的 `removed`） |
+| `node.active`〔裁，M7 D2 补充，`claude/queue-maint`〕 | `busy?: string`（≤ 32 字，只作诊断） | 不回包（带了 `reqId` 也不回）；只记这个节点的 `activeAt`。锁闲置怎么算见 F.9 |
 
 - **格式错误**（缺必填字段、类型不对、`id` 与 `taskIdOf` 不符、`plan` 的 `resultKey` 与 `source` 不符、未知 `type`、消息不是对象）：回 `error { reqId, reason: 'bad-message', detail: string }`，**整条消息不生效**，状态不变（C6）。
 - **令牌不符**：`progress` / `complete` / `release` / `fail` 的 `id` 不存在，或任务不是 `claimed`，或 `token !== claim.token`，或发消息的节点不是当前认领者：回 `task.lease-lost { id, token, reason: 'token' }`，状态不变。
@@ -203,7 +204,7 @@ claim = null
 ```
 
 - `task.fail` 自己回 `task.fail-ack { id, state }`。
-- 回收时（A.8），若原认领者的连接还在，给它发 `task.lease-lost { id, token, reason: 'expired' }`；连接已断开就不发。
+- 回收时（A.8），若原认领者的连接还在，给它发 `task.lease-lost { id, token, reason: 'expired' }`；连接已断开就不发。（2026-09-28 起 `reason` 是回收原因 `lease-expired` / `stalled` / `disconnected`，见 A.12〔裁〕）
 - **没有订阅者**的任务经「放弃」或「放回」（A.7.5）回到 `open` 时，直接删除（发 `task.closed { id, state: 'removed' }` 代替 `task.opened`）〔裁〕：它不会再有人要，理由同 A.8 第 3 项。这时 `task.fail-ack` 的 `state` 是 `'removed'`。
 
 ### A.8 `tick()` 的四项扫描（按此顺序）
@@ -211,7 +212,7 @@ claim = null
 所有比较都是**严格大于**：
 
 1. **租约**：`claimed` 且 `now > claim.leaseUntil` → 放弃（`lastError = 'lease-expired'`）
-2. **停滞**：`claimed` 且 `now - claim.progress.changedAt > STALL_MS` 且 `claim.progress.done !== null` → 放弃（`lastError = 'stalled'`）。从未报过进度的任务只受租约管（F3.3）
+2. **停滞**：`claimed` 且 `now - claim.progress.changedAt > STALL_MS` 且 `claim.progress.done !== null` → 放弃（`lastError = 'stalled'`）。从未报过进度的任务只受租约管（F3.3）。`changedAt` 在 `done` 或节点带来的工作计数 `step` 变了时重起（A.12 第 4 条〔裁〕）
 3. **宽限**：
    - 节点断开且 `now - disconnectedAt > RECONNECT_GRACE_MS`：它名下每个 `claimed` 任务放弃（`lastError = 'disconnected'`），然后删掉这个节点记录；
    - 发布方断开且超过宽限：从所有任务的订阅者里移除它；变得没有订阅者的 `open` 任务删除（给可见的 watch 者发 `task.closed { id, state: 'removed' }`），`claimed` 的保留；然后删掉这个发布方记录（C5）
@@ -275,7 +276,20 @@ claim = null
 
 所有出站消息都带 `epoch`（C6）。回包带入站的 `reqId`（有的话）。
 
-`node.welcome`、`publisher.welcome`、`queue.snapshot`、`task.published`、`task.unsubscribed`、`task.claimed`、`task.claim-rejected`、`task.renewed`、`task.completed`、`task.released`、`task.fail-ack`、`task.lease-lost`、`task.opened`、`task.taken`、`task.closed`、`task.done`、`task.failed`、`error`。
+`node.welcome`（M7 D2 补充〔裁〕起多带 `activeIntervalMs`，见 F.9）、`publisher.welcome`、`queue.snapshot`、`task.published`、`task.unsubscribed`、`task.claimed`、`task.claim-rejected`、`task.renewed`、`task.completed`、`task.released`、`task.fail-ack`、`task.lease-lost`、`task.opened`、`task.taken`、`task.closed`、`task.done`、`task.failed`、`error`。
+
+### A.12 收回原因与丢认领的诊断（2026-09-28，`claude/stall-phases`）〔裁〕
+
+M8 的 C1（放云端）里两台独立渲染主机各丢了 6、7 次认领，节点那边只收到 `lease-lost { reason: 'expired' }`，分不出是租约到期、停滞还是断线；主机的逐任务事件也不进日志。试过只看现有日志与诊断接口：队列对三种回收发的是同一个 reason，任务视图不带 `lastError`，`describe()` 只在托管端进程里、事后拿不到。只能改消息形状，改动如下（三级机制，报告 `docs/archive/agent-reports/AGENT-stall-phases.md`）：
+
+1. **回收的 `lease-lost` 带真实原因**：A.8 的回收给原认领者发 `task.lease-lost { id, token, reason }`，`reason` 就是这次放弃记的 `lastError`：`lease-expired`（第 1 项）、`stalled`（第 2 项）、`disconnected`（第 3 项；这时连接多半已不在，照 A.7.6 不发）。原来一律是 `expired`。节点侧只把 `reason` 原样交给 `onLost`，不按它分支，旧节点照常工作。A.7.6 那一条按此读。
+2. **任务视图带 `lastError`**：`TaskView` 在任务放弃过（`lastError` 非空）时多带 `lastError: string`，没放弃过的不带这一项。放回 `open` 的 `task.opened`、`queue.snapshot`、认领回包里的 `task` 都一样。旧节点不认这一项，照常工作。
+3. **节点侧的诊断**（不改消息）：`task-runner.mjs` 的 `lost`、`discarded`、`failed`、`completed`、`dedup` 事件带所处阶段（`dedup` / `manifest` / `render` / `push` / `plan`，及执行器、产物库报的细一层位置）、帧数、距上次帧数变化与距认领的毫秒数，推送阶段另带块数与用时；预渲染进程按行打 `[queue-node] node.task-<类型> {…}`，编辑器进程的转发器放行这几种行与 `sink.incomplete`（只带任务 id、原因、阶段与毫秒数，不带会话号与凭证）。产物库 `put(entry, { signal?, report? })` 的第二个参数可选：`report` 报推送进度；没收全时回包另带 `reason`（`range-missing` / `small-missing` / `collect-failed:<code>` / `push-failed:<code>` / `bad-kind`）与 `stats`。D.1 的形状不变，只多了可选项。
+
+**修复**（诊断之后；同一分支）。C1 里受害主机被扣的任务恢复后 154 s 才收回、它自己其实做完了；另一台全程没断线也丢了 7 次。连接活着、续约照发，收回只能是第 2 项停滞：`done` 超过 `STALL_MS` 没变。本机替身复现到两个帧数不变的阶段（`server/test/stall-phases.test.mjs`）：推产物（60 块、每块 10 s，推到第 48 块时 120.5 s 收回，满 3 次永久失败）与在预渲染间里排队（主机 `maxConcurrent` 2、lane 串行，第二段 `lane ahead=1` 排了 120.5 s 收回）。语义（`mechanism/document-service.md`「渲染任务队列」）是「在约定时间内既没报进度也没报完成」才收回，现行只认帧数，比语义严。比较过三条路：(a) 进度带一个随工作推进而变的计数；(b) 真正开工才报 `progress(0)`、排队只受租约管、另加节点本地看门狗；(c) 主机只在执行器空着时认领。只用 (b)：推产物阶段帧数照样不变，还是会误判，看门狗又是一套新的卡死判定；只用 (c)：推产物仍误判；只用 (a)：排队时本来就没有工作在推进，计数也不动。定为 (a) + (c)：
+
+4. **`task.progress` 可带 `step`**（A.6 的 `task.progress` 多一个可选字段 `step: number`）：节点这个认领的工作计数，换阶段、出一批帧、推完一块时加一（续约本身不加）。第 2 项改为：`claimed` 且 `now - claim.progress.changedAt > STALL_MS` 且 `claim.progress.done !== null` → 放弃；`changedAt` 在 `done` 变了、**或带来的 `step` 与上次不同**时重起。不带 `step` 的旧节点只看 `done`，与原来相同；旧队列丢掉这个字段，新节点照旧工作（只是推产物慢时仍按旧规则停滞）。`step` 不是数或 `null` 回 `bad-message`。`describe()` 的 `claim.progress` 在收到过 `step` 时多带 `step`。执行器、产物库真卡死时计数不动，照旧在 `STALL_MS` 后收回（I8 不变）。节点侧：会话 `advance(id)` 只记不发，下一次 `progress` 或续约带上；执行编排换阶段时当场报一次进度，下一步卡死时停滞计时从这一刻算起。
+5. **独立渲染主机闲时认领**（`render-host-contract.md` 第 3 节「闲时门槛」）：快照与 `plan` 共用预渲染管线里一条串行 lane；要用它的任务只在它空着（执行器 `laneBusy() === 0`）、全部节点手里没有还没走到推送的同 lane 任务（`occupying()`）、也没有在飞的同 lane 认领时才认领。推产物不占 lane，前一段推送时下一段照样认领、渲染；流任务不受这道闸。执行器不给 `laneOf` 时不加闸（测试替身行为不变）。节点会话多一个可选的 `canClaim(task)`，认领前过一遍候选。
 
 ---
 
@@ -352,15 +366,16 @@ export function filterClaimable(tasks, node) // → task[]（保持原顺序）
 ### B.3 `pick.mjs`（设计 4.3 末段、第 7 节「公平性」）
 
 ```js
-export function rankCandidates(tasks)                              // 新数组：优先级档（normal 先于 backfill）→ 档内整数 priority 降序 → source.publishedAt 升序 → id 升序；pickCandidate 只在排头那一档里挑
+export function rankCandidates(tasks)                              // 新数组：优先级档（normal 先于 backfill）→ 计划先于细任务（`kind: 'plan'` 在前）→ 档内整数 priority 降序 → source.publishedAt 升序 → id 升序；pickCandidate 只在排头那一档、排头那一类里挑
 export function pickCandidate(tasks, { k = 4, random = Math.random, lastProjectId = null } = {})   // → task | null
 ```
 
 `pickCandidate`：
 
 1. 空数组回 `null`；
-2. 取 `rankCandidates` 里与第一名同档、**同整数 priority** 的那些，再取其前 `k` 个；
-   〔裁〕2026-09-28（主会话）：原文是「取 `rankCandidates` 的前 `k` 个」。为什么改：前 `k` 个里锚帧段（50）和普通段（10）混在一起随机挑，锚帧优先几乎不起作用——笔记本跑 M7-A4 时页面认领顺序是 h3:0-59、h1:0-59、h2:120-179、h2:240-299、h2:180-239、h1:120-179、最后才 h2:0-59，最差 85.3 s（`docs/reports/AGENT-lowmem-latency.md`「段的顺序基本随机」是同一件事）。改成：先取最高那一个整数名次，只在它的前 `k` 个里随机（同名次内保留随机，多节点照旧错开）；这一名次认领完才轮到下一名次。代码向语义「锚帧优先」靠，语义不改。
+2. 取 `rankCandidates` 里与第一名同档、同类（计划 / 细任务）、**同整数 priority** 的那些，再取其前 `k` 个；
+   〔裁〕2026-10-01（主会话据 `claude/m7-race`）：加「同类」，同一档里计划排在细任务前面。原来计划记名次 0、排在节点自己积压的细任务后面，新改的卡要等积压做完才有细任务，不会切分的纯浏览器节点没活可接（M7-A10 实测 224～295 s）；切分只要一两秒。出处 `docs/archive/agent-reports/AGENT-m7-race.md`。
+   〔裁〕2026-09-28（主会话）：原文是「取 `rankCandidates` 的前 `k` 个」。为什么改：前 `k` 个里锚帧段（50）和普通段（10）混在一起随机挑，锚帧优先几乎不起作用——笔记本跑 M7-A4 时页面认领顺序是 h3:0-59、h1:0-59、h2:120-179、h2:240-299、h2:180-239、h1:120-179、最后才 h2:0-59，最差 85.3 s（`docs/archive/agent-reports/AGENT-lowmem-latency.md`「段的顺序基本随机」是同一件事）。改成：先取最高那一个整数名次，只在它的前 `k` 个里随机（同名次内保留随机，多节点照旧错开）；这一名次认领完才轮到下一名次。代码向语义「锚帧优先」靠，语义不改。
 3. 若给了 `lastProjectId`，且前 `k` 个里有和第一名**同优先级**、但 `source.projectId !== lastProjectId` 的，候选只留这些（同优先级里按项目轮转）；
 4. 在候选里取 `candidates[Math.floor(random() * candidates.length)]`（`random()` 返回 `[0, 1)`）。
 
@@ -898,6 +913,8 @@ export async function probeBrowserEnvironment({ browser, page }, { platform = pr
 
 **`describe()`**：新增 `locks: [{ lockKey, envFingerprint, source, since, touchedAt }]`，按 `lockKey` 排序。
 
+**锁闲置按「最后一次产出或报忙」算（F.9）**：M7 D2 的 `lockIdleMs` 起初是「此刻减最后一次产出」，页面只是忙也会被接手；F.9 补上报忙。
+
 ### F.2 节点（`server/render-node/`，Pipeline/Node 的 Node 部分）
 
 **`fingerprint.mjs` 的 `normalizeOs`**：在现有精确匹配之后，按前缀补三条（小写后比）：
@@ -1131,6 +1148,16 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
    - L10：本机已齐、没有锁文件的卡，后台那一趟之后锁归本机，此后页面测量帧回 `CARD_LOCKED`。
 
 ---
+
+### F.9 页面只是忙不算闲置（2026-09-30，`claude/queue-maint`）〔裁〕
+
+M7 D2（`m7-contract.md` 第 3.4 节）让切分方在锁定方闲置超 30 s、这张卡又没做完时接手；「闲置」起初只看产出（认领、续约、完成、`card.lock`）。
+M7 实测里浏览器锁着一张卡、手里在做别的段，这张卡 30 s 没产出就被接手，已做的帧白费。试过的路：只按「节点连着」判（断网之外一直连着的页面会永远不被接手，页面隐藏几小时也一样，不行）；按「节点在任何任务上产出」判（覆盖不了测量、补跑这些没有认领的忙，且旧页面行为会变，不行）。定为节点显式报忙：
+
+- **队列**：锁多记一项 `nodeId`（最后一次经认领、续约、完成为它产出的节点；`card.lock`、接手建的锁不记）。节点记录多记 `activeAt`、`activeBusy`（最后一次 `node.active` 的时刻与内容）。回包（发布回包、认领回包）的 `lockIdleMs = now - max(producedAt, activeAt)`，其中 `activeAt` 只在那个节点此刻连着（`conn` 在）、`envFingerprint` 仍等于锁的指纹时才算；否则 `lockIdleMs = now - producedAt`（与改前相同）。`node.welcome` 多带 `activeIntervalMs`（`NODE_ACTIVE_INTERVAL_MS` = 10 s，`constants.mjs`；不进 A.2 的 `QUEUE_DEFAULTS`）。`describe()` 的 `nodes[]` 在节点报过忙时多带 `activeAt`、`activeBusy`，别的节点形状不变。
+- **节点**（纯浏览器，`src/online/browserNode.ts`）：welcome 带 `activeIntervalMs` 才发 `node.active`；手里有认领报 `'bake'`，否则宿主报后台舞台单飞队列里有更急的活时报 `'stage'`；每次报到后第一拍即可发，此后不比间隔更勤。页面隐藏、父页 rAF 断档、闲着、只是在播放或拖动而后台没活时不发。
+- **兼容**：`node.active` 是新类型，旧队列会回 `bad-message`，所以节点只在 welcome 带 `activeIntervalMs` 时发；旧页面不发，新队列行为不变；切分方（pc、host 的 `idleLockTakeover`）不改。
+- **测试**：`server/test/queue-maint-d2-busy.test.mjs`（QM-D-01～10）、`src/online/browserNodeActive.test.mjs`（QM-D-P1～P4）。
 
 ## G. M5a：网络层、集群令牌与服务地址登记（文档服务通用化）
 
@@ -1914,6 +1941,8 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 
 **开关**：`PROMPTCUT_QUEUE_NODE=1`，缺省关。关着时行为与现在完全一样。
 
+**页面交接**（2026-09-29，落地语义「加入共享项目的桌面应用自动成为这个项目的渲染节点」，`claude/desktop-auto-node`，报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`）：桌面版的页面进入共享项目时，经编辑器进程把这个项目的共享配置（文档服务地址、项目 id、项目文档 id、素材服务基址、页面签的 render 角色连接票据）交给预渲染进程（`POST /api/frames/render-node`），预渲染进程据此起本机节点并建推送队列（模式名 `page`）；每次建新会话经 HMR 向页面要一张新票据；页面离开项目、取消协作或换开别的项目时撤掉。开发者开关 `PROMPTCUT_AUTO_RENDER_NODE=0` 关掉它，缺省开；环境变量已经配出节点时不接交接。
+
 **开着、并且 `resolveDocservice` 不是 `offline` 时**：
 - **起本机节点**：`createLocalNode`：
   - `profile: 'pc'`；
@@ -2020,6 +2049,7 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 2. **推送只在显式开启时生效**：
    - `resolveDocservice` 回 `mode: 'editor'`、进程又没设 `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1` 时，不建推送队列，也不在 preload 之前拉取别的节点的结果，行为与 C6.4 之前相同；
    - `remote` / `local` 两种模式照旧建；
+   - 页面交来了共享配置（J.5「页面交接」，模式名 `page`）时建，不用显式开关；
    - `PROMPTCUT_PUSH=0` 一律关。
    这样开关关着时，默认的开发环境与探针的行为不变。
 3. **推迟到 M6，登记进计划第 11.2 节**：
@@ -2034,7 +2064,20 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 
 预渲染进程里的推送队列与队列节点，素材服务的基址按下面的顺序定：
 1. `PROMPTCUT_ASSET_URL`；
-2. 服务地址登记里别的机器登记的 `kind: 'asset'`，按 `announcerId` 字典序取第一个；登记变化时换用新的 client；
-3. 本机的 `assetServiceOrigin()`。
+2. 页面交来的素材服务基址（J.5「页面交接」）（2026-09-29，落地语义「加入共享项目的桌面应用自动成为这个项目的渲染节点」，`claude/desktop-auto-node`，报告 `docs/archive/agent-reports/AGENT-desktop-auto-node.md`）；
+3. 服务地址登记里别的机器登记的 `kind: 'asset'`，按 `announcerId` 字典序取第一个；登记变化时换用新的 client；
+4. 本机的 `assetServiceOrigin()`。
 
 素材服务部署在主 PC，地址由控制面下发给工作节点（D7）。所以笔记本节点推送、拉取都走主 PC 的素材服务，主 PC 能拉到笔记本的产物。
+
+〔裁：`claude/push-scope`，报告 `docs/reports/AGENT-push-scope.md`（三级）〕第 1、2 条都没有时，要到第 3 条（登记）才知道推到哪里；原来先按第 4 条建 client、登记到了再换，于是起步那一阵的推送（队列文件里上次没推完的段、刚写进帧库的段）先落在本机素材服务。改为：第 1、2 条都没有时，推送与拉取的第一次调用先等登记——收到第一份登记（哪怕是空的）、页面交来了基址，或等满 10 秒（连不上文档服务）就按那时的选择走，之后与原来相同。实现 `server/asset-select.mjs`。
+
+### J.14 推送只推绑定项目的产物（2026-09-29，〔裁：`claude/push-scope`，报告 `docs/reports/AGENT-push-scope.md`（三级）〕）
+
+依据：`product/asset-service.md`「凭票据读写」（票据只在这个项目内有效）与 `product/platforms.md`「渲染节点」（加入共享项目的桌面应用成为**这个项目**的渲染节点）。预渲染进程的帧库是本机所有项目共用的，原来推送钩子把任何项目新写的帧都排进推送队列，同时开着的别的本机项目的帧也会推到共享项目的素材服务。
+
+1. **范围**：推送队列只收属于绑定项目的段（`server/push-scope.mjs`）。本地档看那一版 entry 的项目文档 id；共享档与轨道流是内容寻址的，绑定项目有一版 entry 的 card plan 用到这个键（流看成员卡的内容键）就算。找不到 entry 的按不属于算。层表 `layers:<项目文档 id>` 同样只写绑定项目的。不属于的段不进队、留在本机，诊断里计 `outOfScope`。
+2. **绑定项目是谁**：自动渲染节点按页面交来的项目文档 id（`contentId`，现取）；还没交来时判不了的段先扣在内存里（最多 5000 段），交来后再判；补推已有层也等它交来。老路径凭 `PROMPTCUT_SHARED_CONFIG` 进入时按配置里新加的可选字段 `contentId`（见 `auth-contract.md` 第 11 节）；没写就不限，记一行 `push.scope`。本机身份（`editor` / `local` / `remote`，J.12 的显式开关）没有共享项目的边界，不限。
+3. **队列文件**：限了项目的推送队列文件在帧库下 `push/<文档服务 host>-<项目 id>/push-queue.json`（老路径写了 `contentId` 时也一样）；换绑定、撤绑定时没推完的段留在原项目的目录，下次绑回同一个项目接着推，不推进别的项目的素材服务。读回的段不再判范围。不限的仍在帧库根。
+4. **plan 发布**：本机节点只替绑定项目发布 `plan`；别的项目（或页面还没交项目文档 id 时）本机自己产，不进共享项目的任务队列。
+5. **sink**：节点认领到的任务来自共享项目的队列，照旧推到共享项目的素材服务，不另判。

@@ -12,6 +12,7 @@
  * 表随包发出去,用户第一次悬停就一步到位;表里没有的(用户 / AI 现场建的卡)照旧现场量。
  * 卡片改了默认参数、改了动画,重跑一次这个脚本即可。
  */
+import './lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

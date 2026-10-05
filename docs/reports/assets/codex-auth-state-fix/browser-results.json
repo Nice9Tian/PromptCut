@@ -1,0 +1,64 @@
+{
+  "results": [
+    {
+      "name": "simulation CLI begins logged in",
+      "ok": true
+    },
+    {
+      "name": "logged in retains re-login button",
+      "ok": true
+    },
+    {
+      "name": "runtime emits one auth terminal",
+      "ok": true
+    },
+    {
+      "name": "same editor tabs share invalid state immediately",
+      "ok": true
+    },
+    {
+      "name": "another client is blocked before CLI startup",
+      "ok": true
+    },
+    {
+      "name": "raw Logged in cannot revive provider cache",
+      "ok": true
+    },
+    {
+      "name": "all open editors synchronize invalidity",
+      "ok": true
+    },
+    {
+      "name": "login running button disabled",
+      "ok": true
+    },
+    {
+      "name": "duplicate login reuses job",
+      "ok": true
+    },
+    {
+      "name": "cancel preserves invalidity",
+      "ok": true
+    },
+    {
+      "name": "failed login recovery/device entry",
+      "ok": true
+    },
+    {
+      "name": "verified login updates settings",
+      "ok": true
+    },
+    {
+      "name": "other editor recovers without reload",
+      "ok": true
+    },
+    {
+      "name": "recovery never automatically replays editing instruction",
+      "ok": true
+    },
+    {
+      "name": "new explicit simulated instruction succeeds",
+      "ok": true
+    }
+  ]
+}

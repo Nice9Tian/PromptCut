@@ -21,13 +21,15 @@ function store(initial = {}) {
   };
 }
 
-const base = { layout: "classic", project: null };
+const base = { project: null };
 
-test("三种模式都要说得出人话,而不是让人去推三个布尔值", () => {
-  assert.equal(describeMode({ layout: "classic" }), "传统式");
-  assert.equal(describeMode({ layout: "chat" }), "对话式");
-  assert.match(describeMode({ layout: "chat", skill: { active: true } }), /SKILL/);
-  assert.match(describeMode({ layout: "classic", teamMode: true }), /分工/);
+test("两种工作方式都要说得出人话;对话式布局已去掉,旧报告里的 layout 字段不影响", () => {
+  assert.equal(describeMode({}), "传统式");
+  assert.equal(describeMode({ layout: "chat" }), "传统式");
+  assert.match(describeMode({ skill: { active: true } }), /SKILL/);
+  assert.doesNotMatch(describeMode({ skill: { active: true } }), /对话式|只读/);
+  assert.match(describeMode({ agentTabs: 3 }), /多 Agent\(3 个页签\)/);
+  assert.equal(describeMode({ agentTabs: 1 }), "传统式");
 });
 
 test("没保存过的项目要**显式**说出来 —— 素材在临时目录的怪事都是从这儿来的", () => {
@@ -100,12 +102,12 @@ test("用户写的剧本正文不许进报告 —— 这份报告是要上传的
 test("白名单里的纯设置项照旧带值 —— 不然排查时什么也看不出来", () => {
   const r = buildEnvReport({
     ...base,
-    storage: store({ aiProvider: "api", aiShowThinking: "1", "pc.layout.mode": "chat", "pc.ai.effort.codex": "high" }),
+    storage: store({ aiProvider: "api", aiShowThinking: "1", "pc.volume": "0.5", "pc.ai.effort.codex": "high" }),
   });
   assert.deepEqual(r.localSettings, {
     aiProvider: "api",
     aiShowThinking: "1",
-    "pc.layout.mode": "chat",
+    "pc.volume": "0.5",
     "pc.ai.effort.codex": "high",
   });
 });

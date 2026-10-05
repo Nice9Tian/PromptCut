@@ -71,7 +71,7 @@
 | `scripts/probes/png-adopt-probe.mjs`（新） | X7 可视验收探针（不对页面打补丁） |
 | `src/editor/preview/UnifiedPreview.tsx` | X7 前提：legacy 整帧请求 `target: "prerender"` |
 | `server/test/legacy-preview-target.test.mjs`（新） | X7-legacy-target（两条） |
-| `docs/reports/AGENT-m6c-snapshot.md` | 本报告 |
+| `AGENT-m6c-snapshot.md`（当时在 `docs/reports/`，现归档在 `docs/archive/agent-reports/`） | 本报告 |
 
 ## 3. 单测
 

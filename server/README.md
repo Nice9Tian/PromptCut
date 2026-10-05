@@ -43,23 +43,17 @@ AI 面板的分页栏、Agent 之间的范围声明与互相通知（`declare_sc
 * 部件（`PartDef`，src/kernel/partTypes.ts）是可独立渲染的最小单元，一个文件一个放在 src/parts/lib/，glob 自动收集；组合卡（cardId `composite`）的 `clip.parts` 是一棵部件实例树，舞台（render/PartTree.tsx）按树逐级渲染摆位，每个实例的框相对父框、进场时机相对父级。
 * MCP 工具 `list_parts`、`add_composite`、`add_part`、`set_part`、`remove_part`、`move_part`；`get_clip` / `set_clip` 对组合卡返回 / 接受整棵实例树（带 partId、frame.local 可写、frame.world 只读、settleMs）。树的增删改移和校验都是 kernel/parts.ts 的纯函数，参数面板（PartsForm）和 Agent 走同一条路。
 
-### Skill 任务（server/vite-plugin-skill.ts）
+### SKILL：桌面 APP 经 MCP 直连（server/vite-plugin-skill.ts、server/mcp-server.mjs）
 
-* `GET /api/skill/jobs` - 每个任务多了 `starting`（刚点的、实例还没上来，三分钟内）、`startedAt`（最近一次起实例）、
-  `mergeRequest`（agent 调了 `submit_merge` 还没被并入的请求 `{ seq, note }`）。前端拿 `starting` 在点「开始」的那一刻就切进 SKILL 模式。
-* `POST /api/skill/jobs/:id/restart` - 停掉的任务再起一份实例（项目用任务目录里的 `project.proc`，`base.proc` 不动），
-  然后把桌面 app 的对话叫回来。实例还活着返回 400。
-* `POST /api/skill/jobs/:id/relaunch` - Claude 那条路现在优先 `claude://code/continue?session=<local_…>` 把原会话叫回前台
-  （会话 id 用上次核对到的，没有就翻桌面版归档找落在任务目录里的那条）；实测同一目录第二次走 `code/new?folder=`
-  会开成「No folder」的临时工作区，`/promptcut` 在里面是未知命令。找不到原会话才退回新建。
-* `POST /api/skill/jobs/:id/merge-result` - 用户那份 PromptCut 做完合并把 `{ seq, ok, summary, error? }` 写回任务目录的
-  `merge-result.json`。
-
-**agent 把改动并回用户项目（`submit_merge`）**：任务目录里那份 `tools/mcp-server.mjs` 只在任务目录里多暴露这一个工具。
-它先等实例把改动写回 `project.proc`，再往任务目录写 `merge-request.json`；用户手里的 PromptCut 每秒轮询任务列表，
-SKILL 模式开着且就是这个任务时，在自己页面里做三方合并（`src/skill/skillMode.ts` 的 `serveMergeRequest`，
-和对话框里「强制并入」同一个 `applyCombine`），把报告 POST 到 `merge-result`，工具等到它就把报告回给 agent（60 秒超时）。
-像 git worktree 合回主分支，仲裁的一方是用户正在开着的编辑台；用户关了 SKILL 模式，请求就不再生效。
+* 桌面 APP（Claude Code、Codex）的每个会话起一份 `server/mcp-server.mjs`，按 `%TEMP%promptcutport.json`（或 `PROMPTCUT_PORT`、
+  `PROMPTCUT_PORT_FILE`）找用户正在用的实例；每个会话一个身份（`desk-…`，Claude Code 一个进程一个会话，Codex 按 `_meta.threadId`），
+  厂商从 `initialize` 的 `clientInfo` 认。调用经 `POST /api/mcp/call`（带 `caller`）落到和 AI 栏同一条路：登记表、SKILL 闸
+  （只拦桌面会话、只在 SKILL 模式关着时拦）、创造力等级（跟项目）、文档服务的写入身份、公告板与「用户正在编辑」提示。
+* `GET /api/agent/desktop` - 桌面会话的分组（厂商、正在进行的操作、最近的调用、进度报告）；页面也收 SSE 的 `agent.desktop`。
+* `GET /api/skill/desktop-register`、`POST /api/skill/desktop-register { target: "claude-code" | "codex", action: "register" | "unregister" }` -
+  把 MCP 服务登记到用户级配置（`server/desktop-register.mjs`：条目名固定 `promptcut`、不写端口、写之前备份到 `<skillRoot>/mcp-register/`、
+  撤销只还原这一条）。测试用 `PROMPTCUT_CLAUDE_CONFIG`、`PROMPTCUT_CODEX_CONFIG`、`PROMPTCUT_SKILL_DIR` 指到临时目录。
+* 原来的「任务目录 + 无头实例 + 深链拉起新对话 + `submit_merge` 三方合并」已归档（计划 `docs/plan/agent-workflow-plan.md` A4）。
 
 ### 素材收集（server/vite-plugin-collect.ts）
 从网页链接（B 站等）抓视频，落到素材目录 `out/media`（和上传同一个目录，所以 `/@media/<文件名>` 直接能取）。干活的是 `python/promptcut_collect`（yt-dlp 封装，见 [python/README.md](../python/README.md)），这边只起进程、解析 JSONL、管作业表。

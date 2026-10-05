@@ -36,6 +36,7 @@ const META: Record<string, string> = {
   themeId: "主题",
   camera3dFov: "三维视角",
   glRoute: "渲染路线",
+  creativity: "创造力等级",
   media: "素材",
   tracks: "序列",
   cuts: "剪辑",

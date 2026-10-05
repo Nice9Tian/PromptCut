@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import "../../testing/registerTs.mjs";
 
 const contract = await import("./contract.ts");
-const { PLACEHOLDER_CSS, PERF_DEGRADED } = await import("./placeholderStyle.ts");
+const { PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, PERF_DEGRADED } = await import("./placeholderStyle.ts");
 const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const component = readFileSync(new URL("./placeholderPlane.tsx", import.meta.url), "utf8");
 
@@ -58,4 +58,21 @@ test("unsupported:电脑 + 离线图标加固定文字,不用沙漏、不铺噪�
   assert.match(component, /pc-ph-offline/);
   assert.equal(contract.UNSUPPORTED_TEXT, "需要本地 PC 渲染辅助");
   assert.doesNotMatch(PLACEHOLDER_CSS, /kind="unsupported[^"]*"\]\s*\{[^}]*(background-image|animation)/s);
+});
+
+test("fit:沙漏与图标按舞台一侧算好的倍数放大(中心不动);图标按 layout 横排 / 竖排 / 只留图标;倍数 1 时不写 transform", () => {
+  // 图标小徽标:translate 在前、scale 在后,中心不动;倍数 1 只有 translate
+  assert.match(component, /translate\(-50%, -50%\) scale\(\$\{s\}\)/);
+  assert.match(component, /s === 1 \? "translate\(-50%, -50%\)"/);
+  assert.match(component, /data-pc-placeholder-layout=\{layout\}/);
+  // 沙漏:徽标的圆整个放大;铺满形态只放大中间那个(噪点铺在根元素上,不缩放)
+  assert.match(component, /width: 28, height: 28, \.\.\.\(s !== 1 \? \{ transform: `scale\(\$\{s\}\)` \} : null\)/);
+  assert.match(component, /className="pc-ph-center"[^>]*style=\{solid && s !== 1 \? \{ transform: `translate\(-50%, -50%\) scale\(\$\{s\}\)` \}/);
+  // 不再用 CSS 变量
+  assert.doesNotMatch(component + PLACEHOLDER_CSS + PLACEHOLDER_ONLINE_CSS, /--pc-ph-ui-scale/);
+  // 排法规则只在在线那一份里:竖排、只留图标(字藏起来)
+  assert.match(PLACEHOLDER_ONLINE_CSS, /layout="column"\][^{]*\.pc-ph-unsupported\s*\{[^}]*flex-direction:\s*column/s);
+  assert.match(PLACEHOLDER_ONLINE_CSS, /layout="icon"\]\s*\.pc-ph-unsupported-text\s*\{[^}]*display:\s*none/s);
+  assert.match(PLACEHOLDER_ONLINE_CSS, /kind="unsupported"\]\s*\{[^}]*overflow:\s*hidden/s);
+  assert.doesNotMatch(PLACEHOLDER_CSS, /data-pc-placeholder-layout/, "桌面注入的那一份不带排法规则");
 });

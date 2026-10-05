@@ -31,11 +31,20 @@ const BAKERY = path.join(SERVER, 'bakery');
  *   - `m7-judge.test.mjs` 测 `scripts/probes/m7-judge.mjs` 里 M7 验收探针 D1-D2-D12 的判据（按出键分组、中途接手只作说明）。
  *   - `m8-scale.test.mjs` 测 `scripts/probes/m8-scale-probe.mjs` 的任务表、节点账本与 K1 / K2 / I1 / I2 判据(M8 规模复测的判据靠它们)。
  *   - `m8-no-lan.test.mjs` 测 `scripts/probes/m8/no-lan.mjs` 的 netstat 解析与计数(M8「异地接入」的「全程没有局域网连接」靠它判)。
- *   - `test-suite-policy.test.mjs` 测 `scripts/test-suite-policy.mjs` 的测试进程异常重跑判定。
+ *   - `no-user-dirs.test.mjs` 测 `scripts/lib/user-dirs.mjs` 与 `dev-server.mjs` 的素材镜像,并扫描探针都先摘掉外部的
+ *     `PROMPTCUT_EXPORT_DIR` / `PROMPTCUT_DATA_DIR`(测试与探针不写用户的 Videos\PromptCut,要常驻基线);
+ *   - `global-setup.mjs`(`npm test` 的全局准备,不是生产代码)用 `scripts/lib/user-dirs.mjs` 摘掉同样两个变量,
+ *     和探针共用一份判定。
+ *   - `port-file.test.mjs` 测 `scripts/lib/user-dirs.mjs` 的 `markNoPortFile`，并扫描起编辑器的探针都带上 `PROMPTCUT_NO_PORT_FILE=1`
+ *     (测试与探针不覆盖公共的 %TEMP%\promptcut\port.json,要常驻基线);
+ *   - `asset-lan-discover.test.mjs` 测 `scripts/probes/asset-lan-discover.mjs`(`asset-lan-probe` 按局域网发现找放本机项目的素材服务地址);
+ *   - `m8-judges.test.mjs` 测 `scripts/probes/m8/lib.mjs` 里 `cloud-untouched` 与 `real:tasks` 的判法。
+ *   - `maint-3-claim-gate-judge.test.mjs` 测 `scripts/probes/claim-gate-judge.mjs`(认领闸端到端探针的判定:多认领、Agent 任务不排在预渲染后面)。
+ *   - `test-suite-policy.test.mjs` 测 `scripts/test-suite-policy.mjs` 与 `scripts/test-event-reporter.mjs` 的测试进程异常重跑判定。
  *
  * 多一条都要在这里显式写出来,加不进来就说明依赖方向真的破了。
  */
-const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/test-suite-policy.test.mjs']);
+const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs', 'server/test/port-file.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/m8-judges.test.mjs', 'server/test/maint-3-claim-gate-judge.test.mjs', 'server/test/test-suite-policy.test.mjs']);
 
 const CODE = /\.(mjs|mts|ts|tsx)$/;
 

@@ -1,5 +1,5 @@
 /**
- * 用户卡与改动层(M8 之前的两处遗留,报告 `docs/reports/AGENT-card-overlay.md`)。
+ * 用户卡与改动层(M8 之前的两处遗留,报告 `docs/archive/agent-reports/AGENT-card-overlay.md`)。
  *
  *   CO1  create_card 带 overwrite:改动层里有这张卡的旧版时,新内容要生效(以前写进底版,被改动层的旧版盖住)
  *   CO2  有改动层时主机不写检出目录:本机原来没有的用户卡(内容库同步、打开 .proc、create_card)一律写进改动层,

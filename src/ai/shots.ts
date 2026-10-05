@@ -4,6 +4,7 @@
  * 检测跑在服务端（TransNetV2 或 scdet 兜底），这边只负责等和存。
  */
 import { readSseStream } from "../editor/io/stt";
+import type { PerceptionMediaRef } from "./perceptionMedia";
 import type { Shots } from "../kernel/project";
 
 export interface ShotsJobState {
@@ -22,11 +23,12 @@ export async function shotsStatus(): Promise<{ ready: boolean; engine: string; d
   return r.json();
 }
 
-export async function startShotDetection(mediaPath: string, mediaId: string): Promise<string> {
+/** 只发素材标识,服务端经素材服务取字节(见 perceptionMedia.ts) */
+export async function startShotDetection(media: PerceptionMediaRef): Promise<string> {
   const r = await fetch("/api/shots/detect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: mediaPath, mediaId }),
+    body: JSON.stringify({ mediaId: media.id, media }),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.ok) throw new Error(data.error || "镜头识别没能启动");

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { installPlanFor, manualHintFor } from './install.mjs';
 import { cliCommand, cliEnv, resolveCli, setupRoot, psLiteral, encodedPowerShell } from './cli-runtime.mjs';
 import { probeAuth, loginCommandFor } from './auth.mjs';
+import { codexAuthState } from './codex-auth-state.mjs';
 
 export function authUrlFrom(text, provider) {
   const hosts = provider === 'codex' ? ['auth.openai.com', 'chatgpt.com'] : provider === 'agy'
@@ -48,10 +49,12 @@ export function createSetupService({ launch = spawn, verifyAuth = probeAuth, ver
       catch (error) { reject(error); return; }
       children.add(child);
       let settled = false;
+      let timeoutError;
       const stop = () => {
         if (process.platform === 'win32' && child.pid) {
           const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
-          killer.on('error', () => child.kill());
+          killer.on('error', () => { if (!settled) child.kill(); });
+          killer.on('exit', code => { if (code && !settled) child.kill(); });
         } else child.kill();
       };
       child.stopSetup = stop;
@@ -63,16 +66,16 @@ export function createSetupService({ launch = spawn, verifyAuth = probeAuth, ver
         children.delete(child);
         error ? reject(error) : resolve();
       };
-      const timer = setTimeout(() => { stop(); finish(new Error('操作超时，请检查网络或代理后重试。')); }, timeoutMs);
+      const timer = setTimeout(() => { timeoutError = new Error('操作超时，请检查网络或代理后重试。'); stop(); }, timeoutMs);
       for (const stream of [child.stdout, child.stderr]) {
         const decoder = new StringDecoder('utf8');
         stream?.on('data', chunk => append(job, decoder.write(chunk)));
         stream?.on('end', () => append(job, decoder.end()));
       }
       child.once('error', error => finish(new Error(`无法启动：${error.message}`)));
-      child.once('close', code => finish(code === 0 ? null : new Error(job.kind === 'login'
+      child.once('close', code => finish(timeoutError || (code === 0 ? null : new Error(job.kind === 'login'
         ? `登录未完成（退出码 ${code}）。请重试；浏览器回调失败时可尝试设备码登录。`
-        : `安装程序退出（${code}）。${job.logs.join('\n').slice(-2500)}`)));
+        : `安装程序退出（${code}）。${job.logs.join('\n').slice(-2500)}`))));
     });
   }
 
@@ -123,6 +126,8 @@ export function createSetupService({ launch = spawn, verifyAuth = probeAuth, ver
   }
 
   async function login(job) {
+    const state = job.provider === 'codex' ? codexAuthState() : null;
+    const generation = state?.beginLogin();
     const cmd = loginCommandFor(job.provider);
     if (!cmd) throw new Error('此服务没有 CLI 登录方式。');
     const exe = resolveCli(cmd[0]);
@@ -135,9 +140,10 @@ export function createSetupService({ launch = spawn, verifyAuth = probeAuth, ver
     const cwd = path.join(setupRoot(), 'login');
     fs.mkdirSync(cwd, { recursive: true });
     await run(job, invocation.command, invocation.args, { cwd });
-    const auth = await verifyAuth(job.provider, { refresh: true });
+    const auth = await verifyAuth(job.provider, { refresh: true, raw: true });
     if (job.cancelRequested) throw new Error('已取消');
     if (auth.loggedIn !== true) throw new Error('登录程序已结束，但尚未确认登录成功。请重试。');
+    if (state && !state.completeLogin(generation)) throw new Error('登录状态已更新，请重新确认当前登录。');
     job.state = 'succeeded';
     job.message = '登录成功。';
     delete job.url;

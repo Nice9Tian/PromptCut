@@ -24,12 +24,14 @@
  * `--headed` 用有头 Chrome 再跑一遍播放和拖动 —— 用户真正看到的是有头浏览器，
  * 有头下 rAF 受真实显示节拍约束，报出来的间隔才是用户感觉到的那个。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 import { stagePortsOf } from '../../server/stage-ports.mjs';
 
@@ -230,7 +232,7 @@ async function openEditor(browser, url, { dual = true } = {}) {
 const launchOpts = {
   headless: !headed,
   protocolTimeout: 240000,
-  args: ['--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
+  args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'],
 };
 if (headed) {
@@ -241,7 +243,7 @@ if (headed) {
 } else {
   // R2 报告:不带这两个,这台机器上无头 Chrome 的 rAF 退到 10 Hz,节拍循环根本等不到帧
   launchOpts.args.push('--disable-gpu-vsync', '--disable-frame-rate-limit');
-  launchOpts.args.unshift('--window-position=-32000,-32000');
+  launchOpts.args.splice(PROBE_CHROME_ARGS.length, 0, '--window-position=-32000,-32000'); // 仍以 PROBE_CHROME_ARGS 打头
 }
 
 const browser = await puppeteer.launch(launchOpts);

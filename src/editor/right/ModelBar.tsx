@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { JSX } from "react";
 import type { AiProvider, PublicAiConfig } from "../../ai/types";
 import {
-  CAPABILITIES,
+  capabilityOf,
   EFFORT_LABEL,
   modelsFor,
   effortsFor,
@@ -15,6 +15,10 @@ import {
   type SchemaCompat,
 } from "../../ai/modelOptions";
 import { IconMore } from "../../ui/icons";
+import { MAIN_TAB } from "../../ai/liveChat";
+import { setTabCreativity, useAgentTabs } from "../../ai/agentTabs";
+import { useStore } from "../../store/project";
+import { CREATIVITY_HINT, CREATIVITY_LABEL, CREATIVITY_LEVELS, normalizeCreativity, projectCreativity, type CreativityLevel } from "../../kernel/creativity.mjs";
 import { usePopover } from "./chat/usePopover";
 import "./ModelBar.css";
 
@@ -35,8 +39,19 @@ export function ModelBar(props: {
   provider: AiProvider | null;
   config: PublicAiConfig | null;
   disabled?: boolean;
+  /** 这一页的 id:创造力等级按页存(不传 = 主页) */
+  tabId?: string;
 }): JSX.Element | null {
   const { provider, config, disabled } = props;
+  const tabId = props.tabId ?? MAIN_TAB;
+  /*
+   * 创造力等级(user-workflow.md「创造力等级」):这个对话默认跟项目,可以单独改。
+   * 覆盖值存在本机页签里(agentTabs.ts),随每条消息带给服务端,服务端的闸门按它判越级调用。
+   * 和模型、思考档不同,它按页存、不按驱动存:换驱动不改变这个对话能改到多深。
+   */
+  const { tabs } = useAgentTabs();
+  const tabCreativity = tabs.find((t) => t.id === tabId)?.creativity ?? null;
+  const projectLevel = useStore((s) => projectCreativity(s.project));
   const [choice, setChoice] = useState(() => ({ model: "", effort: "" as EffortLevel, fast: false, deepAuto: false, schemaCompat: "auto" as SchemaCompat }));
   const pop = usePopover();
 
@@ -46,7 +61,7 @@ export function ModelBar(props: {
   }, [provider]);
 
   if (!provider) return null;
-  const cap = CAPABILITIES[provider];
+  const cap = capabilityOf(provider);
 
   // 和 useAiChat 发请求时用的是同一个函数 —— 下拉框显示什么,请求里就得是什么
   const models = modelsFor(provider, config);
@@ -110,10 +125,12 @@ export function ModelBar(props: {
       : "API 直连没有加速档";
 
   // 「⋯」收起来之后看不见里面开了什么:思考档、加速、深度自主有一样不是默认,按钮上就挂个点
-  const tuned = effort !== "" || (cap.fast && choice.fast) || choice.deepAuto;
+  const tuned = effort !== "" || (cap.fast && choice.fast) || choice.deepAuto || tabCreativity !== null;
+  const creativityNow: CreativityLevel = tabCreativity ?? projectLevel;
   const optionsTitle = [
     "运行选项",
     `思考 ${EFFORT_LABEL[effort] ?? effort}`,
+    `创造力 ${CREATIVITY_LABEL[creativityNow]}${tabCreativity ? "" : "(跟项目)"}`,
     cap.fast && choice.fast ? "Fast" : "",
     choice.deepAuto ? "深度自主" : "",
     compat.applies && compat.on ? "参数兼容" : "",
@@ -171,6 +188,23 @@ export function ModelBar(props: {
                 : efforts.map((lv) => (
                     <option key={lv} value={lv}>{EFFORT_LABEL[lv]}</option>
                   ))}
+            </select>
+          </label>
+
+          <label className="ai-modelbar-item">
+            <span className="ai-modelbar-label">创造力</span>
+            <select
+              className="ai-modelbar-select"
+              data-pc="ai-creativity"
+              value={tabCreativity ?? ""}
+              disabled={disabled}
+              title={`创造力等级「${CREATIVITY_LABEL[creativityNow]}」:${CREATIVITY_HINT[creativityNow]}。只管这个对话;项目的默认等级在项目设置里改`}
+              onChange={(e) => setTabCreativity(tabId, normalizeCreativity(e.target.value))}
+            >
+              <option value="">跟项目({CREATIVITY_LABEL[projectLevel]})</option>
+              {CREATIVITY_LEVELS.map((lv) => (
+                <option key={lv} value={lv}>{CREATIVITY_LABEL[lv]}</option>
+              ))}
             </select>
           </label>
 

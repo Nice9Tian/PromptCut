@@ -7,7 +7,7 @@
  * 测试方没看实现（`claude/http-transport`、`claude/ht-client`）。HTTP 长轮询是 HT-b，本组测试一条都不测。
  *
  * 契约没写死的模块路径、选项名、回包形状全部集中在本文件，集成时对账只改这里。
- * 每一处假设用「假设 H<n>」标出，报告 `docs/reports/AGENT-ht-tests.md` 按同样的编号列出。
+ * 每一处假设用「假设 H<n>」标出，报告 `docs/archive/agent-reports/AGENT-ht-tests.md` 按同样的编号列出。
  *
  *   H1  服务端会话层在 `server/docservice/session.mjs`（契约第 2 节、第 15 节点名）。本组测试不直接调它的导出，
  *       全部经 `createDocService` 测：**这个文件在不在**就是「服务端会话层到位没有」的探测；在而行为不对，用例报错。

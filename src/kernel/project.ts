@@ -296,6 +296,12 @@ export interface Project {
    * 导出页在预渲染进程里没有父页,永远走 `perDocument`,不看这一项。
    */
   glRoute?: "perDocument" | "shared";
+  /**
+   * 创造力等级的项目默认(`user-workflow.md`「创造力等级」,定义见 `kernel/creativity.mjs`)。
+   * 在项目设置里选;AI 栏每个对话默认取它、可以单独改,桌面 APP 的会话跟随它。
+   * 不填 = 出厂的「高」(旧项目没有这个字段)。Agent 不能写它:`set_project_meta` 只收声明过的字段。
+   */
+  creativity?: import("./creativity.mjs").CreativityLevel;
   media: MediaAsset[];
   tracks: Track[];
   /** 全部剪辑,按选项栏顺序。老文件没有这个字段,加载时 normalizeCuts 补成三条 */

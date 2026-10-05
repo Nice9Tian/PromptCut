@@ -51,6 +51,7 @@
  * - Chrome 参数(--disable-gpu、--font-render-hinting=none、软件光栅化…)都在 server/bakery/chrome.mjs
  *   的 CHROME_ARGS 里,两棵树各自用自己的那份——这正是要比的东西之一,不要在这里覆盖。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';

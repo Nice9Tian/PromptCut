@@ -28,6 +28,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { PNG } from 'pngjs';
 import { serve, devOrigin, flagArg } from './probe-connect.mjs';
 import { handleStreamRequest } from '../../server/frame-stream.mjs';
@@ -147,7 +148,7 @@ try {
   }, '127.0.0.1');
   const base = `http://127.0.0.1:${hostServer.address().port}`;
   browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required',
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required',
       '--disable-gpu-vsync', '--disable-frame-rate-limit'] });
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });

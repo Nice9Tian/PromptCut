@@ -41,7 +41,8 @@ function linkError(code, message, extra = {}) {
  * 状态：`hasState`（收到过 `project.state`）、`hasBody`（文档服务里这个项目有真身）、`rev`、`project`。
  */
 class Replica {
-  constructor({ gapTimeoutMs, historyKeep, onResync, log }) {
+  constructor({ gapTimeoutMs, historyKeep, onResync, log, onApplied = null }) {
+    this.onApplied = onApplied;
     this.gapTimeoutMs = gapTimeoutMs;
     this.historyKeep = historyKeep;
     this.onResync = onResync;
@@ -93,11 +94,16 @@ class Replica {
       } catch (err) {
         return this.resync(`远端操作在副本上落不下去：${err?.message ?? err}`);
       }
+      const before = this.project;
       this.project = root;
       this.hasBody = true;
       this.rev = next;
       this.history.push({ rev: next, opId: meta.opId ?? null, actor: meta.actor ?? null, session: meta.session ?? meta.actor?.session ?? null });
       if (this.history.length > this.historyKeep) this.history.splice(0, this.history.length - this.historyKeep);
+      // 提交流(A3 公告板的改动记录由它喂):每一版带写入身份与前后两份项目
+      if (typeof this.onApplied === 'function') {
+        try { this.onApplied({ rev: next, opId: meta.opId ?? null, actor: meta.actor ?? null, ops, before, after: root }); } catch (err) { this.log('agent.replica.commit-listener-error', { message: String(err?.message ?? err) }); }
+      }
     }
     clearTimeout(this.gapTimer);
     this.gapTimer = null;
@@ -197,6 +203,7 @@ export function createAgentLink({
   let feedConv = null;
   let reqSeq = 0;
   const listeners = new Set();
+  const commitListeners = new Set();
   /** 分片接收中的 project.state */
   let partial = null;
   let stateWaiters = [];
@@ -206,6 +213,11 @@ export function createAgentLink({
     historyKeep,
     log: say,
     onResync: () => openFeed(),
+    onApplied: (commit) => {
+      for (const cb of [...commitListeners]) {
+        try { cb(commit); } catch (err) { say('agent.link.commit-listener-error', { message: String(err?.message ?? err) }); }
+      }
+    },
   });
 
   function emit(message, conversation) {
@@ -456,6 +468,15 @@ export function createAgentLink({
     onMessage(cb) {
       listeners.add(cb);
       return () => listeners.delete(cb);
+    },
+
+    /**
+     * 订阅提交流:副本每应用一版回调一次 `{ rev, opId, actor, ops, before, after }`(别人的广播与自己的 ok 都算;
+     * 整份换内容的 `project.state` 不算)。回退订函数。
+     */
+    onCommit(cb) {
+      commitListeners.add(cb);
+      return () => commitListeners.delete(cb);
     },
 
     /** 诊断 */

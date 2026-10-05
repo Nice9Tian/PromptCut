@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { INHERITED_PROPS, LAYOUT_USED_VALUE_PROPS } from '../../src/render/snapshot/snapshotStyleProps.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -43,7 +44,7 @@ const CANDIDATES = [
   '"a" "b"', 'manual', '33', 'currentcolor', 'thick', 'under', 'skip', 'from-font',
 ];
 
-const browser = await puppeteer.launch({ headless: true, args: ['--no-first-run', '--hide-scrollbars'] });
+const browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars'] });
 let exitCode = 0;
 try {
   const page = await browser.newPage();

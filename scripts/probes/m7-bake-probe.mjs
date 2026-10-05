@@ -1,6 +1,6 @@
 /**
  * M7 契约第 8 节 P1、P2、P3(`docs/plan/m7-contract.md`):后台舞台为隔离单卡工程逐帧生成快照的节拍与隔离、
- * 生成的快照与桌面预渲染是否一致、`foreignObject` 出小尺寸与桌面 CDP 截图的差别。报告:docs/reports/AGENT-m7-probe.md。
+ * 生成的快照与桌面预渲染是否一致、`foreignObject` 出小尺寸与桌面 CDP 截图的差别。报告:docs/archive/agent-reports/AGENT-m7-probe.md。
  *
  * 舞台一侧要实验分支 `claude/m7-probe-exp` 的改动:`render(t, { jump: true, bake: { from } })` —— 快照趟不按一拍预算截断、
  * 挂载帧也生成快照、本地帧号小于 `from` 的只推不生成(即契约 4.3 的 `bake` RPC 的最小替身)。产品代码没有这个选项。
@@ -34,6 +34,7 @@
  *
  * 输出:过程写 stderr;每个子命令最后一行 stdout 是一行 JSON,原始数据写 <dir>/*.json。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -42,6 +43,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg, serve, closeAll, sleep } from './probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -101,7 +103,7 @@ async function launch(head, extra = []) {
   const ignore = ['--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     ...defaults.filter((a) => a.startsWith('--disable-features='))];
   return puppeteer.launch({ headless: head === 'headless', ignoreDefaultArgs: ignore, defaultViewport: null, protocolTimeout: 600000,
-    args: ['--disable-gpu', '--window-size=1100,820', '--window-position=40,40', ...extra] });
+    args: [...PROBE_CHROME_ARGS, '--disable-gpu', '--window-size=1100,820', '--window-position=40,40', ...extra] });
 }
 
 /* ------------------------------------------------------------------ desktop */

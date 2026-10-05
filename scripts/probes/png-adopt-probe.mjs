@@ -21,6 +21,7 @@
  * 端口:每台编辑器另占「端口 +1」「端口 +2」当舞台端口,三个连号都要空着;文档服务一个端口。
  * 截图缺省放在本检出的 `out/png-adopt-probe/`。输出最后一行是一行 JSON:`{ ok, before, after, pngFrames, identicalPng, shots, fails }`。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -31,6 +32,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -217,7 +219,7 @@ try {
   const DOC_URL = `ws://127.0.0.1:${DOC_PORT}`;
 
   browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
-    args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
+    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
 
   // 1. A:远端,产并推送
   const A = await startEditor('a', PORT_A, { PROMPTCUT_DOCSERVICE_URL: DOC_URL, PROMPTCUT_PUSH: '1' });

@@ -3,6 +3,7 @@ import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
 import { tools } from '../mcp-tools.mjs';
 import { pairingSession } from '../agent/call-pairing.mjs';
+import { codexAuthState, codexAuthReason, authErrorDecoder, authFailureEvent } from './codex-auth-state.mjs';
 
 /**
  * Codex 把「工具是否暴露」和「调用是否要审批」分成两个配置项。只注册 server 不会
@@ -85,9 +86,12 @@ export function startRun(opts) {
 
   let abortRef = { abort: () => {} };
   let rejected = false;
+  let authFailed = false;
+  let cancelled = false;
 
   const interceptOnEvent = (ev) => {
-    if ((ev.type === 'done' || ev.type === 'error') && rejected) {
+    if (ev.authReason || ev.message === authFailureEvent(null, false).message) authFailed = true;
+    if ((ev.type === 'done' || ev.type === 'error') && rejected && !authFailed) {
         return;
     }
     opts.onEvent(ev);
@@ -103,7 +107,7 @@ export function startRun(opts) {
   abortRef.abort = run.abort;
 
   const donePromise = run.done.then((res) => {
-    if (rejected) {
+    if (rejected && !authFailed && !cancelled) {
       opts.onEvent({ type: 'status', text: '原生工具被拒，改用文本协议重试' });
       const nextRun = runTextProtocolLoop({ startRun: _startRun, opts, onEvent: opts.onEvent });
       abortRef.abort = nextRun.abort;
@@ -112,7 +116,7 @@ export function startRun(opts) {
     return res;
   });
 
-  return { abort: () => abortRef.abort(), done: donePromise };
+  return { abort: () => { cancelled = true; abortRef.abort(); }, done: donePromise };
 }
 
 export function buildCodexArgs(opts) {
@@ -154,12 +158,32 @@ export function buildCodexArgs(opts) {
 }
 
 function _startRun(opts) {
+  const state = codexAuthState();
+  const snapshot = state.snapshot();
+  if (snapshot.state === 'invalid' || snapshot.state === 'unknown') {
+    opts.onEvent(snapshot.state === 'invalid' ? authFailureEvent(snapshot.reason)
+      : { type: 'error', message: 'Codex 登录状态待确认，请重新登录。', authProvider: 'codex', authReason: 'state_unknown', authGeneration: snapshot.revision, retryable: false });
+    return { abort() {}, done: Promise.resolve() };
+  }
+  let terminal = false;
+  let cancelled = false;
+  const emit = ev => {
+    if (terminal || cancelled) return;
+    if (ev.type === 'done' || ev.type === 'error') terminal = true;
+    opts.onEvent(ev);
+  };
   const exePath = resolveExe('codex');
   const args = buildCodexArgs(opts);
 
   const fullPrompt = `<<<系统说明>>>\n${opts.systemPrompt}\n<<<用户消息>>>\n${opts.prompt}`;
   
-  const { child, safeOnEvent, finish, abort, donePromise } = spawnCli(exePath, args, { cwd: opts.cwd, env: cliEnv('codex') }, opts.onEvent, 'Codex CLI');
+  const { child, safeOnEvent, finish, abort, donePromise } = spawnCli(exePath, args, { cwd: opts.cwd, env: cliEnv('codex'), stopOnFinish: true }, emit, 'Codex CLI');
+  const failAuth = reason => {
+    if (terminal || cancelled) return;
+    const changed = state.invalidate(snapshot.generation, reason);
+    finish(authFailureEvent(reason, changed));
+  };
+  const decodeAuth = authErrorDecoder(failAuth);
 
   let sentLength = 0;
   let threadId = null;
@@ -176,6 +200,9 @@ function _startRun(opts) {
   const isOurs = (item) => item.server === undefined || item.server === 'promptcut';
 
   child.stderr.on('data', (data) => {
+      if (terminal || cancelled) return;
+      decodeAuth(data);
+      if (terminal) return;
       const str = data.toString('utf8');
       if (!warnedConfig && str.includes('config.toml') && (str.includes('unknown variant') || str.includes('unknown field'))) {
           warnedConfig = true;
@@ -184,11 +211,16 @@ function _startRun(opts) {
   });
 
   child.stdout.on('data', lineSplitter(line => {
+    if (terminal || cancelled) return;
     if (!line.trim()) return;
     if (process.env.PROMPTCUT_RUNNER_DEBUG) console.error('[Codex] ' + line);
     try {
       const ev = JSON.parse(line);
       const evType = ev.type || ev.event;
+      if (evType === 'turn.failed' || evType === 'error') {
+        const reason = codexAuthReason(errText(ev.error || ev.message));
+        if (reason) { failAuth(reason); return; }
+      }
       
       if (evType === 'thread.started' && ev.thread_id) {
          threadId = ev.thread_id;
@@ -242,11 +274,11 @@ function _startRun(opts) {
       } else if (evType === 'turn.failed') {
          finish({ type: 'error', message: ev.error?.message || ev.message || 'Codex turn failed' });
       } else if (evType === 'error') {
-         const msg = ev.message || ev.error || 'Codex error';
+         const msg = errText(ev.message || ev.error || 'Codex error');
          if (typeof msg === 'string' && (msg.startsWith('Reconnecting') || msg.includes('重试'))) {
              safeOnEvent({ type: 'status', text: msg });
          } else {
-             safeOnEvent({ type: 'error', message: msg });
+             finish({ type: 'error', message: msg });
          }
       }
     } catch {}
@@ -260,5 +292,5 @@ function _startRun(opts) {
       child.stdin.end();
   } catch {}
 
-  return { abort, done: donePromise };
+  return { abort: () => { cancelled = true; abort(); }, done: donePromise };
 }

@@ -18,7 +18,7 @@
  *   T5b(播放中换档):素材小尺寸在播,中途素材原尺寸到齐;换档那一刻前后两帧的帧号跳变与时间差对得上(误差 ≤ 1 帧),无黑帧。
  *   T6 :素材原尺寸是 ProRes:本机探出放不了(设备本地缓存记 0),两档都到齐也一直停在素材小尺寸。
  *   T7 :素材原尺寸没到齐时导出:`exportVideo` 拒绝、提示「等待上传方」,顶栏点导出弹出同样的提示,没有任何导出请求发出。
- *   T5c(暂停中、素材原尺寸慢到;`docs/reports/AGENT-tier-reload-seek.md`):同 T5a 的开头(先等待上传方、素材原尺寸地址挂失败过),
+ *   T5c(暂停中、素材原尺寸慢到;`docs/archive/agent-reports/AGENT-tier-reload-seek.md`):同 T5a 的开头(先等待上传方、素材原尺寸地址挂失败过),
  *        素材原尺寸报齐后远程先扣住字节 `--hold-ms`(回了头、不给字节),可播性探测因此超时(记「未知」);之后探针不再碰页面的
  *        任何状态(播放头停着、集合不变),也必须换到素材原尺寸。跨机 T9 `ht9a0927` 里观察端就是这样一直停在素材小尺寸。
  *   T5e(暂停中、可播性早有结论、预热槽位要重载):同 T5a 的开头,但本机早就记下「素材原尺寸放得了」;素材原尺寸报齐那一轮,
@@ -37,6 +37,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
 import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 
@@ -135,7 +136,7 @@ const publish = (x, complete, holdUntil = 0) => remoteFiles.set(x.hash, { bytes:
 /* ------------------------------------------------------------------ 页面 */
 const out = { ok: false, origin, run: RUN, out: OUT, T5a: {}, T5b: {}, T5c: {}, T5e: {}, T6: {}, T7: {} };
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
-  args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
+  args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });
@@ -307,13 +308,26 @@ try {
     if (remote) await tiers(`T.setRemoteAssets({ base: args[0], ticket: async () => 'probe-ticket' });`, REMOTE_BASE);
     return r;
   };
-  const setupProjectOnly = (pair, name) => store(`
-    actions.newProject(args[0]);
+  const setupProjectOnly = async (pair, name) => {
+    await store('actions.newProject(args[0]);', name);
+    // 远程素材来自共享项目。只改素材服务地址却仍留在本机空间，会让
+    // 本机缺失检查按正常规则清空尚未拉到的原尺寸地址，干扰换档观察。
+    // 用真实协作入口建立隔离的共享项目，再由场景控制远程素材服务。
+    const shared = await page.evaluate(async (name) => {
+      const { enableCollab } = await import('/src/editor/sync/collab.ts');
+      const result = await enableCollab({ where: 'lan', mode: 'free', name,
+        creator: { username: 'tier-probe', password: 'isolated-tier-probe-creator' },
+        projectPassword: 'isolated-tier-probe-project' });
+      return { ok: result.ok, error: result.ok ? null : result.error };
+    }, name);
+    if (!shared.ok) throw new Error(`换档探针共享项目初始化失败: ${shared.error}`);
+    return store(`
     const m = actions.addMedia({ kind: 'video', name: args[0] + '.' + args[4], url: '/@media/' + args[1], hash: args[1], ext: args[4], size: args[3],
       tiers: { original: args[1], small: args[2] }, duration: 6, width: 1280, height: 720 });
     const c = actions.addMediaClip(m.id, 0, { duration: 6 });
     actions.seek(2.5);
     return { mediaId: m.id, clipId: c && c.id };`, name, pair.orig.hash, pair.small.hash, pair.orig.bytes.length, pair.ext);
+  };
 
   /* ============================================================ T5a:暂停中换档 */
   if (want('T5a')) {
