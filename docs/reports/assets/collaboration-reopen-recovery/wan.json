@@ -1,0 +1,125 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_drf6ktqgj3bb4kywm5pkju4d7b",
+      "where": "lan",
+      "mode": "free",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": false,
+      "hostOpenedWhileCloudOffline": false,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": true,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 9,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": false,
+      "creatorSecondDevice": false,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": false
+    }
+  ],
+  "asset": {
+    "hash": "12c85a4fc289362a265bab8b198663da76a376547a7d28e8e0531f3a87e0b4c6",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": {
+    "service": "<isolated-test-gateway>",
+    "remoteDirectory": "<isolated-remote-test-directory>",
+    "path": "existing-ssh-test-proxy",
+    "publicHttp": false,
+    "results": [
+      {
+        "ok": true,
+        "roomId": "sp_drf6ktqgj3bb4kywm5pkju4d7b",
+        "rev": 3,
+        "username": "wan-member",
+        "role": "member",
+        "restoredDeviceIdentity": false,
+        "pid": 144777,
+        "assets": []
+      },
+      {
+        "ok": true,
+        "roomId": "sp_drf6ktqgj3bb4kywm5pkju4d7b",
+        "rev": 7,
+        "username": "wan-member",
+        "role": "member",
+        "restoredDeviceIdentity": true,
+        "pid": 144851,
+        "assets": [
+          {
+            "namespace": "media",
+            "bytes": 50000,
+            "hashVerified": true
+          },
+          {
+            "namespace": "snap",
+            "bytes": 50000,
+            "hashVerified": true
+          },
+          {
+            "namespace": "px",
+            "bytes": 50000,
+            "hashVerified": true
+          }
+        ]
+      },
+      {
+        "ok": true,
+        "roomId": "sp_drf6ktqgj3bb4kywm5pkju4d7b",
+        "rev": 9,
+        "username": "wan-member",
+        "role": "member",
+        "restoredDeviceIdentity": true,
+        "pid": 144913,
+        "assets": [
+          {
+            "namespace": "media",
+            "bytes": 50000,
+            "hashVerified": true
+          },
+          {
+            "namespace": "snap",
+            "bytes": 50000,
+            "hashVerified": true
+          },
+          {
+            "namespace": "px",
+            "bytes": 50000,
+            "hashVerified": true
+          }
+        ]
+      }
+    ]
+  },
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-9sIN5G"
+}

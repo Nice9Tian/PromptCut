@@ -150,6 +150,7 @@ export function transportOf(option, env = globalThis.process?.env?.PROMPTCUT_TRA
  * @param {object} options
  * @param {string} options.url  `ws(s)://` 或 `http(s)://`
  * @param {() => (string[] | Promise<string[]>)} [options.protocols]  每次**建会话**前现取鉴权列表（含 `promptcut.v1`，不含会话项）
+ * @param {() => (string[] | Promise<string[]>)} [options.resumeProtocols] 中继接续时另取网关路由能力；会话秘密不变，失败保留会话退避重试
  * @param {string} [options.token]  集群令牌（管理接口用）；与 `protocols` 互斥；都不给就只带 `promptcut.v1`
  * @param {'auto' | 'ws' | 'http'} [options.transport]  缺省读 Node 的 `PROMPTCUT_TRANSPORT`，再缺省 `auto`
  * @param {typeof fetch} [options.fetch]  HT-b 的 HTTP 长轮询用；HT-a 不调
@@ -167,6 +168,7 @@ export function transportOf(option, env = globalThis.process?.env?.PROMPTCUT_TRA
 export function createDocEndpoint({
   url,
   protocols: protocolsOf,
+  resumeProtocols: resumeProtocolsOf,
   token,
   transport,
   // eslint-disable-next-line no-unused-vars
@@ -288,7 +290,24 @@ export function createDocEndpoint({
         endSession(1006, 'retain-expired', { notify: false });
         return;
       }
-      dial([PROTOCOL, `${SESSION_PREFIX}${sess.sid}.${sess.inAck}`], 'resume');
+      if (typeof resumeProtocolsOf !== 'function') {
+        dial([PROTOCOL, `${SESSION_PREFIX}${sess.sid}.${sess.inAck}`], 'resume');
+        return;
+      }
+      // 会话秘密仍由原服务核验；中继网关另需当前路由能力，不能因接续省略它。
+      const saved = sess;
+      pendingProtocols = true;
+      Promise.resolve().then(() => resumeProtocolsOf()).then(list => {
+        pendingProtocols = false;
+        if (closed || sess !== saved || cur !== null) return;
+        if (!Array.isArray(list) || list.some(p => typeof p !== 'string')) throw new TypeError('resumeProtocols() 必须回字符串数组');
+        dial([PROTOCOL, `${SESSION_PREFIX}${saved.sid}.${saved.inAck}`, ...list.filter(p => p !== PROTOCOL && p !== SESSION_NEW && !p.startsWith(SESSION_PREFIX))], 'resume');
+      }).catch(() => {
+        pendingProtocols = false;
+        if (closed || sess !== saved) return;
+        say('session.resume-protocols-failed');
+        scheduleRetry();
+      });
       return;
     }
     if (typeof protocolsOf !== 'function') {

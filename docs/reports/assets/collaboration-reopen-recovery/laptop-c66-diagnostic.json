@@ -1,0 +1,1088 @@
+{
+  "source": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+  "kind": "diagnostic-only-copy-with-read-only-observations",
+  "doesNotOverrideFirstFailure": true,
+  "originalAssertionThresholdsUnchanged": true,
+  "productSourceUnchangedDuringDiagnostic": true,
+  "transferredZip": {
+    "bytes": 7328,
+    "sha256": "5c8d45a8ade6d04bd94da914413b14a1b421334c447288fb1669e399805fd063"
+  },
+  "files": [
+    {
+      "file": "diagnostic-summary.json",
+      "rawSha256": "2f4f43e04520561e32a3bed0e9c0fc1af5fd0620c5f4bc698a3e4e01b1adc024",
+      "content": {
+        "source": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+        "run": "c66diag10041831",
+        "diagnosticOnly": true,
+        "originalFailureRetained": "[observer] remeasure-over-5s(6187)",
+        "observerRunnerExit": 0,
+        "observerProbeExit": 0,
+        "hostRunnerExit": 0,
+        "hostProbeExit": 0,
+        "fails": {
+          "observer": [],
+          "host": []
+        },
+        "pending": "Original role probe does not emit a pending field",
+        "skips": "No skip flags supplied; no skipped field emitted",
+        "installMs": 319,
+        "hmrMs": 991,
+        "remeasureMs": 1985,
+        "editGateAt": 1791106388924,
+        "firstNewIdentityProbeStarts": [
+          {
+            "sinceEditGateMs": 753,
+            "clipId": "c-mutmf97m-w",
+            "identityKey": "534d84e0b713d",
+            "at": 1791106389677
+          },
+          {
+            "sinceEditGateMs": 1347,
+            "clipId": "c-mutmf97m-w",
+            "identityKey": "534d84e0b713d",
+            "at": 1791106390271
+          }
+        ],
+        "timeline": [
+          {
+            "sinceEditGateMs": -50028,
+            "type": "probe-state",
+            "stamp": 1791106319616,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              }
+            ],
+            "running": false,
+            "done": 2,
+            "total": 2
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389251
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389251
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389260
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389260
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389263
+          },
+          {
+            "sinceEditGateMs": 465,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389263
+          },
+          {
+            "sinceEditGateMs": 516,
+            "type": "cards-updated",
+            "stamp": 1791106389251,
+            "stale": []
+          },
+          {
+            "sinceEditGateMs": 652,
+            "type": "probe-state",
+            "stamp": 1791106389251,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              }
+            ],
+            "running": false,
+            "done": 2,
+            "total": 2
+          },
+          {
+            "sinceEditGateMs": 758,
+            "type": "probe-state",
+            "stamp": 1791106389251,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              }
+            ],
+            "running": true,
+            "done": 0,
+            "total": 1
+          },
+          {
+            "sinceEditGateMs": 780,
+            "type": "cards-updated",
+            "stamp": 1791106389260,
+            "stale": []
+          },
+          {
+            "sinceEditGateMs": 894,
+            "type": "probe-state",
+            "stamp": 1791106389260,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              }
+            ],
+            "running": true,
+            "done": 0,
+            "total": 1
+          },
+          {
+            "sinceEditGateMs": 1002,
+            "type": "cards-updated",
+            "stamp": 1791106389263,
+            "stale": []
+          },
+          {
+            "sinceEditGateMs": 1124,
+            "type": "probe-state",
+            "stamp": 1791106389263,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              }
+            ],
+            "running": true,
+            "done": 0,
+            "total": 1
+          },
+          {
+            "sinceEditGateMs": 1362,
+            "type": "probe-state",
+            "stamp": 1791106389263,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106390271
+              }
+            ],
+            "running": true,
+            "done": 0,
+            "total": 1
+          },
+          {
+            "sinceEditGateMs": 1818,
+            "type": "probe-state",
+            "stamp": 1791106389263,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106390271
+              }
+            ],
+            "running": false,
+            "done": 1,
+            "total": 1
+          }
+        ],
+        "stageIdentityLimitation": "Captured stage/id values are null; cannot identify A vs B message ordering. Can establish stage messages preceded parent registry update.",
+        "hypothesisResult": "Every sampled staleStages is empty; no 4s stale-stage reload observed in this diagnostic round. Original failure was not reproduced; cause not established.",
+        "hostCardV2": {
+          "ms": 3,
+          "rev": 2,
+          "inOverlay": true,
+          "baseUntouched": null
+        },
+        "hostClaimed": 3,
+        "hostCompleted": 3,
+        "ports": [
+          {
+            "port": 5590,
+            "free": true
+          },
+          {
+            "port": 5591,
+            "free": true
+          },
+          {
+            "port": 5592,
+            "free": true
+          },
+          {
+            "port": 5593,
+            "free": true
+          },
+          {
+            "port": 5594,
+            "free": true
+          },
+          {
+            "port": 5595,
+            "free": true
+          },
+          {
+            "port": 5596,
+            "free": true
+          },
+          {
+            "port": 5597,
+            "free": true
+          },
+          {
+            "port": 5598,
+            "free": true
+          }
+        ],
+        "rawEvidenceDirectories": {
+          "observer": "<test-temp>/pc-c66-diagnostic-observer-54c9c48597584d5d942fc32b574d6ec0",
+          "host": "<test-temp>/pc-c66-diagnostic-host-fa279c480e1e4b08a060de02493fd4db"
+        },
+        "rawEvidenceRetained": true,
+        "secondFormalWaveStarted": false
+      }
+    },
+    {
+      "file": "host/raw-sha256-manifest.json",
+      "rawSha256": "9427974ec99b0f55ccdce84cf331aff41ab8287f5379bb34d956dabcb4724d1c",
+      "content": [
+        {
+          "file": "receipt.json",
+          "sha256": "e91feeef26bed3a3fca9a3c11b1f884d867341698f8aa83c34b2b579b130a56b"
+        },
+        {
+          "file": "result.json",
+          "sha256": "ae6d40dc4700b5b195c00c89b8370ab0f0914be5ecaae3bfd499b556b0190534"
+        },
+        {
+          "file": "runner-error.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "file": "runner.log",
+          "sha256": "91675ab22ff6ca71f2ee19fc6022c309ec5f5041b7e0f5a43abf22ac2af38a98"
+        },
+        {
+          "file": "stderr.log",
+          "sha256": "f5b3e467355ed5cb7e51a5e5a278704b5d0b5d777986bedc146fc0792f66986e"
+        },
+        {
+          "file": "stdout.log",
+          "sha256": "6f200abb14e53625817d83c403275a5bb619a4a8710207353332e1e832523982"
+        }
+      ]
+    },
+    {
+      "file": "host/receipt.json",
+      "rawSha256": "395940c82f32b6e96fbf49c2c0f2b76f6521ac9135bb488439c3d2b462c6aa56",
+      "content": {
+        "targetCommit": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+        "role": "host",
+        "prepareOnly": false,
+        "timingAuthoritative": true,
+        "diagnosticOnly": true,
+        "hostname": "<test-laptop>",
+        "startedAt": "2026-10-04T09:31:40.498Z",
+        "nodeVersion": "v24.19.0",
+        "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+        "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+        "port": 5593,
+        "status": "pass",
+        "actualExitCode": 0,
+        "fails": [],
+        "installed": false,
+        "userRuntimeModified": false,
+        "hostNetworkChanged": false,
+        "wave": 1,
+        "run": "c66diag10041831",
+        "expiresAt": "2026-10-04T12:14:56.344Z",
+        "command": "node --import=./scripts/lib/test-silent-processes.mjs work/c66-t9-diagnostic-probe.mjs --role host --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66diag10041831 --port 5593 --out <test-temp>\\pc-c66-diagnostic-host-fa279c480e1e4b08a060de02493fd4db\\probe --keep-temp --timeout-min 25",
+        "ownedProbePid": 23628,
+        "ok": true,
+        "probeMs": 95622,
+        "rawLogSha256": {
+          "stdout.log": "6f200abb14e53625817d83c403275a5bb619a4a8710207353332e1e832523982",
+          "stderr.log": "f5b3e467355ed5cb7e51a5e5a278704b5d0b5d777986bedc146fc0792f66986e"
+        },
+        "finishedAt": "2026-10-04T09:33:19.394Z"
+      }
+    },
+    {
+      "file": "host/result.json",
+      "rawSha256": "b4310a981b8165008d57353818e2423759c1c3c21ab4352e995f5256ac5dd467",
+      "content": {
+        "role": "host",
+        "run": "c66diag10041831",
+        "port": 5593,
+        "cardInRepoBefore": false,
+        "readyQueue": {
+          "profile": "host",
+          "nodes": 1,
+          "maxConcurrent": 2,
+          "codeVersion": "33325e30724f"
+        },
+        "cardSync": {
+          "connected": true,
+          "rev": 1,
+          "notices": [
+            "installed"
+          ]
+        },
+        "profile": "host",
+        "claimed": 3,
+        "completed": 3,
+        "dedup": 0,
+        "failed": 0,
+        "lost": 0,
+        "connected": true,
+        "assetBase": "http://<test-PC-LAN>:5451/api/asset",
+        "codeVersion": "33325e30724f",
+        "plan": {
+          "planId": "plan:p-mutmf97l-5bce263b@3",
+          "tasks": 8,
+          "done": 8
+        },
+        "creatorCodeVersion": "33325e30724f",
+        "doneCounts": {
+          "tasks": 8,
+          "exactlyOnce": 8,
+          "missing": 0,
+          "duplicate": 0
+        },
+        "artifacts": {
+          "manifests": 8,
+          "missingManifests": 0,
+          "blocks": 480,
+          "missingBlocks": []
+        },
+        "cardV2": {
+          "ms": 3,
+          "rev": 2,
+          "inOverlay": true,
+          "baseUntouched": null
+        },
+        "exitCode": 0,
+        "released": 0,
+        "temp": "<test-temp>\\pc-c66t9-host-m9dYFy",
+        "ms": 95622,
+        "fails": [],
+        "ok": true
+      }
+    },
+    {
+      "file": "observer/raw-sha256-manifest.json",
+      "rawSha256": "012ed43e7ab3727051dc382f21844c9a781f585c613d9e93a0e224cdc52c1a35",
+      "content": [
+        {
+          "file": "diagnostic-edit-gate.json",
+          "sha256": "f48649e190ae37125b02b388de394e3febeadda1d3fe38ecb4947be9ccd6f519"
+        },
+        {
+          "file": "evidence-transfer-receipt.json",
+          "sha256": "15e6d831aec931954c98222f232d33ba2e4f98e74d140405f03f418667656640"
+        },
+        {
+          "file": "receipt.json",
+          "sha256": "2b8eb8b4dc97443c6c6137e8f8ec91d2f1a33cebe376186d24eb8b0a4bf600a8"
+        },
+        {
+          "file": "result.json",
+          "sha256": "becbb9c70d6c575dbded8346022897c2c5519299a35666e776fa220cfeca045b"
+        },
+        {
+          "file": "runner-error.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "file": "runner.log",
+          "sha256": "aabda283938a9864f1948d3577fa44030d79283b3dbd511674a70838ce7ea532"
+        },
+        {
+          "file": "stderr.log",
+          "sha256": "9224f920ece4da9f975fc902a798c10a561195d23205e0097b1a666e983f4822"
+        },
+        {
+          "file": "stdout.log",
+          "sha256": "acf8db66e7549007dcb5fd904b5bc7591ce17fbb05c47402c8b7e4a6c613534a"
+        }
+      ]
+    },
+    {
+      "file": "observer/receipt.json",
+      "rawSha256": "3b4664d85727a5c8e94f0e4147d48404653334c18464237bd4cc38dc4dd48cf4",
+      "content": {
+        "targetCommit": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+        "role": "observer",
+        "prepareOnly": false,
+        "timingAuthoritative": true,
+        "diagnosticOnly": true,
+        "hostname": "<test-laptop>",
+        "startedAt": "2026-10-04T09:31:40.498Z",
+        "nodeVersion": "v24.19.0",
+        "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+        "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+        "port": 5590,
+        "status": "pass",
+        "actualExitCode": 0,
+        "fails": [],
+        "installed": false,
+        "userRuntimeModified": false,
+        "hostNetworkChanged": false,
+        "wave": 1,
+        "run": "c66diag10041831",
+        "expiresAt": "2026-10-04T12:14:56.344Z",
+        "command": "node --import=./scripts/lib/test-silent-processes.mjs work/c66-t9-diagnostic-probe.mjs --role observer --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66diag10041831 --port 5590 --out <test-temp>\\pc-c66-diagnostic-observer-54c9c48597584d5d942fc32b574d6ec0\\probe --keep-temp --timeout-min 25",
+        "ownedProbePid": 22604,
+        "ok": true,
+        "probeMs": 91538,
+        "rawLogSha256": {
+          "stdout.log": "acf8db66e7549007dcb5fd904b5bc7591ce17fbb05c47402c8b7e4a6c613534a",
+          "stderr.log": "9224f920ece4da9f975fc902a798c10a561195d23205e0097b1a666e983f4822"
+        },
+        "finishedAt": "2026-10-04T09:33:12.339Z"
+      }
+    },
+    {
+      "file": "observer/result.json",
+      "rawSha256": "e3db745a9969ceb4238e60d2923f881e3a285cad2868bb0c9f1e2a03559ce03c",
+      "content": {
+        "role": "observer",
+        "run": "c66diag10041831",
+        "port": 5590,
+        "cardInRepoBefore": false,
+        "env": {
+          "PROMPTCUT_QUEUE_NODE": null,
+          "PROMPTCUT_SHARED_CONFIG": null
+        },
+        "frameQueue": {
+          "nodes": 0,
+          "starting": false,
+          "profile": "pc"
+        },
+        "joinMs": 809,
+        "projectTiers": {
+          "original": "5cd5f9e3f4219883ed2d4921e137f38efef4baf32f4342a7ad8820f8aeb832d4",
+          "small": "e9af392629cadcb3a3d8e97fa9fab82eaed907f4354ddda0abc79e0324ec7d6e"
+        },
+        "firstShown": {
+          "tier": "small",
+          "idx": 75,
+          "w": 800
+        },
+        "originalAtFirstFrame": {
+          "paused": {
+            "at": 1791106267639,
+            "skipped": null,
+            "originalComplete": false,
+            "originalReceived": 2,
+            "originalChunks": 6
+          },
+          "resumedBefore": false
+        },
+        "smallIdxSource": "stable",
+        "smallIdx": 75,
+        "smallStableBeforeSwap": true,
+        "swapWaitMs": 7781,
+        "original": {
+          "idx": 75,
+          "w": 1920
+        },
+        "tierSequence": [
+          {
+            "ms": 848,
+            "tier": "none",
+            "idx": null,
+            "w": null,
+            "ct": null
+          },
+          {
+            "ms": 11616,
+            "tier": "small",
+            "idx": 75,
+            "w": 800,
+            "ct": 2.5
+          },
+          {
+            "ms": 19741,
+            "tier": "original",
+            "idx": 75,
+            "w": 1920,
+            "ct": 2.5
+          }
+        ],
+        "lowReadyState": {
+          "samples": 0,
+          "presentedBefore": 0,
+          "withShot": 0,
+          "shots": 0,
+          "shotLuma": null,
+          "srcs": [],
+          "windowsMs": []
+        },
+        "swapMode": "covered",
+        "swapSamples": {
+          "n": 720,
+          "black": 0,
+          "idxSeen": [
+            75
+          ],
+          "srcs": [
+            "e9af3926",
+            "5cd5f9e3"
+          ],
+          "smallBeforeSwap": 709,
+          "spanMs": 7334,
+          "coversSwap": true,
+          "mode": "covered",
+          "swapGapMs": 8125,
+          "sampleIntervalMs": 8
+        },
+        "playhead": {
+          "t": 2.5,
+          "log": [
+            {
+              "ms": 1,
+              "t": 2.5,
+              "cut": "cut-1",
+              "duration": 6,
+              "stack": [
+                "at emit (/src/store/core.ts:33:29)",
+                "at set (/src/store/core.ts:40:2)",
+                "at Object.seek (/src/store/actions/playback.ts:6:3)",
+                "at pptr:evaluate;P%20(file%3A%2F%2F%2FD%3A%2FVectorMPEG7%2FPromptCut%2F.worktrees%2Freopen-laptop-stream-acceptance%2Fwork%2Fc66-t9-diagnostic-probe.mjs%3A431%3A36):16:17"
+              ]
+            }
+          ]
+        },
+        "keyBefore": "982f42cd856de",
+        "stageV1": true,
+        "mediaEvents": [
+          {
+            "frame": "A",
+            "seeks": [
+              {
+                "at": 19437,
+                "to": 0.001,
+                "from": 0,
+                "rs": 4,
+                "shown": false,
+                "stack": [
+                  "at HTMLVideoElement.set [as currentTime] (pptr:;CdpFrame.%3Canonymous%3E%20(file%3A%2F%2F%2FD%3A%2FVectorMPEG7%2FPromptCut%2Fnode_modules%2Fpuppeteer-core%2Flib%2Fpuppeteer%2Futil%2Fdecorators.js%3A101%3A27):13:95)",
+                  "at el.addEventListener.once (/src/render/playability.ts:232:21)"
+                ]
+              },
+              {
+                "at": 19465,
+                "to": 2.5,
+                "from": 0,
+                "rs": 0,
+                "shown": false,
+                "stack": [
+                  "at HTMLVideoElement.set [as currentTime] (pptr:;CdpFrame.%3Canonymous%3E%20(file%3A%2F%2F%2FD%3A%2FVectorMPEG7%2FPromptCut%2Fnode_modules%2Fpuppeteer-core%2Flib%2Fpuppeteer%2Futil%2Fdecorators.js%3A101%3A27):13:95)",
+                  "at syncMediaEl (/src/render/mediaDrive.ts:50:18)",
+                  "at driveMedia (/src/render/mediaDrive.ts:90:2)"
+                ]
+              }
+            ],
+            "loads": [
+              {
+                "at": 19462,
+                "src": "5cd5f9e3",
+                "stack": [
+                  "at close (/src/render/playability.ts:183:9)"
+                ]
+              }
+            ],
+            "aligned": [
+              {
+                "at": 19468,
+                "mediaTime": 2.5,
+                "ref": 2.5
+              },
+              {
+                "at": 19628,
+                "mediaTime": 2.5,
+                "ref": 2.5
+              }
+            ],
+            "seeked": [
+              {
+                "at": 19635,
+                "shown": false
+              }
+            ],
+            "shownAt": {
+              "at": 19638,
+              "rs": 4
+            },
+            "drops": [
+              {
+                "at": 19119,
+                "rs": 0,
+                "shown": false,
+                "ct": 0
+              },
+              {
+                "at": 19158,
+                "rs": 0,
+                "shown": false,
+                "ct": 0
+              },
+              {
+                "at": 19261,
+                "rs": 1,
+                "shown": false,
+                "ct": 0
+              },
+              {
+                "at": 19441,
+                "rs": 1,
+                "shown": false,
+                "ct": 0.001
+              },
+              {
+                "at": 19514,
+                "rs": 0,
+                "shown": false,
+                "ct": 2.5
+              },
+              {
+                "at": 19535,
+                "rs": 1,
+                "shown": false,
+                "ct": 2.5
+              }
+            ]
+          },
+          {
+            "frame": "B",
+            "seeks": [],
+            "loads": [],
+            "aligned": [],
+            "seeked": [],
+            "shownAt": null,
+            "drops": []
+          }
+        ],
+        "installMs": 319,
+        "hmrMs": 991,
+        "cardUpdateDiagnostic": [
+          {
+            "sinceEditGateMs": -50028,
+            "type": "probe-state",
+            "stamp": 1791106319616,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              }
+            ],
+            "running": false,
+            "done": 2,
+            "total": 2
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389251
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389251
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389260
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389260
+          },
+          {
+            "sinceEditGateMs": 464,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389263
+          },
+          {
+            "sinceEditGateMs": 465,
+            "type": "pc-stage-cards",
+            "stage": null,
+            "stamp": 1791106389263
+          },
+          {
+            "sinceEditGateMs": 516,
+            "type": "cards-updated",
+            "stamp": 1791106389251,
+            "stale": []
+          },
+          {
+            "sinceEditGateMs": 652,
+            "type": "probe-state",
+            "stamp": 1791106389251,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              }
+            ],
+            "running": false,
+            "done": 2,
+            "total": 2
+          },
+          {
+            "sinceEditGateMs": 758,
+            "type": "probe-state",
+            "stamp": 1791106389251,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              }
+            ],
+            "running": true,
+            "done": 0,
+            "total": 1
+          },
+          {
+            "sinceEditGateMs": 780,
+            "type": "cards-updated",
+            "stamp": 1791106389260,
+            "stale": []
+          },
+          {
+            "sinceEditGateMs": 894,
+            "type": "probe-state",
+            "stamp": 1791106389260,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              }
+            ],
+            "running": true,
+            "done": 0,
+            "total": 1
+          },
+          {
+            "sinceEditGateMs": 1002,
+            "type": "cards-updated",
+            "stamp": 1791106389263,
+            "stale": []
+          },
+          {
+            "sinceEditGateMs": 1124,
+            "type": "probe-state",
+            "stamp": 1791106389263,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              }
+            ],
+            "running": true,
+            "done": 0,
+            "total": 1
+          },
+          {
+            "sinceEditGateMs": 1362,
+            "type": "probe-state",
+            "stamp": 1791106389263,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106390271
+              }
+            ],
+            "running": true,
+            "done": 0,
+            "total": 1
+          },
+          {
+            "sinceEditGateMs": 1818,
+            "type": "probe-state",
+            "stamp": 1791106389263,
+            "stale": [],
+            "probed": [
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "982f42cd856de",
+                "at": 1791106328017
+              },
+              {
+                "clipId": "c-mutmghtl-10",
+                "cardId": "probe-slow-stepped",
+                "identityKey": "1594fd4af5c030",
+                "at": 1791106328942
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106389677
+              },
+              {
+                "clipId": "c-mutmf97m-w",
+                "cardId": "c66t9-c66diag10041831",
+                "identityKey": "534d84e0b713d",
+                "at": 1791106390271
+              }
+            ],
+            "running": false,
+            "done": 1,
+            "total": 1
+          }
+        ],
+        "keyAfter": "534d84e0b713d",
+        "remeasureMs": 1985,
+        "remeasureVia": "record",
+        "newCostRecordMs": 1985,
+        "stageMs": 1988,
+        "editedSeen": {
+          "ms": 59,
+          "ok": true,
+          "editMs": 45
+        },
+        "bRecord": {
+          "rev": 2,
+          "hash": "1c2dc88b28e3966a4c347d7e1ced4806c979d5c2d3804a829d19b6f7deec1ef4",
+          "mine": false
+        },
+        "bNotices": [
+          {
+            "type": "installed",
+            "key": "src/cards/user/c66t9-c66diag10041831.tsx",
+            "rev": 1
+          },
+          {
+            "type": "installed",
+            "key": "src/cards/user/c66t9-c66diag10041831.tsx",
+            "rev": 2
+          }
+        ],
+        "bOverrideV2": true,
+        "bKindAfter": "shared",
+        "shots": [
+          "<test-temp>\\pc-c66-diagnostic-observer-54c9c48597584d5d942fc32b574d6ec0\\probe\\c66diag10041831-observer-1-small.png",
+          "<test-temp>\\pc-c66-diagnostic-observer-54c9c48597584d5d942fc32b574d6ec0\\probe\\c66diag10041831-observer-2-original.png",
+          "<test-temp>\\pc-c66-diagnostic-observer-54c9c48597584d5d942fc32b574d6ec0\\probe\\c66diag10041831-observer-3-v2.png"
+        ],
+        "pageErrors": [],
+        "temp": "<test-temp>\\pc-c66t9-observer-1RsB9K",
+        "ms": 91538,
+        "fails": [],
+        "ok": true
+      }
+    }
+  ]
+}

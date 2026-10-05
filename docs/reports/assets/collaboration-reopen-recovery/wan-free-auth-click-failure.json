@@ -1,0 +1,23 @@
+{
+  "ok": false,
+  "phase": "member first authentication",
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-0YZfEU",
+  "sourceCommit": "5ece2b4ea67c85c3eb9b485d6dbed6bb24351de8",
+  "recoveryState": "needs-auth",
+  "authFormPresent": false,
+  "recoveryControlPresent": true,
+  "physicalHitWasRecoveryButton": false,
+  "physicalHitTag": "DIV",
+  "capturedClickWasRecoveryButton": false,
+  "authenticationRequestCount": 0,
+  "storageFailures": 0,
+  "journalFailures": 0,
+  "specificInterceptingElement": "not recorded in original failure; cause not established",
+  "laterProbeChanges": [
+    "isolated provider/CLI/skill configuration",
+    "confirm physical hit before real click",
+    "dismiss optional speech prompt only if it blocks control"
+  ],
+  "successfulRerun": "wan-public-free-latest.json",
+  "rerunSpeechPromptDismissed": false
+}

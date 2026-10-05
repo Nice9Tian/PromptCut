@@ -108,7 +108,7 @@ export function httpBaseOf(url) {
 async function callJson(fetchImpl, url, init) {
   const f = fetchImpl ?? globalThis.fetch;
   if (typeof f !== 'function') throw new Error('没有可用的 fetch');
-  const res = await f(url, { ...init, cache: 'no-store' });
+  const res = await f(url, { ...init, cache: 'no-store', redirect: 'error' });
   let body = null;
   try {
     body = await res.json();

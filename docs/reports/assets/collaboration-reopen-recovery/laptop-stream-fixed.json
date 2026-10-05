@@ -1,0 +1,611 @@
+{
+  "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+  "kind": "actual-laptop-authoritative-stream",
+  "status": "pass",
+  "files": [
+    {
+      "file": "pc-fixed-share-9l3hPu/acceptance-summary.json",
+      "rawSha256": "e976ed67203de8f4c45a4ff39cb6f3b0f14d2de5f9d3929b83d7b5bd8b739dab",
+      "content": {
+        "target": "113b425c3053f6e9867499f9d305aad975d5846b",
+        "role": "stream",
+        "actualExitCode": 0,
+        "status": "pass",
+        "fails": [],
+        "pending": [],
+        "bench": [
+          {
+            "clipId": "clip-bg",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 1920,
+              "h": 1080
+            },
+            "captureMsFor15": 1025,
+            "encodeMs": [
+              264,
+              294,
+              307
+            ],
+            "p50": 294,
+            "bytes": 428801,
+            "alpha": {
+              "mean": 0.0956,
+              "max": 50
+            }
+          },
+          {
+            "clipId": "clip-pill",
+            "rect": {
+              "x": 40,
+              "y": -7,
+              "w": 560,
+              "h": 374
+            },
+            "captureMsFor15": 377,
+            "encodeMs": [
+              44,
+              46,
+              50
+            ],
+            "p50": 46,
+            "bytes": 16355,
+            "alpha": {
+              "mean": 0.069,
+              "max": 54
+            }
+          }
+        ],
+        "restart": {
+          "staged": 3,
+          "streams": 3,
+          "layersBeforeProject": 0,
+          "republished": 3,
+          "producedAfterRestart": 0
+        },
+        "evidenceDirectory": "<test-temp>\\pc-stream-fixed-b9d10ac454bc439fbee49321374a2a21"
+      }
+    },
+    {
+      "file": "pc-fixed-share-9l3hPu/raw-sha256-manifest.json",
+      "rawSha256": "aa783d0c7f4e8eba3cbefe2ba8059cecedcaae06f99ff3ca1f098a348a093c3f",
+      "content": [
+        {
+          "file": "editor.log",
+          "bytes": 12107,
+          "sha256": "fca5ba0ae0bd10d3c6353646486fc19664586db2701180443248eb6fdcc8be4f"
+        },
+        {
+          "file": "probe.log",
+          "bytes": 29103,
+          "sha256": "3e7501afa2781af2a99a44ece01f58ef387e351197af7f54c8b08b21d49a856b"
+        },
+        {
+          "file": "receipt.json",
+          "bytes": 1885,
+          "sha256": "c5587d86ac5dc2091749e7c2cbfb45d2b41a530abad59c87def92f9cd4b1a9c6"
+        },
+        {
+          "file": "runner-error.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "file": "runner.log",
+          "bytes": 1534,
+          "sha256": "3e0a7a5c81128723aaa5a800a6374215f16d9c99090092a9455ce7343ad64cf5"
+        },
+        {
+          "file": "stream-result.json",
+          "bytes": 8542,
+          "sha256": "2275f1b77cca23dabf7bb4f5273bdd3a28a6235be7bf5213ab83315796c7245b"
+        }
+      ]
+    },
+    {
+      "file": "pc-fixed-share-9l3hPu/receipt.json",
+      "rawSha256": "c5587d86ac5dc2091749e7c2cbfb45d2b41a530abad59c87def92f9cd4b1a9c6",
+      "content": {
+        "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+        "startedAt": "2026-10-04T10:29:06.740Z",
+        "nodeVersion": "v24.19.0",
+        "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+        "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+        "probeChromeAvailable": true,
+        "prepareOnly": false,
+        "timingAuthoritative": true,
+        "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5203 --out <test-temp>\\pc-stream-fixed-b9d10ac454bc439fbee49321374a2a21\\library --json <test-temp>\\pc-stream-fixed-b9d10ac454bc439fbee49321374a2a21\\stream-result.json --keep",
+        "actualExitCode": 0,
+        "status": "pass",
+        "fails": [],
+        "pending": [],
+        "installed": false,
+        "userRuntimeModified": false,
+        "bench": [
+          {
+            "clipId": "clip-bg",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 1920,
+              "h": 1080
+            },
+            "captureMsFor15": 1025,
+            "encodeMs": [
+              264,
+              294,
+              307
+            ],
+            "p50": 294,
+            "bytes": 428801,
+            "alpha": {
+              "mean": 0.0956,
+              "max": 50
+            }
+          },
+          {
+            "clipId": "clip-pill",
+            "rect": {
+              "x": 40,
+              "y": -7,
+              "w": 560,
+              "h": 374
+            },
+            "captureMsFor15": 377,
+            "encodeMs": [
+              44,
+              46,
+              50
+            ],
+            "p50": 46,
+            "bytes": 16355,
+            "alpha": {
+              "mean": 0.069,
+              "max": 54
+            }
+          }
+        ],
+        "restart": {
+          "staged": 3,
+          "streams": 3,
+          "layersBeforeProject": 0,
+          "republished": 3,
+          "producedAfterRestart": 0
+        },
+        "devServerRestarts": 0,
+        "finishedAt": "2026-10-04T10:30:18.613Z",
+        "rawLogSha256": "3e7501afa2781af2a99a44ece01f58ef387e351197af7f54c8b08b21d49a856b"
+      }
+    },
+    {
+      "file": "pc-fixed-share-9l3hPu/stream-result.json",
+      "rawSha256": "90fe253886af3c26ee9ca61b574fb4fe48ebfc30518229ffd9b99f414a2d27a1",
+      "content": {
+        "origin": "http://127.0.0.1:5203",
+        "library": "<test-temp>\\pc-stream-fixed-b9d10ac454bc439fbee49321374a2a21\\library",
+        "group": false,
+        "produceMs": 40204,
+        "environment": {
+          "os": "windows",
+          "gpuClass": "software",
+          "chromeMajor": 152,
+          "fingerprint": "258acaaa7c5fe509",
+          "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+          "vendor": "Google Inc. (Google)",
+          "chromeVersion": "HeadlessChrome/152.0.7977.75",
+          "detected": true
+        },
+        "stats": {
+          "segments": 34,
+          "resets": 6,
+          "replacedDeleted": 17,
+          "failures": 0,
+          "maxAliveEncoders": 2,
+          "setFrameWindowCalls": 6,
+          "bakeStreamResets": 6,
+          "sparseVsDense": [
+            {
+              "stream": "55409f9b",
+              "segment": 0,
+              "sparse": 254645,
+              "dense": 413953,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 1,
+              "sparse": 256543,
+              "dense": 417048,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 2,
+              "sparse": 261207,
+              "dense": 427971,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 3,
+              "sparse": 262319,
+              "dense": 430758,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 4,
+              "sparse": 270403,
+              "dense": 442742,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 5,
+              "sparse": 268040,
+              "dense": 437262,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 6,
+              "sparse": 253793,
+              "dense": 421437,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 7,
+              "sparse": 261189,
+              "dense": 431342,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 8,
+              "sparse": 263745,
+              "dense": 432108,
+              "sameRect": true
+            },
+            {
+              "stream": "55409f9b",
+              "segment": 9,
+              "sparse": 257164,
+              "dense": 421024,
+              "sameRect": true
+            },
+            {
+              "stream": "9b288832",
+              "segment": 0,
+              "sparse": 31739,
+              "dense": 54605,
+              "sameRect": false
+            },
+            {
+              "stream": "9b288832",
+              "segment": 1,
+              "sparse": 28306,
+              "dense": 36263,
+              "sameRect": false
+            },
+            {
+              "stream": "9b288832",
+              "segment": 2,
+              "sparse": 13656,
+              "dense": 15525,
+              "sameRect": false
+            },
+            {
+              "stream": "9b288832",
+              "segment": 3,
+              "sparse": 9001,
+              "dense": 9045,
+              "sameRect": false
+            },
+            {
+              "stream": "602b556f",
+              "segment": 1,
+              "sparse": 5228,
+              "dense": 8019,
+              "sameRect": false
+            },
+            {
+              "stream": "602b556f",
+              "segment": 2,
+              "sparse": 11559,
+              "dense": 22120,
+              "sameRect": false
+            },
+            {
+              "stream": "602b556f",
+              "segment": 3,
+              "sparse": 10188,
+              "dense": 20977,
+              "sameRect": false
+            }
+          ],
+          "aliveEncoders": 0
+        },
+        "encoder": "libx264",
+        "pool": 1,
+        "log": [
+          "分段读口已接上",
+          "编码器:libx264",
+          "流 55409f9b 新变体 init-6831cf034ffc5db1(avc1.640032 1920×2176)",
+          "流 55409f9b 收紧到 {\"x\":0,\"y\":0,\"w\":1920,\"h\":1080}(上界 {\"x\":0,\"y\":0,\"w\":1920,\"h\":1080})",
+          "流 9b288832 新变体 init-1905435341cc8572(avc1.64001f 704×864)",
+          "流 9b288832 收紧到 {\"x\":40,\"y\":-7,\"w\":560,\"h\":374}(上界 {\"x\":-32,\"y\":-32,\"w\":704,\"h\":424})",
+          "流 602b556f 新变体 init-3b20979f450d61c2(avc1.64001f 864×1044)",
+          "流 602b556f 收紧到 {\"x\":109,\"y\":153,\"w\":538,\"h\":144}(上界 {\"x\":-32,\"y\":-32,\"w\":864,\"h\":514})",
+          "流 9b288832 新变体 init-947f6e644fd148ca(avc1.64001f 560×764)",
+          "流 602b556f 新变体 init-51cc61cab94ab8ab(avc1.640015 538×304)"
+        ],
+        "streams": [
+          {
+            "streamKey": "55409f9b49961564b69e96d530cdd5957089427566cff59f7b22e3a9ffbc67f8",
+            "kind": "card",
+            "clipIds": [
+              "clip-bg"
+            ],
+            "bound": {
+              "x": 0,
+              "y": 0,
+              "w": 1920,
+              "h": 1080
+            },
+            "tight": {
+              "x": 0,
+              "y": 0,
+              "w": 1920,
+              "h": 1080
+            },
+            "segments": 10,
+            "segFiles": 10,
+            "inits": 1,
+            "variants": 1,
+            "encodeMs": [
+              772,
+              882,
+              844,
+              789,
+              969,
+              832,
+              837,
+              956,
+              829,
+              840
+            ],
+            "bytes": [
+              413953,
+              417048,
+              427971,
+              430758,
+              442742,
+              437262,
+              421437,
+              431342,
+              432108,
+              421024
+            ],
+            "sparseBytes": {}
+          },
+          {
+            "streamKey": "602b556f4963a7ffd935eeb104ed45aae6b655a58a5ef0b413971ece509b13c5",
+            "kind": "card",
+            "clipIds": [
+              "clip-red"
+            ],
+            "bound": {
+              "x": -32,
+              "y": -32,
+              "w": 864,
+              "h": 514
+            },
+            "tight": {
+              "x": 109,
+              "y": 153,
+              "w": 538,
+              "h": 144
+            },
+            "segments": 3,
+            "segFiles": 3,
+            "inits": 2,
+            "variants": 2,
+            "encodeMs": [
+              154,
+              118,
+              118
+            ],
+            "bytes": [
+              8019,
+              22120,
+              20977
+            ],
+            "sparseBytes": {}
+          },
+          {
+            "streamKey": "9b2888326a84fc546b199336dfb170a88d9d4773bb880aa6af1a73bece8c2d12",
+            "kind": "card",
+            "clipIds": [
+              "clip-pill"
+            ],
+            "bound": {
+              "x": -32,
+              "y": -32,
+              "w": 704,
+              "h": 424
+            },
+            "tight": {
+              "x": 40,
+              "y": -7,
+              "w": 560,
+              "h": 374
+            },
+            "segments": 4,
+            "segFiles": 4,
+            "inits": 2,
+            "variants": 2,
+            "encodeMs": [
+              259,
+              250,
+              179,
+              154
+            ],
+            "bytes": [
+              54605,
+              36263,
+              15525,
+              9045
+            ],
+            "sparseBytes": {}
+          }
+        ],
+        "sparseSnapshot": null,
+        "resets_clip-bg": {
+          "sparse": 1,
+          "dense": 2
+        },
+        "resets_clip-red": {
+          "sparse": 1,
+          "dense": 1
+        },
+        "resets_clip-pill": {
+          "sparse": 1,
+          "dense": 1
+        },
+        "layers": [
+          {
+            "type": "layer",
+            "clipId": "clip-bg",
+            "kind": "stream",
+            "key": "55409f9b49961564b69e96d530cdd5957089427566cff59f7b22e3a9ffbc67f8",
+            "ranges": [
+              [
+                0,
+                9
+              ]
+            ]
+          },
+          {
+            "type": "layer",
+            "clipId": "clip-pill",
+            "kind": "stream",
+            "key": "9b2888326a84fc546b199336dfb170a88d9d4773bb880aa6af1a73bece8c2d12",
+            "ranges": [
+              [
+                0,
+                3
+              ]
+            ]
+          },
+          {
+            "type": "layer",
+            "clipId": "clip-red",
+            "kind": "stream",
+            "key": "602b556f4963a7ffd935eeb104ed45aae6b655a58a5ef0b413971ece509b13c5",
+            "ranges": [
+              [
+                1,
+                3
+              ]
+            ]
+          }
+        ],
+        "isolation_bg": {
+          "width": 1920,
+          "height": 1080,
+          "bluePixels": 0,
+          "opaquePixels": 4003,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 1920,
+            "h": 1080
+          }
+        },
+        "isolation_pill": {
+          "width": 560,
+          "height": 374,
+          "bluePixels": 29519,
+          "opaquePixels": 36949,
+          "rect": {
+            "x": 40,
+            "y": -7,
+            "w": 560,
+            "h": 374
+          }
+        },
+        "bench": [
+          {
+            "clipId": "clip-bg",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 1920,
+              "h": 1080
+            },
+            "captureMsFor15": 1025,
+            "encodeMs": [
+              264,
+              294,
+              307
+            ],
+            "p50": 294,
+            "bytes": 428801,
+            "alpha": {
+              "mean": 0.0956,
+              "max": 50
+            }
+          },
+          {
+            "clipId": "clip-pill",
+            "rect": {
+              "x": 40,
+              "y": -7,
+              "w": 560,
+              "h": 374
+            },
+            "captureMsFor15": 377,
+            "encodeMs": [
+              44,
+              46,
+              50
+            ],
+            "p50": 46,
+            "bytes": 16355,
+            "alpha": {
+              "mean": 0.069,
+              "max": 54
+            }
+          }
+        ],
+        "resegment": {
+          "before": "5-64d4406a6391603f.m4s",
+          "after": "5-64d4406a6391603f.m4s",
+          "produced": 1,
+          "oldGone": true,
+          "ranges": [
+            [
+              0,
+              9
+            ]
+          ],
+          "sigOk": true
+        },
+        "restart": {
+          "staged": 3,
+          "streams": 3,
+          "layersBeforeProject": 0,
+          "republished": 3,
+          "producedAfterRestart": 0
+        },
+        "fails": []
+      }
+    }
+  ],
+  "transferredZip": {
+    "bytes": 4483,
+    "sha256": "e3400e40666979e4a05c22c29dd1f5702d69163f37416df7a54745c1f7446bba"
+  }
+}

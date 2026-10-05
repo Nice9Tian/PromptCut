@@ -67,6 +67,7 @@ interface DocEndpoint {
 const createDocEndpoint = createDocEndpointUntyped as (options: {
   url: string;
   protocols: () => string[];
+  resumeProtocols?: () => Promise<string[]> | string[];
   WebSocket?: WsCtor;
   transport: "ws";
   renew: false;
@@ -82,17 +83,24 @@ const createDocEndpoint = createDocEndpointUntyped as (options: {
 export const PAGE_MAX_PENDING_BYTES = 32 * 1024 * 1024;
 
 export interface LinkOptions {
+  docSync?: DocSync;
+  initialize?: boolean;
   url: string;
   protocols: () => Promise<string[]> | string[];
+  resumeProtocols?: () => Promise<string[]> | string[];
   projectId: string;
   session: string;
   initial: Project;
   saveBackup?: (b: LocalBackup) => void;
   onMessage?: (msg: AnyMsg) => void;
+  /** Validate delegated tickets before a caller can use them through a relay. */
+  onResponse?: (msg: AnyMsg) => Promise<void>;
   onOpen?: () => void;
   /** 传输断过、在保留期内接续上了(会话没断,不用重新订阅) */
   onResume?: () => void;
   onClosed?: (info: CloseInfo) => void;
+  /** 重新取认证证明时接口明确拒绝；返回 true 终止此连接，不再盲目重试。 */
+  onProtocolError?: (error: unknown) => boolean;
   WebSocketImpl?: WsCtor;
   reconnect?: { minMs: number; maxMs: number };
 }
@@ -116,11 +124,12 @@ export class SyncLink {
   constructor(o: LinkOptions) {
     this.o = o;
     this.delay = o.reconnect?.minMs ?? 500;
-    this.ds = new DocSync(o.initial, {
+    this.ds = o.docSync ?? new DocSync(o.initial, {
       projectId: o.projectId,
       session: o.session,
       send: (msg) => this.send(msg as unknown as AnyMsg),
       saveBackup: o.saveBackup,
+      initialize: o.initialize,
     });
   }
 
@@ -252,8 +261,10 @@ export class SyncLink {
     let protocols: string[];
     try {
       protocols = await this.o.protocols();
-    } catch {
+    } catch (error) {
       this.dialing = false;
+      if (this.stopped) return;
+      if (this.o.onProtocolError?.(error)) { this.stop(); return; }
       this.o.onClosed?.({ code: 0, reason: "protocols", fatal: false, neverOpened: !this.everOpened });
       this.scheduleRetry();
       return;
@@ -265,6 +276,13 @@ export class SyncLink {
       ep = createDocEndpoint({
         url: this.o.url,
         protocols: () => protocols,
+        resumeProtocols: this.o.resumeProtocols ? async () => {
+          try { return await this.o.resumeProtocols!(); }
+          catch (error) {
+            if (!this.stopped && this.ep === ep && this.o.onProtocolError?.(error)) this.stop();
+            throw error;
+          }
+        } : undefined,
         ...(this.o.WebSocketImpl ? { WebSocket: this.o.WebSocketImpl } : {}),
         transport: "ws",
         renew: false,
@@ -305,7 +323,8 @@ export class SyncLink {
       if (w) {
         this.waiting.delete(String(msg.reqId));
         clearTimeout(w.timer);
-        w.resolve(msg);
+        if (this.o.onResponse) void this.o.onResponse(msg).then(() => w.resolve(msg), w.reject);
+        else w.resolve(msg);
         // project.* 的回包也要交给 DocSync(它不带 reqId 发,正常不会走到这里)
         if (!msg.type.startsWith("project.")) return;
       }

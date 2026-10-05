@@ -45,6 +45,20 @@ Section
   ; 传 -Force：双击进来的用户没有别的途径确认「可以关掉正在运行的 PromptCut」，
   ; 在这里再弹一个窗口问反而啰嗦。apply-patch.ps1 只会关掉可执行文件在目标
   ; 安装目录下的那些进程，不会误伤别处装的或开发中跑的。
-  ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\patch\apply-patch.ps1" -Force $R0' $0
+  ; 非交互验证沿用脚本已有的环境开关，整条命令链不弹控制台。
+  ReadEnvStr $R1 "PROMPTCUT_PATCH_NONINTERACTIVE"
+  StrCmp $R1 "" interactive
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\patch\apply-patch.ps1" -Force $R0'
+    Pop $0
+    Pop $R1
+    StrCmp $0 "error" failed
+    StrCmp $0 "timeout" failed
+    Goto finished
+  interactive:
+    ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\patch\apply-patch.ps1" -Force $R0' $0
+    Goto finished
+  failed:
+    StrCpy $0 1
+  finished:
   SetErrorLevel $0
 SectionEnd

@@ -52,7 +52,7 @@ function inferSettings(w: number, h: number): { ratio: AspectRatio; orientation:
 
 /**
  * 项目设置对话框:配置视频画幅比例与方向,实时预览分辨率;底下一段「多用户协作」(C10a 契约第 6 节,`sync/CollabSection.tsx`)。
- * 多用户协作不写进项目文档:「确定」先写项目元数据,再交给那一段做它的开启 / 取消;它有动作在做时对话框留着显示进度与结果。
+ * 房间关联与项目元数据分开保存:「确定」先写项目元数据,再交给协作段做开启 / 取消;它有动作在做时对话框留着显示进度与结果。
  */
 export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogProps) {
   const curW = useStore((s) => s.project.width);

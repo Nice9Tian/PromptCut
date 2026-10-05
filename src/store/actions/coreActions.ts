@@ -1,7 +1,7 @@
 import { createEmptyProject, newProjectId, type Project } from "../../kernel/project";
 import { normalizeCuts } from "../../kernel/cuts";
 
-import { state, history, future, set, getProjectSync } from "../core";
+import { state, history, future, set, getProjectSync, getProjectLoader } from "../core";
 
 export const coreActions = {
   /* ---------- 文档 ---------- */
@@ -13,7 +13,8 @@ export const coreActions = {
     const normalized = normalizeCuts(p.id ? p : { ...p, id: newProjectId() });
     // 连着文档服务时,载入就是一次根替换(docsync 负责提交、清它自己的撤销栈)
     const sync = getProjectSync();
-    const project = sync ? sync.load(normalized) : normalized;
+    const loader = getProjectLoader();
+    const project = loader ? loader(normalized) : sync ? sync.load(normalized) : normalized;
     // lastCamera3dFov 跟着项目走,换项目要清掉,否则三维视角会串味
     set({ project, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null, lastCamera3dFov: null });
   },

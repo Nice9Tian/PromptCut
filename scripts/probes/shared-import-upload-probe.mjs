@@ -174,7 +174,8 @@ try {
   });
   out.projectId = shared.projectId;
   const candidate = { where: 'hosted', base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode };
-  const enter = (page, cred) => page.evaluate(async (c, cr) => (await import('/src/editor/sync/syncManager.ts')).enterShared(c, cr), candidate, cred);
+  const enter = (page, cred, initialize = false) => page.evaluate(async (c, cr, initialize) =>
+    (await import('/src/editor/sync/syncManager.ts')).enterShared(c, cr, { initialize }), candidate, cred, initialize);
   // 扣住页面交给编辑器进程的上传目标(base 非空的那种),造出「上传目标就绪之前」的窗口
   await pageA.evaluate(() => {
     const real = window.fetch.bind(window);
@@ -190,7 +191,8 @@ try {
       return real(input, init);
     };
   });
-  const ea = await enter(pageA, { as: 'creator', username: 'alice', password: creatorPw });
+  // Only the creation step may seed an empty room; ordinary entry keeps server state authoritative.
+  const ea = await enter(pageA, { as: 'creator', username: 'alice', password: creatorPw }, true);
   if (!check(ea?.ok, 'A 以创建者进入共享项目', ea)) throw new Error('A 进不去共享项目');
   await until('A 的页面要把上传目标交给编辑器进程(被扣住)', () => pageA.evaluate(() => window.__pcHeldTargets.length > 0), 60_000);
   const qBeforeEarly = await getJson(`${srvA.origin}/api/media/upload-queue`);

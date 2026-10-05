@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_stujf3i2upngz3dtxtm5m2zuim",
+      "where": "hosted",
+      "mode": "restricted",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": false,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": false,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 5,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": true,
+      "creatorSecondDevice": true,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": true
+    }
+  ],
+  "asset": {
+    "hash": "7193100b29391e65a8b6a7e6d5f63bcb90c7a5c5300cd013fe980f074193113c",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-YDzV7s"
+}

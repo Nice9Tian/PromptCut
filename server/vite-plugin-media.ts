@@ -826,8 +826,11 @@ export function mediaMiddleware(root: string) {
           res.setHeader("Content-Type", "application/json");
           if (!service.queue) return res.end(JSON.stringify({ ok: false, error: "no-queue" }));
           const { enqueueLocalMedia }: any = await import("./upload-queue.mjs");
-          const r = await enqueueLocalMedia(service.queue, body, (hash: string) => resolveHashFile(root, hash));
-          tiersLog("upload.enqueue-existing", { queued: r.queued.length, missing: r.missing.length, bad: r.bad, local: r.local });
+          const r = await enqueueLocalMedia(service.queue, body, (hash: string) => resolveHashFile(root, hash), {
+            getTiers: (hash: string) => service.manager.status([hash])[hash],
+            isLocal: () => !service.target(),
+          });
+          tiersLog("upload.enqueue-existing", { queued: r.queued.length, deferred: r.deferred?.length ?? 0, missing: r.missing.length, bad: r.bad, local: r.local });
           return res.end(JSON.stringify({ ok: true, ...r }));
         }
         if (req.method === "GET" && req.url.split("?")[0] === "/api/media/upload-queue") {

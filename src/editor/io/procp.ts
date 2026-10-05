@@ -228,8 +228,10 @@ export interface PackResult {
  * 取不到的那条不让它毁掉整次打包,但一定出现在返回值的 `missing` 里。
  */
 export async function packProcp(): Promise<PackResult> {
+  await (await import("../sync/syncManager")).whenSaved();
   const { ingestUnhashedMedia } = await import("./mediaUpload.ts");
   await ingestUnhashedMedia();
+  await (await import("../sync/syncManager")).whenSaved();
   const { serializeProc } = await import("./proc.ts");
   const { getState } = await import("../../store/project.ts");
   // 桌面:本地内容库的 /@media/<hash>;在线页面:远程素材服务上的原尺寸(带只读票据),还没就绪给 ""(跳过)

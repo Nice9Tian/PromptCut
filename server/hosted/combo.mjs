@@ -30,6 +30,9 @@
  */
 import fs from 'node:fs';
 import http from 'node:http';
+import { createHostingService } from '../hosting/service.mjs';
+import { createHostedRelocation } from './relocation.mjs';
+import { localDeviceInfo } from '../auth/device.mjs';
 import path from 'node:path';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { registerTsResolve } from './ts-resolve.mjs';
@@ -278,7 +281,9 @@ export async function startHostedCombo({
     return !!m && timingSafeEqual(sha256(m[1]), tokenDigest);
   }
 
-  const { service } = createSharedDocService({
+  const hosting = createHostingService({ dir: path.join(root, 'hosting'), now, authorityService: docPublicUrl || null });
+  let relocation;
+  const { service, authenticate } = createSharedDocService({
     mode: 'hosted',
     dataDir: paths.docservice,
     store,
@@ -289,7 +294,10 @@ export async function startHostedCombo({
     now,
     log: say,
     ...(limits ? { limits } : {}),
-    ...(serviceOptions ? { service: serviceOptions } : {}),
+    service: { ...serviceOptions,
+      http(req, res) { if (relocation?.handle(req, res)) return true; if (String(req.url).startsWith('/hosting/')) { void hosting.handle(req, res); return true; } return serviceOptions?.http?.(req, res); },
+      upgrade(req, socket, head) { if (String(req.url).startsWith('/hosting/')) { hosting.handleUpgrade(req, socket, head); return true; } return serviceOptions?.upgrade?.(req, socket, head); },
+    },
   });
 
   async function inventory() {
@@ -371,6 +379,13 @@ export async function startHostedCombo({
 
   const publicUrl = assetPublicUrl || `http://127.0.0.1:${assetAddr.port}/api/asset`;
   const loopHost = host === '0.0.0.0' || host === '::' || loopbackBind ? (host === '::1' ? '[::1]' : '127.0.0.1') : host;
+  hosting.setAuthority(docPublicUrl || `http://${loopHost}:${docAddr.port}`);
+  if (store) {
+    relocation = createHostedRelocation({ paths, hosting, store, device: localDevice || localDeviceInfo({ PROMPTCUT_DATA_DIR: root }),
+      assets: Object.fromEntries(HOSTED_NAMESPACES.map(ns => [ns, { root: path.join(paths.assets, ns), shard: true }])), reloadSpace: service.reloadSpace, authenticate,
+      docBaseOf: () => `http://${loopHost}:${docAddr.port}`, assetBaseOf: () => `http://${loopHost}:${assetAddr.port}` });
+    relocation.start();
+  }
   let announceDone = () => {};
   const announced = new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), 5000);
@@ -400,11 +415,14 @@ export async function startHostedCombo({
     announced: announceOk,
     service,
     stores,
+    hosting,
     get credentialStore() { return store; },
     inventory,
     async close() {
       if (closed) return;
       closed = true;
+      await relocation?.close();
+      await hosting.close();
       try { announcer.stop(); } catch { /* 已停 */ }
       await new Promise((resolve) => {
         assetServer.close(() => resolve());

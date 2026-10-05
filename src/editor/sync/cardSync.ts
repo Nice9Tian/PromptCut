@@ -39,6 +39,12 @@ let hooks: CardSyncHooks | null = null;
 let current: Binding | null = null;
 let lastSent = "";
 let cardIdsKey = "";
+let bindingWrite: Promise<unknown> = Promise.resolve();
+export function detachCardSync(): void {
+  if (!current) return;
+  current = null; hooks = null; lastSent = ""; cardIdsKey = "";
+  bindingWrite = bindingWrite.catch(() => undefined).then(() => post("/api/cards/sync/unbind", {}));
+}
 
 /** 项目要带上的卡:时间轴上用到的(含卡片图里的节点)+ 归属表记在本项目名下的 */
 export function projectCardIds(p: Project, projectId?: string | null): string[] {
@@ -72,7 +78,9 @@ async function send(b: Binding, cardIds: string[]) {
   const key = JSON.stringify(body);
   if (key === lastSent) return;
   lastSent = key;
-  const j = await post("/api/cards/sync/bind", body);
+  const pending = bindingWrite.catch(() => undefined).then(() => post("/api/cards/sync/bind", body));
+  bindingWrite = pending;
+  const j = await pending;
   if (!j?.ok) {
     if (lastSent === key) lastSent = "";
     console.warn("[cards] 卡片源码同步没绑上:", j?.error ?? "无回包");

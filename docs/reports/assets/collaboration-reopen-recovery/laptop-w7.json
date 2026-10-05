@@ -1,0 +1,4486 @@
+{
+  "source": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+  "run": "m7r1004851007",
+  "kind": "actual-two-physical-machine-w7",
+  "authoritativeTiming": true,
+  "creatorReceipt": {
+    "targetCommit": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+    "role": "creator",
+    "prepareOnly": false,
+    "timingAuthoritative": false,
+    "hostname": "<test-PC>",
+    "startedAt": "2026-10-04T08:44:07.287Z",
+    "nodeVersion": "v24.19.0",
+    "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+    "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+    "basePort": 5450,
+    "status": "pass",
+    "actualExitCode": 0,
+    "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/m7-browser-probe.mjs --role creator --run m7r1004851007 --base-port 5450 --out <test-temp>\\pc-reopen-w7-creator-LeDchw\\probe --keep-temp --timeout-min 120 --bind 0.0.0.0 --public-host <test-PC-LAN>",
+    "fails": [],
+    "pending": [],
+    "installed": false,
+    "userRuntimeModified": false,
+    "hostNetworkChanged": false,
+    "run": "m7r1004851007",
+    "coord": "http://<test-PC-LAN>:5456",
+    "expiresAt": "2026-10-04T11:40:35.727Z",
+    "ownedProbePid": 21900,
+    "items": {
+      "M7-A1": {
+        "status": "pass",
+        "parts": {
+          "server-B-other-user": {
+            "status": "pass",
+            "detail": {
+              "published": "task.published",
+              "tasks": 10,
+              "allDone": true,
+              "doneMs": 2298,
+              "sB": 0,
+              "sS": 0,
+              "watcherSaw": 14
+            }
+          },
+          "server-same-name-other-device": {
+            "status": "pass",
+            "detail": {
+              "sS": 0,
+              "userIdDiffers": true
+            }
+          },
+          "page": {
+            "status": "pass",
+            "detail": {
+              "b1": 0,
+              "low": 0,
+              "single": 0,
+              "aTasks": 14
+            }
+          }
+        }
+      },
+      "M7-A2": {
+        "status": "pass",
+        "parts": {
+          "server-claim-other-user-forbidden": {
+            "status": "pass",
+            "detail": {
+              "otherTasks": [
+                {
+                  "type": "task.claim-rejected",
+                  "reason": "forbidden",
+                  "hasState": false,
+                  "hasVersion": false
+                },
+                {
+                  "type": "task.claim-rejected",
+                  "reason": "forbidden",
+                  "hasState": false,
+                  "hasVersion": false
+                },
+                {
+                  "type": "task.claim-rejected",
+                  "reason": "forbidden",
+                  "hasState": false,
+                  "hasVersion": false
+                }
+              ],
+              "otherPlan": {
+                "type": "task.claim-rejected",
+                "reason": "forbidden",
+                "hasState": false,
+                "hasVersion": false
+              },
+              "ownPlan": {
+                "type": "task.claim-rejected",
+                "reason": "plan-profile",
+                "hasState": false,
+                "hasVersion": false
+              }
+            }
+          },
+          "server-own-plan-plan-profile": {
+            "status": "pass",
+            "detail": {
+              "type": "task.claim-rejected",
+              "reason": "plan-profile",
+              "hasState": false,
+              "hasVersion": false
+            }
+          },
+          "server-d9-browser-as-pc-forbidden": {
+            "status": "pass",
+            "detail": {
+              "hello": "error",
+              "reason": "forbidden",
+              "watchAfter": "not-registered"
+            }
+          },
+          "page-hello-profile-browser": {
+            "status": "pass",
+            "detail": {
+              "at": 1791103507100,
+              "dir": "sent",
+              "conn": "8832.84",
+              "type": "node.hello",
+              "id": null,
+              "reqId": null,
+              "profile": "browser",
+              "nodeId": "browser-page-1515a9082655",
+              "hasEnvironment": true,
+              "maxConcurrent": 1,
+              "codeVersions": [
+                "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23"
+              ]
+            }
+          }
+        }
+      },
+      "M7-A3": {
+        "status": "pass",
+        "parts": {
+          "server-standin-forbidden-claimed-0": {
+            "status": "pass",
+            "detail": {
+              "seconds": 60,
+              "perClass": {
+                "light": {
+                  "tasks": 2,
+                  "claimedBySq": 2,
+                  "claimsSent": 2,
+                  "done": 2
+                },
+                "medium": {
+                  "tasks": 2,
+                  "claimedBySq": 2,
+                  "claimsSent": 2,
+                  "done": 2
+                },
+                "heavy": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "local": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "userCard": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "graphCard": {
+                  "tasks": 1,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "modifiedCard": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "notIndependent": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "stream": {
+                  "tasks": 1,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "plan": {
+                  "tasks": 1,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                }
+              },
+              "publishErrors": [],
+              "fp": "efe42e99feca808c"
+            }
+          },
+          "server-standin-light-medium-done": {
+            "status": "pass",
+            "detail": {
+              "light": {
+                "tasks": 2,
+                "claimedBySq": 2,
+                "claimsSent": 2,
+                "done": 2
+              },
+              "medium": {
+                "tasks": 2,
+                "claimedBySq": 2,
+                "claimsSent": 2,
+                "done": 2
+              }
+            }
+          },
+          "server-page-node-registered": {
+            "status": "pass",
+            "detail": {
+              "node": {
+                "profile": "browser",
+                "fp": "258acaaa7c5fe509"
+              }
+            }
+          },
+          "server-page-forbidden-claimed-0": {
+            "status": "pass",
+            "detail": {
+              "seconds": 60,
+              "claimedByPage": [],
+              "publishErrors": 0
+            }
+          },
+          "page-forbidden-claimed-0": {
+            "status": "pass",
+            "detail": {
+              "tasks": 8,
+              "seconds": 60,
+              "claimedTags": [],
+              "blocked": {
+                "6:plan-on-browser": 3,
+                "4:weight": 1,
+                "7:tier": 1,
+                "3:user-cards": 1,
+                "3:graph-cards": 1,
+                "1:card-source": 1,
+                "7:not-independent": 1,
+                "2:transcode": 1,
+                "1:code-version": 1
+              }
+            }
+          },
+          "page-light-medium-done": {
+            "status": "pass",
+            "detail": {
+              "completed": 15
+            }
+          }
+        }
+      },
+      "M7-A4": {
+        "status": "pass",
+        "parts": {
+          "server-anchors-by-browser": {
+            "status": "pass",
+            "detail": {
+              "perClip": {
+                "h1": [
+                  {
+                    "id": "snapshot:5cdd243e104",
+                    "state": "done",
+                    "byPage": true,
+                    "manifest": true,
+                    "snapAll": true,
+                    "frames": 60
+                  }
+                ],
+                "h2": [
+                  {
+                    "id": "snapshot:75ea413fc86",
+                    "state": "done",
+                    "byPage": true,
+                    "manifest": true,
+                    "snapAll": true,
+                    "frames": 60
+                  }
+                ],
+                "h3": [
+                  {
+                    "id": "snapshot:399eccda62f",
+                    "state": "done",
+                    "byPage": true,
+                    "manifest": true,
+                    "snapAll": true,
+                    "frames": 60
+                  }
+                ]
+              },
+              "pageSignal": {
+                "by": "node",
+                "at": 1791103532484,
+                "done": {
+                  "h2": 1,
+                  "h3": 1,
+                  "h1": 1
+                },
+                "worstSinceGateMs": 25530,
+                "completedIds": [
+                  "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                  "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                  "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59"
+                ]
+              }
+            }
+          },
+          "server-layer-map-points-to-browser": {
+            "status": "pass",
+            "detail": {
+              "v": 3,
+              "layerPoint": {
+                "h1": true,
+                "h2": true,
+                "h3": true
+              }
+            }
+          },
+          "page-anchors-done": {
+            "status": "pass",
+            "detail": {
+              "anchorRule": {
+                "h1": "priority-50",
+                "h2": "priority-50",
+                "h3": "priority-50"
+              },
+              "perClip": {
+                "h2": [
+                  {
+                    "id": "snapshot:75ea413fc86b654",
+                    "fullId": "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                    "at": 1791103516654,
+                    "sinceGateMs": 9908
+                  }
+                ],
+                "h3": [
+                  {
+                    "id": "snapshot:399eccda62f18b2",
+                    "fullId": "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                    "at": 1791103524517,
+                    "sinceGateMs": 17771
+                  }
+                ],
+                "h1": [
+                  {
+                    "id": "snapshot:5cdd243e10443ce",
+                    "fullId": "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59",
+                    "at": 1791103532276,
+                    "sinceGateMs": 25530
+                  }
+                ]
+              },
+              "worstSinceGateMs": 25530,
+              "l2Snapshots": 360,
+              "authoritative": true,
+              "diag": {
+                "available": true,
+                "state": "baking",
+                "reason": null,
+                "nodeId": "browser-page-1515a9082655",
+                "envFingerprint": "258acaaa7c5fe509",
+                "codeVersion": "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23",
+                "held": [
+                  "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:180-239"
+                ],
+                "counts": {
+                  "claimed": 4,
+                  "completed": 3,
+                  "dedup": 0,
+                  "failed": 0,
+                  "lost": 0,
+                  "released": {
+                    "yield": 0,
+                    "hidden": 0,
+                    "urgent": 0,
+                    "noSnapshot": 0,
+                    "other": 0,
+                    "raw": {},
+                    "total": 0
+                  },
+                  "blocked": {
+                    "6:plan-on-browser": 1
+                  },
+                  "bakeFrames": 180,
+                  "bakeMs": {
+                    "n": 180,
+                    "p50": 117,
+                    "p95": 167
+                  },
+                  "stageMs": {
+                    "p50": 115.79999999701977,
+                    "p95": 161.09999999403954,
+                    "pausedMs": 0
+                  },
+                  "chunksPushed": 360,
+                  "chunksSkipped": 0,
+                  "bytesPushed": 2566255,
+                  "uploadFailed": 0,
+                  "smallFrames": 180
+                },
+                "lastError": null
+              },
+              "assetHttp": {
+                "GET snap chunks": {
+                  "n": 180,
+                  "p50": 6,
+                  "p95": 8,
+                  "preP50": 0,
+                  "newSockets": 1
+                },
+                "GET px chunks": {
+                  "n": 180,
+                  "p50": 6,
+                  "p95": 8,
+                  "preP50": 1,
+                  "newSockets": 1
+                }
+              },
+              "ticketReqs": {
+                "conn:render": 1,
+                "asset:rw": 1
+              },
+              "phases": {
+                "lease": {
+                  "n": 181,
+                  "p50": 0,
+                  "p95": 0.09999999403953552
+                },
+                "rpc": {
+                  "n": 180,
+                  "p50": 89.39999999850988,
+                  "p95": 135.10000000149012
+                },
+                "gunzip": {
+                  "n": 180,
+                  "p50": 0.6999999955296516,
+                  "p95": 0.8999999985098839
+                },
+                "snap": {
+                  "n": 180,
+                  "p50": 24.400000005960464,
+                  "p95": 33.100000001490116
+                },
+                "px": {
+                  "n": 180,
+                  "p50": 24.600000001490116,
+                  "p95": 33.20000000298023
+                },
+                "push": {
+                  "n": 180,
+                  "p50": 24.700000002980232,
+                  "p95": 33.29999999701977
+                },
+                "l2": {
+                  "n": 180,
+                  "p50": 1.1000000014901161,
+                  "p95": 1.4000000059604645
+                },
+                "total": {
+                  "n": 180,
+                  "p50": 117,
+                  "p95": 166.79999999701977
+                }
+              },
+              "uploadMs": {
+                "requests": 1080,
+                "ticket": 61.999999947845936,
+                "fetch": 8952.10000000894,
+                "body": 356.600000038743
+              }
+            }
+          },
+          "page-within-30s": {
+            "status": "pass",
+            "detail": {
+              "worstSinceGateMs": 25530
+            }
+          },
+          "page-layer-env-browser": {
+            "status": "pass",
+            "detail": [
+              {
+                "clip": "light",
+                "fp": "baaae4fa0af898a3",
+                "ready": 0
+              },
+              {
+                "clip": "h3",
+                "fp": "258acaaa7c5fe509",
+                "ready": 60
+              },
+              {
+                "clip": "h2",
+                "fp": "258acaaa7c5fe509",
+                "ready": 60
+              },
+              {
+                "clip": "h1",
+                "fp": "258acaaa7c5fe509",
+                "ready": 60
+              }
+            ]
+          }
+        }
+      },
+      "M7-A5": {
+        "status": "pass",
+        "parts": {
+          "page-yield-on-drag": {
+            "status": "pass",
+            "detail": {
+              "drag": true,
+              "claimsDuring": 0,
+              "framesDuringDrag": 0,
+              "releases": [
+                {
+                  "reason": "yield-drag",
+                  "cause": "yield",
+                  "msAfterDrag": 1224
+                }
+              ],
+              "l2": {
+                "before": 360,
+                "after": 360
+              },
+              "claimsWithin500ms": 0,
+              "resumedAfterMs": 712,
+              "attemptsOnReclaim": null,
+              "authoritative": true
+            }
+          },
+          "page-attempts-unchanged": {
+            "status": "pass",
+            "detail": {
+              "attemptsOnReclaim": null,
+              "note": "放回不计失败（C2）；认领回包里的 attempts 由队列给"
+            }
+          },
+          "page-resume-after-500ms": {
+            "status": "pass",
+            "detail": {
+              "claimsWithin500ms": 0,
+              "resumedAfterMs": 712
+            }
+          }
+        }
+      },
+      "M7-A6": {
+        "status": "pass",
+        "parts": {
+          "play-yield": {
+            "status": "pass",
+            "detail": {
+              "claims": 0,
+              "frames": 0,
+              "releases": [
+                "yield-play"
+              ],
+              "releaseAfterPauseMs": null,
+              "lateReason": "yield-play",
+              "diagAfter": "idle"
+            }
+          },
+          "hidden-release-now": {
+            "status": "pass",
+            "detail": {
+              "hidden": true,
+              "releaseMs": -41,
+              "reason": "yield-hidden",
+              "cause": "hidden",
+              "progressBeforeRelease": false
+            }
+          },
+          "hidden-no-claims-then-resume": {
+            "status": "pass",
+            "detail": {
+              "claimsHidden": 0,
+              "resumed": true
+            }
+          },
+          "urgent-stops-at-frame-boundary": {
+            "status": "pass",
+            "detail": {
+              "releaseMs": 64,
+              "reason": "yield-urgent",
+              "cause": "urgent",
+              "framesAfter": 1
+            }
+          }
+        }
+      },
+      "M7-A7": {
+        "status": "pass",
+        "parts": {
+          "setup-single-stage": {
+            "status": "pass",
+            "detail": {
+              "single": false,
+              "low": false
+            }
+          },
+          "no-render-connection": {
+            "status": "pass",
+            "detail": {
+              "low": {
+                "render": 0,
+                "hello": 0,
+                "dual": false
+              },
+              "single": {
+                "render": 0,
+                "hello": 0,
+                "dual": false
+              },
+              "control": {
+                "isNode": true,
+                "render": 2
+              }
+            }
+          }
+        }
+      },
+      "M7-A8": {
+        "status": "pass",
+        "parts": {
+          "server-manifest-matches": {
+            "status": "pass",
+            "detail": {
+              "manifests": 3,
+              "bad": []
+            }
+          },
+          "server-one-env-per-layer": {
+            "status": "pass",
+            "detail": {
+              "h1": [
+                "258acaaa7c5fe509"
+              ],
+              "h2": [
+                "258acaaa7c5fe509"
+              ],
+              "h3": [
+                "258acaaa7c5fe509"
+              ]
+            }
+          },
+          "server-exactly-once-done": {
+            "status": "pass",
+            "detail": {
+              "doneEvents": 22,
+              "dup": []
+            }
+          },
+          "server-desktop-applied": {
+            "status": "pass",
+            "detail": {
+              "applied": 16,
+              "fetched": 240,
+              "applyErrors": 0
+            }
+          }
+        }
+      },
+      "M7-A9": {
+        "status": "pass",
+        "parts": {
+          "server-every-frame-has-px": {
+            "status": "pass",
+            "detail": [
+              {
+                "id": "snapshot:5cdd243e104",
+                "frames": 60,
+                "small": 60,
+                "pxAll": true
+              },
+              {
+                "id": "snapshot:75ea413fc86",
+                "frames": 60,
+                "small": 60,
+                "pxAll": true
+              },
+              {
+                "id": "snapshot:399eccda62f",
+                "frames": 60,
+                "small": 60,
+                "pxAll": true
+              }
+            ]
+          },
+          "page-low-memory-shows-small": {
+            "status": "pass",
+            "detail": {
+              "waitedForAllFrames": false,
+              "tier": "small",
+              "layers": [
+                {
+                  "clip": "h1",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 120,
+                  "placeholder": false
+                },
+                {
+                  "clip": "h2",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 120,
+                  "placeholder": false
+                },
+                {
+                  "clip": "h3",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 120,
+                  "placeholder": false
+                }
+              ]
+            }
+          }
+        }
+      },
+      "M7-A10": {
+        "status": "pass",
+        "parts": {
+          "server-idle-takeover": {
+            "status": "pass",
+            "detail": {
+              "clip": "z1",
+              "took": {
+                "lock": "baaae4fa0af898a3",
+                "pcDone": 0
+              },
+              "takeoverMs": 3021,
+              "lockHistory": [
+                {
+                  "envFingerprint": "258acaaa7c5fe509",
+                  "at": 1791104223411
+                },
+                {
+                  "envFingerprint": "baaae4fa0af898a3",
+                  "at": 1791104274369
+                }
+              ],
+              "plans": [
+                {
+                  "user": "B",
+                  "rev": 3,
+                  "clips": [
+                    "h1",
+                    "h2",
+                    "h3",
+                    "z1"
+                  ],
+                  "state": "done"
+                },
+                {
+                  "user": "B-low",
+                  "rev": 4,
+                  "clips": [
+                    "light"
+                  ],
+                  "state": "open"
+                },
+                {
+                  "user": "B",
+                  "rev": 3,
+                  "clips": [
+                    "h1",
+                    "h2",
+                    "h3",
+                    "light",
+                    "z1"
+                  ],
+                  "state": "failed"
+                },
+                {
+                  "user": "B",
+                  "rev": 4,
+                  "clips": [
+                    "h1",
+                    "h2",
+                    "h3",
+                    "z1"
+                  ],
+                  "state": "done"
+                }
+              ]
+            }
+          },
+          "server-race-split-promptly": {
+            "status": "pass",
+            "detail": {
+              "splitMs": 7645,
+              "limitMs": 90000
+            }
+          },
+          "server-race-done-in-time": {
+            "status": "pass",
+            "detail": {
+              "raceMs": 31740,
+              "limitMs": 180000,
+              "splitMs": 7645,
+              "timedOut": [],
+              "race": {
+                "w1": [
+                  "258acaaa7c5fe509"
+                ],
+                "w2": [
+                  "258acaaa7c5fe509"
+                ]
+              }
+            }
+          },
+          "server-race-one-env-per-card": {
+            "status": "pass",
+            "detail": {
+              "w1": [
+                "258acaaa7c5fe509"
+              ],
+              "w2": [
+                "258acaaa7c5fe509"
+              ],
+              "raceMs": 31740,
+              "envOf": {
+                "w1": [
+                  "browser"
+                ],
+                "w2": [
+                  "browser"
+                ]
+              }
+            }
+          },
+          "page-layer-switched": {
+            "status": "pass",
+            "detail": {
+              "clip": "z1",
+              "fp": "baaae4fa0af898a3",
+              "pcFp": "baaae4fa0af898a3",
+              "ready": 1,
+              "waitedMs": 2,
+              "limitMs": 240000
+            }
+          }
+        }
+      },
+      "M7-A11": {
+        "status": "pass",
+        "parts": {
+          "server-logs-describe": {
+            "status": "pass",
+            "detail": {
+              "found": false,
+              "where": [],
+              "ticketsKnown": 11,
+              "logLines": 131,
+              "urls": 11084
+            }
+          },
+          "page-render-ticket-expiry": {
+            "status": "pass",
+            "detail": {
+              "endedBy": {
+                "by": "creator",
+                "at": 1791104218584,
+                "closed": true,
+                "conns": 1,
+                "code": 1001,
+                "reason": null
+              },
+              "rebuilt": {
+                "welcomeMs": 1083,
+                "ticket": true
+              },
+              "newRenderConns": 1
+            }
+          },
+          "echo-only-promptcut.v1": {
+            "status": "pass",
+            "detail": [
+              {
+                "page": "b1",
+                "role": null,
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "b1",
+                "role": "render",
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "b1",
+                "role": "render",
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "low",
+                "role": null,
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "single",
+                "role": null,
+                "echoed": "promptcut.v1"
+              }
+            ]
+          },
+          "render-echo-only-promptcut.v1": {
+            "status": "pass",
+            "detail": [
+              {
+                "page": "b1",
+                "role": "render",
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "b1",
+                "role": "render",
+                "echoed": "promptcut.v1"
+              }
+            ]
+          },
+          "ticket-not-in-url-or-page-diag": {
+            "status": "pass",
+            "detail": {
+              "urlLeaks": [],
+              "diagLeaks": [],
+              "ticketsSeen": 15
+            }
+          }
+        }
+      },
+      "M7-A12": {
+        "status": "pass",
+        "parts": {
+          "play-10s-longtasks-0": {
+            "status": "pass",
+            "detail": {
+              "count": 0,
+              "worst": []
+            }
+          },
+          "play-10s-claims-0": {
+            "status": "pass",
+            "detail": {
+              "claims": 0,
+              "heldAtStart": null
+            }
+          },
+          "bake-longtasks-0": {
+            "status": "pass",
+            "detail": {
+              "count": 0,
+              "worst": []
+            }
+          }
+        }
+      },
+      "W7": {
+        "status": "pass",
+        "parts": {
+          "cross-machine": {
+            "status": "pass",
+            "detail": {
+              "creator": "<test-PC>",
+              "node": "<test-laptop>",
+              "bind": "0.0.0.0",
+              "publicHost": "<test-PC-LAN>",
+              "timingAuthoritative": true
+            }
+          },
+          "M7-A1": {
+            "status": "pass",
+            "detail": {
+              "mirror": "M7-A1"
+            }
+          },
+          "M7-A2": {
+            "status": "pass",
+            "detail": {
+              "mirror": "M7-A2"
+            }
+          },
+          "M7-A3": {
+            "status": "pass",
+            "detail": {
+              "mirror": "M7-A3"
+            }
+          },
+          "A4-timing-on-laptop": {
+            "status": "pass",
+            "detail": {
+              "worstSinceGateMs": 25530
+            }
+          }
+        }
+      },
+      "D9": {
+        "status": "pass",
+        "parts": {
+          "browser-credential-as-pc-host": {
+            "status": "pass",
+            "detail": {
+              "as-pc": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              },
+              "as-host": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              },
+              "bindOtherBrowser": {
+                "hello": "error",
+                "reason": "forbidden"
+              },
+              "bindOtherDesktop": {
+                "hello": "error",
+                "reason": "forbidden"
+              },
+              "originalStillWorks": "queue.snapshot"
+            }
+          },
+          "nodeId-bound-to-userId": {
+            "status": "pass",
+            "detail": {
+              "as-pc": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              },
+              "as-host": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              },
+              "bindOtherBrowser": {
+                "hello": "error",
+                "reason": "forbidden"
+              },
+              "bindOtherDesktop": {
+                "hello": "error",
+                "reason": "forbidden"
+              },
+              "originalStillWorks": "queue.snapshot"
+            }
+          }
+        }
+      },
+      "D10": {
+        "status": "pass",
+        "parts": {
+          "welcome-fingerprint": {
+            "status": "pass",
+            "detail": {
+              "welcome": "3731ec3cf0cc69e9",
+              "expected": "3731ec3cf0cc69e9",
+              "selfReported": {
+                "type": "node.welcome",
+                "envFingerprint": "b4ed24465ac9233d",
+                "expected": "b4ed24465ac9233d"
+              },
+              "noEnvironment": {
+                "type": "error",
+                "reason": "bad-message"
+              }
+            }
+          },
+          "self-reported-ignored": {
+            "status": "pass",
+            "detail": {
+              "type": "node.welcome",
+              "envFingerprint": "b4ed24465ac9233d",
+              "expected": "b4ed24465ac9233d"
+            }
+          },
+          "browser-without-environment": {
+            "status": "pass",
+            "detail": {
+              "type": "error",
+              "reason": "bad-message"
+            }
+          },
+          "page-welcome-fp-equals-computed": {
+            "status": "pass",
+            "detail": {
+              "welcome": "258acaaa7c5fe509",
+              "computed": "258acaaa7c5fe509"
+            }
+          }
+        }
+      },
+      "D14": {
+        "status": "pass",
+        "parts": {
+          "non-chromium-refused": {
+            "status": "pass",
+            "detail": {
+              "firefox": {
+                "hello": "error",
+                "reason": "not-chromium",
+                "watchAfter": "not-registered"
+              },
+              "safari": {
+                "hello": "error",
+                "reason": "not-chromium",
+                "watchAfter": "not-registered"
+              },
+              "crios": {
+                "hello": "error",
+                "reason": "not-chromium",
+                "watchAfter": "not-registered"
+              }
+            }
+          }
+        }
+      },
+      "D1-D2-D12": {
+        "status": "pass",
+        "parts": {
+          "page-dual-split-supersede-layermap": {
+            "status": "pass",
+            "detail": {
+              "v": 3,
+              "perClip": {
+                "h1": {
+                  "pc": 5,
+                  "page": 5,
+                  "allDual": true,
+                  "pageHasBake": true,
+                  "ok": true,
+                  "winner": "page",
+                  "fullySuperseded": [
+                    "pc"
+                  ],
+                  "takenOverMidway": [],
+                  "badRanges": [],
+                  "reasons": [],
+                  "candidates": [
+                    "page",
+                    "pc"
+                  ]
+                },
+                "h2": {
+                  "pc": 5,
+                  "page": 5,
+                  "allDual": true,
+                  "pageHasBake": true,
+                  "ok": true,
+                  "winner": "page",
+                  "fullySuperseded": [
+                    "pc"
+                  ],
+                  "takenOverMidway": [],
+                  "badRanges": [],
+                  "reasons": [],
+                  "candidates": [
+                    "page",
+                    "pc"
+                  ]
+                },
+                "h3": {
+                  "pc": 5,
+                  "page": 5,
+                  "allDual": true,
+                  "pageHasBake": true,
+                  "ok": true,
+                  "winner": "page",
+                  "fullySuperseded": [
+                    "pc"
+                  ],
+                  "takenOverMidway": [],
+                  "badRanges": [],
+                  "reasons": [],
+                  "candidates": [
+                    "page",
+                    "pc"
+                  ]
+                }
+              },
+              "takenOverMidway": []
+            }
+          }
+        }
+      }
+    },
+    "ok": true,
+    "rawLogSha256": {
+      "stdout.log": "2ec937dcba7ae6fb4b73e20486cbbc3ff77e3967cd55088092ac16202df5fb9d",
+      "stderr.log": "b3f00cfc7ae64873d278566095aacabbd1637c7c64e673eedf3e5c78da3a08c1"
+    },
+    "finishedAt": "2026-10-04T08:58:26.928Z"
+  },
+  "result": {
+    "probe": "m7-browser-probe",
+    "role": "creator",
+    "startedAt": "2026-10-04T08:44:07.456Z",
+    "run": "m7r1004851007",
+    "out": "<test-temp>\\pc-reopen-w7-creator-LeDchw\\probe",
+    "planDump": {
+      "plans": [
+        {
+          "id": "plan:<项目>@1#clips:apt05h1kfh8mt",
+          "kind": "clips",
+          "priority": "normal",
+          "user": "B",
+          "rev": 1,
+          "clips": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "requires": {
+            "codeVersion": "33325e30…"
+          },
+          "state": "done",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open",
+            "claimed",
+            "done"
+          ],
+          "claimedBy": [
+            "pc"
+          ],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@1#clips:3n9v7r1cw7g9j",
+          "kind": "clips",
+          "priority": "normal",
+          "user": "B",
+          "rev": 1,
+          "clips": [
+            "h1",
+            "h2",
+            "h3",
+            "light"
+          ],
+          "requires": {
+            "codeVersion": "33325e30…"
+          },
+          "state": "done",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open",
+            "done"
+          ],
+          "claimedBy": [],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@2#clips:apt05h1kfh8mt",
+          "kind": "clips",
+          "priority": "normal",
+          "user": "B",
+          "rev": 2,
+          "clips": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "requires": {
+            "codeVersion": "33325e30…"
+          },
+          "state": "done",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open",
+            "claimed",
+            "done"
+          ],
+          "claimedBy": [
+            "pc"
+          ],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@2#backfill:fkr97e16061ii",
+          "kind": "backfill",
+          "priority": "backfill",
+          "user": "B-low",
+          "rev": 2,
+          "clips": [
+            "c-mutkuk1h-h"
+          ],
+          "requires": {},
+          "state": "done",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open",
+            "done"
+          ],
+          "claimedBy": [],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@3#backfill:7vq6j8aqqijo",
+          "kind": "backfill",
+          "priority": "backfill",
+          "user": "B-low",
+          "rev": 3,
+          "clips": [
+            "z1"
+          ],
+          "requires": {},
+          "state": "done",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open",
+            "claimed",
+            "done"
+          ],
+          "claimedBy": [
+            "pc"
+          ],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@3#clips:ukmvp81j578ek",
+          "kind": "clips",
+          "priority": "normal",
+          "user": "B",
+          "rev": 3,
+          "clips": [
+            "h1",
+            "h2",
+            "h3",
+            "z1"
+          ],
+          "requires": {
+            "codeVersion": "33325e30…"
+          },
+          "state": "done",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open",
+            "done"
+          ],
+          "claimedBy": [],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@4#backfill:1qvkxm7ic5u67",
+          "kind": "backfill",
+          "priority": "backfill",
+          "user": "B-low",
+          "rev": 4,
+          "clips": [
+            "light"
+          ],
+          "requires": {},
+          "state": "open",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open"
+          ],
+          "claimedBy": [],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@3#clips:19f0woim9vyea",
+          "kind": "clips",
+          "priority": "normal",
+          "user": "B",
+          "rev": 3,
+          "clips": [
+            "h1",
+            "h2",
+            "h3",
+            "light",
+            "z1"
+          ],
+          "requires": {
+            "codeVersion": "33325e30…"
+          },
+          "state": "failed",
+          "attempts": 3,
+          "lastError": "文档服务上没有项目快照 sp_cpyyx4xncuohkuk2bmqv6kptvq@3",
+          "states": [
+            "open",
+            "failed"
+          ],
+          "claimedBy": [],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@4#clips:ukmvp81j578ek",
+          "kind": "clips",
+          "priority": "normal",
+          "user": "B",
+          "rev": 4,
+          "clips": [
+            "h1",
+            "h2",
+            "h3",
+            "z1"
+          ],
+          "requires": {
+            "codeVersion": "33325e30…"
+          },
+          "state": "done",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "claimed",
+            "done"
+          ],
+          "claimedBy": [
+            "pc"
+          ],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@5#backfill:3op05g1joqsj8",
+          "kind": "backfill",
+          "priority": "backfill",
+          "user": "B-low",
+          "rev": 5,
+          "clips": [
+            "w1",
+            "w2"
+          ],
+          "requires": {},
+          "state": "open",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open"
+          ],
+          "claimedBy": [],
+          "pcFilter": {
+            "ok": true
+          }
+        },
+        {
+          "id": "plan:<项目>@5#clips:wbopq3k691xn",
+          "kind": "clips",
+          "priority": "normal",
+          "user": "B",
+          "rev": 5,
+          "clips": [
+            "h1",
+            "h2",
+            "h3",
+            "w1",
+            "w2",
+            "z1"
+          ],
+          "requires": {
+            "codeVersion": "33325e30…"
+          },
+          "state": "done",
+          "attempts": 0,
+          "lastError": null,
+          "states": [
+            "open",
+            "claimed",
+            "done"
+          ],
+          "claimedBy": [
+            "pc"
+          ],
+          "pcFilter": {
+            "ok": true
+          }
+        }
+      ],
+      "pcView": {
+        "openVisible": 24,
+        "claimable": 17,
+        "claimableByBand": {
+          "normal": 15,
+          "backfill": 2
+        },
+        "claimableNormal": [
+          {
+            "id": "snapshot:32f1cdfe9520bf01da83937a25f9338",
+            "kind": "snapshot",
+            "user": "B",
+            "clip": "h3",
+            "lastError": null,
+            "attempts": 0
+          },
+          {
+            "id": "snapshot:32f1cdfe9520bf01da83937a25f9338",
+            "kind": "snapshot",
+            "user": "B",
+            "clip": "h3",
+            "lastError": null,
+            "attempts": 0
+          },
+          {
+            "id": "snapshot:32f1cdfe9520bf01da83937a25f9338",
+            "kind": "snapshot",
+            "user": "B",
+            "clip": "h3",
+            "lastError": null,
+            "attempts": 0
+          },
+          {
+            "id": "snapshot:a168626acc2ad5f043685860a6e3828",
+            "kind": "snapshot",
+            "user": "B",
+            "clip": "h2",
+            "lastError": null,
+            "attempts": 0
+          },
+          {
+            "id": "snapshot:a168626acc2ad5f043685860a6e3828",
+            "kind": "snapshot",
+            "user": "B",
+            "clip": "h2",
+            "lastError": null,
+            "attempts": 0
+          },
+          {
+            "id": "snapshot:a168626acc2ad5f043685860a6e3828",
+            "kind": "snapshot",
+            "user": "B",
+            "clip": "h2",
+            "lastError": null,
+            "attempts": 0
+          },
+          {
+            "id": "snapshot:a168626acc2ad5f043685860a6e3828",
+            "kind": "snapshot",
+            "user": "B",
+            "clip": "h2",
+            "lastError": null,
+            "attempts": 0
+          },
+          {
+            "id": "snapshot:a168626acc2ad5f043685860a6e3828",
+            "kind": "snapshot",
+            "user": "B",
+            "clip": "h2",
+            "lastError": null,
+            "attempts": 0
+          }
+        ],
+        "wouldPick": {
+          "id": "snapshot:9a34697b82cec9590da5edb88fd33ba",
+          "kind": "snapshot",
+          "band": "normal"
+        }
+      },
+      "pc": {
+        "held": [
+          "snapshot:990e5813eae3baa0063ad8205b0e228f09f0dfa2fd3e80cbe838277412f3a43c:0-59"
+        ],
+        "running": [
+          "snapshot:990e5813eae3baa0063ad8205b0e228f09f0dfa2fd3e80cbe838277412f3a43c:0-59"
+        ],
+        "idle": {
+          "reason": null,
+          "lastInteractionAt": null
+        },
+        "stats": {
+          "claimed": 28,
+          "completed": 4,
+          "dedup": 0,
+          "failed": 21,
+          "discarded": 0,
+          "lost": 0,
+          "planSplit": 2,
+          "done": 26,
+          "failedTasks": 27,
+          "applied": 26,
+          "applyErrors": 0,
+          "written": 180,
+          "fetched": 180,
+          "skipped": 1380
+        },
+        "claims": [
+          {
+            "id": "snapshot:b7828f24be594b169cc487951648cc1",
+            "priority": "backfill"
+          },
+          {
+            "id": "snapshot:b7828f24be594b169cc487951648cc1",
+            "priority": "backfill"
+          },
+          {
+            "id": "plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@3#cli",
+            "priority": "normal"
+          },
+          {
+            "id": "plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@3#cli",
+            "priority": "normal"
+          },
+          {
+            "id": "plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@4#cli",
+            "priority": "normal"
+          },
+          {
+            "id": "plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@3#cli",
+            "priority": "normal"
+          },
+          {
+            "id": "snapshot:990e5813eae3baa0063ad8205b0e228",
+            "priority": 50
+          },
+          {
+            "id": "plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@5#cli",
+            "priority": "normal"
+          },
+          {
+            "id": "snapshot:9a34697b82cec9590da5edb88fd33ba",
+            "priority": 50
+          },
+          {
+            "id": "snapshot:32f1cdfe9520bf01da83937a25f9338",
+            "priority": 50
+          },
+          {
+            "id": "snapshot:32f1cdfe9520bf01da83937a25f9338",
+            "priority": 50
+          },
+          {
+            "id": "snapshot:990e5813eae3baa0063ad8205b0e228",
+            "priority": 50
+          }
+        ],
+        "events": [
+          "{\"at\":1791104272238,\"event\":\"node.failed\",\"id\":\"plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@3#clips:19f0woim9vyea\",\"error\":\"文档服务上没有项目快照 sp_cpyyx4xncuohkuk2bmqv6kptvq@3\"}",
+          "{\"at\":1791104272747,\"event\":\"node.failed\",\"id\":\"plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@3#clips:19f0woim9vyea\",\"error\":\"文档服务上没有项目快照 sp_cpyyx4xncuohkuk2bmqv6kptvq@3\"}",
+          "{\"at\":1791104274142,\"event\":\"executor.plan\",\"version\":\"sp_cpyyx4xncuohkuk2bmqv6kptvq@4\",\"entryKey\":\"b5f087a4c8ff9a755522a160bd4a60d898567e691ac598de8852280c9dde08d7\",\"controls\":6,\"locks\":0}",
+          "{\"at\":1791104274151,\"event\":\"queue.task-failed\",\"id\":\"snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274151,\"event\":\"queue.task-failed\",\"id\":\"snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:120-179\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274151,\"event\":\"queue.task-failed\",\"id\":\"snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:240-299\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274151,\"event\":\"queue.task-failed\",\"id\":\"snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274151,\"event\":\"node.plan-relocked\",\"id\":\"plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@4#clips:ukmvp81j578ek\"}",
+          "{\"at\":1791104274152,\"event\":\"node.plan-split\",\"id\":\"plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@4#clips:ukmvp81j578ek\",\"derived\":40}",
+          "{\"at\":1791104274152,\"event\":\"queue.task-failed\",\"id\":\"snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274152,\"event\":\"queue.task-failed\",\"id\":\"snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:120-179\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274152,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:0-59\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274152,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:60-119\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274152,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:120-179\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274152,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:180-239\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274152,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:240-299\",\"error\":\"superseded\"}",
+          "{\"at\":1791104274262,\"event\":\"node.failed\",\"id\":\"plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@3#clips:19f0woim9vyea\",\"error\":\"文档服务上没有项目快照 sp_cpyyx4xncuohkuk2bmqv6kptvq@3\"}",
+          "{\"at\":1791104281835,\"event\":\"executor.plan\",\"version\":\"sp_cpyyx4xncuohkuk2bmqv6kptvq@5\",\"entryKey\":\"4586efa3367aa7b603c0b772bf5f026db767f129c3d700c943ec5de99822838d\",\"controls\":8,\"locks\":0}",
+          "{\"at\":1791104281843,\"event\":\"node.plan-relocked\",\"id\":\"plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@5#clips:wbopq3k691xn\"}",
+          "{\"at\":1791104281843,\"event\":\"node.plan-split\",\"id\":\"plan:sp_cpyyx4xncuohkuk2bmqv6kptvq@5#clips:wbopq3k691xn\",\"derived\":48}",
+          "{\"at\":1791104281897,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a18a7f13730c56efa9500e145953567bb019a22a6e6c8b5b718301425be8c164:0-59\",\"error\":\"superseded\"}",
+          "{\"at\":1791104281897,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a18a7f13730c56efa9500e145953567bb019a22a6e6c8b5b718301425be8c164:60-119\",\"error\":\"superseded\"}",
+          "{\"at\":1791104281897,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a18a7f13730c56efa9500e145953567bb019a22a6e6c8b5b718301425be8c164:120-179\",\"error\":\"superseded\"}",
+          "{\"at\":1791104281897,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a18a7f13730c56efa9500e145953567bb019a22a6e6c8b5b718301425be8c164:180-239\",\"error\":\"superseded\"}",
+          "{\"at\":1791104281897,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a18a7f13730c56efa9500e145953567bb019a22a6e6c8b5b718301425be8c164:240-299\",\"error\":\"superseded\"}",
+          "{\"at\":1791104298396,\"event\":\"queue.task-failed\",\"id\":\"snapshot:9bafc63f367e45d5f8622d9380e5032640c4404f078ee693f3c561a3f9a3f089:0-59\",\"error\":\"superseded\"}",
+          "{\"at\":1791104298396,\"event\":\"queue.task-failed\",\"id\":\"snapshot:9bafc63f367e45d5f8622d9380e5032640c4404f078ee693f3c561a3f9a3f089:60-119\",\"error\":\"superseded\"}",
+          "{\"at\":1791104298396,\"event\":\"queue.task-failed\",\"id\":\"snapshot:9bafc63f367e45d5f8622d9380e5032640c4404f078ee693f3c561a3f9a3f089:120-179\",\"error\":\"superseded\"}",
+          "{\"at\":1791104298396,\"event\":\"queue.task-failed\",\"id\":\"snapshot:9bafc63f367e45d5f8622d9380e5032640c4404f078ee693f3c561a3f9a3f089:180-239\",\"error\":\"superseded\"}",
+          "{\"at\":1791104298396,\"event\":\"queue.task-failed\",\"id\":\"snapshot:9bafc63f367e45d5f8622d9380e5032640c4404f078ee693f3c561a3f9a3f089:240-299\",\"error\":\"superseded\"}"
+        ]
+      },
+      "pcNode": {
+        "nodeId": "prerender:<test-PC>:5453",
+        "profile": "pc",
+        "envFingerprint": "baaae4fa0af898a3",
+        "codeVersions": [
+          "33325e30…"
+        ],
+        "capabilities": {},
+        "editing": false
+      }
+    },
+    "projectId": "sp_cpyyx4xncuohkuk2bmqv6kptvq",
+    "pcFp": "baaae4fa0af898a3",
+    "pcFpApplied": true,
+    "pageFp": "258acaaa7c5fe509",
+    "pageNode": {
+      "by": "node",
+      "at": 1791103510384,
+      "isNode": true,
+      "nodeId": "browser-page-1515a9082655",
+      "envFingerprint": "258acaaa7c5fe509",
+      "gateLiftAt": 1791103506746,
+      "diag": {
+        "available": true,
+        "state": "baking",
+        "reason": null
+      }
+    },
+    "planOnly": {
+      "pcNodeId": "prerender:<test-PC>:5453",
+      "fineClaimedByPc": 5,
+      "plansClaimedByPc": 5,
+      "applied": false
+    },
+    "godPolls": 3263,
+    "nodesSeen": [
+      {
+        "profile": "pc",
+        "userId": "creator@…",
+        "fp": null,
+        "claimsMax": 0
+      },
+      {
+        "profile": "pc",
+        "userId": "creator@…",
+        "fp": "baaae4fa0af898a3",
+        "claimsMax": 1
+      },
+      {
+        "profile": "browser",
+        "userId": "B@…",
+        "fp": "258acaaa7c5fe509",
+        "claimsMax": 1
+      },
+      {
+        "profile": "browser",
+        "userId": "B@…",
+        "fp": "3731ec3cf0cc69e9",
+        "claimsMax": 0
+      },
+      {
+        "profile": "browser",
+        "userId": "creator@…",
+        "fp": "01c0200a57cd7fa8",
+        "claimsMax": 0
+      },
+      {
+        "profile": "browser",
+        "userId": "B@…",
+        "fp": "b4ed24465ac9233d",
+        "claimsMax": 0
+      },
+      {
+        "profile": "host",
+        "userId": "creator@…",
+        "fp": null,
+        "claimsMax": 2
+      },
+      {
+        "profile": "host",
+        "userId": "creator@…",
+        "fp": "3731ec3cf0cc69e9",
+        "claimsMax": 0
+      },
+      {
+        "profile": "host",
+        "userId": "creator@…",
+        "fp": "01c0200a57cd7fa8",
+        "claimsMax": 1
+      },
+      {
+        "profile": "host",
+        "userId": "creator@…",
+        "fp": "258acaaa7c5fe509",
+        "claimsMax": 1
+      },
+      {
+        "profile": "browser",
+        "userId": "B@…",
+        "fp": "efe42e99feca808c",
+        "claimsMax": 1
+      },
+      {
+        "profile": "browser",
+        "userId": "B@…",
+        "fp": "258acaaa7c5fe509",
+        "claimsMax": 1
+      }
+    ],
+    "projectDeleted": true,
+    "ok": true,
+    "fails": [],
+    "pending": [],
+    "items": {
+      "M7-A1": {
+        "status": "pass",
+        "parts": {
+          "server-B-other-user": {
+            "status": "pass",
+            "detail": {
+              "published": "task.published",
+              "tasks": 10,
+              "allDone": true,
+              "doneMs": 2298,
+              "sB": 0,
+              "sS": 0,
+              "watcherSaw": 14
+            }
+          },
+          "server-same-name-other-device": {
+            "status": "pass",
+            "detail": {
+              "sS": 0,
+              "userIdDiffers": true
+            }
+          },
+          "page": {
+            "status": "pass",
+            "detail": {
+              "b1": 0,
+              "low": 0,
+              "single": 0,
+              "aTasks": 14
+            }
+          }
+        }
+      },
+      "M7-A2": {
+        "status": "pass",
+        "parts": {
+          "server-claim-other-user-forbidden": {
+            "status": "pass",
+            "detail": {
+              "otherTasks": [
+                {
+                  "type": "task.claim-rejected",
+                  "reason": "forbidden",
+                  "hasState": false,
+                  "hasVersion": false
+                },
+                {
+                  "type": "task.claim-rejected",
+                  "reason": "forbidden",
+                  "hasState": false,
+                  "hasVersion": false
+                },
+                {
+                  "type": "task.claim-rejected",
+                  "reason": "forbidden",
+                  "hasState": false,
+                  "hasVersion": false
+                }
+              ],
+              "otherPlan": {
+                "type": "task.claim-rejected",
+                "reason": "forbidden",
+                "hasState": false,
+                "hasVersion": false
+              },
+              "ownPlan": {
+                "type": "task.claim-rejected",
+                "reason": "plan-profile",
+                "hasState": false,
+                "hasVersion": false
+              }
+            }
+          },
+          "server-own-plan-plan-profile": {
+            "status": "pass",
+            "detail": {
+              "type": "task.claim-rejected",
+              "reason": "plan-profile",
+              "hasState": false,
+              "hasVersion": false
+            }
+          },
+          "server-d9-browser-as-pc-forbidden": {
+            "status": "pass",
+            "detail": {
+              "hello": "error",
+              "reason": "forbidden",
+              "watchAfter": "not-registered"
+            }
+          },
+          "page-hello-profile-browser": {
+            "status": "pass",
+            "detail": {
+              "at": 1791103507100,
+              "dir": "sent",
+              "conn": "8832.84",
+              "type": "node.hello",
+              "id": null,
+              "reqId": null,
+              "profile": "browser",
+              "nodeId": "browser-page-1515a9082655",
+              "hasEnvironment": true,
+              "maxConcurrent": 1,
+              "codeVersions": [
+                "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23"
+              ]
+            }
+          }
+        }
+      },
+      "M7-A3": {
+        "status": "pass",
+        "parts": {
+          "server-standin-forbidden-claimed-0": {
+            "status": "pass",
+            "detail": {
+              "seconds": 60,
+              "perClass": {
+                "light": {
+                  "tasks": 2,
+                  "claimedBySq": 2,
+                  "claimsSent": 2,
+                  "done": 2
+                },
+                "medium": {
+                  "tasks": 2,
+                  "claimedBySq": 2,
+                  "claimsSent": 2,
+                  "done": 2
+                },
+                "heavy": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "local": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "userCard": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "graphCard": {
+                  "tasks": 1,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "modifiedCard": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "notIndependent": {
+                  "tasks": 2,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "stream": {
+                  "tasks": 1,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                },
+                "plan": {
+                  "tasks": 1,
+                  "claimedBySq": 0,
+                  "claimsSent": 0,
+                  "done": 0
+                }
+              },
+              "publishErrors": [],
+              "fp": "efe42e99feca808c"
+            }
+          },
+          "server-standin-light-medium-done": {
+            "status": "pass",
+            "detail": {
+              "light": {
+                "tasks": 2,
+                "claimedBySq": 2,
+                "claimsSent": 2,
+                "done": 2
+              },
+              "medium": {
+                "tasks": 2,
+                "claimedBySq": 2,
+                "claimsSent": 2,
+                "done": 2
+              }
+            }
+          },
+          "server-page-node-registered": {
+            "status": "pass",
+            "detail": {
+              "node": {
+                "profile": "browser",
+                "fp": "258acaaa7c5fe509"
+              }
+            }
+          },
+          "server-page-forbidden-claimed-0": {
+            "status": "pass",
+            "detail": {
+              "seconds": 60,
+              "claimedByPage": [],
+              "publishErrors": 0
+            }
+          },
+          "page-forbidden-claimed-0": {
+            "status": "pass",
+            "detail": {
+              "tasks": 8,
+              "seconds": 60,
+              "claimedTags": [],
+              "blocked": {
+                "6:plan-on-browser": 3,
+                "4:weight": 1,
+                "7:tier": 1,
+                "3:user-cards": 1,
+                "3:graph-cards": 1,
+                "1:card-source": 1,
+                "7:not-independent": 1,
+                "2:transcode": 1,
+                "1:code-version": 1
+              }
+            }
+          },
+          "page-light-medium-done": {
+            "status": "pass",
+            "detail": {
+              "completed": 15
+            }
+          }
+        }
+      },
+      "M7-A4": {
+        "status": "pass",
+        "parts": {
+          "server-anchors-by-browser": {
+            "status": "pass",
+            "detail": {
+              "perClip": {
+                "h1": [
+                  {
+                    "id": "snapshot:5cdd243e104",
+                    "state": "done",
+                    "byPage": true,
+                    "manifest": true,
+                    "snapAll": true,
+                    "frames": 60
+                  }
+                ],
+                "h2": [
+                  {
+                    "id": "snapshot:75ea413fc86",
+                    "state": "done",
+                    "byPage": true,
+                    "manifest": true,
+                    "snapAll": true,
+                    "frames": 60
+                  }
+                ],
+                "h3": [
+                  {
+                    "id": "snapshot:399eccda62f",
+                    "state": "done",
+                    "byPage": true,
+                    "manifest": true,
+                    "snapAll": true,
+                    "frames": 60
+                  }
+                ]
+              },
+              "pageSignal": {
+                "by": "node",
+                "at": 1791103532484,
+                "done": {
+                  "h2": 1,
+                  "h3": 1,
+                  "h1": 1
+                },
+                "worstSinceGateMs": 25530,
+                "completedIds": [
+                  "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                  "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                  "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59"
+                ]
+              }
+            }
+          },
+          "server-layer-map-points-to-browser": {
+            "status": "pass",
+            "detail": {
+              "v": 3,
+              "layerPoint": {
+                "h1": true,
+                "h2": true,
+                "h3": true
+              }
+            }
+          },
+          "page-anchors-done": {
+            "status": "pass",
+            "detail": {
+              "anchorRule": {
+                "h1": "priority-50",
+                "h2": "priority-50",
+                "h3": "priority-50"
+              },
+              "perClip": {
+                "h2": [
+                  {
+                    "id": "snapshot:75ea413fc86b654",
+                    "fullId": "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                    "at": 1791103516654,
+                    "sinceGateMs": 9908
+                  }
+                ],
+                "h3": [
+                  {
+                    "id": "snapshot:399eccda62f18b2",
+                    "fullId": "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                    "at": 1791103524517,
+                    "sinceGateMs": 17771
+                  }
+                ],
+                "h1": [
+                  {
+                    "id": "snapshot:5cdd243e10443ce",
+                    "fullId": "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59",
+                    "at": 1791103532276,
+                    "sinceGateMs": 25530
+                  }
+                ]
+              },
+              "worstSinceGateMs": 25530,
+              "l2Snapshots": 360,
+              "authoritative": true,
+              "diag": {
+                "available": true,
+                "state": "baking",
+                "reason": null,
+                "nodeId": "browser-page-1515a9082655",
+                "envFingerprint": "258acaaa7c5fe509",
+                "codeVersion": "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23",
+                "held": [
+                  "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:180-239"
+                ],
+                "counts": {
+                  "claimed": 4,
+                  "completed": 3,
+                  "dedup": 0,
+                  "failed": 0,
+                  "lost": 0,
+                  "released": {
+                    "yield": 0,
+                    "hidden": 0,
+                    "urgent": 0,
+                    "noSnapshot": 0,
+                    "other": 0,
+                    "raw": {},
+                    "total": 0
+                  },
+                  "blocked": {
+                    "6:plan-on-browser": 1
+                  },
+                  "bakeFrames": 180,
+                  "bakeMs": {
+                    "n": 180,
+                    "p50": 117,
+                    "p95": 167
+                  },
+                  "stageMs": {
+                    "p50": 115.79999999701977,
+                    "p95": 161.09999999403954,
+                    "pausedMs": 0
+                  },
+                  "chunksPushed": 360,
+                  "chunksSkipped": 0,
+                  "bytesPushed": 2566255,
+                  "uploadFailed": 0,
+                  "smallFrames": 180
+                },
+                "lastError": null
+              },
+              "assetHttp": {
+                "GET snap chunks": {
+                  "n": 180,
+                  "p50": 6,
+                  "p95": 8,
+                  "preP50": 0,
+                  "newSockets": 1
+                },
+                "GET px chunks": {
+                  "n": 180,
+                  "p50": 6,
+                  "p95": 8,
+                  "preP50": 1,
+                  "newSockets": 1
+                }
+              },
+              "ticketReqs": {
+                "conn:render": 1,
+                "asset:rw": 1
+              },
+              "phases": {
+                "lease": {
+                  "n": 181,
+                  "p50": 0,
+                  "p95": 0.09999999403953552
+                },
+                "rpc": {
+                  "n": 180,
+                  "p50": 89.39999999850988,
+                  "p95": 135.10000000149012
+                },
+                "gunzip": {
+                  "n": 180,
+                  "p50": 0.6999999955296516,
+                  "p95": 0.8999999985098839
+                },
+                "snap": {
+                  "n": 180,
+                  "p50": 24.400000005960464,
+                  "p95": 33.100000001490116
+                },
+                "px": {
+                  "n": 180,
+                  "p50": 24.600000001490116,
+                  "p95": 33.20000000298023
+                },
+                "push": {
+                  "n": 180,
+                  "p50": 24.700000002980232,
+                  "p95": 33.29999999701977
+                },
+                "l2": {
+                  "n": 180,
+                  "p50": 1.1000000014901161,
+                  "p95": 1.4000000059604645
+                },
+                "total": {
+                  "n": 180,
+                  "p50": 117,
+                  "p95": 166.79999999701977
+                }
+              },
+              "uploadMs": {
+                "requests": 1080,
+                "ticket": 61.999999947845936,
+                "fetch": 8952.10000000894,
+                "body": 356.600000038743
+              }
+            }
+          },
+          "page-within-30s": {
+            "status": "pass",
+            "detail": {
+              "worstSinceGateMs": 25530
+            }
+          },
+          "page-layer-env-browser": {
+            "status": "pass",
+            "detail": [
+              {
+                "clip": "light",
+                "fp": "baaae4fa0af898a3",
+                "ready": 0
+              },
+              {
+                "clip": "h3",
+                "fp": "258acaaa7c5fe509",
+                "ready": 60
+              },
+              {
+                "clip": "h2",
+                "fp": "258acaaa7c5fe509",
+                "ready": 60
+              },
+              {
+                "clip": "h1",
+                "fp": "258acaaa7c5fe509",
+                "ready": 60
+              }
+            ]
+          }
+        }
+      },
+      "M7-A5": {
+        "status": "pass",
+        "parts": {
+          "page-yield-on-drag": {
+            "status": "pass",
+            "detail": {
+              "drag": true,
+              "claimsDuring": 0,
+              "framesDuringDrag": 0,
+              "releases": [
+                {
+                  "reason": "yield-drag",
+                  "cause": "yield",
+                  "msAfterDrag": 1224
+                }
+              ],
+              "l2": {
+                "before": 360,
+                "after": 360
+              },
+              "claimsWithin500ms": 0,
+              "resumedAfterMs": 712,
+              "attemptsOnReclaim": null,
+              "authoritative": true
+            }
+          },
+          "page-attempts-unchanged": {
+            "status": "pass",
+            "detail": {
+              "attemptsOnReclaim": null,
+              "note": "放回不计失败（C2）；认领回包里的 attempts 由队列给"
+            }
+          },
+          "page-resume-after-500ms": {
+            "status": "pass",
+            "detail": {
+              "claimsWithin500ms": 0,
+              "resumedAfterMs": 712
+            }
+          }
+        }
+      },
+      "M7-A6": {
+        "status": "pass",
+        "parts": {
+          "play-yield": {
+            "status": "pass",
+            "detail": {
+              "claims": 0,
+              "frames": 0,
+              "releases": [
+                "yield-play"
+              ],
+              "releaseAfterPauseMs": null,
+              "lateReason": "yield-play",
+              "diagAfter": "idle"
+            }
+          },
+          "hidden-release-now": {
+            "status": "pass",
+            "detail": {
+              "hidden": true,
+              "releaseMs": -41,
+              "reason": "yield-hidden",
+              "cause": "hidden",
+              "progressBeforeRelease": false
+            }
+          },
+          "hidden-no-claims-then-resume": {
+            "status": "pass",
+            "detail": {
+              "claimsHidden": 0,
+              "resumed": true
+            }
+          },
+          "urgent-stops-at-frame-boundary": {
+            "status": "pass",
+            "detail": {
+              "releaseMs": 64,
+              "reason": "yield-urgent",
+              "cause": "urgent",
+              "framesAfter": 1
+            }
+          }
+        }
+      },
+      "M7-A7": {
+        "status": "pass",
+        "parts": {
+          "setup-single-stage": {
+            "status": "pass",
+            "detail": {
+              "single": false,
+              "low": false
+            }
+          },
+          "no-render-connection": {
+            "status": "pass",
+            "detail": {
+              "low": {
+                "render": 0,
+                "hello": 0,
+                "dual": false
+              },
+              "single": {
+                "render": 0,
+                "hello": 0,
+                "dual": false
+              },
+              "control": {
+                "isNode": true,
+                "render": 2
+              }
+            }
+          }
+        }
+      },
+      "M7-A8": {
+        "status": "pass",
+        "parts": {
+          "server-manifest-matches": {
+            "status": "pass",
+            "detail": {
+              "manifests": 3,
+              "bad": []
+            }
+          },
+          "server-one-env-per-layer": {
+            "status": "pass",
+            "detail": {
+              "h1": [
+                "258acaaa7c5fe509"
+              ],
+              "h2": [
+                "258acaaa7c5fe509"
+              ],
+              "h3": [
+                "258acaaa7c5fe509"
+              ]
+            }
+          },
+          "server-exactly-once-done": {
+            "status": "pass",
+            "detail": {
+              "doneEvents": 22,
+              "dup": []
+            }
+          },
+          "server-desktop-applied": {
+            "status": "pass",
+            "detail": {
+              "applied": 16,
+              "fetched": 240,
+              "applyErrors": 0
+            }
+          }
+        }
+      },
+      "M7-A9": {
+        "status": "pass",
+        "parts": {
+          "server-every-frame-has-px": {
+            "status": "pass",
+            "detail": [
+              {
+                "id": "snapshot:5cdd243e104",
+                "frames": 60,
+                "small": 60,
+                "pxAll": true
+              },
+              {
+                "id": "snapshot:75ea413fc86",
+                "frames": 60,
+                "small": 60,
+                "pxAll": true
+              },
+              {
+                "id": "snapshot:399eccda62f",
+                "frames": 60,
+                "small": 60,
+                "pxAll": true
+              }
+            ]
+          },
+          "page-low-memory-shows-small": {
+            "status": "pass",
+            "detail": {
+              "waitedForAllFrames": false,
+              "tier": "small",
+              "layers": [
+                {
+                  "clip": "h1",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 120,
+                  "placeholder": false
+                },
+                {
+                  "clip": "h2",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 120,
+                  "placeholder": false
+                },
+                {
+                  "clip": "h3",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 120,
+                  "placeholder": false
+                }
+              ]
+            }
+          }
+        }
+      },
+      "M7-A10": {
+        "status": "pass",
+        "parts": {
+          "server-idle-takeover": {
+            "status": "pass",
+            "detail": {
+              "clip": "z1",
+              "took": {
+                "lock": "baaae4fa0af898a3",
+                "pcDone": 0
+              },
+              "takeoverMs": 3021,
+              "lockHistory": [
+                {
+                  "envFingerprint": "258acaaa7c5fe509",
+                  "at": 1791104223411
+                },
+                {
+                  "envFingerprint": "baaae4fa0af898a3",
+                  "at": 1791104274369
+                }
+              ],
+              "plans": [
+                {
+                  "user": "B",
+                  "rev": 3,
+                  "clips": [
+                    "h1",
+                    "h2",
+                    "h3",
+                    "z1"
+                  ],
+                  "state": "done"
+                },
+                {
+                  "user": "B-low",
+                  "rev": 4,
+                  "clips": [
+                    "light"
+                  ],
+                  "state": "open"
+                },
+                {
+                  "user": "B",
+                  "rev": 3,
+                  "clips": [
+                    "h1",
+                    "h2",
+                    "h3",
+                    "light",
+                    "z1"
+                  ],
+                  "state": "failed"
+                },
+                {
+                  "user": "B",
+                  "rev": 4,
+                  "clips": [
+                    "h1",
+                    "h2",
+                    "h3",
+                    "z1"
+                  ],
+                  "state": "done"
+                }
+              ]
+            }
+          },
+          "server-race-split-promptly": {
+            "status": "pass",
+            "detail": {
+              "splitMs": 7645,
+              "limitMs": 90000
+            }
+          },
+          "server-race-done-in-time": {
+            "status": "pass",
+            "detail": {
+              "raceMs": 31740,
+              "limitMs": 180000,
+              "splitMs": 7645,
+              "timedOut": [],
+              "race": {
+                "w1": [
+                  "258acaaa7c5fe509"
+                ],
+                "w2": [
+                  "258acaaa7c5fe509"
+                ]
+              }
+            }
+          },
+          "server-race-one-env-per-card": {
+            "status": "pass",
+            "detail": {
+              "w1": [
+                "258acaaa7c5fe509"
+              ],
+              "w2": [
+                "258acaaa7c5fe509"
+              ],
+              "raceMs": 31740,
+              "envOf": {
+                "w1": [
+                  "browser"
+                ],
+                "w2": [
+                  "browser"
+                ]
+              }
+            }
+          },
+          "page-layer-switched": {
+            "status": "pass",
+            "detail": {
+              "clip": "z1",
+              "fp": "baaae4fa0af898a3",
+              "pcFp": "baaae4fa0af898a3",
+              "ready": 1,
+              "waitedMs": 2,
+              "limitMs": 240000
+            }
+          }
+        }
+      },
+      "M7-A11": {
+        "status": "pass",
+        "parts": {
+          "server-logs-describe": {
+            "status": "pass",
+            "detail": {
+              "found": false,
+              "where": [],
+              "ticketsKnown": 11,
+              "logLines": 131,
+              "urls": 11084
+            }
+          },
+          "page-render-ticket-expiry": {
+            "status": "pass",
+            "detail": {
+              "endedBy": {
+                "by": "creator",
+                "at": 1791104218584,
+                "closed": true,
+                "conns": 1,
+                "code": 1001,
+                "reason": null
+              },
+              "rebuilt": {
+                "welcomeMs": 1083,
+                "ticket": true
+              },
+              "newRenderConns": 1
+            }
+          },
+          "echo-only-promptcut.v1": {
+            "status": "pass",
+            "detail": [
+              {
+                "page": "b1",
+                "role": null,
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "b1",
+                "role": "render",
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "b1",
+                "role": "render",
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "low",
+                "role": null,
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "single",
+                "role": null,
+                "echoed": "promptcut.v1"
+              }
+            ]
+          },
+          "render-echo-only-promptcut.v1": {
+            "status": "pass",
+            "detail": [
+              {
+                "page": "b1",
+                "role": "render",
+                "echoed": "promptcut.v1"
+              },
+              {
+                "page": "b1",
+                "role": "render",
+                "echoed": "promptcut.v1"
+              }
+            ]
+          },
+          "ticket-not-in-url-or-page-diag": {
+            "status": "pass",
+            "detail": {
+              "urlLeaks": [],
+              "diagLeaks": [],
+              "ticketsSeen": 15
+            }
+          }
+        }
+      },
+      "M7-A12": {
+        "status": "pass",
+        "parts": {
+          "play-10s-longtasks-0": {
+            "status": "pass",
+            "detail": {
+              "count": 0,
+              "worst": []
+            }
+          },
+          "play-10s-claims-0": {
+            "status": "pass",
+            "detail": {
+              "claims": 0,
+              "heldAtStart": null
+            }
+          },
+          "bake-longtasks-0": {
+            "status": "pass",
+            "detail": {
+              "count": 0,
+              "worst": []
+            }
+          }
+        }
+      },
+      "W7": {
+        "status": "pass",
+        "parts": {
+          "cross-machine": {
+            "status": "pass",
+            "detail": {
+              "creator": "<test-PC>",
+              "node": "<test-laptop>",
+              "bind": "0.0.0.0",
+              "publicHost": "<test-PC-LAN>",
+              "timingAuthoritative": true
+            }
+          },
+          "M7-A1": {
+            "status": "pass",
+            "detail": {
+              "mirror": "M7-A1"
+            }
+          },
+          "M7-A2": {
+            "status": "pass",
+            "detail": {
+              "mirror": "M7-A2"
+            }
+          },
+          "M7-A3": {
+            "status": "pass",
+            "detail": {
+              "mirror": "M7-A3"
+            }
+          },
+          "A4-timing-on-laptop": {
+            "status": "pass",
+            "detail": {
+              "worstSinceGateMs": 25530
+            }
+          }
+        }
+      },
+      "D9": {
+        "status": "pass",
+        "parts": {
+          "browser-credential-as-pc-host": {
+            "status": "pass",
+            "detail": {
+              "as-pc": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              },
+              "as-host": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              },
+              "bindOtherBrowser": {
+                "hello": "error",
+                "reason": "forbidden"
+              },
+              "bindOtherDesktop": {
+                "hello": "error",
+                "reason": "forbidden"
+              },
+              "originalStillWorks": "queue.snapshot"
+            }
+          },
+          "nodeId-bound-to-userId": {
+            "status": "pass",
+            "detail": {
+              "as-pc": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              },
+              "as-host": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              },
+              "bindOtherBrowser": {
+                "hello": "error",
+                "reason": "forbidden"
+              },
+              "bindOtherDesktop": {
+                "hello": "error",
+                "reason": "forbidden"
+              },
+              "originalStillWorks": "queue.snapshot"
+            }
+          }
+        }
+      },
+      "D10": {
+        "status": "pass",
+        "parts": {
+          "welcome-fingerprint": {
+            "status": "pass",
+            "detail": {
+              "welcome": "3731ec3cf0cc69e9",
+              "expected": "3731ec3cf0cc69e9",
+              "selfReported": {
+                "type": "node.welcome",
+                "envFingerprint": "b4ed24465ac9233d",
+                "expected": "b4ed24465ac9233d"
+              },
+              "noEnvironment": {
+                "type": "error",
+                "reason": "bad-message"
+              }
+            }
+          },
+          "self-reported-ignored": {
+            "status": "pass",
+            "detail": {
+              "type": "node.welcome",
+              "envFingerprint": "b4ed24465ac9233d",
+              "expected": "b4ed24465ac9233d"
+            }
+          },
+          "browser-without-environment": {
+            "status": "pass",
+            "detail": {
+              "type": "error",
+              "reason": "bad-message"
+            }
+          },
+          "page-welcome-fp-equals-computed": {
+            "status": "pass",
+            "detail": {
+              "welcome": "258acaaa7c5fe509",
+              "computed": "258acaaa7c5fe509"
+            }
+          }
+        }
+      },
+      "D14": {
+        "status": "pass",
+        "parts": {
+          "non-chromium-refused": {
+            "status": "pass",
+            "detail": {
+              "firefox": {
+                "hello": "error",
+                "reason": "not-chromium",
+                "watchAfter": "not-registered"
+              },
+              "safari": {
+                "hello": "error",
+                "reason": "not-chromium",
+                "watchAfter": "not-registered"
+              },
+              "crios": {
+                "hello": "error",
+                "reason": "not-chromium",
+                "watchAfter": "not-registered"
+              }
+            }
+          }
+        }
+      },
+      "D1-D2-D12": {
+        "status": "pass",
+        "parts": {
+          "page-dual-split-supersede-layermap": {
+            "status": "pass",
+            "detail": {
+              "v": 3,
+              "perClip": {
+                "h1": {
+                  "pc": 5,
+                  "page": 5,
+                  "allDual": true,
+                  "pageHasBake": true,
+                  "ok": true,
+                  "winner": "page",
+                  "fullySuperseded": [
+                    "pc"
+                  ],
+                  "takenOverMidway": [],
+                  "badRanges": [],
+                  "reasons": [],
+                  "candidates": [
+                    "page",
+                    "pc"
+                  ]
+                },
+                "h2": {
+                  "pc": 5,
+                  "page": 5,
+                  "allDual": true,
+                  "pageHasBake": true,
+                  "ok": true,
+                  "winner": "page",
+                  "fullySuperseded": [
+                    "pc"
+                  ],
+                  "takenOverMidway": [],
+                  "badRanges": [],
+                  "reasons": [],
+                  "candidates": [
+                    "page",
+                    "pc"
+                  ]
+                },
+                "h3": {
+                  "pc": 5,
+                  "page": 5,
+                  "allDual": true,
+                  "pageHasBake": true,
+                  "ok": true,
+                  "winner": "page",
+                  "fullySuperseded": [
+                    "pc"
+                  ],
+                  "takenOverMidway": [],
+                  "badRanges": [],
+                  "reasons": [],
+                  "candidates": [
+                    "page",
+                    "pc"
+                  ]
+                }
+              },
+              "takenOverMidway": []
+            }
+          }
+        }
+      }
+    },
+    "timing": {
+      "authoritative": true,
+      "note": "带耗时门槛的项（A4 的 30 s、A5 的 500 ms、A12 的长任务）以笔记本为准"
+    },
+    "nodeHead": {
+      "probe": "m7-browser-probe",
+      "role": "node",
+      "startedAt": "2026-10-04T08:45:00.248Z",
+      "run": "m7r1004851007",
+      "timingAuthoritative": true,
+      "host": "<test-laptop>",
+      "pageNode": {
+        "isNode": true,
+        "waitedMs": 60000,
+        "diag": {
+          "available": true,
+          "state": "baking",
+          "reason": null,
+          "nodeId": "browser-page-1515a9082655",
+          "envFingerprint": "258acaaa7c5fe509",
+          "codeVersion": "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23",
+          "held": [
+            "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59"
+          ],
+          "counts": {
+            "claimed": 1,
+            "completed": 0,
+            "dedup": 0,
+            "failed": 0,
+            "lost": 0,
+            "released": {
+              "yield": 0,
+              "hidden": 0,
+              "urgent": 0,
+              "noSnapshot": 0,
+              "other": 0,
+              "raw": {},
+              "total": 0
+            },
+            "blocked": {
+              "6:plan-on-browser": 1
+            },
+            "bakeFrames": 8,
+            "bakeMs": {
+              "n": 8,
+              "p50": 105,
+              "p95": 212
+            },
+            "stageMs": {
+              "p50": 104.30000000447035,
+              "p95": 122.29999999701977,
+              "pausedMs": 0
+            },
+            "chunksPushed": 16,
+            "chunksSkipped": 0,
+            "bytesPushed": 113860,
+            "uploadFailed": 0,
+            "smallFrames": 8
+          },
+          "lastError": null
+        },
+        "welcomeFp": "258acaaa7c5fe509",
+        "computedFp": "258acaaa7c5fe509"
+      },
+      "pages": {
+        "b1": {
+          "gateSeen": true,
+          "conns": 3,
+          "render": 2,
+          "frames": 2201,
+          "pageErrors": []
+        },
+        "low": {
+          "gateSeen": false,
+          "conns": 1,
+          "render": 0,
+          "frames": 22,
+          "pageErrors": []
+        },
+        "single": {
+          "gateSeen": false,
+          "conns": 1,
+          "render": 0,
+          "frames": 4,
+          "pageErrors": []
+        }
+      }
+    },
+    "assumptions": [
+      "A-1 页面诊断钩子是编辑器页（顶层文档）上的 `window.__pcBrowserNode()`，同步回一个可结构化克隆的对象（契约第 7 节只给了名字）；没有这个函数 = 页面节点代码不在。改 `readNodeDiag`。",
+      "A-2 `state` 取值 `off` / `idle` / `busy` / `baking`（契约第 7 节原文），另有 `reason`（字符串，说明为什么 off）；`nodeId`、`envFingerprint`、`codeVersion` 平铺在顶层。改 `normalizeNodeDiag`。",
+      "A-3 持有的任务在 `held`（或 `tasks`、`holding`）：数组，元素是任务 id 字符串或带 `id` 的对象。改 `normalizeNodeDiag` 的 `heldOf`。",
+      "A-4 〔对账后，rq-m7-node 9774eda 报告「诊断形状」一节〕计数在 `counters`：`claims completed dedup failed lost bakedFrames`；放回在 `counters.released`，键是线上原因原文（`yield-play` `yield-drag` `yield-urgent` `yield-hidden` `no-snapshot` `offline` `unsupported`），按 `releaseCauseOf` 归类；节点侧过滤挡掉的在 `counters.blocked`（「规则号:原因」）；推送在 `upload`：`pushed skipped bytes failed reauth recheck`；小尺寸帧数在 `stage.smallFrames`。旧的猜测名（`counts`、`stats`、平铺）仍兜底。改 `countsOf`。",
+      "A-5 〔对账后〕页面侧一帧（含推送）的耗时在 `counters.frameMs { n, p50, p95 }`；舞台侧在 `stage.frameMs`、`stage.pausedMs`（被门挡住的时长，不进耗时）。改 `countsOf`。",
+      "A-6 最近一次错误在 `lastError`（字符串或 `{ message }`）。改 `normalizeNodeDiag`。",
+      "A-7 舞台侧的生成快照诊断在舞台文档的 `window.__pcStageDiag().bake`（C10 已有 `__pcStageDiag`，`bake` 这一项是假设）：`{ frames, frameMs: { p50, p95 }, pausedMs }`。改 `readStageBakeDiag`。",
+      "A-8 `task.release` 的放回原因（契约第 2 节、第 4.2 节只有 `no-snapshot` 一个写明了）：让路（拖动 / 播放）认 `yield` `busy` `interaction` `drag` `play`，页面隐藏认 `hidden` `visibility`，更急的后台活认 `urgent` `preempt` `measure` `catch-up`，取不到项目认 `no-snapshot`。认不出的记 `other`，判据里「放回 1 次」不看原因。改 `releaseCauseOf`。",
+      "A-9 C10 已有的诊断照旧可读：`__pcPreviewDiag()`（`dual`、`frontId`、`backWork`）、`__pcOnlineSnapshots()`（`tier`、`layers[].{clipId, resultKey, envFingerprint, ready}`）、`__pcPlanPublisher()`（`log`）；这些不是本适配处的假设，但页面节点若改了它们的形状，探针在同名函数里读。"
+    ],
+    "ms": 859393
+  },
+  "verification": {
+    "creatorActualExitCode": 0,
+    "totalItems": 17,
+    "totalParts": 59,
+    "actualNodeParts": 26,
+    "nodeActualExitCode": 3,
+    "nodeFails": [],
+    "nodePending": [
+      "M7-A8: 这一轮没有走到",
+      "W7: 这一轮没有走到",
+      "D9: 这一轮没有走到",
+      "D14: 这一轮没有走到",
+      "D1-D2-D12: 这一轮没有走到"
+    ],
+    "nodeScope": "The existing node-role summary includes five creator-only empty items. All 26 executed node parts passed. The complete creator summary executed all service parts and passed; no exit code was rewritten.",
+    "noForegroundCommandWindowsRequested": true,
+    "ownedServicesClosed": true,
+    "projectDeleted": true
+  },
+  "originalResultSha256": "1bdb76cfa6e864d990dcb73e257813a69461cf2cbb2024280ed9313c5a3aa8fb",
+  "nodeEvidence": {
+    "thread": "01a105f3-f710-7322-a95c-b7e4dad6e0e6",
+    "turn": "01a10616-416a-74e0-88e8-c45822a4a980",
+    "transferredResultZipSha256": "6a4518af96a3a487a7bcde8b8679938ca5ce1b5b60a436d83cfb502670d8a4b4",
+    "stdoutSha256": "9482e1f3ea847fb91c3a2d4aaeae61efd76ce0ccd4c37c5d8d7e1f4556519f76",
+    "stderrSha256": "944a58a39294c225c178369076cd7416df30e93ba077d7772fb83112c317cda0",
+    "result": {
+      "probe": "m7-browser-probe",
+      "role": "node",
+      "startedAt": "2026-10-04T08:45:00.248Z",
+      "run": "m7r1004851007",
+      "timingAuthoritative": true,
+      "host": "<test-laptop>",
+      "pageNode": {
+        "isNode": true,
+        "waitedMs": 60000,
+        "diag": {
+          "available": true,
+          "state": "baking",
+          "reason": null,
+          "nodeId": "browser-page-1515a9082655",
+          "envFingerprint": "258acaaa7c5fe509",
+          "codeVersion": "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23",
+          "held": [
+            "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59"
+          ],
+          "counts": {
+            "claimed": 1,
+            "completed": 0,
+            "dedup": 0,
+            "failed": 0,
+            "lost": 0,
+            "released": {
+              "yield": 0,
+              "hidden": 0,
+              "urgent": 0,
+              "noSnapshot": 0,
+              "other": 0,
+              "raw": {},
+              "total": 0
+            },
+            "blocked": {
+              "6:plan-on-browser": 1
+            },
+            "bakeFrames": 8,
+            "bakeMs": {
+              "n": 8,
+              "p50": 105,
+              "p95": 212
+            },
+            "stageMs": {
+              "p50": 104.30000000447035,
+              "p95": 122.29999999701977,
+              "pausedMs": 0
+            },
+            "chunksPushed": 16,
+            "chunksSkipped": 0,
+            "bytesPushed": 113860,
+            "uploadFailed": 0,
+            "smallFrames": 8
+          },
+          "lastError": null
+        },
+        "welcomeFp": "258acaaa7c5fe509",
+        "computedFp": "258acaaa7c5fe509"
+      },
+      "pages": {
+        "b1": {
+          "gateSeen": true,
+          "conns": 3,
+          "render": 2,
+          "frames": 2201,
+          "pageErrors": []
+        },
+        "low": {
+          "gateSeen": false,
+          "conns": 1,
+          "render": 0,
+          "frames": 22,
+          "pageErrors": []
+        },
+        "single": {
+          "gateSeen": false,
+          "conns": 1,
+          "render": 0,
+          "frames": 4,
+          "pageErrors": []
+        }
+      },
+      "ok": false,
+      "fails": [],
+      "pending": [
+        "M7-A8: 这一轮没有走到",
+        "W7: 这一轮没有走到",
+        "D9: 这一轮没有走到",
+        "D14: 这一轮没有走到",
+        "D1-D2-D12: 这一轮没有走到"
+      ],
+      "items": {
+        "M7-A1": {
+          "status": "pass",
+          "parts": {
+            "page": {
+              "status": "pass",
+              "detail": {
+                "b1": 0,
+                "low": 0,
+                "single": 0,
+                "aTasks": 14
+              }
+            }
+          }
+        },
+        "M7-A2": {
+          "status": "pass",
+          "parts": {
+            "page-hello-profile-browser": {
+              "status": "pass",
+              "detail": {
+                "at": 1791103507100,
+                "dir": "sent",
+                "conn": "8832.84",
+                "type": "node.hello",
+                "id": null,
+                "reqId": null,
+                "profile": "browser",
+                "nodeId": "browser-page-1515a9082655",
+                "hasEnvironment": true,
+                "maxConcurrent": 1,
+                "codeVersions": [
+                  "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23"
+                ]
+              }
+            }
+          }
+        },
+        "M7-A3": {
+          "status": "pass",
+          "parts": {
+            "page-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "tasks": 8,
+                "seconds": 60,
+                "claimedTags": [],
+                "blocked": {
+                  "6:plan-on-browser": 3,
+                  "4:weight": 1,
+                  "7:tier": 1,
+                  "3:user-cards": 1,
+                  "3:graph-cards": 1,
+                  "1:card-source": 1,
+                  "7:not-independent": 1,
+                  "2:transcode": 1,
+                  "1:code-version": 1
+                }
+              }
+            },
+            "page-light-medium-done": {
+              "status": "pass",
+              "detail": {
+                "completed": 15
+              }
+            }
+          }
+        },
+        "M7-A4": {
+          "status": "pass",
+          "parts": {
+            "page-anchors-done": {
+              "status": "pass",
+              "detail": {
+                "anchorRule": {
+                  "h1": "priority-50",
+                  "h2": "priority-50",
+                  "h3": "priority-50"
+                },
+                "perClip": {
+                  "h2": [
+                    {
+                      "id": "snapshot:75ea413fc86b654",
+                      "fullId": "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                      "at": 1791103516654,
+                      "sinceGateMs": 9908
+                    }
+                  ],
+                  "h3": [
+                    {
+                      "id": "snapshot:399eccda62f18b2",
+                      "fullId": "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                      "at": 1791103524517,
+                      "sinceGateMs": 17771
+                    }
+                  ],
+                  "h1": [
+                    {
+                      "id": "snapshot:5cdd243e10443ce",
+                      "fullId": "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59",
+                      "at": 1791103532276,
+                      "sinceGateMs": 25530
+                    }
+                  ]
+                },
+                "worstSinceGateMs": 25530,
+                "l2Snapshots": 360,
+                "authoritative": true,
+                "diag": {
+                  "available": true,
+                  "state": "baking",
+                  "reason": null,
+                  "nodeId": "browser-page-1515a9082655",
+                  "envFingerprint": "258acaaa7c5fe509",
+                  "codeVersion": "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23",
+                  "held": [
+                    "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:180-239"
+                  ],
+                  "counts": {
+                    "claimed": 4,
+                    "completed": 3,
+                    "dedup": 0,
+                    "failed": 0,
+                    "lost": 0,
+                    "released": {
+                      "yield": 0,
+                      "hidden": 0,
+                      "urgent": 0,
+                      "noSnapshot": 0,
+                      "other": 0,
+                      "raw": {},
+                      "total": 0
+                    },
+                    "blocked": {
+                      "6:plan-on-browser": 1
+                    },
+                    "bakeFrames": 180,
+                    "bakeMs": {
+                      "n": 180,
+                      "p50": 117,
+                      "p95": 167
+                    },
+                    "stageMs": {
+                      "p50": 115.79999999701977,
+                      "p95": 161.09999999403954,
+                      "pausedMs": 0
+                    },
+                    "chunksPushed": 360,
+                    "chunksSkipped": 0,
+                    "bytesPushed": 2566255,
+                    "uploadFailed": 0,
+                    "smallFrames": 180
+                  },
+                  "lastError": null
+                },
+                "assetHttp": {
+                  "GET snap chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 8,
+                    "preP50": 0,
+                    "newSockets": 1
+                  },
+                  "GET px chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 8,
+                    "preP50": 1,
+                    "newSockets": 1
+                  }
+                },
+                "ticketReqs": {
+                  "conn:render": 1,
+                  "asset:rw": 1
+                },
+                "phases": {
+                  "lease": {
+                    "n": 181,
+                    "p50": 0,
+                    "p95": 0.09999999403953552
+                  },
+                  "rpc": {
+                    "n": 180,
+                    "p50": 89.39999999850988,
+                    "p95": 135.10000000149012
+                  },
+                  "gunzip": {
+                    "n": 180,
+                    "p50": 0.6999999955296516,
+                    "p95": 0.8999999985098839
+                  },
+                  "snap": {
+                    "n": 180,
+                    "p50": 24.400000005960464,
+                    "p95": 33.100000001490116
+                  },
+                  "px": {
+                    "n": 180,
+                    "p50": 24.600000001490116,
+                    "p95": 33.20000000298023
+                  },
+                  "push": {
+                    "n": 180,
+                    "p50": 24.700000002980232,
+                    "p95": 33.29999999701977
+                  },
+                  "l2": {
+                    "n": 180,
+                    "p50": 1.1000000014901161,
+                    "p95": 1.4000000059604645
+                  },
+                  "total": {
+                    "n": 180,
+                    "p50": 117,
+                    "p95": 166.79999999701977
+                  }
+                },
+                "uploadMs": {
+                  "requests": 1080,
+                  "ticket": 61.999999947845936,
+                  "fetch": 8952.10000000894,
+                  "body": 356.600000038743
+                }
+              }
+            },
+            "page-within-30s": {
+              "status": "pass",
+              "detail": {
+                "worstSinceGateMs": 25530
+              }
+            },
+            "page-layer-env-browser": {
+              "status": "pass",
+              "detail": [
+                {
+                  "clip": "light",
+                  "fp": "baaae4fa0af898a3",
+                  "ready": 0
+                },
+                {
+                  "clip": "h3",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h2",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h1",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                }
+              ]
+            }
+          }
+        },
+        "M7-A5": {
+          "status": "pass",
+          "parts": {
+            "page-yield-on-drag": {
+              "status": "pass",
+              "detail": {
+                "drag": true,
+                "claimsDuring": 0,
+                "framesDuringDrag": 0,
+                "releases": [
+                  {
+                    "reason": "yield-drag",
+                    "cause": "yield",
+                    "msAfterDrag": 1224
+                  }
+                ],
+                "l2": {
+                  "before": 360,
+                  "after": 360
+                },
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 712,
+                "attemptsOnReclaim": null,
+                "authoritative": true
+              }
+            },
+            "page-attempts-unchanged": {
+              "status": "pass",
+              "detail": {
+                "attemptsOnReclaim": null,
+                "note": "放回不计失败（C2）；认领回包里的 attempts 由队列给"
+              }
+            },
+            "page-resume-after-500ms": {
+              "status": "pass",
+              "detail": {
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 712
+              }
+            }
+          }
+        },
+        "M7-A6": {
+          "status": "pass",
+          "parts": {
+            "play-yield": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "frames": 0,
+                "releases": [
+                  "yield-play"
+                ],
+                "releaseAfterPauseMs": null,
+                "lateReason": "yield-play",
+                "diagAfter": "idle"
+              }
+            },
+            "hidden-release-now": {
+              "status": "pass",
+              "detail": {
+                "hidden": true,
+                "releaseMs": -41,
+                "reason": "yield-hidden",
+                "cause": "hidden",
+                "progressBeforeRelease": false
+              }
+            },
+            "hidden-no-claims-then-resume": {
+              "status": "pass",
+              "detail": {
+                "claimsHidden": 0,
+                "resumed": true
+              }
+            },
+            "urgent-stops-at-frame-boundary": {
+              "status": "pass",
+              "detail": {
+                "releaseMs": 64,
+                "reason": "yield-urgent",
+                "cause": "urgent",
+                "framesAfter": 1
+              }
+            }
+          }
+        },
+        "M7-A7": {
+          "status": "pass",
+          "parts": {
+            "setup-single-stage": {
+              "status": "pass",
+              "detail": {
+                "single": false,
+                "low": false
+              }
+            },
+            "no-render-connection": {
+              "status": "pass",
+              "detail": {
+                "low": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "single": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "control": {
+                  "isNode": true,
+                  "render": 2
+                }
+              }
+            }
+          }
+        },
+        "M7-A8": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "M7-A9": {
+          "status": "pass",
+          "parts": {
+            "page-low-memory-shows-small": {
+              "status": "pass",
+              "detail": {
+                "waitedForAllFrames": false,
+                "tier": "small",
+                "layers": [
+                  {
+                    "clip": "h1",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h2",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h3",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "M7-A10": {
+          "status": "pass",
+          "parts": {
+            "page-layer-switched": {
+              "status": "pass",
+              "detail": {
+                "clip": "z1",
+                "fp": "baaae4fa0af898a3",
+                "pcFp": "baaae4fa0af898a3",
+                "ready": 1,
+                "waitedMs": 2,
+                "limitMs": 240000
+              }
+            }
+          }
+        },
+        "M7-A11": {
+          "status": "pass",
+          "parts": {
+            "page-render-ticket-expiry": {
+              "status": "pass",
+              "detail": {
+                "endedBy": {
+                  "by": "creator",
+                  "at": 1791104218584,
+                  "closed": true,
+                  "conns": 1,
+                  "code": 1001,
+                  "reason": null
+                },
+                "rebuilt": {
+                  "welcomeMs": 1083,
+                  "ticket": true
+                },
+                "newRenderConns": 1
+              }
+            },
+            "echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "low",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "single",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "render-echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "ticket-not-in-url-or-page-diag": {
+              "status": "pass",
+              "detail": {
+                "urlLeaks": [],
+                "diagLeaks": [],
+                "ticketsSeen": 15
+              }
+            }
+          }
+        },
+        "M7-A12": {
+          "status": "pass",
+          "parts": {
+            "play-10s-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            },
+            "play-10s-claims-0": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "heldAtStart": null
+              }
+            },
+            "bake-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            }
+          }
+        },
+        "W7": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D9": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D10": {
+          "status": "pass",
+          "parts": {
+            "page-welcome-fp-equals-computed": {
+              "status": "pass",
+              "detail": {
+                "welcome": "258acaaa7c5fe509",
+                "computed": "258acaaa7c5fe509"
+              }
+            }
+          }
+        },
+        "D14": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D1-D2-D12": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        }
+      },
+      "head": {
+        "probe": "m7-browser-probe",
+        "role": "node",
+        "startedAt": "2026-10-04T08:45:00.248Z",
+        "run": "m7r1004851007",
+        "timingAuthoritative": true,
+        "host": "<test-laptop>",
+        "pageNode": {
+          "isNode": true,
+          "waitedMs": 60000,
+          "diag": {
+            "available": true,
+            "state": "baking",
+            "reason": null,
+            "nodeId": "browser-page-1515a9082655",
+            "envFingerprint": "258acaaa7c5fe509",
+            "codeVersion": "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23",
+            "held": [
+              "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59"
+            ],
+            "counts": {
+              "claimed": 1,
+              "completed": 0,
+              "dedup": 0,
+              "failed": 0,
+              "lost": 0,
+              "released": {
+                "yield": 0,
+                "hidden": 0,
+                "urgent": 0,
+                "noSnapshot": 0,
+                "other": 0,
+                "raw": {},
+                "total": 0
+              },
+              "blocked": {
+                "6:plan-on-browser": 1
+              },
+              "bakeFrames": 8,
+              "bakeMs": {
+                "n": 8,
+                "p50": 105,
+                "p95": 212
+              },
+              "stageMs": {
+                "p50": 104.30000000447035,
+                "p95": 122.29999999701977,
+                "pausedMs": 0
+              },
+              "chunksPushed": 16,
+              "chunksSkipped": 0,
+              "bytesPushed": 113860,
+              "uploadFailed": 0,
+              "smallFrames": 8
+            },
+            "lastError": null
+          },
+          "welcomeFp": "258acaaa7c5fe509",
+          "computedFp": "258acaaa7c5fe509"
+        },
+        "pages": {
+          "b1": {
+            "gateSeen": true,
+            "conns": 3,
+            "render": 2,
+            "frames": 2201,
+            "pageErrors": []
+          },
+          "low": {
+            "gateSeen": false,
+            "conns": 1,
+            "render": 0,
+            "frames": 22,
+            "pageErrors": []
+          },
+          "single": {
+            "gateSeen": false,
+            "conns": 1,
+            "render": 0,
+            "frames": 4,
+            "pageErrors": []
+          }
+        }
+      },
+      "ms": 807325
+    },
+    "receipt": {
+      "targetCommit": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+      "role": "node",
+      "prepareOnly": false,
+      "timingAuthoritative": true,
+      "hostname": "<test-laptop>",
+      "startedAt": "2026-10-04T08:45:00.090Z",
+      "nodeVersion": "v24.19.0",
+      "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+      "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "basePort": 5590,
+      "status": "pending",
+      "actualExitCode": 3,
+      "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/m7-browser-probe.mjs --role node --run m7r1004851007 --base-port 5590 --out <test-temp>\\pc-reopen-w7-node-81afefecfebc426d8658ab30707c2552\\probe --keep-temp --timeout-min 120 --coord http://<test-PC-LAN>:5456 --timing-authoritative",
+      "fails": [],
+      "pending": [
+        "M7-A8: 这一轮没有走到",
+        "W7: 这一轮没有走到",
+        "D9: 这一轮没有走到",
+        "D14: 这一轮没有走到",
+        "D1-D2-D12: 这一轮没有走到"
+      ],
+      "installed": false,
+      "userRuntimeModified": false,
+      "hostNetworkChanged": false,
+      "run": "m7r1004851007",
+      "coord": "http://<test-PC-LAN>:5456",
+      "expiresAt": "2026-10-04T11:40:35.727Z",
+      "ownedProbePid": 27972,
+      "items": {
+        "M7-A1": {
+          "status": "pass",
+          "parts": {
+            "page": {
+              "status": "pass",
+              "detail": {
+                "b1": 0,
+                "low": 0,
+                "single": 0,
+                "aTasks": 14
+              }
+            }
+          }
+        },
+        "M7-A2": {
+          "status": "pass",
+          "parts": {
+            "page-hello-profile-browser": {
+              "status": "pass",
+              "detail": {
+                "at": 1791103507100,
+                "dir": "sent",
+                "conn": "8832.84",
+                "type": "node.hello",
+                "id": null,
+                "reqId": null,
+                "profile": "browser",
+                "nodeId": "browser-page-1515a9082655",
+                "hasEnvironment": true,
+                "maxConcurrent": 1,
+                "codeVersions": [
+                  "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23"
+                ]
+              }
+            }
+          }
+        },
+        "M7-A3": {
+          "status": "pass",
+          "parts": {
+            "page-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "tasks": 8,
+                "seconds": 60,
+                "claimedTags": [],
+                "blocked": {
+                  "6:plan-on-browser": 3,
+                  "4:weight": 1,
+                  "7:tier": 1,
+                  "3:user-cards": 1,
+                  "3:graph-cards": 1,
+                  "1:card-source": 1,
+                  "7:not-independent": 1,
+                  "2:transcode": 1,
+                  "1:code-version": 1
+                }
+              }
+            },
+            "page-light-medium-done": {
+              "status": "pass",
+              "detail": {
+                "completed": 15
+              }
+            }
+          }
+        },
+        "M7-A4": {
+          "status": "pass",
+          "parts": {
+            "page-anchors-done": {
+              "status": "pass",
+              "detail": {
+                "anchorRule": {
+                  "h1": "priority-50",
+                  "h2": "priority-50",
+                  "h3": "priority-50"
+                },
+                "perClip": {
+                  "h2": [
+                    {
+                      "id": "snapshot:75ea413fc86b654",
+                      "fullId": "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                      "at": 1791103516654,
+                      "sinceGateMs": 9908
+                    }
+                  ],
+                  "h3": [
+                    {
+                      "id": "snapshot:399eccda62f18b2",
+                      "fullId": "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                      "at": 1791103524517,
+                      "sinceGateMs": 17771
+                    }
+                  ],
+                  "h1": [
+                    {
+                      "id": "snapshot:5cdd243e10443ce",
+                      "fullId": "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59",
+                      "at": 1791103532276,
+                      "sinceGateMs": 25530
+                    }
+                  ]
+                },
+                "worstSinceGateMs": 25530,
+                "l2Snapshots": 360,
+                "authoritative": true,
+                "diag": {
+                  "available": true,
+                  "state": "baking",
+                  "reason": null,
+                  "nodeId": "browser-page-1515a9082655",
+                  "envFingerprint": "258acaaa7c5fe509",
+                  "codeVersion": "33325e30724f412244640d59abb5b5007eb87cd44f2f2acc52139fe835c19c23",
+                  "held": [
+                    "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:180-239"
+                  ],
+                  "counts": {
+                    "claimed": 4,
+                    "completed": 3,
+                    "dedup": 0,
+                    "failed": 0,
+                    "lost": 0,
+                    "released": {
+                      "yield": 0,
+                      "hidden": 0,
+                      "urgent": 0,
+                      "noSnapshot": 0,
+                      "other": 0,
+                      "raw": {},
+                      "total": 0
+                    },
+                    "blocked": {
+                      "6:plan-on-browser": 1
+                    },
+                    "bakeFrames": 180,
+                    "bakeMs": {
+                      "n": 180,
+                      "p50": 117,
+                      "p95": 167
+                    },
+                    "stageMs": {
+                      "p50": 115.79999999701977,
+                      "p95": 161.09999999403954,
+                      "pausedMs": 0
+                    },
+                    "chunksPushed": 360,
+                    "chunksSkipped": 0,
+                    "bytesPushed": 2566255,
+                    "uploadFailed": 0,
+                    "smallFrames": 180
+                  },
+                  "lastError": null
+                },
+                "assetHttp": {
+                  "GET snap chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 8,
+                    "preP50": 0,
+                    "newSockets": 1
+                  },
+                  "GET px chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 8,
+                    "preP50": 1,
+                    "newSockets": 1
+                  }
+                },
+                "ticketReqs": {
+                  "conn:render": 1,
+                  "asset:rw": 1
+                },
+                "phases": {
+                  "lease": {
+                    "n": 181,
+                    "p50": 0,
+                    "p95": 0.09999999403953552
+                  },
+                  "rpc": {
+                    "n": 180,
+                    "p50": 89.39999999850988,
+                    "p95": 135.10000000149012
+                  },
+                  "gunzip": {
+                    "n": 180,
+                    "p50": 0.6999999955296516,
+                    "p95": 0.8999999985098839
+                  },
+                  "snap": {
+                    "n": 180,
+                    "p50": 24.400000005960464,
+                    "p95": 33.100000001490116
+                  },
+                  "px": {
+                    "n": 180,
+                    "p50": 24.600000001490116,
+                    "p95": 33.20000000298023
+                  },
+                  "push": {
+                    "n": 180,
+                    "p50": 24.700000002980232,
+                    "p95": 33.29999999701977
+                  },
+                  "l2": {
+                    "n": 180,
+                    "p50": 1.1000000014901161,
+                    "p95": 1.4000000059604645
+                  },
+                  "total": {
+                    "n": 180,
+                    "p50": 117,
+                    "p95": 166.79999999701977
+                  }
+                },
+                "uploadMs": {
+                  "requests": 1080,
+                  "ticket": 61.999999947845936,
+                  "fetch": 8952.10000000894,
+                  "body": 356.600000038743
+                }
+              }
+            },
+            "page-within-30s": {
+              "status": "pass",
+              "detail": {
+                "worstSinceGateMs": 25530
+              }
+            },
+            "page-layer-env-browser": {
+              "status": "pass",
+              "detail": [
+                {
+                  "clip": "light",
+                  "fp": "baaae4fa0af898a3",
+                  "ready": 0
+                },
+                {
+                  "clip": "h3",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h2",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h1",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                }
+              ]
+            }
+          }
+        },
+        "M7-A5": {
+          "status": "pass",
+          "parts": {
+            "page-yield-on-drag": {
+              "status": "pass",
+              "detail": {
+                "drag": true,
+                "claimsDuring": 0,
+                "framesDuringDrag": 0,
+                "releases": [
+                  {
+                    "reason": "yield-drag",
+                    "cause": "yield",
+                    "msAfterDrag": 1224
+                  }
+                ],
+                "l2": {
+                  "before": 360,
+                  "after": 360
+                },
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 712,
+                "attemptsOnReclaim": null,
+                "authoritative": true
+              }
+            },
+            "page-attempts-unchanged": {
+              "status": "pass",
+              "detail": {
+                "attemptsOnReclaim": null,
+                "note": "放回不计失败（C2）；认领回包里的 attempts 由队列给"
+              }
+            },
+            "page-resume-after-500ms": {
+              "status": "pass",
+              "detail": {
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 712
+              }
+            }
+          }
+        },
+        "M7-A6": {
+          "status": "pass",
+          "parts": {
+            "play-yield": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "frames": 0,
+                "releases": [
+                  "yield-play"
+                ],
+                "releaseAfterPauseMs": null,
+                "lateReason": "yield-play",
+                "diagAfter": "idle"
+              }
+            },
+            "hidden-release-now": {
+              "status": "pass",
+              "detail": {
+                "hidden": true,
+                "releaseMs": -41,
+                "reason": "yield-hidden",
+                "cause": "hidden",
+                "progressBeforeRelease": false
+              }
+            },
+            "hidden-no-claims-then-resume": {
+              "status": "pass",
+              "detail": {
+                "claimsHidden": 0,
+                "resumed": true
+              }
+            },
+            "urgent-stops-at-frame-boundary": {
+              "status": "pass",
+              "detail": {
+                "releaseMs": 64,
+                "reason": "yield-urgent",
+                "cause": "urgent",
+                "framesAfter": 1
+              }
+            }
+          }
+        },
+        "M7-A7": {
+          "status": "pass",
+          "parts": {
+            "setup-single-stage": {
+              "status": "pass",
+              "detail": {
+                "single": false,
+                "low": false
+              }
+            },
+            "no-render-connection": {
+              "status": "pass",
+              "detail": {
+                "low": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "single": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "control": {
+                  "isNode": true,
+                  "render": 2
+                }
+              }
+            }
+          }
+        },
+        "M7-A8": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "M7-A9": {
+          "status": "pass",
+          "parts": {
+            "page-low-memory-shows-small": {
+              "status": "pass",
+              "detail": {
+                "waitedForAllFrames": false,
+                "tier": "small",
+                "layers": [
+                  {
+                    "clip": "h1",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h2",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h3",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "M7-A10": {
+          "status": "pass",
+          "parts": {
+            "page-layer-switched": {
+              "status": "pass",
+              "detail": {
+                "clip": "z1",
+                "fp": "baaae4fa0af898a3",
+                "pcFp": "baaae4fa0af898a3",
+                "ready": 1,
+                "waitedMs": 2,
+                "limitMs": 240000
+              }
+            }
+          }
+        },
+        "M7-A11": {
+          "status": "pass",
+          "parts": {
+            "page-render-ticket-expiry": {
+              "status": "pass",
+              "detail": {
+                "endedBy": {
+                  "by": "creator",
+                  "at": 1791104218584,
+                  "closed": true,
+                  "conns": 1,
+                  "code": 1001,
+                  "reason": null
+                },
+                "rebuilt": {
+                  "welcomeMs": 1083,
+                  "ticket": true
+                },
+                "newRenderConns": 1
+              }
+            },
+            "echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "low",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "single",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "render-echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "ticket-not-in-url-or-page-diag": {
+              "status": "pass",
+              "detail": {
+                "urlLeaks": [],
+                "diagLeaks": [],
+                "ticketsSeen": 15
+              }
+            }
+          }
+        },
+        "M7-A12": {
+          "status": "pass",
+          "parts": {
+            "play-10s-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            },
+            "play-10s-claims-0": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "heldAtStart": null
+              }
+            },
+            "bake-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            }
+          }
+        },
+        "W7": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D9": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D10": {
+          "status": "pass",
+          "parts": {
+            "page-welcome-fp-equals-computed": {
+              "status": "pass",
+              "detail": {
+                "welcome": "258acaaa7c5fe509",
+                "computed": "258acaaa7c5fe509"
+              }
+            }
+          }
+        },
+        "D14": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D1-D2-D12": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        }
+      },
+      "ok": false,
+      "rawLogSha256": {
+        "stdout.log": "9482e1f3ea847fb91c3a2d4aaeae61efd76ce0ccd4c37c5d8d7e1f4556519f76",
+        "stderr.log": "944a58a39294c225c178369076cd7416df30e93ba077d7772fb83112c317cda0"
+      },
+      "finishedAt": "2026-10-04T08:58:27.693Z"
+    },
+    "rawManifest": [
+      {
+        "file": "receipt.json",
+        "sha256": "abb49806dcea4126504d1731af4d82c307e4d59efd72f49e73397d24b3cbfeb7"
+      },
+      {
+        "file": "result.json",
+        "sha256": "365cef4a03dca474540801c56d0ed3f2eca87b170aa0fd74e2c19d5bbc8d1106"
+      },
+      {
+        "file": "runner-error.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "runner.log",
+        "sha256": "dca55898a2474f258537f084e44f0f854cbd8eb91966daaaba8db0838dbe4132"
+      },
+      {
+        "file": "stderr.log",
+        "sha256": "944a58a39294c225c178369076cd7416df30e93ba077d7772fb83112c317cda0"
+      },
+      {
+        "file": "stdout.log",
+        "sha256": "9482e1f3ea847fb91c3a2d4aaeae61efd76ce0ccd4c37c5d8d7e1f4556519f76"
+      }
+    ]
+  }
+}

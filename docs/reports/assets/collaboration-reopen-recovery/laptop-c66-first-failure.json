@@ -1,0 +1,546 @@
+{
+  "kind": "real-cross-device-c66-first-wave",
+  "source": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+  "run": "c66w1mutlujmg",
+  "creatorActualExitCode": 1,
+  "observerActualExitCode": 1,
+  "hostActualExitCode": 0,
+  "authority": "laptop",
+  "observer": {
+    "installMs": 472,
+    "hmrMs": 1989,
+    "remeasureMs": 6187,
+    "via": "record",
+    "keyBefore": "12800c1e5177ed",
+    "keyAfter": "82ddadb5f8391",
+    "firstShown": {
+      "tier": "small",
+      "idx": 75,
+      "w": 800
+    },
+    "original": {
+      "idx": 75,
+      "w": 1920
+    },
+    "swapSamples": {
+      "n": 1866,
+      "black": 0,
+      "idxSeen": [
+        75
+      ],
+      "srcs": [
+        "2df3fddf",
+        "5fcda980"
+      ],
+      "smallBeforeSwap": 1857,
+      "spanMs": 16304,
+      "coversSwap": true,
+      "mode": "covered",
+      "swapGapMs": 16173,
+      "sampleIntervalMs": 8
+    },
+    "fails": [
+      "[observer] remeasure-over-5s(6187)"
+    ]
+  },
+  "host": {
+    "claimed": 2,
+    "completed": 2,
+    "doneCounts": {
+      "tasks": 8,
+      "exactlyOnce": 8,
+      "missing": 0,
+      "duplicate": 0
+    },
+    "artifacts": {
+      "manifests": 8,
+      "missingManifests": 0,
+      "blocks": 480,
+      "missingBlocks": []
+    },
+    "cardV2": {
+      "ms": 5,
+      "rev": 2,
+      "inOverlay": true,
+      "baseUntouched": null
+    },
+    "exitCode": 0,
+    "fails": []
+  },
+  "deleted": true,
+  "rawLogSha256": {
+    "stdout.log": "d7a10496a35bc3e72eac3d840f630fc416d02d9dbcb28b04ae2c3d22ef848206",
+    "stderr.log": "c132313400898dfadd6533e8284804b734504ea1fcc33556ff992a20482692f4"
+  },
+  "status": "fail",
+  "diagnosticHypothesis": "not yet verified",
+  "observerRawResult": {
+    "role": "observer",
+    "run": "c66w1mutlujmg",
+    "port": 5590,
+    "cardInRepoBefore": false,
+    "env": {
+      "PROMPTCUT_QUEUE_NODE": null,
+      "PROMPTCUT_SHARED_CONFIG": null
+    },
+    "frameQueue": {
+      "nodes": 0,
+      "starting": false,
+      "profile": "pc"
+    },
+    "joinMs": 862,
+    "projectTiers": {
+      "original": "5fcda980be92f2d58b9e45c0cbcbfe76da88db43a80382c3b5e7b2ba059c30eb",
+      "small": "2df3fddf1f78637758fd8525d20396a1a926ce4c336b8cdd6e4f2bfa24a05e1d"
+    },
+    "firstShown": {
+      "tier": "small",
+      "idx": 75,
+      "w": 800
+    },
+    "originalAtFirstFrame": {
+      "paused": {
+        "at": 1791105567795,
+        "skipped": null,
+        "originalComplete": false,
+        "originalReceived": 2,
+        "originalChunks": 6
+      },
+      "resumedBefore": false
+    },
+    "smallIdxSource": "stable",
+    "smallIdx": 75,
+    "smallStableBeforeSwap": true,
+    "swapWaitMs": 15824,
+    "original": {
+      "idx": 75,
+      "w": 1920
+    },
+    "tierSequence": [
+      {
+        "ms": 888,
+        "tier": "none",
+        "idx": null,
+        "w": null,
+        "ct": null
+      },
+      {
+        "ms": 12434,
+        "tier": "small",
+        "idx": 75,
+        "w": 800,
+        "ct": 2.5
+      },
+      {
+        "ms": 28607,
+        "tier": "original",
+        "idx": 75,
+        "w": 1920,
+        "ct": 2.5
+      }
+    ],
+    "lowReadyState": {
+      "samples": 0,
+      "presentedBefore": 0,
+      "withShot": 0,
+      "shots": 0,
+      "shotLuma": null,
+      "srcs": [],
+      "windowsMs": []
+    },
+    "swapMode": "covered",
+    "swapSamples": {
+      "n": 1866,
+      "black": 0,
+      "idxSeen": [
+        75
+      ],
+      "srcs": [
+        "2df3fddf",
+        "5fcda980"
+      ],
+      "smallBeforeSwap": 1857,
+      "spanMs": 16304,
+      "coversSwap": true,
+      "mode": "covered",
+      "swapGapMs": 16173,
+      "sampleIntervalMs": 8
+    },
+    "playhead": {
+      "t": 2.5,
+      "log": [
+        {
+          "ms": 1,
+          "t": 2.5,
+          "cut": "cut-1",
+          "duration": 6,
+          "stack": [
+            "at emit (/src/store/core.ts:33:29)",
+            "at set (/src/store/core.ts:40:2)",
+            "at Object.seek (/src/store/actions/playback.ts:6:3)",
+            "at pptr:evaluate;P%20(file%3A%2F%2F%2FD%3A%2FVectorMPEG7%2FPromptCut%2F.worktrees%2Freopen-laptop-stream-acceptance%2Fscripts%2Fprobes%2Fc66-t9-probe.mjs%3A431%3A36):16:17"
+          ]
+        }
+      ]
+    },
+    "keyBefore": "12800c1e5177ed",
+    "stageV1": true,
+    "mediaEvents": [
+      {
+        "frame": "A",
+        "seeks": [
+          {
+            "at": 28364,
+            "to": 0.001,
+            "from": 0,
+            "rs": 4,
+            "shown": false,
+            "stack": [
+              "at HTMLVideoElement.set [as currentTime] (pptr:;CdpFrame.%3Canonymous%3E%20(file%3A%2F%2F%2FD%3A%2FVectorMPEG7%2FPromptCut%2Fnode_modules%2Fpuppeteer-core%2Flib%2Fpuppeteer%2Futil%2Fdecorators.js%3A101%3A27):13:95)",
+              "at el.addEventListener.once (/src/render/playability.ts:232:21)"
+            ]
+          },
+          {
+            "at": 28386,
+            "to": 2.5,
+            "from": 0,
+            "rs": 0,
+            "shown": false,
+            "stack": [
+              "at HTMLVideoElement.set [as currentTime] (pptr:;CdpFrame.%3Canonymous%3E%20(file%3A%2F%2F%2FD%3A%2FVectorMPEG7%2FPromptCut%2Fnode_modules%2Fpuppeteer-core%2Flib%2Fpuppeteer%2Futil%2Fdecorators.js%3A101%3A27):13:95)",
+              "at syncMediaEl (/src/render/mediaDrive.ts:50:18)",
+              "at driveMedia (/src/render/mediaDrive.ts:90:2)"
+            ]
+          }
+        ],
+        "loads": [
+          {
+            "at": 28382,
+            "src": "5fcda980",
+            "stack": [
+              "at close (/src/render/playability.ts:183:9)"
+            ]
+          }
+        ],
+        "aligned": [
+          {
+            "at": 28388,
+            "mediaTime": 2.5,
+            "ref": 2.5
+          },
+          {
+            "at": 28572,
+            "mediaTime": 2.5,
+            "ref": 2.5
+          }
+        ],
+        "seeked": [
+          {
+            "at": 28576,
+            "shown": false
+          }
+        ],
+        "shownAt": {
+          "at": 28611,
+          "rs": 4
+        },
+        "drops": [
+          {
+            "at": 27638,
+            "rs": 0,
+            "shown": false,
+            "ct": 0
+          },
+          {
+            "at": 27661,
+            "rs": 0,
+            "shown": false,
+            "ct": 0
+          },
+          {
+            "at": 28147,
+            "rs": 1,
+            "shown": false,
+            "ct": 0
+          },
+          {
+            "at": 28366,
+            "rs": 1,
+            "shown": false,
+            "ct": 0.001
+          },
+          {
+            "at": 28444,
+            "rs": 0,
+            "shown": false,
+            "ct": 2.5
+          },
+          {
+            "at": 28475,
+            "rs": 1,
+            "shown": false,
+            "ct": 2.5
+          }
+        ]
+      },
+      {
+        "frame": "B",
+        "seeks": [],
+        "loads": [],
+        "aligned": [],
+        "seeked": [],
+        "shownAt": null,
+        "drops": []
+      }
+    ],
+    "installMs": 472,
+    "hmrMs": 1989,
+    "keyAfter": "82ddadb5f8391",
+    "remeasureMs": 6187,
+    "remeasureVia": "record",
+    "newCostRecordMs": 6187,
+    "stageMs": 6188,
+    "editedSeen": {
+      "ms": 179,
+      "ok": true,
+      "editMs": 159
+    },
+    "bRecord": {
+      "rev": 2,
+      "hash": "ffb0aa97f6b13fda63f33ab4925e7ed915710cf9432f5d7170763cb741a262e9",
+      "mine": false
+    },
+    "bNotices": [
+      {
+        "type": "installed",
+        "key": "src/cards/user/c66t9-c66w1mutlujmg.tsx",
+        "rev": 1
+      },
+      {
+        "type": "installed",
+        "key": "src/cards/user/c66t9-c66w1mutlujmg.tsx",
+        "rev": 2
+      }
+    ],
+    "bOverrideV2": true,
+    "bKindAfter": "shared",
+    "shots": [
+      "<test-temp>\\pc-c66-wave1-observer-553fcb4057824f9488c297d264c6bb72\\probe\\c66w1mutlujmg-observer-1-small.png",
+      "<test-temp>\\pc-c66-wave1-observer-553fcb4057824f9488c297d264c6bb72\\probe\\c66w1mutlujmg-observer-2-original.png",
+      "<test-temp>\\pc-c66-wave1-observer-553fcb4057824f9488c297d264c6bb72\\probe\\c66w1mutlujmg-observer-3-v2.png"
+    ],
+    "pageErrors": [],
+    "temp": "<test-temp>\\pc-c66t9-observer-jg1lJv",
+    "ms": 85449,
+    "fails": [
+      "[observer] remeasure-over-5s(6187)"
+    ],
+    "ok": false
+  },
+  "observerReceipt": {
+    "targetCommit": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+    "role": "observer",
+    "prepareOnly": false,
+    "timingAuthoritative": true,
+    "hostname": "<test-laptop>",
+    "startedAt": "2026-10-04T09:19:45.814Z",
+    "nodeVersion": "v24.19.0",
+    "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+    "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+    "port": 5590,
+    "status": "fail",
+    "actualExitCode": 1,
+    "fails": [
+      "[observer] remeasure-over-5s(6187)"
+    ],
+    "installed": false,
+    "userRuntimeModified": false,
+    "hostNetworkChanged": false,
+    "wave": 1,
+    "run": "c66w1mutlujmg",
+    "expiresAt": "2026-10-04T12:14:56.344Z",
+    "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c66-t9-probe.mjs --role observer --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66w1mutlujmg --port 5590 --out <test-temp>\\pc-c66-wave1-observer-553fcb4057824f9488c297d264c6bb72\\probe --keep-temp --timeout-min 25",
+    "ownedProbePid": 25816,
+    "ok": false,
+    "probeMs": 85449,
+    "rawLogSha256": {
+      "stdout.log": "829a26c3f3c16e174a469806a45849ba2485b41cac25c294d42a7dd029911990",
+      "stderr.log": "69023704cd9af90b555f84cbf63689d57efd2dff63af91b98baa493ed7163d62"
+    },
+    "finishedAt": "2026-10-04T09:21:11.559Z"
+  },
+  "observerRawManifest": [
+    {
+      "file": "receipt.json",
+      "sha256": "98dd2b53bd53745dec025847cfd173726ca98ce174f1873e6891e816e6917284"
+    },
+    {
+      "file": "result.json",
+      "sha256": "acf52e76872b54d8425491bc83e6bd8aa81ae835def522a815253f01610ed563"
+    },
+    {
+      "file": "runner-error.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "runner.log",
+      "sha256": "eba524e19bbd06ae5ddd2d48d1abed9b0885ad6be5f04695341567364a59758c"
+    },
+    {
+      "file": "stderr.log",
+      "sha256": "69023704cd9af90b555f84cbf63689d57efd2dff63af91b98baa493ed7163d62"
+    },
+    {
+      "file": "stdout.log",
+      "sha256": "829a26c3f3c16e174a469806a45849ba2485b41cac25c294d42a7dd029911990"
+    }
+  ],
+  "hostRawResult": {
+    "role": "host",
+    "run": "c66w1mutlujmg",
+    "port": 5593,
+    "cardInRepoBefore": false,
+    "readyQueue": {
+      "profile": "host",
+      "nodes": 1,
+      "maxConcurrent": 2,
+      "codeVersion": "33325e30724f"
+    },
+    "cardSync": {
+      "connected": true,
+      "rev": 1,
+      "notices": [
+        "installed"
+      ]
+    },
+    "profile": "host",
+    "claimed": 2,
+    "completed": 2,
+    "dedup": 0,
+    "failed": 0,
+    "lost": 0,
+    "connected": true,
+    "assetBase": "http://<test-PC-LAN>:5451/api/asset",
+    "codeVersion": "33325e30724f",
+    "plan": {
+      "planId": "plan:p-mutm09vh-60f3c85d@2",
+      "tasks": 8,
+      "done": 8
+    },
+    "creatorCodeVersion": "33325e30724f",
+    "doneCounts": {
+      "tasks": 8,
+      "exactlyOnce": 8,
+      "missing": 0,
+      "duplicate": 0
+    },
+    "artifacts": {
+      "manifests": 8,
+      "missingManifests": 0,
+      "blocks": 480,
+      "missingBlocks": []
+    },
+    "cardV2": {
+      "ms": 5,
+      "rev": 2,
+      "inOverlay": true,
+      "baseUntouched": null
+    },
+    "exitCode": 0,
+    "released": 0,
+    "temp": "<test-temp>\\pc-c66t9-host-udGV7k",
+    "ms": 85526,
+    "fails": [],
+    "ok": true
+  },
+  "hostReceipt": {
+    "targetCommit": "20d28fbda9f57e495becfb7f70deb8a610aab77f",
+    "role": "host",
+    "prepareOnly": false,
+    "timingAuthoritative": true,
+    "hostname": "<test-laptop>",
+    "startedAt": "2026-10-04T09:19:45.849Z",
+    "nodeVersion": "v24.19.0",
+    "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+    "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+    "port": 5593,
+    "status": "pass",
+    "actualExitCode": 0,
+    "fails": [],
+    "installed": false,
+    "userRuntimeModified": false,
+    "hostNetworkChanged": false,
+    "wave": 1,
+    "run": "c66w1mutlujmg",
+    "expiresAt": "2026-10-04T12:14:56.344Z",
+    "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c66-t9-probe.mjs --role host --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66w1mutlujmg --port 5593 --out <test-temp>\\pc-c66-wave1-host-a058cd9cf395431689b741fc71019ac2\\probe --keep-temp --timeout-min 25",
+    "ownedProbePid": 27744,
+    "ok": true,
+    "probeMs": 85526,
+    "rawLogSha256": {
+      "stdout.log": "269ec3c35742a5f5471e4a193184a035c4ff5ef418731c08894e1ddad0ba378b",
+      "stderr.log": "cb68c8b01991a92af3afac9a3da7a2959b29fdf4346ffb9e2c77f74b1ca6c1d1"
+    },
+    "finishedAt": "2026-10-04T09:21:14.638Z"
+  },
+  "hostRawManifest": [
+    {
+      "file": "receipt.json",
+      "sha256": "c9b1a8aee0c6f746e423a97f518f2e984913c71232645b37cf7dd6ac63dc4bb5"
+    },
+    {
+      "file": "result.json",
+      "sha256": "fa83a975fe67624f7b23f5c2f779ce1f00d46e7571fdc8a02009aed8c13a88aa"
+    },
+    {
+      "file": "runner-error.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "runner.log",
+      "sha256": "2039be05c3462b59e660094ff7dcada366d2bcd9fbe6908242a7190fb30ec0e1"
+    },
+    {
+      "file": "stderr.log",
+      "sha256": "cb68c8b01991a92af3afac9a3da7a2959b29fdf4346ffb9e2c77f74b1ca6c1d1"
+    },
+    {
+      "file": "stdout.log",
+      "sha256": "269ec3c35742a5f5471e4a193184a035c4ff5ef418731c08894e1ddad0ba378b"
+    }
+  ],
+  "readOnlyDiagnostics": {
+    "identityKeyBefore": "12800c1e5177ed",
+    "identityKeyAfter": "82ddadb5f8391",
+    "installMs": 472,
+    "hmrMs": 1989,
+    "remeasureMs": 6187,
+    "remeasureVia": "record",
+    "newCostRecordMs": 6187,
+    "stageMs": 6188,
+    "gateObservation": "No earlier gate-based remeasure was captured. Source polls after HMR wait; lack of capture does not prove a mask never appeared.",
+    "browserPageErrors": [],
+    "editorLastMatchingLine": "DEP0137 FileHandle garbage-collection closing deprecation warning; not a current thrown error",
+    "observerEditorSha256": "ee7f13dad6ab9f41bee10af7af42b5669012fccba8c2008e4dc21a5ca86f6364",
+    "hostLogSha256": "2ede5f106a7133249882eb4c220539dc296313ede6ae071c6855f6d59c56b1de",
+    "browserGpuLogSha256": "47429d4e29dfa17af0f6a11841efdb399a94ffd6c6bfc4c771c31a880266b208",
+    "browserGpuUnexpectedExitCount": 2,
+    "browserGpuUnexpectedExitCode": -2147483645,
+    "browserOtherLogSha256": "a429c31a961a4ce9b268a452e91128652091b649dff6c3b09866be3abed640a6",
+    "browserOtherErrorCount": 0,
+    "causalClassification": "Performance failure retained; logs do not establish cause",
+    "hostCardV2Ms": 5,
+    "hostClaimed": 2,
+    "hostCompleted": 2,
+    "hostIpcExit": 0,
+    "trackedSourceClean": true,
+    "fixtureInRepoAfter": false,
+    "ports5590to5598Free": true,
+    "wave2Started": false
+  },
+  "transferredZip": {
+    "bytes": 637590,
+    "sha256": "3b5a0d8cb7f7a5533326881ce4cabfb46d4b15c7d4af000021c1fd6e22f13910"
+  },
+  "diagnosticOnlyRerunDoesNotOverrideFailure": true
+}

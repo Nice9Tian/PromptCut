@@ -1,0 +1,92 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_m42hefjlngilpdwprattbzrtrd",
+      "where": "hosted",
+      "mode": "free",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": false,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": false,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 5,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": true,
+      "creatorSecondDevice": true,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": true
+    }
+  ],
+  "matrix": {
+    "recoveredSettingsDoNotGeneratePasswords": true,
+    "transientStorageRetryUi": {
+      "identityPreserved": true,
+      "retryAfterSeconds": 2,
+      "observedDelayMs": 2016
+    },
+    "crashRetainsOfflineQueue": true,
+    "conflictReplayUi": true,
+    "conflictDiscardUi": true,
+    "discardBackupPersisted": true,
+    "multipleWindowsBidirectional": true,
+    "newCollaborationDefaultPasswordsPreserved": true,
+    "lateIdentityAfterProjectSwitchIgnored": true,
+    "homeUiClearsResume": true,
+    "homeAfterSystemPathRefreshStaysHome": true,
+    "unknownFormatUiPreserved": true,
+    "legacyPasswordViewPreserved": true,
+    "legacyIdentityMigratedAcrossProcessRestart": true,
+    "legacySecretSettingsMigrated": true,
+    "invitedIdentitySurvivesRevokeAndExpiry": true,
+    "kickAndUnbanUi": true,
+    "projectPasswordUi": true,
+    "authenticationRateLimit": {
+      "observed": true,
+      "cooldowns": [
+        {
+          "retryAfterSeconds": 60,
+          "observedDelayMs": 60395
+        }
+      ],
+      "eventualReauthentication": true
+    },
+    "corruptVaultUiPreservesBytes": true,
+    "finalRevision": 11
+  },
+  "asset": {
+    "hash": "f7915da8322e5764eb6f4dd1883eb5104a06df16e89a8f4227f5d826f7a617c1",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-MsU497"
+}

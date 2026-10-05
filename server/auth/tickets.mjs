@@ -13,6 +13,7 @@
  * 允许 30 s 时钟偏差；`exp - iat` 不得超过这类票据的有效期。
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { roomUnavailableReason } from '../recovery/relocation.mjs';
 import {
   TICKET_TTL, MAX_TICKET_LENGTH, b64urlDecode, utf8Text, isProjectId, isRole, isConversation, normalizeOwner,
   isDeviceName, splitUserId,
@@ -37,6 +38,8 @@ export const userGeneration = (rec, userId) => {
  * @returns {{ ticket: string, exp: number }}
  */
 export function signTicket(rec, fields, at) {
+  const unavailable = roomUnavailableReason(rec);
+  if (unavailable) throw Object.assign(new Error('Room unavailable'), { reason: unavailable });
   const ttl = TICKET_TTL[fields.k];
   if (!ttl) throw new TypeError(`不认识的票据类别 ${fields.k}`);
   const payload = {
@@ -91,6 +94,8 @@ export function verifyTicket(ticket, { lookup, now, kind } = {}) {
   if (!isObj(hint) || !isProjectId(hint.p) || typeof hint.kid !== 'string') return bad('format');
   const rec = lookup(hint.p);
   if (!rec) return bad('no-project');
+  const unavailable = roomUnavailableReason(rec);
+  if (unavailable) return bad(unavailable);
   const at = now;
   let key = null;
   if (kidOf(rec.ticketKey) === hint.kid) key = rec.ticketKey;

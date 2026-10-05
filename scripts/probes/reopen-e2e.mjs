@@ -1,0 +1,472 @@
+/** Isolated editor reopen probe. Starts and stops only its own services and browser. */
+import '../lib/no-user-dirs.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { randomBytes } from 'node:crypto';
+import assert from 'node:assert/strict';
+import puppeteer from 'puppeteer';
+import { pathToFileURL } from 'node:url';
+import { waitFor } from '../../server/test/fake-ws-kit.mjs';
+import { hostedPorts } from '../../server/test/sp-kit.mjs';
+import { reopenEditorEnv } from './reopen-editor-env.mjs';
+
+const require = createRequire(import.meta.url);
+const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-e2e-'));
+const testData = who => path.join(root, who);
+const secret = () => randomBytes(32).toString('base64url');
+const password = secret(); let creatorPassword = secret();
+const editors = new Set(); let browser, cloud; let phase = 'startup';
+const evidence = [];
+let createRequests = 0;
+let wan, secondCreator; const wanResults = [];
+let collector; let matrix; let exitMatrix;
+const where = process.argv.includes('--hosted') ? 'hosted' : 'lan';
+const mode = process.argv.includes('--restricted') ? 'restricted' : 'free';
+async function stop(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exit = new Promise(r => child.once('exit', r)); child.kill(); await exit; editors.delete(child);
+}
+async function editor(who, port) {
+  fs.mkdirSync(testData(who), { recursive: true });
+  const child = spawn(process.execPath, [vite, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: process.cwd(), windowsHide: true,
+    env: reopenEditorEnv(testData(who), {
+      PROMPTCUT_PROJECTS_DIR: path.join(testData(who), 'drafts'), PROMPTCUT_DEVICE_ID: who === 'host' && process.argv.includes('--keep-room') ? '' : `probe-${who}-device-000001`, PROMPTCUT_DEVICE_NAME: `isolated-${who}`,
+      PROMPTCUT_ARTIFACT_DIR: path.join(testData(who), 'artifacts'),
+      PROMPTCUT_AUTO_RENDER_NODE: process.argv.includes('--nodes') ? '1' : '0', PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_PUSH: process.argv.includes('--nodes') ? '' : '0', PROMPTCUT_LAN_HOST: '0', PROMPTCUT_NODE_PROFILE: 'user', PROMPTCUT_SHARED_CONFIG: '', PROMPTCUT_QUEUE_NODE: '0' }), stdio: ['ignore', 'pipe', 'pipe'] });
+  editors.add(child); child.stdout.resume(); child.stderr.resume();
+  const base = `http://127.0.0.1:${port}`;
+  await waitFor(async () => { if (child.exitCode !== null) throw new Error('isolated editor exited'); try { const r = await fetch(`${base}/api/docservice/device`, { signal: AbortSignal.timeout(1000) }); return r.ok; } catch { return false; } }, 30000, 'isolated editor');
+  return { child, base, pid: child.pid };
+}
+async function hostedProcess(docPort = 0, assetPort = 0) {
+  if (!docPort || !assetPort) { const ports = await hostedPorts(); docPort ||= ports.docPort; assetPort ||= ports.assetPort; }
+  fs.mkdirSync(testData('cloud'), { recursive: true });
+  const comboUrl = pathToFileURL(path.resolve('server/hosted/combo.mjs')).href;
+  const code = `import { startHostedCombo } from ${JSON.stringify(comboUrl)};
+    const c = await startHostedCombo({ dataDir: process.env.PROMPTCUT_DATA_DIR, docPort: Number(process.env.PC_PROBE_DOC_PORT), assetPort: Number(process.env.PC_PROBE_ASSET_PORT), host: '127.0.0.1', trustLoopback: false, clusterToken: process.env.PROMPTCUT_CLUSTER_TOKEN, log: () => {} });
+    console.log(JSON.stringify({ docPort: c.docPort, assetPort: c.assetPort }));
+    process.stdin.resume(); process.stdin.on('end', () => c.close().then(() => process.exit(0)));`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code], { windowsHide: true, env: reopenEditorEnv(testData('cloud'), { PROMPTCUT_CLUSTER_TOKEN: secret(), PC_PROBE_DOC_PORT: String(docPort), PC_PROBE_ASSET_PORT: String(assetPort) }), stdio: ['pipe', 'pipe', 'pipe'] });
+  editors.add(child); child.stderr.resume();
+  let ports, output = ''; child.stdout.on('data', b => { output += b; if (output.includes('\n') && !ports) { try { ports = JSON.parse(output.split('\n')[0]); } catch {} } });
+  await waitFor(() => { if (child.exitCode !== null) throw new Error('isolated hosted process exited'); return ports; }, 15000, 'isolated hosted process');
+  return { ...ports, pid: child.pid, hosting: { online: async () => (await (await fetch(`http://127.0.0.1:${ports.docPort}/hosting/healthz`)).json()).online === 1 }, close: () => stop(child) };
+}
+async function page(base, openPath = null) {
+  const context = await browser.createBrowserContext(), p = await context.newPage();
+  p.recoveryHttpEvidence = [];
+  p.recoveryStorageEvidence = [];
+  p.on('response', res => { const route = new URL(res.url()).pathname;
+    if (/\/(?:shared\/(?:challenge|verify|invite\/(?:resolve|redeem))|hosting\/(?:challenge|resolve))$/.test(route)) {
+      const retryAfter = Number(res.headers()['retry-after']);
+      p.recoveryHttpEvidence.push({ route, status: res.status(), at: Date.now(), ...(retryAfter > 0 ? { retryAfter } : {}) }); if (p.recoveryHttpEvidence.length > 80) p.recoveryHttpEvidence.shift();
+    }
+  });
+  p.on('response', async res => {
+    const route = new URL(res.url()).pathname;
+    if (!route.startsWith('/api/collaboration/') || res.status() < 400) return;
+    let error = null, diagnostic = null;
+    try { const body = await res.json(); if (/^[a-z-]{1,40}$/.test(body.error)) error = body.error;
+      if (body.storageDiagnostic) diagnostic = body.storageDiagnostic;
+    } catch {}
+    p.recoveryStorageEvidence.push({ route, status: res.status(), error, diagnostic, at: Date.now() });
+  });
+  p.on('request', req => { if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/shared/create')) createRequests++; });
+  p.on('console', m => { if (/\[(collab|sync)\]/.test(m.text())) console.error(m.text().replace(/[A-Za-z0-9_-]{32,}/g, '[redacted]')); });
+  await p.setViewport({ width: 1440, height: 1000 });
+  await p.evaluateOnNewDocument(() => {
+    window.recoverySockets = []; const Native = window.WebSocket;
+    window.WebSocket = class extends Native { constructor(...args) { super(...args); window.recoverySockets.push(this); } };
+    window.recoveryPasswordGenerations = 0;
+    const random = crypto.getRandomValues.bind(crypto);
+    crypto.getRandomValues = bytes => {
+      if (new Error().stack?.includes('generatePassword')) window.recoveryPasswordGenerations++;
+      return random(bytes);
+    };
+  });
+  await p.goto(openPath ? `${base}/?nosetup=1&open=${encodeURIComponent(openPath)}` : `${base}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await p.evaluate(async () => {
+    const [sync, proc, store, collab, pack, drafts] = await Promise.all([import('/src/editor/sync/syncManager.ts'), import('/src/editor/io/proc.ts'), import('/src/store/project.ts'), import('/src/editor/sync/collab.ts'), import('/src/editor/io/procp.ts'), import('/src/editor/io/drafts.ts')]);
+    window.probe = { sync, proc, store, collab, pack, drafts };
+    const { DocSync } = await import('/src/store/docsync.ts'); const restore = DocSync.prototype.restoreJournal;
+    window.recoveryJournalErrors = [];
+    DocSync.prototype.restoreJournal = function (journal) {
+      try { return restore.call(this, journal); }
+      catch (e) { window.recoveryJournalErrors.push({ rev: journal?.rev, pending: journal?.pending?.length, newPending: this.unconfirmed }); throw e; }
+    };
+    await sync.startSync();
+  });
+  // Empty browser profiles show the first-run AI settings dialog. Close that UI only;
+  // never change its provider/account settings or let its mask intercept recovery clicks.
+  await p.waitForFunction(() => document.querySelector('.ais-dialog') || window.probe.sync.getSyncView().device, { timeout: 10000 });
+  await p.evaluate(() => {
+    const close = [...document.querySelectorAll('.ais-dialog button')].find(b => b.textContent?.trim() === '关闭');
+    close?.click();
+  });
+  assert.equal(await p.evaluate(async () => {
+    const response = await (await fetch('/api/ai/config')).json(), c = response.config ?? response;
+    return !c.api?.apiKey?.set && !c.keys?.custom?.set && !c.keys?.router?.set;
+  }), true, 'isolated editor must not load user provider credentials');
+  return p;
+}
+async function exposeRecoveryControl(p) {
+  let speechPromptDismissed = false;
+  await waitFor(async () => {
+    const point = await p.evaluate(() => {
+      const b = document.querySelector('[data-pc="recovery-auth-open"]'), r = b?.getBoundingClientRect();
+      const hit = r && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { ready: !!b && hit?.closest('[data-pc="recovery-auth-open"]') === b, speech: !!hit?.closest('.dep-prompt') };
+    });
+    if (point.speech) {
+      await p.click('.dep-prompt button.dep-prompt-btn:not(.is-primary)');
+      await p.waitForSelector('.dep-prompt', { hidden: true }); speechPromptDismissed = true;
+    }
+    return point.ready;
+  }, 10000, 'actual recovery control hit target');
+  return { hitConfirmed: true, speechPromptDismissed };
+}
+async function connected(p, roomId, username) {
+  try { await p.waitForFunction((room, user) => { const v = window.probe.sync.getSyncView(); return v.shared?.projectId === room && v.shared.username === user && v.status === 'online'; }, { timeout: 30000 }, roomId, username); }
+  catch { const v = await p.evaluate(() => { const v = window.probe.sync.getSyncView(); return { reopen: v.reopenState, status: v.status, shared: v.shared && { roomId: v.shared.projectId, username: v.shared.username }, registration: v.hostRegistration }; }); throw new Error(`${username} reopen state ${JSON.stringify(v)}`); }
+}
+async function open(p, text) { await p.evaluate(t => { const { proc, store } = window.probe; store.actions.loadProject(proc.loadProc(t), 'isolated.proc'); }, text); }
+async function saved(p) { return p.evaluate(async () => { await window.probe.sync.whenSaved(); return window.probe.proc.serializeProc(); }); }
+async function name(p, value) { await p.evaluate(n => window.probe.store.actions.setProjectMeta({ name: n }), value); }
+async function sees(p, value) { await p.waitForFunction(n => window.probe.store.getState().project.name === n, { timeout: 20000 }, value); }
+try {
+  if (process.argv.includes('--wan')) { wan = await (await import('./reopen-wan.mjs')).startWanProbe(); cloud = wan; }
+  else cloud = await hostedProcess();
+  const service = wan?.service ?? `http://127.0.0.1:${cloud.docPort}`;
+  browser = await puppeteer.launch({ headless: true, userDataDir: path.join(root, 'browser'), args: ['--no-sandbox'] });
+  const hostRuntime = await editor('host', 5203), memberRuntime = await editor('member', 5206);
+  let host = await page(hostRuntime.base), member = await page(memberRuntime.base);
+  phase = 'create original LAN room';
+  const created = await host.evaluate(async o => { window.probe.proc.newProject('isolated-reopen-file'); return window.probe.collab.enableCollab(o); }, { where, mode, name: `isolated-reopen-${Date.now()}`, creator: { username: 'host', password: creatorPassword }, projectPassword: password, list: [{ username: 'member', password }, ...(wan ? [{ username: 'wan-member', password }] : [])], hostedUrl: service });
+  assert.equal(created.ok, true, `isolated creation must succeed (${created.error || 'unknown'})`);
+  const hostFile = await saved(host), descriptor = JSON.parse(hostFile).collaboration, roomId = descriptor.roomId;
+  assert.equal(descriptor.service, service);
+  assert.equal(hostFile.includes(password) || hostFile.includes(creatorPassword), false);
+  if (where === 'lan') await waitFor(() => cloud.hosting.online(roomId), 10000, 'cloud registration');
+  phase = 'member first authentication';
+  await open(member, hostFile);
+  await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+  const firstAuthenticationControl = await exposeRecoveryControl(member);
+  await member.evaluate(() => {
+    const records = window.recoveryEvidence = [];
+    const log = (kind, value) => records.push({ t: performance.now(), kind, ...value });
+    const snapshot = () => ({ state: window.probe.sync.getSyncView().reopenState,
+      buttons: [...document.querySelectorAll('[data-pc="recovery-auth-open"]')].map(el => {
+        const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return { connected: el.isConnected, rect: r.toJSON(), hit: hit?.tagName, hitClass: typeof hit?.className === 'string' ? hit.className : null,
+          speechPrompt: !!hit?.closest('.dep-prompt'), hitButton: hit?.closest('[data-pc="recovery-auth-open"]') === el };
+      }), form: !!document.querySelector('form[aria-label="恢复原协作身份"]') });
+    window.recoverySnapshot = snapshot;
+    log('before-click', snapshot());
+    window.probe.sync.subscribeSync(() => log('sync', { state: window.probe.sync.getSyncView().reopenState }));
+    document.addEventListener('click', e => log('click', { tag: e.target?.tagName, recoveryButton: !!e.target?.closest?.('[data-pc="recovery-auth-open"]') }), true);
+    const containsForm = n => n.nodeType === 1 && (n.matches?.('form[aria-label="恢复原协作身份"]') || n.querySelector?.('form[aria-label="恢复原协作身份"]'));
+    new MutationObserver(ms => { for (const m of ms) { for (const n of m.addedNodes) if (containsForm(n)) log('form-added', {}); for (const n of m.removedNodes) if (containsForm(n)) log('form-removed', {}); } }).observe(document.body, { childList: true, subtree: true });
+  });
+  await member.locator('[data-pc="recovery-auth-open"]').click();
+  await member.evaluate(() => window.recoveryEvidence.push({ t: performance.now(), kind: 'after-click', ...window.recoverySnapshot() }));
+  await member.waitForSelector('form[aria-label="恢复原协作身份"]');
+  await member.screenshot({ path: path.join(root, 'recovery-auth-empty.png') });
+  await member.type('form[aria-label="恢复原协作身份"] input[autocomplete="username"]', 'member');
+  await member.type('form[aria-label="恢复原协作身份"] input[type="password"]', password);
+  await member.click('form[aria-label="恢复原协作身份"] button[type="submit"]');
+  await connected(member, roomId, 'member');
+  const memberFile = await saved(member);
+  phase = 'both directions before restart';
+  await name(member, 'member-edit-before-restart'); await sees(host, 'member-edit-before-restart');
+  await name(host, 'host-edit-before-restart'); await sees(member, 'host-edit-before-restart'); await saved(host); await saved(member);
+  if (wan) {
+    wanResults.push(await wan.peer({ roomId, password, expected: 'host-edit-before-restart', edit: 'wan-edit-before-restart' }));
+    await sees(host, 'wan-edit-before-restart'); await sees(member, 'wan-edit-before-restart');
+    await name(host, 'host-edit-before-restart'); await sees(member, 'host-edit-before-restart'); await saved(host);
+  }
+  phase = 'stop original host process';
+  await host.close(); await stop(hostRuntime.child);
+  if (where === 'lan') await waitFor(async () => !(await cloud.hosting.online(roomId)), 10000, 'host tunnel offline');
+  if (!wan) {
+    phase = 'stop and restart isolated cloud process';
+    const previous = cloud; await previous.close();
+    if (where === 'hosted') { cloud = await hostedProcess(previous.docPort, previous.assetPort); assert.notEqual(cloud.pid, previous.pid); }
+  }
+  await member.close(); await stop(memberRuntime.child);
+  let restoredMember = await editor('member', 5206);
+  assert.notEqual(restoredMember.pid, memberRuntime.pid);
+  member = await page(restoredMember.base); await open(member, memberFile);
+  if (where === 'lan') {
+    await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'waiting-host', { timeout: 15000 });
+    await member.screenshot({ path: path.join(root, 'recovery-waiting.png') });
+  }
+  else await connected(member, roomId, 'member');
+  phase = 'restart original host at new port and discard browser storage';
+  let restoredRuntime = await editor('host', 5209);
+  assert.notEqual(restoredRuntime.pid, hostRuntime.pid);
+  host = await page(restoredRuntime.base); await open(host, hostFile);
+  await connected(host, roomId, 'host');
+  if (!wan && where === 'lan') {
+    phase = 'original host opens while cloud is offline and automatically registers after cloud returns';
+    await host.evaluate(() => window.probe.store.actions.setProjectMeta({ width: 1280 })); await saved(host);
+    const previous = cloud; cloud = await hostedProcess(previous.docPort, previous.assetPort); assert.notEqual(cloud.pid, previous.pid);
+    await waitFor(() => cloud.hosting.online(roomId), 30000, 'host automatic registration after network return');
+  }
+  await connected(member, roomId, 'member');
+  if (!wan && where === 'lan') await member.waitForFunction(() => window.probe.store.getState().project.width === 1280);
+  await sees(host, 'host-edit-before-restart'); await sees(member, 'host-edit-before-restart');
+  phase = 'both directions after automatic reopen';
+  await name(member, 'member-edit-after-reopen'); await sees(host, 'member-edit-after-reopen');
+  await name(host, 'host-edit-after-reopen'); await sees(member, 'host-edit-after-reopen');
+  await member.screenshot({ path: path.join(root, 'recovery-connected.png') });
+  phase = 'restored Agent, cards and optional render-node bindings';
+  for (const p of [host, member]) await p.waitForFunction(async room => {
+    const [agent, cards] = await Promise.all(['/api/agent/status', '/api/cards/sync/status'].map(async url => (await fetch(url)).json()));
+    return agent.bound && agent.projectId === room && cards.projectId === room;
+  }, { timeout: 15000 }, roomId);
+  if (process.argv.includes('--nodes')) for (const p of [host, member]) await p.waitForFunction(async room => {
+    const r = await (await fetch('/api/render-node/status')).json();
+    const stage = await (await fetch('/api/frames/render-node')).json();
+    return r.binding?.projectId === room && stage.bound && stage.projectId === room && stage.started;
+  }, { timeout: 30000 }, roomId);
+  if (process.argv.includes('--nodes')) await host.waitForFunction(async () => {
+    const r = await window.probe.sync.currentSharedLink().request({ type: 'shared.members' });
+    return ['host', 'member'].every(user => ['agent', 'render'].every(role => r.devices.some(d => d.username === user && d.conns.some(c => c.role === role))));
+  }, { timeout: 15000 });
+  phase = 'browser relay ticket asset transport';
+  const asset = await member.evaluate(async hostedAsset => {
+    const v = window.probe.sync.getSyncView(), link = window.probe.sync.currentSharedLink();
+    const issued = await link.request({ type: 'auth.ticket', kind: 'asset', access: 'rw' });
+    if (issued.type !== 'auth.ticket.ok') throw new Error('asset ticket failed');
+    const base = hostedAsset ?? v.shared.base.replace(/\/doc$/, '/asset/api/asset');
+    const bytes = crypto.getRandomValues(new Uint8Array(50000));
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+    for (const ns of ['media', 'snap', 'px']) {
+      const r = await fetch(`${base}/${ns}/${hash}/0`, { method: 'PUT', headers: { Authorization: `Bearer ${issued.ticket}`, 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(bytes.length), 'X-Media-Ext': 'bin' }, body: bytes });
+      if (!r.ok) throw new Error(`browser asset upload ${r.status}`);
+      const done = await fetch(`${base}/${ns}/${hash}/complete`, { method: 'POST', headers: { Authorization: `Bearer ${issued.ticket}` } });
+      if (!done.ok) throw new Error('browser asset completion failed');
+    }
+    const read = await link.request({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+    for (const ns of ['media', 'snap', 'px']) {
+      const r = await fetch(`${base}/${ns}/${hash}?t=${encodeURIComponent(read.ticket)}`);
+      if (!r.ok) throw new Error('browser ticket read failed');
+      const got = await r.arrayBuffer();
+      const gotHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', got))].map(b => b.toString(16).padStart(2, '0')).join('');
+      if (got.byteLength !== bytes.length || gotHash !== hash) throw new Error('browser ticket content mismatch');
+    }
+    return { hash, size: bytes.length, browserCors: true, namespaces: ['media', 'snap', 'px'] };
+  }, where === 'hosted' ? `http://127.0.0.1:${cloud.assetPort}/api/asset` : null);
+  if (wan) {
+    phase = 'external member device identity after restart';
+    wanResults.push(await wan.peer({ roomId, expected: 'host-edit-after-reopen', edit: 'wan-edit-after-reopen', asset }));
+    await sees(host, 'wan-edit-after-reopen'); await sees(member, 'wan-edit-after-reopen');
+    await name(host, 'host-edit-after-reopen'); await sees(member, 'host-edit-after-reopen');
+    wanResults.push(await wan.peer({ roomId, expected: 'host-edit-after-reopen', asset }));
+  }
+  const journal = await host.evaluate(async () => { await window.probe.sync.whenSaved(); const d = window.probe.sync.getSyncView().association; return (await window.probe.sync.recoveryRequest('select', d, { contentId: window.probe.store.getState().project.id })).journal; });
+  assert.ok(journal.rev >= 5); assert.equal(journal.pending.length, 0);
+  if (process.argv.includes('--password-change')) {
+    phase = 'own creator password updates both device record and live reconnect proof';
+    const next = secret();
+    await host.evaluate(async ({ before, after }) => {
+      const sync = window.probe.sync, creator = await sync.makeCredential(after);
+      const r = await sync.adminOp('set-creator-password', { password: before }, { creator });
+      if (!r.ok) throw new Error('isolated own password change failed'); await sync.whenSaved();
+      const base = new URL(sync.getSyncView().shared.base); base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+      for (const ws of window.recoverySockets) if (ws.readyState === 1 && ws.url.startsWith(base.href.replace(/\/$/, ''))) ws.close();
+    }, { before: creatorPassword, after: next });
+    await host.waitForFunction(() => window.probe.sync.getSyncView().status !== 'online'); await connected(host, roomId, 'host');
+    creatorPassword = next; await saved(host);
+  }
+  if (process.argv.includes('--roles')) {
+    phase = 'creator second device joins without owning the host';
+    const secondRuntime = await editor('creator-second', 5215), second = await page(secondRuntime.base); await open(second, hostFile);
+    await second.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+    const secondResult = await second.evaluate(pw => window.probe.sync.authenticateRecovery('host', pw, 'creator'), creatorPassword); assert.equal(secondResult.ok, true);
+    await connected(second, roomId, 'host');
+    const role = await second.evaluate(async () => { await window.probe.sync.whenSaved(); const v = window.probe.sync.getSyncView(); const r = await window.probe.sync.recoveryRequest('select', v.association, { contentId: window.probe.store.getState().project.id }); return { creator: v.shared.creator, where: v.shared.where, hostBinding: !!r.host }; });
+    assert.deepEqual(role, { creator: true, where, hostBinding: false });
+    if (process.argv.includes('--delete-from-second')) secondCreator = second;
+    else { await second.close(); await stop(secondRuntime.child); }
+  }
+  phase = 'packed format and draft reopen';
+  const packed = await member.evaluate(async () => { const p = await window.probe.pack.packProcp(); const { procText } = await window.probe.pack.unpackProcp(p.blob); return procText; });
+  assert.equal(JSON.parse(packed).collaboration.roomId, roomId);
+  await open(member, packed); await connected(member, roomId, 'member');
+  await member.evaluate(async () => { await window.probe.drafts.saveDraft('isolated-reopen-draft'); window.probe.proc.newProject('unrelated'); await window.probe.drafts.openDraft('isolated-reopen-draft'); });
+  await connected(member, roomId, 'member'); await sees(member, 'host-edit-after-reopen');
+  phase = 'desktop system path entry';
+  const systemFile = path.join(root, 'isolated-system-open.proc'); fs.writeFileSync(systemFile, memberFile);
+  const fromPath = await page(restoredMember.base, systemFile); await connected(fromPath, roomId, 'member');
+  await sees(fromPath, 'host-edit-after-reopen'); await fromPath.close();
+  phase = 'page refresh through shared coordinator';
+  await member.reload({ waitUntil: 'domcontentloaded' });
+  await member.evaluate(async () => { const [sync, proc, store, collab, pack, drafts] = await Promise.all([import('/src/editor/sync/syncManager.ts'), import('/src/editor/io/proc.ts'), import('/src/store/project.ts'), import('/src/editor/sync/collab.ts'), import('/src/editor/io/procp.ts'), import('/src/editor/io/drafts.ts')]); window.probe = { sync, proc, store, collab, pack, drafts }; await sync.startSync(); await sync.resumeShared(); });
+  await connected(member, roomId, 'member'); await sees(member, 'host-edit-after-reopen');
+  if (where === 'hosted') assert.equal(await host.evaluate(() => window.probe.sync.getSyncView().shared.where), 'hosted');
+  if (process.argv.includes('--trust')) {
+    phase = 'tampered file roles, service and room cannot reuse another identity';
+    let requests = 0;
+    collector = (await import('node:http')).createServer((_req, res) => { requests++; res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"ok":false}'); });
+    await new Promise(r => collector.listen(0, '127.0.0.1', r));
+    const roleFile = JSON.parse(memberFile); roleFile.collaboration.creator = true; roleFile.collaboration.username = 'host'; roleFile.collaboration.as = 'creator';
+    await open(member, JSON.stringify(roleFile)); await connected(member, roomId, 'member');
+    assert.equal(await member.evaluate(() => window.probe.sync.getSyncView().shared.creator), false);
+    const changedService = JSON.parse(memberFile); changedService.collaboration.service = `http://127.0.0.1:${collector.address().port}`;
+    await open(member, JSON.stringify(changedService)); await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+    await new Promise(r => setTimeout(r, 300)); assert.equal(requests, 0, 'file address cannot receive cached credentials or automatic authentication traffic');
+    const changedRoom = JSON.parse(memberFile); changedRoom.collaboration.roomId = 'sp_aaaaaaaaaaaaaaaaaaaaaaaaaa';
+    await open(member, JSON.stringify(changedRoom)); await member.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'needs-auth');
+    await open(member, memberFile); await connected(member, roomId, 'member'); await sees(member, 'host-edit-after-reopen');
+    await new Promise(r => collector.close(r)); collector = null;
+  }
+  if (process.argv.includes('--matrix')) {
+    ({ host, member, hostRuntime: restoredRuntime, memberRuntime: restoredMember, evidence: matrix } = await (await import('./reopen-matrix.mjs')).runRecoveryMatrix({
+      root, host, member, hostRuntime: restoredRuntime, memberRuntime: restoredMember, roomId, where, mode, hostFile, memberFile, password, creatorPassword,
+      editor, page, stop, open, saved, connected, name, sees, phase: value => { phase = value; console.log(JSON.stringify({ phase })); },
+    }));
+  }
+  if (process.argv.includes('--exit-matrix')) {
+    ({ host, member, evidence: exitMatrix } = await (await import('./reopen-exit-matrix.mjs')).runRecoveryExitMatrix({
+      root, where, roomId, host, member, hostFile, memberFile, hostRuntime: restoredRuntime, memberRuntime: restoredMember,
+      page, open, connected, cloud, phase: value => { phase = value; console.log(JSON.stringify({ phase })); },
+    }));
+  }
+  let relocation = null;
+  if (process.argv.includes('--move-hosted')) {
+    assert.equal(where, 'lan'); assert.equal(!!matrix || !!exitMatrix || !!wan, false, 'movement has its own isolated acceptance');
+    phase = 'actual settings UI moves the original room to hosted service'; console.log(JSON.stringify({ phase }));
+    await host.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings'))); await host.waitForSelector('[data-pc="collab-move-hosted"]');
+    await host.click('[data-pc="collab-move-hosted"]'); await connected(host, roomId, 'host');
+    await host.waitForFunction(() => window.probe.sync.getSyncView().shared?.where === 'hosted', { timeout: 30000 });
+    await host.waitForFunction(() => document.querySelector('[data-pc="collab-status"]')?.textContent.includes('已搬到云端'));
+    await host.evaluate(() => { for (const el of document.querySelectorAll('[data-pc="collab-project-password"], [data-pc="collab-invite-link"], [data-pc="collab-qr"]')) el.replaceChildren(document.createTextNode('[redacted]')); });
+    await host.screenshot({ path: path.join(root, 'relocation-hosted-ui.png') });
+    await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '取消').click());
+    // The member's old file still says LAN and must follow the authenticated new location.
+    await open(member, memberFile); await connected(member, roomId, 'member'); assert.equal(await member.evaluate(() => window.probe.sync.getSyncView().shared.where), 'hosted');
+    await name(member, 'member-after-relocation'); await sees(host, 'member-after-relocation');
+    await name(host, 'host-after-relocation'); await sees(member, 'host-after-relocation');
+    const reads = await member.evaluate(async ({ hash, size, base }) => {
+      const ticket = await window.probe.sync.currentSharedLink().request({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+      for (const ns of ['media', 'snap', 'px']) { const response = await fetch(`${base}/${ns}/${hash}`, { headers: { authorization: `Bearer ${ticket.ticket}` } }); if (!response.ok) throw new Error('relocated material read rejected'); const bytes = await response.arrayBuffer(); const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(n => n.toString(16).padStart(2, '0')).join(''); if (bytes.byteLength !== size || digest !== hash) throw new Error('relocated material mismatch'); }
+      return { namespaces: ['media', 'snap', 'px'], size, hash, ticketRead: true };
+    }, { ...asset, base: `http://127.0.0.1:${cloud.assetPort}/api/asset` });
+    const movedFile = JSON.parse(await saved(host)); assert.equal(movedFile.collaboration.where, 'hosted'); assert.equal(movedFile.collaboration.roomId, roomId);
+    const previousCloud = cloud; await cloud.close(); cloud = await hostedProcess(previousCloud.docPort, previousCloud.assetPort); assert.notEqual(cloud.pid, previousCloud.pid);
+    await open(host, hostFile); await connected(host, roomId, 'host'); await open(member, memberFile); await connected(member, roomId, 'member');
+    await sees(host, 'host-after-relocation'); await sees(member, 'host-after-relocation');
+    assert.equal(await host.evaluate(() => window.probe.sync.getSyncView().shared.where), 'hosted');
+    relocation = { roomId, actualSettingsAction: true, source: 'lan', destination: 'hosted', oldFilesFollowNewLocation: true, savedLocation: 'hosted', actualCloudRestart: true,
+      bidirectionalEdits: 2, asset: reads, recoveryCreateRequests: createRequests - 1 };
+    // Preserve subsequent deletion assertions' existing expected project name.
+    await name(host, 'host-edit-after-reopen'); await sees(member, 'host-edit-after-reopen');
+  }
+  let relocationBack = null;
+  if (process.argv.includes('--move-lan')) {
+    assert.equal(where === 'hosted' || !!relocation, true); assert.equal(!!matrix || !!exitMatrix || !!wan, false);
+    phase = 'actual settings UI pulls the same room back to this device'; console.log(JSON.stringify({ phase }));
+    const previousHostedFile = await saved(host), beforeRev = await host.evaluate(() => window.probe.sync.currentSharedLink().ds.rev);
+    await host.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings'))); await host.waitForSelector('[data-pc="collab-move-lan"]');
+    await host.click('[data-pc="collab-move-lan"]'); await host.waitForFunction(() => window.probe.sync.getSyncView().shared?.where === 'lan', { timeout: 30000 }); await connected(host, roomId, 'host');
+    await host.waitForFunction(() => document.querySelector('[data-pc="collab-status"]')?.textContent.includes('已搬回本机'));
+    await host.evaluate(() => { for (const el of document.querySelectorAll('[data-pc="collab-project-password"], [data-pc="collab-invite-link"], [data-pc="collab-qr"]')) el.replaceChildren(document.createTextNode('[redacted]')); });
+    await host.screenshot({ path: path.join(root, 'relocation-lan-ui.png') });
+    await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '取消').click());
+    await open(member, memberFile); await connected(member, roomId, 'member'); assert.equal(await member.evaluate(() => window.probe.sync.getSyncView().shared.where), 'lan');
+    await name(member, 'member-after-move-back'); await sees(host, 'member-after-move-back'); await name(host, 'host-after-move-back'); await sees(member, 'host-after-move-back');
+    const reads = await member.evaluate(async ({ hash, size }) => {
+      const sync = window.probe.sync, issued = await sync.currentSharedLink().request({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+      const base = sync.getSyncView().shared.base.replace(/\/doc$/, '/asset/api/asset');
+      for (const ns of ['media', 'snap', 'px']) { const response = await fetch(`${base}/${ns}/${hash}`, { headers: { authorization: `Bearer ${issued.ticket}` } }); if (!response.ok) throw new Error('move-back material rejected'); const bytes = await response.arrayBuffer(); const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(n => n.toString(16).padStart(2, '0')).join(''); if (bytes.byteLength !== size || digest !== hash) throw new Error('move-back material mismatch'); }
+      return { namespaces: ['media', 'snap', 'px'], size, hash, ticketRead: true };
+    }, asset);
+    const localFile = JSON.parse(await saved(host)); assert.equal(localFile.collaboration.where, 'lan'); assert.equal(localFile.collaboration.roomId, roomId);
+    const afterRev = await host.evaluate(() => window.probe.sync.currentSharedLink().ds.rev); assert.equal(afterRev > beforeRev, true);
+    phase = 'move-back destination process restart and old hosted file';
+    const oldRuntime = restoredRuntime; await host.close(); await stop(oldRuntime.child); restoredRuntime = await editor('host', 5209); assert.notEqual(restoredRuntime.pid, oldRuntime.pid);
+    host = await page(restoredRuntime.base); await open(host, previousHostedFile); await connected(host, roomId, 'host'); assert.equal(await host.evaluate(() => window.probe.sync.getSyncView().shared.where), 'lan');
+    await connected(member, roomId, 'member'); await sees(host, 'host-after-move-back'); await sees(member, 'host-after-move-back');
+    if (process.argv.includes('--nodes')) { phase = 'move-back Agent and render roles after destination restart'; await host.waitForFunction(async () => {
+      const response = await window.probe.sync.currentSharedLink().request({ type: 'shared.members' });
+      window.relocationRoles = response.devices.map(d => ({ username: d.username, deviceId: d.deviceId, roles: d.conns.map(c => c.role) }));
+      return ['host', 'member'].every(user => ['agent', 'render'].every(role => response.devices.some(d => d.username === user && d.conns.some(c => c.role === role))));
+    }, { timeout: 30000 });
+    }
+    relocationBack = { roomId, actualSettingsAction: true, source: 'hosted', destination: 'lan', sourceActor: 'creator:host', oldHostedFileRestoresActualHost: true, savedLocation: 'lan',
+      actualDestinationProcessRestart: true, beforeRev, afterRev, bidirectionalEdits: 2, asset: reads, recoveryCreateRequests: createRequests - 1, nodeRolesAuthenticated: process.argv.includes('--nodes') };
+    await name(host, 'host-edit-after-reopen'); await sees(member, 'host-edit-after-reopen');
+  }
+  phase = 'old-file tombstone';
+  assert.equal(createRequests, 1, 'every reopen must reuse the original room without a create request');
+  if (process.argv.includes('--keep-room')) {
+    assert.equal(!!wan, false, 'reboot checkpoint requires the isolated local cloud process');
+    fs.writeFileSync(path.join(root, 'host.proc'), hostFile); fs.writeFileSync(path.join(root, 'member.proc'), memberFile);
+    const boot = await (await import('./reopen-reboot.mjs')).bootIdentity();
+    fs.writeFileSync(path.join(root, 'checkpoint.json'), JSON.stringify({ version: 1, roomId, where, mode, boot, docPort: cloud.docPort, assetPort: cloud.assetPort, hostPid: restoredRuntime.pid, memberPid: restoredMember.pid }, null, 2));
+  } else {
+  if (process.argv.includes('--delete-offline')) {
+    await member.evaluate(() => window.probe.sync.currentSharedLink().dropFor(1000));
+    await member.waitForFunction(() => !window.probe.sync.currentSharedLink().connected);
+  }
+  if (process.argv.includes('--cancel-ui')) {
+    phase = 'actual creator UI cancels collaboration after recovery'; console.log(JSON.stringify({ phase }));
+    assert.equal(!!secondCreator, false, 'UI cancellation uses the original creator');
+    await host.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
+    await host.waitForSelector('[data-pc="collab-toggle"]'); await host.click('[data-pc="collab-toggle"]');
+    const passwordInput = await host.$('#pc-collab-cancel-pw'); if (passwordInput) await passwordInput.type(creatorPassword);
+    host.once('dialog', d => void d.accept());
+    await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '确定').click());
+    await host.waitForFunction(() => !window.probe.sync.getSyncView().association && window.probe.sync.getSyncView().kind === 'local', { timeout: 15000 });
+    assert.equal(await host.evaluate(() => !!window.probe.sync.getSyncView().shared), false);
+    const localFile = JSON.parse(await saved(host)); assert.equal(localFile.collaboration == null, true);
+    assert.equal(localFile.project.name, 'host-edit-after-reopen', 'UI cancellation must retain the latest content rather than the old file snapshot');
+    await host.evaluate(() => { for (const i of document.querySelectorAll('input[type="password"], #pc-collab-cpw, #pc-collab-ppw')) i.value = ''; });
+    await host.screenshot({ path: path.join(root, 'cancel-collaboration-ui.png') });
+    await host.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '取消').click());
+    if (exitMatrix) exitMatrix.creatorCancelUi = { returnedToLocal: true, savedAssociationRemoved: true, originalContentPreserved: localFile.project.name === 'host-edit-after-reopen' };
+  } else {
+    const disabled = await (secondCreator ?? host).evaluate(pw => window.probe.collab.disableCollab(pw), creatorPassword); assert.equal(disabled.ok, true);
+  }
+  await member.waitForFunction(async () => {
+    const v = window.probe.sync.getSyncView(); const agent = await (await fetch('/api/agent/status')).json();
+    const cards = await (await fetch('/api/cards/sync/status')).json(); const render = await (await fetch('/api/render-node/status')).json();
+    return v.reopenState === 'deleted' && !agent.bound && cards.local && !render.binding;
+  }, { timeout: 15000 });
+  await open(host, hostFile); await host.waitForFunction(() => window.probe.sync.getSyncView().reopenState === 'deleted');
+  if (where === 'lan') await waitFor(async () => (await fetch(`${service}/hosting/challenge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ roomId, username: 'member', deviceId: 'probe-member-device-000001', as: 'member' }) })).status === 410, 15000, 'cloud deletion tombstone');
+  await host.screenshot({ path: path.join(root, 'recovery-deleted.png') });
+  }
+  evidence.push({ roomId, where, mode, actualHostProcessRestart: true, actualMemberProcessRestart: true, actualCloudProcessRestart: !wan, hostOpenedWhileCloudOffline: !wan && where === 'lan', pidChanged: true, portChanged: true, emptyBrowserStorage: true, memberWaitThenAutoJoin: where === 'lan',
+    sameUsers: ['creator:host', 'member:member'], oldSnapshotsPreservedLatest: true, version: journal.rev, bidirectionalEdits: 4, formats: ['proc', 'procp', 'draft', 'system-path', 'refresh'], nativeOsDoubleClick: false, cancellationTombstone: !process.argv.includes('--keep-room'), recoveryCreateRequests: createRequests - 1, agentAndCardBindings: true, renderNodeStarted: process.argv.includes('--nodes'), nodeRolesAuthenticated: process.argv.includes('--nodes'), staleBindingsRemovedOnDelete: !process.argv.includes('--keep-room'), creatorPasswordReconnect: process.argv.includes('--password-change'), creatorSecondDevice: process.argv.includes('--roles'), deletedFromSecondCreator: !!secondCreator });
+  const result = { ok: true, evidence, matrix, exitMatrix, relocation, relocationBack, asset, wan: wan ? { service, remoteDirectory: wan.remoteDirectory, path: wan.path, publicHttp: wan.publicHttp, results: wanResults } : null, evidenceDirectory: root };
+  result.testIsolation = { providerConfiguration: true, firstAuthenticationControl };
+  evidence[0].deletedWhileMemberOffline = process.argv.includes('--delete-offline');
+  evidence[0].tamperedAssociationsRejected = process.argv.includes('--trust');
+  fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
+} catch (e) {
+  if (browser) for (const [index, p] of (await browser.pages()).entries()) {
+    try {
+      const state = await p.evaluate(async () => {
+        for (const input of document.querySelectorAll('input[type="password"], #pc-collab-cpw, #pc-collab-ppw')) input.value = '';
+        for (const secret of document.querySelectorAll('[data-pc="collab-project-password"], [data-pc="collab-invite-link"], [data-pc="collab-qr"]')) secret.replaceChildren(document.createTextNode('[redacted]'));
+        const v = window.probe?.sync.getSyncView();
+        const diagnostics = {};
+        for (const [key, url] of Object.entries({ agent: '/api/agent/status', cards: '/api/cards/sync/status', render: '/api/render-node/status', stage: '/api/frames/render-node' })) {
+          try { const r = await (await fetch(url)).json(); diagnostics[key] = { bound: r.bound, projectId: r.projectId, enabled: r.enabled, off: r.off, binding: r.binding, started: r.started, starting: r.starting, lastError: r.lastError }; } catch {}
+        }
+        return { url: location.href, reopen: v?.reopenState, diagnostics, relocationRoles: window.relocationRoles, journalFailures: window.recoveryJournalErrors, recoveryEvidence: window.recoveryEvidence, buttons: [...document.querySelectorAll('[data-pc="recovery-auth-open"]')].map(el => ({ text: el.textContent, rect: JSON.stringify(el.getBoundingClientRect()), parent: el.parentElement?.tagName })), dialogs: [...document.querySelectorAll('[role="dialog"]')].map(el => ({ label: el.getAttribute('aria-label'), cls: el.className })), project: window.probe?.store.getState().project.id };
+      });
+      state.http = p.recoveryHttpEvidence;
+      state.storageFailures = p.recoveryStorageEvidence;
+      fs.writeFileSync(path.join(root, `failure-page-${index}.json`), JSON.stringify(state, null, 2));
+      await p.screenshot({ path: path.join(root, `failure-page-${index}.png`) });
+    } catch {}
+  }
+  console.error(JSON.stringify({ ok: false, phase, error: String(e.message).replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]'), evidenceDirectory: root })); process.exitCode = 1;
+} finally { await browser?.close(); for (const child of [...editors]) await stop(child); await cloud?.close(); if (collector) await new Promise(r => collector.close(r)); }

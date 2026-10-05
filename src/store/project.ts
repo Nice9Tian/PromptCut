@@ -5,7 +5,7 @@
 // setProject、history、future、listeners、emit 等是包内原语,只给 src/store/actions 用,
 // 不从这里转出去。
 export type { EditorState } from "./core";
-export { getState, subscribe, useStore, StoreHold, planPlacement, onLocalCommit } from "./core";
+export { getState, subscribe, useStore, StoreHold, planPlacement, onLocalCommit, setProjectLoader } from "./core";
 
 import { coreActions } from "./actions/coreActions";
 import { projectMeta } from "./actions/projectMeta";

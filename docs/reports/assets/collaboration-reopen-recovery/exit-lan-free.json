@@ -1,0 +1,126 @@
+{
+  "provenance": {
+    "date": "2026-10-05",
+    "sourceCommit": "7bfe11d69463765b9091226d36366b37c34818c3",
+    "machine": "PC, isolated services and browser",
+    "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-e2e.mjs --exit-matrix --cancel-ui --nodes --roles",
+    "actualExitCode": 0,
+    "elapsedSeconds": 116,
+    "stderr": "empty apart from the user-directory notice",
+    "purpose": "plan section 11 row 15: the two mode combinations of the exit and cancel matrix that had not been run"
+  },
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_bd6zlyodxoiodho54fsrmos4a5",
+      "where": "lan",
+      "mode": "free",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": true,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": true,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 6,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": false,
+      "creatorSecondDevice": true,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": false
+    }
+  ],
+  "exitMatrix": {
+    "where": "lan",
+    "cases": [
+      {
+        "phase": "identity",
+        "who": "host",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": true
+      },
+      {
+        "phase": "host",
+        "who": "host",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": true
+      },
+      {
+        "phase": "discover",
+        "who": "member",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": null
+      },
+      {
+        "phase": "enter-and-register",
+        "who": "host",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": true
+      }
+    ],
+    "unsupportedPhases": [],
+    "creatorCancelUi": {
+      "returnedToLocal": true,
+      "savedAssociationRemoved": true,
+      "originalContentPreserved": true
+    }
+  },
+  "relocation": null,
+  "relocationBack": null,
+  "asset": {
+    "hash": "de90182fc5f3c26c17177394264f09cb94ccea5d24c6b6927f2fa9e72f6c7882",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-ozj8Ui",
+  "testIsolation": {
+    "providerConfiguration": true,
+    "firstAuthenticationControl": {
+      "hitConfirmed": true,
+      "speechPromptDismissed": false
+    }
+  }
+}

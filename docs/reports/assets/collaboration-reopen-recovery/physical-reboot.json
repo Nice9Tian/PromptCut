@@ -1,0 +1,69 @@
+{
+  "ok": true,
+  "actualComputerRestart": true,
+  "actualHostProcessRestart": true,
+  "actualMemberProcessRestart": true,
+  "roomId": "sp_e2uowvu7stzt3esqfeh7v4aj63",
+  "sameUsers": [
+    "creator:host",
+    "member:member"
+  ],
+  "authenticatedRoles": [
+    {
+      "username": "host",
+      "creator": true,
+      "roles": [
+        "page",
+        "agent",
+        "page"
+      ]
+    },
+    {
+      "username": "member",
+      "creator": false,
+      "roles": [
+        "page"
+      ]
+    }
+  ],
+  "beforeRev": 12,
+  "afterRev": 14,
+  "hostRegistration": "online",
+  "recoveryCreateRequests": 0,
+  "bidirectionalEdits": true,
+  "ticketAsset": {
+    "ok": true,
+    "reads": [
+      {
+        "namespace": "media",
+        "status": 200,
+        "ok": true,
+        "bytes": 50000
+      },
+      {
+        "namespace": "snap",
+        "status": 200,
+        "ok": true,
+        "bytes": 50000
+      },
+      {
+        "namespace": "px",
+        "status": 200,
+        "ok": true,
+        "bytes": 50000
+      }
+    ]
+  },
+  "emptyBrowserStorage": true,
+  "testIsolation": {
+    "providerConfiguration": true
+  },
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-MH2SCg",
+  "sourceCommit": "33d7106f943e38a21d4db5a2e749d0d2a35915aa",
+  "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-reboot.mjs <pre-reboot isolated checkpoint>",
+  "actualExitCode": 0,
+  "bootComparison": {
+    "differentOperatingSystemBootIdentity": true,
+    "allowSameBoot": false
+  }
+}

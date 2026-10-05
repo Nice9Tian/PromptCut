@@ -96,6 +96,8 @@
  * 输出：过程写 stderr（一行一条 JSON）；stdout 最后一行是结果行（`m8/lib.mjs` 的形状），ok 为假退出码 1，参数不对 2。
  *   用例因前置不满足而跳过时 `skipped` 写明理由，ok 为真。
  */
+import '../lib/no-user-dirs.mjs';
+import '../lib/test-silent-processes.mjs';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';

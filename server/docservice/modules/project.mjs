@@ -936,6 +936,12 @@ export function projectModule({
     revOf(projectId) {
       return PROJECT_ID_RE.test(projectId) ? stateOf(projectId).projectRev : 0;
     },
+    /** Server-internal snapshot inspection; never expose the mutable cached body. */
+    bodyOf(projectId) {
+      if (!PROJECT_ID_RE.test(projectId)) return null;
+      const state = stateOf(projectId);
+      return state.hasBody ? structuredClone(state.body) : null;
+    },
   };
 }
 

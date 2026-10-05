@@ -41,7 +41,8 @@ for (const kind of ['patch', 'extension']) {
         }), 'utf8');
       }
       const command = `$ErrorActionPreference='Stop'; [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false); & ${quote(script)} -InstallDir ${quote(installed)} -WhatIf; exit $LASTEXITCODE`;
-      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], {
+      // 与随包启动器一样只对本次 PowerShell 指定策略；不改用户或系统执行策略。
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], {
         encoding: 'utf8', windowsHide: true, timeout: 15_000,
         env: {
           ...process.env,

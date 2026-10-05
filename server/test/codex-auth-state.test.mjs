@@ -58,7 +58,9 @@ test('runtime token_revoked overrides local login and both provider caches; repe
   assert.equal(terminals(r.events).length,1);assert.equal(terminals(r.events)[0].authReason,'token_revoked');
   assert.equal(codexAuthState().snapshot().state,'invalid');
   for(const refresh of [false,true,false]) assert.equal((await listProviders({refresh})).find(p=>p.id==='codex').auth.status,'invalid');
-  for(const {pid} of calls()) if(pid) assert.equal(alive(pid),false);
+  // Runtime invalidation resolves before Windows completes asynchronous child termination.
+  // Keep the exit requirement, but observe it within the existing bounded fixture wait.
+  for(const {pid} of calls()) if(pid) await until(() => !alive(pid));
 });
 
 test('a delayed positive probe from before invalidation cannot seed auth cache', async () => {
@@ -168,14 +170,14 @@ test('cancel races authentication; abnormal exit and early turn done settle once
   for(const scenario of ['stderr','exit','normal']) {
     const s=codexAuthState();s.completeLogin(s.beginLogin());write({scenario,runDelay:100});const r=run();
     if(scenario==='stderr') {await until(()=>calls().some(c=>c.args?.[0]==='exec'));r.abort();}
-    await r.done;assert.ok(terminals(r.events).length<=1);for(const c of calls()) if(c.pid) assert.equal(alive(c.pid),false);
+    await r.done;assert.ok(terminals(r.events).length<=1);for(const c of calls()) if(c.pid) await until(() => !alive(c.pid));
   }
 });
 
 test('fatal auth cleans only this Windows CLI process tree; unrelated task process survives', {skip:process.platform!=='win32'},async()=>{
   const unrelated=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{windowsHide:true,stdio:'ignore'});
   try { write({scenario:'split',descendant:true});const r=run();await r.done;
-    for(const c of calls()) if(c.pid||c.descendant) assert.equal(alive(c.pid||c.descendant),false);
+    for(const c of calls()) if(c.pid||c.descendant) await until(() => !alive(c.pid||c.descendant));
     assert.equal(alive(unrelated.pid),true);
   } finally {const closed=new Promise(r=>unrelated.once('close',r));unrelated.kill('SIGKILL');await closed;}
 });

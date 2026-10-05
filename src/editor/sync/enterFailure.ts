@@ -35,6 +35,16 @@ function statusOf(e: unknown): { status: number | null; retryAfter: number | nul
   };
 }
 
+/** 可信挑战/发现接口已明确拒绝，不能把它当普通网络断线无限重连。 */
+export function classifyProtocolError(e: unknown): "auth" | "kicked" | "no-project" | null {
+  const { status } = statusOf(e);
+  const reason = (e as { reason?: unknown })?.reason;
+  if (status === 404 || status === 410 || reason === "deleted" || reason === "no-project") return "no-project";
+  if (status === 403 || reason === "banned" || reason === "kicked" || reason === "removed") return "kicked";
+  if (status === 401 || reason === "auth" || reason === "unauthorized") return "auth";
+  return null;
+}
+
 export async function classifyEnterFailure(outcome: CloseInfo, deps: EnterFailureDeps): Promise<EnterFailure> {
   const denied = (): EnterFailure => ({ error: deps.wasKicked() ? "kicked" : "auth" });
   if (outcome.reason === "timeout") return { error: "unreachable" };
@@ -45,7 +55,8 @@ export async function classifyEnterFailure(outcome: CloseInfo, deps: EnterFailur
   } catch (e) {
     const { status, retryAfter } = statusOf(e);
     if (status === 429) return { error: "rate-limited", retryAfter };
-    if (status === 404) return { error: "no-project" };
+    const terminal = classifyProtocolError(e);
+    if (terminal) return { error: terminal };
     return { error: "unreachable" };
   }
   try {

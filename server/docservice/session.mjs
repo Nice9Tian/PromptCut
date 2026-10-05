@@ -124,6 +124,7 @@ function withSeq(text, seq, ack) {
  * @param {(event: string, fields: object) => void} [options.log]
  * @param {number} [options.retainMs] 缺省 60 000
  * @param {number} [options.tombstoneMs] 缺省 120 000
+ * @param {(principal: object) => string | null} [options.resumeGate] 接续前重新核对持久权限状态
  */
 export function createSessionLayer({
   router,
@@ -132,6 +133,7 @@ export function createSessionLayer({
   log = () => {},
   retainMs,
   tombstoneMs,
+  resumeGate,
 } = /** @type {any} */ ({})) {
   if (!router || typeof router.connect !== 'function') throw new TypeError('createSessionLayer: 要给 router');
   if (typeof nextConnId !== 'function') throw new TypeError('createSessionLayer: 要给 nextConnId');
@@ -405,6 +407,14 @@ export function createSessionLayer({
         }
         return { ok: false, status: 404, code: SESSION_CLOSE.NO_SESSION, reason: 'no-session' };
       }
+      if (typeof resumeGate === 'function') {
+        let reason;
+        try { reason = resumeGate(s.principal); } catch { reason = 'forbidden'; }
+        if (typeof reason === 'string') {
+          endSession(s, 1012, reason);
+          return { ok: false, status: 503, code: 1012, closedCode: 1012, closedReason: reason, reason };
+        }
+      }
       if (!Number.isSafeInteger(ack) || ack < 0 || ack > s.outSeq) {
         badSeq(s);
         return { ok: false, status: 410, code: SESSION_CLOSE.BAD_SEQ, closedCode: SESSION_CLOSE.BAD_SEQ, closedReason: 'bad-seq', reason: 'bad-seq' };
@@ -671,6 +681,9 @@ export function createSessionLayer({
     /**
      * 关停：所有会话以 `code` 结束（脱开的也结束），旧客户端关掉它的传输。回全部注销完成的 Promise。
      */
+    closeSpace(space, code, reason) {
+      for (const s of [...byConn.values()]) if (s.principal?.tenantId === space) endSession(s, code, reason);
+    },
     closeAll(code, reason) {
       const waits = [];
       for (const s of [...byConn.values()]) {

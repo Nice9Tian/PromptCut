@@ -438,6 +438,9 @@ function withFallback(picked: string | null, fallback: string | null, online: bo
   const selfHost = typeof location === "undefined" ? "" : location.host;
   try { return new URL(fallback).host === selfHost ? null : fallback; } catch { return null; }
 }
+function relayAssetBase(docBase: string, fallback: string | null): string | null {
+  try { return /^\/hosting\/relay\/sp_[a-z2-7]{26}\/doc\/?$/.test(new URL(docBase).pathname) ? fallback : null; } catch { return null; }
+}
 
 /**
  * 进入共享项目后调:从服务地址登记里挑素材服务、设成当前远程素材服务。登记里挑不到时用 `fallback`
@@ -458,7 +461,7 @@ export async function connectSharedAssets(link: LinkLike, docBase: string, { onl
     const r = await link.request({ type: "service.watch", kinds: ["asset"] });
     base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host, { online });
   } catch { failed = true; /* 取不到登记:用后备,没有就留在本地 */ }
-  base = withFallback(base, fallback, online);
+  base = relayAssetBase(docBase, fallback) ?? withFallback(base, fallback, online);
   if (generation !== discoveryGeneration || docLink !== link) return null;
   if (again && remote && (failed || base === remote.base)) {
     if (failed) discoveryTimer = setTimeout(() => {
@@ -482,7 +485,7 @@ export async function connectSharedAssets(link: LinkLike, docBase: string, { onl
 export function receiveSharedAssetEndpoints(endpoints: unknown): void {
   const ctx = sharedAssetContext;
   if (!ctx || docLink !== ctx.link) return;
-  const base = withFallback(pickAssetEndpoint(endpoints, ctx.docBase, typeof location === "undefined" ? "" : location.host, { online: ctx.online }), ctx.fallback, ctx.online);
+  const base = relayAssetBase(ctx.docBase, ctx.fallback) ?? withFallback(pickAssetEndpoint(endpoints, ctx.docBase, typeof location === "undefined" ? "" : location.host, { online: ctx.online }), ctx.fallback, ctx.online);
   if ((remote?.base ?? null) === base) return;
   discoveryGeneration++;
   if (discoveryTimer !== null) clearTimeout(discoveryTimer);

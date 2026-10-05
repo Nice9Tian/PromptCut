@@ -1,0 +1,57 @@
+{
+  "historicalFailure": {
+    "testRun": "pc-reopen-e2e-t6nM3X",
+    "where": "hosted",
+    "mode": "free",
+    "phase": "member credential change",
+    "hostState": "connected",
+    "memberState": "damaged",
+    "verify401Count": 2,
+    "rateLimit429Observed": false,
+    "localApiFailureDiagnosticRecorded": false,
+    "browserJournalFailureDiagnosticRecorded": false,
+    "causeEstablished": false,
+    "resolvedClaim": false
+  },
+  "postmortemAfterOwnedProcessesStopped": {
+    "vaultReadable": true,
+    "digestValid": true,
+    "lockPresent": false,
+    "identityCount": 1,
+    "journals": [
+      { "revision": 10, "pendingCount": 0, "restoreAccepted": true },
+      { "revision": 5, "pendingCount": 0, "restoreAccepted": true }
+    ],
+    "provesInFlightRequestOrMemoryWasValid": false
+  },
+  "laterWholeProbeSuccesses": [
+    { "testRun": "pc-reopen-e2e-Dw7xvX", "retryAfterSeconds": 60, "observedDelayMs": 60382 },
+    { "testRun": "pc-reopen-e2e-eUSdVu", "retryAfterSeconds": 60, "observedDelayMs": 60470 },
+    { "testRun": "pc-reopen-e2e-MsU497", "retryAfterSeconds": 60, "observedDelayMs": 60395 }
+  ],
+  "independentlyReproducedClassificationFault": {
+    "before": { "tests": 19, "pass": 17, "fail": 2, "skipped": 0 },
+    "after": { "tests": 19, "pass": 19, "fail": 0, "skipped": 0, "durationMs": 5385.4322 },
+    "transientReadCode": "EBUSY",
+    "transientProviderCode": "ETIMEDOUT",
+    "corruptionRemainsTerminal": true,
+    "originalBytesPreserved": true,
+    "unknownDiagnosticCodesRedacted": true,
+    "historicalFailureCauseProvenByThisTest": false
+  },
+  "diagnosticsNowAvailable": {
+    "localApi": ["route", "status", "fixed phase", "fixed OS code", "elapsed milliseconds"],
+    "browserJournal": ["revision", "pending count", "new pending count"],
+    "rawMessagesPathsStacksPayloadsOrSecretsRecorded": false
+  },
+  "additionalReadOnlyAudit": {
+    "attemptedReads": 160,
+    "successfulReads": 160,
+    "failures": [],
+    "originalBytesPreserved": true,
+    "writesToProtectedStore": false,
+    "durationMs": 27774,
+    "historicalCauseEstablished": false,
+    "firstSetupAttempt": "requested a nonexistent saved file; corrected to the existing matrix fixture before reads"
+  }
+}

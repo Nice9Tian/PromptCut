@@ -1,0 +1,90 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_3voale7khddhm34rmemhxjgogb",
+      "where": "hosted",
+      "mode": "free",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": false,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": false,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 5,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": false,
+      "creatorSecondDevice": true,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": false
+    }
+  ],
+  "exitMatrix": {
+    "where": "hosted",
+    "cases": [
+      {
+        "phase": "identity",
+        "who": "host",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": null
+      },
+      {
+        "phase": "enter",
+        "who": "member",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": null
+      }
+    ],
+    "unsupportedPhases": [
+      "local-host: cloud is the host",
+      "lan-discovery: trusted hosted candidate has no LAN discovery"
+    ],
+    "creatorCancelUi": {
+      "returnedToLocal": true,
+      "savedAssociationRemoved": true,
+      "originalContentPreserved": true
+    }
+  },
+  "asset": {
+    "hash": "d1ee71bebb0bcfb280bdaad950c449c0eeb716fbe4abc5d06508ff9cc4952be0",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-yggcKL"
+}

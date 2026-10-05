@@ -303,11 +303,12 @@ try {
   });
   res.projectId = shared.projectId;
   const candidate = { where: 'hosted', base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode };
-  const enter = (page, cred, cand = candidate) => P(page, async (candidate, cred) => {
+  const enter = (page, cred, cand = candidate, initialize = false) => P(page, async (candidate, cred, initialize) => {
     const M = await import('/src/editor/sync/syncManager.ts');
-    return M.enterShared(candidate, cred);
-  }, cand, cred);
-  const ea = await enter(pageA, { as: 'creator', username: 'alice', password: creatorPw });
+    return M.enterShared(candidate, cred, { initialize });
+  }, cand, cred, initialize);
+  // A has just created this fixture room; B and later entries must never initialize it.
+  const ea = await enter(pageA, { as: 'creator', username: 'alice', password: creatorPw }, candidate, true);
   if (!ea?.ok) throw new Error(`A 进不去共享项目:${JSON.stringify(ea)}`);
   // A 把项目带进共享项目时,项目用到的探针卡(用户卡)传上内容库
   const aPushed = await waitFor(async () => {

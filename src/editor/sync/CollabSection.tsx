@@ -7,7 +7,7 @@
  *   邀请码状态、创建者操作（作废并重新生成邀请码，每次当场输入创建者密码；以及 C6.5 的改项目密码、改名单、踢人、删项目）。
  * - 取消勾选再「确定」：确认后放云端的先拉回本机再删云端项目，放本机的停本机托管；中途失败恢复为开启。
  *
- * 多用户协作不写进项目文档（第 6 节「位置」）：状态取自同步管理（`syncManager.ts`）与本机记下的东西（`collab.ts`）。
+ * 房间关联写进普通项目文件，凭证只在设备保护存储中；连接状态取自同步管理（`syncManager.ts`）与本机记录（`collab.ts`）。
  */
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 // @ts-expect-error 无类型声明的 .mjs(零依赖,浏览器里能跑,契约第 7 节)
@@ -16,7 +16,7 @@ import { ONLINE } from "../../online/mode";
 import { hosted, type SharedMode, type Where } from "./sharedApi";
 import { ListEditor, LanRestartHint, readHostedUrl, writeHostedUrl } from "./SharedDialogs";
 import { CreatorFlow, type Flow } from "./MembersPanel";
-import { useSync } from "./syncManager";
+import { useSync, moveSharedToHosted, moveSharedToLan } from "./syncManager";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
   type InviteInfo, type InviteStatus,
@@ -38,7 +38,7 @@ export const COLLAB_TEXT = {
   cancelled: "多用户协作已关闭，内容已拉回本机。",
   cancelFailed: "拉回本机没有完成，已恢复为开启状态。检查网络后重试。",
   localNote: "你的电脑关机后其他人打不开，可在设置里搬到云端",
-  localLimit: "当前版本放本机只支持局域网内的成员加入；要让局域网外的人加入，请选放云端。",
+  localLimit: "放本机时，主机在线且云端登记成功后，其他成员可通过中继加入；临时网络故障会自动重试登记。",
 } as const;
 
 export interface CollabHandle {
@@ -59,7 +59,9 @@ function when(ms: number | null): string {
 export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(function CollabSection({ open }, ref) {
   const shared = useSync((v) => v.shared);
   const device = useSync((v) => v.device);
-  const isOn = !!shared;
+  const association = useSync((v) => v.association);
+  const hostRegistration = useSync((v) => v.hostRegistration);
+  const isOn = !!shared || !!association;
   const [checked, setChecked] = useState(isOn);
   const [where, setWhere] = useState<Where>("lan");
   const [mode, setMode] = useState<SharedMode>("free");
@@ -73,6 +75,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const [hostedUrl, setHostedUrl] = useState(readHostedUrl());
   const [status, setStatus] = useState<{ text: string; tone: "ok" | "err" | "info" } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [movingHosted, setMovingHosted] = useState(false);
+  const [movingLan, setMovingLan] = useState(false);
   const [invite, setInvite] = useState<InviteInfo | null>(null);
   const [inviteStatus, setInviteStatus] = useState<InviteStatus | null>(null);
   const [regenPw, setRegenPw] = useState<string | null>(null);
@@ -82,9 +86,19 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
 
   const local = shared ? localCollab(shared.projectId) : null;
   const iAmCreator = !!shared?.creator;
-  const lanOk = !ONLINE && !!device?.localEditor && !!device?.lanHost;
+  const lanOk = !ONLINE && !!device?.localEditor;
+  useEffect(() => {
+    if (movingHosted && shared?.where === "hosted") {
+      setMovingHosted(false); setStatus({ text: "已搬到云端，仍是原房间。", tone: "ok" });
+    }
+  }, [movingHosted, shared?.where]);
+  useEffect(() => {
+    if (movingLan && shared?.where === "lan") {
+      setMovingLan(false); setStatus({ text: "已搬回本机，仍是原房间。", tone: "ok" });
+    }
+  }, [movingLan, shared?.where]);
 
-  // 打开对话框时按当前状态重置；缺省值（第 6 节）：放本机、自由进入、创建者用户名取设备名、两样密码自动生成
+  // 打开对话框时按当前状态重置；只有尚未开启协作的创建表单生成缺省密码，恢复原房间不生成新密码。
   useEffect(() => {
     if (!open) return;
     setChecked(isOn);
@@ -95,8 +109,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setCopied(null);
     setWhere(ONLINE ? "hosted" : "lan");
     setMode("free");
-    setCreatorPw(generatePassword());
-    setProjectPw(generatePassword());
+    setCreatorPw(isOn ? "" : generatePassword());
+    setProjectPw(isOn ? "" : generatePassword());
     setList([]);
     setHostedUrl(readHostedUrl());
     void defaultCreatorName().then(setCreator);
@@ -211,6 +225,18 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setInviteStatus({ active: true, expiresAt: r.invite.expiresAt, maxUses: r.invite.maxUses, used: 0, revokedAt: null });
     setStatus({ text: COLLAB_TEXT.regenDone, tone: "ok" });
   };
+  const moveHosted = async () => {
+    setMovingHosted(true); setBusy(true); setStatus({ text: "正在搬到云端，完成后自动连接原房间…", tone: "info" });
+    const result = await moveSharedToHosted(); setBusy(false);
+    if (!result.ok) { setMovingHosted(false); setStatus({ text: result.error === "not-original-host" ? "请在当前实际主机上执行搬到云端。"
+      : result.error === "relocation-materials-missing" ? "有项目引用的素材尚未入库，补齐后重试；原房间和身份已保留。"
+        : "搬迁暂未完成，原房间信息已保留。检查连接或存储后重试。", tone: "err" }); }
+  };
+  const moveLan = async () => {
+    setMovingLan(true); setBusy(true); setStatus({ text: "正在搬回本机，完成后自动连接原房间…", tone: "info" });
+    const result = await moveSharedToLan(); setBusy(false);
+    if (!result.ok) { setMovingLan(false); setStatus({ text: "搬迁暂未完成，房间和本机恢复信息已保留。请检查连接、身份或存储后重试。", tone: "err" }); }
+  };
 
   const copied$ = (key: string) => (copied === key ? <span className="pc-sync-hint">{COLLAB_TEXT.copied}</span> : null);
   const copyBtn = (key: string, text: string) => (
@@ -222,7 +248,14 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     <div className="pc-collab" data-pc="collab-section">
       <label className="pc-collab-head">
         <input type="checkbox" data-pc="collab-toggle" checked={on} disabled={busy || (isOn && !iAmCreator) || (isOn && ONLINE)}
-          onChange={(e) => { setChecked(e.target.checked); setStatus(null); }} />
+          onChange={(e) => {
+            setChecked(e.target.checked); setStatus(null);
+            // 取消后仍留在同一设置窗口：再次明确创建时也保留默认密码生成能力。
+            if (e.target.checked && !isOn) {
+              if (!creatorPw) setCreatorPw(generatePassword());
+              if (!projectPw) setProjectPw(generatePassword());
+            }
+          }} />
         多用户协作
       </label>
 
@@ -237,7 +270,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
             <>
               <div className="pc-sync-warn">{COLLAB_TEXT.localNote}</div>
               <div className="pc-sync-hint">{COLLAB_TEXT.localLimit}</div>
-              {!lanOk && !ONLINE ? <LanRestartHint /> : null}
+              {!device?.lanHost && !ONLINE ? <LanRestartHint /> : null}
             </>
           ) : (
             <div className="pc-sync-field">
@@ -290,6 +323,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
             <span className="pc-collab-key">放在</span>
             <span>{shared.where === "hosted" ? "云端" : "本机"} · {shared.mode === "free" ? "自由进入" : "限定进入"}</span>
           </div>
+          {shared.where === "hosted" && !ONLINE ? <button type="button" className="pc-dialog-opt" data-pc="collab-move-lan" disabled={busy} onClick={() => void moveLan()}>搬回本机</button> : null}
           <div className="pc-collab-row" data-pc="collab-project-name">
             <span className="pc-collab-key">项目名</span>
             <code>{shared.name}</code>
@@ -307,7 +341,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
           {shared.where === "lan" ? (
             <>
               <div className="pc-sync-warn">{COLLAB_TEXT.localNote}</div>
-              <div className="pc-sync-hint">{COLLAB_TEXT.localLimit}</div>
+              <div className="pc-sync-hint" data-pc="host-registration" data-state={hostRegistration ?? "member"}>{hostRegistration === "online" ? "原房间已登记上线，中继接入已就绪。" : hostRegistration === "host-conflict" ? "主机占用冲突，未自动接管。" : COLLAB_TEXT.localLimit}</div>
+              {!ONLINE ? <button type="button" className="pc-dialog-opt" data-pc="collab-move-hosted" disabled={busy} onClick={() => void moveHosted()}>搬到云端</button> : null}
             </>
           ) : null}
           {shared.where === "hosted" && iAmCreator ? (

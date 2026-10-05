@@ -1,0 +1,1274 @@
+{
+  "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+  "kind": "formal-physical-independent-host-C10",
+  "run": "c10fix10041021",
+  "status": "fail",
+  "allRequiredAcceptancePassed": false,
+  "originalProbeSha256": "f40b58a3070bf9340d64976dcc0b9b53d4bb96a48ba55f2c5b33924ebeee5eac",
+  "testFingerprintOverride": false,
+  "roleScope": "Laptop creator uses actual Chrome152; PC independent Y host uses already cached actual Chrome150. X is original protocol claimer; no actual independent X host is claimed.",
+  "creator": {
+    "receipt": {
+      "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "role": "creator",
+      "run": "c10fix10041021",
+      "actualExitCode": 1,
+      "status": "fail",
+      "prepareOnly": false,
+      "timingAuthoritative": true,
+      "startedAt": "2026-10-04T10:54:18.055Z",
+      "hostname": "<test-laptop>",
+      "testFingerprintOverride": false,
+      "ownTcpBridgeOnly": true,
+      "hostNetworkChanged": false,
+      "userRuntimeModified": false,
+      "ports": [
+        5480,
+        5481,
+        5482,
+        5483,
+        5484,
+        5485,
+        5486,
+        5487,
+        5488
+      ],
+      "nodeVersion": "v24.19.0",
+      "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+      "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "fails": [
+        "超时:跳到卡中间再播:第一拍附近走估时",
+        "任务 C:跳到卡中间再播,夹具轻卡照旧按估时决定(发起判断的 t 在 3～3.5 秒) :: {\"lastPlan\":null,\"playRun\":null,\"naturalSkips\":null}"
+      ],
+      "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c10-browser-probe.mjs --role creator --run c10fix10041021 --coord http://<test-PC-LAN>:5456 --out <test-temp>\\pc-c10-fixed-creator-c62d39e1ddc245dc8f9754dbb399f716\\probe --keep-temp --timeout-min 25 --e6-reverse --base-port 5480",
+      "ownedProbePid": 22024,
+      "pending": [],
+      "ok": false,
+      "rawLogSha256": {
+        "stdout.log": "7e4d3c79e5f1ba7f2a83c02f98c358ff5063a4e452b463065fef5d4a72cbf9ee",
+        "stderr.log": "937b9eb033b5145f7f6f9b84e81d90a0e07cb446113486ad40a95bbdfc573a06"
+      },
+      "finishedAt": "2026-10-04T11:04:23.048Z"
+    },
+    "result": {
+      "ok": false,
+      "run": "c10fix10041021",
+      "role": "creator",
+      "mode": "a1-a5+e6-reverse",
+      "target": "local",
+      "site": "http://127.0.0.1:5480",
+      "stageOrigins": [
+        "http://127.0.0.1:5481",
+        "http://127.0.0.1:5482"
+      ],
+      "out": "<test-temp>\\pc-c10-fixed-creator-c62d39e1ddc245dc8f9754dbb399f716\\probe",
+      "steps": {
+        "creator": {
+          "ms": 267668,
+          "projectId": "sp_qtqnuyqyrwpoedwsxvdjqwcnn2",
+          "clips": {
+            "main": "c-mutpeqba-14",
+            "extras": 8,
+            "light": "c-mutpeqb9-y"
+          },
+          "creatorFp": "258acaaa7c5fe509",
+          "layer": {
+            "v": 3,
+            "contentKey": true,
+            "envFingerprint": "258acaaa7c5fe509",
+            "resultKey": "7f363a5b21c64c972c4bffb30176c8fb040643b1242e6626a6fb0b013bb5d179",
+            "count": 300,
+            "extras": 8
+          }
+        },
+        "playEntryFixture": {
+          "cardId": "chapter-bar",
+          "start": 2,
+          "duration": 6,
+          "stepMs": 3.5,
+          "catchUpMs": 352.7,
+          "vtOk": false,
+          "tier": "catchup-b"
+        },
+        "playEntry": {
+          "natural": {
+            "clip": "c-mutpeqba-12",
+            "naturalSkipped": [
+              "c-mutpeqba-12",
+              "c-mutpeqba-10"
+            ],
+            "naturalSkips": 121,
+            "playRun": {
+              "startFrame": 0,
+              "lastFrame": 299,
+              "breaks": 0
+            },
+            "plansInPlay": [
+              {
+                "t": 1,
+                "ids": [
+                  "c-mutpeqb9-y"
+                ],
+                "ok": false,
+                "reason": "rate"
+              }
+            ]
+          },
+          "seekMiddle": {
+            "lastPlan": null,
+            "playRun": null,
+            "naturalSkips": null
+          }
+        },
+        "play": {
+          "ms": 22500,
+          "longTasks": 0,
+          "samples": 61,
+          "mainDistinctFrames": 53,
+          "deliveries": 367,
+          "placeholder": {
+            "t": 0.1,
+            "fit": 6,
+            "deadMs": 23.333333333333332,
+            "placeholder": [
+              "c-mutpeqbc-18",
+              "c-mutpeqbc-16",
+              "c-mutpeqba-14"
+            ],
+            "shown": [
+              "c-mutpeqba-14",
+              "c-mutpeqbc-16",
+              "c-mutpeqbc-18"
+            ]
+          }
+        },
+        "settleTrace": [
+          {
+            "at": 2053,
+            "op": "settle",
+            "t": 0,
+            "stale": 0,
+            "plan": true,
+            "costs": 0,
+            "cards": [
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "2c7d893f5c",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "586f169a61",
+                "record": false
+              }
+            ]
+          },
+          {
+            "at": 2053,
+            "op": "settle",
+            "t": 0,
+            "stale": 0,
+            "plan": true,
+            "costs": 0,
+            "cards": [
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "2c7d893f5c",
+                "record": false
+              },
+              {
+                "id": "c-mutpeq",
+                "pipeline": "heavy",
+                "identityPrefix": "586f169a61",
+                "record": false
+              }
+            ]
+          },
+          {
+            "at": 6786,
+            "op": "settle",
+            "t": 0,
+            "stale": 10,
+            "plan": true,
+            "costs": 5
+          },
+          {
+            "at": 6786,
+            "op": "catchup-queued",
+            "t": 0
+          },
+          {
+            "at": 6788,
+            "op": "catchup-start",
+            "t": 0,
+            "back": true,
+            "sameAsFront": false
+          },
+          {
+            "at": 7235,
+            "op": "catchup-rendered",
+            "t": 0,
+            "aborted": false
+          },
+          {
+            "at": 13321,
+            "op": "playing",
+            "t": 1,
+            "ids": [
+              "c-mutpeq"
+            ],
+            "out": "skip-rate",
+            "backlogMs": 11460,
+            "ratePerSec": 1482
+          },
+          {
+            "at": 22308,
+            "op": "settle",
+            "t": 10,
+            "stale": 0,
+            "plan": true,
+            "costs": 5,
+            "cards": []
+          },
+          {
+            "at": 22779,
+            "op": "settle",
+            "t": 0.5,
+            "stale": 10,
+            "plan": true,
+            "costs": 5
+          },
+          {
+            "at": 22779,
+            "op": "catchup-queued",
+            "t": 0.5
+          },
+          {
+            "at": 22784,
+            "op": "catchup-start",
+            "t": 0.5,
+            "back": true,
+            "sameAsFront": false
+          },
+          {
+            "at": 29096,
+            "op": "catchup-rendered",
+            "t": 0.5,
+            "aborted": false
+          }
+        ],
+        "settleTiming": {
+          "stopAt": 22338,
+          "seekAt": 22349,
+          "swappedAt": 29438,
+          "seekToPreciseMs": 7089,
+          "swapPlaying": {
+            "lastPlan": {
+              "at": 13321,
+              "t": 1,
+              "ids": [
+                "c-mutpeqb9-y"
+              ],
+              "ok": false,
+              "reason": "rate",
+              "backlogMs": 11460.4,
+              "ratePerSec": 1482,
+              "leadMs": null
+            },
+            "plans": [
+              {
+                "at": 13321,
+                "t": 1,
+                "ids": [
+                  "c-mutpeqb9-y"
+                ],
+                "ok": false,
+                "reason": "rate",
+                "backlogMs": 11460.4,
+                "ratePerSec": 1482,
+                "leadMs": null
+              }
+            ],
+            "preemptCount": 0,
+            "orphan": false,
+            "playRun": {
+              "startFrame": 0,
+              "lastFrame": 299,
+              "breaks": 0
+            },
+            "naturalSkips": 121,
+            "lastNaturalSkip": {
+              "t": 5.966666666666667,
+              "ids": [
+                "c-mutpeqba-10"
+              ]
+            },
+            "naturalSkipped": [
+              "c-mutpeqba-12",
+              "c-mutpeqba-10"
+            ]
+          },
+          "costs": [
+            {
+              "k": "[redacted]",
+              "step": 1,
+              "stepMax": 4.8,
+              "catchUp": 65.5,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 40.9,
+              "stepMax": 40.9,
+              "catchUp": 12149.9,
+              "capped": true,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 2.3,
+              "stepMax": 8.5,
+              "catchUp": 340.2,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 49.2,
+              "stepMax": 49.2,
+              "catchUp": 1247.3,
+              "capped": true,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 3.5,
+              "stepMax": 5.2,
+              "catchUp": 352.7,
+              "vtOk": false,
+              "kind": "stepped"
+            }
+          ]
+        },
+        "settle": {
+          "settled": true,
+          "stillLive": true,
+          "feedSettled": 0,
+          "backWork": {
+            "on": true,
+            "reason": null,
+            "changes": 0,
+            "sent": 4,
+            "pauses": {}
+          },
+          "probeFrames": {
+            "frames": 2,
+            "gzFrames": 2,
+            "gzBytes": 6986,
+            "htmlBytes": 0
+          }
+        },
+        "member": {
+          "ms": 52459,
+          "stages": [
+            "http://127.0.0.1:5481",
+            "http://127.0.0.1:5482"
+          ],
+          "iframeTargets": [
+            "http://127.0.0.1:5481",
+            "http://127.0.0.1:5482",
+            "http://127.0.0.1:5486",
+            "http://127.0.0.1:5487"
+          ],
+          "caps": {
+            "A": {
+              "prerender": false,
+              "offscreenGl": true,
+              "lowMemory": false,
+              "measure": true,
+              "catchUp": true,
+              "stageId": "A"
+            },
+            "B": {
+              "prerender": false,
+              "offscreenGl": true,
+              "lowMemory": false,
+              "measure": true,
+              "catchUp": true,
+              "stageId": "B"
+            }
+          },
+          "requests": {
+            "px": 0,
+            "snap": 490,
+            "media": 12,
+            "mediaByFrameOrigin": {
+              "http://127.0.0.1:5480→http://127.0.0.1:5480": 6,
+              "http://127.0.0.1:5481→http://127.0.0.1:5481": 3,
+              "http://127.0.0.1:5482→http://127.0.0.1:5482": 3
+            }
+          },
+          "l2": {
+            "costs": 5,
+            "snapshots": 91,
+            "ranges": 2
+          },
+          "pageFp": "258acaaa7c5fe509",
+          "costPublish": {
+            "calls": 5,
+            "ok": 5,
+            "failed": 0,
+            "records": 5,
+            "lastError": null
+          },
+          "publisher": {
+            "measured": true,
+            "want": {
+              "projectId": "sp_qtqnuyqyrwpoedwsxvdjqwcnn2",
+              "projectRev": 1
+            },
+            "last": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@1#clips:10kldttvgxdld",
+            "lastClips": [
+              "c-mutpeqb9-y",
+              "c-mutpeqba-10",
+              "c-mutpeqba-12",
+              "c-mutpeqba-14",
+              "c-mutpeqbc-16",
+              "c-mutpeqbc-18",
+              "c-mutpeqbc-1a",
+              "c-mutpeqbd-1c",
+              "c-mutpeqbd-1e",
+              "c-mutpeqbe-1g",
+              "c-mutpeqbe-1i",
+              "c-mutpeqbe-1k"
+            ],
+            "helloOk": true,
+            "nodeWaitMs": null,
+            "log": [
+              {
+                "at": 1791111536952,
+                "id": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@1#clips:1eemqrq69a9li",
+                "clips": 11,
+                "ok": true,
+                "state": "open",
+                "node": "ready"
+              },
+              {
+                "at": 1791111578269,
+                "id": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@1#clips:10kldttvgxdld",
+                "clips": 12,
+                "ok": true,
+                "state": "open",
+                "node": "ready"
+              }
+            ]
+          }
+        },
+        "reopen": {
+          "ms": 21076,
+          "gateAgain": false,
+          "costs": {
+            "costs": 5,
+            "snapshots": 538,
+            "ranges": 5
+          },
+          "refetched": 0,
+          "l2Hits": 3
+        },
+        "publisher": {
+          "measured": true,
+          "want": {
+            "projectId": "sp_qtqnuyqyrwpoedwsxvdjqwcnn2",
+            "projectRev": 11
+          },
+          "last": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@11#clips:1eemqrq69a9li",
+          "lastClips": [
+            "c-mutpeqb9-y",
+            "c-mutpeqba-12",
+            "c-mutpeqba-14",
+            "c-mutpeqbc-16",
+            "c-mutpeqbc-18",
+            "c-mutpeqbc-1a",
+            "c-mutpeqbd-1c",
+            "c-mutpeqbd-1e",
+            "c-mutpeqbe-1g",
+            "c-mutpeqbe-1i",
+            "c-mutpeqbe-1k"
+          ],
+          "helloOk": true,
+          "nodeWaitMs": null,
+          "log": [
+            {
+              "at": 1791111591765,
+              "id": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@1#clips:1eemqrq69a9li",
+              "clips": 11,
+              "ok": true,
+              "state": "done",
+              "node": "ready"
+            },
+            {
+              "at": 1791111613197,
+              "id": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@11#clips:1eemqrq69a9li",
+              "clips": 11,
+              "ok": true,
+              "state": "open",
+              "node": "ready"
+            }
+          ]
+        },
+        "a5host": {
+          "readyMs": 6579,
+          "platform": "win32",
+          "arch": "x64",
+          "testFingerprint": false,
+          "profile": "host",
+          "envFingerprint": "de57ec1a7cffba6b",
+          "codeVersion": "46d3c04676bd",
+          "differsFromPage": true,
+          "differsFromCreator": true,
+          "cut": null,
+          "ffmpeg": {
+            "found": true,
+            "via": "PATH",
+            "version": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg "
+          },
+          "capabilities": {
+            "userCards": true,
+            "graphCards": false,
+            "transcode": false,
+            "streams": false
+          }
+        },
+        "a5": {
+          "ms": 258726,
+          "published": {
+            "at": 1791111613197,
+            "id": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@11#clips:1eemqrq69a9li",
+            "clips": 11,
+            "ok": true,
+            "state": "open",
+            "node": "ready",
+            "all": 2
+          },
+          "external": true,
+          "claimant": {
+            "profile": "host",
+            "envFingerprint": "de57ec1a7cffba6b",
+            "codeVersion": "46d3c04676bd",
+            "nodes": [
+              {
+                "nodeId": "host:<test-PC>:5203/p0",
+                "claimed": 3,
+                "completed": 1,
+                "failed": 0,
+                "transport": "ws",
+                "resumes": 0,
+                "legacy": false,
+                "opens": 1,
+                "connectFailed": 0
+              }
+            ],
+            "sessionLog": [
+              {
+                "event": "session.open",
+                "transport": "ws",
+                "retainMs": "60000"
+              }
+            ]
+          },
+          "cut": null,
+          "newLayer": {
+            "resultKey": "127e36f07a90",
+            "envFingerprint": "258acaaa7c5fe509",
+            "by": "page",
+            "ready": 60
+          },
+          "shown": {
+            "t": 2.2666666666666666,
+            "planeSig": "12196:1yjsbn0"
+          },
+          "planeText": "main-v2",
+          "hostResult": {
+            "ok": true,
+            "fails": [],
+            "exitCode": 0,
+            "released": 0,
+            "ms": 642214
+          }
+        },
+        "e6r": {
+          "checks": [
+            {
+              "name": "Y-claimed-plan",
+              "ok": true,
+              "detail": {
+                "planId": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@11#clips:1eemqrq69a9li",
+                "watcherTaken": 1,
+                "takenBeforeX": true,
+                "inYHeld": true,
+                "yAtPlanTaken": {
+                  "claimed": 1,
+                  "completed": 0,
+                  "envFingerprint": "de57ec1a7cffba6b"
+                },
+                "ownCopiesRequireY": 14,
+                "roundPlans": 2,
+                "how": "Y 的持有记录里有这个 plan"
+              }
+            },
+            {
+              "name": "derived-fingerprints",
+              "ok": true,
+              "detail": {
+                "tasks": 20,
+                "yFp": "de57ec1a7cffba6b",
+                "pageFp": "258acaaa7c5fe509",
+                "byFp": {
+                  "de57ec1a7cffba6b": 8,
+                  "de57ec1a7cffba6b/dual": 6,
+                  "258acaaa7c5fe509/dual": 6
+                },
+                "badOthers": []
+              }
+            },
+            {
+              "name": "X-online-while-work",
+              "ok": true,
+              "detail": {
+                "claimer": {
+                  "onlineAt": 1791111628647,
+                  "doneAfter": 14
+                },
+                "tasks": 14
+              }
+            },
+            {
+              "name": "X-claimed-0",
+              "ok": true,
+              "detail": {
+                "claimer": {
+                  "fingerprint": "258acaaa7c5fe509",
+                  "attempts": 8,
+                  "rejected": {
+                    "fingerprint-mismatch": 8
+                  },
+                  "claimed": 0,
+                  "sameFpSkipped": 5,
+                  "visibleRound": 6,
+                  "sample": [
+                    {
+                      "id": "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:0-59",
+                      "at": 1791111629256,
+                      "type": "task.claim-rejected",
+                      "reason": "fingerprint-mismatch"
+                    },
+                    {
+                      "id": "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:60-119",
+                      "at": 1791111629256,
+                      "type": "task.claim-rejected",
+                      "reason": "fingerprint-mismatch"
+                    },
+                    {
+                      "id": "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:120-179",
+                      "at": 1791111629256,
+                      "type": "task.claim-rejected",
+                      "reason": "fingerprint-mismatch"
+                    },
+                    {
+                      "id": "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:240-299",
+                      "at": 1791111629257,
+                      "type": "task.claim-rejected",
+                      "reason": "fingerprint-mismatch"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "J-all-done",
+              "ok": true,
+              "detail": {
+                "ok": true,
+                "total": 14,
+                "done": 14,
+                "notDone": [],
+                "superseded": 6,
+                "badSuperseded": []
+              }
+            },
+            {
+              "name": "J-exactly-once",
+              "ok": true,
+              "detail": {
+                "ok": true,
+                "total": 16,
+                "epochs": [
+                  "529acc72-39c5-46d0-a53b-6ff86743998a"
+                ],
+                "dup": [],
+                "missing": [],
+                "stray": 2
+              }
+            },
+            {
+              "name": "J-pure-layers",
+              "ok": true,
+              "detail": {
+                "ok": true,
+                "layers": 4,
+                "observed": 28,
+                "unknown": 0,
+                "mixed": [],
+                "attributed": 14,
+                "tasks": 14,
+                "byNode": {
+                  "Y": 9,
+                  "page": 5
+                },
+                "inferredPage": 5
+              }
+            },
+            {
+              "name": "layer-map-covers-done",
+              "ok": true,
+              "detail": {
+                "v": 3,
+                "cards": 4,
+                "uncovered": 0,
+                "primaryAllY": false,
+                "layers": [
+                  {
+                    "clip": "c-mutpeqb9-y",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqba-10",
+                    "fp": "258acaaa7c5fe509",
+                    "candidates": [
+                      "258acaaa7c5fe509",
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": null
+                  },
+                  {
+                    "clip": "c-mutpeqba-12",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqba-14",
+                    "fp": "258acaaa7c5fe509",
+                    "candidates": [
+                      "258acaaa7c5fe509",
+                      "de57ec1a7cffba6b"
+                    ],
+                    "doneFp": "258acaaa7c5fe509"
+                  },
+                  {
+                    "clip": "c-mutpeqbc-16",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b",
+                      "258acaaa7c5fe509"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqbc-18",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b",
+                      "258acaaa7c5fe509"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqbc-1a",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b",
+                      "258acaaa7c5fe509"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqbd-1c",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b",
+                      "258acaaa7c5fe509"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqbd-1e",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b",
+                      "258acaaa7c5fe509"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqbe-1g",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b",
+                      "258acaaa7c5fe509"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqbe-1i",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b",
+                      "258acaaa7c5fe509"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  },
+                  {
+                    "clip": "c-mutpeqbe-1k",
+                    "fp": "de57ec1a7cffba6b",
+                    "candidates": [
+                      "de57ec1a7cffba6b",
+                      "258acaaa7c5fe509"
+                    ],
+                    "doneFp": "de57ec1a7cffba6b"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "X-differs-from-Y",
+              "ok": true,
+              "detail": {
+                "yFp": "de57ec1a7cffba6b",
+                "xClaimerFp": "258acaaa7c5fe509",
+                "xHostFp": null,
+                "pageFp": "258acaaa7c5fe509"
+              }
+            }
+          ],
+          "planId": "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@11#clips:1eemqrq69a9li",
+          "roundPlans": 2,
+          "tasks": 20,
+          "live": 14,
+          "superseded": 6,
+          "doneByFp": {
+            "de57ec1a7cffba6b": 9,
+            "258acaaa7c5fe509": 5
+          },
+          "epochs": 1,
+          "y": {
+            "fp": "de57ec1a7cffba6b",
+            "claimedSeen": 10,
+            "done": 9
+          },
+          "x": {
+            "claimer": {
+              "fingerprint": "258acaaa7c5fe509",
+              "attempts": 8,
+              "rejected": {
+                "fingerprint-mismatch": 8
+              },
+              "claimed": 0,
+              "sameFpSkipped": 5,
+              "visibleRound": 6,
+              "sample": [
+                {
+                  "id": "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:0-59",
+                  "at": 1791111629256,
+                  "type": "task.claim-rejected",
+                  "reason": "fingerprint-mismatch"
+                },
+                {
+                  "id": "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:60-119",
+                  "at": 1791111629256,
+                  "type": "task.claim-rejected",
+                  "reason": "fingerprint-mismatch"
+                },
+                {
+                  "id": "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:120-179",
+                  "at": 1791111629256,
+                  "type": "task.claim-rejected",
+                  "reason": "fingerprint-mismatch"
+                },
+                {
+                  "id": "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:240-299",
+                  "at": 1791111629257,
+                  "type": "task.claim-rejected",
+                  "reason": "fingerprint-mismatch"
+                }
+              ]
+            }
+          },
+          "pageFp": "258acaaa7c5fe509",
+          "pageDoneEvents": 18,
+          "pageFailedEvents": 6,
+          "l18": {
+            "note": "只记录不判(C10 契约第 18 节第 9 条、M8 计划 L18):桌面发布的 plan 不带片段清单,requires 带发布方指纹与 preferNode;host 档认领回 plan-profile,环境不同的主机领不到",
+            "desktopPlans": 1,
+            "desktopFingerprint": "258acaaa7c5fe509",
+            "hostClaim": [
+              {
+                "id": "plan:p-mutpemka-e00b940b@1",
+                "type": "task.claim-rejected",
+                "reason": "plan-profile",
+                "released": null
+              }
+            ]
+          },
+          "settled": true
+        }
+      },
+      "pending": [],
+      "memberDiag": {
+        "pageErrors": [],
+        "consoleErrors": []
+      },
+      "cleanup": {
+        "deleted": "shared.admin.ok",
+        "listening": []
+      },
+      "ms": 604725,
+      "fails": [
+        "超时:跳到卡中间再播:第一拍附近走估时",
+        "任务 C:跳到卡中间再播,夹具轻卡照旧按估时决定(发起判断的 t 在 3～3.5 秒) :: {\"lastPlan\":null,\"playRun\":null,\"naturalSkips\":null}"
+      ]
+    },
+    "rawResultSha256": "665bafa3327e38536d8f6440fd872837aa75b6e51c262a491e11eeebbf4d833e",
+    "transferManifest": [
+      {
+        "file": "receipt.json",
+        "bytes": 1610,
+        "sha256": "ae74cbd8af790e8fd6c482298757e43d901252f2f135540d776342279d08a2ff"
+      },
+      {
+        "file": "result.json",
+        "bytes": 25578,
+        "sha256": "48f82d70d282278946b3a3553d4f786c5f801401e732bef3415fd018bed26cd3"
+      },
+      {
+        "file": "runner-error.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "runner.log",
+        "bytes": 1788,
+        "sha256": "863fb1a5f907ee30f758cf1f5bf524eb23b916c8eb2be48aeabf2e58b015c923"
+      },
+      {
+        "file": "stderr.log",
+        "bytes": 6811,
+        "sha256": "937b9eb033b5145f7f6f9b84e81d90a0e07cb446113486ad40a95bbdfc573a06"
+      },
+      {
+        "file": "stdout.log",
+        "bytes": 14055,
+        "sha256": "7e4d3c79e5f1ba7f2a83c02f98c358ff5063a4e452b463065fef5d4a72cbf9ee"
+      }
+    ],
+    "acceptanceSummary": {
+      "target": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "role": "creator",
+      "run": "c10fix10041021",
+      "actualExitCode": 1,
+      "status": "fail",
+      "ok": false,
+      "fails": [
+        "超时:跳到卡中间再播:第一拍附近走估时",
+        "任务 C:跳到卡中间再播,夹具轻卡照旧按估时决定(发起判断的 t 在 3～3.5 秒) :: {\"lastPlan\":null,\"playRun\":null,\"naturalSkips\":null}"
+      ],
+      "pending": [],
+      "evidenceDirectory": "<test-temp>\\pc-c10-fixed-creator-c62d39e1ddc245dc8f9754dbb399f716"
+    }
+  },
+  "host": {
+    "receipt": {
+      "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "role": "host",
+      "run": "c10fix10041021",
+      "actualExitCode": 0,
+      "status": "pass",
+      "prepareOnly": false,
+      "timingAuthoritative": false,
+      "startedAt": "2026-10-04T10:53:38.882Z",
+      "hostname": "<test-PC>",
+      "testFingerprintOverride": false,
+      "ownTcpBridgeOnly": true,
+      "hostNetworkChanged": false,
+      "userRuntimeModified": false,
+      "ports": [
+        5203,
+        5204,
+        5205,
+        5480
+      ],
+      "nodeVersion": "v24.19.0",
+      "chromeVersion": "Google Chrome for Testing 150.0.7871.24",
+      "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "fails": [],
+      "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c10-browser-probe.mjs --role host --run c10fix10041021 --coord http://<test-PC-LAN>:5456 --out <test-temp>\\pc-reopen-c10-host-uXuerA\\probe --keep-temp --timeout-min 25 --port 5203",
+      "ownedProbePid": 15160,
+      "pending": [],
+      "ok": true,
+      "rawLogSha256": {
+        "stdout.log": "fe295b1bb6c35fc84a5b2fe7c75fbe0ffcb3d6205ef30a0389fc205792b9d2f5",
+        "stderr.log": "21359c5b109e9063523a3a353036a5987389d252e5b06d20e0fe3f04fcbab9ea"
+      },
+      "finishedAt": "2026-10-04T11:04:21.302Z"
+    },
+    "result": {
+      "ok": true,
+      "run": "c10fix10041021",
+      "role": "host",
+      "mode": "a1-a5",
+      "target": "local",
+      "site": "http://127.0.0.1:5420",
+      "stageOrigins": [
+        "http://127.0.0.1:5421",
+        "http://127.0.0.1:5422"
+      ],
+      "out": "<test-temp>\\pc-reopen-c10-host-uXuerA\\probe",
+      "steps": {},
+      "port": 5203,
+      "project": {
+        "projectId": "sp_qtqnuyqyrwpoedwsxvdjqwcnn2",
+        "hosted": "http://127.0.0.1:5480/hosted/"
+      },
+      "testFingerprint": false,
+      "ffmpeg": {
+        "found": true,
+        "via": "PATH",
+        "version": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg "
+      },
+      "e6Reverse": true,
+      "ready": {
+        "profile": "host",
+        "envFingerprint": "de57ec1a7cffba6b",
+        "codeVersion": "46d3c04676bd",
+        "maxConcurrent": 1,
+        "nodes": [
+          {
+            "nodeId": "host:<test-PC>:5203/p0",
+            "projectId": "sp_qtqnuyqyrwpoedwsxvdjqwcnn2",
+            "connected": true,
+            "claimed": 1,
+            "completed": 0,
+            "dedup": 0,
+            "failed": 0,
+            "lost": 0,
+            "released": 0,
+            "transport": "ws",
+            "resumes": 0,
+            "legacy": false,
+            "opens": 1,
+            "connectFailed": 0,
+            "assetBase": "http://127.0.0.1:5480/media/api/asset"
+          }
+        ],
+        "sessionLog": [
+          {
+            "event": "session.open",
+            "transport": "ws",
+            "retainMs": "60000"
+          }
+        ]
+      },
+      "finish": {
+        "reason": "fresh"
+      },
+      "last": {
+        "profile": "host",
+        "envFingerprint": "de57ec1a7cffba6b",
+        "codeVersion": "46d3c04676bd",
+        "maxConcurrent": 1,
+        "nodes": [
+          {
+            "nodeId": "host:<test-PC>:5203/p0",
+            "projectId": "sp_qtqnuyqyrwpoedwsxvdjqwcnn2",
+            "connected": true,
+            "claimed": 11,
+            "completed": 6,
+            "dedup": 3,
+            "failed": 0,
+            "lost": 0,
+            "released": 0,
+            "transport": "ws",
+            "resumes": 0,
+            "legacy": false,
+            "opens": 1,
+            "connectFailed": 0,
+            "assetBase": "http://127.0.0.1:5480/media/api/asset"
+          }
+        ],
+        "sessionLog": [
+          {
+            "event": "session.open",
+            "transport": "ws",
+            "retainMs": "60000"
+          }
+        ]
+      },
+      "didWork": true,
+      "ids": {
+        "claimed": [
+          "plan:sp_qtqnuyqyrwpoedwsxvdjqwcnn2@11#clips:1eemqrq69a9li",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:180-239",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:240-299",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:0-59",
+          "snapshot:caf9444616513a66fd3606d74106b353ceccd1564b774353d9458964daef28a6:120-179",
+          "snapshot:4d5af2ab932063dda5944e7c78c5d4481fe7a45f66bd310c2435c6e8c2b1232f:0-29",
+          "snapshot:caf9444616513a66fd3606d74106b353ceccd1564b774353d9458964daef28a6:0-59",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:120-179",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:60-119",
+          "snapshot:caf9444616513a66fd3606d74106b353ceccd1564b774353d9458964daef28a6:60-119"
+        ],
+        "completed": [
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:180-239",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:240-299",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:0-59",
+          "snapshot:4d5af2ab932063dda5944e7c78c5d4481fe7a45f66bd310c2435c6e8c2b1232f:0-29",
+          "snapshot:caf9444616513a66fd3606d74106b353ceccd1564b774353d9458964daef28a6:0-59",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:120-179"
+        ],
+        "dedup": [
+          "snapshot:caf9444616513a66fd3606d74106b353ceccd1564b774353d9458964daef28a6:120-179",
+          "snapshot:64987a62602754d2992d5ef884844e331fe5b93e4fbbbe0473759c8b58668317:60-119",
+          "snapshot:caf9444616513a66fd3606d74106b353ceccd1564b774353d9458964daef28a6:60-119"
+        ],
+        "lost": [],
+        "failed": []
+      },
+      "ffmpegMentions": [],
+      "capabilities": {
+        "userCards": true,
+        "graphCards": false,
+        "transcode": false,
+        "streams": false
+      },
+      "exitCode": 0,
+      "released": 0,
+      "ms": 642214,
+      "fails": []
+    },
+    "rawResultSha256": "0c92851f38fa826746686762b5414d069030f6d0bf6cbcc9bcfeab85f1c9503f"
+  },
+  "transferredZip": {
+    "bytes": 7000,
+    "sha256": "a0f72224813cb9fadcc2f019858c1d16733c0dade59caa8cca9844b4d1ddba05"
+  },
+  "finding": "Seek-middle selector did not find an entry plan at t in [3,3.5). Nulls are constructed from the missing selector result, not proof that live internal diagnostics were null. Actual cause unproven.",
+  "publicationTransform": "Non-secret 10-character card identity prefixes in settleTrace.cards are named identityPrefix. Original results and original file hashes are retained."
+}

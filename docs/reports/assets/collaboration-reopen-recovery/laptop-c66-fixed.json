@@ -1,0 +1,1902 @@
+{
+  "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+  "kind": "formal-two-wave-physical-devices",
+  "originalProbeSha256": "47138c1036b9bb05294fdc5d2d383bf77e83890bdb23edc7e6a931fd5e98fe9a",
+  "allWavesPassed": false,
+  "wave1": {
+    "run": "c66f11004100005",
+    "status": "pass",
+    "creator": {
+      "receipt": {
+        "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+        "role": "creator",
+        "prepareOnly": false,
+        "timingAuthoritative": false,
+        "hostname": "<test-PC>",
+        "startedAt": "2026-10-04T10:19:57.910Z",
+        "nodeVersion": "v24.19.0",
+        "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+        "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+        "port": 5203,
+        "status": "pass",
+        "actualExitCode": 0,
+        "fails": [],
+        "installed": false,
+        "userRuntimeModified": false,
+        "hostNetworkChanged": false,
+        "wave": 1,
+        "run": "c66f11004100005",
+        "expiresAt": "2026-10-04T12:14:56.344Z",
+        "diagnosticOnly": false,
+        "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c66-t9-probe.mjs --role creator --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66f11004100005 --port 5203 --out <test-temp>\\pc-reopen-c66-creator-wu7P78\\probe --keep-temp --timeout-min 25",
+        "ownedProbePid": 33428,
+        "ok": true,
+        "probeMs": 108875,
+        "rawLogSha256": {
+          "stdout.log": "5d54677ac492166afd5da8fc81b500b56819efbc7f5d7010cbb896d761bbb598",
+          "stderr.log": "e47b1d78e5c8cfb019eabde10dea0fd3daa7a85b0e0a3a92253d05cc38f1b344"
+        },
+        "finishedAt": "2026-10-04T10:21:49.311Z"
+      },
+      "result": {
+        "role": "creator",
+        "run": "c66f11004100005",
+        "port": 5203,
+        "place": "cloud",
+        "heavyMode": "slow-stepped",
+        "hosted": "http://<test-PC-LAN>:5450",
+        "lanIp": null,
+        "video": {
+          "name": "t9-c66f11004100005.mp4",
+          "bytes": 44417590,
+          "sha": "4f1e98f8ba06",
+          "size": "1920x1080",
+          "fps": 30,
+          "seconds": 6
+        },
+        "projectId": "sp_fjg3kw3br7wdwxc74phyh4lqcf",
+        "projectName": "c66t9-c66f11004100005",
+        "userClip": "c-muto6bnh-w",
+        "cardPushedRev": 1,
+        "assetUrl": "http://<test-PC-LAN>:5451/api/asset",
+        "uploadTarget": "http://<test-PC-LAN>:5451/api/asset",
+        "importMs": 2149,
+        "pause": {
+          "at": 1791109209364,
+          "sinceImportMs": 3436,
+          "via": "log",
+          "postStatus": 200,
+          "chunkSize": 8388608,
+          "originalBytes": 44417590,
+          "originalChunks": 6,
+          "originalReceived": 0,
+          "originalComplete": false,
+          "smallComplete": true,
+          "after1500ms": {
+            "originalReceived": 0,
+            "originalComplete": false,
+            "queued": 1,
+            "target": null
+          }
+        },
+        "tiers": {
+          "original": "33da7e3703f5808b1b34e2cb2a7c016ecad1a300d00a8eaa7d555a36a5517e1e",
+          "small": "3a933aac48940fcdb3a15264ab2e07a1da41b185374b26533801b2dd253a5835",
+          "remuxed": true
+        },
+        "hostReady": {
+          "at": 1791109248563,
+          "port": 5593
+        },
+        "heavy": {
+          "mode": "slow-stepped",
+          "cardId": "probe-slow-stepped",
+          "seconds": 16,
+          "clipId": "c-muto79nw-10",
+          "identityKey": "47913d1787393",
+          "pinned": false,
+          "forwarded": false,
+          "frameMode": "stateful",
+          "compositing": "independent",
+          "control": {
+            "picked": true,
+            "tier": "shared",
+            "frameMode": "stateful",
+            "costKey": "47913d1787393"
+          }
+        },
+        "resume": {
+          "at": 1791109256730,
+          "signal": "observer.small",
+          "sincePauseMs": 47366,
+          "ok": true,
+          "base": "http://<test-PC-LAN>:5451/api/asset",
+          "originalCompleteMs": 5061
+        },
+        "firstCompleteMs": {
+          "small": 3436,
+          "original": 55863,
+          "polls": 22
+        },
+        "uploadQueue": {
+          "uploaded": null,
+          "failures": 1,
+          "lastError": {
+            "code": 401,
+            "message": "素材服务 PUT media/33da7e3703f5808b1b34e2cb2a7c016ecad1a300d00a8eaa7d555a36a5517e1e/0 回 401：unauthorized"
+          }
+        },
+        "uploadOrder": [
+          "tier-start small",
+          "tier-done small",
+          "tier-start original",
+          "retry",
+          "tier-start small",
+          "tier-done small",
+          "tier-start original",
+          "tier-done original",
+          "item-done"
+        ],
+        "uploadSent": [
+          {
+            "tier": "small",
+            "attempt": 1,
+            "sent": 2
+          },
+          {
+            "tier": "small",
+            "attempt": 2,
+            "sent": 0
+          },
+          {
+            "tier": "original",
+            "attempt": 2,
+            "sent": 6
+          }
+        ],
+        "hostedBytes": {
+          "small": {
+            "ms": 141,
+            "bytes": 9708010,
+            "error": null
+          },
+          "original": {
+            "ms": 499,
+            "bytes": 44417590,
+            "error": null
+          }
+        },
+        "plan": {
+          "planId": "plan:p-muto6bng-3f27d08f@3",
+          "plans": 1,
+          "tasks": 8,
+          "done": 8,
+          "failed": 0,
+          "planDoneCount": 1,
+          "pcCompleted": 6,
+          "pcDedup": 0,
+          "pcPlanClaimed": true,
+          "publishToSettledMs": 49011,
+          "stats": {
+            "applied": 8,
+            "applyErrors": 0,
+            "fetched": 239
+          }
+        },
+        "edit": {
+          "ok": true,
+          "ms": 46,
+          "backup": true
+        },
+        "cardRevAfterEdit": 2,
+        "observer": {
+          "role": "observer",
+          "run": "c66f11004100005",
+          "port": 5590,
+          "cardInRepoBefore": false,
+          "env": {
+            "PROMPTCUT_QUEUE_NODE": null,
+            "PROMPTCUT_SHARED_CONFIG": null
+          },
+          "frameQueue": {
+            "nodes": 0,
+            "starting": false,
+            "profile": "pc"
+          },
+          "joinMs": 645,
+          "projectTiers": {
+            "original": "33da7e3703f5808b1b34e2cb2a7c016ecad1a300d00a8eaa7d555a36a5517e1e",
+            "small": "3a933aac48940fcdb3a15264ab2e07a1da41b185374b26533801b2dd253a5835"
+          },
+          "firstShown": {
+            "tier": "small",
+            "idx": 75,
+            "w": 800
+          },
+          "originalAtFirstFrame": {
+            "paused": {
+              "at": 1791109209364,
+              "skipped": null,
+              "originalComplete": false,
+              "originalReceived": 0,
+              "originalChunks": 6
+            },
+            "resumedBefore": false
+          },
+          "smallIdxSource": "stable",
+          "smallIdx": 75,
+          "smallStableBeforeSwap": true,
+          "swapWaitMs": 7397,
+          "original": {
+            "idx": 75,
+            "w": 1920
+          },
+          "tierSequence": [
+            {
+              "ms": 666,
+              "tier": "none",
+              "idx": null,
+              "w": null,
+              "ct": null
+            },
+            {
+              "ms": 10720,
+              "tier": "small",
+              "idx": 75,
+              "w": 800,
+              "ct": 2.5
+            },
+            {
+              "ms": 18493,
+              "tier": "original",
+              "idx": 75,
+              "w": 1920,
+              "ct": 2.5
+            }
+          ],
+          "lowReadyState": {
+            "samples": 0,
+            "presentedBefore": 0,
+            "withShot": 0,
+            "shots": 0,
+            "shotLuma": null,
+            "srcs": [],
+            "windowsMs": []
+          },
+          "swapMode": "covered",
+          "swapSamples": {
+            "n": 865,
+            "black": 0,
+            "idxSeen": [
+              75
+            ],
+            "srcs": [
+              "3a933aac",
+              "33da7e37"
+            ],
+            "smallBeforeSwap": 855,
+            "spanMs": 7891,
+            "coversSwap": true,
+            "mode": "covered",
+            "swapGapMs": 7773,
+            "sampleIntervalMs": 8
+          },
+          "playhead": {
+            "t": 2.5,
+            "log": [
+              {
+                "ms": 0,
+                "t": 2.5,
+                "cut": "cut-1",
+                "duration": 6,
+                "stack": [
+                  "at emit (/src/store/core.ts:33:29)",
+                  "at set (/src/store/core.ts:40:2)",
+                  "at Object.seek (/src/store/actions/playback.ts:6:3)",
+                  "at pptr:evaluate;P%20(<test-file-stack>):16:17"
+                ]
+              }
+            ]
+          },
+          "keyBefore": "1789f62d41f91a",
+          "stageV1": true,
+          "mediaEvents": [
+            {
+              "frame": "A",
+              "seeks": [
+                {
+                  "at": 18197,
+                  "to": 0.001,
+                  "from": 0,
+                  "rs": 4,
+                  "shown": false,
+                  "stack": [
+                    "at HTMLVideoElement.set [as currentTime] (pptr:;CdpFrame.%3Canonymous%3E%20(<test-file-stack>):13:95)",
+                    "at el.addEventListener.once (/src/render/playability.ts:232:21)"
+                  ]
+                },
+                {
+                  "at": 18229,
+                  "to": 2.5,
+                  "from": 0,
+                  "rs": 0,
+                  "shown": false,
+                  "stack": [
+                    "at HTMLVideoElement.set [as currentTime] (pptr:;CdpFrame.%3Canonymous%3E%20(<test-file-stack>):13:95)",
+                    "at syncMediaEl (/src/render/mediaDrive.ts:50:18)",
+                    "at driveMedia (/src/render/mediaDrive.ts:90:2)"
+                  ]
+                }
+              ],
+              "loads": [
+                {
+                  "at": 18224,
+                  "src": "33da7e37",
+                  "stack": [
+                    "at close (/src/render/playability.ts:183:9)"
+                  ]
+                }
+              ],
+              "aligned": [
+                {
+                  "at": 18230,
+                  "mediaTime": 2.5,
+                  "ref": 2.5
+                },
+                {
+                  "at": 18393,
+                  "mediaTime": 2.5,
+                  "ref": 2.5
+                }
+              ],
+              "seeked": [
+                {
+                  "at": 18445,
+                  "shown": true
+                }
+              ],
+              "shownAt": {
+                "at": 18402,
+                "rs": 4
+              },
+              "drops": [
+                {
+                  "at": 17559,
+                  "rs": 0,
+                  "shown": false,
+                  "ct": 0
+                },
+                {
+                  "at": 17591,
+                  "rs": 0,
+                  "shown": false,
+                  "ct": 0
+                },
+                {
+                  "at": 17962,
+                  "rs": 1,
+                  "shown": false,
+                  "ct": 0
+                },
+                {
+                  "at": 18205,
+                  "rs": 1,
+                  "shown": false,
+                  "ct": 0.001
+                },
+                {
+                  "at": 18278,
+                  "rs": 0,
+                  "shown": false,
+                  "ct": 2.5
+                },
+                {
+                  "at": 18305,
+                  "rs": 1,
+                  "shown": false,
+                  "ct": 2.5
+                }
+              ]
+            },
+            {
+              "frame": "B",
+              "seeks": [],
+              "loads": [],
+              "aligned": [],
+              "seeked": [],
+              "shownAt": null,
+              "drops": []
+            }
+          ],
+          "installMs": 298,
+          "hmrMs": 801,
+          "keyAfter": "13f3d8cd211465",
+          "remeasureMs": 1723,
+          "remeasureVia": "record",
+          "newCostRecordMs": 1723,
+          "stageMs": 1725,
+          "editedSeen": {
+            "ms": 58,
+            "ok": true,
+            "editMs": 46
+          },
+          "bRecord": {
+            "rev": 2,
+            "hash": "b0ccc20f0946b9d7a45e242aaaa67c2d190518efd7dde19585744aa76bacf22f",
+            "mine": false
+          },
+          "bNotices": [
+            {
+              "type": "installed",
+              "key": "src/cards/user/c66t9-c66f11004100005.tsx",
+              "rev": 1
+            },
+            {
+              "type": "installed",
+              "key": "src/cards/user/c66t9-c66f11004100005.tsx",
+              "rev": 2
+            }
+          ],
+          "bOverrideV2": true,
+          "bKindAfter": "shared",
+          "shots": [
+            "<test-temp>\\pc-c66-fixed-wave1-observer-54bc199ab4304de4b7a34aee62fa2747\\probe\\c66f11004100005-observer-1-small.png",
+            "<test-temp>\\pc-c66-fixed-wave1-observer-54bc199ab4304de4b7a34aee62fa2747\\probe\\c66f11004100005-observer-2-original.png",
+            "<test-temp>\\pc-c66-fixed-wave1-observer-54bc199ab4304de4b7a34aee62fa2747\\probe\\c66f11004100005-observer-3-v2.png"
+          ],
+          "pageErrors": [],
+          "temp": "<test-temp>\\pc-c66t9-observer-0g5xoc",
+          "ok": true,
+          "fails": []
+        },
+        "host": {
+          "role": "host",
+          "run": "c66f11004100005",
+          "port": 5593,
+          "cardInRepoBefore": false,
+          "readyQueue": {
+            "profile": "host",
+            "nodes": 1,
+            "maxConcurrent": 2,
+            "codeVersion": "46d3c04676bd"
+          },
+          "cardSync": {
+            "connected": true,
+            "rev": 1,
+            "notices": [
+              "installed"
+            ]
+          },
+          "profile": "host",
+          "claimed": 2,
+          "completed": 2,
+          "dedup": 0,
+          "failed": 0,
+          "lost": 0,
+          "connected": true,
+          "assetBase": "http://<test-PC-LAN>:5451/api/asset",
+          "codeVersion": "46d3c04676bd",
+          "plan": {
+            "planId": "plan:p-muto6bng-3f27d08f@3",
+            "tasks": 8,
+            "done": 8
+          },
+          "creatorCodeVersion": "46d3c04676bd",
+          "doneCounts": {
+            "tasks": 8,
+            "exactlyOnce": 8,
+            "missing": 0,
+            "duplicate": 0
+          },
+          "artifacts": {
+            "manifests": 8,
+            "missingManifests": 0,
+            "blocks": 480,
+            "missingBlocks": []
+          },
+          "cardV2": {
+            "ms": 12,
+            "rev": 2,
+            "inOverlay": true,
+            "baseUntouched": null
+          },
+          "exitCode": 0,
+          "released": 0,
+          "temp": "<test-temp>\\pc-c66t9-host-py0dE7",
+          "ok": true,
+          "fails": []
+        },
+        "completedByNode": {
+          "pc": 6,
+          "host": 2
+        },
+        "shots": [
+          "<test-temp>\\pc-reopen-c66-creator-wu7P78\\probe\\c66f11004100005-creator-1-published.png",
+          "<test-temp>\\pc-reopen-c66-creator-wu7P78\\probe\\c66f11004100005-creator-2-end.png"
+        ],
+        "pageErrors": [],
+        "deleted": true,
+        "temp": "<test-temp>\\pc-c66t9-creator-elwnh8",
+        "ms": 108875,
+        "fails": [],
+        "ok": true
+      },
+      "rawResultSha256": "6df35f001b0140d7ef71c93fd8b3ddfd00902ab9e9f8f3d433bada2571c6d2bd"
+    },
+    "peer": [
+      {
+        "file": "acceptance-summary.json",
+        "rawSha256": "3987449726a29b784ecaadef74e4f72ec97a974596023e84c6c88907be11be13",
+        "content": {
+          "target": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "run": "c66f11004100005",
+          "wave": 1,
+          "host": "<test-laptop>",
+          "diagnosticOnly": false,
+          "startedTokyo": "2026-10-04T19:20:29.110+09:00",
+          "observerFinishedTokyo": "2026-10-04T19:21:42.377+09:00",
+          "hostFinishedTokyo": "2026-10-04T19:21:50.188+09:00",
+          "runnerExitCodes": {
+            "observer": 0,
+            "host": 0
+          },
+          "probeExitCodes": {
+            "observer": 0,
+            "host": 0
+          },
+          "fails": {
+            "observer": [],
+            "host": []
+          },
+          "observerMetrics": {
+            "installMs": 298,
+            "hmrMs": 801,
+            "remeasureMs": 1723,
+            "stageMs": 1725,
+            "smallIndex": 75,
+            "originalIndex": 75,
+            "blackFrames": 0,
+            "materialHashes": {
+              "original": "33da7e3703f5808b1b34e2cb2a7c016ecad1a300d00a8eaa7d555a36a5517e1e",
+              "small": "3a933aac48940fcdb3a15264ab2e07a1da41b185374b26533801b2dd253a5835"
+            }
+          },
+          "hostMetrics": {
+            "cardV2": {
+              "ms": 12,
+              "rev": 2,
+              "inOverlay": true,
+              "baseUntouched": null
+            },
+            "claimed": 2,
+            "completed": 2,
+            "doneCounts": {
+              "tasks": 8,
+              "exactlyOnce": 8,
+              "missing": 0,
+              "duplicate": 0
+            },
+            "artifacts": {
+              "manifests": 8,
+              "missingManifests": 0,
+              "blocks": 480,
+              "missingBlocks": []
+            },
+            "ipcExit": 0
+          },
+          "pending": "Original probe has no pending field; no unexecuted item reported",
+          "skips": "No skip flags; original probe has no skipped field",
+          "original20d28FailurePreserved": true,
+          "rawEvidenceRetained": true,
+          "sourceCleanAfter": true,
+          "fixtureAbsentAfter": true,
+          "ports": [
+            {
+              "port": 5590,
+              "free": true
+            },
+            {
+              "port": 5591,
+              "free": true
+            },
+            {
+              "port": 5592,
+              "free": true
+            },
+            {
+              "port": 5593,
+              "free": true
+            },
+            {
+              "port": 5594,
+              "free": true
+            },
+            {
+              "port": 5595,
+              "free": true
+            },
+            {
+              "port": 5596,
+              "free": true
+            },
+            {
+              "port": 5597,
+              "free": true
+            },
+            {
+              "port": 5598,
+              "free": true
+            }
+          ],
+          "rawEvidenceDirectories": {
+            "observer": "<test-temp>/pc-c66-fixed-wave1-observer-54bc199ab4304de4b7a34aee62fa2747",
+            "host": "<test-temp>/pc-c66-fixed-wave1-host-cc80d94f5787426d97e4da55dd5cc2cb"
+          },
+          "wave2Started": false,
+          "awaitingPcAggregateAcknowledgement": true
+        }
+      },
+      {
+        "file": "host/raw-sha256-manifest.json",
+        "rawSha256": "4dbf6c468eaf48ac106236487d87c1da4e2c957e21b687ba46e86e9c5cab40dd",
+        "content": [
+          {
+            "file": "receipt.json",
+            "sha256": "dbfe7bbf8b7ccde2bf16159cd6f5b9c42ca3e4794b8755bb0d338a5968efa4ac"
+          },
+          {
+            "file": "result.json",
+            "sha256": "881b76acb11703b711ded00f1b042c1b0b6be0aa719664255f12948f92ed3fc7"
+          },
+          {
+            "file": "runner-error.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "runner.log",
+            "sha256": "30d4cfd465b787ce94e920e22ea3ffcc4dd3f4304d84457c8e9be2e809bb3ded"
+          },
+          {
+            "file": "stderr.log",
+            "sha256": "d90b0c107bb8cdc9fb711a370f60da62acd8373677a8bc3ecbbc7e3b8c6bad48"
+          },
+          {
+            "file": "stdout.log",
+            "sha256": "a381c30e4597072d808b98907e7ec0cd0088f624951c0b2c3a16d42acff28ae7"
+          },
+          {
+            "file": "probe/render-host.log",
+            "sha256": "fcd5463dae0d99a956b42390ac74d217ca843b25755b4f6ba072209f2fa63aff"
+          }
+        ]
+      },
+      {
+        "file": "host/receipt.json",
+        "rawSha256": "613a48b44682ffed936b7019ee3d7bb55a534c830d8b4cc542b201d09f37e1a3",
+        "content": {
+          "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "role": "host",
+          "prepareOnly": false,
+          "timingAuthoritative": false,
+          "hostname": "<test-laptop>",
+          "startedAt": "2026-10-04T10:20:29.110Z",
+          "nodeVersion": "v24.19.0",
+          "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+          "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+          "port": 5593,
+          "status": "pass",
+          "actualExitCode": 0,
+          "fails": [],
+          "installed": false,
+          "userRuntimeModified": false,
+          "hostNetworkChanged": false,
+          "wave": 1,
+          "run": "c66f11004100005",
+          "expiresAt": "2026-10-04T12:14:56.344Z",
+          "diagnosticOnly": false,
+          "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c66-t9-probe.mjs --role host --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66f11004100005 --port 5593 --out <test-temp>\\pc-c66-fixed-wave1-host-cc80d94f5787426d97e4da55dd5cc2cb\\probe --keep-temp --timeout-min 25",
+          "ownedProbePid": 27016,
+          "ok": true,
+          "probeMs": 77806,
+          "rawLogSha256": {
+            "stdout.log": "a381c30e4597072d808b98907e7ec0cd0088f624951c0b2c3a16d42acff28ae7",
+            "stderr.log": "d90b0c107bb8cdc9fb711a370f60da62acd8373677a8bc3ecbbc7e3b8c6bad48"
+          },
+          "finishedAt": "2026-10-04T10:21:50.188Z"
+        }
+      },
+      {
+        "file": "host/result.json",
+        "rawSha256": "6c686a92dae88f0dc1d5a2725ec823dc1375be5951a54658a8962c07df3e3bba",
+        "content": {
+          "role": "host",
+          "run": "c66f11004100005",
+          "port": 5593,
+          "cardInRepoBefore": false,
+          "readyQueue": {
+            "profile": "host",
+            "nodes": 1,
+            "maxConcurrent": 2,
+            "codeVersion": "46d3c04676bd"
+          },
+          "cardSync": {
+            "connected": true,
+            "rev": 1,
+            "notices": [
+              "installed"
+            ]
+          },
+          "profile": "host",
+          "claimed": 2,
+          "completed": 2,
+          "dedup": 0,
+          "failed": 0,
+          "lost": 0,
+          "connected": true,
+          "assetBase": "http://<test-PC-LAN>:5451/api/asset",
+          "codeVersion": "46d3c04676bd",
+          "plan": {
+            "planId": "plan:p-muto6bng-3f27d08f@3",
+            "tasks": 8,
+            "done": 8
+          },
+          "creatorCodeVersion": "46d3c04676bd",
+          "doneCounts": {
+            "tasks": 8,
+            "exactlyOnce": 8,
+            "missing": 0,
+            "duplicate": 0
+          },
+          "artifacts": {
+            "manifests": 8,
+            "missingManifests": 0,
+            "blocks": 480,
+            "missingBlocks": []
+          },
+          "cardV2": {
+            "ms": 12,
+            "rev": 2,
+            "inOverlay": true,
+            "baseUntouched": null
+          },
+          "exitCode": 0,
+          "released": 0,
+          "temp": "<test-temp>\\pc-c66t9-host-py0dE7",
+          "ms": 77806,
+          "fails": [],
+          "ok": true
+        }
+      },
+      {
+        "file": "observer/raw-sha256-manifest.json",
+        "rawSha256": "5f05f05eabc1aac8e255d5152fb597315c9b6cf76c1ca3f9664e80183b8d6c42",
+        "content": [
+          {
+            "file": "receipt.json",
+            "sha256": "8bdb7ddf6bb9639889871ce1281bcf42feb1496f6ed0f7bb36052934f3a91706"
+          },
+          {
+            "file": "result.json",
+            "sha256": "4ebd88817aad33246a80d662ee05ea92730b384a6a7ccb82fd6682a608554ffe"
+          },
+          {
+            "file": "runner-error.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "runner.log",
+            "sha256": "626d54e5471b3de06976bb478d2a973c0938dc24e766fe78a7288fe19cdc8cbe"
+          },
+          {
+            "file": "stderr.log",
+            "sha256": "b22dbe7048ecc28719e8d7d303a91f77419adfc6c3e6bda6729ed9738207b68c"
+          },
+          {
+            "file": "stdout.log",
+            "sha256": "0d9ef1906ff17cd006bec5ed788da17b6b6109c2f7ec7fb4ed5781262f331ce1"
+          },
+          {
+            "file": "probe/observer-editor.log",
+            "sha256": "275fed30085a0ace2eca3dc1fcddf4491fda4ebff432d4a6d04023a4a80807f3"
+          }
+        ]
+      },
+      {
+        "file": "observer/receipt.json",
+        "rawSha256": "95018f752971e18aa67006371c40f7e87f89db3dfcf15d1805f0f441b9b2dc96",
+        "content": {
+          "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "role": "observer",
+          "prepareOnly": false,
+          "timingAuthoritative": true,
+          "hostname": "<test-laptop>",
+          "startedAt": "2026-10-04T10:20:29.110Z",
+          "nodeVersion": "v24.19.0",
+          "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+          "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+          "port": 5590,
+          "status": "pass",
+          "actualExitCode": 0,
+          "fails": [],
+          "installed": false,
+          "userRuntimeModified": false,
+          "hostNetworkChanged": false,
+          "wave": 1,
+          "run": "c66f11004100005",
+          "expiresAt": "2026-10-04T12:14:56.344Z",
+          "diagnosticOnly": false,
+          "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c66-t9-probe.mjs --role observer --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66f11004100005 --port 5590 --out <test-temp>\\pc-c66-fixed-wave1-observer-54bc199ab4304de4b7a34aee62fa2747\\probe --keep-temp --timeout-min 25",
+          "ownedProbePid": 23752,
+          "ok": true,
+          "probeMs": 72979,
+          "rawLogSha256": {
+            "stdout.log": "0d9ef1906ff17cd006bec5ed788da17b6b6109c2f7ec7fb4ed5781262f331ce1",
+            "stderr.log": "b22dbe7048ecc28719e8d7d303a91f77419adfc6c3e6bda6729ed9738207b68c"
+          },
+          "finishedAt": "2026-10-04T10:21:42.377Z"
+        }
+      },
+      {
+        "file": "observer/result.json",
+        "rawSha256": "7a37c1bd6273f2855b82a0099535e6927b66f3d1b71417f77e82480967a14a28",
+        "content": {
+          "role": "observer",
+          "run": "c66f11004100005",
+          "port": 5590,
+          "cardInRepoBefore": false,
+          "env": {
+            "PROMPTCUT_QUEUE_NODE": null,
+            "PROMPTCUT_SHARED_CONFIG": null
+          },
+          "frameQueue": {
+            "nodes": 0,
+            "starting": false,
+            "profile": "pc"
+          },
+          "joinMs": 645,
+          "projectTiers": {
+            "original": "33da7e3703f5808b1b34e2cb2a7c016ecad1a300d00a8eaa7d555a36a5517e1e",
+            "small": "3a933aac48940fcdb3a15264ab2e07a1da41b185374b26533801b2dd253a5835"
+          },
+          "firstShown": {
+            "tier": "small",
+            "idx": 75,
+            "w": 800
+          },
+          "originalAtFirstFrame": {
+            "paused": {
+              "at": 1791109209364,
+              "skipped": null,
+              "originalComplete": false,
+              "originalReceived": 0,
+              "originalChunks": 6
+            },
+            "resumedBefore": false
+          },
+          "smallIdxSource": "stable",
+          "smallIdx": 75,
+          "smallStableBeforeSwap": true,
+          "swapWaitMs": 7397,
+          "original": {
+            "idx": 75,
+            "w": 1920
+          },
+          "tierSequence": [
+            {
+              "ms": 666,
+              "tier": "none",
+              "idx": null,
+              "w": null,
+              "ct": null
+            },
+            {
+              "ms": 10720,
+              "tier": "small",
+              "idx": 75,
+              "w": 800,
+              "ct": 2.5
+            },
+            {
+              "ms": 18493,
+              "tier": "original",
+              "idx": 75,
+              "w": 1920,
+              "ct": 2.5
+            }
+          ],
+          "lowReadyState": {
+            "samples": 0,
+            "presentedBefore": 0,
+            "withShot": 0,
+            "shots": 0,
+            "shotLuma": null,
+            "srcs": [],
+            "windowsMs": []
+          },
+          "swapMode": "covered",
+          "swapSamples": {
+            "n": 865,
+            "black": 0,
+            "idxSeen": [
+              75
+            ],
+            "srcs": [
+              "3a933aac",
+              "33da7e37"
+            ],
+            "smallBeforeSwap": 855,
+            "spanMs": 7891,
+            "coversSwap": true,
+            "mode": "covered",
+            "swapGapMs": 7773,
+            "sampleIntervalMs": 8
+          },
+          "playhead": {
+            "t": 2.5,
+            "log": [
+              {
+                "ms": 0,
+                "t": 2.5,
+                "cut": "cut-1",
+                "duration": 6,
+                "stack": [
+                  "at emit (/src/store/core.ts:33:29)",
+                  "at set (/src/store/core.ts:40:2)",
+                  "at Object.seek (/src/store/actions/playback.ts:6:3)",
+                  "at pptr:evaluate;P%20(<test-file-stack>):16:17"
+                ]
+              }
+            ]
+          },
+          "keyBefore": "1789f62d41f91a",
+          "stageV1": true,
+          "mediaEvents": [
+            {
+              "frame": "A",
+              "seeks": [
+                {
+                  "at": 18197,
+                  "to": 0.001,
+                  "from": 0,
+                  "rs": 4,
+                  "shown": false,
+                  "stack": [
+                    "at HTMLVideoElement.set [as currentTime] (pptr:;CdpFrame.%3Canonymous%3E%20(<test-file-stack>):13:95)",
+                    "at el.addEventListener.once (/src/render/playability.ts:232:21)"
+                  ]
+                },
+                {
+                  "at": 18229,
+                  "to": 2.5,
+                  "from": 0,
+                  "rs": 0,
+                  "shown": false,
+                  "stack": [
+                    "at HTMLVideoElement.set [as currentTime] (pptr:;CdpFrame.%3Canonymous%3E%20(<test-file-stack>):13:95)",
+                    "at syncMediaEl (/src/render/mediaDrive.ts:50:18)",
+                    "at driveMedia (/src/render/mediaDrive.ts:90:2)"
+                  ]
+                }
+              ],
+              "loads": [
+                {
+                  "at": 18224,
+                  "src": "33da7e37",
+                  "stack": [
+                    "at close (/src/render/playability.ts:183:9)"
+                  ]
+                }
+              ],
+              "aligned": [
+                {
+                  "at": 18230,
+                  "mediaTime": 2.5,
+                  "ref": 2.5
+                },
+                {
+                  "at": 18393,
+                  "mediaTime": 2.5,
+                  "ref": 2.5
+                }
+              ],
+              "seeked": [
+                {
+                  "at": 18445,
+                  "shown": true
+                }
+              ],
+              "shownAt": {
+                "at": 18402,
+                "rs": 4
+              },
+              "drops": [
+                {
+                  "at": 17559,
+                  "rs": 0,
+                  "shown": false,
+                  "ct": 0
+                },
+                {
+                  "at": 17591,
+                  "rs": 0,
+                  "shown": false,
+                  "ct": 0
+                },
+                {
+                  "at": 17962,
+                  "rs": 1,
+                  "shown": false,
+                  "ct": 0
+                },
+                {
+                  "at": 18205,
+                  "rs": 1,
+                  "shown": false,
+                  "ct": 0.001
+                },
+                {
+                  "at": 18278,
+                  "rs": 0,
+                  "shown": false,
+                  "ct": 2.5
+                },
+                {
+                  "at": 18305,
+                  "rs": 1,
+                  "shown": false,
+                  "ct": 2.5
+                }
+              ]
+            },
+            {
+              "frame": "B",
+              "seeks": [],
+              "loads": [],
+              "aligned": [],
+              "seeked": [],
+              "shownAt": null,
+              "drops": []
+            }
+          ],
+          "installMs": 298,
+          "hmrMs": 801,
+          "keyAfter": "13f3d8cd211465",
+          "remeasureMs": 1723,
+          "remeasureVia": "record",
+          "newCostRecordMs": 1723,
+          "stageMs": 1725,
+          "editedSeen": {
+            "ms": 58,
+            "ok": true,
+            "editMs": 46
+          },
+          "bRecord": {
+            "rev": 2,
+            "hash": "b0ccc20f0946b9d7a45e242aaaa67c2d190518efd7dde19585744aa76bacf22f",
+            "mine": false
+          },
+          "bNotices": [
+            {
+              "type": "installed",
+              "key": "src/cards/user/c66t9-c66f11004100005.tsx",
+              "rev": 1
+            },
+            {
+              "type": "installed",
+              "key": "src/cards/user/c66t9-c66f11004100005.tsx",
+              "rev": 2
+            }
+          ],
+          "bOverrideV2": true,
+          "bKindAfter": "shared",
+          "shots": [
+            "<test-temp>\\pc-c66-fixed-wave1-observer-54bc199ab4304de4b7a34aee62fa2747\\probe\\c66f11004100005-observer-1-small.png",
+            "<test-temp>\\pc-c66-fixed-wave1-observer-54bc199ab4304de4b7a34aee62fa2747\\probe\\c66f11004100005-observer-2-original.png",
+            "<test-temp>\\pc-c66-fixed-wave1-observer-54bc199ab4304de4b7a34aee62fa2747\\probe\\c66f11004100005-observer-3-v2.png"
+          ],
+          "pageErrors": [],
+          "temp": "<test-temp>\\pc-c66t9-observer-0g5xoc",
+          "ms": 72979,
+          "fails": [],
+          "ok": true
+        }
+      }
+    ],
+    "transferredZip": {
+      "bytes": 6645,
+      "sha256": "dd058fb8c9f7e6e53af1dfd14d21079c831e471c7c688fc47ae141fb3cd92fca"
+    }
+  },
+  "wave2": {
+    "run": "c66f21004100005",
+    "status": "fail",
+    "observer": {
+      "receipt": {
+        "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+        "role": "observer",
+        "prepareOnly": false,
+        "timingAuthoritative": false,
+        "hostname": "<test-PC>",
+        "startedAt": "2026-10-04T10:24:37.842Z",
+        "nodeVersion": "v24.19.0",
+        "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+        "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+        "port": 5203,
+        "status": "fail",
+        "actualExitCode": 1,
+        "fails": [
+          "超时:[observer] 换档前后的逐帧样本够数",
+          "[observer] 逐帧采样够数(≥ 10) :: {\"n\":0,\"black\":0,\"idxSeen\":[],\"srcs\":[],\"smallBeforeSwap\":0,\"spanMs\":0,\"coversSwap\":false,\"mode\":\"covered\",\"swapGapMs\":8734,\"sampleIntervalMs\":null}",
+          "[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本) :: {\"n\":0,\"black\":0,\"idxSeen\":[],\"srcs\":[],\"smallBeforeSwap\":0,\"spanMs\":0,\"coversSwap\":false,\"mode\":\"covered\",\"swapGapMs\":8734,\"sampleIntervalMs\":null}"
+        ],
+        "installed": false,
+        "userRuntimeModified": false,
+        "hostNetworkChanged": false,
+        "wave": 2,
+        "run": "c66f21004100005",
+        "expiresAt": "2026-10-04T12:14:56.344Z",
+        "diagnosticOnly": false,
+        "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c66-t9-probe.mjs --role observer --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66f21004100005 --port 5203 --out <test-temp>\\pc-reopen-c66-observer-bGYm7I\\probe --keep-temp --timeout-min 25",
+        "ownedProbePid": 44448,
+        "ok": false,
+        "probeMs": 155905,
+        "rawLogSha256": {
+          "stdout.log": "ba07e57ae349119de65cee658cc24a1306cdbb861f03112549cff82543e428c8",
+          "stderr.log": "e51c01aa5fce8b693c7a9b02b2808ddf06b9532be11f44685d1fde990642c68c"
+        },
+        "finishedAt": "2026-10-04T10:27:13.921Z"
+      },
+      "result": {
+        "role": "observer",
+        "run": "c66f21004100005",
+        "port": 5203,
+        "cardInRepoBefore": false,
+        "env": {
+          "PROMPTCUT_QUEUE_NODE": null,
+          "PROMPTCUT_SHARED_CONFIG": null
+        },
+        "frameQueue": {
+          "nodes": 0,
+          "starting": false,
+          "profile": "pc"
+        },
+        "joinMs": 481,
+        "projectTiers": {
+          "original": "b45e0edb9af3f08bc42b97805558ad2e63834a5675ecd5a336debeac65650f8b",
+          "small": "b904f6cb0fb643ed34ca4e9d9c3273ff072941490f0422b478fa4dbc2369a6de"
+        },
+        "firstShown": {
+          "tier": "small",
+          "idx": 75,
+          "w": 800
+        },
+        "originalAtFirstFrame": {
+          "paused": {
+            "at": 1791109546223,
+            "skipped": null,
+            "originalComplete": false,
+            "originalReceived": 0,
+            "originalChunks": 6
+          },
+          "resumedBefore": false
+        },
+        "smallIdxSource": "stable",
+        "smallIdx": 75,
+        "smallStableBeforeSwap": true,
+        "swapWaitMs": 8454,
+        "original": {
+          "idx": 75,
+          "w": 1920
+        },
+        "tierSequence": [
+          {
+            "ms": 492,
+            "tier": "none",
+            "idx": null,
+            "w": null,
+            "ct": null
+          },
+          {
+            "ms": 2293,
+            "tier": "small",
+            "idx": 75,
+            "w": 800,
+            "ct": 2.5
+          },
+          {
+            "ms": 6231,
+            "tier": "none",
+            "idx": null,
+            "w": null,
+            "ct": null
+          },
+          {
+            "ms": 7328,
+            "tier": "small",
+            "idx": 75,
+            "w": 800,
+            "ct": 2.5
+          },
+          {
+            "ms": 11027,
+            "tier": "original",
+            "idx": 75,
+            "w": 1920,
+            "ct": 2.5
+          }
+        ],
+        "lowReadyState": {
+          "samples": 0,
+          "presentedBefore": 0,
+          "withShot": 0,
+          "shots": 0,
+          "shotLuma": null,
+          "srcs": [],
+          "windowsMs": []
+        },
+        "swapMode": "covered",
+        "swapSamples": {
+          "n": 0,
+          "black": 0,
+          "idxSeen": [],
+          "srcs": [],
+          "smallBeforeSwap": 0,
+          "spanMs": 0,
+          "coversSwap": false,
+          "mode": "covered",
+          "swapGapMs": 8734,
+          "sampleIntervalMs": null
+        },
+        "playhead": {
+          "t": 2.5,
+          "log": [
+            {
+              "ms": 0,
+              "t": 2.5,
+              "cut": "cut-1",
+              "duration": 6,
+              "stack": [
+                "at emit (/src/store/core.ts:33:29)",
+                "at set (/src/store/core.ts:40:2)",
+                "at Object.seek (/src/store/actions/playback.ts:6:3)",
+                "at pptr:evaluate;P%20(<test-file-stack>):16:17"
+              ]
+            }
+          ]
+        },
+        "keyBefore": "ad7f42887dc14",
+        "stageV1": true,
+        "mediaEvents": [],
+        "installMs": 508,
+        "hmrMs": 761,
+        "keyAfter": "944423426619",
+        "remeasureMs": 1271,
+        "remeasureVia": "record",
+        "newCostRecordMs": 1271,
+        "stageMs": 1271,
+        "editedSeen": {
+          "ms": 378,
+          "ok": true,
+          "editMs": 356
+        },
+        "bRecord": {
+          "rev": 2,
+          "hash": "da285b2a5295a4b52191123b808b7b3397f918fc6aeb084521a8f06f28039ace",
+          "mine": false
+        },
+        "bNotices": [
+          {
+            "type": "installed",
+            "key": "src/cards/user/c66t9-c66f21004100005.tsx",
+            "rev": 1
+          },
+          {
+            "type": "installed",
+            "key": "src/cards/user/c66t9-c66f21004100005.tsx",
+            "rev": 2
+          }
+        ],
+        "bOverrideV2": true,
+        "bKindAfter": "shared",
+        "shots": [
+          "<test-temp>\\pc-reopen-c66-observer-bGYm7I\\probe\\c66f21004100005-observer-1-small.png",
+          "<test-temp>\\pc-reopen-c66-observer-bGYm7I\\probe\\c66f21004100005-observer-2-original.png",
+          "<test-temp>\\pc-reopen-c66-observer-bGYm7I\\probe\\c66f21004100005-observer-3-v2.png"
+        ],
+        "pageErrors": [],
+        "temp": "<test-temp>\\pc-c66t9-observer-pJJkHE",
+        "ms": 155905,
+        "fails": [
+          "超时:[observer] 换档前后的逐帧样本够数",
+          "[observer] 逐帧采样够数(≥ 10) :: {\"n\":0,\"black\":0,\"idxSeen\":[],\"srcs\":[],\"smallBeforeSwap\":0,\"spanMs\":0,\"coversSwap\":false,\"mode\":\"covered\",\"swapGapMs\":8734,\"sampleIntervalMs\":null}",
+          "[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本) :: {\"n\":0,\"black\":0,\"idxSeen\":[],\"srcs\":[],\"smallBeforeSwap\":0,\"spanMs\":0,\"coversSwap\":false,\"mode\":\"covered\",\"swapGapMs\":8734,\"sampleIntervalMs\":null}"
+        ],
+        "ok": false
+      },
+      "rawResultSha256": "9be193ca1c34fae565ebbbad6b40eb583784215043ba4863b40948d5bfac55c4"
+    },
+    "host": {
+      "receipt": {
+        "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+        "role": "host",
+        "prepareOnly": false,
+        "timingAuthoritative": false,
+        "hostname": "<test-PC>",
+        "startedAt": "2026-10-04T10:24:37.842Z",
+        "nodeVersion": "v24.19.0",
+        "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+        "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+        "port": 5206,
+        "status": "pass",
+        "actualExitCode": 0,
+        "fails": [],
+        "installed": false,
+        "userRuntimeModified": false,
+        "hostNetworkChanged": false,
+        "wave": 2,
+        "run": "c66f21004100005",
+        "expiresAt": "2026-10-04T12:14:56.344Z",
+        "diagnosticOnly": false,
+        "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c66-t9-probe.mjs --role host --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66f21004100005 --port 5206 --out <test-temp>\\pc-reopen-c66-host-djSScJ\\probe --keep-temp --timeout-min 25",
+        "ownedProbePid": 43688,
+        "ok": true,
+        "probeMs": 161403,
+        "rawLogSha256": {
+          "stdout.log": "16da4685b2d46966d61991b0baea2ffb8f16489780184064303bf8eb0daf757e",
+          "stderr.log": "434505cfb37bea9ab5aa51713c8bbbbf0b49e3ca6e6b895309a52639ea7edd23"
+        },
+        "finishedAt": "2026-10-04T10:27:22.393Z"
+      },
+      "result": {
+        "role": "host",
+        "run": "c66f21004100005",
+        "port": 5206,
+        "cardInRepoBefore": false,
+        "readyQueue": {
+          "profile": "host",
+          "nodes": 1,
+          "maxConcurrent": 2,
+          "codeVersion": "46d3c04676bd"
+        },
+        "cardSync": {
+          "connected": true,
+          "rev": 1,
+          "notices": [
+            "installed"
+          ]
+        },
+        "profile": "host",
+        "claimed": 5,
+        "completed": 5,
+        "dedup": 0,
+        "failed": 0,
+        "lost": 0,
+        "connected": true,
+        "assetBase": "http://<test-PC-LAN>:5451/api/asset",
+        "codeVersion": "46d3c04676bd",
+        "plan": {
+          "planId": "plan:p-mutodfpm-11c99696@3",
+          "tasks": 8,
+          "done": 8
+        },
+        "creatorCodeVersion": "46d3c04676bd",
+        "doneCounts": {
+          "tasks": 8,
+          "exactlyOnce": 8,
+          "missing": 0,
+          "duplicate": 0
+        },
+        "artifacts": {
+          "manifests": 8,
+          "missingManifests": 0,
+          "blocks": 480,
+          "missingBlocks": []
+        },
+        "cardV2": {
+          "ms": 1,
+          "rev": 2,
+          "inOverlay": true,
+          "baseUntouched": null
+        },
+        "exitCode": 0,
+        "released": 0,
+        "temp": "<test-temp>\\pc-c66t9-host-zWdh2J",
+        "ms": 161403,
+        "fails": [],
+        "ok": true
+      },
+      "rawResultSha256": "256f2b0e7685fc77676f3a63e3ea6499ff7e28304d641a688b550533d743731f"
+    },
+    "peer": [
+      {
+        "file": "pc-fixed-share-kx6gbW/acceptance-summary.json",
+        "rawSha256": "109a08dca1b01b652d77427e9c0e21e01044a504d3a94df81a410da2bc49d5d8",
+        "content": {
+          "target": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "role": "creator",
+          "run": "c66f21004100005",
+          "actualExitCode": 1,
+          "status": "fail",
+          "ok": false,
+          "fails": [
+            "观察端 ok :: [\"超时:[observer] 换档前后的逐帧样本够数\",\"[observer] 逐帧采样够数(≥ 10) :: {\\\"n\\\":0,\\\"black\\\":0,\\\"idxSeen\\\":[],\\\"srcs\\\":[],\\\"smallBeforeSwap\\\":0,\\\"spanMs\\\":0,\\\"coversSwap\\\":false,\\\"mode\\\":\\\"covered\\\",\\\"swapGapMs\\\":8734,\\\"sampleIntervalMs\\\":null}\",\"[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本) :: {\\\"n\\\":0,\\\"black\\\":0,\\\"idxSeen\\\":[],\\\"srcs\\\":[],\\\"smallBeforeSwap\\\":0,\\\"spanMs\\\":0,\\\"coversSwap\\\":false,\\\"mode\\\":\\\"covered\\\",\\\"sw"
+          ],
+          "evidenceDirectory": "<test-temp>\\pc-c66-fixed-wave2-creator-8465f48e9d6b45bc8e10307bb6376bb3"
+        }
+      },
+      {
+        "file": "pc-fixed-share-kx6gbW/raw-sha256-manifest.json",
+        "rawSha256": "ddc5d4a467dba333c9b7c26e14347ee6822571d895f1c8ba5c075ab3de5feeb3",
+        "content": [
+          {
+            "file": "receipt.json",
+            "bytes": 1993,
+            "sha256": "4cbc375731b3212ec21f2b7db0dc6d4ebbc02266a1260149ef997bc863d1f1e8"
+          },
+          {
+            "file": "result.json",
+            "bytes": 10232,
+            "sha256": "7c0d6fdda62cacc48f73e6812c211b47b213ada5b1f13b43727bef13963f0bfd"
+          },
+          {
+            "file": "runner-error.log",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "runner.log",
+            "bytes": 2251,
+            "sha256": "b686db8db85a48d862338671ba865dec2fdc5e5a86ded45410f89162848b865c"
+          },
+          {
+            "file": "stderr.log",
+            "bytes": 1286,
+            "sha256": "93f6f32246dd395b138f26f0f890c39bc1ee49b7847daed28ae53a5434374d31"
+          },
+          {
+            "file": "stdout.log",
+            "bytes": 7655,
+            "sha256": "338d51d2af0b7b89c552e6632dd4c0a76a222ed8fa59c4b3eed9f9e73ffbfbd3"
+          }
+        ]
+      },
+      {
+        "file": "pc-fixed-share-kx6gbW/receipt.json",
+        "rawSha256": "4cbc375731b3212ec21f2b7db0dc6d4ebbc02266a1260149ef997bc863d1f1e8",
+        "content": {
+          "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+          "role": "creator",
+          "prepareOnly": false,
+          "timingAuthoritative": true,
+          "hostname": "<test-laptop>",
+          "startedAt": "2026-10-04T10:25:21.139Z",
+          "nodeVersion": "v24.19.0",
+          "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+          "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+          "port": 5590,
+          "status": "fail",
+          "actualExitCode": 1,
+          "fails": [
+            "观察端 ok :: [\"超时:[observer] 换档前后的逐帧样本够数\",\"[observer] 逐帧采样够数(≥ 10) :: {\\\"n\\\":0,\\\"black\\\":0,\\\"idxSeen\\\":[],\\\"srcs\\\":[],\\\"smallBeforeSwap\\\":0,\\\"spanMs\\\":0,\\\"coversSwap\\\":false,\\\"mode\\\":\\\"covered\\\",\\\"swapGapMs\\\":8734,\\\"sampleIntervalMs\\\":null}\",\"[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本) :: {\\\"n\\\":0,\\\"black\\\":0,\\\"idxSeen\\\":[],\\\"srcs\\\":[],\\\"smallBeforeSwap\\\":0,\\\"spanMs\\\":0,\\\"coversSwap\\\":false,\\\"mode\\\":\\\"covered\\\",\\\"sw"
+          ],
+          "installed": false,
+          "userRuntimeModified": false,
+          "hostNetworkChanged": false,
+          "wave": 2,
+          "run": "c66f21004100005",
+          "expiresAt": "2026-10-04T12:14:56.344Z",
+          "diagnosticOnly": false,
+          "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/c66-t9-probe.mjs --role creator --place cloud --heavy slow-stepped --hosted http://<test-PC-LAN>:5450 --coord http://<test-PC-LAN>:5456 --run c66f21004100005 --port 5590 --out <test-temp>\\pc-c66-fixed-wave2-creator-8465f48e9d6b45bc8e10307bb6376bb3\\probe --keep-temp --timeout-min 25",
+          "ownedProbePid": 5960,
+          "ok": false,
+          "probeMs": 120393,
+          "rawLogSha256": {
+            "stdout.log": "338d51d2af0b7b89c552e6632dd4c0a76a222ed8fa59c4b3eed9f9e73ffbfbd3",
+            "stderr.log": "93f6f32246dd395b138f26f0f890c39bc1ee49b7847daed28ae53a5434374d31"
+          },
+          "finishedAt": "2026-10-04T10:27:23.687Z"
+        }
+      },
+      {
+        "file": "pc-fixed-share-kx6gbW/result.json",
+        "rawSha256": "7c0d6fdda62cacc48f73e6812c211b47b213ada5b1f13b43727bef13963f0bfd",
+        "content": {
+          "role": "creator",
+          "run": "c66f21004100005",
+          "port": 5590,
+          "place": "cloud",
+          "heavyMode": "slow-stepped",
+          "hosted": "http://<test-PC-LAN>:5450",
+          "lanIp": null,
+          "video": {
+            "name": "t9-c66f21004100005.mp4",
+            "bytes": 44080254,
+            "sha": "d01ccd99354d",
+            "size": "1920x1080",
+            "fps": 30,
+            "seconds": 6
+          },
+          "projectId": "sp_sneioten7uamlgr2a4lcwaal6q",
+          "projectName": "c66t9-c66f21004100005",
+          "userClip": "c-mutodfpp-w",
+          "cardPushedRev": 1,
+          "assetUrl": "http://<test-PC-LAN>:5451/api/asset",
+          "uploadTarget": "http://<test-PC-LAN>:5451/api/asset",
+          "importMs": 5267,
+          "pause": {
+            "at": 1791109546223,
+            "sinceImportMs": 7903,
+            "via": "log",
+            "postStatus": 200,
+            "chunkSize": 8388608,
+            "originalBytes": 44080254,
+            "originalChunks": 6,
+            "originalReceived": 0,
+            "originalComplete": false,
+            "smallComplete": true,
+            "after1500ms": {
+              "originalReceived": 0,
+              "originalComplete": false,
+              "queued": 1,
+              "target": null
+            }
+          },
+          "tiers": {
+            "original": "b45e0edb9af3f08bc42b97805558ad2e63834a5675ecd5a336debeac65650f8b",
+            "small": "b904f6cb0fb643ed34ca4e9d9c3273ff072941490f0422b478fa4dbc2369a6de",
+            "remuxed": true
+          },
+          "hostReady": {
+            "at": 1791109556579,
+            "port": 5206
+          },
+          "resume": {
+            "at": 1791109557803,
+            "signal": "observer.small",
+            "sincePauseMs": 11580,
+            "ok": true,
+            "base": "http://<test-PC-LAN>:5451/api/asset",
+            "originalCompleteMs": 6237
+          },
+          "heavy": {
+            "mode": "slow-stepped",
+            "cardId": "probe-slow-stepped",
+            "seconds": 16,
+            "clipId": "c-mutodwt5-10",
+            "identityKey": "12dca47ea0cc45",
+            "pinned": false,
+            "forwarded": false,
+            "frameMode": "stateful",
+            "compositing": "independent",
+            "control": {
+              "picked": true,
+              "tier": "shared",
+              "frameMode": "stateful",
+              "costKey": "12dca47ea0cc45"
+            }
+          },
+          "firstCompleteMs": {
+            "small": 7903,
+            "original": 25720,
+            "polls": 46
+          },
+          "uploadQueue": {
+            "uploaded": null,
+            "failures": 1,
+            "lastError": {
+              "code": 401,
+              "message": "素材服务 PUT media/b45e0edb9af3f08bc42b97805558ad2e63834a5675ecd5a336debeac65650f8b/0 回 401：unauthorized"
+            }
+          },
+          "uploadOrder": [
+            "tier-start small",
+            "tier-done small",
+            "tier-start original",
+            "retry",
+            "tier-start small",
+            "tier-done small",
+            "tier-start original",
+            "tier-done original",
+            "item-done"
+          ],
+          "uploadSent": [
+            {
+              "tier": "small",
+              "attempt": 1,
+              "sent": 2
+            },
+            {
+              "tier": "small",
+              "attempt": 2,
+              "sent": 0
+            },
+            {
+              "tier": "original",
+              "attempt": 2,
+              "sent": 6
+            }
+          ],
+          "hostedBytes": {
+            "small": {
+              "ms": 389,
+              "bytes": 9739824,
+              "error": null
+            },
+            "original": {
+              "ms": 1468,
+              "bytes": 44080254,
+              "error": null
+            }
+          },
+          "plan": {
+            "planId": "plan:p-mutodfpm-11c99696@3",
+            "plans": 1,
+            "tasks": 8,
+            "done": 8,
+            "failed": 0,
+            "planDoneCount": 1,
+            "pcCompleted": 3,
+            "pcDedup": 0,
+            "pcPlanClaimed": true,
+            "publishToSettledMs": 73343,
+            "stats": {
+              "applied": 8,
+              "applyErrors": 0,
+              "fetched": 599
+            }
+          },
+          "edit": {
+            "ok": true,
+            "ms": 356,
+            "backup": true
+          },
+          "cardRevAfterEdit": 2,
+          "observer": {
+            "role": "observer",
+            "run": "c66f21004100005",
+            "port": 5203,
+            "cardInRepoBefore": false,
+            "env": {
+              "PROMPTCUT_QUEUE_NODE": null,
+              "PROMPTCUT_SHARED_CONFIG": null
+            },
+            "frameQueue": {
+              "nodes": 0,
+              "starting": false,
+              "profile": "pc"
+            },
+            "joinMs": 481,
+            "projectTiers": {
+              "original": "b45e0edb9af3f08bc42b97805558ad2e63834a5675ecd5a336debeac65650f8b",
+              "small": "b904f6cb0fb643ed34ca4e9d9c3273ff072941490f0422b478fa4dbc2369a6de"
+            },
+            "firstShown": {
+              "tier": "small",
+              "idx": 75,
+              "w": 800
+            },
+            "originalAtFirstFrame": {
+              "paused": {
+                "at": 1791109546223,
+                "skipped": null,
+                "originalComplete": false,
+                "originalReceived": 0,
+                "originalChunks": 6
+              },
+              "resumedBefore": false
+            },
+            "smallIdxSource": "stable",
+            "smallIdx": 75,
+            "smallStableBeforeSwap": true,
+            "swapWaitMs": 8454,
+            "original": {
+              "idx": 75,
+              "w": 1920
+            },
+            "tierSequence": [
+              {
+                "ms": 492,
+                "tier": "none",
+                "idx": null,
+                "w": null,
+                "ct": null
+              },
+              {
+                "ms": 2293,
+                "tier": "small",
+                "idx": 75,
+                "w": 800,
+                "ct": 2.5
+              },
+              {
+                "ms": 6231,
+                "tier": "none",
+                "idx": null,
+                "w": null,
+                "ct": null
+              },
+              {
+                "ms": 7328,
+                "tier": "small",
+                "idx": 75,
+                "w": 800,
+                "ct": 2.5
+              },
+              {
+                "ms": 11027,
+                "tier": "original",
+                "idx": 75,
+                "w": 1920,
+                "ct": 2.5
+              }
+            ],
+            "lowReadyState": {
+              "samples": 0,
+              "presentedBefore": 0,
+              "withShot": 0,
+              "shots": 0,
+              "shotLuma": null,
+              "srcs": [],
+              "windowsMs": []
+            },
+            "swapMode": "covered",
+            "swapSamples": {
+              "n": 0,
+              "black": 0,
+              "idxSeen": [],
+              "srcs": [],
+              "smallBeforeSwap": 0,
+              "spanMs": 0,
+              "coversSwap": false,
+              "mode": "covered",
+              "swapGapMs": 8734,
+              "sampleIntervalMs": null
+            },
+            "playhead": {
+              "t": 2.5,
+              "log": [
+                {
+                  "ms": 0,
+                  "t": 2.5,
+                  "cut": "cut-1",
+                  "duration": 6,
+                  "stack": [
+                    "at emit (/src/store/core.ts:33:29)",
+                    "at set (/src/store/core.ts:40:2)",
+                    "at Object.seek (/src/store/actions/playback.ts:6:3)",
+                    "at pptr:evaluate;P%20(<test-file-stack>):16:17"
+                  ]
+                }
+              ]
+            },
+            "keyBefore": "ad7f42887dc14",
+            "stageV1": true,
+            "mediaEvents": [],
+            "installMs": 508,
+            "hmrMs": 761,
+            "keyAfter": "944423426619",
+            "remeasureMs": 1271,
+            "remeasureVia": "record",
+            "newCostRecordMs": 1271,
+            "stageMs": 1271,
+            "editedSeen": {
+              "ms": 378,
+              "ok": true,
+              "editMs": 356
+            },
+            "bRecord": {
+              "rev": 2,
+              "hash": "da285b2a5295a4b52191123b808b7b3397f918fc6aeb084521a8f06f28039ace",
+              "mine": false
+            },
+            "bNotices": [
+              {
+                "type": "installed",
+                "key": "src/cards/user/c66t9-c66f21004100005.tsx",
+                "rev": 1
+              },
+              {
+                "type": "installed",
+                "key": "src/cards/user/c66t9-c66f21004100005.tsx",
+                "rev": 2
+              }
+            ],
+            "bOverrideV2": true,
+            "bKindAfter": "shared",
+            "shots": [
+              "<test-temp>\\pc-reopen-c66-observer-bGYm7I\\probe\\c66f21004100005-observer-1-small.png",
+              "<test-temp>\\pc-reopen-c66-observer-bGYm7I\\probe\\c66f21004100005-observer-2-original.png",
+              "<test-temp>\\pc-reopen-c66-observer-bGYm7I\\probe\\c66f21004100005-observer-3-v2.png"
+            ],
+            "pageErrors": [],
+            "temp": "<test-temp>\\pc-c66t9-observer-pJJkHE",
+            "ok": false,
+            "fails": [
+              "超时:[observer] 换档前后的逐帧样本够数",
+              "[observer] 逐帧采样够数(≥ 10) :: {\"n\":0,\"black\":0,\"idxSeen\":[],\"srcs\":[],\"smallBeforeSwap\":0,\"spanMs\":0,\"coversSwap\":false,\"mode\":\"covered\",\"swapGapMs\":8734,\"sampleIntervalMs\":null}",
+              "[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本) :: {\"n\":0,\"black\":0,\"idxSeen\":[],\"srcs\":[],\"smallBeforeSwap\":0,\"spanMs\":0,\"coversSwap\":false,\"mode\":\"covered\",\"swapGapMs\":8734,\"sampleIntervalMs\":null}"
+            ]
+          },
+          "host": {
+            "role": "host",
+            "run": "c66f21004100005",
+            "port": 5206,
+            "cardInRepoBefore": false,
+            "readyQueue": {
+              "profile": "host",
+              "nodes": 1,
+              "maxConcurrent": 2,
+              "codeVersion": "46d3c04676bd"
+            },
+            "cardSync": {
+              "connected": true,
+              "rev": 1,
+              "notices": [
+                "installed"
+              ]
+            },
+            "profile": "host",
+            "claimed": 5,
+            "completed": 5,
+            "dedup": 0,
+            "failed": 0,
+            "lost": 0,
+            "connected": true,
+            "assetBase": "http://<test-PC-LAN>:5451/api/asset",
+            "codeVersion": "46d3c04676bd",
+            "plan": {
+              "planId": "plan:p-mutodfpm-11c99696@3",
+              "tasks": 8,
+              "done": 8
+            },
+            "creatorCodeVersion": "46d3c04676bd",
+            "doneCounts": {
+              "tasks": 8,
+              "exactlyOnce": 8,
+              "missing": 0,
+              "duplicate": 0
+            },
+            "artifacts": {
+              "manifests": 8,
+              "missingManifests": 0,
+              "blocks": 480,
+              "missingBlocks": []
+            },
+            "cardV2": {
+              "ms": 1,
+              "rev": 2,
+              "inOverlay": true,
+              "baseUntouched": null
+            },
+            "exitCode": 0,
+            "released": 0,
+            "temp": "<test-temp>\\pc-c66t9-host-zWdh2J",
+            "ok": true,
+            "fails": []
+          },
+          "completedByNode": {
+            "pc": 3,
+            "host": 5
+          },
+          "shots": [
+            "<test-temp>\\pc-c66-fixed-wave2-creator-8465f48e9d6b45bc8e10307bb6376bb3\\probe\\c66f21004100005-creator-1-published.png",
+            "<test-temp>\\pc-c66-fixed-wave2-creator-8465f48e9d6b45bc8e10307bb6376bb3\\probe\\c66f21004100005-creator-2-end.png"
+          ],
+          "pageErrors": [],
+          "deleted": true,
+          "temp": "<test-temp>\\pc-c66t9-creator-hZ0FKG",
+          "ms": 120393,
+          "fails": [
+            "观察端 ok :: [\"超时:[observer] 换档前后的逐帧样本够数\",\"[observer] 逐帧采样够数(≥ 10) :: {\\\"n\\\":0,\\\"black\\\":0,\\\"idxSeen\\\":[],\\\"srcs\\\":[],\\\"smallBeforeSwap\\\":0,\\\"spanMs\\\":0,\\\"coversSwap\\\":false,\\\"mode\\\":\\\"covered\\\",\\\"swapGapMs\\\":8734,\\\"sampleIntervalMs\\\":null}\",\"[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本) :: {\\\"n\\\":0,\\\"black\\\":0,\\\"idxSeen\\\":[],\\\"srcs\\\":[],\\\"smallBeforeSwap\\\":0,\\\"spanMs\\\":0,\\\"coversSwap\\\":false,\\\"mode\\\":\\\"covered\\\",\\\"sw"
+          ],
+          "ok": false
+        }
+      }
+    ],
+    "transferredZip": {
+      "bytes": 5767,
+      "sha256": "3b0e05957ef5c54945819fa1140432c492872734859b842bcc4733ec790c8f4d"
+    },
+    "finding": "Sampler returned zero samples; small/original frame 75 was observed. Frame/context replacement is an unproven hypothesis, not a product root cause or a pass."
+  }
+}

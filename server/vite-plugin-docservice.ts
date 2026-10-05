@@ -3,6 +3,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { Plugin } from "vite";
 import { apiPath, clientAddressOf, isLoopbackAddress, isLocalOrigin, remoteTagOf } from "./http-guard.mjs";
+import { prepareLocalDocumentDir, recoveryDir } from "./recovery/paths.mjs";
+import { recoveryHttp } from "./recovery/http.mjs";
+import { mediaDir } from "./vite-plugin-media";
+import { artifactStoreDir } from "./asset-service";
 
 /**
  * 本地文档服务(契约 `docs/plan/docservice-contract.md` 第 5 节、第 10 节)。
@@ -222,7 +226,7 @@ export function docservicePlugin(): Plugin {
           import("./auth/store.mjs"),
           import("./auth/device.mjs"),
         ]);
-        const dataDir = path.join(server.config.root, "out", "docservice");
+        const dataDir = prepareLocalDocumentDir(server.config.root);
         // 凭证存储:进程内单例,素材服务按同一个目录取到同一份
         let store: object | null = null;
         try {
@@ -252,6 +256,13 @@ export function docservicePlugin(): Plugin {
         lan.attach({ store: store as LanStore | null, hostDeviceName: localDeviceInfo().deviceName });
         service = built.service;
         handleShared = built.handleHttp;
+        server.middlewares.use(recoveryHttp({
+          dir: recoveryDir(server.config.root), dataDir, store, device: localDeviceInfo(),
+          assets: { media: { root: mediaDir(server.config.root), shard: false }, snap: { root: artifactStoreDir(server.config.root, "snap"), shard: false }, px: { root: artifactStoreDir(server.config.root, "px"), shard: false } },
+          reloadSpace: built.service.reloadSpace,
+          baseOf: () => `http://127.0.0.1:${(httpServer.address() as { port: number }).port}/docservice`,
+          onClose: (close: () => void) => httpServer.once("close", close),
+        }));
         log("docservice.attach", { path: WS_PATH, modules: built.service.health().modules, authStore: store ? "ok" : "unavailable" });
       } catch (err) {
         log("docservice.error", { stage: "attach", message: errText(err) });

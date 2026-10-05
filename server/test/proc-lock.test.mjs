@@ -222,24 +222,49 @@ test("并发接管同一个死锁:恰好一个赢(不是两个都以为自己独
   fs.writeFileSync(LOCK, JSON.stringify({ pid: deadPid, at: new Date().toISOString(), host: "promptcut" }));
 
   const child = path.join(TMP, "grab.mjs");
+  const release = path.join(TMP, "grab-release");
   fs.writeFileSync(child, [
+    `const fs = (await import('node:fs')).default;`,
     `const s = await import(${JSON.stringify(new URL("../vite-plugin-skill-state.ts", import.meta.url).href)});`,
     `const r = s.acquireLock(${JSON.stringify(PROC)});`,
-    // 抢到就握住一会儿,不放锁 —— 让「两个都以为自己拿到了」这件事暴露出来
+    // 保持赢家存活直到每个竞争者都完成尝试。固定等待 2500 ms 会在全量
+    // 负载下先结束赢家,让晚启动的竞争者合法接管,误报为同时双赢。
     `process.stdout.write(r.ok ? "WON" : "LOST");`,
-    `if (r.ok) await new Promise((res) => setTimeout(res, 2500));`,
+    `const deadline = Date.now() + 30000;`,
+    `while (r.ok && !fs.existsSync(${JSON.stringify(release)})) {`,
+    `  if (Date.now() > deadline) throw new Error('parent did not release lock test');`,
+    `  await new Promise((res) => setTimeout(res, 20));`,
+    `}`,
   ].join("\n"), "utf8");
 
-  const results = await Promise.all(
-    Array.from({ length: 12 }, () =>
-      new Promise((resolve) => {
+  const competitors = Array.from({ length: 12 }, () => {
+    const c = spawn(process.execPath, [child], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const exited = new Promise((resolve, reject) => {
+      c.once("error", reject);
+      c.once("close", (code) => code === 0 ? resolve() : reject(new Error(`lock competitor exited ${code}`)));
+    });
+    // Attach both observers immediately, before a fast child can emit/exit.
+    const attempted = new Promise((resolve, reject) => {
         let out = "";
-        const c = spawn(process.execPath, [child], { stdio: ["ignore", "pipe", "ignore"] });
-        c.stdout.on("data", (b) => (out += b));
-        c.on("exit", () => resolve(out));
-      }),
-    ),
-  );
+        c.stdout.on("data", (b) => {
+          out += b;
+          if (out === "WON" || out === "LOST") resolve(out);
+        });
+        c.once("error", reject);
+        c.once("close", () => {
+          if (out !== "WON" && out !== "LOST") reject(new Error("lock competitor did not report an attempt"));
+        });
+    });
+    c.stderr.resume();
+    return { attempted, exited };
+  });
+  let results;
+  try {
+    results = await Promise.all(competitors.map((c) => c.attempted));
+  } finally {
+    fs.writeFileSync(release, "release");
+    await Promise.all(competitors.map((c) => c.exited));
+  }
   const won = results.filter((r) => r === "WON").length;
   assert.equal(won, 1, `恰好一个该抢到死锁的接管权,实际 ${won} 个`);
   try { fs.unlinkSync(LOCK); } catch {}

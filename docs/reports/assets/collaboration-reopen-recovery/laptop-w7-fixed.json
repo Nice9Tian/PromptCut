@@ -1,0 +1,4487 @@
+{
+  "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+  "kind": "actual-physical-devices-W7",
+  "status": "pass",
+  "creator": {
+    "receipt": {
+      "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "role": "creator",
+      "prepareOnly": false,
+      "timingAuthoritative": false,
+      "hostname": "<test-PC>",
+      "startedAt": "2026-10-04T10:32:49.530Z",
+      "nodeVersion": "v24.19.0",
+      "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+      "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "basePort": 5460,
+      "status": "pass",
+      "actualExitCode": 0,
+      "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/m7-browser-probe.mjs --role creator --run m7rfix10041021 --base-port 5460 --out <test-temp>\\pc-reopen-w7-creator-eUPvID\\probe --keep-temp --timeout-min 120 --bind 0.0.0.0 --public-host <test-PC-LAN>",
+      "fails": [],
+      "pending": [],
+      "installed": false,
+      "userRuntimeModified": false,
+      "hostNetworkChanged": false,
+      "run": "m7rfix10041021",
+      "coord": "http://<test-PC-LAN>:5466",
+      "expiresAt": "2026-10-04T12:14:56.344Z",
+      "ownedProbePid": 42620,
+      "items": {
+        "M7-A1": {
+          "status": "pass",
+          "parts": {
+            "server-B-other-user": {
+              "status": "pass",
+              "detail": {
+                "published": "task.published",
+                "tasks": 10,
+                "allDone": true,
+                "doneMs": 2295,
+                "sB": 0,
+                "sS": 0,
+                "watcherSaw": 14
+              }
+            },
+            "server-same-name-other-device": {
+              "status": "pass",
+              "detail": {
+                "sS": 0,
+                "userIdDiffers": true
+              }
+            },
+            "page": {
+              "status": "pass",
+              "detail": {
+                "b1": 0,
+                "low": 0,
+                "single": 0,
+                "aTasks": 14
+              }
+            }
+          }
+        },
+        "M7-A2": {
+          "status": "pass",
+          "parts": {
+            "server-claim-other-user-forbidden": {
+              "status": "pass",
+              "detail": {
+                "otherTasks": [
+                  {
+                    "type": "task.claim-rejected",
+                    "reason": "forbidden",
+                    "hasState": false,
+                    "hasVersion": false
+                  },
+                  {
+                    "type": "task.claim-rejected",
+                    "reason": "forbidden",
+                    "hasState": false,
+                    "hasVersion": false
+                  },
+                  {
+                    "type": "task.claim-rejected",
+                    "reason": "forbidden",
+                    "hasState": false,
+                    "hasVersion": false
+                  }
+                ],
+                "otherPlan": {
+                  "type": "task.claim-rejected",
+                  "reason": "forbidden",
+                  "hasState": false,
+                  "hasVersion": false
+                },
+                "ownPlan": {
+                  "type": "task.claim-rejected",
+                  "reason": "plan-profile",
+                  "hasState": false,
+                  "hasVersion": false
+                }
+              }
+            },
+            "server-own-plan-plan-profile": {
+              "status": "pass",
+              "detail": {
+                "type": "task.claim-rejected",
+                "reason": "plan-profile",
+                "hasState": false,
+                "hasVersion": false
+              }
+            },
+            "server-d9-browser-as-pc-forbidden": {
+              "status": "pass",
+              "detail": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              }
+            },
+            "page-hello-profile-browser": {
+              "status": "pass",
+              "detail": {
+                "at": 1791110017602,
+                "dir": "sent",
+                "conn": "19092.84",
+                "type": "node.hello",
+                "id": null,
+                "reqId": null,
+                "profile": "browser",
+                "nodeId": "browser-page-dc0492e8210a",
+                "hasEnvironment": true,
+                "maxConcurrent": 1,
+                "codeVersions": [
+                  "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a"
+                ]
+              }
+            }
+          }
+        },
+        "M7-A3": {
+          "status": "pass",
+          "parts": {
+            "server-standin-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "seconds": 60,
+                "perClass": {
+                  "light": {
+                    "tasks": 2,
+                    "claimedBySq": 2,
+                    "claimsSent": 2,
+                    "done": 2
+                  },
+                  "medium": {
+                    "tasks": 2,
+                    "claimedBySq": 2,
+                    "claimsSent": 2,
+                    "done": 2
+                  },
+                  "heavy": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "local": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "userCard": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "graphCard": {
+                    "tasks": 1,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "modifiedCard": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "notIndependent": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "stream": {
+                    "tasks": 1,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "plan": {
+                    "tasks": 1,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  }
+                },
+                "publishErrors": [],
+                "fp": "efe42e99feca808c"
+              }
+            },
+            "server-standin-light-medium-done": {
+              "status": "pass",
+              "detail": {
+                "light": {
+                  "tasks": 2,
+                  "claimedBySq": 2,
+                  "claimsSent": 2,
+                  "done": 2
+                },
+                "medium": {
+                  "tasks": 2,
+                  "claimedBySq": 2,
+                  "claimsSent": 2,
+                  "done": 2
+                }
+              }
+            },
+            "server-page-node-registered": {
+              "status": "pass",
+              "detail": {
+                "node": {
+                  "profile": "browser",
+                  "fp": "258acaaa7c5fe509"
+                }
+              }
+            },
+            "server-page-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "seconds": 60,
+                "claimedByPage": [],
+                "publishErrors": 0
+              }
+            },
+            "page-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "tasks": 8,
+                "seconds": 60,
+                "claimedTags": [],
+                "blocked": {
+                  "6:plan-on-browser": 3,
+                  "4:weight": 1,
+                  "7:tier": 1,
+                  "3:user-cards": 1,
+                  "3:graph-cards": 1,
+                  "1:card-source": 1,
+                  "7:not-independent": 1,
+                  "2:transcode": 1,
+                  "1:code-version": 1
+                }
+              }
+            },
+            "page-light-medium-done": {
+              "status": "pass",
+              "detail": {
+                "completed": 15
+              }
+            }
+          }
+        },
+        "M7-A4": {
+          "status": "pass",
+          "parts": {
+            "server-anchors-by-browser": {
+              "status": "pass",
+              "detail": {
+                "perClip": {
+                  "h1": [
+                    {
+                      "id": "snapshot:5cdd243e104",
+                      "state": "done",
+                      "byPage": true,
+                      "manifest": true,
+                      "snapAll": true,
+                      "frames": 60
+                    }
+                  ],
+                  "h2": [
+                    {
+                      "id": "snapshot:75ea413fc86",
+                      "state": "done",
+                      "byPage": true,
+                      "manifest": true,
+                      "snapAll": true,
+                      "frames": 60
+                    }
+                  ],
+                  "h3": [
+                    {
+                      "id": "snapshot:399eccda62f",
+                      "state": "done",
+                      "byPage": true,
+                      "manifest": true,
+                      "snapAll": true,
+                      "frames": 60
+                    }
+                  ]
+                },
+                "pageSignal": {
+                  "by": "node",
+                  "at": 1791110040587,
+                  "done": {
+                    "h3": 1,
+                    "h2": 1,
+                    "h1": 1
+                  },
+                  "worstSinceGateMs": 22945,
+                  "completedIds": [
+                    "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                    "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                    "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59"
+                  ]
+                }
+              }
+            },
+            "server-layer-map-points-to-browser": {
+              "status": "pass",
+              "detail": {
+                "v": 3,
+                "layerPoint": {
+                  "h1": true,
+                  "h2": true,
+                  "h3": true
+                }
+              }
+            },
+            "page-anchors-done": {
+              "status": "pass",
+              "detail": {
+                "anchorRule": {
+                  "h1": "priority-50",
+                  "h2": "priority-50",
+                  "h3": "priority-50"
+                },
+                "perClip": {
+                  "h3": [
+                    {
+                      "id": "snapshot:399eccda62f18b2",
+                      "fullId": "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                      "at": 1791110026649,
+                      "sinceGateMs": 9046
+                    }
+                  ],
+                  "h2": [
+                    {
+                      "id": "snapshot:75ea413fc86b654",
+                      "fullId": "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                      "at": 1791110033445,
+                      "sinceGateMs": 15842
+                    }
+                  ],
+                  "h1": [
+                    {
+                      "id": "snapshot:5cdd243e10443ce",
+                      "fullId": "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59",
+                      "at": 1791110040548,
+                      "sinceGateMs": 22945
+                    }
+                  ]
+                },
+                "worstSinceGateMs": 22945,
+                "l2Snapshots": 360,
+                "authoritative": true,
+                "diag": {
+                  "available": true,
+                  "state": "idle",
+                  "reason": null,
+                  "nodeId": "browser-page-dc0492e8210a",
+                  "envFingerprint": "258acaaa7c5fe509",
+                  "codeVersion": "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a",
+                  "held": [],
+                  "counts": {
+                    "claimed": 3,
+                    "completed": 3,
+                    "dedup": 0,
+                    "failed": 0,
+                    "lost": 0,
+                    "released": {
+                      "yield": 0,
+                      "hidden": 0,
+                      "urgent": 0,
+                      "noSnapshot": 0,
+                      "other": 0,
+                      "raw": {},
+                      "total": 0
+                    },
+                    "blocked": {
+                      "6:plan-on-browser": 1
+                    },
+                    "bakeFrames": 180,
+                    "bakeMs": {
+                      "n": 180,
+                      "p50": 102,
+                      "p95": 151
+                    },
+                    "stageMs": {
+                      "p50": 100.20000000298023,
+                      "p95": 142.29999999701977,
+                      "pausedMs": 0
+                    },
+                    "chunksPushed": 360,
+                    "chunksSkipped": 0,
+                    "bytesPushed": 2566255,
+                    "uploadFailed": 0,
+                    "smallFrames": 180
+                  },
+                  "lastError": null
+                },
+                "assetHttp": {
+                  "GET snap chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 11,
+                    "preP50": 0,
+                    "newSockets": 1
+                  },
+                  "GET px chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 11,
+                    "preP50": 1,
+                    "newSockets": 1
+                  }
+                },
+                "ticketReqs": {
+                  "asset:rw": 1
+                },
+                "phases": {
+                  "lease": {
+                    "n": 180,
+                    "p50": 0,
+                    "p95": 0
+                  },
+                  "rpc": {
+                    "n": 180,
+                    "p50": 74.79999999701977,
+                    "p95": 119
+                  },
+                  "gunzip": {
+                    "n": 180,
+                    "p50": 0.6999999955296516,
+                    "p95": 0.8999999985098839
+                  },
+                  "snap": {
+                    "n": 180,
+                    "p50": 24.100000001490116,
+                    "p95": 36.599999994039536
+                  },
+                  "px": {
+                    "n": 180,
+                    "p50": 24.100000001490116,
+                    "p95": 36.79999999701977
+                  },
+                  "push": {
+                    "n": 180,
+                    "p50": 24.200000002980232,
+                    "p95": 36.79999999701977
+                  },
+                  "l2": {
+                    "n": 180,
+                    "p50": 1.1000000014901161,
+                    "p95": 1.5
+                  },
+                  "total": {
+                    "n": 180,
+                    "p50": 101.70000000298023,
+                    "p95": 151.59999999403954
+                  }
+                },
+                "uploadMs": {
+                  "requests": 1080,
+                  "ticket": 63.200000032782555,
+                  "fetch": 8680.499999970198,
+                  "body": 368.9999999925494
+                }
+              }
+            },
+            "page-within-30s": {
+              "status": "pass",
+              "detail": {
+                "worstSinceGateMs": 22945
+              }
+            },
+            "page-layer-env-browser": {
+              "status": "pass",
+              "detail": [
+                {
+                  "clip": "light",
+                  "fp": "938c9066059fe8ae",
+                  "ready": 0
+                },
+                {
+                  "clip": "h3",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h2",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h1",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                }
+              ]
+            }
+          }
+        },
+        "M7-A5": {
+          "status": "pass",
+          "parts": {
+            "page-yield-on-drag": {
+              "status": "pass",
+              "detail": {
+                "drag": true,
+                "claimsDuring": 0,
+                "framesDuringDrag": 0,
+                "releases": [
+                  {
+                    "reason": "yield-drag",
+                    "cause": "yield",
+                    "msAfterDrag": 1143
+                  }
+                ],
+                "l2": {
+                  "before": 360,
+                  "after": 360
+                },
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 638,
+                "attemptsOnReclaim": null,
+                "authoritative": true
+              }
+            },
+            "page-attempts-unchanged": {
+              "status": "pass",
+              "detail": {
+                "attemptsOnReclaim": null,
+                "note": "放回不计失败（C2）；认领回包里的 attempts 由队列给"
+              }
+            },
+            "page-resume-after-500ms": {
+              "status": "pass",
+              "detail": {
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 638
+              }
+            }
+          }
+        },
+        "M7-A6": {
+          "status": "pass",
+          "parts": {
+            "play-yield": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "frames": 0,
+                "releases": [
+                  "yield-play"
+                ],
+                "releaseAfterPauseMs": null,
+                "lateReason": "yield-play",
+                "diagAfter": "idle"
+              }
+            },
+            "hidden-release-now": {
+              "status": "pass",
+              "detail": {
+                "hidden": true,
+                "releaseMs": -37,
+                "reason": "yield-hidden",
+                "cause": "hidden",
+                "progressBeforeRelease": false
+              }
+            },
+            "hidden-no-claims-then-resume": {
+              "status": "pass",
+              "detail": {
+                "claimsHidden": 0,
+                "resumed": true
+              }
+            },
+            "urgent-stops-at-frame-boundary": {
+              "status": "pass",
+              "detail": {
+                "releaseMs": 86,
+                "reason": "yield-urgent",
+                "cause": "urgent",
+                "framesAfter": 1
+              }
+            }
+          }
+        },
+        "M7-A7": {
+          "status": "pass",
+          "parts": {
+            "setup-single-stage": {
+              "status": "pass",
+              "detail": {
+                "single": false,
+                "low": false
+              }
+            },
+            "no-render-connection": {
+              "status": "pass",
+              "detail": {
+                "low": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "single": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "control": {
+                  "isNode": true,
+                  "render": 2
+                }
+              }
+            }
+          }
+        },
+        "M7-A8": {
+          "status": "pass",
+          "parts": {
+            "server-manifest-matches": {
+              "status": "pass",
+              "detail": {
+                "manifests": 3,
+                "bad": []
+              }
+            },
+            "server-one-env-per-layer": {
+              "status": "pass",
+              "detail": {
+                "h1": [
+                  "258acaaa7c5fe509"
+                ],
+                "h2": [
+                  "258acaaa7c5fe509"
+                ],
+                "h3": [
+                  "258acaaa7c5fe509"
+                ]
+              }
+            },
+            "server-exactly-once-done": {
+              "status": "pass",
+              "detail": {
+                "doneEvents": 22,
+                "dup": []
+              }
+            },
+            "server-desktop-applied": {
+              "status": "pass",
+              "detail": {
+                "applied": 16,
+                "fetched": 240,
+                "applyErrors": 0
+              }
+            }
+          }
+        },
+        "M7-A9": {
+          "status": "pass",
+          "parts": {
+            "server-every-frame-has-px": {
+              "status": "pass",
+              "detail": [
+                {
+                  "id": "snapshot:5cdd243e104",
+                  "frames": 60,
+                  "small": 60,
+                  "pxAll": true
+                },
+                {
+                  "id": "snapshot:75ea413fc86",
+                  "frames": 60,
+                  "small": 60,
+                  "pxAll": true
+                },
+                {
+                  "id": "snapshot:399eccda62f",
+                  "frames": 60,
+                  "small": 60,
+                  "pxAll": true
+                }
+              ]
+            },
+            "page-low-memory-shows-small": {
+              "status": "pass",
+              "detail": {
+                "waitedForAllFrames": false,
+                "tier": "small",
+                "layers": [
+                  {
+                    "clip": "h1",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h2",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h3",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "M7-A10": {
+          "status": "pass",
+          "parts": {
+            "server-idle-takeover": {
+              "status": "pass",
+              "detail": {
+                "clip": "z1",
+                "took": {
+                  "lock": "938c9066059fe8ae",
+                  "pcDone": 0
+                },
+                "takeoverMs": 3017,
+                "lockHistory": [
+                  {
+                    "envFingerprint": "258acaaa7c5fe509",
+                    "at": 1791110733817
+                  },
+                  {
+                    "envFingerprint": "938c9066059fe8ae",
+                    "at": 1791110784850
+                  }
+                ],
+                "plans": [
+                  {
+                    "user": "B-low",
+                    "rev": 3,
+                    "clips": [
+                      "z1"
+                    ],
+                    "state": "done"
+                  },
+                  {
+                    "user": "B-low",
+                    "rev": 4,
+                    "clips": [
+                      "light"
+                    ],
+                    "state": "done"
+                  },
+                  {
+                    "user": "B",
+                    "rev": 3,
+                    "clips": [
+                      "h1",
+                      "h2",
+                      "h3",
+                      "light",
+                      "z1"
+                    ],
+                    "state": "failed"
+                  },
+                  {
+                    "user": "B",
+                    "rev": 4,
+                    "clips": [
+                      "h1",
+                      "h2",
+                      "h3",
+                      "z1"
+                    ],
+                    "state": "done"
+                  }
+                ]
+              }
+            },
+            "server-race-split-promptly": {
+              "status": "pass",
+              "detail": {
+                "splitMs": 7636,
+                "limitMs": 90000
+              }
+            },
+            "server-race-done-in-time": {
+              "status": "pass",
+              "detail": {
+                "raceMs": 24710,
+                "limitMs": 180000,
+                "splitMs": 7636,
+                "timedOut": [],
+                "race": {
+                  "w1": [
+                    "258acaaa7c5fe509"
+                  ],
+                  "w2": [
+                    "258acaaa7c5fe509"
+                  ]
+                }
+              }
+            },
+            "server-race-one-env-per-card": {
+              "status": "pass",
+              "detail": {
+                "w1": [
+                  "258acaaa7c5fe509"
+                ],
+                "w2": [
+                  "258acaaa7c5fe509"
+                ],
+                "raceMs": 24710,
+                "envOf": {
+                  "w1": [
+                    "browser"
+                  ],
+                  "w2": [
+                    "browser"
+                  ]
+                }
+              }
+            },
+            "page-layer-switched": {
+              "status": "pass",
+              "detail": {
+                "clip": "z1",
+                "fp": "938c9066059fe8ae",
+                "pcFp": "938c9066059fe8ae",
+                "ready": 1,
+                "waitedMs": 2,
+                "limitMs": 240000
+              }
+            }
+          }
+        },
+        "M7-A11": {
+          "status": "pass",
+          "parts": {
+            "server-logs-describe": {
+              "status": "pass",
+              "detail": {
+                "found": false,
+                "where": [],
+                "ticketsKnown": 11,
+                "logLines": 131,
+                "urls": 10124
+              }
+            },
+            "page-render-ticket-expiry": {
+              "status": "pass",
+              "detail": {
+                "endedBy": {
+                  "by": "creator",
+                  "at": 1791110728109,
+                  "closed": true,
+                  "conns": 1,
+                  "code": 1001,
+                  "reason": null
+                },
+                "rebuilt": {
+                  "welcomeMs": 1796,
+                  "ticket": true
+                },
+                "newRenderConns": 1
+              }
+            },
+            "echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "low",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "single",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "render-echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "ticket-not-in-url-or-page-diag": {
+              "status": "pass",
+              "detail": {
+                "urlLeaks": [],
+                "diagLeaks": [],
+                "ticketsSeen": 16
+              }
+            }
+          }
+        },
+        "M7-A12": {
+          "status": "pass",
+          "parts": {
+            "play-10s-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            },
+            "play-10s-claims-0": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "heldAtStart": null
+              }
+            },
+            "bake-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            }
+          }
+        },
+        "W7": {
+          "status": "pass",
+          "parts": {
+            "cross-machine": {
+              "status": "pass",
+              "detail": {
+                "creator": "<test-PC>",
+                "node": "<test-laptop>",
+                "bind": "0.0.0.0",
+                "publicHost": "<test-PC-LAN>",
+                "timingAuthoritative": true
+              }
+            },
+            "M7-A1": {
+              "status": "pass",
+              "detail": {
+                "mirror": "M7-A1"
+              }
+            },
+            "M7-A2": {
+              "status": "pass",
+              "detail": {
+                "mirror": "M7-A2"
+              }
+            },
+            "M7-A3": {
+              "status": "pass",
+              "detail": {
+                "mirror": "M7-A3"
+              }
+            },
+            "A4-timing-on-laptop": {
+              "status": "pass",
+              "detail": {
+                "worstSinceGateMs": 22945
+              }
+            }
+          }
+        },
+        "D9": {
+          "status": "pass",
+          "parts": {
+            "browser-credential-as-pc-host": {
+              "status": "pass",
+              "detail": {
+                "as-pc": {
+                  "hello": "error",
+                  "reason": "forbidden",
+                  "watchAfter": "not-registered"
+                },
+                "as-host": {
+                  "hello": "error",
+                  "reason": "forbidden",
+                  "watchAfter": "not-registered"
+                },
+                "bindOtherBrowser": {
+                  "hello": "error",
+                  "reason": "forbidden"
+                },
+                "bindOtherDesktop": {
+                  "hello": "error",
+                  "reason": "forbidden"
+                },
+                "originalStillWorks": "queue.snapshot"
+              }
+            },
+            "nodeId-bound-to-userId": {
+              "status": "pass",
+              "detail": {
+                "as-pc": {
+                  "hello": "error",
+                  "reason": "forbidden",
+                  "watchAfter": "not-registered"
+                },
+                "as-host": {
+                  "hello": "error",
+                  "reason": "forbidden",
+                  "watchAfter": "not-registered"
+                },
+                "bindOtherBrowser": {
+                  "hello": "error",
+                  "reason": "forbidden"
+                },
+                "bindOtherDesktop": {
+                  "hello": "error",
+                  "reason": "forbidden"
+                },
+                "originalStillWorks": "queue.snapshot"
+              }
+            }
+          }
+        },
+        "D10": {
+          "status": "pass",
+          "parts": {
+            "welcome-fingerprint": {
+              "status": "pass",
+              "detail": {
+                "welcome": "3731ec3cf0cc69e9",
+                "expected": "3731ec3cf0cc69e9",
+                "selfReported": {
+                  "type": "node.welcome",
+                  "envFingerprint": "b4ed24465ac9233d",
+                  "expected": "b4ed24465ac9233d"
+                },
+                "noEnvironment": {
+                  "type": "error",
+                  "reason": "bad-message"
+                }
+              }
+            },
+            "self-reported-ignored": {
+              "status": "pass",
+              "detail": {
+                "type": "node.welcome",
+                "envFingerprint": "b4ed24465ac9233d",
+                "expected": "b4ed24465ac9233d"
+              }
+            },
+            "browser-without-environment": {
+              "status": "pass",
+              "detail": {
+                "type": "error",
+                "reason": "bad-message"
+              }
+            },
+            "page-welcome-fp-equals-computed": {
+              "status": "pass",
+              "detail": {
+                "welcome": "258acaaa7c5fe509",
+                "computed": "258acaaa7c5fe509"
+              }
+            }
+          }
+        },
+        "D14": {
+          "status": "pass",
+          "parts": {
+            "non-chromium-refused": {
+              "status": "pass",
+              "detail": {
+                "firefox": {
+                  "hello": "error",
+                  "reason": "not-chromium",
+                  "watchAfter": "not-registered"
+                },
+                "safari": {
+                  "hello": "error",
+                  "reason": "not-chromium",
+                  "watchAfter": "not-registered"
+                },
+                "crios": {
+                  "hello": "error",
+                  "reason": "not-chromium",
+                  "watchAfter": "not-registered"
+                }
+              }
+            }
+          }
+        },
+        "D1-D2-D12": {
+          "status": "pass",
+          "parts": {
+            "page-dual-split-supersede-layermap": {
+              "status": "pass",
+              "detail": {
+                "v": 3,
+                "perClip": {
+                  "h1": {
+                    "pc": 5,
+                    "page": 5,
+                    "allDual": true,
+                    "pageHasBake": true,
+                    "ok": true,
+                    "winner": "page",
+                    "fullySuperseded": [
+                      "pc"
+                    ],
+                    "takenOverMidway": [],
+                    "badRanges": [],
+                    "reasons": [],
+                    "candidates": [
+                      "page",
+                      "pc"
+                    ]
+                  },
+                  "h2": {
+                    "pc": 5,
+                    "page": 5,
+                    "allDual": true,
+                    "pageHasBake": true,
+                    "ok": true,
+                    "winner": "page",
+                    "fullySuperseded": [
+                      "pc"
+                    ],
+                    "takenOverMidway": [],
+                    "badRanges": [],
+                    "reasons": [],
+                    "candidates": [
+                      "page",
+                      "pc"
+                    ]
+                  },
+                  "h3": {
+                    "pc": 5,
+                    "page": 5,
+                    "allDual": true,
+                    "pageHasBake": true,
+                    "ok": true,
+                    "winner": "page",
+                    "fullySuperseded": [
+                      "pc"
+                    ],
+                    "takenOverMidway": [],
+                    "badRanges": [],
+                    "reasons": [],
+                    "candidates": [
+                      "page",
+                      "pc"
+                    ]
+                  }
+                },
+                "takenOverMidway": []
+              }
+            }
+          }
+        }
+      },
+      "ok": true,
+      "rawLogSha256": {
+        "stdout.log": "c0c43bdfbe93a1ab6771b198de6a6300deba650bc60577733420b198b507475d",
+        "stderr.log": "3f17b61a2ed1faab6717b78704e3873f61b1f5245b3c96ebbeeef9750ba3a07e"
+      },
+      "finishedAt": "2026-10-04T10:46:51.968Z"
+    },
+    "result": {
+      "probe": "m7-browser-probe",
+      "role": "creator",
+      "startedAt": "2026-10-04T10:32:49.630Z",
+      "run": "m7rfix10041021",
+      "out": "<test-temp>\\pc-reopen-w7-creator-eUPvID\\probe",
+      "planDump": {
+        "plans": [
+          {
+            "id": "plan:<项目>@1#clips:apt05h1kfh8mt",
+            "kind": "clips",
+            "priority": "normal",
+            "user": "B",
+            "rev": 1,
+            "clips": [
+              "h1",
+              "h2",
+              "h3"
+            ],
+            "requires": {
+              "codeVersion": "46d3c046…"
+            },
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "open",
+              "claimed",
+              "done"
+            ],
+            "claimedBy": [
+              "pc"
+            ],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@1#clips:3n9v7r1cw7g9j",
+            "kind": "clips",
+            "priority": "normal",
+            "user": "B",
+            "rev": 1,
+            "clips": [
+              "h1",
+              "h2",
+              "h3",
+              "light"
+            ],
+            "requires": {
+              "codeVersion": "46d3c046…"
+            },
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "open",
+              "done"
+            ],
+            "claimedBy": [],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@2#backfill:7pbpxd1dze0i9",
+            "kind": "backfill",
+            "priority": "backfill",
+            "user": "B-low",
+            "rev": 2,
+            "clips": [
+              "c-mutoq25p-h"
+            ],
+            "requires": {},
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "claimed",
+              "done"
+            ],
+            "claimedBy": [
+              "pc"
+            ],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@2#clips:apt05h1kfh8mt",
+            "kind": "clips",
+            "priority": "normal",
+            "user": "B",
+            "rev": 2,
+            "clips": [
+              "h1",
+              "h2",
+              "h3"
+            ],
+            "requires": {
+              "codeVersion": "46d3c046…"
+            },
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "open",
+              "done"
+            ],
+            "claimedBy": [],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@3#clips:ukmvp81j578ek",
+            "kind": "clips",
+            "priority": "normal",
+            "user": "B",
+            "rev": 3,
+            "clips": [
+              "h1",
+              "h2",
+              "h3",
+              "z1"
+            ],
+            "requires": {
+              "codeVersion": "46d3c046…"
+            },
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "claimed",
+              "done"
+            ],
+            "claimedBy": [
+              "pc"
+            ],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@3#backfill:7vq6j8aqqijo",
+            "kind": "backfill",
+            "priority": "backfill",
+            "user": "B-low",
+            "rev": 3,
+            "clips": [
+              "z1"
+            ],
+            "requires": {},
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "open",
+              "done"
+            ],
+            "claimedBy": [],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@4#backfill:1qvkxm7ic5u67",
+            "kind": "backfill",
+            "priority": "backfill",
+            "user": "B-low",
+            "rev": 4,
+            "clips": [
+              "light"
+            ],
+            "requires": {},
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "open",
+              "claimed",
+              "done"
+            ],
+            "claimedBy": [
+              "pc"
+            ],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@3#clips:19f0woim9vyea",
+            "kind": "clips",
+            "priority": "normal",
+            "user": "B",
+            "rev": 3,
+            "clips": [
+              "h1",
+              "h2",
+              "h3",
+              "light",
+              "z1"
+            ],
+            "requires": {
+              "codeVersion": "46d3c046…"
+            },
+            "state": "failed",
+            "attempts": 3,
+            "lastError": "文档服务上没有项目快照 sp_vxbhm3tmy254fnhmug3jukbyky@3",
+            "states": [
+              "open",
+              "failed"
+            ],
+            "claimedBy": [],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@4#clips:ukmvp81j578ek",
+            "kind": "clips",
+            "priority": "normal",
+            "user": "B",
+            "rev": 4,
+            "clips": [
+              "h1",
+              "h2",
+              "h3",
+              "z1"
+            ],
+            "requires": {
+              "codeVersion": "46d3c046…"
+            },
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "open",
+              "done"
+            ],
+            "claimedBy": [],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@5#backfill:3op05g1joqsj8",
+            "kind": "backfill",
+            "priority": "backfill",
+            "user": "B-low",
+            "rev": 5,
+            "clips": [
+              "w1",
+              "w2"
+            ],
+            "requires": {},
+            "state": "open",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "open"
+            ],
+            "claimedBy": [],
+            "pcFilter": {
+              "ok": true
+            }
+          },
+          {
+            "id": "plan:<项目>@5#clips:wbopq3k691xn",
+            "kind": "clips",
+            "priority": "normal",
+            "user": "B",
+            "rev": 5,
+            "clips": [
+              "h1",
+              "h2",
+              "h3",
+              "w1",
+              "w2",
+              "z1"
+            ],
+            "requires": {
+              "codeVersion": "46d3c046…"
+            },
+            "state": "done",
+            "attempts": 0,
+            "lastError": null,
+            "states": [
+              "open",
+              "claimed",
+              "done"
+            ],
+            "claimedBy": [
+              "pc"
+            ],
+            "pcFilter": {
+              "ok": true
+            }
+          }
+        ],
+        "pcView": {
+          "openVisible": 29,
+          "claimable": 22,
+          "claimableByBand": {
+            "normal": 16,
+            "backfill": 6
+          },
+          "claimableNormal": [
+            {
+              "id": "snapshot:a10401cb7f9d98d887f5dafb5e198ed",
+              "kind": "snapshot",
+              "user": "B",
+              "clip": "h3",
+              "lastError": null,
+              "attempts": 0
+            },
+            {
+              "id": "snapshot:a10401cb7f9d98d887f5dafb5e198ed",
+              "kind": "snapshot",
+              "user": "B",
+              "clip": "h3",
+              "lastError": null,
+              "attempts": 0
+            },
+            {
+              "id": "snapshot:a10401cb7f9d98d887f5dafb5e198ed",
+              "kind": "snapshot",
+              "user": "B",
+              "clip": "h3",
+              "lastError": null,
+              "attempts": 0
+            },
+            {
+              "id": "snapshot:a7ba7fd0382e8be5d57db2288c61129",
+              "kind": "snapshot",
+              "user": "B",
+              "clip": "h2",
+              "lastError": null,
+              "attempts": 0
+            },
+            {
+              "id": "snapshot:a7ba7fd0382e8be5d57db2288c61129",
+              "kind": "snapshot",
+              "user": "B",
+              "clip": "h2",
+              "lastError": null,
+              "attempts": 0
+            },
+            {
+              "id": "snapshot:a7ba7fd0382e8be5d57db2288c61129",
+              "kind": "snapshot",
+              "user": "B",
+              "clip": "h2",
+              "lastError": null,
+              "attempts": 0
+            },
+            {
+              "id": "snapshot:a7ba7fd0382e8be5d57db2288c61129",
+              "kind": "snapshot",
+              "user": "B",
+              "clip": "h2",
+              "lastError": null,
+              "attempts": 0
+            },
+            {
+              "id": "snapshot:a7ba7fd0382e8be5d57db2288c61129",
+              "kind": "snapshot",
+              "user": "B",
+              "clip": "h2",
+              "lastError": null,
+              "attempts": 0
+            }
+          ],
+          "wouldPick": {
+            "id": "snapshot:a7ba7fd0382e8be5d57db2288c61129",
+            "kind": "snapshot",
+            "band": "normal"
+          }
+        },
+        "pc": {
+          "held": [
+            "snapshot:2c4faa95d15c54cf63830efe5a3f015539f429888fd67441d7beedbd0cb38ac7:0-59"
+          ],
+          "running": [
+            "snapshot:2c4faa95d15c54cf63830efe5a3f015539f429888fd67441d7beedbd0cb38ac7:0-59"
+          ],
+          "idle": {
+            "reason": null,
+            "lastInteractionAt": null
+          },
+          "stats": {
+            "claimed": 28,
+            "completed": 3,
+            "dedup": 0,
+            "failed": 21,
+            "discarded": 0,
+            "lost": 0,
+            "planSplit": 3,
+            "done": 26,
+            "failedTasks": 28,
+            "applied": 26,
+            "applyErrors": 0,
+            "written": 120,
+            "fetched": 120,
+            "skipped": 1440
+          },
+          "claims": [
+            {
+              "id": "snapshot:3da4b648aff6236944b4e919ea5ab2a",
+              "priority": "backfill"
+            },
+            {
+              "id": "snapshot:3da4b648aff6236944b4e919ea5ab2a",
+              "priority": "backfill"
+            },
+            {
+              "id": "plan:sp_vxbhm3tmy254fnhmug3jukbyky@4#bac",
+              "priority": "backfill"
+            },
+            {
+              "id": "plan:sp_vxbhm3tmy254fnhmug3jukbyky@3#cli",
+              "priority": "normal"
+            },
+            {
+              "id": "plan:sp_vxbhm3tmy254fnhmug3jukbyky@4#cli",
+              "priority": "normal"
+            },
+            {
+              "id": "plan:sp_vxbhm3tmy254fnhmug3jukbyky@3#cli",
+              "priority": "normal"
+            },
+            {
+              "id": "plan:sp_vxbhm3tmy254fnhmug3jukbyky@3#cli",
+              "priority": "normal"
+            },
+            {
+              "id": "snapshot:a10401cb7f9d98d887f5dafb5e198ed",
+              "priority": 50
+            },
+            {
+              "id": "plan:sp_vxbhm3tmy254fnhmug3jukbyky@5#cli",
+              "priority": "normal"
+            },
+            {
+              "id": "snapshot:2c4faa95d15c54cf63830efe5a3f015",
+              "priority": 50
+            },
+            {
+              "id": "snapshot:a10401cb7f9d98d887f5dafb5e198ed",
+              "priority": 50
+            },
+            {
+              "id": "snapshot:2c4faa95d15c54cf63830efe5a3f015",
+              "priority": 50
+            }
+          ],
+          "events": [
+            "{\"at\":1791110784587,\"event\":\"executor.plan\",\"version\":\"sp_vxbhm3tmy254fnhmug3jukbyky@4\",\"entryKey\":\"12724a1dac14382924d939966ba5a81ecec0c6e5ac7fd1713fd9421258798a28\",\"controls\":6,\"locks\":0}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:60-119\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:120-179\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:240-299\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:0-59\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:60-119\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:120-179\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:180-239\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784592,\"event\":\"queue.task-failed\",\"id\":\"snapshot:3f5d0544fb5384a683f14f3058c0321bb9c61fd7c0fcecd01340a320123d57c1:240-299\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784593,\"event\":\"node.plan-relocked\",\"id\":\"plan:sp_vxbhm3tmy254fnhmug3jukbyky@4#clips:ukmvp81j578ek\"}",
+            "{\"at\":1791110784593,\"event\":\"node.plan-split\",\"id\":\"plan:sp_vxbhm3tmy254fnhmug3jukbyky@4#clips:ukmvp81j578ek\",\"derived\":35}",
+            "{\"at\":1791110784594,\"event\":\"queue.task-failed\",\"id\":\"snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:60-119\",\"error\":\"superseded\"}",
+            "{\"at\":1791110784594,\"event\":\"queue.task-failed\",\"id\":\"snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:120-179\",\"error\":\"superseded\"}",
+            "{\"at\":1791110785098,\"event\":\"node.failed\",\"id\":\"plan:sp_vxbhm3tmy254fnhmug3jukbyky@3#clips:19f0woim9vyea\",\"error\":\"文档服务上没有项目快照 sp_vxbhm3tmy254fnhmug3jukbyky@3\"}",
+            "{\"at\":1791110785609,\"event\":\"node.failed\",\"id\":\"plan:sp_vxbhm3tmy254fnhmug3jukbyky@3#clips:19f0woim9vyea\",\"error\":\"文档服务上没有项目快照 sp_vxbhm3tmy254fnhmug3jukbyky@3\"}",
+            "{\"at\":1791110793203,\"event\":\"executor.plan\",\"version\":\"sp_vxbhm3tmy254fnhmug3jukbyky@5\",\"entryKey\":\"9ffc46efbd12bd62e926f23cff85ae7b354c3dd375115b911b4343ec19745270\",\"controls\":8,\"locks\":0}",
+            "{\"at\":1791110793209,\"event\":\"node.plan-relocked\",\"id\":\"plan:sp_vxbhm3tmy254fnhmug3jukbyky@5#clips:wbopq3k691xn\"}",
+            "{\"at\":1791110793210,\"event\":\"node.plan-split\",\"id\":\"plan:sp_vxbhm3tmy254fnhmug3jukbyky@5#clips:wbopq3k691xn\",\"derived\":48}",
+            "{\"at\":1791110793425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a3f359eae6376a19739050f76a70b7a87cde538009ddaa3efa614fb85c0c2822:0-59\",\"error\":\"superseded\"}",
+            "{\"at\":1791110793425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a3f359eae6376a19739050f76a70b7a87cde538009ddaa3efa614fb85c0c2822:60-119\",\"error\":\"superseded\"}",
+            "{\"at\":1791110793425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a3f359eae6376a19739050f76a70b7a87cde538009ddaa3efa614fb85c0c2822:120-179\",\"error\":\"superseded\"}",
+            "{\"at\":1791110793425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a3f359eae6376a19739050f76a70b7a87cde538009ddaa3efa614fb85c0c2822:180-239\",\"error\":\"superseded\"}",
+            "{\"at\":1791110793425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:a3f359eae6376a19739050f76a70b7a87cde538009ddaa3efa614fb85c0c2822:240-299\",\"error\":\"superseded\"}",
+            "{\"at\":1791110800424,\"event\":\"queue.task-failed\",\"id\":\"snapshot:44ce95728c26d10d258b47d8d5d0ddeb3023d602ed37e8594de72401384d5b57:0-59\",\"error\":\"superseded\"}",
+            "{\"at\":1791110800425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:44ce95728c26d10d258b47d8d5d0ddeb3023d602ed37e8594de72401384d5b57:60-119\",\"error\":\"superseded\"}",
+            "{\"at\":1791110800425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:44ce95728c26d10d258b47d8d5d0ddeb3023d602ed37e8594de72401384d5b57:120-179\",\"error\":\"superseded\"}",
+            "{\"at\":1791110800425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:44ce95728c26d10d258b47d8d5d0ddeb3023d602ed37e8594de72401384d5b57:180-239\",\"error\":\"superseded\"}",
+            "{\"at\":1791110800425,\"event\":\"queue.task-failed\",\"id\":\"snapshot:44ce95728c26d10d258b47d8d5d0ddeb3023d602ed37e8594de72401384d5b57:240-299\",\"error\":\"superseded\"}"
+          ]
+        },
+        "pcNode": {
+          "nodeId": "prerender:<test-PC>:5463",
+          "profile": "pc",
+          "envFingerprint": "938c9066059fe8ae",
+          "codeVersions": [
+            "46d3c046…"
+          ],
+          "capabilities": {},
+          "editing": false
+        }
+      },
+      "projectId": "sp_vxbhm3tmy254fnhmug3jukbyky",
+      "pcFp": "938c9066059fe8ae",
+      "pcFpApplied": true,
+      "pageFp": "258acaaa7c5fe509",
+      "pageNode": {
+        "by": "node",
+        "at": 1791110021280,
+        "isNode": true,
+        "nodeId": "browser-page-dc0492e8210a",
+        "envFingerprint": "258acaaa7c5fe509",
+        "gateLiftAt": 1791110017603,
+        "diag": {
+          "available": true,
+          "state": "baking",
+          "reason": null
+        }
+      },
+      "planOnly": {
+        "pcNodeId": "prerender:<test-PC>:5463",
+        "fineClaimedByPc": 4,
+        "plansClaimedByPc": 5,
+        "applied": false
+      },
+      "godPolls": 3193,
+      "nodesSeen": [
+        {
+          "profile": "pc",
+          "userId": "creator@…",
+          "fp": null,
+          "claimsMax": 0
+        },
+        {
+          "profile": "pc",
+          "userId": "creator@…",
+          "fp": "938c9066059fe8ae",
+          "claimsMax": 1
+        },
+        {
+          "profile": "browser",
+          "userId": "B@…",
+          "fp": "258acaaa7c5fe509",
+          "claimsMax": 1
+        },
+        {
+          "profile": "browser",
+          "userId": "B@…",
+          "fp": "3731ec3cf0cc69e9",
+          "claimsMax": 0
+        },
+        {
+          "profile": "browser",
+          "userId": "creator@…",
+          "fp": "01c0200a57cd7fa8",
+          "claimsMax": 0
+        },
+        {
+          "profile": "browser",
+          "userId": "B@…",
+          "fp": "b4ed24465ac9233d",
+          "claimsMax": 0
+        },
+        {
+          "profile": "host",
+          "userId": "creator@…",
+          "fp": null,
+          "claimsMax": 2
+        },
+        {
+          "profile": "host",
+          "userId": "creator@…",
+          "fp": "3731ec3cf0cc69e9",
+          "claimsMax": 2
+        },
+        {
+          "profile": "host",
+          "userId": "creator@…",
+          "fp": "01c0200a57cd7fa8",
+          "claimsMax": 2
+        },
+        {
+          "profile": "host",
+          "userId": "creator@…",
+          "fp": "258acaaa7c5fe509",
+          "claimsMax": 2
+        },
+        {
+          "profile": "browser",
+          "userId": "B@…",
+          "fp": "efe42e99feca808c",
+          "claimsMax": 1
+        },
+        {
+          "profile": "browser",
+          "userId": "B@…",
+          "fp": "258acaaa7c5fe509",
+          "claimsMax": 1
+        }
+      ],
+      "projectDeleted": true,
+      "ok": true,
+      "fails": [],
+      "pending": [],
+      "items": {
+        "M7-A1": {
+          "status": "pass",
+          "parts": {
+            "server-B-other-user": {
+              "status": "pass",
+              "detail": {
+                "published": "task.published",
+                "tasks": 10,
+                "allDone": true,
+                "doneMs": 2295,
+                "sB": 0,
+                "sS": 0,
+                "watcherSaw": 14
+              }
+            },
+            "server-same-name-other-device": {
+              "status": "pass",
+              "detail": {
+                "sS": 0,
+                "userIdDiffers": true
+              }
+            },
+            "page": {
+              "status": "pass",
+              "detail": {
+                "b1": 0,
+                "low": 0,
+                "single": 0,
+                "aTasks": 14
+              }
+            }
+          }
+        },
+        "M7-A2": {
+          "status": "pass",
+          "parts": {
+            "server-claim-other-user-forbidden": {
+              "status": "pass",
+              "detail": {
+                "otherTasks": [
+                  {
+                    "type": "task.claim-rejected",
+                    "reason": "forbidden",
+                    "hasState": false,
+                    "hasVersion": false
+                  },
+                  {
+                    "type": "task.claim-rejected",
+                    "reason": "forbidden",
+                    "hasState": false,
+                    "hasVersion": false
+                  },
+                  {
+                    "type": "task.claim-rejected",
+                    "reason": "forbidden",
+                    "hasState": false,
+                    "hasVersion": false
+                  }
+                ],
+                "otherPlan": {
+                  "type": "task.claim-rejected",
+                  "reason": "forbidden",
+                  "hasState": false,
+                  "hasVersion": false
+                },
+                "ownPlan": {
+                  "type": "task.claim-rejected",
+                  "reason": "plan-profile",
+                  "hasState": false,
+                  "hasVersion": false
+                }
+              }
+            },
+            "server-own-plan-plan-profile": {
+              "status": "pass",
+              "detail": {
+                "type": "task.claim-rejected",
+                "reason": "plan-profile",
+                "hasState": false,
+                "hasVersion": false
+              }
+            },
+            "server-d9-browser-as-pc-forbidden": {
+              "status": "pass",
+              "detail": {
+                "hello": "error",
+                "reason": "forbidden",
+                "watchAfter": "not-registered"
+              }
+            },
+            "page-hello-profile-browser": {
+              "status": "pass",
+              "detail": {
+                "at": 1791110017602,
+                "dir": "sent",
+                "conn": "19092.84",
+                "type": "node.hello",
+                "id": null,
+                "reqId": null,
+                "profile": "browser",
+                "nodeId": "browser-page-dc0492e8210a",
+                "hasEnvironment": true,
+                "maxConcurrent": 1,
+                "codeVersions": [
+                  "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a"
+                ]
+              }
+            }
+          }
+        },
+        "M7-A3": {
+          "status": "pass",
+          "parts": {
+            "server-standin-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "seconds": 60,
+                "perClass": {
+                  "light": {
+                    "tasks": 2,
+                    "claimedBySq": 2,
+                    "claimsSent": 2,
+                    "done": 2
+                  },
+                  "medium": {
+                    "tasks": 2,
+                    "claimedBySq": 2,
+                    "claimsSent": 2,
+                    "done": 2
+                  },
+                  "heavy": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "local": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "userCard": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "graphCard": {
+                    "tasks": 1,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "modifiedCard": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "notIndependent": {
+                    "tasks": 2,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "stream": {
+                    "tasks": 1,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  },
+                  "plan": {
+                    "tasks": 1,
+                    "claimedBySq": 0,
+                    "claimsSent": 0,
+                    "done": 0
+                  }
+                },
+                "publishErrors": [],
+                "fp": "efe42e99feca808c"
+              }
+            },
+            "server-standin-light-medium-done": {
+              "status": "pass",
+              "detail": {
+                "light": {
+                  "tasks": 2,
+                  "claimedBySq": 2,
+                  "claimsSent": 2,
+                  "done": 2
+                },
+                "medium": {
+                  "tasks": 2,
+                  "claimedBySq": 2,
+                  "claimsSent": 2,
+                  "done": 2
+                }
+              }
+            },
+            "server-page-node-registered": {
+              "status": "pass",
+              "detail": {
+                "node": {
+                  "profile": "browser",
+                  "fp": "258acaaa7c5fe509"
+                }
+              }
+            },
+            "server-page-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "seconds": 60,
+                "claimedByPage": [],
+                "publishErrors": 0
+              }
+            },
+            "page-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "tasks": 8,
+                "seconds": 60,
+                "claimedTags": [],
+                "blocked": {
+                  "6:plan-on-browser": 3,
+                  "4:weight": 1,
+                  "7:tier": 1,
+                  "3:user-cards": 1,
+                  "3:graph-cards": 1,
+                  "1:card-source": 1,
+                  "7:not-independent": 1,
+                  "2:transcode": 1,
+                  "1:code-version": 1
+                }
+              }
+            },
+            "page-light-medium-done": {
+              "status": "pass",
+              "detail": {
+                "completed": 15
+              }
+            }
+          }
+        },
+        "M7-A4": {
+          "status": "pass",
+          "parts": {
+            "server-anchors-by-browser": {
+              "status": "pass",
+              "detail": {
+                "perClip": {
+                  "h1": [
+                    {
+                      "id": "snapshot:5cdd243e104",
+                      "state": "done",
+                      "byPage": true,
+                      "manifest": true,
+                      "snapAll": true,
+                      "frames": 60
+                    }
+                  ],
+                  "h2": [
+                    {
+                      "id": "snapshot:75ea413fc86",
+                      "state": "done",
+                      "byPage": true,
+                      "manifest": true,
+                      "snapAll": true,
+                      "frames": 60
+                    }
+                  ],
+                  "h3": [
+                    {
+                      "id": "snapshot:399eccda62f",
+                      "state": "done",
+                      "byPage": true,
+                      "manifest": true,
+                      "snapAll": true,
+                      "frames": 60
+                    }
+                  ]
+                },
+                "pageSignal": {
+                  "by": "node",
+                  "at": 1791110040587,
+                  "done": {
+                    "h3": 1,
+                    "h2": 1,
+                    "h1": 1
+                  },
+                  "worstSinceGateMs": 22945,
+                  "completedIds": [
+                    "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                    "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                    "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59"
+                  ]
+                }
+              }
+            },
+            "server-layer-map-points-to-browser": {
+              "status": "pass",
+              "detail": {
+                "v": 3,
+                "layerPoint": {
+                  "h1": true,
+                  "h2": true,
+                  "h3": true
+                }
+              }
+            },
+            "page-anchors-done": {
+              "status": "pass",
+              "detail": {
+                "anchorRule": {
+                  "h1": "priority-50",
+                  "h2": "priority-50",
+                  "h3": "priority-50"
+                },
+                "perClip": {
+                  "h3": [
+                    {
+                      "id": "snapshot:399eccda62f18b2",
+                      "fullId": "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                      "at": 1791110026649,
+                      "sinceGateMs": 9046
+                    }
+                  ],
+                  "h2": [
+                    {
+                      "id": "snapshot:75ea413fc86b654",
+                      "fullId": "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                      "at": 1791110033445,
+                      "sinceGateMs": 15842
+                    }
+                  ],
+                  "h1": [
+                    {
+                      "id": "snapshot:5cdd243e10443ce",
+                      "fullId": "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59",
+                      "at": 1791110040548,
+                      "sinceGateMs": 22945
+                    }
+                  ]
+                },
+                "worstSinceGateMs": 22945,
+                "l2Snapshots": 360,
+                "authoritative": true,
+                "diag": {
+                  "available": true,
+                  "state": "idle",
+                  "reason": null,
+                  "nodeId": "browser-page-dc0492e8210a",
+                  "envFingerprint": "258acaaa7c5fe509",
+                  "codeVersion": "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a",
+                  "held": [],
+                  "counts": {
+                    "claimed": 3,
+                    "completed": 3,
+                    "dedup": 0,
+                    "failed": 0,
+                    "lost": 0,
+                    "released": {
+                      "yield": 0,
+                      "hidden": 0,
+                      "urgent": 0,
+                      "noSnapshot": 0,
+                      "other": 0,
+                      "raw": {},
+                      "total": 0
+                    },
+                    "blocked": {
+                      "6:plan-on-browser": 1
+                    },
+                    "bakeFrames": 180,
+                    "bakeMs": {
+                      "n": 180,
+                      "p50": 102,
+                      "p95": 151
+                    },
+                    "stageMs": {
+                      "p50": 100.20000000298023,
+                      "p95": 142.29999999701977,
+                      "pausedMs": 0
+                    },
+                    "chunksPushed": 360,
+                    "chunksSkipped": 0,
+                    "bytesPushed": 2566255,
+                    "uploadFailed": 0,
+                    "smallFrames": 180
+                  },
+                  "lastError": null
+                },
+                "assetHttp": {
+                  "GET snap chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 11,
+                    "preP50": 0,
+                    "newSockets": 1
+                  },
+                  "GET px chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 11,
+                    "preP50": 1,
+                    "newSockets": 1
+                  }
+                },
+                "ticketReqs": {
+                  "asset:rw": 1
+                },
+                "phases": {
+                  "lease": {
+                    "n": 180,
+                    "p50": 0,
+                    "p95": 0
+                  },
+                  "rpc": {
+                    "n": 180,
+                    "p50": 74.79999999701977,
+                    "p95": 119
+                  },
+                  "gunzip": {
+                    "n": 180,
+                    "p50": 0.6999999955296516,
+                    "p95": 0.8999999985098839
+                  },
+                  "snap": {
+                    "n": 180,
+                    "p50": 24.100000001490116,
+                    "p95": 36.599999994039536
+                  },
+                  "px": {
+                    "n": 180,
+                    "p50": 24.100000001490116,
+                    "p95": 36.79999999701977
+                  },
+                  "push": {
+                    "n": 180,
+                    "p50": 24.200000002980232,
+                    "p95": 36.79999999701977
+                  },
+                  "l2": {
+                    "n": 180,
+                    "p50": 1.1000000014901161,
+                    "p95": 1.5
+                  },
+                  "total": {
+                    "n": 180,
+                    "p50": 101.70000000298023,
+                    "p95": 151.59999999403954
+                  }
+                },
+                "uploadMs": {
+                  "requests": 1080,
+                  "ticket": 63.200000032782555,
+                  "fetch": 8680.499999970198,
+                  "body": 368.9999999925494
+                }
+              }
+            },
+            "page-within-30s": {
+              "status": "pass",
+              "detail": {
+                "worstSinceGateMs": 22945
+              }
+            },
+            "page-layer-env-browser": {
+              "status": "pass",
+              "detail": [
+                {
+                  "clip": "light",
+                  "fp": "938c9066059fe8ae",
+                  "ready": 0
+                },
+                {
+                  "clip": "h3",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h2",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h1",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                }
+              ]
+            }
+          }
+        },
+        "M7-A5": {
+          "status": "pass",
+          "parts": {
+            "page-yield-on-drag": {
+              "status": "pass",
+              "detail": {
+                "drag": true,
+                "claimsDuring": 0,
+                "framesDuringDrag": 0,
+                "releases": [
+                  {
+                    "reason": "yield-drag",
+                    "cause": "yield",
+                    "msAfterDrag": 1143
+                  }
+                ],
+                "l2": {
+                  "before": 360,
+                  "after": 360
+                },
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 638,
+                "attemptsOnReclaim": null,
+                "authoritative": true
+              }
+            },
+            "page-attempts-unchanged": {
+              "status": "pass",
+              "detail": {
+                "attemptsOnReclaim": null,
+                "note": "放回不计失败（C2）；认领回包里的 attempts 由队列给"
+              }
+            },
+            "page-resume-after-500ms": {
+              "status": "pass",
+              "detail": {
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 638
+              }
+            }
+          }
+        },
+        "M7-A6": {
+          "status": "pass",
+          "parts": {
+            "play-yield": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "frames": 0,
+                "releases": [
+                  "yield-play"
+                ],
+                "releaseAfterPauseMs": null,
+                "lateReason": "yield-play",
+                "diagAfter": "idle"
+              }
+            },
+            "hidden-release-now": {
+              "status": "pass",
+              "detail": {
+                "hidden": true,
+                "releaseMs": -37,
+                "reason": "yield-hidden",
+                "cause": "hidden",
+                "progressBeforeRelease": false
+              }
+            },
+            "hidden-no-claims-then-resume": {
+              "status": "pass",
+              "detail": {
+                "claimsHidden": 0,
+                "resumed": true
+              }
+            },
+            "urgent-stops-at-frame-boundary": {
+              "status": "pass",
+              "detail": {
+                "releaseMs": 86,
+                "reason": "yield-urgent",
+                "cause": "urgent",
+                "framesAfter": 1
+              }
+            }
+          }
+        },
+        "M7-A7": {
+          "status": "pass",
+          "parts": {
+            "setup-single-stage": {
+              "status": "pass",
+              "detail": {
+                "single": false,
+                "low": false
+              }
+            },
+            "no-render-connection": {
+              "status": "pass",
+              "detail": {
+                "low": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "single": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "control": {
+                  "isNode": true,
+                  "render": 2
+                }
+              }
+            }
+          }
+        },
+        "M7-A8": {
+          "status": "pass",
+          "parts": {
+            "server-manifest-matches": {
+              "status": "pass",
+              "detail": {
+                "manifests": 3,
+                "bad": []
+              }
+            },
+            "server-one-env-per-layer": {
+              "status": "pass",
+              "detail": {
+                "h1": [
+                  "258acaaa7c5fe509"
+                ],
+                "h2": [
+                  "258acaaa7c5fe509"
+                ],
+                "h3": [
+                  "258acaaa7c5fe509"
+                ]
+              }
+            },
+            "server-exactly-once-done": {
+              "status": "pass",
+              "detail": {
+                "doneEvents": 22,
+                "dup": []
+              }
+            },
+            "server-desktop-applied": {
+              "status": "pass",
+              "detail": {
+                "applied": 16,
+                "fetched": 240,
+                "applyErrors": 0
+              }
+            }
+          }
+        },
+        "M7-A9": {
+          "status": "pass",
+          "parts": {
+            "server-every-frame-has-px": {
+              "status": "pass",
+              "detail": [
+                {
+                  "id": "snapshot:5cdd243e104",
+                  "frames": 60,
+                  "small": 60,
+                  "pxAll": true
+                },
+                {
+                  "id": "snapshot:75ea413fc86",
+                  "frames": 60,
+                  "small": 60,
+                  "pxAll": true
+                },
+                {
+                  "id": "snapshot:399eccda62f",
+                  "frames": 60,
+                  "small": 60,
+                  "pxAll": true
+                }
+              ]
+            },
+            "page-low-memory-shows-small": {
+              "status": "pass",
+              "detail": {
+                "waitedForAllFrames": false,
+                "tier": "small",
+                "layers": [
+                  {
+                    "clip": "h1",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h2",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h3",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "M7-A10": {
+          "status": "pass",
+          "parts": {
+            "server-idle-takeover": {
+              "status": "pass",
+              "detail": {
+                "clip": "z1",
+                "took": {
+                  "lock": "938c9066059fe8ae",
+                  "pcDone": 0
+                },
+                "takeoverMs": 3017,
+                "lockHistory": [
+                  {
+                    "envFingerprint": "258acaaa7c5fe509",
+                    "at": 1791110733817
+                  },
+                  {
+                    "envFingerprint": "938c9066059fe8ae",
+                    "at": 1791110784850
+                  }
+                ],
+                "plans": [
+                  {
+                    "user": "B-low",
+                    "rev": 3,
+                    "clips": [
+                      "z1"
+                    ],
+                    "state": "done"
+                  },
+                  {
+                    "user": "B-low",
+                    "rev": 4,
+                    "clips": [
+                      "light"
+                    ],
+                    "state": "done"
+                  },
+                  {
+                    "user": "B",
+                    "rev": 3,
+                    "clips": [
+                      "h1",
+                      "h2",
+                      "h3",
+                      "light",
+                      "z1"
+                    ],
+                    "state": "failed"
+                  },
+                  {
+                    "user": "B",
+                    "rev": 4,
+                    "clips": [
+                      "h1",
+                      "h2",
+                      "h3",
+                      "z1"
+                    ],
+                    "state": "done"
+                  }
+                ]
+              }
+            },
+            "server-race-split-promptly": {
+              "status": "pass",
+              "detail": {
+                "splitMs": 7636,
+                "limitMs": 90000
+              }
+            },
+            "server-race-done-in-time": {
+              "status": "pass",
+              "detail": {
+                "raceMs": 24710,
+                "limitMs": 180000,
+                "splitMs": 7636,
+                "timedOut": [],
+                "race": {
+                  "w1": [
+                    "258acaaa7c5fe509"
+                  ],
+                  "w2": [
+                    "258acaaa7c5fe509"
+                  ]
+                }
+              }
+            },
+            "server-race-one-env-per-card": {
+              "status": "pass",
+              "detail": {
+                "w1": [
+                  "258acaaa7c5fe509"
+                ],
+                "w2": [
+                  "258acaaa7c5fe509"
+                ],
+                "raceMs": 24710,
+                "envOf": {
+                  "w1": [
+                    "browser"
+                  ],
+                  "w2": [
+                    "browser"
+                  ]
+                }
+              }
+            },
+            "page-layer-switched": {
+              "status": "pass",
+              "detail": {
+                "clip": "z1",
+                "fp": "938c9066059fe8ae",
+                "pcFp": "938c9066059fe8ae",
+                "ready": 1,
+                "waitedMs": 2,
+                "limitMs": 240000
+              }
+            }
+          }
+        },
+        "M7-A11": {
+          "status": "pass",
+          "parts": {
+            "server-logs-describe": {
+              "status": "pass",
+              "detail": {
+                "found": false,
+                "where": [],
+                "ticketsKnown": 11,
+                "logLines": 131,
+                "urls": 10124
+              }
+            },
+            "page-render-ticket-expiry": {
+              "status": "pass",
+              "detail": {
+                "endedBy": {
+                  "by": "creator",
+                  "at": 1791110728109,
+                  "closed": true,
+                  "conns": 1,
+                  "code": 1001,
+                  "reason": null
+                },
+                "rebuilt": {
+                  "welcomeMs": 1796,
+                  "ticket": true
+                },
+                "newRenderConns": 1
+              }
+            },
+            "echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "low",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "single",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "render-echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "ticket-not-in-url-or-page-diag": {
+              "status": "pass",
+              "detail": {
+                "urlLeaks": [],
+                "diagLeaks": [],
+                "ticketsSeen": 16
+              }
+            }
+          }
+        },
+        "M7-A12": {
+          "status": "pass",
+          "parts": {
+            "play-10s-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            },
+            "play-10s-claims-0": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "heldAtStart": null
+              }
+            },
+            "bake-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            }
+          }
+        },
+        "W7": {
+          "status": "pass",
+          "parts": {
+            "cross-machine": {
+              "status": "pass",
+              "detail": {
+                "creator": "<test-PC>",
+                "node": "<test-laptop>",
+                "bind": "0.0.0.0",
+                "publicHost": "<test-PC-LAN>",
+                "timingAuthoritative": true
+              }
+            },
+            "M7-A1": {
+              "status": "pass",
+              "detail": {
+                "mirror": "M7-A1"
+              }
+            },
+            "M7-A2": {
+              "status": "pass",
+              "detail": {
+                "mirror": "M7-A2"
+              }
+            },
+            "M7-A3": {
+              "status": "pass",
+              "detail": {
+                "mirror": "M7-A3"
+              }
+            },
+            "A4-timing-on-laptop": {
+              "status": "pass",
+              "detail": {
+                "worstSinceGateMs": 22945
+              }
+            }
+          }
+        },
+        "D9": {
+          "status": "pass",
+          "parts": {
+            "browser-credential-as-pc-host": {
+              "status": "pass",
+              "detail": {
+                "as-pc": {
+                  "hello": "error",
+                  "reason": "forbidden",
+                  "watchAfter": "not-registered"
+                },
+                "as-host": {
+                  "hello": "error",
+                  "reason": "forbidden",
+                  "watchAfter": "not-registered"
+                },
+                "bindOtherBrowser": {
+                  "hello": "error",
+                  "reason": "forbidden"
+                },
+                "bindOtherDesktop": {
+                  "hello": "error",
+                  "reason": "forbidden"
+                },
+                "originalStillWorks": "queue.snapshot"
+              }
+            },
+            "nodeId-bound-to-userId": {
+              "status": "pass",
+              "detail": {
+                "as-pc": {
+                  "hello": "error",
+                  "reason": "forbidden",
+                  "watchAfter": "not-registered"
+                },
+                "as-host": {
+                  "hello": "error",
+                  "reason": "forbidden",
+                  "watchAfter": "not-registered"
+                },
+                "bindOtherBrowser": {
+                  "hello": "error",
+                  "reason": "forbidden"
+                },
+                "bindOtherDesktop": {
+                  "hello": "error",
+                  "reason": "forbidden"
+                },
+                "originalStillWorks": "queue.snapshot"
+              }
+            }
+          }
+        },
+        "D10": {
+          "status": "pass",
+          "parts": {
+            "welcome-fingerprint": {
+              "status": "pass",
+              "detail": {
+                "welcome": "3731ec3cf0cc69e9",
+                "expected": "3731ec3cf0cc69e9",
+                "selfReported": {
+                  "type": "node.welcome",
+                  "envFingerprint": "b4ed24465ac9233d",
+                  "expected": "b4ed24465ac9233d"
+                },
+                "noEnvironment": {
+                  "type": "error",
+                  "reason": "bad-message"
+                }
+              }
+            },
+            "self-reported-ignored": {
+              "status": "pass",
+              "detail": {
+                "type": "node.welcome",
+                "envFingerprint": "b4ed24465ac9233d",
+                "expected": "b4ed24465ac9233d"
+              }
+            },
+            "browser-without-environment": {
+              "status": "pass",
+              "detail": {
+                "type": "error",
+                "reason": "bad-message"
+              }
+            },
+            "page-welcome-fp-equals-computed": {
+              "status": "pass",
+              "detail": {
+                "welcome": "258acaaa7c5fe509",
+                "computed": "258acaaa7c5fe509"
+              }
+            }
+          }
+        },
+        "D14": {
+          "status": "pass",
+          "parts": {
+            "non-chromium-refused": {
+              "status": "pass",
+              "detail": {
+                "firefox": {
+                  "hello": "error",
+                  "reason": "not-chromium",
+                  "watchAfter": "not-registered"
+                },
+                "safari": {
+                  "hello": "error",
+                  "reason": "not-chromium",
+                  "watchAfter": "not-registered"
+                },
+                "crios": {
+                  "hello": "error",
+                  "reason": "not-chromium",
+                  "watchAfter": "not-registered"
+                }
+              }
+            }
+          }
+        },
+        "D1-D2-D12": {
+          "status": "pass",
+          "parts": {
+            "page-dual-split-supersede-layermap": {
+              "status": "pass",
+              "detail": {
+                "v": 3,
+                "perClip": {
+                  "h1": {
+                    "pc": 5,
+                    "page": 5,
+                    "allDual": true,
+                    "pageHasBake": true,
+                    "ok": true,
+                    "winner": "page",
+                    "fullySuperseded": [
+                      "pc"
+                    ],
+                    "takenOverMidway": [],
+                    "badRanges": [],
+                    "reasons": [],
+                    "candidates": [
+                      "page",
+                      "pc"
+                    ]
+                  },
+                  "h2": {
+                    "pc": 5,
+                    "page": 5,
+                    "allDual": true,
+                    "pageHasBake": true,
+                    "ok": true,
+                    "winner": "page",
+                    "fullySuperseded": [
+                      "pc"
+                    ],
+                    "takenOverMidway": [],
+                    "badRanges": [],
+                    "reasons": [],
+                    "candidates": [
+                      "page",
+                      "pc"
+                    ]
+                  },
+                  "h3": {
+                    "pc": 5,
+                    "page": 5,
+                    "allDual": true,
+                    "pageHasBake": true,
+                    "ok": true,
+                    "winner": "page",
+                    "fullySuperseded": [
+                      "pc"
+                    ],
+                    "takenOverMidway": [],
+                    "badRanges": [],
+                    "reasons": [],
+                    "candidates": [
+                      "page",
+                      "pc"
+                    ]
+                  }
+                },
+                "takenOverMidway": []
+              }
+            }
+          }
+        }
+      },
+      "timing": {
+        "authoritative": true,
+        "note": "带耗时门槛的项（A4 的 30 s、A5 的 500 ms、A12 的长任务）以笔记本为准"
+      },
+      "nodeHead": {
+        "probe": "m7-browser-probe",
+        "role": "node",
+        "startedAt": "2026-10-04T10:33:31.001Z",
+        "run": "m7rfix10041021",
+        "timingAuthoritative": true,
+        "host": "<test-laptop>",
+        "pageNode": {
+          "isNode": true,
+          "waitedMs": 60000,
+          "diag": {
+            "available": true,
+            "state": "baking",
+            "reason": null,
+            "nodeId": "browser-page-dc0492e8210a",
+            "envFingerprint": "258acaaa7c5fe509",
+            "codeVersion": "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a",
+            "held": [
+              "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59"
+            ],
+            "counts": {
+              "claimed": 1,
+              "completed": 0,
+              "dedup": 0,
+              "failed": 0,
+              "lost": 0,
+              "released": {
+                "yield": 0,
+                "hidden": 0,
+                "urgent": 0,
+                "noSnapshot": 0,
+                "other": 0,
+                "raw": {},
+                "total": 0
+              },
+              "blocked": {
+                "6:plan-on-browser": 1
+              },
+              "bakeFrames": 12,
+              "bakeMs": {
+                "n": 12,
+                "p50": 102,
+                "p95": 209
+              },
+              "stageMs": {
+                "p50": 102.20000000298023,
+                "p95": 119.69999999552965,
+                "pausedMs": 0
+              },
+              "chunksPushed": 24,
+              "chunksSkipped": 0,
+              "bytesPushed": 170949,
+              "uploadFailed": 0,
+              "smallFrames": 12
+            },
+            "lastError": null
+          },
+          "welcomeFp": "258acaaa7c5fe509",
+          "computedFp": "258acaaa7c5fe509"
+        },
+        "pages": {
+          "b1": {
+            "gateSeen": true,
+            "conns": 3,
+            "render": 2,
+            "frames": 2213,
+            "pageErrors": []
+          },
+          "low": {
+            "gateSeen": false,
+            "conns": 1,
+            "render": 0,
+            "frames": 23,
+            "pageErrors": []
+          },
+          "single": {
+            "gateSeen": false,
+            "conns": 1,
+            "render": 0,
+            "frames": 4,
+            "pageErrors": []
+          }
+        }
+      },
+      "assumptions": [
+        "A-1 页面诊断钩子是编辑器页（顶层文档）上的 `window.__pcBrowserNode()`，同步回一个可结构化克隆的对象（契约第 7 节只给了名字）；没有这个函数 = 页面节点代码不在。改 `readNodeDiag`。",
+        "A-2 `state` 取值 `off` / `idle` / `busy` / `baking`（契约第 7 节原文），另有 `reason`（字符串，说明为什么 off）；`nodeId`、`envFingerprint`、`codeVersion` 平铺在顶层。改 `normalizeNodeDiag`。",
+        "A-3 持有的任务在 `held`（或 `tasks`、`holding`）：数组，元素是任务 id 字符串或带 `id` 的对象。改 `normalizeNodeDiag` 的 `heldOf`。",
+        "A-4 〔对账后，rq-m7-node 9774eda 报告「诊断形状」一节〕计数在 `counters`：`claims completed dedup failed lost bakedFrames`；放回在 `counters.released`，键是线上原因原文（`yield-play` `yield-drag` `yield-urgent` `yield-hidden` `no-snapshot` `offline` `unsupported`），按 `releaseCauseOf` 归类；节点侧过滤挡掉的在 `counters.blocked`（「规则号:原因」）；推送在 `upload`：`pushed skipped bytes failed reauth recheck`；小尺寸帧数在 `stage.smallFrames`。旧的猜测名（`counts`、`stats`、平铺）仍兜底。改 `countsOf`。",
+        "A-5 〔对账后〕页面侧一帧（含推送）的耗时在 `counters.frameMs { n, p50, p95 }`；舞台侧在 `stage.frameMs`、`stage.pausedMs`（被门挡住的时长，不进耗时）。改 `countsOf`。",
+        "A-6 最近一次错误在 `lastError`（字符串或 `{ message }`）。改 `normalizeNodeDiag`。",
+        "A-7 舞台侧的生成快照诊断在舞台文档的 `window.__pcStageDiag().bake`（C10 已有 `__pcStageDiag`，`bake` 这一项是假设）：`{ frames, frameMs: { p50, p95 }, pausedMs }`。改 `readStageBakeDiag`。",
+        "A-8 `task.release` 的放回原因（契约第 2 节、第 4.2 节只有 `no-snapshot` 一个写明了）：让路（拖动 / 播放）认 `yield` `busy` `interaction` `drag` `play`，页面隐藏认 `hidden` `visibility`，更急的后台活认 `urgent` `preempt` `measure` `catch-up`，取不到项目认 `no-snapshot`。认不出的记 `other`，判据里「放回 1 次」不看原因。改 `releaseCauseOf`。",
+        "A-9 C10 已有的诊断照旧可读：`__pcPreviewDiag()`（`dual`、`frontId`、`backWork`）、`__pcOnlineSnapshots()`（`tier`、`layers[].{clipId, resultKey, envFingerprint, ready}`）、`__pcPlanPublisher()`（`log`）；这些不是本适配处的假设，但页面节点若改了它们的形状，探针在同名函数里读。"
+      ],
+      "ms": 842276
+    },
+    "rawResultSha256": "8dfe8a90442d3bc996bb6bfc1a771878bfbf81002df7a03234aa1142597e206c"
+  },
+  "node": {
+    "receipt": {
+      "targetCommit": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "role": "node",
+      "prepareOnly": false,
+      "timingAuthoritative": true,
+      "hostname": "<test-laptop>",
+      "startedAt": "2026-10-04T10:33:30.831Z",
+      "nodeVersion": "v24.19.0",
+      "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+      "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "basePort": 5590,
+      "status": "pending",
+      "actualExitCode": 3,
+      "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/m7-browser-probe.mjs --role node --run m7rfix10041021 --base-port 5590 --out <test-temp>\\pc-w7-fixed-node-a5a930f587bd49d5bd7b76a4f4eabc87\\probe --keep-temp --timeout-min 120 --coord http://<test-PC-LAN>:5466 --timing-authoritative",
+      "fails": [],
+      "pending": [
+        "M7-A8: 这一轮没有走到",
+        "W7: 这一轮没有走到",
+        "D9: 这一轮没有走到",
+        "D14: 这一轮没有走到",
+        "D1-D2-D12: 这一轮没有走到"
+      ],
+      "installed": false,
+      "userRuntimeModified": false,
+      "hostNetworkChanged": false,
+      "run": "m7rfix10041021",
+      "coord": "http://<test-PC-LAN>:5466",
+      "expiresAt": "2026-10-04T12:14:56.344Z",
+      "ownedProbePid": 16700,
+      "items": {
+        "M7-A1": {
+          "status": "pass",
+          "parts": {
+            "page": {
+              "status": "pass",
+              "detail": {
+                "b1": 0,
+                "low": 0,
+                "single": 0,
+                "aTasks": 14
+              }
+            }
+          }
+        },
+        "M7-A2": {
+          "status": "pass",
+          "parts": {
+            "page-hello-profile-browser": {
+              "status": "pass",
+              "detail": {
+                "at": 1791110017602,
+                "dir": "sent",
+                "conn": "19092.84",
+                "type": "node.hello",
+                "id": null,
+                "reqId": null,
+                "profile": "browser",
+                "nodeId": "browser-page-dc0492e8210a",
+                "hasEnvironment": true,
+                "maxConcurrent": 1,
+                "codeVersions": [
+                  "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a"
+                ]
+              }
+            }
+          }
+        },
+        "M7-A3": {
+          "status": "pass",
+          "parts": {
+            "page-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "tasks": 8,
+                "seconds": 60,
+                "claimedTags": [],
+                "blocked": {
+                  "6:plan-on-browser": 3,
+                  "4:weight": 1,
+                  "7:tier": 1,
+                  "3:user-cards": 1,
+                  "3:graph-cards": 1,
+                  "1:card-source": 1,
+                  "7:not-independent": 1,
+                  "2:transcode": 1,
+                  "1:code-version": 1
+                }
+              }
+            },
+            "page-light-medium-done": {
+              "status": "pass",
+              "detail": {
+                "completed": 15
+              }
+            }
+          }
+        },
+        "M7-A4": {
+          "status": "pass",
+          "parts": {
+            "page-anchors-done": {
+              "status": "pass",
+              "detail": {
+                "anchorRule": {
+                  "h1": "priority-50",
+                  "h2": "priority-50",
+                  "h3": "priority-50"
+                },
+                "perClip": {
+                  "h3": [
+                    {
+                      "id": "snapshot:399eccda62f18b2",
+                      "fullId": "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                      "at": 1791110026649,
+                      "sinceGateMs": 9046
+                    }
+                  ],
+                  "h2": [
+                    {
+                      "id": "snapshot:75ea413fc86b654",
+                      "fullId": "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                      "at": 1791110033445,
+                      "sinceGateMs": 15842
+                    }
+                  ],
+                  "h1": [
+                    {
+                      "id": "snapshot:5cdd243e10443ce",
+                      "fullId": "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59",
+                      "at": 1791110040548,
+                      "sinceGateMs": 22945
+                    }
+                  ]
+                },
+                "worstSinceGateMs": 22945,
+                "l2Snapshots": 360,
+                "authoritative": true,
+                "diag": {
+                  "available": true,
+                  "state": "idle",
+                  "reason": null,
+                  "nodeId": "browser-page-dc0492e8210a",
+                  "envFingerprint": "258acaaa7c5fe509",
+                  "codeVersion": "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a",
+                  "held": [],
+                  "counts": {
+                    "claimed": 3,
+                    "completed": 3,
+                    "dedup": 0,
+                    "failed": 0,
+                    "lost": 0,
+                    "released": {
+                      "yield": 0,
+                      "hidden": 0,
+                      "urgent": 0,
+                      "noSnapshot": 0,
+                      "other": 0,
+                      "raw": {},
+                      "total": 0
+                    },
+                    "blocked": {
+                      "6:plan-on-browser": 1
+                    },
+                    "bakeFrames": 180,
+                    "bakeMs": {
+                      "n": 180,
+                      "p50": 102,
+                      "p95": 151
+                    },
+                    "stageMs": {
+                      "p50": 100.20000000298023,
+                      "p95": 142.29999999701977,
+                      "pausedMs": 0
+                    },
+                    "chunksPushed": 360,
+                    "chunksSkipped": 0,
+                    "bytesPushed": 2566255,
+                    "uploadFailed": 0,
+                    "smallFrames": 180
+                  },
+                  "lastError": null
+                },
+                "assetHttp": {
+                  "GET snap chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 11,
+                    "preP50": 0,
+                    "newSockets": 1
+                  },
+                  "GET px chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 11,
+                    "preP50": 1,
+                    "newSockets": 1
+                  }
+                },
+                "ticketReqs": {
+                  "asset:rw": 1
+                },
+                "phases": {
+                  "lease": {
+                    "n": 180,
+                    "p50": 0,
+                    "p95": 0
+                  },
+                  "rpc": {
+                    "n": 180,
+                    "p50": 74.79999999701977,
+                    "p95": 119
+                  },
+                  "gunzip": {
+                    "n": 180,
+                    "p50": 0.6999999955296516,
+                    "p95": 0.8999999985098839
+                  },
+                  "snap": {
+                    "n": 180,
+                    "p50": 24.100000001490116,
+                    "p95": 36.599999994039536
+                  },
+                  "px": {
+                    "n": 180,
+                    "p50": 24.100000001490116,
+                    "p95": 36.79999999701977
+                  },
+                  "push": {
+                    "n": 180,
+                    "p50": 24.200000002980232,
+                    "p95": 36.79999999701977
+                  },
+                  "l2": {
+                    "n": 180,
+                    "p50": 1.1000000014901161,
+                    "p95": 1.5
+                  },
+                  "total": {
+                    "n": 180,
+                    "p50": 101.70000000298023,
+                    "p95": 151.59999999403954
+                  }
+                },
+                "uploadMs": {
+                  "requests": 1080,
+                  "ticket": "[redacted]",
+                  "fetch": 8680.499999970198,
+                  "body": 368.9999999925494
+                }
+              }
+            },
+            "page-within-30s": {
+              "status": "pass",
+              "detail": {
+                "worstSinceGateMs": 22945
+              }
+            },
+            "page-layer-env-browser": {
+              "status": "pass",
+              "detail": [
+                {
+                  "clip": "light",
+                  "fp": "938c9066059fe8ae",
+                  "ready": 0
+                },
+                {
+                  "clip": "h3",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h2",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h1",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                }
+              ]
+            }
+          }
+        },
+        "M7-A5": {
+          "status": "pass",
+          "parts": {
+            "page-yield-on-drag": {
+              "status": "pass",
+              "detail": {
+                "drag": true,
+                "claimsDuring": 0,
+                "framesDuringDrag": 0,
+                "releases": [
+                  {
+                    "reason": "yield-drag",
+                    "cause": "yield",
+                    "msAfterDrag": 1143
+                  }
+                ],
+                "l2": {
+                  "before": 360,
+                  "after": 360
+                },
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 638,
+                "attemptsOnReclaim": null,
+                "authoritative": true
+              }
+            },
+            "page-attempts-unchanged": {
+              "status": "pass",
+              "detail": {
+                "attemptsOnReclaim": null,
+                "note": "放回不计失败（C2）；认领回包里的 attempts 由队列给"
+              }
+            },
+            "page-resume-after-500ms": {
+              "status": "pass",
+              "detail": {
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 638
+              }
+            }
+          }
+        },
+        "M7-A6": {
+          "status": "pass",
+          "parts": {
+            "play-yield": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "frames": 0,
+                "releases": [
+                  "yield-play"
+                ],
+                "releaseAfterPauseMs": null,
+                "lateReason": "yield-play",
+                "diagAfter": "idle"
+              }
+            },
+            "hidden-release-now": {
+              "status": "pass",
+              "detail": {
+                "hidden": true,
+                "releaseMs": -37,
+                "reason": "yield-hidden",
+                "cause": "hidden",
+                "progressBeforeRelease": false
+              }
+            },
+            "hidden-no-claims-then-resume": {
+              "status": "pass",
+              "detail": {
+                "claimsHidden": 0,
+                "resumed": true
+              }
+            },
+            "urgent-stops-at-frame-boundary": {
+              "status": "pass",
+              "detail": {
+                "releaseMs": 86,
+                "reason": "yield-urgent",
+                "cause": "urgent",
+                "framesAfter": 1
+              }
+            }
+          }
+        },
+        "M7-A7": {
+          "status": "pass",
+          "parts": {
+            "setup-single-stage": {
+              "status": "pass",
+              "detail": {
+                "single": false,
+                "low": false
+              }
+            },
+            "no-render-connection": {
+              "status": "pass",
+              "detail": {
+                "low": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "single": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "control": {
+                  "isNode": true,
+                  "render": 2
+                }
+              }
+            }
+          }
+        },
+        "M7-A8": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "M7-A9": {
+          "status": "pass",
+          "parts": {
+            "page-low-memory-shows-small": {
+              "status": "pass",
+              "detail": {
+                "waitedForAllFrames": false,
+                "tier": "small",
+                "layers": [
+                  {
+                    "clip": "h1",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h2",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h3",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "M7-A10": {
+          "status": "pass",
+          "parts": {
+            "page-layer-switched": {
+              "status": "pass",
+              "detail": {
+                "clip": "z1",
+                "fp": "938c9066059fe8ae",
+                "pcFp": "938c9066059fe8ae",
+                "ready": 1,
+                "waitedMs": 2,
+                "limitMs": 240000
+              }
+            }
+          }
+        },
+        "M7-A11": {
+          "status": "pass",
+          "parts": {
+            "page-render-ticket-expiry": {
+              "status": "pass",
+              "detail": {
+                "endedBy": {
+                  "by": "creator",
+                  "at": 1791110728109,
+                  "closed": true,
+                  "conns": 1,
+                  "code": 1001,
+                  "reason": null
+                },
+                "rebuilt": {
+                  "welcomeMs": 1796,
+                  "ticket": "[redacted]"
+                },
+                "newRenderConns": 1
+              }
+            },
+            "echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "low",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "single",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "render-echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "ticket-not-in-url-or-page-diag": {
+              "status": "pass",
+              "detail": {
+                "urlLeaks": [],
+                "diagLeaks": [],
+                "ticketsSeen": 16
+              }
+            }
+          }
+        },
+        "M7-A12": {
+          "status": "pass",
+          "parts": {
+            "play-10s-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            },
+            "play-10s-claims-0": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "heldAtStart": null
+              }
+            },
+            "bake-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            }
+          }
+        },
+        "W7": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D9": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D10": {
+          "status": "pass",
+          "parts": {
+            "page-welcome-fp-equals-computed": {
+              "status": "pass",
+              "detail": {
+                "welcome": "258acaaa7c5fe509",
+                "computed": "258acaaa7c5fe509"
+              }
+            }
+          }
+        },
+        "D14": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D1-D2-D12": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        }
+      },
+      "ok": false,
+      "rawLogSha256": {
+        "stdout.log": "b1bbefaf437e2f6a90ab056f2ec6c474798d48730995f517af77787f49f42cf5",
+        "stderr.log": "966496c31c0d0aecf355835c91ae2fd89ccf0f7ba0fd8cbe9e292e0b1e494873"
+      },
+      "finishedAt": "2026-10-04T10:46:52.713Z"
+    },
+    "result": {
+      "probe": "m7-browser-probe",
+      "role": "node",
+      "startedAt": "2026-10-04T10:33:31.001Z",
+      "run": "m7rfix10041021",
+      "timingAuthoritative": true,
+      "host": "<test-laptop>",
+      "pageNode": {
+        "isNode": true,
+        "waitedMs": 60000,
+        "diag": {
+          "available": true,
+          "state": "baking",
+          "reason": null,
+          "nodeId": "browser-page-dc0492e8210a",
+          "envFingerprint": "258acaaa7c5fe509",
+          "codeVersion": "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a",
+          "held": [
+            "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59"
+          ],
+          "counts": {
+            "claimed": 1,
+            "completed": 0,
+            "dedup": 0,
+            "failed": 0,
+            "lost": 0,
+            "released": {
+              "yield": 0,
+              "hidden": 0,
+              "urgent": 0,
+              "noSnapshot": 0,
+              "other": 0,
+              "raw": {},
+              "total": 0
+            },
+            "blocked": {
+              "6:plan-on-browser": 1
+            },
+            "bakeFrames": 12,
+            "bakeMs": {
+              "n": 12,
+              "p50": 102,
+              "p95": 209
+            },
+            "stageMs": {
+              "p50": 102.20000000298023,
+              "p95": 119.69999999552965,
+              "pausedMs": 0
+            },
+            "chunksPushed": 24,
+            "chunksSkipped": 0,
+            "bytesPushed": 170949,
+            "uploadFailed": 0,
+            "smallFrames": 12
+          },
+          "lastError": null
+        },
+        "welcomeFp": "258acaaa7c5fe509",
+        "computedFp": "258acaaa7c5fe509"
+      },
+      "pages": {
+        "b1": {
+          "gateSeen": true,
+          "conns": 3,
+          "render": 2,
+          "frames": 2213,
+          "pageErrors": []
+        },
+        "low": {
+          "gateSeen": false,
+          "conns": 1,
+          "render": 0,
+          "frames": 23,
+          "pageErrors": []
+        },
+        "single": {
+          "gateSeen": false,
+          "conns": 1,
+          "render": 0,
+          "frames": 4,
+          "pageErrors": []
+        }
+      },
+      "ok": false,
+      "fails": [],
+      "pending": [
+        "M7-A8: 这一轮没有走到",
+        "W7: 这一轮没有走到",
+        "D9: 这一轮没有走到",
+        "D14: 这一轮没有走到",
+        "D1-D2-D12: 这一轮没有走到"
+      ],
+      "items": {
+        "M7-A1": {
+          "status": "pass",
+          "parts": {
+            "page": {
+              "status": "pass",
+              "detail": {
+                "b1": 0,
+                "low": 0,
+                "single": 0,
+                "aTasks": 14
+              }
+            }
+          }
+        },
+        "M7-A2": {
+          "status": "pass",
+          "parts": {
+            "page-hello-profile-browser": {
+              "status": "pass",
+              "detail": {
+                "at": 1791110017602,
+                "dir": "sent",
+                "conn": "19092.84",
+                "type": "node.hello",
+                "id": null,
+                "reqId": null,
+                "profile": "browser",
+                "nodeId": "browser-page-dc0492e8210a",
+                "hasEnvironment": true,
+                "maxConcurrent": 1,
+                "codeVersions": [
+                  "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a"
+                ]
+              }
+            }
+          }
+        },
+        "M7-A3": {
+          "status": "pass",
+          "parts": {
+            "page-forbidden-claimed-0": {
+              "status": "pass",
+              "detail": {
+                "tasks": 8,
+                "seconds": 60,
+                "claimedTags": [],
+                "blocked": {
+                  "6:plan-on-browser": 3,
+                  "4:weight": 1,
+                  "7:tier": 1,
+                  "3:user-cards": 1,
+                  "3:graph-cards": 1,
+                  "1:card-source": 1,
+                  "7:not-independent": 1,
+                  "2:transcode": 1,
+                  "1:code-version": 1
+                }
+              }
+            },
+            "page-light-medium-done": {
+              "status": "pass",
+              "detail": {
+                "completed": 15
+              }
+            }
+          }
+        },
+        "M7-A4": {
+          "status": "pass",
+          "parts": {
+            "page-anchors-done": {
+              "status": "pass",
+              "detail": {
+                "anchorRule": {
+                  "h1": "priority-50",
+                  "h2": "priority-50",
+                  "h3": "priority-50"
+                },
+                "perClip": {
+                  "h3": [
+                    {
+                      "id": "snapshot:399eccda62f18b2",
+                      "fullId": "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59",
+                      "at": 1791110026649,
+                      "sinceGateMs": 9046
+                    }
+                  ],
+                  "h2": [
+                    {
+                      "id": "snapshot:75ea413fc86b654",
+                      "fullId": "snapshot:75ea413fc86b6544dfa79c4acbc6b4b1b7d0dd04cd418192c0da33eb12d4ee93:0-59",
+                      "at": 1791110033445,
+                      "sinceGateMs": 15842
+                    }
+                  ],
+                  "h1": [
+                    {
+                      "id": "snapshot:5cdd243e10443ce",
+                      "fullId": "snapshot:5cdd243e10443ce33f8751d20e5b23c923eab0acd97f622c9ed0a3a662797820:0-59",
+                      "at": 1791110040548,
+                      "sinceGateMs": 22945
+                    }
+                  ]
+                },
+                "worstSinceGateMs": 22945,
+                "l2Snapshots": 360,
+                "authoritative": true,
+                "diag": {
+                  "available": true,
+                  "state": "idle",
+                  "reason": null,
+                  "nodeId": "browser-page-dc0492e8210a",
+                  "envFingerprint": "258acaaa7c5fe509",
+                  "codeVersion": "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a",
+                  "held": [],
+                  "counts": {
+                    "claimed": 3,
+                    "completed": 3,
+                    "dedup": 0,
+                    "failed": 0,
+                    "lost": 0,
+                    "released": {
+                      "yield": 0,
+                      "hidden": 0,
+                      "urgent": 0,
+                      "noSnapshot": 0,
+                      "other": 0,
+                      "raw": {},
+                      "total": 0
+                    },
+                    "blocked": {
+                      "6:plan-on-browser": 1
+                    },
+                    "bakeFrames": 180,
+                    "bakeMs": {
+                      "n": 180,
+                      "p50": 102,
+                      "p95": 151
+                    },
+                    "stageMs": {
+                      "p50": 100.20000000298023,
+                      "p95": 142.29999999701977,
+                      "pausedMs": 0
+                    },
+                    "chunksPushed": 360,
+                    "chunksSkipped": 0,
+                    "bytesPushed": 2566255,
+                    "uploadFailed": 0,
+                    "smallFrames": 180
+                  },
+                  "lastError": null
+                },
+                "assetHttp": {
+                  "GET snap chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 11,
+                    "preP50": 0,
+                    "newSockets": 1
+                  },
+                  "GET px chunks": {
+                    "n": 180,
+                    "p50": 6,
+                    "p95": 11,
+                    "preP50": 1,
+                    "newSockets": 1
+                  }
+                },
+                "ticketReqs": {
+                  "asset:rw": 1
+                },
+                "phases": {
+                  "lease": {
+                    "n": 180,
+                    "p50": 0,
+                    "p95": 0
+                  },
+                  "rpc": {
+                    "n": 180,
+                    "p50": 74.79999999701977,
+                    "p95": 119
+                  },
+                  "gunzip": {
+                    "n": 180,
+                    "p50": 0.6999999955296516,
+                    "p95": 0.8999999985098839
+                  },
+                  "snap": {
+                    "n": 180,
+                    "p50": 24.100000001490116,
+                    "p95": 36.599999994039536
+                  },
+                  "px": {
+                    "n": 180,
+                    "p50": 24.100000001490116,
+                    "p95": 36.79999999701977
+                  },
+                  "push": {
+                    "n": 180,
+                    "p50": 24.200000002980232,
+                    "p95": 36.79999999701977
+                  },
+                  "l2": {
+                    "n": 180,
+                    "p50": 1.1000000014901161,
+                    "p95": 1.5
+                  },
+                  "total": {
+                    "n": 180,
+                    "p50": 101.70000000298023,
+                    "p95": 151.59999999403954
+                  }
+                },
+                "uploadMs": {
+                  "requests": 1080,
+                  "ticket": "[redacted]",
+                  "fetch": 8680.499999970198,
+                  "body": 368.9999999925494
+                }
+              }
+            },
+            "page-within-30s": {
+              "status": "pass",
+              "detail": {
+                "worstSinceGateMs": 22945
+              }
+            },
+            "page-layer-env-browser": {
+              "status": "pass",
+              "detail": [
+                {
+                  "clip": "light",
+                  "fp": "938c9066059fe8ae",
+                  "ready": 0
+                },
+                {
+                  "clip": "h3",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h2",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                },
+                {
+                  "clip": "h1",
+                  "fp": "258acaaa7c5fe509",
+                  "ready": 60
+                }
+              ]
+            }
+          }
+        },
+        "M7-A5": {
+          "status": "pass",
+          "parts": {
+            "page-yield-on-drag": {
+              "status": "pass",
+              "detail": {
+                "drag": true,
+                "claimsDuring": 0,
+                "framesDuringDrag": 0,
+                "releases": [
+                  {
+                    "reason": "yield-drag",
+                    "cause": "yield",
+                    "msAfterDrag": 1143
+                  }
+                ],
+                "l2": {
+                  "before": 360,
+                  "after": 360
+                },
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 638,
+                "attemptsOnReclaim": null,
+                "authoritative": true
+              }
+            },
+            "page-attempts-unchanged": {
+              "status": "pass",
+              "detail": {
+                "attemptsOnReclaim": null,
+                "note": "放回不计失败（C2）；认领回包里的 attempts 由队列给"
+              }
+            },
+            "page-resume-after-500ms": {
+              "status": "pass",
+              "detail": {
+                "claimsWithin500ms": 0,
+                "resumedAfterMs": 638
+              }
+            }
+          }
+        },
+        "M7-A6": {
+          "status": "pass",
+          "parts": {
+            "play-yield": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "frames": 0,
+                "releases": [
+                  "yield-play"
+                ],
+                "releaseAfterPauseMs": null,
+                "lateReason": "yield-play",
+                "diagAfter": "idle"
+              }
+            },
+            "hidden-release-now": {
+              "status": "pass",
+              "detail": {
+                "hidden": true,
+                "releaseMs": -37,
+                "reason": "yield-hidden",
+                "cause": "hidden",
+                "progressBeforeRelease": false
+              }
+            },
+            "hidden-no-claims-then-resume": {
+              "status": "pass",
+              "detail": {
+                "claimsHidden": 0,
+                "resumed": true
+              }
+            },
+            "urgent-stops-at-frame-boundary": {
+              "status": "pass",
+              "detail": {
+                "releaseMs": 86,
+                "reason": "yield-urgent",
+                "cause": "urgent",
+                "framesAfter": 1
+              }
+            }
+          }
+        },
+        "M7-A7": {
+          "status": "pass",
+          "parts": {
+            "setup-single-stage": {
+              "status": "pass",
+              "detail": {
+                "single": false,
+                "low": false
+              }
+            },
+            "no-render-connection": {
+              "status": "pass",
+              "detail": {
+                "low": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "single": {
+                  "render": 0,
+                  "hello": 0,
+                  "dual": false
+                },
+                "control": {
+                  "isNode": true,
+                  "render": 2
+                }
+              }
+            }
+          }
+        },
+        "M7-A8": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "M7-A9": {
+          "status": "pass",
+          "parts": {
+            "page-low-memory-shows-small": {
+              "status": "pass",
+              "detail": {
+                "waitedForAllFrames": false,
+                "tier": "small",
+                "layers": [
+                  {
+                    "clip": "h1",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h2",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  },
+                  {
+                    "clip": "h3",
+                    "fp": "258acaaa7c5fe509",
+                    "ready": 120,
+                    "placeholder": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "M7-A10": {
+          "status": "pass",
+          "parts": {
+            "page-layer-switched": {
+              "status": "pass",
+              "detail": {
+                "clip": "z1",
+                "fp": "938c9066059fe8ae",
+                "pcFp": "938c9066059fe8ae",
+                "ready": 1,
+                "waitedMs": 2,
+                "limitMs": 240000
+              }
+            }
+          }
+        },
+        "M7-A11": {
+          "status": "pass",
+          "parts": {
+            "page-render-ticket-expiry": {
+              "status": "pass",
+              "detail": {
+                "endedBy": {
+                  "by": "creator",
+                  "at": 1791110728109,
+                  "closed": true,
+                  "conns": 1,
+                  "code": 1001,
+                  "reason": null
+                },
+                "rebuilt": {
+                  "welcomeMs": 1796,
+                  "ticket": "[redacted]"
+                },
+                "newRenderConns": 1
+              }
+            },
+            "echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "low",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "single",
+                  "role": null,
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "render-echo-only-promptcut.v1": {
+              "status": "pass",
+              "detail": [
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                },
+                {
+                  "page": "b1",
+                  "role": "render",
+                  "echoed": "promptcut.v1"
+                }
+              ]
+            },
+            "ticket-not-in-url-or-page-diag": {
+              "status": "pass",
+              "detail": {
+                "urlLeaks": [],
+                "diagLeaks": [],
+                "ticketsSeen": 16
+              }
+            }
+          }
+        },
+        "M7-A12": {
+          "status": "pass",
+          "parts": {
+            "play-10s-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            },
+            "play-10s-claims-0": {
+              "status": "pass",
+              "detail": {
+                "claims": 0,
+                "heldAtStart": null
+              }
+            },
+            "bake-longtasks-0": {
+              "status": "pass",
+              "detail": {
+                "count": 0,
+                "worst": []
+              }
+            }
+          }
+        },
+        "W7": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D9": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D10": {
+          "status": "pass",
+          "parts": {
+            "page-welcome-fp-equals-computed": {
+              "status": "pass",
+              "detail": {
+                "welcome": "258acaaa7c5fe509",
+                "computed": "258acaaa7c5fe509"
+              }
+            }
+          }
+        },
+        "D14": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        },
+        "D1-D2-D12": {
+          "status": "pending",
+          "parts": {},
+          "note": "这一轮没有走到"
+        }
+      },
+      "head": {
+        "probe": "m7-browser-probe",
+        "role": "node",
+        "startedAt": "2026-10-04T10:33:31.001Z",
+        "run": "m7rfix10041021",
+        "timingAuthoritative": true,
+        "host": "<test-laptop>",
+        "pageNode": {
+          "isNode": true,
+          "waitedMs": 60000,
+          "diag": {
+            "available": true,
+            "state": "baking",
+            "reason": null,
+            "nodeId": "browser-page-dc0492e8210a",
+            "envFingerprint": "258acaaa7c5fe509",
+            "codeVersion": "46d3c04676bd96711e80486af191924798860ea8c0ea4f5668f3d36d98c59e3a",
+            "held": [
+              "snapshot:399eccda62f18b236b8fdfaff35bddf7c87e6c38526b1c90aa01e7868fb0e782:0-59"
+            ],
+            "counts": {
+              "claimed": 1,
+              "completed": 0,
+              "dedup": 0,
+              "failed": 0,
+              "lost": 0,
+              "released": {
+                "yield": 0,
+                "hidden": 0,
+                "urgent": 0,
+                "noSnapshot": 0,
+                "other": 0,
+                "raw": {},
+                "total": 0
+              },
+              "blocked": {
+                "6:plan-on-browser": 1
+              },
+              "bakeFrames": 12,
+              "bakeMs": {
+                "n": 12,
+                "p50": 102,
+                "p95": 209
+              },
+              "stageMs": {
+                "p50": 102.20000000298023,
+                "p95": 119.69999999552965,
+                "pausedMs": 0
+              },
+              "chunksPushed": 24,
+              "chunksSkipped": 0,
+              "bytesPushed": 170949,
+              "uploadFailed": 0,
+              "smallFrames": 12
+            },
+            "lastError": null
+          },
+          "welcomeFp": "258acaaa7c5fe509",
+          "computedFp": "258acaaa7c5fe509"
+        },
+        "pages": {
+          "b1": {
+            "gateSeen": true,
+            "conns": 3,
+            "render": 2,
+            "frames": 2213,
+            "pageErrors": []
+          },
+          "low": {
+            "gateSeen": false,
+            "conns": 1,
+            "render": 0,
+            "frames": 23,
+            "pageErrors": []
+          },
+          "single": {
+            "gateSeen": false,
+            "conns": 1,
+            "render": 0,
+            "frames": 4,
+            "pageErrors": []
+          }
+        }
+      },
+      "ms": 801592
+    },
+    "rawResultSha256": "1e2fa463dd6d99aa4a21c4361a75059515e27f7efd712fcb779dd4f4b735cd27",
+    "transferManifest": [
+      {
+        "file": "receipt.json",
+        "bytes": 15873,
+        "sha256": "5da73fe88f2ee549cc2e9687a2bd21bb1197da085fb938d0ca8664554ba1a0d0"
+      },
+      {
+        "file": "result.json",
+        "bytes": 18576,
+        "sha256": "0c48aae1703cc02a45a056709efa5abd2e9aacb54c4f572cc918227dab9c467d"
+      },
+      {
+        "file": "runner-error.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "runner.log",
+        "bytes": 8679,
+        "sha256": "53bcf23f540f6f3807f28e955d38df86f2d1e2ae2cb703f895eb93f39c0d997f"
+      },
+      {
+        "file": "stderr.log",
+        "bytes": 10812,
+        "sha256": "966496c31c0d0aecf355835c91ae2fd89ccf0f7ba0fd8cbe9e292e0b1e494873"
+      },
+      {
+        "file": "stdout.log",
+        "bytes": 9608,
+        "sha256": "b1bbefaf437e2f6a90ab056f2ec6c474798d48730995f517af77787f49f42cf5"
+      }
+    ],
+    "acceptanceSummary": {
+      "target": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "role": "node",
+      "run": "m7rfix10041021",
+      "actualExitCode": 3,
+      "status": "pending",
+      "ok": false,
+      "fails": [],
+      "pending": [
+        "M7-A8: 这一轮没有走到",
+        "W7: 这一轮没有走到",
+        "D9: 这一轮没有走到",
+        "D14: 这一轮没有走到",
+        "D1-D2-D12: 这一轮没有走到"
+      ],
+      "evidenceDirectory": "<test-temp>\\pc-w7-fixed-node-a5a930f587bd49d5bd7b76a4f4eabc87"
+    }
+  },
+  "transferredZip": {
+    "bytes": 8210,
+    "sha256": "1ab16ee720b2850fa54763723cc268cd0b8a796cdb69439e114f86559cbe6b80"
+  },
+  "assertionCounts": {
+    "creatorItems": 17,
+    "creatorParts": 59,
+    "nodeParts": 26
+  },
+  "expectedNodePending": [
+    "M7-A8",
+    "W7",
+    "D9",
+    "D14",
+    "D1-D2-D12"
+  ],
+  "nodeExitCodePreserved": 3,
+  "allRequiredAcceptancePassed": false
+}

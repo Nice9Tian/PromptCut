@@ -1,0 +1,5149 @@
+{
+  "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+  "kind": "readonly-seek-pipeline-diagnostic",
+  "diagnosticOnly": true,
+  "status": "pass",
+  "allRequiredAcceptancePassed": false,
+  "run": "c10plan10042045",
+  "creator": {
+    "receipt": {
+      "source": "113b425c3053f6e9867499f9d305aad975d5846b",
+      "role": "creator",
+      "run": "c10plan10042045",
+      "actualExitCode": 0,
+      "status": "pass",
+      "prepareOnly": false,
+      "timingAuthoritative": true,
+      "startedAt": "2026-10-04T11:43:18.751Z",
+      "hostname": "<test-laptop>",
+      "testFingerprintOverride": false,
+      "diagnosticOnly": true,
+      "ownTcpBridgeOnly": true,
+      "hostNetworkChanged": false,
+      "userRuntimeModified": false,
+      "ports": [
+        5480,
+        5481,
+        5482,
+        5483,
+        5484,
+        5485,
+        5486,
+        5487,
+        5488
+      ],
+      "nodeVersion": "v24.19.0",
+      "chromeVersion": "Google Chrome for Testing 152.0.7977.75",
+      "ffmpegVersion": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "fails": [],
+      "command": "node --import=./scripts/lib/test-silent-processes.mjs work/c10-plan-diagnostic-probe.mjs --role creator --run c10plan10042045 --coord http://<test-PC-LAN>:5456 --out <test-temp>\\pc-c10-plan-creator-4be38cdb33c84682af0708b491586678\\probe --keep-temp --timeout-min 25 --only-a4 --base-port 5480",
+      "ownedProbePid": 8256,
+      "pending": [],
+      "ok": true,
+      "rawLogSha256": {
+        "stdout.log": "d753d737aeba16fd626333667809dd663111d5b03e44d8e92a1ac722add8fb8a",
+        "stderr.log": "8e3e1e12173ea2f01755cf888bae3756cbc24596cd00804a757eb4176ac30a4a"
+      },
+      "finishedAt": "2026-10-04T11:52:00.100Z"
+    },
+    "result": {
+      "ok": true,
+      "run": "c10plan10042045",
+      "role": "creator",
+      "mode": "a1-a5",
+      "target": "local",
+      "site": "http://127.0.0.1:5480",
+      "stageOrigins": [
+        "http://127.0.0.1:5481",
+        "http://127.0.0.1:5482"
+      ],
+      "out": "<test-temp>\\pc-c10-plan-creator-4be38cdb33c84682af0708b491586678\\probe",
+      "steps": {
+        "creator": {
+          "ms": 466914,
+          "projectId": "sp_3ogn5ez5zo2d4ubn3j7llliwal",
+          "clips": {
+            "main": "c-mutr5rge-14",
+            "extras": 8,
+            "light": "c-mutr5rgd-y"
+          },
+          "creatorFp": "258acaaa7c5fe509",
+          "layer": {
+            "v": 3,
+            "contentKey": true,
+            "envFingerprint": "258acaaa7c5fe509",
+            "resultKey": "7f363a5b21c64c972c4bffb30176c8fb040643b1242e6626a6fb0b013bb5d179",
+            "count": 300,
+            "extras": 8
+          }
+        },
+        "playEntryFixture": {
+          "cardId": "chapter-bar",
+          "start": 2,
+          "duration": 6,
+          "stepMs": 1.5,
+          "catchUpMs": 199.6,
+          "vtOk": false,
+          "tier": "catchup-b"
+        },
+        "playEntry": {
+          "natural": {
+            "clip": "c-mutr5rgd-12",
+            "naturalSkipped": [
+              "c-mutr5rgd-12",
+              "c-mutr5rgd-10"
+            ],
+            "naturalSkips": 181,
+            "playRun": {
+              "startFrame": 0,
+              "lastFrame": 295,
+              "breaks": 0
+            },
+            "plansInPlay": [
+              {
+                "t": 1,
+                "ids": [
+                  "c-mutr5rgd-y"
+                ],
+                "ok": false,
+                "reason": "rate"
+              }
+            ]
+          },
+          "seekMiddle": {
+            "lastPlan": {
+              "at": 47976,
+              "t": 3.1333333333333333,
+              "ids": [
+                "c-mutr5rgd-12"
+              ],
+              "ok": false,
+              "reason": "rate",
+              "backlogMs": 13860.199999999999,
+              "ratePerSec": 1359,
+              "leadMs": null
+            },
+            "playRun": {
+              "startFrame": 90,
+              "lastFrame": 96,
+              "breaks": 0
+            },
+            "naturalSkips": 181
+          }
+        },
+        "play": {
+          "ms": 22425,
+          "longTasks": 0,
+          "samples": 61,
+          "mainDistinctFrames": 53,
+          "deliveries": 262,
+          "placeholder": {
+            "t": 0.1,
+            "fit": 6,
+            "deadMs": 23.333333333333332,
+            "placeholder": [
+              "c-mutr5rgf-18",
+              "c-mutr5rgf-16",
+              "c-mutr5rge-14",
+              "c-mutr5rgd-y"
+            ],
+            "shown": [
+              "c-mutr5rgd-y",
+              "c-mutr5rge-14",
+              "c-mutr5rgf-16",
+              "c-mutr5rgf-18"
+            ]
+          }
+        },
+        "settleTrace": [
+          {
+            "at": 1948,
+            "op": "settle",
+            "t": 0,
+            "stale": 0,
+            "plan": true,
+            "costs": 0,
+            "cards": [
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "2c7d893f5c",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "586f169a61",
+                "record": false
+              }
+            ]
+          },
+          {
+            "at": 1948,
+            "op": "settle",
+            "t": 0,
+            "stale": 0,
+            "plan": true,
+            "costs": 0,
+            "cards": [
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "a1fd11c3e1",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "2c7d893f5c",
+                "record": false
+              },
+              {
+                "id": "c-mutr5r",
+                "pipeline": "heavy",
+                "identityPrefix": "586f169a61",
+                "record": false
+              }
+            ]
+          },
+          {
+            "at": 6703,
+            "op": "settle",
+            "t": 0,
+            "stale": 10,
+            "plan": true,
+            "costs": 5
+          },
+          {
+            "at": 6703,
+            "op": "catchup-queued",
+            "t": 0
+          },
+          {
+            "at": 6705,
+            "op": "catchup-start",
+            "t": 0,
+            "back": true,
+            "sameAsFront": false
+          },
+          {
+            "at": 7168,
+            "op": "catchup-rendered",
+            "t": 0,
+            "aborted": false
+          },
+          {
+            "at": 13430,
+            "op": "playing",
+            "t": 1,
+            "ids": [
+              "c-mutr5r"
+            ],
+            "out": "skip-rate",
+            "backlogMs": 11048,
+            "ratePerSec": 1272
+          },
+          {
+            "at": 22427,
+            "op": "settle",
+            "t": 10,
+            "stale": 0,
+            "plan": true,
+            "costs": 5,
+            "cards": []
+          },
+          {
+            "at": 23036,
+            "op": "settle",
+            "t": 0.5,
+            "stale": 10,
+            "plan": true,
+            "costs": 5
+          },
+          {
+            "at": 23036,
+            "op": "catchup-queued",
+            "t": 0.5
+          },
+          {
+            "at": 23043,
+            "op": "catchup-start",
+            "t": 0.5,
+            "back": true,
+            "sameAsFront": false
+          },
+          {
+            "at": 29361,
+            "op": "catchup-rendered",
+            "t": 0.5,
+            "aborted": false
+          }
+        ],
+        "settleTiming": {
+          "stopAt": 22583,
+          "seekAt": 22595,
+          "swappedAt": 29701,
+          "seekToPreciseMs": 7106,
+          "swapPlaying": {
+            "lastPlan": {
+              "at": 13430,
+              "t": 1,
+              "ids": [
+                "c-mutr5rgd-y"
+              ],
+              "ok": false,
+              "reason": "rate",
+              "backlogMs": 11048,
+              "ratePerSec": 1272,
+              "leadMs": null
+            },
+            "plans": [
+              {
+                "at": 13430,
+                "t": 1,
+                "ids": [
+                  "c-mutr5rgd-y"
+                ],
+                "ok": false,
+                "reason": "rate",
+                "backlogMs": 11048,
+                "ratePerSec": 1272,
+                "leadMs": null
+              }
+            ],
+            "preemptCount": 0,
+            "orphan": false,
+            "playRun": {
+              "startFrame": 0,
+              "lastFrame": 299,
+              "breaks": 0
+            },
+            "naturalSkips": 181,
+            "lastNaturalSkip": {
+              "t": 7.966666666666667,
+              "ids": [
+                "c-mutr5rgd-12"
+              ]
+            },
+            "naturalSkipped": [
+              "c-mutr5rgd-12",
+              "c-mutr5rgd-10"
+            ]
+          },
+          "costs": [
+            {
+              "k": "[redacted]",
+              "step": 0.5,
+              "stepMax": 1.2,
+              "catchUp": 47.9,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 40.6,
+              "stepMax": 40.6,
+              "catchUp": 12120,
+              "capped": true,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 1.4,
+              "stepMax": 1.8,
+              "catchUp": 313.75,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 41.5,
+              "stepMax": 41.5,
+              "catchUp": 1222,
+              "capped": true,
+              "vtOk": false,
+              "kind": "stepped"
+            },
+            {
+              "k": "[redacted]",
+              "step": 1.5,
+              "stepMax": 1.7,
+              "catchUp": 199.6,
+              "vtOk": false,
+              "kind": "stepped"
+            }
+          ]
+        },
+        "seekMiddleDiagnostic": [
+          {
+            "phase": "before-seek",
+            "view": {
+              "at": 32864,
+              "t": 0.5,
+              "playing": false,
+              "frontId": "A",
+              "dual": true,
+              "lowMemory": false,
+              "swapInFlight": false,
+              "swapPlaying": {
+                "lastPlan": {
+                  "at": 13430,
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5rgd-y"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272,
+                  "leadMs": null
+                },
+                "plans": [
+                  {
+                    "at": 13430,
+                    "t": 1,
+                    "ids": [
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 11048,
+                    "ratePerSec": 1272,
+                    "leadMs": null
+                  }
+                ],
+                "preemptCount": 0,
+                "orphan": false,
+                "playRun": {
+                  "startFrame": 0,
+                  "lastFrame": 299,
+                  "breaks": 0
+                },
+                "naturalSkips": 181,
+                "lastNaturalSkip": {
+                  "t": 7.966666666666667,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ]
+                },
+                "naturalSkipped": [
+                  "c-mutr5rgd-12",
+                  "c-mutr5rgd-10"
+                ]
+              },
+              "swapLog": [
+                {
+                  "at": 7543,
+                  "t": 0,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 29701,
+                  "t": 0.5,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                }
+              ],
+              "swapTrace": [
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 6703,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 6703,
+                  "op": "catchup-queued",
+                  "t": 0
+                },
+                {
+                  "at": 6705,
+                  "op": "catchup-start",
+                  "t": 0,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 7168,
+                  "op": "catchup-rendered",
+                  "t": 0,
+                  "aborted": false
+                },
+                {
+                  "at": 13430,
+                  "op": "playing",
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272
+                },
+                {
+                  "at": 22427,
+                  "op": "settle",
+                  "t": 10,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 5,
+                  "cards": []
+                },
+                {
+                  "at": 23036,
+                  "op": "settle",
+                  "t": 0.5,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 23036,
+                  "op": "catchup-queued",
+                  "t": 0.5
+                },
+                {
+                  "at": 23043,
+                  "op": "catchup-start",
+                  "t": 0.5,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 29361,
+                  "op": "catchup-rendered",
+                  "t": 0.5,
+                  "aborted": false
+                }
+              ],
+              "setTimeLog": [
+                {
+                  "at": 1346,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 1349,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 6701,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 22424,
+                  "sec": 10,
+                  "settle": true
+                },
+                {
+                  "at": 22589,
+                  "sec": 0.5,
+                  "settle": true
+                }
+              ],
+              "setTimeError": null,
+              "probeRun": {
+                "probed": [
+                  {
+                    "clipId": "c-mutr5rgi-1k",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "a1fd11c3e1825",
+                    "at": 1791114671229
+                  },
+                  {
+                    "clipId": "c-mutr5rge-14",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "2c7d893f5c768",
+                    "at": 1791114672351
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-12",
+                    "cardId": "chapter-bar",
+                    "identityKey": "a578059facd73",
+                    "at": 1791114673465
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-10",
+                    "cardId": "probe-typewriter",
+                    "identityKey": "1c78651c4d5d52",
+                    "at": 1791114674279
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-y",
+                    "cardId": "chapter-bar",
+                    "identityKey": "586f169a61efe",
+                    "at": 1791114675009
+                  }
+                ],
+                "running": false,
+                "done": 5,
+                "total": 5
+              },
+              "snapshotFeedHeavy": [
+                "c-mutr5rgd-y",
+                "c-mutr5rge-14",
+                "c-mutr5rgf-16",
+                "c-mutr5rgf-18",
+                "c-mutr5rgg-1a",
+                "c-mutr5rgg-1c",
+                "c-mutr5rgh-1e",
+                "c-mutr5rgh-1g",
+                "c-mutr5rgh-1i",
+                "c-mutr5rgi-1k"
+              ],
+              "clips": [
+                {
+                  "id": "c-mutr5rgi-1k",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1i",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1g",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1e",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1c",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1a",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-18",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-16",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rge-14",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-12",
+                  "cardId": "chapter-bar",
+                  "start": 2,
+                  "end": 8,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-10",
+                  "cardId": "probe-typewriter",
+                  "start": 2,
+                  "end": 6,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-y",
+                  "cardId": "chapter-bar",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5own-w",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5rga-x",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                }
+              ]
+            }
+          },
+          {
+            "phase": "after-seek",
+            "view": {
+              "at": 32892,
+              "t": 3,
+              "playing": false,
+              "frontId": "A",
+              "dual": true,
+              "lowMemory": false,
+              "swapInFlight": false,
+              "swapPlaying": {
+                "lastPlan": {
+                  "at": 13430,
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5rgd-y"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272,
+                  "leadMs": null
+                },
+                "plans": [
+                  {
+                    "at": 13430,
+                    "t": 1,
+                    "ids": [
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 11048,
+                    "ratePerSec": 1272,
+                    "leadMs": null
+                  }
+                ],
+                "preemptCount": 0,
+                "orphan": false,
+                "playRun": {
+                  "startFrame": 0,
+                  "lastFrame": 299,
+                  "breaks": 0
+                },
+                "naturalSkips": 181,
+                "lastNaturalSkip": {
+                  "t": 7.966666666666667,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ]
+                },
+                "naturalSkipped": [
+                  "c-mutr5rgd-12",
+                  "c-mutr5rgd-10"
+                ]
+              },
+              "swapLog": [
+                {
+                  "at": 7543,
+                  "t": 0,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 29701,
+                  "t": 0.5,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                }
+              ],
+              "swapTrace": [
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 6703,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 6703,
+                  "op": "catchup-queued",
+                  "t": 0
+                },
+                {
+                  "at": 6705,
+                  "op": "catchup-start",
+                  "t": 0,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 7168,
+                  "op": "catchup-rendered",
+                  "t": 0,
+                  "aborted": false
+                },
+                {
+                  "at": 13430,
+                  "op": "playing",
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272
+                },
+                {
+                  "at": 22427,
+                  "op": "settle",
+                  "t": 10,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 5,
+                  "cards": []
+                },
+                {
+                  "at": 23036,
+                  "op": "settle",
+                  "t": 0.5,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 23036,
+                  "op": "catchup-queued",
+                  "t": 0.5
+                },
+                {
+                  "at": 23043,
+                  "op": "catchup-start",
+                  "t": 0.5,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 29361,
+                  "op": "catchup-rendered",
+                  "t": 0.5,
+                  "aborted": false
+                }
+              ],
+              "setTimeLog": [
+                {
+                  "at": 1346,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 1349,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 6701,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 22424,
+                  "sec": 10,
+                  "settle": true
+                },
+                {
+                  "at": 22589,
+                  "sec": 0.5,
+                  "settle": true
+                },
+                {
+                  "at": 32869,
+                  "sec": 3,
+                  "settle": true
+                }
+              ],
+              "setTimeError": null,
+              "probeRun": {
+                "probed": [
+                  {
+                    "clipId": "c-mutr5rgi-1k",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "a1fd11c3e1825",
+                    "at": 1791114671229
+                  },
+                  {
+                    "clipId": "c-mutr5rge-14",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "2c7d893f5c768",
+                    "at": 1791114672351
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-12",
+                    "cardId": "chapter-bar",
+                    "identityKey": "a578059facd73",
+                    "at": 1791114673465
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-10",
+                    "cardId": "probe-typewriter",
+                    "identityKey": "1c78651c4d5d52",
+                    "at": 1791114674279
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-y",
+                    "cardId": "chapter-bar",
+                    "identityKey": "586f169a61efe",
+                    "at": 1791114675009
+                  }
+                ],
+                "running": false,
+                "done": 5,
+                "total": 5
+              },
+              "snapshotFeedHeavy": [
+                "c-mutr5rgd-12",
+                "c-mutr5rge-14"
+              ],
+              "clips": [
+                {
+                  "id": "c-mutr5rgi-1k",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1i",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1g",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1e",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1c",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1a",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-18",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-16",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rge-14",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-12",
+                  "cardId": "chapter-bar",
+                  "start": 2,
+                  "end": 8,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-10",
+                  "cardId": "probe-typewriter",
+                  "start": 2,
+                  "end": 6,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-y",
+                  "cardId": "chapter-bar",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5own-w",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5rga-x",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                }
+              ]
+            }
+          },
+          {
+            "phase": "settled-before-play",
+            "view": {
+              "at": 47811,
+              "t": 3,
+              "playing": false,
+              "frontId": "B",
+              "dual": true,
+              "lowMemory": false,
+              "swapInFlight": false,
+              "swapPlaying": {
+                "lastPlan": {
+                  "at": 13430,
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5rgd-y"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272,
+                  "leadMs": null
+                },
+                "plans": [
+                  {
+                    "at": 13430,
+                    "t": 1,
+                    "ids": [
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 11048,
+                    "ratePerSec": 1272,
+                    "leadMs": null
+                  }
+                ],
+                "preemptCount": 0,
+                "orphan": false,
+                "playRun": {
+                  "startFrame": 0,
+                  "lastFrame": 299,
+                  "breaks": 0
+                },
+                "naturalSkips": 181,
+                "lastNaturalSkip": {
+                  "t": 7.966666666666667,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ]
+                },
+                "naturalSkipped": [
+                  "c-mutr5rgd-12",
+                  "c-mutr5rgd-10"
+                ]
+              },
+              "swapLog": [
+                {
+                  "at": 7543,
+                  "t": 0,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 29701,
+                  "t": 0.5,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 47581,
+                  "t": 3,
+                  "stale": 4,
+                  "ready": true,
+                  "swapped": true
+                }
+              ],
+              "swapTrace": [
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 6703,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 6703,
+                  "op": "catchup-queued",
+                  "t": 0
+                },
+                {
+                  "at": 6705,
+                  "op": "catchup-start",
+                  "t": 0,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 7168,
+                  "op": "catchup-rendered",
+                  "t": 0,
+                  "aborted": false
+                },
+                {
+                  "at": 13430,
+                  "op": "playing",
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272
+                },
+                {
+                  "at": 22427,
+                  "op": "settle",
+                  "t": 10,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 5,
+                  "cards": []
+                },
+                {
+                  "at": 23036,
+                  "op": "settle",
+                  "t": 0.5,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 23036,
+                  "op": "catchup-queued",
+                  "t": 0.5
+                },
+                {
+                  "at": 23043,
+                  "op": "catchup-start",
+                  "t": 0.5,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 29361,
+                  "op": "catchup-rendered",
+                  "t": 0.5,
+                  "aborted": false
+                },
+                {
+                  "at": 32946,
+                  "op": "settle",
+                  "t": 3,
+                  "stale": 4,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 32946,
+                  "op": "catchup-queued",
+                  "t": 3
+                },
+                {
+                  "at": 32951,
+                  "op": "catchup-start",
+                  "t": 3,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 47262,
+                  "op": "catchup-rendered",
+                  "t": 3,
+                  "aborted": false
+                }
+              ],
+              "setTimeLog": [
+                {
+                  "at": 1346,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 1349,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 6701,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 22424,
+                  "sec": 10,
+                  "settle": true
+                },
+                {
+                  "at": 22589,
+                  "sec": 0.5,
+                  "settle": true
+                },
+                {
+                  "at": 32869,
+                  "sec": 3,
+                  "settle": true
+                }
+              ],
+              "setTimeError": null,
+              "probeRun": {
+                "probed": [
+                  {
+                    "clipId": "c-mutr5rgi-1k",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "a1fd11c3e1825",
+                    "at": 1791114671229
+                  },
+                  {
+                    "clipId": "c-mutr5rge-14",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "2c7d893f5c768",
+                    "at": 1791114672351
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-12",
+                    "cardId": "chapter-bar",
+                    "identityKey": "a578059facd73",
+                    "at": 1791114673465
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-10",
+                    "cardId": "probe-typewriter",
+                    "identityKey": "1c78651c4d5d52",
+                    "at": 1791114674279
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-y",
+                    "cardId": "chapter-bar",
+                    "identityKey": "586f169a61efe",
+                    "at": 1791114675009
+                  }
+                ],
+                "running": false,
+                "done": 5,
+                "total": 5
+              },
+              "snapshotFeedHeavy": [
+                "c-mutr5rgd-12",
+                "c-mutr5rge-14"
+              ],
+              "clips": [
+                {
+                  "id": "c-mutr5rgi-1k",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1i",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1g",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1e",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1c",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1a",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-18",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-16",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rge-14",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-12",
+                  "cardId": "chapter-bar",
+                  "start": 2,
+                  "end": 8,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-10",
+                  "cardId": "probe-typewriter",
+                  "start": 2,
+                  "end": 6,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-y",
+                  "cardId": "chapter-bar",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5own-w",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5rga-x",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                }
+              ]
+            }
+          },
+          {
+            "phase": "after-play",
+            "view": {
+              "at": 47824,
+              "t": 3,
+              "playing": true,
+              "frontId": "B",
+              "dual": true,
+              "lowMemory": false,
+              "swapInFlight": false,
+              "swapPlaying": {
+                "lastPlan": {
+                  "at": 13430,
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5rgd-y"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272,
+                  "leadMs": null
+                },
+                "plans": [
+                  {
+                    "at": 13430,
+                    "t": 1,
+                    "ids": [
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 11048,
+                    "ratePerSec": 1272,
+                    "leadMs": null
+                  }
+                ],
+                "preemptCount": 0,
+                "orphan": false,
+                "playRun": {
+                  "startFrame": 90,
+                  "lastFrame": 90,
+                  "breaks": 0
+                },
+                "naturalSkips": 181,
+                "lastNaturalSkip": {
+                  "t": 7.966666666666667,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ]
+                },
+                "naturalSkipped": []
+              },
+              "swapLog": [
+                {
+                  "at": 7543,
+                  "t": 0,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 29701,
+                  "t": 0.5,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 47581,
+                  "t": 3,
+                  "stale": 4,
+                  "ready": true,
+                  "swapped": true
+                }
+              ],
+              "swapTrace": [
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 6703,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 6703,
+                  "op": "catchup-queued",
+                  "t": 0
+                },
+                {
+                  "at": 6705,
+                  "op": "catchup-start",
+                  "t": 0,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 7168,
+                  "op": "catchup-rendered",
+                  "t": 0,
+                  "aborted": false
+                },
+                {
+                  "at": 13430,
+                  "op": "playing",
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272
+                },
+                {
+                  "at": 22427,
+                  "op": "settle",
+                  "t": 10,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 5,
+                  "cards": []
+                },
+                {
+                  "at": 23036,
+                  "op": "settle",
+                  "t": 0.5,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 23036,
+                  "op": "catchup-queued",
+                  "t": 0.5
+                },
+                {
+                  "at": 23043,
+                  "op": "catchup-start",
+                  "t": 0.5,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 29361,
+                  "op": "catchup-rendered",
+                  "t": 0.5,
+                  "aborted": false
+                },
+                {
+                  "at": 32946,
+                  "op": "settle",
+                  "t": 3,
+                  "stale": 4,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 32946,
+                  "op": "catchup-queued",
+                  "t": 3
+                },
+                {
+                  "at": 32951,
+                  "op": "catchup-start",
+                  "t": 3,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 47262,
+                  "op": "catchup-rendered",
+                  "t": 3,
+                  "aborted": false
+                }
+              ],
+              "setTimeLog": [
+                {
+                  "at": 1346,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 1349,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 6701,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 22424,
+                  "sec": 10,
+                  "settle": true
+                },
+                {
+                  "at": 22589,
+                  "sec": 0.5,
+                  "settle": true
+                },
+                {
+                  "at": 32869,
+                  "sec": 3,
+                  "settle": true
+                }
+              ],
+              "setTimeError": null,
+              "probeRun": {
+                "probed": [
+                  {
+                    "clipId": "c-mutr5rgi-1k",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "a1fd11c3e1825",
+                    "at": 1791114671229
+                  },
+                  {
+                    "clipId": "c-mutr5rge-14",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "2c7d893f5c768",
+                    "at": 1791114672351
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-12",
+                    "cardId": "chapter-bar",
+                    "identityKey": "a578059facd73",
+                    "at": 1791114673465
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-10",
+                    "cardId": "probe-typewriter",
+                    "identityKey": "1c78651c4d5d52",
+                    "at": 1791114674279
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-y",
+                    "cardId": "chapter-bar",
+                    "identityKey": "586f169a61efe",
+                    "at": 1791114675009
+                  }
+                ],
+                "running": false,
+                "done": 5,
+                "total": 5
+              },
+              "snapshotFeedHeavy": [
+                "c-mutr5rgd-12",
+                "c-mutr5rge-14"
+              ],
+              "clips": [
+                {
+                  "id": "c-mutr5rgi-1k",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1i",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1g",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1e",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1c",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1a",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-18",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-16",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rge-14",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-12",
+                  "cardId": "chapter-bar",
+                  "start": 2,
+                  "end": 8,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-10",
+                  "cardId": "probe-typewriter",
+                  "start": 2,
+                  "end": 6,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-y",
+                  "cardId": "chapter-bar",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5own-w",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5rga-x",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                }
+              ]
+            }
+          },
+          {
+            "phase": "playing-poll",
+            "view": {
+              "at": 47831,
+              "t": 3,
+              "playing": true,
+              "frontId": "B",
+              "dual": true,
+              "lowMemory": false,
+              "swapInFlight": false,
+              "swapPlaying": {
+                "lastPlan": {
+                  "at": 13430,
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5rgd-y"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272,
+                  "leadMs": null
+                },
+                "plans": [
+                  {
+                    "at": 13430,
+                    "t": 1,
+                    "ids": [
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 11048,
+                    "ratePerSec": 1272,
+                    "leadMs": null
+                  }
+                ],
+                "preemptCount": 0,
+                "orphan": false,
+                "playRun": {
+                  "startFrame": 90,
+                  "lastFrame": 90,
+                  "breaks": 0
+                },
+                "naturalSkips": 181,
+                "lastNaturalSkip": {
+                  "t": 7.966666666666667,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ]
+                },
+                "naturalSkipped": []
+              },
+              "swapLog": [
+                {
+                  "at": 7543,
+                  "t": 0,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 29701,
+                  "t": 0.5,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 47581,
+                  "t": 3,
+                  "stale": 4,
+                  "ready": true,
+                  "swapped": true
+                }
+              ],
+              "swapTrace": [
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 6703,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 6703,
+                  "op": "catchup-queued",
+                  "t": 0
+                },
+                {
+                  "at": 6705,
+                  "op": "catchup-start",
+                  "t": 0,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 7168,
+                  "op": "catchup-rendered",
+                  "t": 0,
+                  "aborted": false
+                },
+                {
+                  "at": 13430,
+                  "op": "playing",
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272
+                },
+                {
+                  "at": 22427,
+                  "op": "settle",
+                  "t": 10,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 5,
+                  "cards": []
+                },
+                {
+                  "at": 23036,
+                  "op": "settle",
+                  "t": 0.5,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 23036,
+                  "op": "catchup-queued",
+                  "t": 0.5
+                },
+                {
+                  "at": 23043,
+                  "op": "catchup-start",
+                  "t": 0.5,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 29361,
+                  "op": "catchup-rendered",
+                  "t": 0.5,
+                  "aborted": false
+                },
+                {
+                  "at": 32946,
+                  "op": "settle",
+                  "t": 3,
+                  "stale": 4,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 32946,
+                  "op": "catchup-queued",
+                  "t": 3
+                },
+                {
+                  "at": 32951,
+                  "op": "catchup-start",
+                  "t": 3,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 47262,
+                  "op": "catchup-rendered",
+                  "t": 3,
+                  "aborted": false
+                }
+              ],
+              "setTimeLog": [
+                {
+                  "at": 1346,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 1349,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 6701,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 22424,
+                  "sec": 10,
+                  "settle": true
+                },
+                {
+                  "at": 22589,
+                  "sec": 0.5,
+                  "settle": true
+                },
+                {
+                  "at": 32869,
+                  "sec": 3,
+                  "settle": true
+                }
+              ],
+              "setTimeError": null,
+              "probeRun": {
+                "probed": [
+                  {
+                    "clipId": "c-mutr5rgi-1k",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "a1fd11c3e1825",
+                    "at": 1791114671229
+                  },
+                  {
+                    "clipId": "c-mutr5rge-14",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "2c7d893f5c768",
+                    "at": 1791114672351
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-12",
+                    "cardId": "chapter-bar",
+                    "identityKey": "a578059facd73",
+                    "at": 1791114673465
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-10",
+                    "cardId": "probe-typewriter",
+                    "identityKey": "1c78651c4d5d52",
+                    "at": 1791114674279
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-y",
+                    "cardId": "chapter-bar",
+                    "identityKey": "586f169a61efe",
+                    "at": 1791114675009
+                  }
+                ],
+                "running": false,
+                "done": 5,
+                "total": 5
+              },
+              "snapshotFeedHeavy": [
+                "c-mutr5rgd-12",
+                "c-mutr5rge-14"
+              ],
+              "clips": [
+                {
+                  "id": "c-mutr5rgi-1k",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1i",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1g",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1e",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1c",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1a",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-18",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-16",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rge-14",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-12",
+                  "cardId": "chapter-bar",
+                  "start": 2,
+                  "end": 8,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-10",
+                  "cardId": "probe-typewriter",
+                  "start": 2,
+                  "end": 6,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-y",
+                  "cardId": "chapter-bar",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5own-w",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5rga-x",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                }
+              ]
+            }
+          },
+          {
+            "phase": "playing-poll",
+            "view": {
+              "at": 47948,
+              "t": 3.033333333333333,
+              "playing": true,
+              "frontId": "B",
+              "dual": true,
+              "lowMemory": false,
+              "swapInFlight": false,
+              "swapPlaying": {
+                "lastPlan": {
+                  "at": 47910,
+                  "t": 3.033333333333333,
+                  "ids": [
+                    "c-mutr5rgd-10",
+                    "c-mutr5rgd-y"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 13724.300000000001,
+                  "ratePerSec": 1359,
+                  "leadMs": null
+                },
+                "plans": [
+                  {
+                    "at": 13430,
+                    "t": 1,
+                    "ids": [
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 11048,
+                    "ratePerSec": 1272,
+                    "leadMs": null
+                  },
+                  {
+                    "at": 47910,
+                    "t": 3.033333333333333,
+                    "ids": [
+                      "c-mutr5rgd-10",
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 13724.300000000001,
+                    "ratePerSec": 1359,
+                    "leadMs": null
+                  }
+                ],
+                "preemptCount": 0,
+                "orphan": false,
+                "playRun": {
+                  "startFrame": 90,
+                  "lastFrame": 91,
+                  "breaks": 0
+                },
+                "naturalSkips": 181,
+                "lastNaturalSkip": {
+                  "t": 7.966666666666667,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ]
+                },
+                "naturalSkipped": []
+              },
+              "swapLog": [
+                {
+                  "at": 7543,
+                  "t": 0,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 29701,
+                  "t": 0.5,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 47581,
+                  "t": 3,
+                  "stale": 4,
+                  "ready": true,
+                  "swapped": true
+                }
+              ],
+              "swapTrace": [
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 6703,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 6703,
+                  "op": "catchup-queued",
+                  "t": 0
+                },
+                {
+                  "at": 6705,
+                  "op": "catchup-start",
+                  "t": 0,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 7168,
+                  "op": "catchup-rendered",
+                  "t": 0,
+                  "aborted": false
+                },
+                {
+                  "at": 13430,
+                  "op": "playing",
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272
+                },
+                {
+                  "at": 22427,
+                  "op": "settle",
+                  "t": 10,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 5,
+                  "cards": []
+                },
+                {
+                  "at": 23036,
+                  "op": "settle",
+                  "t": 0.5,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 23036,
+                  "op": "catchup-queued",
+                  "t": 0.5
+                },
+                {
+                  "at": 23043,
+                  "op": "catchup-start",
+                  "t": 0.5,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 29361,
+                  "op": "catchup-rendered",
+                  "t": 0.5,
+                  "aborted": false
+                },
+                {
+                  "at": 32946,
+                  "op": "settle",
+                  "t": 3,
+                  "stale": 4,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 32946,
+                  "op": "catchup-queued",
+                  "t": 3
+                },
+                {
+                  "at": 32951,
+                  "op": "catchup-start",
+                  "t": 3,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 47262,
+                  "op": "catchup-rendered",
+                  "t": 3,
+                  "aborted": false
+                },
+                {
+                  "at": 47910,
+                  "op": "playing",
+                  "t": 3.033333333333333,
+                  "ids": [
+                    "c-mutr5r",
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 13724,
+                  "ratePerSec": 1359
+                }
+              ],
+              "setTimeLog": [
+                {
+                  "at": 1346,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 1349,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 6701,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 22424,
+                  "sec": 10,
+                  "settle": true
+                },
+                {
+                  "at": 22589,
+                  "sec": 0.5,
+                  "settle": true
+                },
+                {
+                  "at": 32869,
+                  "sec": 3,
+                  "settle": true
+                }
+              ],
+              "setTimeError": null,
+              "probeRun": {
+                "probed": [
+                  {
+                    "clipId": "c-mutr5rgi-1k",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "a1fd11c3e1825",
+                    "at": 1791114671229
+                  },
+                  {
+                    "clipId": "c-mutr5rge-14",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "2c7d893f5c768",
+                    "at": 1791114672351
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-12",
+                    "cardId": "chapter-bar",
+                    "identityKey": "a578059facd73",
+                    "at": 1791114673465
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-10",
+                    "cardId": "probe-typewriter",
+                    "identityKey": "1c78651c4d5d52",
+                    "at": 1791114674279
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-y",
+                    "cardId": "chapter-bar",
+                    "identityKey": "586f169a61efe",
+                    "at": 1791114675009
+                  }
+                ],
+                "running": false,
+                "done": 5,
+                "total": 5
+              },
+              "snapshotFeedHeavy": [
+                "c-mutr5rgd-12",
+                "c-mutr5rge-14"
+              ],
+              "clips": [
+                {
+                  "id": "c-mutr5rgi-1k",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1i",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1g",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1e",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1c",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1a",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-18",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-16",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rge-14",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-12",
+                  "cardId": "chapter-bar",
+                  "start": 2,
+                  "end": 8,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-10",
+                  "cardId": "probe-typewriter",
+                  "start": 2,
+                  "end": 6,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-y",
+                  "cardId": "chapter-bar",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5own-w",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5rga-x",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                }
+              ]
+            }
+          },
+          {
+            "phase": "playing-poll",
+            "view": {
+              "at": 48055,
+              "t": 3.1666666666666665,
+              "playing": true,
+              "frontId": "B",
+              "dual": true,
+              "lowMemory": false,
+              "swapInFlight": false,
+              "swapPlaying": {
+                "lastPlan": {
+                  "at": 47976,
+                  "t": 3.1333333333333333,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 13860.199999999999,
+                  "ratePerSec": 1359,
+                  "leadMs": null
+                },
+                "plans": [
+                  {
+                    "at": 13430,
+                    "t": 1,
+                    "ids": [
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 11048,
+                    "ratePerSec": 1272,
+                    "leadMs": null
+                  },
+                  {
+                    "at": 47910,
+                    "t": 3.033333333333333,
+                    "ids": [
+                      "c-mutr5rgd-10",
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 13724.300000000001,
+                    "ratePerSec": 1359,
+                    "leadMs": null
+                  },
+                  {
+                    "at": 47976,
+                    "t": 3.1333333333333333,
+                    "ids": [
+                      "c-mutr5rgd-12"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 13860.199999999999,
+                    "ratePerSec": 1359,
+                    "leadMs": null
+                  }
+                ],
+                "preemptCount": 0,
+                "orphan": false,
+                "playRun": {
+                  "startFrame": 90,
+                  "lastFrame": 95,
+                  "breaks": 0
+                },
+                "naturalSkips": 181,
+                "lastNaturalSkip": {
+                  "t": 7.966666666666667,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ]
+                },
+                "naturalSkipped": []
+              },
+              "swapLog": [
+                {
+                  "at": 7543,
+                  "t": 0,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 29701,
+                  "t": 0.5,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 47581,
+                  "t": 3,
+                  "stale": 4,
+                  "ready": true,
+                  "swapped": true
+                }
+              ],
+              "swapTrace": [
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 6703,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 6703,
+                  "op": "catchup-queued",
+                  "t": 0
+                },
+                {
+                  "at": 6705,
+                  "op": "catchup-start",
+                  "t": 0,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 7168,
+                  "op": "catchup-rendered",
+                  "t": 0,
+                  "aborted": false
+                },
+                {
+                  "at": 13430,
+                  "op": "playing",
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272
+                },
+                {
+                  "at": 22427,
+                  "op": "settle",
+                  "t": 10,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 5,
+                  "cards": []
+                },
+                {
+                  "at": 23036,
+                  "op": "settle",
+                  "t": 0.5,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 23036,
+                  "op": "catchup-queued",
+                  "t": 0.5
+                },
+                {
+                  "at": 23043,
+                  "op": "catchup-start",
+                  "t": 0.5,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 29361,
+                  "op": "catchup-rendered",
+                  "t": 0.5,
+                  "aborted": false
+                },
+                {
+                  "at": 32946,
+                  "op": "settle",
+                  "t": 3,
+                  "stale": 4,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 32946,
+                  "op": "catchup-queued",
+                  "t": 3
+                },
+                {
+                  "at": 32951,
+                  "op": "catchup-start",
+                  "t": 3,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 47262,
+                  "op": "catchup-rendered",
+                  "t": 3,
+                  "aborted": false
+                },
+                {
+                  "at": 47910,
+                  "op": "playing",
+                  "t": 3.033333333333333,
+                  "ids": [
+                    "c-mutr5r",
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 13724,
+                  "ratePerSec": 1359
+                },
+                {
+                  "at": 47976,
+                  "op": "playing",
+                  "t": 3.1333333333333333,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 13860,
+                  "ratePerSec": 1359
+                }
+              ],
+              "setTimeLog": [
+                {
+                  "at": 1346,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 1349,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 6701,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 22424,
+                  "sec": 10,
+                  "settle": true
+                },
+                {
+                  "at": 22589,
+                  "sec": 0.5,
+                  "settle": true
+                },
+                {
+                  "at": 32869,
+                  "sec": 3,
+                  "settle": true
+                }
+              ],
+              "setTimeError": null,
+              "probeRun": {
+                "probed": [
+                  {
+                    "clipId": "c-mutr5rgi-1k",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "a1fd11c3e1825",
+                    "at": 1791114671229
+                  },
+                  {
+                    "clipId": "c-mutr5rge-14",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "2c7d893f5c768",
+                    "at": 1791114672351
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-12",
+                    "cardId": "chapter-bar",
+                    "identityKey": "a578059facd73",
+                    "at": 1791114673465
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-10",
+                    "cardId": "probe-typewriter",
+                    "identityKey": "1c78651c4d5d52",
+                    "at": 1791114674279
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-y",
+                    "cardId": "chapter-bar",
+                    "identityKey": "586f169a61efe",
+                    "at": 1791114675009
+                  }
+                ],
+                "running": false,
+                "done": 5,
+                "total": 5
+              },
+              "snapshotFeedHeavy": [
+                "c-mutr5rgd-y",
+                "c-mutr5rge-14"
+              ],
+              "clips": [
+                {
+                  "id": "c-mutr5rgi-1k",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1i",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1g",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1e",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1c",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1a",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-18",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-16",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rge-14",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-12",
+                  "cardId": "chapter-bar",
+                  "start": 2,
+                  "end": 8,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-10",
+                  "cardId": "probe-typewriter",
+                  "start": 2,
+                  "end": 6,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-y",
+                  "cardId": "chapter-bar",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5own-w",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5rga-x",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                }
+              ]
+            }
+          },
+          {
+            "phase": "paused-after-window",
+            "view": {
+              "at": 48083,
+              "t": 3.2333333333333334,
+              "playing": false,
+              "frontId": "B",
+              "dual": true,
+              "lowMemory": false,
+              "swapInFlight": false,
+              "swapPlaying": {
+                "lastPlan": {
+                  "at": 47976,
+                  "t": 3.1333333333333333,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ],
+                  "ok": false,
+                  "reason": "rate",
+                  "backlogMs": 13860.199999999999,
+                  "ratePerSec": 1359,
+                  "leadMs": null
+                },
+                "plans": [
+                  {
+                    "at": 13430,
+                    "t": 1,
+                    "ids": [
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 11048,
+                    "ratePerSec": 1272,
+                    "leadMs": null
+                  },
+                  {
+                    "at": 47910,
+                    "t": 3.033333333333333,
+                    "ids": [
+                      "c-mutr5rgd-10",
+                      "c-mutr5rgd-y"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 13724.300000000001,
+                    "ratePerSec": 1359,
+                    "leadMs": null
+                  },
+                  {
+                    "at": 47976,
+                    "t": 3.1333333333333333,
+                    "ids": [
+                      "c-mutr5rgd-12"
+                    ],
+                    "ok": false,
+                    "reason": "rate",
+                    "backlogMs": 13860.199999999999,
+                    "ratePerSec": 1359,
+                    "leadMs": null
+                  }
+                ],
+                "preemptCount": 0,
+                "orphan": false,
+                "playRun": {
+                  "startFrame": 90,
+                  "lastFrame": 97,
+                  "breaks": 0
+                },
+                "naturalSkips": 181,
+                "lastNaturalSkip": {
+                  "t": 7.966666666666667,
+                  "ids": [
+                    "c-mutr5rgd-12"
+                  ]
+                },
+                "naturalSkipped": []
+              },
+              "swapLog": [
+                {
+                  "at": 7543,
+                  "t": 0,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 29701,
+                  "t": 0.5,
+                  "stale": 10,
+                  "ready": true,
+                  "swapped": true
+                },
+                {
+                  "at": 47581,
+                  "t": 3,
+                  "stale": 4,
+                  "ready": true,
+                  "swapped": true
+                }
+              ],
+              "swapTrace": [
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 1948,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 0,
+                  "cards": [
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "a1fd11c3e1",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "2c7d893f5c",
+                      "record": false
+                    },
+                    {
+                      "id": "c-mutr5r",
+                      "pipeline": "heavy",
+                      "identityPrefix": "586f169a61",
+                      "record": false
+                    }
+                  ]
+                },
+                {
+                  "at": 6703,
+                  "op": "settle",
+                  "t": 0,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 6703,
+                  "op": "catchup-queued",
+                  "t": 0
+                },
+                {
+                  "at": 6705,
+                  "op": "catchup-start",
+                  "t": 0,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 7168,
+                  "op": "catchup-rendered",
+                  "t": 0,
+                  "aborted": false
+                },
+                {
+                  "at": 13430,
+                  "op": "playing",
+                  "t": 1,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 11048,
+                  "ratePerSec": 1272
+                },
+                {
+                  "at": 22427,
+                  "op": "settle",
+                  "t": 10,
+                  "stale": 0,
+                  "plan": true,
+                  "costs": 5,
+                  "cards": []
+                },
+                {
+                  "at": 23036,
+                  "op": "settle",
+                  "t": 0.5,
+                  "stale": 10,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 23036,
+                  "op": "catchup-queued",
+                  "t": 0.5
+                },
+                {
+                  "at": 23043,
+                  "op": "catchup-start",
+                  "t": 0.5,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 29361,
+                  "op": "catchup-rendered",
+                  "t": 0.5,
+                  "aborted": false
+                },
+                {
+                  "at": 32946,
+                  "op": "settle",
+                  "t": 3,
+                  "stale": 4,
+                  "plan": true,
+                  "costs": 5
+                },
+                {
+                  "at": 32946,
+                  "op": "catchup-queued",
+                  "t": 3
+                },
+                {
+                  "at": 32951,
+                  "op": "catchup-start",
+                  "t": 3,
+                  "back": true,
+                  "sameAsFront": false
+                },
+                {
+                  "at": 47262,
+                  "op": "catchup-rendered",
+                  "t": 3,
+                  "aborted": false
+                },
+                {
+                  "at": 47910,
+                  "op": "playing",
+                  "t": 3.033333333333333,
+                  "ids": [
+                    "c-mutr5r",
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 13724,
+                  "ratePerSec": 1359
+                },
+                {
+                  "at": 47976,
+                  "op": "playing",
+                  "t": 3.1333333333333333,
+                  "ids": [
+                    "c-mutr5r"
+                  ],
+                  "out": "skip-rate",
+                  "backlogMs": 13860,
+                  "ratePerSec": 1359
+                }
+              ],
+              "setTimeLog": [
+                {
+                  "at": 1346,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 1349,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 6701,
+                  "sec": 0,
+                  "settle": true
+                },
+                {
+                  "at": 22424,
+                  "sec": 10,
+                  "settle": true
+                },
+                {
+                  "at": 22589,
+                  "sec": 0.5,
+                  "settle": true
+                },
+                {
+                  "at": 32869,
+                  "sec": 3,
+                  "settle": true
+                },
+                {
+                  "at": 48081,
+                  "sec": 3.2333333333333334,
+                  "settle": true
+                }
+              ],
+              "setTimeError": null,
+              "probeRun": {
+                "probed": [
+                  {
+                    "clipId": "c-mutr5rgi-1k",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "a1fd11c3e1825",
+                    "at": 1791114671229
+                  },
+                  {
+                    "clipId": "c-mutr5rge-14",
+                    "cardId": "probe-slow-stepped",
+                    "identityKey": "2c7d893f5c768",
+                    "at": 1791114672351
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-12",
+                    "cardId": "chapter-bar",
+                    "identityKey": "a578059facd73",
+                    "at": 1791114673465
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-10",
+                    "cardId": "probe-typewriter",
+                    "identityKey": "1c78651c4d5d52",
+                    "at": 1791114674279
+                  },
+                  {
+                    "clipId": "c-mutr5rgd-y",
+                    "cardId": "chapter-bar",
+                    "identityKey": "586f169a61efe",
+                    "at": 1791114675009
+                  }
+                ],
+                "running": false,
+                "done": 5,
+                "total": 5
+              },
+              "snapshotFeedHeavy": [
+                "c-mutr5rgd-y",
+                "c-mutr5rge-14"
+              ],
+              "clips": [
+                {
+                  "id": "c-mutr5rgi-1k",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1i",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1g",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgh-1e",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1c",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgg-1a",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-18",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgf-16",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 1,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rge-14",
+                  "cardId": "probe-slow-stepped",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-12",
+                  "cardId": "chapter-bar",
+                  "start": 2,
+                  "end": 8,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-10",
+                  "cardId": "probe-typewriter",
+                  "start": 2,
+                  "end": 6,
+                  "hidden": false
+                },
+                {
+                  "id": "c-mutr5rgd-y",
+                  "cardId": "chapter-bar",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5own-w",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                },
+                {
+                  "id": "v-mutr5rga-x",
+                  "cardId": "",
+                  "start": 0,
+                  "end": 10,
+                  "hidden": false
+                }
+              ]
+            }
+          }
+        ],
+        "seekActualCosts": [
+          {
+            "identityKey": "1c78651c4d5d52",
+            "stepMs": 0.5,
+            "catchUpMs": 47.9,
+            "seekMs": 0.1,
+            "seekOk": false,
+            "vtOk": false,
+            "kind": "stepped"
+          },
+          {
+            "identityKey": "2c7d893f5c768",
+            "stepMs": 40.6,
+            "catchUpMs": 12120,
+            "seekMs": 40.2,
+            "seekOk": false,
+            "vtOk": false,
+            "capped": true,
+            "kind": "stepped"
+          },
+          {
+            "identityKey": "586f169a61efe",
+            "stepMs": 1.4,
+            "catchUpMs": 313.75,
+            "seekMs": 0.4,
+            "seekOk": false,
+            "vtOk": false,
+            "kind": "stepped"
+          },
+          {
+            "identityKey": "a1fd11c3e1825",
+            "stepMs": 41.5,
+            "catchUpMs": 1222,
+            "seekMs": 40.4,
+            "seekOk": false,
+            "vtOk": false,
+            "capped": true,
+            "kind": "stepped"
+          },
+          {
+            "identityKey": "a578059facd73",
+            "stepMs": 1.5,
+            "catchUpMs": 199.6,
+            "seekMs": 0.4,
+            "seekOk": false,
+            "vtOk": false,
+            "kind": "stepped"
+          }
+        ],
+        "settle": {
+          "settled": true,
+          "stillLive": true,
+          "feedSettled": 0,
+          "backWork": {
+            "on": true,
+            "reason": null,
+            "changes": 0,
+            "sent": 4,
+            "pauses": {}
+          },
+          "probeFrames": {
+            "frames": 3,
+            "gzFrames": 3,
+            "gzBytes": 10479,
+            "htmlBytes": 0
+          }
+        },
+        "member": {
+          "ms": 48244,
+          "stages": [
+            "http://127.0.0.1:5481",
+            "http://127.0.0.1:5482"
+          ],
+          "iframeTargets": [
+            "http://127.0.0.1:5481",
+            "http://127.0.0.1:5482",
+            "http://127.0.0.1:5486",
+            "http://127.0.0.1:5487"
+          ],
+          "caps": {
+            "A": {
+              "prerender": false,
+              "offscreenGl": true,
+              "lowMemory": false,
+              "measure": true,
+              "catchUp": true,
+              "stageId": "A"
+            },
+            "B": {
+              "prerender": false,
+              "offscreenGl": true,
+              "lowMemory": false,
+              "measure": true,
+              "catchUp": true,
+              "stageId": "B"
+            }
+          },
+          "requests": {
+            "px": 0,
+            "snap": 633,
+            "media": 12,
+            "mediaByFrameOrigin": {
+              "http://127.0.0.1:5480→http://127.0.0.1:5480": 6,
+              "http://127.0.0.1:5481→http://127.0.0.1:5481": 3,
+              "http://127.0.0.1:5482→http://127.0.0.1:5482": 3
+            }
+          },
+          "l2": {
+            "costs": 5,
+            "snapshots": 152,
+            "ranges": 3
+          },
+          "pageFp": "258acaaa7c5fe509",
+          "costPublish": {
+            "calls": 5,
+            "ok": 5,
+            "failed": 0,
+            "records": 5,
+            "lastError": null
+          },
+          "publisher": {
+            "measured": true,
+            "want": {
+              "projectId": "sp_3ogn5ez5zo2d4ubn3j7llliwal",
+              "projectRev": 1
+            },
+            "last": "plan:sp_3ogn5ez5zo2d4ubn3j7llliwal@1#clips:l6e8a11a03xrt",
+            "lastClips": [
+              "c-mutr5rgd-12",
+              "c-mutr5rgd-y",
+              "c-mutr5rge-14",
+              "c-mutr5rgf-16",
+              "c-mutr5rgf-18",
+              "c-mutr5rgg-1a",
+              "c-mutr5rgg-1c",
+              "c-mutr5rgh-1e",
+              "c-mutr5rgh-1g",
+              "c-mutr5rgh-1i",
+              "c-mutr5rgi-1k"
+            ],
+            "helloOk": true,
+            "nodeWaitMs": null,
+            "log": [
+              {
+                "at": 1791114677042,
+                "id": "plan:sp_3ogn5ez5zo2d4ubn3j7llliwal@1#clips:l6e8a11a03xrt",
+                "clips": 11,
+                "ok": true,
+                "state": "open",
+                "node": "ready"
+              }
+            ]
+          }
+        }
+      },
+      "pending": [],
+      "memberDiag": {
+        "pageErrors": [],
+        "consoleErrors": []
+      },
+      "cleanup": {
+        "deleted": "shared.admin.ok",
+        "listening": []
+      },
+      "ms": 521070,
+      "fails": []
+    },
+    "rawResultSha256": "98836068694cdfc816975bac00d04df3ec71d4e6d4b5ebee6550d04f163f2429"
+  },
+  "originalProbeSha256": "f40b58a3070bf9340d64976dcc0b9b53d4bb96a48ba55f2c5b33924ebeee5eac",
+  "diagnosticProbeSha256": "c23cefcb509c96ca096208fa05d862e0be0102c541a8dd42cfe7b33200c33e0b",
+  "acceptanceSummary": {
+    "diagnosticOnly": true,
+    "target": "113b425c3053f6e9867499f9d305aad975d5846b",
+    "run": "c10plan10042045",
+    "actualExitCode": 0,
+    "fails": [],
+    "pending": [],
+    "formalFailureRetained": true,
+    "fixtureClip": "c-mutr5rgd-12",
+    "fixture": {
+      "cardId": "chapter-bar",
+      "start": 2,
+      "duration": 6,
+      "stepMs": 1.5,
+      "catchUpMs": 199.6,
+      "vtOk": false,
+      "tier": "catchup-b"
+    },
+    "costRecords": [
+      {
+        "identityKey": "1c78651c4d5d52",
+        "stepMs": 0.5,
+        "catchUpMs": 47.9,
+        "seekMs": 0.1,
+        "seekOk": false,
+        "vtOk": false,
+        "kind": "stepped"
+      },
+      {
+        "identityKey": "2c7d893f5c768",
+        "stepMs": 40.6,
+        "catchUpMs": 12120,
+        "seekMs": 40.2,
+        "seekOk": false,
+        "vtOk": false,
+        "capped": true,
+        "kind": "stepped"
+      },
+      {
+        "identityKey": "586f169a61efe",
+        "stepMs": 1.4,
+        "catchUpMs": 313.75,
+        "seekMs": 0.4,
+        "seekOk": false,
+        "vtOk": false,
+        "kind": "stepped"
+      },
+      {
+        "identityKey": "a1fd11c3e1825",
+        "stepMs": 41.5,
+        "catchUpMs": 1222,
+        "seekMs": 40.4,
+        "seekOk": false,
+        "vtOk": false,
+        "capped": true,
+        "kind": "stepped"
+      },
+      {
+        "identityKey": "a578059facd73",
+        "stepMs": 1.5,
+        "catchUpMs": 199.6,
+        "seekMs": 0.4,
+        "seekOk": false,
+        "vtOk": false,
+        "kind": "stepped"
+      }
+    ],
+    "clips": [
+      {
+        "id": "c-mutr5rgi-1k",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 1,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgh-1i",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 1,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgh-1g",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 1,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgh-1e",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 1,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgg-1c",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 1,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgg-1a",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 1,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgf-18",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 1,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgf-16",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 1,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rge-14",
+        "cardId": "probe-slow-stepped",
+        "start": 0,
+        "end": 10,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgd-12",
+        "cardId": "chapter-bar",
+        "start": 2,
+        "end": 8,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgd-10",
+        "cardId": "probe-typewriter",
+        "start": 2,
+        "end": 6,
+        "hidden": false
+      },
+      {
+        "id": "c-mutr5rgd-y",
+        "cardId": "chapter-bar",
+        "start": 0,
+        "end": 10,
+        "hidden": false
+      },
+      {
+        "id": "v-mutr5own-w",
+        "cardId": "",
+        "start": 0,
+        "end": 10,
+        "hidden": false
+      },
+      {
+        "id": "v-mutr5rga-x",
+        "cardId": "",
+        "start": 0,
+        "end": 10,
+        "hidden": false
+      }
+    ],
+    "states": [
+      {
+        "phase": "before-seek",
+        "at": 32864,
+        "t": 0.5,
+        "playing": false,
+        "frontId": "A",
+        "dual": true,
+        "swapInFlight": false,
+        "heavy": [
+          "c-mutr5rgd-y",
+          "c-mutr5rge-14",
+          "c-mutr5rgf-16",
+          "c-mutr5rgf-18",
+          "c-mutr5rgg-1a",
+          "c-mutr5rgg-1c",
+          "c-mutr5rgh-1e",
+          "c-mutr5rgh-1g",
+          "c-mutr5rgh-1i",
+          "c-mutr5rgi-1k"
+        ],
+        "fixtureHeavy": false,
+        "lastPlan": {
+          "at": 13430,
+          "t": 1,
+          "ids": [
+            "c-mutr5rgd-y"
+          ],
+          "ok": false,
+          "reason": "rate",
+          "backlogMs": 11048,
+          "ratePerSec": 1272,
+          "leadMs": null
+        },
+        "playRun": {
+          "startFrame": 0,
+          "lastFrame": 299,
+          "breaks": 0
+        }
+      },
+      {
+        "phase": "after-seek",
+        "at": 32892,
+        "t": 3,
+        "playing": false,
+        "frontId": "A",
+        "dual": true,
+        "swapInFlight": false,
+        "heavy": [
+          "c-mutr5rgd-12",
+          "c-mutr5rge-14"
+        ],
+        "fixtureHeavy": true,
+        "lastPlan": {
+          "at": 13430,
+          "t": 1,
+          "ids": [
+            "c-mutr5rgd-y"
+          ],
+          "ok": false,
+          "reason": "rate",
+          "backlogMs": 11048,
+          "ratePerSec": 1272,
+          "leadMs": null
+        },
+        "playRun": {
+          "startFrame": 0,
+          "lastFrame": 299,
+          "breaks": 0
+        }
+      },
+      {
+        "phase": "settled-before-play",
+        "at": 47811,
+        "t": 3,
+        "playing": false,
+        "frontId": "B",
+        "dual": true,
+        "swapInFlight": false,
+        "heavy": [
+          "c-mutr5rgd-12",
+          "c-mutr5rge-14"
+        ],
+        "fixtureHeavy": true,
+        "lastPlan": {
+          "at": 13430,
+          "t": 1,
+          "ids": [
+            "c-mutr5rgd-y"
+          ],
+          "ok": false,
+          "reason": "rate",
+          "backlogMs": 11048,
+          "ratePerSec": 1272,
+          "leadMs": null
+        },
+        "playRun": {
+          "startFrame": 0,
+          "lastFrame": 299,
+          "breaks": 0
+        }
+      },
+      {
+        "phase": "after-play",
+        "at": 47824,
+        "t": 3,
+        "playing": true,
+        "frontId": "B",
+        "dual": true,
+        "swapInFlight": false,
+        "heavy": [
+          "c-mutr5rgd-12",
+          "c-mutr5rge-14"
+        ],
+        "fixtureHeavy": true,
+        "lastPlan": {
+          "at": 13430,
+          "t": 1,
+          "ids": [
+            "c-mutr5rgd-y"
+          ],
+          "ok": false,
+          "reason": "rate",
+          "backlogMs": 11048,
+          "ratePerSec": 1272,
+          "leadMs": null
+        },
+        "playRun": {
+          "startFrame": 90,
+          "lastFrame": 90,
+          "breaks": 0
+        }
+      },
+      {
+        "phase": "playing-poll",
+        "at": 47831,
+        "t": 3,
+        "playing": true,
+        "frontId": "B",
+        "dual": true,
+        "swapInFlight": false,
+        "heavy": [
+          "c-mutr5rgd-12",
+          "c-mutr5rge-14"
+        ],
+        "fixtureHeavy": true,
+        "lastPlan": {
+          "at": 13430,
+          "t": 1,
+          "ids": [
+            "c-mutr5rgd-y"
+          ],
+          "ok": false,
+          "reason": "rate",
+          "backlogMs": 11048,
+          "ratePerSec": 1272,
+          "leadMs": null
+        },
+        "playRun": {
+          "startFrame": 90,
+          "lastFrame": 90,
+          "breaks": 0
+        }
+      },
+      {
+        "phase": "playing-poll",
+        "at": 47948,
+        "t": 3.033333333333333,
+        "playing": true,
+        "frontId": "B",
+        "dual": true,
+        "swapInFlight": false,
+        "heavy": [
+          "c-mutr5rgd-12",
+          "c-mutr5rge-14"
+        ],
+        "fixtureHeavy": true,
+        "lastPlan": {
+          "at": 47910,
+          "t": 3.033333333333333,
+          "ids": [
+            "c-mutr5rgd-10",
+            "c-mutr5rgd-y"
+          ],
+          "ok": false,
+          "reason": "rate",
+          "backlogMs": 13724.300000000001,
+          "ratePerSec": 1359,
+          "leadMs": null
+        },
+        "playRun": {
+          "startFrame": 90,
+          "lastFrame": 91,
+          "breaks": 0
+        }
+      },
+      {
+        "phase": "playing-poll",
+        "at": 48055,
+        "t": 3.1666666666666665,
+        "playing": true,
+        "frontId": "B",
+        "dual": true,
+        "swapInFlight": false,
+        "heavy": [
+          "c-mutr5rgd-y",
+          "c-mutr5rge-14"
+        ],
+        "fixtureHeavy": false,
+        "lastPlan": {
+          "at": 47976,
+          "t": 3.1333333333333333,
+          "ids": [
+            "c-mutr5rgd-12"
+          ],
+          "ok": false,
+          "reason": "rate",
+          "backlogMs": 13860.199999999999,
+          "ratePerSec": 1359,
+          "leadMs": null
+        },
+        "playRun": {
+          "startFrame": 90,
+          "lastFrame": 95,
+          "breaks": 0
+        }
+      },
+      {
+        "phase": "paused-after-window",
+        "at": 48083,
+        "t": 3.2333333333333334,
+        "playing": false,
+        "frontId": "B",
+        "dual": true,
+        "swapInFlight": false,
+        "heavy": [
+          "c-mutr5rgd-y",
+          "c-mutr5rge-14"
+        ],
+        "fixtureHeavy": false,
+        "lastPlan": {
+          "at": 47976,
+          "t": 3.1333333333333333,
+          "ids": [
+            "c-mutr5rgd-12"
+          ],
+          "ok": false,
+          "reason": "rate",
+          "backlogMs": 13860.199999999999,
+          "ratePerSec": 1359,
+          "leadMs": null
+        },
+        "playRun": {
+          "startFrame": 90,
+          "lastFrame": 97,
+          "breaks": 0
+        }
+      }
+    ],
+    "snapshotCount": 8,
+    "selectorResult": {
+      "lastPlan": {
+        "at": 47976,
+        "t": 3.1333333333333333,
+        "ids": [
+          "c-mutr5rgd-12"
+        ],
+        "ok": false,
+        "reason": "rate",
+        "backlogMs": 13860.199999999999,
+        "ratePerSec": 1359,
+        "leadMs": null
+      },
+      "playRun": {
+        "startFrame": 90,
+        "lastFrame": 96,
+        "breaks": 0
+      },
+      "naturalSkips": 181
+    },
+    "cpuPreparePercent": [
+      0,
+      10
+    ],
+    "cleanup": {
+      "deleted": "shared.admin.ok",
+      "listening": []
+    },
+    "interpretation": "At t=3 fixture is in snapshotFeed.heavy; by t=3.166 it is absent. A fixture plan at t=3.133 matches original selector. Only this diagnostic passes; previous formal failure retained. No t=6 sample because original selector completes early. Greedy-at-3/until-typewriter-exits-at-6 hypothesis not established by this run; reason for heavy transition remains unresolved."
+  },
+  "transferManifest": [
+    {
+      "file": "receipt.json",
+      "bytes": 1398,
+      "sha256": "445b22de73e26812d86cac39028b4cc88ce9ac1a10bd3303f1fbd949a4e8d96c"
+    },
+    {
+      "file": "result.json",
+      "bytes": 121091,
+      "sha256": "c002098bd02b8e3cd70eefe3a18d79aa8dd134d285038f208c716bd93e193660"
+    },
+    {
+      "file": "runner-error.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "runner.log",
+      "bytes": 1584,
+      "sha256": "6a7f225a8ed39b759321e30f54a69089e24308006218f5dbeededb0d903b46e4"
+    },
+    {
+      "file": "seek-diagnostic-summary.json",
+      "bytes": 9540,
+      "sha256": "5586d4db24e968c5e474e0547a0ce4ba36f4fc1c524407f2dd4bf2a9eb243883"
+    },
+    {
+      "file": "stderr.log",
+      "bytes": 4801,
+      "sha256": "8e3e1e12173ea2f01755cf888bae3756cbc24596cd00804a757eb4176ac30a4a"
+    },
+    {
+      "file": "stdout.log",
+      "bytes": 50885,
+      "sha256": "d753d737aeba16fd626333667809dd663111d5b03e44d8e92a1ac722add8fb8a"
+    }
+  ],
+  "transferredZip": {
+    "bytes": 8731,
+    "sha256": "b6c569b22c73f7a8b82f4b28d59e2af9bb52d5192b500587e2a3de0f331ec3cd"
+  },
+  "observed": "The unchanged selector found the target plan at t=3.133 seconds. snapshotFeed heavy included the target at t=3 and omitted it at t=3.166. The diagnostic stopped early and did not sample t=6. Earlier formal failure remains unresolved; this is not a formal full C10 pass."
+}

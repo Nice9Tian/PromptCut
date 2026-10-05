@@ -1,0 +1,109 @@
+{
+  "provenance": {
+    "date": "2026-10-05",
+    "sourceCommit": "7bfe11d69463765b9091226d36366b37c34818c3",
+    "machine": "PC, isolated services and browser",
+    "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-e2e.mjs --hosted --restricted --exit-matrix --cancel-ui --nodes --roles",
+    "actualExitCode": 0,
+    "elapsedSeconds": 81,
+    "stderr": "empty apart from the user-directory notice",
+    "purpose": "plan section 11 row 15: the two mode combinations of the exit and cancel matrix that had not been run"
+  },
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_gmuagcmrqvpyqv5c434ug7rec6",
+      "where": "hosted",
+      "mode": "restricted",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": false,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": false,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 5,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": false,
+      "creatorSecondDevice": true,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": false
+    }
+  ],
+  "exitMatrix": {
+    "where": "hosted",
+    "cases": [
+      {
+        "phase": "identity",
+        "who": "host",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": null
+      },
+      {
+        "phase": "enter",
+        "who": "member",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": null
+      }
+    ],
+    "unsupportedPhases": [
+      "local-host: cloud is the host",
+      "lan-discovery: trusted hosted candidate has no LAN discovery"
+    ],
+    "creatorCancelUi": {
+      "returnedToLocal": true,
+      "savedAssociationRemoved": true,
+      "originalContentPreserved": true
+    }
+  },
+  "relocation": null,
+  "relocationBack": null,
+  "asset": {
+    "hash": "a574c2658d74db24487ff949fc31d2f6a7b8bb82d2fe6dbf6acfc8a669182466",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-0WyKBm",
+  "testIsolation": {
+    "providerConfiguration": true,
+    "firstAuthenticationControl": {
+      "hitConfirmed": true,
+      "speechPromptDismissed": false
+    }
+  }
+}

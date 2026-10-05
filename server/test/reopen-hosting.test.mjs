@@ -1,0 +1,147 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { randomBytes, createHash } from 'node:crypto';
+import { createHostingService } from '../hosting/service.mjs';
+import { startHostingHost, mirrorOf } from '../hosting/host.mjs';
+import { createBandwidth } from '../hosting/bandwidth.mjs';
+import { discoverRoom, relayFetch, authorizeRelayAsset } from '../hosting/client.mjs';
+import { startHostedCombo } from '../hosted/combo.mjs';
+import { createSharedProject, buildAuthProtocols, adminProof, makeCredential } from '../auth/client.mjs';
+import { createAssetClient } from '../asset-store/client.mjs';
+import { wsClient, waitFor, createTcpProxy } from './fake-ws-kit.mjs';
+import { createDocEndpoint } from '../render-node/session-link.mjs';
+import { createAgentLink } from '../agent/doc-link.mjs';
+const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-hosting-'));
+const key = () => randomBytes(32).toString('base64url');
+let seq = 0;
+async function ask(c, m) { const reqId = `rh-${++seq}`; c.send({ ...m, reqId }); try { return await c.next(x => x.reqId === reqId); } catch { throw new Error(`等待 ${m.type} 响应超时（秘密已省略）`); } }
+for (const mode of ['free', 'restricted']) test(`真实中继 ${mode}：登记认证、独占租约、双向编辑、带票据素材读写、删除墓碑`, { timeout: 30000 }, async t => {
+  const dir = temp(), cloud = createHostingService({ dir }); const addr = await cloud.listen(); const service = `http://127.0.0.1:${addr.port}`;
+  t.after(() => cloud.close());
+  const c = await startHostedCombo({ dataDir: temp(), docPort: 0, assetPort: 0, host: '127.0.0.1', trustLoopback: false, clusterToken: key(), log: () => {} }); t.after(() => c.close());
+  const localBase = `http://127.0.0.1:${c.docPort}`;
+  const creatorPassword = key(), password = key(), memberPassword = mode === 'free' ? password : key();
+  const p = await createSharedProject({ base: localBase, name: `isolated-reopen-${mode}`, mode, creator: { username: 'host', password: creatorPassword }, password,
+    list: [{ username: 'member', password: memberPassword }], kdf: { alg: 'pbkdf2-sha256', iter: 100000 } });
+  const docUrl = localBase.replace('http:', 'ws:');
+  const host = wsClient(docUrl, await buildAuthProtocols({ base: localBase, projectId: p.projectId, username: 'host', as: 'creator', password: creatorPassword, deviceId: 'host-original-device-0001', deviceName: 'isolated-host' })); await host.opened; t.after(() => host.close());
+  await ask(host, { type: 'project.open', projectId: p.projectId });
+  assert.equal((await ask(host, { type: 'project.op', projectId: p.projectId, opId: key(), ops: [{ op: 'set', path: '', value: { id: 'content-1', name: 'initial', tracks: [], media: [] } }] })).rev, 1);
+  const hostKey = key(), instance = key(); const states = [];
+  const outgoing = startHostingHost({ service, roomId: p.projectId, hostKey, deviceId: 'host-original-device-0001', instance, record: () => c.credentialStore.peek(p.projectId), docBase: localBase, assetBase: `http://127.0.0.1:${c.assetPort}`, state: s => states.push(s), renewMs: 500 });
+  t.after(() => outgoing.stop()); await waitFor(() => cloud.online(p.projectId), 10000, 'isolated tunnel');
+  const register = (deviceId, instanceId) => fetch(`${service}/hosting/register`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${hostKey}` },
+    body: JSON.stringify({ roomId: p.projectId, deviceId, instance: instanceId, mirror: mirrorOf(c.credentialStore.peek(p.projectId)) }) });
+  assert.equal((await register('host-original-device-0001', key())).status, 409, 'another live instance cannot take the lease');
+  assert.equal((await register('creator-second-device-001', key())).status, 409, 'creator privilege does not grant host device ownership');
+  const discover = opts => discoverRoom({ service, roomId: p.projectId, username: 'member', deviceId: 'member-original-device-01', as: 'member', password: memberPassword, ...opts });
+  await assert.rejects(discover({ password: key() }), e => e.status === 401);
+  const route = await discover();
+  const proxy = await createTcpProxy({ target: addr.port }); t.after(() => proxy.close());
+  const relayUrl = new URL(route.base); relayUrl.port = String(proxy.port);
+  let resumed = 0, resumeChecks = 0; const resumeLogs = [];
+  const endpoint = createDocEndpoint({ url: relayUrl.href, transport: 'ws', renew: false,
+    protocols: async () => [...await buildAuthProtocols({ base: route.base, fetch: relayFetch(route.access), projectId: p.projectId, username: 'member', as: 'member', password: memberPassword, deviceId: 'member-original-device-01', deviceName: 'isolated-member' }), route.routeProtocol],
+    resumeProtocols: async () => { resumeChecks++; const fresh = await discover(); return [fresh.routeProtocol]; },
+    backoff: { baseMs: 10, factor: 2, maxMs: 20, jitter: 0 }, log: (event, fields = {}) => resumeLogs.push({ event, code: fields.code, closedCode: fields.closedCode }) });
+  t.after(() => endpoint.close()); endpoint.onResume(() => { resumed++; });
+  await waitFor(() => endpoint.connected, 5000, 'relay session opened');
+  proxy.cutAll();
+  try { await waitFor(() => resumed === 1, 5000, 'relay session resumed with fresh route capability'); }
+  catch { assert.fail(JSON.stringify({ resumeChecks, stats: endpoint.stats(), events: resumeLogs })); }
+  assert.ok(resumeChecks >= 1); assert.equal(endpoint.stats().opens, 1, '接续不新建会话或丢未确认队列');
+  endpoint.close();
+  const protocols = await buildAuthProtocols({ base: route.base, fetch: relayFetch(route.access), projectId: p.projectId, username: 'member', as: 'member', password: memberPassword, deviceId: 'member-original-device-01', deviceName: 'isolated-member' });
+  const member = wsClient(route.base.replace('http:', 'ws:'), [...protocols, route.routeProtocol]); await member.opened; t.after(() => member.close());
+  assert.equal((await ask(member, { type: 'project.open', projectId: p.projectId })).rev, 1);
+  const edited = await ask(member, { type: 'project.op', projectId: p.projectId, opId: key(), ops: [{ op: 'set', path: '/name', value: 'member-edit' }] }); assert.equal(edited.rev, 2);
+  assert.equal((await ask(host, { type: 'project.open', projectId: p.projectId })).project.name, 'member-edit');
+  await ask(host, { type: 'project.op', projectId: p.projectId, opId: key(), ops: [{ op: 'set', path: '/name', value: 'host-edit' }] });
+  assert.equal((await ask(member, { type: 'project.open', projectId: p.projectId })).project.name, 'host-edit');
+  const issued = await ask(member, { type: 'auth.ticket', kind: 'asset', access: 'rw' }); assert.equal(issued.type, 'auth.ticket.ok');
+  await authorizeRelayAsset(route, issued.ticket);
+  const assets = createAssetClient({ base: route.asset, ticket: async () => issued.ticket });
+  const bytes = randomBytes(50000), hash = createHash('sha256').update(bytes).digest('hex');
+  assert.equal((await assets.put('media', bytes, { ext: 'bin' })).hash, hash); assert.deepEqual(Buffer.from(await assets.get('media', hash)), bytes);
+  const denied = await fetch(`${route.asset}/media/${hash}`); assert.equal(denied.status, 401);
+  const readonly = await ask(member, { type: 'auth.ticket', kind: 'asset', access: 'r' });
+  assert.equal(readonly.type, 'auth.ticket.ok');
+  await authorizeRelayAsset(route, readonly.ticket);
+  const read = await fetch(`${route.asset}/media/${hash}?t=${encodeURIComponent(readonly.ticket)}`);
+  assert.equal(read.status, 200); assert.deepEqual(Buffer.from(await read.arrayBuffer()), bytes);
+  const invalid = await fetch(`${route.asset}/media/${hash}?t=${encodeURIComponent(issued.ticket)}`);
+  assert.equal(invalid.status, 401, 'query parameter never grants write ticket authority');
+  for (const role of ['agent', 'render', 'page']) {
+    const delegated = await ask(member, { type: 'auth.ticket', kind: 'conn', role, ...(role === 'agent' ? { conversation: 1 } : role === 'render' ? { owner: { kind: 'user' } } : {}) });
+    assert.equal(delegated.type, 'auth.ticket.ok'); await authorizeRelayAsset(route, delegated.ticket);
+    const node = wsClient(route.base.replace('http:', 'ws:'), ['promptcut.v1', `promptcut.ticket.${delegated.ticket}`]);
+    await node.opened; t.after(() => node.close());
+    assert.equal((await ask(node, { type: 'project.open', projectId: p.projectId })).rev, 3);
+    assert.equal((await ask(node, { type: 'project.open', projectId: 'sp_aaaaaaaaaaaaaaaaaaaaaaaaaa' })).project, null, 'another room is not visible inside this authenticated tenant');
+    node.close();
+  }
+  let agentTickets = 0, failAgentTicketOnce = false;
+  const agent = createAgentLink({ url: relayUrl.href, projectId: p.projectId, protocolsFor: async conversation => {
+    agentTickets++;
+    if (failAgentTicketOnce) { failAgentTicketOnce = false; throw new Error('isolated page temporarily offline'); }
+    const delegated = await ask(member, { type: 'auth.ticket', kind: 'conn', role: 'agent', conversation });
+    assert.equal(delegated.type, 'auth.ticket.ok'); await authorizeRelayAsset(route, delegated.ticket);
+    return ['promptcut.v1', `promptcut.ticket.${delegated.ticket}`];
+  }, log: () => {} }); t.after(() => agent.close());
+  const agentConversation = agent.conversation(1); await agentConversation.open(); await agent.ready(5000);
+  const agentEndpoint = agentConversation.ep; proxy.cutAll();
+  await waitFor(() => agentTickets >= 2 && !agentEndpoint.stats().detached, 5000, 'actual delegated Agent session resumed');
+  assert.equal(agentConversation.ep === agentEndpoint, true, 'Agent retains its original session endpoint');
+  assert.equal(agentEndpoint.stats().opens, 1); assert.equal(agentEndpoint.stats().resumes, 1);
+  await ask(host, { type: 'project.op', projectId: p.projectId, opId: key(), ops: [{ op: 'set', path: '/name', value: 'agent-resumed' }] });
+  await waitFor(() => agent.replica.project?.name === 'agent-resumed', 5000, 'Agent subscription reads edit after TCP reset');
+  const ticketsBefore = agentTickets; failAgentTicketOnce = true; agentEndpoint.close();
+  await waitFor(() => agentTickets >= ticketsBefore + 2 && agentConversation.state === 'open', 5000, 'Agent automatically retries a temporarily unavailable page ticket');
+  await agent.ready(5000); assert.equal(agent.replica.project.name, 'agent-resumed');
+  agent.close();
+  const registry = fs.readFileSync(path.join(dir, 'directory.json'), 'utf8');
+  assert.equal(registry.includes('host-edit'), false); assert.equal(registry.includes(creatorPassword), false); assert.equal(registry.includes(hostKey), false);
+  const admin = async (op, fields = {}) => {
+    const ch = await ask(host, { type: 'shared.challenge' });
+    const m = await adminProof({ key: c.credentialStore.peek(p.projectId).creator.key, projectId: p.projectId, username: 'host', op, nonce: ch.nonce });
+    const r = await ask(host, { type: 'shared.admin', op, proof: { nonce: ch.nonce, m }, ...fields });
+    assert.equal(r.type, 'shared.admin.ok'); await outgoing.update(); return r;
+  };
+  const invite = await admin('invite-create', { expiresInSec: 1 });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'directory.json')))[p.projectId].mirror.invite.expiresAt, invite.expiresAt);
+  await new Promise(r => setTimeout(r, 1100));
+  const inviteResolve = await relayFetch(route.access)(`${route.base}/shared/invite/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: invite.code }) });
+  assert.equal(inviteResolve.status, 404, 'expired invite cannot admit another member');
+  await discover();
+  await admin('invite-revoke'); await discover();
+  await admin('kick', { username: 'member', deviceId: 'member-original-device-01' });
+  await assert.rejects(discover(), e => e.status === 403 && e.reason === 'banned');
+  await admin('unban', { username: 'member', deviceId: 'member-original-device-01' }); await discover();
+  const newPassword = key(), replacement = await makeCredential(newPassword, c.credentialStore.peek(p.projectId).kdf);
+  if (mode === 'free') await admin('set-password', { project: replacement });
+  else await admin('set-list', { list: [{ username: 'member', ...replacement }] });
+  await assert.rejects(discover(), e => e.status === 401);
+  await discover({ password: newPassword });
+  assert.equal((await fetch(`${route.asset}/media/${hash}?t=${encodeURIComponent(readonly.ticket)}`)).status, 401, 'permission generation invalidates previously granted routes and tickets');
+  const newCreator = key(); await admin('set-creator-password', { creator: await makeCredential(newCreator, c.credentialStore.peek(p.projectId).kdf) });
+  const creatorDiscover = password => discoverRoom({ service, roomId: p.projectId, username: 'host', as: 'creator', deviceId: 'creator-second-device-001', password });
+  await assert.rejects(creatorDiscover(creatorPassword), e => e.status === 401); await creatorDiscover(newCreator);
+  const finalRoute = await creatorDiscover(newCreator); let terminal = null;
+  const deletedEndpoint = createDocEndpoint({ url: finalRoute.base, transport: 'ws', renew: false, backoff: { baseMs: 10, factor: 2, maxMs: 20, jitter: 0 },
+    protocols: async () => [...await buildAuthProtocols({ base: finalRoute.base, fetch: relayFetch(finalRoute.access), projectId: p.projectId, username: 'host', as: 'creator', password: newCreator, deviceId: 'creator-second-device-001', deviceName: 'isolated-second' }), finalRoute.routeProtocol],
+    resumeProtocols: async () => { try { return [(await creatorDiscover(newCreator)).routeProtocol]; } catch (e) { terminal = e.reason; deletedEndpoint.close(); throw e; } }, log: () => {} });
+  t.after(() => deletedEndpoint.close()); await waitFor(() => deletedEndpoint.connected, 5000, 'live member before deletion');
+  await outgoing.stop({ deleted: true });
+  await waitFor(() => terminal === 'deleted', 5000, 'tunnel closure reaches member and trusted deletion stops resume');
+  await assert.rejects(discover(), e => e.status === 410);
+});
+test('中继速率预算跨通道、双向与全局累计，而非每条流分别限速', () => {
+  let now = 0; const b = createBandwidth({ bytesPerSecond: 100, totalBytesPerSecond: 200, now: () => now });
+  assert.equal(b.reserve('member-device', 50), 500);
+  assert.equal(b.reserve('member-device', 50), 1000);
+  assert.equal(b.reserve('other-device', 50), 750);
+  now = 2000; b.prune(); assert.equal(b.reserve('member-device', 50), 500);
+});

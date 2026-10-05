@@ -3,22 +3,23 @@
  *
  * - **开启**：放云端向托管端 `POST shared/create`（地址缺省是内置托管地址，可改，沿用 C6.5）→ 以创建者身份进入、把当前项目
  *   以根替换写进去（`enterShared`，C6.5 的路径）→ `invite-create` → 界面显示邀请链接与二维码。放本机沿用 C6.5 的本机托管
- *   （本机文档服务 `/docservice/shared/create`，要编辑器以局域网主机方式启动），不向云端登记、不出邀请链接。
+ *   （本机文档服务 `/docservice/shared/create`），以原设备绑定向云端登记并保持出站隧道。
  * - **勾上时的缺省**：放本机、自由进入、创建者用户名取设备名；项目密码与创建者密码都自动生成（各 16 个字符）并存在本机〔裁，第 6 节〕。
- * - **邀请码**：原文只在签发时回给创建者，存在他本机（`pc.shared.local`）；服务端不存原文，别的成员取不到〔裁，第 6 节〕。
+ * - **邀请码**：原文只在签发时回给创建者，存在他本机保护存储；服务端不存原文，别的成员取不到〔裁，第 6 节〕。
  * - **取消**：放云端的先把项目真身与被引用的素材原尺寸全部拉回本机（预渲染产物可以再生，不拉），再以创建者身份 `delete`，
  *   本机项目回到 `local` 空间；中途失败就恢复为开启状态。放本机的停本机托管（删掉本机文档服务里的共享项目），回到 `local` 空间。
  *
  * 界面在 `CollabSection.tsx`；连接、进入、创建者操作在 `syncManager.ts`。
  */
-import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, pushToast, whenSaved, type AdminError } from "./syncManager";
-import { errorStatus, route, type SharedMode, type Where } from "./sharedApi";
+import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, pushToast, whenSaved, recoveryRequest, type AdminError } from "./syncManager";
+import { errorStatus, route, hosted, type SharedMode, type Where } from "./sharedApi";
 import { getState } from "../../store/project";
 import { originalHashOf } from "../../render/mediaTier";
 import { enqueueExistingMedia, type EnqueueExistingResult } from "../media/assetTiers";
 import { ingestUnhashedMedia } from "../io/mediaUpload";
 import { ONLINE } from "../../online/mode";
 import { inviteLinkOf } from "../../online/invite";
+import { cacheCollabSecrets, cachedCollabSecrets } from "./collabSecrets";
 
 /* ---------------- 本机记下的东西 ---------------- */
 
@@ -52,22 +53,24 @@ function readAll(): Record<string, LocalCollab> {
 }
 
 function writeAll(all: Record<string, LocalCollab>) {
-  try {
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(all));
-  } catch {
-    /* 存不了：只影响下次打开设置时能不能直接显示密码与链接 */
-  }
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(all));
 }
 
 export function localCollab(projectId: string): LocalCollab | null {
-  return readAll()[projectId] ?? null;
+  return cachedCollabSecrets<LocalCollab>(projectId) ?? readAll()[projectId] ?? null;
 }
 
-function saveLocal(rec: LocalCollab) {
-  writeAll({ ...readAll(), [rec.projectId]: rec });
+async function saveLocal(rec: LocalCollab) {
+  const descriptor = getSyncView().association;
+  if (ONLINE) { cacheCollabSecrets(rec.projectId, rec); return; }
+  if (!descriptor || descriptor.roomId !== rec.projectId) throw new Error("当前房间的秘密无法可靠保存");
+  await recoveryRequest("settings-write", descriptor, { settings: rec });
+  cacheCollabSecrets(rec.projectId, rec);
+  const all = readAll(); delete all[rec.projectId]; writeAll(all);
 }
 
 function dropLocal(projectId: string) {
+  cacheCollabSecrets(projectId, null);
   const all = readAll();
   delete all[projectId];
   writeAll(all);
@@ -124,7 +127,7 @@ export async function createInvite(creatorPassword: string): Promise<InviteResul
     maxUses: typeof r.reply.maxUses === "number" ? r.reply.maxUses : null,
   };
   const prev = localCollab(s.projectId);
-  saveLocal({ ...(prev ?? { projectId: s.projectId, where: s.where, mode: s.mode, name: s.name, creatorUsername: s.username }), invite });
+  await saveLocal({ ...(prev ?? { projectId: s.projectId, where: s.where, mode: s.mode, name: s.name, creatorUsername: s.username }), invite });
   return { ok: true, invite };
 }
 
@@ -189,14 +192,19 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
   }
   const device = getSyncView().device;
   const entered = await enterShared(
-    { where: made.where, base: made.base, projectId: made.projectId, name: made.name, mode: made.mode, ...(o.where === "lan" ? { hostDeviceName: device?.deviceName } : {}) },
+    { where: made.where, base: made.base, projectId: made.projectId, name: made.name, mode: made.mode, service: o.where === "lan" ? hosted.resolveHostedUrl({ ui: o.hostedUrl }) : made.base, ...(o.where === "lan" ? { hostDeviceName: device?.deviceName } : {}) },
     { as: "creator", username: o.creator.username, password: o.creator.password },
+    { initialize: true },
   );
   if (!entered.ok) {
     console.warn("[collab] 以创建者身份进入没成:", entered.error);
     return { ok: false, error: o.where === "hosted" ? "unreachable" : "lan-failed" };
   }
-  saveLocal({
+  if (o.where === "lan") {
+    const descriptor = getSyncView().association;
+    if (descriptor) await recoveryRequest("activate-host", descriptor);
+  }
+  await saveLocal({
     projectId: made.projectId,
     where: made.where,
     mode: made.mode,
@@ -304,7 +312,7 @@ async function pullOriginals(hashes: string[], onProgress?: (done: number, total
 
 /**
  * 取消多用户协作（创建者）：核对创建者密码 → 放云端的先把项目真身与素材原尺寸拉回本机 → `delete` → 回到本机空间。
- * 失败时什么都没删，调用方把勾选恢复成开启。
+ * 删除前失败保留开启；服务删除成功后即使本机注销记录写失败，也不能报成房间还在。
  */
 export async function disableCollab(creatorPassword: string, onProgress?: (done: number, total: number) => void): Promise<{ ok: true } | { ok: false; error: DisableError }> {
   const s = getSyncView().shared;
@@ -330,13 +338,18 @@ export async function disableCollab(creatorPassword: string, onProgress?: (done:
     return { ok: false, error: del.error === "rate-limited" ? "rate-limited" : del.error === "forbidden" ? "forbidden" : "pull-failed" };
   }
   dropLocal(s.projectId);
+  const descriptor = getSyncView().association;
+  if (descriptor) {
+    try { await recoveryRequest("revoke", descriptor); }
+    catch { pushToast("房间已经删除，但本机注销记录未能保存。请保留项目并检查磁盘；旧房间不会重新创建。", "warn", Infinity); }
+  }
   leaveSharedToLocal(project);
   return { ok: true };
 }
 
 /** 创建者在成员浮层或设置里改了密码：本机记下的那份跟着换（这台设备上没开启过的不记） */
-export function rememberPasswords(projectId: string, p: { creatorPassword?: string; projectPassword?: string }) {
+export async function rememberPasswords(projectId: string, p: { creatorPassword?: string; projectPassword?: string }) {
   const prev = localCollab(projectId);
   if (!prev) return;
-  saveLocal({ ...prev, ...p });
+  await saveLocal({ ...prev, ...p });
 }

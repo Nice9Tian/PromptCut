@@ -25,6 +25,7 @@ import crypto from 'node:crypto';
 import { createAssetHarness, ROOT } from './fake-asset-service.mjs';
 import { BakeStoreError, bakeUrlOf, createBakeStore, setBakeRemote, bakeRemote } from '../bake-store.mjs';
 import { createAssetClient } from '../asset-store/client.mjs';
+import { refusingPort } from './fake-ws-kit.mjs';
 
 const harness = createAssetHarness();
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-bake-store-test-'));
@@ -158,9 +159,9 @@ test('BKA-4 素材服务不可达 / 拒绝:回清楚的错(写明地址与原因
   const none = createBakeStore({ indexDir: indexDir(), origin: () => null, remote: () => null });
   await assert.rejects(none.put('aaaaaaaaaaaa', png()), (e) => e instanceof BakeStoreError && e.kind === 'asset-service' && /素材服务不可达.*取不到素材服务的地址/.test(e.message));
 
-  const s = await listen(() => {});
-  const closed = s.origin;
-  await closeServer(s.server);
+  const s = await refusingPort();
+  after(() => s.close());
+  const closed = `http://127.0.0.1:${s.port}`;
   const down = createBakeStore({ indexDir: indexDir(), origin: () => closed, remote: () => null, retries: 0, timeoutMs: 3000 });
   await assert.rejects(down.put('aaaaaaaaaaaa', png()), (e) => e instanceof BakeStoreError && e.message.includes(`素材服务不可达(${closed}/api/asset)`) && /写入/.test(e.message));
   await assert.rejects(down.migrateLegacy('aaaaaaaaaaaa', 'bake-a-aaaaaaaaaaaa.png'), (e) => e instanceof BakeStoreError && e.message.includes(closed));
@@ -226,9 +227,9 @@ test('BKA-6 共享项目:登记了远程素材服务时写入后再推一份过�
   assert.ok(await until(() => JSON.parse(fs.readFileSync(path.join(dir, '555555555555.json'), 'utf8')).pushed === remote.base), '索引记下推到哪一台');
 
   // 推失败(远程连不上):写入照常成功;换回能连的远程后,下次命中时补推
-  const s = await listen(() => {});
-  const closed = s.origin;
-  await closeServer(s.server);
+  const s = await refusingPort();
+  after(() => s.close());
+  const closed = `http://127.0.0.1:${s.port}`;
   remoteClient = createAssetClient({ base: `${closed}/api/asset`, retries: 0, timeoutMs: 2000 });
   const f = await store.put('666666666666', png(400));
   assert.ok(await until(() => events.some((x) => x.ev === 'bake.push-failed' && x.key === '666666666666')), '推失败记日志,不抛');
@@ -367,10 +368,13 @@ async function serveWithEvict(pxEvict) {
   fs.mkdirSync(path.join(root, 'out', 'media'), { recursive: true });
   const saved = process.env.PROMPTCUT_EXPORT_DIR;
   delete process.env.PROMPTCUT_EXPORT_DIR;
-  const mw = a.assetServiceMiddleware(root, { pxEvict: { start: false, ...pxEvict } });
+  // These cases drive eviction explicitly; onStored must not race the pre-eviction assertion.
+  const mw = a.assetServiceMiddleware(root, { pxEvict: { start: false, ...pxEvict, options: { ...pxEvict.options, minIntervalMs: Number.MAX_SAFE_INTEGER } } });
   if (saved !== undefined) process.env.PROMPTCUT_EXPORT_DIR = saved;
   const s = await listen((req, res) => { void mw(req, res, () => { res.statusCode = 404; res.end('no route'); }); });
-  return { ...s, root, base: `${s.origin}/api/asset`, pxDir: path.join(root, 'out', 'asset-store', 'px'), evictor: await mw.pxEvictor() };
+  const evictor = await mw.pxEvictor();
+  after(async () => { await evictor?.stop(); await closeServer(s.server); });
+  return { ...s, root, base: `${s.origin}/api/asset`, pxDir: path.join(root, 'out', 'asset-store', 'px'), evictor };
 }
 
 test('BKA-11 本机素材服务的 px 超上限时按最近使用删到 90%:media 一个字节不碰,最近用过的留下', async () => {

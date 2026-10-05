@@ -1,0 +1,63 @@
+{
+  "ok": true,
+  "actualComputerRestart": false,
+  "actualHostProcessRestart": true,
+  "actualMemberProcessRestart": true,
+  "roomId": "sp_e2uowvu7stzt3esqfeh7v4aj63",
+  "sameUsers": [
+    "creator:host",
+    "member:member"
+  ],
+  "authenticatedRoles": [
+    {
+      "username": "host",
+      "creator": true,
+      "roles": [
+        "page",
+        "agent",
+        "page"
+      ]
+    },
+    {
+      "username": "member",
+      "creator": false,
+      "roles": [
+        "page"
+      ]
+    }
+  ],
+  "beforeRev": 10,
+  "afterRev": 12,
+  "hostRegistration": "online",
+  "recoveryCreateRequests": 0,
+  "bidirectionalEdits": true,
+  "ticketAsset": {
+    "ok": true,
+    "reads": [
+      {
+        "namespace": "media",
+        "status": 200,
+        "ok": true,
+        "bytes": 50000
+      },
+      {
+        "namespace": "snap",
+        "status": 200,
+        "ok": true,
+        "bytes": 50000
+      },
+      {
+        "namespace": "px",
+        "status": 200,
+        "ok": true,
+        "bytes": 50000
+      }
+    ]
+  },
+  "emptyBrowserStorage": true,
+  "testIsolation": {
+    "providerConfiguration": true
+  },
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-MH2SCg",
+  "sourceCommit": "16f93bb05f7669166fc946552896cac35f85b749"
+}

@@ -19,6 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { b64urlEncode, nameKey, isProjectId } from './protocol.mjs';
+import { inviteDigest } from './invite.mjs';
+import { roomUnavailableReason } from '../recovery/relocation.mjs';
 
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 
@@ -159,6 +161,33 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
     peekByInviteDigest(digest) {
       const id = typeof digest === 'string' ? invites.get(digest) : undefined;
       return id ? records.get(id) ?? null : null;
+    },
+    /** A relocated invitation retains its original verifier; no invitation is regenerated. */
+    peekByInviteCode(code) {
+      const found = this.peekByInviteDigest(inviteDigest(Buffer.from(secret, 'base64url'), code));
+      if (found) return found;
+      for (const rec of records.values()) {
+        if (typeof rec.inviteDigestSecret === 'string' && rec.invite?.digest === inviteDigest(Buffer.from(rec.inviteDigestSecret, 'base64url'), code)) return rec;
+      }
+      return null;
+    },
+
+    /** Server-internal verified import. Staging is inaccessible until authority publication. */
+    installRelocated(rec) {
+      if (!rec || rec.v !== 1 || !isProjectId(rec.projectId) || typeof rec.name !== 'string' || typeof rec.ticketKey !== 'string'
+        || roomUnavailableReason(rec) !== 'relocating' || rec.relocation.phase !== 'staging' || rec.hostingEpoch !== rec.relocation.targetEpoch) {
+        throw Object.assign(new Error('Invalid staged room'), { reason: 'bad-relocation' });
+      }
+      const prior = records.get(rec.projectId), owner = names.get(nameKey(rec.name));
+      if (owner && owner !== rec.projectId) throw Object.assign(new Error('Room name occupied'), { reason: 'name-taken' });
+      if (prior && !((roomUnavailableReason(prior) === 'relocated' && (prior.hostingEpoch ?? 1) < rec.hostingEpoch)
+        || prior.relocation?.phase === 'staging' && prior.relocation.txnId === rec.relocation.txnId && JSON.stringify(prior) === JSON.stringify(rec))) {
+        throw Object.assign(new Error('Destination room occupied'), { reason: 'relocation-conflict' });
+      }
+      if (prior && JSON.stringify(prior) === JSON.stringify(rec)) return clone(prior);
+      const draft = clone(rec); persist(draft); records.set(rec.projectId, draft);
+      if (prior) names.delete(nameKey(prior.name)); names.set(nameKey(draft.name), draft.projectId); indexInvite(draft, prior);
+      return clone(draft);
     },
 
     /**

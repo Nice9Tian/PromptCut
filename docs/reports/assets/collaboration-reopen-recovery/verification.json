@@ -1,0 +1,88 @@
+{
+  "sourceCommit": "16f93bb05f7669166fc946552896cac35f85b749",
+  "generatedAtCommit": "16f93bb05f7669166fc946552896cac35f85b749",
+  "baselineTypesExitCode": 0,
+  "finalTypesExitCode": 0,
+  "finalTestsExitCode": 0,
+  "finalDeterminismExitCode": 0,
+  "finalUnifiedExitCode": 0,
+  "finalBuildExitCode": 0,
+  "testedOn": "PC; laptop performance thresholds not certified",
+  "logs": [
+    {
+      "file": ".baseline-types.log",
+      "sourceCommit": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "exitCode": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "counts": {}
+    },
+    {
+      "file": ".baseline-tests.log",
+      "sourceCommit": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+      "exitCode": 0,
+      "sha256": "63111e01210610f6dde9dd18179a5d44ea6c2ec3a922d87a98a5665f8361c0de",
+      "counts": {
+        "tests": 4251,
+        "pass": 4249,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 2,
+        "todo": 0,
+        "duration_ms": 50943.989
+      }
+    },
+    {
+      "file": ".final-types.log",
+      "sourceCommit": "16f93bb05f7669166fc946552896cac35f85b749",
+      "exitCode": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "counts": {}
+    },
+    {
+      "file": ".final-tests.log",
+      "sourceCommit": "16f93bb05f7669166fc946552896cac35f85b749",
+      "exitCode": 0,
+      "sha256": "8c9cd56ecbe68f34ccc00afee8c4271e9927fc61ec18dac530fae2cc2f0d9ff9",
+      "counts": {
+        "tests": 4316,
+        "pass": 4316,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 54847.4761
+      }
+    },
+    {
+      "file": ".final-determinism.log",
+      "sourceCommit": "4bd3087f0c92aa5398903daee3aac45e31a7cc90",
+      "exitCode": 0,
+      "sha256": "fc192d91aff37891712df4a136d7a3646eb7c4f5c243fbe2b395330453a6f9aa",
+      "counts": {},
+      "identicalFrames": 10,
+      "differentFrames": 0
+    },
+    {
+      "file": ".final-unified.log",
+      "sourceCommit": "4bd3087f0c92aa5398903daee3aac45e31a7cc90",
+      "exitCode": 0,
+      "sha256": "c77b4238ebdb48aa53bd101d71b8306e16991e1f76c9783bc5c6801f204d1767",
+      "counts": {},
+      "functionalPass": true
+    },
+    {
+      "file": ".final-build.log",
+      "sourceCommit": "16f93bb05f7669166fc946552896cac35f85b749",
+      "exitCode": 0,
+      "sha256": "447fae4f7fcbbce0353e1ab83acc4ed04a22a3db52aede3b7fec4c82e4c43153",
+      "counts": {},
+      "built": true,
+      "warnings": [
+        "future-native-config-loader",
+        "lottie-direct-eval",
+        "ineffective-dynamic-import",
+        "chunk-size"
+      ]
+    }
+  ]
+}

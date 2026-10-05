@@ -213,7 +213,9 @@ function editorEnv(dir, extra = {}) {
   for (const d of [tmp, path.join(dir, 'data'), path.join(dir, 'card-overrides')]) fs.mkdirSync(d, { recursive: true });
   return {
     ...env, PROMPTCUT_EXPORT_DIR: dir, PROMPTCUT_DATA_DIR: path.join(dir, 'data'), PROMPTCUT_CARD_OVERRIDES: path.join(dir, 'card-overrides'),
-    PROMPTCUT_STREAMS: '0', TEMP: tmp, TMP: tmp, TMPDIR: tmp, ...extra,
+    // This probe counts only the explicitly configured creator and render host.
+    // The observer must not create an additional automatic desktop render node.
+    PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_STREAMS: '0', TEMP: tmp, TMP: tmp, TMPDIR: tmp, ...extra,
   };
 }
 
@@ -436,6 +438,13 @@ async function openEditorPage(browser, origin, label, pageErrors) {
   const online = await until(`[${label}] 页面同步接上`, () => P(page, () => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 180_000, 500);
   if (!online) throw new Error(`${label} 页面没接上同步`);
   await until(`[${label}] 页面舞台起来、测量遮罩退下`, () => P(page, () => document.querySelectorAll('iframe').length >= 2 && !document.querySelector('[data-pc="probe-gate"]')), 300_000, 500);
+  // iframe 存在时其入口模块可能还在加载，卡片 HMR 回调尚未注册。
+  // 各舞台完成握手后再进入共享项目，避免同步源码的首轮更新被启动中的舞台漏接。
+  const stagesReady = await until(`[${label}] 两个舞台完成实际握手`, () => P(page, () => {
+    const d = window.__pcPreviewDiag?.();
+    return !!d?.hostCaps?.A && !!d?.hostCaps?.B;
+  }), 180_000, 100);
+  if (!stagesReady) throw new Error(`${label} 两个舞台没有完成握手`);
   await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
   return page;
 }
@@ -554,7 +563,8 @@ async function runCreator(out) {
       proto.request = function (msg, ...rest) { if (msg?.type === 'service.watch') window.__t9AssetLink = this; return orig.call(this, msg, ...rest); };
       proto.__t9Wrapped = true;
     });
-    const entered = await P(page, async (candidate, cred) => (await import('/src/editor/sync/syncManager.ts')).enterShared(candidate, cred),
+    // This is the fixture's creation step, distinct from the observer's later entry.
+    const entered = await P(page, async (candidate, cred) => (await import('/src/editor/sync/syncManager.ts')).enterShared(candidate, cred, { initialize: true }),
       { where: shared.where, base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode }, { as: 'creator', username: 'creator', password: creatorPw });
     if (!entered?.ok) throw new Error(`创建者进不去共享项目:${JSON.stringify(entered)}`);
     const pushed = await until('[creator] 用户卡传上内容库', async () => {

@@ -14,9 +14,10 @@ import { devOrigin } from './probes/probe-connect.mjs';
 // 原来写死的 5192 是用户常驻编辑台(5190)的舞台端口,别碰
 const origin = process.env.PC_FRAME_TEST_URL || devOrigin();
 const root = path.resolve('out', `frame-verification-${Date.now()}`);
-await fs.mkdir('out/media', { recursive: true });
+const isolatedMedia = process.env.PC_FRAME_MEDIA_DIR || path.resolve('out/media');
+await fs.mkdir(isolatedMedia, { recursive: true });
 const name = `frame-verification-${Date.now()}.webm`;
-const media = path.resolve('out/media', name);
+const media = path.join(isolatedMedia, name);
 const ffmpeg = await findFfmpeg();
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=10:d=2', '-c:v', 'libvpx-vp9', '-y', media]);
 const project = { id: 'verification', width: 320, height: 180, fps: 10, duration: 1, media: [{ id: 'video', kind: 'video', name, url: '/@media/' + name }], tracks: [

@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "mode": "free",
+  "roomId": "sp_gimuabdquisswgm32dhuem2aqo",
+  "role": "member",
+  "username": "browser-member",
+  "actualUiRefresh": true,
+  "sameBrowserIdentity": true,
+  "version": 4,
+  "bidirectionalEdits": true,
+  "location": "hosted",
+  "localApiRequests": 0,
+  "evidenceDirectory": "test-temp:pc-reopen-online-Seq96E"
+}

@@ -1,0 +1,583 @@
+{
+  "capturedAt": "2026-10-05T01:41:12.4909826+09:00",
+  "readOnlyPreflight": true,
+  "targetProductCommit": "b09885db74fa13091b9e3bf59969a0adeb2b1663",
+  "targetNativeCommit": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
+  "repositories": {
+    "main": {
+      "head": "6c8b8cbbad7f5da69998777a75ccd03d5d2d901b",
+      "branch": "main",
+      "clean": true,
+      "statusExitCode": 0
+    },
+    "acceptance": {
+      "head": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+      "branch": "codex/reopen-laptop-stream-acceptance",
+      "clean": true,
+      "statusExitCode": 0
+    }
+  },
+  "targetObjects": [
+    {
+      "commit": "b09885db74fa13091b9e3bf59969a0adeb2b1663",
+      "present": false,
+      "exitCode": 128
+    },
+    {
+      "commit": "1ec99174139a3375270bb4edd046506c1ccb7b8c",
+      "present": false,
+      "exitCode": 128
+    }
+  ],
+  "windows": {
+    "edition": "Enterprise",
+    "build": "26200",
+    "ubr": 9457
+  },
+  "virtualization": {
+    "sandboxExeExists": false,
+    "sandboxCommandFound": false,
+    "vmTools": [
+      {
+        "name": "VBoxManage.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "vmrun.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "vmware.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "qemu-system-x86_64.exe",
+        "found": false,
+        "invoked": false
+      }
+    ],
+    "knownVmToolPathsPresent": 0,
+    "vmmsServiceExists": false,
+    "vmmsServiceRunning": false,
+    "hyperVInventory": {
+      "attempted": false,
+      "vmCount": null,
+      "windowsGuestConfirmed": false,
+      "error": null
+    },
+    "virtualBoxDefaultHomePresent": false,
+    "vmwareDefaultHomePresent": false,
+    "runningVmProcessCount": 0,
+    "confirmedIndependentWindowsEnvironment": false,
+    "coverage": "Known installed executables, running VM service/process metadata and default VM home existence only; no guests/configs/user data opened, no service/VM launched."
+  },
+  "association": {
+    "readOnlyApi": "AssocQueryStringW(flags=0,ASSOCSTR_EXECUTABLE=2,.proc,open)",
+    "apiHresult": 0,
+    "effectiveExeBasename": "promptcut.exe",
+    "effectiveExeExists": true,
+    "userChoiceExists": false,
+    "userChoiceHasProgId": false,
+    "mergedExtensionRegistrationExists": true,
+    "userChoiceMatchesMergedExtension": null,
+    "effectiveExeHasExpectedTestShellBasename": false,
+    "commandOrSIDOrHashPrinted": false,
+    "actualExplorerDoubleClickTested": false,
+    "explorerCachedResolutionUnverified": true
+  },
+  "native": {
+    "tools": [
+      {
+        "name": "node.exe",
+        "found": true,
+        "invoked": false
+      },
+      {
+        "name": "cargo.exe",
+        "found": true,
+        "invoked": false
+      },
+      {
+        "name": "rustc.exe",
+        "found": true,
+        "invoked": false
+      },
+      {
+        "name": "cl.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "csc.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "dotnet.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "MSBuild.exe",
+        "found": false,
+        "invoked": false
+      },
+      {
+        "name": "vswhere.exe",
+        "found": false,
+        "invoked": false
+      }
+    ],
+    "frameworkCscExists": true,
+    "readOnlyPInvokeCompilationSucceeded": true,
+    "knownFixtureDirectoryCount": 0,
+    "fixtureMetadata": [],
+    "localNativeProbeSourceExists": true,
+    "localNativeFixtureSourceExists": true,
+    "taskWorkNativeHelperCount": 0,
+    "developmentExeExists": false,
+    "verifiedIndependentTestShellAvailable": false,
+    "newTargetSourceAvailable": false,
+    "fixtureBuildOrProductLaunchPerformed": false,
+    "knownFixtureCoverage": "Only dedicated pc-reopen-native-* temporary directories and task work helper metadata; no .proc contents or credentials read."
+  },
+  "taskCommands": [
+    {
+      "name": "git HEAD",
+      "command": "git.exe rev-parse HEAD",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git branch",
+      "command": "git.exe branch --show-current",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git status",
+      "command": "git.exe status --porcelain",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git HEAD",
+      "command": "git.exe rev-parse HEAD",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git branch",
+      "command": "git.exe branch --show-current",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git status",
+      "command": "git.exe status --porcelain",
+      "exitCode": 0,
+      "stderrPresent": false
+    },
+    {
+      "name": "git target commit existence",
+      "command": "git.exe cat-file -e b09885db74fa13091b9e3bf59969a0adeb2b1663^{commit}",
+      "exitCode": 128,
+      "stderrPresent": true
+    },
+    {
+      "name": "git target commit existence",
+      "command": "git.exe cat-file -e 1ec99174139a3375270bb4edd046506c1ccb7b8c^{commit}",
+      "exitCode": 128,
+      "stderrPresent": true
+    }
+  ],
+  "unmeasured": [
+    "Actual Explorer default-association double click",
+    "Target b09885db/1ec99174 local source/probe validation",
+    "New target isolated test shell build and launch",
+    "VM guest usability and Windows guest identity",
+    "Default association registration or changes",
+    "Explorer cache behavior and actual executable launch",
+    "Room/identity recovery in native double click"
+  ],
+  "coordination": {
+    "targetThread": "01a102a0-9ace-7880-8e9c-13491eac48e5",
+    "sendMessageToolAvailable": false,
+    "messageSent": false,
+    "reason": "No read_thread/send_message_to_thread or tool-search capability exposed in current callable tool inventory; no bypass attempted."
+  },
+  "boundaries": {
+    "uiLaunched": false,
+    "productLaunched": false,
+    "serviceLaunched": false,
+    "componentInstalledOrEnabled": false,
+    "associationChanged": false,
+    "userShellEnded": false,
+    "computerUseInvoked": false,
+    "networkChanged": false,
+    "realProjectsOrCredentialsRead": false
+  },
+  "exitCode": 0,
+  "receivedVia": "Codex read_thread of completed laptop task",
+  "localRawArtifactVerified": false,
+  "remoteEvidence": {
+    "directory": "laptop-task-worktree:work/native-gate-preflight-1005/",
+    "files": [
+      {
+        "file": "assessment.md",
+        "bytes": 3612,
+        "sha256": "91942558c7a8d992f557859b7082308e50db6c90ba5008ccc4895b43543e5805"
+      },
+      {
+        "file": "execution-receipt.json",
+        "bytes": 1166,
+        "sha256": "bd2146a12066b8891837daf64de399953d2f62b65e1fa0a16005cc62707a4df9"
+      },
+      {
+        "file": "preflight.ps1",
+        "bytes": 10236,
+        "sha256": "66732912d9ad10ff3e9b20dcbc6462e1aa882a71f72ed7a90ec365b516b19a2e"
+      },
+      {
+        "file": "report.json",
+        "bytes": 6488,
+        "sha256": "e4a22d71c82b5ad0424b305891a35225dbf521b51e2b95b5e2bd2809c720b36c"
+      },
+      {
+        "file": "toolchain-supplement.json",
+        "bytes": 287,
+        "sha256": "61b18979c2a193665c2654631744934285abb1e07f85717a5f2862074b4b0cd5"
+      }
+    ],
+    "hashScope": "Hashes reported by remote task; local copies were not independently hashed."
+  },
+  "toolchainSupplement": {
+    "vcToolsInstallationVersion": "17.13.35919.96",
+    "vswhereStandardLocationExists": true,
+    "windowsSdkHeaderVersionCount": 1,
+    "compilerBuildTested": false,
+    "knownIndependentShellAvailable": false
+  },
+  "preliminaryFailures": [
+    {
+      "exitCode": 1,
+      "gitObjectExit": 129,
+      "cause": "PowerShell quoting caused a malformed initial git cat-file command; correctly quoted preflight separately returned 128 for missing target commits."
+    },
+    {
+      "exitCode": 1,
+      "cause": "Windows literal rg wildcard path error 123; subsequent explicit-file/glob searches succeeded."
+    }
+  ],
+  "initialSnapshotOnly": true,
+  "sourcePreparation": {
+    "receivedVia": "Codex read_thread of completed laptop task",
+    "receivedAt": "2026-10-04T17:45:11.306Z",
+    "localRawArtifactVerified": false,
+    "remoteThread": "01a105f3-f710-7322-a95c-b7e4dad6e0e6",
+    "remoteTurn": "01a107f4-afbc-7812-8601-5373076060bc",
+    "receipt": {
+      "target": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "startedAt": "2026-10-04T17:33:30.468Z",
+      "registryPackagesVerified": 511,
+      "publicResourceVerification": "<laptop-repository>\\.worktrees\\reopen-laptop-stream-acceptance\\work\\native-gate-preflight-1005\\source-5998\\public-resource-verification.json",
+      "isolationDifferences": [
+        "Copied only verified public chrome/ffmpeg/python into ignored owned checkout runtime",
+        "CARGO_HOME and CARGO_NET_OFFLINE set only on preparation child environment; existing rustup/toolchain read only",
+        "Original development node_modules resolved by committed generator; lock files already matched",
+        "Generated test-only Rust/config changes confined to new OS TEMP fixture by committed generator",
+        "Process-only RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc selects already installed MSVC toolchain; global default unchanged"
+      ],
+      "cargoHome": "<laptop-repository>\\.worktrees\\reopen-laptop-stream-acceptance\\work\\native-gate-preflight-1005\\source-5998\\public-resources-v2\\cargo-home",
+      "windowsHide": true,
+      "metadata": {
+        "command": "cargo metadata --locked --offline --format-version 1",
+        "actualExitCode": 0,
+        "elapsedMs": 979
+      },
+      "build": {
+        "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-native-fixture.mjs --build --standalone-launch",
+        "actualExitCode": 0,
+        "startedAt": "2026-10-04T17:33:31.449Z",
+        "pid": 14036,
+        "elapsedMs": 114827,
+        "phases": [
+          {
+            "phase": "copy-dependencies",
+            "sourceCommit": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+            "fixtureDirectory": "<test-temp>\\pc-reopen-native-FeMRuw"
+          },
+          {
+            "phase": "compile-isolated-native",
+            "sourceCommit": "5998b9fd8250805da2806e0c17c04679317cb5b4"
+          },
+          {
+            "phase": "ready",
+            "fixtureFile": "<test-temp>\\pc-reopen-native-FeMRuw\\fixture.json",
+            "sourceCommit": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+            "exeSha256": "cbd0ce55e7d8c5a8f10effeefd6debbc0cf5ceccaffd064068c33df88d8903ad",
+            "patches": [
+              "test editor URL",
+              "test port with unchanged +1/+2 stage derivation",
+              "test sidecar port",
+              "never reuse an existing editor service",
+              "strict refusal before any occupied test port is contacted",
+              "test export directory, including menu commands",
+              "stable test Node data and sidecar logs",
+              "isolated main WebView2 profile",
+              "test-only Explorer environment bootstrap; only owned proc files and fixed private directories",
+              "matching isolated agent WebView2 profile",
+              "unique single-instance and plugin storage identity; no bundle or file associations; test origin capability"
+            ]
+          }
+        ]
+      },
+      "fixture": {
+        "file": "<test-temp>\\pc-reopen-native-FeMRuw\\fixture.json",
+        "sourceCommit": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+        "identifier": "com.promptcut.reopen.0ce80045febf906a",
+        "exeSha256": "cbd0ce55e7d8c5a8f10effeefd6debbc0cf5ceccaffd064068c33df88d8903ad",
+        "ownedRoot": "<test-temp>\\pc-reopen-native-FeMRuw",
+        "loaderVerified": true,
+        "copies": [
+          {
+            "exe": "<test-temp>\\pc-reopen-native-FeMRuw\\copy-A\\promptcut-recovery-test.exe",
+            "runtime": "<test-temp>\\pc-reopen-native-FeMRuw\\copy-A\\runtime"
+          },
+          {
+            "exe": "<test-temp>\\pc-reopen-native-FeMRuw\\copy-B\\promptcut-recovery-test.exe",
+            "runtime": "<test-temp>\\pc-reopen-native-FeMRuw\\copy-B\\runtime"
+          }
+        ],
+        "standaloneLaunch": true,
+        "installerProduced": false,
+        "fileAssociationsChanged": false,
+        "existingRuntimeModified": false
+      },
+      "previousFailedAttempt": "<laptop-repository>\\.worktrees\\reopen-laptop-stream-acceptance\\work\\native-gate-preflight-1005\\source-5998\\native-preparation-receipt.json",
+      "rustupToolchain": "stable-x86_64-pc-windows-msvc",
+      "finalStates": {
+        "main": {
+          "head": "6c8b8cbbad7f5da69998777a75ccd03d5d2d901b",
+          "trackedClean": true
+        },
+        "acceptance": {
+          "head": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "trackedClean": true
+        },
+        "ownedCheckout": {
+          "head": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+          "trackedClean": true
+        }
+      },
+      "nativeAppStarted": false,
+      "servicesStarted": false,
+      "browserStarted": false,
+      "notTested": [
+        "OS default double-click",
+        "native recovery"
+      ]
+    },
+    "checkpoint": {
+      "target": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "buildActualExitCode": 0,
+      "buildElapsedMs": 114827,
+      "fixtureLoaderVerified": true,
+      "exeSha256": "cbd0ce55e7d8c5a8f10effeefd6debbc0cf5ceccaffd064068c33df88d8903ad",
+      "identifier": "com.promptcut.reopen.0ce80045febf906a",
+      "fixtureFile": "<test-temp>\\pc-reopen-native-FeMRuw\\fixture.json",
+      "states": {
+        "main": {
+          "head": "6c8b8cbbad7f5da69998777a75ccd03d5d2d901b",
+          "trackedClean": true
+        },
+        "acceptance": {
+          "head": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "trackedClean": true
+        },
+        "ownedCheckout": {
+          "head": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+          "trackedClean": true
+        }
+      },
+      "defaultToolchain": "stable-x86_64-pc-windows-gnu (default)",
+      "previousFailedGNUAttemptRetained": true,
+      "previousPathLengthFailureRetained": true,
+      "nativeAppStarted": false,
+      "servicesStarted": false,
+      "browserStarted": false,
+      "fileAssociationsChanged": false,
+      "waitingForAssignment": true,
+      "notTested": [
+        "OS default double-click",
+        "native recovery"
+      ],
+      "checkedAt": "2026-10-04T17:36:08.298Z",
+      "evidenceDirectory": "<laptop-repository>\\.worktrees\\reopen-laptop-stream-acceptance\\work\\native-gate-preflight-1005\\source-5998\\native-evidence",
+      "evidenceManifestSha256": "c356721c5ef5001025a0ef8b748127fffed688b047bf494a7ef6c8ffd349aae4"
+    },
+    "resourceDownload": {
+      "command": "GET http://<test-PC-LAN>:52031/native-public-resources.zip",
+      "startedAt": "2026-10-04T17:27:52.237Z",
+      "expectedBytes": 628337069,
+      "expectedSha256": "698d72516d311e3fb94cae57a553d704c5f161fcb722331db3f043c9bad41420",
+      "actualExitCode": 0,
+      "httpStatus": 200,
+      "bytes": 628337069,
+      "sha256": "698d72516d311e3fb94cae57a553d704c5f161fcb722331db3f043c9bad41420",
+      "elapsedMs": 7722
+    },
+    "resourceVerification": {
+      "target": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "actualExitCode": 0,
+      "zipEntryCount": 5733,
+      "verifiedPublicFileCount": 4940,
+      "verifiedPublicBytes": 1410787993,
+      "manifestSha256": "a4e052d9df78a0d6b32bdb6d6b163d23bf1d5433957adb7db716a2c508e69745",
+      "cargoLockMatches": true,
+      "missingFiles": [],
+      "extraFiles": [],
+      "linksOrReparsePoints": false,
+      "output": "<laptop-repository>\\.worktrees\\reopen-laptop-stream-acceptance\\work\\native-gate-preflight-1005\\source-5998\\public-resources-v2",
+      "elapsedMs": 24875,
+      "registryPackages": 511,
+      "indexEntries": 458,
+      "previousAttempt": {
+        "actualExitCode": 1,
+        "error": "WinError 206: filename or extension too long",
+        "partialDirectoryPreserved": "<laptop-repository>\\.worktrees\\reopen-laptop-stream-acceptance\\work\\native-gate-preflight-1005\\source-5998\\public-resources",
+        "change": "Use extended-length Windows paths in fresh public-resources-v2; no OS setting change"
+      }
+    },
+    "gnuFailedPreparation": {
+      "target": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "startedAt": "2026-10-04T17:31:34.923Z",
+      "registryPackagesVerified": 511,
+      "publicResourceVerification": "<laptop-repository>\\.worktrees\\reopen-laptop-stream-acceptance\\work\\native-gate-preflight-1005\\source-5998\\public-resource-verification.json",
+      "isolationDifferences": [
+        "Copied only verified public chrome/ffmpeg/python into ignored owned checkout runtime",
+        "CARGO_HOME and CARGO_NET_OFFLINE set only on preparation child environment; existing rustup/toolchain read only",
+        "Original development node_modules resolved by committed generator; lock files already matched",
+        "Generated test-only Rust/config changes confined to new OS TEMP fixture by committed generator"
+      ],
+      "cargoHome": "<laptop-repository>\\.worktrees\\reopen-laptop-stream-acceptance\\work\\native-gate-preflight-1005\\source-5998\\public-resources-v2\\cargo-home",
+      "windowsHide": true,
+      "metadata": {
+        "command": "cargo metadata --locked --offline --format-version 1",
+        "actualExitCode": 0,
+        "elapsedMs": 22741
+      },
+      "build": {
+        "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-native-fixture.mjs --build --standalone-launch",
+        "actualExitCode": 1,
+        "startedAt": "2026-10-04T17:31:57.665Z",
+        "pid": 26300,
+        "elapsedMs": 25484,
+        "phases": [
+          {
+            "phase": "copy-dependencies",
+            "sourceCommit": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+            "fixtureDirectory": "<test-temp>\\pc-reopen-native-vEkNKH"
+          },
+          {
+            "phase": "compile-isolated-native",
+            "sourceCommit": "5998b9fd8250805da2806e0c17c04679317cb5b4"
+          }
+        ]
+      },
+      "fixture": null,
+      "finalStates": {
+        "main": {
+          "head": "6c8b8cbbad7f5da69998777a75ccd03d5d2d901b",
+          "trackedClean": true
+        },
+        "acceptance": {
+          "head": "aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140",
+          "trackedClean": true
+        },
+        "ownedCheckout": {
+          "head": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+          "trackedClean": true
+        }
+      },
+      "nativeAppStarted": false,
+      "servicesStarted": false,
+      "browserStarted": false,
+      "notTested": [
+        "OS default double-click",
+        "native recovery"
+      ]
+    },
+    "commands": [
+      {
+        "id": "exec-f0428701-af74-430a-906e-9caaf1013bd7",
+        "actualExitCode": 1,
+        "toolWallMs": 17490,
+        "outputTruncated": false
+      },
+      {
+        "id": "exec-93f166d5-2214-4bfb-9c4c-c97b4f8f568d",
+        "actualExitCode": 0,
+        "toolWallMs": 25073,
+        "outputTruncated": false
+      },
+      {
+        "id": "exec-ae3af99e-d956-4aac-af7e-838c10fbbcb8",
+        "actualExitCode": 1,
+        "toolWallMs": 51791,
+        "outputTruncated": false
+      },
+      {
+        "id": "exec-824de61b-63ef-4b47-8cf7-35bea15cef90",
+        "actualExitCode": 0,
+        "toolWallMs": 118558,
+        "outputTruncated": false
+      },
+      {
+        "id": "exec-5c2d58b2-1d5e-4bb8-974b-335053d84423",
+        "actualExitCode": 0,
+        "toolWallMs": 1804,
+        "outputTruncated": false
+      }
+    ],
+    "scope": "Remote task outputs were read in full. Remote artifact hashes are reported values; root has not separately downloaded/rehashed the remote evidence files. No OS-default double-click or native recovery acceptance is inferred from compilation.",
+    "rootPublicResourcePack": {
+      "source": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "actualExitCode": 0,
+      "root": "<test-worktree>\\work\\native-resource-handoff-zywloG",
+      "archive": "<test-worktree>\\work\\native-resource-handoff-zywloG\\native-public-resources.zip",
+      "bytes": 628337069,
+      "sha256": "698d72516d311e3fb94cae57a553d704c5f161fcb722331db3f043c9bad41420",
+      "manifestSha256": "a4e052d9df78a0d6b32bdb6d6b163d23bf1d5433957adb7db716a2c508e69745",
+      "files": 4940,
+      "registryPackages": 511,
+      "uncompressedBytes": 1410787993,
+      "packElapsedMs": 32887,
+      "userRuntimeModified": false,
+      "userCargoCacheModified": false,
+      "credentialsIncluded": false
+    },
+    "rootReceiptSha256": "07d5b35415148202248283367361d4de4dc23bc5c67cd4f554f978aa4ddba106",
+    "rootPackResultSha256": "2a9cced4a6e203aa868302fd50c8a46e75f01d4df2cc91da512fc3bc77fff853",
+    "rootHandoffServerLogs": [
+      {
+        "file": "task-worktree:work/review-bundle-share-5998.log",
+        "sha256": "420a0012a248c632cd6795f3ed996c45256d4b00e5b601c31fa85eb7242de2dc"
+      },
+      {
+        "file": "task-worktree:work/native-resource-share-current.log",
+        "sha256": "e72fdb9406d307f36cc0d224f1597fdca8d0556de9d6a90cdfc04b4c2c0e242d"
+      }
+    ],
+    "sourceReviewBundle": {
+      "source": "5998b9fd8250805da2806e0c17c04679317cb5b4",
+      "bytes": 20930805,
+      "sha256": "3dd9945571cd22ac66b6ae8c3f57bc07f0a031e77ec93ebe001479f1a599e690",
+      "verifiedInEmptyBareRepository": true
+    },
+    "allRequiredAcceptancePassed": false
+  }
+}

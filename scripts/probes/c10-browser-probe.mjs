@@ -145,6 +145,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, parseTaskId } from './m8/lib.mjs';
+import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -1458,9 +1459,13 @@ try {
   const clips = await P(creator, async (spec) => {
     const S = await import('/src/store/project.ts');
     if (spec.mediaId) S.actions.addMediaClip(spec.mediaId, 0, { duration: spec.seconds });
-    const light = S.actions.addClipOnNewTrack({ index: 0, cardId: 'chapter-bar', start: 0, duration: spec.seconds });
+    const light = S.actions.addClipOnNewTrack({ index: 0, cardId: 'chapter-bar', start: 8, duration: 2 });
     // 独立的轻卡:测量的快照趟会推出探针帧(验「大块产出压成可转移的 ArrayBuffer」)
-    S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-typewriter', start: 2, duration: 4 });
+    S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-typewriter', start: 0, duration: 2 });
+    // 打字机在快 PC 上整段追帧能落进 (a) 档，不能假定它会经过播放态互换的 (b) 档。
+    // 另放一张较长的推帧卡；其它轻卡不与它重叠，避免 K2 按位置贪心把跳转夹具挤成重卡。
+    // 0～1 秒的九重卡压力、主重卡和十秒播放保持；核对实测档位与实际轻管线，不改成本或阈值。
+    const playEntry = S.actions.addClipOnNewTrack({ index: 0, cardId: 'chapter-bar', start: 2, duration: 6 });
     const main = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: spec.seconds });
     S.actions.setClipParams(main.id, { burnMs: 40, label: 'main' });
     const extras = [];
@@ -1477,7 +1482,7 @@ try {
     // --user-card:一张仓库用户卡(在线页面跑不了它的代码,只能贴渲染节点的产物)
     const user = spec.userCard ? S.actions.addClipOnNewTrack({ index: 0, cardId: 'mu-animated-shiny-text', start: 0, duration: spec.seconds }) : null;
     S.actions.seek(1);
-    return { light: light?.id ?? null, main: main?.id ?? null, extras, userClip: user?.id ?? null };
+    return { light: light?.id ?? null, playEntry: playEntry?.id ?? null, main: main?.id ?? null, extras, userClip: user?.id ?? null };
   }, { mediaId: state.media?.id ?? null, seconds: SECONDS, extra: EXTRA_HEAVY, userCard: USER_CARD });
   Object.assign(state, clips);
   check(state.main && state.extras.length === EXTRA_HEAVY, '创建者放好卡片', clips);
@@ -1562,6 +1567,21 @@ try {
     r.onerror = () => resolve(null);
   })).catch(() => null);
   check(Array.isArray(costMode) && costMode.length && costMode.every((m) => m === 'build'), 'A2:成本记录 mode=build', costMode);
+  const entryRecord = await P(member, (clipId) => new Promise((resolve) => {
+    const job = window.__pcPreviewDiag?.()?.probeRun?.probed?.find((j) => j.clipId === clipId);
+    const r = indexedDB.open('promptcut-l2');
+    r.onsuccess = () => { const db = r.result; const q = db.transaction('costs').objectStore('costs').getAll(); q.onsuccess = () => { resolve(q.result.find((x) => x.record?.identityKey === job?.identityKey)?.record ?? null); db.close(); }; };
+    r.onerror = () => resolve(null);
+  }), state.playEntry);
+  const entryWeight = entryRecord ? clipWeight(entryRecord, 'stateful', FPS) : null;
+  out.steps.playEntryFixture = { cardId: 'chapter-bar', start: 2, duration: 6, stepMs: entryRecord?.stepMs ?? null, catchUpMs: entryRecord?.catchUpMs ?? null, vtOk: entryRecord?.vtOk ?? null, tier: entryWeight?.tier ?? null };
+  check(entryRecord?.vtOk === false && entryWeight?.tier === 'catchup-b', '任务 C 夹具:实际测量为 (b) 档且 vtOk=false', out.steps.playEntryFixture);
+  const entryPipeline = await until('任务 C 夹具在 3 秒实际判轻', async () => {
+    const f = await frontFrame(member);
+    return f?.evaluate(id => window.__pcStagePipelineAt?.(id, 3) === 'light', state.playEntry).catch(() => false);
+  }, 15_000, 100);
+  out.steps.playEntryFixture.pipelineAt3 = entryPipeline === true ? 'light' : 'not-confirmed';
+  check(entryPipeline === true, '任务 C 夹具:3 秒处的实际舞台管线为轻卡', out.steps.playEntryFixture);
   // 第 3 节 + 第 18 节第 7 条(集成接线):在线普通档测完的记录当场转写进文档服务(onCostRecords → publishSharedCosts)
   // 等在途的转写都回了(calls = ok + failed)、条数够了再判;只看 ok > 0 会在外网延迟下读到还在途的那一条
   const costPublish = await until('成员页测完的成本记录写进了文档服务', () => P(member, (costs) => { const d = window.__pcCostPublish?.(); return d && d.calls > 0 && d.ok + d.failed === d.calls && d.records >= costs ? d : null; }, costs1?.costs ?? 0), 30_000, 500);
@@ -1626,17 +1646,16 @@ try {
   const beatAfter = (await previewDiag(member))?.beatSwap ?? {};
   {
     /*
-     * 任务 C(swap-tuning):从 0 秒连续播放,`probe-typewriter`(入点 2 秒,判轻、(b) 档、vtOk = false)是逐拍自然进场的,
+     * 任务 C(swap-tuning):从 0 秒连续播放,夹具轻卡(入点 2 秒、实测 (b) 档、vtOk = false)逐拍自然进场,
      * 不该发起播放态互换,也不该走估时(以前在它的入点附近估一次、记 skip-rate)。起播那一刻已经挂着的卡(入点 0)照旧走估时,只报不判。
      */
     const sp = (await previewDiag(member))?.swapPlaying ?? null;
-    state.typewriter = await P(member, () => window.__pcStore.getState().project.tracks.flatMap((tr) => tr.clips).find((c) => c.cardId === 'probe-typewriter')?.id ?? null);
     const beforeAt = entryBefore?.lastPlan?.at ?? -1;
     const plansInPlay = (sp?.plans ?? []).filter((x) => x.at > beforeAt);
-    const typewriterPlanned = plansInPlay.filter((x) => (x.ids ?? []).includes(state.typewriter));
-    out.steps.playEntry = { natural: { typewriter: state.typewriter, naturalSkipped: sp?.naturalSkipped ?? null, naturalSkips: sp?.naturalSkips ?? null, playRun: sp?.playRun ?? null,
+    const entryPlanned = plansInPlay.filter((x) => (x.ids ?? []).includes(state.playEntry));
+    out.steps.playEntry = { natural: { clip: state.playEntry, naturalSkipped: sp?.naturalSkipped ?? null, naturalSkips: sp?.naturalSkips ?? null, playRun: sp?.playRun ?? null,
       plansInPlay: plansInPlay.map((x) => ({ t: x.t, ids: x.ids, ok: x.ok, reason: x.reason ?? null })) } };
-    check(state.typewriter && (sp?.naturalSkipped ?? []).includes(state.typewriter) && typewriterPlanned.length === 0 && sp?.playRun?.breaks === 0,
+    check(state.playEntry && (sp?.naturalSkipped ?? []).includes(state.playEntry) && entryPlanned.length === 0 && sp?.playRun?.breaks === 0,
       '任务 C:从 0 秒连续播放,自然进场的 (b) 档轻卡不发起播放态互换、不走估时(拍序号连续、没有断开)', out.steps.playEntry.natural);
   }
   const playing = samples.filter((s) => s.playing);
@@ -1690,7 +1709,7 @@ try {
   check(stillLive && stillLive.wraps.filter((w) => w.id === state.main || state.extras.includes(w.id)).every((w) => !w.suppressed && !w.plane && !w.placeholder),
     'A4:占位撤下后不再盖回(3 秒后仍是活渲)', stillLive?.wraps?.slice(0, 4));
   {
-    // 任务 C(swap-tuning):跳到 typewriter 中间(3 秒)再播 —— 从卡中间开始播放,照旧交给估时(发起与否由 planPlayingSwap 定)
+    // 任务 C(swap-tuning):跳到夹具轻卡中间(3 秒)再播，照旧交给估时。
     const before = (await previewDiag(member))?.swapPlaying ?? null;
     const seekAt3 = await P(member, () => { window.__pcStore.actions.seek(3); return Math.round(performance.now()); });
     // 等 3 秒处的暂停态第二路做完再播(它跑着时父页不判播放态互换:`swapInFlight`)
@@ -1701,13 +1720,13 @@ try {
     await P(member, () => window.__pcStore.actions.play());
     const seekPlan = await until('跳到卡中间再播:第一拍附近走估时', async () => {
       const sp = (await previewDiag(member))?.swapPlaying ?? null;
-      const lp = (sp?.plans ?? []).find((x) => x.at > (before?.lastPlan?.at ?? -1) && (x.ids ?? []).includes(state.typewriter));
+      const lp = (sp?.plans ?? []).find((x) => x.at > (before?.lastPlan?.at ?? -1) && (x.ids ?? []).includes(state.playEntry));
       return lp && lp.t >= 3 && lp.t < 3.5 ? { ...sp, lastPlan: lp } : null;
     }, 5_000, 100);
     await P(member, () => window.__pcStore.actions.pause());
     await until('停下', () => P(member, () => !window.__pcStore.getState().playing), 5_000, 100);
     out.steps.playEntry = { ...(out.steps.playEntry ?? {}), seekMiddle: { lastPlan: seekPlan?.lastPlan ?? null, playRun: seekPlan?.playRun ?? null, naturalSkips: seekPlan?.naturalSkips ?? null } };
-    check(seekPlan, '任务 C:跳到卡中间再播,typewriter 照旧按估时决定(发起判断的 t 在 3～3.5 秒)', out.steps.playEntry.seekMiddle);
+    check(seekPlan, '任务 C:跳到卡中间再播,夹具轻卡照旧按估时决定(发起判断的 t 在 3～3.5 秒)', out.steps.playEntry.seekMiddle);
     say('play-entry', out.steps.playEntry);
   }
   const pd = await previewDiag(member);

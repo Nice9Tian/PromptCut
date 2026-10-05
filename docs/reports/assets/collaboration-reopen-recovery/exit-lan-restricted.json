@@ -1,0 +1,107 @@
+{
+  "ok": true,
+  "evidence": [
+    {
+      "roomId": "sp_cmd4s5if67seeoksvdohzbct44",
+      "where": "lan",
+      "mode": "restricted",
+      "actualHostProcessRestart": true,
+      "actualMemberProcessRestart": true,
+      "actualCloudProcessRestart": true,
+      "hostOpenedWhileCloudOffline": true,
+      "pidChanged": true,
+      "portChanged": true,
+      "emptyBrowserStorage": true,
+      "memberWaitThenAutoJoin": true,
+      "sameUsers": [
+        "creator:host",
+        "member:member"
+      ],
+      "oldSnapshotsPreservedLatest": true,
+      "version": 6,
+      "bidirectionalEdits": 4,
+      "formats": [
+        "proc",
+        "procp",
+        "draft",
+        "system-path",
+        "refresh"
+      ],
+      "nativeOsDoubleClick": false,
+      "cancellationTombstone": true,
+      "recoveryCreateRequests": 0,
+      "agentAndCardBindings": true,
+      "renderNodeStarted": true,
+      "nodeRolesAuthenticated": true,
+      "staleBindingsRemovedOnDelete": true,
+      "creatorPasswordReconnect": false,
+      "creatorSecondDevice": true,
+      "deletedFromSecondCreator": false,
+      "deletedWhileMemberOffline": false,
+      "tamperedAssociationsRejected": false
+    }
+  ],
+  "exitMatrix": {
+    "where": "lan",
+    "cases": [
+      {
+        "phase": "identity",
+        "who": "host",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": true
+      },
+      {
+        "phase": "host",
+        "who": "host",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": true
+      },
+      {
+        "phase": "discover",
+        "who": "member",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": null
+      },
+      {
+        "phase": "enter-and-register",
+        "who": "host",
+        "realServiceResponseDelayed": true,
+        "homeUi": true,
+        "lateResultIgnored": true,
+        "nodeBindingsRemoved": true,
+        "refreshStaysHome": true,
+        "hostRegistrationStopped": true
+      }
+    ],
+    "unsupportedPhases": [],
+    "creatorCancelUi": {
+      "returnedToLocal": true,
+      "savedAssociationRemoved": true,
+      "originalContentPreserved": true
+    }
+  },
+  "asset": {
+    "hash": "8bad42a5fd3a4532ba163e3cd151d5eb4bffb8c1cbdeca755690c129c54b6169",
+    "size": 50000,
+    "browserCors": true,
+    "namespaces": [
+      "media",
+      "snap",
+      "px"
+    ]
+  },
+  "wan": null,
+  "evidenceDirectory": "test-temp:pc-reopen-e2e-FGR5Kg"
+}

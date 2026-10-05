@@ -14,6 +14,7 @@ import { BackupsDialog } from "./BackupsDialog";
 import { ONLINE } from "../../online/mode";
 import { remoteAssetsDown, subscribeRemoteAssetsHealth } from "../media/assetTiers";
 import { OFFLINE_SHOW_DELAY_MS, ONLINE_STATUS_TEXT, onlineStatusOf, type OnlineStatusKind } from "./onlineStatus";
+import { RecoveryActions } from "./RecoveryActions";
 import "./sync.css";
 
 function subscribeNavigator(cb: () => void): () => void {
@@ -69,9 +70,21 @@ function OnlineBackupsChip() {
 }
 
 export function SyncChips() {
+  const reopenState = useSync((v) => v.reopenState);
   const status = useSync((v) => v.status);
   const active = useSync((v) => v.active);
   const blocked = useSync((v) => v.blocked);
+  if (reopenState && reopenState !== "connected") {
+    const text: Record<string, string> = {
+      recovering: "正在恢复原协作房间…", "waiting-host": "正在等待主机上线，将自动重试。",
+      "waiting-storage": "本机恢复信息暂时无法读取，将保留原身份并自动重试。",
+      "needs-auth": "请用原身份重新认证；本地项目内容已保留。", rejected: "原身份已被拒绝，请联系创建者。",
+      deleted: "原房间已删除或取消协作。", damaged: "协作恢复数据缺失或损坏，请从原备份恢复。",
+      unsupported: "本项目的协作恢复版本暂不支持；房间关联已保留。", "choose-identity": "这台设备保存了多个身份，请选择原身份。",
+      "host-conflict": "原房间已有主机，未接管。",
+    };
+    return <><span className="pc-sync-chip pc-sync-chip--offline" role="status" data-pc="collaboration-recovery" data-kind={reopenState}>{text[reopenState] ?? reopenState}</span><RecoveryActions state={reopenState} /></>;
+  }
   if (!active || blocked) return null;
   return (
     <>

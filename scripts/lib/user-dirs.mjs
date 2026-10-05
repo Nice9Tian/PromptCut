@@ -32,7 +32,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 /** 会把产物引到用户目录的环境变量 */
-export const USER_DIR_ENV_KEYS = Object.freeze(['PROMPTCUT_EXPORT_DIR', 'PROMPTCUT_DATA_DIR']);
+export const USER_DIR_ENV_KEYS = Object.freeze(['PROMPTCUT_EXPORT_DIR', 'PROMPTCUT_DATA_DIR', 'PROMPTCUT_ARTIFACT_DIR']);
 
 /** 桌面版的导出目录：`<home>/Videos/PromptCut`（`desktop/src-tauri/src/lib.rs`） */
 export function userExportDir(home = os.homedir()) {
