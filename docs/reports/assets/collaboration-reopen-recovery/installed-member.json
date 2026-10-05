@@ -1,0 +1,47 @@
+{
+  "kind": "installed-build-default-double-click-member-v1",
+  "date": "2026-10-05",
+  "scenario": "plan section 11, row 6: system default double click on a really installed build; the installed build is an ordinary member and the host runs on another machine",
+  "result": "passed",
+  "where": {
+    "member": "laptop, the build installed from PromptCut-0.7.14-setup.exe of commit 613ce6e6 (see installed-host.json for build, backup and installation)",
+    "host": "PC, own isolated editor on port 5296 with its own data directory and browser (scripts/probes/reopen-remote-host.mjs); never the application installed on the PC",
+    "path": "task-owned temporary HTTPS/WS entry in front of an isolated hosting directory; the member reaches the host only through that relay (the hint in the host's file is the PC's loopback address)"
+  },
+  "receivedVia": "cross-session messages from the laptop session; the host-side evidence was produced on the PC",
+  "memberRun": {
+    "probeCommit": "d8ef01ef6c6d898c7f1b82ac27797b4e08f00508",
+    "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-installed.mjs --manifest <laptop build>/manifest-0.7.14.json --app-src-hash a0cbfb77… --member --remote-host-key <PC host public key> --control <owned> --click-timeout-ms 2400000",
+    "actualExitCode": 0,
+    "stderr": "empty",
+    "timeline": ["13:02:31Z host project file placed by rename", "13:03:18Z host answered the member's first edit", "13:03:23Z host offline after the member's bye", "13:03:28.910Z hand-off: awaiting double click (cold)", "13:13:00.485Z launch accepted, pid 28608", "member waiting for the host", "13:14:42Z operator signal on the PC, 13:14:55Z host online again", "13:15:30Z host answered the second edit", "13:15:42.899Z hand-off: awaiting double click (window open)", "13:15:56.806Z launch accepted, pid 12844"],
+    "evidence": {"ok":true,"kind":"promptcut-installed-reopen-v1","actor":"member","room":"sp_lysb2zouap3khzsf2i644og3g4","firstAuth":{"actualAuthenticationUi":true,"speechPromptDismissed":false},"memberPidBefore":28844,"memberPidAfter":28608,"memberWaitThenAutomaticJoin":true,"stableDevice":true,"bidirectionalEdits":4,"echoTag":"rb620e6f4","binding":{"creator":false,"where":"lan","hostBinding":false,"rev":6},"asset":{"bytes":50000,"hash":"5f8d1a87f8470e3624312fce3875d20e130a0ae3942471beda8930a62c880e52","namespaces":["media","snap","px"]},"forwarded":{"secondary":true,"pid":12844,"createdAt":"2026-10-05T13:15:56.7400228Z","armedAt":"2026-10-05T13:15:42.899Z","parentName":"explorer.exe","parentPid":5600,"parentCreatedAt":"2026-10-05T13:03:55.7746839Z","installedExecutable":true,"fileOnCommandLine":true,"via":"explorer-double-click","rejectedBefore":0,"openEvents":1,"replacedLink":true},"firstRunPanelClosed":false,"recoveryCreateRequests":0,"originalFileUnchanged":true,"remoteHost":true,"service":"temporary-public-https-entry","launchMode":"explorer-double-click","osDoubleClick":true,"osShellOpen":false,"rehearsal":false,"installed":{"exeSha256":"cfcd5d962b1a9c1ceb1fe38232be4679e1879226fd46f45d4fc0de6505b5d086","versions":{"node":"v24.19.0","chrome":"152.0.7977.75","ffmpeg":"ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers","python":"Python 3.11.9","app":"0.7.14","appSrcHash":"a0cbfb7764acb226e0c50d683ba3e0ea95e7ffd88af186b5761bdf599c787fe9","builtAt":"2026-10-05T10:20:44.139Z"},"payload":{"files":2498,"missing":0,"mismatched":0,"sample":[]},"progId":"PromptCut Project","userChoice":false},"launches":[{"secondary":false,"pid":28608,"createdAt":"2026-10-05T13:13:00.4245027Z","armedAt":"2026-10-05T13:03:28.908Z","parentName":"explorer.exe","parentPid":5600,"parentCreatedAt":"2026-10-05T13:03:55.7746839Z","installedExecutable":true,"fileOnCommandLine":true,"via":"explorer-double-click","rejectedBefore":0},{"secondary":true,"pid":12844,"createdAt":"2026-10-05T13:15:56.7400228Z","armedAt":"2026-10-05T13:15:42.899Z","parentName":"explorer.exe","parentPid":5600,"parentCreatedAt":"2026-10-05T13:03:55.7746839Z","installedExecutable":true,"fileOnCommandLine":true,"via":"explorer-double-click","rejectedBefore":0}],"rejectedLaunches":[],"fileAssociationsChanged":false,"evidenceDirectory":"<laptop-temp>/pc-reopen-installed-4kxGTI"},
+    "evidenceEdits": "service and evidenceDirectory are replaced by neutral labels; nothing else changed"
+  },
+  "hostRun": {
+    "probeCommit": "d8ef01ef6c6d898c7f1b82ac27797b4e08f00508",
+    "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-remote-host.mjs --service <temporary public entry> --control <owned> --port 5296 --wait-timeout-ms 10800000",
+    "actualExitCode": 0,
+    "evidence": {"ok":true,"kind":"promptcut-remote-host-v1","room":"sp_lysb2zouap3khzsf2i644og3g4","service":"temporary-public-https-entry","hostPidBefore":26500,"hostPidAfter":52276,"answeredMemberEdits":[1,2],"hostAfterReturn":{"reopen":"connected","status":"online","room":"sp_lysb2zouap3khzsf2i644og3g4","username":"host","creator":true,"registration":"online"},"recoveryCreateRequests":0,"isolatedEditorPort":5296,"evidenceDirectory":"test-temp:pc-reopen-remote-host-0uwOpZ"}
+  },
+  "secretHandling": "the member probe generated its password in process memory and returned only text sealed to the PC host's public key; the host's project file went the other way and contains no secret (the probes assert that)",
+  "operator": {
+    "who": "laptop session with computer-use (File Explorer: click tier; PromptCut: full)",
+    "folderWindow": "opened by command with the folder path only; that Explorer process is pid 5600, the parent of both launches",
+    "blocked": "13:03-13:06Z: the laptop's OLED screensaver was in front; screenshots came back empty and input was refused. The session left it alone and the user dismissed it at the laptop.",
+    "ineffectiveAttempts": ["a double click at the old window position after the window had been moved landed on the desktop; nothing opened and nothing was rejected", "a double click refused by the tool because the input-method process had taken the foreground; no input was sent"],
+    "firstDoubleClick": "real double click on original-member.proc in the folder window; afterwards the PromptCut editor with project name rb620e6f4-bye and, where the member count normally is, the notice that it is waiting for the host and will retry by itself; no form, dialog or security prompt",
+    "automaticJoin": "before the second hand-off the same window showed project name rb620e6f4-h2 and 2 members; the waiting notice was gone; the operator had sent no input in between",
+    "secondDoubleClick": "the same Explorer window brought forward from the taskbar, real double click on the same file; no second PromptCut window, no dialog",
+    "screenshotSeenByOperator": "installed-restored.png: editor window, project name rb620e6f4-h2, 2 members, empty timeline, no dialog",
+    "notSeen": "the recovery form of the first authentication (the screensaver was in front for that minute); the probe typed into the real form through the application's own debugging port and records actualAuthenticationUi:true"
+  },
+  "earlierAttempts": [
+    { "round": 1, "probeCommit": "e9fc7c4c", "result": "exit 1 before the application started: EBUSY reading the host project file while it was still being copied into the control directory", "fix": "d8ef01ef: control files are re-read until complete; the laptop places files by rename" },
+    { "round": 2, "probeCommit": "d8ef01ef", "result": "exit 1 at the first authentication: the member stayed in needs-auth. The temporary public entry was lost at 12:40:58Z after 2 h 12 min (the laptop saw HTTP 530 from it). A transient failure of the test entry; entry and PC host were restarted." }
+  ],
+  "notCovered": [
+    "the host of this run is an isolated editor, not an installed application; the installed build as host is covered by installed-host.json",
+    "LAN discovery and direct connection between the two machines were not used; the member came in through the relay"
+  ]
+}

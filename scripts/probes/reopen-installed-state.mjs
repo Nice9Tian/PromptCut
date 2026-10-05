@@ -10,11 +10,15 @@
  * Excluded subtrees are not copied; only their file count, size and newest time are recorded,
  * and restore moves them back unchanged. Links inside a root are refused.
  * The application must not be running: a locked file fails the command before anything moves.
+ * Run restore from an ordinary terminal. A shell started by a packaged desktop application
+ * (one installed under WindowsApps) sees AppData as the real directory merged with a private
+ * layer; renaming a directory there moves only the private layer and leaves the real one.
  * Exit codes: 0 done or identical, 2 compare found differences, 1 refused or failed.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const KIND = 'promptcut-installed-state-v1';
@@ -115,6 +119,18 @@ export function compare({ backup: dir, sample = 40 }) {
   return { identical, roots };
 }
 
+/** The executable of the nearest ancestor process that is a packaged application, or null. Windows only. */
+export function packagedAncestor() {
+  if (process.platform !== 'win32') return null;
+  const script = String.raw`$id = ${process.pid}; for ($i = 0; $i -lt 12 -and $id; $i++) { $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $id); if (-not $p) { break }; if ($p.ExecutablePath -and $p.ExecutablePath.Contains('\WindowsApps\')) { $p.ExecutablePath; break }; $id = $p.ParentProcessId }`;
+  try { return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, encoding: 'utf8' }).trim() || null; } catch { return null; }
+}
+/** Roots a packaged application's child processes do not see as they really are. */
+export function layeredRoots(manifest, env = process.env) {
+  const inside = (dir, root) => { const rel = path.relative(dir, root); return !!dir && !rel.startsWith('..') && !path.isAbsolute(rel); };
+  return manifest.roots.filter(r => (inside(env.LOCALAPPDATA, r.path) && !inside(path.join(env.LOCALAPPDATA, 'Temp'), r.path)) || inside(env.APPDATA, r.path)).map(r => r.name);
+}
+
 /** Put the recorded state back. The current directory is renamed aside, never deleted.
  * `afterRename` exists for the undo test: it runs once per root right after that root moved aside. */
 export function restore({ backup: dir, now = new Date(), afterRename }) {
@@ -131,7 +147,10 @@ export function restore({ backup: dir, now = new Date(), afterRename }) {
   try {
     for (const r of manifest.roots) {
       const aside = r.path + suffix, source = path.join(dir, r.name);
-      fs.renameSync(r.path, aside); moved.push({ root: r, aside });
+      fs.renameSync(r.path, aside);
+      // In a layered view the rename succeeds and the directory is still there. Nothing can be undone from here.
+      if (fs.existsSync(r.path)) throw Object.assign(new Error(`${r.path} is still there after it was renamed to ${aside}: this process sees more than the real directory. Run the restore from an ordinary terminal`), { layered: true });
+      moved.push({ root: r, aside });
       afterRename?.(r);
       fs.mkdirSync(r.path);
       for (const sub of r.dirs) fs.mkdirSync(path.join(r.path, sub), { recursive: true });
@@ -179,7 +198,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const result = compare({ backup: path.resolve(one('--backup')) });
       console.log(JSON.stringify({ ok: true, ...result })); process.exitCode = result.identical ? 0 : 2;
     } else if (command === 'restore') {
-      console.log(JSON.stringify({ ok: true, ...restore({ backup: path.resolve(one('--backup')) }) }));
+      const dir = path.resolve(one('--backup')), layered = layeredRoots(loadManifest(dir)), ancestor = layered.length ? packagedAncestor() : null;
+      if (ancestor) throw new Error(`this shell was started by a packaged application (${path.basename(ancestor)}), which sees ${layered.join(', ')} through a layered view of AppData; run the same command from an ordinary terminal`);
+      console.log(JSON.stringify({ ok: true, ...restore({ backup: dir }) }));
     } else throw new Error('usage: reopen-installed-state.mjs backup|compare|restore');
   } catch (error) { console.error(JSON.stringify({ ok: false, error: error.message })); process.exitCode = 1; }
 }
