@@ -1,0 +1,48 @@
+{
+  "kind": "baseline-and-render-checks-2026-10-05",
+  "date": "2026-10-05",
+  "scope": "type check, full tests and the rendering extras (G0-R) for the commits of the installed-build acceptance round. Between these commits only scripts/probes, server/test and docs changed; product code under src/, server/ and desktop/ is the same as at 613ce6e6.",
+  "pc": {
+    "silentPreload": "every command ran under --import=./scripts/lib/test-silent-processes.mjs with isolated data directories",
+    "g0": [
+      { "commit": "ecf9f2a7fa1d437740ee2ceefe180f9d44aa3210", "types": { "command": "node <repository>/node_modules/typescript/bin/tsc -b --force", "equivalent": "npx tsc -b --force", "exitCode": 0, "elapsedMs": 5454 },
+        "tests": { "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs", "equivalent": "npm test", "exitCode": 1, "tests": 4342, "pass": 4341, "fail": 1, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 58831.1138,
+          "failure": "server/test/bakery-deps.test.mjs: the two new unit tests import script helpers and were not on the dependency-direction allow list", "fix": "8a6cbbaa" } },
+      { "commit": "5254bd1cc88c78b459be54e22ea4f133ceb5de39", "types": { "exitCode": 0, "elapsedMs": 6049 },
+        "tests": { "exitCode": 0, "tests": 4342, "pass": 4342, "fail": 0, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 59755.1691 } }
+    ],
+    "g0r": [
+      { "name": "export determinism", "commit": "222198e7cafd992beb45e6a01b67f82c723f771e", "command": "node scripts/verify-determinism.mjs --url http://127.0.0.1:5203/?export=1", "exitCode": 0, "elapsedMs": 344393, "frames": 1800, "identical": 1800, "different": 0 },
+      { "name": "export equals snapshot replay", "commit": "222198e7cafd992beb45e6a01b67f82c723f771e", "command": "node scripts/verify-unified-frames.mjs", "exitCode": 0, "elapsedMs": 10175, "result": "PASS" },
+      { "name": "full-length pixel comparison with main", "candidate": "222198e7cafd992beb45e6a01b67f82c723f771e", "baseline": "adc3ae2a31857e6edcf868ddc361fbb20e249f88",
+        "commands": ["node scripts/probes/export-baseline-compare.mjs run --tree <worktree> --origin <own editor> --project <own>/project.json --out <own>/candidate --workers 1", "the same with --tree <main baseline worktree> --out <own>/baseline", "node scripts/probes/export-baseline-compare.mjs compare --baseline <own>/baseline/frames --candidate <own>/candidate/frames"],
+        "exitCodes": [0, 0, 0], "elapsedMs": [125065, 137373, 609], "frames": { "baseline": 1800, "candidate": 1800 }, "result": "byte-identical over the full length" },
+      { "name": "ready-index-probe", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "command": "node scripts/probes/ready-index-probe.mjs --port 5206 --out <own>", "exitCode": 0, "elapsedMs": 63274, "fails": [] },
+      { "name": "stream-produce-probe --group", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 0, "elapsedMs": 28541, "fails": [] },
+      { "name": "stream-produce-probe (normal mode; timing not authoritative on the PC)", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 0, "elapsedMs": 44122, "fails": [] },
+      { "name": "preview-fallback-probe", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 0, "elapsedMs": 66563, "fails": [] },
+      { "name": "preview-fallback-probe --page-preload", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 0, "elapsedMs": 71668, "fails": [] }
+    ],
+    "harnessFailure": "the integration script's prerender phase stopped after the stream probes: it started the next editor on ports 5203-5205 before the previous one had released them. The two preview-fallback probes were then run separately, each on its own editor, and passed.",
+    "notRun": "video-source-cadence-probe and video-seek-race-probe: the branch does not touch frame fetching, decoding, the card video source or frameMedia.ts"
+  },
+  "laptopTiming": {
+    "item": "stream-produce-probe, normal mode: one 15-frame segment of a 1080p full-frame stream must encode within 300 ms (p50 of three)",
+    "result": "not passed",
+    "runs": [
+      { "label": "first run, idle gate never satisfied (CPU about 18.5%)", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 1, "encodeMs": [313, 335, 340], "p50": 335, "bytes": 428801, "alphaMean": 0.0956, "producedAfterRestart": 0 },
+      { "label": "formal run after the idle gate (four samples below 15%); CPU 17.3% just before the start, 14.9% after", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 1, "encodeMs": [312, 313, 342], "p50": 313, "bytes": 428801, "alphaMean": 0.0956, "producedAfterRestart": 0 },
+      { "label": "paired comparison 1, main", "commit": "adc3ae2a31857e6edcf868ddc361fbb20e249f88", "exitCode": 1, "encodeMs": [332, 358, 387], "p50": 358, "cpuBefore": 18.8, "cpuAfter": 25.1 },
+      { "label": "paired comparison 2, branch", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 1, "encodeMs": [286, 357, 390], "p50": 357, "cpuBefore": 15.4, "cpuAfter": 20.9 },
+      { "label": "paired comparison 3, main", "commit": "adc3ae2a31857e6edcf868ddc361fbb20e249f88", "exitCode": 1, "encodeMs": [305, 311, 420], "p50": 311, "cpuBefore": 13.1, "cpuAfter": 15.3 },
+      { "label": "paired comparison 4, branch", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 1, "encodeMs": [286, 367, 382], "p50": 367, "cpuBefore": 14.7, "cpuAfter": 13.5 }
+    ],
+    "onlyFailingCheck": "the 300 ms encode limit; segment size, alpha error, restart behaviour and all other checks passed in every run",
+    "machineState": "nobody at the machine; the OLED screensaver takes 4-8% CPU, the desktop application and the graphics overlay a few more; the background load stayed at 13-17%. The main comparison of the formal protocol could not start because the idle gate did not open within 15 minutes.",
+    "codeOnEncodePath": "identical to main adc3ae2a: no file differs under server/bakery, server/frame-stream.mjs, server/frame-pipeline.mjs, server/frame-service.mjs, src/render, the probe itself, package.json or the lock file",
+    "previousIdleResult": "last round on this machine at 7-11% CPU: 264 / 294 / 307, p50 294",
+    "next": "formal re-measurement of branch and main when the user is at the laptop and the screensaver is not in front",
+    "environment": { "node": "v24.19.0", "chrome": "HeadlessChrome/152.0.7977.75, software rendering", "ffmpeg": "9.0.1-full_build", "receivedVia": "cross-session messages from the laptop session; result files stay on the laptop" }
+  },
+  "mainMoved": { "from": "adc3ae2a31857e6edcf868ddc361fbb20e249f88", "to": "f951553cc9f1bd8507f50c0e840a2b96eac25ad8", "commits": 12, "content": "test start script (npm test now runs scripts/test-suite.mjs) and draft documents", "mergePreview": "one conflict: server/test/bakery-deps.test.mjs (both sides added allow-list entries)" }
+}
