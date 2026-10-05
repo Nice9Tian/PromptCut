@@ -14,6 +14,8 @@
  *                           elsewhere (reopen-remote-host.mjs) and receives the member password sealed
  *   --peer-port <n>         first of three ports for the own stand-in member editor (default 5206)
  *   --control <dir>         where hand-off and exchanged files live (default <run dir>/control)
+ *   --seal-dir <dir>        owned directory of the seal key / member password, when they were prepared
+ *                           beforehand with reopen-sealed.mjs (default <run dir>/seal)
  *   --click-timeout-ms <n>  how long to wait for each double click (default 900000)
  *   --rehearse-fixture <fixture.json>   no installed build: drive the isolated test shell and start it
  *                           with the file as argument. A rehearsal is not double-click evidence.
@@ -46,6 +48,7 @@ const clickTimeoutMs = Number(arg('--click-timeout-ms') ?? 900000), peerPort = N
 assert.equal(process.platform, 'win32', 'Windows only');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-installed-'));
 const control = path.resolve(arg('--control') ?? path.join(root, 'control')), files = path.join(root, 'files');
+const sealDir = path.resolve(arg('--seal-dir') ?? path.join(root, 'seal'));
 fs.mkdirSync(control, { recursive: true }); fs.mkdirSync(files);
 const require = createRequire(import.meta.url);
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
@@ -274,7 +277,7 @@ async function hostRole() {
   let external = null;
   if (externalMember) {
     phase = 'receive sealed external member';
-    const keys = ownedSealKeys(path.join(root, 'seal'));
+    const keys = ownedSealKeys(sealDir);
     fs.writeFileSync(path.join(control, 'host-public-key.json'), JSON.stringify({ publicKey: keys.publicKey }));
     say('host-public-key', { publicKey: keys.publicKey, expects: path.join(control, 'external-member.sealed') });
     external = unseal(keys.privateKey, await controlFile('external-member.sealed', clickTimeoutMs, 'sealed external member'));
@@ -339,7 +342,7 @@ async function hostRole() {
 async function memberRole_() {
   const hostKey = arg('--remote-host-key'); assert(hostKey, '--remote-host-key: the public key printed by reopen-remote-host.mjs');
   phase = 'seal own member password for the remote host';
-  const mine = ownedMemberSecret(path.join(root, 'seal'), 'member'), sealed = seal(hostKey, mine);
+  const mine = ownedMemberSecret(sealDir, 'member'), sealed = seal(hostKey, mine);
   fs.writeFileSync(path.join(control, 'member.sealed'), sealed); say('member-sealed', { sealed, expects: path.join(control, 'host.proc') });
   const hostFile = await controlFile('host.proc', clickTimeoutMs, 'project file of the remote host');
   const descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId; service = descriptor.service;
