@@ -31,7 +31,10 @@ const require = createRequire(import.meta.url);
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
 const secret = () => randomBytes(32).toString('base64url');
 const say = (phase, more = {}) => console.log(JSON.stringify({ phase, at: new Date().toISOString(), ...more }));
-const controlFile = (name, ms, what) => waitFor(() => { const f = path.join(control, name); return fs.existsSync(f) && (fs.readFileSync(f, 'utf8').trim() || 'present'); }, ms, what);
+/** A file the operator drops into the control directory; it may still be open for writing when it first appears. */
+const controlFile = (name, ms, what, complete = () => true) => waitFor(() => {
+  try { const text = fs.readFileSync(path.join(control, name), 'utf8').replace(/^\uFEFF/, '').trim() || 'present'; return complete(text) ? text : false; } catch { return false; }
+}, ms, what);
 const online = async () => { try { return (await (await fetch(`${service}/hosting/healthz`, { signal: AbortSignal.timeout(5000) })).json()).online; } catch { return null; } };
 let phase = 'start', browser, editor, createRequests = 0;
 
@@ -75,7 +78,7 @@ try {
   const keys = ownedSealKeys(path.join(root, 'seal'));
   fs.writeFileSync(path.join(control, 'host-public-key.json'), JSON.stringify({ publicKey: keys.publicKey }));
   say('host-public-key', { publicKey: keys.publicKey, control, expects: 'member.sealed' });
-  const member = unseal(keys.privateKey, await controlFile('member.sealed', waitMs, 'sealed member password'));
+  const member = unseal(keys.privateKey, await controlFile('member.sealed', waitMs, 'sealed member password', text => /^pcs1\.[A-Za-z0-9_-]{100,}$/.test(text)));
   assert(member.username === 'member' && typeof member.password === 'string' && member.password.length >= 32, 'member secret is not usable');
   phase = 'start own host and create the room';
   browser = await puppeteer.launch({ headless: true, userDataDir: path.join(root, 'browser'), args: ['--no-sandbox'] });

@@ -75,7 +75,13 @@ async function stop(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const ended = new Promise(resolve => child.once('exit', resolve)); child.kill(); await ended; children.delete(child);
 }
-const controlFile = async (name, ms, what) => waitFor(() => { const f = path.join(control, name); return fs.existsSync(f) && fs.readFileSync(f, 'utf8').trim(); }, ms, what);
+/** A file the operator drops into the control directory. It may still be open for writing when it first
+ * appears, so a failed or incomplete read just means: look again. */
+const controlFile = async (name, ms, what, complete) => waitFor(() => {
+  try { const text = fs.readFileSync(path.join(control, name), 'utf8').replace(/^\uFEFF/, '').trim(); return text && complete(text) ? text : false; } catch { return false; }
+}, ms, what);
+const isSealed = text => /^pcs1\.[A-Za-z0-9_-]{100,}$/.test(text);
+const isProjectFile = text => { try { return !!JSON.parse(text).collaboration?.roomId; } catch { return false; } };
 const online = async () => { try { return (await (await fetch(`${service}/hosting/healthz`, { signal: AbortSignal.timeout(5000) })).json()).online; } catch { return null; } };
 
 /** Own loopback hosting directory, used when no --service is given. */
@@ -294,7 +300,7 @@ async function hostRole() {
     const keys = ownedSealKeys(sealDir ?? path.join(root, 'seal'));
     fs.writeFileSync(path.join(control, 'host-public-key.json'), JSON.stringify({ publicKey: keys.publicKey }));
     say('host-public-key', { publicKey: keys.publicKey, expects: path.join(control, 'external-member.sealed') });
-    external = unseal(keys.privateKey, await controlFile('external-member.sealed', clickTimeoutMs, 'sealed external member'));
+    external = unseal(keys.privateKey, await controlFile('external-member.sealed', clickTimeoutMs, 'sealed external member', isSealed));
     assert(/^[a-z][a-z0-9-]{2,31}$/.test(external.username) && external.username !== 'member' && external.username !== 'host' && typeof external.password === 'string' && external.password.length >= 32, 'external member secret is not usable');
     list.push({ username: external.username, password: external.password });
   }
@@ -359,7 +365,7 @@ async function memberRole_() {
   // Without --seal-dir the member password exists only in this process.
   const mine = sealDir ? ownedMemberSecret(sealDir, 'member') : { username: 'member', password: secret() }, sealed = seal(hostKey, mine);
   fs.writeFileSync(path.join(control, 'member.sealed'), sealed); say('member-sealed', { sealed, expects: path.join(control, 'host.proc') });
-  const hostFile = await controlFile('host.proc', clickTimeoutMs, 'project file of the remote host');
+  const hostFile = await controlFile('host.proc', clickTimeoutMs, 'project file of the remote host', isProjectFile);
   const descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId; service = descriptor.service;
   assert.equal(hostFile.includes(mine.password), false, 'project file must not contain a password');
   phase = 'start the application and authenticate as member';

@@ -65,7 +65,7 @@ export function installedIdentity(association, { manifest, appSrcHash }) {
   if (association.userChoice && association.userChoice !== association.progId) reasons.push('a per-user choice overrides the installed association');
   let versions = null, payload = null;
   // A patched installation has this file rewritten by PowerShell, with a byte order mark.
-  try { versions = JSON.parse(fs.readFileSync(path.join(runtime, 'VERSIONS.json'), 'utf8').replace(/^﻿/, '')); } catch { reasons.push('installed runtime has no readable VERSIONS.json'); }
+  try { versions = JSON.parse(fs.readFileSync(path.join(runtime, 'VERSIONS.json'), 'utf8').replace(/^\uFEFF/, '')); } catch { reasons.push('installed runtime has no readable VERSIONS.json'); }
   if (versions && versions.appSrcHash !== appSrcHash) reasons.push('installed runtime is not the candidate (appSrcHash differs)');
   if (versions && manifest.appVersion && versions.app !== manifest.appVersion) reasons.push('installed application version differs from the manifest');
   if (!reasons.length) {
