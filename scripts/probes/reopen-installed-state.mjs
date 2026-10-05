@@ -158,9 +158,11 @@ export function restore({ backup: dir, now = new Date(), afterRename }) {
     error.message += `; undone: ${undone.join(',') || 'nothing'}`;
     throw error;
   }
+  // Excluded subtrees were moved back as they are; a change inside them is reported, not an error.
   const verified = compare({ backup: dir });
-  if (!verified.identical) throw new Error(`restored state differs from the backup manifest: ${JSON.stringify(verified.roots.map(r => ({ name: r.name, added: r.added, removed: r.removed, changed: r.changed, excludedChanged: r.excludedChanged })))}`);
-  return { restored: done, identical: true };
+  const differing = verified.roots.filter(r => r.missing || r.added || r.removed || r.changed || r.links);
+  if (differing.length) throw new Error(`restored state differs from the backup manifest: ${JSON.stringify(differing.map(r => ({ name: r.name, added: r.added, removed: r.removed, changed: r.changed })))}`);
+  return { restored: done, identical: true, excludedChanged: verified.roots.flatMap(r => r.excludedChanged.map(rel => `${r.name}:${rel}`)) };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -56,18 +56,22 @@ test('RIS-3 还原把现状改名挪开、复制备份回原处,排除的子目�
   f.write(path.join(f.install, 'app.exe'), 'candidate shell');
   f.write(path.join(f.install, 'runtime/app/server/new.mjs'), 'new');
   f.write(path.join(f.data, 'collaboration/vault.json'), 'test room');
+  f.write(path.join(f.install, 'cli/added-during-test.txt'), 'kept');
   const now = new Date('2026-10-05T12:00:00Z'), result = restore({ backup: f.out, now });
   assert.equal(result.identical, true);
+  assert.deepEqual(result.excludedChanged, ['install:cli'], '排除的子目录里的变化只报告,不当失败');
   assert.equal(text(path.join(f.install, 'app.exe')), 'original shell');
   assert.equal(fs.existsSync(path.join(f.install, 'runtime/app/server/new.mjs')), false);
   assert.equal(text(path.join(f.install, 'cli/tool.txt')), 'managed cli', '排除的子目录回到原处');
+  assert.equal(text(path.join(f.install, 'cli/added-during-test.txt')), 'kept', '排除的子目录不归还原管');
   assert.equal(fs.existsSync(path.join(f.data, 'collaboration')), false);
   const aside = `${f.install}.reopen-candidate-20261005T120000Z`;
   assert.deepEqual(result.restored.map(r => r.aside), [aside, `${f.data}.reopen-candidate-20261005T120000Z`]);
   assert.equal(text(path.join(aside, 'app.exe')), 'candidate shell', '候选版的文件留在挪开的目录里');
   assert.equal(text(path.join(aside, 'runtime/app/server/new.mjs')), 'new');
   assert.equal(text(path.join(f.out, 'install/app.exe')), 'original shell', '备份本身不动');
-  assert.equal(compare({ backup: f.out }).identical, true);
+  assert.deepEqual(compare({ backup: f.out }).roots.map(r => [r.name, r.added, r.removed, r.changed, r.excludedChanged]),
+    [['install', 0, 0, 0, ['cli']], ['data', 0, 0, 0, []]]);
 });
 
 test('RIS-4 备份不完整时在第一次改名之前就拒绝;中途失败只用改名退回', () => {
