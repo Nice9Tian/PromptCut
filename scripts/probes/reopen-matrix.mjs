@@ -14,8 +14,11 @@ export async function runRecoveryMatrix(o) {
   }, selector, text);
   const waitJournal = () => member.waitForFunction(async () => {
     const sync = window.probe.sync, descriptor = sync.getSyncView().association;
-    const r = await sync.recoveryRequest('select', descriptor, { contentId: window.probe.store.getState().project.id });
-    return r.journal?.pending?.length > 0;
+    // 本机存储暂时忙时这次查询会失败,在时限内再查,不当成断言失败
+    try {
+      const r = await sync.recoveryRequest('select', descriptor, { contentId: window.probe.store.getState().project.id });
+      return r.journal?.pending?.length > 0;
+    } catch { return false; }
   }, { timeout: 15000 });
   const paused = () => member.waitForFunction(() => window.probe.sync.getSyncView().status === 'paused', { timeout: 20000 });
   const screenshot = async (p, file) => {
@@ -93,10 +96,13 @@ export async function runRecoveryMatrix(o) {
   evidence.crashRetainsOfflineQueue = true; evidence.conflictReplayUi = true;
 
   phase('conflict discard UI retains a real local backup');
-  await member.evaluate(() => window.probe.sync.currentSharedLink().dropFor(1200));
+  // 离线窗口要盖住「成员的离线修改落盘 + 主机的修改保存」:成员先重连的话冲突不会发生。1.2 秒在机器忙时不够(实测落盘 1.7 秒、主机保存 3.4 秒)
+  await member.evaluate(() => window.probe.sync.currentSharedLink().dropFor(8000));
   await member.waitForFunction(() => !window.probe.sync.currentSharedLink().connected);
   await name(member, 'matrix-offline-discard'); await waitJournal();
-  await name(host, 'matrix-remote-discard'); await saved(host); await paused();
+  await name(host, 'matrix-remote-discard'); await saved(host);
+  assert.equal(await member.evaluate(() => window.probe.sync.currentSharedLink().connected), false, 'the member reconnected before the remote edit was saved; the conflict cannot occur');
+  await paused();
   await member.waitForSelector('[data-pc="offline-dialog"]');
   await screenshot(member, 'matrix-conflict-discard');
   await clickText(member, '[data-pc="offline-dialog"] button', '不要了，用现在的最新版本');
