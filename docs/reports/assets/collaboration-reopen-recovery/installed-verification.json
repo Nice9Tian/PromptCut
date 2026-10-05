@@ -1,7 +1,7 @@
 {
   "kind": "baseline-and-render-checks-2026-10-05",
   "date": "2026-10-05",
-  "scope": "type check, full tests and the rendering extras (G0-R) for the commits of the installed-build acceptance round. Between these commits only scripts/probes, server/test and docs changed; product code under src/, server/ and desktop/ is the same as at 613ce6e6.",
+  "scope": "type check, full tests and the rendering extras (G0-R) for the commits of the installed-build acceptance round. From 613ce6e6 to 05ab07c6 only scripts/probes, server/test and docs changed; product code under src/, server/ and desktop/ is the same as at 613ce6e6. Commits after 05ab07c6 change docs only.",
   "pc": {
     "silentPreload": "every command ran under --import=./scripts/lib/test-silent-processes.mjs with isolated data directories",
     "g0": [
@@ -9,7 +9,9 @@
         "tests": { "command": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/*.test.mjs src/**/*.test.mjs tools/report-worker/*.test.mjs", "equivalent": "npm test", "exitCode": 1, "tests": 4342, "pass": 4341, "fail": 1, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 58831.1138,
           "failure": "server/test/bakery-deps.test.mjs: the two new unit tests import script helpers and were not on the dependency-direction allow list", "fix": "8a6cbbaa" } },
       { "commit": "5254bd1cc88c78b459be54e22ea4f133ceb5de39", "types": { "exitCode": 0, "elapsedMs": 6049 },
-        "tests": { "exitCode": 0, "tests": 4342, "pass": 4342, "fail": 0, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 59755.1691 } }
+        "tests": { "exitCode": 0, "tests": 4342, "pass": 4342, "fail": 0, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 59755.1691 } },
+      { "commit": "05ab07c68b607c09c89fd990a480199e0071b323", "types": { "exitCode": 0, "elapsedMs": 6165 },
+        "tests": { "exitCode": 0, "tests": 4342, "pass": 4342, "fail": 0, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 63504.4108 } }
     ],
     "g0r": [
       { "name": "export determinism", "commit": "222198e7cafd992beb45e6a01b67f82c723f771e", "command": "node scripts/verify-determinism.mjs --url http://127.0.0.1:5203/?export=1", "exitCode": 0, "elapsedMs": 344393, "frames": 1800, "identical": 1800, "different": 0 },
@@ -23,6 +25,16 @@
       { "name": "preview-fallback-probe", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 0, "elapsedMs": 66563, "fails": [] },
       { "name": "preview-fallback-probe --page-preload", "commit": "7d7ead7061e9c362b709e3e25e23595c70a1277d", "exitCode": 0, "elapsedMs": 71668, "fails": [] }
     ],
+    "g0rSecondRun": { "commit": "05ab07c68b607c09c89fd990a480199e0071b323", "note": "the whole set again on one commit, same commands as the first run", "results": [
+      { "name": "export determinism", "exitCode": 0, "elapsedMs": 463598, "frames": 1800, "identical": 1800, "different": 0 },
+      { "name": "export equals snapshot replay", "exitCode": 0, "elapsedMs": 10388, "result": "PASS" },
+      { "name": "full-length pixel comparison with main", "baseline": "adc3ae2a31857e6edcf868ddc361fbb20e249f88", "exitCodes": [0, 0, 0], "elapsedMs": [160735, 176121, 863], "frames": { "baseline": 1800, "candidate": 1800 }, "result": "byte-identical over the full length" },
+      { "name": "ready-index-probe", "exitCode": 0, "elapsedMs": 70775, "fails": [] },
+      { "name": "stream-produce-probe --group", "exitCode": 0, "elapsedMs": 33492, "fails": [] },
+      { "name": "stream-produce-probe (normal mode; timing not authoritative on the PC)", "exitCode": 0, "elapsedMs": 54559, "fails": [], "encodeMs": [228, 230, 262], "p50": 230 },
+      { "name": "preview-fallback-probe", "exitCode": 0, "elapsedMs": 88249, "fails": [] },
+      { "name": "preview-fallback-probe --page-preload", "exitCode": 0, "elapsedMs": 89817, "fails": [] }
+    ], "harness": "the integration script stopped after the stream probes again (ports 5203-5205 not yet released by the previous editor); the two preview-fallback probes were then run separately and passed" },
     "harnessFailure": "the integration script's prerender phase stopped after the stream probes: it started the next editor on ports 5203-5205 before the previous one had released them. The two preview-fallback probes were then run separately, each on its own editor, and passed.",
     "notRun": "video-source-cadence-probe and video-seek-race-probe: the branch does not touch frame fetching, decoding, the card video source or frameMedia.ts"
   },
@@ -40,9 +52,22 @@
     "onlyFailingCheck": "the 300 ms encode limit; segment size, alpha error, restart behaviour and all other checks passed in every run",
     "machineState": "nobody at the machine; the OLED screensaver takes 4-8% CPU, the desktop application and the graphics overlay a few more; the background load stayed at 13-17%. The main comparison of the formal protocol could not start because the idle gate did not open within 15 minutes.",
     "codeOnEncodePath": "identical to main adc3ae2a: no file differs under server/bakery, server/frame-stream.mjs, server/frame-pipeline.mjs, server/frame-service.mjs, src/render, the probe itself, package.json or the lock file",
-    "previousIdleResult": "last round on this machine at 7-11% CPU: 264 / 294 / 307, p50 294",
+    "previousResults": "2026-10-04 on this machine: 237 / 248 / 273 (p50 248, CPU before the start 0-3%) and 264 / 294 / 307 (p50 294, CPU not recorded)",
+    "correction": "until 2026-10-06 this file said the 294 reading was taken at 7-11% CPU. That CPU figure belongs to an older record of the laptop session (p50 283 on 211695db, 2026-09-28, an earlier version of server/bakery/ffmpeg.mjs) whose result files are not in the repository",
+    "timedCode": { "what": "the probe times openStreamSegmentEncoder in server/bakery/ffmpeg.mjs: start ffmpeg, write 15 PNG frames, finish",
+      "sameFileObject": { "server/bakery/ffmpeg.mjs": "2d5cf7787da2596ede6fe0b75eefe54704c773a6", "scripts/probes/stream-produce-probe.mjs": "7c02a3914dfa728e9f03663e5d6a7901580b4b85", "at": ["501a7dd7 (the fix merged into main, 2026-09-28)", "adc3ae2a (main)", "05ab07c6 (branch)"] },
+      "readingsOnTheLaptop": [
+        { "when": "2026-09-27", "p50": "355-397", "note": "before the fix; source: docs/plan/TODO.md" },
+        { "when": "2026-09-28", "p50": "207-224", "note": "after the fix; source: docs/plan/TODO.md. Measured at the time of the fix: median 211 at 2-4% CPU, 245-276 with 8-13% background load; source: docs/archive/agent-reports/AGENT-perf-encode-2.md" },
+        { "when": "2026-09-30", "p50": 261, "note": "final integration of that round; source: docs/plan/TODO.md" },
+        { "when": "the round after", "p50": 287, "note": "screensaver taking CPU; source: REPORT-post-M8.md section 7.5" },
+        { "when": "2026-10-04", "p50": 248, "note": "this branch, first formal run, CPU before the start 0-3%; source: laptop-stream.json" },
+        { "when": "2026-10-04", "p50": 294, "note": "this branch, formal re-run later the same day, CPU not recorded; source: laptop-stream-fixed.json" },
+        { "when": "2026-10-05", "p50": [335, 313, 358, 357, 311, 367], "note": "this round, unattended, screensaver running, CPU 13-17%" }
+      ] },
+    "machineFacts": { "takenAt": "2026-10-05T15:13Z to 15:16Z, read-only queries by the laptop session; no timing run, no settings changed", "power": "on AC, battery 100%", "powerScheme": "Balanced; Windows power mode on AC: best performance", "vendorPerformanceMode": "not found; the vendor's own interface was not opened", "cpu": "AMD Ryzen 7 6800H, 8 cores, 16 logical processors", "percentProcessorPerformanceAtLowLoad": { "min": 78.8, "max": 83.4, "mean": 81.9 }, "percentProcessorUtility": { "min": 10.5, "max": 13.4, "mean": 11.4 }, "percentProcessorTime": { "min": 11, "max": 18, "mean": 13.4 }, "screensaver": "running; 4.7% of all logical processors over 30 s, about 0.75 of a core", "otherTopProcesses": "three processes of the desktop application 3.94% + 0.74% + 0.53%, one WebView2 process 0.43%", "encoder": "libx264, software; pool 1; the test browser renders in software", "ffmpeg": "9.0.1 full build", "upSince": "2026-10-03T18:00:57Z", "conclusion": "no battery operation, power saving or frequency limit found; nothing that could be removed without a person at the machine" },
     "next": "formal re-measurement of branch and main when the user is at the laptop and the screensaver is not in front",
     "environment": { "node": "v24.19.0", "chrome": "HeadlessChrome/152.0.7977.75, software rendering", "ffmpeg": "9.0.1-full_build", "receivedVia": "cross-session messages from the laptop session; result files stay on the laptop" }
   },
-  "mainMoved": { "from": "adc3ae2a31857e6edcf868ddc361fbb20e249f88", "to": "f951553cc9f1bd8507f50c0e840a2b96eac25ad8", "commits": 12, "content": "test start script (npm test now runs scripts/test-suite.mjs) and draft documents", "mergePreview": "one conflict: server/test/bakery-deps.test.mjs (both sides added allow-list entries)" }
+  "mainMoved": { "from": "adc3ae2a31857e6edcf868ddc361fbb20e249f88", "to": "f951553cc9f1bd8507f50c0e840a2b96eac25ad8", "commits": 12, "content": "test start script (npm test now runs scripts/test-suite.mjs) and draft documents", "mergePreview": "one conflict: server/test/bakery-deps.test.mjs (both sides added allow-list entries)", "checkedAgain": { "date": "2026-10-06", "originMain": "f951553cc9f1bd8507f50c0e840a2b96eac25ad8", "mergePreview": "git merge-tree --write-tree HEAD origin/main: one conflict, server/test/bakery-deps.test.mjs; docs/plan/TODO.md merges automatically", "mainWorkspace": "on main at a1b4b626, one commit behind origin/main, with two uncommitted items: a modified docs/semantics/guide_files/verification.md and an untracked docs/plan/collaboration-reopen-recovery-plan.md. Both are byte-identical to the files on this branch and have to be moved out of the way before a merge" } }
 }
