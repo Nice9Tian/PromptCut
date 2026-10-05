@@ -1,0 +1,82 @@
+{
+  "kind": "installed-build-default-double-click-host-v1",
+  "date": "2026-10-05",
+  "scenario": "plan section 11, row 6: system default double click on a really installed build; the installed build is the original host",
+  "result": "passed",
+  "where": "laptop (performance reference machine), Windows user profile of the machine owner; no test shell, no association rewrite",
+  "receivedVia": "cross-session messages from the laptop session and mailbox receipts from the cloud session; raw files stay on those machines and were not re-hashed on the PC",
+  "build": {
+    "sourceCommit": "613ce6e66e1b33f095d3c6458a09ec1281007c06",
+    "builtOn": "laptop, isolated git repository, node desktop/scripts/build-release.mjs --from-head (script body of `npm run release -- --from-head`)",
+    "actualExitCode": 0,
+    "elapsedSeconds": 912.7,
+    "installer": { "name": "PromptCut-0.7.14-setup.exe", "bytes": 437638866, "sha256": "4bfab5777fc11985d451345f6c6c3c5e59392f7d5c1dcb406ea42439348c4c15" },
+    "manifest": { "name": "manifest-0.7.14.json", "bytes": 277412, "sha256": "3f383aa1a6ecf411c6f3a888af06e1514566e8f190e27fae0b2fb01e8a2efd6d", "files": 2498, "matchedRuntimeApp": 2498, "missing": 0, "mismatched": 0 },
+    "appSrcHash": "a0cbfb7764acb226e0c50d683ba3e0ea95e7ffd88af186b5761bdf599c787fe9",
+    "runtimeBuiltAt": "2026-10-05T10:20:44.139Z",
+    "diagnosticSubmitConfiguration": "loopback placeholders; a candidate for acceptance, not a package for release",
+    "toolchain": "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc on the child only; global default unchanged",
+    "fetchedFromOfficialSources": ["233 crates (cargo fetch --locked)", "python-3.11.9-embed-amd64.zip, get-pip.py, numpy 2.2.6, Pillow 12.3.0", "npm packages of the two npm ci steps (cache copied; network use per package not distinguishable from the log)"],
+    "failedAttempts": ["first npm ci: exit 1 after 0 s, wrong quoting in the laptop's own driver, nothing touched", "cargo fetch --locked --offline: exit 101, copied registry incomplete; repeated online"]
+  },
+  "backup": {
+    "tool": "scripts/probes/reopen-installed-state.mjs backup, commit 43c581a5",
+    "actualExitCode": 0,
+    "elapsedSeconds": 129,
+    "roots": { "install": { "files": 34750, "bytes": 2027242315 }, "data": { "files": 3, "bytes": 7395 }, "webview": { "files": 6007, "bytes": 412993739 }, "videos": { "files": 13981, "bytes": 1405868008 } },
+    "compareAfterBackup": { "actualExitCode": 0, "identical": true },
+    "registrySnapshotBefore": ["HKCU\\Software\\Classes\\.proc", "HKCU\\Software\\Classes\\PromptCut Project", "HKCU\\...\\Uninstall\\PromptCut", "HKCU\\...\\Explorer\\FileExts\\.proc (absent)"]
+  },
+  "install": {
+    "command": "PromptCut-0.7.14-setup.exe /S, started hidden, waited on the process handle",
+    "installerSha256Checked": true,
+    "actualExitCode": 0,
+    "elapsedSeconds": 68,
+    "securityPrompts": "none",
+    "preflightBefore": { "actualExitCode": 1, "reason": "installed runtime has no VERSIONS.json", "note": "the previous installation's VERSIONS.json starts with a byte order mark; the probe misnamed the reason and was corrected in ecf9f2a7. The refusal itself was right." },
+    "preflightAfter": { "actualExitCode": 0, "ok": true, "progId": "PromptCut Project", "userChoice": false, "payload": { "files": 2498, "missing": 0, "mismatched": 0 }, "exeSha256": "cfcd5d962b1a9c1ceb1fe38232be4679e1879226fd46f45d4fc0de6505b5d086" },
+    "registryAfter": "identical to before except Uninstall\\PromptCut EstimatedSize; .proc and PromptCut Project unchanged; FileExts\\.proc absent before and after; Start menu and desktop shortcuts unchanged",
+    "associationWrittenBy": "the installer only"
+  },
+  "run": {
+    "probeCommit": "e7d0d1ecf88aaf53455f31e4ea70f5b0b0897ab9",
+    "productCodeSameAsBuild": "outside scripts/probes, server/test and docs there is no difference from 613ce6e6",
+    "command": "node --import=./scripts/lib/test-silent-processes.mjs scripts/probes/reopen-installed.mjs --manifest <laptop build>/manifest-0.7.14.json --app-src-hash a0cbfb77… --service <temporary public entry> --external-member --seal-dir <owned> --control <owned> --peer-port 5580 --click-timeout-ms 2400000",
+    "actualExitCode": 0,
+    "stderr": "empty",
+    "evidence": {"ok":true,"kind":"promptcut-installed-reopen-v1","actor":"host","room":"sp_3fhfqwrfkso6txveiy2rlp76ef","firstAuth":{"actualAuthenticationUi":true,"speechPromptDismissed":false},"hostPidBefore":2624,"hostPidAfter":5872,"memberWaitThenAutomaticJoin":true,"stableDevice":true,"bidirectionalEdits":4,"binding":{"creator":true,"where":"lan","hostBinding":true,"rev":5},"asset":{"bytes":50000,"hash":"2c168f246539ab6b75a3e7333a2bcb434eeb87a0823bd9df21e209c57ffc82ca","namespaces":["media","snap","px"]},"external":{"username":"wan-member","editSeenByHostAndMember":true},"forwarded":{"secondary":true,"pid":6208,"createdAt":"2026-10-05T12:02:06.2250905Z","armedAt":"2026-10-05T12:01:53.663Z","parentName":"explorer.exe","parentPid":1640,"parentCreatedAt":"2026-10-05T11:58:53.7258272Z","installedExecutable":true,"fileOnCommandLine":true,"via":"explorer-double-click","rejectedBefore":0,"openEvents":1,"replacedLink":true},"cloudRestarted":false,"firstRunPanelClosed":false,"recoveryCreateRequests":0,"originalFileUnchanged":true,"service":"temporary-public-https-entry","launchMode":"explorer-double-click","osDoubleClick":true,"osShellOpen":false,"rehearsal":false,"installed":{"exeSha256":"cfcd5d962b1a9c1ceb1fe38232be4679e1879226fd46f45d4fc0de6505b5d086","versions":{"node":"v24.19.0","chrome":"152.0.7977.75","ffmpeg":"ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers","python":"Python 3.11.9","app":"0.7.14","appSrcHash":"a0cbfb7764acb226e0c50d683ba3e0ea95e7ffd88af186b5761bdf599c787fe9","builtAt":"2026-10-05T10:20:44.139Z"},"payload":{"files":2498,"missing":0,"mismatched":0,"sample":[]},"progId":"PromptCut Project","userChoice":false},"launches":[{"secondary":false,"pid":5872,"createdAt":"2026-10-05T11:59:01.6710928Z","armedAt":"2026-10-05T11:58:47.876Z","parentName":"explorer.exe","parentPid":1640,"parentCreatedAt":"2026-10-05T11:58:53.7258272Z","installedExecutable":true,"fileOnCommandLine":true,"via":"explorer-double-click","rejectedBefore":0},{"secondary":true,"pid":6208,"createdAt":"2026-10-05T12:02:06.2250905Z","armedAt":"2026-10-05T12:01:53.663Z","parentName":"explorer.exe","parentPid":1640,"parentCreatedAt":"2026-10-05T11:58:53.7258272Z","installedExecutable":true,"fileOnCommandLine":true,"via":"explorer-double-click","rejectedBefore":0}],"rejectedLaunches":[],"fileAssociationsChanged":false,"evidenceDirectory":"<laptop-temp>/pc-reopen-installed-MGhAI3"},
+    "evidenceEdits": "service and evidenceDirectory are replaced by neutral labels; nothing else changed"
+  },
+  "operator": {
+    "who": "laptop session, computer-use granted by the user at the laptop (File Explorer: click tier; PromptCut: full)",
+    "folderWindow": "opened by command with the folder path only (explorer.exe \"<run dir>\\files\"); that Explorer process is pid 1640, the parent of both launches",
+    "firstDoubleClick": "screenshot before: window titled files, one row original-host.proc, type column PromptCut 项目文件, no dialog; real double click on the file name; afterwards the PromptCut editor window with project name host-after and 2 members, no Open-with box, security prompt or first-run panel",
+    "secondDoubleClick": "PromptCut open with project name external-after-reopen; the same Explorer window brought forward from the taskbar, real double click on the same file; afterwards still one PromptCut window, no dialog",
+    "screenshotSeenByOperator": "installed-restored.png: editor window, project name external-after-reopen, member indicator, timeline with clips, no dialog",
+    "productNoticeObserved": "after the external member's edit the host showed: your recent change was overwritten by wan-member and saved to a local backup. The probe makes host and external member edit the same field in turn; recorded as an observation, not a failure."
+  },
+  "externalMember": {
+    "who": "cloud session in a container that can only dial out, Node v22.22.0, egress 160.79.106.129",
+    "probeCommit": "ecf9f2a7fa1d437740ee2ceefe180f9d44aa3210",
+    "command": "node scripts/probes/reopen-wan-member.mjs --hold --dir <owned> --to <host public key>; run parameters arrived later as run.json",
+    "actualExitCode": 0,
+    "elapsedSeconds": 22.6,
+    "result": {"ok":true,"roomId":"sp_3fhfqwrfkso6txveiy2rlp76ef","username":"wan-member","role":"member","revBeforeEdit":5,"edit":"external-after-reopen","assets":[{"namespace":"media","bytes":50000,"hashVerified":true},{"namespace":"snap","bytes":50000,"hashVerified":true},{"namespace":"px","bytes":50000,"hashVerified":true}],"connections":2,"restoredDeviceIdentityOnLastConnection":true,"passwordKeptInMemoryOnly":true,"node":"v22.22.0"},
+    "secretHandling": "the member generated its password in process memory and returned only text sealed to the host's public key; mailbox and messages carried the public key and the sealed text"
+  },
+  "publicEntry": {
+    "kind": "task-owned temporary HTTPS/WS entry in front of an isolated hosting directory on the authorised test host; no production service, DNS, firewall or account",
+    "tunnelBinary": { "version": "cloudflared 2026.9.3", "bytes": 40122749, "sha256": "77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2", "matchesOfficialReleaseDigest": true },
+    "firstStartAttempt": "failed: entry not reachable from the PC within the probe's 15 checks; started on the next attempt"
+  },
+  "earlierAttempts": [
+    { "name": "computer-use access request", "result": "denied (user_denied; nobody at the laptop). The session did not work around it. Granted later by the user." },
+    { "name": "shell-open stand-in (probe asks Explorer to open the file), probe c673369f", "result": "not completed", "passedParts": "cold open through the registered association recovered the room (pid 34176, file on the command line); the cloud member joined, read three asset namespaces and edited (exit 0, 14.8 s, egress 160.79.106.128)", "failedPart": "the second open while the window was up happened (the host replaced its connection at 11:20:40Z) but the probe's watcher could not read that short-lived process before it exited and waited without a receipt", "fix": "fdd350e6: the watcher asks the system directly for each new process" },
+    { "name": "first real double-click run, probe fdd350e6", "result": "exit 1 before any double click: room creation failed (name-taken); the installed build keeps the previous run's room", "fix": "e7d0d1ec: unique room name per run" }
+  ],
+  "notCovered": [
+    "the candidate's diagnostic submission points at loopback placeholders",
+    "the version number was not bumped; this is a build of the branch at 0.7.14 / shell 0.2.7, not the release build",
+    "one unexplained 5 s drop and return of the host registration at 11:30:28Z during the stand-in run while nothing was operated"
+  ]
+}
