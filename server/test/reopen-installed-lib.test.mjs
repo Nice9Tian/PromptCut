@@ -73,6 +73,11 @@ test('RIL-5 关联指向别的程序、被用户选择覆盖、或根本没有�
   assert.deepEqual(installedIdentity(chosen.association, { manifest: chosen.manifest, appSrcHash: 'a'.repeat(64) }).reasons, ['a per-user choice overrides the installed association']);
   assert.deepEqual(installedIdentity({ exe: null }, { manifest: { files: {} }, appSrcHash: 'x' }), { ok: false, reasons: ['.proc has no installed program'] });
   assert.deepEqual(installedIdentity({ exe: path.join(os.tmpdir(), 'missing', 'promptcut.exe') }, { manifest: { files: {} }, appSrcHash: 'x' }).ok, false);
+  const patched = installed(); const versionsFile = path.join(patched.dir, 'runtime', 'VERSIONS.json');
+  fs.writeFileSync(versionsFile, '﻿' + fs.readFileSync(versionsFile, 'utf8'));
+  assert.equal(installedIdentity(patched.association, { manifest: patched.manifest, appSrcHash: 'a'.repeat(64) }).ok, true, '带字节序标记的 VERSIONS.json 照常读');
+  fs.writeFileSync(versionsFile, 'not json');
+  assert.deepEqual(installedIdentity(patched.association, { manifest: patched.manifest, appSrcHash: 'a'.repeat(64) }).reasons, ['installed runtime has no readable VERSIONS.json']);
   const old = installed({ version: '0.7.13' });
   assert.deepEqual(installedIdentity(old.association, { manifest: old.manifest, appSrcHash: 'a'.repeat(64) }).reasons, ['installed application version differs from the manifest']);
 });

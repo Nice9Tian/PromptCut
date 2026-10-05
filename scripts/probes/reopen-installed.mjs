@@ -46,7 +46,8 @@ const flag = name => process.argv.includes(name);
 const memberRole = flag('--member'), externalMember = flag('--external-member'), rehearsal = arg('--rehearse-fixture');
 const clickTimeoutMs = Number(arg('--click-timeout-ms') ?? 900000), peerPort = Number(arg('--peer-port') ?? 5206);
 assert.equal(process.platform, 'win32', 'Windows only');
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-installed-'));
+// Explorer hands the application the long form of a path; keep the run directory in that form.
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-installed-')));
 const control = path.resolve(arg('--control') ?? path.join(root, 'control')), files = path.join(root, 'files');
 const sealDir = path.resolve(arg('--seal-dir') ?? path.join(root, 'seal'));
 fs.mkdirSync(control, { recursive: true }); fs.mkdirSync(files);
@@ -202,7 +203,7 @@ async function attach(pid, { file } = {}) {
   connections.add(connection);
   let p;
   await waitFor(async () => { p = (await connection.pages()).find(x => x.url().startsWith(`http://127.0.0.1:${app.port}/`)); return p; }, 90000, 'editor page of the launched instance');
-  if (file) assert.equal(new URL(p.url()).searchParams.get('open'), file, 'the double-clicked file must reach the boot address');
+  if (file) assert.equal(String(new URL(p.url()).searchParams.get('open')).toLowerCase(), file.toLowerCase(), 'the double-clicked file must reach the boot address');
   await observe(p);
   assert.equal(await p.evaluate(() => !!window.__TAURI__?.core?.invoke), true, 'actual desktop shell required');
   assert.equal((await p.evaluate(() => window.__TAURI__.core.invoke('agent_webview_info'))).port, port, 'attached to another debugging endpoint');
@@ -261,7 +262,7 @@ async function secondDoubleClick(file, room, username) {
   const { p } = running;
   await p.evaluate(async target => {
     window.reopenOpenEvents = 0; window.reopenLinkBefore = window.probe.sync.currentSharedLink();
-    await window.__TAURI__.event.listen('pc-open-file', ev => { if (ev.payload === target) window.reopenOpenEvents++; });
+    await window.__TAURI__.event.listen('pc-open-file', ev => { if (String(ev.payload).toLowerCase() === target.toLowerCase()) window.reopenOpenEvents++; });
   }, file);
   const receipt = await explorerLaunch(file, { secondary: true });
   await p.waitForFunction(() => window.reopenOpenEvents >= 1, { timeout: 30000 });
@@ -286,7 +287,7 @@ async function hostRole() {
   }
   phase = 'start own member'; let peerProcess = await peerEditor(), peer = await peerPage();
   phase = 'start the application and create the room';
-  let native = await startPlain(); await native.p.click('.sp-hero'); await clearOverlays(native.p, app.firstRunWaitMs);
+  let native = await startPlain(); await native.p.waitForSelector('.sp-hero', { timeout: 60000 }); await native.p.click('.sp-hero'); await clearOverlays(native.p, app.firstRunWaitMs);
   const created = await native.p.evaluate(o => window.probe.collab.enableCollab(o), { where: 'lan', mode: 'restricted', name: 'reopen-installed', creator: { username: 'host', password: creatorPassword }, projectPassword: password, list, hostedUrl: service });
   assert.equal(created.ok, true, `room creation failed (${created.error || 'unknown'})`);
   const hostFile = await saved(native.p), descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId;
@@ -348,7 +349,7 @@ async function memberRole_() {
   const descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId; service = descriptor.service;
   assert.equal(hostFile.includes(mine.password), false, 'project file must not contain a password');
   phase = 'start the application and authenticate as member';
-  let native = await startPlain(); await native.p.click('.sp-hero'); await clearOverlays(native.p, app.firstRunWaitMs);
+  let native = await startPlain(); await native.p.waitForSelector('.sp-hero', { timeout: 60000 }); await native.p.click('.sp-hero'); await clearOverlays(native.p, app.firstRunWaitMs);
   await openText(native.p, hostFile); const firstAuth = await authenticate(native.p, 'member', mine.password);
   await connected(native.p, room, 'member', 60000);
   const tag = `r${randomBytes(4).toString('hex')}`, firstPid = native.pid, device = await deviceOf(native.p);
