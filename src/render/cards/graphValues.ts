@@ -31,3 +31,8 @@ export function bitmap(image: ImageBitmap | ImageData | OffscreenCanvas): Bitmap
 }
 
 export type { CardGpuValue, SourceValue };
+
+/** 默认输入查询沿当前卡片源时钟走，GPU 执行器不会把它误当作裁切后的局部时间。 */
+export function sourceValueAt(ref: { nodeId: string; offset?: number; rate?: number }, sourceTime: number, requestedTime?: number): SourceValue {
+  return { type: "source", nodeId: ref.nodeId, offset: ref.offset ?? 0, rate: ref.rate ?? 1, time: requestedTime ?? sourceTime };
+}

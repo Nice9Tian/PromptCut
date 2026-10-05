@@ -60,6 +60,7 @@ const STAGE_HANDOVER_MAX_MS = 3000;
 /** 新的可见舞台第一次 `setTime` 回包(或报来第一拍)之后再等这么久撤盖板,让它把这一帧画到屏上 */
 const STAGE_HANDOVER_SETTLE_MS = 150;
 import { createStageWatch, type StageWatch } from "../online/stageWatch";
+import { builtinCardSourceFiles } from "../render/cardSourceFiles.mjs";
 import { builtinSourceExports } from "../cards/builtinSourceExports";
 import { pageL2 } from "../online/l2";
 import { l2CostBackend } from "../online/l2Costs";
@@ -1024,7 +1025,7 @@ export function Preview() {
     const sources = new OnlineCardSources({
       request: docRequest, linkKey,
       // 用户卡源码从内置模块引进来的控件、默认值:用页面自己带着的那份(`src/cards/builtinSourceExports.ts`)
-      builtins: builtinSourceExports,
+      builtins: builtinSourceExports, sourceFiles: builtinCardSourceFiles,
       onFirstSettled: (ok, link) => releaseMeasureGate(ok, link),
     });
     const push = () => {

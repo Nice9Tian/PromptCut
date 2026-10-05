@@ -10,6 +10,7 @@
  *
  * 这一层不认识编辑器:项目、素材服务、文档服务、提示、确认都由调用方(`src/editor/io/index.ts` 的 `exportVideo` 在线分支)注入。
  */
+import { assertProjectCardAudio } from "../audio/cardAudio";
 import type { Project } from "../kernel/project";
 import { audioPlanOf } from "../kernel/audioPlan.mjs";
 import { renderMix, encodeWavFloat32, type MixPlan } from "../audio/renderMix";
@@ -130,6 +131,7 @@ async function sliceWav(source: ArrayBuffer, offset: number, dur: number): Promi
 
 async function encodeAudio(deps: BrowserExportDeps, durationSec: number): Promise<EncodedAudio | null> {
   const project = deps.project;
+  assertProjectCardAudio(project);
   const all = audioPlanOf(project).filter((e: { start: number }) => e.start < durationSec);
   if (!all.length) return null;
   const byId = new Map(project.media.map((m) => [m.id, m]));
@@ -213,6 +215,7 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
 
   const cap = await probeExportCapability({ width: project.width, height: project.height, fps }, deps.env);
   if (!cap.ok || !cap.videoCodec) throw new Error(cap.message || ONLINE_EXPORT_TEXT.unsupportedSize);
+  assertProjectCardAudio(project);
   const wantsAudio = audioPlanOf(project).some((e: { start: number }) => e.start < durationSec);
   if (wantsAudio && !cap.audio && !(await deps.confirm(ONLINE_EXPORT_TEXT.noAudio))) throw cancelled();
 

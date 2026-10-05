@@ -49,6 +49,7 @@ export interface AudioSourceContext {
   project: Pick<Project, "tracks" | "media">;
   getCard: (id: string) => CardDef<any> | undefined;
   sampleRate: number;
+  signal?: AbortSignal;
 }
 
 /** 声道恒定 2:路由固定 `ch=2`,和 `card-service.mjs` 那条老路一致 */
@@ -202,15 +203,20 @@ export interface AudioRange { start: number; count: number; sampleRate: number }
 
 /** 找节点 → 注册表里的定义 → `def.audio(sources, range, params)`。返回交错的采样块 */
 export async function evaluateCardAudio(ctx: AudioSourceContext, nodeId: string, range: AudioRange): Promise<Float32Array> {
+  if (ctx.signal?.aborted) throw new DOMException("aborted", "AbortError");
+  if (onlinePage()) fail("在线浏览器模式不能执行卡片声音源码，请使用已生成的声音素材");
   const node = nodeOf(ctx, nodeId);
   if (!node) fail(`audio node ${nodeId} is missing`);
   const cardId = typeof node!.cardId === "string" ? node!.cardId : "";
   const def = cardId ? ctx.getCard(cardId) : undefined;
   if (!def?.audio) fail(`card ${cardId || node!.id} has no audio()`);
-  const samples = await def!.audio!(audioSourcesOf(ctx, node!), range, paramsOfAudioNode(ctx, node!) as any);
+  const mapped = { ...range, start: range.start + Math.round((Number(node!.timeOffset) || 0) * range.sampleRate) };
+  const samples = await def!.audio!(audioSourcesOf(ctx, node!), mapped, paramsOfAudioNode(ctx, node!) as any);
   if (!(samples instanceof Float32Array)) fail(`card ${cardId} audio() must return a Float32Array`);
   if (samples.length < 1 || samples.length % range.count !== 0) {
     fail(`card ${cardId} audio() returned ${samples.length} samples for ${range.count} frames (not a whole number of channels)`);
   }
+  if (ctx.signal?.aborted) throw new DOMException("aborted", "AbortError");
+  if (samples.length / range.count > 8 || samples.some(value => !Number.isFinite(value))) fail(`card ${cardId} audio() returned invalid samples or too many channels`);
   return samples;
 }

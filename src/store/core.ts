@@ -13,6 +13,8 @@ import { type Transition } from "../kernel/transitions";
  */
 
 export interface EditorState {
+  /** Changes only when a project is opened/replaced; async jobs must not survive reopening. */
+  projectLoadToken: number;
   project: Project;
   /** 播放头(秒) */
   t: number;
@@ -53,6 +55,7 @@ export function readVolume(): number {
 }
 
 export let state: EditorState = {
+  projectLoadToken: 0,
   project: createEmptyProject(),
   t: 0,
   playing: false,

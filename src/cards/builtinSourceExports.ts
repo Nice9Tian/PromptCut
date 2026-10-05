@@ -10,9 +10,11 @@
  */
 import { hudControls, hudDefaults, hudOffsetControls, hudOffsetDefaults } from "./native/hud";
 import { assetOptions, type AssetKind } from "./catalogAssets";
+import { NOTIFICATION_SOUND_DEFAULTS, KEYBOARD_SOUND_DEFAULTS } from "../kernel/soundEffects";
 import { pureCall } from "../kernel/cardSourceParse.mjs";
 
 export const BUILTIN_SOURCE_EXPORTS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = Object.freeze({
+  "src/kernel/soundEffects.ts": Object.freeze({ NOTIFICATION_SOUND_DEFAULTS, KEYBOARD_SOUND_DEFAULTS }),
   "src/cards/native/hud.ts": Object.freeze({ hudControls, hudDefaults, hudOffsetControls, hudOffsetDefaults }),
   "src/cards/catalogAssets.ts": Object.freeze({
     assetOptions: pureCall((kind: unknown) => (kind === "lottie" || kind === "particles" ? assetOptions(kind as AssetKind) : null)),

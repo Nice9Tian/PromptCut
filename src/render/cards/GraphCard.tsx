@@ -6,6 +6,7 @@ import { getCard } from "../../kernel/registry";
 import type { CardDef, Clip, GraphCardSource, Timeline } from "../../kernel/types";
 import { CARD_AUDIO_SAMPLE_RATE } from "../../audio/cardAudio";
 import { blockOf, resolveAudioRef, type AudioSourceContext } from "./audioSources";
+import { sourceValueAt } from "./graphValues";
 import { CardSurface } from "./CardSurface";
 import { CardGpuExecutor, type CardGpuError, type CardGpuValue, type PixelsValue, type SourceValue, type ValueResolver } from "./gpuExecutor";
 import { CardMediaSource } from "./mediaSource";
@@ -85,7 +86,8 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
     const upstreamDef = getCard(node.cardId as string);
     if (typeof upstreamDef?.card !== "function") throw new Error(`上游图卡的定义找不到：${node.cardId}`);
     const upstreamParams = { ...upstreamDef.defaults, ...(node.params as Record<string, unknown>) };
-    const upstreamValue = await upstreamDef.card(sourcesOf(node, time, depth), time, upstreamParams,
+    const sourceTime = time + (Number(node.timeOffset) || 0);
+    const upstreamValue = await upstreamDef.card(sourcesOf(node, sourceTime, depth), sourceTime, upstreamParams,
       { fps, width, height, duration, stage });
     let slot = upstream.current.get(depth);
     if (!slot) {
@@ -98,7 +100,7 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
     if (slot.canvas.width !== Math.max(1, width) || slot.canvas.height !== Math.max(1, height)) {
       slot.canvas.width = Math.max(1, width); slot.canvas.height = Math.max(1, height);
     }
-    await slot.executor.execute(upstreamValue, time, signal);
+    await slot.executor.execute(upstreamValue, sourceTime, signal);
     return createImageBitmap(slot.canvas);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fps, width, height, duration, stage]);
@@ -116,8 +118,7 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
       const ref = typeof input === "string" ? { nodeId: input, offset: 0, rate: 1 } : { offset: 0, rate: 1, ...input };
       sources[name] = {
         nodeId: ref.nodeId,
-        at: (at?: number) => ({ type: "source", nodeId: ref.nodeId, offset: ref.offset, rate: ref.rate,
-          ...(at === undefined ? null : { time: at }) }) as SourceValue,
+        at: (at?: number) => sourceValueAt(ref, time, at),
         pixels: (at?: number, signal?: AbortSignal) =>
           renderNode(ref.nodeId, (at ?? time) * (ref.rate ?? 1) + (ref.offset ?? 0), depth + 1, signal),
         block: (start: number, count: number) => blockOf(audioContext, resolveAudioRef(audioContext, input), start, count),
@@ -146,7 +147,8 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
       const node = nodeAt(nodeId);
       if (!node) throw new Error(`图卡节点不存在：${nodeId}`);
       if (typeof def.card !== "function") throw new Error(`${def.id} 不是视觉图卡`);
-      return def.card(sourcesOf(node, t, 0), t, params, { fps, width, height, duration, stage });
+      const sourceTime = t + (Number(node.timeOffset) || 0);
+      return def.card(sourcesOf(node, sourceTime, 0), sourceTime, params, { fps, width, height, duration, stage });
     })();
     void evaluate
       .then((result) => { if (!controller.signal.aborted) setValue({ value: result, evaluatedTime: t, evaluatedGraph: graph, evaluatedNodeId: nodeId }); })
@@ -177,7 +179,7 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
   if (!graph) return null;
   return <div data-pc-graph-node={nodeId} data-pc-card-error={failure || undefined} style={{ width: "100%", height: "100%" }}>
     {value && <CardSurface value={value.value} width={width} height={height}
-      time={t} enabled={value.evaluatedTime === t && value.evaluatedGraph === graph && value.evaluatedNodeId === nodeId}
+      time={t + (Number(nodeAt(nodeId)?.timeOffset) || 0)} enabled={value.evaluatedTime === t && value.evaluatedGraph === graph && value.evaluatedNodeId === nodeId}
       resolveSource={resolveSource} onReady={ready} onError={failed} />}
     {failure && <span role="status">{failure}</span>}
   </div>;

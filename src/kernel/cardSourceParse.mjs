@@ -1202,7 +1202,7 @@ export function parseCardSource(source, opts = {}) {
     let fields;
     try { fields = literalFields(mod, props); } catch { fields = { defaults: {}, controls: [], controlsIncomplete: true, skippedControls: [{ reason: "解析出错" }] }; }
     const { description, defaults, controls, controlsIncomplete, skippedControls } = fields;
-    out.push({ id, name, ...(description !== undefined ? { description } : {}), defaults, controls, controlsIncomplete, skippedControls });
+    out.push({ id, name, ...(props.has("audio") && (props.has("Component") || props.has("card")) ? { embeddedAudio: true } : {}), ...(description !== undefined ? { description } : {}), defaults, controls, controlsIncomplete, skippedControls });
   }
   return out;
 }

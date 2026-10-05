@@ -15,7 +15,7 @@ export const coreActions = {
     const sync = getProjectSync();
     const project = sync ? sync.load(normalized) : normalized;
     // lastCamera3dFov 跟着项目走,换项目要清掉,否则三维视角会串味
-    set({ project, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null, lastCamera3dFov: null });
+    set({ project, projectLoadToken: state.projectLoadToken + 1, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null, lastCamera3dFov: null });
   },
   newProject(name?: string) {
     coreActions.loadProject(createEmptyProject(name));

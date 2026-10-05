@@ -10,6 +10,7 @@ export interface SkippedControl {
 
 /** 源码里认出的一张卡(`defaults` / `controls` / `description` 只认字面量,见 `cardSourceParse.mjs` 文件头) */
 export interface ParsedCardSource {
+  embeddedAudio?: boolean;
   id: string;
   name: string;
   description?: string;
