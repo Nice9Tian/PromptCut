@@ -58,20 +58,59 @@ if ($Mode -eq 'processes') {
     exit 0
 }
 
-# watch: a second launch only lives until it has handed its file to the running window,
-# so poll the cheap process list quickly and ask WMI about each new id once.
+# watch: a second launch only lives until it has handed its file to the running window, sometimes
+# well under a tenth of a second. WMI is too slow for that, so each new process id is asked directly
+# for its command line, parent and start time while its handle is open.
+Add-Type -TypeDefinition @'
+using System; using System.Text; using System.Runtime.InteropServices;
+public static class PromptCutProcess {
+    [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr handle, int infoClass, IntPtr buffer, int length, out int returned);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr handle, int flags, StringBuilder name, ref int size);
+    [DllImport("kernel32.dll")] static extern bool GetProcessTimes(IntPtr handle, out long created, out long exited, out long kernel, out long user);
+    public class Info { public int Pid; public int ParentPid; public string Exe; public string CommandLine; public long Created; }
+    public static Info Query(int pid) {
+        IntPtr handle = OpenProcess(0x1000, false, pid);   // PROCESS_QUERY_LIMITED_INFORMATION
+        if (handle == IntPtr.Zero) return null;
+        try {
+            var info = new Info { Pid = pid }; int returned;
+            IntPtr basic = Marshal.AllocHGlobal(IntPtr.Size * 6);
+            try { if (NtQueryInformationProcess(handle, 0, basic, IntPtr.Size * 6, out returned) == 0) info.ParentPid = (int)Marshal.ReadIntPtr(basic, IntPtr.Size * 5); }
+            finally { Marshal.FreeHGlobal(basic); }
+            IntPtr line = Marshal.AllocHGlobal(65536);      // ProcessCommandLineInformation: a UNICODE_STRING and its characters
+            try { if (NtQueryInformationProcess(handle, 60, line, 65536, out returned) == 0) info.CommandLine = Marshal.PtrToStringUni(Marshal.ReadIntPtr(line, IntPtr.Size), (ushort)Marshal.ReadInt16(line, 0) / 2); }
+            finally { Marshal.FreeHGlobal(line); }
+            var name = new StringBuilder(32768); int size = name.Capacity;
+            if (QueryFullProcessImageName(handle, 0, name, ref size)) info.Exe = name.ToString();
+            long created, exited, kernel, user;
+            if (GetProcessTimes(handle, out created, out exited, out kernel, out user)) info.Created = created;
+            return info;
+        } finally { CloseHandle(handle); }
+    }
+}
+'@
+function Stamp($fileTime) { if ($fileTime -gt 0) { [DateTime]::FromFileTimeUtc($fileTime).ToString('o') } else { $null } }
+function Ids() { $list = [Diagnostics.Process]::GetProcessesByName($name); try { $list | ForEach-Object { $_.Id } } finally { $list | ForEach-Object { $_.Dispose() } } }
 $seen = @{}
-foreach ($p in [Diagnostics.Process]::GetProcessesByName($name)) { $seen[$p.Id] = $true }
+foreach ($id in Ids) { $seen[$id] = $true }
 Emit ([pscustomobject]@{ watching = $true; existing = $seen.Count })
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 while ((Get-Date) -lt $deadline) {
-    foreach ($p in [Diagnostics.Process]::GetProcessesByName($name)) {
-        if ($seen.ContainsKey($p.Id)) { continue }
-        $seen[$p.Id] = $true
-        $row = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue
-        if (-not $row) { Emit ([pscustomobject]@{ pid = [int]$p.Id; exitedBeforeQuery = $true }); continue }
-        if (& $same $row.ExecutablePath) { Emit (Row $row) }
+    foreach ($id in Ids) {
+        if ($seen.ContainsKey($id)) { continue }
+        $seen[$id] = $true
+        $info = [PromptCutProcess]::Query($id)
+        if (-not $info -or -not $info.Exe) { Emit ([pscustomobject]@{ pid = [int]$id; exitedBeforeQuery = $true }); continue }
+        if (-not (& $same $info.Exe)) { continue }
+        $parent = if ($info.ParentPid -gt 0) { [PromptCutProcess]::Query($info.ParentPid) } else { $null }
+        Emit ([pscustomobject]@{
+            pid = [int]$id; exe = $info.Exe; commandLine = $info.CommandLine; createdAt = (Stamp $info.Created)
+            parentPid = [int]$info.ParentPid
+            parentName = $(if ($parent -and $parent.Exe) { [IO.Path]::GetFileName($parent.Exe) } else { $null })
+            parentCreatedAt = $(if ($parent) { Stamp $parent.Created } else { $null })
+        })
     }
-    Start-Sleep -Milliseconds 40
+    Start-Sleep -Milliseconds 10
 }
 exit 0

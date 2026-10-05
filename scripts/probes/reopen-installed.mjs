@@ -39,6 +39,7 @@ import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
 import { waitFor } from '../../server/test/fake-ws-kit.mjs';
+import { isUnsafePort } from '../../server/safe-port.mjs';
 import { loadNativeFixture, nativeTestEnv } from './reopen-native-fixture.mjs';
 import { reopenEditorEnv } from './reopen-editor-env.mjs';
 import { handoffWriter, installedIdentity, launchReceipt, openThroughExplorer, queryAssociation, queryProcesses, sha256File, watchLaunches } from './reopen-installed-lib.mjs';
@@ -203,8 +204,11 @@ function target() {
 async function attach(pid, { file } = {}) {
   let port;
   await waitFor(() => { const views = queryProcesses(app.exe).webviews; port = (views.find(w => w.parentPid === pid) ?? (views.length === 1 ? views[0] : null))?.port; return port; }, 90000, 'WebView debugging port of the launched instance');
+  // The shell takes whatever free port the system hands out. Node refuses to dial a few well-known ones,
+  // which is a property of that port, not of the launch; say so instead of timing out.
+  assert.equal(isUnsafePort(port), false, `the shell chose debugging port ${port}, which Node refuses to connect to; start again`);
   let connection;
-  await waitFor(async () => { try { connection = await puppeteer.connect({ browserURL: `http://127.0.0.1:${port}`, defaultViewport: null }); return true; } catch { return false; } }, 60000, 'WebView debugging endpoint');
+  await waitFor(async () => { try { connection = await puppeteer.connect({ browserURL: `http://127.0.0.1:${port}`, defaultViewport: null }); return true; } catch { return false; } }, 60000, `WebView debugging endpoint on port ${port}`);
   connections.add(connection);
   let p;
   await waitFor(async () => { p = (await connection.pages()).find(x => x.url().startsWith(`http://127.0.0.1:${app.port}/`)); return p; }, 90000, 'editor page of the launched instance');
