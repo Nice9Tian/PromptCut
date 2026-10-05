@@ -15,7 +15,8 @@
  *   --peer-port <n>         first of three ports for the own stand-in member editor (default 5206)
  *   --control <dir>         where hand-off and exchanged files live (default <run dir>/control)
  *   --seal-dir <dir>        owned directory of the seal key / member password, when they were prepared
- *                           beforehand with reopen-sealed.mjs (default <run dir>/seal)
+ *                           beforehand with reopen-sealed.mjs. Default: the host role keeps its seal key under
+ *                           <run dir>/seal; the member role keeps its password in memory only
  *   --click-timeout-ms <n>  how long to wait for each double click (default 900000)
  *   --shell-open            stand-in when nobody can double-click: the probe asks Explorer to open the file
  *                           through the registered association. It proves the association and what follows,
@@ -55,7 +56,7 @@ assert.equal(process.platform, 'win32', 'Windows only');
 // Explorer hands the application the long form of a path; keep the run directory in that form.
 const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'pc-reopen-installed-')));
 const control = path.resolve(arg('--control') ?? path.join(root, 'control')), files = path.join(root, 'files');
-const sealDir = path.resolve(arg('--seal-dir') ?? path.join(root, 'seal'));
+const sealDir = arg('--seal-dir') ? path.resolve(arg('--seal-dir')) : null;
 fs.mkdirSync(control, { recursive: true }); fs.mkdirSync(files);
 const require = createRequire(import.meta.url);
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
@@ -290,7 +291,7 @@ async function hostRole() {
   let external = null;
   if (externalMember) {
     phase = 'receive sealed external member';
-    const keys = ownedSealKeys(sealDir);
+    const keys = ownedSealKeys(sealDir ?? path.join(root, 'seal'));
     fs.writeFileSync(path.join(control, 'host-public-key.json'), JSON.stringify({ publicKey: keys.publicKey }));
     say('host-public-key', { publicKey: keys.publicKey, expects: path.join(control, 'external-member.sealed') });
     external = unseal(keys.privateKey, await controlFile('external-member.sealed', clickTimeoutMs, 'sealed external member'));
@@ -355,7 +356,8 @@ async function hostRole() {
 async function memberRole_() {
   const hostKey = arg('--remote-host-key'); assert(hostKey, '--remote-host-key: the public key printed by reopen-remote-host.mjs');
   phase = 'seal own member password for the remote host';
-  const mine = ownedMemberSecret(sealDir, 'member'), sealed = seal(hostKey, mine);
+  // Without --seal-dir the member password exists only in this process.
+  const mine = sealDir ? ownedMemberSecret(sealDir, 'member') : { username: 'member', password: secret() }, sealed = seal(hostKey, mine);
   fs.writeFileSync(path.join(control, 'member.sealed'), sealed); say('member-sealed', { sealed, expects: path.join(control, 'host.proc') });
   const hostFile = await controlFile('host.proc', clickTimeoutMs, 'project file of the remote host');
   const descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId; service = descriptor.service;
