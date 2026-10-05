@@ -284,6 +284,8 @@ async function secondDoubleClick(file, room, username) {
 }
 
 async function hostRole() {
+  // An installed build keeps its rooms between runs; a fixed name would collide with the previous run.
+  const roomName = `reopen-installed-${randomBytes(4).toString('hex')}`;
   const password = secret(), creatorPassword = secret(), list = [{ username: 'member', password }];
   let external = null;
   if (externalMember) {
@@ -298,7 +300,7 @@ async function hostRole() {
   phase = 'start own member'; let peerProcess = await peerEditor(), peer = await peerPage();
   phase = 'start the application and create the room';
   let native = await startPlain(); await native.p.waitForSelector('.sp-hero', { timeout: 60000 }); await native.p.click('.sp-hero'); await clearOverlays(native.p, app.firstRunWaitMs);
-  const created = await native.p.evaluate(o => window.probe.collab.enableCollab(o), { where: 'lan', mode: 'restricted', name: 'reopen-installed', creator: { username: 'host', password: creatorPassword }, projectPassword: password, list, hostedUrl: service });
+  const created = await native.p.evaluate(o => window.probe.collab.enableCollab(o), { where: 'lan', mode: 'restricted', name: roomName, creator: { username: 'host', password: creatorPassword }, projectPassword: password, list, hostedUrl: service });
   assert.equal(created.ok, true, `room creation failed (${created.error || 'unknown'})`);
   const hostFile = await saved(native.p), descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId;
   assert.equal(descriptor.service, service);

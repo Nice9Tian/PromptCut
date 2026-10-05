@@ -81,7 +81,7 @@ try {
   browser = await puppeteer.launch({ headless: true, userDataDir: path.join(root, 'browser'), args: ['--no-sandbox'] });
   editor = await startEditor(); const firstPid = editor.pid, creatorPassword = secret();
   const created = await editor.p.evaluate(async o => { window.probe.proc.newProject('reopen-remote-host'); return window.probe.collab.enableCollab(o); },
-    { where: 'lan', mode: 'restricted', name: 'reopen-remote-host', creator: { username: 'host', password: creatorPassword }, projectPassword: secret(), list: [{ username: member.username, password: member.password }], hostedUrl: service });
+    { where: 'lan', mode: 'restricted', name: `reopen-remote-host-${randomBytes(4).toString('hex')}`, creator: { username: 'host', password: creatorPassword }, projectPassword: secret(), list: [{ username: member.username, password: member.password }], hostedUrl: service });
   assert.equal(created.ok, true, `room creation failed (${created.error || 'unknown'})`);
   const hostFile = await saved(editor.p), descriptor = JSON.parse(hostFile).collaboration, room = descriptor.roomId;
   assert.equal(descriptor.service, service);
