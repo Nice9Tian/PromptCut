@@ -56,7 +56,7 @@ W7 的 node 角色**实际退出 3**，五个 creator 专属空项（M7-A8、W7�
 
 随后实际运行 `c66frame10041950` 只读诊断：PC observer 命令 `node --import=./scripts/lib/test-silent-processes.mjs work/run-cross-device-c66-frame.mjs --role observer --config work/c66-frame-handoff/task-config.json --wave 2 --port 5203 --diagnostic`；PC host 同 wrapper 用 `--role host --port 5206`、不加 diagnostic，笔记本 creator 仍用正式 fixed wrapper。observer 退出 1、177,338 ms，host 退出 0、172,875 ms，creator 退出 1。97 次状态记录实证：4,569 ms 时原 A 上 sampler 已推进到 312 个样本；5,777/5,781 ms 两台 iframe 导航，timeOrigin 从 A `1791112199153.6` / B `1791112199154.6` 变为 `1791112205729` / `1791112205729.4`，新上下文没有原采样数组，最终读回 n:0。导航时加载遮罩已经消失、blocking:false；不能简单延后至遮罩消失来解决。该事实证伪“初始 rAF 完全没推进”，但重载的发起者尚未证明；不将一次导航直接断言为用户看到黑帧。
 
-完整只读证据见 [laptop-c66-frame-diagnostic.json](assets/collaboration-reopen-recovery/laptop-c66-frame-diagnostic.json)，正式判据未改，诊断不计正式通过。原采样 nonce 只是 performance.timeOrigin 的字符串，公开字段改名 samplerOrigin，原结果 SHA 保留。笔记本 ZIP 8,409 B，SHA `f09cd8ed0a1e7038ac74dbc813e336afc7eab8261f0f742b491e379e34c67bce`，实际校验安全解压。
+完整只读证据在 laptop-c66-frame-diagnostic.json（2026-10-06 已移出仓库，文件名、大小、SHA-256 与结论见文末「移出仓库的原始诊断文件」），正式判据未改，诊断不计正式通过。原采样 nonce 只是 performance.timeOrigin 的字符串，公开字段改名 samplerOrigin，原结果 SHA 保留。笔记本 ZIP 8,409 B，SHA `f09cd8ed0a1e7038ac74dbc813e336afc7eab8261f0f742b491e379e34c67bce`，实际校验安全解压。
 
 两位顾问同会话 r2 复盘实际 CLI 均退出 0，本轮外层耗时 A 27.1972057 s、B 26.9244133 s；metadata 的约 2,780 秒是累计会话字段，不能当本轮耗时。主任务全文阅读两份 r2 回答及 metadata。两者偏向 stageCards 的四秒过期等待，但目前只是待取证假说；A 声称 iframe.src 是唯一重载机制及版本严格相等的说法不符合全部代码，B 建议测量中一律不重载可能隐藏真正过期状态，都未实施。下一诊断仅加父页 iframe.src 调用来源、舞台报到 stamp、stale/watch 状态及 Vite 消息记录，先区别过期重载、心跳故障与 Vite 重载。
 
@@ -89,9 +89,9 @@ C10 新 work helper 首次 PC prepare 退出 1（对异步浏览器路径调用�
 
 提交 `aba4c1f9ce1cc2567fc1f3cc1a43df4e5ccb7140` 只修改两份正式探针。C6.6 打开页面后等待两台舞台实际握手（已有 hostCaps A/B），再进入原成员接入与计时流程；iframe DOM 存在不足以证明 StageView 模块、卡片热更新回调和 RPC 已加载。C10 初始普通 chapter-bar 改在 8–10 秒、typewriter 改在 0–2 秒，目标卡仍在 2–8 秒，主重卡仍覆盖 0–10 秒，额外重卡仍在 0–1 秒；并用舞台实际诊断确认目标在 3 秒判轻后再执行原跳转断言。没有修改性能记录、指纹、5 秒门槛或播放计划 selector。
 
-C6.6 只读 cause、child 和 wire 诊断分别证明：两台舞台的同 src 重载来自 Preview 中等待卡片同步的 4 秒兜底；重载前 child 卡片 registry 仍 known:false/stamp:0/version:0；三条 Vite 连接均收到九次实际更新，独立观察 hot context 的 before/afterUpdate 也执行。wire 诊断虽然退出 0，A 仍两次重载，不算正式修复通过。独立本机启动诊断进一步发现，握手前两台舞台尚没有卡片模块的热更新回调；等实际 StageView 加载后再安装的对照可正常更新并 ACK。没有禁用合法的过期重载，未采用重注 sampler 来掩盖上下文丢失。完整原始结果见 [cause](assets/collaboration-reopen-recovery/laptop-c66-cause-diagnostic.json)、[child](assets/collaboration-reopen-recovery/laptop-c66-child-diagnostic.json)、[wire](assets/collaboration-reopen-recovery/laptop-c66-wire-diagnostic.json)；frame 的失败历史保留。
+C6.6 只读 cause、child 和 wire 诊断分别证明：两台舞台的同 src 重载来自 Preview 中等待卡片同步的 4 秒兜底；重载前 child 卡片 registry 仍 known:false/stamp:0/version:0；三条 Vite 连接均收到九次实际更新，独立观察 hot context 的 before/afterUpdate 也执行。wire 诊断虽然退出 0，A 仍两次重载，不算正式修复通过。独立本机启动诊断进一步发现，握手前两台舞台尚没有卡片模块的热更新回调；等实际 StageView 加载后再安装的对照可正常更新并 ACK。没有禁用合法的过期重载，未采用重注 sampler 来掩盖上下文丢失。完整原始结果在 laptop-c66-cause-diagnostic.json、laptop-c66-child-diagnostic.json、laptop-c66-wire-diagnostic.json（2026-10-06 已移出仓库，文件名、大小、SHA-256 与结论见文末「移出仓库的原始诊断文件」）；frame 的失败历史保留。
 
-C10 seek 诊断退出 1：3.033 秒有实际计划但缺目标卡，目标到 6 秒才出现，帧 90→241 连续。plan 只读诊断退出 0，在 3.133 秒实际命中目标；这次诊断提前结束，没有测到 6 秒，不能抵消正式失败。使用失败运行的实测标量做纯函数重放：目标/普通 chapter/typewriter 权重约 10/8.5/3.5，预算 23.333 ms；原叠放下目标在 3 秒判重、6 秒判轻，移开同时叠放后 3 秒判轻。这是夹具候选的依据，不是唯一根因或浏览器验收。完整结果见 [seek](assets/collaboration-reopen-recovery/laptop-c10-seek-diagnostic.json) 和 [plan](assets/collaboration-reopen-recovery/laptop-c10-plan-diagnostic.json)。
+C10 seek 诊断退出 1：3.033 秒有实际计划但缺目标卡，目标到 6 秒才出现，帧 90→241 连续。plan 只读诊断退出 0，在 3.133 秒实际命中目标；这次诊断提前结束，没有测到 6 秒，不能抵消正式失败。使用失败运行的实测标量做纯函数重放：目标/普通 chapter/typewriter 权重约 10/8.5/3.5，预算 23.333 ms；原叠放下目标在 3 秒判重、6 秒判轻，移开同时叠放后 3 秒判轻。这是夹具候选的依据，不是唯一根因或浏览器验收。完整结果在 laptop-c10-seek-diagnostic.json（2026-10-06 已移出仓库，文件名、大小、SHA-256 与结论见文末「移出仓库的原始诊断文件」）和 [plan](assets/collaboration-reopen-recovery/laptop-c10-plan-diagnostic.json)。
 
 | 卡点 / 行 | 层 | 候选与机制 | g | h | f | 状态与实际证据 |
 |---|---|---|---|---|---|---|
@@ -141,3 +141,17 @@ creator/probe与runner均0、468040 ms；PC host均0、497325 ms，fails/pending
 - 类型/全量、必需G0-R及上述正式双机均已通过，但系统默认关联双击仍未测；main合入、release推进、发版构建及安装包覆盖未执行。安装包目标精确路径仍待此前提问的回复。
 
 全部测试使用隔离数据和专用房间，静默规则已进入 Guide，未修改宿主机网络、用户真实项目/账户、运行副本或终止用户进程。生产托管服务的部署需另行审核，本报告没有把临时测试服务通过说成生产已经上线。
+
+## 移出仓库的原始诊断文件（2026-10-06）
+
+这几个文件是单个超过 200 KB 的原始诊断输出，合入 main 之前按用户 2026-10-06 的决定移出了仓库，放在主工作区不入库的 `work/evidence-archive/collaboration-reopen-recovery/`，旁边有一份 MANIFEST.txt。下表的大小与 SHA-256 对存档文件和仓库历史里的原文件都成立（两者逐字节相同）；提交 `b6e0d627` 及之前的历史里仍有它们，可用 `git show b6e0d627:docs/reports/assets/collaboration-reopen-recovery/<文件名>` 取回。
+
+| 文件 | 大小（字节） | SHA-256 | 结论 |
+|---|---|---|---|
+| laptop-c66-frame-diagnostic.json | 301,913 | `8ce64fc4ca8fdf057a0f810a58f605f7cefed9478226f925ded20683181dbb8c` | C6.6 的只读 frame 与上下文诊断，observer 退出 1。97 次状态记录证实两台舞台的 iframe 在约 5.78 秒发生导航，新上下文里没有原来的采样数组，最终读回 0 个样本；证伪了「初始 rAF 完全没推进」，重载由谁发起当时还没证明。诊断不计正式通过 |
+| laptop-c66-cause-diagnostic.json | 328,631 | `6f1c51141d7b9d1e58ff44c52ff690f98ba075f3807be4994b76003f4b54f059` | 只读的重载发起者诊断：两台舞台的同 src 重载来自 Preview 里等待卡片同步的 4 秒兜底 |
+| laptop-c66-child-diagnostic.json | 434,995 | `6dda9fa73c3aa6927089e7da2362432cb5f40acc484a51bcf77f9c7e3c7c09e9` | 只读的子页卡片登记诊断：重载前 child 的卡片 registry 仍是 known:false、stamp:0、version:0 |
+| laptop-c66-wire-diagnostic.json | 1,463,303 | `70577b459cd6274856793dc8e6d632254dad275b99e0fd64b966f2d633c0efc3` | 只读的 Vite 连接诊断：三条连接都收到九次实际更新，独立观察的 hot context 的 before / afterUpdate 也执行了。诊断虽然退出 0，A 仍两次重载，不算正式修复通过 |
+| laptop-c10-seek-diagnostic.json | 630,203 | `870a3dc249f3d063ae4781aae1f2462698d423de95975f9248dd1d3348867e44` | C10 的 seek 时间线诊断，退出 1：3.033 秒时有实际计划但缺目标卡，目标到 6 秒才出现，帧 90→241 连续。它是后来夹具候选的依据之一，不是唯一根因 |
+
+这些诊断之后的正式结果没有变：C6.6 两方向与 C10 全项在修正后的正式双机复核里通过，见上文各节。

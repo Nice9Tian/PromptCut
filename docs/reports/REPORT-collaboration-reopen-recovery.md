@@ -190,7 +190,7 @@ Windows 静默要求已经写入 guide_files/verification.md（完整提交 c06c
 
 主机和普通成员两次 `--patch-upgrade` **通过**，见 [native-upgrade.json](assets/collaboration-reopen-recovery/native-upgrade.json)。实际使用提交中的 `desktop/scripts/apply-patch.ps1`，摘要 `0800b2b8ef1981eeb866bb4adcf490c18dae4c8dbdbae816890a921d6d95e8bb`，在任务安装副本 copy-B 上更新2044个文件；没有修改安装器代码或伪造版本。应用版本仍为0.7.14，是旧 `4f72d19e` 源码到新提交的真实代码更新；最终发版版本号尚未变更。主机安装来源18b7ebb7，实际补丁退出0/17172 ms；成员来源e2552d07，退出0/8095 ms。两个方向更新后验证文件摘要、外壳字节不变、data/member保护状态字节不变，再由真实原生新进程重开；主机creator/hostBinding为true，普通成员两项为false。分别保持房间、版本到5、零建房、4次双向编辑、三命名空间50k带票据素材哈希一致。没有运行NSIS外层安装器，不能扩大为最终完整安装包验收。首次模块路径失败及不完整旧夹具失败也保留在同一证据中。
 
-系统默认 `.proc` 双击 **尚未通过**，见 [native-os-handoff.json](assets/collaboration-reopen-recovery/native-os-handoff.json)。已有原生参数启动、单实例转发及新私有启动冒烟均通过；它们不等于系统双击。七次真实 Explorer handoff最终均退出1、无本次匹配的原生启动回执，不计通过。第一次在准备阶段超时，没有改关联；第2—6次只短时替换当前用户已有 ProgID 的打开命令；第7次暂时把`.proc`默认字符串指向本次新建的独立测试类型，原ProgID命令未改。独立守护和finally均恢复原值（退出0），第7次测试类型也已清理。没有改UserChoice、账户、安全设置或安装运行代码。所有关联控制文件仅留在忽略的隔离目录，公开证据只含布尔结果和摘要。
+系统默认 `.proc` 双击 **尚未通过**，见 native-os-handoff.json（2026-10-06 已移出仓库，文件名、大小、SHA-256 与结论见文末「移出仓库的原始诊断文件」）。已有原生参数启动、单实例转发及新私有启动冒烟均通过；它们不等于系统双击。七次真实 Explorer handoff最终均退出1、无本次匹配的原生启动回执，不计通过。第一次在准备阶段超时，没有改关联；第2—6次只短时替换当前用户已有 ProgID 的打开命令；第7次暂时把`.proc`默认字符串指向本次新建的独立测试类型，原ProgID命令未改。独立守护和finally均恢复原值（退出0），第7次测试类型也已清理。没有改UserChoice、账户、安全设置或安装运行代码。所有关联控制文件仅留在忽略的隔离目录，公开证据只含布尔结果和摘要。
 
 用户明确告知前四次期间正同时操作电脑；此后取得独占桌面时间再测试。第5次在静态目录、fresh截图及HKCR打开命令精确匹配测试壳的条件下仍走原安装版（创建14:53:39.274479Z，armed14:53:26.886Z，恢复14:53:52.984Z）。第6次等待通知完成并真实F5刷新仍失败（PID39928，创建15:13:23.563821Z，armed15:13:05.465Z，恢复15:13:31.843Z）；第7次独立测试类型仍失败（PID49016，创建15:29:25.078918Z，armed15:29:08.539Z，恢复15:29:35.247Z）。这些UTC时刻均在各自租约内；不能只归因于用户操作或未发送通知。四次误启动PID38772/42284/39928/49016均核验时间、exe和隔离文件参数，只清理这四个新启动的匹配进程及各两名同次直接子进程，不结束其它进程。正常关闭曾被几何/截图或输入保护挡住，后改用精确进程身份清理。没有主动编辑用户项目/账户、安装或覆盖运行代码，但运行版可能执行正常启动及草稿写入，不能断言用户数据绝对未写。误开的测试JSON所属编辑器已不在本次可操作窗口列表，未擅自结束其进程。
 
@@ -222,7 +222,7 @@ Codex max攻坚全文及各只读命令已由根Agent审阅，摘要在handoff J
 
 本轮静默补丁提交faf6b74b457930903e31ba49c02773785b7d606b采用NSIS官方nsExec隐藏命令窗口，仅在脚本已有的非交互环境开关下启用；4c5474e43d38732319b95dcc706c0c4ab4922560纠正探针的实际入口命令元数据。[NSIS官方插件说明](https://nsis.sourceforge.io/NsExec_plug-in)。主机run-xQdu53、普通成员run-hqcKqp均实际编译并执行提交的补丁EXE后正常重开，退出0；NSIS编译1096/1634ms，更新8699/15654ms，载荷2048件。两轮均4f72d19e旧运行时变成当前代码、版本仍0.7.14，保护目录及外壳字节不变，原房间、原设备、正确creator/host与普通member角色、等待自动加入、版本5、4次双向编辑、三类50k票据素材均通过，恢复建房0。故意指定任务自有不存在的安装目录时EXE实际返回1，负例验证命令退出0且目录仍不存在。主机faf原回执的外层command误写下层PS命令，wrapper.command和新投影明确实际EXE入口；原始回执未改。首次run-ye98XG因PVG副本已含相同probeRunner代码被更新前保护检查挡住，退出1，未生成清单或执行安装器；改用未更新的Zb副本，没有放宽断言。见[native-nsis-upgrade.json](assets/collaboration-reopen-recovery/native-nsis-upgrade.json)。完整setup安装包仍未执行。
 
-实际默认解析新增三轮独立诊断，退出码0、1、0；不加入16次OS handoff的计数。DbytMa的0/8/16/24秒新PS查询、UbRPrF的相同时点及18:33:34.109–34.263Z真实F5刷新前后，真正NULL默认verb与显式open在flags0/noFixups下COMMAND/EXE均匹配测试壳，GetKey成功且四视图前后值匹配，结束后原值恢复/watchdog0。UbRPrF单击选择因关联已恢复被guard挡住，没有发出文件启动动作。jLqihq高频查询第11次退出1，前10项匹配，原stderr未保留，原因未知；其提前恢复让UI输入被guard挡住，不能当作关联覆写证据。只读AppDefaults日志启用、现存1936件，17:45–18:05UTC窗口无事件，不推断当时发生了默认关联重置。见[native-default-query.json](assets/collaboration-reopen-recovery/native-default-query.json)。新查询证明这几次采样中的默认解析已切换，不证明Explorer真实执行或点击瞬间；没有新增误启动。自有Explorer窗口已关闭、进程自然退出，用户Shell保留。
+实际默认解析新增三轮独立诊断，退出码0、1、0；不加入16次OS handoff的计数。DbytMa的0/8/16/24秒新PS查询、UbRPrF的相同时点及18:33:34.109–34.263Z真实F5刷新前后，真正NULL默认verb与显式open在flags0/noFixups下COMMAND/EXE均匹配测试壳，GetKey成功且四视图前后值匹配，结束后原值恢复/watchdog0。UbRPrF单击选择因关联已恢复被guard挡住，没有发出文件启动动作。jLqihq高频查询第11次退出1，前10项匹配，原stderr未保留，原因未知；其提前恢复让UI输入被guard挡住，不能当作关联覆写证据。只读AppDefaults日志启用、现存1936件，17:45–18:05UTC窗口无事件，不推断当时发生了默认关联重置。见 native-default-query.json（2026-10-06 已移出仓库，见文末「移出仓库的原始诊断文件」）。新查询证明这几次采样中的默认解析已切换，不证明Explorer真实执行或点击瞬间；没有新增误启动。自有Explorer窗口已关闭、进程自然退出，用户Shell保留。
 
 补充只读身份核验退出0：当前Explorer11120与新隐藏PS32884的用户、登录身份、会话、integrity8192一致，均明确non-AppContainer，GetPackageFullName均返回15700（显式无package）。旧四份上下文只覆盖11120/50380，未覆盖后来已退出的新GUI进程，不能补判相同；Explorer线程token和package graph未读。私有helper现在独有文件保存未来错误stdout/stderr和SHA，恢复态复查0，未故意注入错误；不能找回jLqihq已丢失的原输出或宣布其原因已修。摘要见native-default-query.json的currentContext/queryFailureCapture。
 
@@ -240,7 +240,7 @@ Codex max攻坚全文及各只读命令已由根Agent审阅，摘要在handoff J
 
 用户当日决定，主会话逐条确认后执行：
 
-- 本分支推送到 origin，只推这一支，不碰 main、release。推送前扫描了分支新增行，没有发现令牌、私钥、远端主机地址、局域网地址、用户目录路径或机器名。
+- 本分支推送到 origin，只推这一支，不碰 main、release。推送前扫描了分支新增行，没有发现令牌、私钥、远端主机地址、局域网地址、用户目录路径或机器名。更正（2026-10-06）：那次扫描只认反斜杠写法的路径，漏了一处：本报告「解法表与顾问调用」里有一个指向本机技能文件的绝对路径链接（在用户目录下，正斜杠写法）。它现在已改成文字，此前推送的历史里仍有；重新按两种写法扫过，没有别的。
 - 系统默认 `.proc` 双击验收换路线：在笔记本上真实安装候选包，由安装器登记关联，再在资源管理器里真双击。PC 不再临时改写关联，也不再启动已装的正式版。卡点 10 解法表第 5、10、12 行因此停止，新增第 13 行。
 - 本轮的完成条件与分工：安装包由笔记本从分支构建并真实安装，双击由笔记本会话做；成员角色的主机放在 PC 上，用隔离数据目录和隔离端口起；云端会话只当 Node 层的外网成员，公网入口沿用任务自有的临时入口，不部署生产。合入 main、改版本号、发版、覆盖安装包、部署生产托管服务都等用户另行授权，不沿用以前的授权。
 - 上一轮的电脑操作是另一个工具做的，可能有缺陷，它的操作经验不一定适用于本轮。上文 19 轮 handoff 的记录保持原样，本轮不据此对 Windows 的行为下结论。
@@ -414,7 +414,7 @@ PC 上这一组先后跑了三遍。第一遍分散在三个提交上：`5254bd1
 | 5 | 4/二级 | 放宽终止等待或只刷新页面判通过 | — | — | — | 关闭·剪：不能证明注销及旧连接撤销；未采用 |
 | 6 | 4/三级 | 免费隔离公开入口；受控重启与独立测试壳 | 3 | 1 | 4 | 公开入口后续已绕开：不改宿主网络，不覆盖既有服务，自由/限定实测通过。电脑重启及独立原生副本切换已通过；系统默认双击仍待物理/隔离条件，其它工作继续完成 |
 
-应用了 [with-agy SKILL](C:/Users/admin/.codex/skills/with-agy/SKILL.md) 的咨询流程。只读 manager 与两位 Gemini Pro High 顾问，不委派产品代码修改。完整原始响应、元数据及执行流保留在 worktree 的忽略目录 `work/agy/`。
+应用了 with-agy 技能（本机技能目录里的 SKILL.md）的咨询流程。只读 manager 与两位 Gemini Pro High 顾问，不委派产品代码修改。完整原始响应、元数据及执行流保留在 worktree 的忽略目录 `work/agy/`。
 
 首次 UI 冻结评审：A 会话 `12535d33-ad88-43f3-9bf8-1ef9b7fed80a`，成功退出 0、51.735 秒；B `e55246a9-f885-40b9-93c0-a7527cc28f21`，成功退出 0、30.948 秒。A 的未证实生命周期推测没有采用；B 的遮罩候选由主 Agent 的事件/截图核实后采用。
 
@@ -636,3 +636,14 @@ node scripts/probes/reopen-native.mjs <生成的fixture.json>
 ```
 
 WAN 仅在环境变量提供已授权测试主机与密钥路径时运行，不将账号、地址或密钥路径写入报告。可选 `PC_REOPEN_PUBLIC_TUNNEL_BIN` 指向该主机独立临时目录里的已核对 cloudflared 二进制。没有公开入口时明确输出 `publicHttp:false`，不能转写为公开验证通过。临时公网工具仅用于测试，不是产品运行依赖。
+
+## 移出仓库的原始诊断文件（2026-10-06）
+
+这几个文件是单个超过 200 KB 的原始诊断输出，合入 main 之前按用户 2026-10-06 的决定移出了仓库，放在主工作区不入库的 `work/evidence-archive/collaboration-reopen-recovery/`，旁边有一份 MANIFEST.txt。下表的大小与 SHA-256 对存档文件和仓库历史里的原文件都成立（两者逐字节相同）；提交 `b6e0d627` 及之前的历史里仍有它们，可用 `git show b6e0d627:docs/reports/assets/collaboration-reopen-recovery/<文件名>` 取回。
+
+| 文件 | 大小（字节） | SHA-256 | 结论 |
+|---|---|---|---|
+| native-os-handoff.json | 772,267 | `230cec040f4ab6c555d6c535f787b42aa4402551683c5738b9c45bf7ce50cb22` | PC 上临时改写关联那条路线的全部 19 轮系统双击 handoff 记录（含 temporalQueries、safeTimingRehearsal、desktopQuickAttempts、extendedWindowAttempts、extendedLeaseSafety 各段）。结论：19 轮都没有拿到匹配的测试壳回执，这条路线没通过；最后三轮没有发出文件双击，其中一轮停在 Windows 安全提示上，没有对提示做任何操作。2026-10-05 改在笔记本真实安装后验收通过，见卡点 10 第 13 行 |
+| native-default-query.json | 311,810 | `2dba9afa41cea8bc7d0ff64987e05c7b0894990285ebcddf98371525580efa05` | 默认关联的只读查询（含 currentContext、queryFailureCapture、globalDefaultRegistrations、extendedDirectorySampling 各段）。结论：每个做完的运行里，四次默认打开方式的 API 采样和两次注册表读取都对上了临时命令；没有打开任何文件，不能证明点击那一瞬间的值，也不能证明资源管理器的路由；逐秒查询在第 11 次失败，原 stderr 没有保留，原因不明。只作诊断 |
+
+另有五个笔记本诊断文件同样移出，表在 `REPORT-collaboration-reopen-laptop-validation.md` 文末。七个文件合计 4,243,122 字节，目录里其余 83 个文件保留。[changed-files.txt](assets/collaboration-reopen-recovery/changed-files.txt) 是 2026-10-04 审计时的文件清单快照，保持原样，其中这七个路径现在不在仓库里；`integration-verification.json` 里指向 native-os-handoff.json 与 native-default-query.json 的两个字段也保持原样。还有一张 323,324 字节的证据截图 integration-t9-member-v2.png 超过 200 KB，它是截图不是原始诊断输出，保留。
