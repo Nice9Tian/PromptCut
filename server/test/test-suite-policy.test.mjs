@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { exitDescription, retryReason, summarizeTestEvents } from '../../scripts/test-suite-policy.mjs';
+import testEventReporter from '../../scripts/test-event-reporter.mjs';
+import { canRecoverInitialRun, exitDescription, retryReason, rootSummaryCounts, summarizeTestEvents } from '../../scripts/test-suite-policy.mjs';
 
 const cwd = path.resolve('fixture-root');
 const file = 'server/test/example.test.mjs';
@@ -11,6 +12,7 @@ const processFail = (exitCode, signal = null) => event('test:fail', {
   details: { error: { code: 'ERR_TEST_FAILURE', cause: 'test failed', exitCode, signal } },
 });
 const summary = (...events) => summarizeTestEvents(events, cwd)[0];
+const root = (failed, cancelled = 0) => ({ type: 'test:summary', data: { counts: { failed, cancelled } } });
 
 test('Windows 原生异常和信号只对文件级失败重跑', () => {
   for (const code of [0xC0000005, 0xC0000142, 0xC0000409, 0xC000001D]) {
@@ -54,4 +56,37 @@ test('不同文件的用例和 stderr 分别计数', () => {
   assert.equal(states[1].testCases, 1);
   assert.equal(states[1].processFailure, null);
   assert.equal(summary(event('test:stderr', { message: 'partial\nlast line' })).stderrLines, 2);
+});
+
+test('根汇总必须恰好覆盖可重跑文件，不能有额外失败或取消', () => {
+  const files = [summary(processFail(0xC0000005))];
+  assert.equal(canRecoverInitialRun([root(1)], files), true);
+  assert.equal(canRecoverInitialRun([root(2)], files), false);
+  assert.equal(canRecoverInitialRun([root(1, 1)], files), false);
+  assert.equal(canRecoverInitialRun([], files), false);
+  assert.equal(rootSummaryCounts([{ type: 'test:summary', data: { file, counts: { failed: 0, cancelled: 0 } } }]), null);
+  const assertion = summary(event('test:fail', { name: 'bad assertion', details: { error: { code: 'ERR_TEST_FAILURE' } } }));
+  assert.equal(canRecoverInitialRun([root(1)], [...files, assertion]), false);
+});
+
+test('报告器只序列化原始类型字段，循环引用和异常 getter 不打断后续事件', async () => {
+  const cyclic = { value: 1 };
+  cyclic.self = cyclic;
+  async function* source() {
+    yield event('test:fail', { name: 'cyclic assertion', nesting: 0, details: { error: { code: 'ERR_TEST_FAILURE', cause: cyclic, actual: cyclic } } });
+    yield event('test:fail', { name: file, nesting: 0, details: { error: { code: 'ERR_TEST_FAILURE', failureType: 'testCodeFailure', cause: 'test failed', exitCode: 0xC0000005, signal: null, actual: cyclic } } });
+    yield { type: 'test:stderr', data: { get file() { throw new Error('bad getter'); } } };
+    yield event('test:pass', { name: 'later case', nesting: 0 });
+    yield { type: 'test:summary', data: { file, counts: { failed: 1, cancelled: 0 } } };
+    yield root(1);
+  }
+  const rows = [];
+  for await (const line of testEventReporter(source())) rows.push(JSON.parse(line));
+  assert.equal(rows.length, 5);
+  assert.equal(rows[0].data.details.error.code, 'ERR_TEST_FAILURE');
+  assert.equal('cause' in rows[0].data.details.error, false);
+  assert.deepEqual(rows[1].data.details.error, { code: 'ERR_TEST_FAILURE', failureType: 'testCodeFailure', cause: 'test failed', signal: null, exitCode: 0xC0000005 });
+  assert.deepEqual(rows[2], { type: 'reporter:error' });
+  assert.equal(rows[3].data.name, 'later case');
+  assert.deepEqual(rows[4], root(1));
 });

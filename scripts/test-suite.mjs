@@ -1,9 +1,22 @@
+/**
+ * Node 24.19 在 Windows 上的测试子进程偶发以 0xC0000005 原生崩溃（nodejs/node#65756），
+ * spec 报告器只显示整份文件的「test failed」，不打印子进程退出码。
+ *
+ * npm test 由此脚本启动原来的全量命令，保留 spec 实时输出，另挂事件报告器；
+ * 每个文件级失败都打印退出码、含义、已报用例数和 stderr 行数，首次异常的诊断不能省。
+ * 只单独重跑没有断言失败且进程异常终止的文件，最多两次；只有根汇总表明
+ * 原始失败全是这些文件、没有取消项，重跑通过后才返回成功。重跑可能掩盖
+ * 非确定性的原生崩溃，所以首次退出信息始终保留在终端输出中。
+ *
+ * 升级到包含 nodejs/node#65778 的 Node 后可移除：v26.10.0 起，或合入回移
+ * nodejs/node#66168 的 v24.x 发布版。
+ */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { exitDescription, retryReason, summarizeTestEvents } from './test-suite-policy.mjs';
+import { canRecoverInitialRun, exitDescription, retryReason, rootSummaryCounts, summarizeTestEvents } from './test-suite-policy.mjs';
 
 const root = path.resolve(fileURLToPath(import.meta.url), '..', '..');
 const reporter = path.join(root, 'scripts', 'test-event-reporter.mjs');
@@ -25,10 +38,10 @@ async function run(testFiles, attempt) {
       events = fs.readFileSync(report, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     } catch (error) {
       console.error(`测试事件报告读取失败：${error.message}`);
-      return { code: 1, files: [], reportError: true };
+      return { code: 1, events: [], files: [], reportError: true };
     }
   }
-  return { code, files: summarizeTestEvents(events, root), reportError: !fs.existsSync(report) };
+  return { code, events, files: summarizeTestEvents(events, root), reportError: !fs.existsSync(report) };
 }
 
 function note(file, attempt, retriable) {
@@ -41,6 +54,11 @@ function note(file, attempt, retriable) {
 async function main() {
   const first = await run(files, 'all');
   if (first.code === 0) {
+    const counts = rootSummaryCounts(first.events);
+    if (first.reportError || !counts || counts.failed !== 0 || counts.cancelled !== 0) {
+      console.error('✖ 测试根汇总缺失或与退出码不一致，保留失败');
+      return 1;
+    }
     console.log('✓ npm test 最终结果：零失败');
     return 0;
   }
@@ -49,13 +67,14 @@ async function main() {
   const failures = first.files.filter((file) => file.assertionFailures > 0 || file.processFailure);
   const retryable = failures.filter((file) => retryReason(file));
   for (const file of failures) if (file.processFailure) note(file, 1, Boolean(retryReason(file)));
-  let unrecovered = failures.length !== retryable.length || retryable.length === 0;
+  let unrecovered = !canRecoverInitialRun(first.events, first.files);
   for (const file of retryable) {
     let recovered = false;
     for (let retry = 1; retry <= 2; retry++) {
       console.error(`↻ 单独重跑 ${file.file}（${retry}/2）`);
       const result = await run([file.file], `${path.basename(file.file)}-${retry}`);
-      if (result.code === 0 && !result.reportError) {
+      const retryCounts = rootSummaryCounts(result.events);
+      if (result.code === 0 && !result.reportError && retryCounts?.failed === 0 && retryCounts.cancelled === 0) {
         console.error(`✓ ${file.file} 重跑通过；首次异常已记录`);
         recovered = true;
         break;
@@ -63,7 +82,7 @@ async function main() {
       const next = result.files.find((entry) => path.normalize(entry.file).toLowerCase() === path.normalize(file.file).toLowerCase());
       if (!next || !retryReason(next)) {
         if (next?.processFailure) note(next, retry + 1, false);
-        console.error(`✖ ${file.file} 重跑出现断言或加载错误，保留失败`);
+        console.error(`✖ ${file.file} 重跑未得到完整成功结果，保留失败`);
         break;
       }
       note(next, retry + 1, true);

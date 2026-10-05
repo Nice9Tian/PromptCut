@@ -1,3 +1,7 @@
+/**
+ * scripts/test-suite.mjs 的纯判定逻辑：从最小报告事件识别文件级原生异常，
+ * 并用 Node 根 test:summary 的总数确认没有其它失败被重跑掩盖。
+ */
 import path from 'node:path';
 
 const NTSTATUS = new Map([
@@ -60,4 +64,20 @@ export function retryReason(file) {
   if (typeof exitCode === 'number' && (exitCode >>> 0) >= 0xC0000000) return 'ntstatus';
   if (typeof exitCode === 'number' && exitCode !== 0 && file.testCases === 0 && file.stderrLines === 0) return 'silent-exit';
   return null;
+}
+
+export function rootSummaryCounts(events) {
+  const summaries = events.filter(({ type, data }) => type === 'test:summary' && data?.file == null);
+  if (summaries.length !== 1) return null;
+  const counts = summaries[0].data?.counts;
+  if (!Number.isInteger(counts?.failed) || counts.failed < 0 || !Number.isInteger(counts?.cancelled) || counts.cancelled < 0) return null;
+  return counts;
+}
+
+export function canRecoverInitialRun(events, files) {
+  const counts = rootSummaryCounts(events);
+  if (!counts || counts.cancelled !== 0) return false;
+  const failedFiles = files.filter((file) => file.assertionFailures > 0 || file.processFailure);
+  const retryable = failedFiles.filter((file) => retryReason(file));
+  return retryable.length > 0 && failedFiles.length === retryable.length && counts.failed === retryable.length;
 }
