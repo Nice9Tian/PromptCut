@@ -64,9 +64,13 @@ node scripts/remote/docservice.mjs status-render                  # 5. 看状态
 ```
 
 - **系统包**（`install-render` 装，`apt-get install`）：中文字体 `fonts-noto-cjk`、`fonts-noto-color-emoji`、`fonts-liberation`；`ffmpeg`；Chrome 的运行库（Puppeteer 排障页列的那一批：`libnss3`、`libgbm1`、`libgtk-3-0`、`libasound2`〔Ubuntu 24.04 起叫 `libasound2t64`，脚本里自动判〕、`libx11-xcb1`、`libxss1` 等，完整清单见 `server/hosted-render/deploy.mjs` 的 `RENDER_APT_PACKAGES`）。`npm ci` 要编译原生模块时才加 `install-render --with-build-tools`（装 `build-essential`、`python3`）。Chrome 本身不是系统包：`deploy-render` 在发布目录里 `npx puppeteer browsers install chrome-headless-shell`，版本由仓库锁定的 puppeteer 决定。
+- **Chrome 必须是 chrome-headless-shell，不能用系统装的 Chrome / Chromium**。预渲染靠受帧控制的页面出帧（`Target.createTarget({ enableBeginFrameControl })` 加 `HeadlessExperimental.beginFrame`），这两样只有 chrome-headless-shell 有；完整版的 Chrome / Chromium（即使以无头方式起）开页时回 `Protocol error (Target.createTarget): Target position can only be set for new windows`，也没有 `beginFrame`。在一台装着 Chromium 141 的 Linux 容器里、把 `PUPPETEER_EXECUTABLE_PATH` 指到它时实测到这条错误；在 Windows 上换成完整版 Chrome 154 复现了同一条——与版本号无关，是「完整版」与「headless-shell」的差别。所以：
+  - 版本由仓库锁定的 puppeteer 决定：`package.json` 写 `puppeteer ^25.3.0`，锁定文件里是 25.10.0，它配的是 **chrome-headless-shell 152.0.7977.75**（`node_modules/puppeteer-core/lib/*/puppeteer/revisions.js` 的 `chrome-headless-shell` 一项；升级 puppeteer 后以那里为准）。`deploy-render` 在发布目录里跑 `npx puppeteer browsers install chrome-headless-shell` 装的就是这一版，装在 `<发布目录>/.cache/puppeteer`（PM2 配置里的 `PUPPETEER_CACHE_DIR`）；
+  - **不要设 `PUPPETEER_EXECUTABLE_PATH`**（它会让 puppeteer 改用你给的那个可执行文件）。离线环境装不了时，把同一版的 chrome-headless-shell 拷进 `PUPPETEER_CACHE_DIR`，或者把 `PUPPETEER_EXECUTABLE_PATH` 指到一份 **chrome-headless-shell**（不是 `chromium` / `chrome`）；
+  - 启动自检的 `chrome-frame` 一项走的就是工作进程开页与出帧的那条路：不行时自检以退出码 78 结束，`selfcheck.error` 里写出实际的 Chrome 版本与期望的版本，不会出现「自检过了、工作进程却一直起不来」。版本不是锁定的那一版但开页与出帧都行时只告警（`chrome-version`）：环境指纹含 Chrome 主版本，它的结果不会与别的节点混用。
 - **服务用户**：`install-render` 建系统用户 `promptcut-render`（`useradd --system --no-create-home --shell /usr/sbin/nologin`，无登录权限）。工作进程用它跑，Chrome 沙箱照常开着；它读不到托管数据目录与私钥目录（都是 0700）。要在只能以 root 跑的环境（容器）里跑，把 `PROMPTCUT_RENDER_USER` 设成空串，Chrome 自动带 `--no-sandbox` 并打日志说明。
 - **keygen**：私钥写进 `{{SECRETS}}/service-key.json`（0600，目录 0700，属主 root），公钥原子追加进托管数据目录的 `secrets/services.json`；文档服务按文件修改时刻重读，不用重启托管服务。`keygen-render --list` 看登记表；**换钥**：再跑一次 `keygen-render`（两把公钥并存）→ `pm2 restart promptcut-render` → 确认新钥生效后 `keygen-render --retire <旧 kid>`；**撤销**：`keygen-render --retire <kid>`，这个服务的连接随即被关。托管数据目录若是从旧节点整份搬来的，要把旧公钥撤掉，再在新节点上生成新钥。
-- **自检**：`deploy-render` 用新发布目录跑 `server/hosted-render/main.mjs --check`（Node 版本、私钥、数据目录、Chrome 能否启动、中文字体、ffmpeg、控制连接握手）。**过了才换 `current`**；退出码 78 什么都不换，旧的照常跑，看输出里的 `selfcheck.error` 行。
+- **自检**：`deploy-render` 用新发布目录跑 `server/hosted-render/main.mjs --check`（Node 版本、私钥、数据目录、Chrome 能否启动、能否照工作进程的办法开页并出一帧、中文字体、ffmpeg、控制连接握手）。**过了才换 `current`**；退出码 78 什么都不换，旧的照常跑，看输出里的 `selfcheck.error` 行。
 
 ### 按提交分目录、升级与回退
 

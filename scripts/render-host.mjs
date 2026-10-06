@@ -56,6 +56,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { renderHostArgs as parseArgs, renderHostEnv as hostEnv } from '../server/render-node/host.mjs';
 import { sessionStatusOf } from '../server/render-node/session-diag.mjs';
+import { killTree as killProcessTree, TREE_ENV } from '../server/hosted-render/worker.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -114,9 +115,20 @@ async function main() {
     else { try { process.kill(-child.pid, 'SIGTERM'); } catch { try { child.kill('SIGTERM'); } catch { /* 已经没了 */ } } }
   };
   const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+  /**
+   * 代理模式(管理进程起的):退出前把这棵树上还活着的进程收干净 —— 编辑器是独立进程组,它起的预渲染进程与 Chrome 不一定跟着
+   * SIGTERM 走;残留的会占着端口,管理进程下一次起工作进程就起不来。按父子关系与管理进程给的记号(`PROMPTCUT_RENDER_TREE`,Linux)找。
+   * 只按记号清(编辑器的 pid 这时已经释放,不能再按它找后代);不带记号(用户自己起的独立渲染主机)或在 Windows 上时不做,行为与原来相同。
+   */
+  const sweepTree = () => {
+    const token = process.env[TREE_ENV];
+    if (process.platform === 'win32' || !token) return;
+    try { killProcessTree(null, { token }); } catch { /* 已经没了 */ }
+  };
   child.once('exit', (code) => {
     if (stopping) return;
     say('editor-exit', { code });
+    sweepTree();
     process.exit(1);
   });
 
@@ -132,6 +144,7 @@ async function main() {
     say('exit', { released, queue: last });
     killTree();
     await Promise.race([exited, delay(15000)]);
+    sweepTree();
     process.exit(0);
   };
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK']) {
@@ -169,6 +182,16 @@ async function main() {
    * 每 5 s 带口令问一次代理口:401 说明管理进程已经换了一个(口令每次启动随机),立即退;连续 3 次问不通也退。
    */
   if (brokered) {
+    // 管理进程被 SIGKILL 时什么都来不及说:每秒看一眼父进程还在不在(起这个进程时记下的 pid),不在就立即收尾
+    const parent = process.ppid;
+    const parentWatch = setInterval(() => {
+      if (stopping) { clearInterval(parentWatch); return; }
+      let alive = true;
+      try { process.kill(parent, 0); } catch (err) { alive = err?.code === 'EPERM'; }
+      if (process.platform !== 'win32' && process.ppid !== parent) alive = false;
+      if (!alive) { clearInterval(parentWatch); void shutdown('parent-gone'); }
+    }, 1000);
+    parentWatch.unref?.();
     const brokerUrl = String(process.env.PROMPTCUT_RENDER_BROKER).replace(/\/+$/, '');
     const brokerKey = String(process.env.PROMPTCUT_RENDER_BROKER_KEY || '');
     let misses = 0;
