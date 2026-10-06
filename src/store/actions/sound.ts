@@ -16,6 +16,8 @@ export interface CommitSoundEffectOptions {
   /** Expected whole clip values make an in-flight render stale on a user edit, split or removal. */
   expectedClip?: string;
   expectedSource?: string;
+  /** 导出前补齐声音时用:不改用户当前的选区,也不进撤销栈(只是把同一份声音的素材记录补回来) */
+  silent?: boolean;
 }
 
 export const sound = {
@@ -76,9 +78,9 @@ export const sound = {
       if (patch.some(op => op.path === "") || new TextEncoder().encode(JSON.stringify(patch)).byteLength > 224 * 1024) {
         throw new Error("音效变更超过共享项目安全提交上限,请拆成多段生成");
       }
-      setProject(next, { undoable: !!clip });
+      setProject(next, { undoable: !!clip && !spec.silent });
     }
-    if (clip) set({ selection: [clip.id] });
+    if (clip && !spec.silent) set({ selection: [clip.id] });
     return { mediaId: media.id, ...(clip ? { clipId: clip.id } : {}), reused: !!existing };
   },
 };

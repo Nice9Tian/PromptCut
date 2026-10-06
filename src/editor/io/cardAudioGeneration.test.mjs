@@ -104,14 +104,18 @@ test('源码和参数更新过期，取消/重开时晚到上传不改项目', a
 test('在线只复用WAV，从不执行用户audio；缺失持久声音明确失败', async () => {
   const f = service();
   try {
-    const clip = fresh(); await generateCardAudio(clip.id);
+    // 用户卡:在线页面不执行它的声音代码(内置卡 2026-10-06 起可以在线合成,见 onlineSoundJudge.test.mjs)
+    const userDef = { ...def, id: 'av-user-fixture', source: 'user' };
+    registerCards([userDef]);
+    configureCardAudio({ getCard: id => id === def.id ? def : id === userDef.id ? userDef : undefined, sourceVersionOf: () => sourceVersion });
+    sourceVersion = 'v1'; actions.newProject('声画'); const clip = actions.addCardClip(userDef.id, 0, { duration: .2 }); await generateCardAudio(clip.id);
     globalThis.__pcOnlinePage = true;
     const p = getState().project, c = findClip(p, clip.id).clip, count = evaluations;
     assert.equal(persistentCardAudio(p, c).media.kind, 'audio'); assert.equal(generatedCardAudioClipsAt(p, .1).length, 1);
     await assert.rejects(() => renderEmbeddedCardWav(p, c, new AbortController().signal), /在线/);
     assert.equal(evaluations, count);
     assert.throws(() => persistentCardAudio(p, { ...c, cardAudio: undefined }), /尚未生成/);
-  } finally { delete globalThis.__pcOnlinePage; f.restore(); }
+  } finally { delete globalThis.__pcOnlinePage; f.restore(); configureCardAudio({ getCard: id => id === def.id ? def : undefined, sourceVersionOf: () => sourceVersion }); }
 });
 test('换卡清掉旧音频能力，失败验证不会遗留取消任务', async () => {
   const clip = fresh(); actions.setClipParams(clip.id, { invalid: () => 1 });

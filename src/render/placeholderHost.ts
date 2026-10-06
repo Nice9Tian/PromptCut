@@ -180,11 +180,11 @@ export function onlineBrowserMode(): boolean {
 
 /**
  * 这张卡在此刻的平台上是不是渲染不了。`isUserCard` 缺省查注册表的 `isUserCardId`(构建时的定制卡登记,
- * 加上内容库同步来的用户卡);图卡的判法和 `kernel/cardAuthoring.mjs` 一致(`card` / `audio` 是函数)。
+ * 加上内容库同步来的用户卡);图卡的判法见 `needsLocalPc`。
  */
 export function unsupportedHere(
   cardId: string | undefined,
-  def: { card?: unknown; audio?: unknown } | undefined,
+  def: { card?: unknown; audio?: unknown; Component?: unknown } | undefined,
   isUserCard: (cardId: string) => boolean = isUserCardId,
 ): boolean {
   if (!onlineBrowser) return false;
@@ -194,15 +194,20 @@ export function unsupportedHere(
 /**
  * 这张卡是不是只有本地 PC 渲染得了(用户卡、图卡),不看此刻的平台。同步来的用户卡没有定义(`def` 为 undefined),
  * 靠 `isUserCard` 认出来;两边都没有的 id(未知卡片)回 false。
+ *
+ * 图卡 = 写了 `card()` 的(画面由宿主在 GPU 上执行),或只写了 `audio()`、没有画面组件的(音频图卡)。
+ * 有画面组件、同时带 `audio()` 的内置有声动效卡不是图卡:它的画面就是一张普通的 DOM 卡,在线页面照常渲染
+ * (声音另由宿主合成,`product/platforms.md`「卡片声音的平台边界」)。2026-10-06 之前这里把凡是写了 `audio()` 的都当图卡,
+ * 内置有声卡的画面在在线页面里因此成了「需要本地 PC 渲染辅助」、导出时一直等预渲染原尺寸。
  */
 export function needsLocalPc(
   cardId: string | undefined,
-  def: { card?: unknown; audio?: unknown } | undefined,
+  def: { card?: unknown; audio?: unknown; Component?: unknown } | undefined,
   isUserCard: (cardId: string) => boolean = isUserCardId,
 ): boolean {
   if (!cardId) return false;
   if (isUserCard(cardId)) return true;
-  return !!def && (typeof def.card === "function" || typeof def.audio === "function");
+  return !!def && (typeof def.card === "function" || (typeof def.audio === "function" && !def.Component));
 }
 
 /*
