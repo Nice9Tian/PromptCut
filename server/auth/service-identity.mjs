@@ -3,7 +3,9 @@
  *
  * 托管方在云节点上跑的服务（渲染服务；以后的 Agent 服务）各有一对 Ed25519 密钥：
  * - **登记表**（文档服务读）：`<托管数据目录>/secrets/services.json`，只有公钥，服务能拿到的连接角色也写在这里；
- *   `{ v: 1, services: { <服务名>: { role, keys: [{ kid, alg: 'ed25519', pub, addedAt }] } } }`；
+ *   `{ v: 1, services: { <服务名>: { role, actsFor?, keys: [{ kid, alg: 'ed25519', pub, addedAt }] } } }`；
+ *   `actsFor`：`'self'`（缺省；服务以自己的身份进项目，不是成员，如渲染服务）或 `'member'`（服务代某个成员进项目，票据的
+ *   `u`、`ug` 是成员的，握手照成员查名单、禁入表，如云端 Agent 服务）。握手按这个属性分支，不写死服务名；
  * - **私钥文件**（服务自己读）：`<私钥目录>/service-key.json`，
  *   `{ v: 1, service, kid, alg: 'ed25519', priv: <PKCS#8 DER base64url>, instanceId, instanceName }`。
  *
@@ -25,6 +27,10 @@ export const SERVICE_KEY_FILE = 'service-key.json';
 export const SERVICE_ALG = 'ed25519';
 /** Ed25519 签名的字节数 */
 export const SERVICE_SIG_BYTES = 64;
+/** 服务进项目时用谁的身份 */
+export const ACTS_FOR = Object.freeze(['self', 'member']);
+/** 有项目级开关的服务（项目记录 `hosted: { <服务名>: { enabled } }`，没有这一项算开）。登记表里可以有别的服务，它们没有开关 */
+export const HOSTED_SERVICES = Object.freeze(['render', 'agent']);
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const KID_RE = /^[A-Za-z0-9_-]{8}$/;
@@ -79,6 +85,8 @@ export function parseRegistry(json) {
   for (const [name, entry] of Object.entries(json.services)) {
     if (!isServiceName(name)) throw bad('bad-services-file', `服务名不合格：${name}`);
     if (!isObj(entry) || !ROLES.includes(entry.role) || !Array.isArray(entry.keys)) throw bad('bad-services-file', `服务 ${name} 要 { role, keys: […] }`);
+    const actsFor = entry.actsFor ?? 'self';
+    if (!ACTS_FOR.includes(actsFor)) throw bad('bad-services-file', `服务 ${name} 的 actsFor 只能是 ${ACTS_FOR.join(' / ')}`);
     const keys = [];
     for (const k of entry.keys) {
       if (!isObj(k) || k.alg !== SERVICE_ALG || typeof k.pub !== 'string' || typeof k.kid !== 'string' || !KID_RE.test(k.kid)) {
@@ -89,7 +97,7 @@ export function parseRegistry(json) {
       if (keys.some((x) => x.kid === k.kid)) throw bad('bad-services-file', `服务 ${name} 的 kid 重复`);
       keys.push({ kid: k.kid, alg: SERVICE_ALG, pub: k.pub, addedAt: Number.isFinite(k.addedAt) ? k.addedAt : 0 });
     }
-    services[name] = { role: entry.role, keys };
+    services[name] = { role: entry.role, actsFor, keys };
   }
   return { v: 1, services };
 }
@@ -132,14 +140,15 @@ function writeAtomic(file, text, mode = 0o600) {
   }
 }
 
-/** 往登记表里加一把公钥（没有这个服务就建）；角色与已有的不同抛 `code: 'role-conflict'`。回是否新加了 */
-export function addServiceKey(file, { service, role, kid, pub, at = Date.now() }) {
+/** 往登记表里加一把公钥（没有这个服务就建）；角色或 `actsFor` 与已有的不同抛 `code: 'role-conflict'`。回是否新加了 */
+export function addServiceKey(file, { service, role, actsFor = 'self', kid, pub, at = Date.now() }) {
   if (!isServiceName(service)) throw bad('bad-service-name', '服务名要是 1～32 个 [a-z0-9-]');
   if (!ROLES.includes(role)) throw bad('bad-role', `role 只能是 ${ROLES.join(' / ')}`);
   if (kidOfPublic(pub) !== kid) throw bad('bad-service-key', '公钥与 kid 对不上');
   const reg = readRegistryFile(file);
-  const entry = reg.services[service] ?? { role, keys: [] };
-  if (entry.role !== role) throw bad('role-conflict', `服务 ${service} 已登记为 ${entry.role}`);
+  if (!ACTS_FOR.includes(actsFor)) throw bad('bad-acts-for', `actsFor 只能是 ${ACTS_FOR.join(' / ')}`);
+  const entry = reg.services[service] ?? { role, actsFor, keys: [] };
+  if (entry.role !== role || entry.actsFor !== actsFor) throw bad('role-conflict', `服务 ${service} 已登记为 ${entry.role} / ${entry.actsFor}`);
   if (entry.keys.some((k) => k.kid === kid)) return false;
   entry.keys.push({ kid, alg: SERVICE_ALG, pub, addedAt: at });
   reg.services[service] = entry;
@@ -195,7 +204,7 @@ export function createServiceRegistry({ file, now = Date.now, minCheckMs = 1000,
     }
     services = parsed.services;
     version += 1;
-    log('services.registry', { services: Object.fromEntries(Object.entries(services).map(([n, e]) => [n, { role: e.role, kids: e.keys.map((k) => k.kid) }])) });
+    log('services.registry', { services: Object.fromEntries(Object.entries(services).map(([n, e]) => [n, { role: e.role, actsFor: e.actsFor, kids: e.keys.map((k) => k.kid) }])) });
     return true;
   }
   load();
@@ -233,10 +242,19 @@ export function createServiceRegistry({ file, now = Date.now, minCheckMs = 1000,
 
 // ---------------------------------------------------------------- 项目里的准入
 
-/** 这个项目对这个服务的开关：渲染服务看 `hostedRender.enabled`（没有这个字段算开）；别的服务本段没有开关 */
+/** 这个项目对这个服务的开关：项目记录的 `hosted.<服务名>.enabled`，没有这一项算开 */
 export function serviceEnabled(record, service) {
-  if (service === 'render') return record?.hostedRender?.enabled !== false;
-  return true;
+  return record?.hosted?.[service]?.enabled !== false;
+}
+
+/**
+ * 成员列表顶层与目录条目里的 `hosted`：有开关的服务各一项 `{ available, enabled }`。
+ * `available`：登记表里有这个服务；`enabled`：这个项目的开关。
+ */
+export function hostedStateOf(registry, record) {
+  const out = {};
+  for (const name of HOSTED_SERVICES) out[name] = { available: !!registry?.get(name), enabled: serviceEnabled(record, name) };
+  return out;
 }
 
 /**

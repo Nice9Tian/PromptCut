@@ -39,6 +39,7 @@ import { registerTsResolve } from './ts-resolve.mjs';
 import { createSharedDocService } from '../docservice/shared-service.mjs';
 import { credentialStoreFor } from '../auth/store.mjs';
 import { createAssetTicketVerifier } from '../auth/asset-tickets.mjs';
+import { createServiceRegistry, SERVICES_FILE } from '../auth/service-identity.mjs';
 import { isLocalOrigin } from '../auth/origin.mjs';
 import { createFsStore, ensureLayoutSync, LAYOUTS } from '../asset-store/fs-store.mjs';
 import { normalizeHash } from '../asset-store/blob-store.mjs';
@@ -68,6 +69,8 @@ export function hostedPaths(dataDir) {
     assets: path.join(root, 'assets'),
     secrets: path.join(root, 'secrets'),
     clusterTokenFile: path.join(root, 'secrets', 'cluster-token'),
+    // 托管方服务的登记表（只有公钥，`docs/plan/hosted-render-contract.md` 第 1.1 节）；没有这个文件就没有服务身份
+    servicesFile: path.join(root, 'secrets', SERVICES_FILE),
   };
 }
 
@@ -268,7 +271,9 @@ export async function startHostedCombo({
 
   // 本机：信任开关开着，且真正的发起方是本机（对端回环、转发头里每一跳都是回环，`auth/origin.mjs`）
   const isLoopbackReq = (req) => trustLoopback !== false && isLocalOrigin(req);
-  const tickets = createAssetTicketVerifier({ store: () => store, now });
+  // 托管方服务的登记表：文档服务的握手与素材票据的核对共用这一份（按文件修改时刻重读，换钥不用重启）
+  const serviceRegistry = createServiceRegistry({ file: paths.servicesFile, now, log: say });
+  const tickets = createAssetTicketVerifier({ store: () => store, now, services: () => serviceRegistry });
   const assetMiddleware = assetService.assetServiceMiddleware(root, { stores, tickets, isTrusted: isLoopbackReq });
   const preflight = assetService.assetPreflightMiddleware();
 
@@ -291,6 +296,7 @@ export async function startHostedCombo({
     trustLoopback: trustLoopback !== false,
     localDevice,
     linkOrigin: publicOriginOf(docPublicUrl),
+    serviceRegistry,
     now,
     log: say,
     ...(limits ? { limits } : {}),
@@ -417,6 +423,7 @@ export async function startHostedCombo({
     stores,
     hosting,
     get credentialStore() { return store; },
+    serviceRegistry,
     inventory,
     async close() {
       if (closed) return;

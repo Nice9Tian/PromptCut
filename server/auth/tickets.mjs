@@ -5,7 +5,9 @@
  * JSON：`{ kid, k: 'asset' | 'conn', p: projectId, u: userId, r, g, ug, exp, iat }`；
  * 连接票据另可带 `c`（对话号）、`o`（归属），以及本实现加的 `dn`（设备名）、`cr`（签发者是创建者，只作界面标记）。
  * 托管方服务身份的票据（`docs/plan/hosted-render-contract.md` 第 1.3、1.6 节）两类都另带 `sv`（服务名）与 `sk`（签发时
- * 服务所用公钥的 `kid`），`u` 是 `service:<服务名>@<instanceId>`；不带 `sv` 的票据 `u` 不许是这种保留用户名。
+ * 服务所用公钥的 `kid`）。服务以自己的身份进项目时 `u` 是 `service:<服务名>@<instanceId>`（这时不带 `c`、`o`、`cr`）；
+ * 代成员进项目的服务（登记表 `actsFor: 'member'`）`u`、`ug` 是那位成员的。哪种服务该用哪种由握手按登记表核对，这里只管形状。
+ * 不带 `sv` 的票据 `u` 不许是保留用户名。
  *
  * 签名密钥是项目记录里的 `ticketKey`，`kid` 是它的编号（`store.kidOf`）；记录可以另存
  * `oldTicketKeys: [{ kid, key, until }]`，轮换期间旧票据照认，直到 `until`。
@@ -119,10 +121,10 @@ export function verifyTicket(ticket, { lookup, now, kind } = {}) {
   if (kind && p.k !== kind) return bad('kind');
   const who = splitUserId(p.u);
   if (!who) return bad('format');
-  // 服务身份的票据：服务名、公钥编号齐全，`u` 必须正是这个服务的保留用户名；别的票据不许用保留用户名
+  // 服务身份的票据：服务名、公钥编号齐全；`u` 是保留用户名时必须正是这个服务的，且不带成员才有的字段。别的票据不许用保留用户名
   if (p.sv !== undefined) {
     if (!isServiceName(p.sv) || typeof p.sk !== 'string' || p.sk === '' || p.sk.length > 16) return bad('format');
-    if (who.username !== serviceUsername(p.sv) || p.cr !== undefined || p.c !== undefined || p.o !== undefined) return bad('format');
+    if (isReservedUsername(who.username) && (who.username !== serviceUsername(p.sv) || p.cr !== undefined || p.c !== undefined || p.o !== undefined)) return bad('format');
   } else if (p.sk !== undefined || isReservedUsername(who.username)) {
     return bad('format');
   }

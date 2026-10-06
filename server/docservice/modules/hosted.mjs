@@ -6,37 +6,48 @@
  *
  * | 消息 | 回包 |
  * |---|---|
- * | `hosted.watch` | `hosted.projects { full: true, projects: [{ projectId, enabled, active }] }`；之后每次变化推 `hosted.project { projectId, enabled, active }` 或 `hosted.project { projectId, removed: true }` |
+ * | `hosted.watch` | `hosted.projects { full: true, projects: [{ projectId, enabled, active, members, hosted }] }`；之后每次变化推 `hosted.project { projectId, enabled, active, members, hosted }` 或 `hosted.project { projectId, removed: true }` |
  * | `hosted.ticket { projectId }` | `hosted.ticket.ok { ticket, exp }`；或 `error { reason }`：`no-project`、`service-disabled`、`relocating` / `relocated`、`service-revoked` |
+ * | `hosted.demand { projectId, holdMs? }` | `hosted.demand.ok { projectId, until }`：声明「这个项目有活要别的托管方服务做」 |
+ * | `hosted.delegate.verify` | 第四段（云端 Agent 服务）实现；现在回 `error { reason: 'unsupported' }` |
  *
- * - 清单里是没在搬迁的全部共享项目；`enabled` 是这个项目对这个服务的开关（渲染服务看 `hostedRender.enabled`）；
- *   `active` 是这个项目的空间里此刻有成员连接，最后一个成员离开后再保持 `lingerMs`（缺省 60 s）；
- * - 推：凭证存储的变更通知（建、删、改开关、搬迁）与成员连接的进出当场推；`active` 的保持到期由 `tick` 推；
- * - 拉：重新发 `hosted.watch` 得到完整清单（`full: true`），服务据此对账；
+ * - 清单里是没在搬迁的全部共享项目；`enabled` 是这个项目对**订阅的那个服务**的开关（渲染服务看渲染的，Agent 服务看 Agent 的）；
+ *   `hosted` 是各服务的 `{ available, enabled }`（与成员列表顶层同形状），一种服务据此知道另一种的开关（Agent 服务要知道渲染开没开）。
+ * - `active`〔裁：主会话 2026-10-06，为「发起人退出后云端照常运转」〕按订阅的服务各算各的：这个项目的空间里此刻有
+ *   **不是本服务自己**的连接（成员，或别的托管方服务如 Agent 服务），或者别的托管方服务声明过这个项目有活（`hosted.demand`，
+ *   还没到期）。某一类连接的最后一条离开后再保持 `lingerMs`（缺省 60 s）。服务自己的连接不算，不然它连上之后永远不会断开。
+ * - `members`：此刻有没有成员连接（不含保持期）。渲染服务据此让有人在线的项目优先（契约第 4 节）。
+ * - `hosted.demand`：只有控制连接能发；`holdMs` 缺省 2 分钟、上限 10 分钟，到期前重发即续期。它只影响**别的**服务看到的 `active`
+ *   （发的那个服务自己不受影响），不绕过开关：项目关掉了某个服务，那个服务照样进不来。发的服务自己的公钥被撤后声明作废。
+ * - 推：凭证存储的变更通知（建、删、改开关、搬迁）与连接的进出当场推；保持期与声明到期由 `tick` 推。
+ * - 拉：重新发 `hosted.watch` 得到完整清单（`full: true`），服务据此对账。
  * - 票据是普通的连接票据（2 分钟，那个项目的 `ticketKey` 签），多带 `sv`（服务名）与 `sk`（服务此刻所用公钥的 `kid`），
- *   `u` 是 `service:<服务名>@<instanceId>`，角色取登记表；
- * - `hosted.ticket` 的 `conversation`、`delegation` 两个字段位留给第四段（云端 Agent 服务），本段给了就回 `unsupported`；
- * - 只有控制连接（`scope: 'service'`、不在任何空间里）能发这两种消息，别的身份一律 `forbidden`（组装层的 gate 也挡一次）；
+ *   `u` 是 `service:<服务名>@<instanceId>`，角色取登记表。
+ * - `hosted.ticket` 的分发点：代成员进项目的服务（登记表 `actsFor: 'member'`，云端 Agent）的票据，以及 `conversation`、`delegation`、
+ *   `purpose` 这几个字段位，都由第四段在 `ticketFor` 里实现；本段遇到就回 `unsupported`。
+ * - 只有控制连接（`scope: 'service'`、不在任何空间里）能发这几种消息，别的身份一律 `forbidden`（组装层的 gate 也挡一次）。
  * - `tick` 另看一眼登记表：公钥已不在表里的服务连接（控制连接与各项目里的数据连接）以 4003 `service-revoked` 关闭。
  */
 import { isProjectId, serviceUserId } from '../../auth/protocol.mjs';
 import { signTicket } from '../../auth/tickets.mjs';
-import { serviceAdmission, serviceEnabled } from '../../auth/service-identity.mjs';
+import { serviceAdmission, serviceEnabled, hostedStateOf } from '../../auth/service-identity.mjs';
 import { roomUnavailableReason } from '../../recovery/relocation.mjs';
 
 export const HOSTED_MODULE = 'hosted';
-export const HOSTED_DEFAULTS = Object.freeze({ LINGER_MS: 60_000, TICK_MS: 1000 });
+export const HOSTED_DEFAULTS = Object.freeze({ LINGER_MS: 60_000, TICK_MS: 1000, DEMAND_MS: 120_000, DEMAND_MAX_MS: 600_000 });
 /** 服务的公钥被撤后关连接用的关闭码（与被移出名单同一个码） */
 export const CLOSE_SERVICE = 4003;
 
 const isReqId = (v) => typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
+const MEMBER = 'member';
+const serviceKey = (name) => `service:${name}`;
 
 /**
  * @param {object} options
  * @param {() => object | null} options.store 取凭证存储
  * @param {() => object | null} options.registry 取服务登记表
  * @param {() => number} [options.now]
- * @param {number} [options.lingerMs] 最后一个成员离开后 `active` 再保持多久
+ * @param {number} [options.lingerMs] 某一类连接的最后一条离开后 `active` 再保持多久
  * @param {number} [options.tickMs]
  */
 export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.LINGER_MS, tickMs = HOSTED_DEFAULTS.TICK_MS } = {}) {
@@ -44,18 +55,22 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
   const registryOf = typeof registry === 'function' ? registry : () => registry;
   /** connId → { principal, watching, sent: Map<projectId, JSON> } */
   const conns = new Map();
-  /** projectId → 成员连接数 */
-  const members = new Map();
-  /** projectId → 最后一个成员离开后保持到的时刻 */
-  const lingerUntil = new Map();
+  /** projectId → Map<类别, 连接数>；类别是 'member' 或 'service:<服务名>' */
+  const present = new Map();
+  /** projectId → Map<类别, 保持到的时刻> */
+  const lingering = new Map();
+  /** projectId → Map<声明的服务名, 到期时刻> */
+  const demands = new Map();
   let ctxRef = null;
   let subscribedTo = null;
   let unsubscribe = null;
   let registryVersion = null;
 
   const clock = (ctx) => (typeof now === 'function' ? now() : ctx.now());
-  const isControl = (p) => p?.scope === 'service' && !(typeof p.tenantId === 'string' && p.tenantId !== '');
-  const isMember = (p) => p?.scope === 'member' && isProjectId(p.tenantId);
+  const inSpace = (p) => typeof p?.tenantId === 'string' && isProjectId(p.tenantId);
+  const isControl = (p) => p?.scope === 'service' && !inSpace(p);
+  /** 这条连接在它的项目里算哪一类；不在共享项目里的回 null */
+  const classOf = (p) => (!inSpace(p) ? null : typeof p.service === 'string' ? serviceKey(p.service) : p.scope === 'member' ? MEMBER : null);
 
   function reply(ctx, connId, message, reqId) {
     if (reqId !== undefined) message.reqId = reqId;
@@ -73,7 +88,36 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     if (st && typeof st.onChange === 'function') unsubscribe = st.onChange(() => { if (ctxRef) sync(ctxRef); });
   }
 
-  /** 这个服务此刻该看到的清单：projectId → { projectId, enabled, active } */
+  function bump(map, projectId, key, delta) {
+    let inner = map.get(projectId);
+    if (!inner) map.set(projectId, (inner = new Map()));
+    const next = (inner.get(key) ?? 0) + delta;
+    if (next > 0) inner.set(key, next);
+    else inner.delete(key);
+    if (inner.size === 0) map.delete(projectId);
+    return Math.max(0, next);
+  }
+
+  /** 到期的保持与声明清掉 */
+  function prune(at) {
+    for (const map of [lingering, demands]) {
+      for (const [projectId, inner] of map) {
+        for (const [key, until] of inner) if (until <= at) inner.delete(key);
+        if (inner.size === 0) map.delete(projectId);
+      }
+    }
+  }
+
+  /** 对服务 `service` 来说这个项目此刻算不算有活：有不是它自己的连接（含保持期），或别的服务声明过 */
+  function activeFor(service, projectId, at) {
+    const own = serviceKey(service);
+    for (const key of present.get(projectId)?.keys() ?? []) if (key !== own) return true;
+    for (const [key, until] of lingering.get(projectId) ?? []) if (key !== own && until > at) return true;
+    for (const [by, until] of demands.get(projectId) ?? []) if (by !== service && until > at) return true;
+    return false;
+  }
+
+  /** 这个服务此刻该看到的清单：projectId → { projectId, enabled, active, members } */
   function viewFor(service, at) {
     const out = new Map();
     const st = storeOf();
@@ -81,8 +125,13 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     for (const { projectId } of st.list()) {
       const rec = st.peek(projectId);
       if (!rec || roomUnavailableReason(rec)) continue;
-      const active = (members.get(projectId) ?? 0) > 0 || (lingerUntil.get(projectId) ?? -Infinity) > at;
-      out.set(projectId, { projectId, enabled: serviceEnabled(rec, service), active });
+      out.set(projectId, {
+        projectId,
+        enabled: serviceEnabled(rec, service),
+        active: activeFor(service, projectId, at),
+        members: (present.get(projectId)?.get(MEMBER) ?? 0) > 0,
+        hosted: hostedStateOf(registryOf(), rec),
+      });
     }
     return out;
   }
@@ -90,7 +139,7 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
   /** 给每条订阅着的控制连接补发与上次不同的条目 */
   function sync(ctx) {
     const at = clock(ctx);
-    for (const [projectId, until] of lingerUntil) if (until <= at) lingerUntil.delete(projectId);
+    prune(at);
     for (const [connId, c] of conns) {
       if (!c.watching) continue;
       const view = viewFor(c.principal.service, at);
@@ -109,7 +158,9 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
   }
 
   function watch(ctx, connId, c, msg, reqId) {
-    const view = viewFor(c.principal.service, clock(ctx));
+    const at = clock(ctx);
+    prune(at);
+    const view = viewFor(c.principal.service, at);
     c.watching = true;
     c.sent = new Map([...view].map(([projectId, item]) => [projectId, JSON.stringify(item)]));
     reply(ctx, connId, { type: 'hosted.projects', full: true, projects: [...view.values()] }, reqId);
@@ -117,9 +168,12 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
 
   function ticket(ctx, connId, c, msg, reqId) {
     const refuse = (reason, detail) => reply(ctx, connId, { type: 'error', reason, ...(detail ? { detail } : {}) }, reqId);
-    if (msg.conversation !== undefined || msg.delegation !== undefined) return refuse('unsupported', 'conversation / delegation 留给以后的服务，本服务不认');
-    if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
     const p = c.principal;
+    // 分发点（第四段往这里填）：代成员进项目的服务的票据，以及这三个字段位
+    if (msg.conversation !== undefined || msg.delegation !== undefined || msg.purpose !== undefined || registryOf()?.get(p.service)?.actsFor === 'member') {
+      return refuse('unsupported', '这种票据由云端 Agent 服务那一段实现');
+    }
+    if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
     const rec = storeOf()?.peek(msg.projectId) ?? null;
     const refused = serviceAdmission({ registry: registryOf(), record: rec, service: p.service, kid: p.serviceKid });
     if (refused) return refuse(refused);
@@ -134,7 +188,34 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     reply(ctx, connId, { type: 'hosted.ticket.ok', ticket: out.ticket, exp: out.exp }, reqId);
   }
 
-  /** 登记表变了：公钥已不在表里的服务连接全部关掉 */
+  function demand(ctx, connId, c, msg, reqId) {
+    const refuse = (reason, detail) => reply(ctx, connId, { type: 'error', reason, ...(detail ? { detail } : {}) }, reqId);
+    if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
+    let holdMs = HOSTED_DEFAULTS.DEMAND_MS;
+    if (msg.holdMs !== undefined && msg.holdMs !== null) {
+      if (!Number.isSafeInteger(msg.holdMs) || msg.holdMs < 0 || msg.holdMs > HOSTED_DEFAULTS.DEMAND_MAX_MS) {
+        return refuse('bad-message', `holdMs 要是 0～${HOSTED_DEFAULTS.DEMAND_MAX_MS} 的整数（0 表示撤回）`);
+      }
+      holdMs = msg.holdMs;
+    }
+    const p = c.principal;
+    const rec = storeOf()?.peek(msg.projectId) ?? null;
+    if (!rec) return refuse('no-project');
+    const unavailable = roomUnavailableReason(rec);
+    if (unavailable) return refuse(unavailable);
+    if (!registryOf()?.has(p.service, p.serviceKid)) return refuse('service-revoked');
+    const at = clock(ctx);
+    const until = at + holdMs;
+    let inner = demands.get(msg.projectId);
+    if (!inner) demands.set(msg.projectId, (inner = new Map()));
+    if (holdMs === 0) inner.delete(p.service);
+    else inner.set(p.service, until);
+    if (inner.size === 0) demands.delete(msg.projectId);
+    reply(ctx, connId, { type: 'hosted.demand.ok', projectId: msg.projectId, until }, reqId);
+    sync(ctx);
+  }
+
+  /** 登记表变了：公钥已不在表里的服务连接全部关掉，它们发的声明作废 */
   function revoke(ctx) {
     const reg = registryOf();
     if (!reg) return;
@@ -143,12 +224,23 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     registryVersion = reg.version;
     for (const [connId, c] of conns) {
       const p = c.principal;
-      if (p?.scope !== 'service') continue;
+      if (typeof p?.service !== 'string') continue;
       if (reg.has(p.service, p.serviceKid)) continue;
       ctx.log('hosted.revoked', { connId, service: p.service, kid: p.serviceKid });
       ctx.close?.(connId, CLOSE_SERVICE, 'service-revoked');
     }
+    for (const [projectId, inner] of demands) {
+      for (const by of [...inner.keys()]) if (!reg.get(by)) inner.delete(by);
+      if (inner.size === 0) demands.delete(projectId);
+    }
   }
+
+  /** 分发点：只核验不签的入口，第四段实现 */
+  function delegateVerify(ctx, connId, c, msg, reqId) {
+    reply(ctx, connId, { type: 'error', reason: 'unsupported', detail: '由云端 Agent 服务那一段实现' }, reqId);
+  }
+
+  const HANDLERS = { 'hosted.watch': watch, 'hosted.ticket': ticket, 'hosted.demand': demand, 'hosted.delegate.verify': delegateVerify };
 
   return {
     name: HOSTED_MODULE,
@@ -158,10 +250,10 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     connect(ctx, connId, principal) {
       bind(ctx);
       conns.set(connId, { principal: { ...principal }, watching: false, sent: new Map() });
-      if (isMember(principal)) {
-        const id = principal.tenantId;
-        members.set(id, (members.get(id) ?? 0) + 1);
-        lingerUntil.delete(id);
+      const key = classOf(principal);
+      if (key !== null) {
+        bump(present, principal.tenantId, key, 1);
+        lingering.get(principal.tenantId)?.delete(key);
         sync(ctx);
       }
     },
@@ -170,13 +262,13 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
       bind(ctx);
       const c = conns.get(connId);
       conns.delete(connId);
-      if (c && isMember(c.principal)) {
+      const key = c ? classOf(c.principal) : null;
+      if (key !== null) {
         const id = c.principal.tenantId;
-        const left = (members.get(id) ?? 1) - 1;
-        if (left > 0) members.set(id, left);
-        else {
-          members.delete(id);
-          lingerUntil.set(id, clock(ctx) + lingerMs);
+        if (bump(present, id, key, -1) === 0) {
+          let inner = lingering.get(id);
+          if (!inner) lingering.set(id, (inner = new Map()));
+          inner.set(key, clock(ctx) + lingerMs);
         }
         sync(ctx);
       }
@@ -187,9 +279,9 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
       const reqId = isReqId(msg.reqId) ? msg.reqId : undefined;
       const c = conns.get(connId);
       if (!c || !isControl(c.principal)) return reply(ctx, connId, { type: 'error', reason: 'forbidden', detail: '只有托管方服务的控制连接能用目录' }, reqId);
-      if (msg.type === 'hosted.watch') return watch(ctx, connId, c, msg, reqId);
-      if (msg.type === 'hosted.ticket') return ticket(ctx, connId, c, msg, reqId);
-      return reply(ctx, connId, { type: 'error', reason: 'unsupported', detail: '目录模块不支持这种消息' }, reqId);
+      const fn = HANDLERS[msg.type];
+      if (!fn) return reply(ctx, connId, { type: 'error', reason: 'unsupported', detail: '目录模块不支持这种消息' }, reqId);
+      return fn(ctx, connId, c, msg, reqId);
     },
 
     tick(ctx) {
@@ -201,7 +293,8 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     describe() {
       return {
         watchers: [...conns.values()].filter((c) => c.watching).map((c) => ({ service: c.principal.service, kid: c.principal.serviceKid, projects: c.sent.size })),
-        active: [...members.keys()].sort(),
+        present: Object.fromEntries([...present].sort().map(([id, inner]) => [id, Object.fromEntries(inner)])),
+        demands: Object.fromEntries([...demands].sort().map(([id, inner]) => [id, [...inner.keys()].sort()])),
       };
     },
   };

@@ -8,8 +8,10 @@
  * - 集群令牌 `promptcut.token.<令牌>` → 管理身份，只能用管理接口（只在调用方允许时认，挂载模式一律不认）；
  * - 服务身份 `promptcut.service.<base64url(JSON)>`（`docs/plan/hosted-render-contract.md` 第 1.2 节）→ 托管方服务的控制身份，
  *   不进任何项目，只能看目录、要票据。只在调用方给了登记表（托管端）、且请求真正从本机发起时认。
- * 带 `sv` 的连接票据（目录模块签给服务的，同上第 1.4 节）→ 服务在那个项目里的身份 `scope: 'service'`：不查名单与禁入表，
- * 查登记表与项目的开关。
+ * 带 `sv` 的连接票据（目录模块签给服务的，同上第 1.4 节）按登记表里这个服务的 `actsFor` 分两种，都查登记表与项目的开关：
+ * - `'self'`（渲染服务）→ 服务在那个项目里的身份 `scope: 'service'`：不是成员，不查名单与禁入表；
+ * - `'member'`（云端 Agent 服务）→ 票据里那位成员的身份（`scope: 'member'`）再带上 `service`：照成员查名单、禁入表、踢人。
+ * 带 `service` 字段的连接一律走消息白名单（`../docservice/service-gate.mjs`）。
  * 回环来源什么都不带 → 本机身份 `{ userId: 'local', tenantId: 'local', scope: 'local', role: 'page' }`。
  * 回环来源连 `promptcut.v1` 都不带的旧客户端，也按本机身份放行（M5 的行为）。
  *
@@ -266,9 +268,27 @@ export function createHandshakeAuth({
       const p = v.payload;
       const who = splitUserId(p.u);
       if (p.sv !== undefined) {
-        // 服务身份的票据：不查名单与禁入表（它不是成员），查登记表与这个项目的开关
-        const refused = serviceAdmission({ registry: registryOf(), record: v.record, service: p.sv, kid: p.sk, role: p.r });
+        // 服务身份的票据：先查登记表与这个项目的开关
+        const registry = registryOf();
+        const refused = serviceAdmission({ registry, record: v.record, service: p.sv, kid: p.sk, role: p.r });
         if (refused) return reject(refused);
+        const own = who.username === serviceUsername(p.sv);
+        if (registry.get(p.sv).actsFor === 'member') {
+          // 代成员进项目（云端 Agent 服务）：票据的 `u`、`ug` 是成员的，名单、禁入表照成员查
+          if (own) return reject('bad-format');
+          const asCreator = p.cr === true;
+          const banned = admissionOf(v.record, { username: who.username, deviceId: who.deviceId, creator: asCreator });
+          if (banned) return reject(banned);
+          return {
+            ...memberPrincipal({
+              projectId: p.p, username: who.username, deviceId: who.deviceId, deviceName: p.dn ?? who.deviceId,
+              creator: asCreator, role: p.r, conversation: p.c, owner: p.o,
+            }),
+            service: p.sv, serviceKid: p.sk,
+          };
+        }
+        // 以服务自己的身份进项目（渲染服务）：不是成员，不查名单与禁入表
+        if (!own) return reject('bad-format');
         return serviceDataPrincipal({ service: p.sv, kid: p.sk, projectId: p.p, deviceId: who.deviceId, deviceName: p.dn ?? who.deviceId, role: p.r });
       }
       const creator = p.cr === true;

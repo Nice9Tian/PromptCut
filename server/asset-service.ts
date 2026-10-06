@@ -396,7 +396,7 @@ export function isLoopbackRequest(req: IncomingMessage): boolean {
 
 /** 核对素材票据(`server/auth/asset-tickets.mjs`) */
 export interface AssetTicketVerifier {
-  verify(ticket: string): { ok: true; access: "r" | "rw"; projectId: string; userId: string } | { ok: false; reason: string };
+  verify(ticket: string): { ok: true; access: "r" | "rw"; projectId: string; userId: string; service?: string } | { ok: false; reason: string };
 }
 
 /** `Authorization: Bearer <票据>` 里的票据;没带或格式不对给 null */
@@ -423,8 +423,10 @@ const DENY_403: Access = { ok: false, status: 403, error: "forbidden" };
 /**
  * 这个请求放不放行。`write`:分片上传与收尾;否则是读。
  * 回环来源不看票据;别的来源按契约第 8 节:写只认 Bearer 的 `rw` 票据,读认 Bearer 的任何素材票据或查询串的 `r` 票据。
+ * 托管方服务身份的票据(核对结果带 `service`,`docs/plan/hosted-render-contract.md` 第 1.6 节)只能往预渲染产物的命名空间
+ * (`snap`、`px`)写,写素材原件(`media`)回 403。
  */
-function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVerifier | null, isTrusted: (req: IncomingMessage) => boolean): Access {
+function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVerifier | null, isTrusted: (req: IncomingMessage) => boolean, ns?: string): Access {
   let trusted = false;
   try { trusted = !!isTrusted(req); } catch { trusted = false; }
   if (trusted) return { ok: true };
@@ -437,6 +439,7 @@ function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVeri
     const v = verify(bearer);
     if (!v.ok) return DENY_401;
     if (write && v.access !== "rw") return DENY_403;
+    if (write && v.service && ns !== "snap" && ns !== "px") return DENY_403;
     return { ok: true };
   }
   if (write) return DENY_401; // 写入一律不认查询串
@@ -616,7 +619,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       } catch { return null; }
     });
   /** 放不放行;不放行时已经回了 401 / 403 */
-  const admit = async (req: IncomingMessage, res: ServerResponse, write: boolean): Promise<boolean> => {
+  const admit = async (req: IncomingMessage, res: ServerResponse, write: boolean, ns?: string): Promise<boolean> => {
     // 带查询串票据的响应:不缓存、不带 Referer 出去(契约第 8 节)
     if (queryTicketOf(req) !== null) {
       res.setHeader("Cache-Control", "no-store");
@@ -624,7 +627,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     }
     let trusted = false;
     try { trusted = !!isTrusted(req); } catch { trusted = false; }
-    const access = accessOf(req, write, trusted ? null : await ticketsOf(), () => trusted);
+    const access = accessOf(req, write, trusted ? null : await ticketsOf(), () => trusted, ns);
     if (access.ok) return true;
     reject(req, res, access.status, { ok: false, error: access.error });
     return false;
@@ -671,13 +674,13 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       }
       if (tail === "complete") {
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
-        if (!(await admit(req, res, true))) return;
+        if (!(await admit(req, res, true, ns))) return;
         await handleComplete(res, store, hash, ns);
         if (ns === "px" && pxEvictor) { touchPx(hash); void pxEvictor.then((ev) => ev?.onStored()); }
         return;
       }
       if (method !== "PUT") return reject(req, res, 405, { ok: false, error: "method" });
-      if (!(await admit(req, res, true))) return;
+      if (!(await admit(req, res, true, ns))) return;
       return await handlePutChunk(req, res, store, hash, tail, ns);
     } catch (err) {
       // 收尾时磁盘满:数据层没有入库、暂存保留(fs 实现的收尾只在成功改名后才删暂存)
