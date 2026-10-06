@@ -18,7 +18,7 @@
 | `c10-ui-probe` | 不过：`members-button` 等待超时（我在修之前复跑过，退出码 1） | 同上 | 建项目后 `seedSharedProject` | 起点：`ok:true, fails:[]`；本分支：`ok:true, fails:[]` |
 | `m7-node-probe` | 与上一条同一路径（建空项目 → 页面加入），**我没有在未修的代码上单独跑它**，按代码路径判不过 | 同上 | 同上 | 起点：`ok:true, fails:[]`（19 s）；本分支：`ok:true, fails:[]` |
 | `c10-browser-probe --user-card` | **本身不受这个问题影响**（创建者是真桌面编辑器，项目有内容）。完整跑：user-card 一步过（层表里有那一层、成员页贴上快照），但 **A5（独立渲染主机认领清单计划并切分）超时**、「认领的节点与页面环境不同」两条失败，`ok:false`；这与用户卡无关，是本机上独立渲染主机一步的起点状态 | A5 与本任务无关，未深究 | 没改 | `--only-a4`（跳过 A2 重开与 A5）：起点 `ok:true, fails:[]`；本分支 `ok:true, fails:[]`。完整版 A5 在起点就挂，**请主会话知道：这一条起点就红，不是我的改动**，我没有在本分支重跑完整版 |
-| `m7-browser-probe` | 见文末「待补」（跑完后写结果） | 创建者是真桌面编辑器，不碰这个问题 | 没改 | 见文末 |
+| `m7-browser-probe` | 过：退出码 3（没有 fail、只有 pending），17 项里 M7-A1～A3、A6～A11、D9、D10、D14、D1-D2-D12 pass；A4、A5、A12、W7 是带耗时门槛或要跨机的 pending（「待笔记本复核」，不是失败） | 创建者是真桌面编辑器，不碰空项目这个问题 | 没改 | 起点：同上；本分支：fails 空、逐项状态与起点完全相同 |
 | `m7-bake-probe`、`m7-bake-node-probe`、`m7-build-probe`、`m7-upload-probe`、`m7-visibility-probe` | 没跑 | 这几个是 M7 当年在实验分支上的取证脚本，用法里要实验分支的检出目录或帧目录，不是验收探针 | — | — |
 
 ### 按第二段新语义要改、这一轮**没改**的断言清单
@@ -88,13 +88,13 @@
 | 项 | 结果 |
 |---|---|
 | `npx tsc -b --force` | 退出码 0 |
-| `npm test` | 4461 项（起点 4448 + 新增 13），4460 通过、0 失败、1 跳过（起点同样 1 跳过）。首轮有 1 项 `server/test/artifact-push.test.mjs` 的 W4（带耗时的推送续传）在机器同时跑探针时失败，单独重跑 7 项全过；最后一轮全量见下「最终全量」 |
+| `npm test` | 4461 项（起点 4448 + 新增 13），4460 通过、0 失败、1 跳过（起点同样 1 跳过）。中途一轮有 1 项 `server/test/artifact-push.test.mjs` 的 W4（带耗时的推送续传）在机器同时跑探针时失败，单独重跑 7 项全过。**最终全量（所有提交之后、探针都跑完时）：4461 项、4460 通过、0 失败、0 取消、1 跳过，退出码 0** |
 | `npm run build` | 退出码 0；产物里没有转译器那一块（`transpile` 文件 0 个） |
 | `npx vite build --mode online` | 退出码 0；`transpile.browser-*.js` 一块 |
 | 新增单测 | `server/test/online-card-n.test.mjs` OCN-01～07；`src/online/nodeCards.test.mjs` OCN-08～11（含 OCN-09 三条），共 13 条，全过 |
 | 内置卡结果键不变 | OCN-01：十一份切分输出（含锁、接手、补渲、改源码、本地素材、流、同机浏览器指纹等）、**57 个结果键**，任务数、摘要、逐个键与改动之前的字面值（`server/test/online-card-n-golden.json`，在改代码之前用起点代码生成）逐个相同；输出行：`OCN-01 比对了 11 份输出、57 个结果键,全部与改动之前相同` |
 | 队列相关既有测试 | `m7-split / m7-node-rules / m7-queue / m7-page-node / env-fingerprint-keys / render-queue-prefilter / render-node-logic / render-node-session / planPublisher / browserNode / browserNodeActive / queue-node-wiring` 共 229 项全过（后又随全量跑） |
-| 探针 | 本分支新构建：`online-user-cards-probe` ok；`c10-ui-probe` ok；`m7-node-probe` ok；`c10-browser-probe --user-card --only-a4` ok；`online-card-node-probe` 见下 |
+| 探针 | 本分支新构建：`online-user-cards-probe` ok；`c10-ui-probe` ok；`m7-node-probe` ok；`c10-browser-probe --user-card --only-a4` ok；`m7-browser-probe` fails 空（与起点逐项相同）；`online-card-node-probe` 见下 |
 
 ### 新增单测逐条
 
@@ -132,4 +132,4 @@
 
 ## 待补
 
-`m7-browser-probe` 起点与本分支的结果、最终全量 `npm test`，跑完后补在这里。
+无。队列相关探针（`queue-mode-probe`、`render-queue-e2e`）本轮没跑：队列改动只在浏览器节点与用户卡、图卡任务这一路，既有队列单测（render-queue-*、m7-*、card-lock-*、c10-*）随 `npm test` 全过，M7 的两个浏览器探针过了。
