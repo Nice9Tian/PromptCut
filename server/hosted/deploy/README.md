@@ -84,7 +84,7 @@ node scripts/remote/docservice.mjs status-render                  # 5. 看状态
 
 ### PM2 存档与开机自启
 
-节点重启后要靠两步才会自己起来：`pm2 save`（存当前进程清单）与 `pm2-<用户>.service`（开机时 `pm2 resurrect`）。`deploy-render --save` 做前者，并在 `pm2-<用户>.service` 没装、且机器有 systemd 时做 `pm2 startup systemd`（与 `deploy-hosted` 相同）。手工做法与核对：
+节点重启后要靠两步才会自己起来：`pm2 save`（存当前进程清单）与 `pm2-<用户>.service`（开机时 `pm2 resurrect`）。`deploy-render --save` 做前者；后者在 `pm2-<用户>.service` 没装、且机器有 systemd 时由每次正式部署（不带 `--no-start`）补装 `pm2 startup systemd`（与 `deploy-hosted` 相同）。手工做法与核对：
 
 ```
 pm2 save

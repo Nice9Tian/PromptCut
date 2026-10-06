@@ -127,6 +127,35 @@ $PROMPTCUT_DATA_DIR/
 7. **验收**：0.7.16 在阿里云上建的测试房间，换机后用 0.7.17 同一台设备打开旧文件，不用认证回到原房间原身份、只连新节点、存回的是新地址；全新的 0.7.16 经阿里云 8787 的转发加入同一房间，双向改名可见，改动落在新节点（rev 2 → 4，阿里云上冻结在 2）；正在编辑的那台 0.7.16 桌面版经转发自动重连回原项目，版本号与停写前一致。
 8. **阿里云留着**：只做转发加信箱（`/coord`），托管服务停着、`pm2 save` 过；托管数据只读保留 7 天。
 
+## 2a. 渲染服务的迁移与重建
+
+托管方的渲染服务（PM2 的 `promptcut-render`，契约 `docs/plan/hosted-render-contract.md`）与托管组合同在一台云节点上。**它不跟着托管数据目录走，换机时在新节点上重建**；模板与逐步命令见 `server/hosted/deploy/README.md` 的「渲染服务」一节。
+
+**什么要带、什么不用带：**
+
+| 东西 | 在哪 | 换机时 |
+|---|---|---|
+| 工作进程的数据 | `/var/lib/promptcut/render/`（帧库、临时目录、卡片同步） | **不用拷**：是可重建的缓存 |
+| 服务私钥 | `/var/lib/promptcut/render-secrets/service-key.json` | **不拷**：新节点重新生成。私钥在节点上生成、不离开节点 |
+| 服务登记表 | 托管数据目录里的 `secrets/services.json`（只有公钥） | 随托管数据目录过去；**过去之后要把旧公钥撤掉**（见下），再登记新节点生成的新钥 |
+| 渲染服务写成的预渲染块 | 托管数据目录里 `assets/snap/`、`assets/px/` | 随托管数据目录过去，不用重做 |
+| 容量记账 | 托管数据目录里 `assets/.service-usage/render.ndjson` | 随托管数据目录过去（记账靠它回放；缺了只会少记，不会多删） |
+| 部署目录与 PM2 配置 | `/opt/promptcut-render/` | 不拷：用模板重新生成，仓库在提交处重新部署 |
+
+**在新节点上的步骤**（托管组合已经在新节点上起来、第 2 节第 6 步通过之后；`$PROMPTCUT_REMOTE` 指向新节点）：
+
+1. **装系统包、建用户与目录、写资源组**：`node scripts/remote/docservice.mjs install-render`（先加 `--dry-run` 看脚本）。会装中文字体、ffmpeg 与 Chrome 的运行库，建系统用户 `promptcut-render`，建 `/opt/promptcut-render`、`/var/lib/promptcut/render`、私钥目录（root，0700），写 `promptcut-render.slice`。没有 systemd 的机器跳过 slice，渲染服务自检报「无 cgroup 上限，只靠进程内看护」并照常工作。
+2. **部署代码，先不启动**：`node scripts/remote/docservice.mjs deploy-render --no-start`。**与在线页面同一个提交**：在线页面（`deploy-hosted --editor`）发的是哪个提交，这里就部署哪个（`--commit <引用>`），否则渲染服务一个任务也认领不了、队列也不报错。
+3. **撤旧公钥、登记新钥**：
+   - `node scripts/remote/docservice.mjs keygen-render --list` 看登记表；托管数据目录是从旧节点带过来的，里面有旧节点那把公钥，用 `keygen-render --retire <旧 kid>` 撤掉（旧私钥即使还在，也进不来：服务握手本来就只认本机发起的连接）；
+   - `node scripts/remote/docservice.mjs keygen-render` 在新节点上生成新私钥并登记公钥，不用重启托管服务。
+4. **正式部署并存档**：`node scripts/remote/docservice.mjs deploy-render --save`：自检过了才换 `current` 并启动，`--save` 做 `pm2 save`，`pm2-<用户>.service` 没装时补装（开机自启）。自检不过（退出码 78）时旧的不动、看输出里的 `selfcheck.error` 行。
+5. **核对**：`node scripts/remote/docservice.mjs status-render`：PM2 在线；`codeVersion` 渲染服务、在线页面并排且一致；资源组有上限；产物容量记账文件在。再在在线页面里新建一个项目，几秒内诊断口 `/status` 里出现这个项目；成员列表里出现「托管方的渲染节点」一行。
+6. **节点重启后自动起来**：`pm2 save` 与 `pm2-<用户>.service` 都就位后，怎么验、要不要真重启（会中断托管服务）由负责部署的人定；手工核对见 README「PM2 存档与开机自启」。
+7. **旧节点**：停掉渲染服务（`stop-render --delete`，旧节点上的）；旧节点的私钥目录随旧节点销毁，不用拷贝也不用保留。
+
+**回退**：新提交有问题时 `rollback-render`（换回 `.previous` 再重载）；整个渲染服务不要了时 `stop-render`，托管服务不受影响（项目照常用，只是没有云节点预渲染）。
+
 ## 3. 验收（M8）
 
 - 迁移后项目、素材、预渲染产物全部可用：
