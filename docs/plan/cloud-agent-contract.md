@@ -557,12 +557,12 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | 跑法 | 含义 | 个数 |
 |---|---|---|
 | 在副本上执行（`route`） | 在服务端的项目副本上同步执行，改动带期望版本提交给文档服务；进程级的锁里跑，实现必须是同步的。其中看画面的四个（标 `look`）读副本后向同机的渲染服务要一帧，不进锁（9.8） | 71 |
-| 服务端另有实现（`hosted`） | `server/agent/service/hosted-tools.mjs`：文件只进这个对话的工作区、出网只经出网闸、素材经素材服务、卡片源码经文档服务的内容库、花钱的调用记用量。外部的等待在锁外，进锁只做同步的改项目 | 7 |
+| 服务端另有实现（`hosted`） | `server/agent/service/hosted-tools.mjs`（声音的三组在 `hosted-sound.mjs`、`hosted-audio.mjs`、`hosted-card-audio.mjs`）：文件只进这个对话的工作区、出网只经出网闸、素材经素材服务、卡片源码经文档服务的内容库、花钱的调用记用量。外部的等待在锁外，进锁只做同步的改项目 | 13 |
 | 就地执行（`server`） | 不碰项目：`wait`、`report_progress`、多 Agent 公告板四个 | 6 |
 | 要操作发起人的界面（`initiator`） | 发起方不在线时立刻回 `{ ok: false, initiatorOffline: true, error }`，Agent 据此继续；在线时读得到的照答 | 8 |
-| 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 36 |
+| 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 30 |
 
-交给模型的是前四类共 92 个（加驱动自带的 `think`）；节点没有配看画面的口子（`PROMPTCUT_AGENT_LOOK_URL`）时少掉看画面的四个，是 88 个，那四个调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 在这台节点上看不了画面…' }`；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
+交给模型的是前四类共 98 个（加驱动自带的 `think`）〔2026-10-07 接上声音的六个，见 9.4a～9.4c 与第 26 节〕；节点没有配看画面的口子（`PROMPTCUT_AGENT_LOOK_URL`）时少掉看画面的四个与卡片声音的两个（都要同机的渲染服务），是 92 个，看画面的四个调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 在这台节点上看不了画面…' }`；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
 
 ### 9.2 逐个工具
 
@@ -571,7 +571,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | project（7） | `get_project`、`list_media`、`set_project_meta`、`set_theme`、`list_media_effects` | `import_media` | `get_selection`（在线：发消息时的选区） | — |
 | clips（8）、layout（6）、tracks（5）、parts（6）、effects（10） | 全部。`get_layout` 的实体框向渲染服务量（9.8）；节点没配看画面的口子、或这次没量成时只回规定的框，`contentBox` 是 null 并带一句原因 | — | — | — |
 | cuts（8） | 全部。`switch_cut`、`add_cut`、`remove_cut` 要播放头：在线用发消息时的，不在线按 0 记并注明 | — | — | — |
-| audio（19） | `set_clip_volume`、`set_clip_muted`、`separate_audio`、`create_audio`、五个 `*_audio_fx`、`sound_presets` | `voice_list`、`voice_generate` | — | `sound_generate`、`sound_status`、`sound_cancel`、`render_card_audio`、`cancel_card_audio`：声音的合成在页面里做（Web Worker 与 AudioContext），服务端的合成没接上；`render_card_audio` 还要执行卡片的声音代码，得放进不持凭证的隔离进程。`measure_audio`：要节点上的 ffmpeg / ffprobe 从素材服务读素材。`measure_audio_js`：另要断网的无头浏览器跑模型写的脚本 |
+| audio（19） | `set_clip_volume`、`set_clip_muted`、`separate_audio`、`create_audio`、五个 `*_audio_fx`、`sound_presets` | `voice_list`、`voice_generate`；`sound_generate`、`sound_status`、`sound_cancel`（9.4a）；`measure_audio`（9.4b）；`render_card_audio`、`cancel_card_audio`（9.4c，要节点配了看画面的口子） | — | `measure_audio_js`：模型写的测量脚本要在断网的无头浏览器里跑，Agent 服务进程不起浏览器；差渲染服务那一侧开一个跑脚本的口子（解码出来的 PCM 怎么送过去、脚本的时限与内存上限怎么并进渲染服务的看护） |
 | ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption`、`list_shots`、`list_subjects` | — | — | `stt_status`、`stt_install`、`transcribe_media`（语音识别）、`detect_shots`（镜头）、`track_points`、`get_track`、`track_status`、`track_install`（追踪）、`detect_subjects`、`subject_status`、`subject_install`（主体）：要节点上的 Python 运行环境与模型权重，并把页面里的作业表搬到服务端。`attach_clip_motion`：要一份追踪结果 |
 | cards（8） | `list_cards`（含本项目的用户卡）、`apply_card`；`bake_card`、`inspect_card_dom`（看画面，9.8） | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | — |
 | vision（2） | `see_frames`（时间轴的画面）、`get_gif`（看画面，9.8） | — | — | `see_frames` 的素材镜头拼图（`source: "media"`）：要节点上的镜头识别，回明确的原因 |
@@ -580,7 +580,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（要页面开页签） | — |
 | core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause` | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
 
-「这一版还没接上」的 36 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
+「这一版还没接上」的 30 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
 
 **要操作发起人界面的八个，发起方在线时**：`get_selection` 按发消息时的选区答；其余七个要反过来操作他的页面，云端到页面的反向通道这一版没有，回 `{ ok: false, initiatorOnly: true, error }`（说明做不了、请用户自己在界面上操作）。反向通道记未达成。
 
@@ -600,6 +600,43 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - `import_media { url, name? }`：`url` 是附件地址（`work:attachments/<文件名>`，或桌面版写法 `/@pcwork/<本对话 id>/<文件名>`）或 http(s) 地址（经出网闸下载到工作区）。先确认成员写得进（只读成员在下载之前就被拒），再按内容哈希分片写进素材服务，然后在副本上登记素材；视频照桌面版放上时间轴（发起方在线放在他发消息时的播放头，不在线接在现有内容后面）。素材条目只有原件一档（`tiers: { original }`），小尺寸一档没有做（要节点上的 ffmpeg 转码），记未达成。时长与宽高：图片读文件头，音视频用节点上的 ffprobe（没有就只认 WAV，其余在结果里注明没读出来）。
 - `voice_generate`：用托管方的配音配置（`<数据目录>/config/voice.json` 与 `config/keys/voice.key`，与模型 Key 同一套落盘加密与导入办法），先确认成员写得进（只读成员不花钱），合成后入库、登记，每次调用记一行用量（第 6.3 节）。没配时工具回明确的原因。
 - **附件**：页面把文件传到 `POST /v1/conversations/<id>/attachments?name=<文件名>`（请求体是文件字节，单个 512 MiB），存进这个对话工作区的 `attachments/` 下，回 `{ attachment: { name, url: 'work:attachments/…', size, kind, text? } }`；发消息时请求体多一个可选的 `attachments: [{ url }]`，服务端只认这个对话工作区里真有的文件，拼进提示词（不给磁盘路径，小的文本内联）。要进素材库由 Agent 调 `import_media`。
+
+### 9.4a 音效合成（`sound_generate`、`sound_status`、`sound_cancel`）
+
+〔2026-10-07 做成，实现记录在第 26 节〕`server/agent/service/hosted-sound.mjs`。
+
+- **在 Agent 服务进程里按块合成。** 提示音与键盘声的合成内核是确定性的纯计算（`src/kernel/soundEffects.ts`），不执行任何项目带来的代码，所以不违反「Agent 服务进程不执行卡片代码」。
+- **与桌面版同一份函数**：参数 → 配方与落点是 `src/audio/soundRequest.ts` 的 `planSoundGeneration`（从编辑器的绑定里搬出来的纯函数，桌面版也改用它）；配方 → PCM16 WAV 是 `src/audio/soundGeneration.ts` 的 `renderSoundEffectWav`（桌面版在 Web Worker 里跑的就是它）；登记是 `commitSoundEffect`（素材条目带配方与内容哈希、片段带配方与 requestId，一次提交）。所以同一份配方两边合成出的 WAV 逐样本相同。
+- **顺序**：先确认成员写得进（只读成员在合成之前被拒）→ 在项目副本上算计划 → 合成 → 凭成员本人的素材票据写进素材服务（`media`）→ 进锁原子登记。提交时照桌面版核对：计划时的目标片段、来源片段若已被改，这次结果不应用（`stale`），旧音效不动。
+- **作业表按实例（项目 × 成员）分**：别的项目、别的成员的对话看不到、查不到、取消不了；作业号带随机数（`sound-<12 位十六进制>`）。同一位成员在同一个项目里的几个对话互相看得到（`sound_status` 不传 jobId 列出来）。
+- **上限**：配方的上限照内核（60 秒、1 万个事件、96 KiB 的配方）；一位成员在一个项目里最多排 4 个；整个进程里同时只合成一个，每块让出一次事件循环。
+- **幂等**：同一个 requestId 重试加入已有的作业或直接回已有的结果，不再合成、不多出片段；同一个 requestId 换了配方被拒。
+- **结果的形状**：成功 `{ ok: true, jobId, requestId, state: 'succeeded', progress: 1, result: { mediaId, clipId?, reused } }`；没成 `{ ok: false, state: 'failed' | 'cancelled' | 'stale', error }`。
+- **用量**：每次合成记一行 `kind: 'service'`、`service: 'sound'`、`vendor: 'builtin'`、`model: <预设>`、`units: <WAV 字节数>`、`unit: 'bytes'`（不花钱，记的是做了多少）。
+- 服务重启后作业表清空（配方已经随片段存在项目里，重新生成即可）。一轮被停掉时正在合成的作业不随之取消（与桌面版关掉 AI 栏相同）。
+
+### 9.4b 测响度（`measure_audio`）
+
+〔2026-10-07 做成〕`server/agent/service/hosted-audio.mjs`。
+
+- 「测谁」在项目副本上算（`src/mcp/common.ts` 的 `measureAudioRequest`，与桌面版同一份；只认本项目素材表里的素材 id）。
+- 素材凭成员本人的**只读**素材票据按内容哈希取到这个对话的工作目录（`measure/` 下），取完核对哈希；一次测量取来的素材合计不超过 1 GiB；量完删掉。只读成员也能量。
+- ffprobe / ffmpeg 只经工作区的受限子进程起（9.5）；参数与解析是桌面版那一份（`server/audio-loudness.mjs`），另在每个输入前加 `-protocol_whitelist file`：素材是成员传的，伪装成媒体的播放列表不能让 ffmpeg 去连网络地址。整个进程里同时只跑一个测量；ffmpeg 的时限 50 秒。
+- 不是按内容哈希登记的素材（迁移期按文件名的）云端读不到，回「素材文件不存在」。节点上没有 ffmpeg 时回 `{ ok: false, error: '这台云节点没有装 ffmpeg / ffprobe…' }`。
+- 残余面：播放列表里写本机文件路径时，ffmpeg 会去读那个文件（读得到的只是「是不是一段能解码的声音」与它的响度数字）；靠 9.5 的「子进程用独立的非特权用户跑」兜底。
+
+### 9.4c 卡片声音（`render_card_audio`、`cancel_card_audio`）
+
+〔2026-10-07 做成〕`server/agent/service/hosted-card-audio.mjs`；渲染服务一侧是 `POST /look` 多出的一条 `/api/cards/audio`（`server/hosted-render/look.mjs`、`server/vite-plugin-cards.ts`、`src/audio/cardAudioHost.ts`）。
+
+- **Agent 服务进程不执行卡片代码**（9.3、25.1 的裁定不变）。卡片的 `audio()`（含用户卡）交给同机的渲染服务，走看画面的同一条路：服务私钥签名、项目由宿主绑死、带卡片源码的项目只由按项目隔离的工作进程碰并等它把卡装到这一版（9.8）。页面请求闸与出口限制没有为此放宽：新接口是工作进程里 Node 一侧的，与看画面那一批一样只认管理进程转来的口令；声音在渲染页里求值，那一页照旧受闸与出口限制管。
+- **求值与记录是桌面版那一份**：渲染页动态载入 `src/audio/cardAudioHost.ts`，用 `renderEmbeddedCardWav`（48000 Hz、32 位浮点、最长 60 秒）与 `cardAudioIdentity` 生成 WAV 与身份记录；WAV 分块从页面取回，随回包交给 Agent 服务（上限 32 MiB）。
+- **Agent 服务一侧只做**：确认成员写得进（只读成员在问渲染服务之前被拒）→ 交项目副本与片段 id → **逐项核对**回来的东西（渲染页跑过项目带来的代码，回来的只当数据：WAV 的格式、长度与记录对得上，记录是这张卡的、字段齐、身份不超过 96 KiB，多出来的字段不留）→ 凭成员本人的素材票据写进素材服务 → 进锁用 `commitCardAudio` 原子登记（比的是 Agent 服务自己取副本那一刻看到的片段，不用渲染页报的）。
+- **复用**：没传 `force` 且渲染页判定已有的记录还对得上时不重算；Agent 服务另核对项目素材表里那一条的字节在素材服务里真有，没有就强制重算。
+- **取消**：掐掉在途的请求；已经回来的不上传、不提交。一位成员在一个项目里最多同时 4 个。单次时限按看画面的那一档（180 秒）。
+- **结果的形状**与桌面版相同：`{ ok: true, clipId, mediaId, reused }` 或 `{ ok: false, code: 'CARD_AUDIO_FAILED' | 'CARD_AUDIO_CANCELLED', error }`；渲染服务回「这次没看成：…」时原因带回、开头换成「卡片声音这次没有生成:」。节点没配看画面的口子时这两个工具不交给模型。
+- **用量**：每次生成记一行 `service: 'card-audio'`、`vendor: 'render'`、`units: <WAV 字节数>`。
+- 入库的 WAV 是以**成员本人**的权限写的（不占托管方渲染服务的产物容量）。
 
 ### 9.5 工作区：按「项目 × 对话」隔离
 
@@ -645,10 +682,13 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | 用途 | 要装的 | 现在 |
 |---|---|---|
 | 导入素材读音视频的时长与宽高 | ffprobe（随 ffmpeg；`PROMPTCUT_FFPROBE` 或 `PROMPTCUT_FFMPEG` 指路径） | 可选：没有时图片与 WAV 照常，其余不带时长 |
-| 素材小尺寸一档、`measure_audio` | ffmpeg | 没接上 |
+| `measure_audio` | ffmpeg 与 ffprobe（`PROMPTCUT_FFMPEG`、`PROMPTCUT_FFPROBE` 指路径，或在 PATH 上；Agent 服务的运行用户要能执行） | 已接上；没装时工具回明确的原因 |
+| 素材小尺寸一档 | ffmpeg | 没接上 |
 | 语音识别、镜头、追踪、主体 | Python 3 与各扩展包、模型权重（`python/` 下各包的 `requirements-*.txt`），`PROMPTCUT_PYTHON` | 没接上 |
 | 网页采集 | Python 与 yt-dlp、ffmpeg | 没接上 |
 | 网页接管、`measure_audio_js` | 无头浏览器 | 没接上 |
+| 音效合成 | 不用装东西（纯计算） | 已接上 |
+| 卡片声音 | 同「看画面」：同机的渲染服务与 `PROMPTCUT_AGENT_LOOK_URL` | 已接上 |
 | 看画面 | 同机的渲染服务（它的无头浏览器与预渲染管线）；环境变量 `PROMPTCUT_AGENT_LOOK_URL`（渲染服务管理进程的回环口子；PM2 模板已带）。`get_gif` 另要渲染服务的工作进程里有 ffmpeg（渲染节点本来就装） | 已接上 |
 | 配音 | 托管方的配音服务地址与令牌（导入办法同模型 Key） | 已接上 |
 | 素材写入 | 环境变量 `PROMPTCUT_AGENT_ASSET_URL`（同机素材服务的回环地址；PM2 模板已带） | 已接上 |
@@ -1563,3 +1603,45 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 - `cloud-agent-ux-ui-probe` 没有加用户卡一步（真实浏览器里「后来的成员贴得上云端 Agent 建的用户卡的快照」仍没有断言）；看画面没有界面可验，界面探针没有动。
 - 有人等着看画面时提前轮换隔离工作进程（45 秒）只有单测（HR41），没有用两个带卡项目的真进程演练。
 - 新节点上要核对的：管理进程读得到登记表（`PROMPTCUT_RENDER_LOOK_SERVICES`；它与托管组合不是同一个用户时要给读权限，文件里只有公钥）；`/status` 的 `look.registry.agentKeys` 不是 0；非 root 的工作进程用户下 `bake_card` 的贴图推得进素材服务；Linux 上 Agent 通道那个浏览器实例多占的内存（常驻那棵树看画面后大约多一个浏览器进程，闲置 10 分钟关掉）计进了内存看护的读数。
+
+---
+
+## 26. 声音三组工具的实现记录（2026-10-07，分支 `claude/cloud-agent`）
+
+任务书 J 要求云端 Agent 的工具与本机一致；这一节是接上音效合成、测响度、卡片声音的记录。上文与本节冲突时以本节为准；第 9.1、9.2、9.9 节已改，新增 9.4a～9.4c。语义文档没有改。
+
+### 26.1 各工具做到哪一步
+
+| 工具 | 状态 | 说明 |
+|---|---|---|
+| `sound_generate`、`sound_status`、`sound_cancel` | 接上 | 9.4a |
+| `measure_audio` | 接上 | 9.4b；节点上要装 ffmpeg / ffprobe |
+| `render_card_audio`、`cancel_card_audio` | 接上 | 9.4c；要节点配了看画面的口子 |
+| `measure_audio_js` | 没接上 | 模型写的脚本要在断网的无头浏览器里跑。Agent 服务进程不起浏览器（25.1），所以得由渲染服务出一个跑脚本的口子：解码出来的 PCM（最多 1200 万个样本）怎么送过去、脚本的时限与内存炸弹怎么并进渲染服务的内存看护、它与预渲染任务怎么排队，都要定；这一轮没有做 |
+
+「一键配特效」仍差语音识别，没有动。
+
+### 26.2 对外接口、配置与行为的改动
+
+| 改动 | 在哪 |
+|---|---|
+| 渲染服务的 `POST /look` 多一条 `path: '/api/cards/audio'`（请求体 `{ project, clipId, force }`；回 `{ ok, clipId, expectedClip, reusable? }` 或带 `name`、`bytes`、`rendition`、`wav`〔base64〕） | `server/hosted-render/look.mjs` 的 `LOOK_ROUTES` |
+| 工作进程（预渲染进程）新接口 `POST /api/cards/audio`；托管方的工作进程里它与看画面那一批一样要口令（`LOOK_WORKER_PREFIXES`） | `server/vite-plugin-cards.ts`、`server/hosted-render/vite-gate.mjs` |
+| 渲染页一侧的新模块（只在被动态载入时执行） | `src/audio/cardAudioHost.ts` |
+| 用量流水的 `service` 多两种：`sound`（`unit: 'bytes'`）、`card-audio`（`unit: 'bytes'`）；`GET /v1/usage` 的 `services` 里跟着多出来 | `server/agent/service/hosted-sound.mjs`、`hosted-card-audio.mjs` |
+| 工具表：六个工具从「还没接上」挪到「服务端另有实现」；卡片声音的两个标 `render`（没配口子时不交给模型）；`CLOUD_SLOW_TOOLS`（单次时限按 180 秒） | `server/agent/service/cloud-tools.mjs`、`instance.mjs` |
+| 前端代码的载入缝多三组：`sound`（计划、合成、登记）、`audio`（测谁、标注）、`cardAudio`（只有登记） | `server/agent/ssr-host.mjs` |
+| 桌面版的两处搬动（行为不变）：`sound_generate` 的参数 → 计划搬成纯函数；`measureAudio` 拆成「测谁」与「标注」两半 | `src/audio/soundRequest.ts`、`src/editor/io/soundGeneration.ts`、`src/mcp/common.ts` |
+
+### 26.3 验收（本机，Windows）
+
+- 单测：`cloud-agent-sound.test.mjs`（CA-SND-01～04）、`cloud-agent-audio.test.mjs`（CA-AUD-01～03）、`cloud-agent-card-audio.test.mjs`（CA-CAU-01～06）。CA-SND-01 把云端合成的 WAV 与桌面版入口同配方合成的逐字节比对，并钉死两份内容哈希。
+- `cloud-agent-sound-probe`（新，真进程）S0～S5 六条全过：提示音（122924 字节）与键盘声（187244 字节）入库，别的成员凭自己的票据取得到、哈希相符；与本机同配方合成的逐字节相同；**与无头浏览器里桌面版入口在真的 Web Worker 里合成的内容哈希相同**（Chrome 152）；只读成员的 `sound_generate`、`render_card_audio` 被拒、项目不变，`measure_audio` 照常；`measure_audio` 量出提示音 -29 LUFS / -19.7 dBTP、时间轴带逐秒曲线，工作目录不留文件；带 `audio()` 的用户卡由隔离工作进程求值（常驻工作进程 0 次），24000 个样本逐个等于公式（最大差 0），代码里的记号不在 Agent 服务的输出里，再调一次 `reused: true`。
+- `cloud-agent-isolation-probe`：31 条全过（原 30 条，新增 T6：音效只进本项目；另一个项目的对话看不到、查不到、取消不了这边的作业，量不了、重生成不了这边的素材与片段；只读成员生成不了；量完不留取来的素材）。
+
+### 26.4 没做成的与留给新节点的
+
+- `measure_audio_js`：见 26.1。
+- 卡片声音的身份记录里的源码版本（`identity.sourceVersion`）是渲染页按桌面版同一算法算的；「在线成员的页面按这份记录判它没过期、放得出声」没有在真实浏览器里断言。
+- 带输入的声音卡（`inputs` 引素材或别的节点）没有验：渲染页求值时要按素材地址取 PCM，那条路在托管方工作进程里通不通没有试；探针里的夹具是纯合成（`inputs: {}`）。
+- 新节点上要核对的：Agent 服务的运行用户执行得了 ffmpeg / ffprobe；ffmpeg 子进程是不是在独立的非特权用户下（代码不假设）；`cloud-agent-sound-probe` 的 S3、S5 在 Linux 上重跑一遍。
