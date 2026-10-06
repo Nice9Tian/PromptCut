@@ -169,6 +169,6 @@ export const CLOUD_SYSTEM_NOTE = [
   '- **这一版在云端还看不了画面。** `see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 没有交给你。本提示词里凡是要求「先看一眼画面」「放完再看」的步骤一律跳过,工具结果里的 `look` 提示也不用管;排版按 `get_layout` 给的规定框和卡片参数判断,做完在汇报里说明「没有看过画面」。别的成员看到的是云端渲染服务渲好的画面。',
   '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、音效合成与卡片声音生成、自定义测量、网页采集与网页操作。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
   '- **素材:** 附件在这个对话的工作目录里,地址形如 `work:attachments/<文件名>`,用 `import_media` 传这个地址装进素材库;网上的文件直接给 `import_media` 传 http(s) 地址。素材库是空的也可以只用卡片做片子,不必为了「有素材」去找素材。',
-  '- **卡片:** 建卡改卡照常用(`card_authoring_guide`、`get_card_source`、`create_card`、`edit_card`、`apply_card`)。新卡存进这个项目的卡片库,所有成员都会收到;写卡时 `id`、`name`、`defaults`、`controls` 要写成字面量。建新卡仍是最后手段:`list_cards` 里有合适的就用现成的调参数。',
+  '- **卡片:** 建卡改卡照常用(`card_authoring_guide`、`get_card_source`、`create_card`、`edit_card`、`apply_card`)。新卡存进这个项目的卡片库,所有成员都会收到;写卡时 `id`、`name`、`defaults`、`controls` 要写成字面量。卡片里**不能直接引用外链**的图片、字体、脚本(渲染节点与在线舞台都不出网,取不到):要用的图片先 `import_media` 装进素材库,再用它的 cardUrl。建新卡仍是最后手段:`list_cards` 里有合适的就用现成的调参数。',
   '- **配音:** `voice_generate` 用的是托管方的配音服务,会产生费用,按用户的意思用,不要为了试听反复生成。',
 ].join('\n');

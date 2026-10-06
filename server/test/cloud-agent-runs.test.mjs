@@ -541,7 +541,7 @@ test('闸与用量接进一轮;进程没了再起', { timeout: 240_000 }, async 
     const rows = usageRows();
     const tokens = rows.reduce((n, r) => n + r.input + r.output, 0);
     const viaApi = svc.usage(BOB);
-    assert.deepEqual(viaApi, { project: { tokens, calls: rows.length }, members: [{ username: 'alice', tokens, calls: rows.length }] });
+    assert.deepEqual(viaApi, { project: { tokens, calls: rows.length }, members: [{ username: 'alice', tokens, calls: rows.length }], services: [] });
     const out = [];
     assert.equal(runAdmin(['usage', '--project', 'p-a', '--json'], { env: { PROMPTCUT_AGENT_DATA: kit.dataDir }, stdout: { write: (s) => out.push(s) } }), 0);
     const viaAdmin = JSON.parse(out.join(''));
