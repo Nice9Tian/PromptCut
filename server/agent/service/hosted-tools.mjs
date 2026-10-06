@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { createAssetClient } from '../../asset-store/client.mjs';
 import { createSlot, createSoundTools, newSoundState } from './hosted-sound.mjs';
 import { createAudioTools } from './hosted-audio.mjs';
+import { createCardAudioTools, newCardAudioState } from './hosted-card-audio.mjs';
 
 const SERVER_DIR = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -244,6 +245,7 @@ export function createHostedTools({
    * @param {() => { online: boolean, t: number }} c.pageState 发起方在不在线、发消息时的播放头
    * @param {() => string | null} c.runId
    * @param {{ cards: object }} c.shared 这个实例(项目 × 成员)各对话共用的:项目的卡片源码表(`newSharedState()`)
+   * @param {() => (Function | null)} [c.look] 这个项目问同机渲染服务的函数(看画面那条路);节点没配口子回 null
    */
   function forConversation(c) {
     const { identity, conversationId } = c;
@@ -697,6 +699,21 @@ export function createHostedTools({
 
     /* ---------- 音效合成(`hosted-sound.mjs`) ---------- */
 
+    /** 把生成出来的 WAV 写进素材服务(`media`,凭成员本人的票据) */
+    const putWav = async (wav) => {
+      try {
+        return await assetClient().put('media', wav, { ext: 'wav' });
+      } catch (err) {
+        if (err?.code === 'forbidden' || err?.status === 403 || err?.status === 401) {
+          throw new HostedToolError('素材服务拒绝了这次写入:你在这个项目里只有只读权限,云端 Agent 不能替你生成声音。', { code: 'forbidden' });
+        }
+        throw err;
+      }
+    };
+    const usageRow = (row) => recordService({
+      t: Date.now(), projectId: identity.projectId, userId: identity.userId, username: identity.username ?? '',
+      conversationId, runId: c.runId() ?? '', kind: 'service', ...row,
+    });
     const sound = createSoundTools({
       state: c.shared.sound,
       slot: soundSlot,
@@ -704,12 +721,25 @@ export function createHostedTools({
       snapshot: () => exec().snapshot(agentKey),
       mutate: (track, apply) => exec().mutate('sound_generate', agentKey, track, apply),
       ensureCanWrite,
-      put: (wav) => assetClient().put('media', wav, { ext: 'wav' }),
-      record: (row) => recordService({
-        t: Date.now(), projectId: identity.projectId, userId: identity.userId, username: identity.username ?? '',
-        conversationId, runId: c.runId() ?? '', kind: 'service', ...row,
-      }),
+      put: putWav,
+      record: usageRow,
       ToolError: HostedToolError,
+    });
+
+    /* ---------- 卡片声音(`hosted-card-audio.mjs`):卡片代码只在渲染服务的工作进程里执行 ---------- */
+
+    const cardAudio = createCardAudioTools({
+      state: c.shared.cardAudio,
+      look: () => (typeof c.look === 'function' ? c.look() : null),
+      snapshot: () => exec().snapshot(agentKey),
+      refreshCards: () => refreshCards(true),
+      mutate: (track, apply) => exec().mutate('render_card_audio', agentKey, track, apply),
+      ensureCanWrite,
+      put: putWav,
+      has: (hash) => assetClient().has('media', hash),
+      record: usageRow,
+      ToolError: HostedToolError,
+      limits: limits.cardAudio ?? {},
     });
 
     /* ---------- 测响度(`hosted-audio.mjs`) ---------- */
@@ -735,6 +765,8 @@ export function createHostedTools({
 
     const TOOLS = {
       measure_audio: audio.measure_audio,
+      render_card_audio: cardAudio.render_card_audio,
+      cancel_card_audio: cardAudio.cancel_card_audio,
       sound_generate: sound.sound_generate,
       sound_status: sound.sound_status,
       sound_cancel: sound.sound_cancel,
@@ -762,7 +794,7 @@ export function createHostedTools({
   return {
     forConversation,
     /** 一个实例(项目 × 成员)里各对话共用的状态 */
-    newSharedState: () => ({ cards: { at: -Infinity, items: new Map(), parsed: [], pending: null }, sound: newSoundState() }),
+    newSharedState: () => ({ cards: { at: -Infinity, items: new Map(), parsed: [], pending: null }, sound: newSoundState(), cardAudio: newCardAudioState() }),
     /** 测试用:把 ffprobe 的缓存清掉 */
     _resetFfprobe() { ffprobeCache = undefined; },
   };

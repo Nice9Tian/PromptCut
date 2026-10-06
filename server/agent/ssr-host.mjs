@@ -21,7 +21,7 @@ const EMPTY_PROJECT = new WeakMap();
  */
 export async function loadSsrHost(load, { apiBase } = {}) {
   for (const id of REGISTRIES) await load(id);
-  const [core, api, routes, diff, common, apiUrl, duration, registry, cardParse, store, soundRequest, soundGeneration, soundEffects] = await Promise.all([
+  const [core, api, routes, diff, common, apiUrl, duration, registry, cardParse, store, soundRequest, soundGeneration, soundEffects, cardAudioActions] = await Promise.all([
     load('/src/store/core.ts'),
     load('/src/mcp/api.ts'),
     load('/src/mcp/routes.mjs'),
@@ -35,6 +35,7 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     load('/src/audio/soundRequest.ts'),
     load('/src/audio/soundGeneration.ts'),
     load('/src/kernel/soundEffects.ts'),
+    load('/src/store/actions/cardAudio.ts'),
   ]);
   if (apiBase) apiUrl.setApiBase(apiBase);
   if (!EMPTY_PROJECT.has(core)) EMPTY_PROJECT.set(core, core.getState().project);
@@ -163,6 +164,13 @@ export async function loadSsrHost(load, { apiBase } = {}) {
       reuseKey: (recipe) => soundEffects.soundEffectReuseKey(recipe),
       assertSize: (recipe) => soundGeneration.assertSoundRecipeSize(recipe),
       commit: (spec) => store.actions.commitSoundEffect(spec),
+    },
+    /**
+     * 卡片声音(契约第 9.4c 节):WAV 已经由渲染服务的工作进程算好、入了库,这里只在放好项目的 store 上原子登记
+     * (与桌面版同一份 `commitCardAudio`;只在进程级的锁里用)。**这里不执行卡片代码。**
+     */
+    cardAudio: {
+      commit: (args) => cardAudioActions.commitCardAudio({ ...args, loadToken: core.getState().projectLoadToken }),
     },
     /**
      * 测响度(契约第 9.4b 节):与桌面版同一份。`measureRequest` 按放好项目的 store 算出「测谁」(只在进程级的锁里用),

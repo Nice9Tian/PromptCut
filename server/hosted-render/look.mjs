@@ -78,10 +78,12 @@ export const LOOK_ROUTES = Object.freeze({
   '/api/vision/bake': Object.freeze({ tool: 'bake_card' }),
   '/api/ai/visual': Object.freeze({ tool: 'get_gif', only: (body) => body?.tool === 'get_gif' }),
   '/api/ai/visual/render': Object.freeze({ tool: 'get_gif' }),
+  // 卡片声音（`cloud-agent-contract.md` 第 9.4c 节）：卡片的 audio() 在渲染页里求值，回 WAV；与出一帧走同一条路由、同一套隔离
+  '/api/cards/audio': Object.freeze({ tool: 'render_card_audio' }),
 });
 
 /** 工作进程里这几条接口的路径前缀（页面请求闸对它们另要口令） */
-export const LOOK_WORKER_PREFIXES = Object.freeze(['/api/vision/', '/api/ai/visual', '/api/cards/dom', '/api/cards/layout']);
+export const LOOK_WORKER_PREFIXES = Object.freeze(['/api/vision/', '/api/ai/visual', '/api/cards/dom', '/api/cards/layout', '/api/cards/audio']);
 
 const sha256hex = (text) => createHash('sha256').update(text).digest('hex');
 const NONCE_RE = /^[A-Za-z0-9_-]{16,64}$/;

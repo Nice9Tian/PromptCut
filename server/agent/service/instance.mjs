@@ -23,7 +23,7 @@ import { annotateError, annotateResult, createUserEditingBoard, userEditingFor }
 import { effectiveIsFile } from '../../card-overrides.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
-  CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PLAYHEAD_TOOLS,
+  CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,
   cloudSystemNote, cloudLookResult, lookUnavailable, lookSourceUnavailable,
 } from './cloud-tools.mjs';
 import { attachmentsPrompt } from './hosted-tools.mjs';
@@ -1299,6 +1299,8 @@ export function createAgentInstance(env) {
         },
         runId: () => hostedRunIds.get(agent) ?? null,
         shared: hostedShared,
+        // 卡片声音:卡片代码交给同机的渲染服务执行(与看画面同一个口子);节点没配时是 null
+        look: () => prerenderPost ?? null,
       });
       hostedContexts.set(agent, ctx);
     }
@@ -1456,7 +1458,7 @@ export function createAgentInstance(env) {
             // 所以这里只是不让这一轮干等;真卡住的实现由一轮的墙钟上限与看护兜底
             const work = callToolInternal(name, args, agentId, typeof meta?.callId === 'string' ? meta.callId : undefined);
             // 看画面的工具另给时限:带用户卡的项目要等隔离工作进程起来,别的项目在渲时还要排队;渲染服务那一侧自己有更短的时限并回明确的原因
-            const isLook = CLOUD_LOOK_TOOLS.has(name) || name === 'get_layout';
+            const isLook = CLOUD_LOOK_TOOLS.has(name) || name === 'get_layout' || CLOUD_SLOW_TOOLS.has(name);
             const limitMs = isLook && Number(o.lookTimeoutMs) > 0 ? Number(o.lookTimeoutMs) : Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
             let timer = null;
             const timeout = new Promise((resolve) => {

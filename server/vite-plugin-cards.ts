@@ -1977,6 +1977,63 @@ export default function vitePluginCards(): Plugin[] {
       });
 
       /**
+       * `/api/cards/audio`:替云端 Agent 生成一段卡片声音(`render_card_audio` 的云端路;契约 cloud-agent-contract.md 第 9.4c 节)。
+       *
+       * 卡片的 `audio()` 在**渲染页**里求值(`src/audio/cardAudioHost.ts`,与桌面版同一份求值与记录),不在 Node 里、
+       * 更不在 Agent 服务进程里。和 `/api/cards/dom` 一样借 agent lane 的那一个 bakery、排同一条队;托管方的工作进程里
+       * 这条接口只认管理进程转来的(`hosted-render/vite-gate.mjs`:看画面那一批接口的口令),浏览器发来的照旧 403。
+       * 回 `{ ok, clipId, expectedClip, reusable? | { name, bytes, rendition, wav: <base64> } }`;WAV 分块从页面取回。
+       */
+      const CARD_AUDIO_MAX_BYTES = 32 * 1024 * 1024;
+      server.middlewares.use('/api/cards/audio', (req, res) => {
+        if (!isPrerender) return proxyToPrerender(req, res);
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        if (!req.headers['content-type']?.startsWith('application/json')) {
+          return sendJson(res, 415, { ok: false, error: 'JSON required' });
+        }
+        if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 32 * 1024 * 1024) req.destroy(); });
+        req.on('end', () => {
+          void agentPipeline().then(pipeline => pipeline.runAgentTask(async (lease: any) => {
+            try {
+              const { project, clipId, force } = JSON.parse(body || '{}');
+              if (!project || typeof clipId !== 'string') return sendJson(res, 400, { ok: false, error: 'project 和 clipId 必填' });
+              const pid = crypto.randomBytes(8).toString('hex');
+              domProjects.clear();
+              domProjects.set(pid, JSON.stringify(project));
+              const bakery = await lease(project, { asIs: true });
+              await bakery.reset(null, `http://${req.headers.host}/?export=1&timeline=/@cards-dom/${pid}/project.json`);
+              // 页面里跑的那两段写成字符串:不经转译器,动态 import 的地址也不被打包工具当成本文件的依赖
+              const arg = JSON.stringify({ url: `/@cards-dom/${pid}/project.json`, clipId, force: force === true, maxBytes: CARD_AUDIO_MAX_BYTES });
+              const meta: any = await bakery.page.evaluate(`(async () => { const a = ${arg}; try {
+                const mod = await import('/src/audio/cardAudioHost.ts');
+                const p = await (await fetch(a.url)).json();
+                return await mod.renderClipCardAudio(p, a.clipId, { force: a.force, maxBytes: a.maxBytes });
+              } catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 400) }; } })()`);
+              if (!meta || meta.ok !== true) return sendJson(res, 200, { ok: false, code: 'CARD_AUDIO_FAILED', error: meta?.error || '卡片声音没有生成' });
+              if (meta.reusable) return sendJson(res, 200, meta);
+              const total = Number(meta.bytes);
+              if (!Number.isSafeInteger(total) || total < 45 || total > CARD_AUDIO_MAX_BYTES) return sendJson(res, 200, { ok: false, code: 'CARD_AUDIO_FAILED', error: '卡片声音的大小不对' });
+              const CHUNK = 3 * 1024 * 1024;
+              const parts: string[] = [];
+              for (let from = 0; from < total; from += CHUNK) {
+                parts.push(await bakery.page.evaluate(`import('/src/audio/cardAudioHost.ts').then((m) => m.takeCardAudioChunk(${from}, ${CHUNK}))`));
+              }
+              // 每块 3 MiB 是 3 的倍数:各块的 base64 没有填充,可以直接拼
+              sendJson(res, 200, { ...meta, wav: parts.join('') });
+            } catch (e: any) {
+              sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+            } finally {
+              domProjects.clear();
+            }
+          })).catch((e: any) => {
+            sendJson(res, Number(e?.status) || 500, { ok: false, code: e?.code, retryable: e?.retryable, error: e?.message || String(e) });
+          });
+        });
+      });
+
+      /**
        * 打开项目时把 .proc 里带的定制卡装回来。规矩在 installBundledCards;
        * 这里只管三件事:收请求、写进改动层的手动触发热更新、给本机原来没有的卡盖归属戳。
        */

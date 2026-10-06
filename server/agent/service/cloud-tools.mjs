@@ -27,7 +27,6 @@ const P = 'pending';
 const NEED_PY = (what) => `${what}要节点上的 Python 运行环境与模型权重,并把页面里的作业表搬到服务端;这一版还没接上`;
 const NEED_COLLECT = '网页采集要节点上的下载器(Python 与 yt-dlp、ffmpeg),并让它只经出网闸的代理出网;这一版还没接上';
 const NEED_WEB = '网页接管要节点上的浏览器,并让它只经出网闸的代理出网、按对话隔离用户数据目录;这一版还没接上';
-const NEED_SYNTH = '卡片的声音代码要在不持凭证的隔离进程里执行,云端这一版还没接上';
 
 /** 工具名 → { mode, why? }。按 `server/tools/` 的分组列,128 个 */
 export const CLOUD_TOOL_PLAN = Object.freeze({
@@ -57,8 +56,9 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
   voice_list: { mode: H }, voice_generate: { mode: H },
   // 提示音与键盘声:确定性的纯计算,在服务进程里按块合成(`hosted-sound.mjs`;契约第 9.4a 节)
   sound_generate: { mode: H }, sound_status: { mode: H }, sound_cancel: { mode: H },
-  render_card_audio: { mode: P, why: NEED_SYNTH },
-  cancel_card_audio: { mode: P, why: NEED_SYNTH },
+  // 卡片声音:卡片的 audio() 交给同机渲染服务的工作进程执行(与看画面同一条路),Agent 服务只入库与登记(`hosted-card-audio.mjs`;契约第 9.4c 节)。
+  // 节点没配看画面的口子时不交给模型(`render: true`)
+  render_card_audio: { mode: H, render: true }, cancel_card_audio: { mode: H, render: true },
   // 测响度:素材凭成员的只读票据取到对话的工作目录,用工作区的受限子进程起 ffmpeg 量(`hosted-audio.mjs`;契约第 9.4b 节)
   measure_audio: { mode: H },
   measure_audio_js: { mode: P, why: '模型写的测量脚本要在断网的无头浏览器里跑,Agent 服务进程不起浏览器;要渲染服务那一侧开一个跑脚本的口子,这一版还没接上' },
@@ -105,8 +105,14 @@ export const CLOUD_OPEN_TOOLS = Object.freeze(new Set(namesOf(R, H, S, I)));
 /** 要向渲染服务要一帧画面的(契约第 9.8 节)。`get_layout` 不在里面:它没有画面也答得了规定的框,只是量不到实体框 */
 export const CLOUD_LOOK_TOOLS = Object.freeze(new Set(Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.look === true).map(([n]) => n)));
 
-/** 这台节点没有配看画面的口子时交给模型的工具(少掉看画面的四个) */
-export const CLOUD_OPEN_TOOLS_NO_LOOK = Object.freeze(new Set([...CLOUD_OPEN_TOOLS].filter((n) => !CLOUD_LOOK_TOOLS.has(n))));
+/** 要同机渲染服务替它执行卡片代码的(卡片声音):与看画面同一个口子,没配时同样不交给模型 */
+export const CLOUD_RENDER_TOOLS = Object.freeze(new Set(Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.render === true).map(([n]) => n)));
+
+/** 单次调用要等渲染服务或外部下载的:时限按看画面的那一档(180 秒),不按一般工具的 60 秒 */
+export const CLOUD_SLOW_TOOLS = Object.freeze(new Set(['render_card_audio']));
+
+/** 这台节点没有配看画面的口子时交给模型的工具(少掉看画面的四个与卡片声音的两个) */
+export const CLOUD_OPEN_TOOLS_NO_LOOK = Object.freeze(new Set([...CLOUD_OPEN_TOOLS].filter((n) => !CLOUD_LOOK_TOOLS.has(n) && !CLOUD_RENDER_TOOLS.has(n))));
 
 /** 这台节点没有配看画面的口子:看画面的工具的回答 */
 export function lookUnavailable(tool) {
@@ -214,7 +220,7 @@ const CLOUD_SYSTEM_NOTE_LINES = [
   '',
   '- **用户可能已经离开。** 要用到他界面的工具(选区、播放头、播放与暂停、网页接管、扫码登录、开子 Agent 页签)在他不在线时会回「发起方不在线」:不要等,按项目内容继续,在进度汇报里说明哪一步没用上页面状态。',
   LOOK_LINE,
-  '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、卡片声音生成、自定义测量(measure_audio_js)、网页采集与网页操作。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
+  '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、自定义测量(measure_audio_js)、网页采集与网页操作。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
   '- **素材:** 附件在这个对话的工作目录里,地址形如 `work:attachments/<文件名>`,用 `import_media` 传这个地址装进素材库;网上的文件直接给 `import_media` 传 http(s) 地址。素材库是空的也可以只用卡片做片子,不必为了「有素材」去找素材。',
   '- **卡片:** 建卡改卡照常用(`card_authoring_guide`、`get_card_source`、`create_card`、`edit_card`、`apply_card`)。新卡存进这个项目的卡片库,所有成员都会收到;写卡时 `id`、`name`、`defaults`、`controls` 要写成字面量。卡片里**不能直接引用外链**的图片、字体、脚本(渲染节点与在线舞台都不出网,取不到):要用的图片先 `import_media` 装进素材库,再用它的 cardUrl。建新卡仍是最后手段:`list_cards` 里有合适的就用现成的调参数。',
   '- **配音:** `voice_generate` 用的是托管方的配音服务,会产生费用,按用户的意思用,不要为了试听反复生成。',

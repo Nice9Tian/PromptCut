@@ -136,7 +136,7 @@ test('CA-LOOK-04 工具表:看画面的四个归到「在副本上执行」并�
     assert.equal(CLOUD_OPEN_TOOLS.has(name), true);
     assert.equal(CLOUD_OPEN_TOOLS_NO_LOOK.has(name), false);
   }
-  assert.equal(CLOUD_OPEN_TOOLS_NO_LOOK.size, CLOUD_OPEN_TOOLS.size - 4);
+  assert.equal(CLOUD_OPEN_TOOLS_NO_LOOK.size, CLOUD_OPEN_TOOLS.size - 6, '少掉看画面的四个与卡片声音的两个(都要同机的渲染服务)');
   assert.equal(CLOUD_OPEN_TOOLS_NO_LOOK.has('get_layout'), true, 'get_layout 没有画面也答得了规定的框');
   const offered = (await buildTools({ callTool: async () => [], workspaceDir: null, only: CLOUD_OPEN_TOOLS_NO_LOOK, localTools: false })).map((x) => x.name);
   assert.deepEqual(offered.filter((n) => CLOUD_LOOK_TOOLS.has(n)), []);
