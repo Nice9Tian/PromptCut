@@ -76,7 +76,9 @@ import { isUnsafePort } from '../safe-port.mjs';
 export const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 export const HOSTED_MAIN = path.join(ROOT, 'server', 'hosted', 'main.mjs');
 export const PROBE = path.join(ROOT, 'scripts', 'probes', 'shared-project-probe.mjs');
-export const HOSTED_IP = '8.219.80.16';
+// 2026-10-06 托管端换到新云节点；换下来的阿里云地址只在 hosted-default.mjs 的 RETIRED_HOSTED_HOSTS 里（旧项目文件读进来换成新的）
+export const HOSTED_IP = '149.88.94.84';
+export const RETIRED_HOSTED_IP = '8.219.80.16';
 
 // ------------------------------------------------------------------ 空端口
 // 不用固定端口：同一台机器上常有几份 `npm test` 并行（不同 worktree 的子 Agent），固定端口会连到别人的实例。

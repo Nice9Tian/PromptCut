@@ -113,6 +113,8 @@ interface RouteApi {
 interface HostedApi {
   DEFAULT_HOSTED_URL: string;
   resolveHostedUrl(o?: { ui?: string | null }): string;
+  migrateHostedText(text: string): string;
+  migrateHostedDeep<T>(value: T): T;
 }
 
 export const client = clientMod as ClientApi;

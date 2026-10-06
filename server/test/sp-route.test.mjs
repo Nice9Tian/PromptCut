@@ -164,7 +164,7 @@ test('SPC5-10 createSharedProject({ where: hosted })：向托管地址 POST shar
 
 // ================================================================== SP6：缺省托管地址
 
-test('SPC6-1 DEFAULT_HOSTED_URL 是 http://8.219.80.16:8787', async () => {
+test('SPC6-1 DEFAULT_HOSTED_URL 是新云节点 http://149.88.94.84:8787', async () => {
   const { DEFAULT_HOSTED_URL } = await loadHostedDefault();
   assert.equal(DEFAULT_HOSTED_URL, `http://${HOSTED_IP}:8787`);
 });

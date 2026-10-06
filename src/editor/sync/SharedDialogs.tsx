@@ -17,7 +17,7 @@ const HOSTED_KEY = "pc.shared.hostedUrl";
 
 export function readHostedUrl(): string {
   try {
-    return localStorage.getItem(HOSTED_KEY) || hosted.DEFAULT_HOSTED_URL;
+    return hosted.migrateHostedText(localStorage.getItem(HOSTED_KEY) || "") || hosted.DEFAULT_HOSTED_URL;
   } catch {
     return hosted.DEFAULT_HOSTED_URL;
   }
