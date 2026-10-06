@@ -1036,7 +1036,8 @@ export function Preview() {
        */
       bundling: {
         enabled: cardExecAvailable,
-        run: (job) => import("../online/cardRuntime/transpile.browser").then((m) => m.bundleCards(job)),
+        // 编译期判:桌面构建里这一行整个剪掉,转译器那一块不进桌面的产物
+        run: (job) => (import.meta.env.VITE_PC_ONLINE === "1" ? import("../online/cardRuntime/transpile.browser").then((m) => m.bundleCards(job)) : Promise.resolve([])),
         onBundles: (results) => { bundles = results; refreshRunStates(); },
       },
     });
