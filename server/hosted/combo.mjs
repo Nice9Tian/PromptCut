@@ -43,6 +43,7 @@ import { createServiceRegistry, SERVICES_FILE } from '../auth/service-identity.m
 import { isLocalOrigin } from '../auth/origin.mjs';
 import { createFsStore, ensureLayoutSync, LAYOUTS } from '../asset-store/fs-store.mjs';
 import { normalizeHash } from '../asset-store/blob-store.mjs';
+import { createServiceUsage, serviceCapBytes, diskTotalOf, SERVICE_USAGE_DIR } from '../asset-store/service-usage.mjs';
 import { startAssetAnnounce } from '../asset-announce.mjs';
 
 export const HOSTED_NAMESPACES = Object.freeze(['media', 'snap', 'px']);
@@ -203,6 +204,7 @@ function scanSpace(dir) {
  * @param {() => number} [options.now]
  * @param {object} [options.limits]  透传 `createSharedDocService`
  * @param {object} [options.service]  透传 `createSharedDocService`
+ * @param {number} [options.renderCapBytes]  渲染服务产物的容量上限（字节），缺省按环境变量 `PROMPTCUT_HOSTED_RENDER_CAP_BYTES`、再按 `min(20 GiB, 盘总容量的四分之一)`（契约第 6 节）
  */
 export async function startHostedCombo({
   dataDir,
@@ -219,6 +221,7 @@ export async function startHostedCombo({
   now = Date.now,
   limits,
   service: serviceOptions,
+  renderCapBytes,
 } = /** @type {any} */ ({})) {
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响服务 */ } };
   const root = checkDataDir(dataDir);
@@ -274,7 +277,21 @@ export async function startHostedCombo({
   // 托管方服务的登记表：文档服务的握手与素材票据的核对共用这一份（按文件修改时刻重读，换钥不用重启）
   const serviceRegistry = createServiceRegistry({ file: paths.servicesFile, now, log: say });
   const tickets = createAssetTicketVerifier({ store: () => store, now, services: () => serviceRegistry });
-  const assetMiddleware = assetService.assetServiceMiddleware(root, { stores, tickets, isTrusted: isLoopbackReq });
+  // 渲染服务写成的块单独记账、有上限（契约第 6 节）：成员的写入不记也不受限；删项目时清只归它的块
+  const capBytes = Number.isFinite(renderCapBytes) && renderCapBytes >= 0 ? Math.floor(renderCapBytes) : serviceCapBytes({ diskTotal: await diskTotalOf(paths.assets) });
+  const serviceUsage = createServiceUsage({ dir: path.join(paths.assets, SERVICE_USAGE_DIR), capBytes, service: 'render', now, log: say });
+  const dropProjectBlocks = async (projectId) => {
+    const gone = serviceUsage.dropProject(projectId);
+    let freed = 0;
+    for (const b of gone) {
+      try { if (await stores[b.ns]?.remove(b.hash)) freed += b.size; } catch (err) { say('service-usage.remove-failed', { ns: b.ns, message: String(err?.code || err?.message || err) }); }
+    }
+    if (gone.length) say('service-usage.project-dropped', { blocks: gone.length, freed });
+  };
+  const unsubscribeUsage = store && typeof store.onChange === 'function'
+    ? store.onChange((change) => { if (change?.type === 'remove' && typeof change.projectId === 'string') void dropProjectBlocks(change.projectId); })
+    : null;
+  const assetMiddleware = assetService.assetServiceMiddleware(root, { stores, tickets, isTrusted: isLoopbackReq, serviceUsage });
   const preflight = assetService.assetPreflightMiddleware();
 
   const tokenDigest = tokenGiven ? sha256(clusterToken) : null;
@@ -317,7 +334,7 @@ export async function startHostedCombo({
       const list = await stores[ns].list();
       assets[ns] = { count: list.length, bytes: list.reduce((n, e) => n + e.size, 0), hashes: list.map((e) => e.hash) };
     }
-    return { ok: true, layout: LAYOUTS.shard, docPublicUrl: docPublicUrl ?? null, assetPublicUrl: publicUrl, sharedProjects: shared, spaces, assets };
+    return { ok: true, layout: LAYOUTS.shard, docPublicUrl: docPublicUrl ?? null, assetPublicUrl: publicUrl, sharedProjects: shared, spaces, assets, serviceUsage: serviceUsage.status() };
   }
 
   async function adminBlob(req, res, ns, rawHash) {
@@ -424,10 +441,12 @@ export async function startHostedCombo({
     hosting,
     get credentialStore() { return store; },
     serviceRegistry,
+    serviceUsage,
     inventory,
     async close() {
       if (closed) return;
       closed = true;
+      try { unsubscribeUsage?.(); } catch { /* 已退订 */ }
       await relocation?.close();
       await hosting.close();
       try { announcer.stop(); } catch { /* 已停 */ }
