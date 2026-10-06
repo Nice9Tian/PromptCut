@@ -144,6 +144,17 @@ export function compareCodeVersions({ self, editorDir, expect, agentVersion }) {
 }
 
 /**
+ * 工作进程的输出里「队列节点没起成」的那一行（`[queue-node] queue.skip {"reason":…}`，`vite-plugin-frames.ts` 打的）。
+ * 认得出就回原因（`no-environment`：探不出渲染环境，多半是 Chrome 开不了页），否则回 null。
+ */
+export function queueSkipReason(line) {
+  const m = /\[queue-node\]\s+queue\.skip\b(.*)$/.exec(String(line));
+  if (!m) return null;
+  const r = /"reason"\s*:\s*"([^"]+)"/.exec(m[1]) ?? /\breason=([\w-]+)/.exec(m[1]);
+  return r ? r[1] : 'unknown';
+}
+
+/**
  * 工作进程是不是「起来了却不干活」：进程在、也打过就绪，但从没交过诊断（队列节点没起成，例如开 Chrome 探环境时卡住），
  * 或者交到一半停了。代理模式下它每秒对一次账、顺带交一次诊断，所以超过 `limitMs` 没有就结束它重起。
  */
@@ -200,6 +211,22 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const directory = createDirectory({ url: config.docUrl, key, log });
 
   // ---------- 工作进程
+  /**
+   * 队列节点没起成（工作进程打了 `queue.skip`）不能静默：它会一直不交诊断、靠看护反复重起。每次都明说一条（同时写 stderr），
+   * 状态里留着最近一次（`environment`）。最常见的是 `no-environment`：工作进程里的 Chrome 开不了页。
+   */
+  let environment = { ok: true, reason: null, at: null, count: 0, worker: null };
+  const noteSkip = (text, which) => {
+    const reason = queueSkipReason(text);
+    if (!reason) return;
+    environment = { ok: false, reason, at: Date.now(), count: environment.count + 1, worker: which };
+    const detail = reason === 'no-environment'
+      ? '工作进程探不出渲染环境（Chrome 起不来或开不了受帧控制的页）：它一个任务也接不了。看它的输出里紧挨着的报错；Chrome 的要求见启动自检的 chrome-frame 一项'
+      : '工作进程的队列节点没起成：它一个任务也接不了';
+    const out = `${JSON.stringify({ t: new Date().toISOString(), event: 'render.no-environment', reason, worker: which, count: environment.count, detail })}\n`;
+    process.stdout.write(out);
+    process.stderr.write(out);
+  };
   const brokerKey = randomBytes(32).toString('base64url');
   let report = null; // 工作进程最近一次交来的诊断
   let reportAt = 0;
@@ -229,7 +256,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       return { cmd: built.cmd, args: built.args, env: workerEnv(), cwd: ROOT };
     },
     log,
-    onLine(line) { if (line.trim()) process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event: 'worker.line', line: line.slice(0, 2000) })}\n`); },
+    // 每次起之前先清上一轮留下的进程树（记号与 pid 记在这里）；结束时整棵树一起走，见 worker.mjs 文件头
+    treeFile: path.join(config.dataDir, 'worker-tree.json'),
+    onLine(line) {
+      if (!line.trim()) return;
+      process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event: 'worker.line', line: line.slice(0, 2000) })}\n`);
+      noteSkip(line, 'resident');
+    },
   });
 
   // ---------- 背压、内存看护、代码版本
@@ -320,6 +353,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         quotaPausedUntil: quotaUntil,
         degraded: oom.degraded,
         codeVersion,
+        environment,
         selfcheck: { ok: check.ok, warnings: check.warnings, info: check.info },
       };
     },
@@ -355,6 +389,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     try { process.on(sig, () => { void stop(sig); }); } catch { /* 这个平台没有这个信号 */ }
   }
   process.on('message', (m) => { if (m?.type === 'shutdown') void stop('ipc'); });
+  // 不管怎么退出（包括没走到 stop 的异常退出）：最后一步把工作进程整棵树带走，不留占着端口的孤儿
+  process.on('exit', () => { try { worker.killSync(); } catch { /* 已经没了 */ } });
   return null;
 }
 

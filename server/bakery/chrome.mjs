@@ -184,14 +184,14 @@ function PAGE_PRELUDE() {
 }
 
 /**
- * 在一个已经起好的浏览器里开一个**全新的、受帧控制的 page**,导航到导出页、等页面就绪。
+ * 开一个受帧控制的空白页(`Target.createTarget({ enableBeginFrameControl: true })`,窗口放在屏幕外)。预渲染每一趟都从这里开页;
+ * 托管方渲染服务的启动自检(`server/hosted-render/selfcheck.mjs`)也走这一条,所以「自检过了、工作进程却开不了页」不会再出现。
  *
- * 为什么每趟都开新 page:页面上有动画锚点、已挂载的卡片、推到片尾的状态,原地再渲一趟拿到的不是
- * 第 0 帧的画面。新 page 是一个全新的 renderer,和全新起一个浏览器等价。
- * 页面必须用 `Target.createTarget({ enableBeginFrameControl: true })` 开 —— `browser.newPage()`
- * 开出来的页面不受帧控制,beginFrame 对它无效。
+ * 只有 chrome-headless-shell 认这组参数:完整版的 Chrome / Chromium(即使以无头方式起)对不带 `newWindow` 的 `left` / `top`
+ * 回 `Target position can only be set for new windows`,而且没有 `HeadlessExperimental.beginFrame`,受帧控制的出帧整个做不了。
+ * 所以渲染节点必须用 chrome-headless-shell,版本由仓库锁定的 puppeteer 决定(`expectedHeadlessShellVersion()`)。
  */
-async function newSession(browser, url) {
+export async function openFrameTarget(browser) {
   const bs = await browser.target().createCDPSession();
   let targetId;
   try {
@@ -200,7 +200,58 @@ async function newSession(browser, url) {
     await bs.detach().catch(() => {});
   }
   const target = await browser.waitForTarget((t) => t._targetId === targetId, { timeout: 30000 });
-  const page = await target.page();
+  return target.page();
+}
+
+/**
+ * 在一个起好的浏览器里走一遍预渲染的开页与出帧:开受帧控制的页、发 `beginFrame` 截一帧。成功回 `{ ok: true, bytes }`(那一帧 PNG 的字节数),
+ * 失败回 `{ ok: false, stage: 'open' | 'frame', detail }`。自检用;不改任何渲染路径。
+ */
+export async function probeFramePath(browser, { timeoutMs = 30000 } = {}) {
+  let page = null;
+  let stage = 'open';
+  const work = (async () => {
+    page = await openFrameTarget(browser);
+    stage = 'frame';
+    const client = await page.createCDPSession();
+    await client.send('Page.enable');
+    await page.evaluate(() => { document.documentElement.style.background = '#204060'; });
+    let tick = 1000;
+    for (let i = 0; i < 8; i += 1) {
+      const out = await client.send('HeadlessExperimental.beginFrame', { frameTimeTicks: (tick += FRAME_INTERVAL), interval: FRAME_INTERVAL, screenshot: { format: 'png' } });
+      if (out?.screenshotData) return { ok: true, bytes: Buffer.from(out.screenshotData, 'base64').length };
+    }
+    return { ok: false, stage: 'frame', detail: 'beginFrame 连发 8 拍都没有交回画面' };
+  })();
+  let timer = null;
+  try {
+    return await Promise.race([
+      work,
+      new Promise((resolve) => { timer = setTimeout(() => resolve({ ok: false, stage, detail: `${timeoutMs / 1000} 秒没有结果` }), timeoutMs); }),
+    ]);
+  } catch (err) {
+    return { ok: false, stage, detail: String(err?.message ?? err).split('\n')[0].slice(0, 300) };
+  } finally {
+    clearTimeout(timer);
+    try { await page?.close(); } catch { /* 浏览器随后就关 */ }
+  }
+}
+
+/** 仓库锁定的 puppeteer 配的 chrome-headless-shell 版本号(如 `152.0.7977.75`);读不到回 null */
+export async function expectedHeadlessShellVersion() {
+  try { return await headlessShellBuildId(); } catch { return null; }
+}
+
+/**
+ * 在一个已经起好的浏览器里开一个**全新的、受帧控制的 page**,导航到导出页、等页面就绪。
+ *
+ * 为什么每趟都开新 page:页面上有动画锚点、已挂载的卡片、推到片尾的状态,原地再渲一趟拿到的不是
+ * 第 0 帧的画面。新 page 是一个全新的 renderer,和全新起一个浏览器等价。
+ * 页面必须用 `Target.createTarget({ enableBeginFrameControl: true })` 开 —— `browser.newPage()`
+ * 开出来的页面不受帧控制,beginFrame 对它无效。
+ */
+async function newSession(browser, url) {
+  const page = await openFrameTarget(browser);
   page.on('console', (msg) => { if (msg.type() !== 'debug') console.log('PAGE LOG:', msg.text()); });
   const client = await page.createCDPSession();
   await client.send('Page.enable');

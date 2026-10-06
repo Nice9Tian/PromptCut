@@ -35,7 +35,9 @@
  *   forbidden  用渲染服务的身份提交一次编辑(`project.op`)被拒,项目版本号不变;写卡片源码、给自己签 page 票据同样被拒
  *   switch     创建者关掉开关:5 s 内渲染服务断开这个项目,之后发的计划它不认领;再打开:连回来并认领
  *   kill       结束工作进程整棵树 → 管理进程把它重新拉起、对账、恢复接活(再发一个计划能做完);结束管理进程 → 工作进程自己退出,
- *              探针(扮 PM2)重起管理进程后恢复接活
+ *              探针(扮 PM2)重起管理进程后恢复接活。两次之后各查一遍:原来那棵树上的进程(render-host、编辑器与预渲染的 Vite、Chrome)
+ *              一个不剩;新的工作进程一次就起来,输出里没有「端口被占」(端口可立即重用)。Linux 上结束管理进程时只 SIGKILL 它一个
+ *              (不带走子进程):工作进程一侧发现父进程没了自己收尾,新的管理进程起工作进程之前再按上一轮的记号清一遍
  *   limits     并发:一个计划切出多段,全程同时持有的认领不超过并发上限;内存:把硬上限调到 `--memory-step-max`,
  *              管理进程量到超限、结束工作进程(`worker.exit` 的 reason 是 `oom`)、退避重起,10 分钟内第 3 次时并发降到 1(`render.degraded`)
  *   load       渲染进行中与空闲时,文档服务 `/healthz` 往返时延的对比(本机数字只作参考)
@@ -64,7 +66,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startHostedCombo, hostedPaths } from '../../server/hosted/combo.mjs';
 import { runKeygen } from '../../server/hosted-render/keygen.mjs';
-import { killTree } from '../../server/hosted-render/worker.mjs';
+import { killTree, treeAlive } from '../../server/hosted-render/worker.mjs';
 import { createSharedProject, buildAuthProtocols, deriveKey, adminProof, ticketProtocols } from '../../server/auth/client.mjs';
 import { readServiceKeyFile, buildServiceProtocols } from '../../server/auth/service-identity.mjs';
 import { clipsPlanTaskOf, backfillPlanTaskOf } from '../../server/render-queue/messages.mjs';
@@ -600,33 +602,71 @@ async function renderOnce(label) {
   return done;
 }
 
+/** 管理进程记下的这一轮工作进程树:记号(Linux 上整棵树的进程都带着它)与树根 pid */
+function workerTreeRecord() {
+  try { return JSON.parse(fs.readFileSync(path.join(RENDER_DATA, 'worker-tree.json'), 'utf8')); } catch { return null; }
+}
+const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { return err?.code === 'EPERM'; } };
+/** 等这批 pid 全部退出;回还活着的(空数组 = 没有残留) */
+async function waitGone(pids, ms) {
+  const until = Date.now() + ms;
+  let left = pids.filter(pidAlive);
+  while (left.length > 0 && Date.now() < until) { await delay(250); left = left.filter(pidAlive); }
+  return left;
+}
+const portBusyLines = (from) => supLogs.slice(from).filter((l) => l.event === 'worker.line' && /already in use|EADDRINUSE/i.test(String(l.line))).map((l) => String(l.line).slice(0, 160));
+
 async function stepKill() {
   const r = {};
   // 1. 结束工作进程整棵树:管理进程自己的看护把它拉起
   const s0 = await status();
   const pid = s0.worker.pid;
   const starts = s0.worker.starts;
-  killTree(pid);
+  const rec0 = workerTreeRecord();
+  check(rec0?.pid === pid && typeof rec0?.token === 'string', 'kill:管理进程记下了这一轮工作进程树的记号与 pid', { recPid: rec0?.pid, pid });
+  const tree0 = treeAlive(pid, { token: rec0?.token ?? '' });
+  r.workerTreeSize = tree0.length;
+  check(tree0.length >= 3, 'kill:工作进程树里不止它自己(还有 Vite、预渲染进程、Chrome)', { tree: tree0.length });
+  const mark0 = supLogs.length;
+  killTree(pid, { token: rec0?.token ?? '' });
   const t0 = Date.now();
-  await waitFor(async () => { const s = await status(); return s.worker.starts > starts && s.worker.ready && s.worker.pid !== pid ? s : null; }, 300_000, '工作进程被重新拉起', 1000);
+  r.workerTreeLeft = await waitGone(tree0, 15_000);
+  check(r.workerTreeLeft.length === 0, 'kill:结束工作进程后,那棵树上的进程一个不剩', { left: r.workerTreeLeft });
+  const s1 = await waitFor(async () => { const s = await status(); return s.worker.starts > starts && s.worker.ready && s.worker.pid !== pid ? s : null; }, 300_000, '工作进程被重新拉起', 1000);
   await waitJoined(ctx.proj.projectId, 60_000);
   r.workerRestartMs = Date.now() - t0;
+  r.workerRestarts = s1.worker.starts - starts;
+  r.portBusyAfterWorkerKill = portBusyLines(mark0);
+  check(r.workerRestarts === 1 && r.portBusyAfterWorkerKill.length === 0, 'kill:新的工作进程一次就起来,没有「端口被占」(端口可立即重用)', { restarts: r.workerRestarts, lines: r.portBusyAfterWorkerKill });
   const exit = supLogs.filter((l) => l.event === 'worker.exit').at(-1);
   r.workerExit = exit ? { code: exit.code, signal: exit.signal, reason: exit.reason } : null;
   r.afterWorkerKill = await renderOnce('kill-worker');
 
   // 2. 结束管理进程(不给它收尾的机会):工作进程发现管理进程没了自己退出;探针扮 PM2 把管理进程重起
   const oldWorker = (await status()).worker.pid;
+  const rec1 = workerTreeRecord();
+  const tree1 = treeAlive(oldWorker, { token: rec1?.token ?? '' });
+  r.workerTreeSizeBeforeSupervisorKill = tree1.length;
   const sup = supervisor;
-  killTree(sup.child.pid);
+  const mark1 = supLogs.length;
+  // Linux:只 SIGKILL 管理进程一个,子进程不带走(PM2 的进程被 OOM 杀掉就是这样);Windows:照旧整棵树结束
+  r.supervisorKill = process.platform === 'win32' ? 'tree' : 'single';
+  if (process.platform === 'win32') killTree(sup.child.pid);
+  else process.kill(sup.child.pid, 'SIGKILL');
   await sup.exited;
   const t1 = Date.now();
   startSupervisor();
-  await waitReady(300_000);
+  r.supervisorTreeLeft = await waitGone(tree1, 30_000);
+  check(r.supervisorTreeLeft.length === 0, 'kill:结束管理进程后,原来那棵工作进程树一个不剩', { left: r.supervisorTreeLeft, how: r.supervisorKill });
+  const s2 = await waitReady(300_000);
   await waitJoined(ctx.proj.projectId, 60_000);
   r.supervisorRestartMs = Date.now() - t1;
-  r.oldWorkerGone = await waitFor(async () => { try { process.kill(oldWorker, 0); return null; } catch { return true; } }, 60_000, '旧的工作进程退出', 500).catch(() => false);
+  r.oldWorkerGone = !pidAlive(oldWorker);
   check(r.oldWorkerGone === true, 'kill:管理进程没了之后旧的工作进程自己退出', { oldWorker });
+  r.workerStartsAfterSupervisorRestart = s2.worker.starts;
+  r.portBusyAfterSupervisorKill = portBusyLines(mark1);
+  r.sweptStale = supLogs.slice(mark1).filter((l) => l.event === 'worker.swept-stale').map((l) => l.count);
+  check(s2.worker.starts === 1 && r.portBusyAfterSupervisorKill.length === 0, 'kill:新的管理进程起的工作进程一次就起来,没有「端口被占」', { starts: s2.worker.starts, lines: r.portBusyAfterSupervisorKill });
   r.afterSupervisorKill = await renderOnce('kill-supervisor');
   return r;
 }

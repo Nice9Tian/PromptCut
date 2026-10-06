@@ -4,7 +4,8 @@
  * `runSelfcheck(config, deps)` 回 `{ ok, errors: [{ reason, detail }], warnings: [{ reason, detail }], info }`：
  * - `errors` 里有任何一项，管理进程以退出码 78 结束、不接活（`SELFCHECK_EXIT`）；每项各打一行 `selfcheck.error`；
  * - `warnings` 只告警、照常启动：`no-cgroup`（没有 systemd / cgroup v2：无 cgroup 上限，只靠进程内看护）、
- *   `no-h264`（ffmpeg 没有 H.264 编码器；轨道流第一版不开，所以只告警）、`no-sandbox`（Chrome 关着沙箱在跑，写明原因）。
+ *   `no-h264`（ffmpeg 没有 H.264 编码器；轨道流第一版不开，所以只告警）、`no-sandbox`（Chrome 关着沙箱在跑，写明原因）、
+ *   `chrome-version`（开页与出帧都行，但版本不是仓库锁定的那一版：环境指纹含 Chrome 主版本，结果不会与别的节点混用，只是提醒）。
  *
  * | `reason` | 查什么 |
  * |---|---|
@@ -12,6 +13,7 @@
  * | `service-key` | 私钥文件在、权限不宽于 0600、格式对 |
  * | `data-dir` | 数据目录可写（没有就建）；其下的 Vite 缓存目录 `vite-cache` 同样可写（检出目录对工作进程的用户可能只读） |
  * | `no-chrome` / `chrome-launch` | 找得到并起得来 chrome-headless-shell（带 root / 容器下的沙箱判断） |
+ * | `chrome-frame` | 在刚起的 Chrome 里走一遍工作进程的**同一条开页路径**（`bakery/chrome.mjs` 的 `openFrameTarget`：受帧控制的页）并出一帧。完整版的 Chrome / Chromium 过不了这一项（它不认这组开页参数、也没有 `beginFrame`）：报错里写出实际的版本与仓库锁定的 puppeteer 配的 chrome-headless-shell 版本 |
  * | `no-cjk-font` | 在刚起的 Chrome 里把「中」「国」各画一遍：没有中文字体时两个字都是同一个缺字方框，位图相同 |
  * | `no-ffmpeg` | `ffmpeg -version` 能跑 |
  *
@@ -50,11 +52,13 @@ export function probeFfmpeg() {
 }
 
 /**
- * 真探测：起一次 chrome-headless-shell（与预渲染同一套启动参数），开一个空白页，查中文字体。
- * 回 `{ ok, stage?, detail?, version?, cjk?, noSandbox? }`；`stage` 是 `no-chrome`（找不到可执行文件）或 `chrome-launch`。
+ * 真探测：起一次 chrome-headless-shell（与预渲染同一套启动参数），走一遍预渲染的开页与出帧，再查中文字体。
+ * 回 `{ ok, stage?, detail?, version?, expected?, frame?, cjk?, noSandbox? }`；`stage` 是 `no-chrome`（找不到可执行文件）或 `chrome-launch`；
+ * `frame` 是 `{ ok, stage?, detail?, bytes? }`（开页与出帧这一条路通不通）；`expected` 是仓库锁定的 puppeteer 配的版本号。
  */
 export async function probeChrome() {
-  const { chromeLaunchArgs, noSandboxReason } = await import('../bakery/chrome.mjs');
+  const { chromeLaunchArgs, noSandboxReason, probeFramePath, expectedHeadlessShellVersion } = await import('../bakery/chrome.mjs');
+  const expected = await expectedHeadlessShellVersion();
   const { default: puppeteer } = await import('puppeteer');
   let browser = null;
   try {
@@ -66,6 +70,9 @@ export async function probeChrome() {
   }
   try {
     const version = await browser.version();
+    // 与工作进程同一条开页路径：这一步不过，后面的字体就不用查了（查字体用的是普通页，完整版 Chrome 也开得了，会掩盖问题）
+    const frame = await probeFramePath(browser);
+    if (!frame.ok) return { ok: true, version, expected, frame, cjk: true, noSandbox: noSandboxReason() };
     const page = await browser.newPage();
     await page.goto('about:blank');
     const cjk = await page.evaluate(() => {
@@ -84,7 +91,7 @@ export async function probeChrome() {
       // 没有中文字体：两个字都画成同一个缺字方框（或什么都不画），位图相同
       return a !== b && a !== blank && b !== blank;
     });
-    return { ok: true, version, cjk, noSandbox: noSandboxReason() };
+    return { ok: true, version, expected, frame, cjk, noSandbox: noSandboxReason() };
   } catch (err) {
     return { ok: false, stage: 'chrome-launch', detail: String(err?.message ?? err).split('\n')[0].slice(0, 300) };
   } finally {
@@ -140,6 +147,17 @@ export async function runSelfcheck(config, deps = {}) {
     info.chrome = chrome.version ?? null;
     // Chrome 的沙箱开没开（root / 容器里自动关，见 `bakery/chrome.mjs` 的 `noSandboxReason`）：'on' | 'off:<原因>'；探测没说就不记
     if (chrome.noSandbox !== undefined) info.chromeSandbox = chrome.noSandbox ? `off:${chrome.noSandbox}` : 'on';
+    if (chrome.expected) info.chromeExpected = chrome.expected;
+    if (chrome.frame !== undefined) {
+      info.chromeFrame = chrome.frame?.ok === true ? 'ok' : `failed:${chrome.frame?.stage ?? 'unknown'}`;
+      if (chrome.frame?.ok !== true) {
+        fail('chrome-frame', `${chrome.version ?? 'Chrome'} 开不了受帧控制的页面（${chrome.frame?.stage === 'frame' ? '出帧' : '开页'}：${chrome.frame?.detail ?? ''}）。`
+          + `渲染要 chrome-headless-shell${chrome.expected ? ` ${chrome.expected}` : ''}（仓库锁定的 puppeteer 配的版本）；完整版的 Chrome / Chromium 不行。`
+          + '在部署目录里跑 npx puppeteer browsers install chrome-headless-shell，并且不要把 PUPPETEER_EXECUTABLE_PATH 指到系统装的 Chromium');
+      } else if (chrome.expected && !String(chrome.version ?? '').includes(chrome.expected)) {
+        warn('chrome-version', `Chrome 是 ${chrome.version}，仓库锁定的是 chrome-headless-shell ${chrome.expected}；开页与出帧都行，按它的环境指纹照常接活`);
+      }
+    }
     if (chrome.cjk !== true) fail('no-cjk-font', 'Chrome 里画不出中文（两个不同的汉字画出来一样）；装中文字体：apt-get install fonts-noto-cjk');
     if (chrome.noSandbox) warn('no-sandbox', `Chrome 关着沙箱在跑（原因：${chrome.noSandbox}）；推荐用专门的非 root 用户跑工作进程`);
   }
