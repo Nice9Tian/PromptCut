@@ -4,7 +4,7 @@
  * `sound-online-render-task.md` 第 23 条里本机能验的各项)。**一条命令**起隔离的托管组合 + 渲染服务 + 发任务 + 断言产物入库,
  * 不依赖浏览器观察端:成员一侧由本进程扮演(Node 里的 WebSocket),发布的是在线页面那种带片段清单的计划任务。
  *
- *   node scripts/probes/hosted-render-probe.mjs [--steps work,late,forbidden,switch,kill,limits,load,delete]
+ *   node scripts/probes/hosted-render-probe.mjs [--steps work,late,agent,forbidden,switch,kill,limits,load,delete]
  *        [--base-port 5730] [--doc-port 8794] [--asset-port 8795] [--keep-temp] [--verbose] [--memory-step-max 150M] [--mem-low 256M]
  *        `--mem-low`:演练时背压的可用内存线(生产缺省 2G;开发机上常年可用内存不到 2 GB,照缺省会一直暂停认领,所以演练缺省放到 256M)
  *
@@ -16,7 +16,10 @@
  *                                    (`7e57c10d00000001`),使它与本机桌面的指纹不同;Linux 上不设就用真实指纹
  *   PROMPTCUT_RENDER_SKIP_CHECKS     原样传给渲染服务(如 `ffmpeg`:机器上没有 ffmpeg 时跳过那一项自检)
  *   PC_CHROME_ARGS                   原样传给预渲染的 Chrome(排查用)
+ *   PUPPETEER_EXECUTABLE_PATH        puppeteer 自己认的变量:用系统里装好的 Chromium / chrome-headless-shell 时给它的路径
+ *   PROMPTCUT_CHROME_NO_SANDBOX      1 强制关 Chrome 沙箱、0 强制不关;不设时 Linux 的 root / 容器里自动关
  *   需要:Node ≥ 22.18;仓库的依赖已装(vite、puppeteer 与它的 chrome-headless-shell);Linux 上要中文字体与 ffmpeg(自检会查)。
+ *   不连任何远端、不开浏览器观察端;全部在 127.0.0.1 上。
  *   root 或容器里 Chrome 自动带 --no-sandbox;没有 systemd 时自检报 no-cgroup 告警并继续。
  *
  * 步骤(缺省全跑,顺序固定;每步的判据):
@@ -24,6 +27,11 @@
  *              细任务全部 done;内容库里有这一版的层表(`snapshot-manifest` 的 `layers:<项目文档 id>`),素材服务的 `snap` / `px` 里有新块;
  *              成员列表里有 `service: 'render'` 一行
  *   late       发布方走了(成员全部断开)之后才上线的另一位成员:不发任何任务,直接取得到层表与清单里的块
+ *   agent      没有任何成员在线时的预渲染:成员全部离开、渲染服务过了保持期(60 s)断开之后,一个「假 Agent 服务」(本进程,另一把服务私钥)
+ *              声明这个项目有活 → 渲染服务 5 s 内连回来;它发布一个补渲计划 → 渲染服务认领、做完、层表与产物入库,全程没有任何成员连接;
+ *              之后才上线的成员不发任何任务就取得到层表与块。结果里 `publisher` 写明发布方是哪一种:`service`(服务身份的发布票据,
+ *              `hosted.ticket { purpose: 'publish' }`,第四段合流后才有)或 `member-standin`(目录回 unsupported 时由一条成员连接代发,
+ *              计划一被认领就断开)
  *   forbidden  用渲染服务的身份提交一次编辑(`project.op`)被拒,项目版本号不变;写卡片源码、给自己签 page 票据同样被拒
  *   switch     创建者关掉开关:5 s 内渲染服务断开这个项目,之后发的计划它不认领;再打开:连回来并认领
  *   kill       结束工作进程整棵树 → 管理进程把它重新拉起、对账、恢复接活(再发一个计划能做完);结束管理进程 → 工作进程自己退出,
@@ -33,8 +41,17 @@
  *   load       渲染进行中与空闲时,文档服务 `/healthz` 往返时延的对比(本机数字只作参考)
  *   delete     创建者删项目:渲染服务断开,目录里没有这个项目
  *
+ * 起来之后、跑步骤之前先做一组环境断言(`environment`):Chrome 沙箱的开关与判据一致(Linux 的 root / 容器里是 `off:root` / `off:container`,
+ * 并有 `no-sandbox` 告警);没有 systemd 时有 `no-cgroup` 告警且照常起来;没用测试变量顶替时环境指纹 = (本机操作系统, software, Chrome 主版本),
+ * Linux 上它不同于同版本 Chrome 的 Windows 指纹;常驻工作进程不报 userCards。
+ *
  * 输出:过程写 stderr(一行一条 JSON);stdout 最后一行是结果,形如
- *   {"ok":true,"fails":[],"platform":"linux","steps":{"work":{"ok":true,"joinMs":812,"planMs":15320,"tasks":5,"done":5,"layers":3,"snapBlobs":…,"pxBlobs":…},…},"selfcheck":{…},"envFingerprint":"…","codeVersion":"…"}
+ *   {"ok":true,"fails":[],"platform":"linux","steps":{"work":{"ok":true,"joinMs":812,"planMs":15320,"tasks":4,"done":4,"layers":2,"snapBlobs":…,"pxBlobs":…},
+ *    "late":{"ok":true,…},"agent":{"ok":true,"publisher":"member-standin","joinOnDemandMs":…,"membersOnlineWhileRendering":0,…},"forbidden":{"ok":true,"edit":"error:forbidden",…},
+ *    "switch":{…},"kill":{…},"limits":{"concurrency":{…},"memory":{…}},"load":{"idle":{…},"rendering":{…}},"delete":{…}},
+ *    "selfcheck":{"warnings":["no-sandbox","no-cgroup"],"chrome":"…","chromeSandbox":"off:root","cgroup":"none:no-systemd",…},
+ *    "environment":{"platform":"linux","chromeSandbox":"off:root","expectSandbox":"off:root","envFingerprint":"…","expectFingerprint":"…","windowsFingerprint":"…",…},
+ *    "envFingerprint":"…","codeVersion":"…"}
  * `ok` 为 true 且 `fails` 为空才算过;退出码 0 过、1 不过、2 起不来。不打印私钥、口令、票据。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
