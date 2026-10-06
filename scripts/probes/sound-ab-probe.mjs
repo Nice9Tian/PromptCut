@@ -5,10 +5,10 @@
  *
  *   npx vite build --mode online --outDir <在线构建目录>
  *   node scripts/probes/sound-ab-probe.mjs --dist <在线构建目录> [--out <目录>] [--phases desktop,online,lowmem]
- *        [--desktop-port 5700] [--site-port 5703] [--doc-port 8790] [--asset-port 8791]
+ *        [--desktop-port 5700] [--site-port 5705] [--doc-port 8790] [--asset-port 8791]
  *
  * 端口:桌面 dev server 占 --desktop-port 起连号三个;在线站点占 --site-port 起连号三个(编辑器页 + 两个舞台的源);
- * 文档服务、素材服务各一个。数据目录都在 --out 下的临时目录里。
+ * 文档服务、素材服务各一个。数据目录都在 --out 下的临时目录里。某个端口被别的进程占着时(启动报 EADDRINUSE)用上面的参数换一段。
  *
  * **不向扬声器出声**:Chrome 无头、带 `--mute-audio`(整个浏览器的输出在设备前静音);探针量声音用的分析节点不接输出。
  * 「听到」一律按数字判,不靠人听:
@@ -68,7 +68,7 @@ const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-sound-ab-${RUN}
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const PHASES = new Set(arg('--phases', 'desktop,online,lowmem').split(','));
 const DESKTOP_PORT = Number(arg('--desktop-port', 5700));
-const SITE_PORT = Number(arg('--site-port', 5703));
+const SITE_PORT = Number(arg('--site-port', 5705));
 const PORTS = { editor: SITE_PORT, stageA: SITE_PORT + 1, stageB: SITE_PORT + 2, doc: Number(arg('--doc-port', 8790)), asset: Number(arg('--asset-port', 8791)) };
 fs.mkdirSync(OUT, { recursive: true });
 
