@@ -13,7 +13,7 @@
  *     项目二(创建者 owner2,成员 乙 yi、丙 bing)。项目文档里各带一个只属于自己的标记(项目名、片段文案、素材名)。
  *     只读成员没有设置它的界面与操作(契约第 4.6 节),探针停掉托管组合直接写项目记录造出来。
  *
- *   node scripts/probes/cloud-agent-isolation-probe.mjs [--doc-port 8798] [--asset-port 8799] [--agent-port 5741] [--keep]
+ *   node scripts/probes/cloud-agent-isolation-probe.mjs [--doc-port 8798] [--asset-port 8799] [--agent-port 5741] [--render-port 5820] [--no-look] [--keep]
  *
  * 验收标准(每条一行 JSON,`ok` 全为 true 才算过;退出码 0 过、1 不过、2 起不来):
  *   I1  不带票据、乱写的票据打每个接口:全 401,响应体不说原因。
@@ -30,6 +30,8 @@
  *       T2 工具的文件读写按「项目 × 对话」隔离(别的项目、别的对话、Agent 服务的私钥与数据目录、托管服务的数据目录、系统文件);
  *       T3 出网闸(回环、内网、169.254.169.254、同机各服务,含换写法与重定向;测试专用的外部地址能通);
  *       T4 花钱的调用记用量(替身配音服务);T5 建卡改卡(源码经内容库、卡只在本项目里认得、卡片代码不在服务进程里执行)。
+ *   V0～V3 看画面(契约第 9.8 节;在 `cloud-agent-isolation-look.mjs`,这一组自己起停同机的渲染服务,`--no-look` 跳过):
+ *       V1 甲项目的对话要不到乙项目的画面;V2 伪造身份要不到;V3 开关关掉后要不到(项目的「渲染节点」、项目的「云端 Agent」、托管方的总开关三层)。
  *   I6  伪造的成员身份证明被拒:签名改一个字符、自己造密钥签、拿项目二的密钥签项目一的、把成员改成别人——当委托票据用一律 401;
  *       当对话委托随消息带一律 403 `bad-grant`,不起任何一轮。别的对话的委托、别的成员的委托、短的委托票据冒充对话委托同样被拒。
  *   I7  过期的成员身份证明被拒:过期的委托票据 401;过期的对话委托 403 `bad-grant`。
@@ -57,6 +59,7 @@ import {
   KDF, sleep, waitFor, portBusy, startHosted, startAgent, joinAs, adminOp, projectOf, putProject, mockScript, delegationOf, agentApi, createChecks, readTree,
 } from './cloud-agent-probe-lib.mjs';
 import { prepareToolFixtures, runToolIsolation } from './cloud-agent-isolation-tools.mjs';
+import { runLookIsolation, lookTrack } from './cloud-agent-isolation-look.mjs';
 
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback; };
@@ -64,6 +67,9 @@ const DOC_PORT = Number(argOf('--doc-port', 8798));
 const ASSET_PORT = Number(argOf('--asset-port', 8799));
 const AGENT_PORT = Number(argOf('--agent-port', 5741));
 const KEEP = args.includes('--keep');
+/** 看画面那一组起的渲染服务:+0/+1/+2 常驻工作进程、+3/+4/+5 隔离工作进程、+6 管理进程(看画面的口子在它上面) */
+const RENDER_PORT = Number(argOf('--render-port', 5820));
+const LOOK = !args.includes('--no-look');
 /** 探针自己在本机回环上起的三个替身:测试专用的外部地址(收集站)、替身配音服务、同机的「别的服务」 */
 const COLLECTOR_PORT = Number(argOf('--collector-port', 5745));
 const VOICE_PORT = Number(argOf('--voice-port', 5746));
@@ -85,7 +91,8 @@ function projectDoc(id, tag, secret) {
   return {
     version: 1, id, name: `项目${tag}-${secret}`, width: 1920, height: 1080, fps: 30, duration: 12, themeId: 'midnight',
     media: [{ id: `media-${tag}`, kind: 'image', name: `素材-${secret}.png`, url: `/api/asset/media/${'0'.repeat(64)}`, width: 10, height: 10 }],
-    tracks: [{ id: 't1', name: '序列 1', clips: [{ id: `clip-${tag}`, cardId: 'title', start: 0, end: 4, params: {}, label: `文案-${secret}` }] }],
+    // 第二条轨给看画面那一组用:两个项目的画面一眼分得开(项目一绿、项目二紫)
+    tracks: [{ id: 't1', name: '序列 1', clips: [{ id: `clip-${tag}`, cardId: 'title', start: 0, end: 4, params: {}, label: `文案-${secret}` }] }, lookTrack(tag)],
     transitions: [],
   };
 }
@@ -129,7 +136,7 @@ async function main() {
 
   // 假凭证与替身先就位(在 Agent 服务起来之前):私钥目录、数据目录、托管服务的数据目录、一个「系统文件」里各放一份
   fixtures = await prepareToolFixtures({ tmp, agentData, agentSecrets, hostedData, assetPort: ASSET_PORT, collectorPort: COLLECTOR_PORT, voicePort: VOICE_PORT, decoyPort: DECOY_PORT });
-  agent = await startAgent({ dataDir: agentData, secrets: agentSecrets, docPort: DOC_PORT, port: AGENT_PORT, env: fixtures.env });
+  agent = await startAgent({ dataDir: agentData, secrets: agentSecrets, docPort: DOC_PORT, port: AGENT_PORT, env: { ...fixtures.env, ...(LOOK ? { PROMPTCUT_AGENT_LOOK_URL: `http://127.0.0.1:${RENDER_PORT + 6}` } : {}) } });
   const URL_A = agent.url;
 
   let jia = await joinAs(BASE, p1, creds.jia);
@@ -144,6 +151,14 @@ async function main() {
   /** 探针经手过的票据原文:最后查它们有没有落盘、进日志 */
   const secrets = new Set();
   const note = (t) => { if (typeof t === 'string' && t.length > 20) secrets.add(t); return t; };
+
+  // ---------- V0～V3 看画面(放最前:它要起停渲染服务,做完就把它停掉,后面各组不带着它跑)
+  if (LOOK) {
+    await runLookIsolation({
+      tmp, hostedData, base: BASE, agentUrl: URL_A, agentData, agentSecrets, renderPort: RENDER_PORT,
+      projects: { p1, p2 }, pages: { jia, yi, owner1 }, apis: { jia: A.jia, yi: A.yi }, check,
+    });
+  }
 
   // ---------- I1 不带票据、乱写的票据
   {
