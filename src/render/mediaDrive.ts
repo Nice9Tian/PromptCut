@@ -53,6 +53,7 @@ export function syncMediaEl(el: HTMLMediaElement, want: Want) {
     elTime: el.currentTime,
     seeking: el.seeking,
     paused: el.paused,
+    ended: el.ended,
     target: want.target,
     playing: want.playing,
     scrubbing: want.scrubbing,

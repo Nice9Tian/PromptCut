@@ -52,6 +52,29 @@ test("seek 有冷却:上一次还没过 700ms 就先忍着", () => {
   assert.equal(q.seekTo, 301, "冷却过了就该纠了");
 });
 
+test("放到素材尽头的元素:播放头还没走出这一段时不调 play() —— 那会从头重播", () => {
+  // 声音比播放头快了 0.2s 先放完(素材 3.945s,播放头在 3.733s)
+  const p = at({ elTime: 3.945, target: 3.733, paused: true, ended: true });
+  assert.equal(p.play, false, "放完了的元素再 play() 会回到 0 重播");
+  assert.equal(p.seekTo, null);
+  assert.equal(p.pause, false);
+  // 片段比素材长:播放头已经越过素材尽头,同样安静等着
+  const q = at({ elTime: 3.945, target: 4.6, paused: true, ended: true });
+  assert.equal(q.play, false);
+  assert.equal(q.seekTo, null);
+  // 对照:没放完、只是暂停着的元素照旧起播
+  assert.equal(at({ elTime: 3.9, target: 3.733, paused: true }).play, true);
+});
+
+test("放到尽头之后播放头真的回到了前面:seek 回去接着放,冷却期内先忍着", () => {
+  const p = at({ elTime: 3.945, target: 1.2, paused: true, ended: true });
+  assert.equal(p.seekTo, 1.2);
+  assert.equal(p.play, true);
+  const q = at({ elTime: 3.945, target: 1.2, paused: true, ended: true, now: 10_000, lastSeekAt: 10_000 - 100 });
+  assert.equal(q.seekTo, null);
+  assert.equal(q.play, false);
+});
+
 test("seeking 期间一律不下新指令 —— 这时候 currentTime 读的是目标值不是真实进度", () => {
   const p = at({ elTime: 301, target: 305, seeking: true });
   assert.equal(p.seekTo, null);
