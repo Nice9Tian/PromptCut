@@ -11,6 +11,8 @@
  *   sink.has 为真就直接 complete(dedup,带 sink.resultFor 的清单);否则 executor.render → sink.put →
  *   收全才 complete(带 put 回的清单),没收全 fail(可重试)。sink 收到的 ref 带任务的 input 与 requires(契约 J.3)。
  *   出错 fail,`error.retryable === false` 才不可重试。
+ *   执行器抛的错带 `superseded === true`(这份内容已被新版本取代,`render-queue-contract.md` J.15):同样发 `task.fail`,
+ *   但 error 固定为 `'superseded'`、不可重试(队列按这个 error 认作废),诊断事件是 `superseded` 而不是 `failed`。
  *
  * # 「仍持有」与迟到的结果
  *
@@ -287,6 +289,16 @@ export function createTaskRunner({ nodeId, session, executor, sink, emit = () =>
       emit({ type: 'completed', id, ...info(run) });
     } catch (error) {
       if (error === ABORTED || !holding(run)) return discard();
+      // 这份内容已被新版本取代(执行器判的,契约 J.15):报给队列作废(error 固定为 'superseded'、不可重试),不算失败
+      if (error?.superseded === true) {
+        try {
+          session().fail(id, 'superseded', false);
+        } catch {
+          // 连接已坏:同下,队列会按租约或断开回收
+        }
+        emit({ type: 'superseded', id, ...(typeof error.detail === 'string' && error.detail ? { why: error.detail.slice(0, 300) } : {}), ...info(run) });
+        return;
+      }
       const message = String(error?.message ?? error);
       const retryable = error?.retryable !== false;
       try {

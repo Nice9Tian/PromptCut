@@ -158,7 +158,8 @@ export function loadHostConfig(env = process.env) {
   return parsed;
 }
 
-const emptyStats = () => ({ claimed: 0, completed: 0, dedup: 0, failed: 0, lost: 0, discarded: 0, released: 0 });
+/** `superseded`:执行器判这份内容已被新版本取代、报给队列作废的任务数(`render-queue-contract.md` J.15),不计入 `failed` */
+const emptyStats = () => ({ claimed: 0, completed: 0, dedup: 0, failed: 0, superseded: 0, lost: 0, discarded: 0, released: 0 });
 
 /**
  * @param {object} options
@@ -333,6 +334,7 @@ export function createRenderHost({
             emit({ type: 'quota-paused', until: quotaUntil, id: event.id, projectId: m.projectId, index: m.index });
           }
         }
+        else if (type === 'superseded') m.stats.superseded++;
         else if (type === 'lost') m.stats.lost++;
         else if (type === 'discarded') m.stats.discarded++;
         emit({ ...event, projectId: m.projectId, index: m.index });
@@ -456,6 +458,7 @@ export function createRenderHost({
         completed: m.stats.completed,
         dedup: m.stats.dedup,
         failed: m.stats.failed,
+        superseded: m.stats.superseded,
         lost: m.stats.lost,
         discarded: m.stats.discarded,
         released: m.stats.released,

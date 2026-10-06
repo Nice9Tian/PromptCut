@@ -232,13 +232,19 @@ export function createProjectClient(endpoint, {
       }
     },
 
-    get(projectId, projectRev) {
+    /**
+     * 取这一版的项目快照,连同「没有时当前是哪一版」(契约 J.15):
+     *   有        → `{ project, projectRev }`
+     *   没有      → `{ project: null, currentRev }`;`currentRev` 是文档服务回的当前版本(项目有真身、要的又不是当前版本时才有),
+     *               否则为 null。
+     */
+    locate(projectId, projectRev) {
       const parts = [];
       let count = null;
       return request('project.snapshot.get', { projectId, projectRev }, (m, resolve) => {
         if (m.type === 'project.snapshot.part') {
           if (m.missing === true) {
-            resolve(null);
+            resolve({ project: null, currentRev: Number.isSafeInteger(m.currentRev) ? m.currentRev : null });
             return 'done';
           }
           if (typeof m.data !== 'string' || !Number.isSafeInteger(m.count) || m.count < 1) {
@@ -265,11 +271,16 @@ export function createProjectClient(endpoint, {
           } catch {
             throw clientError('bad-json', '项目快照不是合法的 JSON');
           }
-          resolve(json);
+          resolve({ project: json, projectRev });
           return 'done';
         }
         throw unexpected('project.snapshot.get', m);
       });
+    },
+
+    /** 取这一版的项目快照；没有回 null（J.2） */
+    get(projectId, projectRev) {
+      return this.locate(projectId, projectRev).then((found) => found.project);
     },
 
     pending() {

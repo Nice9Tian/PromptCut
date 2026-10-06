@@ -18,6 +18,13 @@
  *     渲染节点重新切一次,已有的细任务把发布方并进订阅者、做完的当场各补一条 `task.done`。同一份清单十分钟内只这样核对一次;
  *     还对不上就交给 `render-request.mjs` 的「连续没有进度」去放弃,由之后进来的页面按现有规则自己发。
  *
+ * 项目往前走了(`docs/plan/render-queue-contract.md` J.15、`cloud-agent-contract.md` 第 16.4 节):
+ *   - 细任务以 `task.failed { error: 'superseded' }` 收场 = 渲染节点判这份内容已被新版本取代、作废了。这**不是失败**:
+ *     它算「有了结局」,计划照常收尾;内容换成了什么由改它的那一方(本服务的下一个计划、别的成员的页面)负责发。
+ *   - 计划每被切一次(原计划、核对用的那一次)都以最新那一次给的细任务清单为准:渲染节点可能是按更新的版本切的。
+ *   - 计划有了结局(完成、失败、撤回)就退订它与它的细任务(别的计划还要的除外),账上它们的失败与作废一并清掉。
+ *     这样之后的计划再遇到同一个细任务时,队列会把它当成新并入的订阅者、把那一刻的真实状态补发过来,不凭旧账判。
+ *
  * 票据原文不进日志。本文件不引用 `src/`。
  */
 import { createHash } from 'node:crypto';
@@ -46,9 +53,11 @@ export function createQueuePublisher({
 } = {}) {
   const limits = { ...PUBLISHER_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响发布 */ } };
+  /** 队列里「作废」的任务的 error(`render-queue/queue.mjs` 的 `isSuperseded`;执行器经 `task.fail` 报的也是它) */
+  const SUPERSEDED = 'superseded';
   let version;
   /**
-   * 跨连接留着的账,projectId → { done: Set(细任务 id), failed: Map(细任务 id → 原因), plans: Map(计划 id → 计划的账) }。
+   * 跨连接留着的账,projectId → { done: Set(细任务 id), failed: Map(细任务 id → 原因), gone: Set(作废的细任务 id), plans: Map(计划 id → 计划的账) }。
    * 细任务的结果按内容寻址、做完就不会变,所以断线重连之后之前看到的完成仍然算数。项目里没有计划了就清掉。
    */
   const books = new Map();
@@ -57,7 +66,7 @@ export function createQueuePublisher({
 
   const bookOf = (projectId) => {
     let b = books.get(projectId);
-    if (!b) { b = { done: new Set(), failed: new Map(), plans: new Map() }; books.set(projectId, b); }
+    if (!b) { b = { done: new Set(), failed: new Map(), gone: new Set(), plans: new Map() }; books.set(projectId, b); }
     return b;
   };
   const dropBookIfIdle = (projectId) => { const b = books.get(projectId); if (b && b.plans.size === 0) books.delete(projectId); };
@@ -90,7 +99,23 @@ export function createQueuePublisher({
       });
     }
 
-    const resolved = (id) => book.done.has(id) || book.failed.has(id);
+    const resolved = (id) => book.done.has(id) || book.failed.has(id) || book.gone.has(id);
+
+    /**
+     * 这个计划有了结局(完成、失败、撤回):从账上拿掉,退订它与它切出过的细任务(别的计划还要的不退),
+     * 这些细任务的失败与作废记录一并清掉(完成的留着:内容寻址,做完就不会变)。见文件头。
+     */
+    function conclude(plan) {
+      book.plans.delete(plan.id);
+      for (const [v, p] of alias) if (p === plan.id) alias.delete(v);
+      const wanted = new Set();
+      for (const other of book.plans.values()) for (const id of other.derived ?? []) wanted.add(id);
+      const mine = [...(plan.every ?? plan.derived ?? [])].filter((id) => !wanted.has(id));
+      for (const id of mine) { book.failed.delete(id); book.gone.delete(id); }
+      const ids = [plan.id, ...(plan.verifyId ? [plan.verifyId] : []), ...mine];
+      dropBookIfIdle(projectId);
+      return down ? Promise.resolve() : request({ type: 'task.unsubscribe', ids });
+    }
 
     /** 看一遍这个项目里各计划:细任务都有结果的收尾,其余报一次进度 */
     function settle(progressed) {
@@ -99,11 +124,12 @@ export function createQueuePublisher({
           const ids = [...plan.derived];
           const done = ids.filter((id) => book.done.has(id)).length;
           if (ids.every(resolved)) {
-            book.plans.delete(plan.id);
-            for (const [v, p] of alias) if (p === plan.id) alias.delete(v);
             const bad = ids.find((id) => book.failed.has(id));
-            if (bad !== undefined) call('onFail', { id: plan.id, reason: `渲染节点报告失败:${String(book.failed.get(bad)).slice(0, 120)}` });
-            else call('onDone', { id: plan.id });
+            const reason = bad !== undefined ? String(book.failed.get(bad)).slice(0, 120) : null;
+            const gone = ids.filter((id) => book.gone.has(id)).length;
+            void conclude(plan);
+            if (reason !== null) call('onFail', { id: plan.id, reason: `渲染节点报告失败:${reason}` });
+            else call('onDone', { id: plan.id, ...(gone ? { superseded: gone } : {}) });
             continue;
           }
           if (progressed) call('onProgress', { id: plan.id, done, total: ids.length });
@@ -129,8 +155,9 @@ export function createQueuePublisher({
 
     function onPlanDone(plan, msg) {
       const derived = Array.isArray(msg.result?.derived) ? msg.result.derived.map(String) : [];
-      // 核对用的那一次切分给出的细任务清单更新(同一版同一份清单,一般相同),并在一起
-      plan.derived = new Set([...(plan.derived ?? []), ...derived]);
+      // 以最新这一次切分给的清单为准(渲染节点可能是按更新的版本切的,旧清单里已被取代的不再等);切出过的都记着,收尾时一起退订
+      plan.every = new Set([...(plan.every ?? []), ...derived]);
+      plan.derived = new Set(derived);
       plan.split = true;
       settle(true);
       if (book.plans.has(plan.id) && plan.uncertain && ![...plan.derived].every(resolved)) void verify(plan);
@@ -144,6 +171,7 @@ export function createQueuePublisher({
         if (plan) { onPlanDone(plan, msg); return; }
         book.done.add(msg.id);
         book.failed.delete(msg.id);
+        book.gone.delete(msg.id);
         settle(true);
         return;
       }
@@ -156,6 +184,8 @@ export function createQueuePublisher({
           dropBookIfIdle(projectId);
           return;
         }
+        // 作废(这份内容已被新版本取代)不是失败:只记「有了结局」
+        if (msg.error === SUPERSEDED) { if (!book.done.has(msg.id)) book.gone.add(msg.id); settle(false); return; }
         if (!book.done.has(msg.id)) book.failed.set(msg.id, String(msg.error ?? 'failed'));
         settle(false);
       }
@@ -220,14 +250,12 @@ export function createQueuePublisher({
         }
         say('agent.publish.plan', { projectId, created: item.created === true, state: item.state ?? null, clips: task.input?.clips?.length ?? 0 });
       },
-      /** 撤回:不再订这个计划与它切出的细任务(没人要、还没被认领的由队列删掉;已经在做的做完) */
+      /** 撤回:不再订这个计划与它切出的细任务(别的计划还要的不退;没人要、还没被认领的由队列删掉;已经在做的做完) */
       async withdraw(id) {
         const plan = book.plans.get(id);
-        book.plans.delete(id);
-        const ids = [id, ...(plan?.verifyId ? [plan.verifyId] : []), ...(plan?.derived ?? [])];
-        if (plan?.verifyId) alias.delete(plan.verifyId);
+        if (plan) { await conclude(plan); return; }
         dropBookIfIdle(projectId);
-        if (!down) await request({ type: 'task.unsubscribe', ids });
+        if (!down) await request({ type: 'task.unsubscribe', ids: [id] });
       },
       close() {
         if (closing) return;

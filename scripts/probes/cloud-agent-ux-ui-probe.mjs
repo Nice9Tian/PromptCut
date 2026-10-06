@@ -12,7 +12,7 @@
  *   项目(限定进入):创建者在桌面版形态的页面里建、放云端;成员 bob、carol。三张内置卡:两张探针重卡(`probe-slow-stepped`,每帧烧 40 毫秒,
  *   在线页面量出来就是重卡:播放时贴预渲染的快照)加一张带参数的图表卡。
  *
- *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,errors[,spaced]] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
+ *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,errors,spaced] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
  *        [--agent-port 5741] [--render-port 5830] [--dist <在线构建目录>] [--out <截图目录>] [--keep]
  *   端口:--base-port +0 编辑器页的源、+1 / +2 两个舞台的源、+3 桌面版编辑器(+4、+5 是它的舞台端口);`--render-port` +0/+1/+2 是渲染
  *   工作进程的三个端口,+6 是管理进程的诊断口。截图存 --out(缺省 `work/four-stage/cloud-agent/ux/`)。
@@ -56,11 +56,12 @@
  *   E5  发起成员中途被移出:她的对话被停下;她的页面当场被阻断并写明「你已被移出名单」(她已不在项目里,对话记录她读不到了),
  *       云端的对话记录里留着「已被移出」的原因;项目停在完好的版本上。
  *   每一种都断言:项目结构完好(三张卡都在)、版本号只多了成功写入的次数、之后 1.5 秒没有新的写入。
- * 附:已知缺陷的复现(步骤 spaced,**缺省不跑**;与时序有关,不是每次都红:2026-10-06 这台机器上 12 次写入那一次红了、6 次写入那一次没红)
- *   K1  写入之间隔得比补渲的防抖(3 秒)长时(真模型的每次往返都是几秒),Agent 服务每写一次就发一个指着当时版本的清单计划;项目接着往前走,
- *       渲染节点取不到旧版本的项目快照(文档服务只给得出当前版本),那些细任务失败,并经队列的同键合并连累最后一版的计划:
- *       对话记录里最后是「云端渲染失败:…没有项目快照」(没连累到时只是渲染节点白做、白失败一批旧版本的任务)。
- *       这一步断言「最后是渲染完成、对话记录里没有渲染失败」,并报渲染节点失败了多少个任务,用来在修好之后确认。
+ * 七、写入之间隔得比补渲的防抖长(步骤 spaced;真模型的每次往返都是几秒,就是这种节奏。契约 `cloud-agent-contract.md` 第 16.4 节)
+ *   K1  创建者的在线页面开着,云端 Agent 连写 12 处、每次隔 9 秒(补渲的防抖是 3 秒):每次写入之后 Agent 服务都按当时的版本发清单计划
+ *       (中途就开始渲,不等一轮结束),项目接着往前走。补渲的结局是「渲染完成」,对话记录里没有「云端渲染失败」。
+ *   K2  渲染节点这一轮没有一个任务以失败收场:取不到旧版本时改按当前版本核对,内容没变的照做,已被新版本取代的记成作废
+ *       (诊断里的 `superseded`,不计入 `failed`)。2026-10-06 修之前这一步渲染节点要失败 22～24 个任务(全是「文档服务上没有项目快照」)。
+ *   K3  渲完之后才上线的成员(bob,新的浏览器进程):项目是最后一版,舞台上两张重卡贴的是最后一版的预渲染结果。
  * 最后一行是汇总 `{ summary }`,有失败退出码 1,起不来退出码 2。不打印口令、票据、私钥。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -79,9 +80,7 @@ import {
 
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
-const ALL_STEPS = ['desktop', 'online', 'stop', 'errors'];
-/** 已知缺陷的复现步骤:缺省不跑(修好之前是红的) */
-const OPT_STEPS = ['spaced'];
+const ALL_STEPS = ['desktop', 'online', 'stop', 'errors', 'spaced'];
 const STEPS = String(arg('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 const BASE = Number(arg('--base-port', 5790));
 const PORTS = { site: BASE, stageA: BASE + 1, stageB: BASE + 2, desktop: BASE + 3, doc: Number(arg('--doc-port', 8798)), asset: Number(arg('--asset-port', 8799)), agent: Number(arg('--agent-port', 5741)), render: Number(arg('--render-port', 5830)) };
@@ -115,6 +114,8 @@ const LEAVE_WAIT_MS = 14_000;
 const LEAVE_TOOLS = 2 + LEAVE_READS + N;
 /** 文档服务保留断掉的会话多久(`server/docservice/session.mjs` 的 `RETAIN_MS`) */
 const RETAIN_MS = 60_000;
+/** 步骤 spaced 里两次写入之间等多久(要大于补渲的防抖 3 秒) */
+const SPACED_GAP_MS = 9000;
 const CLIPS = { bars: 'clip-bars', stateful: 'clip-stateful', canvas: 'clip-canvas' };
 const HEAVY = [CLIPS.stateful, CLIPS.canvas];
 const pw = () => `pw-${randomBytes(6).toString('hex')}`;
@@ -742,30 +743,71 @@ async function errorsStep() {
   }
 }
 
-/** 已知缺陷的复现:写入之间隔得比补渲的防抖长(见文件头 K1)。创建者的在线页面一直开着,只看补渲最后的结果 */
+/**
+ * 写入之间隔得比补渲的防抖长(见文件头 K1～K3)。创建者的在线页面在这一轮里一直开着(它自己也按每一版发清单计划,与 Agent 服务的
+ * 计划同时在队列里);渲完之后另一位成员才上线看。
+ */
 async function spacedStep() {
   const c = await onlineUp(CRED.creator, { asCreator: true });
   await selectCloud(c.page);
   const salt = `${SALT}-k`;
-  await sendText(c.page, mockSteps([...Array.from({ length: N }, (_, k) => [{ sleepMs: 9000 }, writeStep(k + 1, salt, true)]).flat(), { say: '隔着写完了' }]));
+  const nodeBefore = await renderNode();
+  const logsBefore = S.render?.logs.length ?? 0;
+  await sendText(c.page, mockSteps([...Array.from({ length: N }, (_, k) => [{ sleepMs: SPACED_GAP_MS }, writeStep(k + 1, salt, true)]).flat(), { say: '隔着写完了' }]));
   await until('K1:这一轮开始', async () => (await view(c.page))?.streaming, 15_000, 50);
   const conv = await conversationOf(c.page);
-  const nodeBefore = await renderNode();
   const fin = await cloudFinishes(conv, { runMs: 240_000, renderMs: 400_000 });
-  // 最后一版的计划发出之后可能还有迟到的结果:再等一小会儿取最终的
-  await sleep(8000);
-  const states = (S.diskConversation(PID, conv)?.events ?? []).filter((e) => e.type === 'render').map((e) => ({ state: e.state, ...(e.reason ? { reason: String(e.reason).slice(0, 80) } : {}) }));
+  // 一轮结束时补发的那一个计划渲完才算数:等「最后一条补渲事件是结局、并且它之后 8 秒没有新的补渲事件」
+  const renderEvents = () => (S.diskConversation(PID, conv)?.events ?? []).filter((e) => e.type === 'render');
+  let quietSince = Date.now();
+  let lastCount = -1;
+  await until('K1:补渲收尾(最后一条是结局,之后 8 秒没有新的补渲事件)', () => {
+    const ev = renderEvents();
+    if (ev.length !== lastCount) { lastCount = ev.length; quietSince = Date.now(); }
+    return ['done', 'failed', 'unavailable'].includes(ev.at(-1)?.state) && Date.now() - quietSince >= 8000 ? true : null;
+  }, 400_000, 500);
+  const states = renderEvents().map((e) => ({ state: e.state, ...(e.reason ? { reason: String(e.reason).slice(0, 80) } : {}) }));
   const node = await renderNode();
-  check('K1(已知缺陷的复现)写入之间隔 9 秒:补渲最后是「渲染完成」,没有因为取不到旧版本的项目快照而失败', fin.toolOk === N && states.at(-1)?.state === 'done' && !states.some((s) => s.state === 'failed'), {
-    writesLanded: fin.toolOk, published: states.filter((s) => s.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((s) => s.state === 'failed'), renderNodeTasksFailedDuringThis: (node?.failed ?? 0) - (nodeBefore?.failed ?? 0), renderNodeTasksCompletedDuringThis: (node?.completed ?? 0) - (nodeBefore?.completed ?? 0),
+  const delta = (k) => (node?.[k] ?? 0) - (nodeBefore?.[k] ?? 0);
+  // 渲染节点逐任务的收尾行:失败与作废各是什么原因(作废 = 这份内容已被新版本取代,不计入失败)
+  const reasons = {};
+  for (const l of (S.render?.logs ?? []).slice(logsBefore)) {
+    const m = l?.event === 'worker.line' ? /node\.task-(failed|superseded) (\{.*\})/.exec(String(l.line ?? '')) : null;
+    if (!m) continue;
+    try { const j = JSON.parse(m[2]); const k = `${m[1]}|${String(j.id).split(':')[0]}|${String(j.error ?? j.why ?? '').replace(/[0-9a-f]{8,}|sp_[A-Za-z0-9_-]+|clip-[a-z]+|@\d+/g, '~').slice(0, 60)}`; reasons[k] = (reasons[k] ?? 0) + 1; } catch { /* 这一行被截断了 */ }
+  }
+  check(`K1 写入之间隔 ${SPACED_GAP_MS / 1000} 秒(大于补渲的防抖 3 秒)、连写 ${N} 次:中途就按当时的版本发计划(不等一轮结束),补渲的结局是「渲染完成」,对话记录里没有渲染失败`, fin.toolOk === N && states.filter((x) => x.state === 'published').length >= 3 && states.at(-1)?.state === 'done' && !states.some((x) => x.state === 'failed' || x.state === 'unavailable'), {
+    writesLanded: fin.toolOk, published: states.filter((x) => x.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((x) => x.state === 'failed'), states: states.map((x) => x.state).join(','),
+  });
+  check('K2 渲染节点这一轮没有一个任务以失败收场;被新版本取代的旧任务记成作废(不计入失败)', delta('failed') === 0 && delta('completed') + delta('dedup') > 0 && !Object.keys(reasons).some((k) => k.startsWith('failed|')), {
+    renderNode: { failed: delta('failed'), superseded: delta('superseded'), completed: delta('completed'), dedup: delta('dedup'), lost: delta('lost'), discarded: delta('discarded') }, reasons,
   });
   await shot(c.page, 'K1-spaced-writes');
   await closeBrowser(c.browser);
+
+  /* ---- K3:渲完之后才上线的成员 */
+  const bob = await onlineUp(CRED.bob);
+  const want = { title: `${salt} 第 10 次:改文案`, rows: rowsOf(salt, 12), statefulEnd: 2.5, canvasEnd: 2 };
+  const got = await until('K3:bob 的页面读到最后一版项目', async () => { const p = await pageProject(bob.page); return p && p.rows === want.rows ? p : null; }, 30_000, 200);
+  const play = await playbackSnapshots(bob.page, 'K3-bob-stage-prerendered');
+  const marks = await localPcMarks(bob.page);
+  const layers = await onlineLayers(bob.page);
+  const heavyLayers = (layers?.layers ?? []).filter((l) => HEAVY.includes(l.clipId));
+  check('K3 之后才上线的成员:项目是最后一版,舞台上两张重卡贴的是最后一版的预渲染结果(层表里这几层没有一层是旧输入的),没有占位、没有「需要本地 PC 渲染辅助」', !!got && got.title === want.title && got.statefulEnd === want.statefulEnd && got.canvasEnd === want.canvasEnd
+    && !!play.hit && marks.badge === 0 && marks.icons === 0 && HEAVY.every((id) => heavyLayers.some((l) => l.clipId === id && l.ready > 0)) && !(layers?.stale ?? []).some((id) => HEAVY.includes(id))
+    && !!play.stats && play.stats.colors >= 3, {
+    project: got, stage: play.hit ? Object.fromEntries(HEAVY.map((id) => [id, { snapshot: play.hit[id].snapshot, placeholder: play.hit[id].placeholder }])) : null, statesSeenWhilePlaying: play.seen,
+    // 这几层是谁渲的不限:创建者的页面那一轮开着,它自己也是纯浏览器节点,先认领的得卡(渲染服务的指纹见 renderServiceFingerprint)
+    renderServiceFingerprint: S.renderFingerprint ?? null, layers: heavyLayers, staleLayers: layers?.stale ?? null, localPcBadges: marks.badge, localPcIcons: marks.icons, pixels: play.stats, shot: play.shot,
+  });
+  const errors = [...(bob.page.pageErrors ?? [])];
+  check('K 这一步的页面没有页面错误', errors.length === 0, { sample: errors.slice(0, 3) });
+  await closeBrowser(bob.browser);
 }
 
 let code = 0;
 try {
-  for (const s of STEPS) if (!ALL_STEPS.includes(s) && !OPT_STEPS.includes(s)) throw new Error(`不认识的步骤 ${s}`);
+  for (const s of STEPS) if (!ALL_STEPS.includes(s)) throw new Error(`不认识的步骤 ${s}`);
   await setup();
   if (STEPS.includes('desktop')) await leavePass('desktop', 'D', `${SALT}-d`);
   if (STEPS.includes('online')) await leavePass('online', 'O', `${SALT}-o`);

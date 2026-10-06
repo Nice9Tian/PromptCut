@@ -269,7 +269,7 @@ const queueLog = (event: string, fields: object = {}) => {
  * (task-runner 的 `info`)。编辑器进程的转发器(`session-diag.mjs` 的 `createSessionLineForwarder`)放行这几种行,
  * 独立渲染主机的日志(`scripts/render-host.mjs`)与 PC 编辑器的日志都看得到。只带诊断字段,不带会话号、票据、口令。
  */
-const TASK_LOG_TYPES = new Set(["lost", "failed", "discarded", "completed", "dedup"]);
+const TASK_LOG_TYPES = new Set(["lost", "failed", "superseded", "discarded", "completed", "dedup"]);
 function taskEventLog(event: any, extra: object = {}) {
   const type = event?.type;
   if (!TASK_LOG_TYPES.has(type)) return;

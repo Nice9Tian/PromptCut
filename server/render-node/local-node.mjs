@@ -366,7 +366,11 @@ export function createLocalNode({
     // plan 带的 cardLocks / takeover 随展开原样传给切分(契约 F.2)。
     // M7 D1:认领回包带的浏览器指纹(文档服务上本项目在线、同一用户的纯浏览器节点)交给切分
     const browserFingerprints = Array.isArray(ctx.browserFingerprints) ? ctx.browserFingerprints : [];
-    const base = { ...plan, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, ...listPlanOverrides(task) };
+    // 执行器按别的版本切的(项目往前走了,契约 J.15):细任务的 `source.projectRev` 写实际那一版;`derivedFrom` 仍是这个 plan
+    const cutBy = Number.isSafeInteger(plan?.actualRev) && plan.actualRev !== task?.source?.projectRev
+      ? { ...task, source: { ...task.source, projectRev: plan.actualRev } }
+      : task;
+    const base = { ...plan, planTask: cutBy, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, ...listPlanOverrides(task) };
     const outcome = await publishDerived(run, base, plan?.cardLocks);
     if (!holding(run)) return discard();
     const { derived, published, relocked, gaveUp } = outcome;
