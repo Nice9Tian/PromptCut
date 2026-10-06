@@ -11,7 +11,7 @@
  *                这一项的开关是编译期常量（`TopBar.tsx` 的 `ONLINE_BUILD`），Node 里渲染不出在线态，所以就对产物核。
  *   C10-CATALOG-01/02 在线构建的 `catalog/` 与 `server/catalog/<kind>/index.json` 登记的 Lottie、粒子条目一一对应、逐字节相同；桌面构建不带。
  *   C10A-API-05 云端 Agent 服务（`docs/plan/cloud-agent-contract.md` 10.3 节）：在线产物里以 `/agent/` 开头的地址字面量只有 `/agent/v1` 一种，且确实有（AI 栏打它）；
- *   C10A-API-07 在线产物里没有桌面专用的标识：`/api/mcp/events`、`/api/ai/setup`、`/api/chats/`、`PROMPTCUT_AGENT`（03 已覆盖路径类，这一条补非路径的）；
+ *   C10A-API-07 在线产物里没有桌面专用的标识：`/api/mcp/events`、`/api/ai/setup`、`/api/chats/`、`PROMPTCUT_AGENT`、`/api/ai/diagnostics`（03 已覆盖路径类，这一条补非路径的与点名的），且带云端对话的诊断报告；
  *   C10A-API-08 桌面产物里也带云端 AI 栏（桌面版项目放云端时多一项「云端」）：有 `/agent/v1` 以外的地址来自文档服务下发，产物里没有写死的云节点地址。
  * 运行期（真浏览器里的网络记录）见 `scripts/probes/c10a-online-probe.mjs`；守卫本身见 `src/online/c10a-api-guard.test.mjs`。
  *
@@ -204,7 +204,9 @@ it('C10A-API-05 在线产物里以 /agent/ 开头的地址字面量只有 /agent
 it('C10A-API-07 在线产物里没有桌面专用的标识', { timeout: 240_000 }, async () => {
   await buildOnline();
   const text = bundleText(onlineDir);
-  for (const id of ['/api/mcp/events', '/api/ai/setup', '/api/chats/', 'PROMPTCUT_AGENT']) assert.equal(text.includes(id), false, `在线产物里不该有 ${id}`);
+  for (const id of ['/api/mcp/events', '/api/ai/setup', '/api/chats/', 'PROMPTCUT_AGENT', '/api/ai/diagnostics']) assert.equal(text.includes(id), false, `在线产物里不该有 ${id}`);
+  // 云端对话的诊断报告在页面里生成、浏览器下载(用户 2026-10-07 定):诊断报告的窗口在在线产物里,走本机编辑器写盘的那条路被剪掉
+  assert.ok(text.includes('云端对话诊断报告'), '在线产物里带云端对话的诊断报告');
 });
 
 it('C10A-API-08 桌面产物里没有写死的云节点地址：云端 Agent 的地址由文档服务下发', { timeout: 240_000 }, async () => {

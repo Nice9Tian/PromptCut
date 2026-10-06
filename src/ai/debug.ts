@@ -145,3 +145,18 @@ export async function copyDebugReport(text: string): Promise<void> {
   try { if (!document.execCommand('copy')) throw new Error('自动复制失败,请手动选中文本复制'); }
   finally { field.remove(); }
 }
+
+/**
+ * 在浏览器里把报告存成文件(下载一份)。在线页面没有编辑器进程可以替它写盘(也不许请求 `/api/*`),云端对话的诊断报告走这条;
+ * 返回一句给用户看的回执。
+ */
+export function downloadReportFile(text: string, label: string): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
+  const name = `${label.replace(/[\/:*?"<>|\s]+/g, '_') || '诊断报告'}-${stamp}.json`;
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.style.display = 'none';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return `已下载:${name}`;
+}

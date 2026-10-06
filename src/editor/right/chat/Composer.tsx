@@ -16,6 +16,9 @@ import {
 } from "./composerHeight";
 import "./chat.css";
 
+/** 云端下「一键配特效」置灰的悬停说明 */
+export const CLOUD_NO_WORKFLOW = "云端 Agent 暂不支持一键配特效:它要多个角色依次跑,云端第一版只开普通对话。请改用本机接入方式";
+
 /** 「✦」菜单里的几样:不常点、但一点就改变这一轮怎么跑的东西,原来挤在顶栏上 */
 export interface ComposerMenuProps {
   /** 「一键配特效」依次跑的角色,只用来写悬停说明 */
@@ -25,7 +28,7 @@ export interface ComposerMenuProps {
   canDiagnose: boolean;
   onOpenDiagnostics: () => void;
   onNewChat: () => void;
-  /** 「云端」接入方式:一键配特效与诊断报告是本机 Agent 的,云端下不出现(契约 9.5) */
+  /** 「云端」接入方式:一键配特效在云端下置灰(悬停写原因);诊断报告照常可用,内容换成这段云端对话的(〔用户 2026-10-07 定〕) */
   cloudMode?: boolean;
 }
 
@@ -111,14 +114,13 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
         <span aria-hidden="true">✦</span>
       </button>
       <div className="ai-pop ai-menu" role="menu" aria-label="更多操作" data-pop style={{ display: pop.open ? undefined : "none" }}>
-        {!cloudMode && (<>
         <button
           type="button"
           role="menuitem"
           className="ai-menu-item"
           data-pc="ai-auto-workflow"
-          title={`依次跑：${workflowRoles.map((r) => r.name).join(" → ")}`}
-          disabled={streaming}
+          title={cloudMode ? CLOUD_NO_WORKFLOW : `依次跑：${workflowRoles.map((r) => r.name).join(" → ")}`}
+          disabled={streaming || cloudMode}
           onClick={pick(onRunWorkflow)}
         >
           <span className="ai-menu-icon" aria-hidden="true" />
@@ -129,7 +131,7 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
           role="menuitem"
           className="ai-menu-item"
           data-pc="ai-diagnostics"
-          title="把这段对话和每一步执行事件收成 JSON(不含密钥),在子窗口里复制 / 存文件 / 提交"
+          title={cloudMode ? "把这段云端对话的过程、出错原因和客户端信息收成 JSON(不含任何凭证),在子窗口里复制 / 存文件 / 提交" : "把这段对话和每一步执行事件收成 JSON(不含密钥),在子窗口里复制 / 存文件 / 提交"}
           disabled={!canDiagnose}
           onClick={pick(onOpenDiagnostics)}
         >
@@ -137,7 +139,6 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
           诊断报告
         </button>
         <div className="ai-menu-sep" role="separator" />
-        </>)}
         <button type="button" role="menuitem" className="ai-menu-item" data-pc="ai-new-chat" onClick={pick(onNewChat)}>
           <span className="ai-menu-icon" aria-hidden="true">＋</span>
           新对话

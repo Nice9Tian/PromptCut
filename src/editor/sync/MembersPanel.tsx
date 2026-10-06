@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, setHostedService, useSync, type MemberRow } from "./syncManager";
 import { ListEditor } from "./SharedDialogs";
 import { rememberPasswords } from "./collab";
-import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, serviceRowLabel, splitMembers, type HostedServiceName } from "./hostedServices";
+import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, isCloudAgentOnly, memberCountLabel, serviceRowLabel, splitMembers, type HostedServiceName } from "./hostedServices";
 import "./sync.css";
 
 export type Flow =
@@ -77,7 +77,7 @@ export function MembersButton() {
           <circle cx="11" cy="4.6" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.2" />
           <path d="M11.5 8.8c2 .2 3.5 1.8 3.5 4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
         </svg>
-        <span>成员: {Math.max(1, people.length)} 人</span>
+        <span data-pc="members-count">{memberCountLabel(people)}</span>
       </button>
       {open &&
         createPortal(
@@ -105,6 +105,7 @@ export function MembersButton() {
                       {me ? " (自己)" : ""}
                     </span>
                     {row.creator ? <span className="pc-sync-tag pc-sync-tag--creator">[创建者]</span> : null}
+                    {isCloudAgentOnly(row) ? <span className="pc-sync-tag" data-pc="members-offline-agent" title="这位成员不在线，他的云端 Agent 还在跑；不计入成员人数，计入 Agent 个数">[离线，Agent 在跑]</span> : null}
                     {row.tags.editing ? <span className="pc-sync-tag pc-sync-tag--editing">[编辑中]</span> : null}
                     {row.tags.rendering ? <span className="pc-sync-tag pc-sync-tag--rendering">[渲染中]</span> : null}
                     {local.length > 0 ? <span className="pc-sync-tag">[Agent ×{local.length}]</span> : null}

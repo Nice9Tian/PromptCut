@@ -31,7 +31,7 @@ export interface HostedServiceText {
   label: string;
   /** 勾选行下面的一行说明 */
   hint: (enabled: boolean) => string;
-  /** 别的成员收到「创建者改了开关」时的提示 */
+  /** 别的成员收到「创建者改了开关」时的提示；空串表示这个方向不提示（云端 Agent 只在关闭时提示，〔用户 2026-10-07 定〕） */
   changed: (enabled: boolean) => string;
   /** 创建者确认弹窗里的一句话(`enabled` 是要改成的状态) */
   confirm: (enabled: boolean) => string;
@@ -48,7 +48,8 @@ export const HOSTED_SERVICE_TEXT: Partial<Record<HostedServiceName, HostedServic
   agent: {
     label: "云端 Agent",
     hint: (enabled) => (enabled ? "成员可以在 AI 栏里选「云端」，让云节点上的 Agent 代自己改项目，关掉软件也会继续。创建者可以关掉。" : "已关闭：成员不能再用云端 Agent，进行中的云端对话已被停下；已经落地的改动保留。"),
-    changed: (enabled) => (enabled ? "创建者打开了云端 Agent。" : "创建者关闭了云端 Agent，进行中的云端对话已被停下。"),
+    // 只有关闭时给别的成员一条气泡，打开时不提示（空串就不弹）〔用户 2026-10-07 定〕
+    changed: (enabled) => (enabled ? "" : "创建者关闭了云端 Agent，进行中的云端对话已被停下。"),
     confirm: (enabled) => (enabled ? "打开后，成员可以在 AI 栏里选「云端」，让云节点上的 Agent 代自己改项目。" : "关闭后，成员不能再用云端 Agent，进行中的云端对话会被立刻停下；已经落地的改动保留。"),
   },
 };
@@ -120,4 +121,47 @@ export function splitMembers<T extends Pick<MemberRow, "service">>(rows: readonl
   const services: T[] = [];
   for (const r of rows) (isServiceRow(r) ? services : people).push(r);
   return { people, services };
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * 成员列表的计数口径〔用户 2026-10-07 定〕：「成员：N 人 · Agent：M 个」
+ *
+ * - 人数只算真人在线的：这一行有任何一条不是「云端 Agent」的连接（页面、本机 Agent、渲染进程都说明他的设备在线）才算；
+ * - 成员本人不在线、只有他的云端 Agent 连着：这一行照常显示并标「离线，Agent 在跑」，不计入人数、计入 Agent 数；
+ * - Agent 数 = 本机 Agent（每个对话一条连接）加云端 Agent（每位成员最多一个，实例里有多条连接也只算一个）；
+ * - 托管方的服务行（渲染节点）不进任何一个数（`splitMembers` 已把它们分开）。
+ * ------------------------------------------------------------------------------------------- */
+
+type CountRow = Pick<MemberRow, "conns">;
+
+/** 这一行的成员此刻是不是真人在线 */
+export function isPersonOnline(row: CountRow): boolean {
+  return row.conns.some((c) => c.service !== "agent");
+}
+
+/** 这位成员本人不在线、只有他的云端 Agent 连着 */
+export function isCloudAgentOnly(row: CountRow): boolean {
+  return row.conns.length > 0 && !isPersonOnline(row) && cloudAgentConns(row.conns).length > 0;
+}
+
+/** 本机 Agent 的数量(这一行里 `role: 'agent'` 且不是云端 Agent 的连接) */
+export function localAgentCount(row: CountRow): number {
+  return row.conns.filter((c) => c.role === "agent" && c.service !== "agent").length;
+}
+
+/** 顶栏成员数与 Agent 数。`people` 是 `splitMembers` 分出来的成员行 */
+export function memberCounts(people: readonly CountRow[]): { people: number; agents: number } {
+  let online = 0;
+  let agents = 0;
+  for (const r of people) {
+    if (isPersonOnline(r)) online++;
+    agents += localAgentCount(r) + (cloudAgentConns(r.conns).length > 0 ? 1 : 0);
+  }
+  return { people: online, agents };
+}
+
+/** 顶栏按钮上的字。自己总是在线的，所以人数至少 1 */
+export function memberCountLabel(people: readonly CountRow[]): string {
+  const c = memberCounts(people);
+  return `成员：${Math.max(1, c.people)} 人 · Agent：${c.agents} 个`;
 }

@@ -21,6 +21,11 @@ import { Composer } from "./chat/Composer";
 import { CloudModelBar, CLOUD_NO_ATTACH } from "./CloudModelBar";
 import { AgentEventLog } from "../sync/AgentEventLog";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
+import { ReportDialog } from "./ReportDialog";
+import { cloudConversationReport } from "../../ai/cloud/report";
+import { CODE_VERSION } from "../../online/buildInfo";
+
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 /** 从桌面版的 AI 栏嵌进来时,本机一侧要给的几样(在线页面不给) */
 export interface CloudDesktopSide {
@@ -184,6 +189,34 @@ export function CloudAiPanel(props: {
     toggleRun: (k: string) => handlersRef.current.toggleRun(k),
   }), []);
 
+  /* ---------- 诊断报告(〔用户 2026-10-07 定〕云端下照常能用) ----------
+   * 在页面里由这段云端对话的事件重建出的消息、会话状态与客户端信息生成,不请求任何 `/api/*`,不含票据、委托与模型 Key。
+   * 在线页面「保存为文件」是浏览器下载,桌面版沿用本机写盘;提交走与本机相同的收报告地址(没配就置灰并说明)。 */
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagReport, setDiagReport] = useState("");
+  const openDiagnostics = () => {
+    if (chat.messages.length === 0) return;
+    setDiagReport(cloudConversationReport({
+      messages: chat.messages,
+      conversationId: chat.conversationId,
+      projectId: cloud.projectId,
+      serviceUrl: cloud.url,
+      view,
+      info: chat.info,
+      model: chat.model,
+      notice: chat.notice,
+      client: {
+        mode: ONLINE_BUILD ? "online" : "desktop",
+        userAgent: typeof navigator === "undefined" ? undefined : navigator.userAgent,
+        language: typeof navigator === "undefined" ? undefined : navigator.language,
+        platform: typeof navigator === "undefined" ? undefined : (navigator as { platform?: string }).platform,
+        viewport: typeof window === "undefined" ? null : { width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio },
+        codeVersion: CODE_VERSION,
+      },
+    }));
+    setDiagOpen(true);
+  };
+
   /* ---------- 历史列表 ---------- */
   const openHistory = () => { setHistoryOpen(true); void chat.history.refresh(); };
   const historyItems = useMemo(() => {
@@ -260,8 +293,8 @@ export function CloudAiPanel(props: {
         menu={{
           workflowRoles: [],
           onRunWorkflow: () => {},
-          canDiagnose: false,
-          onOpenDiagnostics: () => {},
+          canDiagnose: chat.messages.length > 0,
+          onOpenDiagnostics: openDiagnostics,
           onNewChat: () => chat.newChat(),
         }}
         cloud={{
@@ -274,6 +307,14 @@ export function CloudAiPanel(props: {
         }}
       />
 
+      <ReportDialog
+        open={diagOpen}
+        title="云端对话诊断报告"
+        label="云端对话诊断"
+        hint="含这段云端对话的过程、出错原因和客户端信息;不含票据、委托、模型 Key 或任何凭证"
+        text={diagReport}
+        onClose={() => setDiagOpen(false)}
+      />
       <ChatHistoryDrawer
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}

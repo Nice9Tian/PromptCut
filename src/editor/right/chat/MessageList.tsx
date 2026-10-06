@@ -15,6 +15,9 @@ import "./chat.css";
  * 合并气泡的上限:一个组最多并这么多轮 / 前几轮合计这么多次操作,够了下一条回复就另起一组。
  * 模型或驱动一直不交本轮小结时(有些 runner、API 模型会漏),不然整段历史会并成一个不收口的组,流式时整组重算
  */
+/** 空对话里唯一的示例句(本机与云端都用它;云端用它也要能只靠内置卡做出一支短片,见 `scripts/probes/cloud-agent-first-video-probe.mjs`) */
+export const EMPTY_EXAMPLE = "为我快速创建一个视频告诉我软件都可以做什么。";
+
 const MAX_GROUP_ROUNDS = 10;
 const MAX_GROUP_TOOLS = 120;
 
@@ -606,14 +609,9 @@ export function MessageList(props: MessageListProps) {
     >
       {messages.length === 0 ? (
         <div className="ai-empty-state">
-          <button type="button" className="ai-empty-example" onClick={() => onPickExample("时间轴上现在有什么?")}>
-            时间轴上现在有什么?
-          </button>
-          <button type="button" className="ai-empty-example" onClick={() => onPickExample("把 3 到 8 秒做一张金句卡，文字是...")}>
-            把 3 到 8 秒做一张金句卡，文字是...
-          </button>
-          <button type="button" className="ai-empty-example" onClick={() => onPickExample("根据我刚导入的视频做字幕")}>
-            根据我刚导入的视频做字幕
+          {/* 空对话只留这一条示例句,本机与云端相同〔用户 2026-10-07 定〕 */}
+          <button type="button" className="ai-empty-example" data-pc="ai-empty-example" onClick={() => onPickExample(EMPTY_EXAMPLE)}>
+            {EMPTY_EXAMPLE}
           </button>
         </div>
       ) : (
