@@ -9,7 +9,7 @@ interface Params extends TypingScheduleOptions {
   duration: number;
 }
 
-function TypingAnimationCard({ params, t, sourceOffset = 0 }: CardProps<Params>) {
+function TypingAnimationCard({ params, t, sourceOffset = 0, mountClockMs }: CardProps<Params>) {
   const schedule = useMemo(() => createTypingSchedule(typingScheduleOptionsFromParams({ ...params })),
     [params.text, params.duration, params.delayMs, params.punctuationPauseMs, params.newlinePauseMs, params.jitterMs, params.seed, params.pauses, params.punctuationSound, params.whitespaceSound]);
   return (
@@ -20,6 +20,7 @@ function TypingAnimationCard({ params, t, sourceOffset = 0 }: CardProps<Params>)
         schedule={schedule}
         t={t}
         sourceOffset={sourceOffset}
+        mountClockMs={mountClockMs}
         className="font-bold"
         style={{ fontSize: 80, lineHeight: "1.2", color: "var(--pc-fg, #f3f4f6)", textShadow: "var(--pc-text-shadow, 0 4px 24px rgba(0,0,0,0.75))" }}
       />

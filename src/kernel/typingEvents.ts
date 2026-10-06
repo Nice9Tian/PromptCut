@@ -105,13 +105,26 @@ export function createTypingSchedule(options: TypingScheduleOptions): TypingSche
  * 事件边界的浮点容差(毫秒)。舞台给的 t 是「帧时刻相减再乘 1000」,整帧边界会差出 1e-13 量级
  * (如 69/30 - 51/30 = 0.5999999999999999,换成毫秒是 599.9999999999999),不加容差,边界那一帧会少一个字,
  * 与旧实现(整数毫秒时钟)逐帧对不上。1e-6 ms(1 纳秒)远小于任何真实的事件间隔与音频采样间隔。
+ *
+ * 容差只补「按秒相减再换毫秒」这一种算法。经过毫秒本来就是两个毫秒钟点相减时(旧实现的算法:
+ * 当前帧毫秒 − 挂载那一帧的毫秒,见 `typingMountClockMs`;以及没有舞台 t 的独立预览),旧实现自己就带着那点浮点误差
+ * (30 fps 下 197/30*1000 − 179/30*1000 = 599.9999999999991,旧实现那一帧就是少一个字),
+ * 要逐帧一致就得照样不补:这两处给 `boundaryEpsilonMs` 传 0。
  */
 export const TYPING_BOUNDARY_EPSILON_MS = 1e-6;
 
+/**
+ * 「挂载钟」的经过毫秒:当前舞台时刻与卡片挂载时刻(都是秒)各自换成毫秒再相减。
+ * 算式与旧打字卡逐位相同(它读的是被钉成 `秒 * 1000` 的页面时钟),所以不要改写成 `(now - mounted) * 1000`。
+ */
+export function typingMountClockMs(nowSec: number, mountedSec: number): number {
+  return nowSec * 1000 - mountedSec * 1000;
+}
+
 /** Inclusive event boundary; binary search supports arbitrary seek without replaying state. */
-export function typingTextAt(schedule: TypingSchedule, elapsedMs: number): string {
+export function typingTextAt(schedule: TypingSchedule, elapsedMs: number, boundaryEpsilonMs: number = TYPING_BOUNDARY_EPSILON_MS): string {
   if (Number.isNaN(elapsedMs)) return "";
-  const limit = elapsedMs + TYPING_BOUNDARY_EPSILON_MS;
+  const limit = elapsedMs + boundaryEpsilonMs;
   let lo = 0, hi = schedule.events.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;

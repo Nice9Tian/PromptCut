@@ -22,6 +22,8 @@ interface TypingAnimationProps {
   /** Stage-local seconds plus the persisted source offset support seek/split without restarting. */
   t?: number;
   sourceOffset?: number;
+  /** 挂载钟(见 CardProps.mountClockMs):有它就按它取字,算法与旧的「挂载即播」逐位相同,不加边界容差。 */
+  mountClockMs?: number;
   className?: string;
   style?: React.CSSProperties;
 }
@@ -32,6 +34,7 @@ export function TypingAnimation({
   schedule: suppliedSchedule,
   t,
   sourceOffset = 0,
+  mountClockMs,
   className,
   style,
 }: TypingAnimationProps) {
@@ -44,13 +47,15 @@ export function TypingAnimation({
     const startTime = performance.now();
     const tick = (now: number) => {
       const elapsed = now - startTime + sourceOffset * 1000;
-      setDisplayedText(typingTextAt(schedule, elapsed));
+      // 两个毫秒钟点相减,和旧实现同一个算式:不加边界容差(见 TYPING_BOUNDARY_EPSILON_MS)
+      setDisplayedText(typingTextAt(schedule, elapsed, 0));
       if (elapsed < schedule.settleMs) rAF = requestAnimationFrame(tick);
     };
     rAF = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rAF);
   }, [schedule, sourceOffset, t]);
-  const visibleText = t === undefined ? displayedText : typingTextAt(schedule, (t + sourceOffset) * 1000);
+  const visibleText = mountClockMs !== undefined ? typingTextAt(schedule, mountClockMs + sourceOffset * 1000, 0)
+    : t === undefined ? displayedText : typingTextAt(schedule, (t + sourceOffset) * 1000);
 
   return (
     <h1
