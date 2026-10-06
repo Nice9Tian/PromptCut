@@ -15,7 +15,7 @@ import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleL
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
-import { getCard, onSyncedUserCardsChanged, syncedUserCards } from "../kernel/registry";
+import { getCard, onSyncedUserCardsChanged, setCardRunStates, syncedUserCards } from "../kernel/registry";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
@@ -39,6 +39,9 @@ import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscri
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
 import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
 import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
+import { editorRunStates } from "./sync/cardRunStates";
+import { cardExecAvailable, cardExecBlockedDetail, subscribeCardExecGate } from "../online/cardRuntime/gate";
+import type { BundleResult } from "../online/cardRuntime/protocol";
 import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
 import { setCoverageSource, subscribeCoverage } from "./onlineCoverage";
 import { localOnlyMissingAt } from "./localOnlyMissing";
@@ -1027,7 +1030,25 @@ export function Preview() {
       // 用户卡源码从内置模块引进来的控件、默认值:用页面自己带着的那份(`src/cards/builtinSourceExports.ts`)
       builtins: builtinSourceExports, sourceFiles: builtinCardSourceFiles,
       onFirstSettled: (ok, link) => releaseMeasureGate(ok, link),
+      /*
+       * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 1、8 节):本页能执行时(`cardRuntime/gate.ts`,
+       * 由舞台的隔离自检立起来)把源码转译成包。转译器按需载入,不能执行的页面不取它。编辑页面只转译、不执行。
+       */
+      bundling: {
+        enabled: cardExecAvailable,
+        run: (job) => import("../online/cardRuntime/transpile.browser").then((m) => m.bundleCards(job)),
+        onBundles: (results) => { bundles = results; refreshRunStates(); },
+      },
     });
+    let bundles: BundleResult[] = [];
+    // 每张同步卡在本页的运行状态(参数面板、徽标、轻重判定读 `registry.cardRunState`)。舞台报来的那一半在与安全隔离那一块合流后接上。
+    const refreshRunStates = () => {
+      setCardRunStates(editorRunStates({
+        cards: syncedUserCards().values(), lowMemory: lowMemoryMode(ONLINE), available: cardExecAvailable(), blockedDetail: cardExecBlockedDetail(), bundles,
+      }));
+    };
+    const offGate = subscribeCardExecGate(() => { refreshRunStates(); void sources.sync(); });
+    const offStates = onSyncedUserCardsChanged(refreshRunStates);
     const push = () => {
       const entries = [...syncedUserCards().values()];
       for (const id of STAGE_IDS) {
@@ -1041,7 +1062,7 @@ export function Preview() {
     const w = window as unknown as Record<string, unknown>;
     w.__pcCardSources = () => sources.debug();
     w.__pcCardSourcesSync = () => sources.sync();
-    return () => { window.clearInterval(timer); offChange(); sources.stop(); delete w.__pcCardSources; delete w.__pcCardSourcesSync; };
+    return () => { window.clearInterval(timer); offChange(); offGate(); offStates(); sources.stop(); setCardRunStates([]); delete w.__pcCardSources; delete w.__pcCardSourcesSync; };
   }, [online]);
   /*
    * 预览缩放倍数变了,发给两个舞台(占位符据此补偿:沙漏在屏幕上保持原大小,「需要本地 PC 渲染辅助」图标看得清)。
