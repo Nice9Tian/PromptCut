@@ -4,7 +4,7 @@ import { previewMode } from "./previewMode";
 import { setPlanProject } from "./planDispatch";
 import { onProbeProgress, probeProgress, requeueProbeRun, syncProbeRun, type ProbeProgress } from "./probeRunner";
 import { whenStageReady } from "./stageBridge";
-import { cardsStamp, onCardsUpdated } from "../kernel/registry";
+import { cardsStamp, onCardRunStatesChanged, onCardsUpdated } from "../kernel/registry";
 import { whenStagesHaveCards } from "./stageCards";
 import { ONLINE } from "../online/mode";
 import { lowMemoryMode } from "../online/lowMemory";
@@ -67,6 +67,19 @@ export function ProbeGate() {
       void whenStagesHaveCards(cardsStamp())
         .then(() => whenStageReady("back"))
         .then(() => { if (active) requeueProbeRun(getState().project); });
+    });
+    return () => { active = false; off(); };
+  }, [enabled]);
+
+  /*
+   * 同步来的卡的运行状态变了(在线页面;`docs/plan/online-card-exec-contract.md` 第 6 节):刚载入成功的卡这时才有成本身份,
+   * 项目没变,所以和卡片代码换了一样显式重排一轮,没有记录的即时补测;换代(源码版本变了)同理。桌面没有运行状态,不触发。
+   */
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    const off = onCardRunStatesChanged(() => {
+      void whenStageReady("back").then(() => { if (active) requeueProbeRun(getState().project); });
     });
     return () => { active = false; off(); };
   }, [enabled]);

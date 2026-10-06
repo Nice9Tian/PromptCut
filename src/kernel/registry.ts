@@ -74,7 +74,7 @@ export function resetCards() {
 }
 
 export function getCard(id: string): CardDef<any> | undefined {
-  return map.get(id);
+  return map.get(id) ?? runtimeCards.get(id);
 }
 
 export function allCards(): CardDef<any>[] {
@@ -278,4 +278,181 @@ export function unknownCardClipIds(clips: Iterable<{ id: string; cardId?: string
   const out = new Set<string>();
   for (const c of clips) if (c && typeof c.cardId === "string" && c.cardId && !isKnownCardId(c.cardId)) out.add(c.id);
   return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * 运行时载入的卡(在线浏览器执行同步来的用户卡与图卡,`docs/plan/online-card-exec-contract.md` 第 2、8 节)
+ * ------------------------------------------------------------------ */
+
+/**
+ * 一张同步来的卡在本页的运行状态(契约第 8 节的十种)。只有 `ready` 是「本页能运行」;其余都退回原做法
+ * (按重卡、贴预渲染结果、缺了出「需要本地 PC 渲染辅助」),参数面板按状态说明原因。
+ */
+export type CardRunStateName =
+  | "ready" | "loading" | "unsupported-syntax" | "missing-module" | "load-error"
+  | "gpu" | "media" | "runtime-error" | "not-isolated" | "low-memory";
+
+export interface CardRunState {
+  state: CardRunStateName;
+  /** 给参数面板看的细节:哪种写法、哪个模块、错误的第一行;没有就不写 */
+  detail?: string;
+  /** 出问题的文件(内容库的键) */
+  file?: string;
+  /** 这一代源码的短签名(运行时版本加闭包里每个文件的哈希);能运行的卡拿它当成本身份里的源码版本 */
+  version?: string;
+}
+
+export const CARD_RUN_STATES: readonly CardRunStateName[] = Object.freeze([
+  "ready", "loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated", "low-memory",
+]);
+
+/**
+ * 运行时载入的卡片定义。**只在执行它们的环境里有**(跨源舞台、舞台起的声音线程);编辑页面永远是空的。
+ * `getCard` 在构建时的注册表里找不到时才看这里(与构建时的卡撞 id 的不生效);`allCards()` 不含它们。
+ */
+const runtimeCards = new Map<string, CardDef<any>>();
+let runtimeGen = 0;
+const runtimeListeners = new Set<() => void>();
+
+const stamp = (d: CardDef<any>): CardDef<any> => {
+  const capabilities = cardCapabilities(d);
+  return { ...d, need_prerendering: capabilities.need_prerendering, compositing: capabilities.compositing, canvasHeavy: capabilities.canvasHeavy,
+    ...(!Object.hasOwn(d, "need_prerendering") ? { _derivedPrerendering: true } : {}) } as CardDef<any>;
+};
+
+/**
+ * 整份换掉运行时载入的卡(加载器每次换代后调)。和 `registerCards` 一样按审阅表盖能力;审阅表里没有的按缺省。
+ * 同一 id 多条取第一条。表有变回 true,`cardsRegistryGen()` 与 `runtimeCardsGen()` 各加一并通知订阅方。
+ */
+export function setRuntimeCards(defs: Iterable<CardDef<any>>): boolean {
+  const next = new Map<string, CardDef<any>>();
+  for (const d of defs ?? []) if (d && typeof d.id === "string" && d.id && !next.has(d.id)) next.set(d.id, d);
+  const same = next.size === runtimeCards.size && [...next].every(([id, d]) => runtimeSource.get(id) === d);
+  if (same) return false;
+  runtimeCards.clear();
+  runtimeSource.clear();
+  for (const [id, d] of next) { runtimeSource.set(id, d); runtimeCards.set(id, stamp(d)); }
+  registryGen++;
+  runtimeGen++;
+  for (const l of [...runtimeListeners]) {
+    try { l(); } catch (err) { console.warn("[registry] 运行时卡片的订阅方出错", err); }
+  }
+  return true;
+}
+/** 盖能力之前的原定义(判「没变」用:同一个对象就是同一代) */
+const runtimeSource = new Map<string, CardDef<any>>();
+
+/** 这张卡是不是运行时载入的、且此刻生效(没被构建时的卡盖住) */
+export function isRuntimeCard(id: string | undefined | null): boolean {
+  return typeof id === "string" && !!id && !map.has(id) && runtimeCards.has(id);
+}
+
+export function runtimeCardsGen(): number {
+  return runtimeGen;
+}
+
+export function onRuntimeCardsChanged(cb: () => void): () => void {
+  runtimeListeners.add(cb);
+  return () => { runtimeListeners.delete(cb); };
+}
+
+let runStates = new Map<string, CardRunState>();
+let runStatesGen = 0;
+const runStateListeners = new Set<() => void>();
+
+const validRunState = (v: unknown): v is CardRunState => isRecord(v) && typeof v.state === "string" && (CARD_RUN_STATES as readonly string[]).includes(v.state);
+
+/**
+ * 整份换掉同步卡的运行状态(卡片 id → 状态)。舞台把载入结果报给编辑页面,编辑页面再合上它自己知道的
+ * (转译失败、本页没有隔离环境、低内存档),写进这里;参数面板、时间轴徽标、轻重判定都读它。
+ * 形状不对的条目丢掉(舞台报来的东西当不可信输入)。内容没变回 false、不通知。
+ */
+export function setCardRunStates(states: Iterable<readonly [string, CardRunState]> | Record<string, CardRunState>): boolean {
+  const next = new Map<string, CardRunState>();
+  const entries = states && typeof (states as Iterable<unknown>)[Symbol.iterator] === "function"
+    ? [...(states as Iterable<readonly [string, CardRunState]>)] : Object.entries((states ?? {}) as Record<string, CardRunState>);
+  for (const [id, v] of entries) {
+    if (typeof id !== "string" || !id || !validRunState(v)) continue;
+    next.set(id, Object.freeze({
+      state: v.state,
+      ...(typeof v.detail === "string" && v.detail ? { detail: v.detail.slice(0, 300) } : {}),
+      ...(typeof v.file === "string" && v.file ? { file: v.file.slice(0, 200) } : {}),
+      ...(typeof v.version === "string" && v.version ? { version: v.version.slice(0, 64) } : {}),
+    }));
+  }
+  const same = next.size === runStates.size && [...next].every(([id, v]) => {
+    const cur = runStates.get(id);
+    return !!cur && cur.state === v.state && cur.detail === v.detail && cur.file === v.file && cur.version === v.version;
+  });
+  if (same) return false;
+  runStates = next;
+  runStatesGen++;
+  for (const l of [...runStateListeners]) {
+    try { l(); } catch (err) { console.warn("[registry] 卡片运行状态的订阅方出错", err); }
+  }
+  return true;
+}
+
+/** 此刻有没有还在转译或载入的同步卡(`loading`;测量的开工门等它们有了结果,`src/editor/measureGate.ts`) */
+export function anyCardLoading(): boolean {
+  for (const v of runStates.values()) if (v.state === "loading") return true;
+  return false;
+}
+
+/** 这张同步卡在本页的运行状态;没有记录回 undefined(调用方按「运行不了」处理) */
+export function cardRunState(id: string | undefined | null): CardRunState | undefined {
+  return typeof id === "string" && id ? runStates.get(id) : undefined;
+}
+
+/**
+ * 这张卡在本页能不能运行:构建时就有定义的恒为 true(含构建时就在包里的仓库用户卡);同步来的,
+ * 在执行它的环境里(舞台、声音线程)看有没有载入成功,在编辑页面看运行状态是不是 `ready`。
+ */
+export function cardRunnableHere(id: string | undefined | null): boolean {
+  if (typeof id !== "string" || !id) return false;
+  if (localExec.blocked.has(id)) return false;
+  if (map.has(id) || runtimeCards.has(id)) return true;
+  return runStates.get(id)?.state === "ready";
+}
+
+/**
+ * 执行卡片的那份文档(跨源舞台)自己的两条结论(`docs/plan/online-card-exec-contract.md` 4.3、第 8 节):
+ *   - `graph`:这份文档能不能跑图卡(画面那一半允许执行,而且图形能力够);缺省不能;
+ *   - `blocked`:运行时载入、但在这份文档里出了事的卡(图卡的输入解不了、运行中抛错):撤下、退回原做法。
+ * 只有舞台写它;编辑页面不写(那里看舞台报回来的运行状态)。变了 `cardsRegistryGen()` 与 `cardRunStatesGen()` 各加一并通知。
+ */
+let localExec: { graph: boolean; blocked: ReadonlySet<string> } = { graph: false, blocked: new Set() };
+export function setLocalCardExec(next: { graph: boolean; blocked?: Iterable<string> }): boolean {
+  const blocked = new Set<string>();
+  for (const id of next.blocked ?? []) if (typeof id === "string" && id) blocked.add(id);
+  const graph = next.graph === true;
+  if (graph === localExec.graph && blocked.size === localExec.blocked.size && [...blocked].every((id) => localExec.blocked.has(id))) return false;
+  localExec = { graph, blocked };
+  registryGen++;
+  runStatesGen++;
+  for (const l of [...runStateListeners]) {
+    try { l(); } catch (err) { console.warn("[registry] 卡片运行状态的订阅方出错", err); }
+  }
+  return true;
+}
+/** 这份文档能不能跑图卡(只在执行卡片的舞台里为真) */
+export function graphCardsRunnableHere(): boolean {
+  return localExec.graph;
+}
+
+export function cardRunStatesGen(): number {
+  return runStatesGen;
+}
+
+export function onCardRunStatesChanged(cb: () => void): () => void {
+  runStateListeners.add(cb);
+  return () => { runStateListeners.delete(cb); };
+}
+
+/** 单测用:清掉运行时的卡与运行状态 */
+export function resetRuntimeCardsForTest(): void {
+  runtimeCards.clear();
+  runtimeSource.clear();
+  runStates = new Map();
+  localExec = { graph: false, blocked: new Set() };
 }

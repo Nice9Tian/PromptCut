@@ -20,7 +20,8 @@ import { cyrb53 } from "../../render/cyrb53.mjs";
  * 内容库的订阅按连接只认最后一次 `watch` 的那一组,与同一条连接上别的订阅方会互相顶掉;会话接续、重连时也不必补订阅。
  * 连接换了(重连、换项目、离开共享项目)清表重取。取不到(没连上、被拒、超时)时手里的表不动,下一轮再试。
  */
-import { cardSourceImports, isUserCardEntryKey, parseCardSource, type ParsedCardSource } from "../../kernel/cardSourceParse.mjs";
+import { cardSourceImports, importSpecifiers, isUserCardEntryKey, parseCardSource, type ParsedCardSource } from "../../kernel/cardSourceParse.mjs";
+import type { BundleResult } from "../../online/cardRuntime/protocol.ts";
 import { setSyncedUserCards, type SyncedUserCard } from "../../kernel/registry";
 
 /** 多久重列一次内容库的卡片源码 */
@@ -34,6 +35,42 @@ export const CARD_SOURCE_MAX_DEPS = 200;
 /** 列表里可以当被引文件取的键:用户卡目录下的 `.ts` / `.tsx` / `.mjs` / `.js`(含子目录) */
 export function isCardSourceModuleKey(key: unknown): key is string {
   return typeof key === "string" && key.startsWith(CARD_SOURCE_PREFIX) && /\.(tsx?|mjs|js)$/.test(key) && !key.split("/").some((p) => p === "" || p === "." || p === "..");
+}
+
+/** 列表里可以当样式取的键:用户卡目录下的 `.css`(卡片 `import "./x.css"` 引的;只在要转译时取) */
+export function isCardSourceStyleKey(key: unknown): key is string {
+  return typeof key === "string" && key.startsWith(CARD_SOURCE_PREFIX) && key.endsWith(".css") && !key.split("/").some((p) => p === "" || p === "." || p === "..");
+}
+
+/** 一份源码相对导入的样式文件的键(`./x.css`、`../y.css`;爬出用户卡目录的不算) */
+export function cardSourceStyleImports(source: string, key: string): string[] {
+  const out = new Set<string>();
+  for (const spec of importSpecifiers(source)) {
+    if (typeof spec !== "string" || !spec.endsWith(".css") || !(spec.startsWith("./") || spec.startsWith("../"))) continue;
+    const parts = key.split("/").slice(0, -1);
+    let ok = true;
+    for (const p of spec.split("/")) {
+      if (p === "" || p === ".") continue;
+      if (p === "..") { if (!parts.length) { ok = false; break; } parts.pop(); continue; }
+      parts.push(p);
+    }
+    const k = parts.join("/");
+    if (ok && isCardSourceStyleKey(k)) out.add(k);
+  }
+  return [...out];
+}
+
+/**
+ * 把同步来的卡转译成舞台能执行的包(`docs/plan/online-card-exec-contract.md` 第 1 节)。由浏览器入口注入
+ * (转译器按需载入,见 `src/online/cardRuntime/transpile.browser.ts`);不给就只做静态解析,与原来相同。
+ */
+export interface CardBundling {
+  /** 本页此刻能不能执行同步来的卡(`src/online/cardRuntime/gate.ts`);不能就不转译,已有的包清掉 */
+  enabled: () => boolean;
+  /** 每个入口一张卡:包,或这张卡的运行状态 */
+  run: (job: { entries: readonly string[]; read: (key: string) => { body: string; hash: string } | null }) => Promise<BundleResult[]>;
+  /** 结果换了(整份;不能执行时是空数组) */
+  onBundles: (results: BundleResult[]) => void;
 }
 
 type Request = (msg: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>;
@@ -58,6 +95,8 @@ export interface OnlineCardSourcesDeps {
   now?: () => number;
   /** 页面自己带着的内置模块的导出(`parseCardSource` 的 `builtins`);缺省不认内置模块 */
   builtins?: (key: string) => Readonly<Record<string, unknown>> | null | undefined;
+  /** 转译成舞台能执行的包;不给就不转译 */
+  bundling?: CardBundling;
 }
 
 type ParsedCard = Pick<ParsedCardSource, "id" | "name"> & Partial<Omit<ParsedCardSource, "id" | "name">> & { audioSourceVersion?: string };
@@ -88,6 +127,13 @@ export function entriesOf(keys: readonly string[], parsed: ReadonlyMap<string, P
   return out;
 }
 
+/** 此刻在跑的那份(同一页只有一份);`nodeCardInfoLive.ts` 经它读同步来的源码算代码身份(块 N) */
+let activeSources: OnlineCardSources | null = null;
+/** 同步来的源码的只读入口:入口文件的键表与「键 → 正文与哈希」;没有在跑的回 null */
+export function activeCardSourceReader(): { entries: () => string[]; read: (key: string) => { body: string; hash: string } | null } | null {
+  return activeSources ? activeSources.reader() : null;
+}
+
 export class OnlineCardSources {
   private readonly deps: OnlineCardSourcesDeps;
   private link: unknown = null;
@@ -99,10 +145,22 @@ export class OnlineCardSources {
   private entries: SyncedUserCard[] = [];
   private stopped = false;
   private settled = false;
-  readonly stats = { lists: 0, gets: 0, errors: 0, lastSyncAt: 0, lastError: "" as string, truncated: false };
+  /** 上一次转译的结果与它对应的输入签名(入口与闭包的哈希);签名没变不重转 */
+  private bundles: BundleResult[] = [];
+  private bundledSig: string | null = null;
+  readonly stats = { lists: 0, gets: 0, errors: 0, lastSyncAt: 0, lastError: "" as string, truncated: false, bundleRuns: 0, bundleErrors: 0 };
 
   constructor(deps: OnlineCardSourcesDeps) {
     this.deps = deps;
+    activeSources = this;
+  }
+
+  /** 只读入口(见 `activeCardSourceReader`) */
+  reader(): { entries: () => string[]; read: (key: string) => { body: string; hash: string } | null } {
+    return {
+      entries: () => this.entries.map((e) => e.source).filter((k): k is string => typeof k === "string" && !!k),
+      read: (key) => this.cache.get(key) ?? null,
+    };
   }
 
   private apply(entries: SyncedUserCard[]): void {
@@ -142,6 +200,7 @@ export class OnlineCardSources {
       this.cache.clear();
       this.parsed = new Map();
       this.apply([]);
+      this.setBundles([], null);
       // 新连接的第一轮重新算「第一次」
       this.settled = false;
     }
@@ -165,9 +224,14 @@ export class OnlineCardSources {
     }
     this.stats.truncated = listing.truncated === true;
     const listed = new Map<string, string>();
+    const styles = new Map<string, string>();
     for (const it of listing.items as { key?: unknown; hash?: unknown }[]) {
       if (isCardSourceModuleKey(it?.key)) listed.set(it.key, typeof it.hash === "string" ? it.hash : "");
+      else if (isCardSourceStyleKey(it?.key)) styles.set(it.key, typeof it.hash === "string" ? it.hash : "");
     }
+    // 样式文件只在要转译时才取(不转译的页面与原来一字不差)
+    const wantStyles = !!this.deps.bundling?.enabled();
+    if (wantStyles) for (const [k, h] of styles) listed.set(k, h);
     const entryKeys = [...listed.keys()].filter((k) => isUserCardEntryKey(k)).sort();
     let dirty = false;
     for (const k of [...this.cache.keys()]) if (!listed.has(k)) { this.cache.delete(k); dirty = true; }
@@ -199,7 +263,9 @@ export class OnlineCardSources {
       }
       const cur = this.cache.get(key);
       if (!cur) continue;
+      if (key.endsWith(".css")) continue;
       for (const dep of cardSourceImports(cur.body, key)) if (listed.has(dep) && !visited.has(dep)) queue.push(dep);
+      if (wantStyles) for (const dep of cardSourceStyleImports(cur.body, key)) if (listed.has(dep) && !visited.has(dep)) queue.push(dep);
     }
     // 不再被引的文件不留
     for (const k of [...this.cache.keys()]) if (!visited.has(k)) { this.cache.delete(k); dirty = true; }
@@ -216,8 +282,40 @@ export class OnlineCardSources {
       this.parsed = next;
     }
     this.apply(entriesOf([...this.parsed.keys()], this.parsed));
+    await this.bundle(entryKeys.filter((k) => this.cache.has(k)), link);
+    if (this.stopped || this.deps.linkKey() !== link) return;
     this.stats.lastSyncAt = (this.deps.now ?? Date.now)();
     this.settle(true, link);
+  }
+
+  private setBundles(results: BundleResult[], sig: string | null): void {
+    const had = this.bundles.length > 0;
+    this.bundles = results;
+    this.bundledSig = sig;
+    if (!had && !results.length) return;
+    try { this.deps.bundling?.onBundles(results); } catch { /* 订阅方坏了不影响同步 */ }
+  }
+
+  /**
+   * 转译这一轮的入口(本页能执行时)。输入没变(入口与已取到的文件的哈希都没变)不重转;
+   * 不能执行了就把已有的包清掉。转译器载入失败、抛错:这一轮不出包,下一轮再试。
+   */
+  private async bundle(entries: string[], link: unknown): Promise<void> {
+    const b = this.deps.bundling;
+    if (!b) return;
+    if (!b.enabled()) { if (this.bundledSig !== null) this.setBundles([], null); return; }
+    const sig = JSON.stringify([entries, [...this.cache].map(([k, v]) => [k, v.hash]).sort()]);
+    if (sig === this.bundledSig) return;
+    if (!entries.length) { this.setBundles([], sig); return; }
+    try {
+      const results = await b.run({ entries, read: (key) => this.cache.get(key) ?? null });
+      if (this.stopped || this.deps.linkKey() !== link) return;
+      this.stats.bundleRuns++;
+      this.setBundles(results, sig);
+    } catch (err) {
+      this.stats.bundleErrors++;
+      this.stats.lastError = String((err as Error)?.message ?? err).slice(0, 160);
+    }
   }
 
   /** 此刻认出的卡(诊断、探针用) */
@@ -228,6 +326,9 @@ export class OnlineCardSources {
       keys: [...this.parsed.keys()].sort(),
       deps: [...this.cache.keys()].filter((k) => !isUserCardEntryKey(k)).sort(),
       cards: this.entries.map((e) => ({ ...e })),
+      bundles: this.bundles.map((r) => (r.ok
+        ? { entry: r.entry, ok: true, generation: r.bundle.generation, modules: r.bundle.modules.map((m) => m.key), styles: r.bundle.styles.map((x) => x.key), tailwindBytes: r.bundle.tailwind.length }
+        : { entry: r.entry, ok: false, state: r.state })),
       ...this.stats,
     };
   }
@@ -235,6 +336,8 @@ export class OnlineCardSources {
   /** 停下并清表(离开在线页面、换档重建时) */
   stop(): void {
     this.stopped = true;
+    if (activeSources === this) activeSources = null;
+    this.setBundles([], null);
     this.cache.clear();
     this.parsed = new Map();
     this.link = null;

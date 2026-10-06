@@ -13,6 +13,8 @@ import { judgedPlan, planLowMemory } from "../editor/planDispatch";
 import { pushToast } from "../editor/sync/syncManager";
 import { MemorySink, type MuxSink } from "./mp4Mux";
 import { runBrowserExport } from "./browserExport";
+import { getCard, isUserCardId } from "../kernel/registry";
+import { setExportWantedClips } from "./exportWanted";
 import { ONLINE_EXPORT_TEXT } from "./text";
 import { prepareExportSounds } from "../editor/io/exportSounds";
 
@@ -60,6 +62,14 @@ function heavyClipsOfPlan(p: Project): string[] {
   return p.tracks.flatMap((tr) => tr.clips).map((c) => c.id).filter((id) => set.has(id));
 }
 
+/**
+ * 同步来的用户卡与图卡的片段(编辑页面没有它们的定义):导出页与编辑页面同源,不执行它们的代码,
+ * 所以导出时一律用预渲染原尺寸,缺的由导出前的核对拦下(`docs/plan/online-card-exec-contract.md` 第 8 节「在线导出」)。
+ */
+function syncedCardClips(p: Project): string[] {
+  return p.tracks.flatMap((tr) => tr.clips).filter((c) => !!c.cardId && isUserCardId(c.cardId) && !getCard(c.cardId)).map((c) => c.id);
+}
+
 /** 低内存档:只有判重的卡用预渲染原尺寸,判轻的卡本机逐帧渲(契约 `c10-contract.md` 第 18 节第 8 条);普通档不限 */
 const heavyOnlyOf = (p: Project) => () => (planLowMemory() ? heavyClipsOfPlan(p) : null);
 
@@ -97,6 +107,8 @@ export async function exportVideoOnline(
   let waitingShown = "";
   // C10 契约第 12 节:导出可能比只读票据的时限还长,途中按时限提前续签(取票复用 assetTicketSource)
   const renewer = remote ? await startRenewer() : null;
+  // 同步来的卡判轻时不在平时发布的清单计划里:导出期间请渲染节点把它们的预渲染原尺寸补上(`exportWanted.ts`)
+  setExportWantedClips(syncedCardClips(p));
   try {
     const result = await runBrowserExport({
       project: p,
@@ -115,6 +127,7 @@ export async function exportVideoOnline(
       originals: originalsDeps(),
       fallbackHeavy: () => heavyClipsOfPlan(p),
       heavyOnly: heavyOnlyOf(p),
+      requiredOriginals: () => syncedCardClips(p),
       // 导出只用素材原尺寸:它的地址换成远程素材服务的取回地址(只读票据走查询串,`<video>` 带不了头)
       mediaUrl: remote ? (url) => remoteMediaUrl(url, { base: remote.base, ticket: renewer?.ticket() ?? remote.ticket }) : undefined,
       freshTicket: renewer ? () => renewer.ticket() : undefined,
@@ -133,6 +146,8 @@ export async function exportVideoOnline(
     const err = e as Error & { cancelled?: boolean };
     pushToast(err.cancelled ? ONLINE_EXPORT_TEXT.cancelled : ONLINE_EXPORT_TEXT.failed(err.message), err.cancelled ? "info" : "warn");
     throw err.cancelled ? Object.assign(new Error(ONLINE_EXPORT_TEXT.cancelled), { cancelled: true }) : err;
+  } finally {
+    setExportWantedClips([]);
   }
 }
 
@@ -174,6 +189,7 @@ export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals
     originals: o.originals ? originalsDeps() : null,
     fallbackHeavy: () => heavyClipsOfPlan(p),
     heavyOnly: heavyOnlyOf(p),
+    requiredOriginals: () => syncedCardClips(p),
     mediaUrl: remote ? (url) => remoteMediaUrl(url, { base: remote.base, ticket: renewer?.ticket() ?? remote.ticket }) : undefined,
     freshTicket: renewer ? () => renewer.ticket() : undefined,
     });

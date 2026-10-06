@@ -183,6 +183,9 @@ function parseTaskInput(v, i) {
       if (!BACKFILL_SIG_RE.test(resultKey.slice(base.length + CLIPS_KEY_MARK.length))) bad(`${at}.resultKey 的清单签名只能是 1～32 位小写字母与数字`);
       if (priorityBand(priority) !== 'normal') bad(`${at}.priority：清单计划是 normal 档，补渲用 #backfill: 的键`);
       input = { ...input, clips: backfillClips(input.clips, `${at}.input.clips`) };
+      // 在线页面自报的用户卡、图卡运行情况(块 N):只留合格的形状,不合格的整项去掉(任务照发,只是切分方不给浏览器出用户卡、图卡的那一份)
+      const browser = browserCardsOf(input.browser);
+      if (browser) input = { ...input, browser }; else delete input.browser;
     } else if (resultKey !== base) {
       bad(`${at}.resultKey 必须等于 source 的 projectId@projectRev`);
     }
@@ -211,6 +214,33 @@ function parsePriority(v, name) {
   return int(v, name);
 }
 
+/**
+ * 清单计划的 `input.browser`(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条):在线页面自报「本页能运行哪些用户卡、图卡」——
+ *   { cardEnvFingerprint, userCards, graphCards, cardSources: { 卡片 id: 代码身份 } }
+ * 页面自报的,不作数的部分由别处把关:纯浏览器节点只认领本人的任务,节点侧过滤(规则 1)还要再核卡片代码身份;
+ * 谎报最坏的结果是切分方多出一份谁也认领不了的备份任务(同锁键的另一份会照旧被认领)。
+ * 这里只规整形状:指纹必须是 16 位小写十六进制,卡片 id、代码身份是有长度上限的字符串,最多 `BROWSER_CARDS_MAX` 张;
+ * 不合格回 null。缺省值与顺序固定(卡片 id 升序),同一份内容一定得到同一个对象与同一个签名。
+ */
+export const BROWSER_CARDS_MAX = 500;
+const HEX16_RE = /^[0-9a-f]{16}$/;
+export function browserCardsOf(v) {
+  if (!isObj(v) || typeof v.cardEnvFingerprint !== 'string' || !HEX16_RE.test(v.cardEnvFingerprint)) return null;
+  const cardSources = {};
+  if (isObj(v.cardSources)) {
+    for (const id of Object.keys(v.cardSources).sort().slice(0, BROWSER_CARDS_MAX)) {
+      const version = v.cardSources[id];
+      if (id === '' || id.length > 256 || typeof version !== 'string' || version === '' || version.length > 128) continue;
+      cardSources[id] = version;
+    }
+  }
+  return { cardEnvFingerprint: v.cardEnvFingerprint, userCards: v.userCards === true, graphCards: v.graphCards === true, cardSources };
+}
+/** `browserCardsOf` 的结果的摘要串(进清单计划的签名):与页面一侧 `planPublisher.ts` 的写法逐字相同 */
+export function browserCardsSig(cards) {
+  return [cards.cardEnvFingerprint, cards.userCards ? 1 : 0, cards.graphCards ? 1 : 0, ...Object.keys(cards.cardSources).sort().map((id) => `${id}=${cards.cardSources[id]}`)].join('|');
+}
+
 /** 补渲计划任务的片段清单：非空、去重、升序的非空字符串数组 */
 function backfillClips(v, name) {
   if (!Array.isArray(v) || v.length === 0 || v.length > BACKFILL_MAX_CLIPS) bad(`${name} 必须是 1～${BACKFILL_MAX_CLIPS} 个片段 id`);
@@ -237,8 +267,8 @@ export function isListPlan(task) {
  * 片段清单的签名（补渲计划任务结果键的后缀）：升序去重后按 FNV-1a（32 位，两轮不同种子拼成 64 位）取 base36。
  * 同一份清单一定得到同一个键，页面与节点各算各的也对得上。纯函数，浏览器可以照抄。
  */
-export function backfillSig(clips) {
-  const text = [...new Set(clips ?? [])].map(String).sort().join('\n');
+export function backfillSig(clips, extra) {
+  const text = [...new Set(clips ?? [])].map(String).sort().join('\n') + (extra ? `\n\u0000${extra}` : '');
   const fnv = (seed) => {
     let h = seed >>> 0;
     for (let i = 0; i < text.length; i++) {
@@ -266,12 +296,14 @@ export function backfillPlanTaskOf({ projectId, projectRev, clips }) {
  * `requires` 里不写 `envFingerprint`、不写 `preferNode`：任何能切分的节点（桌面版、独立渲染主机）都认领得了，
  * 由认领的节点用自己的指纹切分；`codeVersion` 给了才写（版本不同的节点不认领）。
  */
-export function clipsPlanTaskOf({ projectId, projectRev, clips, codeVersion }) {
+export function clipsPlanTaskOf({ projectId, projectRev, clips, codeVersion, browser }) {
   const list = [...new Set(clips ?? [])].map(String).filter(Boolean).sort();
-  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${backfillSig(list)}`;
+  const cards = browserCardsOf(browser);
+  // 带 `input.browser` 时,签名里再加它的摘要:同一份清单,本页能运行的卡变了(转译好一张、换了代)就是另一个计划,切分方重新切
+  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${backfillSig(list, cards ? browserCardsSig(cards) : undefined)}`;
   return {
     id: taskIdOf({ kind: 'plan', resultKey, range: null }), kind: 'plan', resultKey, range: null,
-    source: { projectId, projectRev }, input: { clips: list }, weight: { class: 'medium', estMs: null, frames: null },
+    source: { projectId, projectRev }, input: cards ? { clips: list, browser: cards } : { clips: list }, weight: { class: 'medium', estMs: null, frames: null },
     requires: typeof codeVersion === 'string' && codeVersion ? { codeVersion } : {}, priority: 'normal',
   };
 }
@@ -295,6 +327,8 @@ const PARSERS = new Map([
     nodeId: nonEmpty(m.nodeId, 'nodeId'),
     profile: oneOf(m.profile, PROFILES, 'profile'),
     envFingerprint: optStr(m.envFingerprint, 'envFingerprint'),
+    // 纯浏览器节点执行用户卡、图卡用的环境指纹(块 N):由文档服务按页面报的运行时版本算好再交进来,自报的不作数(`admitNodeHello`)
+    cardEnvFingerprint: optStr(m.cardEnvFingerprint, 'cardEnvFingerprint'),
     capabilities: absent(m.capabilities) ? {} : plainObject(m.capabilities, 'capabilities'),
     codeVersions: absent(m.codeVersions) ? [] : strArray(m.codeVersions, 'codeVersions'),
     maxConcurrent: optInt(m.maxConcurrent, 'maxConcurrent'),

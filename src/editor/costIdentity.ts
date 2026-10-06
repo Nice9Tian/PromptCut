@@ -12,11 +12,11 @@
  */
 import type { Project } from "../kernel/project";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
-import { allCards, cardsRegistryGen, getCard, syncedUserCardsGen, unknownCardClipIds, userCardSources } from "../kernel/registry";
-import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
+import { allCards, cardRunState, cardRunStatesGen, cardsRegistryGen, getCard, syncedCardView, syncedUserCardsGen, unknownCardClipIds, userCardSources } from "../kernel/registry";
+import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles, cardSourceFilesVersion } from "../render/cardSourceFiles.mjs";
-import { clipCostIndex } from "../render/pipelinePlan.mjs";
+import { clipCostIndex, clipCostNodes } from "../render/pipelinePlan.mjs";
 
 export interface ClipIdentity {
   /** clipId → `cardCostKey(node, sourceVersion, fps, durationFrames)` */
@@ -60,7 +60,8 @@ let cached: ClipIdentity = EMPTY;
 let cachedLocalKey = "";
 
 /**
- * 在线浏览器模式下这台设备跑不了的片段(用户卡、图卡;C10 契约第 9 节)不给身份:页面不测它们(`probeRunner` 按身份挑卡)、
+ * 在线浏览器模式下本页运行不了的片段(图卡、运行不了的用户卡;C10 契约第 9 节,`placeholderHost.needsLocalPc`)不给身份 ——
+ * 本页能运行的用户卡(构建时就在包里的、同步来且载入成功的)照内置卡给身份、照测(`online-card-exec-contract.md` 第 6 节):页面不测它们(`probeRunner` 按身份挑卡)、
  * 分派表查不到成本记录也查不到声明的帧模式,一律按重卡(`clipWeight` 的 `declared-heavy`)—— 旧的 L2 里哪怕留着
  * 以前在后台舞台上测过的记录也不认;舞台拿不到它们的身份,停下也就不追;不把它们的记录转写进文档服务。
  * 桌面(模式关着)照旧。
@@ -88,24 +89,55 @@ function dropClips(id: ClipIdentity, local: ReadonlySet<string>): ClipIdentity {
   return { identityKeys, frameModes, capabilities };
 }
 
+/**
+ * 有声动效卡(画面是组件、另写了 `audio()`)片段自己的图卡节点算它的成本身份节点(`pipelinePlan.mjs` 的 `clipCostNodes`):
+ * 它的画面就是一张普通的 DOM 卡,和别的卡一样第一次要用时就测、测完按结果判轻重。2026-10-06 之前它没有身份
+ * (图卡那一支合成的节点不带 `clipId`),从不测量,画面在桌面与在线都永远按重卡。
+ *
+ * 画面由 `card()` 出的图卡、只有 `audio()` 的音频图卡不算,照旧没有身份:测量用的是只留这一个片段的缩水项目
+ * (`probeRunner.ts` 的 `shrinkProject`,不带素材与卡片图节点),图卡的输入在那里取不到;音频图卡没有画面。
+ */
+function ownsVisual(node: { cardId?: unknown }): boolean {
+  const def = typeof node.cardId === "string" ? getCard(node.cardId) : undefined;
+  return !!def && !!def.Component && typeof def.card !== "function";
+}
+
+/**
+ * 摊成图。卡片图里有悬空输入时 `projectCardGraph` 会抛(删片段不清 `cardNodes`):以前这一轮整个项目都没有身份,
+ * 全部卡不测、按声明兜底(没声明 `direct` 的一律按重)。现在退一步只按片段自己的卡再摊一遍(不带卡片图节点、
+ * 不看片段的 `nodeId`):普通卡与有声动效卡的节点内容与完整的图里相同,身份照给、照测;坏掉的图卡链路本来就没有身份。
+ * 这一遍也抛才当作没有身份。
+ */
+function costGraph(project: Project, cardOf: (id: string) => ReturnType<typeof getCard> = getCard): ReturnType<typeof projectCardGraph> {
+  try {
+    return projectCardGraph(project, cardOf);
+  } catch {
+    const bare = { ...project, cardNodes: [], tracks: project.tracks.map((tr) => ({ ...tr, clips: tr.clips.map((c) => (c.nodeId ? { ...c, nodeId: undefined } : c)) })) };
+    return projectCardGraph(bare as Project, cardOf);
+  }
+}
+
 export function clipIdentityOf(project: Project | null): ClipIdentity {
   if (!project) return EMPTY;
   // 注册表与同步表的代数也进键:卡片定义到了(热更新、同步到了),未知卡片变成认得的卡,身份跟着给
-  const localKey = `${onlineBrowserMode() ? "on" : "off"}:${syncedUserCardsGen()}:${cardsRegistryGen()}`;
+  const localKey = `${onlineBrowserMode() ? "on" : "off"}:${syncedUserCardsGen()}:${cardsRegistryGen()}:${cardRunStatesGen()}:${localOnlyLowMemory() ? 1 : 0}`;
   if (project === cachedProject && localKey === cachedLocalKey) return cached;
   let out = EMPTY;
   try {
-    // projectCardGraph 对悬空输入会 throw（删片段不清 cardNodes）——
-    // 一张坏卡不该让探针和分派表整个停摆，那一轮当作「没有身份」，按声明兜底
-    const graph = projectCardGraph(project, getCard);
+    // 一张坏卡不该让探针和分派表整个停摆:图摊不出来时退一步只按片段自己的卡摊(`costGraph`);那也不成才当作「没有身份」
+    /*
+     * 同步来的、本页能运行的用户卡(`docs/plan/online-card-exec-contract.md` 第 5、6 节):编辑页面没有它的定义(只在舞台里执行),
+     * 图里这张卡的节点按静态解析出来的缺省参数合成;源码版本用这一代的短签名(运行状态里带着:运行时版本加闭包的哈希),
+     * 前缀 `user:online:`,与桌面的 `user:<闭包原文>` 不相撞 —— 两边的成本记录各记各的。
+     */
+    const cardOf = (id: string) => getCard(id) ?? (cardRunState(id)?.state === "ready" && syncedCardView(id) ? ({ id, defaults: syncedCardView(id)!.defaults } as unknown as ReturnType<typeof getCard>) : undefined);
+    const graph = costGraph(project, cardOf);
     const versions = sourceVersionsOf();
-    const { identityKeys, frameModes } = clipCostIndex(project, graph, (node) => versions[(node as { cardId?: string }).cardId ?? ""] ?? null);
+    const versionOf = (cardId: string) => versions[cardId] ?? (cardRunState(cardId)?.state === "ready" && cardRunState(cardId)!.version ? `user:online:${cardRunState(cardId)!.version}` : null);
+    const own = { ownNode: ownsVisual };
+    const { identityKeys, frameModes } = clipCostIndex(project, graph, (node) => versionOf((node as { cardId?: string }).cardId ?? ""), own);
     const capabilities = new Map<string, Record<string, unknown>>();
-    for (const node of graph.nodes ?? []) {
-      if (typeof node.clipId === "string" && !capabilities.has(node.clipId)) {
-        capabilities.set(node.clipId, (node.capabilities ?? {}) as Record<string, unknown>);
-      }
-    }
+    for (const [clipId, node] of clipCostNodes(project, graph, own)) capabilities.set(clipId, (node.capabilities ?? {}) as Record<string, unknown>);
     out = { identityKeys, frameModes, capabilities };
     if (onlineBrowserMode()) out = dropLocalOnly(project, out);
     out = dropUnknown(project, out);

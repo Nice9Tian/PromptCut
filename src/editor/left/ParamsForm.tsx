@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
+import { cardRunState, cardRunStatesGen, onCardRunStatesChanged } from "../../kernel/registry";
+import { runStateMessage } from "../sync/cardRunStates";
 import { actions } from "../../store/project";
 import type { Control } from "../../kernel/types";
 import { paramsEmptyText, paramsPartialText, paramsSkippedText, type ParamsCardView } from "./paramsView";
@@ -15,6 +17,18 @@ function isSpeakerVideoControl(ctrl: Control): boolean {
 }
 
 /**
+ * 同步来的用户卡 / 图卡没在这个浏览器里运行时,说明为什么(`docs/plan/online-card-exec-contract.md` 第 8 节的表)。
+ * 能运行、还在载入、不是同步来的卡:什么都不画。
+ */
+function CardRunNote({ cardId }: { cardId: string | undefined }) {
+  useSyncExternalStore(onCardRunStatesChanged, cardRunStatesGen);
+  const state = cardRunState(cardId);
+  const text = runStateMessage(state);
+  if (!text) return null;
+  return <div className="px-3 pt-2 text-left text-[11px] pc-left-muted" data-pc="params-run-state" data-state={state?.state}>{text}</div>;
+}
+
+/**
  * `cardDef`:能跑的定义,或在线页面同步来的用户卡的只读视图(`registry.syncedCardView`;没有组件,改参数照常经文档服务提交)。
  */
 export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: ParamsCardView | undefined }) {
@@ -28,6 +42,7 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
         {paramsSkippedText(cardDef) && (
           <div className="mt-2 text-left text-[11px]" data-pc="params-skipped">{paramsSkippedText(cardDef)}</div>
         )}
+        <CardRunNote cardId={clip.cardId} />
       </div>
     );
   }
@@ -188,6 +203,8 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
           </div>
         );
       })}
+
+      <CardRunNote cardId={clip.cardId} />
 
       {/* 同步来的卡:源码里有控件没认出来,认出的照常画,这里说明其余的在线改不了 */}
       {paramsPartialText(cardDef) && (

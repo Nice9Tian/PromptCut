@@ -27,10 +27,11 @@
  * 断言:
  *   普通档(电脑浏览器,两个跨源舞台):
  *     - 时间轴标签:s1 →「探针同步卡」,x →「未知卡片」;
- *     - 有层的 u、s1:清单与 `snap/` 请求 > 0,舞台贴出快照,没有图标;时间轴没有徽标;
+ *     - 有层的 s1(故意运行不了的同步卡):清单与 `snap/` 请求 > 0,舞台贴出快照,没有图标;时间轴没有徽标;
+ *       u(仓库用户卡,本页能运行;2026-10-06 新语义)测完判轻:在舞台里活渲(没有快照、没有图标)、不在页面发布的清单计划里;
  *     - 没有层的 s2:舞台是「需要本地 PC 渲染辅助」(不是沙漏),时间轴有徽标、悬停文案对;给它写层与清单后几秒内图标换成快照、徽标撤掉;
  *     - x:舞台不画、不挂徽标;
- *     - 页面发布的清单计划(`__pcPlanPublisher().lastClips`)含 u、s1、s2、s3;
+ *     - 页面发布的清单计划(`__pcPlanPublisher().lastClips`)含 s1、s2、s3,稳定之后不含判轻的 u;
  *     - 选中同步卡片段:参数面板出现四种控件、值是 defaults;改 text 后另一成员看得到,页面重发清单计划;
  *     - 图标与沙漏在屏幕上的大小(见上面 4～8 秒那几段);
  *     - 另一成员(乙)页面一打开就每 100 ms 采样一次,直到快照贴上:有层的 u、s1 任何一次采样都没有图标、没有徽标;
@@ -49,12 +50,11 @@ import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
-import http from 'node:http';
-import net from 'node:net';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 
 const argv = process.argv.slice(2);
@@ -62,10 +62,10 @@ const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), 'online-user-cards-shots')));
-const BASE = Number(arg('--base-port', 5744));
+const BASE = Number(arg('--base-port', 5780));
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4 };
-const SITE = `http://127.0.0.1:${PORTS.editor}`;
-const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
+const ORIGINS = proxyOrigins(BASE); // 编辑器页 pc.localhost:<base>,舞台 s1./s2.pc.localhost:<base+1/+2>(同站跨源)
+const SITE = ORIGINS.editor;
 const DOC_DIRECT = `http://127.0.0.1:${PORTS.doc}`;
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -93,6 +93,9 @@ const SYNCED_DEFAULTS = { text: 'synced', size: 48, side: 'left', tint: '#ff8800
 const SYNCED_SOURCE = `/** 探针:内容库同步来的用户卡(本机构建里没有) */
 import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string; size: number; side: string; tint: string }
+// 2026-10-06 新语义:同步来的用户卡在隔离生效的普通档里会被执行。本探针测的是「在线页面运行不了的同步卡」(没有层 → 图标与徽标、有层 → 贴快照、
+// 不测量、进清单计划),所以让这张卡故意运行不了:转译前的预检会拦下 namespace(状态 unsupported-syntax)。同步卡真的运行的断言在 online-card-security-probe 等。
+export namespace ProbeUnsupported { export const marker = 1; }
 const SIDES = [{ value: "left", label: "靠左" }, { value: "right", label: "靠右" }];
 function ProbeSynced({ params }: CardProps<Params>) {
   return <div className="absolute inset-0 flex items-center justify-center" style={{ color: params.tint, fontSize: params.size }}>It's {params.text}</div>;
@@ -116,80 +119,27 @@ export const probeSyncedCard: CardDef<Params> = {
 /* ------------------------------------------------------------------ 服务 */
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'online-user-cards-hosted-'));
 const combo = await startHostedCombo({
-  dataDir, docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1',
-  docPublicUrl: `ws://127.0.0.1:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
+  dataDir, docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1', trustLoopback: false, clusterToken: randomBytes(32).toString('base64url'),
+  docPublicUrl: `ws://pc.localhost:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
 });
 
 /** 代理直接给的预渲染字节:`<ns>/<hash>` → { type, bytes } */
 const fakeAssets = new Map();
 const assetLog = [];
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-const OAC = { 'origin-agent-cluster': '?1' };
-const runtimeConfig = JSON.stringify({ v: 1, stageOrigins: STAGE_ORIGINS });
-const servers = [];
-function makeProxy(port) {
-  const origin = `http://127.0.0.1:${port}`;
-  const forward = (req, res, upstream, strip) => {
-    const target = req.url.slice(strip.length) || '/';
-    const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => {
-      res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC });
-      r.pipe(res);
-    });
-    up.on('error', () => { res.writeHead(502, OAC); res.end('bad gateway'); });
-    req.pipe(up);
-  };
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, origin);
-    if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, PORTS.doc, '/hosted');
+/** 共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:三个源同站跨源、带内容安全策略与出口白名单、`/media-s/`);预渲染字节由钩子直接给 */
+const proxy = await startHostedProxy({
+  dist: DIST, basePort: PORTS.editor, docPort: PORTS.doc, assetPort: PORTS.asset, policy: 'full',
+  intercept: ({ role, req, url }) => {
     const m = /^\/media\/api\/asset\/(snap|px)\/([0-9a-f]{64})$/.exec(url.pathname);
-    if (m) {
-      assetLog.push({ at: Date.now(), ns: m[1], hash: m[2], port });
-      const hit = fakeAssets.get(`${m[1]}/${m[2]}`);
-      if (hit && req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': hit.type, 'Content-Length': hit.bytes.length, 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*', ...OAC });
-        return res.end(hit.bytes);
-      }
+    if (!m) return undefined;
+    assetLog.push({ at: Date.now(), ns: m[1], hash: m[2], role });
+    const hit = fakeAssets.get(`${m[1]}/${m[2]}`);
+    if (hit && req.method === 'GET') {
+      return { status: 200, body: hit.bytes, headers: { 'content-type': hit.type, 'content-length': hit.bytes.length, 'cache-control': 'public, max-age=31536000, immutable', 'access-control-allow-origin': '*' } };
     }
-    if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
-    const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
-    const sendFile = (file, cache) => {
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
-      fs.createReadStream(file).pipe(res);
-    };
-    if (url.pathname === '/editor/runtime-config.json') {
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec });
-      return res.end(runtimeConfig);
-    }
-    const index = path.join(DIST, 'index.html');
-    if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-    if (url.pathname.startsWith('/editor/assets/')) {
-      const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-      if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
-      return sendFile(f, 'public, max-age=31536000, immutable');
-    }
-    if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-    res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC });
-    res.end('not found');
-  });
-  server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, origin);
-    if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
-    const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-    const up = net.connect(PORTS.doc, '127.0.0.1', () => {
-      const lines = [`${req.method} ${target} HTTP/1.1`];
-      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-      up.write(`${lines.join('\r\n')}\r\n\r\n`);
-      if (head?.length) up.write(head);
-      up.pipe(socket);
-      socket.pipe(up);
-    });
-    up.on('error', () => socket.destroy());
-    socket.on('error', () => up.destroy());
-  });
-  servers.push(server);
-  return new Promise((r) => server.listen(port, '127.0.0.1', r));
-}
-await Promise.all([makeProxy(PORTS.editor), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+    return undefined;
+  },
+});
 
 /* ------------------------------------------------------------------ 共享项目 */
 const stamp = Date.now().toString(36);
@@ -210,6 +160,19 @@ async function wsAsCreator(projectId = made.projectId) {
     ws.send(JSON.stringify({ ...msg, reqId }));
   });
   return { ask, close: () => ws.close() };
+}
+
+/**
+ * 在线页面只加入、不新建(`dce4b22b`,2026-10-04:加入用 `initialize: false`,服务端没有项目内容就拒绝,不拿本地这份去盖),
+ * 所以项目要先有内容才进得去。探针替创建者的桌面版写进一份空项目(尺寸、时长同「新建项目」的缺省)。
+ */
+async function seedProject(node, projectId, name) {
+  const opened = await node.ask({ type: 'project.open', projectId });
+  const body = { version: 1, id: `ouc-seed-${projectId.slice(-8)}`, name, width: 1920, height: 1080, fps: 30, duration: 30, themeId: 'midnight', media: [],
+    tracks: [{ id: 't-1', name: '序列 1', clips: [] }, { id: 't-2', name: '序列 2', clips: [] }] };
+  const seeded = await node.ask({ type: 'project.op', projectId, opId: randomBytes(16).toString('base64url'), ops: [{ op: 'set', path: '', value: body }] });
+  check(!/error|reject/i.test(String(opened?.type ?? '') + String(seeded?.type ?? '')), `替创建者写进空项目 ${name}`, { opened: opened?.type, seeded: seeded?.type });
+  return body.id;
 }
 
 /* ------------------------------------------------------------------ 浏览器 */
@@ -316,6 +279,8 @@ async function stageState(page, ids) {
       outS[id] = {
         wrapper: true,
         snapshot: !!snap && snap.childElementCount > 0,
+        // 活组件:包裹层里除了快照平面与占位槽位以外还有带文字的内容(本页能运行的卡直接活渲)
+        live: [...w.children].some((c) => !c.matches('[data-pc-placeholder-slot],[data-pc-snapshot-plane]') && (c.textContent ?? '').trim().length > 0),
         snapText: snap?.textContent?.trim().slice(0, 40) ?? null,
         small: !!snap?.querySelector('img[data-pc-small-snapshot]'),
         placeholderShown: !!slot && !slot.hidden,
@@ -370,6 +335,7 @@ const reqsFor = (L, ns) => assetLog.filter((r) => r.ns === ns && r.hash === (ns 
 try {
   /* ============================================================ 创建者:同步卡的源码进内容库 */
   const node = await wsAsCreator();
+  await seedProject(node, made.projectId, NAME);
   const put = await node.ask({ type: 'content.put', kind: 'card-source', key: SYNCED_KEY, body: SYNCED_SOURCE });
   check(put.type === 'content.stored', '创建者写卡片源码(card-source)', put);
 
@@ -428,13 +394,18 @@ try {
   check(n.timeline?.[ID.s1]?.label === SYNCED_NAME, '标签:同步卡 → 真名', n.timeline?.[ID.s1]);
   check(n.timeline?.[ID.x]?.label === '未知卡片', '标签:未知 id →「未知卡片」', n.timeline?.[ID.x]);
   // 舞台:有层的贴快照、没有图标;没层的同步卡是图标(不是沙漏);未知 id 不画
-  n.stage = await until('舞台:u、s1 贴出快照,s2 是「需要本地 PC 渲染辅助」', async () => {
+  n.stage = await until('舞台:s1 贴出快照,s2 是「需要本地 PC 渲染辅助」', async () => {
     const s = await stageState(A, Object.values(ID));
-    return s && s[ID.u]?.snapshot && s[ID.s1]?.snapshot && s[ID.s2]?.placeholderShown ? s : null;
+    return s && s[ID.s1]?.snapshot && s[ID.s2]?.placeholderShown ? s : null;
   }, 45_000);
-  const st = n.stage ?? {};
+  if (!n.stage) n.stageSeen = await stageState(A, Object.values(ID)); // 等不到时记下舞台此刻的实际状态(排障用,进结果行)
+  const st = n.stage ?? n.stageSeen ?? {};
+  // 新语义(2026-10-06):s1 是故意运行不了的同步卡(有层 → 贴快照);u 是仓库用户卡,本页能运行,测完判轻 → 直接活渲(没有快照、没有图标)
+  n.uLive = await until('舞台:u 测完判轻后直接活渲', async () => { const s2 = await stageState(A, [ID.u]); return s2?.[ID.u]?.live && !s2[ID.u].snapshot && !s2[ID.u].placeholderShown ? s2[ID.u] : null; }, 90_000);
+  st[ID.u] = (await stageState(A, [ID.u]))?.[ID.u] ?? st[ID.u];
+  check(st[ID.s1]?.snapshot && /SNAP/.test(st[ID.s1]?.snapText ?? ''), '舞台:s1 贴出预渲染快照', st[ID.s1]);
+  check(st[ID.u]?.live && !st[ID.u].snapshot, '舞台:u(仓库用户卡,本页能运行)测完判轻,直接活渲(没有预渲染快照)', st[ID.u]);
   for (const k of ['u', 's1']) {
-    check(st[ID[k]]?.snapshot && /SNAP/.test(st[ID[k]]?.snapText ?? ''), `舞台:${k} 贴出预渲染快照`, st[ID[k]]);
     check(!st[ID[k]]?.placeholderShown, `舞台:${k} 没有图标`, st[ID[k]]);
     check(!st[ID[k]]?.fixed, `舞台:${k} 没有常驻槽位`, st[ID[k]]);
   }
@@ -453,9 +424,10 @@ try {
   n.requests = { snapU: reqsFor(L.u, 'snap'), snapS1: reqsFor(L.s1, 'snap'), snapB: reqsFor(L.b, 'snap'), pxAny: assetLog.filter((r) => r.ns === 'px').length };
   n.online = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
   const manifestsOf = (id) => n.online?.layers?.find((l) => l.clipId === id) ?? null;
-  check(n.requests.snapU > 0 && n.requests.snapS1 > 0, '有层的 u、s1:snap/ 请求 > 0', n.requests);
+  // u 是本页能运行的仓库用户卡:测完判轻就活渲,早先有没有取过它的快照取决于先后,不断言;s1 是运行不了的同步卡,一定贴快照
+  check(n.requests.snapS1 > 0, '有层的 s1:snap/ 请求 > 0', n.requests);
   check(n.requests.pxAny === 0, '普通档:预渲染小尺寸请求 0', n.requests);
-  check(manifestsOf(ID.u)?.ready > 0 && manifestsOf(ID.s1)?.ready > 0, '有层的 u、s1:清单取了、就绪帧 > 0', { u: manifestsOf(ID.u), s1: manifestsOf(ID.s1) });
+  check(manifestsOf(ID.s1)?.ready > 0, '有层的 s1:清单取了、就绪帧 > 0', { s1: manifestsOf(ID.s1) });
   // 时间轴徽标:只在 s2、s3(没有层)上
   n.badges = await until('徽标:s2、s3 有,u、s1 没有', async () => {
     const t = await timelineState(A, Object.values(ID));
@@ -468,12 +440,15 @@ try {
   await shot(A, 'normal-1-before-s2-layer');
   n.stageShot1 = await stageShot(A, 'normal-1-stage');
   // 页面发布的清单计划含用户卡与同步卡
-  n.plan = await until('页面发布的清单计划含 u、s1、s2、s3', async () => {
+  n.plan = await until('页面发布的清单计划含 s1、s2、s3', async () => {
     const d = await A.evaluate(() => window.__pcPlanPublisher?.() ?? null);
     const clips = d?.lastClips ?? [];
-    return [ID.u, ID.s1, ID.s2, ID.s3].every((id) => clips.includes(id)) ? d : null;
+    return [ID.s1, ID.s2, ID.s3].every((id) => clips.includes(id)) ? d : null;
   }, 90_000) ?? await A.evaluate(() => window.__pcPlanPublisher?.() ?? null);
-  check([ID.u, ID.s1, ID.s2, ID.s3].every((id) => (n.plan?.lastClips ?? []).includes(id)), '普通档清单计划含用户卡与同步卡片段', { lastClips: n.plan?.lastClips, log: n.plan?.log?.slice(-3) });
+  check([ID.s1, ID.s2, ID.s3].every((id) => (n.plan?.lastClips ?? []).includes(id)), '普通档清单计划含同步卡片段(s1、s2、s3)', { lastClips: n.plan?.lastClips, log: n.plan?.log?.slice(-3) });
+  // 新语义:u 判轻,不进预渲染集合,所以不在清单计划里(测量完成前它按重,计划可能先含它;这里看的是稳定之后)
+  n.planNoU = await until('页面发布的清单计划不含判轻的仓库用户卡 u', async () => { const d = await A.evaluate(() => window.__pcPlanPublisher?.() ?? null); return d && !(d.lastClips ?? []).includes(ID.u) ? d : null; }, 60_000, 1000);
+  check(!!n.planNoU && !(n.planNoU.lastClips ?? []).includes(ID.u), '普通档清单计划不含判轻的仓库用户卡 u(它在浏览器里活渲)', { lastClips: n.planNoU?.lastClips });
   check(!(n.plan?.lastClips ?? []).includes(ID.x), '清单计划不含未知 id(它不画、不判重)', n.plan?.lastClips);
 
   /* ------------------------------------------------ 乙:页面一打开就每 100 ms 采样(刚打开页面不闪图标) */
@@ -488,7 +463,7 @@ try {
       const tl = await timelineState(B, [ID.u, ID.s1, ID.s2, ID.s3]).catch(() => null);
       const map = await B.evaluate(() => window.__pcOnlineSnapshots?.()?.mapVersion ?? null).catch(() => null);
       samples.push({ at, st: st2, tl, map });
-      if (st2?.[ID.u]?.snapshot && st2?.[ID.s1]?.snapshot && st2?.[ID.s2]?.reason === 'unsupported' && st2?.[ID.s2]?.placeholderShown
+      if ((st2?.[ID.u]?.snapshot || st2?.[ID.u]?.live) && st2?.[ID.s1]?.snapshot && st2?.[ID.s2]?.reason === 'unsupported' && st2?.[ID.s2]?.placeholderShown
         && st2?.[ID.s3]?.placeholderShown && st2?.[ID.s3]?.reason === 'unsupported' && tl?.[ID.s2]?.badge && tl?.[ID.s3]?.badge) break;
       await sleep(100);
     }
@@ -516,13 +491,43 @@ try {
   dense.kinds = { u: [...new Set(shownKinds(ID.u))], s1: [...new Set(shownKinds(ID.s1))], s2: [...new Set(shownKinds(ID.s2))], s3: [...new Set(shownKinds(ID.s3))] };
   dense.firstMapAt = samples.find((x) => x.map !== null)?.at ?? null;
   dense.firstS2IconAt = samples.find((x) => x.st?.[ID.s2]?.placeholderShown && x.st[ID.s2].reason === 'unsupported')?.at ?? null;
-  dense.firstSnapAt = samples.find((x) => x.st?.[ID.u]?.snapshot && x.st?.[ID.s1]?.snapshot)?.at ?? null;
+  dense.firstSnapAt = samples.find((x) => (x.st?.[ID.u]?.snapshot || x.st?.[ID.u]?.live) && x.st?.[ID.s1]?.snapshot)?.at ?? null;
   dense.bad = bad.slice(0, 10);
   n.dense = dense;
   // 采到最终状态为止(层表到得快时次数自然少):至少 3 次、最后一次已到最终状态,才算这一段真的采过
-  check(samples.length >= 3 && !!(last?.st?.[ID.u]?.snapshot && last?.st?.[ID.s1]?.snapshot), '乙:页面一打开就密集采样(每 100 ms 一次,采到最终状态为止,至少 3 次)', dense);
+  check(samples.length >= 3 && !!((last?.st?.[ID.u]?.snapshot || last?.st?.[ID.u]?.live) && last?.st?.[ID.s1]?.snapshot), '乙:页面一打开就密集采样(每 100 ms 一次,采到最终状态为止,至少 3 次)', dense);
   check(bad.length === 0, '乙:有层的 u、s1 任何一次采样都没有图标、没有徽标;s2、s3 层表取到之前不出图标、不出徽标', dense);
-  check(last?.st?.[ID.u]?.snapshot && last?.st?.[ID.s1]?.snapshot, '乙:u、s1 最后贴上快照', last?.st);
+  check(last?.st?.[ID.s1]?.snapshot, '乙:s1(运行不了的同步卡)贴上快照', last?.st);
+  /*
+   * 待核实的结论(第二段收尾):同一张仓库用户卡 u,甲看到活渲、乙的采样里先是快照。判断是「乙刚打开页面就采样,没声明 direct 的卡在测量完成前按重、贴已有的层;
+   * 甲是测完判轻之后采的」。这里继续对乙采样,断言:先贴已有的层(快照),测量完成后切到活渲;切换前后画面连续(任何一次采样都没有占位、没有「需要本地 PC 渲染辅助」,
+   * 也没有「既没快照又没活内容」的空窗);切换发生在乙测完 u 之后。
+   */
+  const uSeq = [];
+  {
+    const t0u = Date.now();
+    let measuredAt = null, prev = null;
+    while (Date.now() - t0u < 90_000) {
+      const stU = (await stageState(B, [ID.u]).catch(() => null))?.[ID.u] ?? null;
+      const tlU = (await timelineState(B, [ID.u]).catch(() => null))?.[ID.u] ?? null;
+      const probed = await B.evaluate((id) => window.__pcPreviewDiag?.()?.probeRun?.probed?.some((e) => e.clipId === id) ?? false, ID.u).catch(() => false);
+      if (probed && measuredAt === null) measuredAt = Date.now() - t0u;
+      const kind = !stU?.wrapper ? 'none' : stU.snapshot ? 'snapshot' : stU.live ? 'live' : 'empty';
+      if (kind !== prev) uSeq.push({ at: Date.now() - t0u, kind, placeholder: !!stU?.placeholderShown, reason: stU?.reason ?? null, badge: !!tlU?.badge, measured: probed });
+      prev = kind;
+      if (kind === 'live' && probed) break;
+      await sleep(50);
+    }
+    const kinds = uSeq.map((x) => x.kind);
+    const switchedAt = uSeq.find((x) => x.kind === 'live')?.at ?? null;
+    const sawIcon = uSeq.some((x) => x.placeholder && x.reason === 'unsupported') || uSeq.some((x) => x.badge);
+    const emptyAfterFirst = kinds.slice(kinds.findIndex((k) => k !== 'none')).includes('empty');
+    n.uSeq = { seq: uSeq, measuredAt, switchedAt };
+    check(kinds.includes('live') && switchedAt !== null, '乙:u 最后切到活渲(测量完成后)', n.uSeq);
+    check(kinds.filter((k) => k !== 'none')[0] === 'snapshot' || kinds.filter((k) => k !== 'none')[0] === 'live', '乙:u 先贴已有的层(快照),或测得快时直接活渲;不是空的', n.uSeq);
+    check(!uSeq.some((x) => x.kind === 'snapshot' && x.measured && x.at > (measuredAt ?? 1e9) + 3000), '乙:切到活渲发生在 u 测完之后不久(测完后 3 秒内不再停留在快照)', n.uSeq);
+    check(!sawIcon && !emptyAfterFirst, '乙:切换前后画面连续:u 的片段没出过占位、没出过「需要本地 PC 渲染辅助」图标与徽标,没有「既没有快照又没有活内容」的空窗', n.uSeq);
+  }
   check(last?.st?.[ID.s2]?.reason === 'unsupported' && last?.st?.[ID.s3]?.reason === 'unsupported' && last?.tl?.[ID.s2]?.badge && last?.tl?.[ID.s3]?.badge,
     '乙:s2、s3 确认之后是图标加徽标', { st: last?.st, tl: last?.tl });
   await shot(B, 'normal-3-member-b');
@@ -618,6 +623,7 @@ try {
     const NAME2 = `ouc2-${stamp}`;
     const made2 = await createSharedProject({ base: DOC_DIRECT, name: NAME2, mode: 'free', creator, password: PROJECT_PW });
     const node2 = await wsAsCreator(made2.projectId);
+    await seedProject(node2, made2.projectId, NAME2);
     const SYNCED2_ID = 'probe-synced-card-b';
     const put2 = await node2.ask({ type: 'content.put', kind: 'card-source', key: `src/cards/user/${SYNCED2_ID}.tsx`,
       body: SYNCED_SOURCE.replaceAll(SYNCED_ID, SYNCED2_ID).replace(SYNCED_NAME, '探针同步卡乙') });
@@ -722,7 +728,7 @@ try {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 600)}`);
 } finally {
   await browser.close().catch(() => {});
-  for (const s of servers) { s.closeAllConnections?.(); await new Promise((r) => s.close(() => r())); }
+  await proxy.close().catch(() => {});
   await combo.close?.().catch?.(() => {});
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* 留着也无妨 */ }
 }
@@ -731,9 +737,9 @@ out.fails = fails;
 out.assetRequests = { snap: assetLog.filter((r) => r.ns === 'snap').length, px: assetLog.filter((r) => r.ns === 'px').length };
 say('result', { ok: out.ok, fails: fails.length });
 const sizeOf = (r) => r ? { layout: r.layout, reason: r.reason, screen: r.screen, clipScreen: r.clipScreen, textShown: r.textShown } : null;
-console.log(JSON.stringify({ ok: out.ok, fails, icon: out.normal.icon ?? null,
+console.log(JSON.stringify({ ok: out.ok, fails, uSeq: out.normal.uSeq ?? null, icon: out.normal.icon ?? null,
   sizes: { column_s2: sizeOf(out.normal.icon), icon_s4: sizeOf(out.normal.geom?.s4), icon_s5: sizeOf(out.normal.geom?.s5), row_s6: sizeOf(out.normal.geom?.s6), hourglass_s7: sizeOf(out.normal.geom?.s7Glass) },
-  dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null },
+  stageSeen: out.normal.stageSeen ?? null, dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null },
   switchProject: out.normal.switchProject ? { gate: out.normal.switchProject.gate, gateBefore: out.normal.switchProject.gateBefore, gateLast: out.normal.switchProject.gateLast, probed: out.normal.switchProject.probed } : null,
   unknownX: { a: out.normal.unknownXA ?? null, b: out.normal.unknownXB ?? null }, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, lowmem: { backfill: out.lowmem.backfill, requests: out.lowmem.requests }, assetRequests: out.assetRequests }));
 process.exit(out.ok ? 0 : 1);

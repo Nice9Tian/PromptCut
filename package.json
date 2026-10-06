@@ -25,6 +25,7 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
+    "sucrase": "3.35.1",
     "three": "^0.185.1"
   },
   "devDependencies": {

@@ -7,7 +7,8 @@
  *   node scripts/probes/m7-browser-probe.mjs --role node --coord http://<PC>:5456 [--timing-authoritative]
  *
  * 角色（W7 跨机：PC 当 creator = 用户 A，笔记本当 node = 成员 B；协调口 KV 前缀 `m7ap`，键名见 `m8/kv.mjs`）：
- *   creator  起本机托管组合（进程内，回环不信任、集群令牌现场生成）与仿 nginx 的三源代理（编辑器页 + 两个舞台，都带 OAC）、
+ *   creator  起本机托管组合（进程内，回环不信任、集群令牌现场生成）与共用的本机托管代理 `lib/hosted-proxy.mjs`（编辑器页 + 两个舞台，同站跨源 pc.localhost / s1. / s2.，带策略头与 `/media-s/`；
+ *            跨机 --bind / --public-host 时没有真域名，退回老的三口前缀代理、隔离不生效）、
  *            在线构建（`vite build --mode online`，或 `--dist` 复用）；以 A 建放云端的项目（自由进入）、上传夹具；
  *            起 A 的桌面编辑器当 pc 节点（测试指纹、`PROMPTCUT_TEST_PLAN_ONLY=1`，D15）；
  *            「上帝视角」：进程内 `service.describe()` 轮询 + 一个 pc 档旁观节点（看得见全部任务的正文）；
@@ -24,8 +25,8 @@
  * 计时项（M7-A4 的 30 s、A5 的 500 ms、A12 的长任务）在 PC 上跑只作参考（`timing.authoritative: false`），
  * 以笔记本为准（`guide_files/verification.md`「性能基准机」）：笔记本跑 node 角色时加 `--timing-authoritative`。
  *
- * 端口（本分支分到 5450～5459）：5450 编辑器页的源、5451 / 5452 两个舞台的源、5453～5455 A 的桌面编辑器（及舞台端口）、
- *   5456 协调口；托管组合的文档服务与素材服务用端口 0（只经代理访问）。不碰 5190～5192、5203～5205。
+ * 端口（缺省 5780～5789，`--base-port` 挪整段）：+0 编辑器页的源、+1 / +2 两个舞台的源、+3～+5 A 的桌面编辑器（及舞台端口）、
+ *   +6 协调口；托管组合的文档服务与素材服务用端口 0（只经代理访问）。不碰 5190～5192、5203～5205。
  * 令牌与口令：集群令牌、票据、会话号、口令都不打印、不进结果行；票据只在内存里做「有没有漏进地址 / 日志 / describe」的比对。
  *
  * 其它参数：
@@ -47,6 +48,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { argsOf, sayer, newRunId, lastJsonLine, fingerprintOf } from './m8/lib.mjs';
 import { roleKv, resolveRun } from './m8/kv.mjs';
 import { startCoord, startQueueEditor, viteBin, killTree, until, claimPorts, portFree } from './m8/procs.mjs';
@@ -57,9 +60,11 @@ const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SELF), '..', '..');
 const PROBE = 'm7-browser-probe';
 const PREFIX = 'm7ap';
-/** --base-port N：整段端口挪到 N～N+9（缺省 5450；笔记本用它自己的 5580～5599 段时给 --base-port 5590） */
-const BASE_PORT = (() => { const i = process.argv.indexOf('--base-port'); const v = i >= 0 ? Number(process.argv[i + 1]) : 5450; if (!Number.isInteger(v) || v < 1024 || v > 65526) throw new Error(`--base-port 不对：${process.argv[i + 1]}`); return v; })();
+/** --base-port N：整段端口挪到 N～N+9（缺省 5780；笔记本用它自己的 5580～5599 段时给 --base-port 5590） */
+const BASE_PORT = (() => { const i = process.argv.indexOf('--base-port'); const v = i >= 0 ? Number(process.argv[i + 1]) : 5780; if (!Number.isInteger(v) || v < 1024 || v > 65526) throw new Error(`--base-port 不对：${process.argv[i + 1]}`); return v; })();
 const BAND = [BASE_PORT, BASE_PORT + 9];
+// 探针起的 Node 子进程(桌面编辑器、协调口、node 角色)继承它,也能解析 pc.localhost
+process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 const PORTS = { site: BASE_PORT, stageA: BASE_PORT + 1, stageB: BASE_PORT + 2, editor: BASE_PORT + 3, coord: BASE_PORT + 6 };
 const FPS = 30;
 const SECONDS = 10;
@@ -246,8 +251,11 @@ async function startSite({ out, bind, publicHost }) {
   const dist = await buildOnline(out);
   const logs = [];
   const clusterToken = randomBytes(32).toString('base64url');
-  const site = `http://${publicHost}:${PORTS.site}`;
-  const stageOrigins = [`http://${publicHost}:${PORTS.stageA}`, `http://${publicHost}:${PORTS.stageB}`];
+  // 本机(回环)用共用的 `lib/hosted-proxy.mjs`:同站跨源的 pc.localhost / s1. / s2.,带策略头与 `/media-s/`(隔离生效)。
+  // 跨机(--bind / --public-host 给了局域网地址)没有真域名,做不出同站跨源的舞台子域,仍用下面老的三口前缀代理(隔离不生效,W7 跨机的老摆法)
+  const lan = bind !== '127.0.0.1' || publicHost !== '127.0.0.1';
+  const site = lan ? `http://${publicHost}:${PORTS.site}` : proxyOrigins(PORTS.site).editor;
+  const stageOrigins = lan ? [`http://${publicHost}:${PORTS.stageA}`, `http://${publicHost}:${PORTS.stageB}`] : proxyOrigins(PORTS.site).stages;
   const { startHostedCombo } = await import('../../server/hosted/combo.mjs');
   const dataDir = path.join(out, 'hosted');
   fs.mkdirSync(dataDir, { recursive: true });
@@ -319,10 +327,16 @@ async function startSite({ out, bind, publicHost }) {
     servers.push(server);
     return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, bind, resolve); });
   };
-  await Promise.all([makeProxy(PORTS.site), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+  let hostedProxy = null;
+  if (lan) await Promise.all([makeProxy(PORTS.site), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+  else {
+    // --media-delay-ms：素材服务的每个请求先压这么久再转发(钩子的 delayMs)
+    hostedProxy = await startHostedProxy({ dist, basePort: PORTS.site, docPort: combo.docPort, assetPort: combo.assetPort, policy: 'full',
+      intercept: MEDIA_DELAY_MS > 0 ? ({ url }) => (url.pathname.startsWith('/media/') ? { delayMs: MEDIA_DELAY_MS } : undefined) : undefined });
+  }
   say('site.up', { site, stageOrigins, bind, docPort: combo.docPort, assetPort: combo.assetPort });
   return {
-    site, stageOrigins, dist, combo, logs, urls,
+    site, stageOrigins, dist, combo, logs, urls: hostedProxy ? hostedProxy.urls : urls, hostedProxy,
     /** Node 侧直连文档服务（不经代理） */
     ws: `ws://127.0.0.1:${combo.docPort}`,
     /** 进程内的 describe()，队列部分拍平成一张表（本机空间 + 各共享项目空间） */
@@ -336,6 +350,7 @@ async function startSite({ out, bind, publicHost }) {
     },
     async stop() {
       for (const s of servers) await new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); });
+      await hostedProxy?.close().catch(() => {});
       await combo.close().catch(() => {});
     },
   };
@@ -980,6 +995,9 @@ async function serverChecks(ctx) {
     add('medium', base('medium', 2, {}, { weight: { class: 'medium', estMs: null, frames: 60 } }));
     add('heavy', base('heavy', 2, {}, { weight: { class: 'heavy', estMs: null, frames: 60 } }));
     add('local', base('local', 2, {}, { tier: 'local' }));
+    // 2026-10-06 新语义(契约 11.3):用户卡、图卡的任务本页能运行时纯浏览器节点也认领。认领的条件是任务的 requires.cardSources 里有这张卡的代码身份、
+    // 且节点的 cardEnvFingerprint 对得上。这里的任务 cardSources 为空、指纹是普通指纹,所以仍然认领 0 次(「没有对应代码身份的认领 0 次」那一半,规则 1、7);
+    // 「有代码身份的认领并完成」那一半在 online-card-node-probe.mjs(A-1~A-5)与单测 OCN-09/OCN-11 里验
     add('userCard', base('user', 2, { userCards: true }));
     add('graphCard', base('graph', 1, { graphCards: true }));
     add('modifiedCard', base('mod', 2, { cardSources: { 'probe-slow-stepped': 'user:deadbeef' } }));
@@ -1244,6 +1262,7 @@ async function pageServerSide(ctx) {
   };
   mkF('heavy', {}, { weight: { class: 'heavy', estMs: null, frames: 60 } });
   mkF('local', {}, { tier: 'local' });
+  // 同上:cardSources 为空、指纹不是 cardEnvFingerprint → 页面节点认领 0 次(有代码身份的那一半见 online-card-node-probe.mjs)
   mkF('user', { userCards: true });
   mkF('graph', { graphCards: true });
   mkF('modified', { cardSources: { 'probe-slow-stepped': 'user:deadbeef' } });

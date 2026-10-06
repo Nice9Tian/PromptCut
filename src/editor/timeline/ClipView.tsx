@@ -5,7 +5,7 @@ import { clipHasAudio, clipHasEmbeddedAudio } from "../../kernel/cardAudioRendit
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
-import { getCard, knownCardName, onSyncedUserCardsChanged, syncedCardView, syncedUserCardsGen } from "../../kernel/registry";
+import { cardRunStatesGen, getCard, knownCardName, onCardRunStatesChanged, onSyncedUserCardsChanged, syncedCardView, syncedUserCardsGen } from "../../kernel/registry";
 import { clipSubtitleOf, paramsCardView } from "../left/paramsView";
 import { onlineBrowserMode, unsupportedHere } from "../../render/placeholderHost";
 import { clipCoverage, subscribeCoverage } from "../onlineCoverage";
@@ -35,6 +35,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const paramsView = clip.cardId ? paramsCardView(clip.cardId, { getCard, syncedCardView }) : undefined;
   // 同步来的用户卡(在线页面从内容库卡片源码认出来的)表变了要重绘:标签换成真名
   useSyncExternalStore(onSyncedUserCardsChanged, syncedUserCardsGen);
+  // 同步来的卡的运行状态变了也重绘:载入成功的不再挂「需要本地 PC 渲染辅助」的徽标,运行不了的照挂
+  useSyncExternalStore(onCardRunStatesChanged, cardRunStatesGen);
   // 标签:构建时定义的名字 → 同步表里的名字 →「未知卡片」(C10 契约第 9 节)
   const label = clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
   /*

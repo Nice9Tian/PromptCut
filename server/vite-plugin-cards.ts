@@ -15,6 +15,7 @@ import {
   setCardHasher, setCardIdentifier, emitCardSourceChange,
 } from './card-overrides.mjs';
 import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
+import { cardCodePreimage, localImportsOf, CARD_CODE_ID_HEX } from '../src/render/cardCodeIdentity.mjs';
 
 /* ────────────────────────────────────────────────────────────────────
  * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
@@ -65,20 +66,12 @@ export function findCardFile(root: string, id: string): string | null {
 
 /** 一个文件直接用到的本地文件(相对导入,且落在可改范围内的);样式文件也算 —— 画面一半在 CSS 里 */
 export function localImports(root: string, rel: string): string[] {
-  let src = '';
-  // 改动层里的版本可能多 import 了别的文件:闭包、共用计数、代码哈希都得按实际加载的那一份算
-  try { src = readEffective(root, path.join(root, rel)); } catch { return []; }
-  const out: string[] = [];
-  const re = /(?:import|export)\s+(?:[^'"]*?\sfrom\s+)?["'](\.{1,2}\/[^"']+)["']|import\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g;
-  for (const m of src.matchAll(re)) {
-    const base = path.resolve(path.dirname(path.join(root, rel)), m[1] || m[2]);
-    const hit = [base, `${base}.tsx`, `${base}.ts`, path.join(base, 'index.tsx'), path.join(base, 'index.ts')]
-      .find((c) => effectiveIsFile(root, c));
-    if (!hit) continue;
-    const r = toRel(root, hit);
-    if (isEditablePath(r) && !out.includes(r)) out.push(r);
-  }
-  return out;
+  // 改动层里的版本可能多 import 了别的文件:闭包、共用计数、代码哈希都得按实际加载的那一份算。
+  // 「跟哪些文件」的规则与在线页面共用(`src/render/cardCodeIdentity.mjs`),这里只注入「改动层优先」的读法。
+  return localImportsOf(rel, {
+    read: (r: string) => readEffective(root, path.join(root, r)),
+    isFile: (r: string) => effectiveIsFile(root, path.join(root, r)),
+  });
 }
 
 /** 一张卡的全部本地源码:定义文件 + 它一路用到的卡片 / 部件文件(第一个是定义文件) */
@@ -1119,19 +1112,20 @@ export function cardCodeIdentity(root: string, id: string): { version: string; c
   if (!def) return null;
   const files = importClosure(root, def);
   const sha = crypto.createHash('sha256');
+  // 取摘要之前的文本与在线页面同一份写法(`cardCodePreimage`):两端算出同一个身份
+  sha.update(cardCodePreimage(files, (rel: string) => {
+    try { return sourceHash(readEffective(root, path.join(root, rel))); } catch { return null; }
+  }));
   let custom = false;
   for (const rel of files) {
     const abs = path.join(root, rel);
-    let text: string | null = null;
-    try { text = readEffective(root, abs); } catch { text = null; }
-    sha.update(`${rel}\n${text === null ? 'missing' : sourceHash(text)}\n`);
     if (rel.startsWith('src/cards/user/')) custom = true;
     else {
       const o = overrideFileFor(root, abs);
       if (o && fs.existsSync(o)) custom = true;
     }
   }
-  return { version: sha.digest('hex').slice(0, 32), custom, files };
+  return { version: sha.digest('hex').slice(0, CARD_CODE_ID_HEX), custom, files };
 }
 
 /** 独立渲染主机的一条卡片同步(`createHostCardSync` 的结果) */

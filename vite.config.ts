@@ -29,7 +29,10 @@ import { docservicePlugin } from "./server/vite-plugin-docservice";
 import { rawEolPlugin } from "./server/raw-eol.mjs";
 import { onlineCatalogPlugin } from "./server/online-catalog.mjs";
 import { watchIgnored, DEP_SCAN_ENTRIES } from "./server/vite-scan-ignore.mjs";
+import { stageEntryHtml, STAGE_ENTRY_FILE } from "./server/stage-entry.mjs";
 import path from "node:path";
+import fs from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 /** 项目根:本文件所在目录。监听忽略按相对它的路径判断(`server/vite-scan-ignore.mjs`)。 */
@@ -127,14 +130,58 @@ const desktopConfig: UserConfig = {
  * 不压缩、不优化 CSS(`cssMinify: false` 与 Tailwind 插件的 `optimize: false`,M7 探针 P2 之后主会话裁定):快照把根元素上的 CSS 自定义属性按原文内联,压缩过的 CSS
  * (`0.4` → `.4`、`150ms` → `.15s`)会让在线页面生成的快照与桌面(未压缩)逐字节不同、像素相同 —— 同指纹同结果键下混两种字节。
  */
+const cardRuntimeDeps = () => {
+  const require = createRequire(import.meta.url);
+  const versionOf = (name: string) => {
+    // 包的入口文件往上找到它自己的 package.json(有的包不导出 package.json)
+    let dir = path.dirname(require.resolve(name));
+    for (let i = 0; i < 6; i++) {
+      const file = path.join(dir, "package.json");
+      if (fs.existsSync(file)) { const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name === name) return String(pkg.version); }
+      dir = path.dirname(dir);
+    }
+    throw new Error(`取不到 ${name} 的版本`);
+  };
+  return { sucrase: versionOf("sucrase"), tailwindcss: versionOf("tailwindcss") };
+};
+
+/**
+ * 舞台入口 `stage.html`(契约 `docs/plan/online-card-exec-contract.md` 第 3.3 节):跨源舞台的 iframe 载它,不载 `index.html`。
+ *
+ * 在线**构建**收尾时由构建出来的 `index.html` 复制一份、在 `<head>` 最前面加上舞台的内容安全策略
+ * (`<meta http-equiv="Content-Security-Policy">`),产出为 `dist-online/stage.html`。这样两个入口引的是**同一份脚本包**
+ * (文件名、分块与只有一个入口时逐字节相同),`index.html` 本身一个字不变。
+ * 生成在 `server/stage-entry.mjs`;策略原文取自 `src/online/stagePolicy.mjs`(与 nginx 响应头、本机代理同出一处)。`<meta>` 是兜底:托管端的 nginx 没更新时舞台
+ * 不至于裸奔;真正算数的是响应头那一份(舞台自检只认响应头,`isolation/isolationCheck.ts`)。
+ * 桌面构建没有这个插件、不产出这个文件;开发服务也没有(那里 `/stage.html` 落到 `index.html`,自检不过、不执行用户卡)。
+ */
+const stageEntryPlugin = (): Plugin => ({
+  name: "promptcut-stage-entry",
+  apply: "build",
+  enforce: "post",
+  generateBundle: {
+    order: "post",
+    handler(_options, bundle) {
+      const index = bundle["index.html"];
+      if (!index || index.type !== "asset") throw new Error("在线构建里没有 index.html,没法生成舞台入口 stage.html");
+      const html = typeof index.source === "string" ? index.source : Buffer.from(index.source).toString("utf8");
+      this.emitFile({ type: "asset", fileName: STAGE_ENTRY_FILE, source: stageEntryHtml(html) });
+    },
+  },
+});
+
 const onlineConfig = async (): Promise<UserConfig> => {
   const { frameCode } = await import("./server/frame-code.mjs");
   const codeVersion = frameCode(process.cwd());
   return {
     base: "/editor/",
     // Tailwind 的构建期优化(Lightning CSS)即使不压缩也会改写数值(`0.4` → `.4`),与开发服务器(桌面导出页)的原文不同:一并关掉
-    plugins: [rawEolPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss({ optimize: false }), onlineCatalogPlugin(process.cwd())],
-    define: { "import.meta.env.VITE_PC_ONLINE": JSON.stringify("1"), __PC_CODE_VERSION__: JSON.stringify(codeVersion) },
+    plugins: [rawEolPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss({ optimize: false }), onlineCatalogPlugin(process.cwd()), stageEntryPlugin()],
+    define: {
+      "import.meta.env.VITE_PC_ONLINE": JSON.stringify("1"), __PC_CODE_VERSION__: JSON.stringify(codeVersion),
+      // 在线卡片运行时版本里的转译器与 Tailwind 版本(`src/online/cardRuntime/version.ts`):取实际装的那一版
+      __PC_CARD_RUNTIME_DEPS__: JSON.stringify(cardRuntimeDeps()),
+    },
     build: { outDir: "dist-online", emptyOutDir: true, cssMinify: false },
     // 构建用不上;有人拿 `vite --mode online` 起开发服务时,监听与依赖扫描同桌面那份,不去翻 out/ 与别的 worktree
     optimizeDeps: { entries: DEP_SCAN_ENTRIES },

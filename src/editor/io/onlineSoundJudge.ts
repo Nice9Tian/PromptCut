@@ -2,7 +2,8 @@
  * 在线浏览器模式:一段声音在本页合成、还是用已有产物(`docs/semantics/product/platforms.md`「卡片声音的平台边界」;
  * 做法 `mechanism/rendering.md`「声音的轻重」)。
  *
- *   - 这台设备跑不了它的代码(用户卡、图卡,第二段再放开) → 不合成;
+ *   - 这台设备跑不了它的代码 → 不合成。内置卡在编辑页面里跑;同步来的用户卡与图卡只在隔离的声音线程里跑(`cardAudio.ts` 的
+ *     `cardAudioRoute`):本页没有那条线程、这张卡在线程里载入不成、要读素材的采样、与内置卡串在一起的,都算跑不了,说明里写原因;
  *   - 低内存档 → 不合成(它现有的规则:不活渲、没有成本记录的一律按重;本模块不改它);
  *   - 其余:测一次合成耗时(不出声,`src/audio/soundCost.ts`),判轻才在浏览器里合成,判重用已有产物。
  *
@@ -14,10 +15,9 @@
 import type { Project, TrackClip } from "../../kernel/project";
 import { renderSoundEffectBlock, soundEffectReuseKey, type SoundEffectRecipe } from "../../kernel/soundEffects";
 import { cardAudioIdentity } from "../../kernel/cardAudioRendition.mjs";
-import { cardJson, projectCardGraph } from "../../kernel/cardGraph.mjs";
+import { cardJson } from "../../kernel/cardGraph.mjs";
 import { cyrb53 } from "../../render/cyrb53.mjs";
-import { evaluateCardAudio, type AudioSourceContext } from "../../render/cards/audioSources";
-import { CARD_AUDIO_SAMPLE_RATE, cardAudioNodeOf, onlineCardAudioSynthesizable, requireCardAudioHooks } from "../../audio/cardAudio";
+import { CARD_AUDIO_SAMPLE_RATE, cardAudioBlockRenderer, cardAudioIdentityHooks, cardAudioNodeOf, onlineCardAudioBlocker, onlineCardAudioSynthesizable } from "../../audio/cardAudio";
 import { createMemorySoundCostStore, createSoundJudge, soundCostStoreKey, soundDeviceString, type SoundCostRecord, type SoundCostStore, type SoundJudge, type SoundJudgeTarget, type SoundVerdict } from "../../audio/soundCost";
 import { onlinePage } from "../../online/pageFlag";
 import { ONLINE_CARD_AUDIO_BLOCKED } from "../../online/soundPolicy";
@@ -84,16 +84,17 @@ export function soundTargetOf(project: Project, clip: TrackClip): SoundJudgeTarg
   if (clip.soundEffect) return recipeSoundTarget(clip.soundEffect.recipe);
   const nodeId = cardAudioNodeOf(project, clip);
   if (!nodeId) return null;
-  const hooks = requireCardAudioHooks();
   const frames = Math.max(1, Math.round((clip.end - clip.start) * CARD_AUDIO_SAMPLE_RATE));
-  const identity = cardJson(cardAudioIdentity(project, clip, hooks));
-  let context: AudioSourceContext | null = null;
+  // 身份:同步来的卡用替身的默认参数与内容库里的声音源码版本(`cardAudioIdentityHooks`),与持久产物的身份同一口径
+  const identity = cardJson(cardAudioIdentity(project, clip, cardAudioIdentityHooks()));
+  /*
+   * 怎么合成一块:内置卡在编辑页面里求值;同步来的用户卡与图卡交给隔离的声音宿主(`cardAudio.ts` 的 `cardAudioBlockRenderer`)。
+   * 测量走的也是这一条 —— 只拿采样块、当场丢掉,不建音频上下文,所以两种卡的测量都不出声。
+   */
+  let block: ((start: number, count: number) => Promise<Float32Array>) | null = null;
   return {
     soundKey: `card:${cyrb53(`${identity}\n${frames}`)}`, kind: "card", frames, sampleRate: CARD_AUDIO_SAMPLE_RATE,
-    renderBlock: (start, count) => {
-      context ??= { graph: projectCardGraph(project, hooks.getCard), project, getCard: hooks.getCard, sampleRate: CARD_AUDIO_SAMPLE_RATE };
-      return evaluateCardAudio(context, nodeId, { start, count, sampleRate: CARD_AUDIO_SAMPLE_RATE });
-    },
+    renderBlock: (start, count) => (block ??= cardAudioBlockRenderer(project, nodeId))(start, count),
   };
 }
 
@@ -104,13 +105,19 @@ export function clipSoundRunnable(project: Project, clip: TrackClip): boolean {
   return !!nodeId && onlineCardAudioSynthesizable(project, nodeId);
 }
 
+/** 在线页面里这个片段的声音代码跑不了的原因(给面板与预览的提示);说不出具体原因时回通用的那一句 */
+export function clipSoundBlockedMessage(project: Project, clip: TrackClip): string {
+  const nodeId = cardAudioNodeOf(project, clip);
+  return (nodeId && onlineCardAudioBlocker(project, nodeId)) || ONLINE_CARD_AUDIO_BLOCKED;
+}
+
 /**
  * 这个片段的声音此刻要不要在本页合成。桌面运行环境恒回「合成」;在线页面按文件头的三条判。
  * 判定要测量时在这里等它测完(测量不出声)。
  */
 export async function decideClipSound(project: Project, clip: TrackClip, signal?: AbortSignal): Promise<SoundDecision> {
   if (!env.online()) return { synth: true };
-  if (!clipSoundRunnable(project, clip)) return { synth: false, reason: "not-runnable", message: ONLINE_CARD_AUDIO_BLOCKED };
+  if (!clipSoundRunnable(project, clip)) return { synth: false, reason: "not-runnable", message: clipSoundBlockedMessage(project, clip) };
   if (env.lowMemory()) return { synth: false, reason: "low-memory", message: ONLINE_SOUND_LOW_MEMORY };
   const target = soundTargetOf(project, clip);
   if (!target) return { synth: false, reason: "not-runnable", message: ONLINE_CARD_AUDIO_BLOCKED };

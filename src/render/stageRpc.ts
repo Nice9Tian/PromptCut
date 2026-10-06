@@ -18,7 +18,9 @@ import type { ProjectPatch } from "./changedClips.mjs";
 import type { CardCostRecord } from "./cardCostKey.mjs";
 import type { StreamPlaneRequest } from "./streamPlayer";
 import { lowMemoryMode } from "../online/lowMemory.ts";
+import { sanitizeRpcError, sanitizeRpcResult, sanitizeStageEvent } from "../online/stageMessageGuard.ts";
 import type { LowMemorySettleResult } from "./lowMemorySettle";
+import type { CardRunState } from "../kernel/registry.ts";
 
 export type { StreamPlaneRequest };
 
@@ -329,7 +331,38 @@ export interface StageRpcApi {
   bakeFrame(req: BakeFrameRequest): Promise<BakeFrameReply>;
   /** M7:停掉正在推的那一帧(帧边界停;在飞的 `bakeFrame` 回 `cancelled`),清掉顺推的接续点 */
   bakeCancel(): Promise<{ ok: true }>;
+  /**
+   * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 2、8 节):编辑页面把转译好的包(全量)发给舞台。
+   * 包里只有转译结果(`src/online/cardRuntime/protocol.ts` 的 `CardBundle`),**不带任何凭证或票据**。舞台先记下,
+   * 自己的执行闸门开着才执行(`online/isolation/execGate.ts`;画面还要出口由浏览器拦),闸门晚开就到时再执行;载入结果经
+   * `card-states` 事件报回。`opts.sound`:这一台同时起声音线程(舞台实例 B;线程跟实例走,不跟角色走),结果经 `sound-state` 事件报回。
+   * 桌面运行环境、同源单舞台回 `{ ok: false }`。
+   */
+  loadUserCards(bundles: unknown[], opts?: { sound?: boolean }): Promise<LoadUserCardsReply>;
+  /**
+   * 同步来的用户卡与图卡的声音(契约 3.5):在这一台舞台起的声音线程里求一块采样。请求的形状见
+   * `src/online/cardRuntime/stageSound.ts` 的 `StageSoundRequest`。没有声音线程(没起、闸门关着)就抛错。
+   */
+  synthCardAudio(request: StageSoundRpcRequest): Promise<Float32Array>;
 }
+
+export interface LoadUserCardsReply {
+  ok: boolean;
+  /** `ok` 为假时:`unsupported` = 这份文档不执行(桌面、同源单舞台);`gate` = 闸门还关着(包已记下,闸门开了自动执行) */
+  reason?: "unsupported" | "gate";
+}
+
+export interface StageSoundRpcRequest {
+  projectKey: string;
+  project?: unknown;
+  nodeId: string;
+  start: number;
+  count: number;
+  sampleRate: number;
+}
+
+/** 这一台舞台的图形能力(契约 4.3):`ok` 能跑图卡;其余是不够的原因;`unknown` = 还没判(还没挂过图卡) */
+export type StageGraphCapability = "unknown" | "ok" | "no-webgl2" | "software" | "texture" | "context-lost";
 
 export type StageEvent =
   | { type: "mediaReady"; sec: number }
@@ -354,9 +387,18 @@ export type StageEvent =
    * `htmlGz` 是 gzip 压过的 HTML(压不了时 `htmlRaw` 给原始字节),`small` 是预渲染小尺寸 WebP;字节都随消息转移。
    */
   | { type: "bake-frame"; session: string; clipId: string; localFrame: number; hash: string; bytes: number; htmlGz?: ArrayBuffer; htmlRaw?: ArrayBuffer;
-    small?: { hash: string; bytes: number; webp: ArrayBuffer } | null };
+    small?: { hash: string; bytes: number; webp: ArrayBuffer } | null }
+  /**
+   * 在线执行用户卡与图卡:这一台舞台里每张同步卡的运行状态(整份;卡片 id → 状态,契约第 8 节),连同这一台的图形能力
+   * 与「画面那一半在这一台执行不执行」。两台都发(不分角色);父页当不可信输入收(`online/stageMessageGuard.ts`)。
+   */
+  | { type: "card-states"; states: [string, CardRunState][]; graph: StageGraphCapability; visual: boolean }
+  /** 声音线程的状态(形状同 `src/online/cardRuntime/stageSound.ts` 的 `StageSoundState`);`state: null` = 这一台没有声音线程了 */
+  | { type: "sound-state"; state: { ready: Record<string, string>; blocked: Record<string, string> } | null };
 
-export const STAGE_EVENT_TYPES = new Set<StageEvent["type"]>(["mediaReady", "frame", "ended", "settled", "probe", "demote", "probe-frame", "bake-frame"]);
+export const STAGE_EVENT_TYPES = new Set<StageEvent["type"]>(["mediaReady", "frame", "ended", "settled", "probe", "demote", "probe-frame", "bake-frame", "card-states", "sound-state"]);
+/** 不分角色、两台舞台都会发的事件:父页在各自的 RPC 客户端上直接听,不经 `stageBridge` 的按角色过滤 */
+export const STAGE_ANY_ROLE_EVENTS = new Set<StageEvent["type"]>(["card-states", "sound-state"]);
 
 /**
  * 每种事件**只认哪个角色**发来的(E0 末条:父页按 `event.source` 过滤来源)。
@@ -406,7 +448,7 @@ export interface StageRpcClient extends StageRpcApi {
 
 const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitTest", "rectsWithBounds", "size", "setProxy", "setRole", "setPlan",
   "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots", "setMediaPolicy",
-  "setSyncedUserCards", "setViewScale", "setLocalOnlyMissing", "settleLowMemory", "setBackWork", "bakeFrame", "bakeCancel"];
+  "setSyncedUserCards", "setViewScale", "setLocalOnlyMissing", "settleLowMemory", "setBackWork", "bakeFrame", "bakeCancel", "loadUserCards", "synthCardAudio"];
 
 /**
  * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。
@@ -438,6 +480,13 @@ export const BAKE_FRAME_TIMEOUT_MS = 120_000;
 /** 这次调用按时长判超时的话,等多久(毫秒);不按时长判回 null */
 export function stageCallTimeoutMs(method: string, args: unknown[]): number | null {
   if (method === "bakeFrame") return BAKE_FRAME_TIMEOUT_MS;
+  if (method === "loadUserCards") return STAGE_UPDATE_TIMEOUT_MS;
+  if (method === "synthCardAudio") {
+    // 声音线程自己有时限(每秒声音 2 秒墙钟、最少 10 秒,另加载入卡片的 20 秒);活着的窗口原地重载会丢回包,父页按它的时限再宽一点判超时
+    const r = args[0] as { count?: unknown; sampleRate?: unknown } | undefined;
+    const sec = Number(r?.count) / Math.max(1, Number(r?.sampleRate) || 48_000);
+    return Math.max(10_000, Math.ceil((Number.isFinite(sec) ? sec : 0) * 2000)) + 20_000 + LOW_MEMORY_SETTLE_RPC_SLACK_MS;
+  }
   if (method === "settleLowMemory") {
     const ms = Number((args[1] as { timeoutMs?: unknown } | undefined)?.timeoutMs);
     return (Number.isFinite(ms) && ms > 0 ? ms : 5000) + LOW_MEMORY_SETTLE_RPC_SLACK_MS;
@@ -455,22 +504,41 @@ export function isShortStageUpdate(method: string, args: unknown[]): boolean {
 /**
  * 父页侧:给一个舞台 iframe 建一个 RPC 客户端。
  * `targetOrigin` 现在是 `location.origin`(同源);第 4 步 E1 跨源时传舞台端口的 origin。
+ *
+ * `opts.untrusted`(在线的跨源舞台,契约 `online-card-exec-contract.md` 第 3.2 节):舞台里会执行用户卡与图卡,它发来的一切当不可信输入 ——
+ * 只认 `event.origin` 等于 `targetOrigin` 的消息;事件与回包按形状校验、数字钳到合理范围(`online/stageMessageGuard.ts`;
+ * `opts.maxSec` 给了就把事件里的时刻钳到它以内,一般是项目时长),
+ * 不合形状的事件丢弃、回包按失败回绝。不给(桌面运行环境、同源单舞台)照旧,一个字节不变。
  */
-export function createStageRpc(target: Window, targetOrigin: string = location.origin): StageRpcClient {
+export function createStageRpc(target: Window, targetOrigin: string = location.origin, opts: { untrusted?: boolean; maxSec?: () => number } = {}): StageRpcClient {
+  const untrusted = opts.untrusted === true;
   let nextId = 1;
   let disposed = false;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; method: string; timer?: ReturnType<typeof setTimeout> }>();
   const listeners = new Set<(e: StageEvent) => void>();
   const onMessage = (e: MessageEvent) => {
     if (e.source !== target) return;
+    if (untrusted && e.origin !== targetOrigin) return;
     const d = e.data;
     if (isRpcReply(d)) {
       const p = pending.get(d.id);
       if (!p) return;
       pending.delete(d.id);
       if (p.timer) clearTimeout(p.timer);
+      if (untrusted) {
+        if (d.ok !== true) { p.reject(new Error(sanitizeRpcError(d.error) || `stage rpc ${p.method} failed`)); return; }
+        let result: unknown;
+        try { result = sanitizeRpcResult(p.method, d.result); } catch (err) { p.reject(err instanceof Error ? err : new Error(String(err))); return; }
+        p.resolve(result);
+        return;
+      }
       if (d.ok) p.resolve(d.result);
       else p.reject(new Error(d.error || `stage rpc ${p.method} failed`));
+      return;
+    }
+    if (untrusted) {
+      const clean = sanitizeStageEvent(d, { maxSec: opts.maxSec?.() }) as StageEvent | null;
+      if (clean) for (const l of listeners) l(clean);
       return;
     }
     if (isStageEvent(d)) for (const l of listeners) l(d);
@@ -618,10 +686,17 @@ export interface StageCardsMessage {
   type: "pc-stage-cards";
   stamp: number;
 }
-/** `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据) */
+/**
+ * `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据)。
+ *
+ * 隔离的跨源舞台(契约 `online-card-exec-contract.md` 第 4.1 节):`remote.base` 是舞台自己源上的 `/media-s/<sid>`、`remote.ticket` 恒为 null
+ * (票据由编辑器页交给舞台源的服务端换成 HttpOnly cookie,不进舞台的脚本);`cardExec` 为真 = 父页点头,这一台可以执行用户卡与图卡
+ * (舞台自己还要核自检与「本文档没见过票据」,`online/isolation/execGate.ts`)。旧办法(同源单舞台、低内存档、没隔离的舞台)照旧带票据、不带 `cardExec`。
+ */
 export interface StageMediaPolicy {
   lowMemory: boolean;
   remote: { base: string; ticket: string | null } | null;
+  cardExec?: boolean;
 }
 
 /**

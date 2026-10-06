@@ -39,7 +39,7 @@
  * `occupying()` 列出还没走到推送的执行(`{ id, kind, phase }`):独立渲染主机据此只在预渲染间空着时认领(`host.mjs`)。
  *
  * @typedef {object} TaskRunner
- * @property {(task: object, ctx: { token: number, browserFingerprints?: string[] }) => void} onTask  会话的 onTask
+ * @property {(task: object, ctx: { token: number, browserFingerprints?: string[], browserCardEnvFingerprints?: string[] }) => void} onTask  会话的 onTask
  * @property {(id: string, reason: string) => void} onLost   会话的 onLost
  * @property {(run: object) => boolean} holding
  * @property {(reason: string) => void} abortAll

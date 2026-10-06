@@ -41,7 +41,7 @@ const project = () => ({ version: 1, id: "p", name: "p", width: 1920, height: 10
   tracks: [{ id: "t", name: "t", clips: [clip("b", "builtin"), clip("u", "mine", 2, 4), clip("g", "graphish", 4, 6), clip("s", "synced-card", 6, 8), clip("x", "nobody", 8, 10)] }] });
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
-test("OU-01 clipIdentityOf:在线时这台设备跑不了的卡没有身份;桌面照旧;同步表变了跟着变", () => {
+test("OU-01 clipIdentityOf:在线时本页运行不了的卡没有身份,能运行的用户卡有;桌面照旧;同步表、运行状态、档位变了跟着变", () => {
   setup();
   const p = project();
   try {
@@ -55,22 +55,44 @@ test("OU-01 clipIdentityOf:在线时这台设备跑不了的卡没有身份;桌�
     assert.ok(on1.identityKeys.b, "内置卡照旧有身份");
     assert.equal(on1.identityKeys.s, undefined, "同步表还没到:s 还是未知卡片,不给身份(不测)");
     assert.equal(on1.identityKeys.x, undefined, "未知卡片不给身份");
-    assert.equal(on1.identityKeys.u, undefined, "构建时的用户卡:没有身份");
-    assert.equal(on1.identityKeys.g, undefined, "图卡:没有身份");
-    assert.equal(on1.frameModes.u, undefined, "也没有声明的帧模式(否则 direct 会判轻)");
-    assert.equal(on1.capabilities.has("u"), false);
-    R.setSyncedUserCards([{ id: "synced-card", name: "同步卡" }]);
+    // 2026-10-06(online-card-exec-contract.md 第 6 节):构建时就在在线包里的仓库用户卡是页面自己的代码,本页能运行,照内置卡给身份
+    assert.equal(on1.identityKeys.u, desk.identityKeys.u, "构建时的用户卡:有身份(与桌面同一个键)");
+    assert.equal(on1.frameModes.u, "direct");
+    assert.equal(on1.capabilities.has("u"), true);
+    assert.equal(on1.identityKeys.g, undefined, "图卡:没有身份(图卡的在线执行还没放开)");
+    R.setSyncedUserCards([{ id: "synced-card", name: "同步卡", defaults: { n: 1 } }]);
     const on2 = CI.clipIdentityOf(p);
-    assert.equal(on2.identityKeys.s, undefined, "同步表到了:同步卡也没有身份");
+    assert.equal(on2.identityKeys.s, undefined, "同步表到了、还没有运行状态:同步卡没有身份");
     assert.equal(on2.identityKeys.x, undefined, "两边都没有的 id 照旧没有身份");
     assert.equal(CI.clipIdentityOf(p), on2, "没变就用记忆");
+    // 运行状态:只有 ready 才有身份;源码版本取这一代的短签名,换代换键
+    for (const state of ["loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated", "low-memory"]) {
+      R.setCardRunStates([["synced-card", { state }]]);
+      assert.equal(CI.clipIdentityOf(p).identityKeys.s, undefined, `${state}:本页运行不了,没有身份`);
+    }
+    R.setCardRunStates([["synced-card", { state: "ready", version: "g1" }]]);
+    const ready1 = CI.clipIdentityOf(p);
+    assert.equal(typeof ready1.identityKeys.s, "string", "ready:有身份,照内置卡测");
+    assert.equal(ready1.capabilities.has("s"), true);
+    R.setCardRunStates([["synced-card", { state: "ready", version: "g2" }]]);
+    assert.notEqual(CI.clipIdentityOf(p).identityKeys.s, ready1.identityKeys.s, "源码换代:身份跟着换(重新测量)");
+    // 低内存档不执行用户卡的代码:构建时的用户卡在低内存档照旧没有身份(它的现有规则不动)
+    D.setPlanLowMemory(true);
+    const low = CI.clipIdentityOf(p);
+    assert.equal(low.identityKeys.u, undefined, "低内存档:构建时的用户卡没有身份");
+    assert.equal(low.frameModes.u, undefined, "也没有声明的帧模式(否则 direct 会判轻)");
+    assert.ok(low.identityKeys.b, "低内存档:内置卡照旧有身份");
+    D.setPlanLowMemory(false);
+    assert.ok(CI.clipIdentityOf(p).identityKeys.u, "回到普通档:又有了");
   } finally {
     H.setOnlineBrowserMode(false);
     R.setSyncedUserCards([]);
+    R.setCardRunStates([]);
+    D.resetPlanDispatch();
   }
 });
 
-test("OU-02 planDispatch:在线时本机跑不了的卡一律判重、进预渲染集合,旧的判轻记录不认;同步表后到也重算", async () => {
+test("OU-02 planDispatch:在线时本页运行不了的卡一律判重、进预渲染集合,旧的判轻记录不认;能运行的用户卡按记录判;同步表、运行状态后到也重算", async () => {
   setup();
   const p = project();
   // 桌面口径的身份键 → 每张都有一条很轻的成本记录(模拟 L2 里以前在后台舞台上测过的旧记录)
@@ -87,16 +109,34 @@ test("OU-02 planDispatch:在线时本机跑不了的卡一律判重、进预渲�
     CI.resetClipIdentityCache();
     D.setPlanCosts(Object.values(keys).map(lightRec), null);
     await settle();
-    assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "u"], "在线:用户卡、图卡判重;同步表还没到");
+    assert.deepEqual([...D.currentPlan().prerenderSet], ["g"], "在线:图卡判重;构建时的用户卡本页能运行,按它的记录判轻;同步表还没到");
     R.setSyncedUserCards([{ id: "synced-card", name: "同步卡" }]);
     await settle();
-    assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s", "u"], "同步表到了:没有定义的同步卡也判重,算表不崩");
-    // 页面发布的清单计划按 prerenderSet 取卡片段(Preview 的 clips()):含用户卡与同步卡
+    assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s"], "同步表到了、还没载入:没有定义的同步卡判重,算表不崩");
+    // 页面发布的清单计划按 prerenderSet 取卡片段(Preview 的 clips()):含运行不了的同步卡
     const byId = new Map(p.tracks[0].clips.map((c) => [c.id, c]));
-    assert.deepEqual([...D.currentPlan().prerenderSet].filter((id) => !!byId.get(id)?.cardId), ["g", "s", "u"]);
+    assert.deepEqual([...D.currentPlan().prerenderSet].filter((id) => !!byId.get(id)?.cardId), ["g", "s"]);
+    // 载入成功(运行状态 ready):有身份;还没有记录时按声明兜底(同步卡没有声明,判重),记录到了按记录判
+    R.setCardRunStates([["synced-card", { state: "ready", version: "g1" }]]);
+    await settle();
+    assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s"], "刚载入成功、还没测:按声明兜底");
+    D.mergePlanCosts([lightRec(CI.clipIdentityOf(p).identityKeys.s)]);
+    await settle();
+    assert.deepEqual([...D.currentPlan().prerenderSet], ["g"], "测完判轻:不进预渲染集合,活渲");
+    // 运行不了了(新一代转译失败):回到一律按重,手里那条判轻的记录不认
+    R.setCardRunStates([["synced-card", { state: "unsupported-syntax", detail: "namespace" }]]);
+    await settle();
+    assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s"], "运行不了:判重");
+    // 低内存档:构建时的用户卡也回到按重(判定的表;界限搜索没有结果时全部按重,有结果时它也不在判轻的集合里)
+    D.setPlanLowMemory(true);
+    D.setPlanLowMemoryLight([keys.b, keys.u]);
+    await settle();
+    assert.equal(D.judgedPlan().prerenderSet.has("u"), true, "低内存档:构建时的用户卡没有身份,判定的表里按重");
+    assert.equal(D.judgedPlan().prerenderSet.has("b"), false, "低内存档:内置卡照界限搜索的结果判轻");
   } finally {
     H.setOnlineBrowserMode(false);
     R.setSyncedUserCards([]);
+    R.setCardRunStates([]);
     D.resetPlanDispatch();
   }
 });

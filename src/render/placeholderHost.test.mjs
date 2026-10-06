@@ -196,6 +196,26 @@ test("needsLocalPc / localOnlyClipIds:同步来的用户卡没有定义也认;�
   }
 });
 
+test("OCE-X-01 在线导出的导出页:开关打开后,同步来的用户卡(没有定义)的包裹层才挂出来;内置卡、有定义的卡、未知卡片、开关关着都不受影响", async () => {
+  const R = await import("../kernel/registry.ts");
+  const H = await import("./placeholderHost.ts");
+  R.setSyncedUserCards([{ id: "synced-user", name: "同步卡" }]);
+  try {
+    assert.equal(H.exportSyncedMountFor("synced-user", undefined), false, "开关没开(桌面、预览、预渲染恒如此):不挂");
+    H.setExportSyncedMount(true);
+    assert.equal(H.exportSyncedMountFor("synced-user", undefined), true, "同步卡没有定义:挂出包裹层,好换成预渲染原尺寸");
+    assert.equal(H.exportSyncedMountFor("synced-user", { Component: () => null }), false, "有定义的(构建时就在包里的)走原来的路");
+    assert.equal(H.exportSyncedMountFor("nobody", undefined), false, "两边都没有的是未知卡片,仍不画");
+    assert.equal(H.exportSyncedMountFor("builtin-card", undefined), false);
+    assert.equal(H.exportSyncedMountFor(undefined, undefined), false);
+    H.setExportSyncedMount(false);
+    assert.equal(H.exportSyncedMountFor("synced-user", undefined), false, "关上又恢复");
+  } finally {
+    H.setExportSyncedMount(false);
+    R.setSyncedUserCards([]);
+  }
+});
+
 test("unsupported:只在在线浏览器模式下,且只认用户卡和图卡", () => {
   const isUser = (id) => id === "my-card";
   const dom = { Component: () => null };

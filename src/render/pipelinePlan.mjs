@@ -248,6 +248,45 @@ export function pipelineAt(plan, clipId, tSec) {
 }
 
 /**
+ * 片段 → 成本身份用的那个节点。
+ *
+ * 1. 图里带着这个片段 `clipId` 的节点（`cardGraph.mjs` 给素材段和普通卡合成的基节点）；
+ * 2. 没有的话，看片段**自己那个图卡节点**（`clip.nodeId` 指的那个，或只有 `cardId` 时就地合成的
+ *    `@clip/<id>/card`）：调用方用 `opts.ownNode(node, clip)` 说它算不算。有声动效卡（画面是组件、另写了
+ *    `audio()`）走的是图卡那一支，它的节点上没有 `clipId`，2026-10-06 之前因此没有成本身份、从不测量、
+ *    画面在桌面与在线都永远按重卡。它的画面就是一张普通的 DOM 卡，能测，所以 `costIdentity.ts` 对它回 true。
+ *    不给 `ownNode` = 一律不算（与以前相同）。
+ *
+ * 节点本身不动（不往节点上写 `clipId`）：节点的内容进预渲染结果的键（`server/card-identity.mjs` 的
+ * `cardNodeIdentities`），改了它，已有的预渲染结果就都对不上了。成本键本来就不含 `clipId`（`cardCostKey`），
+ * 预渲染进程那一端按输出节点算的 `costKey`（`server/card-cache.mjs`）与这里是同一个节点、同一个键。
+ *
+ * @param {any} project
+ * @param {any} graph
+ * @param {{ ownNode?: (node: any, clip: any) => boolean }} [opts]
+ * @returns {Map<string, any>} clipId → 节点
+ */
+export function clipCostNodes(project, graph, opts = {}) {
+  const byClip = new Map(), byId = new Map();
+  for (const node of graph?.nodes ?? []) {
+    if (typeof node?.id === 'string') byId.set(node.id, node);
+    if (typeof node?.clipId === 'string' && !byClip.has(node.clipId)) byClip.set(node.clipId, node);
+  }
+  const ownNode = typeof opts?.ownNode === 'function' ? opts.ownNode : null;
+  if (ownNode) {
+    for (const track of project?.tracks ?? []) {
+      for (const clip of track?.clips ?? []) {
+        if (!isCardClip(clip) || byClip.has(clip.id)) continue;
+        // 片段指着的节点不在图里(图是退一步、不带卡片图节点摊出来的,`costIdentity.ts` 的 `costGraph`):看就地合成的那个
+        const node = (typeof clip.nodeId === 'string' && clip.nodeId ? byId.get(clip.nodeId) : undefined) ?? byId.get(`@clip/${clip.id}/card`);
+        if (node?.adapter === 'card' && ownNode(node, clip)) byClip.set(clip.id, node);
+      }
+    }
+  }
+  return byClip;
+}
+
+/**
  * 片段 → 成本记录的索引（片段 → 节点 → `cardCostKey`，口径同 `scripts/probe-card-costs.mjs`）。
  *
  * `planPipelines` 本身是纯函数、够不到卡片注册表，所以「这一段是哪张卡、它的源码版本是多少」
@@ -257,13 +296,11 @@ export function pipelineAt(plan, clipId, tSec) {
  * @param {any} project 项目（要 `fps` 和每段的入出点算 `durationFrames`）
  * @param {any} graph `projectCardGraph(project, getCard)` 的结果
  * @param {(node: any) => string | null} [sourceVersionOf] 那张卡的源码版本（照 `ExportView.tsx` 的算法）
+ * @param {{ ownNode?: (node: any, clip: any) => boolean }} [opts] 见 `clipCostNodes`
  */
-export function clipCostIndex(project, graph, sourceVersionOf = () => null) {
+export function clipCostIndex(project, graph, sourceVersionOf = () => null, opts = {}) {
   const fps = Math.max(1, Number(project?.fps) || 30);
-  const nodeByClip = new Map();
-  for (const node of graph?.nodes ?? []) {
-    if (typeof node?.clipId === 'string' && !nodeByClip.has(node.clipId)) nodeByClip.set(node.clipId, node);
-  }
+  const nodeByClip = clipCostNodes(project, graph, opts);
   const identityKeys = {}, frameModes = {};
   for (const track of project?.tracks ?? []) {
     for (const clip of track?.clips ?? []) {

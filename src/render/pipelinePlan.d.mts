@@ -87,4 +87,17 @@ export function clipCostIndex(
   project: any,
   graph: { nodes?: CardNode[] } | null | undefined,
   sourceVersionOf?: (node: CardNode) => string | null,
+  opts?: ClipCostNodeOptions,
 ): { identityKeys: Record<string, string>; frameModes: Record<string, string> };
+
+export interface ClipCostNodeOptions {
+  /** 片段自己那个图卡节点(没有 `clipId`)算不算它的成本身份节点;不给 = 不算。见 `clipCostNodes` */
+  ownNode?: (node: CardNode, clip: any) => boolean;
+}
+
+/** 片段 → 成本身份用的那个节点 */
+export function clipCostNodes(
+  project: any,
+  graph: { nodes?: CardNode[] } | null | undefined,
+  opts?: ClipCostNodeOptions,
+): Map<string, CardNode>;
