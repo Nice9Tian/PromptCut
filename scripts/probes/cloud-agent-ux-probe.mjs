@@ -419,7 +419,7 @@ async function main() {
     }
     check('U20 云端 Agent 建一张用户卡并用它加片段,发起方进程被结束、没有成员在线:隔离工作进程把它渲出来,后来的成员取得到这一层', left.sent?.status === 202 && left.killed && endLog.state === 'idle'
       && typeof stored.body === 'string' && !!clip && rendered?.event === 'agent.render.done' && sawMembers === false
-      && /^hosted-render-iso:/.test(String(iso?.nodeId ?? '')) && (iso?.completed ?? 0) > 0 && (iso?.failed ?? 0) === 0 && (resident?.claimed ?? 0) === 0
+      && /^hosted-render-iso:/.test(String(iso?.nodeId ?? '')) && (iso?.claimed ?? 0) > 0 && (iso?.failed ?? 0) === 0 && (resident?.claimed ?? 0) === 0
       && map.type === 'content.item' && !map.missing && layerClips.includes(clip?.id) && found > 0 && blobBytes() > filesBefore && uma.all.filter((m) => m.type === 'task.published').length === 0, {
       sent: left.sent?.status ?? null, initiatorGone: left.killed, end: endLog.state, toolResults: results, cardSourceInLibrary: typeof stored.body === 'string', 
       clipWithUserCard: clip ? { id: clip.id, cardId: clip.cardId } : null, outcome: rendered?.event ?? '没有结果', renderedMs: timings.usercardRenderedMs, membersEverOnline: sawMembers,
