@@ -1597,6 +1597,8 @@ export async function setHostedService(service: HostedServiceName, enabled: bool
   const r = await adminOp("set-hosted-service", { key }, { service, enabled });
   if (!r.ok) return r;
   patch({ hosted: applyHostedChange(view.hosted, service, enabled) });
+  // 创建者自己这一页的 AI 栏也马上跟着变(通知只发给别的连接)
+  if (service === "agent") setHostedAgentEnabled(view.shared?.projectId ?? currentDocProjectId(), enabled);
   return { ok: true };
 }
 

@@ -196,6 +196,8 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const sessionRef = useRef<CloudSession | null>(null);
   const convRef = useRef(conversationId);
   convRef.current = conversationId;
+  /** 进入时的那一次「取 info、定对话」还没做完,用户已经自己选了对话(历史列表里点的、新对话):后到的结果不再改写他的选择 */
+  const pickedRef = useRef(false);
 
   // 项目或地址或页签变了:换一个会话控制器。对话 id 取这个项目这一页上次用的
   useEffect(() => {
@@ -205,6 +207,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       return;
     }
     let dead = false;
+    pickedRef.current = false;
     const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : lsGet(chatKey(projectId, tabId));
     const first = stored && CHAT_ID_RE.test(stored) ? stored : newCloudChatId();
     const session = createCloudSession({ api, store });
@@ -226,7 +229,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
         if (dead) return;
         setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       }
-      if (dead) return;
+      if (dead || pickedRef.current) return;
       setConversationId(id);
       lsSet(chatKey(projectId, tabId), id);
       session.open(id);
@@ -313,6 +316,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   }, []);
 
   const switchTo = useCallback((id: string) => {
+    pickedRef.current = true;
     setConversationId(id);
     if (projectId) lsSet(chatKey(projectId, tabId), id);
     setNotice(null);

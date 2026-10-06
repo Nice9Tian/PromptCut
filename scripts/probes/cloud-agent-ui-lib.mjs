@@ -486,6 +486,24 @@ export async function joinOnline(page, { site, name, username, password, asCreat
   await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await page.waitForFunction(() => !!window.__pcStore && window.__pcStore.getState().project.tracks.length > 0, { timeout: 60_000 });
+  await gateSettled(page);
+}
+
+/**
+ * 等「正在测量卡片」的遮罩放开并稳住:它在进项目几秒之后才出现(舞台就绪了才开始测),期间盖住整个编辑器、鼠标点不下去。
+ * 连续 `quietMs` 没有遮罩才算放开。
+ */
+export async function gateSettled(page, { quietMs = 3500, ms = 300_000 } = {}) {
+  const t0 = Date.now();
+  let clearSince = null;
+  while (Date.now() - t0 < ms) {
+    const up = await page.evaluate(() => !!document.querySelector('[data-pc="probe-gate"]')).catch(() => false);
+    if (up) clearSince = null;
+    else if (clearSince === null) clearSince = Date.now();
+    else if (Date.now() - clearSince >= quietMs) return true;
+    await delay(250);
+  }
+  return false;
 }
 
 /** 桌面版形态的页面:进编辑器、等舞台起来、关掉首次打开的 AI 设置弹窗 */
@@ -494,6 +512,7 @@ export async function openDesktopEditor(page, origin, query = 'editor&nosetup=1&
   await page.waitForFunction(() => document.querySelectorAll('iframe').length >= 2 && !document.querySelector('[data-pc="probe-gate"]'), { timeout: 300_000, polling: 500 });
   await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
   await page.waitForSelector('[data-pc="ai-provider"]', { timeout: 60_000 }).catch(() => {});
+  await gateSettled(page);
 }
 
 /** 桌面版形态的页面此刻连着的共享项目号(没连回 null) */
@@ -552,20 +571,21 @@ export const eventLog = (page) => P(page, () => {
 export async function membersList(page) {
   await page.click('[data-pc="members-button"]');
   await page.waitForSelector('[data-pc="members-pop"]', { visible: true, timeout: 8000 }).catch(() => {});
-  // 有 Agent 连接的行点一下展开(「〈成员名〉的云端 Agent」在展开的子行里)
-  await P(page, () => { for (const r of document.querySelectorAll('[data-pc="members-pop"] .pc-members-row-main.is-expandable')) r.click(); });
-  await delay(200);
-  const out = await P(page, () => {
+  // 有 Agent 连接的行逐个点开读(一次只展开一行;「〈成员名〉的云端 Agent」在展开的子行里)
+  const out = await P(page, async () => {
     const pop = document.querySelector('[data-pc="members-pop"]');
-    return {
-      button: document.querySelector('[data-pc="members-button"]')?.textContent?.trim() ?? '',
-      rows: [...(pop?.querySelectorAll('.pc-members-row') ?? [])].map((r) => ({
+    const rows = [];
+    for (const r of pop?.querySelectorAll('.pc-members-row') ?? []) {
+      const main = r.querySelector('.pc-members-row-main.is-expandable');
+      if (main && !r.querySelector('.pc-members-sub')) { main.click(); await new Promise((ok) => setTimeout(ok, 120)); }
+      rows.push({
         text: (r.textContent ?? '').replace(/\s+/g, ' ').trim(),
         cloudTag: !!r.querySelector('[data-pc="members-cloud-agent"]'),
         cloudRow: r.querySelector('[data-pc="members-cloud-agent-row"]')?.textContent?.trim() ?? null,
         editing: /\[编辑中\]/.test(r.textContent ?? ''),
-      })),
-    };
+      });
+    }
+    return { button: document.querySelector('[data-pc="members-button"]')?.textContent?.trim() ?? '', rows };
   }).catch(() => null);
   await page.keyboard.press('Escape');
   await page.mouse.click(700, 887);

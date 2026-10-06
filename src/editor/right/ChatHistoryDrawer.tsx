@@ -158,6 +158,7 @@ export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
                   key={item.id}
                   className={`chat-drawer-item ${item.id === cloud.currentId ? "is-current" : ""}`}
                   data-pc="chat-cloud-item"
+                  data-chat-id={item.id}
                   data-state={item.state}
                   onClick={() => cloud.onPick(item.id)}
                 >

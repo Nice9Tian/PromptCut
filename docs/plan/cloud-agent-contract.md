@@ -1170,3 +1170,43 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 **没有并掉的重复**
 
 - `server/hosted-render/directory.mjs` 与 `server/auth/service-client.mjs` 都是「凭服务私钥连控制连接、订目录、要票据」，重叠约七成。这一轮没有并：两者的退避参数、错误码（`directory-offline` 等）、每 60 秒主动重订、`status()` 的形状都不同，渲染服务的管理进程与它的单测按这些形状写；第三段的隔离工作进程还在另一个分支上改同一目录。并的办法是让 `directory` 包在 `service-client` 外面（清单的缓存、`since`、定时重订留在外层），等第三段的分支都合完之后做。
+
+---
+
+## 21. 界面合流与页面一侧接线的实现记录（2026-10-06，分支 `claude/cloud-agent`）
+
+界面（丁块，`claude/cloud-agent-ui`）合进本分支、接上真身份之后定下、或与上文不同的地方。上文与本节冲突时以本节为准。
+
+**身份（第 4.2、10.4 节）**
+
+- 委托票据与对话委托只有一个来源：同步管理（`src/editor/sync/syncManager.ts` 的 `cloudIdentityOf`）在页面接上共享项目时注入，两样都在页面自己到文档服务的那条连接上要（`auth.ticket { kind: 'delegate', audience: 'agent', conversation? }`）；回本机空间、离开项目时撤掉。在线页面与桌面版同一条路。票据不缓存、不进日志。
+- 界面分支留的两个全局回退口子（`globalThis.__pcCloudIdentity`、`globalThis.__pcCloudAgent`）与可注入来源 `setCloudAgentSource` 已删；守门单测 CAU-ID-02（`src/ai/cloud/cloud-chat.test.mjs`）：页面源码里不出现这三个名字，设了那两个全局变量也不起作用。
+- 文档服务拒签时页面不发请求（不带对话委托发出去只会换回 `bad-grant`）：`service-disabled` 显示「项目创建者已关闭云端 Agent。」，连接断着显示连不上，其余按身份验证没过。单测 CAU-API-02。
+- `end` 事件带 `reason: 'stopped'` 才算主人停掉；界面分支「靠先前一条『已停止』状态判」的旁路已去掉。
+
+**地址与开关（第 9.5、10.4 节）**
+
+- Agent 服务的地址与开关只取成员列表顶层的 `hosted.agent { available, enabled, url }` 与通知 `hosted-service-changed`。在线页面在成员列表到达之前先按同源的 `/agent/v1`、开着算；到了以它为准：地址用下发的 `url`（托管端没配 `PROMPTCUT_AGENT_PUBLIC_URL` 时仍是同源的那个），`available` 为假时 AI 栏说明「这个项目所在的托管端没有云端 Agent 服务。」。
+- 项目设置里的开关是 `HostedServiceRows` 的 `agent` 一行（`hostedServices.ts` 的 `HOSTED_SERVICE_ROWS`、`HOSTED_SERVICE_TEXT`），排在「托管方的渲染节点」之后；每种服务的确认弹窗各有一句话（`confirm`）。创建者改完后自己这一页的 AI 栏马上跟着变（通知只发给别的连接）。
+- 创建者把开关关了又打开：页面重取一次 `info`、清掉「已关闭」的提示、把停下的事件流接回去。
+
+**署名与成员列表（第 5 节）**
+
+- 显示名在 `src/editor/sync/labels.ts` 的 `writerLabel`：`role: 'agent'` 且 `service: 'agent'` → 「〈成员名〉的云端 Agent」（`hostedServices.ts` 的 `cloudAgentLabel`）；发起的那台设备上自己看到「你的云端 Agent」。写入身份里没有用户名，成员名取 `userId`（`用户名@设备`）里最后一个 `@` 之前的部分，所以发起成员不在线时也有名字。
+- 第 5 节「同一位成员开了多个云端对话时在后面加『· 第几个对话』」**没有做**：云端对话的 id 是字符串，连接上的 `conversation` 是连接序号，界面拿不到「第几个」。
+- 成员列表：成员行里带 `service: 'agent'` 的连接显示成一个「[云端 Agent]」标记，展开的子行是「〈成员名〉的云端 Agent」；本机 Agent 的计数不含它。成员本人不在线、只有他的云端 Agent 连着时，这一行仍在（计入成员数）。
+- AI 栏顶上「别的成员那边的 Agent 正在改」那一行（`RemoteAgentsStrip`）：来源是云端 Agent 时写「〈成员名〉的云端 Agent正在改:…」。
+
+**撤销（第 7.4 节）**
+
+- 探针验过：页面在这些事件发生时不在线，重开后经 `events.list` 取得回完成事件里的逆操作（文档服务在内存里按项目留最近 500 条，重启后从新的事件开始）；「撤销这步」与本机 Agent 相同，由页面以自己的身份提交。文档服务重启过的话，重启之前的云端改动在界面上没有「撤销这步」。
+
+**没有做的**
+
+- 对话重命名与删除（`PATCH`、`DELETE /v1/conversations/<id>`）、用量查询（`GET /v1/usage`）的界面入口：这一版不做，接口在。
+- 桌面版 rail 页签图标上的「云端对话进行中」标记：做成了面板顶上的提示条。
+
+**探针发现、待定的两处（服务端，这一轮没有改）**
+
+- **写入之间隔得比补渲的防抖（3 秒）长时，补渲会失败**（第 16 节）：Agent 服务每写一次就发一个指着当时版本的清单计划；项目接着往前走，渲染节点取不到旧版本的项目快照（文档服务对没有上传过快照的版本只给得出当前版本，发布连接的白名单又不许上传），那些细任务以「文档服务上没有项目快照」失败，并经队列的同键合并连累最后一版的计划，对话记录里最后是「云端渲染失败」。模拟模型连着写（间隔 1 秒左右）时碰不到；真模型每次往返几秒，会碰到。复现：`node scripts/probes/cloud-agent-ux-ui-probe.mjs --steps spaced`。可选的修法：一轮进行中不发计划、只在收尾时发（减轻，不根治）；或文档服务在收下指着当前版本的清单计划时把这一版的快照留下来；或执行器取不到旧版本时改按当前版本重切。
+- **成员列表与目录里的「有没有成员在线」含会话的保留期**：`server/docservice/modules/hosted.mjs` 文件头写 `members` 「不含保持期」，实际按模块的连接进出计数，传输断开后会话保留 60 秒（`session.mjs` 的 `RETAIN_MS`）期间仍算在线。发起方被结束后约 60 秒，成员列表里才不再显示他「编辑中」，渲染服务的目录里 `members` 才变假。

@@ -54,7 +54,7 @@
     - 文档服务 = 同源的 `wss://<host>/hosted/`；
     - 素材服务 = 文档服务 `service.endpoints` 下发的公网地址（阿里云上是 `https://8-219-80-16.sslip.io/media/api/asset`）；
     - 素材票据由页面在自己的连接上 `auth.ticket` 取（auth 契约第 8 节，`server/auth/ticket-source.mjs` 可在浏览器用）；
-    - Agent 服务 = 同源的 `/agent/v1/`（经 nginx 的 `/agent/`），凭文档服务签的委托票据（`docs/plan/cloud-agent-contract.md` 第 4、10 节）。它是第三个托管端服务，不是编辑器进程的 `/api/*`：路径不以 `/api/` 开头，守卫不改、棘轮清单不加；守门见 `server/test/c10a-online-build.test.mjs` 的 C10A-API-05（在线产物里 `/agent/` 只有 `/agent/v1`）、C10A-API-07（没有桌面专用标识）。
+    - Agent 服务 = 同源的 `/agent/v1/`（经 nginx 的 `/agent/`），凭文档服务签的委托票据（`docs/plan/cloud-agent-contract.md` 第 4、10 节）。它是第三个托管端服务，不是编辑器进程的 `/api/*`：路径不以 `/api/` 开头，守卫不改、棘轮清单不加；守门见 `server/test/c10a-online-build.test.mjs` 的 C10A-API-05（在线产物里 `/agent/` 只有 `/agent/v1`）、C10A-API-07（没有桌面专用标识）。地址以文档服务在成员列表里下发的 `hosted.agent.url` 为准，成员列表到达之前与托管端没配公网地址时用同源的 `/agent/v1`；票据由页面在自己到文档服务的连接上要，页面里没有任何全局变量的替身口子（`cloud-agent-contract.md` 第 21 节，守门 CAU-ID-02）。
 - **纯浏览器的设备身份**：
   - 在线模式不经 `GET /api/docservice/device`（现在拿不到就不起同步，`device=null`、进入回 `not-ready`）；
   - 设备 id 用 128 位随机数，存在页面本地；
