@@ -6,7 +6,8 @@
  * 它要完整的仓库加依赖(vite 与 `src/`),并且必须与渲染服务、在线页面出自同一个提交(补渲计划的代码版本要对得上)。
  * 所以这里没有上传代码的一步;升级与回退跟着渲染服务的 `current` 走,换完链接再 `deploy-agent` 重载一次。
  *
- * 不含任何秘密:服务私钥在节点上由 `keygen-agent` 生成(不离开节点、不打印),模型 Key 由用户在节点上运行 `set-key.mjs` 录入。
+ * 不含任何秘密:服务私钥在节点上由 `keygen-agent` 生成(不离开节点、不打印);模型 Key 与配音令牌走加密分发
+ * (`machine-id-agent` 报节点的机器识别码 → 用户在自己的电脑上用 `make-api-share.bat` 加密 → `import-key-agent` 把密文导入节点)。
  * 本文件不引用 `src/`。
  */
 import { DeployUsageError, renderInstance, fillTemplate, readTemplate, shq } from '../hosted-render/deploy.mjs';
@@ -23,7 +24,7 @@ const preamble = (extra = []) => ['set -euo pipefail', 'set +x', ...extra];
 
 /**
  * 部署参数。缺省值与服务的缺省一致,可用本机的环境变量覆盖:`PROMPTCUT_AGENT_DATA`、`PROMPTCUT_AGENT_SECRETS`、`PROMPTCUT_AGENT_PORT`、
- * `PROMPTCUT_AGENT_DOC_URL`、`PROMPTCUT_AGENT_PUBLIC_ORIGIN`(可空);检出目录与托管数据目录取渲染服务那一套
+ * `PROMPTCUT_AGENT_DOC_URL`、`PROMPTCUT_AGENT_ASSET_URL`(同机素材服务的回环地址)、`PROMPTCUT_AGENT_PUBLIC_ORIGIN`(可空);检出目录与托管数据目录取渲染服务那一套
  * (`PROMPTCUT_RENDER_DIR`、`PROMPTCUT_HOSTED_DATA`)。
  */
 export function agentInstance(env = process.env) {
@@ -33,6 +34,9 @@ export function agentInstance(env = process.env) {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new DeployUsageError(`PROMPTCUT_AGENT_PORT 要是 1024～65535 的整数:${e('PROMPTCUT_AGENT_PORT')}`);
   const docUrl = e('PROMPTCUT_AGENT_DOC_URL', render.docUrl);
   if (!/^wss?:\/\/[A-Za-z0-9.:[\]-]+(\/[A-Za-z0-9_./-]*)?$/.test(docUrl)) throw new DeployUsageError(`PROMPTCUT_AGENT_DOC_URL 要是 ws:// 或 wss:// 开头的地址:${docUrl}`);
+  // 同机素材服务(云端 Agent 导入素材、配音入库写进它):只许回环地址
+  const assetUrl = e('PROMPTCUT_AGENT_ASSET_URL', 'http://127.0.0.1:8788');
+  if (!/^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d{2,5}$/.test(assetUrl)) throw new DeployUsageError(`PROMPTCUT_AGENT_ASSET_URL 要是同机素材服务的回环地址,如 http://127.0.0.1:8788:${assetUrl}`);
   const origin = e('PROMPTCUT_AGENT_PUBLIC_ORIGIN', '');
   if (origin !== '' && !/^https?:\/\/[A-Za-z0-9.:[\]-]+$/.test(origin)) throw new DeployUsageError(`PROMPTCUT_AGENT_PUBLIC_ORIGIN 要是 http(s)://主机[:端口],不带路径:${origin}`);
   return {
@@ -43,6 +47,7 @@ export function agentInstance(env = process.env) {
     secrets: path$('PROMPTCUT_AGENT_SECRETS', e('PROMPTCUT_AGENT_SECRETS', '/var/lib/promptcut/agent-secrets')),
     hostedData: render.hostedData,
     docUrl,
+    assetUrl,
     port,
     publicOrigin: origin,
     /** 契约第 11 节:V8 老生代 1536 MiB;常驻内存超过 2 GB 由 PM2 重启;重启前给 8 秒收尾 */
@@ -55,7 +60,7 @@ export function agentInstance(env = process.env) {
 
 export function agentTemplateValues(inst) {
   return {
-    DIR: inst.dir, DATA: inst.data, SECRETS: inst.secrets, DOC_URL: inst.docUrl, AGENT_PORT: String(inst.port), PUBLIC_ORIGIN: inst.publicOrigin,
+    DIR: inst.dir, DATA: inst.data, SECRETS: inst.secrets, DOC_URL: inst.docUrl, ASSET_URL: inst.assetUrl, AGENT_PORT: String(inst.port), PUBLIC_ORIGIN: inst.publicOrigin,
     HEAP_MB: String(inst.heapMb), MAX_MEMORY_RESTART: inst.maxMemoryRestart, KILL_TIMEOUT_MS: String(inst.killTimeoutMs),
   };
 }
@@ -95,7 +100,7 @@ export function agentDeployScript(inst, { save = false, noStart = false, read } 
     'for i in $(seq 1 60); do if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then ok=1; break; fi; sleep 1; done',
     'if [ -z "$ok" ]; then echo "Agent 服务 60 秒内没有应答 /healthz:" >&2; pm2 logs "$APP" --lines 40 --nostream >&2 || true; exit 6; fi',
     'echo "== healthz"; curl -fsS "http://127.0.0.1:$PORT/healthz"; echo',
-    'if [ ! -f "$DATA/config/ai.json" ]; then echo "还没有配置模型:对话请求会回 no-model-key。由用户在节点上运行 set-key.mjs 录入(见 README「Agent 服务」)。"; fi',
+    'if [ ! -f "$DATA/config/ai.json" ]; then echo "还没有配置模型:对话请求会回 no-model-key。走加密分发:machine-id-agent 取机器识别码 → 用户用 make-api-share.bat 生成密文 → import-key-agent 导入(见 README「Agent 服务」)。"; fi',
   );
   if (save) lines.push('pm2 save >/dev/null && echo "pm2 save:已保存(节点重启后自启)"');
   else lines.push('echo "没有 pm2 save:确认运行正常后加 --save 再跑一次,或手工 pm2 save"');
@@ -118,7 +123,12 @@ export function agentStatusScript(inst) {
     'H="$H" R="$R" node -e \'const j=(t)=>{try{return JSON.parse(t)}catch{return null}};const a=j(process.env.H)?.codeVersion??null;const r=j(process.env.R)?.codeVersion?.self??null;const line="agent="+(a??"?")+"  render="+(r??"?");console.log(a&&r&&a!==r?"\\x1b[31m!! "+line+"  不一致:补渲计划渲染服务不会认领,重新部署同一个提交\\x1b[0m":line)\'',
     'echo "== 数据目录"',
     'if [ -d "$DATA" ]; then du -sh "$DATA" 2>/dev/null | cut -f1; echo "对话所在的项目数:$(ls -1 "$DATA/tenants" 2>/dev/null | wc -l)"; ls -1 "$DATA/usage" 2>/dev/null | tail -n 3 || true; else echo "$DATA 不存在"; fi',
-    'if [ -f "$DATA/config/ai.json" ]; then echo "模型配置:有($(node -e \'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log((c.vendor??"?")+" / "+String(c.model??"?").split("|")[0])\' "$DATA/config/ai.json" 2>/dev/null || echo 读不了))"; else echo "模型配置:还没有(set-key.mjs)"; fi',
+    // 配置文件的形状是 { v, api: { vendor, model, … } }(server/agent/service/model-config.mjs);只读厂商与型号,不读 Key
+    'if [ -f "$DATA/config/ai.json" ]; then echo "模型配置:有($(node -e \'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const a=c&&c.api?c.api:{};console.log((a.vendor??"?")+" / "+String(a.model??"?").split("|")[0])\' "$DATA/config/ai.json" 2>/dev/null || echo 读不了))"; else echo "模型配置:还没有(machine-id-agent → make-api-share.bat → import-key-agent)"; fi',
+    'if [ -f "$DATA/config/keys/custom.key" ]; then echo "模型 Key:已导入"; else echo "模型 Key:还没有导入"; fi',
+    'if [ -f "$DATA/config/voice.json" ] && [ -f "$DATA/config/keys/voice.key" ]; then echo "配音配置:有"; else echo "配音配置:没有(云端 Agent 的 voice_generate 会回「还没有配置配音服务」)"; fi',
+    'echo "== 出网闸的测试例外(生产必须是 false)"; echo "$H" | grep -o \'"egressTestAllow":[a-z]*\' || echo "读不到"',
+    'if [ -d "$DATA/work" ]; then echo "工作目录占用:$(du -sh "$DATA/work" 2>/dev/null | cut -f1)"; fi',
     'if [ -f "$SECRETS/service-key.json" ]; then echo "服务私钥:有"; else echo "服务私钥:没有(keygen-agent)"; fi',
   );
   return `${lines.join('\n')}\n`;

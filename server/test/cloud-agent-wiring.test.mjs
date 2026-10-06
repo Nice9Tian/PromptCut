@@ -288,6 +288,11 @@ test('CA-DEPLOY-01 Agent 服务的部署脚本:没有没填的占位符、不含
   assert.match(pm2, /max_memory_restart: '2G'/);
   assert.match(pm2, /kill_timeout: 8000/);
   assert.match(pm2, /PROMPTCUT_AGENT_HOST: '127\.0\.0\.1'/);
+  assert.match(pm2, /PROMPTCUT_AGENT_ASSET_URL: 'http:\/\/127\.0\.0\.1:8788'/);
+  assert.ok(!/^\s*PROMPTCUT_AGENT_EGRESS_TEST_ALLOW\s*:/m.test(pm2), '生产配置不设出网闸的测试例外');
+  assert.throws(() => agentInstance({ PROMPTCUT_AGENT_ASSET_URL: 'http://example.com:8788' }), /ASSET_URL/);
+  const status = planAgentCommand('status-agent', ['--dry-run'], env).script;
+  assert.ok(status.includes('c.api') && !status.includes('set-key.mjs'), '状态脚本读 api.vendor / api.model,提示加密分发');
   for (const [cmd, argv] of [['deploy-agent', []], ['deploy-agent', ['--no-start']], ['deploy-agent', ['--save']], ['status-agent', []], ['stop-agent', []], ['stop-agent', ['--delete']], ['keygen-agent', []], ['keygen-agent', ['--list']], ['keygen-agent', ['--retire', 'abcdEFGH']]]) {
     const plan = planAgentCommand(cmd, [...argv, '--dry-run'], env);
     assert.equal(plan.dryRun, true);

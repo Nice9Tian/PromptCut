@@ -1,7 +1,8 @@
 // 云端 Agent 服务的 PM2 配置模板(契约 docs/plan/cloud-agent-contract.md 第 2.2、11 节)。
 // 部署脚本 `scripts/remote/docservice.mjs deploy-agent` 用 server/agent-service/deploy.mjs 的 agentPm2Config 填好占位符,
 // 写成 {{DIR}}/pm2-agent.config.cjs(仓库外)。手工重建时把花括号占位符(两层花括号括起来的大写名字)换成 server/hosted/deploy/README.md「Agent 服务」一节表里的值。
-// 不含任何秘密:服务私钥在 {{SECRETS}}/service-key.json(0600,目录 0700),模型 Key 的密文在 {{DATA}}/config/keys/(由 set-key.mjs 写),都不进环境变量,也不进这个文件。
+// 不含任何秘密:服务私钥在 {{SECRETS}}/service-key.json(0600,目录 0700),模型 Key 与配音令牌的密文在 {{DATA}}/config/keys/(加密分发导入),都不进环境变量,也不进这个文件。
+// 不要在这里设 PROMPTCUT_AGENT_EGRESS_TEST_ALLOW:它只给探针与演练用,设了出网闸就对点名的地址放行(/healthz 的 egressTestAllow 会是 true)。
 module.exports = {
   apps: [
     {
@@ -24,6 +25,8 @@ module.exports = {
         PROMPTCUT_AGENT_DATA: '{{DATA}}',
         PROMPTCUT_AGENT_SECRETS: '{{SECRETS}}',
         PROMPTCUT_AGENT_DOC_URL: '{{DOC_URL}}',
+        // 同机素材服务(回环):云端 Agent 导入素材、配音入库时凭代成员的素材票据写进它
+        PROMPTCUT_AGENT_ASSET_URL: '{{ASSET_URL}}',
         PROMPTCUT_AGENT_HOST: '127.0.0.1',
         PROMPTCUT_AGENT_PORT: '{{AGENT_PORT}}',
         PROMPTCUT_AGENT_PUBLIC_ORIGIN: '{{PUBLIC_ORIGIN}}',
