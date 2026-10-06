@@ -10,6 +10,9 @@
  *                `disabled` 为真、悬停说明是「在线浏览器模式暂不支持合并 Skill 结果…」，桌面说明不在产物里；桌面产物照旧。
  *                这一项的开关是编译期常量（`TopBar.tsx` 的 `ONLINE_BUILD`），Node 里渲染不出在线态，所以就对产物核。
  *   C10-CATALOG-01/02 在线构建的 `catalog/` 与 `server/catalog/<kind>/index.json` 登记的 Lottie、粒子条目一一对应、逐字节相同；桌面构建不带。
+ *   C10A-API-05 云端 Agent 服务（`docs/plan/cloud-agent-contract.md` 10.3 节）：在线产物里以 `/agent/` 开头的地址字面量只有 `/agent/v1` 一种，且确实有（AI 栏打它）；
+ *   C10A-API-07 在线产物里没有桌面专用的标识：`/api/mcp/events`、`/api/ai/setup`、`/api/chats/`、`PROMPTCUT_AGENT`（03 已覆盖路径类，这一条补非路径的）；
+ *   C10A-API-08 桌面产物里也带云端 AI 栏（桌面版项目放云端时多一项「云端」）：有 `/agent/v1` 以外的地址来自文档服务下发，产物里没有写死的云节点地址。
  * 运行期（真浏览器里的网络记录）见 `scripts/probes/c10a-online-probe.mjs`；守卫本身见 `src/online/c10a-api-guard.test.mjs`。
  *
  * 构建用 vite 的 JS 接口，产物写进临时目录，不碰 `dist/`、`dist-online/`。`src/online/mode.ts` 不在时整组 skip。
@@ -184,4 +187,29 @@ it('C10-CATALOG-01 在线构建的 catalog/ 与 index.json 登记的 Lottie、�
 it('C10-CATALOG-02 桌面构建照旧不带 catalog/（桌面由开发服务器的 /catalog 中间件提供）', { timeout: 240_000 }, async () => {
   await buildDesktop();
   assert.equal(fs.existsSync(path.join(desktopDir, 'catalog')), false);
+});
+
+/*
+ * 云端 Agent 服务的通道（`docs/plan/cloud-agent-contract.md` 10.1～10.3 节）：在线页面的 AI 栏打同源的 `/agent/v1/*`，不是编辑器进程的 `/api/*`。
+ * 守卫与棘轮清单一条不加（C10A-API-03 已守）；这里补「/agent/ 只有一种前缀」与「桌面专用的非路径标识不进在线产物」。
+ */
+const agentLiterals = (text) => [...new Set([...text.matchAll(/["'`](\/agent\/[^"'`\s]*)["'`]/g)].map((m) => m[1]))];
+
+it('C10A-API-05 在线产物里以 /agent/ 开头的地址字面量只有 /agent/v1 一种', { timeout: 240_000 }, async () => {
+  await buildOnline();
+  const lits = agentLiterals(bundleText(onlineDir));
+  assert.deepEqual(lits, ['/agent/v1'], `在线产物里 /agent/ 开头的地址：${lits.join(', ')}`);
+});
+
+it('C10A-API-07 在线产物里没有桌面专用的标识', { timeout: 240_000 }, async () => {
+  await buildOnline();
+  const text = bundleText(onlineDir);
+  for (const id of ['/api/mcp/events', '/api/ai/setup', '/api/chats/', 'PROMPTCUT_AGENT']) assert.equal(text.includes(id), false, `在线产物里不该有 ${id}`);
+});
+
+it('C10A-API-08 桌面产物里没有写死的云节点地址：云端 Agent 的地址由文档服务下发', { timeout: 240_000 }, async () => {
+  await buildDesktop();
+  const text = bundleText(desktopDir);
+  assert.ok(text.includes('在云端运行'), '桌面产物里带云端 AI 栏');
+  assert.equal(/https?:\/\/[^"'`\s]*\/agent\/v1/.test(text), false, '桌面产物里不该写死云节点的 /agent/v1 地址');
 });
