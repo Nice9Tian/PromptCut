@@ -1,6 +1,6 @@
 # 托管方的渲染节点：设计与契约
 
-状态：**主会话已审、按它开工**（2026-10-06，`claude/render-service`；草稿 `acbb2993`）。任务书 `sound-online-render-task.md` 的 D 与第 20～24 条，以及 `cloud-agent-task.md`「用户体验验收」对本段的要求。第 1 批（服务身份、目录、白名单、开关的服务端）已实现，与本文不一致的地方记在文末「实现记录」；其余批次未做。标〔裁：主会话 2026-10-06〕的是主会话的裁定。
+状态：**主会话已审、按它开工**（2026-10-06，`claude/render-service`；草稿 `acbb2993`）。任务书 `sound-online-render-task.md` 的 D 与第 20～24 条，以及 `cloud-agent-task.md`「用户体验验收」对本段的要求。第 1 批（服务身份、目录、白名单、开关的服务端）与第 2 批（主机动态项目与代理模式、管理进程、背压与内存看护、自检、Chrome 沙箱、本机演练探针）已实现，与本文不一致的地方记在文末「实现记录」；方案 A 的隔离工作进程与语义落稿未做。标〔裁：主会话 2026-10-06〕的是主会话的裁定。
 
 依据的现有契约：`auth-contract.md`（凭证、角色、票据）、`render-host-contract.md`（独立渲染主机）、`render-queue-contract.md` B.1、F、I（指纹、卡片锁、前置过滤）、`m7-contract.md` 第 3、6 节、`http-transport-contract.md` 第 10 节（本机信任）。〔裁〕是本文自己定的细节，每条写了理由，主会话可以推翻。「待实现时验证」是没有实测依据、实现时先用探针确认的点。
 
@@ -268,7 +268,7 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 | R1 | 项目「活跃」算上别的托管方服务的连接 | 第 1.3 节的 `active`：不是本服务自己的连接都算（Agent 代成员的连接、Agent 的发布连接），外加 `hosted.demand`。「队列里有未完成的任务」不单列，理由见第 1.3 节；渲染服务手里有认领时做完再断开 | 第 1 批已做（目录模块）；「做完再断」在第 2 批 |
 | R2 | `agent` 服务能以服务身份当发布方，只许发带片段清单的计划 | 队列模块对发布方的身份种类没有限制（`publisher.hello` 谁都能发，只有 `node.hello` 看角色），不用改。权限归第四段的白名单与 `hosted.ticket` 的 `purpose: 'publish'` 分发点。本段的白名单只对 `render` 禁发计划任务 | 第 1 批已留分发点；内容由第四段填 |
 | R3 | 渲染服务认领它发的清单计划 | 节点侧过滤规则 6 只看「是不是带片段清单的计划」，不看发布方。加一条单测：发布方是服务身份的清单计划被主机认领并切分 | 第 2 批 |
-| R4 | 发布方短暂断开不丢任务；已认领的做完照常入库 | 队列现有规则（`render-queue-contract.md` A.8、A.9）：发布方断开后有 10 s 宽限期，期内重连（会话接续不算断开）什么都不丢；超过宽限期，它的订阅被移除，**没人订阅又没被认领的任务删除，已认领的做完**。细任务是切分方（渲染服务）发布的，订阅者里有渲染服务自己，所以计划一旦被切分，细任务不随 Agent 的发布连接断开而丢。结果入库与写清单都是渲染服务自己做的，不依赖发布方在线。这几条待第 2 批核对代码并加单测；若「细任务的订阅者含切分方」不成立，再回来改这里 | 第 2 批 |
+| R4 | 发布方短暂断开不丢任务；已认领的做完照常入库 | 队列现有规则（`render-queue-contract.md` A.8、A.9）：发布方断开后有 10 s 宽限期，期内重连（会话接续不算断开）什么都不丢；超过宽限期，它的订阅被移除，**没人订阅又没被认领的任务删除，已认领的做完**。细任务是切分方（渲染服务）发布的，订阅者里有渲染服务自己，所以计划一旦被切分，细任务不随 Agent 的发布连接断开而丢。结果入库与写清单都是渲染服务自己做的，不依赖发布方在线。**第 2 批已核对代码并加单测（HR25），成立**：`render-queue/queue.mjs` 的 `planParentOf` 与建任务处——细任务的订阅者 = 切分方自己的发布方 id + 计划的全部订阅者；`tick` 里发布方超过宽限期只删它自己的订阅，订阅者清空且还没认领的任务才删。三个边界：(1) 继承只在「计划此刻正由发布这批细任务的节点认领着」时发生（主机是先发细任务、后交计划，满足）；(2) 计划**还没被认领**时发布方走了并超过宽限期，计划被撤——所以发布连接至少要保持到计划被认领；(3) 切分方（渲染服务）自己也断开超过宽限期，而发布方也不在，还没认领的细任务会被删，要发布方回来重发计划。发布方看得到的进度是「每做完一段一条 `task.done`」（帧级的 `task.progress` 不转给发布方）；发布方超过宽限期才重连的，订阅已清，重发同一个计划即可（已完成的当场补一条 `task.done`） | 第 2 批已做 |
 | R5 | 发布方不是页面时，预渲染清单照样写进内容库 | 主机认领清单计划后，按那条连接的内容库写这一版的层表（`snapshot-manifest` 的 `layers:<项目文档 id>`，C10 契约第 18 节第 9 条），与发布方是谁无关；白名单允许。之后才上线的在线页面按层表找清单、直接贴，不用再发任务。加探针步骤：只有 Agent 发布方、没有任何页面，渲完后新开页面断言层是贴上的 | 第 2 批（单测）、第 6 批（探针） |
 | R6 | 渲染服务、Agent 服务、在线页面同一个提交 | 第 7.4 节：三者的代码版本并排比，不一致明确告警、状态里可查 | 第 2、3 批 |
 | R7 | Agent 服务要能知道渲染开关 | `hosted.project` 与 `hosted.projects` 的每一项带 `hosted: { render, agent }`；成员列表顶层同形状 | 第 1 批已做 |
@@ -292,11 +292,11 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 
 - **记账**在托管组合的素材服务里做（它才看得到写入）：凡是凭带 `sv: 'render'` 的票据写成的块，记一条 `{ ns, hash, size, projectId, at }`，追加到 `<托管数据目录>/assets/.service-usage/render.ndjson`，启动时回放成内存表；同一个块被几个项目写到（内容相同）就记几个项目。成员写的块不记、不归这里管。
 - **上限**〔裁：主会话 2026-10-06〕：`min(20 GiB, 托管数据目录所在盘总容量的四分之一)`，`PROMPTCUT_HOSTED_RENDER_CAP_BYTES` 可改。新节点系统盘 39 GB，实际约 9.7 GiB。
-- **到上限**：素材服务对渲染服务的写入回 507 `service-quota`；渲染服务把任务报失败（不重试）、暂停认领 10 分钟并打 `render.quota`。成员的写入不受影响。
+- **到上限**：素材服务对渲染服务的写入回 507 `service-quota`；渲染服务把任务报失败（不重试）、暂停认领 10 分钟并打 `render.quota`。成员的写入不受影响。已实现：产物库（`artifact-transfer.mjs` 的 `createAssetSink`）认出素材客户端重试用尽后抛的 `status === 507` 且 `body.error === 'service-quota'`，改抛不可重试的 `service-quota`；主机（`render-node/host.mjs`）见到任务以它失败就让全部项目暂停认领 `QUOTA_PAUSE_MS`（10 分钟），工作进程与管理进程各打一条 `render.quota`，`/status` 的 `quotaPausedUntil` 可查（HR26）。
+- **记账的两条细则**（`claude/render-service-ops` 已实现）：成员后来也写了同一个块，这个块就不再只归渲染服务（不计入它的用量、不由它的淘汰删）；写之前已由成员入库的块不记。
 - **淘汰**，两条：
   1. 删项目时：这个项目名下的记账条目去掉，不再被任何项目记着的块删除。
-  2. 超过上限的 90% 时：按项目最近一次有成员在线的时刻从旧到新，整项目清掉它名下只归它的块，清到 80% 为止；有成员在线或 24 小时内在线过的项目不清。
-- 第 2 条有一个前提**待实现时验证**：清掉的块在内容库的清单里还有引用，在线页面与低内存档取不到时必须按「没有产物」重新发补渲，而不是卡住或报错。实现时先写探针验这条；验不过就**先只交付到上限即停与第 1 条**，第 2 条记未达成并写明缺什么。
+  2. ~~超过上限的 90% 时按最久没人在线淘汰~~ **不交付，另立专项**〔主会话 2026-10-06 据 `claude/render-service-ops` 的核对〕：它的前提不成立——清单里列着、块却稳定 404 时，在线页面不会按「没有产物」重新发补渲，只当成暂时错误。专项的前提是先让页面与低内存档在块缺失时重新发补渲；在那之前只交付「到上限即停」与第 1 条。
 
 ---
 
@@ -327,14 +327,23 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 | `PROMPTCUT_RENDER_MAX_PROJECTS` | 16 | 第 2 节 |
 | `PROMPTCUT_RENDER_MEMORY_MAX` / `_HIGH` | `6G` / `5G` | 第 4 节 |
 | `PROMPTCUT_RENDER_CPU_QUOTA` | `400%` | 第 4 节 |
-| `PROMPTCUT_RENDER_USER` | `promptcut-render` | 工作进程用的系统用户；空表示与管理进程同一用户 |
+| `PROMPTCUT_RENDER_USER` | 空（部署模板写 `promptcut-render`） | 工作进程用的系统用户，只在有 systemd 时经 `systemd-run --uid` 生效；空表示与管理进程同一用户 |
+| `PROMPTCUT_RENDER_CGROUP` | `auto` | `auto`：有 systemd 与 cgroup v2 就用 slice；`off`：不用 |
+| `PROMPTCUT_RENDER_MEM_LOW` | `2G` | 背压的可用内存线 |
+| `PROMPTCUT_RENDER_DOC_HEALTH_URL` | 由 `DOC_URL` 推出 `http://…/healthz` | 背压用的文档服务自检地址 |
+| `PROMPTCUT_RENDER_EDITOR_DIR` / `_EXPECT_CODE_VERSION` / `_AGENT_STATUS_URL` | `/opt/promptcut-hosted/editor` / 空 / 空 | 比代码版本用（第 7.4 节） |
+| `PROMPTCUT_RENDER_REPORT_TIMEOUT_MS` | 180000 | 工作进程起来后这么久没交过诊断（或中途停交）就结束它重起 |
+| `PROMPTCUT_RENDER_STREAMS` / `_VERBOSE` | 不设 | `1` 开轨道流；`1` 把工作进程的输出原样转出来 |
+| `PROMPTCUT_RENDER_SAMPLE_MS` / `_SKIP_CHECKS` | 5000 / 空 | 测试与演练用：采样间隔；跳过自检里的 `chrome`、`ffmpeg` |
 | `PROMPTCUT_RENDER_USER_CARDS` | `isolated` | `isolated`（方案 A）或 `off`（方案 B） |
 
 PM2 配置由部署脚本生成、放在部署目录里，不含任何秘密（同 `hostedPm2Config`）。
 
+管理进程交给工作进程的环境变量（不由部署配置）：`PROMPTCUT_RENDER_BROKER`、`PROMPTCUT_RENDER_BROKER_KEY`（代理口与这次启动的随机口令）、`PROMPTCUT_CARD_SYNC=0`、`PROMPTCUT_VITE_CACHE_DIR=<PROMPTCUT_RENDER_DATA>/vite-cache`（Vite 的依赖预构建缓存；发布目录属 root、工作进程以服务用户跑时检出目录它写不了，`vite.config.ts` 与 `vite.prerender.config.ts` 认这个变量，不设时行为与原来相同）；其余 `PROMPTCUT_RENDER_*`、集群令牌、`PROMPTCUT_SHARED_CONFIG` 一律不传。
+
 ### 7.3 Chrome 沙箱与启动自检
 
-- **沙箱**：`server/bakery/chrome.mjs` 加自动判断——进程以 root 运行（`process.getuid?.() === 0`）、或在容器里（存在 `/.dockerenv`，或环境变量 `PROMPTCUT_CHROME_NO_SANDBOX=1`）时，启动参数自动加 `--no-sandbox`，并打一行日志说明。`PC_CHROME_ARGS` 照旧可追加。
+- **沙箱**：`server/bakery/chrome.mjs` 加自动判断——进程以 root 运行（`process.getuid?.() === 0`）、或在容器里（存在 `/.dockerenv` 或 `/run/.containerenv`）、或环境变量 `PROMPTCUT_CHROME_NO_SANDBOX=1` 时，启动参数自动加 `--no-sandbox`，并打一行日志说明；`PROMPTCUT_CHROME_NO_SANDBOX=0` 则无论如何不加。**只在 Linux 上判**：Windows、macOS 的启动参数与原来逐项相同（HR20 钉住）。`PC_CHROME_ARGS` 照旧可追加。自检结果的 `chromeSandbox` 写 `on` 或 `off:<原因>`，关着时另有一条 `no-sandbox` 告警。
 - 〔裁：主会话 2026-10-06〕两种跑法**都必须支持**：root 或容器里直接跑（自动带 `--no-sandbox`，任务书第 21 条的原文要求，部署前的容器演练就是这样跑）；以及部署模板推荐的非 root 用户。非 root 是推荐值，不是前提。
 - 〔裁〕**推荐的部署**：工作进程用专门的非 root 用户 `promptcut-render` 跑（无登录权限的服务用户），Chrome 的沙箱照常开着。理由：它要执行别人写的卡片代码；Puppeteer 的文档把 `--no-sandbox` 称为强烈不建议的最后手段。这个用户读不到托管数据目录与私钥目录（都是 0700）。自动加参数只是在只能以 root 跑的环境（测试容器）里兜底。（待实现时验证：Ubuntu 22.04 上非 root 用户的 Chrome 能用用户命名空间沙箱；Puppeteer 文档说 AppArmor 的限制从 23.10 起才有。）
 - **自检**（管理进程启动时做，也可单跑 `node server/hosted-render/main.mjs --check`）。每项失败打一行 `selfcheck.error { reason, detail }`（同时写 stdout 与 stderr），全部项跑完后只要有一项失败就以退出码 78 结束，不带病接活：
@@ -343,9 +352,9 @@ PM2 配置由部署脚本生成、放在部署目录里，不含任何秘密（�
 |---|---|
 | `node-version` | Node ≥ 22.18 |
 | `service-key` | 私钥文件在、权限不宽于 0600、格式对 |
-| `data-dir` | 数据目录可写 |
+| `data-dir` | 数据目录可写；其下的 Vite 缓存目录 `vite-cache` 同样可写 |
 | `no-chrome` / `chrome-launch` | 找得到 chrome-headless-shell；真起一次、开一个空白页（带上面的沙箱判断） |
-| `no-cjk-font` | 在刚起的 Chrome 里量「中文测试」四个字的宽度，与同字号下缺字方框的宽度不同，且 `document.fonts.check('16px sans-serif', '中')` 为真；报错信息写明要装 `fonts-noto-cjk` |
+| `no-cjk-font` | 在刚起的 Chrome 里把「中」「国」各画到画布上比位图：没有中文字体时两个字都是同一个缺字方框（或都不画），位图相同；报错信息写明要装 `fonts-noto-cjk`（实现时改的：量宽度在等宽的缺字方框上分不出来） |
 | `no-ffmpeg` | `ffmpeg -version` 能跑；没有 H.264 编码器只告警（轨道流第一版不开） |
 | `registry` | 控制连接握手成功（登记表里有这把公钥） |
 
@@ -356,7 +365,9 @@ PM2 配置由部署脚本生成、放在部署目录里，不含任何秘密（�
 | `no-cgroup` | 没有 systemd / cgroup v2：无 cgroup 上限，只靠进程内看护（第 4 节） |
 | `code-version` | 自己的代码版本（`frameCode`）与在线页面、Agent 服务的不一致（第 7.4 节）。启动时比一次，之后每 5 分钟比一次；不一致期间状态里 `codeVersion.match` 为假，日志每 10 分钟重复一条 `render.code-mismatch` |
 
-  `registry` 一项失败时不退出，按退避重试（文档服务可能正在重启）。PM2 配置里写 `stop_exit_codes: [78]`，自检不过就停着不反复拉起（待实现时验证这个选项在节点的 PM2 版本上有效；无效就改用带退避的重启）。
+  `registry` 一项失败时不退出，按退避重试（文档服务可能正在重启）；`--check` 不做这一项（不连文档服务），只做上表其余各项：过了退出码 0，不过 78，`deploy-render` 换 `current` 之前先跑它。另有两条只告警的：`no-sandbox`（Chrome 关着沙箱在跑，写明原因）、`no-h264`（ffmpeg 没有 H.264 编码器）。
+
+  **工作进程的看护**（第 2 批加）：进程在、也打过就绪，却超过 `PROMPTCUT_RENDER_REPORT_TIMEOUT_MS` 没向管理进程交过诊断（队列节点没起成，例如探环境时 Chrome 卡住；本机演练里遇到过一次），管理进程打 `render.worker-stalled` 并结束它重起（`worker.exit` 的 `reason` 是 `stalled`）。PM2 配置里写 `stop_exit_codes: [78]`，自检不过就停着不反复拉起（待实现时验证这个选项在节点的 PM2 版本上有效；无效就改用带退避的重启）。
 
 ### 7.4 部署目录、依赖与升级
 
@@ -373,10 +384,10 @@ PM2 配置由部署脚本生成、放在部署目录里，不含任何秘密（�
 ```
 
 - 系统包（`apt-get install`，任务书第 22 条允许）：`fonts-noto-cjk fonts-noto-color-emoji fonts-liberation ffmpeg`，加 Puppeteer 文档列的 Chrome 运行库（见「依据」）。Chrome 用 `npx puppeteer browsers install chrome-headless-shell` 装进发布目录，版本由仓库锁定的 puppeteer 决定。
-- 部署脚本：`scripts/remote/docservice.mjs` 加 `install-render`（系统包、建用户与目录、建 slice 单元）、`deploy-render`（上传、`npm ci`、装 Chrome、`--check`、换 `current`、`pm2 startOrReload`、可选 `--save`）、`status-render`、`keygen-render`。`npm ci` 在节点上跑（本仓库「不跑 npm ci」的规矩说的是本机 worktree）。
+- 部署脚本：`scripts/remote/docservice.mjs` 加 `install-render`（系统包、建用户与目录、建 slice 单元）、`deploy-render`（上传、`npm ci`、装 Chrome、`--check`、换 `current`、`pm2 startOrReload`；**加 `--save` 才 `pm2 save`**）、`status-render`、`keygen-render`、`stop-render`（停掉渲染服务进程）、`rollback-render`（`current` 换回上一份再重载）。`--check` 退出码 78 时 `deploy-render` 什么都不换。`npm ci` 在节点上跑（本仓库「不跑 npm ci」的规矩说的是本机 worktree）。
 - **升级**：新提交放进新的 `releases/` 目录，自检过了才换 `current`、重载；上一份留着，回退就是换回去再重载。重载时手里的认领先放回。
 - **与在线页面、Agent 服务同一提交**：任务的 `requires.codeVersion` 来自发布方（在线页面嵌入的代码版本；Agent 服务按它自己的检出算），渲染服务按自己的检出算（`frameCode`，换行统一成 LF，不含用户卡）。不同提交时它一个任务都认领不了，队列也不报错。所以三者要出自同一个提交。**不能静默**〔裁：主会话 2026-10-06〕：管理进程从两处取对方的代码版本——在线页面的取部署目录里 `editor/` 构建嵌入的版本（配置项 `PROMPTCUT_RENDER_EDITOR_DIR`，缺省 `/opt/promptcut-hosted/editor`；取不到时可用 `PROMPTCUT_RENDER_EXPECT_CODE_VERSION` 直接给）；Agent 服务的取它诊断口报的版本（配置项 `PROMPTCUT_RENDER_AGENT_STATUS_URL`，第四段定地址，没配就不比）。与自己不一致就按第 7.3 节告警，并写进 `/status` 的 `codeVersion: { self, editor, agent, match }`。`status-render` 把三者并排打出来，不同就标红。
-- **PM2 存档与开机自启**〔裁：主会话 2026-10-06〕：`deploy-render` 成功后 `pm2 save`；`pm2-<用户>.service` 没装时 `pm2 startup systemd`（与 `deploy-hosted` 相同）。这两步写在部署脚本里，并在 `server/hosted/deploy/README.md` 里写明手工做法与核对办法（`systemctl is-enabled pm2-root`、`pm2 resurrect` 之后 `pm2 list` 里有 `promptcut-render`）。节点重启后是否真的自动起来，由主会话最后在新节点上定怎么验。
+- **PM2 存档与开机自启**〔裁：主会话 2026-10-06〕：`deploy-render` 带 `--save` 时成功后 `pm2 save`；`pm2-<用户>.service` 没装时 `pm2 startup systemd`（与 `deploy-hosted` 相同）。这两步写在部署脚本里，并在 `server/hosted/deploy/README.md` 里写明手工做法与核对办法（`systemctl is-enabled pm2-root`、`pm2 resurrect` 之后 `pm2 list` 里有 `promptcut-render`）。节点重启后是否真的自动起来，由主会话最后在新节点上定怎么验。
 - **被杀与重启**：进程被杀由 PM2 拉起（`autorestart`）；节点重启由已装的 `pm2-root` 服务按 `pm2 save` 的清单拉起，所以部署成功后要 `pm2 save`。起来之后走自检、控制连接、对账，自动恢复接活。
 
 ### 7.5 用户卡的隔离（方案 A）
@@ -577,6 +588,8 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 | HR20 | Chrome 参数：root、容器标记、环境变量三种情况自动带 `--no-sandbox`，普通用户不带（注入 `getuid` 与文件探测） |
 | HR21 | 容量：`sv` 写入记账、成员写入不记；到上限 507 且只拦服务；删项目清只归它的块、几个项目共有的块不清；按最久没人在线淘汰、24 小时内在线的不清 |
 | HR25 | 没有成员在线时的预渲染（第 5a 节）：发布方是服务身份的清单计划被主机认领并切分；发布方断开超过宽限期后，已切出的细任务不丢、已认领的做完、层表照写；有成员在线的项目先认领 |
+| HR26 | 产物到了容量上限：素材服务回 507 `service-quota` 时产物库抛不可重试的错、任务按不可重试失败、主机全部项目暂停认领 10 分钟、到点恢复 |
+| HR27 | 工作进程起来了却不交诊断的判定；Vite 缓存目录在数据目录下并进自检 |
 | HR22 | 部署脚本的纯函数：PM2 配置、slice 单元、远端脚本的文本（照 `sp-hosted` 里测 `hostedDeployScript` 的做法），里面没有任何秘密 |
 | HR23 | 隔离工作进程的编排（方案 A）：有 `card-source` 的项目只交给隔离进程；一次一个；换项目前清空；轮流的 5 分钟 |
 | HR24 | 界面：项目设置里开关的显示条件（放云端且 `available`）、创建者可改、成员只读（组件测试） |
@@ -719,3 +732,21 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 - `agent` 服务：没有这一行，全拒，留给第四段。
 
 这份清单是按主机节点现在会发的消息定的，还没有在整套演练里抓过实际流量；第 2 批接上代理模式后若发现缺哪一种，回来补并加单测。
+
+### 第 2 批（2026-10-06）：主机动态项目与代理模式、管理进程、看护、自检、本机演练
+
+已实现并有单测（`server/test/hosted-render-service.test.mjs`，HR16～HR20、HR25～HR27；产物库的容量用例在 `artifact-transfer.test.mjs` 的 T6）与探针（`scripts/probes/hosted-render-probe.mjs`）：第 2 节（渲染服务一侧）、第 4 节（并发、背压、内存看护、有成员在线的优先）、第 5a 节 R3～R5、第 6 节「到上限」的渲染服务一侧、第 7.1～7.4 节（管理进程、代理模式、自检、代码版本告警）。
+
+与正文原稿不一致、正文已按实现改过的：
+
+1. **代理口比原稿多一条 `POST /report`**：工作进程每秒对账时把自己的诊断交给管理进程，管理进程不反过来请求工作进程；`GET /projects` 是每秒轮询，不是长轮询。清单项带 `members`、`drain`、`nodeId`。
+2. **节点 id** 是 `hosted-render:<instanceId 前 12 位>/<projectId 去掉 sp_ 的前 8 位>`。
+3. **工作进程发现管理进程没了就自己退出**（每 5 s 带口令问一次代理口：401 立即退，连续 3 次问不通也退），不留孤儿占端口。
+4. **能力位集中在 `render-node/host.mjs` 的 `hostedRenderCapabilities`**：不同步卡的常驻工作进程不报 `userCards`（原来照独立渲染主机报 true，靠卡片代码身份过滤才不认领）；`graphCards` 为 false，留给第二段合流后对。
+5. **自检的中文字体判据**改成比两个汉字的位图（见第 7.3 节）；自检多 `chromeSandbox`、Vite 缓存目录两项。
+6. **看护多一条**：工作进程不交诊断就重起（第 7.3 节）。
+7. **第 5a 节 R4 核对成立**，三个边界写进了 R4 那一格。
+8. **内存超限的退出原因**：管理进程自己量到超限而结束的记 `oom`；有 cgroup 时由内核杀的那种，管理进程只看得到被信号结束（`reason: 'exit'`、`signal: 'SIGKILL'`），不计入「三次降并发」——待新节点上验证后再定要不要按信号归类。
+9. **没做的**：方案 A 的隔离工作进程（第 7.5 节，`isolation.mjs`、HR23、P-iso）；现在的行为等同方案 B（含用户卡的任务渲染服务不认领）。`hosted-render-load-probe`、`hosted-render-evict-probe` 没有单独成文件：负载对比是 `hosted-render-probe` 的 `load` 步骤，淘汰一项不交付。浏览器观察端的 `lowmem`、`online` 两步（第 10.4 节前两行）没有做进探针：探针按「不依赖浏览器」写，成员一侧由 Node 扮演，发的是与在线页面、低内存档同形状的清单计划与补渲计划。
+
+白名单：整套演练里渲染服务的数据连接实际发过的消息都在第 1 批的清单里，没有缺的。
