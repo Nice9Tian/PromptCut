@@ -83,6 +83,8 @@ const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) +
 /** 顺序固定:spaced 在 errors 之前(errors 的最后会把渲染服务停掉) */
 const ALL_STEPS = ['desktop', 'online', 'stop', 'spaced', 'errors'];
 const STEPS = String(arg('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
+/** `--real-model`:只跑真实模型的那一遍(`realPass`;`--real-how desktop` 换成桌面版发起,缺省在线浏览器) */
+const REAL = process.argv.includes('--real-model');
 const BASE = Number(arg('--base-port', 5790));
 const PORTS = { site: BASE, stageA: BASE + 1, stageB: BASE + 2, desktop: BASE + 3, doc: Number(arg('--doc-port', 8798)), asset: Number(arg('--asset-port', 8799)), agent: Number(arg('--agent-port', 5741)), render: Number(arg('--render-port', 5830)) };
 for (const p of USER_PORTS) if ([...Object.values(PORTS), PORTS.desktop + 1, PORTS.desktop + 2].includes(p)) { process.stderr.write(`端口段碰到了 ${p}(用户的编辑器或安装版)\n`); process.exit(2); }
@@ -450,10 +452,102 @@ async function leavePass(how, tag, salt) {
   return conv;
 }
 
+/* ================================================================== 真实模型的一遍(--real-model) */
+
+/**
+ * 模型换成这台电脑上桌面版已配好的 API 直连(只读地用,`server/agent-service/rehearsal-model.mjs`),任务是一句自然语言,断言只看结果:
+ * 发起方的浏览器进程被结束后云端做完 → 重卡渲出来 → 另一位成员的页面看得到改动、署名对、舞台上是渲好的 → 创建者重开找得回对话 →「撤销这步」。
+ * 真实模型的一轮只有二十来秒,比文档服务保留断掉会话的 60 秒短,所以这里不断言「写入落在没有任何成员连接之后」(那一条由模拟模型的跑法验)。
+ */
+async function realPass(how, tag) {
+  const TASK = '请直接改这个项目,不用问我:1)把图表那张卡(片段 clip-bars)的标题改成「季度渠道占比」;2)把它数据里「微信」那一行的数值改成 91;3)把片段 clip-stateful 的结束时间改成第 2.5 秒(开始时间不变)。做完用一句话告诉我改了什么。';
+  const filesBefore = S.assetFiles();
+  let actor;
+  if (how === 'desktop') {
+    actor = await desktopUp({ open: PROC_FILE });
+    await until(`${tag}:桌面版回到这个共享项目`, async () => (await sharedProjectOf(actor.page)) === PID, 120_000, 500);
+  } else {
+    actor = await onlineUp(CRED.creator, { asCreator: true });
+  }
+  await selectCloud(actor.page);
+  const t0 = Date.now();
+  await sendText(actor.page, TASK);
+  const conv = await until(`${tag}:任务被云端接下`, async () => { const id = await conversationOf(actor.page); return id && S.diskConversation(PID, id)?.events.some((e) => e.type === 'user') ? id : null; }, 60_000, 100);
+  timings[`${tag}.acceptedMs`] = Date.now() - t0;
+  await shot(actor.page, `${tag}-1-accepted`);
+  let gone;
+  if (how === 'desktop') { const k = await desktopKill(actor); gone = k.browserGone && k.serverGone && k.portsFree; } else { const k = await killBrowser(actor.browser); browsers.delete(actor.browser); gone = k.gone; }
+  const stateAtKill = S.diskConversation(PID, conv)?.meta?.state ?? null;
+  check(`${tag} RA1 发起方用一句自然语言发出任务、被云端接下后进程被真的结束`, !!conv && gone === true, { accepted: !!conv, initiatorGone: gone, runStateWhenKilled: stateAtKill });
+
+  const fin = await cloudFinishes(conv, { runMs: 600_000 });
+  timings[`${tag}.runMs`] = fin.runMs;
+  timings[`${tag}.renderedMs`] = fin.renderMs;
+  const events = fin.disk?.events ?? [];
+  const used = {};
+  for (const e of events.filter((x) => x.type === 'tool_call')) used[e.name] = (used[e.name] ?? 0) + 1;
+  const said = events.filter((e) => e.type === 'text').map((e) => e.delta ?? '').join('');
+  check(`${tag} RA2 发起方不在了,对话照样跑到结束(模型自己决定怎么改),助手交代了结果`, fin.disk?.meta?.state === 'idle' && !fin.error && said.trim().length > 0 && (used.update_clip ?? 0) + (used.set_clip ?? 0) >= 1, {
+    state: fin.disk?.meta?.state ?? null, tools: used, reply: said.slice(0, 200), error: fin.error ? String(fin.error.message ?? '').slice(0, 160) : null, runMs: fin.runMs,
+  });
+  check(`${tag} RA3 被改动的重卡由云节点的渲染服务渲出来、产物入库`, fin.renderStates.at(-1) === 'done' && S.assetFiles() > filesBefore, { renderEvents: fin.renderStates, assetFiles: [filesBefore, S.assetFiles()], renderedMs: fin.renderMs });
+
+  const bob = await onlineUp(CRED.bob);
+  const got = await until(`${tag}:bob 的页面读到改动`, async () => { const p = await pageProject(bob.page); return p && p.title === '季度渠道占比' ? p : null; }, 30_000, 200);
+  const log = await until(`${tag}:bob 的「Agent 操作记录」里有这一轮`, async () => { const l = await eventLog(bob.page); return l && l.rows.length > 0 ? l : null; }, 20_000, 200);
+  const whos = [...new Set((log?.rows ?? []).map((r) => r.who))];
+  check(`${tag} RA4 另一位成员从在线浏览器进项目:三处改动都在,「Agent 操作记录」里的署名是「${CREATOR_SIGN}」`, !!got && /微信\s*,\s*91/.test(String(got.rows ?? '')) && got.statefulEnd === 2.5 && whos.length === 1 && whos[0] === CREATOR_SIGN, {
+    project: got, eventLog: log ? { count: log.count, who: whos, tools: [...new Set(log.rows.map((r) => r.tool))] } : null,
+  });
+  await shot(bob.page, `${tag}-2-bob-sees-changes`);
+  const play = await playbackSnapshots(bob.page, `${tag}-3-bob-stage-prerendered`);
+  const marks = await localPcMarks(bob.page);
+  check(`${tag} RA5 他的舞台上是渲好的预渲染结果:两张重卡贴着快照、没有占位,没有「需要本地 PC 渲染辅助」;画面不是空白`, !!play.hit && marks.badge === 0 && !!play.stats && play.stats.colors >= 3 && play.stats.topShare < 0.985, {
+    stage: play.hit ? Object.fromEntries(HEAVY.map((id) => [id, { snapshot: play.hit[id].snapshot, placeholder: play.hit[id].placeholder }])) : null, statesSeenWhilePlaying: play.seen, localPcBadges: marks.badge, pixels: play.stats, shot: play.shot,
+  });
+
+  let back;
+  if (how === 'desktop') {
+    back = await desktopUp({ open: PROC_FILE });
+    await until(`${tag}:重新打开后回到同一个共享项目`, async () => (await sharedProjectOf(back.page)) === PID, 120_000, 500);
+  } else {
+    back = await onlineUp(CRED.creator, { asCreator: true });
+  }
+  await until(`${tag}:重新打开后接入方式里有「云端」`, async () => (await providerOptions(back.page))?.options.some((o) => o.value === 'cloud'), 30_000, 200);
+  const opened = await openFromHistory(back.page, conv);
+  const full = await until(`${tag}:点开后完整过程都在`, async () => { const m = await msgs(back.page); return m && toolParts(m).length >= 1 && (lastAssistant(m)?.text ?? '').trim() ? m : null; }, 30_000, 200);
+  const a = lastAssistant(full);
+  const mine = await pageProject(back.page);
+  check(`${tag} RA6 创建者重新打开(新进程):历史里找得到这段对话,过程与结果都在,项目是最新版本,云端渲染完成的状态在`, !!opened.hit && opened.hit.state !== 'running' && !!full && toolParts(full).length === events.filter((e) => e.type === 'tool_call').length
+    && (a?.statuses ?? []).some((s) => /云端渲染完成/.test(s)) && mine?.title === '季度渠道占比' && mine?.statefulEnd === 2.5, {
+    listed: opened.hit, toolCalls: toolParts(full ?? []).length, reply: (a?.text ?? '').slice(0, 80), renderStatus: (a?.statuses ?? []).filter((s) => /渲染/.test(s)), project: mine,
+  });
+  await shot(back.page, `${tag}-4-creator-reopened`);
+  const before = JSON.stringify(await pageProject(back.page));
+  const logBack = await until(`${tag}:创建者的「Agent 操作记录」里有可撤销的步骤`, async () => { const l = await eventLog(back.page); return l && l.rows.some((r) => r.undo === 'ready') ? l : null; }, 20_000, 200);
+  const target = logBack?.rows.find((r) => r.undo === 'ready') ?? null;
+  if (target) await clickUntil(back.page, `[data-pc="agent-event"][data-event-id="${target.id}"] [data-pc="agent-undo"]:not([disabled])`, async () => (await eventLog(back.page))?.rows.find((r) => r.id === target.id)?.undo === 'done');
+  const undoneMine = await until(`${tag}:撤销后创建者页面里项目变了`, async () => (JSON.stringify(await pageProject(back.page)) !== before ? true : null), 10_000, 150);
+  const mineAfter = await pageProject(back.page);
+  const undoneBob = await until(`${tag}:bob 的页面也看到撤销的结果`, async () => { const p = await pageProject(bob.page); return p && p.title === mineAfter?.title && p.rows === mineAfter?.rows && p.statefulEnd === mineAfter?.statefulEnd ? true : null; }, 10_000, 150);
+  const rowAfter = (await eventLog(back.page))?.rows.find((r) => r.id === target?.id) ?? null;
+  check(`${tag} RA7 「撤销这步」撤掉 Agent 的一处改动:按钮变成「已撤销」,创建者与别的成员都看到撤销的结果`, !!target && !!undoneMine && !!undoneBob && rowAfter?.undo === 'done', {
+    undone: target ? { tool: target.tool, who: target.who } : null, button: rowAfter?.undo ?? null, after: mineAfter ? { title: mineAfter.title, rows: mineAfter.rows, statefulEnd: mineAfter.statefulEnd } : null, otherMemberSees: !!undoneBob,
+  });
+  const errors = [...(back.errors ?? []), ...(bob.errors ?? [])];
+  check(`${tag} 这一遍的页面没有页面错误`, errors.length === 0, { sample: errors.slice(0, 3) });
+  if (how === 'desktop') await desktopDown(back); else await closeBrowser(back.browser);
+  await closeBrowser(bob.browser);
+  // 模型往返次数与 token 数(读本机这份 Agent 服务的用量流水)
+  const dir = path.join(TMP, 'agent', 'usage');
+  const rows = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).flatMap((f) => fs.readFileSync(path.join(dir, f), 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })).filter((r) => r && r.kind !== 'service') : [];
+  process.stdout.write(`${JSON.stringify({ realModel: { modelCalls: rows.length, input: rows.reduce((n, r) => n + (r.input ?? 0), 0), output: rows.reduce((n, r) => n + (r.output ?? 0), 0), model: rows[0]?.model ?? null, usageDirFound: fs.existsSync(dir) } })}\n`);
+}
+
 /* ================================================================== 主流程 */
 
 async function setup() {
-  S = await startStack({ tmp: TMP, ports: PORTS, dist: arg('--dist', null), say });
+  S = await startStack({ tmp: TMP, ports: PORTS, dist: arg('--dist', null), say, ...(REAL ? { agentEnv: { PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL: '1' } } : {}) });
   S.startRender();
   const ready = await S.waitRenderReady();
   const agentHealth = await (await fetch(`${S.AGENT_DIRECT}/healthz`)).json();
@@ -810,11 +904,15 @@ let code = 0;
 try {
   for (const s of STEPS) if (!ALL_STEPS.includes(s)) throw new Error(`不认识的步骤 ${s}`);
   await setup();
-  if (STEPS.includes('desktop')) await leavePass('desktop', 'D', `${SALT}-d`);
-  if (STEPS.includes('online')) await leavePass('online', 'O', `${SALT}-o`);
-  if (STEPS.includes('stop')) await stopStep();
-  if (STEPS.includes('spaced')) await spacedStep();
-  if (STEPS.includes('errors')) await errorsStep();
+  if (REAL) {
+    await realPass(arg('--real-how', 'online'), 'R');
+  } else {
+    if (STEPS.includes('desktop')) await leavePass('desktop', 'D', `${SALT}-d`);
+    if (STEPS.includes('online')) await leavePass('online', 'O', `${SALT}-o`);
+    if (STEPS.includes('stop')) await stopStep();
+    if (STEPS.includes('spaced')) await spacedStep();
+    if (STEPS.includes('errors')) await errorsStep();
+  }
 } catch (err) {
   code = 2;
   check('探针自己没出错', false, { error: String(err?.stack ?? err).slice(0, 1200), agentLogTail: S?.agent ? S.agent.text().slice(-600) : null });
