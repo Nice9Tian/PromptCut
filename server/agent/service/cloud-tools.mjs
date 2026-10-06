@@ -59,8 +59,9 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
   sound_generate: { mode: H }, sound_status: { mode: H }, sound_cancel: { mode: H },
   render_card_audio: { mode: P, why: NEED_SYNTH },
   cancel_card_audio: { mode: P, why: NEED_SYNTH },
-  measure_audio: { mode: P, why: '要节点上的 ffmpeg / ffprobe 从素材服务读这段素材来量;这一版还没接上' },
-  measure_audio_js: { mode: P, why: '要节点上的 ffmpeg 解码,再在断网的无头浏览器里跑模型写的测量脚本;这一版还没接上' },
+  // 测响度:素材凭成员的只读票据取到对话的工作目录,用工作区的受限子进程起 ffmpeg 量(`hosted-audio.mjs`;契约第 9.4b 节)
+  measure_audio: { mode: H },
+  measure_audio_js: { mode: P, why: '模型写的测量脚本要在断网的无头浏览器里跑,Agent 服务进程不起浏览器;要渲染服务那一侧开一个跑脚本的口子,这一版还没接上' },
   // ai(19)
   detach_clip_motion: { mode: R }, get_transcript: { mode: R }, fill_captions: { mode: R }, list_captions: { mode: R }, edit_caption: { mode: R },
   list_shots: { mode: R }, list_subjects: { mode: R },
@@ -213,7 +214,7 @@ const CLOUD_SYSTEM_NOTE_LINES = [
   '',
   '- **用户可能已经离开。** 要用到他界面的工具(选区、播放头、播放与暂停、网页接管、扫码登录、开子 Agent 页签)在他不在线时会回「发起方不在线」:不要等,按项目内容继续,在进度汇报里说明哪一步没用上页面状态。',
   LOOK_LINE,
-  '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、卡片声音生成、响度测量与自定义测量、网页采集与网页操作。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
+  '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、卡片声音生成、自定义测量(measure_audio_js)、网页采集与网页操作。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
   '- **素材:** 附件在这个对话的工作目录里,地址形如 `work:attachments/<文件名>`,用 `import_media` 传这个地址装进素材库;网上的文件直接给 `import_media` 传 http(s) 地址。素材库是空的也可以只用卡片做片子,不必为了「有素材」去找素材。',
   '- **卡片:** 建卡改卡照常用(`card_authoring_guide`、`get_card_source`、`create_card`、`edit_card`、`apply_card`)。新卡存进这个项目的卡片库,所有成员都会收到;写卡时 `id`、`name`、`defaults`、`controls` 要写成字面量。卡片里**不能直接引用外链**的图片、字体、脚本(渲染节点与在线舞台都不出网,取不到):要用的图片先 `import_media` 装进素材库,再用它的 cardUrl。建新卡仍是最后手段:`list_cards` 里有合适的就用现成的调参数。',
   '- **配音:** `voice_generate` 用的是托管方的配音服务,会产生费用,按用户的意思用,不要为了试听反复生成。',

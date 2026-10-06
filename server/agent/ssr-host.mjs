@@ -164,6 +164,14 @@ export async function loadSsrHost(load, { apiBase } = {}) {
       assertSize: (recipe) => soundGeneration.assertSoundRecipeSize(recipe),
       commit: (spec) => store.actions.commitSoundEffect(spec),
     },
+    /**
+     * 测响度(契约第 9.4b 节):与桌面版同一份。`measureRequest` 按放好项目的 store 算出「测谁」(只在进程级的锁里用),
+     * `measureFinish` 给量出来的数标上谁在出声。
+     */
+    audio: {
+      measureRequest: (args) => common.measureAudioRequest(args),
+      measureFinish: (req, data) => common.measureAudioFinish(req, data),
+    },
     /** 此刻 store 里项目内容的末尾(秒):新导入的视频接在后面放 */
     contentEnd() {
       return duration.contentEndOf(core.getState().project.tracks ?? []);

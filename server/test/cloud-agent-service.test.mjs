@@ -102,8 +102,8 @@ test('CA-TOOL-02 工具表里的每个工具都归了类;在副本上执行的�
   assert.deepEqual(Object.keys(CLOUD_TOOL_PLAN).filter((n) => !names.includes(n)), [], '云端工具表里有工具表没有的名字');
   const count = (mode) => Object.values(CLOUD_TOOL_PLAN).filter((p) => p.mode === mode).length;
   assert.deepEqual({ route: count('route'), hosted: count('hosted'), server: count('server'), initiator: count('initiator'), pending: count('pending') },
-    { route: 71, hosted: 10, server: 6, initiator: 8, pending: 33 });
-  assert.equal(CLOUD_OPEN_TOOLS.size, 95, '交给模型的 = 除「还没接上」的全部(看画面的四个要节点配了看画面的口子才交,见 cloud-agent-look.test.mjs)');
+    { route: 71, hosted: 11, server: 6, initiator: 8, pending: 32 });
+  assert.equal(CLOUD_OPEN_TOOLS.size, 96, '交给模型的 = 除「还没接上」的全部(看画面的四个要节点配了看画面的口子才交,见 cloud-agent-look.test.mjs)');
   // 在副本上执行的:走路由表的必须是同步实现(进程级的锁里不等外部);点名的两个例外实现本身是同步的
   const route = Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.mode === 'route').map(([n]) => n);
   // 看画面的四个不走路由表(读副本后向渲染服务要一帧,不进锁),与 get_layout 同理
@@ -118,7 +118,7 @@ test('CA-TOOL-02 工具表里的每个工具都归了类;在副本上执行的�
     if (p.mode === 'initiator') assert.ok(typeof p.what === 'string' && p.what, `${n} 要写明用到发起人的什么`);
   }
   assert.ok(pendingByReason().size >= 5);
-  assert.deepEqual([...CLOUD_HOSTED_TOOLS].sort(), ['card_authoring_guide', 'create_card', 'edit_card', 'get_card_source', 'import_media', 'sound_cancel', 'sound_generate', 'sound_status', 'voice_generate', 'voice_list']);
+  assert.deepEqual([...CLOUD_HOSTED_TOOLS].sort(), ['card_authoring_guide', 'create_card', 'edit_card', 'get_card_source', 'import_media', 'measure_audio', 'sound_cancel', 'sound_generate', 'sound_status', 'voice_generate', 'voice_list']);
   assert.deepEqual([...CLOUD_INITIATOR_TOOLS].sort(), ['collect_login', 'collect_login_check', 'get_selection', 'pause', 'play', 'seek', 'spawn_agent', 'web_handoff']);
   assert.deepEqual(checkCloudTool('update_clip'), { ok: true, mode: 'route' });
   assert.deepEqual(checkCloudTool('create_card'), { ok: true, mode: 'hosted' });
@@ -354,7 +354,7 @@ test('CA-ISO-01 / CA-ISO-02 / CA-TOOL-01 / CA-PAGE-01 / CA-HIST-01 / CA-RUN-01 /
     const inst = kit.service._instance(alice);
     const before = (await kit.doc.stateOf('p-a')).rev;
     const closed = tools.map((x) => x.name).filter((n) => !CLOUD_OPEN_TOOLS.has(n));
-    assert.equal(closed.length, 33);
+    assert.equal(closed.length, 32);
     for (const name of closed) {
       const r = await inst.callTool(name, {}, 'c-tools');
       assert.equal(r?.cloudUnavailable, true, `${name} 回「还用不了」`);

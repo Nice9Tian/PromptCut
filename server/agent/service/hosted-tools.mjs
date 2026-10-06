@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createAssetClient } from '../../asset-store/client.mjs';
 import { createSlot, createSoundTools, newSoundState } from './hosted-sound.mjs';
+import { createAudioTools } from './hosted-audio.mjs';
 
 const SERVER_DIR = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -218,6 +219,8 @@ export function createHostedTools({
 
   /** 音效合成在整个进程里同时只跑一个 */
   const soundSlot = createSlot();
+  /** 测响度(ffmpeg 子进程)同理 */
+  const measureSlot = createSlot();
 
   /** 卡片的翻译、审查、语法检查:纯函数,在 `server/vite-plugin-cards.ts` 里(桌面版建卡用的同一份) */
   let cardLibPromise = null;
@@ -709,7 +712,29 @@ export function createHostedTools({
       ToolError: HostedToolError,
     });
 
+    /* ---------- 测响度(`hosted-audio.mjs`) ---------- */
+
+    /** 凭成员本人的只读素材票据按哈希取一份素材(同机素材服务的地址是托管方配的,不经出网闸) */
+    async function fetchAssetByHash(hash, onChunk, { timeoutMs }) {
+      if (!assetBase) throw new HostedToolError('这台云节点没有配置素材服务的地址,云端 Agent 暂时读不到素材。请联系托管方。', { code: 'no-asset-service' });
+      const reply = await docRequest({ type: 'auth.ticket', kind: 'asset', access: 'r' }, ['auth.ticket.ok']);
+      const res = await fetchImpl(`${assetBase.replace(/\/+$/, '')}/api/asset/media/${hash}`, {
+        headers: { Authorization: `Bearer ${reply.ticket}` }, signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status < 200 || res.status >= 300 || !res.body) { try { await res.body?.cancel(); } catch { /* 已经读完 */ } return { status: res.status }; }
+      for await (const chunk of res.body) onChunk(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      return { status: res.status };
+    }
+    const audio = createAudioTools({
+      workspace, host: c.host, slot: measureSlot, fetchAsset: fetchAssetByHash, ToolError: HostedToolError,
+      limits: limits.audio ?? {},
+      ...(limits.audioTools ? { tools: limits.audioTools } : {}),
+      // 只读:在放好项目副本的 store 上算「测谁」,不产生写入
+      read: (apply) => exec().mutate('measure_audio', agentKey, {}, apply),
+    });
+
     const TOOLS = {
+      measure_audio: audio.measure_audio,
       sound_generate: sound.sound_generate,
       sound_status: sound.sound_status,
       sound_cancel: sound.sound_cancel,
