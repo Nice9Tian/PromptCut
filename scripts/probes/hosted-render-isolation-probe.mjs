@@ -61,6 +61,13 @@
  *   （`PROMPTCUT_TEST_NO_EGRESS_HEADER=1`），同一张探测卡再渲一遍：每个目的地在出口代理的拒绝记录里都有、页面仍然读不到任何内容、
  *   收集站仍然是 0——证明代理这一层自己拦得住。`--no-proxy-only` 跳过这一段。
  * K 代理口：不带口令要清单 401；浏览器形状的请求（带 `Sec-Fetch-Site`）连状态口也 403；状态口的输出里没有任何假凭证与票据。
+ * L 「看画面」这一路（云端 Agent 经管理进程的 `/look` 要一帧，契约第 8a 节；`--no-look` 跳过）。探针持一把登记过的 agent 服务私钥扮演 Agent 服务，
+ *   为项目甲要一帧，项目内容里放着同一张越权探测卡（结果标 `look`）：
+ *   L1 前提：这一帧由隔离工作进程出（不是常驻的）、回了图；取回了标 `look` 的结果对象、清单每一类都有记录；对照（读自己的模块与素材）是通的。
+ *   L2 这一路的渲染页里同样读不到：别的项目的内容与卡片源码、节点上的假凭证、工作目录以外的文件；自己这台 Vite 的 `/api/**`（含看画面的那两条）
+ *      全部 403；管理进程（含 `/look`）、常驻工作进程、文档服务、素材服务读不到；元数据地址连不出去；收集站仍然是 0。
+ *   L3 这个口子认身份：不带签名、渲染服务自己的私钥签的、签名对但请求体改过的 401；浏览器形状的（带 `Sec-Fetch-Site`）403；
+ *      绕过管理进程直接请求两个工作进程的看画面接口（不带那个工作进程的口令）403。
  *
  * # 残余面（如实记录，不算失败；写进结果的 `residual`）
  *   1. 素材按哈希寻址：同一台素材服务上，任何有效票据都能按哈希读块（`auth-contract.md` 第 8 节的既有裁定）。探针先以甲的成员身份
@@ -88,6 +95,7 @@ import { createSharedProject, buildAuthProtocols, ticketProtocols } from '../../
 import { readServiceKeyFile, buildServiceProtocols } from '../../server/auth/service-identity.mjs';
 import { clipsPlanTaskOf } from '../../server/render-queue/messages.mjs';
 import { createAssetClient } from '../../server/asset-store/client.mjs';
+import { signLookRequest, LOOK_AUTH_HEADER } from '../../server/hosted-render/look.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FIXTURES = path.join(ROOT, 'scripts', 'probes', 'fixtures', 'render-isolation');
@@ -117,6 +125,7 @@ const RENDER_DATA = path.join(TMP, 'render');
 const ISO_DATA = path.join(RENDER_DATA, 'iso');
 const OUTSIDE_DIR = path.join(TMP, 'outside');
 const PRERENDER_LOG = path.join(TMP, 'prerender.log');
+const AGENT_SECRETS = path.join(TMP, 'agent-secrets');
 
 /* ------------------------------------------------------------------ 记分 */
 const fails = [];
@@ -279,6 +288,8 @@ function startSupervisor(extraEnv = {}) {
     // 两个工作进程合起来的内存上限：不给就用生产缺省（6G / 5G）；演练不验内存上限（那是整套演练 limits 一步的事），要放宽才传 --memory-max
     ...(MEMORY_MAX ? { PROMPTCUT_RENDER_MEMORY_MAX: MEMORY_MAX, PROMPTCUT_RENDER_MEMORY_HIGH: MEMORY_MAX } : {}),
     PROMPTCUT_RENDER_EDITOR_DIR: path.join(TMP, 'no-editor'),
+    // 看画面的口子核对 Agent 服务签名用的登记表：这个临时托管组合的那一份
+    PROMPTCUT_RENDER_LOOK_SERVICES: hostedPaths(HOSTED_DATA).servicesFile,
     // 换项目快一点：闲置 8 s 就结束这一轮（生产缺省 60 s）
     PROMPTCUT_RENDER_ISO_IDLE_MS: String(T(8000)),
     // 预渲染进程的全部输出（含渲染页的页面日志）追加进这个文件：探针从这里取回越权探测卡的结果对象
@@ -355,6 +366,8 @@ async function main() {
     log: (event, fields) => { if (VERBOSE || /error|reject|revoked/.test(event)) say(`hosted.${event}`, fields); },
   });
   runKeygen(['--hosted-data', HOSTED_DATA, '--secrets', RENDER_SECRETS, '--instance-name', '托管方的渲染节点（隔离探针）']);
+  // 看画面那一组（L）：探针持一把登记过的 agent 服务私钥扮演云端 Agent 服务
+  runKeygen(['--hosted-data', HOSTED_DATA, '--secrets', AGENT_SECRETS, '--service', 'agent', '--instance-name', '云端 Agent（隔离探针扮演）']);
 
   // ---------- 假凭证
   const F = {
@@ -426,7 +439,7 @@ async function main() {
     tag,
     ...(tag === 'jia' ? { ownAssetHash: jiaBlob.hash } : {}),
     loopback: {
-      managerStatus: `${STATUS}/status`, managerBroker: `${STATUS}/projects`,
+      managerStatus: `${STATUS}/status`, managerBroker: `${STATUS}/projects`, managerLook: `${STATUS}/look`,
       residentEditor: `http://127.0.0.1:${PORTS.worker}/api/frames/queue`, residentStage: `http://127.0.0.1:${PORTS.worker + 1}/`,
       ownEditor: `http://127.0.0.1:${PORTS.iso}/api/frames/queue`, ownEditorCards: `http://127.0.0.1:${PORTS.iso}/api/cards/sync/status`,
       docService: `http://127.0.0.1:${PORTS.doc}/healthz`, assetService: `http://127.0.0.1:${PORTS.asset}/api/asset/media/${other.hash ?? '0'.repeat(64)}`,
@@ -623,6 +636,88 @@ async function main() {
   const asBrowser = await fetch(`${STATUS}/status`, { headers: { 'sec-fetch-site': 'cross-site', origin: 'http://127.0.0.1:1' } }).then((r) => r.status).catch(() => 0);
   const statusText = JSON.stringify(await status());
   check('K', '代理口：不带口令要清单 401；浏览器形状的请求连状态口也 403；状态口的输出里没有假凭证与票据', noKey === 401 && asBrowser === 403 && fakesIn(statusText).length === 0 && !TICKET_RE.test(statusText), { noKey, asBrowser, fakes: fakesIn(statusText) });
+
+  /* ---- L 看画面这一路：同一张越权探测卡，经管理进程的 /look 渲一帧 */
+  if (!flag('--no-look')) {
+    say('look', {});
+    const agentKey = readServiceKeyFile(AGENT_SECRETS);
+    const lookAsk = async (signer, msg, { headers = {}, tamper = false } = {}) => {
+      const text = JSON.stringify(msg);
+      const res = await fetch(`${STATUS}/look`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(signer ? { [LOOK_AUTH_HEADER]: signLookRequest(signer, text) } : {}), ...headers },
+        body: tamper ? text.replace('"t":1', '"t":2') : text,
+        signal: AbortSignal.timeout(T(240_000)),
+      });
+      return { status: res.status, json: await res.json().catch(() => null) };
+    };
+    const lookCtx = { ...ctxOf('jia', { projectId: yi.projectId, docId: yi.docId, hash: yiBlob.hash, cardFiles: ['src/cards/user/overreach-yi-only.tsx'] }), tag: 'look' };
+    const lookProject = projectOf(jia, [{ id: 'clip-probe', cardId: 'overreach-probe', params: { ctx: lookCtx } }, { id: 'clip-builtin', cardId: 'r6-stateful' }]);
+    const jiaCards = Object.fromEntries(['overreach-probe.tsx', 'overreach-probe-lib.ts', 'overreach-marker-jia.tsx', 'overreach-graph.tsx'].map((f) => [`src/cards/user/${f}`, null]));
+    const lookMsg = { projectId: jia.projectId, path: '/api/vision/snapshot', body: { project: lookProject, t: 1 }, cards: jiaCards, timeoutMs: 170_000 };
+    const markL = prerenderText().length;
+    const supMarkL = supLogs.length;
+    const collectorL = { tcp: collector.tcp, http: collector.http.length, udp: collector.udp };
+    const lookBefore = (await status()).look ?? null;
+    let got = null;
+    try { got = await lookAsk(agentKey, lookMsg); } catch (err) { out.lookError = String(err?.message ?? err); }
+    await delay(1500);
+    const sLook = await status();
+    const partL = prerenderText().slice(markL);
+    const lookReports = reportsFrom(partL).filter((r) => r.tag === 'look');
+    out.look = { status: got?.status ?? null, ok: got?.json?.ok ?? null, look: got?.json?.look ?? null, image: got?.json?.__image?.base64 ? `${got.json.width}x${got.json.height}` : null, reports: lookReports.length,
+      byWorker: sLook.look?.byWorker ?? null, byWorkerBefore: lookBefore?.byWorker ?? null, isoCurrent: sLook.isolation?.current?.projectId === jia.projectId ? '甲' : (sLook.isolation?.current ? '别的项目' : null) };
+    check('L1', '看画面这一帧由隔离工作进程出（不是常驻的），回了图', got?.status === 200 && got.json?.ok === true && !!got.json?.__image?.base64
+      && (sLook.look?.byWorker?.isolated ?? 0) === (lookBefore?.byWorker?.isolated ?? 0) + 1 && (sLook.look?.byWorker?.resident ?? 0) === (lookBefore?.byWorker?.resident ?? 0), { ...out.look, error: out.lookError ?? got?.json?.error });
+    check('L1', '取回了看画面这一路的结果对象，固定清单的每一类都有记录', lookReports.length >= 1 && !lookReports.some((r) => r.broken)
+      && ['globals.', 'storage.', 'window.', 'self.', 'loopback.', 'metadata.', 'other.', 'collector.', 'outside['].every((p) => itemsOf(lookReports.slice(0, 1), p).length > 0), { reports: lookReports.length, items: lookReports[0] ? Object.keys(lookReports[0].items).length : 0 });
+    const ownL = itemsOf(lookReports, 'other.overlayListing');
+    const ownAssetL = itemsOf(lookReports, 'own.asset');
+    check('L1', '对照：这一路的渲染页读自己这台预渲染 Vite 上的模块、读自己项目的素材是通的', ownL.length > 0 && ownL.every((it) => /^200 /.test(it.got ?? '')) && ownAssetL.length > 0 && ownAssetL.every((it) => (it.got ?? '').includes(OWN_MARK)),
+      { module: ownL.slice(0, 1).map((it) => String(it.got).slice(0, 60)), asset: ownAssetL.slice(0, 1).map((it) => String(it.got ?? it.err).slice(0, 60)) });
+    const hitLook = [...new Set(lookReports.flatMap((r) => fakesIn(r.raw, allowJia)))];
+    check('L2', '看画面这一路的结果里没有任何不该有的假凭证（节点上的、工作目录以外的、乙的内容与卡片源码），没有票据形状的串', lookReports.length >= 1 && hitLook.length === 0 && !TICKET_RE.test(lookReports.map((r) => r.raw).join('\n')), hitLook);
+    const selfL = itemsOf(lookReports, 'self.');
+    const lookApis = selfL.filter((it) => /\/api\/vision\/snapshot|\/api\/ai\/visual/.test(it.name));
+    check('L2', '这一路的渲染页请求自己这台 Vite 的 /api/**（清单里每一条，含看画面的那两条）：都被页面请求闸拒掉（403 page-gate）', selfL.length >= 16 && selfL.every(gated) && lookApis.length === 2,
+      selfL.filter((it) => !gated(it)).slice(0, 4).concat(lookApis.map((it) => ({ name: it.name, got: String(it.got ?? it.err).slice(0, 60) }))));
+    const loopL = itemsOf(lookReports, 'loopback.');
+    const loopReadL = loopL.filter((it) => !denied(it) && !opaque(it) && !frameBlind(it));
+    const metaL = itemsOf(lookReports, 'metadata.');
+    check('L2', '这一路的渲染页读不到管理进程（状态口、代理口、/look）、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务；元数据地址连不出去', loopL.some((it) => /managerLook/.test(it.name)) && loopReadL.length === 0 && metaL.length > 0 && metaL.every((it) => it.ok === false),
+      loopReadL.slice(0, 4).concat(loopL.filter((it) => /managerLook/.test(it.name)).slice(0, 2)));
+    const outsideL = itemsOf(lookReports, 'outside[');
+    const outsideHitL = outsideL.filter((it) => fakesIn(`${it.got ?? ''}${it.err ?? ''}`).length > 0);
+    const outside200L = outsideL.filter((it) => it.ok && /^200 /.test(it.got ?? '') && !/^200 \S+ <!doctype html>/i.test(it.got ?? ''));
+    check('L2', '这一路的渲染页读不到工作目录以外的四个文件', outsideL.length >= 40 && outsideHitL.length === 0 && outside200L.length === 0, outsideHitL.concat(outside200L).slice(0, 3).concat([{ attempts: outsideL.length }]));
+    const otherCardL = itemsOf(lookReports, 'other.card ');
+    check('L2', '这一路的渲染页取不到别的项目（乙）的卡片文件', otherCardL.length > 0 && otherCardL.every((it) => denied(it) || !/overreachYiOnly/.test(it.got ?? '')), otherCardL.map((it) => `${it.name}=${String(it.got ?? it.err).slice(0, 40)}`));
+    check('L2', '看画面期间：收集站仍然 0 条 TCP 连接、0 个 HTTP 请求、0 个 UDP 包；管理进程没有收到任何浏览器发来的请求', collector.tcp === collectorL.tcp && collector.http.length === collectorL.http && collector.udp === collectorL.udp
+      && !supLogs.slice(supMarkL).some((l) => l.event === 'broker.browser-refused'), { tcp: collector.tcp - collectorL.tcp, http: collector.http.length - collectorL.http, udp: collector.udp - collectorL.udp });
+    const logsL = `${partL}\n${supLogs.slice(supMarkL).map((l) => JSON.stringify(l)).join('\n')}`;
+    const inLogsL = fakesIn(logsL).filter((label) => NODE_LEVEL.includes(label));
+    check('L2', '看画面期间工作进程与管理进程的输出里没有节点上的假凭证', inLogsL.length === 0, inLogsL);
+
+    // L3 认身份与绕行
+    const renderKey = readServiceKeyFile(RENDER_SECRETS);
+    const servedBefore = (await status()).look?.served ?? 0;
+    const small = { ...lookMsg, timeoutMs: 5000 };
+    const unsigned = await lookAsk(null, small);
+    const byRender = await lookAsk(renderKey, small);
+    const asAgentWithRenderKey = await lookAsk({ ...renderKey, service: 'agent' }, small);
+    const tampered = await lookAsk(agentKey, small, { tamper: true });
+    const browserish = await lookAsk(agentKey, small, { headers: { 'sec-fetch-site': 'same-site' } });
+    const withWorkerKeyOnly = await fetch(`${STATUS}/look`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer not-a-signature' }, body: JSON.stringify(small) }).then((r) => r.status).catch(() => 0);
+    const servedAfter = (await status()).look?.served ?? 0;
+    check('L3', '看画面的口子认身份：不带签名、渲染服务自己的私钥签的（报本名或冒称 agent）、签名对但请求体改过的都 401；浏览器形状的 403；一帧都没多出', unsigned.status === 401 && byRender.status === 401 && asAgentWithRenderKey.status === 401
+      && tampered.status === 401 && browserish.status === 403 && withWorkerKeyOnly === 401 && servedAfter === servedBefore && ![unsigned, byRender, asAgentWithRenderKey, tampered, browserish].some((r) => r.json?.__image),
+      { unsigned: unsigned.status, renderKey: byRender.status, renderKeyAsAgent: asAgentWithRenderKey.status, tampered: tampered.status, browserShaped: browserish.status, bearerOnly: withWorkerKeyOnly, served: [servedBefore, servedAfter] });
+    const direct = async (port) => fetch(`http://127.0.0.1:${port}/api/vision/snapshot`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: lookProject, t: 1 }), signal: AbortSignal.timeout(15_000) })
+      .then(async (r) => `${r.status} ${(await r.text()).slice(0, 60)}`).catch((e) => `连不上 ${String(e?.cause?.code ?? e?.message ?? e).slice(0, 40)}`);
+    const directResident = await direct(PORTS.worker);
+    const directIso = await direct(PORTS.iso);
+    check('L3', '绕过管理进程直接请求工作进程的看画面接口（不带那个工作进程的口令）：常驻的 403；隔离的 403（或它已经结束、连不上）', /^403 .*look-key/.test(directResident) && (/^403 .*look-key/.test(directIso) || /^连不上/.test(directIso)), { resident: directResident, isolated: directIso });
+  }
 
   /* ---- P 对照段：只留出口代理一层（不发出口白名单头），同一张探测卡再渲一遍 */
   if (!flag('--no-proxy-only')) {

@@ -180,6 +180,9 @@ export async function runOverreach(ctx: Ctx): Promise<Report> {
     "/__open-in-editor",
   ];
   await Promise.all(sameOrigin.map((p) => t(`self.GET ${p}`, () => fetchText(p))));
+  // 「看画面」的那批接口（云端 Agent 经管理进程转来才出图）：页面自己来要。没被拦也只是「缺少 project」/「没有这条记录」，不会渲任何东西
+  await t("self.POST /api/vision/snapshot", () => fetchText("/api/vision/snapshot", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
+  await t("self.GET /api/ai/visual/v-000000.json", () => fetchText("/api/ai/visual/v-000000.json"));
   // 写方法：发给一条不存在的接口——没被拦也只是 404，不会改到任何东西
   await t("self.POST /api/overreach-probe/no-such-endpoint", () => fetchText("/api/overreach-probe/no-such-endpoint", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
   await t("self.ws", () => wsOpen(`ws://${location.host}/`));
