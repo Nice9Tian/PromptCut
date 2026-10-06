@@ -48,4 +48,7 @@
 - 源码、参数、事件或输入身份改变会使旧产物过期；成功入库且目标未改变才替换引用。失败、取消或迟到结果不替换旧引用。
 - 片段静音用既有 `audioMuted`，独立音量用 `audioVolume`，不修改视觉不透明度。分离内嵌声音返回 `EMBEDDED_CARD_AUDIO_UNSEPARABLE`，批量操作先全部校验再提交。
 
+- 在线浏览器里，同步来的用户卡与图卡的 `audio()` 在舞台源的专用后台线程里执行；线程里没有 DOM，一载入就要 DOM 的包（`lottie-web`、`@tsparticles/*`）在那里是占位，声音代码用到就算在线合成不了；读素材采样的音频图卡不在线合成〔裁：`online-card-exec-contract.md` 3.5〕。
+- 卡片用 `cardSoundBlock`（`src/cards/native/sound-effects.ts`）按块求声音配方，不要在 `audio()` 里一次把整段 `renderSoundEffectBlock`：后者单次最多 65536 个采样，预览一次请求整个片段会被拒。
+
 - 对含 `audio()` 的视觉卡，宿主传给 `Component` / `card()` 的 `t` 已包含源偏移，与音频采样位置同钟；`sourceOffset` 只用于诊断，不重复相加。普通无声 DOM 卡保持原本局部 `t` 语义。
