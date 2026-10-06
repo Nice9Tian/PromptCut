@@ -12,7 +12,8 @@ import { codexAuthState } from './codex-auth-state.mjs';
 export function authUrlFrom(text, provider) {
   const hosts = provider === 'codex' ? ['auth.openai.com', 'chatgpt.com'] : provider === 'agy'
     ? ['accounts.google.com', 'antigravity.google', 'www.antigravity.google']
-    : ['claude.ai', 'console.anthropic.com', 'platform.claude.com'];
+    // claude.com:Claude Code 2.1.x 起登录页在 claude.com/cai/oauth/authorize;少了它,「打开登录网页」的链接就不出现。
+    : ['claude.ai', 'claude.com', 'console.anthropic.com', 'platform.claude.com'];
   for (const candidate of text.match(/https:\/\/[^\s<>"\x1b]+/g) || []) {
     try {
       const url = new URL(candidate);

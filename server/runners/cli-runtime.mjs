@@ -11,6 +11,10 @@ export function cliEnv(provider, base = process.env) {
   const env = { ...base };
   // PowerShell 7 module paths can shadow Windows PowerShell 5's built-ins.
   for (const key of Object.keys(env)) if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  // 桌面外壳给后台进程设了 BROWSER=none(desktop/src-tauri/src/lib.rs),本意只是不让 Vite 自己开浏览器。
+  // 这个值原样传给 CLI 的话,Claude Code 的登录命令会把 "none" 当成浏览器程序去找,找不到,登录页就不弹。
+  // 只去掉这一个记号:用户自己指定的浏览器(别的值)照常传下去。
+  for (const key of Object.keys(env)) if (key.toLowerCase() === 'browser' && String(env[key]).trim().toLowerCase() === 'none') delete env[key];
   // A desktop Codex configuration may contain providers/options unsupported by the CLI.
   // Keep PromptCut login and execution in the same independent home.
   if (provider === 'codex') {
