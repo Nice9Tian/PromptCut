@@ -37,7 +37,7 @@ export const userGeneration = (rec, userId) => {
 /**
  * 签一张票据。
  * @param {object} rec 项目记录（要 `ticketKey`、`generation`、`userGenerations`）
- * @param {object} fields `{ k, u, r, c?, o?, dn?, cr?, sv?, sk? }`
+ * @param {object} fields `{ k, u, r, c?, o?, dn?, cr?, sv?, sk?, acc?, pu? }`
  * @param {number} at 签发时刻
  * @returns {{ ticket: string, exp: number }}
  */
@@ -64,6 +64,9 @@ export function signTicket(rec, fields, at) {
   if (fields.sv !== undefined && fields.sv !== null) {
     payload.sv = fields.sv;
     payload.sk = fields.sk;
+    // 云端 Agent 服务的两种连接票据（`docs/plan/cloud-agent-contract.md` 第 4.3、16 节）：代成员的带 `acc`，只用来发布补渲计划的带 `pu`
+    if (fields.acc !== undefined && fields.acc !== null) payload.acc = fields.acc;
+    if (fields.pu !== undefined && fields.pu !== null) payload.pu = fields.pu;
   }
   const seg = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const sig = sign(rec.ticketKey, `v1.${seg}`).toString('base64url');
@@ -128,10 +131,13 @@ export function verifyTicket(ticket, { lookup, now, kind } = {}) {
   } else if (p.sk !== undefined || isReservedUsername(who.username)) {
     return bad('format');
   }
+  // `acc`（代成员的服务连接的权限）只出现在成员的 `sv` 连接票据上；`pu`（只用来发布）只出现在服务自己身份的 `sv` 连接票据上
+  if (p.acc !== undefined && (p.sv === undefined || p.k !== 'conn' || isReservedUsername(who.username) || (p.acc !== 'r' && p.acc !== 'rw'))) return bad('format');
+  if (p.pu !== undefined && (p.sv === undefined || p.k !== 'conn' || !isReservedUsername(who.username) || p.pu !== 'publish')) return bad('format');
   if (p.k === 'asset' && p.r !== 'r' && p.r !== 'rw') return bad('format');
   if (p.k === 'conn') {
     if (!isRole(p.r)) return bad('format');
-    if (p.r === 'agent' && !isConversation(p.c)) return bad('format');
+    if (p.r === 'agent' && !isConversation(p.c) && p.pu !== 'publish') return bad('format');
     if (p.c !== undefined && !isConversation(p.c)) return bad('format');
     if (p.o !== undefined && (p.r !== 'render' || !normalizeOwner(p.o))) return bad('format');
     if (p.dn !== undefined && !isDeviceName(p.dn)) return bad('format');
