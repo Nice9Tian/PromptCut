@@ -322,7 +322,7 @@ export const ITEMS = [
     id: 'P-m7-browser', name: 'M7 纯浏览器节点验收(本机替身,A1～A12)', category: '探针', taskRef: '主计划第 7 节 M7;任务书一 第 16、17 条',
     tasks: ['R16', 'R17'], covers: ['m7-browser-probe.mjs'],
     cmd: probe('m7-browser-probe', ['--role', 'all', '--timing-authoritative', '--base-port', B, '--out', '{item}']),
-    pass: { exit: [0, 3] }, timing: 'laptop', timingNote: 'A4 最慢锚点段 ≤ 30 s、A5 让路后恢复、A12 长任务 0;W7 是真跨机项(退出码 3 表示只剩 W7 待跨机,算过)',
+    pass: { exit: [0, 3], strictJson: false, must: ['"fails":\\[\\]'] }, timing: 'laptop', timingNote: 'A4 最慢锚点段 ≤ 30 s、A5 让路后恢复、A12 长任务 0;W7 是真跨机项(退出码 3 表示只剩 W7 待跨机,算过)',
     timeoutMin: 50, known: 'main 上有带耗时门槛或跨机的 pending 项(退出码 3);A10 抢卡一步历史上贴着 300 s 等待上限',
   },
   {
