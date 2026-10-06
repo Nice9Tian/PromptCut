@@ -86,6 +86,7 @@ test('FSA-04 validateManifest:逐项抓错', () => {
   bad(base({ id: 'T-2', manual: '看图' }), /不能带命令/);
   bad(base({ id: 'T-2', cmd: undefined, pass: undefined, manual: 3 }), /manual 要写明/);
   bad(base({ id: 'T-2', tasks: ['X1'] }), /tasks 要/);
+  assert.deepEqual(validateManifest([base({ id: 'T-3', tasks: ['C4a', 'K1', 'J1'] })]), []);
   bad(base({ id: 'T-2', parallel: true }), /parallel 只用于 steps/);
   bad(base({ id: 'T-2', timeoutMin: 999 }), /timeoutMin/);
   bad(base({ id: 'T-2', requiresText: [{ file: 'a' }] }), /requiresText/);
@@ -120,10 +121,11 @@ test('FSA-05 清单自洽:prereq 都在、占位符都认得、端口不踩禁�
 });
 
 test('FSA-06 任务书的每一条编号验收都至少被清单里一项覆盖', () => {
-  const all = [...TASK_ACCEPTANCE.R, ...TASK_ACCEPTANCE.C, ...TASK_ACCEPTANCE.U];
+  const all = [...TASK_ACCEPTANCE.R, ...TASK_ACCEPTANCE.C, ...TASK_ACCEPTANCE.U, ...TASK_ACCEPTANCE.N];
   assert.equal(TASK_ACCEPTANCE.R.length, 25);
   assert.equal(TASK_ACCEPTANCE.C.length, 13);
   assert.equal(TASK_ACCEPTANCE.U.length, 6);
+  assert.deepEqual(TASK_ACCEPTANCE.N, ['J1', 'K1', 'C4a', 'C4b', 'C4c', 'C8a', 'C8b', 'C8c']);
   const m = taskMatrix(ITEMS, all);
   assert.deepEqual(m.uncovered, []);
   // 每个类别都有项,且都是合法类别
@@ -134,6 +136,7 @@ test('FSA-06 任务书的每一条编号验收都至少被清单里一项覆盖'
 test('FSA-07 清单里带耗时门槛的项都写了门槛,只能在新节点上验的项不带命令', () => {
   for (const it of ITEMS) {
     if (it.timing === 'laptop') assert.ok(it.timingNote);
+    if (it.realModel) assert.ok(it.remoteOnly, `${it.id}:真实模型的行写在 remoteOnly 里`);
     if (it.remoteOnly) { assert.ok(!it.cmd && !it.steps, it.id); assert.ok(typeof it.remoteOnly === 'string' && it.remoteOnly.length > 10); }
     if (it.manual) assert.ok(!it.cmd && !it.steps, it.id);
   }
@@ -318,7 +321,7 @@ function writeFakeManifest(dir) {
     { id: 'T-idle', name: '没输出被杀', category: '探针', taskRef: '测试', idleKillMin: 0.02, timeoutMin: 1, cmd: ['node', '-e', 'setTimeout(()=>{},60000)'], pass: { exit: 0 } },
   ];
   const file = path.join(dir, 'fake-manifest.mjs');
-  fs.writeFileSync(file, `export const ITEMS = ${JSON.stringify(items, null, 2)};\nexport const EXCLUDED_PROBE_FILES = {};\nexport const TASK_ACCEPTANCE = { R: [], C: [], U: [] };\n`);
+  fs.writeFileSync(file, `export const ITEMS = ${JSON.stringify(items, null, 2)};\nexport const EXCLUDED_PROBE_FILES = {};\nexport const TASK_ACCEPTANCE = { R: [], C: [], U: [], N: [] };\n`);
   return file;
 }
 

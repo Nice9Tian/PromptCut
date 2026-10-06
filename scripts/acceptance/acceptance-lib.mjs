@@ -140,7 +140,7 @@ export function validateManifest(items) {
     if (it.idleKillMin !== undefined && !(it.idleKillMin > 0)) errs.push(`${at}:idleKillMin 要正数`);
     if (it.requires !== undefined && !(Array.isArray(it.requires) && it.requires.every((s) => typeof s === 'string'))) errs.push(`${at}:requires 要字符串数组`);
     if (it.requiresText !== undefined && !(Array.isArray(it.requiresText) && it.requiresText.every((r) => r && typeof r.file === 'string' && typeof r.text === 'string'))) errs.push(`${at}:requiresText 要 [{ file, text }]`);
-    if (it.tasks !== undefined && !(Array.isArray(it.tasks) && it.tasks.every((t) => /^[RCU]\d+$/.test(t)))) errs.push(`${at}:tasks 要 R<n> / C<n> / U<n> 的数组`);
+    if (it.tasks !== undefined && !(Array.isArray(it.tasks) && it.tasks.every((t) => /^[RCUKJ]\d+[a-z]?$/.test(t)))) errs.push(`${at}:tasks 要 R<n> / C<n> / U<n> / K<n> / J<n>(可带小写字母后缀)的数组`);
     if (it.covers !== undefined && !(Array.isArray(it.covers) && it.covers.every((c) => typeof c === 'string'))) errs.push(`${at}:covers 要字符串数组`);
     if (it.parallel !== undefined && typeof it.parallel !== 'boolean') errs.push(`${at}:parallel 要布尔`);
     if (it.parallel && !it.steps) errs.push(`${at}:parallel 只用于 steps`);
@@ -323,6 +323,7 @@ export function describeItem(item) {
   const flags = [];
   if (item.timing === 'laptop') flags.push('笔记本复核');
   if (item.remoteOnly) flags.push('只能在新节点上验');
+  if (item.realModel) flags.push('真实模型');
   if (item.manual) flags.push('人工');
   if (item.optional) flags.push('补充');
   if ((item.needs || []).length) flags.push('需要:' + item.needs.join('+'));

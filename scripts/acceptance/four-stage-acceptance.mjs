@@ -48,7 +48,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // 清单模块可以用环境变量 PC_ACCEPTANCE_MANIFEST 换成别的(单测用一份假清单跑真的子进程流程)
 const MANIFEST_FILE = process.env.PC_ACCEPTANCE_MANIFEST ? path.resolve(process.env.PC_ACCEPTANCE_MANIFEST) : path.join(HERE, 'four-stage-manifest.mjs');
-const { ITEMS, EXCLUDED_PROBE_FILES = {}, TASK_ACCEPTANCE = { R: [], C: [], U: [] } } = await import(pathToFileURL(MANIFEST_FILE).href);
+const { ITEMS, EXCLUDED_PROBE_FILES = {}, TASK_ACCEPTANCE = { R: [], C: [], U: [], N: [] } } = await import(pathToFileURL(MANIFEST_FILE).href);
 
 /* ------------------------------------------------------------------ 小工具 */
 
@@ -304,7 +304,7 @@ async function main() {
     return 0;
   }
   if (opts.matrix) {
-    console.log(matrixText(ITEMS, { '任务书一 sound-online-render-task.md 编号验收': TASK_ACCEPTANCE.R, '任务书二 cloud-agent-task.md 完成条件': TASK_ACCEPTANCE.C, '任务书二「用户体验验收」六条': TASK_ACCEPTANCE.U }));
+    console.log(matrixText(ITEMS, { '任务书一 sound-online-render-task.md 编号验收': TASK_ACCEPTANCE.R, '任务书二 cloud-agent-task.md 完成条件': TASK_ACCEPTANCE.C, '任务书二「用户体验验收」六条': TASK_ACCEPTANCE.U, '任务书二 2026-10-07 更新带来的编号(J 工具范围、K 诊断报告、第 4 条新增三条、第 8 条真实模型三样)': TASK_ACCEPTANCE.N }));
     return 0;
   }
   if (opts.checkCoverage) {
