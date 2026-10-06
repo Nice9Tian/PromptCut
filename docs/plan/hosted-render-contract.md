@@ -840,4 +840,25 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 - 非 root 的服务用户、只读的发布目录、0700 的目录这一层纵深只在新节点上有，本机演练没有覆盖；Linux 上软件 WebGL 跑图卡的画面没有验。
 - 隔离工作进程的冷启动（Vite 的依赖缓存每一轮都清）本机约 7～11 s；这是「整个数据目录清空」的代价，没有另做缓存。
 - 并发总数降到 1 之后隔离工作进程与常驻工作进程之间没有轮转（第 7.5 节）。
-- Windows 上管理进程自己量的进程树内存把共享页重复计入，两棵工作进程树空着就量出 7 GB 上下：本机演练把内存上限放宽到 32G（`--memory-max`），真实的上限留给新节点的 cgroup。
+- ~~Windows 上管理进程自己量的进程树内存把共享页重复计入……本机演练把内存上限放宽到 32G~~：已修（2026-10-07），量法改成不重复的口径、探针改回生产的 6G / 5G，见下一节「内存看护量法的修正」。
+
+### 内存看护量法的修正（2026-10-07，`claude/render-service`）
+
+**缺陷。** 在没有 systemd 的 Linux 容器（4 核、root、15 GiB，chrome-headless-shell 152）上演练整套时，`usercard` 一步里隔离工作进程每次刚就绪就被 `render.memory-exceeded`（`victim: isolated`、`reason: oom`）结束，5 次都是这样、一个任务也没认领到。读数：常驻树空着 `workerRss` 6.68～6.83 GB、隔离树 `isoRss` 2.6～3.7 GB，上限 `max = 6442450944`，而同一时刻 `MemAvailable` 约 14 GB。Windows 上同样偏高（两棵树合计约 6.9 GB），上一轮靠探针放宽到 32G 绕过，没有查原因。
+
+**原因。** 管理进程按进程树累加每个进程的工作集（Linux 读 `/proc/<pid>/stat` 的 rss，Windows 读 `WorkingSetSize`）。Chrome 多进程，每个进程的工作集都含着共享的库、字体、GPU 与共享内存页，累加把同一页算了好几遍。有 systemd 时硬上限由 cgroup 执行，但管理进程里「自己量、超了就杀」的看护照样在跑，量法不对就会一直误杀隔离工作进程。
+
+**改法**（`server/hosted-render/limits.mjs`，口径与逐级退路写在第 4 节「内存怎么量、谁先动手」，这里不重复）：`measureTrees`（Linux：独立 cgroup 读 `memory.current` 减 `inactive_file`，否则 `Pss`，再退 `RssAnon + RssShmem`；Windows：私有工作集，再退私有已提交；一次扫一遍进程表，Windows 上两棵树只起一次 PowerShell，原来每棵一次）、`createMemoryWatch`（判定：量不了不判、合起来比、先结束隔离的、冷却 30 s、有 cgroup 时放宽 5%）；`main.mjs` 的 `sample()` 接上，诊断的 `readings` 多 `residentRss`、`memoryMethods`，超限日志多 `limit`、`victim`、`methods`，量不了记 `render.memory-unmeasured`。探针：`hosted-render-probe.mjs`、`hosted-render-isolation-probe.mjs` 不再放宽内存上限（缺省用生产的 6G / 5G）；整套演练的 `limits`、`load` 两步等待时限改按 `work` 步骤实测的单任务耗时定（`taskBudgetMs`：任务数 × 单任务耗时 × 2，不低于原来的 300 s，只定等多久、不改判据）。
+
+**本机读数的修前修后**（Windows，20 核 32 GB，整套演练在生产上限 6G 下，轮询管理进程的状态口，同一时刻对同两棵树各量一遍；系统可用内存的下降量取自 `os.freemem()` 相对启动前，含托管组合、管理进程与探针自己，本机上还有别的会话在跑，只作量级参考）：
+
+| 时刻 | 旧口径（累加工作集） | 新口径（私有工作集） | 系统可用内存下降 |
+|---|---|---|---|
+| 常驻树空闲（刚连上、什么都没渲） | 3.3～3.9 GB | 1.8～2.1 GB | 2.2～2.8 GB |
+| 隔离工作进程在渲（两棵合计） | 6.0～7.4 GB（其中隔离树 3.4～4.3） | 3.3～3.9 GB（其中隔离树 1.6～2.2） | 5.4～6.6 GB（偶发尖峰 7.5） |
+
+旧口径在两棵树都在渲时多次越过 6 GB，不放宽上限就会和 Linux 上一样误杀隔离工作进程；新口径整套演练里最高 3.87 GB，`render.memory-exceeded` 只出现在 `limits` 一步自己调到 150M 的那三次。Windows 的私有工作集不含共享内存段（GPU 的共享内存等），是真实占用的下限；系统可用内存的下降量含别的进程，是上限；真值在两者之间。Linux 上 `Pss` 把共享页按份额算进来、独立 cgroup 的 `memory.current` 是内核的账，没有这个偏低的问题。
+
+**验收**（本机，Windows）：`npx tsc -b --force` 零错误；`npm test` 4533 项、4532 通过、1 跳过、零失败（新增单测 HR33～HR37 共 9 个用例，`server/test/hosted-render-memory.test.mjs`，Linux 一支用夹具文件）；`hosted-render-probe` 十步全过（上限用生产缺省 6G，`limits` 一步仍自己调到 150M 演练「内存超限 3 次后降级」）；`hosted-render-isolation-probe` 37 条断言全过（同样 6G）。
+
+**没验的、留给 Linux 容器与新节点复核**：Linux 一支（`smaps_rollup`、`memory.current`）本机只用夹具文件验过格式与逻辑，没有在真的 `/proc` 上跑；要在那台没有 systemd 的容器上重跑整套（看 `usercard` 一步隔离工作进程不再被误杀、`readings.memoryMethods` 里是 `pss`），在新节点上看独立 cgroup 的那一支（`memoryMethods` 里是 `cgroup`、`render.memory-exceeded` 平时不出现）。另一个要看的数：容器上常驻树空闲时 `Pss` 合计是多少——如果不重复的口径下常驻加隔离仍接近 6 GB，那 6 GB 的整组上限本身对「常驻加隔离」就偏紧，要另议（那是上限的取值问题，不是量法问题）。
