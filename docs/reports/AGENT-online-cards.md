@@ -96,3 +96,56 @@
 - 块 G：`mediaSource.ts` 的素材地址（等 S 的 `/media-s/`）、图形能力判定写 `gpu` / `media` 两种状态。
 - 块 L：把六处判断换成 `cardRunnableHere`；构建时就在在线包里的仓库用户卡现在也被当成运行不了（`needsLocalPc`），一并改。
 - 块 N：`transpile.browser.ts` 的 `codeIdentities()` 已能算出与桌面相同的代码身份，接到 `browserNode.ts` 与 `planPublisher.ts`。
+
+## 块 A、块 L 与有声动效卡的成本身份（接手的子 Agent 做，主会话据其返回落稿）
+
+子 Agent 写报告文件时被会话的工具拦下，本节由主会话按它返回的内容写入。
+
+### 提交
+
+| 提交 | 内容 |
+|---|---|
+| `1c9325e9` | 有声动效卡的成本身份（单独一个提交，建在 `8a71920b` 上；与 `9057d973` 一起带回第一段） |
+| `9913441a` | 接手的未提交改动（九个文件里保留八个与 `soundEngine.ts`；`cardGraph.mjs` 往节点上写 `clipId` 的那一处没采用：节点内容进预渲染结果的键，加字段会让这类卡已有的预渲染结果全部失效） |
+| `550e4b7a` | 块 L |
+| `a4d0fe3f` | 块 A |
+| `9057d973` | `sound-ab-probe.mjs` 跟上有声动效卡判轻后的行为 |
+
+### 有声动效卡即时补测（用户 2026-10-06：「直接自动即时补测试。不要默认判重。」）
+
+- 改法：`src/render/pipelinePlan.mjs` 新增 `clipCostNodes`（按 `clipId` 找不到节点时看片段自己的图卡节点），`clipCostIndex` 多一个可选参数；`src/editor/costIdentity.ts` 把「画面是组件、没有 `card()`」的算进来。图里的节点不动，预渲染结果的键不变。另修一条静默按重的路径：卡片图有悬空输入、摊图抛错时以前整个项目都没有身份、全部不测，现在退一步只按片段自己的卡再摊一遍。
+- 仍然按重的情况：低内存档（现有规则，没动）；在线页面里本页运行不了的同步用户卡；在线页面里全部图卡（图卡在线执行还没接上）；桌面与在线画面由 `card()` 出的图卡（测量用的缩水项目不带素材与卡片图节点，GPU 耗时也不在现在量的数里——能否给不带输入的图卡补测待定）；没声明 `direct` 的卡在第一次测完前的几秒；测量这一轮没成（下次项目变动、卡片更新或重开时再测）；记录本身判重。
+- 验证：探针 `scripts/probes/av-card-cost-probe.mjs` 7 项全过（两段都有身份、第一次出现就测、每步 1.2 ms 与 0.9 ms、测量期间新建音频上下文 / 元素播放 / 声源启动都是 0 次、判轻且不在预渲染集合里、没有「需要本地 PC 渲染辅助」、重开后不重测）；同一项目在 `8a71920b` 上对照为没有身份、判重、在预渲染集合里；含它与不含它的项目改前改后导出各 120 对 120 帧、0 帧不同、文件逐字节相同；在线普通档 `sound-ab-probe` 新加一条通过。
+
+### 块 L
+
+六处判断共用 `placeholderHost.ts` 的 `needsLocalPc` 一个出口：用户卡只有本页运行不了的才算（构建时就在在线包里的仓库用户卡不算；同步来的只有 `ready` 不算；图卡照旧算）。低内存档照旧不运行仓库用户卡。运行状态变化时分派表重算、测量重排、时间轴片段重绘。测量门等同步卡第一次载入有结果，仍受 10 秒上限。导出：同步卡必须用预渲染原尺寸，判轻的同步卡导出期间并进清单计划（`src/export/exportWanted.ts`）。
+
+### 块 A
+
+线程一侧在 `src/online/cardRuntime/`（`soundStub.ts`、`soundModules.ts`、`soundThread.ts`、`soundWorker.ts`、`soundHost.ts`、`stageSound.ts`、`soundSpawn.ts`）；编辑页面一侧 `src/audio/cardAudio.ts` 加隔离宿主接口 `setIsolatedCardAudioHost` 与路由 `cardAudioRoute`，`src/editor/io/isolatedSound.ts` 把舞台状态和一个 RPC 函数接成宿主。不在线合成的：读素材采样的音频图卡、同步卡与内置卡串联的链路、线程里载入不成或连着两次超时的、低内存档、没有隔离环境的页面。
+
+### 轻量验收
+
+`npx tsc -b --force` 退出码 0；`npm test` tests 4496、pass 4495、fail 0、skipped 1；`npm run build` 与 `npx vite build --mode online` 退出码 0（全部 js 与 css gzip 后 2,016,968 → 2,021,203）；新单测 AVC-01～05、OCE-L-01～07、OCE-A-01～07 共 19 项全过；`online-card-sound-probe` 9 项全过（线程起在舞台源，线程里没有 `document`、`localStorage`、`parent`、`RTCPeerConnection`；采样与页面逐样本相同；死循环 1018 毫秒掐断后能重起）；`sound-ab-probe` 三段 73/73；`sound-preview-probe --mode both` 74/74。按新语义改了断言的旧单测：OU-01、OU-02、C10-UI-03、SL-01、OCE-T-08。
+
+### 等块 S 的接线点
+
+1. `stageRpc.ts` 加 `synthCardAudio(request)`（形状见 `stageSound.ts` 的 `StageSoundRequest`）与声音状态事件；`loadUserCards` 把同一组包也交给声音那一半。
+2. `StageView.tsx` 后台舞台按需载入 `stageSound.ts`，调 `createStageSound({ spawn, onState })`；前后台互换时线程跟哪个文档走要定。
+3. `Preview.tsx` 用 `createIsolatedSoundLink({ render })` 接上；舞台换了、退回单舞台或改判低内存档时调 `link.setState(null)`。
+4. `soundSpawn.ts` 现在从同源模块地址起线程，`worker-src blob:` 下要换成 blob 引导；隔离断言补进安全探针。
+5. 线程那一块 3,746,284 字节（gzip 1,092,442），线程打包不拆块；`vite.config.ts` 设 `worker.format: "es"` 可拆。
+6. 舞台的 `setTimeout` 是虚拟时钟：`soundHost.ts` 的时限走 `__pcRealSetTimeout`，别的超时也要注意。
+7. `setMediaPolicy` 改带 `sid` 时保留 `lowMemory` 字段。
+8. 块 T 列过的 `setCardExecGate`、`siteCardExecOf`、Trusted Types 的 `compile`（声音线程的加载器同样要）。
+
+等 N：导出期间并进清单计划的同步卡片段，要 `cardSources` 与 `cardEnvFingerprint` 到位后浏览器节点才能认领；同步卡成本记录的运行时版本放在源码版本里（`user:online:<签名>`）。等 G：放开 `needsLocalPc` 的图卡分支；把 `stageRuntime.ts` 里图卡临时报的 `load-error` 换成真实状态。
+
+### 契约更正建议
+
+第 6 节六处判断实际是一个出口，另需加运行状态的订阅；第 8 节补「判轻的同步卡导出期间并进清单计划」「仓库用户卡在低内存档照旧不运行」；3.5 时限补「走真计时」，模块表 `react-dom` 也给占位；第 5 节运行时版本在源码版本里；同步卡在线生成的声音产物，身份里的默认参数取自静态解析，解析不全时桌面会判它过期；同步卡在编辑页面没有声明的帧模式，一律按推帧测。
+
+### 没做成的
+
+在线页面里真正执行同步卡（等 S 的 RPC）；导出页贴同步卡原尺寸的真实浏览器验证（只有单测）；`setSoundBackfillHandler` 按分工没接；完整渲染附加项与语义文档按分工没动。
