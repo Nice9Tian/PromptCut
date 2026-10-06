@@ -27,7 +27,7 @@
  * 不碰用户在跑的东西:端口自选(默认 5714、5717),导出目录临时;不继承 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR。
  * 输出:过程写 stdout;最后一行 JSON `{ ok, cases: [...] }`;完整结果写 <out>/result.json。
  */
-import './../lib/no-user-dirs.mjs';
+import '../lib/no-user-dirs.mjs';
 import '../../src/testing/registerTs.mjs';
 import fs from 'node:fs';
 import path from 'node:path';

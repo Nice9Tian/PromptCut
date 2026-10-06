@@ -16,7 +16,7 @@
  *      前两帧的亮度标准差都 > 2(事件那一刻画面上有内容,不是纯色),且三帧不全相同(画面在动)。
  * 不向扬声器出声:无头 Chrome 带 --mute-audio;ffmpeg 只解码到文件。
  */
-import './../lib/no-user-dirs.mjs';
+import '../lib/no-user-dirs.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

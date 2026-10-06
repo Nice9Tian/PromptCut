@@ -32,7 +32,7 @@
  *   P6 声画卡:内嵌声音与画面是同一个片段(时间轴上没有第二个片段),元素的 data-card-audio-state = ready,从中间开始不重来。
  * 截图写进 --out:<形态>-1-playing.png、<形态>-2-muted.png 等。
  */
-import './../lib/no-user-dirs.mjs';
+import '../lib/no-user-dirs.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
