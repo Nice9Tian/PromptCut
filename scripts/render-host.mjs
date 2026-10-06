@@ -10,6 +10,11 @@
  *   node scripts/render-host.mjs --config <文件> [--port 5400] [--data <目录>] [--max-concurrent N]
  *        [--streams] [--verbose] [--json-status]
  *
+ *   代理模式(托管方的渲染节点,`docs/plan/hosted-render-contract.md` 第 7.1 节):环境里有 `PROMPTCUT_RENDER_BROKER`(管理进程的本机
+ *   代理口)与 `PROMPTCUT_RENDER_BROKER_KEY` 时不要 --config:项目清单与连接票据向管理进程要,这个进程里没有任何凭证。
+ *   这时不等「至少有一个节点」才算就绪(起来时可能一个有活的项目都没有)。
+ *
+ *   --cwd             编辑器 vite 的工作目录,缺省本仓库根(隔离工作进程用自己的检出副本时给)。
  *   --config          共享项目配置(M6a 契约第 11 节的形状:一项或数组,每项
  *                     `{ url, projectId, username, deviceId, deviceName, as: 'member', password | key, role: 'render' }`,
  *                     另可给 `maxConcurrent`)。不给就用环境变量 `PROMPTCUT_SHARED_CONFIG`。
@@ -74,9 +79,13 @@ async function main() {
   let opts;
   try { opts = parseArgs(process.argv.slice(2)); }
   catch (error) { console.error(`[render-host] ${error.message}`); process.exit(2); }
-  const config = opts.config ?? process.env.PROMPTCUT_SHARED_CONFIG;
-  if (!config) { console.error('[render-host] 要给 --config 或 PROMPTCUT_SHARED_CONFIG'); process.exit(2); }
-  if (!fs.existsSync(config)) { console.error('[render-host] 配置文件不存在'); process.exit(2); }
+  const brokered = !!process.env.PROMPTCUT_RENDER_BROKER;
+  const config = brokered ? null : (opts.config ?? process.env.PROMPTCUT_SHARED_CONFIG);
+  if (!brokered) {
+    if (!config) { console.error('[render-host] 要给 --config 或 PROMPTCUT_SHARED_CONFIG'); process.exit(2); }
+    if (!fs.existsSync(config)) { console.error('[render-host] 配置文件不存在'); process.exit(2); }
+  }
+  const cwd = opts.cwd ? path.resolve(opts.cwd) : ROOT;
   const data = path.resolve(opts.data ?? path.join(os.tmpdir(), `promptcut-render-host-${opts.port}`));
   fs.mkdirSync(path.join(data, 'tmp'), { recursive: true });
   fs.mkdirSync(path.join(data, 'data'), { recursive: true });
@@ -84,7 +93,7 @@ async function main() {
   const editorUrl = `http://127.0.0.1:${opts.port}`;
   const env = hostEnv(process.env, { config, data, streams: opts.streams, maxConcurrent: opts.maxConcurrent });
   const child = spawn(process.execPath, [viteBin(), '--port', String(opts.port), '--strictPort', '--host', '127.0.0.1'], {
-    cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: true,
+    cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: true,
   });
   let tail = '';
   const forward = (chunk) => {
@@ -148,13 +157,35 @@ async function main() {
     try {
       const q = await getJson(`${editorUrl}/api/frames/queue`, { timeoutMs: 40000 });
       summary = q.body;
-      if (Array.isArray(summary?.nodes) && summary.nodes.length > 0) break;
+      if (Array.isArray(summary?.nodes) && (summary.nodes.length > 0 || brokered)) break;
     } catch { /* 预渲染进程还在开 Chrome */ }
     await delay(1000);
   }
   if (stopping) return;
   say('ready', { port: opts.port, data, queue: summary });
   if (process.send) process.send({ type: 'ready', port: opts.port, queue: summary });
+  /*
+   * 代理模式下管理进程没了(被杀、被换掉)就自己收尾退出:不然这棵树成了孤儿,占着端口,新的管理进程起不了工作进程。
+   * 每 5 s 带口令问一次代理口:401 说明管理进程已经换了一个(口令每次启动随机),立即退;连续 3 次问不通也退。
+   */
+  if (brokered) {
+    const brokerUrl = String(process.env.PROMPTCUT_RENDER_BROKER).replace(/\/+$/, '');
+    const brokerKey = String(process.env.PROMPTCUT_RENDER_BROKER_KEY || '');
+    let misses = 0;
+    const guard = setInterval(async () => {
+      if (stopping) { clearInterval(guard); return; }
+      try {
+        const res = await fetch(`${brokerUrl}/projects`, { headers: { authorization: `Bearer ${brokerKey}` }, signal: AbortSignal.timeout(4000) });
+        await res.arrayBuffer().catch(() => null);
+        if (res.status === 401) { clearInterval(guard); void shutdown('broker-replaced'); return; }
+        misses = 0;
+      } catch {
+        misses += 1;
+        if (misses >= 3) { clearInterval(guard); void shutdown('broker-gone'); }
+      }
+    }, 5000);
+    guard.unref?.();
+  }
   // 会话计数有变化才打一行(混沌测试看「接续了几次、丢了几次、是否重建会话」)
   let lastKey = sessionStatusOf(summary).key;
   const watch = setInterval(async () => {

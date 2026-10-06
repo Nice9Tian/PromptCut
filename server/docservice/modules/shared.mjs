@@ -9,6 +9,19 @@
  * | `shared.admin` | `shared.admin.ok { op }` 或 `error` | `{ op, proof: { nonce, m }, … }`，op 见下 |
  * | `auth.ticket` | `auth.ticket.ok { ticket, exp }` | 签发素材票据或连接票据 |
  *
+ * 托管方的服务（契约 `docs/plan/hosted-render-contract.md` 第 1.6、1.7、3 节；只在托管端、组装方给了 `hostedServices` 时有）：
+ * - `shared.members.list` 顶层多一个 `hosted: { render: { available, enabled }, agent: { available, enabled } }`
+ *   （`available`：这台文档服务的登记表里有这个服务；`enabled`：本项目对它的开关，记录里没有这一项算开）。放本机的项目没有这个字段；
+ * - 以服务自己的身份进来的连接（渲染服务）单独一行，行上多一个 `service: '<服务名>'`（`username` 是保留的 `service:<服务名>`、
+ *   `creator: false`），界面按 `service` 字段显示，不看用户名；代成员进来的服务连接（云端 Agent）归在那位成员的行里，
+ *   `conns` 里那一项带 `service: '<服务名>'`；
+ * - 创建者操作 `set-hosted-service { service: 'render' | 'agent', enabled: boolean }`：改开关（项目记录 `hosted.<服务名>.enabled`），
+ *   不加代数、不断成员自己的连接。关掉时这个项目里这个服务的连接先放回手里的认领、再以 4003 `service-disabled` 关闭；
+ *   并给本空间其余成员连接发 `shared.notice { event: 'hosted-service-changed', service, enabled }`。
+ *   登记表里没有这个服务时回 `bad-message`；
+ * - 服务连接（`scope: 'service'`）的 `auth.ticket` 只签素材票据，负载多带 `sv`（服务名）与 `sk`（公钥编号）；
+ * - `service:` 开头的用户名留给服务身份：`set-list` 的名单项、`kick` / `unban` 的目标是这种用户名回 `bad-message`。
+ *
  * 创建者操作：`set-password`、`set-list`、`kick`、`unban`、`delete`。每次都要一份新的创建者证明
  * `m = HMAC-SHA256(K_创建者, "promptcut.admin.v1\n" + projectId + "\n" + 创建者用户名 + "\n" + op + "\n" + nonce)`，
  * `nonce` 须由同一连接刚取的 `shared.challenge` 给出。不带证明、证明不对一律回 `forbidden`；证明不对计入限速
@@ -19,8 +32,9 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
-  ROLES, adminPurpose, b64urlDecode, isUsername, isDeviceId, isRole, isConversation, normalizeOwner,
+  ROLES, adminPurpose, b64urlDecode, isUsername as isUsernameShape, isDeviceId, isRole, isConversation, normalizeOwner, isReservedUsername,
 } from '../../auth/protocol.mjs';
+import { serviceAdmission, hostedStateOf, HOSTED_SERVICES } from '../../auth/service-identity.mjs';
 import { signTicket, userGeneration } from '../../auth/tickets.mjs';
 import { admissionOf, isLoopbackAddress } from '../../auth/handshake.mjs';
 import { parseList, isCred } from '../../auth/http.mjs';
@@ -30,7 +44,11 @@ export const SHARED_MODULE = 'shared';
 export const ADMIN_OPS = Object.freeze([
   'set-password', 'set-list', 'kick', 'unban', 'delete', 'set-creator-password', 'list-bans',
   'invite-create', 'invite-revoke', 'invite-status',
+  'set-hosted-service',
 ]);
+
+/** 成员能用的用户名：形状对，且不是留给服务身份的 `service:` 开头 */
+const isUsername = (v) => isUsernameShape(v) && !isReservedUsername(v);
 
 /**
  * C10a 补的三种创建者操作(`docs/plan/c10a-contract.md` 第 5 节;规则与存储在 `../../auth/invite.mjs`):
@@ -61,7 +79,11 @@ export const CLOSE_DELETED = 4004;
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isReqId = (v) => typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
-const spaceOf = (p) => (p?.scope === 'admin' ? null : (typeof p?.tenantId === 'string' && p.tenantId !== '' ? p.tenantId : 'local'));
+// 管理身份、托管方服务的控制身份（没有 tenantId 的 service）不在任何空间里
+const spaceOf = (p) => {
+  if (typeof p?.tenantId === 'string' && p.tenantId !== '') return p.scope === 'admin' ? null : p.tenantId;
+  return p?.scope === 'admin' || p?.scope === 'service' ? null : 'local';
+};
 
 class Refused extends Error {
   constructor(reason, detail) {
@@ -79,6 +101,8 @@ class Refused extends Error {
  * @param {(connId: string) => number} [options.claimsOf] 这条连接持有的认领数（「渲染中」标签）
  * @param {(remote: string | null) => boolean} [options.isLoopbackRemote] 回环来源不计限速
  * @param {() => number} [options.now]
+ * @param {{ registry: () => object | null, releaseClaims?: (connId: string) => number } | null} [options.hostedServices]
+ *   托管端才给：服务登记表的取法，以及「立即放回这条连接手里的认领」（关掉渲染节点的开关时用）
  */
 export function sharedModule({
   store,
@@ -89,8 +113,30 @@ export function sharedModule({
   isLoopbackRemote = isLoopbackAddress,
   now,
   linkOrigin = null,
+  hostedServices = null,
 } = {}) {
   const storeOf = typeof store === 'function' ? store : () => store;
+  const registryOf = () => {
+    try { return hostedServices?.registry?.() ?? null; } catch { return null; }
+  };
+
+  /** 成员列表顶层的 `hosted`：只有托管端的共享项目有 */
+  function hostedOf(space) {
+    if (!hostedServices || space === null) return undefined;
+    const rec = storeOf()?.peek(space);
+    if (!rec) return undefined;
+    return hostedStateOf(registryOf(), rec);
+  }
+
+  function listMessage(space, devices = devicesOf(space)) {
+    const message = { type: 'shared.members.list', devices };
+    const hosted = hostedOf(space);
+    if (hosted) message.hosted = hosted;
+    return message;
+  }
+
+  /** 这条连接是不是托管方服务的（以自己的身份，或代成员） */
+  const serviceOf = (p) => (typeof p?.service === 'string' ? p.service : null);
   /** connId → { principal, space, watching } */
   const conns = new Map();
   const clock = (ctx) => (typeof now === 'function' ? now() : ctx.now());
@@ -121,12 +167,16 @@ export function sharedModule({
           tags: { editing: false, rendering: false, agents: 0 },
           conns: [],
         };
+        // 托管方服务的连接：不是成员，界面按这个字段显示（「托管方的渲染节点」），不看用户名
+        if (p.scope === 'service' && typeof p.service === 'string') row.service = p.service;
         rows.set(key, row);
       }
       const role = p.role ?? 'page';
       const item = { role };
       if (p.conversation !== undefined && p.conversation !== null) item.conversation = p.conversation;
       if (p.owner !== undefined && p.owner !== null) item.owner = { ...p.owner };
+      // 代成员进来的服务连接（云端 Agent）归在成员这一行里，连接项上标明是哪个服务
+      if (serviceOf(p) !== null && p.scope !== 'service') item.service = p.service;
       row.conns.push(item);
       if (role === 'page') row.tags.editing = true;
       if (role === 'agent') row.tags.agents += 1;
@@ -152,7 +202,7 @@ export function sharedModule({
     for (const [connId, c] of connsIn(space)) {
       if (!c.watching) continue;
       devices ??= devicesOf(space);
-      ctx.send(connId, { type: 'shared.members.list', devices: structuredClone(devices) });
+      ctx.send(connId, listMessage(space, structuredClone(devices)));
     }
   }
 
@@ -176,14 +226,14 @@ export function sharedModule({
   function members(ctx, connId, msg, reqId) {
     const c = conns.get(connId);
     if (!c || c.space === null) throw new Refused('forbidden');
-    reply(ctx, connId, { type: 'shared.members.list', devices: devicesOf(c.space) }, reqId);
+    reply(ctx, connId, listMessage(c.space), reqId);
   }
 
   function watch(ctx, connId, msg, reqId) {
     const c = conns.get(connId);
     if (!c || c.space === null) throw new Refused('forbidden');
     c.watching = true;
-    reply(ctx, connId, { type: 'shared.members.list', devices: devicesOf(c.space) }, reqId);
+    reply(ctx, connId, listMessage(c.space), reqId);
   }
 
   function challenge(ctx, connId, msg, reqId) {
@@ -194,8 +244,25 @@ export function sharedModule({
     reply(ctx, connId, { type: 'shared.challenge.ok', nonce, salt: rec.creator.salt, kdf: { ...rec.kdf } }, reqId);
   }
 
+  /** 托管方服务的连接要票据：只签素材票据，带 `sv` / `sk`；连接票据一律不签（那等于给自己换角色） */
+  function serviceTicket(ctx, connId, c, msg, reqId) {
+    const p = c.principal;
+    if (c.space === null) throw new Refused('forbidden', '控制连接要不到票据');
+    const rec = storeOf()?.peek(c.space) ?? null;
+    const refused = serviceAdmission({ registry: registryOf(), record: rec, service: p.service, kid: p.serviceKid, role: p.role });
+    if (refused) throw new Refused('forbidden', refused);
+    if (msg.kind !== 'asset') throw new Refused('forbidden', '服务身份只能要素材票据');
+    const access = msg.access ?? 'r';
+    if (access !== 'r' && access !== 'rw') throw new Refused('bad-message', "access 只能是 'r' 或 'rw'");
+    const out = signTicket(rec, { k: 'asset', u: p.userId, r: access, dn: p.deviceName, sv: p.service, sk: p.serviceKid }, clock(ctx));
+    reply(ctx, connId, { type: 'auth.ticket.ok', ticket: out.ticket, exp: out.exp }, reqId);
+  }
+
   function ticket(ctx, connId, msg, reqId) {
     const c = conns.get(connId);
+    if (c?.principal?.scope === 'service') return serviceTicket(ctx, connId, c, msg, reqId);
+    // 代成员进来的服务连接（云端 Agent）不能给自己签票据（白名单已挡，这里再挡一次）
+    if (serviceOf(c?.principal) !== null) throw new Refused('forbidden', '服务连接要不到这种票据');
     const rec = memberRecord(c);
     const p = c.principal;
     if (admissionOf(rec, { username: p.username, deviceId: p.deviceId, creator: p.creator === true })) throw new Refused('forbidden');
@@ -316,6 +383,27 @@ export function sharedModule({
           d.bans.push({ username, deviceId });
         });
         closeWhere(ctx, space, (p) => p.username === username && p.deviceId === deviceId, CLOSE_REMOVED, 'kicked');
+        break;
+      }
+      case 'set-hosted-service': {
+        const name = msg.service;
+        if (!HOSTED_SERVICES.includes(name)) throw new Refused('bad-message', `service 只能是 ${HOSTED_SERVICES.join(' / ')}`);
+        if (!hostedServices || !registryOf()?.get(name)) throw new Refused('bad-message', '这台文档服务没有这个托管方服务');
+        if (typeof msg.enabled !== 'boolean') throw new Refused('bad-message', 'enabled 要是布尔值');
+        st.update(space, (d) => { d.hosted = { ...(d.hosted ?? {}), [name]: { enabled: msg.enabled } }; });
+        if (!msg.enabled) {
+          // 关掉：这个服务在这个项目里的连接先放回手里的认领（不等断线宽限期），再关
+          for (const [other, oc] of connsIn(space)) {
+            if (serviceOf(oc.principal) !== name) continue;
+            try { hostedServices.releaseClaims?.(other); } catch (err) {
+              ctx.log('module.error', { module: SHARED_MODULE, hook: 'releaseClaims', message: String(err?.message ?? err) });
+            }
+            ctx.close?.(other, CLOSE_REMOVED, 'service-disabled');
+          }
+        }
+        for (const [other, oc] of connsIn(space)) {
+          if (other !== connId && serviceOf(oc.principal) === null) ctx.send(other, { type: 'shared.notice', event: 'hosted-service-changed', service: name, enabled: msg.enabled });
+        }
         break;
       }
       case 'invite-create': {

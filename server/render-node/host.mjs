@@ -47,6 +47,19 @@
  * `shutdown(reason)`:每个节点 `yieldAll(reason)`(持有的一律 `task.release`,在飞的认领回来即放回)
  * 再 `stop()`;调用方随后关连接。队列收到 `task.release` 立即把任务放回 `open`,不必等断线的宽限期。
  *
+ * # 运行中增删项目(托管方的渲染节点,`docs/plan/hosted-render-contract.md` 第 2、4、7.1 节)
+ *
+ * `dynamic: true` 时 `entries` 可以是空的,之后由调用方 `add(entry)` / `remove(projectId, { drain })`:
+ *   - `add`:照构造时的同一条路接线(`connect`)、起节点;同一个 `projectId` 已经在就只更新它的 `members`;
+ *   - `remove(projectId)`:让掉这个项目手里的认领(`task.release`)、停节点、调接线时给的 `close()`;
+ *   - `remove(projectId, { drain: true })`:不再认领新的,手里的做完(持有与在飞都清空)才停、才关;
+ *   - `setPaused(true)`:全部节点不再认领新任务,手里的照做(背压);
+ *   - **产物到了容量上限**:某个任务以 `service-quota` 失败(素材服务回 507,`artifact-transfer.mjs`)时,全部节点暂停认领
+ *     `QUOTA_PAUSE_MS`(10 分钟),发一条 `quota-paused` 事件;`quotaPausedUntil` 可查。那个任务是不可重试的失败;
+ *   - **有成员在线的项目优先**:每一拍先推进 `entry.members === true` 的项目,全局闸的空位先给它们;
+ *     `setMembers(projectId, bool)` 随目录的变化更新。
+ * 不带 `dynamic` 时这些方法照样在,行为与原来一致(成员表就是构造时那几项)。
+ *
  * 除 `loadHostConfig` 读一次配置文件外(经 `../auth/shared-config.mjs`),本模块不开计时器、不碰网络:
  * 端点、执行器、产物库都由调用方注入(预渲染进程里是 `vite-plugin-frames.ts` 的 `startHostNode`)。
  */
@@ -62,6 +75,21 @@ export const HOST_MAX_CONCURRENT = 4;
 export const HOST_CONCURRENCY_ENV = 'PROMPTCUT_HOST_MAX_CONCURRENT';
 /** 与 PC 节点相同的能力(契约第 3 节 `node.hello`) */
 export const HOST_CAPABILITIES = Object.freeze({ userCards: true, graphCards: false });
+/** 产物到了容量上限(任务以 `service-quota` 失败)后暂停认领多久(`docs/plan/hosted-render-contract.md` 第 6 节) */
+export const QUOTA_PAUSE_MS = 10 * 60_000;
+
+/**
+ * 托管方渲染服务的工作进程报的能力位(`docs/plan/hosted-render-contract.md` 第 5、7.5 节),集中在这一处:
+ *   - `userCards`:只有开着卡片同步的工作进程才报 true。常驻工作进程绝不同步任何项目的卡(它不执行项目带来的代码),报 false,
+ *     要用户卡的任务它不认领;按项目隔离的工作进程(方案 A)开着同步,报 true;
+ *   - `graphCards`:false。第二段(在线执行用户卡与图卡)合流后由主会话对这一位;
+ *   - 其余能力位(`streams`、`transcode`)按预渲染管线的实测值,不在这里改。
+ * @param {object} base 预渲染管线实测出的能力(`nodeCapabilities`)
+ * @param {{ cardSync: boolean }} o 这个工作进程开没开卡片同步
+ */
+export function hostedRenderCapabilities(base, { cardSync }) {
+  return { ...base, userCards: cardSync === true, graphCards: false };
+}
 
 function badHost(detail) {
   const err = new Error(`独立渲染主机配置:${detail}`);
@@ -134,8 +162,9 @@ const emptyStats = () => ({ claimed: 0, completed: 0, dedup: 0, failed: 0, lost:
 
 /**
  * @param {object} options
- * @param {object[]} options.entries  规整过的配置项(`loadHostConfig().entries`),每项要有 `projectId`
- * @param {(entry: object, index: number) => { endpoint: object, executor: object, sink: object }} options.connect
+ * @param {object[]} options.entries  规整过的配置项(`loadHostConfig().entries`),每项要有 `projectId`;`dynamic` 时可以为空
+ * @param {boolean} [options.dynamic]  允许空的 `entries`,项目由 `add` / `remove` 在运行中增减
+ * @param {(entry: object, index: number) => { endpoint: object, executor: object, sink: object, close?: () => void }} options.connect
  *   每项调一次:到那个项目文档服务的 `render` 连接(`createWsEndpoint` 的形状;有 `onOpen` / `onClose` 就挂上,
  *   没有就当已连上),以及这个项目用的执行器与产物库
  * @param {(entry: object, index: number) => string} options.nodeIdOf  每个节点的 id
@@ -164,12 +193,17 @@ export function createRenderHost({
   random,
   constants,
   onEvent = () => {},
+  dynamic = false,
 }) {
-  if (!Array.isArray(entries) || entries.length === 0) throw new TypeError('createRenderHost:entries 至少一项');
+  if (!Array.isArray(entries) || (entries.length === 0 && !dynamic)) throw new TypeError('createRenderHost:entries 至少一项');
   if (typeof connect !== 'function') throw new TypeError('createRenderHost:connect 必须是函数');
   const cap = hostMaxConcurrent(maxConcurrent);
   let version = codeVersion;
   let stopped = false;
+  let started = false;
+  let paused = false;
+  let quotaUntil = 0;
+  let nextIndex = 0;
 
   const emit = (event) => { try { onEvent(event); } catch { /* 诊断回调出错不影响节点 */ } };
 
@@ -194,7 +228,10 @@ export function createRenderHost({
   /** 全部节点的持有数 + 在飞的认领数 */
   const busy = () => members.reduce((n, m) => n + (m.local ? m.local.session.held().length : 0) + (m.inflight !== null ? 1 : 0), 0);
 
-  const members = entries.map((entry, index) => {
+  /** @type {any[]} 现有的项目;运行中 `add` 追加、`remove` 摘掉。`index` 是接线时发的号,摘掉后不复用 */
+  const members = [];
+  function wire(entry) {
+    const index = nextIndex++;
     const wired = connect(entry, index);
     const endpoint = wired?.endpoint;
     if (!endpoint || typeof endpoint.send !== 'function' || typeof endpoint.onMessage !== 'function') {
@@ -212,6 +249,10 @@ export function createRenderHost({
       started: false,
       stats: emptyStats(),
       seen: new Set(),
+      close: typeof wired.close === 'function' ? wired.close : null,
+      prefer: entry.members === true,
+      draining: false,
+      removed: false,
     };
     // 包一层 send:记在飞的认领、放回数
     m.ep = {
@@ -247,8 +288,22 @@ export function createRenderHost({
     });
     if (typeof endpoint.onOpen === 'function') endpoint.onOpen(() => open(m));
     if (typeof endpoint.onClose === 'function') endpoint.onClose(() => { m.started = false; m.inflight = null; });
+    members.push(m);
     return m;
-  });
+  }
+  for (const entry of entries) wire(entry);
+
+  /** 摘掉一个项目:停节点、从成员表拿掉、调接线时给的 close */
+  function detach(m, reason) {
+    if (m.removed) return;
+    m.removed = true;
+    try { m.local?.stop(); } catch { /* 已停 */ }
+    m.started = false;
+    const i = members.indexOf(m);
+    if (i >= 0) members.splice(i, 1);
+    try { m.close?.(); } catch { /* 已关 */ }
+    emit({ type: 'project-removed', projectId: m.projectId, index: m.index, reason });
+  }
 
   function build(m) {
     m.local?.stop();
@@ -259,7 +314,7 @@ export function createRenderHost({
       now,
       ...(random ? { random } : {}),
       ...(constants ? { constants } : {}),
-      isIdle: () => busy() < cap,
+      isIdle: () => !paused && now() >= quotaUntil && !m.draining && busy() < cap,
       canClaim: (task) => laneFree(m, task),
       maxConcurrent: cap,
       codeVersion: version,
@@ -271,7 +326,13 @@ export function createRenderHost({
         const type = event?.type;
         if (type === 'completed') m.stats.completed++;
         else if (type === 'dedup') m.stats.dedup++;
-        else if (type === 'failed') m.stats.failed++;
+        else if (type === 'failed') {
+          m.stats.failed++;
+          if (event.error === 'service-quota') {
+            quotaUntil = now() + QUOTA_PAUSE_MS;
+            emit({ type: 'quota-paused', until: quotaUntil, id: event.id, projectId: m.projectId, index: m.index });
+          }
+        }
         else if (type === 'lost') m.stats.lost++;
         else if (type === 'discarded') m.stats.discarded++;
         emit({ ...event, projectId: m.projectId, index: m.index });
@@ -281,7 +342,7 @@ export function createRenderHost({
 
   /** (重)连上就报到,接续本实例仍持有的认领(G.7 约定写法) */
   function open(m) {
-    if (stopped || !m.local) return;
+    if (stopped || !m.local || m.removed) return;
     m.inflight = null;
     m.local.start(m.local.session.held().map(({ id, token }) => ({ id, token })));
     m.started = true;
@@ -291,16 +352,69 @@ export function createRenderHost({
     /** 起全部节点;已经连上的(或没有连接状态的,如进程内环回)立即报到 */
     start() {
       stopped = false;
+      started = true;
       for (const m of members) {
         build(m);
         if (m.endpoint.connected === true || (typeof m.endpoint.onOpen !== 'function' && m.endpoint.closed !== true)) open(m);
       }
     },
-    /** 一拍:逐个节点续约、认领 */
+    /** 一拍:逐个节点续约、认领。有成员在线的项目先推进(全局闸的空位先给它们);排空中的项目做完就摘掉 */
     tick() {
       if (stopped) return;
-      for (const m of members) if (m.started && m.local) m.local.tick();
+      const order = [...members].sort((a, b) => (a.prefer === b.prefer ? a.index - b.index : a.prefer ? -1 : 1));
+      for (const m of order) {
+        if (m.removed) continue;
+        if (m.started && m.local) m.local.tick();
+        if (m.draining && m.inflight === null && (m.local ? m.local.session.held().length : 0) === 0 && (m.local?.running?.().length ?? 0) === 0) detach(m, 'drained');
+      }
     },
+    /**
+     * 运行中加一个项目(`entry.projectId` 必须有;`entry.members` 表示此刻有成员在线)。已经在的只更新 `members`、取消排空。
+     * 回 true = 新加的。
+     */
+    add(entry) {
+      if (stopped && started) return false;
+      const existing = members.find((m) => m.projectId === entry?.projectId);
+      if (existing) {
+        existing.prefer = entry.members === true;
+        existing.draining = false;
+        return false;
+      }
+      const m = wire(entry);
+      if (started) {
+        build(m);
+        if (m.endpoint.connected === true || (typeof m.endpoint.onOpen !== 'function' && m.endpoint.closed !== true)) open(m);
+      }
+      return true;
+    },
+    /**
+     * 运行中摘掉一个项目。缺省:让掉它手里的认领(`task.release`)后立即停、关;`drain: true`:不再认领新的,手里的做完再停、再关。
+     * 回让掉的条数(排空时是 0);没有这个项目回 -1。
+     */
+    remove(projectId, { drain = false, reason = 'removed' } = {}) {
+      const m = members.find((x) => x.projectId === projectId);
+      if (!m) return -1;
+      if (drain) {
+        m.draining = true;
+        return 0;
+      }
+      let released = 0;
+      try { released = m.local?.yieldAll(reason) ?? 0; } catch { /* 连接坏了:队列按断线回收 */ }
+      detach(m, reason);
+      return released;
+    },
+    /** 这个项目此刻有没有成员在线(有的优先) */
+    setMembers(projectId, online) {
+      const m = members.find((x) => x.projectId === projectId);
+      if (m) m.prefer = online === true;
+    },
+    /** 背压:暂停认领新任务,手里的照做 */
+    setPaused(value) { paused = value === true; },
+    get paused() { return paused; },
+    /** 因产物容量上限暂停认领到什么时刻(毫秒时间戳);没在暂停回 null */
+    get quotaPausedUntil() { return now() < quotaUntil ? quotaUntil : null; },
+    /** 现有项目的 projectId(含排空中的) */
+    projects: () => members.map((m) => m.projectId),
     /** 代码版本变了:全部让掉、按新版本重新报到 */
     setCodeVersion(next) {
       if (next === version) return false;
@@ -333,6 +447,9 @@ export function createRenderHost({
     nodes() {
       return members.map((m) => ({
         projectId: m.projectId,
+        index: m.index,
+        prefer: m.prefer,
+        draining: m.draining,
         nodeId: m.nodeId,
         connected: m.endpoint.connected === true || (m.endpoint.connected === undefined && m.endpoint.closed !== true),
         claimed: m.stats.claimed,
@@ -354,7 +471,7 @@ export function createRenderHost({
 
 /** `scripts/render-host.mjs` 的命令行参数(契约第 2 节);放在这里是因为 `server/**` 不许引 `scripts/`(单测要用) */
 export function renderHostArgs(argv) {
-  const opts = { port: 5400, config: null, data: null, maxConcurrent: null, streams: false, verbose: false };
+  const opts = { port: 5400, config: null, data: null, maxConcurrent: null, streams: false, verbose: false, cwd: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { const v = argv[++i]; if (v === undefined) throw new Error(`${a} 要跟一个值`); return v; };
@@ -364,6 +481,7 @@ export function renderHostArgs(argv) {
     else if (a === '--max-concurrent') opts.maxConcurrent = Number(next());
     else if (a === '--streams') opts.streams = true;
     else if (a === '--verbose') opts.verbose = true;
+    else if (a === '--cwd') opts.cwd = next();
     else throw new Error(`不认识的参数 ${a}`);
   }
   if (!Number.isInteger(opts.port) || opts.port <= 0 || opts.port > 65533) throw new Error('--port 不对');
@@ -378,10 +496,12 @@ export function renderHostEnv(base, { config, data, streams, maxConcurrent }) {
   const env = { ...base };
   for (const key of ['PROMPTCUT_DOCSERVICE_URL', 'PROMPTCUT_CLUSTER_TOKEN', 'PROMPTCUT_HEADLESS', 'PROMPTCUT_PUSH', 'PROMPTCUT_ROLE']) delete env[key];
   const tmp = path.join(data, 'tmp');
+  // 代理模式(托管方的渲染节点):没有配置文件,项目清单与票据向管理进程要(`PROMPTCUT_RENDER_BROKER`)
+  if (config) env.PROMPTCUT_SHARED_CONFIG = path.resolve(config);
+  else delete env.PROMPTCUT_SHARED_CONFIG;
   Object.assign(env, {
     PROMPTCUT_QUEUE_NODE: '1',
     PROMPTCUT_NODE_PROFILE: 'host',
-    PROMPTCUT_SHARED_CONFIG: path.resolve(config),
     PROMPTCUT_STREAMS: streams ? '1' : '0',
     PROMPTCUT_EXPORT_DIR: data,
     PROMPTCUT_DATA_DIR: path.join(data, 'data'),
@@ -390,6 +510,64 @@ export function renderHostEnv(base, { config, data, streams, maxConcurrent }) {
   if (maxConcurrent !== null && maxConcurrent !== undefined) env.PROMPTCUT_HOST_MAX_CONCURRENT = String(maxConcurrent);
   else delete env.PROMPTCUT_HOST_MAX_CONCURRENT;
   return env;
+}
+
+/** 代理模式的两个环境变量(`docs/plan/hosted-render-contract.md` 第 7.1 节):管理进程的本机代理口与这次启动的口令 */
+export const BROKER_URL_ENV = 'PROMPTCUT_RENDER_BROKER';
+export const BROKER_KEY_ENV = 'PROMPTCUT_RENDER_BROKER_KEY';
+
+/**
+ * 代理模式的客户端:工作进程向管理进程要「现在该连哪些项目」与连接票据。工作进程里没有服务私钥,也没有任何项目的口令。
+ *   projects() → { docUrl, paused, projects: [{ projectId, members, drain, nodeId }] }
+ *   ticket(projectId) → 连接票据(字符串);要不到抛错
+ * @param {{ url: string, key: string, fetch?: typeof globalThis.fetch, timeoutMs?: number }} options
+ */
+export function createBrokerClient({ url, key, fetch: fetchImpl = globalThis.fetch, timeoutMs = 10_000 }) {
+  const base = String(url).replace(/\/+$/, '');
+  const headers = { authorization: `Bearer ${key}`, 'content-type': 'application/json' };
+  async function call(pathname, init = {}) {
+    const res = await fetchImpl(`${base}${pathname}`, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
+    const body = await res.json().catch(() => null);
+    if (res.status !== 200 || !body || body.ok !== true) {
+      const err = new Error(`渲染代理口 ${pathname}:${res.status} ${body?.error ?? ''}`.trim());
+      err.code = body?.error ?? `http-${res.status}`;
+      throw err;
+    }
+    return body;
+  }
+  return {
+    projects: () => call('/projects'),
+    async ticket(projectId) { return (await call('/ticket', { method: 'POST', body: JSON.stringify({ projectId }) })).ticket; },
+    /** 工作进程把自己的诊断交给管理进程(它不用反过来请求工作进程) */
+    report: (body) => call('/report', { method: 'POST', body: JSON.stringify(body) }).catch(() => null),
+  };
+}
+
+/**
+ * 按代理口给的清单对账:该加的 `add`,不在清单里的 `remove`,清单里标了 `drain` 的排空,`members` 与 `paused` 跟着改。
+ * 纯编排,不碰网络;回 `{ added, removed, drained }`(projectId 列表)。
+ * @param {ReturnType<typeof createRenderHost>} host
+ * @param {{ paused?: boolean, projects: { projectId: string, members?: boolean, drain?: boolean }[] }} listing
+ * @param {(item: object) => object} entryOf  清单项 → `add` 用的配置项
+ */
+export function reconcileHostProjects(host, listing, entryOf) {
+  const want = new Map((listing?.projects ?? []).map((p) => [p.projectId, p]));
+  const out = { added: [], removed: [], drained: [] };
+  host.setPaused(listing?.paused === true);
+  for (const projectId of host.projects()) {
+    if (want.has(projectId)) continue;
+    host.remove(projectId, { reason: 'not-listed' });
+    out.removed.push(projectId);
+  }
+  for (const [projectId, item] of want) {
+    if (item.drain === true) {
+      if (host.remove(projectId, { drain: true }) === 0) out.drained.push(projectId);
+      continue;
+    }
+    if (host.add(entryOf(item))) out.added.push(projectId);
+    else host.setMembers(projectId, item.members === true);
+  }
+  return out;
 }
 
 /**

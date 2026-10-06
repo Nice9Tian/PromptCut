@@ -5,13 +5,19 @@
  * - 证明 `promptcut.auth.<base64url(JSON)>` → 该项目的成员身份；
  * - 连接票据 `promptcut.ticket.<票据>` → 签发票据的那个身份，角色按票据；
  * - 本机声明 `promptcut.tenant.<projectId>`（可再加 `promptcut.role.<角色>`），只在回环来源上认 → 本机信任的该项目身份；
- * - 集群令牌 `promptcut.token.<令牌>` → 管理身份，只能用管理接口（只在调用方允许时认，挂载模式一律不认）。
+ * - 集群令牌 `promptcut.token.<令牌>` → 管理身份，只能用管理接口（只在调用方允许时认，挂载模式一律不认）；
+ * - 服务身份 `promptcut.service.<base64url(JSON)>`（`docs/plan/hosted-render-contract.md` 第 1.2 节）→ 托管方服务的控制身份，
+ *   不进任何项目，只能看目录、要票据。只在调用方给了登记表（托管端）、且请求真正从本机发起时认。
+ * 带 `sv` 的连接票据（目录模块签给服务的，同上第 1.4 节）按登记表里这个服务的 `actsFor` 分两种，都查登记表与项目的开关：
+ * - `'self'`（渲染服务）→ 服务在那个项目里的身份 `scope: 'service'`：不是成员，不查名单与禁入表；
+ * - `'member'`（云端 Agent 服务）→ 票据里那位成员的身份（`scope: 'member'`）再带上 `service`：照成员查名单、禁入表、踢人。
+ * 带 `service` 字段的连接一律走消息白名单（`../docservice/service-gate.mjs`）。
  * 回环来源什么都不带 → 本机身份 `{ userId: 'local', tenantId: 'local', scope: 'local', role: 'page' }`。
  * 回环来源连 `promptcut.v1` 都不带的旧客户端，也按本机身份放行（M5 的行为）。
  *
  * 失败一律回 null（组装层回 401，响应体不说原因），日志记 `auth.reject { remote, reason }`，
  * `reason` ∈ `no-credential`、`bad-proof`、`nonce`、`banned`、`not-listed`、`no-project`、`rate-limited`、
- * `bad-format`、`multiple`。不记任何口令、`K`、证明、票据、令牌的原文。
+ * `bad-format`、`multiple`，服务身份另有 `bad-service`、`service-origin`、`service-revoked`、`service-disabled`。不记任何口令、`K`、证明、票据、令牌的原文。
  *
  * 本机声明的角色项可以写 `promptcut.role.agent.<对话号>`，把对话号一起带上（契约只写了 `promptcut.role.<角色>`，
  * 而 `agent` 连接必须有对话号，这是本实现的补充）。
@@ -20,10 +26,12 @@
  */
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
-  PROTOCOL, AUTH_PREFIX, TICKET_PREFIX, TENANT_PREFIX, ROLE_PREFIX, TOKEN_PREFIX, MAX_PROTOCOL_JSON,
+  PROTOCOL, AUTH_PREFIX, TICKET_PREFIX, TENANT_PREFIX, ROLE_PREFIX, TOKEN_PREFIX, SERVICE_PREFIX, MAX_PROTOCOL_JSON,
   b64urlDecode, utf8Text, authPurpose, isProjectId, isUsername, isDeviceId, isDeviceName, isRole, isConversation,
-  normalizeOwner, splitUserId,
+  normalizeOwner, splitUserId, isServiceName, isReservedUsername, serviceUsername, serviceUserId,
 } from './protocol.mjs';
+import { verifyServiceProof, serviceAdmission, SERVICE_SIG_BYTES } from './service-identity.mjs';
+import { isLocalOrigin } from './origin.mjs';
 import { verifyTicket } from './tickets.mjs';
 import { roomUnavailableReason } from '../recovery/relocation.mjs';
 
@@ -31,6 +39,19 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{32,256}$/;
 
 export const LOCAL_PRINCIPAL = Object.freeze({ userId: 'local', tenantId: 'local', scope: 'local', role: 'page' });
 export const ADMIN_PRINCIPAL = Object.freeze({ userId: 'admin', tenantId: null, scope: 'admin' });
+
+/** 托管方服务的控制身份（不进任何项目的空间）；`serviceRole` 是登记表里这个服务的连接角色 */
+export function serviceControlPrincipal({ service, kid, role, deviceId, deviceName }) {
+  return { userId: serviceUsername(service), tenantId: null, scope: 'service', service, serviceKid: kid, serviceRole: role, deviceId, deviceName };
+}
+
+/** 托管方服务在一个项目里的身份：不是成员（`scope: 'service'`），角色取票据 */
+export function serviceDataPrincipal({ service, kid, projectId, deviceId, deviceName, role }) {
+  return {
+    userId: serviceUserId(service, deviceId), tenantId: projectId, scope: 'service', service, serviceKid: kid,
+    username: serviceUsername(service), deviceId, deviceName, creator: false, role, conversation: null, owner: null,
+  };
+}
 
 /** 集群令牌格式：base64url 字符，32～256 个 */
 export const checkTokenFormat = (token) => typeof token === 'string' && TOKEN_RE.test(token);
@@ -97,6 +118,10 @@ export function admissionOf(rec, { username, deviceId, creator }) {
  * @param {boolean} [options.acceptToken] 认不认集群令牌（挂载模式 false）
  * @param {(req) => boolean} options.isLoopback 这条请求是不是本机回环来的
  * @param {(req) => string | null} [options.remoteOf] 日志与限速用的来源地址
+ * @param {() => object | null} [options.services] 取服务登记表（`service-identity.mjs` 的 `createServiceRegistry`）；
+ *   不给或回 null 时服务握手项与带 `sv` 的票据一律 401（局域网主机）
+ * @param {(req) => boolean} [options.isDirectLocal] 请求是不是真正从本机发起的（服务握手只认这种，不看本机信任开关）；
+ *   缺省 `origin.mjs` 的 `isLocalOrigin`
  * @param {{ deviceId: string, deviceName: string }} [options.localDevice] 本机声明用的本机设备信息
  * @param {() => number} [options.now]
  * @param {(event: string, fields: object) => void} [options.log]
@@ -110,9 +135,12 @@ export function createHandshakeAuth({
   isLoopback,
   remoteOf = (req) => req?.socket?.remoteAddress ?? null,
   localDevice,
+  services = null,
+  isDirectLocal = (req) => isLocalOrigin(req),
   now = Date.now,
   log = () => {},
 }) {
+  const registryOf = typeof services === 'function' ? services : () => services;
   if (clusterToken !== undefined && clusterToken !== null && !checkTokenFormat(clusterToken)) {
     throw new TypeError('createHandshakeAuth: 集群令牌格式不对（要 32～256 个 base64url 字符）');
   }
@@ -133,7 +161,7 @@ export function createHandshakeAuth({
     }
     const offered = offeredProtocols(req);
     const items = offered.filter((p) => p !== PROTOCOL);
-    const kinds = items.filter((p) => p.startsWith(AUTH_PREFIX) || p.startsWith(TICKET_PREFIX) || p.startsWith(TENANT_PREFIX) || p.startsWith(TOKEN_PREFIX));
+    const kinds = items.filter((p) => p.startsWith(AUTH_PREFIX) || p.startsWith(TICKET_PREFIX) || p.startsWith(TENANT_PREFIX) || p.startsWith(TOKEN_PREFIX) || p.startsWith(SERVICE_PREFIX));
     const roleItems = items.filter((p) => p.startsWith(ROLE_PREFIX));
 
     if (kinds.length > 1) return reject('multiple');
@@ -194,6 +222,43 @@ export function createHandshakeAuth({
     // 冷却期内：非回环来源凭证明、票据一律拒（口令对也拒）
     if (!loopback && limiter.blocked(remote)) return reject('rate-limited');
 
+    // ---------- 服务身份（控制连接） ----------
+    if (item.startsWith(SERVICE_PREFIX)) {
+      const registry = registryOf();
+      if (!registry) return reject('no-credential');
+      const failService = (reason) => {
+        if (!loopback) limiter.fail(remote);
+        return reject(reason);
+      };
+      const raw = b64urlDecode(item.slice(SERVICE_PREFIX.length));
+      if (!raw || raw.length > MAX_PROTOCOL_JSON) return reject('bad-format');
+      const text = utf8Text(raw);
+      let j;
+      try {
+        j = text === null ? null : JSON.parse(text);
+      } catch {
+        j = null;
+      }
+      if (!isObj(j) || j.v !== 1) return reject('bad-format');
+      const { s: service, kid, d: deviceId, dn: deviceName, nonce, m } = j;
+      if (!isServiceName(service) || typeof kid !== 'string' || kid === '' || kid.length > 16 || !isDeviceId(deviceId) || !isDeviceName(deviceName)
+        || typeof nonce !== 'string' || typeof m !== 'string') return reject('bad-format');
+      // nonce 先核对：不论后面成败都已作废；重放用过的不计入限速（同证明）
+      const nonceState = challenges.check(nonce, ['service', service, deviceId]);
+      if (nonceState === 'used') return reject('nonce');
+      if (nonceState !== 'ok') return failService('nonce');
+      // 只认真正从本机发起的连接：私钥即使外泄，也只能在节点本机上用（契约第 1.2 节〔裁〕）
+      let direct = false;
+      try { direct = !!isDirectLocal(req); } catch { direct = false; }
+      if (!direct) return reject('service-origin');
+      const entry = registry.get(service);
+      const key = entry?.keys.find((k) => k.kid === kid) ?? null;
+      const sig = b64urlDecode(m);
+      if (!key || !sig || sig.length !== SERVICE_SIG_BYTES) return failService('bad-service');
+      if (!verifyServiceProof(key.pub, { service, deviceId, nonce }, m)) return failService('bad-service');
+      return serviceControlPrincipal({ service, kid, role: entry.role, deviceId, deviceName });
+    }
+
     // ---------- 连接票据 ----------
     if (item.startsWith(TICKET_PREFIX)) {
       const st = storeOf();
@@ -202,6 +267,30 @@ export function createHandshakeAuth({
       if (!v.ok) return reject(v.reason === 'no-project' ? 'no-project' : 'bad-proof');
       const p = v.payload;
       const who = splitUserId(p.u);
+      if (p.sv !== undefined) {
+        // 服务身份的票据：先查登记表与这个项目的开关
+        const registry = registryOf();
+        const refused = serviceAdmission({ registry, record: v.record, service: p.sv, kid: p.sk, role: p.r });
+        if (refused) return reject(refused);
+        const own = who.username === serviceUsername(p.sv);
+        if (registry.get(p.sv).actsFor === 'member') {
+          // 代成员进项目（云端 Agent 服务）：票据的 `u`、`ug` 是成员的，名单、禁入表照成员查
+          if (own) return reject('bad-format');
+          const asCreator = p.cr === true;
+          const banned = admissionOf(v.record, { username: who.username, deviceId: who.deviceId, creator: asCreator });
+          if (banned) return reject(banned);
+          return {
+            ...memberPrincipal({
+              projectId: p.p, username: who.username, deviceId: who.deviceId, deviceName: p.dn ?? who.deviceId,
+              creator: asCreator, role: p.r, conversation: p.c, owner: p.o,
+            }),
+            service: p.sv, serviceKid: p.sk,
+          };
+        }
+        // 以服务自己的身份进项目（渲染服务）：不是成员，不查名单与禁入表
+        if (!own) return reject('bad-format');
+        return serviceDataPrincipal({ service: p.sv, kid: p.sk, projectId: p.p, deviceId: who.deviceId, deviceName: p.dn ?? who.deviceId, role: p.r });
+      }
       const creator = p.cr === true;
       const denied = admissionOf(v.record, { username: who.username, deviceId: who.deviceId, creator });
       if (denied) return reject(denied);
@@ -228,6 +317,8 @@ export function createHandshakeAuth({
     if (!isObj(j) || j.v !== 1) return reject('bad-format');
     const { p: projectId, u: username, d: deviceId, dn: deviceName, as, nonce, m, r: role, c, o } = j;
     if (!isProjectId(projectId) || !isUsername(username) || !isDeviceId(deviceId) || !isDeviceName(deviceName)) return reject('bad-format');
+    // `service:` 开头的用户名留给服务身份，成员进不来（契约 hosted-render 第 1.4 节）
+    if (isReservedUsername(username)) return reject('bad-format');
     if ((as !== 'member' && as !== 'creator') || typeof nonce !== 'string' || typeof m !== 'string') return reject('bad-format');
     // nonce 先核对：不论后面成败都已作废。重放用过的（Node 的 WebSocket 在 401 后会原样重试一次）不计入限速
     const nonceState = challenges.check(nonce, ['join', projectId, username, deviceId, as]);

@@ -73,7 +73,10 @@ const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/*
 
 export default defineConfig({
   // 依赖预构建缓存和编辑器那一份分开,两个进程同时写 node_modules/.vite 会互相踩
-  cacheDir: process.env.PROMPTCUT_HEADLESS === "1" ? "node_modules/.vite-prerender-headless" : "node_modules/.vite-prerender",
+  // PROMPTCUT_VITE_CACHE_DIR：检出目录只读时把缓存指到可写的地方（见 vite.config.ts 同名处）；不设时与原来相同
+  cacheDir: process.env.PROMPTCUT_VITE_CACHE_DIR
+    ? `${process.env.PROMPTCUT_VITE_CACHE_DIR}/${process.env.PROMPTCUT_HEADLESS === "1" ? "prerender-headless" : "prerender"}`
+    : process.env.PROMPTCUT_HEADLESS === "1" ? "node_modules/.vite-prerender-headless" : "node_modules/.vite-prerender",
   clearScreen: false,
   // 依赖扫描入口只找真正的页面,不把 out/frame-library 下的快照 .html 当入口(`server/vite-scan-ignore.mjs`)
   optimizeDeps: { entries: DEP_SCAN_ENTRIES },

@@ -87,7 +87,7 @@ const positive = (v, fallback) => (typeof v === 'number' && Number.isFinite(v) &
  * @param {(connId: string, code: number, reason: string) => void} [options.close] 主动关闭连接
  * @param {number} [options.highWaterBytes] 缺省 `CORE_DEFAULTS.HIGH_WATER_BYTES`
  * @param {number} [options.maxPendingBytes] 缺省 `CORE_DEFAULTS.MAX_PENDING_BYTES`
- * @param {(principal: object, type: string) => string | null} [options.gate]
+ * @param {(principal: object, type: string, msg: object) => string | null} [options.gate]
  *   派发前的放行判断：回一个原因字符串就不交给模块，直接回 `error { reason }`；回 null 照常派发。
  *   核心不认识任何身份或业务，判据全在组装层（例：管理身份只能发管理接口的消息，`auth-contract.md` 第 5 节）
  */
@@ -430,7 +430,7 @@ export function createRouter({
     if (gate) {
       let reason;
       try {
-        reason = gate(conns.get(connId).principal, msg.type);
+        reason = gate(conns.get(connId).principal, msg.type, msg);
       } catch {
         reason = 'forbidden';
       }

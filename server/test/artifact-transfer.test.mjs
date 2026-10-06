@@ -558,6 +558,13 @@ test('T6 createAssetSink：本机帧库覆盖完整时 has 为真；put 回 { co
     await seedSnapshots(A, other, range(0, 59), { tag: 'A-own' });
     const r3 = await T().createAssetSink({ pipeline: A, client: broken }).put({ ...ref(other), artifacts: null, meta: meta(other) });
     assert.equal(r3.complete, false, '推失败：put 回 complete: false');
+    // HR26（`docs/plan/hosted-render-contract.md` 第 6 节）：素材服务回 507 service-quota（渲染服务的产物到了容量上限）——不回 incomplete（那是可重试的），抛不可重试的错
+    const overQuota = { ...client, put: async () => { throw Object.assign(new Error('asset 507'), { status: 507, body: { error: 'service-quota' } }); }, has: client.has, get: client.get };
+    await assert.rejects(
+      () => T().createAssetSink({ pipeline: A, client: overQuota }).put({ ...ref(other), artifacts: null, meta: meta(other) }),
+      (e) => e.code === 'service-quota' && e.retryable === false && e.status === 507,
+      '到了容量上限：抛 service-quota、不可重试',
+    );
 
     // 流：has / put
     const contentKey = sha256('stream-T6');

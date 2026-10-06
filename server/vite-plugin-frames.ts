@@ -504,7 +504,8 @@ async function startQueueNode(root: string, service: FramePipeline, auto: AutoLi
         else if (event?.type === "discarded") stats.discarded++;
         else if (event?.type === "lost") stats.lost++;
         else if (event?.type === "plan-split") { stats.planSplit++; planDerived.set(id, [...(event.derived ?? [])]); }
-        if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { id, ...(event.error ? { error: event.error } : {}), ...(event.derived ? { derived: event.derived.length } : {}) });
+        if (event?.type === "quota-paused") queueLog("render.quota", { profile: "host", projectId: event.projectId, until: event.until, detail: "素材服务回 507 service-quota:渲染服务的产物到了容量上限,暂停认领" });
+      if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { id, ...(event.error ? { error: event.error } : {}), ...(event.derived ? { derived: event.derived.length } : {}) });
         taskEventLog(event);
       },
     });
@@ -790,12 +791,26 @@ function hostAssetClient({ node, endpoint, docUrl, origin, ticket, createAssetCl
  *   - 不发布 `plan`、不认领 `plan`(filter 规则 6),不接 `/preload` 的队列发布(`active()` 恒为 false);
  *   - 闲时门槛只有全局闸;断线重连按 G.7 接续仍持有的认领;
  *   - 诊断 `GET /api/frames/queue`(`summary()`),退出前 `POST /api/frames/queue/release`(`release()`)。
+ *
+ * 代理模式(托管方的渲染节点,`docs/plan/hosted-render-contract.md` 第 7.1 节):设了 `PROMPTCUT_RENDER_BROKER` 时不读配置文件,
+ * 项目清单与每条连接的票据向管理进程的本机代理口要(`render-node/host.mjs` 的 `createBrokerClient`):每秒对一次账,
+ * 清单里新出现的项目当场连上、不在清单里的让掉认领后断开、标了排空的做完再断开;管理进程说暂停就不认领新任务(背压)。
+ * 这个进程里没有服务私钥,也没有任何项目的口令,只有两分钟的连接票据。节点 id 用清单给的。
  */
 async function startHostNode(root: string, service: FramePipeline, node: any, origin: string) {
   const hostMod: any = await import("./render-node/host.mjs");
+  const brokerUrl = String(process.env[hostMod.BROKER_URL_ENV] || "").trim();
+  const broker: any = brokerUrl ? hostMod.createBrokerClient({ url: brokerUrl, key: String(process.env[hostMod.BROKER_KEY_ENV] || "") }) : null;
   let config: { entries: any[]; maxConcurrent: number } | null;
-  try { config = hostMod.loadHostConfig(); }
-  catch (error: any) { return queueLog("queue.skip", { reason: "bad-shared-config", profile: "host", detail: String(error?.message ?? error) }); }
+  if (broker) {
+    try {
+      const raw = process.env[hostMod.HOST_CONCURRENCY_ENV];
+      config = { entries: [], maxConcurrent: raw === undefined || raw === "" ? 1 : hostMod.hostMaxConcurrent(Number(raw)) };
+    } catch (error: any) { return queueLog("queue.skip", { reason: "bad-shared-config", profile: "host", detail: String(error?.message ?? error) }); }
+  } else {
+    try { config = hostMod.loadHostConfig(); }
+    catch (error: any) { return queueLog("queue.skip", { reason: "bad-shared-config", profile: "host", detail: String(error?.message ?? error) }); }
+  }
   if (!config) return queueLog("queue.skip", { reason: "no-shared-config", profile: "host" });
   if (services.get(root) !== service || (service as any).closed) return;
 
@@ -810,7 +825,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   if (!envFingerprint) return queueLog("queue.skip", { reason: "no-environment", profile: "host" });
   if (services.get(root) !== service || (service as any).closed) return;
   // M6c X1:能力与 PC 节点同一个判据(`streams` 按实报)
-  const capabilities = await nodeCapabilities(service);
+  let capabilities = await nodeCapabilities(service);
   if (services.get(root) !== service || (service as any).closed) return;
   /*
    * 主机也是渲染节点:产原尺寸时一并产预渲染小尺寸,两档都推(`product/rendering.md`「两档」、c10a 第 9 节)。主机没有推送队列,
@@ -841,6 +856,8 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const cardSyncDir = path.join(process.env.PROMPTCUT_DATA_DIR || path.join(root, ".pc-work"), "host-cards");
   const { createHostCardSync }: any = cardSyncOn ? await import("./vite-plugin-cards") : {};
   if (!cardSyncOn) queueLog("queue.card-sync-skip", { profile: "host", reason: process.env.PROMPTCUT_CARD_SYNC === "0" ? "disabled" : "no-overrides" });
+  // 托管方的渲染节点:能力位集中在 `render-node/host.mjs` 的 `hostedRenderCapabilities`(不同步卡的工作进程不报 userCards)
+  if (broker) capabilities = hostMod.hostedRenderCapabilities(capabilities, { cardSync: cardSyncOn });
 
   const override = String(process.env[TEST_CODE_VERSION_ENV] || "").trim() || null;
   let codeVersion: string = override ?? frameCode(root);
@@ -850,21 +867,27 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const nodeIdBase = `host:${hostName}${editorPort ? `:${editorPort}` : ""}`;
 
   /** 每项的连接记录:诊断用(连不上的次数、素材基址),退出时关 */
-  const wired: { projectId: string | null; endpoint: any; assets: any; ticket: any; connectFailed: number; opens: number; cards: any }[] = [];
+  const wired: { projectId: string | null; endpoint: any; assets: any; ticket: any; connectFailed: number; opens: number; cards: any; closed?: boolean }[] = [];
+  const { ticketProtocols }: any = broker ? await import("./auth/client.mjs") : {};
   const host = hostMod.createRenderHost({
     entries: config.entries,
+    dynamic: !!broker,
     maxConcurrent: config.maxConcurrent,
     envFingerprint,
     codeVersion,
     capabilities,
     cardSourceVersions: cardCode(root).view,
     now: Date.now,
-    nodeIdOf: (_entry: any, index: number) => `${nodeIdBase}/p${index}`.slice(0, 128),
+    nodeIdOf: (entry: any, index: number) => (typeof entry?.nodeId === "string" && entry.nodeId ? entry.nodeId : `${nodeIdBase}/p${index}`).slice(0, 128),
     connect: (entry: any, index: number) => {
-      const rec: any = { projectId: entry.projectId ?? null, endpoint: null, assets: null, ticket: null, connectFailed: 0, opens: 0, cards: null };
+      const rec: any = { projectId: entry.projectId ?? null, endpoint: null, assets: null, ticket: null, connectFailed: 0, opens: 0, cards: null, closed: false };
+      // 代理模式:每次建新会话向管理进程要一张连接票据(与桌面版「页面每次交一张 render 票据」同一做法)
+      const protocols = broker
+        ? async () => ticketProtocols(await broker.ticket(entry.projectId))
+        : sharedProtocols(entry, { role: "render" });
       // 连不上时每次退避都会打一行:按事件节流(`sessionLogger`),免得刷屏
       const sessionLog = sessionLogger((event: string, fields: object) => queueLog(`docservice.${event}`, fields), { extra: { project: index, projectId: rec.projectId } });
-      rec.endpoint = node.createDocEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), log: (event: string, fields: object) => {
+      rec.endpoint = node.createDocEndpoint({ url: entry.url, protocols, log: (event: string, fields: object) => {
         if (event === "session.connect-failed") rec.connectFailed++;
         if (event === "session.open") rec.opens++;
         sessionLog(event, fields);
@@ -904,8 +927,16 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
           queueLog("queue.card-sync-failed", { project: index, projectId: rec.projectId, message: String(error?.message ?? error) });
         }
       }
-      wired.push(rec);
-      return { endpoint: rec.endpoint, executor, sink };
+      wired[index] = rec;
+      const close = () => {
+        if (rec.closed) return;
+        rec.closed = true;
+        try { rec.cards?.close(); } catch { /* 已关 */ }
+        try { rec.assets.stop(); } catch { /* 已停 */ }
+        try { rec.endpoint.close(); } catch { /* 已关 */ }
+        log("queue.project-closed", { profile: "host", project: index, projectId: rec.projectId });
+      };
+      return { endpoint: rec.endpoint, executor, sink, close };
     },
     onEvent: (event: any) => {
       if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { project: event.index, id: event.id, ...(event.error ? { error: event.error } : {}) });
@@ -915,25 +946,51 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
 
   // J.6 的素材回退(读别的机器上的素材):各项目的素材服务都当回退基址;票据按基址挑,用那台素材服务所属项目的
   // (票据只在签发它的素材服务上有效;同一台服务上有几个项目时用配置里靠前的那个,按哈希寻址,任一项目的有效票据都能读)
+  /** 还开着的连接记录(运行中摘掉的项目留着空位,序号不复用) */
+  const live = () => wired.filter(rec => rec && !rec.closed);
   let fallbackKey = "";
   const refreshFallback = () => {
-    const bases = wired.map(rec => rec.assets.base()).filter((b: string | null): b is string => !!b);
+    const bases = [...new Set(live().map(rec => rec.assets.base()).filter((b: string | null): b is string => !!b))];
     const key = JSON.stringify(bases);
     if (key === fallbackKey) return;
     fallbackKey = key;
     note("queue.media-fallback", { bases: setMediaFallbackBases(bases).length });
   };
   refreshFallback();
-  setMediaFallbackTicket(hostMod.fallbackTicketFor(wired.map(rec => ({ base: () => rec.assets.base(), ticket: () => rec.ticket() }))));
+  setMediaFallbackTicket((base: string) => hostMod.fallbackTicketFor(live().map(rec => ({ base: () => rec.assets.base(), ticket: () => rec.ticket() })))(base));
 
   let closed = false;
   let released = false;
   host.start();
-  log("queue.started", { profile: "host", projects: config.entries.map((e: any) => e.projectId), maxConcurrent: host.maxConcurrent,
+  log("queue.started", { profile: "host", broker: !!broker, projects: config.entries.map((e: any) => e.projectId), maxConcurrent: host.maxConcurrent,
     envFingerprint, codeVersion: codeVersion.slice(0, 12), codeVersionOverride: override !== null, capabilities });
+
+  // 代理模式:每秒向管理进程对一次账(增删项目、成员在线与否、暂停),顺带把自己的诊断交过去
+  let brokerBusy = false;
+  let brokerAt = 0;
+  let brokerError = "";
+  const syncBroker = async () => {
+    if (!broker || brokerBusy || closed || Date.now() - brokerAt < 1000) return;
+    brokerBusy = true;
+    brokerAt = Date.now();
+    try {
+      const listing = await broker.projects();
+      if (closed) return;
+      const diff = hostMod.reconcileHostProjects(host, listing, (item: any) => ({ url: listing.docUrl, projectId: item.projectId, members: item.members === true, nodeId: item.nodeId }));
+      if (diff.added.length || diff.removed.length || diff.drained.length) log("queue.broker-sync", { profile: "host", ...diff, paused: listing.paused === true });
+      brokerError = "";
+      void broker.report({ pid: process.pid, queue: summary() });
+    } catch (error: any) {
+      const message = String(error?.code ?? error?.message ?? error);
+      if (message !== brokerError) { brokerError = message; log("queue.broker-error", { profile: "host", message }); }
+    } finally {
+      brokerBusy = false;
+    }
+  };
 
   const timer = setInterval(() => {
     if (closed) return;
+    void syncBroker();
     try {
       if (override === null) {
         const now = frameCode(root);
@@ -953,15 +1010,15 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
 
   const summary = () => ({
     profile: "host",
-    nodes: host.nodes().map((n: any, i: number) => ({ ...n, opens: wired[i]?.opens ?? 0, connectFailed: wired[i]?.connectFailed ?? 0, ...sessionDiag(wired[i]?.endpoint), assetBase: wired[i]?.assets.base() ?? null })),
-    codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent,
+    nodes: host.nodes().map((n: any) => { const rec = wired[n.index]; return { ...n, opens: rec?.opens ?? 0, connectFailed: rec?.connectFailed ?? 0, ...sessionDiag(rec?.endpoint), assetBase: rec?.assets.base() ?? null }; }),
+    codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent, paused: host.paused === true, quotaPausedUntil: host.quotaPausedUntil ?? null, capabilities,
     // c66-host-cards:每个项目的卡片同步(记账:仓库相对路径 → 装到的 cardRev)与卡片代码身份的状态
-    cardSync: wired.map((rec) => hostCardSyncSummary(rec.projectId, rec.cards)),
+    cardSync: live().map((rec) => hostCardSyncSummary(rec.projectId, rec.cards)),
     cardCode: { epoch: cardCode(root).epoch, settled: cardCode(root).settled() },
   });
   const closeAll = async () => {
     clearInterval(timer);
-    for (const rec of wired) { try { rec.cards?.close(); } catch { /* 已关 */ } rec.assets.stop(); try { rec.endpoint.close(); } catch { /* 已关 */ } }
+    for (const rec of live()) { rec.closed = true; try { rec.cards?.close(); } catch { /* 已关 */ } rec.assets.stop(); try { rec.endpoint.close(); } catch { /* 已关 */ } }
   };
   const handle: QueueNode = {
     active: () => false,
@@ -982,7 +1039,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     },
     async close() {
       if (!released) { released = true; try { host.shutdown("closing"); } catch { /* 已停 */ } }
-      if (closed && wired.every(rec => rec.endpoint.closed)) return;
+      if (closed && live().length === 0) return;
       closed = true;
       await Promise.race([host.settled(), new Promise(resolve => setTimeout(resolve, 5000))]);
       await closeAll();

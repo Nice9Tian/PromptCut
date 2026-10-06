@@ -35,6 +35,7 @@ import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
+import { applyHostedChange, HOSTED_SERVICE_TEXT, parseHosted, type HostedServiceName, type HostedView } from "./hostedServices";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
@@ -63,7 +64,9 @@ export interface MemberRow {
   displayName: string;
   creator: boolean;
   tags: { editing: boolean; rendering: boolean; agents: number };
-  conns: { role: string; conversation?: number }[];
+  conns: { role: string; conversation?: number; service?: string }[];
+  /** 托管方的服务(不是成员):这一行按服务名显示(`hostedServices.ts`),不计入成员数、没有踢人按钮 */
+  service?: string;
 }
 
 export interface SharedInfo {
@@ -144,6 +147,8 @@ export interface SyncView {
   offlineOpen: boolean;
   shared: SharedInfo | null;
   members: MemberRow[];
+  /** 托管方服务的可用与开关(成员列表顶层的 `hosted`);放本机的项目与没有登记表的托管端没有 */
+  hosted: HostedView | null;
   blocked: Blocked | null;
   notice: UndoNoticeView | null;
   toasts: Toast[];
@@ -171,6 +176,7 @@ let view: SyncView = {
   offlineOpen: false,
   shared: null,
   members: [],
+  hosted: null,
   blocked: null,
   notice: null,
   toasts: [],
@@ -560,7 +566,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   }
   // 在场状态(A3 第二阶段):这个页面「正在编辑」的片段经这条连接发布,别的成员那边 Agent 的范围经它收
   setPresenceLink(link, docProjectId, me().userId ?? "");
-  patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
+  patch({ active: true, kind, members: kind === "local" ? [] : view.members, hosted: kind === "local" ? null : view.hosted, notice: null });
   refreshStatus();
   // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
   if (!ONLINE_BUILD && !ONLINE) {
@@ -624,7 +630,7 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
   if (ONLINE) {
     // 在线页面没有本机空间:离开共享项目就是断开(C10a 第 2 节)
     detach();
-    patch({ shared: null, members: [], blocked: null });
+    patch({ shared: null, members: [], hosted: null, blocked: null });
     disconnectSharedAssets();
     return project;
   }
@@ -632,7 +638,7 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
   const link = newLocalLink(id, project);
   if (load) link.ds.load(project);
   bind(link, "local", id, localWsUrl());
-  patch({ shared: null, members: [], blocked: null });
+  patch({ shared: null, members: [], hosted: null, blocked: null });
   // C6.6:回到本机空间 = 回到本地素材服务
   disconnectSharedAssets();
   link.start();
@@ -650,7 +656,7 @@ function onLoad(project: Project): Project {
   patch({ association, reopenState: null });
   if (association) {
     detach(); disconnectSharedAssets();
-    patch({ shared: null, members: [], blocked: null });
+    patch({ shared: null, members: [], hosted: null, blocked: null });
     holdRecovery(project, association);
     if (started) recoveryCoordinator.start(association, project.id);
     return project;
@@ -736,7 +742,7 @@ export function forgetSharedResume(): void {
   cancelHostTask(currentAssociation());
   releaseHolding();
   detach(); disconnectSharedAssets();
-  patch({ reopenState: null, shared: null, members: [], blocked: null });
+  patch({ reopenState: null, shared: null, members: [], hosted: null, blocked: null });
   clearSharedResume();
 }
 
@@ -835,10 +841,19 @@ function onSideMessage(msg: AnyMsg) {
       receiveSharedAssetEndpoints(msg.endpoints);
       return;
     case "shared.members.list":
-      patch({ members: Array.isArray(msg.devices) ? (msg.devices as MemberRow[]) : [] });
+      patch({ members: Array.isArray(msg.devices) ? (msg.devices as MemberRow[]) : [], hosted: parseHosted(msg.hosted) });
       return;
     case "shared.notice":
       if (msg.event === "password-changed") pushToast("项目密码已被修改。你当前的连接不受影响，但下次进入需要新密码。", "info", 8000);
+      // 创建者开关了托管方的服务:界面马上跟着变(紧接着还有一条刷新后的成员列表,以它为准)
+      if (msg.event === "hosted-service-changed") {
+        const next = applyHostedChange(view.hosted, msg.service, msg.enabled);
+        if (next !== view.hosted) {
+          patch({ hosted: next });
+          const text = HOSTED_SERVICE_TEXT[msg.service as HostedServiceName]?.changed(msg.enabled === true);
+          if (text) pushToast(text, "info", 6000);
+        }
+      }
       return;
     case "events.event":
       rememberEvent(msg as Record<string, unknown>);
@@ -1122,7 +1137,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
       const descriptor = currentAssociation();
       recoveryCoordinator.cancel(); cancelHostTask(descriptor);
       clearSharedResume(); detach(); disconnectSharedAssets();
-      patch({ blocked: failure === "auth" ? null : failure, shared: null, members: [], reopenState: failure === "auth" ? "needs-auth" : failure === "deleted" ? "deleted" : "rejected" });
+      patch({ blocked: failure === "auth" ? null : failure, shared: null, members: [], hosted: null, reopenState: failure === "auth" ? "needs-auth" : failure === "deleted" ? "deleted" : "rejected" });
       if (failure === "auth") pushToast("原协作身份已失效，请重新认证；本地内容已保留。", "warn", Infinity);
       // 即便隧道在致命关闭帧到达前中断，可信发现接口的 deleted 也必须持久注销。
       if (failure === "deleted" && descriptor && !ONLINE_BUILD && !ONLINE) {
@@ -1178,6 +1193,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
         patch({
           shared: { projectId: candidate.projectId, name: candidate.name, mode: candidate.mode, where: candidate.where, base: candidate.base, username: cred.username, creator: cred.as === "creator", hostDeviceName: candidate.hostDeviceName },
           members: [],
+          hosted: null,
           blocked: null,
         });
         rememberKicked(candidate.projectId, cred.username, false);
@@ -1256,7 +1272,7 @@ export function leaveSharedToLocal(project: Project = getState().project): Proje
   releaseHolding();
   patch({ association: null, reopenState: null });
   clearSharedResume();
-  patch({ shared: null, members: [], blocked: null });
+  patch({ shared: null, members: [], hosted: null, blocked: null });
   const out = switchToLocal(project, { load: true });
   expectedClose = null;
   return out;
@@ -1437,7 +1453,7 @@ export async function moveSharedToHosted(): Promise<{ ok: true } | { ok: false; 
     if (cur?.link !== original || currentAssociation() !== descriptor) return { ok: false, error: "cancelled" };
     const project = structuredClone(getState().project);
     recoveryCoordinator.cancel(); cancelHostTask(descriptor); releaseHolding(); detach(); disconnectSharedAssets();
-    setAssociation(descriptor, true); patch({ association: descriptor, shared: null, members: [], blocked: null, reopenState: "waiting-host" });
+    setAssociation(descriptor, true); patch({ association: descriptor, shared: null, members: [], hosted: null, blocked: null, reopenState: "waiting-host" });
     holdRecovery(project, descriptor); recoveryCoordinator.start(descriptor, project.id);
     return { ok: true };
   } catch (e) { return { ok: false, error: (e as { reason?: string }).reason ?? "relocation-network" }; }
@@ -1452,7 +1468,7 @@ export async function moveSharedToLan(): Promise<{ ok: true } | { ok: false; err
     if (cur?.link !== original || currentAssociation() !== descriptor) return { ok: false, error: "cancelled" };
     const project = structuredClone(getState().project), destination = result.descriptor as CollaborationDescriptor;
     recoveryCoordinator.cancel(); releaseHolding(); detach(); disconnectSharedAssets();
-    setAssociation(destination, true); patch({ association: destination, shared: null, members: [], blocked: null, reopenState: "waiting-host" });
+    setAssociation(destination, true); patch({ association: destination, shared: null, members: [], hosted: null, blocked: null, reopenState: "waiting-host" });
     holdRecovery(project, destination); recoveryCoordinator.start(destination, project.id);
     return { ok: true };
   } catch (e) { return { ok: false, error: (e as { reason?: string }).reason ?? "relocation-network" }; }
@@ -1486,7 +1502,7 @@ export function currentSharedUrl(): string | null {
 /** 被踢 / 被移出 / 项目被删之后点「开始页」:回到本机空间,回开始页 */
 export function leaveBlocked() {
   clearSharedResume();
-  patch({ blocked: null, shared: null, members: [] });
+  patch({ blocked: null, shared: null, members: [], hosted: null });
   switchToLocal(getState().project, { load: false });
   window.dispatchEvent(new Event("pc-go-home"));
 }
@@ -1537,6 +1553,18 @@ export async function adminOp(
   }
   const reason = String(reply.reason ?? "");
   return { ok: false, error: reason === "forbidden" || reason === "rate-limited" || reason === "bad-message" ? (reason as AdminError) : "other" };
+}
+
+/**
+ * 创建者开关托管方的服务(契约 `docs/plan/hosted-render-contract.md` 第 3 节):`shared.admin { op: 'set-hosted-service' }`,
+ * 证明与其它创建者操作相同(`key` 是同一次流程里刚验证过的 K)。成功后马上把本页的开关状态改过来
+ * (服务端随后还会推一条刷新后的成员列表,以它为准)。
+ */
+export async function setHostedService(service: HostedServiceName, enabled: boolean, key: string): Promise<{ ok: true } | { ok: false; error: AdminError }> {
+  const r = await adminOp("set-hosted-service", { key }, { service, enabled });
+  if (!r.ok) return r;
+  patch({ hosted: applyHostedChange(view.hosted, service, enabled) });
+  return { ok: true };
 }
 
 /** 新的一份口令凭证(改项目密码、改名单、改创建者密码用),kdf 与项目记录一致用缺省 */
