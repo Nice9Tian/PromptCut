@@ -1055,6 +1055,14 @@ async function newPage(ctx) {
   page.on('request', (r) => {
     let u;
     try { u = new URL(r.url()); } catch { return; }
+    // 2026-10-06 隔离之后:舞台读素材走自己源上的 /media-s/<会话号>/media/<哈希>(票据在 cookie 里,地址里没有),照样记成 ns = media
+    const ms = new RegExp('^/media-s/[0-9a-f]{32}/media/([0-9a-f]{64})').exec(u.pathname);
+    if (ms) {
+      let fo = null;
+      try { fo = new URL(r.frame()?.url() ?? '').origin; } catch { /* 没有 frame */ }
+      page.assets.push({ at: Date.now(), method: r.method(), origin: u.origin, frameOrigin: fo, ns: 'media', hash: ms[1], sub: '', route: 'media-s', hasTicket: /[?&]t=/.test(u.search) });
+      return;
+    }
     const i = u.pathname.indexOf('/media/api/asset/');
     if (i < 0) return;
     const rest = u.pathname.slice(i + '/media/api/asset/'.length).split('/');
@@ -1683,7 +1691,8 @@ try {
   const sum1 = assetSummary(member.assets);
   check(sum1.snap > 0 && sum1.px === 0, 'A3:普通档取 snap/ 原尺寸、预渲染小尺寸请求 0', sum1);
   if (VIDEO) check(Object.keys(sum1.mediaByFrameOrigin).some((k) => STAGE_ORIGINS.some((o) => k === `${o}→${o}`)) && !Object.keys(sum1.mediaByFrameOrigin).some((k) => STAGE_ORIGINS.some((o) => k.startsWith(`${o}→`) && !k.endsWith(o))),
-    '第 2 节:跨源舞台用相对地址读自己源上反代的 /media', sum1.mediaByFrameOrigin);
+    '第 2 节(2026-10-06 隔离后):跨源舞台用相对地址读自己源上的 /media-s/<会话号>/media/<哈希>(不再是 /media)', sum1.mediaByFrameOrigin);
+  if (VIDEO) check(member.assets.some((a) => a.route === 'media-s') && !member.assets.some((a) => a.hasTicket), '第 2 节(2026-10-06 隔离后):舞台取素材的地址里没有票据(?t=),票据在舞台读不到的 cookie 里', { mediaS: member.assets.filter((a) => a.route === 'media-s').length });
   const o3 = await onlineDiag(member);
   check(o3?.layers?.length && o3.layers.every((l) => l.envFingerprint === state.creatorFp), 'A3:一层只出自一种环境(层表记录的那一种)', o3?.layers?.map((l) => ({ clip: l.clipId.slice(0, 6), fp: l.envFingerprint })));
   out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp, costPublish: state.costPublish,
@@ -1720,10 +1729,29 @@ try {
     const lastU = { stage: await userStage(), badge: await badgeOf() };
     lastU.diag = await P(member, (id) => { const d = window.__pcPreviewDiag?.(); const j = d?.probeRun?.probed?.filter((x) => x.clipId === id) ?? []; return { probedN: j.length, identityKey: j.at(-1)?.identityKey ?? null, suppressed: (d?.suppressed ?? []).includes(id), pending: d?.probeRun?.running ?? null }; }, state.userClip).catch(() => null);
     lastU.layer = (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null;
-    check(!!liveU, '用户卡(新语义):成员页测完判轻,仓库用户卡在可见舞台里活渲(没有快照、没有「需要本地 PC 渲染辅助」图标)', { liveU, last: lastU });
+    check(!!liveU, '用户卡(新语义):成员页在可见舞台里直接看得到仓库用户卡的活画面(判轻活渲,或判重暂停后追精确;没有快照、没有「需要本地 PC 渲染辅助」图标)', { liveU, last: lastU });
     check(lastU.badge === false, '用户卡(新语义):时间轴上它没有「需要本地 PC 渲染辅助」徽标', lastU);
     const planU = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
-    check(!!planU && !planU.lastClips.includes(state.userClip), '用户卡(新语义):判轻的仓库用户卡不在成员页发布的清单计划里(不进预渲染集合)', planU?.lastClips);
+    /*
+     * 页面按测量结果给这张卡定轻重:判轻的不进清单计划(上面已断言活渲、没有图标与徽标);判重的与内置重卡同一条路 ——
+     * 进清单计划、由创建者的桌面渲染节点渲出来写进层表、成员页贴上快照。两条路都要成立,走哪一条看这台机器上它的实测结果(本机忙闲会让同一张卡落在两边),
+     * 所以按「它在不在清单计划里」分流断言。
+     */
+    const inPlan = !!planU?.lastClips?.includes(state.userClip);
+    lastU.inPlan = inPlan;
+    if (!inPlan) {
+      check(true, '用户卡(新语义):判轻的仓库用户卡不在成员页发布的清单计划里(不进预渲染集合)', planU?.lastClips);
+    } else {
+      const gotU = await until('用户卡(判重的一路):桌面渲染节点渲出、成员页贴上快照,图标与徽标撤掉', async () => {
+        await P(member, () => { window.__pcStore.actions.seek(1); }).catch(() => {});
+        const o = await onlineDiag(member);
+        const l = o?.layers?.find((x) => x.clipId === state.userClip);
+        const st = await userStage();
+        return l && l.ready > 0 && st?.snapshot && !st.placeholder && (await badgeOf()) === false ? { layer: l, stage: st } : null;
+      }, 420_000, 5000);
+      check(!!gotU, '用户卡(判重的一路):在清单计划里,桌面节点渲出、成员页贴上快照,没有图标与徽标', { gotU, plan: planU?.lastClips?.length, last: { stage: await userStage(), layer: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null } });
+      if (gotU) check(gotU.layer.envFingerprint === state.creatorFp, '用户卡(判重的一路):那一层出自创建者的桌面节点', { layer: gotU.layer.envFingerprint, creator: state.creatorFp });
+    }
     await shot(member, 'user-card-live');
     out.steps.userCard = { ms: Date.now() - tU, clip: state.userClip, planClips: planU?.lastClips ?? null, live: liveU, last: lastU };
     say('user-card.done', out.steps.userCard);
