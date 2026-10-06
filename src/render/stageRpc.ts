@@ -18,6 +18,7 @@ import type { ProjectPatch } from "./changedClips.mjs";
 import type { CardCostRecord } from "./cardCostKey.mjs";
 import type { StreamPlaneRequest } from "./streamPlayer";
 import { lowMemoryMode } from "../online/lowMemory.ts";
+import { sanitizeRpcError, sanitizeRpcResult, sanitizeStageEvent } from "../online/stageMessageGuard.ts";
 import type { LowMemorySettleResult } from "./lowMemorySettle";
 
 export type { StreamPlaneRequest };
@@ -455,22 +456,41 @@ export function isShortStageUpdate(method: string, args: unknown[]): boolean {
 /**
  * 父页侧:给一个舞台 iframe 建一个 RPC 客户端。
  * `targetOrigin` 现在是 `location.origin`(同源);第 4 步 E1 跨源时传舞台端口的 origin。
+ *
+ * `opts.untrusted`(在线的跨源舞台,契约 `online-card-exec-contract.md` 第 3.2 节):舞台里会执行用户卡与图卡,它发来的一切当不可信输入 ——
+ * 只认 `event.origin` 等于 `targetOrigin` 的消息;事件与回包按形状校验、数字钳到合理范围(`online/stageMessageGuard.ts`;
+ * `opts.maxSec` 给了就把事件里的时刻钳到它以内,一般是项目时长),
+ * 不合形状的事件丢弃、回包按失败回绝。不给(桌面运行环境、同源单舞台)照旧,一个字节不变。
  */
-export function createStageRpc(target: Window, targetOrigin: string = location.origin): StageRpcClient {
+export function createStageRpc(target: Window, targetOrigin: string = location.origin, opts: { untrusted?: boolean; maxSec?: () => number } = {}): StageRpcClient {
+  const untrusted = opts.untrusted === true;
   let nextId = 1;
   let disposed = false;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; method: string; timer?: ReturnType<typeof setTimeout> }>();
   const listeners = new Set<(e: StageEvent) => void>();
   const onMessage = (e: MessageEvent) => {
     if (e.source !== target) return;
+    if (untrusted && e.origin !== targetOrigin) return;
     const d = e.data;
     if (isRpcReply(d)) {
       const p = pending.get(d.id);
       if (!p) return;
       pending.delete(d.id);
       if (p.timer) clearTimeout(p.timer);
+      if (untrusted) {
+        if (d.ok !== true) { p.reject(new Error(sanitizeRpcError(d.error) || `stage rpc ${p.method} failed`)); return; }
+        let result: unknown;
+        try { result = sanitizeRpcResult(p.method, d.result); } catch (err) { p.reject(err instanceof Error ? err : new Error(String(err))); return; }
+        p.resolve(result);
+        return;
+      }
       if (d.ok) p.resolve(d.result);
       else p.reject(new Error(d.error || `stage rpc ${p.method} failed`));
+      return;
+    }
+    if (untrusted) {
+      const clean = sanitizeStageEvent(d, { maxSec: opts.maxSec?.() }) as StageEvent | null;
+      if (clean) for (const l of listeners) l(clean);
       return;
     }
     if (isStageEvent(d)) for (const l of listeners) l(d);
@@ -618,10 +638,17 @@ export interface StageCardsMessage {
   type: "pc-stage-cards";
   stamp: number;
 }
-/** `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据) */
+/**
+ * `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据)。
+ *
+ * 隔离的跨源舞台(契约 `online-card-exec-contract.md` 第 4.1 节):`remote.base` 是舞台自己源上的 `/media-s/<sid>`、`remote.ticket` 恒为 null
+ * (票据由编辑器页交给舞台源的服务端换成 HttpOnly cookie,不进舞台的脚本);`cardExec` 为真 = 父页点头,这一台可以执行用户卡与图卡
+ * (舞台自己还要核自检与「本文档没见过票据」,`online/isolation/execGate.ts`)。旧办法(同源单舞台、低内存档、没隔离的舞台)照旧带票据、不带 `cardExec`。
+ */
 export interface StageMediaPolicy {
   lowMemory: boolean;
   remote: { base: string; ticket: string | null } | null;
+  cardExec?: boolean;
 }
 
 /**

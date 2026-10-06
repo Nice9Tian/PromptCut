@@ -56,6 +56,8 @@ import { resolveGlRoute } from "./render/costDevice.mjs";
 import { themeStyle } from "./themes";
 import { ONLINE } from "./online/mode";
 import { setMediaTierPolicy } from "./render/mediaTier";
+import { noteMediaPolicy } from "./online/isolation/execGate";
+import { announceStageIsolation } from "./online/isolation/stageGuard";
 import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
 import { clipFrameMode } from "./kernel/frameMode.mjs";
 import { resolveFrameSize } from "./kernel/frameSize.mjs";
@@ -2306,7 +2308,10 @@ export default function StageView() {
       },
       async setMediaPolicy(next) {
         // 低内存档只会从普通改到低(运行中改判),不回头:舞台自己判出来的 true 不被父页的 false 盖掉
-        setMediaTierPolicy({ lowMemory: caps.lowMemory || !!next?.lowMemory, remote: next?.remote ?? null });
+        // 执行闸门(契约 `online-card-exec-contract.md` 第 3.1 节):带票据的策略让本文档永久不执行用户卡;闸门开过之后再来的票据不收
+        const gate = ONLINE ? noteMediaPolicy({ ticket: next?.remote?.ticket ?? null, cardExec: next?.cardExec }) : { acceptTicket: true };
+        const remote = next?.remote && !gate.acceptTicket && next.remote.ticket ? { ...next.remote, ticket: null } : next?.remote ?? null;
+        setMediaTierPolicy({ lowMemory: caps.lowMemory || !!next?.lowMemory, remote });
         commitPlanes();
         return { ok: true as const };
       },
@@ -2394,6 +2399,8 @@ export default function StageView() {
     (window as unknown as Record<string, unknown>).__pcGlWorkerDiag = () => gl.workerDiag();
     window.__pcStagePipelineAt = (clipId: string, tSec: number) => pipelineAt(ref.current.plan?.plan ?? null, clipId, tSec);
     postStageReady(caps);
+    // 跨源舞台的自检结果排在握手之后发(`online/isolation/stageGuard.ts`);别的文档什么都不发
+    if (ONLINE) announceStageIsolation();
     return () => {
       stopRpc();
       player.stop();

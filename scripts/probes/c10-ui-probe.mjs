@@ -165,6 +165,20 @@ async function wsAsCreator() {
   return { ask, close: () => ws.close() };
 }
 
+/**
+ * 在线页面只加入、不新建(`dce4b22b`,2026-10-04:加入用 `initialize: false`,服务端没有项目内容就拒绝,不拿本地这份去盖),
+ * 所以项目要先有内容才进得去。探针替创建者的桌面版写进一份空项目(尺寸、时长同「新建项目」的缺省)。
+ */
+{
+  const seeder = await wsAsCreator();
+  const opened = await seeder.ask({ type: 'project.open', projectId: made.projectId });
+  const body = { version: 1, id: `c10ui-seed-${made.projectId.slice(-8)}`, name: NAME, width: 1920, height: 1080, fps: 30, duration: 30, themeId: 'midnight', media: [],
+    tracks: [{ id: 't-1', name: '序列 1', clips: [] }, { id: 't-2', name: '序列 2', clips: [] }] };
+  const seeded = await seeder.ask({ type: 'project.op', projectId: made.projectId, opId: randomBytes(16).toString('base64url'), ops: [{ op: 'set', path: '', value: body }] });
+  check(!/error|reject/i.test(String(opened?.type ?? '') + String(seeded?.type ?? '')), '替创建者写进空项目', { opened: opened?.type, seeded: seeded?.type });
+  seeder.close();
+}
+
 /* ------------------------------------------------------------------ 浏览器 */
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
 async function newPage(label) {

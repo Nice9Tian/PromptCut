@@ -6,6 +6,9 @@
  *
  *       { "v": 1, "stageOrigins": ["https://s1.<主机>", "https://s2.<主机>"] }
  *
+ *   同一份配置里另有托管方的总开关 `"onlineCardExec": false`(契约 `online-card-exec-contract.md`;缺省开):关掉就不在线执行用户卡与图卡,
+ *   整体退回原来的做法(`parseCardExecSwitch`)。
+ *
  * - **退回**:读不到配置、配置不对、或舞台握手失败,退回 C10a 的同源单舞台 —— 不许开不出画面(`dualStage()` 的兜底原则)。
  * - **低内存档**:仍是单舞台,不开后台舞台(C10a)。
  *
@@ -70,6 +73,19 @@ export function parseStageOrigins(config: unknown): StageOrigins | null {
 }
 
 /**
+ * 运行配置里的总开关「在线执行用户卡与图卡」(托管方可关):只有明写 `"onlineCardExec": false` 才是关,没写、写别的值、
+ * 配置不是对象都按缺省(开)。读不到配置时没有舞台源,本来就是同源单舞台、不执行,所以「读不到」不用另判。
+ */
+export function parseCardExecSwitch(config: unknown): boolean {
+  let c: unknown = config;
+  if (typeof c === "string") {
+    try { c = JSON.parse(c); } catch { return true; }
+  }
+  if (!c || typeof c !== "object") return true;
+  return (c as { onlineCardExec?: unknown }).onlineCardExec !== false;
+}
+
+/**
  * 开几个舞台:低内存档单舞台;没有舞台源(读不到配置)单舞台;握手失败单舞台;其余双舞台(握手进行中也按双舞台挂 iframe)。
  * `pageOrigin` 给了时,舞台源不能与编辑器页同源(那就不是跨源隔离,按读不到处理)。
  */
@@ -104,11 +120,13 @@ interface State {
   handshake: Handshake;
   /** 握手失败时的原因(诊断) */
   reason: string | null;
+  /** 托管方的总开关:在线执行用户卡与图卡(缺省开;运行配置里 `onlineCardExec: false` 才关) */
+  cardExec: boolean;
   /** 什么时候进的 `interim`(`Date.now()`);没进过为 null。换回双舞台之后仍留着(Preview 据此做换回那一下的画面衔接) */
   interimAt: number | null;
 }
 
-let state: State = { config: "idle", origins: null, handshake: "pending", reason: null, interimAt: null };
+let state: State = { config: "idle", origins: null, handshake: "pending", reason: null, cardExec: true, interimAt: null };
 const listeners = new Set<() => void>();
 let loading: Promise<StageOrigins | null> | null = null;
 
@@ -132,6 +150,7 @@ export function subscribeOnlineStages(cb: () => void): () => void {
 export function loadStageConfig({ base = "/editor/", fetchImpl, timeoutMs = RUNTIME_CONFIG_TIMEOUT_MS }: { base?: string; fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<StageOrigins | null> {
   if (loading) return loading;
   set({ config: "loading" });
+  let cardExec = true;
   const f = fetchImpl ?? (typeof fetch === "function" ? fetch : null);
   loading = (async () => {
     if (!f) return null;
@@ -141,14 +160,16 @@ export function loadStageConfig({ base = "/editor/", fetchImpl, timeoutMs = RUNT
     try {
       const res = await f(url, { cache: "no-store", signal: ctrl?.signal });
       if (!res.ok) return null;
-      return parseStageOrigins(await res.text());
+      const text = await res.text();
+      cardExec = parseCardExecSwitch(text);
+      return parseStageOrigins(text);
     } catch {
       return null;
     } finally {
       clearTimeout(timer);
     }
   })().then((origins) => {
-    set({ config: "done", origins });
+    set({ config: "done", origins, cardExec });
     return origins;
   });
   return loading;
@@ -172,6 +193,6 @@ export function markStageHandshake(result: Exclude<Handshake, "pending">, reason
 /** 测试用 */
 export function resetOnlineStagesForTest(next: Partial<State> = {}): void {
   loading = null;
-  state = { config: "idle", origins: null, handshake: "pending", reason: null, interimAt: null, ...next };
+  state = { config: "idle", origins: null, handshake: "pending", reason: null, cardExec: true, interimAt: null, ...next };
   listeners.clear();
 }

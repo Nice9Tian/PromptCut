@@ -8,10 +8,10 @@ import { themeStyle } from "../themes";
 import { actions, getState, useStore } from "../store/project";
 import { findClip } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
-import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
+import { createStageRpc, type HostCapabilities, type StageMediaPolicy, type StageRpcClient } from "../render/stageRpc";
 import { frontStage, onStageEvent, pushProject, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
 import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
-import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleLiveStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
+import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleLiveStage, stageOrigins, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
@@ -57,6 +57,10 @@ import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { layerSwapMs } from "./swapCost";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages } from "../online/stageOrigins";
+import { STAGE_SANDBOX, onlineCardExec, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport } from "../online/stageIsolation";
+import { sanitizeHostCapabilities } from "../online/stageMessageGuard";
+import { MEDIA_PROXY_BASE } from "../online/stagePolicy.mjs";
+import type { IsolationReport } from "../online/isolation/isolationCheck";
 import { createStageHandshake, type StageHandshake } from "../online/stageHandshake";
 
 /** 换回双舞台时盖板最多留多久(〔裁〕2026-09-30 `claude/stage-handshake`) */
@@ -325,6 +329,10 @@ export function Preview() {
    * 懒建:生效路线真是 `shared` 时才建。端口在握手之后、任何 RPC 之前交(见下面 `pc-stage-ready` 那段)。
    */
   const sharedGlRef = useRef<SharedGl | null>(null);
+  /** 每台舞台的取档策略发到第几次了(等自检与票据交接是异步的,晚回来的旧一次不许盖掉新的) */
+  const policySeqRef = useRef<Partial<Record<StageId, number>>>({});
+  /** 各舞台窗口(含预热的)发来的自检结果:握手时清、结果到了存;换回双舞台时补交给隔离会话 */
+  const isoByWinRef = useRef(new WeakMap<object, IsolationReport | null>());
   const glPortTo = useCallback((id: StageId, win: Window, caps: HostCapabilities | null) => {
     if (resolveGlRoute(getState().project.glRoute, !!caps?.lowMemory) !== "shared") return;
     sharedGlRef.current ??= createSharedGl({ lowMemory: !!caps?.lowMemory });
@@ -343,19 +351,46 @@ export function Preview() {
     const policy: MediaTierPolicy = { lowMemory: lowMemRef.current, online: true, remote: base ? { base, ticket } : null };
     setMediaTierPolicy(policy);
     /*
-     * 跨源的舞台(C10 契约第 2 节「舞台读素材」):一律用相对地址读**自己源上**反代的 `/media`,不跨源直读素材服务
-     * (那要靠 CORS,媒体画进 canvas 会污染它)。基址与编辑器页同源时换成路径;票据照旧经 RPC 下发、走 `?t=`。
+     * 跨源的舞台(C10 契约第 2 节「舞台读素材」):一律用相对地址读**自己源上**的反代,不跨源直读素材服务
+     * (那要靠 CORS,媒体画进 canvas 会污染它)。
+     *
+     * 票据怎么给(契约 `online-card-exec-contract.md` 第 4.1 节,`online/stageIsolation.ts`):这一台自检通过、票据交接成功 →
+     * 舞台读 `/media-s/<sid>/media/<哈希>`,票据不经 RPC(舞台源的服务端把它换成 HttpOnly cookie);否则照旧:基址换成 `/media` 的路径、
+     * 票据经 RPC 下发、走 `?t=`(这样的舞台文档不执行用户卡)。素材服务不在编辑器页源的 `/media/api/asset` 上(别的主机、别的路径)时没有那条反代,照旧。
      */
-    const stagePolicy: MediaTierPolicy = dualRef.current && base
-      ? { ...policy, remote: { base: stageAssetBase(base, location.origin), ticket } }
-      : policy;
-    for (const id of STAGE_IDS) {
+    const iso = pageStageIsolation(() => onlineStageState().cardExec);
+    iso.setDual(dualRef.current);
+    const origins = dualRef.current ? stageOrigins() : null;
+    const stageBase = base ? stageAssetBase(base, location.origin) : null;
+    await Promise.all(STAGE_IDS.map(async (id) => {
       const c = rpcRef.current[id];
-      if (c) void c.setMediaPolicy(stagePolicy).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
-    }
+      if (!c) return;
+      const seq = (policySeqRef.current[id] = (policySeqRef.current[id] ?? 0) + 1);
+      let stagePolicy: StageMediaPolicy = policy;
+      if (dualRef.current && base && stageBase) {
+        const plan = stageBase === MEDIA_PROXY_BASE && origins
+          ? await iso.plan(id, { dual: true, stageOrigin: origins[id], ticket })
+          : { mode: "legacy" as const, base: null, ticket, cardExec: false };
+        // 等自检与交接的时候这一台换了、或者又发起了一次更新的:这一次作废
+        if (rpcRef.current[id] !== c || policySeqRef.current[id] !== seq) return;
+        stagePolicy = plan.mode === "cookie"
+          ? { lowMemory: policy.lowMemory, remote: { base: plan.base!, ticket: null }, cardExec: plan.cardExec }
+          : { ...policy, remote: { base: stageBase, ticket: plan.ticket } };
+      }
+      void c.setMediaPolicy(stagePolicy).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
+    }));
+  }, []);
+  // 本页能不能执行用户卡变了(另一台也隔离好了、出了加固拦下的事):两台的取档策略重发一遍
+  useEffect(() => {
+    if (!ONLINE) return;
+    return pageStageIsolation(() => onlineStageState().cardExec).subscribe(() => { void pushMediaPolicyRef.current(); });
   }, []);
   const pushMediaPolicyRef = useRef(pushMediaPolicy);
   pushMediaPolicyRef.current = pushMediaPolicy;
+  // 布局变了(握手失败退回单舞台、换回双舞台):单舞台不执行用户卡
+  useEffect(() => {
+    if (ONLINE) pageStageIsolation(() => onlineStageState().cardExec).setDual(dual);
+  }, [dual]);
   useEffect(() => {
     if (!ONLINE) return;
     void pushMediaPolicy();
@@ -613,8 +648,36 @@ export function Preview() {
    */
   useEffect(() => {
     const frames: Record<StageId, React.RefObject<HTMLIFrameElement | null>> = { A: frameARef, B: frameBRef };
+    /*
+     * 在线的跨源舞台(契约 `online-card-exec-contract.md` 第 3.2 节):只认 `event.origin` 是运行配置里那个舞台源的消息。
+     * 同源单舞台、桌面运行环境照旧不看(那里由 `event.source` 把关)。
+     */
+    const originOk = (id: StageId, origin: string, crossOrigin: boolean): boolean => {
+      if (!ONLINE || !crossOrigin) return true;
+      const o = stageOrigins();
+      return !!o && origin === o[id];
+    };
     const onMessage = (e: MessageEvent) => {
       const type = (e.data as { type?: string } | null)?.type;
+      if (type === "pc-stage-isolation") {
+        // 跨源舞台的自检结果、或加固拦下了事(`online/isolation/stageGuard.ts`):只在在线模式里认,只认自己挂的跨源舞台
+        if (!ONLINE || !e.source) return;
+        const iso = pageStageIsolation(() => onlineStageState().cardExec);
+        for (const id of STAGE_IDS) {
+          const warm = warmRef.current[id]?.contentWindow;
+          const live = dualRef.current ? frames[id].current?.contentWindow : null;
+          if (e.source !== warm && e.source !== live) continue;
+          if (!originOk(id, e.origin, true)) return;
+          const d = e.data as { report?: unknown; breach?: unknown };
+          const breach = sanitizeBreach(d.breach);
+          if (breach) { iso.breach(breach); return; }
+          const report = sanitizeIsolationReport(d.report);
+          isoByWinRef.current.set(e.source, report);
+          if (e.source === live && rpcRef.current[id]) iso.report(id, report);
+          return;
+        }
+        return;
+      }
       if (type === "pc-stage-cards") {
         // 舞台按新卡重渲完了(C6.6 集成 3b,`stageCards.ts`)
         for (const id of STAGE_IDS) if (e.source === frames[id].current?.contentWindow) noteStageCards(id, Number((e.data as { stamp?: number }).stamp) || 0);
@@ -632,16 +695,28 @@ export function Preview() {
         return;
       }
       if (type !== "pc-stage-ready") return;
-      if (e.source) readyByWinRef.current.set(e.source, { origin: e.origin, caps: (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null });
+      const rawCaps = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
+      // 在线页面:能力表按形状收一遍(跨源舞台的消息当不可信输入);桌面运行环境原样
+      const readyCaps = ONLINE ? (sanitizeHostCapabilities(rawCaps) as HostCapabilities | null) : rawCaps;
+      if (e.source && !ONLINE) readyByWinRef.current.set(e.source, { origin: e.origin, caps: readyCaps });
       // 过渡期里预热的跨源舞台握上手了:只记进首次握手的计时(不建 RPC;换回双舞台时再补握手)
       for (const id of STAGE_IDS) {
         const warm = warmRef.current[id]?.contentWindow;
-        if (warm && e.source === warm) { handshakeRef.current?.ready(id); return; }
+        if (warm && e.source === warm) {
+          if (!originOk(id, e.origin, true)) return;
+          readyByWinRef.current.set(warm, { origin: e.origin, caps: readyCaps });
+          isoByWinRef.current.delete(warm); // 新文档:旧的自检结果作废
+          handshakeRef.current?.ready(id);
+          return;
+        }
       }
       for (const id of STAGE_IDS) {
         const win = frames[id].current?.contentWindow;
         if (!win || e.source !== win) continue;
-        processReadyRef.current(id, win, e.origin, (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null);
+        if (!originOk(id, e.origin, dualRef.current)) return;
+        readyByWinRef.current.set(win, { origin: e.origin, caps: readyCaps });
+        isoByWinRef.current.delete(win);
+        processReadyRef.current(id, win, e.origin, readyCaps);
         return;
       }
     };
@@ -657,7 +732,18 @@ export function Preview() {
         noteStageFresh(id);
         rpcRef.current[id]?.dispose();
         // 回包发给这个 iframe 此刻真实的源(换源重载的过渡期里 `stageTargetOrigin` 可能已经是另一个)
-        const client = createStageRpc(win, origin && origin !== "null" ? origin : stageTargetOrigin(id));
+        const targetOrigin = origin && origin !== "null" ? origin : stageTargetOrigin(id);
+        // 在线的跨源舞台:回包与事件当不可信输入校验(`online/stageMessageGuard.ts`);同源单舞台、桌面运行环境照旧
+        const untrusted = ONLINE && dualRef.current && targetOrigin !== location.origin;
+        const client = createStageRpc(win, targetOrigin, { untrusted, maxSec: () => getState().project.duration });
+        if (ONLINE) {
+          // 隔离会话:这一台是新文档,先清掉旧的自检结果与取档方式;它的结果要是已经到了(预热期间)就补交
+          const iso = pageStageIsolation(() => onlineStageState().cardExec);
+          iso.setDual(dualRef.current);
+          iso.handshake(id);
+          const stored = isoByWinRef.current.get(win);
+          if (dualRef.current && stored !== undefined) iso.report(id, stored);
+        }
         handshookRef.current.add(id);
         // 过渡期的同源单舞台握手不算首次握手(那是 A 的另一个 iframe)
         if (dualRef.current) handshakeRef.current?.ready(id);
@@ -1466,6 +1552,8 @@ export function Preview() {
       // C10:在线双舞台、按拍换快照、后台活开关、探针帧的可转移字节
       dual: dualRef.current,
       onlineStages: onlineStageState(),
+      // 在线执行用户卡与图卡:本页此刻能不能执行、为什么不能、会话号(不是秘密;票据不在这里)
+      cardExec: ONLINE ? { ...onlineCardExec(), sid: pageStageIsolation().sid } : null,
       // 首次握手过渡期之后换回双舞台那一下(盖板因为什么、多久撤下)
       handover: { ...handoverInfoRef.current },
       beatSwap: beatSwapDebug(),
@@ -2191,6 +2279,12 @@ export function Preview() {
                     ref={warm ? warmRefOf.A : frameRefOf.A}
                     data-pc={warm ? "stage-frame-warm" : "stage-frame"}
                     title={warm ? "预热舞台" : "预览舞台"}
+                    /*
+                     * 在线的跨源舞台带 sandbox(契约 `online-card-exec-contract.md` 第 3.3 节):只开脚本与保有自己的源两项,
+                     * 不给弹窗、带走顶层、表单、模态框、下载。舞台是跨源地址,`allow-same-origin` 只是让它保有自己的源
+                     * (读自己源上的素材要它),不会变成编辑器页的源。桌面运行环境不带。
+                     */
+                    sandbox={ONLINE ? STAGE_SANDBOX : undefined}
                     src={stageSrc("A", { dual: true })}
                     onLoad={() => onStageFrameLoad("A")}
                     style={{
@@ -2205,6 +2299,7 @@ export function Preview() {
                       ref={warm ? warmRefOf.B : frameRefOf.B}
                       data-pc={warm ? "stage-frame-warm" : "stage-frame-back"}
                       title={warm ? "预热舞台" : "后台舞台"}
+                      sandbox={ONLINE ? STAGE_SANDBOX : undefined}
                       src={stageSrc("B", { dual: true })}
                       onLoad={() => onStageFrameLoad("B")}
                       style={{

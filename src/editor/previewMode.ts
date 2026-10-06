@@ -21,6 +21,7 @@
 import { ONLINE } from "../online/mode";
 import { lowMemoryMode } from "../online/lowMemory";
 import { onlineStageState, stageLayout } from "../online/stageOrigins";
+import { STAGE_ENTRY_FILE } from "../online/isolation/stageGuard";
 
 /** 舞台实例名。**只是实例名,和角色无关**(E1):谁当 `front` 由 `setRole` 定 */
 export type StageId = "A" | "B";
@@ -136,7 +137,14 @@ export function stageSrc(id: StageId, opts: { dual?: boolean } = {}): string {
    */
   const dualFlag = dual ? "&dual=1" : "";
   const tier = ONLINE ? `&lm=${lowMemoryMode(true) ? 1 : 0}` : "";
-  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${mode}${platform}${dualFlag}${tier}`;
+  /*
+   * 在线的跨源舞台载单独的舞台入口 `stage.html`(同一份脚本包;契约 `online-card-exec-contract.md` 第 3.3 节):它带舞台的内容安全策略
+   * (`<meta>` 兜底),加固与自检按这个路径认它(`isolation/stageGuard.ts`)。同源单舞台、桌面运行环境的地址一个字不变。
+   */
+  // 按构建的 base 拼(`/editor/stage.html`):编辑器页的地址可能是不带斜杠的 `/editor`,不能拿它的目录部分
+  const base = typeof import.meta.env !== "undefined" && import.meta.env.BASE_URL ? import.meta.env.BASE_URL : "/";
+  const path = ONLINE && origins ? `${base.endsWith("/") ? base : `${base}/`}${STAGE_ENTRY_FILE}` : location.pathname;
+  return `${origins ? origins[id] : ""}${path}?stage=1&id=${id}${mode}${platform}${dualFlag}${tier}`;
 }
 
 /** 给 `createStageRpc` 的 `targetOrigin`:跨源时必须点名,不能用 `location.origin` */
