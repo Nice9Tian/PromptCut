@@ -638,8 +638,8 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 
 | 文件 | 改什么 |
 |---|---|
-| `server/auth/handshake.mjs`、`protocol.mjs`、`tickets.mjs`、`http.mjs`、`store.mjs`、`asset-tickets.mjs` | 服务握手项与挑战端点；票据的 `sv`；带 `sv` 票据的握手分支；保留用户名；`store.onChange` 与 `hostedRender` 字段；素材票据核对回 `service` |
-| `server/docservice/shared-service.mjs`、`spaces.mjs`、`modules/shared.mjs`、`modules/content.mjs`、`modules/render-queue.mjs` | 挂目录模块与白名单；`scope: 'service'` 不进空间的判断；`set-hosted-render`、成员列表新字段、服务的 `auth.ticket`；`content.put` 的类别限制；关开关时立即放回认领 |
+| `server/auth/handshake.mjs`、`protocol.mjs`、`tickets.mjs`、`http.mjs`、`store.mjs`、`asset-tickets.mjs` | 服务握手项与挑战端点；票据的 `sv`；带 `sv` 票据的握手分支；保留用户名；`store.onChange` 与 `hosted` 字段；素材票据核对回 `service` |
+| `server/docservice/shared-service.mjs`、`spaces.mjs`、`modules/shared.mjs`、`modules/render-queue.mjs` | 挂目录模块与白名单；`scope: 'service'` 不进空间的判断；`set-hosted-service`、成员列表新字段、服务的 `auth.ticket`；关开关时立即放回认领 |
 | `server/asset-service.ts` | 带 `sv` 票据的命名空间与删除限制；记账钩子；507 `service-quota` |
 | `server/hosted/combo.mjs`、`files.mjs`、`deploy.mjs` | 读登记表、接记账与淘汰；部署清单加新文件 |
 | `server/render-node/host.mjs`、`server/vite-plugin-frames.ts`（`startHostNode`）、`scripts/render-host.mjs` | 运行中增删项目；代理模式（向管理进程要项目清单与票据）；暂停认领的开关 |
