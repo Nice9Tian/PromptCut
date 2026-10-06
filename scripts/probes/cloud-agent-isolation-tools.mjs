@@ -14,6 +14,9 @@
  *      含换写法、经主机名指到本机、经放行地址重定向过去——全部被拒且根本没连过去;测试专用的外部地址能通(闸不是一刀切)。
  *   T4 花钱的调用记用量:替身配音服务收到一次请求,用量记录里有这一行(项目、成员、服务、计量);只读成员不花钱。
  *   T5 建卡改卡:卡片源码经内容库到别的成员;这张卡只在本项目里认得;只读成员建不了;卡片代码没有在 Agent 服务进程里执行。
+ *   T6 音效合成与测响度:生成的音效只进本项目、别的成员取得到;另一个项目的对话看不到、查不到、取消不了这边的作业,量不了、
+ *      重生成不了这边的素材与片段;只读成员生成不了;量完对话的工作目录里不留取来的素材。
+ *      (卡片声音的代码不在 Agent 服务进程里执行,由 `cloud-agent-sound-probe.mjs` 的 S5 对着真的隔离工作进程验。)
  */
 import fs from 'node:fs';
 import http from 'node:http';
@@ -473,6 +476,53 @@ export async function runToolIsolation(c) {
       clipAddedWithCard: !!clip, otherProjectHasSource: inOther.missing !== true, otherProjectAgent: other.results.map((x) => `${x.name}:${x.ok ? 'ok' : 'error'}`),
       readonlyMember: { toolOk: ro.results[0]?.ok ?? null, summary: ro.results[0]?.summary?.slice(0, 80) ?? null, stored: roStored.missing !== true },
       cardCodeRanInAgentProcess: log.includes(marker),
+    });
+  }
+
+  // ---------- T6 音效合成与测响度
+  {
+    const before1 = await projectOf(owner1, p1.projectId);
+    const before2 = await projectOf(owner2, p2.projectId);
+    const made = await run(A.jia, 'conv-t6-jia', [
+      { tool: 'sound_generate', input: { preset: 'notification', start: 2, requestId: 't6-chime', name: '隔离探针提示音' } },
+      { tool: 'sound_status', input: {} },
+    ]);
+    const jobId = /"(?:jobId|id)":"(sound-[a-f0-9]+)"/.exec(made.results[0]?.summary ?? '')?.[1] ?? null;
+    const after1 = await projectOf(owner1, p1.projectId);
+    const media = (after1.project?.media ?? []).find((m) => m.soundEffect?.recipe && m.name === '隔离探针提示音.wav') ?? null;
+    const soundClip = (after1.project?.tracks ?? []).flatMap((t) => t.clips).find((cl) => cl.mediaId === media?.id) ?? null;
+    const bytes = media?.hash ? await fetchAsset(owner1, ports.asset, media.hash) : null;
+    const measured = media ? await run(A.jia, 'conv-t6-jia', [{ tool: 'measure_audio', input: { mediaId: media.id } }]) : { results: [] };
+    const ffmpeg = !/没有装 ffmpeg/.test(measured.results[0]?.summary ?? '');
+    const work = workDirOf(p1.projectId, 'conv-t6-jia');
+    const leftovers = work && fs.existsSync(path.join(work, 'measure')) ? fs.readdirSync(path.join(work, 'measure')) : [];
+    // 项目二的对话:看不到、查不到、取消不了项目一的作业;量不了、重生成不了项目一的素材与片段
+    const other = await run(A.yi, 'conv-t6-yi', [
+      { tool: 'sound_status', input: {} },
+      { tool: 'sound_status', input: { jobId: jobId ?? 'sound-000000000000' } },
+      { tool: 'sound_cancel', input: { jobId: jobId ?? 'sound-000000000000' } },
+      { tool: 'measure_audio', input: { mediaId: media?.id ?? 'm-none' } },
+      { tool: 'sound_generate', input: { clipId: soundClip?.id ?? 'v-none', requestId: 't6-cross', params: { frequency: 990 } } },
+    ]);
+    const after2 = await projectOf(owner2, p2.projectId);
+    // 只读成员:生成不了
+    const rev1 = (await projectOf(owner1, p1.projectId)).rev;
+    const ro = await run(A.ding, 'conv-t6-ding', [{ tool: 'sound_generate', input: { preset: 'notification', start: 4, requestId: 't6-ro' } }]);
+    const rev1After = (await projectOf(owner1, p1.projectId)).rev;
+    const o = other.results;
+    check('T6 音效合成与测响度按项目隔离:读写成员生成的音效进了本项目、别的成员取得到;另一个项目的对话看不到、查不到、取消不了这边的作业,量不了、重生成不了这边的素材与片段;只读成员生成不了;量完不留取来的素材', made.done
+      && made.results[0]?.ok === true && !!jobId && !!media && !!soundClip && !!bytes && bytes.status === 200 && bytes.sha === media.hash
+      && (after1.project?.media ?? []).length === (before1.project?.media ?? []).length + 1
+      && (ffmpeg ? measured.results[0]?.ok === true : measured.results[0]?.ok === false) && leftovers.length === 0
+      && other.done && o[0]?.ok === true && o[0].summary.includes('"jobs":[]') && o[1]?.ok === false && o[2]?.ok === false && o[3]?.ok === false && o[4]?.ok === false
+      && JSON.stringify(after2.project?.media ?? []) === JSON.stringify(before2.project?.media ?? []) && after2.rev === before2.rev
+      && ro.results[0]?.ok === false && /只读/.test(ro.results[0].summary) && rev1After === rev1, {
+      generate: made.results.map((x) => `${x.name}:${x.ok ? 'ok' : `error ${x.summary.slice(0, 120)}`}`), jobId: jobId ? `${jobId.slice(0, 10)}…` : null,
+      mediaInProject: !!media, clipInProject: !!soundClip, otherMemberFetch: bytes ? { status: bytes.status, hashMatches: bytes.sha === media?.hash } : null,
+      measure: ffmpeg ? (measured.results[0]?.ok ? 'ok' : `error ${measured.results[0]?.summary?.slice(0, 120)}`) : '本机没有 ffmpeg:工具回了明确的原因', fetchedFilesLeft: leftovers,
+      otherProjectAgent: o.map((x) => `${x.name}:${x.ok ? `ok ${x.summary.slice(0, 40)}` : `error ${x.summary.slice(0, 60)}`}`),
+      otherProjectUnchanged: after2.rev === before2.rev,
+      readonlyMember: { toolOk: ro.results[0]?.ok ?? null, summary: ro.results[0]?.summary?.slice(0, 80) ?? null, rev: [rev1, rev1After] },
     });
   }
 }
