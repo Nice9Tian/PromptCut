@@ -59,3 +59,20 @@
 - 打字片段正好只有打字那么长时，「结尾加提示音」会报「音效起点在项目出点之外」（音效不隐式延长出点）。
 - main 上原有：在线普通档导出在没有预渲染层表时会一直等。
 - 有声动效卡的画面原来没有成本身份、永远按重卡——用户 2026-10-06 指示「直接自动即时补测试，不要默认判重」，修复在第二段的分支上（`1c9325e9`），随第二段合入。
+
+### 笔记本上的渲染性能基线（指令 LT-01，2026-10-07，提交 `326e9069`）
+
+笔记本辅助节点（AMD Ryzen 7 6800H，8 核 16 线程；Node 24.19；puppeteer 自带的 Chrome 152.0.7977.75）在集成分支当前头（main 加第一段）上串行跑了六项，全部退出码 0、一遍过、没有重跑。全程每秒采样处理器频率，各项时间窗里 `% Processor Performance` 都高于 100%（最低 103.1%）；屏保没有启动。
+
+| 项 | 结果 | 带时间的数字 |
+|---|---|---|
+| `stream-produce-probe` | PASS，`fails: []` | 全幅编码（1920×1080，15 帧分段）三遍 215 / 217 / 226 ms，p50 217 ms（门槛 300 ms）；药丸流 p50 58 ms |
+| `stream-produce-probe --group` | PASS，`fails: []` | 组流模式不出全幅编码基准 |
+| `preview-fallback-probe` | PASS，`fails: []`，透明拍 0 | 任务耗时 p90：起播 23.4、跳转 13.1、超过 6 路流 37.5、编辑后 23.9 ms |
+| `preview-fallback-probe --page-preload` | PASS，`fails: []`，透明拍 0 | 任务耗时 p90：起播 23.1、跳转 13.4、超过 6 路流 42.5、编辑后 27.7 ms |
+| `video-source-cadence-probe` | `ok: true`，`fails: []` | 导出 11.7 s |
+| `video-seek-race-probe --mode fixed --busy --settle 0 --loops 300`，三实例并行 | 三个都 `ok: true` | 各 36000 次取帧，`stale` 0、`wrongPixel` 0 |
+| `ready-index-probe` | `fails: []` | — |
+| `playback-probe` | `ok: true`，`fails: []` | 节拍到达间隔 p50：36.1 / 35.9 / 35.2 / 17.7 ms |
+
+声音探针按用户 2026-10-07 的分工不在笔记本上跑（笔记本只跑渲染性能基线，要操作电脑的验收在 PC 上做）。最终提交上的同一组还要再复核一遍。
