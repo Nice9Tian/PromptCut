@@ -21,7 +21,7 @@ const EMPTY_PROJECT = new WeakMap();
  */
 export async function loadSsrHost(load, { apiBase } = {}) {
   for (const id of REGISTRIES) await load(id);
-  const [core, api, routes, diff, common, apiUrl, duration, registry, cardParse, store] = await Promise.all([
+  const [core, api, routes, diff, common, apiUrl, duration, registry, cardParse, store, soundRequest, soundGeneration, soundEffects] = await Promise.all([
     load('/src/store/core.ts'),
     load('/src/mcp/api.ts'),
     load('/src/mcp/routes.mjs'),
@@ -32,6 +32,9 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     load('/src/kernel/registry.ts'),
     load('/src/kernel/cardSourceParse.mjs'),
     load('/src/store/project.ts'),
+    load('/src/audio/soundRequest.ts'),
+    load('/src/audio/soundGeneration.ts'),
+    load('/src/kernel/soundEffects.ts'),
   ]);
   if (apiBase) apiUrl.setApiBase(apiBase);
   if (!EMPTY_PROJECT.has(core)) EMPTY_PROJECT.set(core, core.getState().project);
@@ -148,6 +151,18 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     /** 把一条素材放上时间轴(与桌面版导入视频后自动放一段相同);回片段或 null */
     addMediaClip(mediaId, start, opts = {}) {
       return store.actions.addMediaClip(mediaId, start, opts);
+    },
+    /**
+     * 音效合成(契约第 9.4a 节):与桌面版同一份纯函数。`plan` 把 sound_generate 的参数变成配方与落点(只读传进来的项目);
+     * `renderWav` 按块合成 PCM16 WAV;`commit` 在放好项目的 store 上原子登记素材与片段(只在进程级的锁里用)。
+     */
+    sound: {
+      plan: (project, options) => soundRequest.planSoundGeneration(project, options),
+      renderWav: (recipe, options) => soundGeneration.renderSoundEffectWav(recipe, options),
+      reuseDigest: (recipe) => soundGeneration.soundEffectReuseDigest(recipe),
+      reuseKey: (recipe) => soundEffects.soundEffectReuseKey(recipe),
+      assertSize: (recipe) => soundGeneration.assertSoundRecipeSize(recipe),
+      commit: (spec) => store.actions.commitSoundEffect(spec),
     },
     /** 此刻 store 里项目内容的末尾(秒):新导入的视频接在后面放 */
     contentEnd() {

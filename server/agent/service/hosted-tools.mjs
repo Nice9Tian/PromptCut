@@ -22,6 +22,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createAssetClient } from '../../asset-store/client.mjs';
+import { createSlot, createSoundTools, newSoundState } from './hosted-sound.mjs';
 
 const SERVER_DIR = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -214,6 +215,9 @@ export function createHostedTools({
 } = {}) {
   const limits = { ...HOSTED_TOOL_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
+
+  /** 音效合成在整个进程里同时只跑一个 */
+  const soundSlot = createSlot();
 
   /** 卡片的翻译、审查、语法检查:纯函数,在 `server/vite-plugin-cards.ts` 里(桌面版建卡用的同一份) */
   let cardLibPromise = null;
@@ -688,7 +692,27 @@ export function createHostedTools({
       };
     }
 
+    /* ---------- 音效合成(`hosted-sound.mjs`) ---------- */
+
+    const sound = createSoundTools({
+      state: c.shared.sound,
+      slot: soundSlot,
+      host: c.host,
+      snapshot: () => exec().snapshot(agentKey),
+      mutate: (track, apply) => exec().mutate('sound_generate', agentKey, track, apply),
+      ensureCanWrite,
+      put: (wav) => assetClient().put('media', wav, { ext: 'wav' }),
+      record: (row) => recordService({
+        t: Date.now(), projectId: identity.projectId, userId: identity.userId, username: identity.username ?? '',
+        conversationId, runId: c.runId() ?? '', kind: 'service', ...row,
+      }),
+      ToolError: HostedToolError,
+    });
+
     const TOOLS = {
+      sound_generate: sound.sound_generate,
+      sound_status: sound.sound_status,
+      sound_cancel: sound.sound_cancel,
       import_media: importMedia,
       voice_list: voiceList,
       voice_generate: voiceGenerate,
@@ -713,7 +737,7 @@ export function createHostedTools({
   return {
     forConversation,
     /** 一个实例(项目 × 成员)里各对话共用的状态 */
-    newSharedState: () => ({ cards: { at: -Infinity, items: new Map(), parsed: [], pending: null } }),
+    newSharedState: () => ({ cards: { at: -Infinity, items: new Map(), parsed: [], pending: null }, sound: newSoundState() }),
     /** 测试用:把 ffprobe 的缓存清掉 */
     _resetFfprobe() { ffprobeCache = undefined; },
   };
