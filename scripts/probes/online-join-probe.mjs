@@ -468,7 +468,7 @@ async function phaseOnline() {
   // 创建者那边看到的成员数
   if (state.creatorPage) {
     const n = await state.creatorPage.evaluate(() => document.querySelector('[data-pc="members-button"]')?.textContent ?? '');
-    check('online.creator-sees-members', /成员: [4-9] 人/.test(n), { members: n });
+    check('online.creator-sees-members', /成员[::] ?[4-9] 人/.test(n), { members: n });
   }
   // 错误口径
   const e1 = await onlineJoin('online-err-password', `${PROXY}/editor`, async (page) => {

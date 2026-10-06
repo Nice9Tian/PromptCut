@@ -595,7 +595,7 @@ export const eventLog = (page) => P(page, () => {
 }).catch(() => null);
 
 /** 成员列表弹层里的行(点开再读,读完关上) */
-export async function membersList(page) {
+export async function membersList(page, opts = {}) {
   await page.click('[data-pc="members-button"]');
   await page.waitForSelector('[data-pc="members-pop"]', { visible: true, timeout: 8000 }).catch(() => {});
   // 有 Agent 连接的行逐个点开读(一次只展开一行;「〈成员名〉的云端 Agent」在展开的子行里)
@@ -610,10 +610,13 @@ export async function membersList(page) {
         cloudTag: !!r.querySelector('[data-pc="members-cloud-agent"]'),
         cloudRow: r.querySelector('[data-pc="members-cloud-agent-row"]')?.textContent?.trim() ?? null,
         editing: /\[编辑中\]/.test(r.textContent ?? ''),
+        offlineTag: r.querySelector('[data-pc="members-offline-agent"]')?.textContent?.trim() ?? null,
+        name: r.querySelector('.pc-members-name')?.textContent?.trim() ?? null,
       });
     }
-    return { button: document.querySelector('[data-pc="members-button"]')?.textContent?.trim() ?? '', rows };
+    return { button: document.querySelector('[data-pc="members-button"]')?.textContent?.trim() ?? '', count: document.querySelector('[data-pc="members-count"]')?.textContent?.trim() ?? '', rows };
   }).catch(() => null);
+  if (opts.shot) await page.screenshot({ path: opts.shot }).catch(() => {});
   await page.keyboard.press('Escape');
   await page.mouse.click(700, 887);
   return out;

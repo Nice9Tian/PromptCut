@@ -12,7 +12,7 @@
  *
  * 端口:--base-port 起 +0 编辑器页的源(在线构建与各代理)、+1 / +2 两个舞台的源、+3 桌面版编辑器(+4、+5 是它的舞台端口);
  * 文档服务、素材服务、Agent 服务各一个。数据目录都在系统临时目录。输出:每项断言一行 `{ check, ok, detail }`,最后一行 `{ summary }`,有失败退出码 1。
- * 截图存 --out(缺省 `work/four-stage/cloud-agent/ui/`)。
+ * 截图存 --out(缺省 `work/four-stage/cloud-agent/ui2/`)。
  *
  * 验收标准:
  *
@@ -30,6 +30,13 @@
  *   O5  出错不悄悄丢:模型调用失败时对话里有原因;创建者(另一台设备)关掉项目的「云端 Agent」开关时进行中的对话被停下、对话里写明原因,
  *       AI 栏说明「项目创建者已关闭云端 Agent」且发不出消息;再打开后恢复,还能再发;
  *   O6  手机仿真(低内存档):仍是占位,没有云端 AI 栏、没有发往 /agent/ 的请求;
+ *   〔用户 2026-10-07 定〕以下几条:
+ *   O7  成员计数写成「成员：N 人 · Agent：M 个」:N 只算真人在线(与原始成员列表各算一遍对账);成员本人关了浏览器、保持期(60 秒)过后只剩他的
+ *       云端 Agent 连着时,他那一行仍在、标「离线，Agent 在跑」,不计入 N、计入 M;
+ *   O8  空对话只有一条示例句「为我快速创建一个视频告诉我软件都可以做什么。」;
+ *   O9  云端下一键配特效置灰并写原因;「诊断报告」可用:报告是这段云端对话的过程、出错原因、客户端与版本信息,没有票据形状的串、Bearer、Key;
+ *       在线页面的「保存为文件」是浏览器下载,不请求 /api/ai/diagnostics*;
+ *   O10 只在创建者关闭「云端 Agent」时给别的成员气泡,打开时不提示;
  *
  * 桌面版(`desktop`,桌面 dev server 在 `?aimock=1` 下起,本机驱动是内置假流,保证有一个本机驱动可选)
  *   D1  放本机的项目:接入方式里没有「云端」,没有任何发往 Agent 服务的请求;
@@ -39,6 +46,7 @@
  *   D3  选「云端」:页面直连 Agent 服务(跨源),没有发往本机 /api/ai/chat、/api/mcp/ 的请求;附件按钮置灰并写原因;「深度自主」置灰并写原因;
  *   D4  选「云端」发一条长一点的任务(三处改动 + 等待),确认已被云端接下后关掉桌面页面:对话在云端照跑完,项目被改了三处;
  *   D5  桌面页面重新打开回到同一个项目:AI 栏仍是本机驱动,只多一次 info 与一次对话列表;历史列表「云端」一组里找得到那个对话,点开找回完整过程;
+ *   D9  桌面版云端对话里「诊断报告」可用(同 O9,不点保存为文件);D11 本机与云端的空对话都只有那一条示例句,本机模式下一键配特效不置灰。
  *   D6  云端对话还在跑时重新打开:AI 栏仍是本机驱动,出现「云端对话进行中」提示,点「接上看看」接上还在跑的对话;成员列表里自己那一行下
  *       有「〈成员名〉的云端 Agent」;跑完过程完整、改动落地。
  */
@@ -63,7 +71,7 @@ const PORTS = { site: BASE, stageA: BASE + 1, stageB: BASE + 2, desktop: BASE + 
 for (const p of USER_PORTS) if (Object.values(PORTS).includes(p) || PORTS.desktop + 1 === p || PORTS.desktop + 2 === p) { process.stderr.write(`端口段碰到了 ${p}(用户的编辑器或安装版)\n`); process.exit(2); }
 const RUN = `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-cloud-ui-'));
-const OUT = path.resolve(arg('--out', path.join(ROOT, '..', '..', 'work', 'four-stage', 'cloud-agent', 'ui')));
+const OUT = path.resolve(arg('--out', path.join(ROOT, '..', '..', 'work', 'four-stage', 'cloud-agent', 'ui2')));
 fs.mkdirSync(OUT, { recursive: true });
 
 const { results, check, say, until } = createUi({ maxLine: 1600 });
@@ -89,6 +97,57 @@ const clipIn = (p, id) => p?.tracks?.flatMap((t) => t.clips).find((c) => c.id ==
 /** 发往 Agent 服务的请求(经代理的 `/agent/`;预检不算) */
 const agentReqs = (page) => page.requests.filter((r) => r.url.startsWith(`${S.SITE}/agent/`) && r.method !== 'OPTIONS');
 const ticketed = (reqs) => reqs.length > 0 && reqs.every((r) => r.auth === 'ticket');
+
+/* ---- 用户 2026-10-07 定的几处界面行为用的小工具 ---- */
+const EXAMPLE = '为我快速创建一个视频告诉我软件都可以做什么。';
+const TICKET_SHAPE = /\bv1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/;
+const CLOUD_PANEL = '[data-pc="cloud-ai-panel"]';
+const LOCAL_PANEL = 'aside.ai-panel:not([data-pc="cloud-ai-panel"])';
+/** 空对话里的示例句(这一栏里所有示例按钮的文字) */
+const exampleSentences = (page, panel) => P(page, (sel) => [...document.querySelectorAll(`${sel} [data-pc="ai-empty-example"]`)].map((e) => (e.textContent ?? '').trim()), panel);
+/** 点开「✦」菜单读一键配特效与诊断报告两项的状态(读完收起) */
+async function menuState(page, panel) {
+  await page.click(`${panel} [data-pc="ai-menu"]`);
+  const out = await P(page, (sel) => {
+    const rd = (pc) => { const b = document.querySelector(`${sel} [data-pc="${pc}"]`); return b ? { disabled: b.disabled, title: b.title } : null; };
+    return { workflow: rd('ai-auto-workflow'), diagnostics: rd('ai-diagnostics') };
+  }, panel);
+  await page.click(`${panel} [data-pc="ai-menu"]`).catch(() => {});
+  return out;
+}
+/**
+ * 云端下点「诊断报告」:子窗口里的报告是这段云端对话的过程、出错原因、客户端与版本信息,不含任何凭证。
+ * `save`:在线页面再点「保存为文件」(浏览器下载,不请求 /api/*);桌面版不点(那条路会请本机编辑器写盘并弹出文件夹)。
+ */
+async function diagnostics(page, { save = false, shotName = null } = {}) {
+  await page.click(`${CLOUD_PANEL} [data-pc="ai-menu"]`);
+  await page.click(`${CLOUD_PANEL} [data-pc="ai-diagnostics"]`);
+  await page.waitForSelector('.rpt-dialog', { visible: true, timeout: 8000 });
+  const text = await page.$eval('.rpt-text', (t) => t.value);
+  const buttons = await P(page, () => [...document.querySelectorAll('.rpt-dialog .rpt-btn')].map((b) => ({ text: b.textContent.trim(), disabled: b.disabled })));
+  if (shotName) await shot(page, shotName);
+  let saveMsg = null;
+  const apiBefore = page.requests.filter((r) => /\/api\/ai\/diagnostics/.test(r.url)).length;
+  if (save) {
+    await page.evaluate(() => { [...document.querySelectorAll('.rpt-dialog .rpt-btn')].find((b) => b.textContent.trim() === '保存为文件')?.click(); });
+    saveMsg = await until('诊断报告:保存为文件有回执', () => page.$eval('.rpt-dialog .rpt-msg', (e) => e.textContent ?? '').catch(() => null), 8000, 100);
+  }
+  const apiAfter = page.requests.filter((r) => /\/api\/ai\/diagnostics/.test(r.url)).length;
+  await page.click('.rpt-dialog .rpt-x').catch(() => {});
+  let report = null;
+  try { report = JSON.parse(text); } catch { report = null; }
+  return { text, report, buttons, saveMsg, diagApiRequests: apiAfter - apiBefore };
+}
+/** 自己按原始成员列表算「成员:N 人 · Agent:M 个」(与界面各写各的,互相对一遍) */
+const expectedCount = (devices) => {
+  let online = 0;
+  let agents = 0;
+  for (const d of devices.filter((x) => !x.service)) {
+    if (d.conns.some((c) => c.service !== 'agent')) online++;
+    agents += d.conns.filter((c) => c.role === 'agent' && c.service !== 'agent').length + (d.conns.some((c) => c.service === 'agent') ? 1 : 0);
+  }
+  return `成员：${Math.max(1, online)} 人 · Agent：${agents} 个`;
+};
 
 const seedBody = (name) => ({
   version: 1, id: `cloud-ui-${RUN}`, name, width: 640, height: 360, fps: 30, duration: 12, themeId: 'midnight', media: [],
@@ -145,6 +204,12 @@ async function onlinePhase() {
   const noIdentityNotice = !(await panelText(A)).includes('还没有取得身份证明');
   check('O0:页面的身份是真的:发往 Agent 服务的请求都带文档服务签的委托票据(不是替身),没有「还没有取得身份证明」', ticketed(agentReqs(A)) && noIdentityNotice, { requests: agentReqs(A).length, kinds: [...new Set(agentReqs(A).map((r) => r.auth))] });
   await shot(A, 'O0-online-ai-panel');
+  // 〔用户 2026-10-07 定〕空对话只留一条示例句;云端下一键配特效置灰并写原因
+  const ex0 = await exampleSentences(A, CLOUD_PANEL);
+  check('O8:空对话只有一条示例句,原文照抄「为我快速创建一个视频告诉我软件都可以做什么。」', ex0.length === 1 && ex0[0] === EXAMPLE, { ex0 });
+  await shot(A, 'O8-online-empty-example');
+  const menu0 = await menuState(A, CLOUD_PANEL);
+  check('O9:云端下「一键配特效」在菜单里、置灰、悬停写原因;「诊断报告」不隐藏', !!menu0.workflow && menu0.workflow.disabled === true && /暂不支持一键配特效/.test(menu0.workflow.title) && !!menu0.diagnostics, menu0);
 
   /* ---- O1:三处改动,流式 */
   await sendText(A, stepsOf(threeEdits()));
@@ -173,6 +238,14 @@ async function onlinePhase() {
   const undone = await until('O1:撤销后卡片参数回到原值', async () => (clipIn(await readProject(), 'c-ring')?.params?.value === 40 ? true : null), 10_000, 200);
   const rowAfter = (await eventLog(A))?.rows.find((r) => r.id === undoRow?.id) ?? null;
   check('O1:点「撤销这步」撤掉云端 Agent 的最后一步:文档服务里卡片参数回到 40,按钮变成「已撤销」,别的改动还在', !!undoRow && !!undone && rowAfter?.undo === 'done' && clipIn(await readProject(), 'c-text').params.text === '云端改的|标题', { tool: undoRow?.tool ?? null, undo: rowAfter?.undo ?? null });
+
+  /* ---- O9:云端下「诊断报告」可用:云端对话的过程、客户端与版本信息,不含凭证;在线页面「保存为文件」是浏览器下载 */
+  const diagA = await diagnostics(A, { save: true, shotName: 'O9-online-diagnostics' });
+  const rep = diagA.report;
+  const toolNames = (rep?.rounds ?? []).flatMap((r) => (r.reply?.tools ?? []).map((t) => t.name));
+  check('O9:云端下「诊断报告」可用:报告是这段云端对话的(对话 id、四个工具调用、回复、客户端模式 online、代码版本)', rep?.format === 'PromptCut cloud conversation debug v1' && rep.conversation?.id === (await conversationOf(A)) && toolNames.filter((n) => n === 'update_clip').length === 3 && toolNames.includes('get_project') && JSON.stringify(rep.rounds).includes('三处都改好了') && rep.client?.mode === 'online' && typeof rep.client?.userAgent === 'string' && 'codeVersion' in rep.client, { format: rep?.format, tools: toolNames, client: rep?.client, rounds: rep?.rounds?.length });
+  check('O9:报告里没有任何凭证:没有票据形状的串(v1.…)、没有 Bearer、没有 sk- 形状的 Key', !TICKET_SHAPE.test(diagA.text) && !/Bearer\s+[A-Za-z0-9]/.test(diagA.text) && !/\bsk-[A-Za-z0-9_-]{12,}/.test(diagA.text) && !/grant|delegation/i.test(Object.keys(rep?.conversation ?? {}).join(',')), { chars: diagA.text.length });
+  check('O9:在线页面的「保存为文件」是浏览器下载(有回执),没有请求 /api/ai/diagnostics*;三个出口都在', /已下载/.test(String(diagA.saveMsg ?? '')) && diagA.diagApiRequests === 0 && diagA.buttons.map((b) => b.text).join() === '复制,保存为文件,提交', { saveMsg: diagA.saveMsg, diagApi: diagA.diagApiRequests, buttons: diagA.buttons });
 
   /* ---- O2:停止 */
   await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 30000 }, { say: '这句话不该出现' }]);
@@ -224,6 +297,8 @@ async function onlinePhase() {
   const B = await newPage(ctxB);
   const tJoin = Date.now();
   await join(B);
+  // 记下 B 页面上出现过的所有气泡文字(O5 查「只在关闭时有气泡」)
+  await P(B, () => { window.__toasts = []; new MutationObserver(() => { const t = document.querySelector('[data-pc="sync-toasts"]')?.textContent?.trim(); if (t && !window.__toasts.includes(t)) window.__toasts.push(t); }).observe(document.body, { subtree: true, childList: true, characterData: true }); });
   const attached = await until('O4:新设备进项目后自动接上还在跑的对话,补齐关页面之前的过程', async () => {
     const v = await view(B);
     const m = await msgs(B);
@@ -267,12 +342,44 @@ async function onlinePhase() {
   const postsAfter = agentReqs(B).filter((r) => r.method === 'POST' && /\/messages$/.test(new URL(r.url).pathname)).length;
   check('O5:开关关着时 AI 栏说明「项目创建者已关闭云端 Agent」,消息发不出去', /项目创建者已关闭云端 Agent/.test(String(offBanner ?? '')) && postsAfter === postsBefore, { banner: offBanner, posts: [postsBefore, postsAfter] });
   await shot(B, 'O5-online-revoked');
+  const offToast = await until('O10:创建者关闭开关时,别的成员的页面上出现气泡', async () => (await P(B, () => window.__toasts)).find((t) => /创建者关闭了云端 Agent/.test(t)) ?? null, 8_000, 100);
   const onReply = await adminOp(obs, proj, 'set-hosted-service', { service: 'agent', enabled: true });
   await until('O5:开关打开后「已关闭」的说明撤掉', async () => !(await B.$('[data-pc="cloud-off"]')), 8_000, 100);
+  await sleep(2500);
+  const toastsAll = await P(B, () => window.__toasts);
+  check('O10:只在创建者关闭云端 Agent 时给别的成员气泡:关闭时有,打开时没有(气泡持续 6 秒,这里观察了打开之后的 2.5 秒以上)', !!offToast && !toastsAll.some((t) => /创建者打开了云端 Agent/.test(t)), { offToast, toasts: toastsAll });
   await P(B, () => { const ta = document.querySelector('[data-pc="cloud-ai-panel"] [data-pc="ai-input"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, ''); ta.dispatchEvent(new Event('input', { bubbles: true })); });
   await sendText(B, stepsOf([{ tool: 'get_project', input: {} }, { say: '重开之后还能再发' }]));
   await until('O5:开关重开之后再发一条,有回复', async () => (lastAssistant(await msgs(B))?.text ?? '').includes('重开之后还能再发'), 20_000, 100);
   check('O5:开关重开之后还能再发消息、有回复', onReply.type === 'shared.admin.ok' && (lastAssistant(await msgs(B))?.text ?? '').includes('重开之后还能再发'));
+
+  /* ---- O7:成员计数分开写「成员:N 人 · Agent:M 个」;本人不在线、只有他的云端 Agent 在跑的成员标「离线,Agent 在跑」
+   * 这位成员(dave,自由进入的成员)发一个长任务就关掉浏览器;文档服务把他的页面连接留 60 秒保持期,保持期过了他的行里只剩云端 Agent 的连接 */
+  const ctxC = await browser.createBrowserContext();
+  const Cc = await newPage(ctxC);
+  await joinOnline(Cc, { site: S.SITE, name: NAME, username: 'dave', password: PW });
+  await until('O7:dave 的云端对话接上', async () => (await view(Cc))?.conversationId, 30_000);
+  await startRun(Cc, [{ tool: 'get_project', input: {} }, { sleepMs: 55000 }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'dave-run' } }, { sleepMs: 50000 }, { say: 'dave 的云端 Agent 做完了' }]);
+  await sleep(800);
+  const tClose = Date.now();
+  await ctxC.close();
+  const rawNow = async () => (await obs.ask({ type: 'shared.members' })).devices ?? [];
+  let snap = null;
+  let rawAt = [];
+  await until('O7:保持期过后 dave 那一行标出「离线,Agent 在跑」', async () => {
+    snap = await membersList(B);
+    rawAt = await rawNow();
+    return snap?.rows.some((r) => r.name?.startsWith('dave') && r.offlineTag) ? snap : null;
+  }, 140_000, 3000);
+  const dave = rawAt.find((d) => d.username === 'dave');
+  const daveRow = snap?.rows.find((r) => r.name?.startsWith('dave'));
+  // 用同一时刻的原始成员列表算期望(界面与探针各算各的);等一轮让界面追上
+  snap = await membersList(B, { shot: path.join(OUT, 'O7-online-members-offline-agent.png') });
+  rawAt = await rawNow();
+  const personsOnline = rawAt.filter((d) => !d.service && d.conns.some((c) => c.service !== 'agent')).length;
+  check('O7:dave 关了浏览器、只剩他的云端 Agent 连着:他那一行仍在,标「离线,Agent 在跑」', !!dave && dave.conns.length >= 1 && dave.conns.every((c) => c.service === 'agent') && daveRow?.offlineTag === '[离线，Agent 在跑]', { waited: Math.round((Date.now() - tClose) / 1000), rawDave: dave?.conns, tag: daveRow?.offlineTag ?? null });
+  check('O7:顶栏的字是「成员:N 人 · Agent:M 个」,N 不含 dave(只算真人在线)、M 含他的云端 Agent;与原始成员列表算出来的一致', snap?.count === expectedCount(rawAt) && /^成员：\d+ 人 · Agent：\d+ 个$/.test(snap?.count ?? '') && Number((/成员：(\d+) 人/.exec(snap?.count ?? '') ?? [])[1]) === personsOnline && Number((/Agent：(\d+) 个/.exec(snap?.count ?? '') ?? [])[1]) >= 1, { label: snap?.count, expected: expectedCount(rawAt), personsOnline, devices: rawAt.map((d) => ({ u: d.username, conns: d.conns.map((c) => `${c.role}${c.service ? ':' + c.service : ''}`) })) });
+  check('O7:成员列表的按钮文字就是这个口径(旧的「成员: N 人」不再出现)', /^成员：\d+ 人 · Agent：\d+ 个$/.test(snap?.button ?? '') && !/成员: /.test(snap?.button ?? ''), { button: snap?.button });
 
   /* ---- O0 补:同源 /api/* 一个都没有 */
   const apiBlocked = await P(B, () => window.__pcApiBlocked ?? []);
@@ -329,6 +436,10 @@ async function desktopPhase() {
   const local = await providerOptions(page);
   check('D1:放本机的项目:接入方式里没有「云端」(本机驱动都在)', local && local.options.length >= 2 && !local.options.some((o) => o.value === 'cloud'), local);
   check('D1:放本机的项目没有任何发往 Agent 服务的请求', agentReqs(page).length === 0 && S.agentLog.filter((r) => r.origin === desktop.origin).length === 0, { n: agentReqs(page).length });
+  const exLocal = await exampleSentences(page, LOCAL_PANEL);
+  check('D11:本机 AI 栏的空对话也只有这一条示例句(本机与云端同一份)', exLocal.length === 1 && exLocal[0] === EXAMPLE, { exLocal });
+  const menuLocal = await menuState(page, LOCAL_PANEL);
+  check('D11:本机模式下一键配特效不置灰(只有云端下才置灰)', !!menuLocal.workflow && menuLocal.workflow.disabled === false, menuLocal);
 
   /* ---- 放云端:桌面页面里勾「多用户协作」→ 放云端 */
   await openProjectSettings(page);
@@ -391,6 +502,10 @@ async function desktopPhase() {
   check('D3:云端下「深度自主」置灰并写原因(含审查环路)', deep?.disabled === true && /深度自主与审查环路/.test(deep.title), deep);
   await page.click('[data-pc="cloud-ai-panel"] [data-pc="ai-run-options"]').catch(() => {});
   await shot(page, 'D3-desktop-cloud-selected');
+  const exCloudD = await exampleSentences(page, CLOUD_PANEL);
+  const menuCloudD = await menuState(page, CLOUD_PANEL);
+  check('D11:桌面版云端对话的空对话只有那一条示例句;云端下一键配特效置灰并写原因,诊断报告不隐藏', exCloudD.length === 1 && exCloudD[0] === EXAMPLE && menuCloudD.workflow?.disabled === true && /暂不支持一键配特效/.test(menuCloudD.workflow.title) && !!menuCloudD.diagnostics, { exCloudD, menuCloudD });
+  await shot(page, 'D11-desktop-empty-example');
 
   /* ---- D4:发长任务,确认被接下后关页面 */
   const DESK_STEPS = [
@@ -447,6 +562,10 @@ async function desktopPhase() {
   const found5 = await until('D5:点开后找回完整过程', async () => { const m = await msgs(page); return m && toolCount(m) === 4 && (lastAssistant(m)?.text ?? '').includes('桌面发起的三处改动做完了') ? m : null; }, 30_000, 200);
   check('D5:点开后找回完整过程(用户消息、四个工具调用、最后的回复)', !!found5 && found5.filter((x) => x.role === 'user').length === 1, { tools: toolCount(found5), users: found5?.filter((x) => x.role === 'user').length });
   await shot(page, 'D5-desktop-cloud-recovered');
+  // 〔用户 2026-10-07 定〕桌面版云端对话里「诊断报告」可用(不点「保存为文件」:那条路请本机编辑器写盘并弹出文件夹)
+  const diagD = await diagnostics(page, { shotName: 'D9-desktop-diagnostics' });
+  const toolNamesD = (diagD.report?.rounds ?? []).flatMap((r) => (r.reply?.tools ?? []).map((t) => t.name));
+  check('D9:桌面版云端下「诊断报告」可用:报告是这段云端对话的(四个工具调用、回复、客户端模式 desktop),不含任何凭证', diagD.report?.format === 'PromptCut cloud conversation debug v1' && diagD.report.conversation?.id === convD && toolNamesD.length === 4 && JSON.stringify(diagD.report.rounds).includes('桌面发起的三处改动做完了') && diagD.report.client?.mode === 'desktop' && !TICKET_SHAPE.test(diagD.text) && !/Bearer\s+[A-Za-z0-9]/.test(diagD.text) && !/\bsk-[A-Za-z0-9_-]{12,}/.test(diagD.text) && diagD.diagApiRequests === 0, { tools: toolNamesD, client: diagD.report?.client, chars: diagD.text.length });
 
   /* ---- D6:云端对话还在跑时重新打开:有「进行中」提示,点了接上 */
   await startRun(page, [{ tool: 'get_project', input: {} }, { sleepMs: 45000 }, { tool: 'update_clip', input: { clipId: clips.text, label: 'D6 接上后' } }, { say: 'D6 做完了' }]);
@@ -462,7 +581,7 @@ async function desktopPhase() {
   const mem = await membersList(page);
   const mine = mem?.rows.find((r) => r.cloudTag) ?? null;
   // 列表里另一行是探针自己的那条创建者连接(另一台设备):成员数 2 = 两台设备,云端 Agent 不占数
-  check('D6:成员列表里自己那一行下有「〈成员名〉的云端 Agent」(不另起一行、不计入成员数)', !!mine && mine.cloudRow === `${creator.username}的云端 Agent` && mem.rows.filter((r) => r.cloudTag).length === 1 && /成员: 2 人/.test(mem.button), { button: mem?.button, rows: mem?.rows.map((r) => r.text.slice(0, 60)) });
+  check('D6:成员列表里自己那一行下有「〈成员名〉的云端 Agent」(不另起一行、不计入成员数)', !!mine && mine.cloudRow === `${creator.username}的云端 Agent` && mem.rows.filter((r) => r.cloudTag).length === 1 && mem.count === '成员：2 人 · Agent：1 个' && mem.button === mem.count, { button: mem?.button, count: mem?.count, rows: mem?.rows.map((r) => r.text.slice(0, 60)) });
   await page.click('[data-pc="cloud-running-banner"] button');
   await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 });
   const attachedD6 = await until('D6:点了「接上看看」后接上还在跑的对话', async () => { const v = await view(page); return v?.streaming ? v : null; }, 20_000, 100);
