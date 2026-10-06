@@ -584,7 +584,14 @@ async function main() {
     };
     await sleep(3000);
     const idle = await sample(40, 100);
-    const long = (who) => writeScript(60, 150, `${salt}-load-${who}`);
+    // 先让渲染服务有活:一个很短的对话改两张卡,它一结束补渲计划就发出去,渲染要几十秒;6 轮对话在它渲的时候起
+    const renderMark = agent.logs.length;
+    await api.alice.send('load-pre', mockScript([writeStep(3, `${salt}-pre`), writeStep(2, `${salt}-pre`), { say: '先让渲染服务忙起来' }]));
+    await api.alice.settled('load-pre');
+    await waitFor(() => agent.logs.slice(renderMark).some((l) => l.event === 'agent.render.published' && l.projectId === PID), 20_000, '补渲计划发出');
+    const rendering = () => { const l = agent.logs.slice(renderMark).filter((x) => x.projectId === PID); return l.some((x) => x.event === 'agent.render.published') && !l.some((x) => x.event === 'agent.render.done' || x.event === 'agent.render.failed' || x.event === 'agent.render.gave-up'); };
+    // 一轮最多 24 次模型往返(契约第 7.3 节):每轮 22 次写入、间隔 700 毫秒,约 16 秒,量时延的那 5 秒落在中间
+    const long = (who) => writeScript(22, 700, `${salt}-load-${who}`);
     const sends = [];
     sends.push(['alice#1', await api.alice.send('load-a1', long('a1'))], ['alice#2', await api.alice.send('load-a2', long('a2'))], ['bob#1', await api.bob.send('load-b1', long('b1'))]);
     const fourth = await api.bob.send('load-b2', long('b2'));
@@ -593,16 +600,20 @@ async function main() {
     check('U15 并发上限生效:每个项目同时 3 轮、全节点 6 轮,超出的回 429 busy', sends.every(([, s]) => s.status === 202) && fourth.status === 429 && fourth.code === 'busy' && seventh.status === 429 && seventh.code === 'busy', {
       accepted: sends.map(([k, s]) => `${k}:${s.status}`), fourthInProject: `${fourth.status}:${fourth.code}`, seventhOnNode: `${seventh.status}:${seventh.code}`,
     });
-    await sleep(4000); // 让补渲的计划发出去、渲染服务开始渲
+    await sleep(3500); // 让补渲的计划发出去、渲染服务开始渲
     const st0 = await renderStatus();
+    const runningNow = async () => [...(await api.alice.info()).running ?? [], ...(await api.dan.info()).running ?? [], ...(await api.bob.info()).running ?? [], ...(await api.eve.info()).running ?? []].length;
+    const runsAtStart = await runningNow();
+    const renderAtStart = rendering();
     const busy = await sample(40, 100);
+    const runsAtEnd = await runningNow();
+    const renderAtEnd = rendering();
     const st1 = await renderStatus();
     const mem = agent.child.pid ? spawnSync(process.platform === 'win32' ? 'powershell' : 'ps', process.platform === 'win32' ? ['-NoProfile', '-Command', `(Get-Process -Id ${agent.child.pid}).WorkingSet64`] : ['-o', 'rss=', '-p', String(agent.child.pid)], { windowsHide: true, encoding: 'utf8' }).stdout.trim() : '';
     const rssMb = mem ? Math.round(Number(mem) / (process.platform === 'win32' ? 1024 * 1024 : 1024)) : null;
-    const running = [...(await api.alice.info()).running ?? [], ...(await api.dan.info()).running ?? []];
-    const rendering = (st0.queue?.nodes ?? []).concat(st1.queue?.nodes ?? []).some((n) => (n.holding ?? n.running ?? n.claimedNow ?? 0) > 0) || (st1.queue?.nodes ?? []).some((n) => n.claimed > 0);
-    check('U16 满载时同机文档服务的响应时间(6 轮对话同时写 + 渲染服务在渲),对比空闲时', busy.healthz.p95 < 500 && busy.projectOpen.p95 < 1000, {
-      idle, loaded: busy, runsDuringSample: running.length, renderNodesBusy: rendering, agentRssMb: rssMb, agentHeapLimitMb: agent.ready?.heapLimitMb ?? null,
+    void st0; void st1;
+    check('U16 满载时同机文档服务的响应时间(6 轮对话同时写 + 渲染服务在渲),对比空闲时', busy.healthz.p95 < 500 && busy.projectOpen.p95 < 1000 && runsAtStart === 6 && runsAtEnd === 6 && renderAtStart, {
+      idle, loaded: busy, runsDuringSample: { atStart: runsAtStart, atEnd: runsAtEnd }, renderInProgress: { atStart: renderAtStart, atEnd: renderAtEnd }, agentRssMb: rssMb, agentHeapLimitMb: agent.ready?.heapLimitMb ?? null,
       note: '本机数字只作参考;门槛只卡「没有被拖垮」(healthz p95 < 500 ms,与渲染服务的背压线相同)',
     });
     for (const [a, ids] of [[api.alice, ['load-a1', 'load-a2']], [api.bob, ['load-b1']], [api.dan, ['load-d1', 'load-d2']], [api.eve, ['load-e1']]]) for (const id of ids) await a.abort(id);
