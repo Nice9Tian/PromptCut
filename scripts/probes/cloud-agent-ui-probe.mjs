@@ -359,6 +359,11 @@ const providerOptions = (page) => P(page, () => {
   return s ? { value: s.value, options: [...s.options].map((o) => ({ value: o.value, text: o.textContent.trim(), disabled: o.disabled, title: o.title })) } : null;
 }).catch(() => null);
 const idle = (page) => view(page).then((v) => v && !v.streaming);
+/** 发一条脚本消息并等到这一轮确实开始(服务端的 user 事件回来、界面进入「在跑」) */
+async function startRun(page, steps) {
+  await sendText(page, stepsOf(steps));
+  return until('这一轮开始(界面进入在跑)', async () => (await view(page))?.streaming, 10_000, 30);
+}
 
 /* ================================================================== 在线浏览器 */
 
@@ -420,8 +425,7 @@ async function onlinePhase() {
   await shot(A, 'O1-online-done');
 
   /* ---- O2:停止 */
-  await sendText(A, stepsOf([{ tool: 'get_project', input: {} }, { sleepMs: 30000 }, { say: '这句话不该出现' }]));
-  await until('O2:这一轮在跑', async () => (await view(A))?.streaming, 10_000, 50);
+  await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 30000 }, { say: '这句话不该出现' }]);
   await sleep(800);
   const t0 = Date.now();
   await A.click('[data-pc="cloud-ai-panel"] [data-pc="ai-stop"]');
@@ -438,9 +442,10 @@ async function onlinePhase() {
   const conn3 = [];
   await P(A, () => { window.__connLog = []; const t = setInterval(() => { const v = window.__pcCloud?.main?.view(); if (v) { const l = window.__connLog; if (l.at(-1) !== v.connection) l.push(v.connection); } }, 30); window.__connTimer = t; });
   const eventsBefore = agentLog.filter((r) => /\/events/.test(r.path)).length;
-  await sendText(A, stepsOf([{ tool: 'get_project', input: {} }, { sleepMs: 1800 }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'r1' } }, { sleepMs: 1800 }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'r2' } }, { sleepMs: 1800 }, { say: '重连完成' }]));
-  await until('O3:第一个工具调用出现', async () => toolCount(await msgs(A)) >= 2 || null, 10_000, 50);
-  const tBefore = toolCount(await msgs(A));
+  const base3 = toolCount(await msgs(A));
+  await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 1800 }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'r1' } }, { sleepMs: 1800 }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'r2' } }, { sleepMs: 1800 }, { say: '重连完成' }]);
+  await until('O3:这一轮的第二个工具调用出现', async () => toolCount(await msgs(A)) - base3 >= 2 || null, 10_000, 50);
+  const tBefore = toolCount(await msgs(A)) - base3;
   const dropped = dropAgentStreams();
   await until('O3:这一轮结束(断流之后页面自己重连补齐)', () => idle(A), 40_000, 100);
   const m3 = await msgs(A);
@@ -452,13 +457,15 @@ async function onlinePhase() {
   check('O3:代理确实掐断了在跑的事件流', dropped >= 1, { dropped, toolsBefore: tBefore });
   check('O3:重连后工具调用数与脚本一致(读项目 + 两次改标签,不重不漏),回复在', tools3.length === 3 && tools3.every((t) => t.ok === true) && (a3?.text ?? '').includes('重连完成'), { tools: tools3.map((t) => [t.name, t.ok]), text: a3?.text });
   check('O3:连接状态经过「重连中」回到「已连接」', connLog.includes('reconnecting') && connLog.at(-1) === 'live', { connLog });
-  check('O3:重连的请求带了已看到的最大 seq(after > 0)', afters.length >= 2 && afters.slice(1).some((n) => n > 0), { afters });
+  check('O3:重连的请求带了已看到的最大 seq(after > 0)', afters.length >= 1 && afters.every((n) => n > 0), { afters });
   const labelNow = clip(await readProject(PID), 'c-text').label;
   check('O3:断流期间服务端的改动照常落地(标签是 r2)', labelNow === 'r2', { labelNow });
 
   /* ---- O4:关掉页面,另一台设备再进:自动接上还在跑的对话 */
-  await sendText(A, stepsOf([{ tool: 'get_project', input: {} }, { sleepMs: 5000 }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'reopened' } }, { sleepMs: 5000 }, { say: '接上了' }]));
-  await until('O4:关页面之前先看到第一个工具调用', async () => toolCount(await msgs(A)) >= 1 && (await view(A))?.streaming, 10_000, 50);
+  await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 5000 }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'reopened' } }, { sleepMs: 5000 }, { say: '接上了' }]);
+  const base4 = toolCount(await msgs(A));
+  await until('O4:关页面之前先看到这一轮的第一个工具调用', async () => toolCount(await msgs(A)) > base4 || (await view(A))?.streaming, 10_000, 50);
+  await sleep(500);
   const toolsBeforeClose = toolCount(await msgs(A));
   const convA = await P(A, () => window.__pcCloud.main.conversationId());
   await A.close();
@@ -467,10 +474,10 @@ async function onlinePhase() {
   const B = await newPage(ctxB, { init: [identityScript(PID, USER)] });
   const tJoin = Date.now();
   await join(B, 'alice');
-  const attached = await until('O4:新设备进项目后自动接上还在跑的对话', async () => {
+  const attached = await until('O4:新设备进项目后自动接上还在跑的对话,补齐关页面之前的过程', async () => {
     const v = await view(B);
     const m = await msgs(B);
-    return v && v.conversationId === convA && (m ?? []).some((x) => x.role === 'user') ? { v, m } : null;
+    return v && v.conversationId === convA && toolCount(m) >= toolsBeforeClose ? { v, m } : null;
   }, 30_000, 100);
   const stillRunning = await view(B);
   check('O4:另一台设备(没有本地存储)进同一个项目,自动打开了那个对话', !!attached && attached.v.conversationId === convA, { conv: attached?.v?.conversationId, convA, ms: Date.now() - tJoin });
@@ -491,12 +498,11 @@ async function onlinePhase() {
 
   /* ---- O5:出错不悄悄丢 */
   await sendText(B, stepsOf([{ fail: '模拟的模型错误' }]));
-  await until('O5:模型失败的那一轮结束', () => idle(B), 20_000, 100);
+  await until('O5:模型失败的那一轮结束', async () => { const a = lastAssistant(await msgs(B)); return a?.outcome === 'error' && !a.pending; }, 20_000, 100);
   const a5 = lastAssistant(await msgs(B));
   check('O5:模型调用失败时对话里有原因(含模型接口给的话)', a5?.outcome === 'error' && String(a5?.error ?? '').includes('模拟的模型错误'), { outcome: a5?.outcome, error: a5?.error });
   await shot(B, 'O5-online-model-error');
-  await sendText(B, stepsOf([{ tool: 'get_project', input: {} }, { sleepMs: 20000 }, { say: '不该出现2' }]));
-  await until('O5:撤销前这一轮在跑', async () => (await view(B))?.streaming, 10_000, 50);
+  await startRun(B, [{ tool: 'get_project', input: {} }, { sleepMs: 20000 }, { say: '不该出现2' }]);
   await sleep(600);
   agent.service.revoke({ projectId: PID, userId: USER, reason: 'removed' });
   await until('O5:撤销后对话停下', () => idle(B), 10_000, 50);
@@ -504,13 +510,16 @@ async function onlinePhase() {
   check('O5:服务端撤销(被移出、开关关了)时对话里写明「已失效」,项目不动', a5b?.outcome === 'error' && /已失效/.test(String(a5b?.error ?? '')) && !(a5b?.text ?? '').includes('不该出现2'), { outcome: a5b?.outcome, error: a5b?.error });
   await shot(B, 'O5-online-revoked');
   await sendText(B, stepsOf([{ tool: 'get_project', input: {} }, { say: '撤销之后还能再发' }]));
-  await until('O5:撤销之后再发一条', () => idle(B), 20_000, 100);
+  await until('O5:撤销之后再发一条,有回复', async () => (lastAssistant(await msgs(B))?.text ?? '').includes('撤销之后还能再发'), 20_000, 100);
   check('O5:撤销之后还能再发消息、有回复', (lastAssistant(await msgs(B))?.text ?? '').includes('撤销之后还能再发'));
 
   /* ---- O0 补:同源 /api/* 一个都没有 */
   const apiBlocked = await P(B, () => window.__pcApiBlocked ?? []);
   const apiReq = [...(A.requests ?? []), ...(B.requests ?? [])].filter((r) => { try { return new URL(r.url).origin === SITE && /^\/(editor\/)?api\//.test(new URL(r.url).pathname); } catch { return false; } });
-  check('O0:整个在线对话过程中没有同源 /api/* 请求(__pcApiBlocked 为空)', apiBlocked.length === 0 && apiReq.length === 0, { apiBlocked, apiReq: apiReq.slice(0, 3) });
+  // 在线页面本来就有几条与桌面共用的 /api/ 调用被守卫就地拦下(棘轮清单里的 19 条,运行期一个字节都不出去);云端 AI 栏不该多出任何一条
+  const ratchet = JSON.parse(fs.readFileSync(path.join(ROOT, 'server', 'test', 'c10a-online-api-paths.json'), 'utf8')).paths;
+  const foreign = apiBlocked.filter((p) => !ratchet.includes(p) || /^\/api\/(ai|chats|mcp|agent)/.test(p));
+  check('O0:整个在线对话过程中没有同源 /api/* 请求发出去;守卫拦下的只有棘轮清单里原有的,没有 /api/ai、/api/chats、/api/mcp', apiReq.length === 0 && foreign.length === 0, { apiBlocked, foreign, apiReq: apiReq.slice(0, 3) });
   check('O0:在线页面没有页面错误', B.pageErrors.length === 0 && A.pageErrors.length === 0, { A: A.pageErrors.slice(0, 3), B: B.pageErrors.slice(0, 3) });
 
   /* ---- O6:手机仿真仍是占位 */

@@ -200,13 +200,27 @@ export function createCloudSession(deps: CloudSessionDeps) {
     /** 发一条消息。服务端回 202 之后保证流连着。出错抛 `CloudError`(界面显示它的 `message`) */
     async send(body: CloudSendBody): Promise<void> {
       if (!conversationId || closed) throw new CloudError("bad-request", "还没有打开对话。");
+      const seenBefore = lastSeq;
+      let accepted: { runId: string; seq: number };
       try {
-        await api.send(conversationId, body);
+        accepted = await api.send(conversationId, body);
       } catch (err) {
         if (err instanceof CloudError) throw err;
         throw new CloudError("network", cloudErrorText("network"));
       }
       problem = null;
+      // 服务端回的 seq 是这一轮第一条事件的序号。比页面已经看到的还小:服务端的这个对话从头开始了(实例被撤销回收、服务重启又没落盘),
+      // 旧流挂在已经不存在的对话上、永远等不到新事件 —— 掐掉旧流、从 0 重新读。记录落盘、seq 跨轮连续时不会走到这里。
+      // (比的是发送之前看到的最大序号:这一轮自己的事件可能已经从流里先到了,不能拿发送之后的 lastSeq 比)
+      if (accepted.seq > 0 && accepted.seq <= seenBefore) {
+        lastSeq = 0;
+        gen++;
+        ac?.abort();
+        ac = null;
+        wake?.();
+        loopAlive = false;
+        publish();
+      }
       ensureLoop();
     },
 

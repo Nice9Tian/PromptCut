@@ -7,6 +7,8 @@
  *   CAU-SES-01  事件流断了自动重连并带上已看到的 seq,补发与实时交界处重复的事件不重复折、不漏;
  *   CAU-SES-02  新对话:读到「没有」就停下,发消息后接上流;服务端把对话丢了(重启)时没收尾的一轮标成中断;
  *   CAU-SES-03  关闭只掐流、不发停止;停止才发 abort;身份类错误停下并给出原因,不无限重连;
+ *   CAU-SES-04  文字增量攒批后折进去与逐条折相同;
+ *   CAU-SES-05  服务端的对话从头开始了(seq 比页面看到的还小):掐掉旧流、从 0 重读;
  *   CAU-EP-01   「云端」一项出不来、出现、置灰的判定:放本机的项目没有;文档服务报了才有;开关关了置灰;在线页面地址固定;
  *   CAU-API-01  请求带委托票据与对话委托、不带 Cookie;错误码换成给用户看的话;info 与对话列表容错。
  */
@@ -64,6 +66,8 @@ test("CAU-EV-01 事件折成消息,从头折与边收边折相同", () => {
   let step = [];
   for (const ev of run1) step = applyCloudEvent(step, ev);
   assert.deepEqual(step.map((m) => ({ ...m, finishedAt: 0 })), all.map((m) => ({ ...m, finishedAt: 0 })));
+  // 折函数对重放幂等:整串事件再折一遍,消息原样不变(重连交界处、从头重读都靠这一点)
+  assert.equal(applyCloudEvents(all, run1), all);
   // 同一个 user 事件补发两次不重复
   assert.equal(applyCloudEvents(all, [run1[0]]).length, 2);
   // tool_call 补发两次不重复
@@ -322,4 +326,40 @@ test("CAU-ID-01 身份是可注入的接口位:没注入且没有替身时抛 no
   assert.equal(await cloudTicket(), "STUB");
   assert.equal(await cloudGrant("c"), undefined);
   delete globalThis.__pcCloudIdentity;
+});
+
+test("CAU-SES-05 服务端的对话从头开始了(seq 比页面看到的还小):掐掉旧流、从 0 重读,新的一轮照样显示", async () => {
+  const store = memStore();
+  const log = { afters: [], sent: 0 };
+  const second = [
+    { type: "user", seq: 1, runId: "r-new", prompt: "撤销之后再来" },
+    { type: "text", seq: 2, runId: "r-new", delta: "又能说了" },
+    { type: "end", seq: 3, runId: "r-new", state: "idle" },
+  ];
+  let conn = 0;
+  const api = {
+    async send() { log.sent++; return { runId: "r-new", seq: 1 }; },
+    async abort() {},
+    async *events(_id, after, signal) {
+      log.afters.push(after);
+      conn++;
+      if (conn === 1) {
+        for (const ev of run1) yield ev;
+        await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true })); // 旧流:挂着,等不到任何新事件
+        return;
+      }
+      for (const ev of second) yield ev;
+      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+    },
+  };
+  const s = createCloudSession({ api, store, flushMs: 0, backoff: () => 5 });
+  s.open("c-1");
+  await waitFor(() => s.getView().lastSeq === 9);
+  await s.send({ prompt: "撤销之后再来" });
+  await waitFor(() => store.get().length === 4 && store.get()[3].outcome === "completed");
+  assert.deepEqual(log.afters, [0, 0], "第二条连接从 0 起");
+  assert.equal(store.get()[3].text, "又能说了");
+  assert.equal(store.get()[1].text, "改好了", "旧的消息还在");
+  assert.equal(s.getView().lastSeq, 3);
+  s.close();
 });

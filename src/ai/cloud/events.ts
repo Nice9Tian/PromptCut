@@ -96,9 +96,12 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
   const idx = targetIndex(messages, runId);
   if (idx < 0) return messages;
   const m = messages[idx];
+  // 每条助手消息记着折到过的最大 seq:同一个事件重复到达(重连交界处、从头重读)只折一次,折函数对重放是幂等的
+  const seq = typeof ev.seq === "number" ? ev.seq : null;
+  if (seq !== null && seq <= (m.cloudSeq ?? 0)) return messages;
   const set = (patch: Partial<ChatMessage>): ChatMessage[] => {
     const next = messages.slice();
-    next[idx] = { ...m, ...patch };
+    next[idx] = { ...m, ...patch, ...(seq !== null ? { cloudSeq: seq } : {}) };
     return next;
   };
 
