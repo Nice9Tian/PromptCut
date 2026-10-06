@@ -212,6 +212,19 @@ async function wsAsCreator(projectId = made.projectId) {
   return { ask, close: () => ws.close() };
 }
 
+/**
+ * 在线页面只加入、不新建(`dce4b22b`,2026-10-04:加入用 `initialize: false`,服务端没有项目内容就拒绝,不拿本地这份去盖),
+ * 所以项目要先有内容才进得去。探针替创建者的桌面版写进一份空项目(尺寸、时长同「新建项目」的缺省)。
+ */
+async function seedProject(node, projectId, name) {
+  const opened = await node.ask({ type: 'project.open', projectId });
+  const body = { version: 1, id: `ouc-seed-${projectId.slice(-8)}`, name, width: 1920, height: 1080, fps: 30, duration: 30, themeId: 'midnight', media: [],
+    tracks: [{ id: 't-1', name: '序列 1', clips: [] }, { id: 't-2', name: '序列 2', clips: [] }] };
+  const seeded = await node.ask({ type: 'project.op', projectId, opId: randomBytes(16).toString('base64url'), ops: [{ op: 'set', path: '', value: body }] });
+  check(!/error|reject/i.test(String(opened?.type ?? '') + String(seeded?.type ?? '')), `替创建者写进空项目 ${name}`, { opened: opened?.type, seeded: seeded?.type });
+  return body.id;
+}
+
 /* ------------------------------------------------------------------ 浏览器 */
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
 async function newPage(label, { mobile = false } = {}) {
@@ -370,6 +383,7 @@ const reqsFor = (L, ns) => assetLog.filter((r) => r.ns === ns && r.hash === (ns 
 try {
   /* ============================================================ 创建者:同步卡的源码进内容库 */
   const node = await wsAsCreator();
+  await seedProject(node, made.projectId, NAME);
   const put = await node.ask({ type: 'content.put', kind: 'card-source', key: SYNCED_KEY, body: SYNCED_SOURCE });
   check(put.type === 'content.stored', '创建者写卡片源码(card-source)', put);
 
@@ -618,6 +632,7 @@ try {
     const NAME2 = `ouc2-${stamp}`;
     const made2 = await createSharedProject({ base: DOC_DIRECT, name: NAME2, mode: 'free', creator, password: PROJECT_PW });
     const node2 = await wsAsCreator(made2.projectId);
+    await seedProject(node2, made2.projectId, NAME2);
     const SYNCED2_ID = 'probe-synced-card-b';
     const put2 = await node2.ask({ type: 'content.put', kind: 'card-source', key: `src/cards/user/${SYNCED2_ID}.tsx`,
       body: SYNCED_SOURCE.replaceAll(SYNCED_ID, SYNCED2_ID).replace(SYNCED_NAME, '探针同步卡乙') });

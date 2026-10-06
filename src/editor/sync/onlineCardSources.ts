@@ -127,6 +127,13 @@ export function entriesOf(keys: readonly string[], parsed: ReadonlyMap<string, P
   return out;
 }
 
+/** 此刻在跑的那份(同一页只有一份);`nodeCardInfoLive.ts` 经它读同步来的源码算代码身份(块 N) */
+let activeSources: OnlineCardSources | null = null;
+/** 同步来的源码的只读入口:入口文件的键表与「键 → 正文与哈希」;没有在跑的回 null */
+export function activeCardSourceReader(): { entries: () => string[]; read: (key: string) => { body: string; hash: string } | null } | null {
+  return activeSources ? activeSources.reader() : null;
+}
+
 export class OnlineCardSources {
   private readonly deps: OnlineCardSourcesDeps;
   private link: unknown = null;
@@ -145,6 +152,15 @@ export class OnlineCardSources {
 
   constructor(deps: OnlineCardSourcesDeps) {
     this.deps = deps;
+    activeSources = this;
+  }
+
+  /** 只读入口(见 `activeCardSourceReader`) */
+  reader(): { entries: () => string[]; read: (key: string) => { body: string; hash: string } | null } {
+    return {
+      entries: () => this.entries.map((e) => e.source).filter((k): k is string => typeof k === "string" && !!k),
+      read: (key) => this.cache.get(key) ?? null,
+    };
   }
 
   private apply(entries: SyncedUserCard[]): void {
@@ -320,6 +336,7 @@ export class OnlineCardSources {
   /** 停下并清表(离开在线页面、换档重建时) */
   stop(): void {
     this.stopped = true;
+    if (activeSources === this) activeSources = null;
     this.setBundles([], null);
     this.cache.clear();
     this.parsed = new Map();

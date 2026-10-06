@@ -1,7 +1,7 @@
 import { createNodeSession } from './session.mjs';
 import { lockKeyOf, splitPlan } from './split.mjs';
 import { createTaskRunner, untilAborted } from './task-runner.mjs';
-import { isListPlan, priorityBand } from '../render-queue/messages.mjs';
+import { browserCardsOf, isListPlan, priorityBand } from '../render-queue/messages.mjs';
 import { LOCK_IDLE_TAKEOVER_MS } from '../render-queue/constants.mjs';
 
 /**
@@ -366,7 +366,11 @@ export function createLocalNode({
     // plan 带的 cardLocks / takeover 随展开原样传给切分(契约 F.2)。
     // M7 D1:认领回包带的浏览器指纹(文档服务上本项目在线、同一用户的纯浏览器节点)交给切分
     const browserFingerprints = Array.isArray(ctx.browserFingerprints) ? ctx.browserFingerprints : [];
-    const base = { ...plan, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, ...listPlanOverrides(task) };
+    // 块 N:本页(同一用户)能运行哪些用户卡、图卡——页面自报在清单计划的 `input.browser`,文档服务给的 `browserCardEnvFingerprints`
+    // 是「确实有这样一台在线节点」的凭据;两边对得上才给浏览器出用户卡、图卡的那一份(`splitPlan` 的 `browserCards`)
+    const browserCards = browserCardsOf(task?.input?.browser);
+    const browserCardEnvFingerprints = Array.isArray(ctx.browserCardEnvFingerprints) ? ctx.browserCardEnvFingerprints : [];
+    const base = { ...plan, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, ...listPlanOverrides(task) };
     const outcome = await publishDerived(run, base, plan?.cardLocks);
     if (!holding(run)) return discard();
     const { derived, published, relocked, gaveUp } = outcome;

@@ -6,7 +6,8 @@
  *
  *   0  纯浏览器只接本人的任务(服务端已按凭证把关,这里再挡一次)
  *   1  环境指纹、代码版本、卡片源码版本对得上(`plan` 任务只查代码版本:谁认领谁的指纹就是这一版的指纹;
- *      带 `requires.preferNode` 的 `plan` 另查指纹,M6c X4);`requires.localMedia` 给了就要等于本节点的
+ *      带 `requires.preferNode` 的 `plan` 另查指纹,M6c X4;纯浏览器节点接用户卡、图卡的任务时比的是
+ *      `node.cardEnvFingerprint`——环境三项再加在线卡片运行时版本,块 N);`requires.localMedia` 给了就要等于本节点的
  *      `nodeId`(M6c X2 本地档能力闸,`node.nodeId` 由会话补上)
  *   2  要求 `capabilities.streams` 的任务(M6c X1 起的流任务)需要节点报 `streams: true`(没报这一项的旧形状
  *      按 `transcode` 算);
@@ -20,6 +21,7 @@
  *   7  纯浏览器的快照任务只收共享档(`tier: 'shared'`)的独立卡(`input.compositing === 'independent'`,切分方在浏览器那一份
  *      里写):M7 契约第 3.2 节与 D4(桌面只把独立卡的页面测量帧当预渲染结果;本地档要整场景渲)。不只靠切分方把本地档记 heavy。
  *      画布卡(`input.canvasHeavy`)也不收:浏览器逐帧顺推生成快照,画布卡与桌面 4 帧一批的结果不等价(M7 探针 P2,主会话裁定)
+ *      用户卡、图卡的任务(块 N)另要 `requires.cardSources` 非空:用户卡一定有代码身份,空了说明切分方没给身份可对
  *   8  仅供测试(M7 契约 D15):节点描述带 `planOnly: true` 时只认领 `plan`、不认领细任务 —— 验收时切分方只切分,
  *      不和纯浏览器抢同一批卡。只在测试环境变量 `PROMPTCUT_TEST_PLAN_ONLY=1` 时由调用方设(`testPlanOnly`),生产不设
  *
@@ -73,7 +75,12 @@ export function checkClaimable(task, node) {
   // 1
   // 带 preferNode 的 plan(M6c X4)窗口过后给「指纹符合的 pc」,所以也查指纹;没带的旧形状照旧不查
   const checksFingerprint = !plan || requires.preferNode != null;
-  if (checksFingerprint && requires.envFingerprint != null && requires.envFingerprint !== node?.envFingerprint) {
+  // 块 N:纯浏览器节点执行用户卡、图卡的任务,指纹按「环境三项 + 在线卡片运行时版本」比;内置卡与别的节点照旧比 envFingerprint。
+  // 浏览器没有 cardEnvFingerprint(没报运行时版本)时拿 envFingerprint 比,与这种任务的指纹自然对不上
+  const runsCardCode = requires.userCards === true || requires.graphCards === true;
+  const nodeFingerprint = browser && runsCardCode && typeof node?.cardEnvFingerprint === 'string' && node.cardEnvFingerprint !== ''
+    ? node.cardEnvFingerprint : node?.envFingerprint;
+  if (checksFingerprint && requires.envFingerprint != null && requires.envFingerprint !== nodeFingerprint) {
     return reject(1, 'env-fingerprint');
   }
   // 本地档能力闸(M6c X2):输入里有只在发布方本机的素材(没有内容哈希),只有那个节点接
@@ -116,6 +123,8 @@ export function checkClaimable(task, node) {
     if (task.tier !== 'shared') return reject(7, 'tier');
     if (task.input?.compositing !== 'independent') return reject(7, 'not-independent');
     if (task.input?.canvasHeavy === true) return reject(7, 'canvas-heavy');
+    // 块 N:用户卡、图卡一定有代码身份;没有(`cardSources` 为空)说明切分方没给身份可对,浏览器不接
+    if (runsCardCode && Object.keys(requires.cardSources ?? {}).length === 0) return reject(7, 'card-source-missing');
   }
 
   // 8(M7 D15,仅供测试):只切分、不认领细任务
