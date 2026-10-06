@@ -19,8 +19,11 @@ export interface ExportState {
   /** 当前这一步的已完成帧 / 总帧数 */
   done: number;
   total: number;
-  /** render = 浏览器逐帧渲卡片;compose = ffmpeg 把视频素材和卡片合成成片。两步各走一遍进度条 */
-  stage?: "render" | "compose";
+  /**
+   * sound = 导出开始时先生成声音(done / total 是段数,done 可带小数);render = 浏览器逐帧渲卡片;
+   * compose = ffmpeg 把视频素材和卡片合成成片。每一步各走一遍进度条
+   */
+  stage?: "sound" | "render" | "compose";
   /** 用户选定的落点，没选就是服务端的产物目录 */
   target: string;
   outDir?: string;
@@ -107,7 +110,9 @@ export function ExportDialog(props: {
             </div>
             <div className="pc-export-meta">
               <span>{pct}%</span>
-              <span>{state.stage === "compose" ? "合成视频" : "渲染卡片"} {state.done} / {state.total} 帧</span>
+              <span data-pc="export-stage" data-stage={state.stage ?? "render"}>{state.stage === "sound"
+                ? `生成声音 ${Math.min(state.total, Math.floor(state.done) + 1)} / ${state.total} 段`
+                : `${state.stage === "compose" ? "合成视频" : "渲染卡片"} ${state.done} / ${state.total} 帧`}</span>
               <span>已用 {fmtDuration(elapsed)}</span>
             </div>
             <div className="pc-export-hint">

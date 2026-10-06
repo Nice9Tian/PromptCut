@@ -1,10 +1,34 @@
 import { findClip, findSoundAsset, newId, soundAssetFrom, type MediaAsset, type Track, type TrackClip } from "../../kernel/project";
 import { stripAudioFxFromCuts, withoutAudioFx } from "../../kernel/cuts";
 import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
+import { getCard } from "../../kernel/registry";
+import { clipHasAudio, clipHasEmbeddedAudio } from "../../kernel/cardAudioRendition.mjs";
 
 import { state, setProject, updateTrack } from "../core";
 
 export const audio = {
+
+  /** 只改声音，不改画面不透明度；选中多段时先校验再一次写入。 */
+  setClipsMuted(clipIds: string[], muted: boolean) {
+    const p = state.project;
+    if (!Array.isArray(clipIds) || !clipIds.length || clipIds.length > 100 || clipIds.some(id => typeof id !== "string")) return { ok: false, code: "INVALID_CLIP_IDS", error: "请选择 1 到 100 个片段" };
+    if (typeof muted !== "boolean") return { ok: false, code: "INVALID_MUTE", error: "muted 必须是布尔值" };
+    const ids = new Set(clipIds);
+    for (const id of ids) {
+      const hit = findClip(p, id);
+      if (!hit) return { ok: false, code: "CLIP_NOT_FOUND", clipId: id, error: "找不到片段" };
+      if (hit.track.locked) return { ok: false, code: "TRACK_LOCKED", clipId: id, error: "请先解锁序列" };
+      if (!clipHasAudio(p, hit.clip, getCard)) return { ok: false, code: "NO_CLIP_AUDIO", clipId: id, error: "这个片段没有音频" };
+    }
+    if ([...ids].some(id => !!findClip(p, id)!.clip.audioMuted !== muted)) setProject({ ...p, tracks: p.tracks.map(track => ({
+      ...track, clips: track.clips.map(clip => ids.has(clip.id) ? { ...clip, audioMuted: muted } : clip),
+    })) });
+    return { ok: true, clipIds: [...ids], muted };
+  },
+
+  setClipMuted(clipId: string, muted: boolean) {
+    return audio.setClipsMuted([clipId], muted);
+  },
 
   /* ---------- 素材 ---------- */
 
@@ -17,8 +41,7 @@ export const audio = {
     const hit = findClip(p, clipId);
     if (!hit) return { ok: false, error: "找不到片段" };
     if (hit.track.locked) return { ok: false, error: "请先解锁序列" };
-    const media = p.media.find((m) => m.id === hit.clip.mediaId);
-    if (!media || (media.kind !== "video" && media.kind !== "audio")) return { ok: false, error: "只能调整音频或视频片段的音量" };
+    if (!clipHasAudio(p, hit.clip, getCard)) return { ok: false, error: "只能调整带声音的素材或卡片音量" };
     if (typeof volume !== "number" || !Number.isFinite(volume) || volume < 0 || volume > 1) return { ok: false, error: "音量必须是 0 到 1 之间的数字" };
     if (volume !== (hit.clip.audioVolume ?? 1)) {
       setProject(updateTrack(p, hit.track.id, (track) => ({
@@ -29,27 +52,48 @@ export const audio = {
   },
 
   separateAudio(clipId: string) {
+    const result = audio.separateAudios([clipId]);
+    return result.ok ? { ok: true as const, ...result.items![0] } : result;
+  },
+
+  /** 一次多选分离：任何内嵌音频卡片或无效选择都在写项目之前拒绝。 */
+  separateAudios(clipIds: string[]) {
     const p = state.project;
-    const hit = findClip(p, clipId);
-    if (!hit) return { ok: false, error: "找不到视频片段" };
-    if (hit.track.locked) return { ok: false, error: "请先解锁序列" };
-    const src = p.media.find((m) => m.id === hit.clip.mediaId);
-    if (!src || src.kind !== "video") return { ok: false, error: "只能分离视频片段的音频" };
-    if (hit.clip.audioMuted) return { ok: false, error: "此视频已静音或已分离音频" };
-    const media = findSoundAsset(p, src.id) ?? soundAssetFrom(src, newId("m"));
-    const audio: TrackClip = {
-      id: newId("c"), cardId: "", mediaId: media.id, params: {}, label: media.name,
-      start: hit.clip.start, end: hit.clip.end, mediaOffset: hit.clip.mediaOffset,
-      opacity: hit.clip.opacity, fadeIn: hit.clip.fadeIn, fadeOut: hit.clip.fadeOut, audioVolume: hit.clip.audioVolume,
-      // 挂着的音频效果跟着声音走:分离出来的那段就是原来出声的那段
-      ...(hit.clip.audioFx ? { audioFx: hit.clip.audioFx } : null),
-    };
-    const track: Track = { id: newId("t"), name: media.name, muted: hit.track.muted, hidden: hit.track.hidden, clips: [audio] };
-    const tracks = p.tracks.map((t) => t.id === hit.track.id
-      ? { ...t, clips: t.clips.map((c) => c.id === clipId ? { ...c, audioMuted: true } : c) } : t);
-    tracks.splice(p.tracks.indexOf(hit.track) + 1, 0, track);
-    setProject({ ...p, tracks, media: p.media.includes(media) ? p.media : [...p.media, media] });
-    return { ok: true, clipId, audioClipId: audio.id, trackId: track.id, mediaId: media.id };
+    if (!Array.isArray(clipIds) || !clipIds.length || clipIds.length > 100 || clipIds.some(id => typeof id !== "string")) return { ok: false, code: "INVALID_CLIP_IDS", error: "请选择 1 到 100 个片段" };
+    const ids = new Set(clipIds);
+    const hits = [];
+    for (const clipId of ids) {
+      const hit = findClip(p, clipId);
+      if (!hit) return { ok: false, code: "CLIP_NOT_FOUND", clipId, error: "找不到片段" };
+      if (clipHasEmbeddedAudio(p, hit.clip, getCard)) return { ok: false, code: "EMBEDDED_CARD_AUDIO_UNSEPARABLE", clipId,
+        error: "动效卡片的声音写在卡片代码里，不能分离音轨。可以单独静音该卡片。未修改任何片段。" };
+      if (hit.track.locked) return { ok: false, code: "TRACK_LOCKED", clipId, error: "请先解锁序列" };
+      const src = p.media.find(m => m.id === hit.clip.mediaId);
+      if (!src || src.kind !== "video") return { ok: false, code: "NOT_VIDEO_MEDIA", clipId, error: "只能分离普通视频素材的音频。未修改任何片段。" };
+      if (hit.clip.audioMuted) return { ok: false, code: "ALREADY_MUTED", clipId, error: "此视频已静音或已分离音频。未修改任何片段。" };
+      hits.push({ ...hit, src });
+    }
+    const media = [...p.media], generated = new Map<string, Track[]>();
+    const items: { clipId: string; audioClipId: string; trackId: string; mediaId: string }[] = [];
+    for (const hit of hits) {
+      const asset = findSoundAsset({ ...p, media }, hit.src.id) ?? soundAssetFrom(hit.src, newId("m"));
+      if (!media.includes(asset)) media.push(asset);
+      const sound: TrackClip = {
+        id: newId("c"), cardId: "", mediaId: asset.id, params: {}, label: asset.name,
+        start: hit.clip.start, end: hit.clip.end, mediaOffset: hit.clip.mediaOffset,
+        opacity: hit.clip.opacity, fadeIn: hit.clip.fadeIn, fadeOut: hit.clip.fadeOut, audioVolume: hit.clip.audioVolume,
+        ...(hit.clip.audioFx ? { audioFx: hit.clip.audioFx } : null),
+      };
+      const track: Track = { id: newId("t"), name: asset.name, muted: hit.track.muted, hidden: hit.track.hidden, clips: [sound] };
+      generated.set(hit.track.id, [...(generated.get(hit.track.id) ?? []), track]);
+      items.push({ clipId: hit.clip.id, audioClipId: sound.id, trackId: track.id, mediaId: asset.id });
+    }
+    const tracks = p.tracks.flatMap(track => [
+      { ...track, clips: track.clips.map(clip => ids.has(clip.id) ? { ...clip, audioMuted: true } : clip) },
+      ...(generated.get(track.id) ?? []),
+    ]);
+    setProject({ ...p, tracks, media });
+    return { ok: true, items };
   },
 
   audioFromVideo(mediaId: string): { ok: true; media: MediaAsset; created: boolean } | { ok: false; error: string } {
@@ -73,6 +117,7 @@ export const audio = {
   convertClipToAudio(clipId: string): { ok: true; mediaId: string; created: boolean; already?: boolean } | { ok: false; error: string } {
     const hit = findClip(state.project, clipId);
     if (!hit) return { ok: false, error: `找不到片段 ${clipId}` };
+    if (clipHasEmbeddedAudio(state.project, hit.clip, getCard)) return { ok: false, error: "动效卡片的内嵌声音不能分离或转换为声音；可以单独静音该卡片" };
     if (!hit.clip.mediaId) return { ok: false, error: "这段是卡片,不是素材,没有声音可转" };
     const r = audio.audioFromVideo(hit.clip.mediaId);
     if (!r.ok) return r;

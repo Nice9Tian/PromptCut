@@ -9,7 +9,7 @@ import fs from 'fs/promises';
 import fsSync from 'node:fs';
 import { spawn } from 'child_process';
 import { buildComposeArgs, clipFrameRange } from '../export-compose.mjs';
-import { buildAudioPlan, buildFfmpegArgs, hasAudioStream } from './mux-audio.mjs';
+import { buildAudioPlan, buildFfmpegArgs, playableAudioPlan } from './mux-audio.mjs';
 import { findFfmpeg, ffprobeOf, runFfmpegProgress, streamPngVideo } from './ffmpeg.mjs';
 import { DEFAULT_URL, openBakery } from './chrome.mjs';
 import { bakeFrames } from './bake.mjs';
@@ -113,7 +113,7 @@ export async function exportFrames(opts) {
           const ffprobeCmd = ffprobeOf(ffmpegCmd);
           // 和画面层同一套找素材的规则:/@media/<文件> 也要经素材服务的 HTTP 找得到,不然配乐 / 配音全被跳过
           const sourceOf = (m) => mediaSourceOf(m, { outDir, pageUrl: opts.url || DEFAULT_URL });
-          const plan = buildAudioPlan(proj, outDir, undefined, sourceOf).filter((c) => c.cardAudio || hasAudioStream(c.file, ffprobeCmd));
+          const plan = playableAudioPlan(buildAudioPlan(proj, outDir, undefined, sourceOf), ffprobeCmd);
           if (plan.length > 0) {
             const preview = path.join(outDir, 'preview.mp4');
             const withAudio = path.join(outDir, 'preview-audio.mp4');
@@ -131,7 +131,7 @@ export async function exportFrames(opts) {
                 // 裁好的 float32 wav 和整条 mix.wav 一小时就是一两 GB,合进成片之后就没用了
                 await fs.rm(path.join(outDir, 'audio'), { recursive: true, force: true }).catch(() => {});
               } catch (e) {
-                if (plan.some(c => c.cardAudio)) throw e;
+                if (plan.some(c => c.cardAudio || c.soundEffect)) throw e;
                 const fx = plan.filter((c) => c.fx).length;
                 console.error('Chrome 混音失败,退回 ffmpeg 直接混' + (fx ? '(' + fx + ' 段挂着的音频效果会丢)' : '') + ':', e.message);
               }

@@ -9,6 +9,7 @@
  */
 
 import { audioFxOfClip } from "./audioFx.mjs";
+import { clipHasEmbeddedAudio, resolveCardAudioRendition } from "./cardAudioRendition.mjs";
 
 const r3 = (n) => +Number(n).toFixed(3);
 
@@ -21,19 +22,27 @@ export function audioPlanOf(project) {
   for (const tr of project.tracks || []) {
     if (tr.hidden || tr.muted) continue;
     for (const c of tr.clips || []) {
-      if (!c.mediaId || c.audioMuted) continue;
-      const m = (project.media || []).find((x) => x.id === c.mediaId);
+      if (c.audioMuted) continue;
+      const embedded = clipHasEmbeddedAudio(project, c);
+      const rendition = embedded ? resolveCardAudioRendition(project, c) : null;
+      const m = rendition?.media ?? (project.media || []).find((x) => x.id === c.mediaId);
+      // 合成声音是已入库的项目内容；丢了引用不能悄悄导出无声片段。
+      const generated = embedded || !!(c.soundEffect || m?.soundEffect);
+      if (generated && (!m || !m.url)) throw new Error(`${c.id} 的合成音效素材缺失，请重新生成或恢复素材`);
+      if (!c.mediaId && !embedded) continue;
       if (!m || !m.url || m.kind === "image") continue;
-      const dur = r3(c.end - c.start);
+      // 普通旧素材保持既有口径；合成 WAV 的定位保留到采样，不能先舍入成毫秒。
+      const time = generated ? (value) => value : r3;
+      const dur = time(c.end - c.start);
       if (!(dur > 0)) continue;
       const def = audioFxOfClip(project, c);
       out.push({
         clipId: c.id,
         trackId: tr.id,
         mediaId: m.id,
-        start: r3(c.start),
+        start: time(c.start),
         dur,
-        offset: r3(c.mediaOffset ?? 0),
+        offset: time(rendition?.offset ?? c.mediaOffset ?? 0),
         volume: (c.opacity ?? 1) * (c.audioVolume ?? 1),
         fadeIn: c.fadeIn ?? 0,
         fadeOut: c.fadeOut ?? 0,

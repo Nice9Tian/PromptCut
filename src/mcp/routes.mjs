@@ -20,6 +20,10 @@
  * 顺序照抄原分发链,方便逐条对账。
  */
 export const TOOL_ROUTES = {
+  sound_presets: { method: "soundPresets", passArgs: false, awaited: false },
+  sound_generate: { method: "soundGenerate", passArgs: true, awaited: true },
+  sound_status: { method: "soundStatus", passArgs: true, awaited: false },
+  sound_cancel: { method: "soundCancel", passArgs: true, awaited: false },
   background_job_status: { method: "backgroundJobStatus", passArgs: true, awaited: false },
   list_cards: { method: "listCards", passArgs: true, awaited: false },
   get_project: { method: "getProject", passArgs: false, awaited: false },
@@ -49,6 +53,9 @@ export const TOOL_ROUTES = {
   duplicate_clip: { method: "duplicateClip", passArgs: true, awaited: false },
   split_clip: { method: "splitClip", passArgs: true, awaited: false },
   set_clip_volume: { method: "setClipVolume", passArgs: true, awaited: false },
+  set_clip_muted: { method: "setClipMuted", passArgs: true, awaited: false },
+  render_card_audio: { method: "renderCardAudio", passArgs: true, awaited: true },
+  cancel_card_audio: { method: "cancelCardAudio", passArgs: true, awaited: false },
   separate_audio: { method: "separateAudio", passArgs: true, awaited: false },
   create_audio: { method: "createAudio", passArgs: true, awaited: false },
   set_emphasis: { method: "setEmphasis", passArgs: true, awaited: false },

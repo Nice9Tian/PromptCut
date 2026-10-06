@@ -1,3 +1,5 @@
+import { cardSourceVersion } from "../../render/cardSourceVersion.mjs";
+import { cyrb53 } from "../../render/cyrb53.mjs";
 /**
  * 在线页面读内容库里的卡片源码,认出「已知但本机不能运行」的用户卡(C10 契约第 9 节「识别」,2026-09-29 用户改语义)。
  *
@@ -37,6 +39,8 @@ export function isCardSourceModuleKey(key: unknown): key is string {
 type Request = (msg: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>;
 
 export interface OnlineCardSourcesDeps {
+  /** 浏览器入口注入原始内置源码表，避免纯同步/Node侧依赖Vite宏。 */
+  sourceFiles?: Record<string, string>;
   request: Request;
   /** 此刻的连接(共享项目的链接对象;变了就清表重取,null = 没连上共享项目) */
   linkKey: () => unknown;
@@ -56,7 +60,7 @@ export interface OnlineCardSourcesDeps {
   builtins?: (key: string) => Readonly<Record<string, unknown>> | null | undefined;
 }
 
-type ParsedCard = Pick<ParsedCardSource, "id" | "name"> & Partial<Omit<ParsedCardSource, "id" | "name">>;
+type ParsedCard = Pick<ParsedCardSource, "id" | "name"> & Partial<Omit<ParsedCardSource, "id" | "name">> & { audioSourceVersion?: string };
 
 /**
  * 一份列表 + 已取到的正文 → 同步用户卡的条目(按键、按源码里的先后;同一 id 取第一条)。
@@ -71,6 +75,8 @@ export function entriesOf(keys: readonly string[], parsed: ReadonlyMap<string, P
       seen.add(c.id);
       out.push({
         id: c.id, name: c.name, source: key,
+        ...(c.embeddedAudio ? { embeddedAudio: true } : {}),
+        ...(c.audioSourceVersion ? { audioSourceVersion: c.audioSourceVersion } : {}),
         ...(c.description !== undefined ? { description: c.description } : {}),
         ...(c.defaults !== undefined ? { defaults: c.defaults } : {}),
         ...(c.controls !== undefined ? { controls: c.controls } : {}),
@@ -203,7 +209,9 @@ export class OnlineCardSources {
       for (const k of entryKeys) {
         const cur = this.cache.get(k);
         if (!cur) continue;
-        next.set(k, parseCardSource(cur.body, { key: k, files, builtins: this.deps.builtins }));
+        const sourceFiles = { ...this.deps.sourceFiles, ...Object.fromEntries([...this.cache].map(([key, value]) => [`/${key}`, value.body])) };
+        next.set(k, parseCardSource(cur.body, { key: k, files, builtins: this.deps.builtins }).map(card => ({ ...card,
+          audioSourceVersion: cyrb53(`user:${cardSourceVersion(card, sourceFiles, `/${k}`)}`) })));
       }
       this.parsed = next;
     }

@@ -91,3 +91,17 @@ test("播放中:重载之后元数据到了就对齐并起播", () => {
     assert.equal(el.paused, false);
   } finally { delete window.__pcRealNow; }
 });
+
+test("播放中:元素先放到了素材尽头、播放头还在这一段里,不从头重播", () => {
+  // 浏览器对放完了的元素调 play() 是「回到 0 重播」;驱动不能在片段末尾触发它
+  const el = new FakeVideo();
+  el.readyState = 4;
+  el.pos = 3.945;
+  el.ended = true;
+  const play = el.play.bind(el);
+  el.play = () => { if (el.ended) { el.ended = false; el.pos = 0; } return play(); };
+  driveMedia(el, { target: 3.733, playing: true, volume: 1, scrubbing: false });
+  assert.equal(el.currentTime, 3.945, "没有回到开头");
+  assert.equal(el.paused, true, "放完了就安静等播放头走出这一段");
+  assert.deepEqual(el.seeks, []);
+});
