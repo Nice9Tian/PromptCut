@@ -36,6 +36,9 @@
  *    参数面板说明「图形能力不够」、舞台不挂图卡的画布,DOM 用户卡不受影响。
  * E8 源码更新后在线页面跟着换:创建者把 `oce-visual` 的源码换一版,10 秒内舞台里的画面是新版的、成本身份(测量记录里的 identityKey)换了、
  *    浏览器节点报的代码身份换了。
+ * E10 导出页不执行卡片代码、贴同步卡的预渲染原尺寸:另开一个只有一张同步画面卡的项目,渲染节点的预渲染原尺寸由探针替它写;在线逐帧导出(`exportVideoBrowser`,
+ *     同源 `?export=1` 的导出页)进行中采样导出页:没有卡片模块的顶层记号(编辑页面里也没有)、同步卡的包裹层挂出来但没有活内容、每一帧都换成预渲染原尺寸;导出完成,成片第一帧
+ *     左上角像素是预渲染原尺寸的颜色。
  * E9 手机低内存档(仿手机)按现有规则走:运行状态 `low-memory`、参数面板说明「低内存档」、两个文档里都没有执行卡片代码的记号,没有预渲染结果的卡显示图标。
  *
  * 带耗时门槛的项这里不设(时限只放宽到够 PC 与笔记本跑完)。不打印令牌、口令(输出里的票据形状串一律抹掉)。
@@ -297,19 +300,19 @@ function makeLayer(clipId, color, fps, count, firstFrame = 0) {
   fakeAssets.set(`px/${L.small}`, { type: 'image/png', bytes: png });
   return L;
 }
-async function writeManifests(L) {
+async function writeManifests(L, conn = { ask }) {
   const half = L.count / 2;
   for (const [from, to] of [[0, half - 1], [half, L.count - 1]]) {
     const frames = [], small = [];
     for (let f = from; f <= to; f++) { frames.push([f, L.full, 300]); small.push([f, L.small, 80]); }
-    const r = await ask({ type: 'content.put', kind: 'snapshot-manifest', key: `${L.rk}:${from}-${to}`, body: { v: 1, kind: 'snapshot', tier: 'shared', resultKey: L.rk, dirKey: L.rk, entryKey: null, range: { from, to }, canvasHeavy: false, frames, small } });
+    const r = await conn.ask({ type: 'content.put', kind: 'snapshot-manifest', key: `${L.rk}:${from}-${to}`, body: { v: 1, kind: 'snapshot', tier: 'shared', resultKey: L.rk, dirKey: L.rk, entryKey: null, range: { from, to }, canvasHeavy: false, frames, small } });
     check(`写段清单 ${L.clipId}`, r.type === 'content.stored', r);
   }
 }
-async function writeLayerMap(projectId, fps, layers) {
+async function writeLayerMap(projectId, fps, layers, conn = { ask }) {
   const map = { v: 2, kind: 'layer-map', projectId, fps, width: 1920, height: 1080, span: layers[0].count / 2, at: Date.now(),
     layers: layers.map((L) => ({ clipId: L.clipId, kind: 'html', key: L.rk, tier: 'shared', resultKey: L.rk, dirKey: L.rk, entryKey: null, firstFrame: L.firstFrame, count: L.count, contentKey: L.ck, envFingerprint: 'oce0probe0fp0000' })) };
-  const r = await ask({ type: 'content.put', kind: 'snapshot-manifest', key: `layers:${projectId}`, body: map });
+  const r = await conn.ask({ type: 'content.put', kind: 'snapshot-manifest', key: `layers:${projectId}`, body: map });
   check('写层表', r.type === 'content.stored', r);
 }
 
@@ -339,7 +342,7 @@ async function launch(extra = []) {
   browsers.push(b);
   return b;
 }
-async function openMember(browser, tag, { mobile = false } = {}) {
+async function openMember(browser, tag, { mobile = false, name = NAME, cardIds = CARD_IDS } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   page.on('dialog', (d) => void d.accept());
@@ -355,13 +358,13 @@ async function openMember(browser, tag, { mobile = false } = {}) {
   const typeInto = async (sel, value) => { await page.waitForSelector(sel, { visible: true, timeout: 30_000 }); await page.click(sel, { clickCount: 3 }); await page.keyboard.press('Backspace'); await page.type(sel, value, { delay: 5 }); };
   await page.goto(`${ORIGINS.editor}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto('[data-pc="join-name"]', NAME);
+  await typeInto('[data-pc="join-name"]', name);
   await typeInto('[data-pc="join-username"]', `m-${tag.toLowerCase()}`);
   await typeInto('[data-pc="join-password"]', PROJECT_PW);
   await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until(`${tag} 时间轴`, () => page.evaluate(() => !!window.__pcStore), 30_000);
-  await until(`${tag} 页面认出同步来的卡`, () => page.evaluate((ids) => { const c = window.__pcCardSources?.()?.cards ?? []; return ids.every((id) => c.some((x) => x.id === id)); }, CARD_IDS), 60_000, 500);
+  await until(`${tag} 页面认出同步来的卡`, () => page.evaluate((ids) => { const c = window.__pcCardSources?.()?.cards ?? []; return ids.every((id) => c.some((x) => x.id === id)); }, cardIds), 60_000, 500);
   const stageFrames = () => page.frames().filter((f) => /[?&]stage=1/.test(f.url()) && !f.detached);
   const run = () => page.evaluate((ids) => { const d = window.__pcCardExecDiag?.(); return d ? { available: d.available, visual: d.visual, run: Object.fromEntries(ids.map((id) => [id, d.run?.[id] ?? null])), graph: Object.fromEntries(Object.entries(d.stages).map(([k, v]) => [k, v.graph])) } : null; }, CARD_IDS).catch(() => null);
   /** 可见舞台(两台里此刻可见的那个;低内存档只有一个) */
@@ -524,6 +527,8 @@ const markersIn = async (m) => {
 };
 
 try {
+  const ONLY_E10 = process.env.OCE_ONLY === 'E10'; // 排障用:只跑 E10
+  if (!ONLY_E10) {
   /* ============================================================ 真显卡的普通档页面 */
   const b1 = await launch();
   summary.chrome = await b1.version();
@@ -714,6 +719,82 @@ try {
   await A.close();
   await b1.close().catch(() => {});
 
+  }
+
+  /* ============================================================ E10 导出页不执行卡片代码、贴同步卡的预渲染原尺寸 */
+  console.log('\n== E10 导出页');
+  {
+    const NAME2 = `${NAME}-x`;
+    const made2 = await createSharedProject({ base: DOC_DIRECT, name: NAME2, mode: 'free', creator, password: PROJECT_PW });
+    const seeded2 = await seedSharedProject({ base: DOC_DIRECT, projectId: made2.projectId, creator, name: NAME2, deviceId: 'oce-probe-seed-02' });
+    const protocols2 = await buildAuthProtocols({ base: DOC_DIRECT, projectId: made2.projectId, username: creator.username, deviceId: 'oce-probe-node-02', deviceName: 'probe-node2', as: 'creator', password: creator.password, role: 'page' });
+    const ws2 = new WebSocket(DOC_DIRECT.replace(/^http/, 'ws'), protocols2);
+    await new Promise((resolve, reject) => { ws2.addEventListener('open', resolve); ws2.addEventListener('error', reject); });
+    const conn2 = { ask: (msg) => new Promise((resolve) => {
+      const reqId = `q${Math.random().toString(36).slice(2)}`;
+      const on = (ev) => { const m = JSON.parse(String(ev.data)); if (m.reqId === reqId) { ws2.removeEventListener('message', on); resolve(m); } };
+      ws2.addEventListener('message', on); ws2.send(JSON.stringify({ ...msg, reqId }));
+    }) };
+    await conn2.ask({ type: 'project.open', projectId: made2.projectId });
+    const put2 = await conn2.ask({ type: 'content.put', kind: 'card-source', key: CARD_KEYS['oce-visual'], body: visualSource('OCE', '#33ccff') });
+    check('E10 准备:第二个项目(只有一张同步的画面卡)写进内容库', seeded2.ok === true && put2.type === 'content.stored', { seeded: seeded2.ok, put: put2.type });
+    const b4 = await launch();
+    const X = await openMember(b4, 'X', { name: NAME2, cardIds: ['oce-visual'] });
+    const EXP_FPS = 30, EXP_COLOR = [10, 140, 60];
+    const setup2 = await X.page.evaluate(() => {
+      const S = window.__pcStore;
+      S.actions.editCardProject((p) => ({ ...p, duration: 1,
+        tracks: [{ id: 'oce-exp-t', name: '导出', clips: [{ id: 'oce-exp-v', cardId: 'oce-visual', start: 0, end: 1, params: {}, frame: { x: 0, y: 0, w: 1920, h: 1080 } }] }] }));
+      S.actions.seek(0.2);
+      const p = S.getState().project;
+      return { projectId: p.id, fps: p.fps || 30 };
+    });
+    await until('X 同步卡载入成功', async () => (await X.run())?.run['oce-visual']?.state === 'ready', 120_000, 500);
+    const live2 = await until('X 导出前预览里是活 DOM', async () => (await X.stageState(['oce-exp-v'], { 'oce-exp-v': '[data-oce-visual]' }))?.['oce-exp-v']?.live, 60_000, 500);
+    check('E10 导出前:预览里这张判轻的同步卡是活 DOM', !!live2);
+    // 预渲染原尺寸:纯色快照(左上角没有文字,取像素用)
+    const layer2 = makeLayer('oce-exp-v', '#0a8c3c', EXP_FPS, 30, 0);
+    await writeManifests(layer2, conn2);
+    await writeLayerMap(setup2.projectId, EXP_FPS, [layer2], conn2);
+    await until('X 层表到了', async () => (await X.page.evaluate(() => window.__pcOnlineSnapshots?.()?.layers?.some((l) => l.clipId === 'oce-exp-v' && l.ready > 0))), 60_000, 500);
+    // 导出:一边导出一边在导出页(同源 iframe)里看
+    const seen = { frames: 0, marks: new Set(), live: false, snap: false, urls: new Set() };
+    let done = false;
+    const exportPromise = X.page.evaluate(() => window.__pcIo.exportVideoBrowser({ maxFrames: 15, originals: true })).then((r) => { done = true; return r; }, (e) => { done = true; return { error: String(e?.message ?? e) }; });
+    const t0 = Date.now();
+    while (!done && Date.now() - t0 < 180_000) {
+      for (const fr of X.page.frames()) {
+        if (!/[?&]export=1/.test(fr.url())) continue;
+        seen.urls.add(new URL(fr.url()).origin + new URL(fr.url()).pathname);
+        const st = await fr.evaluate(() => ({ wrappers: [...document.querySelectorAll('[data-pc-clip]')].map((w) => w.getAttribute('data-pc-clip') + ':' + w.childElementCount), mark: globalThis.__pcOceMark ?? null, live: !!document.querySelector('[data-oce-visual]'), snap: /SNAP oce-exp-v/.test(document.body?.innerText ?? '') || !!document.querySelector('[data-probe-snap="oce-exp-v"]') })).catch(() => null);
+        if (st) { seen.wrappers = st.wrappers; seen.frames++; seen.marks.add(String(st.mark)); seen.live ||= st.live; seen.snap ||= st.snap; }
+      }
+      await sleep(80);
+    }
+    const exp = await exportPromise;
+    const topMark = await X.page.evaluate(() => globalThis.__pcOceMark ?? null);
+    summary.E10 = { frames: exp?.result?.frames ?? null, error: exp?.error ?? null, waits: exp?.waits ?? null, stats: exp?.result?.stats ?? null, seen: { wrappers: seen.wrappers ?? null, frames: seen.frames, marks: [...seen.marks], live: seen.live, snap: seen.snap, urls: [...seen.urls] }, topMark };
+    check('E10 导出页(同源 ?export=1 的 iframe)被采样到,里面没有卡片模块的顶层记号,编辑页面里也没有', seen.frames > 0 && seen.marks.size === 1 && seen.marks.has('null') && topMark === null, summary.E10);
+    // 预渲染原尺寸是合成器在导出页给出的场景快照里换进包裹层的(不在导出页的活文档里):导出页里这张卡的包裹层挂着、里面没有任何活内容;每一帧都换了一次
+    check('E10 导出页里同步卡的包裹层挂出来了、里面没有活内容(没有执行卡片代码),每一帧都换成了预渲染原尺寸(heavyReplaced = 15)', seen.live === false && (seen.wrappers ?? []).includes('oce-exp-v:0') && exp?.result?.stats?.heavyReplaced === 15, summary.E10);
+    check('E10 导出完成(15 帧),没有等待提示', exp?.result?.frames === 15 && !exp?.error && (exp?.waits ?? []).length === 0, summary.E10);
+    // 成片第一帧左上角是预渲染原尺寸的颜色
+    let color = null;
+    if (exp?.base64) {
+      const mp4 = path.join(tmp, 'e10.mp4'), png = path.join(OUT, 'e10-frame0.png');
+      fs.writeFileSync(mp4, Buffer.from(exp.base64, 'base64'));
+      const r = spawnSync(ffmpeg, ['-y', '-i', mp4, '-vframes', '1', png], { windowsHide: true, timeout: 60_000 });
+      if (r.status === 0) { const img = PNG.sync.read(fs.readFileSync(png)); const i = (100 * img.width + 100) * 4; color = { rgb: [img.data[i], img.data[i + 1], img.data[i + 2]], size: [img.width, img.height], file: png }; }
+    }
+    summary.E10.frame0 = color;
+    check(`E10 成片第一帧(左上角像素)是预渲染原尺寸的颜色 (${EXP_COLOR}),容差 ±30,且尺寸是项目画幅`, !!color && near(color.rgb, EXP_COLOR, 30) && color.size[0] === 1920 && color.size[1] === 1080, color);
+    check('E10 导出页那一页没有页面错误', X.pageErrors.length === 0, X.pageErrors.slice(0, 3));
+    try { ws2.close(); } catch { /* 已关 */ }
+    await X.close();
+    await b4.close().catch(() => {});
+  }
+
+  if (!ONLY_E10) {
   /* ============================================================ 图形能力不够 */
   console.log('\n== E7(续) 图形能力不够(--disable-gpu --disable-software-rasterizer)');
   const b2 = await launch(['--disable-gpu', '--disable-software-rasterizer']);
@@ -753,6 +834,7 @@ try {
   await P.shot('e9-lowmem');
   check('E9 低内存档没有页面错误', P.pageErrors.length === 0, P.pageErrors.slice(0, 3));
   await P.close();
+  }
 } catch (e) {
   check('探针没有中途出错', false, String(e?.stack ?? e).slice(0, 600));
 } finally {

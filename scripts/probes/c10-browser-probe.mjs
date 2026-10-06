@@ -1718,6 +1718,8 @@ try {
       return st?.live && !st.snapshot && !st.placeholder ? st : null;
     }, 120_000, 1000);
     const lastU = { stage: await userStage(), badge: await badgeOf() };
+    lastU.diag = await P(member, (id) => { const d = window.__pcPreviewDiag?.(); const j = d?.probeRun?.probed?.filter((x) => x.clipId === id) ?? []; return { probedN: j.length, identityKey: j.at(-1)?.identityKey ?? null, suppressed: (d?.suppressed ?? []).includes(id), pending: d?.probeRun?.running ?? null }; }, state.userClip).catch(() => null);
+    lastU.layer = (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null;
     check(!!liveU, '用户卡(新语义):成员页测完判轻,仓库用户卡在可见舞台里活渲(没有快照、没有「需要本地 PC 渲染辅助」图标)', { liveU, last: lastU });
     check(lastU.badge === false, '用户卡(新语义):时间轴上它没有「需要本地 PC 渲染辅助」徽标', lastU);
     const planU = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);

