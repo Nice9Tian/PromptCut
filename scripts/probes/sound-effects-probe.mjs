@@ -3,7 +3,7 @@
  *
  * node scripts/probes/sound-effects-probe.mjs --node-only
  * node --experimental-transform-types scripts/probes/sound-effects-probe.mjs --node-only --av
- * node scripts/probes/sound-effects-probe.mjs --origin http://127.0.0.1:5250
+ * node scripts/probes/sound-effects-probe.mjs --origin http://127.0.0.1:5250 [--asset-port 5255]  (资产服务用 N 与 N+1)
  *   [--chrome /path/to/chrome] [--no-sandbox] [--out work/sound-effects] [--av]
  *
  * The portable Node lane calls the real CardDef.audio, synthesis job manager, asset storage,
@@ -148,7 +148,7 @@ try {
   mediaFiles = new Map();
   let activeUploads = 0, peakUploads = 0;
   const storage = path.join(OUT, 'asset-service');
-  const assetOrigin = await serveAssets(service, storage, 5255);
+  const assetOrigin = await serveAssets(service, storage, Number(arg('asset-port', 5255)));
   const { createSnapUploader, sha256Hex } = await import('../../src/online/snapUploader.ts');
   const uploader = createSnapUploader({ base: () => `${assetOrigin}/api/asset`, ticket: async () => null });
   const manager = flow.createSoundGenerationManager({ upload: async (wav, signal) => {
@@ -208,7 +208,7 @@ try {
   // Real packaging and real service HTTP endpoints; only relative-URL resolution is adapted for Node.
   const oldFetch = globalThis.fetch;
   const unpackRoot = path.join(OUT, 'reopened-asset-service');
-  const unpackOrigin = await serveAssets(service, unpackRoot, 5256);
+  const unpackOrigin = await serveAssets(service, unpackRoot, Number(arg('asset-port', 5255)) + 1);
   let transportOrigin = assetOrigin;
   globalThis.fetch = (input, init) => oldFetch(typeof input === 'string' && input.startsWith('/') ? new URL(input, transportOrigin) : input, init);
   try {
@@ -312,7 +312,7 @@ process.exitCode = report.ok ? 0 : 1;
 
 async function browserLane() {
   const { default: puppeteer } = await import('puppeteer');
-  const browser = await puppeteer.launch({ executablePath: arg('chrome', process.env.PUPPETEER_EXECUTABLE_PATH || undefined), headless: true, args: [...PROBE_CHROME_ARGS, '--autoplay-policy=no-user-gesture-required', ...(argv.includes('--no-sandbox') ? ['--no-sandbox'] : [])] });
+  const browser = await puppeteer.launch({ executablePath: arg('chrome', process.env.PUPPETEER_EXECUTABLE_PATH || undefined), headless: true, args: [...PROBE_CHROME_ARGS, '--autoplay-policy=no-user-gesture-required', '--mute-audio', ...(argv.includes('--no-sandbox') ? ['--no-sandbox'] : [])] });
   try {
     const page = await browser.newPage(); await page.setViewport({ width: 1440, height: 1000 });
     await page.goto(`${ORIGIN}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded', timeout: 120000 });
@@ -320,10 +320,14 @@ async function browserLane() {
     const generated = await page.evaluate(async recipes => {
       const { actions, getState } = await import('/src/store/project.ts');
       const { startSoundGeneration, waitSoundGeneration } = await import('/src/editor/io/soundGeneration.ts');
-      actions.newProject('Browser native sound generation acceptance');
+      // 新项目的缺省时长很短,音效起点必须落在项目内(「音效起点在项目出点之外」),所以先装一个 5 秒的空项目。
+      const { createEmptyProject } = await import('/src/kernel/project.ts');
+      actions.loadProject({ ...createEmptyProject('Browser native sound generation acceptance'), width: 640, height: 360, fps: 30, duration: 5, media: [], tracks: [{ id: 'browser-visual', name: 'visual', clips: [] }] });
+      // 总时长跟着内容走、声音尾巴不会拉长出点:先放一张 5 秒的画面卡当内容,音效才有地方落。
+      actions.addCardClip('mu-typing', 0, { duration: 5 });
       const jobs = Object.entries(recipes).map(([name, recipe]) => startSoundGeneration({ recipe, start: name === 'keyboard' ? .35 : 3.75, name, requestId: `browser-${name}` }));
       const results = await Promise.all(jobs.map(job => waitSoundGeneration(job.id)));
-      return { results, media: getState().project.media.map(m => ({ kind: m.kind, hash: m.hash, url: m.url, hasRecipe: !!m.soundEffect })), clips: getState().project.tracks.flatMap(t => t.clips).map(c => ({ mediaId: c.mediaId, nodeId: c.nodeId })) };
+      return { results, media: getState().project.media.map(m => ({ kind: m.kind, hash: m.hash, url: m.url, hasRecipe: !!m.soundEffect })), clips: getState().project.tracks.flatMap(t => t.clips).filter(c => !c.cardId).map(c => ({ mediaId: c.mediaId, nodeId: c.nodeId })) };
     }, recipes);
     check(generated.results.every(j => j.state === 'succeeded') && generated.media.length === 2 && generated.clips.length === 2 && generated.clips.every(c => c.mediaId && !c.nodeId), 'actual editor generation Worker, asset service and atomic ordinary-clip commit', generated);
     if (!generated.results.every(j => j.state === 'succeeded')) throw new Error('Browser native generation failed');
