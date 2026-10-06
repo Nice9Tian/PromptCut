@@ -32,7 +32,7 @@
  */
 import { QUEUE_DEFAULTS } from '../../render-queue/constants.mjs';
 import { parseInbound, makeMessage, prioritySummaryValue, NODE_TYPES, PUBLISHER_TYPES } from '../../render-queue/messages.mjs';
-import { describeEnvironment, isChromiumUserAgent } from '../../render-node/fingerprint.mjs';
+import { describeEnvironment, describeCardEnvironment, isChromiumUserAgent } from '../../render-node/fingerprint.mjs';
 
 export const RENDER_QUEUE_MODULE = 'render-queue';
 
@@ -103,8 +103,25 @@ function admitNodeHello(principal, msg, nodeUserOf) {
       const envFingerprint = describeEnvironment({ platform: env.platform, renderer: env.renderer, vendor: env.vendor, chromeVersion: env.userAgent }).fingerprint;
       out = { ...msg, envFingerprint };
     }
+    // 块 N(`docs/plan/online-card-exec-contract.md` 第 7 节第 2 条):纯浏览器节点执行用户卡、图卡用的指纹 = 三项环境值再加
+    // 页面报的「在线卡片运行时版本」(`msg.cardRuntime`),同样由这里算、自报的不作数;没报或不合格就没有这个指纹。
+    // 别的 profile、没有 environment 的连接一律去掉这一项:只有浏览器节点有它。`envFingerprint` 一个字不变。
+    const { cardRuntime, ...rest } = out;
+    out = rest;
+    if (msg.profile === 'browser') {
+      const cardEnv = describeCardEnvironment({ platform: env.platform, renderer: env.renderer, vendor: env.vendor, chromeVersion: env.userAgent, cardRuntime });
+      out = { ...out, cardEnvFingerprint: cardEnv.cardEnvFingerprint };
+    } else {
+      const { cardEnvFingerprint: _own, ...others } = out;
+      out = others;
+    }
   } else if (browserOwned) {
     return { error: { reason: 'bad-message', detail: '纯浏览器节点要报 environment（页面的原始环境值），指纹由文档服务算' } };
+  }
+  if (msg.environment === undefined || msg.environment === null) {
+    // 没有原始环境值就算不出指纹:自报的 cardRuntime、cardEnvFingerprint 不作数
+    const { cardRuntime: _r, cardEnvFingerprint: _c, ...bare } = out;
+    out = bare;
   }
   const bound = typeof nodeUserOf === 'function' && typeof msg.nodeId === 'string' ? nodeUserOf(msg.nodeId) : null;
   if (bound !== null && principal && bound !== principal.userId) {

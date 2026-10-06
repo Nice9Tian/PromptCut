@@ -136,6 +136,21 @@ export function createRenderQueue(options = {}) {
 
   /** 非空字符串才算带了指纹；空串、null、缺省都当没带 */
   const fingerprintOf = (v) => (typeof v === 'string' && v !== '' ? v : null);
+
+  /** 任务要不要在节点里执行用户卡、图卡的代码(`requires.userCards` / `requires.graphCards`) */
+  const runsCardCode = (task) => !!task?.requires && typeof task.requires === 'object' && (task.requires.userCards === true || task.requires.graphCards === true);
+  /**
+   * 这个节点认领这个任务时用的环境指纹(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 4 条)。
+   * 纯浏览器节点执行用户卡、图卡的任务用 `cardEnvFingerprint`(三项环境值再加在线卡片运行时版本);其余一律是 `envFingerprint`,
+   * 内置卡的任务与别的 profile 一个字不变。浏览器节点没有 `cardEnvFingerprint`(没报运行时版本、旧页面)时,
+   * 用户卡、图卡的任务对它一律对不上(`NO_CARD_RUNTIME` 不等于任何指纹):看不见、认领被指纹挡下——没声明能执行这些卡的页面
+   * 不会拿到它们的任务(同一台机器上它的 `envFingerprint` 与桌面那份相同,不挡的话它会看见桌面那份)。
+   */
+  const NO_CARD_RUNTIME = '<no-card-runtime>';
+  function nodeFpFor(node, task) {
+    if (node?.profile === 'browser' && runsCardCode(task)) return fingerprintOf(node.cardEnvFingerprint) ?? NO_CARD_RUNTIME;
+    return fingerprintOf(node?.envFingerprint);
+  }
   /** 非空字符串才算给了；requires 里的 localMedia（X2）、preferNode（X4）都这么读 */
   const requiredOf = (task, name) => {
     const v = task.requires ? task.requires[name] : undefined;
@@ -163,7 +178,7 @@ export function createRenderQueue(options = {}) {
    * 节点没带指纹时两条都不生效，与加过滤之前一样；能力过滤仍由节点自己做。
    */
   function envAllows(node, task) {
-    const nodeFp = fingerprintOf(node.envFingerprint);
+    const nodeFp = nodeFpFor(node, task);
     if (nodeFp === null) return true;
     // 1. 指纹相符：任务没带指纹时不生效。没带 preferNode 的 plan 不看，和节点侧 filter.mjs 规则 1 一致：
     //    plan 不产结果，谁认领谁的指纹就是这一版的指纹；带 preferNode 的 plan 要指纹符合（X4）
@@ -385,7 +400,7 @@ export function createRenderQueue(options = {}) {
   function lockLastActive(lock) {
     let last = lock.producedAt;
     const owner = lock.nodeId != null ? nodes.get(lock.nodeId) : undefined;
-    if (owner && owner.conn !== null && isLive(owner.conn) && owner.envFingerprint === lock.envFingerprint
+    if (owner && owner.conn !== null && isLive(owner.conn) && (owner.envFingerprint === lock.envFingerprint || owner.cardEnvFingerprint === lock.envFingerprint)
       && typeof owner.activeAt === 'number' && owner.activeAt > last) last = owner.activeAt;
     return last;
   }
@@ -450,12 +465,12 @@ export function createRenderQueue(options = {}) {
    * 并且 watch 着这个项目的节点；指纹去重、升序，最多 MAX_BROWSER_FINGERPRINTS 个。没有这样的节点回空数组，
    * 切分方就只出自己那一份。
    */
-  function browserFingerprintsFor(task) {
+  function browserFingerprintsFor(task, field = 'envFingerprint') {
     const out = new Set();
     for (const node of nodes.values()) {
       const conn = node.conn;
       if (node.profile !== 'browser' || !conn || !isLive(conn)) continue;
-      const fp = fingerprintOf(node.envFingerprint);
+      const fp = fingerprintOf(node[field]);
       if (fp === null || conn.principal.userId !== task.source.userId) continue;
       if (!(conn.watch instanceof Set) || !conn.watch.has(task.source.projectId)) continue;
       out.add(fp);
@@ -594,6 +609,8 @@ export function createRenderQueue(options = {}) {
     }
     Object.assign(node, {
       profile: body.profile, envFingerprint: body.envFingerprint, capabilities: body.capabilities,
+      // 块 N:纯浏览器节点执行用户卡、图卡用的指纹(文档服务按页面报的运行时版本算好交进来);别的 profile 一律没有
+      cardEnvFingerprint: body.profile === 'browser' ? (body.cardEnvFingerprint ?? null) : null,
       codeVersions: body.codeVersions, maxConcurrent: body.maxConcurrent,
       conn, disconnectedAt: null,
     });
@@ -632,6 +649,8 @@ export function createRenderQueue(options = {}) {
     // activeIntervalMs（M7 D2 补充）：这个队列认 `node.active`，节点忙着时按这个间隔报；旧队列不带，节点据此不发
     emit(conn, 'node.welcome', {
       nodeId, envFingerprint: node.envFingerprint ?? null, resumed, lost: lost.map((l) => l.id), activeIntervalMs: NODE_ACTIVE_INTERVAL_MS,
+      // 块 N:浏览器节点另有一个用户卡、图卡用的指纹;别的节点与没报运行时版本的浏览器不带这一项(旧形状不变)
+      ...(node.profile === 'browser' && fingerprintOf(node.cardEnvFingerprint) !== null ? { cardEnvFingerprint: node.cardEnvFingerprint } : {}),
     }, reqId);
     for (const l of lost) emit(conn, 'task.lease-lost', l);
     for (const out of outs) out.notify();
@@ -896,7 +915,7 @@ export function createRenderQueue(options = {}) {
     // 计入限流次数。放在 taken 之后、3a 之前：环境本来就不对的节点不必知道这张卡锁在谁那里。
     // 没带 preferNode 的 plan 不查（同 envAllows）；带的查（X4「指纹符合的 pc」）
     if (C.PREFILTER && checksFingerprint(task)) {
-      const nodeFp = fingerprintOf(node.envFingerprint);
+      const nodeFp = nodeFpFor(node, task);
       const taskFp = fingerprintOf(task.requires ? task.requires.envFingerprint : undefined);
       if (nodeFp !== null && taskFp !== null && nodeFp !== taskFp) {
         conn.cardLockedRejects += 1;
@@ -948,6 +967,9 @@ export function createRenderQueue(options = {}) {
     if (task.kind === 'plan') {
       const browserFingerprints = browserFingerprintsFor(task);
       if (browserFingerprints.length > 0) claimed.browserFingerprints = browserFingerprints;
+      // 块 N:同样的节点用户卡、图卡的指纹(`cardEnvFingerprint`)。切分方只给「文档服务确认过有这样一台在线节点」的指纹出用户卡、图卡的浏览器那一份
+      const browserCardEnvFingerprints = browserFingerprintsFor(task, 'cardEnvFingerprint');
+      if (browserCardEnvFingerprints.length > 0) claimed.browserCardEnvFingerprints = browserCardEnvFingerprints;
     }
     emit(conn, 'task.claimed', claimed, reqId);
     broadcast(task, 'task.taken', { id, version: task.version }, conn);
@@ -1209,6 +1231,7 @@ export function createRenderQueue(options = {}) {
           cardLockedRejects: rejects, throttled: C.PREFILTER && rejects > C.THROTTLE_REJECTS,
           // M7 第 7 节诊断：节点的用户（带设备）、指纹、此刻持有的认领数；票据之类一律不出现
           userId: n.userId ?? null, envFingerprint: n.envFingerprint ?? null, claims: claimsByNode.get(n.nodeId) ?? 0,
+          ...(fingerprintOf(n.cardEnvFingerprint) !== null ? { cardEnvFingerprint: n.cardEnvFingerprint } : {}),
           // M7 D2 补充：报过 node.active 的节点才有这两项（旧节点的 describe 形状不变）
           ...(typeof n.activeAt === 'number' ? { activeAt: n.activeAt, activeBusy: n.activeBusy ?? null } : {}),
         };

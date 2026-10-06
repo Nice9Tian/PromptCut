@@ -105,3 +105,41 @@ export function describeEnvironment({ platform, renderer, vendor, chromeVersion 
 export function resultKeyOf(contentKey, envFingerprint) {
   return sha256(`${contentKey ?? ''}\n${envFingerprint ?? ''}`);
 }
+
+/**
+ * 在线卡片运行时版本串(`src/online/cardRuntime/version.ts`,形如 `ocr1:sucrase@3.35.1:tailwindcss@4.3.3`):页面报来的原始值,
+ * 只认安全字符、长度有限;不合格一律当没报(→ 没有 `cardEnvFingerprint`,浏览器节点不认领用户卡与图卡)。
+ */
+export const CARD_RUNTIME_MAX = 128;
+const CARD_RUNTIME_RE = /^[A-Za-z0-9._@:+\-]+$/;
+export function cardRuntimeOf(value) {
+  if (typeof value !== 'string' || value === '' || value.length > CARD_RUNTIME_MAX || !CARD_RUNTIME_RE.test(value)) return null;
+  return value;
+}
+
+/**
+ * 用户卡、图卡的环境指纹(在线执行用户卡与图卡契约 `docs/plan/online-card-exec-contract.md` 第 5、7 节,块 N):
+ * 纯浏览器节点执行用户卡、图卡时,画面不只取决于系统、显卡类别、Chrome 主版本,还取决于在线页面里的转译器与加载规则,
+ * 所以在 `envFingerprintOf` 那三项之外再加「在线卡片运行时版本」一起取摘要。
+ *
+ *   cardEnvFingerprint = sha256(`${os}\n${gpuClass}\n${chromeMajor}\ncard-runtime:${cardRuntime}`) 的前 16 位十六进制
+ *
+ * 末尾那一行带 `card-runtime:` 前缀,摘要的原文与 `envFingerprintOf`(三行)永远不同,所以同一台机器上桌面节点(没有这一项)
+ * 与浏览器节点对用户卡、图卡的结果键不会相同。`envFingerprint` 与内置卡片的结果键一个字不变。
+ * `cardRuntime` 不合格(`cardRuntimeOf` 回 null)时回 `null`:没有这一项就没有这个指纹。
+ */
+export function cardEnvFingerprintOf({ os, gpuClass, chromeMajor, cardRuntime } = {}) {
+  const runtime = cardRuntimeOf(cardRuntime);
+  if (runtime === null) return null;
+  return sha256(`${os ?? ''}\n${gpuClass ?? ''}\n${chromeMajor ?? 0}\ncard-runtime:${runtime}`).slice(0, 16);
+}
+
+/**
+ * 从原始探测值一次算齐用户卡、图卡的环境指纹:`describeEnvironment` 之外多一个 `cardRuntime`;
+ * 回 `{ os, gpuClass, chromeMajor, fingerprint, cardRuntime, cardEnvFingerprint }`(没有合格的 `cardRuntime` 时后两项为 `null`)。
+ */
+export function describeCardEnvironment({ platform, renderer, vendor, chromeVersion, cardRuntime } = {}) {
+  const env = describeEnvironment({ platform, renderer, vendor, chromeVersion });
+  const runtime = cardRuntimeOf(cardRuntime);
+  return { ...env, cardRuntime: runtime, cardEnvFingerprint: cardEnvFingerprintOf({ os: env.os, gpuClass: env.gpuClass, chromeMajor: env.chromeMajor, cardRuntime: runtime }) };
+}

@@ -131,7 +131,11 @@ export function createNodeSession({
     holds.set(id, { id, token, lastSentAt: now(), done: null, step: null, projectId });
     if (projectId != null) lastProjectId = projectId;
     // M7 D1：plan 的认领回包带同用户在线纯浏览器节点的指纹，原样交给编排（切分方据此给浏览器可做的卡另出一份）
-    onTask(task, Array.isArray(message.browserFingerprints) ? { token, browserFingerprints: [...message.browserFingerprints] } : { token });
+    // 块 N:另带的 `browserCardEnvFingerprints`(同一批节点执行用户卡、图卡的指纹)同样原样交出,只在有时才带(旧形状不变)
+    const ctx = { token };
+    if (Array.isArray(message.browserFingerprints)) ctx.browserFingerprints = [...message.browserFingerprints];
+    if (Array.isArray(message.browserCardEnvFingerprints)) ctx.browserCardEnvFingerprints = [...message.browserCardEnvFingerprints];
+    onTask(task, ctx);
   }
 
   function onRejected(message) {
