@@ -16,7 +16,7 @@ import { allCards, cardsRegistryGen, getCard, syncedUserCardsGen, unknownCardCli
 import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles, cardSourceFilesVersion } from "../render/cardSourceFiles.mjs";
-import { clipCostIndex } from "../render/pipelinePlan.mjs";
+import { clipCostIndex, clipCostNodes } from "../render/pipelinePlan.mjs";
 
 export interface ClipIdentity {
   /** clipId → `cardCostKey(node, sourceVersion, fps, durationFrames)` */
@@ -88,6 +88,34 @@ function dropClips(id: ClipIdentity, local: ReadonlySet<string>): ClipIdentity {
   return { identityKeys, frameModes, capabilities };
 }
 
+/**
+ * 有声动效卡(画面是组件、另写了 `audio()`)片段自己的图卡节点算它的成本身份节点(`pipelinePlan.mjs` 的 `clipCostNodes`):
+ * 它的画面就是一张普通的 DOM 卡,和别的卡一样第一次要用时就测、测完按结果判轻重。2026-10-06 之前它没有身份
+ * (图卡那一支合成的节点不带 `clipId`),从不测量,画面在桌面与在线都永远按重卡。
+ *
+ * 画面由 `card()` 出的图卡、只有 `audio()` 的音频图卡不算,照旧没有身份:测量用的是只留这一个片段的缩水项目
+ * (`probeRunner.ts` 的 `shrinkProject`,不带素材与卡片图节点),图卡的输入在那里取不到;音频图卡没有画面。
+ */
+function ownsVisual(node: { cardId?: unknown }): boolean {
+  const def = typeof node.cardId === "string" ? getCard(node.cardId) : undefined;
+  return !!def && !!def.Component && typeof def.card !== "function";
+}
+
+/**
+ * 摊成图。卡片图里有悬空输入时 `projectCardGraph` 会抛(删片段不清 `cardNodes`):以前这一轮整个项目都没有身份,
+ * 全部卡不测、按声明兜底(没声明 `direct` 的一律按重)。现在退一步只按片段自己的卡再摊一遍(不带卡片图节点、
+ * 不看片段的 `nodeId`):普通卡与有声动效卡的节点内容与完整的图里相同,身份照给、照测;坏掉的图卡链路本来就没有身份。
+ * 这一遍也抛才当作没有身份。
+ */
+function costGraph(project: Project): ReturnType<typeof projectCardGraph> {
+  try {
+    return projectCardGraph(project, getCard);
+  } catch {
+    const bare = { ...project, cardNodes: [], tracks: project.tracks.map((tr) => ({ ...tr, clips: tr.clips.map((c) => (c.nodeId ? { ...c, nodeId: undefined } : c)) })) };
+    return projectCardGraph(bare as Project, getCard);
+  }
+}
+
 export function clipIdentityOf(project: Project | null): ClipIdentity {
   if (!project) return EMPTY;
   // 注册表与同步表的代数也进键:卡片定义到了(热更新、同步到了),未知卡片变成认得的卡,身份跟着给
@@ -95,17 +123,13 @@ export function clipIdentityOf(project: Project | null): ClipIdentity {
   if (project === cachedProject && localKey === cachedLocalKey) return cached;
   let out = EMPTY;
   try {
-    // projectCardGraph 对悬空输入会 throw（删片段不清 cardNodes）——
-    // 一张坏卡不该让探针和分派表整个停摆，那一轮当作「没有身份」，按声明兜底
-    const graph = projectCardGraph(project, getCard);
+    // 一张坏卡不该让探针和分派表整个停摆:图摊不出来时退一步只按片段自己的卡摊(`costGraph`);那也不成才当作「没有身份」
+    const graph = costGraph(project);
     const versions = sourceVersionsOf();
-    const { identityKeys, frameModes } = clipCostIndex(project, graph, (node) => versions[(node as { cardId?: string }).cardId ?? ""] ?? null);
+    const own = { ownNode: ownsVisual };
+    const { identityKeys, frameModes } = clipCostIndex(project, graph, (node) => versions[(node as { cardId?: string }).cardId ?? ""] ?? null, own);
     const capabilities = new Map<string, Record<string, unknown>>();
-    for (const node of graph.nodes ?? []) {
-      if (typeof node.clipId === "string" && !capabilities.has(node.clipId)) {
-        capabilities.set(node.clipId, (node.capabilities ?? {}) as Record<string, unknown>);
-      }
-    }
+    for (const [clipId, node] of clipCostNodes(project, graph, own)) capabilities.set(clipId, (node.capabilities ?? {}) as Record<string, unknown>);
     out = { identityKeys, frameModes, capabilities };
     if (onlineBrowserMode()) out = dropLocalOnly(project, out);
     out = dropUnknown(project, out);
