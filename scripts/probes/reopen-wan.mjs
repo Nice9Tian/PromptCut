@@ -1,4 +1,9 @@
-/** Start an isolated cloud directory on a second machine. No production service, account or firewall changes. */
+/**
+ * Start an isolated cloud directory on a second machine. No production service, account or firewall changes.
+ *
+ * PC_REOPEN_WAN_SERVICE=<https://host/hosted>: use an already deployed hosted service instead of starting a temporary
+ * gateway (no tunnel, no SSH proxy). The WAN peer still runs on PC_REOPEN_SSH_HOST and reaches the room through that address.
+ */
 import '../lib/no-user-dirs.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -21,6 +26,23 @@ export async function startWanProbe() {
   execFileSync('scp', ['-i', key, '-o', 'BatchMode=yes', archive, `${host}:${dir}/bundle.tar`], { windowsHide: true, stdio: 'pipe', timeout: 30000 });
   run(`tar -xf ${dir}/bundle.tar -C ${dir}`);
   const remote = () => spawn('ssh', [...sshArgs, `cd ${dir} && node scripts/probes/reopen-wan-peer.mjs`], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const deployed = (process.env.PC_REOPEN_WAN_SERVICE || '').replace(/\/+$/, '');
+  if (deployed) {
+    if (!/^https?:\/\//.test(deployed)) throw new Error('PC_REOPEN_WAN_SERVICE must be an http(s) address');
+    const health = async () => (await fetch(`${deployed}/hosting/healthz`, { signal: AbortSignal.timeout(10000) })).json();
+    if ((await health()).role !== 'hosting') throw new Error('deployed service has no hosting registry');
+    return {
+      service: deployed, remoteDirectory: dir, gatewayPid: null, publicHttp: true, path: 'deployed-service',
+      hosting: { online: async () => { try { return (await health()).online > 0; } catch { return false; } } },
+      peer: config => new Promise((resolve, reject) => {
+        const child = remote(); let out = ''; child.stdout.on('data', b => { out += b; }); child.stderr.resume();
+        const timer = setTimeout(() => { child.kill(); reject(new Error('WAN peer timed out; secrets omitted')); }, 30000);
+        child.once('exit', code => { clearTimeout(timer); try { const result = JSON.parse(out.trim()); if (code || !result.ok) throw new Error(); resolve(result); } catch { reject(new Error('WAN peer failed; secrets omitted')); } });
+        child.stdin.end(JSON.stringify({ ...config, op: 'member', service: deployed, dir }) + '\n');
+      }),
+      async close() {},
+    };
+  }
   const gateway = remote(); let stopped = false;
   const gatewayLines = readline.createInterface({ input: gateway.stdout }); gateway.stderr.resume();
   const launched = new Promise((resolve, reject) => {
