@@ -253,7 +253,7 @@ try {
   check(ready?.eligibility?.ok, '当节点的条件成立(在线构建、普通档双舞台、Chromium、成员、测量落定)', ready?.eligibility);
   out.steps.ready = ready && { envFingerprint: ready.envFingerprint, codeVersion: ready.codeVersion?.slice(0, 12), nodeId: ready.nodeId, eligibility: ready.eligibility };
   say('node.ready', out.steps.ready ?? {});
-  debugProbe = async () => ({ node: await P(page, () => { const d = window.__pcBrowserNode?.(); return d ? { ready: d.ready, counters: d.counters, elig: d.eligibility, last: d.lastError ?? d.last ?? null, running: d.running ?? null } : null; }), plan: await P(page, () => { const p = window.__pcPlanPublisher?.(); return p ? { last: p.last, log: (p.log ?? []).slice(-3) } : null; }), exec: await P(page, () => window.__pcCardExecDiag?.() ?? null) });
+  debugProbe = async () => ({ node: await P(page, () => { const d = window.__pcBrowserNode?.(); return d ? { ready: d.ready, state: d.state, reason: d.reason, idle: d.idle, counters: d.counters, elig: d.eligibility, last: d.lastError ?? d.last ?? null, running: d.running ?? null, backWork: window.__pcPreviewDiag?.()?.backWork ?? null } : null; }), plan: await P(page, () => { const p = window.__pcPlanPublisher?.(); return p ? { last: p.last, log: (p.log ?? []).slice(-3) } : null; }), exec: await P(page, () => window.__pcCardExecDiag?.() ?? null) });
   // 从节点报到起算主文档长任务(契约 M7-A12:生成快照期间主文档长任务 0)
   await P(page, () => { window.__pcLongTasks.length = 0; });
 

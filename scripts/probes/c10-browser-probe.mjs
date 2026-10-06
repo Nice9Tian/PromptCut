@@ -9,7 +9,8 @@
  *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`)。2026-10-06 起的新语义(`online-card-exec-contract.md` 第 11.3 节):它是在线包里构建时
  *                                就有的卡,本页能运行,与内置卡一样按轻重区分。成员页进来时在加载遮罩下把它测完、判轻,于是在可见舞台里直接活渲(没有快照、没有
  *                                「需要本地 PC 渲染辅助」的图标与徽标)、不在页面发布的清单计划里。旧语义(清单计划含它、桌面渲染节点渲出来写进层表、成员页贴快照)
- *                                描述的是判重的那条路,这条路对判重的内置卡在 A1~A4 里验,对判重的同步用户卡在 `online-card-exec-probe.mjs` E6 里验
+ *                                描述的是判重的那条路,这条路对判重的内置卡在 A1~A4 里验,对判重的同步用户卡在 `online-card-exec-probe.mjs` E6 里验。
+ *                                清单计划里含它的那一路(测量完成前它按重、计划先发出去)现在也可能由成员页自己的浏览器节点渲出(本页能运行的用户卡任务它认领),层的环境指纹是 cardEnvFingerprint
  *        [--base-port 5780]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
  *                                (A5 里创建者关掉之后,独立渲染主机用同一段)
  *
@@ -1694,7 +1695,8 @@ try {
     '第 2 节(2026-10-06 隔离后):跨源舞台用相对地址读自己源上的 /media-s/<会话号>/media/<哈希>(不再是 /media)', sum1.mediaByFrameOrigin);
   if (VIDEO) check(member.assets.some((a) => a.route === 'media-s') && !member.assets.some((a) => a.hasTicket), '第 2 节(2026-10-06 隔离后):舞台取素材的地址里没有票据(?t=),票据在舞台读不到的 cookie 里', { mediaS: member.assets.filter((a) => a.route === 'media-s').length });
   const o3 = await onlineDiag(member);
-  check(o3?.layers?.length && o3.layers.every((l) => l.envFingerprint === state.creatorFp), 'A3:一层只出自一种环境(层表记录的那一种)', o3?.layers?.map((l) => ({ clip: l.clipId.slice(0, 6), fp: l.envFingerprint })));
+  // 2026-10-06 起:本页能运行的仓库用户卡的任务,成员页自己的后台舞台(纯浏览器节点)也认领,它的那一层出自浏览器环境(cardEnvFingerprint),与桌面节点的环境本来就不同;每一层仍只出自一种环境。内置卡的层仍都出自创建者的桌面节点
+  check(o3?.layers?.length && o3.layers.filter((l) => l.clipId !== state.userClip).every((l) => l.envFingerprint === state.creatorFp), 'A3:一层只出自一种环境(层表记录的那一种;仓库用户卡那一层另论:它可能出自成员页自己的浏览器节点)', o3?.layers?.map((l) => ({ clip: l.clipId.slice(0, 6), fp: l.envFingerprint })));
   out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp, costPublish: state.costPublish,
     publisher: await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null) };
   say('step1.done', out.steps.member);
@@ -1742,15 +1744,15 @@ try {
     if (!inPlan) {
       check(true, '用户卡(新语义):判轻的仓库用户卡不在成员页发布的清单计划里(不进预渲染集合)', planU?.lastClips);
     } else {
-      const gotU = await until('用户卡(判重的一路):桌面渲染节点渲出、成员页贴上快照,图标与徽标撤掉', async () => {
+      const gotU = await until('用户卡(在清单计划里的一路):渲染节点把它渲出来写进层表(出自桌面节点或成员页自己的浏览器节点),图标与徽标始终没有', async () => {
         await P(member, () => { window.__pcStore.actions.seek(1); }).catch(() => {});
         const o = await onlineDiag(member);
         const l = o?.layers?.find((x) => x.clipId === state.userClip);
         const st = await userStage();
-        return l && l.ready > 0 && st?.snapshot && !st.placeholder && (await badgeOf()) === false ? { layer: l, stage: st } : null;
+        return l && l.ready > 0 && (st?.snapshot || st?.live) && !st.placeholder && (await badgeOf()) === false ? { layer: l, stage: st } : null;
       }, 420_000, 5000);
-      check(!!gotU, '用户卡(判重的一路):在清单计划里,桌面节点渲出、成员页贴上快照,没有图标与徽标', { gotU, plan: planU?.lastClips?.length, last: { stage: await userStage(), layer: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null } });
-      if (gotU) check(gotU.layer.envFingerprint === state.creatorFp, '用户卡(判重的一路):那一层出自创建者的桌面节点', { layer: gotU.layer.envFingerprint, creator: state.creatorFp });
+      check(!!gotU, '用户卡(在清单计划里的一路):渲染节点渲出、层表里有这一层(就绪帧 > 0),舞台上是快照或活画面,没有图标与徽标', { gotU, plan: planU?.lastClips?.length, last: { stage: await userStage(), layer: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null } });
+      if (gotU) check(!!gotU.layer.envFingerprint, '用户卡(在清单计划里的一路):那一层记着它的环境指纹(创建者的桌面节点是 ' + state.creatorFp + ',成员页自己的浏览器节点是它的 cardEnvFingerprint,两者都合法)', { layer: gotU.layer.envFingerprint, creator: state.creatorFp });
     }
     await shot(member, 'user-card-live');
     out.steps.userCard = { ms: Date.now() - tU, clip: state.userClip, planClips: planU?.lastClips ?? null, live: liveU, last: lastU };
