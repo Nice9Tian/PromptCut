@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import { identityKey, roomKey } from './descriptor.mjs';
+import { migrateHostedDeep } from '../auth/hosted-default.mjs';
 
 const transientStorageCodes = new Set(['ETIMEDOUT', 'EBUSY', 'EAGAIN', 'EINTR', 'EMFILE', 'ENFILE', 'RECOVERY_LOCK_BUSY']);
 const diagnosticCodes = new Set([...transientStorageCodes, 'INVALID', 'OTHER', 'DPAPI_FAILED', 'ENOSPC', 'EACCES', 'EPERM', 'ENOENT', 'EIO', 'EEXIST', 'ERR_OSSL_BAD_DECRYPT', 'ERR_CRYPTO_INVALID_AUTH_TAG']);
@@ -85,7 +86,9 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
       storagePhase = 'state-parse';
       const v = JSON.parse(bytes);
       if (v.version !== 1 || !v.identities || !v.bindings || !v.revoked || !v.hosts) throw new Error();
-      state = { ...v, journals: v.journals ?? {}, settings: v.settings ?? {}, unregister: v.unregister ?? {}, moves: v.moves ?? {} };
+      // 旧托管主机名（键与值里都有）换成新的，见 hosted-default.mjs 的 RETIRED_HOSTED_HOSTS；下次写入时落盘
+      const m = migrateHostedDeep(v);
+      state = { ...m, journals: m.journals ?? {}, settings: m.settings ?? {}, unregister: m.unregister ?? {}, moves: m.moves ?? {} };
     } catch (e) { throw Object.assign(new Error('协作恢复数据损坏；保留原数据，请从备份恢复或重新认证'), { storagePhase, storageCode: e.storageCode ?? e.code ?? 'INVALID' }); }
   };
   read();

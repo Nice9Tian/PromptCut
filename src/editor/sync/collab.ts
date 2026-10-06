@@ -45,7 +45,7 @@ const LOCAL_KEY = "pc.shared.local";
 
 function readAll(): Record<string, LocalCollab> {
   try {
-    const v = JSON.parse(localStorage.getItem(LOCAL_KEY) ?? "");
+    const v = hosted.migrateHostedDeep(JSON.parse(localStorage.getItem(LOCAL_KEY) ?? ""));
     return v && typeof v === "object" ? (v as Record<string, LocalCollab>) : {};
   } catch {
     return {};

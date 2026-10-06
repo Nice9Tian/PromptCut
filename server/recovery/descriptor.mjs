@@ -1,7 +1,9 @@
-/** Non-secret file metadata. File roles and addresses never authorize a user. */
+import { migrateHostedText } from '../auth/hosted-default.mjs';
+
+/** Non-secret file metadata. File roles and addresses never authorize a user. Retired hosted hosts map to their replacement. */
 export function serviceIdentity(base) {
   if (typeof base !== 'string' || base.length > 2048) throw new TypeError('协作服务地址无效');
-  const u = new URL(base);
+  const u = new URL(migrateHostedText(base));
   if (!['http:', 'https:', 'ws:', 'wss:'].includes(u.protocol) || u.username || u.password || u.search || u.hash) throw new TypeError('协作服务地址无效');
   u.protocol = u.protocol === 'ws:' ? 'http:' : u.protocol === 'wss:' ? 'https:' : u.protocol;
   return u.href.replace(/\/+$/, '');

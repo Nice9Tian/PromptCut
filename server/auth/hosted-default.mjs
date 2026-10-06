@@ -15,7 +15,49 @@
  * 浏览器与 Node 通用：不引任何模块；浏览器里没有 `process`，第 2 级自然跳过。
  */
 
-export const DEFAULT_HOSTED_URL = 'http://8.219.80.16:8787';
+const HOSTED_HOST = '149.88.94.84';
+
+export const DEFAULT_HOSTED_URL = `http://${HOSTED_HOST}:8787`;
+
+/**
+ * 换下来的托管端（2026-10-06 用户定：阿里云到期不续，托管端换到新云节点，数据已整体拷过去）。
+ * 旧项目文件、本机记的恢复凭证与托管地址里写的是旧主机名；读进来时一律换成新主机名（协议、端口、路径不变），
+ * 用户不用重新认证，存回去时写的就是新地址。只换主机名这一段：IP 形式与 sslip.io 形式（含 s1.、s2. 舞台子域）各一条。
+ */
+export const RETIRED_HOSTED_HOSTS = Object.freeze([
+  ['8.219.80.16', HOSTED_HOST],
+  ['8-219-80-16.sslip.io', '149-88-94-84.sslip.io'],
+]);
+
+const RETIRED_RE = /(^|[/@.])(8\.219\.80\.16|8-219-80-16\.sslip\.io)(?=[:/"\\]|$)/g;
+const RETIRED_MAP = new Map(RETIRED_HOSTED_HOSTS);
+
+/** 一个字符串里出现的旧托管主机名换成新的；不含旧主机名的原样返回 */
+export function migrateHostedText(text) {
+  if (typeof text !== 'string' || !(text.includes('8.219.80.16') || text.includes('8-219-80-16.sslip.io'))) return text;
+  return text.replace(RETIRED_RE, (_, pre, host) => pre + RETIRED_MAP.get(host));
+}
+
+/**
+ * 深拷一份，把其中所有字符串（含对象的键：恢复记录的键是 JSON 串，里面带服务地址）里的旧托管主机名换成新的。
+ * 没有要换的就返回原值本身。
+ */
+export function migrateHostedDeep(value) {
+  if (typeof value === 'string') return migrateHostedText(value);
+  if (!value || typeof value !== 'object') return value;
+  let changed = false;
+  if (Array.isArray(value)) {
+    const out = value.map((v) => { const m = migrateHostedDeep(v); if (m !== v) changed = true; return m; });
+    return changed ? out : value;
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    const mk = migrateHostedText(k), mv = migrateHostedDeep(v);
+    if (mk !== k || mv !== v) changed = true;
+    out[mk] = mv;
+  }
+  return changed ? out : value;
+}
 
 export const HOSTED_URL_ENV = 'PROMPTCUT_HOSTED_URL';
 

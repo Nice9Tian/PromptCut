@@ -620,8 +620,13 @@ function sourceFiles() {
     && !/(^|\/)node_modules\//.test(f));
 }
 
-test('SPR-6a 守门：源码里阿里云托管端的 IP 只出现在 server/auth/hosted-default.mjs（测试、文档、探针除外）', () => {
-  const ip = ['8', '219', '80', '16'].join('.');
+test('SPR-6a 守门：源码里托管端的 IP（现用的与换下来的）只出现在 server/auth/hosted-default.mjs（测试、文档、探针除外）', () => {
+  const retired = ['8', '219', '80', '16'].join('.');
+  {
+    const hitsRetired = sourceFiles().filter((f) => { try { return fs.readFileSync(path.join(ROOT, f), 'utf8').includes(retired); } catch { return false; } });
+    assert.deepEqual(hitsRetired, ['server/auth/hosted-default.mjs'], '换下来的阿里云地址只在对照表里');
+  }
+  const ip = ['149', '88', '94', '84'].join('.');
   const files = sourceFiles();
   assert.ok(files.includes('server/auth/hosted-default.mjs'), '扫描范围要包含 hosted-default.mjs');
   assert.ok(files.length > 100, `扫描了 ${files.length} 个文件`);

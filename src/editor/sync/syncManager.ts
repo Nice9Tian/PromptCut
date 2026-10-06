@@ -687,7 +687,7 @@ function readSharedResume(): SharedResume | null {
   try { raw = sessionStorage.getItem(SHARED_RESUME_KEY); } catch { return null; }
   if (!raw) return null;
   try {
-    const r = JSON.parse(raw) as SharedResume;
+    const r = hosted.migrateHostedDeep(JSON.parse(raw)) as SharedResume;
     const c = r?.candidate;
     if (!c || typeof c.projectId !== "string" || typeof c.base !== "string" || typeof r.username !== "string" || typeof r.key !== "string" || !r.key) return null;
     if (r.as !== "member" && r.as !== "creator") return null;
@@ -1018,7 +1018,8 @@ const CREATORS_KEY = "pc.shared.creators";
 
 function readJson<T>(key: string, fallback: T): T {
   try {
-    const v = JSON.parse(localStorage.getItem(key) ?? "");
+    // 旧托管主机名换成新的(hosted-default.mjs 的 RETIRED_HOSTED_HOSTS):恢复凭证、本机记录照旧能用
+    const v = hosted.migrateHostedDeep(JSON.parse(localStorage.getItem(key) ?? ""));
     return v && typeof v === "object" ? (v as T) : fallback;
   } catch {
     return fallback;
