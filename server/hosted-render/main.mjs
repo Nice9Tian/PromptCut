@@ -54,7 +54,7 @@ import { createIsolation, isolationCandidates, isoNodeIdFor, wipeDir, leftoverCo
 import { HOSTED_WORKER_ENV } from './source-gate.mjs';
 import { runSelfcheck, SELFCHECK_EXIT } from './selfcheck.mjs';
 import {
-  LIMIT_DEFAULTS, cgroupSupport, workerCommand, memAvailable, treeRss, createBackpressure, createOomTracker, parseBytes, loadHighFor, machineCores,
+  LIMIT_DEFAULTS, cgroupSupport, workerCommand, memAvailable, measureTrees, createMemoryWatch, createBackpressure, createOomTracker, parseBytes, loadHighFor, machineCores,
 } from './limits.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -230,6 +230,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const key = readServiceKeyFile(config.secretsDir);
   const support = config.cgroup === 'off' ? { ok: false, reason: 'disabled' } : cgroupSupport();
   const memoryMaxBytes = parseBytes(config.memoryMax);
+  // 内存看护的判定（量法与 cgroup 的关系见 limits.mjs 的 createMemoryWatch）
+  const memoryWatch = createMemoryWatch({ max: memoryMaxBytes });
+  let memoryFailLogAt = 0;
   let concurrency = config.maxConcurrent;
 
   // ---------- 目录
@@ -421,22 +424,27 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
   async function sample() {
     const healthMs = await timedHealth(config.healthUrl);
-    const residentRss = worker.pid ? treeRss(worker.pid) : null;
-    const isoRss = isoProc?.pid ? treeRss(isoProc.pid) : null;
-    // 内存上限管的是两个工作进程合起来的（契约第 4 节）
-    const workerRss = residentRss === null && isoRss === null ? null : (residentRss ?? 0) + (isoRss ?? 0);
-    readings = { memAvailable: memAvailable(), healthMs, load1: os.loadavg()[0], workerRss, isoRss, at: Date.now() };
+    // 内存：量两棵工作进程树各自占的物理内存（不重复计共享页，口径见 limits.mjs），上限管的是合起来的（契约第 4 节）
+    const [residentMem, isoMem] = measureTrees([worker.pid ?? null, isoProc?.pid ?? null]);
+    const mem = memoryWatch.judge({ resident: residentMem, iso: isoMem });
+    const workerRss = mem.total;
+    const isoRss = Number.isFinite(isoMem?.bytes) ? isoMem.bytes : null;
+    readings = { memAvailable: memAvailable(), healthMs, load1: os.loadavg()[0], workerRss, isoRss, residentRss: Number.isFinite(residentMem?.bytes) ? residentMem.bytes : null, memoryMethods: mem.methods, at: Date.now() };
     const before = backpressure.paused;
     const state = backpressure.sample(readings);
     if (state.paused !== before) log(state.paused ? 'render.backpressure' : 'render.backpressure-clear', { reasons: state.reasons, ...readings });
-    // 内存看护：没有 cgroup 时它是唯一的硬上限
-    if (workerRss !== null && memoryMaxBytes !== null && workerRss > memoryMaxBytes && (worker.running || isolation?.active)) {
+    // 量不了：不当成 0、也不当成超限，这一拍不判；记一条（连着量不了时每分钟最多一条）
+    if (mem.verdict === 'unmeasured' && Date.now() - memoryFailLogAt >= 60_000) {
+      memoryFailLogAt = Date.now();
+      log('render.memory-unmeasured', { failures: mem.failures, detail: '这一拍量不了工作进程树的内存，没有判超限' });
+    }
+    // 内存看护：没有独立 cgroup 时它是唯一的硬上限；有 cgroup 时内核先动手，这里放宽一档兜底（不会双杀，见 createMemoryWatch）
+    if (mem.verdict === 'over') {
       const o = oom.note();
-      // 合起来超限：隔离工作进程在跑就先结束它（跑的是项目带来的代码），常驻的留着；只有常驻的在跑才结束常驻的
-      const victim = isolation?.active && isoRss !== null ? 'isolated' : 'resident';
-      log('render.memory-exceeded', { workerRss, isoRss, max: memoryMaxBytes, count: o.count, victim });
+      log('render.memory-exceeded', { workerRss, isoRss, max: memoryMaxBytes, limit: mem.limit, count: o.count, victim: mem.victim, methods: mem.methods });
       if (o.degrade && concurrency !== 1) { concurrency = 1; log('render.degraded', { concurrency, reason: 'oom' }); }
-      if (victim === 'isolated') void isolation.stop('oom');
+      // 合起来超限：隔离工作进程在跑就先结束它（跑的是项目带来的代码），常驻的留着；只有常驻的在跑才结束常驻的
+      if (mem.victim === 'isolated') void isolation?.stop('oom');
       else worker.kill('oom');
     }
     // 起来了却不交诊断：结束重起

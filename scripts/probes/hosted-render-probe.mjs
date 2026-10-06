@@ -6,11 +6,13 @@
  *
  *   node scripts/probes/hosted-render-probe.mjs [--steps work,late,agent,usercard,forbidden,switch,kill,limits,load,delete]
  *        [--base-port 5730] [--doc-port 8794] [--asset-port 8795] [--keep-temp] [--verbose] [--memory-step-max 150M] [--mem-low 256M]
- *        [--memory-max <如 32G>] [--time-scale <倍数>]
+ *        [--memory-max <如 6G>] [--time-scale <倍数>]
  *        `--time-scale`：全部等待时限的倍数。不给时按机器核数取（4 核及以下 2，否则 1）：核少的机器（4 核的容器）上 `limits`、`load` 两步
- *        要渲的段多，照 8 核定的时限不够。只放宽「等多久」，不改任何判据的数值
- *        `--memory-max`：演练时两个工作进程合起来的内存硬上限（`limits` 一步自己另给很小的值）。不给时 Windows 上取 32G、别的平台用生产缺省 6G：
- *        没有 cgroup 时管理进程自己量进程树的常驻内存，Windows 的工作集把共享页重复计入，两棵工作进程树空着就量出 7 GB 上下
+ *        要渲的段多，照 8 核定的时限不够。只放宽「等多久」，不改任何判据的数值。`limits`、`load` 两步的时限另按 `work` 步骤实测的
+ *        单任务耗时定（任务数 × 单任务耗时 × 余量，不低于原来的 300 s），见 `taskBudgetMs`
+ *        `--memory-max`：演练时两个工作进程合起来的内存硬上限（`limits` 一步自己另给很小的值）。不给就用生产缺省 6G / 5G（所有平台）：
+ *        管理进程量进程树的内存按不重复的口径（cgroup 的 memory.current、Pss、Windows 的私有工作集；`limits.mjs` 的 `measureTrees`），
+ *        空着的两棵工作进程树只有几 GB，不会触发。原来 Windows 上放宽到 32G 是因为累加工作集把共享页重复计入，已经查清并改了量法
  *        `--mem-low`:演练时背压的可用内存线(生产缺省 2G;开发机上常年可用内存不到 2 GB,照缺省会一直暂停认领,所以演练缺省放到 256M)
  *
  * 端口(都只绑 127.0.0.1):`--base-port` +0/+1/+2 渲染服务的工作进程(编辑器与两个舞台端口)、+3/+4/+5 隔离工作进程(用户卡)、+6 管理进程的诊断与代理口;
@@ -94,7 +96,7 @@ const PORTS = { worker: BASE, iso: BASE + 3, status: BASE + 6, doc: Number(arg('
 const CORES = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
 /** 等待时限的倍数：核少的机器上放宽（只放宽等多久，不改判据） */
 const SCALE = Number(arg('--time-scale', CORES <= 4 ? 2 : 1)) || 1;
-const MEMORY_MAX = String(arg('--memory-max', process.platform === 'win32' ? '32G' : ''));
+const MEMORY_MAX = String(arg('--memory-max', ''));
 const KEEP = flag('--keep-temp');
 const VERBOSE = flag('--verbose');
 const MEMORY_STEP_MAX = String(arg('--memory-step-max', '150M'));
@@ -333,7 +335,19 @@ async function blobCounts() {
 
 /* ------------------------------------------------------------------ 步骤 */
 
-const ctx = { proj: null, creator: null, codeVersion: null, rev: null, salt: 0 };
+const ctx = { proj: null, creator: null, codeVersion: null, rev: null, salt: 0, perTaskMs: null, tasksPerClip: null };
+
+/**
+ * `limits`、`load` 两步等「计划与细任务做完」的时限(传给 `waitFor` 的原始毫秒,它会再乘 `SCALE`):不再写死 300 s,按 `work` 步骤实测的
+ * 单任务耗时(`ctx.perTaskMs`,含冷启动,偏保守)、这一步要渲的段数(`clips` 个片段 × 实测每片段的任务数)与余量(`BUDGET_MARGIN`)定;
+ * 不低于原来的 300 s。只定「等多久」,不改任何判据。Linux 4 核的容器上每个快照任务 34～50 s,10 个任务照 300 s × 2 做不完。
+ */
+const BUDGET_MARGIN = 2;
+function taskBudgetMs(clips, floor = 300_000) {
+  if (!ctx.perTaskMs || !ctx.tasksPerClip) return floor;
+  const tasks = Math.ceil(clips * ctx.tasksPerClip);
+  return Math.max(floor, Math.ceil((tasks * ctx.perTaskMs * BUDGET_MARGIN) / SCALE));
+}
 
 async function stepWork() {
   const r = {};
@@ -356,6 +370,8 @@ async function stepWork() {
   const done = await waitRendered(ctx.proj.projectId, ctx.rev, planId);
   Object.assign(r, { planMs: done.ms, tasks: done.tasks, done: done.done, failed: done.failed });
   check(done.done === done.tasks && done.failed === 0, 'work:细任务全部 done', done);
+  // 实测的单任务耗时(含冷启动),limits、load 两步定时限用
+  if (done.tasks > 0) { ctx.perTaskMs = Math.round(done.ms / done.tasks); ctx.tasksPerClip = done.tasks / 2; r.perTaskMs = ctx.perTaskMs; }
 
   const s = await status();
   const n = nodeOf(s, ctx.proj.projectId);
@@ -799,12 +815,13 @@ async function stepLimits() {
   const planId = await publishPlan(ctx.creator, { rev, clips: clipIdsOf(project), codeVersion: ctx.codeVersion });
   let maxBusy = 0;
   let lastStatusAt = 0;
-  const done = await waitRendered(ctx.proj.projectId, rev, planId, 300_000, async () => {
+  const budget = taskBudgetMs(6);
+  const done = await waitRendered(ctx.proj.projectId, rev, planId, budget, async () => {
     if (Date.now() - lastStatusAt < 500) return;
     lastStatusAt = Date.now();
     try { const s = await status(); maxBusy = Math.max(maxBusy, (s.queue?.nodes ?? []).reduce((n, x) => n + (x.held?.length ?? 0), 0)); } catch { /* 这一拍没问到 */ }
   });
-  r.concurrency = { limit: MAX_CONCURRENT, tasks: done.tasks, done: done.done, maxClaimedInQueue: done.maxClaimed, maxHeldByService: maxBusy, ms: done.ms };
+  r.concurrency = { limit: MAX_CONCURRENT, budgetMs: Math.round(budget * SCALE), tasks: done.tasks, done: done.done, maxClaimedInQueue: done.maxClaimed, maxHeldByService: maxBusy, ms: done.ms };
   check(done.tasks > MAX_CONCURRENT, 'limits:任务数多于并发上限(这一步才有意义)', done);
   check(done.maxClaimed <= MAX_CONCURRENT && maxBusy <= MAX_CONCURRENT, 'limits:同时持有的认领不超过并发上限', r.concurrency);
   check(done.done === done.tasks, 'limits:超出并发的任务排队做完,没有失败', done);
@@ -864,11 +881,13 @@ async function stepLoad() {
   const busy = [];
   let sampling = true;
   const sampler = (async () => { while (sampling) busy.push(...await healthSamples(5)); })();
-  const done = await waitRendered(ctx.proj.projectId, rev, planId, 300_000);
+  const budget = taskBudgetMs(6);
+  const done = await waitRendered(ctx.proj.projectId, rev, planId, budget);
   sampling = false;
   await sampler;
   r.rendering = summarize(busy);
   r.renderMs = done.ms;
+  r.budgetMs = Math.round(budget * SCALE);
   r.tasks = done.tasks;
   check(busy.length >= 5, 'load:渲染期间采到了样本', { n: busy.length });
   check(r.rendering.p95 < 500, 'load:满载时文档服务自检的 p95 低于背压线 500 ms', r.rendering);

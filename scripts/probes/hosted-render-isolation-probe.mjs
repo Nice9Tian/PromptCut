@@ -4,7 +4,7 @@
  * 任务书 `docs/plan/sound-online-render-task.md` 第 23 条与文末「越权探测卡」一节）。用断言，不靠推断。
  *
  *   node scripts/probes/hosted-render-isolation-probe.mjs [--base-port 5800] [--doc-port 8770] [--asset-port 8771]
- *        [--keep-temp] [--verbose] [--mem-low 256M] [--memory-max 32G] [--time-scale 1] [--no-proxy-only]
+ *        [--keep-temp] [--verbose] [--mem-low 256M] [--memory-max <如 6G>] [--time-scale 1] [--no-proxy-only]
  *
  * 端口（都只绑 127.0.0.1）：`--base-port` +0/+1/+2 常驻工作进程、+3/+4/+5 隔离工作进程、+6 管理进程的诊断与代理口、
  * +7 收集站（TCP 与 UDP；它就是「测试专用的外部地址」）；`--doc-port` / `--asset-port` 本机隔离的托管组合。全部数据在一个临时目录里，结束时删掉。
@@ -99,7 +99,8 @@ const PORTS = { worker: BASE, iso: BASE + 3, status: BASE + 6, collector: BASE +
 const KEEP = flag('--keep-temp');
 const VERBOSE = flag('--verbose');
 const MEM_LOW = String(arg('--mem-low', '256M'));
-const MEMORY_MAX = String(arg('--memory-max', '32G'));
+// 缺省不给：用生产缺省（6G / 5G）。管理进程量内存按不重复的口径（limits.mjs 的 measureTrees），两棵树空着也只有几 GB
+const MEMORY_MAX = String(arg('--memory-max', ''));
 const CORES = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
 const SCALE = Number(arg('--time-scale', CORES <= 4 ? 2 : 1)) || 1;
 const T = (ms) => Math.round(ms * SCALE);
@@ -275,9 +276,8 @@ function startSupervisor(extraEnv = {}) {
     PROMPTCUT_RENDER_MAX_CONCURRENT: '2',
     PROMPTCUT_RENDER_SAMPLE_MS: '2000',
     PROMPTCUT_RENDER_MEM_LOW: MEM_LOW,
-    // 两个工作进程合起来的内存上限：管理进程自己量进程树的常驻内存（没有 cgroup 时），Windows 上工作集把共享页重复计入，
-    // 两棵树空着就量出 7 GB 上下；演练不验内存上限（那是整套演练 limits 一步的事），放宽到不触发
-    PROMPTCUT_RENDER_MEMORY_MAX: MEMORY_MAX, PROMPTCUT_RENDER_MEMORY_HIGH: MEMORY_MAX,
+    // 两个工作进程合起来的内存上限：不给就用生产缺省（6G / 5G）；演练不验内存上限（那是整套演练 limits 一步的事），要放宽才传 --memory-max
+    ...(MEMORY_MAX ? { PROMPTCUT_RENDER_MEMORY_MAX: MEMORY_MAX, PROMPTCUT_RENDER_MEMORY_HIGH: MEMORY_MAX } : {}),
     PROMPTCUT_RENDER_EDITOR_DIR: path.join(TMP, 'no-editor'),
     // 换项目快一点：闲置 8 s 就结束这一轮（生产缺省 60 s）
     PROMPTCUT_RENDER_ISO_IDLE_MS: String(T(8000)),
