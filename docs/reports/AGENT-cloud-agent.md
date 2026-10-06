@@ -104,3 +104,28 @@ CA-ISO-01 {"甲写成":60,"乙写成":60,"被拒":0,"甲最后":"AAA-60","乙最
 
 这两条有没有牙：把进程级的锁去掉（只留各执行器自己的锁）再跑，CA-MULTI-01 与 CA-ISO-01 都变红；恢复后变绿。
 
+### 与 Agent 相关的现有探针
+
+全部在临时目录里跑（数据、导出、对话、`ai.json` 都指到会话的临时目录，不写公共的 `port.json`），进程静默，跑完端口都已释放。
+
+| 探针 | 结果 |
+|---|---|
+| `skill-mcp-probe`（端口 5880） | 通过，35 项 |
+| `creativity-probe`（编辑器 5740） | 通过，15 项 |
+| `user-editing-probe`（编辑器 5740） | 通过，18 项 |
+| `chat-window-probe`（端口 5743） | 通过，19 项，0 失败 |
+| `multi-agent-probe`（它自己的 5840～5859） | 24 项通过、6 项失败。第一阶段（单台编辑器上的多 Agent）全过；第二阶段在第一步 X0「成员的页面进入共享项目」就回 `host-data-missing`，后面 5 项是连带。**在没有本次改动的 `.worktrees/four-stage`（`de03c915`）上用同一套环境跑，结果逐条相同（24 过、同样 6 项失败）**，所以不是这次改动引入的。`host-data-missing` 出自 `server/recovery/`（协作重开恢复），本次没碰。原因没有查：可能是探针落后于 main 的协作恢复改动，也可能是我给探针设的临时环境所致，两边同样失败所以分不出来 |
+| `codex-auth-state-probe` | 没跑成：它用相对路径 `node_modules/vite/bin/vite.js` 起编辑器，worktree 里没有 `node_modules`（规矩不许建 junction），编辑器起不来，探针超时。与改动无关；对应的单测 `server/test/codex-auth-state.test.mjs` 在全量测试里通过。要跑得在主工作区跑 |
+| `c65-editor-probe` | 没跑：它要一套托管组合加多个角色的参数，这一轮没搭 |
+
+### 没做成的及原因（甲块）
+
+- `multi-agent-probe` 第二阶段、`codex-auth-state-probe`、`c65-editor-probe` 见上表。
+- 契约的 CA-TOOL-03、CA-LOG-01 的完整版、CA-GATE、CA-REVOKE、CA-CRASH、CA-RENDER 等属于乙、丙块，没写。
+- 事件与对话状态现在只在内存里；落盘、进程重启后的中断标记、用量记录、补渲发布是丙块。
+
+### 乙、丙、丁块开工前还缺什么
+
+- **乙（Agent 服务一侧）**：等主会话把 `claude/cloud-agent-auth` 与第三段合进本分支。要它交付的客户端小模块给出：`authenticate(req)` 能用的「核验委托票据 → 身份」（含 `creator`、`mode`、`username`、`userId`、`access`）、「凭对话委托换连接票据」。接入点已留好：`startAgentService({ authenticate, credentials })` 与 `credentials.protocolsFor(identity, 对话号)`；撤销接到 `service.revoke({ projectId, userId?, reason })`。还缺的一处：对话委托要随「发消息」进来并按对话存在实例里，`protocolsFor` 现在拿不到对话 id，只拿到对话号，接真身份时要把签名改成带对话 id。
+- **丙**：不缺外部条件，可以在乙之前或并行做（事件与状态落盘、`runs` 的中断与上限、闸与用量、`set-key`、`admin`）。补渲发布依赖第三段的 R1～R5 落地。`onModelCall` 要改 `server/harness/agent.mjs`。
+- **丁**：依赖 `hosted.agent: { available, enabled, url }` 出现在成员列表回包里（第三段与乙的服务端一侧）；界面可以先对着本轮的 HTTP 接口做（发消息、事件流、停止、列表都已可用，鉴权用测试替身）。
