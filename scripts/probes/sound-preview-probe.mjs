@@ -69,7 +69,7 @@ async function until(what, fn, ms = 30_000, every = 200) {
   let last = null;
   for (;;) {
     let v = null;
-    try { v = await fn(); } catch (e) { last = String(e?.message ?? e); }
+    try { v = await Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error('单次检查超过 30 s 没返回')), 30_000))]); } catch (e) { last = String(e?.message ?? e); }
     if (v) return v;
     if (Date.now() - t0 > ms) { fails.push(`等不到:${what}${last ? ` (${last.slice(0, 160)})` : ''}`); console.log(`FAIL 等不到:${what} ${last ?? ''}`); return null; }
     await sleep(every);
@@ -151,11 +151,21 @@ async function buildScenario(page) {
     await el.click();
   };
   const mediaCount = () => P(page, () => window.__pcStore.getState().project.media.length);
-  await clickData('[data-pc="sound-keyboard"]', '生成键盘声');
-  if (!(await until('键盘声入库', async () => (await mediaCount()) >= 1, 60_000))) throw new Error('键盘声没生成');
-  await P(page, () => window.__pcStore.actions.select([window.__svTyping]));
-  await clickData('[data-pc="sound-typing-end"]', '结尾加提示音');
-  if (!(await until('提示音入库', async () => (await mediaCount()) >= 2, 60_000))) throw new Error('提示音没生成');
+  // 点按钮 → 等素材入库;失败时把页面上的任务状态与提示原样记下来(排查用),最多再点两次
+  const generate = async (sel, label, want) => {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await P(page, () => window.__pcStore.actions.select([window.__svTyping]));
+      await openEdit(page);
+      await clickData(sel, label);
+      const t0 = Date.now();
+      while (Date.now() - t0 < 25_000) { if ((await mediaCount()) >= want) return; await sleep(250); }
+      const diag = await P(page, () => ({ jobs: [...document.querySelectorAll('[data-pc="sound-job"]')].map((j) => `${j.getAttribute('data-state')}:${j.textContent.slice(0, 80)}`), alerts: [...document.querySelectorAll('[role="alert"]')].map((a) => a.textContent.slice(0, 120)), media: window.__pcStore.getState().project.media.length }));
+      console.log(`[scenario] ${label} 第 ${attempt} 次 25 s 内没入库:${JSON.stringify(diag)}`);
+    }
+    throw new Error(`${label}没生成`);
+  };
+  await generate('[data-pc="sound-keyboard"]', '生成键盘声', 1);
+  await generate('[data-pc="sound-typing-end"]', '结尾加提示音', 2);
   const av = await P(page, () => {
     const S = window.__pcStore;
     const c = S.actions.addCardClip('av-pulse', 5.2, { trackId: 't-av', duration: 1 });
@@ -247,7 +257,7 @@ function gapsQuiet(samples, clip) {
 }
 
 /* ================================================================== 套件 */
-async function runSuite(page, label, truth) {
+async function runSuite(page, label, truth, { quick = false } = {}) {
   const tag = (s) => `${label}:${s}`;
   const S = (fn, ...a) => P(page, fn, ...a);
   const shot = async (name) => { const f = path.join(OUT, `${label}-${name}.png`); await page.screenshot({ path: f }).catch(() => {}); return f; };
@@ -281,6 +291,8 @@ async function runSuite(page, label, truth) {
   check(a1.av.some((x) => x.hooked && x.rms !== null && x.rms >= THR), tag('P6 声画卡内嵌声音播放时有能量'), { maxRms: Math.max(0, ...a1.av.filter((x) => x.rms !== null).map((x) => x.rms)) });
   check(a1.av.length > 0 && a1.av.every((x) => x.cstate === 'ready' || x.cstate === 'pending'), tag('P6 声画卡元素 data-card-audio-state 为 ready'), { states: [...new Set(a1.av.map((x) => x.cstate))] });
   check(truth.clipCount === 4 && truth.avDuplicateAudioClips === 0, tag('P6 声画卡的声音与画面是同一个片段(项目里只有 4 个片段:打字卡、键盘声、提示音、声画卡;没有第二个引用它声音的片段)'), { clipCount: truth.clipCount, avDuplicateAudioClips: truth.avDuplicateAudioClips });
+
+  if (quick) { await S(() => window.__sv.stop()); return shots; }
 
   /* ---- P2 暂停 ---- */
   await seek(0.4); await sleep(300);
@@ -452,7 +464,7 @@ let browser = null, dev = null, combo = null, proxies = [], summary = { out: OUT
 async function launchBrowser() {
   const { default: puppeteer } = await import('puppeteer');
   const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
-  return puppeteer.launch({ headless: true, protocolTimeout: 600_000, defaultViewport: { width: 1600, height: 900 },
+  return puppeteer.launch({ headless: true, protocolTimeout: 180_000, defaultViewport: { width: 1600, height: 900 },
     args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--site-per-process',
       ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
 }
@@ -572,26 +584,76 @@ try {
     summary.desktopShots = await runSuite(creator, 'desktop', truth);
     summary.desktopErrors = creator.errors.slice(0, 10);
   }
+  if (MODE === 'desktop' || MODE === 'both') {
+    /* ---- 第 7 条:含生成声音的项目「打包保存」后,在空数据目录打开,声音还在 ---- */
+    const packed = await P(creator, async () => {
+      const { packProcp } = await import('/src/editor/io/procp.ts');
+      const r = await packProcp();
+      const bytes = new Uint8Array(await r.blob.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return { b64: btoa(bin), size: bytes.length, missing: r.missing };
+    });
+    check(packed.size > 1000 && packed.missing.length === 0, '第7条:真实「打包保存」(packProcp)打出 .procp,没有缺失素材', { size: packed.size, missing: packed.missing });
+    fs.writeFileSync(path.join(OUT, 'sound-project.procp'), Buffer.from(packed.b64, 'base64'));
+    const dir2 = path.join(TMP, 'desktop-empty');
+    for (const d of ['data', 'card-overrides', 'projects', 'work', 'tmp']) fs.mkdirSync(path.join(dir2, d), { recursive: true });
+    const dev2 = await startDevServer({ env: { PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_EXPORT_DIR: dir2, PROMPTCUT_DATA_DIR: path.join(dir2, 'data'), PROMPTCUT_CARD_OVERRIDES: path.join(dir2, 'card-overrides'),
+      PROMPTCUT_PROJECTS_DIR: path.join(dir2, 'projects'), PROMPTCUT_WORK_DIR: path.join(dir2, 'work'), PROMPTCUT_STREAMS: '0', TEMP: path.join(dir2, 'tmp'), TMP: path.join(dir2, 'tmp'), TMPDIR: path.join(dir2, 'tmp') },
+      logFile: path.join(dir2, 'vite.log'), port: BASE + 6, log: (m) => console.log('[dev2] ' + m) });
+    try {
+      const empty = path.join(dir2, 'media');
+      const before = fs.existsSync(empty) ? fs.readdirSync(empty).filter((x) => !x.startsWith('.')).length : 0;
+      const fresh = await newPage('reopen');
+      await fresh.goto(dev2.origin + '/?editor&nosetup=1', { waitUntil: 'domcontentloaded', timeout: 180_000 });
+      await until('空数据目录的编辑器就绪', () => P(fresh, () => !!window.__pcStore && !!document.querySelector('[data-pc="ruler"]')), 120_000, 300);
+      const missingBefore = await Promise.all([truth.kbd.hash, truth.notif.hash, truth.av.hash].map((h) => fetch(dev2.origin + '/@media/' + h).then((r) => r.status)));
+      const opened = await P(fresh, async (b64) => {
+        const bin = atob(b64), bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const { loadProcpFile } = await import('/src/editor/io/procp.ts');
+        const project = await loadProcpFile(new Blob([bytes]));
+        window.__pcStore.actions.loadProject(project);
+        const p = window.__pcStore.getState().project;
+        return { media: p.media.map((m) => ({ name: m.name, hash: m.hash, recipe: !!m.soundEffect, url: m.url })), cardAudio: p.tracks.flatMap((t) => t.clips).filter((c) => c.cardAudio).length, clips: p.tracks.flatMap((t) => t.clips).length };
+      }, packed.b64);
+      const statuses = await Promise.all([truth.kbd.hash, truth.notif.hash, truth.av.hash].map((h) => fetch(dev2.origin + '/@media/' + h).then(async (r) => ({ status: r.status, bytes: (await r.arrayBuffer()).byteLength }))));
+      check(missingBefore.every((x) => x !== 200) && before === 0, '第7条:打开前空数据目录里没有这三份声音', { missingBefore, filesBefore: before });
+      check(opened.media.length === 3 && opened.cardAudio === 1 && opened.clips === 4 && opened.media.filter((m) => m.recipe).length === 2, '第7条:打开 .procp 后项目完整(3 份声音素材、2 份带配方、1 个声画卡内嵌声音、4 个片段)', opened);
+      check(statuses.every((x) => x.status === 200 && x.bytes > 44), '第7条:声音字节已落进新数据目录,/@media/<哈希> 取得到', statuses);
+      await openEdit(fresh);
+      summary.reopenShots = await runSuite(fresh, 'reopened', truth, { quick: true });
+    } finally { dev2.stop(); }
+  }
   if (MODE === 'online' || MODE === 'both') {
     const SITE = await startOnlineSite();
+    console.log('[step] 在线站点已起 ' + SITE);
     // 开协作前先恢复到干净状态(静音都已恢复),让成员看到的与创建者一致
     const link = await enableCollab(creator, SITE);
     const code = String(link).split('invite=')[1];
+    console.log('[step] 协作已开启,邀请码长度 ' + code.length);
     // 等素材上云
     const uploaded = await until('三份声音素材上传到本机托管组合', async () => {
       const q = await fetch(`${dev.origin}/api/media/upload-queue`).then((r) => r.json()).catch(() => null);
-      return q && (q.pending ?? q.queued ?? q.length ?? 0) === 0 ? q : null;
+      const u = q?.queue;
+      return u && !u.working && (u.items?.length ?? 0) === 0 && u.enqueued > 0 && u.done >= u.enqueued ? q : null;
     }, 120_000, 1000);
     summary.uploadQueue = uploaded;
+    console.log('[step] 上传队列 ' + JSON.stringify(uploaded?.queue ?? null));
     const member = await newPage('member');
+    member.on('console', (m) => { if (['error', 'warning'].includes(m.type())) console.log('[member console ' + m.type() + '] ' + m.text().slice(0, 240)); });
+    member.on('pageerror', (e) => console.log('[member pageerror] ' + String(e?.message ?? e).slice(0, 240)));
     await member.goto(`${SITE}/editor#invite=${code}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    console.log('[step] 成员页已打开');
     await member.waitForSelector('[data-pc="join-invite-project"]', { visible: true, timeout: 60_000 });
     await typeInto(member, '[data-pc="join-username"]', '成员');
     await member.click('[data-pc="join-submit"]');
+    console.log('[step] 成员已提交加入表单');
     await member.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 90_000 });
+    console.log('[step] 成员已进入共享项目');
     const ready = await until('成员页看到共享项目的全部声音素材与片段', () => P(member, () => {
       const p = window.__pcStore?.getState().project;
-      return p && p.media.length >= 3 && p.tracks.flatMap((t) => t.clips).length >= 5 ? p.media.length : null;
+      return p && p.media.length >= 3 && p.tracks.flatMap((t) => t.clips).length >= 4 ? p.media.length : null;
     }), 90_000, 500);
     check(!!ready, '在线成员页收到共享项目(声音素材与片段都在)', { media: ready });
     const isOnline = await P(member, () => location.pathname.startsWith('/editor'));
@@ -599,6 +661,33 @@ try {
     // 真值:成员页上的哈希与创建者一致
     summary.onlineShots = await runSuite(member, 'online', truth);
     summary.onlineErrors = member.errors.slice(0, 10);
+    /* ---- 第 7 条:协作项目里 Agent 生成声音,另一端(在线成员页)听得到 ---- */
+    const baseline = await P(member, () => window.__pcStore.getState().project.media.map((m) => m.hash));
+    const called = await fetch(dev.origin + '/api/mcp/call', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'sound_generate', agent: 'verify-agent', args: { preset: 'notification', start: 6.2, requestId: 'verify-agent-sound-1', name: 'agent-提示音', params: { frequency: 1320 } } }) }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+    check(called.ok === true, '第7条:Agent 经 sound_generate 工具(与 MCP 同一入口)在协作项目里生成提示音', { ok: called.ok, error: called.error, result: JSON.stringify(called.result ?? '').slice(0, 200) });
+    const fresh = await until('成员页收到 Agent 生成的新声音素材与片段', () => P(member, (known) => {
+      const p = window.__pcStore.getState().project;
+      const m = p.media.find((x) => x.soundEffect?.recipe?.params?.frequency === 1320 && !known.includes(x.hash));
+      const c = m && p.tracks.flatMap((t) => t.clips).find((x) => x.mediaId === m.id);
+      return c ? { hash: m.hash, start: c.start, end: c.end, off: c.mediaOffset ?? 0, events: m.soundEffect.recipe.events.map((e) => e.frame / 48000) } : null;
+    }, baseline), 90_000, 500);
+    if (fresh) {
+      await P(member, HARNESS);
+      await P(member, () => window.__sv.start());
+      await P(member, (t) => { const s = window.__pcStore; s.actions.pause(); s.actions.seek(t); s.actions.play(); }, fresh.start - 0.1);
+      await sleep(1100);
+      await P(member, () => window.__pcStore.actions.pause());
+      const tr = await P(member, () => window.__sv.stop());
+      const own = [];
+      for (const smp of tr) for (const el of smp.els) if (hashOf(el.src) === fresh.hash) own.push({ ...el, t: smp.t, playing: smp.playing, expect: smp.t - fresh.start + fresh.off });
+      const al = alignment(own);
+      const maxRms = Math.max(0, ...own.filter((x) => x.rms !== null).map((x) => x.rms));
+      check(own.length > 5 && al.frac >= 0.9 && maxRms >= THR, '第7条:另一端(在线成员页)播放 Agent 生成的声音:元素在播、currentTime 对齐、有能量', { samples: own.length, ...al, maxRms });
+      const srcUsed = own.find((x) => x.src)?.src;
+      const sameBytes = await P(member, async (u) => { const r = await fetch(u); return { status: r.status, bytes: (await r.arrayBuffer()).byteLength }; }, srcUsed).catch((e) => ({ error: String(e) }));
+      check(sameBytes.status === 200 && sameBytes.bytes > 44, '第7条:成员页播放用的地址(素材服务)取得到 Agent 生成的 WAV', sameBytes);
+    }
   }
 } catch (e) {
   fails.push(`中断:${String(e?.message ?? e).slice(0, 300)}`);
