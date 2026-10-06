@@ -166,7 +166,7 @@ if (args.includes('--child')) {
 
 /* ================================================================== 主进程 */
 
-const ALL_STEPS = ['leave', 'later', 'reopen', 'stop', 'spaced', 'errors', 'usercard', 'load'];
+const ALL_STEPS = ['leave', 'later', 'reopen', 'stop', 'spaced', 'usercard', 'errors', 'load'];
 /** 步骤 spaced 里两次写入之间等多久(要大于补渲的防抖 3 秒) */
 const SPACED_GAP_MS = 9000;
 const STEPS = String(argOf('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
@@ -633,6 +633,9 @@ async function main() {
   }
 
   /* ---------------------------------------------------------------- 六 */
+  // 用户卡一步排在 errors 之前:errors 里有一条要把渲染服务停掉
+  if (STEPS.includes('usercard')) await usercardStep();
+
   if (STEPS.includes('errors')) {
     bob ??= await joinAs(BASE, proj, creds.bob);
     /** 跑一遍:发起、离开、等收尾;回 { before, after, meta, events, quiet, intact } */
@@ -719,8 +722,6 @@ async function main() {
   }
 
   /* ---------------------------------------------------------------- 附:节点资源 */
-  if (STEPS.includes('usercard')) await usercardStep();
-
   if (STEPS.includes('load')) {
     bob ??= await joinAs(BASE, proj, creds.bob);
     if (agent.shortStall) await bootAgent();
