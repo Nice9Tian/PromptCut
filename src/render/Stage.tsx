@@ -19,7 +19,7 @@ import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
 /* 占位组件(product/rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
 import { PlaceholderPlane, PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, maxAnimated } from "./placeholder";
-import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, localOnlyReason, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholderFitFor, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
+import { ensurePlaceholderStyle, exportSyncedMountFor, geometryFor, isCatchingUpClip, localOnlyReason, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholderFitFor, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
 import type { PlaceholderReason } from "./placeholder/contract";
 
 setMaxAnimated(maxAnimated);
@@ -242,7 +242,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            * 包裹层照内置重卡的路子挂快照平面、流平面,兜底顺序什么都贴不上时占位符显示 `unsupported`(C10 契约第 9 节)。
            * 模式关着(桌面、导出、预渲染、Agent 看到的画面)恒为 false,下面每一支和以前逐字相同。
            */
-          const localOnly = onlineBrowserMode() && unsupportedHere(clip.cardId, def);
+          const localOnly = (onlineBrowserMode() && unsupportedHere(clip.cardId, def)) || exportSyncedMountFor(clip.cardId, def);
           /*
            * 三道都在取 def 这一格剔掉,不放到分支里:
            *  - 定义没了(用户卡文件被删)——图卡的 def 在注册表里必然取得到,挡不住下面两种;

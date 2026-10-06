@@ -180,6 +180,20 @@ export function onlineBrowserMode(): boolean {
 }
 
 /*
+ * 在线逐帧导出的导出页(与编辑页面同源的 `?export=1` 文档,`src/export/frameCompositor.ts` 开的 iframe)里同步来的用户卡:
+ * 这个文档不执行卡片代码、也没有它们的定义,但导出要把每一帧里这些卡的包裹层换成预渲染原尺寸(契约第 8 节「在线导出」),
+ * 所以包裹层得先挂出来。编辑页面经 `__pcSetSyncedUserCards` 把同步表交给导出页并打开这个开关;只对「没有定义的同步卡」生效,
+ * 内置卡、图卡与桌面的导出一个字不变(开关只有在线导出才会打开)。
+ */
+let exportSyncedMount = false;
+export function setExportSyncedMount(on: boolean): void {
+  exportSyncedMount = !!on;
+}
+export function exportSyncedMountFor(cardId: string | undefined, def: unknown): boolean {
+  return exportSyncedMount && !def && !!cardId && isUserCardId(cardId);
+}
+
+/*
  * 低内存档不执行用户卡、图卡的代码(`product/platforms.md`「面向的平台」;它的现有规则,不因在线执行放开而变):
  * 构建时就在在线包里的仓库用户卡在低内存档也照旧算运行不了(同步来的卡另有运行状态 `low-memory`)。
  * 档位从两处得知:编辑页面由 `planDispatch.setPlanLowMemory` 写进来;舞台是另一个文档,看它启动时写下的取档策略

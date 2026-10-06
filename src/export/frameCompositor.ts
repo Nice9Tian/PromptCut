@@ -20,6 +20,7 @@
 import type { Project } from "../kernel/project";
 import { renameSnapshotIds } from "../render/snapshotRename";
 import { withTicket } from "./ticketRenewal";
+import { syncedUserCards } from "../kernel/registry";
 
 type ExportWindow = Window & typeof globalThis & {
   __pcReady?: boolean;
@@ -32,6 +33,8 @@ type ExportWindow = Window & typeof globalThis & {
   __pcPrepareFrameMedia?: () => Promise<void>;
   __pcHideFrameMedia?: () => void;
   __pcLoadProject?: (p: unknown, o?: unknown) => Promise<void>;
+  /** 导出页:接同步来的用户卡的表(在线导出把它们的包裹层挂出来,好换成预渲染原尺寸) */
+  __pcSetSyncedUserCards?: (entries: unknown[]) => void;
   __pcRealRaf?: (cb: FrameRequestCallback) => number;
   /** `?rafControl=1` 时由 `src/render/stageClockEntry.ts` 装:跑一轮排着的 rAF 回调(一拍),回跑了几个 */
   __pcBrowserBeginFrame?: () => number;
@@ -136,6 +139,8 @@ export class ExportCompositor {
     const c = new ExportCompositor(el, opts);
     try {
       await c.waitFor(() => c.w?.__pcReady === true && typeof c.w.__pcLoadProject === "function", 60_000, "导出页 60 秒没就绪");
+      // 同步来的用户卡在导出页里没有定义:把同步表交给它,让这些卡的包裹层挂出来,逐帧换成预渲染原尺寸
+      if (syncedUserCards().size) c.w.__pcSetSyncedUserCards?.([...syncedUserCards().values()]);
       await c.w.__pcLoadProject!(p);
       await c.waitFor(() => c.w.__pcReady === true && typeof c.w.__pcSetT === "function", 60_000, "导出页 60 秒没装好项目");
     } catch (e) {
