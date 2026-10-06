@@ -5,6 +5,7 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
+import { hostedGatePlugin } from "./server/vite-plugin-hosted-gate";
 import { exportPlugin } from "./server/vite-plugin-export";
 import { mediaPlugin } from "./server/vite-plugin-media";
 import { assetProxyPlugin } from "./server/asset-client";
@@ -81,7 +82,8 @@ export default defineConfig({
   // 依赖扫描入口只找真正的页面,不把 out/frame-library 下的快照 .html 当入口(`server/vite-scan-ignore.mjs`)
   optimizeDeps: { entries: DEP_SCAN_ENTRIES },
   // 跨源守卫要排在所有接口前面(中间件按 configureServer 的调用顺序注册)
-  plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), mediaRoutes(), vitePluginCards(), rawEolPlugin(), visionPlugin()],
+  // hostedGatePlugin 只在托管方渲染服务的工作进程里生效(页面请求闸、出口代理,`server/hosted-render/vite-gate.mjs`),别处是空的
+  plugins: [hostedGatePlugin(), corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), mediaRoutes(), vitePluginCards(), rawEolPlugin(), visionPlugin()],
   server: {
     // 渲染页每一趟都是全新的页面,用不着热更新;源码改了照样重新变换(watcher 还开着)
     hmr: false,

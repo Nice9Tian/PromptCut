@@ -14,8 +14,8 @@
  *     别的源（另一个工作进程的页面、任何别的网页）一律 403；过了这一条，`/api/**` 只放行 `PAGE_API_ALLOW` 里的几条——
  *     导出页渲染时确实要用的——其余 403；非 `/api/**`（模块、样式、素材）照常。
  *
- * **现状：只有这个纯函数与它的单测（HR28），还没有接进 `vite-plugin-api-guard.ts`，对任何进程都不生效。**
- * `PAGE_API_ALLOW` 是按读代码估的，没有在真的渲染里核对过页面实际发哪些请求；接线时先只记不拦跑一遍整套演练，再定这张表。
+ * 接线在 `vite-gate.mjs`（`server/vite-plugin-hosted-gate.ts` 把它装到工作进程的两台 Vite 上，排在一切接口之前）。
+ * `PAGE_API_ALLOW` 按「只记不拦」跑整套演练时渲染页实际发过的请求定（`PROMPTCUT_PAGE_GATE=log`，记录里的 `seen` / `would-deny`）。
  */
 import { apiPath, isAssetServicePath } from '../http-guard.mjs';
 
@@ -24,16 +24,16 @@ export const PAGE_GATE_ENV = 'PROMPTCUT_RENDER_BROKER';
 
 /**
  * 预渲染页面（导出页）可以请求的 `/api/**`：`[方法, 路径前缀或完整路径, 是不是前缀]`。
- * 这张表按整套演练里页面实际发过的请求定（`hosted-render-probe.mjs` 与隔离探针里没有任何一条被拦的正常请求）；
- * 多一种就回来加并写明谁在用。素材服务的路由（`/api/asset/<ns>/<hash>`，只读方法）另行放行：页面按哈希取素材。
+ *
+ * **这张表按真实渲染里页面实际发出的请求定**（2026-10-07 实测：`PROMPTCUT_PAGE_GATE=log` 只记不拦跑整套演练的 `work`、`late`、`usercard`
+ * 三步，常驻与隔离两个工作进程的渲染页合起来，浏览器发来的 `/api/**` 只有一种：`GET /api/cards/scopes`，76 次）。
+ * 上一版按读代码估的三条（`/api/export/`、`/api/media/file`、`/api/media/tiers`）在真实渲染里没有出现，页面代码里也只有编辑界面才发，已去掉：
+ * 项目内容随导出页的地址给，不经接口取；素材按哈希走 `/@media/<哈希>`（不是 `/api`）与素材服务的路由。
+ * 多一种就回来加并写明谁在用、怎么测出来的。素材服务的路由（`/api/asset/<ns>/<hash>`，只读方法）另行放行：页面按哈希取素材。
  */
 export const PAGE_API_ALLOW = Object.freeze([
-  // 导出页取这一趟要渲的项目（`ExportView` 按 id 取预渲染进程备好的那一份）
-  Object.freeze({ method: 'GET', path: '/api/export/', prefix: true }),
-  // 素材的本机文件（已缓存到这个工作进程数据目录里的那一份），按素材 id 取
-  Object.freeze({ method: 'GET', path: '/api/media/file', prefix: true }),
-  Object.freeze({ method: 'HEAD', path: '/api/media/file', prefix: true }),
-  Object.freeze({ method: 'GET', path: '/api/media/tiers', prefix: true }),
+  // 页面启动时取卡片归属表（这个工作进程自己数据目录里的那一份，只读）
+  Object.freeze({ method: 'GET', path: '/api/cards/scopes', prefix: false }),
 ]);
 
 function apiAllowed(method, pathname, allow) {
@@ -65,6 +65,8 @@ export function pageGate({ url, method, headers, prerender, allow = PAGE_API_ALL
     if (!same) return { browser: true, allow: false, reason: 'cross-origin' };
   }
   const pathname = apiPath(url);
+  // 开发服务器自带的「在编辑器里打开」：会在这台机器上起一个进程，渲染页用不着
+  if (pathname.startsWith('/__open-in-editor') || pathname.startsWith('/__inspect')) return { browser: true, allow: false, reason: 'dev-tool' };
   if (!pathname.startsWith('/api/')) return { browser: true, allow: true };
   const m = String(method || 'GET').toUpperCase();
   if (isAssetServicePath(url) && (m === 'GET' || m === 'HEAD')) return { browser: true, allow: true };

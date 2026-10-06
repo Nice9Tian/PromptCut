@@ -858,6 +858,20 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   if (!cardSyncOn) queueLog("queue.card-sync-skip", { profile: "host", reason: process.env.PROMPTCUT_CARD_SYNC === "0" ? "disabled" : "no-overrides" });
   // 托管方的渲染节点:能力位集中在 `render-node/host.mjs` 的 `hostedRenderCapabilities`(不同步卡的工作进程不报 userCards)
   if (broker) capabilities = hostMod.hostedRenderCapabilities(capabilities, { cardSync: cardSyncOn });
+  /*
+   * 托管方渲染服务的用户卡隔离(`docs/plan/hosted-render-contract.md` 第 7.5 节),管理进程经两个环境变量告诉工作进程自己是哪一种:
+   *   - 常驻工作进程(`PROMPTCUT_HOSTED_WORKER=resident`,不同步卡)且 `PROMPTCUT_HOSTED_HOLD_CARDS=1`:内容库里有 `card-source` 的项目
+   *     它连着、看着队列,但一个任务也不认领(`card-presence.mjs`),把「这个项目要隔离、有几个任务等着」随诊断报上去;
+   *   - 隔离工作进程(`PROMPTCUT_HOSTED_WORKER=isolated`,开着卡片同步):装卡之前过同步文件预检(`source-gate.mjs`);
+   *     卡片同步对完第一次账、卡片代码身份稳定之前不认领(不然清单计划会在卡还没装上时被切分)。
+   * 没有这两个变量(桌面版、普通的独立渲染主机)时下面三个量都是空的,接线与原来逐项相同。
+   */
+  const hostedKind: string | null = broker ? (await import("./hosted-render/source-gate.mjs") as any).hostedWorkerKind() : null;
+  const holdCards = hostedKind === "resident" && !cardSyncOn && process.env.PROMPTCUT_HOSTED_HOLD_CARDS === "1";
+  const { createCardPresence }: any = holdCards ? await import("./hosted-render/card-presence.mjs") : {};
+  const { checkSyncedSource }: any = hostedKind === "isolated" ? await import("./hosted-render/source-gate.mjs") : {};
+  const { hostedGateStatus }: any = hostedKind ? await import("./hosted-render/vite-gate.mjs") : {};
+  if (hostedKind) queueLog("queue.hosted-worker", { kind: hostedKind, cardSync: cardSyncOn, holdCards });
 
   const override = String(process.env[TEST_CODE_VERSION_ENV] || "").trim() || null;
   let codeVersion: string = override ?? frameCode(root);
@@ -867,7 +881,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const nodeIdBase = `host:${hostName}${editorPort ? `:${editorPort}` : ""}`;
 
   /** 每项的连接记录:诊断用(连不上的次数、素材基址),退出时关 */
-  const wired: { projectId: string | null; endpoint: any; assets: any; ticket: any; connectFailed: number; opens: number; cards: any; closed?: boolean }[] = [];
+  const wired: { projectId: string | null; endpoint: any; assets: any; ticket: any; connectFailed: number; opens: number; cards: any; presence?: any; cardsSynced?: boolean; closed?: boolean }[] = [];
   const { ticketProtocols }: any = broker ? await import("./auth/client.mjs") : {};
   const host = hostMod.createRenderHost({
     entries: config.entries,
@@ -918,6 +932,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
           rec.cards = createHostCardSync({
             root, dataDir: cardSyncDir, projectId: rec.projectId, url: entry.url, endpoint: rec.endpoint,
             before: () => cardCode(root).touch(),
+            ...(checkSyncedSource ? { precheck: (rel: string, source: string) => checkSyncedSource(rel, source, { rootHas: (p: string) => fs.existsSync(path.join(root, p)) }) } : {}),
             log: (event: string, fields: object = {}) => {
               note(event, { project: index, ...fields });
               if (/installed|rejected|backup-failed|error|skip|put-failed/.test(event)) queueLog(event, { project: index, projectId: rec.projectId, ...fields });
@@ -927,16 +942,38 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
           queueLog("queue.card-sync-failed", { project: index, projectId: rec.projectId, message: String(error?.message ?? error) });
         }
       }
+      // 常驻工作进程:这个项目带没带卡片代码(只列键,不取正文)
+      if (createCardPresence && rec.projectId) {
+        rec.presence = createCardPresence({ endpoint: rec.endpoint, content, log: (event: string, fields: object = {}) => queueLog(event, { project: index, projectId: rec.projectId, ...fields }) });
+      }
+      // 隔离工作进程:每次建新会话后等卡片同步对完账(列表里的卡都装上或被拒)才放开认领
+      if (hostedKind === "isolated" && rec.cards) {
+        rec.cardsSynced = false;
+        const settle = () => {
+          rec.cardsSynced = false;
+          // 卡片同步自己的「连上」处理先排进队(它在本处理之前注册),这里晚一拍再等它的队列走空
+          setTimeout(() => { void rec.cards.idle().then(() => { if (!rec.closed) { rec.cardsSynced = true; queueLog("queue.cards-synced", { project: index, projectId: rec.projectId }); } }, () => {}); }, 200);
+        };
+        rec.endpoint.onOpen(settle);
+        if (rec.endpoint.connected === true) settle();
+      }
+      const hold = rec.presence ? () => rec.presence.hold()
+        : hostedKind === "isolated" ? () => !(rec.cards ? rec.cardsSynced === true : true) || !cardCode(root).settled()
+        : null;
+      const cardsInfo = rec.presence ? () => rec.presence.status()
+        : hostedKind === "isolated" ? () => ({ state: rec.cardsSynced ? "synced" : "syncing", count: Object.keys(rec.cards?.status?.()?.records ?? {}).length })
+        : null;
       wired[index] = rec;
       const close = () => {
         if (rec.closed) return;
         rec.closed = true;
+        try { rec.presence?.close(); } catch { /* 已关 */ }
         try { rec.cards?.close(); } catch { /* 已关 */ }
         try { rec.assets.stop(); } catch { /* 已停 */ }
         try { rec.endpoint.close(); } catch { /* 已关 */ }
         log("queue.project-closed", { profile: "host", project: index, projectId: rec.projectId });
       };
-      return { endpoint: rec.endpoint, executor, sink, close };
+      return { endpoint: rec.endpoint, executor, sink, close, ...(hold ? { hold } : {}), ...(cardsInfo ? { cards: cardsInfo } : {}) };
     },
     onEvent: (event: any) => {
       if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { project: event.index, id: event.id, ...(event.error ? { error: event.error } : {}) });
@@ -1001,6 +1038,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
         }
       }
       refreshFallback();
+      for (const rec of live()) rec.presence?.tick();
       host.tick();
     } catch (error: any) {
       note("queue.tick-error", { message: String(error?.message ?? error) });
@@ -1011,10 +1049,12 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const summary = () => ({
     profile: "host",
     nodes: host.nodes().map((n: any) => { const rec = wired[n.index]; return { ...n, opens: rec?.opens ?? 0, connectFailed: rec?.connectFailed ?? 0, ...sessionDiag(rec?.endpoint), assetBase: rec?.assets.base() ?? null }; }),
-    codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent, paused: host.paused === true, quotaPausedUntil: host.quotaPausedUntil ?? null, capabilities,
+    codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent, ...(hostedKind ? { worker: hostedKind, limit: host.limit } : {}), paused: host.paused === true, quotaPausedUntil: host.quotaPausedUntil ?? null, capabilities,
     // c66-host-cards:每个项目的卡片同步(记账:仓库相对路径 → 装到的 cardRev)与卡片代码身份的状态
     cardSync: live().map((rec) => hostCardSyncSummary(rec.projectId, rec.cards)),
     cardCode: { epoch: cardCode(root).epoch, settled: cardCode(root).settled() },
+    // 托管方的工作进程:这台预渲染 Vite 上页面请求闸与出口代理拦了多少(`hosted-render/vite-gate.mjs`)
+    ...(hostedGateStatus ? { pageGate: hostedGateStatus() } : {}),
   });
   const closeAll = async () => {
     clearInterval(timer);

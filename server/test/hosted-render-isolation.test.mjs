@@ -2,7 +2,8 @@
  * 托管方渲染服务隔离工作进程的底层零件（契约 `docs/plan/hosted-render-contract.md` 第 7.5 节，方案 A；用例 HR23、HR28）。
  * 跑：npm test -- server/test/hosted-render-isolation.test.mjs（不起浏览器、不起进程）
  *
- * 这些零件**还没有接进管理进程**（`main.mjs` 没有引它们）：现在渲染服务的行为仍等同方案 B。
+ * 接线（主机搁着不认领、代理口分口令、闸装到开发服务器上、同步文件预检）的单测在 `hosted-render-usercards.test.mjs`；
+ * 端到端的验收是 `scripts/probes/hosted-render-isolation-probe.mjs`。
  *
  *   HR23  隔离工作进程的编排（状态机）：一次只做一个项目；60 s 没有它能做的任务就结束；几个项目都在等时轮流、每个最多 5 分钟一换；
  *         换项目之前清空；起不来、什么都没认领到的不反复重来；检出副本与数据目录的建与清（只清带记号的目录、Windows 上不建链接）
@@ -287,7 +288,7 @@ test('HR28 页面请求闸：Node 一侧的调用照旧放行；编辑器的 Vit
   // 预渲染的 Vite：别的源（另一个工作进程的页面是「同站」）一律拒，连模块也不给
   for (const site of ['same-site', 'cross-site']) {
     assert.equal(gate({ url: '/src/cards/index.ts', headers: page(site) }).reason, 'cross-origin');
-    assert.equal(gate({ url: '/api/export/abc', headers: page(site) }).reason, 'cross-origin');
+    assert.equal(gate({ url: '/api/cards/scopes', headers: page(site) }).reason, 'cross-origin');
     assert.equal(gate({ url: '/@fs/C:/x/y.ts', headers: page(site) }).reason, 'cross-origin');
   }
   // 没有 Sec-Fetch-Site 但带 Origin（WebSocket 握手）：Origin 与 Host 对不上就拒
@@ -298,15 +299,20 @@ test('HR28 页面请求闸：Node 一侧的调用照旧放行；编辑器的 Vit
     assert.equal(gate({ url, headers: page('same-origin') }).allow, true, url);
   }
   assert.equal(gate({ url: '/?export=1', headers: page('none') }).allow, true, 'puppeteer 直接开的导航');
+  // 放行表按真实渲染里页面实际发的请求定：只有取卡片归属表这一条
+  assert.deepEqual(PAGE_API_ALLOW.map((r) => `${r.method} ${r.path}${r.prefix ? '*' : ''}`), ['GET /api/cards/scopes']);
   for (const rule of PAGE_API_ALLOW) {
-    assert.equal(gate({ url: rule.prefix ? `${rule.path}x?y=1` : rule.path, method: rule.method, headers: page('same-origin') }).allow, true, rule.path);
+    assert.equal(gate({ url: rule.prefix ? `${rule.path}x?y=1` : `${rule.path}?y=1`, method: rule.method, headers: page('same-origin') }).allow, true, rule.path);
   }
+  assert.equal(gate({ url: '/api/cards/scopes', method: 'POST', headers: page('same-origin') }).reason, 'api-not-allowed', '只读');
+  assert.equal(gate({ url: '/api/cards/scopes/x', headers: page('same-origin') }).reason, 'api-not-allowed', '不是前缀');
   assert.equal(gate({ url: `/api/asset/snap/${'a'.repeat(64)}`, headers: page('same-origin') }).allow, true, '按哈希读素材');
   assert.equal(gate({ url: `/api/asset/snap/${'a'.repeat(64)}/chunks`, method: 'POST', headers: page('same-origin') }).allow, false, '页面不许写素材');
   for (const [method, url] of [
     ['GET', '/api/cards/source?id=x'], ['POST', '/api/cards/create'], ['POST', '/api/cards/edit'], ['GET', '/api/frames/queue'], ['POST', '/api/frames/queue/release'],
     ['GET', '/api/data/project'], ['GET', '/api/media/local?path=/etc/passwd'], ['POST', '/api/media/upload/x'], ['POST', '/api/export'], ['GET', '/api/storage'],
     ['GET', '/api/render-node/ticket-request'], ['GET', '/api/ai/config'], ['GET', '/aPi/cards/source'], ['GET', '//api/cards/source'], ['POST', '/api/export/media/x'],
+    ['GET', '/api/export/project/x'], ['GET', '/api/media/file?path=/etc/passwd'], ['HEAD', '/api/media/file?path=x'], ['GET', '/api/media/tiers?hashes=x'],
   ]) {
     assert.equal(gate({ url, method, headers: page('same-origin') }).reason, 'api-not-allowed', `${method} ${url}`);
   }

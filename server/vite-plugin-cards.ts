@@ -15,6 +15,7 @@ import {
   setCardHasher, setCardIdentifier, emitCardSourceChange,
 } from './card-overrides.mjs';
 import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
+import { checkSyncedSource, rejectedStub, hostedWorkerKind } from './hosted-render/source-gate.mjs';
 
 /* ────────────────────────────────────────────────────────────────────
  * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
@@ -1161,6 +1162,8 @@ export function createHostCardSync(opts: {
   url: string;
   endpoint: { send(m: object): unknown; onMessage(h: (m: any) => void): void; onOpen(h: () => void): void; onClose(h: (info: any) => void): void; onResume?(h: () => void): void; stats?(): any; connected?: boolean };
   before?: () => void;
+  /** 装一个文件之前的预检(托管方的隔离工作进程给 `hosted-render/source-gate.mjs` 的 `checkSyncedSource`);不过就不装 */
+  precheck?: (rel: string, source: string) => { ok: boolean; errors: string[] };
   log?: (event: string, fields?: object) => void;
 }): HostCardSync {
   const { root, dataDir, endpoint } = opts;
@@ -1195,6 +1198,12 @@ export function createHostCardSync(opts: {
         return file;
       },
       install: (rel: string, source: string) => {
+        // 托管方的隔离工作进程:装之前先过同步文件预检(调用方给了 `precheck` 才有;桌面版与普通的独立渲染主机不给)
+        if (opts.precheck) {
+          let verdict: { ok: boolean; errors: string[] };
+          try { verdict = opts.precheck(rel, source); } catch (error: any) { verdict = { ok: false, errors: [String(error?.message ?? error)] }; }
+          if (!verdict.ok) return { ok: false, error: `同步文件预检不过:${verdict.errors.slice(0, 5).join(';')}` };
+        }
         try { opts.before?.(); } catch { /* 计时出错不挡装卡 */ }
         const r = installSyncedFile({ root, historyDir: path.join(dataDir, 'card-history'), rel, source });
         return { ok: r.ok, error: r.error };
@@ -1286,6 +1295,8 @@ export function userOverlayModuleCode(root: string): string {
  */
 function cardOverridesLoader(): Plugin {
   let projectRoot = process.cwd();
+  /** 托管方渲染服务的工作进程才有值(`resident` / `isolated`);别的进程是 null,下面那段预检不走 */
+  const hostedKind = hostedWorkerKind();
   return {
     name: 'promptcut-card-overrides',
     enforce: 'pre',
@@ -1304,6 +1315,19 @@ function cardOverridesLoader(): Plugin {
       if (!o || !fs.existsSync(o)) return null;
       this.addWatchFile(o);
       const text = fs.readFileSync(o, 'utf8');
+      /*
+       * 托管方渲染服务的工作进程(`docs/plan/hosted-render-contract.md` 第 7.5 节):改动层里的文件是项目带来的代码,交给 Vite 与
+       * Tailwind 在 Node 一侧处理之前先过同步文件预检(`hosted-render/source-gate.mjs`),不过的换成一段报错的桩——装卡时已经拦过一遍,
+       * 这里是第二道(文件不经卡片同步落到改动层里的情况)。常驻工作进程本来就不该有改动层文件,一律不载入。别的进程不走这一段。
+       */
+      if (hostedKind) {
+        const rel = toRel(projectRoot, file);
+        const verdict = hostedKind === 'isolated' ? checkSyncedSource(rel, text, { rootHas: (p: string) => fs.existsSync(path.join(projectRoot, p)) }) : { ok: false, errors: ['常驻工作进程不载入任何项目带来的代码'] };
+        if (!verdict.ok) {
+          console.log(`[page-gate] source-rejected ${JSON.stringify({ rel, errors: verdict.errors.slice(0, 3) })}`);
+          return rejectedStub(rel, verdict.errors, { raw: /[?&]raw\b/.test(id) });
+        }
+      }
       // `?raw` 要的是源码字符串(cards/user/index.ts 打包 .proc 用),不是模块本身。
       // 原样交出去的话,Vite 会把 TSX 源码当成这个 ?raw 模块的 JS 来跑。
       // 换行统一成 LF(同 `raw-eol.mjs`):源码版本 / 身份键不随检出方式变

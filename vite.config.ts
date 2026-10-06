@@ -5,6 +5,7 @@ import { defineConfig, type Plugin, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
+import { hostedGatePlugin } from "./server/vite-plugin-hosted-gate";
 import { exportPlugin } from "./server/vite-plugin-export";
 import { exportsListPlugin } from "./server/vite-plugin-exports-list";
 import vitePluginAi from "./server/vite-plugin-ai";
@@ -83,7 +84,8 @@ const desktopConfig: UserConfig = {
   //   apiGuardPlugin  —— /api/** 的同源校验,任何 dev server 都生效。
   // stagePortsPlugin 排在 apiGuard 后面:它自己那条 /api/stage/ports 也该受同一道卡口管。
   // docservicePlugin(本地文档服务)总是注册。
-  plugins: [lanHostPlugin(), apiGuardPlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), exportsListPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), rawEolPlugin(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
+  // hostedGatePlugin 只在托管方渲染服务的工作进程里生效(页面请求闸,`server/hosted-render/vite-gate.mjs`),别处是空的;它要先于一切接口
+  plugins: [hostedGatePlugin(), lanHostPlugin(), apiGuardPlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), exportsListPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), rawEolPlugin(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
   // 依赖扫描入口只找真正的页面:缺省的 `**/*.html` 会把 out/frame-library 下成千上万个快照 .html 当入口读一遍(`server/vite-scan-ignore.mjs`)
   optimizeDeps: { entries: DEP_SCAN_ENTRIES },
   server: {

@@ -40,7 +40,7 @@
 | `{{MAX_CONCURRENT}}` / `{{MAX_PROJECTS}}` | `2` / `16` | `PROMPTCUT_RENDER_MAX_CONCURRENT` / `PROMPTCUT_RENDER_MAX_PROJECTS` |
 | `{{MEMORY_MAX}}` / `{{MEMORY_HIGH}}` / `{{CPU_QUOTA}}` | `6G` / `5G` / `400%` | `PROMPTCUT_RENDER_MEMORY_MAX` / `_MEMORY_HIGH` / `PROMPTCUT_RENDER_CPU_QUOTA`（slice 与管理进程的看护共用这几个值） |
 | `{{RENDER_USER}}` | `promptcut-render` | `PROMPTCUT_RENDER_USER`：工作进程的系统用户；空串表示与管理进程同一用户（root 或容器里直接跑，Chrome 自动带 `--no-sandbox`） |
-| `{{USER_CARDS}}` | `isolated` | `PROMPTCUT_RENDER_USER_CARDS`：`isolated`（有用户卡的项目在按项目隔离的工作进程里渲）或 `off`（不接用户卡任务） |
+| `{{USER_CARDS}}` | `isolated` | `PROMPTCUT_RENDER_USER_CARDS`：`isolated`（内容库里有卡片源码的项目由按项目隔离的工作进程渲，常驻工作进程不碰）或 `off`（退回不接用户卡任务：不起隔离工作进程）。隔离工作进程不用另外配置：端口缺省是工作进程的端口 + 10（`PROMPTCUT_RENDER_ISO_PORT` 可改，另占 +1、+2），数据目录是 `{{DATA}}/iso`（每一轮前后整个清空，属主跟 `{{DATA}}` 走），与常驻工作进程在同一个 slice 里 |
 | `{{EDITOR_DIR}}` | `/opt/promptcut-hosted/editor` | `PROMPTCUT_RENDER_EDITOR_DIR`：托管服务部署目录里的在线页面构建，管理进程从它读在线页面的代码版本，与自己比 |
 | `{{MAX_MEMORY_RESTART}}` / `{{KILL_TIMEOUT_MS}}` | `300M` / `20000` | 固定值 |
 
@@ -70,6 +70,7 @@ node scripts/remote/docservice.mjs status-render                  # 5. 看状态
   - 启动自检的 `chrome-frame` 一项走的就是工作进程开页与出帧的那条路：不行时自检以退出码 78 结束，`selfcheck.error` 里写出实际的 Chrome 版本与期望的版本，不会出现「自检过了、工作进程却一直起不来」。版本不是锁定的那一版但开页与出帧都行时只告警（`chrome-version`）：环境指纹含 Chrome 主版本，它的结果不会与别的节点混用。
 - **服务用户**：`install-render` 建系统用户 `promptcut-render`（`useradd --system --no-create-home --shell /usr/sbin/nologin`，无登录权限）。工作进程用它跑，Chrome 沙箱照常开着；它读不到托管数据目录与私钥目录（都是 0700）。要在只能以 root 跑的环境（容器）里跑，把 `PROMPTCUT_RENDER_USER` 设成空串，Chrome 自动带 `--no-sandbox` 并打日志说明。
 - **keygen**：私钥写进 `{{SECRETS}}/service-key.json`（0600，目录 0700，属主 root），公钥原子追加进托管数据目录的 `secrets/services.json`；文档服务按文件修改时刻重读，不用重启托管服务。`keygen-render --list` 看登记表；**换钥**：再跑一次 `keygen-render`（两把公钥并存）→ `pm2 restart promptcut-render` → 确认新钥生效后 `keygen-render --retire <旧 kid>`；**撤销**：`keygen-render --retire <kid>`，这个服务的连接随即被关。托管数据目录若是从旧节点整份搬来的，要把旧公钥撤掉，再在新节点上生成新钥。
+- **用户卡的隔离**（契约 `docs/plan/hosted-render-contract.md` 第 7.5 节）：工作进程里的页面请求闸、出口代理与同步文件预检随代码生效，没有开关要配。排查「渲染页的某个请求被拦了」时看管理进程日志里的 `[page-gate] deny …` 行；确要放开，先用 `PROMPTCUT_PAGE_GATE=log`（写进 PM2 配置的 `env`，只记不拦，**排查完立刻去掉**）看清它发的是什么，再改放行表。`PROMPTCUT_RENDER_LOAD_HIGH` 缺省等于核数，一般不用配。别把别的服务的凭证放进渲染服务的环境变量：名字像秘密的不会传给工作进程，名字不像的会。上线前在节点上跑一遍 `node scripts/probes/hosted-render-isolation-probe.mjs`（全在回环上、用的是假凭证，端口 5800～5807 与 8770、8771）。
 - **自检**：`deploy-render` 用新发布目录跑 `server/hosted-render/main.mjs --check`（Node 版本、私钥、数据目录、Chrome 能否启动、能否照工作进程的办法开页并出一帧、中文字体、ffmpeg、控制连接握手）。**过了才换 `current`**；退出码 78 什么都不换，旧的照常跑，看输出里的 `selfcheck.error` 行。
 
 ### 按提交分目录、升级与回退

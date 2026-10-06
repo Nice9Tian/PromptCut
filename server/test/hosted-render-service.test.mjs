@@ -35,7 +35,7 @@ import { selectProjects, nodeIdFor, createBroker } from '../hosted-render/broker
 import { createDirectory } from '../hosted-render/directory.mjs';
 import { createWorker } from '../hosted-render/worker.mjs';
 import {
-  createBackpressure, createOomTracker, workerCommand, cgroupSupport, parseBytes, sumTree, memAvailable, LIMIT_DEFAULTS,
+  createBackpressure, createOomTracker, workerCommand, cgroupSupport, parseBytes, sumTree, memAvailable, LIMIT_DEFAULTS, loadHighFor,
 } from '../hosted-render/limits.mjs';
 import { runSelfcheck, nodeVersionOk, SELFCHECK_EXIT } from '../hosted-render/selfcheck.mjs';
 import { renderServiceConfig, compareCodeVersions, editorHasCodeVersion, reportStale } from '../hosted-render/main.mjs';
@@ -396,7 +396,7 @@ test('HR17 本机代理口：要口令；只给清单里的项目签票据；/st
 
 test('HR18 背压：可用内存低、文档服务自检连续三次慢、负载高 → 暂停；全部恢复满 30 s 才放开', () => {
   let now = 0;
-  const bp = createBackpressure({ now: () => now });
+  const bp = createBackpressure({ now: () => now, cores: 8 });
   const ok = { memAvailable: 8 * 1024 ** 3, healthMs: 20, load1: 1 };
   assert.deepEqual(bp.sample(ok), { paused: false, reasons: [] });
   assert.deepEqual(bp.sample({ ...ok, memAvailable: 1.5 * 1024 ** 3 }), { paused: true, reasons: ['memory'] });
@@ -423,6 +423,11 @@ test('HR18 背压：可用内存低、文档服务自检连续三次慢、负载
   assert.equal(bp.sample(ok).paused, true);
   now += 30_000;
   assert.equal(bp.sample(ok).paused, false);
+  // 负载的线按核数算：4 核的机器上高于 4 就暂停（原来写死 8）；也可以直接给
+  assert.deepEqual([loadHighFor(8), loadHighFor(4), loadHighFor(1), loadHighFor(0)], [8, 4, 1, 1]);
+  assert.deepEqual(createBackpressure({ now: () => now, cores: 4 }).sample({ ...ok, load1: 4.5 }), { paused: true, reasons: ['load'] });
+  assert.equal(createBackpressure({ now: () => now, cores: 4 }).sample({ ...ok, load1: 4 }).paused, false);
+  assert.equal(createBackpressure({ now: () => now, cores: 4, loadHigh: 16 }).sample({ ...ok, load1: 12 }).paused, false);
   // 可调的线（演练用）
   const loose = createBackpressure({ now: () => now, memLowBytes: 256 * 1024 ** 2 });
   assert.equal(loose.sample({ ...ok, memAvailable: 1024 ** 3 }).paused, false);

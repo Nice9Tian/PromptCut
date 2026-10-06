@@ -247,6 +247,15 @@ export function prerenderPlugin(): Plugin {
         child.stderr?.on("data", keep);
         child.stdout?.on("data", forwardOut);
         child.stderr?.on("data", forwardErr);
+        // 托管方渲染服务的工作进程:预渲染进程里页面请求闸的记录(`[page-gate] …`,源头已限量)原样转出,管理进程的日志里看得到拦了什么
+        if (process.env.PROMPTCUT_RENDER_BROKER) {
+          let gateTail = "";
+          child.stdout?.on("data", (c: Buffer) => {
+            const lines = (gateTail + c.toString()).split(/\r?\n/);
+            gateTail = (lines.pop() ?? "").slice(-4000);
+            for (const line of lines) if (line.startsWith("[page-gate]")) console.info(line.slice(0, 2000));
+          });
+        }
         /*
          * 排障用(缺省不开):`PROMPTCUT_PRERENDER_LOG=<文件>` 时把预渲染进程的全部输出原样追加进这个文件,
          * 每块前带收到的时刻(`docs/archive/agent-reports/AGENT-uc-latency.md` 查换页卡住用)。不设就什么都不做。
