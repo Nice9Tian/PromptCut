@@ -182,7 +182,8 @@ export function createLook({
   const stats = { requests: 0, served: 0, refused: 0, failed: 0, unauthorized: 0, lastMs: null, lastAt: null, byWorker: { resident: 0, isolated: 0 } };
   /** 在途的那一个：`{ projectId, worker: 'resident' | 'isolated' | null, since }` */
   let current = null;
-  let waiting = 0;
+  /** 在途的加排队的 */
+  let pending = 0;
   let chain = Promise.resolve();
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -316,15 +317,19 @@ export function createLook({
       }
       const timeoutMs = Math.min(limits.maxTimeoutMs, Math.max(2000, Number.isFinite(msg.timeoutMs) ? msg.timeoutMs : limits.timeoutMs));
       if (paused()) { stats.refused += 1; log('look.refused', { projectId: msg.projectId, reason: 'backpressure' }); return fail(503, 'busy'); }
-      if (waiting >= limits.maxWaiting) { stats.refused += 1; log('look.refused', { projectId: msg.projectId, reason: 'queue-full' }); return fail(503, 'busy'); }
-      waiting += 1;
+      // 一个在途，最多再排 maxWaiting 个
+      if (pending >= limits.maxWaiting + 1) { stats.refused += 1; log('look.refused', { projectId: msg.projectId, reason: 'queue-full' }); return fail(503, 'busy'); }
+      pending += 1;
       const arrived = now();
       const run = chain.then(async () => {
-        waiting -= 1;
-        // 排队把时限等光了：不再去渲
-        const left = timeoutMs - (now() - arrived);
-        if (left < 2000) return fail(504, 'busy');
-        return serve({ projectId: msg.projectId, path: msg.path, body: msg.body, cards, timeoutMs: left });
+        try {
+          // 排队把时限等光了：不再去渲
+          const left = timeoutMs - (now() - arrived);
+          if (left < 1500) return fail(504, 'busy');
+          return await serve({ projectId: msg.projectId, path: msg.path, body: msg.body, cards, timeoutMs: left });
+        } finally {
+          pending -= 1;
+        }
       });
       chain = run.catch(() => {});
       let out;
@@ -343,6 +348,6 @@ export function createLook({
     busyOn: () => current?.worker ?? null,
     /** 在途的那个请求是哪个项目的（还在等路由时也算）；没有回 null */
     busyProject: () => current?.projectId ?? null,
-    status: () => ({ enabled, inFlight: current ? { projectId: current.projectId, worker: current.worker, ms: now() - current.since } : null, waiting, ...stats, byWorker: { ...stats.byWorker } }),
+    status: () => ({ enabled, inFlight: current ? { projectId: current.projectId, worker: current.worker, ms: now() - current.since } : null, waiting: Math.max(0, pending - (current ? 1 : 0)), ...stats, byWorker: { ...stats.byWorker } }),
   };
 }

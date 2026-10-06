@@ -102,11 +102,12 @@ test('CA-TOOL-02 工具表里的每个工具都归了类;在副本上执行的�
   assert.deepEqual(Object.keys(CLOUD_TOOL_PLAN).filter((n) => !names.includes(n)), [], '云端工具表里有工具表没有的名字');
   const count = (mode) => Object.values(CLOUD_TOOL_PLAN).filter((p) => p.mode === mode).length;
   assert.deepEqual({ route: count('route'), hosted: count('hosted'), server: count('server'), initiator: count('initiator'), pending: count('pending') },
-    { route: 67, hosted: 7, server: 6, initiator: 8, pending: 40 });
-  assert.equal(CLOUD_OPEN_TOOLS.size, 88, '交给模型的 = 除「还没接上」的全部');
+    { route: 71, hosted: 7, server: 6, initiator: 8, pending: 36 });
+  assert.equal(CLOUD_OPEN_TOOLS.size, 92, '交给模型的 = 除「还没接上」的全部(看画面的四个要节点配了看画面的口子才交,见 cloud-agent-look.test.mjs)');
   // 在副本上执行的:走路由表的必须是同步实现(进程级的锁里不等外部);点名的两个例外实现本身是同步的
   const route = Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.mode === 'route').map(([n]) => n);
-  const awaited = route.filter((n) => Object.hasOwn(TOOL_ROUTES, n) && TOOL_ROUTES[n].awaited !== false && n !== 'get_layout' && n !== 'apply_card');
+  // 看画面的四个不走路由表(读副本后向渲染服务要一帧,不进锁),与 get_layout 同理
+  const awaited = route.filter((n) => Object.hasOwn(TOOL_ROUTES, n) && TOOL_ROUTES[n].awaited !== false && n !== 'get_layout' && n !== 'apply_card' && CLOUD_TOOL_PLAN[n].look !== true);
   assert.deepEqual(awaited, [], '这些工具的实现是异步的,不能进锁');
   const sides = route.map((n) => [n, tools.find((t) => t.name === n).side]).filter(([n, s]) => s !== 'agent' && !CLOUD_AGENT_SIDE.has(n));
   assert.deepEqual(sides, [], '在副本上执行的只有 agent 侧的工具,外加点名改到服务端的几个');
@@ -170,8 +171,9 @@ test('CA-ENTRY-01 / CA-ENTRY-03 托管档入口:没有 /api/*,没配鉴权一律
     const h = await fetch(`${bare.url}/healthz`);
     assert.equal(h.status, 200);
     const health = await h.json();
-    assert.deepEqual(Object.keys(health).sort(), ['egressTestAllow', 'ok', 'version']);
+    assert.deepEqual(Object.keys(health).sort(), ['egressTestAllow', 'look', 'ok', 'version']);
     assert.equal(health.egressTestAllow, false, '出网闸的测试例外缺省关着');
+    assert.equal(health.look, false, '没配看画面的口子');
     for (const p of ['/api/ai/chat', '/api/ai/config', '/api/mcp/call', '/api/mcp/events', '/api/agent/status', '/api/agent/bind', '/api/chats/list', '/']) {
       const r = await fetch(`${bare.url}${p}`, { method: p === '/api/ai/chat' || p === '/api/mcp/call' ? 'POST' : 'GET' });
       assert.equal(r.status, 404, `${p} 不存在`);
@@ -352,7 +354,7 @@ test('CA-ISO-01 / CA-ISO-02 / CA-TOOL-01 / CA-PAGE-01 / CA-HIST-01 / CA-RUN-01 /
     const inst = kit.service._instance(alice);
     const before = (await kit.doc.stateOf('p-a')).rev;
     const closed = tools.map((x) => x.name).filter((n) => !CLOUD_OPEN_TOOLS.has(n));
-    assert.equal(closed.length, 40);
+    assert.equal(closed.length, 36);
     for (const name of closed) {
       const r = await inst.callTool(name, {}, 'c-tools');
       assert.equal(r?.cloudUnavailable, true, `${name} 回「还用不了」`);
