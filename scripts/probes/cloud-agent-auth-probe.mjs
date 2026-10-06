@@ -39,6 +39,7 @@
  *   P14 只用来发布补渲计划的连接：能发带片段清单的计划，读不了项目、改不了项目、取不了票据；成员被踢、被移出不影响它。
  *   P15 托管组合的日志里没有委托、对话委托、票据的原文。
  */
+import '../lib/no-user-dirs.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';

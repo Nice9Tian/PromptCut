@@ -664,6 +664,25 @@ test('CA-OWNER-01 归属键由文档服务算：创建者按「创建者」、�
   assert.equal(ownerKeyOf({ mode: 'restricted' }, { username: 'x', userId: 'x@d', creator: true }), 'creator');
 });
 
+// ------------------------------------------------------------------ CA-URL-01
+
+test('CA-URL-01 成员列表顶层的 hosted.agent.url：组装方配了、登记表里有 agent 才带；没配就没有这个字段', async (t) => {
+  const url = 'https://node.example/agent/v1';
+  const env = await serviceHostFor(t, { services: ['render', 'agent'], serviceUrls: { agent: url, render: '', backup: 'https://x.example' } });
+  const proj = await createProject(env, { mode: 'free' });
+  const creator = await join(env, proj, { username: proj.creator.username, as: 'creator' });
+  const list = await ask(creator, { type: 'shared.members' }, 'shared.members.list');
+  assert.deepEqual(list.hosted, { render: { available: true, enabled: true }, agent: { available: true, enabled: true, url } });
+  // 登记表里没有 agent 的托管端：配了地址也不带
+  const env2 = await serviceHostFor(t, { services: ['render'], serviceUrls: { agent: url } });
+  const proj2 = await createProject(env2, { mode: 'free' });
+  const c2 = await join(env2, proj2, { username: proj2.creator.username, as: 'creator' });
+  assert.deepEqual((await ask(c2, { type: 'shared.members' }, 'shared.members.list')).hosted, { render: { available: true, enabled: true }, agent: { available: false, enabled: true } });
+  // 没配地址：与第 1 批的形状逐字段相同
+  const { creator: c3 } = await setup(t);
+  assert.deepEqual((await ask(c3, { type: 'shared.members' }, 'shared.members.list')).hosted, { render: { available: true, enabled: true }, agent: { available: true, enabled: true } });
+});
+
 // ------------------------------------------------------------------ CA-ASSET-01
 
 test('CA-ASSET-01 / AU21 素材：云端 Agent 的连接要不到素材票据；委托当不了素材票据；sv: agent 的素材票据只读、写不进、开关关掉或被踢后当场失效', async (t) => {
