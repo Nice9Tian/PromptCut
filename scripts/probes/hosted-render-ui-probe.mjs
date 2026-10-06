@@ -302,7 +302,7 @@ async function main() {
   check('U3.service-row-after-members-not-counted-no-kick', ok3, list1);
   await shot(member, 'ui-2-member-members-list');
   await member.keyboard.press('Escape');
-  await member.mouse.click(10, 10);
+  await member.mouse.click(700, 887);
 
   // —— 创建者取消勾选：验证创建者身份 → 确认
   async function creatorToggle(page, want) {
@@ -316,6 +316,8 @@ async function main() {
     await page.waitForFunction(() => !document.querySelector('[data-pc="hosted-service-dialog"]'), { timeout: 15_000 });
     return { body, want };
   }
+  // 成员的项目设置开着再让创建者改:验的是「已经开着的界面跟着变」,不是重开之后读到新值
+  await openSettings(member);
   const closesBefore = service.state.closes.length;
   const off = await creatorToggle(creator, false);
   const cOff = await waitFor(async () => { const s = await toggleState(creator); return s && s.checked === false ? s : null; }, 8000, '创建者的勾选取消');
@@ -326,29 +328,31 @@ async function main() {
   check('U4.member-toast', !!toastText, { toast: toastText });
   const closed = await waitFor(() => service.state.closes.slice(closesBefore).find((c) => c.projectId === projectId), 8000, '服务连接被关').catch(() => null);
   check('U4.service-conn-closed-4003', !!closed && closed.code === 4003 && closed.reason === 'service-disabled', { closed });
-  await member.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
-  await sleep(500);
   await shot(member, 'ui-4-member-settings-off');
   const denied = await service.ask(service.state.control, { type: 'hosted.ticket', projectId }, 'hosted.ticket.ok').catch((e) => ({ type: 'timeout', reason: String(e.message) }));
   check('U4.ticket-refused-while-off', denied.type === 'error' && denied.reason === 'service-disabled', denied);
   await member.keyboard.press('Escape');
+  await member.waitForFunction(() => !document.querySelector('[data-pc="collab-section"]'), { timeout: 5000 }).catch(() => {});
   await member.click('[data-pc="members-button"]');
   await sleep(500);
   const svcGone = await member.evaluate(() => !document.querySelector('[data-pc="members-service-render"]'));
   check('U4.service-row-gone', svcGone);
   await member.keyboard.press('Escape');
-  await member.mouse.click(10, 10);
+  await member.mouse.click(700, 887);
 
   // —— 再勾上
   await creator.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
   await creator.waitForSelector('[data-pc="collab-hosted-render-toggle"]', { visible: true, timeout: 10_000 });
+  await member.mouse.click(700, 887);
+  await openSettings(member);
   await creatorToggle(creator, true);
   await waitFor(async () => (await toggleState(creator))?.checked === true, 8000, '创建者勾回');
   const mOn = await waitFor(async () => { const s = await toggleState(member); return s && s.checked === true ? s : null; }, 5000, '成员勾回').catch(() => null);
   check('U5.both-checked-again', !!mOn && (await toggleState(creator)).checked === true, { member: mOn });
   const again = await service.connectProject(projectId).catch((e) => ({ ok: false, reply: String(e.message) }));
   check('U5.service-can-reconnect', again.ok, { reply: again.ok ? undefined : again.reply });
-  await member.mouse.click(10, 10);
+  await member.keyboard.press('Escape');
+  await member.waitForFunction(() => !document.querySelector('[data-pc="collab-section"]'), { timeout: 5000 }).catch(() => {});
   await member.click('[data-pc="members-button"]');
   const back = await member.waitForSelector('[data-pc="members-service-render"]', { visible: true, timeout: 8000 }).then(() => true, () => false);
   check('U5.service-row-back', back);
