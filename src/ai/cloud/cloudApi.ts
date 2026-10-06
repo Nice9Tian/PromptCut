@@ -45,7 +45,12 @@ export interface CloudApiDeps {
   ticket?: () => Promise<string>;
   grant?: (conversationId: string) => Promise<string | undefined>;
   fetchImpl?: typeof fetch;
+  /** 事件流连续这么久一个字节都没来就当它断了(服务端每 15 秒发一行 ping);缺省 45 秒 */
+  stallMs?: number;
 }
+
+/** 事件流多久没有任何字节就当断了:服务端每 15 秒一行 ping(契约 2.4 节),三次没到就是半开的连接 */
+export const EVENTS_STALL_MS = 45_000;
 
 async function readError(res: Response): Promise<CloudError> {
   let parsed: unknown = null;
@@ -193,9 +198,16 @@ export function createCloudApi(deps: CloudApiDeps) {
       if (!reader) throw new CloudError("network", cloudErrorText("network"));
       const decoder = new TextDecoder();
       let buffer = "";
+      const stallMs = deps.stallMs ?? EVENTS_STALL_MS;
+      /** 读下一块;太久没有任何字节(连 ping 都没有)就当连接半开着断了,抛错让调用方重连 */
+      const readChunk = () => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const stalled = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CloudError("network", cloudErrorText("network"))), stallMs); });
+        return Promise.race([reader.read(), stalled]).finally(() => { if (timer !== null) clearTimeout(timer); });
+      };
       try {
         for (;;) {
-          const { done, value } = await reader.read();
+          const { done, value } = await readChunk();
           if (done) break;
           const { events, rest } = parseSseChunks(buffer, decoder.decode(value, { stream: true }));
           buffer = rest;

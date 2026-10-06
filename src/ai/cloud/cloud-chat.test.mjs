@@ -12,6 +12,7 @@
  *   CAU-EP-01   「云端」一项出不来、出现、置灰的判定:放本机的项目没有;文档服务报了才有;开关关了置灰;在线页面地址固定;
  *   CAU-API-01  请求带委托票据与对话委托、不带 Cookie;错误码换成给用户看的话;info 与对话列表容错;
  *   CAU-API-02  委托要不到时不发请求:文档服务拒签 service-disabled 显示「创建者已关闭」,连接断着显示连不上,其余按身份验证没过;
+ *   CAU-API-03  事件流连续太久一个字节都没来(半开的连接)就当它断了,抛错让会话重连;
  *   CAU-ID-01   身份只有注入这一个来源:没注入抛 no-identity,请求一个都不发;
  *   CAU-ID-02   守门:页面源码里没有探针用的全局回退口子(`__pcCloudIdentity`、`__pcCloudAgent`),设了这两个全局变量也不起作用。
  */
@@ -100,6 +101,15 @@ test("CAU-EV-01b 两轮、补渲进展、思考片段", () => {
   const a2 = all[3];
   assert.deepEqual(a2.parts.map((p) => p.kind), ["thinking", "status", "status", "status"]);
   assert.deepEqual(a2.statuses, ["已把 2 个片段交给云端渲染", "云端渲染中:1/2", "云端渲染失败:渲染节点不可用"]);
+});
+
+test("CAU-EV-03 补渲进展另记在消息上(气泡末尾常驻一行),失败的不只藏在状态行里", () => {
+  const base = [{ type: "user", seq: 1, runId: "r", prompt: "x" }, { type: "end", seq: 2, runId: "r", state: "idle" }];
+  const done = applyCloudEvents([], [...base, { type: "render", seq: 3, state: "published", clips: ["a"] }, { type: "render", seq: 4, state: "done", clips: ["a"] }]);
+  assert.deepEqual(done[1].cloudRender, { state: "done", text: "云端渲染完成" });
+  const failed = applyCloudEvents([], [...base, { type: "render", seq: 3, state: "failed", clips: ["a"], reason: "渲染节点 10 分钟没有进展" }]);
+  assert.deepEqual(failed[1].cloudRender, { state: "failed", text: "云端渲染失败:渲染节点 10 分钟没有进展" });
+  assert.equal(failed[1].outcome, "completed", "渲染失败不把这一轮本身记成出错");
 });
 
 test("CAU-EV-02 每种收尾都有明确原因", () => {
@@ -329,6 +339,17 @@ test("CAU-API-02 委托要不到时不发请求,原因换成给用户看的话",
   // 票据要得到、对话委托要不到:消息不发(不带委托发出去只会换回 bad-grant)
   await assert.rejects(() => createCloudApi({ ...base, ticket: async () => "T", grant: refuse("service-disabled") }).send("c-1", { prompt: "x" }), (e) => e instanceof CloudError && e.code === "disabled");
   assert.equal(fetched, 0, "一个请求都没发");
+});
+
+test("CAU-API-03 事件流太久没有任何字节就当断了", async () => {
+  const enc = new TextEncoder();
+  // 先给一个事件,然后一直不给也不关(半开的连接)
+  const body = new ReadableStream({ start(ctl) { ctl.enqueue(enc.encode('data: {"type":"text","seq":1,"delta":"a"}\n\n')); } });
+  const fetchImpl = async () => new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  const api = createCloudApi({ baseUrl: () => "https://h.example/agent/v1", ticket: async () => "T", fetchImpl, stallMs: 60 });
+  const got = [];
+  await assert.rejects(async () => { for await (const ev of api.events("c-1", 0)) got.push(ev); }, (e) => e instanceof CloudError && e.code === "network");
+  assert.equal(got.length, 1, "断之前收到的事件照常交出去");
 });
 
 test("CAU-ID-01 身份只有注入这一个来源:没注入抛 no-identity,请求一个都不发", async () => {

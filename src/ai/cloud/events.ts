@@ -149,7 +149,7 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
     case "render": {
       const text = renderStatusText(ev);
       if (!text) return messages;
-      return set({ statuses: [...(m.statuses ?? []), text], parts: [...(m.parts ?? []), { kind: "status", text }] });
+      return set({ statuses: [...(m.statuses ?? []), text], parts: [...(m.parts ?? []), { kind: "status", text }], cloudRender: { state: String(ev.state ?? ""), text } });
     }
     case "error": {
       return set({ error: cloudErrorMessage(typeof ev.code === "string" ? ev.code : undefined, typeof ev.message === "string" ? ev.message : undefined), pending: false, outcome: "error", finishedAt: Date.now() });

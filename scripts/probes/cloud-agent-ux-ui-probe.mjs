@@ -9,7 +9,8 @@
  *   在线构建(从当前工作区现打)经本机代理:编辑器页、两个舞台源、`/hosted/`、`/media/`、`/agent/`
  *   桌面版形态的编辑器:本 worktree 的 dev server,独立进程、临时数据目录、固定设备号;它自己不当渲染节点(要看的是云节点把活干了)
  *   每个「人」一个独立的浏览器进程:创建者的桌面页面、创建者的在线页面、另一位成员 bob、被移出的 carol。
- *   项目(限定进入):创建者在桌面版形态的页面里建、放云端;成员 bob、carol。三张要预渲染的内置卡(两张探针重卡加一张带参数的图表卡)。
+ *   项目(限定进入):创建者在桌面版形态的页面里建、放云端;成员 bob、carol。三张内置卡:两张探针重卡(`probe-slow-stepped`,每帧烧 40 毫秒,
+ *   在线页面量出来就是重卡:播放时贴预渲染的快照)加一张带参数的图表卡。
  *
  *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,errors[,spaced]] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
  *        [--agent-port 5741] [--render-port 5830] [--dist <在线构建目录>] [--out <截图目录>] [--keep]
@@ -72,7 +73,7 @@ import { joinAs, adminOp, projectOf, agentApi } from './cloud-agent-probe-lib.mj
 import {
   ROOT, sleep, USER_PORTS, createUi, startStack, startDesktop, killDesktop, launchBrowser, killBrowser, alive, newPage, P, mockSteps, msgs, view, conversationOf,
   toolParts, lastAssistant, idle, panelText, providerOptions, sendText, joinOnline, sharedProjectOf, hostedToggle, openProjectSettings,
-  creatorToggleService, closeDialogs, eventLog, membersList, clipOnStage, stageShot, pixelStats, portFree, gateSettled,
+  creatorToggleService, closeDialogs, eventLog, membersList, clipOnStage, stageShot, pixelStats, portFree, gateSettled, clickUntil,
 } from './cloud-agent-ui-lib.mjs';
 
 const argv = process.argv.slice(2);
@@ -239,9 +240,8 @@ async function openFromHistory(page, conversationId) {
     items = await until('历史列表「云端」一组里有对话', () => P(page, () => { const g = document.querySelector('[data-pc="chat-cloud-group"]'); const list = g ? [...g.querySelectorAll('[data-pc="chat-cloud-item"]')] : []; return list.length ? list.map((e) => ({ id: e.getAttribute('data-chat-id'), state: e.getAttribute('data-state'), text: (e.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) })) : null; }), 8_000, 200);
   }
   const hit = (items ?? []).find((x) => x.id === conversationId) ?? null;
-  if (hit) await page.click(`[data-pc="chat-cloud-item"][data-chat-id="${conversationId}"]`);
+  if (hit) await clickUntil(page, `[data-pc="chat-cloud-item"][data-chat-id="${conversationId}"]`, async () => (await conversationOf(page)) === conversationId && !!(await page.$('[data-pc="cloud-ai-panel"]')));
   else await page.click('.chat-drawer-close-btn').catch(() => {});
-  if (hit) await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 }).catch(() => {});
   return { items: items ?? [], hit };
 }
 
@@ -407,6 +407,7 @@ async function leavePass(how, tag, salt) {
   const opened = await openFromHistory(back.page, conv);
   const full = await until(`${tag}:点开后完整过程都在`, async () => { const m = await msgs(back.page); return m && toolParts(m).length === LEAVE_TOOLS && (lastAssistant(m)?.text ?? '').includes('都做完了') ? m : null; }, 30_000, 200);
   const a = lastAssistant(full);
+  const renderNote = await back.page.$eval('[data-pc="cloud-ai-panel"] [data-pc="cloud-render-note"]', (el) => el.textContent ?? '').catch(() => null);
   const mine = await pageProject(back.page);
   let prerender;
   if (how === 'desktop') {
@@ -418,18 +419,17 @@ async function leavePass(how, tag, salt) {
     prerender = { ok: !!p2.hit, statesSeenWhilePlaying: p2.seen, pixels: p2.stats };
   }
   check(`${tag} A6 创建者重新打开(新进程):回到同一个项目,历史里找得到这段对话,完整过程与结果都在,项目是最新版本,预渲染结果已在`, sameProject && !!opened.hit && opened.hit.state === 'idle' && !!full && full.filter((x) => x.role === 'user').length === 1
-    && toolParts(full).every((t) => t.ok === true) && (a?.statuses ?? []).some((s) => /云端渲染完成/.test(s)) && mine?.rows === want.rows && mine?.title === want.title && prerender.ok
+    && toolParts(full).every((t) => t.ok === true) && (a?.statuses ?? []).some((s) => /云端渲染完成/.test(s)) && /云端渲染完成/.test(String(renderNote ?? '')) && mine?.rows === want.rows && mine?.title === want.title && prerender.ok
     && (how === 'desktop' ? provider?.value !== 'cloud' && provider?.options.some((o) => o.value === 'cloud') : provider?.value === 'cloud'), {
     sameProject, providerOnOpen: provider?.value ?? null, listed: opened.hit, conversations: opened.items.length, toolCalls: toolParts(full).length, users: full?.filter((x) => x.role === 'user').length ?? null,
     allToolCallsOk: toolParts(full).every((t) => t.ok === true), notOk: toolParts(full).filter((t) => t.ok !== true).map((t) => [t.name, t.ok ?? null]).slice(0, 6), providerOptions: provider?.options.map((o) => o.value) ?? null,
-    reply: (a?.text ?? '').slice(0, 40), renderStatus: (a?.statuses ?? []).filter((s) => /渲染/.test(s)), project: mine, prerender,
+    reply: (a?.text ?? '').slice(0, 40), renderStatus: (a?.statuses ?? []).filter((s) => /渲染/.test(s)), renderNoteShown: renderNote, project: mine, prerender,
   });
   await shot(back.page, `${tag}-4-creator-reopened`);
   // 撤销 Agent 的最后一处改动(第 12 次写入:rows 回到第 9 次的值)
   const logBack = await until(`${tag}:创建者的「Agent 操作记录」里有可撤销的步骤`, async () => { const l = await eventLog(back.page); return l && l.rows.some((r) => r.undo === 'ready') ? l : null; }, 20_000, 200);
   const target = logBack?.rows.find((r) => r.undo === 'ready') ?? null;
-  await gateSettled(back.page);
-  if (target) await back.page.click(`[data-pc="agent-event"][data-event-id="${target.id}"] [data-pc="agent-undo"]`);
+  if (target) await clickUntil(back.page, `[data-pc="agent-event"][data-event-id="${target.id}"] [data-pc="agent-undo"]:not([disabled])`, async () => (await eventLog(back.page))?.rows.find((r) => r.id === target.id)?.undo === 'done');
   const undoneMine = await until(`${tag}:撤销后创建者页面里参数回到上一次的值`, async () => ((await pageProject(back.page))?.rows === rowsOf(salt, 9) ? true : null), 10_000, 150);
   const undoneBob = await until(`${tag}:bob 的页面也看到撤销的结果`, async () => ((await pageProject(bob.page))?.rows === rowsOf(salt, 9) ? true : null), 10_000, 150);
   const rowAfter = (await eventLog(back.page))?.rows.find((r) => r.id === target?.id) ?? null;
@@ -473,8 +473,8 @@ async function setup() {
       ...p, width: 1920, height: 1080, fps: 30, duration: 3,
       tracks: [
         { id: 'tr-0', name: '图表', hidden: false, clips: [{ id: 'clip-bars', kind: 'card', cardId: 'rank-bars', start: 0, end: 3, params: { title: '原文案', rows: '微信,85|抖音,62', suffix: '%' } }] },
-        { id: 'tr-1', name: '推帧卡', hidden: false, clips: [{ id: 'clip-stateful', kind: 'card', cardId: 'r6-stateful', start: 0, end: 3, params: {} }] },
-        { id: 'tr-2', name: '画布卡', hidden: false, clips: [{ id: 'clip-canvas', kind: 'card', cardId: 'r6-canvas', start: 0, end: 3, params: { probeSalt: o.salt } }] },
+        { id: 'tr-1', name: '重卡甲', hidden: false, clips: [{ id: 'clip-stateful', kind: 'card', cardId: 'probe-slow-stepped', start: 0, end: 3, params: { burnMs: 40, label: '重卡甲' } }] },
+        { id: 'tr-2', name: '重卡乙', hidden: false, clips: [{ id: 'clip-canvas', kind: 'card', cardId: 'probe-slow-stepped', start: 0, end: 3, params: { burnMs: 40, label: `重卡乙 ${o.salt}` } }] },
       ],
     }));
     St.actions.seek(0);
@@ -626,8 +626,10 @@ async function errorsStep() {
   const admin = (...a) => spawnSync(process.execPath, [path.join(ROOT, 'server', 'agent-service', 'admin.mjs'), ...a], { cwd: ROOT, env: { ...process.env, PROMPTCUT_AGENT_DATA: S.D.agent }, windowsHide: true, encoding: 'utf8' });
   const runAndWait = async (prompt, ms = 60_000) => {
     const convBefore = await conversationOf(c.page);
+    const usersBefore = ((await msgs(c.page)) ?? []).filter((x) => x.role === 'user').length;
     await sendText(c.page, prompt);
-    await until('这一轮开始', async () => (await view(c.page))?.streaming, 15_000, 50);
+    // 有的轮一开始就收尾(额度用尽):看的是「对话里多了一条用户消息」,不是「此刻还在跑」
+    await until('这一轮开始', async () => ((await msgs(c.page)) ?? []).filter((x) => x.role === 'user').length > usersBefore, 15_000, 50);
     await until('这一轮收尾', () => idle(c.page), ms, 100);
     return convBefore;
   };
@@ -697,17 +699,20 @@ async function errorsStep() {
     const mark = seqOf(await conversationOf(c.page));
     // Agent 服务刚重起:页面的事件流在重连,第一次发送可能撞上;发不出去就再发一次
     for (let i = 0; i < 3 && !conv; i++) {
+      // 这一轮很短:看的是「对话里多了一条用户消息」(服务端收下了),不是「此刻还在跑」
+      const usersBefore = ((await msgs(c.page)) ?? []).filter((x) => x.role === 'user').length;
       await sendText(c.page, mockSteps([writeStep(3, `rf${i}`), { sleepMs: 200 }, writeStep(2, `rf${i}`), { say: '改完了,渲染节点不在' }]));
-      const started = await c.page.waitForFunction(() => window.__pcCloud?.main?.view()?.streaming === true, { timeout: 6000 }).then(() => true, () => false);
+      const started = await c.page.waitForFunction((n) => (window.__pcCloud?.main?.messages() ?? []).filter((x) => x.role === 'user').length > n, { timeout: 8000 }, usersBefore).then(() => true, () => false);
       if (started) conv = await conversationOf(c.page); else { await c.page.click('[data-pc="cloud-notice"]').catch(() => {}); await sleep(1500); }
     }
     await until('E4:对话照常做完', async () => { const a = lastAssistant(await msgs(c.page)); return a && !a.pending && (a.text ?? '').includes('改完了'); }, 40_000, 150);
     const failed = await until('E4:对话记录里出现「云端渲染失败」', async () => { const a = lastAssistant(await msgs(c.page)); return (a?.statuses ?? []).find((x) => /云端渲染失败/.test(x)) ?? null; }, RENDER_STALL_MS * 4 + 30_000, 300);
-    const text = await panelText(c.page);
+    // 气泡末尾常驻的那一行(简洁模式也看得到)
+    const note = await until('E4:气泡末尾出现渲染失败的那一行', () => c.page.$eval('[data-pc="cloud-ai-panel"] [data-pc="cloud-render-note"][data-state="failed"]', (el) => el.textContent ?? '').catch(() => null), 10_000, 200);
     const s = await sane(before, 2);
     const e = await errText(c.page);
-    check('E4 渲染失败(渲染服务停着):对话照常做完,对话记录里有「云端渲染失败」与原因;项目内容不受影响', !!conv && e.outcome !== 'error' && typeof failed === 'string' && /云端渲染失败:.+/.test(failed) && text.includes('云端渲染失败') && okOf(conv, mark) === 2 && s.ok, {
-      shown: failed, outcome: e.outcome, writesLanded: conv ? okOf(conv, mark) : null, ...s,
+    check('E4 渲染失败(渲染服务停着):对话照常做完,对话记录里有「云端渲染失败」与原因;项目内容不受影响', !!conv && e.outcome !== 'error' && typeof failed === 'string' && /云端渲染失败:.+/.test(failed) && /云端渲染失败:.+/.test(String(note ?? '')) && okOf(conv, mark) === 2 && s.ok, {
+      shown: note, outcome: e.outcome, writesLanded: conv ? okOf(conv, mark) : null, ...s,
       note: `渲染服务被探针停掉;补渲「连续没有进度」的时限在这次演练里缩成 ${RENDER_STALL_MS / 1000} 秒(生产 10 分钟,原因文字是固定的那一句)`,
     });
     await shot(c.page, 'E4-render-failed');

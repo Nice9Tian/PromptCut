@@ -172,6 +172,8 @@ export async function startStack({ tmp, ports, dist = null, say = () => {}, agen
       const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => {
         res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC });
         r.pipe(res);
+        // 上游中途没了(服务被结束):照 nginx 的做法把下游也断开,不留一条半开的连接
+        r.on('close', () => { if (!r.complete && !res.writableEnded) res.destroy(); });
       });
       up.on('error', () => { try { res.writeHead(502, OAC); } catch { /* 已发 */ } res.end('bad gateway'); });
       if (stream) {
@@ -471,6 +473,7 @@ export async function sendText(page, text, panelSel = '[data-pc="cloud-ai-panel"
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, t);
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   }, text, panelSel);
+  await gateSettled(page, { appearMs: 300 });
   await page.click(`${panelSel} [data-pc="ai-send"]`);
 }
 
@@ -493,17 +496,41 @@ export async function joinOnline(page, { site, name, username, password, asCreat
  * 等「正在测量卡片」的遮罩放开并稳住:它在进项目几秒之后才出现(舞台就绪了才开始测),期间盖住整个编辑器、鼠标点不下去。
  * 连续 `quietMs` 没有遮罩才算放开。
  */
-export async function gateSettled(page, { quietMs = 3500, ms = 300_000 } = {}) {
+export async function gateSettled(page, { appearMs, quietMs = 3000, ms = 300_000 } = {}) {
   const t0 = Date.now();
+  const up = () => page.evaluate(() => !!document.querySelector('[data-pc="probe-gate"]')).catch(() => false);
+  // 先等它出现(这一页已经等过一次、之后又没出现过的,只等一小会儿)
+  const waitAppear = appearMs ?? (page.__gateSeen ? quietMs : 12_000);
+  let seen = false;
+  while (Date.now() - t0 < waitAppear) {
+    if (await up()) { seen = true; break; }
+    await delay(200);
+  }
+  page.__gateSeen = true;
+  if (!seen) return true;
+  // 出现了:等它放开,并连续 quietMs 没有再出现(测完一轮可能紧接着再排一轮)
   let clearSince = null;
   while (Date.now() - t0 < ms) {
-    const up = await page.evaluate(() => !!document.querySelector('[data-pc="probe-gate"]')).catch(() => false);
-    if (up) clearSince = null;
+    if (await up()) clearSince = null;
     else if (clearSince === null) clearSince = Date.now();
     else if (Date.now() - clearSince >= quietMs) return true;
-    await delay(250);
+    await delay(200);
   }
   return false;
+}
+
+/** 点一个按钮,直到 `done()` 为真(遮罩刚好盖上来、点不下去时再点);回点了几次,没成回 0 */
+export async function clickUntil(page, selector, done, { tries = 4, waitMs = 3000 } = {}) {
+  for (let i = 1; i <= tries; i++) {
+    await gateSettled(page, { appearMs: 600 });
+    await page.click(selector).catch(() => {});
+    const t0 = Date.now();
+    while (Date.now() - t0 < waitMs) {
+      if (await done().catch(() => false)) return i;
+      await delay(150);
+    }
+  }
+  return 0;
 }
 
 /** 桌面版形态的页面:进编辑器、等舞台起来、关掉首次打开的 AI 设置弹窗 */
