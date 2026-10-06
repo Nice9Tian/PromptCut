@@ -17,6 +17,21 @@
 import { STAGE_CSP_HEADER_ONLY_DIRECTIVE } from "../stagePolicy.mjs";
 import type { HardenReport } from "./harden.ts";
 
+/*
+ * 自检的时限用**真实时间**的定时器:舞台把 `setTimeout` 换成跟着舞台时间走的那一份(`render/stageClock.ts`,不播放时不走),
+ * 自检要是用了它,只有 `<meta>` 生效那种情况会永远等不到结论。模块载入时(舞台时钟装上之前)先把原装的取下来;
+ * 舞台时钟装上之后它自己留的口子 `__pcRealSetTimeout` 优先。
+ */
+const nativeSetTimeout: typeof setTimeout | null = typeof setTimeout === "function" ? setTimeout.bind(globalThis) : null;
+const nativeClearTimeout: typeof clearTimeout | null = typeof clearTimeout === "function" ? clearTimeout.bind(globalThis) : null;
+function realTimeout(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+  const hatch = (globalThis as { __pcRealSetTimeout?: typeof setTimeout }).__pcRealSetTimeout;
+  return (hatch ?? nativeSetTimeout ?? setTimeout)(fn, ms);
+}
+function realClear(t: ReturnType<typeof setTimeout> | null | undefined): void {
+  if (t !== null && t !== undefined) (nativeClearTimeout ?? clearTimeout)(t);
+}
+
 /** 自检用的外部地址:`.invalid` 是保留的顶级域,永远解析不出来;策略在解析之前就拦下 */
 export const ISOLATION_CHECK_EXTERNAL_URL = "https://pc-isolation-check.invalid/";
 /** 舞台源上给自检用的两个地址(相对在线构建的 base):前者回 204,后者重定向到前者 */
@@ -85,8 +100,8 @@ function checkPolicy(w: Window & typeof globalThis, timeoutMs: number): Promise<
     let settle: ReturnType<typeof setTimeout> | null = null;
     const finish = () => {
       w.document.removeEventListener("securitypolicyviolation", onViolation);
-      clearTimeout(deadline);
-      if (settle) clearTimeout(settle);
+      realClear(deadline);
+      realClear(settle);
       resolve(best);
     };
     const onViolation = (e: SecurityPolicyViolationEvent) => {
@@ -94,9 +109,9 @@ function checkPolicy(w: Window & typeof globalThis, timeoutMs: number): Promise<
       if (String(e.originalPolicy).includes(STAGE_CSP_HEADER_ONLY_DIRECTIVE)) { best = "header"; finish(); return; }
       if (best === "none") best = "meta";
       // 响应头与 <meta> 两份各报一次,先后不定:再等一小会儿看响应头那一份来不来
-      settle ??= setTimeout(finish, 150);
+      settle ??= realTimeout(finish, 150);
     };
-    const deadline = setTimeout(finish, timeoutMs);
+    const deadline = realTimeout(finish, timeoutMs);
     w.document.addEventListener("securitypolicyviolation", onViolation);
     w.fetch(ISOLATION_CHECK_EXTERNAL_URL, { mode: "no-cors", cache: "no-store" }).then(
       // 请求居然发出去了(并且有应答):策略没在管
@@ -111,14 +126,14 @@ async function checkAllowlist(w: Window & typeof globalThis, base: string, timeo
   const root = base.replace(/\/?$/, "/");
   const get = async (path: string): Promise<"ok" | "blocked" | "other"> => {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const timer = realTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const r = await w.fetch(`${root}${path}`, { cache: "no-store", signal: ctrl.signal });
       return r.status === 204 ? "ok" : "other";
     } catch {
       return ctrl.signal.aborted ? "other" : "blocked";
     } finally {
-      clearTimeout(timer);
+      realClear(timer);
     }
   };
   if ((await get(ISOLATION_OK_PATH)) !== "ok") return false; // 托管端没有这两个地址(旧 nginx):判不了,按没有算

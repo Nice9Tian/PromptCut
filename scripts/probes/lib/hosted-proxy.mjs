@@ -26,7 +26,7 @@
  *   - `"full"`(缺省):新 nginx —— 舞台源每个响应带 `stageSecurityHeaders`,编辑器页带 `frame-src`;
  *   - `"legacy"`:旧 nginx —— 没有策略头、没有 `/media-s/` 与 `_iso/`(落到 index.html),只有 `Origin-Agent-Cluster` 等原有三条。
  *     用来核对「新页面在旧 nginx 下自检不过、自动不执行」;
- *   - `"none"`:对照组 —— 路由同 `full`,但舞台源不带内容安全策略与出口白名单(证明探针看得见外传)。
+ *   - `"none"`:对照组 —— 路由同 `full`,但舞台源不带内容安全策略与出口白名单,舞台入口也回不带 `<meta>` 的 index.html(证明探针看得见外传)。
  *   - `"csp-only"`:只带内容安全策略、不带出口白名单(仿不认 `Connection-Allowlist` 的浏览器,记 WebRTC 的残余缺口)。
  *
  * 直接运行(本机隔离托管组合,不连任何远端):
@@ -55,10 +55,11 @@ export function proxyOrigins(basePort, host = 'pc.localhost') {
  * @param {number} o.assetPort       素材服务端口(127.0.0.1)
  * @param {"full"|"legacy"|"none"|"csp-only"} [o.policy]
  * @param {boolean} [o.onlineCardExec]  运行配置里的总开关;只有明给 false 才写进配置
+ * @param {boolean} [o.runtimeConfig]   给 false 就不提供运行配置(404):页面读不到舞台源,退回同源单舞台(仿没有舞台子域的部署)
  * @param {(info: { role: "editor"|"stageA"|"stageB", req: http.IncomingMessage, url: URL }) => (void | { status: number, body?: string } | { delayMs: number })} [o.intercept]
  *        探针的钩子:回 `{ status }` 直接应答,回 `{ delayMs }` 压住这个请求再照常处理
  */
-export async function startHostedProxy({ dist, basePort, docPort, assetPort, policy = 'full', host = 'pc.localhost', onlineCardExec, intercept }) {
+export async function startHostedProxy({ dist, basePort, docPort, assetPort, policy = 'full', host = 'pc.localhost', onlineCardExec, runtimeConfig: withRuntimeConfig = true, intercept }) {
   const DIST = path.resolve(dist);
   if (!fs.existsSync(path.join(DIST, 'index.html'))) throw new Error(`在线构建目录里没有 index.html:${DIST}`);
   const origins = proxyOrigins(basePort, host);
@@ -120,12 +121,12 @@ export async function startHostedProxy({ dist, basePort, docPort, assetPort, pol
         if (p === '/editor/_iso/ok') return end(req, url, res, 204, { 'cache-control': 'no-store' });
         if (p === '/editor/_iso/redirect') return end(req, url, res, 302, { 'cache-control': 'no-store', location: '/editor/_iso/ok' });
       }
-      if (!isStage && p === '/editor/runtime-config.json') return end(req, url, res, 200, { 'content-type': 'application/json', 'cache-control': 'no-store' }, runtimeConfig);
+      if (!isStage && p === '/editor/runtime-config.json') return withRuntimeConfig ? end(req, url, res, 200, { 'content-type': 'application/json', 'cache-control': 'no-store' }, runtimeConfig) : end(req, url, res, 404, { 'content-type': 'text/plain' }, 'not found');
       const index = path.join(DIST, 'index.html');
       if (p === '/editor' || p === '/editor/' || p === '/editor/index.html') return sendFile(req, url, res, index, 'no-store');
       if (p === '/editor/stage.html') {
         const f = path.join(DIST, 'stage.html');
-        return sendFile(req, url, res, fs.existsSync(f) ? f : index, 'no-store');
+        return sendFile(req, url, res, policy !== 'none' && fs.existsSync(f) ? f : index, 'no-store');
       }
       if (p.startsWith('/editor/assets/')) {
         const f = path.join(DIST, decodeURIComponent(p.slice('/editor/'.length)));

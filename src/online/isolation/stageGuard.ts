@@ -10,7 +10,7 @@
  */
 import { installStageHardening, type BreachKind, type HardenReport } from "./harden.ts";
 import { runIsolationCheck, type IsolationReport } from "./isolationCheck.ts";
-import { markIsolatedStageDocument, noteBreach, setIsolationReport } from "./execGate.ts";
+import { cardExecGate, markIsolatedStageDocument, noteBreach, setIsolationReport } from "./execGate.ts";
 
 /** 舞台入口的文件名(在线构建的第二个入口;跨源舞台的 iframe 载它,同源单舞台仍载 `index.html`) */
 export const STAGE_ENTRY_FILE = "stage.html";
@@ -41,6 +41,8 @@ function post(msg: StageIsolationMessage): void {
 export function bootStageGuard({ online, base }: { online: boolean; base: string }): boolean {
   if (booted) return true;
   if (!online || typeof window === "undefined" || typeof location === "undefined") return false;
+  // 探针与排障用的观察口(只读):在线构建的每个文档都有 —— 编辑器页、同源单舞台、导出页回 `not-stage`(不执行)
+  (window as unknown as Record<string, unknown>).__pcCardExecGate = () => { const g = cardExecGate(); return { allowed: g.allowed, reason: g.reason }; };
   if (!isStageEntryPath(location.pathname)) return false;
   booted = true;
   markIsolatedStageDocument();
