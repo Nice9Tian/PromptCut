@@ -150,7 +150,7 @@ function selfTest(builtin) {
   const pass = judgeFirstVideo({ project: good, events: okEvents, state: 'idle', builtin }).checks.every((c) => c.ok);
   const gap = judgeFirstVideo({ project: mk([{ id: 'a', cardId: 'ring-metric', start: 0, end: 4 }, { id: 'b', cardId: 'ring-metric', start: 8, end: 12 }, { id: 'c', cardId: 'ring-metric', start: 12, end: 16 }]), events: okEvents, state: 'idle', builtin });
   const userCard = judgeFirstVideo({ project: mk([0, 5, 10].map((s, i) => ({ id: `c${i}`, cardId: i === 1 ? 'my-own-card' : 'ring-metric', start: s, end: s + 5 }))), events: [...okEvents, { type: 'tool_call', name: 'create_card' }], state: 'idle', builtin });
-  const forbidden = judgeFirstVideo({ project: good, events: [...okEvents, { type: 'tool_call', name: 'see_frames' }], state: 'idle', builtin });
+  const forbidden = judgeFirstVideo({ project: good, events: [...okEvents, { type: 'tool_call', name: 'web_open' }], state: 'idle', builtin }); // 网页操作在云端还没接上(看画面的工具 2026-10-07 起已经交给模型,不能再拿它当例子)
   const blocked = judgeFirstVideo({ project: mk([]), events: [{ type: 'tool_call', name: 'add_clip' }, { type: 'tool_result', name: 'transcribe_media', ok: false, summary: '云端 Agent 这一版还用不了 transcribe_media' }, { type: 'text', delta: '做不了' }, { type: 'end' }], state: 'idle', builtin });
   const byName = (r, k) => r.checks.find((c) => c.check.startsWith(k));
   return pass

@@ -556,31 +556,31 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 
 | 跑法 | 含义 | 个数 |
 |---|---|---|
-| 在副本上执行（`route`） | 在服务端的项目副本上同步执行，改动带期望版本提交给文档服务；进程级的锁里跑，实现必须是同步的 | 67 |
+| 在副本上执行（`route`） | 在服务端的项目副本上同步执行，改动带期望版本提交给文档服务；进程级的锁里跑，实现必须是同步的。其中看画面的四个（标 `look`）读副本后向同机的渲染服务要一帧，不进锁（9.8） | 71 |
 | 服务端另有实现（`hosted`） | `server/agent/service/hosted-tools.mjs`：文件只进这个对话的工作区、出网只经出网闸、素材经素材服务、卡片源码经文档服务的内容库、花钱的调用记用量。外部的等待在锁外，进锁只做同步的改项目 | 7 |
 | 就地执行（`server`） | 不碰项目：`wait`、`report_progress`、多 Agent 公告板四个 | 6 |
 | 要操作发起人的界面（`initiator`） | 发起方不在线时立刻回 `{ ok: false, initiatorOffline: true, error }`，Agent 据此继续；在线时读得到的照答 | 8 |
-| 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 40 |
+| 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 36 |
 
-交给模型的是前四类共 88 个（加驱动自带的 `think`）；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
+交给模型的是前四类共 92 个（加驱动自带的 `think`）；节点没有配看画面的口子（`PROMPTCUT_AGENT_LOOK_URL`）时少掉看画面的四个，是 88 个，那四个调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 在这台节点上看不了画面…' }`；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
 
 ### 9.2 逐个工具
 
 | 分组 | 在副本上执行 | 服务端另有实现 | 要操作发起人的界面 | 这一版还没接上（差什么） |
 |---|---|---|---|---|
 | project（7） | `get_project`、`list_media`、`set_project_meta`、`set_theme`、`list_media_effects` | `import_media` | `get_selection`（在线：发消息时的选区） | — |
-| clips（8）、layout（6）、tracks（5）、parts（6）、effects（10） | 全部。`get_layout` 只回规定的框（实体框要渲染，见 9.8） | — | — | — |
+| clips（8）、layout（6）、tracks（5）、parts（6）、effects（10） | 全部。`get_layout` 的实体框向渲染服务量（9.8）；节点没配看画面的口子、或这次没量成时只回规定的框，`contentBox` 是 null 并带一句原因 | — | — | — |
 | cuts（8） | 全部。`switch_cut`、`add_cut`、`remove_cut` 要播放头：在线用发消息时的，不在线按 0 记并注明 | — | — | — |
 | audio（19） | `set_clip_volume`、`set_clip_muted`、`separate_audio`、`create_audio`、五个 `*_audio_fx`、`sound_presets` | `voice_list`、`voice_generate` | — | `sound_generate`、`sound_status`、`sound_cancel`、`render_card_audio`、`cancel_card_audio`：声音的合成在页面里做（Web Worker 与 AudioContext），服务端的合成没接上；`render_card_audio` 还要执行卡片的声音代码，得放进不持凭证的隔离进程。`measure_audio`：要节点上的 ffmpeg / ffprobe 从素材服务读素材。`measure_audio_js`：另要断网的无头浏览器跑模型写的脚本 |
 | ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption`、`list_shots`、`list_subjects` | — | — | `stt_status`、`stt_install`、`transcribe_media`（语音识别）、`detect_shots`（镜头）、`track_points`、`get_track`、`track_status`、`track_install`（追踪）、`detect_subjects`、`subject_status`、`subject_install`（主体）：要节点上的 Python 运行环境与模型权重，并把页面里的作业表搬到服务端。`attach_clip_motion`：要一份追踪结果 |
-| cards（8） | `list_cards`（含本项目的用户卡）、`apply_card` | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | `bake_card`、`inspect_card_dom`：要一帧渲好的画面（9.8） |
-| vision（2） | — | — | — | `see_frames`、`get_gif`：要渲染（9.8） |
+| cards（8） | `list_cards`（含本项目的用户卡）、`apply_card`；`bake_card`、`inspect_card_dom`（看画面，9.8） | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | — |
+| vision（2） | `see_frames`（时间轴的画面）、`get_gif`（看画面，9.8） | — | — | `see_frames` 的素材镜头拼图（`source: "media"`）：要节点上的镜头识别，回明确的原因 |
 | collect（9） | — | — | `collect_login`、`collect_login_check`（要用户自己扫码或输口令） | 其余七个：要节点上的下载器（Python 与 yt-dlp、ffmpeg），并让它只经出网闸的代理出网 |
 | browser（8） | — | — | `web_handoff` | 其余七个：要节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录 |
 | agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（要页面开页签） | — |
 | core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause` | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
 
-「这一版还没接上」的 40 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
+「这一版还没接上」的 36 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
 
 **要操作发起人界面的八个，发起方在线时**：`get_selection` 按发消息时的选区答；其余七个要反过来操作他的页面，云端到页面的反向通道这一版没有，回 `{ ok: false, initiatorOnly: true, error }`（说明做不了、请用户自己在界面上操作）。反向通道记未达成。
 
@@ -625,11 +625,20 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 
 ### 9.7 系统提示词
 
-`CLOUD_SYSTEM_NOTE` 只写与本机真实的差别：用户可能已经离开（「发起方不在线」时不要等）；这一版看不了画面（要求看画面的步骤一律跳过、汇报里说明）；这一版还没有的工具；附件与素材的地址写法；建卡要写成字面量、不能引用外链；配音会产生费用。不再有「只能用内置卡」「云端暂不支持」这类话。第 22.3 节列的五个缺口：1、2、4 已写进提示词；3 不再成立（可以建卡）；5（摘要里没标哪些内置卡需要素材）没有做。
+`cloudSystemNote({ look })` 只写与本机真实的差别：用户可能已经离开（「发起方不在线」时不要等）；看画面（节点配了口子：照常用但比本机慢，带自定义卡片的项目第一次要等十来秒、别的项目在渲时要排队，工具回「这次没看成」时不要反复重试、按规定框继续并在汇报里说明；没配：看不了画面，要求看画面的步骤一律跳过、汇报里说明）；这一版还没有的工具；附件与素材的地址写法；建卡要写成字面量、不能引用外链；配音会产生费用。不再有「只能用内置卡」「云端暂不支持」这类话。第 22.3 节列的五个缺口：1、2、4 已写进提示词；3 不再成立（可以建卡）；5（摘要里没标哪些内置卡需要素材）没有做。
 
 ### 9.8 看画面（即时渲染）
 
-这一版**没有做成**，记未达成，不是排除：`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 与 `get_layout` 的实体框归在「还没接上」。打算的做法是复用同机的渲染服务（它有无头浏览器与预渲染管线），经一个只在本机回环上的内部口子按「项目 × 版本 × 时刻」要一帧；有用户卡的项目走它的隔离工作进程那一路。差的是渲染服务一侧的这个口子、Agent 服务一侧取帧并交给模型、以及两边的并发与内存上限。
+〔2026-10-07 做成，实现记录在第 25 节；渲染服务一侧的口子在 `hosted-render-contract.md` 第 8a 节〕
+
+- **怎么要**：Agent 服务（`server/agent-service/look-client.mjs`）向同机渲染服务管理进程的 `POST /look`（只绑回环）发 `{ projectId, path, body, cards, timeoutMs }`。`path` 是本机 Agent 看画面用的同一批接口（`/api/vision/snapshot`、`/api/cards/layout`、`/api/cards/dom`、`/api/vision/bake`、`/api/ai/visual` 与 `/api/ai/visual/render`），`body` 里带着**这一版项目副本**与时刻；所以 `server/agent/agent-exec.mjs` 里看画面的那几个读工具与桌面版是同一份实现，只是「问谁」不同。
+- **认身份**：每个请求用 Agent 服务的**服务私钥**签名（时刻、一次性随机数、请求体摘要）；渲染服务按服务登记表核对，只认服务 `agent`。
+- **一个对话要不到别的项目的画面**：`projectId` 由宿主在建实例时绑死（来自鉴权——委托里的项目），工具参数改不了；请求体里的项目内容是这个实例的副本。只读成员照常能看（看不改项目）。
+- **带用户卡的项目**：随请求报这个项目内容库里卡片源码的「键 → 版本」；渲染服务据此只让隔离工作进程出图，并等它把这几份卡装到至少这个版本——所以 `create_card` / `edit_card` 之后紧接着 `see_frames`，看到的就是刚写的那一版。
+- **图片怎么进模型**：与本机相同（`server/harness/agent.mjs`）：工具结果里的 `__image` / `__images` 摘出来，作为图片块跟在同一条 user 消息的工具结果之后；历史里只留最近 10 张；历史文件超过 `maxHistoryBytes`（8 MiB）按现有办法从最早的整对消息截。事件记录与发给页面的工具结果里不带图片。
+- **云端的结果不带页面取不到的东西**：聊天栏的可视化记录与动图存在渲染服务的工作进程里，在线页面取不到，所以结果里没有 `visualId` 与动图地址，`get_gif` 只把 4×2 的拼图交给模型（说明里照实写）；改片段时的前后对比记录云端不存。
+- **时限与没看成**：看画面的工具单次最多等 180 秒（别的工具 60 秒）。渲染服务回 `{ ok: false, look: <原因码>, error: '这次没看成：…' }` 时原话交给模型，这一轮照常继续；原因码与原话见 `hosted-render-contract.md` 第 8a 节。
+- **开关**：项目的「渲染节点」关着、项目的「云端 Agent」关着、托管方关掉渲染服务的看画面（`PROMPTCUT_RENDER_LOOK=off`）、Agent 服务没配 `PROMPTCUT_AGENT_LOOK_URL`，任一成立都要不到画面。
 
 ### 9.9 节点上要装什么（给部署说明）
 
@@ -639,7 +648,8 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | 素材小尺寸一档、`measure_audio` | ffmpeg | 没接上 |
 | 语音识别、镜头、追踪、主体 | Python 3 与各扩展包、模型权重（`python/` 下各包的 `requirements-*.txt`），`PROMPTCUT_PYTHON` | 没接上 |
 | 网页采集 | Python 与 yt-dlp、ffmpeg | 没接上 |
-| 网页接管、`measure_audio_js`、看画面 | 无头浏览器（渲染服务已有一份） | 没接上 |
+| 网页接管、`measure_audio_js` | 无头浏览器 | 没接上 |
+| 看画面 | 同机的渲染服务（它的无头浏览器与预渲染管线）；环境变量 `PROMPTCUT_AGENT_LOOK_URL`（渲染服务管理进程的回环口子；PM2 模板已带）。`get_gif` 另要渲染服务的工作进程里有 ffmpeg（渲染节点本来就装） | 已接上 |
 | 配音 | 托管方的配音服务地址与令牌（导入办法同模型 Key） | 已接上 |
 | 素材写入 | 环境变量 `PROMPTCUT_AGENT_ASSET_URL`（同机素材服务的回环地址；PM2 模板已带） | 已接上 |
 
@@ -1428,7 +1438,7 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 
 **没有做成的（记未达成，原因与差什么）**
 
-1. 看画面（即时渲染）：`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom`、`get_layout` 的实体框——差渲染服务一侧按「项目 × 版本 × 时刻」出一帧的内部口子（第 9.8 节）。
+1. ~~看画面（即时渲染）：`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom`、`get_layout` 的实体框~~——已做成（2026-10-07，第 25 节）。仍差的只有 `see_frames` 的素材镜头拼图（要镜头识别）。
 2. 感知类工具（语音识别、镜头、追踪、主体）、`auto_workflow`、`background_job_status`、`attach_clip_motion`——差节点上的 Python 环境与模型权重，以及把页面里的作业表搬到服务端。
 3. 音效合成与卡片声音生成、`measure_audio`、`measure_audio_js`——差服务端的合成 / 解码与隔离进程。
 4. 网页采集（七个）、网页接管（七个）——差节点上的下载器与浏览器，并让它们只经出网闸的代理出网（代理已有：`egress.mjs` 的 `startProxy`）。
@@ -1471,8 +1481,85 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 
 ### 24.3 看画面：这一轮没有做成（2026-10-07）
 
+〔同日稍后做成：见第 25 节。下面是当时查到的现状，留作记录；其中「工作进程的端口不对别的进程开放」不准确——页面请求闸只拦浏览器形状的请求，Node 一侧的请求原来是放行的，这次给看画面的那批接口另加了口令。〕
+
 `see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 与 `get_layout` 的实体框仍归在「这一版还没接上」。查到的现状与差的东西：
 
 - 渲染服务的工作进程里有一份预渲染用的 Vite，本机 Agent 看画面用的那几条接口（`/api/vision/snapshot`、`/api/vision/bake`、`/api/cards/dom`、`/api/cards/layout`、`/api/ai/visual`）就在它上面；但工作进程的页面请求闸（`server/hosted-render/page-gate.mjs`）只放行渲染页自己要用的那一条，别的 `/api/**` 一律 403，工作进程的端口也不对别的进程开放。
 - 要做成需要：① 渲染服务的管理进程加一个只绑回环的内部口子，凭 Agent 服务的服务身份（或管理进程发的一次性口令）认调用方；② 管理进程把请求转给工作进程，并在页面请求闸上为这一路单开放行（只认管理进程转来的）；③ 有卡片源码的项目必须走隔离工作进程——它同时只渲一个项目、按项目起停、冷启动约 10 秒，「要一帧」得排进它的轮转里，不能让常驻工作进程去装卡；④ 取素材要的票据由渲染服务按项目取（现有的目录与票据那一套）；⑤ 并发与内存上限并进渲染服务现有的看护；⑥ Agent 服务一侧把 `prerenderPost` 指到这个口子，把四个工具与 `get_layout` 的实体框挪出「还没接上」，图片交给模型。
 - 没有做的原因：这要动渲染服务的隔离边界（页面请求闸、隔离工作进程的轮转），第三段刚在这上面收口；这一轮余下的时间不够把它做稳并补上隔离探针，所以没有动 `server/hosted-render/`，记未达成。
+
+---
+
+## 25. 看画面的实现记录（2026-10-07，分支 `claude/cloud-agent`）
+
+任务书 J〔2026-10-07 更正〕要求云端 Agent 的工具与本机一致，包括看画面。第 24 节那一轮没做成，这一节是补做的记录。上文与本节冲突时以本节为准；第 9.1、9.2、9.7、9.8、9.9 节已按实现改过。渲染服务一侧写在 `hosted-render-contract.md` 第 8a 节与它的实现记录里。
+
+### 25.1 方案与理由
+
+- **画面由同机的渲染服务出，Agent 服务只是来要。** Agent 服务进程持服务私钥，不执行卡片代码、不起浏览器（第 4.3、9.3 节的裁定不变）；渲染服务已有无头浏览器、预渲染管线、页面请求闸、出口限制与按项目的隔离工作进程。复用它，卡片代码在「看画面」时能做的事与预渲染时完全相同，不多出一个要另外设防的执行环境。
+- **口子在渲染服务的管理进程上**（`POST /look`，只绑回环，与诊断口、代理口同一个监听）。管理进程不执行卡片代码，它只核对身份、定路由、转发。
+- **认身份用 Agent 服务的服务私钥签名**，渲染服务按服务登记表（只有公钥）核对〔裁，二级：决定「谁能让渲染服务出图」〕。不改文档服务的任何接口与白名单；不把成员的委托交给渲染服务；撤钥跟着登记表走。
+- **项目内容随请求带来**（Agent 服务此刻的项目副本），不是让渲染服务按版本号去文档服务取：副本里已经有这一轮刚落地的改动，「这一版」没有歧义；渲染服务也不必为了一帧去开一条读项目的连接。
+- **带卡片源码的项目只由隔离工作进程出图。** 请求里带着这个项目卡片源码的「键 → 版本」，渲染服务等隔离工作进程这一轮正是这个项目、这几份卡装到了这个版本才转给它。常驻工作进程照旧不装任何项目带来的卡。
+- **看画面优先于预渲染任务**，但不打断已经在做的任务：同一时刻只转发一个看画面的请求，在途时让出一个并发名额；理由是模型的一轮正等着这一帧。排队、背压、时限都回明确的「这次没看成」，不挂住一轮。
+- **Agent 服务一侧不另写一套工具**：给 `agent-exec.mjs` 一个与桌面版同形状的 `prerenderPost`（桌面版问本机的预渲染进程，云端问渲染服务），`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 与 `get_layout` 的实体框用的是同一份实现。
+
+### 25.2 各工具做到哪一步
+
+| 工具 | 状态 | 说明 |
+|---|---|---|
+| `see_frames`（时间轴） | 接上 | 单个时刻、多个时刻（`times`）、只看一个片段（`clipId`）都走同一条；图片交给模型 |
+| `get_layout` 的实体框 | 接上 | 没量成（渲染服务忙、关着）时照旧回规定的框，`contentBox` 是 null 并带原因 |
+| `inspect_card_dom` | 接上 | — |
+| `bake_card` | 接上 | 贴图先进渲染工作进程自己的素材库，再推到项目的素材服务（`px`，渲染服务的身份）；成员凭自己的素材票据取得到 |
+| `get_gif` | 接上一半 | 4×2 的拼图交给了模型；**动图用户看不到**——它存在渲染服务工作进程的数据目录里，在线页面取不到（带用户卡的项目那个目录每一轮还会清空）。结果里不带动图地址，说明里照实写。差：把动图推进素材服务，并让在线页面的工具结果能按素材地址显示它 |
+| `see_frames` 的素材镜头拼图（`source: "media"`） | 没接上 | 要节点上的镜头识别（Python 环境与模型权重，同第 24 节「没有做成的」第 2 项）；调用回明确的原因 |
+| 聊天栏里「看得见的工具结果」（`visualId`：看过的画面、改片段的前后对比） | 没接上 | 记录存在渲染服务的工作进程里，在线页面取不到。云端的工具结果不带 `visualId`。差：记录与图片改存素材服务（或 Agent 服务的对话目录），在线页面的 `ToolVisual` 按那个地址取 |
+
+### 25.3 对外接口、配置与行为的改动
+
+| 改动 | 在哪 |
+|---|---|
+| 渲染服务管理进程新增 `POST /look`（回环）；状态口多 `look`、`isolation.lastQueue`；节点计数多 `plans` | `server/hosted-render/look.mjs`、`broker.mjs`、`main.mjs`、`server/render-node/host.mjs` |
+| 渲染服务新配置 `PROMPTCUT_RENDER_LOOK`（`on` / `off`，缺省 `on`）、`PROMPTCUT_RENDER_LOOK_SERVICES`（登记表路径） | `server/hosted-render/main.mjs`；PM2 模板与 `deploy.mjs` |
+| 托管方工作进程里看画面的那批接口，Node 一侧的请求也要带这个工作进程自己的口令（原来不带任何凭证就放行） | `server/hosted-render/vite-gate.mjs` |
+| 隔离工作进程：要看画面的项目没有任务也算候选并排最前；有人等着看画面时当前一轮最多再做 45 秒就轮换 | `server/hosted-render/isolation.mjs` |
+| 托管方工作进程（代理模式）登记卡片快照的远程素材服务（`bake_card` 的贴图推到项目的素材服务） | `server/vite-plugin-frames.ts` 的 `startHostNode` |
+| Agent 服务新配置 `PROMPTCUT_AGENT_LOOK_URL`（不是回环上的 http 地址：`config.error look-url`）；`/healthz` 多回 `look` | `server/agent-service/main.mjs`、`http.mjs`、`look-client.mjs` |
+| 工具表：`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 从「还没接上」挪到「在副本上执行」并标 `look`；没配口子时不交给模型 | `server/agent/service/cloud-tools.mjs`、`instance.mjs` |
+| 系统提示词 `cloudSystemNote({ look })`（`CLOUD_SYSTEM_NOTE` 留作没配口子时的那一段） | 同上 |
+| 看画面的工具单次时限 180 秒（`HOSTED_DEFAULTS.lookToolMs`） | `server/agent/service/create-agent-service.mjs` |
+| 内容库里卡片源码的版本（`rev`）记进实例的卡片源码表 | `server/agent/service/hosted-tools.mjs` |
+
+语义文档没有改。「谁能让渲染服务出图」「看画面优先于预渲染任务」是这次新定的，分别标了〔裁〕（二级、三级），合入 main 前请用户审。
+
+### 25.4 两处小修
+
+1. **一轮结束后范围声明还挂着。** 云端的一轮结束（说完、模型失败、被停、被撤销）时撤掉这个对话声明的范围（`agent-board.mjs` 的 `clearScope`，`instance.mjs` 在一轮收尾处调并发 `presence.clear`）。原因：云端的对话没有页签可关，范围一直留到实例闲置回收。单测 CA-SCOPE-01。
+2. **隔离工作进程的 `completed` 一直是 0。** 计数本身没有错，是看的时机与位置：工作进程每秒向管理进程交一次诊断，任务做完的那一刻读状态口拿到的是上一拍的；这一轮闲置结束后 `isolation.queue` 被清成 null，之后再看就看不到这一轮做了什么；计划任务做完原来不计在任何一项里。改法：节点计数加 `plans`；状态口的 `isolation` 多 `lastQueue`（上一轮结束时的计数）；`cloud-agent-ux-probe` 的 `usercard` 一步等两拍再读（本机复跑：`claimed: 2, completed: 1, plans: 1`）。
+
+### 25.5 验收（本机，Windows，20 核）
+
+- `npx tsc -b --force`：零错误。`npm test`：4697 项、4696 通过、1 跳过、零失败（起点 4686 项；新增 HR38～HR43 六个、CA-LOOK-01～04 四个、CA-SCOPE-01 一个）。
+- `cloud-agent-look-probe`（新）：K0～K7 八条全过。像素断言：只用内置卡的项目，`see_frames { t: 0.5 }` 与 `{ t: 1.5 }` 里横移的绿色方块重心在 808 与 1108（应在 810、1110）；把片段截到 1 秒后要 1.5 秒，得到的是这一版的最后一帧（方块在 948，应在 950）。含用户卡的项目：`create_card` 之后 `see_frames` 的画面中心是 (255,0,0)；改参数后是 (0,0,255)；`edit_card` 改源码后是 (0,255,0)；三张都由隔离工作进程出，常驻工作进程对这个项目一帧没出、一个任务没认领。`bake_card` 的贴图成员在项目的素材服务上取得到；只读成员能看、同一轮里的写入照旧被拒；关掉项目的「渲染节点」后回「这次没看成」并照常收尾；桌面版的看画面照常（K7）。
+- `hosted-render-isolation-probe`：49 条全过（原 37 条，新增 L 组 12 条：越权探测卡经 `/look` 渲一帧，同样读不到别的项目的内容与卡片源码、节点上的假凭证、工作进程的本机接口（含看画面的那两条）、管理进程与同机各服务、元数据地址、工作目录以外的文件，收集站 0；口子认身份；绕过管理进程直连两个工作进程 403）。
+- `cloud-agent-isolation-probe`：30 条全过（原 24 条，新增 V0～V3 六条：甲项目的对话要不到乙项目的画面；伪造身份八种写法全被拒、一帧没多出；项目的「渲染节点」、项目的「云端 Agent」、托管方的总开关三层关掉后都要不到）。
+- `hosted-render-probe` 十步全过（缺省上限，没有加 `--memory-max`）；`cloud-agent-ux-probe` 21 条全过；`cloud-agent-first-video-probe`（模拟模型冒烟）8 条全过。
+- 真实模型没有再跑（有费用）。真实模型下图片块怎么送进各家接口走的是桌面版已有的那一段（`server/harness/` 的各家提供方），云端没有另写。
+
+### 25.6 实现时发现、任务书与清单都没列的用户可见行为
+
+1. 云端 Agent 看过的画面只有模型看得到：AI 栏里点开「看了画面」这一步没有图，`get_gif` 也没有动图可点（桌面版有）。
+2. 带自定义卡片的项目，云端第一次看画面（含 `get_layout` 量实体框）要等十来秒：隔离工作进程按项目现起。之后 90 秒内再看是快的。
+3. 渲染服务正在渲别的项目的自定义卡片时，带自定义卡片的项目看画面要排队，最长等到时限（`see_frames` 约三分钟、`get_layout` 一分钟）后回「这次没看成」，模型按规定框继续并在汇报里说明。
+4. 项目创建者关掉「渲染节点」后，云端 Agent 也看不了这个项目的画面（工具回「这次没看成：项目创建者关掉了这个项目的渲染节点」）。
+5. 云端 Agent 用 `bake_card` 做的贴图是以渲染服务的身份写进素材服务的，按现有规则应计在托管方渲染服务的产物容量里（`hosted-render-contract.md` 第 6 节）、不算在成员名下；这一点是按规则推的，没有单独验。
+6. 一轮结束后，别的成员 AI 栏顶上「〈成员〉的云端 Agent 正在改：…」那一行随之消失（原来一直挂着）。
+
+### 25.7 没做成的与留给新节点的
+
+- `get_gif` 的动图、聊天栏的可视化记录：见 25.2。
+- `cloud-agent-ux-ui-probe` 没有加用户卡一步（真实浏览器里「后来的成员贴得上云端 Agent 建的用户卡的快照」仍没有断言）；看画面没有界面可验，界面探针没有动。
+- 有人等着看画面时提前轮换隔离工作进程（45 秒）只有单测（HR41），没有用两个带卡项目的真进程演练。
+- 新节点上要核对的：管理进程读得到登记表（`PROMPTCUT_RENDER_LOOK_SERVICES`；它与托管组合不是同一个用户时要给读权限，文件里只有公钥）；`/status` 的 `look.registry.agentKeys` 不是 0；非 root 的工作进程用户下 `bake_card` 的贴图推得进素材服务；Linux 上 Agent 通道那个浏览器实例多占的内存（常驻那棵树看画面后大约多一个浏览器进程，闲置 10 分钟关掉）计进了内存看护的读数。
