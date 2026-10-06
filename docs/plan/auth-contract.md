@@ -393,7 +393,7 @@ hosted.ticket { projectId, purpose: 'publish' }
 | 握手核对 | 登记表、开关；名单与禁入表照成员查（`admissionOf`） | 登记表、开关；不查名单与禁入表（不是成员） |
 | principal | 成员的（`scope: 'member'`）加 `service: 'agent'`、`serviceKid`、`access: 'rw' \| 'r'`（票据的 `acc` 与此刻的 `memberAccess` 里小的；票据没写按 `r`） | `scope: 'service'`、`userId: 'service:agent@<instanceId>'`、`role: 'agent'`、`conversation: null`、`service: 'agent'`、`serviceKid`、`purpose: 'publish'` |
 | 白名单 | `SERVICE_ALLOW.agent`：`project.open`、`project.close`、`project.op`、`project.upload`、`events.create`、`events.complete`、`events.text`、`presence.set`、`presence.clear`、`presence.list`；`access` 不是 `rw` 的另拒 `project.op`、`project.upload` | `SERVICE_PUBLISH_ALLOW.agent`：`publisher.hello`、`task.publish`（每个任务都必须是带片段清单的计划：`kind: 'plan'`、结果键含 `#clips:` 或 `#backfill:`、`input.clips` 非空）、`task.unsubscribe` |
-| 成员列表 | 归在成员那一行，`conns` 里 `{ role: 'agent', conversation, service: 'agent' }`，`tags.agents` 加一 | 不列出 |
+| 成员列表 | 归在成员那一行，`conns` 里 `{ role: 'agent', conversation, service: 'agent' }`，`tags.agents` 加一。界面的计数「成员：N 人 · Agent：M 个」只看 `conns`（带 `service: 'agent'` 的不算真人在线、每位成员的云端 Agent 只算一个），不看 `tags`（`cloud-agent-contract.md` 第 22 节，〔用户 2026-10-07 定〕） | 不列出 |
 | 写入身份 | `{ userId, deviceId, role: 'agent', conversation, session, service: 'agent' }` | 不写任何东西 |
 
 - `acc` 只许出现在成员的 `sv` 连接票据上，`pu` 只许出现在服务自己身份的 `sv` 连接票据上；别处出现按格式不对拒。`pu: 'publish'` 的票据不带 `c`。

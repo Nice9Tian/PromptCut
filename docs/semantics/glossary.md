@@ -14,7 +14,9 @@
 | SKILL | 桌面 APP 里的 Agent 经 MCP 接入；默认关闭编辑界面，转入后台运行 | 一 | `user-workflow.md` |
 | 后台运行 | 桌面应用关闭编辑界面后转为托盘图标和悬浮窗继续运行 | 一 | `user-workflow.md` |
 | AI 栏 | 编辑界面右侧和 Agent 对话、看进度的区域 | 一 | `user-workflow.md` |
-| 接入方式 | Agent 的三种接入：CLI、API（在 AI 栏里对话）、桌面 APP（经 SKILL） | 一 | `user-workflow.md` |
+| 接入方式 | Agent 的四种接入：CLI、API（在 AI 栏里对话）、桌面 APP（经 SKILL）、云端（AI 栏里，对话在云节点上运行；在线浏览器模式只有这一种） | 一 | `user-workflow.md` |
+| 云端 Agent | 托管方提供、跑在云节点上的 Agent 服务；对话与工具由它执行，改动经文档服务落地；发起的成员离线后对话照常跑完；署名「〈成员名〉的云端 Agent」 | 二 | product/agent.md |
+| 委托票据、对话委托 | 云端 Agent 的两种身份证明：前者页面每个请求出示（2 分钟），后者随「发消息」交给 Agent 服务（60 分钟，绑成员、项目、对话），都由项目的文档服务签发与核验；成员离线不影响，被移出、关开关、删项目当场作废 | 三 | mechanism/agent.md |
 | 创造力等级 | 低、中、高三档，决定 Agent 能改到多深；项目有默认值，每个对话可单独改 | 一 | `user-workflow.md` |
 | 主 Agent、角色 | 主 Agent 可拉起其它 Agent 并分派任务，拉起时可附加预设的角色 | 一 | `user-workflow.md` |
 | 进度汇报 | Agent 交给用户的结构化条目：做了、待办、问题 | 一 | `user-workflow.md` |
