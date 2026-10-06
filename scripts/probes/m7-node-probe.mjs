@@ -246,6 +246,10 @@ try {
   const creator = { username: 'm7-creator', password: `pw-${randomBytes(6).toString('hex')}` };
   const projectPassword = `pp-${randomBytes(6).toString('hex')}`;
   const made = await createSharedProject({ base: DOC_DIRECT, name: projName, mode: 'free', creator, password: projectPassword });
+  // 在线页面只加入、不新建(dce4b22b):项目要先有内容才进得去,替创建者写进一份空项目
+  const { seedSharedProject } = await import('./lib-seed.mjs');
+  const seeded = await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator, name: projName });
+  check(seeded.ok, '替创建者写进空项目', seeded);
   out.steps.project = { projectId: made.projectId, name: projName };
   splitter = await startSplitter({ projectId: made.projectId, creator, codeVersion });
   say('splitter.up', { fp: SPLITTER_FP });
