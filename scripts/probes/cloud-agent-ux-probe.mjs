@@ -55,7 +55,8 @@
  *   每一种都断言:项目内容完好(结构不变、片段都在)、版本号等于成功写入的次数、之后 1.5 秒没有新的写入。
  * 附:节点资源(步骤 load,任务书完成条件第 9 条的本机版,数字只作参考)
  *   U15 全节点同时进行的一轮不超过 6、每个项目不超过 3:超出的回 429 busy。
- *   U16 满载(6 轮对话同时写 + 渲染服务在渲)时文档服务 `/healthz` 与一次读项目的往返时延,对比空闲时的,写明数字。
+ *   U16 满载(6 轮对话同时写 + 渲染服务在渲)时文档服务 `/healthz` 与一次读项目的往返时延、同机素材服务的下载速度
+ *       (一件 16 MiB 的素材连下 3 次),对比空闲时的,写明数字。
  * 最后一行是汇总 `{ ok, passed, failed, timings }`。退出码 0 过、1 不过、2 起不来。不打印口令、票据、私钥。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -63,7 +64,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { clipInputSig, inputSigStale } from '../../src/render/layerInputSig.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
@@ -659,8 +660,36 @@ async function main() {
       const f = (l) => ({ p50: Number(pct(l, 0.5).toFixed(1)), p95: Number(pct(l, 0.95).toFixed(1)), max: Number(Math.max(...l).toFixed(1)), n: l.length });
       return { healthz: f(http), projectOpen: f(ws) };
     };
+    // 素材下载速度:成员自己传一件 16 MiB 的素材,空闲时与满载时各连下 3 次,量每秒多少 MiB
+    const blob = randomBytes(16 * 1024 * 1024);
+    const blobHash = createHash('sha256').update(blob).digest('hex');
+    {
+      const rw = await bob.ask({ type: 'auth.ticket', kind: 'asset', access: 'rw' });
+      const auth = { authorization: `Bearer ${rw.ticket}` };
+      const chunkSize = 8 * 1024 * 1024;
+      for (let n = 0; n * chunkSize < blob.length; n += 1) {
+        const part = blob.subarray(n * chunkSize, (n + 1) * chunkSize);
+        const r = await fetch(`http://127.0.0.1:${ASSET_PORT}/api/asset/media/${blobHash}/${n}`, { method: 'PUT', body: part, headers: { ...auth, 'content-type': 'application/octet-stream', 'x-media-size': String(blob.length) } });
+        if (r.status !== 200) throw new Error(`探针传素材失败:${r.status}`);
+      }
+      const done = await fetch(`http://127.0.0.1:${ASSET_PORT}/api/asset/media/${blobHash}/complete`, { method: 'POST', headers: auth });
+      if (done.status !== 200) throw new Error(`探针传素材收尾失败:${done.status}`);
+    }
+    const download = async (n) => {
+      const speeds = [];
+      for (let i = 0; i < n; i += 1) {
+        const r = await bob.ask({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+        const t = performance.now();
+        const res = await fetch(`http://127.0.0.1:${ASSET_PORT}/api/asset/media/${blobHash}`, { headers: { authorization: `Bearer ${r.ticket}` } });
+        const got = (await res.arrayBuffer()).byteLength;
+        if (res.status !== 200 || got !== blob.length) throw new Error(`探针下素材失败:${res.status} ${got}`);
+        speeds.push(got / (1024 * 1024) / ((performance.now() - t) / 1000));
+      }
+      return { mibPerSec: speeds.map((s) => Math.round(s)), median: Math.round(pct(speeds, 0.5)), min: Math.round(Math.min(...speeds)), n };
+    };
     await sleep(3000);
     const idle = await sample(40, 100);
+    const idleDownload = await download(3);
     // 先让渲染服务有活:一个很短的对话改两张卡,它一结束补渲计划就发出去,渲染要几十秒;6 轮对话在它渲的时候起
     const renderMark = agent.logs.length;
     await api.alice.send('load-pre', mockScript([writeStep(3, `${salt}-pre`), writeStep(2, `${salt}-pre`), { say: '先让渲染服务忙起来' }]));
@@ -683,15 +712,17 @@ async function main() {
     const runsAtStart = await runningNow();
     const renderAtStart = rendering();
     const busy = await sample(40, 100);
+    const busyDownload = await download(3);
     const runsAtEnd = await runningNow();
     const renderAtEnd = rendering();
     const st1 = await renderStatus();
     const mem = agent.child.pid ? spawnSync(process.platform === 'win32' ? 'powershell' : 'ps', process.platform === 'win32' ? ['-NoProfile', '-Command', `(Get-Process -Id ${agent.child.pid}).WorkingSet64`] : ['-o', 'rss=', '-p', String(agent.child.pid)], { windowsHide: true, encoding: 'utf8' }).stdout.trim() : '';
     const rssMb = mem ? Math.round(Number(mem) / (process.platform === 'win32' ? 1024 * 1024 : 1024)) : null;
     void st0; void st1;
-    check('U16 满载时同机文档服务的响应时间(6 轮对话同时写 + 渲染服务在渲),对比空闲时', busy.healthz.p95 < 500 && busy.projectOpen.p95 < 1000 && runsAtStart === 6 && runsAtEnd === 6 && renderAtStart, {
-      idle, loaded: busy, runsDuringSample: { atStart: runsAtStart, atEnd: runsAtEnd }, renderInProgress: { atStart: renderAtStart, atEnd: renderAtEnd }, agentRssMb: rssMb, agentHeapLimitMb: agent.ready?.heapLimitMb ?? null,
-      note: '本机数字只作参考;门槛只卡「没有被拖垮」(healthz p95 < 500 ms,与渲染服务的背压线相同)',
+    check('U16 满载时同机文档服务的响应时间与素材下载速度(6 轮对话同时写 + 渲染服务在渲),对比空闲时', busy.healthz.p95 < 500 && busy.projectOpen.p95 < 1000 && runsAtStart === 6 && runsAtEnd === 6 && renderAtStart
+      && busyDownload.min >= Math.max(5, idleDownload.median * 0.2), {
+      idle, loaded: busy, assetDownloadMibPerSec: { idle: idleDownload, loaded: busyDownload, sizeMiB: 16 }, runsDuringSample: { atStart: runsAtStart, atEnd: runsAtEnd }, renderInProgress: { atStart: renderAtStart, atEnd: renderAtEnd }, agentRssMb: rssMb, agentHeapLimitMb: agent.ready?.heapLimitMb ?? null,
+      note: '本机数字只作参考;门槛只卡「没有被拖垮」(healthz p95 < 500 ms,与渲染服务的背压线相同;素材下载最慢的一次不低于空闲中位数的两成、且不低于每秒 5 MiB)',
     });
     for (const [a, ids] of [[api.alice, ['load-a1', 'load-a2']], [api.bob, ['load-b1']], [api.dan, ['load-d1', 'load-d2']], [api.eve, ['load-e1']]]) for (const id of ids) await a.abort(id);
     await sleep(500);
