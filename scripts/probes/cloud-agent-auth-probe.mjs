@@ -21,15 +21,19 @@
  *   P2  成员甲的对话改不了成员乙的项目：甲的 Agent 连接提交的写入只落在项目一，项目二的版本号与内容不变。
  *   P3  一个项目的对话拿不到另一个项目的内容：丙在两个项目都有权限，但他在项目一的对话的连接读不到项目二的内容；
  *       项目一的对话委托拿去换项目二的连接被拒；消息里自报项目、自报成员都不认。
- *   P4  一个项目的对话拿不到另一个项目的素材，也拿不到本项目的素材字节：Agent 的连接要不到素材票据；
- *       委托、对话委托、Agent 的连接票据拿去素材服务一律 401；成员自己的票据照常能读（对照）。
+ *   P4  素材按成员本人的权限（任务书 J〔2026-10-07 更正〕）：读写成员的 Agent 连接要得到代成员的素材票据（绑本项目、带 `sv: 'agent'`），
+ *       能写素材原件（`media`）、写不了预渲染产物（`snap`、`px`）；只读成员的要不到读写票据、只读票据写不进；
+ *       委托、对话委托、Agent 的连接票据拿去素材服务一律 401；创建者关掉开关后那张素材票据当场失效（在 P10 里验）。
+ *       注：素材服务按内容哈希存取、没有项目语义（`product/asset-service.md`），任何有效的素材票据凭哈希都读得到——对成员本人也是如此；
+ *       云端 Agent 的工具不接受裸的哈希与素材服务地址（隔离探针 T1c）。
  *   P5  对话记录的归属由文档服务定：核验委托回的 `projectId`、`userId`、`ownerKey` 只取自委托本身，
  *       项目一的委托核验不出项目二的归属（对话记录本身在 Agent 服务侧，这里断言的是它据以分目录的那几个字段伪造不了）。
  *   P6  伪造的成员身份证明被拒：改签名、改负载、用别的密钥签、拿连接票据或素材票据冒充，核验与换票据都拒；委托直接当握手票据 401。
  *   P7  过期的成员身份证明被拒：过期的委托票据（2 分钟）与过期的对话委托（60 分钟）核验与换票据都回 `expired`
  *       （用项目真正的签名密钥签一张签发时刻在过去的，等于时间走过了有效期）。
  *   P8  只读成员发起的对话改不了项目：丁的委托 `acc` 是 `r`，换出的连接读得到、`project.op` 与 `project.upload` 被拒，版本号不变。
- *   P9  白名单：Agent 的连接发表外的消息（取票据、成员列表、创建者操作、报到成渲染节点、认领、写内容库、发布任务）一律 `forbidden`。
+ *   P9  白名单：Agent 的连接发表外的消息（取连接票据与委托、成员列表、创建者操作、报到成渲染节点、认领、发布任务、
+ *       内容库里卡片源码以外的类别）一律 `forbidden`；卡片源码（`card-source`）读得到、读写成员写得进、只读成员写不进。
  *   P10 创建者关掉开关后正在进行的对话被停掉：对话正在连续提交写入，创建者（从自己的连接）关开关，
  *       Agent 的连接在 2 秒内以 4003 `service-disabled` 关闭，之后没有新的写入落地，委托换不出新票据、核验不过；
  *       项目二里丙的对话不受影响；开关开回来后恢复。
@@ -77,6 +81,8 @@ const DOC = 'doc-1';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const results = [];
+/** 甲的云端 Agent 连接拿到的素材票据(P4 取、P10 关开关后再验它当场失效) */
+let jiaAsset = null;
 function check(name, ok, detail = {}) {
   const line = { check: name, ok: !!ok, ...detail };
   results.push(line);
@@ -312,33 +318,64 @@ async function main() {
     const swap = await agent.memberTicket({ projectId: p2.projectId, conversation: 2, conversationId: 'conv-bing-1', delegation: gBing1 });
     const swapCid = await agent.memberTicket({ projectId: p1.projectId, conversation: 2, conversationId: 'conv-bing-2', delegation: gBing1 });
     const lied = await agent.memberTicket({ projectId: p1.projectId, conversation: 2, conversationId: 'conv-bing-1', delegation: gBing1, userId: jia.userId, username: 'jia', u: jia.userId, access: 'rw' });
-    const got = await aBing1.conn.ask({ type: 'content.list', kind: 'card-source' });
+    // 内容库:卡片源码按项目分开——丙在项目二的对话写一张,项目一的对话列不出、取不到;卡片源码以外的类别读写都被拒
+    const cardKey = `src/cards/user/probe-${tag}.tsx`;
+    const putTwo = await aBing2.conn.ask({ type: 'content.put', kind: 'card-source', key: cardKey, body: `// ${SECRET2}` });
+    const listOne = await aBing1.conn.ask({ type: 'content.list', kind: 'card-source', prefix: 'src/' });
+    const getOne = await aBing1.conn.ask({ type: 'content.get', kind: 'card-source', key: cardKey });
+    const getTwo = await aBing2.conn.ask({ type: 'content.get', kind: 'card-source', key: cardKey });
+    const otherKinds = [];
+    for (const kind of ['render-manifest', 'snapshot-manifest', 'event-detail']) {
+      otherKinds.push(verdict(await aBing1.conn.ask({ type: 'content.list', kind, prefix: '' })), verdict(await aBing1.conn.ask({ type: 'content.get', kind, key: 'k' })), verdict(await aBing1.conn.ask({ type: 'content.put', kind, key: 'k', body: {} })));
+    }
     check('P3 一个项目的对话拿不到另一个项目的内容', seen1.includes(SECRET1) && !seen1.includes(SECRET2) && seen2.includes(SECRET2) && !seen2.includes(SECRET1)
-      && swap.reason === 'project' && swapCid.reason === 'conversation' && lied.ok === true && lied.userId === bing1.userId && verdict(got) === 'error:forbidden', {
+      && swap.reason === 'project' && swapCid.reason === 'conversation' && lied.ok === true && lied.userId === bing1.userId
+      && putTwo.type === 'content.stored' && listOne.type === 'content.listing' && !(listOne.items ?? []).some((i) => i.key === cardKey) && getOne.missing === true
+      && typeof getTwo.body === 'string' && getTwo.body.includes(SECRET2) && otherKinds.every((v) => v === 'error:forbidden'), {
       projectOneConvSeesTwo: seen1.includes(SECRET2), projectTwoConvSeesOne: seen2.includes(SECRET1), grantOneForProjectTwo: swap.reason ?? 'issued',
-      grantForOtherConversation: swapCid.reason ?? 'issued', selfReportedUserIgnored: lied.userId === bing1.userId, contentList: verdict(got),
+      grantForOtherConversation: swapCid.reason ?? 'issued', selfReportedUserIgnored: lied.userId === bing1.userId,
+      cardSource: { writtenInProjectTwo: putTwo.type, listedInProjectOne: (listOne.items ?? []).some((i) => i.key === cardKey), readFromProjectOne: getOne.missing === true ? 'missing' : 'found', readFromProjectTwo: typeof getTwo.body === 'string' },
+      otherContentKinds: [...new Set(otherKinds)],
     });
   }
 
-  // ---------- P4 素材
+  // ---------- P4 素材:按成员本人的权限
   {
     const rw = await owner2.ask({ type: 'auth.ticket', kind: 'asset', access: 'rw' });
     const bytes = randomBytes(512);
     const hash = createHash('sha256').update(bytes).digest('hex');
     const auth = (t) => ({ Authorization: `Bearer ${t}` });
-    const put = await fetch(`${ASSET}/media/${hash}/0`, { method: 'PUT', body: bytes, headers: { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(bytes.length), ...auth(rw.ticket) } });
-    const done = await fetch(`${ASSET}/media/${hash}/complete`, { method: 'POST', headers: auth(rw.ticket) });
-    const read = async (t) => (await fetch(`${ASSET}/media/${hash}`, { headers: auth(t) })).status;
-    const asked = [];
-    for (const c of [aBing1.conn, aBing2.conn, aJia.conn]) for (const access of ['r', 'rw']) asked.push(verdict(await c.ask({ type: 'auth.ticket', kind: 'asset', access })));
+    const putTo = (ns, t, data) => fetch(`${ASSET}/${ns}/${createHash('sha256').update(data).digest('hex')}/0`, { method: 'PUT', body: data, headers: { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(data.length), ...auth(t) } }).then((r) => r.status);
+    const complete = (t, data) => fetch(`${ASSET}/media/${createHash('sha256').update(data).digest('hex')}/complete`, { method: 'POST', headers: auth(t) }).then((r) => r.status);
+    const put = await putTo('media', rw.ticket, bytes);
+    const done = await complete(rw.ticket, bytes);
+    const read = async (t, h = hash) => (await fetch(`${ASSET}/media/${h}`, { headers: auth(t) })).status;
+    // 读写成员(甲)的 Agent 连接:要得到读写的素材票据;票据是成员的身份、绑本项目、带 sv: 'agent'
+    const jiaRw = await aJia.conn.ask({ type: 'auth.ticket', kind: 'asset', access: 'rw' });
+    const payload = jiaRw.type === 'auth.ticket.ok' ? JSON.parse(Buffer.from(jiaRw.ticket.split('.')[1], 'base64url').toString('utf8')) : {};
+    const mine = randomBytes(300);
+    const mineHash = createHash('sha256').update(mine).digest('hex');
+    const agentWrites = { media: await putTo('media', jiaRw.ticket, mine), complete: await complete(jiaRw.ticket, mine), snap: await putTo('snap', jiaRw.ticket, randomBytes(64)), px: await putTo('px', jiaRw.ticket, randomBytes(64)) };
+    const ownerReadsAgentUpload = await read((await owner1.ask({ type: 'auth.ticket', kind: 'asset', access: 'r' })).ticket, mineHash);
+    // 只读成员(丁)的 Agent 连接:要不到读写的;只读的写不进
+    const dingRw = verdict(await aDing.conn.ask({ type: 'auth.ticket', kind: 'asset', access: 'rw' }));
+    const dingR = await aDing.conn.ask({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+    const readonlyWrites = { media: await putTo('media', dingR.ticket, randomBytes(64)), snap: await putTo('snap', dingR.ticket, randomBytes(64)), read: await read(dingR.ticket, mineHash) };
+    // 委托、对话委托、Agent 的连接票据都当不了素材票据
     const statuses = {
       memberOwnTicket: await read(rw.ticket),
       grantOfOtherProject: await read(gBing1), grantOfThisProject: await read(gBing2), shortDelegation: await read(await shortFor(bing2)),
       agentConnTicketOtherProject: await read(aBing1.ticket), agentConnTicketThisProject: await read(aBing2.ticket), noTicket: (await fetch(`${ASSET}/media/${hash}`)).status,
     };
-    const write = await fetch(`${ASSET}/snap/${hash}/0`, { method: 'PUT', body: bytes, headers: { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(bytes.length), ...auth(aBing2.ticket) } });
-    check('P4 一个项目的对话拿不到另一个项目的素材（也取不到素材票据）', put.status === 200 && done.status === 200 && asked.every((v) => v === 'error:forbidden') && statuses.memberOwnTicket === 200
-      && Object.entries(statuses).every(([k, v]) => (k === 'memberOwnTicket' ? v === 200 : v === 401)) && write.status === 401, { assetTicketRequests: asked, statuses, writeWithAgentTicket: write.status });
+    jiaAsset = { ticket: jiaRw.ticket, read: (t) => read(t, mineHash) };
+    check('P4 素材按成员本人的权限:读写成员的云端 Agent 写得进素材原件、写不了预渲染产物;只读成员的写不进;委托与连接票据当不了素材票据', put === 200 && done === 200
+      && jiaRw.type === 'auth.ticket.ok' && payload.k === 'asset' && payload.p === p1.projectId && payload.u === jia.userId && payload.sv === 'agent' && payload.r === 'rw'
+      && agentWrites.media === 200 && agentWrites.complete === 200 && agentWrites.snap === 403 && agentWrites.px === 403 && ownerReadsAgentUpload === 200
+      && dingRw === 'error:forbidden' && dingR.type === 'auth.ticket.ok' && readonlyWrites.media === 403 && readonlyWrites.snap === 403 && readonlyWrites.read === 200
+      && Object.entries(statuses).every(([k, v]) => (k === 'memberOwnTicket' ? v === 200 : v === 401)), {
+      agentTicket: { issued: jiaRw.type, boundToOwnProject: payload.p === p1.projectId, memberIdentity: payload.u === jia.userId, service: payload.sv ?? null, access: payload.r ?? null },
+      agentWrites, otherMemberReadsAgentUpload: ownerReadsAgentUpload, readonlyMember: { rwTicket: dingRw, rTicket: dingR.type, ...readonlyWrites }, statuses,
+    });
   }
 
   // ---------- P5 对话记录的归属
@@ -423,14 +460,24 @@ async function main() {
       'auth.ticket conn': { type: 'auth.ticket', kind: 'conn', role: 'page' }, 'auth.ticket delegate': { type: 'auth.ticket', kind: 'delegate', audience: 'agent', conversation: 'conv-jia' },
       'shared.members': { type: 'shared.members' }, 'shared.challenge': { type: 'shared.challenge' }, 'shared.admin': { type: 'shared.admin', op: 'delete' },
       'node.hello': { type: 'node.hello', nodeId: 'x', profile: 'host' }, 'task.claim': { type: 'task.claim' }, 'publisher.hello': { type: 'publisher.hello', publisherId: 'x' },
-      'task.publish': { type: 'task.publish', tasks: [] }, 'content.put': { type: 'content.put', kind: 'card-source', key: 'src/cards/user/x.card.tsx', body: { source: 'x' } },
-      'content.get': { type: 'content.get', kind: 'card-source', key: 'x' }, 'project.snapshot.put': { type: 'project.snapshot.put', projectId: DOC },
+      'task.publish': { type: 'task.publish', tasks: [] }, 'content.put render-manifest': { type: 'content.put', kind: 'render-manifest', key: 'x', body: {} },
+      'content.get event-detail': { type: 'content.get', kind: 'event-detail', key: 'x' }, 'content.watch': { type: 'content.watch', kinds: ['card-source'] },
+      'service.watch': { type: 'service.watch' }, 'project.snapshot.get': { type: 'project.snapshot.get', projectId: DOC }, 'project.snapshot.put': { type: 'project.snapshot.put', projectId: DOC },
       'project.announce': { type: 'project.announce', projectId: DOC }, 'service.announce': { type: 'service.announce' }, 'hosted.watch': { type: 'hosted.watch' },
       'hosted.ticket': { type: 'hosted.ticket', projectId: p2.projectId, purpose: 'publish' }, 'cost.put': { type: 'cost.put' },
     };
     const out = {};
     for (const [what, m] of Object.entries(tries)) out[what] = verdict(await aJia.conn.ask(m));
-    check('P9 Agent 的连接发表外的消息一律 forbidden', Object.values(out).every((v) => v === 'error:forbidden'), { outcomes: out });
+    // 表里新加的卡片源码:读写成员写得进、读得到;只读成员(丁)读得到、写不进
+    const key9 = `src/cards/user/p9-${tag}.tsx`;
+    const card = {
+      rwPut: verdict(await aJia.conn.ask({ type: 'content.put', kind: 'card-source', key: key9, body: '// p9' })),
+      rwGet: verdict(await aJia.conn.ask({ type: 'content.get', kind: 'card-source', key: key9 })),
+      roGet: verdict(await aDing.conn.ask({ type: 'content.get', kind: 'card-source', key: key9 })),
+      roPut: verdict(await aDing.conn.ask({ type: 'content.put', kind: 'card-source', key: `${key9}x`, body: '// ro' })),
+    };
+    check('P9 Agent 的连接发表外的消息一律 forbidden;卡片源码读写成员写得进、只读成员写不进', Object.values(out).every((v) => v === 'error:forbidden')
+      && card.rwPut === 'content.stored' && card.rwGet === 'content.item' && card.roGet === 'content.item' && card.roPut === 'error:forbidden', { outcomes: out, cardSource: card });
   }
 
   // ---------- P14 发布连接（放在撤销之前建好，撤销时看它受不受影响）
@@ -482,6 +529,9 @@ async function main() {
     spare.close();
     const other = verdict(await aBing2.conn.ask({ type: 'presence.list', projectId: DOC }));
     const memberStill = verdict(await jia.ask({ type: 'shared.members' }));
+    // 开关关着:甲的云端 Agent 早先拿到的那张素材票据当场失效(不等它过期);成员自己的票据不受影响
+    const assetOff = jiaAsset ? { agentTicketRead: await jiaAsset.read(jiaAsset.ticket), memberTicketRead: await jiaAsset.read((await jia.ask({ type: 'auth.ticket', kind: 'asset', access: 'r' })).ticket) } : null;
+    check('P10c 开关关着时云端 Agent 手里的素材票据当场失效', assetOff?.agentTicketRead === 401 && assetOff?.memberTicketRead === 200, { ...assetOff });
     check('P10 创建者关掉开关后正在进行的对话被停掉', off.type === 'shared.admin.ok' && landedBefore > 0 && closes.every((c) => c && c.code === 4003 && c.reason === 'service-disabled')
       && pubClose?.code === 4003 && ms !== null && ms < 2000 && revAtClose === revLater && swap.reason === 'service-disabled' && ver.reason === 'service-disabled'
       && verdict(fresh) === 'error:service-disabled' && spareOpened === false && other === 'presence.state' && memberStill === 'shared.members.list', {
