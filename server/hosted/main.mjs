@@ -23,6 +23,8 @@
  *                                    0 不算——文档服务握手、共享端点、素材服务、管理接口都按远端对待回环来的请求，也不豁免限速。
  *                                    部署在反向代理之后时必须是 0（代理转进来的请求看上去都是回环）；deploy-hosted 写 0。
  *                                    0 时必须有集群令牌（地址登记只能带令牌）
+ *   PROMPTCUT_AGENT_PUBLIC_URL       云端 Agent 服务对页面的公网地址，形如 https://<域名>/agent/v1（`docs/plan/cloud-agent-contract.md` 第 10.4 节）。
+ *                                    设了、且服务登记表里有 agent 服务时，经成员列表顶层的 hosted.agent.url 下发给页面；不设就不下发
  *
  * 失败即关（打一行 `config.error { reason }`，同时写 stdout 与 stderr，退出码 1）：
  *   data-dir           数据目录没设、不存在、不是目录或不可写
@@ -30,6 +32,7 @@
  *   bad-token-format   令牌（文件或环境变量）不是 32～256 个 base64url 字符
  *   auth-store         绑非回环地址而凭证存储打不开（auth-contract 第 10 节）
  *   asset-public-url   绑非回环地址而没设 PROMPTCUT_ASSET_PUBLIC_URL，或它不是 http(s) 地址
+ *   agent-public-url   PROMPTCUT_AGENT_PUBLIC_URL 设了却不是 http(s) 地址
  *   listen             端口被占等，监听失败
  *   trust-loopback     PROMPTCUT_TRUST_LOOPBACK 不是 0 或 1
  *   cluster-token-required  PROMPTCUT_TRUST_LOOPBACK=0 而没有集群令牌
@@ -104,6 +107,13 @@ async function main() {
     return configError('asset-public-url', { detail: 'unset' });
   }
 
+  const agentPublicUrl = env.PROMPTCUT_AGENT_PUBLIC_URL || undefined;
+  if (agentPublicUrl !== undefined) {
+    let ok = false;
+    try { ok = /^https?:$/.test(new URL(agentPublicUrl).protocol); } catch { ok = false; }
+    if (!ok) return configError('agent-public-url', { detail: 'not-http' });
+  }
+
   let combo;
   try {
     combo = await startHostedCombo({
@@ -114,6 +124,7 @@ async function main() {
       clusterToken: token,
       assetPublicUrl,
       docPublicUrl: env.PROMPTCUT_DOCSERVICE_PUBLIC_URL || undefined,
+      agentPublicUrl,
       trustLoopback,
       localDevice: localDeviceInfo(),
       log,
@@ -133,6 +144,7 @@ async function main() {
     admin: token === undefined ? 'loopback-only' : `token:${tokenInfo.source}`,
     authStore: combo.credentialStore ? 'ok' : 'unavailable',
     loopbackTrust: trustLoopback,
+    agent: { publicUrl: agentPublicUrl ?? null },
   });
 
   let stopping = false;

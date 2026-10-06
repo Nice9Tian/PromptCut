@@ -368,7 +368,7 @@ auth.ticket { kind: 'delegate', audience: 'agent', conversation: <对话 id> } �
 
 ```
 hosted.delegate.verify { delegation }
-  → hosted.delegate.ok { projectId, userId, username, deviceId, deviceName, creator, mode, acc, exp, ownerKey, grant, conversationId? }
+  → hosted.delegate.ok { projectId, userId, username, deviceId, deviceName, creator, mode, acc, access, exp, ownerKey, grant, conversationId? }
   → error { reason }
 
 hosted.ticket { projectId, conversation: <对话号>, conversationId: <对话 id>, delegation: <对话委托> }
@@ -429,4 +429,8 @@ hosted.ticket { projectId, purpose: 'publish' }
 | AU20 | 关开关时以 4003 `service-disabled` 关连接，委托当场失效；移出、踢人、删项目同理 | CA-REVOKE-01～03 |
 | AU21 | 素材：云端 Agent 要不到素材票据；委托当不了素材票据；`sv: 'agent'` 的素材票据只读、撤销后当场失效 | CA-ASSET-01 |
 
-另有 CA-AUTH-05（白名单逐条）、CA-AUTH-06（目录里的开关）、CA-GRANT-01～02、CA-RENDER-04（发布连接）、CA-SIGN-01、CA-OWNER-01、CA-LOG-01、CA-CLIENT-01～02；隔离探针 `scripts/probes/cloud-agent-auth-probe.mjs`（P1～P15）。
+另有 CA-AUTH-05（白名单逐条）、CA-AUTH-06（目录里的开关）、CA-GRANT-01～02、CA-RENDER-04（发布连接）、CA-SIGN-01、CA-OWNER-01、CA-URL-01～02、CA-LOG-01、CA-CLIENT-01～02；隔离探针 `scripts/probes/cloud-agent-auth-probe.mjs`（P1～P17；P16 是「发起成员的连接全部断开后，凭对话委托仍能换票据并提交编辑」，P17 是地址下发）。
+
+### 17.7 Agent 服务对外地址的下发
+
+托管组合读环境变量 `PROMPTCUT_AGENT_PUBLIC_URL`（形如 `https://<域名>/agent/v1`；设了却不是 http(s) 地址时失败即关，`config.error { reason: 'agent-public-url' }`），经 `startHostedCombo({ agentPublicUrl })` → `createSharedDocService({ hostedServiceUrls: { agent } })` 交给共享项目模块。`shared.members.list` 顶层的 `hosted.agent` 在登记表里有 `agent` 服务、且配了地址时多带 `url`；没配、或登记表里没有这个服务时没有这个字段，页面据此不出「云端」一项。放本机的项目（局域网主机）没有顶层的 `hosted`。

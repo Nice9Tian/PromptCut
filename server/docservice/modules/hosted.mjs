@@ -308,7 +308,8 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
   /**
    * 只核验不签的入口（`docs/plan/cloud-agent-contract.md` 第 4.3 ①）：`hosted.delegate.verify { delegation }`，只对代成员进项目的服务
    * （云端 Agent）开，渲染服务发它回 `forbidden`。委托票据与对话委托都认。成功回
-   * `hosted.delegate.ok { projectId, userId, username, deviceId, deviceName, creator, mode, acc, exp, ownerKey, grant, conversationId? }`；
+   * `hosted.delegate.ok { projectId, userId, username, deviceId, deviceName, creator, mode, acc, access, exp, ownerKey, grant, conversationId? }`
+   * （`access` 与 `acc` 同值：`hosted.ticket.ok` 用的名字是 `access`，两处都给，接线的一侧不用换名）；
    * 失败回 `error { reason }`，`reason` 同 `memberServiceTicket`（没有 `not-grant`、`project`、`conversation`）。
    */
   function delegateVerify(ctx, connId, c, msg, reqId) {
@@ -324,7 +325,7 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     reply(ctx, connId, {
       type: 'hosted.delegate.ok',
       projectId: v.payload.p, userId: v.payload.u, username: v.username, deviceId: v.deviceId, deviceName: v.payload.dn ?? v.deviceId,
-      creator: v.creator, mode: v.record.mode, acc: v.access, exp: v.payload.exp, ownerKey: v.ownerKey,
+      creator: v.creator, mode: v.record.mode, acc: v.access, access: v.access, exp: v.payload.exp, ownerKey: v.ownerKey,
       grant: v.grant, ...(v.grant ? { conversationId: v.payload.cid } : {}),
     }, reqId);
   }

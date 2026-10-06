@@ -38,6 +38,10 @@
  *   P13 项目删除后对话被停掉：项目一剩下的 Agent 连接 2 秒内以 4004 `deleted` 关闭，委托换不出（`no-project`）。
  *   P14 只用来发布补渲计划的连接：能发带片段清单的计划，读不了项目、改不了项目、取不了票据；成员被踢、被移出不影响它。
  *   P15 托管组合的日志里没有委托、对话委托、票据的原文。
+ *   P16 发起成员离线后对话委托继续有效：项目一的成员页面连接全部断开（成员列表里他们没有页面在线）之后，
+ *       凭还在有效期内的对话委托仍能换到连接票据、连上、提交编辑；写入的署名是这位成员加 `service: 'agent'`，
+ *       成员列表里归在他那一行、连接项带 `service: 'agent'`。
+ *   P17 Agent 服务的对外地址由托管端配置下发：成员列表顶层 `hosted.agent` 带 `available`、`enabled`、`url`（`PROMPTCUT_AGENT_PUBLIC_URL`）。
  */
 import '../lib/no-user-dirs.mjs';
 import { spawn } from 'node:child_process';
@@ -67,6 +71,8 @@ const KEEP = args.includes('--keep');
 const BASE = `ws://127.0.0.1:${DOC_PORT}`;
 const ASSET = `http://127.0.0.1:${ASSET_PORT}/api/asset`;
 const KDF = { alg: 'pbkdf2-sha256', iter: 100_000 };
+/** 只是一个要原样下发的字符串；探针不连它 */
+const AGENT_URL = 'https://probe.invalid/agent/v1';
 const DOC = 'doc-1';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -95,6 +101,7 @@ async function startHosted() {
     PROMPTCUT_ASSET_PORT: String(ASSET_PORT),
     PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1',
     PROMPTCUT_TRUST_LOOPBACK: '0',
+    PROMPTCUT_AGENT_PUBLIC_URL: AGENT_URL,
     // 只给这个临时实例用的随机令牌（关掉本机信任时必须有）；探针自己不用它，不打印
     PROMPTCUT_CLUSTER_TOKEN: randomBytes(32).toString('base64url'),
   };
@@ -349,7 +356,8 @@ async function main() {
 
   // ---------- P6 伪造
   {
-    const flip = (t) => t.slice(0, -1) + (t.at(-1) === 'A' ? 'B' : 'A');
+    // 改签名段的第一个字符：改完仍是合规的 base64url（改最后一个字符有十六分之一的机会变成不合规，原因就成了 format）
+    const flip = (t) => { const i = t.lastIndexOf('.') + 1; return t.slice(0, i) + (t[i] === 'A' ? 'B' : 'A') + t.slice(i + 1); };
     const tamper = (t, patch) => {
       const [v, seg, sig] = t.split('.');
       const body = { ...JSON.parse(Buffer.from(seg, 'base64url').toString('utf8')), ...patch };
@@ -502,6 +510,43 @@ async function main() {
   await sleep(300);
   const online = (await owner1.ask({ type: 'shared.members' })).devices ?? [];
   const pagesOffline = online.every((d) => d.tags.editing === false || d.username === creds.creator1.username);
+
+  // ---------- P17 地址下发（真的托管组合进程读环境变量）
+  {
+    const hosted = (await owner1.ask({ type: 'shared.members' })).hosted ?? {};
+    check('P17 Agent 服务的对外地址由托管端配置下发', hosted.agent?.available === true && hosted.agent?.enabled === true && hosted.agent?.url === AGENT_URL && hosted.render?.url === undefined, {
+      agent: hosted.agent ?? null, render: hosted.render ?? null,
+    });
+  }
+
+  // ---------- P16 发起成员离线后，对话委托继续有效
+  {
+    // 甲的页面已经断开；把他现有的 Agent 连接也关掉，从零开始：手里只剩那张对话委托
+    aJia.conn.close();
+    await aJia.conn.closed;
+    await sleep(200);
+    const rowsBefore = (await owner1.ask({ type: 'shared.members' })).devices ?? [];
+    const jiaGone = !rowsBefore.some((d) => d.username === 'jia');
+    const revBefore = await revOf(owner1);
+    const t0 = performance.now();
+    const again = await openAgent(p1.projectId, gJia, 'conv-jia', 5);
+    const exchangeMs = performance.now() - t0;
+    const w = again.conn ? await again.conn.ask({ ...opOf('op-offline-1', 'written-while-offline'), session: 's-offline' }) : { type: 'error', reason: 'no-conn' };
+    const seen = await owner1.next((m) => m.type === 'project.ops' && m.opId === 'op-offline-1', 3000);
+    const after = await stateOf(owner1);
+    const rows = (await owner1.ask({ type: 'shared.members' })).devices ?? [];
+    const row = rows.find((d) => d.username === 'jia');
+    const actor = seen.actor ?? null;
+    check('P16 发起成员离线后凭对话委托仍能换票据并提交编辑', pagesOffline && jiaGone && again.reply.ok === true && !!again.conn && w.type === 'project.op.ok' && after.rev === revBefore + 1
+      && JSON.stringify(after).includes('written-while-offline') && actor?.userId === jia.userId && actor?.role === 'agent' && actor?.service === 'agent' && actor?.conversation === 5
+      && !!row && row.tags.editing === false && row.tags.agents === 1 && JSON.stringify(row.conns) === JSON.stringify([{ role: 'agent', conversation: 5, service: 'agent' }])
+      && !rows.some((d) => 'service' in d), {
+      memberPagesOnline: !pagesOffline, memberHadNoConnection: jiaGone, ticket: again.reply.ok ? 'issued' : again.reply.reason, op: verdict(w), revBefore, revAfter: after.rev,
+      actor: actor ? { isMember: actor.userId === jia.userId, role: actor.role, service: actor.service ?? null, conversation: actor.conversation } : null,
+      memberRow: row ? { tags: row.tags, conns: row.conns } : null, exchangeAndConnectMs: Math.round(exchangeMs * 10) / 10,
+    });
+    if (again.conn) { aJia.conn = again.conn; aJia.ticket = again.ticket; }
+  }
 
   // ---------- P11 踢人
   {

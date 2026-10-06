@@ -195,6 +195,8 @@ function scanSpace(dir) {
  * @param {string} [options.clusterToken]  已校验过格式的集群令牌；不给则管理接口只认本机回环
  * @param {string} [options.assetPublicUrl]  登记给成员的素材服务地址；不给就按实际端口拼 `http://127.0.0.1:<port>/api/asset`
  * @param {string} [options.docPublicUrl]  记录与诊断；另取它的源拼邀请链接（C10a，`publicOriginOf`）
+ * @param {string} [options.agentPublicUrl]  云端 Agent 服务对页面的公网地址（`PROMPTCUT_AGENT_PUBLIC_URL`）；给了、且登记表里有 agent 服务时，
+ *   成员列表顶层的 `hosted.agent.url` 下发它（`docs/plan/cloud-agent-contract.md` 第 10.4 节）
  * @param {boolean} [options.trustLoopback]  是否把本机回环当本机（缺省 true）；false 时文档服务握手、共享端点、素材服务、
  *   管理接口都按远端对待回环来的请求（部署在反向代理之后时必须 false），而且必须给 `clusterToken`
  * @param {{ deviceId: string, deviceName: string }} [options.localDevice]
@@ -212,6 +214,7 @@ export async function startHostedCombo({
   clusterToken,
   assetPublicUrl,
   docPublicUrl,
+  agentPublicUrl,
   trustLoopback = true,
   localDevice,
   wrapStore,
@@ -297,6 +300,7 @@ export async function startHostedCombo({
     localDevice,
     linkOrigin: publicOriginOf(docPublicUrl),
     serviceRegistry,
+    ...(typeof agentPublicUrl === 'string' && agentPublicUrl !== '' ? { hostedServiceUrls: { agent: agentPublicUrl } } : {}),
     now,
     log: say,
     ...(limits ? { limits } : {}),

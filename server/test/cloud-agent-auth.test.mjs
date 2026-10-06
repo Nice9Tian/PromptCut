@@ -4,15 +4,20 @@
  *
  * 编号：`CA-AUTH-01～06`（委托的签发与核对、换票据、白名单、只读）、`CA-GRANT-01～03`（对话委托、成员离线后照用、撤销）、
  * `CA-REVOKE-01～03`（四种撤销各自的关闭码与时延、只关这个项目的）、`CA-RENDER-04`（只用来发布的连接）、
- * `CA-SIGN-01`（署名与成员列表）、`CA-OWNER-01`（归属键）、`CA-ASSET-01`（素材）、`CA-LOG-01`（日志不记原文）、
+ * `CA-SIGN-01`（署名与成员列表）、`CA-OWNER-01`（归属键）、`CA-URL-01～02`（Agent 服务对外地址的下发与配置）、`CA-ASSET-01`（素材）、`CA-LOG-01`（日志不记原文）、
  * `CA-CLIENT-01～02`（服务一侧的客户端小模块）。不依赖 Agent 服务本体：这里的「Agent 服务」是直接拿服务私钥走真握手的测试代码。
  * 跑：npm test -- server/test/cloud-agent-auth.test.mjs
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  createProject, join, adminOp, ask, members, newDevice, parseTicket, tamperTicket, flipSignature, bearer, logText, sleep, waitFor, PROTOCOL,
+  createProject, join, adminOp, ask, members, newDevice, parseTicket, tamperTicket, bearer, logText, sleep, waitFor, PROTOCOL,
 } from './auth-kit.mjs';
 import {
   serviceHostFor, openControl, watchDirectory, requestServiceTicket, outcome, enrollService, TICKET_PREFIX, ALL_TYPES,
@@ -29,6 +34,15 @@ import { createServiceClient } from '../auth/service-client.mjs';
 const DOC = 'doc-1';
 const projectBody = (name = 'demo') => ({ id: DOC, name, tracks: [] });
 const sha256hex = (buf) => createHash('sha256').update(buf).digest('hex');
+/**
+ * 把签名改一个字符，改完仍是合规的 base64url（所以被拒的原因是「签名不对」而不是「格式不对」）。
+ * 不用 `auth-kit.mjs` 的 `flipSignature`：它改的是最后一个字符，32 字节的签名最后一个字符只有 16 种合规取值，
+ * 原来恰好是 `A` 时改成的 `B` 不合规，原因会变成 `format`（十六分之一的机会），断言原因码的用例就偶发失败。
+ */
+function flipSignature(ticket) {
+  const i = ticket.lastIndexOf('.') + 1;
+  return ticket.slice(0, i) + (ticket[i] === 'A' ? 'B' : 'A') + ticket.slice(i + 1);
+}
 
 async function closedWithin(c, ms, what) {
   let timer;
@@ -235,7 +249,7 @@ test('CA-AUTH-02 / AU17 hosted.ticket 的委托分支：票据的 u、ug 是成�
   const { reqId: _r, ...fields } = v;
   assert.deepEqual(fields, {
     type: 'hosted.delegate.ok', projectId: proj.projectId, userId: bob.userId, username: 'bob', deviceId: bob.device.deviceId, deviceName: bob.device.deviceName,
-    creator: false, mode: 'free', acc: 'rw', exp: parseTicket(short).body.exp, ownerKey: `device:${bob.userId}`, grant: false,
+    creator: false, mode: 'free', acc: 'rw', access: 'rw', exp: parseTicket(short).body.exp, ownerKey: `device:${bob.userId}`, grant: false,
   });
   const vg = await ask(control, { type: 'hosted.delegate.verify', delegation: grant }, 'hosted.delegate.ok');
   assert.deepEqual([vg.grant, vg.conversationId, vg.exp], [true, 'conv-1', parseTicket(grant).body.exp]);
@@ -681,6 +695,24 @@ test('CA-URL-01 成员列表顶层的 hosted.agent.url：组装方配了、登�
   // 没配地址：与第 1 批的形状逐字段相同
   const { creator: c3 } = await setup(t);
   assert.deepEqual((await ask(c3, { type: 'shared.members' }, 'shared.members.list')).hosted, { render: { available: true, enabled: true }, agent: { available: true, enabled: true } });
+});
+
+test('CA-URL-02 托管组合的配置：PROMPTCUT_AGENT_PUBLIC_URL 不是 http(s) 地址时失败即关（config.error agent-public-url，退出码 1）', { timeout: 30_000 }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-ca-url-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 留给系统清 */ } });
+  const main = fileURLToPath(new URL('../hosted/main.mjs', import.meta.url));
+  for (const bad of ['not a url', 'ftp://node.example/agent']) {
+    const child = spawn(process.execPath, [main], {
+      env: { ...process.env, PROMPTCUT_DATA_DIR: dir, PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1', PROMPTCUT_DOCSERVICE_PORT: '0', PROMPTCUT_ASSET_PORT: '0', PROMPTCUT_AGENT_PUBLIC_URL: bad },
+      windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout.on('data', (b) => { out += b.toString('utf8'); });
+    const code = await new Promise((resolve) => child.once('exit', resolve));
+    assert.equal(code, 1, out.slice(0, 300));
+    assert.match(out, /"event":"config.error","reason":"agent-public-url"/);
+    assert.doesNotMatch(out, /"event":"listen"/);
+  }
 });
 
 // ------------------------------------------------------------------ CA-ASSET-01
