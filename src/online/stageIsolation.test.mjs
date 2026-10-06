@@ -71,6 +71,14 @@ test("OCS-S-03 两台都自检通过、票据交接成功:都走 cookie(基址 /
   const again = await iso.plan("A", { dual: true, stageOrigin: S1, ticket: TICKET });
   assert.equal(again.cardExec, true);
   assert.equal(state.grants.length, 2);
+  // 取档策略连着算几遍(还没交接完又来一次):同一张票据只发一次请求
+  {
+    const m2 = make();
+    m2.iso.setDual(true); m2.iso.handshake("A"); m2.iso.report("A", OK);
+    const both = await Promise.all([1, 2, 3].map(() => m2.iso.plan("A", { dual: true, stageOrigin: S1, ticket: TICKET })));
+    assert.equal(m2.state.grants.length, 1);
+    assert.ok(both.every((p) => p.mode === "cookie" && p.ticket === null));
+  }
   // 续票:换了一张就再交接一次
   await iso.plan("A", { dual: true, stageOrigin: S1, ticket: `${TICKET}2` });
   assert.equal(state.grants.length, 3);

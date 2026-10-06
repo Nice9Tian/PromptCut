@@ -731,7 +731,7 @@ export function Preview() {
         const targetOrigin = origin && origin !== "null" ? origin : stageTargetOrigin(id);
         // 在线的跨源舞台:回包与事件当不可信输入校验(`online/stageMessageGuard.ts`);同源单舞台、桌面运行环境照旧
         const untrusted = ONLINE && dualRef.current && targetOrigin !== location.origin;
-        const client = createStageRpc(win, targetOrigin, { untrusted });
+        const client = createStageRpc(win, targetOrigin, { untrusted, maxSec: () => getState().project.duration });
         if (ONLINE) {
           // 隔离会话:这一台是新文档,先清掉旧的自检结果与取档方式;它的结果要是已经到了(预热期间)就补交
           const iso = pageStageIsolation(() => onlineStageState().cardExec);

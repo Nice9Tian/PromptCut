@@ -2,6 +2,8 @@
  * 在线普通档两个跨源舞台的**首次握手**计时(`src/online/stageHandshake.ts`,〔裁〕2026-09-30 `claude/stage-handshake`):
  * 每台的 20 秒从那一台 iframe 的 `load` 起算,另有自挂上起 2 分钟的总上限;可见舞台 A 加载完才挂后台舞台 B。
  * 全程在本机:本机托管组合代替阿里云,仿 nginx 的前缀代理开三个源(编辑器页 + 两个舞台,都带 OAC),在线构建当页面。
+ * 代理仿的是**没有隔离策略头的旧 nginx**:跨源舞台载舞台入口 `stage.html`(自带 `<meta>` 策略),自检判没有隔离、素材照旧走 `?t=`;
+ * 握手计时与它无关。「舞台页请求」按 `/editor/stage.html?stage=1`(跨源)与 `/editor/?stage=1`(同源单舞台)两种地址认。
  * 慢网络只在应用层模拟:代理把**舞台源上**的主脚本(index.html 引的入口 `assets/index-*.js`)压住 `--stage-delay-ms` 再回,
  * 编辑器页自己的源不压(不动宿主机网络)。
  *
@@ -34,6 +36,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
+import { seedSharedProject } from './lib-seed.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -110,11 +113,14 @@ function makeProxy(port) {
       return res.end(runtimeConfig);
     }
     const index = path.join(DIST, 'index.html');
-    const isPage = url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html';
+    // 跨源舞台载的是舞台入口 stage.html(在线执行用户卡与图卡,`online-card-exec-contract.md` 第 3.3 节);同源单舞台仍是 /editor/?stage=1
+    const isStageEntry = url.pathname === '/editor/stage.html';
+    const isPage = url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html' || isStageEntry;
     if (isPage && url.searchParams.get('stage') === '1') {
       push(log.page, port);
       if (cfg.broken.has(port)) { res.writeHead(503, { 'Content-Type': 'text/plain', ...sec }); return res.end('stage origin down (probe)'); }
     }
+    if (isStageEntry) { const entry = path.join(DIST, 'stage.html'); return sendFile(fs.existsSync(entry) ? entry : index, 'no-store'); }
     if (isPage) return sendFile(index, 'no-store');
     if (url.pathname.startsWith('/editor/assets/')) {
       const rel = decodeURIComponent(url.pathname.slice('/editor/'.length));
@@ -157,7 +163,9 @@ const stamp = Date.now().toString(36);
 const NAME = `osh-${stamp}`;
 const creator = { username: 'boss', password: `boss-${randomBytes(6).toString('hex')}` };
 const PROJECT_PW = `pw-${randomBytes(6).toString('hex')}`;
-await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+const made = await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+// 在线页面只加入、不新建(`dce4b22b`):先替创建者写进一份空项目,否则页面进不去
+check((await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator, name: NAME })).ok, '替创建者写进空项目');
 const CLIP = 'osh-b';
 
 /* ------------------------------------------------------------------ 浏览器 */

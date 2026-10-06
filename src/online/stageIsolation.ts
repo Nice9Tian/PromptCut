@@ -110,6 +110,8 @@ interface Slot {
   mode: StageMediaMode | null;
   /** 上一次交接成功时用的票据与舞台源(同一张不重复交接) */
   granted: { ticket: string; origin: string } | null;
+  /** 正在路上的交接(同一张票据、同一个舞台源只发一次请求;取档策略短时间里会连着算几遍) */
+  granting: { key: string; done: Promise<boolean> } | null;
   /** 握手的代数:结果晚到时对不上代就丢 */
   gen: number;
 }
@@ -157,8 +159,8 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
   const clearTimer = deps.clearTimer ?? ((t: unknown) => clearTimeout(t as ReturnType<typeof setTimeout>));
   const waitMs = deps.reportWaitMs ?? ISOLATION_REPORT_WAIT_MS;
   const slots: Record<StageLetter, Slot> = {
-    A: { report: null, waiters: [], mode: null, granted: null, gen: 0 },
-    B: { report: null, waiters: [], mode: null, granted: null, gen: 0 },
+    A: { report: null, waiters: [], mode: null, granted: null, granting: null, gen: 0 },
+    B: { report: null, waiters: [], mode: null, granted: null, granting: null, gen: 0 },
   };
   const IDS: StageLetter[] = ["A", "B"];
   let dual = false;
@@ -213,6 +215,7 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
       slot.report = null;
       slot.mode = null;
       slot.granted = null;
+      slot.granting = null;
       for (const w of slot.waiters.splice(0)) w(null);
       update();
     },
@@ -251,7 +254,11 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
         return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: false };
       }
       if (!(slot.granted && slot.granted.ticket === ctx.ticket && slot.granted.origin === ctx.stageOrigin)) {
-        const ok = await grant(ctx.stageOrigin, sid, ctx.ticket);
+        const key = JSON.stringify([ctx.stageOrigin, ctx.ticket]);
+        if (slot.granting?.key !== key) slot.granting = { key, done: grant(ctx.stageOrigin, sid, ctx.ticket) };
+        const flying = slot.granting;
+        const ok = await flying.done;
+        if (slot.granting === flying) slot.granting = null;
         if (gen !== slot.gen) return legacy();
         if (!ok) {
           // 续票时交接失败:已经走 cookie 的舞台留在 cookie 上(旧 cookie 还能用到过期),不退回旧办法

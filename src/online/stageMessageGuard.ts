@@ -59,16 +59,19 @@ type Clean = Record<string, unknown> & { type: string };
 /**
  * 舞台事件(`StageEvent`)按形状校验;回一份只含认得的字段的新对象,不合形状回 null。
  * 回值的静态类型留给调用方断言(本文件不引 render 层的类型,免得成环)。
+ * `opts.maxSec`:时间类字段(`sec`)的上限,一般给项目时长。
  */
-export function sanitizeStageEvent(d: unknown): Clean | null {
+export function sanitizeStageEvent(d: unknown, opts: { maxSec?: number } = {}): Clean | null {
   if (!isObj(d) || typeof d.type !== "string") return null;
+  // 时间的上限:调用方给了项目时长就用它(播放头不许被舞台报的时刻带出时间轴),没给用通用上限
+  const maxSec = typeof opts.maxSec === "number" && Number.isFinite(opts.maxSec) && opts.maxSec >= 0 ? Math.min(opts.maxSec, L.maxSec) : L.maxSec;
   switch (d.type) {
     case "mediaReady": case "frame": case "ended": {
-      const sec = num(d.sec, 0, L.maxSec);
+      const sec = num(d.sec, 0, maxSec);
       return sec === null ? null : { type: d.type, sec };
     }
     case "settled": {
-      const sec = num(d.sec, 0, L.maxSec);
+      const sec = num(d.sec, 0, maxSec);
       if (sec === null || !Array.isArray(d.clipIds) || d.clipIds.length > L.maxClipIds) return null;
       const clipIds: string[] = [];
       for (const c of d.clipIds) { const s = str(c, L.maxIdLength); if (s === null) return null; clipIds.push(s); }

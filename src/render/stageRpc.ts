@@ -458,10 +458,11 @@ export function isShortStageUpdate(method: string, args: unknown[]): boolean {
  * `targetOrigin` 现在是 `location.origin`(同源);第 4 步 E1 跨源时传舞台端口的 origin。
  *
  * `opts.untrusted`(在线的跨源舞台,契约 `online-card-exec-contract.md` 第 3.2 节):舞台里会执行用户卡与图卡,它发来的一切当不可信输入 ——
- * 只认 `event.origin` 等于 `targetOrigin` 的消息;事件与回包按形状校验、数字钳到合理范围(`online/stageMessageGuard.ts`),
+ * 只认 `event.origin` 等于 `targetOrigin` 的消息;事件与回包按形状校验、数字钳到合理范围(`online/stageMessageGuard.ts`;
+ * `opts.maxSec` 给了就把事件里的时刻钳到它以内,一般是项目时长),
  * 不合形状的事件丢弃、回包按失败回绝。不给(桌面运行环境、同源单舞台)照旧,一个字节不变。
  */
-export function createStageRpc(target: Window, targetOrigin: string = location.origin, opts: { untrusted?: boolean } = {}): StageRpcClient {
+export function createStageRpc(target: Window, targetOrigin: string = location.origin, opts: { untrusted?: boolean; maxSec?: () => number } = {}): StageRpcClient {
   const untrusted = opts.untrusted === true;
   let nextId = 1;
   let disposed = false;
@@ -488,7 +489,7 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
       return;
     }
     if (untrusted) {
-      const clean = sanitizeStageEvent(d) as StageEvent | null;
+      const clean = sanitizeStageEvent(d, { maxSec: opts.maxSec?.() }) as StageEvent | null;
       if (clean) for (const l of listeners) l(clean);
       return;
     }

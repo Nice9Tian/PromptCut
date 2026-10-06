@@ -26,7 +26,8 @@
  *      舞台响应带内容安全策略与出口白名单,编辑器页带 `frame-src`;舞台读素材的地址是 `/media-s/<sid>/media/<哈希>`、不带 `?t=`。
  *   A2 父页对象:`parent.*`、`top.*`、别的舞台,读任何属性抛 `SecurityError`;`opener`、`frameElement` 为空。
  *   A3 凭证、票据、本机存储:把舞台(窗口与 Worker)里读得到的一切倒出来 —— localStorage、sessionStorage、IndexedDB 全部内容、
- *      可读 cookie、cookieStore、OPFS、Cache、性能条目、DOM 属性、全局变量与观察口、父页发来的每一条消息、凭 cookie 读素材的应答头 ——
+ *      可读 cookie、cookieStore、OPFS、Cache、性能条目、DOM 属性、全局变量与观察口、父页发来的每一条消息(含下发的项目内容与取档策略)、
+ *      凭 cookie 读素材的应答头 ——
  *      里面没有:项目密码、编辑器页存的凭证(密钥)、设备身份、页面拿到过的每一张票据、探针种在编辑器页各处存储里的记号;
  *      也没有任何票据形状的串(`v1.<…>.<…>`)与 `?t=`。
  *   A4 图卡干得了活:凭 cookie 按 Range 取到素材(206、字节对),画进 2D 画布、传进 WebGL2 纹理读得回像素;换一个 `sid`、
@@ -39,7 +40,7 @@
  *   A7 加固:可行性探针试过的 21 条从子框架拿回 `RTCPeerConnection` 的路,加实现时补的,一条都拿不到;
  *      有代码试图造子框架之后,父页本次会话不再判「可执行」。
  *   A8 父页对伪造消息:舞台发各种伪造的握手、RPC 回包、舞台事件(超范围的数、巨串、带脚本的 HTML),父页不崩、不报错、
- *      不把那段 HTML 放进活文档、存储里没有超范围的数。
+ *      不把那段 HTML 放进活文档、存储里没有超范围的数、播放头没被带出时间轴。
  *   A9 DNS:Chrome 的网络日志里没有对「受控组用的那个域名」的解析。
  * B 浏览器层面拦 WebRTC:假设脚本加固被绕过(探针在页面脚本之前留一份原装的构造器),隔离生效时 WebRTC 仍然 0 个包到收集站
  *   (`Connection-Allowlist`)。另核加固的第二层:假设「不给造子框架元素」那一层被绕过(探针留一个原装造出来的 iframe 元素),
@@ -385,6 +386,9 @@ try {
       }
       const hearA = runInFrame(sA, 'listenParent', { listenMs: 8000 }), hearB = runInFrame(sB, 'listenParent', { listenMs: 8000 });
       await sleep(500);
+      // 听的时候在编辑器页改一处项目:父页把项目内容经 RPC 下发给两台(setProject),里面同样不该有凭证类的东西
+      await m.page.evaluate(() => { window.__pcStore.actions.addClipOnNewTrack({ index: 0, cardId: 'punch-pill', start: 6, duration: 2 }); });
+      await sleep(1500);
       rA.firstBreach = await runInFrame(sA, 'hardenAttacks', { ...ctxA, only: ['createElement'] });
       rA.heard = await hearA; rB.heard = await hearB;
       for (const [frame, ctx, r] of [[sA, ctxA, rA], [sB, ctxB, rB]]) {
@@ -417,7 +421,7 @@ try {
       }
       check(`A3 ${who}:舞台里可读的 cookie 是空的(票据的 cookie 是 HttpOnly)`, r.dump?.['document.cookie'] === '' && r.dump?.cookieStore === '[]', `${r.dump?.['document.cookie']} / ${r.dump?.cookieStore}`);
       const heard = r.heard?.['parent-messages'] ?? '';
-      check(`A3 ${who}:听到了父页重发的取档策略(RPC setMediaPolicy,基址是 /media-s/<sid>),里面的票据是 null、整段消息里没有秘密`, /setMediaPolicy/.test(heard) && heard.includes(`/media-s/${sid}`) && /"ticket":null/.test(heard) && leaksIn(heard).length === 0 && !TICKET_SHAPE.test(heard), { chars: heard.length, methods: [...new Set([...heard.matchAll(/"method":"(\w+)"/g)].map((x) => x[1]))] });
+      check(`A3 ${who}:听到了父页下发的项目内容(RPC setProject)与重发的取档策略(setMediaPolicy,基址是 /media-s/<sid>、票据是 null),整段消息里没有秘密`, /"method":"setProject"/.test(heard) && /setMediaPolicy/.test(heard) && heard.includes(`/media-s/${sid}`) && /"ticket":null/.test(heard) && leaksIn(heard).length === 0 && !TICKET_SHAPE.test(heard), { chars: heard.length, methods: [...new Set([...heard.matchAll(/"method":"(\w+)"/g)].map((x) => x[1]))] });
       check(`A3 ${who}:凭 cookie 读素材的应答头里没有票据;舞台自己发交接请求被拒`, /^200 /.test(r.dump?.['media-headers'] ?? '') && /^403 /.test(r.dump?.['grant-from-stage'] ?? ''), `${(r.dump?.['media-headers'] ?? '').slice(0, 4)} / ${(r.dump?.['grant-from-stage'] ?? '').slice(0, 4)}`);
       /* A6 声音线程 */
       const w = r.worker ?? {};
@@ -467,11 +471,13 @@ try {
         alive: !!window.__pcPreviewDiag?.(), xss: typeof window.__pcXss, html: document.querySelectorAll('[data-pcevil-html]').length,
         polluted: typeof ({}).polluted, hugeNumber: /7\.77e\+?98/.test(storage), forgedIdentity: magics.some((x) => storage.includes('FORGED-' + x)), bytes: storage.length,
         probeRun: JSON.stringify(window.__pcPreviewDiag?.().probeRun ?? null).length,
+        t: window.__pcStore.getState().t, duration: window.__pcStore.getState().project.duration,
       };
     }, [ctxA.magic, ctxB.magic]);
     check('A8 父页对伪造的握手、回包、舞台事件:没崩、没有页面错误', after.alive === true && m.pageErrors.length === 0, m.pageErrors.slice(0, 3));
     check('A8 父页没有把舞台交来的 HTML 放进活文档(里面的脚本没执行、原型没被污染)', after.xss === 'undefined' && after.html === 0 && after.polluted === 'undefined', after);
     check('A8 父页的存储里没有伪造事件里那个超范围的数', after.hugeNumber === false, { bytes: after.bytes, forgedIdentity: after.forgedIdentity });
+    check('A8 伪造的时刻(1e99 秒)没把播放头带出时间轴', typeof after.t === 'number' && after.t >= 0 && after.t <= after.duration, { t: after.t, duration: after.duration });
     await m.page.screenshot({ path: path.join(OUT, 'a-editor.png') }).catch(() => {});
     await m.close();
 
