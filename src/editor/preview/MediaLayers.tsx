@@ -39,6 +39,8 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
   const target = nodeId ? Math.max(0, t - clip.start + cardOffset) : targetTimeOf(clip, t);
   const [cardUrl, setCardUrl] = useState<string | null>(null);
   const [cardState, setCardState] = useState<"idle" | CardState>("idle");
+  // 这一段卡片声音的播放源是当场合成的(图卡、在线页面判轻的内置声音)还是已入库的产物;只给验收探针看(`data-pc-audio-source`)
+  const [cardLive, setCardLive] = useState(false);
   // 在线页面(`product/platforms.md`「卡片声音的平台边界」):产物的字节取不到时改由浏览器合成(判轻的内置声音)。
   // `productFailed` = 这一段的产物地址已经报过读不了;`effectUrl` = 独立音效按配方合成出来的临时地址
   const [productFailed, setProductFailed] = useState(false);
@@ -72,7 +74,7 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
         try {
           const result = persistentCardAudio(project, clip);
           setCardOffset(result.offset);
-          return { url: playbackUrl(result.media, localHashes), release() {} };
+          return { url: playbackUrl(result.media, localHashes), release() {}, live: false };
         } catch (error) {
           // 在线页面:没有有效产物、判轻的内置声音由浏览器合成(同一个源时钟,偏移已在节点里);桌面照旧提示
           const live = await onlineLiveCardAudio(project, clip, nodeId, frames);
@@ -92,6 +94,7 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
     void acquire().then((lease) => {
       release = lease.release; const url = lease.url;
       if (!current) { release(); return; }
+      setCardLive(!("live" in lease && lease.live === false));
       setCardUrl(url); // 真正解码就绪后由 canplay 确认，URL 存在不代表字节可读。
     }, (error: unknown) => {
       if (!current) return;
@@ -126,7 +129,9 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
       if (onlinePage() && !productFailed && (effectKey || (nodeId && embedded))) { setProductFailed(true); return; }
       if (nodeId && cardUrl) { const message = `${clip.label ?? clip.id} 的卡片声音素材无法读取，请恢复素材或重新生成`; setCardState("error"); onCardState?.(clip.id, "error", message); }
     }}
-    src={nodeId ? (cardUrl ?? undefined) : (effectUrl ?? held.current)} preload="auto" hidden data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
+    src={nodeId ? (cardUrl ?? undefined) : (effectUrl ?? held.current)} preload="auto" hidden
+    data-pc-audio-clip={clip.id} data-pc-audio-source={nodeId ? (cardUrl ? (cardLive ? "live" : "product") : undefined) : (effectUrl ? "live" : "product")}
+    data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
 }
 
 
