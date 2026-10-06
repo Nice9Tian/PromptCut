@@ -161,7 +161,9 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
     forgetPlan(job, id);
     job.finished.push(...plan.clips);
     if (!job.plans.size) {
-      report(job, { state: 'done', clips: job.finished.splice(0) });
+      const clips = job.finished.splice(0);
+      report(job, { state: 'done', clips });
+      say('agent.render.done', { projectId: job.projectId, clips: clips.length });
     } else {
       job.lastReportAt = now();
       report(job, { state: 'progress', clips: plan.clips, done: job.finished.length, total: job.finished.length + [...job.plans.values()].reduce((n, p) => n + p.clips.length, 0) });
@@ -177,6 +179,7 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
     if (!plan) return;
     forgetPlan(job, id);
     report(job, { state: 'failed', clips: Array.isArray(clips) && clips.length ? clips.map(String) : plan.clips, reason: typeof reason === 'string' && reason ? reason.slice(0, 200) : '渲染失败' });
+    say('agent.render.failed', { projectId: job.projectId, clips: plan.clips.length });
     persist(job);
     closeChannelIfIdle(job.projectId);
     dropJobIfDone(job);
@@ -237,6 +240,7 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
         const clips = [...job.dirty];
         job.dirty.clear();
         report(job, { state: 'unavailable', clips });
+        say('agent.render.unavailable', { projectId: job.projectId, clips: clips.length });
         persist(job);
         dropJobIfDone(job);
         return;

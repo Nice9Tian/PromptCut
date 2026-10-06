@@ -29,9 +29,9 @@
  *   late       发布方走了(成员全部断开)之后才上线的另一位成员:不发任何任务,直接取得到层表与清单里的块
  *   agent      没有任何成员在线时的预渲染:成员全部离开、渲染服务过了保持期(60 s)断开之后,一个「假 Agent 服务」(本进程,另一把服务私钥)
  *              声明这个项目有活 → 渲染服务 5 s 内连回来;它发布一个补渲计划 → 渲染服务认领、做完、层表与产物入库,全程没有任何成员连接;
- *              之后才上线的成员不发任何任务就取得到层表与块。结果里 `publisher` 写明发布方是哪一种:`service`(服务身份的发布票据,
- *              `hosted.ticket { purpose: 'publish' }`,第四段合流后才有)或 `member-standin`(目录回 unsupported 时由一条成员连接代发,
- *              计划一被认领就断开)
+ *              之后才上线的成员不发任何任务就取得到层表与块。发布方是服务身份(`hosted.ticket { purpose: 'publish' }` 要来的只能发布的
+ *              连接票据),结果里 `publisher` 应为 `service`;发布连接一直留着,断言它收到计划的完成通知(带切出的细任务清单)
+ *              与**每一段**的完成通知。要不到发布票据算不过(`publisher` 会写成 `member-standin`,只为把后半段走完看清坏在哪)
  *   forbidden  用渲染服务的身份提交一次编辑(`project.op`)被拒,项目版本号不变;写卡片源码、给自己签 page 票据同样被拒
  *   switch     创建者关掉开关:5 s 内渲染服务断开这个项目,之后发的计划它不认领;再打开:连回来并认领
  *   kill       结束工作进程整棵树 → 管理进程把它重新拉起、对账、恢复接活(再发一个计划能做完);结束管理进程 → 工作进程自己退出,
@@ -471,9 +471,10 @@ async function stepAgent() {
     pub = connect(ticketProtocols(tk.ticket));
     await pub.opened;
   } else {
+    // 第四段合流之后服务身份的发布票据必须要得到;要不到就是坏了(下面仍用成员连接代发把后半段走完,好看清坏在哪)
     r.publisher = 'member-standin';
     r.serviceTicket = `error:${tk.reason}`;
-    check(tk.reason === 'unsupported', 'agent:服务身份的发布票据在这个分支上回 unsupported(第四段实现);别的原因就是真的坏了', tk);
+    check(false, 'agent:以服务身份要得到只能发布的连接票据(hosted.ticket { purpose: publish })', { type: tk.type, reason: tk.reason });
     pub = await joinAs(ctx.proj, { username: 'agent-standin', name: 'agent-standin' });
   }
   const hello = await pub.ask({ type: 'publisher.hello', publisherId: `hrp-agent-${RUN}` });
@@ -505,8 +506,17 @@ async function stepAgent() {
   check(maxMembers === 0, 'agent:渲染全程没有任何成员连接', { maxMembers });
   if (r.afterGrace) check(!r.afterGrace.subscribers.includes(`hrp-agent-${RUN}`), 'agent:发布方断开超过宽限期后它的订阅已清掉,细任务靠切分方的订阅留着', r.afterGrace);
   if (r.publisher === 'service') {
-    r.progressSeen = pub.all.filter((m) => m.type === 'task.done').length;
-    check(r.progressSeen >= done.tasks, 'agent:发布方收到每个细任务的完成通知(进度)', { seen: r.progressSeen, tasks: done.tasks });
+    // 发布方看得到的进度(契约第 5a 节 R4):计划被切分后先收到计划自己的 task.done,结果里的 derived 是切出的细任务;
+    // 之后每做完一段一条 task.done(细任务继承了计划的订阅者)。逐个对:这一版切出的每一段都收到了完成通知
+    const doneIds = new Set(pub.all.filter((m) => m.type === 'task.done').map((m) => m.id));
+    const planDone = pub.all.find((m) => m.type === 'task.done' && m.id === plan.id);
+    const derived = Array.isArray(planDone?.result?.derived) ? planDone.result.derived : [];
+    const fineIds = queueTasks(projectId).filter((t) => !knownTasks.has(t.id) && !t.id.startsWith('plan:')).map((t) => t.id);
+    r.progressSeen = [...doneIds].filter((id) => id !== plan.id).length;
+    r.planDerived = derived.length;
+    check(!!planDone && derived.length >= done.tasks, 'agent:发布方收到计划的完成通知,结果里列出切出的细任务', { planDone: !!planDone, derived: derived.length, tasks: done.tasks });
+    check(fineIds.length === done.tasks && fineIds.every((id) => doneIds.has(id)) && derived.every((id) => doneIds.has(id)), 'agent:发布方收到每一段的完成通知(进度)', { seen: r.progressSeen, tasks: done.tasks, missing: fineIds.filter((id) => !doneIds.has(id)).length });
+    check(pub.all.filter((m) => m.type === 'task.failed').length === 0, 'agent:发布方没有收到失败通知', pub.all.filter((m) => m.type === 'task.failed').length);
     pub.close();
   }
   const n = nodeOf(await status(), projectId);

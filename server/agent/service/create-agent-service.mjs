@@ -388,7 +388,7 @@ export function createHostedAgentService({
         grants.delete(grantKey);
         entry.lastUsed = now();
         gate.release(slot);
-        store.emit(conv, { type: 'end', runId, state });
+        store.emit(conv, { type: 'end', runId, state, ...(reason ? { reason } : {}) });
         store.setState(conv, { state, reason, message, endedAt: now() });
         store.compact(conv);
         say('agent.run.end', { projectId: identity.projectId, runId, state, ...(reason ? { reason } : {}) });
