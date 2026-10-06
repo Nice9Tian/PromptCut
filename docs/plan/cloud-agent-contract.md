@@ -326,11 +326,13 @@ Agent 服务**不持有**任何成员的口令、`K`、项目的 `ticketKey`，�
 | 读项目、收别人的改动 | `project.open`、`project.close` |
 | 改项目（`access: 'rw'` 才行） | `project.op`、`project.upload` |
 | 工具调用事件 | `events.create`、`events.complete`、`events.text`（事件模块借内容库写 `event-detail`，不经这条连接直接写内容库） |
-| 在场状态 | 在场模块的发布与订阅（别的成员「正在编辑」的片段；实现时按在场桥实际发的类型填） |
+| 在场状态 | 在场模块的发布与订阅（别的成员「正在编辑」的片段；Agent 的范围；「这一轮在不在跑」的 `cloud-run`，第 5 节） |
+| 卡片源码〔2026-10-07〕 | `content.get`、`content.list`、`content.put`，只许 `kind: 'card-source'`；`content.put` 要 `access: 'rw'`（建卡改卡，第 9.3 节） |
+| 素材票据〔2026-10-07〕 | `auth.ticket { kind: 'asset', access }`：读写的要 `access: 'rw'`；签出的票据是成员的身份加 `sv: 'agent'`（导入素材、配音入库，第 9.4 节） |
 
-  明确拒绝、各有单测的：`auth.ticket`（任何种类：要不到连接票据、委托票据、素材票据）、`shared.*`（含创建者操作与成员列表）、`node.hello` 与全部队列消息、`content.put`、`project.snapshot.put`、`service.announce` / `service.withdraw`、成本记录。白名单以实现时在探针里抓到的消息类型为准，多一种就回来改本表。
+  明确拒绝、各有单测的：`auth.ticket` 里素材票据以外的种类（要不到连接票据、委托票据：不能给自己换角色、续命）、内容库里卡片源码以外的类别、`content.watch`、`shared.*`（含创建者操作与成员列表）、`node.hello` 与全部队列消息、`content.put`、`project.snapshot.put`、`service.announce` / `service.withdraw`、成本记录。白名单以实现时在探针里抓到的消息类型为准，多一种就回来改本表。
 - `access: 'r'` 的连接发 `project.op`、`project.upload` 回 `forbidden`；事件照发（读工具也有事件）。
-- 素材：第一版开放的工具不读写素材字节（只引用素材 id），Agent 服务**不取素材票据**。以后做「看」时再定（留在 `draft_cloud-node-and-agent.md`）。
+- 素材〔2026-10-07 改：原「第一版 Agent 不取素材票据」作废〕：云端 Agent 代成员取素材票据，权限不超过成员本人——只读成员要不到读写的；素材服务每次核对都重看登记表、开关、名单、禁入表与成员此刻的权限，撤销后当场失效；只能写素材原件（`media`），不能写预渲染产物。读素材与成员本人同一个口径（按哈希读，`auth-contract.md` 第 8 节的既有裁定）。细节见第 9.4 节。
 
 ### 4.5 三种失效怎么传到并停掉对话
 
@@ -546,85 +548,112 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 
 ## 9. J：工具清单与 I：界面
 
+〔用户 2026-10-07 更正〕原先写的「第一版不开放建卡改卡、导入素材、网页采集、配音」是会话的建议被误记成用户的决定，作废。**云端 Agent 的工具与本机 Agent 一致**；唯一可以缺省的是要操作发起人自己界面的工具。本节按这个范围重写（2026-10-07，分支 `claude/cloud-agent`），旧的「开放清单 66 个」与「云端暂不支持」不再存在。
+
 ### 9.1 判定规则
 
-一张**开放清单**（`server/agent/service/cloud-tools.mjs`），不在清单里的一律不开放——新加的工具默认关着，要人看过才进清单。两道：
+工具表（`server/mcp-tools.mjs`，128 个）里的**每一个**工具在 `server/agent/service/cloud-tools.mjs` 的 `CLOUD_TOOL_PLAN` 里归到五种跑法之一。没有归类的工具（以后新加的）按「还没接上」答，并由单测 CA-TOOL-02 拦住：新加工具必须表态。
 
-1. 不开放的工具**不交给模型**（省上下文，也免得它去试）。系统提示词里写一段「云端第一版不支持：导入与采集素材、网页操作、语音识别、配音与音效生成、镜头与主体识别、运动追踪、看画面、新建或修改卡片代码、自定义测量、多 Agent 协作、播放控制。用户要这些时直接告诉他『云端暂不支持，请在电脑上的 PromptCut 里使用』，不要找替代办法。」
-2. 所有工具调用的总入口（创造力等级闸之前）再判一次：不在清单里的回 `{ ok: false, cloudUnsupported: true, error: '云端暂不支持 <工具名>：<原因>。请在电脑上的 PromptCut 里使用。' }`，什么都不执行。
+| 跑法 | 含义 | 个数 |
+|---|---|---|
+| 在副本上执行（`route`） | 在服务端的项目副本上同步执行，改动带期望版本提交给文档服务；进程级的锁里跑，实现必须是同步的 | 67 |
+| 服务端另有实现（`hosted`） | `server/agent/service/hosted-tools.mjs`：文件只进这个对话的工作区、出网只经出网闸、素材经素材服务、卡片源码经文档服务的内容库、花钱的调用记用量。外部的等待在锁外，进锁只做同步的改项目 | 7 |
+| 就地执行（`server`） | 不碰项目：`wait`、`report_progress`、多 Agent 公告板四个 | 6 |
+| 要操作发起人的界面（`initiator`） | 发起方不在线时立刻回 `{ ok: false, initiatorOffline: true, error }`，Agent 据此继续；在线时读得到的照答 | 8 |
+| 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 40 |
 
-进清单的条件（单测 CA-TOOL-01～03 对着 `server/mcp-tools.mjs` 与 `src/mcp/routes.mjs` 核对）：`side` 是 `agent` 或 `server`；走路由表的必须 `awaited: false`；实现不打 `/api/*`、不碰 3.2 第 42 项的作业表、不读页面状态。128 个工具里开放 66 个（含 9.4 的四个页面状态工具）。
+交给模型的是前四类共 88 个（加驱动自带的 `think`）；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
 
 ### 9.2 逐个工具
 
-| 分组 | 开放 | 回「云端暂不支持」及理由 |
+| 分组 | 在副本上执行 | 服务端另有实现 | 要操作发起人的界面 | 这一版还没接上（差什么） |
+|---|---|---|---|---|
+| project（7） | `get_project`、`list_media`、`set_project_meta`、`set_theme`、`list_media_effects` | `import_media` | `get_selection`（在线：发消息时的选区） | — |
+| clips（8）、layout（6）、tracks（5）、parts（6）、effects（10） | 全部。`get_layout` 只回规定的框（实体框要渲染，见 9.8） | — | — | — |
+| cuts（8） | 全部。`switch_cut`、`add_cut`、`remove_cut` 要播放头：在线用发消息时的，不在线按 0 记并注明 | — | — | — |
+| audio（19） | `set_clip_volume`、`set_clip_muted`、`separate_audio`、`create_audio`、五个 `*_audio_fx`、`sound_presets` | `voice_list`、`voice_generate` | — | `sound_generate`、`sound_status`、`sound_cancel`、`render_card_audio`、`cancel_card_audio`：声音的合成在页面里做（Web Worker 与 AudioContext），服务端的合成没接上；`render_card_audio` 还要执行卡片的声音代码，得放进不持凭证的隔离进程。`measure_audio`：要节点上的 ffmpeg / ffprobe 从素材服务读素材。`measure_audio_js`：另要断网的无头浏览器跑模型写的脚本 |
+| ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption`、`list_shots`、`list_subjects` | — | — | `stt_status`、`stt_install`、`transcribe_media`（语音识别）、`detect_shots`（镜头）、`track_points`、`get_track`、`track_status`、`track_install`（追踪）、`detect_subjects`、`subject_status`、`subject_install`（主体）：要节点上的 Python 运行环境与模型权重，并把页面里的作业表搬到服务端。`attach_clip_motion`：要一份追踪结果 |
+| cards（8） | `list_cards`（含本项目的用户卡）、`apply_card` | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | `bake_card`、`inspect_card_dom`：要一帧渲好的画面（9.8） |
+| vision（2） | — | — | — | `see_frames`、`get_gif`：要渲染（9.8） |
+| collect（9） | — | — | `collect_login`、`collect_login_check`（要用户自己扫码或输口令） | 其余七个：要节点上的下载器（Python 与 yt-dlp、ffmpeg），并让它只经出网闸的代理出网 |
+| browser（8） | — | — | `web_handoff` | 其余七个：要节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录 |
+| agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（要页面开页签） | — |
+| core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause` | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
+
+「这一版还没接上」的 40 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
+
+**要操作发起人界面的八个，发起方在线时**：`get_selection` 按发消息时的选区答；其余七个要反过来操作他的页面，云端到页面的反向通道这一版没有，回 `{ ok: false, initiatorOnly: true, error }`（说明做不了、请用户自己在界面上操作）。反向通道记未达成。
+
+### 9.3 建卡改卡
+
+- 卡片源码存在**这个项目的内容库**里（文档服务的 `card-source`，键是仓库相对路径，如 `src/cards/user/<id>.tsx`），与本机 Agent 在协作项目里建卡同一条路：别的成员的页面、渲染节点从内容库取。云端 Agent 的连接为此在白名单里多了 `content.get`、`content.list`、`content.put`，只许 `card-source` 这一类，写要读写权限（第 4.4 节）。
+- `create_card` / `edit_card` 只做静态的事：翻译器、审查、语法检查（`server/vite-plugin-cards.ts` 的 `translateCardSource`、`checkCardSource`、`checkSourceEdit`、`applyCardPatch`，与桌面版同一份函数），另过一遍渲染节点装卡时用的预检（`server/hosted-render/source-gate.mjs` 的 `checkSyncedSource`），不过就不入库并把原因回给模型。**Agent 服务进程里不执行卡片代码**（所以第 4.3 节「单进程持有私钥」的裁定不变）。
+- Agent 自己要「认得」这张卡（`list_cards`、`add_clip` 校验参数）：用 `src/kernel/cardSourceParse.mjs` 静态解析出 id、名字、默认值与控件（只认字面量），在进程级的锁里临时登记进服务端的卡片表、出锁撤掉（`ssr-host.mjs` 的 `registerProjectCards`，登记的是只有数据的空壳）。卡片表是进程里的单例，所以一个项目的卡不会留给下一个项目。`id`、`name`、`defaults`、`controls` 不是字面量的卡入得了库、成员也能用，但 `add_clip` 在云端认不出它（工具结果里明说）。
+- 改内置卡：改动写进本项目的内容库（键是那个文件的仓库相对路径），只影响这个项目；云端 Agent 自己的卡片表里那张内置卡的参数表仍是检出里的那一份。
+- 创造力等级照旧管：新建是「高」、整篇重写已有的是「中」；「有没有这张卡」按本项目的内容库判。
+- 这张卡在别的成员的浏览器与渲染节点上执行，由第二、三段的隔离保护；云端不另设限制。卡片里不能引用外链的图片、字体（渲染节点与在线舞台不出网），系统提示词里写明。
+
+### 9.4 导入素材、配音与附件
+
+- **素材票据**：云端 Agent 的连接可以要素材票据（`auth.ticket { kind: 'asset', access }`），由文档服务签成「成员的身份加 `sv: 'agent'`」，`r` 不超过成员此刻的权限（只读成员要不到读写的）。素材服务每次核对票据都重新看登记表、项目开关、名单、禁入表与成员此刻的权限：关开关、被踢、被移出、被改成只读后当场失效。这种票据只能写素材原件（`media`），不能写预渲染产物（`snap`、`px`）；它写的块算成员的，不进托管方服务的容量账。渲染服务（`sv: 'render'`）的规则不变。
+- **读素材的口径不变**：素材服务按内容哈希存取、没有项目语义（`auth-contract.md` 第 8 节的既有裁定），持有素材票据的成员知道哈希就读得到；云端 Agent 与成员本人同一个口径，没有收紧也没有放宽。云端 Agent 的工具只按本项目素材表里的素材 id 工作，不接受裸的哈希；同机素材服务的地址在出网闸那里就被拒。
+- `import_media { url, name? }`：`url` 是附件地址（`work:attachments/<文件名>`，或桌面版写法 `/@pcwork/<本对话 id>/<文件名>`）或 http(s) 地址（经出网闸下载到工作区）。先确认成员写得进（只读成员在下载之前就被拒），再按内容哈希分片写进素材服务，然后在副本上登记素材；视频照桌面版放上时间轴（发起方在线放在他发消息时的播放头，不在线接在现有内容后面）。素材条目只有原件一档（`tiers: { original }`），小尺寸一档没有做（要节点上的 ffmpeg 转码），记未达成。时长与宽高：图片读文件头，音视频用节点上的 ffprobe（没有就只认 WAV，其余在结果里注明没读出来）。
+- `voice_generate`：用托管方的配音配置（`<数据目录>/config/voice.json` 与 `config/keys/voice.key`，与模型 Key 同一套落盘加密与导入办法），先确认成员写得进（只读成员不花钱），合成后入库、登记，每次调用记一行用量（第 6.3 节）。没配时工具回明确的原因。
+- **附件**：页面把文件传到 `POST /v1/conversations/<id>/attachments?name=<文件名>`（请求体是文件字节，单个 512 MiB），存进这个对话工作区的 `attachments/` 下，回 `{ attachment: { name, url: 'work:attachments/…', size, kind, text? } }`；发消息时请求体多一个可选的 `attachments: [{ url }]`，服务端只认这个对话工作区里真有的文件，拼进提示词（不给磁盘路径，小的文本内联）。要进素材库由 Agent 调 `import_media`。
+
+### 9.5 工作区：按「项目 × 对话」隔离
+
+`server/agent/service/workspace.mjs`。凡是读写本地文件的工具只经它：
+
+- 目录是 `<数据目录>/work/<项目 id>/<主人键>/<对话 id>/`，三段都来自鉴权与服务端，不来自工具参数；
+- 工具给的相对路径先在字面上拒掉绝对路径、盘符、UNC 与设备路径、`..`、NUL、Windows 保留设备名、备用数据流、结尾的点与空格；再解析并核对在对话目录之内；再对已存在的最深一层取真实路径（跟符号链接、junction），核对仍在对话目录的真实路径之内；
+- 上限：单个文件 1 GiB、一个对话 2 GiB、一个项目 8 GiB、一个对话 2000 个文件，超了拒写；
+- 对话删除、项目删除时整棵删掉；
+- 子进程只经 `spawn()` 起：工作目录是对话目录，环境变量按白名单重建（不带任何 `PROMPTCUT_*`、代理、别的凭证变量），临时目录在对话目录里，不弹窗口。节点上应当再用独立的非特权用户跑这些子进程（部署说明里写），代码不假设它存在。
+
+### 9.6 出网闸
+
+`server/agent/service/egress.mjs`。凡是按模型给的地址发请求的工具只经它（现在是 `import_media` 的按地址导入；网页采集、网页接管接上时经它的代理）：
+
+- 只许 http / https；地址里不许带用户名口令；端口只许 80、443、8080、8443；
+- 主机名先解析，解析出的**每一个**地址都要过黑名单：回环、链路本地（含 `169.254.169.254`）、私有网段、运营商级 NAT、保留与组播段、本机各网卡的地址，以及 IPv6 的对应范围与把 IPv4 包进去的前缀（IPv4 映射、NAT64、6to4、Teredo）；有一个不过就整个拒；
+- 按解析结果连接、不二次解析（连接的 `lookup` 钉死在核过的地址上）；
+- 重定向每一跳重查，最多 5 跳，跨源的跳不带鉴权头；响应体上限 512 MiB（各工具可以更小）、整体有时限；
+- 给子进程用的正向代理（只绑回环、随机端口）过同一道闸；
+- **测试例外**：环境变量 `PROMPTCUT_AGENT_EGRESS_TEST_ALLOW`（逗号分隔的「IP:端口」）只给探针与演练，生产不设；设了日志里有 `agent.egress.test-allow`，`/healthz` 的 `egressTestAllow` 为 `true`（部署后的核对看它）。
+- 托管方自己配置的地址（模型接口、配音服务、同机的文档服务与素材服务）不经出网闸：它们不是模型给的。
+
+### 9.7 系统提示词
+
+`CLOUD_SYSTEM_NOTE` 只写与本机真实的差别：用户可能已经离开（「发起方不在线」时不要等）；这一版看不了画面（要求看画面的步骤一律跳过、汇报里说明）；这一版还没有的工具；附件与素材的地址写法；建卡要写成字面量、不能引用外链；配音会产生费用。不再有「只能用内置卡」「云端暂不支持」这类话。第 22.3 节列的五个缺口：1、2、4 已写进提示词；3 不再成立（可以建卡）；5（摘要里没标哪些内置卡需要素材）没有做。
+
+### 9.8 看画面（即时渲染）
+
+这一版**没有做成**，记未达成，不是排除：`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 与 `get_layout` 的实体框归在「还没接上」。打算的做法是复用同机的渲染服务（它有无头浏览器与预渲染管线），经一个只在本机回环上的内部口子按「项目 × 版本 × 时刻」要一帧；有用户卡的项目走它的隔离工作进程那一路。差的是渲染服务一侧的这个口子、Agent 服务一侧取帧并交给模型、以及两边的并发与内存上限。
+
+### 9.9 节点上要装什么（给部署说明）
+
+| 用途 | 要装的 | 现在 |
 |---|---|---|
-| project（7） | `get_project`、`list_media`、`set_project_meta`、`set_theme`、`list_media_effects` | `import_media`（要读写节点本地文件）。`get_selection` 开放，规则见 9.4 |
-| clips（8） | 全部：`add_clip`、`update_clip`、`remove_clip`、`duplicate_clip`、`split_clip`、`get_clip`、`set_clip`、`set_emphasis` | — |
-| layout（6） | 全部：`set_position`、`set_rect`、`align`、`nudge`、`get_layout`、`set_camera3d`。`get_layout` 只回规定的框，实体框为空并注明「云端没有渲染」 | — |
-| tracks（5） | 全部 | — |
-| parts（6） | 全部 | — |
-| effects（10） | 全部（新建类照常受创造力等级管）。〔裁：主会话 2026-10-06〕：像素映射两个工具照开。依据：`create_pixel_map` 的入参是声明式结构（`where` 与 `to.expr` 是受限的数学表达式，变量只有 `r/g/b/a/luma/x/y/t`），由 `src/kernel/pixelMap.mjs` 用与滤镜共用的 `parseExpr` 解析成语法树，再按固定的函数表 `GLSL_FUNCS`（:367、:427）翻译成着色器；工具说明写明「表达式只翻译不执行 JavaScript」。入参里带不进任意 GLSL 或 JS 文本。滤镜、音频效果同理（`ops` 的 `kind` 是枚举，数值是同一种表达式） | — |
-| cuts（8） | `list_transitions`、`add_transition`、`remove_transition`、`list_cuts`、`rename_cut` | —。`switch_cut`、`add_cut`、`remove_cut` 开放，播放头的规则见 9.4 |
-| audio（19） | `set_clip_volume`、`set_clip_muted`、`separate_audio`、`create_audio`、`list_audio_fx`、`create_audio_fx`、`update_audio_fx`、`remove_audio_fx`、`apply_audio_fx` | `measure_audio`、`measure_audio_js`（要节点本地解码与专用 Chrome）；`sound_*` 四个、`render_card_audio`、`cancel_card_audio`、`voice_list`、`voice_generate`（配音与声音生成） |
-| ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption` | 语音识别三个、镜头两个、追踪四个、主体四个；`attach_clip_motion`（要页面内存里的轨迹） |
-| cards（8） | `list_cards`（在服务端注册表上执行，只有内置卡） | `card_authoring_guide`、`get_card_source`、`edit_card`、`create_card`、`apply_card`（建卡改卡，J 明确关着；图卡定义同属此类）；`inspect_card_dom`、`bake_card`（看画面） |
-| vision（2） | — | `see_frames`、`get_gif`（看画面，可选项） |
-| collect（9）、browser（8） | — | 全部（网页采集与网页接管） |
-| agent（5） | — | 全部：`spawn_agent` 要页面开页签；其余四个依赖页面的信箱投递。〔裁：第一版一个对话一个 Agent，多 Agent 协作留给以后〕 |
-| core（8） | `wait`、`report_progress` | `background_job_status`、`auto_workflow`、`auto_workflow_status`（依赖转写等后台作业）；`seek`、`play`、`pause`（页面状态） |
-| 驱动自带 | `think` | `text_editor`（读写节点本地文件）：不提供 |
+| 导入素材读音视频的时长与宽高 | ffprobe（随 ffmpeg；`PROMPTCUT_FFPROBE` 或 `PROMPTCUT_FFMPEG` 指路径） | 可选：没有时图片与 WAV 照常，其余不带时长 |
+| 素材小尺寸一档、`measure_audio` | ffmpeg | 没接上 |
+| 语音识别、镜头、追踪、主体 | Python 3 与各扩展包、模型权重（`python/` 下各包的 `requirements-*.txt`），`PROMPTCUT_PYTHON` | 没接上 |
+| 网页采集 | Python 与 yt-dlp、ffmpeg | 没接上 |
+| 网页接管、`measure_audio_js`、看画面 | 无头浏览器（渲染服务已有一份） | 没接上 |
+| 配音 | 托管方的配音服务地址与令牌（导入办法同模型 Key） | 已接上 |
+| 素材写入 | 环境变量 `PROMPTCUT_AGENT_ASSET_URL`（同机素材服务的回环地址；PM2 模板已带） | 已接上 |
 
-`list_cards`、`list_parts` 在托管档改由 SSR 宿主的注册表直接答（现在 `list_cards` 是 `side: "page"`）。项目里已有的用户卡片段：云端 Agent 能挪、能删、能改通用属性，改它的卡片参数时拿不到参数表，按「未知卡片」回错并说明「这张卡是用户自定义的，云端暂不支持改它的参数」。探针 CAP-TOOL-04 覆盖这一条。
+### 9.10 第一版不提供的对话选项
 
-### 9.3 第一版不提供的两个对话选项（请主会话确认，见第 15 节）
+「深度自主」与「审查环路」在云端仍不提供〔用户 2026-10-07 确认「深度自主」保持置灰〕：用的是托管方的 Key、现在没有上限，而云端的一轮在用户离开后没人看着。
 
-〔裁：主会话 2026-10-06〕（待用户审）：第一版只开普通对话；界面上这两项在选「云端」时不可选并说明原因（「云端 Agent 暂不支持深度自主与审查环路：云端用的是托管方的模型额度，目前没有上限」）。
+### 9.11 界面（I）
 
-「深度自主」与「审查环路」在云端接入方式下不提供：它们把一轮从最多 24 次模型往返放大到最多 300 次，且审查环路每个角色回合各调一次模型，用的是托管方的 Key、现在又没有上限，而云端的一轮在用户离开后没人看着。界面上这两个开关在「云端」下置灰不可选，悬停说明原因。托管档一轮的硬上限见 7.3。
+与原 9.5 节相同的不再重复，改动的几处：
 
-### 9.4 页面状态与看画面
-
-**页面状态的规则**（任务书 J 补的一句）：云端的一轮不依赖任何页面，页面状态只是「有就用」。
-
-- 发消息时页面把当时的播放头与选区随消息带上（`pageState: { t, selection: [片段 id] }`），服务端记在这一轮上。
-- 「发起方在线」的判定：此刻有一条来自**发起这一轮的那个 `userId`** 的事件流连着这个对话。
-- 读页面状态的工具：
-
-| 工具 | 发起方在线 | 发起方不在线 |
-|---|---|---|
-| `get_selection` | 回发消息时的选区，注明「这是发消息时的选区」 | 立刻回 `{ ok: false, initiatorOffline: true, error: '发起方不在线，读不到页面的选区。请按项目内容继续，不要等待。' }` |
-| `switch_cut`、`add_cut`、`remove_cut`（要播放头） | 用发消息时的播放头 | 照常执行，被停放的剪辑的播放头记 0，结果里注明「发起方不在线，播放头按 0 记」 |
-| `attach_clip_motion`（要页面内存里的轨迹） | 云端暂不支持（追踪不开放，轨迹无从来） | 同左 |
-| `seek`、`play`、`pause` | 云端暂不支持（它们是操作页面，不是读） | 同左 |
-
-  系统提示词里写一句：「用户可能已经离开。工具回『发起方不在线』时不要等，按项目内容继续，在进度汇报里说明哪一步没用上页面状态。」不在线的回答是立刻给的，不设等待，Agent 不会卡住。
-- 所以开放清单比 9.2 的表多 `get_selection` 与三个切剪辑的工具，共 66 个（9.2 表里这四个所在的格子以本节为准）。
-- **反向通道**（工具执行中途向在线的页面要此刻的选区与播放头，经事件流发 `page.request`、页面 `POST …/page-result` 回）是可选项，建议这一版**不做**：发消息时的快照已经覆盖「引用我选中的这张卡」这类用法；反向通道要处理多条流、超时与页面中途离开，收益小。做了的话上表「在线」一列换成实时值，离线一列不变。
-
-**看画面（即时渲染）**：这一版不做，记未达成〔裁：主会话 2026-10-06〕。要在节点上再跑一份只做即时渲染的进程加 Chrome（约 1.5～3 GB 内存），还要给它素材票据与按需拉素材的本地库；节点 16 GB 无 swap，同机已有渲染服务的 Chrome。以后做的自然路径是让第三段的渲染服务顺带提供即时渲染接口。云端 Agent 改完后的画面由第 16 节的补渲保证「别人看到的是渲好的」，那不需要 Agent 自己看。
-
-### 9.5 界面（I）
-
-- **在线宽屏**：`DockPages.tsx:46` 的 `AgentPage` 现在在在线构建里恒为占位。改成：在线构建且**不是低内存档**（`src/online/lowMemory.ts` 的现有判定）时挂 `AiPanel`，接入方式只有一项「云端」并且默认选中；低内存档（手机、iPad 浏览器，含 Chrome 的手机仿真）仍是现在的占位，文案不变〔裁：用现成的低内存档判定当「手机」的口径，不另造一套宽度阈值〕。
-- **桌面版**：接入方式的列表里，在现有的 CLI、API 之后多一项「云端」。
-  - **只在这些条件都成立时出现**：当前项目是放云端的多用户协作项目、文档服务已连上、文档服务报这台节点有云端 Agent 服务（`hosted.agent.available`，第 10.4 节）。放本机的项目、没开协作的项目、本机草稿里看不到这一项。开关被创建者关着时这一项在，但置灰并说明「项目创建者已关闭云端 Agent」。
-  - **本机 Agent 仍是缺省**：新开的对话页签用的还是上次选的本机接入方式；「云端」从不被自动选中，也不记成全局缺省（只记在这个页签上）。
-  - 选了「云端」的页签是一个云端对话：消息发到云节点，工具在云端执行，**不经过本机的 Agent 服务**（`/api/ai/chat`、`/api/mcp/*`、本机的项目副本绑定都不参与）。同一个 AI 栏里可以一个页签本机、一个页签云端，互不影响。
-  - 桌面版退出（连托盘）：云端对话照跑。重新打开见 7.4。
-- **AiPanel 的后端**：新目录 `src/ai/backend/`，一个接口两份实现：
-
-  ```ts
-  interface AiBackend { info(); send(conversationId, body); events(conversationId, after, onEvent, signal); abort(conversationId); listChats(); deleteChat(id); capabilities }
-  ```
-
-  `desktop.ts`（现在散在 `useAiChat.ts`、`chatStore.ts`、`providerState.ts` 里的 `/api/ai/*`、`/api/chats/*` 调用搬进来，行为不变：本机的一轮仍然绑在那条请求上）与 `cloud.ts`（打云节点的 `/agent/v1/*`，带委托票据）。在线构建只带 `cloud.ts`（`index.ts` 里用就地常量 `ONLINE_BUILD` 把 `desktop.ts` 摇掉）；桌面构建两份都带，按页签选的接入方式取。
-- **云端下隐藏或置灰的**（`capabilities` 驱动，不在组件里到处写 `if`）：安装与登录入口、API 设置窗口、附件按钮、深度自主与审查环路开关、拉起子 Agent；一键配特效置灰并写原因；**诊断报告不置灰、不隐藏**，内容换成这段云端对话的（〔用户 2026-10-07 定〕，见第 22 节）。置灰的悬停说明：在线页面沿用 `c10-contract.md` 第 17 节表 A 的句式；桌面版写「云端 Agent 暂不支持{入口名}，请改用本机接入方式」。
-- **可用的**：发消息、流式回复、停止、工具调用过程（事件从文档服务来，与本机同一套）、进度条目、「撤销这一步」、对话列表与重开、创造力等级选择、模型选择（托管方配置了多个模型时）、「引用到 AI」。
-- **离开时的提示**：云端对话在跑时关页签或退出桌面版，不拦，也不弹确认；对话页签上常驻一行小字「在云端运行，关闭后继续；重新打开可接着看」〔裁：主会话 2026-10-06〕。
-- **状态提示**：项目关了开关 →「项目创建者已关闭云端 Agent。」；超额、忙、中断、撤销见 6.2、7.3 的文案；补渲见第 16 节。
-- **项目设置**里「云端 Agent」开关：只有创建者能改，与第三段的「托管方的渲染节点」开关放在一起。桌面版与在线页面的项目设置都显示。文件与第三段冲突，见第 14.3 节。
-- 成员列表与署名的显示名规则在共用代码里，桌面与在线一致。
+- 云端下**附件按钮可用**〔用户 2026-10-07 确认〕：传到 9.4 的接口，随下一条消息带上；第 19 节 U5「云端下不能附文件」作废。
+- 「一键配特效」「✦」菜单里的项：只依赖工具的改回可用，仍做不了的写真实的原因（见第 24 节的实现记录）。
+- 成员列表的「离线，Agent 在跑」与 Agent 数按「有一轮在跑」算（第 5 节与第 24 节）。
 
 ---
 
@@ -1169,7 +1198,7 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 | U2 | 云端第一版只开普通对话，不提供「深度自主」与「审查环路」 | 9.3 | 选「云端」时这两项不可选并说明原因 〔用户 2026-10-07 确认:「深度自主」在云端保持置灰;「普通对话」之外的工具范围按 23.1 放开〕 |
 | U3 | 「创建者特权只有三项」改成四项，第四项是「开关托管方在这个项目里的服务（渲染节点、云端 Agent）」 | 12.7（`workflow/project.md`、`product/document-service.md`） | 项目设置里多两个只有创建者能改的开关 |
 | U4 | 一级文档：`user-workflow.md` 的接入方式加「云端」；`workflow/project.md` 加「云端 Agent」开关一条 | 12.7 | E～I 的直接后果 |
-| U5 | 云端下不能附文件；云端对话记录存在托管方的节点上，托管方读得到 | 9.5、7.2 | 界面说明与语义里照写 〔用户 2026-10-07 推翻:「云端下不能附文件」推翻,附件在云端可用(23.1);「对话记录托管方读得到」不变〕 |
+| U5 | ~~云端下不能附文件~~〔用户 2026-10-07：附件改回可用，见第 9.4、9.11 节〕；云端对话记录存在托管方的节点上，托管方读得到 | 9.5、7.2 | 界面说明与语义里照写 〔用户 2026-10-07 推翻:「云端下不能附文件」推翻,附件在云端可用(23.1);「对话记录托管方读得到」不变〕 |
 
 ---
 
@@ -1203,6 +1232,7 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 - 有细任务失败就记失败这一句，`superseded`（作废）除外：它算有了结局、不算失败（第 16.4 节）。核对用的那一次切分给出的细任务清单与原来不同时以新的为准。
 - 优先级是 `normal`（与在线页面发的清单计划逐字段相同），核对用的那一个是 `backfill`。
 - 「连续没有进度」放弃时写进对话记录的原因是固定的一句「渲染节点 10 分钟没有进展」；时限被环境变量改短时这句话不跟着变。
+- **R8 又改回方案 A**（主会话 2026-10-07 转来，`claude/render-service` 的 `a3898559` 已合进本分支）：托管方渲染服务用按项目隔离的工作进程执行项目带来的用户卡（同时最多一个、一轮一个项目、闲置 60 秒结束、冷启动约 7～11 秒），所以云端 Agent 建卡、改到用户卡片段之后没人在线也渲得出来，只是更慢。体验探针里「云端 Agent 建一张用户卡并让它判重、发起方退出后云节点渲出来」那一步还没有加（第 24 节「没有做成的」）。以下是改之前的记录——
 - **R8 的结论改成方案 B**（主会话 2026-10-06 转来）：第三段的用户卡隔离工作进程没有交付，托管方的渲染节点不认领含用户卡的任务。云端 Agent 改到用户卡片段时清单里照放，渲染节点不接，Agent 服务一侧表现为连续没有进度后记 `render failed`；这些片段的画面要等有渲染节点的成员上线后由页面按现有规则补上。这是已知范围，不是缺陷。
 
 **资源上限（第 11 节）**
@@ -1370,3 +1400,44 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 ### 23.5 仍保持现状的四条用户可见行为
 
 空对话时「诊断报告」置灰；消息太长时页面一律显示「消息太长了…」；创建者自己页面上改开关后的确认气泡；顶栏「Agent：0 个」一直显示。
+
+---
+
+## 24. 工具范围改成与本机一致的实现记录（2026-10-07，分支 `claude/cloud-agent`）
+
+用户 2026-10-07 更正任务书 J 之后的返工。上文与本节冲突时以本节为准；第 9 节已按新范围整节重写。
+
+**做成的**
+
+- 工具表逐个归类（第 9.1、9.2 节）：128 个里 88 个交给模型（在副本上执行 67、服务端另有实现 7、就地执行 6、要操作发起人界面 8），40 个记「这一版还没接上」并逐项写明差什么。
+- 按「项目 × 对话」隔离的工作区（第 9.5 节）、出网闸（第 9.6 节）、代成员的素材写入（第 4.4、9.4 节）、建卡改卡经内容库且不在服务进程里执行卡片代码（第 9.3 节）、配音用托管方的配置并记用量（第 9.4 节；用量流水多一类 `kind: 'service'`，不占 token 额度，`GET /v1/usage` 多回 `services`）、附件（第 9.4 节）、系统提示词（第 9.7 节）。
+- 「这一轮在不在跑」：有一轮在跑时，Agent 服务经实例自己的那条连接在在场状态里挂 `presence.set { key: 'cloud-run', ttlMs: 90000, data: { v: 1, kind: 'cloud-run', runs } }`，每 30 秒续一次，最后一轮结束时撤掉；页面据它标「离线，Agent 在跑」并计入 Agent 数，闲置的连接不标、不计。
+- 多 Agent 的公告板四个工具（`declare_scope`、`list_agents`、`send_message`、`check_messages`）在云端可用：同一位成员的几个云端对话、以及经在场状态与别的成员那边的 Agent，都看得到彼此的范围与消息。
+
+**对外接口与鉴权消息的改动**
+
+| 改动 | 在哪 |
+|---|---|
+| 新接口 `POST /v1/conversations/<id>/attachments?name=`（请求体是文件字节）；`POST …/messages` 的请求体多一个可选的 `attachments: [{ url }]` | `server/agent-service/http.mjs` |
+| `GET /healthz` 多回 `egressTestAllow`；`GET /v1/usage` 多回 `services` | 同上 |
+| 环境变量 `PROMPTCUT_AGENT_ASSET_URL`（同机素材服务的回环地址，格式不对 `config.error asset-url`）、`PROMPTCUT_AGENT_EGRESS_TEST_ALLOW`（只给探针） | `server/agent-service/main.mjs` |
+| `SERVICE_ALLOW.agent` 加 `content.get`、`content.list`、`content.put`（只许 `card-source`）与 `auth.ticket`（只许素材票据）；`AGENT_WRITE_TYPES` 加 `content.put` | `server/docservice/service-gate.mjs` |
+| 文档服务给云端 Agent 的连接签代成员的素材票据（`k: 'asset'`，`u` 是成员，带 `sv: 'agent'`、`sk`、`cr`） | `server/docservice/modules/shared.mjs` |
+| 素材服务对 `sv: 'agent'` 的票据从「只读」改成「按成员本人的权限、只许写 `media`」；核对结果多一个 `actsFor: 'member'` | `server/auth/asset-tickets.mjs`、`server/asset-service.ts` |
+| 工具结果的三种新形状：`{ ok: false, cloudUnavailable: true, error }`（原 `cloudUnsupported` 不再有）、`{ ok: false, initiatorOffline: true, error }`（八个工具都会回，原来只有 `get_selection`）、`{ ok: false, initiatorOnly: true, error }` | `server/agent/service/cloud-tools.mjs` |
+
+**没有做成的（记未达成，原因与差什么）**
+
+1. 看画面（即时渲染）：`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom`、`get_layout` 的实体框——差渲染服务一侧按「项目 × 版本 × 时刻」出一帧的内部口子（第 9.8 节）。
+2. 感知类工具（语音识别、镜头、追踪、主体）、`auto_workflow`、`background_job_status`、`attach_clip_motion`——差节点上的 Python 环境与模型权重，以及把页面里的作业表搬到服务端。
+3. 音效合成与卡片声音生成、`measure_audio`、`measure_audio_js`——差服务端的合成 / 解码与隔离进程。
+4. 网页采集（七个）、网页接管（七个）——差节点上的下载器与浏览器，并让它们只经出网闸的代理出网（代理已有：`egress.mjs` 的 `startProxy`）。
+5. 发起方在线时反过来操作他的页面（`seek`、`play`、`pause`、`web_handoff`、`collect_login`、`collect_login_check`、`spawn_agent`）——差云端到页面的反向通道；现在在线时回 `initiatorOnly`，不在线时回「发起方不在线」。
+6. 导入的素材没有小尺寸一档；节点上没有 ffprobe 时音视频（WAV 除外）不带时长与宽高。
+7. 子进程用独立的非特权用户跑——只写进了部署说明的要求，代码里没有子进程在用（上面第 2～4 项接上时才用得到）。
+
+**残余面（照实写）**
+
+- 素材按哈希读（既有口径）：任何持有素材票据的成员知道别的项目某块素材的哈希就读得到；云端 Agent 与成员本人同一个口径。云端 Agent 的工具列举不了别的项目的素材，也不接受裸的哈希与同机素材服务的地址。
+- 出网闸只管 Agent 服务进程自己发的请求与经它代理的请求；以后接上的子进程若自己解析、自己连（不走代理），要靠部署时的系统级限制兜底。
+- 文档服务的内容库按空间分；托管端每个项目一个空间，所以卡片源码按项目隔离。本机档（一个空间里多个项目）不在云端 Agent 的范围里。

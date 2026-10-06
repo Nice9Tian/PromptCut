@@ -398,7 +398,7 @@ hosted.ticket { projectId, purpose: 'publish' }
 
 - `acc` 只许出现在成员的 `sv` 连接票据上，`pu` 只许出现在服务自己身份的 `sv` 连接票据上；别处出现按格式不对拒。`pu: 'publish'` 的票据不带 `c`。
 - 逐消息的 `gate` 与会话接续前的 `resumeGate` 每次重新看：登记表与开关（`serviceAdmission`）、代成员的连接另看名单与禁入表、改项目的两种消息另按项目记录此刻的 `memberAccess` 判。
-- 素材：云端 Agent 的两种连接都要不到素材票据（白名单不放 `auth.ticket`）。素材服务对带 `sv` 且登记表 `actsFor: 'member'` 的素材票据另加限制（以后签发时也成立）：只认 `r: 'r'`，名单与禁入表照成员查，开关与登记表照第 1.6 节（`hosted-render-contract.md`）当场看。
+- 素材〔2026-10-07 改，`cloud-agent-contract.md` 第 4.4、9.4 节〕：云端 Agent 代成员的连接可以要素材票据（`auth.ticket { kind: 'asset' }`，签成成员的身份加 `sv: 'agent'`，`r` 不超过成员此刻的权限，只读成员要不到读写的）；发布连接仍要不到任何票据。素材服务对这种票据：名单、禁入表、开关与成员此刻的权限每次核对都重看（撤销后当场失效），只许写素材原件（`media`）。以下是改之前的写法，留作对照——素材服务对带 `sv` 且登记表 `actsFor: 'member'` 的素材票据另加限制（以后签发时也成立）：只认 `r: 'r'`，名单与禁入表照成员查，开关与登记表照第 1.6 节（`hosted-render-contract.md`）当场看。
 
 ### 17.4 撤销
 
@@ -427,7 +427,7 @@ hosted.ticket { projectId, purpose: 'publish' }
 | AU18 | 伪造、过期、代数变了、受众不对的委托被拒 | CA-AUTH-03 |
 | AU19 | 只读成员的连接改不了项目 | CA-AUTH-04 |
 | AU20 | 关开关时以 4003 `service-disabled` 关连接，委托当场失效；移出、踢人、删项目同理 | CA-REVOKE-01～03 |
-| AU21 | 素材：云端 Agent 要不到素材票据；委托当不了素材票据；`sv: 'agent'` 的素材票据只读、撤销后当场失效 | CA-ASSET-01 |
+| AU21 | 素材〔2026-10-07 改〕：云端 Agent 的连接按成员本人的权限要素材票据（读写成员写得进素材原件、写不了预渲染产物；只读成员要不到读写票据、写不进）；委托当不了素材票据；开关关掉、被踢、被改成只读后当场失效 | CA-ASSET-01 |
 
 另有 CA-AUTH-05（白名单逐条）、CA-AUTH-06（目录里的开关）、CA-GRANT-01～02、CA-RENDER-04（发布连接）、CA-SIGN-01、CA-OWNER-01、CA-URL-01～02、CA-LOG-01、CA-CLIENT-01～02；隔离探针 `scripts/probes/cloud-agent-auth-probe.mjs`（P1～P17；P16 是「发起成员的连接全部断开后，凭对话委托仍能换票据并提交编辑」，P17 是地址下发）。
 

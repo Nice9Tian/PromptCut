@@ -453,7 +453,21 @@ export function createHostedAgentService({
       conv.run = { runId, userId: identity.userId, stop };
       conv.pinned = true;
       entry.runs.set(conversationId, conv);
-      const first = store.emit(conv, { type: 'user', runId, prompt: body.prompt, from: identity.deviceName ?? null, at: now() });
+      // 这条消息带的附件(只认这个对话工作目录里真有的):名字、地址、大小记进用户消息的事件里,换设备或重开对话时气泡里看得到
+      const attached = [];
+      if (Array.isArray(body.attachments) && workspaces.available) {
+        try {
+          const ws = workspaces.open({ projectId: identity.projectId, ownerKey: ownerKeyOf(identity), conversationId });
+          for (const a of body.attachments.slice(0, 32)) {
+            const url = typeof a?.url === 'string' ? a.url : '';
+            if (!url.startsWith('work:attachments/')) continue;
+            let st = null;
+            try { st = ws.stat(url.slice(5)); } catch { st = null; }
+            if (st) attached.push({ name: url.slice('work:attachments/'.length), url, size: st.size });
+          }
+        } catch { /* 没有工作区:当作没带附件 */ }
+      }
+      const first = store.emit(conv, { type: 'user', runId, prompt: body.prompt, from: identity.deviceName ?? null, at: now(), ...(attached.length ? { attachments: attached } : {}) });
       store.setState(conv, {
         state: 'running', reason: null, message: null, runId, startedAt: now(), endedAt: null,
         startedOn: identity.deviceName ?? conv.meta.startedOn ?? null,
@@ -470,7 +484,7 @@ export function createHostedAgentService({
         creativity: body.creativity,
         script: body.script,
         library: Array.isArray(body.library) ? body.library : [],
-        attachments: Array.isArray(body.attachments) ? body.attachments : [],
+        attachments: attached,
         pageState: body.pageState && typeof body.pageState === 'object' ? body.pageState : null,
         apiConfig: cfg,
         historyFile: dataDir ? path.join(store.dirOf(identity.projectId, ownerKeyOf(identity), conversationId), 'history.json') : null,

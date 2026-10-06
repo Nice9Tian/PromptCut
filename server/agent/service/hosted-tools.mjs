@@ -162,7 +162,7 @@ function sha256File(abs) {
 
 /* ---------------------------------------------------------------- 托管方的配音配置 */
 
-/** 托管方的配音配置放哪(与模型配置同一个目录、同一套落盘加密) */
+/** 托管方的配音配置放哪(与模型配置同一个目录、同一套落盘加密;写它的是 `server/agent-service/import-key.mjs --service voice`) */
 export function voiceConfigPaths(dataDir) {
   const dir = path.join(dataDir, 'config');
   return { file: path.join(dir, 'voice.json'), keyFile: path.join(dir, 'keys', 'voice.key') };
@@ -170,24 +170,21 @@ export function voiceConfigPaths(dataDir) {
 
 /**
  * 读托管方的配音配置;没配回 null。回的对象形状与桌面版的 `readVoiceConfig()` 相同(`apiKey` 是明文,只在进程内用)。
- * Key 文件由托管方用与模型 Key 相同的办法导入(密文落盘,`server/runners/config-crypt.mjs` 的 `voice` 一类)。
+ * 地址、提供方与令牌经 `server/agent-service/service-keys.mjs` 的 `readServiceKey(dataDir, 'voice')` 读(加密分发导入的那一份,
+ * 不另造保存办法);`voice.json` 里若还写了各提供方的缺省音色、语速与登记的音色,一并按桌面版的规矩取。
  */
 export async function readHostedVoiceConfig(dataDir) {
   if (!dataDir) return null;
-  const { file, keyFile } = voiceConfigPaths(dataDir);
+  const { file } = voiceConfigPaths(dataDir);
   let raw;
   try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
-  const [{ normalizeVoiceConfig }, { openKey, sealedKind }] = await Promise.all([
+  const [{ normalizeVoiceConfig }, { readServiceKey }] = await Promise.all([
     import(new URL('../../voice/voice-config.mjs', import.meta.url).href),
-    import(new URL('../../runners/config-crypt.mjs', import.meta.url).href),
+    import(new URL('../../agent-service/service-keys.mjs', import.meta.url).href),
   ]);
-  const cfg = normalizeVoiceConfig(raw);
-  let apiKey = '';
-  try {
-    const sealed = fs.readFileSync(keyFile, 'utf8').trim();
-    if (sealedKind(sealed) === 'voice') apiKey = openKey(sealed, 'voice') || '';
-  } catch { /* 还没导入 */ }
-  return { ...cfg, effectiveBaseUrl: cfg.baseUrl, apiKey };
+  const key = readServiceKey(dataDir, 'voice');
+  const cfg = normalizeVoiceConfig({ ...raw, baseUrl: key.baseUrl ?? raw.baseUrl, provider: key.provider ?? raw.provider });
+  return { ...cfg, effectiveBaseUrl: cfg.baseUrl, apiKey: key.apiKey ?? '' };
 }
 
 /* ---------------------------------------------------------------- 工具 */
@@ -583,6 +580,10 @@ export function createHostedTools({
 
     async function putCard(key, source) {
       if (Buffer.byteLength(source, 'utf8') > limits.maxCardBytes) throw new HostedToolError(`源码超过 ${Math.round(limits.maxCardBytes / 1024)}KB,太大了。`);
+      // 渲染节点装卡时的那道预检(越界的 @import、@plugin、import.meta.glob 等写法会被拒装)提前在这里报:过不了的卡入了库也渲不出来
+      const gate = await import(new URL('../../hosted-render/source-gate.mjs', import.meta.url).href);
+      const pre = gate.checkSyncedSource(key, source);
+      if (!pre.ok) throw new HostedToolError(`这份源码在云端的渲染节点上装不上,没有保存:\n${pre.errors.join('\n')}`, { errors: pre.errors });
       const stored = await docRequest({ type: 'content.put', kind: CARD_KIND, key, body: source, session: `agent:${agentKey}`.slice(0, 128) }, ['content.stored']);
       cards.items.set(key, { hash: stored.hash, body: source });
       await refreshCards(true);
