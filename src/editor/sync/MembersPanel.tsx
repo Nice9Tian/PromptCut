@@ -9,9 +9,10 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, useSync, type MemberRow } from "./syncManager";
+import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, setHostedService, useSync, type MemberRow } from "./syncManager";
 import { ListEditor } from "./SharedDialogs";
 import { rememberPasswords } from "./collab";
+import { HOSTED_SERVICE_TEXT, serviceRowLabel, splitMembers, type HostedServiceName } from "./hostedServices";
 import "./sync.css";
 
 export type Flow =
@@ -20,7 +21,8 @@ export type Flow =
   | { kind: "list" }
   | { kind: "bans" }
   | { kind: "delete" }
-  | { kind: "kick"; row: MemberRow };
+  | { kind: "kick"; row: MemberRow }
+  | { kind: "hosted-service"; service: HostedServiceName; enabled: boolean };
 
 export function MembersButton() {
   const shared = useSync((v) => v.shared);
@@ -46,8 +48,10 @@ export function MembersButton() {
 
   if (!shared) return null;
   const isMe = (r: MemberRow) => r.username === shared.username && r.deviceId === device?.deviceId;
-  const others = members.filter((r) => !isMe(r));
-  const mine = members.find(isMe);
+  // 托管方的服务(渲染节点)不是成员:排在成员之后,不计入成员数,没有踢人按钮
+  const { people, services } = splitMembers(members);
+  const others = people.filter((r) => !isMe(r));
+  const mine = people.find(isMe);
   const iAmCreator = shared.creator || !!mine?.creator;
   const startFlow = (f: Flow) => {
     setOpen(false);
@@ -73,7 +77,7 @@ export function MembersButton() {
           <circle cx="11" cy="4.6" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.2" />
           <path d="M11.5 8.8c2 .2 3.5 1.8 3.5 4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
         </svg>
-        <span>成员: {Math.max(1, members.length)} 人</span>
+        <span>成员: {Math.max(1, people.length)} 人</span>
       </button>
       {open &&
         createPortal(
@@ -127,6 +131,15 @@ export function MembersButton() {
               );
             })}
             {others.length === 0 ? <div className="pc-members-empty">只有你自己在线。</div> : null}
+            {services.length ? <div className="pc-members-sep" data-pc="members-services-sep" /> : null}
+            {services.map((row) => (
+              <div className="pc-members-row" key={`service:${row.service}@${row.deviceId}`} data-pc={`members-service-${row.service}`}>
+                <div className="pc-members-row-main">
+                  <span className="pc-members-name">{serviceRowLabel(row.service)}</span>
+                  {row.tags.rendering ? <span className="pc-sync-tag pc-sync-tag--rendering">[渲染中]</span> : null}
+                </div>
+              </div>
+            ))}
             {iAmCreator ? (
               <>
                 <div className="pc-members-sep" />
@@ -178,6 +191,8 @@ export function CreatorFlow({ flow, onClose }: { flow: Flow; onClose: () => void
       return <DeleteDialog v={verified} onClose={onClose} />;
     case "kick":
       return <KickDialog row={flow.row} v={verified} onClose={onClose} />;
+    case "hosted-service":
+      return <HostedServiceDialog service={flow.service} enabled={flow.enabled} v={verified} onClose={onClose} />;
   }
 }
 
@@ -436,6 +451,42 @@ function KickDialog({ row, v, onClose }: { row: MemberRow; v: Verified; onClose:
     >
       <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
         确定要把 {row.username} ({row.deviceName ?? row.deviceId}) 踢出项目吗？
+      </div>
+      {err ? <div className="pc-sync-err">{err}</div> : null}
+    </Dialog>
+  );
+}
+
+/** 创建者开关托管方的服务(项目设置里的勾选;验证创建者身份之后到这一步确认) */
+function HostedServiceDialog({ service, enabled, v, onClose }: { service: HostedServiceName; enabled: boolean; v: Verified; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const label = HOSTED_SERVICE_TEXT[service]?.label ?? serviceRowLabel(service);
+  const apply = async () => {
+    setBusy(true);
+    const r = await setHostedService(service, enabled, v.key);
+    setBusy(false);
+    if (!r.ok) return setErr(r.error === "bad-message" ? "这台云节点现在没有这个服务。" : failText(r.error));
+    pushToast(enabled ? `已打开${label}。` : `已关闭${label}。`, "info", 4000);
+    onClose();
+  };
+  return (
+    <Dialog
+      title={label}
+      pc="hosted-service-dialog"
+      foot={
+        <>
+          <button type="button" className="pc-btn" onClick={onClose}>
+            取消
+          </button>
+          <button type="button" className="pc-btn pc-btn--primary" data-pc="hosted-service-confirm" disabled={busy} onClick={() => void apply()}>
+            {enabled ? "打开" : "关闭"}
+          </button>
+        </>
+      }
+    >
+      <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
+        {enabled ? `打开后，${label}会为这个项目做预渲染。` : `关闭后，${label}不再为这个项目做预渲染，已经渲好的结果保留。`}
       </div>
       {err ? <div className="pc-sync-err">{err}</div> : null}
     </Dialog>
