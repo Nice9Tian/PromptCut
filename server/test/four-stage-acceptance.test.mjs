@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   parseArgs, validateManifest, selectItems, planResume, judge, combineAttempts, expandPlaceholders, expandCmd,
-  lastJsonObject, globToRegExp, matchesToken, coverageReport, taskMatrix, summaryText, listText, CATEGORIES,
+  lastJsonObject, shiftPorts, globToRegExp, matchesToken, coverageReport, taskMatrix, summaryText, listText, CATEGORIES,
 } from '../../scripts/acceptance/acceptance-lib.mjs';
 import { ITEMS, EXCLUDED_PROBE_FILES, TASK_ACCEPTANCE } from '../../scripts/acceptance/four-stage-manifest.mjs';
 
@@ -240,6 +240,10 @@ test('FSA-14 judge:带耗时门槛的项在 PC 上记 ref-pass / ref-fail', () =
   const it = base({ timing: 'laptop', timingNote: 'p50 ≤ 300 ms' });
   assert.equal(judge(it, run1({})).verdict, 'ref-pass');
   assert.equal(judge(it, run1({ exitCode: 1 })).verdict, 'ref-fail');
+  // 笔记本(--authoritative)上按过 / 不过判
+  assert.equal(judge(it, run1({}), { authoritative: true }).verdict, 'pass');
+  assert.equal(judge(it, run1({ exitCode: 1 }), { authoritative: true }).verdict, 'fail');
+  assert.equal(parseArgs(['--authoritative']).authoritative, true);
 });
 
 test('FSA-15 judge:多步的项,每一步都要过;结果行取输出里最后的 JSON,没有就取最后一行', () => {
@@ -441,4 +445,12 @@ test('FSA-24 真清单:--list 与 --matrix 能跑,两份任务书的编号一条
   assert.ok(!m.stdout.includes('没有任何项覆盖'));
   assert.match(m.stdout, /R25/);
   assert.match(m.stdout, /U6/);
+});
+
+test('FSA-25 --port-shift:端口类参数后的 5xxx 平移,8xxx 与别的参数不动', () => {
+  assert.deepEqual(parseArgs(['--port-shift', '-110']).portShift, -110);
+  assert.throws(() => parseArgs(['--port-shift', '99999']), /-3000～3000/);
+  const cmd = ['node', 'p.mjs', '--port', '5690', '--doc-port', '8760', '--port-b', '5693', '--online-base', '5693', '--iters', '5690', '--origin', 'http://127.0.0.1:5690'];
+  assert.deepEqual(shiftPorts(cmd, 0), cmd);
+  assert.deepEqual(shiftPorts(cmd, -110), ['node', 'p.mjs', '--port', '5580', '--doc-port', '8760', '--port-b', '5583', '--online-base', '5583', '--iters', '5690', '--origin', 'http://127.0.0.1:5690']);
 });

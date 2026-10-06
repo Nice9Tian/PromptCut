@@ -26,7 +26,7 @@ export function parseArgs(argv) {
   const o = {
     list: false, only: [], from: null, resume: false, forceResume: false, out: null, mainRef: 'main',
     flakyRerun: 0, devPort: 5690, devMainPort: 5693, json: false, checkCoverage: false, help: false,
-    keepMainWorktree: false, includeOptional: false, dryRun: false, matrix: false,
+    keepMainWorktree: false, includeOptional: false, dryRun: false, matrix: false, portShift: 0, authoritative: false,
   };
   const need = (i, name) => {
     const v = argv[i + 1];
@@ -45,6 +45,7 @@ export function parseArgs(argv) {
       case '--include-optional': o.includeOptional = true; break;
       case '--dry-run': o.dryRun = true; break;
       case '--matrix': o.matrix = true; break;
+      case '--authoritative': o.authoritative = true; break;
       case '--help': case '-h': o.help = true; break;
       case '--only': o.only.push(...need(i, a).split(',').map((s) => s.trim()).filter(Boolean)); i++; break;
       case '--from': o.from = need(i, a); i++; break;
@@ -54,6 +55,11 @@ export function parseArgs(argv) {
         const n = Number(need(i, a));
         if (!Number.isInteger(n) || n < 0 || n > 10) throw new Error('--flaky-rerun 要 0～10 的整数');
         o.flakyRerun = n; i++; break;
+      }
+      case '--port-shift': {
+        const n = Number(need(i, a));
+        if (!Number.isInteger(n) || Math.abs(n) > 3000) throw new Error('--port-shift 要 -3000～3000 的整数');
+        o.portShift = n; i++; break;
       }
       case '--dev-port': case '--dev-main-port': {
         const n = Number(need(i, a));
@@ -76,12 +82,14 @@ export const USAGE = `用法:node scripts/acceptance/four-stage-acceptance.mjs [
   --out <目录>            输出目录(缺省 <主工作区>/work/four-stage/final-prep/<时间戳>);--resume 必须给
   --main-ref <引用>       像素比对的 main 基准(缺省 main)
   --flaky-rerun <N>       全部跑完后,每个失败项再重跑至多 N 次定稳定性(过一次就记 flaky)
+  --port-shift <N>        把清单命令里 5xxx 的端口(端口类参数,5600～5999)整体平移 N(笔记本用 5580～5599 段时给 -110,并配 --dev-port 5580 --dev-main-port 5583);8xxx 的文档与素材服务端口不动
   --dev-port <端口>       共享 dev server 的编辑器端口(缺省 5690,另占 +1、+2)
   --dev-main-port <端口>  main 基准树的 dev server(缺省 5693,另占 +1、+2)
   --include-optional      连带跑标了 optional 的补充项(缺省不跑)
   --keep-main-worktree    结束时不删 main 基准 worktree
   --check-coverage        对照 scripts/probes/ 下的文件,列出清单没登记也没写明排除原因的探针后退出
   --dry-run               只打印将要跑哪些项与命令,不执行
+  --authoritative         性能基准机(笔记本)专用:带耗时门槛的项按过 / 不过判,不再记 ref-*;要同时用 sample-cpu-performance.ps1 证明采样期间频率不低于 100%
   --matrix                打印两份任务书的每一条编号验收由哪些项覆盖(R<n> 任务书一、C<n> 任务书二完成条件、U<n> 用户体验验收)后退出
   --json                  --list 时输出 JSON`;
 
@@ -245,7 +253,7 @@ export const stripAnsi = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, '');
  *   - 输出最后一行 JSON 里 fails 非空数组、或 ok === false:fail(退出码给了假的 0 也拦住);
  *   - 带耗时门槛(timing === 'laptop')的项:过记 ref-pass、不过记 ref-fail,在 PC 上只作参考。
  */
-export function judge(item, stepResults) {
+export function judge(item, stepResults, { authoritative = false } = {}) {
   const reasons = [];
   const pass = item.pass || {};
   const okExits = pass.exit === undefined ? [0] : Array.isArray(pass.exit) ? pass.exit : [pass.exit];
@@ -285,7 +293,7 @@ export function judge(item, stepResults) {
   if (!resultLine) resultLine = lastNonEmptyLine(combined);
   const passed = reasons.length === 0;
   let verdict;
-  if (item.timing === 'laptop') verdict = passed ? 'ref-pass' : 'ref-fail';
+  if (item.timing === 'laptop' && !authoritative) verdict = passed ? 'ref-pass' : 'ref-fail';
   else verdict = passed ? 'pass' : 'fail';
   return { verdict, reasons, resultLine: clip(resultLine, 400), metrics };
 }
@@ -424,4 +432,20 @@ export function matrixText(items, groups) {
     lines.push('');
   }
   return lines.join('\n');
+}
+
+/**
+ * 端口平移:命令里「端口类参数」(--port、--base-port、--port-a、--online-base 等)后面紧跟的 5600～5999 的数加 shift。
+ * 8xxx 的文档与素材服务端口、别的参数不动。shift 为 0 原样返回。
+ */
+export function shiftPorts(cmd, shift) {
+  if (!shift) return cmd;
+  return cmd.map((part, i) => {
+    const flag = cmd[i - 1] || '';
+    if (/^--[a-z-]*port(-[a-z])?$/.test(flag) || flag === '--online-base') {
+      const n = Number(part);
+      if (Number.isInteger(n) && n >= 5600 && n <= 5999) return String(n + shift);
+    }
+    return part;
+  });
 }

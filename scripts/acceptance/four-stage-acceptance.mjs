@@ -42,7 +42,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { REPO, killTree, portFree, tripleFree, viteBin, waitHttp, startDevServer, sleep } from '../lib/dev-server.mjs';
 import {
   parseArgs, USAGE, validateManifest, selectItems, planResume, expandCmd, expandPlaceholders, judge, combineAttempts,
-  listText, summaryText, commandText, describeItem, coverageReport, DONE_VERDICTS, matrixText,
+  listText, summaryText, commandText, describeItem, coverageReport, DONE_VERDICTS, matrixText, shiftPorts,
 } from './acceptance-lib.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -437,7 +437,7 @@ async function main() {
     const mk = (spec, i) => {
       const suffix = tag + (stepSpecs.length > 1 ? `-s${i + 1}` : '');
       return runCommand({
-        cmd: expandCmd(spec.cmd, vars), cwd: spec.cwd === 'main' ? vars.main : cwd, env: { ...env, ...Object.fromEntries(Object.entries(spec.env || {}).map(([k, v]) => [k, expandPlaceholders(v, vars)])) },
+        cmd: shiftPorts(expandCmd(spec.cmd, vars), opts.portShift), cwd: spec.cwd === 'main' ? vars.main : cwd, env: { ...env, ...Object.fromEntries(Object.entries(spec.env || {}).map(([k, v]) => [k, expandPlaceholders(v, vars)])) },
         logFile: path.join(out, 'logs', `${item.id}${suffix}.log`), timeoutMin: item.timeoutMin, idleKillMin: item.idleKillMin,
         label: `${item.id} ${item.name}${stepSpecs.length > 1 ? ` 第 ${i + 1} 步` : ''}`,
       });
@@ -459,7 +459,7 @@ async function main() {
       second.idleRetried = true;
       return second;
     }
-    const j = judge(item, steps);
+    const j = judge(item, steps, { authoritative: opts.authoritative });
     return {
       ...rec, cmd: steps.map((s, i) => expandCmd(stepSpecs[i].cmd, vars).join(' ')).join(item.parallel ? ' ‖ ' : ' && '),
       startedAt: new Date(startedMs).toISOString(), finishedAt: nowIso(), durationSec: Math.round((Date.now() - startedMs) / 1000),
