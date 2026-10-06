@@ -102,7 +102,7 @@ async function main() {
     const lines = text.split('\n');
     tail = lines.pop() ?? '';
     for (const line of lines) {
-      if (opts.verbose || /\[queue-node\]|\[render-host\]|error|Error|ERR_/.test(line)) process.stdout.write(`${line}\n`);
+      if (opts.verbose || /\[queue-node\]|\[render-host\]|\[page-gate\]|error|Error|ERR_/.test(line)) process.stdout.write(`${line}\n`);
     }
   };
   child.stdout.on('data', forward);

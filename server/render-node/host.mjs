@@ -60,12 +60,25 @@
  *     `setMembers(projectId, bool)` 随目录的变化更新。
  * 不带 `dynamic` 时这些方法照样在,行为与原来一致(成员表就是构造时那几项)。
  *
+ * # 按项目「搁着不认领」(托管方渲染服务的用户卡隔离,`docs/plan/hosted-render-contract.md` 第 7.5 节)
+ *
+ * 接线时(`connect` 的返回值)可以多给两项:
+ *   - `hold()`:回 true 时这个项目**一个任务也不认领**(连接、报到、看队列照常)。常驻工作进程对内容库里有 `card-source` 的项目
+ *     这样搁着——它不执行任何项目带来的代码,这种项目整个交给隔离工作进程;隔离工作进程在卡片同步对完账之前也这样搁着;
+ *   - `cards()`:回 `{ state: 'unknown' | 'none' | 'some', count }`,原样进诊断。
+ * 给了 `hold` 的项目,诊断里另有 `pending`(此刻看得见、换一个带着卡片代码的工作进程就能认领的任务数——环境指纹、代码版本、
+ * 能力都按本节点算,只是不看卡片代码身份、并当作有 `userCards`)与 `pendingKey`(这批任务 id 的摘要,变了说明来了新任务)。
+ * `setLimit(n)`:运行中把并发压到 n(0～`maxConcurrent`;隔离工作进程在跑时管理进程把常驻的压低,两者合起来不超过上限)。
+ * 都不给时行为与原来逐项相同。
+ *
  * 除 `loadHostConfig` 读一次配置文件外(经 `../auth/shared-config.mjs`),本模块不开计时器、不碰网络:
  * 端点、执行器、产物库都由调用方注入(预渲染进程里是 `vite-plugin-frames.ts` 的 `startHostNode`)。
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { createLocalNode, idleLockTakeover } from './local-node.mjs';
+import { checkClaimable } from './filter.mjs';
 import { normalizeEntry, SHARED_CONFIG_ENV } from '../auth/shared-config.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
 
@@ -86,6 +99,10 @@ export const QUOTA_PAUSE_MS = 10 * 60_000;
  *   - 其余能力位(`streams`、`transcode`)按预渲染管线的实测值,不在这里改。
  * @param {object} base 预渲染管线实测出的能力(`nodeCapabilities`)
  * @param {{ cardSync: boolean }} o 这个工作进程开没开卡片同步
+ *
+ * 图卡如实写:托管方的渲染节点**现在不渲图卡**。预渲染管线里 PC 节点与独立渲染主机报的都是 `graphCards: false`
+ * (`vite-plugin-frames.ts` 的 `nodeCapabilities`),切分时写了 `requires.graphCards: true` 的任务谁都不认领——
+ * 这是现有规则,不是托管方这一侧的限制;隔离工作进程照此报 false。哪天独立渲染主机能渲图卡了,这里跟着改一处即可。
  */
 export function hostedRenderCapabilities(base, { cardSync }) {
   return { ...base, userCards: cardSync === true, graphCards: false };
@@ -204,6 +221,8 @@ export function createRenderHost({
   let paused = false;
   let quotaUntil = 0;
   let nextIndex = 0;
+  /** 运行中的并发上限(`setLimit`),不超过 `cap` */
+  let limit = cap;
 
   const emit = (event) => { try { onEvent(event); } catch { /* 诊断回调出错不影响节点 */ } };
 
@@ -223,6 +242,33 @@ export function createRenderHost({
       for (const run of x.local?.occupying?.() ?? []) if (laneOfX(run) === lane) return false;
     }
     return true;
+  }
+
+  /** 这个项目此刻是不是搁着不认领(见文件头);判不出来按搁着算 */
+  const held = (m) => {
+    if (!m.hold) return false;
+    try { return m.hold() !== false; } catch { return true; }
+  };
+
+  /**
+   * 搁着的项目里,换一个带着卡片代码的工作进程就能认领的任务:按本节点的环境指纹、代码版本、能力过滤,
+   * 只是不看卡片代码身份(`requires.cardSources`)、并当作有 `userCards`。回 `{ pending, pendingKey, claimable }`(`claimable` 是按本节点手里真有的卡片代码、此刻就能认领的数)。
+   */
+  function pendingOf(m) {
+    let tasks = [];
+    try { tasks = m.local?.session.known?.() ?? []; } catch { tasks = []; }
+    const node = { nodeId: m.nodeId, profile: 'host', envFingerprint, codeVersions: [version], capabilities: { ...capabilities, userCards: true }, maxConcurrent: cap };
+    const mine = { ...node, capabilities, ...(cardSourceVersions ? { cardSourceVersions } : {}) };
+    const ids = [];
+    let claimable = 0;
+    for (const task of tasks) {
+      const { cardSources: _ignored, ...requires } = task?.requires ?? {};
+      if (checkClaimable({ ...task, requires }, node).ok) ids.push(String(task.id));
+      // 按本节点手里真有的卡片代码算:此刻就能认领的(隔离工作进程据此判「还有没有活」)
+      if (checkClaimable(task, mine).ok) claimable += 1;
+    }
+    ids.sort();
+    return { pending: ids.length, pendingKey: ids.length ? createHash('sha256').update(ids.join('\n')).digest('hex').slice(0, 16) : '', claimable };
   }
 
   /** 全部节点的持有数 + 在飞的认领数 */
@@ -250,6 +296,8 @@ export function createRenderHost({
       stats: emptyStats(),
       seen: new Set(),
       close: typeof wired.close === 'function' ? wired.close : null,
+      hold: typeof wired.hold === 'function' ? wired.hold : null,
+      cards: typeof wired.cards === 'function' ? wired.cards : null,
       prefer: entry.members === true,
       draining: false,
       removed: false,
@@ -314,7 +362,7 @@ export function createRenderHost({
       now,
       ...(random ? { random } : {}),
       ...(constants ? { constants } : {}),
-      isIdle: () => !paused && now() >= quotaUntil && !m.draining && busy() < cap,
+      isIdle: () => !paused && now() >= quotaUntil && !m.draining && busy() < limit && !held(m),
       canClaim: (task) => laneFree(m, task),
       maxConcurrent: cap,
       codeVersion: version,
@@ -411,6 +459,9 @@ export function createRenderHost({
     /** 背压:暂停认领新任务,手里的照做 */
     setPaused(value) { paused = value === true; },
     get paused() { return paused; },
+    /** 运行中把并发压到 n(0～maxConcurrent);不是这个范围里的整数就恢复成 maxConcurrent。手里已有的照做 */
+    setLimit(n) { limit = Number.isInteger(n) && n >= 0 && n <= cap ? n : cap; },
+    get limit() { return limit; },
     /** 因产物容量上限暂停认领到什么时刻(毫秒时间戳);没在暂停回 null */
     get quotaPausedUntil() { return now() < quotaUntil ? quotaUntil : null; },
     /** 现有项目的 projectId(含排空中的) */
@@ -463,6 +514,8 @@ export function createRenderHost({
         watching: m.local?.session.watching?.() ?? [],
         held: m.local ? m.local.session.held().map(({ id }) => id) : [],
         running: m.local ? m.local.running() : [],
+        ...(m.hold ? { hold: held(m), ...pendingOf(m) } : {}),
+        ...(m.cards ? { cards: (() => { try { return m.cards(); } catch { return { state: 'unknown', count: 0 }; } })() } : {}),
         ...(typeof m.endpoint.stats === 'function' ? { transport: m.endpoint.stats() } : {}),
       }));
     },
@@ -554,6 +607,8 @@ export function reconcileHostProjects(host, listing, entryOf) {
   const want = new Map((listing?.projects ?? []).map((p) => [p.projectId, p]));
   const out = { added: [], removed: [], drained: [] };
   host.setPaused(listing?.paused === true);
+  // 清单没给 `limit`(旧的管理进程、测试替身)就是不压:恢复成 maxConcurrent
+  host.setLimit?.(Number.isInteger(listing?.limit) ? listing.limit : null);
   for (const projectId of host.projects()) {
     if (want.has(projectId)) continue;
     host.remove(projectId, { reason: 'not-listed' });

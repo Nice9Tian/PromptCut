@@ -65,6 +65,8 @@ export function pageGate({ url, method, headers, prerender, allow = PAGE_API_ALL
     if (!same) return { browser: true, allow: false, reason: 'cross-origin' };
   }
   const pathname = apiPath(url);
+  // 开发服务器自带的「在编辑器里打开」：会在这台机器上起一个进程，渲染页用不着
+  if (pathname.startsWith('/__open-in-editor') || pathname.startsWith('/__inspect')) return { browser: true, allow: false, reason: 'dev-tool' };
   if (!pathname.startsWith('/api/')) return { browser: true, allow: true };
   const m = String(method || 'GET').toUpperCase();
   if (isAssetServicePath(url) && (m === 'GET' || m === 'HEAD')) return { browser: true, allow: true };

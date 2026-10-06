@@ -79,36 +79,56 @@ function readJson(req, max = 4 * 1024 * 1024) {
  * @param {(projectId: string) => Promise<{ ticket: string }>} o.ticket
  * @param {(body: object) => void} o.report
  * @param {() => object} o.status
+ * @param {() => { name: string, key: string, listing: () => object, report: (body: object) => void }[]} [o.clients] 另外的工作进程（隔离工作进程）
  * @param {(event: string, fields?: object) => void} [o.log]
  */
-export function createBroker({ key, listing, ticket, report, status, log = () => {} }) {
-  const digest = sha(key);
-  const authed = (req) => {
+export function createBroker({ key, listing, ticket, report, status, clients = null, log = () => {} }) {
+  /*
+   * 口令按工作进程分（契约第 7.5 节）：常驻工作进程一把（`key` / `listing` / `report`），隔离工作进程一把（`clients()` 每次请求现取——
+   * 它的口令每一轮都换，没在跑时不在表里）。哪把口令进来就只看得到那个工作进程自己的清单、只要得到清单里那些项目的票据、
+   * 交的诊断也只记在它名下：隔离工作进程即使整个被项目带来的代码拿下，凭它的口令也要不到别的项目的票据、看不到别的项目的 id。
+   */
+  const single = typeof key === 'string' && key ? { name: 'resident', key, listing, report } : null;
+  /** 这条请求是哪个工作进程发的；口令对不上回 null。逐个比完（不提前返回） */
+  const clientOf = (req) => {
     const m = /^Bearer[ \t]+(\S+)$/i.exec(String(req.headers.authorization ?? '').trim());
-    return !!m && timingSafeEqual(sha(m[1]), digest);
+    if (!m) return null;
+    const given = sha(m[1]);
+    let hit = null;
+    for (const c of [...(single ? [single] : []), ...((typeof clients === 'function' ? clients() : null) ?? [])]) {
+      if (c && typeof c.key === 'string' && c.key && timingSafeEqual(given, sha(c.key)) && !hit) hit = c;
+    }
+    return hit;
   };
+  /** 浏览器发来的请求（带 `Sec-Fetch-Site` 或 `Origin`，页面脚本去不掉）：这个口不是给页面用的，连 `/status` 也不答 */
+  const fromBrowser = (req) => !!req.headers['sec-fetch-site'] || !!req.headers.origin;
 
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://broker.local');
+      if (fromBrowser(req)) { req.resume(); log('broker.browser-refused', { path: url.pathname.slice(0, 80) }); return send(res, 403, { ok: false, error: 'forbidden' }); }
       if (req.method === 'GET' && url.pathname === '/status') return send(res, 200, { ok: true, ...status() });
-      if (!authed(req)) { req.resume(); return send(res, 401, { ok: false, error: 'unauthorized' }); }
-      if (req.method === 'GET' && url.pathname === '/projects') return send(res, 200, { ok: true, ...listing() });
+      const client = clientOf(req);
+      if (!client) { req.resume(); return send(res, 401, { ok: false, error: 'unauthorized' }); }
+      if (req.method === 'GET' && url.pathname === '/projects') return send(res, 200, { ok: true, ...client.listing() });
       if (req.method === 'POST' && url.pathname === '/ticket') {
         const body = await readJson(req);
         const projectId = body?.projectId;
-        if (typeof projectId !== 'string' || !listing().projects.some((p) => p.projectId === projectId)) return send(res, 403, { ok: false, error: 'not-listed' });
+        if (typeof projectId !== 'string' || !client.listing().projects.some((p) => p.projectId === projectId)) {
+          log('broker.ticket-not-listed', { client: client.name });
+          return send(res, 403, { ok: false, error: 'not-listed' });
+        }
         try {
-          const out = await ticket(projectId);
+          const out = await ticket(projectId, client.name);
           return send(res, 200, { ok: true, ticket: out.ticket });
         } catch (err) {
-          log('broker.ticket-refused', { projectId, reason: String(err?.code ?? 'error') });
+          log('broker.ticket-refused', { projectId, client: client.name, reason: String(err?.code ?? 'error') });
           return send(res, 503, { ok: false, error: String(err?.code ?? 'ticket-failed') });
         }
       }
       if (req.method === 'POST' && url.pathname === '/report') {
         const body = await readJson(req);
-        if (body && typeof body === 'object') report(body);
+        if (body && typeof body === 'object') client.report(body);
         return send(res, 200, { ok: true });
       }
       req.resume();

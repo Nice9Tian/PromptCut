@@ -22,7 +22,11 @@
  *   PROMPTCUT_RENDER_MEM_LOW          背压的可用内存线，本机可用内存低于它就暂停认领，缺省 2G
  *   PROMPTCUT_RENDER_USER             工作进程用的系统用户（只在有 systemd 时经 --uid 生效）；空表示与管理进程同一用户
  *   PROMPTCUT_RENDER_CGROUP           auto（缺省：有 systemd 与 cgroup v2 就用）| off
- *   PROMPTCUT_RENDER_USER_CARDS       isolated | off（第 5 批才实现隔离工作进程；现在两种取值下常驻工作进程都不同步卡）
+ *   PROMPTCUT_RENDER_USER_CARDS       isolated（缺省）| off。isolated：内容库里有卡片源码的项目由按项目隔离的工作进程做（契约第 7.5 节）；
+ *                                     off：不起隔离工作进程，含用户卡的任务渲染服务不认领（常驻工作进程两种取值下都不同步卡）
+ *   PROMPTCUT_RENDER_ISO_PORT         隔离工作进程的端口（另占 +1、+2），缺省 PROMPTCUT_RENDER_PORT + 10。它的数据目录是 <PROMPTCUT_RENDER_DATA>/iso
+ *   PROMPTCUT_RENDER_ISO_IDLE_MS / _ISO_SLICE_MS   测试与演练用：隔离工作进程闲置多久结束（缺省 60000）、另有项目在等时一个项目最多连续做多久（缺省 300000）
+ *   PROMPTCUT_PAGE_GATE               log：工作进程的页面请求闸与出口代理只记不拦（排查用；缺省 enforce）。不是 PROMPTCUT_RENDER_ 开头，原样传给工作进程
  *   PROMPTCUT_RENDER_EDITOR_DIR       在线页面构建所在目录（比代码版本用），缺省 /opt/promptcut-hosted/editor
  *   PROMPTCUT_RENDER_EXPECT_CODE_VERSION   直接给应该一致的代码版本（取不到在线页面构建时用）
  *   PROMPTCUT_RENDER_AGENT_STATUS_URL      云端 Agent 服务的诊断口（回 { codeVersion }）；没配就不比
@@ -45,6 +49,8 @@ import { readServiceKeyFile } from '../auth/service-identity.mjs';
 import { createDirectory } from './directory.mjs';
 import { createBroker, selectProjects } from './broker.mjs';
 import { createWorker } from './worker.mjs';
+import { createIsolation, isolationCandidates, isoNodeIdFor, wipeDir, leftoverCount, ISOLATION_DEFAULTS } from './isolation.mjs';
+import { HOSTED_WORKER_ENV } from './source-gate.mjs';
 import { runSelfcheck, SELFCHECK_EXIT } from './selfcheck.mjs';
 import {
   LIMIT_DEFAULTS, cgroupSupport, workerCommand, memAvailable, treeRss, createBackpressure, createOomTracker, parseBytes,
@@ -80,6 +86,10 @@ export function renderServiceConfig(env = process.env) {
     viteCacheDir: path.join(path.resolve(env.PROMPTCUT_RENDER_DATA || '/var/lib/promptcut/render'), 'vite-cache'),
     reportTimeoutMs: intOf(env.PROMPTCUT_RENDER_REPORT_TIMEOUT_MS, 180_000, 5000, 3_600_000),
     port: intOf(env.PROMPTCUT_RENDER_PORT, 5400, 1, 65533),
+    isoPort: intOf(env.PROMPTCUT_RENDER_ISO_PORT, Math.min(65533, intOf(env.PROMPTCUT_RENDER_PORT, 5400, 1, 65533) + 10), 1, 65533),
+    isoDataDir: path.join(path.resolve(env.PROMPTCUT_RENDER_DATA || '/var/lib/promptcut/render'), 'iso'),
+    isoIdleMs: intOf(env.PROMPTCUT_RENDER_ISO_IDLE_MS, ISOLATION_DEFAULTS.IDLE_MS, 1000, 3_600_000),
+    isoSliceMs: intOf(env.PROMPTCUT_RENDER_ISO_SLICE_MS, ISOLATION_DEFAULTS.SLICE_MS, 1000, 86_400_000),
     statusPort: intOf(env.PROMPTCUT_RENDER_STATUS_PORT, 5399, 0, 65535),
     maxConcurrent: intOf(env.PROMPTCUT_RENDER_MAX_CONCURRENT, LIMIT_DEFAULTS.maxConcurrent, 1, 4),
     maxProjects: intOf(env.PROMPTCUT_RENDER_MAX_PROJECTS, LIMIT_DEFAULTS.maxProjects, 1, 1000),
@@ -103,6 +113,20 @@ export function renderServiceConfig(env = process.env) {
     sampleMs: intOf(env.PROMPTCUT_RENDER_SAMPLE_MS, LIMIT_DEFAULTS.sampleMs, 200, 600_000),
     skipChecks: String(env.PROMPTCUT_RENDER_SKIP_CHECKS || '').split(',').map((s) => s.trim()).filter(Boolean),
   };
+}
+
+/**
+ * 交给工作进程的环境里不带的变量：管理进程自己的配置（`PROMPTCUT_RENDER_*`）、集群令牌、共享项目配置、上一层给的工作进程种类，
+ * 以及**名字像秘密的**（令牌、密钥、口令、凭证、cookie）。页面里的卡片代码本来就读不到进程的环境变量；这一条是纵深——
+ * 工作进程（与它起的 Vite、Chrome）的环境里不该躺着节点上别的服务的凭证。按名字判，不看值。
+ */
+const SECRET_NAME_RE = /(^|_)(TOKEN|TOKENS|SECRET|SECRETS|KEY|KEYS|APIKEY|PASSWORD|PASSWD|PASS|CREDENTIAL|CREDENTIALS|COOKIE|COOKIES)(_|$)/i;
+export function scrubWorkerEnv(env) {
+  const out = { ...env };
+  for (const k of Object.keys(out)) {
+    if (/^PROMPTCUT_RENDER_/.test(k) || /^PROMPTCUT_HOSTED_/.test(k) || k === 'PROMPTCUT_CLUSTER_TOKEN' || k === 'PROMPTCUT_SHARED_CONFIG' || k === 'PROMPTCUT_CARD_SYNC' || k === 'PROMPTCUT_CARD_OVERRIDES' || SECRET_NAME_RE.test(k)) delete out[k];
+  }
+  return out;
 }
 
 /**
@@ -192,13 +216,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     ...(skip.has('ffmpeg') ? { ffmpeg: () => ({ ok: true, h264: true, version: 'skipped' }) } : {}),
     ...(config.cgroup === 'off' ? { cgroup: () => ({ ok: false, reason: 'disabled' }) } : {}),
   });
-  for (const e of check.errors) {
-    const line = `${JSON.stringify({ t: new Date().toISOString(), event: 'selfcheck.error', ...e })}\n`;
-    process.stdout.write(line);
-    process.stderr.write(line);
-  }
+  // 每项失败只记一行，写 stderr（PM2 的错误日志、部署脚本的输出里都看得到）；stdout 的 `selfcheck` 汇总里有全部 reason 与说明。
+  // 原来 stdout、stderr 各写一遍，两路合在一起看（容器、`2>&1`）就是同一条记两遍
+  for (const e of check.errors) process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), event: 'selfcheck.error', ...e })}\n`);
   for (const w of check.warnings) log('selfcheck.warn', w);
-  log('selfcheck', { ok: check.ok, errors: check.errors.map((e) => e.reason), warnings: check.warnings.map((w) => w.reason), ...check.info });
+  log('selfcheck', { ok: check.ok, errors: check.errors.map((e) => e.reason), ...(check.errors.length ? { errorDetails: check.errors } : {}), warnings: check.warnings.map((w) => w.reason), ...check.info });
   if (!check.ok) return SELFCHECK_EXIT;
   if (argv.includes('--check')) return 0;
 
@@ -228,17 +250,21 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     process.stderr.write(out);
   };
   const brokerKey = randomBytes(32).toString('base64url');
+  let stopping = false;
   let report = null; // 工作进程最近一次交来的诊断
   let reportAt = 0;
   let brokerPort = config.statusPort;
+  const isoEnabled = config.userCards === 'isolated';
   const workerEnv = () => {
-    const e = { ...env };
-    for (const k of Object.keys(e)) if (/^PROMPTCUT_RENDER_/.test(k) || k === 'PROMPTCUT_CLUSTER_TOKEN' || k === 'PROMPTCUT_SHARED_CONFIG') delete e[k];
+    const e = scrubWorkerEnv(env);
     Object.assign(e, {
       PROMPTCUT_RENDER_BROKER: `http://127.0.0.1:${brokerPort}`,
       PROMPTCUT_RENDER_BROKER_KEY: brokerKey,
+      [HOSTED_WORKER_ENV]: 'resident',
       // 常驻工作进程绝不同步任何项目的卡（契约第 7.5 节）：它不执行任何项目带来的代码
       PROMPTCUT_CARD_SYNC: '0',
+      // 内容库里有卡片源码的项目它连着但不认领，报给管理进程交给隔离工作进程；off 时照旧（它认领得了的照认领）
+      ...(isoEnabled ? { PROMPTCUT_HOSTED_HOLD_CARDS: '1' } : {}),
       // Vite 的依赖预构建缓存放数据目录下（检出目录对工作进程的用户可能只读）
       PROMPTCUT_VITE_CACHE_DIR: config.viteCacheDir,
     });
@@ -278,22 +304,137 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const heldByProject = () => Object.fromEntries((report?.queue?.nodes ?? []).map((n) => [n.projectId, (n.held?.length ?? 0) + (n.running?.length ?? 0)]));
   const listing = () => {
     const picked = selectProjects({ directory: directory.list(), held: heldByProject(), maxProjects: config.maxProjects, instanceId: key.instanceId });
-    return { docUrl: config.docUrl, paused: backpressure.paused, projects: picked.projects, waiting: picked.waiting };
+    // 隔离工作进程在跑时占一个并发名额：常驻的压到「总数 - 1」，两者合起来不超过第 4 节的并发上限
+    return { docUrl: config.docUrl, paused: backpressure.paused, limit: isolation?.active ? Math.max(0, concurrency - 1) : concurrency, projects: picked.projects, waiting: picked.waiting };
   };
+
+  // ---------- 隔离工作进程（契约第 7.5 节，方案 A）
+  /*
+   * 内容库里有卡片源码的项目，常驻工作进程连着但不认领（它不执行任何项目带来的代码），由这里起一个**只做这一个项目**的工作进程：
+   *   - 同一时刻最多一个；口令每一轮现生成，代理口凭它只给这一个项目的清单与票据（`broker.mjs`）；
+   *   - 自己的数据目录（`<数据目录>/iso`）与端口，开卡片同步，报 `userCards: true`，并发 1；
+   *   - 闲置 `isoIdleMs`（60 s）结束；几个项目在等时每个最多 `isoSliceMs`（5 分钟）一换；
+   *   - **每一轮前后都把数据目录整个清空**：装进来的卡（改动层）、帧库、临时目录、Chrome 的用户数据目录、Vite 的依赖缓存全在里面；
+   *   - 结束时带走整棵进程树（`worker.mjs`）。
+   * 检出目录与常驻工作进程共用、不另拷：卡片同步只写数据目录下的改动层，Vite 的缓存、导出目录、临时目录也都指到了数据目录，
+   * 检出目录里一个文件都不写；部署时它属 root、工作进程的用户只读。另拷一份只多出每一轮几秒的拷贝与一份磁盘，挡不住别的东西
+   * （Windows 上还不能给副本链 node_modules）。`isolation.mjs` 的 `prepareCheckout` 留着没用。
+   */
+  let isoKey = null;
+  let isoReport = null;
+  let isoReportAt = 0;
+  let isoProc = null;
+  const isoLog = (event, fields = {}) => log(event, { worker: 'isolated', ...fields });
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  /** 清空隔离工作进程的数据目录；刚结束的进程可能还握着文件（Windows），重试几次。回清完后剩下的项数（0 = 干净） */
+  async function wipeIso() {
+    let last = null;
+    for (let i = 0; i < 20; i += 1) {
+      try {
+        wipeDir(config.isoDataDir);
+        // 管理进程以 root 跑、工作进程以服务用户跑时：目录属主跟数据目录走，工作进程才写得了
+        if (process.platform !== 'win32') { try { const st = fs.statSync(config.dataDir); fs.chownSync(config.isoDataDir, st.uid, st.gid); } catch { /* 不是 root：本来就是同一个用户 */ } }
+        return leftoverCount(config.isoDataDir);
+      } catch (err) {
+        last = err;
+        if (err?.code === 'iso-not-ours') throw err;
+        await sleep(500);
+      }
+    }
+    throw last ?? new Error('清不掉隔离工作进程的数据目录');
+  }
+  const isolation = !isoEnabled ? null : createIsolation({
+    nodeIdOf: (projectId) => isoNodeIdFor(key.instanceId, projectId),
+    idleMs: config.isoIdleMs,
+    sliceMs: config.isoSliceMs,
+    log: isoLog,
+    runner: {
+      async prepare() {
+        isoReport = null;
+        isoReportAt = 0;
+        isoKey = randomBytes(32).toString('base64url');
+        const left = await wipeIso();
+        if (left !== 0) throw new Error(`数据目录没清干净（还剩 ${left} 项）`);
+      },
+      start(projectId) {
+        const myKey = isoKey;
+        isoProc = createWorker({
+          restart: false,
+          log: isoLog,
+          treeFile: path.join(config.dataDir, 'iso-worker-tree.json'),
+          command() {
+            const args = [path.join(ROOT, 'scripts', 'render-host.mjs'), '--port', String(config.isoPort), '--data', config.isoDataDir, '--max-concurrent', '1',
+              ...(config.verbose ? ['--verbose'] : [])];
+            const built = workerCommand({
+              node: process.execPath, args, support, user: config.user,
+              limits: { memoryMax: config.memoryMax, memoryHigh: config.memoryHigh, cpuQuota: config.cpuQuota },
+            });
+            const e = scrubWorkerEnv(env);
+            Object.assign(e, {
+              PROMPTCUT_RENDER_BROKER: `http://127.0.0.1:${brokerPort}`,
+              PROMPTCUT_RENDER_BROKER_KEY: myKey,
+              [HOSTED_WORKER_ENV]: 'isolated',
+              PROMPTCUT_VITE_CACHE_DIR: path.join(config.isoDataDir, 'vite-cache'),
+            });
+            isoLog('worker.command', { mode: built.mode, projectId, port: config.isoPort });
+            return { cmd: built.cmd, args: built.args, env: e, cwd: ROOT };
+          },
+          onLine(line) {
+            if (!line.trim()) return;
+            process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event: 'worker.line', worker: 'isolated', line: line.slice(0, 2000) })}\n`);
+            noteSkip(line, 'isolated');
+          },
+        });
+        isoProc.start();
+      },
+      async stop() {
+        const p = isoProc;
+        // 口令先作废：这一轮的工作进程从此要不到票据、交不了诊断
+        isoKey = null;
+        if (p) await p.stop();
+      },
+      async cleanup() {
+        try { isoProc?.killSync(); } catch { /* 已经没了 */ }
+        isoProc = null;
+        isoReport = null;
+        const left = await wipeIso();
+        if (left !== 0) throw new Error(`数据目录没清干净（还剩 ${left} 项）`);
+      },
+      exited: () => !isoProc || !isoProc.running,
+    },
+  });
+  const isoListing = () => ({ docUrl: config.docUrl, paused: backpressure.paused, limit: 1, projects: isolation?.listing() ?? [], waiting: [] });
+  function isoTick() {
+    if (!isolation || stopping) return;
+    const dir = directory.list();
+    // 背压暂停时不新起（已经在跑的照旧，它自己不认领新的）
+    const candidates = backpressure.paused && !isolation.active ? [] : isolationCandidates({ directory: dir, residentNodes: report?.queue?.nodes ?? [] });
+    isolation.tick({
+      candidates,
+      eligible: (projectId) => dir.some((p) => p.projectId === projectId && p.enabled && p.active),
+      report: isoReport ? { at: isoReportAt, queue: isoReport.queue } : null,
+    });
+  }
 
   async function sample() {
     const healthMs = await timedHealth(config.healthUrl);
-    const workerRss = worker.pid ? treeRss(worker.pid) : null;
-    readings = { memAvailable: memAvailable(), healthMs, load1: os.loadavg()[0], workerRss, at: Date.now() };
+    const residentRss = worker.pid ? treeRss(worker.pid) : null;
+    const isoRss = isoProc?.pid ? treeRss(isoProc.pid) : null;
+    // 内存上限管的是两个工作进程合起来的（契约第 4 节）
+    const workerRss = residentRss === null && isoRss === null ? null : (residentRss ?? 0) + (isoRss ?? 0);
+    readings = { memAvailable: memAvailable(), healthMs, load1: os.loadavg()[0], workerRss, isoRss, at: Date.now() };
     const before = backpressure.paused;
     const state = backpressure.sample(readings);
     if (state.paused !== before) log(state.paused ? 'render.backpressure' : 'render.backpressure-clear', { reasons: state.reasons, ...readings });
     // 内存看护：没有 cgroup 时它是唯一的硬上限
-    if (workerRss !== null && memoryMaxBytes !== null && workerRss > memoryMaxBytes && worker.running) {
+    if (workerRss !== null && memoryMaxBytes !== null && workerRss > memoryMaxBytes && (worker.running || isolation?.active)) {
       const o = oom.note();
-      log('render.memory-exceeded', { workerRss, max: memoryMaxBytes, count: o.count });
+      // 合起来超限：隔离工作进程在跑就先结束它（跑的是项目带来的代码），常驻的留着；只有常驻的在跑才结束常驻的
+      const victim = isolation?.active && isoRss !== null ? 'isolated' : 'resident';
+      log('render.memory-exceeded', { workerRss, isoRss, max: memoryMaxBytes, count: o.count, victim });
       if (o.degrade && concurrency !== 1) { concurrency = 1; log('render.degraded', { concurrency, reason: 'oom' }); }
-      worker.kill('oom');
+      if (victim === 'isolated') void isolation.stop('oom');
+      else worker.kill('oom');
     }
     // 起来了却不交诊断：结束重起
     const ws = worker.status();
@@ -336,6 +477,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const broker = createBroker({
     key: brokerKey,
     listing,
+    // 隔离工作进程：口令每一轮都换，没在跑时不在表里；凭它只看得到、只要得到它那一个项目
+    clients: () => (isoKey && isolation?.active ? [{ name: 'isolated', key: isoKey, listing: isoListing, report(body) { isoReport = body; isoReportAt = Date.now(); } }] : []),
     ticket: (projectId) => directory.ticket(projectId),
     report(body) { report = body; reportAt = Date.now(); },
     log,
@@ -347,6 +490,14 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         projects: l.projects, waiting: l.waiting,
         worker: { ...worker.status(), concurrency, mode: support.ok ? 'cgroup' : 'in-process', reportAgeMs: reportAt ? Date.now() - reportAt : null },
         queue: report?.queue ?? null,
+        userCards: config.userCards,
+        isolation: !isolation ? { enabled: false } : {
+          enabled: true, port: config.isoPort, ...isolation.status(),
+          worker: isoProc ? isoProc.status() : null,
+          reportAgeMs: isoReportAt ? Date.now() - isoReportAt : null,
+          queue: isoReport?.queue ?? null,
+          dataLeft: isolation.active ? null : leftoverCount(config.isoDataDir),
+        },
         limits: { maxConcurrent: config.maxConcurrent, maxProjects: config.maxProjects, memoryMax: config.memoryMax, memoryHigh: config.memoryHigh, cpuQuota: config.cpuQuota, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}` },
         readings,
         backpressure: { paused: backpressure.paused, reasons: backpressure.reasons },
@@ -369,17 +520,22 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
   log('listen', { role: 'hosted-render', statusPort: brokerPort, workerPort: config.port, docUrl: config.docUrl, service: key.service, kid: key.kid, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}`, node: process.version });
 
+  // 上一次没来得及清的（管理进程自己被杀）：起任何工作进程之前先把隔离工作进程的数据目录清空
+  if (isolation) { try { await wipeIso(); } catch (err) { log('isolation.cleanup-failed', { message: String(err?.message ?? err), at: 'startup' }); } }
   directory.start();
   worker.start();
+  const isoTimer = setInterval(() => { try { isoTick(); } catch (err) { log('isolation.error', { message: String(err?.message ?? err) }); } }, 1000);
+  isoTimer.unref?.();
   const sampler = setInterval(() => { void sample().catch((err) => log('render.sample-error', { message: String(err?.message ?? err) })); }, config.sampleMs);
 
   // ---------- 退出
-  let stopping = false;
   const stop = async (signal) => {
     if (stopping) return;
     stopping = true;
     log('stop', { signal });
     clearInterval(sampler);
+    clearInterval(isoTimer);
+    if (isolation) { try { await isolation.stop('shutdown'); } catch { /* 下面的 exit 钩子再兜一层 */ } }
     await worker.stop();
     directory.stop();
     await broker.close();
@@ -390,7 +546,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
   process.on('message', (m) => { if (m?.type === 'shutdown') void stop('ipc'); });
   // 不管怎么退出（包括没走到 stop 的异常退出）：最后一步把工作进程整棵树带走，不留占着端口的孤儿
-  process.on('exit', () => { try { worker.killSync(); } catch { /* 已经没了 */ } });
+  process.on('exit', () => { try { worker.killSync(); } catch { /* 已经没了 */ } try { isoProc?.killSync(); } catch { /* 已经没了 */ } });
   return null;
 }
 

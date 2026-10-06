@@ -134,7 +134,8 @@ export function createIsolation({
       try { await runner.stop(reason); } catch (err) { log('isolation.stop-error', { message: String(err?.message ?? err) }); }
       let cleaned = true;
       try { await runner.cleanup(mine.projectId); } catch (err) { cleaned = false; log('isolation.cleanup-failed', { projectId: mine.projectId, message: String(err?.message ?? err) }); }
-      if (reason === 'idle' && !mine.worked) skip.set(mine.projectId, { key: mine.pendingKey, until: now() + retryIdleMs });
+      // 什么都没认领到、起不来、内存超限被结束：同一批任务先不再为它起（免得每一拍都重来）
+      if ((reason === 'idle' && !mine.worked) || reason === 'oom' || reason === 'start-timeout') skip.set(mine.projectId, { key: mine.pendingKey, until: now() + retryIdleMs });
       lastServed = mine.projectId;
       lastRun = { projectId: mine.projectId, reason, worked: mine.worked, cleaned, ms: now() - mine.startedAt, at: now() };
       history.push(lastRun);
