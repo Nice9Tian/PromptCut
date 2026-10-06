@@ -564,5 +564,15 @@ if (typeof window !== "undefined") {
   window.__pcIo = { importVideoFiles, importProjectFile, importSrtFile, parseSrt, exportProjectJson, exportVideo, setMediaTranscript: (mediaId: string, transcript: any) => actions.setMediaTranscript(mediaId, transcript) };
   // c10a 探针(`scripts/probes/lowmem-export-probe.mjs`):在当前页面上跑一次浏览器逐帧导出,回产物字节(base64)与统计。
   // 不经「另存为」、不下载;`originals: false` 时重卡照活渲(桌面运行环境没有渲染节点的层表)
-  window.__pcIo.exportVideoBrowser = async (o: { maxFrames?: number; originals?: boolean } = {}) => (await import("../../export/onlineExport")).exportVideoBrowserProbe(o);
+  window.__pcIo.exportVideoBrowser = async (o: { maxFrames?: number; originals?: boolean; sounds?: boolean } = {}) => (await import("../../export/onlineExport")).exportVideoBrowserProbe(o);
+  // 声音探针(`scripts/probes/sound-ab-probe.mjs`):在线构建里没有 `/src/…` 可引,生成、判定、导出前补齐声音从这里拿
+  Object.assign(window.__pcIo, { cancelExport, fetchExportFile });
+  window.__pcIo.sound = async () => {
+    const [effects, cards, exportSounds, judge, upload] = await Promise.all([import("./soundGeneration"), import("./cardAudioGeneration"), import("./exportSounds"), import("./onlineSoundJudge"), import("./generatedAudioUpload")]);
+    return {
+      startSoundGeneration: effects.startSoundGeneration, waitSoundGeneration: effects.waitSoundGeneration,
+      generateCardAudio: cards.generateCardAudio, listExportSoundNeeds: exportSounds.listExportSoundNeeds,
+      decideClipSound: judge.decideClipSound, hasGeneratedAudio: upload.hasGeneratedAudio,
+    };
+  };
 }

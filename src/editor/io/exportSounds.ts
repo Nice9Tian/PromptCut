@@ -74,7 +74,7 @@ export class ExportSoundError extends Error {
 }
 
 const cancelled = () => Object.assign(new Error("已取消导出"), { cancelled: true });
-const labelOf = (clip: TrackClip) => String(clip.label || clip.cardId || clip.id);
+const labelOf = (clip: TrackClip) => String(clip.label || getCard(clip.cardId)?.name || syncedUserCards().get(clip.cardId)?.name || clip.cardId || clip.id);
 
 /**
  * 这次导出要先生成哪些声音。口径与混音计划相同(`src/kernel/audioPlan.mjs`):隐藏、静音的序列和静音的片段不出声,不用生成。
