@@ -79,6 +79,31 @@ test('Codex home is created and inherited PowerShell module paths are removed', 
   assert.ok(env.Path.endsWith('custom'));
 });
 
+// 桌面外壳为了不让 Vite 自己开浏览器,给后台进程设了 BROWSER=none;这个值传给登录命令,
+// Claude Code 就把 "none" 当成浏览器程序去找,找不到,登录页不弹(2026-10-06 用户真机)。
+test('the BROWSER=none marker set by the desktop shell is not passed on to a CLI, a real browser choice is', () => {
+  for (const provider of ['claude', 'codex', 'agy']) {
+    assert.equal(cliEnv(provider, { BROWSER: 'none', Path: 'custom' }).BROWSER, undefined, provider);
+    assert.equal(cliEnv(provider, { Browser: ' None ', Path: 'custom' }).Browser, undefined, provider);
+  }
+  const firefox = String.raw`C:\Program Files\Mozilla Firefox\firefox.exe`;
+  assert.equal(cliEnv('claude', { BROWSER: firefox, Path: 'custom' }).BROWSER, firefox);
+  const base = { BROWSER: 'none', Path: 'custom' };
+  cliEnv('claude', base);
+  assert.equal(base.BROWSER, 'none', 'the environment object passed in is left alone');
+});
+
+// Claude Code 2.1.x 把登录页从 claude.ai 换到了 claude.com/cai/oauth/authorize。
+test('Claude login link on claude.com is recognised, look-alike hosts are not', () => {
+  const link = 'https://claude.com/cai/oauth/authorize?code=true&client_id=x&state=y';
+  const out = ['Opening browser to sign in…', `If the browser did not open, visit: ${link}`, 'Paste code here if prompted > '].join('\n');
+  assert.equal(authUrlFrom(out, 'claude'), link);
+  assert.equal(authUrlFrom('visit: https://claude.ai/oauth/authorize?x=1', 'claude'), 'https://claude.ai/oauth/authorize?x=1');
+  assert.equal(authUrlFrom('https://claude.com.attacker.test/cai/oauth/authorize', 'claude'), undefined);
+  assert.equal(authUrlFrom('https://evil-claude.com/cai/oauth/authorize', 'claude'), undefined);
+  assert.equal(authUrlFrom(link, 'codex'), undefined);
+});
+
 test('deduplicates clicks and tracks providers independently', async () => {
   const { service, calls } = fakeService();
   const first = service.start('codex', 'install');
