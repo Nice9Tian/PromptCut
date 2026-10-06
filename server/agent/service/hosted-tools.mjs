@@ -278,6 +278,20 @@ export function createHostedTools({
       });
     }
 
+    /**
+     * 动手之前先确认这位成员写得进素材(只读成员要不到读写的素材票据):下载、合成(要花钱)都排在它后面,
+     * 不让只读成员的对话白白占带宽、白白花托管方的钱。
+     */
+    async function ensureCanWrite() {
+      if (!assetBase) throw new HostedToolError('这台云节点没有配置素材服务的地址,云端 Agent 暂时不能把文件入库。请联系托管方。', { code: 'no-asset-service' });
+      try {
+        await docRequest({ type: 'auth.ticket', kind: 'asset', access: 'rw' }, ['auth.ticket.ok']);
+      } catch (err) {
+        if (err?.code === 'forbidden') throw new HostedToolError('你在这个项目里只有只读权限,云端 Agent 不能替你把素材写进项目。', { code: 'forbidden' });
+        throw err;
+      }
+    }
+
     /** 把工作区里的一个文件送进素材服务(`media` 命名空间);回 `{ hash, ext, bytes }` */
     async function ingest(rel) {
       const ws = workspace();
@@ -402,6 +416,7 @@ export function createHostedTools({
     }
 
     async function importMedia(args, track) {
+      await ensureCanWrite();
       const got = await materialize(args?.url, typeof args?.name === 'string' ? args.name : '');
       const kind = kindOfName(got.rel) ?? kindOfName(got.name);
       if (!kind) {
@@ -452,6 +467,7 @@ export function createHostedTools({
       if (!cfg?.apiKey || !cfg?.effectiveBaseUrl) {
         throw new HostedToolError('托管方还没有为云端 Agent 配置配音服务。请告诉用户联系托管方,或在电脑上的 PromptCut 里配音。', { code: 'no-voice-config' });
       }
+      await ensureCanWrite();
       const { generateVoice } = await import(new URL('../../voice/generate.mjs', import.meta.url).href);
       const ws = workspace();
       const outDir = path.dirname(ws.resolve('voice/x'));
@@ -579,7 +595,7 @@ export function createHostedTools({
     }
 
     async function getCardSource(args) {
-      const id = String(args?.id ?? args?.cardId ?? '');
+      const id = String(args?.cardId ?? args?.id ?? '');
       if (!ID_RE.test(id)) throw new HostedToolError(`卡片 id "${id}" 不合法。`);
       await refreshCards();
       const lib = await cardLib();
@@ -641,8 +657,9 @@ export function createHostedTools({
     }
 
     async function editCard(args) {
-      const { id, file, find, replace, replaceAll } = args ?? {};
-      if (typeof id !== 'string' || typeof find !== 'string' || typeof replace !== 'string') throw new HostedToolError('id、find、replace 都必须是字符串');
+      const { file, find, replace, replaceAll } = args ?? {};
+      const id = args?.cardId ?? args?.id;
+      if (typeof id !== 'string' || typeof find !== 'string' || typeof replace !== 'string') throw new HostedToolError('cardId、find、replace 都必须是字符串');
       if (!ID_RE.test(id)) throw new HostedToolError(`卡片 id "${id}" 不合法。`);
       await refreshCards(true);
       const lib = await cardLib();

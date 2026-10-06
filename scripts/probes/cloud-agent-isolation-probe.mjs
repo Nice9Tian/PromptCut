@@ -23,8 +23,13 @@
  *       写入的署名是甲本人加 `service: 'agent'`。请求体里自报别的项目、别的成员、别的 sessionId 不被采信。
  *   I4  一个项目的对话拿不到另一个项目的对话记录:丙在两个项目里各有一个同名对话,凭项目二的票据列不出、取不到、看不到、
  *       停不了、删不掉项目一的;两边的事件互不出现。同一项目里别的成员(甲)也读不到丙的对话。
- *   I5  一个项目的对话拿不到另一个项目的素材:云端 Agent 的连接要不到素材票据(文档服务的白名单拒绝,由 auth 探针 P 覆盖);
- *       这里验 Agent 服务一侧——列素材只回本项目的,Agent 服务没有任何取素材字节的接口(逐个试,全 404)。
+ *   I5  一个项目的对话拿不到另一个项目的素材:列素材只回本项目的,Agent 服务没有任何取素材字节的接口(逐个试,全 404)。
+ *       素材的写入、别的项目的素材、撤销见下面的 T1 与 auth 探针 P。
+ *   T1～T5 工具(任务书 J〔2026-10-07 更正〕并进本条验收的几组,在 `cloud-agent-isolation-tools.mjs`,越权探测的办法、只用假凭证):
+ *       T1 素材写入按成员本人的权限(读写成员写得进、只读成员写不进、别的项目的素材读不到);
+ *       T2 工具的文件读写按「项目 × 对话」隔离(别的项目、别的对话、Agent 服务的私钥与数据目录、托管服务的数据目录、系统文件);
+ *       T3 出网闸(回环、内网、169.254.169.254、同机各服务,含换写法与重定向;测试专用的外部地址能通);
+ *       T4 花钱的调用记用量(替身配音服务);T5 建卡改卡(源码经内容库、卡只在本项目里认得、卡片代码不在服务进程里执行)。
  *   I6  伪造的成员身份证明被拒:签名改一个字符、自己造密钥签、拿项目二的密钥签项目一的、把成员改成别人——当委托票据用一律 401;
  *       当对话委托随消息带一律 403 `bad-grant`,不起任何一轮。别的对话的委托、别的成员的委托、短的委托票据冒充对话委托同样被拒。
  *   I7  过期的成员身份证明被拒:过期的委托票据 401;过期的对话委托 403 `bad-grant`。
@@ -51,6 +56,7 @@ import { runKeygen } from '../../server/hosted-render/keygen.mjs';
 import {
   KDF, sleep, waitFor, portBusy, startHosted, startAgent, joinAs, adminOp, projectOf, putProject, mockScript, delegationOf, agentApi, createChecks, readTree,
 } from './cloud-agent-probe-lib.mjs';
+import { prepareToolFixtures, runToolIsolation } from './cloud-agent-isolation-tools.mjs';
 
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback; };
@@ -58,6 +64,10 @@ const DOC_PORT = Number(argOf('--doc-port', 8798));
 const ASSET_PORT = Number(argOf('--asset-port', 8799));
 const AGENT_PORT = Number(argOf('--agent-port', 5741));
 const KEEP = args.includes('--keep');
+/** 探针自己在本机回环上起的三个替身:测试专用的外部地址(收集站)、替身配音服务、同机的「别的服务」 */
+const COLLECTOR_PORT = Number(argOf('--collector-port', 5745));
+const VOICE_PORT = Number(argOf('--voice-port', 5746));
+const DECOY_PORT = Number(argOf('--decoy-port', 5749));
 const BASE = `ws://127.0.0.1:${DOC_PORT}`;
 
 const { results, check } = createChecks();
@@ -67,6 +77,7 @@ const agentData = path.join(tmp, 'agent');
 const agentSecrets = path.join(tmp, 'agent-secrets');
 let hosted = null;
 let agent = null;
+let fixtures = null;
 const revokeMs = {};
 
 /** 一个项目的内容:文档 id 就是项目 id(与桌面版放云端的项目相同) */
@@ -87,7 +98,7 @@ const historyOf = (projectId) => {
 };
 
 async function main() {
-  for (const [name, port] of [['文档服务', DOC_PORT], ['素材服务', ASSET_PORT], ['Agent 服务', AGENT_PORT]]) {
+  for (const [name, port] of [['文档服务', DOC_PORT], ['素材服务', ASSET_PORT], ['Agent 服务', AGENT_PORT], ['收集站', COLLECTOR_PORT], ['替身配音服务', VOICE_PORT], ['同机别的服务', DECOY_PORT]]) {
     if (await portBusy(port)) throw new Error(`端口 ${port}(${name})已被占用`);
   }
   const gen = runKeygen(['--hosted-data', hostedData, '--secrets', agentSecrets, '--service', 'agent', '--instance-name', '云端 Agent(隔离探针)']);
@@ -116,7 +127,9 @@ async function main() {
   await putProject(owner1, p1.projectId, projectDoc(p1.projectId, 'one', SECRET1));
   await putProject(owner2, p2.projectId, projectDoc(p2.projectId, 'two', SECRET2));
 
-  agent = await startAgent({ dataDir: agentData, secrets: agentSecrets, docPort: DOC_PORT, port: AGENT_PORT });
+  // 假凭证与替身先就位(在 Agent 服务起来之前):私钥目录、数据目录、托管服务的数据目录、一个「系统文件」里各放一份
+  fixtures = await prepareToolFixtures({ tmp, agentData, agentSecrets, hostedData, assetPort: ASSET_PORT, collectorPort: COLLECTOR_PORT, voicePort: VOICE_PORT, decoyPort: DECOY_PORT });
+  agent = await startAgent({ dataDir: agentData, secrets: agentSecrets, docPort: DOC_PORT, port: AGENT_PORT, env: fixtures.env });
   const URL_A = agent.url;
 
   let jia = await joinAs(BASE, p1, creds.jia);
@@ -253,6 +266,12 @@ async function main() {
       projectOneHistory: { own: h1.includes(`素材-${SECRET1}`), other: h1.includes(`素材-${SECRET2}`) }, projectTwoHistory: { own: h2.includes(`素材-${SECRET2}`), other: h2.includes(`素材-${SECRET1}`) }, assetRoutes: probes,
     });
   }
+
+  // ---------- T1～T5 工具:素材写入、文件隔离、出网闸、花钱的调用、建卡改卡
+  await runToolIsolation({
+    fx: fixtures, check, A, jia, bing2, owner1, owner2, p1, p2, projectOf, historyOf, agent, agentUrl: URL_A,
+    agentData, agentSecrets, hostedData, tmp, ports: { doc: DOC_PORT, asset: ASSET_PORT, agent: AGENT_PORT, decoy: DECOY_PORT },
+  });
 
   // ---------- I6 / I7 伪造、过期
   {
@@ -480,6 +499,7 @@ try {
 } finally {
   await agent?.stop();
   await hosted?.stop();
+  await fixtures?.close().catch(() => {});
   if (!KEEP) { try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* 留给系统清 */ } }
 }
 const failed = results.filter((r) => !r.ok);

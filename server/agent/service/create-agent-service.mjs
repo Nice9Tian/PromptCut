@@ -609,7 +609,7 @@ export function createHostedAgentService({
     /** 本项目的用量:总量与各成员的量(项目内任何成员可查) */
     usage(identity, since = null) {
       checkIdentity(identity);
-      if (!usage) return { project: { tokens: 0, calls: 0 }, members: [] };
+      if (!usage) return { project: { tokens: 0, calls: 0 }, members: [], services: [] };
       const s = usage.summary(identity.projectId, Number.isFinite(since) ? since : null);
       const byName = new Map();
       for (const m of s.members) {
@@ -618,7 +618,18 @@ export function createHostedAgentService({
         cur.tokens += m.tokens; cur.calls += m.calls;
         byName.set(name, cur);
       }
-      return { project: s.project, members: [...byName.values()] };
+      // 外部服务(配音等)的调用单列:按服务与服务商,各成员按用户名归并
+      const services = (s.services ?? []).map((sv) => {
+        const people = new Map();
+        for (const m of sv.members ?? []) {
+          const name = m.username || String(m.userId ?? '').split('@')[0];
+          const cur = people.get(name) ?? { username: name, calls: 0, units: 0 };
+          cur.calls += m.calls; cur.units += m.units;
+          people.set(name, cur);
+        }
+        return { service: sv.service, vendor: sv.vendor, calls: sv.calls, units: sv.units, unit: sv.unit, members: [...people.values()] };
+      });
+      return { project: s.project, members: [...byName.values()], services };
     },
 
     /** `GET /v1/info` 的内容(契约第 2.3 节) */
