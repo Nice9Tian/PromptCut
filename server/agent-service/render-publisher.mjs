@@ -24,6 +24,10 @@
  *   - 计划每被切一次(原计划、核对用的那一次)都以最新那一次给的细任务清单为准:渲染节点可能是按更新的版本切的。
  *   - 计划有了结局(完成、失败、撤回)就退订它与它的细任务(别的计划还要的除外),账上它们的失败与作废一并清掉。
  *     这样之后的计划再遇到同一个细任务时,队列会把它当成新并入的订阅者、把那一刻的真实状态补发过来,不凭旧账判。
+ *     手里还有**没切的计划**时细任务先不退(记在 `drops` 里):那个计划切出来的可能正是这几个,渲染节点切分时我们若还订着,
+ *     队列不会把我们当新订阅者、也就不补发;这时退订会让我们再也收不到它们的结局。等手里的计划都切完、知道谁还要哪些再退。
+ *   - 计划切出的清单里有账上记成作废的细任务:队列在切分时已经把作废的重建了,旧账不作数,清掉;为防那条作废说的恰好是这次
+ *     切出来的任务(别的节点刚把它作废),再照「核对一次」的办法让渲染节点重切一遍,以新清单为准。
  *
  * 票据原文不进日志。本文件不引用 `src/`。
  */
@@ -57,7 +61,8 @@ export function createQueuePublisher({
   const SUPERSEDED = 'superseded';
   let version;
   /**
-   * 跨连接留着的账,projectId → { done: Set(细任务 id), failed: Map(细任务 id → 原因), gone: Set(作废的细任务 id), plans: Map(计划 id → 计划的账) }。
+   * 跨连接留着的账,projectId → { done: Set(细任务 id), failed: Map(细任务 id → 原因), gone: Set(作废的细任务 id),
+   * drops: Set(等着退订的细任务 id), plans: Map(计划 id → 计划的账) }。
    * 细任务的结果按内容寻址、做完就不会变,所以断线重连之后之前看到的完成仍然算数。项目里没有计划了就清掉。
    */
   const books = new Map();
@@ -66,7 +71,7 @@ export function createQueuePublisher({
 
   const bookOf = (projectId) => {
     let b = books.get(projectId);
-    if (!b) { b = { done: new Set(), failed: new Map(), gone: new Set(), plans: new Map() }; books.set(projectId, b); }
+    if (!b) { b = { done: new Set(), failed: new Map(), gone: new Set(), drops: new Set(), plans: new Map() }; books.set(projectId, b); }
     return b;
   };
   const dropBookIfIdle = (projectId) => { const b = books.get(projectId); if (b && b.plans.size === 0) books.delete(projectId); };
@@ -102,17 +107,33 @@ export function createQueuePublisher({
     const resolved = (id) => book.done.has(id) || book.failed.has(id) || book.gone.has(id);
 
     /**
-     * 这个计划有了结局(完成、失败、撤回):从账上拿掉,退订它与它切出过的细任务(别的计划还要的不退),
-     * 这些细任务的失败与作废记录一并清掉(完成的留着:内容寻址,做完就不会变)。见文件头。
+     * 等着退订的细任务里现在能退的那些(见文件头):手里还有没切的计划就一个都不退;否则退掉没有计划还要的,
+     * 它们的失败与作废记录一并清掉(完成的留着:内容寻址,做完就不会变)。
      */
+    function takeDrops() {
+      if (book.drops.size === 0) return [];
+      const wanted = new Set();
+      for (const other of book.plans.values()) {
+        if (!other.derived) return [];
+        for (const id of other.derived) wanted.add(id);
+      }
+      const ids = [...book.drops].filter((id) => !wanted.has(id));
+      book.drops.clear();
+      for (const id of ids) { book.failed.delete(id); book.gone.delete(id); }
+      return ids;
+    }
+
+    function flushDrops() {
+      const ids = takeDrops();
+      if (ids.length && !down) void request({ type: 'task.unsubscribe', ids });
+    }
+
+    /** 这个计划有了结局(完成、失败、撤回):从账上拿掉,退订它自己;它切出过的细任务记进等着退订的那一批,能退的当场退 */
     function conclude(plan) {
       book.plans.delete(plan.id);
       for (const [v, p] of alias) if (p === plan.id) alias.delete(v);
-      const wanted = new Set();
-      for (const other of book.plans.values()) for (const id of other.derived ?? []) wanted.add(id);
-      const mine = [...(plan.every ?? plan.derived ?? [])].filter((id) => !wanted.has(id));
-      for (const id of mine) { book.failed.delete(id); book.gone.delete(id); }
-      const ids = [plan.id, ...(plan.verifyId ? [plan.verifyId] : []), ...mine];
+      for (const id of plan.every ?? plan.derived ?? []) book.drops.add(id);
+      const ids = [plan.id, ...(plan.verifyId ? [plan.verifyId] : []), ...takeDrops()];
       dropBookIfIdle(projectId);
       return down ? Promise.resolve() : request({ type: 'task.unsubscribe', ids });
     }
@@ -159,8 +180,14 @@ export function createQueuePublisher({
       plan.every = new Set([...(plan.every ?? []), ...derived]);
       plan.derived = new Set(derived);
       plan.split = true;
+      // 账上记成作废的:切分时队列已经把它们重建了,旧账不作数(见文件头);原计划的这一次再核对一遍
+      const stale = derived.filter((id) => book.gone.has(id));
+      for (const id of stale) book.gone.delete(id);
+      if (stale.length && msg.id === plan.id) plan.uncertain = true;
       settle(true);
       if (book.plans.has(plan.id) && plan.uncertain && ![...plan.derived].every(resolved)) void verify(plan);
+      // 手里的计划都切完了:之前攒着的退订现在能退了
+      flushDrops();
     }
 
     function onMessage(msg) {
@@ -180,6 +207,7 @@ export function createQueuePublisher({
         const plan = book.plans.get(msg.id);
         if (plan) {
           book.plans.delete(plan.id);
+          flushDrops();
           call('onFail', { id: plan.id, reason: `渲染节点没有接下这个计划:${String(msg.error ?? 'failed').slice(0, 120)}` });
           dropBookIfIdle(projectId);
           return;

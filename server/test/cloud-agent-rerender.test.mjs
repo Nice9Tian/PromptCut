@@ -676,4 +676,42 @@ test('CA-RR-07 发布通道:细任务作废不算失败;计划有了结局就退
   await handle.withdraw(planF.id);
   assert.deepEqual(unsubscribed().at(-1), [planF.id, 'f1']);
   assert.deepEqual(seen.fail.length, 1);
+  await handle.withdraw(planG.id);
+  assert.deepEqual(unsubscribed().at(-1), [planG.id, 'shared', 'g1']);
+
+  // 手里还有没切的计划时,被撤回的计划的细任务先不退:新计划切出来的可能正是它们(这时退订就再也收不到结局)
+  const planH = clipsPlanTaskOf({ projectId: PID, projectRev: 9, clips: ['a', 'b'], codeVersion: CV });
+  const planI = clipsPlanTaskOf({ projectId: PID, projectRev: 10, clips: ['a', 'b'], codeVersion: CV });
+  await handle.publish(planH);
+  ws.reply({ type: 'task.done', id: planH.id, result: { derived: ['h1', 'h2'] } });
+  await handle.publish(planI);
+  await handle.withdraw(planH.id);
+  assert.deepEqual(unsubscribed().at(-1), [planH.id], '只退旧计划自己');
+  ws.reply({ type: 'task.done', id: planI.id, result: { derived: ['h2', 'i1'] } });
+  await tickMs();
+  assert.deepEqual(unsubscribed().at(-1), ['h1'], '新计划切完才知道谁还要:退掉没人要的那一个');
+  ws.reply({ type: 'task.done', id: 'h2', result: {} });
+  ws.reply({ type: 'task.done', id: 'i1', result: {} });
+  assert.deepEqual(seen.done.at(-1), { id: planI.id });
+  await tickMs();
+  assert.deepEqual(unsubscribed().at(-1), [planI.id, 'h2', 'i1']);
+
+  // 还订着的细任务被作废过,新计划又切出同一个:旧账不作数,并让渲染节点再切一遍核对,以新清单为准
+  const planJ = clipsPlanTaskOf({ projectId: PID, projectRev: 11, clips: ['a', 'b'], codeVersion: CV });
+  const planK = clipsPlanTaskOf({ projectId: PID, projectRev: 12, clips: ['a', 'b'], codeVersion: CV });
+  await handle.publish(planJ);
+  ws.reply({ type: 'task.done', id: planJ.id, result: { derived: ['j1', 'j2'] } });
+  ws.reply({ type: 'task.failed', id: 'j1', error: 'superseded' });
+  await handle.publish(planK);
+  await handle.withdraw(planJ.id);
+  const doneBefore = seen.done.length;
+  ws.reply({ type: 'task.done', id: planK.id, result: { derived: ['j1', 'k1'] } });
+  ws.reply({ type: 'task.done', id: 'k1', result: {} });
+  assert.equal(seen.done.length, doneBefore, 'j1 的作废是旧账:不算有了结局');
+  await tickMs();
+  const verify = ws.sent.filter((m) => m.type === 'task.publish').at(-1).tasks[0];
+  assert.ok(verify.id.includes('#backfill:') && verify.source.projectRev === 12, '再核对一次:改发补渲档的同一份清单');
+  ws.reply({ type: 'task.done', id: verify.id, result: { derived: ['k1'] } });
+  assert.deepEqual(seen.done.at(-1), { id: planK.id }, '重切的清单里已经没有 j1:完成');
+  assert.equal(seen.fail.length, 1, '从头到尾只有那一次真失败');
 });

@@ -12,7 +12,7 @@
  *   Agent 服务 `server/agent-service/main.mjs`(命令行入口,服务身份 agent),模型是模拟模型提供方(照提示词里的脚本走)
  *   项目(限定进入):创建者 alice,成员 bob(另一位成员)、carol(中途被移出的那位)。项目里三张要预渲染的卡(两张探针重卡加一张带参数的内置图表卡 rank-bars)。
  *
- *   node scripts/probes/cloud-agent-ux-probe.mjs [--steps leave,later,reopen,stop,errors,load] [--doc-port 8798] [--asset-port 8799]
+ *   node scripts/probes/cloud-agent-ux-probe.mjs [--steps leave,later,reopen,stop,spaced,errors,load] [--doc-port 8798] [--asset-port 8799]
  *        [--agent-port 5741] [--render-port 5830] [--keep] [--verbose]
  *   `--render-port` +0/+1/+2 是渲染工作进程的三个端口,+6 是管理进程的诊断口。
  *
@@ -39,6 +39,13 @@
  *       成员列表里 alice 那一行下有 `service: 'agent'` 的连接。
  *   U9  创建者在另一台设备(另一个设备号、同一创建者身份、另一个进程)打开:`info.running` 里有这个对话,接上事件流看得到过程;
  *       停掉 → 2 秒内收尾,项目停在最后一次成功写入的版本上;接着在这台设备上说一句,新的一轮正常跑完,`seq` 接着往后。
+ * 五之二、写入之间隔得比补渲的防抖长(步骤 spaced;真模型的每次往返都是几秒,就是这种节奏。契约 `cloud-agent-contract.md` 第 16.4 节)
+ *   U17 发起方发出一个连写 12 处、每次隔 9 秒(补渲的防抖是 3 秒)的任务后被结束,全程没有任何成员连接:每次写入之后 Agent 服务都按
+ *       当时的版本发清单计划(中途就开始渲),项目接着往前走。补渲的结局是「渲染完成」,对话记录里没有 `render failed`。
+ *   U18 渲染节点这一轮没有一个任务以失败收场:取不到旧版本时改按当前版本核对,内容没变的照做,已被新版本取代的记成作废
+ *       (诊断里的 `superseded`,不计入 `failed`)。
+ *   U19 渲完之后才上线的成员:不发任何渲染任务,取到的层表是最后一版的——三张卡各有一层、每层的输入签名与他读到的项目对得上
+ *       (不是旧参数的层)、帧数是最后一版的,各层的清单取得到。
  * 六、出错不悄悄丢(步骤 errors;发起方都已离线,事后从对话记录里看)
  *   U10 模型调用失败:对话记录里有「模型调用失败」,状态 failed / model;项目停在失败前最后一次成功写入。
  *   U11 额度用尽:对话记录里有带已用与上限的那句话,状态 failed / quota-exceeded;已落地的保留;清掉额度后恢复。
@@ -58,6 +65,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { clipInputSig, inputSigStale } from '../../src/render/layerInputSig.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
 import { runKeygen } from '../../server/hosted-render/keygen.mjs';
 import {
@@ -154,7 +162,9 @@ if (args.includes('--child')) {
 
 /* ================================================================== 主进程 */
 
-const ALL_STEPS = ['leave', 'later', 'reopen', 'stop', 'errors', 'load'];
+const ALL_STEPS = ['leave', 'later', 'reopen', 'stop', 'spaced', 'errors', 'load'];
+/** 步骤 spaced 里两次写入之间等多久(要大于补渲的防抖 3 秒) */
+const SPACED_GAP_MS = 9000;
 const STEPS = String(argOf('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 const DOC_PORT = Number(argOf('--doc-port', 8798));
 const ASSET_PORT = Number(argOf('--asset-port', 8799));
@@ -466,6 +476,72 @@ async function main() {
       && clipOf({ tracks: [{ clips: r.project?.clips ?? [] }] }, 'clip-bars')?.label === '换了设备接着说', {
       running: r.info?.running ?? null, watched: r.watched ?? null, stop: a.end ?? null, stoppedInMs: a.ms ?? null, statusText: a.status ?? null, rev: a.rev ?? null, recorded: a.meta ? { state: a.meta.state, reason: a.meta.reason } : null,
       continued: r.said ?? null, label: r.project?.clips?.find((c) => c.id === 'clip-bars')?.label ?? null,
+    });
+  }
+
+  /* ---------------------------------------------------------------- 五之二:写入之间隔得比补渲的防抖长 */
+  if (STEPS.includes('spaced')) {
+    // 全程没有成员连接:先把探针手里 bob 的连接关掉,等渲染服务的目录里 members 变假
+    bob?.close();
+    bob = null;
+    await waitFor(async () => (await membersOnline(PID)) === false, 90_000, '没有任何成员连接', 500);
+    const nodeOf = async () => ((await renderStatus()).queue?.nodes ?? []).find((n) => n.projectId === PID) ?? null;
+    const nodeBefore = await nodeOf();
+    const logsBefore = render.logs.length;
+    const id = 'ux-spaced';
+    const left = await initiateAndLeave({ ...aliceCfg(dev.a1), conversationId: id, prompt: writeScript(N, SPACED_GAP_MS, `${salt}-k`) }, 1);
+    let sawMembers = false;
+    const polling = setInterval(() => { void membersOnline(PID).then((m) => { if (m === true) sawMembers = true; }).catch(() => {}); }, 1000);
+    // 发起方被结束后,文档服务把它断掉的会话保留 60 秒:这段时间 members 仍为真,之后恒为假。只在保留期过后开始记
+    const ended = await waitFor(() => { const d = diskConversation(PID, id); return d && d.meta.state !== 'running' && d.events.some((e) => e.type === 'end') ? d : null; }, 300_000, `${id} 跑到结束`, 300);
+    // 一轮结束时补发的那一个计划渲完才算数:最后一条补渲事件是结局,并且之后 8 秒没有新的补渲事件
+    const renderEventsOf = () => (diskConversation(PID, id)?.events ?? []).filter((e) => e.type === 'render');
+    let quietSince = Date.now();
+    let lastCount = -1;
+    await waitFor(() => {
+      const ev = renderEventsOf();
+      if (ev.length !== lastCount) { lastCount = ev.length; quietSince = Date.now(); }
+      return ['done', 'failed', 'unavailable'].includes(ev.at(-1)?.state) && Date.now() - quietSince >= 8000;
+    }, 400_000, '补渲收尾', 500);
+    clearInterval(polling);
+    void sawMembers;
+    const states = renderEventsOf().map((e) => ({ state: e.state, ...(e.reason ? { reason: String(e.reason).slice(0, 80) } : {}) }));
+    const toolOk = ended.events.filter((e) => e.type === 'tool_result' && e.ok === true).length;
+    check(`U17 写入之间隔 ${SPACED_GAP_MS / 1000} 秒(大于补渲的防抖 3 秒)、连写 ${N} 次,发起方已被结束:中途就按当时的版本发计划,补渲的结局是「渲染完成」,对话记录里没有渲染失败`, left.killed && ended.meta.state === 'idle' && toolOk === N
+      && states.filter((x) => x.state === 'published').length >= 3 && states.at(-1)?.state === 'done' && !states.some((x) => x.state === 'failed' || x.state === 'unavailable'), {
+      initiatorGone: left.killed, writesLanded: toolOk, published: states.filter((x) => x.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((x) => x.state === 'failed'), states: states.map((x) => x.state).join(','),
+    });
+    const node = await nodeOf();
+    const delta = (k) => (node?.[k] ?? 0) - (nodeBefore?.[k] ?? 0);
+    const reasons = {};
+    for (const l of render.logs.slice(logsBefore)) {
+      const m = l?.event === 'worker.line' ? /node\.task-(failed|superseded) (\{.*\})/.exec(String(l.line ?? '')) : null;
+      if (!m) continue;
+      try { const j = JSON.parse(m[2]); const k = `${m[1]}|${String(j.id).split(':')[0]}|${String(j.error ?? j.why ?? '').replace(/[0-9a-f]{8,}|sp_[A-Za-z0-9_-]+|clip-[a-z]+|@\d+/g, '~').slice(0, 60)}`; reasons[k] = (reasons[k] ?? 0) + 1; } catch { /* 这一行被截断了 */ }
+    }
+    check('U18 渲染节点这一轮没有一个任务以失败收场;被新版本取代的旧任务记成作废(不计入失败)', delta('failed') === 0 && delta('completed') + delta('dedup') > 0 && !Object.keys(reasons).some((k) => k.startsWith('failed|')), {
+      renderNode: { failed: delta('failed'), superseded: delta('superseded'), completed: delta('completed'), dedup: delta('dedup'), lost: delta('lost'), discarded: delta('discarded') }, reasons,
+    });
+    // 之后才上线的成员
+    bob = await joinAs(BASE, proj, creds.bob);
+    const p = await projectOf(bob, PID);
+    const map = await bob.ask({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${PID}` });
+    const listed = ((await bob.ask({ type: 'content.list', kind: 'snapshot-manifest' })).items ?? []).map((i) => i.key);
+    const layers = Array.isArray(map.body?.layers) ? map.body.layers : [];
+    const fps = p.project?.fps ?? 30;
+    const rows = ['clip-bars', ...HEAVY].map((clipId) => {
+      const layer = layers.find((l) => l.clipId === clipId) ?? null;
+      const clip = clipOf(p.project, clipId);
+      const frames = clip ? Math.round((clip.end - clip.start) * fps) : null;
+      return {
+        clipId, layer: !!layer, staleInput: layer ? inputSigStale(layer.inputSig, clipInputSig(p.project, clipId)) : null, hasInputSig: !!layer?.inputSig, frames: [layer?.count ?? null, frames],
+        manifests: layer ? listed.filter((k) => k.startsWith(String(layer.key)) || k.includes(String(layer.resultKey))).length : 0,
+      };
+    });
+    const bars = clipOf(p.project, 'clip-bars');
+    check('U19 渲完之后才上线的成员:不发任何渲染任务,取到的层表是最后一版的(每层的输入签名与项目对得上、帧数是最后一版的),各层的清单取得到', bars?.params?.title === `${salt}-k 第 10 次:改文案` && bars?.params?.rows === `微信,62|抖音,62|${salt}-k,12`
+      && map.type === 'content.item' && !map.missing && rows.every((r) => r.layer && r.hasInputSig && r.staleInput === false && r.frames[0] === r.frames[1] && r.manifests > 0) && bob.all.filter((m) => m.type === 'task.published').length === 0, {
+      title: bars?.params?.title ?? null, rowsAreTwelfth: bars?.params?.rows === `微信,62|抖音,62|${salt}-k,12`, layerMap: map.type === 'content.item' && !map.missing, layers: rows, publishedByBob: bob.all.filter((m) => m.type === 'task.published').length,
     });
   }
 
