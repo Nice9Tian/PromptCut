@@ -298,6 +298,8 @@ export interface CardRunState {
   detail?: string;
   /** 出问题的文件(内容库的键) */
   file?: string;
+  /** 这一代源码的短签名(运行时版本加闭包里每个文件的哈希);能运行的卡拿它当成本身份里的源码版本 */
+  version?: string;
 }
 
 export const CARD_RUN_STATES: readonly CardRunStateName[] = Object.freeze([
@@ -375,11 +377,12 @@ export function setCardRunStates(states: Iterable<readonly [string, CardRunState
       state: v.state,
       ...(typeof v.detail === "string" && v.detail ? { detail: v.detail.slice(0, 300) } : {}),
       ...(typeof v.file === "string" && v.file ? { file: v.file.slice(0, 200) } : {}),
+      ...(typeof v.version === "string" && v.version ? { version: v.version.slice(0, 64) } : {}),
     }));
   }
   const same = next.size === runStates.size && [...next].every(([id, v]) => {
     const cur = runStates.get(id);
-    return !!cur && cur.state === v.state && cur.detail === v.detail && cur.file === v.file;
+    return !!cur && cur.state === v.state && cur.detail === v.detail && cur.file === v.file && cur.version === v.version;
   });
   if (same) return false;
   runStates = next;
@@ -395,10 +398,13 @@ export function cardRunState(id: string | undefined | null): CardRunState | unde
   return typeof id === "string" && id ? runStates.get(id) : undefined;
 }
 
-/** 这张卡在本页能不能运行:构建时就有定义的恒为 true;同步来的看运行状态是不是 `ready` */
+/**
+ * 这张卡在本页能不能运行:构建时就有定义的恒为 true(含构建时就在包里的仓库用户卡);同步来的,
+ * 在执行它的环境里(舞台、声音线程)看有没有载入成功,在编辑页面看运行状态是不是 `ready`。
+ */
 export function cardRunnableHere(id: string | undefined | null): boolean {
   if (typeof id !== "string" || !id) return false;
-  if (map.has(id)) return true;
+  if (map.has(id) || runtimeCards.has(id)) return true;
   return runStates.get(id)?.state === "ready";
 }
 

@@ -12,7 +12,7 @@
  */
 import type { Project } from "../kernel/project";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
-import { allCards, cardsRegistryGen, getCard, syncedUserCardsGen, unknownCardClipIds, userCardSources } from "../kernel/registry";
+import { allCards, cardRunState, cardRunStatesGen, cardsRegistryGen, getCard, syncedCardView, syncedUserCardsGen, unknownCardClipIds, userCardSources } from "../kernel/registry";
 import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles, cardSourceFilesVersion } from "../render/cardSourceFiles.mjs";
@@ -107,27 +107,34 @@ function ownsVisual(node: { cardId?: unknown }): boolean {
  * 不看片段的 `nodeId`):普通卡与有声动效卡的节点内容与完整的图里相同,身份照给、照测;坏掉的图卡链路本来就没有身份。
  * 这一遍也抛才当作没有身份。
  */
-function costGraph(project: Project): ReturnType<typeof projectCardGraph> {
+function costGraph(project: Project, cardOf: (id: string) => ReturnType<typeof getCard> = getCard): ReturnType<typeof projectCardGraph> {
   try {
-    return projectCardGraph(project, getCard);
+    return projectCardGraph(project, cardOf);
   } catch {
     const bare = { ...project, cardNodes: [], tracks: project.tracks.map((tr) => ({ ...tr, clips: tr.clips.map((c) => (c.nodeId ? { ...c, nodeId: undefined } : c)) })) };
-    return projectCardGraph(bare as Project, getCard);
+    return projectCardGraph(bare as Project, cardOf);
   }
 }
 
 export function clipIdentityOf(project: Project | null): ClipIdentity {
   if (!project) return EMPTY;
   // 注册表与同步表的代数也进键:卡片定义到了(热更新、同步到了),未知卡片变成认得的卡,身份跟着给
-  const localKey = `${onlineBrowserMode() ? "on" : "off"}:${syncedUserCardsGen()}:${cardsRegistryGen()}`;
+  const localKey = `${onlineBrowserMode() ? "on" : "off"}:${syncedUserCardsGen()}:${cardsRegistryGen()}:${cardRunStatesGen()}`;
   if (project === cachedProject && localKey === cachedLocalKey) return cached;
   let out = EMPTY;
   try {
     // 一张坏卡不该让探针和分派表整个停摆:图摊不出来时退一步只按片段自己的卡摊(`costGraph`);那也不成才当作「没有身份」
-    const graph = costGraph(project);
+    /*
+     * 同步来的、本页能运行的用户卡(`docs/plan/online-card-exec-contract.md` 第 5、6 节):编辑页面没有它的定义(只在舞台里执行),
+     * 图里这张卡的节点按静态解析出来的缺省参数合成;源码版本用这一代的短签名(运行状态里带着:运行时版本加闭包的哈希),
+     * 前缀 `user:online:`,与桌面的 `user:<闭包原文>` 不相撞 —— 两边的成本记录各记各的。
+     */
+    const cardOf = (id: string) => getCard(id) ?? (cardRunState(id)?.state === "ready" && syncedCardView(id) ? ({ id, defaults: syncedCardView(id)!.defaults } as unknown as ReturnType<typeof getCard>) : undefined);
+    const graph = costGraph(project, cardOf);
     const versions = sourceVersionsOf();
+    const versionOf = (cardId: string) => versions[cardId] ?? (cardRunState(cardId)?.state === "ready" && cardRunState(cardId)!.version ? `user:online:${cardRunState(cardId)!.version}` : null);
     const own = { ownNode: ownsVisual };
-    const { identityKeys, frameModes } = clipCostIndex(project, graph, (node) => versions[(node as { cardId?: string }).cardId ?? ""] ?? null, own);
+    const { identityKeys, frameModes } = clipCostIndex(project, graph, (node) => versionOf((node as { cardId?: string }).cardId ?? ""), own);
     const capabilities = new Map<string, Record<string, unknown>>();
     for (const [clipId, node] of clipCostNodes(project, graph, own)) capabilities.set(clipId, (node.capabilities ?? {}) as Record<string, unknown>);
     out = { identityKeys, frameModes, capabilities };

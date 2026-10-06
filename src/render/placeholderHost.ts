@@ -27,7 +27,7 @@ import {
   PLACEHOLDER_ATTR, PLACEHOLDER_SLOT_ATTR, PLACEHOLDER_STATIC_ATTR, setPlaceholderShown,
   type PlaceholderBox, type PlaceholderGeometry, type PlaceholderReason,
 } from "./placeholder/contract.ts";
-import { getCard, isUserCardId } from "../kernel/registry.ts";
+import { cardRunnableHere, getCard, isUserCardId } from "../kernel/registry.ts";
 import { hourglassFit, unsupportedFit, type PlaceholderFit } from "./placeholderFit.ts";
 
 /** 包裹层里托着占位组件的槽位(常量在 contract 里,这里转出去给已有的引用方) */
@@ -204,10 +204,14 @@ export function needsLocalPc(
   cardId: string | undefined,
   def: { card?: unknown; audio?: unknown; Component?: unknown } | undefined,
   isUserCard: (cardId: string) => boolean = isUserCardId,
+  runnable: (cardId: string) => boolean = cardRunnableHere,
 ): boolean {
   if (!cardId) return false;
-  if (isUserCard(cardId)) return true;
-  return !!def && (typeof def.card === "function" || (typeof def.audio === "function" && !def.Component));
+  // 图卡(画面由 card() 出,或只有 audio()):在线执行还没放开(等素材票据的隔离与图形能力判定),照旧算运行不了
+  if (!!def && (typeof def.card === "function" || (typeof def.audio === "function" && !def.Component))) return true;
+  // 用户卡:本页能运行的不算(构建时就在包里的仓库用户卡;同步来的、载入成功的,`registry.cardRunnableHere`)
+  if (isUserCard(cardId)) return !runnable(cardId);
+  return false;
 }
 
 /*

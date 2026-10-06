@@ -13,6 +13,7 @@
  */
 import type { CardRunState, SyncedUserCard } from "../../kernel/registry.ts";
 import type { BundleResult } from "../../online/cardRuntime/protocol.ts";
+import { cyrb53 } from "../../render/cyrb53.mjs";
 
 export interface EditorRunStateInput {
   /** 同步表(静态解析出来的卡;`source` 是入口文件的键) */
@@ -41,7 +42,9 @@ export function editorRunStates(input: EditorRunStateInput): Map<string, CardRun
     if (!bundle) { out.set(card.id, { state: "loading" }); continue; }
     const reported = stages.map((m) => m.get(card.id)).filter((s): s is CardRunState => !!s);
     if (!reported.length) { out.set(card.id, { state: "loading" }); continue; }
-    out.set(card.id, reported.find((s) => s.state !== "ready") ?? reported[0]);
+    const bad = reported.find((s) => s.state !== "ready");
+    // 能运行的带上这一代的短签名:成本身份里的源码版本用它(源码或转译器换了,身份跟着换)
+    out.set(card.id, bad ?? { state: "ready", version: String(cyrb53(bundle.bundle.generation)) });
   }
   return out;
 }
