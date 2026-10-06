@@ -4,7 +4,7 @@ import { frameCss } from "../kernel/layout";
 import { perspectivePx } from "../kernel/space3d";
 import { motionAt } from "../kernel/motion";
 import { cardOpacityAt, hasOpacityControls } from "../kernel/project";
-import { typingMountClockMs } from "../kernel/typingEvents";
+import { forgetUnmounted, mountClockMsAt } from "./mountClock";
 import { emphasisFilter } from "../kernel/emphasis";
 import { getCard, isRuntimeCard } from "../kernel/registry";
 import { PartTree } from "./PartTree";
@@ -153,22 +153,18 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    * 但同一份代码也服务导出 / legacy 的多片段 Stage。
    */
   /*
-   * 挂载钟:每张卡这一次挂载(`片段 id:代数`,和包裹层的 key 同一个)第一次渲染时的舞台时刻(秒)。
-   * 只在 `mountClock` 打开时记;渲染体里按 key 取,卸载的在下面清掉。
+   * 挂载钟(记账在 `mountClock.ts`):每张卡这一次挂载(`片段 id:代数`,和包裹层的 key 同一个)第一次渲染时的舞台时刻。
+   * 只在 `mountClock` 打开时记;渲染体里按 key 取,这一次渲染没挂的在提交后清掉。
    */
   const mountedAt = useRef(new Map<string, number>());
   const mountKeys = new Set<string>();
   const mountClockMsOf = (key: string, clip: Timeline["clips"][number], now: number): number | undefined => {
     if (!mountClock) return undefined;
     mountKeys.add(key);
-    let at = mountedAt.current.get(key);
-    if (at === undefined) mountedAt.current.set(key, at = now);
-    // 在起点或之后才挂上的(从片段中间开始导、重挂载)照常按 t:不让「从中间接着打」退回「从头打」
-    return at < clip.start ? typingMountClockMs(now, at) : undefined;
+    return mountClockMsAt(mountedAt.current, key, clip.start, now);
   };
-  // 这一次渲染没挂的卡清掉:它再进来是一次新的挂载,钟从那时重新起算(和旧卡重挂载即重播一致)
   useEffect(() => {
-    for (const key of [...mountedAt.current.keys()]) if (!mountKeys.has(key)) mountedAt.current.delete(key);
+    if (mountClock) forgetUnmounted(mountedAt.current, mountKeys);
   });
   const frozenT = useRef(new Map<string, number>());
   const prevSuppressed = useRef<ReadonlySet<string>>(EMPTY_SET);
