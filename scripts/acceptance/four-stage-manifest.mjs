@@ -21,6 +21,8 @@
  * 探针自己限定端口段的照它的(multi-agent 5840～5859、skill-mcp 5880～5899)。串行跑,每项结束后它的进程都清掉。
  */
 
+import '../lib/no-user-dirs.mjs'; // 清单里写着会起编辑器与导出的命令;按 no-user-dirs.test.mjs 的规矩,第一个 import 摘掉外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
+
 const node = 'node';
 const probe = (name, args = []) => [node, `scripts/probes/${name}.mjs`, ...args];
 

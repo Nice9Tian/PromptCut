@@ -31,8 +31,8 @@
  *
  * 退出码:本次选中的、会跑的项里有 fail / ref-fail / flaky / blocked / missing → 1;否则 0(ref-pass 与 manual / remote 不算失败)。
  */
-import '../lib/test-silent-processes.mjs'; // 第一个 import:之后起的命令行孙进程也不弹窗
-import '../lib/no-user-dirs.mjs'; // 不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,并设 PROMPTCUT_NO_PORT_FILE=1
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,并设 PROMPTCUT_NO_PORT_FILE=1
+import '../lib/test-silent-processes.mjs'; // 之后起的命令行孙进程也不弹窗
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
