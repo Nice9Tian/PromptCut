@@ -172,6 +172,13 @@ const ASSET_PORT = Number(argOf('--asset-port', 8799));
 const AGENT_PORT = Number(argOf('--agent-port', 5741));
 const RENDER_PORT = Number(argOf('--render-port', 5830));
 const KEEP = args.includes('--keep');
+/**
+ * `--real-model`:模型换成这台电脑上桌面版已配好的 API 直连(只读地用,`server/agent-service/rehearsal-model.mjs`),任务是自然语言,
+ * 断言只看结果(R1～R8,见 `realModelFlow`):发起方发出任务后进程被结束 → 云端做完、改动落地 → 重卡渲出来 → 后来的成员看得到、署名对
+ * → 重开找得回对话 → 能撤销 → 两位成员同时各开一个对话互不串。出错留原因(模型失败、额度、撤销、渲染失败)只在模拟模型的跑法里验。
+ * 真实模型有费用:跑通一次即可;汇总里报模型往返次数与 token 数。
+ */
+const REAL = args.includes('--real-model');
 const VERBOSE = args.includes('--verbose');
 const BASE = `ws://127.0.0.1:${DOC_PORT}`;
 const AGENT_URL = `http://127.0.0.1:${AGENT_PORT}`;
@@ -333,7 +340,7 @@ async function main() {
 
   startRender();
   const bootAgent = async (env = {}) => { await agent?.stop(); agent = await startAgent({ dataDir: D.agent, secrets: D.agentSecrets, docPort: DOC_PORT, port: AGENT_PORT, env }); agent.shortStall = !!env.PROMPTCUT_AGENT_RENDER_STALL_MS; };
-  await bootAgent();
+  await bootAgent(REAL ? { PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL: '1' } : {});
   const ready = await waitRenderReady();
   const agentHealth = await (await fetch(`${AGENT_URL}/healthz`)).json();
   check('U0 三个服务起来;Agent 服务与渲染服务的代码版本相同(同一个提交)', ready.queue.codeVersion === agentHealth.codeVersion && !!agentHealth.codeVersion, {
@@ -341,6 +348,8 @@ async function main() {
   });
   const blobBytes = () => { let n = 0; const walk = (d) => { if (!fs.existsSync(d)) return; for (const i of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, i.name); if (i.isDirectory()) walk(p); else n += 1; } }; walk(path.join(D.hosted, 'assets')); return n; };
   const assetFilesBefore = blobBytes();
+
+  if (REAL) { await realModelFlow({ proj, PID, creds, dev, aliceCfg, blobBytes, assetFilesBefore, SEED_REV }); return; }
 
   let mainEvents = null;
   const N = 12;
@@ -729,6 +738,107 @@ async function main() {
     for (const c of [dan, eve, alice]) c.close();
   }
   bob?.close();
+}
+
+/** 真实模型的跑法:任务是自然语言,只看结果 */
+async function realModelFlow({ proj, PID, creds, dev, aliceCfg, blobBytes, assetFilesBefore, SEED_REV }) {
+  const usageNow = () => {
+    const dir = path.join(D.agent, 'usage');
+    const rows = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).flatMap((f) => fs.readFileSync(path.join(dir, f), 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })).filter((r) => r && r.kind !== 'service') : [];
+    return { modelCalls: rows.length, input: rows.reduce((n, r) => n + (r.input ?? 0), 0), output: rows.reduce((n, r) => n + (r.output ?? 0), 0), model: rows[0]?.model ?? null };
+  };
+  const toolsOf = (events) => { const used = {}; for (const e of events.filter((x) => x.type === 'tool_call')) used[e.name] = (used[e.name] ?? 0) + 1; return used; };
+  const TASK = '请直接改这个项目,不用问我:1)把图表那张卡(片段 clip-bars)的标题改成「季度渠道占比」;2)把它数据里「微信」那一行的数值改成 91;3)把片段 clip-stateful 挪到从第 1 秒开始、到第 3.5 秒结束。做完用一句话告诉我改了什么。';
+  const t0 = Date.now();
+  const left = await initiateAndLeave({ ...aliceCfg(dev.a1), conversationId: 'ux-real', prompt: TASK, pageState: { t: 1, selection: ['clip-bars'] } }, 1);
+  timings.acceptedMs = Date.now() - t0;
+  await waitFor(async () => (await membersOnline(PID)) === false, 10_000, '成员连接都断开').catch(() => null);
+  const membersAfterKill = await membersOnline(PID);
+  check('R1 发起方用一句自然语言发出任务、被云端接下后进程被真的结束;项目里没有任何成员连接', left.sent?.status === 202 && left.killed && membersAfterKill === false, {
+    sent: left.sent?.status ?? null, processGone: left.killed, membersOnline: membersAfterKill,
+  });
+  let sawMembers = false;
+  const polling = setInterval(() => { void membersOnline(PID).then((m) => { if (m === true) sawMembers = true; }).catch(() => {}); }, 500);
+  const endLog = await waitFor(() => agent.logs.find((l) => l.event === 'agent.run.end' && l.projectId === PID), 600_000, '对话跑到结束', 300);
+  timings.runMs = Date.now() - t0;
+  const rendered = await waitFor(() => agent.logs.find((l) => (l.event === 'agent.render.done' || l.event === 'agent.render.failed' || l.event === 'agent.render.unavailable' || l.event === 'agent.render.gave-up') && l.projectId === PID), 600_000, '补渲有结果', 500).catch(() => null);
+  timings.renderedMs = Date.now() - t0;
+  clearInterval(polling);
+  const disk = diskConversation(PID, 'ux-real');
+  const events = disk?.events ?? [];
+  const said = events.filter((e) => e.type === 'text').map((e) => e.delta ?? e.text ?? '').join('');
+  const wrote = events.filter((e) => e.type === 'tool_result' && e.ok === true && /update_clip|set_clip|set_position/.test(String(e.name))).length;
+  check('R2 没有任何成员在线,对话跑到结束(模型自己决定怎么改),有写入落地、助手交代了结果', endLog.state === 'idle' && disk?.meta?.state === 'idle' && wrote >= 1 && sawMembers === false && said.trim().length > 0, {
+    end: endLog.state, reason: endLog.reason ?? null, tools: toolsOf(events), writesLanded: wrote, membersEverOnline: sawMembers, runMs: timings.runMs, reply: said.slice(0, 300),
+    errors: events.filter((e) => e.type === 'error').map((e) => String(e.message ?? '').slice(0, 160)),
+  });
+  const st = await renderStatus();
+  const node = (st.queue?.nodes ?? []).find((n) => n.projectId === PID) ?? null;
+  check('R3 被改动的重卡由渲染服务渲出来、产物入库(全程没有成员在线)', rendered?.event === 'agent.render.done' && (node?.completed ?? 0) > 0 && (node?.failed ?? 0) === 0 && blobBytes() > assetFilesBefore, {
+    outcome: rendered?.event ?? '没有结果', renderNode: node ? { claimed: node.claimed, completed: node.completed, failed: node.failed } : null, assetFiles: [assetFilesBefore, blobBytes()], renderedMs: timings.renderedMs,
+  });
+
+  const bob = await joinAs(BASE, proj, creds.bob);
+  const p = await projectOf(bob, PID);
+  const bars = clipOf(p.project, 'clip-bars');
+  const stateful = clipOf(p.project, 'clip-stateful');
+  const listing = await bob.ask({ type: 'events.list', projectId: PID });
+  const actors = (listing.items ?? []).filter((e) => e.opId !== undefined && e.opId !== null).map((e) => e.actor ?? e.by ?? {});
+  check('R4 另一位成员之后进项目:三处改动(改文案、调卡片参数、挪片段)都在,署名是创建者本人加 service: agent', bars?.params?.title === '季度渠道占比' && /微信\s*,\s*91/.test(String(bars?.params?.rows ?? ''))
+    && stateful?.start === 1 && stateful?.end === 3.5 && p.rev > SEED_REV && actors.length >= 1 && actors.every((a) => String(a.userId ?? '').startsWith('alice@') && a.role === 'agent' && a.service === 'agent') && intact(p.project), {
+    title: bars?.params?.title ?? null, rows: bars?.params?.rows ?? null, stateful: stateful ? [stateful.start, stateful.end] : null, rev: [SEED_REV, p.rev],
+    writers: [...new Set(actors.map((a) => `${String(a.userId ?? '').split('@')[0]}/${a.role}/${a.service ?? '-'}`))], projectIntact: intact(p.project),
+  });
+  const map = await bob.ask({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${PID}` });
+  const layers = Array.isArray(map.body?.layers) ? map.body.layers.length : 0;
+  check('R5 他不发任何渲染任务,直接取得到这一版的层表(画面是渲好的)', map.type === 'content.item' && !map.missing && layers > 0, { layers, layerMapRev: map.body?.projectRev ?? map.body?.rev ?? null, projectRev: p.rev });
+
+  const r = await visit({ ...aliceCfg(dev.a1), conversationId: 'ux-real', do: { replay: true, replayUntilSeq: events.at(-1)?.seq, project: true, undo: { clipId: 'clip-bars' } } });
+  const replay = r.replay ?? [];
+  const item = (r.list ?? []).find((i) => i.id === 'ux-real');
+  check('R6 创建者重新打开(新进程、同一身份):列得出这段对话,过程从头补齐,项目是最新版本', !!item && item.state === 'idle' && replay[0]?.type === 'user' && replay.some((e) => e.type === 'tool_call') && replay.some((e) => e.type === 'end' && e.state === 'idle')
+    // 盘上把逐字的回复并成了整段(补发时拆回增量),所以比的是回复正文之外的事件条数与拼起来的正文
+    && replay.filter((e) => e.type !== 'text' && e.type !== 'thinking').length === events.filter((e) => e.type !== 'text' && e.type !== 'thinking').length
+    && replay.filter((e) => e.type === 'text').map((e) => e.delta ?? '').join('') === said && r.project?.rev === p.rev, {
+    listed: item ? { title: item.title, state: item.state } : null, replayed: replay.length, onDisk: events.length, sameReplyText: replay.filter((e) => e.type === 'text').map((e) => e.delta ?? '').join('') === said, projectRev: r.project?.rev ?? null });
+  await sleep(500);
+  const seen = await projectOf(bob, PID);
+  const u = r.undo ?? {};
+  check('R7 撤销能撤掉 Agent 的改动:取得到最后一次写入的逆操作,以创建者自己的身份提交,别的成员看到结果', u.found === true && u.event?.actor?.service === 'agent' && u.submit === 'ok' && u.rev?.[1] === u.rev?.[0] + 1
+    && seen.rev === p.rev + 1 && JSON.stringify(seen.project) !== JSON.stringify(p.project), {
+    undone: u.event ? { tool: u.event.tool, inverseOps: u.event.inverseOps, actor: u.event.actor } : null, submit: u.submit ?? null, rev: u.rev ?? null, otherMemberRev: seen.rev,
+    after: { title: clipOf(seen.project, 'clip-bars')?.params?.title ?? null, stateful: [clipOf(seen.project, 'clip-stateful')?.start, clipOf(seen.project, 'clip-stateful')?.end] },
+  });
+
+  // 两位成员同时各开一个对话:互不串
+  const carol = await joinAs(BASE, proj, { ...creds.carol, device: dev.carol });
+  const apiB = agentApi(AGENT_URL, bob);
+  const apiC = agentApi(AGENT_URL, carol);
+  const [sb, sc] = await Promise.all([
+    apiB.send('real-bob', '请直接改,不用问我:把片段 clip-bars 这张卡的 suffix 参数改成「分」。只改这一处。'),
+    apiC.send('real-carol', '请直接改,不用问我:把片段 clip-canvas 的结束时间改成第 2 秒(开始时间不变)。只改这一处。'),
+  ]);
+  const [eb, ec] = await Promise.all([apiB.events('real-bob', { ms: 300_000 }), apiC.events('real-carol', { ms: 300_000 })]);
+  await sleep(800);
+  const fin = await projectOf(bob, PID);
+  const after = await bob.ask({ type: 'events.list', projectId: PID });
+  const who = (prefix) => (after.items ?? []).filter((e) => e.opId !== undefined && e.opId !== null && String((e.actor ?? {}).userId ?? '').startsWith(prefix)).length;
+  // 「互不串」看的是对话:各自的事件流里只有自己那条用户消息、自己那一轮的事件,工具调用只动自己被交代的那个片段。
+  // 项目是共用的:一方的写入因为另一方刚改过而被要求重读时,工具结果里会提到对方改了什么,那是项目内容,不算串
+  const mine = (events, clipId) => events.filter((e) => e.type === 'tool_call' && typeof e.input?.clipId === 'string').every((e) => e.input.clipId === clipId);
+  const users = (events) => events.filter((e) => e.type === 'user').map((e) => String(e.prompt ?? ''));
+  const runs = (events) => new Set(events.map((e) => e.runId).filter(Boolean));
+  const mentions = (events, word) => events.filter((e) => JSON.stringify(e).includes(word)).map((e) => `${e.type}:${e.name ?? ''}:${String(e.summary ?? e.delta ?? '').slice(0, 90)}`).slice(0, 3);
+  const disjoint = [...runs(eb.events)].every((id) => !runs(ec.events).has(id));
+  check('R8 两位成员同时各开一个对话:各改各的都落地,事件互不出现,署名各是各的', sb.status === 202 && sc.status === 202 && eb.done && ec.done
+    && clipOf(fin.project, 'clip-bars')?.params?.suffix === '分' && clipOf(fin.project, 'clip-canvas')?.end === 2 && who('bob@') >= 1 && who('carol@') >= 1
+    && mine(eb.events, 'clip-bars') && mine(ec.events, 'clip-canvas') && users(eb.events).length === 1 && users(ec.events).length === 1
+    && users(eb.events)[0].includes('suffix') && users(ec.events)[0].includes('clip-canvas') && disjoint, {
+    sent: [sb.status, sc.status], suffix: clipOf(fin.project, 'clip-bars')?.params?.suffix ?? null, canvasEnd: clipOf(fin.project, 'clip-canvas')?.end ?? null,
+    writesBy: { bob: who('bob@'), carol: who('carol@') }, bobTools: toolsOf(eb.events), carolTools: toolsOf(ec.events), ownToolCallsOnly: { bob: mine(eb.events, 'clip-bars'), carol: mine(ec.events, 'clip-canvas') }, runIdsDisjoint: disjoint, bobEventsMentioningCarolsClip: mentions(eb.events, 'clip-canvas'), carolEventsMentioningSuffix: mentions(ec.events, 'suffix'),
+  });
+  for (const c of [bob, carol]) c.close();
+  process.stdout.write(`${JSON.stringify({ realModel: usageNow(), mainRunTools: toolsOf(events) })}\n`);
 }
 
 let code = 0;
