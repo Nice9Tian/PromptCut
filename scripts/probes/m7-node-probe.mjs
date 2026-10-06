@@ -57,6 +57,7 @@ const deadline = Date.now() + 30 * 60_000;
 const fails = [];
 const out = { ok: false, run: RUN, site: SITE, out: OUT, steps: {} };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ` :: ${JSON.stringify(extra).slice(0, 600)}`)); return !!cond; };
+let debugProbe = null;
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), step, ...fields })}\n`);
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
@@ -67,6 +68,7 @@ async function until(label, fn, timeoutMs, everyMs = 300) {
     try { v = await fn(); } catch { v = null; }
     if (v) return v;
     if (Date.now() > end) { fails.push(`超时:${label}`); return null; }
+    if (process.env.PROBE_DEBUG && Date.now() - (until.last ?? 0) > 15_000) { until.last = Date.now(); say('waiting', { label, v: debugProbe ? await debugProbe().catch((e) => String(e?.message ?? e)) : null }); }
     await delay(everyMs);
   }
 }
@@ -165,7 +167,9 @@ async function startSplitter({ projectId, creator, codeVersion }) {
 /* ================================================================== 页面 */
 
 let browser = null;
-const P = (page, fn, ...a) => page.evaluate(fn, ...a);
+/** 页面求值带时限:主文档被卡住时不让探针跟着挂死(回绝后由各处的 `until` 当「还没等到」处理) */
+const EVAL_TIMEOUT_MS = 30_000;
+const P = (page, fn, ...a) => Promise.race([page.evaluate(fn, ...a), delay(EVAL_TIMEOUT_MS).then(() => { throw new Error('页面 30 秒没应答'); })]);
 const shot = async (page, name) => { const f = path.join(OUT, `${name}.png`); await page.screenshot({ path: f }).catch(() => {}); return f; };
 async function typeInto(page, sel, text) {
   await page.waitForSelector(sel, { visible: true, timeout: 20_000 });
@@ -249,6 +253,7 @@ try {
   check(ready?.eligibility?.ok, '当节点的条件成立(在线构建、普通档双舞台、Chromium、成员、测量落定)', ready?.eligibility);
   out.steps.ready = ready && { envFingerprint: ready.envFingerprint, codeVersion: ready.codeVersion?.slice(0, 12), nodeId: ready.nodeId, eligibility: ready.eligibility };
   say('node.ready', out.steps.ready ?? {});
+  debugProbe = async () => ({ node: await P(page, () => { const d = window.__pcBrowserNode?.(); return d ? { ready: d.ready, counters: d.counters, elig: d.eligibility, last: d.lastError ?? d.last ?? null, running: d.running ?? null } : null; }), plan: await P(page, () => { const p = window.__pcPlanPublisher?.(); return p ? { last: p.last, log: (p.log ?? []).slice(-3) } : null; }), exec: await P(page, () => window.__pcCardExecDiag?.() ?? null) });
   // 从节点报到起算主文档长任务(契约 M7-A12:生成快照期间主文档长任务 0)
   await P(page, () => { window.__pcLongTasks.length = 0; });
 

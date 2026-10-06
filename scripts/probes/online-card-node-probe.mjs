@@ -90,6 +90,11 @@ const CARD_SOURCE = `/** 探针:在线执行用户卡的端到端(块 N);无相�
 import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string; tint: string }
 function OcnCard({ params }: CardProps<Params>) {
+  // 每次渲染忙等 40 毫秒(真墙钟):这张卡在本页能运行之后和内置卡一样按轻重区分,判轻的不进预渲染集合、不发任务;
+  // 探针要的是「判重、发清单计划、由浏览器节点认领」这条路,所以人为把它的每拍成本拉高(同 src/cards/_probe/slow.tsx 的做法)
+  const now = () => ((globalThis as any).__pcRealNow ? (globalThis as any).__pcRealNow() : performance.now());
+  const end = now() + 40;
+  while (now() < end) { /* 烧时间 */ }
   return <div className="absolute inset-0 flex items-center justify-center" data-ocn-card="1" style={{ color: params.tint, fontSize: 64 }}>OCN {params.text}</div>;
 }
 export const ocnCard: CardDef<Params> = {
@@ -238,7 +243,8 @@ async function startSplitter({ projectId, creator, codeVersion, envFingerprint, 
         if (!ctx) return;
         const candidates = splitCandidatesOf(tasks);
         const table = layerMapOf({ key: `ocn-${RUN}`, project: ctx.project, cardPlan: ctx.cardPlan }, { fingerprint: envFingerprint, candidatesOf: (c) => candidates.get(c.contentKey) ?? [] });
-        await contentClient.put('snapshot-manifest', layerMapKeyOf(planTask.source.projectId), table);
+        // 层表的键按**项目内容里的 id**(在线页面的在线来源按 `project.id` 取层表,桌面也是按它写);不是清单计划里文档服务那一侧的项目号
+        await contentClient.put('snapshot-manifest', layerMapKeyOf(ctx.project?.id || planTask.source.projectId), table);
       },
     },
     sink: { has: async () => false, put: async () => ({ complete: false }) },
@@ -386,7 +392,9 @@ try {
   const { resultKeyOf } = await import('../../server/render-node/fingerprint.mjs');
   const { manifestMatches } = await import('../../server/artifact-transfer.mjs');
   const lib = await creatorContent(made.projectId, creator, 'chk');
-  const layersItem = await lib.content.get('snapshot-manifest', `layers:${made.projectId}`).catch(() => null);
+  // 层表的键按项目内容里的 id(与在线页面取层表的键同一个)
+  const contentProjectId = await P(A, () => window.__pcStore.getState().project.id).catch(() => null);
+  const layersItem = await lib.content.get('snapshot-manifest', `layers:${contentProjectId || made.projectId}`).catch(() => null);
   const layers = layersItem?.body?.layers ?? [];
   const layer = layers.find((l) => l.clipId === clipA);
   out.steps.layer = layer ? { candidates: layer.candidates?.map((c) => c.envFingerprint), contentKey: layer.contentKey } : null;
@@ -409,6 +417,7 @@ try {
     return s?.layers?.some?.((l) => l.clipId === clipA) ? s : null;
   }, 120_000, 1000, { pending: true });
   out.steps.memberB = snapsB && { layers: snapsB.layers?.filter?.((l) => l.clipId === clipA), aliveKeys: snapsB.aliveKeys };
+  if (!snapsB) out.steps.memberBDebug = await P(B, (id) => { const j = (v) => { try { return JSON.parse(JSON.stringify(v ?? null)); } catch { return null; } }; const s2 = j(window.__pcOnlineSnapshots?.()); const d = window.__pcCardExecDiag?.(); return { online: s2 && { ...s2, layers: (s2.layers ?? []).slice(0, 6) }, run: d?.run ?? null, clip: window.__pcStore.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id) ?? null }; }, clipA).catch((e) => String(e?.message ?? e));
   check(!!snapsB, 'A-2 ★ 乙按层表贴上甲的浏览器节点产出的这一层', out.steps.memberB, { pending: true });
   await shot(B, 'ocn-member-b');
 
