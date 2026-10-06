@@ -176,7 +176,11 @@ export function loadHostConfig(env = process.env) {
 }
 
 /** `superseded`:执行器判这份内容已被新版本取代、报给队列作废的任务数(`render-queue-contract.md` J.15),不计入 `failed` */
-const emptyStats = () => ({ claimed: 0, completed: 0, dedup: 0, failed: 0, superseded: 0, lost: 0, discarded: 0, released: 0 });
+/**
+ * `completed` / `dedup` 只数**细任务**:渲完交付的、与产物库里已有而以去重方式交付的。`plans` 数做完的计划任务(切分并发布了细任务;
+ * 托管方的渲染节点认领带片段清单的计划时走这里)。一个只切了计划、细任务都以去重方式交付的节点 `completed` 是 0,要看 `plans` 与 `dedup`。
+ */
+const emptyStats = () => ({ claimed: 0, completed: 0, dedup: 0, plans: 0, failed: 0, superseded: 0, lost: 0, discarded: 0, released: 0 });
 
 /**
  * @param {object} options
@@ -375,6 +379,7 @@ export function createRenderHost({
         const type = event?.type;
         if (type === 'completed') m.stats.completed++;
         else if (type === 'dedup') m.stats.dedup++;
+        else if (type === 'plan-split') m.stats.plans++;
         else if (type === 'failed') {
           m.stats.failed++;
           if (event.error === 'service-quota') {
@@ -508,6 +513,7 @@ export function createRenderHost({
         claimed: m.stats.claimed,
         completed: m.stats.completed,
         dedup: m.stats.dedup,
+        plans: m.stats.plans,
         failed: m.stats.failed,
         superseded: m.stats.superseded,
         lost: m.stats.lost,

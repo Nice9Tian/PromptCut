@@ -396,6 +396,8 @@ async function main() {
     clearInterval(polling);
     const disk = diskConversation(UID, 'ux-usercard');
     const results = (disk?.events ?? []).filter((e) => e.type === 'tool_result').map((e) => `${e.name}:${e.ok ? 'ok' : `error ${String(e.summary ?? '').slice(0, 120)}`}`);
+    // 工作进程每秒向管理进程交一次诊断:渲完的那一刻读到的可能还是上一拍的计数,等两拍再读
+    await sleep(2500);
     const st = await renderStatus();
     const resident = (st.queue?.nodes ?? []).find((n) => n.projectId === UID) ?? null;
     const iso = (st.isolation?.queue?.nodes ?? []).find((n) => n.projectId === UID) ?? null;
@@ -423,7 +425,7 @@ async function main() {
       && map.type === 'content.item' && !map.missing && layerClips.includes(clip?.id) && found > 0 && blobBytes() > filesBefore && uma.all.filter((m) => m.type === 'task.published').length === 0, {
       sent: left.sent?.status ?? null, initiatorGone: left.killed, end: endLog.state, toolResults: results, cardSourceInLibrary: typeof stored.body === 'string', 
       clipWithUserCard: clip ? { id: clip.id, cardId: clip.cardId } : null, outcome: rendered?.event ?? '没有结果', renderedMs: timings.usercardRenderedMs, membersEverOnline: sawMembers,
-      isolatedWorker: iso ? { nodeId: String(iso.nodeId).slice(0, 34), claimed: iso.claimed, completed: iso.completed, failed: iso.failed } : null,
+      isolatedWorker: iso ? { nodeId: String(iso.nodeId).slice(0, 34), claimed: iso.claimed, completed: iso.completed, dedup: iso.dedup ?? null, plans: iso.plans ?? null, failed: iso.failed } : null,
       residentWorker: resident ? { claimed: resident.claimed, hold: resident.hold ?? null, cards: resident.cards?.state ?? null } : null,
       ...(rendered?.event === 'agent.render.done' ? {} : { isolationStatus: st.isolation ?? null, renderLog: render ? render.logs.filter((l) => /iso|isolat|card/i.test(JSON.stringify(l))).slice(-12).map((l) => JSON.stringify(l).slice(0, 260)) : null, agentRenderLog: agent.logs.filter((l) => /render|publish/.test(String(l.event)) && l.projectId === UID).slice(-8).map((l) => JSON.stringify(l).slice(0, 220)) }),
       layerMapHasUserCardLayer: layerClips.includes(clip?.id), layers: layerClips.length, blobsFound: found, assetFiles: [filesBefore, blobBytes()],

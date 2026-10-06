@@ -338,6 +338,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   let isoKey = null;
   let isoReport = null;
   let isoReportAt = 0;
+  /** 上一轮隔离工作进程最后一次交来的各节点计数（这一轮结束、数据清空之后状态口还看得到它做了什么） */
+  let isoLastQueue = null;
+  const countsOf = (n) => ({ projectId: n.projectId, nodeId: n.nodeId, claimed: n.claimed ?? 0, completed: n.completed ?? 0, dedup: n.dedup ?? 0, plans: n.plans ?? 0,
+    failed: n.failed ?? 0, superseded: n.superseded ?? 0, lost: n.lost ?? 0, discarded: n.discarded ?? 0, released: n.released ?? 0 });
   let isoProc = null;
   const isoLog = (event, fields = {}) => log(event, { worker: 'isolated', ...fields });
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -411,6 +415,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       async cleanup() {
         try { isoProc?.killSync(); } catch { /* 已经没了 */ }
         isoProc = null;
+        if (isoReport?.queue?.nodes?.length) isoLastQueue = { at: isoReportAt, nodes: isoReport.queue.nodes.map(countsOf) };
         isoReport = null;
         const left = await wipeIso();
         if (left !== 0) throw new Error(`数据目录没清干净（还剩 ${left} 项）`);
@@ -555,6 +560,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           worker: isoProc ? isoProc.status() : null,
           reportAgeMs: isoReportAt ? Date.now() - isoReportAt : null,
           queue: isoReport?.queue ?? null,
+          // 上一轮结束时的计数（`queue` 在一轮结束后是 null：那一轮的诊断随数据目录一起清掉了）
+          lastQueue: isoLastQueue,
           dataLeft: isolation.active ? null : leftoverCount(config.isoDataDir),
         },
         limits: { maxConcurrent: config.maxConcurrent, maxProjects: config.maxProjects, memoryMax: config.memoryMax, memoryHigh: config.memoryHigh, cpuQuota: config.cpuQuota, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}` },
