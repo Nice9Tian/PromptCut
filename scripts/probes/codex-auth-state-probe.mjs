@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
@@ -25,8 +26,13 @@ const env = { ...process.env, PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_AUTH_SIMULA
 env.PROMPTCUT_PRERENDER_MODE = 'agent';
 fs.writeFileSync(env.PROMPTCUT_AI_CONFIG, JSON.stringify({ version: 1, defaultProvider: 'codex', quota: { enabled: false } }));
 const log = fs.openSync(path.join(out, 'server.log'), 'a');
-const server = spawn(process.execPath, ['--import', './scripts/probes/codex-auth-fixture-loader.mjs', 'node_modules/vite/bin/vite.js', '--port', '5203', '--strictPort', '--host', '127.0.0.1'], { cwd: root, env, windowsHide: true, stdio: ['ignore', log, log] });
-const origin = 'http://127.0.0.1:5203';
+// vite 向上解析:在 worktree 里(没有自己的 node_modules,依赖在主仓库目录)也起得来。端口缺省 5203,--port 可改(连同 +1、+2 两个舞台端口都要空着)
+const viteBin = path.join(path.dirname(createRequire(import.meta.url).resolve('vite/package.json')), 'bin', 'vite.js');
+const portArg = process.argv.indexOf('--port');
+const PORT = portArg >= 0 ? Number(process.argv[portArg + 1]) : 5203;
+if (!Number.isInteger(PORT) || PORT < 1024 || PORT > 65533) { console.error('--port 要是端口号'); process.exit(2); }
+const server = spawn(process.execPath, ['--import', './scripts/probes/codex-auth-fixture-loader.mjs', viteBin, '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: root, env, windowsHide: true, stdio: ['ignore', log, log] });
+const origin = `http://127.0.0.1:${PORT}`;
 const results = [];
 const check = (name, ok, detail = {}) => { results.push({ name, ok, ...detail }); console.log(JSON.stringify(results.at(-1))); if (!ok) throw new Error(name); };
 const delay = ms => new Promise(r => setTimeout(r, ms));
