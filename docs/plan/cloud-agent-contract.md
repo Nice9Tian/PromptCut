@@ -557,12 +557,12 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | 跑法 | 含义 | 个数 |
 |---|---|---|
 | 在副本上执行（`route`） | 在服务端的项目副本上同步执行，改动带期望版本提交给文档服务；进程级的锁里跑，实现必须是同步的。其中看画面的四个（标 `look`）读副本后向同机的渲染服务要一帧，不进锁（9.8） | 71 |
-| 服务端另有实现（`hosted`） | `server/agent/service/hosted-tools.mjs`（声音的三组在 `hosted-sound.mjs`、`hosted-audio.mjs`、`hosted-card-audio.mjs`）：文件只进这个对话的工作区、出网只经出网闸、素材经素材服务、卡片源码经文档服务的内容库、花钱的调用记用量。外部的等待在锁外，进锁只做同步的改项目 | 13 |
+| 服务端另有实现（`hosted`） | `server/agent/service/hosted-tools.mjs`（声音的三组在 `hosted-sound.mjs`、`hosted-audio.mjs`、`hosted-card-audio.mjs`，网页采集在 `hosted-collect.mjs`）：文件只进这个对话的工作区、出网只经出网闸、素材经素材服务、卡片源码经文档服务的内容库、花钱的调用记用量。外部的等待在锁外，进锁只做同步的改项目 | 20 |
 | 就地执行（`server`） | 不碰项目：`wait`、`report_progress`、多 Agent 公告板四个 | 6 |
 | 要操作发起人的界面（`initiator`） | 发起方不在线时立刻回 `{ ok: false, initiatorOffline: true, error }`，Agent 据此继续；在线时读得到的照答 | 8 |
-| 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 30 |
+| 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 23 |
 
-交给模型的是前四类共 98 个（加驱动自带的 `think`）〔2026-10-07 接上声音的六个，见 9.4a～9.4c 与第 26 节〕；节点没有配看画面的口子（`PROMPTCUT_AGENT_LOOK_URL`）时少掉看画面的四个与卡片声音的两个（都要同机的渲染服务），是 92 个，看画面的四个调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 在这台节点上看不了画面…' }`；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
+交给模型的是前四类共 105 个（加驱动自带的 `think`）〔2026-10-07 接上声音的六个与网页采集的七个，见 9.4a～9.4d 与第 26、27 节〕；节点没有配看画面的口子（`PROMPTCUT_AGENT_LOOK_URL`）时少掉看画面的四个与卡片声音的两个（都要同机的渲染服务），是 99 个，看画面的四个调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 在这台节点上看不了画面…' }`；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
 
 ### 9.2 逐个工具
 
@@ -575,12 +575,12 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption`、`list_shots`、`list_subjects` | — | — | `stt_status`、`stt_install`、`transcribe_media`（语音识别）、`detect_shots`（镜头）、`track_points`、`get_track`、`track_status`、`track_install`（追踪）、`detect_subjects`、`subject_status`、`subject_install`（主体）：要节点上的 Python 运行环境与模型权重，并把页面里的作业表搬到服务端。`attach_clip_motion`：要一份追踪结果 |
 | cards（8） | `list_cards`（含本项目的用户卡）、`apply_card`；`bake_card`、`inspect_card_dom`（看画面，9.8） | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | — |
 | vision（2） | `see_frames`（时间轴的画面）、`get_gif`（看画面，9.8） | — | — | `see_frames` 的素材镜头拼图（`source: "media"`）：要节点上的镜头识别，回明确的原因 |
-| collect（9） | — | — | `collect_login`、`collect_login_check`（要用户自己扫码或输口令） | 其余七个：要节点上的下载器（Python 与 yt-dlp、ffmpeg），并让它只经出网闸的代理出网 |
+| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check`（要用户自己扫码或输口令） | — |
 | browser（8） | — | — | `web_handoff` | 其余七个：要节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录 |
 | agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（要页面开页签） | — |
 | core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause` | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
 
-「这一版还没接上」的 30 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
+「这一版还没接上」的 23 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
 
 **要操作发起人界面的八个，发起方在线时**：`get_selection` 按发消息时的选区答；其余七个要反过来操作他的页面，云端到页面的反向通道这一版没有，回 `{ ok: false, initiatorOnly: true, error }`（说明做不了、请用户自己在界面上操作）。反向通道记未达成。
 
@@ -638,6 +638,23 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - **用量**：每次生成记一行 `service: 'card-audio'`、`vendor: 'render'`、`units: <WAV 字节数>`。
 - 入库的 WAV 是以**成员本人**的权限写的（不占托管方渲染服务的产物容量）。
 
+### 9.4d 网页采集（`collect_status`、`collect_install`、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`）
+
+〔2026-10-07 做成，实现记录在第 27 节〕`server/agent/service/hosted-collect.mjs`。
+
+- **外部程序与桌面版是同一个**：`python -m promptcut_collect <子命令>`（检出里的 `python/promptcut_collect`，里面是 yt-dlp 与 ffmpeg），同一份命令行与 JSONL 约定。
+- **只经工作区的受限子进程起**（9.5）：工作目录是这个对话的工作目录，环境变量按白名单重建，不带任何 `PROMPTCUT_*`。
+- **只经出网闸的代理出网**（9.6）：每次调用起一个只绑回环的代理、用完关掉；子进程的环境里只有指向它的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`（大小写两套），`NO_PROXY` 是空的。代理对每个目标做与出网闸相同的检查：回环、内网、云厂商元数据地址、同机各服务一律到不了。
+- **模型给的链接**只收 `http(s)://` 开头的地址，或 B 站的 BV 号 / av 号；别的（`file:`、`ftp:`、以 `-` 开头的）在起子进程之前就被拒。
+- **下载物只落在对话的工作目录**（`collect/<作业号>/`）。入库走 `import_media` 的那条路（成员本人的素材票据、在项目副本上登记，视频照桌面版放上时间轴）；只读成员在下载之前就被拒。只认作业目录里这一层的文件（下载器报的别处的路径不认），入库后整个作业目录删掉。
+- **作业表在服务端**，按实例（项目 × 成员）分，作业号带随机数（`collect-<12 位十六进制>`）；同一位成员在同一个项目里的几个对话互相查得到，别的项目、别的成员查不到。作业表随对话落盘（工作目录的 `collect/jobs.json`）：服务重启后在原来的对话里查，得到的是「云端 Agent 服务重启过，这次下载中断了」，不是「找不到」。
+- **上限**：一个作业的下载物合计 512 MiB（边下边量，超了就停）、片子时长 2 小时、墙钟 15 分钟、最多入库 20 个文件；一位成员在一个项目里同时只跑 1 个下载，整个进程同时 2 个。超限的不入库、不留文件，作业记 `error` 与原因。
+- **`collect_install` 在云端不装东西**：节点上有没有采集工具由部署决定（`PROMPTCUT_AGENT_COLLECT_PYTHON`，9.9）。没装时 `collect_status` 回 `{ ok: true, ready: false, ytdlp: { installed: false }, hint: '这台云节点没有装采集工具…' }`，`collect_install` 与 `collect_download` 回 `{ ok: false, cloudUnavailable: true, error }`，`collect_probe`、`collect_search` 报同一句原因；一个子进程也不起。装了时 `collect_install` 回 `{ ok: true, alreadyInstalled: true }`，同样不起安装的子进程。
+- **登录态**：`collect_login`、`collect_login_check` 要用户自己扫码，是「要操作发起人界面」的工具（9.2）。云端不存任何站点的 cookies：下载按未登录的画质，`collect_download` 的 `cookies` 参数不用（结果的 `notes` 里注明），`collect_logout` 回 `{ ok: true, loggedOut: false, note }`。
+- **用量**：每次调用记一行 `service: 'collect'`、`vendor: 'yt-dlp'`、`model: <子命令>`、`units: <下载的字节数，查状态 / 探测 / 搜索是 0>`、`unit: 'bytes'`；汇总里的 `calls` 就是次数。
+- **残余面**（照实写）：代理只管「经它出去的」；下载器若不认环境里的代理、自己去连，或往工作目录以外写文件，代码这一层拦不住——靠节点上用独立的非特权用户跑子进程与系统级的出站限制兜底（9.5、9.6 的同一条）。yt-dlp 与它调用的 ffmpeg 都认环境里的代理。
+- 对话被删时还在跑的下载不会被主动停掉（它的作业目录随对话的工作目录删掉，之后入库会失败并记 `error`）。
+
 ### 9.5 工作区：按「项目 × 对话」隔离
 
 `server/agent/service/workspace.mjs`。凡是读写本地文件的工具只经它：
@@ -650,7 +667,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 
 ### 9.6 出网闸
 
-`server/agent/service/egress.mjs`。凡是按模型给的地址发请求的工具只经它（现在是 `import_media` 的按地址导入；网页采集、网页接管接上时经它的代理）：
+`server/agent/service/egress.mjs`。凡是按模型给的地址发请求的工具只经它（`import_media` 的按地址导入在进程内经它；网页采集的子进程经它的代理，9.4d；网页接管接上时同样经代理）：
 
 - 只许 http / https；地址里不许带用户名口令；端口只许 80、443、8080、8443；
 - 主机名先解析，解析出的**每一个**地址都要过黑名单：回环、链路本地（含 `169.254.169.254`）、私有网段、运营商级 NAT、保留与组播段、本机各网卡的地址，以及 IPv6 的对应范围与把 IPv4 包进去的前缀（IPv4 映射、NAT64、6to4、Teredo）；有一个不过就整个拒；
@@ -662,7 +679,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 
 ### 9.7 系统提示词
 
-`cloudSystemNote({ look })` 只写与本机真实的差别：用户可能已经离开（「发起方不在线」时不要等）；看画面（节点配了口子：照常用但比本机慢，带自定义卡片的项目第一次要等十来秒、别的项目在渲时要排队，工具回「这次没看成」时不要反复重试、按规定框继续并在汇报里说明；没配：看不了画面，要求看画面的步骤一律跳过、汇报里说明）；这一版还没有的工具；附件与素材的地址写法；建卡要写成字面量、不能引用外链；配音会产生费用。不再有「只能用内置卡」「云端暂不支持」这类话。第 22.3 节列的五个缺口：1、2、4 已写进提示词；3 不再成立（可以建卡）；5（摘要里没标哪些内置卡需要素材）没有做。
+`cloudSystemNote({ look })` 只写与本机真实的差别：用户可能已经离开（「发起方不在线」时不要等）；网页采集经托管方的出口出网、不带登录态、节点没装时不能由模型来装；声音（音效与测响度照常用，卡片声音由渲染服务生成）；看画面（节点配了口子：照常用但比本机慢，带自定义卡片的项目第一次要等十来秒、别的项目在渲时要排队，工具回「这次没看成」时不要反复重试、按规定框继续并在汇报里说明；没配：看不了画面，要求看画面的步骤一律跳过、汇报里说明）；这一版还没有的工具；附件与素材的地址写法；建卡要写成字面量、不能引用外链；配音会产生费用。不再有「只能用内置卡」「云端暂不支持」这类话。第 22.3 节列的五个缺口：1、2、4 已写进提示词；3 不再成立（可以建卡）；5（摘要里没标哪些内置卡需要素材）没有做。
 
 ### 9.8 看画面（即时渲染）
 
@@ -685,7 +702,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | `measure_audio` | ffmpeg 与 ffprobe（`PROMPTCUT_FFMPEG`、`PROMPTCUT_FFPROBE` 指路径，或在 PATH 上；Agent 服务的运行用户要能执行） | 已接上；没装时工具回明确的原因 |
 | 素材小尺寸一档 | ffmpeg | 没接上 |
 | 语音识别、镜头、追踪、主体 | Python 3 与各扩展包、模型权重（`python/` 下各包的 `requirements-*.txt`），`PROMPTCUT_PYTHON` | 没接上 |
-| 网页采集 | Python 与 yt-dlp、ffmpeg | 没接上 |
+| 网页采集 | Python 3 与 yt-dlp（`PROMPTCUT_AGENT_COLLECT_PYTHON` 指解释器的绝对路径）、ffmpeg（`PROMPTCUT_FFMPEG`）；步骤见 27.4 | 已接上；没配时工具回「这台云节点没有装采集工具」 |
 | 网页接管、`measure_audio_js` | 无头浏览器 | 没接上 |
 | 音效合成 | 不用装东西（纯计算） | 已接上 |
 | 卡片声音 | 同「看画面」：同机的渲染服务与 `PROMPTCUT_AGENT_LOOK_URL` | 已接上 |
@@ -1480,8 +1497,8 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 
 1. ~~看画面（即时渲染）：`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom`、`get_layout` 的实体框~~——已做成（2026-10-07，第 25 节）。仍差的只有 `see_frames` 的素材镜头拼图（要镜头识别）。
 2. 感知类工具（语音识别、镜头、追踪、主体）、`auto_workflow`、`background_job_status`、`attach_clip_motion`——差节点上的 Python 环境与模型权重，以及把页面里的作业表搬到服务端。
-3. 音效合成与卡片声音生成、`measure_audio`、`measure_audio_js`——差服务端的合成 / 解码与隔离进程。
-4. 网页采集（七个）、网页接管（七个）——差节点上的下载器与浏览器，并让它们只经出网闸的代理出网（代理已有：`egress.mjs` 的 `startProxy`）。
+3. ~~音效合成与卡片声音生成、`measure_audio`~~——已做成（2026-10-07，第 26 节）。仍差的只有 `measure_audio_js`（要渲染服务一侧开一个跑脚本的口子）。
+4. ~~网页采集（七个）~~——已做成（2026-10-07，第 27 节；链路用下载器替身验通，真的 yt-dlp 留到节点上验）。网页接管（七个）仍差节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录。
 5. 发起方在线时反过来操作他的页面（`seek`、`play`、`pause`、`web_handoff`、`collect_login`、`collect_login_check`、`spawn_agent`）——差云端到页面的反向通道；现在在线时回 `initiatorOnly`，不在线时回「发起方不在线」。
 6. 导入的素材没有小尺寸一档；节点上没有 ffprobe 时音视频（WAV 除外）不带时长与宽高。
 7. 子进程用独立的非特权用户跑——只写进了部署说明的要求，代码里没有子进程在用（上面第 2～4 项接上时才用得到）。
@@ -1645,3 +1662,44 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 - 卡片声音的身份记录里的源码版本（`identity.sourceVersion`）是渲染页按桌面版同一算法算的；「在线成员的页面按这份记录判它没过期、放得出声」没有在真实浏览器里断言。
 - 带输入的声音卡（`inputs` 引素材或别的节点）没有验：渲染页求值时要按素材地址取 PCM，那条路在托管方工作进程里通不通没有试；探针里的夹具是纯合成（`inputs: {}`）。
 - 新节点上要核对的：Agent 服务的运行用户执行得了 ffmpeg / ffprobe；ffmpeg 子进程是不是在独立的非特权用户下（代码不假设）；`cloud-agent-sound-probe` 的 S3、S5 在 Linux 上重跑一遍。
+
+---
+
+## 27. 网页采集的实现记录（2026-10-07，分支 `claude/cloud-agent`）
+
+接着第 26 节，把网页采集的七个工具接上。上文与本节冲突时以本节为准；第 9.1、9.2、9.6、9.7、9.9 节已改，新增 9.4d。语义文档没有改。
+
+### 27.1 各工具做到哪一步
+
+| 工具 | 状态 | 说明 |
+|---|---|---|
+| `collect_status`、`collect_search`、`collect_probe`、`collect_download`、`collect_job` | 接上（链路用下载器替身验通；真的 yt-dlp 留到节点上验） | 9.4d |
+| `collect_install` | 接上，但在云端不装东西 | 没装回明确的原因；装了回「已经装好」 |
+| `collect_logout` | 接上 | 云端不存登录态，回「没有可退出的」 |
+| `collect_login`、`collect_login_check` | 仍是「要操作发起人界面」 | 不在线回「发起方不在线」，在线回「云端还不能反过来操作他的页面」（没有动） |
+
+### 27.2 对外接口、配置与行为的改动
+
+| 改动 | 在哪 |
+|---|---|
+| Agent 服务新配置 `PROMPTCUT_AGENT_COLLECT_PYTHON`（装了 yt-dlp 的 Python 解释器的绝对路径；不存在 `config.error collect`）；ffmpeg 的目录取自 `PROMPTCUT_FFMPEG`（加到子进程的 PATH 最前面） | `server/agent-service/main.mjs`、`hosted-collect.mjs` 的 `readCollectConfig` |
+| 只给探针的 `PROMPTCUT_AGENT_COLLECT_TEST_ARGS`（把 `-m promptcut_collect` 换成替身脚本）；设了日志里有 `agent.collect.test-runner` | 同上 |
+| `GET /healthz` 多回 `collect`（装没装）与 `collectTestRunner`（**生产必须是 false**，部署后的核对看它）；`agent.ready` 的日志同 | `server/agent-service/http.mjs`、`main.mjs` |
+| 用量流水的 `service` 多一种 `collect` | `hosted-collect.mjs` |
+| 工具表：七个工具从「还没接上」挪到「服务端另有实现」；`collect_search` 进 `CLOUD_SLOW_TOOLS`（单次时限 180 秒） | `cloud-tools.mjs` |
+| 系统提示词：「这一版在云端还没有」里去掉网页采集与声音；新增「网页采集」「声音」两条 | `cloud-tools.mjs` 的 `cloudSystemNote` |
+
+### 27.3 验收（本机，Windows；这台机器没有 yt-dlp，也没有为此去装）
+
+- 下载器替身 `scripts/probes/fixtures/cloud-collect/fake-collect.mjs`：说同一份命令行与 JSONL，**只按环境里的代理出网**（没有代理就失败），并把自己看到的工作目录与环境变量的名字报回来（只读、只报告）。
+- 单测 `cloud-agent-collect.test.mjs`（CA-COL-01～07；出网闸与代理、工作区与受限子进程是真的）：整条链（查状态 → 探测 → 下载 → 入库，入库的字节与源站相同、作业目录删掉、作业表落盘、四行用量）；回环、`localhost`、`[::1]`、`127.1`、10/8、192.168/16、169.254.169.254 的探测与下载全被代理拒掉，替身服务 0 次被连到；`file:`、`ftp:`、以 `-` 开头的地址不起子进程；体积、时长、墙钟上限与取消；没装时不起子进程；只读成员不起子进程、不连源站；作业表按实例分、重启后回「中断了」、作业目录以外的文件不认。
+- `cloud-agent-isolation-probe`：32 条全过（新增 T7，对着真的 Agent 服务进程）：子进程的工作目录是对话的工作目录、环境里没有任何 `PROMPTCUT_*`；九种到同机与内网的地址全被代理拒掉（替身服务 0 次被连到）；下载的 6000 字节入库后别的成员取得到同样的字节、作业目录删掉；指向同机服务的下载作业经代理被拒；只读成员在下载之前被拒（源站 0 次）；另一个项目的对话查不到这边的作业；用量里有 `download:6000bytes`。
+- 没有验的：真的 yt-dlp 与 ffmpeg（合并、转码、412 重试、B 站的搜索）；Linux 上子进程的环境与代理变量；子进程不经代理自己去连、往工作目录以外写（代码拦不住，靠部署）。
+
+### 27.4 节点上要装什么（给部署说明）
+
+1. Python 3（建议单独的虚拟环境，属于跑子进程的那个非特权用户）：`python3 -m venv /opt/promptcut/collect-venv && /opt/promptcut/collect-venv/bin/pip install yt-dlp`；
+2. ffmpeg 与 ffprobe（`measure_audio`、导入素材读时长、采集的合并与转码共用），`PROMPTCUT_FFMPEG` 指它的绝对路径；
+3. Agent 服务的环境里设 `PROMPTCUT_AGENT_COLLECT_PYTHON=/opt/promptcut/collect-venv/bin/python`；**不要**设 `PROMPTCUT_AGENT_COLLECT_TEST_ARGS` 与 `PROMPTCUT_AGENT_EGRESS_TEST_ALLOW`；
+4. 部署后核对 `/healthz`：`collect: true`、`collectTestRunner: false`、`egressTestAllow: false`；再用一个测试项目让云端 Agent 调一次 `collect_status`（应当 `ready: true`）与一次真实的 `collect_probe`；
+5. 建议（代码不假设）：子进程用独立的非特权用户跑，并在系统层面只许它连本机的代理端口段（出站限制），这样下载器即使不认代理也出不去。
