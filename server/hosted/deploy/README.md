@@ -106,3 +106,78 @@ pm2 resurrect && pm2 list                     # 期望 list 里有 promptcut-ren
 ### 容量
 
 渲染服务写成的预渲染块在托管服务的素材服务里单独记账（`<托管数据目录>/assets/.service-usage/render.ndjson`），上限 `min(20 GiB, 托管数据目录所在盘总容量的四分之一)`，`PROMPTCUT_HOSTED_RENDER_CAP_BYTES`（设在 `promptcut-hosted` 的环境里）可改。到上限只拦渲染服务的写入（507 `service-quota`），成员不受影响；删项目时清只归它的块。`status-render` 末尾列记账文件的行数与大小。
+
+## Agent 服务
+
+托管方的云端 Agent 服务（契约 `docs/plan/cloud-agent-contract.md`）：一个不带页面的 Node 进程（PM2 应用 `promptcut-agent`，入口 `server/agent-service/main.mjs`），只绑回环，对外只经 nginx 的 `/agent/`。它用服务名 `agent` 的服务身份连文档服务的控制连接；每个请求的委托票据、每一轮的对话委托都交文档服务核验。它不持有集群令牌、任何成员的口令或项目密钥。
+
+| 占位符 | 缺省值 | 说明 |
+|---|---|---|
+| `DIR` | `/opt/promptcut-render` | 与渲染服务共用的部署目录；Agent 服务的 `cwd` 是 `DIR/current` |
+| `DATA` | `/var/lib/promptcut/agent` | 数据目录（0700）：`config/`（模型配置、Key 的密文、额度）、`tenants/`（对话）、`usage/`（用量流水）、`tmp/` |
+| `SECRETS` | `/var/lib/promptcut/agent-secrets` | 服务私钥目录（0700），里面是 `service-key.json`（0600） |
+| `DOC_URL` | `ws://127.0.0.1:8787` | 文档服务的本机地址（控制连接只认本机发起） |
+| `AGENT_PORT` | `8790` | Agent 服务的端口（只绑 127.0.0.1） |
+| `PUBLIC_ORIGIN` | 空 | 对外的源，只做格式检查并记进日志，可不填 |
+| `HEAP_MB` / `MAX_MEMORY_RESTART` / `KILL_TIMEOUT_MS` | `1536` / `2G` / `8000` | V8 老生代上限、常驻内存超过即由 PM2 重启、重启前给的收尾时间 |
+
+模板：`pm2-promptcut-agent.config.cjs`（PM2）、`nginx-location-agent.conf`（主站 `server` 块里的 `/agent/` 一段；两个舞台源的 `server` 块不加）。
+
+### 先决条件：与在线页面、渲染服务同一个提交
+
+Agent 服务不单独上传代码：它用 `deploy-render` 放上去的那份检出（完整仓库加依赖，要 vite 与 `src/`）。Agent 服务发布的补渲计划带着这份检出的代码版本，渲染服务只认领代码版本相同的计划，在线页面也按同一个代码版本找预渲染的结果。所以**三者必须出自同一个提交**：先换在线页面、`deploy-render`，再 `deploy-agent`。`status-agent` 把 Agent 服务与渲染服务的代码版本并排，不一致标红。
+
+Agent 服务自己不开 Chrome；预渲染用的 chrome-headless-shell 只属于渲染服务（见上面「渲染服务」一节）。含用户卡的片段托管方的渲染节点不认领：云端 Agent 改到这样的片段时，画面要等有渲染节点的成员上线后补上。
+
+### 第一次部署（按顺序）
+
+1. 渲染服务已按上一节部署好（`current` 指向要用的提交）。
+2. `node scripts/remote/docservice.mjs deploy-agent --no-start`：建数据目录与私钥目录、写 PM2 配置，不起进程。
+3. `node scripts/remote/docservice.mjs keygen-agent`：在节点上给服务名 `agent` 生成密钥并登记公钥（等价于在节点上运行 `node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --secrets <SECRETS> --service agent`）。私钥不离开节点、不打印。
+4. 托管组合（`promptcut-hosted`）的环境里加 `PROMPTCUT_AGENT_PUBLIC_URL=https://<主站域名>/agent/v1`，按「重启托管服务前先确认没有正在写入的客户端」的规矩重启它一次。文档服务经成员列表把这个地址下发给页面；不设时页面不出「云端」一项。
+5. nginx 主站 `server` 块里加 `nginx-location-agent.conf` 的那一段，`nginx -t && systemctl reload nginx`。
+6. `node scripts/remote/docservice.mjs deploy-agent`，确认 `/healthz` 有应答；`status-agent` 看代码版本一致；确认无误后 `deploy-agent --save`（`pm2 save`，节点重启后自启）。
+7. 录入模型 Key（见下，由用户做）。录入之前要先验一遍，用 `set-key.mjs --mock` 切到模拟模型。
+
+### 录入模型 Key（由用户在节点上做）
+
+```
+1. 用 SSH 登录到节点（不要用  ssh 主机 "命令"  的形式，Key 不要出现在任何命令里）。
+2. 运行：
+     cd /opt/promptcut-render/current && PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/set-key.mjs
+3. 按提示依次输入：
+     厂商（anthropic / openai / gemini）
+     接口地址（用厂商官方地址就直接回车）
+     模型清单（多个用 | 分隔，第一个是缺省）
+     单次回复的 token 上限（直接回车是 4096）
+     Key（输入时屏幕上不显示，输完回车）
+4. 看到「已保存,末四位 ××××。运行中的服务下一轮对话起就用它,不用重启。」就是成了。
+
+换 Key：再运行一次。
+删掉 Key：加 --clear。
+切到模拟模型（验收与排查用，不调用任何真实模型）：加 --mock；换回真实模型就不带参数再运行一次。
+
+不要把 Key 发到任何对话里。脚本不接受命令行参数或环境变量里的 Key，标准输入不是终端（管道、重定向）时也拒绝录入。
+Key 的密文存在 <数据目录>/config/keys/custom.key，口令由这台机器的指纹（/etc/machine-id）派生：节点重装系统或换机器后要重新录入。
+这层封装挡的是「明文躺在文件里」，挡不住能以同一个系统用户在节点上运行程序的人。
+```
+
+### 额度与用量（托管方在节点上运行，改了即生效，不用重启）
+
+```
+cd /opt/promptcut-render/current
+PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mjs quota set <projectId> --tokens <N> [--window total|month|day] [--runs <N>]
+PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mjs quota clear <projectId>
+PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mjs quota show [<projectId>]
+PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mjs usage [--project <projectId>] [--since 2026-10-01] [--json]
+```
+
+现在不设上限：任何能进云端项目的成员都能用托管方的 Key 跑模型，对外开放之前先按项目把上限发下去。节点级的并发上限（全节点 6 轮、每个项目 3 轮、每位成员 2 轮）在 `<数据目录>/config/limits.json` 的 `node` 里，缺省就有。
+
+### 升级与回退
+
+- 升级：换在线页面 → `deploy-render --commit <提交>`（换 `current`）→ `deploy-agent`（重载；进行中的对话会被记为「中断」，主人回来说一句就接着做）。
+- 回退：`rollback-render` 把 `current` 换回上一份，再 `deploy-agent` 重载一次。在线页面同样退回那个提交。
+- 只停 Agent 服务：`stop-agent`（托管服务与渲染服务不动）；在线页面的「云端」一项会报连不上。要让页面不出这一项，去掉托管组合的 `PROMPTCUT_AGENT_PUBLIC_URL` 并重启它，或撤掉 `agent` 的公钥（`keygen-agent --retire <kid>`）。
+- 换服务密钥：`keygen-agent`（新旧公钥并存）→ `pm2 restart promptcut-agent` → `keygen-agent --retire <旧 kid>`。
+- 四个子命令都收 `--dry-run`：只打印要交给远端的脚本，不连任何远端。
