@@ -42,6 +42,11 @@ export function relayAllowed(url, method) {
   return u.startsWith('/@media/') || u.startsWith('/api/asset/') || u.startsWith('/api/media/');
 }
 export const EGRESS_HEADER = Object.freeze(['Connection-Allowlist', '(response-origin)']);
+/**
+ * 仅供验收（隔离探针的对照段）：设成 1 时不发出口白名单头，只留出口代理这一层——用来单独证明代理这一层自己拦得住
+ * （两层都在时浏览器先拦，请求到不了代理）。生产不设；设了也只是少一层，出口仍由代理管。
+ */
+export const TEST_NO_EGRESS_HEADER_ENV = 'PROMPTCUT_TEST_NO_EGRESS_HEADER';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 
 export const hostedGateWanted = (env = process.env) => !!String(env?.[PAGE_GATE_ENV] ?? '').trim();
@@ -151,6 +156,7 @@ export async function installHostedGate(server, { prerender, env = process.env, 
   // 通行记号：编辑器进程先生成（它起的预渲染进程从环境里继承）；预渲染进程只读不生成
   if (!prerender && !env[GATE_PASS_ENV]) env[GATE_PASS_ENV] = randomBytes(24).toString('hex');
   const pass = String(env[GATE_PASS_ENV] ?? '');
+  const egressHeader = env[TEST_NO_EGRESS_HEADER_ENV] !== '1';
 
   server.middlewares.use((req, res, next) => {
     const given = req.headers[GATE_PASS_HEADER];
@@ -158,7 +164,7 @@ export async function installHostedGate(server, { prerender, env = process.env, 
     // 编辑器一侧：自己的预渲染进程转来的、已经过了那一侧的闸的素材请求
     if (!prerender && samePass(given, pass) && relayAllowed(req.url, req.method)) return next();
     const verdict = pageGate({ url: req.url, method: req.method, headers: req.headers, prerender });
-    if (prerender && verdict.browser) res.setHeader(EGRESS_HEADER[0], EGRESS_HEADER[1]);
+    if (prerender && verdict.browser && egressHeader) res.setHeader(EGRESS_HEADER[0], EGRESS_HEADER[1]);
     // 只记不拦时把浏览器发来的每一条 /api 请求都记下（放行的也记）：定放行表时看页面实际发了什么
     if (mode === 'log' && verdict.browser && verdict.allow && /^\/+api\//i.test(String(req.url ?? ''))) denyLog.note('seen', { layer: 'page', role, method: req.method, path: String(req.url ?? '').split('?')[0].slice(0, 160), reason: 'allowed' });
     if (verdict.allow) {
@@ -194,7 +200,7 @@ export async function installHostedGate(server, { prerender, env = process.env, 
     env.PC_CHROME_ARGS = env.PC_CHROME_ARGS ? `${env.PC_CHROME_ARGS} ${extra}` : extra;
     server.httpServer?.once('close', () => { void proxy.close(); });
   }
-  try { (write ?? ((line) => console.log(line)))(`[page-gate] on ${JSON.stringify({ role, mode, egressProxy: proxy ? proxy.port : null })}`); } catch { /* 日志出错不影响闸 */ }
+  try { (write ?? ((line) => console.log(line)))(`[page-gate] on ${JSON.stringify({ role, mode, egressProxy: proxy ? proxy.port : null, egressHeader: prerender ? egressHeader : null })}`); } catch { /* 日志出错不影响闸 */ }
   installed = { mode, role, counts: () => denyLog.counts(), proxy };
   return installed;
 }

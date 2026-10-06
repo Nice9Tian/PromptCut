@@ -1,6 +1,6 @@
 # 托管方的渲染节点：设计与契约
 
-状态：**主会话已审、按它开工**（2026-10-06，`claude/render-service`；草稿 `acbb2993`）。任务书 `sound-online-render-task.md` 的 D 与第 20～24 条，以及 `cloud-agent-task.md`「用户体验验收」对本段的要求。第 1 批（服务身份、目录、白名单、开关的服务端）与第 2 批（主机动态项目与代理模式、管理进程、背压与内存看护、自检、Chrome 沙箱、本机演练探针）已实现，与本文不一致的地方记在文末「实现记录」；方案 A 的隔离工作进程与语义落稿未做。标〔裁：主会话 2026-10-06〕的是主会话的裁定。
+状态：**主会话已审、按它开工**（2026-10-06，`claude/render-service`；草稿 `acbb2993`）。任务书 `sound-online-render-task.md` 的 D 与第 20～24 条，以及 `cloud-agent-task.md`「用户体验验收」对本段的要求。第 1 批（服务身份、目录、白名单、开关的服务端）与第 2 批（主机动态项目与代理模式、管理进程、背压与内存看护、自检、Chrome 沙箱、本机演练探针）已实现，与本文不一致的地方记在文末「实现记录」；方案 A 的隔离工作进程已实现并用越权探测卡验收（2026-10-07，第 7.5 节与文末「实现记录」）；语义落稿未做。标〔裁：主会话 2026-10-06〕的是主会话的裁定。
 
 依据的现有契约：`auth-contract.md`（凭证、角色、票据）、`render-host-contract.md`（独立渲染主机）、`render-queue-contract.md` B.1、F、I（指纹、卡片锁、前置过滤）、`m7-contract.md` 第 3、6 节、`http-transport-contract.md` 第 10 节（本机信任）。〔裁〕是本文自己定的细节，每条写了理由，主会话可以推翻。「待实现时验证」是没有实测依据、实现时先用探针确认的点。
 
@@ -44,6 +44,8 @@
 | 10 | 保留用户名 `service:` | 认可；新节点上的盘点由主会话部署前做 |
 | 11 | 没有成员在线时也要渲 | `active` 的判据改掉（第 1.3 节）；没人在线时由**云端 Agent 服务发布补渲计划**，渲染服务认领（第 5a 节）；有成员在线的项目优先（第 4 节） |
 | 12 | 开关与通知的形状 | 两种托管方服务合成一种形状：记录 `hosted: { render, agent }`、操作 `set-hosted-service`、通知 `hosted-service-changed`、成员列表顶层 `hosted`（第 1.7、3 节）；白名单按连接的 `service` 字段查；握手对带 `sv` 的票据按登记表的 `actsFor` 分两支（第 1.1、1.4 节） |
+
+**第 1 条的结论（2026-10-07，用户 2026-10-06 要求重开）：方案 A 已交付，不退到方案 B。** 托管方渲染服务按项目隔离地执行项目带来的卡片代码（第 7.5 节），隔离用任务书定义的「越权探测卡」验收（`scripts/probes/hosted-render-isolation-probe.mjs`，37 条断言全过）：读不到别的项目的内容、读不到节点上的凭证与令牌、访问不了工作进程自己的本机接口与同机别的端口、读不到工作目录以外的文件、带不走任何内容到外部地址；渲染身份仍然不能改项目。开工时确认的两个缺口（页面能请求工作进程的本机接口；同步来的样式与脚本在 Node 一侧处理时能读盘、能被当成构建插件执行）都实测存在、都已堵上。残余面只有一条属于既有裁定（素材按哈希寻址，见第 7.5 节末）。上表第 1 行「做不稳就退到方案 B」不再适用。
 
 ---
 
@@ -202,7 +204,7 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 |---|---|---|
 | 并发任务总数 | 2 | `maxConcurrent`（主机现有上限 4）。快照共用一条串行通道，第二个名额主要让「推产物」与「下一段渲染」重叠 |
 | 同时连着的项目 | 16 | 第 2 节 |
-| 工作进程 | 常驻 1 个；隔离工作进程最多再 1 个（第 7.5 节） | 管理进程 |
+| 工作进程 | 常驻 1 个；隔离工作进程最多再 1 个（第 7.5 节）。隔离工作进程并发 1，它在跑时常驻的压到「并发总数 - 1」，两者合起来不超过上面的并发总数；内存上限同样管两者合起来的 | 管理进程 |
 | Chrome | 每个工作进程一个浏览器进程（预渲染进程现有做法） | — |
 | 内存 | 整组硬上限 6 GB，节流线 5 GB | systemd 的 `promptcut-render.slice`：`MemoryMax=6G`、`MemoryHigh=5G`；工作进程经 `systemd-run --scope --slice=…` 起 |
 | CPU | 最多 4 核，抢占时权重是缺省的五分之一 | 同一 slice：`CPUQuota=400%`、`CPUWeight=20`；另 `Nice=10` |
@@ -212,7 +214,7 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 | 管理进程自身 | 300 MB | PM2 `max_memory_restart`（它只量管理进程自己，见下） |
 
 - **为什么不用 PM2 的内存上限管渲染**：`max_memory_restart` 由 PM2 的内部检查每 30 s 看一次，文档没说把子进程算进去；渲染的内存几乎都在 Chrome 子进程里。无交换分区的机器上 30 s 也太慢。所以硬上限交给 cgroup，PM2 只管管理进程的拉起。（待实现时验证：`systemd-run --scope` 在 PM2 拉起的进程里可用、子进程都落在 slice 里；Ubuntu 22.04 缺省是 cgroup v2。）
-- **背压**（管理进程每 5 s 采一次）：`MemAvailable` 低于 2 GB，或本机 `http://127.0.0.1:8787/healthz` 连续 3 次超过 500 ms，或 1 分钟负载高于 8 → 通知工作进程**停止认领新任务**，手里的做完；恢复正常满 30 s 再放开。
+- **背压**（管理进程每 5 s 采一次）：`MemAvailable` 低于 2 GB，或本机 `http://127.0.0.1:8787/healthz` 连续 3 次超过 500 ms，或 1 分钟负载高于这台机器的核数（新节点 8 核即 8；原来写死 8，核少的机器上等于没有这条线；`PROMPTCUT_RENDER_LOAD_HIGH` 可改）→ 通知工作进程**停止认领新任务**，手里的做完；恢复正常满 30 s 再放开。
 - **超限时的表现**：
   - 并发满：不认领，任务留在队列里等；
   - 内存到节流线：内核对这一组加压，渲染变慢；到硬上限：内核在这一组里杀进程（通常是 Chrome），工作进程退出，管理进程记 `worker.exit { reason: 'oom' }`，手里的认领由队列按断线规则收回，管理进程按退避（1 s 起、翻倍、封顶 60 s）重起；10 分钟内第 3 次被杀，并发降到 1 并打 `render.degraded`；
@@ -238,7 +240,8 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
   - `requires.localMedia` 的任务（素材只在发布方本机）；
   - `requires.codeVersion` 不是它的代码版本的任务。**渲染服务必须和在线页面出自同一个提交**，否则一个任务也认领不了（第 7.4 节）；
   - 轨道流任务：〔裁〕第一版不开（不传 `--streams`）。在线浏览器没有轨道流、低内存档看的是小尺寸，开了只白耗 CPU。ffmpeg 仍然装、仍然自检，开关留着；
-  - 用户卡任务：方案 A，由隔离工作进程做（第 7.5 节）；图卡任务：按第二段定的能力位报。能力位集中在一处（`render-node/host.mjs` 的 `HOST_CAPABILITIES` 旁边加托管方渲染服务自己的一张表），第二段合流后主会话再对。
+  - 用户卡任务：常驻工作进程不认领；内容库里有卡片源码的项目整个由隔离工作进程做（第 7.5 节），它报 `userCards: true`。
+  - 图卡：能力位照独立渲染主机现有的报法，`graphCards: false`，不改（集中在 `render-node/host.mjs` 的 `hostedRenderCapabilities`，第二段合流后主会话再对）。**如实写明现状**：服务端现在分不出一张卡是不是图卡（切分时 `requires.graphCards` 恒为假，`frame-pipeline.mjs` 的 `isGraphCardControl` 只认片段上明写的标记），所以含图卡的片段并不会因为这一位而被跳过——它与用户卡一样在带着卡片代码的工作进程里被认领、`card()` 在渲染页里求值（软件 WebGL）。隔离探针里的图卡夹具就是这样被求值的，对它的结果做了与用户卡同样的断言。画面对不对没有在这里验（Linux 上软件 WebGL 跑图卡留到新节点上看）。
 - 节点 `profile` 仍是 `host`，`nodeId` 形如 `hosted-render:<instanceId>/<projectId 前 8 位>`。
 - 本机演练在 Windows 上，指纹与本机桌面相同，验不出「键不串」：演练里渲染服务用现有的测试环境变量 `PROMPTCUT_TEST_ENV_FINGERPRINT` 报一个不同的指纹，真实的 Linux 指纹留到新节点上验。
 
@@ -321,7 +324,9 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 | `PROMPTCUT_RENDER_DOC_URL` | `ws://127.0.0.1:8787` | 文档服务的本机地址（直连，不经 nginx） |
 | `PROMPTCUT_RENDER_SECRETS` | `/var/lib/promptcut/render-secrets` | 私钥目录 |
 | `PROMPTCUT_RENDER_DATA` | `/var/lib/promptcut/render` | 工作进程的数据目录（帧库、临时目录、卡片同步） |
-| `PROMPTCUT_RENDER_PORT` | 5400 | 工作进程的端口（另占 +1、+2）；隔离工作进程用 5410 |
+| `PROMPTCUT_RENDER_PORT` | 5400 | 常驻工作进程的端口（另占 +1、+2） |
+| `PROMPTCUT_RENDER_ISO_PORT` | `PROMPTCUT_RENDER_PORT` + 10（即 5410） | 隔离工作进程的端口（另占 +1、+2）。它的数据目录固定是 `<PROMPTCUT_RENDER_DATA>/iso` |
+| `PROMPTCUT_RENDER_LOAD_HIGH` | 这台机器的核数 | 背压的 1 分钟负载线（第 4 节） |
 | `PROMPTCUT_RENDER_STATUS_PORT` | 5399 | 管理进程的诊断与代理口 |
 | `PROMPTCUT_RENDER_MAX_CONCURRENT` | 2 | 第 4 节 |
 | `PROMPTCUT_RENDER_MAX_PROJECTS` | 16 | 第 2 节 |
@@ -335,18 +340,20 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 | `PROMPTCUT_RENDER_REPORT_TIMEOUT_MS` | 180000 | 工作进程起来后这么久没交过诊断（或中途停交）就结束它重起 |
 | `PROMPTCUT_RENDER_STREAMS` / `_VERBOSE` | 不设 | `1` 开轨道流；`1` 把工作进程的输出原样转出来 |
 | `PROMPTCUT_RENDER_SAMPLE_MS` / `_SKIP_CHECKS` | 5000 / 空 | 测试与演练用：采样间隔；跳过自检里的 `chrome`、`ffmpeg` |
-| `PROMPTCUT_RENDER_USER_CARDS` | `isolated` | `isolated`（方案 A）或 `off`（方案 B） |
+| `PROMPTCUT_RENDER_USER_CARDS` | `isolated` | `isolated`（方案 A：内容库里有卡片源码的项目由隔离工作进程做）或 `off`（退回不接用户卡任务：不起隔离工作进程，常驻工作进程照旧不同步卡） |
+| `PROMPTCUT_RENDER_ISO_IDLE_MS` / `_ISO_SLICE_MS` | 60000 / 300000 | 测试与演练用：隔离工作进程闲置多久结束、另有项目在等时一个项目最多连续做多久 |
+| `PROMPTCUT_PAGE_GATE` | 不设（`enforce`） | `log`：工作进程的页面请求闸与出口代理只记不拦（定放行表、排查用）。名字不是 `PROMPTCUT_RENDER_` 开头，原样传给工作进程。没有「关掉」这个取值 |
 
 PM2 配置由部署脚本生成、放在部署目录里，不含任何秘密（同 `hostedPm2Config`）。
 
-管理进程交给工作进程的环境变量（不由部署配置）：`PROMPTCUT_RENDER_BROKER`、`PROMPTCUT_RENDER_BROKER_KEY`（代理口与这次启动的随机口令）、`PROMPTCUT_CARD_SYNC=0`、`PROMPTCUT_VITE_CACHE_DIR=<PROMPTCUT_RENDER_DATA>/vite-cache`（Vite 的依赖预构建缓存；发布目录属 root、工作进程以服务用户跑时检出目录它写不了，`vite.config.ts` 与 `vite.prerender.config.ts` 认这个变量，不设时行为与原来相同）；其余 `PROMPTCUT_RENDER_*`、集群令牌、`PROMPTCUT_SHARED_CONFIG` 一律不传。
+管理进程交给工作进程的环境变量（不由部署配置）：`PROMPTCUT_RENDER_BROKER`、`PROMPTCUT_RENDER_BROKER_KEY`（代理口与**这个工作进程自己的**口令：常驻的每次启动随机，隔离的每一轮现生成）、`PROMPTCUT_HOSTED_WORKER`（`resident` / `isolated`）、`PROMPTCUT_VITE_CACHE_DIR`（Vite 的依赖预构建缓存，常驻的在 `<PROMPTCUT_RENDER_DATA>/vite-cache`，隔离的在它自己的数据目录里；发布目录属 root、工作进程以服务用户跑时检出目录它写不了，`vite.config.ts` 与 `vite.prerender.config.ts` 认这个变量，不设时行为与原来相同）；常驻的另有 `PROMPTCUT_CARD_SYNC=0` 与（`isolated` 时）`PROMPTCUT_HOSTED_HOLD_CARDS=1`。不传的：其余 `PROMPTCUT_RENDER_*`、`PROMPTCUT_HOSTED_*`、集群令牌、`PROMPTCUT_SHARED_CONFIG`、`PROMPTCUT_CARD_OVERRIDES`，以及**名字像秘密的**环境变量（`…_TOKEN`、`…_SECRET`、`…_KEY`、`…_PASSWORD`、`…_CREDENTIALS`、`…_COOKIE` 等，`main.mjs` 的 `scrubWorkerEnv`，按名字判）。工作进程里编辑器的 Vite 另生成 `PROMPTCUT_HOSTED_GATE_PASS` 传给它起的预渲染进程（第 7.5 节的通行记号）。
 
 ### 7.3 Chrome 沙箱与启动自检
 
 - **沙箱**：`server/bakery/chrome.mjs` 加自动判断——进程以 root 运行（`process.getuid?.() === 0`）、或在容器里（存在 `/.dockerenv` 或 `/run/.containerenv`）、或环境变量 `PROMPTCUT_CHROME_NO_SANDBOX=1` 时，启动参数自动加 `--no-sandbox`，并打一行日志说明；`PROMPTCUT_CHROME_NO_SANDBOX=0` 则无论如何不加。**只在 Linux 上判**：Windows、macOS 的启动参数与原来逐项相同（HR20 钉住）。`PC_CHROME_ARGS` 照旧可追加。自检结果的 `chromeSandbox` 写 `on` 或 `off:<原因>`，关着时另有一条 `no-sandbox` 告警。
 - 〔裁：主会话 2026-10-06〕两种跑法**都必须支持**：root 或容器里直接跑（自动带 `--no-sandbox`，任务书第 21 条的原文要求，部署前的容器演练就是这样跑）；以及部署模板推荐的非 root 用户。非 root 是推荐值，不是前提。
 - 〔裁〕**推荐的部署**：工作进程用专门的非 root 用户 `promptcut-render` 跑（无登录权限的服务用户），Chrome 的沙箱照常开着。理由：它要执行别人写的卡片代码；Puppeteer 的文档把 `--no-sandbox` 称为强烈不建议的最后手段。这个用户读不到托管数据目录与私钥目录（都是 0700）。自动加参数只是在只能以 root 跑的环境（测试容器）里兜底。（待实现时验证：Ubuntu 22.04 上非 root 用户的 Chrome 能用用户命名空间沙箱；Puppeteer 文档说 AppArmor 的限制从 23.10 起才有。）
-- **自检**（管理进程启动时做，也可单跑 `node server/hosted-render/main.mjs --check`）。每项失败打一行 `selfcheck.error { reason, detail }`（同时写 stdout 与 stderr），全部项跑完后只要有一项失败就以退出码 78 结束，不带病接活：
+- **自检**（管理进程启动时做，也可单跑 `node server/hosted-render/main.mjs --check`）。每项失败打一行 `selfcheck.error { reason, detail }`（只写 stderr，一条只记一行；stdout 的 `selfcheck` 汇总行里有全部 `reason` 与 `errorDetails`。原来两路各写一遍，合在一起看就是同一条记两遍），全部项跑完后只要有一项失败就以退出码 78 结束，不带病接活：
 
 | `reason` | 查什么 |
 |---|---|
@@ -391,18 +398,51 @@ PM2 配置由部署脚本生成、放在部署目录里，不含任何秘密（�
 - **PM2 存档与开机自启**〔裁：主会话 2026-10-06〕：`deploy-render` 带 `--save` 时成功后 `pm2 save`；`pm2-<用户>.service` 没装时 `pm2 startup systemd`（与 `deploy-hosted` 相同）。这两步写在部署脚本里，并在 `server/hosted/deploy/README.md` 里写明手工做法与核对办法（`systemctl is-enabled pm2-root`、`pm2 resurrect` 之后 `pm2 list` 里有 `promptcut-render`）。节点重启后是否真的自动起来，由主会话最后在新节点上定怎么验。
 - **被杀与重启**：进程被杀由 PM2 拉起（`autorestart`）；节点重启由已装的 `pm2-root` 服务按 `pm2 save` 的清单拉起，所以部署成功后要 `pm2 save`。起来之后走自检、控制连接、对账，自动恢复接活。
 
-### 7.5 用户卡的隔离（方案 A）
+### 7.5 用户卡的隔离（方案 A，已实现）
 
-- 常驻工作进程**不同步任何卡**（`PROMPTCUT_CARD_SYNC=0`），只做不要卡片代码的任务。它不执行任何项目带来的代码。
-- 某个项目的内容库里有 `card-source`（常驻工作进程连上后列一次，并订阅变化）时，把这个项目标成「要隔离」报给管理进程。这个项目需要卡片代码的任务由**隔离工作进程**做：
-  - 同一时刻最多一个，只连这一个项目，代理口只给它这一个项目的票据；
-  - 有自己的检出副本（`releases/<…>` 的拷贝，`node_modules` 链回去）、自己的数据目录与端口；开卡片同步；
-  - 这个项目 60 s 没有它能做的任务就结束；换项目之前把检出副本里装进来的用户卡与整个数据目录清空；
-  - 几个项目都在等时轮流，每个最多 5 分钟一换〔裁〕；
-  - 与常驻工作进程同在一个 slice 里，合起来受第 4 节的上限。
-- 这样，卡片代码即使把隔离工作进程完全拿下，拿到的也只是它自己那个项目的只读票据与渲染服务的产物写权限——卡片作者本来就是那个项目的成员。
-- **现状（2026-10-06，`claude/render-service-iso`）：方案 A 没有交付，行为仍等同方案 B。** 只落了两个还没接线的零件（见文末「实现记录」的「隔离工作进程」一段）。
-- 隔离不了的面，用探针断言而不是推断（第 10 节 P-iso）：恶意用户卡读不到别的项目的内容、读不到私钥、请求工作进程的本机接口拿不到文件系统上的东西、请求云厂商的元数据地址不通。差什么补什么，补不上的写明。
+托管端任何人都能建项目，所以托管方的渲染服务执行项目带来的卡片代码时**按项目隔离**。两种工作进程：
+
+**常驻工作进程**不同步任何卡（`PROMPTCUT_CARD_SYNC=0`），不执行任何项目带来的代码。它连上一个项目后只列一次内容库里 `card-source` 的**键**（不取正文，并订阅变化、每 15 s 兜底重列；`card-presence.mjs`）：有任何一条（用户卡，或改过的内置卡、部件），这个项目它就**一个任务也不认领**——连它本来做得了的内置卡任务、清单计划也不认领（计划要用卡片代码的身份来切分）——只把「这个项目要隔离、此刻有几个任务在等」随诊断报给管理进程。还没列出来、列失败时同样搁着。
+
+**隔离工作进程**由管理进程按需起停（`isolation.mjs` 的状态机，`main.mjs` 接线）：
+
+- 同一时刻最多一个，一轮只做一个项目；口令每一轮现生成，代理口凭它只给这一个项目的清单与票据（`broker.mjs`：口令按工作进程分，哪把口令进来就只看得到那个工作进程自己的清单；这一轮一结束口令作废）；
+- 自己的端口（`PROMPTCUT_RENDER_ISO_PORT`）与数据目录（`<PROMPTCUT_RENDER_DATA>/iso`）；开卡片同步，报 `userCards: true`，节点 id 是 `hosted-render-iso:…`，并发 1；卡片同步对完第一次账、卡片代码身份稳定之前不认领；
+- 这个项目 60 s 没有它能做的任务就结束；几个项目都在等时轮流，每个最多 5 分钟一换〔裁〕；起不来、内存超限被结束、一轮下来什么都没认领到的，同一批任务 10 分钟内不再为它起；
+- **每一轮前后都把整个数据目录清空**（管理进程启动时也清一次）：装进来的卡只在数据目录下的改动层里（`data/card-overrides/`，检出目录一个文件都不写），帧库、临时目录、渲染用的 Chrome 的用户数据目录、Vite 的依赖缓存也都在里面。只清带记号的目录（配错了路径不至于删到别处）；
+- 结束时带走整棵进程树（`worker.mjs`）；与常驻工作进程合起来受第 4 节的并发与内存上限，有 cgroup 时两者在同一个 slice 里。合起来超过内存上限时先结束隔离工作进程。并发总数降到 1 之后（第 4 节的降级），隔离工作进程在跑的那段时间常驻的不认领新任务——这一条是已知的取舍，没有做两者之间的轮转。
+- **检出目录不另拷**，与常驻工作进程共用：卡片同步只写数据目录，Vite 的缓存、导出目录、临时目录也都指到了数据目录，检出目录里没有任何东西会被写；部署时它属 root、工作进程的用户只读。另拷一份只多出每一轮几秒的拷贝与一份磁盘，挡不住别的东西，Windows 上还不能给副本链 `node_modules`。（`isolation.mjs` 里的 `prepareCheckout` 留着没用。）
+
+这样，卡片代码即使把隔离工作进程完全拿下，拿到的也只是它自己那个项目的两分钟票据与渲染服务的产物写权限——卡片作者本来就是那个项目的成员。在这之上另有三道闸，把「拿下」本身挡在页面里：
+
+**一、页面请求闸**（`page-gate.mjs` 判定，`vite-gate.mjs` 装到工作进程的两台 Vite 上，排在一切接口之前；常驻与隔离工作进程都装，环境里有 `PROMPTCUT_RENDER_BROKER` 才装，桌面版与普通的独立渲染主机不装）。开工时确认的缺口：现有的同源守卫放行不带 `Origin` 的请求，渲染页里的代码因此能同源请求预渲染 Vite 的全部 `/api/**`（队列诊断、放回认领、卡片、项目……），也能向同机别的端口发请求。现在：
+
+- 判「是不是浏览器发的」：带 `Sec-Fetch-Site` 或 `Origin`（页面脚本改不了、去不掉）。Node 一侧的调用都不带，照旧；
+- 编辑器的 Vite：浏览器发来的一律 403；预渲染的 Vite：只认同源，`/api/**` 只放行表里的；开发服务器自带的 `/__open-in-editor` 拒；浏览器发的 WebSocket 升级一律掐；
+- **放行表按真实渲染里页面实际发出的请求定**（只记不拦跑整套演练实测）：渲染页发的 `/api/**` 只有 `GET /api/cards/scopes` 一种。上一版按读代码估的 `/api/export/`、`/api/media/file`、`/api/media/tiers` 没有出现，已去掉。素材服务的只读路由（`/api/asset/<ns>/<哈希>`）与 `/@media/<哈希>` 照常；
+- 渲染页的素材请求由预渲染的 Vite 转给同一工作进程里编辑器的 Vite：预渲染一侧给放行了的请求盖通行记号，编辑器一侧凭它只放行素材那三类路径的只读请求；
+- 管理进程的代理口同样不答浏览器发来的请求（连 `/status` 也 403）。
+
+**二、出口限制**（只在预渲染的 Vite 上；两层，各自独立）：
+
+- 渲染用的 Chrome 经一个只转发到「这台预渲染 Vite 自己」的出口代理出网（`--proxy-server` 加 `--proxy-bypass-list=<-loopback>`，回环也不绕过；另带 `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`）。别的目的地一律 403、隧道一律拒：管理进程的状态口与代理口、别的工作进程的 Vite、自己这棵树里编辑器的 Vite 与舞台端口、文档服务与素材服务的本机端口、云厂商的元数据地址、任何外部地址；
+- 预渲染 Vite 的每个响应带 `Connection-Allowlist: (response-origin)`（与在线舞台同一条）：文档只能连它自己的源，WebRTC 整个拦下。
+
+两层都在时浏览器先拦（页面日志里是 `ERR_NETWORK_ACCESS_REVOKED`，请求到不了代理）；隔离探针另有一段对照只留代理一层，每个目的地都止于代理。**外传**：隔离工作进程里的卡片代码连本项目自己的内容也带不到任何外部地址——比「卡片作者本来就是本项目成员」要求的更严，与在线舞台执行用户卡时的策略一致；卡片里引用外部地址的资源（远程图片、字体）在渲染节点上取不到，在线舞台同样取不到。
+
+**三、同步文件预检**（`source-gate.mjs`）。开工时确认的缺口（`hosted-render-node-side-check.mjs` 实测复现）：同步来的 `.css` / `.ts` / `.tsx` 由工作进程里的 Vite 与 Tailwind 在 Node 一侧处理，样式里的 `@import "<任意路径>"` 会把那个文件读进来、`url(<路径>?inline)` 把文件读成 data URI、`@plugin` / `@config` **把同步来的脚本当构建插件在 Node 里执行**、脚本里越界的 `import.meta.glob` 列出工作目录以外的文件名。这些发生在 Node 里，页面一侧的闸与 Vite 的 `server.fs.strict` 都挡不住。现在隔离工作进程里：
+
+- 装卡之前按白名单预检，不过的**不装**（卡片同步记「被拒」，这张卡的代码身份对不上，任务不认领）；改动层里的文件交给 Vite 之前再检一遍，不过的换成一段报错的桩。常驻工作进程不载入任何改动层文件；
+- 规则：样式的 `@` 规则只许白名单里不碰文件系统的那些，`@import` 只许相对路径的 `.css` 且仍在 `src/cards`、`src/parts` 里，`url()` 不许走出 `src`、`/` 开头的只认项目根下确实有的文件；脚本的导入只许包名、`src` 里的相对路径与 `/src/…`，动态 `import()` 的参数必须是字面量，`import.meta.glob` 与 `new URL(…, import.meta.url)` 不许越界；不许 `sourceMappingURL` 与 `@jsxImportSource`；
+- 浏览器一侧再去取文件（`/@fs/…`、`?raw`、`?url`、`?inline`、穿越、运行时 `import()`）由 `server.fs.strict`（缺省开着，没有动）挡：隔离探针实测工作目录以外的文件一个都读不到。
+
+**残余面（如实）：**
+
+1. **素材按哈希寻址。** 同一台素材服务上，任何有效票据都能按哈希读块（`auth-contract.md` 第 8 节的既有裁定，成员自己的票据同样如此）。所以卡片代码**若已经知道**别的项目某块素材的哈希，经工作进程（`/@media/<哈希>`）读得到——与那位卡片作者以成员身份直接向素材服务读同一块是同一个能力，渲染服务没有增加能力；哈希无从枚举（页面请求闸不放行任何列举接口，素材服务没有列举接口）。这一条渲染服务这一侧收不紧：哪些哈希「属于这个项目」由项目文档自己说了算，文档是成员写的。要收紧得在素材服务按项目核对归属，属于二级改动，另议。
+2. **环境变量。** 名字不像秘密的环境变量会被工作进程继承（名字像的不传）。页面读不到进程环境变量，Node 一侧又过不了预检，探针实测带不回来；部署时仍不应把别的服务的凭证放进渲染服务的环境。
+3. **纵深的那一层只在新节点上有。** 非 root 的服务用户、0700 的私钥目录与托管数据目录、只读的发布目录，在本机演练（Windows、单用户）里不存在；演练里的「读不到」靠的是上面三道闸，不靠系统权限。
+4. **工作进程自己的数据目录**里是它那个项目的东西（帧库、同步来的卡、Chrome 的用户数据），卡片代码经 `/@fs/` 读不到（数据目录在项目根之外），换项目时清空。
+5. **`log` 模式**（`PROMPTCUT_PAGE_GATE=log`）下两道闸都只记不拦，只该在排查时短暂使用。
 
 ---
 
@@ -593,13 +633,16 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 | HR26 | 产物到了容量上限：素材服务回 507 `service-quota` 时产物库抛不可重试的错、任务按不可重试失败、主机全部项目暂停认领 10 分钟、到点恢复 |
 | HR27 | 工作进程起来了却不交诊断的判定；Vite 缓存目录在数据目录下并进自检 |
 | HR22 | 部署脚本的纯函数：PM2 配置、slice 单元、远端脚本的文本（照 `sp-hosted` 里测 `hostedDeployScript` 的做法），里面没有任何秘密 |
-| HR23 | 隔离工作进程的编排（方案 A）：有 `card-source` 的项目只交给隔离进程；一次一个；换项目前清空；轮流的 5 分钟 |
+| HR23 | 隔离工作进程的编排（方案 A）：有 `card-source` 的项目只交给隔离进程；一次一个；换项目前清空；轮流的 5 分钟（状态机在 `hosted-render-isolation.test.mjs`）。接线（`hosted-render-usercards.test.mjs`）：主机按项目搁着不认领并报在等的任务；并发在运行中压低；「项目带没带卡片代码」的判定；代理口按工作进程分口令；交给工作进程的环境 |
+| HR28 | 页面一侧的闸：判定（纯函数）；装到开发服务器上之后浏览器发来的请求按表放行、其余 403，浏览器发的升级被掐；预渲染到编辑器的素材转发凭通行记号；出口代理只转发到自己；代理口不答浏览器发来的请求 |
+| HR32 | 同步文件预检：样式的 `@` 规则白名单、`@import` 的形状、`url()` 的落点；脚本的导入说明符、`import.meta.glob`、动态导入、`new URL(…, import.meta.url)`；越权探测卡的夹具（主卡过得了、Node 一侧读盘的两份被整份拒掉） |
 | HR24 | 界面：项目设置里开关的显示条件（放云端且 `available`）、创建者可改、成员只读（组件测试） |
 
 ### 10.2 新探针（放 `scripts/probes/`）
 
 - **`hosted-render-probe.mjs`**：整套演练的驱动，分步（`--step`），每步输出一行 JSON。验收标准写在文件头。
-- **`hosted-render-isolation-probe.mjs`**（P-iso）：一张恶意用户卡加一张恶意图卡，在渲染服务里被渲染时去读——别的项目的内容、私钥文件、托管数据目录、工作进程本机接口能给出的文件、代理口、云厂商元数据地址；全部读不到才算过。
+- **`hosted-render-isolation-probe.mjs`**（P-iso，已交付）：两个项目甲、乙，各放「越权探测卡」（任务书文末的定义；夹具在 `scripts/probes/fixtures/render-isolation/`，防御性测试、只读只报告、全用假凭证）。让隔离工作进程真实地渲，取回结果对象，逐条断言固定清单：页面全局对象、本机存储、父页面与别的窗口、工作进程自己的接口与同机各端口、云厂商元数据地址、测试专用的外部地址（探针在回环上起的收集站）、Node 一侧处理时读工作目录以外的文件；再断言换项目时清空、乙的页面里没有甲的代码、渲染身份不能改项目；另有一段只留出口代理一层的对照。验收标准与残余面写在文件头。
+- **`hosted-render-node-side-check.mjs`**：对照实验——同步来的样式与脚本**不过预检**时，Node 一侧会不会读到工作目录以外的文件、会不会把同步来的脚本当构建插件执行（会：`@import`、`url(?inline)`、`import.meta.glob`、`@plugin`、`@config` 都实测复现），并逐项核对预检拒掉了同一份输入。
 - **`hosted-render-load-probe.mjs`**：满载渲染时量文档服务的往返时延与素材下载速度，前后对比。本机跑出相对值，绝对数字到新节点上量。
 - **`hosted-render-evict-probe.mjs`**：第 6 节的前提——清掉块之后，在线页面与低内存档重新发补渲、最终贴上。
 
@@ -607,7 +650,7 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 
 ### 10.3 本机整套演练怎么搭
 
-全部在本机回环上，端口用分配的段：托管组合 8794（文档）/ 8795（素材），渲染服务的工作进程 5730（另占 5731、5732），隔离工作进程 5733（另占 5734、5735），管理进程诊断口 5736，在线页面的开发服务器 5737（另占 5738、5739）。
+全部在本机回环上，端口用分配的段：托管组合 8794（文档）/ 8795（素材），渲染服务的工作进程 5730（另占 5731、5732），隔离工作进程 5733（另占 5734、5735），管理进程诊断口 5736（隔离探针用另一段：5800～5807 与 8770、8771，可与整套演练同时跑），在线页面的开发服务器 5737（另占 5738、5739）。
 
 1. 临时数据目录下起隔离的托管组合（`startHostedCombo`，`trustLoopback: false`，带一把临时集群令牌——与新节点同样的配置，保证演练里回环不被当本机）。
 2. `keygen` 生成服务密钥，登记表写进这份数据目录。
@@ -620,7 +663,7 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 |---|---|---|
 | 低内存档打开含重卡的项目，补渲被云节点认领、产物贴上 | `--step lowmem`：手机仿真的低内存档页面进项目，断言补渲计划被 `service:render` 认领、清单与小尺寸入库、页面贴上（截图） | 真实 Linux 指纹与中文字体下的画面；经公网的页面 |
 | 在线普通档把判重的层交给渲染节点，云节点接了、结果贴回 | `--step online`：普通档页面发清单计划，断言由渲染服务切分并完成，页面贴上 | 同上 |
-| 含用户卡、图卡的任务它能渲 | `--step cards`：方案 A 下带用户卡的项目由隔离工作进程完成；图卡按第二段定的规则；加 P-iso | Linux 上软件 WebGL 跑图卡 |
+| 含用户卡、图卡的任务它能渲；按项目隔离 | `usercard` 一步：含用户卡的项目由隔离工作进程认领、渲完入库，之后才上线的成员直接取得到；常驻工作进程没有认领；没有任何成员在线时由发布方发布同样成立。隔离本身由 `hosted-render-isolation-probe.mjs` 验（越权探测卡） | Linux 上软件 WebGL 跑图卡的画面；非 root 用户与只读的发布目录这一层纵深 |
 | 新建项目不做配置就接活；关开关后不接；删项目后断开 | `--step lifecycle`：新建 → 5 s 内诊断里出现这个项目并认领；`set-hosted-service` 关 → 5 s 内连接关闭、之后发布的任务它不认领；再开；删项目 → 连接 4004、清单里消失 | 在新节点上用测试房间重做一遍 |
 | 用它的身份提交一次编辑，被拒 | `--step forbidden`：探针拿到服务的数据连接，发 `project.op` 与 HR8 的其余各项，全部被拒，项目版本号不变 | 在新节点上重做 `project.op` 一项 |
 | 进程被杀后自动拉起并恢复接活；节点重启后自动起来 | `--step kill`：结束工作进程 → 管理进程重起、对账、继续认领；结束管理进程 → 由探针扮 PM2 重起后恢复 | PM2 的拉起；节点重启后的 `pm2 resurrect`（要不要真重启节点由主会话定，重启会中断托管服务） |
@@ -762,16 +805,29 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 
 单测 HR30（进程树）、HR31（自检与 `queue.skip`），在 `server/test/hosted-render-process.test.mjs`。`hosted-render-probe` 的 `kill` 步骤加了「没有残留、端口可立即重用」的断言。
 
-### 隔离工作进程（方案 A）：没有交付
+### 隔离工作进程（方案 A）：已交付（2026-10-07，`claude/render-service`）
 
-`claude/render-service-iso` 上只落了两个**没有接线**的零件，各带单测（`server/test/hosted-render-isolation.test.mjs`）：
+用户 2026-10-06 要求重开：上一轮只落了两个没接线的零件，卡住的原因是验收用的那张测试卡没人写，不是隔离做不稳。这一轮把它接上、把两个缺口堵上、用「越权探测卡」验收。正文第 0 节第 1 条的结论、第 4、5、7.2、7.3、7.5、10 节已按实现改过。
 
-- `server/hosted-render/isolation.mjs`：编排的状态机（一次一个项目、60 s 闲置结束、5 分钟轮换、换项目前清空、不反复重来）与检出副本、数据目录的建与清（HR23）。
-- `server/hosted-render/page-gate.mjs`：工作进程里「浏览器发来的请求」的判定（HR28）。它要解决的缺口是实在的：现有的同源守卫放行不带 `Origin` 的请求，预渲染页面里的代码因此能同源请求预渲染 Vite 的全部 `/api/**`，也能向同机别的工作进程的 Vite 发不带 `Origin` 的 GET；Vite 的缺省 CORS 还放行回环来源。方案 A 要成立，这道闸必须接上并用探针验过。
+**做了什么**
 
-没做的：常驻工作进程对有 `card-source` 的项目不认领并上报、代理口按工作进程分口令、管理进程起停隔离工作进程、合起来的并发与内存、整套演练的 `usercard` 步骤、隔离探针 P-iso。所以 `PROMPTCUT_RENDER_USER_CARDS` 取 `isolated` 或 `off` 现在没有区别，含用户卡的任务渲染服务不认领，任务书第 23 条「含用户卡、图卡的任务它能渲」记未达成。
+1. **常驻工作进程搁着不认领并上报。** `server/hosted-render/card-presence.mjs`（只列内容库里 `card-source` 的键）；`render-node/host.mjs` 的 `createRenderHost` 接线时可给 `hold()` / `cards()`，搁着的项目诊断里多 `hold`、`pending`、`pendingKey`、`claimable`、`cards`；`setLimit(n)` 在运行中压低并发。`vite-plugin-frames.ts` 的 `startHostNode` 按 `PROMPTCUT_HOSTED_WORKER`、`PROMPTCUT_HOSTED_HOLD_CARDS` 接线。没有这两个变量（桌面版、普通的独立渲染主机）时接线与原来逐项相同。
+2. **管理进程起停隔离工作进程。** `main.mjs` 把 `isolation.mjs` 的状态机接上：候选来自常驻工作进程的诊断；每一轮现生成口令；数据目录 `<数据目录>/iso` 每一轮前后清空（管理进程启动时也清）；并发与内存合计；退出时带走整棵树。`broker.mjs` 口令按工作进程分。检出目录不另拷（理由见第 7.5 节）。
+3. **页面一侧的闸。** `vite-gate.mjs` 加 `server/vite-plugin-hosted-gate.ts`（排在两份 Vite 配置的插件表最前面，环境里没有 `PROMPTCUT_RENDER_BROKER` 时是空的）：页面请求闸、出口代理、出口白名单头、预渲染到编辑器的通行记号。`page-gate.mjs` 的放行表按实测收到一条。
+4. **同步文件预检。** `source-gate.mjs`；`vite-plugin-cards.ts` 的 `createHostCardSync` 多一个可选的 `precheck`，改动层的加载钩子在托管方的工作进程里先检再交给 Vite。别的进程不走这两处。
+5. **验收夹具与探针。** `scripts/probes/fixtures/render-isolation/`（越权探测卡：用户卡、图卡形态、只有甲才有的记号卡、Node 一侧读盘的两份）、`hosted-render-isolation-probe.mjs`、`hosted-render-node-side-check.mjs`；整套演练 `hosted-render-probe.mjs` 加 `usercard` 一步。单测 HR23（接线）、HR28、HR32 在 `server/test/hosted-render-usercards.test.mjs`。
+6. **上次 Linux 演练记下的三处小改。** 背压的负载线按核数算（`limits.mjs` 的 `loadHighFor`，`PROMPTCUT_RENDER_LOAD_HIGH` 可改）；两个探针的等待时限按核数放宽（4 核及以下 2 倍，`--time-scale` 可给）；`selfcheck.error` 一条只记一行（只写 stderr）。
 
-读代码时另记下的两点，方案 A 开工时要先核对：
+**两个缺口的验证结论**
 
-- 卡片同步把同步来的文件一律写进数据目录下的改动层（`<数据目录>/data/card-overrides/`），不写检出目录（`vite-plugin-cards.ts` 的 `createHostCardSync` 注释）；`render-host-contract.md` 第 7 节「本机没有的用户卡写进检出的 `src/cards/user/`」是旧说法。清空数据目录就清掉了装进来的卡，检出副本只是兜底。
-- 同步来的 `.css` 与 `.ts` 由工作进程里的 Vite 与 Tailwind 在 Node 一侧处理。样式文件里的指令会不会让 Node 一侧读到检出目录之外的文件、或载入同步来的脚本，没有验证过；这一条不验清，页面一侧的闸再严也不够。
+- *渲染页能请求工作进程自己的本机接口*：成立（接闸之前，探测卡同源取得到 `/api/frames/queue` 等，也发得出放回认领的 POST——上一轮的结论，这一轮在只记不拦的模式下再次看到）。堵法见第 7.5 节「一」「二」。只记不拦跑整套演练实测，渲染页自己要的 `/api/**` 只有 `GET /api/cards/scopes`。接闸时另发现并修掉一处：渲染页的素材请求是预渲染的 Vite 转给编辑器的 Vite 的，浏览器的请求头跟着过去会被编辑器一侧的闸拒掉（素材全部取不到）——加了通行记号，探针里有「读自己项目的素材是通的」这一条对照盯着。
+- *同步来的样式与脚本在 Node 一侧处理时读到别处的文件*：成立，而且比预想的重。`hosted-render-node-side-check.mjs` 不过预检直接让 Vite 与 Tailwind 处理：`@import` 项目根以外的文件（绝对路径与 `..` 两种）读到了，`url(…?inline)` 读到了，`import.meta.glob` 列出了项目根以外的文件名，**`@plugin` 与 `@config` 把同步来的脚本在 Node 里执行了**。`?raw` 导入只改写地址、内容要浏览器再来取（被 `server.fs.strict` 挡）。堵法见第 7.5 节「三」；每一种都有预检的拒绝规则对应（脚本末尾逐项核对）。另：样式里 `/` 开头的地址开发服务器找不到「相对项目根」的就当文件系统的绝对路径读（Linux 上才有的面），预检只认项目根下确实有的文件。
+
+**隔离探针的结果（本机，Windows，2026-10-07）**：37 条断言全过。前提（A）：两个项目的探测卡都由 `hosted-render-iso:` 节点渲完、结果对象取回、常驻工作进程一个任务没认领、对照（读自己的模块与素材）是通的。固定清单：全局对象（B）、本机存储（C）、父页面与别的窗口（D）、自己这台 Vite 的接口（清单里 14 条，含写方法与 WebSocket 升级）全部被拒（E1）、管理进程的状态口与代理口、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务都读不到、连不上（E2）、元数据地址连不出去（E3）、收集站 0 条 TCP、0 个 HTTP、0 个 UDP（F）、工作目录以外的四个文件 132 次尝试一个都读不到（G1）、Node 一侧读盘的两份被整份拒掉、没有被执行（G2）、取回的全部内容与全部输出里没有不该有的假凭证（H）、换项目时清空且乙的页面里没有甲的代码（I）、渲染身份不能改项目（J）、代理口不带口令 401、浏览器形状的请求 403（K）、只留出口代理一层的对照里每个目的地都止于代理（P）。残余面见第 7.5 节末。图卡：`card()` 在渲染页里被求值了（服务端分不出图卡，见第 5 节），对它的结果做了同样的断言。
+
+**没做的、留给新节点的**
+
+- 非 root 的服务用户、只读的发布目录、0700 的目录这一层纵深只在新节点上有，本机演练没有覆盖；Linux 上软件 WebGL 跑图卡的画面没有验。
+- 隔离工作进程的冷启动（Vite 的依赖缓存每一轮都清）本机约 7～11 s；这是「整个数据目录清空」的代价，没有另做缓存。
+- 并发总数降到 1 之后隔离工作进程与常驻工作进程之间没有轮转（第 7.5 节）。
+- Windows 上管理进程自己量的进程树内存把共享页重复计入，两棵工作进程树空着就量出 7 GB 上下：本机演练把内存上限放宽到 32G（`--memory-max`），真实的上限留给新节点的 cgroup。

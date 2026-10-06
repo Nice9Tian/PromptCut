@@ -4,7 +4,7 @@
  * 任务书 `docs/plan/sound-online-render-task.md` 第 23 条与文末「越权探测卡」一节）。用断言，不靠推断。
  *
  *   node scripts/probes/hosted-render-isolation-probe.mjs [--base-port 5800] [--doc-port 8770] [--asset-port 8771]
- *        [--keep-temp] [--verbose] [--mem-low 256M] [--memory-max 32G] [--time-scale 1]
+ *        [--keep-temp] [--verbose] [--mem-low 256M] [--memory-max 32G] [--time-scale 1] [--no-proxy-only]
  *
  * 端口（都只绑 127.0.0.1）：`--base-port` +0/+1/+2 常驻工作进程、+3/+4/+5 隔离工作进程、+6 管理进程的诊断与代理口、
  * +7 收集站（TCP 与 UDP；它就是「测试专用的外部地址」）；`--doc-port` / `--asset-port` 本机隔离的托管组合。全部数据在一个临时目录里，结束时删掉。
@@ -57,6 +57,9 @@
  * I 换项目：渲完甲换去渲乙之前，隔离工作进程结束、整棵进程树不剩、数据目录清空（管理进程的记录与磁盘上都是空的）；
  *   乙那一轮的改动层里只有乙的卡；乙的页面里没有甲的卡片代码（甲的记号卡没有载入、取不到它的文件、清单里没有它）。
  * J 渲染身份不能改项目：以渲染服务的身份提交一次编辑、写卡片源码，被拒，项目版本号不变。
+ * P 对照段（只留出口代理一层）：两层出口限制都在时浏览器先拦，请求到不了代理。所以另起一轮，用仅供验收的开关不发出口白名单头
+ *   （`PROMPTCUT_TEST_NO_EGRESS_HEADER=1`），同一张探测卡再渲一遍：每个目的地在出口代理的拒绝记录里都有、页面仍然读不到任何内容、
+ *   收集站仍然是 0——证明代理这一层自己拦得住。`--no-proxy-only` 跳过这一段。
  * K 代理口：不带口令要清单 401；浏览器形状的请求（带 `Sec-Fetch-Site`）连状态口也 403；状态口的输出里没有任何假凭证与票据。
  *
  * # 残余面（如实记录，不算失败；写进结果的 `residual`）
@@ -620,6 +623,43 @@ async function main() {
   const asBrowser = await fetch(`${STATUS}/status`, { headers: { 'sec-fetch-site': 'cross-site', origin: 'http://127.0.0.1:1' } }).then((r) => r.status).catch(() => 0);
   const statusText = JSON.stringify(await status());
   check('K', '代理口：不带口令要清单 401；浏览器形状的请求连状态口也 403；状态口的输出里没有假凭证与票据', noKey === 401 && asBrowser === 403 && fakesIn(statusText).length === 0 && !TICKET_RE.test(statusText), { noKey, asBrowser, fakes: fakesIn(statusText) });
+
+  /* ---- P 对照段：只留出口代理一层（不发出口白名单头），同一张探测卡再渲一遍 */
+  if (!flag('--no-proxy-only')) {
+    say('proxy-only', {});
+    await stopSupervisor();
+    const mark = prerenderText().length;
+    const supMark = supLogs.length;
+    const collectorBefore = { tcp: collector.tcp, http: collector.http.length, udp: collector.udp };
+    startSupervisor({ PROBE_FAKE_MANAGER_TOKEN: F.envSecret, PROBE_FAKE_MANAGER_NOTE: F.envPlain, PROMPTCUT_TEST_NO_EGRESS_HEADER: '1' });
+    await waitFor(async () => { const s = await status(); return s.directory?.connected && s.worker?.ready && s.queue ? s : null; }, 300_000, '渲染服务就绪（对照段）', 1000);
+    const bing = await makeProject('丙', 'carol', 'bing');
+    await putCard(bing, 'src/cards/user/overreach-probe.tsx', probeCard);
+    await putCard(bing, 'src/cards/user/overreach-probe-lib.ts', probeLib);
+    const bingProject = projectOf(bing, [{ id: 'clip-probe', cardId: 'overreach-probe', params: { ctx: ctxOf('bing', { projectId: yi.projectId, docId: yi.docId, cardFiles: [] }) } }]);
+    const bingRev = await putProject(bing, bingProject);
+    const bingPlan = await publishPlan(bing, { rev: bingRev, clips: ['clip-probe'], codeVersion });
+    let bingDone = null;
+    try { bingDone = await waitRendered(bing, bingPlan); } catch (err) { out.bingError = String(err?.message ?? err); }
+    await delay(1500);
+    const part = prerenderText().slice(mark);
+    const bingReports = reportsFrom(part).filter((r) => r.tag === 'bing');
+    const bingLoop = itemsOf(bingReports, 'loopback.').concat(itemsOf(bingReports, 'metadata.'));
+    const bingRead = bingLoop.filter((it) => !denied(it) && !opaque(it) && !frameBlind(it));
+    const partGate = [...part.matchAll(/\[page-gate\] (deny|on) (\{.*\})/g)].map((m) => { try { return { kind: m[1], ...JSON.parse(m[2]) }; } catch { return { kind: m[1] }; } });
+    const proxyDenied = partGate.filter((l) => l.kind === 'deny' && l.layer === 'egress');
+    const headerOff = partGate.some((l) => l.kind === 'on' && l.role === 'prerender' && l.egressHeader === false);
+    const revokedP = (part.match(/ERR_NETWORK_ACCESS_REVOKED/g) ?? []).length;
+    out.proxyOnly = { done: bingDone, reports: bingReports.length, headerOff, revokedByAllowlist: revokedP, deniedAtProxy: proxyDenied.length, destinations: [...new Set(proxyDenied.map((l) => String(l.to)))].sort(),
+      collector: { tcp: collector.tcp - collectorBefore.tcp, http: collector.http.length - collectorBefore.http, udp: collector.udp - collectorBefore.udp } };
+    check('P', '对照段成立：出口白名单头确实没发、探测卡照样渲完并交回结果', headerOff && revokedP === 0 && !!bingDone && bingDone.failed === 0 && bingReports.length >= 1, { headerOff, revokedP, done: bingDone, reports: bingReports.length, error: out.bingError });
+    const wantDest = [STATUS, `http://127.0.0.1:${PORTS.worker}`, `http://127.0.0.1:${PORTS.iso}`, `http://127.0.0.1:${PORTS.doc}`, `http://127.0.0.1:${PORTS.asset}`, COLLECTOR, 'http://169.254.169.254'];
+    const missed = wantDest.filter((d) => !out.proxyOnly.destinations.includes(d));
+    check('P', '只靠出口代理一层：管理进程、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务、元数据地址、收集站——每个目的地在代理的拒绝记录里都有，请求止于代理', missed.length === 0, { missed, seen: out.proxyOnly.destinations });
+    check('P', '只靠出口代理一层：页面仍然读不到任何内容，收集站仍然 0 条 TCP 连接、0 个 HTTP 请求、0 个 UDP 包', bingLoop.length > 0 && bingRead.length === 0 && out.proxyOnly.collector.tcp === 0 && out.proxyOnly.collector.http === 0 && out.proxyOnly.collector.udp === 0
+      && fakesIn(bingReports.map((r) => r.raw).join('\n')).length === 0, { read: bingRead.slice(0, 3), collector: out.proxyOnly.collector });
+    check('P', '对照段里管理进程同样没有收到任何浏览器发来的请求', !supLogs.slice(supMark).some((l) => l.event === 'broker.browser-refused'), '');
+  }
 
   /* ---- 残余面与图卡 */
   const assetItems = itemsOf(jiaReports, 'other.asset.');
