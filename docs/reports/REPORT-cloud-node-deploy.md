@@ -1,57 +1,91 @@
 # 新云节点部署与在线页面换 0.7.15：报告
 
-状态：**进行中**（2026-10-06）。阿里云的在线页面已换成 0.7.15 并核验通过；新云节点的部署还没开工，等用户给节点地址、登录用户和 SSH 私钥在本机的路径。本机信息（地址、密钥位置、备份位置）在不入库的 `docs/local.md`。
+状态：**完成**（2026-10-06）。新云节点 `149.88.94.84` 上跑起了托管组合（文档服务、素材服务，含 0.7.15 新增的主机登记与中继接口）和在线页面，nginx 与三个源的证书都配好；阿里云的在线页面换成了 0.7.15。按用户定的「并存」：阿里云照常服务，没有迁数据，没有改桌面版内置的托管地址。节点的地址、密钥位置、目录与备份位置在不入库的 `docs/local.md`。
 
-## 1. 做了什么
+## 1. 新节点
 
-### 1.1 阿里云的 `/editor` 换成 0.7.15
+### 1.1 摸底（只读）
 
-- 在线构建：在 main `2cbe523e` 的 worktree 里跑 `npx vite build --mode online`，退出 0，主脚本 `assets/index-DvYaNaSX.js`（原文 4,279,571 字节，预压缩 1,345,131 字节）。
-- 只换静态页面：本机用 `server/hosted/deploy.mjs` 的 `stageEditorBuild` 生成 14 个 `.gz`，拷成服务器部署目录下的 `.incoming-editor`，再只跑 `editorSwapLines()` 那几行。没有用 `deploy-hosted`（它会换应用目录并重载 PM2）。
-- 换之前在服务器上整份备份了旧的 `editor/`（0.7.14，`index-RvNdCRPh.js`，172 个文件、19,730,220 字节，与原目录相同）。
+- Ubuntu 22.04 LTS（内核 5.15），KVM 虚拟机，8 核 Xeon Platinum 8272CL、16 GB 内存、无 swap；系统盘 39 GB（已用 2 GB），另有 40 GB 数据盘挂在 `/home`。位置在香港。
+- 公网地址直接配在网卡上，没有内网地址。
+- 已装：git、curl、rsync、python3；没有 Node、PM2、nginx、certbot、docker、ffmpeg。
+- 防火墙：UFW 未启用，iptables 全放行；只有 22 在监听。云厂商那层后来实测 22、80、443、8787、8788 从公网都能连，**不需要用户放行端口**。
+- 登录：服务器原来关着公钥登录（`sshd_config` 里 `PubkeyAuthentication no`）。会话不用密码登录，由用户自己输一次密码装上本机生成的部署公钥、把这项改成 yes；之后全程密钥登录。
+
+### 1.2 Node、PM2 与托管组合
+
+- `scripts/remote/docservice.mjs install`：Node v24.21.0（官方二进制，校验 SHA256）、PM2 7.0.4。
+- `deploy-hosted --write-token --save --editor dist-online --doc-public-url wss://149-88-94-84.sslip.io/hosted/ --asset-public-url https://149-88-94-84.sslip.io/media/api/asset --stage-origins https://s1.149-88-94-84.sslip.io,https://s2.149-88-94-84.sslip.io`，退出 0：79 个文件、14 个预压缩 `.gz`；进程 `promptcut-hosted` 起来，`pm2 save`，装了 `pm2-root.service` 开机自启。
+- 部署源：main 当时的提交 `be681c5e`。部署期间 main 从 `2cbe523e` 前进到 `be681c5e`（0.7.16，Claude Code 登录页的修复）；多出来的改动是 `server/runners/` 两个文件、一个测试与版本号，都不在托管清单里，托管端代码与 0.7.15 相同。
+- 集群令牌：沿用阿里云那份（经 ssh 读进本机进程的环境变量，再由部署脚本经 ssh 标准输入写进 `secrets/cluster-token`，0600），没有落盘、没有打印。以后整体搬迁时不用换令牌。
+- 部署清单不用补：`server/hosted/files.mjs` 已含 `server/hosting`（登记与中继）与 `server/recovery`。部署前在本机按清单拼出 79 个文件单独起过一次，`/hosting/healthz` 200。
+
+### 1.3 nginx 与证书
+
+- 装 nginx 1.18、certbot 1.21（Ubuntu 22.04 的包）。
+- 站点配置从阿里云抄（只读登录取的）：`promptcut`（主站）与 `promptcut-stages`（s1、s2），换域名，`proxy_bind` 与反代目标换成本机地址 149.88.94.84；去掉只属于阿里云的 `/coord`（探针协调口）。其余照旧：三个源的 `/editor` 与 `/catalog/` 都带 `Origin-Agent-Cluster: ?1`，`/editor/assets/` 开 `gzip_static on`；`/hosted` 升级头、读写超时 3600 s、上传上限 2 MB、不缓冲；`/media` 上传上限 2 GB、不缓冲请求、读超时 600 s。删掉自带的 `default` 站点。
+- `nginx.conf`：照阿里云打开 `gzip_vary`、`gzip_proxied any`、`gzip_comp_level 6` 与同样的 `gzip_types`。
+- 与阿里云的差异：nginx 1.18 的 `mime.types` 没有 `wasm`（阿里云的 1.24 有），补了 `application/wasm wasm;`，不然 wasm 会按二进制流发。
+- 证书：certbot `certonly --nginx` 签了一张 Let's Encrypt 证书，含主站、s1、s2 三个名字，到期 2027-01-04，`certbot.timer` 自动续期；没登记邮箱。
+- 改之前的 nginx 配置备份在服务器 `/root/nginx-backup-20261006/`。
+
+### 1.4 在线页面
+
+从 main `2cbe523e`（0.7.15）`npx vite build --mode online`，退出 0，主脚本 `index-DvYaNaSX.js`；随 `deploy-hosted --editor` 部署，运行配置写了两个舞台源。构建内嵌的代码版本 `46d3c046…` 与 main `be681c5e` 算出的相同，所以与 0.7.15、0.7.16 的桌面版都对得上。
+
+## 2. 阿里云的 `/editor` 换成 0.7.15
+
+- 只换静态页面：本机用 `server/hosted/deploy.mjs` 的 `stageEditorBuild` 生成预压缩文件，拷成部署目录下的 `.incoming-editor`，只跑 `editorSwapLines()` 那几行；没有用 `deploy-hosted`（它会换应用目录并重载 PM2）。
+- 先在服务器上整份备份旧的 `editor/`（0.7.14，`index-RvNdCRPh.js`，172 个文件、19,730,220 字节）。
 - 换代输出：保留上一代 assets 13 个；保留 `runtime-config.json`；96 个本代 assets，109 个在位。
-- 托管服务进程没动：换代前后 `promptcut-hosted` 的 pid 相同，PM2 重启计数 27、启动时刻 2026-10-04 都没变。
+- 托管服务进程没动：换代前后 `promptcut-hosted` 的 pid 相同，重启计数 27、启动时刻 2026-10-04 不变。阿里云的托管服务仍是旧版本（`/hosted/hosting/healthz` 404），按任务约定不重部署。
 
-核验（2026-10-06，从 PC 经公网）：
+## 3. 验证
 
-| 源 | `/editor` | 主脚本 | 响应头 | 解压后 |
-|---|---|---|---|---|
-| 主站 | 200，`Origin-Agent-Cluster: ?1`，`no-store` | `index-DvYaNaSX.js` 200 | `Content-Encoding: gzip`，`Content-Length: 1345131`，不分块 | 4,279,571 字节，SHA-256 前 16 位 `7b5703f30dba33c9` |
-| s1 | 同上 | 同上 | 同上 | 同上 |
-| s2 | 同上 | 同上 | 同上 | 同上 |
+### 3.1 健康检查与三个源
 
-三个源的 `runtime-config.json` 都回原来的两个舞台源。无头 Chrome 打开主站 `/editor`：停在「加入别人的项目」页，页面错误 0、失败请求 0、4xx/5xx 响应 0。
+新节点：`/hosted/healthz` 200（文档服务）、`/hosted/hosting/healthz` 200（`{"ok":true,"role":"hosting","rooms":0,"online":0}`）、`/media/healthz` 200（素材服务）。
 
-### 1.2 部署清单核对
+两台都用同一个核验脚本（从 PC 经公网取三个源的 `/editor`、主脚本、运行配置，再用无头 Chrome 打开主站 `/editor`）：
 
-`server/hosted/files.mjs` 的清单已经含 `server/hosting`（主机登记与中继）与 `server/recovery`，不用补。核对办法：`node scripts/remote/docservice.mjs stage-hosted <目录>` 拼出 79 个文件，在这个目录里单独起 `server/hosted/main.mjs`（本机回环、临时数据目录），文档端口 `/healthz` 200、`/hosting/healthz` 回 `{"ok":true,"role":"hosting","rooms":0,"online":0}`，素材端口 `/healthz` 200。
+| 节点 | 源 | `/editor` | 主脚本 | 响应头 | 解压后 |
+|---|---|---|---|---|---|
+| 新节点 | 主站、s1、s2 | 都 200，带 `Origin-Agent-Cluster: ?1`、`no-store` | 都是 `index-DvYaNaSX.js`，200 | `Content-Encoding: gzip`、`Content-Length: 1345131`，不分块 | 4,279,571 字节，SHA-256 前 16 位 `7b5703f30dba33c9`，三个源相同 |
+| 阿里云 | 主站、s1、s2 | 同上 | 同上 | 同上 | 同上 |
 
-对照：阿里云生产 `https://8-219-80-16.sslip.io/hosted/hosting/healthz` 回 404，`/hosted/healthz`、`/media/healthz` 回 200——生产托管服务确实还是没有登记与中继接口的旧版本。按任务约定不重部署它。
+两台的无头打开都停在「加入别人的项目」页，页面错误 0、失败请求 0、4xx/5xx 0；运行配置都回各自的两个舞台源。
 
-### 1.3 阿里云 nginx 配置（只读抄下，给新节点用）
+### 3.2 在线页面加入测试项目并读素材
 
-- `sites-enabled/promptcut`：主站。`/hosted`（升级头、读写超时 3600 s、上传上限 2 MB、不缓冲）、`/media`（上传上限 2 GB、不缓冲请求、读超时 600 s）反代到内网地址的 8787、8788，带 `proxy_bind`；`/editor` 四个 location 与 `/catalog/`，都带 `Origin-Agent-Cluster: ?1`；`/editor/assets/` 开 `gzip_static on`。另有只属于阿里云的 `/coord`（探针协调口），新节点不抄。
-- `sites-enabled/promptcut-stages`：s1、s2 两个舞台源，只提供 `/media`、`/editor`、`/catalog/`，其余 404。
-- `nginx.conf`：`gzip on`、`gzip_vary on`、`gzip_proxied any`、`gzip_comp_level 6`，`gzip_types` 含 JS、CSS、JSON、SVG、WASM 等。
-- 证书：certbot `--nginx` 签的一张三个名字的 Let's Encrypt 证书，`certbot.timer` 自动续期。
+`node scripts/probes/c10a-demo-probe.mjs --site https://149-88-94-84.sslip.io --port 5560`（run `muw01bjae185`，测试项目、测试凭证）：
 
-### 1.4 探针：对着已部署的托管服务跑外网成员
+- 第 1 步过：本机桌面版当创建者，导入一段带声音的视频、放卡，项目放到新节点，取邀请链接；预渲染计划 5 个任务全部完成。
+- 第 2 步过：手机仿真（低内存档）凭邀请链接只填用户名加入；读到小尺寸素材（4 次请求）与 50 个预渲染块，舞台显示小尺寸；截图上素材库有那段视频的缩略图、时间轴 3 个片段。
+- 第 3 步过：手机上改重卡参数，创建者的渲染节点认领重渲，新键下的预渲染贴回手机（约 13 s 出新键、88 s 出新块）。
+- 第 4 步没过：低内存档逐帧导出 10 秒。经新节点取原尺寸视频时 seek 一直超时，重试 11 次、45 分钟没出片。第 5、6 步（作废邀请码、桌面版加入表单）随后超时。
+- 收尾：云端测试项目已删，再查回 404。
 
-现有 `scripts/probes/reopen-e2e.mjs --wan` 经 `reopen-wan.mjs` 在远端自己起一个临时网关，没有对着真实部署跑的入口。分支 `claude/cloud-node-deploy`（`8883c0d0`）给 `reopen-wan.mjs` 加了环境变量 `PC_REOPEN_WAN_SERVICE=<https://主机/hosted>`：给了就不起临时网关、不开隧道，外网成员仍在 `PC_REOPEN_SSH_HOST` 上跑，经这个地址发现房间并加入。只动探针。
+第 4 步的原因是 **PC 到新节点这条线路**，不是部署：同一个 1.3 MB 的主脚本，PC 从新节点取每秒 12～23 KB、往返约 250 ms；PC 从阿里云取每秒 1.4～2.6 MB。新节点到阿里云每秒约 2.1 MB，到 Cloudflare 下载、上传都约 2.3 MB/s，本机回环 55 MB/s。逐帧导出要拉原尺寸视频（815 次分段请求），在每秒十几 KB 的线路上 seek 赶不上时限。这一项不在本任务的验收单里，记为第 5 节的待用户项。
 
-基线（在该分支上）：`npx tsc -b --force` 退出 0；`npm test` 4348 项，4347 通过、0 失败、1 跳过，退出 0。这个入口还没有实跑过，要等新节点；未合入 main。
+### 3.3 协作重开恢复探针走真实部署
 
-## 2. 没做的与原因
+`PC_REOPEN_WAN_SERVICE=https://149-88-94-84.sslip.io/hosted PC_REOPEN_SSH_HOST=root@149.88.94.84 node scripts/probes/reopen-e2e.mjs --wan`（在探针分支上，见第 4 节），退出 0，`"ok":true`：
 
-卡点 1：任务第 1 步「只读摸底新节点」要节点地址、登录用户与 SSH 私钥路径，任务书里这三项没填；本机 `~/.ssh`、`Downloads`、`docs/local.md` 与仓库文档里都没有新节点的记录。属「待用户」，不建候选。它挡住的：
+- 主机重开：主机与成员的编辑器进程都真重启（pid、端口都变，浏览器存储清空），回到原房间 `sp_iqavh5q7…`，主机重新登记上线；成员先打开、保留身份等着，主机上线后自动加入；身份仍是 `creator:host` 与 `member:member`；重开零建房；`.proc`、`.procp`、草稿、系统路径、刷新五种入口都过。
+- 外网成员：在新节点上经公网域名发现房间、认证、加入三次（`path: deployed-service`，没有临时公开入口）；双向编辑 4 次，项目版本走到 9；第二、三次进入恢复了原设备身份。
+- 带票据的素材：外网成员读 media、snap、px 三类各 50,000 字节，哈希都核对通过。
 
-- 第 1 步摸底；第 2 步装 Node 与 PM2、部署托管组合、写集群令牌；第 3 步 nginx 与证书；第 4 步新节点的 `/editor`；
-- 第 6 步里新节点的三项验证（`/healthz` 与三个源、在线页面加入测试项目并读素材、协作重开恢复探针走真实部署）；
-- 第 7 步里新节点信息写进 `docs/local.md`。
+这次托管服务进程没有重启（探针在部署服务上不重启云端，`actualCloudProcessRestart: false`），云端离线时主机先打开那条只在隔离服务上验过。
 
-## 3. 待用户项
+## 4. 代码改动（未合入 main）
 
-1. 给新节点地址与登录用户、SSH 私钥在本机的路径；域名与「并存 / 整体搬过去」不给就按缺省（sslip.io、并存）。
-2. 新节点的防火墙与安全组放行由用户做；摸底后给出具体端口与命令（预计 80、443；照阿里云另有 8787、8788）。
-3. 新节点的集群令牌：打算沿用阿里云那一份（经 ssh 读进环境变量再写过去，不落盘、不打印）；要另生成请说明。
-4. 分支 `claude/cloud-node-deploy` 合入 main 须用户同意。
+分支 `claude/cloud-node-deploy`（`8883c0d0`，基于 `2cbe523e`）：`scripts/probes/reopen-wan.mjs` 加环境变量 `PC_REOPEN_WAN_SERVICE`，给了就对着已部署的托管服务跑外网成员，不起临时网关、不开隧道。只动探针。基线：`npx tsc -b --force` 退出 0；`npm test` 4348 项，4347 通过、0 失败、1 跳过。3.3 节就是用它跑通的。合入须用户同意。
+
+## 5. 待用户项与遗留
+
+1. **换 root 密码**：密码出现在了对话记录里；之后的维护只用密钥，不需要它。
+2. **合入探针分支** `claude/cloud-node-deploy`。
+3. **PC 到新节点的线路慢**（每秒十几 KB、往返 250 ms），挡住了经新节点的逐帧导出。新节点本身带宽正常。可选的改法都要用户定：服务器 TCP 拥塞控制从 cubic 换成 BBR（改内核参数，对高延迟有丢包的线路常见有效）；或接受这条线路、真实用户按各自线路测。
+4. 新节点 `~/.ssh/authorized_keys` 第一行是 PowerShell 管道写坏的公钥，无害，可删；`/tmp/pc-reopen-wan.*` 是探针留的证据目录，可删。
+5. 阿里云的托管服务仍是旧版本：本机托管的项目，外网成员经阿里云重新加入仍要等它升级，或改用新节点；切客户端（改桌面版内置托管地址）不在本任务范围。
+6. 不在本任务范围、没做：渲染服务常驻、云端 Agent、迁移阿里云数据、改桌面版内置的托管地址、发新版本。
