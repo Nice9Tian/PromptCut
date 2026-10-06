@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ModelBar } from "../ModelBar";
 import { IconPaperclip } from "../../../ui/icons";
 import type { AiProvider, ChatAttachment, ProviderInfo, PublicAiConfig } from "../../../ai/types";
@@ -25,6 +25,25 @@ export interface ComposerMenuProps {
   canDiagnose: boolean;
   onOpenDiagnostics: () => void;
   onNewChat: () => void;
+  /** 「云端」接入方式:一键配特效与诊断报告是本机 Agent 的,云端下不出现(契约 9.5) */
+  cloudMode?: boolean;
+}
+
+/** 「云端」接入方式(契约 9.5) */
+export interface ComposerCloud {
+  /** 驱动下拉里要不要有「云端」这一项 */
+  show: boolean;
+  selected: boolean;
+  /** 这一项能不能选(创建者关了开关时不能,`disabledReason` 是悬停说明) */
+  disabled?: boolean;
+  disabledReason?: string;
+  onSelect: () => void;
+  /** 选中云端时又选了本机的某个驱动 */
+  onLeave: (p: AiProvider) => void;
+  /** 云端下模型那一组(`CloudModelBar`) */
+  toolbar: ReactNode;
+  /** 云端下附件按钮的悬停说明 */
+  attachReason: string;
 }
 
 export interface ComposerProps {
@@ -55,6 +74,11 @@ export interface ComposerProps {
   onSetProvider: (p: AiProvider) => void;
   config: PublicAiConfig | null;
   menu: ComposerMenuProps;
+  /**
+   * 「云端」接入方式:不给就与原来逐条相同。给了,驱动下拉里多一项「云端」(`show`),选中时模型那一组换成 `toolbar`、
+   * 附件按钮置灰并写原因。在线页面没有本机驱动,下拉里只有这一项。
+   */
+  cloud?: ComposerCloud;
   /** 这一页的 id:运行选项里的创造力等级按页存 */
   tabId?: string;
 }
@@ -65,7 +89,7 @@ function providerLabel(p: ProviderInfo): string {
 
 /** 工具条上的「✦」菜单 */
 function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
-  const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming } = props;
+  const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming, cloudMode } = props;
   const pop = usePopover();
   /** 点了一项就收起菜单 */
   const pick = (fn: () => void) => () => {
@@ -87,6 +111,7 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
         <span aria-hidden="true">✦</span>
       </button>
       <div className="ai-pop ai-menu" role="menu" aria-label="更多操作" data-pop style={{ display: pop.open ? undefined : "none" }}>
+        {!cloudMode && (<>
         <button
           type="button"
           role="menuitem"
@@ -112,6 +137,7 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
           诊断报告
         </button>
         <div className="ai-menu-sep" role="separator" />
+        </>)}
         <button type="button" role="menuitem" className="ai-menu-item" data-pc="ai-new-chat" onClick={pick(onNewChat)}>
           <span className="ai-menu-icon" aria-hidden="true">＋</span>
           新对话
@@ -242,7 +268,9 @@ export function Composer(props: ComposerProps) {
     config,
     menu,
     tabId,
+    cloud,
   } = props;
+  const cloudOn = !!cloud?.selected;
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (hotkeysOff || !active) return;
@@ -313,30 +341,40 @@ export function Composer(props: ComposerProps) {
             type="button"
             className="pc-icon-btn ai-bar-btn"
             data-pc="ai-attach"
-            title="添加附件"
+            title={cloudOn ? cloud!.attachReason : "添加附件"}
             aria-label="添加附件"
             onClick={onPickFiles}
-            disabled={uploading}
+            disabled={uploading || cloudOn}
           >
             <IconPaperclip size={16} />
           </button>
-          <ComposerMenu {...menu} streaming={streaming} />
+          <ComposerMenu {...menu} cloudMode={cloudOn} streaming={streaming} />
           {/* 当前用哪个驱动是这一页的身份,再窄也留在工具条上 */}
           <select
             className="ai-bar-select ai-provider-select"
             data-pc="ai-provider"
             aria-label="AI 驱动方式"
             title="驱动方式"
-            value={provider || ""}
-            onChange={(e) => onSetProvider(e.target.value as AiProvider)}
+            value={cloudOn ? "cloud" : provider || ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "cloud") cloud?.onSelect();
+              else if (cloudOn) cloud!.onLeave(v as AiProvider);
+              else onSetProvider(v as AiProvider);
+            }}
           >
             {providers.map((p) => (
               <option key={p.id} value={p.id} disabled={!p.available} title={p.available ? "" : "未安装"}>
                 {providerLabel(p)}
               </option>
             ))}
+            {cloud?.show && (
+              <option value="cloud" disabled={cloud.disabled} title={cloud.disabled ? cloud.disabledReason : "消息发到云端,在云节点上执行;关掉软件也会继续"}>
+                云端
+              </option>
+            )}
           </select>
-          <ModelBar provider={provider} config={config} disabled={streaming} tabId={tabId} />
+          {cloudOn ? cloud!.toolbar : <ModelBar provider={provider} config={config} disabled={streaming} tabId={tabId} />}
         </div>
         {streaming ? (
           <>

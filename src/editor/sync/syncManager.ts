@@ -36,6 +36,7 @@ import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
 import { applyHostedChange, HOSTED_SERVICE_TEXT, parseHosted, type HostedServiceName, type HostedView } from "./hostedServices";
+import { setHostedAgent, setHostedAgentEnabled } from "../../ai/cloud/endpoint";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
@@ -842,6 +843,8 @@ function onSideMessage(msg: AnyMsg) {
       return;
     case "shared.members.list":
       patch({ members: Array.isArray(msg.devices) ? (msg.devices as MemberRow[]) : [], hosted: parseHosted(msg.hosted) });
+      // 托管端有没有云端 Agent、开没开、在哪(顶层 `hosted.agent`,比界面状态多一个 `url`;放本机的项目没有这个字段)
+      setHostedAgent(view.shared?.projectId ?? currentDocProjectId(), (msg.hosted as { agent?: unknown } | undefined)?.agent ?? null);
       return;
     case "shared.notice":
       if (msg.event === "password-changed") pushToast("项目密码已被修改。你当前的连接不受影响，但下次进入需要新密码。", "info", 8000);
@@ -853,6 +856,8 @@ function onSideMessage(msg: AnyMsg) {
           const text = HOSTED_SERVICE_TEXT[msg.service as HostedServiceName]?.changed(msg.enabled === true);
           if (text) pushToast(text, "info", 6000);
         }
+        // AI 栏里「云端」一项随之置灰或恢复
+        if (msg.service === "agent" && typeof msg.enabled === "boolean") setHostedAgentEnabled(view.shared?.projectId ?? currentDocProjectId(), msg.enabled);
       }
       return;
     case "events.event":

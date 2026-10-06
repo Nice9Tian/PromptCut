@@ -33,10 +33,14 @@ export interface VisualRecord {
  * 存的是 Promise,同一时刻好几处要同一个 id 也只发一次请求。
  * 取失败的不留在缓存里 —— 和原来每次挂载都重新取一样,下次打开还能再试。
  */
+// 在线构建:看画面的记录存在预渲染进程的 /api/ai/visual 上,云端 Agent 第一版不开放看画面的工具(契约 9.2),在线页面不会有 visualId;
+// 就地常量让在线产物里不带这个地址(写法见 src/online/pageFlag.ts 的「在线构建剪枝」)
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 const inflight = new Map<string, Promise<VisualRecord>>();
 const loaded = new Map<string, VisualRecord>();
 
 export function loadVisualRecord(id: string): Promise<VisualRecord> {
+  if (ONLINE_BUILD) return Promise.reject(new Error("在线浏览器模式没有这一步的画面记录"));
   const hit = inflight.get(id);
   if (hit) return hit;
   const p = prerenderUrl(`/api/ai/visual/${id}.json`)
