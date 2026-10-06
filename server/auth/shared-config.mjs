@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import { buildAuthProtocols, lookupProject } from './client.mjs';
 import { isProjectId, isUsername, isDeviceId, isDeviceName, isRole, isB64Bytes, KEY_BYTES } from './protocol.mjs';
 import { localDeviceInfo } from './device.mjs';
+import { migrateHostedText } from './hosted-default.mjs';
 
 export const SHARED_CONFIG_ENV = 'PROMPTCUT_SHARED_CONFIG';
 
@@ -33,7 +34,7 @@ export function normalizeEntry(raw, device = localDeviceInfo()) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw bad('每一项必须是对象');
   let url;
   try {
-    url = new URL(raw.url);
+    url = new URL(migrateHostedText(raw.url)); // 换下来的托管主机名换成新的（hosted-default.mjs）
   } catch {
     throw bad('url 不是合法地址');
   }
