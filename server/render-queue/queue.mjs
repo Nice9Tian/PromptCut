@@ -32,6 +32,14 @@
  * - D9 nodeId 绑到 userId：节点记录在时，别的 userId 拿同一个 nodeId 报到回 forbidden。
  * - D10 `node.welcome` 回这个节点的 `envFingerprint`（浏览器的指纹由文档服务模块按页面报的原始值算好再交进来）。
  *
+ * 在线执行用户卡与图卡（块 N，`docs/plan/online-card-exec-contract.md` 第 7 节）：
+ * - 纯浏览器节点另有 `cardEnvFingerprint`（环境三项再加在线卡片运行时版本，同样由文档服务算好交进来），`node.welcome` 带回；
+ *   别的 profile、没报运行时版本的浏览器没有这一项。
+ * - 浏览器节点对 `requires.userCards` / `requires.graphCards` 为真的任务，前置过滤、认领的指纹检查、锁的闲置判断都按
+ *   `cardEnvFingerprint` 比；没有这一项的浏览器对这类任务一律对不上（看不见、认领被挡）。内置卡的任务、别的 profile 一个字不变。
+ * - plan 的认领回包另带 `browserCardEnvFingerprints`（本项目在线、同一用户、watch 着的浏览器节点的 `cardEnvFingerprint`），
+ *   切分方据此确认页面自报的「本页能运行的卡」确有这样一台节点。
+ *
  * M7 D2 补充〔裁〕（`claude/queue-maint`，`REPORT-M7.md` 第 11 节第 1 行「页面只是忙也会被 D2 接手」）：
  * - `node.welcome` 带 `activeIntervalMs`（`NODE_ACTIVE_INTERVAL_MS`）：告诉节点这个队列认 `node.active`；
  * - `node.active { busy? }`：节点还在、在忙（页面在生成别的卡的快照、后台舞台在测量或补跑），不回包，只记 `activeAt`；
