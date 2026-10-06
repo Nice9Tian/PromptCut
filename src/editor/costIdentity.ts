@@ -13,7 +13,7 @@
 import type { Project } from "../kernel/project";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
 import { allCards, cardRunState, cardRunStatesGen, cardsRegistryGen, getCard, syncedCardView, syncedUserCardsGen, unknownCardClipIds, userCardSources } from "../kernel/registry";
-import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
+import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles, cardSourceFilesVersion } from "../render/cardSourceFiles.mjs";
 import { clipCostIndex, clipCostNodes } from "../render/pipelinePlan.mjs";
@@ -60,7 +60,8 @@ let cached: ClipIdentity = EMPTY;
 let cachedLocalKey = "";
 
 /**
- * 在线浏览器模式下这台设备跑不了的片段(用户卡、图卡;C10 契约第 9 节)不给身份:页面不测它们(`probeRunner` 按身份挑卡)、
+ * 在线浏览器模式下本页运行不了的片段(图卡、运行不了的用户卡;C10 契约第 9 节,`placeholderHost.needsLocalPc`)不给身份 ——
+ * 本页能运行的用户卡(构建时就在包里的、同步来且载入成功的)照内置卡给身份、照测(`online-card-exec-contract.md` 第 6 节):页面不测它们(`probeRunner` 按身份挑卡)、
  * 分派表查不到成本记录也查不到声明的帧模式,一律按重卡(`clipWeight` 的 `declared-heavy`)—— 旧的 L2 里哪怕留着
  * 以前在后台舞台上测过的记录也不认;舞台拿不到它们的身份,停下也就不追;不把它们的记录转写进文档服务。
  * 桌面(模式关着)照旧。
@@ -119,7 +120,7 @@ function costGraph(project: Project, cardOf: (id: string) => ReturnType<typeof g
 export function clipIdentityOf(project: Project | null): ClipIdentity {
   if (!project) return EMPTY;
   // 注册表与同步表的代数也进键:卡片定义到了(热更新、同步到了),未知卡片变成认得的卡,身份跟着给
-  const localKey = `${onlineBrowserMode() ? "on" : "off"}:${syncedUserCardsGen()}:${cardsRegistryGen()}:${cardRunStatesGen()}`;
+  const localKey = `${onlineBrowserMode() ? "on" : "off"}:${syncedUserCardsGen()}:${cardsRegistryGen()}:${cardRunStatesGen()}:${localOnlyLowMemory() ? 1 : 0}`;
   if (project === cachedProject && localKey === cachedLocalKey) return cached;
   let out = EMPTY;
   try {

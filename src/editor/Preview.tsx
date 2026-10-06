@@ -40,6 +40,7 @@ import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemory
 import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
 import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
 import { editorRunStates } from "./sync/cardRunStates";
+import { exportWantedClips } from "../export/exportWanted";
 import { cardExecAvailable, cardExecBlockedDetail, subscribeCardExecGate } from "../online/cardRuntime/gate";
 import type { BundleResult } from "../online/cardRuntime/protocol";
 import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
@@ -1149,8 +1150,8 @@ export function Preview() {
       if (!plan) return [];
       const p = getState().project;
       const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
-      // 只列卡片段(素材段不产快照)
-      return [...plan.prerenderSet].filter((id) => !!byId.get(id)?.cardId);
+      // 只列卡片段(素材段不产快照)。导出期间并上必须用预渲染原尺寸的同步卡片段(判轻时不在预渲染集合里,`export/exportWanted.ts`)
+      return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId);
     };
     const publisher = createPlanPublisher({
       request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION,

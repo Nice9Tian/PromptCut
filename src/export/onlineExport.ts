@@ -14,6 +14,7 @@ import { pushToast } from "../editor/sync/syncManager";
 import { MemorySink, type MuxSink } from "./mp4Mux";
 import { runBrowserExport } from "./browserExport";
 import { getCard, isUserCardId } from "../kernel/registry";
+import { setExportWantedClips } from "./exportWanted";
 import { ONLINE_EXPORT_TEXT } from "./text";
 import { prepareExportSounds } from "../editor/io/exportSounds";
 
@@ -106,6 +107,8 @@ export async function exportVideoOnline(
   let waitingShown = "";
   // C10 契约第 12 节:导出可能比只读票据的时限还长,途中按时限提前续签(取票复用 assetTicketSource)
   const renewer = remote ? await startRenewer() : null;
+  // 同步来的卡判轻时不在平时发布的清单计划里:导出期间请渲染节点把它们的预渲染原尺寸补上(`exportWanted.ts`)
+  setExportWantedClips(syncedCardClips(p));
   try {
     const result = await runBrowserExport({
       project: p,
@@ -143,6 +146,8 @@ export async function exportVideoOnline(
     const err = e as Error & { cancelled?: boolean };
     pushToast(err.cancelled ? ONLINE_EXPORT_TEXT.cancelled : ONLINE_EXPORT_TEXT.failed(err.message), err.cancelled ? "info" : "warn");
     throw err.cancelled ? Object.assign(new Error(ONLINE_EXPORT_TEXT.cancelled), { cancelled: true }) : err;
+  } finally {
+    setExportWantedClips([]);
   }
 }
 

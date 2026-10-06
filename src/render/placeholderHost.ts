@@ -28,6 +28,7 @@ import {
   type PlaceholderBox, type PlaceholderGeometry, type PlaceholderReason,
 } from "./placeholder/contract.ts";
 import { cardRunnableHere, getCard, isUserCardId } from "../kernel/registry.ts";
+import { mediaTierPolicy } from "./mediaTier.ts";
 import { hourglassFit, unsupportedFit, type PlaceholderFit } from "./placeholderFit.ts";
 
 /** 包裹层里托着占位组件的槽位(常量在 contract 里,这里转出去给已有的引用方) */
@@ -178,6 +179,25 @@ export function onlineBrowserMode(): boolean {
   return onlineBrowser;
 }
 
+/*
+ * 低内存档不执行用户卡、图卡的代码(`product/platforms.md`「面向的平台」;它的现有规则,不因在线执行放开而变):
+ * 构建时就在在线包里的仓库用户卡在低内存档也照旧算运行不了(同步来的卡另有运行状态 `low-memory`)。
+ * 档位从两处得知:编辑页面由 `planDispatch.setPlanLowMemory` 写进来;舞台是另一个文档,看它启动时写下的取档策略
+ * (`mediaTier.ts` 的 `mediaTierPolicy().lowMemory`,`StageView` 按能力表设)。桌面两处恒为 false。
+ */
+let lowMemoryTier = false;
+export function setLocalOnlyLowMemory(on: boolean): void {
+  lowMemoryTier = !!on;
+}
+export function localOnlyLowMemory(): boolean {
+  return lowMemoryTier || mediaTierPolicy().lowMemory === true;
+}
+
+/** 这张用户卡在本页能不能运行:低内存档一律不能;其余看注册表(`registry.cardRunnableHere`) */
+export function userCardRunnableHere(cardId: string): boolean {
+  return !localOnlyLowMemory() && cardRunnableHere(cardId);
+}
+
 /**
  * 这张卡在此刻的平台上是不是渲染不了。`isUserCard` 缺省查注册表的 `isUserCardId`(构建时的定制卡登记,
  * 加上内容库同步来的用户卡);图卡的判法见 `needsLocalPc`。
@@ -192,8 +212,11 @@ export function unsupportedHere(
 }
 
 /**
- * 这张卡是不是只有本地 PC 渲染得了(用户卡、图卡),不看此刻的平台。同步来的用户卡没有定义(`def` 为 undefined),
- * 靠 `isUserCard` 认出来;两边都没有的 id(未知卡片)回 false。
+ * 这张卡是不是本页运行不了、要靠渲染节点(`docs/plan/online-card-exec-contract.md` 第 6、8 节)。同步来的用户卡在编辑页面没有定义
+ * (`def` 为 undefined),靠 `isUserCard` 认出来;两边都没有的 id(未知卡片)回 false。
+ *
+ * 用户卡:本页能运行的不算 —— 构建时就在包里的仓库用户卡(它是页面自己的代码);同步来的、运行状态是 `ready` 的
+ * (编辑页面看舞台报回的状态,舞台看自己载入成功没有)。转译失败、引用了页面里没有的模块、没有隔离环境、低内存档的照旧算。
  *
  * 图卡 = 写了 `card()` 的(画面由宿主在 GPU 上执行),或只写了 `audio()`、没有画面组件的(音频图卡)。
  * 有画面组件、同时带 `audio()` 的内置有声动效卡不是图卡:它的画面就是一张普通的 DOM 卡,在线页面照常渲染
@@ -204,12 +227,12 @@ export function needsLocalPc(
   cardId: string | undefined,
   def: { card?: unknown; audio?: unknown; Component?: unknown } | undefined,
   isUserCard: (cardId: string) => boolean = isUserCardId,
-  runnable: (cardId: string) => boolean = cardRunnableHere,
+  runnable: (cardId: string) => boolean = userCardRunnableHere,
 ): boolean {
   if (!cardId) return false;
   // 图卡(画面由 card() 出,或只有 audio()):在线执行还没放开(等素材票据的隔离与图形能力判定),照旧算运行不了
   if (!!def && (typeof def.card === "function" || (typeof def.audio === "function" && !def.Component))) return true;
-  // 用户卡:本页能运行的不算(构建时就在包里的仓库用户卡;同步来的、载入成功的,`registry.cardRunnableHere`)
+  // 用户卡:本页能运行的不算(构建时就在包里的仓库用户卡;同步来的、载入成功的,`registry.cardRunnableHere`);低内存档一律算运行不了
   if (isUserCard(cardId)) return !runnable(cardId);
   return false;
 }

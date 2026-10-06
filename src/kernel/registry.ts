@@ -393,6 +393,12 @@ export function setCardRunStates(states: Iterable<readonly [string, CardRunState
   return true;
 }
 
+/** 此刻有没有还在转译或载入的同步卡(`loading`;测量的开工门等它们有了结果,`src/editor/measureGate.ts`) */
+export function anyCardLoading(): boolean {
+  for (const v of runStates.values()) if (v.state === "loading") return true;
+  return false;
+}
+
 /** 这张同步卡在本页的运行状态;没有记录回 undefined(调用方按「运行不了」处理) */
 export function cardRunState(id: string | undefined | null): CardRunState | undefined {
   return typeof id === "string" && id ? runStates.get(id) : undefined;

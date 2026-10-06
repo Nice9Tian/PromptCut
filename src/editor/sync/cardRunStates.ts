@@ -44,7 +44,7 @@ export function editorRunStates(input: EditorRunStateInput): Map<string, CardRun
     if (!reported.length) { out.set(card.id, { state: "loading" }); continue; }
     const bad = reported.find((s) => s.state !== "ready");
     // 能运行的带上这一代的短签名:成本身份里的源码版本用它(源码或转译器换了,身份跟着换)
-    out.set(card.id, bad ?? { state: "ready", version: String(cyrb53(bundle.bundle.generation)) });
+    out.set(card.id, bad ?? { state: "ready", version: String(cyrb53(String(bundle.bundle?.generation ?? ""))) });
   }
   return out;
 }

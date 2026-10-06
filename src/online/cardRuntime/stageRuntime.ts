@@ -31,6 +31,8 @@ export interface StageCardRuntimeOptions {
 }
 
 const STYLE_ATTR = "data-pc-card-style";
+/** 图卡在线执行接上之前,面板上的说明 */
+export const GRAPH_CARD_PENDING = "图卡的画面暂时由渲染节点提供";
 
 export function createStageCardRuntime(opts: StageCardRuntimeOptions = {}): StageCardRuntime {
   const doc = opts.doc ?? document;
@@ -49,7 +51,14 @@ export function createStageCardRuntime(opts: StageCardRuntimeOptions = {}): Stag
     },
     onCards: (defs) => { setRuntimeCards(defs); },
     onResults(results) {
-      last = [...runStatesOf(results, entryCards)];
+      /*
+       * 图卡(画面由 `card()` 出,或只有 `audio()`)的在线执行还没接上(等素材票据的隔离与图形能力判定,契约第 4 节):
+       * 舞台照旧不挂它们(`placeholderHost.needsLocalPc`),所以这里不能报 `ready` —— 否则编辑页面当它能运行、不再贴预渲染结果,
+       * 两边对不上。图卡那一块接上之后,这里换成它判的 `ready` / `gpu` / `media`。
+       */
+      const graphIds = new Set(loader.cards().filter((d) => typeof d.card === "function" || (typeof d.audio === "function" && !d.Component)).map((d) => d.id));
+      last = [...runStatesOf(results, entryCards)].map(([id, s]) => (s.state === "ready" && graphIds.has(id)
+        ? [id, { state: "load-error", detail: GRAPH_CARD_PENDING }] as [string, CardRunState] : [id, s] as [string, CardRunState]));
       opts.onStates?.(last);
     },
   });

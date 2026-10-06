@@ -10,9 +10,15 @@
  * 下一次问门时门重新关上,直到新连接的卡片源码第一次同步有了结果,最多同样等 `MEASURE_GATE_MAX_MS`。
  * 连接由 `setMeasureGateLink` 给(在线页面的 `Preview` 接到 `currentSharedLink()` 上);没连着(null)时不重新关。
  *
+ * **再等同步来的卡第一次载入有结果**(`docs/plan/online-card-exec-contract.md` 第 6 节):本页能执行同步来的用户卡时,卡片源码同步完之后
+ * 它们还要转译、交给舞台载入;在那之前运行状态是 `loading`,还没有成本身份。门等到没有 `loading` 的卡(成功或失败都算有结果)再开,
+ * 免得第一轮测量排队时漏掉它们、界面先按「没测过」摆一遍。仍受同一个 `MEASURE_GATE_MAX_MS` 封顶;门开之后才载入成功的卡
+ * 由运行状态的通知另排一轮补测(`ProbeGate.tsx`)。本页不能执行时没有 `loading` 的卡,这一条不起作用。
+ *
  * 桌面运行环境(不是在线页面)一开始就是开的,也不按连接关。Node 单测里 `onlinePage()` 恒为 false,同样是开的。
  */
 import { onlinePage } from "../online/pageFlag";
+import { anyCardLoading, onCardRunStatesChanged } from "../kernel/registry";
 
 /** 卡片源码第一次同步最多等这么久(毫秒),过了照常开始测量 */
 export const MEASURE_GATE_MAX_MS = 10_000;
@@ -29,6 +35,10 @@ let linkOf: (() => unknown) | null = null;
 let openFor: unknown = null;
 let heldFor: unknown = null;
 let maxMs = MEASURE_GATE_MAX_MS;
+/** 卡片源码已经同步完、只差同步来的卡载入出结果:记下那一次的结论,等运行状态里没有 `loading` 了再开 */
+let pendingRelease: { ok: boolean; link: unknown } | null = null;
+let offRunStates: (() => void) | null = null;
+let cardLoading: () => boolean = anyCardLoading;
 const diag = { heldAt: null as number | null, openedAt: null as number | null, reason: null as MeasureGateReason | null, holds: 0, links: 0, confirmedAt: null as number | null };
 /** 单测可以换掉计时与时钟 */
 let clock: { now: () => number; setTimer: (fn: () => void, ms: number) => Timer; clearTimer: (t: Timer) => void } = {
@@ -45,6 +55,7 @@ function currentLink(): unknown {
 function open(reason: MeasureGateReason, link: unknown = currentLink() ?? heldFor): void {
   if (state === "open") return;
   state = "open";
+  pendingRelease = null;
   if (timer !== null) clock.clearTimer(timer);
   timer = null;
   if (link !== null && link !== openFor) diag.links++;
@@ -59,6 +70,7 @@ function open(reason: MeasureGateReason, link: unknown = currentLink() ?? heldFo
 
 function hold(link: unknown, ms: number): void {
   state = "held";
+  pendingRelease = null;
   heldFor = link;
   diag.holds++;
   diag.heldAt = clock.now();
@@ -112,7 +124,22 @@ export function releaseMeasureGate(ok: boolean, link?: unknown): void {
     return;
   }
   if (state === "unset") state = "held";
-  open(ok ? "synced" : "failed", link !== undefined ? link : currentLink() ?? heldFor);
+  const target = link !== undefined ? link : currentLink() ?? heldFor;
+  if (cardLoading()) {
+    // 同步来的卡还在转译或载入:先不开,等它们有了结果(`settleCardLoading`);计时照走,到点照开
+    pendingRelease = { ok, link: target };
+    offRunStates ??= onCardRunStatesChanged(settleCardLoading);
+    return;
+  }
+  open(ok ? "synced" : "failed", target);
+}
+
+/** 运行状态变了:卡片源码已同步完、又没有还在载入的卡了,就开门 */
+function settleCardLoading(): void {
+  if (!pendingRelease || state === "open" || cardLoading()) return;
+  const { ok, link } = pendingRelease;
+  pendingRelease = null;
+  open(ok ? "synced" : "failed", link);
 }
 
 /** 门开了没有(第一次问时按是不是在线页面定初值;在线页面换了连接就重新关上) */
@@ -138,10 +165,14 @@ export function measureGateDiag() {
 }
 
 /** 单测用:回到刚载入的样子,可换掉计时与时钟 */
-export function resetMeasureGate(next?: Partial<typeof clock>): void {
+export function resetMeasureGate(next?: Partial<typeof clock> & { cardLoading?: () => boolean }): void {
   if (timer !== null) clock.clearTimer(timer);
   timer = null;
   state = "unset";
+  pendingRelease = null;
+  offRunStates?.();
+  offRunStates = null;
+  cardLoading = next?.cardLoading ?? anyCardLoading;
   waiters = [];
   linkOf = null;
   openFor = null;
