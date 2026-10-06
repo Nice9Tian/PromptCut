@@ -133,3 +133,51 @@ test("CAU-EMPTY-01 空对话只留一条示例句,原文照抄,本机与云端�
     assert.equal(s.includes("ai-empty-example"), false);
   }
 });
+
+/* ---------- 本机对话的报告与两个出口(用户 2026-10-07 定,任务书 K) ---------- */
+import { conversationReport, recordTrace, redactDebug } from "../debug.ts";
+
+test("CAU-DIAG-04 本机对话的报告按这段对话出,同样不含凭证、票据、委托、模型 Key(含它的执行事件与环境快照)", () => {
+  const FAKE_CODE = "PCM-ABCDE-FGHJK-MNPQR-STVWX";
+  let reply = {
+    id: "a1", role: "assistant", text: `读到了 ${FAKE_GKEY},也看到 ${FAKE_TICKET}`, error: `401 invalid x-api-key ${FAKE_KEY}`, outcome: "error",
+    tools: [{ name: "update_clip", input: { clipId: "c1", grant: FAKE_GRANT, delegation: FAKE_TICKET, ticket: FAKE_TICKET } }],
+  };
+  reply = recordTrace(reply, { type: "tool_call", name: "web_fetch", input: { url: `https://x.test/y?token=abc123&key=${FAKE_KEY}`, headers: { Authorization: `Bearer ${FAKE_TICKET}` } } });
+  reply = recordTrace(reply, { type: "text", delta: `模型回了 ${FAKE_GKEY}` });
+  const user = { id: "u1", role: "user", text: `我的票据 ${FAKE_TICKET},Key 是 ${FAKE_KEY}` };
+  const text = conversationReport([user, reply], "api", null, { server: { machineCode: FAKE_CODE, headers: { "x-api-key": FAKE_KEY }, note: FAKE_GRANT } });
+  for (const secret of [FAKE_TICKET, FAKE_GRANT, FAKE_KEY, FAKE_GKEY, "abc123", "FGHJK"]) {
+    assert.equal(text.includes(secret), false, `本机对话报告里不该出现 ${secret.slice(0, 18)}…`);
+  }
+  assert.equal(/\bv1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/.test(text), false, "整份文本里没有票据形状的串");
+  assert.equal(/\bsk-[A-Za-z0-9_-]{8,}/.test(text), false);
+  assert.equal(/\bAIza[0-9A-Za-z_-]{20,}/.test(text), false);
+  assert.equal(/Bearer\s+(?!\[)/.test(text), false);
+  const r = JSON.parse(text);
+  assert.equal(r.messages.length, 2, "是这段对话的全部消息,不是整机诊断");
+  assert.equal(r.messages[1].tools[0].input.grant, "[REDACTED]");
+  assert.equal(r.messages[1].tools[0].input.clipId, "c1", "排查要用的字段原样留着");
+  assert.match(r.messages[0].text, /我的票据 \[TICKET-REDACTED\]/);
+});
+
+test("CAU-DIAG-04b redactDebug 的新增规则不误伤排查要用的东西(版本号、文件名、计数)", () => {
+  const out = redactDebug({ v: "v1.2.3", file: "v1.final_render.mp4", max_tokens: 4096, note: "第 v1 版" });
+  assert.deepEqual(out, { v: "v1.2.3", file: "v1.final_render.mp4", max_tokens: 4096, note: "第 v1 版" });
+});
+
+test("CAU-DIAG-05 两个出口:下载是浏览器本地的,提交是页面直接打收集端的外部地址,都不经 /api/*;本机与云端同一个对话框", () => {
+  const code = (rel) => read(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const submit = code("src/ai/reportSubmit.ts");
+  assert.equal(/["'`]\/api\//.test(submit), false, "提交不经编辑器进程的 /api/*");
+  assert.match(submit, /fetch\(SUBMIT_URL,/, "提交直接请求收集端的地址");
+  assert.match(submit, /"Content-Type": "text\/plain;charset=utf-8"/, "text/plain 是 CORS 简单请求,在线页面跨源提交不触发预检");
+  assert.match(submit, /if \(!SUBMIT_URL\) return /, "没配收集端地址时给出原因(按钮置灰)");
+  const dialog = read("src/editor/right/ReportDialog.tsx");
+  assert.match(dialog, /submitReport\(text, label\)/);
+  assert.match(dialog, /disabled=\{collecting \|\| submitBlocked !== "" \|\| busy !== ""\}/, "没配地址时提交按钮置灰");
+  for (const rel of ["src/editor/right/AiPanel.tsx", "src/editor/right/CloudAiPanel.tsx"]) {
+    assert.match(read(rel), /<ReportDialog/, `${rel} 用同一个报告对话框(复制、保存为文件、提交)`);
+  }
+  assert.match(read("src/editor/right/AiPanel.tsx"), /conversationReport\(messages, provider, config, environment\)/, "本机对话按对话出报告");
+});

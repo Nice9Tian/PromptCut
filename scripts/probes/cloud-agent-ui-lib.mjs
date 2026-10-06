@@ -115,10 +115,11 @@ export function createUi({ maxLine = 1800 } = {}) {
 
 /**
  * 起托管组合 + Agent 服务(+ 渲染服务)+ 仿 nginx 的代理。
+ * `buildEnv`:在线构建时额外带的环境变量(例如 `VITE_DIAG_SUBMIT_URL`,让页面的诊断报告提交打到探针自己起的假收集端)。
  * `ports`:`{ site, stageA, stageB, doc, asset, agent, render? }`(`render` 给了才起渲染服务,另占 +1、+2 与 +6)。
  * 回一个句柄,见各字段的注释;`stop()` 把它起的全部停掉。
  */
-export async function startStack({ tmp, ports, dist = null, say = () => {}, agentEnv = {} }) {
+export async function startStack({ tmp, ports, dist = null, say = () => {}, agentEnv = {}, buildEnv = {} }) {
   const need = [ports.site, ports.stageA, ports.stageB, ports.doc, ports.asset, ports.agent, ...(ports.render ? [ports.render, ports.render + 1, ports.render + 2, ports.render + 6] : [])];
   for (const p of need) {
     if (USER_PORTS.includes(p)) throw new Error(`端口段碰到了 ${p}(用户的编辑器或安装版)`);
@@ -146,7 +147,7 @@ export async function startStack({ tmp, ports, dist = null, say = () => {}, agen
   if (!DIST) {
     DIST = path.join(tmp, 'dist-online');
     say('build-online', { dist: DIST });
-    const b = spawnSync(process.execPath, [viteBin(), 'build', '--mode', 'online', '--outDir', DIST, '--emptyOutDir', '--logLevel', 'error'], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
+    const b = spawnSync(process.execPath, [viteBin(), 'build', '--mode', 'online', '--outDir', DIST, '--emptyOutDir', '--logLevel', 'error'], { cwd: ROOT, encoding: 'utf8', windowsHide: true, env: { ...process.env, ...buildEnv } });
     if (b.status !== 0) throw new Error(`在线构建失败:${String(b.stderr).slice(-600)}`);
   }
   S.DIST = DIST = path.resolve(DIST);
