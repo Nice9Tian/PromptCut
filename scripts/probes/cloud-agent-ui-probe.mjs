@@ -656,12 +656,12 @@ async function desktopPhase() {
   const preSel = agentReqs(page).filter((r) => r.method !== 'OPTIONS');
   check('D2:不选「云端」时发往 Agent 服务的请求只有一次 info 加一次对话列表', preSel.length === 2 && preSel.some((r) => r.url.endsWith('/v1/info')) && preSel.some((r) => r.url.endsWith('/v1/conversations')), preSel.map((r) => `${r.method} ${r.url.replace(/^http:\/\/127\.0\.0\.1:\d+/, '')}`));
   // 开关被关:成员列表通知过来的 hosted.agent.enabled = false
-  await P(page, async (pid, url) => { const E = await import('/src/ai/cloud/endpoint.ts'); E.setHostedAgent(pid, { available: true, enabled: false, url }); }, PID, AGENT_DIRECT);
-  await sleep(500);
+  await P(page, async (url) => { const E = await import('/src/ai/cloud/endpoint.ts'); E.setCloudAgentSource(() => ({ available: true, enabled: false, url })); }, AGENT_DIRECT);
+  await sleep(700);
   const offOpt = (await providerOptions(page))?.options.find((o) => o.value === 'cloud');
   check('D2:创建者关了开关时「云端」一项在、置灰、写原因', !!offOpt && offOpt.disabled && /项目创建者已关闭云端 Agent/.test(offOpt.title), offOpt);
-  await P(page, async (pid, url) => { const E = await import('/src/ai/cloud/endpoint.ts'); E.setHostedAgent(pid, { available: true, enabled: true, url }); }, PID, AGENT_DIRECT);
-  await sleep(500);
+  await P(page, async () => { const E = await import('/src/ai/cloud/endpoint.ts'); E.setCloudAgentSource(null); }, null);
+  await sleep(700);
 
   /* ---- D3:选「云端」 */
   await page.select('[data-pc="ai-provider"]', 'cloud');
@@ -709,18 +709,29 @@ async function desktopPhase() {
   await page.goto(`${desktop.origin}/?editor&nosetup=1&aimock=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
   const back = await until('D5:桌面页面回到同一个共享项目', () => P(page, async () => { const S = await import('/src/editor/sync/syncManager.ts'); const v = S.getSyncView(); return v.shared?.projectId ?? null; }), 120_000, 500);
   check('D5:桌面页面重新打开后回到同一个共享项目', back === PID, { back, PID });
+  await until('D5:测量门放开', () => P(page, () => !document.querySelector('[data-pc="probe-gate"]')), 180_000, 300);
   await until('D5:AI 栏出来', () => page.$('[data-pc="ai-provider"]'), 60_000, 200);
   await sleep(2500);
   const reopened = await providerOptions(page);
   check('D5:重新打开后 AI 栏仍是本机驱动(云端从不自动选中)', reopened && reopened.value !== 'cloud' && reopened.options.some((o) => o.value === 'cloud'), reopened);
   const preSel2 = page.requests.slice(markReq).filter((r) => r.url.startsWith(`http://127.0.0.1:${PORTS.agent}/`) && r.method !== 'OPTIONS');
   check('D5:重新打开时只多一次 info 与一次对话列表', preSel2.length === 2, preSel2.map((r) => r.url.replace(/^http:\/\/127\.0\.0\.1:\d+/, '')));
-  await page.click('[data-pc="ai-history"]');
+  // 打开历史列表(点一下;没开出来就再点,最多三次)
+  for (let i = 0; i < 3; i++) {
+    await page.click('[data-pc="ai-history"]');
+    if (await page.waitForSelector('.chat-history-drawer', { visible: true, timeout: 4000 }).catch(() => null)) break;
+  }
   const group = await until('D5:历史列表「云端」一组里有刚才的对话', () => P(page, (id) => { const g = document.querySelector('[data-pc="chat-cloud-group"]'); const items = g ? [...g.querySelectorAll('[data-pc="chat-cloud-item"]')] : []; return items.length ? items.map((e) => e.textContent.trim().slice(0, 60)) : null; }, convD), 15_000, 200);
-  check('D5:历史列表的「云端」一组里找得到桌面页面关掉前发起的对话', Array.isArray(group) && group.length >= 1, { group });
+  check('D5:历史列表的「云端」一组里找得到桌面页面关掉前发起的对话', Array.isArray(group) && group.length >= 1, { group, consoleErrors: page.consoleErrors.slice(-3), failures: page.failures.slice(-3) });
   await shot(page, 'D5-desktop-history-cloud-group');
   await page.click('[data-pc="chat-cloud-item"]');
-  await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 });
+  const panelUp = await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 }).catch(() => null);
+  if (!panelUp) {
+    await shot(page, 'D5-click-failed');
+    const diag = await P(page, async () => { const T = await import('/src/ai/cloud/tabMode.ts'); return { tab: T.getCloudTab('main'), drawer: !!document.querySelector('.chat-history-drawer'), panels: [...document.querySelectorAll('aside.ai-panel')].map((a) => a.className + '|' + (a.getAttribute('data-inactive') ?? '')) }; });
+    check('D5:点了历史列表里的云端对话后云端 AI 栏出现', false, { diag, consoleErrors: page.consoleErrors.slice(-4) });
+    throw new Error('云端 AI 栏没出现');
+  }
   const found5 = await until('D5:点开后找回完整过程', async () => { const m = await msgs(page); return m && toolCount(m) === 4 && (lastAssistant(m)?.text ?? '').includes('桌面发起的三处改动做完了') ? m : null; }, 30_000, 200);
   check('D5:点开后找回完整过程(用户消息、四个工具调用、最后的回复)', !!found5 && found5.filter((x) => x.role === 'user').length === 1, { tools: toolCount(found5), users: found5?.filter((x) => x.role === 'user').length });
   await shot(page, 'D5-desktop-cloud-recovered');
@@ -731,6 +742,7 @@ async function desktopPhase() {
   await page.goto('about:blank');
   await page.goto(`${desktop.origin}/?editor&nosetup=1&aimock=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await until('D6:桌面页面回到共享项目', () => P(page, async () => { const S = await import('/src/editor/sync/syncManager.ts'); return S.getSyncView().shared?.projectId ?? null; }), 120_000, 500);
+  await until('D6:测量门放开', () => P(page, () => !document.querySelector('[data-pc="probe-gate"]')), 180_000, 300);
   const banner = await until('D6:本机模式下出现「云端对话进行中」提示', () => page.$('[data-pc="cloud-running-banner"]'), 30_000, 200);
   const optsD6 = await providerOptions(page);
   check('D6:云端对话还在跑时重新打开:AI 栏仍是本机驱动,出现「云端对话进行中」提示', !!banner && optsD6 && optsD6.value !== 'cloud', { value: optsD6?.value });
