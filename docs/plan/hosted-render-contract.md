@@ -353,7 +353,8 @@ PM2 配置由部署脚本生成、放在部署目录里，不含任何秘密（�
 | `node-version` | Node ≥ 22.18 |
 | `service-key` | 私钥文件在、权限不宽于 0600、格式对 |
 | `data-dir` | 数据目录可写；其下的 Vite 缓存目录 `vite-cache` 同样可写 |
-| `no-chrome` / `chrome-launch` | 找得到 chrome-headless-shell；真起一次、开一个空白页（带上面的沙箱判断） |
+| `no-chrome` / `chrome-launch` | 找得到 chrome-headless-shell；真起一次（带上面的沙箱判断） |
+| `chrome-frame` | 在刚起的 Chrome 里走工作进程的同一条开页路径（受帧控制的页）并出一帧。完整版的 Chrome / Chromium 过不了（不认那组开页参数、没有 `beginFrame`）；报错里写实际版本与仓库锁定的 puppeteer 配的 chrome-headless-shell 版本 |
 | `no-cjk-font` | 在刚起的 Chrome 里把「中」「国」各画到画布上比位图：没有中文字体时两个字都是同一个缺字方框（或都不画），位图相同；报错信息写明要装 `fonts-noto-cjk`（实现时改的：量宽度在等宽的缺字方框上分不出来） |
 | `no-ffmpeg` | `ffmpeg -version` 能跑；没有 H.264 编码器只告警（轨道流第一版不开） |
 | `registry` | 控制连接握手成功（登记表里有这把公钥） |
@@ -400,6 +401,7 @@ PM2 配置由部署脚本生成、放在部署目录里，不含任何秘密（�
   - 几个项目都在等时轮流，每个最多 5 分钟一换〔裁〕；
   - 与常驻工作进程同在一个 slice 里，合起来受第 4 节的上限。
 - 这样，卡片代码即使把隔离工作进程完全拿下，拿到的也只是它自己那个项目的只读票据与渲染服务的产物写权限——卡片作者本来就是那个项目的成员。
+- **现状（2026-10-06，`claude/render-service-iso`）：方案 A 没有交付，行为仍等同方案 B。** 只落了两个还没接线的零件（见文末「实现记录」的「隔离工作进程」一段）。
 - 隔离不了的面，用探针断言而不是推断（第 10 节 P-iso）：恶意用户卡读不到别的项目的内容、读不到私钥、请求工作进程的本机接口拿不到文件系统上的东西、请求云厂商的元数据地址不通。差什么补什么，补不上的写明。
 
 ---
@@ -750,3 +752,26 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 9. **没做的**：方案 A 的隔离工作进程（第 7.5 节，`isolation.mjs`、HR23、P-iso）；现在的行为等同方案 B（含用户卡的任务渲染服务不认领）。`hosted-render-load-probe`、`hosted-render-evict-probe` 没有单独成文件：负载对比是 `hosted-render-probe` 的 `load` 步骤，淘汰一项不交付。浏览器观察端的 `lowmem`、`online` 两步（第 10.4 节前两行）没有做进探针：探针按「不依赖浏览器」写，成员一侧由 Node 扮演，发的是与在线页面、低内存档同形状的清单计划与补渲计划。
 
 白名单：整套演练里渲染服务的数据连接实际发过的消息都在第 1 批的清单里，没有缺的。
+
+### 进程树与自检的修复（2026-10-06，`claude/render-service-iso` 的 `4171d872`）
+
+主会话在一台 Linux 容器（root、没有 systemd、系统装的 Chromium 141）上跑整套演练时暴露的两件事。
+
+1. **结束工作进程要带走整棵树。** 工作进程起的编辑器 Vite 自成进程组，只向工作进程那一组发信号带不走它与它下面的预渲染进程、Chrome；它们成了孤儿、占着端口，之后每次重起都报端口被占。现在按父子关系与记号两条线索找全进程：记号每次起工作进程现生成，放进环境变量 `PROMPTCUT_RENDER_TREE`，整棵树继承，Linux 上据此连挂到 1 号进程下的孤儿一起清。每次起之前先清上一轮留下的（记号与树根 pid 记在 `<数据目录>/worker-tree.json`；Linux 按记号，Windows 只在那个 pid 还活着、命令行确是同一个入口脚本时才结束它）。不按端口找进程。工作进程一侧每秒看父进程在不在，不在就收尾。Windows 上工作进程自己异常退出后留下的子进程没有记号可认，这一种不清（照旧靠 `taskkill /T` 在它活着时结束整棵树）。
+2. **启动自检多一项 `chrome-frame`**（第 7.3 节的表）。原来只开一个普通页，完整版的 Chrome 也开得了，掩盖了问题。结论：渲染节点必须用 chrome-headless-shell；那条协议错误（`Target position can only be set for new windows`）是完整版 Chrome / Chromium 的行为，与版本号无关（本机用完整版 Chrome 154 复现了同一条）。仓库锁定的 puppeteer 25.10.0 配的是 chrome-headless-shell 152.0.7977.75。工作进程打 `queue.skip` 时管理进程明说一条 `render.no-environment`，`/status` 多 `environment`。
+
+单测 HR30（进程树）、HR31（自检与 `queue.skip`），在 `server/test/hosted-render-process.test.mjs`。`hosted-render-probe` 的 `kill` 步骤加了「没有残留、端口可立即重用」的断言。
+
+### 隔离工作进程（方案 A）：没有交付
+
+`claude/render-service-iso` 上只落了两个**没有接线**的零件，各带单测（`server/test/hosted-render-isolation.test.mjs`）：
+
+- `server/hosted-render/isolation.mjs`：编排的状态机（一次一个项目、60 s 闲置结束、5 分钟轮换、换项目前清空、不反复重来）与检出副本、数据目录的建与清（HR23）。
+- `server/hosted-render/page-gate.mjs`：工作进程里「浏览器发来的请求」的判定（HR28）。它要解决的缺口是实在的：现有的同源守卫放行不带 `Origin` 的请求，预渲染页面里的代码因此能同源请求预渲染 Vite 的全部 `/api/**`，也能向同机别的工作进程的 Vite 发不带 `Origin` 的 GET；Vite 的缺省 CORS 还放行回环来源。方案 A 要成立，这道闸必须接上并用探针验过。
+
+没做的：常驻工作进程对有 `card-source` 的项目不认领并上报、代理口按工作进程分口令、管理进程起停隔离工作进程、合起来的并发与内存、整套演练的 `usercard` 步骤、隔离探针 P-iso。所以 `PROMPTCUT_RENDER_USER_CARDS` 取 `isolated` 或 `off` 现在没有区别，含用户卡的任务渲染服务不认领，任务书第 23 条「含用户卡、图卡的任务它能渲」记未达成。
+
+读代码时另记下的两点，方案 A 开工时要先核对：
+
+- 卡片同步把同步来的文件一律写进数据目录下的改动层（`<数据目录>/data/card-overrides/`），不写检出目录（`vite-plugin-cards.ts` 的 `createHostCardSync` 注释）；`render-host-contract.md` 第 7 节「本机没有的用户卡写进检出的 `src/cards/user/`」是旧说法。清空数据目录就清掉了装进来的卡，检出副本只是兜底。
+- 同步来的 `.css` 与 `.ts` 由工作进程里的 Vite 与 Tailwind 在 Node 一侧处理。样式文件里的指令会不会让 Node 一侧读到检出目录之外的文件、或载入同步来的脚本，没有验证过；这一条不验清，页面一侧的闸再严也不够。
