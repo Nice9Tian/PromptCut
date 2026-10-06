@@ -53,8 +53,9 @@ import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { layerSwapMs } from "./swapCost";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages } from "../online/stageOrigins";
-import { STAGE_SANDBOX, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport } from "../online/stageIsolation";
+import { STAGE_SANDBOX, onlineCardExec, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport } from "../online/stageIsolation";
 import { sanitizeHostCapabilities } from "../online/stageMessageGuard";
+import { MEDIA_PROXY_BASE } from "../online/stagePolicy.mjs";
 import type { IsolationReport } from "../online/isolation/isolationCheck";
 import { createStageHandshake, type StageHandshake } from "../online/stageHandshake";
 
@@ -351,7 +352,7 @@ export function Preview() {
      *
      * 票据怎么给(契约 `online-card-exec-contract.md` 第 4.1 节,`online/stageIsolation.ts`):这一台自检通过、票据交接成功 →
      * 舞台读 `/media-s/<sid>/media/<哈希>`,票据不经 RPC(舞台源的服务端把它换成 HttpOnly cookie);否则照旧:基址换成 `/media` 的路径、
-     * 票据经 RPC 下发、走 `?t=`(这样的舞台文档不执行用户卡)。素材服务不在编辑器页的源上(别的主机)时没有那条反代,照旧。
+     * 票据经 RPC 下发、走 `?t=`(这样的舞台文档不执行用户卡)。素材服务不在编辑器页源的 `/media/api/asset` 上(别的主机、别的路径)时没有那条反代,照旧。
      */
     const iso = pageStageIsolation(() => onlineStageState().cardExec);
     iso.setDual(dualRef.current);
@@ -363,7 +364,7 @@ export function Preview() {
       const seq = (policySeqRef.current[id] = (policySeqRef.current[id] ?? 0) + 1);
       let stagePolicy: StageMediaPolicy = policy;
       if (dualRef.current && base && stageBase) {
-        const plan = stageBase !== base && origins
+        const plan = stageBase === MEDIA_PROXY_BASE && origins
           ? await iso.plan(id, { dual: true, stageOrigin: origins[id], ticket })
           : { mode: "legacy" as const, base: null, ticket, cardExec: false };
         // 等自检与交接的时候这一台换了、或者又发起了一次更新的:这一次作废
@@ -1501,6 +1502,8 @@ export function Preview() {
       // C10:在线双舞台、按拍换快照、后台活开关、探针帧的可转移字节
       dual: dualRef.current,
       onlineStages: onlineStageState(),
+      // 在线执行用户卡与图卡:本页此刻能不能执行、为什么不能、会话号(不是秘密;票据不在这里)
+      cardExec: ONLINE ? { ...onlineCardExec(), sid: pageStageIsolation().sid } : null,
       // 首次握手过渡期之后换回双舞台那一下(盖板因为什么、多久撤下)
       handover: { ...handoverInfoRef.current },
       beatSwap: beatSwapDebug(),

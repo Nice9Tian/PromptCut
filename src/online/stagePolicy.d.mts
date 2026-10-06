@@ -4,6 +4,8 @@ export const MEDIA_S_PREFIX: string;
 export const SID_PATTERN: string;
 export const MEDIA_S_PATH_PATTERN: string;
 export const TICKET_PATTERN: string;
+export const ASSET_API_PREFIX: string;
+export const MEDIA_PROXY_BASE: string;
 export const STAGE_CSP_META: string;
 export const STAGE_CSP_HEADER_ONLY_DIRECTIVE: string;
 export const STAGE_CONNECTION_ALLOWLIST: string;

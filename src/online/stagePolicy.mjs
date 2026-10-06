@@ -21,6 +21,13 @@ export const MEDIA_S_PREFIX = "/media-s";
 export const SID_PATTERN = "[A-Za-z0-9]{16,64}";
 /** `/media-s/<sid>/` 之后放行的路径(只读素材字节:原尺寸与小尺寸都按哈希寻址) */
 export const MEDIA_S_PATH_PATTERN = "media/[0-9a-f]{64}(?:\\.[A-Za-z0-9]{1,8})?";
+/**
+ * 素材服务自己的 API 基址(`server/asset-service.ts`:`<origin>/api/asset`,契约固定)。`/media-s/<sid>/media/<哈希>` 转给素材服务时
+ * 接在它后面;编辑器页这边的素材基址必须是同一台素材服务经 `/media` 反代出来的 `MEDIA_PROXY_BASE`,否则不走 cookie 这条路。
+ */
+export const ASSET_API_PREFIX = "/api/asset";
+/** 编辑器页的源上素材服务的基址路径(nginx 的 `/media` 反代 + 素材服务的 API 基址) */
+export const MEDIA_PROXY_BASE = "/media/api/asset";
 /** 素材票据的形状(`server/auth/tickets.mjs`:`v1.<base64url>.<base64url>`,总长不超过 2048) */
 export const TICKET_PATTERN = "v1\\.[A-Za-z0-9_-]{1,1600}\\.[A-Za-z0-9_-]{1,200}";
 
@@ -166,7 +173,7 @@ export function mediaGrantCorsHeaders(editorOrigin) {
  *   { kind: "reject", status }             拒绝(404 路径不对、405 方法不对、403 来源不对、400 票据形状不对、401 没有 cookie)
  *   { kind: "preflight", headers }         交接的预检:204
  *   { kind: "grant", headers }             交接:204,带 `Set-Cookie`
- *   { kind: "proxy", path, authorization } 读素材:转给素材服务的 `path`,`Authorization` 换成 cookie 里的票据(不转发 cookie)
+ *   { kind: "proxy", path, authorization } 读素材:转给素材服务的 `path`(`/api/asset/media/<哈希>`),`Authorization` 换成 cookie 里的票据(不转发 cookie)
  */
 export function mediaSRoute({ method, pathname, origin, authorization, cookie }, { editorOrigin, secure = true }) {
   const m = MEDIA_S_RE.exec(String(pathname || ""));
@@ -185,7 +192,7 @@ export function mediaSRoute({ method, pathname, origin, authorization, cookie },
   if (verb !== "GET" && verb !== "HEAD") return { kind: "reject", status: 405 };
   const ticket = cookieValue(cookie, MEDIA_COOKIE);
   if (!isTicketShaped(ticket)) return { kind: "reject", status: 401 };
-  return { kind: "proxy", path: `/${rest}`, authorization: `Bearer ${ticket}` };
+  return { kind: "proxy", path: `${ASSET_API_PREFIX}/${rest}`, authorization: `Bearer ${ticket}` };
 }
 
 /** 从 `Cookie` 头里取一个值;没有给 null */
