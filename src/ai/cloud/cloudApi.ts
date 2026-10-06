@@ -7,6 +7,7 @@
  */
 import { parseSseChunks } from "../sse.ts";
 import { CloudDelegationError, CloudIdentityError, cloudGrant, cloudTicket } from "./identity.ts";
+import { CLOUD_ATTACH_TOO_LARGE, normalizeAttachmentInfo, type CloudAttachmentInfo } from "./attach.ts";
 import type { CloudChatItem, CloudChatState, CloudEvent, CloudInfo, CloudSendBody } from "./types.ts";
 
 export class CloudError extends Error {
@@ -178,6 +179,31 @@ export function createCloudApi(deps: CloudApiDeps) {
       const res = await request(`/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", json: { ...body, ...(grant ? { grant } : {}) } });
       const out = (await res.json()) as { runId?: string; seq?: number };
       return { runId: String(out.runId ?? ""), seq: num(out.seq) };
+    },
+
+    /**
+     * 传一个附件到这个对话的工作目录(契约 2.3 节):请求体就是文件字节,不是 JSON、不是 multipart。
+     * 对话还没发过消息也可以先传。回的 `url`(`work:attachments/…`)随下一条消息的 `attachments` 带回去。
+     * 出错:413 `too-large`(单个 512 MB 或工作目录满了)、400 `bad-request`(空文件、文件名不合法)、403 `disabled`、401、503 `unavailable`。
+     */
+    async attach(conversationId: string, file: Blob, name: string, signal?: AbortSignal): Promise<CloudAttachmentInfo> {
+      let res: Response;
+      try {
+        res = await request(`/conversations/${encodeURIComponent(conversationId)}/attachments?name=${encodeURIComponent(name)}`, {
+          method: "POST",
+          body: file,
+          signal,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+      } catch (err) {
+        // 「消息太长了」是发消息的话,附件超限要换一句
+        if (err instanceof CloudError && err.code === "too-large") throw new CloudError("too-large", CLOUD_ATTACH_TOO_LARGE, err.status);
+        throw err;
+      }
+      const body = (await res.json().catch(() => null)) as { attachment?: unknown } | null;
+      const info = normalizeAttachmentInfo(body?.attachment, name);
+      if (!info) throw new CloudError("unavailable", "云端 Agent 没有收下这个附件,请重试。", res.status);
+      return info;
     },
 
     async abort(conversationId: string): Promise<void> {

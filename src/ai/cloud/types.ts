@@ -51,4 +51,6 @@ export interface CloudSendBody {
   script?: string;
   library?: unknown[];
   pageState?: CloudPageState;
+  /** 已经传到这个对话工作目录里的附件(`POST …/attachments` 回包里的 `url`);服务端只认工作目录里真有的 */
+  attachments?: { url: string }[];
 }

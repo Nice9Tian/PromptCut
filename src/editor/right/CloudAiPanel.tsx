@@ -5,12 +5,13 @@ import "./CloudAiPanel.css";
 import "katex/dist/katex.min.css";
 import { useCloudChat, type CloudAgentState } from "../../ai/cloud/useCloud";
 import { leaveCloudTab } from "../../ai/cloud/tabMode";
-import { cloudErrorText } from "../../ai/cloud/cloudApi";
+import { CloudError, cloudErrorText } from "../../ai/cloud/cloudApi";
+import { CLOUD_ATTACH_ACCEPT, CLOUD_ATTACH_NEED_TEXT, CLOUD_ATTACH_TITLE, cloudAttachKindOfName, newCloudAttachId, pickSendable } from "../../ai/cloud/attach";
 import { setTabBusy, setTabConversation, useAgentTabs } from "../../ai/agentTabs";
 import { MAIN_TAB } from "../../ai/liveChat";
 import { useInstallJobs } from "../../ai/sttInstallStore";
 import { enqueue, getQueue, clear as clearQueue, remove as removeQueued, setPaused as setQueuePaused, useQueue, type QueuedItem } from "../../ai/chatQueue";
-import type { AiProvider, ProviderInfo, PublicAiConfig } from "../../ai/types";
+import type { AiProvider, ChatAttachment, ProviderInfo, PublicAiConfig } from "../../ai/types";
 import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
 import { useViewPrefs, setShowThinking } from "./chat/viewPrefs";
 import { ChatHeader } from "./chat/ChatHeader";
@@ -18,7 +19,7 @@ import { MessageList } from "./chat/MessageList";
 import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { QueueList } from "./chat/QueueList";
 import { Composer } from "./chat/Composer";
-import { CloudModelBar, CLOUD_NO_ATTACH } from "./CloudModelBar";
+import { CloudModelBar } from "./CloudModelBar";
 import { AgentEventLog } from "../sync/AgentEventLog";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { ReportDialog } from "./ReportDialog";
@@ -77,6 +78,22 @@ export function CloudAiPanel(props: {
   /* ---------- 草稿、排队、发送 ---------- */
   const [inputText, setInputText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /* 附件:选文件 → 逐个上传到云端这个对话的工作目录(显示上传中)→ 发消息时把传好的带上。失败给出原因,可点一下重试、可移除 */
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  /** 附件占位 id → 原始文件(失败重试用)与进行中的上传(移除时取消) */
+  const retryFilesRef = useRef<Map<string, File>>(new Map());
+  const uploadsRef = useRef<Map<string, AbortController>>(new Map());
+  // 换了对话(新对话、历史里点了别的、进入时自动接上在跑的):附件只在传去的那个对话的工作目录里,不跟过去
+  useEffect(() => {
+    setAttachments((prev) => {
+      const keep = prev.filter((a) => !a.conversationId || a.conversationId === chat.conversationId);
+      if (keep.length === prev.length) return prev;
+      for (const a of prev) if (!keep.includes(a) && a.id) { uploadsRef.current.get(a.id)?.abort(); uploadsRef.current.delete(a.id); retryFilesRef.current.delete(a.id); }
+      return keep;
+    });
+  }, [chat.conversationId]);
+  useEffect(() => () => { for (const ac of uploadsRef.current.values()) ac.abort(); }, []);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [query, setQuery] = useState("");
   const { view: viewMode, showThinking } = useViewPrefs();
@@ -117,23 +134,32 @@ export function CloudAiPanel(props: {
   };
   useEffect(() => () => { if (echoTimer.current !== null) window.clearTimeout(echoTimer.current); }, []);
 
-  const sendNow = async (text: string): Promise<boolean> => {
+  const sendNow = async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
     if (off) { return false; }
     markSent();
-    const ok = await chat.send(text);
+    const ok = await chat.send(text, files);
     if (!ok) { echoWait.current = false; bump((n) => n + 1); }
     return ok;
   };
 
   const handleSend = (text: string) => {
-    if (!text.trim()) return;
+    if (!text.trim() && attachments.length === 0) return;
     if (off) return;
+    // 还在上传或上传失败的附件这次先不带上,但发送本身不被挡住
+    const { usable, skipped } = pickSendable(attachments, chat.conversationId);
+    if (!text.trim()) {
+      // 服务端不收空消息:只有附件时留在输入框里,等用户写一句话
+      chat.notify(skipped > 0 && usable.length === 0 ? `${skipped} 个附件还在上传或上传失败,请等它传好、或重试后再发。` : CLOUD_ATTACH_NEED_TEXT);
+      return;
+    }
+    if (skipped > 0) chat.notify(`${skipped} 个附件还在上传或上传失败,这次没带上。`);
     if (busy()) {
-      enqueue(qKey, { text: text.trim() });
+      enqueue(qKey, { text: text.trim(), ...(usable.length ? { attachments: usable } : {}) });
     } else {
-      void sendNow(text.trim());
+      void sendNow(text.trim(), usable);
     }
     setInputText("");
+    setAttachments([]);
   };
 
   // 一轮结束:空闲且没暂停就发队首
@@ -142,7 +168,7 @@ export function CloudAiPanel(props: {
     if (queue.paused || queue.items.length === 0) return;
     const head = queue.items[0];
     removeQueued(qKey, head.id);
-    void sendNow(head.text);
+    void sendNow(head.text, head.attachments);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.streaming, queue.items, queue.paused, off]);
 
@@ -157,15 +183,60 @@ export function CloudAiPanel(props: {
       // 停止要等服务端收尾的事件回来
       for (let i = 0; i < 40 && chat.store.get().some((m) => m.pending); i++) await new Promise((r) => setTimeout(r, 100));
     }
-    void sendNow(item.text);
+    void sendNow(item.text, item.attachments);
   };
   const editQueued = (item: QueuedItem) => {
     removeQueued(qKey, item.id);
     setInputText(item.text);
+    setAttachments(item.attachments ?? []);
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
   const resumeQueue = () => setQueuePaused(qKey, false);
-  const hasDraft = () => inputText.trim().length > 0;
+  const hasDraft = () => inputText.trim().length > 0 || attachments.length > 0;
+
+  /** 真正上传:不 await 丢出去跑,跑完回填那张附件卡(保留占位 id,重试与移除还对得上) */
+  const runUpload = (id: string, file: File) => {
+    const convId = chat.conversationId;
+    const ac = new AbortController();
+    uploadsRef.current.set(id, ac);
+    chat.attach(file, ac.signal).then(
+      (info) => {
+        uploadsRef.current.delete(id);
+        setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, url: info.url, name: info.name, kind: info.kind, bytes: info.size, ...(info.text !== undefined ? { text: info.text } : {}), conversationId: convId, status: "ready" as const, error: undefined } : a)));
+      },
+      (err: unknown) => {
+        uploadsRef.current.delete(id);
+        if (ac.signal.aborted) return;
+        const msg = err instanceof CloudError ? err.message : cloudErrorText("network");
+        setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "error" as const, error: msg } : a)));
+      },
+    );
+  };
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (files.length === 0 || off) return;
+    for (const file of files) {
+      const id = newCloudAttachId();
+      retryFilesRef.current.set(id, file);
+      // 先把占位卡片插进去,这一步之前不许有任何 await,输入区一秒都不能卡
+      setAttachments((prev) => [...prev, { id, url: "", name: file.name, kind: cloudAttachKindOfName(file.name), bytes: file.size, srcPath: null, conversationId: chat.conversationId, status: "importing" as const }]);
+      runUpload(id, file);
+    }
+  };
+  const retryAttachment = (id: string) => {
+    const file = retryFilesRef.current.get(id);
+    if (!file) return;
+    setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "importing" as const, error: undefined, conversationId: chat.conversationId } : a)));
+    runUpload(id, file);
+  };
+  const removeAttachment = (idx: number) => {
+    setAttachments((prev) => {
+      const gone = prev[idx];
+      if (gone?.id) { uploadsRef.current.get(gone.id)?.abort(); uploadsRef.current.delete(gone.id); retryFilesRef.current.delete(gone.id); }
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
 
   /* ---------- 消息行的展开状态(同 AiPanel) ---------- */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -275,11 +346,11 @@ export function CloudAiPanel(props: {
         text={inputText}
         onTextChange={setInputText}
         textareaRef={textareaRef}
-        attachments={[]}
+        attachments={attachments}
         uploading={false}
-        onPickFiles={() => {}}
-        onRetryAttachment={() => {}}
-        onRemoveAttachment={() => {}}
+        onPickFiles={() => fileInputRef.current?.click()}
+        onRetryAttachment={(id) => retryAttachment(id)}
+        onRemoveAttachment={removeAttachment}
         onSubmit={handleSend}
         onStop={handleStop}
         streaming={view.streaming}
@@ -303,9 +374,10 @@ export function CloudAiPanel(props: {
           onSelect: () => {},
           onLeave: (p) => { if (desktop) { leaveCloudTab(tabId); desktop.onLeave(p); } },
           toolbar: <CloudModelBar info={chat.info} model={chat.model} onModel={chat.setModel} disabled={view.streaming} tabId={tabId} />,
-          attachReason: CLOUD_NO_ATTACH,
+          attachTitle: CLOUD_ATTACH_TITLE,
         }}
       />
+      <input type="file" ref={fileInputRef} data-pc="cloud-attach-input" accept={CLOUD_ATTACH_ACCEPT} multiple style={{ display: "none" }} onChange={handleFileChange} />
 
       <ReportDialog
         open={diagOpen}

@@ -16,6 +16,8 @@ import { cloudIdentityVersion, subscribeCloudIdentity } from "./identity";
 import { CloudError, cloudErrorText, createCloudApi, type CloudApi } from "./cloudApi";
 import { createCloudSession, type CloudSession, type CloudSessionView } from "./session";
 import { titleOf } from "./events";
+import { bubbleAttachments, type CloudAttachmentInfo } from "./attach";
+import type { ChatAttachment } from "../types";
 import type { CloudChatItem, CloudInfo, CloudSendBody } from "./types";
 
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
@@ -73,7 +75,7 @@ function rememberTitle(projectId: string, id: string, title: string) {
   lsSet(titlesKey(projectId), JSON.stringify(t));
 }
 
-/** 素材库清单(附在每条消息后面,让模型不必先花一轮 list_media);云端不收附件,只列库里已有的 */
+/** 素材库清单(附在每条消息后面,让模型不必先花一轮 list_media);只列库里已有的,用户这一轮传的附件走 `attachments` */
 export function mediaLibrary(): unknown[] {
   try {
     return getState().project.media
@@ -164,8 +166,13 @@ export interface CloudChat {
   /** 页面上要给用户看一下的(发送失败、身份没就绪、项目关了开关),用户关掉或下一次操作时清掉 */
   notice: string | null;
   clearNotice: () => void;
+  /** 给用户看一句话(「某些附件没带上」之类页面自己的提示) */
+  notify: (text: string) => void;
   conversationId: string;
-  send: (text: string) => Promise<boolean>;
+  /** `files`:已经传好的附件(`attach` 回来的那些);其 `url` 随消息带给服务端,名字显示在本页的气泡里 */
+  send: (text: string, files?: ChatAttachment[]) => Promise<boolean>;
+  /** 传一个文件到这个对话的工作目录(对话还没发过消息也行);出错抛 `CloudError` */
+  attach: (file: File, signal?: AbortSignal) => Promise<CloudAttachmentInfo>;
   abort: () => Promise<void>;
   newChat: () => void;
   openChat: (id: string) => void;
@@ -286,10 +293,11 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     rememberTitle(projectId, convRef.current, titleOf(messages));
   }, [projectId, messages]);
 
-  const send = useCallback(async (text: string): Promise<boolean> => {
+  const send = useCallback(async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
     const s = sessionRef.current;
     if (!s || !text.trim()) return false;
     setNotice(null);
+    const sent = (files ?? []).filter((a) => !!a.url);
     const body: CloudSendBody = {
       prompt: text.trim(),
       pageState: pageState(),
@@ -297,15 +305,18 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       creativity: getTabCreativity(tabId),
       ...(getScript().trim() ? { script: getScript() } : {}),
       ...(model ? { model } : {}),
+      ...(sent.length ? { attachments: sent.map((a) => ({ url: a.url })) } : {}),
     };
     try {
-      await s.send(body);
+      await s.send(body, sent.length ? bubbleAttachments(sent) : undefined);
       return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       return false;
     }
   }, [tabId, model]);
+
+  const attach = useCallback((file: File, signal?: AbortSignal): Promise<CloudAttachmentInfo> => api.attach(convRef.current, file, file.name, signal), [api]);
 
   const abort = useCallback(async () => {
     try {
@@ -348,8 +359,10 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     info,
     notice,
     clearNotice: () => setNotice(null),
+    notify: setNotice,
     conversationId,
     send,
+    attach,
     abort,
     newChat,
     openChat: switchTo,

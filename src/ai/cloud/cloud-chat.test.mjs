@@ -14,7 +14,10 @@
  *   CAU-API-02  委托要不到时不发请求:文档服务拒签 service-disabled 显示「创建者已关闭」,连接断着显示连不上,其余按身份验证没过;
  *   CAU-API-03  事件流连续太久一个字节都没来(半开的连接)就当它断了,抛错让会话重连;
  *   CAU-ID-01   身份只有注入这一个来源:没注入抛 no-identity,请求一个都不发;
- *   CAU-ID-02   守门:页面源码里没有探针用的全局回退口子(`__pcCloudIdentity`、`__pcCloudAgent`),设了这两个全局变量也不起作用。
+ *   CAU-ID-02   守门:页面源码里没有探针用的全局回退口子(`__pcCloudIdentity`、`__pcCloudAgent`),设了这两个全局变量也不起作用;
+ *   CAU-ATT-01  附件上传:请求体是文件字节(octet-stream、不是 JSON)、带委托票据、文件名百分号编码在查询串里;回包换成附件条用的形状;各种错误换成人话;
+ *   CAU-ATT-02  发消息带已传好的附件的 url,本页气泡里显示附件名;服务端的 user 事件自己带了附件时重新打开也看得到;只有传好的、属于当前对话的才带;
+ *   CAU-ATT-03  守门:云端这条路不引本机的附件模块(它带着 `/api/chats/attach/*`,在线构建不许请求 `/api/*`),源码里没有这类地址,也没有「附件置灰」的说明。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -24,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, titleOf } from "./events.ts";
 import { createCloudSession } from "./session.ts";
 import { CloudError, cloudErrorText, createCloudApi, normalizeChatItem, normalizeInfo } from "./cloudApi.ts";
+import { bubbleAttachments, cloudAttachKind, normalizeAttachmentInfo, pickSendable } from "./attach.ts";
 import { CLOUD_OFF, resolveCloudAgent, setHostedAgent, setHostedAgentEnabled, clearHostedAgent } from "./endpoint.ts";
 import { CloudDelegationError, CloudIdentityError, cloudGrant, cloudTicket, hasCloudIdentity, setCloudIdentity } from "./identity.ts";
 
@@ -430,4 +434,110 @@ test("CAU-SES-05 服务端的对话从头开始了(seq 比页面看到的还小)
   assert.equal(store.get()[1].text, "改好了", "旧的消息还在");
   assert.equal(s.getView().lastSeq, 3);
   s.close();
+});
+
+test("CAU-ATT-01 附件上传:请求体是文件字节、带票据、文件名在查询串里;回包与各种错误", async () => {
+  const calls = [];
+  let reply = () => Response.json({ ok: true, attachment: { name: "片 头.mp4", url: "work:attachments/片 头.mp4", size: 5, kind: "video" } });
+  const fetchImpl = async (url, init) => { calls.push({ url, init }); return reply(); };
+  const api = createCloudApi({ baseUrl: () => "https://h.example/agent/v1", ticket: async () => "TICKET", grant: async () => { throw new Error("上传不要对话委托"); }, fetchImpl });
+  const file = new Blob([new Uint8Array([1, 2, 3, 4, 5])]);
+  const info = await api.attach("c-a", file, "片 头.mp4");
+  assert.deepEqual(info, { name: "片 头.mp4", url: "work:attachments/片 头.mp4", size: 5, kind: "video" });
+  const c = calls[0];
+  assert.equal(c.url, "https://h.example/agent/v1/conversations/c-a/attachments?name=" + encodeURIComponent("片 头.mp4"));
+  assert.equal(c.init.method, "POST");
+  assert.equal(c.init.body, file, "请求体直接是文件(字节),不是 JSON、不是 multipart");
+  assert.equal(c.init.headers.Authorization, "Bearer TICKET");
+  assert.equal(c.init.headers["Content-Type"], "application/octet-stream");
+  assert.equal(c.init.credentials, "omit");
+  // 文本类附件的内联文本带回来;服务端改了名(重名加 -1)以回包为准
+  reply = () => Response.json({ ok: true, attachment: { name: "a-1.srt", url: "work:attachments/a-1.srt", size: 9, kind: "text", text: "1\n00:00" } });
+  assert.deepEqual(await api.attach("c-a", file, "a.srt"), { name: "a-1.srt", url: "work:attachments/a-1.srt", size: 9, kind: "text", text: "1\n00:00" });
+  assert.equal(cloudAttachKind("file", "x.pdf"), "pdf", "服务端给的类型是 file 时按文件名再猜");
+  assert.equal(cloudAttachKind("file", "x.zip"), "other");
+  assert.equal(normalizeAttachmentInfo({ name: "x" }, "x"), null, "没有 url 不算传好");
+  // 错误
+  const err = async (status, code, message) => {
+    reply = () => Response.json({ ok: false, code, message }, { status });
+    return api.attach("c-a", file, "f.mp4").then(() => null, (e) => e);
+  };
+  const tooLarge = await err(413, "too-large", "附件太大了。");
+  assert.ok(tooLarge instanceof CloudError && tooLarge.code === "too-large" && /512 MB/.test(tooLarge.message), "超限换成附件自己的话");
+  assert.doesNotMatch(tooLarge.message, /消息太长/, "不是发消息那句「消息太长了」");
+  assert.equal((await err(400, "bad-request", "附件是空的。")).message, "附件是空的。", "空文件、文件名不合法:用服务端的说明");
+  assert.equal((await err(403, "disabled", "x")).message, "项目创建者已关闭云端 Agent。");
+  assert.equal((await err(401, "unauthorized", "x")).code, "unauthorized");
+  assert.equal((await err(503, "unavailable", "这个云端 Agent 服务没有工作目录,不能收附件。")).message, "这个云端 Agent 服务没有工作目录,不能收附件。");
+  reply = () => Response.json({ ok: true });
+  assert.equal((await api.attach("c-a", file, "f.mp4").then(() => null, (e) => e)).code, "unavailable", "回包里没有附件不算传好");
+  // 断网
+  const down = createCloudApi({ baseUrl: () => "https://h.example/agent/v1", ticket: async () => "T", fetchImpl: async () => { throw new TypeError("fetch failed"); } });
+  assert.equal((await down.attach("c-a", file, "f.mp4").then(() => null, (e) => e)).code, "network");
+  // 取消上传(用户移除附件)抛 AbortError,不是 CloudError
+  const ac = new AbortController();
+  const hang = createCloudApi({ baseUrl: () => "https://h.example/agent/v1", ticket: async () => "T", fetchImpl: (url, init) => new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(Object.assign(new Error("x"), { name: "AbortError" })))) });
+  const p = hang.attach("c-a", file, "f.mp4", ac.signal).then(() => null, (e) => e);
+  await new Promise((r) => setTimeout(r, 5));
+  ac.abort();
+  assert.equal((await p).name, "AbortError");
+});
+
+test("CAU-ATT-02 发消息带附件:url 随消息走、气泡里显示名字;服务端的 user 事件带了附件时重新打开也看得到", async () => {
+  const sentAtt = [{ id: "att-1", url: "work:attachments/a.mp4", name: "a.mp4", kind: "video", bytes: 5, status: "ready", conversationId: "c-1" }];
+  // 发送之后 user 事件才到
+  const store = memStore();
+  const sent = [];
+  const api = {
+    async send(id, body) { sent.push(body); return { runId: "r1", seq: 1 }; },
+    async abort() {},
+    async *events() { await new Promise((r) => setTimeout(r, 30)); yield { type: "user", seq: 1, runId: "r1", prompt: "用这个视频" }; await new Promise(() => {}); },
+  };
+  const s = createCloudSession({ api, store, flushMs: 0 });
+  s.open("c-1");
+  await s.send({ prompt: "用这个视频", attachments: [{ url: "work:attachments/a.mp4" }] }, bubbleAttachments(sentAtt));
+  assert.deepEqual(sent[0].attachments, [{ url: "work:attachments/a.mp4" }], "请求体多一个可选字段 attachments: [{ url }]");
+  await waitFor(() => store.get().some((m) => m.role === "user"));
+  const u = store.get().find((m) => m.role === "user");
+  assert.deepEqual(u.attachments.map((a) => [a.name, a.kind, a.url]), [["a.mp4", "video", "work:attachments/a.mp4"]], "气泡里照桌面版显示附件名");
+  s.close();
+  // user 事件先于 202 回包到
+  const store2 = memStore();
+  const api2 = {
+    async send() { await new Promise((r) => setTimeout(r, 40)); return { runId: "r2", seq: 1 }; },
+    async abort() {},
+    async *events() { await new Promise((r) => setTimeout(r, 5)); yield { type: "user", seq: 1, runId: "r2", prompt: "x" }; await new Promise(() => {}); },
+  };
+  const s2 = createCloudSession({ api: api2, store: store2, flushMs: 0 });
+  s2.open("c-2");
+  await s2.send({ prompt: "x" }, bubbleAttachments(sentAtt));
+  assert.equal(store2.get().find((m) => m.role === "user").attachments[0].name, "a.mp4", "消息先到、回包后到也贴得上");
+  s2.close();
+  // 服务端的 user 事件自己带了附件:重新打开、换设备时也看得到
+  const re = applyCloudEvents([], [{ type: "user", seq: 1, runId: "r3", prompt: "看这个", attachments: [{ name: "b.png", url: "work:attachments/b.png", kind: "image", size: 7 }, { nope: 1 }] }]);
+  assert.deepEqual(re[0].attachments.map((a) => [a.name, a.kind, a.bytes]), [["b.png", "image", 7]]);
+  assert.equal(applyCloudEvents([], [{ type: "user", seq: 1, runId: "r4", prompt: "无附件" }])[0].attachments, undefined);
+  // 只带传好的、属于当前对话的
+  const list = [
+    { id: "1", url: "work:attachments/a", name: "a", kind: "video", status: "ready", conversationId: "c-1" },
+    { id: "2", url: "", name: "b", kind: "video", status: "importing", conversationId: "c-1" },
+    { id: "3", url: "", name: "c", kind: "video", status: "error", error: "x", conversationId: "c-1" },
+    { id: "4", url: "work:attachments/d", name: "d", kind: "video", status: "ready", conversationId: "c-other" },
+  ];
+  const pick = pickSendable(list, "c-1");
+  assert.deepEqual([pick.usable.map((a) => a.id), pick.skipped], [["1"], 3]);
+});
+
+test("CAU-ATT-03 守门:云端这条路不引本机附件模块、不带 /api/chats/attach,也没有「附件置灰」的说明", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const files = [
+    "src/ai/cloud/attach.ts", "src/ai/cloud/cloudApi.ts", "src/ai/cloud/session.ts", "src/ai/cloud/useCloud.ts", "src/ai/cloud/events.ts",
+    "src/editor/right/CloudAiPanel.tsx", "src/editor/right/CloudModelBar.tsx",
+  ];
+  for (const rel of files) {
+    const src = fs.readFileSync(path.join(root, rel), "utf8");
+    assert.doesNotMatch(src, /\/api\/chats\/attach/, `${rel} 不许请求本机的附件接口`);
+    assert.doesNotMatch(src, /from\s+["'](\.\.\/)+(ai\/)?attachments["']/, `${rel} 不许引本机的附件模块`);
+    assert.doesNotMatch(src, /CLOUD_NO_ATTACH|暂不支持附文件/, `${rel} 云端下附件不再置灰`);
+  }
 });

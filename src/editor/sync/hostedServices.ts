@@ -124,44 +124,70 @@ export function splitMembers<T extends Pick<MemberRow, "service">>(rows: readonl
 }
 
 /* ---------------------------------------------------------------------------------------------
- * 成员列表的计数口径〔用户 2026-10-07 定〕：「成员：N 人 · Agent：M 个」
+ * 成员列表的计数口径〔用户 2026-10-07 定;同日改:云端 Agent 按「此刻有没有一轮在跑」算,不按「连没连着」〕：「成员：N 人 · Agent：M 个」
+ *
+ * 云端 Agent 的连接在一轮结束后还会连着(闲置 10 分钟才回收),连没连着说不清它在不在干活。Agent 服务在有一轮在跑时经在场状态挂一项
+ * `cloud-run`(`presence.ts` 的 `cloudRunning()`:成员键 `用户名@设备号` 的集合,与成员行的 `${username}@${deviceId}` 同一写法),下面的函数都带这张表:
  *
  * - 人数只算真人在线的：这一行有任何一条不是「云端 Agent」的连接（页面、本机 Agent、渲染进程都说明他的设备在线）才算；
- * - 成员本人不在线、只有他的云端 Agent 连着：这一行照常显示并标「离线，Agent 在跑」，不计入人数、计入 Agent 数；
- * - Agent 数 = 本机 Agent（每个对话一条连接）加云端 Agent（每位成员最多一个，实例里有多条连接也只算一个）；
+ * - Agent 数 = 本机 Agent（每个对话一条连接）加有一轮在跑的云端 Agent（每位成员最多一个，实例里有多条连接也只算一个）；闲置的云端 Agent 连接不计；
+ * - 成员本人不在线、他的云端 Agent 有一轮在跑：这一行照常显示并标「离线，Agent 在跑」，不计入人数、计入 Agent 数；
+ * - 成员本人不在线、只剩闲置的云端 Agent 连接：这一行不显示（不标、不计入任何一个数）；
+ * - 成员本人在线、云端 Agent 闲置：行里不显示「[云端 Agent]」标记；有一轮在跑才显示；
  * - 托管方的服务行（渲染节点）不进任何一个数（`splitMembers` 已把它们分开）。
  * ------------------------------------------------------------------------------------------- */
 
-type CountRow = Pick<MemberRow, "conns">;
+type CountRow = Pick<MemberRow, "conns" | "username" | "deviceId">;
+
+/** 此刻云端 Agent 有一轮在跑的成员键(`用户名@设备号`) */
+export type CloudRunning = ReadonlySet<string>;
+
+/** 成员行在「有一轮在跑」表里的键:与在场状态里来源身份的 `userId` 是同一种写法(`用户名@设备号`) */
+export const memberKeyOf = (row: Pick<MemberRow, "username" | "deviceId">): string => `${row.username}@${row.deviceId}`;
 
 /** 这一行的成员此刻是不是真人在线 */
-export function isPersonOnline(row: CountRow): boolean {
+export function isPersonOnline(row: Pick<MemberRow, "conns">): boolean {
   return row.conns.some((c) => c.service !== "agent");
 }
 
-/** 这位成员本人不在线、只有他的云端 Agent 连着 */
-export function isCloudAgentOnly(row: CountRow): boolean {
-  return row.conns.length > 0 && !isPersonOnline(row) && cloudAgentConns(row.conns).length > 0;
+/** 这位成员的云端 Agent 此刻有一轮在跑(连着,且在「有一轮在跑」表里) */
+export function isCloudAgentRunning(row: CountRow, running: CloudRunning): boolean {
+  return cloudAgentConns(row.conns).length > 0 && running.has(memberKeyOf(row));
+}
+
+/** 这位成员本人不在线、他的云端 Agent 有一轮在跑:标「离线，Agent 在跑」 */
+export function isCloudAgentOnly(row: CountRow, running: CloudRunning): boolean {
+  return !isPersonOnline(row) && isCloudAgentRunning(row, running);
+}
+
+/** 这位成员本人不在线、只剩闲置的云端 Agent 连接:这一行不显示 */
+export function isIdleCloudAgentOnly(row: CountRow, running: CloudRunning): boolean {
+  return !isPersonOnline(row) && cloudAgentConns(row.conns).length > 0 && !isCloudAgentRunning(row, running);
+}
+
+/** 成员列表里要显示的行(去掉只剩闲置云端 Agent 连接的)。`people` 是 `splitMembers` 分出来的成员行 */
+export function visibleMembers<T extends CountRow>(people: readonly T[], running: CloudRunning): T[] {
+  return people.filter((r) => !isIdleCloudAgentOnly(r, running));
 }
 
 /** 本机 Agent 的数量(这一行里 `role: 'agent'` 且不是云端 Agent 的连接) */
-export function localAgentCount(row: CountRow): number {
+export function localAgentCount(row: Pick<MemberRow, "conns">): number {
   return row.conns.filter((c) => c.role === "agent" && c.service !== "agent").length;
 }
 
 /** 顶栏成员数与 Agent 数。`people` 是 `splitMembers` 分出来的成员行 */
-export function memberCounts(people: readonly CountRow[]): { people: number; agents: number } {
+export function memberCounts(people: readonly CountRow[], running: CloudRunning): { people: number; agents: number } {
   let online = 0;
   let agents = 0;
-  for (const r of people) {
+  for (const r of visibleMembers(people, running)) {
     if (isPersonOnline(r)) online++;
-    agents += localAgentCount(r) + (cloudAgentConns(r.conns).length > 0 ? 1 : 0);
+    agents += localAgentCount(r) + (isCloudAgentRunning(r, running) ? 1 : 0);
   }
   return { people: online, agents };
 }
 
 /** 顶栏按钮上的字。自己总是在线的，所以人数至少 1 */
-export function memberCountLabel(people: readonly CountRow[]): string {
-  const c = memberCounts(people);
+export function memberCountLabel(people: readonly CountRow[], running: CloudRunning): string {
+  const c = memberCounts(people, running);
   return `成员：${Math.max(1, c.people)} 人 · Agent：${c.agents} 个`;
 }

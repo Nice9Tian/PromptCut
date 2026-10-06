@@ -8,8 +8,9 @@
  * 助手消息的形状与桌面本机 Agent 的一样(`parts` 按发生顺序),所以 `MessageList` 等组件原样可用。
  * 不记 `trace`:诊断导出在云端下不提供,tool_result 也不带完整输出。
  */
-import type { ChatMessage, MessagePart } from "../types.ts";
+import type { ChatAttachment, ChatMessage, MessagePart } from "../types.ts";
 import { appendTextPart, appendThinkingPart } from "../streamBatch.ts";
+import { cloudAttachKind } from "./attach.ts";
 import type { CloudEvent } from "./types.ts";
 
 export const userMessageId = (runId: string) => `cu-${runId}`;
@@ -79,6 +80,20 @@ function targetIndex(messages: ChatMessage[], runId: string | undefined): number
   return -1;
 }
 
+/** `user` 事件里带的附件(服务端带了才有:`attachments: [{ name, url, kind?, size? }]`):重新打开、换设备时气泡里也看得到名字 */
+function userAttachments(ev: CloudEvent): { attachments?: ChatAttachment[] } {
+  if (!Array.isArray(ev.attachments)) return {};
+  const list: ChatAttachment[] = [];
+  for (const a of ev.attachments as unknown[]) {
+    const o = a && typeof a === "object" ? (a as Record<string, unknown>) : null;
+    const url = o && typeof o.url === "string" ? o.url : "";
+    if (!o || !url) continue;
+    const name = typeof o.name === "string" && o.name ? o.name : url.slice(url.lastIndexOf("/") + 1);
+    list.push({ url, name, kind: cloudAttachKind(o.kind, name), ...(typeof o.size === "number" ? { bytes: o.size } : {}), status: "ready" });
+  }
+  return list.length ? { attachments: list } : {};
+}
+
 /** 折一个事件。不认得的事件原样放过(服务端以后加类型不会让页面坏掉) */
 export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMessage[] {
   const runId = typeof ev.runId === "string" ? ev.runId : undefined;
@@ -88,7 +103,7 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
     const at = typeof ev.at === "number" ? ev.at : undefined;
     return [
       ...messages,
-      { id: userMessageId(runId), role: "user", text: String(ev.prompt ?? "") },
+      { id: userMessageId(runId), role: "user", text: String(ev.prompt ?? ""), ...userAttachments(ev) },
       freshAssistant(runId, at),
     ];
   }

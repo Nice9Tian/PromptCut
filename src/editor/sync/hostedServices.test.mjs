@@ -196,30 +196,53 @@ test("CAU-SIGN-01 署名:云端 Agent 的改动别人看到「〈成员名〉的
 
 const mrow = (username, conns, extra = {}) => ({ username, displayName: username, deviceId: `${username}-d`, deviceName: null, creator: false, tags: { editing: conns.some((c) => c.role === "page"), rendering: false, agents: conns.filter((c) => c.role === "agent").length }, conns, ...extra });
 
-test("CAU-MEM-01 成员计数口径〔用户 2026-10-07 定〕:人数只算真人在线,Agent 数含本机与云端,离线只有云端 Agent 在跑的成员标出来", () => {
+/** 「有一轮在跑」表:成员键是 用户名@设备号(与成员行的 `${username}@${deviceId}` 同一写法,mrow 的设备号是 `<用户名>-d`) */
+const running = (...names) => new Set(names.map((n) => `${n}@${n}-d`));
+const NONE = new Set();
+
+test("CAU-MEM-01 成员计数口径〔用户 2026-10-07 定,同日改按「一轮在跑」〕:人数只算真人在线;Agent 数 = 本机 + 有一轮在跑的云端;离线只剩闲置云端连接的不显示", () => {
   const alice = mrow("alice", [{ role: "page" }, { role: "agent", conversation: 1 }, { role: "agent", conversation: 2 }]);
   const bob = mrow("bob", [{ role: "page" }, { role: "agent", conversation: "cc-1", service: "agent" }, { role: "agent", conversation: "cc-1", service: "agent" }]);
   const carol = mrow("carol", [{ role: "agent", conversation: "cc-2", service: "agent" }]);
   const render = mrow("service:render", [{ role: "render" }], { service: "render" });
   const { people } = H.splitMembers([alice, bob, carol, render]);
   assert.equal(people.length, 3, "渲染节点那一行不进成员");
-  assert.deepEqual(H.memberCounts(people), { people: 2, agents: 4 }, "真人在线 alice、bob;Agent:alice 本机 2 个 + bob 云端 1 个(多条连接只算一个)+ carol 云端 1 个");
-  assert.equal(H.memberCountLabel(people), "成员：2 人 · Agent：4 个");
+  // 谁都没有一轮在跑:bob 的云端 Agent 闲置(不计),carol 本人不在线、只剩闲置连接(整行不显示、不计)
+  assert.deepEqual(H.memberCounts(people, NONE), { people: 2, agents: 2 }, "只剩 alice 的本机 Agent 2 个;bob、carol 的云端连接都闲置,不计");
+  assert.deepEqual(H.visibleMembers(people, NONE).map((r) => r.username), ["alice", "bob"], "carol 本人不在线、只剩闲置的云端 Agent 连接:这一行不显示");
+  assert.equal(H.memberCountLabel(people, NONE), "成员：2 人 · Agent：2 个");
+  assert.equal(H.isCloudAgentOnly(carol, NONE), false, "闲置的不标「离线,Agent 在跑」");
+  assert.equal(H.isIdleCloudAgentOnly(carol, NONE), true);
+  assert.equal(H.isCloudAgentRunning(bob, NONE), false, "本人在线、云端 Agent 闲置:不显示「[云端 Agent]」标记");
+  // bob、carol 各有一轮在跑:bob 云端算 1 个(多条连接只算一个),carol 的行回来、标「离线,Agent 在跑」、计入 Agent 数、不计入人数
+  const both = running("bob", "carol");
+  assert.deepEqual(H.memberCounts(people, both), { people: 2, agents: 4 }, "真人在线 alice、bob;Agent:alice 本机 2 个 + bob 云端 1 个 + carol 云端 1 个");
+  assert.equal(H.memberCountLabel(people, both), "成员：2 人 · Agent：4 个");
+  assert.deepEqual(H.visibleMembers(people, both).map((r) => r.username), ["alice", "bob", "carol"]);
   assert.equal(H.isPersonOnline(alice), true);
   assert.equal(H.isPersonOnline(carol), false);
-  assert.equal(H.isCloudAgentOnly(carol), true, "本人不在线、只有云端 Agent 在跑:标「离线,Agent 在跑」");
-  assert.equal(H.isCloudAgentOnly(bob), false, "本人在线的不标");
-  assert.equal(H.isCloudAgentOnly(alice), false);
-  assert.equal(H.isCloudAgentOnly(mrow("dave", [])), false, "没有任何连接不算");
+  assert.equal(H.isCloudAgentOnly(carol, both), true, "本人不在线、云端 Agent 有一轮在跑:标「离线,Agent 在跑」");
+  assert.equal(H.isCloudAgentOnly(bob, both), false, "本人在线的不标");
+  assert.equal(H.isCloudAgentRunning(bob, both), true, "本人在线、一轮在跑:显示「[云端 Agent]」标记");
+  assert.equal(H.isCloudAgentOnly(alice, both), false);
+  assert.equal(H.isCloudAgentOnly(mrow("dave", []), running("dave")), false, "没有任何连接不算");
+  // 表里有这位成员、但他名下并没有云端 Agent 的连接(成员列表还没跟上):不算
+  assert.equal(H.isCloudAgentRunning(alice, running("alice")), false, "没有云端 Agent 连接,表里有也不算");
+  assert.equal(H.memberKeyOf(alice), "alice@alice-d", "成员键是 用户名@设备号");
 });
 
-test("CAU-MEM-02 成员计数:只有自己在线时是「成员:1 人 · Agent:0 个」;自己带本机 Agent 与云端 Agent 都计入 Agent", () => {
-  assert.equal(H.memberCountLabel([]), "成员：1 人 · Agent：0 个", "自己总是在线,人数至少 1");
+test("CAU-MEM-02 成员计数:只有自己在线时是「成员:1 人 · Agent:0 个」;自己带本机 Agent、一轮在跑的云端 Agent 都计入 Agent;自己那一行也按这张表", () => {
+  assert.equal(H.memberCountLabel([], NONE), "成员：1 人 · Agent：0 个", "自己总是在线,人数至少 1");
   const me = mrow("me", [{ role: "page" }]);
-  assert.equal(H.memberCountLabel([me]), "成员：1 人 · Agent：0 个");
+  assert.equal(H.memberCountLabel([me], NONE), "成员：1 人 · Agent：0 个");
   const me2 = mrow("me", [{ role: "page" }, { role: "agent", conversation: 1 }, { role: "agent", conversation: "cc-9", service: "agent" }]);
-  assert.equal(H.memberCountLabel([me2]), "成员：1 人 · Agent：2 个");
-  // 只有自己的云端 Agent 连着(自己的页面都关了)也是离线、不计入人数
+  assert.equal(H.memberCountLabel([me2], NONE), "成员：1 人 · Agent：1 个", "自己的云端 Agent 闲置:只算本机的 1 个");
+  assert.equal(H.memberCountLabel([me2], running("me")), "成员：1 人 · Agent：2 个", "自己的云端 Agent 有一轮在跑:本机 1 + 云端 1");
+  assert.equal(H.isCloudAgentRunning(me2, running("me")), true, "自己那一行也按这张表显示「[云端 Agent]」");
+  assert.equal(H.isCloudAgentRunning(me2, NONE), false);
+  // 只有自己的云端 Agent 连着(自己的页面都关了):闲置时整行不显示、不计;一轮在跑时标「离线,Agent 在跑」、计 Agent、不计人数
   const gone = mrow("gone", [{ role: "agent", conversation: "cc-3", service: "agent" }]);
-  assert.equal(H.memberCountLabel([me, gone]), "成员：1 人 · Agent：1 个");
+  assert.equal(H.memberCountLabel([me, gone], NONE), "成员：1 人 · Agent：0 个");
+  assert.equal(H.memberCountLabel([me, gone], running("gone")), "成员：1 人 · Agent：1 个");
+  assert.equal(H.isCloudAgentOnly(gone, running("gone")), true);
 });

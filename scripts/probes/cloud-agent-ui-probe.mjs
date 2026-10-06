@@ -31,19 +31,23 @@
  *       AI 栏说明「项目创建者已关闭云端 Agent」且发不出消息;再打开后恢复,还能再发;
  *   O6  手机仿真(低内存档):仍是占位,没有云端 AI 栏、没有发往 /agent/ 的请求;
  *   〔用户 2026-10-07 定〕以下几条:
- *   O7  成员计数写成「成员：N 人 · Agent：M 个」:N 只算真人在线(与原始成员列表各算一遍对账);成员本人关了浏览器、保持期(60 秒)过后只剩他的
- *       云端 Agent 连着时,他那一行仍在、标「离线，Agent 在跑」,不计入 N、计入 M;
+ *   O7  成员计数写成「成员：N 人 · Agent：M 个」:N 只算真人在线,M = 本机 Agent + 有一轮在跑的云端 Agent(与原始成员列表、在场状态里的 cloud-run
+ *       各算一遍对账);成员本人关了浏览器、保持期(60 秒)过后他的云端 Agent 一轮还在跑:他那一行仍在、标「离线，Agent 在跑」,不计入 N、计入 M;
+ *       这一轮结束后(不等 10 分钟回收,连接还连着)几秒内标记消失、那一行不再显示、M 回落;
  *   O8  空对话只有一条示例句「为我快速创建一个视频告诉我软件都可以做什么。」;
- *   O9  云端下一键配特效置灰并写原因;「诊断报告」可用:报告是这段云端对话的过程、出错原因、客户端与版本信息,没有票据形状的串、Bearer、Key;
+ *   O9  云端下一键配特效置灰并写真实原因(差语音识别);「诊断报告」可用:报告是这段云端对话的过程、出错原因、客户端与版本信息,没有票据形状的串、Bearer、Key;
  *       在线页面的「保存为文件」是浏览器下载,不请求 /api/ai/diagnostics*;
  *   O10 只在创建者关闭「云端 Agent」时给别的成员气泡,打开时不提示;
+ *   O11 〔用户 2026-10-07 更正〕云端下附件按钮可用:选文件逐个上传到云端这个对话的工作目录(请求体是文件字节、octet-stream、带委托票据,文件真的落在
+ *       Agent 服务的工作目录里、字节一致);上传失败(空文件)给出原因、可移除;发消息把已传好的 url 带上,气泡里显示附件名,发出后附件条清空;
+ *       没有任何同源 /api/ 请求;
  *
  * 桌面版(`desktop`,桌面 dev server 在 `?aimock=1` 下起,本机驱动是内置假流,保证有一个本机驱动可选)
  *   D1  放本机的项目:接入方式里没有「云端」,没有任何发往 Agent 服务的请求;
  *   D2  项目放云端(桌面页面里勾「多用户协作」→ 放云端)后:接入方式里多了「云端」(地址是文档服务下发的),本机驱动仍是缺省、没有自动切;
  *       不选「云端」时发往 Agent 服务的请求只有一次 info 加一次对话列表(CA-DESK-02),带的是委托票据;
  *       项目设置里有「云端 Agent」一行、缺省勾上;创建者取消勾选(验证创建者身份 → 确认)后「云端」一项在、置灰、写原因;勾回来恢复;
- *   D3  选「云端」:页面直连 Agent 服务(跨源),没有发往本机 /api/ai/chat、/api/mcp/ 的请求;附件按钮置灰并写原因;「深度自主」置灰并写原因;
+ *   D3  选「云端」:页面直连 Agent 服务(跨源),没有发往本机 /api/ai/chat、/api/mcp/ 的请求;附件按钮可用(不置灰);「深度自主」置灰并写原因;
  *   D4  选「云端」发一条长一点的任务(三处改动 + 等待),确认已被云端接下后关掉桌面页面:对话在云端照跑完,项目被改了三处;
  *   D5  桌面页面重新打开回到同一个项目:AI 栏仍是本机驱动,只多一次 info 与一次对话列表;历史列表「云端」一组里找得到那个对话,点开找回完整过程;
  *   D9  桌面版云端对话里「诊断报告」可用(同 O9,不点保存为文件);D11 本机与云端的空对话都只有那一条示例句,本机模式下一键配特效不置灰。
@@ -60,7 +64,7 @@ import { joinAs, adminOp, projectOf, putProject } from './cloud-agent-probe-lib.
 import {
   ROOT, sleep, USER_PORTS, createUi, startStack, startDesktop, killDesktop, launchBrowser, newPage, P, typeInto, mockSteps, msgs, view, conversationOf,
   toolCount, lastAssistant, idle, panelText, providerOptions, sendText, joinOnline, openDesktopEditor, sharedProjectOf, hostedToggle, openProjectSettings,
-  creatorToggleService, closeDialogs, eventLog, membersList,
+  creatorToggleService, closeDialogs, eventLog, membersList, gateSettled,
 } from './cloud-agent-ui-lib.mjs';
 
 const argv = process.argv.slice(2);
@@ -120,6 +124,7 @@ async function menuState(page, panel) {
  * `save`:在线页面再点「保存为文件」(浏览器下载,不请求 /api/*);桌面版不点(那条路会请本机编辑器写盘并弹出文件夹)。
  */
 async function diagnostics(page, { save = false, shotName = null } = {}) {
+  await gateSettled(page, { appearMs: 1500 }); // 测量遮罩盖着时点不下去
   await page.click(`${CLOUD_PANEL} [data-pc="ai-menu"]`);
   await page.click(`${CLOUD_PANEL} [data-pc="ai-diagnostics"]`);
   await page.waitForSelector('.rpt-dialog', { visible: true, timeout: 8000 });
@@ -138,15 +143,28 @@ async function diagnostics(page, { save = false, shotName = null } = {}) {
   try { report = JSON.parse(text); } catch { report = null; }
   return { text, report, buttons, saveMsg, diagApiRequests: apiAfter - apiBefore };
 }
-/** 自己按原始成员列表算「成员:N 人 · Agent:M 个」(与界面各写各的,互相对一遍) */
-const expectedCount = (devices) => {
+/**
+ * 自己按原始成员列表与在场状态里的 cloud-run 算「成员:N 人 · Agent:M 个」(与界面各写各的,互相对一遍):
+ * 人数只算真人在线;Agent = 本机 Agent + 有一轮在跑的云端 Agent;本人不在线、只剩闲置云端连接的行不算(界面也不显示)。
+ * `running` 是有一轮在跑的成员键(用户名@设备号)。
+ */
+const expectedCount = (devices, running = new Set()) => {
   let online = 0;
   let agents = 0;
   for (const d of devices.filter((x) => !x.service)) {
-    if (d.conns.some((c) => c.service !== 'agent')) online++;
-    agents += d.conns.filter((c) => c.role === 'agent' && c.service !== 'agent').length + (d.conns.some((c) => c.service === 'agent') ? 1 : 0);
+    const person = d.conns.some((c) => c.service !== 'agent');
+    const cloudConn = d.conns.some((c) => c.service === 'agent');
+    const cloudRun = cloudConn && running.has(`${d.username}@${d.deviceId}`);
+    if (!person && cloudConn && !cloudRun) continue;
+    if (person) online++;
+    agents += d.conns.filter((c) => c.role === 'agent' && c.service !== 'agent').length + (cloudRun ? 1 : 0);
   }
   return `成员：${Math.max(1, online)} 人 · Agent：${agents} 个`;
+};
+/** 在场状态里此刻有一轮在跑的云端 Agent(`cloud-run` 条目,来源身份带 service: 'agent'),成员键 用户名@设备号 */
+const runningOf = async (conn, projectId) => {
+  const r = await conn.ask({ type: 'presence.list', projectId });
+  return new Set((r.entries ?? []).filter((e) => e.key === 'cloud-run' && e.from?.service === 'agent' && e.expiresAt > Date.now()).map((e) => e.from.userId));
 };
 
 const seedBody = (name) => ({
@@ -209,7 +227,7 @@ async function onlinePhase() {
   check('O8:空对话只有一条示例句,原文照抄「为我快速创建一个视频告诉我软件都可以做什么。」', ex0.length === 1 && ex0[0] === EXAMPLE, { ex0 });
   await shot(A, 'O8-online-empty-example');
   const menu0 = await menuState(A, CLOUD_PANEL);
-  check('O9:云端下「一键配特效」在菜单里、置灰、悬停写原因;「诊断报告」不隐藏', !!menu0.workflow && menu0.workflow.disabled === true && /暂不支持一键配特效/.test(menu0.workflow.title) && !!menu0.diagnostics, menu0);
+  check('O9:云端下「一键配特效」在菜单里、置灰、悬停写原因;「诊断报告」不隐藏', !!menu0.workflow && menu0.workflow.disabled === true && /语音识别/.test(menu0.workflow.title) && !/第一版只开普通对话/.test(menu0.workflow.title) && !!menu0.diagnostics, menu0);
 
   /* ---- O1:三处改动,流式 */
   await sendText(A, stepsOf(threeEdits()));
@@ -366,9 +384,11 @@ async function onlinePhase() {
   const rawNow = async () => (await obs.ask({ type: 'shared.members' })).devices ?? [];
   let snap = null;
   let rawAt = [];
+  let runAt = new Set();
   await until('O7:保持期过后 dave 那一行标出「离线,Agent 在跑」', async () => {
     snap = await membersList(B);
     rawAt = await rawNow();
+    runAt = await runningOf(obs, PID);
     return snap?.rows.some((r) => r.name?.startsWith('dave') && r.offlineTag) ? snap : null;
   }, 140_000, 3000);
   const dave = rawAt.find((d) => d.username === 'dave');
@@ -376,10 +396,85 @@ async function onlinePhase() {
   // 用同一时刻的原始成员列表算期望(界面与探针各算各的);等一轮让界面追上
   snap = await membersList(B, { shot: path.join(OUT, 'O7-online-members-offline-agent.png') });
   rawAt = await rawNow();
+  runAt = await runningOf(obs, PID);
   const personsOnline = rawAt.filter((d) => !d.service && d.conns.some((c) => c.service !== 'agent')).length;
   check('O7:dave 关了浏览器、只剩他的云端 Agent 连着:他那一行仍在,标「离线,Agent 在跑」', !!dave && dave.conns.length >= 1 && dave.conns.every((c) => c.service === 'agent') && daveRow?.offlineTag === '[离线，Agent 在跑]', { waited: Math.round((Date.now() - tClose) / 1000), rawDave: dave?.conns, tag: daveRow?.offlineTag ?? null });
-  check('O7:顶栏的字是「成员:N 人 · Agent:M 个」,N 不含 dave(只算真人在线)、M 含他的云端 Agent;与原始成员列表算出来的一致', snap?.count === expectedCount(rawAt) && /^成员：\d+ 人 · Agent：\d+ 个$/.test(snap?.count ?? '') && Number((/成员：(\d+) 人/.exec(snap?.count ?? '') ?? [])[1]) === personsOnline && Number((/Agent：(\d+) 个/.exec(snap?.count ?? '') ?? [])[1]) >= 1, { label: snap?.count, expected: expectedCount(rawAt), personsOnline, devices: rawAt.map((d) => ({ u: d.username, conns: d.conns.map((c) => `${c.role}${c.service ? ':' + c.service : ''}`) })) });
+  check('O7:顶栏的字是「成员:N 人 · Agent:M 个」,N 不含 dave(只算真人在线)、M 含他的云端 Agent;与原始成员列表算出来的一致', snap?.count === expectedCount(rawAt, runAt) && /^成员：\d+ 人 · Agent：\d+ 个$/.test(snap?.count ?? '') && Number((/成员：(\d+) 人/.exec(snap?.count ?? '') ?? [])[1]) === personsOnline && Number((/Agent：(\d+) 个/.exec(snap?.count ?? '') ?? [])[1]) >= 1, { label: snap?.count, expected: expectedCount(rawAt, runAt), running: [...runAt], personsOnline, devices: rawAt.map((d) => ({ u: d.username, conns: d.conns.map((c) => `${c.role}${c.service ? ':' + c.service : ''}`) })) });
   check('O7:成员列表的按钮文字就是这个口径(旧的「成员: N 人」不再出现)', /^成员：\d+ 人 · Agent：\d+ 个$/.test(snap?.button ?? '') && !/成员: /.test(snap?.button ?? ''), { button: snap?.button });
+  // 一轮结束:不等 10 分钟回收(Agent 服务的连接这时还连着),在场状态里的 cloud-run 一撤,几秒内标记消失、这一行不再显示、Agent 数回落
+  const daveKey = `${dave?.username}@${dave?.deviceId}`;
+  const agentsBefore = Number((/Agent：(\d+) 个/.exec(snap?.count ?? '') ?? [])[1]);
+  const tEnd = await until('O7:dave 的这一轮结束(在场状态里的 cloud-run 撤掉)', async () => ((await runningOf(obs, PID)).has(daveKey) ? null : Date.now()), 150_000, 700);
+  let snapEnd = null;
+  let rawEnd = [];
+  let runEnd = new Set();
+  await until('O7:这一轮结束后几秒内 dave 那一行不再显示', async () => {
+    snapEnd = await membersList(B);
+    rawEnd = await rawNow();
+    runEnd = await runningOf(obs, PID);
+    return snapEnd && !snapEnd.rows.some((r) => r.name?.startsWith('dave')) ? snapEnd : null;
+  }, 30_000, 800);
+  const goneMs = tEnd ? Date.now() - tEnd : null;
+  const daveEnd = rawEnd.find((d) => d.username === 'dave');
+  const agentsAfter = Number((/Agent：(\d+) 个/.exec(snapEnd?.count ?? '') ?? [])[1]);
+  check('O7:这一轮结束后(不等 10 分钟回收)标记消失:dave 那一行不再显示,Agent 数回落,顶栏字与原始成员列表、在场状态算出来的一致', !!snapEnd && goneMs !== null && goneMs < 20_000 && !snapEnd.rows.some((r) => r.name?.startsWith('dave')) && agentsAfter === agentsBefore - 1 && snapEnd.count === expectedCount(rawEnd, runEnd), { goneMs, before: snap?.count, after: snapEnd?.count, expected: expectedCount(rawEnd, runEnd), rawDaveConnsAfterEnd: daveEnd ? daveEnd.conns.map((c) => `${c.role}${c.service ? ':' + c.service : ''}`) : 'gone' });
+  await shot(B, 'O7-online-members-after-run');
+
+  /* ---- O11:云端下附件可用(新成员 erin、新对话):选文件→上传→失败可移除→发消息带上 */
+  const ctxE = await browser.createBrowserContext();
+  const E = await newPage(ctxE);
+  await joinOnline(E, { site: S.SITE, name: NAME, username: 'erin', password: PW });
+  await until('O11:erin 的云端对话接上', async () => (await view(E))?.conversationId, 30_000);
+  const convE = await conversationOf(E);
+  const attBtn = await P(E, () => { const b = document.querySelector('[data-pc="cloud-ai-panel"] [data-pc="ai-attach"]'); return b ? { disabled: b.disabled, title: b.title } : null; });
+  check('O11:云端下附件按钮可用(不置灰),悬停说明是传到云端对话的工作目录', attBtn?.disabled === false && /附件/.test(attBtn.title) && !/暂不支持/.test(attBtn.title), attBtn);
+  const attDir = path.join(TMP, 'attach');
+  fs.mkdirSync(attDir, { recursive: true });
+  const noteBytes = Buffer.from(`云端附件探针 ${RUN}\n第二行:字幕文字\n`, 'utf8');
+  const picBytes = randomBytes(3000);
+  fs.writeFileSync(path.join(attDir, 'notes.txt'), noteBytes);
+  fs.writeFileSync(path.join(attDir, 'pic.png'), picBytes);
+  fs.writeFileSync(path.join(attDir, 'empty.txt'), '');
+  const fileInput = await E.$('[data-pc="cloud-attach-input"]');
+  await fileInput.uploadFile(path.join(attDir, 'notes.txt'), path.join(attDir, 'pic.png'), path.join(attDir, 'empty.txt'));
+  const chipsOf = () => P(E, () => [...document.querySelectorAll('[data-pc="cloud-ai-panel"] .ai-attachment-chip')].map((c) => ({ name: c.querySelector('.ai-attachment-name')?.textContent ?? '', importing: c.classList.contains('is-importing'), error: c.classList.contains('is-error'), text: (c.textContent ?? '').replace(/\s+/g, ' ').trim(), title: c.title })));
+  const settled = await until('O11:三个文件都有了结果(两个传好、空文件失败)', async () => { const c = await chipsOf(); return c.length === 3 && c.every((x) => !x.importing) ? c : null; }, 30_000, 150);
+  await shot(E, 'O11-online-attachments');
+  await sleep(500); // 回包的 json 异步读完
+  const okChips = (settled ?? []).filter((c) => !c.error);
+  const badChip = (settled ?? []).find((c) => c.error);
+  check('O11:传好两个、空文件失败:失败的那张附件条写明原因与「点击重试」,可移除', okChips.length === 2 && okChips.every((c) => /notes\.txt|pic\.png/.test(c.name)) && badChip?.name === 'empty.txt' && /上传失败/.test(badChip.text) && /空/.test(badChip.text) && /点击重试/.test(badChip.text), { settled });
+  const attReqs = agentReqs(E).filter((r) => r.att);
+  check('O11:上传请求:POST …/conversations/<对话 id>/attachments?name=<文件名>,内容类型 octet-stream,带委托票据', attReqs.length === 3 && attReqs.every((r) => r.method === 'POST' && r.auth === 'ticket' && r.att.ctype === 'application/octet-stream' && new URL(r.url).pathname.endsWith(`/conversations/${convE}/attachments`)) && ['notes.txt', 'pic.png', 'empty.txt'].every((n) => attReqs.some((r) => r.att.name === n)), { attReqs: attReqs.map((r) => ({ name: r.att.name, ctype: r.att.ctype, auth: r.auth })) });
+  const attachResponses = await E.attachResponses();
+  const respOf = (name) => attachResponses.find((x) => x.name === name);
+  const notesResp = respOf('notes.txt');
+  const picResp = respOf('pic.png');
+  check('O11:服务端收下的回包:地址 work:attachments/…、大小与文件一致、类型对(文本带内联文本),空文件被拒', notesResp?.status === 200 && notesResp.body?.attachment?.url === 'work:attachments/notes.txt' && notesResp.body.attachment.size === noteBytes.length && notesResp.body.attachment.kind === 'text' && picResp?.status === 200 && picResp.body?.attachment?.url === 'work:attachments/pic.png' && picResp.body.attachment.size === picBytes.length && picResp.body.attachment.kind === 'image' && respOf('empty.txt')?.status === 400, { notes: notesResp?.body?.attachment ?? notesResp?.status, pic: picResp?.body?.attachment ?? picResp?.status, empty: respOf('empty.txt')?.status });
+  const onDiskNotes = S.attachmentOnDisk(convE, 'notes.txt');
+  const onDiskPic = S.attachmentOnDisk(convE, 'pic.png');
+  check('O11:文件真的落在 Agent 服务这个对话的工作目录里,字节一致', !!onDiskNotes && onDiskNotes.equals(noteBytes) && !!onDiskPic && onDiskPic.equals(picBytes), { notes: onDiskNotes?.length ?? null, pic: onDiskPic?.length ?? null });
+  // 移除失败的那张;另外移除一张传好的再重新选(重名时服务端另起名),这里只验移除
+  await P(E, () => { const chip = [...document.querySelectorAll('[data-pc="cloud-ai-panel"] .ai-attachment-chip')].find((c) => c.querySelector('.ai-attachment-name')?.textContent === 'empty.txt'); chip?.querySelector('.ai-attachment-remove')?.click(); });
+  const afterRemove = await until('O11:移除失败的附件后只剩两张', async () => { const c = await chipsOf(); return c.length === 2 ? c : null; }, 5000, 100);
+  check('O11:失败的附件移除后只剩传好的两张', !!afterRemove && afterRemove.every((c) => !c.error), { afterRemove });
+  // 只有附件、没写话:服务端不收空消息,页面留着附件并提示
+  await P(E, () => { const ta = document.querySelector('[data-pc="cloud-ai-panel"] [data-pc="ai-input"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, ''); ta.dispatchEvent(new Event('input', { bubbles: true })); });
+  await E.click('[data-pc="cloud-ai-panel"] [data-pc="ai-send"]');
+  const needText = await until('O11:只有附件时提示要写一句话', async () => ((await panelText(E)).includes('请写一句话') ? true : null), 5000, 100);
+  check('O11:只有附件没写话:不发请求、附件还在、提示「请写一句话」', !!needText && (await chipsOf()).length === 2 && agentReqs(E).filter((r) => r.method === 'POST' && /\/messages$/.test(new URL(r.url).pathname)).length === 0, {});
+  // 带话发出去:请求体里带两个 url;气泡里显示附件名;附件条清空
+  await sendText(E, stepsOf([{ tool: 'get_project', input: {} }, { say: '附件探针收到了' }]));
+  await until('O11:这一轮结束', async () => { const v = await view(E); const m = await msgs(E); return v && !v.streaming && (lastAssistant(m)?.text ?? '').includes('附件探针收到了') ? true : null; }, 40_000, 150);
+  const sendReq = agentReqs(E).filter((r) => r.method === 'POST' && /\/messages$/.test(new URL(r.url).pathname));
+  check('O11:发消息的请求体里带两个附件的 url(只要 url),对话委托与票据照常', sendReq.length === 1 && JSON.stringify(sendReq[0].attUrls) === JSON.stringify(['work:attachments/notes.txt', 'work:attachments/pic.png']) && sendReq[0].grant === true && sendReq[0].auth === 'ticket', { posts: sendReq.length, attUrls: sendReq[0]?.attUrls, grant: sendReq[0]?.grant });
+  const bubble = await P(E, () => [...document.querySelectorAll('[data-pc="cloud-ai-panel"] .ai-bubble-file-name')].map((e) => e.textContent));
+  const chipsAfterSend = await chipsOf();
+  check('O11:本地消息气泡里显示附件名(与桌面版同一个样子),发出后附件条清空', bubble.join() === 'notes.txt,pic.png' && chipsAfterSend.length === 0, { bubble, chipsAfterSend: chipsAfterSend.length });
+  await shot(E, 'O11-online-attachments-sent');
+  const apiE = E.requests.filter((r) => { try { return new URL(r.url).origin === S.SITE && /^\/(editor\/)?api\//.test(new URL(r.url).pathname); } catch { return false; } });
+  check('O11:整个附件过程没有同源 /api/* 请求(没走本机的附件接口),没有页面错误', apiE.length === 0 && E.pageErrors.length === 0, { apiE: apiE.slice(0, 3).map((r) => r.url), pageErrors: E.pageErrors.slice(0, 3) });
+  await ctxE.close().catch(() => {});
 
   /* ---- O0 补:同源 /api/* 一个都没有 */
   const apiBlocked = await P(B, () => window.__pcApiBlocked ?? []);
@@ -496,7 +591,7 @@ async function desktopPhase() {
   await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 });
   await until('D3:云端页接上', async () => { const v = await view(page); return v && v.conversationId; }, 20_000);
   const attach = await P(page, () => { const b = document.querySelector('[data-pc="cloud-ai-panel"] [data-pc="ai-attach"]'); return b ? { disabled: b.disabled, title: b.title } : null; });
-  check('D3:云端下附件按钮置灰并写原因', attach?.disabled === true && /暂不支持附文件/.test(attach.title), attach);
+  check('D3:云端下附件按钮可用(不置灰),悬停说明是传到云端对话的工作目录', attach?.disabled === false && /附件/.test(attach.title) && !/暂不支持/.test(attach.title), attach);
   await page.click('[data-pc="cloud-ai-panel"] [data-pc="ai-run-options"]');
   const deep = await P(page, () => { const b = document.querySelector('[data-pc="cloud-ai-panel"] [data-pc="deep-auto"]'); return b ? { disabled: b.disabled, title: b.title } : null; });
   check('D3:云端下「深度自主」置灰并写原因(含审查环路)', deep?.disabled === true && /深度自主与审查环路/.test(deep.title), deep);
@@ -504,7 +599,7 @@ async function desktopPhase() {
   await shot(page, 'D3-desktop-cloud-selected');
   const exCloudD = await exampleSentences(page, CLOUD_PANEL);
   const menuCloudD = await menuState(page, CLOUD_PANEL);
-  check('D11:桌面版云端对话的空对话只有那一条示例句;云端下一键配特效置灰并写原因,诊断报告不隐藏', exCloudD.length === 1 && exCloudD[0] === EXAMPLE && menuCloudD.workflow?.disabled === true && /暂不支持一键配特效/.test(menuCloudD.workflow.title) && !!menuCloudD.diagnostics, { exCloudD, menuCloudD });
+  check('D11:桌面版云端对话的空对话只有那一条示例句;云端下一键配特效置灰并写原因,诊断报告不隐藏', exCloudD.length === 1 && exCloudD[0] === EXAMPLE && menuCloudD.workflow?.disabled === true && /语音识别/.test(menuCloudD.workflow.title) && !/第一版只开普通对话/.test(menuCloudD.workflow.title) && !!menuCloudD.diagnostics, { exCloudD, menuCloudD });
   await shot(page, 'D11-desktop-empty-example');
 
   /* ---- D4:发长任务,确认被接下后关页面 */
@@ -591,6 +686,14 @@ async function desktopPhase() {
   const pD6 = await readProject();
   check('D6:接上后过程完整、回复在,改动落地', (lastAssistant(mD6)?.text ?? '').includes('D6 做完了') && clipIn(pD6, clips.text)?.label === 'D6 接上后', { text: lastAssistant(mD6)?.text, tools: toolCount(mD6) });
   await shot(page, 'D6-desktop-attached');
+  // 一轮结束:自己那一行下的「[云端 Agent]」标记几秒内消失、云端 Agent 不再计入 Agent 数(连接还连着,不等回收)。
+  // 桌面页面此时可能带着自己的本机 Agent 连接(行里的「[Agent ×n]」),它照常计数:期望的 Agent 数就是行里本机 Agent 的个数
+  const tD6End = Date.now();
+  const localAgents = (m) => (m?.rows ?? []).reduce((n, r) => n + Number((/\[Agent ×(\d+)\]/.exec(r.text) ?? [])[1] ?? 0), 0);
+  let lastMemD6 = null;
+  const memEnd = await until('D6:这一轮结束后几秒内自己那一行不再有云端 Agent 标记、顶栏只剩本机 Agent 的数', async () => { lastMemD6 = await membersList(page); const m = lastMemD6; return m && !m.rows.some((r) => r.cloudTag) && m.count === `成员：2 人 · Agent：${localAgents(m)} 个` ? m : null; }, 30_000, 800);
+  const runningD6 = await P(page, async () => [...(await import('/src/editor/sync/presence.ts')).cloudRunning()]).catch((e) => String(e));
+  check('D6:一轮结束后几秒内「[云端 Agent]」标记消失、「有一轮在跑」表空了、顶栏的 Agent 数只剩本机 Agent(不等 10 分钟回收)', !!memEnd && Array.isArray(runningD6) && runningD6.length === 0 && Date.now() - tD6End < 25_000, { count: (memEnd ?? lastMemD6)?.count, localAgents: localAgents(memEnd ?? lastMemD6), rows: (memEnd ?? lastMemD6)?.rows.map((r) => r.text.slice(0, 80)), running: runningD6, ms: Date.now() - tD6End });
   check('D5:桌面页面没有页面错误', page.pageErrors.length === 0, page.pageErrors.slice(0, 3));
   await ctx.close().catch(() => {});
   await killDesktop(desktop);

@@ -10,10 +10,10 @@
  * 流是「看」,不是「跑」:关掉页面、退出软件,服务端的这一轮照样跑完(契约 2.4 节)。所以 `close()` 只掐流,不发停止。
  * 停止只有 `abort()` 一条路,是用户点「停止」才发的。
  */
-import type { ChatMessage } from "../types.ts";
+import type { ChatAttachment, ChatMessage } from "../types.ts";
 import type { ChatStore } from "../liveChat.ts";
 import { CloudError, cloudErrorText, type CloudApi } from "./cloudApi.ts";
-import { applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun } from "./events.ts";
+import { applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, userMessageId } from "./events.ts";
 import type { CloudEvent, CloudSendBody } from "./types.ts";
 
 export type CloudConnection = "idle" | "connecting" | "live" | "reconnecting";
@@ -60,6 +60,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
   let wake: (() => void) | null = null;
   let closed = false;
   let queued: CloudEvent[] = [];
+  /** 这一页刚发出去的消息带的附件(气泡里显示名字用):runId → 附件;服务端的 user 事件到了(或已经在)就贴上、从表里去掉 */
+  const pendingAttachments = new Map<string, ChatAttachment[]>();
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   let view: CloudSessionView = { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 };
@@ -82,6 +84,16 @@ export function createCloudSession(deps: CloudSessionDeps) {
     store.set((prev) => applyCloudEvents(prev, batch));
   }
 
+  /** 把这一页发的附件贴到对应的用户消息上(消息还没到就留着等它) */
+  function applyPendingAttachments(runId: string) {
+    const list = pendingAttachments.get(runId);
+    if (!list) return;
+    const id = userMessageId(runId);
+    if (!store.get().some((m) => m.id === id)) return;
+    pendingAttachments.delete(runId);
+    store.set((prev) => prev.map((m) => (m.id === id && !m.attachments?.length ? { ...m, attachments: list } : m)));
+  }
+
   function handle(ev: CloudEvent) {
     if (typeof ev.seq === "number") {
       if (ev.seq <= lastSeq) return; // 补发与实时交界处、重连后重复的:不重
@@ -94,6 +106,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     } else {
       flush();
       store.set((prev) => applyCloudEvent(prev, ev));
+      if (ev.type === "user" && typeof ev.runId === "string") applyPendingAttachments(ev.runId);
     }
     publish();
   }
@@ -188,6 +201,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       conversationId = id;
       lastSeq = 0;
       queued = [];
+      pendingAttachments.clear();
       problem = null;
       store.set([]);
       publish();
@@ -197,8 +211,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
     /** 对话 id;没打开过是 null */
     get conversationId() { return conversationId; },
 
-    /** 发一条消息。服务端回 202 之后保证流连着。出错抛 `CloudError`(界面显示它的 `message`) */
-    async send(body: CloudSendBody): Promise<void> {
+    /** 发一条消息(`shown`:带的附件,只用于本页气泡的显示)。服务端回 202 之后保证流连着。出错抛 `CloudError`(界面显示它的 `message`) */
+    async send(body: CloudSendBody, shown?: ChatAttachment[]): Promise<void> {
       if (!conversationId || closed) throw new CloudError("bad-request", "还没有打开对话。");
       const seenBefore = lastSeq;
       let accepted: { runId: string; seq: number };
@@ -209,6 +223,12 @@ export function createCloudSession(deps: CloudSessionDeps) {
         throw new CloudError("network", cloudErrorText("network"));
       }
       problem = null;
+      // 带了附件:气泡里照桌面版显示附件名(服务端的 user 事件自己带了就以它为准)
+      if (shown?.length && accepted.runId) {
+        pendingAttachments.set(accepted.runId, shown);
+        applyPendingAttachments(accepted.runId);
+        if (pendingAttachments.size > 20) pendingAttachments.delete(pendingAttachments.keys().next().value as string);
+      }
       // 服务端回的 seq 是这一轮第一条事件的序号。比页面已经看到的还小:服务端的这个对话从头开始了(实例被撤销回收、服务重启又没落盘),
       // 旧流挂在已经不存在的对话上、永远等不到新事件 —— 掐掉旧流、从 0 重新读。记录落盘、seq 跨轮连续时不会走到这里。
       // (比的是发送之前看到的最大序号:这一轮自己的事件可能已经从流里先到了,不能拿发送之后的 lastSeq 比)

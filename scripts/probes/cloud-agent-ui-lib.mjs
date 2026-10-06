@@ -297,6 +297,25 @@ export async function startStack({ tmp, ports, dist = null, say = () => {}, agen
 
   S.agentLogs = (event, projectId) => S.agent.logs.filter((l) => l.event === event && (!projectId || l.projectId === projectId));
   /** 从 Agent 服务盘上找一个对话的 meta 与事件记录(探针自己的临时目录;不经任何成员连接) */
+  /** 附件传到 Agent 服务的这个对话工作目录里没有:找 …/<对话 id>/attachments/<文件名>,回字节(没有回 null) */
+  S.attachmentOnDisk = (conversationId, name) => {
+    const stack = [D.agent];
+    while (stack.length) {
+      const dir = stack.pop();
+      let items = [];
+      try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const item of items) {
+        if (!item.isDirectory()) continue;
+        const p = path.join(dir, item.name);
+        if (item.name === conversationId) {
+          const f = path.join(p, 'attachments', name);
+          if (fs.existsSync(f)) return fs.readFileSync(f);
+        }
+        stack.push(p);
+      }
+    }
+    return null;
+  };
   S.diskConversation = (projectId, conversationId) => {
     const root = path.join(D.agent, 'tenants', projectId);
     if (!fs.existsSync(root)) return null;
@@ -425,11 +444,40 @@ export async function newPage(ctx, { mobile = false, init = [] } = {}) {
   page.on('request', (r) => {
     const a = r.headers().authorization ?? '';
     let grant = null;
+    let attUrls = null;
     try {
-      if (r.method() === 'POST' && /\/messages$/.test(new URL(r.url()).pathname)) grant = typeof JSON.parse(r.postData() ?? '{}').grant === 'string';
+      if (r.method() === 'POST' && /\/messages$/.test(new URL(r.url()).pathname)) {
+        const body = JSON.parse(r.postData() ?? '{}');
+        grant = typeof body.grant === 'string';
+        // 发消息带的附件:只记 url(work:attachments/…),不记别的
+        attUrls = Array.isArray(body.attachments) ? body.attachments.map((x) => String(x?.url ?? '')) : [];
+      }
     } catch { grant = false; }
-    page.requests.push({ method: r.method(), url: r.url(), auth: a ? (a.startsWith('Bearer ') && !a.startsWith('Bearer test:') && a.length > 60 ? 'ticket' : 'other') : null, ...(grant !== null ? { grant } : {}) });
+    // 传附件的请求(POST …/attachments?name=):记内容类型与文件名(请求体是文件字节,探针不记内容)
+    let att = null;
+    try {
+      const u = new URL(r.url());
+      if (r.method() === 'POST' && /\/attachments$/.test(u.pathname)) att = { ctype: r.headers()['content-type'] ?? null, name: u.searchParams.get('name') };
+    } catch { att = null; }
+    page.requests.push({ method: r.method(), url: r.url(), auth: a ? (a.startsWith('Bearer ') && !a.startsWith('Bearer test:') && a.length > 60 ? 'ticket' : 'other') : null, ...(grant !== null ? { grant, attUrls } : {}), ...(att ? { att } : {}) });
   });
+  // 传附件的回包(状态与回的附件信息:名字、地址、大小、类型):在页面里包一层 fetch 记下,读 window.__pcAttachResponses
+  await page.evaluateOnNewDocument(() => {
+    const orig = window.fetch;
+    window.__pcAttachResponses = [];
+    window.fetch = function (input, init) {
+      const p = orig.apply(this, arguments);
+      try {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        if ((init?.method ?? 'GET') === 'POST' && /\/attachments$/.test(url.pathname)) {
+          const name = url.searchParams.get('name');
+          p.then((res) => res.clone().json().then((body) => window.__pcAttachResponses.push({ status: res.status, name, body }), () => window.__pcAttachResponses.push({ status: res.status, name, body: null })), () => {});
+        }
+      } catch { /* 不是这类请求 */ }
+      return p;
+    };
+  });
+  page.attachResponses = () => page.evaluate(() => window.__pcAttachResponses ?? []).catch(() => []);
   page.failures = [];
   page.on('requestfailed', (r) => page.failures.push(`${r.method()} ${r.url().slice(0, 120)} ${r.failure()?.errorText}`));
   page.on('response', (r) => { if (r.status() >= 400) page.failures.push(`${r.status()} ${r.request().method()} ${r.url().slice(0, 120)}`); });
@@ -473,7 +521,8 @@ export async function sendText(page, text, panelSel = '[data-pc="cloud-ai-panel"
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, t);
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   }, text, panelSel);
-  await gateSettled(page, { appearMs: 300 });
+  // 测量遮罩常在项目被改之后几秒才冒出来(冷启动的桌面 dev server 上更晚):多等一会儿再点,免得点在遮罩上、消息没发出去
+  await gateSettled(page, { appearMs: 1500 });
   await page.click(`${panelSel} [data-pc="ai-send"]`);
 }
 
