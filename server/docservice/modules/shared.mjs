@@ -404,7 +404,8 @@ export function sharedModule({
           d.list = list;
           d.generation += 1;
         });
-        closeWhere(ctx, space, (p) => p.creator !== true && p.username !== rec.creator.username && !keep.has(p.username), CLOSE_REMOVED, 'removed');
+        // 以服务自己的身份进来的连接（渲染服务、云端 Agent 的发布连接）不是成员，名单管不着它们：不关
+        closeWhere(ctx, space, (p) => p.scope !== 'service' && p.creator !== true && p.username !== rec.creator.username && !keep.has(p.username), CLOSE_REMOVED, 'removed');
         break;
       }
       case 'kick': {
