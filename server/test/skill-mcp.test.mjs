@@ -439,7 +439,8 @@ test('SM-12 SKILL 闸按调用方类型(与 vite-plugin-ai.ts 相同的判法:�
   gate.openGate();
   assert.equal(gate.checkGate('get_project', typeOf('desk-A')).ok, true);
   gate.closeGate('test');
-  const src = fs.readFileSync(path.join(ROOT, 'server', 'vite-plugin-ai.ts'), 'utf8');
+  // 总入口随 Agent 服务搬到 server/agent/service/instance.mjs(契约 cloud-agent-contract.md 第 2.1 节)
+  const src = fs.readFileSync(path.join(ROOT, 'server', 'agent', 'service', 'instance.mjs'), 'utf8');
   assert.match(src, /gate\.checkGate\(tool, callerEntry\.registeredAt \? callerEntry\.type : 'unknown'\)/, '总入口按登记表的类型判');
   assert.equal(/PROMPTCUT_HEADLESS/.test(fs.readFileSync(path.join(ROOT, 'server', 'skill-gate.mjs'), 'utf8')), false, '不再按「是不是无头实例」判');
 });
