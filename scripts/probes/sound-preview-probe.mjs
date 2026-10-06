@@ -490,7 +490,8 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     // 起播那一刻:声音不抢在播放头前面。舞台的第一拍到之前(播放头还没动)声音元素不该在放;第一拍之后的 1.5 秒里声音不超前
     const p1 = t1.filter((x) => x.playing);
     const beatAt = p1.find((x) => x.t > p1[0].t + 1e-9)?.w ?? Infinity;
-    const early = t1.filter((x) => x.playing && x.w < beatAt - 30).reduce((n, x) => n + x.els.filter((e) => !e.paused && e.ready >= 3).length, 0);
+    // 「第一拍」是舞台渲完起点那一帧,播放头要到第二拍才往前走一格:声音可以比播放头的第一次变化早一拍多一点(留 80 ms)
+    const early = t1.filter((x) => x.playing && x.w < beatAt - 80).reduce((n, x) => n + x.els.filter((e) => !e.paused && e.ready >= 3).length, 0);
     const head = a1.kbd.filter((x) => x.playing && !x.paused && x.w >= beatAt && x.w - beatAt < 1500);
     const ahead = head.length ? Math.max(...head.map((x) => x.ct - x.expect)) : null;
     checks.push(C(early <= 1 && head.length > 5 && ahead <= ALIGN_SEC, 'P1 起播时声音不抢在播放头前面(等舞台的第一拍)', { playingBeforeFirstBeat: early, startStallMs: pace.startStallMs, samples: head.length, maxAheadSec: round(ahead) }, true));
@@ -507,8 +508,8 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     // 放到素材尽头不从头重播:元素放完(ended)之后不应再出现「在播、位置回到开头」的拍
     const restarted = ['kbd', 'notif', 'av'].map((k) => { const xs = a1[k]; const i = xs.findIndex((x) => x.ended); return i < 0 ? 0 : xs.slice(i).filter((x) => x.playing && !x.paused && x.ct < 0.3 && x.expect > 0.5).length; });
     checks.push(C(restarted.every((n) => n === 0), 'P1 放到素材尽头的元素没有从头重播', { kbd: restarted[0], notif: restarted[1], av: restarted[2] }));
-    // 刚挂上的一两拍是 idle / pending(还没有声音源);出声的拍必须都是 ready,而且不出现 error
-    checks.push(C(a1.av.filter(audible).length > 0 && a1.av.filter(audible).every((x) => x.cstate === 'ready') && !a1.av.some((x) => x.cstate === 'error'), 'P6 声画卡元素出声时 data-card-audio-state 为 ready', { states: [...new Set(a1.av.map((x) => x.cstate))], whileAudible: [...new Set(a1.av.filter(audible).map((x) => x.cstate))] }, true));
+    // 刚挂上的一两拍是 idle / pending(还没有声音源);canplay 之后标记才翻成 ready,比元素真的开始出声晚一次重渲染(留 3 拍)。不许出现 error
+    checks.push(C(a1.av.filter(audible).length > 5 && a1.av.filter((x) => audible(x) && x.cstate !== 'ready').length <= 3 && !a1.av.some((x) => x.cstate === 'error'), 'P6 声画卡元素出声时 data-card-audio-state 为 ready', { states: [...new Set(a1.av.map((x) => x.cstate))], whileAudible: [...new Set(a1.av.filter(audible).map((x) => x.cstate))] }, true));
     checks.push(C(truth.clipCount === 4 && truth.avDuplicateAudioClips === 0, 'P6 声画卡的声音与画面是同一个片段(项目里只有 4 个片段:打字卡、键盘声、提示音、声画卡;没有第二个引用它声音的片段)', { clipCount: truth.clipCount, avDuplicateAudioClips: truth.avDuplicateAudioClips }));
     // 播的那份声音本身(解码它的字节):每个事件的位置上有能量 —— 两种来源同一条断言,不依赖实时采样的时序
     for (const [key, clip, need] of [['kbd', truth.kbd, 0.95], ['notif', truth.notif, 1], ['av', truth.av, 1]]) {
