@@ -107,7 +107,8 @@ const HARNESS = () => {
   const store = () => window.__pcStore;
   /** 把元素此刻的那条采集音轨接到一个分析节点上(只量不出声:不接 destination) */
   const attach = (h) => {
-    const track = h.stream.getAudioTracks().find((x) => x.readyState === 'live');
+    // 取最新的一条:元素重新加载后旧音轨还留在流里、状态也还是 live,只是不再出数据
+    const track = h.stream.getAudioTracks().filter((x) => x.readyState === 'live').at(-1);
     if (!track || track === h.track) return;
     try { h.src?.disconnect(); } catch { /* 已断 */ }
     h.track = track;
@@ -124,8 +125,8 @@ const HARNESS = () => {
   const hook = (el) => {
     let h = state.hooks.get(el);
     if (!h) {
-      h = { stream: null, track: null, src: null, an: null, buf: new Float32Array(1024), loads: 0 };
-      el.addEventListener('loadstart', () => { h.loads++; });
+      h = { stream: null, track: null, src: null, an: null, buf: new Float32Array(1024), loads: 0, alive: false, zeros: 0, recaps: 0 };
+      el.addEventListener('loadstart', () => { h.loads++; h.alive = false; h.zeros = 0; });
       state.hooks.set(el, h);
     }
     if (!h.stream && el.readyState >= 1 && el.captureStream) {
@@ -151,6 +152,18 @@ const HARNESS = () => {
         for (const v of h.buf) e += v * v;
         rms = Math.sqrt(e / h.buf.length);
       }
+      /*
+       * 采集音轨偶尔从接上起就不出数据(状态仍是 live;Chrome 152 上拖动中、播放中才挂上的元素见过,单独复现不出来)。
+       * 元素明明在出声、读数却连续恰好是 0,而且这条采集从没读到过能量:重新 captureStream 一条再接,每个元素最多 3 次。
+       * 这只是让「实时采样」这一路尽量可用;「听到了没有」的判定不靠它(见 heardEvents)。
+       */
+      if (h.an && s.playing && !el.paused && el.readyState >= 3 && !el.seeking && el.volume > 0 && !el.muted) {
+        if (rms > 1e-7) { h.alive = true; h.zeros = 0; }
+        else if (!h.alive && ++h.zeros >= 8 && h.recaps < 3) {
+          h.zeros = 0; h.recaps++;
+          try { h.stream = el.captureStream(); h.stream.addEventListener('addtrack', () => attach(h)); h.track = null; attach(h); } catch { /* 下一拍再试 */ }
+        }
+      }
       if (!state.ids.has(el)) state.ids.set(el, ++state.seq);
       const src = el.currentSrc || el.src || '';
       const clip = el.getAttribute('data-pc-audio-clip');
@@ -159,7 +172,7 @@ const HARNESS = () => {
         state.bytes.set(`${clip}|${src}`, fetch(src).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null));
       }
       els.push({ el: state.ids.get(el), clip, source: el.getAttribute('data-pc-audio-source'), src, node: el.getAttribute('data-card-audio-node'), cstate: el.getAttribute('data-card-audio-state'),
-        ct: el.currentTime, paused: el.paused, vol: el.volume, rms, hooked: !!h.an, ready: el.readyState, seeking: el.seeking, ended: el.ended, loads: h.loads, err: el.error?.code ?? null, rate: el.playbackRate });
+        ct: el.currentTime, paused: el.paused, vol: el.volume, muted: el.muted, recaps: h.recaps, rms, hooked: !!h.an, ready: el.readyState, seeking: el.seeking, ended: el.ended, loads: h.loads, err: el.error?.code ?? null, rate: el.playbackRate });
     }
     state.trace.push({ w: performance.now(), t: s.t, playing: s.playing, els });
   };
@@ -194,6 +207,31 @@ const HARNESS = () => {
       const s = store();
       s.actions.pause(); s.actions.seek(from); s.actions.play();
       return window.__sv.waitT(to, maxMs);
+    },
+    /**
+     * 旁路核对(只在实时采样整段读到 0 时用):把这一段的元素接进 Web Audio(createMediaElementSource),直接量元素的输出。
+     * 用来分清「元素真的没出声」和「captureStream 那条采集音轨不出数据」。接上之后元素的声音只走节点图,所以只对马上要卸掉的元素用。
+     */
+    async elementOutput(clipId, ms) {
+      const el = [...document.querySelectorAll('audio')].find((e) => e.getAttribute('data-pc-audio-clip') === clipId);
+      if (!el) return { error: '没有这个片段的声音元素' };
+      try {
+        const src = state.ctx.createMediaElementSource(el);
+        const an = state.ctx.createAnalyser();
+        an.fftSize = 1024;
+        src.connect(an); src.connect(state.ctx.destination);
+        const b = new Float32Array(1024);
+        let peak = 0, playingSamples = 0;
+        const t0 = performance.now();
+        while (performance.now() - t0 < ms) {
+          an.getFloatTimeDomainData(b);
+          let e = 0;
+          for (const v of b) e += v * v;
+          if (!el.paused) { playingSamples++; peak = Math.max(peak, Math.sqrt(e / b.length)); }
+          await sleep(12);
+        }
+        return { peak, playingSamples, ct: el.currentTime, vol: el.volume };
+      } catch (e) { return { error: String(e?.message ?? e).slice(0, 120) }; }
     },
     /** 解码采样时记下的那几份字节,回每个事件窗口 [E, E+0.06] 的 RMS(按片段 id) */
     async sourceEnergy(wanted) {
@@ -310,8 +348,8 @@ function analyse(trace, truth) {
   }
   return per;
 }
-/** 这一拍这个元素真的在出声:时间轴在播、元素没暂停、有数据可放、不在 seek */
-const audible = (x) => x.playing && !x.paused && x.ready >= 3 && !x.seeking;
+/** 这一拍这个元素真的在出声:时间轴在播、元素没暂停、有数据可放、不在 seek、音量不为 0、没被静音 */
+const audible = (x) => x.playing && !x.paused && x.ready >= 3 && !x.seeking && x.vol > 0 && !x.muted;
 /**
  * 对齐。dev = 元素位置 − 应在位置(负 = 声音落后于播放头)。
  * - 起播前就挂着的元素(mounted):|dev| ≤ ALIGN_SEC 的采样占 ≥ 90%。
@@ -329,21 +367,29 @@ function alignment(samples, { lateStart = false } = {}) {
   const pass = lateStart ? (median >= -LATE_START_SEC && median <= 0.05 && steady >= 0.9) : within >= 0.9;
   return { n: a.length, pass, within: round(within), median: round(median), steady: round(steady), min: round(sorted[0]), max: round(sorted[sorted.length - 1]) };
 }
-/** 事件是否被听到:媒体时间窗口 [E-0.02, E+0.12] 里实时采到的最大能量 ≥ THR;只看真的在出声、且已接上采样的拍 */
-function heardEvents(samples, clip, { after = -Infinity } = {}) {
-  const hooked = samples.filter((x) => audible(x) && x.hooked && x.rms !== null);
-  if (!hooked.length) return { eligible: 0, heard: [], missed: [] };
-  const firstCt = Math.min(...hooked.map((x) => x.ct));
-  const lastCt = Math.max(...hooked.map((x) => x.ct));
+/**
+ * 事件是否被听到。判定不靠实时采样:
+ *   「听到」= 元素在出声的拍里有落在这个事件的媒体时间窗口 [E-0.02, E+0.12] 的,**并且**元素播的那份字节解码后这个位置上有能量(energyOf)。
+ * 位置跳过了某个事件(seek、从头重来)它就没有拍落在窗口里,算漏;播的那份声音里这个位置是空的,也算漏。
+ * 实时采样(captureStream)在窗口里读到能量的事件数另记在 live 里,只作旁证 —— 采集音轨有时不出数据,不能拿它当判据。
+ */
+function heardEvents(samples, clip, energyOf, { after = -Infinity } = {}) {
+  const on = samples.filter(audible);
+  if (!on.length) return { eligible: 0, heard: [], missed: [], live: 0 };
+  const firstCt = Math.min(...on.map((x) => x.ct));
+  const lastCt = Math.max(...on.map((x) => x.ct));
   const heard = [], missed = [];
-  for (const E of clip.events) {
-    if (E < Math.max(after, firstCt + 0.03) || E + 0.12 > lastCt) continue; // 窗口没被采到的不判
-    const win = hooked.filter((x) => x.ct >= E - 0.02 && x.ct <= E + 0.12);
-    const peak = win.length ? Math.max(...win.map((x) => x.rms)) : 0;
-    (peak >= THR ? heard : missed).push(+E.toFixed(3));
-  }
-  return { eligible: heard.length + missed.length, heard, missed };
+  let live = 0;
+  clip.events.forEach((E, i) => {
+    if (E < Math.max(after, firstCt + 0.03) || E + 0.12 > lastCt) return; // 这一遍没播到的不判
+    const win = on.filter((x) => x.ct >= E - 0.02 && x.ct <= E + 0.12);
+    (win.length && energyOf(i) >= THR ? heard : missed).push(+E.toFixed(3));
+    if (win.some((x) => x.rms !== null && x.rms >= THR)) live++;
+  });
+  return { eligible: heard.length + missed.length, heard, missed, live };
 }
+/** 解码结果 → 「第 i 个事件位置上的能量」(同一段播过几份字节就取最小的;没有解码结果给 0) */
+const energyIn = (srcE, clip) => (i) => { const got = (srcE?.[clip.id] ?? []).filter((g) => !g.error); return got.length ? Math.min(...got.map((g) => g.rms[i] ?? 0)) : 0; };
 const maxRms = (samples) => Math.max(0, ...samples.filter((x) => x.rms !== null).map((x) => x.rms));
 /** 这一遍播放里时间轴相对墙钟走得多快(从播放头第一次动起算;起步之前的等待另记) */
 function timelinePace(trace) {
@@ -412,6 +458,14 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
   await S(HARNESS);
   await S(() => window.__sv.start());
   const shots = {};
+  const wanted = { [truth.kbd.id]: truth.kbd.events, [truth.notif.id]: truth.notif.events, [truth.av.id]: truth.av.events };
+  /** 播的那份字节解码后各事件位置上的能量(每段播完后取;合成来源每次挂上是新地址,取的时候一并核) */
+  let srcE = {};
+  const decode = async () => { srcE = await S((w) => window.__sv.sourceEnergy(w), wanted); return srcE; };
+  /** 实时采样这一路:每段声音采到过的最大能量(旁证;套件末尾要求三段都采到过) */
+  const liveSeen = { kbd: 0, notif: 0, av: 0 };
+  const noteLive = (a) => { for (const k of Object.keys(liveSeen)) liveSeen[k] = Math.max(liveSeen[k], maxRms((a[k] ?? []).filter(audible))); return a; };
+  const liveOf = (xs) => round(maxRms(xs.filter(audible)), 4);
 
   /* ---- P1 从头播放(这一页第一次播放:舞台、解码都是冷的) ---- */
   await phase(tag('P1'), async () => {
@@ -422,7 +476,8 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     await waitT(6.95); // 键盘声整段、提示音、声画卡都走过
     await stopAll();
     const t1 = await collect();
-    const a1 = analyse(t1, truth);
+    const a1 = noteLive(analyse(t1, truth));
+    await decode();
     const { pace, invalid } = paceOf(t1);
     const checks = [];
     const ctxState = await S(() => window.__sv.ctxState());
@@ -432,36 +487,56 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     checks.push(C(['kbd', 'notif', 'av'].every((k) => srcSeen[k].length === 1 && srcSeen[k][0] === source), `P1 三段声音的播放源都是${source === 'live' ? '浏览器当场合成的临时声音' : '已入库的产物'}`, { want: source, seen: srcSeen, urls: Object.fromEntries(['kbd', 'notif', 'av'].map((k) => [k, [...new Set(a1[k].filter(audible).map((x) => (x.src.startsWith('blob:') ? 'blob:' : x.src.replace(/^https?:\/\/[^/]+/, '').replace(/[0-9a-f]{56}(?=[0-9a-f]{8})/, '…').replace(/\?.*/, '?…'))))]])) }));
     const alK = alignment(a1.kbd);
     checks.push(C(alK.n > 5 && alK.pass, 'P1 kbd 播放时元素 currentTime 与时间轴对齐', alK, true));
-    // 起播那一刻:声音不抢在播放头前面(舞台起步慢时声音等第一拍)
-    const head = a1.kbd.filter((x) => x.playing && !x.paused && x.w - (a1.kbd.find((y) => y.playing)?.w ?? 0) < 1500);
+    // 起播那一刻:声音不抢在播放头前面。舞台的第一拍到之前(播放头还没动)声音元素不该在放;第一拍之后的 1.5 秒里声音不超前
+    const p1 = t1.filter((x) => x.playing);
+    const beatAt = p1.find((x) => x.t > p1[0].t + 1e-9)?.w ?? Infinity;
+    const early = t1.filter((x) => x.playing && x.w < beatAt - 30).reduce((n, x) => n + x.els.filter((e) => !e.paused && e.ready >= 3).length, 0);
+    const head = a1.kbd.filter((x) => x.playing && !x.paused && x.w >= beatAt && x.w - beatAt < 1500);
     const ahead = head.length ? Math.max(...head.map((x) => x.ct - x.expect)) : null;
-    checks.push(C(head.length > 5 && ahead <= ALIGN_SEC, 'P1 起播时声音不抢在播放头前面(等舞台的第一拍)', { samples: head.length, maxAheadSec: round(ahead), startStallMs: pace.startStallMs }, true));
+    checks.push(C(early <= 1 && head.length > 5 && ahead <= ALIGN_SEC, 'P1 起播时声音不抢在播放头前面(等舞台的第一拍)', { playingBeforeFirstBeat: early, startStallMs: pace.startStallMs, samples: head.length, maxAheadSec: round(ahead) }, true));
     for (const key of ['notif', 'av']) {
       const al = alignment(a1[key], { lateStart: true });
       checks.push(C(al.n > 5 && al.pass, `P1 ${key} 播放时元素 currentTime 与时间轴对齐(播放中才挂上:起声 ≤ ${LATE_START_SEC}s、之后一路平稳)`, al, true));
     }
-    const hk = heardEvents(a1.kbd, truth.kbd);
-    checks.push(C(hk.eligible >= 20 && hk.heard.length / hk.eligible >= 0.8, 'P1 键盘声每个事件窗口里都有能量', { eligible: hk.eligible, heard: hk.heard.length, missed: hk.missed.slice(0, 10) }, true));
-    checks.push(C(maxRms(a1.notif.filter(audible)) >= THR, 'P1 提示音片段播放时有能量', { maxRms: round(maxRms(a1.notif.filter(audible)), 4), audible: a1.notif.filter(audible).length }, true));
-    checks.push(C(maxRms(a1.av.filter(audible)) >= THR, 'P6 声画卡内嵌声音播放时有能量', { maxRms: round(maxRms(a1.av.filter(audible)), 4), audible: a1.av.filter(audible).length }, true));
+    const hk = heardEvents(a1.kbd, truth.kbd, energyIn(srcE, truth.kbd));
+    checks.push(C(hk.eligible >= 20 && hk.heard.length / hk.eligible >= 0.95, 'P1 键盘声的事件都播到了,播的那份声音在这些位置上有能量', { eligible: hk.eligible, heard: hk.heard.length, missed: hk.missed.slice(0, 10), liveHeard: hk.live }, true));
+    checks.push(C(a1.notif.filter(audible).length >= 10 && energyIn(srcE, truth.notif)(0) >= THR, 'P1 提示音片段播放时在出声(元素在放、放的那份声音有能量)', { audible: a1.notif.filter(audible).length, sourceRms: round(energyIn(srcE, truth.notif)(0), 4), liveRms: liveOf(a1.notif) }, true));
+    checks.push(C(a1.av.filter(audible).length >= 20 && energyIn(srcE, truth.av)(0) >= THR, 'P6 声画卡内嵌声音播放时在出声(元素在放、放的那份声音有能量)', { audible: a1.av.filter(audible).length, sourceRms: round(energyIn(srcE, truth.av)(0), 4), liveRms: liveOf(a1.av) }, true));
     const reloads = Object.fromEntries(['kbd', 'notif', 'av'].map((k) => [k, reloadsWhilePlaying(a1[k])]));
     checks.push(C(Object.values(reloads).every((n) => n === 0), 'P1 出声之后元素没有在播放中重新加载(声音不断)', reloads));
     // 放到素材尽头不从头重播:元素放完(ended)之后不应再出现「在播、位置回到开头」的拍
     const restarted = ['kbd', 'notif', 'av'].map((k) => { const xs = a1[k]; const i = xs.findIndex((x) => x.ended); return i < 0 ? 0 : xs.slice(i).filter((x) => x.playing && !x.paused && x.ct < 0.3 && x.expect > 0.5).length; });
     checks.push(C(restarted.every((n) => n === 0), 'P1 放到素材尽头的元素没有从头重播', { kbd: restarted[0], notif: restarted[1], av: restarted[2] }));
-    checks.push(C(a1.av.length > 0 && a1.av.every((x) => x.cstate === 'ready' || x.cstate === 'pending') && a1.av.some((x) => x.cstate === 'ready'), 'P6 声画卡元素 data-card-audio-state 为 ready', { states: [...new Set(a1.av.map((x) => x.cstate))] }, true));
+    // 刚挂上的一两拍是 idle / pending(还没有声音源);出声的拍必须都是 ready,而且不出现 error
+    checks.push(C(a1.av.filter(audible).length > 0 && a1.av.filter(audible).every((x) => x.cstate === 'ready') && !a1.av.some((x) => x.cstate === 'error'), 'P6 声画卡元素出声时 data-card-audio-state 为 ready', { states: [...new Set(a1.av.map((x) => x.cstate))], whileAudible: [...new Set(a1.av.filter(audible).map((x) => x.cstate))] }, true));
     checks.push(C(truth.clipCount === 4 && truth.avDuplicateAudioClips === 0, 'P6 声画卡的声音与画面是同一个片段(项目里只有 4 个片段:打字卡、键盘声、提示音、声画卡;没有第二个引用它声音的片段)', { clipCount: truth.clipCount, avDuplicateAudioClips: truth.avDuplicateAudioClips }));
+    // 播的那份声音本身(解码它的字节):每个事件的位置上有能量 —— 两种来源同一条断言,不依赖实时采样的时序
+    for (const [key, clip, need] of [['kbd', truth.kbd, 0.95], ['notif', truth.notif, 1], ['av', truth.av, 1]]) {
+      const got = srcE[clip.id] ?? [];
+      const ok = got.length > 0 && got.every((g) => !g.error && g.rms.filter((r) => r >= THR).length / g.rms.length >= need && (source === 'live' ? g.kind === 'blob' : g.kind === 'url'));
+      const good = got.filter((g) => !g.error);
+      checks.push(C(ok, `P1 ${key} 播的那份声音解码后,事件位置上有能量(来源:${source === 'live' ? '合成' : '产物'})`, { copies: got.length, errors: got.filter((g) => g.error).map((g) => g.error), kind: [...new Set(good.map((g) => g.kind))], duration: round(good[0]?.duration), events: clip.events.length, withEnergy: good.length ? Math.min(...good.map((g) => g.rms.filter((r) => r >= THR).length)) : 0, minRms: good.length ? round(Math.min(...good.flatMap((g) => g.rms)), 4) : null }));
+    }
     return { checks, pace, invalid };
   });
-  // 播的那份声音本身(解码它的字节):每个事件的位置上有能量 —— 两种来源同一条断言,不依赖实时采样的时序
-  const srcE = await S((w) => window.__sv.sourceEnergy(w), { [truth.kbd.id]: truth.kbd.events, [truth.notif.id]: truth.notif.events, [truth.av.id]: truth.av.events });
-  for (const [key, clip, need] of [['kbd', truth.kbd, 0.95], ['notif', truth.notif, 1], ['av', truth.av, 1]]) {
-    const got = srcE[clip.id] ?? [];
-    const ok = got.length > 0 && got.every((g) => !g.error && g.rms.filter((r) => r >= THR).length / g.rms.length >= need && (source === 'live' ? g.kind === 'blob' : g.kind === 'url'));
-    check(ok, tag(`P1 ${key} 播的那份声音解码后,事件位置上有能量(来源:${source === 'live' ? '合成' : '产物'})`), got.map((g) => (g.error ? g : { kind: g.kind, duration: round(g.duration), events: g.rms.length, withEnergy: g.rms.filter((r) => r >= THR).length, minRms: round(Math.min(...g.rms), 4) })));
-  }
 
-  if (quick) { await S(() => window.__sv.stop()); return shots; }
+  /** 实时采样这一路的收尾:哪段声音整个套件里都没采到能量,就把它单独再播几遍(每遍元素都是新挂的),最后三段都得采到过 */
+  const liveTopUp = async () => {
+    let extraPlays = 0;
+    for (const [key, clip] of [['kbd', truth.kbd], ['notif', truth.notif], ['av', truth.av]]) {
+      for (let i = 0; i < 3 && liveSeen[key] < THR; i++) {
+        extraPlays++;
+        await stopAll(); await seek(7.5); await sleep(300); // 播放头在所有声音片段之外:元素卸掉,下一遍重新挂
+        await collect();
+        await playTo(Math.max(0, clip.start - 0.2), Math.min(clip.end, clip.start + 1.2) - 0.02);
+        await stopAll();
+        noteLive(analyse(await collect(), truth));
+      }
+    }
+    check(Object.values(liveSeen).every((v) => v >= THR), tag('实时采样(captureStream):三段声音都从元素上采到过能量'), { maxRms: Object.fromEntries(Object.entries(liveSeen).map(([k, v]) => [k, round(v, 4)])), extraPlays });
+  };
+
+  if (quick) { await liveTopUp(); await S(() => window.__sv.stop()); return shots; }
 
   /* ---- P2 暂停 ---- */
   await seek(0.4); await sleep(300);
@@ -521,7 +596,8 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     await playTo(MID, MID + 1.8);
     await stopAll();
     const t4 = await collect();
-    const a4 = analyse(t4, truth);
+    const a4 = noteLive(analyse(t4, truth));
+    await decode();
     const { pace, invalid } = paceOf(t4);
     const checks = [];
     // 不从头重来:凡是「没暂停、有数据」的拍,位置都不早于中间位置(不带时间:重来一次就是没过,不重量)
@@ -530,9 +606,20 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     checks.push(C(live4.length > 10 && minCt >= startMedia - ALIGN_SEC && minCt > 0.5, 'P4 从片段中间播放:currentTime 接着中间位置,不回到 0', { startMedia: round(startMedia), firstCt: round(live4[0]?.ct), minCt: round(minCt), samples: live4.length }));
     const al4 = alignment(a4.kbd);
     checks.push(C(al4.n > 10 && al4.pass, 'P4 从中间播放后一路对齐', al4, true));
-    const h4 = heardEvents(a4.kbd, truth.kbd, { after: startMedia - 0.02 });
-    checks.push(C(h4.eligible >= 8 && h4.heard.length / h4.eligible >= 0.8 && h4.heard.every((e) => e >= startMedia - 0.05), 'P4 中间播放时听到的都是中间位置之后的事件,且没有漏', { eligible: h4.eligible, heard: h4.heard.length, firstHeard: h4.heard[0], startMedia: round(startMedia), missed: h4.missed.slice(0, 8) }, true));
+    const h4 = heardEvents(a4.kbd, truth.kbd, energyIn(srcE, truth.kbd), { after: startMedia - 0.02 });
+    checks.push(C(h4.eligible >= 8 && h4.missed.length === 0 && h4.heard.every((e) => e >= startMedia - 0.05), 'P4 中间播放时听到的都是中间位置之后的事件,且没有漏', { eligible: h4.eligible, heard: h4.heard.length, firstHeard: h4.heard[0], startMedia: round(startMedia), missed: h4.missed.slice(0, 8), liveHeard: h4.live }, true));
     checks.push(C(reloadsWhilePlaying(a4.kbd) === 0, 'P4 播放中元素没有重新加载', { reloads: reloadsWhilePlaying(a4.kbd) }));
+    if (h4.eligible >= 8 && h4.live === 0) {
+      // 实时采样整段是 0:旁路量一次元素的真实输出,分清是元素没出声还是采集音轨不出数据
+      await stopAll(); await seek(MID); await sleep(300);
+      const measuring = S((id) => window.__sv.elementOutput(id, 1200), truth.kbd.id);
+      await sleep(80);
+      await S(() => window.__pcStore.actions.play());
+      const out = await measuring;
+      await stopAll();
+      console.log(`DIAG ${tag('P4')} 实时采样读到 0,旁路量元素输出:${JSON.stringify(out)} recaps=${Math.max(0, ...a4.kbd.map((x) => x.recaps ?? 0))}`);
+      checks.push(C(!out.error && out.peak >= THR, 'P4 实时采样读不到时,旁路(Web Audio 直接接元素)量到元素确实在出声', { peak: round(out.peak, 4), playingSamples: out.playingSamples, error: out.error }));
+    }
     return { checks, pace, invalid };
   });
   // 声画卡中间:5.2 开始的片段,从 5.3 播
@@ -542,7 +629,7 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     await playTo(5.3, 5.8);
     await stopAll();
     const t4b = await collect();
-    const a4b = analyse(t4b, truth);
+    const a4b = noteLive(analyse(t4b, truth));
     const { pace, invalid } = paceOf(t4b);
     const from = 5.3 - truth.av.start + truth.av.off;
     const liveAv = a4b.av.filter((x) => x.playing && !x.paused && x.ready >= 3);
@@ -599,8 +686,9 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     await collect();
     await playTo(5.2, 6.1); await stopAll();
     const t5b = await collect();
-    const a5b = analyse(t5b, truth);
-    return { ...paceOf(t5b), checks: [C(maxRms(a5b.av.filter(audible)) >= THR, 'P5 其他片段(声画卡)在别的片段静音时照常出声', { maxRms: round(maxRms(a5b.av.filter(audible)), 4), audible: a5b.av.filter(audible).length }, true)] };
+    const a5b = noteLive(analyse(t5b, truth));
+    await decode();
+    return { ...paceOf(t5b), checks: [C(a5b.av.filter(audible).length >= 20 && energyIn(srcE, truth.av)(0) >= THR, 'P5 其他片段(声画卡)在别的片段静音时照常出声', { audible: a5b.av.filter(audible).length, sourceRms: round(energyIn(srcE, truth.av)(0), 4), liveRms: liveOf(a5b.av) }, true)] };
   });
   // 声画卡自己静音:参数面板的按钮
   await S((id) => window.__pcStore.actions.select([id]), truth.av.id);
@@ -628,14 +716,17 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
     await collect();
     await playTo(0.3, 1.8); shots.restored = await shot('3-restored-playing'); await stopAll();
     const t5d = await collect();
-    const a5d = analyse(t5d, truth);
+    const a5d = noteLive(analyse(t5d, truth));
+    await decode();
     const k = a5d.kbd.filter(audible);
+    const h5 = heardEvents(a5d.kbd, truth.kbd, energyIn(srcE, truth.kbd));
     const al = alignment(a5d.kbd);
     return { ...paceOf(t5d), checks: [
-      C(k.length > 10 && maxRms(k) >= THR, 'P5 恢复后键盘声重新出声', { audible: k.length, maxRms: round(maxRms(k), 4) }, true),
+      C(k.length > 10 && h5.eligible >= 5 && h5.missed.length === 0, 'P5 恢复后键盘声重新出声', { audible: k.length, events: h5.eligible, heard: h5.heard.length, liveRms: liveOf(a5d.kbd) }, true),
       C(al.n > 10 && al.pass, 'P5 恢复后键盘声接着当前位置、对齐', al, true),
     ] };
   });
+  await liveTopUp();
   await S(() => window.__sv.stop());
   return shots;
 }
@@ -876,10 +967,12 @@ try {
         const own = analyse(tr, { ...truth, extra: fresh }).extra;
         const al = alignment(own, { lateStart: true });
         const loud = maxRms(own.filter(audible));
+        const dec = await P(member, (w) => window.__sv.sourceEnergy(w), { [fresh.id]: fresh.events });
+        const srcRms = energyIn(dec, fresh)(0);
         srcUsed = own.find((x) => audible(x) && x.src)?.src ?? srcUsed;
         const pace = timelinePace(tr);
         return { pace, invalid: pace.rate !== null && pace.rate < MIN_TIMELINE_RATE ? `时间轴只有墙钟的 ${pace.rate} 倍速` : undefined, checks: [
-          { ok: own.length > 5 && al.pass && loud >= THR, name: '第7条:另一端(在线成员页)播放 Agent 生成的声音:元素在播、currentTime 对齐、有能量', evidence: { samples: own.length, ...al, maxRms: round(loud, 4), source: [...new Set(own.filter(audible).map((x) => x.source))] }, timing: true },
+          { ok: own.filter(audible).length >= 10 && al.pass && srcRms >= THR, name: '第7条:另一端(在线成员页)播放 Agent 生成的声音:元素在播、currentTime 对齐、放的那份声音有能量', evidence: { samples: own.length, ...al, sourceRms: round(srcRms, 4), liveRms: round(loud, 4), source: [...new Set(own.filter(audible).map((x) => x.source))] }, timing: true },
         ] };
       });
       const sameBytes = await P(member, async (u) => { const r = await fetch(u); return { status: r.status, bytes: (await r.arrayBuffer()).byteLength }; }, srcUsed).catch((e) => ({ error: String(e) }));
