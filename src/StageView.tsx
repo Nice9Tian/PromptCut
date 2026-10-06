@@ -460,7 +460,8 @@ export default function StageView() {
           cardExec.runtime?.dispose(); cardExec.runtime = null;
           postStageEvent({ type: "card-states", states: [], graph: "unknown", visual: false });
         }
-        if (cardExec.sound) {
+        // 没有同步来的卡就不起声音线程(也不报声音状态):项目里没有用户卡、图卡时这一台与以前一样安静
+        if (cardExec.sound && (bundles.length > 0 || cardExec.soundHost)) {
           if (!cardExec.soundHost) {
             const [m, sp] = await Promise.all([import("./online/cardRuntime/stageSound"), import("./online/cardRuntime/soundSpawn")]);
             if (stale() || !stageExecGate().allowed) return;

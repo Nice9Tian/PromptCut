@@ -108,6 +108,52 @@ export const card: CardDef<{}> = { id: "probe-mods", name: "真模块", defaults
   audio: () => { for (;;) { /* 掐不断就永远不回 */ } } };`,
 };
 
+/**
+ * 同步来的有声用户卡经真实加载路径:创建者把卡源码 `content.put` 进内容库 → 在线页面(隔离生效)取回、转译、发给两台舞台 →
+ * 页面请求生成这段卡片的声音(`generateCardAudio`)→ `audio()` 在舞台实例 B 起的声音线程里执行 → 采样块回到编辑页面 → 打包成 WAV 入库。
+ * 与上面 dev server 一段不同:这里舞台是跨源的 `s1./s2.pc.localhost`(带内容安全策略与出口白名单),线程从舞台源的 blob 地址引导。
+ */
+const ONLINE_CARD_ID = 'probe-online-audio';
+const ONLINE_CARD_KEY = `${U}${ONLINE_CARD_ID}.tsx`;
+const ONLINE_FREQ = 880;
+const ONLINE_CARD_SOURCE = `/** 探针:同步来的有声用户卡(在线构建里没有) */
+import type { CardDef } from "../../kernel/types";
+import { createNotificationRecipe, renderSoundEffectBlock } from "../../kernel/soundEffects";
+(globalThis as any).__pcSoundProbeMark = ((globalThis as any).__pcSoundProbeMark ?? 0) + 1;
+export const probeOnlineAudio: CardDef<{ frequency: number }> = {
+  id: "${ONLINE_CARD_ID}",
+  name: "探针在线有声卡",
+  description: "在线执行的声音线程探针用",
+  frameMode: "stateful",
+  defaults: { frequency: ${ONLINE_FREQ} },
+  controls: [{ key: "frequency", label: "频率", type: "number", min: 100, max: 4000, step: 10 }],
+  Component: () => <div className="absolute inset-0 flex items-center justify-center text-[64px]">probe-online-audio</div>,
+  audio: (_sources: unknown, range: { start: number; count: number }, params: { frequency: number }) =>
+    renderSoundEffectBlock(createNotificationRecipe({ frequency: params.frequency, gain: 0.5, duration: 0.2 }), { start: range.start, count: range.count }),
+};
+`;
+
+/** 解一段 WAV(PCM 16/24/32 位整数或 32 位浮点,取第一个声道),回 { sampleRate, channels, frames, ch0 } */
+function parseWav(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (String.fromCharCode(...bytes.subarray(0, 4)) !== 'RIFF') throw new Error('不是 RIFF');
+  let pos = 12, fmt = null, dataAt = -1, dataLen = 0;
+  while (pos + 8 <= bytes.length) {
+    const id = String.fromCharCode(...bytes.subarray(pos, pos + 4)), len = dv.getUint32(pos + 4, true);
+    if (id === 'fmt ') fmt = { tag: dv.getUint16(pos + 8, true), channels: dv.getUint16(pos + 10, true), sampleRate: dv.getUint32(pos + 12, true), bits: dv.getUint16(pos + 22, true) };
+    if (id === 'data') { dataAt = pos + 8; dataLen = Math.min(len, bytes.length - dataAt); break; }
+    pos += 8 + len + (len & 1);
+  }
+  if (!fmt || dataAt < 0) throw new Error('没有 fmt / data');
+  const bytesPer = fmt.bits / 8, frames = Math.floor(dataLen / (bytesPer * fmt.channels));
+  const ch0 = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) {
+    const at = dataAt + i * bytesPer * fmt.channels;
+    ch0[i] = fmt.tag === 3 ? dv.getFloat32(at, true) : fmt.bits === 16 ? dv.getInt16(at, true) / 32768 : fmt.bits === 24 ? ((dv.getUint8(at) | (dv.getUint8(at + 1) << 8) | (dv.getInt8(at + 2) << 16)) / 8388608) : dv.getInt32(at, true) / 2147483648;
+  }
+  return { sampleRate: fmt.sampleRate, channels: fmt.channels, frames, ch0 };
+}
+
 const cleanups = [];
 let exitCode = 1;
 try {
@@ -234,52 +280,6 @@ async function devPhase() {
 
 /* ================================================================== 在线构建 + 隔离代理的真实路径(S8) */
 
-/**
- * 同步来的有声用户卡经真实加载路径:创建者把卡源码 `content.put` 进内容库 → 在线页面(隔离生效)取回、转译、发给两台舞台 →
- * 页面请求生成这段卡片的声音(`generateCardAudio`)→ `audio()` 在舞台实例 B 起的声音线程里执行 → 采样块回到编辑页面 → 打包成 WAV 入库。
- * 与上面 dev server 一段不同:这里舞台是跨源的 `s1./s2.pc.localhost`(带内容安全策略与出口白名单),线程从舞台源的 blob 地址引导。
- */
-const ONLINE_CARD_ID = 'probe-online-audio';
-const ONLINE_CARD_KEY = `${U}${ONLINE_CARD_ID}.tsx`;
-const ONLINE_FREQ = 880;
-const ONLINE_CARD_SOURCE = `/** 探针:同步来的有声用户卡(在线构建里没有) */
-import type { CardDef } from "../../kernel/types";
-import { createNotificationRecipe, renderSoundEffectBlock } from "../../kernel/soundEffects";
-(globalThis as any).__pcSoundProbeMark = ((globalThis as any).__pcSoundProbeMark ?? 0) + 1;
-export const probeOnlineAudio: CardDef<{ frequency: number }> = {
-  id: "${ONLINE_CARD_ID}",
-  name: "探针在线有声卡",
-  description: "在线执行的声音线程探针用",
-  frameMode: "stateful",
-  defaults: { frequency: ${ONLINE_FREQ} },
-  controls: [{ key: "frequency", label: "频率", type: "number", min: 100, max: 4000, step: 10 }],
-  Component: () => <div className="absolute inset-0 flex items-center justify-center text-[64px]">probe-online-audio</div>,
-  audio: (_sources: unknown, range: { start: number; count: number }, params: { frequency: number }) =>
-    renderSoundEffectBlock(createNotificationRecipe({ frequency: params.frequency, gain: 0.5, duration: 0.2 }), { start: range.start, count: range.count }),
-};
-`;
-
-/** 解一段 WAV(PCM 16/24/32 位整数或 32 位浮点,取第一个声道),回 { sampleRate, channels, frames, ch0 } */
-function parseWav(bytes) {
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (String.fromCharCode(...bytes.subarray(0, 4)) !== 'RIFF') throw new Error('不是 RIFF');
-  let pos = 12, fmt = null, dataAt = -1, dataLen = 0;
-  while (pos + 8 <= bytes.length) {
-    const id = String.fromCharCode(...bytes.subarray(pos, pos + 4)), len = dv.getUint32(pos + 4, true);
-    if (id === 'fmt ') fmt = { tag: dv.getUint16(pos + 8, true), channels: dv.getUint16(pos + 10, true), sampleRate: dv.getUint32(pos + 12, true), bits: dv.getUint16(pos + 22, true) };
-    if (id === 'data') { dataAt = pos + 8; dataLen = Math.min(len, bytes.length - dataAt); break; }
-    pos += 8 + len + (len & 1);
-  }
-  if (!fmt || dataAt < 0) throw new Error('没有 fmt / data');
-  const bytesPer = fmt.bits / 8, frames = Math.floor(dataLen / (bytesPer * fmt.channels));
-  const ch0 = new Float32Array(frames);
-  for (let i = 0; i < frames; i++) {
-    const at = dataAt + i * bytesPer * fmt.channels;
-    ch0[i] = fmt.tag === 3 ? dv.getFloat32(at, true) : fmt.bits === 16 ? dv.getInt16(at, true) / 32768 : fmt.bits === 24 ? ((dv.getUint8(at) | (dv.getUint8(at + 1) << 8) | (dv.getInt8(at + 2) << 16)) / 8388608) : dv.getInt32(at, true) / 2147483648;
-  }
-  return { sampleRate: fmt.sampleRate, channels: fmt.channels, frames, ch0 };
-}
-
 async function onlinePhase() {
   const { startHostedCombo } = await import('../../server/hosted/combo.mjs');
   const { createSharedProject, buildAuthProtocols } = await import('../../server/auth/client.mjs');
@@ -384,7 +384,8 @@ async function onlinePhase() {
     { B: spawnsB, A: spawnsA });
   const marks = await page.evaluate(() => globalThis.__pcSoundProbeMark ?? null);
   const stageMarks = await Promise.all(stageFrames().map((f) => f.evaluate(() => globalThis.__pcSoundProbeMark ?? null).catch(() => 'err')));
-  check('S8 卡片文件顶层的记号在编辑页面与两台舞台的窗口里都没有(代码只在声音线程里执行)', marks === null && stageMarks.every((m) => m === null), { editor: marks, stages: stageMarks });
+  // 同一个文件的模块顶层在两台舞台的窗口里也会执行(画面那一半由舞台里的加载器载入);不许出现的是编辑页面
+  check('S8 卡片文件顶层的记号不在编辑页面里(编辑页面不执行卡片代码);两台隔离舞台的窗口里有(画面那一半)', marks === null && stageMarks.length === 2 && stageMarks.every((m) => m !== null), { editor: marks, stages: stageMarks });
 
   // 采样回到编辑页面、打包成 WAV 入库:取回字节,与编辑页面按同一配方算的期望逐样本比
   const media = await page.evaluate((id) => { const m = window.__pcStore.getState().project.media.find((x) => x.id === id); return m ? { hash: m.hash, kind: m.kind, duration: m.duration ?? null } : null; }, gen.mediaId ?? '');
@@ -395,12 +396,14 @@ async function onlinePhase() {
       if (r.ok) wav = parseWav(new Uint8Array(await r.arrayBuffer())); else fetchErr = `状态 ${r.status}`;
     } catch (e) { fetchErr = String(e?.message ?? e).slice(0, 200); }
   }
-  const want = await page.evaluate(async (hz) => {
-    const K = await import('/src/kernel/soundEffects.ts');
-    return [...K.renderSoundEffectBlock(K.createNotificationRecipe({ frequency: hz, gain: 0.5, duration: 0.2 }), { start: 0, count: 4096 })];
-  }, ONLINE_FREQ);
-  const near = (a, b, tol) => a.length >= b.length && b.every((v, i) => Math.abs(a[i] - v) <= tol);
-  check('S8 采样块回到了编辑页面并入库:取回的 WAV 前 4096 个采样与按同一配方算的期望一致(误差在量化范围内),不是静音',
+  // 在线构建里没有 `/src/…` 可引,期望值不在页面里现算:按过零点数出前 4096 个采样的主频,应当是配方里的那个频率
+  const head = wav ? Array.from(wav.ch0.slice(0, 4096)) : [];
+  let crossings = 0;
+  for (let i = 1; i < head.length; i++) if ((head[i - 1] < 0) !== (head[i] < 0)) crossings++;
+  const heardHz = head.length ? crossings / 2 / (head.length / 48000) : 0;
+  const want = { hz: ONLINE_FREQ, heardHz: Math.round(heardHz) };
+  const near = () => Math.abs(heardHz - ONLINE_FREQ) <= ONLINE_FREQ * 0.06;
+  check('S8 采样块回到了编辑页面并入库:取回的 WAV 前 4096 个采样的主频是配方里的频率(±6%),不是静音',
     !!wav && wav.sampleRate === 48000 && wav.frames >= 48000 * 0.9 && near(wav.ch0, want, 2e-3) && wav.ch0.slice(0, 4096).some((v) => Math.abs(v) > 0.05),
     { media, fetchErr, sampleRate: wav?.sampleRate, frames: wav?.frames, peak: wav ? Math.max(...wav.ch0.slice(0, 4096).map(Math.abs)) : null });
   check('S8 没有策略拦截的控制台报错(Refused to …)与页面错误', refused.length === 0 && errors.length === 0, { refused: refused.slice(0, 3), errors: errors.slice(0, 3) });

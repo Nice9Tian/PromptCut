@@ -83,10 +83,12 @@ export function createIsolatedSoundLink(opts: { render: (request: IsolatedSoundR
   return {
     setState(next) {
       const clean = next === null ? null : sanitizeSoundState(next);
+      // 没变就不惊动声音那一侧(换宿主会让所有在用的声音重新取一遍;舞台每载入一次包都会报一次状态)
+      const same = (clean === null && state === null) || (!!clean && !!state && JSON.stringify(clean) === JSON.stringify(state));
       state = clean;
       // 舞台那头换了一批卡(或线程没了):之前发过的项目它不一定还留着,下一次带上项目
       sent.clear();
-      setIsolatedCardAudioHost(clean ? host : null);
+      if (!same) setIsolatedCardAudioHost(clean ? host : null);
     },
     host: () => host,
     dispose() {
