@@ -877,6 +877,33 @@ export function Preview() {
   /** 验收口:这一轮播放判过几次卡顿、最大的一次超出名义拍长多少毫秒 */
   const stallCountRef = useRef(0);
   const gapMaxRef = useRef(0);
+  /*
+   * 「音频跟随时刻」(`mechanism/rendering.md`)要音频跟着舞台的拍子走,原来有两处漏着,声音会先跑出去:
+   *
+   * 1. **起播到第一拍之间**:`playing` 一翻,主文档的音频立刻起播,而播放头要等舞台收到项目、回了 `play`、
+   *    渲完第一拍才动。舞台起步慢(刚打开项目、重卡)时声音先放出去几百毫秒,偏差过了硬 seek 的门槛又被拉回来重放一遍。
+   *    `firstBeatRef`:这一轮播放的第一拍到了才放开音频。只管主文档的音频,不动舞台里的素材层。
+   * 2. **卡顿是到货时才判的**:晚到的那一拍到了才知道它晚了,卡住的那几百毫秒里音频照放。
+   *    看门狗:上一拍(或 `play` 回包)之后过了「名义拍长 + 40 ms」还没有下一拍,当场按卡顿掐住;
+   *    判据与到货时那一条相同(超出名义拍长 40 ms),只是不等它到。
+   */
+  const firstBeatRef = useRef(false);
+  const [, setFirstBeatSeen] = useState(0);
+  if (!playing) firstBeatRef.current = false;
+  const stallWatchRef = useRef(0);
+  const armStallWatch = useCallback(() => {
+    window.clearTimeout(stallWatchRef.current);
+    if (!playingRef.current) return;
+    const beat = 1000 / Math.max(1, getState().project.fps || 30);
+    stallWatchRef.current = window.setTimeout(() => {
+      if (!playingRef.current || stalledRef.current || !lastFrameAtRef.current) return;
+      stallCountRef.current++;
+      stalledRef.current = true;
+      setMediaStalled(true);
+      void frontStage()?.setPlaying(false).catch(() => {});
+    }, beat + MEDIA_STALL_MS);
+  }, []);
+  useEffect(() => () => window.clearTimeout(stallWatchRef.current), []);
 
   /*
    * 快照 / 抑制的投递(C4、C5、A3c;排程在 `snapshotFeed.ts`)。
@@ -1466,6 +1493,8 @@ export function Preview() {
         const now = performance.now();
         const prev = lastFrameAtRef.current;
         lastFrameAtRef.current = now;
+        armStallWatch();
+        if (!firstBeatRef.current && playingRef.current) { firstBeatRef.current = true; setFirstBeatSeen((n) => n + 1); }
         actions.tick(e.sec);
         // 这一拍的抑制集合和快照(C5:播放中发 setSuppressed(H(t)) + setSnapshots)
         void pumpRef.current();
@@ -1805,7 +1834,7 @@ export function Preview() {
           const reply = await s.play(from);
           if (!alive) return;
           // 首拍的到达间隔以 `play()` 回包时刻为起点(K4)
-          if (reply.ok) lastFrameAtRef.current = performance.now();
+          if (reply.ok) { lastFrameAtRef.current = performance.now(); armStallWatch(); }
           /*
            * 舞台说起不了(没项目、角色不对):**把 store 也翻回暂停**,别让界面停在「在播」。
            * 翻回去之后下面那一支照常收尾(`pause()` 拿 `stoppedAt` → `setTime(settle)`),
@@ -1818,6 +1847,7 @@ export function Preview() {
       void (async () => {
         // **发 pause() 的这一处同步清空 lastRenderKey**(E6),否则下一次 setTime 被去重吞掉
         lastRenderKey.current = "";
+        window.clearTimeout(stallWatchRef.current);
         stalledRef.current = false;
         setMediaStalled(false);
         let stoppedAt = tRef.current;
@@ -2104,8 +2134,8 @@ export function Preview() {
         >
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
             <div style={{ position: "relative", width: project.width, height: project.height }}>
-              {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
-              <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={tierList} />
+              {/* K4 的 `mediaStalled`:舞台的一拍比应到时刻晚出超过 40 ms 时,音频跟着停一下;这一轮播放的第一拍到之前音频不起播 */}
+              <MediaLayers project={project} t={t} playing={playing && !mediaStalled && (!live || firstBeatRef.current)} masterVolume={muted ? 0 : volume} audioOnly localHashes={tierList} />
               {/*
                 * 舞台 iframe 按槽位挂:同源单舞台(`single`)、跨源的 A(`dualA`)、跨源的 B(`dualB`),顺序固定、按槽位作 key。
                 * 首次握手的过渡期(〔裁〕2026-09-30 `claude/stage-handshake`)里三个同时在:`single` 当可见舞台 A,`dualA` / `dualB`

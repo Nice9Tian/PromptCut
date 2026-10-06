@@ -273,9 +273,9 @@ async function desktopPhase() {
   await page.evaluateOnNewDocument(AUDIO_HOOK);
   await page.goto(`${server.origin}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await until('桌面编辑器就绪', () => page.evaluate(() => !!window.__pcStore && !!window.__pcIo?.sound), 120_000);
-  // 只数导出任务的目录(`export-<时间>`):预渲染结果的目录 `frame-library` 是用到才建的 —— 有声动效卡判轻之后不再提前预渲染,
-  // 它可能到导出时才出现,不能算成一个导出任务
-  const exportJobs = () => fs.readdirSync(dirs.exportDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^export-/.test(d.name)).map((d) => d.name);
+  // 只数导出任务的目录(`export-<时间>`):同一层的 `frame-library`(预渲染进程的快照库)是用到才建的 —— 有声动效卡判轻之后不再提前预渲染,
+  // 它可能到导出时才出现,落在「导出前」还是「导出后」也看机器忙不忙,不能算成一个导出任务
+  const exportJobs = () => fs.readdirSync(dirs.exportDir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('export-')).map((d) => d.name);
 
   /* ---- 摆项目:未生成一段、过期一段、缺失一段 */
   const setup = await page.evaluate(async () => {
