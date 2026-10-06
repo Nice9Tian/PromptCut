@@ -198,6 +198,13 @@ export function createAgentExecutor({
   newOpId = (session) => `${session}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`,
   agentLabel = null,
   now = () => Date.now(),
+  /**
+   * 串行锁由调用方给:一个进程里有多个执行器(托管档,每个「项目 × 成员」一个)时,它们共用服务端那一份 store,
+   * 必须排在同一把锁里。不给就各用各的(桌面:一个进程只有一个执行器)。
+   */
+  serial: serialIn = null,
+  /** 进锁先把 store 里项目以外的状态清掉、出锁把项目拿走:上一个实例留下的东西不让下一个实例的工具实现读到 */
+  isolateStore = false,
 } = {}) {
   if (!link) throw new TypeError('createAgentExecutor: 要 link');
   if (typeof loadHost !== 'function') throw new TypeError('createAgentExecutor: 要 loadHost');
@@ -226,6 +233,7 @@ export function createAgentExecutor({
 
   /** 串行锁:服务端 store 只有一份,放项目、跑 handler、取结果必须一气呵成 */
   function serial(fn) {
+    if (typeof serialIn === 'function') return serialIn(fn);
     const run = lock.then(fn, fn);
     lock = run.catch(() => {});
     return run;
@@ -338,6 +346,7 @@ export function createAgentExecutor({
       const replica = link.replica;
       const base = replica.project;
       const baseRev = replica.rev;
+      if (isolateStore) host.resetStore?.();
       host.setProject(base);
       const cleanup = ps && typeof host.setPageState === 'function' ? host.setPageState(ps) : null;
       let result;
@@ -347,7 +356,8 @@ export function createAgentExecutor({
       } finally {
         // 先把跑完的项目取出来,再把 store 放回副本;handler 抛错时这次的改动整个作废(不提交)
         after = host.getProject();
-        host.setProject(base);
+        if (isolateStore && typeof host.clearProject === 'function') host.clearProject();
+        else host.setProject(base);
         cleanup?.();
       }
       if (after === base) return { result, base, baseRev, ops: [], inverse: [] };
@@ -419,11 +429,16 @@ export function createAgentExecutor({
     const snap = await readSnapshot(conv);
     const host = await loadHost();
     const frames = await serial(async () => {
+      if (isolateStore) host.resetStore?.();
       host.setProject(snap.project);
-      const all = (snap.project.tracks || []).flatMap((tr) => (tr.clips || []).map((c) => c.id));
-      if (args?.clipId && !all.includes(args.clipId)) throw new Error(`找不到 clip ${args.clipId}`);
-      const ids = args?.clipId ? [args.clipId] : all;
-      return { ids, stage: host.stageSize(), layout: Object.fromEntries(ids.map((id) => [id, host.frameLayoutOf(id)])) };
+      try {
+        const all = (snap.project.tracks || []).flatMap((tr) => (tr.clips || []).map((c) => c.id));
+        if (args?.clipId && !all.includes(args.clipId)) throw new Error(`找不到 clip ${args.clipId}`);
+        const ids = args?.clipId ? [args.clipId] : all;
+        return { ids, stage: host.stageSize(), layout: Object.fromEntries(ids.map((id) => [id, host.frameLayoutOf(id)])) };
+      } finally {
+        if (isolateStore) host.clearProject?.();
+      }
     });
     let measured = null;
     let note = null;

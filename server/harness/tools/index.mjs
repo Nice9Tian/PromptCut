@@ -4,7 +4,11 @@ import { createTextEditorTool } from './textEditor.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { injectCardParams, injectPartParams } from '../../card-params-schema.mjs';
 
-export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, pollIntervalMs = 3000, jobTimeoutMs = 600000 }) {
+/**
+ * `only`:给了就只把名单里的工具交给模型(托管档的开放清单);`localTools: false` 不带读写本地文件的 text_editor。
+ * 两个都不给时与原来相同。
+ */
+export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, pollIntervalMs = 3000, jobTimeoutMs = 600000, only = null, localTools = true }) {
   async function waitForJob(name, input, initial, context) {
     const workflow = name === 'auto_workflow' && initial?.running === true || name === 'auto_workflow_status' && initial?.done === false;
     const background = ['stt_install', 'transcribe_media'].includes(name) && initial?.jobId;
@@ -25,7 +29,8 @@ export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, p
     }
     throw new Error(`后台任务 ${jobId} 等待超时；任务可能仍在运行，请先查询状态，不要重复启动。`);
   }
-  const result = mcpTools.map(t => ({
+  const offered = only ? mcpTools.filter((t) => only.has(t.name)) : mcpTools;
+  const result = offered.map(t => ({
     name: t.name,
     description: t.description + (['auto_workflow', 'stt_install', 'transcribe_media'].includes(t.name) ? ' API 模式会自动等待后台作业结束，不要自己密集轮询或重复启动。' : ''),
     // 深拷贝:下面要就地改写 params,而 mcpTools 是整个进程共享的模块级常量
@@ -33,7 +38,8 @@ export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, p
     // context.callId 是这次 tool_use 的 id:交给编辑器放进工具调用事件,页面 AI 栏按它对上聊天记录(c65-integ2)
     async execute(input, context = {}) { return waitForJob(t.name, input, await callTool(t.name, input, { callId: context.callId }), context); },
   }));
-  result.push(thinkTool, createTextEditorTool(workspaceDir));
+  result.push(thinkTool);
+  if (localTools) result.push(createTextEditorTool(workspaceDir));
 
   // 把 add_clip / update_clip 的 params 换成按 cardId 分支的真实 schema。
   // 不做这一步的话它是个自由对象,模型看到的是「没有任何字段」,一个卡片参数都传不出去

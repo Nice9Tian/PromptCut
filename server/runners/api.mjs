@@ -193,9 +193,13 @@ export function startRun(opts) {
      */
     cfg = { ...cfg, model: picked, schemaCompat, effort: opts.effort || '' };
 
+    /*
+     * 历史文件放哪:缺省按 sessionId 放系统临时目录(桌面:一台机器一个用户)。`opts.historyFile` 给了就用它 ——
+     * 托管档的 Agent 服务按「项目、主人、对话」自己定路径,不认请求里的 sessionId(契约 cloud-agent-contract.md 第 3.2 节第 32 项)。
+     */
     const historyDir = path.join(os.tmpdir(), 'promptcut', 'harness-sessions');
-    fs.mkdirSync(historyDir, { recursive: true });
-    const historyFile = path.join(historyDir, `${sessionId}.json`);
+    const historyFile = typeof opts.historyFile === 'string' && opts.historyFile ? opts.historyFile : path.join(historyDir, `${sessionId}.json`);
+    fs.mkdirSync(path.dirname(historyFile), { recursive: true });
     
     let initialMessages = [];
     if (fs.existsSync(historyFile)) {
@@ -297,7 +301,8 @@ export function startRun(opts) {
       ? (opts.maxRounds === 0 ? Infinity : Number(opts.maxRounds) || 300)
       : 24;
     safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, effort: cfg.effort || '(默认)', maxTokens: cfg.maxTokens, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
-    const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent });
+    // localTools: false 时不给读写本地文件的 text_editor;toolFilter 是只交给模型的工具名单(托管档的开放清单)
+    const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent, localTools: opts.localTools !== false, only: opts.toolFilter ?? null });
     const agent = new Agent({ 
       provider, 
       system: opts.systemPrompt, 

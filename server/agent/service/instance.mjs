@@ -21,6 +21,7 @@ import { createPresenceBridge } from '../presence-bridge.mjs';
 import { loadRole } from '../agent-roles.mjs';
 import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from '../user-editing.mjs';
 import { effectiveIsFile } from '../../card-overrides.mjs';
+import { checkCloudTool, CLOUD_AGENT_SIDE, CLOUD_OPEN_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_SYSTEM_NOTE } from './cloud-tools.mjs';
 
 function sendJson(res, code, data) {
   if (res.headersSent) return;
@@ -35,9 +36,14 @@ function sendJson(res, code, data) {
  * @param {Function} env.prerenderPost 问预渲染进程(`server/prerender-client.mjs`;必须由宿主静态引入后传进来,见宿主里的说明)
  * @param {() => object | null} env.latestMirror 当前编辑页的数据镜像(`server/vite-plugin-mirror.ts`)
  * @param {() => { t: number } | null} env.latestPlayhead
+ * @param {'desktop' | 'hosted'} [env.profile] 缺省 `desktop`。`hosted`(云节点,契约第 3 节)时另给:
+ *   `projectId`(这个实例只为它服务)、`docUrl`、`protocolsFor(对话号)`(连文档服务的子协议)、
+ *   `execSerial`(进程级的串行锁,所有实例共用)、`log(event, fields)`
  */
 export function createAgentInstance(env) {
   const { server, prerenderPost, latestMirror, latestPlayhead } = env;
+  /** 托管档:没有页面、没有命令行驱动与桌面会话;工具按开放清单放行,凭证由宿主给(契约第 3、4、9 节) */
+  const HOSTED = env.profile === 'hosted';
   let editorRes = null;
   let nextCallId = 1;
   const pendingCalls = new Map                               ();
@@ -216,10 +222,12 @@ export function createAgentInstance(env) {
   let agentBinding = null;
   let ticketSeq = 0;
   const ticketWaiters = new Map                                                                                                                   ();
-  const AGENT_MODES = new Set(["local", "lan-host", "ticket"]);
+  const AGENT_MODES = new Set(HOSTED ? ["hosted"] : ["local", "lan-host", "ticket"]);
   const PROJECT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
   const editorPortOf = () => (server.httpServer?.address())?.port || 5195;
   const agentLog = (event, fields = {}) => {
+    // 托管档的日志交给宿主(一行一条 JSON,只有 id、计数、原因码)
+    if (HOSTED) { try { env.log?.(event, fields); } catch { /* 日志失败不影响服务 */ } return; }
     try { console.info("[agent]", event, JSON.stringify(fields)); } catch { console.info("[agent]", event); }
   };
 
@@ -240,12 +248,17 @@ export function createAgentInstance(env) {
   async function bindAgent(input) {
     const projectId = typeof input?.projectId === "string" && PROJECT_ID_RE.test(input.projectId) ? input.projectId : null;
     if (!projectId) throw new Error("projectId 不合法");
-    const mode = typeof input?.mode === "string" ? input.mode : "local";
+    const mode = typeof input?.mode === "string" ? input.mode : (HOSTED ? "hosted" : "local");
     if (!AGENT_MODES.has(mode)) throw new Error(`mode 只能是 ${[...AGENT_MODES].join(" / ")}`);
     let url = `ws://127.0.0.1:${editorPortOf()}/docservice`;
     if (mode === "ticket") {
       if (typeof input?.url !== "string" || !/^wss?:\/\//.test(input.url)) throw new Error("mode 为 ticket 时要给文档服务的 ws(s):// 地址");
       url = input.url;
+    }
+    if (mode === "hosted") {
+      // 托管档的实例只为建它时定下的那个项目服务:项目与文档服务地址都不听请求的
+      if (projectId !== env.projectId) throw new Error("这个实例不为这个项目服务");
+      url = env.docUrl;
     }
     if (agentBinding && agentBinding.projectId === projectId && agentBinding.mode === mode && agentBinding.url === url) return agentBinding;
     unbindAgent("rebind");
@@ -255,6 +268,7 @@ export function createAgentInstance(env) {
       import(new URL("../../mcp-tools.mjs", import.meta.url).href),
     ]);
     const protocolsFor = async (n) => {
+      if (mode === "hosted") return env.protocolsFor(n);
       if (mode === "local") return ["promptcut.v1", `promptcut.role.agent.${n}`];
       if (mode === "lan-host") return ["promptcut.v1", `promptcut.tenant.${projectId}`, `promptcut.role.agent.${n}`];
       return ["promptcut.v1", `promptcut.ticket.${await requestTicket(projectId, n)}`];
@@ -264,14 +278,19 @@ export function createAgentInstance(env) {
       projectId,
       url,
       protocolsFor,
-      tools,
+      // 托管档:`list_cards` 改在服务端副本上执行(卡片注册表在服务端也有,只有内置卡)
+      tools: HOSTED ? tools.map((t) => (CLOUD_AGENT_SIDE.has(t.name) ? { ...t, side: "agent" } : t)) : tools,
       toolGroups,
-      loadHost: () => loadSsrHost((id) => server.ssrLoadModule(id), { apiBase: `http://127.0.0.1:${editorPortOf()}` }),
+      // 托管档没有编辑器进程:工具实现里漏网的 /api/* 调用指到一个解析不了的地址,立刻失败,不会打到同机别的服务
+      loadHost: () => loadSsrHost((id) => server.ssrLoadModule(id), { apiBase: HOSTED ? "http://agent-service.invalid" : `http://127.0.0.1:${editorPortOf()}` }),
       prerenderPost,
-      playhead: () => latestPlayhead()?.t ?? 0,
+      playhead: () => (HOSTED ? (Number(hostedLastPageState?.t) || 0) : (latestPlayhead()?.t ?? 0)),
+      // 托管档:服务端 store 是进程里的单例,所有实例共用一把锁、进锁清场(契约第 3.3 节)
+      ...(HOSTED ? { execSerial: env.execSerial, isolateStore: true } : {}),
       log: agentLog,
       pageResult: "wrapped",
       callPage: async (tool, args, ctx) => {
+        if (HOSTED) return hostedCallPage(tool);
         const def = tools.find((t) => t.name === tool);
         const out = await callEditorPage(tool, args, ctx?.agent || undefined, def?.timeoutMs || (tool === "__page_state" ? 10_000 : 60_000));
         if (!out.ok) throw new Error(out.error);
@@ -383,6 +402,7 @@ export function createAgentInstance(env) {
   }
   /** create_card 的等级按「这张用户卡在不在」判(整篇重写已有的 = 中,新建 = 高);按生效的那一份判,改动层优先 */
   function userCardExists(id) {
+    if (HOSTED) return false; // 云节点上没有用户卡片目录,建卡改卡也不开放
     return effectiveIsFile(server.config.root, path.join(server.config.root, 'src', 'cards', 'user', `${id}.tsx`));
   }
 
@@ -467,6 +487,20 @@ export function createAgentInstance(env) {
     }
 
     /*
+     * 托管档的开放清单(server/agent/service/cloud-tools.mjs,契约第 9 节):不在清单里的什么都不执行,明确回「云端暂不支持」。
+     * 读页面状态的工具按发消息时的快照答;发起方不在线就明说,不等(契约第 9.4 节)。
+     */
+    if (HOSTED) {
+      const { toolGroups } = await import(new URL('../../mcp-tools.mjs', import.meta.url).href);
+      const open = checkCloudTool(tool, toolGroups);
+      if (!open.ok) {
+        agentLog('agent.cloud-unsupported', { tool });
+        return open;
+      }
+      if (CLOUD_PAGE_STATE_READS.has(tool)) return hostedPageRead(tool, agent || '');
+    }
+
+    /*
      * 审查环路走 CLI 时的只读锁(runners/cli-loop.mjs 通过 setToolAccess 设置)。
      *
      * CLI 的 MCP 是全局登记的,没法按回合少给工具,所以只能在执行入口拦:reviewer / judger
@@ -487,10 +521,12 @@ export function createAgentInstance(env) {
      * 什么都不做,AI 栏的 Agent 不受它管。**拦在执行之前** —— 用户切回传统式就是收回了桌面 APP 的手,
      * 那边的会话可能正跑在半路并不知情;执行完再回滚是收拾不干净的。没登记过、也没报身份的调用按 unknown,不拦。
      */
-    const callerEntry = agentSessions.get(agent);
-    const gate = await import(new URL('../../skill-gate.mjs', import.meta.url).href);
-    const verdict = gate.checkGate(tool, callerEntry.registeredAt ? callerEntry.type : 'unknown');
-    if (!verdict.ok) return { ok: false, skillClosed: true, error: verdict.message, message: verdict.message };
+    if (!HOSTED) { // 云节点上没有桌面 APP 的会话,也没有 SKILL 模式
+      const callerEntry = agentSessions.get(agent);
+      const gate = await import(new URL('../../skill-gate.mjs', import.meta.url).href);
+      const verdict = gate.checkGate(tool, callerEntry.registeredAt ? callerEntry.type : 'unknown');
+      if (!verdict.ok) return { ok: false, skillClosed: true, error: verdict.message, message: verdict.message };
+    }
 
     /*
      * 堵口子(计划 agent-workflow-plan.md A1):set_project_meta 带了 schema 没声明的字段就整次拒绝。
@@ -1154,8 +1190,161 @@ export function createAgentInstance(env) {
       port
     });
   });
+
+  /*
+   * ---------------- 托管档(契约 cloud-agent-contract.md 第 2、3、9 节) ----------------
+   *
+   * 云节点上没有页面通道:对话不经 /api/ai/chat,由宿主(create-agent-service.mjs)调 startHostedRun 起一轮,
+   * 事件交给宿主记下来再发;一轮与发起它的连接无关。页面状态只有发消息时页面带来的那一份快照。
+   */
+  /** 对话 id → 发这一轮消息时页面带来的页面状态 { t, selection } */
+  const hostedPageStates = new Map();
+  /** 最近一条消息带来的页面状态:切剪辑的工具向「页面」要播放头时没有对话 id,用它 */
+  let hostedLastPageState = null;
+
+  /** 托管档的「经页面执行」:只答只读的页面状态,别的一律做不了 */
+  async function hostedCallPage(tool) {
+    if (tool === '__page_state') {
+      const t = Number(hostedLastPageState?.t);
+      return { result: Number.isFinite(t) ? { t } : null, opIds: [] };
+    }
+    throw new Error(`云端暂不支持 ${tool}:它要在编辑界面里执行。请告诉用户在电脑上的 PromptCut 里使用。`);
+  }
+
+  /** 读页面状态的工具(get_selection):按发消息时的快照答;发起方不在线、或没带快照,立刻明说,不等 */
+  function hostedPageRead(tool, agent) {
+    const ps = hostedPageStates.get(agent) ?? null;
+    let online = true;
+    try { online = env.initiatorOnline ? env.initiatorOnline(agent) !== false : true; } catch { online = true; }
+    if (!online || !ps || !Array.isArray(ps.selection)) {
+      return { ok: false, initiatorOffline: true, error: '发起方不在线,读不到页面的选区。请按项目内容继续,不要等待。' };
+    }
+    const ids = ps.selection.filter((x) => typeof x === 'string').slice(0, 200);
+    const project = agentBinding?.side?.link?.replica?.project;
+    const clips = [];
+    for (const tr of project?.tracks ?? []) {
+      for (const c of tr.clips ?? []) if (ids.includes(c.id)) clips.push({ ...c, trackId: tr.id });
+    }
+    return { ok: true, ids, clips, note: '这是用户发这条消息时的选区,之后页面上可能已经变了。' };
+  }
+
+  /**
+   * 起一轮(托管档)。只走 API 直连;工具按开放清单;不开深度自主与审查环路(契约第 9.3 节)。
+   * @param {object} o `{ runId, conversationId, prompt, model?, effort?, creativity?, script?, library?, pageState?,
+   *   apiConfig, historyFile, sessionKey?, fetchImpl?, onEvent }`
+   * @returns {{ runId: string, abort(): void, done: Promise<void> }}
+   */
+  function startHostedRun(o) {
+    const agentId = String(o.conversationId);
+    let aborted = false;
+    let inner = null;
+    const emit = (ev) => { try { o.onEvent(ev); } catch { /* 宿主的事 */ } };
+    const done = (async () => {
+      const binding = agentBinding;
+      if (!binding) {
+        emit({ type: 'error', code: 'unavailable', message: '这个项目的云端 Agent 还没接上文档服务,请稍后再试。' });
+        return;
+      }
+      let systemPrompt = '';
+      try {
+        systemPrompt = fs.readFileSync(new URL('../../ai-system-prompt.md', import.meta.url), 'utf-8');
+      } catch {
+        systemPrompt = 'System prompt missing.';
+      }
+      systemPrompt += `\n\n${CLOUD_SYSTEM_NOTE}`;
+      if (typeof o.script === 'string' && o.script.trim()) {
+        systemPrompt += `\n\n## 本片剧本(用户写的,每一步都要照它来)\n\n${o.script.trim()}\n\n` +
+          '这是这条片子的主线。做任何编排、配字幕、配动效的决定时都要对照它;' +
+          '和它冲突的做法不要做,拿不准就按剧本写的来。剧本没写到的细节可以自己判断。';
+      }
+      let finalPrompt = String(o.prompt ?? '');
+      const library = Array.isArray(o.library) ? o.library.filter((a) => a && typeof a === 'object').slice(0, 500) : [];
+      if (library.length > 0) {
+        const kindName = { video: '视频', image: '图片', audio: '音频' };
+        finalPrompt += '\n\n素材库(已导入,工具里用 mediaId;卡片参数里引用填 cardUrl):\n' + library.map((a) => {
+          let line = `- [${kindName[a.kind] || a.kind}] ${a.name} · mediaId ${a.id} · cardUrl ${a.url}`;
+          if (a.durationSec && a.kind !== 'image') line += ` · 时长 ${a.durationSec} 秒`;
+          return line;
+        }).join('\n');
+      }
+      const ps = o.pageState && typeof o.pageState === 'object' ? o.pageState : null;
+      hostedPageStates.set(agentId, ps);
+      hostedLastPageState = ps;
+
+      const apiConfig = o.apiConfig && typeof o.apiConfig === 'object' ? o.apiConfig : {};
+      agentSessions.register(agentId, { type: 'api', vendor: String(apiConfig.vendor || 'api'), role: 'main', creativity: normalizeCreativity(o.creativity) });
+      const { level, source } = agentSessions.creativityOf(agentId, currentProjectCreativity());
+      finalPrompt += `\n\n你的 Agent 对话 ID:${agentId};创造力等级「${CREATIVITY_LABEL[level]}」(${source}):` +
+        `${CREATIVITY_HINT[level]}。越级的工具调用会被拒绝,被拒就停下告诉用户,不要绕`;
+
+      emit({ type: 'run', runId: o.runId });
+      const api = await import(new URL('../../runners/api.mjs', import.meta.url).href);
+      if (aborted) return;
+
+      let pendingText = '';
+      const flushText = () => {
+        const b = agentBinding;
+        if (b && pendingText.trim()) b.side.executor.text(agentId, pendingText);
+        pendingText = '';
+      };
+      board().beginRun(agentId, 0);
+      try {
+        inner = api.startRun({
+          provider: 'api',
+          prompt: finalPrompt,
+          systemPrompt,
+          // 历史按宿主给的文件找;sessionId 只是事件里的一个名字,不认页面自报的
+          sessionId: typeof o.sessionKey === 'string' && o.sessionKey ? o.sessionKey : `cloud-${o.runId}`,
+          historyFile: o.historyFile || undefined,
+          cwd: null,
+          model: o.model,
+          effort: o.effort,
+          deepAuto: false,
+          reviewLoop: false,
+          apiConfig,
+          fetchImpl: o.fetchImpl,
+          localTools: false,
+          toolFilter: CLOUD_OPEN_TOOLS,
+          callTool: async (name, args, meta) => callToolInternal(name, args, agentId, typeof meta?.callId === 'string' ? meta.callId : undefined),
+          onEvent: (ev) => {
+            if (ev.type === 'text' && typeof ev.delta === 'string') pendingText += ev.delta;
+            if (ev.type === 'tool_call' || ev.type === 'done' || ev.type === 'error') flushText();
+            // 与桌面相同:工具结果的完整输出不发给看的人(get_project 是整份项目)
+            emit(ev.type === 'tool_result' && ev.output !== undefined ? { ...ev, output: undefined, outputOmitted: true } : ev);
+          },
+        });
+        if (aborted) { try { inner.abort(); } catch { /* 已经结束 */ } }
+        await inner.done;
+      } finally {
+        flushText();
+        try { board().endRun(agentId); } catch { /* 实例已经关了 */ }
+      }
+    })();
+    return {
+      runId: o.runId,
+      abort() {
+        aborted = true;
+        try { inner?.abort(); } catch { /* 已经结束 */ }
+      },
+      done,
+    };
+  }
+
   return {
     /** CLI 额度熔断:`/api/ai/quota`(留在宿主里)与对话用的是同一份 */
     getQuotaGuard,
+    /** 以下给托管档的宿主用(桌面经上面登记的路由走,不用这些) */
+    bindAgent,
+    unbindAgent,
+    callTool: callToolInternal,
+    startHostedRun,
+    /** 这个实例绑着的项目副本与各对话读到的版本(诊断);没绑回 null */
+    describe: () => (agentBinding ? agentBinding.side.describe() : null),
+    close(reason = 'close') {
+      unbindAgent(reason);
+      clearTimeout(boardPushTimer);
+      clearTimeout(desktopPushTimer);
+      hostedPageStates.clear();
+    },
   };
 }

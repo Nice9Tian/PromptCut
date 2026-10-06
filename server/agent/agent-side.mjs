@@ -56,6 +56,8 @@ export function createAgentSide({
   userEditing = null,
   agentLabel = null,
   onPageWrites = null,
+  execSerial = null,
+  isolateStore = false,
 } = {}) {
   if (!Array.isArray(tools)) throw new TypeError('createAgentSide: 要 tools(工具表)');
   if (typeof callPage !== 'function') throw new TypeError('createAgentSide: 要 callPage');
@@ -78,6 +80,9 @@ export function createAgentSide({
     log,
     limits: execLimits,
     agentLabel,
+    // 多个实例共用一份服务端 store 时(托管档),锁由调用方给、进锁清场
+    ...(execSerial ? { serial: execSerial } : {}),
+    isolateStore,
     // 只读的页面状态:经同一条页面通道要一次
     pageState: async (tool, args, keys) => {
       const { result } = await viaPage(PAGE_STATE_TOOL, { tool, args, keys: [...keys] }, '');

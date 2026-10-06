@@ -12,6 +12,9 @@
 /** 注册表要先于工具实现就位:卡片、部件都靠 import 时的副作用登记 */
 const REGISTRIES = ['/src/cards/index.ts', '/src/parts/index.ts'];
 
+/** store 模块 → 它刚载入时的那份空项目(`clearProject` 放回去的就是它) */
+const EMPTY_PROJECT = new WeakMap();
+
 /**
  * @param {(id: string) => Promise<any>} load
  * @param {{ apiBase?: string }} [options] 工具实现里打编辑器接口用的地址(`src/mcp/apiUrl.ts`)
@@ -28,6 +31,11 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     load('/src/kernel/duration.ts'),
   ]);
   if (apiBase) apiUrl.setApiBase(apiBase);
+  if (!EMPTY_PROJECT.has(core)) EMPTY_PROJECT.set(core, core.getState().project);
+  const dropUndo = () => {
+    if (Array.isArray(core.history)) core.history.length = 0;
+    if (Array.isArray(core.future)) core.future.length = 0;
+  };
   const editorApi = api.editorApi;
   const routeTable = routes.TOOL_ROUTES;
   return {
@@ -37,6 +45,19 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     },
     getProject() {
       return core.getState().project;
+    },
+    /**
+     * 多个实例共用这一份 store 时(托管档,`agent-exec.mjs` 的 `isolateStore`)进锁先调:项目以外的页面状态
+     * (播放头、选区、手动时长等)回到缺省值,撤销栈清空 —— 上一个实例的工具实现留下的东西不带给下一个。
+     */
+    resetStore() {
+      core.set({ t: 0, playing: false, selection: [], filePath: null, dirty: false, durationManual: null, lastCamera3dFov: null });
+      dropUndo();
+    },
+    /** 出锁时调:把项目换回刚载入时的空项目,store 里不留任何实例的内容 */
+    clearProject() {
+      core.set({ project: EMPTY_PROJECT.get(core), selection: [] });
+      dropUndo();
     },
     /** 路由表里的工具 → EditorApi 方法;不在表里回 undefined */
     routeOf(tool) {
