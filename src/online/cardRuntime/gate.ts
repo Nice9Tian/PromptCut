@@ -17,9 +17,15 @@ export interface CardExecGate {
   isolated: boolean;
   /** `isolated` 为假时的原因(诊断) */
   reason: string | null;
+  /**
+   * 画面那一半能不能执行(〔裁:主会话 2026-10-06〕契约 3.4):隔离就绪之外,还要两台舞台的出口都由浏览器拦
+   * (自检的 `egress: "allowlist"`,响应头 `Connection-Allowlist`)。只靠脚本加固拦 WebRTC 的浏览器(`egress: "script"`)上为假:
+   * 画面不执行、退回原做法;声音线程照常(后台线程里没有 WebRTC)。缺省真(由 `isolated` 把关),隔离那一块写进来。
+   */
+  visual: boolean;
 }
 
-let gate: CardExecGate = { site: null, isolated: false, reason: "还没有隔离环境的结论" };
+let gate: CardExecGate = { site: null, isolated: false, reason: "还没有隔离环境的结论", visual: true };
 const listeners = new Set<() => void>();
 
 export function cardExecGate(): Readonly<CardExecGate> {
@@ -31,17 +37,26 @@ export function cardExecAvailable(): boolean {
   return gate.site !== false && gate.isolated;
 }
 
+/** 本页此刻能不能执行同步来的卡的**画面**(声音线程只看 `cardExecAvailable`) */
+export function cardVisualExecAvailable(): boolean {
+  return cardExecAvailable() && gate.visual;
+}
+
+/** 画面因为出口拦不住而不执行时,参数面板上的那一句(状态仍是 `not-isolated`) */
+export const CARD_EXEC_EGRESS_DETAIL = "这个浏览器拦不住卡片代码经 WebRTC 向外发数据";
+
 /** 不能执行时,卡片该报哪一句(参数面板):站点关了与没有隔离环境是两句话,状态都是 `not-isolated` */
 export function cardExecBlockedDetail(): string | null {
   if (gate.site === false) return "这个站点没有开启在线运行用户卡与图卡";
   if (!gate.isolated) return null;
+  if (!gate.visual) return CARD_EXEC_EGRESS_DETAIL;
   return null;
 }
 
 export function setCardExecGate(patch: Partial<CardExecGate>): void {
   const next = { ...gate, ...patch };
   if (next.isolated) next.reason = null;
-  if (next.site === gate.site && next.isolated === gate.isolated && next.reason === gate.reason) return;
+  if (next.site === gate.site && next.isolated === gate.isolated && next.reason === gate.reason && next.visual === gate.visual) return;
   gate = next;
   for (const l of [...listeners]) { try { l(); } catch { /* 订阅方坏了 */ } }
 }
@@ -60,6 +75,6 @@ export function siteCardExecOf(config: unknown): boolean {
 
 /** 单测用 */
 export function resetCardExecGateForTest(): void {
-  gate = { site: null, isolated: false, reason: "还没有隔离环境的结论" };
+  gate = { site: null, isolated: false, reason: "还没有隔离环境的结论", visual: true };
   listeners.clear();
 }

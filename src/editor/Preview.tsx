@@ -8,14 +8,14 @@ import { themeStyle } from "../themes";
 import { actions, getState, useStore } from "../store/project";
 import { findClip } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
-import { createStageRpc, type HostCapabilities, type StageMediaPolicy, type StageRpcClient } from "../render/stageRpc";
+import { createStageRpc, type HostCapabilities, type StageGraphCapability, type StageMediaPolicy, type StageRpcClient } from "../render/stageRpc";
 import { frontStage, onStageEvent, pushProject, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
 import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleLiveStage, stageOrigins, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
-import { getCard, onSyncedUserCardsChanged, setCardRunStates, syncedUserCards } from "../kernel/registry";
+import { cardRunState, getCard, onSyncedUserCardsChanged, setCardRunStates, syncedUserCards, type CardRunState } from "../kernel/registry";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
@@ -41,8 +41,10 @@ import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render
 import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
 import { editorRunStates } from "./sync/cardRunStates";
 import { exportWantedClips } from "../export/exportWanted";
-import { cardExecAvailable, cardExecBlockedDetail, subscribeCardExecGate } from "../online/cardRuntime/gate";
-import type { BundleResult } from "../online/cardRuntime/protocol";
+import { cardExecAvailable, cardExecBlockedDetail, cardVisualExecAvailable, setCardExecGate, subscribeCardExecGate } from "../online/cardRuntime/gate";
+import type { BundleResult, CardBundle } from "../online/cardRuntime/protocol";
+import { setNodeGraphCapable } from "../online/nodeCardInfo";
+import { createIsolatedSoundLink, type IsolatedSoundLink } from "./io/isolatedSound";
 import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
 import { setCoverageSource, subscribeCoverage } from "./onlineCoverage";
 import { localOnlyMissingAt } from "./localOnlyMissing";
@@ -57,7 +59,7 @@ import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { layerSwapMs } from "./swapCost";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages } from "../online/stageOrigins";
-import { STAGE_SANDBOX, onlineCardExec, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport } from "../online/stageIsolation";
+import { STAGE_SANDBOX, onlineCardExec, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport, subscribeOnlineCardExec } from "../online/stageIsolation";
 import { sanitizeHostCapabilities } from "../online/stageMessageGuard";
 import { MEDIA_PROXY_BASE } from "../online/stagePolicy.mjs";
 import type { IsolationReport } from "../online/isolation/isolationCheck";
@@ -329,6 +331,41 @@ export function Preview() {
    * 懒建:生效路线真是 `shared` 时才建。端口在握手之后、任何 RPC 之前交(见下面 `pc-stage-ready` 那段)。
    */
   const sharedGlRef = useRef<SharedGl | null>(null);
+  /*
+   * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 2、8 节)的页面一侧:转译好的包、各舞台报回的运行状态与图形能力、
+   * 声音线程的连接。编辑页面只转译、发包、收状态,**不执行任何卡片代码**;包里只有转译结果,不带凭证或票据。
+   */
+  const cardBundlesRef = useRef<BundleResult[]>([]);
+  const stageCardStatesRef = useRef<Partial<Record<StageId, Map<string, CardRunState>>>>({});
+  const stageGraphRef = useRef<Partial<Record<StageId, StageGraphCapability>>>({});
+  const refreshRunStatesRef = useRef<() => void>(() => {});
+  const soundLinkRef = useRef<IsolatedSoundLink | null>(null);
+  /** 把此刻的包发给一台(或两台)舞台。本页不能执行时发空表(舞台把已载入的撤下)。声音线程只在实例 B 起:线程跟实例走,不跟角色走 */
+  const pushCardBundles = useCallback((only?: StageId) => {
+    if (!ONLINE) return;
+    const list: CardBundle[] = cardExecAvailable() ? cardBundlesRef.current.filter((b): b is Extract<BundleResult, { ok: true }> => b.ok).map((b) => b.bundle) : [];
+    for (const id of STAGE_IDS) {
+      if (only && only !== id) continue;
+      const c = rpcRef.current[id];
+      if (c) void c.loadUserCards(list, { sound: id === "B" }).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
+    }
+  }, []);
+  const pushCardBundlesRef = useRef(pushCardBundles);
+  pushCardBundlesRef.current = pushCardBundles;
+  /*
+   * 页面一侧的执行前提(`cardRuntime/gate.ts`)由隔离会话立起来:站点总开关、双舞台握手、两台自检、票据交接(`online/stageIsolation.ts`)。
+   * 画面那一半另要两台的出口都由浏览器拦(`egress: "allowlist"`;〔裁:主会话 2026-10-06〕只靠脚本加固的浏览器上画面不执行,声音线程照常)。
+   */
+  useEffect(() => {
+    if (!ONLINE) return;
+    const sync = () => {
+      const s = onlineCardExec();
+      setCardExecGate({ site: onlineStageState().cardExec, isolated: s.enabled, reason: s.enabled ? null : s.reason, visual: !s.enabled || s.egress === "allowlist" });
+    };
+    const offs = [subscribeOnlineCardExec(sync), subscribeOnlineStages(sync)];
+    sync();
+    return () => { for (const off of offs) off(); setCardExecGate({ isolated: false, reason: "页面卸载", visual: true }); };
+  }, []);
   /** 每台舞台的取档策略发到第几次了(等自检与票据交接是异步的,晚回来的旧一次不许盖掉新的) */
   const policySeqRef = useRef<Partial<Record<StageId, number>>>({});
   /** 各舞台窗口(含预热的)发来的自检结果:握手时清、结果到了存;换回双舞台时补交给隔离会话 */
@@ -751,6 +788,25 @@ export function Preview() {
         stageWatchRef.current?.ready(id);
         rpcRef.current[id] = client;
         hostCapsRef.current[id] = caps;
+        if (ONLINE) {
+          // 新文档:这一台以前报的运行状态、图形能力、声音线程都作废,等它重新载入后再报
+          delete stageCardStatesRef.current[id];
+          delete stageGraphRef.current[id];
+          if (id === "B") soundLinkRef.current?.setState(null);
+          refreshRunStatesRef.current();
+          client.onEvent((e) => {
+            if (rpcRef.current[id] !== client) return;
+            if (e.type === "card-states") {
+              // 画面那一半在这一台不执行(`visual: false`)时没有状态可言:当它没报
+              if (e.visual) stageCardStatesRef.current[id] = new Map(e.states); else delete stageCardStatesRef.current[id];
+              stageGraphRef.current[id] = e.graph;
+              setNodeGraphCapable(STAGE_IDS.every((s) => stageGraphRef.current[s] === "ok"));
+              refreshRunStatesRef.current();
+            } else if (e.type === "sound-state" && id === "B") {
+              soundLinkRef.current?.setState(e.state);
+            }
+          });
+        }
         // R9 端口转交协议:路线 2 下,握手之后、发任何 RPC(含下面的 setRole)之前先把 GL 端口交过去
         glPortTo(id, win, caps);
         // 能力表一起登记:K1 的 device 串要 lowMemory / offscreenGl,而它必须是**舞台**探到的那一份
@@ -760,6 +816,8 @@ export function Preview() {
         if (ONLINE) void pushMediaPolicyRef.current();
         // C10 契约第 9 节:内容库同步来的用户卡(本机跑不了)交给这一台舞台;桌面运行环境不发
         if (ONLINE) void client.setSyncedUserCards([...syncedUserCards().values()]).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
+        // 在线执行:转译好的包交给这一台(排在同步表之后:舞台按同步表把入口摊到卡片 id 上);闸门没开的舞台先记着
+        if (ONLINE) pushCardBundlesRef.current(id);
         // 预览缩放倍数交给舞台:占位符(沙漏、「需要本地 PC 渲染辅助」图标)据此补偿,屏幕上看得清;桌面与在线都发
         void client.setViewScale(scaleRef.current).catch(() => { /* 同上 */ });
         // 在线浏览器模式:已确认此刻没有可贴结果的「本机跑不了」的片段(其余显示沙漏;刚打开页面时不闪图标)
@@ -1152,17 +1210,36 @@ export function Preview() {
         enabled: cardExecAvailable,
         // 编译期判:桌面构建里这一行整个剪掉,转译器那一块不进桌面的产物
         run: (job) => (import.meta.env.VITE_PC_ONLINE === "1" ? import("../online/cardRuntime/transpile.browser").then((m) => m.bundleCards(job)) : Promise.resolve([])),
-        onBundles: (results) => { bundles = results; refreshRunStates(); },
+        onBundles: (results) => { bundles = results; cardBundlesRef.current = results; refreshRunStates(); pushCardBundlesRef.current(); },
       },
     });
     let bundles: BundleResult[] = [];
-    // 每张同步卡在本页的运行状态(参数面板、徽标、轻重判定读 `registry.cardRunState`)。舞台报来的那一半在与安全隔离那一块合流后接上。
+    /*
+     * 每张同步卡在本页的运行状态(参数面板、徽标、轻重判定读 `registry.cardRunState`):页面自己知道的(低内存档、没有隔离环境、转译不成)
+     * 合上两台舞台报回来的(载入成功、载入出错、图形能力不够、素材解不了、运行出错)。两台都报了能运行才算能运行。
+     */
     const refreshRunStates = () => {
       setCardRunStates(editorRunStates({
-        cards: syncedUserCards().values(), lowMemory: lowMemoryMode(ONLINE), available: cardExecAvailable(), blockedDetail: cardExecBlockedDetail(), bundles,
+        cards: syncedUserCards().values(), lowMemory: lowMemoryMode(ONLINE), available: cardVisualExecAvailable(), blockedDetail: cardExecBlockedDetail(), bundles,
+        stages: STAGE_IDS.map((id) => stageCardStatesRef.current[id]), stageCount: STAGE_IDS.length,
       }));
     };
-    const offGate = subscribeCardExecGate(() => { refreshRunStates(); void sources.sync(); });
+    refreshRunStatesRef.current = refreshRunStates;
+    // 声音线程(后台舞台实例 B 起的专用后台线程)接成 `cardAudio.ts` 的隔离宿主;舞台报了声音状态才算接上
+    const soundLink = createIsolatedSoundLink({
+      render: (request) => {
+        const c = rpcRef.current.B;
+        return c ? c.synthCardAudio(request) : Promise.reject(new Error("后台舞台不在"));
+      },
+    });
+    soundLinkRef.current = soundLink;
+    const offGate = subscribeCardExecGate(() => {
+      // 本页不能执行了(退回单舞台、出了加固拦下的事、站点关了):舞台报过的状态与声音线程都作废
+      if (!cardExecAvailable()) { stageCardStatesRef.current = {}; stageGraphRef.current = {}; setNodeGraphCapable(false); soundLink.setState(null); }
+      refreshRunStates();
+      pushCardBundlesRef.current();
+      void sources.sync();
+    });
     const offStates = onSyncedUserCardsChanged(refreshRunStates);
     const push = () => {
       const entries = [...syncedUserCards().values()];
@@ -1177,7 +1254,18 @@ export function Preview() {
     const w = window as unknown as Record<string, unknown>;
     w.__pcCardSources = () => sources.debug();
     w.__pcCardSourcesSync = () => sources.sync();
-    return () => { window.clearInterval(timer); offChange(); offGate(); offStates(); sources.stop(); setCardRunStates([]); delete w.__pcCardSources; delete w.__pcCardSourcesSync; };
+    w.__pcCardExecDiag = () => ({
+      available: cardExecAvailable(), visual: cardVisualExecAvailable(),
+      run: Object.fromEntries([...syncedUserCards().values()].map((c) => [c.id, cardRunState(c.id) ?? null])),
+      bundles: bundles.map((b) => ({ entry: b.entry, ok: b.ok, state: b.ok ? null : b.state.state })),
+      stages: Object.fromEntries(STAGE_IDS.map((id) => [id, { graph: stageGraphRef.current[id] ?? null, states: [...(stageCardStatesRef.current[id] ?? [])] }])),
+    });
+    return () => {
+      window.clearInterval(timer); offChange(); offGate(); offStates(); sources.stop(); setCardRunStates([]);
+      refreshRunStatesRef.current = () => {}; soundLinkRef.current = null; soundLink.dispose(); cardBundlesRef.current = []; stageCardStatesRef.current = {}; stageGraphRef.current = {};
+      setNodeGraphCapable(false);
+      delete w.__pcCardSources; delete w.__pcCardSourcesSync; delete w.__pcCardExecDiag;
+    };
   }, [online]);
   /*
    * 预览缩放倍数变了,发给两个舞台(占位符据此补偿:沙漏在屏幕上保持原大小,「需要本地 PC 渲染辅助」图标看得清)。

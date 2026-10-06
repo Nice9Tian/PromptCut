@@ -27,6 +27,8 @@ export interface EditorRunStateInput {
   bundles: readonly BundleResult[];
   /** 各舞台报来的状态(卡片 id → 状态);没报过的舞台不在里面 */
   stages?: Iterable<ReadonlyMap<string, CardRunState> | null | undefined>;
+  /** 要几台舞台都报了这张卡才下结论(双舞台给 2:两台画面要一致,只有一台载入好时还算 `loading`);缺省 1 */
+  stageCount?: number;
 }
 
 export function editorRunStates(input: EditorRunStateInput): Map<string, CardRunState> {
@@ -41,8 +43,9 @@ export function editorRunStates(input: EditorRunStateInput): Map<string, CardRun
     if (bundle && !bundle.ok) { out.set(card.id, bundle.state); continue; }
     if (!bundle) { out.set(card.id, { state: "loading" }); continue; }
     const reported = stages.map((m) => m.get(card.id)).filter((s): s is CardRunState => !!s);
-    if (!reported.length) { out.set(card.id, { state: "loading" }); continue; }
     const bad = reported.find((s) => s.state !== "ready");
+    // 有一台说运行不了就按运行不了(不用等另一台);都说行的要等够台数
+    if (!bad && reported.length < Math.max(1, input.stageCount ?? 1)) { out.set(card.id, { state: "loading" }); continue; }
     // 能运行的带上这一代的短签名:成本身份里的源码版本用它(源码或转译器换了,身份跟着换)
     out.set(card.id, bad ?? { state: "ready", version: String(cyrb53(String(bundle.bundle?.generation ?? ""))) });
   }

@@ -10,6 +10,7 @@ import { sourceValueAt } from "./graphValues";
 import { CardSurface } from "./CardSurface";
 import { CardGpuExecutor, type CardGpuError, type CardGpuValue, type PixelsValue, type SourceValue, type ValueResolver } from "./gpuExecutor";
 import { CardMediaSource } from "./mediaSource";
+import { noteGraphCardError, noteGraphCardOk } from "./cardTrouble";
 
 type Graph = Timeline["graph"];
 
@@ -151,8 +152,9 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
       return def.card(sourcesOf(node, sourceTime, 0), sourceTime, params, { fps, width, height, duration, stage });
     })();
     void evaluate
-      .then((result) => { if (!controller.signal.aborted) setValue({ value: result, evaluatedTime: t, evaluatedGraph: graph, evaluatedNodeId: nodeId }); })
-      .catch((error) => { if (!controller.signal.aborted) { work.fail(error); setFailure(error instanceof Error ? error.message : String(error)); } });
+      .then((result) => { if (!controller.signal.aborted) { noteGraphCardOk(def.id); setValue({ value: result, evaluatedTime: t, evaluatedGraph: graph, evaluatedNodeId: nodeId }); } })
+      // 出事只记一笔(`cardTrouble.ts`):在线舞台据此把这张图卡退回原做法;没有订阅方的文档(桌面、导出)行为不变
+      .catch((error) => { if (!controller.signal.aborted) { noteGraphCardError(def.id, error); work.fail(error); setFailure(error instanceof Error ? error.message : String(error)); } });
     return () => { controller.abort(); work.dispose(); };
     // `params` 每次 render 都是新对象,直接进依赖就是 effect → setValue → 重渲染 → 自激死循环
     // eslint-disable-next-line react-hooks/exhaustive-deps

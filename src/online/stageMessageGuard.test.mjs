@@ -18,7 +18,37 @@ const SAMPLES = {
   demote: { type: "demote", clipId: "c1" },
   "probe-frame": { type: "probe-frame", clipId: "c1", localFrame: 3, html: "<div>x</div>", htmlGz: new ArrayBuffer(8) },
   "bake-frame": { type: "bake-frame", session: "s1", clipId: "c1", localFrame: 3, hash: HASH, bytes: 100, htmlGz: new ArrayBuffer(8), small: { hash: HASH, bytes: 10, webp: new ArrayBuffer(4) } },
+  "card-states": { type: "card-states", states: [["card-a", { state: "ready" }], ["card-b", { state: "load-error", detail: "boom", file: "src/cards/user/b.tsx" }]], graph: "ok", visual: true },
+  "sound-state": { type: "sound-state", state: { ready: { "card-a": "k3" }, blocked: { "card-b": "载入时出错" } } },
 };
+
+test("OCS-M-09 在线执行的两种事件:运行状态只认名单上的十种、文字截短;声音状态只留短文字;形状不对整条丢弃", () => {
+  const long = "x".repeat(5000);
+  const clean = sanitizeStageEvent({ type: "card-states", states: [["a", { state: "load-error", detail: long, file: long, version: long, ticket: "v1.a.b" }]], graph: "software", visual: false, extra: 1 });
+  assert.deepEqual(Object.keys(clean), ["type", "states", "graph", "visual"]);
+  assert.deepEqual(Object.keys(clean.states[0][1]), ["state", "detail", "file", "version"]);
+  assert.equal(clean.states[0][1].detail.length, 300);
+  assert.equal(clean.states[0][1].file.length, 200);
+  assert.equal(clean.states[0][1].version.length, 64);
+  for (const bad of [
+    { type: "card-states", states: [["a", { state: "god-mode" }]], graph: "ok", visual: true },
+    { type: "card-states", states: [["a", { state: "ready" }]], graph: "rtx", visual: true },
+    { type: "card-states", states: [["a", { state: "ready" }]], graph: "ok", visual: "yes" },
+    { type: "card-states", states: [["", { state: "ready" }]], graph: "ok", visual: true },
+    { type: "card-states", states: [["a", { state: "ready", detail: 7 }]], graph: "ok", visual: true },
+    { type: "card-states", states: { a: { state: "ready" } }, graph: "ok", visual: true },
+    { type: "card-states", states: Array.from({ length: 501 }, (_, i) => [`c${i}`, { state: "ready" }]), graph: "ok", visual: true },
+    { type: "sound-state", state: { ready: { a: 1 }, blocked: {} } },
+    { type: "sound-state", state: { ready: [], blocked: {} } },
+    { type: "sound-state", state: "ready" },
+    { type: "sound-state" },
+  ]) assert.equal(sanitizeStageEvent(bad), null, JSON.stringify(bad).slice(0, 120));
+  assert.deepEqual(sanitizeStageEvent({ type: "sound-state", state: null }), { type: "sound-state", state: null });
+  const sound = sanitizeStageEvent({ type: "sound-state", state: { ready: { a: long }, blocked: { b: long }, ticket: "v1.a.b" } });
+  assert.deepEqual(Object.keys(sound.state), ["ready", "blocked"]);
+  assert.equal(sound.state.ready.a.length, 64);
+  assert.equal(sound.state.blocked.b.length, 240);
+});
 
 test("OCS-M-01 白名单:舞台协议里的每一种事件都有校验,合法的原样通过;不在名单上的、不是对象的一律丢弃", async () => {
   const { STAGE_EVENT_TYPES } = await import("../render/stageRpc.ts");

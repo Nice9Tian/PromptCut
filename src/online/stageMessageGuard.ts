@@ -119,9 +119,62 @@ export function sanitizeStageEvent(d: unknown, opts: { maxSec?: number } = {}): 
       }
       return out;
     }
+    case "card-states": {
+      // 在线执行用户卡与图卡:每张卡的运行状态。状态名只认契约第 8 节那十种,文字截短;图形能力只认名单上的几种
+      const states = runStatePairs(d.states);
+      if (!states) return null;
+      const graph = typeof d.graph === "string" && GRAPH_CAPS.has(d.graph) ? d.graph : null;
+      if (graph === null || typeof d.visual !== "boolean") return null;
+      return { type: "card-states", states, graph, visual: d.visual };
+    }
+    case "sound-state": {
+      if (d.state === null) return { type: "sound-state", state: null };
+      if (!isObj(d.state)) return null;
+      const ready = textMap(d.state.ready, 64), blocked = textMap(d.state.blocked, 240);
+      if (!ready || !blocked) return null;
+      return { type: "sound-state", state: { ready, blocked } };
+    }
     default:
       return null;
   }
+}
+
+const RUN_STATES = new Set(["ready", "loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated", "low-memory"]);
+const GRAPH_CAPS = new Set(["unknown", "ok", "no-webgl2", "software", "texture", "context-lost"]);
+/** 同步卡的张数上限(与同步表、清单计划的上限同量级) */
+const MAX_CARDS = 500;
+
+/** `[卡片 id, 运行状态][]`:逐条按形状收;形状不对回 null */
+function runStatePairs(v: unknown): [string, Record<string, string>][] | null {
+  if (!Array.isArray(v) || v.length > MAX_CARDS) return null;
+  const out: [string, Record<string, string>][] = [];
+  for (const pair of v) {
+    if (!Array.isArray(pair) || pair.length !== 2) return null;
+    const id = str(pair[0], 200), s = pair[1];
+    if (id === null || !id || !isObj(s) || typeof s.state !== "string" || !RUN_STATES.has(s.state)) return null;
+    const state: Record<string, string> = { state: s.state };
+    for (const [k, max] of [["detail", 300], ["file", 200], ["version", 64]] as const) {
+      if (s[k] === undefined) continue;
+      if (typeof s[k] !== "string") return null;
+      if (s[k]) state[k] = (s[k] as string).slice(0, max);
+    }
+    out.push([id, state]);
+  }
+  return out;
+}
+
+/** `{ 卡片 id: 短文字 }`:只留字符串值,截短;不是对象回 null */
+function textMap(v: unknown, max: number): Record<string, string> | null {
+  if (!isObj(v)) return null;
+  const out: Record<string, string> = {};
+  let n = 0;
+  for (const k of Object.keys(v)) {
+    if (++n > MAX_CARDS) return null;
+    const t = v[k];
+    if (!k || k.length > 200 || typeof t !== "string") return null;
+    if (t) out[k] = t.slice(0, max);
+  }
+  return out;
 }
 
 /** 进成本记录的那几个数所在的方法:里面的耗时一律钳到 [0, maxMs] */

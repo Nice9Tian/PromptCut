@@ -27,7 +27,7 @@ import {
   PLACEHOLDER_ATTR, PLACEHOLDER_SLOT_ATTR, PLACEHOLDER_STATIC_ATTR, setPlaceholderShown,
   type PlaceholderBox, type PlaceholderGeometry, type PlaceholderReason,
 } from "./placeholder/contract.ts";
-import { cardRunnableHere, getCard, isUserCardId } from "../kernel/registry.ts";
+import { cardRunnableHere, getCard, graphCardsRunnableHere, isUserCardId } from "../kernel/registry.ts";
 import { mediaTierPolicy } from "./mediaTier.ts";
 import { hourglassFit, unsupportedFit, type PlaceholderFit } from "./placeholderFit.ts";
 
@@ -193,6 +193,11 @@ export function localOnlyLowMemory(): boolean {
   return lowMemoryTier || mediaTierPolicy().lowMemory === true;
 }
 
+/** 这份文档能不能跑图卡:低内存档一律不能;其余看注册表(`registry.graphCardsRunnableHere`,只有执行卡片的舞台为真) */
+export function graphCardsHere(): boolean {
+  return !localOnlyLowMemory() && graphCardsRunnableHere();
+}
+
 /** 这张用户卡在本页能不能运行:低内存档一律不能;其余看注册表(`registry.cardRunnableHere`) */
 export function userCardRunnableHere(cardId: string): boolean {
   return !localOnlyLowMemory() && cardRunnableHere(cardId);
@@ -228,10 +233,15 @@ export function needsLocalPc(
   def: { card?: unknown; audio?: unknown; Component?: unknown } | undefined,
   isUserCard: (cardId: string) => boolean = isUserCardId,
   runnable: (cardId: string) => boolean = userCardRunnableHere,
+  graphRunnable: () => boolean = graphCardsHere,
 ): boolean {
   if (!cardId) return false;
-  // 图卡(画面由 card() 出,或只有 audio()):在线执行还没放开(等素材票据的隔离与图形能力判定),照旧算运行不了
-  if (!!def && (typeof def.card === "function" || (typeof def.audio === "function" && !def.Component))) return true;
+  /*
+   * 图卡(画面由 card() 出,或只有 audio()):只在能跑图卡的文档里运行 —— 跨源舞台、画面那一半允许执行、图形能力够
+   * (`registry.graphCardsRunnableHere`,由舞台写;契约 4.3)。编辑页面、同源单舞台、低内存档、桌面仿在线模式里恒为运行不了。
+   * 能跑图卡的文档里再看这张卡自己(下面用户卡那一支:载入成功、没出过事)。
+   */
+  if (!!def && (typeof def.card === "function" || (typeof def.audio === "function" && !def.Component)) && !graphRunnable()) return true;
   // 用户卡:本页能运行的不算(构建时就在包里的仓库用户卡;同步来的、载入成功的,`registry.cardRunnableHere`);低内存档一律算运行不了
   if (isUserCard(cardId)) return !runnable(cardId);
   return false;

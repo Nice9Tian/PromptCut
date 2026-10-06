@@ -68,6 +68,15 @@ export function cardExecGate(): ExecGateState {
   return cached;
 }
 
+/**
+ * 本文档能不能执行用户卡、图卡的**画面**(〔裁:主会话 2026-10-06〕契约 3.4):闸门开着,而且本文档的出口由浏览器拦
+ * (自检的 `egress: "allowlist"`)。只靠脚本加固的浏览器(`egress: "script"`)上画面不执行;声音线程只看 `allowed`
+ * (后台线程里没有 WebRTC,网络出口由继承来的内容安全策略拦)。舞台自己判,不靠父页点头。
+ */
+export function cardVisualExecAllowed(): boolean {
+  return cached.allowed && cached.isolation?.egress === "allowlist";
+}
+
 export function subscribeCardExecGate(cb: () => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };

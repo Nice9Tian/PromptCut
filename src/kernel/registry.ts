@@ -410,8 +410,34 @@ export function cardRunState(id: string | undefined | null): CardRunState | unde
  */
 export function cardRunnableHere(id: string | undefined | null): boolean {
   if (typeof id !== "string" || !id) return false;
+  if (localExec.blocked.has(id)) return false;
   if (map.has(id) || runtimeCards.has(id)) return true;
   return runStates.get(id)?.state === "ready";
+}
+
+/**
+ * 执行卡片的那份文档(跨源舞台)自己的两条结论(`docs/plan/online-card-exec-contract.md` 4.3、第 8 节):
+ *   - `graph`:这份文档能不能跑图卡(画面那一半允许执行,而且图形能力够);缺省不能;
+ *   - `blocked`:运行时载入、但在这份文档里出了事的卡(图卡的输入解不了、运行中抛错):撤下、退回原做法。
+ * 只有舞台写它;编辑页面不写(那里看舞台报回来的运行状态)。变了 `cardsRegistryGen()` 与 `cardRunStatesGen()` 各加一并通知。
+ */
+let localExec: { graph: boolean; blocked: ReadonlySet<string> } = { graph: false, blocked: new Set() };
+export function setLocalCardExec(next: { graph: boolean; blocked?: Iterable<string> }): boolean {
+  const blocked = new Set<string>();
+  for (const id of next.blocked ?? []) if (typeof id === "string" && id) blocked.add(id);
+  const graph = next.graph === true;
+  if (graph === localExec.graph && blocked.size === localExec.blocked.size && [...blocked].every((id) => localExec.blocked.has(id))) return false;
+  localExec = { graph, blocked };
+  registryGen++;
+  runStatesGen++;
+  for (const l of [...runStateListeners]) {
+    try { l(); } catch (err) { console.warn("[registry] 卡片运行状态的订阅方出错", err); }
+  }
+  return true;
+}
+/** 这份文档能不能跑图卡(只在执行卡片的舞台里为真) */
+export function graphCardsRunnableHere(): boolean {
+  return localExec.graph;
 }
 
 export function cardRunStatesGen(): number {
@@ -428,4 +454,5 @@ export function resetRuntimeCardsForTest(): void {
   runtimeCards.clear();
   runtimeSource.clear();
   runStates = new Map();
+  localExec = { graph: false, blocked: new Set() };
 }

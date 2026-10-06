@@ -38,6 +38,9 @@ const pure = import.meta.glob([
 const lazy = import.meta.glob([
   "/src/cards/**/*.{ts,mjs}", "/src/parts/**/*.{ts,mjs}",
   "!/src/cards/user/**", "!/src/**/*.test.{ts,tsx,mjs,js}", "!/src/**/*.d.{ts,mts}",
+  // 汇总文件把整棵组件树连同样式一起引进来:构建产物里线程打成一个文件,样式会在线程启动时往 `document` 里注入
+  // (线程里没有 `document`,整条线程起不来)。它们是画面那一半的东西,在声音线程里给占位
+  "!/src/cards/**/index.ts", "!/src/parts/**/index.ts", "!/src/cards/native/batch-*.ts", "!/src/cards/userOverlay.ts", "!/src/cards/_probe/**",
 ]);
 
 const builtin = new Map<string, () => unknown | Promise<unknown>>();

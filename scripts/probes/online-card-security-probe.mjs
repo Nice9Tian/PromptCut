@@ -12,10 +12,15 @@
  * 收集站 `http://127.0.0.1:<base+7>`(另一个站;记每条 TCP 连接、每个 UDP 包、每个 HTTP 请求)。
  *
  * 攻击代码是夹具 `fixtures/online-card-attacks/probe-evil-attacks.ts`(恶意用户卡 `probe-evil-card.tsx`、恶意图卡
- * `probe-evil-graph.tsx` 都引它)。加载器还没接到舞台上,所以本探针把夹具当「代表卡片代码的脚本」直接在舞台的帧里用
- * `new Function("require", "module", "exports", 代码)` 执行(与加载器执行转译结果的办法相同):舞台 A 里按「用户卡」跑一遍,
- * 舞台 B 里按「图卡」跑一遍(多一组凭 cookie 读素材进 GPU),各自再在舞台起的 blob Worker 里跑声音那一半。
- * 与块 T 合流后改成经真实加载路径再跑一遍(三份夹具原样 `content.put`)。
+ * `probe-evil-graph.tsx` 都引它)。**A 组经真实加载路径跑**:三份夹具原样 `content.put` 进内容库(`card-source`,键在
+ * `src/cards/user/` 下)→ 编辑页面取回、转译成包 → 经舞台 RPC `loadUserCards` 发给两台舞台 → 舞台里的加载器执行 →
+ * 片段挂上时卡片代码自己把攻击跑一遍(用户卡在组件挂载时、图卡在 `card()` 求值时;声音那一半在 `audio()` 被声音线程调用时)。
+ * 恶意用户卡与恶意图卡各开一个成员页(攻击里有一步会让本页会话不再执行,所以分开);参数经片段的 `params.ctx` 交给卡片。
+ * 窗口那一半的结果从可见舞台的 `globalThis.__pcEvil` 读,声音那一半的结果由线程 `postMessage` 出来、探针在舞台里给 `Worker`
+ * 包的一层接住。B、G、C 与导航类要用「页面脚本之前留下的原装构造器」这类卡片代码拿不到的东西,仍由探针直接在舞台的帧里执行夹具里的函数。
+ *
+ * E 编辑页面不执行(契约第 10 节):夹具的两张卡在模块顶层往 `globalThis` 写记号 `__pcEvilLoaded`。A 里它只出现在两台舞台与声音线程,
+ *   编辑页面没有;G(只靠脚本加固的浏览器)里画面不执行,舞台窗口里也没有;L / S / N / M 里任何文档都没有。
  *
  * # 验收标准(每条一行「过 / 不过 / 缺口」,最后一行是 JSON `{ ok, pass, fail, gaps, fails, notes }`;退出码 = 有没有「不过」)
  *
@@ -69,6 +74,10 @@ import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
+import { normalizeEntry, sharedProtocols } from '../../server/auth/shared-config.mjs';
+import { createWsEndpoint } from '../../server/render-node/ws-transport.mjs';
+import { createContentClient } from '../../server/render-node/content-client.mjs';
+import { wsBaseOf } from '../../server/auth/route.mjs';
 import { createAssetClient } from '../../server/asset-store/client.mjs';
 import { STAGE_CONNECTION_ALLOWLIST, stageCspHeader, editorCspHeader } from '../../src/online/stagePolicy.mjs';
 
@@ -186,7 +195,20 @@ let MEDIA_HASH = '';
   const bare = await fetch(`http://127.0.0.1:${ASSET_PORT}/api/asset/media/${MEDIA_HASH}`);
   check('准备:素材服务不信回环,不带票据读素材是 401', bare.status === 401, bare.status);
   node.close();
+  // 三份夹具原样写进内容库:同步来的用户卡 / 图卡(真实加载路径)
+  const entry = normalizeEntry({ url: wsBaseOf(DOC_DIRECT), projectId: made.projectId, username: creator.username, password: creator.password, as: 'creator', role: 'page', deviceId: 'ocs-probe-content1', deviceName: 'ocs-probe content' });
+  const ep = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'page' }), log: () => {} });
+  await new Promise((r) => { if (ep.connected) r(); else ep.onOpen(r); });
+  const content = createContentClient(ep);
+  const putErrors = [];
+  for (const file of ['probe-evil-attacks.ts', 'probe-evil-card.tsx', 'probe-evil-graph.tsx']) {
+    const r = await content.put('card-source', `src/cards/user/${file}`, fs.readFileSync(path.join(FIXTURE_DIR, file), 'utf8')).catch((e) => ({ error: String(e?.message ?? e) }));
+    if (r?.error) putErrors.push(`${file}:${r.error}`);
+  }
+  check('准备:三份攻击夹具原样写进内容库(card-source,src/cards/user/ 下)', putErrors.length === 0, putErrors);
+  try { ep.close?.(); } catch { /* 已经关了 */ }
 }
+const EVIL_CARDS = { user: 'probe-evil-card', graph: 'probe-evil-graph' };
 
 /* ------------------------------------------------------------------ 浏览器 */
 const NETLOG = path.join(OUT, 'netlog.json');
@@ -231,9 +253,24 @@ async function openMember(tag, { saveRtc = false, mobile = false } = {}) {
       Object.defineProperty(window, '__pcMakeFrame', { value: () => create.call(document, 'iframe'), enumerable: false });
     } catch { /* Worker 等没有 */ }
   });
+  // 声音线程里的攻击结果由线程 postMessage 出来:在每个文档的页面脚本之前给 Worker 包一层接住(只多听一个消息,不改线程)
+  await page.evaluateOnNewDocument(() => {
+    try {
+      const W = window.Worker;
+      if (typeof W !== 'function') return;
+      const Wrapped = function (...a) {
+        const w = new W(...a);
+        w.addEventListener('message', (e) => { const d = e.data; if (d && typeof d === 'object' && typeof d.__pcEvil === 'string') { window.__pcEvilWorker = { ...(window.__pcEvilWorker ?? {}), [d.__pcEvil]: d.r }; } });
+        return w;
+      };
+      Wrapped.prototype = W.prototype;
+      Object.defineProperty(window, 'Worker', { value: Wrapped, configurable: true, writable: true });
+    } catch { /* 没有 Worker */ }
+  });
   page.on('dialog', (d) => void d.accept());
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 200)));
+  if (process.env.PROBE_DEBUG) page.on('console', (msg) => { if (msg.type() === 'warn' || msg.type() === 'error') console.error('[console:' + tag + ']', scrub(msg.text().slice(0, 400))); });
   // 页面经文档服务拿到的每一张票据都算秘密(读的、读写的、连接用的)
   const cdp = await page.createCDPSession();
   await cdp.send('Network.enable');
@@ -270,8 +307,26 @@ async function openMember(tag, { saveRtc = false, mobile = false } = {}) {
   const stageOf = (i) => stageFrames().find((f) => f.url().startsWith(`${ORIGINS.stages[i]}/`)) ?? null;
   const diag = () => page.evaluate(() => { const d = window.__pcPreviewDiag?.(); return d ? { dual: d.dual, onlineStages: d.onlineStages, cardExec: d.cardExec, lowMemory: d.lowMemory } : null; });
   const gateOf = (frame) => frame.evaluate(() => ({ gate: window.__pcCardExecGate?.() ?? null, iso: window.__pcStageIsolation?.() ?? null, url: location.origin + location.pathname })).catch(() => null);
-  return { tag, ctx, page, popups, pageErrors, stageFrames, stageOf, diag, gateOf, close: () => ctx.close().catch(() => {}) };
+  /** 每个文档里夹具写的顶层记号(`__pcEvilLoaded`):编辑页面与每个舞台文档各一条 */
+  const marks = async () => ({
+    editor: await page.evaluate(() => globalThis.__pcEvilLoaded ?? null).catch(() => 'err'),
+    stages: await Promise.all(stageFrames().map((f) => f.evaluate(() => ({ url: location.origin + location.pathname, loaded: globalThis.__pcEvilLoaded ?? null })).catch(() => ({ url: '?', loaded: 'err' })))),
+  });
+  return { tag, ctx, page, popups, pageErrors, stageFrames, stageOf, diag, gateOf, marks, close: () => ctx.close().catch(() => {}) };
 }
+
+/** 页面认出同步来的卡(定时重取内容库,最多几秒) */
+const knowsCard = (m, cardId) => until(`${m.tag} 页面认出同步来的卡 ${cardId}`, () => m.page.evaluate((id) => !!window.__pcCardSources?.()?.cards?.some((c) => c.id === id), cardId), 60_000, 500);
+/** 放一个用这张卡的片段(同步来的卡不在主注册表,经 editCardProject 直接放);已有同 id 的片段就换掉它的参数 */
+const putEvilClip = (m, clipId, cardId, start, params) => m.page.evaluate((id, card, at, p) => {
+  const S = window.__pcStore;
+  S.actions.editCardProject((proj) => {
+    const tracks = proj.tracks.map((tr) => ({ ...tr, clips: tr.clips.filter((c) => c.id !== id) })).filter((tr) => tr.id !== 'ocs-t-' + id);
+    return { ...proj, duration: Math.max(proj.duration, at + 4), tracks: [{ id: 'ocs-t-' + id, name: '序列 ' + id, clips: [{ id, cardId: card, start: at, end: at + 2, params: p }] }, ...tracks] };
+  });
+}, clipId, cardId, start, params);
+/** 这张卡在本页的运行状态(编辑页面的注册表) */
+const runStateOf = (m, cardId) => m.page.evaluate((id) => { const d = window.__pcCardExecDiag?.(); if (!d) return null; const per = Object.fromEntries(Object.entries(d.stages).map(([k, v]) => [k, (v.states.find((s) => s[0] === id) ?? [null, null])[1]])); return { available: d.available, visual: d.visual, bundles: d.bundles, per, graph: Object.fromEntries(Object.entries(d.stages).map(([k, v]) => [k, v.graph])) }; }, cardId).catch(() => null);
 
 /** 在一个帧里执行夹具的某个函数(与加载器执行转译结果同一个办法) */
 const runInFrameRaw = (frame, fn, ctx, { worker = false } = {}) => frame.evaluate(async (code, fnName, c, inWorker) => {
@@ -368,7 +423,7 @@ try {
     check('A3 准备:探针手里有编辑器页存的凭证、设备身份与票据可比', editorSecrets.some((s) => /凭证/.test(s.label)) && [...secrets.values()].some((l) => /票据/.test(l)), [...new Set(secrets.values())]);
 
     const mkCtx = (tag, graph, stageOrigin) => ({ tag, graph, collector: EVIL, collectorPort: EVIL_PORT, dnsHost: DNS.guarded, sid, mediaHash: MEDIA_HASH, stageOrigin, frameDocUrl: '/editor/stage.html', magic: `MAGIC${randomBytes(6).toString('hex')}`, listenMs: 1500 });
-    const ctxA = mkCtx('user-card', false, ORIGINS.stages[0]), ctxB = mkCtx('graph-card', true, ORIGINS.stages[1]);
+    const ctxA = mkCtx('user-card', false, undefined), ctxB = mkCtx('graph-card', true, undefined);
     /*
      * 「卡片代码」的执行办法与加载器相同。分三段:
      *   一、闸门开着(A1 已核):读父页、把读得到的一切倒出来、图卡读素材、声音线程;
@@ -376,26 +431,61 @@ try {
      *       听到的消息里不该有票据;
      *   三、伪造消息、外传、加固各条路(这时闸门已经因为第二段关上了;照样硬跑,断言看的是浏览器与加固拦不拦得住)。
      */
-    const rA = {}, rB = {};
-    if (sA && sB) {
-      for (const [frame, ctx, r] of [[sA, ctxA, rA], [sB, ctxB, rB]]) {
-        r.parent = await runInFrame(frame, 'parentReads', ctx);
-        r.dump = await runInFrame(frame, 'dumpEverything', ctx);
-        if (ctx.graph) r.media = await runInFrame(frame, 'mediaWork', ctx);
-        r.worker = await runInFrame(frame, 'workerAttacks', ctx, { worker: true });
-      }
-      const hearA = runInFrame(sA, 'listenParent', { listenMs: 8000 }), hearB = runInFrame(sB, 'listenParent', { listenMs: 8000 });
-      await sleep(500);
-      // 听的时候在编辑器页改一处项目:父页把项目内容经 RPC 下发给两台(setProject),里面同样不该有凭证类的东西
-      await m.page.evaluate(() => { window.__pcStore.actions.addClipOnNewTrack({ index: 0, cardId: 'punch-pill', start: 6, duration: 2 }); });
+    /*
+     * 真实加载路径:恶意卡的片段摆上(参数里带 ctx)→ 等这张卡在本页「能运行」(两台舞台的加载器都执行了它的模块顶层)→
+     *   一、声音那一半:请编辑页面生成这段卡片的声音,经舞台 RPC 到实例 B 起的声音线程,`audio()` 在线程里跑 Worker 那一组;
+     *   二、窗口那一半:播放头拨到片段上,可见的那台舞台挂上它,卡片代码把攻击整套跑一遍(其间探针在编辑页面改一处项目,
+     *       让父页经 RPC 下发项目内容;攻击里那一步「试着造子框架」被加固拦下并上报,父页改判、把取档策略重发给两台)。
+     */
+    const runCard = async (member, which, ctx, at) => {
+      const cardId = EVIL_CARDS[which], clipId = `ocs-evil-${which}`, tag = which === 'user' ? 'user-card' : 'graph-card';
+      const r = {};
+      await knowsCard(member, cardId);
+      await putEvilClip(member, clipId, cardId, at, { ctx: { ...ctx, listenAfterMs: 5000 } });
+      const ready = await until(`${member.tag} ${cardId} 在本页能运行(两台舞台都载入成功)`, async () => { const s = await runStateOf(member, cardId); return s && s.per.A?.state === 'ready' && s.per.B?.state === 'ready' ? s : null; }, 60_000, 500);
+      r.runState = ready ?? await runStateOf(member, cardId);
+      r.marks = await member.marks();
+      // 一、声音线程
+      const audio = await member.page.evaluate(async (id) => {
+        try { const sound = await window.__pcIo.sound(); const out = await sound.generateCardAudio(id, { force: true }); return { ok: out?.ok === true }; } catch (e) { return { error: String(e?.message ?? e).slice(0, 200) }; }
+      }, clipId);
+      r.audioAsk = audio;
+      const workerTag = `${tag}-audio`;
+      r.worker = await until(`${member.tag} 声音线程里的攻击跑完(${workerTag})`, async () => { for (const f of member.stageFrames()) { const v = await f.evaluate((t) => window.__pcEvilWorker?.[t] ?? null, workerTag).catch(() => null); if (v) return v; } return null; }, 180_000, 500) ?? { 'worker-error': `没跑起来:${JSON.stringify(audio)}` };
+      r.workerHost = await Promise.all(member.stageFrames().map((f) => f.evaluate((t) => ({ id: new URLSearchParams(location.search).get('id'), has: !!window.__pcEvilWorker?.[t] }), workerTag).catch(() => null)));
+      // 二、窗口
+      await member.page.evaluate((t) => window.__pcStore.actions.seek(t), at + 0.5);
+      await until(`${member.tag} 可见舞台挂上了 ${cardId}、攻击开始跑`, async () => { for (const f of member.stageFrames()) { if (await f.evaluate((t) => !!globalThis.__pcEvilStarted?.[t], tag).catch(() => false)) return true; } return false; }, 60_000, 250);
+      // 听的时候在编辑页面改一处项目:父页把项目内容经 RPC 下发给两台(setProject),里面同样不该有凭证类的东西
       await sleep(1500);
-      rA.firstBreach = await runInFrame(sA, 'hardenAttacks', { ...ctxA, only: ['createElement'] });
-      rA.heard = await hearA; rB.heard = await hearB;
-      for (const [frame, ctx, r] of [[sA, ctxA, rA], [sB, ctxB, rB]]) {
-        r.forged = await runInFrame(frame, 'forgedMessages', ctx);
-        r.exfil = await runInFrame(frame, 'exfilAttacks', ctx);
-        r.harden = await runInFrame(frame, 'hardenAttacks', ctx);
-      }
+      await member.page.evaluate(() => { window.__pcStore.actions.addClipOnNewTrack({ index: 0, cardId: 'punch-pill', start: 6, duration: 2 }); });
+      const done = await until(`${member.tag} ${cardId} 的攻击整套跑完`, async () => { for (const f of member.stageFrames()) { const v = await f.evaluate((t) => globalThis.__pcEvil?.[t] ?? null, tag).catch(() => null); if (v) return { v, url: f.url().replace(/\?.*$/, '') }; } return null; }, RUN_TIMEOUT_MS * 2, 1000);
+      Object.assign(r, done?.v ?? {});
+      r.ranIn = done?.url ?? null;
+      if (!done) { const prog = await Promise.all(member.stageFrames().map((f) => Promise.race([f.evaluate(() => String(globalThis.__pcEvilProgress)).catch(() => '?'), sleep(3000).then(() => '(舞台没应答)')]))); r.exfil = { 'run-error': `没跑完,停在 ${prog.join(' / ')}` }; }
+      return r;
+    };
+    const rA = sA && sB ? await runCard(m, 'user', ctxA, 10) : {};
+    rA.sid = sid;
+    check('A-真实路径 恶意用户卡:页面转译成包、两台舞台的加载器都执行了它(运行状态 ready),攻击是卡片代码自己在可见舞台里跑的', rA.runState?.per?.A?.state === 'ready' && rA.runState?.per?.B?.state === 'ready' && /\/editor\/stage\.html$/.test(rA.ranIn ?? ''), { runState: rA.runState, ranIn: rA.ranIn });
+    check('E 编辑页面不执行:恶意卡的模块顶层记号只出现在两台舞台里,编辑页面的文档里没有', rA.marks?.editor === null && rA.marks?.stages?.length === 2 && rA.marks.stages.every((s) => s.loaded?.['user-card'] === true && /\/editor\/stage\.html$/.test(s.url)), rA.marks);
+    check('A6-真实路径 恶意用户卡的 audio() 是在实例 B 起的声音线程里被调用的', rA.workerHost?.some((h) => h?.id === 'B' && h.has) && !rA.workerHost?.some((h) => h?.id === 'A' && h.has) && !rA.worker?.['worker-error'], { ask: rA.audioAsk, host: rA.workerHost, err: rA.worker?.['worker-error'] });
+    // 恶意图卡另开一页(上一页的会话已经因为加固拦下的事不再执行);先把用户卡片段的参数清掉,它在这一页不跑
+    let rB = {}, mG = null;
+    if (sA && sB) {
+      await putEvilClip(m, 'ocs-evil-user', EVIL_CARDS.user, 10, {});
+      await sleep(1500);
+      mG = await openMember('Ag');
+      const dG = await settled(mG);
+      const sidG = dG?.cardExec?.sid ?? '';
+      await until('Ag 舞台凭 cookie 取到素材', () => proxy.requests.some((r) => r.path === `/media-s/${sidG}/media/${MEDIA_HASH}` && (r.status === 200 || r.status === 206)), 30_000);
+      for (const g of proxy.grants) addSecret('交接给舞台源的只读素材票据', g.ticket);
+      ctxB.sid = sidG;
+      rB = await runCard(mG, 'graph', ctxB, 14);
+      rB.sid = sidG;
+      check('A-真实路径 恶意图卡:图形能力够、两台舞台都载入成功(ready),card() 是在可见舞台里被求值的', rB.runState?.per?.A?.state === 'ready' && rB.runState?.per?.B?.state === 'ready' && rB.runState?.graph?.A === 'ok' && /\/editor\/stage\.html$/.test(rB.ranIn ?? ''), { runState: rB.runState, ranIn: rB.ranIn });
+      check('E 编辑页面不执行(图卡那一页):顶层记号只在两台舞台里', rB.marks?.editor === null && rB.marks?.stages?.length === 2 && rB.marks.stages.every((s) => s.loaded?.['graph-card'] === true), rB.marks);
+      check('A6-真实路径 恶意图卡的 audio() 是在实例 B 起的声音线程里被调用的', rB.workerHost?.some((h) => h?.id === 'B' && h.has) && !rB.worker?.['worker-error'], { ask: rB.audioAsk, host: rB.workerHost, err: rB.worker?.['worker-error'] });
     }
     await sleep(2000);
     summary.A.userCard = { parent: rA.parent, exfil: rA.exfil, harden: rA.harden, worker: rA.worker };
@@ -421,7 +511,7 @@ try {
       }
       check(`A3 ${who}:舞台里可读的 cookie 是空的(票据的 cookie 是 HttpOnly)`, r.dump?.['document.cookie'] === '' && r.dump?.cookieStore === '[]', `${r.dump?.['document.cookie']} / ${r.dump?.cookieStore}`);
       const heard = r.heard?.['parent-messages'] ?? '';
-      check(`A3 ${who}:听到了父页下发的项目内容(RPC setProject)与重发的取档策略(setMediaPolicy,基址是 /media-s/<sid>、票据是 null),整段消息里没有秘密`, /"method":"setProject"/.test(heard) && /setMediaPolicy/.test(heard) && heard.includes(`/media-s/${sid}`) && /"ticket":null/.test(heard) && leaksIn(heard).length === 0 && !TICKET_SHAPE.test(heard), { chars: heard.length, methods: [...new Set([...heard.matchAll(/"method":"(\w+)"/g)].map((x) => x[1]))] });
+      check(`A3 ${who}:听到了父页下发的项目内容(RPC setProject)与重发的取档策略(setMediaPolicy,基址是 /media-s/<sid>、票据是 null),整段消息里没有秘密`, /"method":"setProject"/.test(heard) && /setMediaPolicy/.test(heard) && heard.includes(`/media-s/${r.sid}`) && /"ticket":null/.test(heard) && leaksIn(heard).length === 0 && !TICKET_SHAPE.test(heard), { chars: heard.length, methods: [...new Set([...heard.matchAll(/"method":"(\w+)"/g)].map((x) => x[1]))] });
       check(`A3 ${who}:凭 cookie 读素材的应答头里没有票据;舞台自己发交接请求被拒`, /^200 /.test(r.dump?.['media-headers'] ?? '') && /^403 /.test(r.dump?.['grant-from-stage'] ?? ''), `${(r.dump?.['media-headers'] ?? '').slice(0, 4)} / ${(r.dump?.['grant-from-stage'] ?? '').slice(0, 4)}`);
       /* A6 声音线程 */
       const w = r.worker ?? {};
@@ -479,6 +569,15 @@ try {
     check('A8 父页的存储里没有伪造事件里那个超范围的数', after.hugeNumber === false, { bytes: after.bytes, forgedIdentity: after.forgedIdentity });
     check('A8 伪造的时刻(1e99 秒)没把播放头带出时间轴', typeof after.t === 'number' && after.t >= 0 && after.t <= after.duration, { t: after.t, duration: after.duration });
     await m.page.screenshot({ path: path.join(OUT, 'a-editor.png') }).catch(() => {});
+    if (mG) {
+      const dG1 = await mG.diag();
+      check('A7 图卡那一页同样:试图造子框架之后父页不再判「可执行」;没有页面错误、没开出新窗口', dG1?.cardExec?.enabled === false && dG1.cardExec.reason === 'breach' && mG.pageErrors.length === 0 && mG.popups.length === 0, { page: dG1?.cardExec?.reason, errors: mG.pageErrors.slice(0, 3), popups: mG.popups });
+      await mG.page.screenshot({ path: path.join(OUT, 'a-editor-graph.png') }).catch(() => {});
+      // 收尾:图卡片段的参数也清掉 —— 后面几组的页面里这两张卡照常载入(记号断言要用),但片段没有参数、不跑攻击
+      await putEvilClip(mG, 'ocs-evil-graph', EVIL_CARDS.graph, 14, {});
+      await sleep(1500);
+      await mG.close();
+    }
     await m.close();
 
     /* A5 导航类:每种单开一页 */
@@ -529,7 +628,20 @@ try {
     const d = await settled(m);
     const f = m.stageOf(0);
     const g = f ? await m.gateOf(f) : null;
-    check('G 这时舞台自检记「出口靠脚本加固」(egress: script),仍判隔离、可执行', g?.iso?.report?.ok === true && g.iso.report.egress === 'script' && d?.cardExec?.enabled === true && d.cardExec.egress === 'script', { report: g?.iso?.report, page: d?.cardExec });
+    check('G 这时舞台自检记「出口靠脚本加固」(egress: script);隔离本身成立(声音线程可以执行)', g?.iso?.report?.ok === true && g.iso.report.egress === 'script' && d?.cardExec?.enabled === true && d.cardExec.egress === 'script', { report: g?.iso?.report, page: d?.cardExec });
+    /*
+     * 〔裁:主会话 2026-10-06〕这种浏览器上画面那一半不执行:同步来的恶意卡在两台舞台的窗口里连模块顶层都不跑(记号不出现),
+     * 页面把它记成「没有隔离环境」并说明原因,退回原做法。声音线程照常(后台线程里没有 WebRTC)。
+     */
+    await knowsCard(m, EVIL_CARDS.user);
+    await putEvilClip(m, 'ocs-evil-user', EVIL_CARDS.user, 10, {});
+    const gs = await until('G 页面对恶意用户卡下了结论', async () => { const s = await m.page.evaluate((id) => { const d2 = window.__pcCardExecDiag?.(); const st = d2?.run?.[id] ?? null; return d2 ? { available: d2.available, visual: d2.visual, bundles: d2.bundles, state: st } : null; }, EVIL_CARDS.user); return s && s.bundles.length && s.state && s.state.state !== 'loading' ? s : null; }, 60_000, 500);
+    await m.page.evaluate(() => window.__pcStore.actions.seek(10.5));
+    await sleep(4000);
+    const gm = await m.marks();
+    check('G 这种浏览器上画面不执行:本页「能执行」(声音)但画面那一半关着,恶意卡的运行状态是 not-isolated 并写明原因', gs?.available === true && gs.visual === false && gs.state?.state === 'not-isolated' && /WebRTC/.test(gs.state.detail ?? ''), gs);
+    check('G 这种浏览器上画面不执行:拨到恶意卡的片段上,两台舞台的窗口里都没有它的顶层记号(模块没被执行),编辑页面里也没有', gm.editor === null && gm.stages.length === 2 && gm.stages.every((s) => s.loaded === null), gm);
+    await m.page.evaluate(() => window.__pcStore.actions.seek(1));
     const guarded = f ? await runInFrame(f, 'exfilAttacks', { collector: EVIL, collectorPort: EVIL_PORT, dnsHost: DNS.guarded, tag: 'gap', only: ['fetch', 'fetch-no-cors', 'xhr', 'img', 'beacon', 'websocket', 'webrtc'] }) : {};
     await sleep(1500);
     const e0 = evilNow();
@@ -539,7 +651,10 @@ try {
     await sleep(2000);
     const e1 = evilNow();
     summary.G = { said, ...e1 };
-    gap('WebRTC 残余缺口:只有内容安全策略(含 webrtc \'block\')、没有出口白名单时,假设脚本加固被绕过,STUN / TURN 的包到得了收集站 —— 这种浏览器上 WebRTC 一项靠脚本加固,不是浏览器保证;带得走的是本项目的内容与素材,带不走凭证与票据(A3)', e1.udp > 0 || e1.tcp > 0, { said, udp: e1.udp, tcp: e1.tcp });
+    // 原来的「已知缺口」:这种浏览器上假设脚本加固被绕过,WebRTC 的包到得了收集站。裁定之后这种浏览器上画面不执行(上面两条),
+    // 被执行的路径上不再有它;这里只把现状记下来(浏览器哪天开始执行 webrtc 'block',这一行的数会变成 0)。
+    console.log(`记录  G 这种浏览器不执行画面;假设仍有代码在窗口里拿到原装构造器,WebRTC 的包到收集站:udp ${e1.udp}、tcp ${e1.tcp}`);
+    notes.push(`G:只靠脚本加固的浏览器上画面不执行;原装构造器发的 WebRTC 包 udp ${e1.udp} tcp ${e1.tcp}`);
     await m.close();
   });
 
@@ -584,6 +699,12 @@ try {
       const src = await until(`${tag} 舞台里的素材元素`, async () => { for (const f of m.stageFrames()) { const s = await f.evaluate((hash) => { const el = [...document.querySelectorAll('img,video')].find((e) => (e.getAttribute('src') ?? '').includes(hash)); return el ? el.getAttribute('src') : null; }, MEDIA_HASH).catch(() => null); if (s) return s; } return null; }, 20_000);
       check(`${tag} 素材照旧走 /media 加 ?t=(这样的舞台文档不执行用户代码),没有交接请求`, /\/media\/api\/asset\/media\/[0-9a-f]{64}\?t=/.test(src ?? '') && proxy.grants.length === 0, { src: (src ?? '').replace(/\?t=.*/, '?t=…'), grants: proxy.grants.length });
     }
+    // E 编辑页面不执行:项目里有用恶意卡的片段、内容库里有它们的源码,拨到片段上,任何文档里都没有顶层记号
+    await knowsCard(m, EVIL_CARDS.user);
+    await m.page.evaluate(() => window.__pcStore.actions.seek(10.5));
+    await sleep(5000);
+    const marks = await m.marks();
+    check(`E ${tag} 不执行:拨到恶意卡的片段上,编辑页面与 ${marks.stages.length} 个舞台文档里都没有恶意卡的顶层记号`, marks.editor === null && marks.stages.length >= 1 && marks.stages.every((s) => s.loaded === null), marks);
     check(`${tag} 没有页面错误`, m.pageErrors.length === 0, m.pageErrors.slice(0, 3));
     await m.page.screenshot({ path: path.join(OUT, `${tag.toLowerCase()}-editor.png`) }).catch(() => {});
     await m.close();

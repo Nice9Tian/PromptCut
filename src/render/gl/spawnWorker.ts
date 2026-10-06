@@ -15,7 +15,7 @@ import workerUrl from "./glWorker.ts?worker&url";
  * 在线的跨源舞台带 Trusted Types(`require-trusted-types-for 'script'`,`src/online/stagePolicy.mjs`),blob Worker 继承它:
  * Worker 里 `importScripts` 要先有缺省策略。只在本文档已经有缺省策略时(舞台加固装过)才加这一句,别处引导脚本一个字不变。
  */
-function trustedTypesPrelude(): string {
+export function trustedTypesPrelude(): string {
   const tt = (globalThis as { trustedTypes?: { defaultPolicy?: unknown } }).trustedTypes;
   if (!tt?.defaultPolicy) return "";
   return `if (self.trustedTypes && !self.trustedTypes.defaultPolicy) self.trustedTypes.createPolicy("default", { createHTML: (s) => s, createScript: (s) => s, createScriptURL: (s) => s });`;
