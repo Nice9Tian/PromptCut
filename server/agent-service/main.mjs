@@ -18,6 +18,8 @@
  *                                  页面拿到的地址由托管组合的 PROMPTCUT_AGENT_PUBLIC_URL 经文档服务下发,不由本进程给
  *   PROMPTCUT_AGENT_ASSET_URL      同机素材服务的地址(回环,如 http://127.0.0.1:8788)。云端 Agent 导入素材、配音入库时按内容哈希写进它
  *                                  (凭代成员的素材票据,权限不超过成员本人)。不设时这些工具回「没有配置素材服务」
+ *   PROMPTCUT_AGENT_LOOK_URL       同机渲染服务管理进程的诊断与代理口(回环,如 http://127.0.0.1:5399)。云端 Agent 看画面(`see_frames` 等)时凭服务私钥的
+ *                                  签名向它要一帧(`look-client.mjs`;契约第 9.8 节)。不设时看画面的工具不交给模型,系统提示词写「看不了画面」
  *   PROMPTCUT_AGENT_EGRESS_TEST_ALLOW
  *                                  **只给探针与演练**:逗号分隔的「IP:端口」,出网闸对它们放行(用来在本机回环上起「测试专用外部地址」)。
  *                                  生产不设;设了会在日志里打 `agent.egress.test-allow`,`/healthz` 的 `egressTestAllow` 为 true
@@ -28,7 +30,7 @@
  *                                  可不设:补渲「连续多久没有进度就放弃」(缺省 10 分钟)与「写入落地后攒多久再发」(缺省 3 秒),排查与演练用
  *
  * 失败即关(打一行 `config.error { reason }`,退出码 1):`data-dir`、`doc-url`、`asset-url`、`service-identity`(私钥读不到、格式不对、
- * 服务名不是 agent)、`public-origin`、`bind-public`、`listen`。文档服务一时连不上不算:控制连接自己退避重连,期间新请求回 503 `unavailable`。
+ * 服务名不是 agent)、`look-url`(不是回环上的 http 地址)、`public-origin`、`bind-public`、`listen`。文档服务一时连不上不算:控制连接自己退避重连,期间新请求回 503 `unavailable`。
  *
  * 数据目录里(契约第 2.2 节):`config/ai.json` 与 `config/keys/custom.key`(模型配置与 Key 的密文,`set-key.mjs` 写)、
  * `config/voice.json` 与 `config/keys/voice.key`(托管方的配音配置与令牌的密文,可没有)、`work/`(各对话的工作目录:附件、下载的文件)、
@@ -54,6 +56,7 @@ import { createServiceClient } from '../auth/service-client.mjs';
 import { readServiceKeyFile } from '../auth/service-identity.mjs';
 import { parseTestAllow } from '../agent/service/egress.mjs';
 import { readDesktopModelConfig } from './rehearsal-model.mjs';
+import { createLookClient, parseLookUrl } from './look-client.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -95,6 +98,7 @@ export async function startAgentService({
   storeLimits,
   renderLimits,
   assetBase = null,
+  look = null,
   egress,
   voiceConfig,
   workspaceLimits,
@@ -144,6 +148,7 @@ export async function startAgentService({
     ...(storeLimits ? { storeLimits } : {}),
     ...(renderLimits ? { renderLimits } : {}),
     ...(assetBase ? { assetBase } : {}),
+    ...(look ? { look } : {}),
     ...(egress ? { egress } : {}),
     ...(voiceConfig ? { voiceConfig } : {}),
     ...(workspaceLimits ? { workspaceLimits } : {}),
@@ -210,6 +215,8 @@ async function main() {
     try { const u = new URL(assetBase); ok = (u.protocol === 'http:' || u.protocol === 'https:') && isLoopbackHost(u.hostname.replace(/^\[|\]$/g, '')); } catch { ok = false; }
     if (!ok) return fail('asset-url', { detail: 'PROMPTCUT_AGENT_ASSET_URL 要是同机素材服务的回环地址,如 http://127.0.0.1:8788' });
   }
+  const lookUrl = env.PROMPTCUT_AGENT_LOOK_URL ? parseLookUrl(env.PROMPTCUT_AGENT_LOOK_URL) : null;
+  if (env.PROMPTCUT_AGENT_LOOK_URL && !lookUrl) return fail('look-url', { detail: 'PROMPTCUT_AGENT_LOOK_URL 要是同机渲染服务的回环地址,如 http://127.0.0.1:5399' });
   const testAllow = parseTestAllow(env.PROMPTCUT_AGENT_EGRESS_TEST_ALLOW);
   // 只给本机演练:用这台电脑上桌面版已配好的 API 直连(只读;日志里只有厂商与模型名)
   const rehearsal = env.PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL === '1';
@@ -246,6 +253,8 @@ async function main() {
       publisher: wiring.publisher,
       renderLimits: { ...(stall ? { stallMs: stall } : {}), ...(debounce ? { debounceMs: debounce } : {}) },
       ...(assetBase ? { assetBase } : {}),
+      // 看画面:凭这把服务私钥的签名向同机的渲染服务要一帧
+      ...(lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
       ...(rehearsal ? { modelConfig: () => readDesktopModelConfig() } : {}),
       version,
@@ -262,7 +271,7 @@ async function main() {
   line('agent.ready', {
     url: started.url, auth: 'service-identity', service: key.service, kid: key.kid, version,
     ...(origin ? { publicOrigin: origin } : {}),
-    assetService: !!assetBase, egressTestAllow: testAllow.length > 0,
+    assetService: !!assetBase, look: !!lookUrl, egressTestAllow: testAllow.length > 0,
     heapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
   });
   const stop = () => {

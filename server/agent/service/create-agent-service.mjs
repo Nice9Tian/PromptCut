@@ -47,6 +47,8 @@ export const HOSTED_DEFAULTS = Object.freeze({
   maxProjectBytes: 16 * 1024 * 1024,
   /** 单次工具调用最多等多久(契约第 11 节) */
   toolMs: 60_000,
+  /** 看画面的工具最多等多久:带用户卡的项目要等隔离工作进程起来(十来秒)、别的项目在渲时还要排队(契约第 9.8 节) */
+  lookToolMs: 180_000,
   /** 一个对话的模型历史(`history.json`)超过这么大就按现有的历史截断(契约第 7.2 节) */
   maxHistoryBytes: 8 * 1024 * 1024,
 });
@@ -131,6 +133,8 @@ const scrub = (text) => String(text ?? '').replace(/https?:\/\/[^\s"'<>)]+/g, '[
  * @param {{ agentEnabled?(projectId): boolean, renderEnabled?(projectId): boolean }} [o.projectState]
  *   各项目的开关(接口位;真的由文档服务的推送喂)。不给时都算开
  * @param {string | null} [o.assetBase] 同机素材服务的地址(`http://127.0.0.1:<端口>`);不给时导入素材、配音入库做不了(工具回明确的原因)
+ * @param {{ forProject(projectId: string, o?: object): Function, describe?(): object } | null} [o.look] 看画面的客户端(`server/agent-service/look-client.mjs`):
+ *   向同机的渲染服务要一帧。不给时看画面的工具不交给模型(契约第 9.8 节)
  * @param {object} [o.egress] 出网闸的选项(`egress.mjs` 的 `createEgressGate`;`testAllow` 只给测试与探针)
  * @param {() => Promise<object | null>} [o.voiceConfig] 托管方的配音配置;不给就读数据目录里的 `config/voice.json` 与 `config/keys/voice.key`
  * @param {object} [o.workspaceLimits] 工作区的总量上限(`workspace.mjs`)
@@ -149,6 +153,7 @@ export function createHostedAgentService({
   storeLimits = {},
   renderLimits = {},
   assetBase = null,
+  look = null,
   egress: egressOptions = {},
   voiceConfig = null,
   workspaceLimits = {},
@@ -304,7 +309,8 @@ export function createHostedAgentService({
           // 托管档没有 /api/*:实例登记的桌面路由一条都不挂
           middlewares: { use() {} },
         },
-        prerenderPost: null,
+        // 看画面:向同机的渲染服务要一帧。项目是这个实例的项目(来自鉴权),工具参数改不了;卡片源码的版本由实例现报
+        prerenderPost: look ? look.forProject(identity.projectId, { cards: () => own.inst?.cardRevs?.() ?? {} }) : null,
         latestMirror: () => null,
         latestPlayhead: () => null,
         projectId: identity.projectId,
@@ -491,6 +497,7 @@ export function createHostedAgentService({
         sessionKey: `cloud-${ownerKeyOf(identity).slice(0, 16)}-${conversationId}`,
         maxProjectBytes: limits.maxProjectBytes,
         toolTimeoutMs: limits.toolMs,
+        lookTimeoutMs: limits.lookToolMs,
         historyMaxBytes: limits.maxHistoryBytes,
         fetchImpl: body.__fetchImpl,
         // 闸:每次模型请求前(契约第 6.2 节);之后记一行用量(第 6.3 节)
@@ -697,6 +704,7 @@ export function createHostedAgentService({
         gate: gate.describe?.() ?? null,
         render: render.describe(),
         egress: egress.describe(),
+        look: look?.describe?.() ?? null,
       };
     },
 
@@ -707,6 +715,8 @@ export function createHostedAgentService({
     _render: render,
     _store: store,
     _workspaces: workspaces,
+    /** 这个进程配没配看画面的口子(状态口报它) */
+    look: !!look,
     /** 出网闸的测试例外开没开(状态口报它;生产必须是 false) */
     egressTestAllow: egress.testAllowActive,
 

@@ -10,6 +10,8 @@
  *   server     就地执行,不碰项目(`wait`、`report_progress`、多 Agent 的公告板);
  *   initiator  要操作发起人自己的界面(选区、播放头、播放与暂停、网页接管、扫码登录、开页签)。**这是唯一可以缺省的一类**:
  *              发起方不在线时立刻回「发起方不在线」,Agent 据此继续,不卡住;在线时能答的照答(选区、播放头按发消息时的快照);
+ *   看画面的四个(`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom`,`look: true`)也是 route:读项目副本,再向同机的渲染服务要一帧
+ *              (`server/agent-service/look-client.mjs`;契约第 9.8 节)。这台节点没有配看画面的口子时它们不交给模型,调用回明确的原因。
  *   pending    这一版在云节点上还没接上。逐项写明差什么(`why`),记未达成;不交给模型,调用时回明确的原因。
  *              这不是「不开放」:接上之后把它挪到上面某一类即可。
  *
@@ -22,7 +24,6 @@ const S = 'server';
 const I = 'initiator';
 const P = 'pending';
 
-const NEED_RENDER = '要一帧渲好的画面。云节点上的即时渲染(借同机渲染服务的无头浏览器)这一版还没接上';
 const NEED_PY = (what) => `${what}要节点上的 Python 运行环境与模型权重,并把页面里的作业表搬到服务端;这一版还没接上`;
 const NEED_COLLECT = '网页采集要节点上的下载器(Python 与 yt-dlp、ffmpeg),并让它只经出网闸的代理出网;这一版还没接上';
 const NEED_WEB = '网页接管要节点上的浏览器,并让它只经出网闸的代理出网、按对话隔离用户数据目录;这一版还没接上';
@@ -71,9 +72,9 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
   // cards(8)
   list_cards: { mode: R }, apply_card: { mode: R },
   card_authoring_guide: { mode: H }, get_card_source: { mode: H }, create_card: { mode: H }, edit_card: { mode: H },
-  bake_card: { mode: P, why: NEED_RENDER }, inspect_card_dom: { mode: P, why: NEED_RENDER },
-  // vision(2)
-  see_frames: { mode: P, why: NEED_RENDER }, get_gif: { mode: P, why: NEED_RENDER },
+  bake_card: { mode: R, look: true }, inspect_card_dom: { mode: R, look: true },
+  // vision(2):向同机的渲染服务要一帧(契约第 9.8 节)
+  see_frames: { mode: R, look: true }, get_gif: { mode: R, look: true },
   // collect(9)
   collect_status: { mode: P, why: NEED_COLLECT }, collect_install: { mode: P, why: NEED_COLLECT }, collect_search: { mode: P, why: NEED_COLLECT },
   collect_probe: { mode: P, why: NEED_COLLECT }, collect_download: { mode: P, why: NEED_COLLECT }, collect_job: { mode: P, why: NEED_COLLECT },
@@ -98,6 +99,28 @@ const namesOf = (...modes) => Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => 
 
 /** 交给模型的工具:除了「还没接上」的,全部 */
 export const CLOUD_OPEN_TOOLS = Object.freeze(new Set(namesOf(R, H, S, I)));
+
+/** 要向渲染服务要一帧画面的(契约第 9.8 节)。`get_layout` 不在里面:它没有画面也答得了规定的框,只是量不到实体框 */
+export const CLOUD_LOOK_TOOLS = Object.freeze(new Set(Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.look === true).map(([n]) => n)));
+
+/** 这台节点没有配看画面的口子时交给模型的工具(少掉看画面的四个) */
+export const CLOUD_OPEN_TOOLS_NO_LOOK = Object.freeze(new Set([...CLOUD_OPEN_TOOLS].filter((n) => !CLOUD_LOOK_TOOLS.has(n))));
+
+/** 这台节点没有配看画面的口子:看画面的工具的回答 */
+export function lookUnavailable(tool) {
+  return {
+    ok: false, cloudUnavailable: true,
+    error: `云端 Agent 在这台节点上看不了画面(${tool}):节点没有开渲染服务的看画面。请按项目内容继续,并在汇报里说明没有看过画面。`,
+  };
+}
+
+/** `see_frames` 的素材镜头拼图(`source: "media"`)要镜头识别,云端还没接上;只看得了时间轴的画面 */
+export function lookSourceUnavailable() {
+  return {
+    ok: false, cloudUnavailable: true,
+    error: '云端 Agent 的 see_frames 只能看时间轴上的画面(不传 source,或 source: "timeline");素材的镜头拼图要节点上的镜头识别,这一版还没接上。',
+  };
+}
 
 /** 在服务端另有实现的(工具表里它们是 `side: "page"` 或走编辑器接口的,托管档改由 `hosted-tools.mjs` 执行) */
 export const CLOUD_HOSTED_TOOLS = Object.freeze(new Set(namesOf(H)));
@@ -158,17 +181,31 @@ export function pendingByReason() {
   return out;
 }
 
-/** 拼进系统提示词的一段:只写与本机真实的差别(契约第 9.7 节) */
-export const CLOUD_SYSTEM_NOTE = [
+const LOOK_NOTE_ON = '- **看画面照常用,但比本机慢。** `see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 的画面由同一台云节点上的渲染服务出;`get_layout` 的实体框也是。'
+  + '项目里有自定义卡片(用 `create_card` / `edit_card` 建过或改过卡)时,画面由一个按项目单开的隔离进程出,第一次要等十来秒,别的项目正在渲时要排队。'
+  + '工具回「这次没看成」时不要反复重试:按 `get_layout` 的规定框和卡片参数继续,做完在汇报里说明哪一步没有看过画面。`see_frames` 只能看时间轴的画面,素材的镜头拼图(`source: "media"`)云端还没有。';
+const LOOK_NOTE_OFF = '- **这台云节点上看不了画面。** `see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 没有交给你。本提示词里凡是要求「先看一眼画面」「放完再看」的步骤一律跳过,工具结果里的 `look` 提示也不用管;排版按 `get_layout` 给的规定框和卡片参数判断,做完在汇报里说明「没有看过画面」。别的成员看到的是云端渲染服务渲好的画面。';
+
+/**
+ * 拼进系统提示词的一段:只写与本机真实的差别(契约第 9.7 节)。
+ * @param {{ look?: boolean }} [o] `look`:这台节点配没配看画面的口子
+ */
+export const cloudSystemNote = ({ look = false } = {}) => CLOUD_SYSTEM_NOTE_LINES.map((line) => (line === LOOK_LINE ? (look ? LOOK_NOTE_ON : LOOK_NOTE_OFF) : line)).join('\n');
+
+const LOOK_LINE = Symbol('look');
+const CLOUD_SYSTEM_NOTE_LINES = [
   '## 你运行在云端',
   '',
   '你是托管方的云端 Agent,运行在云节点上。你的改动经文档服务落到项目里,所有成员都看得到;用户关掉软件后你照常把这一轮做完。',
   '工具与本机一致,下面是仅有的差别:',
   '',
   '- **用户可能已经离开。** 要用到他界面的工具(选区、播放头、播放与暂停、网页接管、扫码登录、开子 Agent 页签)在他不在线时会回「发起方不在线」:不要等,按项目内容继续,在进度汇报里说明哪一步没用上页面状态。',
-  '- **这一版在云端还看不了画面。** `see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 没有交给你。本提示词里凡是要求「先看一眼画面」「放完再看」的步骤一律跳过,工具结果里的 `look` 提示也不用管;排版按 `get_layout` 给的规定框和卡片参数判断,做完在汇报里说明「没有看过画面」。别的成员看到的是云端渲染服务渲好的画面。',
+  LOOK_LINE,
   '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、音效合成与卡片声音生成、自定义测量、网页采集与网页操作。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
   '- **素材:** 附件在这个对话的工作目录里,地址形如 `work:attachments/<文件名>`,用 `import_media` 传这个地址装进素材库;网上的文件直接给 `import_media` 传 http(s) 地址。素材库是空的也可以只用卡片做片子,不必为了「有素材」去找素材。',
   '- **卡片:** 建卡改卡照常用(`card_authoring_guide`、`get_card_source`、`create_card`、`edit_card`、`apply_card`)。新卡存进这个项目的卡片库,所有成员都会收到;写卡时 `id`、`name`、`defaults`、`controls` 要写成字面量。卡片里**不能直接引用外链**的图片、字体、脚本(渲染节点与在线舞台都不出网,取不到):要用的图片先 `import_media` 装进素材库,再用它的 cardUrl。建新卡仍是最后手段:`list_cards` 里有合适的就用现成的调参数。',
   '- **配音:** `voice_generate` 用的是托管方的配音服务,会产生费用,按用户的意思用,不要为了试听反复生成。',
-].join('\n');
+];
+
+/** 没有配看画面的口子时的那一段(原来的常量名留着:单测与旧调用方用) */
+export const CLOUD_SYSTEM_NOTE = cloudSystemNote({ look: false });

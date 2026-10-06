@@ -20,6 +20,11 @@
  * 经环境变量 `PROMPTCUT_HOSTED_GATE_PASS` 从编辑器进程传给它起的预渲染进程；页面拿不到它，自己带来的同名头先被摘掉）；
  * 编辑器一侧见到对的记号，只放行素材那三类路径的 GET / HEAD，别的照拒。
  *
+ * **看画面的接口另要口令**（契约第 8a 节）：`/api/vision/**`、`/api/ai/visual**`、`/api/cards/dom`、`/api/cards/layout`（本机 Agent 看画面用的那一批，
+ * `look.mjs` 的 `LOOK_WORKER_PREFIXES`）在托管方的工作进程里只认**管理进程转来的**：Node 一侧的请求也要带这个工作进程自己的代理口口令
+ * （请求头 `x-pc-look-key`，值是环境里的 `PROMPTCUT_RENDER_BROKER_KEY`；页面读不到环境变量），不带或不对 403。浏览器发来的照旧走上面的页面请求闸
+ * （这几条不在放行表里，403）。所以卡片代码即使绕过了浏览器这一层，也没法让工作进程替它渲一帧别的东西。
+ *
  * `PROMPTCUT_PAGE_GATE=log`：只记不拦（定放行表、排查时用）——闸照判、代理照转，把本该拦下的打出来。缺省 `enforce`。
  * 被拦的请求打一行 `[page-gate] deny {…}`（前 50 条逐条，之后每 100 条一行），`render-host.mjs` 原样转出。
  */
@@ -27,6 +32,16 @@ import http from 'node:http';
 import net from 'node:net';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { pageGate, PAGE_GATE_ENV } from './page-gate.mjs';
+import { LOOK_KEY_HEADER, LOOK_WORKER_PREFIXES } from './look.mjs';
+import { apiPath } from '../http-guard.mjs';
+
+/** 这个工作进程自己的代理口口令（管理进程经环境变量给的；看画面的接口凭它认「管理进程转来的」） */
+const LOOK_KEY_ENV = 'PROMPTCUT_RENDER_BROKER_KEY';
+/** 是不是看画面那一批接口 */
+export function isLookPath(url) {
+  const p = apiPath(url);
+  return LOOK_WORKER_PREFIXES.some((prefix) => (prefix.endsWith('/') ? p.startsWith(prefix) : p === prefix || p.startsWith(`${prefix}/`)));
+}
 
 export const PAGE_GATE_MODE_ENV = 'PROMPTCUT_PAGE_GATE';
 /** 预渲染 → 编辑器转发时的通行记号：环境变量名与请求头名 */
@@ -157,6 +172,7 @@ export async function installHostedGate(server, { prerender, env = process.env, 
   if (!prerender && !env[GATE_PASS_ENV]) env[GATE_PASS_ENV] = randomBytes(24).toString('hex');
   const pass = String(env[GATE_PASS_ENV] ?? '');
   const egressHeader = env[TEST_NO_EGRESS_HEADER_ENV] !== '1';
+  const lookKey = String(env[LOOK_KEY_ENV] ?? '');
 
   server.middlewares.use((req, res, next) => {
     const given = req.headers[GATE_PASS_HEADER];
@@ -164,6 +180,17 @@ export async function installHostedGate(server, { prerender, env = process.env, 
     // 编辑器一侧：自己的预渲染进程转来的、已经过了那一侧的闸的素材请求
     if (!prerender && samePass(given, pass) && relayAllowed(req.url, req.method)) return next();
     const verdict = pageGate({ url: req.url, method: req.method, headers: req.headers, prerender });
+    // 看画面的接口：Node 一侧的请求也要带这个工作进程自己的口令（只有管理进程有）。编辑器转给预渲染时头跟着过去，两台各核一遍
+    if (!verdict.browser && isLookPath(req.url) && !samePass(req.headers[LOOK_KEY_HEADER], lookKey)) {
+      denyLog.note(mode === 'log' ? 'would-deny' : 'deny', { layer: 'look', role, method: req.method, path: String(req.url ?? '').split('?')[0].slice(0, 160), reason: 'look-key' });
+      if (mode !== 'log') {
+        req.resume?.();
+        res.statusCode = 403;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.end(JSON.stringify({ ok: false, error: 'look-key' }));
+      }
+    }
     if (prerender && verdict.browser && egressHeader) res.setHeader(EGRESS_HEADER[0], EGRESS_HEADER[1]);
     // 只记不拦时把浏览器发来的每一条 /api 请求都记下（放行的也记）：定放行表时看页面实际发了什么
     if (mode === 'log' && verdict.browser && verdict.allow && /^\/+api\//i.test(String(req.url ?? ''))) denyLog.note('seen', { layer: 'page', role, method: req.method, path: String(req.url ?? '').split('?')[0].slice(0, 160), reason: 'allowed' });

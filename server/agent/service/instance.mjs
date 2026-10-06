@@ -23,7 +23,8 @@ import { annotateError, annotateResult, createUserEditingBoard, userEditingFor }
 import { effectiveIsFile } from '../../card-overrides.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
-  CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_OPEN_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SYSTEM_NOTE,
+  CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PLAYHEAD_TOOLS,
+  cloudSystemNote, lookUnavailable, lookSourceUnavailable,
 } from './cloud-tools.mjs';
 import { attachmentsPrompt } from './hosted-tools.mjs';
 
@@ -519,6 +520,11 @@ export function createAgentInstance(env) {
       if (!open.ok) {
         agentLog('agent.cloud-unavailable', { tool });
         return open;
+      }
+      // 看画面的(契约第 9.8 节):这台节点没配看画面的口子就明说;素材的镜头拼图云端还没有
+      if (CLOUD_LOOK_TOOLS.has(tool)) {
+        if (!prerenderPost) return lookUnavailable(tool);
+        if (tool === 'see_frames' && args?.source !== undefined && args.source !== 'timeline') return lookSourceUnavailable();
       }
       // 要操作发起人界面的(契约第 9.2 节):不在线立刻明说;在线时读得到的(选区)按发消息时的快照答,要反过来操作页面的做不了
       if (CLOUD_INITIATOR_TOOLS.has(tool)) {
@@ -1363,7 +1369,7 @@ export function createAgentInstance(env) {
       } catch {
         systemPrompt = 'System prompt missing.';
       }
-      systemPrompt += `\n\n${CLOUD_SYSTEM_NOTE}`;
+      systemPrompt += `\n\n${cloudSystemNote({ look: !!prerenderPost })}`;
       if (typeof o.script === 'string' && o.script.trim()) {
         systemPrompt += `\n\n## 本片剧本(用户写的,每一步都要照它来)\n\n${o.script.trim()}\n\n` +
           '这是这条片子的主线。做任何编排、配字幕、配动效的决定时都要对照它;' +
@@ -1437,7 +1443,8 @@ export function createAgentInstance(env) {
           apiConfig,
           fetchImpl: o.fetchImpl,
           localTools: false,
-          toolFilter: CLOUD_OPEN_TOOLS,
+          // 没配看画面的口子时,看画面的四个不交给模型
+          toolFilter: prerenderPost ? CLOUD_OPEN_TOOLS : CLOUD_OPEN_TOOLS_NO_LOOK,
           // 每完成一次工具往返落一次模型历史(进程被杀也接得上);每次模型请求前后过宿主的闸、记用量(契约第 6.2、7.1 节)
           checkpoint: true,
           ...(typeof o.onModelCall === 'function' ? { onModelCall: o.onModelCall } : {}),
@@ -1445,7 +1452,9 @@ export function createAgentInstance(env) {
             // 单次工具调用的时限(契约第 11 节):到时不再等,明说这一步没做完。工具实现在进程级的串行锁里跑,
             // 所以这里只是不让这一轮干等;真卡住的实现由一轮的墙钟上限与看护兜底
             const work = callToolInternal(name, args, agentId, typeof meta?.callId === 'string' ? meta.callId : undefined);
-            const limitMs = Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
+            // 看画面的工具另给时限:带用户卡的项目要等隔离工作进程起来,别的项目在渲时还要排队;渲染服务那一侧自己有更短的时限并回明确的原因
+            const isLook = CLOUD_LOOK_TOOLS.has(name) || name === 'get_layout';
+            const limitMs = isLook && Number(o.lookTimeoutMs) > 0 ? Number(o.lookTimeoutMs) : Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
             let timer = null;
             const timeout = new Promise((resolve) => {
               timer = setTimeout(() => {
@@ -1495,6 +1504,8 @@ export function createAgentInstance(env) {
     describe: () => (agentBinding ? agentBinding.side.describe() : null),
     /** 托管档:这个项目的内容库里有没有卡片源码(有的话由渲染服务的隔离工作进程渲,补渲要排队) */
     hasProjectCards: () => (hostedShared?.cards.items.size ?? 0) > 0,
+    /** 托管档:这个项目内容库里卡片源码的「键 → 版本」(看画面时交给渲染服务:有卡就走隔离工作进程,并等它装到这个版本) */
+    cardRevs: () => Object.fromEntries([...(hostedShared?.cards.items ?? [])].map(([key, v]) => [key, Number.isFinite(v?.rev) ? v.rev : null])),
     /** 此刻的项目副本与它的版本(托管档的宿主挑要补渲的片段用);没绑或还没内容回 null */
     replica: () => {
       const r = agentBinding?.side?.link?.replica;

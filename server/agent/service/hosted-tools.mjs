@@ -521,10 +521,11 @@ export function createHostedTools({
           const next = new Map();
           for (const it of listing.items ?? []) {
             const prev = cards.items.get(it.key);
-            if (prev && prev.hash === it.hash && typeof prev.body === 'string') { next.set(it.key, prev); continue; }
+            // `rev`:内容库里这一条的版本(看画面时交给渲染服务,它等隔离工作进程把这份卡装到至少这个版本)
+            if (prev && prev.hash === it.hash && typeof prev.body === 'string') { next.set(it.key, { ...prev, rev: it.rev ?? prev.rev ?? null }); continue; }
             const item = await docRequest({ type: 'content.get', kind: CARD_KIND, key: it.key }, ['content.item']);
             if (item.missing || typeof item.body !== 'string') continue;
-            next.set(it.key, { hash: it.hash, body: item.body });
+            next.set(it.key, { hash: it.hash, rev: it.rev ?? null, body: item.body });
           }
           cards.items = next;
           const host = await c.host();
@@ -585,7 +586,7 @@ export function createHostedTools({
       const pre = gate.checkSyncedSource(key, source);
       if (!pre.ok) throw new HostedToolError(`这份源码在云端的渲染节点上装不上,没有保存:\n${pre.errors.join('\n')}`, { errors: pre.errors });
       const stored = await docRequest({ type: 'content.put', kind: CARD_KIND, key, body: source, session: `agent:${agentKey}`.slice(0, 128) }, ['content.stored']);
-      cards.items.set(key, { hash: stored.hash, body: source });
+      cards.items.set(key, { hash: stored.hash, rev: stored.rev ?? null, body: source });
       await refreshCards(true);
     }
 

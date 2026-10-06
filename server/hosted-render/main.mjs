@@ -27,6 +27,10 @@
  *                                     off：不起隔离工作进程，含用户卡的任务渲染服务不认领（常驻工作进程两种取值下都不同步卡）
  *   PROMPTCUT_RENDER_ISO_PORT         隔离工作进程的端口（另占 +1、+2），缺省 PROMPTCUT_RENDER_PORT + 10。它的数据目录是 <PROMPTCUT_RENDER_DATA>/iso
  *   PROMPTCUT_RENDER_ISO_IDLE_MS / _ISO_SLICE_MS   测试与演练用：隔离工作进程闲置多久结束（缺省 60000）、另有项目在等时一个项目最多连续做多久（缺省 300000）
+ *   PROMPTCUT_RENDER_LOOK             on（缺省）| off。看画面的口子（契约第 8a 节，`look.mjs`）：云端 Agent 服务凭服务身份向本进程要一帧画面。
+ *                                     off：这条路整个不在（回 404），云端 Agent 的看画面工具回「这次没看成」
+ *   PROMPTCUT_RENDER_LOOK_SERVICES    服务登记表（只有公钥）的路径，核对云端 Agent 服务的签名用；缺省 /var/lib/promptcut/hosted/secrets/services.json。
+ *                                     读不到、里面没有 agent：看画面的口子谁也进不来
  *   PROMPTCUT_PAGE_GATE               log：工作进程的页面请求闸与出口代理只记不拦（排查用；缺省 enforce）。不是 PROMPTCUT_RENDER_ 开头，原样传给工作进程
  *   PROMPTCUT_RENDER_EDITOR_DIR       在线页面构建所在目录（比代码版本用），缺省 /opt/promptcut-hosted/editor
  *   PROMPTCUT_RENDER_EXPECT_CODE_VERSION   直接给应该一致的代码版本（取不到在线页面构建时用）
@@ -46,7 +50,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { readServiceKeyFile } from '../auth/service-identity.mjs';
+import { readServiceKeyFile, createServiceRegistry } from '../auth/service-identity.mjs';
+import { createLook, createLookVerifier } from './look.mjs';
 import { createDirectory } from './directory.mjs';
 import { createBroker, selectProjects } from './broker.mjs';
 import { createWorker } from './worker.mjs';
@@ -108,6 +113,8 @@ export function renderServiceConfig(env = process.env) {
     user: env.PROMPTCUT_RENDER_USER || '',
     cgroup: env.PROMPTCUT_RENDER_CGROUP === 'off' ? 'off' : 'auto',
     userCards: env.PROMPTCUT_RENDER_USER_CARDS === 'off' ? 'off' : 'isolated',
+    look: env.PROMPTCUT_RENDER_LOOK === 'off' ? 'off' : 'on',
+    lookServicesFile: env.PROMPTCUT_RENDER_LOOK_SERVICES || '/var/lib/promptcut/hosted/secrets/services.json',
     editorDir: env.PROMPTCUT_RENDER_EDITOR_DIR || '/opt/promptcut-hosted/editor',
     expectCodeVersion: env.PROMPTCUT_RENDER_EXPECT_CODE_VERSION || '',
     agentStatusUrl: env.PROMPTCUT_RENDER_AGENT_STATUS_URL || '',
@@ -310,8 +317,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const heldByProject = () => Object.fromEntries((report?.queue?.nodes ?? []).map((n) => [n.projectId, (n.held?.length ?? 0) + (n.running?.length ?? 0)]));
   const listing = () => {
     const picked = selectProjects({ directory: directory.list(), held: heldByProject(), maxProjects: config.maxProjects, instanceId: key.instanceId });
-    // 隔离工作进程在跑时占一个并发名额：常驻的压到「总数 - 1」，两者合起来不超过第 4 节的并发上限
-    return { docUrl: config.docUrl, paused: backpressure.paused, limit: isolation?.active ? Math.max(0, concurrency - 1) : concurrency, projects: picked.projects, waiting: picked.waiting };
+    // 隔离工作进程在跑时占一个并发名额：常驻的压到「总数 - 1」，两者合起来不超过第 4 节的并发上限。
+    // 常驻工作进程正在出一帧「看画面」时也让出一个名额（已经在做的任务不打断，只是不再认领新的）
+    const taken = (isolation?.active ? 1 : 0) + (look.busyOn() === 'resident' ? 1 : 0);
+    return { docUrl: config.docUrl, paused: backpressure.paused, limit: Math.max(0, concurrency - taken), projects: picked.projects, waiting: picked.waiting };
   };
 
   // ---------- 隔离工作进程（契约第 7.5 节，方案 A）
@@ -410,17 +419,54 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     },
   });
   const isoListing = () => ({ docUrl: config.docUrl, paused: backpressure.paused, limit: 1, projects: isolation?.listing() ?? [], waiting: [] });
+  /** 「要看画面」的需求（`look.mjs` 登记）：projectId → { until, seq }。到期的随手清掉 */
+  const lookWants = new Map();
+  let lookSeq = 0;
+  const lookWanted = (projectId) => {
+    const w = lookWants.get(projectId);
+    if (!w) return false;
+    if (w.until <= Date.now()) { lookWants.delete(projectId); return false; }
+    return true;
+  };
   function isoTick() {
     if (!isolation || stopping) return;
     const dir = directory.list();
+    const looks = new Map();
+    for (const [projectId, w] of [...lookWants]) { if (lookWanted(projectId)) looks.set(projectId, w.seq); }
     // 背压暂停时不新起（已经在跑的照旧，它自己不认领新的）
-    const candidates = backpressure.paused && !isolation.active ? [] : isolationCandidates({ directory: dir, residentNodes: report?.queue?.nodes ?? [] });
+    const candidates = backpressure.paused && !isolation.active ? [] : isolationCandidates({ directory: dir, residentNodes: report?.queue?.nodes ?? [], looks });
     isolation.tick({
       candidates,
       eligible: (projectId) => dir.some((p) => p.projectId === projectId && p.enabled && p.active),
       report: isoReport ? { at: isoReportAt, queue: isoReport.queue } : null,
+      looks: { wanted: lookWanted, busy: look.busyOn() === 'isolated' ? look.busyProject() : null },
     });
   }
+
+  // ---------- 看画面（契约第 8a 节）：云端 Agent 服务凭服务身份来要一帧
+  const lookRegistry = config.look === 'on' ? createServiceRegistry({ file: config.lookServicesFile, log: (event, fields) => log(`look.${event}`, fields) }) : null;
+  const look = createLook({
+    enabled: config.look === 'on',
+    verify: createLookVerifier({ registry: lookRegistry }),
+    project: (projectId) => directory.get(projectId),
+    paused: () => backpressure.paused,
+    resident: () => ({
+      port: config.port, key: brokerKey, running: worker.status().running === true && worker.status().ready === true,
+      node: (projectId) => (report?.queue?.nodes ?? []).find((n) => n.projectId === projectId) ?? null,
+    }),
+    iso: () => ({
+      enabled: !!isolation, port: config.isoPort, key: isoKey,
+      current: isolation?.current ? { projectId: isolation.current.projectId, phase: isolation.current.phase } : null,
+      // 只认这一轮开始之后交来的诊断（上一轮的不作数）
+      report: isolation?.current && isoReport && isoReportAt >= isolation.current.startedAt ? isoReport : null,
+      lastRun: isolation?.status().lastRun ?? null,
+    }),
+    want: (projectId, until) => {
+      const prev = lookWants.get(projectId);
+      lookWants.set(projectId, { until, seq: prev && prev.until > Date.now() ? prev.seq : (lookSeq += 1) });
+    },
+    log,
+  });
 
   async function sample() {
     const healthMs = await timedHealth(config.healthUrl);
@@ -492,6 +538,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     clients: () => (isoKey && isolation?.active ? [{ name: 'isolated', key: isoKey, listing: isoListing, report(body) { isoReport = body; isoReportAt = Date.now(); } }] : []),
     ticket: (projectId) => directory.ticket(projectId),
     report(body) { report = body; reportAt = Date.now(); },
+    look,
     log,
     status() {
       const l = listing();
@@ -502,6 +549,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         worker: { ...worker.status(), concurrency, mode: support.ok ? 'cgroup' : 'in-process', reportAgeMs: reportAt ? Date.now() - reportAt : null },
         queue: report?.queue ?? null,
         userCards: config.userCards,
+        look: { ...look.status(), registry: lookRegistry ? { file: config.lookServicesFile, agentKeys: lookRegistry.get('agent')?.keys.length ?? 0 } : null },
         isolation: !isolation ? { enabled: false } : {
           enabled: true, port: config.isoPort, ...isolation.status(),
           worker: isoProc ? isoProc.status() : null,
@@ -529,7 +577,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     process.stderr.write(line);
     return 1;
   }
-  log('listen', { role: 'hosted-render', statusPort: brokerPort, workerPort: config.port, docUrl: config.docUrl, service: key.service, kid: key.kid, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}`, node: process.version });
+  log('listen', { role: 'hosted-render', look: config.look, statusPort: brokerPort, workerPort: config.port, docUrl: config.docUrl, service: key.service, kid: key.kid, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}`, node: process.version });
 
   // 上一次没来得及清的（管理进程自己被杀）：起任何工作进程之前先把隔离工作进程的数据目录清空
   if (isolation) { try { await wipeIso(); } catch (err) { log('isolation.cleanup-failed', { message: String(err?.message ?? err), at: 'startup' }); } }

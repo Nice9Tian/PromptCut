@@ -7,8 +7,9 @@
  * | `GET /projects` | 工作进程 | `{ ok, docUrl, paused, projects: [{ projectId, members, drain, nodeId }] }`：它现在该连哪些项目 |
  * | `POST /ticket { projectId }` | 工作进程 | `{ ok, ticket }`：一张连接票据（转给目录的 `hosted.ticket`）；只给清单里的项目 |
  * | `POST /report { pid, queue }` | 工作进程 | 把自己的诊断交过来（管理进程不反过来请求工作进程） |
+ * | `POST /look { projectId, path, body, cards?, timeoutMs? }` | 云端 Agent 服务 | 要一帧画面（`look.mjs`）；凭服务私钥的签名（`x-pc-service-auth`），不认工作进程的口令 |
  *
- * 后三条要 `Authorization: Bearer <这次启动随机生成的口令>`（经环境变量交给工作进程）。卡片代码跑在 Chrome 页面里，
+ * 中间三条要 `Authorization: Bearer <这次启动随机生成的口令>`（经环境变量交给工作进程）。卡片代码跑在 Chrome 页面里，
  * 读不到工作进程的环境变量，所以即使它能请求这个端口也过不了这一关。
  *
  * `selectProjects` 是纯函数：从目录清单与工作进程此刻手里的认领，定出它该连的项目——
@@ -19,6 +20,7 @@
  */
 import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { LOOK_AUTH_HEADER } from './look.mjs';
 
 /** 节点 id：`hosted-render:<instanceId 前 12 位>/<projectId 去掉 sp_ 的前 8 位>` */
 export const nodeIdFor = (instanceId, projectId) => `hosted-render:${String(instanceId).slice(0, 12)}/${String(projectId).replace(/^sp_/, '').slice(0, 8)}`;
@@ -72,6 +74,17 @@ function readJson(req, max = 4 * 1024 * 1024) {
   });
 }
 
+/** 读原样的请求体（看画面的签名按原文算）；超过上限回 null */
+function readText(req, max) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => { size += c.length; if (size <= max) chunks.push(c); });
+    req.on('end', () => resolve(size > max ? null : Buffer.concat(chunks).toString('utf8')));
+    req.on('error', () => resolve(null));
+  });
+}
+
 /**
  * @param {object} o
  * @param {string} o.key 这次启动的口令
@@ -80,9 +93,11 @@ function readJson(req, max = 4 * 1024 * 1024) {
  * @param {(body: object) => void} o.report
  * @param {() => object} o.status
  * @param {() => { name: string, key: string, listing: () => object, report: (body: object) => void }[]} [o.clients] 另外的工作进程（隔离工作进程）
+ * @param {null | { limits: { maxBodyBytes: number }, handle(input: { auth: unknown, bodyText: string }): Promise<{ status: number, body: object }> }} [o.look]
+ *   看画面的口子（`look.mjs` 的 `createLook`）；不给就没有这条路
  * @param {(event: string, fields?: object) => void} [o.log]
  */
-export function createBroker({ key, listing, ticket, report, status, clients = null, log = () => {} }) {
+export function createBroker({ key, listing, ticket, report, status, clients = null, look = null, log = () => {} }) {
   /*
    * 口令按工作进程分（契约第 7.5 节）：常驻工作进程一把（`key` / `listing` / `report`），隔离工作进程一把（`clients()` 每次请求现取——
    * 它的口令每一轮都换，没在跑时不在表里）。哪把口令进来就只看得到那个工作进程自己的清单、只要得到清单里那些项目的票据、
@@ -108,6 +123,14 @@ export function createBroker({ key, listing, ticket, report, status, clients = n
       const url = new URL(req.url ?? '/', 'http://broker.local');
       if (fromBrowser(req)) { req.resume(); log('broker.browser-refused', { path: url.pathname.slice(0, 80) }); return send(res, 403, { ok: false, error: 'forbidden' }); }
       if (req.method === 'GET' && url.pathname === '/status') return send(res, 200, { ok: true, ...status() });
+      // 看画面：云端 Agent 服务凭服务私钥的签名来要，不走工作进程的口令（工作进程的口令要不到画面，Agent 服务的签名也要不到清单与票据）
+      if (req.method === 'POST' && url.pathname === '/look') {
+        if (!look) { req.resume(); return send(res, 404, { ok: false, error: 'not-found' }); }
+        const bodyText = await readText(req, look.limits.maxBodyBytes);
+        if (bodyText === null) return send(res, 413, { ok: false, error: 'too-large' });
+        const out = await look.handle({ auth: req.headers[LOOK_AUTH_HEADER], bodyText });
+        return send(res, out.status, out.body);
+      }
       const client = clientOf(req);
       if (!client) { req.resume(); return send(res, 401, { ok: false, error: 'unauthorized' }); }
       if (req.method === 'GET' && url.pathname === '/projects') return send(res, 200, { ok: true, ...client.listing() });
