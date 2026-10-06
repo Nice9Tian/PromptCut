@@ -37,10 +37,12 @@
  *   O8  空对话只有一条示例句「为我快速创建一个视频告诉我软件都可以做什么。」;
  *   O9  云端下一键配特效置灰并写真实原因(差语音识别);「诊断报告」可用:报告是这段云端对话的过程、出错原因、客户端与版本信息,没有票据形状的串、Bearer、Key;
  *       在线页面的「保存为文件」是浏览器下载,不请求 /api/ai/diagnostics*;
- *   O10 只在创建者关闭「云端 Agent」时给别的成员气泡,打开时不提示;
+ *   O10 只在创建者关闭「云端 Agent」时给别的成员气泡,打开时不提示(「托管方的渲染节点」那个开关同一个规矩,由单测 CAU-SW-01 守:本探针的搭法里没有登记渲染节点,开不了它的开关);
  *   O11 〔用户 2026-10-07 更正〕云端下附件按钮可用:选文件逐个上传到云端这个对话的工作目录(请求体是文件字节、octet-stream、带委托票据,文件真的落在
  *       Agent 服务的工作目录里、字节一致);上传失败(空文件)给出原因、可移除;发消息把已传好的 url 带上,气泡里显示附件名,发出后附件条清空;
  *       没有任何同源 /api/ 请求;
+ *   O9(K) 在线页面「保存为文件」真的下载到文件、内容就是对话框里的报告;一键「报告」提交:页面直接跨源请求收集端(探针自己起的,跑的是仓库里真的 `tools/report-worker/worker.js`,令牌是假的),
+ *       收集端存下的就是这份报告、没有任何凭证与提交令牌;D9(K) 桌面版云端对话的报告同样能提交;
  *
  * 桌面版(`desktop`,桌面 dev server 在 `?aimock=1` 下起,本机驱动是内置假流,保证有一个本机驱动可选)
  *   D1  放本机的项目:接入方式里没有「云端」,没有任何发往 Agent 服务的请求;
@@ -57,12 +59,14 @@
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createSharedProject, lookupProject } from '../../server/auth/client.mjs';
+import reportWorker from '../../tools/report-worker/worker.js';
 import { joinAs, adminOp, projectOf, putProject } from './cloud-agent-probe-lib.mjs';
 import {
-  ROOT, sleep, USER_PORTS, createUi, startStack, startDesktop, killDesktop, launchBrowser, newPage, P, typeInto, mockSteps, msgs, view, conversationOf,
+  ROOT, sleep, USER_PORTS, portFree, createUi, startStack, startDesktop, killDesktop, launchBrowser, newPage, P, typeInto, mockSteps, msgs, view, conversationOf,
   toolCount, lastAssistant, idle, panelText, providerOptions, sendText, joinOnline, openDesktopEditor, sharedProjectOf, hostedToggle, openProjectSettings,
   creatorToggleService, closeDialogs, eventLog, membersList, gateSettled,
 } from './cloud-agent-ui-lib.mjs';
@@ -70,13 +74,46 @@ import {
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const BASE = Number(arg('--base-port', 5790));
+const BUILT_HERE = !arg('--dist', null);
 const PHASES = new Set(arg('--phases', 'online,desktop').split(','));
 const PORTS = { site: BASE, stageA: BASE + 1, stageB: BASE + 2, desktop: BASE + 3, doc: Number(arg('--doc-port', 8776)), asset: Number(arg('--asset-port', 8777)), agent: Number(arg('--agent-port', 8778)) };
-for (const p of USER_PORTS) if (Object.values(PORTS).includes(p) || PORTS.desktop + 1 === p || PORTS.desktop + 2 === p) { process.stderr.write(`端口段碰到了 ${p}(用户的编辑器或安装版)\n`); process.exit(2); }
+const COLLECTOR_PORT = BASE + 6;
+for (const p of USER_PORTS) if (Object.values(PORTS).includes(p) || PORTS.desktop + 1 === p || PORTS.desktop + 2 === p || COLLECTOR_PORT === p) { process.stderr.write(`端口段碰到了 ${p}(用户的编辑器或安装版)\n`); process.exit(2); }
 const RUN = `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-cloud-ui-'));
 const OUT = path.resolve(arg('--out', path.join(ROOT, '..', '..', 'work', 'four-stage', 'cloud-agent', 'ui2')));
 fs.mkdirSync(OUT, { recursive: true });
+
+/* ---- 假收集端(诊断报告的「提交」打到这里;任务书 K):就是仓库里真的 tools/report-worker/worker.js(令牌校验、CORS、存储),
+ *      只是 KV 换成内存、令牌是探针自己生成的假串,监听本机一个端口。页面是跨源 fetch 它,浏览器真的做 CORS 检查;不连任何真实的收集端。 */
+const COLLECTOR_TOKEN = `probe-${randomBytes(6).toString('hex')}`;
+const COLLECTOR_ORIGIN = `http://127.0.0.1:${COLLECTOR_PORT}`;
+const collectorKv = new Map();
+const collectorEnv = {
+  SUBMIT_TOKEN: COLLECTOR_TOKEN,
+  REPORTS: {
+    async put(k, v, o) { collectorKv.set(k, { v, meta: o?.metadata }); },
+    async get(k) { return collectorKv.has(k) ? collectorKv.get(k).v : null; },
+    async delete(k) { collectorKv.delete(k); },
+    async list() { return { keys: [...collectorKv.entries()].map(([name, e]) => ({ name, metadata: e.meta })), list_complete: true, cursor: null }; },
+  },
+};
+/** 收集端收到的每个请求(`{ method, origin, contentType }`;预检也记) */
+const collectorLog = [];
+const collector = http.createServer(async (req, res) => {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  collectorLog.push({ method: req.method, origin: req.headers.origin ?? null, contentType: req.headers['content-type'] ?? null });
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
+  const r = await reportWorker.fetch(new Request(`${COLLECTOR_ORIGIN}${req.url}`, { method: req.method, headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks) }), collectorEnv);
+  res.writeHead(r.status, Object.fromEntries(r.headers));
+  res.end(Buffer.from(await r.arrayBuffer()));
+});
+/** 收集端存下的报告(页面提交的整个 JSON:`{ label, at, text }`,令牌已被收集端摘掉) */
+const collected = () => [...collectorKv.values()].map((e) => ({ meta: e.meta, payload: JSON.parse(e.v) }));
+/** 在线页面与桌面编辑器构建时带的收集端地址与令牌(Vite 读 VITE_ 开头的环境变量) */
+const COLLECTOR_ENV = { VITE_DIAG_SUBMIT_URL: COLLECTOR_ORIGIN, VITE_DIAG_SUBMIT_TOKEN: COLLECTOR_TOKEN };
 
 const { results, check, say, until } = createUi({ maxLine: 1600 });
 let S = null;
@@ -121,9 +158,10 @@ async function menuState(page, panel) {
 }
 /**
  * 云端下点「诊断报告」:子窗口里的报告是这段云端对话的过程、出错原因、客户端与版本信息,不含任何凭证。
- * `save`:在线页面再点「保存为文件」(浏览器下载,不请求 /api/*);桌面版不点(那条路会请本机编辑器写盘并弹出文件夹)。
+ * `save`:在线页面再点「保存为文件」(浏览器下载,不请求 /api/*;下载到探针自己的临时目录,读回文件名与内容);桌面版不点(那条路会请本机编辑器写盘并弹出文件夹)。
+ * `submit`:再点「提交」,页面直接请求假收集端(跨源),回执原文放进 `submitMsg`,这期间页面发给收集端的请求放进 `collectorReqs`。
  */
-async function diagnostics(page, { save = false, shotName = null } = {}) {
+async function diagnostics(page, { save = false, submit = false, shotName = null } = {}) {
   await gateSettled(page, { appearMs: 1500 }); // 测量遮罩盖着时点不下去
   await page.click(`${CLOUD_PANEL} [data-pc="ai-menu"]`);
   await page.click(`${CLOUD_PANEL} [data-pc="ai-diagnostics"]`);
@@ -132,16 +170,30 @@ async function diagnostics(page, { save = false, shotName = null } = {}) {
   const buttons = await P(page, () => [...document.querySelectorAll('.rpt-dialog .rpt-btn')].map((b) => ({ text: b.textContent.trim(), disabled: b.disabled })));
   if (shotName) await shot(page, shotName);
   let saveMsg = null;
+  let downloaded = null;
+  let submitMsg = null;
   const apiBefore = page.requests.filter((r) => /\/api\/ai\/diagnostics/.test(r.url)).length;
   if (save) {
+    const dir = fs.mkdtempSync(path.join(TMP, 'dl-'));
+    const cdp = await browser.target().createCDPSession();
+    await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dir, browserContextId: page.browserContext().id });
     await page.evaluate(() => { [...document.querySelectorAll('.rpt-dialog .rpt-btn')].find((b) => b.textContent.trim() === '保存为文件')?.click(); });
     saveMsg = await until('诊断报告:保存为文件有回执', () => page.$eval('.rpt-dialog .rpt-msg', (e) => e.textContent ?? '').catch(() => null), 8000, 100);
+    const file = await until('诊断报告:浏览器真的把文件下载下来了', () => fs.readdirSync(dir).find((n) => !n.endsWith('.crdownload')) ?? null, 10_000, 100);
+    if (file) downloaded = { name: file, text: fs.readFileSync(path.join(dir, file), 'utf8') };
+    await cdp.detach().catch(() => {});
   }
+  const collectorBefore = page.requests.filter((r) => r.url.startsWith(COLLECTOR_ORIGIN)).length;
+  if (submit) {
+    await page.evaluate(() => { [...document.querySelectorAll('.rpt-dialog .rpt-btn')].find((b) => b.textContent.trim() === '提交')?.click(); });
+    submitMsg = await until('诊断报告:提交有回执', () => page.$eval('.rpt-dialog .rpt-msg', (e, prev) => ((e.textContent ?? '') !== prev ? e.textContent : null), saveMsg).catch(() => null), 10_000, 100);
+  }
+  const collectorReqs = page.requests.filter((r) => r.url.startsWith(COLLECTOR_ORIGIN)).slice(collectorBefore);
   const apiAfter = page.requests.filter((r) => /\/api\/ai\/diagnostics/.test(r.url)).length;
   await page.click('.rpt-dialog .rpt-x').catch(() => {});
   let report = null;
   try { report = JSON.parse(text); } catch { report = null; }
-  return { text, report, buttons, saveMsg, diagApiRequests: apiAfter - apiBefore };
+  return { text, report, buttons, saveMsg, downloaded, submitMsg, collectorReqs, diagApiRequests: apiAfter - apiBefore };
 }
 /**
  * 自己按原始成员列表与在场状态里的 cloud-run 算「成员:N 人 · Agent:M 个」(与界面各写各的,互相对一遍):
@@ -258,12 +310,23 @@ async function onlinePhase() {
   check('O1:点「撤销这步」撤掉云端 Agent 的最后一步:文档服务里卡片参数回到 40,按钮变成「已撤销」,别的改动还在', !!undoRow && !!undone && rowAfter?.undo === 'done' && clipIn(await readProject(), 'c-text').params.text === '云端改的|标题', { tool: undoRow?.tool ?? null, undo: rowAfter?.undo ?? null });
 
   /* ---- O9:云端下「诊断报告」可用:云端对话的过程、客户端与版本信息,不含凭证;在线页面「保存为文件」是浏览器下载 */
-  const diagA = await diagnostics(A, { save: true, shotName: 'O9-online-diagnostics' });
+  // 给了 --dist 就不重打在线构建,页面里没有收集端地址,「提交」那几条不测
+const diagA = await diagnostics(A, { save: true, submit: BUILT_HERE, shotName: 'O9-online-diagnostics' });
   const rep = diagA.report;
   const toolNames = (rep?.rounds ?? []).flatMap((r) => (r.reply?.tools ?? []).map((t) => t.name));
   check('O9:云端下「诊断报告」可用:报告是这段云端对话的(对话 id、四个工具调用、回复、客户端模式 online、代码版本)', rep?.format === 'PromptCut cloud conversation debug v1' && rep.conversation?.id === (await conversationOf(A)) && toolNames.filter((n) => n === 'update_clip').length === 3 && toolNames.includes('get_project') && JSON.stringify(rep.rounds).includes('三处都改好了') && rep.client?.mode === 'online' && typeof rep.client?.userAgent === 'string' && 'codeVersion' in rep.client, { format: rep?.format, tools: toolNames, client: rep?.client, rounds: rep?.rounds?.length });
   check('O9:报告里没有任何凭证:没有票据形状的串(v1.…)、没有 Bearer、没有 sk- 形状的 Key', !TICKET_SHAPE.test(diagA.text) && !/Bearer\s+[A-Za-z0-9]/.test(diagA.text) && !/\bsk-[A-Za-z0-9_-]{12,}/.test(diagA.text) && !/grant|delegation/i.test(Object.keys(rep?.conversation ?? {}).join(',')), { chars: diagA.text.length });
   check('O9:在线页面的「保存为文件」是浏览器下载(有回执),没有请求 /api/ai/diagnostics*;三个出口都在', /已下载/.test(String(diagA.saveMsg ?? '')) && diagA.diagApiRequests === 0 && diagA.buttons.map((b) => b.text).join() === '复制,保存为文件,提交', { saveMsg: diagA.saveMsg, diagApi: diagA.diagApiRequests, buttons: diagA.buttons });
+  // 〔任务书 K〕下载:浏览器真的下载下来一个文件,内容就是对话框里的那份报告
+  check('O9(K):「保存为文件」真的下载到一个文件:文件名「云端对话诊断-〈时间〉.json」,内容就是对话框里的那份报告', !!diagA.downloaded && /^云端对话诊断-.+\.json$/.test(diagA.downloaded.name) && diagA.downloaded.text === diagA.text && JSON.parse(diagA.downloaded.text).format === 'PromptCut cloud conversation debug v1', { name: diagA.downloaded?.name, bytes: diagA.downloaded?.text.length, sameAsDialog: diagA.downloaded?.text === diagA.text });
+  if (BUILT_HERE) {
+    // 〔任务书 K〕提交:页面直接请求收集端(跨源),不经编辑器进程的 /api/*;收集端是仓库里真的 worker.js(令牌、CORS)
+    const got = collected();
+    const stored = got[0]?.payload ?? null;
+    check('O9(K):一键「报告」提交成功:回执「已提交,回执编号 …」;页面只向收集端发了一个跨源 POST(text/plain,没有预检);收集端存下的就是这份报告、标签「云端对话诊断」,提交令牌已被摘掉', /已提交，回执编号 \S+/.test(String(diagA.submitMsg ?? '')) && diagA.collectorReqs.length === 1 && diagA.collectorReqs[0].method === 'POST' && collectorLog.length === 1 && collectorLog[0].method === 'POST' && /^text\/plain/.test(collectorLog[0].contentType ?? '') && collectorLog[0].origin === S.SITE && got.length === 1 && stored?.label === '云端对话诊断' && stored?.text === diagA.text && !JSON.stringify(stored).includes(COLLECTOR_TOKEN) && diagA.diagApiRequests === 0, { msg: diagA.submitMsg, pageReqs: diagA.collectorReqs.length, collectorLog, stored: got.length, label: stored?.label, sameText: stored?.text === diagA.text });
+    const storedText = JSON.stringify(stored ?? {});
+    check('O9(K):收集端存下的内容里没有任何凭证:没有票据形状的串、Bearer、sk- Key、委托与提交令牌', !!stored && !TICKET_SHAPE.test(storedText) && !/Bearer\s+[A-Za-z0-9]/.test(storedText) && !/sk-[A-Za-z0-9_-]{12,}/.test(storedText) && !storedText.includes(COLLECTOR_TOKEN), { chars: storedText.length });
+  }
 
   /* ---- O2:停止 */
   await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 30000 }, { say: '这句话不该出现' }]);
@@ -507,7 +570,7 @@ async function onlinePhase() {
 const localAiReqs = (page) => page.requests.filter((r) => { try { const u = new URL(r.url); return u.origin === desktop.origin && /^\/api\/(ai\/(chat|abort)|mcp\/call)/.test(u.pathname); } catch { return false; } });
 
 async function desktopPhase() {
-  desktop = await startDesktop({ port: PORTS.desktop, dir: path.join(TMP, 'desktop'), deviceId: `cloud-ui-desk-${RUN}`.padEnd(20, '0') });
+  desktop = await startDesktop({ port: PORTS.desktop, dir: path.join(TMP, 'desktop'), deviceId: `cloud-ui-desk-${RUN}`.padEnd(20, '0'), env: COLLECTOR_ENV });
   say('desktop.up', { origin: desktop.origin });
   const ctx = await browser.createBrowserContext();
   const page = await newPage(ctx);
@@ -658,9 +721,14 @@ async function desktopPhase() {
   check('D5:点开后找回完整过程(用户消息、四个工具调用、最后的回复)', !!found5 && found5.filter((x) => x.role === 'user').length === 1, { tools: toolCount(found5), users: found5?.filter((x) => x.role === 'user').length });
   await shot(page, 'D5-desktop-cloud-recovered');
   // 〔用户 2026-10-07 定〕桌面版云端对话里「诊断报告」可用(不点「保存为文件」:那条路请本机编辑器写盘并弹出文件夹)
-  const diagD = await diagnostics(page, { shotName: 'D9-desktop-diagnostics' });
+  const diagD = await diagnostics(page, { submit: true, shotName: 'D9-desktop-diagnostics' });
   const toolNamesD = (diagD.report?.rounds ?? []).flatMap((r) => (r.reply?.tools ?? []).map((t) => t.name));
   check('D9:桌面版云端下「诊断报告」可用:报告是这段云端对话的(四个工具调用、回复、客户端模式 desktop),不含任何凭证', diagD.report?.format === 'PromptCut cloud conversation debug v1' && diagD.report.conversation?.id === convD && toolNamesD.length === 4 && JSON.stringify(diagD.report.rounds).includes('桌面发起的三处改动做完了') && diagD.report.client?.mode === 'desktop' && !TICKET_SHAPE.test(diagD.text) && !/Bearer\s+[A-Za-z0-9]/.test(diagD.text) && !/\bsk-[A-Za-z0-9_-]{12,}/.test(diagD.text) && diagD.diagApiRequests === 0, { tools: toolNamesD, client: diagD.report?.client, chars: diagD.text.length });
+  {
+    const desk = collected().map((x) => x.payload).filter((p) => { try { return JSON.parse(p.text).client?.mode === 'desktop'; } catch { return false; } });
+    const deskText = JSON.stringify(desk[0] ?? {});
+    check('D9(K):桌面版云端对话的报告同样能一键提交到收集端:回执「已提交」,收集端存下的就是这份报告,不含凭证与提交令牌', /已提交/.test(String(diagD.submitMsg ?? '')) && desk.length === 1 && desk[0].text === diagD.text && !TICKET_SHAPE.test(deskText) && !/Bearer\s+[A-Za-z0-9]/.test(deskText) && !/sk-[A-Za-z0-9_-]{12,}/.test(deskText) && !deskText.includes(COLLECTOR_TOKEN) && diagD.collectorReqs.length === 1, { msg: diagD.submitMsg, stored: desk.length, pageReqs: diagD.collectorReqs.length });
+  }
 
   /* ---- D6:云端对话还在跑时重新打开:有「进行中」提示,点了接上 */
   await startRun(page, [{ tool: 'get_project', input: {} }, { sleepMs: 45000 }, { tool: 'update_clip', input: { clipId: clips.text, label: 'D6 接上后' } }, { say: 'D6 做完了' }]);
@@ -704,7 +772,9 @@ async function desktopPhase() {
 
 let exitCode = 0;
 try {
-  S = await startStack({ tmp: TMP, ports: PORTS, dist: arg('--dist', null), say });
+  if (!(await portFree(COLLECTOR_PORT))) throw new Error(`端口 ${COLLECTOR_PORT} 被占用`);
+  await new Promise((r) => collector.listen(COLLECTOR_PORT, '127.0.0.1', r));
+  S = await startStack({ tmp: TMP, ports: PORTS, dist: arg('--dist', null), say, buildEnv: COLLECTOR_ENV });
   const health = await (await fetch(`${S.AGENT_DIRECT}/healthz`, { signal: AbortSignal.timeout(10_000) })).json().catch((e) => ({ error: String(e?.message ?? e) }));
   check('Agent 服务(托管档,本机,真身份)/healthz', health?.ok === true && S.agent.ready?.auth !== undefined, { ok: health?.ok, version: health?.version, auth: S.agent.ready?.auth ?? null });
   browser = await launchBrowser({ extraArgs: ['--disable-gpu'] });
@@ -717,6 +787,7 @@ try {
   if (desktop) await killDesktop(desktop).catch(() => {});
   for (const c of nodeConns) { try { c.close(); } catch { /* 已关 */ } }
   await S?.stop().catch(() => {});
+  await new Promise((r) => { try { collector.close(() => r()); collector.closeAllConnections?.(); } catch { r(); } });
   await sleep(300);
   const busy = S ? await S.portsStillBusy().catch(() => []) : [];
   if (busy.length) say('ports.still-busy', { busy });

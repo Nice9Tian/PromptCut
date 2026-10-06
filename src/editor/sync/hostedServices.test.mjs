@@ -54,7 +54,8 @@ test("CAU-SW-01 云端 Agent 一行的文案与同组一致;成员行下的云�
   for (const on of [true, false]) for (const f of [t.hint, t.confirm]) assert.ok(f(on).length > 8);
   assert.ok(t.changed(false).length > 8);
   assert.equal(t.changed(true), "", "只在关闭时给别的成员气泡,打开时不提示〔用户 2026-10-07 定〕");
-  assert.match(H.HOSTED_SERVICE_TEXT.render.changed(true), /创建者打开了托管方的渲染节点/, "渲染节点的气泡保持现状:打开也提示");
+  assert.equal(H.HOSTED_SERVICE_TEXT.render.changed(true), "", "渲染节点同一个规矩:只在关闭时给别的成员气泡,打开时不提示〔用户 2026-10-07 定〕");
+  assert.match(H.HOSTED_SERVICE_TEXT.render.changed(false), /创建者关闭了托管方的渲染节点/);
   assert.match(t.hint(false), /已关闭/);
   assert.match(t.changed(false), /创建者关闭了云端 Agent/);
   assert.notEqual(H.HOSTED_SERVICE_TEXT.render.confirm(false), t.confirm(false), "确认弹窗的话按服务各写各的");

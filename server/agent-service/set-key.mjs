@@ -1,5 +1,11 @@
 /**
- * 录入云端 Agent 用的模型 Key(契约 `docs/plan/cloud-agent-contract.md` 第 8.2 节)。由托管方自己在节点的终端里运行:
+ * 云端 Agent 的模型配置:切模拟模型(`--mock`)、删 Key(`--clear`),以及**仅供本机调试**的交互式录入明文 Key。
+ *
+ * 〔用户 2026-10-07 定〕正式的 Key 录入走加密分发,不走本文件:节点报出机器识别码(`machine-id.mjs`)→ 用户在自己的电脑上用
+ * `make-api-share.bat` 生成只有这台节点解得开的密文 → `import-key.mjs` 导入。会话全程只接触密文,不向用户要明文。
+ * 下面的交互式录入保留,是给「用户本人坐在节点终端前、手边没有密文」的调试场合;运行时会先写明这一点。
+ *
+ * 契约 `docs/plan/cloud-agent-contract.md` 第 8.2 节原先的写法(交互式录入明文)如下,仍然有效:由托管方自己在节点的终端里运行:
  *
  *   cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-service/set-key.mjs
  *
@@ -122,6 +128,7 @@ export async function runSetKey({ argv = [], env = process.env, stdin = process.
     const old = readModelConfig(dataDir);
     const oldVendor = REAL_VENDORS.includes(old.vendor) ? old.vendor : 'anthropic';
     prompter = createPrompter(stdin, stdout);
+    say('提示:这是仅供本机调试的录入方式。正式录入模型 Key 请用加密分发:node server/agent-service/machine-id.mjs 报出识别码,用 make-api-share.bat 生成密文,再 node server/agent-service/import-key.mjs --file <密文文件>。');
     say(`模型配置写到 ${path.join(modelConfigPaths(dataDir).dir, '')}`);
     const vendor = (await prompter.ask(`厂商(${REAL_VENDORS.join(' / ')})[${oldVendor}]:`)).trim() || oldVendor;
     if (!REAL_VENDORS.includes(vendor)) throw new Quit(`厂商只能是 ${REAL_VENDORS.join(' / ')}。没有改动。`);
