@@ -40,6 +40,13 @@ export interface CardProps<P> {
   t?: number;
   /** 裁切/切分后的源偏移（秒）。普通 mu-typing 用它补局部 t；有 audio() 的卡其 t 已含此值，只作诊断。 */
   sourceOffset?: number;
+  /**
+   * 挂载钟:这张卡自挂载起经过的舞台毫秒。**只有平铺时间轴的导出页**(`ExportView` 里不经 `FrameScene` 的那个 `Stage`)
+   * 会传,而且只在卡片是在片段起点之前挂上的时候传(舞台提前 `CARD_MOUNT_LEAD` 挂载,30 fps 下就是早一帧)。
+   * 旧的「挂载即播」卡从挂载那一刻起计时,在这条路径上比片段起点早走这一段;改成按 `t` 取画面的卡要与旧画面逐帧一致,
+   * 就在收到它时用它代替 `t`(mu-typing)。预览、Project 导出、预渲染都不传,那里一律按 `t`。
+   */
+  mountClockMs?: number;
   /** clip 总时长(秒) */
   duration?: number;
   /**

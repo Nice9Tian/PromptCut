@@ -4,6 +4,7 @@ import { frameCss } from "../kernel/layout";
 import { perspectivePx } from "../kernel/space3d";
 import { motionAt } from "../kernel/motion";
 import { cardOpacityAt, hasOpacityControls } from "../kernel/project";
+import { forgetUnmounted, mountClockMsAt } from "./mountClock";
 import { emphasisFilter } from "../kernel/emphasis";
 import { getCard, isRuntimeCard } from "../kernel/registry";
 import { PartTree } from "./PartTree";
@@ -109,7 +110,15 @@ function snapshotProp(clipId: string, html: string): { __html: string } {
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
-export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting }: { timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender } & StagePlaneProps) {
+export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting, mountClock = false }: {
+  timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender;
+  /**
+   * 给「按挂载时刻计时」的卡传挂载钟(`CardProps.mountClockMs`)。**只有平铺时间轴的导出页传 true**:
+   * 那条路径上卡片提前 `CARD_MOUNT_LEAD` 挂载,旧的打字卡从挂载那一帧起计时,导出像素基线(演示项目)就是那样渲出来的。
+   * 预览与 Project 导出不传:前者提前多少取决于哪一拍落进提前窗口,后者在起点才挂,都按 `t`。
+   */
+  mountClock?: boolean;
+} & StagePlaneProps) {
   const timeOf = (c: Timeline['clips'][number]) => clipFrameMode(c, getCard(c.cardId)) === 'direct' ? directT : t;
   const active = timeline.clips.filter((c) => cardMountedAt(c, timeOf(c)));
 
@@ -143,6 +152,20 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    * 放 Map 而不是单个值:live 路径下每个 clip 一个单片段 Stage、Map 里只有一条,
    * 但同一份代码也服务导出 / legacy 的多片段 Stage。
    */
+  /*
+   * 挂载钟(记账在 `mountClock.ts`):每张卡这一次挂载(`片段 id:代数`,和包裹层的 key 同一个)第一次渲染时的舞台时刻。
+   * 只在 `mountClock` 打开时记;渲染体里按 key 取,这一次渲染没挂的在提交后清掉。
+   */
+  const mountedAt = useRef(new Map<string, number>());
+  const mountKeys = new Set<string>();
+  const mountClockMsOf = (key: string, clip: Timeline["clips"][number], now: number): number | undefined => {
+    if (!mountClock) return undefined;
+    mountKeys.add(key);
+    return mountClockMsAt(mountedAt.current, key, clip.start, now);
+  };
+  useEffect(() => {
+    if (mountClock) forgetUnmounted(mountedAt.current, mountKeys);
+  });
   const frozenT = useRef(new Map<string, number>());
   const prevSuppressed = useRef<ReadonlySet<string>>(EMPTY_SET);
   const supNow = suppressed ?? EMPTY_SET;
@@ -274,6 +297,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            * `layoutId` 靠它换新、三维 / 终端卡靠它重播,只换 key 的话 Motion 会把重播当共享布局过渡。
            */
           const gen = remountGen?.get(clip.id) ?? playToken;
+          const mountClockMs = mountClockMsOf(`${clip.id}:${gen}`, clip, cardT);
           const isSettling = settling?.has(clip.id) ?? false;
           const snapshotHtml = snapshots?.get(clip.id);
           /*
@@ -358,7 +382,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               ) : clipFrameMode(clip, def) === 'direct' ? (
                 <DirectCard def={def!} params={clip.params} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} duration={clip.end - clip.start} stage={stageInfo} />
               ) : (
-                <C params={{ ...def!.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} duration={clip.end - clip.start} stage={stageInfo} />
+                <C params={{ ...def!.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} mountClockMs={mountClockMs} duration={clip.end - clip.start} stage={stageInfo} />
               ))}
               {/*
                 gl 平面(R9,E7 的第五种兄弟平面)。它是**活渲的一部分**,不进四条平面选择器的放过名单 ——

@@ -60,3 +60,15 @@ test('typing frame-boundary times with float error still show the character (def
   // 容差只吸收浮点误差:差 0.001 ms 仍然是上一个字
   assert.equal(typingTextAt(s, 120 - 0.001), '');
 });
+
+test('typing boundary tolerance is opt-out: clocks that already subtract milliseconds keep their own float error', async () => {
+  const { typingMountClockMs, TYPING_BOUNDARY_EPSILON_MS } = await import('./typingEvents.ts');
+  const s = createTypingSchedule({ text: 'Hello, world!', duration: 120 });
+  // 30 fps:挂载在第 179 帧,第 197 帧是「整 600 ms」,两个毫秒钟点相减却得 599.9999999999991
+  const elapsed = typingMountClockMs(197 / 30, 179 / 30);
+  assert.equal(elapsed, (197 / 30) * 1000 - (179 / 30) * 1000);
+  assert.ok(elapsed < 600 && 600 - elapsed < TYPING_BOUNDARY_EPSILON_MS);
+  assert.equal(typingTextAt(s, elapsed, 0), 'Hell');   // 旧实现:floor(599.99…/120) = 4
+  assert.equal(typingTextAt(s, elapsed), 'Hello');     // 按 t 的那条路:容差补上
+  assert.equal(typingTextAt(s, 600, 0), 'Hello');
+});

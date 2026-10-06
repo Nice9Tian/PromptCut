@@ -333,7 +333,7 @@ export default function ExportView() {
       }}
     >
       {renderProject ? <FrameScene project={renderProject} sourceProject={project!} t={t} directT={directT} playToken={playToken} graph={timeline.graph} />
-        : <Stage timeline={renderTimeline!} t={t} directT={directT} playToken={playToken} />}
+        : <Stage timeline={renderTimeline!} t={t} directT={directT} playToken={playToken} mountClock />}
 
     </div>
   );
