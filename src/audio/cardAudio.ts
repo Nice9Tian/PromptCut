@@ -58,6 +58,147 @@ export function requireCardAudioHooks(): CardAudioHooks {
   return hooks;
 }
 
+/* ------------------------------------------------------------------ *
+ * 同步来的用户卡与图卡:声音在隔离的声音线程里合成(`docs/plan/online-card-exec-contract.md` 3.5、第 6 节)
+ * ------------------------------------------------------------------ */
+
+/**
+ * 隔离的声音宿主(在线页面:后台舞台起的专用后台线程,经舞台 RPC 接过来)。编辑页面的源里**不执行**同步来的卡的 `audio()`:
+ * 这里只把「项目、节点、采样范围」交给它,收回 Float32 采样块。打包成 WAV、上传、提交产物记录仍在编辑页面做。
+ * 没接(本页没有隔离环境、低内存档、桌面运行环境)时为 null,同步来的卡的声音照旧只用已入库的产物。
+ */
+export interface IsolatedCardAudioHost {
+  /** 这张卡的声音代码此刻在声音线程里载入成功、能合成 */
+  runnable(cardId: string): boolean;
+  /** 合成不了的原因(给面板:顶层用了声音线程里没有的模块、载入出错、超时);能合成或不认得这张卡回 null */
+  blocker?(cardId: string): string | null;
+  /** 这张卡这一代声音代码的签名(块缓存的键:换代后旧块作废) */
+  versionOf(cardId: string): string;
+  render(request: CardAudioRequest, signal?: AbortSignal): Promise<Float32Array>;
+}
+
+let isolatedHost: IsolatedCardAudioHost | null = null;
+/** 接上 / 撤下隔离的声音宿主;宿主里哪些卡能合成变了也再叫一次(预览据 `cardAudioEpoch` 重新取块) */
+export function setIsolatedCardAudioHost(host: IsolatedCardAudioHost | null): void {
+  isolatedHost = host;
+  epoch++;
+  for (const listener of [...epochListeners]) listener();
+}
+export function isolatedCardAudioHost(): IsolatedCardAudioHost | null { return isolatedHost; }
+
+export const SYNCED_AUDIO_NOT_HERE = "同步来的卡的声音代码不在编辑页面里执行";
+export const ONLINE_AUDIO_NEEDS_MEDIA = "这张卡要读素材的声音采样,在线页面取不到,用已经生成的声音(没有就由渲染节点提供)";
+export const ONLINE_AUDIO_NO_THREAD = "这个页面没有隔离的声音线程,用户卡与图卡的声音用已经生成的(没有就由渲染节点提供)";
+export const ONLINE_AUDIO_MIXED = "同步来的卡与内置卡串在一起的声音在线合成不了,用已经生成的声音(没有就由渲染节点提供)";
+
+/**
+ * 同步来的有声用户卡在编辑页面里的替身:只给「把项目摊成图、算身份」用(要有 `audio` 才会合成图卡节点,要有默认参数才算得出身份)。
+ * 它的 `audio()` 一调就抛 —— 编辑页面的源里永远不会真去执行同步来的卡的声音代码;真的定义只在声音线程里。
+ */
+const standIns = new WeakMap<object, CardDef<any>>();
+function StandInComponent() { return null; }
+function syncedAudioStandIn(id: string): CardDef<any> | undefined {
+  const entry = syncedUserCards().get(id);
+  if (!entry?.embeddedAudio) return undefined;
+  let def = standIns.get(entry);
+  if (!def) {
+    def = { id, name: entry.name, source: "user", defaults: entry.defaults ?? {}, controls: [], kind: "animation", inputs: {}, Component: StandInComponent,
+      audio: () => { throw new CardAudioError("request-failed", SYNCED_AUDIO_NOT_HERE); } } as unknown as CardDef<any>;
+    standIns.set(entry, def);
+  }
+  return def;
+}
+
+/** 摊图、算身份用的取卡:页面里有定义的用定义;没有的、同步来的有声用户卡给替身 */
+export function cardAudioGraphCard(id: string): CardDef<any> | undefined {
+  return hooks?.getCard(id) ?? syncedAudioStandIn(id);
+}
+
+/** 一张卡的声音源码版本:页面里有定义的照旧;同步来的取声音线程里这一代的签名,没接宿主时取静态解析出来的那一个 */
+function audioVersionOfCard(id: string): string {
+  if (hooks?.getCard(id)) return hooks.sourceVersionOf(id);
+  return isolatedHost?.versionOf(id) || syncedUserCards().get(id)?.audioSourceVersion || "";
+}
+
+/** 持久声音的身份用的那一对(`cardAudioIdentity`):同步来的卡用替身的默认参数与内容库里的声音源码版本(与桌面同一算法) */
+export function cardAudioIdentityHooks(): CardAudioHooks {
+  const ready = requireCardAudioHooks();
+  return { getCard: cardAudioGraphCard, sourceVersionOf: (id) => (ready.getCard(id) ? ready.sourceVersionOf(id) : syncedUserCards().get(id)?.audioSourceVersion ?? ready.sourceVersionOf(id)) };
+}
+
+export type CardAudioRoute = { route: "page" | "isolated"; reason?: undefined } | { route: null; reason: string };
+
+/**
+ * 在线页面:这个音频节点连同它的整条上游,在哪里合成。
+ *   - `page`:全是页面里有定义、放开了的卡(内置卡)→ 编辑页面自己求值;
+ *   - `isolated`:全是同步来的、声音线程里载入成功的卡 → 交给隔离的声音宿主;
+ *   - null:合成不了(一路上有素材输入、有没放开或没载入的卡、两种卡串在一起),`reason` 给面板。
+ * 只回答「在哪里跑、能不能跑」,轻重另判(`src/editor/io/onlineSoundJudge.ts`)。
+ */
+export function cardAudioRoute(project: unknown, nodeId: string): CardAudioRoute {
+  const ready = hooks;
+  if (!ready || !nodeId) return { route: null, reason: ONLINE_CARD_AUDIO_BLOCKED };
+  let nodes: ReturnType<typeof projectCardGraph>["nodes"];
+  try { nodes = projectCardGraph(project, cardAudioGraphCard).nodes; } catch { return { route: null, reason: ONLINE_CARD_AUDIO_BLOCKED }; }
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const seen = new Set<string>();
+  let page = 0, isolated = 0;
+  const walk = (id: string): string | null => {
+    if (seen.has(id)) return null;
+    seen.add(id);
+    const node = byId.get(id);
+    if (!node) return ONLINE_CARD_AUDIO_BLOCKED;
+    if (node.adapter !== "card" || typeof node.cardId !== "string") return ONLINE_AUDIO_NEEDS_MEDIA;
+    const def = ready.getCard(node.cardId);
+    if (def) {
+      if (!onlineCardAudioRunnable(def)) return ONLINE_CARD_AUDIO_BLOCKED;
+      page++;
+    } else {
+      if (!isolatedHost) return ONLINE_AUDIO_NO_THREAD;
+      if (!isolatedHost.runnable(node.cardId)) return isolatedHost.blocker?.(node.cardId) ?? ONLINE_CARD_AUDIO_BLOCKED;
+      isolated++;
+    }
+    for (const ref of Object.values(node.inputs ?? {})) {
+      const next = typeof ref === "string" ? ref : (ref as { nodeId?: unknown } | null)?.nodeId;
+      if (typeof next !== "string") return ONLINE_AUDIO_NEEDS_MEDIA;
+      const bad = walk(next);
+      if (bad) return bad;
+    }
+    return null;
+  };
+  const bad = walk(nodeId);
+  if (bad) return { route: null, reason: bad };
+  if (page && isolated) return { route: null, reason: ONLINE_AUDIO_MIXED };
+  return { route: isolated ? "isolated" : "page" };
+}
+
+/** 声音线程回来的采样块当不可信输入:形状不对、带非有限值的一律不要 */
+function checkedIsolatedBlock(samples: unknown, count: number): Float32Array {
+  if (!(samples instanceof Float32Array) || samples.length < 1 || samples.length % count !== 0 || samples.length / count > 8) throw new CardAudioError("invalid-reply", "声音线程回的采样块形状不对");
+  for (let i = 0; i < samples.length; i++) if (!Number.isFinite(samples[i])) throw new CardAudioError("invalid-reply", "声音线程回的采样块里有无效的值");
+  return samples;
+}
+
+/**
+ * 这个节点的声音由谁求一块:在线页面按 `cardAudioRoute`;桌面运行环境恒在页面里求。合成不了时抛出原因。
+ * 测量(`onlineSoundJudge.ts`)、生成持久产物(`renderEmbeddedCardWav`)、预览取块(`requestCardAudio`)都经这里,
+ * 所以同步来的卡的 `audio()` 只会在隔离的声音宿主里跑。
+ */
+export function cardAudioBlockRenderer(project: unknown, nodeId: string, signal?: AbortSignal): (start: number, count: number) => Promise<Float32Array> {
+  const ready = requireCardAudioHooks();
+  const routed: CardAudioRoute = onlinePage() ? cardAudioRoute(project, nodeId) : { route: "page" };
+  if (routed.route === null) throw new CardAudioError("request-failed", routed.reason);
+  if (routed.route === "isolated") {
+    const host = isolatedHost!;
+    return async (start, count) => checkedIsolatedBlock(await host.render({ project, nodeId, start, count, sampleRate: CARD_AUDIO_SAMPLE_RATE }, signal), count);
+  }
+  let context: AudioSourceContext | null = null;
+  return (start, count) => {
+    context ??= { graph: projectCardGraph(project, ready.getCard), project: project as Pick<Project, "tracks" | "media">, getCard: ready.getCard, sampleRate: CARD_AUDIO_SAMPLE_RATE, signal };
+    return evaluateCardAudio(context, nodeId, { start, count, sampleRate: CARD_AUDIO_SAMPLE_RATE });
+  };
+}
+
 const projectBlocks = new WeakMap<object, Map<string, Promise<CardAudioReply>>>();
 interface CachedClip { promise: Promise<string>; url?: string; refs: number; }
 const projectClips = new WeakMap<object, Map<string, CachedClip>>();
@@ -67,8 +208,8 @@ const projectClips = new WeakMap<object, Map<string, CachedClip>>();
  * 和旧 `blob:`。沿 `inputs[*]` 向上游走,只收 `adapter === 'card'` 的节点(素材节点没有源码)。
  */
 function versionKeyOf(project: unknown, nodeId: string): string {
-  const ready = requireCardAudioHooks();
-  const nodes = projectCardGraph(project, ready.getCard).nodes;
+  requireCardAudioHooks();
+  const nodes = projectCardGraph(project, cardAudioGraphCard).nodes;
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const seen = new Set<string>(), cardIds = new Set<string>();
   const walk = (id: string) => {
@@ -84,11 +225,10 @@ function versionKeyOf(project: unknown, nodeId: string): string {
     }
   };
   walk(nodeId);
-  const version = requireCardAudioHooks().sourceVersionOf;
-  return cyrb53([...cardIds].sort().map((id) => `${id}\u0000${version(id)}`).join("\u0001"));
+  return cyrb53([...cardIds].sort().map((id) => `${id}\u0000${audioVersionOfCard(id)}`).join("\u0001"));
 }
 
-const key = (x: CardAudioRequest) => `${versionKeyOf(x.project, x.nodeId)}:${cyrb53(cardJson(projectCardGraph(x.project, requireCardAudioHooks().getCard)))}:${x.nodeId}:${x.start}:${x.count}:${x.sampleRate}`;
+const key = (x: CardAudioRequest) => `${versionKeyOf(x.project, x.nodeId)}:${cyrb53(cardJson(projectCardGraph(x.project, cardAudioGraphCard)))}:${x.nodeId}:${x.start}:${x.count}:${x.sampleRate}`;
 const ownerOf = (project: unknown): object => {
   if (!project || (typeof project !== "object" && typeof project !== "function")) throw new CardAudioError("invalid-reply", "card audio project must be an object");
   return project as object;
@@ -102,33 +242,23 @@ export function isCardAudioNode(project: Pick<Project, "cardNodes">, nodeId: str
 }
 
 export function cardAudioNodeOf(project: Pick<Project, "cardNodes">, clip: Pick<TrackClip, "nodeId"> & Partial<TrackClip>): string | null {
-  if (clipHasEmbeddedAudio(project, clip, hooks?.getCard) || syncedUserCards().get(clip.cardId ?? "")?.embeddedAudio) return clip.nodeId ?? `@clip/${clip.id}/card`;
+  if (clipHasEmbeddedAudio(project, clip, hooks?.getCard) || (!hooks?.getCard(clip.cardId ?? "") && syncedUserCards().get(clip.cardId ?? "")?.embeddedAudio)) return clip.nodeId ?? `@clip/${clip.id}/card`;
   if (typeof hooks?.getCard(clip.cardId ?? "")?.audio === "function") return clip.nodeId ?? `@clip/${clip.id}/card`;
   return isCardAudioNode(project, clip.nodeId) ? clip.nodeId : null;
 }
 
 /**
- * 在线页面:这个音频节点连同它的整条上游,本页能不能合成 —— 全是放开了的卡(第一段:内置卡,`src/online/soundPolicy.ts`)、
- * 一路上没有素材输入(在线页面取不到素材的采样块)。只回答「能不能跑」,轻重另判(`src/editor/io/onlineSoundJudge.ts`)。
+ * 在线页面:这个音频节点连同它的整条上游,本页能不能合成(在编辑页面里,或在隔离的声音线程里;`cardAudioRoute`)。
+ * 只回答「能不能跑」,轻重另判(`src/editor/io/onlineSoundJudge.ts`)。
  */
 export function onlineCardAudioSynthesizable(project: unknown, nodeId: string): boolean {
-  const ready = hooks;
-  if (!ready || !nodeId) return false;
-  let nodes: ReturnType<typeof projectCardGraph>["nodes"];
-  try { nodes = projectCardGraph(project, ready.getCard).nodes; } catch { return false; }
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const seen = new Set<string>();
-  const ok = (id: string): boolean => {
-    if (seen.has(id)) return true;
-    seen.add(id);
-    const node = byId.get(id);
-    if (!node || node.adapter !== "card" || typeof node.cardId !== "string" || !onlineCardAudioRunnable(ready.getCard(node.cardId))) return false;
-    return Object.values(node.inputs ?? {}).every((ref) => {
-      const next = typeof ref === "string" ? ref : (ref as { nodeId?: unknown } | null)?.nodeId;
-      return typeof next === "string" && ok(next);
-    });
-  };
-  return ok(nodeId);
+  return cardAudioRoute(project, nodeId).route !== null;
+}
+
+/** 在线页面:这个节点的声音合成不了的原因(给面板);能合成回 null */
+export function onlineCardAudioBlocker(project: unknown, nodeId: string): string | null {
+  const routed = cardAudioRoute(project, nodeId);
+  return routed.route === null ? routed.reason : null;
 }
 
 /** A generated node owns a video-backed clip's audio too; callers must mute that native media element. */
@@ -161,7 +291,8 @@ function isSameOriginOrBlob(url: string): boolean {
 export async function requestCardAudio(x: CardAudioRequest, signal?: AbortSignal, _fetchImpl: typeof fetch = fetch): Promise<CardAudioReply> {
   if (signal?.aborted) throw new DOMException("aborted", "AbortError");
   if (!Number.isSafeInteger(x.start) || !Number.isSafeInteger(x.count) || x.count < 1 || x.count > CARD_AUDIO_MAX_BLOCK_FRAMES) throw new CardAudioError("invalid-reply", `audio range must be 1…${CARD_AUDIO_MAX_BLOCK_FRAMES} samples`);
-  if (onlinePage() && !onlineCardAudioSynthesizable(x.project, x.nodeId)) throw new CardAudioError("request-failed", ONLINE_CARD_AUDIO_BLOCKED);
+  const routed: CardAudioRoute = onlinePage() ? cardAudioRoute(x.project, x.nodeId) : { route: "page" };
+  if (routed.route === null) throw new CardAudioError("request-failed", routed.reason);
   const ready = requireCardAudioHooks();
   const owner = ownerOf(x.project), k = key(x), blocks = projectBlocks.get(owner) ?? new Map<string, Promise<CardAudioReply>>();
   projectBlocks.set(owner, blocks);
@@ -174,7 +305,10 @@ export async function requestCardAudio(x: CardAudioRequest, signal?: AbortSignal
       sampleRate: x.sampleRate,
     };
     pending = (async () => {
-      const samples = await evaluateCardAudio(context, x.nodeId, { start: x.start, count: x.count, sampleRate: x.sampleRate });
+      // 同步来的卡:交给隔离的声音宿主(编辑页面不执行它们的 audio());其余在页面里求值
+      const samples = routed.route === "isolated"
+        ? checkedIsolatedBlock(await isolatedHost!.render(x, signal), x.count)
+        : await evaluateCardAudio(context, x.nodeId, { start: x.start, count: x.count, sampleRate: x.sampleRate });
       const channels = samples.length / x.count;
       if (!Number.isInteger(channels) || channels < 1) throw new CardAudioError("invalid-reply", "invalid card audio descriptor");
       const reply: CardAudioReply = { samples, format: "wav", sampleRate: x.sampleRate, frames: x.count, channels };
@@ -270,19 +404,20 @@ export function assertProjectCardAudio(project: Project) {
 /** 复用已有 audio() 采样管线，逐小块让出页面。只在明确生成动作运行，预览从不自动重生成。 */
 export async function renderEmbeddedCardWav(project: Project, clip: TrackClip, signal: AbortSignal,
   onProgress?: (done: number, total: number) => void): Promise<{ wav: Uint8Array; channels: number; frames: number }> {
-  const ready = requireCardAudioHooks(), nodeId = cardAudioNodeOf(project, clip);
-  if (onlinePage() && !(nodeId && onlineCardAudioSynthesizable(project, nodeId))) throw new Error(ONLINE_CARD_AUDIO_BLOCKED);
-  if (!nodeId || !clipHasEmbeddedAudio(project, clip, ready.getCard)) throw new Error("这张卡没有内嵌声音");
-  assertAudiovisualCardKind(ready.getCard(clip.cardId));
-  cardAudioIdentity(project, clip, ready);
+  requireCardAudioHooks();
+  const nodeId = cardAudioNodeOf(project, clip);
+  if (onlinePage() && !(nodeId && onlineCardAudioSynthesizable(project, nodeId))) throw new Error((nodeId && onlineCardAudioBlocker(project, nodeId)) || ONLINE_CARD_AUDIO_BLOCKED);
+  if (!nodeId || !clipHasEmbeddedAudio(project, clip, cardAudioGraphCard)) throw new Error("这张卡没有内嵌声音");
+  assertAudiovisualCardKind(cardAudioGraphCard(clip.cardId));
+  cardAudioIdentity(project, clip, cardAudioIdentityHooks());
   const frames = Math.round((clip.end - clip.start) * CARD_AUDIO_SAMPLE_RATE);
   if (!Number.isSafeInteger(frames) || frames < 1 || frames > 60 * CARD_AUDIO_SAMPLE_RATE) throw new Error("卡片声音生成范围必须在 1 个采样至 60 秒内");
   let channels = 0, output: Uint8Array | undefined, view: DataView | undefined;
-  const context: AudioSourceContext = { graph: projectCardGraph(project, ready.getCard), project, getCard: ready.getCard, sampleRate: CARD_AUDIO_SAMPLE_RATE, signal };
+  const block = cardAudioBlockRenderer(project, nodeId, signal);
   for (let start = 0; start < frames; start += 8192) {
     signal.throwIfAborted();
     const count = Math.min(8192, frames - start);
-    const samples = await evaluateCardAudio(context, nodeId, { start, count, sampleRate: CARD_AUDIO_SAMPLE_RATE });
+    const samples = await block(start, count);
     const blockChannels = samples.length / count;
     if (!channels) {
       channels = blockChannels;

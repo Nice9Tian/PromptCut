@@ -54,18 +54,21 @@ export function soundBlocker(nodes: readonly GraphNode[], nodeId: string, getCar
 
 export interface SoundEngine {
   render(req: SoundRenderRequest, signal?: AbortSignal): Promise<Float32Array>;
+  /** 卡片换代了:丢掉记着的图(图里有按旧定义算的默认参数与能力) */
+  reset(): void;
 }
 
 export function createSoundEngine(getCard: (id: string) => CardDef<any> | undefined): SoundEngine {
   /** 最近一个项目的图(同一个项目对象连着求很多块) */
-  let last: { project: unknown; cards: unknown; ctx: AudioSourceContext } | null = null;
+  let last: { project: unknown; ctx: AudioSourceContext } | null = null;
   return {
+    reset() { last = null; },
     async render(req, signal) {
       if (!req || typeof req.nodeId !== "string" || !Number.isSafeInteger(req.start) || !Number.isSafeInteger(req.count) || req.count < 1 || req.count > SOUND_MAX_BLOCK_FRAMES
         || !Number.isFinite(req.sampleRate) || req.sampleRate < 8000 || req.sampleRate > 192_000) throw new Error("声音请求的范围不对");
       if (!last || last.project !== req.project) {
         const graph = projectCardGraph(req.project, getCard);
-        last = { project: req.project, cards: null, ctx: { graph, project: req.project as AudioSourceContext["project"], getCard, sampleRate: req.sampleRate } };
+        last = { project: req.project, ctx: { graph, project: req.project as AudioSourceContext["project"], getCard, sampleRate: req.sampleRate } };
       }
       const ctx: AudioSourceContext = { ...last.ctx, sampleRate: req.sampleRate, signal };
       const nodes = (Array.isArray(ctx.graph) ? ctx.graph : ctx.graph?.nodes ?? []) as GraphNode[];
