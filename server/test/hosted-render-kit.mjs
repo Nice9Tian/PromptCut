@@ -53,9 +53,11 @@ export const serviceItem = (fields) => {
  * @param {boolean} [o.trustLoopback] 缺省 false（云节点在 nginx 之后）
  * @param {boolean} [o.assets] 同进程再起素材服务（三个命名空间，票据核对共用登记表）
  * @param {number} [o.lingerMs] 目录里 `active` 的保持时长
+ * @param {Record<string, string>} [o.serviceUrls] 托管方服务对页面的公网地址（成员列表顶层 `hosted.<服务名>.url`）
  */
 export async function startServiceHost({
   services = ['render'], registry: withRegistry = true, attached = false, trustLoopback = false, assets = false, lingerMs, clock = testClock(),
+  serviceUrls = null,
 } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-hr-'));
   const registryFile = path.join(dataDir, 'secrets', SERVICES_FILE);
@@ -89,6 +91,7 @@ export async function startServiceHost({
     log,
     serviceRegistry: registry,
     ...(Number.isFinite(lingerMs) ? { hostedLingerMs: lingerMs } : {}),
+    ...(serviceUrls ? { hostedServiceUrls: serviceUrls } : {}),
   });
   let port;
   if (attached) {

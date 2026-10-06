@@ -9,7 +9,7 @@
  * | `hosted.watch` | `hosted.projects { full: true, projects: [{ projectId, enabled, active, members, hosted }] }`；之后每次变化推 `hosted.project { projectId, enabled, active, members, hosted }` 或 `hosted.project { projectId, removed: true }` |
  * | `hosted.ticket { projectId }` | `hosted.ticket.ok { ticket, exp }`；或 `error { reason }`：`no-project`、`service-disabled`、`relocating` / `relocated`、`service-revoked` |
  * | `hosted.demand { projectId, holdMs? }` | `hosted.demand.ok { projectId, until }`：声明「这个项目有活要别的托管方服务做」 |
- * | `hosted.delegate.verify` | 第四段（云端 Agent 服务）实现；现在回 `error { reason: 'unsupported' }` |
+ * | `hosted.delegate.verify { delegation }` | `hosted.delegate.ok { projectId, userId, username, …, acc, ownerKey }`：核验云端 Agent 的委托，不签任何东西；只对代成员进项目的服务开（见 `delegateVerify`） |
  *
  * - 清单里是没在搬迁的全部共享项目；`enabled` 是这个项目对**订阅的那个服务**的开关（渲染服务看渲染的，Agent 服务看 Agent 的）；
  *   `hosted` 是各服务的 `{ available, enabled }`（与成员列表顶层同形状），一种服务据此知道另一种的开关（Agent 服务要知道渲染开没开）。
@@ -23,12 +23,13 @@
  * - 拉：重新发 `hosted.watch` 得到完整清单（`full: true`），服务据此对账。
  * - 票据是普通的连接票据（2 分钟，那个项目的 `ticketKey` 签），多带 `sv`（服务名）与 `sk`（服务此刻所用公钥的 `kid`），
  *   `u` 是 `service:<服务名>@<instanceId>`，角色取登记表。
- * - `hosted.ticket` 的分发点：代成员进项目的服务（登记表 `actsFor: 'member'`，云端 Agent）的票据，以及 `conversation`、`delegation`、
- *   `purpose` 这几个字段位，都由第四段在 `ticketFor` 里实现；本段遇到就回 `unsupported`。
+ * - `hosted.ticket` 的分发点：代成员进项目的服务（登记表 `actsFor: 'member'`，云端 Agent）凭对话委托换代成员的连接票据、
+ *   或要只用来发布补渲计划的票据（`purpose: 'publish'`），见 `memberServiceTicket`；渲染服务带这几个字段回 `forbidden`。
  * - 只有控制连接（`scope: 'service'`、不在任何空间里）能发这几种消息，别的身份一律 `forbidden`（组装层的 gate 也挡一次）。
  * - `tick` 另看一眼登记表：公钥已不在表里的服务连接（控制连接与各项目里的数据连接）以 4003 `service-revoked` 关闭。
  */
-import { isProjectId, serviceUserId } from '../../auth/protocol.mjs';
+import { isProjectId, serviceUserId, isConversation, isConversationId } from '../../auth/protocol.mjs';
+import { checkDelegation, delegationDigest } from '../../auth/delegation.mjs';
 import { signTicket } from '../../auth/tickets.mjs';
 import { serviceAdmission, serviceEnabled, hostedStateOf } from '../../auth/service-identity.mjs';
 import { roomUnavailableReason } from '../../recovery/relocation.mjs';
@@ -169,9 +170,12 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
   function ticket(ctx, connId, c, msg, reqId) {
     const refuse = (reason, detail) => reply(ctx, connId, { type: 'error', reason, ...(detail ? { detail } : {}) }, reqId);
     const p = c.principal;
-    // 分发点（第四段往这里填）：代成员进项目的服务的票据，以及这三个字段位
-    if (msg.conversation !== undefined || msg.delegation !== undefined || msg.purpose !== undefined || registryOf()?.get(p.service)?.actsFor === 'member') {
-      return refuse('unsupported', '这种票据由云端 Agent 服务那一段实现');
+    // 分发点：代成员进项目的服务（云端 Agent）的两种票据，见 `memberServiceTicket`。
+    // 以自己的身份进项目的服务（渲染服务）带了这几个字段一律拒：它没有「代成员」这回事
+    const actsForMember = registryOf()?.get(p.service)?.actsFor === 'member';
+    if (actsForMember) return memberServiceTicket(ctx, connId, c, msg, reqId);
+    if (msg.conversation !== undefined || msg.conversationId !== undefined || msg.delegation !== undefined || msg.purpose !== undefined) {
+      return refuse('forbidden', '这个服务要不到代成员的票据');
     }
     if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
     const rec = storeOf()?.peek(msg.projectId) ?? null;
@@ -235,9 +239,95 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     }
   }
 
-  /** 分发点：只核验不签的入口，第四段实现 */
+  /**
+   * 代成员进项目的服务（登记表 `actsFor: 'member'`，云端 Agent 服务）要票据（`docs/plan/cloud-agent-contract.md` 第 4.3 ③、16.3 R2）。两种，别的一律 `forbidden`：
+   * - `{ projectId, conversation: <对话号>, conversationId: <对话 id>, delegation: <对话委托> }` → 代那位成员的连接票据：
+   *   `u`、`ug` 是成员的，带 `sv`、`sk`、`c`、`acc`、`dn`、`cr?`。只认对话委托（带 `cid`、`run`），短的委托票据换不出；
+   *   委托的 `p` 必须等于 `projectId`、`cid` 必须等于 `conversationId`；登记表、开关、名单、禁入表、代数都重新核一次，**不看成员在不在线**。
+   *   回 `hosted.ticket.ok { ticket, exp, userId, username, access, ownerKey, conversation, conversationId }`；
+   * - `{ projectId, purpose: 'publish' }`（不带委托）→ 只用来发布补渲计划的连接票据：`u` 是服务自己的 `service:<服务名>@<instanceId>`，
+   *   带 `pu: 'publish'`，不带任何成员的身份与权限。回 `hosted.ticket.ok { ticket, exp }`。
+   * 它没有「服务自己读写项目」这回事：不带委托又不是发布用的，`forbidden`。
+   * 委托不对时的 `reason`（只在这条受信的连接上给）：`format`、`signature`、`expired`、`generation`、`audience`、`no-project`、
+   * `service-disabled`、`service-revoked`、`banned`、`not-listed`、`not-grant`（不是对话委托）、`project`、`conversation`（与报的对不上）。
+   */
+  function memberServiceTicket(ctx, connId, c, msg, reqId) {
+    const refuse = (reason, detail) => reply(ctx, connId, { type: 'error', reason, ...(detail ? { detail } : {}) }, reqId);
+    const p = c.principal;
+    if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
+    const role = registryOf().get(p.service).role;
+    const at = clock(ctx);
+
+    if (msg.delegation === undefined || msg.delegation === null) {
+      if (msg.purpose !== 'publish' || msg.conversation !== undefined || msg.conversationId !== undefined) {
+        return refuse('forbidden', '不带对话委托只能要发布用的票据');
+      }
+      const rec = storeOf()?.peek(msg.projectId) ?? null;
+      const refused = serviceAdmission({ registry: registryOf(), record: rec, service: p.service, kid: p.serviceKid });
+      if (refused) return refuse(refused);
+      let out;
+      try {
+        out = signTicket(rec, { k: 'conn', u: serviceUserId(p.service, p.deviceId), r: role, dn: p.deviceName, sv: p.service, sk: p.serviceKid, pu: 'publish' }, at);
+      } catch (err) {
+        return refuse(typeof err?.reason === 'string' ? err.reason : 'forbidden');
+      }
+      ctx.log('hosted.ticket', { connId, service: p.service, projectId: msg.projectId, purpose: 'publish' });
+      return reply(ctx, connId, { type: 'hosted.ticket.ok', ticket: out.ticket, exp: out.exp }, reqId);
+    }
+
+    if (msg.purpose !== undefined) return refuse('forbidden', '带对话委托的票据没有 purpose');
+    if (typeof msg.delegation !== 'string') return refuse('bad-message', 'delegation 要是字符串');
+    if (role === 'agent' ? !isConversation(msg.conversation) : msg.conversation !== undefined) return refuse('bad-message', 'conversation 要是对话号（正整数）');
+    if (!isConversationId(msg.conversationId)) return refuse('bad-message', 'conversationId 要是对话 id');
+    const v = checkDelegation({ ticket: msg.delegation, lookup: (id) => storeOf()?.peek(id) ?? null, registry: registryOf(), service: p.service, kid: p.serviceKid, now: at });
+    const digest = delegationDigest(msg.delegation);
+    const deny = (reason) => {
+      ctx.log('hosted.delegate.reject', { connId, service: p.service, projectId: msg.projectId, reason, delegation: digest });
+      return refuse(reason);
+    };
+    if (!v.ok) return deny(v.reason);
+    if (!v.grant) return deny('not-grant');
+    if (v.payload.p !== msg.projectId) return deny('project');
+    if (v.payload.cid !== msg.conversationId) return deny('conversation');
+    const fields = { k: 'conn', u: v.payload.u, r: role, sv: p.service, sk: p.serviceKid, acc: v.access, cr: v.creator };
+    if (role === 'agent') fields.c = msg.conversation;
+    if (v.payload.dn !== undefined) fields.dn = v.payload.dn;
+    let out;
+    try {
+      out = signTicket(v.record, fields, at);
+    } catch (err) {
+      return refuse(typeof err?.reason === 'string' ? err.reason : 'forbidden');
+    }
+    ctx.log('hosted.ticket', { connId, service: p.service, projectId: msg.projectId, conversation: msg.conversation, access: v.access, delegation: digest });
+    reply(ctx, connId, {
+      type: 'hosted.ticket.ok', ticket: out.ticket, exp: out.exp,
+      userId: v.payload.u, username: v.username, access: v.access, ownerKey: v.ownerKey, conversation: msg.conversation, conversationId: msg.conversationId,
+    }, reqId);
+  }
+
+  /**
+   * 只核验不签的入口（`docs/plan/cloud-agent-contract.md` 第 4.3 ①）：`hosted.delegate.verify { delegation }`，只对代成员进项目的服务
+   * （云端 Agent）开，渲染服务发它回 `forbidden`。委托票据与对话委托都认。成功回
+   * `hosted.delegate.ok { projectId, userId, username, deviceId, deviceName, creator, mode, acc, access, exp, ownerKey, grant, conversationId? }`
+   * （`access` 与 `acc` 同值：`hosted.ticket.ok` 用的名字是 `access`，两处都给，接线的一侧不用换名）；
+   * 失败回 `error { reason }`，`reason` 同 `memberServiceTicket`（没有 `not-grant`、`project`、`conversation`）。
+   */
   function delegateVerify(ctx, connId, c, msg, reqId) {
-    reply(ctx, connId, { type: 'error', reason: 'unsupported', detail: '由云端 Agent 服务那一段实现' }, reqId);
+    const refuse = (reason, detail) => reply(ctx, connId, { type: 'error', reason, ...(detail ? { detail } : {}) }, reqId);
+    const p = c.principal;
+    if (registryOf()?.get(p.service)?.actsFor !== 'member') return refuse('forbidden', '这个服务不能核验委托');
+    if (typeof msg.delegation !== 'string') return refuse('bad-message', 'delegation 要是字符串');
+    const v = checkDelegation({ ticket: msg.delegation, lookup: (id) => storeOf()?.peek(id) ?? null, registry: registryOf(), service: p.service, kid: p.serviceKid, now: clock(ctx) });
+    if (!v.ok) {
+      ctx.log('hosted.delegate.reject', { connId, service: p.service, reason: v.reason, delegation: delegationDigest(msg.delegation) });
+      return refuse(v.reason);
+    }
+    reply(ctx, connId, {
+      type: 'hosted.delegate.ok',
+      projectId: v.payload.p, userId: v.payload.u, username: v.username, deviceId: v.deviceId, deviceName: v.payload.dn ?? v.deviceId,
+      creator: v.creator, mode: v.record.mode, acc: v.access, access: v.access, exp: v.payload.exp, ownerKey: v.ownerKey,
+      grant: v.grant, ...(v.grant ? { conversationId: v.payload.cid } : {}),
+    }, reqId);
   }
 
   const HANDLERS = { 'hosted.watch': watch, 'hosted.ticket': ticket, 'hosted.demand': demand, 'hosted.delegate.verify': delegateVerify };

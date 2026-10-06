@@ -41,7 +41,8 @@ import { eventsModule } from './modules/events.mjs';
 import { sharedModule } from './modules/shared.mjs';
 import { createFileStore, createMemoryStore } from './store/index.mjs';
 import { createRenderQueue } from '../render-queue/index.mjs';
-import { createHandshakeAuth } from '../auth/handshake.mjs';
+import { createHandshakeAuth, admissionOf } from '../auth/handshake.mjs';
+import { memberAccess } from '../auth/delegation.mjs';
 import { isLocalOrigin, remoteTagOf } from '../auth/origin.mjs';
 import { createSharedHttp } from '../auth/http.mjs';
 import { createChallenges } from '../auth/challenges.mjs';
@@ -49,7 +50,7 @@ import { createRateLimiter } from '../auth/rate-limit.mjs';
 import { isProjectId } from '../auth/protocol.mjs';
 import { roomUnavailableReason } from '../recovery/relocation.mjs';
 import { hostedModule } from './modules/hosted.mjs';
-import { serviceGate } from './service-gate.mjs';
+import { serviceGate, AGENT_WRITE_TYPES } from './service-gate.mjs';
 import { serviceAdmission } from '../auth/service-identity.mjs';
 
 /**
@@ -74,6 +75,8 @@ import { serviceAdmission } from '../auth/service-identity.mjs';
  *   只在 `hosted` 模式用，不给就没有服务身份
  * @param {(req) => boolean} [options.isDirectLocal] 服务握手用的「真正从本机发起」判据，缺省 `isLocalOrigin`（不看本机信任开关）
  * @param {number} [options.hostedLingerMs] 目录里 `active` 的保持时长（测试用）
+ * @param {Record<string, string> | null} [options.hostedServiceUrls] 托管方服务对页面的公网地址，如 `{ agent: 'https://<主站>/agent/v1' }`
+ *   （`docs/plan/cloud-agent-contract.md` 第 10.4 节）；成员列表顶层 `hosted.agent.url` 下发给页面
  */
 export function createSharedDocService({
   mode,
@@ -100,6 +103,7 @@ export function createSharedDocService({
   serviceRegistry = null,
   isDirectLocal = (req) => isLocalOrigin(req),
   hostedLingerMs,
+  hostedServiceUrls = null,
 } = {}) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedDocService: mode 只能是 'hosted' 或 'lan'");
   const say = typeof log === 'function' ? log : undefined;
@@ -116,9 +120,21 @@ export function createSharedDocService({
     if (typeof principal?.service !== 'string' && principal?.scope !== 'service') return null;
     if (!registry) return 'forbidden';
     if (!isProjectId(principal.tenantId)) return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
-    return serviceAdmission({
-      registry, record: storeOf()?.peek(principal.tenantId) ?? null, service: principal.service, kid: principal.serviceKid, role: principal.role,
-    });
+    const record = storeOf()?.peek(principal.tenantId) ?? null;
+    const refused = serviceAdmission({ registry, record, service: principal.service, kid: principal.serviceKid, role: principal.role });
+    if (refused) return refused;
+    // 代成员进项目的服务连接（云端 Agent）：名单与禁入表照成员再看一次（`docs/plan/cloud-agent-contract.md` 第 4.5 节）。
+    // 踢人、移出名单时这条连接本来就会被关；这里是第二道——逐消息与接续前都看，关连接那一下万一漏了也发不出东西
+    if (principal.scope === 'member') {
+      return admissionOf(record, { username: principal.username, deviceId: principal.deviceId, creator: principal.creator === true });
+    }
+    return null;
+  }
+  /** 只读成员的云端 Agent 连接改不了项目：按项目记录**此刻**的权限判（连接建立之后才被改成只读的也拦得住） */
+  function readonlyRefusal(principal, type) {
+    if (principal?.service !== 'agent' || principal.scope !== 'member' || !AGENT_WRITE_TYPES.includes(type)) return null;
+    const record = storeOf()?.peek(principal.tenantId) ?? null;
+    return record && memberAccess(record, principal.username, principal.creator === true) === 'rw' ? null : 'forbidden';
   }
 
   const auth = createHandshakeAuth({
@@ -158,7 +174,7 @@ export function createSharedDocService({
     gate(principal, type, msg) {
       const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
       // 托管方服务身份：白名单（缺省拒绝），再核对登记表与项目的开关
-      return reason ?? serviceGate(principal, type, msg) ?? serviceRefusal(principal) ?? serviceOptions.gate?.(principal, type, msg) ?? null;
+      return reason ?? serviceGate(principal, type, msg) ?? serviceRefusal(principal) ?? readonlyRefusal(principal, type) ?? serviceOptions.gate?.(principal, type, msg) ?? null;
     },
     resumeGate(principal) {
       const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
@@ -225,7 +241,7 @@ export function createSharedDocService({
     },
     now,
     linkOrigin,
-    hostedServices: registry ? { registry: registryOf, releaseClaims: (connId) => service.releaseClaims(connId, 'service-disabled') } : null,
+    hostedServices: registry ? { registry: registryOf, releaseClaims: (connId) => service.releaseClaims(connId, 'service-disabled'), urls: hostedServiceUrls ?? {} } : null,
     dropSpace(space) {
       // 先通知（记录已经删掉了）：清数据目录失败也不影响停止通告
       if (typeof onDelete === 'function') {

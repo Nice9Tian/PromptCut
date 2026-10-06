@@ -11,6 +11,8 @@
 import { verifyTicket } from './tickets.mjs';
 import { credentialStoreFor } from './store.mjs';
 import { serviceAdmission } from './service-identity.mjs';
+import { admissionOf } from './handshake.mjs';
+import { splitUserId, isReservedUsername } from './protocol.mjs';
 
 /**
  * @param {object} options
@@ -40,6 +42,15 @@ export function createAssetTicketVerifier({ store, now = Date.now, services = nu
         try { registry = registryOf(); } catch { registry = null; }
         const refused = serviceAdmission({ registry, record: v.record, service: v.payload.sv, kid: v.payload.sk });
         if (refused) return { ok: false, reason: refused };
+        // 代成员进项目的服务（云端 Agent，`docs/plan/cloud-agent-contract.md` 第 4.4 节）：第一版文档服务不给它签素材票据；
+        // 这里把以后的规则先钉死——只许只读、名单与禁入表照成员查——万一有这种票据，也写不了、被踢后当场失效
+        if (registry.get(v.payload.sv)?.actsFor === 'member') {
+          if (v.payload.r !== 'r') return { ok: false, reason: 'forbidden' };
+          const who = splitUserId(v.payload.u);
+          if (!who || isReservedUsername(who.username)) return { ok: false, reason: 'format' };
+          const denied = admissionOf(v.record, { username: who.username, deviceId: who.deviceId, creator: v.payload.cr === true });
+          if (denied) return { ok: false, reason: denied };
+        }
         return { ok: true, access: v.payload.r, projectId: v.payload.p, userId: v.payload.u, service: v.payload.sv };
       }
       return { ok: true, access: v.payload.r, projectId: v.payload.p, userId: v.payload.u };

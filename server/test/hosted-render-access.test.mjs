@@ -68,9 +68,10 @@ test('HR8 白名单（纯函数）：渲染服务的表、控制连接的表；�
     assert.equal(serviceGate({ scope: 'member', tenantId: render.tenantId, role: 'render' }, type, { type }), null, `成员发 ${type} 不归这里管`);
   }
   assert.equal(serviceGate({ scope: 'service', service: 'unknown', tenantId: render.tenantId }, 'project.open', {}), 'forbidden', '没有白名单的服务什么都不能发');
-  // 按 service 字段判，不按 scope：代成员进来的云端 Agent 连接（scope 是 member）同样走白名单；它的表留给第四段，本段全拒
+  // 按 service 字段判，不按 scope：代成员进来的服务连接（scope 是 member）同样走白名单。agent 一行由第四段填
+  // （`cloud-agent-auth.test.mjs` 的 CA-AUTH-05 逐条测）；这里只钉「表里没有的服务名全拒」
   for (const type of ALL_TYPES) {
-    assert.equal(serviceGate({ scope: 'member', service: 'agent', tenantId: render.tenantId, role: 'agent', conversation: 1 }, type, { type }), 'forbidden', 'agent 连接发 ' + type);
+    assert.equal(serviceGate({ scope: 'member', service: 'backup', tenantId: render.tenantId, role: 'agent', conversation: 1 }, type, { type }), 'forbidden', '表里没有的服务发 ' + type);
   }
   for (const p of [{ scope: 'member', tenantId: render.tenantId }, { scope: 'admin', tenantId: null }, { scope: 'local', tenantId: 'local' }, render]) {
     assert.equal(serviceGate(p, 'hosted.watch', {}), 'forbidden', `${p.scope} 发 hosted.watch`);
