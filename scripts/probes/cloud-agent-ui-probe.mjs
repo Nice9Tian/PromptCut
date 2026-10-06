@@ -35,7 +35,8 @@
  *       不选「云端」时发往 Agent 服务的请求只有一次 info 加一次对话列表(CA-DESK-02);开关被关时「云端」一项在、置灰、写原因;
  *   D3  选「云端」:页面直连 Agent 服务(跨源),没有发往本机 /api/ai/chat、/api/mcp/ 的请求;附件按钮置灰并写原因;「深度自主」置灰并写原因;
  *   D4  选「云端」发一条长一点的任务(三处改动 + 等待),确认已被云端接下后关掉桌面页面:对话在云端照跑完,项目被改了三处;
- *   D5  桌面页面重新打开回到同一个项目:AI 栏仍是本机驱动,有「云端对话进行中」或历史列表「云端」一组;从里面点开找回完整过程。
+ *   D5  桌面页面重新打开回到同一个项目:AI 栏仍是本机驱动,只多一次 info 与一次对话列表;历史列表「云端」一组里找得到那个对话,点开找回完整过程;
+ *   D6  云端对话还在跑时重新打开:AI 栏仍是本机驱动,出现「云端对话进行中」提示,点「接上看看」接上还在跑的对话,跑完过程完整、改动落地。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import { spawn, spawnSync } from 'node:child_process';
@@ -319,7 +320,8 @@ const P = (page, fn, ...a) => page.evaluate(fn, ...a);
 const shot = async (page, name) => { const f = path.join(OUT, `${name}.png`); await page.screenshot({ path: f }).catch(() => {}); return f; };
 async function typeInto(page, sel, text) {
   await page.waitForSelector(sel, { visible: true, timeout: 20_000 });
-  await page.click(sel, { clickCount: 3 });
+  await page.click(sel);
+  await page.$eval(sel, (el) => el.select());
   await page.keyboard.press('Backspace');
   if (text) await page.type(sel, text, { delay: 5 });
 }
@@ -332,6 +334,11 @@ async function newPage(ctx, { mobile = false, init = [] } = {}) {
   page.requests = [];
   page.on('pageerror', (e) => page.pageErrors.push(String(e?.message ?? e).slice(0, 200)));
   page.on('request', (r) => page.requests.push({ method: r.method(), url: r.url() }));
+  page.failures = [];
+  page.on('requestfailed', (r) => page.failures.push(`${r.method()} ${r.url().slice(0, 120)} ${r.failure()?.errorText}`));
+  page.on('response', (r) => { if (r.status() >= 400) page.failures.push(`${r.status()} ${r.request().method()} ${r.url().slice(0, 120)}`); });
+  page.consoleErrors = [];
+  page.on('console', (m) => { if (m.type() === 'error' || m.text().includes('[collab]')) page.consoleErrors.push(m.text().slice(0, 300)); });
   if (mobile) {
     await page.emulate({ userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36', viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false } });
     await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
@@ -555,7 +562,7 @@ function shellEnv(dir) {
 async function startDesktop() {
   for (const p of [PORTS.desktop, PORTS.desktop + 1, PORTS.desktop + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
   const dir = path.join(TMP, 'desktop');
-  const child = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--port', String(PORTS.desktop), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: shellEnv(dir) });
+  const child = spawn(process.execPath, [viteBin(), '--port', String(PORTS.desktop), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: shellEnv(dir) });
   const log = [];
   const keep = (c) => { for (const line of c.toString().split(/\r?\n/)) if (line) { log.push(line); if (log.length > 4000) log.shift(); } };
   child.stdout.on('data', keep);
@@ -575,7 +582,7 @@ async function stopDesktop() {
   desktop = null;
 }
 const agentReqs = (page) => page.requests.filter((r) => r.url.startsWith(`http://127.0.0.1:${PORTS.agent}/`));
-const localAiReqs = (page) => page.requests.filter((r) => { try { const u = new URL(r.url); return u.origin === desktop.origin && /^\/api\/(ai\/chat|mcp\/)/.test(u.pathname); } catch { return false; } });
+const localAiReqs = (page) => page.requests.filter((r) => { try { const u = new URL(r.url); return u.origin === desktop.origin && /^\/api\/(ai\/(chat|abort)|mcp\/call)/.test(u.pathname); } catch { return false; } });
 
 async function openDesktopEditor(page) {
   await page.goto(`${desktop.origin}/?editor&nosetup=1&aimock=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
@@ -583,6 +590,8 @@ async function openDesktopEditor(page) {
   await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
   await page.waitForSelector('[data-pc="ai-provider"]', { timeout: 60_000 }).catch(() => {});
 }
+
+const clip6Label = (p) => p.tracks.flatMap((t) => t.clips).find((c) => c.label === 'D6 接上后')?.label ?? null;
 
 async function desktopPhase() {
   await startDesktop();
@@ -623,17 +632,20 @@ async function desktopPhase() {
   await typeInto(page, '[data-pc="collab-hosted-url"]', HOSTED_FOR_DESKTOP);
   await page.click('.pc-dialog-foot .pc-btn--primary');
   const enabled = await until('放云端开启完成', async () => { const t = await page.$eval('[data-pc="collab-status"]', (el) => el.textContent ?? '').catch(() => ''); return t && !t.includes('正在设置') ? t : null; }, 90_000, 300);
-  check('D2:桌面页面开启「多用户协作」放云端', enabled?.includes('多用户协作已开启。'), { status: enabled });
+  check('D2:桌面页面开启「多用户协作」放云端', enabled?.includes('多用户协作已开启。'), { status: enabled, failures: page.failures.slice(-6), consoleErrors: page.consoleErrors.slice(-4) });
   await page.keyboard.press('Escape');
   const found = await M.lookupProject({ base: HOSTED_FOR_DESKTOP, name: NAME });
   const PID = found.projectId;
   creds.set(PID, creator);
   const USER = `${creator.username}@probe-desktop`;
   const ID = identityScript(PID, USER);
-  await page.evaluate(ID);
   await page.evaluateOnNewDocument(ID);
-  // 合流前文档服务不报 hosted.agent:让页面重新判一次可用性(读上面注入的来源)
+  // 合流前文档服务不报 hosted.agent:让页面重新判一次可用性(读上面注入的来源);这时身份还没有 —— 页面一个请求都不发
   await P(page, async () => { const E = await import('/src/ai/cloud/endpoint.ts'); E.setCloudAgentSource(null); });
+  await sleep(1500);
+  check('D2:身份还没就绪时(云端可用、没有票据)页面不向 Agent 服务发任何请求', agentReqs(page).length === 0, { n: agentReqs(page).length });
+  // 身份就绪(合流后是文档服务给的委托票据;这里是测试替身):页面此时才取一次 info 加一次对话列表
+  await P(page, async (ticket) => { const I = await import('/src/ai/cloud/identity.ts'); I.setCloudIdentity({ getTicket: async () => ticket, getGrant: async () => undefined }); }, `test:${PID}:${USER}`);
   await sleep(2500);
 
   /* ---- D2 */
@@ -679,8 +691,8 @@ async function desktopPhase() {
   check('D3:选「云端」后页面直连 Agent 服务(跨源 POST),没有发往本机 /api/ai/chat、/api/mcp/ 的请求', agentCross.length === 1 && localAi.length === 0, { agentPosts: agentCross.length, localAi: localAi.map((r) => r.url) });
   await shot(page, 'D4-desktop-streaming');
   check('D4:云端接下了任务', !!taken, {});
-  // 关掉桌面页面(整个标签页)
-  await page.close();
+  // 关掉桌面页面:标签页离开编辑器(页面里的一切、事件流连接都没了);同一个标签页稍后再打开,共享项目的恢复信息在标签页的会话存储里
+  await page.goto('about:blank');
   say('desktop.page-closed');
   const doneOnCloud = await until('D4:桌面页面关掉之后,云端对话照跑完', async () => {
     const r = await fetch(`${AGENT_DIRECT}/conversations`, { headers: { Authorization: `Bearer test:${PID}:${USER}` } }).then((x) => x.json());
@@ -693,9 +705,7 @@ async function desktopPhase() {
   check('D4:桌面页面不在时三处改动照样落地', clipD(clips.text)?.params?.text === '桌面云端改的|标题' && clipD(clips.move)?.start === 8 && clipD(clips.ring)?.params?.value === 88, { text: clipD(clips.text)?.params?.text, move: clipD(clips.move)?.start, ring: clipD(clips.ring)?.params?.value });
 
   /* ---- D5:重新打开 */
-  page = await newPage(ctx);
-  await page.evaluateOnNewDocument(agentInject);
-  await page.evaluateOnNewDocument(ID);
+  const markReq = page.requests.length;
   await page.goto(`${desktop.origin}/?editor&nosetup=1&aimock=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
   const back = await until('D5:桌面页面回到同一个共享项目', () => P(page, async () => { const S = await import('/src/editor/sync/syncManager.ts'); const v = S.getSyncView(); return v.shared?.projectId ?? null; }), 120_000, 500);
   check('D5:桌面页面重新打开后回到同一个共享项目', back === PID, { back, PID });
@@ -703,7 +713,7 @@ async function desktopPhase() {
   await sleep(2500);
   const reopened = await providerOptions(page);
   check('D5:重新打开后 AI 栏仍是本机驱动(云端从不自动选中)', reopened && reopened.value !== 'cloud' && reopened.options.some((o) => o.value === 'cloud'), reopened);
-  const preSel2 = agentReqs(page).filter((r) => r.method !== 'OPTIONS');
+  const preSel2 = page.requests.slice(markReq).filter((r) => r.url.startsWith(`http://127.0.0.1:${PORTS.agent}/`) && r.method !== 'OPTIONS');
   check('D5:重新打开时只多一次 info 与一次对话列表', preSel2.length === 2, preSel2.map((r) => r.url.replace(/^http:\/\/127\.0\.0\.1:\d+/, '')));
   await page.click('[data-pc="ai-history"]');
   const group = await until('D5:历史列表「云端」一组里有刚才的对话', () => P(page, (id) => { const g = document.querySelector('[data-pc="chat-cloud-group"]'); const items = g ? [...g.querySelectorAll('[data-pc="chat-cloud-item"]')] : []; return items.length ? items.map((e) => e.textContent.trim().slice(0, 60)) : null; }, convD), 15_000, 200);
@@ -714,6 +724,25 @@ async function desktopPhase() {
   const found5 = await until('D5:点开后找回完整过程', async () => { const m = await msgs(page); return m && toolCount(m) === 4 && (lastAssistant(m)?.text ?? '').includes('桌面发起的三处改动做完了') ? m : null; }, 30_000, 200);
   check('D5:点开后找回完整过程(用户消息、四个工具调用、最后的回复)', !!found5 && found5.filter((x) => x.role === 'user').length === 1, { tools: toolCount(found5), users: found5?.filter((x) => x.role === 'user').length });
   await shot(page, 'D5-desktop-cloud-recovered');
+
+  /* ---- D6:云端对话还在跑时重新打开:有「进行中」提示,点了接上 */
+  await startRun(page, [{ tool: 'get_project', input: {} }, { sleepMs: 45000 }, { tool: 'update_clip', input: { clipId: clips.text, label: 'D6 接上后' } }, { say: 'D6 做完了' }]);
+  await sleep(1500);
+  await page.goto('about:blank');
+  await page.goto(`${desktop.origin}/?editor&nosetup=1&aimock=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
+  await until('D6:桌面页面回到共享项目', () => P(page, async () => { const S = await import('/src/editor/sync/syncManager.ts'); return S.getSyncView().shared?.projectId ?? null; }), 120_000, 500);
+  const banner = await until('D6:本机模式下出现「云端对话进行中」提示', () => page.$('[data-pc="cloud-running-banner"]'), 30_000, 200);
+  const optsD6 = await providerOptions(page);
+  check('D6:云端对话还在跑时重新打开:AI 栏仍是本机驱动,出现「云端对话进行中」提示', !!banner && optsD6 && optsD6.value !== 'cloud', { value: optsD6?.value });
+  await shot(page, 'D6-desktop-running-banner');
+  await page.click('[data-pc="cloud-running-banner"] button');
+  await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 });
+  const attachedD6 = await until('D6:点了「接上看看」后接上还在跑的对话', async () => { const v = await view(page); return v?.streaming ? v : null; }, 20_000, 100);
+  check('D6:接上后看到「停止」(这一轮还在跑)', !!attachedD6 && !!(await page.$('[data-pc="cloud-ai-panel"] [data-pc="ai-stop"]')), {});
+  await until('D6:这一轮结束', () => idle(page), 90_000, 200);
+  const mD6 = await msgs(page);
+  check('D6:接上后过程完整、回复在,改动落地', (lastAssistant(mD6)?.text ?? '').includes('D6 做完了') && clip6Label(await readProject(PID)) === 'D6 接上后', { text: lastAssistant(mD6)?.text, tools: toolCount(mD6) });
+  await shot(page, 'D6-desktop-attached');
   check('D5:桌面页面没有页面错误', page.pageErrors.length === 0, page.pageErrors.slice(0, 3));
   await ctx.close().catch(() => {});
   await stopDesktop();

@@ -28,10 +28,23 @@ export class CloudIdentityError extends Error {
 }
 
 let injected: CloudIdentity | null = null;
+let version = 0;
+const listeners = new Set<() => void>();
 
-/** 合流后由接真身份的那一处调用;传 null 撤掉 */
+/** 合流后由接真身份的那一处调用;传 null 撤掉。身份就绪(或换了)时通知订阅方:界面据此重新取一次云端的 info 与对话列表 */
 export function setCloudIdentity(next: CloudIdentity | null): void {
   injected = next;
+  version++;
+  for (const l of [...listeners]) l();
+}
+
+export function subscribeCloudIdentity(l: () => void): () => void {
+  listeners.add(l);
+  return () => { listeners.delete(l); };
+}
+
+export function cloudIdentityVersion(): number {
+  return version;
 }
 
 function current(): CloudIdentity {

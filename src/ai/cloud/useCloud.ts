@@ -12,6 +12,7 @@ import { getTabCreativity } from "../agentTabs";
 import { getScript } from "../script";
 import { mediaCardUrl } from "../mediaRef";
 import { cloudAgentVersion, resolveCloudAgent, subscribeCloudAgent, type CloudAgentAvailability } from "./endpoint";
+import { cloudIdentityVersion, subscribeCloudIdentity } from "./identity";
 import { CloudError, cloudErrorText, createCloudApi, type CloudApi } from "./cloudApi";
 import { createCloudSession, type CloudSession, type CloudSessionView } from "./session";
 import { titleOf } from "./events";
@@ -24,17 +25,20 @@ const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.V
 export interface CloudAgentState extends CloudAgentAvailability {
   /** 此刻连着的共享项目号;没连共享项目是 null */
   projectId: string | null;
+  /** 身份接口位被(重新)注入的次数:身份晚于「云端可用」才就绪时,据此重新取一次 */
+  identityVersion: number;
 }
 
 export function useCloudAgent(): CloudAgentState {
   const shared = useSync((v) => v.shared);
   const ver = useSyncExternalStore(subscribeCloudAgent, cloudAgentVersion, cloudAgentVersion);
+  const identityVersion = useSyncExternalStore(subscribeCloudIdentity, cloudIdentityVersion, cloudIdentityVersion);
   const projectId = shared?.projectId ?? (ONLINE_BUILD ? currentDocProjectId() || null : null);
   const where = shared?.where === "hosted";
   return useMemo(
-    () => ({ ...resolveCloudAgent({ projectId, hostedWhere: where || ONLINE_BUILD, online: ONLINE_BUILD }), projectId }),
+    () => ({ ...resolveCloudAgent({ projectId, hostedWhere: where || ONLINE_BUILD, online: ONLINE_BUILD }), projectId, identityVersion }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectId, where, ver],
+    [projectId, where, ver, identityVersion],
   );
 }
 
@@ -117,7 +121,7 @@ export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudD
   const [items, setItems] = useState<CloudChatItem[]>([]);
   const [running, setRunning] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const key = cloud.available && cloud.url && cloud.projectId ? `${cloud.projectId}|${cloud.url}` : "";
+  const key = cloud.available && cloud.url && cloud.projectId ? `${cloud.projectId}|${cloud.url}|${cloud.identityVersion}` : "";
   const keyRef = useRef(key);
   keyRef.current = key;
 
@@ -180,7 +184,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const messages = useChatMessages(store);
   const api = useCloudApi(cloud.url);
   const projectId = cloud.projectId ?? "";
-  const key = enabled && cloud.available && cloud.url && projectId ? `${projectId}|${cloud.url}|${tabId}` : "";
+  const key = enabled && cloud.available && cloud.url && projectId ? `${projectId}|${cloud.url}|${tabId}|${cloud.identityVersion}` : "";
 
   const [info, setInfo] = useState<CloudInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
