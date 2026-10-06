@@ -308,13 +308,18 @@ async function openMember(label, projName, username, projectPassword) {
   void puppeteer;
   return page;
 }
-const addCardClip = (page, label) => P(page, (cardId, label2) => {
-  const S = window.__pcStore;
-  const c = S.actions.addClipOnNewTrack({ index: 0, cardId, start: 0, duration: 1 });
-  S.actions.setClipParams(c.id, { text: label2 });
-  S.actions.seek(0.5);
-  return c.id;
-}, CARD_ID, label);
+async function addCardClip(page, label) {
+  // 同步来的用户卡要等页面把内容库的卡片源码取到、认出它(定时重取,最多几秒)才放得上
+  await until(`${page.label}页认出同步来的卡 ${CARD_ID}`, () => P(page, (id) => !!window.__pcCardSources?.()?.cards?.some((c) => c.id === id), CARD_ID), 60_000, 500);
+  // 同步来的卡不在主注册表,不能用 addClipOnNewTrack;经 editCardProject 直接放一个片段(同 online-user-cards-probe)
+  return P(page, (cardId, label2, tag) => {
+    const S = window.__pcStore;
+    const id = 'ocn-' + tag;
+    S.actions.editCardProject((p) => ({ ...p, duration: Math.max(p.duration, 8), tracks: [{ id: 'ocn-t-' + tag, name: '序列 ' + tag, clips: [{ id, cardId, start: 0, end: 1, params: { text: label2 }, frame: { x: 0, y: 0, w: 640, h: 360 } }] }, ...p.tracks] }));
+    S.actions.seek(0.5);
+    return id;
+  }, CARD_ID, label, label.replace(/[^a-z0-9]/gi, '') + Math.random().toString(36).slice(2, 6));
+}
 
 try {
   const DIST = await startLocalSite();
