@@ -38,15 +38,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { REPO, killTree, portFree, tripleFree, viteBin, waitHttp, startDevServer, sleep } from '../lib/dev-server.mjs';
 import {
   parseArgs, USAGE, validateManifest, selectItems, planResume, expandCmd, expandPlaceholders, judge, combineAttempts,
   listText, summaryText, commandText, describeItem, coverageReport, DONE_VERDICTS, matrixText,
 } from './acceptance-lib.mjs';
-import { ITEMS, EXCLUDED_PROBE_FILES, TASK_ACCEPTANCE } from './four-stage-manifest.mjs';
-
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+// 清单模块可以用环境变量 PC_ACCEPTANCE_MANIFEST 换成别的(单测用一份假清单跑真的子进程流程)
+const MANIFEST_FILE = process.env.PC_ACCEPTANCE_MANIFEST ? path.resolve(process.env.PC_ACCEPTANCE_MANIFEST) : path.join(HERE, 'four-stage-manifest.mjs');
+const { ITEMS, EXCLUDED_PROBE_FILES = {}, TASK_ACCEPTANCE = { R: [], C: [], U: [] } } = await import(pathToFileURL(MANIFEST_FILE).href);
 
 /* ------------------------------------------------------------------ 小工具 */
 
@@ -117,7 +119,7 @@ function runCommand({ cmd, cwd, env, logFile, timeoutMin, idleKillMin, label }) 
     child.stderr.on('data', onData);
     const timer = setTimeout(() => { timedOut = true; killTree(child.pid); }, (timeoutMin || 30) * 60_000);
     const idle = idleKillMin
-      ? setInterval(() => { if (Date.now() - lastData > idleKillMin * 60_000) { idleKilled = idleKillMin; killTree(child.pid); } }, 15_000)
+      ? setInterval(() => { if (Date.now() - lastData > idleKillMin * 60_000) { idleKilled = idleKillMin; killTree(child.pid); } }, Math.min(15_000, Math.max(200, idleKillMin * 15_000)))
       : null;
     const finish = (exitCode, signal, spawnError) => {
       if (done) return;
