@@ -1483,6 +1483,9 @@ export function createAgentInstance(env) {
         hostedRunIds.delete(agentId);
         noteRun(-1);
         try { board().endRun(agentId); } catch { /* 实例已经关了 */ }
+        // 这一轮声明过的范围随这一轮结束撤掉(说完、失败、被停、被撤销都走到这里):云端的对话没有页签可关,不撤的话别的成员的 AI 栏顶上
+        // 会一直挂着「〈成员〉的云端 Agent 正在改:…」。经这个对话自己的连接发 presence.clear;连接已经被关掉时在场状态随连接一起没了
+        try { if (board().clearScope(agentId)) void presenceBridge?.publishAgent(agentId)?.catch?.(() => {}); } catch { /* 实例已经关了 */ }
       }
     })();
     return {
