@@ -362,7 +362,7 @@ test('一轮的生命周期、收尾与对话状态', { timeout: 240_000 }, asyn
       const err = live.seen.filter((e) => e.type === 'error').at(-1);
       assert.deepEqual([err.code, err.reason], ['revoked', reason]);
       assert.match(err.message, re);
-      assert.deepEqual(live.seen.at(-1), { type: 'end', runId: err.runId, state: 'revoked', seq: live.seen.length });
+      assert.deepEqual(live.seen.at(-1), { type: 'end', runId: err.runId, state: 'revoked', reason, seq: live.seen.length });
       assert.deepEqual([metaOf(kit, A1, id).state, metaOf(kit, A1, id).reason], ['revoked', reason]);
       await sleep(150);
       assert.equal((await kit.doc.stateOf('p-a')).project.tracks[0].clips[0].label, `撤销前-${reason}`, '之后没有新的写入');
