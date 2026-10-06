@@ -6,6 +6,8 @@ import { persistentCardAudio } from "../../audio/cardAudio";
 import { actions, useStore } from "../../store/project";
 import { cancelCardAudioGeneration, generateCardAudio } from "../io/cardAudioGeneration";
 import { onlinePage } from "../../online/pageFlag";
+import { clipSoundRunnable } from "../io/onlineSoundJudge";
+import { planLowMemory } from "../planDispatch";
 
 /** 卡内声音依附同一片段。生成不是分离音轨；失败不把旧声音或画面替掉。 */
 export function CardAudioForm({ clip }: { clip: TrackClip }) {
@@ -14,6 +16,8 @@ export function CardAudioForm({ clip }: { clip: TrackClip }) {
   const active = useRef(false);
   if (!clipHasEmbeddedAudio(project, clip, getCard)) return null;
   const locked = project.tracks.find(track => track.clips.some(c => c.id === clip.id))?.locked;
+  // 在线页面(`product/platforms.md`「卡片声音的平台边界」):内置有声卡可以在浏览器里合成(判轻的);用户卡、图卡与低内存档照旧只用同步来的声音
+  const online = onlinePage(), synthHere = !online || (clipSoundRunnable(project, clip) && !planLowMemory());
   let ready = false, status = "尚未生成卡片声音";
   try { persistentCardAudio(project, clip); ready = true; status = "声音已保存，预览和导出共用同一份 WAV"; }
   catch (cause) { status = cause instanceof Error ? cause.message : String(cause); }
@@ -29,7 +33,7 @@ export function CardAudioForm({ clip }: { clip: TrackClip }) {
     <p className="pc-left-muted mb-2">{status}</p>
     <p className="pc-left-muted mb-2">声音和画面属于同一片段，可单独静音，不能分离音轨。</p>
     <div className="flex gap-2 flex-wrap">
-      <button type="button" disabled={busy || locked || onlinePage()} onClick={() => void generate()}>{ready ? "重新生成声音" : "生成声音"}</button>
+      <button type="button" disabled={busy || locked || !synthHere} onClick={() => void generate()}>{ready ? "重新生成声音" : "生成声音"}</button>
       <button type="button" disabled={locked} aria-pressed={!!clip.audioMuted} onClick={() => {
         const result = actions.setClipMuted(clip.id, !clip.audioMuted);
         if (!result.ok) setError(result.error ?? "静音操作失败");
@@ -37,7 +41,8 @@ export function CardAudioForm({ clip }: { clip: TrackClip }) {
       {busy && <button type="button" onClick={() => cancelCardAudioGeneration(clip.id)}>取消生成</button>}
     </div>
     {busy && <p role="status" className="mt-2">正在生成或上传声音 {Math.round(progress * 100)}%</p>}
-    {onlinePage() && <p className="pc-left-muted mt-2">请在本地生成并同步卡片声音；这里可以预览已有声音。</p>}
+    {online && !synthHere && <p className="pc-left-muted mt-2">请在本地生成并同步卡片声音；这里可以预览已有声音。</p>}
+    {online && synthHere && !ready && <p className="pc-left-muted mt-2">预览里的声音由浏览器即时合成；点「生成声音」或导出时会保存成同步的声音。</p>}
     {error && <p role="alert" className="mt-2">{error}</p>}
   </section>;
 }

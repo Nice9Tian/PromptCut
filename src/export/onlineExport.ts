@@ -14,6 +14,7 @@ import { pushToast } from "../editor/sync/syncManager";
 import { MemorySink, type MuxSink } from "./mp4Mux";
 import { runBrowserExport } from "./browserExport";
 import { ONLINE_EXPORT_TEXT } from "./text";
+import { prepareExportSounds } from "../editor/io/exportSounds";
 
 export interface OnlineExportOptions {
   /**
@@ -65,14 +66,23 @@ const heavyOnlyOf = (p: Project) => () => (planLowMemory() ? heavyClipsOfPlan(p)
 const originalsDeps = () => (hasDocLink() ? { request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders } : null);
 
 export async function exportVideoOnline(
-  opts: { onProgress?: (done: number, total: number, stage?: "render" | "compose") => void; onStart?: (id: string) => void } & OnlineExportOptions,
+  opts: { onProgress?: (done: number, total: number, stage?: "sound" | "render" | "compose") => void; onStart?: (id: string) => void } & OnlineExportOptions,
   jobs: Map<string, OnlineJob>,
 ): Promise<{ outDir: string; id: string; written?: boolean }> {
-  const p = JSON.parse(JSON.stringify(getState().project)) as Project;
   const id = `online-${Date.now().toString(36)}-${++seq}`;
   const job: OnlineJob = { controller: new AbortController(), blob: null };
   jobs.set(id, job);
   opts.onStart?.(id);
+  // 导出开始时先把未生成、缺失或过期的声音生成好,再出画面(`product/rendering.md`「有声动效卡」;在线页面只合成判轻的内置声音)。
+  // 项目快照在这之后才取;这一步失败或取消时落点文件还没打开,不留东西
+  try {
+    await prepareExportSounds({ signal: job.controller.signal, onProgress: (done, total) => opts.onProgress?.(done, total, "sound") });
+  } catch (e) {
+    const err = e as Error & { cancelled?: boolean };
+    pushToast(err.cancelled ? ONLINE_EXPORT_TEXT.cancelled : ONLINE_EXPORT_TEXT.failed(err.message), err.cancelled ? "info" : "warn");
+    throw err.cancelled ? Object.assign(new Error(ONLINE_EXPORT_TEXT.cancelled), { cancelled: true }) : err;
+  }
+  const p = JSON.parse(JSON.stringify(getState().project)) as Project;
   // 导出期间暂停预览,并释放小尺寸缓存(契约第 11.1 节)
   if (getState().playing) actions.pause();
   activeOnlineSource()?.clearCache();
@@ -144,7 +154,9 @@ export function exportRenewalStats() {
  * 探针入口(`window.__pcIo.exportVideoBrowser`,`scripts/probes/lowmem-export-compare.mjs`):在当前页面上跑一次浏览器逐帧导出,
  * 回产物字节(base64)与统计。不经「另存为」、不下载;`originals: false` 时重卡照活渲(桌面运行环境没有渲染节点的层表)。
  */
-export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals?: boolean } = {}) {
+export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals?: boolean; sounds?: boolean } = {}) {
+  // `sounds: true`:同正式导出,先把声音生成好(探针 `sound-ab-probe.mjs`)
+  if (o.sounds) await prepareExportSounds({ signal: new AbortController().signal });
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
   const sink = new MemorySink();
   const controller = new AbortController();

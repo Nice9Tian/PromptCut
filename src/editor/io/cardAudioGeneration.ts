@@ -7,7 +7,7 @@ import { requireCardAudioHooks, renderEmbeddedCardWav } from "../../audio/cardAu
 import { sha256Hex } from "../../online/snapUploader";
 import { hasGeneratedAudio, uploadGeneratedAudio } from "./generatedAudioUpload";
 import { isViewOnly } from "./viewOnly";
-import { onlinePage } from "../../online/pageFlag";
+import { decideClipSound } from "./onlineSoundJudge";
 
 /** 与独立音效一样限制总任务数；任意用户卡仍只在一个小块里求值，不同时攒多份 PCM。 */
 export const CARD_AUDIO_JOB_LIMIT = 4;
@@ -36,7 +36,6 @@ export function cancelCardAudioGeneration(clipId: string): boolean {
 /** Agent 等待实际入库和提交完成；取消/换项目/新请求不会留下半个片段或覆盖新内容。 */
 export async function generateCardAudio(clipId: string, options: { signal?: AbortSignal; force?: boolean; onProgress?: (done: number, total: number) => void } = {}) {
   if (isViewOnly()) throw new Error("只读页面不能生成卡片声音");
-  if (onlinePage()) throw new Error("在线浏览器模式不能执行卡片声音代码，请在本地生成后同步");
   const state = getState(), p = state.project, hit = findClip(p, clipId), hooks = requireCardAudioHooks();
   if (!hit || !clipHasEmbeddedAudio(p, hit.clip, hooks.getCard)) throw new Error("找不到带内嵌声音的动效卡片");
   if (hit.track.locked) throw new Error("请先解锁卡片所在序列");
@@ -66,6 +65,10 @@ export async function generateCardAudio(clipId: string, options: { signal?: Abor
         return { ok: true as const, clipId, mediaId: reusable.media.id, reused: true };
       }
     }
+    // 在线页面:这台设备跑得了、又判轻的才在浏览器里合成(`onlineSoundJudge.ts`;桌面运行环境恒合成)
+    const decision = await decideClipSound(frozen, clip, controller.signal);
+    check();
+    if (!decision.synth) throw new Error(decision.message);
     release = await acquireSlot(controller.signal);
     check();
     const rendered = await renderEmbeddedCardWav(frozen, clip, controller.signal, options.onProgress);

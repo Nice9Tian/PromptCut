@@ -36,6 +36,7 @@ import type { CardDef } from "../../kernel/types";
 import type { MediaAsset, Project, TrackClip } from "../../kernel/project";
 import type { CardNode } from "../../kernel/cardGraph.mjs";
 import { onlinePage } from "../../online/pageFlag";
+import { ONLINE_CARD_AUDIO_BLOCKED, onlineCardAudioRunnable } from "../../online/soundPolicy";
 
 /** 一路输入解析后的样子。`offset` 是秒,`rate` 是播放速率(第一版只支持 1) */
 export type AudioSourceRef =
@@ -204,11 +205,12 @@ export interface AudioRange { start: number; count: number; sampleRate: number }
 /** 找节点 → 注册表里的定义 → `def.audio(sources, range, params)`。返回交错的采样块 */
 export async function evaluateCardAudio(ctx: AudioSourceContext, nodeId: string, range: AudioRange): Promise<Float32Array> {
   if (ctx.signal?.aborted) throw new DOMException("aborted", "AbortError");
-  if (onlinePage()) fail("在线浏览器模式不能执行卡片声音源码，请使用已生成的声音素材");
   const node = nodeOf(ctx, nodeId);
   if (!node) fail(`audio node ${nodeId} is missing`);
   const cardId = typeof node!.cardId === "string" ? node!.cardId : "";
   const def = cardId ? ctx.getCard(cardId) : undefined;
+  // 在线页面只执行放开了的卡(第一段:内置卡;`src/online/soundPolicy.ts`),其余照旧用已生成的声音素材
+  if (onlinePage() && !onlineCardAudioRunnable(def)) fail(ONLINE_CARD_AUDIO_BLOCKED);
   if (!def?.audio) fail(`card ${cardId || node!.id} has no audio()`);
   const mapped = { ...range, start: range.start + Math.round((Number(node!.timeOffset) || 0) * range.sampleRate) };
   const samples = await def!.audio!(audioSourcesOf(ctx, node!), mapped, paramsOfAudioNode(ctx, node!) as any);

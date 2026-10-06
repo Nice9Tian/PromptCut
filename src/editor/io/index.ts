@@ -327,15 +327,62 @@ export function exportProjectJson(): string {
  */
 export async function exportVideo(
   opts: {
-    /** stage:render = 逐帧渲卡片,compose = ffmpeg 合素材编码;done/total 是这一步的帧数 */
-    onProgress?: (done: number, total: number, stage?: "render" | "compose") => void;
-    /** 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方 */
+    /**
+     * stage:sound = 导出开始时先生成声音(done/total 是段数,done 可带小数);render = 逐帧渲卡片,compose = ffmpeg 合素材编码
+     * (done/total 是这一步的帧数)
+     */
+    onProgress?: (done: number, total: number, stage?: ExportStage) => void;
+    /**
+     * 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方。要先生成声音时会回两次:先是生成声音那一步的 id,
+     * 交给预渲染进程之后是导出任务的 id(取消、取件、打开目录都认后一个;前一个仍然能用来取消)
+     */
     onStart?: (id: string) => void;
   } & OnlineExportOptions = {},
 ): Promise<{ outDir: string; id: string; written?: boolean; skippedMedia?: ExportSkipped[] }> {
   // c10a 第 11.1 节:在线页面没有预渲染进程,在浏览器里逐帧导出。
   // `ONLINE` 按需取:`mode.ts` 读 `import.meta.env`,Node 单测里载入本模块时没有它
   if ((await import("../../online/mode")).ONLINE) return exportVideoOnline(opts);
+  // 导出开始时先把未生成、缺失或过期的声音生成好,再出画面(`product/rendering.md`「有声动效卡」)。项目快照在这之后才取
+  const prep = await prepareSoundsBeforeExport(opts);
+  try {
+    return await exportVideoDesktop(opts, prep);
+  } finally {
+    if (prep.id) soundPrepJobs.delete(prep.id);
+  }
+}
+
+export type ExportStage = "sound" | "render" | "compose";
+const exportCancelled = () => Object.assign(new Error("已取消导出"), { cancelled: true });
+
+/**
+ * 「先生成声音」那一步的任务表。这一步在页面里跑、还没有预渲染进程的任务 id,所以先发一个自己的 id 给调用方取消用;
+ * 导出任务开出来之后记下它的 id,拿旧 id 来取消的照样取消得到。
+ */
+const soundPrepJobs = new Map<string, { controller: AbortController; jobId?: string }>();
+let soundPrepSeq = 0;
+
+async function prepareSoundsBeforeExport(opts: Parameters<typeof exportVideo>[0]): Promise<{ id: string | null; controller: AbortController }> {
+  const sounds = await import("./exportSounds");
+  const controller = new AbortController();
+  const needs = await sounds.listExportSoundNeeds(controller.signal);
+  if (!needs.length) return { id: null, controller };
+  const id = `sound-prep-${Date.now().toString(36)}-${++soundPrepSeq}`;
+  soundPrepJobs.set(id, { controller });
+  opts?.onStart?.(id);
+  try {
+    await sounds.prepareExportSounds({ signal: controller.signal, needs, onProgress: (done, total) => opts?.onProgress?.(done, total, "sound") });
+  } catch (error) {
+    soundPrepJobs.delete(id);
+    throw error;
+  }
+  if (controller.signal.aborted) { soundPrepJobs.delete(id); throw exportCancelled(); }
+  return { id, controller };
+}
+
+async function exportVideoDesktop(
+  opts: Parameters<typeof exportVideo>[0] = {},
+  prep: { id: string | null; controller: AbortController },
+): Promise<{ outDir: string; id: string; written?: boolean; skippedMedia?: ExportSkipped[] }> {
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
   (await import("../../audio/cardAudio")).assertProjectCardAudio(p);
   // C6.6「导出只用素材原尺寸」:素材原尺寸在当前素材服务上还没 complete 的,导出前拦下,提示等待上传方,不拿素材小尺寸代替
@@ -393,6 +440,12 @@ export async function exportVideo(
   const skippedMedia = parseExportSkipped(started.skippedMedia);
   if (skippedMedia.length) console.warn("[io] 导出跳过缺失素材所在的片段:", skippedMedia.map((m) => m.name || m.id));
   jobBase.set(id, base);
+  if (prep.id) {
+    const job = soundPrepJobs.get(prep.id);
+    if (job) job.jobId = id;
+    // 生成完声音、导出任务还没开出来的那一小段里点了取消:任务刚开出来就结束它
+    if (prep.controller.signal.aborted) { await fetch(exportJobUrl(id), { method: "DELETE" }).catch(() => {}); throw exportCancelled(); }
+  }
   opts.onStart?.(id);
 
   return new Promise((resolve, reject) => {
@@ -440,6 +493,13 @@ function exportJobUrl(id: string, suffix = ""): string {
 export async function cancelExport(id: string): Promise<void> {
   const online = onlineJobs.get(id);
   if (online) { online.controller.abort(); return; }
+  // 还在「先生成声音」那一步:停掉生成(没提交的那一段不留东西);已经交给预渲染进程的,转去取消那个任务
+  const prep = soundPrepJobs.get(id);
+  if (prep) {
+    prep.controller.abort();
+    if (prep.jobId) await fetch(exportJobUrl(prep.jobId), { method: "DELETE" }).catch(() => {});
+    return;
+  }
   await fetch(exportJobUrl(id), { method: "DELETE" }).catch(() => {});
 }
 
@@ -504,5 +564,15 @@ if (typeof window !== "undefined") {
   window.__pcIo = { importVideoFiles, importProjectFile, importSrtFile, parseSrt, exportProjectJson, exportVideo, setMediaTranscript: (mediaId: string, transcript: any) => actions.setMediaTranscript(mediaId, transcript) };
   // c10a 探针(`scripts/probes/lowmem-export-probe.mjs`):在当前页面上跑一次浏览器逐帧导出,回产物字节(base64)与统计。
   // 不经「另存为」、不下载;`originals: false` 时重卡照活渲(桌面运行环境没有渲染节点的层表)
-  window.__pcIo.exportVideoBrowser = async (o: { maxFrames?: number; originals?: boolean } = {}) => (await import("../../export/onlineExport")).exportVideoBrowserProbe(o);
+  window.__pcIo.exportVideoBrowser = async (o: { maxFrames?: number; originals?: boolean; sounds?: boolean } = {}) => (await import("../../export/onlineExport")).exportVideoBrowserProbe(o);
+  // 声音探针(`scripts/probes/sound-ab-probe.mjs`):在线构建里没有 `/src/…` 可引,生成、判定、导出前补齐声音从这里拿
+  Object.assign(window.__pcIo, { cancelExport, fetchExportFile });
+  window.__pcIo.sound = async () => {
+    const [effects, cards, exportSounds, judge, upload] = await Promise.all([import("./soundGeneration"), import("./cardAudioGeneration"), import("./exportSounds"), import("./onlineSoundJudge"), import("./generatedAudioUpload")]);
+    return {
+      startSoundGeneration: effects.startSoundGeneration, waitSoundGeneration: effects.waitSoundGeneration,
+      generateCardAudio: cards.generateCardAudio, listExportSoundNeeds: exportSounds.listExportSoundNeeds,
+      decideClipSound: judge.decideClipSound, hasGeneratedAudio: upload.hasGeneratedAudio,
+    };
+  };
 }
