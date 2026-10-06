@@ -4,7 +4,7 @@
  * 用断言，不靠推断。
  *
  *   node scripts/probes/cloud-agent-look-probe.mjs [--doc-port 8798] [--asset-port 8799] [--agent-port 5745] [--render-port 5820]
- *        [--steps builtin,tools,usercard,readonly,off] [--keep] [--verbose]
+ *        [--steps builtin,tools,usercard,readonly,off,desktop] [--desktop-port 5790] [--keep] [--verbose]
  *
  * 全部是真进程、真握手，只绑 127.0.0.1，数据在一个临时目录里，结束时删掉；不连任何远端。模型是仓库里的模拟模型提供方（照脚本走），不花钱。
  *   托管组合（文档 + 素材）`server/hosted/main.mjs`，本机信任关着
@@ -32,6 +32,9 @@
  * K5 只读成员也能看（步骤 readonly）：只读成员发起的对话里 `see_frames` 照常拿到画面（看不改项目），同一轮里的写入照旧被拒。
  * K6 开关（步骤 off，放最后）：项目创建者关掉「渲染节点」后，`see_frames` 回「这次没看成」（原因是渲染节点关着），这一轮照常结束、不挂住；
  *    重新打开后又看得到。
+ * K7 桌面版的看画面不退步（步骤 desktop，最后做，这时三个服务已经停掉）：起一台普通的编辑器开发服务器（`--desktop-port`，另占 +1、+2；
+ *    环境里没有 `PROMPTCUT_RENDER_BROKER`，所以托管方工作进程的那些闸一道都不装），照本机 Agent 的做法从 Node 一侧**不带任何口令**
+ *    问它 `/api/vision/snapshot`、`/api/cards/layout`、`/api/ai/visual`：照常出图（方块在 810）、量出实体框、存下可视化记录。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import：不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import { randomBytes } from 'node:crypto';
@@ -41,6 +44,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createSharedProject } from '../../server/auth/client.mjs';
 import { runKeygen } from '../../server/hosted-render/keygen.mjs';
+import { startDevServer } from '../lib/dev-server.mjs';
 import {
   ROOT, KDF, sleep, waitFor, portBusy, killTree, startProcess, startHosted, startAgent, joinAs, adminOp, projectOf, putProject, mockScript, agentApi, createChecks,
 } from './cloud-agent-probe-lib.mjs';
@@ -48,12 +52,13 @@ import {
 const { PNG } = createRequire(import.meta.url)('pngjs');
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback; };
-const ALL_STEPS = ['builtin', 'tools', 'usercard', 'readonly', 'off'];
+const ALL_STEPS = ['builtin', 'tools', 'usercard', 'readonly', 'off', 'desktop'];
 const STEPS = String(argOf('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 const DOC_PORT = Number(argOf('--doc-port', 8798));
 const ASSET_PORT = Number(argOf('--asset-port', 8799));
 const AGENT_PORT = Number(argOf('--agent-port', 5745));
 const RENDER_PORT = Number(argOf('--render-port', 5820));
+const DESKTOP_PORT = Number(argOf('--desktop-port', 5790));
 const KEEP = args.includes('--keep');
 const VERBOSE = args.includes('--verbose');
 const BASE = `ws://127.0.0.1:${DOC_PORT}`;
@@ -66,6 +71,37 @@ const D = { hosted: path.join(tmp, 'hosted'), agent: path.join(tmp, 'agent'), ag
 let hosted = null;
 let agent = null;
 let render = null;
+let desktop = null;
+
+/** K7：桌面版本机 Agent 看画面的那条路（编辑器进程转给预渲染进程），不带任何口令 */
+async function desktopStep() {
+  desktop = await startDevServer({
+    port: DESKTOP_PORT, logFile: path.join(tmp, 'desktop-dev.log'),
+    env: { PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_DATA_DIR: path.join(tmp, 'desktop-data'), PROMPTCUT_EXPORT_DIR: path.join(tmp, 'desktop-export'), PROMPTCUT_RENDER_BROKER: undefined, PROMPTCUT_RENDER_BROKER_KEY: undefined },
+  });
+  const project = {
+    version: 1, id: 'look-desktop', name: '看画面探针·桌面', width: 1920, height: 1080, fps: 30, duration: 3, themeId: 'dark', camera3dFov: 50,
+    media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {}, transitions: [],
+    tracks: [{ id: 'tr-0', name: 'tr-0', hidden: false, clips: [{ id: 'clip-slide', kind: 'card', cardId: 'r6-stateful', start: 0, end: 3, params: {} }] }],
+  };
+  const post = async (pathname, body, ms = 180_000) => {
+    const res = await fetch(`${desktop.origin}${pathname}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) });
+    return { status: res.status, json: await res.json().catch(() => null) };
+  };
+  // 预渲染进程起来要一会儿（首次要预构建依赖）
+  await waitFor(async () => (await (await fetch(`${desktop.origin}/api/prerender/info`, { signal: AbortSignal.timeout(3000) })).json())?.ready === true, 180_000, '桌面版的预渲染进程就绪', 500);
+  const snap = await post('/api/vision/snapshot', { project, t: 0.5 });
+  const png = snap.json?.__image?.base64 ? PNG.sync.read(Buffer.from(snap.json.__image.base64, 'base64')) : null;
+  const e = png ? emerald(png) : null;
+  const layout = await post('/api/cards/layout', { project, t: 0.5, clipIds: ['clip-slide'] }, 60_000);
+  const visual = png ? await post('/api/ai/visual', { tool: 'see_frames', images: [{ mime: 'image/png', base64: snap.json.__image.base64, label: 't=0.5s' }] }, 10_000) : null;
+  check('K7 桌面版的看画面不退步：普通的编辑器开发服务器上不带任何口令照常出图、量出实体框、存下可视化记录', snap.status === 200 && snap.json?.ok === true && !!e && e.count > 500 && Math.abs(e.x - 810) <= 60
+    && layout.status === 200 && !!layout.json?.clips?.['clip-slide']?.contentBox && visual?.status === 200 && /^v-/.test(String(visual.json?.visualId ?? '')), {
+    snapshot: { status: snap.status, ok: snap.json?.ok ?? null, image: png ? `${png.width}x${png.height}` : null, emerald: e ? { pixels: e.count, x: e.x } : null, error: snap.json?.error ?? null },
+    layout: { status: layout.status, contentBox: layout.json?.clips?.['clip-slide']?.contentBox ?? null, error: layout.json?.error ?? null },
+    visual: visual ? { status: visual.status, visualId: !!visual.json?.visualId } : null,
+  });
+}
 
 function startRender() {
   const env = {};
@@ -136,6 +172,8 @@ const near = (rgb, want, tol = 40) => !!rgb && Math.abs(rgb[0] - want[0]) <= tol
 
 async function main() {
   for (const s of STEPS) if (!ALL_STEPS.includes(s)) throw new Error(`不认识的步骤 ${s}`);
+  // 只跑桌面那一步：不起三个服务
+  if (STEPS.length === 1 && STEPS[0] === 'desktop') { await desktopStep(); return; }
   for (const [name, port] of [['文档服务', DOC_PORT], ['素材服务', ASSET_PORT], ['Agent 服务', AGENT_PORT], ...[0, 1, 2, 3, 4, 5, 6].map((d) => ['渲染服务', RENDER_PORT + d])]) {
     if (await portBusy(port)) throw new Error(`端口 ${port}(${name})已被占用`);
   }
@@ -314,6 +352,13 @@ async function main() {
 
   alice.close();
   ula.close();
+  if (STEPS.includes('desktop')) {
+    // 先把三个服务停掉（省内存，也免得与桌面那台开发服务器抢 CPU）
+    await agent?.stop(); agent = null;
+    if (render) { await render.stop(30_000); killTree(render.child.pid); render = null; }
+    await hosted?.stop(); hosted = null;
+    await desktopStep();
+  }
 }
 
 let code = 0;
@@ -327,8 +372,10 @@ try {
   try { await agent?.stop(); } catch { /* 已经没了 */ }
   try { if (render) { await render.stop(30_000); killTree(render.child.pid); } } catch { /* 已经没了 */ }
   try { await hosted?.stop(); } catch { /* 已经没了 */ }
+  try { desktop?.stop(); } catch { /* 已经没了 */ }
+  if (desktop) await sleep(1500);
   const left = [];
-  for (const port of [DOC_PORT, ASSET_PORT, AGENT_PORT, ...[0, 1, 2, 3, 4, 5, 6].map((d) => RENDER_PORT + d)]) if (await portBusy(port)) left.push(port);
+  for (const port of [DOC_PORT, ASSET_PORT, AGENT_PORT, ...[0, 1, 2, 3, 4, 5, 6].map((d) => RENDER_PORT + d), ...(desktop ? [DESKTOP_PORT, DESKTOP_PORT + 1, DESKTOP_PORT + 2] : [])]) if (await portBusy(port)) left.push(port);
   if (!KEEP) { for (let i = 0; i < 10; i += 1) { try { fs.rmSync(tmp, { recursive: true, force: true }); break; } catch { await sleep(500); } } }
   const fails = results.filter((r) => !r.ok).map((r) => r.check);
   if (code === 0 && fails.length) code = 1;
