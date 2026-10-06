@@ -222,6 +222,31 @@ export function createHostedAgentService({
     render.noteWrite(conv, { clipIds: write?.clipIds ?? [], rev: write?.rev ?? replica?.rev, project: replica?.project ?? null, runId: conv.run.runId });
   }
 
+  /**
+   * 实例的第 n 条连接连文档服务用的凭证。对话委托绑死一个对话(契约第 4.2 节),所以连同对话 id 与这一轮的委托一起交给凭证一侧。
+   * 实例自己的那条连接(副本的订阅、在场状态;执行器里没有对话 id 的那一个)没有自己的委托:借这个实例里此刻有委托的一个对话的。
+   * 文档服务明确不给(委托过期、代数变了、开关关了、被踢、被移出、项目没了)时,被用到的那个对话的一轮按原因收尾;
+   * 连不上、超时这类暂时性的不在此列,照常由连接层退避重试。
+   */
+  async function connectionCredentials(entry, n, conversationId) {
+    let id = conversationId;
+    let grant = grants.get(`${entry.key}\n${id}`) ?? null;
+    if (!id) {
+      const prefix = `${entry.key}\n`;
+      for (const [k, g] of grants) {
+        if (k.startsWith(prefix)) { id = k.slice(prefix.length); grant = g; break; }
+      }
+      if (!id) id = entry.runs.keys().next().value ?? '';
+    }
+    try {
+      return await credentials.protocolsFor(entry.identity, n, { conversationId: id, grant });
+    } catch (err) {
+      const why = CREDENTIAL_REASON[err?.reason];
+      if (why) entry.runs.get(id)?.run?.stop('revoked', { reason: why });
+      throw err;
+    }
+  }
+
   /** 找到或建出这位成员在这个项目里的实例;同一个键并发到达的共用同一次建立 */
   async function instanceFor(identity) {
     if (closed) throw new AgentServiceError('unavailable', '服务正在关闭', 503);
@@ -249,15 +274,10 @@ export function createHostedAgentService({
         latestPlayhead: () => null,
         projectId: identity.projectId,
         docUrl,
-        protocolsFor: (n, conversationId) => credentials.protocolsFor(own.identity, n, { conversationId, grant: grants.get(`${own.key}\n${conversationId}`) ?? null }),
+        protocolsFor: (n, conversationId) => connectionCredentials(own, n, conversationId),
         execSerial,
         initiatorOnline: (conversationId) => initiatorOnline(own, conversationId),
         onWrite: (conversationId, write) => onWrite(own, conversationId, write),
-        // 文档服务明确不给这个对话票据:这一轮按原因收尾(暂时性的连不上不在此列)
-        onCredentialDenied: (conversationId, reason) => {
-          const why = CREDENTIAL_REASON[reason];
-          if (why) own.runs.get(conversationId)?.run?.stop('revoked', { reason: why });
-        },
         // 文档服务以 4003 / 4004 关掉了数据连接:撤销,立刻停这个实例里的每一轮并关实例,不重连
         onFinalClose: (info) => {
           const reason = revokeReasonOfClose(info);
@@ -323,6 +343,10 @@ export function createHostedAgentService({
         throw new AgentServiceError(code, admitted?.message ?? '云端 Agent 正忙,请稍后再试。', code === 'disabled' ? 403 : 429);
       }
       const slot = { projectId: identity.projectId, userId: identity.userId };
+      // 委托先放好:实例一建起来就要连文档服务,那时就得有凭证
+      const grantKey = `${keyOf(identity)}\n${conversationId}`;
+      const hadGrant = grants.get(grantKey);
+      if (grant) grants.set(grantKey, grant);
       let entry;
       let conv;
       try {
@@ -332,13 +356,14 @@ export function createHostedAgentService({
         if (conv.run) throw new AgentServiceError('busy-conversation', '这个对话还有一轮在进行。', 409);
       } catch (err) {
         gate.release(slot);
+        // 这条消息没起成一轮:它带来的委托不留(同一个对话正在跑的那一轮的委托放回去)
+        if (grant) { if (hadGrant) grants.set(grantKey, hadGrant); else grants.delete(grantKey); }
         throw err;
       }
       // 从这里到 `conv.run = …` 没有等待:同一个对话并发到达的两条消息只有一条过得去
 
       const runId = randomUUID();
-      const grantKey = `${entry.key}\n${conversationId}`;
-      if (grant) grants.set(grantKey, grant); else grants.delete(grantKey);
+      if (!grant) grants.delete(grantKey);
       const model = pickModel(cfg, typeof body.model === 'string' ? body.model : undefined);
       let finished = false;
       let stopped = false;

@@ -60,7 +60,8 @@ export function createProvider(cfg) {
           const step = script[at] ?? {};
           at += 1;
           if (Number.isFinite(step.sleepMs)) { await sleep(Math.max(0, Math.min(60_000, step.sleepMs)), signal); continue; }
-          if (typeof step.fail === 'string') throw new Error(step.fail);
+          // `{{apiKey}}`、`{{baseUrl}}` 换成配置里的值:测「模型接口的报错里带着 Key 与地址」时用,免得把它们写进提示词
+          if (typeof step.fail === 'string') throw new Error(step.fail.replaceAll('{{apiKey}}', String(cfg?.apiKey ?? '')).replaceAll('{{baseUrl}}', String(cfg?.baseUrl ?? '')));
           if (typeof step.tool === 'string') {
             const input = step.input && typeof step.input === 'object' ? step.input : {};
             yield { type: 'tool_use', id: `mock_${at}`, name: step.tool, input };
