@@ -37,8 +37,10 @@ function sendJson(res, code, data) {
  * @param {() => object | null} env.latestMirror 当前编辑页的数据镜像(`server/vite-plugin-mirror.ts`)
  * @param {() => { t: number } | null} env.latestPlayhead
  * @param {'desktop' | 'hosted'} [env.profile] 缺省 `desktop`。`hosted`(云节点,契约第 3 节)时另给:
- *   `projectId`(这个实例只为它服务)、`docUrl`、`protocolsFor(对话号)`(连文档服务的子协议)、
- *   `execSerial`(进程级的串行锁,所有实例共用)、`log(event, fields)`
+ *   `projectId`(这个实例只为它服务)、`docUrl`、`protocolsFor(对话号, 对话 id)`(连文档服务的子协议)、
+ *   `execSerial`(进程级的串行锁,所有实例共用)、`log(event, fields)`,以及可选的
+ *   `initiatorOnline(对话 id)`(发起这一轮的成员此刻有没有连着看)、`onWrite(对话 id, { opId, rev, clipIds })`(一次写入落地了)、
+ *   `onFinalClose({ code, reason })`(文档服务以 4003 / 4004 关掉了数据连接:撤销)
  */
 export function createAgentInstance(env) {
   const { server, prerenderPost, latestMirror, latestPlayhead } = env;
@@ -271,13 +273,8 @@ export function createAgentInstance(env) {
       // 托管档:凭证按对话给(对话委托绑死一个对话,契约第 4.2 节),所以连同这个对话号对应的对话 id 一起交给宿主
       if (mode === "hosted") {
         const conversationId = side.describe().conversations.find((c) => c.conversation === n)?.key ?? '';
-        try {
-          return await env.protocolsFor(n, conversationId);
-        } catch (err) {
-          // 文档服务明确不给这个对话票据(委托过期、代数变了、开关关了、被踢、被移出、项目没了):这是收尾的原因,不是暂时性故障
-          if (typeof err?.reason === 'string') { try { env.onCredentialDenied?.(conversationId, err.reason); } catch { /* 宿主的事 */ } }
-          throw err;
-        }
+        // 没有对话 id 的那一个('')是实例自己的连接(副本的订阅、在场状态);宿主决定它用谁的凭证,以及被拒时哪一轮收尾
+        return env.protocolsFor(n, conversationId);
       }
       if (mode === "local") return ["promptcut.v1", `promptcut.role.agent.${n}`];
       if (mode === "lan-host") return ["promptcut.v1", `promptcut.tenant.${projectId}`, `promptcut.role.agent.${n}`];
