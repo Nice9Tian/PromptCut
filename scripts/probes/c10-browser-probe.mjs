@@ -6,8 +6,10 @@
  *        [--ticket-ttl-ms 20000]
  *        [--no-video]            不导入视频(只验卡片)
  *        [--only-a4]             只跑到 A4(播放、暂停追活渲)为止,跳过 A2 的重开与 A5(排障用)
- *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`),验端到端:成员页发布的清单计划含它,桌面渲染节点渲出来、
- *                                写进层表,成员页贴上快照、没有「需要本地 PC 渲染辅助」的图标与徽标(C10 契约第 9 节,2026-09-29)
+ *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`)。2026-10-06 起的新语义(`online-card-exec-contract.md` 第 11.3 节):它是在线包里构建时
+ *                                就有的卡,本页能运行,与内置卡一样按轻重区分。成员页进来时在加载遮罩下把它测完、判轻,于是在可见舞台里直接活渲(没有快照、没有
+ *                                「需要本地 PC 渲染辅助」的图标与徽标)、不在页面发布的清单计划里。旧语义(清单计划含它、桌面渲染节点渲出来写进层表、成员页贴快照)
+ *                                描述的是判重的那条路,这条路对判重的内置卡在 A1~A4 里验,对判重的同步用户卡在 `online-card-exec-probe.mjs` E6 里验
  *        [--base-port 5780]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
  *                                (A5 里创建者关掉之后,独立渲染主机用同一段)
  *
@@ -1692,34 +1694,36 @@ try {
     /* ---------------------------------------------------------------- 用户卡端到端(C10 契约第 9 节,2026-09-29 用户改语义) */
     const tU = Date.now();
     check(!!state.userClip, '用户卡:创建者放好了用户卡片段', state.userClip);
-    const planU = await until('用户卡:成员页发布的清单计划含用户卡片段', async () => {
-      const d = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
-      return d?.lastClips?.includes(state.userClip) ? d : null;
-    }, 120_000, 1000);
-    check(!!planU, '用户卡:成员页发布的清单计划含用户卡片段(页面一律按重卡)', planU?.lastClips);
+    /*
+     * 新语义(2026-10-06,契约 11.3 的 1757、1776~1777 两处):仓库用户卡在在线页面里本页能运行,与内置卡一样按轻重区分。
+     * 成员页进来时在加载遮罩下已把它测完;判轻的卡在可见舞台里直接活渲、不进页面发布的清单计划、时间轴不挂徽标。
+     * 旧断言「清单计划含它」「桌面渲染节点渲出来、成员页贴上快照、那一层出自创建者的桌面节点」说的是判重那条路,在这里不再成立。
+     */
     const userStage = async () => {
       const f = await frontFrame(member);
       return f ? f.evaluate((id) => {
         const w = document.querySelector(`[data-pc-clip="${id}"]:not([data-pc-media])`);
         const slot = w?.querySelector(':scope > [data-pc-placeholder-slot]');
         const plane = w?.querySelector(':scope > [data-pc-snapshot-plane]');
-        return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null } : null;
+        const liveChildren = w ? [...w.children].filter((c) => !c.matches('[data-pc-placeholder-slot],[data-pc-snapshot-plane]')) : [];
+        return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null,
+          live: liveChildren.some((c) => (c.textContent ?? '').trim().length > 0), text: liveChildren.map((c) => (c.textContent ?? '').trim()).join('|').slice(0, 40) } : null;
       }, state.userClip).catch(() => null) : null;
     };
-    const firstLook = { stage: await userStage(), badge: await P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null) };
+    const badgeOf = () => P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null);
     await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); });
-    const got = await until('用户卡:成员页贴出桌面渲染节点产的快照,图标与徽标撤掉', async () => {
+    const liveU = await until('用户卡:成员页在可见舞台里直接活渲仓库用户卡(判轻),没有快照与图标', async () => {
       await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); }).catch(() => {});
-      const o = await onlineDiag(member);
-      const l = o?.layers?.find((x) => x.clipId === state.userClip);
       const st = await userStage();
-      const badge = await P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null);
-      return l && l.ready > 0 && st?.snapshot && !st.placeholder && badge === false ? { layer: l, stage: st, ms: Date.now() - tU } : null;
-    }, 1_200_000, 5000);
-    check(!!got, '用户卡端到端:桌面节点渲出、成员页贴上快照,没有图标与徽标', { got, firstLook, last: { stage: await userStage(), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null } });
-    if (got) check(got.layer.envFingerprint === state.creatorFp, '用户卡:那一层出自创建者的桌面节点', { layer: got.layer.envFingerprint, creator: state.creatorFp });
-    await shot(member, 'user-card-e2e');
-    out.steps.userCard = { ms: Date.now() - tU, clip: state.userClip, planClips: planU?.lastClips ?? null, firstLook, got };
+      return st?.live && !st.snapshot && !st.placeholder ? st : null;
+    }, 120_000, 1000);
+    const lastU = { stage: await userStage(), badge: await badgeOf() };
+    check(!!liveU, '用户卡(新语义):成员页测完判轻,仓库用户卡在可见舞台里活渲(没有快照、没有「需要本地 PC 渲染辅助」图标)', { liveU, last: lastU });
+    check(lastU.badge === false, '用户卡(新语义):时间轴上它没有「需要本地 PC 渲染辅助」徽标', lastU);
+    const planU = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
+    check(!!planU && !planU.lastClips.includes(state.userClip), '用户卡(新语义):判轻的仓库用户卡不在成员页发布的清单计划里(不进预渲染集合)', planU?.lastClips);
+    await shot(member, 'user-card-live');
+    out.steps.userCard = { ms: Date.now() - tU, clip: state.userClip, planClips: planU?.lastClips ?? null, live: liveU, last: lastU };
     say('user-card.done', out.steps.userCard);
   }
 

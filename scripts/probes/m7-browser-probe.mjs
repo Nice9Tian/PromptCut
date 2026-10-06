@@ -995,6 +995,9 @@ async function serverChecks(ctx) {
     add('medium', base('medium', 2, {}, { weight: { class: 'medium', estMs: null, frames: 60 } }));
     add('heavy', base('heavy', 2, {}, { weight: { class: 'heavy', estMs: null, frames: 60 } }));
     add('local', base('local', 2, {}, { tier: 'local' }));
+    // 2026-10-06 新语义(契约 11.3):用户卡、图卡的任务本页能运行时纯浏览器节点也认领。认领的条件是任务的 requires.cardSources 里有这张卡的代码身份、
+    // 且节点的 cardEnvFingerprint 对得上。这里的任务 cardSources 为空、指纹是普通指纹,所以仍然认领 0 次(「没有对应代码身份的认领 0 次」那一半,规则 1、7);
+    // 「有代码身份的认领并完成」那一半在 online-card-node-probe.mjs(A-1~A-5)与单测 OCN-09/OCN-11 里验
     add('userCard', base('user', 2, { userCards: true }));
     add('graphCard', base('graph', 1, { graphCards: true }));
     add('modifiedCard', base('mod', 2, { cardSources: { 'probe-slow-stepped': 'user:deadbeef' } }));
@@ -1259,6 +1262,7 @@ async function pageServerSide(ctx) {
   };
   mkF('heavy', {}, { weight: { class: 'heavy', estMs: null, frames: 60 } });
   mkF('local', {}, { tier: 'local' });
+  // 同上:cardSources 为空、指纹不是 cardEnvFingerprint → 页面节点认领 0 次(有代码身份的那一半见 online-card-node-probe.mjs)
   mkF('user', { userCards: true });
   mkF('graph', { graphCards: true });
   mkF('modified', { cardSources: { 'probe-slow-stepped': 'user:deadbeef' } });

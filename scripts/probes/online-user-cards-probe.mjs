@@ -27,10 +27,11 @@
  * 断言:
  *   普通档(电脑浏览器,两个跨源舞台):
  *     - 时间轴标签:s1 →「探针同步卡」,x →「未知卡片」;
- *     - 有层的 u、s1:清单与 `snap/` 请求 > 0,舞台贴出快照,没有图标;时间轴没有徽标;
+ *     - 有层的 s1(故意运行不了的同步卡):清单与 `snap/` 请求 > 0,舞台贴出快照,没有图标;时间轴没有徽标;
+ *       u(仓库用户卡,本页能运行;2026-10-06 新语义)测完判轻:在舞台里活渲(没有快照、没有图标)、不在页面发布的清单计划里;
  *     - 没有层的 s2:舞台是「需要本地 PC 渲染辅助」(不是沙漏),时间轴有徽标、悬停文案对;给它写层与清单后几秒内图标换成快照、徽标撤掉;
  *     - x:舞台不画、不挂徽标;
- *     - 页面发布的清单计划(`__pcPlanPublisher().lastClips`)含 u、s1、s2、s3;
+ *     - 页面发布的清单计划(`__pcPlanPublisher().lastClips`)含 s1、s2、s3,稳定之后不含判轻的 u;
  *     - 选中同步卡片段:参数面板出现四种控件、值是 defaults;改 text 后另一成员看得到,页面重发清单计划;
  *     - 图标与沙漏在屏幕上的大小(见上面 4～8 秒那几段);
  *     - 另一成员(乙)页面一打开就每 100 ms 采样一次,直到快照贴上:有层的 u、s1 任何一次采样都没有图标、没有徽标;
@@ -71,12 +72,6 @@ fs.mkdirSync(OUT, { recursive: true });
 const fails = [];
 const out = { ok: false, out: OUT, normal: {}, lowmem: {} };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return !!cond; };
-/**
- * 「按新语义待改」的断言(2026-10-06 起):仓库用户卡 u(`mu-animated-shiny-text`)现在在隔离生效的普通档里被执行(判轻就活渲、不贴快照、不进清单计划)。
- * 原断言写的是旧语义(u 一律贴预渲染快照、进清单计划),这里不算失败也不删:记下原断言与此刻的实际值,下一轮改写成新语义的完整断言。
- */
-const newSemantics = [];
-const pendingNew = (nowTrue, label, value) => { newSemantics.push({ label, oldAssertionHolds: !!nowTrue, now: value }); return !!nowTrue; };
 const say = (k, v) => console.log(JSON.stringify({ [k]: v }));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(what, fn, ms = 20_000, every = 250) {
@@ -284,6 +279,8 @@ async function stageState(page, ids) {
       outS[id] = {
         wrapper: true,
         snapshot: !!snap && snap.childElementCount > 0,
+        // 活组件:包裹层里除了快照平面与占位槽位以外还有带文字的内容(本页能运行的卡直接活渲)
+        live: [...w.children].some((c) => !c.matches('[data-pc-placeholder-slot],[data-pc-snapshot-plane]') && (c.textContent ?? '').trim().length > 0),
         snapText: snap?.textContent?.trim().slice(0, 40) ?? null,
         small: !!snap?.querySelector('img[data-pc-small-snapshot]'),
         placeholderShown: !!slot && !slot.hidden,
@@ -403,8 +400,12 @@ try {
   }, 45_000);
   if (!n.stage) n.stageSeen = await stageState(A, Object.values(ID)); // 等不到时记下舞台此刻的实际状态(排障用,进结果行)
   const st = n.stage ?? n.stageSeen ?? {};
+  // 新语义(2026-10-06):s1 是故意运行不了的同步卡(有层 → 贴快照);u 是仓库用户卡,本页能运行,测完判轻 → 直接活渲(没有快照、没有图标)
+  n.uLive = await until('舞台:u 测完判轻后直接活渲', async () => { const s2 = await stageState(A, [ID.u]); return s2?.[ID.u]?.live && !s2[ID.u].snapshot && !s2[ID.u].placeholderShown ? s2[ID.u] : null; }, 90_000);
+  st[ID.u] = (await stageState(A, [ID.u]))?.[ID.u] ?? st[ID.u];
+  check(st[ID.s1]?.snapshot && /SNAP/.test(st[ID.s1]?.snapText ?? ''), '舞台:s1 贴出预渲染快照', st[ID.s1]);
+  check(st[ID.u]?.live && !st[ID.u].snapshot, '舞台:u(仓库用户卡,本页能运行)测完判轻,直接活渲(没有预渲染快照)', st[ID.u]);
   for (const k of ['u', 's1']) {
-    (k === 'u' ? pendingNew : check)(st[ID[k]]?.snapshot && /SNAP/.test(st[ID[k]]?.snapText ?? ''), `舞台:${k} 贴出预渲染快照`, st[ID[k]]);
     check(!st[ID[k]]?.placeholderShown, `舞台:${k} 没有图标`, st[ID[k]]);
     check(!st[ID[k]]?.fixed, `舞台:${k} 没有常驻槽位`, st[ID[k]]);
   }
@@ -423,9 +424,10 @@ try {
   n.requests = { snapU: reqsFor(L.u, 'snap'), snapS1: reqsFor(L.s1, 'snap'), snapB: reqsFor(L.b, 'snap'), pxAny: assetLog.filter((r) => r.ns === 'px').length };
   n.online = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
   const manifestsOf = (id) => n.online?.layers?.find((l) => l.clipId === id) ?? null;
-  check(n.requests.snapU > 0 && n.requests.snapS1 > 0, '有层的 u、s1:snap/ 请求 > 0', n.requests);
+  // u 是本页能运行的仓库用户卡:测完判轻就活渲,早先有没有取过它的快照取决于先后,不断言;s1 是运行不了的同步卡,一定贴快照
+  check(n.requests.snapS1 > 0, '有层的 s1:snap/ 请求 > 0', n.requests);
   check(n.requests.pxAny === 0, '普通档:预渲染小尺寸请求 0', n.requests);
-  check(manifestsOf(ID.u)?.ready > 0 && manifestsOf(ID.s1)?.ready > 0, '有层的 u、s1:清单取了、就绪帧 > 0', { u: manifestsOf(ID.u), s1: manifestsOf(ID.s1) });
+  check(manifestsOf(ID.s1)?.ready > 0, '有层的 s1:清单取了、就绪帧 > 0', { s1: manifestsOf(ID.s1) });
   // 时间轴徽标:只在 s2、s3(没有层)上
   n.badges = await until('徽标:s2、s3 有,u、s1 没有', async () => {
     const t = await timelineState(A, Object.values(ID));
@@ -444,7 +446,9 @@ try {
     return [ID.s1, ID.s2, ID.s3].every((id) => clips.includes(id)) ? d : null;
   }, 90_000) ?? await A.evaluate(() => window.__pcPlanPublisher?.() ?? null);
   check([ID.s1, ID.s2, ID.s3].every((id) => (n.plan?.lastClips ?? []).includes(id)), '普通档清单计划含同步卡片段(s1、s2、s3)', { lastClips: n.plan?.lastClips, log: n.plan?.log?.slice(-3) });
-  pendingNew((n.plan?.lastClips ?? []).includes(ID.u), '普通档清单计划含仓库用户卡 u', { lastClips: n.plan?.lastClips });
+  // 新语义:u 判轻,不进预渲染集合,所以不在清单计划里(测量完成前它按重,计划可能先含它;这里看的是稳定之后)
+  n.planNoU = await until('页面发布的清单计划不含判轻的仓库用户卡 u', async () => { const d = await A.evaluate(() => window.__pcPlanPublisher?.() ?? null); return d && !(d.lastClips ?? []).includes(ID.u) ? d : null; }, 60_000, 1000);
+  check(!!n.planNoU && !(n.planNoU.lastClips ?? []).includes(ID.u), '普通档清单计划不含判轻的仓库用户卡 u(它在浏览器里活渲)', { lastClips: n.planNoU?.lastClips });
   check(!(n.plan?.lastClips ?? []).includes(ID.x), '清单计划不含未知 id(它不画、不判重)', n.plan?.lastClips);
 
   /* ------------------------------------------------ 乙:页面一打开就每 100 ms 采样(刚打开页面不闪图标) */
@@ -459,7 +463,7 @@ try {
       const tl = await timelineState(B, [ID.u, ID.s1, ID.s2, ID.s3]).catch(() => null);
       const map = await B.evaluate(() => window.__pcOnlineSnapshots?.()?.mapVersion ?? null).catch(() => null);
       samples.push({ at, st: st2, tl, map });
-      if (st2?.[ID.u]?.snapshot && st2?.[ID.s1]?.snapshot && st2?.[ID.s2]?.reason === 'unsupported' && st2?.[ID.s2]?.placeholderShown
+      if ((st2?.[ID.u]?.snapshot || st2?.[ID.u]?.live) && st2?.[ID.s1]?.snapshot && st2?.[ID.s2]?.reason === 'unsupported' && st2?.[ID.s2]?.placeholderShown
         && st2?.[ID.s3]?.placeholderShown && st2?.[ID.s3]?.reason === 'unsupported' && tl?.[ID.s2]?.badge && tl?.[ID.s3]?.badge) break;
       await sleep(100);
     }
@@ -487,13 +491,43 @@ try {
   dense.kinds = { u: [...new Set(shownKinds(ID.u))], s1: [...new Set(shownKinds(ID.s1))], s2: [...new Set(shownKinds(ID.s2))], s3: [...new Set(shownKinds(ID.s3))] };
   dense.firstMapAt = samples.find((x) => x.map !== null)?.at ?? null;
   dense.firstS2IconAt = samples.find((x) => x.st?.[ID.s2]?.placeholderShown && x.st[ID.s2].reason === 'unsupported')?.at ?? null;
-  dense.firstSnapAt = samples.find((x) => x.st?.[ID.u]?.snapshot && x.st?.[ID.s1]?.snapshot)?.at ?? null;
+  dense.firstSnapAt = samples.find((x) => (x.st?.[ID.u]?.snapshot || x.st?.[ID.u]?.live) && x.st?.[ID.s1]?.snapshot)?.at ?? null;
   dense.bad = bad.slice(0, 10);
   n.dense = dense;
   // 采到最终状态为止(层表到得快时次数自然少):至少 3 次、最后一次已到最终状态,才算这一段真的采过
-  check(samples.length >= 3 && !!(last?.st?.[ID.u]?.snapshot && last?.st?.[ID.s1]?.snapshot), '乙:页面一打开就密集采样(每 100 ms 一次,采到最终状态为止,至少 3 次)', dense);
+  check(samples.length >= 3 && !!((last?.st?.[ID.u]?.snapshot || last?.st?.[ID.u]?.live) && last?.st?.[ID.s1]?.snapshot), '乙:页面一打开就密集采样(每 100 ms 一次,采到最终状态为止,至少 3 次)', dense);
   check(bad.length === 0, '乙:有层的 u、s1 任何一次采样都没有图标、没有徽标;s2、s3 层表取到之前不出图标、不出徽标', dense);
-  check(last?.st?.[ID.u]?.snapshot && last?.st?.[ID.s1]?.snapshot, '乙:u、s1 最后贴上快照', last?.st);
+  check(last?.st?.[ID.s1]?.snapshot, '乙:s1(运行不了的同步卡)贴上快照', last?.st);
+  /*
+   * 待核实的结论(第二段收尾):同一张仓库用户卡 u,甲看到活渲、乙的采样里先是快照。判断是「乙刚打开页面就采样,没声明 direct 的卡在测量完成前按重、贴已有的层;
+   * 甲是测完判轻之后采的」。这里继续对乙采样,断言:先贴已有的层(快照),测量完成后切到活渲;切换前后画面连续(任何一次采样都没有占位、没有「需要本地 PC 渲染辅助」,
+   * 也没有「既没快照又没活内容」的空窗);切换发生在乙测完 u 之后。
+   */
+  const uSeq = [];
+  {
+    const t0u = Date.now();
+    let measuredAt = null, prev = null;
+    while (Date.now() - t0u < 90_000) {
+      const stU = (await stageState(B, [ID.u]).catch(() => null))?.[ID.u] ?? null;
+      const tlU = (await timelineState(B, [ID.u]).catch(() => null))?.[ID.u] ?? null;
+      const probed = await B.evaluate((id) => window.__pcPreviewDiag?.()?.probeRun?.probed?.some((e) => e.clipId === id) ?? false, ID.u).catch(() => false);
+      if (probed && measuredAt === null) measuredAt = Date.now() - t0u;
+      const kind = !stU?.wrapper ? 'none' : stU.snapshot ? 'snapshot' : stU.live ? 'live' : 'empty';
+      if (kind !== prev) uSeq.push({ at: Date.now() - t0u, kind, placeholder: !!stU?.placeholderShown, reason: stU?.reason ?? null, badge: !!tlU?.badge, measured: probed });
+      prev = kind;
+      if (kind === 'live' && probed) break;
+      await sleep(50);
+    }
+    const kinds = uSeq.map((x) => x.kind);
+    const switchedAt = uSeq.find((x) => x.kind === 'live')?.at ?? null;
+    const sawIcon = uSeq.some((x) => x.placeholder && x.reason === 'unsupported') || uSeq.some((x) => x.badge);
+    const emptyAfterFirst = kinds.slice(kinds.findIndex((k) => k !== 'none')).includes('empty');
+    n.uSeq = { seq: uSeq, measuredAt, switchedAt };
+    check(kinds.includes('live') && switchedAt !== null, '乙:u 最后切到活渲(测量完成后)', n.uSeq);
+    check(kinds.filter((k) => k !== 'none')[0] === 'snapshot' || kinds.filter((k) => k !== 'none')[0] === 'live', '乙:u 先贴已有的层(快照),或测得快时直接活渲;不是空的', n.uSeq);
+    check(!uSeq.some((x) => x.kind === 'snapshot' && x.measured && x.at > (measuredAt ?? 1e9) + 3000), '乙:切到活渲发生在 u 测完之后不久(测完后 3 秒内不再停留在快照)', n.uSeq);
+    check(!sawIcon && !emptyAfterFirst, '乙:切换前后画面连续:u 的片段没出过占位、没出过「需要本地 PC 渲染辅助」图标与徽标,没有「既没有快照又没有活内容」的空窗', n.uSeq);
+  }
   check(last?.st?.[ID.s2]?.reason === 'unsupported' && last?.st?.[ID.s3]?.reason === 'unsupported' && last?.tl?.[ID.s2]?.badge && last?.tl?.[ID.s3]?.badge,
     '乙:s2、s3 确认之后是图标加徽标', { st: last?.st, tl: last?.tl });
   await shot(B, 'normal-3-member-b');
@@ -700,11 +734,10 @@ try {
 }
 out.ok = fails.length === 0;
 out.fails = fails;
-out.newSemantics = newSemantics;
 out.assetRequests = { snap: assetLog.filter((r) => r.ns === 'snap').length, px: assetLog.filter((r) => r.ns === 'px').length };
 say('result', { ok: out.ok, fails: fails.length });
 const sizeOf = (r) => r ? { layout: r.layout, reason: r.reason, screen: r.screen, clipScreen: r.clipScreen, textShown: r.textShown } : null;
-console.log(JSON.stringify({ ok: out.ok, fails, newSemantics, icon: out.normal.icon ?? null,
+console.log(JSON.stringify({ ok: out.ok, fails, uSeq: out.normal.uSeq ?? null, icon: out.normal.icon ?? null,
   sizes: { column_s2: sizeOf(out.normal.icon), icon_s4: sizeOf(out.normal.geom?.s4), icon_s5: sizeOf(out.normal.geom?.s5), row_s6: sizeOf(out.normal.geom?.s6), hourglass_s7: sizeOf(out.normal.geom?.s7Glass) },
   stageSeen: out.normal.stageSeen ?? null, dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null },
   switchProject: out.normal.switchProject ? { gate: out.normal.switchProject.gate, gateBefore: out.normal.switchProject.gateBefore, gateLast: out.normal.switchProject.gateLast, probed: out.normal.switchProject.probed } : null,
