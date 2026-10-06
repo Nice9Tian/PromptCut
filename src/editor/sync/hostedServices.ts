@@ -31,7 +31,7 @@ export interface HostedServiceText {
   label: string;
   /** 勾选行下面的一行说明 */
   hint: (enabled: boolean) => string;
-  /** 别的成员收到「创建者改了开关」时的提示；空串表示这个方向不提示（云端 Agent 只在关闭时提示，〔用户 2026-10-07 定〕） */
+  /** 别的成员收到「创建者改了开关」时的提示；空串表示这个方向不提示（两个开关同一个规矩：只在关闭时提示，打开时不提示，〔用户 2026-10-07 定〕） */
   changed: (enabled: boolean) => string;
   /** 创建者确认弹窗里的一句话(`enabled` 是要改成的状态) */
   confirm: (enabled: boolean) => string;
@@ -42,7 +42,8 @@ export const HOSTED_SERVICE_TEXT: Partial<Record<HostedServiceName, HostedServic
   render: {
     label: "托管方的渲染节点",
     hint: (enabled) => (enabled ? "云节点上托管方的渲染节点为这个项目做预渲染，创建者可以关掉。" : "已关闭：托管方的渲染节点不再为这个项目做预渲染，已经渲好的结果保留。"),
-    changed: (enabled) => (enabled ? "创建者打开了托管方的渲染节点。" : "创建者关闭了托管方的渲染节点，它不再为这个项目做预渲染。"),
+    // 与云端 Agent 同一个规矩：只在关闭时给别的成员气泡，打开时不提示〔用户 2026-10-07 定〕
+    changed: (enabled) => (enabled ? "" : "创建者关闭了托管方的渲染节点，它不再为这个项目做预渲染。"),
     confirm: (enabled) => (enabled ? "打开后，托管方的渲染节点会为这个项目做预渲染。" : "关闭后，托管方的渲染节点不再为这个项目做预渲染，已经渲好的结果保留。"),
   },
   agent: {
