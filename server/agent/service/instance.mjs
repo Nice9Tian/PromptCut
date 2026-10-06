@@ -24,7 +24,7 @@ import { effectiveIsFile } from '../../card-overrides.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
   CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PLAYHEAD_TOOLS,
-  cloudSystemNote, lookUnavailable, lookSourceUnavailable,
+  cloudSystemNote, cloudLookResult, lookUnavailable, lookSourceUnavailable,
 } from './cloud-tools.mjs';
 import { attachmentsPrompt } from './hosted-tools.mjs';
 
@@ -525,6 +525,9 @@ export function createAgentInstance(env) {
       if (CLOUD_LOOK_TOOLS.has(tool)) {
         if (!prerenderPost) return lookUnavailable(tool);
         if (tool === 'see_frames' && args?.source !== undefined && args.source !== 'timeline') return lookSourceUnavailable();
+        // 这个项目的卡片源码表先列到最新(渲染服务据它决定走不走隔离工作进程、等卡装到哪个版本)
+        await hostedContext(agent || '')?.refreshCards().catch(() => {});
+        return cloudLookResult(tool, await callToolChecked(tool, toolDef, args, agent, callId));
       }
       // 要操作发起人界面的(契约第 9.2 节):不在线立刻明说;在线时读得到的(选区)按发消息时的快照答,要反过来操作页面的做不了
       if (CLOUD_INITIATOR_TOOLS.has(tool)) {

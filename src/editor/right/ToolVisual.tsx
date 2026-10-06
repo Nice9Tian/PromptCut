@@ -33,7 +33,8 @@ export interface VisualRecord {
  * 存的是 Promise,同一时刻好几处要同一个 id 也只发一次请求。
  * 取失败的不留在缓存里 —— 和原来每次挂载都重新取一样,下次打开还能再试。
  */
-// 在线构建:看画面的记录存在预渲染进程的 /api/ai/visual 上,云端 Agent 第一版不开放看画面的工具(契约 9.2),在线页面不会有 visualId;
+// 在线构建:看画面的记录存在预渲染进程的 /api/ai/visual 上。云端 Agent 能看画面(契约 cloud-agent-contract.md 第 9.8 节),但画面只交给模型:
+// 可视化记录存在云节点渲染服务的工作进程里,在线页面取不到,所以云端的工具结果不带 visualId(server/agent/service/cloud-tools.mjs 的 cloudLookResult);
 // 就地常量让在线产物里不带这个地址(写法见 src/online/pageFlag.ts 的「在线构建剪枝」)
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 const inflight = new Map<string, Promise<VisualRecord>>();

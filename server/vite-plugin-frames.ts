@@ -995,6 +995,18 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   };
   refreshFallback();
   setMediaFallbackTicket((base: string) => hostMod.fallbackTicketFor(live().map(rec => ({ base: () => rec.assets.base(), ticket: () => rec.ticket() })))(base));
+  /*
+   * 托管方的渲染节点(代理模式):云端 Agent 的 `bake_card` 经管理进程转到这里出图(`hosted-render/look.mjs`)。卡片快照先写进这个工作进程
+   * 自己的素材库,再推一份到项目的素材服务(`bake-store.mjs` 的远程;成员与别的渲染节点按 `/api/asset/px/<哈希>` 从那里取)。
+   * 托管端各项目共用同一台素材服务、按内容哈希寻址,所以用此刻连着的任一个项目的客户端(渲染服务的身份,写 `px`)。
+   * 桌面版与普通的独立渲染主机不走这里(它们没有 Agent 的查询)。
+   */
+  if (broker) {
+    setBakeRemote(() => {
+      const rec = live().find(r => !!r.assets.base());
+      return rec ? { get base() { return rec.assets.base(); }, put: (ns: string, bytes: Buffer, o?: any) => rec.assets.client.put(ns, bytes, o) } : null;
+    });
+  }
 
   let closed = false;
   let released = false;
@@ -1058,6 +1070,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   });
   const closeAll = async () => {
     clearInterval(timer);
+    if (broker) setBakeRemote(null);
     for (const rec of live()) { rec.closed = true; try { rec.cards?.close(); } catch { /* 已关 */ } rec.assets.stop(); try { rec.endpoint.close(); } catch { /* 已关 */ } }
   };
   const handle: QueueNode = {

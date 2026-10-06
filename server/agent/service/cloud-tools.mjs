@@ -114,6 +114,17 @@ export function lookUnavailable(tool) {
   };
 }
 
+/**
+ * 看画面的工具在云端的结果:画面只交给模型。聊天栏的可视化记录与动图存在云节点渲染服务的工作进程里,在线页面取不到,
+ * 所以不带 `visualId` 与动图地址(页面据 `visualId` 去取记录,带了只会取不到);`get_gif` 的说明照实改。
+ */
+export function cloudLookResult(tool, out) {
+  if (!out || typeof out !== 'object' || Array.isArray(out)) return out;
+  const { visualId: _v, gif: _g, ...rest } = out;
+  if (tool === 'get_gif' && rest.ok !== false) rest.note = '拼图 4×2,第 k 格对应 times 的第 k 个时刻(按行从左到右)。云端只把这张拼图交给你;用户在聊天栏里看不到动图。';
+  return rest;
+}
+
 /** `see_frames` 的素材镜头拼图(`source: "media"`)要镜头识别,云端还没接上;只看得了时间轴的画面 */
 export function lookSourceUnavailable() {
   return {

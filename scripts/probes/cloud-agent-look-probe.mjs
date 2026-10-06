@@ -23,8 +23,9 @@
  *    （项目总时长跟着变成 1 秒），第三次 `see_frames { t: 1.5 }` 渲的是这一版的最后一帧（0.97 秒，方块在 950）并在结果里注明——
  *    **是这一版项目的画面**。三张都由常驻工作进程出，隔离工作进程没有为它起过。
  * K2 `get_layout` 的实体框（步骤 builtin）：结果里那个片段的 `contentBox` 不是 null。
- * K3 其余三个工具各调一次（步骤 tools）：`inspect_card_dom`、`bake_card`、`get_gif`，逐个记「成 / 不成与原因」。`inspect_card_dom` 必须成；
- *    另两个不成不算探针失败，原因写进结果（决定它们在云端的工具表里怎么归类）。
+ * K3 其余三个工具各调一次（步骤 tools）：`inspect_card_dom` 回 DOM 树；`bake_card` 回的贴图地址（`/api/asset/px/<哈希>`）成员凭自己的素材票据
+ *    在**项目的素材服务**上取得到（不是只躺在渲染工作进程自己的素材库里）；`get_gif` 把 4×2 的拼图交给了模型，结果里不带页面取不到的
+ *    `visualId` 与动图地址。
  * K4 含用户卡的项目（步骤 usercard）：云端 Agent 用 `create_card` 建一张纯色卡（`fixtures/cloud-look/look-solid.tsx`）并放上时间轴，
  *    `see_frames` 看到的画面中心是参数给的红色；`update_clip` 把参数改成蓝色后再看是蓝色；`edit_card` 把源码改成恒为绿色后再看是绿色
  *    （渲染服务等隔离工作进程把改过的卡同步到位才出图）。三张都由隔离工作进程出；常驻工作进程对这个项目一帧也没出、一个任务也没认领。
@@ -222,10 +223,26 @@ async function main() {
       { say: '试过了' },
     ]);
     const by = Object.fromEntries(r.tools.map((t) => [t.name, t]));
-    check('K3 inspect_card_dom 成；bake_card、get_gif 各记成与不成', r.meta?.state === 'idle' && by.inspect_card_dom?.ok === true, {
+    // bake_card 的贴图：成员凭自己的素材票据在项目的素材服务上取得到
+    const hash = /\/api\/asset\/px\/([0-9a-f]{64})/.exec(by.bake_card?.summary ?? '')?.[1] ?? null;
+    let texture = null;
+    if (hash) {
+      const ticket = await alice.ask({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+      texture = await waitFor(async () => {
+        const res = await fetch(`http://127.0.0.1:${ASSET_PORT}/api/asset/px/${hash}`, { headers: { authorization: `Bearer ${ticket.ticket}` }, signal: AbortSignal.timeout(5000) });
+        if (res.status !== 200) return null;
+        const png = PNG.sync.read(Buffer.from(await res.arrayBuffer()));
+        return { width: png.width, height: png.height, emerald: emerald(png).count };
+      }, 20_000, '贴图进了项目的素材服务', 500).catch(() => null);
+    }
+    const gifOk = by.get_gif?.ok === true && r.images.length === 1 && !/visualId|\/api\/ai\/visual\/gif/.test(by.get_gif.summary);
+    check('K3 inspect_card_dom 回 DOM 树；bake_card 的贴图成员在项目的素材服务上取得到；get_gif 把拼图交给了模型、不带页面取不到的地址', r.meta?.state === 'idle'
+      && by.inspect_card_dom?.ok === true && /r6|R6 推帧卡|html|tree|ref/i.test(by.inspect_card_dom.summary)
+      && by.bake_card?.ok === true && !!texture && texture.width === 256 && texture.emerald > 50 && gifOk, {
       end: r.meta?.state ?? null, ms: r.ms, tools: toolsLine(r.tools), imagesToModel: r.images.length,
-      bake_card: by.bake_card ? (by.bake_card.ok ? `成 ${by.bake_card.summary.slice(0, 200)}` : `不成：${by.bake_card.summary.slice(0, 240)}`) : '没有调到',
-      get_gif: by.get_gif ? (by.get_gif.ok ? `成 ${by.get_gif.summary.slice(0, 200)}` : `不成：${by.get_gif.summary.slice(0, 240)}`) : '没有调到',
+      inspect_card_dom: by.inspect_card_dom ? by.inspect_card_dom.summary.slice(0, 160) : '没有调到',
+      bake_card: by.bake_card ? (by.bake_card.ok ? { url: hash ? `/api/asset/px/${hash.slice(0, 12)}…` : null, inProjectAssetService: texture } : `不成：${by.bake_card.summary.slice(0, 240)}`) : '没有调到',
+      get_gif: by.get_gif ? (by.get_gif.ok ? { gridToModel: r.images.map((p) => `${p.width}x${p.height}`), result: by.get_gif.summary.slice(0, 220) } : `不成：${by.get_gif.summary.slice(0, 240)}`) : '没有调到',
     });
   }
 
