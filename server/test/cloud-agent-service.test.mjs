@@ -469,3 +469,35 @@ test('CA-ISO-01 / CA-ISO-02 / CA-TOOL-01 / CA-PAGE-01 / CA-HIST-01 / CA-RUN-01 /
     for (const leak of ['mock-script', 'AAA-', 'BBB-', '按脚本做', '乙完']) assert.equal(text.includes(leak), false, `日志里不该有 ${leak}`);
   });
 });
+
+test('CA-DESK-01 桌面档:Agent 服务登记的路由与搬出插件之前逐条相同,桌面专用接口留在插件里', async () => {
+  const { createAgentInstance } = await import('../agent/service/instance.mjs');
+  const routes = [];
+  const inst = createAgentInstance({
+    server: { httpServer: null, ssrLoadModule: async () => { throw new Error('这条用例不载入前端代码'); }, config: { root: ROOT }, middlewares: { use: (route, handler) => routes.push([route, typeof handler]) } },
+    prerenderPost: async () => null,
+    latestMirror: () => null,
+    latestPlayhead: () => null,
+  });
+  try {
+    // 起点提交 e7d18340 的 server/vite-plugin-ai.ts 里这些路由的登记顺序
+    assert.deepEqual(routes.map((r) => r[0]), [
+      '/api/ai/chat', '/api/ai/abort',
+      '/api/mcp/events', '/api/mcp/result', '/api/mcp/call',
+      '/api/agent/bind', '/api/agent/unbind', '/api/agent/ticket', '/api/agent/editing',
+      '/api/agent/tabs', '/api/agent/inbox', '/api/agent/spawned', '/api/agent/board', '/api/agent/desktop', '/api/agent/status',
+      '/api/mcp/status',
+    ]);
+    assert.ok(routes.every((r) => r[1] === 'function'));
+    assert.equal(typeof inst.getQuotaGuard, 'function');
+  } finally {
+    inst.close();
+  }
+  const shell = fs.readFileSync(path.join(ROOT, 'server', 'vite-plugin-ai.ts'), 'utf8');
+  const kept = [...shell.matchAll(/server\.middlewares\.use\('([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(kept, [
+    '/api/ai/providers', '/api/ai/auth-state', '/api/ai/models', '/api/ai/setup', '/api/ai/',
+    '/api/ai/diagnostics/save', '/api/ai/diagnostics', '/api/ai/machine-code', '/api/ai/config', '/api/ai/agy-permissions', '/api/ai/quota',
+  ]);
+  assert.match(shell, /for \(const kind of \['install', 'login'\] as const\)/, "'/api/ai/' + kind 是安装与登录两条");
+});
