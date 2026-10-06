@@ -637,6 +637,13 @@ S 与 T 可以并行开工（T 先不依赖新入口）；G、A、L、N 在 T �
 - **第 2 节**：模块实例按卡分开；「桌面端改过的内置文件用同步来的那份」没做（页面只列内容库里 `src/cards/user/` 下的键）。
 - **第 7 节第 3 条**：`input.browser` 之外，切分方还要文档服务在清单计划的认领回包里确认这台浏览器节点的 `cardEnvFingerprint`，两边对得上才出浏览器那一份；清单计划的签名带 `input.browser` 的摘要。
 
+### 收尾时的更正(第二段收尾,2026-10-07)
+
+- **在线导出的导出页要挂出同步卡的包裹层**:导出页是与编辑页面同源的另一份文档,注册表里没有同步来的用户卡;Stage 对没有定义的卡不画,合成器按 `data-pc-clip` 找包裹层换预渲染原尺寸时找不到(`heavyReplaced` 为 0),成片里这张卡整张缺失,导出前核对却不报缺。真实浏览器验证(`online-card-exec-probe.mjs` E10)才发现,上一轮只有单测。修法:开导出页后把同步表交给它(`__pcSetSyncedUserCards`)并打开 `placeholderHost.setExportSyncedMount`,Stage 对「开关打开、没有定义、是同步来的用户卡」也挂包裹层;开关只有在线导出才会打开。
+- **仓库用户卡 `u` 的轻重**:构建时就在在线包里的仓库用户卡本页能运行,与内置卡一样按测量结果分轻重:测完判轻的活渲、不进清单计划;测量完成之前(没声明 `direct` 的卡按重)先贴已有的层,所以刚打开页面的成员先看到快照、几秒后切到活渲(`online-user-cards-probe` 对乙连续采样核实,切换前后没有占位、没有图标)。
+- **卡片作者的一个坑**:音频用 `renderSoundEffectBlock` 单次最多 65536 个采样,预览一次请求整个片段会被拒(状态栏「音频生成失败:Sound effect: range count (block budget) must be an integer in [0, 65536]」);按块求声音配方用 `src/cards/native/sound-effects.ts` 的 `cardSoundBlock`。已写进 `mechanism/cards.md`;`server/card-authoring-guide.md` 建议同步提醒。
+- 旧探针按新语义改断言的清单与结果见第二段收尾报告;`c10-contract.md` 第 9 节、`m7-contract.md`、`render-queue-contract.md` 已同步。
+
 ## 14. 依据
 
 **探针**（可行性，已提交）：`node scripts/probes/online-card-isolation-feasibility-probe.mjs`，端口 5720、5721、5727，约 1 分钟，退出码 0；最后一行 JSON 里 `notes` 是两条缺口。
