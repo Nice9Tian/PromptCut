@@ -11,8 +11,10 @@
  *   CA-ISO-02    甲拿乙的对话 id 去看、去停:都当作不存在,乙的对话不受影响;
  *   CA-RUN-01    发消息后没有任何人连着看:这一轮照样跑完,事后从头补看到完整过程;`after` 之后的才补;
  *   CA-CHAT-02   停止:进行中的一轮 1 秒内结束,状态与原因正确;
- *   CA-TOOL-01   开放清单 ⊆ 工具表;不在清单里的逐个调用都回 `cloudUnsupported`,项目版本不变;
- *   CA-TOOL-02   清单里走路由表的工具都是同步实现(`awaited: false`);
+ *   CA-TOOL-01   「还没接上」的工具逐个调用都回 `cloudUnavailable` 与原因,项目版本不变;要操作发起人界面的,发起方不在线时
+ *                逐个回 `initiatorOffline`,立刻回、不等;
+ *   CA-TOOL-02   工具表里的每个工具都在云端工具表里归了类(新加的工具不表态就挂);在副本上执行的都是同步实现;
+ *                在服务端另有实现的一个不少;
  *   CA-TOOL-04   交给模型的工具只有清单里的加 `think`,没有 `text_editor`;
  *   CA-PAGE-01   `get_selection`:带了快照回快照;没带(或发起方不在线)立刻回 `initiatorOffline`;
  *   CA-HIST-01   模型历史落在数据目录的「项目 / 主人 / 对话」下,不按请求里的 sessionId 找;
@@ -32,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer as createVite } from 'vite';
 import { createSharedDocService } from '../docservice/shared-service.mjs';
 import { createHostedAgentService, ownerKeyOf } from '../agent/service/create-agent-service.mjs';
-import { CLOUD_OPEN_TOOLS, checkCloudTool } from '../agent/service/cloud-tools.mjs';
+import { CLOUD_OPEN_TOOLS, CLOUD_TOOL_PLAN, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_AGENT_SIDE, CLOUD_SYSTEM_NOTE, checkCloudTool, pendingByReason } from '../agent/service/cloud-tools.mjs';
 import { startAgentService, AgentConfigError } from '../agent-service/main.mjs';
 import { mockScriptOf, createProvider } from '../harness/providers/mock.mjs';
 import { buildTools } from '../harness/tools/index.mjs';
@@ -93,19 +95,40 @@ test('CA-MOCK-01 模拟模型提供方照脚本走;没有脚本时是原来的�
   await assert.rejects(async () => { for await (const _ of failing.stream([{ role: 'user', content: [{ type: 'text', text: script([{ fail: '模拟的模型错误' }]) }] }], [], '', undefined)) { /* 读完 */ } }, /模拟的模型错误/);
 });
 
-test('CA-TOOL-02 开放清单 ⊆ 工具表,走路由表的都是同步实现', () => {
-  const names = new Set(tools.map((t) => t.name));
-  for (const n of CLOUD_OPEN_TOOLS) assert.ok(names.has(n), `${n} 在工具表里`);
-  assert.equal(CLOUD_OPEN_TOOLS.size, 66);
-  const awaited = [...CLOUD_OPEN_TOOLS].filter((n) => Object.hasOwn(TOOL_ROUTES, n) && TOOL_ROUTES[n].awaited !== false && n !== 'get_layout');
+test('CA-TOOL-02 工具表里的每个工具都归了类;在副本上执行的都是同步实现;系统提示词不再写旧范围', () => {
+  const names = tools.map((t) => t.name);
+  // 两边一一对应:新加的工具不在云端工具表里表态,这里就挂(不会悄悄变成「云端没有」)
+  assert.deepEqual(names.filter((n) => !Object.hasOwn(CLOUD_TOOL_PLAN, n)), [], '这些工具还没在云端工具表里归类');
+  assert.deepEqual(Object.keys(CLOUD_TOOL_PLAN).filter((n) => !names.includes(n)), [], '云端工具表里有工具表没有的名字');
+  const count = (mode) => Object.values(CLOUD_TOOL_PLAN).filter((p) => p.mode === mode).length;
+  assert.deepEqual({ route: count('route'), hosted: count('hosted'), server: count('server'), initiator: count('initiator'), pending: count('pending') },
+    { route: 67, hosted: 7, server: 6, initiator: 8, pending: 40 });
+  assert.equal(CLOUD_OPEN_TOOLS.size, 88, '交给模型的 = 除「还没接上」的全部');
+  // 在副本上执行的:走路由表的必须是同步实现(进程级的锁里不等外部);点名的两个例外实现本身是同步的
+  const route = Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.mode === 'route').map(([n]) => n);
+  const awaited = route.filter((n) => Object.hasOwn(TOOL_ROUTES, n) && TOOL_ROUTES[n].awaited !== false && n !== 'get_layout' && n !== 'apply_card');
   assert.deepEqual(awaited, [], '这些工具的实现是异步的,不能进锁');
-  const sides = [...CLOUD_OPEN_TOOLS].map((n) => [n, tools.find((t) => t.name === n).side]).filter(([n, s]) => s !== 'agent' && s !== 'server' && n !== 'list_cards' && n !== 'get_selection');
-  assert.deepEqual(sides, [], '清单里只有 agent / server 侧的工具,外加点名的两个');
-  assert.equal(checkCloudTool('update_clip', toolGroups).ok, true);
-  const no = checkCloudTool('web_open', toolGroups);
+  const sides = route.map((n) => [n, tools.find((t) => t.name === n).side]).filter(([n, s]) => s !== 'agent' && !CLOUD_AGENT_SIDE.has(n));
+  assert.deepEqual(sides, [], '在副本上执行的只有 agent 侧的工具,外加点名改到服务端的几个');
+  for (const n of Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.mode === 'server').map(([x]) => x)) assert.equal(tools.find((t) => t.name === n).side, 'server', n);
+  // 「还没接上」的每一个都写了差什么;要操作发起人界面的每一个都写了要用到他的什么
+  for (const [n, p] of Object.entries(CLOUD_TOOL_PLAN)) {
+    if (p.mode === 'pending') assert.ok(typeof p.why === 'string' && p.why.length > 10, `${n} 要写明差什么`);
+    if (p.mode === 'initiator') assert.ok(typeof p.what === 'string' && p.what, `${n} 要写明用到发起人的什么`);
+  }
+  assert.ok(pendingByReason().size >= 5);
+  assert.deepEqual([...CLOUD_HOSTED_TOOLS].sort(), ['card_authoring_guide', 'create_card', 'edit_card', 'get_card_source', 'import_media', 'voice_generate', 'voice_list']);
+  assert.deepEqual([...CLOUD_INITIATOR_TOOLS].sort(), ['collect_login', 'collect_login_check', 'get_selection', 'pause', 'play', 'seek', 'spawn_agent', 'web_handoff']);
+  assert.deepEqual(checkCloudTool('update_clip'), { ok: true, mode: 'route' });
+  assert.deepEqual(checkCloudTool('create_card'), { ok: true, mode: 'hosted' });
+  const no = checkCloudTool('web_open');
   assert.equal(no.ok, false);
-  assert.equal(no.cloudUnsupported, true);
-  assert.match(no.error, /云端暂不支持 web_open/);
+  assert.equal(no.cloudUnavailable, true);
+  assert.match(no.error, /云端 Agent 这一版还用不了 web_open/);
+  assert.equal(checkCloudTool('no_such_tool').cloudUnavailable, true);
+  // 系统提示词:不再说旧范围的话
+  for (const stale of ['只能用内置卡', '云端第一版不支持', '云端暂不支持', '新建或修改卡片代码、']) assert.equal(CLOUD_SYSTEM_NOTE.includes(stale), false, stale);
+  for (const must of ['发起方不在线', 'import_media', 'create_card', '托管方的配音服务']) assert.ok(CLOUD_SYSTEM_NOTE.includes(must), must);
 });
 
 test('CA-TOOL-04 交给模型的工具只有清单里的加 think', async () => {
@@ -146,7 +169,9 @@ test('CA-ENTRY-01 / CA-ENTRY-03 托管档入口:没有 /api/*,没配鉴权一律
   try {
     const h = await fetch(`${bare.url}/healthz`);
     assert.equal(h.status, 200);
-    assert.deepEqual(Object.keys(await h.json()).sort(), ['ok', 'version']);
+    const health = await h.json();
+    assert.deepEqual(Object.keys(health).sort(), ['egressTestAllow', 'ok', 'version']);
+    assert.equal(health.egressTestAllow, false, '出网闸的测试例外缺省关着');
     for (const p of ['/api/ai/chat', '/api/ai/config', '/api/mcp/call', '/api/mcp/events', '/api/agent/status', '/api/agent/bind', '/api/chats/list', '/']) {
       const r = await fetch(`${bare.url}${p}`, { method: p === '/api/ai/chat' || p === '/api/mcp/call' ? 'POST' : 'GET' });
       assert.equal(r.status, 404, `${p} 不存在`);
@@ -323,15 +348,25 @@ test('CA-ISO-01 / CA-ISO-02 / CA-TOOL-01 / CA-PAGE-01 / CA-HIST-01 / CA-RUN-01 /
     assert.notEqual((await kit.doc.stateOf('p-a')).project.tracks[0].clips[0].end, 11, '停下之后没有新的写入');
   });
 
-  await t.test('CA-TOOL-01 不在清单里的工具逐个回 cloudUnsupported,项目版本不变', async () => {
+  await t.test('CA-TOOL-01 还没接上的工具逐个回 cloudUnavailable 与原因;要操作发起人界面的在他不在线时逐个回 initiatorOffline;项目版本不变', async () => {
     const inst = kit.service._instance(alice);
     const before = (await kit.doc.stateOf('p-a')).rev;
     const closed = tools.map((x) => x.name).filter((n) => !CLOUD_OPEN_TOOLS.has(n));
-    assert.equal(closed.length, tools.length - 66);
+    assert.equal(closed.length, 40);
     for (const name of closed) {
       const r = await inst.callTool(name, {}, 'c-tools');
-      assert.equal(r?.cloudUnsupported, true, `${name} 回云端暂不支持`);
+      assert.equal(r?.cloudUnavailable, true, `${name} 回「还用不了」`);
       assert.equal(r.ok, false);
+      assert.ok(r.error.includes(name) && r.error.includes(CLOUD_TOOL_PLAN[name].why), `${name} 的回答里写了差什么`);
+    }
+    // 发起方不在线(这个对话没有人连着看):八个要操作他界面的工具立刻回,不等
+    for (const name of CLOUD_INITIATOR_TOOLS) {
+      const t0 = Date.now();
+      const r = await inst.callTool(name, {}, 'c-tools');
+      assert.equal(r?.initiatorOffline, true, name);
+      assert.equal(r.ok, false);
+      assert.match(r.error, /发起方不在线/);
+      assert.ok(Date.now() - t0 < 200, `${name} 不等待`);
     }
     assert.equal((await kit.doc.stateOf('p-a')).rev, before);
   });

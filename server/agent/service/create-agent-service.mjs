@@ -30,6 +30,9 @@ import { createGate, limitsFileOf } from './gate.mjs';
 import { createUsageLog } from './usage.mjs';
 import { createRenderRequests } from './render-request.mjs';
 import { modelReady, pickModel, publicModelInfo } from './model-config.mjs';
+import { createWorkspaces } from './workspace.mjs';
+import { createEgressGate } from './egress.mjs';
+import { createHostedTools, readHostedVoiceConfig, saveAttachment } from './hosted-tools.mjs';
 
 export const CONVERSATION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -127,6 +130,10 @@ const scrub = (text) => String(text ?? '').replace(/https?:\/\/[^\s"'<>)]+/g, '[
  * @param {object | null} [o.publisher] 补渲的发布通道(接口位,形状见 `render-request.mjs`);不给就不发补渲
  * @param {{ agentEnabled?(projectId): boolean, renderEnabled?(projectId): boolean }} [o.projectState]
  *   各项目的开关(接口位;真的由文档服务的推送喂)。不给时都算开
+ * @param {string | null} [o.assetBase] 同机素材服务的地址(`http://127.0.0.1:<端口>`);不给时导入素材、配音入库做不了(工具回明确的原因)
+ * @param {object} [o.egress] 出网闸的选项(`egress.mjs` 的 `createEgressGate`;`testAllow` 只给测试与探针)
+ * @param {() => Promise<object | null>} [o.voiceConfig] 托管方的配音配置;不给就读数据目录里的 `config/voice.json` 与 `config/keys/voice.key`
+ * @param {object} [o.workspaceLimits] 工作区的总量上限(`workspace.mjs`)
  */
 export function createHostedAgentService({
   root,
@@ -141,6 +148,12 @@ export function createHostedAgentService({
   limits: limitsIn = {},
   storeLimits = {},
   renderLimits = {},
+  assetBase = null,
+  egress: egressOptions = {},
+  voiceConfig = null,
+  workspaceLimits = {},
+  toolLimits = {},
+  toolFetch = undefined,
   log = () => {},
   now = () => Date.now(),
 } = {}) {
@@ -158,6 +171,22 @@ export function createHostedAgentService({
   const gate = gateIn ?? createGate({ limitsFile: dataDir ? limitsFileOf(dataDir) : null, usage, isEnabled: agentEnabled, now, log: say });
   const store = createConversationStore({ dataDir, now, limits: storeLimits, log: say });
   const render = createRenderRequests({ publisher, store, now, limits: renderLimits, log: say });
+  // 工具在节点上读写的一切按「项目 × 对话」隔离;按模型给的地址出网只经出网闸(任务书 J,契约第 9.5、9.6 节)
+  const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log: say });
+  const egress = createEgressGate({ ...egressOptions, log: say });
+  const hostedTools = createHostedTools({
+    root,
+    loadModule,
+    workspaces,
+    egress,
+    assetBase,
+    voiceConfig: voiceConfig ?? (() => readHostedVoiceConfig(dataDir)),
+    // 花钱的外部调用(配音)与模型请求记进同一份用量流水
+    recordService: (row) => { try { gate.record(row); } catch (err) { say('agent.usage.service-failed', { message: String(err?.message ?? err).slice(0, 120) }); } },
+    limits: toolLimits,
+    ...(toolFetch ? { fetchImpl: toolFetch } : {}),
+    log: say,
+  });
 
   // 上一个进程没收尾就没了的对话:标中断,不自动续跑(契约第 7.5 节)。没渲完的补渲清单重新发布(只用服务身份)
   store.recover();
@@ -279,6 +308,9 @@ export function createHostedAgentService({
         latestMirror: () => null,
         latestPlayhead: () => null,
         projectId: identity.projectId,
+        identity: { userId: identity.userId, username: identity.username ?? '' },
+        ownerKey: own.ownerKey,
+        hostedTools,
         docUrl,
         protocolsFor: (n, conversationId) => connectionCredentials(own, n, conversationId),
         execSerial,
@@ -438,6 +470,7 @@ export function createHostedAgentService({
         creativity: body.creativity,
         script: body.script,
         library: Array.isArray(body.library) ? body.library : [],
+        attachments: Array.isArray(body.attachments) ? body.attachments : [],
         pageState: body.pageState && typeof body.pageState === 'object' ? body.pageState : null,
         apiConfig: cfg,
         historyFile: dataDir ? path.join(store.dirOf(identity.projectId, ownerKeyOf(identity), conversationId), 'history.json') : null,
@@ -539,14 +572,38 @@ export function createHostedAgentService({
       return true;
     },
 
-    /** 删对话:进行中的先停;连模型历史、补渲清单一起删。没有这个对话回 false */
+    /** 删对话:进行中的先停;连模型历史、补渲清单、工作目录(附件、下载的文件)一起删。没有这个对话回 false */
     remove(identity, conversationId) {
       const conv = conversationOf(identity, conversationId, false);
       if (!conv) return false;
       conv.run?.stop('stopped');
       render.forget(conv);
       store.remove(conv);
+      try { workspaces.open({ projectId: identity.projectId, ownerKey: ownerKeyOf(identity), conversationId }).destroy(); } catch { /* 没有工作区 */ }
       return true;
+    },
+
+    /**
+     * 存一个附件到这个对话的工作目录(契约第 9.5 节)。对话还没有也可以先传(发第一条消息之前选的附件);
+     * 回 `{ name, url, size, kind, text? }`,`url` 是 `work:attachments/<文件名>`,随下一条消息的 `attachments` 带回来。
+     * 只读成员也能传(附件只在他自己的对话里,进不进素材库由 `import_media` 时的权限定)。
+     * @param {AsyncIterable<Buffer>} stream
+     */
+    async attach(identity, conversationId, name, stream) {
+      checkIdentity(identity);
+      checkConversationId(conversationId);
+      if (closed) throw new AgentServiceError('unavailable', '服务正在关闭', 503);
+      if (!agentEnabled(identity.projectId)) throw new AgentServiceError('disabled', '项目创建者已关闭云端 Agent。', 403);
+      if (!workspaces.available) throw new AgentServiceError('unavailable', '这个云端 Agent 服务没有工作目录,不能收附件。', 503);
+      const ws = workspaces.open({ projectId: identity.projectId, ownerKey: ownerKeyOf(identity), conversationId });
+      try {
+        return await saveAttachment(ws, name, stream);
+      } catch (err) {
+        if (err?.workspace) throw new AgentServiceError(err.code === 'quota' || err.code === 'too-large' ? 'too-large' : 'bad-request', err.message, err.code === 'quota' || err.code === 'too-large' ? 413 : 400);
+        if (err?.code === 'too-large') throw new AgentServiceError('too-large', err.message, 413);
+        if (err?.code === 'bad-request') throw new AgentServiceError('bad-request', err.message, 400);
+        throw err;
+      }
     },
 
     /** 本项目的用量:总量与各成员的量(项目内任何成员可查) */
@@ -593,7 +650,7 @@ export function createHostedAgentService({
         closeEntry(entry, `revoked:${reason}`);
       }
       if (reason === 'disabled' || reason === 'deleted') void render.cancelProject(projectId);
-      if (reason === 'deleted') store.removeProject(projectId);
+      if (reason === 'deleted') { store.removeProject(projectId); workspaces.removeProject(projectId); }
       for (const fn of [...revokeListeners]) { try { fn({ projectId, userId, reason }); } catch { /* 监听方的事 */ } }
     },
 
@@ -614,6 +671,7 @@ export function createHostedAgentService({
         })),
         gate: gate.describe?.() ?? null,
         render: render.describe(),
+        egress: egress.describe(),
       };
     },
 
@@ -623,6 +681,9 @@ export function createHostedAgentService({
     },
     _render: render,
     _store: store,
+    _workspaces: workspaces,
+    /** 出网闸的测试例外开没开(状态口报它;生产必须是 false) */
+    egressTestAllow: egress.testAllowActive,
 
     /**
      * 收尾(SIGTERM,契约第 3.4 节):不再接新请求 → 进行中的每一轮记「中断」并停下 → 状态落盘 → 关连接。

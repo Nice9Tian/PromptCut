@@ -16,13 +16,19 @@
  *   PROMPTCUT_AGENT_PORT           缺省 8790
  *   PROMPTCUT_AGENT_PUBLIC_ORIGIN  可不设:对外的源(如 https://149-88-94-84.sslip.io),只做格式检查并记进日志。
  *                                  页面拿到的地址由托管组合的 PROMPTCUT_AGENT_PUBLIC_URL 经文档服务下发,不由本进程给
+ *   PROMPTCUT_AGENT_ASSET_URL      同机素材服务的地址(回环,如 http://127.0.0.1:8788)。云端 Agent 导入素材、配音入库时按内容哈希写进它
+ *                                  (凭代成员的素材票据,权限不超过成员本人)。不设时这些工具回「没有配置素材服务」
+ *   PROMPTCUT_AGENT_EGRESS_TEST_ALLOW
+ *                                  **只给探针与演练**:逗号分隔的「IP:端口」,出网闸对它们放行(用来在本机回环上起「测试专用外部地址」)。
+ *                                  生产不设;设了会在日志里打 `agent.egress.test-allow`,`/healthz` 的 `egressTestAllow` 为 true
  *   PROMPTCUT_AGENT_RENDER_STALL_MS / PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS
  *                                  可不设:补渲「连续多久没有进度就放弃」(缺省 10 分钟)与「写入落地后攒多久再发」(缺省 3 秒),排查与演练用
  *
- * 失败即关(打一行 `config.error { reason }`,退出码 1):`data-dir`、`doc-url`、`service-identity`(私钥读不到、格式不对、
+ * 失败即关(打一行 `config.error { reason }`,退出码 1):`data-dir`、`doc-url`、`asset-url`、`service-identity`(私钥读不到、格式不对、
  * 服务名不是 agent)、`public-origin`、`bind-public`、`listen`。文档服务一时连不上不算:控制连接自己退避重连,期间新请求回 503 `unavailable`。
  *
  * 数据目录里(契约第 2.2 节):`config/ai.json` 与 `config/keys/custom.key`(模型配置与 Key 的密文,`set-key.mjs` 写)、
+ * `config/voice.json` 与 `config/keys/voice.key`(托管方的配音配置与令牌的密文,可没有)、`work/`(各对话的工作目录:附件、下载的文件)、
  * `config/limits.json`(各项目额度与节点并发,`admin.mjs quota` 写,改了即生效)、`tenants/`(对话)、`usage/`(用量流水)。
  * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发补渲。
  * 收到 SIGTERM / SIGINT:进行中的每一轮记「中断」后停下,状态落盘,5 秒内退出。
@@ -43,6 +49,7 @@ import { createAgentHttp } from './http.mjs';
 import { createHostedWiring } from './hosted-wiring.mjs';
 import { createServiceClient } from '../auth/service-client.mjs';
 import { readServiceKeyFile } from '../auth/service-identity.mjs';
+import { parseTestAllow } from '../agent/service/egress.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -83,6 +90,11 @@ export async function startAgentService({
   projectState,
   storeLimits,
   renderLimits,
+  assetBase = null,
+  egress,
+  voiceConfig,
+  workspaceLimits,
+  toolLimits,
   root = ROOT,
   version = 'dev',
   codeVersion = null,
@@ -127,6 +139,11 @@ export async function startAgentService({
     ...(projectState ? { projectState } : {}),
     ...(storeLimits ? { storeLimits } : {}),
     ...(renderLimits ? { renderLimits } : {}),
+    ...(assetBase ? { assetBase } : {}),
+    ...(egress ? { egress } : {}),
+    ...(voiceConfig ? { voiceConfig } : {}),
+    ...(workspaceLimits ? { workspaceLimits } : {}),
+    ...(toolLimits ? { toolLimits } : {}),
     log,
   });
   const api = createAgentHttp({ service, authenticate, version, codeVersion, log });
@@ -183,6 +200,13 @@ async function main() {
   if (typeof docUrl !== 'string' || !/^wss?:\/\//.test(docUrl)) return fail('doc-url', { detail: '文档服务地址要是 ws(s)://' });
   const origin = env.PROMPTCUT_AGENT_PUBLIC_ORIGIN || '';
   if (origin && !/^https?:\/\/[^/\s]+$/.test(origin)) return fail('public-origin', { detail: 'PROMPTCUT_AGENT_PUBLIC_ORIGIN 要是 http(s)://主机[:端口],不带路径' });
+  const assetBase = env.PROMPTCUT_AGENT_ASSET_URL || '';
+  if (assetBase) {
+    let ok = false;
+    try { const u = new URL(assetBase); ok = (u.protocol === 'http:' || u.protocol === 'https:') && isLoopbackHost(u.hostname.replace(/^\[|\]$/g, '')); } catch { ok = false; }
+    if (!ok) return fail('asset-url', { detail: 'PROMPTCUT_AGENT_ASSET_URL 要是同机素材服务的回环地址,如 http://127.0.0.1:8788' });
+  }
+  const testAllow = parseTestAllow(env.PROMPTCUT_AGENT_EGRESS_TEST_ALLOW);
   let key;
   try {
     key = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
@@ -211,6 +235,8 @@ async function main() {
       projectState: wiring.projectState,
       publisher: wiring.publisher,
       renderLimits: { ...(stall ? { stallMs: stall } : {}), ...(debounce ? { debounceMs: debounce } : {}) },
+      ...(assetBase ? { assetBase } : {}),
+      ...(testAllow.length ? { egress: { testAllow } } : {}),
       version,
       codeVersion: () => wiring.publisher.codeVersion(),
       log: line,
@@ -225,6 +251,7 @@ async function main() {
   line('agent.ready', {
     url: started.url, auth: 'service-identity', service: key.service, kid: key.kid, version,
     ...(origin ? { publicOrigin: origin } : {}),
+    assetService: !!assetBase, egressTestAllow: testAllow.length > 0,
     heapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
   });
   const stop = () => {

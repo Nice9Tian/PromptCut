@@ -39,7 +39,7 @@ import { createConversationStore, expandEntry, mergeDeltas } from '../agent/serv
 import { createGate, limitsFileOf, normalizeLimits } from '../agent/service/gate.mjs';
 import { createUsageLog, queryUsage } from '../agent/service/usage.mjs';
 import { ownerKeyOf, revokeReasonOfClose } from '../agent/service/create-agent-service.mjs';
-import { CLOUD_OPEN_TOOLS } from '../agent/service/cloud-tools.mjs';
+import { CLOUD_TOOL_PLAN } from '../agent/service/cloud-tools.mjs';
 import { readModelConfig, modelConfigPaths } from '../agent/service/model-config.mjs';
 import { STALL_REASON } from '../agent/service/render-request.mjs';
 import { clipsPlanTaskOf } from '../render-queue/messages.mjs';
@@ -651,7 +651,9 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
     };
     const ran = [];
     try {
-      for (const name of [...CLOUD_OPEN_TOOLS].sort()) {
+      // 在项目副本上执行的与就地执行的(在服务端另有实现的走文件、素材服务与外部服务,由隔离探针验)
+      const inProcess = Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.mode === 'route' || p.mode === 'server').map(([n]) => n);
+      for (const name of inProcess.sort()) {
         const def = tools.find((x) => x.name === name);
         const args = {};
         for (const key of def.inputSchema?.required ?? []) args[key] = valueFor(key, def.inputSchema?.properties?.[key]);
@@ -663,7 +665,7 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
     } finally {
       globalThis.fetch = realFetch;
     }
-    assert.equal(ran.length, 66);
+    assert.equal(ran.length, 73);
     assert.deepEqual(fetched, [], '没有一次请求发出去(更不会打到 agent-service.invalid)');
     assert.deepEqual(sizes(), before, '作业表与结果表没有被碰');
     const okCount = ran.filter(([, o]) => o === 'ok').length;

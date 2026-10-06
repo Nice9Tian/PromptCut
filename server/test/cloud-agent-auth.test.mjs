@@ -26,7 +26,7 @@ import { createTcpProxy, snapshotTaskInput } from './fake-ws-kit.mjs';
 import { signTicket } from '../auth/tickets.mjs';
 import { signDelegation, verifyDelegation, memberAccess, ownerKeyOf, delegationDigest } from '../auth/delegation.mjs';
 import { DELEGATION_TTL } from '../auth/protocol.mjs';
-import { SERVICE_ALLOW, SERVICE_PUBLISH_ALLOW, AGENT_WRITE_TYPES, CLIP_LIST_KEY_MARKS, serviceGate } from '../docservice/service-gate.mjs';
+import { SERVICE_ALLOW, SERVICE_PUBLISH_ALLOW, AGENT_WRITE_TYPES, AGENT_CONTENT_KINDS, CLIP_LIST_KEY_MARKS, serviceGate } from '../docservice/service-gate.mjs';
 import { actorOf } from '../docservice/modules/actor.mjs';
 import { clipsPlanTaskOf, backfillPlanTaskOf, CLIPS_KEY_MARK, BACKFILL_KEY_MARK } from '../render-queue/messages.mjs';
 import { createServiceClient } from '../auth/service-client.mjs';
@@ -159,13 +159,13 @@ test('CA-AUTH-01 / AU16 委托的签发：只有成员的页面连接要得到�
   assert.equal(await outcome(bobAgent, { type: 'auth.ticket', kind: 'delegate', audience: 'agent' }), 'error:forbidden');
   assert.equal(await outcome(bobRender, { type: 'auth.ticket', kind: 'delegate', audience: 'agent', conversation: 'c1' }), 'error:forbidden');
 
-  // 云端 Agent 自己的连接、发布连接都要不到任何票据
+  // 云端 Agent 自己的连接要不到委托与连接票据(不能给自己续命、换角色;素材票据见 CA-ASSET-01);发布连接要不到任何票据
   const cloud = await openAgent(env, control, proj.projectId, grant.ticket, { conversationId: 'conv-A_1' });
   const pub = await openPublish(env, control, proj.projectId);
-  for (const c of [cloud, pub]) {
-    for (const body of [{ kind: 'delegate', audience: 'agent' }, { kind: 'delegate', audience: 'agent', conversation: 'c1' }, { kind: 'conn', role: 'page' }, { kind: 'asset', access: 'r' }]) {
-      assert.equal(await outcome(c, { type: 'auth.ticket', ...body }), 'error:forbidden', JSON.stringify(body));
-    }
+  const forbiddenKinds = [{ kind: 'delegate', audience: 'agent' }, { kind: 'delegate', audience: 'agent', conversation: 'c1' }, { kind: 'conn', role: 'page' }, { kind: 'conn', role: 'agent', conversation: 2 }];
+  for (const body of forbiddenKinds) assert.equal(await outcome(cloud, { type: 'auth.ticket', ...body }), 'error:forbidden', JSON.stringify(body));
+  for (const body of [...forbiddenKinds, { kind: 'asset', access: 'r' }, { kind: 'asset', access: 'rw' }]) {
+    assert.equal(await outcome(pub, { type: 'auth.ticket', ...body }), 'error:forbidden', `发布连接 ${JSON.stringify(body)}`);
   }
 
   // 开关关着：service-disabled；开回来恢复
@@ -360,14 +360,17 @@ test('CA-AUTH-04 / AU19 只读成员发起的对话改不了项目：project.op�
 
 // ------------------------------------------------------------------ CA-AUTH-05
 
-test('CA-AUTH-05 白名单：代成员的连接只有表里的十种，表外逐个 forbidden；发布连接另一张表', async (t) => {
+test('CA-AUTH-05 白名单：代成员的连接只有表里的十四种（内容库只许卡片源码、票据只许素材票据），表外逐个 forbidden；发布连接另一张表', async (t) => {
   assert.deepEqual([...SERVICE_ALLOW.agent].sort(), [
+    'auth.ticket',
+    'content.get', 'content.list', 'content.put',
     'events.complete', 'events.create', 'events.text',
     'presence.clear', 'presence.list', 'presence.set',
     'project.close', 'project.op', 'project.open', 'project.upload',
   ]);
   assert.deepEqual({ ...SERVICE_PUBLISH_ALLOW }, { agent: ['publisher.hello', 'task.publish', 'task.unsubscribe'] });
-  assert.deepEqual([...AGENT_WRITE_TYPES], ['project.op', 'project.upload']);
+  assert.deepEqual([...AGENT_WRITE_TYPES], ['project.op', 'project.upload', 'content.put']);
+  assert.deepEqual([...AGENT_CONTENT_KINDS], ['card-source']);
   assert.deepEqual([...CLIP_LIST_KEY_MARKS].sort(), [BACKFILL_KEY_MARK, CLIPS_KEY_MARK].sort(), '与队列的标记对拍');
 
   const { env, proj, control } = await setup(t);
@@ -375,8 +378,8 @@ test('CA-AUTH-05 白名单：代成员的连接只有表里的十种，表外逐
   const conn = await openAgent(env, control, proj.projectId, await grantOf(bob.page, 'c1'), { conversationId: 'c1' });
   const extra = ['events.list', 'presence.send', 'hosted.watch', 'hosted.ticket', 'hosted.demand', 'hosted.delegate.verify'];
   const outside = [...ALL_TYPES, ...extra].filter((type) => !SERVICE_ALLOW.agent.includes(type));
-  for (const must of ['auth.ticket', 'shared.admin', 'shared.members', 'shared.watch', 'shared.challenge', 'node.hello', 'task.claim', 'task.publish',
-    'publisher.hello', 'content.put', 'content.get', 'project.snapshot.put', 'project.announce', 'service.announce', 'service.withdraw', 'cost.put']) {
+  for (const must of ['shared.admin', 'shared.members', 'shared.watch', 'shared.challenge', 'node.hello', 'task.claim', 'task.publish',
+    'publisher.hello', 'content.watch', 'project.snapshot.put', 'project.snapshot.get', 'project.announce', 'service.announce', 'service.withdraw', 'service.watch', 'cost.put']) {
     assert.ok(outside.includes(must), `${must} 在表外`);
   }
   for (const type of outside) {
@@ -390,12 +393,35 @@ test('CA-AUTH-05 白名单：代成员的连接只有表里的十种，表外逐
     'events.complete': { projectId: DOC, eventId: 'ev-1', session: 's', status: 'ok' },
     'events.text': { projectId: DOC, eventId: 'ev-2', session: 's', text: 'hi' },
     'presence.set': { projectId: DOC, key: 'agent.scope', data: { clips: [] } }, 'presence.clear': { projectId: DOC, key: 'agent.scope' }, 'presence.list': { projectId: DOC },
+    'content.put': { kind: 'card-source', key: 'src/cards/user/probe-card.tsx', body: 'export const x = 1;' },
+    'content.get': { kind: 'card-source', key: 'src/cards/user/probe-card.tsx' }, 'content.list': { kind: 'card-source', prefix: 'src/' },
+    'auth.ticket': { kind: 'asset', access: 'r' },
   };
   assert.deepEqual(Object.keys(samples).sort(), [...SERVICE_ALLOW.agent].sort());
   for (const [type, fields] of Object.entries(samples)) {
     const r = await ask(conn, { type, ...fields });
     assert.notEqual(r.reason, 'forbidden', `${type}：${JSON.stringify(r)}`);
   }
+  // 内容库：只许卡片源码这一类。预渲染清单、事件详情、别的类别读、列、写都被拒
+  for (const kind of ['snapshot-manifest', 'render-manifest', 'event-detail', 'cost', 'anything']) {
+    for (const [type, fields] of [['content.put', { key: 'k', body: {} }], ['content.get', { key: 'k' }], ['content.list', { prefix: '' }]]) {
+      assert.equal(await outcome(conn, { type, kind, ...fields }), 'error:forbidden', `${type} ${kind}`);
+    }
+  }
+  assert.equal(await outcome(conn, { type: 'content.put', key: 'k', body: {} }), 'error:forbidden', '不带 kind');
+  // 写进去的卡片源码别的成员读得到，署名是成员本人加 service: 'agent'
+  const stored = await ask(bob.page, { type: 'content.get', kind: 'card-source', key: 'src/cards/user/probe-card.tsx' });
+  assert.equal(stored.body, 'export const x = 1;');
+  // 纯函数：只读成员的连接读得了卡片源码、写不了；要不到读写的素材票据
+  const ro = { scope: 'member', service: 'agent', tenantId: proj.projectId, role: 'agent', access: 'r' };
+  assert.equal(serviceGate(ro, 'content.get', { kind: 'card-source' }), null);
+  assert.equal(serviceGate(ro, 'content.put', { kind: 'card-source' }), 'forbidden');
+  assert.equal(serviceGate(ro, 'auth.ticket', { kind: 'asset', access: 'r' }), null);
+  assert.equal(serviceGate(ro, 'auth.ticket', { kind: 'asset' }), null);
+  assert.equal(serviceGate(ro, 'auth.ticket', { kind: 'asset', access: 'rw' }), 'forbidden');
+  const rwp = { ...ro, access: 'rw' };
+  assert.equal(serviceGate(rwp, 'auth.ticket', { kind: 'asset', access: 'rw' }), null);
+  for (const kind of ['conn', 'delegate', undefined]) assert.equal(serviceGate(rwp, 'auth.ticket', { kind }), 'forbidden', `票据 ${kind}`);
   // 纯函数：agent 的表只给成员身份的连接；服务自己的身份（没有 purpose）拿不到这张表
   assert.equal(serviceGate({ scope: 'service', service: 'agent', tenantId: proj.projectId, role: 'agent' }, 'project.open', {}), 'forbidden');
   assert.equal(serviceGate({ scope: 'member', service: 'agent', tenantId: proj.projectId, role: 'agent', access: 'rw', purpose: 'publish' }, 'publisher.hello', {}), 'forbidden', '成员身份的连接不能自称发布连接');
@@ -717,44 +743,69 @@ test('CA-URL-02 托管组合的配置：PROMPTCUT_AGENT_PUBLIC_URL 不是 http(s
 
 // ------------------------------------------------------------------ CA-ASSET-01
 
-test('CA-ASSET-01 / AU21 素材：云端 Agent 的连接要不到素材票据；委托当不了素材票据；sv: agent 的素材票据只读、写不进、开关关掉或被踢后当场失效', async (t) => {
+test('CA-ASSET-01 / AU21 素材：云端 Agent 的连接按成员本人的权限要素材票据——读写成员能写素材原件、写不了预渲染产物；只读成员要不到读写票据、写不进；委托当不了素材票据；开关关掉、被踢、被改成只读后当场失效', async (t) => {
   const { env, proj, creator, control } = await setup(t, { assets: true });
   const bob = await member(env, proj, 'bob');
   const grant = await grantOf(bob.page, 'c1');
   const conn = await openAgent(env, control, proj.projectId, grant, { conversationId: 'c1' });
-  for (const access of ['r', 'rw']) assert.equal(await outcome(conn, { type: 'auth.ticket', kind: 'asset', access }), 'error:forbidden', access);
-
-  // 成员自己传一件素材
-  const rw = (await ask(creator, { type: 'auth.ticket', kind: 'asset', access: 'rw' }, 'auth.ticket.ok')).ticket;
   const bytes = randomBytes(256);
   const hash = sha256hex(bytes);
   const put = (ns, headers, data = bytes, h = hash) => env.asset(`${ns}/${h}/0`, { method: 'PUT', body: data, headers: { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(data.length), ...headers } });
-  assert.equal((await put('media', bearer(rw))).status, 200);
-  assert.equal((await env.asset(`media/${hash}/complete`, { method: 'POST', headers: bearer(rw) })).status, 200);
-  const read = (ticket) => env.asset(`media/${hash}`, { headers: bearer(ticket) }).then((r) => r.status);
+  const complete = (ns, headers, h = hash) => env.asset(`${ns}/${h}/complete`, { method: 'POST', headers });
+  const read = (ticket, h = hash) => env.asset(`media/${h}`, { headers: bearer(ticket) }).then((r) => r.status);
+
+  // 读写成员的云端 Agent:要得到读写的素材票据,票据是成员的身份加 sv: 'agent'
+  const rwReply = await ask(conn, { type: 'auth.ticket', kind: 'asset', access: 'rw' }, 'auth.ticket.ok');
+  const agentRw = rwReply.ticket;
+  const payload = JSON.parse(Buffer.from(agentRw.split('.')[1], 'base64url').toString('utf8'));
+  assert.deepEqual([payload.k, payload.u, payload.r, payload.sv, payload.p], ['asset', bob.userId, 'rw', 'agent', proj.projectId]);
+  // 写素材原件(media):成;写预渲染产物(snap、px):403
+  assert.equal((await put('media', bearer(agentRw))).status, 200);
+  assert.equal((await complete('media', bearer(agentRw))).status, 200);
+  assert.equal(await read(agentRw), 200);
+  const other = randomBytes(64);
+  for (const ns of ['snap', 'px']) assert.equal((await put(ns, bearer(agentRw), other, sha256hex(other))).status, 403, `云端 Agent 写 ${ns}`);
+  assert.equal((await env.asset(`media/${hash}`, { method: 'DELETE', headers: bearer(agentRw) })).status, 405, '素材服务没有删除接口');
+  // 别的成员凭自己的票据读得到它写的这一件
+  const creatorR = (await ask(creator, { type: 'auth.ticket', kind: 'asset', access: 'r' }, 'auth.ticket.ok')).ticket;
+  assert.equal(await read(creatorR), 200);
 
   // 委托、对话委托、Agent 的连接票据都当不了素材票据
   for (const tk of [grant, (await delegateOf(bob.page)).ticket, conn.ticket]) assert.equal(await read(tk), 401);
 
-  // 文档服务不签这种票据；万一有（这里直接用项目密钥造），素材服务的规则也钉死了
+  // 只读成员:他的云端 Agent 连接要得到只读票据,要不到读写的;只读票据写不进任何命名空间
+  env.store.update(proj.projectId, (x) => { x.readonly = ['ro']; });
+  const ro = await member(env, proj, 'ro');
+  const roConn = await openAgent(env, control, proj.projectId, await grantOf(ro.page, 'c-ro'), { conversationId: 'c-ro' });
+  assert.equal(await outcome(roConn, { type: 'auth.ticket', kind: 'asset', access: 'rw' }), 'error:forbidden');
+  const roTicket = (await ask(roConn, { type: 'auth.ticket', kind: 'asset', access: 'r' }, 'auth.ticket.ok')).ticket;
+  assert.equal(await read(roTicket), 200, '只读的能读');
+  const more = randomBytes(80);
+  for (const ns of ['media', 'snap', 'px']) assert.equal((await put(ns, bearer(roTicket), more, sha256hex(more))).status, 403, `只读票据写 ${ns}`);
+  // 万一有一张读写的(这里直接用项目密钥造一张只读成员的):素材服务每次核对都看成员此刻的权限,无效
   const rec = () => env.store.peek(proj.projectId);
-  const forge = (r, u = bob.userId) => signTicket(rec(), { k: 'asset', u, r, sv: 'agent', sk: env.keys.agent.kid }, env.clock.now()).ticket;
-  assert.equal(await read(forge('rw')), 401, '读写的 sv: agent 素材票据一律无效');
-  const ro = forge('r');
-  assert.equal(await read(ro), 200, '只读的能读');
-  const other = randomBytes(64);
-  for (const ns of ['media', 'snap', 'px']) assert.equal((await put(ns, bearer(ro), other, sha256hex(other))).status, 403, `只读票据写 ${ns}`);
-  assert.equal((await env.asset(`media/${hash}`, { method: 'DELETE', headers: bearer(ro) })).status, 405, '素材服务没有删除接口');
-  // 关开关：当场失效，不等 15 分钟过期
+  const forge = (r, u) => signTicket(rec(), { k: 'asset', u, r, sv: 'agent', sk: env.keys.agent.kid }, env.clock.now()).ticket;
+  assert.equal((await put('media', bearer(forge('rw', ro.userId)), more, sha256hex(more))).status, 401, '只读成员的读写票据无效');
+  // 读写成员中途被改成只读:手里那张读写票据当场写不进
+  const late = randomBytes(96);
+  assert.equal((await put('media', bearer(agentRw), late, sha256hex(late))).status, 200);
+  env.store.update(proj.projectId, (x) => { x.readonly = ['ro', 'bob']; });
+  assert.equal((await complete('media', bearer(agentRw), sha256hex(late))).status, 401, '改成只读后当场失效');
+  env.store.update(proj.projectId, (x) => { x.readonly = ['ro']; });
+  assert.equal((await complete('media', bearer(agentRw), sha256hex(late))).status, 200);
+
+  // 关开关:当场失效,不等票据过期;连接也要不到新的
   assert.equal((await adminOp(creator, proj, 'set-hosted-service', { service: 'agent', enabled: false })).type, 'shared.admin.ok');
-  assert.equal(await read(ro), 401);
+  assert.equal(await read(agentRw), 401);
+  assert.equal(await read(roTicket), 401);
   assert.equal((await adminOp(creator, proj, 'set-hosted-service', { service: 'agent', enabled: true })).type, 'shared.admin.ok');
-  assert.equal(await read(ro), 200);
-  // 踢人：旧的（代数）与按新代数造的（禁入表）都无效
+  assert.equal(await read(agentRw), 200);
+  // 踢人:旧的(代数)与按新代数造的(禁入表)都无效
   assert.equal((await adminOp(creator, proj, 'kick', { username: 'bob', deviceId: bob.device.deviceId })).type, 'shared.admin.ok');
-  assert.equal(await read(ro), 401);
-  assert.equal(await read(forge('r')), 401);
-  assert.equal(await read(rw), 200, '别的成员自己的票据不受影响');
+  assert.equal(await read(agentRw), 401);
+  assert.equal(await read(forge('r', bob.userId)), 401);
+  assert.equal(await read(forge('rw', bob.userId)), 401);
+  assert.equal(await read(creatorR), 200, '别的成员自己的票据不受影响');
 });
 
 // ------------------------------------------------------------------ CA-LOG-01

@@ -1,7 +1,9 @@
 /**
  * 托管档 Agent 服务的 HTTP 接口(契约 `docs/plan/cloud-agent-contract.md` 第 2.3、2.4 节)。
  *
- * `/healthz`、`info`、发消息(202,一轮与连接无关)、事件流(先补发再接实时)、停止、对话的列取改删、用量查询。
+ * `/healthz`、`info`、发消息(202,一轮与连接无关)、事件流(先补发再接实时)、停止、对话的列取改删、用量查询、传附件。
+ * 传附件:`POST /v1/conversations/<id>/attachments?name=<文件名>`,请求体是文件字节(不是 JSON);存进这个对话的工作目录,
+ * 回 `{ ok, attachment: { name, url, size, kind, text? } }`,`url`(`work:attachments/…`)随下一条消息的 `attachments` 带回来。
  * 丙块在甲块的基础上只追加了接口与字段(对话的取、改标题、删,`/v1/usage`,`info` 与列表项多出的字段),已有的没有改。
  *
  * 身份只来自 `authenticate(req)`:回 `{ projectId, userId, username?, deviceName?, creator?, mode?, access? }` 或 null。
@@ -59,7 +61,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
   // 跨源:在线页面同源,桌面版的页面从本机源来(契约第 10.4 节)。鉴权只看票据,不收不发 Cookie
   const CORS = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Attachment-Name',
     'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
     'Access-Control-Max-Age': '600',
   };
@@ -141,7 +143,8 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'bad-request', message: 'GET only' }, CORS);
         // `codeVersion`:这份检出的代码版本(同机的渲染服务拿它比对三者是不是同一个提交);不含任何项目信息
         const code = typeof codeVersion === 'function' ? codeVersion() : codeVersion;
-        return sendJson(res, 200, { ok: true, version, ...(code ? { codeVersion: code } : {}) }, CORS);
+        // `egressTestAllow`:出网闸的测试例外开没开。生产必须是 false,部署后的核对看它(契约第 9.6 节)
+        return sendJson(res, 200, { ok: true, version, ...(code ? { codeVersion: code } : {}), egressTestAllow: service.egressTestAllow === true }, CORS);
       }
       if (!pathname.startsWith('/v1/')) return sendJson(res, 404, { ok: false, code: 'not-found', message: 'not found' }, CORS);
 
@@ -177,7 +180,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           return service.remove(identity, conversationId) ? sendJson(res, 200, { ok: true }, CORS) : missing();
         }
       }
-      const m = /^\/v1\/conversations\/([^/]+)\/(messages|events|abort)$/.exec(pathname);
+      const m = /^\/v1\/conversations\/([^/]+)\/(messages|events|abort|attachments)$/.exec(pathname);
       if (m) {
         const conversationId = decodeURIComponent(m[1]);
         if (!CONVERSATION_ID_RE.test(conversationId)) throw new AgentServiceError('bad-request', '对话 id 不合法');
@@ -185,13 +188,21 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           const body = await readBody(req);
           // 这些桌面字段云端不收(契约第 2.3 节);`__` 开头的是进程内测试用的,不从网络收。
           // `grant` 是这一轮的对话委托(契约第 4.2 节):只进内存,不落盘、不进日志
-          const { prompt, grant, model, effort, creativity, script, library, pageState } = body;
-          const out = await service.send(identity, conversationId, { prompt, grant, model, effort, creativity, script, library, pageState });
+          const { prompt, grant, model, effort, creativity, script, library, pageState, attachments } = body;
+          const out = await service.send(identity, conversationId, { prompt, grant, model, effort, creativity, script, library, pageState, attachments });
           return sendJson(res, 202, { ok: true, ...out }, CORS);
         }
         if (m[2] === 'events' && req.method === 'GET') {
           const after = Number(url.searchParams.get('after') ?? 0);
           return events(req, res, identity, conversationId, Number.isSafeInteger(after) ? after : 0);
+        }
+        if (m[2] === 'attachments' && req.method === 'POST') {
+          // 文件名在查询串或请求头里(百分号编码);字节直接是请求体,边收边写进工作目录,超了上限当场断
+          const raw = url.searchParams.get('name') ?? req.headers['x-attachment-name'] ?? '';
+          let name = String(raw);
+          try { name = decodeURIComponent(name); } catch { /* 原样用 */ }
+          const attachment = await service.attach(identity, conversationId, name, req);
+          return sendJson(res, 200, { ok: true, attachment }, CORS);
         }
         if (m[2] === 'abort' && req.method === 'POST') {
           return sendJson(res, 200, service.abort(identity, conversationId), CORS);

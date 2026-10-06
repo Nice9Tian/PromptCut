@@ -268,11 +268,34 @@ export function sharedModule({
     reply(ctx, connId, { type: 'auth.ticket.ok', ticket: out.ticket, exp: out.exp }, reqId);
   }
 
+  /**
+   * 代成员进项目的服务连接（云端 Agent，`docs/plan/cloud-agent-contract.md` 第 4.4 节）要素材票据：导入素材、配音等产物入库用。
+   * 票据的 `u`、`ug` 是成员的，带 `sv` / `sk`；`r` 不超过成员此刻的权限（只读成员要不到读写票据）。登记表、开关、名单、禁入表
+   * 这里核一次，素材服务每次核对票据时再核一次（`auth/asset-tickets.mjs`），所以撤销后当场失效，不等票据过期。
+   */
+  function memberServiceAssetTicket(ctx, connId, c, msg, reqId) {
+    const p = c.principal;
+    if (p.scope !== 'member' || c.space === null) throw new Refused('forbidden', '服务连接要不到这种票据');
+    if (msg.kind !== 'asset') throw new Refused('forbidden', '服务连接只能要素材票据');
+    const rec = storeOf()?.peek(c.space) ?? null;
+    const refused = serviceAdmission({ registry: registryOf(), record: rec, service: p.service, kid: p.serviceKid });
+    if (refused) throw new Refused('forbidden', refused);
+    if (registryOf()?.get(p.service)?.actsFor !== 'member') throw new Refused('forbidden', '服务连接要不到这种票据');
+    if (admissionOf(rec, { username: p.username, deviceId: p.deviceId, creator: p.creator === true })) throw new Refused('forbidden');
+    const access = msg.access ?? 'r';
+    if (access !== 'r' && access !== 'rw') throw new Refused('bad-message', "access 只能是 'r' 或 'rw'");
+    const mine = p.access === 'rw' && memberAccess(rec, p.username, p.creator === true) === 'rw' ? 'rw' : 'r';
+    if (access === 'rw' && mine !== 'rw') throw new Refused('forbidden', '只读成员的云端 Agent 要不到读写的素材票据');
+    const out = signTicket(rec, { k: 'asset', u: p.userId, r: access, dn: p.deviceName, cr: p.creator === true, sv: p.service, sk: p.serviceKid }, clock(ctx));
+    ctx.log('shared.agent-asset-ticket', { connId, projectId: c.space, access });
+    reply(ctx, connId, { type: 'auth.ticket.ok', ticket: out.ticket, exp: out.exp }, reqId);
+  }
+
   function ticket(ctx, connId, msg, reqId) {
     const c = conns.get(connId);
     if (c?.principal?.scope === 'service') return serviceTicket(ctx, connId, c, msg, reqId);
-    // 代成员进来的服务连接（云端 Agent）不能给自己签票据（白名单已挡，这里再挡一次）
-    if (serviceOf(c?.principal) !== null) throw new Refused('forbidden', '服务连接要不到这种票据');
+    // 代成员进来的服务连接（云端 Agent）：只签素材票据，权限不超过这位成员此刻的；连接票据、委托一律不签（不能给自己换角色、续命）
+    if (serviceOf(c?.principal) !== null) return memberServiceAssetTicket(ctx, connId, c, msg, reqId);
     const rec = memberRecord(c);
     const p = c.principal;
     if (admissionOf(rec, { username: p.username, deviceId: p.deviceId, creator: p.creator === true })) throw new Refused('forbidden');

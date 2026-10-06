@@ -60,6 +60,7 @@ export function createAgentSide({
   onWrite = null,
   execSerial = null,
   isolateStore = false,
+  enterHost = null,
 } = {}) {
   if (!Array.isArray(tools)) throw new TypeError('createAgentSide: 要 tools(工具表)');
   if (typeof callPage !== 'function') throw new TypeError('createAgentSide: 要 callPage');
@@ -85,6 +86,7 @@ export function createAgentSide({
     // 多个实例共用一份服务端 store 时(托管档),锁由调用方给、进锁清场
     ...(execSerial ? { serial: execSerial } : {}),
     isolateStore,
+    ...(typeof enterHost === 'function' ? { enterHost } : {}),
     // 只读的页面状态:经同一条页面通道要一次
     // `agent` 仍是 ''(桌面的页面通道按它分发,行为不变);要它的那个对话另放在 `pageStateFor` 里,托管档按它找这个对话的页面状态
     pageState: async (tool, args, keys, agentKey = '') => {
@@ -100,7 +102,8 @@ export function createAgentSide({
     } else if (toolDef.side === 'server') {
       return callServer(tool, args, { agent });
     }
-    const { result, opIds } = await viaPage(tool, args, agent);
+    // `track` 是这次调用的事件上下文:托管档在服务端实现的工具把落地的写入记在它上面(桌面的页面通道不看它)
+    const { result, opIds } = await viaPage(tool, args, agent, { track: ctx });
     const own = opIds.filter((x) => typeof x === 'string');
     if (own.length) {
       // 页面替这个 Agent 执行的写入以页面身份提交:告诉公告板这几次提交是它的(A3)

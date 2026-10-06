@@ -205,6 +205,11 @@ export function createAgentExecutor({
   serial: serialIn = null,
   /** 进锁先把 store 里项目以外的状态清掉、出锁把项目拿走:上一个实例留下的东西不让下一个实例的工具实现读到 */
   isolateStore = false,
+  /**
+   * 进锁之后、放项目之前调一次,回一个出锁时调的收拾函数(或 null)。托管档用它把**这个项目**的用户卡定义(静态解析出的,
+   * 不执行源码)临时登记进服务端的卡片表,出锁撤掉——卡片表与 store 一样是进程里的单例,不让一个项目的卡留给下一个项目。
+   */
+  enterHost = null,
 } = {}) {
   if (!link) throw new TypeError('createAgentExecutor: 要 link');
   if (typeof loadHost !== 'function') throw new TypeError('createAgentExecutor: 要 loadHost');
@@ -338,28 +343,35 @@ export function createAgentExecutor({
     return { wire: [{ op: 'set', path: '', upload: uploadId }], local: [{ op: 'set', path: '', value: JSON.parse(text) }] };
   }
 
-  async function runRoute(tool, args, conv, ctx) {
+  /**
+   * `apply`(可省):不走路由表,由调用方直接在放好项目的 host 上改(托管档在服务端实现的工具,如导入素材后登记素材)。
+   * 给了它就不查路由表、不要页面状态;其余(进锁、清场、算差异、带期望版本提交、记这次写入)与路由表的工具完全相同。
+   */
+  async function runRoute(tool, args, conv, ctx, apply = null) {
     await replicaReady();
     const host = await loadHost();
-    if (!host.routeOf(tool)) throw new Error(`未知工具: ${tool}`);
-    const ps = await pageStateFor(tool, args, conv.key);
+    if (!apply && !host.routeOf(tool)) throw new Error(`未知工具: ${tool}`);
+    const ps = apply ? null : await pageStateFor(tool, args, conv.key);
     const prepared = await serial(async () => {
       const replica = link.replica;
       const base = replica.project;
       const baseRev = replica.rev;
       if (isolateStore) host.resetStore?.();
+      let leave = null;
+      if (typeof enterHost === 'function') { try { leave = enterHost(host, conv.key) ?? null; } catch (err) { say('agent.enter-host-failed', { message: String(err?.message ?? err).slice(0, 160) }); } }
       host.setProject(base);
       const cleanup = ps && typeof host.setPageState === 'function' ? host.setPageState(ps) : null;
       let result;
       let after;
       try {
-        result = await host.callRoute(tool, args);
+        result = apply ? await apply(host) : await host.callRoute(tool, args);
       } finally {
         // 先把跑完的项目取出来,再把 store 放回副本;handler 抛错时这次的改动整个作废(不提交)
         after = host.getProject();
         if (isolateStore && typeof host.clearProject === 'function') host.clearProject();
         else host.setProject(base);
         cleanup?.();
+        try { leave?.(); } catch { /* 收拾失败不影响这次的结果 */ }
       }
       if (after === base) return { result, base, baseRev, ops: [], inverse: [] };
       // 总时长跟着内容走的那一下在这里一并做,随同一批 ops 提交(页面收到后不再补写)
@@ -590,6 +602,26 @@ export function createAgentExecutor({
         return reader(args ?? {}, conv, toolDef);
       }
       return runRoute(tool, args ?? {}, conv, ctx);
+    },
+
+    /**
+     * 托管档在服务端实现的工具用:在项目副本上执行 `apply(host)`,改动照常算差异、带期望版本提交、记进 `ctx.write`。
+     * `apply` 在进程级的锁里跑,只做同步的改项目,不等外部的东西(下载、上传在进锁之前做完)。
+     */
+    mutate(tool, agentKey, ctx, apply) {
+      return runRoute(tool, {}, conversationOf(agentKey), ctx ?? {}, apply);
+    },
+
+    /** 托管档:以这个对话的连接向文档服务发一个请求(取素材票据、读写卡片源码);回文档服务的那条回包 */
+    async request(agentKey, message, accept) {
+      await replicaReady();
+      const conv = conversationOf(agentKey);
+      return link.conversation(conv.n).request({ ...message, projectId }, accept);
+    },
+
+    /** 托管档:此刻的项目副本(只读;记这个对话读到了这一版) */
+    async snapshot(agentKey) {
+      return readSnapshot(conversationOf(agentKey));
     },
 
     /**

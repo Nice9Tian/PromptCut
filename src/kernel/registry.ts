@@ -73,6 +73,16 @@ export function resetCards() {
   map.clear();
 }
 
+/**
+ * 撤掉几张卡。只给云端 Agent 服务用:它把某个项目的用户卡定义临时登记进来(静态解析出的,不执行源码),
+ * 用完撤掉,不留给下一个项目(`server/agent/ssr-host.mjs` 的 `registerProjectCards`)。页面不调它。
+ */
+export function unregisterCards(ids: readonly string[]) {
+  let changed = false;
+  for (const id of ids) changed = map.delete(id) || changed;
+  if (changed) registryGen++;
+}
+
 export function getCard(id: string): CardDef<any> | undefined {
   return map.get(id);
 }

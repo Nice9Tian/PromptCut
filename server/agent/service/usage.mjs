@@ -9,6 +9,10 @@
  *   {"t":毫秒,"projectId":"…","userId":"…","username":"…","conversationId":"…","runId":"…",
  *    "vendor":"…","model":"…","input":N,"output":N,"cacheRead":N,"ok":true,"ms":N}
  *
+ * 要花钱的外部调用(配音等,用托管方的配置)也各记一行,多四个字段,token 数是 0、不占额度:
+ *   {…同上…,"kind":"service","service":"voice","units":N,"unit":"chars"}
+ * `vendor` 是服务商,`model` 是它的型号;`units` 是这次的计量(配音按字数)。汇总里单列在 `services` 下,不混进模型的调用次数。
+ *
  * 额度按「输入加输出的 token 数」算(`cacheRead` 已含在 `input` 里,只是看命中率用)。窗口按 UTC:累计、当月、当天。
  * 本文件不引用 `src/`。
  */
@@ -52,8 +56,17 @@ export function usageRow(row, now = Date.now()) {
     cacheRead: num(row?.cacheRead),
     ok: row?.ok !== false,
     ms: num(row?.ms),
+    ...(row?.kind === 'service' ? {
+      kind: 'service',
+      service: String(row?.service ?? '').slice(0, 32),
+      units: num(row?.units),
+      unit: String(row?.unit ?? '').slice(0, 16),
+    } : {}),
   };
 }
+
+/** 这一行是不是外部服务的调用(不是模型请求) */
+const isServiceRow = (r) => r?.kind === 'service';
 
 /** 读一个流水文件里从 `from` 字节起的整行;回 `{ rows, bytes }`(`bytes` 是读到的最后一个整行的末尾) */
 function readRows(file, from = 0) {
@@ -91,6 +104,16 @@ export function queryUsage(dir, { projectId = null, since = null } = {}) {
       if (Number.isFinite(since) && !(r.t >= since)) continue;
       const tokens = num(r.input) + num(r.output);
       const p = (out.projects[r.projectId] ??= { tokens: 0, calls: 0, input: 0, output: 0, members: {}, models: {} });
+      if (isServiceRow(r)) {
+        // 外部服务的调用单列:按「服务 / 服务商」累计次数与计量,另按成员累计次数
+        const sk = `${r.service}/${r.vendor}`;
+        const sv = ((p.services ??= {})[sk] ??= { calls: 0, units: 0, unit: r.unit ?? '', members: {} });
+        sv.calls += 1; sv.units += num(r.units);
+        const sm = (sv.members[r.userId] ??= { username: r.username ?? '', calls: 0, units: 0 });
+        sm.calls += 1; sm.units += num(r.units);
+        out.rows.push(r);
+        continue;
+      }
       p.tokens += tokens; p.calls += 1; p.input += num(r.input); p.output += num(r.output);
       const m = (p.members[r.userId] ??= { username: r.username ?? '', tokens: 0, calls: 0 });
       m.tokens += tokens; m.calls += 1;
@@ -117,6 +140,7 @@ export function createUsageLog({ dir = null, now = () => Date.now(), flushMs = 3
   const totalsFile = dir ? path.join(dir, 'totals.json') : null;
 
   function fold(r) {
+    if (isServiceRow(r)) return; // 外部服务的调用不占 token 额度,不进这份累计(汇总时从流水读)
     const tokens = num(r.input) + num(r.output);
     const t = Number.isFinite(r.t) ? r.t : now();
     let p = projects.get(r.projectId);
@@ -226,6 +250,10 @@ export function createUsageLog({ dir = null, now = () => Date.now(), flushMs = 3
         return {
           project: { tokens: q?.tokens ?? 0, calls: q?.calls ?? 0 },
           members: Object.entries(q?.members ?? {}).map(([userId, m]) => ({ userId, username: m.username, tokens: m.tokens, calls: m.calls })),
+          services: Object.entries(q?.services ?? {}).map(([key, s]) => ({
+            service: key.split('/')[0], vendor: key.split('/').slice(1).join('/'), calls: s.calls, units: s.units, unit: s.unit,
+            members: Object.entries(s.members).map(([userId, m]) => ({ userId, username: m.username, calls: m.calls, units: m.units })),
+          })),
         };
       }
       const p = projects.get(projectId);

@@ -21,7 +21,7 @@ const EMPTY_PROJECT = new WeakMap();
  */
 export async function loadSsrHost(load, { apiBase } = {}) {
   for (const id of REGISTRIES) await load(id);
-  const [core, api, routes, diff, common, apiUrl, duration] = await Promise.all([
+  const [core, api, routes, diff, common, apiUrl, duration, registry, cardParse, store] = await Promise.all([
     load('/src/store/core.ts'),
     load('/src/mcp/api.ts'),
     load('/src/mcp/routes.mjs'),
@@ -29,6 +29,9 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     load('/src/mcp/common.ts'),
     load('/src/mcp/apiUrl.ts'),
     load('/src/kernel/duration.ts'),
+    load('/src/kernel/registry.ts'),
+    load('/src/kernel/cardSourceParse.mjs'),
+    load('/src/store/project.ts'),
   ]);
   if (apiBase) apiUrl.setApiBase(apiBase);
   if (!EMPTY_PROJECT.has(core)) EMPTY_PROJECT.set(core, core.getState().project);
@@ -99,5 +102,56 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     },
     frameLayoutOf: common.frameLayoutOf,
     stageSize: common.stageSize,
+
+    /* ---------------- 托管档:项目自己的用户卡与素材登记(契约 cloud-agent-contract.md 第 9.3、9.4 节) ---------------- */
+
+    /** 服务端卡片表里现有的卡片 id(检出里带的内置卡与随仓库的用户卡) */
+    cardIds() {
+      return registry.allCards().map((c) => c.id);
+    },
+    /**
+     * 静态解析一份用户卡源码(`src/kernel/cardSourceParse.mjs`):取 id、名字、说明、参数默认值与控件,只认字面量,**不执行源码**。
+     * `files(key)` 给它引到的同目录文件的源码。回 `[{ id, name, description?, defaults, controls, controlsIncomplete }]`。
+     */
+    parseCard(source, { key, files } = {}) {
+      return cardParse.parseCardSource(source, { key, ...(typeof files === 'function' ? { files } : {}) });
+    },
+    /** 一份卡片源码经相对导入引到的文件(仓库相对路径) */
+    cardImports(source, key) {
+      return cardParse.cardSourceImports(source, key);
+    },
+    /**
+     * 把一组静态解析出的用户卡临时登记进卡片表(只有数据:组件是个空壳,从不渲染),回撤掉它们的函数。
+     * 与表里已有的 id 撞车的不登记(内置卡优先,和 `src/cards/index.ts` 的兜底一致)。只在进程级的锁里用。
+     */
+    registerProjectCards(parsed) {
+      const taken = new Set(registry.allCards().map((c) => c.id));
+      const defs = [];
+      for (const p of Array.isArray(parsed) ? parsed : []) {
+        if (!p || typeof p.id !== 'string' || taken.has(p.id)) continue;
+        taken.add(p.id);
+        defs.push({
+          id: p.id, name: p.name, description: typeof p.description === 'string' ? p.description : '', source: 'user',
+          defaults: p.defaults && typeof p.defaults === 'object' ? p.defaults : {},
+          controls: Array.isArray(p.controls) ? p.controls : [],
+          Component: () => null,
+        });
+      }
+      if (!defs.length) return () => {};
+      registry.registerCards(defs);
+      return () => registry.unregisterCards(defs.map((d) => d.id));
+    },
+    /** 登记一条已经入库的素材(不进撤销栈);回登记好的那一条 */
+    addMedia(asset) {
+      return store.actions.addMedia(asset);
+    },
+    /** 把一条素材放上时间轴(与桌面版导入视频后自动放一段相同);回片段或 null */
+    addMediaClip(mediaId, start, opts = {}) {
+      return store.actions.addMediaClip(mediaId, start, opts);
+    },
+    /** 此刻 store 里项目内容的末尾(秒):新导入的视频接在后面放 */
+    contentEnd() {
+      return duration.contentEndOf(core.getState().project.tracks ?? []);
+    },
   };
 }

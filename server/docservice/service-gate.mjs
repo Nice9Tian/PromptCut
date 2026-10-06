@@ -11,7 +11,8 @@
  *   （`docs/plan/cloud-agent-contract.md` 第 4.4 节，只读成员的另拒改项目的两种）。云端 Agent 服务只用来发布补渲计划的连接
  *   （principal 带 `purpose: 'publish'`）查另一张表 `SERVICE_PUBLISH_ALLOW`，`task.publish` 只许带片段清单的计划任务。
  *   三种消息另看内容：`content.put` 只许写预渲染清单，`auth.ticket` 只许要素材票据（要连接票据等于给自己换角色），
- *   `task.publish` 不许发布计划任务（渲染服务只发布自己切分出来的细任务）；
+ *   `task.publish` 不许发布计划任务（渲染服务只发布自己切分出来的细任务）；云端 Agent 代成员的连接：`content.*` 只许
+ *   `card-source` 一类（建卡改卡），`auth.ticket` 只许素材票据、读写的要成员本人有读写权限（导入素材，不超过成员本人）；
  * - 不是服务身份的连接发 `hosted.*` 一律 `forbidden`。
  *
  * 纯函数，不引任何模块。
@@ -45,10 +46,17 @@ export const SERVICE_ALLOW = Object.freeze({
     'project.op', 'project.upload',
     // 工具调用事件（事件模块借内容库写 event-detail，不经这条连接直接写内容库）
     'events.create', 'events.complete', 'events.text',
-    // 在场状态：别的成员「正在编辑」的片段、Agent 自己的范围
+    // 在场状态：别的成员「正在编辑」的片段、Agent 自己的范围、「这一轮在不在跑」
     'presence.set', 'presence.clear', 'presence.list',
+    // 卡片源码（建卡改卡，`docs/plan/cloud-agent-contract.md` 第 9.4 节）：内容库里只许碰 `card-source` 这一类（下面按 kind 再判），写要读写权限
+    'content.get', 'content.list', 'content.put',
+    // 素材票据（导入素材、配音等产物入库）：只许 asset，要读写票据得成员本人有读写权限（下面再判）
+    'auth.ticket',
   ]),
 });
+
+/** 云端 Agent 代成员的连接能碰的内容库类别 */
+export const AGENT_CONTENT_KINDS = Object.freeze(['card-source']);
 
 /**
  * 以服务自己的身份开、只用来发布补渲计划的连接（principal 的 `purpose: 'publish'`，同上第 16 节 R2）：服务名 → 能发的消息。
@@ -59,7 +67,7 @@ export const SERVICE_PUBLISH_ALLOW = Object.freeze({
 });
 
 /** 只读成员的云端 Agent 连接不能发的（改项目的） */
-export const AGENT_WRITE_TYPES = Object.freeze(['project.op', 'project.upload']);
+export const AGENT_WRITE_TYPES = Object.freeze(['project.op', 'project.upload', 'content.put']);
 
 /** 带片段清单的计划任务的结果键标记（与 `../render-queue/messages.mjs` 的 `CLIPS_KEY_MARK`、`BACKFILL_KEY_MARK` 相同；本文件不引模块，照抄，单测对拍） */
 export const CLIP_LIST_KEY_MARKS = Object.freeze(['#clips:', '#backfill:']);
@@ -98,6 +106,13 @@ export function serviceGate(principal, type, msg) {
     // 代成员的连接必须是成员身份；只读的不能改项目
     if (principal.scope !== 'member') return 'forbidden';
     if (principal.access !== 'rw' && AGENT_WRITE_TYPES.includes(type)) return 'forbidden';
+    // 内容库只许卡片源码这一类（预渲染清单、事件详情、别的类别都碰不到）
+    if (type.startsWith('content.') && !AGENT_CONTENT_KINDS.includes(msg?.kind)) return 'forbidden';
+    // 票据只许素材票据（连接票据、委托都要不到：Agent 不能给自己换角色、续命）；读写票据要成员本人有读写权限
+    if (type === 'auth.ticket') {
+      if (msg?.kind !== 'asset') return 'forbidden';
+      if ((msg.access ?? 'r') !== 'r' && principal.access !== 'rw') return 'forbidden';
+    }
   }
   if (principal.service === 'render') {
     if (type === 'content.put' && !RENDER_CONTENT_KINDS.includes(msg?.kind)) return 'forbidden';
