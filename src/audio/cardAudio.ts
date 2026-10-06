@@ -6,6 +6,7 @@ import { cyrb53 } from "../render/cyrb53.mjs";
 import { evaluateCardAudio, type AudioSourceContext } from "../render/cards/audioSources";
 import { syncedUserCards, onSyncedUserCardsChanged } from "../kernel/registry";
 import { onlinePage } from "../online/pageFlag";
+import { ONLINE_CARD_AUDIO_BLOCKED, onlineCardAudioRunnable } from "../online/soundPolicy";
 import { projectCardGraph, cardJson } from "../kernel/cardGraph.mjs";
 import { clipHasEmbeddedAudio, cardAudioIdentity, resolveCardAudioRendition, assertAudiovisualCardKind } from "../kernel/cardAudioRendition.mjs";
 
@@ -106,6 +107,30 @@ export function cardAudioNodeOf(project: Pick<Project, "cardNodes">, clip: Pick<
   return isCardAudioNode(project, clip.nodeId) ? clip.nodeId : null;
 }
 
+/**
+ * 在线页面:这个音频节点连同它的整条上游,本页能不能合成 —— 全是放开了的卡(第一段:内置卡,`src/online/soundPolicy.ts`)、
+ * 一路上没有素材输入(在线页面取不到素材的采样块)。只回答「能不能跑」,轻重另判(`src/editor/io/onlineSoundJudge.ts`)。
+ */
+export function onlineCardAudioSynthesizable(project: unknown, nodeId: string): boolean {
+  const ready = hooks;
+  if (!ready || !nodeId) return false;
+  let nodes: ReturnType<typeof projectCardGraph>["nodes"];
+  try { nodes = projectCardGraph(project, ready.getCard).nodes; } catch { return false; }
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const seen = new Set<string>();
+  const ok = (id: string): boolean => {
+    if (seen.has(id)) return true;
+    seen.add(id);
+    const node = byId.get(id);
+    if (!node || node.adapter !== "card" || typeof node.cardId !== "string" || !onlineCardAudioRunnable(ready.getCard(node.cardId))) return false;
+    return Object.values(node.inputs ?? {}).every((ref) => {
+      const next = typeof ref === "string" ? ref : (ref as { nodeId?: unknown } | null)?.nodeId;
+      return typeof next === "string" && ok(next);
+    });
+  };
+  return ok(nodeId);
+}
+
 /** A generated node owns a video-backed clip's audio too; callers must mute that native media element. */
 export function shouldMuteNativeAudio(project: Project, clip: TrackClip, globallyMuted = false) {
   return globallyMuted || !!clip.audioMuted || !!cardAudioNodeOf(project, clip);
@@ -136,7 +161,7 @@ function isSameOriginOrBlob(url: string): boolean {
 export async function requestCardAudio(x: CardAudioRequest, signal?: AbortSignal, _fetchImpl: typeof fetch = fetch): Promise<CardAudioReply> {
   if (signal?.aborted) throw new DOMException("aborted", "AbortError");
   if (!Number.isSafeInteger(x.start) || !Number.isSafeInteger(x.count) || x.count < 1 || x.count > CARD_AUDIO_MAX_BLOCK_FRAMES) throw new CardAudioError("invalid-reply", `audio range must be 1…${CARD_AUDIO_MAX_BLOCK_FRAMES} samples`);
-  if (onlinePage()) throw new CardAudioError("request-failed", "在线浏览器模式不能执行卡片声音源码，请使用持久声音素材");
+  if (onlinePage() && !onlineCardAudioSynthesizable(x.project, x.nodeId)) throw new CardAudioError("request-failed", ONLINE_CARD_AUDIO_BLOCKED);
   const ready = requireCardAudioHooks();
   const owner = ownerOf(x.project), k = key(x), blocks = projectBlocks.get(owner) ?? new Map<string, Promise<CardAudioReply>>();
   projectBlocks.set(owner, blocks);
@@ -245,8 +270,8 @@ export function assertProjectCardAudio(project: Project) {
 /** 复用已有 audio() 采样管线，逐小块让出页面。只在明确生成动作运行，预览从不自动重生成。 */
 export async function renderEmbeddedCardWav(project: Project, clip: TrackClip, signal: AbortSignal,
   onProgress?: (done: number, total: number) => void): Promise<{ wav: Uint8Array; channels: number; frames: number }> {
-  if (onlinePage()) throw new Error("在线浏览器模式不能生成用户卡声音，请在本地生成后同步");
   const ready = requireCardAudioHooks(), nodeId = cardAudioNodeOf(project, clip);
+  if (onlinePage() && !(nodeId && onlineCardAudioSynthesizable(project, nodeId))) throw new Error(ONLINE_CARD_AUDIO_BLOCKED);
   if (!nodeId || !clipHasEmbeddedAudio(project, clip, ready.getCard)) throw new Error("这张卡没有内嵌声音");
   assertAudiovisualCardKind(ready.getCard(clip.cardId));
   cardAudioIdentity(project, clip, ready);
