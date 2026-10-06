@@ -138,6 +138,7 @@ const scrub = (text) => String(text ?? '').replace(/https?:\/\/[^\s"'<>)]+/g, '[
  * @param {object} [o.egress] 出网闸的选项(`egress.mjs` 的 `createEgressGate`;`testAllow` 只给测试与探针)
  * @param {() => Promise<object | null>} [o.voiceConfig] 托管方的配音配置;不给就读数据目录里的 `config/voice.json` 与 `config/keys/voice.key`
  * @param {object} [o.workspaceLimits] 工作区的总量上限(`workspace.mjs`)
+ * @param {object | null} [o.collect] 节点上的采集工具(`hosted-collect.mjs` 的 `readCollectConfig`);不给时采集的工具回「这台云节点没有装采集工具」
  */
 export function createHostedAgentService({
   root,
@@ -159,6 +160,7 @@ export function createHostedAgentService({
   workspaceLimits = {},
   toolLimits = {},
   toolFetch = undefined,
+  collect = null,
   log = () => {},
   now = () => Date.now(),
 } = {}) {
@@ -189,6 +191,8 @@ export function createHostedAgentService({
     // 花钱的外部调用(配音)与模型请求记进同一份用量流水
     recordService: (row) => { try { gate.record(row); } catch (err) { say('agent.usage.service-failed', { message: String(err?.message ?? err).slice(0, 120) }); } },
     limits: toolLimits,
+    // 网页采集:节点上装没装由部署决定(`hosted-collect.mjs`);没有时工具回明确的原因
+    collect,
     ...(toolFetch ? { fetchImpl: toolFetch } : {}),
     log: say,
   });
@@ -717,6 +721,9 @@ export function createHostedAgentService({
     _workspaces: workspaces,
     /** 这个进程配没配看画面的口子(状态口报它) */
     look: !!look,
+    /** 这台节点装没装采集工具;用的是不是测试替身(生产必须是 false) */
+    collect: hostedTools.collectInstalled === true,
+    collectTestRunner: collect?.testRunner === true,
     /** 出网闸的测试例外开没开(状态口报它;生产必须是 false) */
     egressTestAllow: egress.testAllowActive,
 

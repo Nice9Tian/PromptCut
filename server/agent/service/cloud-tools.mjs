@@ -25,7 +25,6 @@ const I = 'initiator';
 const P = 'pending';
 
 const NEED_PY = (what) => `${what}要节点上的 Python 运行环境与模型权重,并把页面里的作业表搬到服务端;这一版还没接上`;
-const NEED_COLLECT = '网页采集要节点上的下载器(Python 与 yt-dlp、ffmpeg),并让它只经出网闸的代理出网;这一版还没接上';
 const NEED_WEB = '网页接管要节点上的浏览器,并让它只经出网闸的代理出网、按对话隔离用户数据目录;这一版还没接上';
 
 /** 工具名 → { mode, why? }。按 `server/tools/` 的分组列,128 个 */
@@ -78,9 +77,10 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
   // vision(2):向同机的渲染服务要一帧(契约第 9.8 节)
   see_frames: { mode: R, look: true }, get_gif: { mode: R, look: true },
   // collect(9)
-  collect_status: { mode: P, why: NEED_COLLECT }, collect_install: { mode: P, why: NEED_COLLECT }, collect_search: { mode: P, why: NEED_COLLECT },
-  collect_probe: { mode: P, why: NEED_COLLECT }, collect_download: { mode: P, why: NEED_COLLECT }, collect_job: { mode: P, why: NEED_COLLECT },
-  collect_logout: { mode: P, why: NEED_COLLECT },
+  // 网页采集:下载器只经工作区的受限子进程起、只经出网闸的代理出网(`hosted-collect.mjs`;契约第 9.4d 节)。节点上没装时工具回明确的原因
+  collect_status: { mode: H }, collect_install: { mode: H }, collect_search: { mode: H },
+  collect_probe: { mode: H }, collect_download: { mode: H }, collect_job: { mode: H },
+  collect_logout: { mode: H },
   collect_login: { mode: I, what: '登录窗口(要用户自己扫码或输口令)' }, collect_login_check: { mode: I, what: '登录窗口' },
   // browser(8)
   web_open: { mode: P, why: NEED_WEB }, web_view: { mode: P, why: NEED_WEB }, web_click: { mode: P, why: NEED_WEB }, web_type: { mode: P, why: NEED_WEB },
@@ -109,7 +109,7 @@ export const CLOUD_LOOK_TOOLS = Object.freeze(new Set(Object.entries(CLOUD_TOOL_
 export const CLOUD_RENDER_TOOLS = Object.freeze(new Set(Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.render === true).map(([n]) => n)));
 
 /** 单次调用要等渲染服务或外部下载的:时限按看画面的那一档(180 秒),不按一般工具的 60 秒 */
-export const CLOUD_SLOW_TOOLS = Object.freeze(new Set(['render_card_audio']));
+export const CLOUD_SLOW_TOOLS = Object.freeze(new Set(['render_card_audio', 'collect_search']));
 
 /** 这台节点没有配看画面的口子时交给模型的工具(少掉看画面的四个与卡片声音的两个) */
 export const CLOUD_OPEN_TOOLS_NO_LOOK = Object.freeze(new Set([...CLOUD_OPEN_TOOLS].filter((n) => !CLOUD_LOOK_TOOLS.has(n) && !CLOUD_RENDER_TOOLS.has(n))));
@@ -220,9 +220,11 @@ const CLOUD_SYSTEM_NOTE_LINES = [
   '',
   '- **用户可能已经离开。** 要用到他界面的工具(选区、播放头、播放与暂停、网页接管、扫码登录、开子 Agent 页签)在他不在线时会回「发起方不在线」:不要等,按项目内容继续,在进度汇报里说明哪一步没用上页面状态。',
   LOOK_LINE,
-  '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、自定义测量(measure_audio_js)、网页采集与网页操作。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
+  '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、自定义测量(measure_audio_js)、网页操作(web_*)。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
   '- **素材:** 附件在这个对话的工作目录里,地址形如 `work:attachments/<文件名>`,用 `import_media` 传这个地址装进素材库;网上的文件直接给 `import_media` 传 http(s) 地址。素材库是空的也可以只用卡片做片子,不必为了「有素材」去找素材。',
   '- **卡片:** 建卡改卡照常用(`card_authoring_guide`、`get_card_source`、`create_card`、`edit_card`、`apply_card`)。新卡存进这个项目的卡片库,所有成员都会收到;写卡时 `id`、`name`、`defaults`、`controls` 要写成字面量。卡片里**不能直接引用外链**的图片、字体、脚本(渲染节点与在线舞台都不出网,取不到):要用的图片先 `import_media` 装进素材库,再用它的 cardUrl。建新卡仍是最后手段:`list_cards` 里有合适的就用现成的调参数。',
+  '- **网页采集:** `collect_*` 经托管方的出口出网,不带任何站点的登录态(按未登录的画质);这台节点没装采集工具时 `collect_status` 会明说,云端不能由你来装(`collect_install` 不装东西)。下载物直接进这个项目的素材库。',
+  '- **声音:** `sound_generate`、`measure_audio` 照常用;卡片的声音(`render_card_audio`)由云节点的渲染服务生成,带自定义卡片的项目第一次要等十来秒。',
   '- **配音:** `voice_generate` 用的是托管方的配音服务,会产生费用,按用户的意思用,不要为了试听反复生成。',
 ];
 

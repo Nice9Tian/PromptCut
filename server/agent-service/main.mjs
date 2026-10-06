@@ -20,6 +20,10 @@
  *                                  (凭代成员的素材票据,权限不超过成员本人)。不设时这些工具回「没有配置素材服务」
  *   PROMPTCUT_AGENT_LOOK_URL       同机渲染服务管理进程的诊断与代理口(回环,如 http://127.0.0.1:5399)。云端 Agent 看画面(`see_frames` 等)时凭服务私钥的
  *                                  签名向它要一帧(`look-client.mjs`;契约第 9.8 节)。不设时看画面的工具不交给模型,系统提示词写「看不了画面」
+ *   PROMPTCUT_AGENT_COLLECT_PYTHON  装了 yt-dlp 的 Python 解释器(绝对路径)。配了网页采集才可用;采集的子进程只经出网闸的代理出网。
+ *                                  没配时采集的工具回「这台云节点没有装采集工具」(模型不能触发往节点上装东西)
+ *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS 只给探针:把 `-m promptcut_collect` 换成一个替身脚本。生产不设;设了日志里有 `agent.collect.test-runner`,
+ *                                  `/healthz` 的 `collectTestRunner` 为 true
  *   PROMPTCUT_AGENT_EGRESS_TEST_ALLOW
  *                                  **只给探针与演练**:逗号分隔的「IP:端口」,出网闸对它们放行(用来在本机回环上起「测试专用外部地址」)。
  *                                  生产不设;设了会在日志里打 `agent.egress.test-allow`,`/healthz` 的 `egressTestAllow` 为 true
@@ -55,6 +59,7 @@ import { createHostedWiring } from './hosted-wiring.mjs';
 import { createServiceClient } from '../auth/service-client.mjs';
 import { readServiceKeyFile } from '../auth/service-identity.mjs';
 import { parseTestAllow } from '../agent/service/egress.mjs';
+import { readCollectConfig } from '../agent/service/hosted-collect.mjs';
 import { readDesktopModelConfig } from './rehearsal-model.mjs';
 import { createLookClient, parseLookUrl } from './look-client.mjs';
 
@@ -103,6 +108,7 @@ export async function startAgentService({
   voiceConfig,
   workspaceLimits,
   toolLimits,
+  collect = null,
   root = ROOT,
   version = 'dev',
   codeVersion = null,
@@ -153,6 +159,7 @@ export async function startAgentService({
     ...(voiceConfig ? { voiceConfig } : {}),
     ...(workspaceLimits ? { workspaceLimits } : {}),
     ...(toolLimits ? { toolLimits } : {}),
+    ...(collect ? { collect } : {}),
     log,
   });
   const api = createAgentHttp({ service, authenticate, version, codeVersion, log });
@@ -218,6 +225,10 @@ async function main() {
   const lookUrl = env.PROMPTCUT_AGENT_LOOK_URL ? parseLookUrl(env.PROMPTCUT_AGENT_LOOK_URL) : null;
   if (env.PROMPTCUT_AGENT_LOOK_URL && !lookUrl) return fail('look-url', { detail: 'PROMPTCUT_AGENT_LOOK_URL 要是同机渲染服务的回环地址,如 http://127.0.0.1:5399' });
   const testAllow = parseTestAllow(env.PROMPTCUT_AGENT_EGRESS_TEST_ALLOW);
+  // 网页采集:节点上装没装由部署决定;没配这个变量时采集的工具回「这台云节点没有装采集工具」
+  const collect = readCollectConfig(env, { root: ROOT });
+  if (collect?.error) return fail('collect', { detail: collect.error });
+  if (collect?.testRunner) line('agent.collect.test-runner', {});
   // 只给本机演练:用这台电脑上桌面版已配好的 API 直连(只读;日志里只有厂商与模型名)
   const rehearsal = env.PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL === '1';
   if (rehearsal) {
@@ -256,6 +267,7 @@ async function main() {
       // 看画面:凭这把服务私钥的签名向同机的渲染服务要一帧
       ...(lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
+      ...(collect ? { collect } : {}),
       ...(rehearsal ? { modelConfig: () => readDesktopModelConfig() } : {}),
       version,
       codeVersion: () => wiring.publisher.codeVersion(),
@@ -271,7 +283,7 @@ async function main() {
   line('agent.ready', {
     url: started.url, auth: 'service-identity', service: key.service, kid: key.kid, version,
     ...(origin ? { publicOrigin: origin } : {}),
-    assetService: !!assetBase, look: !!lookUrl, egressTestAllow: testAllow.length > 0,
+    assetService: !!assetBase, look: !!lookUrl, egressTestAllow: testAllow.length > 0, collect: !!collect, collectTestRunner: collect?.testRunner === true,
     heapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
   });
   const stop = () => {

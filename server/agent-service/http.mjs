@@ -144,7 +144,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         // `codeVersion`:这份检出的代码版本(同机的渲染服务拿它比对三者是不是同一个提交);不含任何项目信息
         const code = typeof codeVersion === 'function' ? codeVersion() : codeVersion;
         // `egressTestAllow`:出网闸的测试例外开没开。生产必须是 false,部署后的核对看它(契约第 9.6 节)
-        return sendJson(res, 200, { ok: true, version, ...(code ? { codeVersion: code } : {}), egressTestAllow: service.egressTestAllow === true, look: service.look === true }, CORS);
+        return sendJson(res, 200, { ok: true, version, ...(code ? { codeVersion: code } : {}), egressTestAllow: service.egressTestAllow === true, look: service.look === true, collect: service.collect === true, collectTestRunner: service.collectTestRunner === true }, CORS);
       }
       if (!pathname.startsWith('/v1/')) return sendJson(res, 404, { ok: false, code: 'not-found', message: 'not found' }, CORS);
 

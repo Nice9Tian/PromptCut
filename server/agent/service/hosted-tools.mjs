@@ -25,6 +25,7 @@ import { createAssetClient } from '../../asset-store/client.mjs';
 import { createSlot, createSoundTools, newSoundState } from './hosted-sound.mjs';
 import { createAudioTools } from './hosted-audio.mjs';
 import { createCardAudioTools, newCardAudioState } from './hosted-card-audio.mjs';
+import { createCollect, newCollectState } from './hosted-collect.mjs';
 
 const SERVER_DIR = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -202,6 +203,7 @@ export async function readHostedVoiceConfig(dataDir) {
  * @param {string | null} o.assetBase 同机素材服务的地址(`http://127.0.0.1:<端口>`);没配时导入素材、配音入库做不了
  * @param {() => Promise<object | null>} o.voiceConfig 托管方的配音配置
  * @param {(row: object) => void} o.recordService 记一行外部服务的用量
+ * @param {object | null} [o.collect] 节点上的采集工具(`hosted-collect.mjs` 的 `readCollectConfig`;部署决定,没有就是 null)
  */
 export function createHostedTools({
   root,
@@ -211,12 +213,16 @@ export function createHostedTools({
   assetBase = null,
   voiceConfig = async () => null,
   recordService = () => {},
+  collect: collectConfig = null,
   fetchImpl = globalThis.fetch,
   limits: limitsIn = {},
   log = () => {},
 } = {}) {
   const limits = { ...HOSTED_TOOL_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
+
+  /** 网页采集:进程级的那一份(同时在跑的下载数是进程级的) */
+  const collector = createCollect({ config: collectConfig, egress, limits: limitsIn.collect ?? {}, log });
 
   /** 音效合成在整个进程里同时只跑一个 */
   const soundSlot = createSlot();
@@ -763,7 +769,28 @@ export function createHostedTools({
       read: (apply) => exec().mutate('measure_audio', agentKey, {}, apply),
     });
 
+    /* ---------- 网页采集(`hosted-collect.mjs`):外部程序只经工作区的受限子进程起、只经出网闸的代理出网 ---------- */
+
+    const collect = collector.forConversation({
+      state: c.shared.collect, workspace, ensureCanWrite, record: usageRow, ToolError: HostedToolError, conversationId,
+      // 下载物进素材库:与 import_media 同一条路(成员本人的素材票据、在项目副本上登记;视频照桌面版放上时间轴)
+      importFile: async (rel, name) => {
+        const kind = kindOfName(rel) ?? kindOfName(name);
+        if (!kind) throw new HostedToolError(`无法识别文件「${name}」的类型`);
+        const ps = c.pageState();
+        const { media, clip } = await registerMedia({}, { rel, name, kind, place: kind === 'video' ? (ps.online ? { start: ps.t } : { atEnd: true }) : null });
+        return { mediaId: media.id, kind, ...(clip ? { clipId: clip.id } : {}), duration: media.duration, width: media.width, height: media.height, bytes: media.size };
+      },
+    });
+
     const TOOLS = {
+      collect_status: collect.collect_status,
+      collect_install: collect.collect_install,
+      collect_search: collect.collect_search,
+      collect_probe: collect.collect_probe,
+      collect_download: collect.collect_download,
+      collect_job: collect.collect_job,
+      collect_logout: collect.collect_logout,
       measure_audio: audio.measure_audio,
       render_card_audio: cardAudio.render_card_audio,
       cancel_card_audio: cardAudio.cancel_card_audio,
@@ -794,7 +821,9 @@ export function createHostedTools({
   return {
     forConversation,
     /** 一个实例(项目 × 成员)里各对话共用的状态 */
-    newSharedState: () => ({ cards: { at: -Infinity, items: new Map(), parsed: [], pending: null }, sound: newSoundState(), cardAudio: newCardAudioState() }),
+    newSharedState: () => ({ cards: { at: -Infinity, items: new Map(), parsed: [], pending: null }, sound: newSoundState(), cardAudio: newCardAudioState(), collect: newCollectState() }),
+    /** 节点上装没装采集工具(状态口报它) */
+    collectInstalled: collector.available,
     /** 测试用:把 ffprobe 的缓存清掉 */
     _resetFfprobe() { ffprobeCache = undefined; },
   };
