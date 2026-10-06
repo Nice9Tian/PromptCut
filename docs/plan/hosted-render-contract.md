@@ -220,7 +220,16 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
   - 内存到节流线：内核对这一组加压，渲染变慢；到硬上限：内核在这一组里杀进程（通常是 Chrome），工作进程退出，管理进程记 `worker.exit { reason: 'oom' }`，手里的认领由队列按断线规则收回，管理进程按退避（1 s 起、翻倍、封顶 60 s）重起；10 分钟内第 3 次被杀，并发降到 1 并打 `render.degraded`；
   - CPU：被配额限住，只是慢；任务超过队列的卡死时限由队列收回（现有规则）；
   - 文档服务、素材服务不在这个 slice 里，不受上面任何一条影响。
-- **没有 systemd 时必须能降级**〔裁：主会话 2026-10-06〕（Windows 上的本机演练；没有 systemd 的 Linux 容器——部署前的演练就在这样一台容器里：root、4 核 15 GiB）：没有 cgroup 上限。自检报一条 `selfcheck.warn { reason: 'no-cgroup' }`「无 cgroup 上限，只靠进程内看护」并**继续**，不是退出 78。进程内的手段照常生效：并发上限、背压、管理进程自己量工作进程整棵树的常驻内存（每 5 s，超过硬上限就结束这棵树——表现与上面「到硬上限」一致）、降优先级（`nice`）。只有新节点（Ubuntu 22.04、有 systemd）上才用 slice。
+- **没有 systemd 时必须能降级**〔裁：主会话 2026-10-06〕（Windows 上的本机演练；没有 systemd 的 Linux 容器——部署前的演练就在这样一台容器里：root、4 核 15 GiB）：没有 cgroup 上限。自检报一条 `selfcheck.warn { reason: 'no-cgroup' }`「无 cgroup 上限，只靠进程内看护」并**继续**，不是退出 78。进程内的手段照常生效：并发上限、背压、管理进程自己量工作进程整棵树**实际占的物理内存**（每 5 s，口径与它和 cgroup 的关系见下一条；超过硬上限就结束这棵树——表现与上面「到硬上限」一致）、降优先级（`nice`）。只有新节点（Ubuntu 22.04、有 systemd）上才用 slice。
+- **内存怎么量、谁先动手**（2026-10-07，据 Linux 容器上的演练修正；三级）：
+  - **只用不重复的口径，不累加工作集。** Chrome 是多进程，每个进程的 VmRSS / WorkingSetSize 都含着共享的库、字体、GPU 与共享内存页，按进程树累加就把同一页算了好几遍：Linux 容器（4 核 15 GiB）上常驻那棵树空着就量出 6.7 GB（同一时刻系统的 `MemAvailable` 约 14 GB），加上隔离工作进程超过 6 GB 的上限，隔离工作进程每次刚就绪就被误杀、一个任务也认领不到；Windows 上两棵树合计量到约 6.9 GB（改后量到约 3.3～3.6 GB）。口径由准到粗，用到的最粗的一级写进诊断（`readings.memoryMethods`）与超限日志：
+    - Linux，进程在自己独立的 cgroup 里（`systemd-run --scope` 起的那个 scope，不是管理进程自己所在的 cgroup）：读那个 cgroup 的 `memory.current` 减去 `memory.stat` 的 `inactive_file`（`cgroup`；文件缓存里不活跃的那部分内核会先回收、不会因它杀进程，所以不算占用）；
+    - Linux，没有独立 cgroup（容器、`nice` 分支、读不到 `memory.current`）：逐进程累加 `/proc/<pid>/smaps_rollup` 的 `Pss`（`pss`，共享页按共享的进程数均摊）；读不到（内核早于 4.14、无权读）退到 `/proc/<pid>/status` 的 `RssAnon + RssShmem`（`rss-anon-shmem`，不含文件映射的共享页）；僵尸进程算 0、读的当口进程没了就不计；
+    - Windows：逐进程累加私有工作集（`Win32_PerfRawData_PerfProc_Process.WorkingSetPrivate`，`private-ws`）；性能计数器里没有的进程退到 `Win32_Process.PrivatePageCount`（私有已提交，只会偏大、不重复，`private-bytes`）；
+    - **取数失败**（有进程读不了、查询失败或超时、树根已经没了、不认识的平台）：这一棵回 `bytes: null` 与原因，**不当成 0、也不当成超限**，这一拍整个不判（连另一棵量得出的也不替它凑数），记一条 `render.memory-unmeasured`（连着量不了时每分钟最多一条）。
+  - **两棵树合起来比**：上限管常驻与隔离两棵树合起来的（第 4 节上面的表）。合起来超限：隔离工作进程在跑就先结束它（跑的是项目带来的代码），常驻的留着；只有常驻的在跑才结束常驻的；下一拍常驻的单独仍超，再结束它。刚结束过的那一棵在 30 s 内不再判（它还在退出、读数是旧的：不记第二次 `oom`、不连杀）。`render.memory-exceeded` 带 `workerRss`（合计）、`isoRss`、`max`、`limit`、`victim`、`methods`。
+  - **有 cgroup 硬上限时谁先动手**：内核先。`MemoryMax` 到顶时内核先回收文件缓存，回收不下来才在这个 cgroup 里杀进程，所以内核动手的那一拍进程内读到的占用不会越过上限。进程内看护只兜底：任一棵的口径是 `cgroup` 时，进程内的上限放宽 5%（6 GB 的上限就是 6.3 GB），内核动手的那一拍读数越不过这条线，不会双杀；越过了说明内核没有执行（slice 没装好、`MemoryMax` 没生效，或两个 scope 各自没到顶而合起来超了——scope 上各带一份 `MemoryMax`，合并的上限靠 slice），这时进程内结束隔离的那一棵或常驻的。没有独立 cgroup（容器、本机演练）时没有内核那一层，上限就是 `max` 本身，进程内看护是唯一的硬上限。内核杀的那种退出管理进程仍只看到信号（见实现记录第 8 条），不计入「三次降并发」。
+
 - **有成员在线的项目优先于没人在线的项目**〔裁：主会话 2026-10-06〕：没人在线的项目（靠 Agent 的连接或声明才 `active`）也占渲染并发，并发、背压的数字不变，但认领时先认 `members` 为真的项目的任务，都没有了才认没人在线的项目的；同一类里照队列现有的先后（`normal` 先于 `backfill`）。Agent 服务发的计划用补渲那一档（第 5a 节），本来就排在页面判重发的任务之后。
 
 ---
@@ -628,6 +637,7 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 | HR16 | `createRenderHost` 运行中加项目、减项目：减的时候放回认领；并发总闸与串行通道的规则不变（RH 系列不退步） |
 | HR17 | 管理进程的项目维护：清单变化 → 连接增减；16 个上限与排队；控制连接断开时已有连接不动；重连对账 |
 | HR18 | 背压与内存看护：注入读数 → 暂停与恢复认领；超过硬上限 → 结束工作进程、退避重起、三次后并发降为 1 |
+| HR33～HR37 | 内存量法与判定（`hosted-render-memory.test.mjs`）：Linux 按进程累加 Pss 不重复计共享页、读不到时的逐级退路；独立 cgroup 的 `memory.current` 减 `inactive_file`、两棵树同一个 cgroup 只记一次；Windows 的私有工作集与退路；量不了不当成 0 也不当成超限；合起来超限先结束隔离的那一棵、冷却内不再判、有 cgroup 时放宽 5%；本机真量一次 |
 | HR19 | 自检：每个 `reason` 各一例（注入找不到 Chrome、起不来、没有中文字体、没有 ffmpeg、私钥权限过宽等），退出码 78；全过时退出码 0 |
 | HR20 | Chrome 参数：root、容器标记、环境变量三种情况自动带 `--no-sandbox`，普通用户不带（注入 `getuid` 与文件探测） |
 | HR21 | 容量：`sv` 写入记账、成员写入不记；到上限 507 且只拦服务；删项目清只归它的块、几个项目共有的块不清；按最久没人在线淘汰、24 小时内在线的不清 |
@@ -832,4 +842,25 @@ D 用户已定。实现阶段照此落；第二段（决定 C）会改 `product/
 - 非 root 的服务用户、只读的发布目录、0700 的目录这一层纵深只在新节点上有，本机演练没有覆盖；Linux 上软件 WebGL 跑图卡的画面没有验。
 - 隔离工作进程的冷启动（Vite 的依赖缓存每一轮都清）本机约 7～11 s；这是「整个数据目录清空」的代价，没有另做缓存。
 - 并发总数降到 1 之后隔离工作进程与常驻工作进程之间没有轮转（第 7.5 节）。
-- Windows 上管理进程自己量的进程树内存把共享页重复计入，两棵工作进程树空着就量出 7 GB 上下：本机演练把内存上限放宽到 32G（`--memory-max`），真实的上限留给新节点的 cgroup。
+- ~~Windows 上管理进程自己量的进程树内存把共享页重复计入……本机演练把内存上限放宽到 32G~~：已修（2026-10-07），量法改成不重复的口径、探针改回生产的 6G / 5G，见下一节「内存看护量法的修正」。
+
+### 内存看护量法的修正（2026-10-07，`claude/render-service`）
+
+**缺陷。** 在没有 systemd 的 Linux 容器（4 核、root、15 GiB，chrome-headless-shell 152）上演练整套时，`usercard` 一步里隔离工作进程每次刚就绪就被 `render.memory-exceeded`（`victim: isolated`、`reason: oom`）结束，5 次都是这样、一个任务也没认领到。读数：常驻树空着 `workerRss` 6.68～6.83 GB、隔离树 `isoRss` 2.6～3.7 GB，上限 `max = 6442450944`，而同一时刻 `MemAvailable` 约 14 GB。Windows 上同样偏高（两棵树合计约 6.9 GB），上一轮靠探针放宽到 32G 绕过，没有查原因。
+
+**原因。** 管理进程按进程树累加每个进程的工作集（Linux 读 `/proc/<pid>/stat` 的 rss，Windows 读 `WorkingSetSize`）。Chrome 多进程，每个进程的工作集都含着共享的库、字体、GPU 与共享内存页，累加把同一页算了好几遍。有 systemd 时硬上限由 cgroup 执行，但管理进程里「自己量、超了就杀」的看护照样在跑，量法不对就会一直误杀隔离工作进程。
+
+**改法**（`server/hosted-render/limits.mjs`，口径与逐级退路写在第 4 节「内存怎么量、谁先动手」，这里不重复）：`measureTrees`（Linux：独立 cgroup 读 `memory.current` 减 `inactive_file`，否则 `Pss`，再退 `RssAnon + RssShmem`；Windows：私有工作集，再退私有已提交；一次扫一遍进程表，Windows 上两棵树只起一次 PowerShell，原来每棵一次）、`createMemoryWatch`（判定：量不了不判、合起来比、先结束隔离的、冷却 30 s、有 cgroup 时放宽 5%）；`main.mjs` 的 `sample()` 接上，诊断的 `readings` 多 `residentRss`、`memoryMethods`，超限日志多 `limit`、`victim`、`methods`，量不了记 `render.memory-unmeasured`。探针：`hosted-render-probe.mjs`、`hosted-render-isolation-probe.mjs` 不再放宽内存上限（缺省用生产的 6G / 5G）；整套演练的 `limits`、`load` 两步等待时限改按 `work` 步骤实测的单任务耗时定（`taskBudgetMs`：任务数 × 单任务耗时 × 2，不低于原来的 300 s，只定等多久、不改判据）。
+
+**本机读数的修前修后**（Windows，20 核 32 GB，整套演练在生产上限 6G 下，轮询管理进程的状态口，同一时刻对同两棵树各量一遍；系统可用内存的下降量取自 `os.freemem()` 相对启动前，含托管组合、管理进程与探针自己，本机上还有别的会话在跑，只作量级参考）：
+
+| 时刻 | 旧口径（累加工作集） | 新口径（私有工作集） | 系统可用内存下降 |
+|---|---|---|---|
+| 常驻树空闲（刚连上、什么都没渲） | 3.3～3.9 GB | 1.8～2.1 GB | 2.2～2.8 GB |
+| 隔离工作进程在渲（两棵合计） | 6.0～7.4 GB（其中隔离树 3.4～4.3） | 3.3～3.9 GB（其中隔离树 1.6～2.2） | 5.4～6.6 GB（偶发尖峰 7.5） |
+
+旧口径在两棵树都在渲时多次越过 6 GB，不放宽上限就会和 Linux 上一样误杀隔离工作进程；新口径整套演练里最高 3.87 GB，`render.memory-exceeded` 只出现在 `limits` 一步自己调到 150M 的那三次。Windows 的私有工作集不含共享内存段（GPU 的共享内存等），是真实占用的下限；系统可用内存的下降量含别的进程，是上限；真值在两者之间。Linux 上 `Pss` 把共享页按份额算进来、独立 cgroup 的 `memory.current` 是内核的账，没有这个偏低的问题。
+
+**验收**（本机，Windows）：`npx tsc -b --force` 零错误；`npm test` 4533 项、4532 通过、1 跳过、零失败（新增单测 HR33～HR37 共 9 个用例，`server/test/hosted-render-memory.test.mjs`，Linux 一支用夹具文件）；`hosted-render-probe` 十步全过（上限用生产缺省 6G，`limits` 一步仍自己调到 150M 演练「内存超限 3 次后降级」）；`hosted-render-isolation-probe` 37 条断言全过（同样 6G）。
+
+**没验的、留给 Linux 容器与新节点复核**：Linux 一支（`smaps_rollup`、`memory.current`）本机只用夹具文件验过格式与逻辑，没有在真的 `/proc` 上跑；要在那台没有 systemd 的容器上重跑整套（看 `usercard` 一步隔离工作进程不再被误杀、`readings.memoryMethods` 里是 `pss`），在新节点上看独立 cgroup 的那一支（`memoryMethods` 里是 `cgroup`、`render.memory-exceeded` 平时不出现）。另一个要看的数：容器上常驻树空闲时 `Pss` 合计是多少——如果不重复的口径下常驻加隔离仍接近 6 GB，那 6 GB 的整组上限本身对「常驻加隔离」就偏紧，要另议（那是上限的取值问题，不是量法问题）。

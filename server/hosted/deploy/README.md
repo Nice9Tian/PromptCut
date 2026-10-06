@@ -26,7 +26,7 @@
 | 文件 | 放到 | 说明 |
 |---|---|---|
 | `pm2-promptcut-render.config.cjs` | `<部署目录>/pm2.config.cjs`（在仓库外） | PM2 配置：应用名 `promptcut-render`，入口 `server/hosted-render/main.mjs`，cwd 是 `<部署目录>/current`，`autorestart`、`kill_timeout` 20 s、`max_memory_restart` 只量管理进程（300 MB）、`stop_exit_codes: [78]`（自检不过就停着，不反复拉起） |
-| `promptcut-render.slice` | `/etc/systemd/system/promptcut-render.slice`，再 `systemctl daemon-reload` | 渲染的全部进程所在的资源组：`MemoryHigh` / `MemoryMax`、`CPUQuota`、`CPUWeight=20`、`IOWeight=20`、`TasksMax=4096`。管理进程用 `systemd-run --scope --slice=promptcut-render.slice` 起工作进程，Chrome 等子进程都落在这一组里 |
+| `promptcut-render.slice` | `/etc/systemd/system/promptcut-render.slice`，再 `systemctl daemon-reload` | 渲染的全部进程所在的资源组：`MemoryHigh` / `MemoryMax`、`CPUQuota`、`CPUWeight=20`、`IOWeight=20`、`TasksMax=4096`。管理进程用 `systemd-run --scope --slice=promptcut-render.slice` 起工作进程，Chrome 等子进程都落在这一组里。**内存上限由内核执行**（到 `MemoryMax` 先回收文件缓存、回收不下来才在这一组里杀进程）；管理进程自己量内存的看护在这里只兜底，量的是 cgroup 的 `memory.current` 减 `inactive_file`，上限放宽 5%（6G 即 6.3G），内核先动手、不会双杀 |
 
 占位符（模板里写成两层花括号括起来的大写名字）：
 
@@ -102,7 +102,7 @@ pm2 resurrect && pm2 list                     # 期望 list 里有 promptcut-ren
 
 ### 没有 systemd 时
 
-容器等没有 systemd 的环境：`install-render` 检测到没有 `/run/systemd/system` 就跳过 slice 并打一行说明；`deploy-render` 同样不装 `pm2-<用户>.service`。渲染服务的管理进程自检报 `selfcheck.warn { reason: 'no-cgroup' }`（无 cgroup 上限，只靠进程内看护）并**继续**，不是退出：并发上限、背压、管理进程自己每 5 秒量工作进程整棵树的常驻内存（超过硬上限就结束这棵树）、降优先级照常生效。只有在有 systemd 的节点（Ubuntu 22.04）上才用 slice。PM2 的 `stop_exit_codes` 要较新的 PM2 才认；不认时自检不过会被反复拉起，用 `pm2 stop promptcut-render` 手动停，或改用带退避的重启（`exp_backoff_restart_delay`）。
+容器等没有 systemd 的环境：`install-render` 检测到没有 `/run/systemd/system` 就跳过 slice 并打一行说明；`deploy-render` 同样不装 `pm2-<用户>.service`。渲染服务的管理进程自检报 `selfcheck.warn { reason: 'no-cgroup' }`（无 cgroup 上限，只靠进程内看护）并**继续**，不是退出：并发上限、背压、管理进程自己每 5 秒量工作进程整棵树实际占的物理内存（逐进程累加 `smaps_rollup` 的 `Pss`，共享页只算一份；不是累加 VmRSS——Chrome 多进程的共享页会被重复计入，空着的常驻树就量出 6 GB 多而误杀；超过硬上限就结束这棵树，先结束隔离工作进程；量不了的那一拍不判，记 `render.memory-unmeasured`）、降优先级照常生效。只有在有 systemd 的节点（Ubuntu 22.04）上才用 slice。PM2 的 `stop_exit_codes` 要较新的 PM2 才认；不认时自检不过会被反复拉起，用 `pm2 stop promptcut-render` 手动停，或改用带退避的重启（`exp_backoff_restart_delay`）。
 
 ### 容量
 
