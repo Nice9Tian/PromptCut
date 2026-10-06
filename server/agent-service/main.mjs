@@ -16,6 +16,11 @@
  *
  * 失败即关(打一行 `config.error { reason }`,退出码 1):`data-dir`、`doc-url`、`bind-public`、`listen`。
  *
+ * 数据目录里(契约第 2.2 节):`config/ai.json` 与 `config/keys/custom.key`(模型配置与 Key 的密文,`set-key.mjs` 写)、
+ * `config/limits.json`(各项目额度与节点并发,`admin.mjs quota` 写,改了即生效)、`tenants/`(对话)、`usage/`(用量流水)。
+ * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发补渲。
+ * 收到 SIGTERM / SIGINT:进行中的每一轮记「中断」后停下,状态落盘,5 秒内退出。
+ *
  * 鉴权:成员的委托票据与托管方的服务身份由后面的块接上(契约第 4 节)。接上之前命令行入口没有 `credentials`,
  * 除 `/healthz` 外一律 401 —— 进程起得来、不接任何对话。测试经 `startAgentService({ authenticate, credentials })` 给替身。
  * 本文件不引用 `src/`。
@@ -25,6 +30,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHostedAgentService } from '../agent/service/create-agent-service.mjs';
+import { readModelConfig } from '../agent/service/model-config.mjs';
 import { createAgentHttp } from './http.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
@@ -38,11 +44,6 @@ export class AgentConfigError extends Error {
 
 const isLoopbackHost = (h) => h === 'localhost' || h === '::1' || /^127\./.test(h);
 
-/** 缺省的模型配置:数据目录或 PROMPTCUT_AI_CONFIG 指的那份 ai.json(Key 在同目录 keys/ 下,现有封装) */
-async function defaultModelConfig() {
-  const mod = await import(new URL('../ai-config.mjs', import.meta.url).href);
-  return mod.readConfig()?.api ?? {};
-}
 
 /**
  * 起服务。回 `{ url, port, service, close }`。
@@ -53,7 +54,9 @@ async function defaultModelConfig() {
  * @param {number} [o.port] 0 = 随机(测试)
  * @param {(req) => object | null} [o.authenticate] 请求 → 身份;不给时一律 401
  * @param {{ protocolsFor(identity, n): string[] | Promise<string[]> }} [o.credentials] 连文档服务的凭证;不给时任何对话都起不来
- * @param {() => object | Promise<object>} [o.modelConfig]
+ * @param {() => object | Promise<object>} [o.modelConfig] 不给就读数据目录里的模型配置
+ * @param {object} [o.publisher] 补渲的发布通道(接口位,见 `server/agent/service/render-request.mjs`)
+ * @param {object} [o.projectState] 各项目的开关(接口位,见 `create-agent-service.mjs`)
  */
 export async function startAgentService({
   dataDir,
@@ -62,9 +65,13 @@ export async function startAgentService({
   port = 8790,
   authenticate = null,
   credentials = null,
-  modelConfig = defaultModelConfig,
+  modelConfig = null,
   gate,
   limits,
+  publisher = null,
+  projectState,
+  storeLimits,
+  renderLimits,
   root = ROOT,
   version = 'dev',
   log = () => {},
@@ -98,10 +105,16 @@ export async function startAgentService({
     loadModule: (id) => vite.ssrLoadModule(id),
     docUrl,
     credentials: credentials ?? { protocolsFor: async () => { throw new Error('这个进程还没有连文档服务的凭证'); } },
-    modelConfig,
+    // 缺省读数据目录里的那一份(`config/ai.json` 与 `config/keys/custom.key`,由 set-key.mjs 写);每一轮开始时现读,换 Key 不用重启。
+    // 不读 PROMPTCUT_AI_CONFIG,也不读这台机器上用户自己的 ai.json
+    modelConfig: modelConfig ?? (() => readModelConfig(dataDir)),
     dataDir,
     ...(gate ? { gate } : {}),
     ...(limits ? { limits } : {}),
+    ...(publisher ? { publisher } : {}),
+    ...(projectState ? { projectState } : {}),
+    ...(storeLimits ? { storeLimits } : {}),
+    ...(renderLimits ? { renderLimits } : {}),
     log,
   });
   const api = createAgentHttp({ service, authenticate, version, log });

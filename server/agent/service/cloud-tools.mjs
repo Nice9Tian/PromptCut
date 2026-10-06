@@ -42,6 +42,9 @@ export const CLOUD_AGENT_SIDE = Object.freeze(new Set(['list_cards']));
 /** 读页面状态、由总入口直接答的工具 */
 export const CLOUD_PAGE_STATE_READS = Object.freeze(new Set(['get_selection']));
 
+/** 要页面播放头的切剪辑工具:发起方在线用发消息时的播放头,不在线照常执行、播放头按 0 记并在结果里注明 */
+export const CLOUD_PLAYHEAD_TOOLS = Object.freeze(new Set(['switch_cut', 'add_cut', 'remove_cut']));
+
 /** 不开放的理由,按分组;分组里个别工具另有理由的写在 `TOOL_REASON` */
 const GROUP_REASON = {
   project: '要读写节点本地文件',

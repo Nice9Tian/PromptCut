@@ -21,7 +21,7 @@ import { createPresenceBridge } from '../presence-bridge.mjs';
 import { loadRole } from '../agent-roles.mjs';
 import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from '../user-editing.mjs';
 import { effectiveIsFile } from '../../card-overrides.mjs';
-import { checkCloudTool, CLOUD_AGENT_SIDE, CLOUD_OPEN_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_SYSTEM_NOTE } from './cloud-tools.mjs';
+import { checkCloudTool, CLOUD_AGENT_SIDE, CLOUD_OPEN_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SYSTEM_NOTE } from './cloud-tools.mjs';
 
 function sendJson(res, code, data) {
   if (res.headersSent) return;
@@ -268,7 +268,17 @@ export function createAgentInstance(env) {
       import(new URL("../../mcp-tools.mjs", import.meta.url).href),
     ]);
     const protocolsFor = async (n) => {
-      if (mode === "hosted") return env.protocolsFor(n);
+      // 托管档:凭证按对话给(对话委托绑死一个对话,契约第 4.2 节),所以连同这个对话号对应的对话 id 一起交给宿主
+      if (mode === "hosted") {
+        const conversationId = side.describe().conversations.find((c) => c.conversation === n)?.key ?? '';
+        try {
+          return await env.protocolsFor(n, conversationId);
+        } catch (err) {
+          // 文档服务明确不给这个对话票据(委托过期、代数变了、开关关了、被踢、被移出、项目没了):这是收尾的原因,不是暂时性故障
+          if (typeof err?.reason === 'string') { try { env.onCredentialDenied?.(conversationId, err.reason); } catch { /* 宿主的事 */ } }
+          throw err;
+        }
+      }
       if (mode === "local") return ["promptcut.v1", `promptcut.role.agent.${n}`];
       if (mode === "lan-host") return ["promptcut.v1", `promptcut.tenant.${projectId}`, `promptcut.role.agent.${n}`];
       return ["promptcut.v1", `promptcut.ticket.${await requestTicket(projectId, n)}`];
@@ -284,13 +294,19 @@ export function createAgentInstance(env) {
       // 托管档没有编辑器进程:工具实现里漏网的 /api/* 调用指到一个解析不了的地址,立刻失败,不会打到同机别的服务
       loadHost: () => loadSsrHost((id) => server.ssrLoadModule(id), { apiBase: HOSTED ? "http://agent-service.invalid" : `http://127.0.0.1:${editorPortOf()}` }),
       prerenderPost,
-      playhead: () => (HOSTED ? (Number(hostedLastPageState?.t) || 0) : (latestPlayhead()?.t ?? 0)),
+      // 托管档没有「服务端记着的页面播放头」:播放头只来自发消息时的快照,按对话找(下面的 hostedCallPage)
+      playhead: () => (HOSTED ? 0 : (latestPlayhead()?.t ?? 0)),
+      ...(HOSTED ? {
+        onWrite: (agent, write) => { try { env.onWrite?.(agent, write); } catch { /* 宿主的事 */ } },
+        // 文档服务以 4003 / 4004 关掉数据连接就是撤销(契约第 4.5 节):不重连,报给宿主立刻停这一轮、记原因
+        linkOptions: { onFinalClose: (_n, info) => { try { env.onFinalClose?.(info); } catch { /* 宿主的事 */ } } },
+      } : {}),
       // 托管档:服务端 store 是进程里的单例,所有实例共用一把锁、进锁清场(契约第 3.3 节)
       ...(HOSTED ? { execSerial: env.execSerial, isolateStore: true } : {}),
       log: agentLog,
       pageResult: "wrapped",
       callPage: async (tool, args, ctx) => {
-        if (HOSTED) return hostedCallPage(tool);
+        if (HOSTED) return hostedCallPage(tool, ctx);
         const def = tools.find((t) => t.name === tool);
         const out = await callEditorPage(tool, args, ctx?.agent || undefined, def?.timeoutMs || (tool === "__page_state" ? 10_000 : 60_000));
         if (!out.ok) throw new Error(out.error);
@@ -498,7 +514,19 @@ export function createAgentInstance(env) {
         return open;
       }
       if (CLOUD_PAGE_STATE_READS.has(tool)) return hostedPageRead(tool, agent || '');
+      // 要播放头的三个切剪辑工具:发起方不在线时照常执行,播放头按 0 记,结果里注明(契约第 9.4 节)
+      if (CLOUD_PLAYHEAD_TOOLS.has(tool) && !hostedInitiatorOnline(agent || '')) {
+        const out = await callToolChecked(tool, toolDef, args, agent, callId);
+        return out && typeof out === 'object' && !Array.isArray(out) && out.ok !== false
+          ? { ...out, initiatorOffline: true, note: '发起方不在线,播放头按 0 记。' }
+          : out;
+      }
     }
+    return callToolChecked(tool, toolDef, args, agent, callId);
+  }
+
+  /** 工具调用总入口的后半:各道闸与执行(桌面档直接到这里;托管档先过上面的开放清单) */
+  async function callToolChecked(tool, toolDef, args, agent, callId) {
 
     /*
      * 审查环路走 CLI 时的只读锁(runners/cli-loop.mjs 通过 setToolAccess 设置)。
@@ -1199,14 +1227,22 @@ export function createAgentInstance(env) {
    */
   /** 对话 id → 发这一轮消息时页面带来的页面状态 { t, selection } */
   const hostedPageStates = new Map();
-  /** 最近一条消息带来的页面状态:切剪辑的工具向「页面」要播放头时没有对话 id,用它 */
-  let hostedLastPageState = null;
 
-  /** 托管档的「经页面执行」:只答只读的页面状态,别的一律做不了 */
-  async function hostedCallPage(tool) {
+  /** 「发起方在线」:此刻有一条来自发起这一轮的那个成员的事件流连着这个对话(由宿主判,契约第 9.4 节) */
+  function hostedInitiatorOnline(agent) {
+    try { return env.initiatorOnline ? env.initiatorOnline(agent) === true : false; } catch { return false; }
+  }
+
+  /**
+   * 托管档的「经页面执行」:只答只读的页面状态,别的一律做不了。
+   * 播放头按**要它的那个对话**发消息时的快照答(`ctx.pageStateFor`,`agent-side.mjs` 带来的对话 id)——
+   * 同一位成员同时开着两个对话,各用各的;发起方不在线、或那条消息没带快照,按 0。
+   */
+  async function hostedCallPage(tool, ctx) {
     if (tool === '__page_state') {
-      const t = Number(hostedLastPageState?.t);
-      return { result: Number.isFinite(t) ? { t } : null, opIds: [] };
+      const agent = typeof ctx?.pageStateFor === 'string' ? ctx.pageStateFor : '';
+      const t = hostedInitiatorOnline(agent) ? Number(hostedPageStates.get(agent)?.t) : 0;
+      return { result: { t: Number.isFinite(t) ? t : 0 }, opIds: [] };
     }
     throw new Error(`云端暂不支持 ${tool}:它要在编辑界面里执行。请告诉用户在电脑上的 PromptCut 里使用。`);
   }
@@ -1214,8 +1250,7 @@ export function createAgentInstance(env) {
   /** 读页面状态的工具(get_selection):按发消息时的快照答;发起方不在线、或没带快照,立刻明说,不等 */
   function hostedPageRead(tool, agent) {
     const ps = hostedPageStates.get(agent) ?? null;
-    let online = true;
-    try { online = env.initiatorOnline ? env.initiatorOnline(agent) !== false : true; } catch { online = true; }
+    const online = hostedInitiatorOnline(agent);
     if (!online || !ps || !Array.isArray(ps.selection)) {
       return { ok: false, initiatorOffline: true, error: '发起方不在线,读不到页面的选区。请按项目内容继续,不要等待。' };
     }
@@ -1269,7 +1304,6 @@ export function createAgentInstance(env) {
       }
       const ps = o.pageState && typeof o.pageState === 'object' ? o.pageState : null;
       hostedPageStates.set(agentId, ps);
-      hostedLastPageState = ps;
 
       const apiConfig = o.apiConfig && typeof o.apiConfig === 'object' ? o.apiConfig : {};
       agentSessions.register(agentId, { type: 'api', vendor: String(apiConfig.vendor || 'api'), role: 'main', creativity: normalizeCreativity(o.creativity) });
@@ -1278,6 +1312,20 @@ export function createAgentInstance(env) {
         `${CREATIVITY_HINT[level]}。越级的工具调用会被拒绝,被拒就停下告诉用户,不要绕`;
 
       emit({ type: 'run', runId: o.runId });
+      // 单个项目副本的上限(契约第 11 节):太大的项目不服务。先等副本就绪(这个对话的连接此时登记)
+      try {
+        binding.side.conversationNumber(agentId);
+        await binding.side.link.ready();
+        const project = binding.side.link.replica.project;
+        const max = Number(o.maxProjectBytes) > 0 ? Number(o.maxProjectBytes) : 16 * 1024 * 1024;
+        if (project && JSON.stringify(project).length > max) {
+          emit({ type: 'error', code: 'too-large', message: '项目太大,云端 Agent 暂不支持这个项目。请在电脑上的 PromptCut 里使用。' });
+          return;
+        }
+      } catch (err) {
+        emit({ type: 'error', code: 'unavailable', message: `云端 Agent 连不上这个项目的文档服务:${String(err?.message ?? err).slice(0, 200)}` });
+        return;
+      }
       const api = await import(new URL('../../runners/api.mjs', import.meta.url).href);
       if (aborted) return;
 
@@ -1305,6 +1353,9 @@ export function createAgentInstance(env) {
           fetchImpl: o.fetchImpl,
           localTools: false,
           toolFilter: CLOUD_OPEN_TOOLS,
+          // 每完成一次工具往返落一次模型历史(进程被杀也接得上);每次模型请求前后过宿主的闸、记用量(契约第 6.2、7.1 节)
+          checkpoint: true,
+          ...(typeof o.onModelCall === 'function' ? { onModelCall: o.onModelCall } : {}),
           callTool: async (name, args, meta) => callToolInternal(name, args, agentId, typeof meta?.callId === 'string' ? meta.callId : undefined),
           onEvent: (ev) => {
             if (ev.type === 'text' && typeof ev.delta === 'string') pendingText += ev.delta;
@@ -1340,6 +1391,11 @@ export function createAgentInstance(env) {
     startHostedRun,
     /** 这个实例绑着的项目副本与各对话读到的版本(诊断);没绑回 null */
     describe: () => (agentBinding ? agentBinding.side.describe() : null),
+    /** 此刻的项目副本与它的版本(托管档的宿主挑要补渲的片段用);没绑或还没内容回 null */
+    replica: () => {
+      const r = agentBinding?.side?.link?.replica;
+      return r && r.hasBody ? { project: r.project, rev: r.rev } : null;
+    },
     close(reason = 'close') {
       unbindAgent(reason);
       clearTimeout(boardPushTimer);

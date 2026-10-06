@@ -316,8 +316,20 @@ export function startRun(opts) {
        */
       maxInputTokens: 1_000_000 - (Number(cfg.maxTokens) || 4096) - 30_000,
       onEvent: safeOnEvent, 
-      signal: abortController.signal, 
-      history 
+      signal: abortController.signal,
+      history,
+      /*
+       * 每次模型请求前后的回调(托管档的闸与用量记录)。`opts.checkpoint` 为真时,从第二次请求起每次请求之前把历史落一次盘:
+       * 这时上一次工具往返刚做完 —— 进程被杀也只丢正在进行的那一次(契约 cloud-agent-contract.md 第 7.1 节)。
+       * 桌面两样都不传,与原来相同。
+       */
+      ...(typeof opts.onModelCall === 'function' || opts.checkpoint ? {
+        onModelCall: async (phase, info) => {
+          if (phase === 'before' && opts.checkpoint && info?.round > 1) saveHistory();
+          if (typeof opts.onModelCall === 'function') return opts.onModelCall(phase, { ...info, vendor: cfg.vendor, model: cfg.model });
+          return undefined;
+        },
+      } : {}),
     });
 
     /*
@@ -395,7 +407,7 @@ export function startRun(opts) {
           retryPrompt: `接着上面继续做。上一轮没做完就断了,原因是:${msg}。\n`
             + `之前的进度都还在,不用重头再来,从刚才停下的地方接着做就行。\n`
             + `如果上一步是在等某个后台作业,用 wait 工具等几秒再查它的状态。`,
-        } : { type: 'error', message: msg });
+        } : { type: 'error', message: msg, ...(typeof err?.runErrorCode === 'string' ? { code: err.runErrorCode } : {}) });
       }
     }
   })();

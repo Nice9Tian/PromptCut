@@ -183,7 +183,7 @@ function targetOf(args) {
  * @param {() => number} [options.playhead] 页面播放头(秒);get_layout / see_frames 没给时刻时用
  * @param {Record<string, string>} [options.toolGroups] 工具名 → 分组名(事件的 icon)
  * @param {(event: string, fields?: object) => void} [options.log]
- * @param {(tool: string, args: object, keys: readonly string[]) => Promise<object | null>} [options.pageState]
+ * @param {(tool: string, args: object, keys: readonly string[], agentKey: string) => Promise<object | null>} [options.pageState]
  *   向页面要一次只读的页面状态(`PAGE_STATE_TOOLS`);没有页面时回 null 或抛错,执行器退回用 `playhead()`
  */
 export function createAgentExecutor({
@@ -282,7 +282,7 @@ export function createAgentExecutor({
    * 向页面要这次工具要的页面状态(`PAGE_STATE_TOOLS`),只要一次。要不到(编辑台没打开、超时)时:
    * 播放头退回服务端记着的页面播放头(`playhead()`,页面推给数据镜像的那个);轨迹没有替代,直接回错。
    */
-  async function pageStateFor(tool, args) {
+  async function pageStateFor(tool, args, agentKey = '') {
     const keys = PAGE_STATE_TOOLS[tool];
     if (!keys) return null;
     let got = null;
@@ -290,7 +290,8 @@ export function createAgentExecutor({
       let timer;
       try {
         got = await Promise.race([
-          Promise.resolve(pageState(tool, args ?? {}, keys)),
+          // 第四个参数是要它的那个对话(托管档按对话找发消息时的页面状态;桌面只有一个页面,不看它)
+          Promise.resolve(pageState(tool, args ?? {}, keys, agentKey)),
           new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`页面 ${limits.pageStateTimeoutMs} ms 内没有回页面状态`)), limits.pageStateTimeoutMs); timer.unref?.(); }),
         ]);
       } catch (err) {
@@ -341,7 +342,7 @@ export function createAgentExecutor({
     await replicaReady();
     const host = await loadHost();
     if (!host.routeOf(tool)) throw new Error(`未知工具: ${tool}`);
-    const ps = await pageStateFor(tool, args);
+    const ps = await pageStateFor(tool, args, conv.key);
     const prepared = await serial(async () => {
       const replica = link.replica;
       const base = replica.project;

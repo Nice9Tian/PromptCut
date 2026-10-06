@@ -1,37 +1,50 @@
 /**
- * 托管档的 Agent 服务:实例登记表(契约 `docs/plan/cloud-agent-contract.md` 第 3 节)。
+ * 托管档的 Agent 服务:实例登记表与一轮的生命周期(契约 `docs/plan/cloud-agent-contract.md` 第 3、6、7、16 节)。
  *
- * 一个进程里按「项目 × 成员(`userId`)」各建一个实例(`instance.mjs`),实例之间不共用任何以页面自报 id 为键的状态:
- * 一切查找先由 `identity`(来自鉴权,不来自请求体)定实例,再在实例里按对话 id 找。
+ * 一个进程里按「项目 × 成员(`userId`)」各建一个运行实例(`instance.mjs`),实例之间不共用任何以页面自报 id 为键的状态:
+ * 一切查找先由 `identity`(来自鉴权,不来自请求体)定范围,再在范围里按对话 id 找。
  *
- * 进程级只有三样:
- *   - `execSerial`:服务端 store 是进程里的单例(`src/store/core.ts`),所有实例的工具实现经同一把锁串行执行、
- *     进锁清场(`agent-exec.mjs` 的 `isolateStore`);
- *   - 闸(`gate`,契约第 6 节):这一块先留接口位,缺省永远放行;
- *   - 进行中的一轮的登记(按实例、按对话)。
+ * 运行实例与对话的**归属**是两回事(契约第 3.1、7.2 节):
+ *   - 对话(事件记录、状态、模型历史、补渲清单)按「项目 × 主人键」存在数据目录里(`conversations.mjs`),不随实例回收而消失,
+ *     不依赖任何连接;主人换一台设备能找回;
+ *   - 每一轮在发起它的那台设备的实例里跑。同一个对话先后两轮可以在两个实例里跑,同一时刻只有一轮。
  *
- * 这一块(甲)的范围:实例、对话在内存里的事件记录(带 `seq`,可补看)、一轮与发起它的连接无关。
- * 事件与状态落盘、用量记录、补渲发布属于后面的块(契约第 6、7、16 节),这里的接口形状已按它们留好。
+ * 一轮只属于服务端:发消息回了就与那条连接无关。只有这几样能让它结束,每样都在事件记录里留一条给人看的原因与一条 `end`,
+ * `meta.json` 的状态与原因同步改(契约第 7.3 节):
+ *   说完(idle)、主人停掉(idle / stopped)、模型调用失败(failed / model)、额度用尽(failed / quota-exceeded)、
+ *   到轮数或时间上限(failed / limit)、撤销——开关关了、被移出、被踢、项目删除、授权失效(revoked / 原因)、
+ *   服务进程退出或被杀(interrupted)。
+ * 每次工具写入是文档服务的一次原子提交,所以一轮在任何时刻被停,项目都停在最后一次成功提交之后。
+ *
+ * 进程级的东西:
+ *   - `execSerial`:服务端 store 是进程里的单例(`src/store/core.ts`),所有实例的工具实现经同一把锁串行执行、进锁清场;
+ *   - 闸与用量记录(`gate.mjs`、`usage.mjs`);
+ *   - 对话存储(`conversations.mjs`)与补渲发布(`render-request.mjs`)。
  * 本文件不引用 `src/`。
  */
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createAgentInstance } from './instance.mjs';
+import { createConversationStore, INTERRUPTED_MESSAGE } from './conversations.mjs';
+import { createGate, limitsFileOf } from './gate.mjs';
+import { createUsageLog } from './usage.mjs';
+import { createRenderRequests } from './render-request.mjs';
+import { modelReady, pickModel, publicModelInfo } from './model-config.mjs';
 
 export const CONVERSATION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export const HOSTED_DEFAULTS = Object.freeze({
-  /** 存活实例上限;超了先回收闲置最久的,回收不动就回 busy */
-  maxInstances: 24,
   /** 没有进行中的一轮、这么久没有请求的实例被回收 */
   idleMs: 10 * 60_000,
-  /** 一个对话在内存里最多留多少条事件(落盘之前的兜底) */
-  maxEventsPerConversation: 5000,
   /** 一轮的墙钟上限 */
   runMs: 30 * 60_000,
+  /** 一轮最多多少次模型往返(驱动里的常规上限;这里只用来告诉页面) */
+  rounds: 24,
+  /** 单个项目副本(JSON)超过这么大不服务 */
+  maxProjectBytes: 16 * 1024 * 1024,
 });
 
-/** 闸的缺省实现:永远放行(契约第 6.2 节「现在永远放行」) */
+/** 闸的替身:永远放行、不记用量(只给不关心闸的测试用;服务缺省用 `gate.mjs` 的真闸) */
 export const ALLOW_ALL_GATE = Object.freeze({
   admitRun: () => ({ ok: true }),
   admitModelCall: () => ({ ok: true }),
@@ -50,25 +63,66 @@ export class AgentServiceError extends Error {
 const sha = (text) => createHash('sha256').update(String(text), 'utf8').digest('hex').slice(0, 32);
 
 /**
- * 对话归谁(契约第 7.2 节,主会话 2026-10-06 裁定,待用户审):创建者与限定进入的名单成员按用户名,
- * 换设备能找回;自由进入的成员(用户名是自报的)按「用户名 + 设备」,只能在原设备找回。
- * @param {{ projectId: string, userId: string, username?: string, creator?: boolean, mode?: string }} identity
+ * 对话归谁(契约第 7.2 节,主会话 2026-10-06 裁定,待用户审)。文档服务核验委托票据后直接回主人键
+ * (`creator` / `user:<用户名>` / `device:<userId>`,键里不含项目),有就用它;没有(测试替身)按同一条规则从字段推:
+ * 创建者与限定进入的名单成员按用户名,换设备能找回;自由进入的成员按「用户名 + 设备」,只能在原设备找回。
+ * 回的是当目录名用的摘要(项目也折进去)。
+ * @param {{ projectId: string, userId: string, username?: string, creator?: boolean, mode?: string, ownerKey?: string }} identity
  */
 export function ownerKeyOf(identity) {
-  if (identity.creator === true) return sha(`${identity.projectId}\ncreator`);
-  if (identity.mode === 'restricted' && identity.username) return sha(`${identity.projectId}\nuser\n${identity.username}`);
-  return sha(`${identity.projectId}\ndevice\n${identity.userId}`);
+  let name;
+  if (typeof identity.ownerKey === 'string' && identity.ownerKey) name = identity.ownerKey;
+  else if (identity.creator === true) name = 'creator';
+  else if (identity.mode === 'restricted' && identity.username) name = `user:${identity.username}`;
+  else name = `device:${identity.userId}`;
+  return sha(`${identity.projectId}\n${name}`);
 }
+
+/** 撤销与授权失效时写进对话记录的那句话 */
+const REVOKE_TEXT = Object.freeze({
+  disabled: '项目创建者已关闭云端 Agent,这一轮已停下。已经落地的改动保留在项目里。',
+  removed: '你已被移出这个项目,云端 Agent 的这一轮已停下。已经落地的改动保留在项目里。',
+  kicked: '你已被请出这个项目,云端 Agent 的这一轮已停下。已经落地的改动保留在项目里。',
+  deleted: '项目已删除,云端 Agent 的这一轮已停下。',
+  expired: '这一轮的授权已过期,已停下。已经落地的改动保留在项目里;再发一条消息即可继续。',
+  generation: '项目的成员名单或口令改过,这一轮的授权已失效,已停下。已经落地的改动保留在项目里;再发一条消息即可继续。',
+  'bad-grant': '这一轮的授权没有被文档服务接受,已停下。已经落地的改动保留在项目里;再发一条消息即可继续。',
+});
+const revokeText = (reason) => REVOKE_TEXT[reason] ?? `云端 Agent 的这段对话已失效(${reason}),这一轮已停下。已经落地的改动保留在项目里。`;
+
+/** 文档服务不给票据时的 `reason` → 对话记录里的收尾原因;不在表里的(连不上、超时)是暂时性故障,不收尾 */
+const CREDENTIAL_REASON = Object.freeze({
+  'service-disabled': 'disabled', 'service-revoked': 'disabled', banned: 'kicked', 'not-listed': 'removed', 'no-project': 'deleted',
+  expired: 'expired', generation: 'generation',
+  signature: 'bad-grant', format: 'bad-grant', audience: 'bad-grant', 'not-grant': 'bad-grant', project: 'bad-grant', conversation: 'bad-grant', forbidden: 'bad-grant',
+});
+
+/** 数据连接被文档服务关掉时的关闭码与原因 → 收尾原因(契约第 4.5 节) */
+export function revokeReasonOfClose({ code, reason } = {}) {
+  if (code === 4004) return 'deleted';
+  if (reason === 'service-disabled') return 'disabled';
+  if (reason === 'kicked' || reason === 'removed') return reason;
+  return typeof reason === 'string' && reason ? reason.slice(0, 40) : 'removed';
+}
+
+/** 模型接口给的错误原文里去掉地址(地址是托管方的配置;Key 已由驱动替换掉) */
+const scrub = (text) => String(text ?? '').replace(/https?:\/\/[^\s"'<>)]+/g, '[地址]').slice(0, 500);
 
 /**
  * @param {object} o
  * @param {string} o.root 仓库根目录(系统提示词等相对它找)
  * @param {(id: string) => Promise<any>} o.loadModule 前端代码的唯一入口(vite 的 `ssrLoadModule`),只交给 `ssr-host.mjs`
  * @param {string} o.docUrl 文档服务的 ws(s) 地址
- * @param {{ protocolsFor(identity: object, conversation: number): Promise<string[]> | string[] }} o.credentials
- *   这个成员的第几个对话连文档服务用的子协议(乙块接上之前由测试替身给)
+ * @param {object} o.credentials 连文档服务的凭证(接口位;真的由乙块的 `server/auth/service-client.mjs` 给):
+ *   `protocolsFor(identity, 对话号, { conversationId, grant })` → 这个对话的连接用的子协议。文档服务明确不给时抛带 `reason` 的错
+ *   (`expired`、`generation`、`service-disabled`、`banned`、`not-listed`、`no-project` 等),这一轮据此收尾;
+ *   `admitGrant?(identity, conversationId, grant)` → 发消息时先核一遍对话委托,不对就抛(回 `bad-grant`)。
  * @param {() => Promise<object> | object} o.modelConfig 这一轮用的模型配置 `{ vendor, model, apiKey?, baseUrl?, maxTokens? }`
- * @param {string | null} [o.dataDir] 数据目录;给了,模型历史放 `tenants/<项目>/owners/<主人>/conversations/<对话>/history.json`
+ * @param {string | null} [o.dataDir] 数据目录;不给时对话只在内存里、不记用量流水(只给测试)
+ * @param {object} [o.gate] 闸;不给就用 `gate.mjs` 的(读 `<数据目录>/config/limits.json`)
+ * @param {object | null} [o.publisher] 补渲的发布通道(接口位,形状见 `render-request.mjs`);不给就不发补渲
+ * @param {{ agentEnabled?(projectId): boolean, renderEnabled?(projectId): boolean }} [o.projectState]
+ *   各项目的开关(接口位;真的由文档服务的推送喂)。不给时都算开
  */
 export function createHostedAgentService({
   root,
@@ -77,8 +131,12 @@ export function createHostedAgentService({
   credentials,
   modelConfig,
   dataDir = null,
-  gate = ALLOW_ALL_GATE,
+  gate: gateIn = null,
+  publisher = null,
+  projectState = {},
   limits: limitsIn = {},
+  storeLimits = {},
+  renderLimits = {},
   log = () => {},
   now = () => Date.now(),
 } = {}) {
@@ -89,6 +147,18 @@ export function createHostedAgentService({
   const limits = { ...HOSTED_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响服务 */ } };
 
+  const agentEnabled = (projectId) => { try { return projectState.agentEnabled ? projectState.agentEnabled(projectId) !== false : true; } catch { return true; } };
+  const renderEnabled = (projectId) => { try { return projectState.renderEnabled ? projectState.renderEnabled(projectId) !== false : true; } catch { return true; } };
+
+  const usage = gateIn ? null : createUsageLog({ dir: dataDir ? path.join(dataDir, 'usage') : null, now, log: say });
+  const gate = gateIn ?? createGate({ limitsFile: dataDir ? limitsFileOf(dataDir) : null, usage, isEnabled: agentEnabled, now, log: say });
+  const store = createConversationStore({ dataDir, now, limits: storeLimits, log: say });
+  const render = createRenderRequests({ publisher, store, now, limits: renderLimits, log: say });
+
+  // 上一个进程没收尾就没了的对话:标中断,不自动续跑(契约第 7.5 节)。没渲完的补渲清单重新发布(只用服务身份)
+  store.recover();
+  const restored = Promise.resolve().then(() => render.restore()).catch((err) => { say('agent.render.restore-failed', { message: String(err?.message ?? err).slice(0, 160) }); return 0; });
+
   /** 进程级的串行锁:所有实例的工具实现共用服务端那一份 store */
   let lock = Promise.resolve();
   const execSerial = (fn) => {
@@ -97,11 +167,14 @@ export function createHostedAgentService({
     return run;
   };
 
-  /** 实例键 → { key, identity, inst, ready, convs, lastUsed, closed } */
+  /** 实例键 → { key, identity, ownerKey, inst, ready, runs: Map(对话 id → 对话), lastUsed, closed } */
   const instances = new Map();
+  /** 「实例键\n对话 id」→ 这一轮的对话委托。只放内存,不落盘、不进日志(契约第 4.2 节) */
+  const grants = new Map();
   let closed = false;
 
-  const keyOf = (identity) => `${identity.projectId}\n${identity.userId}`;
+  const keyOf = (identity) => `${identity.projectId}\n${identity.userId}\n${ownerKeyOf(identity)}`;
+  const maxInstances = () => limitsIn.maxInstances ?? gate.nodeLimits?.().maxInstances ?? 24;
 
   function checkIdentity(identity) {
     if (!identity || typeof identity.projectId !== 'string' || !identity.projectId || typeof identity.userId !== 'string' || !identity.userId) {
@@ -109,19 +182,16 @@ export function createHostedAgentService({
     }
   }
 
-  function activeRunsOf(entry) {
-    let n = 0;
-    for (const c of entry.convs.values()) if (c.run) n += 1;
-    return n;
+  function checkConversationId(id) {
+    if (typeof id !== 'string' || !CONVERSATION_ID_RE.test(id)) throw new AgentServiceError('bad-request', '对话 id 不合法');
   }
 
   function closeEntry(entry, reason) {
     if (entry.closed) return;
     entry.closed = true;
     instances.delete(entry.key);
-    for (const c of entry.convs.values()) {
-      if (c.run) { try { c.run.abort(); } catch { /* 已经结束 */ } }
-    }
+    // 还在跑的一轮由调用方先按各自的原因停掉;走到这里还有的(不该有)按中断收尾,不让它悬着
+    for (const conv of [...entry.runs.values()]) conv.run?.stop('interrupted');
     try { entry.inst.close(reason); } catch { /* 已经关了 */ }
     say('agent.instance.close', { projectId: entry.identity.projectId, user: sha(entry.identity.userId).slice(0, 8), reason });
   }
@@ -129,25 +199,43 @@ export function createHostedAgentService({
   function reclaim() {
     const at = now();
     for (const entry of [...instances.values()]) {
-      if (activeRunsOf(entry) === 0 && at - entry.lastUsed >= limits.idleMs) closeEntry(entry, 'idle');
+      if (entry.runs.size === 0 && at - entry.lastUsed >= limits.idleMs) closeEntry(entry, 'idle');
     }
   }
   const sweep = setInterval(reclaim, Math.min(60_000, limits.idleMs));
   sweep.unref?.();
 
+  /** 「发起方在线」:此刻有一条来自发起这一轮的那个 `userId` 的事件流连着这个对话(契约第 9.4 节) */
+  function initiatorOnline(entry, conversationId) {
+    const conv = entry.runs.get(conversationId);
+    if (!conv?.run) return false;
+    for (const l of conv.listeners) if (l.userId === conv.run.userId) return true;
+    return false;
+  }
+
+  /** 这个实例里的一次写入落地了:挑出要预渲染的片段,交给补渲(契约第 16 节) */
+  function onWrite(entry, conversationId, write) {
+    if (!render.enabled) return;
+    const conv = entry.runs.get(conversationId);
+    if (!conv?.run) return;
+    const replica = entry.inst.replica();
+    render.noteWrite(conv, { clipIds: write?.clipIds ?? [], rev: write?.rev ?? replica?.rev, project: replica?.project ?? null, runId: conv.run.runId });
+  }
+
   /** 找到或建出这位成员在这个项目里的实例;同一个键并发到达的共用同一次建立 */
   async function instanceFor(identity) {
-    checkIdentity(identity);
     if (closed) throw new AgentServiceError('unavailable', '服务正在关闭', 503);
     const key = keyOf(identity);
     let entry = instances.get(key);
     if (!entry) {
-      if (instances.size >= limits.maxInstances) {
-        const idle = [...instances.values()].filter((e) => activeRunsOf(e) === 0).sort((a, b) => a.lastUsed - b.lastUsed)[0];
+      if (instances.size >= maxInstances()) {
+        const idle = [...instances.values()].filter((e) => e.runs.size === 0).sort((a, b) => a.lastUsed - b.lastUsed)[0];
         if (!idle) throw new AgentServiceError('busy', '云端 Agent 正忙,请稍后再试。', 503);
         closeEntry(idle, 'evicted');
       }
-      const inst = createAgentInstance({
+      entry = { key, identity: { ...identity }, ownerKey: ownerKeyOf(identity), inst: null, runs: new Map(), lastUsed: now(), closed: false, ready: null };
+      const own = entry;
+      entry.inst = createAgentInstance({
         profile: 'hosted',
         server: {
           httpServer: null,
@@ -161,13 +249,24 @@ export function createHostedAgentService({
         latestPlayhead: () => null,
         projectId: identity.projectId,
         docUrl,
-        protocolsFor: (n) => credentials.protocolsFor(identity, n),
+        protocolsFor: (n, conversationId) => credentials.protocolsFor(own.identity, n, { conversationId, grant: grants.get(`${own.key}\n${conversationId}`) ?? null }),
         execSerial,
+        initiatorOnline: (conversationId) => initiatorOnline(own, conversationId),
+        onWrite: (conversationId, write) => onWrite(own, conversationId, write),
+        // 文档服务明确不给这个对话票据:这一轮按原因收尾(暂时性的连不上不在此列)
+        onCredentialDenied: (conversationId, reason) => {
+          const why = CREDENTIAL_REASON[reason];
+          if (why) own.runs.get(conversationId)?.run?.stop('revoked', { reason: why });
+        },
+        // 文档服务以 4003 / 4004 关掉了数据连接:撤销,立刻停这个实例里的每一轮并关实例,不重连
+        onFinalClose: (info) => {
+          const reason = revokeReasonOfClose(info);
+          queueMicrotask(() => api.revoke({ projectId: own.identity.projectId, userId: own.identity.userId, reason }));
+        },
         log: (event, fields) => say(event, fields),
       });
-      entry = { key, identity: { ...identity }, inst, convs: new Map(), lastUsed: now(), closed: false, ready: null };
-      entry.ready = inst.bindAgent({ projectId: identity.projectId, mode: 'hosted' }).then(() => entry, (err) => {
-        closeEntry(entry, 'bind-failed');
+      entry.ready = entry.inst.bindAgent({ projectId: identity.projectId, mode: 'hosted' }).then(() => own, (err) => {
+        closeEntry(own, 'bind-failed');
         throw new AgentServiceError('unavailable', `连不上文档服务:${err?.message ?? err}`, 503);
       });
       instances.set(key, entry);
@@ -177,34 +276,19 @@ export function createHostedAgentService({
     return entry.ready;
   }
 
-  function conversationOf(entry, id, create) {
-    if (typeof id !== 'string' || !CONVERSATION_ID_RE.test(id)) throw new AgentServiceError('bad-request', '对话 id 不合法');
-    let conv = entry.convs.get(id);
-    if (!conv && create) {
-      conv = { id, events: [], seq: 0, listeners: new Set(), run: null, state: 'idle', reason: null };
-      entry.convs.set(id, conv);
-    }
-    return conv ?? null;
+  /** 这位成员(按主人键)在这个项目里的一个对话;没有回 null */
+  function conversationOf(identity, conversationId, create = false) {
+    checkIdentity(identity);
+    if (typeof conversationId !== 'string' || !CONVERSATION_ID_RE.test(conversationId)) return null;
+    return store.get(identity.projectId, ownerKeyOf(identity), conversationId, { create, startedOn: identity.deviceName ?? null });
   }
 
-  /** 事件先记下来,再发给此刻连着的流(契约第 2.4 节) */
-  function emit(conv, event) {
-    const ev = { ...event, seq: ++conv.seq };
-    conv.events.push(ev);
-    if (conv.events.length > limits.maxEventsPerConversation) conv.events.splice(0, conv.events.length - limits.maxEventsPerConversation);
-    for (const cb of [...conv.listeners]) {
-      try { cb(ev); } catch { /* 一条流坏了不影响别的 */ }
-    }
-    return ev;
-  }
+  const listItem = (m) => ({ id: m.id, title: m.title ?? '', updatedAt: m.updatedAt ?? null, state: m.state, reason: m.reason ?? null, lastSeq: m.lastSeq ?? 0, startedOn: m.startedOn ?? null });
 
-  function historyFileOf(identity, conversationId) {
-    if (!dataDir) return null;
-    return path.join(dataDir, 'tenants', identity.projectId, 'owners', ownerKeyOf(identity), 'conversations', conversationId, 'history.json');
-  }
-
-  return {
+  const api = {
     limits,
+    /** 起来时的补渲重发做完了没有(测试等它) */
+    restored,
 
     /**
      * 发一条消息、起一轮。这一轮从此与调用方的连接无关:事件进这个对话的事件记录,谁连着谁看。
@@ -212,41 +296,109 @@ export function createHostedAgentService({
      */
     async send(identity, conversationId, body = {}) {
       checkIdentity(identity);
+      if (closed) throw new AgentServiceError('unavailable', '服务正在关闭', 503);
       if (typeof body.prompt !== 'string' || !body.prompt.trim()) throw new AgentServiceError('bad-request', '消息是空的');
-      if (!CONVERSATION_ID_RE.test(String(conversationId))) throw new AgentServiceError('bad-request', '对话 id 不合法');
+      checkConversationId(conversationId);
+      const before = conversationOf(identity, conversationId, false);
+      if (before?.run) throw new AgentServiceError('busy-conversation', '这个对话还有一轮在进行。', 409);
+      if (before && store.full(before)) throw new AgentServiceError('too-large', '这个对话的记录已经太长,请新开一个对话。', 413);
+      const cfg = (await modelConfig()) ?? {};
+      if (!modelReady(cfg)) throw new AgentServiceError('no-model-key', '托管方还没有为云端 Agent 配置模型。', 503);
+      const grant = typeof body.grant === 'string' && body.grant ? body.grant : null;
+      if (typeof credentials.admitGrant === 'function') {
+        try {
+          await credentials.admitGrant(identity, conversationId, grant);
+        } catch (err) {
+          if (err instanceof AgentServiceError) throw err;
+          const why = CREDENTIAL_REASON[err?.reason];
+          if (why === 'disabled') throw new AgentServiceError('disabled', '项目创建者已关闭云端 Agent。', 403);
+          if (err?.reason === 'unavailable' || err?.reason === 'timeout') throw new AgentServiceError('unavailable', '文档服务暂时连不上,请稍后再试。', 503);
+          throw new AgentServiceError('bad-grant', '这条消息带的授权不对或已过期,请重试。', 403);
+        }
+      }
+      // 闸:一轮开始前(契约第 6.2 节)。放行即占名额,之后恰好还一次
       const admitted = await gate.admitRun({ projectId: identity.projectId, userId: identity.userId });
-      if (!admitted?.ok) throw new AgentServiceError(admitted?.code ?? 'busy', admitted?.message ?? '云端 Agent 正忙,请稍后再试。', admitted?.code === 'disabled' ? 403 : 429);
+      if (!admitted?.ok) {
+        const code = admitted?.code ?? 'busy';
+        throw new AgentServiceError(code, admitted?.message ?? '云端 Agent 正忙,请稍后再试。', code === 'disabled' ? 403 : 429);
+      }
+      const slot = { projectId: identity.projectId, userId: identity.userId };
       let entry;
       let conv;
       try {
         entry = await instanceFor(identity);
-        conv = conversationOf(entry, conversationId, true);
+        conv = conversationOf(identity, conversationId, true);
+        if (!conv) throw new AgentServiceError('bad-request', '对话 id 不合法');
         if (conv.run) throw new AgentServiceError('busy-conversation', '这个对话还有一轮在进行。', 409);
       } catch (err) {
-        gate.release({ projectId: identity.projectId, userId: identity.userId });
+        gate.release(slot);
         throw err;
       }
-      const cfg = await modelConfig();
+      // 从这里到 `conv.run = …` 没有等待:同一个对话并发到达的两条消息只有一条过得去
+
       const runId = randomUUID();
-      const first = emit(conv, { type: 'user', runId, prompt: body.prompt, from: identity.deviceName ?? null, at: now() });
-      conv.state = 'running';
-      conv.reason = null;
+      const grantKey = `${entry.key}\n${conversationId}`;
+      if (grant) grants.set(grantKey, grant); else grants.delete(grantKey);
+      const model = pickModel(cfg, typeof body.model === 'string' ? body.model : undefined);
       let finished = false;
-      const finish = (state, reason = null) => {
+      let stopped = false;
+      let sawError = null;
+      let limitHit = false;
+      let inner = null;
+      let timer = null;
+
+      const finish = (state, reason = null, message = null) => {
         if (finished) return;
         finished = true;
         clearTimeout(timer);
         conv.run = null;
-        conv.state = state;
-        conv.reason = reason;
+        conv.pinned = false;
+        entry.runs.delete(conversationId);
+        grants.delete(grantKey);
         entry.lastUsed = now();
-        gate.release({ projectId: identity.projectId, userId: identity.userId });
-        emit(conv, { type: 'end', runId, state });
-        say('agent.run.end', { projectId: identity.projectId, runId, state });
+        gate.release(slot);
+        store.emit(conv, { type: 'end', runId, state });
+        store.setState(conv, { state, reason, message, endedAt: now() });
+        store.compact(conv);
+        say('agent.run.end', { projectId: identity.projectId, runId, state, ...(reason ? { reason } : {}) });
+        // 一轮结束:攒着的补渲马上发,保证最后的版本有计划
+        void render.flush(conv);
       };
-      let sawError = null;
-      let stopped = false;
-      const run = entry.inst.startHostedRun({
+
+      const stop = (kind, detail = {}) => {
+        if (finished) return;
+        stopped = true;
+        try { inner?.abort(); } catch { /* 已经结束 */ }
+        if (kind === 'stopped') {
+          store.emit(conv, { type: 'status', runId, text: '已停止' });
+          finish('idle', 'stopped');
+        } else if (kind === 'limit') {
+          const message = `这一轮超过了 ${Math.round(limits.runMs / 60_000)} 分钟的上限,已停下。已经落地的改动保留在项目里。`;
+          store.emit(conv, { type: 'error', code: 'limit', runId, message });
+          finish('failed', 'limit', message);
+        } else if (kind === 'revoked') {
+          const reason = detail.reason ?? 'revoked';
+          const message = revokeText(reason);
+          store.emit(conv, { type: 'error', code: 'revoked', reason, runId, message });
+          finish('revoked', reason, message);
+        } else {
+          store.emit(conv, { type: 'error', code: 'interrupted', runId, message: INTERRUPTED_MESSAGE });
+          finish('interrupted', 'interrupted', INTERRUPTED_MESSAGE);
+        }
+      };
+
+      conv.run = { runId, userId: identity.userId, stop };
+      conv.pinned = true;
+      entry.runs.set(conversationId, conv);
+      const first = store.emit(conv, { type: 'user', runId, prompt: body.prompt, from: identity.deviceName ?? null, at: now() });
+      store.setState(conv, {
+        state: 'running', reason: null, message: null, runId, startedAt: now(), endedAt: null,
+        startedOn: identity.deviceName ?? conv.meta.startedOn ?? null,
+        ...(conv.meta.title ? {} : { title: (body.prompt.trim().split('\n')[0] ?? '').slice(0, 40) }),
+      });
+      say('agent.run.start', { projectId: identity.projectId, runId });
+
+      inner = entry.inst.startHostedRun({
         runId,
         conversationId,
         prompt: body.prompt,
@@ -257,40 +409,58 @@ export function createHostedAgentService({
         library: Array.isArray(body.library) ? body.library : [],
         pageState: body.pageState && typeof body.pageState === 'object' ? body.pageState : null,
         apiConfig: cfg,
-        historyFile: historyFileOf(identity, conversationId),
+        historyFile: dataDir ? path.join(store.dirOf(identity.projectId, ownerKeyOf(identity), conversationId), 'history.json') : null,
         sessionKey: `cloud-${ownerKeyOf(identity).slice(0, 16)}-${conversationId}`,
+        maxProjectBytes: limits.maxProjectBytes,
         fetchImpl: body.__fetchImpl,
+        // 闸:每次模型请求前(契约第 6.2 节);之后记一行用量(第 6.3 节)
+        onModelCall: async (phase, info) => {
+          if (phase === 'before') {
+            const ok = await gate.admitModelCall({ projectId: identity.projectId, userId: identity.userId, model });
+            if (!ok?.ok) throw Object.assign(new Error(ok?.message ?? '云端 Agent 现在不能调用模型。'), { runErrorCode: ok?.code ?? 'busy' });
+            return;
+          }
+          gate.record({
+            t: now(), projectId: identity.projectId, userId: identity.userId, username: identity.username ?? '', conversationId, runId,
+            vendor: info?.vendor ?? cfg.vendor ?? '', model: info?.model ?? model,
+            input: info?.input ?? 0, output: info?.output ?? 0, cacheRead: info?.cacheRead ?? 0, ok: info?.ok !== false, ms: info?.ms ?? 0,
+          });
+        },
         onEvent: (ev) => {
           if (finished) return;
-          if (ev.type === 'error') sawError = ev;
-          emit(conv, { ...ev, runId });
+          let out = ev;
+          if (ev.type === 'diagnostic') {
+            // 托管档只发配置与请求、回应的计数,不带模型接口的地址(契约第 2.4 节)
+            if (ev.stage !== 'configuration' && ev.stage !== 'request' && ev.stage !== 'response') return;
+          } else if (ev.type === 'error') {
+            out = typeof ev.code === 'string' ? ev : { ...ev, code: 'model', message: `模型调用失败:${scrub(ev.message)}` };
+            sawError = out;
+          } else if (ev.type === 'done' && ev.outcome === 'round_limit') {
+            limitHit = true;
+          }
+          store.emit(conv, { ...out, runId });
         },
       });
-      const timer = setTimeout(() => {
-        if (finished) return;
-        emit(conv, { type: 'error', code: 'limit', runId, message: `这一轮超过了 ${Math.round(limits.runMs / 60_000)} 分钟的上限,已停下。已经落地的改动保留在项目里。` });
-        stopped = true;
-        try { run.abort(); } catch { /* 已经结束 */ }
-        finish('failed', 'limit');
-      }, limits.runMs);
+      timer = setTimeout(() => stop('limit'), limits.runMs);
       timer.unref?.();
-      conv.run = {
-        runId,
-        abort: () => {
-          if (finished) return;
-          stopped = true;
-          try { run.abort(); } catch { /* 已经结束 */ }
-          emit(conv, { type: 'status', runId, text: '已停止' });
-          finish('idle', 'stopped');
+      if (stopped) { try { inner.abort(); } catch { /* 已经结束 */ } }
+
+      inner.done.then(
+        () => {
+          if (finished || stopped) return;
+          if (sawError) return finish('failed', sawError.code ?? 'model', sawError.message ?? null);
+          if (limitHit) {
+            const message = `这一轮到了 ${limits.rounds} 次模型往返的上限,已停下。已经落地的改动保留在项目里,可以接着说。`;
+            store.emit(conv, { type: 'error', code: 'limit', runId, message });
+            return finish('failed', 'limit', message);
+          }
+          return finish('idle', null);
         },
-      };
-      say('agent.run.start', { projectId: identity.projectId, runId });
-      run.done.then(
-        () => { if (!stopped) finish(sawError ? 'failed' : 'idle', sawError ? (sawError.code ?? 'model') : null); },
         (err) => {
-          if (stopped) return;
-          emit(conv, { type: 'error', code: 'model', runId, message: String(err?.message ?? err) });
-          finish('failed', 'model');
+          if (finished || stopped) return;
+          const message = `模型调用失败:${scrub(err?.message ?? err)}`;
+          store.emit(conv, { type: 'error', code: 'model', runId, message });
+          finish('failed', 'model', message);
         },
       );
       return { runId, seq: first.seq };
@@ -301,47 +471,96 @@ export function createHostedAgentService({
      * 对话不存在(或不是这位成员在这个项目里的)时回 null,不泄露存在与否之外的任何东西。
      */
     subscribe(identity, conversationId, after, onEvent) {
-      checkIdentity(identity);
-      const entry = instances.get(keyOf(identity));
-      const conv = entry && !entry.closed ? conversationOf(entry, conversationId, false) : null;
+      const conv = conversationOf(identity, conversationId, false);
       if (!conv) return null;
-      entry.lastUsed = now();
-      const from = Number.isSafeInteger(after) && after > 0 ? after : 0;
-      // 补发与接上实时在同一拍里做:emit 是同步的,中间插不进别的事件
-      for (const ev of conv.events) if (ev.seq > from) onEvent(ev);
-      conv.listeners.add(onEvent);
-      return () => conv.listeners.delete(onEvent);
+      const entry = instances.get(keyOf(identity));
+      if (entry) entry.lastUsed = now();
+      return store.subscribe(conv, after, onEvent, { userId: identity.userId });
     },
 
-    /** 停这个对话进行中的一轮。别人的、不存在的都当作没有 */
+    /** 停这个对话进行中的一轮。主人从任何设备都能停;别人的、不存在的都当作没有 */
     abort(identity, conversationId) {
-      checkIdentity(identity);
-      const entry = instances.get(keyOf(identity));
-      const conv = entry && !entry.closed && CONVERSATION_ID_RE.test(String(conversationId)) ? entry.convs.get(conversationId) : null;
-      if (conv?.run) conv.run.abort();
+      const conv = conversationOf(identity, conversationId, false);
+      conv?.run?.stop('stopped');
       return { ok: true };
     },
 
-    /** 这位成员在这个项目里的对话(这一块只有内存里的;落盘后由存储给) */
+    /** 这位成员(按主人键)在这个项目里的对话,最近动过的在前 */
     conversations(identity) {
       checkIdentity(identity);
-      const entry = instances.get(keyOf(identity));
-      if (!entry || entry.closed) return [];
-      return [...entry.convs.values()].map((c) => ({ id: c.id, state: c.state, reason: c.reason, lastSeq: c.seq }));
+      return store.list(identity.projectId, ownerKeyOf(identity)).map(listItem);
     },
 
-    /** 撤销(契约第 4.5 节):关掉受影响的实例,进行中的一轮记原因后停下。`userId` 不给表示整个项目 */
+    /** 一个对话的状态;没有回 null */
+    conversation(identity, conversationId) {
+      const conv = conversationOf(identity, conversationId, false);
+      if (!conv) return null;
+      return { ...listItem({ ...conv.meta, lastSeq: conv.seq }), message: conv.meta.message ?? null, runId: conv.meta.runId ?? null };
+    },
+
+    /** 改标题;没有这个对话回 false */
+    rename(identity, conversationId, title) {
+      const conv = conversationOf(identity, conversationId, false);
+      if (!conv) return false;
+      store.setState(conv, { title: String(title ?? '').trim().slice(0, 80) });
+      return true;
+    },
+
+    /** 删对话:进行中的先停;连模型历史、补渲清单一起删。没有这个对话回 false */
+    remove(identity, conversationId) {
+      const conv = conversationOf(identity, conversationId, false);
+      if (!conv) return false;
+      conv.run?.stop('stopped');
+      render.forget(conv);
+      store.remove(conv);
+      return true;
+    },
+
+    /** 本项目的用量:总量与各成员的量(项目内任何成员可查) */
+    usage(identity, since = null) {
+      checkIdentity(identity);
+      if (!usage) return { project: { tokens: 0, calls: 0 }, members: [] };
+      const s = usage.summary(identity.projectId, Number.isFinite(since) ? since : null);
+      const byName = new Map();
+      for (const m of s.members) {
+        const name = m.username || String(m.userId ?? '').split('@')[0];
+        const cur = byName.get(name) ?? { username: name, tokens: 0, calls: 0 };
+        cur.tokens += m.tokens; cur.calls += m.calls;
+        byName.set(name, cur);
+      }
+      return { project: s.project, members: [...byName.values()] };
+    },
+
+    /** `GET /v1/info` 的内容(契约第 2.3 节) */
+    async info(identity) {
+      checkIdentity(identity);
+      let cfg = {};
+      try { cfg = (await modelConfig()) ?? {}; } catch { cfg = {}; }
+      const q = gate.quotaOf?.(identity.projectId) ?? { tokens: 0, limitTokens: null };
+      return {
+        enabled: agentEnabled(identity.projectId),
+        render: { enabled: render.enabled && renderEnabled(identity.projectId) },
+        ...publicModelInfo(cfg),
+        limits: { rounds: limits.rounds, runMs: limits.runMs },
+        usage: { tokens: q.tokens, limitTokens: q.limitTokens, ...(q.window ? { window: q.window } : {}) },
+        running: store.list(identity.projectId, ownerKeyOf(identity)).filter((m) => m.state === 'running').map((m) => m.id),
+      };
+    },
+
+    /**
+     * 撤销(契约第 4.5 节):受影响实例里进行中的一轮各记原因后立刻停下,实例关掉。`userId` 不给表示整个项目。
+     * `reason`:`disabled`(开关关了)、`removed`、`kicked`、`deleted`。开关关了与项目删除时撤回并清掉补渲清单;
+     * 项目删除时删掉这个项目的对话记录与模型历史(用量记录留着,它是托管方的账)。
+     */
     revoke({ projectId, userId = null, reason }) {
       for (const entry of [...instances.values()]) {
         if (entry.identity.projectId !== projectId) continue;
         if (userId !== null && entry.identity.userId !== userId) continue;
-        for (const conv of entry.convs.values()) {
-          if (!conv.run) continue;
-          const runId = conv.run.runId;
-          emit(conv, { type: 'error', code: 'revoked', reason, runId, message: `云端 Agent 的这段对话已失效(${reason})。已经落地的改动保留在项目里。` });
-        }
+        for (const conv of [...entry.runs.values()]) conv.run?.stop('revoked', { reason });
         closeEntry(entry, `revoked:${reason}`);
       }
+      if (reason === 'disabled' || reason === 'deleted') void render.cancelProject(projectId);
+      if (reason === 'deleted') store.removeProject(projectId);
     },
 
     /** 诊断:不含任何正文 */
@@ -350,9 +569,11 @@ export function createHostedAgentService({
         instances: [...instances.values()].map((e) => ({
           projectId: e.identity.projectId,
           user: sha(e.identity.userId).slice(0, 8),
-          conversations: e.convs.size,
-          running: activeRunsOf(e),
+          conversations: e.runs.size,
+          running: e.runs.size,
         })),
+        gate: gate.describe?.() ?? null,
+        render: render.describe(),
       };
     },
 
@@ -360,17 +581,25 @@ export function createHostedAgentService({
     _instance(identity) {
       return instances.get(keyOf(identity))?.inst ?? null;
     },
+    _render: render,
+    _store: store,
 
+    /**
+     * 收尾(SIGTERM,契约第 3.4 节):不再接新请求 → 进行中的每一轮记「中断」并停下 → 状态落盘 → 关连接。
+     * 没渲完的补渲清单留在盘上,下次起来重发。
+     */
     async close() {
       if (closed) return;
       closed = true;
       clearInterval(sweep);
       for (const entry of [...instances.values()]) {
-        for (const conv of entry.convs.values()) {
-          if (conv.run) emit(conv, { type: 'error', code: 'interrupted', runId: conv.run.runId, message: '云端 Agent 服务中断,这一轮没有做完。已经落地的改动保留在项目里。' });
-        }
+        for (const conv of [...entry.runs.values()]) conv.run?.stop('interrupted');
         closeEntry(entry, 'service-close');
       }
+      render.close();
+      usage?.close();
+      store.close();
     },
   };
+  return api;
 }

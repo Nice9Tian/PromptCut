@@ -40,92 +40,8 @@ import { tools, toolGroups } from '../mcp-tools.mjs';
 import { TOOL_ROUTES } from '../../src/mcp/routes.mjs';
 import { wsClient, waitFor } from './fake-ws-kit.mjs';
 
-const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
-function project(id, name) {
-  return {
-    version: 1, id, name, width: 1920, height: 1080, fps: 30, duration: 12, themeId: 'midnight', media: [],
-    tracks: [{ id: 't1', name: '序列 1', clips: [{ id: 'c1', cardId: 'title', start: 0, end: 4, params: {}, label: `${name} 的卡` }] }],
-    transitions: [],
-  };
-}
-
-const script = (steps) => `按脚本做。\n\`\`\`mock-script\n${JSON.stringify(steps)}\n\`\`\``;
-const credentials = { protocolsFor: (_identity, n) => ['promptcut.v1', `promptcut.role.agent.${n}`] };
-const modelConfig = () => ({ vendor: 'mock', model: 'mock-1' });
-
-/** 本机回环的文档服务(内存)加两个小工具:把项目写进去、读当前内容 */
-async function startDoc(t) {
-  const server = http.createServer((req, res) => { res.statusCode = 404; res.end(); });
-  const built = createSharedDocService({ mode: 'lan', dataDir: null, store: null, server, path: '/docservice', isLoopback: () => true, localDevice: { deviceId: 'pc-test-device-0001', deviceName: 'test' }, log: () => {} });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const url = `ws://127.0.0.1:${server.address().port}/docservice`;
-  const clients = [];
-  t.after(async () => {
-    for (const c of clients) c.close();
-    await built.service.close();
-    await new Promise((resolve) => server.close(resolve));
-  });
-  let seq = 0;
-  async function open(projectId) {
-    const c = wsClient(url);
-    clients.push(c);
-    await c.opened;
-    c.send({ type: 'project.open', projectId, reqId: `open-${++seq}` });
-    const st = await c.next((m) => m.type === 'project.state', 5000);
-    if (st.project === undefined && Number.isSafeInteger(st.parts)) {
-      await c.next((m) => m.type === 'project.state.end' && m.rev === st.rev, 5000);
-      const parts = c.all.filter((m) => m.type === 'project.state.part' && m.rev === st.rev).sort((x, y) => x.index - y.index);
-      st.project = JSON.parse(parts.map((m) => m.data).join(''));
-    }
-    return { c, st };
-  }
-  return {
-    url,
-    async seed(p) {
-      const { c } = await open(p.id);
-      const opId = `seed-${++seq}`;
-      c.send({ type: 'project.op', projectId: p.id, opId, session: 'seed', ops: [{ op: 'set', path: '', value: p }], reqId: opId });
-      const r = await c.next((m) => m.reqId === opId, 5000);
-      assert.equal(r.type, 'project.op.ok', `项目 ${p.id} 写进文档服务`);
-      c.close();
-    },
-    async stateOf(projectId) {
-      const { c, st } = await open(projectId);
-      c.close();
-      return st;
-    },
-  };
-}
-
-/** 一套:文档服务 + vite + 托管档服务(不经 HTTP) */
-async function startKit(t, { limits } = {}) {
-  const doc = await startDoc(t);
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-cloud-agent-'));
-  const vite = await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, ws: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
-  const logs = [];
-  const service = createHostedAgentService({
-    root: ROOT, loadModule: (id) => vite.ssrLoadModule(id), docUrl: doc.url, credentials, modelConfig, dataDir,
-    ...(limits ? { limits } : {}), log: (event, fields) => logs.push({ event, ...fields }),
-  });
-  t.after(async () => {
-    await service.close();
-    await vite.close();
-    fs.rmSync(dataDir, { recursive: true, force: true });
-  });
-  /** 等这个对话的事件里出现 end,回全部事件 */
-  async function finished(identity, conversationId, ms = 30_000) {
-    const seen = [];
-    await waitFor(() => {
-      seen.length = 0;
-      const off = service.subscribe(identity, conversationId, 0, (ev) => seen.push(ev));
-      off?.();
-      return seen.some((e) => e.type === 'end');
-    }, ms, `对话 ${conversationId} 结束`);
-    return seen;
-  }
-  return { doc, vite, service, dataDir, logs, finished };
-}
+import { ROOT, project, script, credentials, modelConfig, startDoc, startKit } from './cloud-agent-kit.mjs';
 
 const alice = { projectId: 'p-a', userId: 'alice@dev-a', username: 'alice', deviceName: 'A 的电脑' };
 const bob = { projectId: 'p-b', userId: 'bob@dev-b', username: 'bob', deviceName: 'B 的电脑' };
@@ -400,7 +316,9 @@ test('CA-ISO-01 / CA-ISO-02 / CA-TOOL-01 / CA-PAGE-01 / CA-HIST-01 / CA-RUN-01 /
     await waitFor(() => seen.some((e) => e.type === 'end'), 1000, '停下');
     assert.ok(Date.now() - at < 1000);
     assert.equal(seen.at(-1).state, 'idle');
-    assert.deepEqual(kit.service.conversations(alice).find((c) => c.id === 'c-stop'), { id: 'c-stop', state: 'idle', reason: 'stopped', lastSeq: seen.length });
+    // 丙块给列表项追加了 title、updatedAt、startedOn;原有的四个字段不变
+    const item = kit.service.conversations(alice).find((c) => c.id === 'c-stop');
+    assert.deepEqual({ id: item.id, state: item.state, reason: item.reason, lastSeq: item.lastSeq }, { id: 'c-stop', state: 'idle', reason: 'stopped', lastSeq: seen.length });
     await new Promise((r) => setTimeout(r, 100));
     assert.notEqual((await kit.doc.stateOf('p-a')).project.tracks[0].clips[0].end, 11, '停下之后没有新的写入');
   });
@@ -425,13 +343,21 @@ test('CA-ISO-01 / CA-ISO-02 / CA-TOOL-01 / CA-PAGE-01 / CA-HIST-01 / CA-RUN-01 /
     assert.equal(off.initiatorOffline, true);
     assert.match(off.error, /发起方不在线/);
     assert.ok(Date.now() - t0 < 100, '不等待');
-    await kit.service.send(alice, 'c-sel', { prompt: script([{ tool: 'get_selection', input: {} }, { say: '看到了' }]), pageState: { t: 2.5, selection: ['c1'] } });
-    await kit.finished(alice, 'c-sel');
+    // 丙块按契约第 9.4 节补上「发起方在线」的判定:发起这一轮的那个成员有事件流连着才算在线(甲块里只看有没有带快照)
+    await kit.service.send(alice, 'c-sel', { prompt: script([{ sleepMs: 3000 }, { say: '看到了' }]), pageState: { t: 2.5, selection: ['c1'] } });
+    assert.equal((await inst.callTool('get_selection', {}, 'c-sel')).initiatorOffline, true, '一轮在跑但发起方没有连着看:不在线');
+    const off2 = kit.service.subscribe(alice, 'c-sel', 0, () => {});
     const got = await inst.callTool('get_selection', {}, 'c-sel');
     assert.equal(got.ok, true);
     assert.deepEqual(got.ids, ['c1']);
     assert.equal(got.clips[0].id, 'c1');
     assert.equal(got.clips[0].trackId, 't1');
+    off2();
+    const t1 = Date.now();
+    const gone = await inst.callTool('get_selection', {}, 'c-sel');
+    assert.equal(gone.initiatorOffline, true, '流断开后同一轮里再调:立刻回发起方不在线');
+    assert.ok(Date.now() - t1 < 100, '不等待');
+    kit.service.abort(alice, 'c-sel');
   });
 
   await t.test('CA-ISO-01 两个项目并发各写 60 次:只动自己的项目;出锁后 store 里不留项目', async () => {
