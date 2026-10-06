@@ -15,11 +15,12 @@
  *
  * 验收标准(退出码 0 当且仅当全部成立):
  *   1. 「默认参数、普通文字」的用例(标 expect=same):改前改后逐帧逐像素相同,差异帧数 0。
- *      含:空文本、拉丁文、中文、含换行、不同的每字毫秒、打字机部件(text-typing,经组合卡)。
+ *      含:空文本、拉丁文、中文、含换行、不同的每字毫秒(含整帧边界上的 100 ms)、打字机部件(text-typing,经组合卡)。
  *   2. 「应当不同」的用例(标 expect=differs)只做报告,不判对错,由人看图解释:
  *      emoji / 组合字符 / 国旗(改前按 UTF-16 码元计时,改后按字素计时,这是用户认可的修正);
  *      带停顿等新参数(改前没有这些参数,忽略它们);片段从中间裁切(改前每次挂载从头打,改后接着打)。
- *      脚本为每个这样的用例列出首个差异帧,并拼「改前 | 改后 | 差异×8」三联图(只裁有差异的区域)到 <out>/sheets/。
+ *      脚本另按文字模型逐帧推「改前该显示的字」与「改后该显示的字」,要求「文字不同的帧集合」恰好等于「像素不同的帧集合」(否则退出码 1);
+ *      并为每个这样的用例列出首个差异帧,并拼「改前 | 改后 | 差异×8」三联图(只裁有差异的区域)到 <out>/sheets/。
  *   3. 两边都导出成功、帧数一致。
  *
  * 比对陷阱:见 docs/guides/compare-pitfalls.md。程序报不同先看图——所以脚本会把每个有差异的用例出图。
@@ -27,6 +28,7 @@
  * 输出:过程写 stdout;最后一行 JSON `{ ok, cases: [...] }`;完整结果写 <out>/result.json。
  */
 import './../lib/no-user-dirs.mjs';
+import '../../src/testing/registerTs.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -54,6 +56,7 @@ const CASES = [
   { name: 'chinese-default', expect: 'same', dur: 2.8, params: { text: '这是一段打字机测试文字，含标点。' } },
   { name: 'multiline-default', expect: 'same', dur: 2.6, params: { text: 'Line one\nLine two' } },
   { name: 'slow-duration-200', expect: 'same', dur: 3.0, params: { text: 'Slow typing', duration: 200 } },
+  { name: 'duration-100-frame-boundaries', expect: 'same', dur: 3.0, params: { text: 'Boundary at exact frames', duration: 100 } },
   { name: 'part-text-typing-default', expect: 'same', dur: 3.2, part: { text: 'Part typing, default.', size: 0, duration: 120 } },
   { name: 'part-text-typing-chinese', expect: 'same', dur: 2.6, part: { text: '部件里的中文打字。', size: 0, duration: 120 } },
   { name: 'emoji-zwj-default', expect: 'differs', dur: 3.0, params: { text: 'Hi 👩🏽‍💻🎉 ok' } },
@@ -160,6 +163,32 @@ function sheet(wa, wb, f, box, file) {
   fs.writeFileSync(file, PNG.sync.write(out));
 }
 
+/**
+ * 解释差异:不靠人眼,逐帧推「改前该显示什么字」与「改后该显示什么字」,
+ * 看「文字不同的帧集合」是否恰好等于「像素不同的帧集合」。
+ *   改前:text.substring(0, floor(经过毫秒 / 每字毫秒)),按 UTF-16 码元,忽略一切新参数、忽略 mediaOffset(每次挂载从头打)
+ *   改后:字素事件表(typingTextAt),经过毫秒 = 局部时间 + mediaOffset
+ * 两边都只在「默认参数的普通文字」用例里已被像素证明与实际一致(expect=same 全 0 差异),这里把同一个模型外推到 differs 用例。
+ */
+async function analyticTextDiff(w) {
+  const { createTypingSchedule, typingTextAt, typingScheduleOptionsFromParams } = await import('../../src/kernel/typingEvents.ts');
+  const p = w.part ?? w.params;
+  const text = p.text ?? '这是一段打字机测试文字', duration = p.duration ?? 120;
+  const schedule = createTypingSchedule(w.part ? { text, duration } : typingScheduleOptionsFromParams({ text, ...p }));
+  const frames = [];
+  for (let f = w.startFrame; f < w.endFrame; f++) {
+    const local = ((f - w.startFrame) / FPS) * 1000;
+    // 旧实现读的是被钉住的页面时钟(帧毫秒,浮点),elapsed = 当前帧毫秒 - 挂载那一帧的毫秒,整帧边界上带着自己的浮点误差,这里照样减
+    const oldElapsed = (f * 1000) / FPS - (w.startFrame * 1000) / FPS;
+    const oldText = duration === 0 ? text : text.substring(0, Math.floor(oldElapsed / duration));
+    const newText = typingTextAt(schedule, local + (w.mediaOffset ?? 0) * 1000);
+    // 排版会折叠空白、末尾空白不占位,所以「肉眼可见的文字」先按空白折叠并去掉尾部空白再比
+    const seen = (x) => x.replace(/s+/g, ' ').trimEnd();
+    if (seen(oldText) !== seen(newText)) frames.push(f);
+  }
+  return frames;
+}
+
 async function main() {
   if (!fs.existsSync(path.join(BEFORE, 'scripts', 'export-e2e.mjs'))) throw new Error(`--main 不是一棵代码树:${BEFORE}`);
   const { project, windows, frames } = buildProject();
@@ -212,8 +241,15 @@ async function main() {
       }
       row.diffFramesList = c.list.map((x) => x.frame);
     }
+    if (w.expect === 'differs') {
+      const expectedFrames = await analyticTextDiff(w);
+      const pixel = new Set(row.diffFramesList ?? []);
+      row.analyticTextDiffFrames = expectedFrames.length;
+      row.analyticMatchesPixels = expectedFrames.length === pixel.size && expectedFrames.every((x) => pixel.has(x));
+      if (!row.analyticMatchesPixels) ok = false;
+    }
     result.cases.push(row);
-    console.log(`${w.expect === 'same' ? (c.diffFrames ? 'FAIL' : 'PASS') : 'INFO'} ${w.name} [${w.expect}] 帧 ${w.startFrame}-${w.endFrame - 1}:${c.frames} 帧,差异 ${c.diffFrames} 帧${c.first !== null ? `,首个差异帧 ${c.first},最大通道差 ${c.maxChannel}` : ''}`);
+    console.log(`${w.expect === 'same' ? (c.diffFrames ? 'FAIL' : 'PASS') : 'INFO'} ${w.name} [${w.expect}] 帧 ${w.startFrame}-${w.endFrame - 1}:${c.frames} 帧,差异 ${c.diffFrames} 帧${c.first !== null ? `,首个差异帧 ${c.first},最大通道差 ${c.maxChannel}` : ''}${row.analyticMatchesPixels !== undefined ? `;按文字模型推的差异帧 ${row.analyticTextDiffFrames} 个,${row.analyticMatchesPixels ? '与像素差异的帧集合完全一致' : '与像素差异的帧集合不一致'}` : ''}`);
   }
   const gap = gaps.map(([a, b]) => compareDirs(works.before[last], works.after[last], a, b));
   result.gapDiffFrames = gap.reduce((s, g) => s + g.diffFrames, 0);
