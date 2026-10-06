@@ -46,7 +46,7 @@ const BAKERY = path.join(SERVER, 'bakery');
  *
  * 多一条都要在这里显式写出来,加不进来就说明依赖方向真的破了。
  */
-const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs', 'server/test/port-file.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/m8-judges.test.mjs', 'server/test/maint-3-claim-gate-judge.test.mjs', 'server/test/reopen-installed-lib.test.mjs', 'server/test/reopen-installed-state.test.mjs', 'server/test/test-suite-policy.test.mjs']);
+const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/four-stage-acceptance.test.mjs', 'server/test/wait-writes-quiet.test.mjs', 'server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs', 'server/test/port-file.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/m8-judges.test.mjs', 'server/test/maint-3-claim-gate-judge.test.mjs', 'server/test/reopen-installed-lib.test.mjs', 'server/test/reopen-installed-state.test.mjs', 'server/test/test-suite-policy.test.mjs']);
 
 const CODE = /\.(mjs|mts|ts|tsx)$/;
 
