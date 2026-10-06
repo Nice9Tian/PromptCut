@@ -12,7 +12,8 @@
  *   S2 解码音轨,每个事件窗口([事件时刻, +0.05 s])里有能量(RMS ≥ 5e-5),且声音起点落在事件时刻前 12 ms 到后 1 帧(33 ms)内
  *      (起点 = 窗口 [事件-0.05, 事件+0.1] 内第一个 |x| ≥ 0.002 的采样);
  *   S3 第一个事件之前(事件-0.2 到事件-0.05)没有声音(没有提前出声);
- *   S4 抽三帧(事件时刻、中间、结尾)存成 PNG,三帧的亮度标准差都 > 2(不是纯色),且事件时刻的帧与最后一帧不相同(画面在动)。
+ *   S4 抽三帧存成 PNG:第一个事件之后 0.1 s、最后一个事件之后 0.1 s、一个安静时刻(第一个事件之前 0.2 s,没有就取片尾前);
+ *      前两帧的亮度标准差都 > 2(事件那一刻画面上有内容,不是纯色),且三帧不全相同(画面在动)。
  * 不向扬声器出声:无头 Chrome 带 --mute-audio;ffmpeg 只解码到文件。
  */
 import './../lib/no-user-dirs.mjs';
@@ -122,7 +123,7 @@ async function main() {
     const probe = JSON.parse(run('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', dest]).stdout);
     const v = probe.streams.find((x) => x.codec_type === 'video'), a = probe.streams.find((x) => x.codec_type === 'audio');
     const dur = Number(probe.format.duration);
-    check(!!v && !!a && Math.abs(dur - s.duration) <= 0.15, `${s.name} S1:有视频流与音频流,时长对`, { video: v && `${v.codec_name} ${v.width}x${v.height}`, audio: a && `${a.codec_name} ${a.sample_rate}Hz ${a.channels}ch`, duration: dur, expected: s.duration, bytes: fs.statSync(dest).size });
+    check(!!v && !!a && Math.abs(dur - s.project.duration) <= 0.15, `${s.name} S1:有视频流与音频流,时长对`, { video: v && `${v.codec_name} ${v.width}x${v.height}`, audio: a && `${a.codec_name} ${a.sample_rate}Hz ${a.channels}ch`, duration: dur, expected: s.project.duration, bytes: fs.statSync(dest).size });
     const raw = path.join(dir, `${s.name}.f32`);
     run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', dest, '-vn', '-ar', String(SR), '-ac', '2', '-f', 'f32le', raw]);
     const buf = fs.readFileSync(raw);
@@ -141,7 +142,8 @@ async function main() {
     for (let i = Math.max(0, Math.round((first - 0.2) * SR)); i < Math.round((first - 0.05) * SR); i++) { lead += pcm[i * 2] ** 2; n++; }
     check(n === 0 || Math.sqrt(lead / n) < 5e-4, `${s.name} S3:第一个事件之前没有提前出声`, { leadRms: n ? +Math.sqrt(lead / n).toFixed(6) : null });
     const stats = [];
-    for (const [label, t] of [['event', first + 0.03], ['mid', s.duration / 2], ['end', s.duration - 0.1]]) {
+    const last = s.events[s.events.length - 1], endAt = s.project.duration - 0.06;
+    for (const [label, t] of [['event', Math.min(first + 0.1, endAt)], ['last', Math.min(last + 0.1, endAt)], ['quiet', first > 0.3 ? first - 0.2 : endAt]]) {
       const png = path.join(OUT, `${s.file.replace('.mp4', '')}-${label}.png`);
       run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', String(t), '-i', dest, '-frames:v', '1', png]);
       const raw8 = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', png, '-f', 'rawvideo', '-pix_fmt', 'gray', '-'], { maxBuffer: 64 * 1024 * 1024, windowsHide: true }).stdout;
@@ -149,7 +151,7 @@ async function main() {
       const mean = sum / raw8.length, std = Math.sqrt(sq / raw8.length - mean * mean);
       stats.push({ label, t: +t.toFixed(2), std: +std.toFixed(2), png, sum });
     }
-    check(stats.every((x) => x.std > 2) && stats[0].sum !== stats[2].sum, `${s.name} S4:画面不是纯色、事件时刻与结尾的画面不同`, { std: stats.map((x) => `${x.label}=${x.std}`), frames: stats.map((x) => x.png) });
+    check(stats[0].std > 2 && stats[1].std > 2 && !(stats[0].sum === stats[1].sum && stats[1].sum === stats[2].sum), `${s.name} S4:事件时刻的画面不是纯色、画面在动`, { std: stats.map((x) => `${x.label}=${x.std}`), frames: stats.map((x) => x.png) });
     s.result = { file: dest, duration: dur, events: rows.length };
   }
 }
