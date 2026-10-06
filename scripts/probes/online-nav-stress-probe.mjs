@@ -37,6 +37,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
+import { seedSharedProject } from './lib-seed.mjs';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const argv = process.argv.slice(2);
@@ -175,7 +176,12 @@ const stamp = Date.now().toString(36);
 const NAME = `nav-${stamp}`;
 const creator = { username: 'boss', password: `boss-${randomBytes(6).toString('hex')}` };
 const PROJECT_PW = `pw-${randomBytes(6).toString('hex')}`;
-if (JOIN) await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+if (JOIN) {
+  const made = await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+  // 在线页面只加入、不新建(`dce4b22b`):先替创建者写进一份空项目,否则页面进不去(等不到成员按钮)
+  const seeded = await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator, name: NAME });
+  if (!seeded.ok) throw new Error(`替创建者写进空项目失败:${JSON.stringify(seeded)}`);
+}
 
 /* ------------------------------------------------------------------ 浏览器 */
 let browser = null;

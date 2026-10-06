@@ -33,6 +33,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
+import { seedSharedProject } from './lib-seed.mjs';
 import { layerMapOf } from '../../server/artifact-transfer.mjs';
 import { renderProject } from '../../server/render-project.mjs';
 import { clipInputSig } from '../../src/render/layerInputSig.mjs';
@@ -169,6 +170,8 @@ const NAME = `osl-${stamp}`;
 const creator = { username: 'boss', password: `boss-${randomBytes(6).toString('hex')}` };
 const PROJECT_PW = `pw-${randomBytes(6).toString('hex')}`;
 const made = await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+// 在线页面只加入、不新建(`dce4b22b`):先替创建者写进一份空项目,否则页面进不去(等不到成员按钮)
+check((await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator, name: NAME })).ok, '替创建者写进空项目');
 async function wsAsCreator(projectId = made.projectId) {
   const protocols = await buildAuthProtocols({ base: DOC_DIRECT, projectId, username: creator.username, deviceId: 'osl-probe-node-01', deviceName: 'probe-node', as: 'creator', password: creator.password, role: 'page' });
   const ws = new WebSocket(DOC_DIRECT.replace(/^http/, 'ws'), protocols);

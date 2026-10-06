@@ -31,6 +31,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
+import { seedSharedProject } from './lib-seed.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -101,12 +102,15 @@ function makeProxy(port) {
       return res.end(runtimeConfig);
     }
     const index = path.join(DIST, 'index.html');
-    const isPage = url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html';
+    // 跨源舞台载的是舞台入口 stage.html(在线执行用户卡与图卡,`online-card-exec-contract.md` 第 3.3 节);同源单舞台仍是 /editor/?stage=1。两种都算「舞台页请求」
+    const isStageEntry = url.pathname === '/editor/stage.html';
+    const isPage = url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html' || isStageEntry;
     if (isPage && url.searchParams.get('stage') === '1') {
       if (!stagePageHits.has(port)) stagePageHits.set(port, []);
       stagePageHits.get(port).push(Date.now());
       if (broken.has(port)) { res.writeHead(503, { 'Content-Type': 'text/plain', ...sec }); return res.end('stage origin down (probe)'); }
     }
+    if (isStageEntry) { const entry = path.join(DIST, 'stage.html'); return sendFile(fs.existsSync(entry) ? entry : index, 'no-store'); }
     if (isPage) return sendFile(index, 'no-store');
     if (url.pathname.startsWith('/editor/assets/')) {
       const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
@@ -143,7 +147,9 @@ const stamp = Date.now().toString(36);
 const NAME = `osw-${stamp}`;
 const creator = { username: 'boss', password: `boss-${randomBytes(6).toString('hex')}` };
 const PROJECT_PW = `pw-${randomBytes(6).toString('hex')}`;
-await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+const made = await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+// 在线页面只加入、不新建(`dce4b22b`):先替创建者写进一份空项目,否则页面进不去(等不到成员按钮)
+check((await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator, name: NAME })).ok, '替创建者写进空项目');
 
 /* ------------------------------------------------------------------ 浏览器 */
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 600_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])] });
