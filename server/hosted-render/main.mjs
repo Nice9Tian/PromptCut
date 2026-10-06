@@ -19,6 +19,7 @@
  *   PROMPTCUT_RENDER_MAX_PROJECTS     同时连着的项目数，缺省 16
  *   PROMPTCUT_RENDER_MEMORY_MAX / _MEMORY_HIGH   内存硬上限与节流线，缺省 6G / 5G
  *   PROMPTCUT_RENDER_CPU_QUOTA        缺省 400%
+ *   PROMPTCUT_RENDER_LOAD_HIGH        背压的 1 分钟负载线，缺省等于这台机器的核数（8 核就是 8）
  *   PROMPTCUT_RENDER_MEM_LOW          背压的可用内存线，本机可用内存低于它就暂停认领，缺省 2G
  *   PROMPTCUT_RENDER_USER             工作进程用的系统用户（只在有 systemd 时经 --uid 生效）；空表示与管理进程同一用户
  *   PROMPTCUT_RENDER_CGROUP           auto（缺省：有 systemd 与 cgroup v2 就用）| off
@@ -53,7 +54,7 @@ import { createIsolation, isolationCandidates, isoNodeIdFor, wipeDir, leftoverCo
 import { HOSTED_WORKER_ENV } from './source-gate.mjs';
 import { runSelfcheck, SELFCHECK_EXIT } from './selfcheck.mjs';
 import {
-  LIMIT_DEFAULTS, cgroupSupport, workerCommand, memAvailable, treeRss, createBackpressure, createOomTracker, parseBytes,
+  LIMIT_DEFAULTS, cgroupSupport, workerCommand, memAvailable, treeRss, createBackpressure, createOomTracker, parseBytes, loadHighFor, machineCores,
 } from './limits.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -102,6 +103,8 @@ export function renderServiceConfig(env = process.env) {
       if (n === null) throw Object.assign(new Error('PROMPTCUT_RENDER_MEM_LOW 写法不对（如 2G、512M）'), { code: 'bad-config' });
       return n;
     })(),
+    // 背压的负载线：缺省按核数（`limits.mjs` 的 `loadHighFor`），给了就用给的
+    loadHigh: env.PROMPTCUT_RENDER_LOAD_HIGH ? intOf(env.PROMPTCUT_RENDER_LOAD_HIGH, null, 1, 4096) : null,
     user: env.PROMPTCUT_RENDER_USER || '',
     cgroup: env.PROMPTCUT_RENDER_CGROUP === 'off' ? 'off' : 'auto',
     userCards: env.PROMPTCUT_RENDER_USER_CARDS === 'off' ? 'off' : 'isolated',
@@ -292,7 +295,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   });
 
   // ---------- 背压、内存看护、代码版本
-  const backpressure = createBackpressure({ memLowBytes: config.memLowBytes });
+  const backpressure = createBackpressure({ memLowBytes: config.memLowBytes, ...(config.loadHigh !== null ? { loadHigh: config.loadHigh } : {}) });
   const oom = createOomTracker();
   let readings = { memAvailable: null, healthMs: null, load1: null, workerRss: null, at: null };
   let codeVersion = compareCodeVersions({ self: null });
@@ -500,7 +503,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         },
         limits: { maxConcurrent: config.maxConcurrent, maxProjects: config.maxProjects, memoryMax: config.memoryMax, memoryHigh: config.memoryHigh, cpuQuota: config.cpuQuota, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}` },
         readings,
-        backpressure: { paused: backpressure.paused, reasons: backpressure.reasons },
+        backpressure: { paused: backpressure.paused, reasons: backpressure.reasons, loadHigh: config.loadHigh ?? loadHighFor(machineCores()) },
         quotaPausedUntil: quotaUntil,
         degraded: oom.degraded,
         codeVersion,

@@ -14,14 +14,33 @@
  *   3. **出口白名单头**：预渲染 Vite 的每个响应带 `Connection-Allowlist: (response-origin)`（与在线舞台同一条，`src/online/stagePolicy.mjs`）：
  *      文档只能连它自己的源，WebRTC 整个拦下。它是浏览器按文档执行的，第 2 层是浏览器进程级的，互为兜底。
  *
+ * **预渲染 → 编辑器的转发**：渲染页的素材请求（`/@media/*`、`/api/asset/*`、`/api/media/*`）由预渲染的 Vite 原样转给同一个工作进程里
+ * 编辑器的 Vite（`asset-client.ts` 的 `assetProxyPlugin`），浏览器的请求头跟着过去，编辑器那一侧的闸会把它当成浏览器直接发来的而拒掉。
+ * 所以预渲染一侧给**放行了的**浏览器请求盖一个通行记号（请求头 `x-pc-page-gate`，值是这个工作进程启动时随机生成的串，
+ * 经环境变量 `PROMPTCUT_HOSTED_GATE_PASS` 从编辑器进程传给它起的预渲染进程；页面拿不到它，自己带来的同名头先被摘掉）；
+ * 编辑器一侧见到对的记号，只放行素材那三类路径的 GET / HEAD，别的照拒。
+ *
  * `PROMPTCUT_PAGE_GATE=log`：只记不拦（定放行表、排查时用）——闸照判、代理照转，把本该拦下的打出来。缺省 `enforce`。
  * 被拦的请求打一行 `[page-gate] deny {…}`（前 50 条逐条，之后每 100 条一行），`render-host.mjs` 原样转出。
  */
 import http from 'node:http';
 import net from 'node:net';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { pageGate, PAGE_GATE_ENV } from './page-gate.mjs';
 
 export const PAGE_GATE_MODE_ENV = 'PROMPTCUT_PAGE_GATE';
+/** 预渲染 → 编辑器转发时的通行记号：环境变量名与请求头名 */
+export const GATE_PASS_ENV = 'PROMPTCUT_HOSTED_GATE_PASS';
+export const GATE_PASS_HEADER = 'x-pc-page-gate';
+const digest = (text) => createHash('sha256').update(String(text), 'utf8').digest();
+const samePass = (given, pass) => typeof given === 'string' && given !== '' && typeof pass === 'string' && pass !== '' && timingSafeEqual(digest(given), digest(pass));
+/** 编辑器一侧凭通行记号放行的：素材那三类路径的只读方法（与 `assetProxyPlugin` 转发的范围相同） */
+export function relayAllowed(url, method) {
+  const m = String(method || 'GET').toUpperCase();
+  if (m !== 'GET' && m !== 'HEAD') return false;
+  const u = String(url || '').toLowerCase().replace(/\/{2,}/g, '/');
+  return u.startsWith('/@media/') || u.startsWith('/api/asset/') || u.startsWith('/api/media/');
+}
 export const EGRESS_HEADER = Object.freeze(['Connection-Allowlist', '(response-origin)']);
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 
@@ -112,6 +131,13 @@ export function egressChromeArgs(proxyPort) {
   return [`--proxy-server=http://127.0.0.1:${proxyPort}`, '--proxy-bypass-list=<-loopback>', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'];
 }
 
+/** 这个进程里装上的闸(一个进程一台 Vite);没装回 null。诊断用 */
+let installed = null;
+export function hostedGateStatus() {
+  if (!installed) return null;
+  return { mode: installed.mode, role: installed.role, denied: installed.counts(), egress: installed.proxy ? installed.proxy.stats() : null };
+}
+
 /**
  * 装到一台 Vite 开发服务器上（`configureServer` 里调，要排在所有别的中间件之前）。
  * @param {{ middlewares: { use(fn: Function): void }, httpServer?: import('node:http').Server | null }} server
@@ -120,13 +146,26 @@ export function egressChromeArgs(proxyPort) {
 export async function installHostedGate(server, { prerender, env = process.env, write } = {}) {
   if (!hostedGateWanted(env)) return null;
   const mode = hostedGateMode(env);
-  const denyLog = createDenyLog(write ? { write } : {});
+  const denyLog = createDenyLog({ ...(write ? { write } : {}), ...(mode === 'log' ? { head: 5000 } : {}) });
   const role = prerender ? 'prerender' : 'editor';
+  // 通行记号：编辑器进程先生成（它起的预渲染进程从环境里继承）；预渲染进程只读不生成
+  if (!prerender && !env[GATE_PASS_ENV]) env[GATE_PASS_ENV] = randomBytes(24).toString('hex');
+  const pass = String(env[GATE_PASS_ENV] ?? '');
 
   server.middlewares.use((req, res, next) => {
+    const given = req.headers[GATE_PASS_HEADER];
+    delete req.headers[GATE_PASS_HEADER];
+    // 编辑器一侧：自己的预渲染进程转来的、已经过了那一侧的闸的素材请求
+    if (!prerender && samePass(given, pass) && relayAllowed(req.url, req.method)) return next();
     const verdict = pageGate({ url: req.url, method: req.method, headers: req.headers, prerender });
     if (prerender && verdict.browser) res.setHeader(EGRESS_HEADER[0], EGRESS_HEADER[1]);
-    if (verdict.allow) return next();
+    // 只记不拦时把浏览器发来的每一条 /api 请求都记下（放行的也记）：定放行表时看页面实际发了什么
+    if (mode === 'log' && verdict.browser && verdict.allow && /^\/+api\//i.test(String(req.url ?? ''))) denyLog.note('seen', { layer: 'page', role, method: req.method, path: String(req.url ?? '').split('?')[0].slice(0, 160), reason: 'allowed' });
+    if (verdict.allow) {
+      // 预渲染一侧：放行了的浏览器请求盖上通行记号（往编辑器转发时带着）
+      if (prerender && verdict.browser && pass) req.headers[GATE_PASS_HEADER] = pass;
+      return next();
+    }
     denyLog.note(mode === 'log' ? 'would-deny' : 'deny', { layer: 'page', role, method: req.method, path: String(req.url ?? '').split('?')[0].slice(0, 160), reason: verdict.reason, site: req.headers['sec-fetch-site'] ?? null });
     if (mode === 'log') return next();
     req.resume?.();
@@ -156,5 +195,6 @@ export async function installHostedGate(server, { prerender, env = process.env, 
     server.httpServer?.once('close', () => { void proxy.close(); });
   }
   try { (write ?? ((line) => console.log(line)))(`[page-gate] on ${JSON.stringify({ role, mode, egressProxy: proxy ? proxy.port : null })}`); } catch { /* 日志出错不影响闸 */ }
-  return { mode, role, counts: () => denyLog.counts(), proxy };
+  installed = { mode, role, counts: () => denyLog.counts(), proxy };
+  return installed;
 }

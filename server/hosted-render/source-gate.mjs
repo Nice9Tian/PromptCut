@@ -152,7 +152,7 @@ export function scanCss(source) {
 
 const CSS_ROOTS = ['src/cards/', 'src/parts/'];
 
-function checkCss(rel, source, errors) {
+function checkCss(rel, source, errors, { rootHas = null } = {}) {
   const { strings, urls, atRules } = scanCss(source);
   for (const at of atRules) {
     const name = at.name.toLowerCase();
@@ -172,7 +172,17 @@ function checkCss(rel, source, errors) {
   // 普通字符串（`content: "\201C"` 之类）不是路径，不查；只有 `image-set("a.png" 1x)` 把裸字符串当地址，出现它时才连字符串一起查
   const asPaths = /image-set\s*\(/i.test(source) ? [...strings, ...urls] : urls;
   for (const value of [...new Set(asPaths)]) {
-    const why = pathProblem(rel, value, { schemes: URL_SCHEMES, roots: ['src/'], rootAbsolute: 'any' });
+    let why = pathProblem(rel, value, { schemes: URL_SCHEMES, roots: ['src/'], rootAbsolute: 'any' });
+    /*
+     * 以 / 开头的地址：开发服务器先当「相对项目根」找，找不到再当**文件系统的绝对路径**找（Linux 上 url(/etc/x.svg)、
+     * url(/tmp/x?inline) 会被 Node 一侧读进来变成 data URI）。所以只认项目根下确实有的那个文件（public/ 里的同样算）；
+     * 没给 rootHas（单测）时只认 /src/ 下的。
+     */
+    const bare = stripQuery(String(value).trim());
+    if (!why && bare.startsWith('/') && !bare.startsWith('//')) {
+      const inRoot = rootHas ? (rootHas(bare.slice(1)) || rootHas('public' + bare)) : bare.startsWith('/src/');
+      if (!inRoot) why = rootHas ? '指向项目根下没有的文件（会被当成文件系统的绝对路径）' : '根路径只许 /src/ 下的';
+    }
     if (why) errors.push(`样式里的路径${why}：${value.slice(0, 80)}`);
   }
 }
@@ -281,9 +291,10 @@ export const SOURCE_GATE_MAX_BYTES = 512 * 1024;
  * 一个同步来的文件能不能交给 Node 一侧处理。
  * @param {string} rel 仓库相对路径（正斜杠）
  * @param {string} source
+ * @param {{ rootHas?: (relFromRoot: string) => boolean }} [o] rootHas：项目根下有没有这个文件（样式里以 / 开头的地址据此判，见 checkCss）
  * @returns {{ ok: boolean, errors: string[] }}
  */
-export function checkSyncedSource(rel, source) {
+export function checkSyncedSource(rel, source, o = {}) {
   const errors = [];
   const file = String(rel).replace(/\\/g, '/');
   const text = String(source ?? '');
@@ -294,7 +305,7 @@ export function checkSyncedSource(rel, source) {
   if (/sourceMappingURL/.test(text)) errors.push('不许出现 sourceMappingURL');
   if (text.includes('\0')) errors.push('带空字符');
   try {
-    if (/\.css$/.test(file)) checkCss(file, text, errors);
+    if (/\.css$/.test(file)) checkCss(file, text, errors, o);
     else if (/\.tsx?$/.test(file)) checkScript(file, text, errors);
     else errors.push('只收 .tsx、.ts、.css');
   } catch (err) {

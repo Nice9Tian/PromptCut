@@ -4,11 +4,16 @@
  * `sound-online-render-task.md` 第 23 条里本机能验的各项)。**一条命令**起隔离的托管组合 + 渲染服务 + 发任务 + 断言产物入库,
  * 不依赖浏览器观察端:成员一侧由本进程扮演(Node 里的 WebSocket),发布的是在线页面那种带片段清单的计划任务。
  *
- *   node scripts/probes/hosted-render-probe.mjs [--steps work,late,agent,forbidden,switch,kill,limits,load,delete]
+ *   node scripts/probes/hosted-render-probe.mjs [--steps work,late,agent,usercard,forbidden,switch,kill,limits,load,delete]
  *        [--base-port 5730] [--doc-port 8794] [--asset-port 8795] [--keep-temp] [--verbose] [--memory-step-max 150M] [--mem-low 256M]
+ *        [--memory-max <如 32G>] [--time-scale <倍数>]
+ *        `--time-scale`：全部等待时限的倍数。不给时按机器核数取（4 核及以下 2，否则 1）：核少的机器（4 核的容器）上 `limits`、`load` 两步
+ *        要渲的段多，照 8 核定的时限不够。只放宽「等多久」，不改任何判据的数值
+ *        `--memory-max`：演练时两个工作进程合起来的内存硬上限（`limits` 一步自己另给很小的值）。不给时 Windows 上取 32G、别的平台用生产缺省 6G：
+ *        没有 cgroup 时管理进程自己量进程树的常驻内存，Windows 的工作集把共享页重复计入，两棵工作进程树空着就量出 7 GB 上下
  *        `--mem-low`:演练时背压的可用内存线(生产缺省 2G;开发机上常年可用内存不到 2 GB,照缺省会一直暂停认领,所以演练缺省放到 256M)
  *
- * 端口(都只绑 127.0.0.1):`--base-port` +0/+1/+2 渲染服务的工作进程(编辑器与两个舞台端口)、+6 管理进程的诊断与代理口;
+ * 端口(都只绑 127.0.0.1):`--base-port` +0/+1/+2 渲染服务的工作进程(编辑器与两个舞台端口)、+3/+4/+5 隔离工作进程(用户卡)、+6 管理进程的诊断与代理口;
  * `--doc-port` / `--asset-port` 托管组合的文档服务与素材服务。全部数据在一个临时目录里,结束时删掉(`--keep-temp` 保留)。
  *
  * 环境变量(都可不设):
@@ -32,6 +37,11 @@
  *              之后才上线的成员不发任何任务就取得到层表与块。结果里 `publisher` 写明发布方是哪一种:`service`(服务身份的发布票据,
  *              `hosted.ticket { purpose: 'publish' }`,第四段合流后才有)或 `member-standin`(目录回 unsupported 时由一条成员连接代发,
  *              计划一被认领就断开)
+ *   usercard   含用户卡的项目(另建一个项目,内容库里放一张用户卡的源码;夹具是 `fixtures/render-isolation/` 里只留记号、什么都不探的那张卡):
+ *              计划与细任务由**隔离工作进程**(`hosted-render-iso:` 节点)认领并做完,层表与产物入库;常驻工作进程对这个项目一个任务也没认领
+ *              (搁着、报「有卡片代码」);发布方走了之后才上线的成员不发任何任务就取得到层表与块;再来一轮「没有任何成员在线」:成员全部离开,
+ *              假 Agent 服务声明有活、发布补渲计划(发布方是哪一种同 `agent` 一步),隔离工作进程照样认领做完,全程没有成员连接,之后上线的成员直接取得到。
+ *              隔离本身(读不到别的项目、凭证、本机接口、工作目录以外的文件)由 `hosted-render-isolation-probe.mjs` 验,不在这里
  *   forbidden  用渲染服务的身份提交一次编辑(`project.op`)被拒,项目版本号不变;写卡片源码、给自己签 page 票据同样被拒
  *   switch     创建者关掉开关:5 s 内渲染服务断开这个项目,之后发的计划它不认领;再打开:连回来并认领
  *   kill       结束工作进程整棵树 → 管理进程把它重新拉起、对账、恢复接活(再发一个计划能做完);结束管理进程 → 工作进程自己退出,
@@ -77,10 +87,14 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const flag = (name) => argv.includes(name);
-const ALL_STEPS = ['work', 'late', 'agent', 'forbidden', 'switch', 'kill', 'limits', 'load', 'delete'];
+const ALL_STEPS = ['work', 'late', 'agent', 'usercard', 'forbidden', 'switch', 'kill', 'limits', 'load', 'delete'];
 const STEPS = String(arg('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 const BASE = Number(arg('--base-port', 5730));
-const PORTS = { worker: BASE, status: BASE + 6, doc: Number(arg('--doc-port', 8794)), asset: Number(arg('--asset-port', 8795)) };
+const PORTS = { worker: BASE, iso: BASE + 3, status: BASE + 6, doc: Number(arg('--doc-port', 8794)), asset: Number(arg('--asset-port', 8795)) };
+const CORES = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+/** 等待时限的倍数：核少的机器上放宽（只放宽等多久，不改判据） */
+const SCALE = Number(arg('--time-scale', CORES <= 4 ? 2 : 1)) || 1;
+const MEMORY_MAX = String(arg('--memory-max', process.platform === 'win32' ? '32G' : ''));
 const KEEP = flag('--keep-temp');
 const VERBOSE = flag('--verbose');
 const MEMORY_STEP_MAX = String(arg('--memory-step-max', '150M'));
@@ -95,11 +109,12 @@ const STATUS = `http://127.0.0.1:${PORTS.status}`;
 const DOC_ID = 'hosted-render-probe';
 
 const fails = [];
-const out = { ok: false, run: RUN, platform: process.platform, ports: PORTS, steps: {} };
+const out = { ok: false, run: RUN, platform: process.platform, cores: CORES, timeScale: SCALE, ports: PORTS, steps: {} };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ` :: ${JSON.stringify(extra).slice(0, 500)}`)); return !!cond; };
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), step, ...fields })}\n`);
 
-async function waitFor(fn, ms, what, every = 250) {
+async function waitFor(fn, rawMs, what, every = 250) {
+  const ms = Math.round(rawMs * SCALE);
   const until = Date.now() + ms;
   let last;
   for (;;) {
@@ -208,6 +223,8 @@ function startSupervisor(extraEnv = {}) {
     PROMPTCUT_RENDER_SECRETS: RENDER_SECRETS,
     PROMPTCUT_RENDER_DATA: RENDER_DATA,
     PROMPTCUT_RENDER_PORT: String(PORTS.worker),
+    PROMPTCUT_RENDER_ISO_PORT: String(PORTS.iso),
+    ...(MEMORY_MAX ? { PROMPTCUT_RENDER_MEMORY_MAX: MEMORY_MAX, PROMPTCUT_RENDER_MEMORY_HIGH: MEMORY_MAX } : {}),
     PROMPTCUT_RENDER_STATUS_PORT: String(PORTS.status),
     PROMPTCUT_RENDER_MAX_CONCURRENT: String(MAX_CONCURRENT),
     PROMPTCUT_RENDER_SAMPLE_MS: '2000',
@@ -267,8 +284,8 @@ function queueTasks(projectId) {
 }
 
 /** 以成员身份放一版项目内容,回版本号 */
-async function putProject(c, project) {
-  const r = await c.ask({ type: 'project.op', projectId: DOC_ID, opId: `op-${RUN}-${++reqSeq}`, session: `s-${RUN}`, ops: [{ op: 'set', path: '', value: project }] }, 20_000);
+async function putProject(c, project, docId = DOC_ID) {
+  const r = await c.ask({ type: 'project.op', projectId: docId, opId: `op-${RUN}-${++reqSeq}`, session: `s-${RUN}`, ops: [{ op: 'set', path: '', value: project }] }, 20_000);
   if (r.type !== 'project.op.ok') throw new Error(`project.op 被拒:${JSON.stringify(r).slice(0, 300)}`);
   return r.rev;
 }
@@ -276,15 +293,15 @@ async function putProject(c, project) {
 /** 发布之前队列里已有的任务 id(之后新出现的就是这一个计划切出来的;各步骤顺序执行,不会交叠) */
 const knownTasks = new Set();
 /** 以成员身份发一个清单计划;回任务 id */
-async function publishPlan(c, { rev, clips, codeVersion }) {
+async function publishPlan(c, { rev, clips, codeVersion, proj = ctx.proj, docId = DOC_ID }) {
   knownTasks.clear();
-  for (const t of queueTasks(ctx.proj.projectId)) knownTasks.add(t.id);
+  for (const t of queueTasks(proj.projectId)) knownTasks.add(t.id);
   if (!c.publisher) {
     const hello = await c.ask({ type: 'publisher.hello', publisherId: `hrp-pub-${RUN}-${++reqSeq}` });
     if (hello.type !== 'publisher.welcome') throw new Error(`publisher.hello:${JSON.stringify(hello).slice(0, 200)}`);
     c.publisher = true;
   }
-  const task = clipsPlanTaskOf({ projectId: DOC_ID, projectRev: rev, clips, codeVersion });
+  const task = clipsPlanTaskOf({ projectId: docId, projectRev: rev, clips, codeVersion });
   const r = await c.ask({ type: 'task.publish', tasks: [task] });
   if (r.type !== 'task.published') throw new Error(`task.publish:${JSON.stringify(r).slice(0, 300)}`);
   return task.id;
@@ -308,7 +325,7 @@ async function waitRendered(projectId, rev, planId, ms = 240_000, onTick = null)
   return { ...result, maxClaimed, ms: Date.now() - started };
 }
 
-const layerMapOf = async (c) => c.ask({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${DOC_ID}` });
+const layerMapOf = async (c, docId = DOC_ID) => c.ask({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${docId}` });
 async function blobCounts() {
   const inv = await combo.inventory();
   return { snap: inv.assets.snap.count, px: inv.assets.px.count, media: inv.assets.media.count, bytes: inv.assets.snap.bytes + inv.assets.px.bytes };
@@ -364,10 +381,10 @@ async function stepWork() {
 }
 
 /** 之后才上线的一位成员:不发任何任务,直接取得到层表、各段的清单与清单里的块。`label` 是步骤名,`rev` 给了就核对层表是这一版的 */
-async function lateMemberSees(label, username, rev = null) {
+async function lateMemberSees(label, username, rev = null, proj = ctx.proj, docId = DOC_ID) {
   const r = {};
-  const late = await joinAs(ctx.proj, { username, name: username });
-  const map = await layerMapOf(late);
+  const late = await joinAs(proj, { username, name: username });
+  const map = await layerMapOf(late, docId);
   r.layers = Array.isArray(map.body?.layers) ? map.body.layers.length : 0;
   r.layerMapRev = map.body?.projectRev ?? map.body?.rev ?? null;
   check(map.type === 'content.item' && !map.missing && r.layers > 0, `${label}:之后上线的成员直接取得到层表`, { type: map.type, missing: map.missing });
@@ -395,7 +412,7 @@ async function lateMemberSees(label, username, rev = null) {
   r.blobsChecked = fetched + missing;
   r.blobsFound = fetched;
   check(fetched > 0, `${label}:清单里的块在素材服务里取得到`, { fetched, missing });
-  const pending = queueTasks(ctx.proj.projectId).filter((t) => t.state === 'open' || t.state === 'claimed').length;
+  const pending = queueTasks(proj.projectId).filter((t) => t.state === 'open' || t.state === 'claimed').length;
   r.pendingTasks = pending;
   check(pending === 0, `${label}:这位成员没有发任何任务,队列里也没有待做的`, { pending });
   late.close();
@@ -521,6 +538,119 @@ async function stepAgent() {
   ctx.creator = await joinAs(ctx.proj, { username: 'alice', as: 'creator' });
   await waitJoined(projectId, 15_000);
   ctx.rev = rev;
+  return r;
+}
+
+/**
+ * 含用户卡的项目（契约第 7.5 节，方案 A）：任务由按项目隔离的工作进程做，常驻工作进程不碰。用另一个项目，不动 `ctx.proj`（别的步骤验的是常驻工作进程）。
+ * 两轮：有成员在线时由成员发布清单计划；没有任何成员在线时由假 Agent 服务发布补渲计划（发布方两种同 `stepAgent`）。
+ */
+async function stepUsercard() {
+  const r = {};
+  const docId = 'hosted-render-probe-uc';
+  const name = `hrp-uc-${RUN}`;
+  const creatorPassword = `c-${randomBytes(9).toString('base64url')}`;
+  const password = `p-${randomBytes(9).toString('base64url')}`;
+  const made = await createSharedProject({ base: DOC_WS, name, mode: 'free', creator: { username: 'ursula', password: creatorPassword }, password });
+  const proj = { projectId: made.projectId, name, creator: 'ursula', creatorPassword, password };
+  let creator = await joinAs(proj, { username: 'ursula', as: 'creator' });
+  // 一张普通的用户卡（夹具里只留记号、什么都不探的那张）进内容库
+  const source = fs.readFileSync(path.join(ROOT, 'scripts', 'probes', 'fixtures', 'render-isolation', 'overreach-marker-jia.tsx'), 'utf8').replace(/\r\n/g, '\n');
+  const stored = await creator.ask({ type: 'content.put', kind: 'card-source', key: 'src/cards/user/overreach-marker-jia.tsx', body: source });
+  check(stored.type === 'content.stored', 'usercard:用户卡源码进了内容库', stored);
+  const projectOf = (salt) => ({
+    id: docId, name: '托管方渲染服务探针·用户卡', width: 1920, height: 1080, fps: FPS, duration: 2,
+    themeId: 'dark', camera3dFov: 50, media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
+    tracks: [
+      { id: 'tr-1', name: 'tr-1', hidden: false, clips: [{ id: 'clip-user', kind: 'card', cardId: 'overreach-marker-jia', start: 0, end: 2, params: { probeSalt: salt } }] },
+      { id: 'tr-2', name: 'tr-2', hidden: false, clips: [{ id: 'clip-builtin', kind: 'card', cardId: 'r6-canvas', start: 0, end: 2, params: { probeSalt: salt } }] },
+    ],
+  });
+  const nodesFor = async () => {
+    const s = await status();
+    return {
+      resident: (s.queue?.nodes ?? []).find((n) => n.projectId === proj.projectId) ?? null,
+      iso: (s.isolation?.queue?.nodes ?? []).find((n) => n.projectId === proj.projectId) ?? null,
+      isolation: s.isolation ? { current: s.isolation.current?.projectId ?? null, runs: s.isolation.runs, capabilities: s.isolation.queue?.capabilities ?? null } : null,
+    };
+  };
+
+  // ---- 第一轮：成员在线，成员发布清单计划
+  const before = await blobCounts();
+  const p1 = projectOf(`${RUN}-uc1`);
+  const rev1 = await putProject(creator, p1, docId);
+  const t0 = Date.now();
+  const plan1 = await publishPlan(creator, { rev: rev1, clips: clipIdsOf(p1), codeVersion: ctx.codeVersion, proj, docId });
+  let isoSeen = null;
+  const done1 = await waitRendered(proj.projectId, rev1, plan1, 420_000, async () => { const n = await nodesFor().catch(() => null); if (n?.iso) isoSeen = n; });
+  const n1 = (await nodesFor().catch(() => null)) ?? isoSeen;
+  const iso1 = n1?.iso ?? isoSeen?.iso ?? null;
+  Object.assign(r, { planMs: Date.now() - t0, tasks: done1.tasks, done: done1.done, failed: done1.failed, isoNode: iso1 && { nodeId: iso1.nodeId, claimed: iso1.claimed, completed: iso1.completed, failed: iso1.failed },
+    resident: n1?.resident && { claimed: n1.resident.claimed, hold: n1.resident.hold, cards: n1.resident.cards?.state }, isoCapabilities: n1?.isolation?.capabilities ?? isoSeen?.isolation?.capabilities ?? null });
+  check(done1.done === done1.tasks && done1.tasks > 0 && done1.failed === 0, 'usercard:含用户卡的计划切出的细任务全部 done', done1);
+  check(/^hosted-render-iso:/.test(String(iso1?.nodeId)) && (iso1?.claimed ?? 0) >= done1.tasks + 1 && (iso1?.failed ?? 0) === 0, 'usercard:计划与细任务都是隔离工作进程认领的', r.isoNode);
+  check(n1?.resident?.claimed === 0 && n1?.resident?.hold === true && n1?.resident?.cards?.state === 'some', 'usercard:常驻工作进程对这个项目一个任务也没认领(搁着、报有卡片代码)', r.resident);
+  check(r.isoCapabilities?.userCards === true, 'usercard:隔离工作进程报 userCards', r.isoCapabilities);
+  const map1 = await layerMapOf(creator, docId);
+  r.layers = Array.isArray(map1.body?.layers) ? map1.body.layers.length : 0;
+  check(map1.type === 'content.item' && !map1.missing && r.layers >= 2, 'usercard:层表入库(含用户卡那一层)', { layers: r.layers, missing: map1.missing });
+  const after = await blobCounts();
+  r.newBlobs = after.snap + after.px - before.snap - before.px;
+  check(r.newBlobs > 0 && after.media === before.media, 'usercard:素材服务里有新产物,没有写素材原件', { before, after });
+  // 发布方走了之后才上线的成员
+  creator.close();
+  await delay(1500);
+  r.late = await lateMemberSees('usercard', 'late-uma', rev1, proj, docId);
+
+  // ---- 第二轮：没有任何成员在线，假 Agent 服务声明有活并发布补渲计划
+  creator = await joinAs(proj, { username: 'ursula', as: 'creator' });
+  const p2 = projectOf(`${RUN}-uc2`);
+  const rev2 = await putProject(creator, p2, docId);
+  creator.close();
+  await waitFor(() => memberConns(proj.projectId) === 0, 10_000, '成员全部离开');
+  const gen = runKeygen(['--hosted-data', HOSTED_DATA, '--secrets', AGENT_SECRETS, '--service', 'agent', '--instance-name', '假 Agent 服务(探针)']);
+  void gen;
+  const key = readServiceKeyFile(AGENT_SECRETS, 'agent');
+  const control = connect(await buildServiceProtocols({ base: DOC_WS, key }));
+  await control.opened;
+  const demand = async () => control.ask({ type: 'hosted.demand', projectId: proj.projectId, holdMs: 120_000 });
+  check((await demand()).type === 'hosted.demand.ok', 'usercard:声明这个项目有活', {});
+  knownTasks.clear();
+  for (const t of queueTasks(proj.projectId)) knownTasks.add(t.id);
+  const plan2 = backfillPlanTaskOf({ projectId: docId, projectRev: rev2, clips: clipIdsOf(p2) });
+  const tk = await control.ask({ type: 'hosted.ticket', projectId: proj.projectId, purpose: 'publish' });
+  let pub = null;
+  if (tk.type === 'hosted.ticket.ok') { r.publisher = 'service'; pub = connect(ticketProtocols(tk.ticket)); await pub.opened; }
+  else {
+    r.publisher = 'member-standin';
+    check(tk.reason === 'unsupported', 'usercard:服务身份的发布票据在这个分支上回 unsupported(第四段实现)', tk);
+    pub = await joinAs(proj, { username: 'agent-standin', name: 'agent-standin-uc' });
+  }
+  const hello = await pub.ask({ type: 'publisher.hello', publisherId: `hrp-agent-uc-${RUN}` });
+  check(hello.type === 'publisher.welcome', 'usercard:发布方报到', hello);
+  const published = await pub.ask({ type: 'task.publish', tasks: [plan2] });
+  check(published.type === 'task.published' && published.results?.[0]?.created === true, 'usercard:补渲计划发布成功', published);
+  if (r.publisher === 'member-standin') {
+    await waitFor(() => { const p = queueTasks(proj.projectId).find((t) => t.id === plan2.id); return p && p.state !== 'open'; }, 300_000, '补渲计划被认领', 50);
+    pub.close();
+    await waitFor(() => memberConns(proj.projectId) === 0, 10_000, '代发的连接断开');
+  }
+  let maxMembers = 0;
+  let lastDemand = Date.now();
+  const done2 = await waitRendered(proj.projectId, rev2, plan2.id, 420_000, async () => {
+    maxMembers = Math.max(maxMembers, memberConns(proj.projectId));
+    if (Date.now() - lastDemand > 30_000) { lastDemand = Date.now(); await demand(); }
+  });
+  if (r.publisher === 'service') pub.close();
+  const n2 = await nodesFor().catch(() => null);
+  r.noMembers = { tasks: done2.tasks, done: done2.done, failed: done2.failed, membersOnlineWhileRendering: maxMembers, residentClaimed: n2?.resident?.claimed ?? null, ms: done2.ms };
+  check(done2.done === done2.tasks && done2.tasks > 0 && done2.failed === 0, 'usercard:没有成员在线,含用户卡的补渲计划照样做完', done2);
+  check(maxMembers === 0, 'usercard:第二轮渲染全程没有任何成员连接', { maxMembers });
+  check((n2?.resident?.claimed ?? 0) === 0, 'usercard:第二轮常驻工作进程仍然没有认领', r.noMembers);
+  await delay(1000);
+  r.lateAfterNoMembers = await lateMemberSees('usercard(无人在线)', 'late-uri', rev2, proj, docId);
+  await control.ask({ type: 'hosted.demand', projectId: proj.projectId, holdMs: 0 });
+  control.close();
   return r;
 }
 
@@ -796,7 +926,7 @@ function environmentChecks(ready) {
   return e;
 }
 
-const RUNNERS = { work: stepWork, late: stepLate, agent: stepAgent, forbidden: stepForbidden, switch: stepSwitch, kill: stepKill, limits: stepLimits, load: stepLoad, delete: stepDelete };
+const RUNNERS = { work: stepWork, late: stepLate, agent: stepAgent, usercard: stepUsercard, forbidden: stepForbidden, switch: stepSwitch, kill: stepKill, limits: stepLimits, load: stepLoad, delete: stepDelete };
 
 /* ------------------------------------------------------------------ 主流程 */
 

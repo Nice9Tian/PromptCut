@@ -870,6 +870,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const holdCards = hostedKind === "resident" && !cardSyncOn && process.env.PROMPTCUT_HOSTED_HOLD_CARDS === "1";
   const { createCardPresence }: any = holdCards ? await import("./hosted-render/card-presence.mjs") : {};
   const { checkSyncedSource }: any = hostedKind === "isolated" ? await import("./hosted-render/source-gate.mjs") : {};
+  const { hostedGateStatus }: any = hostedKind ? await import("./hosted-render/vite-gate.mjs") : {};
   if (hostedKind) queueLog("queue.hosted-worker", { kind: hostedKind, cardSync: cardSyncOn, holdCards });
 
   const override = String(process.env[TEST_CODE_VERSION_ENV] || "").trim() || null;
@@ -931,7 +932,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
           rec.cards = createHostCardSync({
             root, dataDir: cardSyncDir, projectId: rec.projectId, url: entry.url, endpoint: rec.endpoint,
             before: () => cardCode(root).touch(),
-            ...(checkSyncedSource ? { precheck: checkSyncedSource } : {}),
+            ...(checkSyncedSource ? { precheck: (rel: string, source: string) => checkSyncedSource(rel, source, { rootHas: (p: string) => fs.existsSync(path.join(root, p)) }) } : {}),
             log: (event: string, fields: object = {}) => {
               note(event, { project: index, ...fields });
               if (/installed|rejected|backup-failed|error|skip|put-failed/.test(event)) queueLog(event, { project: index, projectId: rec.projectId, ...fields });
@@ -1052,6 +1053,8 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     // c66-host-cards:每个项目的卡片同步(记账:仓库相对路径 → 装到的 cardRev)与卡片代码身份的状态
     cardSync: live().map((rec) => hostCardSyncSummary(rec.projectId, rec.cards)),
     cardCode: { epoch: cardCode(root).epoch, settled: cardCode(root).settled() },
+    // 托管方的工作进程:这台预渲染 Vite 上页面请求闸与出口代理拦了多少(`hosted-render/vite-gate.mjs`)
+    ...(hostedGateStatus ? { pageGate: hostedGateStatus() } : {}),
   });
   const closeAll = async () => {
     clearInterval(timer);

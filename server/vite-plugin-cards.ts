@@ -1322,7 +1322,7 @@ function cardOverridesLoader(): Plugin {
        */
       if (hostedKind) {
         const rel = toRel(projectRoot, file);
-        const verdict = hostedKind === 'isolated' ? checkSyncedSource(rel, text) : { ok: false, errors: ['常驻工作进程不载入任何项目带来的代码'] };
+        const verdict = hostedKind === 'isolated' ? checkSyncedSource(rel, text, { rootHas: (p: string) => fs.existsSync(path.join(projectRoot, p)) }) : { ok: false, errors: ['常驻工作进程不载入任何项目带来的代码'] };
         if (!verdict.ok) {
           console.log(`[page-gate] source-rejected ${JSON.stringify({ rel, errors: verdict.errors.slice(0, 3) })}`);
           return rejectedStub(rel, verdict.errors, { raw: /[?&]raw\b/.test(id) });

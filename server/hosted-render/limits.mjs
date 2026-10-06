@@ -32,7 +32,8 @@ export const LIMIT_DEFAULTS = Object.freeze({
   memLowBytes: 2 * GiB,
   healthSlowMs: 500,
   healthSlowCount: 3,
-  loadHigh: 8,
+  /** 1 分钟负载的线：缺省按核数算（`loadHighFor`），这里留空；要写死就给数 */
+  loadHigh: null,
   recoverMs: 30_000,
   sampleMs: 5_000,
   /** OOM 降级 */
@@ -167,15 +168,25 @@ export function sumTree(root, procs) {
   return total;
 }
 
+/** 这台机器的核数（容器里按可用的算） */
+export const machineCores = () => (typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length) || 1;
+
+/**
+ * 背压里「负载高」的线：每核 1（1 分钟负载高于核数，说明就绪的任务已经排不下）。新节点 8 核就是 8，
+ * 4 核的容器是 4——原来写死 8，是照新节点定的，核少的机器上等于没有这条线。
+ */
+export const loadHighFor = (cores) => Math.max(1, Math.floor(Number(cores) || 1));
+
 /**
  * 背压的判定（纯状态机）。`sample({ memAvailable, healthMs, load1 })` 回 `{ paused, reasons }`：
  * - 可用内存低于 `memLowBytes` → `memory`；
  * - 文档服务自检连续 `healthSlowCount` 次超过 `healthSlowMs`（`healthMs` 为 null 表示这次没问通，同样算慢）→ `docservice`；
- * - 1 分钟负载高于 `loadHigh` → `load`；
+ * - 1 分钟负载高于 `loadHigh`（缺省按核数，`loadHighFor(cores)`）→ `load`；
  * 任一项成立就暂停；全部不成立持续满 `recoverMs` 才放开。读数给 null / undefined 的那一项这次不判。
  */
-export function createBackpressure({ now = Date.now, ...overrides } = {}) {
+export function createBackpressure({ now = Date.now, cores = machineCores(), ...overrides } = {}) {
   const L = { ...LIMIT_DEFAULTS, ...overrides };
+  if (!Number.isFinite(L.loadHigh)) L.loadHigh = loadHighFor(cores);
   let paused = false;
   let slow = 0;
   let clearSince = null;
