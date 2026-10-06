@@ -3,10 +3,10 @@
  * 在线构建的编辑页(普通档、两个跨源舞台)在闲时当纯浏览器节点,连本机托管组合的真队列,认领一段 light 快照任务,
  * 在后台舞台逐帧生成快照、推素材服务(`snap` 原尺寸 + `px` 小尺寸)、清单写内容库、`task.complete`。
  *
- *   node scripts/probes/m7-node-probe.mjs [--dist <在线构建目录>] [--base-port 5440] [--out <目录>] [--keep-temp]
+ *   node scripts/probes/m7-node-probe.mjs [--dist <在线构建目录>] [--base-port 5780] [--out <目录>] [--keep-temp]
  *        端口:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务(都只绑 127.0.0.1)
  *
- * 本机替身(与阿里云同形,照 `c10-browser-probe.mjs`):托管组合 + 仿 nginx 的前缀代理开三个源(每个响应带 `Origin-Agent-Cluster: ?1`),
+ * 本机替身(与阿里云同形,照 `c10-browser-probe.mjs`):托管组合 + 共用的本机托管代理 `lib/hosted-proxy.mjs` 开三个源(同站跨源:pc.localhost / s1.pc.localhost / s2.pc.localhost,带策略头与 `/media-s/`),
  * `/editor/runtime-config.json` 给两个舞台源。项目由探针经 `shared/create` 直接在托管端建(自由进入)。
  *
  * 切分方:本进程里的一个 pc 档渲染节点(`createLocalNode`,真会话、真切分 `splitPlan`),凭创建者的 render 凭证连同一个托管端。
@@ -26,23 +26,25 @@ import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTC
 import { spawnSync } from 'node:child_process';
 import crypto, { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const KEEP = argv.includes('--keep-temp');
-const BASE = Number(arg('--base-port', 5440));
+const BASE = Number(arg('--base-port', 5780));
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4 };
 const RUN = `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
-const SITE = `http://127.0.0.1:${PORTS.editor}`;
-const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
+const ORIGINS = proxyOrigins(PORTS.editor); // 编辑器页 pc.localhost:<端口>,舞台 s1./s2.pc.localhost:<端口+1/+2>(同站跨源)
+const SITE = ORIGINS.editor;
+const STAGE_ORIGINS = ORIGINS.stages;
 const HOSTED = `${SITE}/hosted/`;
 const DOC_DIRECT = `http://127.0.0.1:${PORTS.doc}`;
 const EDITOR = `${SITE}/editor`;
@@ -84,7 +86,7 @@ const portFree = (port) => new Promise((resolve) => {
 /* ================================================================== 托管组合 + 三个源的仿 nginx 代理(照 c10-browser-probe) */
 
 let combo = null;
-const proxies = [];
+let hostedProxy = null;
 async function startLocalSite() {
   for (const p of Object.values(PORTS)) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
   let DIST = arg('--dist', null);
@@ -99,65 +101,10 @@ async function startLocalSite() {
   fs.mkdirSync(path.join(TMP, 'hosted'), { recursive: true });
   combo = await startHostedCombo({
     dataDir: path.join(TMP, 'hosted'), docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1',
-    docPublicUrl: `ws://127.0.0.1:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
+    docPublicUrl: `ws://pc.localhost:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
   });
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-  const OAC = { 'origin-agent-cluster': '?1' };
-  const runtimeConfig = JSON.stringify({ v: 1, stageOrigins: STAGE_ORIGINS });
-  const makeProxy = (port) => {
-    const origin = `http://127.0.0.1:${port}`;
-    const forward = (req, res, upstream, strip) => {
-      const target = req.url.slice(strip.length) || '/';
-      const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => {
-        res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC });
-        r.pipe(res);
-      });
-      up.on('error', () => { res.writeHead(502, OAC); res.end('bad gateway'); });
-      req.pipe(up);
-    };
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, origin);
-      if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, PORTS.doc, '/hosted');
-      if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
-      const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
-      const sendFile = (file, cache) => {
-        res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
-        fs.createReadStream(file).pipe(res);
-      };
-      if (url.pathname === '/editor/runtime-config.json') {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec });
-        return res.end(runtimeConfig);
-      }
-      const index = path.join(DIST, 'index.html');
-      if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-      if (url.pathname.startsWith('/editor/assets/')) {
-        const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-        if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
-        return sendFile(f, 'public, max-age=31536000, immutable');
-      }
-      if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-      res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC });
-      res.end('not found');
-    });
-    server.on('upgrade', (req, socket, head) => {
-      const url = new URL(req.url, origin);
-      if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
-      const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-      const up = net.connect(PORTS.doc, '127.0.0.1', () => {
-        const lines = [`${req.method} ${target} HTTP/1.1`];
-        for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-        up.write(`${lines.join('\r\n')}\r\n\r\n`);
-        if (head?.length) up.write(head);
-        up.pipe(socket);
-        socket.pipe(up);
-      });
-      up.on('error', () => socket.destroy());
-      socket.on('error', () => up.destroy());
-    });
-    proxies.push(server);
-    return new Promise((r) => server.listen(port, '127.0.0.1', r));
-  };
-  await Promise.all([makeProxy(PORTS.editor), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+  // 共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:同站跨源的三个源、策略头、`/media-s/`、运行配置)
+  hostedProxy = await startHostedProxy({ dist: DIST, basePort: PORTS.editor, docPort: PORTS.doc, assetPort: PORTS.asset, policy: 'full' });
   say('local.up', { site: SITE, stages: STAGE_ORIGINS, doc: PORTS.doc, asset: PORTS.asset, dist: DIST });
   return DIST;
 }
@@ -431,7 +378,7 @@ try {
 } finally {
   try { splitter?.stop(); } catch { /* 已停 */ }
   try { await browser?.close(); } catch { /* 已关 */ }
-  for (const s of proxies) try { s.close(); } catch { /* 已关 */ }
+  try { await hostedProxy?.close(); } catch { /* 已关 */ }
   try { await combo?.close?.(); } catch { /* 已关 */ }
   if (!KEEP) try { fs.rmSync(path.join(TMP, 'hosted'), { recursive: true, force: true }); } catch { /* 留着 */ }
 }

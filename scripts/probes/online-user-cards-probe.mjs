@@ -49,12 +49,11 @@ import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
-import http from 'node:http';
-import net from 'node:net';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 
 const argv = process.argv.slice(2);
@@ -62,16 +61,22 @@ const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), 'online-user-cards-shots')));
-const BASE = Number(arg('--base-port', 5744));
+const BASE = Number(arg('--base-port', 5780));
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4 };
-const SITE = `http://127.0.0.1:${PORTS.editor}`;
-const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
+const ORIGINS = proxyOrigins(BASE); // 编辑器页 pc.localhost:<base>,舞台 s1./s2.pc.localhost:<base+1/+2>(同站跨源)
+const SITE = ORIGINS.editor;
 const DOC_DIRECT = `http://127.0.0.1:${PORTS.doc}`;
 fs.mkdirSync(OUT, { recursive: true });
 
 const fails = [];
 const out = { ok: false, out: OUT, normal: {}, lowmem: {} };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return !!cond; };
+/**
+ * 「按新语义待改」的断言(2026-10-06 起):仓库用户卡 u(`mu-animated-shiny-text`)现在在隔离生效的普通档里被执行(判轻就活渲、不贴快照、不进清单计划)。
+ * 原断言写的是旧语义(u 一律贴预渲染快照、进清单计划),这里不算失败也不删:记下原断言与此刻的实际值,下一轮改写成新语义的完整断言。
+ */
+const newSemantics = [];
+const pendingNew = (nowTrue, label, value) => { newSemantics.push({ label, oldAssertionHolds: !!nowTrue, now: value }); return !!nowTrue; };
 const say = (k, v) => console.log(JSON.stringify({ [k]: v }));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(what, fn, ms = 20_000, every = 250) {
@@ -93,6 +98,9 @@ const SYNCED_DEFAULTS = { text: 'synced', size: 48, side: 'left', tint: '#ff8800
 const SYNCED_SOURCE = `/** 探针:内容库同步来的用户卡(本机构建里没有) */
 import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string; size: number; side: string; tint: string }
+// 2026-10-06 新语义:同步来的用户卡在隔离生效的普通档里会被执行。本探针测的是「在线页面运行不了的同步卡」(没有层 → 图标与徽标、有层 → 贴快照、
+// 不测量、进清单计划),所以让这张卡故意运行不了:转译前的预检会拦下 namespace(状态 unsupported-syntax)。同步卡真的运行的断言在 online-card-security-probe 等。
+export namespace ProbeUnsupported { export const marker = 1; }
 const SIDES = [{ value: "left", label: "靠左" }, { value: "right", label: "靠右" }];
 function ProbeSynced({ params }: CardProps<Params>) {
   return <div className="absolute inset-0 flex items-center justify-center" style={{ color: params.tint, fontSize: params.size }}>It's {params.text}</div>;
@@ -116,80 +124,27 @@ export const probeSyncedCard: CardDef<Params> = {
 /* ------------------------------------------------------------------ 服务 */
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'online-user-cards-hosted-'));
 const combo = await startHostedCombo({
-  dataDir, docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1',
-  docPublicUrl: `ws://127.0.0.1:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
+  dataDir, docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1', trustLoopback: false, clusterToken: randomBytes(32).toString('base64url'),
+  docPublicUrl: `ws://pc.localhost:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
 });
 
 /** 代理直接给的预渲染字节:`<ns>/<hash>` → { type, bytes } */
 const fakeAssets = new Map();
 const assetLog = [];
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-const OAC = { 'origin-agent-cluster': '?1' };
-const runtimeConfig = JSON.stringify({ v: 1, stageOrigins: STAGE_ORIGINS });
-const servers = [];
-function makeProxy(port) {
-  const origin = `http://127.0.0.1:${port}`;
-  const forward = (req, res, upstream, strip) => {
-    const target = req.url.slice(strip.length) || '/';
-    const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => {
-      res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC });
-      r.pipe(res);
-    });
-    up.on('error', () => { res.writeHead(502, OAC); res.end('bad gateway'); });
-    req.pipe(up);
-  };
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, origin);
-    if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, PORTS.doc, '/hosted');
+/** 共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:三个源同站跨源、带内容安全策略与出口白名单、`/media-s/`);预渲染字节由钩子直接给 */
+const proxy = await startHostedProxy({
+  dist: DIST, basePort: PORTS.editor, docPort: PORTS.doc, assetPort: PORTS.asset, policy: 'full',
+  intercept: ({ role, req, url }) => {
     const m = /^\/media\/api\/asset\/(snap|px)\/([0-9a-f]{64})$/.exec(url.pathname);
-    if (m) {
-      assetLog.push({ at: Date.now(), ns: m[1], hash: m[2], port });
-      const hit = fakeAssets.get(`${m[1]}/${m[2]}`);
-      if (hit && req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': hit.type, 'Content-Length': hit.bytes.length, 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*', ...OAC });
-        return res.end(hit.bytes);
-      }
+    if (!m) return undefined;
+    assetLog.push({ at: Date.now(), ns: m[1], hash: m[2], role });
+    const hit = fakeAssets.get(`${m[1]}/${m[2]}`);
+    if (hit && req.method === 'GET') {
+      return { status: 200, body: hit.bytes, headers: { 'content-type': hit.type, 'content-length': hit.bytes.length, 'cache-control': 'public, max-age=31536000, immutable', 'access-control-allow-origin': '*' } };
     }
-    if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
-    const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
-    const sendFile = (file, cache) => {
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
-      fs.createReadStream(file).pipe(res);
-    };
-    if (url.pathname === '/editor/runtime-config.json') {
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec });
-      return res.end(runtimeConfig);
-    }
-    const index = path.join(DIST, 'index.html');
-    if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-    if (url.pathname.startsWith('/editor/assets/')) {
-      const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-      if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
-      return sendFile(f, 'public, max-age=31536000, immutable');
-    }
-    if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-    res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC });
-    res.end('not found');
-  });
-  server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, origin);
-    if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
-    const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-    const up = net.connect(PORTS.doc, '127.0.0.1', () => {
-      const lines = [`${req.method} ${target} HTTP/1.1`];
-      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-      up.write(`${lines.join('\r\n')}\r\n\r\n`);
-      if (head?.length) up.write(head);
-      up.pipe(socket);
-      socket.pipe(up);
-    });
-    up.on('error', () => socket.destroy());
-    socket.on('error', () => up.destroy());
-  });
-  servers.push(server);
-  return new Promise((r) => server.listen(port, '127.0.0.1', r));
-}
-await Promise.all([makeProxy(PORTS.editor), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+    return undefined;
+  },
+});
 
 /* ------------------------------------------------------------------ 共享项目 */
 const stamp = Date.now().toString(36);
@@ -442,13 +397,14 @@ try {
   check(n.timeline?.[ID.s1]?.label === SYNCED_NAME, '标签:同步卡 → 真名', n.timeline?.[ID.s1]);
   check(n.timeline?.[ID.x]?.label === '未知卡片', '标签:未知 id →「未知卡片」', n.timeline?.[ID.x]);
   // 舞台:有层的贴快照、没有图标;没层的同步卡是图标(不是沙漏);未知 id 不画
-  n.stage = await until('舞台:u、s1 贴出快照,s2 是「需要本地 PC 渲染辅助」', async () => {
+  n.stage = await until('舞台:s1 贴出快照,s2 是「需要本地 PC 渲染辅助」', async () => {
     const s = await stageState(A, Object.values(ID));
-    return s && s[ID.u]?.snapshot && s[ID.s1]?.snapshot && s[ID.s2]?.placeholderShown ? s : null;
+    return s && s[ID.s1]?.snapshot && s[ID.s2]?.placeholderShown ? s : null;
   }, 45_000);
-  const st = n.stage ?? {};
+  if (!n.stage) n.stageSeen = await stageState(A, Object.values(ID)); // 等不到时记下舞台此刻的实际状态(排障用,进结果行)
+  const st = n.stage ?? n.stageSeen ?? {};
   for (const k of ['u', 's1']) {
-    check(st[ID[k]]?.snapshot && /SNAP/.test(st[ID[k]]?.snapText ?? ''), `舞台:${k} 贴出预渲染快照`, st[ID[k]]);
+    (k === 'u' ? pendingNew : check)(st[ID[k]]?.snapshot && /SNAP/.test(st[ID[k]]?.snapText ?? ''), `舞台:${k} 贴出预渲染快照`, st[ID[k]]);
     check(!st[ID[k]]?.placeholderShown, `舞台:${k} 没有图标`, st[ID[k]]);
     check(!st[ID[k]]?.fixed, `舞台:${k} 没有常驻槽位`, st[ID[k]]);
   }
@@ -482,12 +438,13 @@ try {
   await shot(A, 'normal-1-before-s2-layer');
   n.stageShot1 = await stageShot(A, 'normal-1-stage');
   // 页面发布的清单计划含用户卡与同步卡
-  n.plan = await until('页面发布的清单计划含 u、s1、s2、s3', async () => {
+  n.plan = await until('页面发布的清单计划含 s1、s2、s3', async () => {
     const d = await A.evaluate(() => window.__pcPlanPublisher?.() ?? null);
     const clips = d?.lastClips ?? [];
-    return [ID.u, ID.s1, ID.s2, ID.s3].every((id) => clips.includes(id)) ? d : null;
+    return [ID.s1, ID.s2, ID.s3].every((id) => clips.includes(id)) ? d : null;
   }, 90_000) ?? await A.evaluate(() => window.__pcPlanPublisher?.() ?? null);
-  check([ID.u, ID.s1, ID.s2, ID.s3].every((id) => (n.plan?.lastClips ?? []).includes(id)), '普通档清单计划含用户卡与同步卡片段', { lastClips: n.plan?.lastClips, log: n.plan?.log?.slice(-3) });
+  check([ID.s1, ID.s2, ID.s3].every((id) => (n.plan?.lastClips ?? []).includes(id)), '普通档清单计划含同步卡片段(s1、s2、s3)', { lastClips: n.plan?.lastClips, log: n.plan?.log?.slice(-3) });
+  pendingNew((n.plan?.lastClips ?? []).includes(ID.u), '普通档清单计划含仓库用户卡 u', { lastClips: n.plan?.lastClips });
   check(!(n.plan?.lastClips ?? []).includes(ID.x), '清单计划不含未知 id(它不画、不判重)', n.plan?.lastClips);
 
   /* ------------------------------------------------ 乙:页面一打开就每 100 ms 采样(刚打开页面不闪图标) */
@@ -737,18 +694,19 @@ try {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 600)}`);
 } finally {
   await browser.close().catch(() => {});
-  for (const s of servers) { s.closeAllConnections?.(); await new Promise((r) => s.close(() => r())); }
+  await proxy.close().catch(() => {});
   await combo.close?.().catch?.(() => {});
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* 留着也无妨 */ }
 }
 out.ok = fails.length === 0;
 out.fails = fails;
+out.newSemantics = newSemantics;
 out.assetRequests = { snap: assetLog.filter((r) => r.ns === 'snap').length, px: assetLog.filter((r) => r.ns === 'px').length };
 say('result', { ok: out.ok, fails: fails.length });
 const sizeOf = (r) => r ? { layout: r.layout, reason: r.reason, screen: r.screen, clipScreen: r.clipScreen, textShown: r.textShown } : null;
-console.log(JSON.stringify({ ok: out.ok, fails, icon: out.normal.icon ?? null,
+console.log(JSON.stringify({ ok: out.ok, fails, newSemantics, icon: out.normal.icon ?? null,
   sizes: { column_s2: sizeOf(out.normal.icon), icon_s4: sizeOf(out.normal.geom?.s4), icon_s5: sizeOf(out.normal.geom?.s5), row_s6: sizeOf(out.normal.geom?.s6), hourglass_s7: sizeOf(out.normal.geom?.s7Glass) },
-  dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null },
+  stageSeen: out.normal.stageSeen ?? null, dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null },
   switchProject: out.normal.switchProject ? { gate: out.normal.switchProject.gate, gateBefore: out.normal.switchProject.gateBefore, gateLast: out.normal.switchProject.gateLast, probed: out.normal.switchProject.probed } : null,
   unknownX: { a: out.normal.unknownXA ?? null, b: out.normal.unknownXB ?? null }, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, lowmem: { backfill: out.lowmem.backfill, requests: out.lowmem.requests }, assetRequests: out.assetRequests }));
 process.exit(out.ok ? 0 : 1);

@@ -1,11 +1,11 @@
 /**
  * 声音改动 A、B 的真实浏览器探针(任务书 `docs/plan/sound-online-render-task.md` 第一段验收第 4、5 条)。
- * 全程在本机:桌面一侧是本探针自己起的 dev server,在线一侧是在线构建 + 本机托管组合(`server/hosted/combo.mjs`)+ 仿 nginx 的代理,
+ * 全程在本机:桌面一侧是本探针自己起的 dev server,在线一侧是在线构建 + 本机托管组合(`server/hosted/combo.mjs`)+ 共用的本机托管代理(`lib/hosted-proxy.mjs`,同站跨源的三个源、策略头、`/media-s/`),
  * 绝不连真正的托管端。
  *
  *   npx vite build --mode online --outDir <在线构建目录>
  *   node scripts/probes/sound-ab-probe.mjs --dist <在线构建目录> [--out <目录>] [--phases desktop,online,lowmem]
- *        [--desktop-port 5700] [--site-port 5705] [--doc-port 8790] [--asset-port 8791]
+ *        [--desktop-port 5783] [--site-port 5780] [--doc-port 8786] [--asset-port 8787]
  *
  * 端口:桌面 dev server 占 --desktop-port 起连号三个;在线站点占 --site-port 起连号三个(编辑器页 + 两个舞台的源);
  * 文档服务、素材服务各一个。数据目录都在 --out 下的临时目录里。某个端口被别的进程占着时(启动报 EADDRINUSE)用上面的参数换一段。
@@ -47,8 +47,6 @@
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import fs from 'node:fs';
 import os from 'node:os';
-import net from 'node:net';
-import http from 'node:http';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -58,6 +56,8 @@ import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startDevServer } from '../lib/dev-server.mjs';
 import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
+import './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 
 const argv = process.argv.slice(2);
@@ -67,9 +67,9 @@ const RUN = Date.now().toString(36) + randomBytes(2).toString('hex');
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-sound-ab-${RUN}`)));
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const PHASES = new Set(arg('--phases', 'desktop,online,lowmem').split(','));
-const DESKTOP_PORT = Number(arg('--desktop-port', 5700));
-const SITE_PORT = Number(arg('--site-port', 5705));
-const PORTS = { editor: SITE_PORT, stageA: SITE_PORT + 1, stageB: SITE_PORT + 2, doc: Number(arg('--doc-port', 8790)), asset: Number(arg('--asset-port', 8791)) };
+const DESKTOP_PORT = Number(arg('--desktop-port', 5783));
+const SITE_PORT = Number(arg('--site-port', 5780));
+const PORTS = { editor: SITE_PORT, stageA: SITE_PORT + 1, stageB: SITE_PORT + 2, doc: Number(arg('--doc-port', 8786)), asset: Number(arg('--asset-port', 8787)) };
 fs.mkdirSync(OUT, { recursive: true });
 
 const SR = 48000, FPS = 30;
@@ -417,79 +417,34 @@ async function desktopPhase() {
 /* ================================================================== 在线 */
 async function onlinePhases() {
   if (!fs.existsSync(path.join(DIST, 'index.html'))) throw new Error(`没有在线构建:${DIST}(先跑 npx vite build --mode online --outDir <目录>)`);
-  const SITE = `http://127.0.0.1:${PORTS.editor}`;
-  const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
+  const SITE = proxyOrigins(PORTS.editor).editor; // 编辑器页 pc.localhost:<端口>,舞台 s1./s2.pc.localhost:<端口+1/+2>(同站跨源)
   const DOC_DIRECT = `http://127.0.0.1:${PORTS.doc}`;
   const dataDir = fs.mkdtempSync(path.join(OUT, 'hosted-'));
   log('在线:起托管组合', PORTS.doc, PORTS.asset);
   const combo = await startHostedCombo({ dataDir, docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1',
-    docPublicUrl: `ws://127.0.0.1:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {} });
+    docPublicUrl: `ws://pc.localhost:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {} });
   cleanups.push(() => combo.close?.() ?? combo.stop?.());
 
   /** 「素材服务里没有这份文件」:代理对挡住的哈希回 404 / 未完成;同一份重新入库(complete)后放行 */
   const blocked = new Set();
   const assetLog = [];
-  const proxyLog = [];
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-  const OAC = { 'origin-agent-cluster': '?1' };
-  const runtimeConfig = JSON.stringify({ v: 1, stageOrigins: STAGE_ORIGINS });
-  const servers = [];
-  const makeProxy = (port) => {
-    const origin = `http://127.0.0.1:${port}`;
-    const forward = (req, res, upstream, strip) => {
-      const target = req.url.slice(strip.length) || '/';
-      const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => { proxyLog.push(`${req.method} ${req.url.slice(0, 80)} → ${r.statusCode}`); res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC }); r.pipe(res); });
-      up.on('error', (e) => { proxyLog.push(`${req.method} ${req.url.slice(0, 80)} → 上游错误 ${e.message}`); res.writeHead(502, OAC); res.end('bad gateway'); });
-      req.pipe(up);
-    };
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, origin);
-      if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, PORTS.doc, '/hosted');
+  // 共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:同站跨源的三个源、策略头、`/media-s/`);挡素材、记素材请求由钩子做
+  const proxy = await startHostedProxy({ dist: DIST, basePort: PORTS.editor, docPort: PORTS.doc, assetPort: PORTS.asset, policy: 'full',
+    intercept: ({ req, url }) => {
       const m = /^\/media\/api\/asset\/media\/([0-9a-f]{64})(\/chunks|\/complete|\/\d+)?$/.exec(url.pathname);
-      if (m) {
-        assetLog.push({ method: req.method, hash: m[1], tail: m[2] ?? '' });
-        if (req.method === 'POST' && m[2] === '/complete') blocked.delete(m[1]);
-        else if (blocked.has(m[1]) && req.method !== 'PUT' && req.method !== 'OPTIONS') {
-          const cors = { 'Access-Control-Allow-Origin': req.headers.origin ?? '*', 'Access-Control-Allow-Headers': 'authorization, content-type, range', ...OAC };
-          if (m[2] === '/chunks') { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors }); return res.end(JSON.stringify({ hash: m[1], complete: false, received: [] })); }
-          res.writeHead(404, cors); return res.end('Not found');
-        }
+      if (!m) return undefined;
+      assetLog.push({ method: req.method, hash: m[1], tail: m[2] ?? '' });
+      if (req.method === 'POST' && m[2] === '/complete') { blocked.delete(m[1]); return undefined; }
+      if (blocked.has(m[1]) && req.method !== 'PUT' && req.method !== 'OPTIONS') {
+        const cors = { 'access-control-allow-origin': req.headers.origin ?? '*', 'access-control-allow-headers': 'authorization, content-type, range' };
+        if (m[2] === '/chunks') return { status: 200, body: JSON.stringify({ hash: m[1], complete: false, received: [] }), headers: { ...cors, 'content-type': 'application/json', 'cache-control': 'no-store' } };
+        return { status: 404, body: 'Not found', headers: cors };
       }
-      if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
-      const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
-      const sendFile = (file, cache) => { res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec }); fs.createReadStream(file).pipe(res); };
-      if (url.pathname === '/editor/runtime-config.json') { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec }); return res.end(runtimeConfig); }
-      const index = path.join(DIST, 'index.html');
-      if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-      if (url.pathname.startsWith('/editor/')) {
-        const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-        if (f.startsWith(DIST) && fs.existsSync(f) && fs.statSync(f).isFile()) return sendFile(f, 'public, max-age=31536000, immutable');
-        return sendFile(index, 'no-store');
-      }
-      res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC });
-      res.end('not found');
-    });
-    server.on('upgrade', (req, socket, head) => {
-      const url = new URL(req.url, origin);
-      proxyLog.push(`UPGRADE ${req.url.slice(0, 80)}`);
-      if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
-      const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-      const up = net.connect(PORTS.doc, '127.0.0.1', () => {
-        const lines = [`${req.method} ${target} HTTP/1.1`];
-        for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-        up.write(`${lines.join('\r\n')}\r\n\r\n`);
-        if (head?.length) up.write(head);
-        up.pipe(socket); socket.pipe(up);
-      });
-      up.on('error', (e) => { proxyLog.push(`UPGRADE 上游错误 ${e.message}`); socket.destroy(); });
-      up.once('data', (d) => proxyLog.push(`UPGRADE 回 ${String(d).split(/\r?\n/)[0]}`));
-      socket.on('error', () => up.destroy());
-    });
-    servers.push(server);
-    return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
-  };
-  await Promise.all([makeProxy(PORTS.editor), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
-  cleanups.push(() => Promise.all(servers.map((s) => new Promise((r) => { s.closeAllConnections?.(); s.close(r); }))));
+      return undefined;
+    } });
+  /** 加入失败时附在错误里的最近请求(只作诊断) */
+  const proxyLog = { slice: (n) => proxy.requests.slice(n).map((r) => `${r.role} ${r.method} ${r.path} → ${r.status}`) };
+  cleanups.push(() => proxy.close());
 
   const NAME = `sound-ab-${RUN}`;
   const creator = { username: 'boss', password: `boss-${randomBytes(6).toString('hex')}` };

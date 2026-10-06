@@ -1,8 +1,8 @@
 /**
  * 声音预览的浏览器端验收(任务书「第一段」第 3 条;浏览器里的真实行为,用探针断言,不靠人听)。
  *
- *   node scripts/probes/sound-preview-probe.mjs [--mode desktop|online|both] [--out <目录>] [--base-port 5710]
- *        [--doc-port 8792] [--asset-port 8793] [--dist <在线构建目录>] [--keep-temp]
+ *   node scripts/probes/sound-preview-probe.mjs [--mode desktop|online|both] [--out <目录>] [--base-port 5780]
+ *        [--doc-port 8786] [--asset-port 8787] [--dist <在线构建目录>] [--keep-temp]
  *
  * 同一套断言(runSuite)跑四遍,覆盖声音的每一种播放来源:
  *   - desktop:桌面版形态。本机编辑器 dev server(本脚本所在代码树,临时数据目录),页面 `/?editor&nosetup=1`;
@@ -59,21 +59,24 @@
 import '../lib/no-user-dirs.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
-import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { startDevServer, viteBin } from '../lib/dev-server.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(`--${name}`) ? argv[argv.indexOf(`--${name}`) + 1] : fallback);
 const MODE = arg('mode', 'both');
-const BASE = Number(arg('base-port', 5710));
-const DOC_PORT = Number(arg('doc-port', 8792));
-const ASSET_PORT = Number(arg('asset-port', 8793));
+const BASE = Number(arg('base-port', 5780));
+// 探针起的 Node 子进程(桌面 dev server)继承它,也能解析 pc.localhost(桌面创建者页填的托管端地址是 pc.localhost)
+process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
+const DOC_PORT = Number(arg('doc-port', 8786));
+const ASSET_PORT = Number(arg('asset-port', 8787));
 const OUT = path.resolve(arg('out', path.join(ROOT, '..', '..', 'work', 'four-stage', 'sound', 'preview')));
 const KEEP = argv.includes('--keep-temp');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-sound-preview-'));
@@ -733,7 +736,7 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
 }
 
 /* ================================================================== 主流程 */
-let browser = null, dev = null, combo = null, proxies = [], summary = { out: OUT };
+let browser = null, dev = null, combo = null, hostedProxy = null, summary = { out: OUT };
 /** 在线站点的代理把这些哈希的字节请求回成 404(「素材服务里没有这份文件」),逼在线页面改用浏览器合成的临时声音 */
 const blockedHashes = new Set();
 
@@ -765,7 +768,7 @@ async function startDesktop() {
 const portFree = (port) => new Promise((resolve) => { const s = net.createServer(); s.once('error', () => resolve(false)); s.listen(port, '127.0.0.1', () => s.close(() => resolve(true))); });
 
 async function startOnlineSite() {
-  const SITE = `http://127.0.0.1:${BASE + 3}`;
+  const SITE = proxyOrigins(BASE + 3).editor; // 编辑器页 pc.localhost:<端口>,舞台 s1./s2.pc.localhost:<端口+1/+2>(同站跨源)
   for (const p of [BASE + 3, BASE + 4, BASE + 5, DOC_PORT, ASSET_PORT]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
   let DIST = arg('dist', null);
   if (!DIST) {
@@ -778,53 +781,16 @@ async function startOnlineSite() {
   const { startHostedCombo } = await import('../../server/hosted/combo.mjs');
   fs.mkdirSync(path.join(TMP, 'hosted'), { recursive: true });
   combo = await startHostedCombo({ dataDir: path.join(TMP, 'hosted'), docPort: DOC_PORT, assetPort: ASSET_PORT, host: '127.0.0.1',
-    docPublicUrl: `ws://127.0.0.1:${BASE + 3}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {} });
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-  const OAC = { 'origin-agent-cluster': '?1' };
-  const stageOrigins = [`http://127.0.0.1:${BASE + 4}`, `http://127.0.0.1:${BASE + 5}`];
-  const runtimeConfig = JSON.stringify({ v: 1, stageOrigins });
-  const make = (port) => {
-    const origin = `http://127.0.0.1:${port}`;
-    const forward = (req, res, upstream, strip, extra = null) => {
-      const target = req.url.slice(strip.length) || '/';
-      const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => { res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC, ...(extra ?? {}) }); r.pipe(res); });
-      up.on('error', () => { res.writeHead(502, OAC); res.end('bad gateway'); });
-      req.pipe(up);
-    };
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, origin);
-      if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, DOC_PORT, '/hosted');
-      const bytesOf = /^\/media\/api\/asset\/media\/([0-9a-f]{64})$/.exec(url.pathname);
-      if (bytesOf && blockedHashes.has(bytesOf[1]) && (req.method === 'GET' || req.method === 'HEAD')) { res.writeHead(404, { 'Cache-Control': 'no-store', ...OAC }); return res.end('Not found'); }
-      if (url.pathname.startsWith('/media/')) return forward(req, res, ASSET_PORT, '/media', bytesOf ? { 'cache-control': 'no-store' } : null);
-      const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
-      const sendFile = (file, cache) => { res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec }); fs.createReadStream(file).pipe(res); };
-      if (url.pathname === '/editor/runtime-config.json') { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec }); return res.end(runtimeConfig); }
-      const index = path.join(DIST, 'index.html');
-      if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-      if (url.pathname.startsWith('/editor/assets/')) {
-        const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-        if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
-        return sendFile(f, 'public, max-age=31536000, immutable');
-      }
-      if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-      res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC }); res.end('not found');
-    });
-    server.on('upgrade', (req, socket, head) => {
-      const url = new URL(req.url, origin);
-      if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
-      const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-      const up = net.connect(DOC_PORT, '127.0.0.1', () => {
-        const lines = [`${req.method} ${target} HTTP/1.1`];
-        for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-        up.write(`${lines.join('\r\n')}\r\n\r\n`); if (head?.length) up.write(head); up.pipe(socket); socket.pipe(up);
-      });
-      up.on('error', () => socket.destroy()); socket.on('error', () => up.destroy());
-    });
-    proxies.push(server);
-    return new Promise((r) => server.listen(port, '127.0.0.1', r));
-  };
-  await Promise.all([make(BASE + 3), make(BASE + 4), make(BASE + 5)]);
+    docPublicUrl: `ws://pc.localhost:${BASE + 3}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {} });
+  // 共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:同站跨源的三个源、策略头、`/media-s/`、运行配置);挡素材由钩子做
+  const bytesRe = /^\/media\/api\/asset\/media\/([0-9a-f]{64})$/;
+  hostedProxy = await startHostedProxy({ dist: DIST, basePort: BASE + 3, docPort: DOC_PORT, assetPort: ASSET_PORT, policy: 'full',
+    intercept: ({ req, url }) => {
+      const bytesOf = bytesRe.exec(url.pathname);
+      if (bytesOf && blockedHashes.has(bytesOf[1]) && (req.method === 'GET' || req.method === 'HEAD')) return { status: 404, body: 'Not found', headers: { 'cache-control': 'no-store' } };
+      return undefined;
+    },
+    responseHeaders: ({ url }) => (bytesRe.test(url.pathname) ? { 'cache-control': 'no-store' } : undefined) });
   return SITE;
 }
 const typeInto = async (page, sel, text) => { await page.waitForSelector(sel, { visible: true, timeout: 20_000 }); await page.click(sel); await page.$eval(sel, (el) => el.select()); await page.keyboard.press('Backspace'); if (text) await page.type(sel, text, { delay: 5 }); };
@@ -1001,7 +967,7 @@ try {
 } finally {
   try { await browser?.close(); } catch { /* 已关 */ }
   try { dev?.stop(); } catch { /* 已关 */ }
-  for (const s of proxies) { try { s.close(); } catch { /* 已关 */ } }
+  try { await hostedProxy?.close(); } catch { /* 已关 */ }
   try { await combo?.close?.(); } catch { /* 已关 */ }
   if (!KEEP) { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 留着 */ } }
 }

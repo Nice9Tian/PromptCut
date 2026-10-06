@@ -1,10 +1,10 @@
 /**
  * 在线纯浏览器节点认领用户卡任务的本机端到端(`docs/plan/sound-online-render-task.md` 第 16 条,
  * `docs/plan/online-card-exec-contract.md` 第 7、11.2 节;块 N)。
- * 全程在本机:本机托管组合代替阿里云,仿 nginx 的前缀代理开三个源(都带 OAC),在线构建当页面,绝不连真正的托管端。
+ * 全程在本机:本机托管组合代替阿里云,共用的本机托管代理 `lib/hosted-proxy.mjs` 开三个源(同站跨源,带策略头与 `/media-s/`),在线构建当页面,绝不连真正的托管端。
  *
  *   npx vite build --mode online --outDir <目录>
- *   node scripts/probes/online-card-node-probe.mjs [--dist <在线构建目录>] [--base-port 5460] [--out <目录>] [--keep-temp] [--strict]
+ *   node scripts/probes/online-card-node-probe.mjs [--dist <在线构建目录>] [--base-port 5780] [--out <目录>] [--keep-temp] [--strict]
  *        端口:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务(都只绑 127.0.0.1)
  *
  * 摆法(沿用 `m7-node-probe.mjs`,同一套本机替身):
@@ -28,8 +28,10 @@
  *       规则 2 与队列侧被挡,逐条断言在单测 `server/test/online-card-n.test.mjs` OCN-04 与 `m7-browser-probe.mjs`(清单计划不切流,这里没法造)。
  *   A-5 ★ 桌面节点与浏览器节点环境不同时结果键不串:同一台机器上切分方指纹 = 页面 envFingerprint、浏览器那份指纹是 cardEnvFingerprint,
  *       两份结果键不同;锁在 cardEnvFingerprint 上、切分方那份作废(superseded);内容库里只有浏览器键的清单。
- *   A-6 ★ 图卡:同一条链路(块 G 合流后补;图卡整屏快照的体积见报告,典型内容 2 MB 以上、超过 M7 的 300 KB / 画布位图 1 MB 的上限,
- *       不是纯色的图卡任务浏览器认领不了,量法见 `lib-graph-snapshot-size.mjs`)。
+ *   A-6 图卡(2026-10-06 主会话裁定,契约 13A(二):图卡任务纯浏览器节点不认领,不放宽体积上限):图卡整屏快照典型 2 MB 以上,超过 M7 的 300 KB /
+ *       画布位图 1 MB 的上限(量法见 `lib-graph-snapshot-size.mjs`),按画布卡处理。同步一张图卡(`ocn-graph`)、甲放一个片段:切分方(替身按画布卡标 canvasHeavy)
+ *       给它出的每个细任务只有桌面那一份、没有浏览器那一份(没有 dual、没有 bake 输入、指纹不是 cardEnvFingerprint),甲的节点认领数不增加。
+ *       (切分方是替身:它不会自己量体积,画布卡标记是替身按裁定给的;真实的「桌面量出超限就标」在单测 OCN-05 与 `server/render-node` 的切分测试里。)
  *
  * 退出码:有「非 ★」断言失败就非 0;★ 断言失败只记进 `pendingFails`(JSON 里 `wiringComplete: false`),带 `--strict` 时也算失败。
  * 不打印令牌、口令。输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, wiringComplete, fails, pendingFails, … }`。
@@ -38,24 +40,26 @@ import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTC
 import { spawnSync } from 'node:child_process';
 import crypto, { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const KEEP = argv.includes('--keep-temp');
 const STRICT = argv.includes('--strict');
-const BASE = Number(arg('--base-port', 5460));
+const BASE = Number(arg('--base-port', 5780));
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4 };
 const RUN = `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
-const SITE = `http://127.0.0.1:${PORTS.editor}`;
-const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
+const ORIGINS = proxyOrigins(PORTS.editor); // 编辑器页 pc.localhost:<端口>,舞台 s1./s2.pc.localhost:<端口+1/+2>(同站跨源)
+const SITE = ORIGINS.editor;
+const STAGE_ORIGINS = ORIGINS.stages;
 const HOSTED = `${SITE}/hosted/`;
 const DOC_DIRECT = `http://127.0.0.1:${PORTS.doc}`;
 const EDITOR = `${SITE}/editor`;
@@ -65,6 +69,23 @@ fs.mkdirSync(OUT, { recursive: true });
 const deadline = Date.now() + 40 * 60_000;
 const CARD_ID = 'ocn-card';
 const CARD_KEY = `src/cards/user/${CARD_ID}.tsx`;
+/** A-6 的图卡:同步来的整屏 glsl 图卡(纯色;体积与画布标记由切分方替身按裁定给,见 A-6) */
+const GRAPH_ID = 'ocn-graph';
+const GRAPH_KEY = `src/cards/user/${GRAPH_ID}.tsx`;
+const GRAPH_SOURCE = `/** 探针:在线执行图卡的端到端(块 N,A-6) */
+import { glsl } from "../../render/cards/graphValues";
+export const ocnGraph = {
+  id: "${GRAPH_ID}",
+  name: "OCN 探针图卡",
+  description: "块 N A-6 探针",
+  tags: ["探针"],
+  kind: "animation",
+  frameMode: "direct",
+  defaults: {},
+  controls: [],
+  card: () => glsl("void main() { outColor = vec4(0.2, 0.4, 0.6, 1.0); }", [], {}),
+};
+`;
 const CARD_SOURCE = `/** 探针:在线执行用户卡的端到端(块 N);无相对导入、无 Tailwind 以外的依赖 */
 import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string; tint: string }
@@ -121,7 +142,7 @@ const portFree = (port) => new Promise((resolve) => {
 /* ================================================================== 托管组合 + 三个源的仿 nginx 代理(同 m7-node-probe) */
 
 let combo = null;
-const proxies = [];
+let hostedProxy = null;
 async function startLocalSite() {
   for (const p of Object.values(PORTS)) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
   let DIST = arg('--dist', null);
@@ -136,65 +157,10 @@ async function startLocalSite() {
   fs.mkdirSync(path.join(TMP, 'hosted'), { recursive: true });
   combo = await startHostedCombo({
     dataDir: path.join(TMP, 'hosted'), docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1',
-    docPublicUrl: `ws://127.0.0.1:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
+    docPublicUrl: `ws://pc.localhost:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
   });
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-  const OAC = { 'origin-agent-cluster': '?1' };
-  const runtimeConfig = JSON.stringify({ v: 1, stageOrigins: STAGE_ORIGINS });
-  const makeProxy = (port) => {
-    const origin = `http://127.0.0.1:${port}`;
-    const forward = (req, res, upstream, strip) => {
-      const target = req.url.slice(strip.length) || '/';
-      const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => {
-        res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC });
-        r.pipe(res);
-      });
-      up.on('error', () => { res.writeHead(502, OAC); res.end('bad gateway'); });
-      req.pipe(up);
-    };
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, origin);
-      if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, PORTS.doc, '/hosted');
-      if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
-      const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
-      const sendFile = (file, cache) => {
-        res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
-        fs.createReadStream(file).pipe(res);
-      };
-      if (url.pathname === '/editor/runtime-config.json') {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec });
-        return res.end(runtimeConfig);
-      }
-      const index = path.join(DIST, 'index.html');
-      if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-      if (url.pathname.startsWith('/editor/assets/')) {
-        const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-        if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
-        return sendFile(f, 'public, max-age=31536000, immutable');
-      }
-      if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-      res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC });
-      res.end('not found');
-    });
-    server.on('upgrade', (req, socket, head) => {
-      const url = new URL(req.url, origin);
-      if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
-      const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-      const up = net.connect(PORTS.doc, '127.0.0.1', () => {
-        const lines = [`${req.method} ${target} HTTP/1.1`];
-        for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-        up.write(`${lines.join('\r\n')}\r\n\r\n`);
-        if (head?.length) up.write(head);
-        up.pipe(socket);
-        socket.pipe(up);
-      });
-      up.on('error', () => socket.destroy());
-      socket.on('error', () => up.destroy());
-    });
-    proxies.push(server);
-    return new Promise((r) => server.listen(port, '127.0.0.1', r));
-  };
-  await Promise.all([makeProxy(PORTS.editor), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+  // 共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:同站跨源的三个源、策略头、`/media-s/`、运行配置)
+  hostedProxy = await startHostedProxy({ dist: DIST, basePort: PORTS.editor, docPort: PORTS.doc, assetPort: PORTS.asset, policy: 'full' });
   say('local.up', { site: SITE, doc: PORTS.doc, asset: PORTS.asset, dist: DIST });
   return DIST;
 }
@@ -216,7 +182,9 @@ async function creatorContent(projectId, creator, label) {
 /* ================================================================== 切分方:同一台机器上的桌面节点(只切分、不认领细任务) */
 
 const splitterLog = [];
-async function startSplitter({ projectId, creator, codeVersion, envFingerprint, identity, contentClient }) {
+/** 切分方实际出的细任务(`afterSplit` 收到的 TaskInput,只留断言要的几项):A-6 核图卡有没有出浏览器那一份 */
+const splitTasks = [];
+async function startSplitter({ projectId, creator, codeVersion, envFingerprint, identity, graphIdentity, contentClient }) {
   const [{ normalizeEntry, sharedProtocols }, { createWsEndpoint }, { createLocalNode }, { createProjectClient }, { wsBaseOf }, { layerMapOf, splitCandidatesOf, layerMapKeyOf }] = await Promise.all([
     import('../../server/auth/shared-config.mjs'), import('../../server/render-node/ws-transport.mjs'), import('../../server/render-node/local-node.mjs'),
     import('../../server/render-node/project-client.mjs'), import('../../server/auth/route.mjs'), import('../../server/artifact-transfer.mjs'),
@@ -231,7 +199,7 @@ async function startSplitter({ projectId, creator, codeVersion, envFingerprint, 
   const node = createLocalNode({
     nodeId: `ocn-splitter-${RUN}`,
     node: { profile: 'pc', envFingerprint, codeVersions: [codeVersion], capabilities: { transcode: false, streams: false, userCards: true, graphCards: true },
-      cardSourceVersions: { [CARD_ID]: [identity] }, weightPolicy: { pc: ['medium'] } },
+      cardSourceVersions: { [CARD_ID]: [identity], [GRAPH_ID]: [graphIdentity] }, weightPolicy: { pc: ['medium'] } },
     endpoint: ep, now: Date.now, projects: [projectId], codeVersion,
     executor: {
       async plan(planTask) {
@@ -246,21 +214,26 @@ async function startSplitter({ projectId, creator, codeVersion, envFingerprint, 
           const first = Math.round(c.start * fps);
           const count = Math.max(1, Math.round((c.end - c.start) * fps));
           const key = `ocn-${RUN}-${planTask.source.userId ?? 'u'}-${c.id}`.replace(/[^\w-]/g, '_');
+          // 图卡(A-6):替身按裁定(契约 13A(二))给「画布卡」标记 —— 桌面按图卡整屏快照的体积(2 MB 以上,超过浏览器 300 KB / 1 MB 的上限)与画布位图标 canvasHeavy,
+          // 切分方就不出浏览器那一份。这里验的是整条链:标了之后浏览器节点一个图卡任务都不认领。
+          const graph = c.cardId === GRAPH_ID;
           cardPlan.push({ clipId: c.id, cardId: c.cardId, snapshotKey: key, contentKey: key, tier: 'shared', start: c.start, end: c.end, count,
             sampling: { firstFrame: first, phase: { numerator: 0, denominator: 1 } }, compositing: 'independent',
-            capabilities: { compositing: 'independent', canvasHeavy: false } });
+            capabilities: { compositing: 'independent', canvasHeavy: graph } });
         }
         splitterLog.push({ at: Date.now(), plan: planTask.id, rev: projectRev, browser: planTask.input?.browser ?? null, cards: cardPlan.map((c) => ({ clipId: c.clipId, count: c.count })) });
         contexts.set(planTask.id, { project, cardPlan });
         return {
           entryKey: `ocn-${RUN}`, cardPlan, prerenderSet: new Set(cardPlan.map((c) => c.clipId)),
-          cardSourceVersions: { [CARD_ID]: identity }, isUserCard: () => true, isGraphCard: () => false,
+          cardSourceVersions: { [CARD_ID]: identity, [GRAPH_ID]: graphIdentity }, isUserCard: (control) => control?.cardId !== GRAPH_ID, isGraphCard: (control) => control?.cardId === GRAPH_ID,
           weightOf: () => ({ class: 'light', estMs: null }),
         };
       },
       async render() { throw Object.assign(new Error('切分方不渲染'), { retryable: true }); },
       // 切分完成后按桌面的写法写层表 v 3:候选 = 切分实际出键的指纹
       async afterSplit(planTask, { tasks }) {
+        for (const t of tasks ?? []) splitTasks.push({ plan: planTask.id, id: t.id, clipId: t.input?.clipId ?? null, fingerprint: t.requires?.envFingerprint ?? null, dual: t.input?.dual === true,
+          canvasHeavy: t.input?.canvasHeavy === true, userCards: t.requires?.userCards === true, graphCards: t.requires?.graphCards === true, hasBake: !!t.input?.bake });
         const ctx = contexts.get(planTask.id);
         if (!ctx) return;
         const candidates = splitCandidatesOf(tasks);
@@ -308,9 +281,9 @@ async function openMember(label, projName, username, projectPassword) {
   void puppeteer;
   return page;
 }
-async function addCardClip(page, label) {
+async function addCardClip(page, label, cardIdOf = CARD_ID) {
   // 同步来的用户卡要等页面把内容库的卡片源码取到、认出它(定时重取,最多几秒)才放得上
-  await until(`${page.label}页认出同步来的卡 ${CARD_ID}`, () => P(page, (id) => !!window.__pcCardSources?.()?.cards?.some((c) => c.id === id), CARD_ID), 60_000, 500);
+  await until(`${page.label}页认出同步来的卡 ${cardIdOf}`, () => P(page, (id) => !!window.__pcCardSources?.()?.cards?.some((c) => c.id === id), cardIdOf), 60_000, 500);
   // 同步来的卡不在主注册表,不能用 addClipOnNewTrack;经 editCardProject 直接放一个片段(同 online-user-cards-probe)
   return P(page, (cardId, label2, tag) => {
     const S = window.__pcStore;
@@ -318,7 +291,7 @@ async function addCardClip(page, label) {
     S.actions.editCardProject((p) => ({ ...p, duration: Math.max(p.duration, 8), tracks: [{ id: 'ocn-t-' + tag, name: '序列 ' + tag, clips: [{ id, cardId, start: 0, end: 1, params: { text: label2 }, frame: { x: 0, y: 0, w: 640, h: 360 } }] }, ...p.tracks] }));
     S.actions.seek(0.5);
     return id;
-  }, CARD_ID, label, label.replace(/[^a-z0-9]/gi, '') + Math.random().toString(36).slice(2, 6));
+  }, cardIdOf, label, label.replace(/[^a-z0-9]/gi, '') + Math.random().toString(36).slice(2, 6));
 }
 
 try {
@@ -337,6 +310,12 @@ try {
     builtin: (rel) => { try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch { return null; } },
   }))?.version;
   check(!!identity, '算出探针卡的代码身份', { identity });
+  const graphHash = await sourceHashOf(GRAPH_SOURCE);
+  const graphIdentity = (await cardCodeIdentityOf(GRAPH_KEY, {
+    synced: (key) => (key === GRAPH_KEY ? { body: GRAPH_SOURCE, hash: graphHash } : null),
+    builtin: (rel) => { try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch { return null; } },
+  }))?.version;
+  check(!!graphIdentity, '算出探针图卡的代码身份', { graphIdentity });
   out.steps.identity = identity;
 
   /* ---------------------------------------------------------------- 0. 建项目、写进空项目、卡片源码进内容库 */
@@ -351,6 +330,8 @@ try {
   const adminLink = await creatorContent(made.projectId, creator, 'admin');
   const put = await adminLink.content.put('card-source', CARD_KEY, CARD_SOURCE).catch((e) => ({ error: String(e?.message ?? e) }));
   check(!put?.error, '创建者把用户卡源码写进内容库', put);
+  const putGraph = await adminLink.content.put('card-source', GRAPH_KEY, GRAPH_SOURCE).catch((e) => ({ error: String(e?.message ?? e) }));
+  check(!putGraph?.error, '创建者把图卡源码写进内容库', putGraph);
 
   const { default: puppeteer } = await import('puppeteer');
   const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
@@ -380,7 +361,7 @@ try {
 
   /* 切分方:同一台机器(指纹 = 页面的 envFingerprint) */
   const splitterContent = await creatorContent(made.projectId, creator, 'split');
-  const splitter = await startSplitter({ projectId: made.projectId, creator, codeVersion, envFingerprint: pageEnv ?? '5b1177e5b1177e50', identity, contentClient: splitterContent.content });
+  const splitter = await startSplitter({ projectId: made.projectId, creator, codeVersion, envFingerprint: pageEnv ?? '5b1177e5b1177e50', identity, graphIdentity, contentClient: splitterContent.content });
   say('splitter.up', { fp: pageEnv });
 
   /* ---------------------------------------------------------------- 3. 清单计划 → 切分两份 → 甲认领自己那份 → 完成(A-1、A-5) */
@@ -431,6 +412,18 @@ try {
   check(!!snapsB, 'A-2 ★ 乙按层表贴上甲的浏览器节点产出的这一层', out.steps.memberB, { pending: true });
   await shot(B, 'ocn-member-b');
 
+  /* ---------------------------------------------------------------- 5b. 图卡(A-6,2026-10-06 裁定改成「浏览器节点不认领图卡任务」,契约 13A(二)) */
+  const beforeG = await nodeDiag(A);
+  const clipG = await addCardClip(A, 'graph-a', GRAPH_ID);
+  await until('A-6 甲的图卡清单计划被切分', async () => splitterLog.some((s) => s.cards.some((c) => c.clipId === clipG)), 120_000, 500);
+  await delay(6000);
+  const afterG = await nodeDiag(A);
+  const gTasks = splitTasks.filter((t) => t.clipId === clipG);
+  out.steps.graph = { tasks: gTasks.map(({ id, ...rest }) => rest), before: beforeG?.counters, after: afterG?.counters, graphCards: afterG?.capabilities?.graphCards ?? null, cards: afterG?.cards ?? null };
+  check(gTasks.length >= 1 && gTasks.every((t) => t.graphCards && !t.userCards), 'A-6 切分方给图卡出了细任务,标明是图卡任务(requires.graphCards)', out.steps.graph);
+  check(gTasks.every((t) => t.canvasHeavy && !t.dual && !t.hasBake && t.fingerprint === pageEnv), 'A-6 图卡的整屏快照体积超过浏览器的上限、按画布卡处理:每个任务只有切分方(桌面)那一份,没有浏览器那一份(没有 dual、没有 bake 输入、指纹不是 cardEnvFingerprint)', gTasks);
+  check(afterG && beforeG && afterG.counters.claims === beforeG.counters.claims, 'A-6 浏览器节点不认领图卡任务:认领数没增加', { before: beforeG?.counters, after: afterG?.counters });
+
   /* ---------------------------------------------------------------- 6. 丙(另一用户)放同一张卡:甲不认领丙的任务(A-3) */
   const C = await openMember('丙', projName, 'ocn-member-c', projectPassword);
   const clipC = await addCardClip(C, 'from-c');
@@ -449,7 +442,7 @@ try {
   fails.push(`异常:${String(e?.stack ?? e).slice(0, 600)}`);
 } finally {
   try { await browser?.close(); } catch { /* 已关 */ }
-  for (const s of proxies) try { s.close(); } catch { /* 已关 */ }
+  try { await hostedProxy?.close(); } catch { /* 已关 */ }
   try { await combo?.close?.(); } catch { /* 已关 */ }
   if (!KEEP) try { fs.rmSync(path.join(TMP, 'hosted'), { recursive: true, force: true }); } catch { /* 留着 */ }
 }

@@ -8,13 +8,14 @@
  *        [--only-a4]             只跑到 A4(播放、暂停追活渲)为止,跳过 A2 的重开与 A5(排障用)
  *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`),验端到端:成员页发布的清单计划含它,桌面渲染节点渲出来、
  *                                写进层表,成员页贴上快照、没有「需要本地 PC 渲染辅助」的图标与徽标(C10 契约第 9 节,2026-09-29)
- *        [--base-port 5420]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
+ *        [--base-port 5780]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
  *                                (A5 里创建者关掉之后,独立渲染主机用同一段)
  *
  * 本机替身(与阿里云同形):
  *   - 托管组合(文档服务 + 素材服务,只绑 127.0.0.1);
- *   - 仿 nginx 的前缀代理,开三个源:编辑器页(+0)与两个舞台(+1、+2)都给 `/editor`(在线构建)、`/hosted/` 与 `/media/` 反代,
- *     **每个响应都带 `Origin-Agent-Cluster: ?1`**;`/editor/runtime-config.json` 给两个舞台源(同 `deploy-hosted --stage-origins` 写的);
+ *   - 共用的本机托管代理 `lib/hosted-proxy.mjs`(2026-10-06 起,取代各探针自带的仿 nginx 代理),开三个同站跨源的源 pc.localhost(+0)、s1.pc.localhost(+1)、s2.pc.localhost(+2),
+ *     带全套策略头(内容安全策略、`Connection-Allowlist`、OAC)、`/media-s/` 与舞台入口 `/editor/stage.html`;`/editor/runtime-config.json` 给两个舞台源(同 `deploy-hosted --stage-origins` 写的);
+ *     Node 这边(探针与它起的桌面 dev server、渲染主机)靠 `lib/localhost-dns.cjs` 认得 `*.localhost`;
  *   - 创建者 = 桌面版 dev server + 它的预渲染进程(队列节点,pc),建项目、放卡、勾「多用户协作」放云端、取邀请链接、预渲染;
  *   - 成员 = 电脑浏览器(普通档)打开邀请链接进入。
  *
@@ -31,7 +32,7 @@
  * ## 对远端跑(外网模式):--site <源>
  *
  *   node scripts/probes/c10-browser-probe.mjs --site https://8-219-80-16.sslip.io [--run <本轮 id>] [--stage-origins <源1>,<源2>]
- *        [--no-host] [--host-wait-min 15] [--timeout-min 120] [--coord <协调口基址>] [--out <目录>] [--base-port 5420]
+ *        [--no-host] [--host-wait-min 15] [--timeout-min 120] [--coord <协调口基址>] [--out <目录>] [--base-port 5780]
  *
  *   - 不起本机托管组合与代理:页面取 `<源>/editor`,文档服务 `<源>/hosted/`,素材服务 `<源>/media/api/asset`;
  *     两个舞台源缺省读 `<源>/editor/runtime-config.json` 的 `stageOrigins`(`deploy-hosted --stage-origins` 写的),读不到记一条失败、
@@ -144,6 +145,8 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, parseTaskId } from './m8/lib.mjs';
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 
@@ -155,7 +158,9 @@ const ONLY_A4 = argv.includes('--only-a4');
 const USER_CARD = argv.includes('--user-card');
 const KEEP = argv.includes('--keep-temp');
 const VIDEO = !argv.includes('--no-video');
-const BASE = Number(arg('--base-port', 5420));
+const BASE = Number(arg('--base-port', 5780));
+// 探针起的 Node 子进程(桌面版 dev server、渲染主机、旁路代理)继承它,也能解析 pc.localhost
+process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 const TTL_MS = Number(arg('--ticket-ttl-ms', 20_000));
 /** 外网模式:给了 --site 就对远端跑,不起本机托管组合与代理 */
 const SITE_ARG = arg('--site', null);
@@ -200,9 +205,9 @@ const HOST_FP = '0c10b0e5f1a9e7d2';
 const RUN_ARG = arg('--run', null);
 if (RUN_ARG && RUN_ARG !== 'latest' && !/^[A-Za-z0-9_-]{1,24}$/.test(RUN_ARG)) { process.stderr.write('--run 要 1～24 个 [A-Za-z0-9_-]\n'); process.exit(2); }
 const RUN = RUN_ARG && RUN_ARG !== 'latest' ? RUN_ARG : `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
-const SITE = REMOTE ? String(SITE_ARG).replace(/\/+$/, '') : `http://127.0.0.1:${PORTS.editor}`;
+const SITE = REMOTE ? String(SITE_ARG).replace(/\/+$/, '') : proxyOrigins(PORTS.editor).editor;
 /** 两个舞台源:本机替身是 +1、+2 两个端口;外网模式在主流程开头按 --stage-origins / runtime-config.json 定 */
-let STAGE_ORIGINS = REMOTE ? [] : [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
+let STAGE_ORIGINS = REMOTE ? [] : proxyOrigins(PORTS.editor).stages;
 const HOSTED = `${SITE}/hosted/`;
 const EDITOR = `${SITE}/editor`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), ROLE === 'host' ? 'pc-c10-host-' : 'pc-c10-browser-'));
@@ -261,9 +266,7 @@ function pidOnPort(port) {
 /* ================================================================== 本机替身:托管组合 + 三个源的仿 nginx 代理 */
 
 let combo = null;
-const proxies = [];
-/** 代理上升级过的连接(两头的 socket),收尾时一起掐掉 */
-const upgraded = new Set();
+let hostedProxy = null;
 const docHeaders = [];
 async function startLocalSite() {
   for (const p of [PORTS.editor, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
@@ -279,70 +282,10 @@ async function startLocalSite() {
   fs.mkdirSync(path.join(TMP, 'hosted'), { recursive: true });
   combo = await startHostedCombo({
     dataDir: path.join(TMP, 'hosted'), docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1',
-    docPublicUrl: `ws://127.0.0.1:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
+    docPublicUrl: `ws://pc.localhost:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
   });
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-  const OAC = { 'origin-agent-cluster': '?1' };
-  const runtimeConfig = JSON.stringify({ v: 1, stageOrigins: STAGE_ORIGINS });
-  const makeProxy = (port) => {
-    const origin = `http://127.0.0.1:${port}`;
-    const forward = (req, res, upstream, strip) => {
-      const target = req.url.slice(strip.length) || '/';
-      const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => {
-        res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC });
-        r.pipe(res);
-      });
-      up.on('error', () => { res.writeHead(502, OAC); res.end('bad gateway'); });
-      req.pipe(up);
-    };
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, origin);
-      if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, PORTS.doc, '/hosted');
-      if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
-      const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
-      const sendFile = (file, cache) => {
-        res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
-        fs.createReadStream(file).pipe(res);
-      };
-      if (url.pathname === '/editor/runtime-config.json') {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec });
-        return res.end(runtimeConfig);
-      }
-      const index = path.join(DIST, 'index.html');
-      if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-      if (url.pathname.startsWith('/editor/assets/')) {
-        const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-        if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
-        return sendFile(f, 'public, max-age=31536000, immutable');
-      }
-      if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-      res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC });
-      res.end('not found');
-    });
-    server.on('upgrade', (req, socket, head) => {
-      const url = new URL(req.url, origin);
-      if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
-      const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-      upgraded.add(socket);
-      socket.on('close', () => upgraded.delete(socket));
-      const up = net.connect(PORTS.doc, '127.0.0.1', () => {
-        const lines = [`${req.method} ${target} HTTP/1.1`];
-        for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-        up.write(`${lines.join('\r\n')}\r\n\r\n`);
-        if (head?.length) up.write(head);
-        up.pipe(socket);
-        socket.pipe(up);
-      });
-      upgraded.add(up);
-      up.on('close', () => { upgraded.delete(up); socket.destroy(); });
-      socket.on('close', () => up.destroy());
-      up.on('error', () => socket.destroy());
-      socket.on('error', () => up.destroy());
-    });
-    proxies.push(server);
-    return new Promise((r) => server.listen(port, '127.0.0.1', r));
-  };
-  await Promise.all([makeProxy(PORTS.editor), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+  // 共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:同站跨源的三个源、策略头、`/media-s/`、运行配置)
+  hostedProxy = await startHostedProxy({ dist: DIST, basePort: PORTS.editor, docPort: PORTS.doc, assetPort: PORTS.asset, policy: 'full' });
   say('local.up', { site: SITE, stages: STAGE_ORIGINS, doc: PORTS.doc, asset: PORTS.asset, dist: DIST, ticketTtlMs: A10 ? TTL_MS : null });
 }
 
@@ -2051,10 +1994,9 @@ try {
   try { fs.writeFileSync(path.join(OUT, 'creator-editor.log'), editorLog.join('\n')); fs.writeFileSync(path.join(OUT, 'host.log'), hostLog.join('\n')); } catch { /* 写不了 */ }
   await stopHost().catch(() => {});
   await stopEditor().catch(() => {});
-  // 升级过的 WebSocket 连接不归 http 服务器管,close 的回调会一直等它们:先全部掐掉,再限时等(以前会在这里挂住、不出结果行)
-  for (const sock of upgraded) { try { sock.destroy(); } catch { /* 已断 */ } }
+  // 升级过的 WebSocket 连接不归 http 服务器管:代理的 close 先把它们全部掐掉再关(限时等,以前会在这里挂住、不出结果行)
   const within = (p, ms) => Promise.race([p, delay(ms)]);
-  for (const s of proxies) await within(new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); }), 5000);
+  try { await within(hostedProxy?.close(), 10_000); } catch { /* 已关 */ }
   try { await within(combo?.close(), 10_000); } catch { /* 已关 */ }
   out.cleanup = { deleted, listening: [PORTS.editor, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset, PORTS.node, PORTS.node + 1, PORTS.node + 2].filter((p) => pidOnPort(p)) };
   if (!KEEP) {

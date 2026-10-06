@@ -56,10 +56,12 @@ export function proxyOrigins(basePort, host = 'pc.localhost') {
  * @param {"full"|"legacy"|"none"|"csp-only"} [o.policy]
  * @param {boolean} [o.onlineCardExec]  运行配置里的总开关;只有明给 false 才写进配置
  * @param {boolean} [o.runtimeConfig]   给 false 就不提供运行配置(404):页面读不到舞台源,退回同源单舞台(仿没有舞台子域的部署)
- * @param {(info: { role: "editor"|"stageA"|"stageB", req: http.IncomingMessage, url: URL }) => (void | { status: number, body?: string } | { delayMs: number })} [o.intercept]
- *        探针的钩子:回 `{ status }` 直接应答,回 `{ delayMs }` 压住这个请求再照常处理
+ * @param {(info: { role: "editor"|"stageA"|"stageB", req: http.IncomingMessage, url: URL }) => (void | { status: number, body?: string | Buffer, headers?: Record<string, string | number> } | { delayMs: number })} [o.intercept]
+ *        探针的钩子:回 `{ status, body?, headers? }` 直接应答(`body` 可以是字节,`headers` 盖过缺省的 text/plain 与策略头),回 `{ delayMs }` 压住这个请求再照常处理
+ * @param {(info: { role: "editor"|"stageA"|"stageB", req: http.IncomingMessage, url: URL }) => (void | Record<string, string>)} [o.responseHeaders]
+ *        探针的钩子:给转发出去的响应(文档服务、素材服务)补 / 盖响应头(例如给素材字节加 `cache-control: no-store`)
  */
-export async function startHostedProxy({ dist, basePort, docPort, assetPort, policy = 'full', host = 'pc.localhost', onlineCardExec, runtimeConfig: withRuntimeConfig = true, intercept }) {
+export async function startHostedProxy({ dist, basePort, docPort, assetPort, policy = 'full', host = 'pc.localhost', onlineCardExec, runtimeConfig: withRuntimeConfig = true, intercept, responseHeaders }) {
   const DIST = path.resolve(dist);
   if (!fs.existsSync(path.join(DIST, 'index.html'))) throw new Error(`在线构建目录里没有 index.html:${DIST}`);
   const origins = proxyOrigins(basePort, host);
@@ -68,7 +70,14 @@ export async function startHostedProxy({ dist, basePort, docPort, assetPort, pol
   const grants = [];
   /** 每个请求一条:{ role, method, path, status } */
   const requests = [];
+  /** 每个请求的原样地址(含查询串;HTTP 与 WebSocket 升级都记):探针核「票据没有出现在任何地址里」用。别在日志里直接打印 */
+  const urls = [];
+  const noteUrl = (u) => { urls.push(u); if (urls.length > 50_000) urls.shift(); };
   const servers = [];
+  /** 现有的 WebSocket 对(`cutWs` 掐断用) */
+  const wsPairs = new Set();
+  /** 探针可以直接改的开关:`blockWs` 拒新的 WebSocket 升级;`blockMedia` 让 `/media/…` 连不上(旧办法那条路,不含 `/media-s/`) */
+  const api = { blockWs: false, blockMedia: false };
 
   const headersFor = (role) => {
     if (role === 'editor') return policy === 'legacy' ? { ...LEGACY_HEADERS } : { ...LEGACY_HEADERS, ...editorSecurityHeaders(origins.stages) };
@@ -88,7 +97,7 @@ export async function startHostedProxy({ dist, basePort, docPort, assetPort, pol
     const forward = (req, url, res, upstreamPort, upstreamPath, headers = req.headers) => {
       const up = http.request({ host: '127.0.0.1', port: upstreamPort, method: req.method, path: upstreamPath, headers }, (r) => {
         note(req, url, r.statusCode ?? 502);
-        res.writeHead(r.statusCode ?? 502, { ...r.headers, ...sec });
+        res.writeHead(r.statusCode ?? 502, { ...r.headers, ...sec, ...(responseHeaders?.({ role, req, url }) ?? {}) });
         r.pipe(res);
       });
       up.on('error', () => { if (!res.headersSent) end(req, url, res, 502, {}, 'bad gateway'); else res.destroy(); });
@@ -102,6 +111,7 @@ export async function startHostedProxy({ dist, basePort, docPort, assetPort, pol
     const handle = (req, res) => {
       const url = new URL(req.url, origin);
       const p = url.pathname;
+      if (api.blockMedia && (p === '/media' || p.startsWith('/media/'))) return req.socket.destroy();
       if (!isStage && (p === '/hosted' || p.startsWith('/hosted/'))) return forward(req, url, res, docPort, (p.slice('/hosted'.length) || '/') + url.search);
       if (p === '/media' || p.startsWith('/media/')) return forward(req, url, res, assetPort, (p.slice('/media'.length) || '/') + url.search);
       if (isStage && policy !== 'legacy') {
@@ -142,15 +152,18 @@ export async function startHostedProxy({ dist, basePort, docPort, assetPort, pol
       return end(req, url, res, 404, { 'content-type': 'text/plain' }, 'not found');
     };
     const server = http.createServer((req, res) => {
+      noteUrl(req.url);
       const verdict = intercept?.({ role, req, url: new URL(req.url, origin) });
-      if (verdict && 'status' in verdict) { res.writeHead(verdict.status, { 'content-type': 'text/plain', ...sec }); return res.end(verdict.body ?? ''); }
+      if (verdict && 'status' in verdict) { res.writeHead(verdict.status, { 'content-type': 'text/plain', ...sec, ...(verdict.headers ?? {}) }); return res.end(verdict.body ?? ''); }
       if (verdict && 'delayMs' in verdict) { const t = setTimeout(() => handle(req, res), verdict.delayMs); req.on('close', () => clearTimeout(t)); return; }
       handle(req, res);
     });
     server.on('upgrade', (req, socket, head) => {
+      noteUrl(req.url);
       const url = new URL(req.url, origin);
-      if (isStage || !(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
+      if (isStage || api.blockWs || !(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
       const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
+      const pair = { socket, up: null };
       const up = net.connect(docPort, '127.0.0.1', () => {
         const lines = [`${req.method} ${target} HTTP/1.1`];
         for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
@@ -159,6 +172,10 @@ export async function startHostedProxy({ dist, basePort, docPort, assetPort, pol
         up.pipe(socket);
         socket.pipe(up);
       });
+      pair.up = up;
+      wsPairs.add(pair);
+      const drop = () => wsPairs.delete(pair);
+      socket.on('close', drop); up.on('close', drop);
       up.on('error', () => socket.destroy());
       socket.on('error', () => up.destroy());
     });
@@ -167,7 +184,7 @@ export async function startHostedProxy({ dist, basePort, docPort, assetPort, pol
   }
   await Promise.all([make('editor', basePort), make('stageA', basePort + 1), make('stageB', basePort + 2)]);
 
-  return {
+  return Object.assign(api, {
     policy,
     editorOrigin: origins.editor,
     stageOrigins: origins.stages,
@@ -175,10 +192,14 @@ export async function startHostedProxy({ dist, basePort, docPort, assetPort, pol
     assetPublicUrl: `${origins.editor}/media/api/asset`,
     grants,
     requests,
+    urls,
+    /** 断这一套代理上的 WebSocket:现有的掐掉、新的拒掉(`blockWs = false` 再放行)。只掐这一套,别的代理照常 */
+    cutWs() { api.blockWs = true; for (const p of wsPairs) { p.socket.destroy(); p.up?.destroy(); } wsPairs.clear(); },
     async close() {
+      for (const p of wsPairs) { p.socket.destroy(); p.up?.destroy(); }
       for (const s of servers) { s.closeAllConnections?.(); await new Promise((r) => s.close(() => r())); }
     },
-  };
+  });
 }
 
 /* ------------------------------------------------------------------ 直接运行:本机隔离托管组合 + 代理 */
