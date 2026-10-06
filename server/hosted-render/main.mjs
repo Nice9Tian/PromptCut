@@ -11,7 +11,8 @@
  * 环境变量（都有缺省；PM2 配置由部署脚本生成，不含任何秘密）：
  *   PROMPTCUT_RENDER_DOC_URL          文档服务的本机地址，缺省 ws://127.0.0.1:8787（直连，不经 nginx）
  *   PROMPTCUT_RENDER_SECRETS          私钥目录，缺省 /var/lib/promptcut/render-secrets
- *   PROMPTCUT_RENDER_DATA             工作进程的数据目录，缺省 /var/lib/promptcut/render
+ *   PROMPTCUT_RENDER_DATA             工作进程的数据目录，缺省 /var/lib/promptcut/render。Vite 的依赖预构建缓存也放这里（`<数据目录>/vite-cache`，
+ *                                     经 PROMPTCUT_VITE_CACHE_DIR 交给工作进程）：发布目录属 root、工作进程以服务用户跑时检出目录它写不了
  *   PROMPTCUT_RENDER_PORT             工作进程的端口（另占 +1、+2），缺省 5400
  *   PROMPTCUT_RENDER_STATUS_PORT      管理进程的诊断与代理口（只绑回环），缺省 5399
  *   PROMPTCUT_RENDER_MAX_CONCURRENT   并发任务数 1～4，缺省 2
@@ -28,6 +29,7 @@
  *   PROMPTCUT_RENDER_DOC_HEALTH_URL   背压用的文档服务自检地址，缺省由 DOC_URL 推出 http://…/healthz
  *   PROMPTCUT_RENDER_STREAMS          1 开轨道流（缺省不开）
  *   PROMPTCUT_RENDER_VERBOSE          1 把工作进程的输出原样转出来
+ *   PROMPTCUT_RENDER_REPORT_TIMEOUT_MS  工作进程起来后这么久没交过诊断（或中途停交）就结束它重起，缺省 180000
  *   测试用：PROMPTCUT_RENDER_SAMPLE_MS（采样间隔）、PROMPTCUT_RENDER_SKIP_CHECKS（逗号分隔，跳过自检里的 chrome / ffmpeg）、
  *   PROMPTCUT_TEST_ENV_FINGERPRINT（原样传给工作进程，本机演练里让它的指纹与本机桌面不同）
  *
@@ -75,6 +77,8 @@ export function renderServiceConfig(env = process.env) {
     healthUrl: health,
     secretsDir: env.PROMPTCUT_RENDER_SECRETS || '/var/lib/promptcut/render-secrets',
     dataDir: path.resolve(env.PROMPTCUT_RENDER_DATA || '/var/lib/promptcut/render'),
+    viteCacheDir: path.join(path.resolve(env.PROMPTCUT_RENDER_DATA || '/var/lib/promptcut/render'), 'vite-cache'),
+    reportTimeoutMs: intOf(env.PROMPTCUT_RENDER_REPORT_TIMEOUT_MS, 180_000, 5000, 3_600_000),
     port: intOf(env.PROMPTCUT_RENDER_PORT, 5400, 1, 65533),
     statusPort: intOf(env.PROMPTCUT_RENDER_STATUS_PORT, 5399, 0, 65535),
     maxConcurrent: intOf(env.PROMPTCUT_RENDER_MAX_CONCURRENT, LIMIT_DEFAULTS.maxConcurrent, 1, 4),
@@ -139,6 +143,15 @@ export function compareCodeVersions({ self, editorDir, expect, agentVersion }) {
   return { self, editor, agent, expect: expect || null, match: editor === 'different' || agent === 'different' ? false : (editor === 'same' || agent === 'same' ? true : null) };
 }
 
+/**
+ * 工作进程是不是「起来了却不干活」：进程在、也打过就绪，但从没交过诊断（队列节点没起成，例如开 Chrome 探环境时卡住），
+ * 或者交到一半停了。代理模式下它每秒对一次账、顺带交一次诊断，所以超过 `limitMs` 没有就结束它重起。
+ */
+export function reportStale({ running, ready, startedAt, reportAt, now, limitMs }) {
+  if (!running || !ready || !Number.isFinite(startedAt)) return false;
+  return now - Math.max(startedAt, reportAt || 0) > limitMs;
+}
+
 async function timedHealth(url) {
   const started = Date.now();
   try {
@@ -199,6 +212,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       PROMPTCUT_RENDER_BROKER_KEY: brokerKey,
       // 常驻工作进程绝不同步任何项目的卡（契约第 7.5 节）：它不执行任何项目带来的代码
       PROMPTCUT_CARD_SYNC: '0',
+      // Vite 的依赖预构建缓存放数据目录下（检出目录对工作进程的用户可能只读）
+      PROMPTCUT_VITE_CACHE_DIR: config.viteCacheDir,
     });
     return e;
   };
@@ -225,6 +240,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   let codeWarnAt = 0;
   let agentVersion = null;
   let agentAt = 0;
+  let quotaUntil = null;
 
   const heldByProject = () => Object.fromEntries((report?.queue?.nodes ?? []).map((n) => [n.projectId, (n.held?.length ?? 0) + (n.running?.length ?? 0)]));
   const listing = () => {
@@ -245,6 +261,20 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       log('render.memory-exceeded', { workerRss, max: memoryMaxBytes, count: o.count });
       if (o.degrade && concurrency !== 1) { concurrency = 1; log('render.degraded', { concurrency, reason: 'oom' }); }
       worker.kill('oom');
+    }
+    // 起来了却不交诊断：结束重起
+    const ws = worker.status();
+    if (reportStale({ running: ws.running, ready: ws.ready, startedAt: ws.startedAt, reportAt, now: Date.now(), limitMs: config.reportTimeoutMs })) {
+      log('render.worker-stalled', { pid: ws.pid, reportAgeMs: reportAt ? Date.now() - reportAt : null, limitMs: config.reportTimeoutMs });
+      report = null;
+      worker.kill('stalled');
+    }
+    // 产物到了容量上限：工作进程已暂停认领，这里明说一次
+    const quota = report?.queue?.quotaPausedUntil ?? null;
+    if (quota !== quotaUntil) {
+      quotaUntil = quota;
+      if (quota) log('render.quota', { until: quota, detail: '素材服务回 507 service-quota：渲染服务的产物到了容量上限，暂停认领 10 分钟' });
+      else log('render.quota-clear', {});
     }
     // 代码版本：与在线页面、Agent 服务的不一致要明说
     if (config.agentStatusUrl && Date.now() - agentAt > 5 * 60_000) {
@@ -287,6 +317,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         limits: { maxConcurrent: config.maxConcurrent, maxProjects: config.maxProjects, memoryMax: config.memoryMax, memoryHigh: config.memoryHigh, cpuQuota: config.cpuQuota, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}` },
         readings,
         backpressure: { paused: backpressure.paused, reasons: backpressure.reasons },
+        quotaPausedUntil: quotaUntil,
         degraded: oom.degraded,
         codeVersion,
         selfcheck: { ok: check.ok, warnings: check.warnings, info: check.info },

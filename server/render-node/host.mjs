@@ -54,6 +54,8 @@
  *   - `remove(projectId)`:让掉这个项目手里的认领(`task.release`)、停节点、调接线时给的 `close()`;
  *   - `remove(projectId, { drain: true })`:不再认领新的,手里的做完(持有与在飞都清空)才停、才关;
  *   - `setPaused(true)`:全部节点不再认领新任务,手里的照做(背压);
+ *   - **产物到了容量上限**:某个任务以 `service-quota` 失败(素材服务回 507,`artifact-transfer.mjs`)时,全部节点暂停认领
+ *     `QUOTA_PAUSE_MS`(10 分钟),发一条 `quota-paused` 事件;`quotaPausedUntil` 可查。那个任务是不可重试的失败;
  *   - **有成员在线的项目优先**:每一拍先推进 `entry.members === true` 的项目,全局闸的空位先给它们;
  *     `setMembers(projectId, bool)` 随目录的变化更新。
  * 不带 `dynamic` 时这些方法照样在,行为与原来一致(成员表就是构造时那几项)。
@@ -73,6 +75,21 @@ export const HOST_MAX_CONCURRENT = 4;
 export const HOST_CONCURRENCY_ENV = 'PROMPTCUT_HOST_MAX_CONCURRENT';
 /** 与 PC 节点相同的能力(契约第 3 节 `node.hello`) */
 export const HOST_CAPABILITIES = Object.freeze({ userCards: true, graphCards: false });
+/** 产物到了容量上限(任务以 `service-quota` 失败)后暂停认领多久(`docs/plan/hosted-render-contract.md` 第 6 节) */
+export const QUOTA_PAUSE_MS = 10 * 60_000;
+
+/**
+ * 托管方渲染服务的工作进程报的能力位(`docs/plan/hosted-render-contract.md` 第 5、7.5 节),集中在这一处:
+ *   - `userCards`:只有开着卡片同步的工作进程才报 true。常驻工作进程绝不同步任何项目的卡(它不执行项目带来的代码),报 false,
+ *     要用户卡的任务它不认领;按项目隔离的工作进程(方案 A)开着同步,报 true;
+ *   - `graphCards`:false。第二段(在线执行用户卡与图卡)合流后由主会话对这一位;
+ *   - 其余能力位(`streams`、`transcode`)按预渲染管线的实测值,不在这里改。
+ * @param {object} base 预渲染管线实测出的能力(`nodeCapabilities`)
+ * @param {{ cardSync: boolean }} o 这个工作进程开没开卡片同步
+ */
+export function hostedRenderCapabilities(base, { cardSync }) {
+  return { ...base, userCards: cardSync === true, graphCards: false };
+}
 
 function badHost(detail) {
   const err = new Error(`独立渲染主机配置:${detail}`);
@@ -185,6 +202,7 @@ export function createRenderHost({
   let stopped = false;
   let started = false;
   let paused = false;
+  let quotaUntil = 0;
   let nextIndex = 0;
 
   const emit = (event) => { try { onEvent(event); } catch { /* 诊断回调出错不影响节点 */ } };
@@ -296,7 +314,7 @@ export function createRenderHost({
       now,
       ...(random ? { random } : {}),
       ...(constants ? { constants } : {}),
-      isIdle: () => !paused && !m.draining && busy() < cap,
+      isIdle: () => !paused && now() >= quotaUntil && !m.draining && busy() < cap,
       canClaim: (task) => laneFree(m, task),
       maxConcurrent: cap,
       codeVersion: version,
@@ -308,7 +326,13 @@ export function createRenderHost({
         const type = event?.type;
         if (type === 'completed') m.stats.completed++;
         else if (type === 'dedup') m.stats.dedup++;
-        else if (type === 'failed') m.stats.failed++;
+        else if (type === 'failed') {
+          m.stats.failed++;
+          if (event.error === 'service-quota') {
+            quotaUntil = now() + QUOTA_PAUSE_MS;
+            emit({ type: 'quota-paused', until: quotaUntil, id: event.id, projectId: m.projectId, index: m.index });
+          }
+        }
         else if (type === 'lost') m.stats.lost++;
         else if (type === 'discarded') m.stats.discarded++;
         emit({ ...event, projectId: m.projectId, index: m.index });
@@ -387,6 +411,8 @@ export function createRenderHost({
     /** 背压:暂停认领新任务,手里的照做 */
     setPaused(value) { paused = value === true; },
     get paused() { return paused; },
+    /** 因产物容量上限暂停认领到什么时刻(毫秒时间戳);没在暂停回 null */
+    get quotaPausedUntil() { return now() < quotaUntil ? quotaUntil : null; },
     /** 现有项目的 projectId(含排空中的) */
     projects: () => members.map((m) => m.projectId),
     /** 代码版本变了:全部让掉、按新版本重新报到 */

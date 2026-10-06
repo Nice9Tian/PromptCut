@@ -673,6 +673,11 @@ function safeLog(log, event, fields) {
  * `ref` 带着任务的 `input` 与 `requires`(M5b 的 local-node 原样传入)。本地档靠它们按 E.9 算落盘键;
  * 缺了就 `has` 回 false、`put` 回 `{ complete: false }`,不猜。`canvasHeavy` 取 `ref.input.canvasHeavy`。
  */
+/** 素材服务回的「托管方渲染服务的产物到了容量上限」 */
+export const SERVICE_QUOTA = 'service-quota';
+/** 素材客户端对 5xx 重试用尽后抛的错:`status === 507` 且 `body.error === 'service-quota'` */
+export const isServiceQuotaError = (error) => error?.status === 507 && error?.body?.error === SERVICE_QUOTA;
+
 export function createAssetSink({ pipeline, client, content = null, log = () => {} }) {
   if (!pipeline) throw new Error('createAssetSink needs a pipeline');
   if (!client) throw new Error('createAssetSink needs an asset client');
@@ -806,6 +811,12 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
         if (content) await writeManifest(content, collected.result, log);
         return { complete: true, result: collected.result, stats: stats() };
       } catch (error) {
+        // 素材服务说托管方渲染服务的产物到了容量上限(507 `service-quota`,`docs/plan/hosted-render-contract.md` 第 6 节):
+        // 重试也没用,按不可重试的失败抛出去;节点据此暂停认领(`render-node/host.mjs`)
+        if (isServiceQuotaError(error)) {
+          safeLog(log, 'sink.service-quota', { resultKey: String(ref?.resultKey ?? '').slice(0, 16), range: ref?.range ?? null, ...stats() });
+          throw Object.assign(new Error(SERVICE_QUOTA), { code: SERVICE_QUOTA, status: 507, retryable: false });
+        }
         const code = error?.code ?? error?.status ?? null;
         return incomplete(`${stage}-failed${code !== null ? `:${String(code).slice(0, 40)}` : ''}`, { message: String(error?.message ?? error).slice(0, 200) });
       }

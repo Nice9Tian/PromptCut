@@ -10,7 +10,7 @@
  * |---|---|
  * | `node-version` | Node ≥ 22.18（`.ts` 靠类型剥离直接载入） |
  * | `service-key` | 私钥文件在、权限不宽于 0600、格式对 |
- * | `data-dir` | 数据目录可写（没有就建） |
+ * | `data-dir` | 数据目录可写（没有就建）；其下的 Vite 缓存目录 `vite-cache` 同样可写（检出目录对工作进程的用户可能只读） |
  * | `no-chrome` / `chrome-launch` | 找得到并起得来 chrome-headless-shell（带 root / 容器下的沙箱判断） |
  * | `no-cjk-font` | 在刚起的 Chrome 里把「中」「国」各画一遍：没有中文字体时两个字都是同一个缺字方框，位图相同 |
  * | `no-ffmpeg` | `ffmpeg -version` 能跑 |
@@ -119,6 +119,13 @@ export async function runSelfcheck(config, deps = {}) {
   } catch (err) {
     fail('data-dir', `${config.dataDir}：${String(err?.code ?? err?.message ?? err)}`);
   }
+  if (config.viteCacheDir) {
+    try {
+      (deps.checkDir ?? checkWritableDir)(config.viteCacheDir);
+    } catch (err) {
+      fail('data-dir', `Vite 缓存目录 ${config.viteCacheDir}：${String(err?.code ?? err?.message ?? err)}`);
+    }
+  }
 
   let chrome;
   try {
@@ -131,6 +138,8 @@ export async function runSelfcheck(config, deps = {}) {
       `${chrome.detail ?? ''}${chrome.stage === 'no-chrome' ? '；在部署目录里跑 npx puppeteer browsers install chrome-headless-shell' : ''}`);
   } else {
     info.chrome = chrome.version ?? null;
+    // Chrome 的沙箱开没开（root / 容器里自动关，见 `bakery/chrome.mjs` 的 `noSandboxReason`）：'on' | 'off:<原因>'；探测没说就不记
+    if (chrome.noSandbox !== undefined) info.chromeSandbox = chrome.noSandbox ? `off:${chrome.noSandbox}` : 'on';
     if (chrome.cjk !== true) fail('no-cjk-font', 'Chrome 里画不出中文（两个不同的汉字画出来一样）；装中文字体：apt-get install fonts-noto-cjk');
     if (chrome.noSandbox) warn('no-sandbox', `Chrome 关着沙箱在跑（原因：${chrome.noSandbox}）；推荐用专门的非 root 用户跑工作进程`);
   }

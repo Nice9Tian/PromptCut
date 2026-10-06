@@ -50,13 +50,15 @@ import { runKeygen } from '../../server/hosted-render/keygen.mjs';
 import { killTree } from '../../server/hosted-render/worker.mjs';
 import { createSharedProject, buildAuthProtocols, deriveKey, adminProof, ticketProtocols } from '../../server/auth/client.mjs';
 import { readServiceKeyFile, buildServiceProtocols } from '../../server/auth/service-identity.mjs';
-import { clipsPlanTaskOf } from '../../server/render-queue/messages.mjs';
+import { clipsPlanTaskOf, backfillPlanTaskOf } from '../../server/render-queue/messages.mjs';
+import { envFingerprintOf, chromeMajorOf } from '../../server/render-node/fingerprint.mjs';
+import { noSandboxReason } from '../../server/bakery/chrome.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const flag = (name) => argv.includes(name);
-const ALL_STEPS = ['work', 'late', 'forbidden', 'switch', 'kill', 'limits', 'load', 'delete'];
+const ALL_STEPS = ['work', 'late', 'agent', 'forbidden', 'switch', 'kill', 'limits', 'load', 'delete'];
 const STEPS = String(arg('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 const BASE = Number(arg('--base-port', 5730));
 const PORTS = { worker: BASE, status: BASE + 6, doc: Number(arg('--doc-port', 8794)), asset: Number(arg('--asset-port', 8795)) };
@@ -177,6 +179,7 @@ const supLogs = [];
 const HOSTED_DATA = path.join(TMP, 'hosted');
 const RENDER_SECRETS = path.join(TMP, 'render-secrets');
 const RENDER_DATA = path.join(TMP, 'render');
+const AGENT_SECRETS = path.join(TMP, 'agent-secrets');
 
 function startSupervisor(extraEnv = {}) {
   const env = { ...process.env };
@@ -341,18 +344,18 @@ async function stepWork() {
   return r;
 }
 
-async function stepLate() {
+/** 之后才上线的一位成员:不发任何任务,直接取得到层表、各段的清单与清单里的块。`label` 是步骤名,`rev` 给了就核对层表是这一版的 */
+async function lateMemberSees(label, username, rev = null) {
   const r = {};
-  // 发布方(创建者,唯一的成员)走掉;之后另一位成员才上线,不发任何任务
-  ctx.creator.close();
-  await delay(1500);
-  const late = await joinAs(ctx.proj, { username: 'late-bob', name: 'late' });
+  const late = await joinAs(ctx.proj, { username, name: username });
   const map = await layerMapOf(late);
   r.layers = Array.isArray(map.body?.layers) ? map.body.layers.length : 0;
-  check(map.type === 'content.item' && !map.missing && r.layers > 0, 'late:之后上线的成员直接取得到层表', { type: map.type, missing: map.missing });
+  r.layerMapRev = map.body?.projectRev ?? map.body?.rev ?? null;
+  check(map.type === 'content.item' && !map.missing && r.layers > 0, `${label}:之后上线的成员直接取得到层表`, { type: map.type, missing: map.missing });
+  if (rev !== null && r.layerMapRev !== null) check(r.layerMapRev === rev, `${label}:层表是刚渲的这一版`, { layerMapRev: r.layerMapRev, rev });
   const list = await late.ask({ type: 'content.list', kind: 'snapshot-manifest' });
   r.manifests = list.items?.length ?? 0;
-  check(r.manifests > 1, 'late:内容库里有各段的清单', { manifests: r.manifests });
+  check(r.manifests > 1, `${label}:内容库里有各段的清单`, { manifests: r.manifests });
   // 取一个清单,核对它指的块在素材服务里(凭这位成员自己的只读票据)
   const ticket = await late.ask({ type: 'auth.ticket', kind: 'asset', access: 'r' });
   const keys = (list.items ?? []).map((i) => i.key).filter((k) => !k.startsWith('layers:'));
@@ -372,13 +375,133 @@ async function stepLate() {
   }
   r.blobsChecked = fetched + missing;
   r.blobsFound = fetched;
-  check(fetched > 0, 'late:清单里的块在素材服务里取得到', { fetched, missing });
+  check(fetched > 0, `${label}:清单里的块在素材服务里取得到`, { fetched, missing });
   const pending = queueTasks(ctx.proj.projectId).filter((t) => t.state === 'open' || t.state === 'claimed').length;
   r.pendingTasks = pending;
-  check(pending === 0, 'late:这位成员没有发任何任务,队列里也没有待做的', { pending });
+  check(pending === 0, `${label}:这位成员没有发任何任务,队列里也没有待做的`, { pending });
   late.close();
+  return r;
+}
+
+async function stepLate() {
+  // 发布方(创建者,唯一的成员)走掉;之后另一位成员才上线,不发任何任务
+  ctx.creator.close();
+  await delay(1500);
+  const r = await lateMemberSees('late', 'late-bob', ctx.rev);
   ctx.creator = await joinAs(ctx.proj, { username: 'alice', as: 'creator' });
   await waitJoined(ctx.proj.projectId, 15_000);
+  return r;
+}
+
+/** 托管组合里这个项目此刻的成员连接数(不含托管方服务的连接) */
+function memberConns(projectId) {
+  return combo.service.describe().conns.filter((c) => c.principal?.tenantId === projectId && typeof c.principal?.service !== 'string' && c.principal?.scope !== 'service').length;
+}
+
+/**
+ * 没有任何成员在线时的预渲染(契约第 5a 节 R1～R5;`cloud-agent-task.md`「用户体验验收」里渲染服务这一侧):
+ * 成员全部离开、渲染服务按保持期断开这个项目之后,由一个「假 Agent 服务」(本进程里的 Node 脚本,另一把服务私钥)——
+ *   1. 在控制连接上声明这个项目有活(`hosted.demand`)→ 渲染服务 5 s 内连回来(此刻没有任何成员连接);
+ *   2. 发布一个带片段清单的补渲计划。两种发布方,结果里的 `publisher` 写明用的是哪一种:
+ *      - `service`:以服务身份要一张只能发布的票据(`hosted.ticket { purpose: 'publish' }`,第四段实现),发布连接一直留着、数完成通知(进度);
+ *      - `member-standin`:目录回 `unsupported`(只有第三段的分支上是这样)时,用一条成员连接代发,计划一被认领就断开,
+ *        之后全程没有任何成员连接——这同时演了「发布方断开超过宽限期,已切出的细任务不丢、照样做完」(R4);
+ *   3. 渲染服务认领、切分、做完,层表与产物入库;
+ *   4. 之后才上线的成员不发任何任务,直接取得到这一版的层表与块。
+ */
+async function stepAgent() {
+  const r = {};
+  const projectId = ctx.proj.projectId;
+  // 先由创建者放一版新内容(云端 Agent 改动落地的替身),然后所有成员离开
+  const project = probeProject(`${RUN}-${++ctx.salt}`);
+  const rev = await putProject(ctx.creator, project);
+  ctx.creator.close();
+  const t0 = Date.now();
+  await waitFor(() => memberConns(projectId) === 0, 10_000, '成员全部离开');
+  await waitLeft(projectId, 120_000);
+  r.leftAfterMembersGoneMs = Date.now() - t0;
+  check(r.leftAfterMembersGoneMs >= 30_000, 'agent:成员走后渲染服务过了保持期才断开(不是立刻)', { ms: r.leftAfterMembersGoneMs });
+
+  // 假 Agent 服务:自己的一把私钥、自己的控制连接
+  const gen = runKeygen(['--hosted-data', HOSTED_DATA, '--secrets', AGENT_SECRETS, '--service', 'agent', '--instance-name', '假 Agent 服务(探针)']);
+  r.agentService = { role: gen.role, actsFor: gen.actsFor };
+  const key = readServiceKeyFile(AGENT_SECRETS, 'agent');
+  const control = connect(await buildServiceProtocols({ base: DOC_WS, key }));
+  await control.opened;
+  const listing = await control.ask({ type: 'hosted.watch' });
+  const mine = (listing.projects ?? []).find((p) => p.projectId === projectId);
+  r.agentSeesRender = mine?.hosted?.render ?? null;
+  check(mine?.hosted?.render?.enabled === true && mine?.hosted?.render?.available === true, 'agent:Agent 服务从目录看得到渲染服务的开关(R7)', mine);
+  check(mine?.members === false, 'agent:目录里这个项目此刻没有成员在线', mine);
+
+  const demand = async () => control.ask({ type: 'hosted.demand', projectId, holdMs: 120_000 });
+  const t1 = Date.now();
+  const d = await demand();
+  check(d.type === 'hosted.demand.ok', 'agent:声明这个项目有活', d);
+  await waitJoined(projectId, 15_000);
+  r.joinOnDemandMs = Date.now() - t1;
+  check(r.joinOnDemandMs <= 5000, 'agent:声明后 5 s 内渲染服务连回来(没有任何成员在线)', { ms: r.joinOnDemandMs });
+  check(memberConns(projectId) === 0, 'agent:渲染服务连回来时没有任何成员连接', { members: memberConns(projectId) });
+
+  // 发布补渲计划
+  knownTasks.clear();
+  for (const t of queueTasks(projectId)) knownTasks.add(t.id);
+  const plan = backfillPlanTaskOf({ projectId: DOC_ID, projectRev: rev, clips: clipIdsOf(project) });
+  const tk = await control.ask({ type: 'hosted.ticket', projectId, purpose: 'publish' });
+  let pub = null;
+  if (tk.type === 'hosted.ticket.ok') {
+    r.publisher = 'service';
+    pub = connect(ticketProtocols(tk.ticket));
+    await pub.opened;
+  } else {
+    r.publisher = 'member-standin';
+    r.serviceTicket = `error:${tk.reason}`;
+    check(tk.reason === 'unsupported', 'agent:服务身份的发布票据在这个分支上回 unsupported(第四段实现);别的原因就是真的坏了', tk);
+    pub = await joinAs(ctx.proj, { username: 'agent-standin', name: 'agent-standin' });
+  }
+  const hello = await pub.ask({ type: 'publisher.hello', publisherId: `hrp-agent-${RUN}` });
+  check(hello.type === 'publisher.welcome', 'agent:发布方报到', hello);
+  const published = await pub.ask({ type: 'task.publish', tasks: [plan] });
+  check(published.type === 'task.published' && published.results?.[0]?.created === true, 'agent:补渲计划发布成功', published);
+  const tPub = Date.now();
+  if (r.publisher === 'member-standin') {
+    // 计划一被认领就断开代发的连接:之后没有任何成员在线,发布方也不在
+    await waitFor(() => { const p = queueTasks(projectId).find((t) => t.id === plan.id); return p && p.state !== 'open'; }, 30_000, '计划被认领', 50);
+    r.planClaimedMs = Date.now() - tPub;
+    pub.close();
+    await waitFor(() => memberConns(projectId) === 0, 10_000, '代发的连接断开');
+  }
+  const tGone = Date.now();
+  let maxMembers = 0;
+  let lastDemand = Date.now();
+  const done = await waitRendered(projectId, rev, plan.id, 300_000, async (tasks) => {
+    maxMembers = Math.max(maxMembers, memberConns(projectId));
+    if (Date.now() - lastDemand > 30_000) { lastDemand = Date.now(); await demand(); }
+    if (r.publisher === 'member-standin' && r.afterGrace === undefined && Date.now() - tGone > 16_000) {
+      // 过了队列的断线宽限期(10 s,加一个扫描周期 5 s):发布方的订阅已清掉,还没做完的细任务必须还在
+      const fine = tasks.filter((t) => !t.id.startsWith('plan:'));
+      r.afterGrace = { fineTasks: fine.length, pending: fine.filter((t) => t.state === 'open' || t.state === 'claimed').length, subscribers: [...new Set(fine.flatMap((t) => t.subscribers ?? []))] };
+    }
+  });
+  Object.assign(r, { planMs: done.ms, tasks: done.tasks, done: done.done, failed: done.failed, membersOnlineWhileRendering: maxMembers });
+  check(done.done === done.tasks && done.tasks > 0 && done.failed === 0, 'agent:没有成员在线,计划切出的细任务全部做完', done);
+  check(maxMembers === 0, 'agent:渲染全程没有任何成员连接', { maxMembers });
+  if (r.afterGrace) check(!r.afterGrace.subscribers.includes(`hrp-agent-${RUN}`), 'agent:发布方断开超过宽限期后它的订阅已清掉,细任务靠切分方的订阅留着', r.afterGrace);
+  if (r.publisher === 'service') {
+    r.progressSeen = pub.all.filter((m) => m.type === 'task.done').length;
+    check(r.progressSeen >= done.tasks, 'agent:发布方收到每个细任务的完成通知(进度)', { seen: r.progressSeen, tasks: done.tasks });
+    pub.close();
+  }
+  const n = nodeOf(await status(), projectId);
+  r.renderNode = n ? { claimed: n.claimed, completed: n.completed, failed: n.failed, prefer: n.prefer } : null;
+  check(n?.prefer === false, 'agent:没人在线的项目在渲染服务里排在有成员在线的之后(prefer 为假)', r.renderNode);
+  await delay(1000); // 层表是切分完成后异步写的,这里只等落盘
+  r.late = await lateMemberSees('agent', 'late-carol', rev);
+  await control.ask({ type: 'hosted.demand', projectId, holdMs: 0 });
+  control.close();
+  ctx.creator = await joinAs(ctx.proj, { username: 'alice', as: 'creator' });
+  await waitJoined(projectId, 15_000);
+  ctx.rev = rev;
   return r;
 }
 
@@ -580,7 +703,43 @@ async function stepDelete() {
   return r;
 }
 
-const RUNNERS = { work: stepWork, late: stepLate, forbidden: stepForbidden, switch: stepSwitch, kill: stepKill, limits: stepLimits, load: stepLoad, delete: stepDelete };
+/**
+ * 环境断言(不看任务,只看渲染服务自己报的):
+ *   - Chrome 沙箱:本进程按同一个判据(`bakery/chrome.mjs` 的 `noSandboxReason`)算出该不该关,与渲染服务自检报的一致;
+ *     该关的时候(Linux 的 root / 容器 / 环境变量)自检要有 `no-sandbox` 告警,而且 Chrome 确实起来了(自检过了);
+ *   - 环境指纹:没有用测试环境变量顶替时,它等于 sha256(操作系统, GPU 类别, Chrome 主版本) 的前 16 位——操作系统取本机的,
+ *     GPU 类别是 software(预渲染一律软件渲染),Chrome 主版本取自检里那个;Linux 上它必然不同于同版本 Chrome 的 Windows 指纹;
+ *   - 没有 systemd 时自检报 `no-cgroup` 告警并照常起来;常驻工作进程不报 userCards。
+ */
+function environmentChecks(ready) {
+  const info = ready.selfcheck.info ?? {};
+  const warnings = (ready.selfcheck.warnings ?? []).map((w) => w.reason);
+  const expectOff = noSandboxReason();
+  const e = {
+    platform: process.platform, node: process.versions.node, uid: typeof process.getuid === 'function' ? process.getuid() : null,
+    chrome: info.chrome ?? null, chromeSandbox: info.chromeSandbox ?? null, expectSandbox: expectOff ? `off:${expectOff}` : 'on',
+    cgroup: info.cgroup ?? null, workerMode: ready.worker.mode, warnings,
+    envFingerprint: ready.queue.envFingerprint, fingerprintOverride: !!process.env.PROMPTCUT_TEST_ENV_FINGERPRINT || process.platform === 'win32',
+  };
+  if (info.chromeSandbox !== undefined) {
+    check(e.chromeSandbox === e.expectSandbox, 'env:Chrome 沙箱的开关与判据一致', { got: e.chromeSandbox, expect: e.expectSandbox });
+    check(!!expectOff === warnings.includes('no-sandbox'), 'env:关着沙箱时自检有 no-sandbox 告警(开着时没有)', { warnings, expectOff });
+  }
+  check(String(info.cgroup).startsWith('none:') === warnings.includes('no-cgroup'), 'env:没有 cgroup 手段时自检报 no-cgroup 告警并继续', { cgroup: info.cgroup, warnings });
+  const major = chromeMajorOf(info.chrome);
+  const osName = { linux: 'linux', win32: 'windows', darwin: 'macos' }[process.platform] ?? 'other';
+  e.expectFingerprint = envFingerprintOf({ os: osName, gpuClass: 'software', chromeMajor: major });
+  e.windowsFingerprint = envFingerprintOf({ os: 'windows', gpuClass: 'software', chromeMajor: major });
+  if (!e.fingerprintOverride) {
+    check(e.envFingerprint === e.expectFingerprint, 'env:环境指纹 = (本机操作系统, software, Chrome 主版本)', { got: e.envFingerprint, expect: e.expectFingerprint, major });
+    if (process.platform === 'linux') check(e.envFingerprint !== e.windowsFingerprint, 'env:Linux 的指纹与同版本 Chrome 的 Windows 指纹不同(结果键不串)', e);
+  }
+  e.capabilities = ready.queue.capabilities ?? null;
+  check(ready.queue.capabilities?.userCards === false, 'env:常驻工作进程不报 userCards(它不同步任何项目的卡)', ready.queue.capabilities);
+  return e;
+}
+
+const RUNNERS = { work: stepWork, late: stepLate, agent: stepAgent, forbidden: stepForbidden, switch: stepSwitch, kill: stepKill, limits: stepLimits, load: stepLoad, delete: stepDelete };
 
 /* ------------------------------------------------------------------ 主流程 */
 
@@ -615,6 +774,8 @@ async function main() {
   out.capabilities = ready.queue.capabilities ?? null;
   say('ready', { envFingerprint: out.envFingerprint, codeVersion: out.codeVersion, selfcheck: out.selfcheck, workerMode: ready.worker.mode });
   check(ready.queue.nodes.length === 0, 'setup:没有项目时渲染服务一个连接也不开', ready.queue.nodes.length);
+  out.environment = environmentChecks(ready);
+  say('environment', out.environment);
 
   for (const name of STEPS) {
     if (name !== 'work' && !ctx.proj) { fails.push(`${name}:要先跑 work`); continue; }

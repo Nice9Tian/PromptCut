@@ -504,7 +504,8 @@ async function startQueueNode(root: string, service: FramePipeline, auto: AutoLi
         else if (event?.type === "discarded") stats.discarded++;
         else if (event?.type === "lost") stats.lost++;
         else if (event?.type === "plan-split") { stats.planSplit++; planDerived.set(id, [...(event.derived ?? [])]); }
-        if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { id, ...(event.error ? { error: event.error } : {}), ...(event.derived ? { derived: event.derived.length } : {}) });
+        if (event?.type === "quota-paused") queueLog("render.quota", { profile: "host", projectId: event.projectId, until: event.until, detail: "素材服务回 507 service-quota:渲染服务的产物到了容量上限,暂停认领" });
+      if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { id, ...(event.error ? { error: event.error } : {}), ...(event.derived ? { derived: event.derived.length } : {}) });
         taskEventLog(event);
       },
     });
@@ -824,7 +825,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   if (!envFingerprint) return queueLog("queue.skip", { reason: "no-environment", profile: "host" });
   if (services.get(root) !== service || (service as any).closed) return;
   // M6c X1:能力与 PC 节点同一个判据(`streams` 按实报)
-  const capabilities = await nodeCapabilities(service);
+  let capabilities = await nodeCapabilities(service);
   if (services.get(root) !== service || (service as any).closed) return;
   /*
    * 主机也是渲染节点:产原尺寸时一并产预渲染小尺寸,两档都推(`product/rendering.md`「两档」、c10a 第 9 节)。主机没有推送队列,
@@ -855,6 +856,8 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const cardSyncDir = path.join(process.env.PROMPTCUT_DATA_DIR || path.join(root, ".pc-work"), "host-cards");
   const { createHostCardSync }: any = cardSyncOn ? await import("./vite-plugin-cards") : {};
   if (!cardSyncOn) queueLog("queue.card-sync-skip", { profile: "host", reason: process.env.PROMPTCUT_CARD_SYNC === "0" ? "disabled" : "no-overrides" });
+  // 托管方的渲染节点:能力位集中在 `render-node/host.mjs` 的 `hostedRenderCapabilities`(不同步卡的工作进程不报 userCards)
+  if (broker) capabilities = hostMod.hostedRenderCapabilities(capabilities, { cardSync: cardSyncOn });
 
   const override = String(process.env[TEST_CODE_VERSION_ENV] || "").trim() || null;
   let codeVersion: string = override ?? frameCode(root);
@@ -1008,7 +1011,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const summary = () => ({
     profile: "host",
     nodes: host.nodes().map((n: any) => { const rec = wired[n.index]; return { ...n, opens: rec?.opens ?? 0, connectFailed: rec?.connectFailed ?? 0, ...sessionDiag(rec?.endpoint), assetBase: rec?.assets.base() ?? null }; }),
-    codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent, paused: host.paused === true, capabilities,
+    codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent, paused: host.paused === true, quotaPausedUntil: host.quotaPausedUntil ?? null, capabilities,
     // c66-host-cards:每个项目的卡片同步(记账:仓库相对路径 → 装到的 cardRev)与卡片代码身份的状态
     cardSync: live().map((rec) => hostCardSyncSummary(rec.projectId, rec.cards)),
     cardCode: { epoch: cardCode(root).epoch, settled: cardCode(root).settled() },

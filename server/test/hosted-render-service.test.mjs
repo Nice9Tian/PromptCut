@@ -8,6 +8,8 @@
  *   HR18  背压与内存看护：读数 → 暂停与恢复；超过硬上限 → 结束工作进程、退避重起、三次后并发降为 1；起工作进程的命令（有无 cgroup）
  *   HR19  自检：每个 reason 各一例，告警不算失败；没有 systemd 时报 no-cgroup 并继续
  *   HR20  Chrome 启动参数：Linux 的 root / 容器 / 环境变量自动带 --no-sandbox；Windows 上与原来逐项相同
+ *   HR26  产物到了容量上限（素材服务回 507 service-quota）：任务按不可重试失败，全部项目暂停认领 10 分钟，到点恢复
+ *   HR27  工作进程起来了却不交诊断：管理进程判得出来；Vite 缓存目录放数据目录下并进自检
  *   HR25  没有成员在线时的预渲染（队列一侧）：服务身份发布的清单计划主机认领得了；发布方断开超过宽限期后，已切出的细任务
  *         不丢、能做完；计划还没被认领时发布方走了则计划被撤；发布方收得到每个细任务的完成通知（进度）
  */
@@ -23,7 +25,8 @@ import { createRenderQueue } from '../render-queue/index.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { clipsPlanTaskOf, backfillPlanTaskOf } from '../render-queue/messages.mjs';
 import { checkClaimable } from '../render-node/filter.mjs';
-import { createRenderHost, reconcileHostProjects, createBrokerClient, renderHostArgs, renderHostEnv, HOST_CAPABILITIES } from '../render-node/host.mjs';
+import { createRenderHost, reconcileHostProjects, createBrokerClient, renderHostArgs, renderHostEnv, HOST_CAPABILITIES, hostedRenderCapabilities, QUOTA_PAUSE_MS } from '../render-node/host.mjs';
+import { isServiceQuotaError, SERVICE_QUOTA } from '../artifact-transfer.mjs';
 import { createLoopback } from './fake-loopback-transport.mjs';
 import { createTimerClock } from './fake-render-executor.mjs';
 import { createProject, join, adminOp, sleep, waitFor, PROTOCOL } from './auth-kit.mjs';
@@ -35,7 +38,7 @@ import {
   createBackpressure, createOomTracker, workerCommand, cgroupSupport, parseBytes, sumTree, memAvailable, LIMIT_DEFAULTS,
 } from '../hosted-render/limits.mjs';
 import { runSelfcheck, nodeVersionOk, SELFCHECK_EXIT } from '../hosted-render/selfcheck.mjs';
-import { renderServiceConfig, compareCodeVersions, editorHasCodeVersion } from '../hosted-render/main.mjs';
+import { renderServiceConfig, compareCodeVersions, editorHasCodeVersion, reportStale } from '../hosted-render/main.mjs';
 import { chromeLaunchArgs, noSandboxReason } from '../bakery/chrome.mjs';
 
 const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -552,7 +555,7 @@ test('HR19 自检：每个 reason 各一例；告警不算失败；没有 system
   const run = (over) => runSelfcheck(config, { ...good, ...over });
   const all = await run({});
   assert.deepEqual([all.ok, all.errors, all.warnings], [true, [], []]);
-  assert.deepEqual(all.info, { node: '24.21.0', service: { service: 'render', kid: 'KIDKIDKI', instanceId: 'instance-0000000001' }, chrome: 'HeadlessChrome/141.0.0.0', ffmpeg: '6.1', cgroup: 'systemd-scope' });
+  assert.deepEqual(all.info, { node: '24.21.0', service: { service: 'render', kid: 'KIDKIDKI', instanceId: 'instance-0000000001' }, chrome: 'HeadlessChrome/141.0.0.0', chromeSandbox: 'on', ffmpeg: '6.1', cgroup: 'systemd-scope' });
   assert.ok(!JSON.stringify(all).includes('SECRET-PRIV'), '结果里没有私钥');
 
   const reasonsOf = async (over) => (await run(over)).errors.map((e) => e.reason);
@@ -577,6 +580,7 @@ test('HR19 自检：每个 reason 各一例；告警不算失败；没有 system
   assert.deepEqual(container.warnings.map((w) => w.reason), ['no-sandbox', 'no-h264', 'no-cgroup']);
   assert.match(container.warnings.at(-1).detail, /无 cgroup 上限.*只靠进程内看护/);
   assert.equal(container.info.cgroup, 'none:no-systemd');
+  assert.equal(container.info.chromeSandbox, 'off:root', '自检结果里写明沙箱关着与原因');
   assert.equal(SELFCHECK_EXIT, 78);
 
   // 真的两项：私钥目录不存在、数据目录建得出来
@@ -655,6 +659,19 @@ test('HR20 Chrome 启动参数：Windows / macOS 上与原来逐项相同；Linu
     assert.deepEqual(chromeLaunchArgs(linux(o)), [...DESKTOP_CHROME_ARGS, '--no-sandbox']);
   }
   assert.deepEqual(chromeLaunchArgs(linux({ getuid: () => 0, env: { PC_CHROME_ARGS: '--x' } })), [...DESKTOP_CHROME_ARGS, '--no-sandbox', '--x']);
+});
+
+test('HR20 托管方渲染服务的能力位（集中的一张表）：不同步卡的常驻工作进程不报 userCards，要用户卡的任务它不认领；隔离工作进程才报', () => {
+  const measured = { userCards: true, graphCards: false, transcode: true, streams: true };
+  assert.deepEqual(hostedRenderCapabilities(measured, { cardSync: false }), { userCards: false, graphCards: false, transcode: true, streams: true });
+  assert.deepEqual(hostedRenderCapabilities(measured, { cardSync: true }), { userCards: true, graphCards: false, transcode: true, streams: true });
+  assert.deepEqual(HOST_CAPABILITIES, { userCards: true, graphCards: false }, '独立渲染主机（成员自己配的）不变');
+  const resident = { profile: 'host', nodeId: 'hosted-render:x/y', envFingerprint: FP, codeVersions: [CV], capabilities: hostedRenderCapabilities(measured, { cardSync: false }) };
+  const plain = fineTask('doc-1', 'cap-plain');
+  const userCard = { ...plain, requires: { ...plain.requires, userCards: true } };
+  assert.deepEqual(checkClaimable(plain, resident), { ok: true });
+  assert.equal(checkClaimable(userCard, resident).ok, false, '常驻工作进程不接要用户卡的任务');
+  assert.deepEqual(checkClaimable(userCard, { ...resident, capabilities: hostedRenderCapabilities(measured, { cardSync: true }) }), { ok: true });
 });
 
 /* ================================================================== HR25 */
@@ -751,4 +768,88 @@ test('HR25 没有成员在线时的预渲染（队列一侧）：服务身份发
   q2.tick();
   assert.equal(task2(plan.id), undefined, '没认领的计划随发布方一起撤掉');
   void msgs2;
+});
+
+/* ================================================================== HR26、HR27 */
+
+test('HR26 产物到了容量上限：素材服务回 507 service-quota 时任务按不可重试失败，主机全部项目暂停认领 10 分钟，到点恢复', async () => {
+  // 识别：素材客户端对 5xx 重试用尽后抛的错
+  const quotaErr = Object.assign(new Error('asset 507'), { status: 507, body: { error: 'service-quota' } });
+  assert.equal(isServiceQuotaError(quotaErr), true);
+  assert.equal(isServiceQuotaError(Object.assign(new Error('x'), { status: 507, body: { error: 'disk-full' } })), false, '别的 507 不算');
+  assert.equal(isServiceQuotaError(Object.assign(new Error('x'), { status: 500, body: { error: 'service-quota' } })), false);
+  assert.equal(isServiceQuotaError(null), false);
+  assert.equal(QUOTA_PAUSE_MS, 10 * 60_000);
+
+  // 产物库遇到它抛不可重试的 service-quota：见 artifact-transfer.test.mjs 的 T6
+
+  // 主机：任务以 service-quota 失败 → 这个项目与别的项目都暂停认领 10 分钟
+  const env = createSpaces(['proj-a', 'proj-b']);
+  let quota = true;
+  const sinkOf = () => ({
+    async has() { return false; },
+    async put() { if (quota) throw Object.assign(new Error(SERVICE_QUOTA), { code: SERVICE_QUOTA, status: 507, retryable: false }); return { complete: true, result: {} }; },
+  });
+  const events = [];
+  const host = createRenderHost({
+    entries: [], dynamic: true,
+    connect: (entry) => ({
+      endpoint: env.spaces.get(entry.projectId).lb.connect(`host-${entry.projectId}`, { userId: 'service:render@instance-00000001', tenantId: entry.projectId }),
+      executor: fakeExecutor(), sink: sinkOf(),
+    }),
+    nodeIdOf: (entry) => `hosted-render:test/${entry.projectId}`,
+    envFingerprint: FP, codeVersion: CV, maxConcurrent: 2, now: env.clock.now, random: () => 0,
+    onEvent: (e) => events.push(e),
+  });
+  host.start();
+  host.add({ projectId: 'proj-a' });
+  host.add({ projectId: 'proj-b' });
+  assert.equal(host.quotaPausedUntil, null);
+  const a1 = fineTask('proj-a', 'quota-1');
+  env.spaces.get('proj-a').publish([a1]);
+  await drive(env, () => host.tick(), () => events.some((e) => e.type === 'quota-paused'));
+  const failMsg = env.spaces.get('proj-a').sent('host-proj-a').find((m) => m.type === 'task.fail');
+  assert.deepEqual([failMsg.error, failMsg.retryable], [SERVICE_QUOTA, false], '报给队列的是不可重试的失败');
+  assert.equal(env.spaces.get('proj-a').task(a1.id).state, 'failed', '队列不再把它放回去重试');
+  const until = host.quotaPausedUntil;
+  assert.equal(until, events.find((e) => e.type === 'quota-paused').until);
+  assert.ok(until - env.clock.now() > QUOTA_PAUSE_MS - 5000);
+
+  quota = false;
+  const b1 = fineTask('proj-b', 'quota-2');
+  env.spaces.get('proj-b').publish([b1]);
+  const claimsBefore = env.spaces.get('proj-b').sent('host-proj-b').filter((m) => m.type === 'task.claim').length;
+  await drive(env, () => host.tick(), () => true, 12);
+  assert.equal(env.spaces.get('proj-b').task(b1.id).state, 'open', '暂停期间别的项目的任务也不认领');
+  assert.equal(env.spaces.get('proj-b').sent('host-proj-b').filter((m) => m.type === 'task.claim').length, claimsBefore);
+  env.clock.advance(until - env.clock.now() + 1);
+  assert.equal(host.quotaPausedUntil, null, '到点');
+  await drive(env, () => host.tick(), () => env.spaces.get('proj-b').task(b1.id)?.state === 'done');
+  host.shutdown('test');
+});
+
+test('HR27 工作进程起来了却不交诊断：超过时限判为卡住；Vite 缓存目录在数据目录下、不可写时自检报 data-dir', async () => {
+  const base = { running: true, ready: true, startedAt: 1000, reportAt: 0, limitMs: 180_000 };
+  assert.equal(reportStale({ ...base, now: 1000 + 180_000 }), false, '刚到时限不算');
+  assert.equal(reportStale({ ...base, now: 1000 + 180_001 }), true, '起来后从没交过诊断');
+  assert.equal(reportStale({ ...base, reportAt: 100_000, now: 100_000 + 180_001 }), true, '交到一半停了');
+  assert.equal(reportStale({ ...base, reportAt: 100_000, now: 200_000 }), false);
+  assert.equal(reportStale({ ...base, reportAt: 500, startedAt: 300_000, now: 400_000 }), false, '重起之后按新的起点算，不看上一个进程的诊断');
+  assert.equal(reportStale({ ...base, ready: false, now: 9e9 }), false, '还没就绪（在起）不算');
+  assert.equal(reportStale({ ...base, running: false, now: 9e9 }), false);
+
+  const c = renderServiceConfig({ PROMPTCUT_RENDER_DATA: path.join(os.tmpdir(), 'pc-hr27-data') });
+  assert.equal(c.viteCacheDir, path.join(c.dataDir, 'vite-cache'));
+  assert.equal(c.reportTimeoutMs, 180_000);
+  assert.throws(() => renderServiceConfig({ PROMPTCUT_RENDER_REPORT_TIMEOUT_MS: '10' }), (e) => e.code === 'bad-config');
+  const seen = [];
+  const good = {
+    nodeVersion: '24.21.0', readKey: () => ({ service: 'render', kid: 'K', instanceId: 'instance-0000000001' }),
+    chrome: async () => ({ ok: true, version: 'v', cjk: true, noSandbox: null }), ffmpeg: () => ({ ok: true, h264: true, version: '6' }), cgroup: () => ({ ok: true }),
+  };
+  const ok = await runSelfcheck({ secretsDir: 'S', dataDir: 'D', viteCacheDir: 'D/vite-cache' }, { ...good, checkDir: (d) => { seen.push(d); } });
+  assert.deepEqual([ok.ok, seen], [true, ['D', 'D/vite-cache']]);
+  const bad = await runSelfcheck({ secretsDir: 'S', dataDir: 'D', viteCacheDir: 'D/vite-cache' }, { ...good, checkDir: (d) => { if (d.endsWith('vite-cache')) throw Object.assign(new Error('x'), { code: 'EACCES' }); } });
+  assert.deepEqual(bad.errors.map((e) => e.reason), ['data-dir']);
+  assert.match(bad.errors[0].detail, /Vite 缓存目录.*EACCES/);
 });
