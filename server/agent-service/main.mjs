@@ -9,29 +9,40 @@
  * 跑:PROMPTCUT_AGENT_DATA=<数据目录> PROMPTCUT_AGENT_DOC_URL=ws://127.0.0.1:8787 node server/agent-service/main.mjs
  *
  * 环境变量:
- *   PROMPTCUT_AGENT_DATA      数据目录,必须已存在且可写
- *   PROMPTCUT_AGENT_DOC_URL   文档服务地址(同机回环)
- *   PROMPTCUT_AGENT_HOST      缺省 127.0.0.1;只许回环(对外只经反向代理)
- *   PROMPTCUT_AGENT_PORT      缺省 8790
+ *   PROMPTCUT_AGENT_DATA           数据目录,必须已存在且可写
+ *   PROMPTCUT_AGENT_DOC_URL        文档服务地址(同机回环,如 ws://127.0.0.1:8787;控制连接只认本机发起)
+ *   PROMPTCUT_AGENT_SECRETS        服务身份的私钥目录(缺省 /var/lib/promptcut/agent-secrets),里面是 keygen 生成的 service-key.json(服务名 agent)
+ *   PROMPTCUT_AGENT_HOST           缺省 127.0.0.1;只许回环(对外只经反向代理)
+ *   PROMPTCUT_AGENT_PORT           缺省 8790
+ *   PROMPTCUT_AGENT_PUBLIC_ORIGIN  可不设:对外的源(如 https://149-88-94-84.sslip.io),只做格式检查并记进日志。
+ *                                  页面拿到的地址由托管组合的 PROMPTCUT_AGENT_PUBLIC_URL 经文档服务下发,不由本进程给
+ *   PROMPTCUT_AGENT_RENDER_STALL_MS / PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS
+ *                                  可不设:补渲「连续多久没有进度就放弃」(缺省 10 分钟)与「写入落地后攒多久再发」(缺省 3 秒),排查与演练用
  *
- * 失败即关(打一行 `config.error { reason }`,退出码 1):`data-dir`、`doc-url`、`bind-public`、`listen`。
+ * 失败即关(打一行 `config.error { reason }`,退出码 1):`data-dir`、`doc-url`、`service-identity`(私钥读不到、格式不对、
+ * 服务名不是 agent)、`public-origin`、`bind-public`、`listen`。文档服务一时连不上不算:控制连接自己退避重连,期间新请求回 503 `unavailable`。
  *
  * 数据目录里(契约第 2.2 节):`config/ai.json` 与 `config/keys/custom.key`(模型配置与 Key 的密文,`set-key.mjs` 写)、
  * `config/limits.json`(各项目额度与节点并发,`admin.mjs quota` 写,改了即生效)、`tenants/`(对话)、`usage/`(用量流水)。
  * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发补渲。
  * 收到 SIGTERM / SIGINT:进行中的每一轮记「中断」后停下,状态落盘,5 秒内退出。
  *
- * 鉴权:成员的委托票据与托管方的服务身份由后面的块接上(契约第 4 节)。接上之前命令行入口没有 `credentials`,
- * 除 `/healthz` 外一律 401 —— 进程起得来、不接任何对话。测试经 `startAgentService({ authenticate, credentials })` 给替身。
+ * 鉴权(契约第 4 节):命令行入口凭服务私钥连文档服务的控制连接(`server/auth/service-client.mjs`),每个请求的委托票据、
+ * 每一轮的对话委托都交文档服务核验;连文档服务的数据连接用凭对话委托换来的连接票据(`hosted-wiring.mjs`)。
+ * 补渲经服务身份的发布连接进文档服务的任务队列(`render-publisher.mjs`)。测试经 `startAgentService({ authenticate, credentials })` 给替身。
  * 本文件不引用 `src/`。
  */
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import v8 from 'node:v8';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHostedAgentService } from '../agent/service/create-agent-service.mjs';
 import { readModelConfig } from '../agent/service/model-config.mjs';
 import { createAgentHttp } from './http.mjs';
+import { createHostedWiring } from './hosted-wiring.mjs';
+import { createServiceClient } from '../auth/service-client.mjs';
+import { readServiceKeyFile } from '../auth/service-identity.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -74,6 +85,7 @@ export async function startAgentService({
   renderLimits,
   root = ROOT,
   version = 'dev',
+  codeVersion = null,
   log = () => {},
 } = {}) {
   if (typeof dataDir !== 'string' || !dataDir) throw new AgentConfigError('data-dir', '没有给数据目录');
@@ -117,7 +129,7 @@ export async function startAgentService({
     ...(renderLimits ? { renderLimits } : {}),
     log,
   });
-  const api = createAgentHttp({ service, authenticate, version, log });
+  const api = createAgentHttp({ service, authenticate, version, codeVersion, log });
   const server = http.createServer((req, res) => { void api.handle(req, res); });
   try {
     await new Promise((resolve, reject) => {
@@ -155,6 +167,8 @@ function line(event, fields = {}) {
   process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event, ...fields })}\n`);
 }
 
+const positiveMs = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : undefined; };
+
 async function main() {
   const fail = (reason, extra = {}) => {
     const text = `${JSON.stringify({ t: new Date().toISOString(), event: 'config.error', reason, ...extra })}\n`;
@@ -162,25 +176,65 @@ async function main() {
     process.stderr.write(text);
     process.exitCode = 1;
   };
-  const port = process.env.PROMPTCUT_AGENT_PORT === undefined ? 8790 : Number(process.env.PROMPTCUT_AGENT_PORT);
+  const env = process.env;
+  const port = env.PROMPTCUT_AGENT_PORT === undefined ? 8790 : Number(env.PROMPTCUT_AGENT_PORT);
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) return fail('listen', { detail: 'PROMPTCUT_AGENT_PORT 不是端口号' });
+  const docUrl = env.PROMPTCUT_AGENT_DOC_URL;
+  if (typeof docUrl !== 'string' || !/^wss?:\/\//.test(docUrl)) return fail('doc-url', { detail: '文档服务地址要是 ws(s)://' });
+  const origin = env.PROMPTCUT_AGENT_PUBLIC_ORIGIN || '';
+  if (origin && !/^https?:\/\/[^/\s]+$/.test(origin)) return fail('public-origin', { detail: 'PROMPTCUT_AGENT_PUBLIC_ORIGIN 要是 http(s)://主机[:端口],不带路径' });
+  let key;
+  try {
+    key = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
+    if (key.service !== 'agent') throw new Error(`私钥文件是服务 ${key.service} 的,不是 agent`);
+  } catch (err) {
+    return fail('service-identity', { detail: String(err?.message ?? err).slice(0, 200) });
+  }
+  let version = 'dev';
+  try { version = String(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version ?? 'dev'); } catch { /* 读不到就算了 */ }
+
+  const client = createServiceClient({ base: docUrl, key, log: line });
+  // 文档服务一时连不上不退出:客户端自己退避重连,期间请求回 503
+  void client.ready().catch(() => {});
+  const wiring = createHostedWiring({ client, docUrl, root: ROOT, log: line });
+  const stall = positiveMs(env.PROMPTCUT_AGENT_RENDER_STALL_MS);
+  const debounce = positiveMs(env.PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS);
   let started;
   try {
     started = await startAgentService({
-      dataDir: process.env.PROMPTCUT_AGENT_DATA,
-      docUrl: process.env.PROMPTCUT_AGENT_DOC_URL,
-      host: process.env.PROMPTCUT_AGENT_HOST || '127.0.0.1',
+      dataDir: env.PROMPTCUT_AGENT_DATA,
+      docUrl,
+      host: env.PROMPTCUT_AGENT_HOST || '127.0.0.1',
       port,
+      authenticate: wiring.authenticate,
+      credentials: wiring.credentials,
+      projectState: wiring.projectState,
+      publisher: wiring.publisher,
+      renderLimits: { ...(stall ? { stallMs: stall } : {}), ...(debounce ? { debounceMs: debounce } : {}) },
+      version,
+      codeVersion: () => wiring.publisher.codeVersion(),
       log: line,
     });
   } catch (err) {
+    wiring.close();
+    client.close();
     if (err instanceof AgentConfigError) return fail(err.reason, { detail: err.message });
     throw err;
   }
-  line('agent.ready', { url: started.url, auth: 'unconfigured' });
-  const stop = () => { void started.close().then(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); };
+  wiring.attach(started.service);
+  line('agent.ready', {
+    url: started.url, auth: 'service-identity', service: key.service, kid: key.kid, version,
+    ...(origin ? { publicOrigin: origin } : {}),
+    heapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
+  });
+  const stop = () => {
+    void started.close().then(() => { wiring.close(); client.close(); process.exit(0); });
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  // PM2 在 Windows 上、以及父进程经 IPC 管它时,用一条消息让它收尾
+  process.on('message', (m) => { if (m === 'shutdown' || m?.type === 'shutdown') stop(); });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

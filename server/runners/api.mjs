@@ -342,7 +342,16 @@ export function startRun(opts) {
      */
     const saveHistory = () => {
       try {
-        const historyStr = JSON.stringify(healDanglingToolUse(history.toJSON()));
+        let historyStr = JSON.stringify(healDanglingToolUse(history.toJSON()));
+        // 历史文件的大小上限(只有托管档给,`opts.historyMaxBytes`):超了按现有的历史截断(从最早的整对消息删起)再落
+        const maxBytes = Number(opts.historyMaxBytes) > 0 ? Number(opts.historyMaxBytes) : 0;
+        for (let i = 0; maxBytes && i < 4 && Buffer.byteLength(historyStr, 'utf8') > maxBytes; i += 1) {
+          const before = history.size();
+          history.maxChars = Math.floor(before * (maxBytes / Buffer.byteLength(historyStr, 'utf8')) * 0.85);
+          history.truncate();
+          if (history.size() >= before) break; // 只剩截不动的两条了
+          historyStr = JSON.stringify(healDanglingToolUse(history.toJSON()));
+        }
         // 再确认一遍历史里没有 API Key
         fs.writeFileSync(
           historyFile,

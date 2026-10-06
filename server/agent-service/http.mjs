@@ -55,7 +55,7 @@ function readBody(req) {
  * @param {string} [o.version]
  * @param {() => object} [o.info] `GET /v1/info` 里项目开关、模型清单这些(后面的块接上之前给缺省)
  */
-export function createAgentHttp({ service, authenticate = null, version = 'dev', info = () => ({}), log = () => {} }) {
+export function createAgentHttp({ service, authenticate = null, version = 'dev', codeVersion = null, info = () => ({}), log = () => {} }) {
   // 跨源:在线页面同源,桌面版的页面从本机源来(契约第 10.4 节)。鉴权只看票据,不收不发 Cookie
   const CORS = {
     'Access-Control-Allow-Origin': '*',
@@ -69,7 +69,9 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     try {
       const id = await authenticate(req);
       return id && typeof id.projectId === 'string' && typeof id.userId === 'string' ? id : null;
-    } catch {
+    } catch (err) {
+      // 鉴权一侧明确要告诉页面的两种(契约第 4.3 节①):创建者关了开关(403 disabled)、文档服务暂时连不上(503 unavailable)
+      if (err instanceof AgentServiceError) throw err;
       return null;
     }
   }
@@ -77,6 +79,15 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
   /** 同时开着的事件流:全节点与每个主人各有上限(契约第 11 节),超了回 busy */
   let streams = 0;
   const streamsByOwner = new Map();
+  /** 开着的事件流:撤销(开关关了、被移出、被踢、项目删除)时把受影响的关掉(契约第 4.5 节) */
+  const openStreams = new Set();
+  service.onRevoke?.(({ projectId, userId }) => {
+    for (const s of [...openStreams]) {
+      if (s.projectId !== projectId || (userId != null && s.userId !== userId)) continue;
+      // 收尾的那几条事件(原因与 end)已经先写出去了,这里只是把流结束。先退订再结束:结束之后这个对话再有事件(补渲的进展)不能再往这条流上写
+      s.close();
+    }
+  });
 
   function events(req, res, identity, conversationId, after) {
     const owner = ownerKeyOf(identity);
@@ -85,7 +96,8 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     }
     let unsubscribe = null;
     let ping = null;
-    const write = (ev) => { try { res.write(`data: ${JSON.stringify(ev)}\n\n`); } catch { /* 对端走了 */ } };
+    const write = (ev) => { if (res.writableEnded || res.destroyed) return; try { res.write(`data: ${JSON.stringify(ev)}\n\n`); } catch { /* 对端走了 */ } };
+    res.on('error', () => { /* 对端走了:由 close 收尾 */ });
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no', ...CORS });
     res.flushHeaders?.();
     unsubscribe = service.subscribe(identity, conversationId, after, write);
@@ -96,20 +108,24 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       return undefined;
     }
     streams += 1;
+    const entry = { projectId: identity.projectId, userId: identity.userId, close: () => {} };
+    openStreams.add(entry);
     streamsByOwner.set(owner, (streamsByOwner.get(owner) ?? 0) + 1);
-    ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* 对端走了 */ } }, PING_MS);
+    ping = setInterval(() => { if (res.writableEnded || res.destroyed) return; try { res.write(': ping\n\n'); } catch { /* 对端走了 */ } }, PING_MS);
     ping.unref?.();
     // 流断开只是没人看了:这一轮不停(契约第 2.4 节)
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
+      openStreams.delete(entry);
       clearInterval(ping);
       unsubscribe?.();
       streams -= 1;
       const left = (streamsByOwner.get(owner) ?? 1) - 1;
       if (left > 0) streamsByOwner.set(owner, left); else streamsByOwner.delete(owner);
     };
+    entry.close = () => { release(); try { res.end(); } catch { /* 对端走了 */ } };
     req.on('close', release);
     res.on('close', release);
     return undefined;
@@ -123,7 +139,9 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       if (req.method === 'OPTIONS') { res.writeHead(204, CORS); res.end(); return; }
       if (pathname === '/healthz') {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'bad-request', message: 'GET only' }, CORS);
-        return sendJson(res, 200, { ok: true, version }, CORS);
+        // `codeVersion`:这份检出的代码版本(同机的渲染服务拿它比对三者是不是同一个提交);不含任何项目信息
+        const code = typeof codeVersion === 'function' ? codeVersion() : codeVersion;
+        return sendJson(res, 200, { ok: true, version, ...(code ? { codeVersion: code } : {}) }, CORS);
       }
       if (!pathname.startsWith('/v1/')) return sendJson(res, 404, { ok: false, code: 'not-found', message: 'not found' }, CORS);
 

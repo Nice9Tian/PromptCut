@@ -42,6 +42,10 @@ export const HOSTED_DEFAULTS = Object.freeze({
   rounds: 24,
   /** 单个项目副本(JSON)超过这么大不服务 */
   maxProjectBytes: 16 * 1024 * 1024,
+  /** 单次工具调用最多等多久(契约第 11 节) */
+  toolMs: 60_000,
+  /** 一个对话的模型历史(`history.json`)超过这么大就按现有的历史截断(契约第 7.2 节) */
+  maxHistoryBytes: 8 * 1024 * 1024,
 });
 
 /** 闸的替身:永远放行、不记用量(只给不关心闸的测试用;服务缺省用 `gate.mjs` 的真闸) */
@@ -172,6 +176,8 @@ export function createHostedAgentService({
   /** 「实例键\n对话 id」→ 这一轮的对话委托。只放内存,不落盘、不进日志(契约第 4.2 节) */
   const grants = new Map();
   let closed = false;
+  /** 撤销发生时要知道的各方(HTTP 层据此关掉事件流,鉴权层据此清核验缓存) */
+  const revokeListeners = new Set();
 
   const keyOf = (identity) => `${identity.projectId}\n${identity.userId}\n${ownerKeyOf(identity)}`;
   const maxInstances = () => limitsIn.maxInstances ?? gate.nodeLimits?.().maxInstances ?? 24;
@@ -437,6 +443,8 @@ export function createHostedAgentService({
         historyFile: dataDir ? path.join(store.dirOf(identity.projectId, ownerKeyOf(identity), conversationId), 'history.json') : null,
         sessionKey: `cloud-${ownerKeyOf(identity).slice(0, 16)}-${conversationId}`,
         maxProjectBytes: limits.maxProjectBytes,
+        toolTimeoutMs: limits.toolMs,
+        historyMaxBytes: limits.maxHistoryBytes,
         fetchImpl: body.__fetchImpl,
         // 闸:每次模型请求前(契约第 6.2 节);之后记一行用量(第 6.3 节)
         onModelCall: async (phase, info) => {
@@ -586,6 +594,13 @@ export function createHostedAgentService({
       }
       if (reason === 'disabled' || reason === 'deleted') void render.cancelProject(projectId);
       if (reason === 'deleted') store.removeProject(projectId);
+      for (const fn of [...revokeListeners]) { try { fn({ projectId, userId, reason }); } catch { /* 监听方的事 */ } }
+    },
+
+    /** 撤销发生时调 `fn({ projectId, userId, reason })`(`userId` 为 null 表示整个项目);回取消函数 */
+    onRevoke(fn) {
+      revokeListeners.add(fn);
+      return () => revokeListeners.delete(fn);
     },
 
     /** 诊断:不含任何正文 */

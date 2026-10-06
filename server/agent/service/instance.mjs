@@ -1341,6 +1341,7 @@ export function createAgentInstance(env) {
           // 历史按宿主给的文件找;sessionId 只是事件里的一个名字,不认页面自报的
           sessionId: typeof o.sessionKey === 'string' && o.sessionKey ? o.sessionKey : `cloud-${o.runId}`,
           historyFile: o.historyFile || undefined,
+          ...(Number(o.historyMaxBytes) > 0 ? { historyMaxBytes: Number(o.historyMaxBytes) } : {}),
           cwd: null,
           model: o.model,
           effort: o.effort,
@@ -1353,7 +1354,22 @@ export function createAgentInstance(env) {
           // 每完成一次工具往返落一次模型历史(进程被杀也接得上);每次模型请求前后过宿主的闸、记用量(契约第 6.2、7.1 节)
           checkpoint: true,
           ...(typeof o.onModelCall === 'function' ? { onModelCall: o.onModelCall } : {}),
-          callTool: async (name, args, meta) => callToolInternal(name, args, agentId, typeof meta?.callId === 'string' ? meta.callId : undefined),
+          callTool: async (name, args, meta) => {
+            // 单次工具调用的时限(契约第 11 节):到时不再等,明说这一步没做完。工具实现在进程级的串行锁里跑,
+            // 所以这里只是不让这一轮干等;真卡住的实现由一轮的墙钟上限与看护兜底
+            const work = callToolInternal(name, args, agentId, typeof meta?.callId === 'string' ? meta.callId : undefined);
+            const limitMs = Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
+            let timer = null;
+            const timeout = new Promise((resolve) => {
+              timer = setTimeout(() => {
+                agentLog('agent.tool-timeout', { tool: name });
+                resolve({ ok: false, timeout: true, error: `${name} 超过 ${Math.round(limitMs / 1000)} 秒没有做完,已不再等它。它可能没有生效,请先读一次项目确认再继续。` });
+              }, limitMs);
+              timer.unref?.();
+            });
+            work.catch(() => {});
+            try { return await Promise.race([work, timeout]); } finally { clearTimeout(timer); }
+          },
           onEvent: (ev) => {
             if (ev.type === 'text' && typeof ev.delta === 'string') pendingText += ev.delta;
             if (ev.type === 'tool_call' || ev.type === 'done' || ev.type === 'error') flushText();
