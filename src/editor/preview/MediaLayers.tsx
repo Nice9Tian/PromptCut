@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { clipHasEmbeddedAudio } from "../../kernel/cardAudioRendition.mjs";
+import { getCard, syncedUserCards } from "../../kernel/registry";
 import type { AudioFxDef } from "../../kernel/audioFx.mjs";
 import { releasePreviewAudio, routePreviewAudio } from "../../audio/previewAudio";
-import { CARD_AUDIO_SAMPLE_RATE, acquireCardAudioClipUrl, cardAudioNodeOf, generatedCardAudioClipsAt, getCardAudioEpoch, subscribeCardAudioEpoch } from "../../audio/cardAudio";
+import { CARD_AUDIO_SAMPLE_RATE, acquireCardAudioClipUrl, cardAudioNodeOf, generatedCardAudioClipsAt, getCardAudioEpoch, subscribeCardAudioEpoch, persistentCardAudio } from "../../audio/cardAudio";
 import { audioClipsAt, isImageMedia, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
 import { driveMedia, releaseMedia, targetTimeOf } from "../../render/mediaDrive";
@@ -27,8 +29,10 @@ const NO_HASHES: readonly string[] = [];
 function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audioFx, onCardState, localHashes }: { project: Project; clip: TrackClip; media?: MediaAsset; volume: number; t: number; playing: boolean; scrubbing: boolean; audioFx?: AudioFxDef[]; onCardState?: (clipId: string, state: CardState, message?: string) => void; localHashes: readonly string[] }) {
   const ref = useRef<HTMLAudioElement>(null);
   const nodeId = cardAudioNodeOf(project, clip);
+  const embedded = clipHasEmbeddedAudio(project, clip, getCard) || !!syncedUserCards().get(clip.cardId)?.embeddedAudio;
+  const [cardOffset, setCardOffset] = useState(0);
   // Card runtime blocks use clip-local samples; mediaOffset applies only to the old source media path.
-  const target = nodeId ? Math.max(0, t - clip.start) : targetTimeOf(clip, t);
+  const target = nodeId ? Math.max(0, t - clip.start + cardOffset) : targetTimeOf(clip, t);
   const [cardUrl, setCardUrl] = useState<string | null>(null);
   const [cardState, setCardState] = useState<"idle" | CardState>("idle");
   // 换了图卡(HMR 重跑 src/cards/index.ts)之后 project 引用不变,effect 不会自己重跑;
@@ -41,18 +45,26 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
     onCardState?.(clip.id, "pending"); ref.current?.dispatchEvent(new CustomEvent("promptcut:card-audio-pending", { bubbles: true, detail: { nodeId, clipId: clip.id } }));
     const frames = Math.max(1, Math.ceil((clip.end - clip.start) * CARD_AUDIO_SAMPLE_RATE));
     let release: (() => void) | undefined;
-    void acquireCardAudioClipUrl({ project, nodeId, frames }).then((lease) => {
+    const acquire = async () => {
+      if (embedded) {
+        const result = persistentCardAudio(project, clip);
+        setCardOffset(result.offset);
+        return { url: playbackUrl(result.media, localHashes), release() {} };
+      }
+      setCardOffset(0);
+      return acquireCardAudioClipUrl({ project, nodeId, frames });
+    };
+    void acquire().then((lease) => {
       release = lease.release; const url = lease.url;
       if (!current) { release(); return; }
-      setCardUrl(url); setCardState("ready"); onCardState?.(clip.id, "ready");
-      ref.current?.dispatchEvent(new CustomEvent("promptcut:card-audio-ready", { bubbles: true, detail: { nodeId, clipId: clip.id, url } }));
+      setCardUrl(url); // 真正解码就绪后由 canplay 确认，URL 存在不代表字节可读。
     }, (error: unknown) => {
       if (!current) return;
       const message = error instanceof Error ? error.message : String(error); setCardState("error"); onCardState?.(clip.id, "error", message);
       ref.current?.dispatchEvent(new CustomEvent("promptcut:card-audio-error", { bubbles: true, detail: { nodeId, clipId: clip.id, error: message } }));
     });
     return () => { current = false; release?.(); };
-  }, [project, nodeId, clip.id, clip.start, clip.end, onCardState, cardAudioEpoch]);
+  }, [project, nodeId, clip.id, clip.start, clip.end, onCardState, cardAudioEpoch, embedded, localHashes]);
   useLayoutEffect(() => {
     // While a 图卡 node is loading or has failed there is deliberately no source URL.
     // driveMedia may attempt play(), but it cannot emit source-media audio as a fallback.
@@ -72,7 +84,10 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
   const wanted = media ? playbackUrl(media, localHashes) : undefined;
   const held = useRef<string | undefined>(undefined);
   if (held.current === undefined || !playing || held.current === wanted || !media || ref.current?.error) held.current = wanted;
-  return <audio ref={ref} src={nodeId ? (cardUrl ?? undefined) : held.current} preload="auto" hidden data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
+  return <audio ref={ref}
+    onCanPlay={() => { if (nodeId && cardUrl) { setCardState("ready"); onCardState?.(clip.id, "ready"); } }}
+    onError={() => { if (nodeId && cardUrl) { const message = `${clip.label ?? clip.id} 的卡片声音素材无法读取，请恢复素材或重新生成`; setCardState("error"); onCardState?.(clip.id, "error", message); } }}
+    src={nodeId ? (cardUrl ?? undefined) : held.current} preload="auto" hidden data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
 }
 
 

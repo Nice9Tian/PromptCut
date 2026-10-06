@@ -244,6 +244,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            */
           if (!localOnly && (!def || (!def.card && !def.Component) || (def.card && !timeline.graph))) return null;
           const C = def?.Component!;
+          // 声画卡的 DOM/图形由视觉出口选择，audio() 不改变视觉分派。
+          const embeddedOffset = def?.audio ? (clip.sourceOffset ?? 0) : 0;
           const cardT = timeOf(clip);
           const unsupported = localOnly;
 
@@ -346,9 +348,9 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 <GraphCard def={def!} clip={clip} graph={timeline.graph} fps={timeline.fps}
                   t={localTOf(clip, cardT)} params={{ ...def!.defaults, ...clip.params }} stage={stageInfo} />
               ) : clipFrameMode(clip, def) === 'direct' ? (
-                <DirectCard def={def!} params={clip.params} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
+                <DirectCard def={def!} params={clip.params} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} duration={clip.end - clip.start} stage={stageInfo} />
               ) : (
-                <C params={{ ...def!.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
+                <C params={{ ...def!.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} duration={clip.end - clip.start} stage={stageInfo} />
               )}
               {/*
                 gl 平面(R9,E7 的第五种兄弟平面)。它是**活渲的一部分**,不进四条平面选择器的放过名单 ——

@@ -7,6 +7,7 @@ import { partsHandlers } from "./handlers/parts";
 import { tracksHandlers } from "./handlers/tracks";
 import { effectsHandlers } from "./handlers/effects";
 import { audioHandlers } from "./handlers/audio";
+import { cardAudioHandlers } from "./handlers/cardAudio";
 import { cardsHandlers } from "./handlers/cards";
 import { aiHandlers } from "./handlers/ai";
 import { collectHandlers } from "./handlers/collect";
@@ -27,6 +28,7 @@ export const editorApi: EditorApi = /* @__PURE__ */ Object.assign(
   tracksHandlers,
   effectsHandlers,
   audioHandlers,
+  cardAudioHandlers,
   cardsHandlers,
   aiHandlers,
   collectHandlers,

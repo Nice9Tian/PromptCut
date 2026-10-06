@@ -111,6 +111,8 @@ export function userCardSources(): { files: Record<string, string>; fileOf: Reco
  * 桌面运行环境不设这张表,恒为空。
  */
 export interface SyncedUserCard {
+  embeddedAudio?: boolean;
+  audioSourceVersion?: string;
   id: string;
   name: string;
   /** 来源键(内容库里那份源码的键,形如 `src/cards/user/x.tsx`);诊断用 */
@@ -162,7 +164,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 
 /** 条目的签名(判「内容没变」) */
 function entrySig(e: SyncedUserCard): string {
-  return JSON.stringify([e.name, e.source ?? null, e.description ?? null, e.defaults ?? null, e.controls ?? null, !!e.controlsIncomplete, e.skippedControls ?? null]);
+  return JSON.stringify([e.name, e.source ?? null, e.description ?? null, e.defaults ?? null, e.controls ?? null, !!e.controlsIncomplete, e.skippedControls ?? null, e.embeddedAudio ?? null, e.audioSourceVersion ?? null]);
 }
 
 /**
@@ -174,6 +176,8 @@ export function setSyncedUserCards(entries: Iterable<SyncedUserCard>): boolean {
     if (!e || typeof e.id !== "string" || !e.id || next.has(e.id)) continue;
     next.set(e.id, {
       id: e.id, name: typeof e.name === "string" ? e.name : "",
+      ...(e.embeddedAudio === true ? { embeddedAudio: true } : {}),
+      ...(typeof e.audioSourceVersion === "string" ? { audioSourceVersion: e.audioSourceVersion } : {}),
       ...(typeof e.source === "string" && e.source ? { source: e.source } : {}),
       ...(typeof e.description === "string" ? { description: e.description } : {}),
       ...(isRecord(e.defaults) ? { defaults: e.defaults } : {}),

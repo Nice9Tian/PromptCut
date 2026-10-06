@@ -145,11 +145,13 @@ test('执行器分发的每个工具名，mcp-tools 里都真的有声明', () =
 // 三个都要当场起一个 Chrome 渲染(vite-plugin-vision):see_frames 渲单帧(timeline)或一整张拼图(media),
 // get_gif 一趟渲 8 帧再编动图,bake_card 渲单帧。
 // 第四个是自定义测量 measure_audio_js(计划 A6):解码(最多 30 秒)+ 起沙箱 Chrome + 代码(最多 30 秒)+ 看门狗余量,超过桥缺省的 60 秒。
-test('放宽超时的只有这三个渲染类工具与自定义测量；都要大于自己那条管线的上限，否则报错信息会被桥的超时盖掉', async () => {
+test('放宽超时的渲染、自定义测量与音效生成工具有明确预算', async () => {
   const withTimeout = mcpTools.filter((t) => t.timeoutMs);
   // 只钉名单,不钉顺序:工具表按领域拆进 server/tools/ 之后,先后次序由聚合顺序决定,没有含义
-  assert.deepEqual(withTimeout.map((t) => t.name).sort(), ['bake_card', 'get_gif', 'measure_audio_js', 'see_frames']);
-  for (const t of withTimeout.filter((x) => x.name !== 'measure_audio_js')) assert.ok(t.timeoutMs > 120000, `${t.name} 要大于 vite-plugin-vision 里 120 秒的渲染上限`);
+  assert.deepEqual(withTimeout.map((t) => t.name).sort(), ['bake_card', 'get_gif', 'measure_audio_js', 'render_card_audio', 'see_frames', 'sound_generate']);
+  for (const t of withTimeout.filter((x) => !['measure_audio_js', 'sound_generate', 'render_card_audio'].includes(x.name))) assert.ok(t.timeoutMs > 120000, `${t.name} 要大于 vite-plugin-vision 里 120 秒的渲染上限`);
+  assert.ok(withTimeout.find(t => t.name === 'sound_generate').timeoutMs >= 120000, '音效工具等待 Worker 合成和素材入库,保留 120 秒预算');
+  assert.ok(withTimeout.find(t => t.name === 'render_card_audio').timeoutMs >= 120000, '声画卡声音等待按块生成和素材入库,保留 120 秒预算');
   const { PCM_LIMITS } = await import('../audio-pcm.mjs');
   const { SANDBOX_LIMITS } = await import('../audio-sandbox.mjs');
   const js = withTimeout.find((x) => x.name === 'measure_audio_js');

@@ -3,10 +3,26 @@ import { getState, actions } from "../../store/project";
 import { timelineDigest } from "../tools/toolEcho";
 import { generateVoice, getVoiceConfig } from "../../ai/voice";
 import { importAudioFromServer } from "../../editor/io";
+import { soundPresets, startSoundGeneration, getSoundGenerationJob, soundGenerationJobs, cancelSoundGeneration, waitSoundGeneration } from "../../editor/io/soundGeneration";
 
 import { clipGuard, audioFxTools, measureAudio, measureAudioJs } from "../common";
 
 export const audioHandlers = {
+  soundPresets: () => soundPresets(),
+  soundGenerate: async (args) => {
+    const job = startSoundGeneration(args);
+    // Keep the Agent operation context open through the atomic project commit. UI callers remain asynchronous.
+    const result = await waitSoundGeneration(job.id);
+    if (result.state === "succeeded") clipGuard.noteMutation();
+    return { ...result, jobId: result.id };
+  },
+  soundStatus: (args) => {
+    if (!args?.jobId) return { jobs: soundGenerationJobs().filter(job => job.targetKey.startsWith(`${getState().project.id}:`)).map(job => ({ ...job, jobId: job.id })) };
+    const job = getSoundGenerationJob(String(args.jobId));
+    if (!job) throw new Error("找不到音效任务(重开页面后请从片段的配方重新生成)");
+    return job;
+  },
+  soundCancel: (args) => cancelSoundGeneration(String(args.jobId)),
   listAudioFx: () => audioFxTools.listAudioFx(),
   createAudioFx: (args) => { const r = audioFxTools.createAudioFx(args); clipGuard.noteMutation(); return r; },
   updateAudioFx: (args) => { const r = audioFxTools.updateAudioFx(args); clipGuard.noteMutation(); return r; },
@@ -20,9 +36,17 @@ export const audioHandlers = {
     clipGuard.noteMutation();
     return { ...result, timeline: timelineDigest(getState().project) };
   },
+  setClipMuted: (args) => {
+    const result = actions.setClipMuted(String(args.clipId), args.muted);
+    if (!result.ok) return result;
+    clipGuard.noteMutation();
+    return { ...result, timeline: timelineDigest(getState().project) };
+  },
   separateAudio: (args) => {
-    const result = actions.separateAudio(String(args.clipId));
-    if (!result.ok) throw new Error(result.error);
+    if (!!args.clipId === !!args.clipIds) return { ok: false, code: "INVALID_CLIP_IDS", error: "clipId 和 clipIds 必须且只能给一个" };
+    const result = args.clipIds ? actions.separateAudios(args.clipIds) : actions.separateAudio(String(args.clipId));
+    // 明确的结构化失败交给 Agent；失败前未写项目，不创建空序列或静默降级。
+    if (!result.ok) return result;
     clipGuard.noteMutation();
     return { ...result, timeline: timelineDigest(getState().project) };
   },

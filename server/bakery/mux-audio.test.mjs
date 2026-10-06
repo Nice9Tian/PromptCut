@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAudioPlan, buildFfmpegArgs, isCardAudioNode } from "./mux-audio.mjs";
+import { buildAudioPlan, buildFfmpegArgs, isCardAudioNode, playableAudioPlan } from "./mux-audio.mjs";
 
 test("generated-only and video-backed card audio replace source entries without timing quantization", () => {
   const project = {
@@ -24,4 +24,25 @@ test("generated-only and video-backed card audio replace source entries without 
   assert.equal(isCardAudioNode(project, "n1"), true);
   assert.equal(isCardAudioNode(project, "n3"), false, "kind 不是 audio 的图卡节点不出声");
   assert.equal(isCardAudioNode(project, undefined), false);
+});
+
+test("持久化合成 WAV 保留采样定位，缺文件或无音轨必须报错", () => {
+  const clip = { id: "sound", mediaId: "s", start: 17 / 48000, end: 48017 / 48000, mediaOffset: 7 / 48000 };
+  const project = {
+    media: [{ id: "s", kind: "audio", url: "/@media/s.wav", soundEffect: { reuseKey: "r" } }],
+    tracks: [{ id: "t", clips: [clip] }],
+  };
+  const source = () => "/disk/s.wav";
+  assert.throws(() => buildAudioPlan(project, ".", () => false, source), /合成音效文件缺失/);
+  assert.throws(() => buildAudioPlan(project, ".", () => true, () => null), /合成音效文件缺失/);
+  const plan = buildAudioPlan(project, ".", () => true, source);
+  assert.equal(plan.length, 1, "只播普通素材一次，不加入图卡音频");
+  assert.equal(plan[0].soundEffect, true);
+  assert.equal(plan[0].start, clip.start);
+  assert.equal(plan[0].offset, clip.mediaOffset);
+  assert.throws(() => playableAudioPlan(plan, "ffprobe", () => false), /合成音效无法读取音轨/);
+  assert.deepEqual(playableAudioPlan(plan, "ffprobe", () => true), plan);
+  assert.deepEqual(playableAudioPlan([{ file: "/silent-video.mp4" }], "ffprobe", () => false), []);
+  const args = buildFfmpegArgs("v.mp4", plan, "out.mp4", 2);
+  assert.match(args[args.indexOf("-filter_complex") + 1], /aresample=48000,adelay=17S:all=1/);
 });

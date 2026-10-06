@@ -1,14 +1,58 @@
 export const audioTools = [
   {
+    name: "render_card_audio",
+    description: "生成动效卡片自身 audio() 的持久 WAV，声音仍属于同一个视觉片段，不新建独立音频片段。先通过 create_card/edit_card 提供视觉 Component/card 与确定性的 audio；本工具等待实际入库完成，返回 mediaId。改参数/源码后重新调用。缺失/失败不静默导出缺声，取消或迟到结果不覆盖旧引用。在线页面只能读取已同步的 WAV，不能运行用户声音代码。",
+    inputSchema: { type: "object", properties: { clipId: { type: "string" }, force: { type: "boolean", description: "忽略可复用结果，重新计算" } }, required: ["clipId"] },
+    side: "page", timeoutMs: 120000,
+  },
+  {
+    name: "cancel_card_audio", description: "取消指定动效片段正在进行的声音生成或上传，保留原有可用音频引用。",
+    inputSchema: { type: "object", properties: { clipId: { type: "string" } }, required: ["clipId"] }, side: "page",
+  },
+  {
+    name: "sound_presets",
+    description: "查可复用的原生合成音效(短提示音、键盘声)、来源、完整默认参数和资源限制。先选现成预设再 sound_generate,不用新建音频卡或外部服务。",
+    inputSchema: { type: "object", properties: {} }, side: "page",
+  },
+  {
+    name: "sound_generate",
+    description: "生成可编辑的 WAV 音效并经素材服务入库。preset:notification 为提示音,keyboard 为键盘声。给 sourceClipId(mu-typing)自动复用其文字、每字毫秒、延迟、停顿、种子,放到相同时间轴锚点的独立音频段;不能再给该段挂音频图卡。普通提示音用 start 放置,不传只进素材库。给 clipId 重生成原音效段,成功上传才替换,取消/失败保持旧声音。recipe 可传之前完整配方;params 只改声音参数;refreshSource:true 从当前打字卡重建事件(改文字/速度后用)。工具等待合成和入库完成后返回结果,页面显示进度并可取消;其它会话可用 sound_status 查询、sound_cancel 取消。requestId 是幂等请求键,重试必须复用,不同音效必须换键。音效不会隐式延长项目出点,指定序列重叠会报错。",
+    inputSchema: { type: "object", properties: {
+      preset: { type: "string", enum: ["notification", "keyboard"] },
+      sourceClipId: { type: "string" }, clipId: { type: "string" },
+      start: { type: "number", minimum: 0 }, trackId: { type: "string" },
+      params: { type: "object", description: "sound_presets 给出的可调完整参数的部分覆盖" },
+      typing: { type: "object", description: "无 sourceClipId 时的文字节奏:{text,duration(每字ms),delayMs,punctuationPauseMs,newlinePauseMs,jitterMs,seed,pauses}" },
+      recipe: { type: "object", description: "已持久化的完整音效配方" },
+      seed: { type: "integer", minimum: 0, maximum: 4294967295 },
+      requestId: { type: "string", maxLength: 200 }, name: { type: "string" },
+      refreshSource: { type: "boolean" },
+    }, required: ["requestId"] }, side: "page", timeoutMs: 120000,
+  },
+  {
+    name: "sound_status", description: "查询音效生成任务进度及结果。不传 jobId 列出当前项目任务(可供另一个会话查询或取消正在生成的任务)。succeeded 才表示已入库并切换片段;failed/cancelled/stale 不会覆盖旧声音。",
+    inputSchema: { type: "object", properties: { jobId: { type: "string" } } }, side: "page",
+  },
+  {
+    name: "sound_cancel", description: "取消音效生成或上传。已经可用的旧音效保持不变,迟到结果不会覆盖。",
+    inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] }, side: "page",
+  },
+  {
     name: "set_clip_volume",
     description: "设置音频或视频卡片的独立声音音量。volume 范围 0~1，0=无声，0.5=50%，1=原声（默认）。不改变画面不透明度，保留淡入淡出；不会解除序列静音、隐藏或音画分离后的原视频静音。支持撤销，锁定序列须先解锁。",
     inputSchema: { type: "object", properties: { clipId: { type: "string" }, volume: { type: "number", minimum: 0, maximum: 1 } }, required: ["clipId", "volume"] },
     side: "agent",
   },
   {
+    name: "set_clip_muted",
+    description: "单独静音或恢复一个带声音的素材/动效卡片。只改声音，不改画面；时间轴醒目标注已静音，支持撤销与保存。不能绕过序列静音或锁定。",
+    inputSchema: { type: "object", properties: { clipId: { type: "string" }, muted: { type: "boolean" } }, required: ["clipId", "muted"] },
+    side: "agent",
+  },
+  {
     name: "separate_audio",
-    description: "音画分离：保留并静音目标视频片段，在其序列正下方新建序列放置音频卡片，保留起止时间、素材偏移、音量及淡入淡出。返回 audioClipId、trackId、mediaId。锁定序列或已分离的视频不可重复操作。",
-    inputSchema: { type: "object", properties: { clipId: { type: "string" } }, required: ["clipId"] },
+    description: "分离普通视频素材的音轨：原视频静音，声音放在下方新序列，保留位置、偏移、音量和淡入淡出。clipId 单选或 clipIds 多选，只给一个。动效卡片代码内嵌的声音不能分离，明确返回 ok:false/code:EMBEDDED_CARD_AUDIO_UNSEPARABLE；不自动生成替代素材、不创建空轨。多选任一失败则整批不修改。",
+    inputSchema: { type: "object", properties: { clipId: { type: "string" }, clipIds: { type: "array", minItems: 1, maxItems: 100, items: { type: "string" } } }, oneOf: [{ required: ["clipId"] }, { required: ["clipIds"] }] },
     side: "agent",
   },
   {
