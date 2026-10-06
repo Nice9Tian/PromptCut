@@ -56,10 +56,11 @@
  *   E5  发起成员中途被移出:她的对话被停下;她的页面当场被阻断并写明「你已被移出名单」(她已不在项目里,对话记录她读不到了),
  *       云端的对话记录里留着「已被移出」的原因;项目停在完好的版本上。
  *   每一种都断言:项目结构完好(三张卡都在)、版本号只多了成功写入的次数、之后 1.5 秒没有新的写入。
- * 附:已知缺陷的复现(步骤 spaced,**缺省不跑**;修好之前它是红的)
+ * 附:已知缺陷的复现(步骤 spaced,**缺省不跑**;与时序有关,不是每次都红:2026-10-06 这台机器上 12 次写入那一次红了、6 次写入那一次没红)
  *   K1  写入之间隔得比补渲的防抖(3 秒)长时(真模型的每次往返都是几秒),Agent 服务每写一次就发一个指着当时版本的清单计划;项目接着往前走,
  *       渲染节点取不到旧版本的项目快照(文档服务只给得出当前版本),那些细任务失败,并经队列的同键合并连累最后一版的计划:
- *       对话记录里最后是「云端渲染失败:…没有项目快照」。这一步断言「最后是渲染完成」,用来在修好之后确认。
+ *       对话记录里最后是「云端渲染失败:…没有项目快照」(没连累到时只是渲染节点白做、白失败一批旧版本的任务)。
+ *       这一步断言「最后是渲染完成、对话记录里没有渲染失败」,并报渲染节点失败了多少个任务,用来在修好之后确认。
  * 最后一行是汇总 `{ summary }`,有失败退出码 1,起不来退出码 2。不打印口令、票据、私钥。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -746,16 +747,17 @@ async function spacedStep() {
   const c = await onlineUp(CRED.creator, { asCreator: true });
   await selectCloud(c.page);
   const salt = `${SALT}-k`;
-  await sendText(c.page, mockSteps([...Array.from({ length: 6 }, (_, k) => [{ sleepMs: 9000 }, writeStep(k + 1, salt, true)]).flat(), { say: '隔着写完了' }]));
+  await sendText(c.page, mockSteps([...Array.from({ length: N }, (_, k) => [{ sleepMs: 9000 }, writeStep(k + 1, salt, true)]).flat(), { say: '隔着写完了' }]));
   await until('K1:这一轮开始', async () => (await view(c.page))?.streaming, 15_000, 50);
   const conv = await conversationOf(c.page);
-  const fin = await cloudFinishes(conv, { runMs: 180_000, renderMs: 300_000 });
+  const nodeBefore = await renderNode();
+  const fin = await cloudFinishes(conv, { runMs: 240_000, renderMs: 400_000 });
   // 最后一版的计划发出之后可能还有迟到的结果:再等一小会儿取最终的
   await sleep(8000);
   const states = (S.diskConversation(PID, conv)?.events ?? []).filter((e) => e.type === 'render').map((e) => ({ state: e.state, ...(e.reason ? { reason: String(e.reason).slice(0, 80) } : {}) }));
   const node = await renderNode();
-  check('K1(已知缺陷的复现)写入之间隔 9 秒:补渲最后是「渲染完成」,没有因为取不到旧版本的项目快照而失败', fin.toolOk === 6 && states.at(-1)?.state === 'done' && !states.some((s) => s.state === 'failed'), {
-    writesLanded: fin.toolOk, published: states.filter((s) => s.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((s) => s.state === 'failed'), renderNode: node ? { completed: node.completed, failed: node.failed } : null,
+  check('K1(已知缺陷的复现)写入之间隔 9 秒:补渲最后是「渲染完成」,没有因为取不到旧版本的项目快照而失败', fin.toolOk === N && states.at(-1)?.state === 'done' && !states.some((s) => s.state === 'failed'), {
+    writesLanded: fin.toolOk, published: states.filter((s) => s.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((s) => s.state === 'failed'), renderNodeTasksFailedDuringThis: (node?.failed ?? 0) - (nodeBefore?.failed ?? 0), renderNodeTasksCompletedDuringThis: (node?.completed ?? 0) - (nodeBefore?.completed ?? 0),
   });
   await shot(c.page, 'K1-spaced-writes');
   await closeBrowser(c.browser);
