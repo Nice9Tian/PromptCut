@@ -55,12 +55,14 @@ export function agentInstance(env = process.env) {
     maxMemoryRestart: '2G',
     killTimeoutMs: 8000,
     renderStatusPort: render.statusPort,
+    /** 看画面:同机渲染服务管理进程的口子;部署时 PROMPTCUT_RENDER_LOOK=off 则不带(看画面的工具不交给模型) */
+    lookUrl: render.look === 'off' ? '' : `http://127.0.0.1:${render.statusPort}`,
   };
 }
 
 export function agentTemplateValues(inst) {
   return {
-    DIR: inst.dir, DATA: inst.data, SECRETS: inst.secrets, DOC_URL: inst.docUrl, ASSET_URL: inst.assetUrl, AGENT_PORT: String(inst.port), PUBLIC_ORIGIN: inst.publicOrigin,
+    DIR: inst.dir, DATA: inst.data, SECRETS: inst.secrets, DOC_URL: inst.docUrl, ASSET_URL: inst.assetUrl, LOOK_URL: inst.lookUrl, AGENT_PORT: String(inst.port), PUBLIC_ORIGIN: inst.publicOrigin,
     HEAP_MB: String(inst.heapMb), MAX_MEMORY_RESTART: inst.maxMemoryRestart, KILL_TIMEOUT_MS: String(inst.killTimeoutMs),
   };
 }

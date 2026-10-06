@@ -27,6 +27,8 @@ module.exports = {
         PROMPTCUT_AGENT_DOC_URL: '{{DOC_URL}}',
         // 同机素材服务(回环):云端 Agent 导入素材、配音入库时凭代成员的素材票据写进它
         PROMPTCUT_AGENT_ASSET_URL: '{{ASSET_URL}}',
+        // 同机渲染服务管理进程的口子(回环):云端 Agent 看画面时凭服务私钥的签名向它要一帧。部署时 PROMPTCUT_RENDER_LOOK=off 则留空(看画面的工具不交给模型)
+        PROMPTCUT_AGENT_LOOK_URL: '{{LOOK_URL}}',
         PROMPTCUT_AGENT_HOST: '127.0.0.1',
         PROMPTCUT_AGENT_PORT: '{{AGENT_PORT}}',
         PROMPTCUT_AGENT_PUBLIC_ORIGIN: '{{PUBLIC_ORIGIN}}',

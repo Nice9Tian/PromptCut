@@ -289,6 +289,10 @@ test('CA-DEPLOY-01 Agent 服务的部署脚本:没有没填的占位符、不含
   assert.match(pm2, /kill_timeout: 8000/);
   assert.match(pm2, /PROMPTCUT_AGENT_HOST: '127\.0\.0\.1'/);
   assert.match(pm2, /PROMPTCUT_AGENT_ASSET_URL: 'http:\/\/127\.0\.0\.1:8788'/);
+  // 看画面:缺省指到同机渲染服务管理进程的口子;部署时关掉就留空
+  assert.match(pm2, /PROMPTCUT_AGENT_LOOK_URL: 'http:\/\/127\.0\.0\.1:5399'/);
+  assert.match(agentPm2Config(agentInstance({ PROMPTCUT_RENDER_LOOK: 'off' })), /PROMPTCUT_AGENT_LOOK_URL: ''/);
+  assert.throws(() => agentInstance({ PROMPTCUT_RENDER_LOOK: 'maybe' }), /PROMPTCUT_RENDER_LOOK/);
   assert.ok(!/^\s*PROMPTCUT_AGENT_EGRESS_TEST_ALLOW\s*:/m.test(pm2), '生产配置不设出网闸的测试例外');
   assert.throws(() => agentInstance({ PROMPTCUT_AGENT_ASSET_URL: 'http://example.com:8788' }), /ASSET_URL/);
   const status = planAgentCommand('status-agent', ['--dry-run'], env).script;

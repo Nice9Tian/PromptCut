@@ -652,7 +652,8 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
     const ran = [];
     try {
       // 在项目副本上执行的与就地执行的(在服务端另有实现的走文件、素材服务与外部服务,由隔离探针验)
-      const inProcess = Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.mode === 'route' || p.mode === 'server').map(([n]) => n);
+      // 看画面的四个要向渲染服务要一帧(这条用例没配口子,它们回「看不了画面」),由 cloud-agent-look.test.mjs 与看画面的探针验
+      const inProcess = Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => (p.mode === 'route' || p.mode === 'server') && p.look !== true).map(([n]) => n);
       for (const name of inProcess.sort()) {
         const def = tools.find((x) => x.name === name);
         const args = {};
