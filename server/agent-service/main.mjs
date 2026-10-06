@@ -21,6 +21,9 @@
  *   PROMPTCUT_AGENT_EGRESS_TEST_ALLOW
  *                                  **只给探针与演练**:逗号分隔的「IP:端口」,出网闸对它们放行(用来在本机回环上起「测试专用外部地址」)。
  *                                  生产不设;设了会在日志里打 `agent.egress.test-allow`,`/healthz` 的 `egressTestAllow` 为 true
+ *   PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL
+ *                                  **只给本机演练**:设成 1 时模型配置改读这台电脑上桌面版已配好的 API 直连配置(只读,见 `rehearsal-model.mjs`),
+ *                                  用来在本机跑真实模型。云节点上不设(节点的 Key 走加密分发)
  *   PROMPTCUT_AGENT_RENDER_STALL_MS / PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS
  *                                  可不设:补渲「连续多久没有进度就放弃」(缺省 10 分钟)与「写入落地后攒多久再发」(缺省 3 秒),排查与演练用
  *
@@ -50,6 +53,7 @@ import { createHostedWiring } from './hosted-wiring.mjs';
 import { createServiceClient } from '../auth/service-client.mjs';
 import { readServiceKeyFile } from '../auth/service-identity.mjs';
 import { parseTestAllow } from '../agent/service/egress.mjs';
+import { readDesktopModelConfig } from './rehearsal-model.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -207,6 +211,12 @@ async function main() {
     if (!ok) return fail('asset-url', { detail: 'PROMPTCUT_AGENT_ASSET_URL 要是同机素材服务的回环地址,如 http://127.0.0.1:8788' });
   }
   const testAllow = parseTestAllow(env.PROMPTCUT_AGENT_EGRESS_TEST_ALLOW);
+  // 只给本机演练:用这台电脑上桌面版已配好的 API 直连(只读;日志里只有厂商与模型名)
+  const rehearsal = env.PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL === '1';
+  if (rehearsal) {
+    const c = readDesktopModelConfig();
+    line('agent.rehearsal.desktop-model', { found: !!c.apiKey, vendor: c.vendor ?? null, model: c.model ?? null });
+  }
   let key;
   try {
     key = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
@@ -237,6 +247,7 @@ async function main() {
       renderLimits: { ...(stall ? { stallMs: stall } : {}), ...(debounce ? { debounceMs: debounce } : {}) },
       ...(assetBase ? { assetBase } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
+      ...(rehearsal ? { modelConfig: () => readDesktopModelConfig() } : {}),
       version,
       codeVersion: () => wiring.publisher.codeVersion(),
       log: line,

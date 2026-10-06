@@ -2,7 +2,10 @@
 /**
  * 云端 Agent 的「首支短片」验收探针(用户 2026-10-07 定;契约 `docs/plan/cloud-agent-contract.md` 第 22 节)。
  *
- * 要证明的事:**云端第一版,拿空对话里唯一的那句示例话,真能做出一支短片——只用内置卡,不建卡、不导入素材。**
+ * 要证明的事:**对空的云端项目发空对话里唯一的那句示例话,一轮结束后项目里有一支能播的短片。**
+ * 〔用户 2026-10-07 更正〕云端 Agent 的工具与本机一致,所以不再限定「只用内置卡、不建卡、不导入素材」:用了哪些工具照实记。
+ * `--real-model`:本机隔离整套,模型换成这台电脑上桌面版已配好的 API 直连(只读地用,见 `server/agent-service/rehearsal-model.mjs`);
+ * 汇总里报模型往返次数与 token 数。真实模型有费用,跑通一次即可。
  * 这句话是 `src/editor/right/chat/MessageList.tsx` 的 `EMPTY_EXAMPLE`(探针启动时从源码里读出来,与界面始终是同一句):
  *
  *     为我快速创建一个视频告诉我软件都可以做什么。
@@ -80,9 +83,6 @@ export function builtinCardIds() {
   return ids;
 }
 
-/** 绝不该出现的工具:建卡改卡、导入采集素材、配音识别、看画面(云端第一版都关着;名字在这里点出来,是为了报告写得明白) */
-const FORBIDDEN_TOOL = /^(create_card|edit_card|apply_card|card_authoring_guide|get_card_source|inspect_card_dom|bake_card|import_media|collect_\w+|web_\w+|voice_\w+|sound_\w+|transcribe_media|detect_shots|see_frames|get_gif|text_editor|spawn_agent|auto_workflow)$/;
-
 const clipsOf = (project) => (project?.tracks ?? []).flatMap((t) => (t.clips ?? []).map((c) => ({ ...c, trackId: t.id })));
 
 /**
@@ -106,10 +106,10 @@ export function judgeFirstVideo({ project, events, state, builtin, openTools = C
   const clips = clipsOf(project);
   const nonCard = clips.filter((c) => !c.cardId);
   const unknown = clips.filter((c) => c.cardId && !builtin.has(c.cardId));
-  const userDefs = [...Object.keys(project?.cardDefinitions ?? {}), ...(project?.cardNodes ? Object.keys(project.cardNodes) : [])];
-  const f2 = clips.length >= 3 && nonCard.length === 0 && unknown.length === 0 && userDefs.length === 0 && (project?.media ?? []).length === 0;
-  add('F2 项目里有若干片段(≥ 3),都是内置卡,没有自定义卡定义、没有素材', f2, {
-    clips: clips.length, cards: [...new Set(clips.map((c) => c.cardId).filter(Boolean))], mediaClips: nonCard.length, notBuiltin: unknown.map((c) => c.cardId), customDefinitions: userDefs.length, media: (project?.media ?? []).length,
+  const broken = clips.filter((c) => !c.cardId && !c.mediaId && !c.nodeId);
+  const f2 = clips.length >= 3 && broken.length === 0;
+  add('F2 项目里有若干片段(≥ 3),每个都是卡片段或素材段(内置卡、用户卡、图卡、素材都可以,照实记)', f2, {
+    clips: clips.length, cards: [...new Set(clips.map((c) => c.cardId).filter(Boolean))], mediaClips: nonCard.length, userCards: [...new Set(unknown.map((c) => c.cardId))], media: (project?.media ?? []).length, broken: broken.length,
   });
 
   const sorted = [...clips].filter((c) => Number.isFinite(c.start) && Number.isFinite(c.end)).sort((a, b) => a.start - b.start);
@@ -127,14 +127,16 @@ export function judgeFirstVideo({ project, events, state, builtin, openTools = C
   add('F4 总时长合理:8～180 秒', contentEnd >= 8 && contentEnd <= 180, { contentEnd: Number(contentEnd.toFixed(2)), projectDuration: project?.duration ?? null });
   if (project && Math.abs((project.duration ?? 0) - contentEnd) > 1) notes.push(`项目时长字段 ${project.duration} 与片段结束的最晚时刻 ${contentEnd.toFixed(2)} 相差超过 1 秒(没用 set_project_meta 修)`);
 
-  const bad = calls.filter((c) => FORBIDDEN_TOOL.test(String(c.name)) || !openTools.has(String(c.name)));
-  add('F5 没有越界的工具调用:不建卡改卡、不导入采集素材、没有看画面,也没有开放清单之外的工具', bad.length === 0, { calls: calls.length, tools: [...new Set(calls.map((c) => c.name))], outOfBounds: [...new Set(bad.map((c) => c.name))] });
+  const bad = calls.filter((c) => !openTools.has(String(c.name)) && c.name !== 'think');
+  const used = {};
+  for (const c of calls) used[c.name] = (used[c.name] ?? 0) + 1;
+  add('F5 用到的工具都在交给模型的那一批里(用了哪些照实记)', bad.length === 0, { calls: calls.length, tools: used, notOffered: [...new Set(bad.map((c) => c.name))] });
 
-  const unsupported = results.filter((r) => /云端暂不支持/.test(String(r.summary ?? '')));
+  const unsupported = results.filter((r) => /这一版还用不了|发起方不在线|要操作发起人/.test(String(r.summary ?? '')));
   const failed = results.filter((r) => r.ok === false && !unsupported.includes(r));
-  for (const r of unsupported) notes.push(`工具回「云端暂不支持」:${r.name} —— ${String(r.summary).slice(0, 120)}`);
+  for (const r of unsupported) notes.push(`工具回「还用不了 / 发起方不在线」:${r.name} —— ${String(r.summary).slice(0, 120)}`);
   for (const r of failed) notes.push(`工具失败:${r.name} —— ${String(r.summary ?? '').slice(0, 120)}`);
-  add('F6 没有因「云端暂不支持」做不下去(出现过只记录;出现之后项目仍不满足 F2、F3 才判红)', unsupported.length === 0 || (f2 && f3), { unsupported: unsupported.map((r) => r.name), failedResults: failed.map((r) => r.name) });
+  add('F6 没有因工具「还用不了」或「发起方不在线」做不下去(出现过只记录;出现之后项目仍不满足 F2、F3 才判红)', unsupported.length === 0 || (f2 && f3), { unsupported: unsupported.map((r) => r.name), failedResults: failed.map((r) => r.name) });
 
   return { checks, notes, unsupported: unsupported.map((r) => ({ name: r.name, summary: r.summary })) };
 }
@@ -147,13 +149,13 @@ function selfTest(builtin) {
   const okEvents = [{ type: 'tool_call', name: 'add_clip' }, { type: 'tool_result', name: 'add_clip', ok: true }, { type: 'text', delta: '做好了' }, { type: 'end' }];
   const pass = judgeFirstVideo({ project: good, events: okEvents, state: 'idle', builtin }).checks.every((c) => c.ok);
   const gap = judgeFirstVideo({ project: mk([{ id: 'a', cardId: 'ring-metric', start: 0, end: 4 }, { id: 'b', cardId: 'ring-metric', start: 8, end: 12 }, { id: 'c', cardId: 'ring-metric', start: 12, end: 16 }]), events: okEvents, state: 'idle', builtin });
-  const userCard = judgeFirstVideo({ project: mk([0, 5, 10].map((s, i) => ({ id: `c${i}`, cardId: i === 1 ? 'my-own-card' : 'ring-metric', start: s, end: s + 5 }))), events: okEvents, state: 'idle', builtin });
-  const forbidden = judgeFirstVideo({ project: good, events: [...okEvents, { type: 'tool_call', name: 'create_card' }], state: 'idle', builtin });
-  const blocked = judgeFirstVideo({ project: mk([]), events: [{ type: 'tool_call', name: 'add_clip' }, { type: 'tool_result', name: 'add_clip', ok: false, summary: '云端暂不支持 import_media' }, { type: 'text', delta: '做不了' }, { type: 'end' }], state: 'idle', builtin });
+  const userCard = judgeFirstVideo({ project: mk([0, 5, 10].map((s, i) => ({ id: `c${i}`, cardId: i === 1 ? 'my-own-card' : 'ring-metric', start: s, end: s + 5 }))), events: [...okEvents, { type: 'tool_call', name: 'create_card' }], state: 'idle', builtin });
+  const forbidden = judgeFirstVideo({ project: good, events: [...okEvents, { type: 'tool_call', name: 'see_frames' }], state: 'idle', builtin });
+  const blocked = judgeFirstVideo({ project: mk([]), events: [{ type: 'tool_call', name: 'add_clip' }, { type: 'tool_result', name: 'transcribe_media', ok: false, summary: '云端 Agent 这一版还用不了 transcribe_media' }, { type: 'text', delta: '做不了' }, { type: 'end' }], state: 'idle', builtin });
   const byName = (r, k) => r.checks.find((c) => c.check.startsWith(k));
   return pass
     && !byName(gap, 'F3').ok
-    && !byName(userCard, 'F2').ok
+    && userCard.checks.every((c) => c.ok)
     && !byName(forbidden, 'F5').ok
     && !byName(blocked, 'F6').ok;
 }
@@ -167,11 +169,13 @@ async function main() {
   const { results: out, check } = createChecks();
   const PROMPT = firstVideoPrompt();
   const builtin = builtinCardIds();
-  check('S0 判定函数自检:好的判过,空档、非内置卡、建卡调用、做不下去各判红', selfTest(builtin), { builtinCards: builtin.size });
+  check('S0 判定函数自检:好的判过(含用户卡与建卡调用),空档、没交给模型的工具、做不下去各判红', selfTest(builtin), { builtinCards: builtin.size });
 
   const external = args.includes('--agent-url');
+  const real = args.includes('--real-model');
   const model = argOf('--model', '');
-  const timeoutMs = Number(argOf('--timeout-sec', external ? 900 : 90)) * 1000;
+  const timeoutMs = Number(argOf('--timeout-sec', external || real ? 900 : 90)) * 1000;
+  let usageDir = null;
   const keepRoom = args.includes('--keep-room');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-ca-firstvideo-'));
   let hosted = null;
@@ -200,7 +204,11 @@ async function main() {
       const gen = runKeygen(['--hosted-data', hostedData, '--secrets', agentSecrets, '--service', 'agent', '--instance-name', '云端 Agent(首支短片探针)']);
       if (gen?.ok === false) throw new Error('keygen 失败');
       hosted = await startHosted({ dataDir: hostedData, docPort: DOC_PORT, assetPort: ASSET_PORT });
-      agent = await startAgent({ dataDir: agentData, secrets: agentSecrets, docPort: DOC_PORT, port: AGENT_PORT });
+      agent = await startAgent({
+        dataDir: agentData, secrets: agentSecrets, docPort: DOC_PORT, port: AGENT_PORT,
+        env: { PROMPTCUT_AGENT_ASSET_URL: `http://127.0.0.1:${ASSET_PORT}`, ...(real ? { PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL: '1' } : {}) },
+      });
+      usageDir = path.join(agentData, 'usage');
       base = `ws://127.0.0.1:${DOC_PORT}`;
       agentUrl = agent.url;
     }
@@ -220,7 +228,7 @@ async function main() {
 
     const api = agentApi(agentUrl, member);
     const conv = `cc-firstvideo-${randomBytes(3).toString('hex')}`;
-    const prompt = external ? PROMPT : `${PROMPT}\n${mockScript(smokeScript())}`;
+    const prompt = external || real ? PROMPT : `${PROMPT}\n${mockScript(smokeScript())}`;
     const sent = await api.send(conv, prompt, model ? { extra: { model } } : {});
     check('S1 发这一句回 202', sent.status === 202, { status: sent.status, code: sent.code ?? null });
     if (sent.status !== 202) throw new Error(`发消息没被接下:${sent.status} ${sent.code ?? ''}`);
@@ -232,7 +240,17 @@ async function main() {
     for (const c of verdict.checks) check(c.check, c.ok, c.detail);
     for (const n of verdict.notes) process.stdout.write(`${JSON.stringify({ note: n })}\n`);
     const tools = ev.events.filter((e) => e.type === 'tool_call').map((e) => e.name);
-    process.stdout.write(`${JSON.stringify({ summary: { mode: external ? 'external' : 'smoke', model: model || null, toolCalls: tools.length, clips: clipsOf(final.project).length, contentEnd: Math.max(0, ...clipsOf(final.project).map((c) => c.end ?? 0)), events: ev.events.length, seconds: ev.events.length ? Math.round(((ev.events.at(-1)._at ?? 0) - (ev.events[0]._at ?? 0)) / 100) / 10 : null } })}\n`);
+    // 模型往返次数与 token 数(读本机这份 Agent 服务的用量流水)
+    let usage = null;
+    if (usageDir && fs.existsSync(usageDir)) {
+      const rows = fs.readdirSync(usageDir).filter((f) => f.endsWith('.jsonl')).flatMap((f) => fs.readFileSync(path.join(usageDir, f), 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })).filter((r) => r && r.kind !== 'service');
+      usage = { modelCalls: rows.length, input: rows.reduce((n, r) => n + (r.input ?? 0), 0), output: rows.reduce((n, r) => n + (r.output ?? 0), 0), model: rows[0]?.model ?? null };
+    }
+    if (real) {
+      const said = ev.events.filter((e) => e.type === 'text').map((e) => String(e.delta ?? '')).join('');
+      process.stdout.write(`${JSON.stringify({ reply: said.slice(0, 1200), timeline: clipsOf(final.project).sort((a, b) => a.start - b.start).map((c) => `${c.start}-${c.end} ${c.cardId || 'media'} [${c.trackId}]`) })}\n`);
+    }
+    process.stdout.write(`${JSON.stringify({ summary: { mode: external ? 'external' : real ? 'real-model' : 'smoke', usage, model: model || null, toolCalls: tools.length, clips: clipsOf(final.project).length, contentEnd: Math.max(0, ...clipsOf(final.project).map((c) => c.end ?? 0)), events: ev.events.length, seconds: ev.events.length ? Math.round(((ev.events.at(-1)._at ?? 0) - (ev.events[0]._at ?? 0)) / 100) / 10 : null } })}\n`);
     return { out, notes: verdict.notes };
   } finally {
     member?.close();
