@@ -17,12 +17,18 @@
  *   T6 音效合成与测响度:生成的音效只进本项目、别的成员取得到;另一个项目的对话看不到、查不到、取消不了这边的作业,量不了、
  *      重生成不了这边的素材与片段;只读成员生成不了;量完对话的工作目录里不留取来的素材。
  *      (卡片声音的代码不在 Agent 服务进程里执行,由 `cloud-agent-sound-probe.mjs` 的 S5 对着真的隔离工作进程验。)
+ *   T7 网页采集(下载器是替身 `fixtures/cloud-collect/fake-collect.mjs`:说同一份命令行,只按环境里的代理出网):
+ *      子进程的工作目录是对话的工作目录、环境里没有任何 `PROMPTCUT_*` 与假凭证;经出网闸的代理到得了测试专用的外部地址、
+ *      到不了本机回环、内网、元数据地址与同机各服务(替身服务一次也没被连到);下载物入库后别的成员取得到同样的字节;
+ *      只读成员在下载之前被拒;另一个项目的对话查不到这边的作业;记了用量。子进程不经代理自己去连、往工作目录以外写,
+ *      代码这一层拦不住(靠节点上的非特权用户与系统级限制,见契约第 9.5、9.6 节),这里不断言。
  */
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { sealKey } from '../../server/runners/config-crypt.mjs';
 import { mockScript, sleep } from './cloud-agent-probe-lib.mjs';
 
@@ -82,6 +88,8 @@ export async function prepareToolFixtures({ tmp, agentData, agentSecrets, hosted
   // 测试专用的外部地址(收集站):发来的请求全记下,最后查里面有没有假凭证
   const png = tinyPng();
   const pngForReadonly = tinyPng(5, 4);
+  // 采集的下载器替身从这里「下」的那段片子(随机字节,每次哈希不同)
+  const clip = randomBytes(6000);
   const received = [];
   const collector = await listen(collectorPort, (req, res) => {
     const chunks = [];
@@ -92,6 +100,7 @@ export async function prepareToolFixtures({ tmp, agentData, agentSecrets, hosted
       if (u.pathname === '/redir') { res.writeHead(302, { location: u.searchParams.get('to') ?? '/' }); return res.end(); }
       if (u.pathname === '/pixel.png') { res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length }); return res.end(png); }
       if (u.pathname === '/readonly.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(pngForReadonly); }
+      if (u.pathname === '/clip.mp4' || u.pathname === '/readonly.mp4') { res.writeHead(200, { 'content-type': 'video/mp4' }); return res.end(clip); }
       res.writeHead(404); res.end();
     });
   });
@@ -112,9 +121,12 @@ export async function prepareToolFixtures({ tmp, agentData, agentSecrets, hosted
     });
   });
   return {
-    FAKE, planted, png, pngForReadonly, received, decoyHits, voiceCalls, collectorPort, voicePort, decoyPort,
+    FAKE, planted, png, pngForReadonly, clip, received, decoyHits, voiceCalls, collectorPort, voicePort, decoyPort,
     env: {
       PROMPTCUT_AGENT_ASSET_URL: `http://127.0.0.1:${assetPort}`,
+      // 网页采集:这台开发机没有 yt-dlp,用下载器替身(只按环境里的代理出网)。只给探针;`/healthz` 的 collectTestRunner 会是 true
+      PROMPTCUT_AGENT_COLLECT_PYTHON: process.execPath,
+      PROMPTCUT_AGENT_COLLECT_TEST_ARGS: JSON.stringify([path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'cloud-collect', 'fake-collect.mjs')]),
       // 只放行收集站这一个「IP:端口」;替身配音服务是托管方的配置,不经出网闸
       PROMPTCUT_AGENT_EGRESS_TEST_ALLOW: `127.0.0.1:${collectorPort}`,
     },
@@ -523,6 +535,98 @@ export async function runToolIsolation(c) {
       otherProjectAgent: o.map((x) => `${x.name}:${x.ok ? `ok ${x.summary.slice(0, 40)}` : `error ${x.summary.slice(0, 60)}`}`),
       otherProjectUnchanged: after2.rev === before2.rev,
       readonlyMember: { toolOk: ro.results[0]?.ok ?? null, summary: ro.results[0]?.summary?.slice(0, 80) ?? null, rev: [rev1, rev1After] },
+    });
+  }
+
+  // ---------- T7 网页采集(下载器是替身;出网闸的代理、工作区与受限子进程是真的)
+  {
+    const D = ports.decoy;
+    const full = (out) => out.events.filter((e) => e.type === 'tool_result').map((e) => ({ name: e.name, ok: e.ok === true, summary: String(e.summary ?? '') }));
+    const before1 = await projectOf(owner1, p1.projectId);
+    const decoyBefore = fx.decoyHits.length;
+    const refusedTargets = [
+      ['本机回环上别的服务', `http://127.0.0.1:${D}/secret`],
+      ['localhost', `http://localhost:${D}/secret`],
+      ['同机文档服务', `http://127.0.0.1:${ports.doc}/healthz`],
+      ['同机素材服务', `http://127.0.0.1:${ports.asset}/api/asset/media/${'0'.repeat(64)}`],
+      ['Agent 服务自己', `http://127.0.0.1:${ports.agent}/healthz`],
+      ['云厂商的元数据地址', 'http://169.254.169.254/latest/meta-data/'],
+      ['内网 10/8', 'http://10.0.0.1/x'],
+      ['内网 192.168/16', 'http://192.168.1.1/x'],
+      ['放行地址的另一个端口', `http://127.0.0.1:${fx.collectorPort + 3}/clip.mp4`],
+    ];
+    const first = await run(A.jia, 'conv-t7-jia', [
+      { tool: 'collect_status', input: {} },
+      { tool: 'collect_install', input: {} },
+      { tool: 'collect_probe', input: { url: `${COLLECT}/clip.mp4` } },
+      ...refusedTargets.map(([, url]) => ({ tool: 'collect_probe', input: { url } })),
+      { tool: 'collect_probe', input: { url: 'file:///etc/passwd' } },
+      { tool: 'collect_download', input: { url: `${COLLECT}/clip.mp4` } },
+    ]);
+    const f = full(first);
+    const statusText = f[0]?.summary ?? '';
+    const jobId = /"jobId":"(collect-[a-f0-9]+)"/.exec(f.at(-1)?.summary ?? '')?.[1] ?? null;
+    // 等下载作业做完(云端后台跑)。每次查用一个新的对话(作业表按「项目 × 成员」分,同一位成员的别的对话查得到):
+    // 这里的 `run` 读事件流读到第一个 end 就停,同一个对话发第二轮读不到新的结果
+    let jobDone = null;
+    let lastJobText = null;
+    for (let i = 0; i < 40 && jobId; i += 1) {
+      const r = await run(A.jia, `conv-t7-job-${i}`, [{ tool: 'collect_job', input: { jobId } }]);
+      const text = full(r).at(-1)?.summary ?? '';
+      lastJobText = text;
+      if (!/"status":"running"/.test(text)) { jobDone = text; break; }
+      await sleep(500);
+    }
+    // 下载作业指向同机的替身服务:作业起得来,但子进程经代理被拒,什么都下不到
+    const local = await run(A.jia, 'conv-t7-local', [{ tool: 'collect_download', input: { url: `http://127.0.0.1:${D}/secret.mp4` } }]);
+    const localJob = /"jobId":"(collect-[a-f0-9]+)"/.exec(full(local).at(-1)?.summary ?? '')?.[1] ?? null;
+    let localDone = null;
+    for (let i = 0; i < 40 && localJob; i += 1) {
+      const r = await run(A.jia, `conv-t7-local-${i}`, [{ tool: 'collect_job', input: { jobId: localJob } }]);
+      const text = full(r).at(-1)?.summary ?? '';
+      if (!/"status":"running"/.test(text)) { localDone = text; break; }
+      await sleep(500);
+    }
+    const after1 = await projectOf(owner1, p1.projectId);
+    const added = (after1.project?.media ?? []).filter((m) => !(before1.project?.media ?? []).some((b) => b.id === m.id));
+    const got = added[0]?.hash ? await fetchAsset(owner1, ports.asset, added[0].hash) : null;
+    const refused = f.slice(3, 3 + refusedTargets.length);
+    const work = workDirOf(p1.projectId, 'conv-t7-jia');
+    const seenCwd = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(statusText)?.[1]?.replace(/\\\\/g, '\\') ?? null;
+    // 另一个项目的对话查不到这边的作业;只读成员在下载之前被拒
+    const other = jobId ? await run(A.yi, 'conv-t7-yi', [{ tool: 'collect_job', input: { jobId } }]) : { results: [] };
+    const hitsBeforeRo = fx.received.filter((r) => r.url.startsWith('/readonly.mp4')).length;
+    const ro = await run(A.ding, 'conv-t7-ding', [{ tool: 'collect_download', input: { url: `${COLLECT}/readonly.mp4` } }]);
+    const hitsAfterRo = fx.received.filter((r) => r.url.startsWith('/readonly.mp4')).length;
+    const health = await (await fetch(`${c.agentUrl}/healthz`)).json();
+    const usageDir = path.join(agentData, 'usage');
+    const rows = (fs.existsSync(usageDir) ? fs.readdirSync(usageDir) : []).flatMap((file) => fs.readFileSync(path.join(usageDir, file), 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }))
+      .filter((u) => u?.kind === 'service' && u.service === 'collect' && u.projectId === p1.projectId);
+    const allFake = Object.values(FAKE);
+    const leaked = allFake.filter((x) => f.some((r) => r.summary.includes(x))).length;
+    check('T7 网页采集:下载器只经受限子进程起、只经出网闸的代理出网——到得了测试专用的外部地址,到不了回环、内网、元数据地址与同机各服务;下载物入库后别的成员取得到;只读成员下载之前被拒;别的项目查不到这边的作业;记了用量', first.done
+      && f[0]?.ok === true && /"ready":true/.test(statusText) && /"promptcutEnv":\[\]/.test(statusText) && /"proxy":true/.test(statusText)
+      && !!work && !!seenCwd && path.resolve(seenCwd).toLowerCase() === path.resolve(work).toLowerCase()
+      && f[1]?.ok === true && /alreadyInstalled/.test(f[1].summary) && f[2]?.ok === true
+      && refused.length === refusedTargets.length && refused.every((r) => r.ok === false) && f[3 + refusedTargets.length]?.ok === false
+      && fx.decoyHits.length === decoyBefore && leaked === 0
+      && !!jobId && !!jobDone && /"status":"done"/.test(jobDone) && added.length === 1 && added[0].kind === 'video' && !!got && got.status === 200 && got.sha === sha256(fx.clip)
+      && !fs.existsSync(path.join(work, 'collect', jobId))
+      && !!localJob && !!localDone && /egress refused|403/.test(localDone)
+      && other.results[0]?.ok === false && ro.results[0]?.ok === false && /只读/.test(ro.results[0].summary) && hitsAfterRo === hitsBeforeRo
+      && rows.some((u) => u.model === 'download' && u.ok === true && u.units === fx.clip.length) && rows.some((u) => u.model === 'probe')
+      && health.collect === true && health.collectTestRunner === true, {
+      tools: f.slice(0, 3).map((x) => `${x.name}:${x.ok ? 'ok' : `error ${x.summary.slice(0, 100)}`}`),
+      childSees: { cwdIsConversationWorkDir: !!work && !!seenCwd && path.resolve(seenCwd).toLowerCase() === path.resolve(work).toLowerCase(), promptcutEnv: /"promptcutEnv":\[\]/.test(statusText) ? [] : '有', proxyOnly: /"proxy":true/.test(statusText) },
+      refusedByProxy: refusedTargets.map(([what], i) => `${what}:${refused[i]?.ok === false ? '被拒' : '到了'}`), refusedAs: refused[0]?.summary.slice(0, 120) ?? null,
+      fileUrlRefused: f[3 + refusedTargets.length]?.ok === false, decoyHits: fx.decoyHits.length - decoyBefore, fakeCredentialsInResults: leaked,
+      download: { jobId: jobId ? `${jobId.slice(0, 12)}…` : null, done: jobDone ? /"status":"done"/.test(jobDone) : false, mediaAdded: added.map((m) => m.kind), otherMemberFetch: got ? { status: got.status, sameBytes: got.sha === sha256(fx.clip) } : null, jobDirRemoved: !!work && !!jobId && !fs.existsSync(path.join(work, 'collect', jobId)) },
+      downloadToLocalService: localDone ? String(localDone).slice(0, 140) : '作业没有结束',
+      otherProjectAgent: other.results.map((x) => `${x.name}:${x.ok ? 'ok' : 'error'}`),
+      readonlyMember: { toolOk: ro.results[0]?.ok ?? null, summary: ro.results[0]?.summary?.slice(0, 80) ?? null, sourceHits: hitsAfterRo - hitsBeforeRo },
+      usageRows: rows.map((u) => `${u.model}:${u.units}${u.unit}:${u.ok ? 'ok' : 'fail'}`), testRunner: health.collectTestRunner ?? null,
+      jobResult: String(jobDone).slice(0, 300),
+      ...(jobDone ? {} : { lastJobText: String(lastJobText).slice(0, 400), agentLog: agent.logs.filter((l) => /collect|import|asset/.test(String(l.event))).slice(-6).map((l) => JSON.stringify(l).slice(0, 200)) }),
     });
   }
 }
