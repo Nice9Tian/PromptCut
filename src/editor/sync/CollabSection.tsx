@@ -16,6 +16,7 @@ import { ONLINE } from "../../online/mode";
 import { hosted, type SharedMode, type Where } from "./sharedApi";
 import { ListEditor, LanRestartHint, readHostedUrl, writeHostedUrl } from "./SharedDialogs";
 import { CreatorFlow, type Flow } from "./MembersPanel";
+import { HostedServiceRows } from "./HostedServiceRows";
 import { useSync, moveSharedToHosted, moveSharedToLan } from "./syncManager";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
@@ -61,6 +62,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const device = useSync((v) => v.device);
   const association = useSync((v) => v.association);
   const hostRegistration = useSync((v) => v.hostRegistration);
+  const hostedServices = useSync((v) => v.hosted);
   const isOn = !!shared || !!association;
   const [checked, setChecked] = useState(isOn);
   const [where, setWhere] = useState<Where>("lan");
@@ -338,6 +340,9 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
               {copied$("pw")}
             </div>
           ) : null}
+          {/* 托管方的服务(渲染节点):放云端且这台托管端有它才出现;创建者能改(先验证创建者身份),其他成员只读 */}
+          <HostedServiceRows where={shared.where} hosted={hostedServices} creator={iAmCreator} busy={busy}
+            onToggle={(service, enabled) => setFlow({ kind: "hosted-service", service, enabled })} />
           {shared.where === "lan" ? (
             <>
               <div className="pc-sync-warn">{COLLAB_TEXT.localNote}</div>

@@ -48,7 +48,7 @@ import { launchHealthyChrome } from './chrome-health.mjs';
 /** 一拍的名义间隔(ms)。帧时间只要单调递增,取多少不影响画面 —— 画面读的是 __pcExportMs */
 const FRAME_INTERVAL = 1000 / 60;
 
-const CHROME_ARGS = [
+const BASE_CHROME_ARGS = [
   // Windows headless-shell can still own a blank native window. Keep both
   // startup and every subsequently created target outside the desktop.
   '--window-position=-32000,-32000', '--no-first-run', '--no-default-browser-check',
@@ -65,9 +65,41 @@ const CHROME_ARGS = [
   // 上面那串 --disable-gpu* 会把 WebGL 一起关死(getContext 返回 null,three.js 卡渲成空画布且不报错);
   // 这个标志打开 SwiftShader 软件 WebGL,同一个三角形连画三趟逐字节相同
   '--enable-unsafe-swiftshader',
-  // 实验/排查用:PC_CHROME_ARGS="--flag-a --flag-b" 追加启动参数
-  ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : []),
 ];
+
+/**
+ * 要不要关 Chrome 的沙箱(`docs/plan/hosted-render-contract.md` 第 7.3 节;任务书「root 或容器里 Chrome 自动带沙箱参数」):
+ * Chrome 拒绝以 root 带沙箱启动,容器里多半也没有它要的用户命名空间。只在 **Linux** 上判 —— Windows、macOS 一律不加,
+ * 桌面版的启动参数与原来逐项相同。三种情况回原因,否则回 null:
+ *   - `PROMPTCUT_CHROME_NO_SANDBOX=1`(显式要求);设成 `0` 则无论如何不加;
+ *   - 进程以 root 运行(`getuid() === 0`);
+ *   - 在容器里(存在 `/.dockerenv` 或 `/run/.containerenv`)。
+ * 参数都能注入,单测不用真的换平台。
+ */
+export function noSandboxReason({ platform = process.platform, env = process.env, getuid = process.getuid?.bind(process), exists = fsSync.existsSync } = {}) {
+  if (platform !== 'linux') return null;
+  if (env.PROMPTCUT_CHROME_NO_SANDBOX === '0') return null;
+  if (env.PROMPTCUT_CHROME_NO_SANDBOX === '1') return 'env';
+  let uid = null;
+  try { uid = typeof getuid === 'function' ? getuid() : null; } catch { uid = null; }
+  if (uid === 0) return 'root';
+  try { if (exists('/.dockerenv') || exists('/run/.containerenv')) return 'container'; } catch { /* 查不了就当不在容器里 */ }
+  return null;
+}
+
+/**
+ * 这一次启动 Chrome 用的参数:固定的那一串,加(仅 Linux 的 root / 容器)`--no-sandbox`,再加排查用的
+ * `PC_CHROME_ARGS="--flag-a --flag-b"`。每次启动现算,不在模块载入时定死(环境变量可以晚于载入才设)。
+ */
+export function chromeLaunchArgs(options = {}) {
+  const env = options.env ?? process.env;
+  return [
+    ...BASE_CHROME_ARGS,
+    ...(noSandboxReason(options) ? ['--no-sandbox'] : []),
+    // 实验/排查用:PC_CHROME_ARGS="--flag-a --flag-b" 追加启动参数
+    ...(env.PC_CHROME_ARGS ? env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : []),
+  ];
+}
 
 /**
  * 每个新文档加载前注入。挡掉 Vite 的 HMR / 心跳(它们会一直挂着网络请求),再放毛玻璃遮罩那一套。
@@ -152,14 +184,14 @@ function PAGE_PRELUDE() {
 }
 
 /**
- * 在一个已经起好的浏览器里开一个**全新的、受帧控制的 page**,导航到导出页、等页面就绪。
+ * 开一个受帧控制的空白页(`Target.createTarget({ enableBeginFrameControl: true })`,窗口放在屏幕外)。预渲染每一趟都从这里开页;
+ * 托管方渲染服务的启动自检(`server/hosted-render/selfcheck.mjs`)也走这一条,所以「自检过了、工作进程却开不了页」不会再出现。
  *
- * 为什么每趟都开新 page:页面上有动画锚点、已挂载的卡片、推到片尾的状态,原地再渲一趟拿到的不是
- * 第 0 帧的画面。新 page 是一个全新的 renderer,和全新起一个浏览器等价。
- * 页面必须用 `Target.createTarget({ enableBeginFrameControl: true })` 开 —— `browser.newPage()`
- * 开出来的页面不受帧控制,beginFrame 对它无效。
+ * 只有 chrome-headless-shell 认这组参数:完整版的 Chrome / Chromium(即使以无头方式起)对不带 `newWindow` 的 `left` / `top`
+ * 回 `Target position can only be set for new windows`,而且没有 `HeadlessExperimental.beginFrame`,受帧控制的出帧整个做不了。
+ * 所以渲染节点必须用 chrome-headless-shell,版本由仓库锁定的 puppeteer 决定(`expectedHeadlessShellVersion()`)。
  */
-async function newSession(browser, url) {
+export async function openFrameTarget(browser) {
   const bs = await browser.target().createCDPSession();
   let targetId;
   try {
@@ -168,7 +200,58 @@ async function newSession(browser, url) {
     await bs.detach().catch(() => {});
   }
   const target = await browser.waitForTarget((t) => t._targetId === targetId, { timeout: 30000 });
-  const page = await target.page();
+  return target.page();
+}
+
+/**
+ * 在一个起好的浏览器里走一遍预渲染的开页与出帧:开受帧控制的页、发 `beginFrame` 截一帧。成功回 `{ ok: true, bytes }`(那一帧 PNG 的字节数),
+ * 失败回 `{ ok: false, stage: 'open' | 'frame', detail }`。自检用;不改任何渲染路径。
+ */
+export async function probeFramePath(browser, { timeoutMs = 30000 } = {}) {
+  let page = null;
+  let stage = 'open';
+  const work = (async () => {
+    page = await openFrameTarget(browser);
+    stage = 'frame';
+    const client = await page.createCDPSession();
+    await client.send('Page.enable');
+    await page.evaluate(() => { document.documentElement.style.background = '#204060'; });
+    let tick = 1000;
+    for (let i = 0; i < 8; i += 1) {
+      const out = await client.send('HeadlessExperimental.beginFrame', { frameTimeTicks: (tick += FRAME_INTERVAL), interval: FRAME_INTERVAL, screenshot: { format: 'png' } });
+      if (out?.screenshotData) return { ok: true, bytes: Buffer.from(out.screenshotData, 'base64').length };
+    }
+    return { ok: false, stage: 'frame', detail: 'beginFrame 连发 8 拍都没有交回画面' };
+  })();
+  let timer = null;
+  try {
+    return await Promise.race([
+      work,
+      new Promise((resolve) => { timer = setTimeout(() => resolve({ ok: false, stage, detail: `${timeoutMs / 1000} 秒没有结果` }), timeoutMs); }),
+    ]);
+  } catch (err) {
+    return { ok: false, stage, detail: String(err?.message ?? err).split('\n')[0].slice(0, 300) };
+  } finally {
+    clearTimeout(timer);
+    try { await page?.close(); } catch { /* 浏览器随后就关 */ }
+  }
+}
+
+/** 仓库锁定的 puppeteer 配的 chrome-headless-shell 版本号(如 `152.0.7977.75`);读不到回 null */
+export async function expectedHeadlessShellVersion() {
+  try { return await headlessShellBuildId(); } catch { return null; }
+}
+
+/**
+ * 在一个已经起好的浏览器里开一个**全新的、受帧控制的 page**,导航到导出页、等页面就绪。
+ *
+ * 为什么每趟都开新 page:页面上有动画锚点、已挂载的卡片、推到片尾的状态,原地再渲一趟拿到的不是
+ * 第 0 帧的画面。新 page 是一个全新的 renderer,和全新起一个浏览器等价。
+ * 页面必须用 `Target.createTarget({ enableBeginFrameControl: true })` 开 —— `browser.newPage()`
+ * 开出来的页面不受帧控制,beginFrame 对它无效。
+ */
+async function newSession(browser, url) {
+  const page = await openFrameTarget(browser);
   page.on('console', (msg) => { if (msg.type() !== 'debug') console.log('PAGE LOG:', msg.text()); });
   const client = await page.createCDPSession();
   await client.send('Page.enable');
@@ -314,7 +397,9 @@ export async function openBakery(opts = {}) {
   const url = opts.url || DEFAULT_URL;
 
   console.log('Launching Puppeteer (chrome-headless-shell)...');
-  const launch = () => puppeteer.launch({ headless: 'shell', protocolTimeout: 60000, args: CHROME_ARGS });
+  const sandboxOff = noSandboxReason();
+  if (sandboxOff) console.log(`Chrome 以 --no-sandbox 启动(原因:${sandboxOff})`);
+  const launch = () => puppeteer.launch({ headless: 'shell', protocolTimeout: 60000, args: chromeLaunchArgs() });
   let browser;
   try {
     browser = await launchHealthyChrome({ launch });

@@ -13,6 +13,10 @@ export const TICKET_PREFIX = 'promptcut.ticket.';
 export const TENANT_PREFIX = 'promptcut.tenant.';
 export const ROLE_PREFIX = 'promptcut.role.';
 export const TOKEN_PREFIX = 'promptcut.token.';
+/** 托管方服务身份的握手项（契约 `docs/plan/hosted-render-contract.md` 第 1.2 节） */
+export const SERVICE_PREFIX = 'promptcut.service.';
+/** 以它开头的用户名留给托管方服务身份，成员不能用（同上第 1.4 节） */
+export const RESERVED_USERNAME_PREFIX = 'service:';
 
 /** 连接角色（契约第 1 节） */
 export const ROLES = Object.freeze(['page', 'agent', 'render']);
@@ -127,6 +131,11 @@ export function adminPurpose({ projectId, username, op, nonce }) {
   return utf8(`promptcut.admin.v1\n${projectId}\n${username}\n${op}\n${nonce}`);
 }
 
+/** 服务握手的用途串（`hosted-render-contract.md` 第 1.2 节）：`promptcut.service.v1\n<服务名>\n<instanceId>\n<nonce>` */
+export function servicePurpose({ service, deviceId, nonce }) {
+  return utf8(`promptcut.service.v1\n${service}\n${deviceId}\n${nonce}`);
+}
+
 // ---------------------------------------------------------------- 校验
 
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
@@ -149,6 +158,16 @@ export const nameKey = (name) => String(name).normalize('NFC').toLowerCase();
  * 契约只给了项目名的规则；用户名要拼进用途串（以换行分隔字段），所以至少不许有控制字符。
  */
 export const isUsername = (v) => typeof v === 'string' && v.length > 0 && charCount(v) <= 64 && !CONTROL_RE.test(v) && v.trim() === v;
+
+/** 服务名：1～32 个 `[a-z0-9-]` */
+export const isServiceName = (v) => typeof v === 'string' && /^[a-z0-9-]{1,32}$/.test(v);
+
+/** 留给服务身份的用户名（成员进入、建项目、名单、踢人都不许用） */
+export const isReservedUsername = (v) => typeof v === 'string' && v.startsWith(RESERVED_USERNAME_PREFIX);
+
+/** 服务在项目里的用户名与 `userId`：`service:<服务名>`、`service:<服务名>@<instanceId>` */
+export const serviceUsername = (service) => `${RESERVED_USERNAME_PREFIX}${service}`;
+export const serviceUserId = (service, deviceId) => `${serviceUsername(service)}@${deviceId}`;
 
 export const isDeviceId = (v) => typeof v === 'string' && DEVICE_ID_RE.test(v);
 

@@ -398,6 +398,19 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
       return id === null ? {} : { coalesceKey: `task:${id}` };
     },
 
+    /**
+     * 立即放回这条连接的节点手里的全部认领（不是 G.3 的模块接口）：逐个替它发 `task.release`，任务当场回到未认领，
+     * 不等断线的宽限期。关掉托管方渲染节点的开关时用（`docs/plan/hosted-render-contract.md` 第 3 节）。回放回的条数
+     */
+    releaseClaims(connId, reason = 'released') {
+      const nodeId = conns.get(connId)?.node?.nodeId;
+      if (!nodeId || typeof q.describe !== 'function') return 0;
+      const d = q.describe();
+      const held = (Array.isArray(d?.tasks) ? d.tasks : []).filter((t) => t.state === 'claimed' && t.claim?.nodeId === nodeId);
+      for (const t of held) q.handle(connId, { type: 'task.release', id: t.id, token: t.claim.token, reason });
+      return held.length;
+    },
+
     /** 这条连接的节点此刻持有的认领数（不是 G.3 的模块接口，给成员列表用） */
     claimsOf(connId) {
       const nodeId = conns.get(connId)?.node?.nodeId;

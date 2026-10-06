@@ -5,6 +5,7 @@ import { defineConfig, type Plugin, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
+import { hostedGatePlugin } from "./server/vite-plugin-hosted-gate";
 import { exportPlugin } from "./server/vite-plugin-export";
 import { exportsListPlugin } from "./server/vite-plugin-exports-list";
 import vitePluginAi from "./server/vite-plugin-ai";
@@ -79,11 +80,15 @@ const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/*
 const REACT_REFRESH_EXCLUDE = [/\/node_modules\//, /\/src\/cards\//, /\/src\/parts\//];
 
 const desktopConfig: UserConfig = {
+  // 依赖预构建缓存缺省在检出目录的 node_modules/.vite；检出目录只读时（托管方的渲染服务以非 root 用户跑，发布目录属 root）
+  // 由 PROMPTCUT_VITE_CACHE_DIR 指到可写的地方（`server/hosted-render/main.mjs` 设成渲染数据目录下的 vite-cache）。不设时与原来相同
+  ...(process.env.PROMPTCUT_VITE_CACHE_DIR ? { cacheDir: `${process.env.PROMPTCUT_VITE_CACHE_DIR}/editor` } : {}),
   // 卡口必须排在所有接口插件**前面**:中间件按 configureServer 的调用顺序注册,排在后面就等于没有。
   //   apiGuardPlugin  —— /api/** 的同源校验,任何 dev server 都生效。
   // stagePortsPlugin 排在 apiGuard 后面:它自己那条 /api/stage/ports 也该受同一道卡口管。
   // docservicePlugin(本地文档服务)总是注册。
-  plugins: [lanHostPlugin(), apiGuardPlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), exportsListPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), rawEolPlugin(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
+  // hostedGatePlugin 只在托管方渲染服务的工作进程里生效(页面请求闸,`server/hosted-render/vite-gate.mjs`),别处是空的;它要先于一切接口
+  plugins: [hostedGatePlugin(), lanHostPlugin(), apiGuardPlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), exportsListPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), rawEolPlugin(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
   // 依赖扫描入口只找真正的页面:缺省的 `**/*.html` 会把 out/frame-library 下成千上万个快照 .html 当入口读一遍(`server/vite-scan-ignore.mjs`)
   optimizeDeps: { entries: DEP_SCAN_ENTRIES },
   server: {

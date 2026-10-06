@@ -10,15 +10,20 @@
  */
 import { verifyTicket } from './tickets.mjs';
 import { credentialStoreFor } from './store.mjs';
+import { serviceAdmission } from './service-identity.mjs';
 
 /**
  * @param {object} options
  * @param {object | (() => object | null)} options.store
  * @param {() => number} [options.now]
- * @returns {{ verify(ticket: string): { ok: true, access: 'r' | 'rw', projectId: string, userId: string } | { ok: false, reason: string } }}
+ * @param {object | (() => object | null)} [options.services] 托管方服务的登记表（`service-identity.mjs`）。带 `sv` 的票据
+ *   （服务身份的素材票据，`docs/plan/hosted-render-contract.md` 第 1.6 节）每次核对都另看登记表与项目的开关，不满足当场无效，
+ *   不等票据过期；没给登记表时这种票据一律无效。回的结果多一个 `service`，素材服务据此限制它能写的命名空间
+ * @returns {{ verify(ticket: string): { ok: true, access: 'r' | 'rw', projectId: string, userId: string, service?: string } | { ok: false, reason: string } }}
  */
-export function createAssetTicketVerifier({ store, now = Date.now } = {}) {
+export function createAssetTicketVerifier({ store, now = Date.now, services = null } = {}) {
   const storeOf = typeof store === 'function' ? store : () => store;
+  const registryOf = typeof services === 'function' ? services : () => services;
   return {
     verify(ticket) {
       let st = null;
@@ -30,6 +35,13 @@ export function createAssetTicketVerifier({ store, now = Date.now } = {}) {
       if (!st) return { ok: false, reason: 'no-store' };
       const v = verifyTicket(ticket, { lookup: (id) => st.peek(id), now: now(), kind: 'asset' });
       if (!v.ok) return { ok: false, reason: v.reason };
+      if (v.payload.sv !== undefined) {
+        let registry = null;
+        try { registry = registryOf(); } catch { registry = null; }
+        const refused = serviceAdmission({ registry, record: v.record, service: v.payload.sv, kid: v.payload.sk });
+        if (refused) return { ok: false, reason: refused };
+        return { ok: true, access: v.payload.r, projectId: v.payload.p, userId: v.payload.u, service: v.payload.sv };
+      }
       return { ok: true, access: v.payload.r, projectId: v.payload.p, userId: v.payload.u };
     },
   };

@@ -9,6 +9,7 @@
  * | `POST shared/invite/resolve` | 凭邀请码查项目（C10a）：200 / 404 `invite-invalid` / 429 |
  * | `POST shared/invite/redeem` | 凭邀请码兑换（C10a）：200 / 400 / 401 `banned` / 404 `invite-invalid` / 429 |
  * | `POST shared/verify` | 〔裁〕核对一份进入证明（`claude/join-error`）：200 / 400 / 401 / 429 |
+ * | `POST shared/service-challenge` | 托管方服务取握手挑战（`docs/plan/hosted-render-contract.md` 第 1.2 节）：200 / 400 / 429；组装方没给登记表时 404 |
  *
  * `shared/verify`〔裁〕：体 `{ protocols: [...] }` 就是 WebSocket 握手要给的子协议列表，其中必须有证明
  * （`promptcut.auth.…`），交给与握手**同一个** `authenticate` 核对：过了回 200 `{ ok: true }`，不过回 401 `unauthorized`
@@ -35,7 +36,8 @@
  */
 import { createHmac } from 'node:crypto';
 import {
-  AUTH_PREFIX, KEY_BYTES, SALT_BYTES, isProjectId, isProjectName, isUsername, isDeviceId, isB64Bytes, isKdf,
+  AUTH_PREFIX, SERVICE_PREFIX, KEY_BYTES, SALT_BYTES, isProjectId, isProjectName, isUsername as isUsernameShape, isDeviceId, isB64Bytes, isKdf,
+  isReservedUsername, isServiceName,
 } from './protocol.mjs';
 import { credentialFor } from './handshake.mjs';
 import { roomUnavailableReason } from '../recovery/relocation.mjs';
@@ -99,6 +101,8 @@ function readBody(req, maxBody) {
 }
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+/** 成员能用的用户名：形状对，且不是留给服务身份的 `service:` 开头（`hosted-render-contract.md` 第 1.4 节） */
+const isUsername = (v) => isUsernameShape(v) && !isReservedUsername(v);
 const isCred = (v) => isObj(v) && isB64Bytes(v.salt, SALT_BYTES) && isB64Bytes(v.key, KEY_BYTES);
 
 /** 校验 `shared/create` 的请求体；合格回规整后的对象，否则 null */
@@ -161,6 +165,7 @@ export function fakeSalt(serverSecret, projectId, username) {
  * @param {number} [options.maxBody]
  * @param {(projectId: string) => void} [options.onCreate]
  * @param {(req) => object | null} [options.authenticate] 握手鉴权（`createHandshakeAuth().authenticate`）；给了才答 `shared/verify`
+ * @param {() => object | null} [options.services] 取服务登记表；给了（托管端）才答 `shared/service-challenge`
  */
 export function createSharedHttp({
   store,
@@ -176,7 +181,9 @@ export function createSharedHttp({
   maxBody = SHARED_HTTP_DEFAULTS.MAX_BODY,
   onCreate = () => {},
   authenticate = null,
+  services = null,
 }) {
+  const servicesOf = typeof services === 'function' ? services : () => services;
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedHttp: mode 只能是 'hosted' 或 'lan'");
   const storeOf = typeof store === 'function' ? store : () => store;
   /** 来源 → 最近一小时建项目的时刻 */
@@ -266,14 +273,15 @@ export function createSharedHttp({
     if (body === undefined) return;
     if (!isObj(body)) return fail(res, 400, 'bad-request');
     const { projectId, username, deviceId, as } = body;
-    if (!isProjectId(projectId) || !isUsername(username) || !isDeviceId(deviceId) || (as !== 'member' && as !== 'creator')) {
+    // 保留用户名在这里不报格式错：照名单外的用户名回伪盐，之后的握手失败
+    if (!isProjectId(projectId) || !isUsernameShape(username) || !isDeviceId(deviceId) || (as !== 'member' && as !== 'creator')) {
       return fail(res, 400, 'bad-request');
     }
     const rec = st.peek(projectId);
     const unavailable = roomUnavailableReason(rec);
     if (unavailable) return fail(res, unavailable === 'relocated' ? 409 : 503, unavailable);
     if (!rec) return fail(res, 404, 'no-project');
-    const cred = credentialFor(rec, username, as);
+    const cred = isReservedUsername(username) ? null : credentialFor(rec, username, as);
     const salt = cred ? cred.salt : fakeSalt(st.serverSecret, projectId, username);
     const nonce = challenges.issue(['join', projectId, username, deviceId, as]);
     send(res, 200, { ok: true, nonce, salt, kdf: { ...rec.kdf }, mode: rec.mode });
@@ -292,7 +300,7 @@ export function createSharedHttp({
     const list = isObj(body) ? body.protocols : undefined;
     if (!Array.isArray(list) || list.length === 0 || list.length > 8
       || !list.every((p) => typeof p === 'string' && p.length > 0 && !p.includes(','))
-      || !list.some((p) => p.startsWith(AUTH_PREFIX))) {
+      || !list.some((p) => p.startsWith(AUTH_PREFIX) || p.startsWith(SERVICE_PREFIX))) {
       return fail(res, 400, 'bad-request');
     }
     // 与这次请求同一个来源、同一套请求头，只把子协议换成体里给的：限速、回环信任都与握手一致
@@ -306,6 +314,26 @@ export function createSharedHttp({
     if (principal && typeof principal.userId === 'string') return send(res, 200, { ok: true });
     if (!loopback && limiter.blocked(remote)) return tooMany(res, remote, { withBody: true });
     return fail(res, 401, 'unauthorized');
+  }
+
+  /**
+   * `POST shared/service-challenge { service, deviceId }`：托管方服务握手用的一次性随机数，绑定 `('service', service, deviceId)`。
+   * 服务名不在登记表里也照样回一个（不暴露有没有这个服务），之后的握手失败。
+   */
+  async function serviceChallenge(req, res) {
+    const remote = remoteOf(req);
+    const loopback = loopbackOf(req);
+    if (!loopback && limiter.blocked(remote)) {
+      req.resume();
+      return tooMany(res, remote);
+    }
+    const body = await jsonBody(req, res);
+    if (body === undefined) return;
+    if (!isObj(body) || !isServiceName(body.service) || !isDeviceId(body.deviceId)) return fail(res, 400, 'bad-request');
+    // 换钥、撤钥在这里生效：有人取挑战就看一眼登记表文件
+    try { servicesOf()?.refresh?.({ force: true }); } catch { /* 读不了按原样 */ }
+    const nonce = challenges.issue(['service', body.service, body.deviceId]);
+    send(res, 200, { ok: true, nonce });
   }
 
   /**
@@ -431,6 +459,10 @@ export function createSharedHttp({
       if (route === 'verify' && typeof authenticate === 'function') {
         if (method !== 'POST') return fail(res, 405, 'method');
         return verify(req, res);
+      }
+      if (route === 'service-challenge' && servicesOf()) {
+        if (method !== 'POST') return fail(res, 405, 'method');
+        return serviceChallenge(req, res);
       }
       if (route === 'invite/resolve' || route === 'invite/redeem') {
         if (method !== 'POST') return fail(res, 405, 'method');
