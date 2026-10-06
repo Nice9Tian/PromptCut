@@ -82,7 +82,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
    */
   const cloud = useCloudAgent();
   const cloudTab = useCloudTab(tabId);
-  const digest = useCloudDigest(cloud, cloud.available && !mock);
+  const digest = useCloudDigest(cloud, cloud.available);
 
   // 顶栏标题就是这一页的页签名:Agent 用 declare_scope 声明范围之后会跟着改名
   const { tabs } = useAgentTabs();

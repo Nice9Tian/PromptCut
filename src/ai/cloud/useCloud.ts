@@ -236,6 +236,14 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
+  // 探针与排障的只读口子:这一页云端对话此刻的消息与会话状态(同 __pcStore、__pcIo 一类的 __pc* 钩子)
+  useEffect(() => {
+    if (!key) return;
+    const w = window as unknown as { __pcCloud?: Record<string, unknown> };
+    w.__pcCloud = { ...(w.__pcCloud ?? {}), [tabId]: { messages: () => store.get(), view: () => sessionRef.current?.getView() ?? null, conversationId: () => convRef.current } };
+    return () => { if (w.__pcCloud) delete w.__pcCloud[tabId]; };
+  }, [key, tabId, store]);
+
   // 窗口回到前台、网络恢复:马上重连,不等退避
   useEffect(() => {
     if (!key) return;
