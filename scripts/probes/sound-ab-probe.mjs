@@ -273,7 +273,9 @@ async function desktopPhase() {
   await page.evaluateOnNewDocument(AUDIO_HOOK);
   await page.goto(`${server.origin}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await until('桌面编辑器就绪', () => page.evaluate(() => !!window.__pcStore && !!window.__pcIo?.sound), 120_000);
-  const exportJobs = () => fs.readdirSync(dirs.exportDir, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name !== 'media').map((d) => d.name);
+  // 只数导出任务的目录(`export-<时间>`):预渲染结果的目录 `frame-library` 是用到才建的 —— 有声动效卡判轻之后不再提前预渲染,
+  // 它可能到导出时才出现,不能算成一个导出任务
+  const exportJobs = () => fs.readdirSync(dirs.exportDir, { withFileTypes: true }).filter((d) => d.isDirectory() && /^export-/.test(d.name)).map((d) => d.name);
 
   /* ---- 摆项目:未生成一段、过期一段、缺失一段 */
   const setup = await page.evaluate(async () => {
@@ -672,6 +674,24 @@ async function onlinePhases() {
     picture.badge = await A.evaluate(() => document.body.innerText.includes('需要本地 PC 渲染辅助'));
     check('在线:内置有声卡的画面照常渲染(圆环在舞台上),没有「需要本地 PC 渲染辅助」', !!picture.stage && picture.stage.ring > 50 && !picture.stage.placeholderShown && !picture.badge, picture);
     await A.screenshot({ path: path.join(OUT, 'O2-online-preview.png') });
+    // 有声动效卡的画面有成本身份(2026-10-06):在线页面也自动测过它(测量日志里有它),播放到它的位置时不被抑制(判轻、活渲)
+    const measuredPulse = await until('在线:有声动效卡的画面测过', () => A.evaluate(() => {
+      const d = window.__pcPreviewDiag?.();
+      return d && !d.probeRun.running && d.probeRun.probed.some((e) => e.cardId === 'av-pulse') ? d.probeRun.probed.filter((e) => e.cardId === 'av-pulse').length : null;
+    }), 60_000);
+    const whilePlaying = await A.evaluate(async () => {
+      const { actions } = window.__pcStore;
+      const wait = (n) => new Promise((r) => setTimeout(r, n));
+      actions.pause(); actions.seek(0.6);
+      await wait(400);
+      actions.play();
+      await wait(250);
+      const suppressed = window.__pcPreviewDiag().suppressed;
+      actions.pause();
+      await wait(200);
+      return suppressed;
+    });
+    check('在线:有声动效卡的画面自动测过、判轻活渲(播放时不在被抑制的集合里)', !!measuredPulse && !whilePlaying.includes(made.pulse), { measuredPulse, whilePlaying, pulse: made.pulse });
 
     /* ---- O3 复用记录 */
     const reuse = await A.evaluate(async (id) => {
