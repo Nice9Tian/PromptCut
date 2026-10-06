@@ -38,7 +38,8 @@ export const HOSTED_DEPLOY_FILES = Object.freeze([
 /** 暂存目录根上的 package.json 内容 */
 export const HOSTED_PACKAGE_JSON = `${JSON.stringify({ name: 'promptcut-hosted', private: true, type: 'module' }, null, 2)}\n`;
 
-const skip = (name) => name === 'test' || name === 'node_modules' || /\.test\.[cm]?[jt]s$/.test(name);
+// `deploy`：server/hosted/deploy/ 是服务器配置模板（nginx、sysctl），不是运行时文件，不拷到远端
+const skip = (name) => name === 'test' || name === 'deploy' || name === 'node_modules' || /\.test\.[cm]?[jt]s$/.test(name);
 
 function copyDir(from, to, out) {
   fs.mkdirSync(to, { recursive: true });

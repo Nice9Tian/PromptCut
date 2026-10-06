@@ -15,6 +15,7 @@
 @source not "../tools";
 @source not "../scripts";
 @source not "../server/test";
+@source not "../server/hosted/deploy";
 @source not "../out";
 @source not "../dist";
 @source not "../data";
