@@ -368,13 +368,14 @@ export const ITEMS = [
   {
     id: 'P-codex-auth-state', name: 'Codex 登录状态的界面探针', category: '探针', taskRef: '任务书二 第 3 条(桌面 Agent 相关探针不变红)',
     tasks: ['C3'], covers: ['codex-auth-state-probe.mjs'],
-    requiresText: [{ file: 'scripts/probes/codex-auth-state-probe.mjs', text: '--port' }],
+    requiresText: [{ file: 'scripts/probes/codex-auth-state-probe.mjs', text: "resolve('vite/package.json')" }],
     cmd: probe('codex-auth-state-probe', ['--port', B]), pass: { exit: 0 }, timeoutMin: 10,
-    known: '本检出的探针端口写死 5203(用户的 dev-test 段),且按相对路径找 node_modules、在 worktree 里起不来;修复(--port、向上解析)在第四段分支上',
+    known: '本检出的探针端口写死 5203(dev-test 段),且按相对路径找 node_modules、在 worktree 里起不来(超时);修复(--port、vite 向上解析)在第四段分支上;requiresText 认的是修复后才有的 vite 向上解析那一行,没有就记 missing、不去跑(免得写死的 5203 被占)',
   },
   {
     id: 'P-asset-path', name: 'Agent 读素材走素材服务', category: '探针', taskRef: '主计划第 7 节 C5 之后的 Agent 素材路径',
     tasks: [], covers: ['asset-path-probe.mjs'], cmd: probe('asset-path-probe', ['--port', B]), pass: { exit: 0 }, timeoutMin: 15,
+    known: '要一个带 numpy 的 Python(PATH 上的 python 或环境变量 PROMPTCUT_TEST_PYTHON);这台 PC 上没有,P7～P11 一项不过(其余 19 项过)——属缺环境,不是代码问题',
   },
   {
     id: 'P-bake-asset', name: 'bake_card 快照经素材服务存取', category: '探针', taskRef: '主计划第 7 节(预渲染产物入库)',
