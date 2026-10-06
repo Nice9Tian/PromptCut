@@ -48,12 +48,13 @@ export interface CloudApiDeps {
 }
 
 async function readError(res: Response): Promise<CloudError> {
-  let body: { code?: string; message?: string } | null = null;
+  let parsed: unknown = null;
   try {
-    body = (await res.json()) as typeof body;
+    parsed = await res.json();
   } catch {
-    body = null;
+    parsed = null;
   }
+  const body = parsed && typeof parsed === "object" ? (parsed as { code?: string; message?: string }) : null;
   const code = body?.code || (res.status === 401 ? "unauthorized" : res.status === 403 ? "forbidden" : "unavailable");
   return new CloudError(code, cloudErrorText(code, body?.message), res.status);
 }

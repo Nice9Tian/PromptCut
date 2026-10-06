@@ -35,6 +35,7 @@ import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
+import { setHostedAgent, setHostedAgentEnabled } from "../../ai/cloud/endpoint";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
@@ -836,9 +837,13 @@ function onSideMessage(msg: AnyMsg) {
       return;
     case "shared.members.list":
       patch({ members: Array.isArray(msg.devices) ? (msg.devices as MemberRow[]) : [] });
+      // 托管端有没有云端 Agent、开没开、在哪(顶层 `hosted.agent`;放本机的项目没有这个字段)
+      setHostedAgent(view.shared?.projectId ?? currentDocProjectId(), (msg.hosted as { agent?: unknown } | undefined)?.agent ?? null);
       return;
     case "shared.notice":
       if (msg.event === "password-changed") pushToast("项目密码已被修改。你当前的连接不受影响，但下次进入需要新密码。", "info", 8000);
+      // 创建者开关了托管方的云端 Agent:AI 栏里「云端」一项随之置灰或恢复
+      if (msg.event === "hosted-service-changed" && msg.service === "agent" && typeof msg.enabled === "boolean") setHostedAgentEnabled(view.shared?.projectId ?? currentDocProjectId(), msg.enabled);
       return;
     case "events.event":
       rememberEvent(msg as Record<string, unknown>);

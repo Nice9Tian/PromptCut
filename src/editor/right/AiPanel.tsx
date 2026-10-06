@@ -24,6 +24,10 @@ import { AgentEventLog } from "../sync/AgentEventLog";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { DesktopSessionsStrip } from "./DesktopSessionsStrip";
 import { Composer } from "./chat/Composer";
+import { CloudAiPanel } from "./CloudAiPanel";
+import { useCloudAgent, useCloudDigest } from "../../ai/cloud/useCloud";
+import { selectCloudTab, useCloudTab } from "../../ai/cloud/tabMode";
+import { cloudErrorText } from "../../ai/cloud/cloudApi";
 import type { RewindHandlers } from "./chat/UserBubble";
 import type { ChatAttachment } from "../../ai/types";
 import {
@@ -70,6 +74,15 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, clearKey, setupOpen, openSetup, closeSetup, isBusy, pumpQueue, rewindTo } = useAiChat({ mock, tabId, getConversationId: () => convRef.current });
   const history = useChatHistory({ provider, messages, sessionId: undefined, storageKey: tabId === MAIN_TAB ? undefined : `pcChatId:${tabId}` });
   convRef.current = history.conversationId;
+
+  /*
+   * 「云端」接入方式(云端 Agent 服务契约 9.5、10.4):只在项目放云端、文档服务报了这台托管端有云端 Agent 时才有这一项;
+   * 本机仍是缺省,"云端"从不被自动选中,只记在这一页上(`tabMode`)。选了云端,这一页整个交给 CloudAiPanel(页面直连云节点,不经本机 Agent)。
+   * `digest` 是打开项目后的一次 info 加一次对话列表:历史列表里「云端」一组与「云端对话进行中」的提示靠它,之后不轮询。
+   */
+  const cloud = useCloudAgent();
+  const cloudTab = useCloudTab(tabId);
+  const digest = useCloudDigest(cloud, cloud.available && !mock);
 
   // 顶栏标题就是这一页的页签名:Agent 用 declare_scope 声明范围之后会跟着改名
   const { tabs } = useAgentTabs();
@@ -334,6 +347,21 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   /** 有事件被截断过就在子窗口顶上说一句,免得我们照着一份残缺报告查半天 */
   const diagTruncated = messages.some((m) => m.traceTruncated);
 
+  // 这一页选了「云端」:整页交给云端对话界面;选回本机驱动时 CloudAiPanel 清掉标记、把选择交还这里
+  if (cloudTab.selected && cloud.available) {
+    return (
+      <CloudAiPanel
+        tabId={tabId}
+        active={active}
+        hotkeysOff={props.hotkeysOff}
+        cloud={cloud}
+        initialConversation={cloudTab.conversationId}
+        desktop={{ providers, provider, config, onLeave: setProvider }}
+      />
+    );
+  }
+  const cloudOff = !cloud.enabled;
+
   // 一个驱动都没装:不给对话界面,只留一个进 AI 设置的入口
   if (providers.length > 0 && !providers.some(p => p.available)) {
     return (
@@ -346,6 +374,11 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         </div>
         <div className="ai-empty-state">
           没找到 Claude Code / agy / Codex,装好任意一个后重启本地服务
+          {cloud.available && (
+            <div style={{ marginTop: 8 }}>
+              <button className="ai-banner-btn" data-pc="ai-use-cloud" disabled={cloudOff} title={cloudOff ? cloudErrorText("disabled") : "项目放在云端,可以直接用云端 Agent"} onClick={() => selectCloudTab(tabId)}>改用云端 Agent</button>
+            </div>
+          )}
         </div>
         <AiSetupDialog
           open={setupOpen}
@@ -498,9 +531,17 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         mcpConnected={props.mcpConnected}
         showThinking={showThinking}
         onChangeShowThinking={setShowThinking}
-        onOpenHistory={() => { setHistoryOpen(true); history.refresh(); }}
+        onOpenHistory={() => { setHistoryOpen(true); history.refresh(); if (cloud.available) void digest.refresh(); }}
         onOpenSetup={openSetup}
       />
+
+      {/* 云端有这位成员还在跑的对话(重新打开软件之后):提示一下,点了接上;不自动切到云端 */}
+      {cloud.available && digest.running.length > 0 && (
+        <div className="ai-banner" data-pc="cloud-running-banner">
+          <span>云端有一个对话正在进行</span>
+          <button className="ai-banner-btn" onClick={() => selectCloudTab(tabId, digest.running[0])}>接上看看</button>
+        </div>
+      )}
 
       {needsLogin && (
         <div className="ai-banner">
@@ -584,6 +625,16 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           onOpenDiagnostics: () => void openDiagnostics(),
           onNewChat: startNewChat,
         }}
+        cloud={cloud.available ? {
+          show: true,
+          selected: false,
+          disabled: cloudOff,
+          disabledReason: cloudErrorText("disabled"),
+          onSelect: () => selectCloudTab(tabId),
+          onLeave: () => {},
+          toolbar: null,
+          attachReason: "",
+        } : undefined}
       />
       <input
         type="file"
@@ -635,6 +686,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         }}
         onDelete={(id) => history.removeChat(id)}
         onNewChat={() => { startNewChat(); setHistoryOpen(false); }}
+        cloud={cloud.available ? { items: digest.items, loading: digest.loading, onPick: (id) => { selectCloudTab(tabId, id); setHistoryOpen(false); } } : undefined}
       />
     </aside>
   );

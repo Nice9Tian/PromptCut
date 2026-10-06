@@ -207,3 +207,11 @@
   background: var(--fill-hover);
   color: var(--danger);
 }
+
+/* 「云端」一组(契约 7.4):本机对话之后另起一组,在跑的对话带「进行中」 */
+.chat-drawer-group { margin-top: 6px; border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08)); }
+.chat-drawer-group-title { padding: 8px 12px 4px; font-size: 11px; letter-spacing: 0.04em; color: var(--ink-muted); }
+.chat-drawer-item[data-state="running"] .chat-drawer-item-meta { color: var(--accent, #5aa9ff); }
+.chat-drawer-item[data-state="interrupted"] .chat-drawer-item-meta,
+.chat-drawer-item[data-state="failed"] .chat-drawer-item-meta,
+.chat-drawer-item[data-state="revoked"] .chat-drawer-item-meta { color: var(--danger, #e5534b); }
