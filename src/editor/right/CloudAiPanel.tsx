@@ -209,7 +209,8 @@ export function CloudAiPanel(props: {
         settingsDisabled="云端 Agent 的模型由托管方配置,这里没有 AI 设置可改"
       />
 
-      {off && <div className="ai-banner" data-pc="cloud-off">{offText}</div>}
+      {!cloud.available && <div className="ai-banner" data-pc="cloud-unavailable">这个项目所在的托管端没有云端 Agent 服务。</div>}
+      {cloud.available && off && <div className="ai-banner" data-pc="cloud-off">{offText}</div>}
       {view.connection === "reconnecting" && (
         <div className="ai-banner pc-cloud-reconnect" data-pc="cloud-reconnecting">
           和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。

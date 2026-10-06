@@ -2,7 +2,7 @@
  * 撤销提示条、离线对话框、本地备份列表里「哪一处」「谁改的」的说法(c65-undo-draft.md 第 2 节)。
  *
  * - 实体按顶层计,前缀带类别:片段「开头空镜」、序列「主序列」、项目设置「帧率」;
- * - 身份:另一位成员(用户名)、Agent 的某个对话、你在另一个页面。
+ * - 身份:另一位成员(用户名)、Agent 的某个对话、某位成员的云端 Agent、你在另一个页面。
  *
  * 纯函数,不读 store:项目与「我是谁」都由调用方传进来。
  */
@@ -10,6 +10,7 @@ import { entityValuePath, getAt, parsePath } from "../../kernel/diffProject";
 import type { Project } from "../../kernel/project";
 import { getCard } from "../../kernel/registry";
 import type { Writer } from "../../store/docsync";
+import { cloudAgentLabel } from "./hostedServices";
 
 /** 集合名 → 类别 */
 const KIND: Record<string, string> = {
@@ -87,12 +88,23 @@ export interface Me {
   userId: string | null;
 }
 
-type Actor = { userId?: string; username?: string; deviceId?: string; deviceName?: string; role?: string; conversation?: number; session?: string };
+type Actor = { userId?: string; username?: string; deviceId?: string; deviceName?: string; role?: string; conversation?: number; session?: string; service?: string };
+
+/** `用户名@设备` 里的用户名(写入身份里不带用户名,发起成员不在线时成员列表里也查不到) */
+const usernameOf = (userId: string | undefined): string => {
+  const s = userId ?? "";
+  const at = s.lastIndexOf("@");
+  return at > 0 ? s.slice(0, at) : s;
+};
 
 /** 共享项目里的显示名:成员列表给的 displayName(重名时带设备名),按 userId 查 */
 export type DisplayNames = Map<string, string>;
 
-/** 写入身份 → 给人看的说法:`张三`、`Agent「第 2 个对话」`、`张三 · Agent · 第 2 个对话`、`你在另一个页面` */
+/**
+ * 写入身份 → 给人看的说法:`张三`、`Agent「第 2 个对话」`、`张三 · Agent · 第 2 个对话`、`张三的云端 Agent`、`你在另一个页面`。
+ * 云端 Agent(`role: 'agent'` 且 `service: 'agent'`,契约 cloud-agent-contract.md 第 5 节)用的是发起成员的身份:
+ * 别人看到「〈成员名〉的云端 Agent」,发起的那台设备上自己看到「你的云端 Agent」。
+ */
 export function writerLabel(by: Writer | undefined, me: Me, names: DisplayNames = new Map()): string {
   // 两种形状都认:`{ actor, session }`(DocSync 记的),和文档服务直接给的 actor 本身(`project.overwritten.by`)
   const raw = by as (Writer & Actor) | undefined;
@@ -100,6 +112,10 @@ export function writerLabel(by: Writer | undefined, me: Me, names: DisplayNames 
   const session = by?.session ?? actor.session;
   const sameUser = !!actor.userId && actor.userId === me.userId;
   if (!actor.userId && session === me.session) return "你在这个页面";
+  if (actor.role === "agent" && actor.service === "agent") {
+    if (sameUser) return "你的云端 Agent";
+    return cloudAgentLabel(actor.username ?? usernameOf(actor.userId));
+  }
   if (actor.role === "agent") {
     const n = typeof actor.conversation === "number" ? `第 ${actor.conversation} 个对话` : "某个对话";
     if (sameUser || !actor.username) return `Agent${quoted(n)}`;

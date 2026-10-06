@@ -6,7 +6,7 @@
  * - 事件流用 `fetch` 读(`EventSource` 带不了请求头),解析复用 `sse.ts`。
  */
 import { parseSseChunks } from "../sse.ts";
-import { CloudIdentityError, cloudGrant, cloudTicket } from "./identity.ts";
+import { CloudDelegationError, CloudIdentityError, cloudGrant, cloudTicket } from "./identity.ts";
 import type { CloudChatItem, CloudChatState, CloudEvent, CloudInfo, CloudSendBody } from "./types.ts";
 
 export class CloudError extends Error {
@@ -103,13 +103,21 @@ export function createCloudApi(deps: CloudApiDeps) {
   const getTicket = deps.ticket ?? cloudTicket;
   const getGrant = deps.grant ?? cloudGrant;
 
+  /** 取票据、取对话委托失败 → 给用户看的错:没有身份、创建者关了开关(文档服务拒签 `service-disabled`)、连接断着、其余算身份验证没过 */
+  function identityError(err: unknown): CloudError {
+    if (err instanceof CloudIdentityError) return new CloudError("no-identity", cloudErrorText("no-identity"));
+    const code = err instanceof CloudDelegationError ? err.code : "";
+    if (code === "service-disabled") return new CloudError("disabled", cloudErrorText("disabled"));
+    if (code === "closed" || code === "timeout" || code === "offline") return new CloudError("unavailable", "和文档服务的连接断着,云端 Agent 暂时用不了。连上后再试。");
+    return new CloudError("unauthorized", cloudErrorText("unauthorized"));
+  }
+
   async function headers(json: boolean): Promise<Record<string, string>> {
     let ticket: string;
     try {
       ticket = await getTicket();
     } catch (err) {
-      if (err instanceof CloudIdentityError) throw new CloudError("no-identity", cloudErrorText("no-identity"));
-      throw new CloudError("unauthorized", cloudErrorText("unauthorized"));
+      throw identityError(err);
     }
     return { Authorization: `Bearer ${ticket}`, ...(json ? { "Content-Type": "application/json" } : {}) };
   }
@@ -155,7 +163,13 @@ export function createCloudApi(deps: CloudApiDeps) {
 
     /** 发一条消息、起一轮。回 202:这一轮从此与这个请求无关 */
     async send(conversationId: string, body: CloudSendBody): Promise<{ runId: string; seq: number }> {
-      const grant = await getGrant(conversationId).catch(() => undefined);
+      // 对话委托要不到(开关关了、连接断着)就不发:不带它服务端只会回 bad-grant,原因反而说不清
+      let grant: string | undefined;
+      try {
+        grant = await getGrant(conversationId);
+      } catch (err) {
+        throw identityError(err);
+      }
       const res = await request(`/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", json: { ...body, ...(grant ? { grant } : {}) } });
       const out = (await res.json()) as { runId?: string; seq?: number };
       return { runId: String(out.runId ?? ""), seq: num(out.seq) };

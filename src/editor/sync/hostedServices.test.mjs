@@ -43,7 +43,21 @@ test("HR24a 显示条件:只有放云端且 available 才有这一行;缺省勾�
   assert.deepEqual(H.hostedRowsOf(null, ON), []);
   assert.deepEqual(H.hostedRowsOf("hosted", null), [], "没有 hosted 字段(旧托管端)没有这一项");
   assert.deepEqual(H.hostedRowsOf("hosted", { render: { available: false, enabled: true } }), [], "登记表里没有这个服务");
-  assert.deepEqual(H.hostedRowsOf("hosted", { agent: { available: true, enabled: true } }), [], "agent 的开关界面是第四段的事,现在不出行");
+  assert.deepEqual(H.hostedRowsOf("hosted", { agent: { available: true, enabled: true } }), [{ service: "agent", label: "云端 Agent", enabled: true }], "云端 Agent 一行:托管端有这个服务才出现,缺省勾上");
+  assert.deepEqual(H.hostedRowsOf("hosted", { render: { available: true, enabled: true }, agent: { available: true, enabled: false } }).map((r) => [r.service, r.enabled]), [["render", true], ["agent", false]], "两行都在,渲染节点在前");
+  assert.deepEqual(H.hostedRowsOf("lan", { agent: { available: true, enabled: true } }), [], "放本机的项目没有云端 Agent 一行");
+});
+
+test("CAU-SW-01 云端 Agent 一行的文案与同组一致;成员行下的云端 Agent 连接与署名", () => {
+  const t = H.HOSTED_SERVICE_TEXT.agent;
+  assert.equal(t.label, "云端 Agent");
+  for (const on of [true, false]) for (const f of [t.hint, t.changed, t.confirm]) assert.ok(f(on).length > 8);
+  assert.match(t.hint(false), /已关闭/);
+  assert.match(t.changed(false), /创建者关闭了云端 Agent/);
+  assert.notEqual(H.HOSTED_SERVICE_TEXT.render.confirm(false), t.confirm(false), "确认弹窗的话按服务各写各的");
+  const conns = [{ role: "page" }, { role: "agent", conversation: 2 }, { role: "agent", conversation: "cc-1", service: "agent" }];
+  assert.deepEqual(H.cloudAgentConns(conns), [{ role: "agent", conversation: "cc-1", service: "agent" }]);
+  assert.equal(H.cloudAgentLabel("alice"), "alice的云端 Agent");
 });
 
 test("HR24a 通知落到状态上:认得的服务才改;不认识或这个项目没有这项服务就原样", () => {
@@ -126,3 +140,53 @@ test("HR24b 点勾选:把要改成什么交给上层(创建者身份验证由上
   input.props.onChange({ target: { checked: true } });
   assert.deepEqual(calls, [["render", false], ["render", true]]);
 }));
+
+/* ---------------- 第四段:项目设置里「云端 Agent」一行、署名(契约 `docs/plan/cloud-agent-contract.md` 第 5、9.5 节) ---------------- */
+
+const agentBoxOf = (html) => html.match(/<input[^>]*data-pc="collab-hosted-agent-toggle"[^>]*>/)?.[0] ?? null;
+
+test("CAU-SW-02 项目设置里「云端 Agent」一行:放云端且 hosted.agent.available 才出现,缺省勾上;创建者能改,成员只读", () => withRows(({ render }) => {
+  const BOTH = { render: { available: true, enabled: true }, agent: { available: true, enabled: true } };
+  assert.equal(agentBoxOf(render({ where: "hosted", hosted: ON, creator: true })), null, "这台托管端没有云端 Agent(available 为假):没有这一行");
+  assert.equal(render({ where: "lan", hosted: BOTH, creator: true }), "", "放本机的项目没有");
+  const asCreator = render({ where: "hosted", hosted: BOTH, creator: true });
+  assert.match(asCreator, /云端 Agent/);
+  assert.match(asCreator, /AI 栏里选「云端」/, "有一行说明");
+  assert.match(agentBoxOf(asCreator), /checked=""/, "缺省勾上");
+  assert.doesNotMatch(agentBoxOf(asCreator), /disabled/, "创建者可以改");
+  assert.ok(asCreator.indexOf("托管方的渲染节点") < asCreator.indexOf("云端 Agent"), "与渲染节点的开关放在一起,在它后面");
+  const asMember = render({ where: "hosted", hosted: BOTH, creator: false });
+  assert.match(agentBoxOf(asMember), /disabled=""/, "成员只读");
+  const closed = render({ where: "hosted", hosted: { ...BOTH, agent: { available: true, enabled: false } }, creator: false });
+  assert.doesNotMatch(agentBoxOf(closed), /checked/);
+  assert.match(closed, /已关闭:成员不能再用云端 Agent|已关闭：成员不能再用云端 Agent/);
+}));
+
+test("CAU-SIGN-01 署名:云端 Agent 的改动别人看到「〈成员名〉的云端 Agent」,发起的设备上是「你的云端 Agent」;本机 Agent 的说法不变", async () => {
+  const server = await createServer({ root: ROOT, configFile: false, logLevel: "error", server: { middlewareMode: true, hmr: false, ws: false, watch: null },
+    appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
+  try {
+    const L = await server.ssrLoadModule("/src/editor/sync/labels.ts");
+    const bob = { session: "s-bob", userId: "bob@dev-b" };
+    const cloud = { userId: "alice@dev-a", deviceId: "dev-a", role: "agent", conversation: 3, session: "s-agent", service: "agent" };
+    // 两种形状都认:DocSync 记的 { actor, session },与文档服务直接给的 actor 本身
+    assert.equal(L.writerLabel({ actor: cloud, session: "s-agent" }, bob), "alice的云端 Agent");
+    assert.equal(L.writerLabel(cloud, bob), "alice的云端 Agent");
+    // 发起成员不在线(成员列表里查不到显示名)时照样有名字;在线、重名带设备名时也只用用户名
+    assert.equal(L.writerLabel({ actor: cloud }, bob, new Map([["alice@dev-a", "alice (电脑)"]])), "alice的云端 Agent");
+    // 用户名里带 @ 的:取最后一个 @ 之前
+    assert.equal(L.writerLabel({ actor: { ...cloud, userId: "a@b@dev-a" } }, bob), "a@b的云端 Agent");
+    // 发起的那台设备上
+    assert.equal(L.writerLabel({ actor: cloud }, { session: "s-alice", userId: "alice@dev-a" }), "你的云端 Agent");
+    // 同一位成员在另一台设备上看:按名字说
+    assert.equal(L.writerLabel({ actor: cloud }, { session: "s-alice-2", userId: "alice@dev-a2" }), "alice的云端 Agent");
+    // 本机 Agent 的说法不变
+    const local = { userId: "alice@dev-a", deviceId: "dev-a", role: "agent", conversation: 2, session: "s-x" };
+    assert.equal(L.writerLabel({ actor: { ...local, username: "alice" } }, bob, new Map([["alice@dev-a", "alice"]])), "alice · Agent · 第 2 个对话");
+    assert.equal(L.writerLabel({ actor: local }, bob), "Agent「第 2 个对话」");
+    assert.equal(L.writerLabel({ actor: local }, { session: "s-alice", userId: "alice@dev-a" }), "Agent「第 2 个对话」");
+    assert.equal(L.writerLabel({ actor: { userId: "alice@dev-a", role: "page", session: "s-p" } }, bob, new Map([["alice@dev-a", "alice"]])), "alice");
+  } finally {
+    await server.close();
+  }
+});

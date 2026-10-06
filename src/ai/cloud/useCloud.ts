@@ -261,6 +261,20 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     };
   }, [key]);
 
+  // 创建者把开关关了又打开(成员列表通知过来的 `cloud.enabled`):重取一次 info、清掉「已关闭」的提示、把停下的事件流接回去
+  const wasEnabled = useRef(cloud.enabled);
+  useEffect(() => {
+    const before = wasEnabled.current;
+    wasEnabled.current = cloud.enabled;
+    if (!key || before === cloud.enabled) return;
+    if (!cloud.enabled) { setInfo((i) => (i ? { ...i, enabled: false } : i)); return; }
+    let dead = false;
+    setNotice(null);
+    void api.info().then((got) => { if (!dead) setInfo(got); }, () => undefined);
+    sessionRef.current?.kick();
+    return () => { dead = true; };
+  }, [cloud.enabled, key, api]);
+
   // 会话的问题(身份不对、被拒)也交给界面
   useEffect(() => { if (view.problem) setNotice(view.problem); }, [view.problem]);
   // 记下对话标题,历史列表里没有服务端标题时用

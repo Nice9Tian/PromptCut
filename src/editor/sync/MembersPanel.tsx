@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, setHostedService, useSync, type MemberRow } from "./syncManager";
 import { ListEditor } from "./SharedDialogs";
 import { rememberPasswords } from "./collab";
-import { HOSTED_SERVICE_TEXT, serviceRowLabel, splitMembers, type HostedServiceName } from "./hostedServices";
+import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, serviceRowLabel, splitMembers, type HostedServiceName } from "./hostedServices";
 import "./sync.css";
 
 export type Flow =
@@ -90,6 +90,9 @@ export function MembersButton() {
             {[...(mine ? [mine] : []), ...others].map((row) => {
               const key = `${row.username}@${row.deviceId}`;
               const agents = row.conns.filter((c) => c.role === "agent");
+              // 代这位成员进项目的云端 Agent 连接:归在他这一行里,不另起一行(契约 cloud-agent-contract.md 第 5 节)
+              const cloud = cloudAgentConns(row.conns);
+              const local = agents.filter((c) => c.service !== "agent");
               const me = isMe(row);
               return (
                 <div className="pc-members-row" key={key}>
@@ -104,7 +107,8 @@ export function MembersButton() {
                     {row.creator ? <span className="pc-sync-tag pc-sync-tag--creator">[创建者]</span> : null}
                     {row.tags.editing ? <span className="pc-sync-tag pc-sync-tag--editing">[编辑中]</span> : null}
                     {row.tags.rendering ? <span className="pc-sync-tag pc-sync-tag--rendering">[渲染中]</span> : null}
-                    {row.tags.agents > 0 ? <span className="pc-sync-tag">[Agent ×{row.tags.agents}]</span> : null}
+                    {local.length > 0 ? <span className="pc-sync-tag">[Agent ×{local.length}]</span> : null}
+                    {cloud.length > 0 ? <span className="pc-sync-tag" data-pc="members-cloud-agent" title={cloudAgentLabel(row.username)}>[云端 Agent]</span> : null}
                     {iAmCreator && !me && row.deviceId ? (
                       <button
                         type="button"
@@ -120,11 +124,12 @@ export function MembersButton() {
                   </div>
                   {expanded === key && agents.length ? (
                     <div className="pc-members-sub">
-                      {agents.map((a, i) => (
+                      {local.map((a, i) => (
                         <span key={i}>
                           {row.username} · Agent · 第 {a.conversation ?? i + 1} 个对话
                         </span>
                       ))}
+                      {cloud.length > 0 ? <span data-pc="members-cloud-agent-row">{cloudAgentLabel(row.username)}</span> : null}
                     </div>
                   ) : null}
                 </div>
@@ -486,7 +491,7 @@ function HostedServiceDialog({ service, enabled, v, onClose }: { service: Hosted
       }
     >
       <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
-        {enabled ? `打开后，${label}会为这个项目做预渲染。` : `关闭后，${label}不再为这个项目做预渲染，已经渲好的结果保留。`}
+        {HOSTED_SERVICE_TEXT[service]?.confirm(enabled) ?? (enabled ? `打开${label}。` : `关闭${label}。`)}
       </div>
       {err ? <div className="pc-sync-err">{err}</div> : null}
     </Dialog>

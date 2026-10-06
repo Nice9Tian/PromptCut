@@ -159,8 +159,8 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
     }
     case "end": {
       if (m.outcome === "error") return set({ pending: false, finishedAt: m.finishedAt ?? Date.now() });
-      // 主人停掉的那一轮:服务端先发一条「已停止」,再收尾,没有 done(`end` 带 `reason: "stopped"` 的话也认)
-      const stopped = ev.reason === "stopped" || (m.statuses ?? []).includes("已停止");
+      // 主人停掉的那一轮没有 done:收尾事件带 `reason: "stopped"`(契约第 20 节)
+      const stopped = ev.reason === "stopped";
       return set({ pending: false, finishedAt: m.finishedAt ?? Date.now(), outcome: m.outcome || (stopped ? "aborted" : "completed") });
     }
     default:

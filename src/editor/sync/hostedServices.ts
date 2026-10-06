@@ -7,6 +7,10 @@
  * - 项目设置里每种服务一行勾选，**按服务名渲染**：现在只有 `render`，第四段（云端 Agent）往 `HOSTED_SERVICE_ROWS` 与
  *   `HOSTED_SERVICE_TEXT` 各加一项就多一行。
  *
+ * - 代成员进项目的服务连接（云端 Agent）不另起一行：归在那位成员的行里，`conns` 里那一项带 `service: 'agent'`，界面在这位成员下
+ *   显示「〈成员名〉的云端 Agent」（`cloudAgentConns`、`cloudAgentLabel`；契约 `docs/plan/cloud-agent-contract.md` 第 5 节）。
+ *   项目设置里 `agent` 一行就是「云端 Agent」开关。
+ *
  * 不引 React、不引同步管理的运行时（只用类型），单测直接 import。
  */
 import type { MemberRow } from "./syncManager";
@@ -20,15 +24,32 @@ export interface HostedServiceState {
 
 export type HostedView = Partial<Record<HostedServiceName, HostedServiceState>>;
 
-/** 项目设置里出现哪几行、按什么顺序。第四段加 `"agent"` */
-export const HOSTED_SERVICE_ROWS: readonly HostedServiceName[] = ["render"];
+/** 项目设置里出现哪几行、按什么顺序 */
+export const HOSTED_SERVICE_ROWS: readonly HostedServiceName[] = ["render", "agent"];
 
-/** 每种服务在界面上的文案。第四段加 `agent` 时在这里加一项、再把名字加进 `HOSTED_SERVICE_ROWS` */
-export const HOSTED_SERVICE_TEXT: Partial<Record<HostedServiceName, { label: string; hint: (enabled: boolean) => string; changed: (enabled: boolean) => string }>> = {
+export interface HostedServiceText {
+  label: string;
+  /** 勾选行下面的一行说明 */
+  hint: (enabled: boolean) => string;
+  /** 别的成员收到「创建者改了开关」时的提示 */
+  changed: (enabled: boolean) => string;
+  /** 创建者确认弹窗里的一句话(`enabled` 是要改成的状态) */
+  confirm: (enabled: boolean) => string;
+}
+
+/** 每种服务在界面上的文案。加服务时在这里加一项、再把名字加进 `HOSTED_SERVICE_ROWS` */
+export const HOSTED_SERVICE_TEXT: Partial<Record<HostedServiceName, HostedServiceText>> = {
   render: {
     label: "托管方的渲染节点",
     hint: (enabled) => (enabled ? "云节点上托管方的渲染节点为这个项目做预渲染，创建者可以关掉。" : "已关闭：托管方的渲染节点不再为这个项目做预渲染，已经渲好的结果保留。"),
     changed: (enabled) => (enabled ? "创建者打开了托管方的渲染节点。" : "创建者关闭了托管方的渲染节点，它不再为这个项目做预渲染。"),
+    confirm: (enabled) => (enabled ? "打开后，托管方的渲染节点会为这个项目做预渲染。" : "关闭后，托管方的渲染节点不再为这个项目做预渲染，已经渲好的结果保留。"),
+  },
+  agent: {
+    label: "云端 Agent",
+    hint: (enabled) => (enabled ? "成员可以在 AI 栏里选「云端」，让云节点上的 Agent 代自己改项目，关掉软件也会继续。创建者可以关掉。" : "已关闭：成员不能再用云端 Agent，进行中的云端对话已被停下；已经落地的改动保留。"),
+    changed: (enabled) => (enabled ? "创建者打开了云端 Agent。" : "创建者关闭了云端 Agent，进行中的云端对话已被停下。"),
+    confirm: (enabled) => (enabled ? "打开后，成员可以在 AI 栏里选「云端」，让云节点上的 Agent 代自己改项目。" : "关闭后，成员不能再用云端 Agent，进行中的云端对话会被立刻停下；已经落地的改动保留。"),
   },
 };
 
@@ -76,6 +97,14 @@ export function hostedRowsOf(where: "lan" | "hosted" | null | undefined, hosted:
   }
   return rows;
 }
+
+/** 这位成员名下代他进项目的云端 Agent 连接(成员列表行的 `conns` 里带 `service: 'agent'` 的那几项) */
+export function cloudAgentConns<T extends { role: string; service?: string }>(conns: readonly T[]): T[] {
+  return conns.filter((c) => c.service === "agent");
+}
+
+/** 云端 Agent 的署名:「〈成员名〉的云端 Agent」(操作记录、覆盖提示、成员列表都用这一处) */
+export const cloudAgentLabel = (name: string): string => `${name}的云端 Agent`;
 
 /** 成员列表的这一行是不是托管方的服务 */
 export const isServiceRow = (row: Pick<MemberRow, "service">): boolean => typeof row.service === "string" && row.service !== "";

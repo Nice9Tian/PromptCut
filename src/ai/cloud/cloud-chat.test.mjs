@@ -10,15 +10,21 @@
  *   CAU-SES-04  文字增量攒批后折进去与逐条折相同;
  *   CAU-SES-05  服务端的对话从头开始了(seq 比页面看到的还小):掐掉旧流、从 0 重读;
  *   CAU-EP-01   「云端」一项出不来、出现、置灰的判定:放本机的项目没有;文档服务报了才有;开关关了置灰;在线页面地址固定;
- *   CAU-API-01  请求带委托票据与对话委托、不带 Cookie;错误码换成给用户看的话;info 与对话列表容错。
+ *   CAU-API-01  请求带委托票据与对话委托、不带 Cookie;错误码换成给用户看的话;info 与对话列表容错;
+ *   CAU-API-02  委托要不到时不发请求:文档服务拒签 service-disabled 显示「创建者已关闭」,连接断着显示连不上,其余按身份验证没过;
+ *   CAU-ID-01   身份只有注入这一个来源:没注入抛 no-identity,请求一个都不发;
+ *   CAU-ID-02   守门:页面源码里没有探针用的全局回退口子(`__pcCloudIdentity`、`__pcCloudAgent`),设了这两个全局变量也不起作用。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, titleOf } from "./events.ts";
 import { createCloudSession } from "./session.ts";
 import { CloudError, cloudErrorText, createCloudApi, normalizeChatItem, normalizeInfo } from "./cloudApi.ts";
-import { CLOUD_OFF, resolveCloudAgent, setCloudAgentSource, setHostedAgent, setHostedAgentEnabled, clearHostedAgent } from "./endpoint.ts";
-import { CloudIdentityError, cloudGrant, cloudTicket, setCloudIdentity } from "./identity.ts";
+import { CLOUD_OFF, resolveCloudAgent, setHostedAgent, setHostedAgentEnabled, clearHostedAgent } from "./endpoint.ts";
+import { CloudDelegationError, CloudIdentityError, cloudGrant, cloudTicket, hasCloudIdentity, setCloudIdentity } from "./identity.ts";
 
 function memStore() {
   let messages = [];
@@ -114,10 +120,13 @@ test("CAU-EV-02 每种收尾都有明确原因", () => {
   }
   assert.match(cloudErrorMessage("revoked"), /已失效/);
   assert.match(cloudErrorMessage("interrupted"), /服务中断/);
-  // 停止:先一条「已停止」状态,再收尾,没有 done
-  const stopped = applyCloudEvents([], [...base, { type: "status", seq: 2, runId: "r", text: "已停止" }, { type: "end", seq: 3, runId: "r", state: "idle" }]);
+  // 停止:先一条「已停止」状态,再收尾(带 reason: stopped),没有 done
+  const stopped = applyCloudEvents([], [...base, { type: "status", seq: 2, runId: "r", text: "已停止" }, { type: "end", seq: 3, runId: "r", state: "idle", reason: "stopped" }]);
   assert.equal(stopped[1].outcome, "aborted");
   assert.equal(stopped[1].pending, false);
+  // 只凭一条「已停止」的状态文字不判成停止:以收尾事件的 reason 为准
+  const plain = applyCloudEvents([], [...base, { type: "status", seq: 2, runId: "r", text: "已停止" }, { type: "end", seq: 3, runId: "r", state: "idle" }]);
+  assert.equal(plain[1].outcome, "completed");
 });
 
 /** 一个假的事件流:`script` 里每一项是一条连接要发的事件,发完按 `then` 收尾('close' 正常关 | 'throw' 抛网络错 | 'hang' 一直开着) */
@@ -246,9 +255,7 @@ test("CAU-SES-04 文字增量攒批后折进去,与逐条折相同", async () =>
 });
 
 test("CAU-EP-01 「云端」出不出现:放本机的项目没有,文档服务报了才有,开关关了置灰,在线页面地址固定", () => {
-  setCloudAgentSource(null);
   clearHostedAgent();
-  delete globalThis.__pcCloudAgent;
   const desk = (projectId, hostedWhere = true) => resolveCloudAgent({ projectId, hostedWhere, online: false });
   assert.deepEqual(desk(null), CLOUD_OFF, "没连共享项目");
   assert.deepEqual(desk("p1", false), CLOUD_OFF, "共享在局域网上(不是托管端)");
@@ -260,17 +267,18 @@ test("CAU-EP-01 「云端」出不出现:放本机的项目没有,文档服务�
   assert.deepEqual(desk("p1"), { available: true, enabled: false, url: "https://node.example/agent/v1" }, "开关关了:在,但 enabled 为假");
   setHostedAgent("p1", { available: false, enabled: true, url: "https://node.example/agent/v1" });
   assert.deepEqual(desk("p1"), CLOUD_OFF, "托管端没有云端 Agent");
+  setHostedAgent("p1", { available: true, enabled: true, url: "https://node.example/agent/v1" });
+  assert.deepEqual(desk("p1", false), CLOUD_OFF, "文档服务报了、但共享在局域网上:不算");
   clearHostedAgent();
-  // 可注入来源只在文档服务没给时、连着托管端的项目上才算
-  globalThis.__pcCloudAgent = { available: true, enabled: true, url: "http://127.0.0.1:8778/v1" };
-  assert.deepEqual(desk("p1"), { available: true, enabled: true, url: "http://127.0.0.1:8778/v1" });
-  assert.deepEqual(desk("p1", false), CLOUD_OFF);
-  assert.deepEqual(desk(null), CLOUD_OFF);
-  delete globalThis.__pcCloudAgent;
-  // 在线页面:同源的 /agent/v1,一直在
-  assert.deepEqual(resolveCloudAgent({ projectId: "p1", hostedWhere: true, online: true, origin: "https://h.example" }), { available: true, enabled: true, url: "https://h.example/agent/v1" });
+  // 在线页面:成员列表到之前先按同源的 /agent/v1、开着算;到了以它为准
+  const online = () => resolveCloudAgent({ projectId: "p1", hostedWhere: true, online: true, origin: "https://h.example" });
+  assert.deepEqual(online(), { available: true, enabled: true, url: "https://h.example/agent/v1" });
   setHostedAgent("p1", { available: true, enabled: false, url: null });
-  assert.equal(resolveCloudAgent({ projectId: "p1", hostedWhere: true, online: true, origin: "https://h.example" }).enabled, false);
+  assert.deepEqual(online(), { available: true, enabled: false, url: "https://h.example/agent/v1" }, "托管端没配公网地址:仍是同源的那个");
+  setHostedAgent("p1", { available: true, enabled: true, url: "https://node.example/agent/v1/" });
+  assert.deepEqual(online(), { available: true, enabled: true, url: "https://node.example/agent/v1" }, "地址用文档服务下发的");
+  setHostedAgent("p1", { available: false, enabled: true });
+  assert.deepEqual(online(), CLOUD_OFF, "这台托管端没有云端 Agent");
   clearHostedAgent();
 });
 
@@ -310,9 +318,21 @@ test("CAU-API-01 请求带票据与对话委托、不带 Cookie;错误码换成�
   assert.equal(normalizeChatItem({}), null);
 });
 
-test("CAU-ID-01 身份是可注入的接口位:没注入且没有替身时抛 no-identity,请求一个都不发", async () => {
+test("CAU-API-02 委托要不到时不发请求,原因换成给用户看的话", async () => {
+  let fetched = 0;
+  const fetchImpl = async () => { fetched++; return Response.json({ ok: true, runId: "r", seq: 1 }, { status: 202 }); };
+  const base = { baseUrl: () => "https://h.example/agent/v1", fetchImpl };
+  const refuse = (reason) => async () => { throw new CloudDelegationError(reason); };
+  await assert.rejects(() => createCloudApi({ ...base, ticket: refuse("service-disabled") }).info(), (e) => e instanceof CloudError && e.code === "disabled" && e.message === "项目创建者已关闭云端 Agent。");
+  await assert.rejects(() => createCloudApi({ ...base, ticket: refuse("closed") }).list(), (e) => e instanceof CloudError && e.code === "unavailable");
+  await assert.rejects(() => createCloudApi({ ...base, ticket: refuse("forbidden") }).info(), (e) => e instanceof CloudError && e.code === "unauthorized");
+  // 票据要得到、对话委托要不到:消息不发(不带委托发出去只会换回 bad-grant)
+  await assert.rejects(() => createCloudApi({ ...base, ticket: async () => "T", grant: refuse("service-disabled") }).send("c-1", { prompt: "x" }), (e) => e instanceof CloudError && e.code === "disabled");
+  assert.equal(fetched, 0, "一个请求都没发");
+});
+
+test("CAU-ID-01 身份只有注入这一个来源:没注入抛 no-identity,请求一个都不发", async () => {
   setCloudIdentity(null);
-  delete globalThis.__pcCloudIdentity;
   await assert.rejects(() => cloudTicket(), (e) => e instanceof CloudIdentityError);
   let fetched = 0;
   const api = createCloudApi({ baseUrl: () => "https://h.example/agent/v1", fetchImpl: async () => { fetched++; return Response.json({}); } });
@@ -322,10 +342,37 @@ test("CAU-ID-01 身份是可注入的接口位:没注入且没有替身时抛 no
   assert.equal(await cloudTicket(), "T1");
   assert.equal(await cloudGrant("c"), "G-c");
   setCloudIdentity(null);
-  globalThis.__pcCloudIdentity = { getTicket: async () => "STUB" };
-  assert.equal(await cloudTicket(), "STUB");
-  assert.equal(await cloudGrant("c"), undefined);
-  delete globalThis.__pcCloudIdentity;
+});
+
+test("CAU-ID-02 守门:没有探针用的全局回退口子", async () => {
+  // 设了这两个全局变量也不起作用
+  setCloudIdentity(null);
+  clearHostedAgent();
+  globalThis.__pcCloudIdentity = { getTicket: async () => "STUB", getGrant: async () => "STUB-GRANT" };
+  globalThis.__pcCloudAgent = { available: true, enabled: true, url: "http://127.0.0.1:8778/v1" };
+  try {
+    assert.equal(hasCloudIdentity(), false);
+    await assert.rejects(() => cloudTicket(), (e) => e instanceof CloudIdentityError);
+    await assert.rejects(() => cloudGrant("c"), (e) => e instanceof CloudIdentityError);
+    assert.deepEqual(resolveCloudAgent({ projectId: "p1", hostedWhere: true, online: false }), CLOUD_OFF);
+  } finally {
+    delete globalThis.__pcCloudIdentity;
+    delete globalThis.__pcCloudAgent;
+  }
+  // 页面源码(src/ 下除测试外的全部 .ts / .tsx)里不出现这两个名字,也没有别的「可注入来源」
+  const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const hits = [];
+  const walk = (dir) => {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, item.name);
+      if (item.isDirectory()) { walk(p); continue; }
+      if (!/.(ts|tsx)$/.test(item.name) || /.test./.test(item.name)) continue;
+      const text = fs.readFileSync(p, "utf8");
+      for (const name of ["__pcCloudIdentity", "__pcCloudAgent", "setCloudAgentSource"]) if (text.includes(name)) hits.push(`${path.relative(src, p)}: ${name}`);
+    }
+  };
+  walk(src);
+  assert.deepEqual(hits, []);
 });
 
 test("CAU-SES-05 服务端的对话从头开始了(seq 比页面看到的还小):掐掉旧流、从 0 重读,新的一轮照样显示", async () => {

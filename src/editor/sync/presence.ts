@@ -27,6 +27,8 @@ export interface RemoteAgent {
   id: string;
   member: string;
   vendor: string | null;
+  /** 这是那位成员的云端 Agent(来源身份带 `service: 'agent'`) */
+  cloud?: boolean;
   scope: string;
   expiresAt: number;
 }
@@ -108,6 +110,7 @@ function ingest(e: Record<string, unknown>) {
     id,
     member: memberOf(from.userId) ?? "?",
     vendor: typeof data.vendor === "string" ? data.vendor : null,
+    ...(from.service === "agent" ? { cloud: true } : {}),
     scope: data.scope,
     expiresAt: typeof e.expiresAt === "number" ? e.expiresAt : Date.now() + 30 * 60_000,
   });
