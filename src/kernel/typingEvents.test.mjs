@@ -44,3 +44,19 @@ test('typing rejects resource excess and malformed timing instead of truncating'
   for (const options of [{text:'a'.repeat(10001)}, {text:'a',duration:NaN}, {text:'a',duration:-1}, {text:'a',duration:1,jitterMs:2}, {text:'a',seed:1.5}, {text:'a',pauses:[{afterIndex:1,durationMs:2}]}]) assert.throws(()=>createTypingSchedule(options));
   assert.throws(()=>typingScheduleOptionsFromParams({text:'a',duration:'120'}),/number/);
 });
+
+test('typing frame-boundary times with float error still show the character (default params match the old integer-ms clock)', () => {
+  const s = createTypingSchedule({ text: 'Hello, PromptCut typing!', duration: 120 });
+  const fps = 30;
+  // 整帧边界:每字 120 ms,6 帧=200 ms,所以 18、36、54、72 帧恰好落在字边界上。舞台把「帧时刻相减」的秒数乘 1000 传入。
+  for (const startFrame of [51, 165, 237, 327, 411, 507]) {
+    for (let k = 1; k <= s.events.length; k++) {
+      const frames = (k * 120 * fps) / 1000;
+      if (!Number.isInteger(frames)) continue;
+      const t = (startFrame + frames) / fps - startFrame / fps;
+      assert.equal(typingTextAt(s, t * 1000), s.source.text.slice(0, k), `start ${startFrame} char ${k} t=${t}`);
+    }
+  }
+  // 容差只吸收浮点误差:差 0.001 ms 仍然是上一个字
+  assert.equal(typingTextAt(s, 120 - 0.001), '');
+});

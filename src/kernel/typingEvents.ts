@@ -101,13 +101,21 @@ export function createTypingSchedule(options: TypingScheduleOptions): TypingSche
   return { version: TYPING_SCHEDULE_VERSION, source, events, settleMs: events.at(-1)?.atMs ?? 0 };
 }
 
+/**
+ * 事件边界的浮点容差(毫秒)。舞台给的 t 是「帧时刻相减再乘 1000」,整帧边界会差出 1e-13 量级
+ * (如 69/30 - 51/30 = 0.5999999999999999,换成毫秒是 599.9999999999999),不加容差,边界那一帧会少一个字,
+ * 与旧实现(整数毫秒时钟)逐帧对不上。1e-6 ms(1 纳秒)远小于任何真实的事件间隔与音频采样间隔。
+ */
+export const TYPING_BOUNDARY_EPSILON_MS = 1e-6;
+
 /** Inclusive event boundary; binary search supports arbitrary seek without replaying state. */
 export function typingTextAt(schedule: TypingSchedule, elapsedMs: number): string {
   if (Number.isNaN(elapsedMs)) return "";
+  const limit = elapsedMs + TYPING_BOUNDARY_EPSILON_MS;
   let lo = 0, hi = schedule.events.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (schedule.events[mid].atMs <= elapsedMs) lo = mid + 1;
+    if (schedule.events[mid].atMs <= limit) lo = mid + 1;
     else hi = mid;
   }
   return lo ? schedule.source.text.slice(0, schedule.events[lo - 1].endOffset) : "";
