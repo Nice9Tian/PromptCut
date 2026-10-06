@@ -297,7 +297,7 @@ export async function chunkStatus(root: string, hash: string, store: AssetBlobSt
   return store.chunks(hash);
 }
 
-async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, rawN: string, ns: AssetNamespace = "media") {
+async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, rawN: string, ns: AssetNamespace = "media", writer: WriteTrace = NO_TRACE) {
   if (!/^(0|[1-9]\d*)$/.test(rawN)) return reject(req, res, 400, { ok: false, error: "bad-chunk-number" });
   const n = Number(rawN);
   const sizeHeader = String(req.headers["x-media-size"] || "").trim();
@@ -312,10 +312,22 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
     return reject(req, res, 400, { ok: false, error: "chunk-length", expected, got: Number(declared) });
   }
 
+  // 托管方服务(渲染服务)写新块:先看容量上限,到了只拦它(成员的写入不走这里);块早已入库的没有新字节,不占名额
+  const usage = writer.usage;
+  const accounted = !!(usage && writer.service && usage.accounts(writer.service));
+  let reservedHere = false;
+  if (accounted && usage && !usage.has(ns, hash) && !(await store.stat(hash))) {
+    if (!usage.reserve(ns, hash, size)) return reject(req, res, 507, { ok: false, error: "service-quota" });
+    reservedHere = true;
+  }
+  // 没有服务标记的写入(成员或本机)写到了渲染服务记过账的块:这个块不再只归服务
+  if (usage && !writer.service) usage.disown(ns, hash);
+
   let out;
   try {
     out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req, ns) }, req);
   } catch (err) {
+    if (reservedHere) usage?.release(ns, hash);
     // 磁盘满:这一片的标记没补(不算收到),已收的分片不动;请求体可能还在路上,回完就掐断
     if (isStorageFull(err)) return reject(req, res, 507, { ok: false, error: "insufficient-storage" });
     // 断线:对面已经不在了,回什么都收不到;这一片的标记没补,对账时报「没收到」
@@ -333,8 +345,17 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
   }
 }
 
-async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: string, ns: AssetNamespace = "media") {
+async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: string, ns: AssetNamespace = "media", writer: WriteTrace = NO_TRACE) {
+  const usage = writer.usage;
+  const accounted = !!(usage && writer.service && usage.accounts(writer.service) && writer.projectId);
+  // 收尾之前这个块已经入库:不是这次新写的(成员写的不记;渲染服务自己写过的只补项目归属)
+  const existed = accounted ? !!(await store.stat(hash)) : true;
   const out = await store.complete(hash);
+  if (usage && accounted && out.status === "hash-mismatch") usage.release(ns, hash); // 这一哈希已收的分片全部丢弃,在途名额放掉
+  if (usage && out.status === "ok") {
+    if (!writer.service) usage.disown(ns, hash);
+    else if (accounted && (!existed || usage.has(ns, hash))) usage.record({ ns, hash, size: out.size, projectId: writer.projectId as string });
+  }
   switch (out.status) {
     case "ok": return sendJson(res, 200, { ok: true, hash, size: out.size, complete: true, url: ns === "media" ? `/@media/${hash}` : `/api/asset/${ns}/${hash}` });
     case "unknown": return sendJson(res, 404, { ok: false, error: "unknown-hash" });
@@ -394,6 +415,10 @@ export function isLoopbackRequest(req: IncomingMessage): boolean {
   return address !== null && isLocalOrigin(req, address);
 }
 
+/** 这次写入的来历,容量记账用 */
+interface WriteTrace { usage?: ServiceUsageHook | null; service?: string; projectId?: string }
+const NO_TRACE: WriteTrace = {};
+
 /** 核对素材票据(`server/auth/asset-tickets.mjs`) */
 export interface AssetTicketVerifier {
   verify(ticket: string): { ok: true; access: "r" | "rw"; projectId: string; userId: string; service?: string } | { ok: false; reason: string };
@@ -416,7 +441,8 @@ function queryTicketOf(req: IncomingMessage): string | null {
   return t ? t : null;
 }
 
-type Access = { ok: true } | { ok: false; status: 401 | 403; error: "unauthorized" | "forbidden" };
+/** 放行时带上这次写入是谁的票据(服务身份的票据有 `service`,`projectId` 是票据限定的项目;容量记账用) */
+type Access = { ok: true; service?: string; projectId?: string } | { ok: false; status: 401 | 403; error: "unauthorized" | "forbidden" };
 const DENY_401: Access = { ok: false, status: 401, error: "unauthorized" };
 const DENY_403: Access = { ok: false, status: 403, error: "forbidden" };
 
@@ -440,7 +466,7 @@ function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVeri
     if (!v.ok) return DENY_401;
     if (write && v.access !== "rw") return DENY_403;
     if (write && v.service && ns !== "snap" && ns !== "px") return DENY_403;
-    return { ok: true };
+    return { ok: true, service: v.service, projectId: v.projectId };
   }
   if (write) return DENY_401; // 写入一律不认查询串
   const q = queryTicketOf(req);
@@ -520,7 +546,24 @@ export function assetPreflightMiddleware() {
  * - `isTrusted`:哪些请求算本机,缺省 `isLoopbackRequest`。
  * 集群令牌(C5 的 `token` 选项)已退役:给了也不认。
  */
+/**
+ * 托管方服务写成的块的容量记账(`asset-store/service-usage.mjs`,契约 `docs/plan/hosted-render-contract.md` 第 6 节)。
+ * 只有托管组合给;票据核对结果带 `service` 且 `accounts(service)` 为真的写入才记账、才受上限约束,成员的写入不受影响。
+ */
+export interface ServiceUsageHook {
+  accounts(service: string): boolean;
+  has(ns: string, hash: string): boolean;
+  /** 新块放行与否(占在途名额);放不下回 false */
+  reserve(ns: string, hash: string, size: number): boolean;
+  record(rec: { ns: string; hash: string; size: number; projectId: string }): void;
+  release(ns: string, hash: string): void;
+  /** 别人写了同一个块:不再只归服务 */
+  disown(ns: string, hash: string): boolean;
+}
+
 export interface AssetServiceOptions {
+  /** 托管方服务写入的容量记账(只有托管组合给);缺省与 null 都表示不记账 */
+  serviceUsage?: ServiceUsageHook | null;
   stores?: { media?: AssetBlobStore; snap?: AssetBlobStore; px?: AssetBlobStore };
   store?: AssetBlobStore;
   tickets?: AssetTicketVerifier | null;
@@ -618,8 +661,8 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
         return typeof mod.fetchRemoteArtifact === "function" ? await mod.fetchRemoteArtifact(ns, hash) : null;
       } catch { return null; }
     });
-  /** 放不放行;不放行时已经回了 401 / 403 */
-  const admit = async (req: IncomingMessage, res: ServerResponse, write: boolean, ns?: string): Promise<boolean> => {
+  /** 放不放行;不放行时已经回了 401 / 403(回 null);放行回这次访问的来历 */
+  const admit = async (req: IncomingMessage, res: ServerResponse, write: boolean, ns?: string): Promise<Extract<Access, { ok: true }> | null> => {
     // 带查询串票据的响应:不缓存、不带 Referer 出去(契约第 8 节)
     if (queryTicketOf(req) !== null) {
       res.setHeader("Cache-Control", "no-store");
@@ -628,9 +671,9 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     let trusted = false;
     try { trusted = !!isTrusted(req); } catch { trusted = false; }
     const access = accessOf(req, write, trusted ? null : await ticketsOf(), () => trusted, ns);
-    if (access.ok) return true;
+    if (access.ok) return access;
     reject(req, res, access.status, { ok: false, error: access.error });
-    return false;
+    return null;
   };
   const handler = async function assetService(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
     if (isAssetMergePath(req.url)) return answerMerge(req, res);
@@ -674,14 +717,16 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       }
       if (tail === "complete") {
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
-        if (!(await admit(req, res, true, ns))) return;
-        await handleComplete(res, store, hash, ns);
+        const who = await admit(req, res, true, ns);
+        if (!who) return;
+        await handleComplete(res, store, hash, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId });
         if (ns === "px" && pxEvictor) { touchPx(hash); void pxEvictor.then((ev) => ev?.onStored()); }
         return;
       }
       if (method !== "PUT") return reject(req, res, 405, { ok: false, error: "method" });
-      if (!(await admit(req, res, true, ns))) return;
-      return await handlePutChunk(req, res, store, hash, tail, ns);
+      const who = await admit(req, res, true, ns);
+      if (!who) return;
+      return await handlePutChunk(req, res, store, hash, tail, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId });
     } catch (err) {
       // 收尾时磁盘满:数据层没有入库、暂存保留(fs 实现的收尾只在成功改名后才删暂存)
       if (isStorageFull(err)) return sendJson(res, 507, { ok: false, error: "insufficient-storage" });

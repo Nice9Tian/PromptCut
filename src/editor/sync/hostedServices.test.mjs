@@ -70,7 +70,7 @@ async function withRows(fn) {
   const server = await createServer({ root: ROOT, configFile: false, logLevel: "error", server: { middlewareMode: true, hmr: false, ws: false, watch: null },
     appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   try {
-    const M = await server.ssrLoadModule("/src/editor/sync/HostedServices.tsx");
+    const M = await server.ssrLoadModule("/src/editor/sync/HostedServiceRows.tsx");
     const render = (props) => renderToStaticMarkup(React.createElement(M.HostedServiceRows, { onToggle: () => {}, ...props }));
     await fn({ M, render });
   } finally {

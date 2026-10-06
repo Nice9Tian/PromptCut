@@ -16,7 +16,7 @@ import { ONLINE } from "../../online/mode";
 import { hosted, type SharedMode, type Where } from "./sharedApi";
 import { ListEditor, LanRestartHint, readHostedUrl, writeHostedUrl } from "./SharedDialogs";
 import { CreatorFlow, type Flow } from "./MembersPanel";
-import { HostedServiceRows } from "./HostedServices";
+import { HostedServiceRows } from "./HostedServiceRows";
 import { useSync, moveSharedToHosted, moveSharedToLan } from "./syncManager";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
