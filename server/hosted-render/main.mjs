@@ -18,6 +18,7 @@
  *   PROMPTCUT_RENDER_MAX_PROJECTS     同时连着的项目数，缺省 16
  *   PROMPTCUT_RENDER_MEMORY_MAX / _MEMORY_HIGH   内存硬上限与节流线，缺省 6G / 5G
  *   PROMPTCUT_RENDER_CPU_QUOTA        缺省 400%
+ *   PROMPTCUT_RENDER_MEM_LOW          背压的可用内存线，本机可用内存低于它就暂停认领，缺省 2G
  *   PROMPTCUT_RENDER_USER             工作进程用的系统用户（只在有 systemd 时经 --uid 生效）；空表示与管理进程同一用户
  *   PROMPTCUT_RENDER_CGROUP           auto（缺省：有 systemd 与 cgroup v2 就用）| off
  *   PROMPTCUT_RENDER_USER_CARDS       isolated | off（第 5 批才实现隔离工作进程；现在两种取值下常驻工作进程都不同步卡）
@@ -81,6 +82,12 @@ export function renderServiceConfig(env = process.env) {
     memoryMax,
     memoryHigh,
     cpuQuota: env.PROMPTCUT_RENDER_CPU_QUOTA || LIMIT_DEFAULTS.cpuQuota,
+    memLowBytes: (() => {
+      if (!env.PROMPTCUT_RENDER_MEM_LOW) return LIMIT_DEFAULTS.memLowBytes;
+      const n = parseBytes(env.PROMPTCUT_RENDER_MEM_LOW);
+      if (n === null) throw Object.assign(new Error('PROMPTCUT_RENDER_MEM_LOW 写法不对（如 2G、512M）'), { code: 'bad-config' });
+      return n;
+    })(),
     user: env.PROMPTCUT_RENDER_USER || '',
     cgroup: env.PROMPTCUT_RENDER_CGROUP === 'off' ? 'off' : 'auto',
     userCards: env.PROMPTCUT_RENDER_USER_CARDS === 'off' ? 'off' : 'isolated',
@@ -211,7 +218,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   });
 
   // ---------- 背压、内存看护、代码版本
-  const backpressure = createBackpressure();
+  const backpressure = createBackpressure({ memLowBytes: config.memLowBytes });
   const oom = createOomTracker();
   let readings = { memAvailable: null, healthMs: null, load1: null, workerRss: null, at: null };
   let codeVersion = compareCodeVersions({ self: null });
