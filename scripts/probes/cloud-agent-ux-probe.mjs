@@ -44,7 +44,7 @@
  *       当时的版本发清单计划(中途就开始渲),项目接着往前走。补渲的结局是「渲染完成」,对话记录里没有 `render failed`。
  *   U18 渲染节点这一轮没有一个任务以失败收场:取不到旧版本时改按当前版本核对,内容没变的照做,已被新版本取代的记成作废
  *       (诊断里的 `superseded`,不计入 `failed`)。
- *   U19 渲完之后才上线的成员:不发任何渲染任务,取到的层表是最后一版的——三张卡各有一层、每层的输入签名与他读到的项目对得上
+ *   U19 渲完之后才上线的成员:不发任何渲染任务,取到的层表是最后一版的——这一轮改到的两张卡各有一层、每层的输入签名与他读到的项目对得上
  *       (不是旧参数的层)、帧数是最后一版的,各层的清单取得到。
  * 六、出错不悄悄丢(步骤 errors;发起方都已离线,事后从对话记录里看)
  *   U10 模型调用失败:对话记录里有「模型调用失败」,状态 failed / model;项目停在失败前最后一次成功写入。
@@ -529,7 +529,8 @@ async function main() {
     const listed = ((await bob.ask({ type: 'content.list', kind: 'snapshot-manifest' })).items ?? []).map((i) => i.key);
     const layers = Array.isArray(map.body?.layers) ? map.body.layers : [];
     const fps = p.project?.fps ?? 30;
-    const rows = ['clip-bars', ...HEAVY].map((clipId) => {
+    // 这一轮写到的是图表卡与推帧卡(画布卡没动,它的层是前面的步骤留下的,这里不核)
+    const rows = ['clip-bars', 'clip-stateful'].map((clipId) => {
       const layer = layers.find((l) => l.clipId === clipId) ?? null;
       const clip = clipOf(p.project, clipId);
       const frames = clip ? Math.round((clip.end - clip.start) * fps) : null;

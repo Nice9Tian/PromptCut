@@ -12,7 +12,7 @@
  *   项目(限定进入):创建者在桌面版形态的页面里建、放云端;成员 bob、carol。三张内置卡:两张探针重卡(`probe-slow-stepped`,每帧烧 40 毫秒,
  *   在线页面量出来就是重卡:播放时贴预渲染的快照)加一张带参数的图表卡。
  *
- *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,errors,spaced] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
+ *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,spaced,errors] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
  *        [--agent-port 5741] [--render-port 5830] [--dist <在线构建目录>] [--out <截图目录>] [--keep]
  *   端口:--base-port +0 编辑器页的源、+1 / +2 两个舞台的源、+3 桌面版编辑器(+4、+5 是它的舞台端口);`--render-port` +0/+1/+2 是渲染
  *   工作进程的三个端口,+6 是管理进程的诊断口。截图存 --out(缺省 `work/four-stage/cloud-agent/ux/`)。
@@ -56,7 +56,7 @@
  *   E5  发起成员中途被移出:她的对话被停下;她的页面当场被阻断并写明「你已被移出名单」(她已不在项目里,对话记录她读不到了),
  *       云端的对话记录里留着「已被移出」的原因;项目停在完好的版本上。
  *   每一种都断言:项目结构完好(三张卡都在)、版本号只多了成功写入的次数、之后 1.5 秒没有新的写入。
- * 七、写入之间隔得比补渲的防抖长(步骤 spaced;真模型的每次往返都是几秒,就是这种节奏。契约 `cloud-agent-contract.md` 第 16.4 节)
+ * 七、写入之间隔得比补渲的防抖长(步骤 spaced,排在 errors 之前跑;真模型的每次往返都是几秒,就是这种节奏。契约 `cloud-agent-contract.md` 第 16.4 节)
  *   K1  创建者的在线页面开着,云端 Agent 连写 12 处、每次隔 9 秒(补渲的防抖是 3 秒):每次写入之后 Agent 服务都按当时的版本发清单计划
  *       (中途就开始渲,不等一轮结束),项目接着往前走。补渲的结局是「渲染完成」,对话记录里没有「云端渲染失败」。
  *   K2  渲染节点这一轮没有一个任务以失败收场:取不到旧版本时改按当前版本核对,内容没变的照做,已被新版本取代的记成作废
@@ -80,7 +80,8 @@ import {
 
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
-const ALL_STEPS = ['desktop', 'online', 'stop', 'errors', 'spaced'];
+/** 顺序固定:spaced 在 errors 之前(errors 的最后会把渲染服务停掉) */
+const ALL_STEPS = ['desktop', 'online', 'stop', 'spaced', 'errors'];
 const STEPS = String(arg('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 const BASE = Number(arg('--base-port', 5790));
 const PORTS = { site: BASE, stageA: BASE + 1, stageB: BASE + 2, desktop: BASE + 3, doc: Number(arg('--doc-port', 8798)), asset: Number(arg('--asset-port', 8799)), agent: Number(arg('--agent-port', 5741)), render: Number(arg('--render-port', 5830)) };
@@ -812,8 +813,8 @@ try {
   if (STEPS.includes('desktop')) await leavePass('desktop', 'D', `${SALT}-d`);
   if (STEPS.includes('online')) await leavePass('online', 'O', `${SALT}-o`);
   if (STEPS.includes('stop')) await stopStep();
-  if (STEPS.includes('errors')) await errorsStep();
   if (STEPS.includes('spaced')) await spacedStep();
+  if (STEPS.includes('errors')) await errorsStep();
 } catch (err) {
   code = 2;
   check('探针自己没出错', false, { error: String(err?.stack ?? err).slice(0, 1200), agentLogTail: S?.agent ? S.agent.text().slice(-600) : null });
