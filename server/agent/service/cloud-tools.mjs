@@ -116,6 +116,8 @@ export const CLOUD_PLAYHEAD_TOOLS = Object.freeze(new Set(['switch_cut', 'add_cu
 
 /** 「发起方不在线」的回答(模型据此继续,不等) */
 export function initiatorOffline(tool) {
+  // 读选区的那一句是用户审过的原话(契约第 22.2 节),不改
+  if (tool === 'get_selection') return { ok: false, initiatorOffline: true, error: '发起方不在线,读不到页面的选区。请按项目内容继续,不要等待。' };
   const what = CLOUD_TOOL_PLAN[tool]?.what ?? '页面';
   return { ok: false, initiatorOffline: true, error: `发起方不在线,${tool} 要用到他的${what}。请按项目内容继续,不要等待。` };
 }
