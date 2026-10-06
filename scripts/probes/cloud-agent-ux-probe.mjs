@@ -54,6 +54,9 @@
  *   U14 渲染失败:渲染服务停着,对话照常做完,对话记录里有 `render failed` 与原因、涉及的片段;项目内容不受影响。
  *   每一种都断言:项目内容完好(结构不变、片段都在)、版本号等于成功写入的次数、之后 1.5 秒没有新的写入。
  * 附:节点资源(步骤 load,任务书完成条件第 9 条的本机版,数字只作参考)
+ *   U20 〔契约第 16 节 R8 改回方案 A〕云端 Agent 建一张用户卡(判重:`frameMode: stateful`)并用它加一个片段,发起方的进程被结束,
+ *       全程没有成员连接:卡片源码进了项目的内容库;补渲计划由渲染服务的**隔离工作进程**(`hosted-render-iso:` 节点)认领并渲完,
+ *       常驻工作进程对这个项目一个任务也没认领;之后才上线的成员不发任何渲染任务,取到的层表里有这张用户卡的那一层、块在素材服务里。
  *   U15 全节点同时进行的一轮不超过 6、每个项目不超过 3:超出的回 429 busy。
  *   U16 满载(6 轮对话同时写 + 渲染服务在渲)时文档服务 `/healthz` 与一次读项目的往返时延、同机素材服务的下载速度
  *       (一件 16 MiB 的素材连下 3 次),对比空闲时的,写明数字。
@@ -90,7 +93,7 @@ if (args.includes('--child')) {
 
   if (cfg.role === 'initiator') {
     // 页面的顺序:进项目 → 要对话委托 → 带委托票据发消息 → 接事件流。之后一直开着,直到被结束
-    const sent = await api.send(cfg.conversationId, cfg.prompt, { extra: cfg.pageState ? { pageState: cfg.pageState } : {} });
+    const sent = await api.send(cfg.conversationId, cfg.prompt, { extra: { ...(cfg.pageState ? { pageState: cfg.pageState } : {}), ...(cfg.creativity ? { creativity: cfg.creativity } : {}) } });
     out({ event: 'sent', status: sent.status, code: sent.code ?? null, runId: sent.runId ?? null });
     if (sent.status !== 202) process.exit(4);
     await api.events(cfg.conversationId, { after: 0, ms: 3_600_000, until: () => false, onEvent: (e) => out({ event: 'ev', type: e.type, seq: e.seq, ok: e.ok ?? null }) });
@@ -163,7 +166,7 @@ if (args.includes('--child')) {
 
 /* ================================================================== 主进程 */
 
-const ALL_STEPS = ['leave', 'later', 'reopen', 'stop', 'spaced', 'errors', 'load'];
+const ALL_STEPS = ['leave', 'later', 'reopen', 'stop', 'spaced', 'errors', 'usercard', 'load'];
 /** 步骤 spaced 里两次写入之间等多久(要大于补渲的防抖 3 秒) */
 const SPACED_GAP_MS = 9000;
 const STEPS = String(argOf('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
@@ -203,7 +206,7 @@ function startRender() {
     env: {
       ...env,
       PROMPTCUT_RENDER_DOC_URL: BASE, PROMPTCUT_RENDER_SECRETS: D.renderSecrets, PROMPTCUT_RENDER_DATA: D.render,
-      PROMPTCUT_RENDER_PORT: String(RENDER_PORT), PROMPTCUT_RENDER_STATUS_PORT: String(RENDER_PORT + 6),
+      PROMPTCUT_RENDER_PORT: String(RENDER_PORT), PROMPTCUT_RENDER_ISO_PORT: String(RENDER_PORT + 3), PROMPTCUT_RENDER_STATUS_PORT: String(RENDER_PORT + 6),
       PROMPTCUT_RENDER_MAX_CONCURRENT: '2', PROMPTCUT_RENDER_SAMPLE_MS: '2000', PROMPTCUT_RENDER_MEM_LOW: '256M',
       PROMPTCUT_RENDER_EDITOR_DIR: path.join(tmp, 'no-editor'), PROMPTCUT_RENDER_AGENT_STATUS_URL: `${AGENT_URL}/healthz`,
       ...(process.platform === 'win32' && !process.env.PROMPTCUT_TEST_ENV_FINGERPRINT ? { PROMPTCUT_TEST_ENV_FINGERPRINT: '7e57c10d00000002' } : {}),
@@ -315,7 +318,7 @@ const pct = (list, p) => { const s = [...list].sort((a, b) => a - b); return s.l
 
 async function main() {
   for (const s of STEPS) if (!ALL_STEPS.includes(s)) throw new Error(`不认识的步骤 ${s}`);
-  for (const [name, port] of [['文档服务', DOC_PORT], ['素材服务', ASSET_PORT], ['Agent 服务', AGENT_PORT], ['渲染工作进程', RENDER_PORT], ['渲染工作进程', RENDER_PORT + 1], ['渲染工作进程', RENDER_PORT + 2], ['渲染管理进程', RENDER_PORT + 6]]) {
+  for (const [name, port] of [['文档服务', DOC_PORT], ['素材服务', ASSET_PORT], ['Agent 服务', AGENT_PORT], ['渲染工作进程', RENDER_PORT], ['渲染工作进程', RENDER_PORT + 1], ['渲染工作进程', RENDER_PORT + 2], ['隔离工作进程', RENDER_PORT + 3], ['渲染管理进程', RENDER_PORT + 6]]) {
     if (await portBusy(port)) throw new Error(`端口 ${port}(${name})已被占用`);
   }
   runKeygen(['--hosted-data', D.hosted, '--secrets', D.renderSecrets, '--instance-name', '托管方的渲染节点(探针)']);
@@ -354,6 +357,79 @@ async function main() {
   let mainEvents = null;
   const N = 12;
   const rowsOf = (i) => `微信,${50 + i}|抖音,62|${salt},${i}`;
+
+  /* ---------------------------------------------------------------- 用户卡(单独一个项目,免得主项目带上卡片源码改走隔离工作进程) */
+  const usercardStep = async () => {
+    const cu = { ula: { username: 'ula', password: pw() }, uma: { username: 'uma', password: pw() } };
+    const pu = { ...(await createSharedProject({ base: BASE, name: `ux-uc-${tag}`, mode: 'restricted', creator: cu.ula, list: [cu.uma], kdf: KDF })), creator: cu.ula };
+    const UID = pu.projectId;
+    const devU = { deviceId: `ux-${tag}-ula-desktop-0001`, deviceName: 'ula 的电脑' };
+    {
+      const seed = await joinAs(BASE, pu, { ...cu.ula, as: 'creator', device: devU });
+      await putProject(seed, UID, {
+        version: 1, id: UID, name: '云端 Agent 用户体验探针·用户卡', width: 1920, height: 1080, fps: 30, duration: 2, themeId: 'dark', camera3dFov: 50,
+        media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {}, transitions: [],
+        tracks: [{ id: 'tr-0', name: 'tr-0', hidden: false, clips: [] }, { id: 'tr-1', name: 'tr-1', hidden: false, clips: [{ id: 'clip-builtin', kind: 'card', cardId: 'r6-canvas', start: 0, end: 2, params: { probeSalt: `${salt}-uc` } }] }],
+      });
+      seed.close();
+    }
+    // 夹具:只留一个记号、什么都不探的那张用户卡(判重的写法),由云端 Agent 用 create_card 建出来
+    const CARD_ID = 'overreach-marker-jia';
+    const source = fs.readFileSync(path.join(ROOT, 'scripts', 'probes', 'fixtures', 'render-isolation', 'overreach-marker-jia.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    const filesBefore = blobBytes();
+    const t0 = Date.now();
+    const left = await initiateAndLeave({
+      projectId: UID, username: 'ula', password: cu.ula.password, as: 'creator', device: devU, conversationId: 'ux-usercard', creativity: 'high',
+      prompt: mockScript([
+        { tool: 'create_card', input: { id: CARD_ID, source } },
+        { sleepMs: 1500 },
+        { tool: 'add_clip', input: { cardId: CARD_ID, start: 0, duration: 2, trackId: 'tr-0' } },
+        { say: '建了一张卡并放上了时间轴' },
+      ]),
+    }, 1);
+    await waitFor(async () => (await membersOnline(UID)) === false, 10_000, '成员连接都断开').catch(() => null);
+    let sawMembers = false;
+    const polling = setInterval(() => { void membersOnline(UID).then((m) => { if (m === true) sawMembers = true; }).catch(() => {}); }, 500);
+    const endLog = await waitFor(() => agent.logs.find((l) => l.event === 'agent.run.end' && l.projectId === UID), 120_000, '建卡的对话跑到结束', 200);
+    const rendered = await waitFor(() => agent.logs.find((l) => (l.event === 'agent.render.done' || l.event === 'agent.render.failed' || l.event === 'agent.render.unavailable' || l.event === 'agent.render.gave-up') && l.projectId === UID), 300_000, '含用户卡的补渲有结果', 500).catch(() => null);
+    timings.usercardRenderedMs = Date.now() - t0;
+    clearInterval(polling);
+    const disk = diskConversation(UID, 'ux-usercard');
+    const results = (disk?.events ?? []).filter((e) => e.type === 'tool_result').map((e) => `${e.name}:${e.ok ? 'ok' : `error ${String(e.summary ?? '').slice(0, 120)}`}`);
+    const st = await renderStatus();
+    const resident = (st.queue?.nodes ?? []).find((n) => n.projectId === UID) ?? null;
+    const iso = (st.isolation?.queue?.nodes ?? []).find((n) => n.projectId === UID) ?? null;
+    const uma = await joinAs(BASE, pu, cu.uma);
+    const p = await projectOf(uma, UID);
+    const clip = p.project?.tracks?.flatMap((t) => t.clips).find((c) => c.cardId === CARD_ID) ?? null;
+    const stored = await uma.ask({ type: 'content.get', kind: 'card-source', key: `src/cards/user/${CARD_ID}.tsx` });
+    const map = await uma.ask({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${UID}` });
+    const layerClips = Array.isArray(map.body?.layers) ? map.body.layers.map((l) => l.clipId) : [];
+    const ticket = await uma.ask({ type: 'auth.ticket', kind: 'asset', access: 'r' });
+    const list = await uma.ask({ type: 'content.list', kind: 'snapshot-manifest' });
+    let found = 0;
+    for (const key of (list.items ?? []).map((i) => i.key).filter((k) => !k.startsWith('layers:')).slice(0, 4)) {
+      const item = await uma.ask({ type: 'content.get', kind: 'snapshot-manifest', key });
+      for (const hash of [...new Set(JSON.stringify(item.body ?? {}).match(/\b[0-9a-f]{64}\b/g) ?? [])].slice(0, 4)) {
+        for (const ns of ['snap', 'px']) {
+          const res = await fetch(`http://127.0.0.1:${ASSET_PORT}/api/asset/${ns}/${hash}`, { method: 'HEAD', headers: { authorization: `Bearer ${ticket.ticket}` } });
+          if (res.status === 200) { found += 1; break; }
+        }
+      }
+    }
+    check('U20 云端 Agent 建一张用户卡并用它加片段,发起方进程被结束、没有成员在线:隔离工作进程把它渲出来,后来的成员取得到这一层', left.sent?.status === 202 && left.killed && endLog.state === 'idle'
+      && typeof stored.body === 'string' && !!clip && rendered?.event === 'agent.render.done' && sawMembers === false
+      && /^hosted-render-iso:/.test(String(iso?.nodeId ?? '')) && (iso?.completed ?? 0) > 0 && (iso?.failed ?? 0) === 0 && (resident?.claimed ?? 0) === 0
+      && map.type === 'content.item' && !map.missing && layerClips.includes(clip?.id) && found > 0 && blobBytes() > filesBefore && uma.all.filter((m) => m.type === 'task.published').length === 0, {
+      sent: left.sent?.status ?? null, initiatorGone: left.killed, end: endLog.state, toolResults: results, cardSourceInLibrary: typeof stored.body === 'string', 
+      clipWithUserCard: clip ? { id: clip.id, cardId: clip.cardId } : null, outcome: rendered?.event ?? '没有结果', renderedMs: timings.usercardRenderedMs, membersEverOnline: sawMembers,
+      isolatedWorker: iso ? { nodeId: String(iso.nodeId).slice(0, 34), claimed: iso.claimed, completed: iso.completed, failed: iso.failed } : null,
+      residentWorker: resident ? { claimed: resident.claimed, hold: resident.hold ?? null, cards: resident.cards?.state ?? null } : null,
+      ...(rendered?.event === 'agent.render.done' ? {} : { isolationStatus: st.isolation ?? null, renderLog: render ? render.logs.filter((l) => /iso|isolat|card/i.test(JSON.stringify(l))).slice(-12).map((l) => JSON.stringify(l).slice(0, 260)) : null, agentRenderLog: agent.logs.filter((l) => /render|publish/.test(String(l.event)) && l.projectId === UID).slice(-8).map((l) => JSON.stringify(l).slice(0, 220)) }),
+      layerMapHasUserCardLayer: layerClips.includes(clip?.id), layers: layerClips.length, blobsFound: found, assetFiles: [filesBefore, blobBytes()],
+    });
+    uma.close();
+  };
 
   /* ---------------------------------------------------------------- 一、二 */
   if (STEPS.includes('leave')) {
@@ -643,6 +719,8 @@ async function main() {
   }
 
   /* ---------------------------------------------------------------- 附:节点资源 */
+  if (STEPS.includes('usercard')) await usercardStep();
+
   if (STEPS.includes('load')) {
     bob ??= await joinAs(BASE, proj, creds.bob);
     if (agent.shortStall) await bootAgent();

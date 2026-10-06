@@ -1493,6 +1493,8 @@ export function createAgentInstance(env) {
     startHostedRun,
     /** 这个实例绑着的项目副本与各对话读到的版本(诊断);没绑回 null */
     describe: () => (agentBinding ? agentBinding.side.describe() : null),
+    /** 托管档:这个项目的内容库里有没有卡片源码(有的话由渲染服务的隔离工作进程渲,补渲要排队) */
+    hasProjectCards: () => (hostedShared?.cards.items.size ?? 0) > 0,
     /** 此刻的项目副本与它的版本(托管档的宿主挑要补渲的片段用);没绑或还没内容回 null */
     replica: () => {
       const r = agentBinding?.side?.link?.replica;

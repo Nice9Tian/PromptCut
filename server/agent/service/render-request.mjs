@@ -33,6 +33,11 @@ export const RENDER_REQUEST_DEFAULTS = Object.freeze({
   maxClipsPerPlan: 200,
   /** 连续这么久没有任何进度就放弃 */
   stallMs: 10 * 60_000,
+  /**
+   * 项目带着用户卡时的那个时限:这样的项目由渲染服务的隔离工作进程渲——同时只渲一个项目、冷启动约 10 秒、
+   * 多个项目在等时每个最多 5 分钟一换,所以轮到它之前可以很久没有任何进度。按「前面排着五个项目」加冷启动留足
+   */
+  userCardStallMs: 30 * 60_000,
   /** 绝对上限 */
   maxMs: 12 * 60 * 60_000,
   /** `render progress` 事件至多多久一条 */
@@ -45,6 +50,8 @@ export const RENDER_REQUEST_DEFAULTS = Object.freeze({
 export const MEDIA_CARD_IDS = Object.freeze(new Set(['video', 'image', 'audio']));
 
 export const STALL_REASON = '渲染节点 10 分钟没有进展';
+/** 带用户卡的项目(隔离工作进程渲,要排队)放弃时的原因 */
+export const USER_CARD_STALL_REASON = '渲染节点 30 分钟没有进展(带用户卡的项目要排队渲)';
 
 /** 从项目里挑出这些 id 中要预渲染的片段(还在项目里、不是素材片段) */
 export function renderableClips(project, clipIds) {
@@ -292,11 +299,11 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
     const at = now();
     for (const job of [...jobs.values()]) {
       for (const plan of [...job.plans.values()]) {
-        const stalled = at - plan.lastProgressAt >= limits.stallMs;
+        const stalled = at - plan.lastProgressAt >= (job.userCards ? limits.userCardStallMs : limits.stallMs);
         const tooLong = at - plan.publishedAt >= limits.maxMs;
         if (!stalled && !tooLong) continue;
         void withdraw(job, plan.id);
-        report(job, { state: 'failed', clips: plan.clips, reason: stalled ? STALL_REASON : '渲染超过了 12 小时的上限' });
+        report(job, { state: 'failed', clips: plan.clips, reason: stalled ? (job.userCards ? USER_CARD_STALL_REASON : STALL_REASON) : '渲染超过了 12 小时的上限' });
         say('agent.render.gave-up', { projectId: job.projectId, clips: plan.clips.length, why: stalled ? 'stalled' : 'max' });
         persist(job);
         closeChannelIfIdle(job.projectId);
@@ -314,11 +321,13 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
      * 一次写入落地了。`project` 是写入之后的项目内容(挑要渲的片段用),`rev` 是它的版本。
      * @param {{ projectId: string, ownerKey: string, id: string }} ref 哪个对话
      */
-    noteWrite(ref, { clipIds = [], rev, project, runId = null } = {}) {
+    noteWrite(ref, { clipIds = [], rev, project, runId = null, userCards = false } = {}) {
       if (!publisher || closed) return;
       const clips = renderableClips(project, clipIds);
       const job = jobOf(ref, clips.length > 0);
       if (!job) return;
+      // 项目带着用户卡:由隔离工作进程渲,判「没有进度」的时限放长(见 userCardStallMs)
+      if (userCards) job.userCards = true;
       if (Number.isSafeInteger(rev)) job.rev = rev;
       if (runId) job.runId = runId;
       if (!clips.length) return;
@@ -353,6 +362,8 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
         job.finished ??= [];
         job.rev = rev;
         job.runId = typeof saved.runId === 'string' ? saved.runId : null;
+        // 重启后不知道这个项目带不带用户卡:按带着的时限等(多等不会出错,少等会把排着队的计划误判成放弃)
+        job.userCards = true;
         for (const c of clips) job.dirty.add(c);
         n += 1;
         await publish(job);

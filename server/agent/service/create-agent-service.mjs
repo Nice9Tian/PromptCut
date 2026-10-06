@@ -254,7 +254,7 @@ export function createHostedAgentService({
     const conv = entry.runs.get(conversationId);
     if (!conv?.run) return;
     const replica = entry.inst.replica();
-    render.noteWrite(conv, { clipIds: write?.clipIds ?? [], rev: write?.rev ?? replica?.rev, project: replica?.project ?? null, runId: conv.run.runId });
+    render.noteWrite(conv, { clipIds: write?.clipIds ?? [], rev: write?.rev ?? replica?.rev, project: replica?.project ?? null, runId: conv.run.runId, userCards: entry.inst.hasProjectCards?.() === true });
   }
 
   /**
