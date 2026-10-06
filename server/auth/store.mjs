@@ -129,6 +129,14 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
   }
   log('auth.store.open', { projects: records.size });
 
+  /** 记录变化的监听（托管端的目录模块用，`docs/plan/hosted-render-contract.md` 第 2 节）：建、改、删、搬迁装入之后各调一次 */
+  const listeners = new Set();
+  const changed = (type, projectId) => {
+    for (const fn of [...listeners]) {
+      try { fn({ type, projectId }); } catch (err) { log('auth.store.listener-error', { message: String(err?.message ?? err) }); }
+    }
+  };
+
   const fileOf = (projectId) => path.join(projectsDir, `${projectId}.json`);
   const persist = (rec) => writeAtomic(fileOf(rec.projectId), `${JSON.stringify(rec, null, 2)}\n`);
 
@@ -138,6 +146,13 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
     serverSecret: Buffer.from(secret, 'base64url'),
 
     count: () => records.size,
+
+    /** 订阅记录变化：`fn({ type: 'create' | 'update' | 'remove' | 'install', projectId })`，落盘并换进内存之后调。回退订函数 */
+    onChange(fn) {
+      if (typeof fn !== 'function') throw new TypeError('onChange: 要给函数');
+      listeners.add(fn);
+      return () => { listeners.delete(fn); };
+    },
 
     /** 记录的副本；没有回 null */
     get(projectId) {
@@ -187,6 +202,7 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
       if (prior && JSON.stringify(prior) === JSON.stringify(rec)) return clone(prior);
       const draft = clone(rec); persist(draft); records.set(rec.projectId, draft);
       if (prior) names.delete(nameKey(prior.name)); names.set(nameKey(draft.name), draft.projectId); indexInvite(draft, prior);
+      changed('install', draft.projectId);
       return clone(draft);
     },
 
@@ -220,6 +236,7 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
       persist(rec);
       records.set(projectId, rec);
       names.set(nameKey(name), projectId);
+      changed('create', projectId);
       return clone(rec);
     },
 
@@ -237,6 +254,7 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
       persist(draft);
       records.set(projectId, draft);
       indexInvite(draft, cur);
+      changed('update', projectId);
       return clone(draft);
     },
 
@@ -252,6 +270,7 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
       records.delete(projectId);
       names.delete(nameKey(rec.name));
       indexInvite(null, rec); // 删项目：邀请码一并删除（C10a 第 5 节）
+      changed('remove', projectId);
       return true;
     },
 
