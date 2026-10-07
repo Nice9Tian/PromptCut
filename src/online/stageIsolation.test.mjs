@@ -10,7 +10,7 @@ import {
   onlineCardExec, subscribeOnlineCardExec, pageStageIsolation, resetPageStageIsolationForTest,
 } from "./stageIsolation.ts";
 
-const OK = { ok: true, crossOrigin: true, csp: "header", egress: "allowlist", hardened: true, trustedTypes: "enforced", reasons: [] };
+const OK = { ok: true, crossOrigin: true, csp: "header", egress: "none", hardened: true, trustedTypes: "unsupported", reasons: [] };
 const BAD = { ok: false, crossOrigin: true, csp: "meta", egress: "script", hardened: true, trustedTypes: "enforced", reasons: ["meta-only"] };
 const SID = "0123456789abcdef0123456789abcdef";
 const TICKET = "v1.payload-payload-payload.signature-signature";
@@ -46,7 +46,7 @@ test("OCS-S-01 舞台 iframe 的 sandbox 只开脚本与保有自己的源两项
 test("OCS-S-02 舞台发来的自检结果按形状校验,结论不信舞台自己下的、按各项事实重算", () => {
   assert.deepEqual(sanitizeIsolationReport(OK), OK);
   // 舞台自称通过,但事实不齐:重算成不通过
-  for (const lie of [{ ...OK, csp: "meta" }, { ...OK, csp: "none" }, { ...OK, crossOrigin: false }, { ...OK, hardened: false }, { ...OK, egress: "none" }, { ...OK, reasons: ["meta-only"] }]) {
+  for (const lie of [{ ...OK, csp: "meta" }, { ...OK, csp: "none" }, { ...OK, crossOrigin: false }, { ...OK, hardened: false }, { ...OK, reasons: ["meta-only"] }]) {
     assert.equal(sanitizeIsolationReport(lie).ok, false, JSON.stringify(lie));
   }
   // 多出来的字段丢掉;认不出的原因丢掉
@@ -65,7 +65,7 @@ test("OCS-S-03 两台都自检通过、票据交接成功:都走 cookie(基址 /
   const { a, b } = await bothIsolated(iso);
   assert.deepEqual(a, { mode: "cookie", base: `/media-s/${SID}`, ticket: null, cardExec: false }, "另一台还没好:先不点头");
   assert.deepEqual(b, { mode: "cookie", base: `/media-s/${SID}`, ticket: null, cardExec: true });
-  assert.deepEqual(iso.state(), { enabled: true, reason: "ok", detail: {}, egress: "allowlist" });
+  assert.deepEqual(iso.state(), { enabled: true, reason: "ok", detail: {}, egress: "none" });
   assert.deepEqual(state.grants, [{ origin: S1, sid: SID, ticket: TICKET }, { origin: S2, sid: SID, ticket: TICKET }]);
   // 同一张票据不重复交接;这回两台都点头
   const again = await iso.plan("A", { dual: true, stageOrigin: S1, ticket: TICKET });
@@ -85,14 +85,14 @@ test("OCS-S-03 两台都自检通过、票据交接成功:都走 cookie(基址 /
   assert.equal(iso.sid, SID);
 });
 
-test("OCS-S-04 有一台靠脚本加固拦 WebRTC:照样可执行,但记成 egress: script", async () => {
+test("OCS-S-04 浏览器没有出口白名单或Trusted Types:分源和交接就绪仍可执行", async () => {
   const { iso } = make();
   iso.setDual(true);
   iso.handshake("A"); iso.handshake("B");
-  iso.report("A", OK); iso.report("B", { ...OK, egress: "script" });
+  iso.report("A", OK); iso.report("B", { ...OK, egress: "none" });
   await iso.plan("A", { dual: true, stageOrigin: S1, ticket: TICKET });
   await iso.plan("B", { dual: true, stageOrigin: S2, ticket: TICKET });
-  assert.deepEqual({ enabled: iso.state().enabled, egress: iso.state().egress }, { enabled: true, egress: "script" });
+  assert.deepEqual({ enabled: iso.state().enabled, egress: iso.state().egress }, { enabled: true, egress: "none" });
 });
 
 test("OCS-S-05 托管方关了总开关:不交接、不等自检,两台都走旧办法(票据经 RPC),原因是总开关;打开后恢复", async () => {

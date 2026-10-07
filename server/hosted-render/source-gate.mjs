@@ -4,7 +4,7 @@
  * 项目带来的卡片文件（`.tsx` / `.ts` / `.css`，只在 `src/cards/`、`src/parts/` 下）由工作进程里的 Vite 与 Tailwind **在 Node 一侧**处理
  * 之后才交给渲染用的 Chrome。Node 一侧的处理会按文件里写的路径去读盘、甚至载入脚本：
  *
- *   - 样式里的 `@import "<路径>"`：Node 一侧把那个文件读进来并进这份样式（任意路径；内容随样式到页面，或随报错的代码框到页面）；
+ *   - 样式里的本地 `@import "<路径>"`：Node 一侧把那个文件读进来并进这份样式（任意路径；内容随样式到页面，或随报错的代码框到页面）；
  *   - 样式里的 `@plugin` / `@config`：Tailwind 把那个文件当构建插件**在 Node 里执行**；`@source`：扫那个目录；`@reference`：同 `@import`；
  *   - 样式里的 `url(<路径>?inline)`：Node 一侧把文件读成 data URI；
  *   - 脚本里的 `import.meta.glob("<模式>")`：Node 一侧按模式列文件名（模式可以用 `..` 走出检出目录）；
@@ -18,7 +18,7 @@
  *
  * 规则（路径一律按仓库相对路径算，`rel` 是这个文件自己的）：
  *   样式：
- *     - `@` 规则只许白名单里的（`CSS_AT_ALLOW`）；`@import` 另算：只许 `@import "<相对路径>.css";`，目标仍在 `src/cards/` 或 `src/parts/` 里；
+ *     - `@` 规则只许白名单里的（`CSS_AT_ALLOW`）；远端 http(s) / 协议相对 `@import` 留给浏览器；本地只许裸相对 `.css`，目标仍在卡片目录；
  *       `@plugin`、`@config`、`@source`、`@reference`、`@tailwind` 等一律不许；`@` 规则名里不许有转义；
  *     - 每个 `url(…)`（出现 `image-set(` 时连同每个字符串）：不许反斜杠；带协议的只许 `data:`、`http:`、`https:`、`blob:`；`/` 开头的不许 `/@…`、不许 `..`；
  *       相对路径算下来必须还在 `src/` 里。
@@ -76,7 +76,7 @@ function pathProblem(rel, raw, { schemes, roots, rootAbsolute }) {
     const scheme = value.slice(0, value.indexOf(':') + 1).toLowerCase();
     return schemes.has(scheme) ? null : `不许的协议 ${scheme}`;
   }
-  if (value.startsWith('//')) return null; // 别的主机：Node 一侧不取，浏览器一侧由出口限制管
+  if (value.startsWith('//')) return null; // 别的主机：由浏览器按页面协议加载
   const bare = stripQuery(value);
   if (bare.startsWith('/')) {
     if (bare.startsWith('/@')) return '指向开发服务器的内部路径（/@…）';
@@ -130,7 +130,7 @@ export function scanCss(source) {
         head += s[k];
         k += 1;
       }
-      atRules.push({ name, head: head.trim() });
+      atRules.push({ name, head: head.trim(), start: i, headStart: j, end: k });
       i = j;
       continue;
     }
@@ -152,6 +152,31 @@ export function scanCss(source) {
 
 const CSS_ROOTS = ['src/cards/', 'src/parts/'];
 
+// 只识别无需 Node 读盘的远端地址；转义与其它协议不扩大许可。
+const remoteImport = (head) => /^(?:"((?:https?:)?\/\/[^"\\\s\0]+)"|'((?:https?:)?\/\/[^'\\\s\0]+)'|url\(\s*(?:"((?:https?:)?\/\/[^"\\\s\0]+)"|'((?:https?:)?\/\/[^'\\\s\0]+)'|((?:https?:)?\/\/[^\s()"'\\\0]+))\s*\))(?:\s|$)/i.exec(head);
+
+/** Tailwind 把裸字符串 // 地址当本地文件；url() 保留给浏览器，地址与条件语义不变。只用于已通过预检的非 raw CSS。 */
+export function normalizeBrowserCssImports(source) {
+  let out = String(source);
+  for (const at of scanCss(out).atRules.reverse()) {
+    if (at.name.toLowerCase() !== 'import') continue;
+    const m = remoteImport(at.head);
+    const uri = m?.[1] ?? m?.[2];
+    if (!uri?.startsWith('//')) continue;
+    const quote = m[1] ? '"' : "'";
+    const old = `${quote}${uri}${quote}`;
+    let headStart = at.headStart;
+    while (headStart < at.end) {
+      if (/\s/.test(out[headStart])) { headStart++; continue; }
+      if (out.slice(headStart, headStart + 2) === '/*') { const end = out.indexOf('*/', headStart + 2); if (end < 0) break; headStart = end + 2; continue; }
+      break;
+    }
+    if (out.slice(headStart, headStart + old.length) !== old) continue;
+    out = out.slice(0, headStart) + `url(${old})` + out.slice(headStart + old.length);
+  }
+  return out;
+}
+
 function checkCss(rel, source, errors, { rootHas = null } = {}) {
   const { strings, urls, atRules } = scanCss(source);
   for (const at of atRules) {
@@ -159,6 +184,7 @@ function checkCss(rel, source, errors, { rootHas = null } = {}) {
     if (name === '') continue; // 孤立的 @（选择器里的转义等）：不是规则
     if (at.name.includes('\\')) { errors.push(`@ 规则名里有转义：@${at.name}`); continue; }
     if (name === 'import') {
+      if (remoteImport(at.head)) continue; // Vite/Tailwind 不读远端文件；仍检查下方 url 路径
       const m = /^(?:"([^"\\]*)"|'([^'\\]*)')$/.exec(at.head);
       const target = m ? (m[1] ?? m[2]) : null;
       if (target === null) { errors.push(`@import 只许写成 @import "<相对路径>.css";（没有 url()、layer、媒体条件）：@import ${at.head.slice(0, 80)}`); continue; }

@@ -46,11 +46,11 @@ export interface CardExecState {
   reason: CardExecReason;
   /** 各舞台自检没过的原因(诊断) */
   detail: Partial<Record<StageLetter, IsolationFailure[]>>;
-  /** WebRTC 由谁拦:两台都是浏览器的出口白名单 = `allowlist`;有一台靠脚本加固 = `script`;不执行时为 null */
-  egress: "allowlist" | "script" | null;
+  /** 兼容诊断字段：当前策略执行时为 `none`，不执行时为 null */
+  egress: "none" | null;
 }
 
-const FAILURES: readonly IsolationFailure[] = ["same-origin", "no-policy", "meta-only", "no-egress-guard", "not-hardened", "check-error"];
+const FAILURES: readonly IsolationFailure[] = ["same-origin", "no-policy", "meta-only", "not-hardened", "check-error"];
 const BREACHES: readonly BreachKind[] = ["html", "create", "insert", "observed", "define"];
 
 /** 舞台发来的自检结果按形状校验(舞台的消息一律当不可信输入);不对给 null */
@@ -63,7 +63,7 @@ export function sanitizeIsolationReport(d: unknown): IsolationReport | null {
   if (!csp || !egress || !tt || typeof r.ok !== "boolean" || typeof r.crossOrigin !== "boolean" || typeof r.hardened !== "boolean" || !Array.isArray(r.reasons)) return null;
   const reasons = r.reasons.filter((x): x is IsolationFailure => FAILURES.includes(x as IsolationFailure)).slice(0, FAILURES.length);
   // 不信舞台自己下的结论:按各项事实重算一遍(少一项就不算通过)
-  const ok = r.ok === true && reasons.length === 0 && r.crossOrigin === true && csp === "header" && egress !== "none" && r.hardened === true;
+  const ok = r.ok === true && reasons.length === 0 && r.crossOrigin === true && csp === "header" && r.hardened === true;
   return { ok, crossOrigin: r.crossOrigin, csp, egress, hardened: r.hardened, trustedTypes: tt, reasons };
 }
 
@@ -181,7 +181,7 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
     if (IDS.some((id) => slots[id].report && !slots[id].report!.ok)) return off("not-isolated");
     if (IDS.some((id) => slots[id].mode === "legacy")) return off(grantFailed ? "grant-failed" : "not-isolated");
     if (IDS.some((id) => slots[id].mode !== "cookie" || !slots[id].report)) return off("pending");
-    const egress = IDS.every((id) => slots[id].report!.egress === "allowlist") ? "allowlist" : "script";
+    const egress = "none" as const;
     return { enabled: true, reason: "ok", detail, egress };
   };
   const update = () => {

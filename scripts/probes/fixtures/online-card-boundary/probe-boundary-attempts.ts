@@ -506,7 +506,7 @@ export async function runAll(ctx) {
   result.heard = { "parent-messages": heard.join("\n") };
   // 这时闸门已经因为上面那一下关上了;照样硬跑,看的是浏览器与加固拦不拦得住
   result.forged = forgedMessages(ctx);
-  result.exfil = await exfilAttacks(ctx);
+  result.exfil = await exfilAttacks({ ...ctx, only: ["fetch", "img", "css-bg", "script"] });
   result.harden = await hardenAttacks(ctx);
   return result;
 }

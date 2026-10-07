@@ -17,7 +17,7 @@
  * 本机替身(与阿里云同形):
  *   - 托管组合(文档服务 + 素材服务,只绑 127.0.0.1);
  *   - 共用的本机托管代理 `lib/hosted-proxy.mjs`(2026-10-06 起,取代各探针自带的仿 nginx 代理),开三个同站跨源的源 pc.localhost(+0)、s1.pc.localhost(+1)、s2.pc.localhost(+2),
- *     带全套策略头(内容安全策略、`Connection-Allowlist`、OAC)、`/media-s/` 与舞台入口 `/editor/stage.html`;`/editor/runtime-config.json` 给两个舞台源(同 `deploy-hosted --stage-origins` 写的);
+ *     带全套策略头(内容安全策略、OAC)、`/media-s/` 与舞台入口 `/editor/stage.html`;`/editor/runtime-config.json` 给两个舞台源(同 `deploy-hosted --stage-origins` 写的);
  *     Node 这边(探针与它起的桌面 dev server、渲染主机)靠 `lib/localhost-dns.cjs` 认得 `*.localhost`;
  *   - 创建者 = 桌面版 dev server + 它的预渲染进程(队列节点,pc),建项目、放卡、勾「多用户协作」放云端、取邀请链接、预渲染;
  *   - 成员 = 电脑浏览器(普通档)打开邀请链接进入。

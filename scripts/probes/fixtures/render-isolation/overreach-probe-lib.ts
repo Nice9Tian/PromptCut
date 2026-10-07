@@ -192,14 +192,13 @@ export async function runOverreach(ctx: Ctx): Promise<Report> {
       t(`loopback.${name}.cors`, () => fetchText(base)),
       t(`loopback.${name}.no-cors`, () => fetchText(base, { mode: "no-cors" })),
       t(`loopback.${name}.ws`, () => wsOpen(base.replace(/^http/, "ws"))),
-      t(`loopback.${name}.frame`, () => frameLoad(base)),
+      // 根页可能载入完整舞台及子资源；只读不存在 API 的导航仍验跨源/页面闸，不留下应用级长连接。
+      t(`loopback.${name}.frame`, () => frameLoad(`${base}/api/overreach-probe/no-such-endpoint`)),
     ]));
   });
   section(async () => {
-  if (ctx.metadata) {
-    await t("metadata.cors", () => fetchText(ctx.metadata!));
-    await t("metadata.no-cors", () => fetchText(ctx.metadata!, { mode: "no-cors" }));
-  }
+  // P1/P3撤销出口护栏：不执行真实云metadata请求，不能再把不出网作为权限保证。
+  await t("metadata.not-applicable", () => "不适用：卡片出口护栏本三个版本不做；未请求元数据地址");
 
   });
 
@@ -229,6 +228,12 @@ export async function runOverreach(ctx: Ctx): Promise<Report> {
   section(async () => {
   if (ctx.collector) {
     const c = ctx.collector;
+    await t('collector.resource.image', async () => {const image=new Image();image.src=`${c}/collect.png?tag=${ctx.tag}`;await image.decode();return image.naturalWidth===4?'loaded':'invalid';});
+    await t('collector.resource.font', async () => {const font=new FontFace('HostedPublicProbe',`url(${c}/public-font.ttf)`);document.fonts.add(await font.load());return font.status;});
+    const stylesheet = async (url: string) => {const link=document.createElement('link');link.rel='stylesheet';link.href=url;const ready=new Promise<void>((resolve,reject)=>{link.onload=()=>resolve();link.onerror=()=>reject(new Error('样式载入失败'));});document.head.append(link);await ready;};
+    await t('collector.resource.style', async () => {await stylesheet(`${c}/public-style.css`);return getComputedStyle(document.documentElement).getPropertyValue('--pc-public-style').trim();});
+    await t('collector.resource.import', async () => {await stylesheet(`${c}/public-import.css`);return getComputedStyle(document.documentElement).getPropertyValue('--pc-public-import').trim();});
+    await t('collector.resource.script', async () => {const script=document.createElement('script');script.src=`${c}/public-script.js`;const ready=new Promise<void>((resolve,reject)=>{script.onload=()=>resolve();script.onerror=()=>reject(new Error('脚本载入失败'));});document.head.append(script);await ready;return String((globalThis as any).__pcPublicExternalScript);});
     await Promise.all([
       t("collector.fetch", () => fetchText(`${c}/collect?via=fetch&tag=${ctx.tag}`, { mode: "no-cors" })),
       t("collector.post", () => fetchText(`${c}/collect?via=post&tag=${ctx.tag}`, { method: "POST", mode: "no-cors", body: "overreach-probe" })),
