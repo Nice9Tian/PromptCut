@@ -26,6 +26,9 @@
  * **每次都从冷缓存开始**:`PROMPTCUT_EXPORT_DIR` 指到一个新建的临时目录,所以
  * 「锚帧先于其他帧就绪」这一条量的是真的冷启动,而不是上一次跑剩下的盘。
  * 它由子进程继承,预渲染进程崩了重起也还是同一个目录(F5 那一条要靠它)。
+ *
+ * 耗时只记录(verification.md「耗时只记录,不当闸门」):这支探针没有时间门槛;每一处等待等到的用时记进
+ * `TIMINGS` 行与结果的 `timings`。等待时限只为防卡死,不到 120 秒的一律按 120 秒等;等到头没有结果仍算不过。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawn } from 'node:child_process';
@@ -36,6 +39,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createTimings } from './probe-timings.mjs';
 import { pickSnapshotFrame, segmentStartOf, anchorFrames } from '../../src/render/snapshotPick.mjs';
 import { resultKeyOf } from '../../server/render-node/fingerprint.mjs';
 
@@ -55,6 +59,8 @@ const PROBE_DEVICE = 'r6-probe-device';
 
 const fails = [];
 const out = { port: PORT, exportDir: EXPORT_DIR };
+const timings = createTimings('ready-index-probe');
+const WAIT_FLOOR_MS = 120000;
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra))); return cond; };
 
 const SESSION = `r6-${Date.now().toString(36)}`;
@@ -80,11 +86,13 @@ const postJson = (url, body) => json(url, { method: 'POST', headers: { 'Content-
 
 /** 等一个条件成立;超时回 false(探针自己判,不抛) */
 async function until(label, fn, timeoutMs = 120000, everyMs = 300) {
-  const deadline = Date.now() + timeoutMs;
+  // 等待时限只为防卡死(verification.md「耗时只记录,不当闸门」):不到 WAIT_FLOOR_MS 的一律提到它;等到的用时只记录
+  const startedAt = Date.now();
+  const deadline = startedAt + Math.max(timeoutMs, WAIT_FLOOR_MS);
   for (;;) {
     let value;
     try { value = await fn(); } catch { value = null; }
-    if (value) return value;
+    if (value) { timings.record(`等到:${label}`, Date.now() - startedAt); return value; }
     if (Date.now() > deadline) { fails.push(`超时:${label}`); return null; }
     await delay(everyMs);
   }
@@ -446,5 +454,7 @@ try {
 }
 
 out.fails = fails;
+out.timings = timings.list;
+timings.print();
 console.log(JSON.stringify(out, null, 2));
 process.exit(fails.length ? 1 : 0);

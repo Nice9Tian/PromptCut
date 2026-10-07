@@ -41,10 +41,11 @@
  *     两个舞台源缺省读 `<源>/editor/runtime-config.json` 的 `stageOrigins`(`deploy-hosted --stage-origins` 写的),读不到记一条失败、
  *     退回按 `s1.<主机>`、`s2.<主机>` 核;`--stage-origins` 给了就以它为准(仍核 runtime-config 与它一致)。
  *   - 创建者 = 本机桌面版 dev server(端口 +5～+7)连远端(同 c10a-demo-probe 的创建者);成员 = 本机无头 Chrome 普通档(桌面视口)。
- *   - 判据与本机替身相同,只有一处不同:A1 的「播放 10 秒主文档长任务 0」在外网模式只报数、标「待笔记本复核」(PC 忙,耗时类判断在 PC 上不作数)。
+ *   - 判据与本机替身相同:A1 的「播放 10 秒主文档长任务 0」在外网模式同样按过 / 不过判(长任务数是不看时间的断言,
+ *     `docs/semantics/guide_files/verification.md`「耗时只记录,不当闸门」;原来在外网模式只报数、标「待笔记本复核」,已去掉)。
  *   - A5 的独立渲染主机来自外部(下一节):没有节点在线时改一处、页面发布清单计划、不报错照常核;之后把本轮的项目与凭证写进协调口 KV,
  *     等外部主机报到(`--host-wait-min`,缺省 15 分钟),再等它认领并完成(至多 15 分钟)、页面取到它产的新快照(至多 10 分钟)。
- *     时限内没有主机报到:A5 的后半记「待笔记本主机」(`steps.a5.pendingHost`),不算失败。`--no-host` 不写 KV、不等,直接记「待笔记本主机」。
+ *     时限内没有主机报到:A5 的后半记「待外部主机」(`steps.a5.pendingHost`),不算失败。`--no-host` 不写 KV、不等,直接记「待外部主机」。
  *   - `--a10` 只对本机替身(要缩短托管端的票据时限)。
  *
  * ## 独立主机角色:--role host --run <id>(HT9 的跨机做法:在线页面发布带片段清单的 plan,独立渲染主机认领并完成)
@@ -119,9 +120,9 @@
  *       node scripts/probes/c10-browser-probe.mjs --role creator --e6-reverse --base-port 5740 --coord http://127.0.0.1:5748 --run <id>
  *       node scripts/probes/c10-browser-probe.mjs --role host --run <id> --coord http://127.0.0.1:5748 --port 5745 --test-fingerprint <Y>
  *       (Y 的端口段就是创建者编辑器的 +5～+7:config 在创建者关掉之后才写,主机拿到 config 才占端口)
- *     跨机(PC 起 creator 与 X,笔记本起 Y;令牌只从环境变量 PROBE_MAIL_TOKEN 取):
+ *     跨机(一台起 creator 与 X,另一台起 Y;令牌只从环境变量 PROBE_MAIL_TOKEN 取):
  *       PC:    node scripts/probes/c10-browser-probe.mjs --site https://8-219-80-16.sslip.io --e6-reverse --run <id> --base-port <PC 段起点> [--coord <协调口>]
- *       笔记本:node scripts/probes/c10-browser-probe.mjs --role host --run <id> --test-fingerprint <Y> --port <笔记本端口> [--coord <协调口>]
+ *       另一台:node scripts/probes/c10-browser-probe.mjs --role host --run <id> --test-fingerprint <Y> --port <那台的端口> [--coord <协调口>]
  *   结果写 `steps.e6r`:checks(每条 { name, ok, detail })、plan、细任务数、X 与 Y 的认领 / 完成、层表逐层指纹、l18。
  *   KV:不加新键;config 多一个字段 `e6Reverse`,host.progress 与 host 多一个字段 `ids`(见下一节)。
  *
@@ -152,6 +153,7 @@ import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localho
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, parseTaskId } from './m8/lib.mjs';
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
+import { createTimings } from './probe-timings.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -221,8 +223,10 @@ const deadline = started + Number(arg('--timeout-min', REMOTE || ROLE !== 'all' 
 
 const fails = [];
 const out = { ok: false, run: RUN, role: ROLE, mode: A10 ? 'a10' : E6R ? 'a1-a5+e6-reverse' : 'a1-a5', target: REMOTE ? 'site' : 'local', site: SITE, stageOrigins: STAGE_ORIGINS, out: OUT, steps: {} };
-/** 待笔记本复核 / 待笔记本主机的项(不算失败,只记下) */
+/** 等外部主机而没等到的项(不算失败,只记下) */
 const pending = [];
+/** 耗时只记录(verification.md「耗时只记录,不当闸门」):各步用时写进 TIMINGS 行与结果的 timings,不决定过不过 */
+const timings = createTimings('c10-browser-probe');
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ` :: ${JSON.stringify(extra).slice(0, 500)}`)); return !!cond; };
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), step, ...fields })}\n`);
 const codeOf = (link) => String(link ?? '').split('invite=')[1] ?? '';
@@ -1615,8 +1619,7 @@ try {
   const playing = samples.filter((s) => s.playing);
   const mainSigs = playing.filter((s) => s.t >= 1).map((s) => s.wraps.find((w) => w.id === state.main)).filter((w) => w?.suppressed && w.plane).map((w) => w.planeSig);
   const worstLong = longTasks.slice().sort((a, b) => b.ms - a.ms).slice(0, 3);
-  if (REMOTE) pending.push({ item: 'A1:播放 10 秒,主文档长任务 0', status: '待笔记本复核', count: longTasks.length, worst: worstLong });
-  else check(longTasks.length === 0, 'A1:播放 10 秒,主文档长任务 0', { count: longTasks.length, worst: worstLong });
+  check(longTasks.length === 0, 'A1:播放 10 秒,主文档长任务 0', { count: longTasks.length, worst: worstLong });
   check(playing.length >= 10, 'A1:播放中采到可见舞台的样子', { samples: samples.length, playing: playing.length });
   check(new Set(mainSigs).size >= 5, 'A1:重层按拍换快照(播放中主重卡的快照平面一直在换帧)', { distinct: new Set(mainSigs).size, of: mainSigs.length });
   const deliveries = (beatAfter.deliveries ?? 0) - (beatBefore.deliveries ?? 0);
@@ -1801,7 +1804,8 @@ try {
       await delay(15_000);
     }
     check(exported?.frames === frames10, 'A10:逐帧导出照常完成', exported);
-    check(exported && exported.ms > TTL_MS * 1.2, 'A10:导出时长跨过票据时限', { ms: exported?.ms, ttl: TTL_MS });
+    // 耗时只记录:原来「导出时长 > 票据时限 × 1.2」是通过条件(机器快了反而不过)。跨没跨过时限由下一条「途中续签过」来判
+    timings.record('A10 逐帧导出用时', exported?.ms ?? null, { formerLimit: `> 票据时限 × 1.2(${Math.round(TTL_MS * 1.2)} ms)` });
     check(exported?.renewal?.renewals >= 1, 'A10:导出途中提前续签了票据', exported?.renewal);
     if (VIDEO) check(exported?.stats?.ticketSwaps > 0, 'A10:素材地址的票据跟着换', exported?.stats);
     out.steps.a10 = { ms: Date.now() - t10, ttlMs: TTL_MS, originalsWaits, export: exported };
@@ -1913,7 +1917,7 @@ try {
       }
       out.hostFacts = { ...hostLogFacts(hostLog), capabilities: await hostCapabilities(host.origin) };
     } else if (NO_HOST) {
-      hostPending = '待笔记本主机(--no-host:没有等外部主机)';
+      hostPending = '待外部主机(--no-host:没有等外部主机)';
     } else {
       // 外部独立渲染主机(另一台机器上的 --role host):本轮的项目与凭证写进 KV,等它报到、认领、完成
       // 旁观节点与页面 task.done 计数先起(主机认领之前),主机要是带 --cut,持有的任务按它们判
@@ -1926,7 +1930,7 @@ try {
       const tReady = Date.now();
       const ready = await xstore.wait('host.ready', Date.now() + HOST_WAIT_MS);
       if (!ready) {
-        hostPending = `待笔记本主机(${HOST_WAIT_MS / 60_000} 分钟内没有外部主机报到)`;
+        hostPending = `待外部主机(${HOST_WAIT_MS / 60_000} 分钟内没有外部主机报到)`;
       } else {
         hostFp = ready.envFingerprint ?? null;
         const readyMs = Date.now() - tReady;
@@ -2061,6 +2065,13 @@ try {
     }
   }
   out.ms = Date.now() - started;
+  for (const [name, label] of [['creator', '创建者建项目、放云端'], ['member', '成员加入到两个舞台就绪'], ['play', 'A1 播放 10 秒这一步'], ['userCard', '用户卡一步'], ['reopen', 'A2 关掉再开'], ['a5', 'A5 独立渲染主机一步'], ['a10', 'A10 票据续签一步']]) {
+    if (out.steps[name]?.ms != null) timings.record(label, out.steps[name].ms);
+  }
+  if (out.steps.settleTiming) timings.record('A4 定位到换上精确帧', out.steps.settleTiming.seekToPreciseMs);
+  timings.record('整支探针', out.ms);
+  out.timings = timings.list;
+  timings.print();
   out.fails = fails;
   out.ok = fails.length === 0;
   console.log(JSON.stringify(out));

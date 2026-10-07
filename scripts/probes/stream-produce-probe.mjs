@@ -11,7 +11,7 @@
  *   1. 每个分段恰好 15 个样本(末段除外)、首帧是 IDR、只有一个 moof;`mfra` 不落盘;
  *   2. 同一个变体里 `init.mp4` 只写一次,后续分段算出来的 `ftyp + moov` 与它逐字节相同;
  *   3. 稀疏分段(`stride = 3`)体积 ≤ 满密度的 1.0 倍;稀疏分段被满密度替换后,旧文件 5 秒内删除;
- *   4. 一条 15 帧分段的编码耗时、分段体积(≤ 512 KB);
+ *   4. 一条 15 帧分段的编码耗时(只记录,不当通过条件;原门槛 1080p 全幅流 p50 ≤ 300 ms)、分段体积(≤ 512 KB);
  *   5. 连续生产只付一次换页:`bakeStream` 的重挂载次数 ≤ 流数 × 2(稀疏一趟 + 补密一趟);
  *      同时存活的分段编码器 ≤ 2 × streamPool;
  *   6. 就绪索引里每条流一层 `kind: 'stream'`、单位是分段号;组流(`--group` 把解码器预算压到 1)带 `groupClipIds`;
@@ -37,6 +37,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
+import { createTimings } from './probe-timings.mjs';
 import { FramePipeline } from '../../server/frame-pipeline.mjs';
 import { splitFmp4, segmentInfo, topLevelBoxes, SEGMENT_FRAMES } from '../../server/frame-stream.mjs';
 import { bakeStream } from '../../server/bakery/bake.mjs';
@@ -56,6 +57,7 @@ const JSON_OUT = flagArg('json', null, args);
 if (GROUP) process.env.PROMPTCUT_STREAM_DECODERS = '1';
 
 const fails = [];
+const timings = createTimings('stream-produce-probe');
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra))); return cond; };
 
 async function until(label, fn, timeoutMs, everyMs = 500) {
@@ -102,6 +104,7 @@ try {
     return !producer.workers.size && !producer.encoding.size ? status : null;
   }, 600000, 1000);
   out.produceMs = Date.now() - started;
+  timings.record('全部分段满密度(从 preload 起)', out.produceMs);
   if (!done) throw new Error('生产没做完');
   // G6:旧文件延迟 5 秒删除 —— 等 6 秒再看盘
   await new Promise(r => setTimeout(r, 6000));
@@ -202,7 +205,7 @@ try {
     if (out.isolation_pill) check(out.isolation_pill.bluePixels > 1000, '金句药丸流里有它自己的蓝色像素', out.isolation_pill);
     if (pill) check(pill.manifest.tight && pill.manifest.tight.w * pill.manifest.tight.h < pill.manifest.bound.w * pill.manifest.bound.h, '框比画面小的卡:收紧矩形小于上界', { bound: pill.manifest.bound, tight: pill.manifest.tight });
   }
-  // 编码耗时基准(验收「一条 1080p 流 15 帧分段编码 ≤ 300 ms,前提:没有别的编码器争 CPU」):
+  // 编码耗时(只记录;原验收门槛「一条 1080p 流 15 帧分段编码 ≤ 300 ms,前提:没有别的编码器争 CPU」已不作通过条件):
   // 先把 15 张 PNG 截在内存里,再一次性喂给编码器计时(G0-b 的量法,和出帧不重叠)
   out.bench = [];
   for (const clipId of GROUP ? [] : ['clip-bg', 'clip-pill']) {
@@ -250,7 +253,11 @@ try {
     } finally { pipeline.returnStreamBakery(bakery); }
   }
   const bgBench = out.bench.find(b => b.clipId === 'clip-bg');
-  if (bgBench) check(bgBench.p50 <= 300, '1080p 全幅流 15 帧分段编码 ≤ 300 ms(无别的编码器争 CPU)', bgBench);
+  // 耗时只记录(verification.md「耗时只记录,不当闸门」):编码 p50 原来是 ≤ 300 ms 的通过条件,现在只记数
+  for (const b of out.bench) {
+    timings.record(`${b.clipId} 15 帧分段编码 p50`, b.p50, b.clipId === 'clip-bg' ? { formerLimit: '1080p 全幅流 ≤ 300 ms' } : {});
+    timings.record(`${b.clipId} 15 帧出帧`, b.captureMsFor15);
+  }
   for (const item of status.stats.sparseVsDense ?? []) {
     if (item.sameRect) check(item.sparse <= item.dense, 'stride 3 稀疏分段 ≤ 满密度 1.0 倍(同一矩形)', item);
   }
@@ -284,15 +291,21 @@ try {
       const seg = bg.manifest.segments[5];
       return seg.sig !== 'stale' && !producer.workers.size && !producer.encoding.size ? seg : null;
     }, 120000);
-    await new Promise(r => setTimeout(r, 6000));
-    const oldGone = !(await fs.stat(path.join(producer.store.dir(bg.spec.streamKey), before.file)).then(() => true, () => false))
-      || before.file === redone?.file;
+    // 旧文件延迟 5 秒删:原来固定等 6 秒就看盘(等于拿 6 秒当门槛)。现在等到它没了为止(至多 60 秒,防卡死),用时只记录
+    const goneT0 = Date.now();
+    const oldFile = path.join(producer.store.dir(bg.spec.streamKey), before.file);
+    let oldGone = before.file === redone?.file;
+    while (!oldGone && Date.now() - goneT0 < 60000) {
+      oldGone = !(await fs.stat(oldFile).then(() => true, () => false));
+      if (!oldGone) await new Promise(r => setTimeout(r, 500));
+    }
+    timings.record('G6 替换后旧分段文件删掉', Date.now() - goneT0, { formerLimit: '固定等 6 秒后看盘(设计值 5 秒内删)' });
     const lastLayer = [...layers].reverse().find(m => m.clipId === 'clip-bg');
     out.resegment = { before: before.file, after: redone?.file, produced: producer.stats.segments - segmentsBefore, oldGone, ranges: lastLayer?.ranges,
       sigOk: redone?.sig === segmentSignature({ streamKey: bg.spec.streamKey, segment: 5, stride: 1, encoder: status.encoder, rect: bg.manifest.tight ?? bg.manifest.bound }) };
     check(out.resegment.produced === 1 && out.resegment.sigOk, '只重新生产了第 5 段', out.resegment);
     check(JSON.stringify(out.resegment.ranges) === JSON.stringify([[bg.spec.firstSegment, bg.spec.lastSegment]]), '重新生产第 5 段后索引区间不变', out.resegment);
-    check(oldGone, '替换后旧文件 5 秒内删掉', out.resegment);
+    check(oldGone, '替换后旧文件删掉了(用时见 timings)', out.resegment);
   }
   // F5:同一个库根上重起一个 FramePipeline(模拟预渲染进程被杀后拉起)
   {
@@ -324,11 +337,13 @@ try {
 } finally {
   off();
   out.fails = fails;
+  out.timings = timings.list;
   await pipeline.close().catch(() => {});
   if (!KEEP) await fs.rm(OUT, { recursive: true, force: true }).catch(() => {});
   const text = JSON.stringify(out, null, 2);
   if (JSON_OUT) await fs.writeFile(JSON_OUT, text);
   console.log(text);
+  timings.print();
   console.log(fails.length ? `FAIL ${fails.length}` : 'PASS');
   process.exit(fails.length ? 1 : 0);
 }

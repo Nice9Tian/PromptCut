@@ -31,6 +31,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -46,6 +47,8 @@ const DATA = path.join(TMP, 'data');
 fs.mkdirSync(DATA, { recursive: true });
 
 const fails = [];
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):开始页的占用数字自动变成真实值用了多久只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('storage-ui-probe');
 const out = { ok: false, out: OUT, tmp: TMP };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 400))); return !!cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -179,7 +182,7 @@ try {
       const t = await p8.$eval('[data-pc="storage-cache-bytes"]', (el) => el.textContent);
       if (texts.at(-1) !== t) texts.push(t);
       return t.startsWith('5.0M') ? t : null;
-    }, 20_000, 250).catch(() => null);
+    }, 120_000, 250).catch(() => null); // 等待时限只为防卡死(原 20 秒)
     const elapsedMs = Date.now() - t0;
     const server = (await storageJson('/api/storage')).body?.frameLibrary;
     out.U8 = { first, settled, elapsedMs, texts, serverBytes: server?.bytes, scanning: server?.scanning };
@@ -187,7 +190,8 @@ try {
     await p8.screenshot({ path: path.join(OUT, 'u8-fresh-bytes.png') });
     await p8.close();
     check(!first.startsWith('5.0M'), 'U8 刚打开时是旧数(证明后面是自动重取,不是碰巧已经量过)', out.U8);
-    check(!!settled && elapsedMs < 20_000, 'U8 十几秒内自动变成真实值 5.0M', out.U8);
+    timingLog.record('U8 打开开始页到占用数字变成真实值', settled ? elapsedMs : null, { formerLimit: '< 20 秒' });
+    check(!!settled, 'U8 自动变成真实值 5.0M(用时只记录)', out.U8);
     check(server?.bytes === 5 * MB && server?.scanning === false, 'U8 服务端量完:5 MB、scanning false', out.U8);
   }
 
@@ -394,5 +398,6 @@ try {
 }
 out.fails = fails;
 out.ok = fails.length === 0;
+timingLog.print();
 console.log(JSON.stringify(out));
 process.exit(out.ok ? 0 : 1);

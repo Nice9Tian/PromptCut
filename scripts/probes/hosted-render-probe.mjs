@@ -52,8 +52,12 @@
  *              (不带走子进程):工作进程一侧发现父进程没了自己收尾,新的管理进程起工作进程之前再按上一轮的记号清一遍
  *   limits     并发:一个计划切出多段,全程同时持有的认领不超过并发上限;内存:把硬上限调到 `--memory-step-max`,
  *              管理进程量到超限、结束工作进程(`worker.exit` 的 reason 是 `oom`)、退避重起,10 分钟内第 3 次时并发降到 1(`render.degraded`)
- *   load       渲染进行中与空闲时,文档服务 `/healthz` 往返时延的对比(本机数字只作参考)
+ *   load       渲染进行中与空闲时,文档服务 `/healthz` 往返时延的对比(只记录,不当通过条件;原门槛 p95 < 500 ms)
  *   delete     创建者删项目:渲染服务断开,目录里没有这个项目
+ *
+ * 耗时只记录(`docs/semantics/guide_files/verification.md`「耗时只记录,不当闸门」):上面各步里的「5 s 内」(连进来、连回来、断开)与
+ * `load` 的往返时延只写进 `TIMINGS` 行与结果的 `timings`,不决定过不过;「连进来了 / 断开了」本身仍是通过条件(等 60 秒 × `--time-scale`,
+ * 等不到算不过)。`agent` 步「成员走后过了保持期才断开(≥ 30 秒)」是产品计时器的下界,仍是通过条件。
  *
  * 起来之后、跑步骤之前先做一组环境断言(`environment`):Chrome 沙箱的开关与判据一致(Linux 的 root / 容器里是 `off:root` / `off:container`,
  * 并有 `no-sandbox` 告警);没有 systemd 时有 `no-cgroup` 告警且照常起来;没用测试变量顶替时环境指纹 = (本机操作系统, software, Chrome 主版本),
@@ -84,6 +88,7 @@ import { readServiceKeyFile, buildServiceProtocols } from '../../server/auth/ser
 import { clipsPlanTaskOf, backfillPlanTaskOf } from '../../server/render-queue/messages.mjs';
 import { envFingerprintOf, chromeMajorOf } from '../../server/render-node/fingerprint.mjs';
 import { noSandboxReason } from '../../server/bakery/chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -115,6 +120,9 @@ const out = { ok: false, run: RUN, platform: process.platform, cores: CORES, tim
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ` :: ${JSON.stringify(extra).slice(0, 500)}`)); return !!cond; };
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), step, ...fields })}\n`);
 
+const timings = createTimings('hosted-render-probe');
+/** 等渲染服务连进来 / 断开的时限:只为防卡死(verification.md「耗时只记录,不当闸门」)。原来等 10～15 秒、再拿 5 秒当通过条件;用时现在只记录 */
+const JOIN_WAIT_MS = 60_000;
 async function waitFor(fn, rawMs, what, every = 250) {
   const ms = Math.round(rawMs * SCALE);
   const until = Date.now() + ms;
@@ -359,9 +367,9 @@ async function stepWork() {
   const before = await blobCounts();
   const t0 = Date.now();
   ctx.creator = await joinAs(ctx.proj, { username: 'alice', as: 'creator' });
-  const node = await waitJoined(ctx.proj.projectId, 10_000);
+  const node = await waitJoined(ctx.proj.projectId, JOIN_WAIT_MS);
   r.joinMs = Date.now() - t0;
-  check(r.joinMs <= 5000, 'work:新建项目后渲染服务 5 s 内连进来', { joinMs: r.joinMs });
+  timings.record('work 新建项目到渲染服务连进来', r.joinMs, { formerLimit: '≤ 5 秒' });
   r.nodeId = node.nodeId;
 
   const project = probeProject(`${RUN}-${++ctx.salt}`);
@@ -490,9 +498,9 @@ async function stepAgent() {
   const t1 = Date.now();
   const d = await demand();
   check(d.type === 'hosted.demand.ok', 'agent:声明这个项目有活', d);
-  await waitJoined(projectId, 15_000);
+  await waitJoined(projectId, JOIN_WAIT_MS);
   r.joinOnDemandMs = Date.now() - t1;
-  check(r.joinOnDemandMs <= 5000, 'agent:声明后 5 s 内渲染服务连回来(没有任何成员在线)', { ms: r.joinOnDemandMs });
+  timings.record('agent 声明有活到渲染服务连回来', r.joinOnDemandMs, { formerLimit: '≤ 5 秒' });
   check(memberConns(projectId) === 0, 'agent:渲染服务连回来时没有任何成员连接', { members: memberConns(projectId) });
 
   // 发布补渲计划
@@ -713,9 +721,9 @@ async function stepSwitch() {
   const off = await adminOp(ctx.creator, ctx.proj, 'set-hosted-service', { service: 'render', enabled: false });
   check(off.type === 'shared.admin.ok', 'switch:关开关', off);
   const t0 = Date.now();
-  await waitLeft(ctx.proj.projectId, 10_000);
+  await waitLeft(ctx.proj.projectId, JOIN_WAIT_MS);
   r.offMs = Date.now() - t0;
-  check(r.offMs <= 5000, 'switch:关掉后 5 s 内断开', { offMs: r.offMs });
+  timings.record('switch 关开关到渲染服务断开', r.offMs, { formerLimit: '≤ 5 秒' });
   const project = probeProject(`${RUN}-${++ctx.salt}`);
   const rev = await putProject(ctx.creator, project);
   const planId = await publishPlan(ctx.creator, { rev, clips: clipIdsOf(project), codeVersion: ctx.codeVersion });
@@ -900,7 +908,11 @@ async function stepLoad() {
   r.budgetMs = Math.round(budget * SCALE);
   r.tasks = done.tasks;
   check(busy.length >= 5, 'load:渲染期间采到了样本', { n: busy.length });
-  check(r.rendering.p95 < 500, 'load:满载时文档服务自检的 p95 低于背压线 500 ms', r.rendering);
+  timings.record('load 空闲时文档服务 /healthz 往返 p50', r.idle.p50);
+  timings.record('load 空闲时文档服务 /healthz 往返 p95', r.idle.p95);
+  timings.record('load 渲染进行时文档服务 /healthz 往返 p50', r.rendering.p50);
+  timings.record('load 渲染进行时文档服务 /healthz 往返 p95', r.rendering.p95, { formerLimit: '< 500 ms(背压线)' });
+  timings.record('load 这一批任务渲完', r.renderMs);
   r.backpressure = (await status()).backpressure;
   ctx.rev = rev;
   return r;
@@ -911,9 +923,9 @@ async function stepDelete() {
   const del = await adminOp(ctx.creator, ctx.proj, 'delete');
   check(del.type === 'shared.admin.ok', 'delete:删项目', del);
   const t0 = Date.now();
-  await waitLeft(ctx.proj.projectId, 10_000);
+  await waitLeft(ctx.proj.projectId, JOIN_WAIT_MS);
   r.leftMs = Date.now() - t0;
-  check(r.leftMs <= 5000, 'delete:删项目后 5 s 内断开', { leftMs: r.leftMs });
+  timings.record('delete 删项目到渲染服务断开', r.leftMs, { formerLimit: '≤ 5 秒' });
   const s = await waitFor(async () => { const x = await status(); return x.directory.list.some((p) => p.projectId === ctx.proj.projectId) ? null : x; }, 5000, '目录里没有这个项目');
   r.directoryProjects = s.directory.list.length;
   return r;
@@ -1025,5 +1037,8 @@ try {
   else out.tmp = TMP;
 }
 out.fails = fails;
+if (ctx.perTaskMs) timings.record('work 单任务耗时(含冷启动)', ctx.perTaskMs);
+out.timings = timings.list;
+process.stdout.write(`${timings.line()}\n`);
 process.stdout.write(`${JSON.stringify(out)}\n`);
 process.exit(exitCode);

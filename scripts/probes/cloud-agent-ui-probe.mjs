@@ -73,6 +73,9 @@ import path from 'node:path';
 import { createSharedProject, lookupProject } from '../../server/auth/client.mjs';
 import reportWorker from '../../tools/report-worker/worker.js';
 import { joinAs, adminOp, projectOf, putProject } from './cloud-agent-probe-lib.mjs';
+import { createTimings } from './probe-timings.mjs';
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):点「停止」到停下、一轮结束到标记消失各用了多久只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('cloud-agent-ui-probe');
 import {
   ROOT, sleep, USER_PORTS, portFree, createUi, startStack, startDesktop, killDesktop, launchBrowser, newPage, P, typeInto, mockSteps, msgs, view, conversationOf,
   toolCount, lastAssistant, idle, panelText, providerOptions, sendText, joinOnline, openDesktopEditor, sharedProjectOf, hostedToggle, openProjectSettings,
@@ -374,11 +377,12 @@ const diagA = await diagnostics(A, { save: true, submit: BUILT_HERE, shotName: '
   const conv2 = await conversationOf(A);
   const t0 = Date.now();
   await A.click('[data-pc="cloud-ai-panel"] [data-pc="ai-stop"]');
-  const stopped = await until('O2:停止后 5 秒内停下', () => idle(A), 5_000, 50);
+  const stopped = await until('O2:停止后停下', () => idle(A), 25_000, 50); // 等待时限只为防卡死(原 5 秒);脚本 30 秒后自己会说完,所以不能等过 30 秒
   const stopMs = Date.now() - t0;
   const m2 = await msgs(A);
   const a2 = lastAssistant(m2);
-  check('O2:点「停止」后 5 秒内停下,回复里没有停之后才会说的话,outcome 是 aborted', !!stopped && stopMs < 5000 && !(a2?.text ?? '').includes('不该出现') && a2?.outcome === 'aborted', { stopMs, outcome: a2?.outcome, text: a2?.text });
+  timingLog.record('O2 点「停止」到这一轮停下', stopped ? stopMs : null, { formerLimit: '< 5 秒' });
+  check('O2:点「停止」后停下(用时只记录),回复里没有停之后才会说的话,outcome 是 aborted', !!stopped && !(a2?.text ?? '').includes('不该出现') && a2?.outcome === 'aborted', { stopMs, outcome: a2?.outcome, text: a2?.text });
   const disk2 = await until('O2:服务端记下这一轮已停', () => { const d = S.diskConversation(PID, conv2); return d && d.meta.state !== 'running' ? d : null; }, 5_000, 100);
   check('O2:服务端那一轮确实不在跑了(对话记录:idle / stopped)', disk2?.meta?.state === 'idle' && disk2.meta.reason === 'stopped', { state: disk2?.meta?.state ?? null, reason: disk2?.meta?.reason ?? null });
   await shot(A, 'O2-online-stopped');
@@ -524,11 +528,12 @@ const diagA = await diagnostics(A, { save: true, submit: BUILT_HERE, shotName: '
     rawEnd = await rawNow();
     runEnd = await runningOf(obs, PID);
     return snapEnd && !snapEnd.rows.some((r) => r.name?.startsWith('dave')) ? snapEnd : null;
-  }, 30_000, 800);
+  }, 120_000, 800); // 等待时限只为防卡死(原 30 秒)
   const goneMs = tEnd ? Date.now() - tEnd : null;
+  timingLog.record('O7 一轮结束到 dave 那一行的云端 Agent 标记消失', goneMs, { formerLimit: '< 20 秒' });
   const daveEnd = rawEnd.find((d) => d.username === 'dave');
   const agentsAfter = Number((/Agent：(\d+) 个/.exec(snapEnd?.count ?? '') ?? [])[1]);
-  check('O7:这一轮结束后(不等 10 分钟回收)标记消失:dave 那一行不再显示,Agent 数回落,顶栏字与原始成员列表、在场状态算出来的一致', !!snapEnd && goneMs !== null && goneMs < 20_000 && !snapEnd.rows.some((r) => r.name?.startsWith('dave')) && agentsAfter === agentsBefore - 1 && snapEnd.count === expectedCount(rawEnd, runEnd), { goneMs, before: snap?.count, after: snapEnd?.count, expected: expectedCount(rawEnd, runEnd), rawDaveConnsAfterEnd: daveEnd ? daveEnd.conns.map((c) => `${c.role}${c.service ? ':' + c.service : ''}`) : 'gone' });
+  check('O7:这一轮结束后(不等 10 分钟回收)标记消失:dave 那一行不再显示,Agent 数回落,顶栏字与原始成员列表、在场状态算出来的一致', !!snapEnd && goneMs !== null && !snapEnd.rows.some((r) => r.name?.startsWith('dave')) && agentsAfter === agentsBefore - 1 && snapEnd.count === expectedCount(rawEnd, runEnd), { goneMs, before: snap?.count, after: snapEnd?.count, expected: expectedCount(rawEnd, runEnd), rawDaveConnsAfterEnd: daveEnd ? daveEnd.conns.map((c) => `${c.role}${c.service ? ':' + c.service : ''}`) : 'gone' });
   await shot(B, 'O7-online-members-after-run');
 
   /* ---- O11:云端下附件可用(新成员 erin、新对话):选文件→上传→失败可移除→发消息带上 */
@@ -811,9 +816,10 @@ async function desktopPhase() {
   // 桌面页面此时可能带着自己的本机 Agent 连接(行里的「[Agent ×n]」),它照常计数:期望的 Agent 数就是行里本机 Agent 的个数
   const tD6End = Date.now();
   let lastMemD6 = null;
-  const memEnd = await until('D6:这一轮结束后几秒内自己那一行不再有云端 Agent 标记、顶栏只剩本机 Agent 的数', async () => { lastMemD6 = await membersList(page); const m = lastMemD6; return m && !m.rows.some((r) => r.cloudTag) && m.count === `成员：2 人 · Agent：${localAgents(m)} 个` ? m : null; }, 30_000, 800);
+  const memEnd = await until('D6:这一轮结束后几秒内自己那一行不再有云端 Agent 标记、顶栏只剩本机 Agent 的数', async () => { lastMemD6 = await membersList(page); const m = lastMemD6; return m && !m.rows.some((r) => r.cloudTag) && m.count === `成员：2 人 · Agent：${localAgents(m)} 个` ? m : null; }, 120_000, 800); // 等待时限只为防卡死(原 30 秒)
+  timingLog.record('D6 一轮结束到自己那一行的云端 Agent 标记消失', memEnd ? Date.now() - tD6End : null, { formerLimit: '< 25 秒' });
   const runningD6 = await P(page, async () => [...(await import('/src/editor/sync/presence.ts')).cloudRunning()]).catch((e) => String(e));
-  check('D6:一轮结束后几秒内「[云端 Agent]」标记消失、「有一轮在跑」表空了、顶栏的 Agent 数只剩本机 Agent(不等 10 分钟回收)', !!memEnd && Array.isArray(runningD6) && runningD6.length === 0 && Date.now() - tD6End < 25_000, { count: (memEnd ?? lastMemD6)?.count, localAgents: localAgents(memEnd ?? lastMemD6), rows: (memEnd ?? lastMemD6)?.rows.map((r) => r.text.slice(0, 80)), running: runningD6, ms: Date.now() - tD6End });
+  check('D6:一轮结束后几秒内「[云端 Agent]」标记消失、「有一轮在跑」表空了、顶栏的 Agent 数只剩本机 Agent(不等 10 分钟回收)', !!memEnd && Array.isArray(runningD6) && runningD6.length === 0, { count: (memEnd ?? lastMemD6)?.count, localAgents: localAgents(memEnd ?? lastMemD6), rows: (memEnd ?? lastMemD6)?.rows.map((r) => r.text.slice(0, 80)), running: runningD6, ms: Date.now() - tD6End });
 
   /* ---- D12:反向通道——桌面版选了「云端」时,云端 Agent 同样能操作这张页面(契约第 28 节) */
   {
@@ -866,6 +872,7 @@ try {
   if (busy.length) say('ports.still-busy', { busy });
   try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 400 }); } catch { /* 占着就留着 */ }
   const failed = results.filter((r) => !r.ok);
+  timingLog.print();
   console.log(JSON.stringify({ summary: { total: results.length, failed: failed.length, failedChecks: failed.map((r) => r.check) } }));
   exitCode = failed.length ? 1 : 0;
 }

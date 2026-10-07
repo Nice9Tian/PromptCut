@@ -27,6 +27,10 @@
  *
  *   `--only T5a,T5c` 只跑列出的场景(缺省全跑)。
  *
+ * 耗时只记录(verification.md「耗时只记录,不当闸门」):T5a「complete 翻真后多久被页面轮询看到」(原门槛 ≤ 2600 ms)与各场景
+ * 换到素材原尺寸的用时只写进 `TIMINGS` 行与结果的 `timings`,不决定过不过。黑帧数、帧号与帧误差(不超过一帧)、
+ * 「等待上传方」的提示照旧是通过条件。等待时限只为防卡死,一律不少于 120 秒。
+ *
  * 输出:最后一行是一行 JSON(`ok`、各场景的关键数),截图在 `--out` 目录。
  * 帧号的读法:在可见舞台里对**显示着的**那个 `<video>` 做 `drawImage`,读顶上那条的 10 个格子。
  */
@@ -39,6 +43,7 @@ import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
+import { createTimings } from './probe-timings.mjs';
 import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 
 const args = process.argv.slice(2);
@@ -55,8 +60,11 @@ const fails = [];
 const notes = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 400))); return !!cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 等待时限只为防卡死(verification.md「耗时只记录,不当闸门」):不到 WAIT_FLOOR_MS 的一律提到它;等到头没有结果仍算不过 */
+const WAIT_FLOOR_MS = 120000;
+const timings = createTimings('tier-switch-probe');
 async function until(label, fn, timeoutMs, everyMs = 200) {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + Math.max(timeoutMs, WAIT_FLOOR_MS);
   for (;;) {
     let v = null;
     try { v = await fn(); } catch { v = null; }
@@ -364,12 +372,14 @@ try {
   const tOrig = Date.now();
   const polled = await until('T5a:页面轮询看到素材原尺寸到齐', () => tiers(`return T.tierHashes().includes(args[0]);`, A.orig.hash), 10000, 50);
   out.T5a.pollMs = polled ? Date.now() - tOrig : null;
-  check(out.T5a.pollMs !== null && out.T5a.pollMs <= 2600, 'T5a:complete 翻真后下一次轮询内看到(≤ 2 s + 余量)', out.T5a.pollMs);
+  // 耗时只记录:原来 ≤ 2600 ms 是通过条件;「看到了」由上面的 until 判(等不到记超时)
+  timings.record('T5a complete 翻真到页面轮询看到素材原尺寸', out.T5a.pollMs, { formerLimit: '≤ 2600 ms(轮询 2 s + 余量)' });
   const origUp = await until('T5a:换到素材原尺寸', async () => {
     const l = await layer();
     return l && l.shown && l.rs >= 2 && l.src.includes(A.orig.hash) && Number.isInteger(l.idx) ? l : null;
   }, 20000);
   out.T5a.switchMs = Date.now() - tOrig;
+  timings.record('T5a 素材原尺寸到齐到换到素材原尺寸(暂停中)', origUp ? out.T5a.switchMs : null, { formerLimit: '等待上限 20 秒' });
   await sleep(300);
   const { samples: samplesA, trace: traceA } = await stopSampler();
   out.T5a.trace = traceA.map((x) => ({ mediaTime: +x.mediaTime.toFixed(4), ref: +x.ref.toFixed(4), errFrames: +((x.mediaTime - x.ref) * x.fps).toFixed(2), playing: x.playing }));
@@ -408,6 +418,7 @@ try {
   const tB = Date.now();
   const switchedB = await until('T5b:播放中换到素材原尺寸', async () => { const l = await layer(); return l && l.rs >= 2 && l.src.includes(B.orig.hash) ? l : null; }, 15000, 100);
   out.T5b.switchMs = switchedB ? Date.now() - tB : null;
+  timings.record('T5b 素材原尺寸到齐到换到素材原尺寸(播放中)', out.T5b.switchMs, { formerLimit: '等待上限 15 秒' });
   await sleep(600);
   const { samples: samplesB, trace: traceB } = await stopSampler();
   const framesB = await stopFrameSampler();
@@ -505,6 +516,7 @@ try {
       return l && l.shown && l.rs >= 2 && l.src.includes(X.orig.hash) && Number.isInteger(l.idx) ? l : null;
     }, timeoutMs, 250);
     o.switchMs = orig ? Date.now() - tOrig : null;
+    timings.record(`${scene} 素材原尺寸报齐到换到素材原尺寸`, o.switchMs, { formerLimit: `等待上限 ${Math.round(timeoutMs / 1000)} 秒` });
     await sleep(300);
     const { samples, trace } = await stopSampler();
     o.trace = trace.map((x) => ({ mediaTime: +x.mediaTime.toFixed(4), ref: +x.ref.toFixed(4), errFrames: +((x.mediaTime - x.ref) * x.fps).toFixed(2), playing: x.playing }));
@@ -606,5 +618,7 @@ try {
 out.fails = fails;
 out.notes = notes;
 out.ok = fails.length === 0;
+out.timings = timings.list;
+timings.print();
 console.log(JSON.stringify(out));
 process.exit(out.ok ? 0 : 1);

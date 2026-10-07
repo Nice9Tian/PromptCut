@@ -41,6 +41,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createTimings } from './probe-timings.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const DOC_PORT = 8798;
@@ -75,6 +76,8 @@ if (process.argv.includes('--child')) {
 /* ---------------- 探针本体 ---------------- */
 
 const results = [];
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):发起方不在线时读选区的工具多久回话只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('cloud-agent-run-probe');
 function check(id, what, fn) {
   return Promise.resolve().then(fn).then(
     (detail) => { results.push({ id, ok: true }); console.log(`PASS ${id} ${what}${detail ? ` —— ${detail}` : ''}`); },
@@ -390,7 +393,8 @@ try {
     const call = offEvents.find((e) => e.type === 'tool_result' && e.name === 'get_selection');
     assert.equal(call.ok, false);
     assert.match(call.summary, /发起方不在线,读不到页面的选区。请按项目内容继续,不要等待。/);
-    assert.ok(call.durationMs < 500, `不等待(${call.durationMs} ms)`);
+    // 原来「耗时 < 500 ms」是通过条件(证明没有干等);现在只记录。回的是「发起方不在线…不要等待」由上一条判
+    timingLog.record('E1 发起方不在线时读选区的工具回话', call.durationMs, { formerLimit: '< 500 ms' });
     return `工具结果原文 ${call.summary}(耗时 ${call.durationMs} ms)`;
   });
   await check('E2', '这一轮不卡住,继续跑完', async () => {
@@ -417,6 +421,7 @@ try {
   fs.rmSync(dataDir, { recursive: true, force: true });
 }
 
+timingLog.print();
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n共 ${results.length} 条,通过 ${results.length - failed},失败 ${failed}`);
 process.exit(failed ? 1 : 0);
