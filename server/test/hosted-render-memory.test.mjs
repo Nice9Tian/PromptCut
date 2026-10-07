@@ -199,6 +199,26 @@ test('HR34 Windows：累加私有工作集（不是工作集）；这一项没�
   assert.deepEqual(measureTrees([1], { platform: 'win32', spawnSync: winSpawn(clean) })[0], { bytes: 40 * MiB, method: 'private-ws', procs: 2 });
 });
 
+test('HR34b Windows：父进程号被重用时，早就成了孤儿的无关进程不算进这棵树（按创建时刻认）', () => {
+  // 9000 是个老孤儿：它记的父进程号 4002 早就退出了，这个号后来被这棵树里的新进程重用。真正的父进程一定先于子进程创建
+  const T = 134000000000000000;
+  const stdout = winOut([
+    [4000, 1, 100 * MiB, 200 * MiB, T + 5000],
+    [4001, 4000, 300 * MiB, 900 * MiB, T + 6000],
+    [4002, 4001, 150 * MiB, 600 * MiB, T + 7000], // 重用了老孤儿的父进程号
+    [9000, 4002, 8 * GiB, 9 * GiB, T + 1000],     // 比「父」早创建：不是它的孩子
+    [9001, 9000, 1 * GiB, 1 * GiB, T + 1500],     // 老孤儿自己的孩子：跟着不算
+    [4003, 4002, 50 * MiB, 60 * MiB, T + 8000],   // 真孩子
+    [4004, 4002, 10 * MiB, 20 * MiB, '-'],        // 创建时刻读不到：照旧按父子关系算
+  ]);
+  const [res] = measureTrees([4000], { platform: 'win32', spawnSync: winSpawn(stdout) });
+  assert.deepEqual([res.bytes, res.procs, res.method], [(100 + 300 + 150 + 50 + 10) * MiB, 5, 'private-ws']);
+  // 纯函数：不给创建时刻时行为不变（Linux 的量法走这一支）
+  const ppids = new Map([[1, 0], [2, 1], [3, 2]]);
+  assert.deepEqual(treeMembers(1, ppids).sort(), [1, 2, 3]);
+  assert.deepEqual(treeMembers(1, ppids, new Map([[1, 10], [2, 20], [3, 5]])).sort(), [1, 2]);
+});
+
 /* ------------------------------------------------------------------ HR35 */
 
 test('HR35 量不了就是量不了：回 bytes: null 和原因，不是 0 也不是超限', () => {

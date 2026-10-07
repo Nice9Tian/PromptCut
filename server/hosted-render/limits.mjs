@@ -178,11 +178,18 @@ export function pidMemoryLinux(pid, fsx = realProcfs) {
   return { bytes: (anon + (kbOf(status, 'RssShmem') ?? 0)) * 1024, method: 'rss-anon-shmem' };
 }
 
-/** 父子关系表 `ppids`（pid → ppid）里以 `root` 为根的整棵树的 pid；`root` 不在表里回空数组 */
-export function treeMembers(root, ppids) {
+/**
+ * 父子关系表 `ppids`（pid → ppid）里以 `root` 为根的整棵树的 pid；`root` 不在表里回空数组。
+ *
+ * `born`（pid → 创建时刻，可缺）：Windows 上进程记的父进程号在父进程退出后不会改，那个号之后可能被别的进程重用——
+ * 一个早就成了孤儿的无关进程，就会被当成重用了它父进程号的那个进程的孩子。给了 `born` 时，「父」比「子」创建得晚的那条
+ * 关系不认（真正的父进程一定先于子进程创建）。Linux 上孤儿会改挂到 1 号进程下面，没有这个问题，不用给。
+ */
+export function treeMembers(root, ppids, born = null) {
   if (!ppids.has(root)) return [];
   const children = new Map();
   for (const [pid, ppid] of ppids) {
+    if (born && born.has(pid) && born.has(ppid) && born.get(ppid) > born.get(pid)) continue; // 父进程号被重用了：不是它的孩子
     if (!children.has(ppid)) children.set(ppid, []);
     children.get(ppid).push(pid);
   }
@@ -240,9 +247,10 @@ function measureLinux(roots, fsx) {
   });
 }
 
-/** Windows 上一次问全：每个进程的 pid、父 pid、私有工作集（没有记 `-`）、私有已提交（没有记 `-`） */
+/** Windows 上一次问全：每个进程的 pid、父 pid、私有工作集（没有记 `-`）、私有已提交（没有记 `-`）、创建时刻（FILETIME，没有记 `-`） */
 const WIN_MEMORY_SCRIPT = '$perf=@{}; try { Get-CimInstance Win32_PerfRawData_PerfProc_Process -ErrorAction Stop | ForEach-Object { $perf[[int]$_.IDProcess]=$_.WorkingSetPrivate } } catch {}; '
-  + 'Get-CimInstance Win32_Process | ForEach-Object { $w=$perf[[int]$_.ProcessId]; if ($null -eq $w) { $w=\'-\' }; $p=$_.PrivatePageCount; if ($null -eq $p) { $p=\'-\' }; "$($_.ProcessId) $($_.ParentProcessId) $w $p" }';
+  + 'Get-CimInstance Win32_Process | ForEach-Object { $w=$perf[[int]$_.ProcessId]; if ($null -eq $w) { $w=\'-\' }; $p=$_.PrivatePageCount; if ($null -eq $p) { $p=\'-\' }; '
+  + '$b=\'-\'; if ($_.CreationDate) { $b=$_.CreationDate.ToFileTimeUtc() }; "$($_.ProcessId) $($_.ParentProcessId) $w $p $b" }';
 
 function measureWindows(roots, spawnSync) {
   const failAll = (reason) => roots.map((r) => (Number.isInteger(r) && r > 0 ? { bytes: null, reason } : null));
@@ -250,17 +258,19 @@ function measureWindows(roots, spawnSync) {
   if (r.error || r.status !== 0) return failAll('query-failed');
   const ppids = new Map();
   const mem = new Map();
+  const born = new Map();
   for (const line of String(r.stdout ?? '').split(/\r?\n/)) {
-    const [id, ppid, ws, priv] = line.trim().split(/\s+/);
+    const [id, ppid, ws, priv, at] = line.trim().split(/\s+/);
     if (!/^\d+$/.test(id ?? '')) continue;
     ppids.set(Number(id), Number(ppid));
+    if (/^\d+$/.test(at ?? '')) born.set(Number(id), Number(at));
     mem.set(Number(id), { ws: /^\d+$/.test(ws ?? '') ? Number(ws) : null, priv: /^\d+$/.test(priv ?? '') ? Number(priv) : null });
   }
   if (ppids.size === 0) return failAll('empty-process-table');
   return roots.map((root) => {
     if (!Number.isInteger(root) || root <= 0) return null;
     if (!ppids.has(root)) return { bytes: null, reason: 'root-gone' };
-    return sumMembers(root, treeMembers(root, ppids), (pid) => {
+    return sumMembers(root, treeMembers(root, ppids, born), (pid) => {
       const m = mem.get(pid);
       if (!m) return { gone: true };
       if (m.ws !== null) return { bytes: m.ws, method: 'private-ws' };

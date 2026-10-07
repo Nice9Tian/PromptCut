@@ -58,10 +58,11 @@ export function listProcesses({ platform = process.platform, token = '', spawnSy
       }
     } else if (platform === 'win32') {
       const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }'], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+        'Get-CimInstance Win32_Process | ForEach-Object { $b=\'-\'; if ($_.CreationDate) { $b=$_.CreationDate.ToFileTimeUtc() }; "$($_.ProcessId) $($_.ParentProcessId) $b" }'], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
       for (const line of String(r.stdout ?? '').split(/\r?\n/)) {
-        const [id, ppid] = line.trim().split(/\s+/).map(Number);
-        if (Number.isInteger(id) && id > 0) procs.set(id, { ppid, tagged: false });
+        const [id, ppid, born] = line.trim().split(/\s+/).map(Number);
+        // born：创建时刻（FILETIME）。Windows 记的父进程号在父进程退出后不改，号被重用时靠它认出陈旧的父子关系（见 treePids）
+        if (Number.isInteger(id) && id > 0) procs.set(id, { ppid, tagged: false, ...(Number.isFinite(born) ? { born } : {}) });
       }
     } else {
       const r = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 10_000 });
@@ -77,12 +78,16 @@ export function listProcesses({ platform = process.platform, token = '', spawnSy
 /**
  * 一棵树的全部进程（纯函数）：`root` 与它的后代，并上带记号的进程与它们的后代。`self`（调用方自己）与 1 号进程从不在内。
  * @param {number | null} root 树根的 pid（已经死了也行：它的孩子还记着它是父进程）
- * @param {Map<number, { ppid: number, tagged?: boolean }>} procs
+ * 进程表里带创建时刻 `born` 时（Windows），「父」比「子」创建得晚的那条关系不认：Windows 记的父进程号在父进程退出后不改，
+ * 那个号被这棵树里的新进程重用后，早就成了孤儿的无关进程会被当成它的孩子（完整验收里实测到：运行器自己被算进了工作进程树）。
+ * @param {Map<number, { ppid: number, tagged?: boolean, born?: number }>} procs
  * @returns {number[]} 升序
  */
 export function treePids(root, procs, { self = process.pid } = {}) {
   const children = new Map();
   for (const [pid, p] of procs) {
+    const parent = procs.get(p.ppid);
+    if (parent && Number.isFinite(parent.born) && Number.isFinite(p.born) && parent.born > p.born) continue; // 父进程号被重用了
     if (!children.has(p.ppid)) children.set(p.ppid, []);
     children.get(p.ppid).push(pid);
   }
