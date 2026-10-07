@@ -77,7 +77,7 @@ export function createProjectAssetAccess({ authority, resolvePrincipal }) {
 export function authorizedAssetStore(store, lease) {
   if (!lease) return store;
   if (store.projectId !== lease.projectId) throw assetAccessError('project-mismatch');
-  const guard = { beforeCommit: lease.assert, signal: lease.signal };
+  const guard = { beforeCommit: lease.assert, signal: lease.signal, track: stream => lease.track(stream) };
   return new Proxy(store, { get(target, key) {
     if (key === 'putChunk') return async (hash, n, info, source) => { await lease.assert(); if (source?.destroy) lease.track(source); const value = await target.putChunk(hash, n, { ...info, ...guard }, source); await lease.assert(); return value; };
     if (key === 'complete') return async hash => { await lease.assert(); return target.complete(hash, guard); };

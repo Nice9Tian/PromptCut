@@ -56,3 +56,10 @@
 - 合并定向target-1共23项22过/1失败，1146.1415ms：HTTP与worker两个测试文件并行都起5780，真实EADDRINUSE，是本包测试端口布局失误。没有终止别人的进程；worker独立fixture改5782，stream5781，HTTP5780，均在独占段内；target-2 23/23零失败/跳过944.5352ms。完整首轮失败和修正日志均留TMP/promptcut-asset-project-target-{1,2}.log。
 - type-2 --force零错，TMP/promptcut-asset-type-2.log；待固定块后的最终检查。新增isolated资产probe直接实际服务模块，明确productionMounted:false，重放旧hosted residual已知hash反例，正反向结果JSON写TMP。
 - asset-path按根授权pyEnv模型目录一致；另Chrome改pipe仅消除随机调试TCP，浏览器行为/模板断言不变。独占5780～5782舞台及5785计数服务，真实探针随后在固定源码跑；没有改已有真实weights/全局环境。
+
+## 固定源码前最后关闭缝与实证
+
+- asset-path固定29d0f60e完成29/29、退出0，TMP/promptcut-asset-path-project-1.log；P7真实URL/direct均template逐字段完全相同，P10旧包临时路径同结果且删除，P11地址/本地BGR像素逐字节一致。默认MODELS继承差异已消除；这只证明模板fallback，不宣称安装模型真实推理已验。browser用pipe，舞台5780～5782/计数5785已全部自然关闭，未碰他人树。
+- isolated资产probe固定29d0f60e 26/26、退出0，TMP/pc-asset-project-isolation-final/result.json与promptcut-asset-isolation-probe-1.log；该probe不连接真实account/中央、不冒称Linux生产全链，重放了旧hosted hash残余反例已被本isolated服务拒。
+- 只读复核发现分片写fd/complete哈希读fd此前只靠请求体destroy及发布前核验，ACK没有显式等这些实际文件流close。新增guard.track登记fs output/input并将lease AbortSignal交pipeline，media上传也登记真实write stream；收到撤销会abort pipeline，完成回执等文件流真实close。此改动在旧probe完成后实施，没有边运行Vite边改受监视源文件。
+- 新增关闭追踪后target-3 23/23、零失败/跳过1475.522ms，TMP/promptcut-asset-project-target-3.log；type-4 --force零错，TMP/promptcut-asset-type-4.log。target-2和旧probe证据不冒称覆盖这条最新产品增量；完整npm及isolated probe会在新提交固定源码再验一次。

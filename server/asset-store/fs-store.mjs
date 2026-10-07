@@ -255,7 +255,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       return { size: meta.size, chunkSize, received: await receivedChunks(key, meta), complete: false };
     },
 
-    async putChunk(hash, n, { size, ext, beforeCommit, signal } = /** @type {any} */ ({}), source) {
+    async putChunk(hash, n, { size, ext, beforeCommit, signal, track } = /** @type {any} */ ({}), source) {
       await beforeCommit?.();
       signal?.throwIfAborted();
       const key = normalizeHash(hash);
@@ -308,7 +308,9 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       });
       // r+：原位写，不截断别的片已经写进去的字节。pipeline 等到文件句柄关掉才返回；
       // 出错（断线等）原样抛给调用方，这一片的标记没补，对账时报「没收到」
-      await pipeline(source, counter, createWriteStream(path.join(d, 'data'), { flags: 'r+', start: n * chunkSize }));
+      const output = createWriteStream(path.join(d, 'data'), { flags: 'r+', start: n * chunkSize });
+      track?.(output);
+      await pipeline(source, counter, output, ...(signal ? [{ signal }] : []));
       await beforeCommit?.();
       signal?.throwIfAborted();
       if (bytes !== expected) return { status: 'length', expected, got: bytes };
@@ -319,7 +321,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       return { status: 'ok', bytes };
     },
 
-    async complete(hash, { beforeCommit, signal } = {}) {
+    async complete(hash, { beforeCommit, signal, track } = {}) {
       const key = normalizeHash(hash);
       return withLock(lockKey(key), async () => {
         await beforeCommit?.();
@@ -337,7 +339,9 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
         const data = path.join(d, 'data');
         const digest = crypto.createHash('sha256');
         // 句柄在 pipeline 返回前就关了，下面才能改名（Windows 上开着的文件改不了名）
-        await pipeline(createReadStream(data, { start: 0, end: meta.size - 1 }), digest);
+        const input = createReadStream(data, { start: 0, end: meta.size - 1 });
+        track?.(input);
+        await pipeline(input, digest, ...(signal ? [{ signal }] : []));
         const actual = digest.digest('hex');
         if (actual !== key) {
           await fs.rm(d, { recursive: true, force: true });

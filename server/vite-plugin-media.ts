@@ -400,7 +400,10 @@ export async function storeMediaStream(root: string, name: string, source: Reada
   });
 
   try {
-    await pipeline(source, tap, createWriteStream(tmp));
+    const output = createWriteStream(tmp), lease = ownership ? mediaContext.getStore()?.lease : null;
+    lease?.track(output);
+    if (lease) await pipeline(source, tap, output, { signal: lease.signal });
+    else await pipeline(source, tap, output);
   } catch (err) {
     await fs.rm(tmp, { force: true });
     throw err;
