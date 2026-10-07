@@ -45,19 +45,27 @@ export function validateAccountEvent(value) {
       !['password-changed', 'credentials-revoked'].includes(value.type) ||
       typeof value.eventId !== 'string' || !value.eventId) fail('bad-event');
   requireAccountId(value.accountId); requireSequence(value.seq); requireSequence(value.changeSeq);
-  if (!Array.isArray(value.oldLoginIds) || value.oldLoginIds.some((id) => typeof id !== 'string' || !id)) fail('bad-event');
-  if (!Number.isSafeInteger(value.changedAt) || !value.initiatorWebsiteLoginId) fail('bad-event');
+  if (value.seq < 1 || value.changeSeq < 1 || !Array.isArray(value.oldLoginIds) || value.oldLoginIds.some((id) => typeof id !== 'string' || !id) || new Set(value.oldLoginIds).size !== value.oldLoginIds.length) fail('bad-event');
+  if (value.revokedLoginIds !== undefined && (!Array.isArray(value.revokedLoginIds) ||
+      value.revokedLoginIds.some((id) => typeof id !== 'string' || !id || !value.oldLoginIds.includes(id)) ||
+      new Set(value.revokedLoginIds).size !== value.revokedLoginIds.length)) fail('bad-event');
+  if (!Number.isSafeInteger(value.changedAt) || value.changedAt < 0 ||
+      (value.type === 'password-changed' && (typeof value.initiatorWebsiteLoginId !== 'string' || !value.initiatorWebsiteLoginId)) ||
+      (value.initiatorWebsiteLoginId != null && typeof value.initiatorWebsiteLoginId !== 'string')) fail('bad-event');
   return value;
 }
 export function validateEventBatch(value, after = 0) {
+  // This validates one page. The doc consumer must persist each receipt and pull to head before opening access.
   requireSequence(after); requireSequence(value?.headSeq);
+  if (after > value.headSeq) fail('event-head-regressed');
   if (!Array.isArray(value.events)) fail('bad-event-batch');
   let previous = after;
   for (const event of value.events) {
     validateAccountEvent(event);
-    if (event.seq <= previous || event.seq > value.headSeq) fail('bad-event-order');
+    if (event.seq !== previous + 1 || event.seq > value.headSeq) fail('bad-event-order');
     previous = event.seq;
   }
+  if (value.events.length === 0 && value.headSeq > after) fail('missing-events');
   return value;
 }
 export function validateConsent(value, accountId) {
