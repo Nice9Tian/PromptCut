@@ -36,6 +36,29 @@ CONTROL: actual HTTP ownership, anonymous denial, success and duplicate per-requ
 
 1. 一次受控副本证明，原错误排序断言按预期失败，完整摘要见上文；不是重跑到通过。
 2. 修后标准针对性 `npm test -- server/test/cloud-agent-page.test.mjs` 只跑一次：12 tests、12 pass、0 fail、0 skipped、duration_ms 8549.3045，墙钟 8.8410086 秒，退出 0。CA-REV-10 为 1577.3832 ms，无包装器自动重跑。
-3. 提交后类型检查与全量 npm test 各一次，待补原始摘要。
+3. 修复提交 `103620d1` 后类型检查一次：父仓库解析 TypeScript 后执行 `node <路径> -b --force`，退出 0、零诊断，墙钟 14.34742 秒。
+4. 同提交全量 `npm test` 一次：退出 0，墙钟 66.688682 秒；CA-REV-10 通过，为 2540.3132 ms。原始摘要：
+
+```text
+ℹ tests 4928
+ℹ suites 0
+ℹ pass 4927
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 66304.7732
+✓ npm test 最终结果：零失败
+```
+
+针对性与全量均无异常退出、自动包装器重跑或断言失败。原 root 两项失败仍保留，子分支绿灯不代替 root 收回后的集成验收。
+
+5. `git diff --check` 退出 0；仅 Git autocrlf 换行提示。对起点只改测试和报告，工作区最终干净。
+
+日志为系统 TMP 的 `promptcut-page-race-proof.log`（受控原断言失败）、`promptcut-page-race-target.log`、`promptcut-page-race-types.log`、`promptcut-page-race-full.log`。全量所需模型权重只在该命令进程设为主仓库现有 `out/models`，未安装或改写环境。
 
 所有 Node 测试命令使用父仓库绝对静默预载、指定既有 Python 及无字节码环境；日志在系统 TMP。沿用现有测试端口0随机监听，只使用测试自建回环服务；没有占用用户端口或改宿主机网络。不安装依赖、不建 junction、不改 Python 环境，不触碰节点、main、版本、release 或其它工作区。
+
+## 交回
+
+开工报告提交 `8bcc8234`，测试修复提交 `103620d1`，最终证据单独提交。不合并、不推送。没有待决产品语义，也没有发现需要扩范围的实现错误。另一独占进程树修复不在本分支里；主会话整合两份修复后重跑真正集成基线。
