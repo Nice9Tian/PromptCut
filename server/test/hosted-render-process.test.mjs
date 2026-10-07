@@ -93,6 +93,24 @@ test('HR30d Windows 核对先前观察的树：PID 重用不能冒充原进程�
   assert.deepEqual(treeAlive(100, options), [110], '原观察缺少创建时刻也不能宣称没有残留');
 });
 
+test('HR30e Windows 的新进程表空了或漏项：先前观察的成员仍要查存活，不把枚举失败当作退出', () => {
+  const observed = new Map([[100, { ppid: 50, born: 1000 }], [110, { ppid: 100, born: 1100 }]]);
+  const queried = [];
+  const kill = (pid, signal) => {
+    queried.push([pid, signal]);
+    if (pid === 110) throw Object.assign(new Error('denied'), { code: 'EPERM' });
+  };
+  for (const current of [new Map(), new Map([[100, observed.get(100)]])]) {
+    queried.length = 0;
+    assert.deepEqual(treeAlive(100, { platform: 'win32', observed, list: () => current, kill }), [100, 110], '存活和权限不足的原成员都保留');
+    assert.deepEqual(queried, [[100, 0], [110, 0]]);
+  }
+  assert.deepEqual(treeAlive(100, {
+    platform: 'win32', observed, list: () => new Map(),
+    kill: () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); },
+  }), [], '原成员都明确 ESRCH 才确认退出');
+});
+
 test('HR30 结束进程树（Linux）：后代与带记号的孤儿逐个 SIGKILL（连同各自的进程组），再扫一遍收掉新起的；Windows 上用 taskkill /T', () => {
   const sent = [];
   let pass = 0;

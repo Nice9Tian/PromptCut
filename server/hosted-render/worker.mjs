@@ -152,9 +152,8 @@ export function treeAlive(pid, { token = '', platform = process.platform, list =
   if (platform !== 'win32') return treePids(root, current);
   return treePids(root, observed ?? current).filter((p) => {
     const now = current.get(p);
-    if (!now) return false;
     const before = observed?.get(p);
-    if (Number.isFinite(before?.born) && Number.isFinite(now.born) && before.born !== now.born) return false;
+    if (Number.isFinite(before?.born) && Number.isFinite(now?.born) && before.born !== now.born) return false;
     try { kill(p, 0); return true; } catch (err) { return err?.code !== 'ESRCH'; }
   });
 }
