@@ -12,6 +12,20 @@
 
 读取相关语义与验证要求，构造可重复的存活判断证据，保留父孙均退出的真实进程验证和 PID 重用安全边界。按小块提交，最终运行类型检查、全量测试、针对性进程测试，原样记录失败与重试。仅改进程逻辑，不改变画面，渲染附加项不适用。
 
-## 验证记录
+## 根因边界与实现
 
-尚未执行。
+原实现把进程表拓扑快照当作当前存活事实，也把已经退出的树根数值 PID 当作稳定身份。两者都不成立：表中记录可能在查询期间退出；旧 PID 可被新进程重用，此时从新根走拓扑还会把原来的孤儿排除。原失败日志没有记录出生身份和当时的查询错误类别，不能断言当时究竟是哪一种，更不能宣布已证实真实残留。
+
+- `treeAlive` 的 Windows 分支只对候选执行 signal 0；仅 `ESRCH` 排除，权限及未知错误保守保留。先找全拓扑再筛存活，已死父进程不会挡住仍活着的孙进程。
+- 可选 `observed` 参数接受之前的 `listProcesses` 快照，核对当时那棵树的原成员，按 PID 与创建时刻排除不同身份，并能在根已换人时继续核对原孙进程。它不负责发现快照之后新起的进程；缺少任一创建时刻时保守保留。现有不传该参数的调用者仍发现当前树，新增的是 Windows 存活复核；Linux/POSIX、`treePids`、`killTree` 均未改动。
+- 真实父孙测试仍逐项断言父进程与 detached 孙进程退出，最后按原身份核对无残留。树记号改为每次随机生成。失败清理由孙进程监听本轮专用管道、收到本轮随机口令后自行退出；父进程用本次 `ChildProcess` 句柄清理，不再向缓存的旧孙 PID 发终止信号。
+
+官方依据：[Microsoft 进程退出语义](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process)说明进程退出状态与仍被句柄持有的对象不是同一回事；[Win32_Process](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process)说明父进程号不保证仍指向原进程。[libuv 1.52.1 的 Windows 实现](https://github.com/libuv/libuv/blob/v1.52.1/src/win/process.c)中 signal 0 调用 `GetExitCodeProcess` 及零超时 `WaitForSingleObject`，退出返回 `ESRCH`，不发送终止操作。
+
+## 验证记录（按执行顺序，含未复现与预期失败）
+
+1. 受控进程对象实验：Python 创建本次 Node 子进程，持有自己的进程句柄，终止并等待后查询；输出 `alive:false,error:ESRCH,inCim:false`，查询退出码 0。该次没有复现持句柄导致 CIM 残留，不能拿它声称历史故障由对象滞留引起。没有结束其它进程。
+2. 修复前新增两个确定性回归，运行 `node --experimental-test-module-mocks --test --test-name-pattern='HR30[cd]' server/test/hosted-render-process.test.mjs`：2 项、0 通过、2 失败、203.1601 ms，退出码 1。HR30c（过期快照及权限边界）旧实现 actual `[100,110,120,130]`，expected `[110,120,130]`；HR30d（PID 重用仍追踪原孙）旧实现 actual `[100,200]`，expected `[110]`。这是预期红灯，不是重跑掩盖偶发失败。
+3. 实现后运行 `node --experimental-test-module-mocks --test server/test/hosted-render-process.test.mjs`：10 项、10 通过、0 失败/跳过，1192.5003 ms；真实父孙用例 993.1629 ms。退出码 0，没有重试。
+
+类型检查、最终全量及最终针对性验证待执行。日志保存在本次系统临时目录中；机器特定路径不写入仓库。
