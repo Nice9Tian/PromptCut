@@ -17,8 +17,7 @@
 | 云端 Agent 服务：在线浏览器宽屏的 AI 栏经云节点上的 Agent 工作 | `docs/plan/cloud-agent-task.md`（2026-10-06 任务书，含用户的决定 E～J 与逐条验收）；前置是上一行三段做完 | 用户 2026-10-06 定，待开工 |
 | 竖屏界面（手机）：在线浏览器在窄屏上的布局，含右侧 AI 栏怎么放 | 还没有计划文件；`docs/plan/c10-contract.md`「不做」一栏写着「手机竖屏布局：不做」 | 2026-10-06 用户定：先搁置，留一个计划。云端 Agent 先只在宽屏的在线浏览器里可用，手机上 AI 栏仍是占位。开工前先出界面草案给用户看（一级） |
 | 在线浏览器新建项目：语义已改（2026-10-07 用户定，`docs/semantics/product/platforms.md`「在线浏览器模式」），代码还没做，线上的开始页仍只有「加入别人的项目」 | 还没有计划文件。谁可以新建、每人能建多少先不设限制，做的时候留好将来加限制的接口（2026-10-07 用户定）。待用户定：云端 Agent 用托管方的 Key，每个项目的用量上限现在只有接口。不在四段任务的两份任务书里 |
-| 验证：耗时只记录、不当闸门，跟着发版记进 `docs/reports/release-timings.md`（规则已改，`docs/semantics/guide_files/verification.md`「耗时只记录，不当闸门」，2026-10-07 用户定）。探针与验收运行器里现有的耗时断言还没改成只记录，记录文件也还没建 | 还没有计划文件。下一次发版（0.7.18）时一并做 |
-| 验证：分成本地验证与真实网络验证两级（规则已定，`docs/semantics/guide_files/verification.md` 同名一节，2026-10-07 用户定）。验收运行器的清单与 `m7-browser-probe` 里的「跨机待复核」还没按两级改 | 还没有计划文件。下一次发版（0.7.18）时一并做 |
+| 验证改造：把 2026-10-07 改定的三条验证规则（耗时只记录不当闸门、分本地与真实网络两级、「跨机」撤销）落到探针、验收运行器和文档里 | `docs/plan/verification-rework-task.md`；单独一个会话做，分支 `claude/verification-rework`（从集成分支切出），不并进四段连做任务 |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有素材原尺寸的云端素材补转素材小尺寸；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
 | Agent 与工作方式：创造力等级、「用户正在编辑」、多 Agent、SKILL 经 MCP 直连、后台运行（托盘与悬浮窗）、Agent 用 JS 自定义测量 | `docs/plan/agent-workflow-plan.md`（2026-09-30 写，A1～A6） | A1～A6均已合入main；A4/A5及ps1-bom、draft-lock、release-no-git本轮验收并出正式应用0.7.14/外壳0.2.7，release已从main快进（2026-10-03，REPORT-post-M8第15轮）；R1/R2/R3/R4/R5/R7/R8过，R6物理双屏待用户，草稿锁政策维持 |
