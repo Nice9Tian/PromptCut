@@ -8,7 +8,6 @@ export const ASSET_API_PREFIX: string;
 export const MEDIA_PROXY_BASE: string;
 export const STAGE_CSP_META: string;
 export const STAGE_CSP_HEADER_ONLY_DIRECTIVE: string;
-export const STAGE_CONNECTION_ALLOWLIST: string;
 export function stageCspHeader(editorOrigin: string, opts?: { template?: boolean }): string;
 export function editorCspHeader(stageOrigins: readonly string[], opts?: { template?: boolean }): string;
 export function stageSecurityHeaders(editorOrigin: string, opts?: { template?: boolean }): Record<string, string>;

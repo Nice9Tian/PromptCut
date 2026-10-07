@@ -228,7 +228,7 @@ try {
   const d1 = await until('A 图卡在两台舞台里载入成功', async () => { const d = await m.diag(); return d && d.per.A?.state === 'ready' && d.per.B?.state === 'ready' && d.run?.state === 'ready' ? d : null; }, 90_000, 500);
   const dNow = d1 ?? await m.diag();
   summary.G1 = dNow;
-  check('G1 本页隔离生效(双舞台、可执行、出口由浏览器拦)', dNow?.dual === true && dNow?.cardExec?.enabled === true && dNow.cardExec.egress === 'allowlist', dNow?.cardExec);
+  check('G1 本页隔离生效(双舞台、可执行、外链允许)', dNow?.dual === true && dNow?.cardExec?.enabled === true && dNow.cardExec.egress === 'none', dNow?.cardExec);
   check('G1 图卡在两台舞台里载入成功(运行状态 ready),两台的图形能力都是 ok', dNow?.run?.state === 'ready' && dNow?.graph?.A === 'ok' && dNow?.graph?.B === 'ok', { run: dNow?.run, per: dNow?.per, graph: dNow?.graph, bundles: dNow?.bundles });
   const sid = dNow?.cardExec?.sid ?? '';
   const want = COLOR.map((c) => 255 - c);

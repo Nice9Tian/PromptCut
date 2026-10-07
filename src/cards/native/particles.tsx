@@ -5,18 +5,6 @@ import { loadSlim } from "@tsparticles/slim";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { assetOptions } from "../catalogAssets";
 
-/**
- * 在线页面里不载入外链的背景图(〔裁:主会话 2026-10-06〕内置卡不因隔离退步,`docs/plan/online-card-exec-contract.md`「已知范围」):
- * 跨源舞台的内容安全策略只许本源、`data:`、`blob:` 的图片,外链图一律加载不出来;没隔离的在线页面里也统一不载入,
- * 两种页面、浏览器节点生成的快照画面一致。眼下只有预设 `nasa` 的背景图是外链(维基共享资源上的 NASA 徽标;
- * NASA 徽标的使用受美国法规限制,不随构建自带),在线页面里这张预设没有徽标、粒子照常。桌面版(本机有网络时照旧载入)不变。
- */
-const EXTERNAL_CSS_URL = /url\(\s*['"]?\s*(?:https?:)?\/\//i;
-function onlineSafeBackground(background: Record<string, unknown> | undefined): Record<string, unknown> {
-  const bg = { ...(background || {}) };
-  if ((globalThis as Record<string, unknown>).__pcOnlinePage === true && typeof bg.image === "string" && EXTERNAL_CSS_URL.test(bg.image)) delete bg.image;
-  return bg;
-}
 
 /**
  * 粒子背景:tsParticles(MIT)画在 canvas 上的漂浮粒子,可选连线。
@@ -74,7 +62,7 @@ function forceOurs(opts: Record<string, any>): Record<string, any> {
      */
     autoPlay: false,
     pauseOnOutsideViewport: false,
-    background: { ...onlineSafeBackground(opts.background), color: "transparent" },
+    background: { ...(opts.background || {}), color: "transparent" },
     interactivity: {
       ...(opts.interactivity || {}),
       events: { ...((opts.interactivity && opts.interactivity.events) || {}), onHover: { enable: false }, onClick: { enable: false }, resize: { enable: false } },

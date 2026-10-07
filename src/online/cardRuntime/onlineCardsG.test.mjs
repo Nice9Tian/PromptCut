@@ -130,49 +130,20 @@ test("OCE-G-03 出事登记:素材解不了一次就算;求值错连着两次才
   T.resetCardTroubleForTest();
 });
 
-test("OCE-G-04 页面一侧:隔离就绪且出口由浏览器拦才执行画面;只靠脚本加固时本页仍能执行(声音),画面不执行并给出原因", () => {
-  PG.resetCardExecGateForTest();
-  assert.equal(PG.cardExecAvailable(), false);
-  assert.equal(PG.cardVisualExecAvailable(), false);
-  PG.setCardExecGate({ site: true, isolated: true, visual: true });
-  assert.equal(PG.cardExecAvailable(), true);
-  assert.equal(PG.cardVisualExecAvailable(), true);
-  assert.equal(PG.cardExecBlockedDetail(), null);
-  let fired = 0;
-  const off = PG.subscribeCardExecGate(() => { fired++; });
-  PG.setCardExecGate({ visual: false });
-  assert.equal(fired, 1, "画面那一半变了也通知");
-  assert.equal(PG.cardExecAvailable(), true, "声音线程照常");
-  assert.equal(PG.cardVisualExecAvailable(), false);
-  assert.equal(PG.cardExecBlockedDetail(), PG.CARD_EXEC_EGRESS_DETAIL);
-  assert.match(PG.CARD_EXEC_EGRESS_DETAIL, /WebRTC/);
-  PG.setCardExecGate({ site: false });
-  assert.equal(PG.cardExecAvailable(), false);
-  assert.equal(PG.cardVisualExecAvailable(), false);
-  assert.match(PG.cardExecBlockedDetail(), /站点没有开启/);
-  off();
+test("OCE-G-04 页面画面执行不以出口能力为条件，站点/隔离开关仍有效",()=>{
+  PG.resetCardExecGateForTest(); assert.equal(PG.cardVisualExecAvailable(),false);
+  PG.setCardExecGate({site:true,isolated:true,visual:false});
+  assert.equal(PG.cardExecAvailable(),true);assert.equal(PG.cardVisualExecAvailable(),true);assert.equal(PG.cardExecBlockedDetail(),null);
+  PG.setCardExecGate({site:false});assert.equal(PG.cardVisualExecAvailable(),false);assert.match(PG.cardExecBlockedDetail(),/站点没有开启/);
   PG.resetCardExecGateForTest();
 });
 
-test("OCE-G-05 舞台一侧:闸门开着且自检的出口是 allowlist 才执行画面;script 时闸门仍开、画面不执行", () => {
-  const report = (egress) => ({ ok: true, crossOrigin: true, csp: "header", egress, hardened: true, trustedTypes: "enforced", reasons: [] });
-  SG.resetExecGateForTest();
-  assert.equal(SG.cardVisualExecAllowed(), false);
-  SG.markIsolatedStageDocument();
-  SG.setIsolationReport(report("allowlist"));
-  assert.equal(SG.cardVisualExecAllowed(), false, "父页还没点头");
-  SG.noteMediaPolicy({ ticket: null, cardExec: true });
-  assert.equal(SG.cardExecGate().allowed, true);
-  assert.equal(SG.cardVisualExecAllowed(), true);
-  SG.resetExecGateForTest();
-  SG.markIsolatedStageDocument();
-  SG.setIsolationReport(report("script"));
-  SG.noteMediaPolicy({ ticket: null, cardExec: true });
-  assert.equal(SG.cardExecGate().allowed, true, "隔离本身成立:声音线程可以执行");
-  assert.equal(SG.cardVisualExecAllowed(), false, "只靠脚本加固:画面不执行(舞台自己判,不靠父页)");
-  SG.noteBreach();
-  assert.equal(SG.cardExecGate().allowed, false);
-  assert.equal(SG.cardVisualExecAllowed(), false);
+test("OCE-G-05 舞台无allowlist/Trusted Types仍执行画面，父页/票据/breach仍把关",()=>{
+  SG.resetExecGateForTest();SG.markIsolatedStageDocument();
+  SG.setIsolationReport({ok:true,crossOrigin:true,csp:'header',egress:'none',hardened:true,trustedTypes:'unsupported',reasons:[]});
+  assert.equal(SG.cardVisualExecAllowed(),false);
+  SG.noteMediaPolicy({ticket:null,cardExec:true});assert.equal(SG.cardVisualExecAllowed(),true);
+  SG.noteBreach();assert.equal(SG.cardVisualExecAllowed(),false);
   SG.resetExecGateForTest();
 });
 
@@ -188,9 +159,9 @@ test("OCE-G-06 两台舞台都报了能运行才算;有一台说运行不了就�
   assert.equal(run([new Map([["a", { state: "ready" }]]), new Map([["a", { state: "media" }]])]).state, "media");
   // 缺省(不给 stageCount)与原来相同:一台报了就算
   assert.equal(ERS.editorRunStates({ cards, lowMemory: false, available: true, bundles, stages: [new Map([["a", { state: "ready" }]])] }).get("a").state, "ready");
-  const blocked = run([], { available: false, blockedDetail: PG.CARD_EXEC_EGRESS_DETAIL });
+  const blocked = run([], { available: false, blockedDetail: "隔离尚未就绪" });
   assert.equal(blocked.state, "not-isolated");
-  assert.match(ERS.runStateMessage(blocked), /WebRTC.*渲染节点/);
+  assert.match(ERS.runStateMessage(blocked), /隔离尚未就绪/);
   assert.match(ERS.runStateMessage({ state: "gpu" }), /图形能力不够/);
   assert.match(ERS.runStateMessage({ state: "media" }), /解不了这段素材/);
 });
@@ -230,7 +201,7 @@ test("OCE-G-08 接线(按源码核)", () => {
   // 编辑页面:发包、收状态、接声音、立闸门
   const preview = read("editor/Preview.tsx");
   assert.match(preview, /c\.loadUserCards\(list, \{ sound: id === "B" \}\)/);
-  assert.match(preview, /setCardExecGate\(\{ site: onlineStageState\(\)\.cardExec, isolated: s\.enabled, reason: s\.enabled \? null : s\.reason, visual: !s\.enabled \|\| s\.egress === "allowlist" \}\)/);
+  assert.match(preview, /setCardExecGate\(\{ site: onlineStageState\(\)\.cardExec, isolated: s\.enabled, reason: s\.enabled \? null : s\.reason, visual: true \}\)/);
   assert.match(preview, /stages: STAGE_IDS\.map\(\(id\) => stageCardStatesRef\.current\[id\]\), stageCount: STAGE_IDS\.length,/);
   assert.match(preview, /setNodeGraphCapable\(STAGE_IDS\.every\(\(s\) => stageGraphRef\.current\[s\] === "ok"\)\)/);
   assert.match(preview, /createIsolatedSoundLink\(\{/);

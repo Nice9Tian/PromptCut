@@ -6,11 +6,11 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { FRAME_TAGS, htmlHasFrame, isFrameName } from "./harden.ts";
-import { judgeIsolation, ISOLATION_CHECK_EXTERNAL_URL } from "./isolationCheck.ts";
+import { judgeIsolation, ISOLATION_CHECK_BASE_PATH } from "./isolationCheck.ts";
 import { cardExecGate, subscribeCardExecGate, markIsolatedStageDocument, setIsolationReport, noteMediaPolicy, noteBreach, resetExecGateForTest } from "./execGate.ts";
 import { bootStageGuard, isStageEntryPath, announceStageIsolation, STAGE_ENTRY_FILE, resetStageGuardForTest } from "./stageGuard.ts";
 
-const HARDENED = { installed: true, webrtcRemoved: true, trustedTypes: "enforced", hooks: 38, errors: [] };
+const HARDENED = { installed: true, webrtcRemoved: false, trustedTypes: "unsupported", hooks: 38, errors: [] };
 const OK_REPORT = judgeIsolation({ crossOrigin: true, csp: "header", allowlist: true, harden: HARDENED });
 
 beforeEach(() => { resetExecGateForTest(); resetStageGuardForTest(); });
@@ -36,29 +36,18 @@ test("OCS-H-02 元素名是不是子框架类:大小写、前缀、首尾空白�
   for (const name of ["div", "foreignObject", "my-iframe", "iframes", "object-fit", "", null, undefined, "video"]) assert.equal(isFrameName(name), false, String(name));
 });
 
-test("OCS-H-03 自检的结论:跨源、策略出自响应头、加固装上、出口有人拦,四样都有才算隔离", () => {
-  assert.deepEqual(OK_REPORT, { ok: true, crossOrigin: true, csp: "header", egress: "allowlist", hardened: true, trustedTypes: "enforced", reasons: [] });
-  // 浏览器不认出口白名单:靠脚本加固(Trusted Types 在强制、构造器已去掉)也算,但记成 script
-  assert.deepEqual(judgeIsolation({ crossOrigin: true, csp: "header", allowlist: false, harden: HARDENED }).egress, "script");
-  assert.equal(judgeIsolation({ crossOrigin: true, csp: "header", allowlist: false, harden: HARDENED }).ok, true);
-  const cases = [
-    [{ crossOrigin: false, csp: "header", allowlist: true, harden: HARDENED }, ["same-origin"]],
-    [{ crossOrigin: true, csp: "none", allowlist: true, harden: HARDENED }, ["no-policy"]],
-    // 只有 <meta> 兜底 = 托管端的 nginx 没更新(或放在没有 nginx 的本机):不算隔离
-    [{ crossOrigin: true, csp: "meta", allowlist: false, harden: HARDENED }, ["meta-only"]],
-    [{ crossOrigin: true, csp: "header", allowlist: true, harden: null }, ["not-hardened"]],
-    [{ crossOrigin: true, csp: "header", allowlist: true, harden: { ...HARDENED, webrtcRemoved: false } }, ["not-hardened"]],
-    // 没有出口白名单,Trusted Types 又没在强制:WebRTC 没人拦
-    [{ crossOrigin: true, csp: "header", allowlist: false, harden: { ...HARDENED, trustedTypes: "created" } }, ["no-egress-guard"]],
-    [{ crossOrigin: true, csp: "header", allowlist: false, harden: { ...HARDENED, trustedTypes: "unsupported" } }, ["no-egress-guard"]],
-    [{ crossOrigin: false, csp: "none", allowlist: false, harden: null }, ["same-origin", "no-policy", "not-hardened", "no-egress-guard"]],
+test("OCS-H-03 无出口白名单/Trusted Types/WebRTC guard仍通过，分源和响应头策略不可缺", () => {
+  assert.deepEqual(OK_REPORT,{ok:true,crossOrigin:true,csp:'header',egress:'none',hardened:true,trustedTypes:'unsupported',reasons:[]});
+  for(const trustedTypes of ['unsupported','created','failed','enforced']) assert.equal(judgeIsolation({crossOrigin:true,csp:'header',allowlist:false,harden:{...HARDENED,webrtcRemoved:false,trustedTypes}}).ok,true);
+  const cases=[
+    [{crossOrigin:false,csp:'header',harden:HARDENED},['same-origin']],
+    [{crossOrigin:true,csp:'none',harden:HARDENED},['no-policy']],
+    [{crossOrigin:true,csp:'meta',harden:HARDENED},['meta-only']],
+    [{crossOrigin:true,csp:'header',harden:null},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,installed:false}},['not-hardened']],
   ];
-  for (const [facts, reasons] of cases) {
-    const r = judgeIsolation(facts);
-    assert.equal(r.ok, false, JSON.stringify(facts));
-    assert.deepEqual(r.reasons, reasons, JSON.stringify(facts));
-  }
-  assert.ok(ISOLATION_CHECK_EXTERNAL_URL.endsWith(".invalid/"), "自检用的外部地址是永远解析不出来的保留域");
+  for(const [facts,reasons] of cases){const r=judgeIsolation(facts);assert.equal(r.ok,false);assert.deepEqual(r.reasons,reasons);}
+  assert.ok(ISOLATION_CHECK_BASE_PATH.startsWith('/'));
 });
 
 test("OCS-H-04 执行闸门:不是舞台文档、自检没出结果、自检没过、父页没点头,都不执行;四样齐了才开", () => {

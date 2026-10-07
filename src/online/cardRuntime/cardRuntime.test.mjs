@@ -624,7 +624,7 @@ test("OCE-T-16 守门:编辑页面与导出页不引加载器;包名与白名单
   const host = fs.readFileSync(path.join(ROOT, "src/online/cardRuntime/hostModules.ts"), "utf8");
   const names = [...host.matchAll(/^\s*"([^"]+)": \(\) => import\("([^"]+)"\),$/gm)].map((m) => { assert.equal(m[1], m[2]); return m[1]; });
   assert.deepEqual(names, [...PR.CARD_PACKAGES], "页面模块表的包名与白名单一一对上");
-  assert.equal(V.CARD_RUNTIME_VERSION, "ocr1:sucrase@dev:tailwindcss@dev", "单测里没有构建注入的版本");
+  assert.equal(V.CARD_RUNTIME_VERSION, "ocr2:sucrase@dev:tailwindcss@dev", "单测里没有构建注入的版本");
   assert.equal(V.cardRuntimeVersionOf("ocr1", { sucrase: "3.35.1", tailwindcss: "4.3.3" }), "ocr1:sucrase@3.35.1:tailwindcss@4.3.3");
   assert.equal(require("sucrase/package.json").version, "3.35.1", "转译器钉在契约写的那一版");
 });

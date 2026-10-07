@@ -1,0 +1,127 @@
+/**
+ * 已定卡片策略的真实浏览器验收：外链 image/font/style/script 正常；无 Allowlist/Trusted Types 仍执行。
+ * 实际调用 harden/isolationCheck/execGate 和 hosted-render/vite-gate，不以手写结论替代自检。
+ * 正反向检查 SOP、header/meta、父页开关、票据闸、管理 API 和素材 cookie 路径。
+ * node scripts/probes/card-policy-probe.mjs --base-port 5900 [--out <TMP>] [--font <公开字体>]
+ * 仅启用四个回环端口；字体从已安装的公开系统字体读取，不打包、不安装依赖。
+ */
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
+import puppeteer from 'puppeteer';
+import { PNG } from 'pngjs';
+import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { stageSecurityHeaders, STAGE_CSP_META, editorCspHeader } from '../../src/online/stagePolicy.mjs';
+import { installHostedGate } from '../../server/hosted-render/vite-gate.mjs';
+
+const arg = (k, d) => process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : d;
+const BASE = Number(arg('--base-port', 5900));
+const OUT = arg('--out', fs.mkdtempSync(path.join(os.tmpdir(), 'pc-card-policy-')));
+fs.mkdirSync(OUT, { recursive: true });
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const EDITOR = `http://pc.localhost:${BASE}`;
+const STAGE = `http://s1.pc.localhost:${BASE + 1}`;
+const EXTERNAL = `http://127.0.0.1:${BASE + 2}`;
+const CLOUD = `http://127.0.0.1:${BASE + 3}`;
+const fontPath = [arg('--font', ''), 'C:/Windows/Fonts/arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'].find((p) => p && fs.existsSync(p));
+if (!fontPath) throw new Error('需要一份已安装的公开字体；用 --font 指定，不安装依赖');
+const font = fs.readFileSync(fontPath);
+const png = new PNG({ width: 4, height: 4 });
+for (let i = 0; i < 16; i++) png.data.set([10, 200, 30, 255], i * 4);
+const image = PNG.sync.write(png);
+const modules = {};
+for (const p of ['src/online/stagePolicy.mjs', 'src/online/isolation/harden.ts', 'src/online/isolation/isolationCheck.ts', 'src/online/isolation/execGate.ts']) {
+  modules[`/${p}`] = ts.transpileModule(fs.readFileSync(path.join(ROOT, p), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, allowJs: true } }).outputText;
+}
+const loader = `const sources=${JSON.stringify(modules)}, cache={}; function load(id){if(cache[id])return cache[id].exports; const m={exports:{}};cache[id]=m; const req=(name)=>load(new URL(name,'http://fixture'+id).pathname);new Function('require','exports','module',sources[id])(req,m.exports,m);return m.exports;}`;
+const boot = `${loader}
+window.runFixture=async function(){
+  // 在脚本执行前仿不提供 Trusted Types 的浏览器；真实 CSP 没有 TT 强制指令。
+  try{Object.defineProperty(window,'trustedTypes',{value:undefined,configurable:true});}catch{}
+  const H=load('/src/online/isolation/harden.ts'), I=load('/src/online/isolation/isolationCheck.ts'), G=load('/src/online/isolation/execGate.ts');
+  const rtcBefore=typeof RTCPeerConnection;const harden=H.installStageHardening({win:window,onBreach:()=>G.noteBreach()});
+  G.markIsolatedStageDocument(); const report=await I.runIsolationCheck({win:window,base:'/',harden,timeoutMs:1000});G.setIsolationReport(report);
+  window.fixture={report,harden,rtcBefore,rtcAfter:typeof RTCPeerConnection,modules:false};
+  addEventListener('message',e=>{if(e.origin!==${JSON.stringify(EDITOR)}||e.source!==parent||e.data?.kind!=='fixture-allow'||e.data.nonce!=='policy-nonce')return;G.noteMediaPolicy({cardExec:true});window.fixture.handshake=true;window.fixture.gate=G.cardExecGate();});
+  parent.postMessage({kind:'fixture-ready',nonce:'policy-nonce'},${JSON.stringify(EDITOR)});
+  await new Promise(r=>setTimeout(r,100)); window.fixture.gate=G.cardExecGate();
+  if(G.cardVisualExecAllowed()){
+    window.fixture.modules=true; const E=${JSON.stringify(EXTERNAL)};
+    const img=new Image();img.id='external-image';img.src=E+'/image.png';document.body.append(img);await img.decode();
+    const css=document.createElement('link');css.rel='stylesheet';css.href=E+'/style.css';const cssReady=new Promise((r,j)=>{css.onload=r;css.onerror=j});document.head.append(css);await cssReady;
+    const script=document.createElement('script');script.src=E+'/script.js';const scriptReady=new Promise((r,j)=>{script.onload=r;script.onerror=j});document.head.append(script);await scriptReady;
+    const face=new FontFace('PolicyFixture','url('+E+'/font.ttf)');document.fonts.add(await face.load());
+    window.fixture.resources={image:img.naturalWidth===4,style:getComputedStyle(document.body).backgroundColor==='rgb(20, 30, 40)',script:window.externalScript==='loaded',font:face.status==='loaded'};
+    let parentRead='';try{parentRead=parent.document.title;}catch(e){parentRead=e.name;}
+    let localRead='';try{localRead=parent.localStorage.getItem('credential');}catch(e){localRead=e.name;}
+    window.fixture.boundaries={parentRead,localRead,cookie:document.cookie,editorAccount:await fetch(${JSON.stringify(EDITOR + '/account')},{credentials:'include'}).then(r=>r.text()).catch(e=>e.name),ownMedia:await fetch('/media-s/projectA/media/image').then(r=>r.status),otherMedia:await fetch('/media-s/projectB/media/image').then(r=>r.status),ownCloudApi:await fetch(${JSON.stringify(CLOUD + '/api/vision/frame')}).then(r=>r.status).catch(e=>e.name)};
+  }
+  window.fixture.done=true;
+};runFixture().catch(e=>{window.fixture={...window.fixture,error:String(e.stack),done:true}});`;
+const requests = [];
+const servers = [];
+const reply = (res, code, type, body, headers = {}) => { res.writeHead(code, { 'content-type': type.startsWith('text/') ? type+'; charset=utf-8' : type, 'cache-control': 'no-store', ...headers });res.end(body); };
+async function serve(port, handler) { const server = http.createServer(handler); servers.push(server);await new Promise((resolve, reject) => { server.once('error', reject);server.listen(port, '127.0.0.1', resolve); });return server; }
+const frameHtml = `<meta http-equiv="Content-Security-Policy" content="${STAGE_CSP_META}"><body><h1>外链卡片策略</h1><script src="/boot.js"></script>`;
+const parentHtml = (mode) => `<title>编辑器凭证边界</title><body><script>localStorage.setItem('credential','fixture-editor-secret');window.__ticket='fixture-editor-ticket';addEventListener('message',e=>{if(e.origin===${JSON.stringify(STAGE)}&&e.source===document.querySelector('iframe').contentWindow&&e.data?.kind==='fixture-ready'&&e.data.nonce==='policy-nonce')e.source.postMessage({kind:'fixture-allow',nonce:'policy-nonce'},e.origin)});</script><iframe sandbox="allow-scripts allow-same-origin" width="640" height="320" src="${mode === 'same' ? EDITOR : STAGE}/stage?mode=${mode}"></iframe>`;
+let gateMiddleware;
+const cloudServer = http.createServer((req, res) => gateMiddleware(req, res, () => reply(res, 200, 'application/json', '{"ok":true}', { 'access-control-allow-origin': STAGE })));
+servers.push(cloudServer);
+await installHostedGate({ middlewares: { use: (fn) => { gateMiddleware = fn; } }, httpServer: cloudServer }, { prerender: true, env: { PROMPTCUT_RENDER_BROKER: 'fixture', PROMPTCUT_RENDER_BROKER_KEY: 'fixture-manager-only-key' }, write: () => {} });
+await new Promise((resolve, reject) => { cloudServer.once('error', reject);cloudServer.listen(BASE + 3, '127.0.0.1', resolve); });
+await serve(BASE, (req, res) => {
+  if (req.url === '/account') return reply(res, 403, 'text/plain', 'denied');
+  if (req.url.startsWith('/stage')) return reply(res, 200, 'text/html', frameHtml, stageSecurityHeaders(EDITOR));
+  if (req.url === '/boot.js') return reply(res, 200, 'application/javascript', boot);
+  return reply(res, 200, 'text/html', parentHtml(new URL(req.url, EDITOR).searchParams.get('mode') || 'full'), { 'content-security-policy': editorCspHeader([STAGE]), 'set-cookie': 'fixtureAccount=editor-secret; HttpOnly; Path=/; SameSite=Strict' });
+});
+await serve(BASE + 1, (req, res) => {
+  if (req.url.startsWith('/stage')) { const mode = new URL(req.url, STAGE).searchParams.get('mode');return reply(res, 200, 'text/html', frameHtml, { ...(mode === 'meta' ? {} : stageSecurityHeaders(EDITOR)), 'set-cookie': 'pc_rt=fixture-project-A; HttpOnly; Path=/media-s/projectA/; SameSite=Strict' }); }
+  if (req.url === '/boot.js') return reply(res, 200, 'application/javascript', boot);
+  if (req.url.startsWith('/media-s/')) return reply(res, req.url.startsWith('/media-s/projectA/') && req.headers.cookie?.includes('pc_rt=fixture-project-A') ? 200 : 401, 'image/png', image);
+  return reply(res, 404, 'text/plain', 'missing');
+});
+await serve(BASE + 2, (req, res) => {
+  requests.push(req.url);
+  const headers = { 'access-control-allow-origin': '*' };
+  if (req.url === '/image.png') return reply(res, 200, 'image/png', image, headers);
+  if (req.url === '/style.css') return reply(res, 200, 'text/css', 'body{background:rgb(20,30,40);color:white}', headers);
+  if (req.url === '/script.js') return reply(res, 200, 'application/javascript', 'window.externalScript="loaded";', headers);
+  if (req.url === '/font.ttf') return reply(res, 200, 'font/ttf', font, headers);
+  return reply(res, 404, 'text/plain', 'missing', headers);
+});
+const browser = await puppeteer.launch({ headless: !process.argv.includes('--headful'), args: [...PROBE_CHROME_ARGS, '--no-sandbox'] });
+const browserVersion = await browser.version();
+const checks = [], results = {};
+function check(name, ok, detail) { checks.push({ name, ok: !!ok, detail });console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); }
+try {
+  const page = await browser.newPage();
+  for (const mode of ['full', 'meta', 'same']) {
+    await page.goto(`${EDITOR}/?mode=${mode}`, { waitUntil: 'domcontentloaded' });
+    const frame = page.frames().find((f) => f !== page.mainFrame());
+    await frame.waitForFunction(() => window.fixture?.done, { timeout: 15_000 });
+    const result = await frame.evaluate(() => window.fixture);results[mode] = result;
+    if (mode === 'full') {
+      check('真实 header/base-uri 自检与跨源握手通过，无 Allowlist/TT 仍可执行', result.report?.ok && result.report.csp === 'header' && result.report.egress === 'none' && result.handshake && result.modules, result);
+      for (const kind of ['image', 'font', 'style', 'script']) check(`外链 ${kind} 实际载入`, result.resources?.[kind]);
+      check('WebRTC 构造器保留', result.rtcBefore === result.rtcAfter, { before: result.rtcBefore, after: result.rtcAfter });
+      check('编辑器 DOM/localStorage 读取被 SOP 拒绝', result.boundaries?.parentRead === 'SecurityError' && result.boundaries.localRead === 'SecurityError');
+      check('账号与素材票据没有交给卡片，另项目素材拒绝', result.boundaries?.cookie === '' && result.boundaries.ownMedia === 200 && result.boundaries.otherMedia === 401 && !JSON.stringify(result).includes('editor-secret'));
+      await page.screenshot({ path: path.join(OUT, 'external-resources.png') });
+    } else check(`${mode} 缺少 ${mode === 'meta' ? 'header' : '跨源'} 时真实自检拒绝执行`, result.report?.ok === false && result.gate?.allowed === false && !result.modules, result.report);
+  }
+  const cloud = await browser.newPage();await cloud.goto(`${CLOUD}/`, { waitUntil: 'domcontentloaded' });
+  const denied = await cloud.evaluate(() => fetch('/api/vision/frame').then(r => r.status));
+  check('真实 hosted Vite 页面闸拒绝管理 API', denied === 403, denied);
+  const withoutKey = await fetch(`${CLOUD}/api/vision/frame`).then(r => r.status);
+  check('Node 管理调用无口令也拒绝', withoutKey === 403, withoutKey);
+  const withKey = await fetch(`${CLOUD}/api/vision/frame`, { headers: { 'x-pc-look-key': 'fixture-manager-only-key' } }).then(r => r.status);
+  check('正确管理口令的 Node 调用通过', withKey === 200, withKey);
+  check('资源站四类请求均真实到达', ['/image.png', '/font.ttf', '/style.css', '/script.js'].every(p => requests.includes(p)), requests);
+} finally { await browser.close();for (const server of servers) { server.closeAllConnections?.();await new Promise(r => server.close(r)); } }
+const out = { ok: checks.every(c => c.ok), browser: 'Chrome for Testing', browserVersion, untested: ['Firefox', 'Safari'], checks, results, out: OUT, obsolete: ['卡片外发为零', 'Connection-Allowlist/Trusted Types/WebRTC 为执行前提'] };
+fs.writeFileSync(path.join(OUT, 'result.json'), JSON.stringify(out, null, 2));
+console.log(JSON.stringify(out));process.exitCode = out.ok ? 0 : 1;

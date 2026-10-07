@@ -11,17 +11,11 @@
  * 转译(`onlineCardSources.ts`)只在这里说「能」的时候才做,所以不能执行的页面不会去载入转译器那一块。
  */
 export interface CardExecGate {
-  /** 站点总开关;null = 还没读到运行配置(按开算,但 `isolated` 没立之前照样不执行) */
+  /** 站点运行开关，尚未读取按开启，但隔离尚未就绪仍不执行。 */
   site: boolean | null;
-  /** 隔离环境就绪 */
   isolated: boolean;
-  /** `isolated` 为假时的原因(诊断) */
   reason: string | null;
-  /**
-   * 画面那一半能不能执行(〔裁:主会话 2026-10-06〕契约 3.4):隔离就绪之外,还要两台舞台的出口都由浏览器拦
-   * (自检的 `egress: "allowlist"`,响应头 `Connection-Allowlist`)。只靠脚本加固拦 WebRTC 的浏览器(`egress: "script"`)上为假:
-   * 画面不执行、退回原做法;声音线程照常(后台线程里没有 WebRTC)。缺省真(由 `isolated` 把关),隔离那一块写进来。
-   */
+  /** 兼容调用者的画面状态字段；出口能力不作为执行条件。 */
   visual: boolean;
 }
 
@@ -39,17 +33,16 @@ export function cardExecAvailable(): boolean {
 
 /** 本页此刻能不能执行同步来的卡的**画面**(声音线程只看 `cardExecAvailable`) */
 export function cardVisualExecAvailable(): boolean {
-  return cardExecAvailable() && gate.visual;
+  return cardExecAvailable();
 }
 
-/** 画面因为出口拦不住而不执行时,参数面板上的那一句(状态仍是 `not-isolated`) */
-export const CARD_EXEC_EGRESS_DETAIL = "这个浏览器拦不住卡片代码经 WebRTC 向外发数据";
+
+
 
 /** 不能执行时,卡片该报哪一句(参数面板):站点关了与没有隔离环境是两句话,状态都是 `not-isolated` */
 export function cardExecBlockedDetail(): string | null {
   if (gate.site === false) return "这个站点没有开启在线运行用户卡与图卡";
   if (!gate.isolated) return null;
-  if (!gate.visual) return CARD_EXEC_EGRESS_DETAIL;
   return null;
 }
 

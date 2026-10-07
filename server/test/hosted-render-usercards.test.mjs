@@ -31,7 +31,7 @@ import { createBroker } from '../hosted-render/broker.mjs';
 import { createCardPresence } from '../hosted-render/card-presence.mjs';
 import { scrubWorkerEnv, renderServiceConfig } from '../hosted-render/main.mjs';
 import { pageGate } from '../hosted-render/page-gate.mjs';
-import { installHostedGate, startEgressProxy, egressChromeArgs, hostedGateWanted, hostedGateMode, relayAllowed, EGRESS_HEADER, GATE_PASS_ENV, GATE_PASS_HEADER } from '../hosted-render/vite-gate.mjs';
+import { installHostedGate, hostedGateWanted, hostedGateMode, relayAllowed, GATE_PASS_ENV, GATE_PASS_HEADER } from '../hosted-render/vite-gate.mjs';
 import { checkSyncedSource, rejectedStub, hostedWorkerKind, scanCss } from '../hosted-render/source-gate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -356,7 +356,7 @@ test('HR28 闸只在托管方的工作进程里装；装上之后浏览器发来
   const gateP = await installHostedGate(pre, { prerender: true, env: envP, write: () => {} });
   try {
     const page = pre.run({ url: '/src/main.tsx', headers: { 'sec-fetch-site': 'same-origin' } });
-    assert.deepEqual([page.passed, page.headers[EGRESS_HEADER[0].toLowerCase()]], [true, '(response-origin)']);
+    assert.deepEqual([page.passed, page.headers["connection-allowlist"]], [true, undefined]);
     assert.equal(pre.run({ url: '/?export=1', headers: { 'sec-fetch-site': 'none' } }).passed, true, 'puppeteer 直接开的导航');
     assert.equal(pre.run({ url: '/api/frames/queue', headers: { 'sec-fetch-site': 'same-origin' } }).status, 403);
     assert.equal(pre.run({ url: '/api/frames/queue/release', method: 'POST', headers: { 'sec-fetch-site': 'same-origin', origin: 'http://127.0.0.1:5555' } }).status, 403);
@@ -366,10 +366,10 @@ test('HR28 闸只在托管方的工作进程里装；装上之后浏览器发来
     assert.equal(pre.run({ url: '/src/main.tsx', headers: { 'sec-fetch-site': 'same-site' } }).status, 403, '另一个工作进程的页面');
     assert.equal(pre.run({ url: '/src/main.tsx', headers: { 'sec-fetch-site': 'cross-site', origin: 'null' } }).status, 403, '不透明来源的子框架');
     assert.equal(pre.run({ url: '/api/frames/queue', headers: {} }).passed, true, 'Node 一侧的调用');
-    assert.match(envP.PC_CHROME_ARGS, new RegExp(`^--existing --proxy-server=http://127\\.0\\.0\\.1:${gateP.proxy.port} --proxy-bypass-list=<-loopback> --force-webrtc-ip-handling-policy=disable_non_proxied_udp$`));
-    assert.deepEqual(egressChromeArgs(1234), ['--proxy-server=http://127.0.0.1:1234', '--proxy-bypass-list=<-loopback>', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']);
+    assert.equal(envP.PC_CHROME_ARGS, "--existing", "不追加出口代理或UDP限制参数");
+    assert.equal(gateP.proxy, null);
   } finally {
-    await gateP.proxy.close();
+    await gateP.proxy?.close();
   }
 
   // 预渲染 → 编辑器的转发：预渲染一侧给放行了的浏览器请求盖通行记号；编辑器一侧凭它只放行素材那三类路径的只读请求
@@ -399,7 +399,7 @@ test('HR28 闸只在托管方的工作进程里装；装上之后浏览器发来
     assert.equal(relayed('/@media/' + 'a'.repeat(64), 'GET', '').status, 403);
     assert.deepEqual([relayAllowed('/@media/x', 'GET'), relayAllowed('//api//asset/x', 'HEAD'), relayAllowed('/api/media/x', 'POST'), relayAllowed('/api/cards/x', 'GET')], [true, true, false, false]);
   } finally {
-    await gatePr.proxy.close();
+    await gatePr.proxy?.close();
   }
 
   // 只记不拦
@@ -411,70 +411,6 @@ test('HR28 闸只在托管方的工作进程里装；装上之后浏览器发来
   assert.equal(gateL.mode, 'log');
   // 判定本身（纯函数）与开发工具的口
   assert.deepEqual(pageGate({ url: '/__open-in-editor?file=x', method: 'GET', headers: { 'sec-fetch-site': 'same-origin' }, prerender: true }), { browser: true, allow: false, reason: 'dev-tool' });
-});
-
-/** 经代理发一条绝对地址的请求，回状态码与正文 */
-function viaProxy(proxyPort, target, { method = 'GET' } = {}) {
-  return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port: proxyPort, method, path: target, headers: { host: new URL(target).host } }, (res) => {
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
-function connectVia(proxyPort, target) {
-  return new Promise((resolve) => {
-    const socket = net.connect(proxyPort, '127.0.0.1', () => socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`));
-    let got = '';
-    socket.on('data', (c) => { got += c.toString(); socket.destroy(); resolve(got.split('\r\n')[0]); });
-    socket.on('error', () => resolve('error'));
-    socket.on('close', () => resolve(got.split('\r\n')[0] || 'closed'));
-  });
-}
-
-test('HR28 出口代理：只转发到这台预渲染服务器自己；别的回环端口、元数据地址、外部地址一律 403；隧道一律拒；只记不拦时照转并记下', async () => {
-  const hits = { own: 0, other: 0 };
-  const own = http.createServer((req, res) => { hits.own += 1; res.writeHead(200, { 'x-own': '1' }); res.end(`own ${req.method} ${req.url} ${req.headers['sec-fetch-site'] ?? '-'}`); });
-  const other = http.createServer((_req, res) => { hits.other += 1; res.end('other'); });
-  await new Promise((r) => own.listen(0, '127.0.0.1', r));
-  await new Promise((r) => other.listen(0, '127.0.0.1', r));
-  const ownPort = own.address().port;
-  const otherPort = other.address().port;
-  const notes = [];
-  let listening = null;
-  const proxy = await startEgressProxy({ allowedPort: () => listening, note: (kind, fields) => notes.push([kind, fields.to, fields.reason]) });
-  try {
-    assert.equal((await viaProxy(proxy.port, `http://127.0.0.1:${ownPort}/x`)).status, 403, '预渲染服务器还没监听：谁都不转');
-    listening = ownPort;
-    const ok = await viaProxy(proxy.port, `http://127.0.0.1:${ownPort}/src/a.tsx?x=1`);
-    assert.deepEqual([ok.status, ok.body], [200, 'own GET /src/a.tsx?x=1 -']);
-    assert.equal((await viaProxy(proxy.port, `http://localhost:${ownPort}/y`)).status, 200, 'localhost 写法同一台');
-    for (const target of [`http://127.0.0.1:${otherPort}/status`, 'http://169.254.169.254/latest/meta-data/', 'http://example.invalid/collect', `http://127.0.0.1:${ownPort + 1}/`, `http://10.0.0.1:${ownPort}/`]) {
-      const r = await viaProxy(proxy.port, target);
-      assert.deepEqual([r.status, r.body], [403, 'egress blocked'], target);
-    }
-    assert.equal(hits.other, 0, '别的端口一个请求都没收到');
-    assert.match(await connectVia(proxy.port, `127.0.0.1:${otherPort}`), /403/);
-    assert.match(await connectVia(proxy.port, `127.0.0.1:${ownPort}`), /403/, '到自己的隧道也不给（渲染页用不着 WebSocket）');
-    assert.match(await connectVia(proxy.port, 'example.invalid:443'), /403/);
-    assert.ok(notes.some(([kind, to]) => kind === 'deny' && String(to).includes('169.254.169.254')));
-    assert.deepEqual(proxy.stats().forwarded, 2);
-  } finally {
-    await proxy.close();
-  }
-  const logNotes = [];
-  const logProxy = await startEgressProxy({ allowedPort: () => ownPort, mode: 'log', note: (kind, fields) => logNotes.push([kind, fields.to]) });
-  try {
-    assert.equal((await viaProxy(logProxy.port, `http://127.0.0.1:${otherPort}/status`)).body, 'other', '只记不拦：照转');
-    assert.deepEqual(logNotes, [['would-deny', `http://127.0.0.1:${otherPort}`]]);
-  } finally {
-    await logProxy.close();
-    await new Promise((r) => own.close(r));
-    await new Promise((r) => other.close(r));
-  }
 });
 
 /* ================================================================== HR32 同步文件预检 */

@@ -16,7 +16,6 @@ export const EDITOR_POLICY_SNIPPET_FILE = 'nginx-snippet-promptcut-editor-policy
 /** 响应头的规范写法(nginx 原样发出;浏览器不分大小写) */
 const NAME = {
   'content-security-policy': 'Content-Security-Policy',
-  'connection-allowlist': 'Connection-Allowlist',
   'x-dns-prefetch-control': 'X-DNS-Prefetch-Control',
   'origin-agent-cluster': 'Origin-Agent-Cluster',
   'referrer-policy': 'Referrer-Policy',
@@ -30,7 +29,7 @@ function addHeaderLines(headers) {
   });
 }
 
-/** 舞台源(s1 / s2)上每个 location 都 include 的那一份:策略、出口白名单、关 DNS 预解析,以及原有的三条 */
+/** 舞台源(s1 / s2)上每个 location 都 include 的那一份:文档边界策略、关 DNS 预解析,以及原有的三条 */
 export function stageHeadersSnippet() {
   return [
     '# 由 scripts/gen-stage-policy-nginx.mjs 生成,不要手改;策略原文在 src/online/stagePolicy.mjs。',

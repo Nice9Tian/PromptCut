@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stagePolicySnippets, STAGE_HEADERS_SNIPPET_FILE, EDITOR_POLICY_SNIPPET_FILE } from '../hosted/stage-policy-nginx.mjs';
 import { stageEntryHtml, STAGE_ENTRY_FILE } from '../stage-entry.mjs';
-import { STAGE_CSP_META, STAGE_CONNECTION_ALLOWLIST, stageCspHeader, editorCspHeader, MEDIA_COOKIE, MEDIA_COOKIE_MAX_AGE_S, SID_PATTERN, MEDIA_S_PATH_PATTERN, TICKET_PATTERN, ASSET_API_PREFIX } from '../../src/online/stagePolicy.mjs';
+import { STAGE_CSP_META, stageCspHeader, editorCspHeader, MEDIA_COOKIE, MEDIA_COOKIE_MAX_AGE_S, SID_PATTERN, MEDIA_S_PATH_PATTERN, TICKET_PATTERN, ASSET_API_PREFIX } from '../../src/online/stagePolicy.mjs';
 
 const DEPLOY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'hosted', 'deploy');
 const read = (name) => fs.readFileSync(path.join(DEPLOY, name), 'utf8').replace(/\r\n/g, '\n');
@@ -35,7 +35,7 @@ test('OCS-N-01 仓库里的两个策略片段与 stagePolicy.mjs 生成的逐字
   for (const [name, text] of Object.entries(want)) assert.equal(read(name), text, name);
   const stage = read(STAGE_HEADERS_SNIPPET_FILE);
   assert.ok(stage.includes(`add_header Content-Security-Policy "${stageCspHeader('https://{{DOMAIN}}', { template: true })}" always;`));
-  assert.ok(stage.includes(`add_header Connection-Allowlist "${STAGE_CONNECTION_ALLOWLIST}" always;`));
+  assert.doesNotMatch(stage, /Connection-Allowlist/);
   assert.ok(stage.includes('add_header X-DNS-Prefetch-Control "off" always;'));
   assert.ok(stage.includes('add_header Origin-Agent-Cluster "?1" always;'));
   assert.ok(read(EDITOR_POLICY_SNIPPET_FILE).includes(`add_header Content-Security-Policy "${editorCspHeader(['https://s1.{{DOMAIN}}', 'https://s2.{{DOMAIN}}'], { template: true })}" always;`));
