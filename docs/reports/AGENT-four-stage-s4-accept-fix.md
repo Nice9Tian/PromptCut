@@ -51,6 +51,33 @@
 - 单测 `server/test/hosted-render-process.test.mjs` HR30b、`server/test/hosted-render-memory.test.mjs` HR34b。
 - 不涉及画面，不影响导出像素。
 
-## 验证数字
+`desktop-auto-node-probe` A5 另修一处探针竞态：页面回到共享项目时先记下绑定、等挑到素材服务（最多 5 秒）才把配置交出去；探针以前只等 `bound` 就读预渲染进程的计数，读早了 `same` 还是 0。改成等页面 `sent`、再等计数到。交接的产品代码与 main 相同。
 
-见返回给主会话的正文；本文件随做随补。
+## 验证数字（提交 `00c27325`）
+
+- `npx tsc -b --force`：退出码 0。
+- `npm test`：tests 4901、pass 4900、fail 0、skipped 1（比起点多 HR30b、HR34b 两条）。
+- 验收运行器单独重跑七项（`--only X-c10a-demo-local,P-desktop-auto-node,P-c10-user-card,X-online-join,S3-1,P-multi-agent,G0-5`），七项全过：
+
+| 项 | 结果 | 耗时 |
+|---|---|---|
+| `G0-5` | pass（37 项） | 1 s |
+| `P-c10-user-card` | ref-pass（PC 参考，待笔记本复核） | 138 s |
+| `P-desktop-auto-node` | pass | 324 s |
+| `P-multi-agent` | pass（35 项） | 28 s |
+| `X-online-join` | pass（45 项） | 72 s |
+| `X-c10a-demo-local` | pass | 624 s |
+| `S3-1` | ref-pass（十步全过，`kill` 步骤残留为空） | 770 s |
+
+  `X-c10a-demo-local` 这一遍正好走到上一遍不过的那种情形（创建者的计划 10 个细任务、手机上轻卡有 180 帧产物）：播放中它抑制着、贴小尺寸（`S+img`），补渲顺序 `NNNNNNNNNNBB`。单独跑的那一遍走的是另一支（没有产物、占位 `S+ph`，顺序 `BNNNNBB`，抢先的那一个比 normal 计划的发布早 308 ms），也过。
+- 进程号重用的实验（造一个孤儿、让它的父进程号被新进程重用）：修前 `treeAlive` 把孤儿算进去，修后不算；`taskkill /T` 两次都没有结束孤儿。
+
+## 第四段的验收项（运行器 `--only 第四段,S3-2`，真实模型与新节点的项运行器本来就不跑）
+
+- 过：`S3-2`（成员计数正则修好后）、`S4-1`、`S4-2`、`S4-3`、`S4-5`、`S4-6`（32 项）、`S4-7`（138 项）。
+- 不过：`S4-4`（`cloud-agent-ui-probe`，90 项里 1 项）——「D6:成员列表里自己那一行下有〈成员名〉的云端 Agent」期望顶栏「成员：2 人 · Agent：1 个」，实际「Agent：2 个」（那一行同时带着「Agent ×1」的本机对话和在跑的云端 Agent）。同一探针后一条断言认定一轮结束后「只剩本机 Agent 1 个」，按新口径运行中就该是 2：倾向探针这一条期望值没跟上，没修、待核。
+
+## 没动的
+
+- `P-c10-browser-full` 的 A5（独立渲染主机认领清单计划）：main 上就不稳，没查。
+- `P-asset-path`：这台机器没有带 numpy 的 Python，环境缺失。
