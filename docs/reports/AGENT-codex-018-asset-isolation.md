@@ -18,3 +18,10 @@
 
 - 起点与工作区干净已核；初次只读搜索误用 Bash 花括号展开于 PowerShell，ParserError、未执行读取/变更；改明确文件清单后读取成功，不算测试。
 - 状态：开工，未实现、未验证，不以计划替代通过。
+
+## 第一块：物理库与授权接口
+
+- `server/asset-store/project-stores.mjs`：`createProjectAssetStores({dir,kind='fs'|'memory',contentTypeForExt?,chunkSize?})` 返回 `{v:2,project(projectId),store(projectId,ns),removeProject(projectId)}`。project 返回 `{v:2,projectId,root,dir,dirs:{media,snap,px},stores}`；目录 `dir/projects/sha256(projectId)/out/...`，没有全球 hash bind，projectId 不作路径片段。内部删除机制需中央先授权、停任务/流，不新增用户删除策略。
+- `project-access.mjs`：`authorizeAsset({authority,principal,projectId,action,resource})` 必须 project 匹配并每次委托 `authority.checkAccess`；`openProjectStream` 先同步登记 `authority.subscribeRevocations(context,callback)` 再核验，回 `{signal,assert,track,release,closed}`。撤销回调同步 abort/destroy，再等真实 close；持久消费/ACK由权威 adapter 实现。`createProjectAssetAccess({authority,resolvePrincipal(req)})` 不认 HTTP body 自报身份。
+- doc owner 已确认 opaque `authorizationId` RAM 绑定原凭证、逐次问 account.verify；公开 account/login/credential 字段不构成授权。当前 adapter shape 已发对方，待其实际 schema 校准，runGrant 必须由 doc 授权，不能仅 body 自报。
+- `node --test server/test/asset-project-stores.test.mjs`：6/6，0失败/跳过，113.7763ms；TMP/promptcut-asset-project-stores-1.log。覆盖 fs/memory 三 namespace 同hash独立入库、B未入库不命中、删除A不影响B、路径编码、逐次权威核验、持续流close及check等待中撤销竞态。
