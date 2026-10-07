@@ -36,3 +36,28 @@ export function judgeDualClip({ groups, candidates = [], layerFp = null }) {
   if (!layerFp || !names.includes(layerFp)) reasons.push('层表这一层没有指向其中一组');
   return { ok: reasons.length === 0, winner: full.length === 1 ? full[0] : null, fullySuperseded, takenOverMidway, badRanges, reasons };
 }
+
+/** Current describe wins over history. A vanished task is not evidence of success:
+ * require both the publisher's explicit superseded reason and the watcher's latest
+ * failed event. Reopening clears that terminal event in the probe. */
+export function observedSuperseded({ current, closed, publisherSuperseded = false }) {
+  if (current) return current.state === 'failed' && current.lastError === 'superseded';
+  return publisherSuperseded && closed?.state === 'failed';
+}
+
+/** Observe the page's actual chosen layers, preserving the first (possibly stale)
+ * sample. The existing A4 deadline bounds this wait; no elapsed time implies pass. */
+export async function observeLayerEnvironments(read, { clips, fingerprint, timeoutMs, pollMs = 250,
+  now = () => performance.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  const started = now();
+  const pick = value => (value?.layers ?? []).map(l => ({ clip: l.clipId, fp: l.envFingerprint, ready: l.ready }));
+  const matches = layers => !!fingerprint && clips.every(c => layers.find(l => l.clip === c)?.fp === fingerprint);
+  const first = pick(await read());
+  let layers = first, samples = 1;
+  while (!matches(layers) && now() - started < timeoutMs) {
+    await sleep(Math.min(pollMs, Math.max(0, timeoutMs - (now() - started))));
+    layers = pick(await read());
+    samples++;
+  }
+  return { ok: matches(layers), first, layers, samples, waitedMs: now() - started };
+}

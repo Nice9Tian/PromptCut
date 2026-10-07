@@ -15,3 +15,11 @@
 第一次定向 `TMP/promptcut-validation-races-target-1.log`：20 tests、18 pass、0 fail、2 cancelled，exit1，60266.03ms。受控门控最初选 MP4，其可执行查询在同步重封装阶段，阻塞 HTTP，两个新测试各 30s timeout；after 释放拥有的子进程并清理。改为不走重封装的 MKV 后第二次 `TMP/promptcut-validation-races-target-2.log`：20/20、0 fail/cancel/skip，exit0，27522.1808ms；旧 rmSync 反例 23649.7141ms，新收口204.1557ms，流 close103.6962ms。新增负向 fixture 的上限改为60s以容纳 Windows 同步 rm 失败内置重试，并记 rmMs；既有 collect 语义、10s job 时限、原断言均不改。
 
 源码7620aed4验收：`TMP/promptcut-validation-races-types-1.log` 类型0错，exit0，wall6847.5649ms；`TMP/promptcut-validation-races-full-1.log` 全量首次4936 tests /4935 pass /0 fail /0 cancelled /1 skip，duration77672.7596ms，wall78083.1568ms，exit0，没有自动重试。相比原失败全量的4934，去掉文件级after失败计数并新增3条。所有原业务断言保留，auth修复未触碰。此块不宣称原失败的唯一持锁者已证。
+
+## M7 观测修复与受控反例
+
+真实 createRenderQueue 反例已证：旁观采样先存 open，浏览器 claim 把异指纹整份 superseded；随后重复 publish 在同一轮先删 superseded 记录、再以 card-locked 拒建。下一次 describe 没有该任务，旧 god Map 不移除缺席项，故永久留下 open；延长 sleep 也无法修这个历史缓存。现在 D12 用当前 describe 优先；当前没有记录时必须同时有本页 publisher 实收 task.failed/error=superseded 与无指纹 watcher 最新 failed 终态才算作废。重新 opened 清掉 watcher 终态；当前仍 open/claimed/done、普通失败、只有消失、只有旧作废证据都不能过。旧纯判据 judgeDualClip 不变，逐任务把 sampled/current/publisher/watcher 证据写进结果。
+
+真实 OnlineSnapshotSource 反例已证：初次层表只有 PC 候选，浏览器 markAlive 已发生而下一张候选层表回包被门控，debug 仍选 PC；放行真实 loadMap 后选 browser。现在 A4 在原 gateLift+600000ms 总截止内等待真实页面各重层指纹匹配，记录第一次样本、最终样本、次数、收敛耗时；时间本身不能判通过，持续错误有负向测试。完成耗时原值仍只记录，未恢复30s门槛。
+
+M7定向第一次 `TMP/promptcut-validation-races-m7-target-1.log`：7/6/1fail、134.0971ms、exit1，新实队列fixture错用了带PC指纹观察者（它收到hidden而非failed）；改为原探针的无指纹观察者后 `...m7-target-2.log` 7/7、121.1975ms、exit0。实队列输出 sampled=open,current=null,published=card-locked,publisher=superseded,watcher=failed；真实页面来源两次采样 first=PC,last=browser。原877s日志没有这些逐任务证据，所以这里只证明可执行失败路径，不追认原两次fail的唯一根因；真实full M7仍待跑。
