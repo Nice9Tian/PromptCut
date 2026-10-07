@@ -56,3 +56,9 @@ private/agent-disabled fence 必须带当次 current/queued/preparing `runIds` �
 生产 owner 必须：所有 doc 写/stop/private/delete 走同一 coordinator；prepared 输入已含确定外部结果，不传回调重跑模型；checkGate 在恢复 account 事件/head 与服务持久 cursor 后核当前项目/成员/开关/run/queue/readReceipt；onFenceRequested 同步关闭读取/工具后续派发，失败保持拒绝；acknowledgeFence 只能返回实际持久服务 receipt。API 只公开 submit/fence/recover，内部 resolveWitness 不给绕锁入口。schema v2 未支持旧历史迁移，未来 schema 直接拒绝；缺完整链 needs-reconciliation。history 数据库是本包可恢复文档提交记录/快照，既有 doc 状态与广播的适配由 owner 接入，同一 prepared 不得再次执行外部效果。
 
 四服务 ACK 的来源真实性由 Foundation mTLS/各服务持久应用保证；logout proof 中 connection/project cursor 的完整枚举由 doc owner 提供，本模块不凭 body.pendingSeals=0 信任结清，而会查账号实际 reserved 记录。账号不裁决项目权限。本包没有部署、公网、真实桌面/浏览器 UI、既有服务挂载或 0.7.20 补偿，均留主会话各 owner 集成验证。
+
+## 全量发现与修复：依赖方向
+
+PC 首轮全量在源 `d3392fee`：4948 tests / 4946 pass / 1 fail / 1 skip，67498.9349 ms，wall 67.8873369 s，exit1。唯一失败 `bakery-deps`：server/test 导入 scripts 的故障矩阵违反依赖方向。原始日志 `promptcut-018-order-full-final.log` 保留。修复为矩阵实现放入本任务已授权 `server/test/password-order-fixture.mjs`，scripts 只向 server re-export，单测直接导入同层夹具；没有修改规则或扩大授权路径。定向依赖+全部 order tests 20/20，3438.3732 ms，exit0，无自动重试；日志 `promptcut-018-order-deps-fixed.log`，33 子案例目录 `pc-order-faults-i5XDv4`。因此重新跑 types/full 与 probe，非盲重试。
+
+修复前最终源类型零错误（wall 8.7642925 s），VH 完整 npm 26/26 pass、0 fail/skip，3427.1994 ms，wall 3.7278466 s；password-order 实际探针 37/37，wall 3.8484109 s，目录 `pc-order-probe-final-9994fd320eee4e969847bd5bff1415a9`。原日志分别 `promptcut-018-order-types-final.log`、`visuhive-018-order-full-final.log`、`promptcut-018-order-probe-final.log`。

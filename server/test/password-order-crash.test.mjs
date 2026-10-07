@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runFaultMatrix } from '../../scripts/probes/fixtures/password-order/fault-matrix.mjs';
+import { runFaultMatrix } from './password-order-fixture.mjs';
 
 test('password-order actual subprocess crash matrix: SQLite persistence boundaries and missing evidence', {
   skip: !process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ? 'Actual cross-repository provider must be explicitly configured; portable unit tests do not prove it' : false,
