@@ -1703,3 +1703,17 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 3. Agent 服务的环境里设 `PROMPTCUT_AGENT_COLLECT_PYTHON=/opt/promptcut/collect-venv/bin/python`；**不要**设 `PROMPTCUT_AGENT_COLLECT_TEST_ARGS` 与 `PROMPTCUT_AGENT_EGRESS_TEST_ALLOW`；
 4. 部署后核对 `/healthz`：`collect: true`、`collectTestRunner: false`、`egressTestAllow: false`；再用一个测试项目让云端 Agent 调一次 `collect_status`（应当 `ready: true`）与一次真实的 `collect_probe`；
 5. 建议（代码不假设）：子进程用独立的非特权用户跑，并在系统层面只许它连本机的代理端口段（出站限制），这样下载器即使不认代理也出不去。
+
+---
+
+## 28. 发起方在线时的反向通道的实现记录（2026-10-07，分支 `claude/cloud-agent-2`）
+
+接着第 27 节，做任务书 J 里「要操作发起人自己界面的工具，发起方在线时要能用」这一块。上文与本节冲突时以本节为准。
+
+### 28.0 进展
+
+- [ ] 服务端：`page.request` 与 `POST …/page-results`
+- [ ] 页面：白名单执行与交回
+- [ ] 工具接线：`seek`、`play`、`pause`、`get_selection`
+- [ ] 隔离探针与界面探针的断言
+- [ ] 两处小的（D6 期望值、界面版体验探针的用户卡一步）
