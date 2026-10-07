@@ -266,7 +266,8 @@ export function createConversationStore({ dataDir = null, now = () => Date.now()
 
   /**
    * 看一个对话:先补发 `seq` 大于 `after` 的,再接实时的(同一拍里切换)。回退订函数。
-   * @param {{ userId?: string }} [who] 谁在看(判「发起方在线」用)
+   * @param {{ userId?: string, pageId?: string | null }} [who] 谁在看(判「发起方在线」用);`pageId` 是那张页面自报的页面号
+   *   (反向通道只认发起这一轮的那一张,契约第 28 节)
    */
   function subscribe(conv, after, cb, who = {}) {
     const from = Number.isSafeInteger(after) && after > 0 ? after : 0;
@@ -274,10 +275,13 @@ export function createConversationStore({ dataDir = null, now = () => Date.now()
       if (entry.seq <= from) continue;
       for (const ev of expandEntry(entry)) if (ev.seq > from) cb(ev);
     }
-    const l = { cb, userId: who.userId ?? null };
+    const l = { cb, userId: who.userId ?? null, pageId: who.pageId ?? null };
     conv.listeners.add(l);
     conv.touched = now();
-    return () => { conv.listeners.delete(l); };
+    const off = () => { conv.listeners.delete(l); };
+    // 这条流在实时名单里的那一项(服务据它认「发给哪条流的请求」)
+    off.listener = l;
+    return off;
   }
 
   /** 改状态并落 `meta.json` */

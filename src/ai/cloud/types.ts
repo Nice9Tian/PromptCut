@@ -53,4 +53,6 @@ export interface CloudSendBody {
   pageState?: CloudPageState;
   /** 已经传到这个对话工作目录里的附件(`POST …/attachments` 回包里的 `url`);服务端只认工作目录里真有的 */
   attachments?: { url: string }[];
+  /** 发这条消息的那张页面的页面号(契约第 28 节):带了,这一轮里云端 Agent 才能经反向通道让这张页面执行播放头等操作 */
+  pageId?: string;
 }

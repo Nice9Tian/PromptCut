@@ -15,6 +15,7 @@ import type { ChatStore } from "../liveChat.ts";
 import { CloudError, cloudErrorText, type CloudApi } from "./cloudApi.ts";
 import { applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, userMessageId } from "./events.ts";
 import type { CloudEvent, CloudSendBody } from "./types.ts";
+import type { PageRequestAnswer } from "./pageRequests.ts";
 
 export type CloudConnection = "idle" | "connecting" | "live" | "reconnecting";
 
@@ -29,7 +30,13 @@ export interface CloudSessionView {
 }
 
 export interface CloudSessionDeps {
-  api: Pick<CloudApi, "send" | "abort" | "events">;
+  api: Pick<CloudApi, "send" | "abort" | "events"> & Partial<Pick<CloudApi, "pageResult">>;
+  /**
+   * 反向通道(契约第 28 节):这张页面的页面号与执行请求的函数。两样都给了,发消息与开事件流时才报页面号,
+   * 事件流里来的 `page.request` 才会被执行并交回;不给就是只看不动的页面。
+   */
+  pageId?: string;
+  onPageRequest?: (ev: CloudEvent) => Promise<PageRequestAnswer | null> | PageRequestAnswer | null;
   store: ChatStore;
   /** 文字与思考的增量攒批的间隔(毫秒);0 = 来一条折一条 */
   flushMs?: number;
@@ -63,6 +70,32 @@ export function createCloudSession(deps: CloudSessionDeps) {
   /** 这一页刚发出去的消息带的附件(气泡里显示名字用):runId → 附件;服务端的 user 事件到了(或已经在)就贴上、从表里去掉 */
   const pendingAttachments = new Map<string, ChatAttachment[]>();
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 反向通道:两样都给了才开 */
+  const pageId = deps.pageId && deps.onPageRequest && api.pageResult ? deps.pageId : undefined;
+  /** 执行过的请求 id:同一条请求重复到达只执行一次 */
+  const answered = new Set<string>();
+
+  /**
+   * 事件流里来了一条 `page.request`:执行并交回。只在这条流还是当前对话的那一条时做(换了对话、关了页面就不做);
+   * 交回失败(已经不在等了、网络断了)不重试——服务端到时会回「发起方不在线」,Agent 自己继续。
+   */
+  async function answerPageRequest(ev: CloudEvent, id: string, myGen: number) {
+    if (!pageId || !deps.onPageRequest || !api.pageResult) return;
+    const reqId = typeof ev.id === "string" ? ev.id : "";
+    if (!reqId || answered.has(reqId)) return;
+    answered.add(reqId);
+    if (answered.size > 200) answered.delete(answered.values().next().value as string);
+    let answer: PageRequestAnswer | null = null;
+    try {
+      answer = await deps.onPageRequest(ev);
+    } catch (err) {
+      answer = { id: reqId, ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (!answer || closed || myGen !== gen || id !== conversationId) return;
+    try {
+      await api.pageResult(id, { ...answer, pageId });
+    } catch { /* 不在等了或网络断了:不重试 */ }
+  }
 
   let view: CloudSessionView = { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 };
   const listeners = new Set<() => void>();
@@ -141,11 +174,13 @@ export function createCloudSession(deps: CloudSessionDeps) {
         setConnection(attempt === 0 ? "connecting" : "reconnecting");
         let sawNone = false;
         try {
-          for await (const ev of api.events(id, lastSeq, ctl.signal)) {
+          for await (const ev of api.events(id, lastSeq, ctl.signal, pageId)) {
             if (myGen !== gen) return;
             attempt = 0;
             if (connection !== "live") { problem = null; setConnection("live"); }
             if (ev.type === "end" && ev.state === "none") { sawNone = true; continue; }
+            // 反向通道的请求不是对话记录的一部分(没有 seq):不折进消息,交给页面执行
+            if (ev.type === "page.request") { void answerPageRequest(ev, id, myGen); continue; }
             handle(ev);
           }
         } catch (err) {
@@ -217,7 +252,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       const seenBefore = lastSeq;
       let accepted: { runId: string; seq: number };
       try {
-        accepted = await api.send(conversationId, body);
+        accepted = await api.send(conversationId, pageId ? { ...body, pageId } : body);
       } catch (err) {
         if (err instanceof CloudError) throw err;
         throw new CloudError("network", cloudErrorText("network"));

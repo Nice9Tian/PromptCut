@@ -4,6 +4,9 @@
  * `/healthz`、`info`、发消息(202,一轮与连接无关)、事件流(先补发再接实时)、停止、对话的列取改删、用量查询、传附件。
  * 传附件:`POST /v1/conversations/<id>/attachments?name=<文件名>`,请求体是文件字节(不是 JSON);存进这个对话的工作目录,
  * 回 `{ ok, attachment: { name, url, size, kind, text? } }`,`url`(`work:attachments/…`)随下一条消息的 `attachments` 带回来。
+ * 反向通道(契约第 28 节,只追加):发消息的请求体多一个可选的 `pageId`,事件流的查询串多一个可选的 `page`(这张页面的页面号);
+ * 事件流上多一种不带 `seq`、不进事件记录的 `page.request`(只发给发起这一轮的那张页面);
+ * `POST /v1/conversations/<id>/page-results`,请求体 `{ id, pageId, ok, result?, error? }`,页面交回一次请求的结果(一次有效,不在等的回 410)。
  * 丙块在甲块的基础上只追加了接口与字段(对话的取、改标题、删,`/v1/usage`,`info` 与列表项多出的字段),已有的没有改。
  *
  * 身份只来自 `authenticate(req)`:回 `{ projectId, userId, username?, deviceName?, creator?, mode?, access? }` 或 null。
@@ -91,7 +94,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     }
   });
 
-  function events(req, res, identity, conversationId, after) {
+  function events(req, res, identity, conversationId, after, pageId = null) {
     const owner = ownerKeyOf(identity);
     if (streams >= MAX_STREAMS || (streamsByOwner.get(owner) ?? 0) >= MAX_STREAMS_PER_OWNER) {
       return sendJson(res, 429, { ok: false, code: 'busy', message: '同时打开的对话窗口太多,请关掉几个再试。' }, CORS);
@@ -102,7 +105,8 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     res.on('error', () => { /* 对端走了:由 close 收尾 */ });
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no', ...CORS });
     res.flushHeaders?.();
-    unsubscribe = service.subscribe(identity, conversationId, after, write);
+    // `pageId`:这张页面自报的页面号(反向通道只把请求发给发起这一轮的那一张,契约第 28 节)
+    unsubscribe = service.subscribe(identity, conversationId, after, write, { pageId });
     if (!unsubscribe) {
       // 还没有这个对话(或不是这位成员在这个项目里的):一条说明后结束,形状与「没有事件」相同
       write({ type: 'end', state: 'none', seq: 0 });
@@ -180,7 +184,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           return service.remove(identity, conversationId) ? sendJson(res, 200, { ok: true }, CORS) : missing();
         }
       }
-      const m = /^\/v1\/conversations\/([^/]+)\/(messages|events|abort|attachments)$/.exec(pathname);
+      const m = /^\/v1\/conversations\/([^/]+)\/(messages|events|abort|attachments|page-results)$/.exec(pathname);
       if (m) {
         const conversationId = decodeURIComponent(m[1]);
         if (!CONVERSATION_ID_RE.test(conversationId)) throw new AgentServiceError('bad-request', '对话 id 不合法');
@@ -188,13 +192,22 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           const body = await readBody(req);
           // 这些桌面字段云端不收(契约第 2.3 节);`__` 开头的是进程内测试用的,不从网络收。
           // `grant` 是这一轮的对话委托(契约第 4.2 节):只进内存,不落盘、不进日志
-          const { prompt, grant, model, effort, creativity, script, library, pageState, attachments } = body;
-          const out = await service.send(identity, conversationId, { prompt, grant, model, effort, creativity, script, library, pageState, attachments });
+          // `pageId`:发这条消息的那张页面的页面号(契约第 28 节);没带就没有反向通道
+          const { prompt, grant, model, effort, creativity, script, library, pageState, attachments, pageId } = body;
+          const out = await service.send(identity, conversationId, { prompt, grant, model, effort, creativity, script, library, pageState, attachments, pageId });
           return sendJson(res, 202, { ok: true, ...out }, CORS);
         }
         if (m[2] === 'events' && req.method === 'GET') {
           const after = Number(url.searchParams.get('after') ?? 0);
-          return events(req, res, identity, conversationId, Number.isSafeInteger(after) ? after : 0);
+          return events(req, res, identity, conversationId, Number.isSafeInteger(after) ? after : 0, url.searchParams.get('page'));
+        }
+        if (m[2] === 'page-results' && req.method === 'POST') {
+          // 发起人的页面交回反向通道上一次请求的结果(契约第 28 节):`{ id, pageId, ok, result?, error? }`。
+          // 别人的、不存在的对话 404(与别的接口一样);不在等的、过期的、交过的 `id`,不是发起这一轮的那张页面,一律 410
+          const body = await readBody(req);
+          const { id, pageId, ok, result, error } = body;
+          const out = service.pageResult(identity, conversationId, { id, pageId, ok, result, error });
+          return out ? sendJson(res, 200, { ok: true }, CORS) : sendJson(res, 404, { ok: false, code: 'not-found', message: 'not found' }, CORS);
         }
         if (m[2] === 'attachments' && req.method === 'POST') {
           // 文件名在查询串或请求头里(百分号编码);字节直接是请求体,边收边写进工作目录,超了上限当场断

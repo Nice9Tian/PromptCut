@@ -22,7 +22,7 @@
  *   - 对话存储(`conversations.mjs`)与补渲发布(`render-request.mjs`)。
  * 本文件不引用 `src/`。
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createAgentInstance } from './instance.mjs';
 import { createConversationStore, INTERRUPTED_MESSAGE } from './conversations.mjs';
@@ -51,7 +51,16 @@ export const HOSTED_DEFAULTS = Object.freeze({
   lookToolMs: 180_000,
   /** 一个对话的模型历史(`history.json`)超过这么大就按现有的历史截断(契约第 7.2 节) */
   maxHistoryBytes: 8 * 1024 * 1024,
+  /** 反向通道(契约第 28 节):向发起人的页面发出一次请求后最多等多久;到时回「发起方不在线」 */
+  pageMs: 15_000,
+  /** 反向通道:发起人的页面刚发完消息、事件流还没接上(或刚断、正在重连)时,最多等它这么久;离开得更久就立刻回「发起方不在线」 */
+  pageAttachMs: 3_000,
 });
+
+/** 页面号:页面自己起的随机串,发消息与开事件流时各报一次(契约第 28 节) */
+export const PAGE_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+/** 反向通道上页面交回的结果(JSON)最多这么大 */
+const MAX_PAGE_RESULT_BYTES = 64 * 1024;
 
 /** 闸的替身:永远放行、不记用量(只给不关心闸的测试用;服务缺省用 `gate.mjs` 的真闸) */
 export const ALLOW_ALL_GATE = Object.freeze({
@@ -257,6 +266,83 @@ export function createHostedAgentService({
     return false;
   }
 
+  /*
+   * ---------------- 反向通道(契约第 28 节) ----------------
+   *
+   * 一轮里要发起人的页面做事(播放头、播放与暂停、读当下的选区)时:向**发起这一轮的那张页面**的事件流发一条
+   * `page.request { id, runId, tool, args, timeoutMs }`,页面用它本机同一套工具实现执行,经 `POST …/page-results` 交回。
+   *   - 只认那一张页面:发消息时页面报了页面号(`pageId`),开事件流时也报;两者相同、且是同一个 `userId` 的那条流才算。
+   *     同一位成员的别的设备、别的页签看得到对话,但收不到请求。发消息没报页面号的(旧页面)没有反向通道。
+   *   - `page.request` 只发给那一条流,**不进事件记录、不带 `seq`**:它是此刻的一次请求,补看的人不该再执行一遍。
+   *   - `id` 是服务端起的 128 位随机数,只有那张页面拿得到;交回时按「这个对话的主人、发起这一轮的 `userId`、
+   *     这一轮的页面号、还在等的 `id`」核对,一次有效。
+   *   - 等结果有时限(`pageMs`);到时、等的中途那条流断了、这一轮结束了,都回「发起方不在线」,Agent 据此继续。
+   */
+  const pageListenerOf = (conv) => {
+    const run = conv?.run;
+    if (!run?.pageId) return null;
+    for (const l of conv.listeners) if (l.userId === run.userId && l.pageId === run.pageId) return l;
+    return null;
+  };
+
+  /** 结束一个在等的请求(只会成功一次) */
+  function settlePage(run, id, out) {
+    const p = run?.pageRequests?.get(id);
+    if (!p) return false;
+    run.pageRequests.delete(id);
+    clearTimeout(p.timer);
+    p.resolve(out);
+    return true;
+  }
+
+  /** 这一轮在等的请求按「发起方不在线」收掉(`listener` 给了就只收发给那条流的;不给是全部,连同在等页面接上的) */
+  function failPageRequests(run, why, listener = null) {
+    if (!run?.pageRequests) return;
+    for (const [id, p] of [...run.pageRequests]) {
+      if (listener && p.listener !== listener) continue;
+      settlePage(run, id, { offline: true, why });
+    }
+    if (!listener) for (const w of [...run.pageWaiters]) w();
+  }
+
+  /**
+   * 让发起人的页面执行一次。回 `{ ok: true, result }`(页面执行了,`result` 是它交回的 `{ ok, result?, error? }`)
+   * 或 `{ offline: true, why }`(没有反向通道 / 页面不在 / 超时 / 中途断了 / 这一轮结束了)。
+   */
+  async function pageCall(entry, conversationId, tool, args) {
+    const conv = entry.runs.get(conversationId);
+    const run = conv?.run;
+    if (!run?.pageId) return { offline: true, why: 'no-page' };
+    let listener = pageListenerOf(conv);
+    if (!listener) {
+      // 刚发完消息流还没接上、或刚断正在重连:等一小会儿;已经离开得久了就立刻回
+      const left = run.pageSeenAt + limits.pageAttachMs - now();
+      if (left <= 0) return { offline: true, why: 'detached' };
+      await new Promise((resolve) => {
+        let t = null;
+        const done = () => { clearTimeout(t); run.pageWaiters.delete(done); resolve(); };
+        t = setTimeout(done, left);
+        t.unref?.();
+        run.pageWaiters.add(done);
+      });
+      if (conv.run !== run) return { offline: true, why: 'ended' };
+      listener = pageListenerOf(conv);
+      if (!listener) return { offline: true, why: 'detached' };
+    }
+    const id = randomBytes(16).toString('base64url');
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { settlePage(run, id, { offline: true, why: 'timeout' }); }, limits.pageMs);
+      timer.unref?.();
+      run.pageRequests.set(id, { resolve, timer, listener, tool });
+      say('agent.page.request', { projectId: entry.identity.projectId, runId: run.runId, tool });
+      try {
+        listener.cb({ type: 'page.request', id, runId: run.runId, tool, args: args ?? {}, timeoutMs: limits.pageMs });
+      } catch {
+        settlePage(run, id, { offline: true, why: 'detached' });
+      }
+    });
+  }
+
   /** 这个实例里的一次写入落地了:挑出要预渲染的片段,交给补渲(契约第 16 节) */
   function onWrite(entry, conversationId, write) {
     if (!render.enabled) return;
@@ -325,6 +411,7 @@ export function createHostedAgentService({
         protocolsFor: (n, conversationId) => connectionCredentials(own, n, conversationId),
         execSerial,
         initiatorOnline: (conversationId) => initiatorOnline(own, conversationId),
+        pageCall: (conversationId, tool, args) => pageCall(own, conversationId, tool, args),
         onWrite: (conversationId, write) => onWrite(own, conversationId, write),
         // 文档服务以 4003 / 4004 关掉了数据连接:撤销,立刻停这个实例里的每一轮并关实例,不重连
         onFinalClose: (info) => {
@@ -424,6 +511,8 @@ export function createHostedAgentService({
         if (finished) return;
         finished = true;
         clearTimeout(timer);
+        // 还在等页面的请求:这一轮没了,不再等
+        failPageRequests(conv.run, 'ended');
         conv.run = null;
         conv.pinned = false;
         entry.runs.delete(conversationId);
@@ -460,7 +549,14 @@ export function createHostedAgentService({
         }
       };
 
-      conv.run = { runId, userId: identity.userId, stop };
+      conv.run = {
+        runId, userId: identity.userId, stop,
+        // 反向通道(契约第 28 节):发起这一轮的那张页面的页面号;没报(旧页面)就没有反向通道
+        pageId: typeof body.pageId === 'string' && PAGE_ID_RE.test(body.pageId) ? body.pageId : null,
+        pageRequests: new Map(),
+        pageWaiters: new Set(),
+        pageSeenAt: now(),
+      };
       conv.pinned = true;
       entry.runs.set(conversationId, conv);
       // 这条消息带的附件(只认这个对话工作目录里真有的):名字、地址、大小记进用户消息的事件里,换设备或重开对话时气泡里看得到
@@ -561,12 +657,50 @@ export function createHostedAgentService({
      * 看一个对话的事件:先把 `seq` 大于 `after` 的补发,再接实时的。回退订函数。
      * 对话不存在(或不是这位成员在这个项目里的)时回 null,不泄露存在与否之外的任何东西。
      */
-    subscribe(identity, conversationId, after, onEvent) {
+    subscribe(identity, conversationId, after, onEvent, { pageId = null } = {}) {
       const conv = conversationOf(identity, conversationId, false);
       if (!conv) return null;
       const entry = instances.get(keyOf(identity));
       if (entry) entry.lastUsed = now();
-      return store.subscribe(conv, after, onEvent, { userId: identity.userId });
+      const page = typeof pageId === 'string' && PAGE_ID_RE.test(pageId) ? pageId : null;
+      const off = store.subscribe(conv, after, onEvent, { userId: identity.userId, pageId: page });
+      const mine = off.listener;
+      const isInitiator = (run) => !!run && !!page && run.pageId === page && run.userId === identity.userId;
+      // 发起这一轮的那张页面接上了:叫醒在等它的调用
+      if (isInitiator(conv.run)) for (const w of [...conv.run.pageWaiters]) w();
+      return () => {
+        off();
+        const run = conv.run;
+        if (!run) return;
+        // 记下它离开的时刻(短暂重连的宽限从这里算);发给这条流的请求不再等
+        if (isInitiator(run)) run.pageSeenAt = now();
+        failPageRequests(run, 'detached', mine);
+      };
+    },
+
+    /**
+     * 发起人的页面交回一次反向通道请求的结果(契约第 28 节)。核对:这个对话是这位成员的(主人键)、有一轮在跑、
+     * 交的人就是发起这一轮的那个 `userId`、页面号是这一轮的、`id` 还在等。后四条任何一条不对都回同一个 `page-request-gone`,
+     * 不说是哪条;对话不是他的(或不存在)回 null(HTTP 层答 404,与别的接口一样)。
+     * 一次有效:收下即从在等的表里去掉,同一个 `id` 再交被拒。
+     */
+    pageResult(identity, conversationId, body = {}) {
+      const conv = conversationOf(identity, conversationId, false);
+      if (!conv) return null;
+      const gone = () => new AgentServiceError('page-request-gone', '这次请求已经不在等了。', 410);
+      const run = conv.run;
+      const id = typeof body.id === 'string' ? body.id : '';
+      if (!run || !run.pageId || run.userId !== identity.userId || body.pageId !== run.pageId || !run.pageRequests.has(id)) throw gone();
+      const out = body.ok === true
+        ? { ok: true, result: body.result ?? null }
+        : { ok: false, error: String(typeof body.error === 'string' && body.error ? body.error : '页面没有做成这一步').slice(0, 500) };
+      if (Buffer.byteLength(JSON.stringify(out)) > MAX_PAGE_RESULT_BYTES) {
+        // 太大的不收,但这次请求算答过了(不让 Agent 干等到超时)
+        settlePage(run, id, { ok: true, result: { ok: false, error: '页面交回的结果太大,没有收下。' } });
+        throw new AgentServiceError('too-large', '页面交回的结果太大', 413);
+      }
+      if (!settlePage(run, id, { ok: true, result: out })) throw gone();
+      return { ok: true };
     },
 
     /** 停这个对话进行中的一轮。主人从任何设备都能停;别人的、不存在的都当作没有 */

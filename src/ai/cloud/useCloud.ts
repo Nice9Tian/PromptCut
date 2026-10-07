@@ -19,6 +19,10 @@ import { titleOf } from "./events";
 import { bubbleAttachments, type CloudAttachmentInfo } from "./attach";
 import type { ChatAttachment } from "../types";
 import type { CloudChatItem, CloudInfo, CloudSendBody } from "./types";
+import { newPageId, runPageRequest, type PageRequestExec } from "./pageRequests";
+import { playbackHandlers } from "../../mcp/handlers/playback";
+import { projectHandlers } from "../../mcp/handlers/project";
+import { beginAgentTool, endAgentTool } from "../../editor/userEditing";
 
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
@@ -97,6 +101,20 @@ function pageState() {
 }
 
 const MODEL_KEY = "pc.cloudModel";
+
+/*
+ * 反向通道(契约第 28 节):这张页面的页面号(每次打开页面新起一个,只在内存里),与那几个工具在本机的同一份实现。
+ * 云端 Agent 只能让**发起这一轮的那张页面**执行;同一位成员别的设备、别的页签开着同一个对话也只是看。
+ */
+const PAGE_ID = newPageId();
+const pageExec: PageRequestExec = {
+  seek: (args) => playbackHandlers.seek(args),
+  play: () => playbackHandlers.play(),
+  pause: () => playbackHandlers.pause(),
+  getSelection: () => projectHandlers.getSelection(),
+  begin: beginAgentTool,
+  end: endAgentTool,
+};
 
 export function useCloudApi(url: string | null): CloudApi {
   const urlRef = useRef(url);
@@ -217,7 +235,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     pickedRef.current = false;
     const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : lsGet(chatKey(projectId, tabId));
     const first = stored && CHAT_ID_RE.test(stored) ? stored : newCloudChatId();
-    const session = createCloudSession({ api, store });
+    const session = createCloudSession({ api, store, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
     sessionRef.current = session;
     const off = session.subscribe(() => setView(session.getView()));
     setView(session.getView());
