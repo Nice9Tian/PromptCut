@@ -51,7 +51,7 @@ authorizationId是易失RAM引用，绑定已核验短凭证，重启失效，�
 | `npm test` / pc-account-projects-full-1.log | 首次4960 tests，4959 pass，0 fail，0 cancelled，1 skipped，0 todo；无异常自动重跑 | runner64747.8253ms；外层65143ms |
 | `git diff --check` | exit0，无差分错误；仅Windows LF→CRLF提示 | 静态核对 |
 
-唯一skip是既有`集成：/api/cards/layout 对真实项目返回整数框`（未配置PC_STAGE_TEST_URL）；未跑不能算通过。所有新增account-projects测试实际执行，无provider不可用跳过。本包没有测试失败；保留所有四次随具体增加检查的真实结果，没有把旧报告或被主会话修复前的auth结果挪作本包结果。一次辅助rg对PowerShell通配路径报os error123（工具检索路径问题，无测试启动/结果失败），后续读取明确文件；diff检查仍exit0。
+唯一skip是既有`集成：/api/cards/layout 对真实项目返回整数框`（未配置PC_STAGE_TEST_URL）；未跑不能算通过。所有新增account-projects测试实际执行，无provider不可用跳过。本包没有测试失败；保留所有四次随具体增加检查的真实结果，没有把旧报告或被主会话修复前的auth结果挪作本包结果。两次辅助rg对PowerShell通配路径报os error123（工具检索路径问题，无测试启动/结果失败），后续改为rg目录配合-g和读取明确文件；diff检查仍exit0。
 
 目标24项含两处ledger-before-write/before-commit失败，证明event/head/精确撤销/outbox事务整体rollback并重开验证；失败恢复不能冒称真实process.exit/crash矩阵，后者是顺序owner独立证据。SQLite inspect实测schema2、journal_mode=wal、synchronous=2(FULL)、integrity_check=ok。真实account provider页>100（105个额外普通logout）重启拉齐全部全局head；password成功、选否保留、选是精确集合、新登录与发起website保留；同event两stage、不相关账号不跳seq；真实内部doc/asset/account证书方法白名单，无证书/错误角色/错误pin、公网/internal隔离；旧授权引用重启失效；所有可用短token不在doc数据库/WAL。gone签名实测owner Ed25519公钥验证正确，错误authority/未知项目/旧无效登录不能gone。
 
