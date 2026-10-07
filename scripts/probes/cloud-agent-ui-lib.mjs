@@ -254,7 +254,8 @@ export async function startStack({ tmp, ports, dist = null, say = () => {}, agen
       env: {
         ...env,
         PROMPTCUT_RENDER_DOC_URL: S.DOC_WS, PROMPTCUT_RENDER_SECRETS: D.renderSecrets, PROMPTCUT_RENDER_DATA: D.render,
-        PROMPTCUT_RENDER_PORT: String(ports.render), PROMPTCUT_RENDER_STATUS_PORT: String(ports.render + 6),
+        // 隔离工作进程(带用户卡的项目)的端口写明:缺省是 +10,会落到这一套的端口段之外
+        PROMPTCUT_RENDER_PORT: String(ports.render), PROMPTCUT_RENDER_ISO_PORT: String(ports.render + 3), PROMPTCUT_RENDER_STATUS_PORT: String(ports.render + 6),
         PROMPTCUT_RENDER_MAX_CONCURRENT: '2', PROMPTCUT_RENDER_SAMPLE_MS: '2000', PROMPTCUT_RENDER_MEM_LOW: '256M',
         // 在线页面的构建就是代理在发的那一份:渲染服务拿它比代码版本
         PROMPTCUT_RENDER_EDITOR_DIR: DIST, PROMPTCUT_RENDER_AGENT_STATUS_URL: `${S.AGENT_DIRECT}/healthz`,

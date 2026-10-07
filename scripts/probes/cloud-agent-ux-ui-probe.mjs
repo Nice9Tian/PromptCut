@@ -62,6 +62,12 @@
  *   K2  渲染节点这一轮没有一个任务以失败收场:取不到旧版本时改按当前版本核对,内容没变的照做,已被新版本取代的记成作废
  *       (诊断里的 `superseded`,不计入 `failed`)。2026-10-06 修之前这一步渲染节点要失败 22～24 个任务(全是「文档服务上没有项目快照」)。
  *   K3  渲完之后才上线的成员(bob,新的浏览器进程):项目是最后一版,舞台上两张重卡贴的是最后一版的预渲染结果。
+ * 八、用户卡(步骤 usercard,排在 errors 之前;单独一个项目,免得主项目带上卡片源码改走隔离工作进程。不带界面的那条探针 `cloud-agent-ux-probe` 的 U20 是同一件事)
+ *   UC1 创建者在在线浏览器里把这个对话的创造力调到「高」,让云端 Agent 建一张用户卡(判重:`frameMode: stateful`)并用它加一个片段;
+ *       界面上看到建卡成功后,发起方的浏览器进程被真的结束。之后云端把这一轮做完:卡片源码进了项目的内容库、片段在时间轴上,
+ *       补渲由渲染服务的**隔离工作进程**(`hosted-render-iso:` 节点)认领并渲完(对话记录里有「渲染完成」),常驻工作进程没有认领这个项目的任务。
+ *   UC2 之后才上线的成员(另一个浏览器进程,真实页面):项目里有这张卡的片段;舞台上这张用户卡贴的是预渲染结果(快照层在、没有占位),
+ *       层表里有它这一层;没有「需要本地 PC 渲染辅助」的图标;舞台截图不是空白;页面没有错误。
  * 最后一行是汇总 `{ summary }`,有失败退出码 1,起不来退出码 2。不打印口令、票据、私钥。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -70,8 +76,8 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { lookupProject } from '../../server/auth/client.mjs';
-import { joinAs, adminOp, projectOf, agentApi } from './cloud-agent-probe-lib.mjs';
+import { createSharedProject, lookupProject } from '../../server/auth/client.mjs';
+import { joinAs, adminOp, projectOf, putProject, agentApi } from './cloud-agent-probe-lib.mjs';
 import {
   ROOT, sleep, USER_PORTS, createUi, startStack, startDesktop, killDesktop, launchBrowser, killBrowser, alive, newPage, P, mockSteps, msgs, view, conversationOf,
   toolParts, lastAssistant, idle, panelText, providerOptions, sendText, joinOnline, sharedProjectOf, hostedToggle, openProjectSettings,
@@ -81,7 +87,7 @@ import {
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 /** 顺序固定:spaced 在 errors 之前(errors 的最后会把渲染服务停掉) */
-const ALL_STEPS = ['desktop', 'online', 'stop', 'spaced', 'errors'];
+const ALL_STEPS = ['desktop', 'online', 'stop', 'spaced', 'usercard', 'errors'];
 const STEPS = String(arg('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 /** `--real-model`:只跑真实模型的那一遍(`realPass`;`--real-how desktop` 换成桌面版发起,缺省在线浏览器) */
 const REAL = process.argv.includes('--real-model');
@@ -121,6 +127,7 @@ const RETAIN_MS = 60_000;
 const SPACED_GAP_MS = 9000;
 const CLIPS = { bars: 'clip-bars', stateful: 'clip-stateful', canvas: 'clip-canvas' };
 const HEAVY = [CLIPS.stateful, CLIPS.canvas];
+const HEAVY_CLIPS = HEAVY;
 const pw = () => `pw-${randomBytes(6).toString('hex')}`;
 const CRED = { creator: { username: 'alice', password: pw() }, bob: { username: 'bob', password: pw() }, carol: { username: 'carol', password: pw() } };
 const CREATOR_SIGN = `${CRED.creator.username}的云端 Agent`;
@@ -217,10 +224,10 @@ async function desktopDown(d) {
   desktops.delete(d.desktop);
 }
 /** 在线页面:一个新的浏览器进程(= 一台新设备),填开始页进项目 */
-async function onlineUp(who, { asCreator = false, browser = null } = {}) {
+async function onlineUp(who, { asCreator = false, browser = null, name = NAME } = {}) {
   const b = browser ?? await openBrowser();
   const page = await newPage(b);
-  await joinOnline(page, { site: S.SITE, name: NAME, username: who.username, password: who.password, asCreator });
+  await joinOnline(page, { site: S.SITE, name, username: who.username, password: who.password, asCreator });
   return { browser: b, page };
 }
 async function selectCloud(page) {
@@ -277,7 +284,7 @@ async function cloudFinishes(conversationId, { runMs = 120_000, render = true, r
 }
 
 /** 播放着看舞台:等到几张重卡同时贴着快照、没有占位的那一刻,当场截图。回 `{ hit, seen, shot, stats }` */
-async function playbackSnapshots(page, name, ms = 60_000) {
+async function playbackSnapshots(page, name, ms = 60_000, HEAVY = HEAVY_CLIPS) {
   const t0 = Date.now();
   const seen = new Set();
   let hit = null;
@@ -303,7 +310,7 @@ async function playbackSnapshots(page, name, ms = 60_000) {
   return { hit, seen: [...seen], shot: pic?.file ?? null, stats };
 }
 /** 在线页面此刻有没有「需要本地 PC 渲染辅助」的图标(舞台)或徽标(时间轴) */
-async function localPcMarks(page) {
+async function localPcMarks(page, HEAVY = HEAVY_CLIPS) {
   const badge = await P(page, () => document.querySelectorAll('[data-pc="clip-custom-card"]').length).catch(() => -1);
   let icons = 0;
   for (const id of HEAVY) { const x = await clipOnStage(page, id); if (x?.placeholder && x.reason === 'unsupported') icons += 1; }
@@ -842,6 +849,86 @@ async function errorsStep() {
  * 写入之间隔得比补渲的防抖长(见文件头 K1～K3)。创建者的在线页面在这一轮里一直开着(它自己也按每一版发清单计划,与 Agent 服务的
  * 计划同时在队列里);渲完之后另一位成员才上线看。
  */
+/* ================================================================== 用户卡:云端 Agent 建卡并判重,发起方退出后,后来的成员在舞台上贴得上它的预渲染结果 */
+
+async function usercardStep() {
+  const cu = { ula: { username: 'ula', password: pw() }, uma: { username: 'uma', password: pw() } };
+  const NAME_U = `云端体验用户卡-${RUN}`;
+  const pu = { ...(await createSharedProject({ base: S.DOC_DIRECT, name: NAME_U, mode: 'restricted', creator: cu.ula, list: [cu.uma] })), creator: cu.ula };
+  const UID = pu.projectId;
+  {
+    const seed = await joinAs(S.DOC_WS, pu, { ...cu.ula, as: 'creator' });
+    if (!seed) throw new Error('用户卡一步:探针的创建者连接没建成');
+    nodeConns.add(seed);
+    await putProject(seed, UID, {
+      version: 1, id: UID, name: NAME_U, width: 1920, height: 1080, fps: 30, duration: 2, themeId: 'dark', camera3dFov: 50,
+      media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {}, transitions: [],
+      tracks: [{ id: 'tr-0', name: 'tr-0', hidden: false, clips: [] }, { id: 'tr-1', name: 'tr-1', hidden: false, clips: [{ id: 'clip-builtin', kind: 'card', cardId: 'rank-bars', start: 0, end: 2, params: { title: `用户卡一步 ${SALT}`, rows: '微信,85|抖音,62', suffix: '%' } }] }],
+    });
+    nodeConns.delete(seed);
+    seed.close();
+  }
+  // 夹具:只留一个记号、什么都不探的那张用户卡(判重的写法),由云端 Agent 用 create_card 建出来
+  const CARD_ID = 'overreach-marker-jia';
+  const source = fs.readFileSync(path.join(ROOT, 'scripts', 'probes', 'fixtures', 'render-isolation', 'overreach-marker-jia.tsx'), 'utf8').replace(/\r\n/g, '\n');
+  const filesBefore = S.assetFiles();
+  const t0 = Date.now();
+
+  /* ---- UC1:创建者在在线浏览器里发起,建卡成功后真实结束他的浏览器 */
+  const c = await onlineUp(cu.ula, { asCreator: true, name: NAME_U });
+  await selectCloud(c.page);
+  // 建卡要「高」创造力:在 AI 栏的运行选项里给这个对话调(下拉在弹层里,不必弹出来也能选)
+  await c.page.select('[data-pc="cloud-ai-panel"] [data-pc="ai-creativity"]', 'high');
+  const level = await P(c.page, () => document.querySelector('[data-pc="cloud-ai-panel"] [data-pc="ai-creativity"]')?.value ?? null);
+  const sent = await sendAndAccepted(c.page, mockSteps([
+    { tool: 'create_card', input: { id: CARD_ID, source } },
+    { sleepMs: 6000 },
+    { tool: 'add_clip', input: { cardId: CARD_ID, start: 0, duration: 2, trackId: 'tr-0' } },
+    { say: '建了一张卡并放上了时间轴' },
+  ]), 1);
+  const conv = sent.conversationId;
+  await shot(c.page, 'UC1-usercard-accepted');
+  const k = await killBrowser(c.browser);
+  browsers.delete(c.browser);
+  const disk = () => S.diskConversation(UID, conv);
+  const ended = await until('UC1:建卡的对话在云端跑到结束', () => { const d = disk(); return d && d.meta.state !== 'running' && d.events.some((e) => e.type === 'end') ? d : null; }, 120_000, 300);
+  const renderEvents = () => (disk()?.events ?? []).filter((e) => e.type === 'render');
+  await until('UC1:含用户卡的补渲有结局', () => (['done', 'failed', 'unavailable'].includes(renderEvents().at(-1)?.state) ? true : null), 420_000, 500);
+  timings.usercardRenderedMs = Date.now() - t0;
+  const results = (disk()?.events ?? []).filter((e) => e.type === 'tool_result').map((e) => `${e.name}:${e.ok ? 'ok' : `error ${String(e.summary ?? '').slice(0, 120)}`}`);
+  // 工作进程每秒向管理进程交一次诊断:渲完的那一刻读到的可能还是上一拍的计数,等两拍再读
+  await sleep(2500);
+  const st = await S.renderStatus();
+  const resident = (st.queue?.nodes ?? []).find((n) => n.projectId === UID) ?? null;
+  const iso = (st.isolation?.queue?.nodes ?? []).find((n) => n.projectId === UID) ?? null;
+  const states = renderEvents().map((e) => e.state);
+  check('UC1 云端 Agent 建一张用户卡(判重)并用它加片段,发起方的浏览器被结束:对话照样做完,补渲由隔离工作进程渲完(对话记录里有「渲染完成」)', level === 'high' && sent.accepted && k.gone && ended?.meta?.state === 'idle'
+    && results.join() === 'create_card:ok,add_clip:ok' && states.at(-1) === 'done' && !states.includes('failed')
+    && /^hosted-render-iso:/.test(String(iso?.nodeId ?? '')) && (iso?.claimed ?? 0) > 0 && (iso?.failed ?? 0) === 0 && (resident?.claimed ?? 0) === 0 && S.assetFiles() > filesBefore, {
+    creativity: level, accepted: sent.accepted, initiatorGone: k.gone, end: ended?.meta?.state ?? null, toolResults: results, renderStates: states.join(','), renderedMs: timings.usercardRenderedMs,
+    isolatedWorker: iso ? { nodeId: String(iso.nodeId).slice(0, 34), claimed: iso.claimed, completed: iso.completed, dedup: iso.dedup ?? null, failed: iso.failed } : null,
+    residentWorker: resident ? { claimed: resident.claimed } : null, assetFiles: [filesBefore, S.assetFiles()],
+    ...(states.at(-1) === 'done' ? {} : { isolationStatus: st.isolation ?? null, renderReasons: renderEvents().filter((e) => e.reason).map((e) => String(e.reason).slice(0, 120)) }),
+  });
+
+  /* ---- UC2:之后才上线的成员(另一个浏览器进程):舞台上贴得上这张用户卡的预渲染结果 */
+  const uma = await onlineUp(cu.uma, { name: NAME_U });
+  const clip = await until('UC2:uma 的页面读到带用户卡的片段', () => P(uma.page, (cardId) => { const x = window.__pcStore.getState().project.tracks.flatMap((t) => t.clips).find((y) => y.cardId === cardId); return x ? { id: x.id, cardId: x.cardId, start: x.start, end: x.end } : null; }, CARD_ID), 30_000, 200);
+  const ids = clip ? [clip.id] : [];
+  const play = clip ? await playbackSnapshots(uma.page, 'UC2-uma-stage-usercard', 90_000, ids) : { hit: null, seen: [], shot: null, stats: null };
+  const marks = clip ? await localPcMarks(uma.page, ids) : { badge: -1, icons: -1 };
+  const layers = await onlineLayers(uma.page);
+  const mine = (layers?.layers ?? []).filter((l) => l.clipId === clip?.id);
+  check('UC2 之后才上线的成员(真实浏览器):项目里有这张用户卡的片段,舞台上贴的是它的预渲染结果(快照层在、没有占位),层表里有这一层,没有「需要本地 PC 渲染辅助」', !!clip && !!play.hit && play.hit[clip.id]?.snapshot === true && play.hit[clip.id]?.placeholder === false
+    && mine.some((l) => l.ready > 0) && !(layers?.stale ?? []).includes(clip.id) && marks.icons === 0 && !!play.stats && play.stats.colors >= 2, {
+    clip, stage: clip && play.hit ? { snapshot: play.hit[clip.id].snapshot, snapNodes: play.hit[clip.id].snapNodes ?? null, placeholder: play.hit[clip.id].placeholder } : null, statesSeenWhilePlaying: play.seen,
+    layers: mine, staleLayers: layers?.stale ?? null, localPcIcons: marks.icons, customCardBadges: marks.badge, pixels: play.stats, shot: play.shot,
+  });
+  const errors = [...(uma.page.pageErrors ?? [])];
+  check('UC 这一步的页面没有页面错误', errors.length === 0, { sample: errors.slice(0, 3) });
+  await closeBrowser(uma.browser);
+}
+
 async function spacedStep() {
   const c = await onlineUp(CRED.creator, { asCreator: true });
   await selectCloud(c.page);
@@ -911,6 +998,7 @@ try {
     if (STEPS.includes('online')) await leavePass('online', 'O', `${SALT}-o`);
     if (STEPS.includes('stop')) await stopStep();
     if (STEPS.includes('spaced')) await spacedStep();
+    if (STEPS.includes('usercard')) await usercardStep();
     if (STEPS.includes('errors')) await errorsStep();
   }
 } catch (err) {
