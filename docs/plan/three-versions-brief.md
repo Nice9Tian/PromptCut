@@ -16,6 +16,20 @@
 
 0.7.18 占了绝大部分工作量。
 
+## 1a. 2026-10-08 调度与对话数量增量
+
+来源：[渲染调度与项目计划补充](render-scheduling-supplement.md)（原始 blob `e0e3afc37f04f51f0ea5e85eb9aa392183cf77c0`），正式版本映射与新增验收在 [账号与云端项目任务书](account-binding-task.md)「渲染调度与对话上限补充」。第 1 节既有功能范围保留，并追加：
+
+| 版本 | 已确认新增范围 | 证据状态 |
+|---|---|---|
+| 0.7.18 | 合格本地即时查询帧节点优先；不满足时云端单活跃项目排队兜底；同项目同创建者最多 50 个不同对话，满额阻新建、用户先删旧历史，提供删除入口、不自动删除 | 已规划；本次未实现、未测试、未通过 |
+| 0.7.19 | 项目级及总体内存预算实测满足条件才允许两个项目并行，未通过组合保留限制 | 已规划；实验与实现待办 |
+| 0.7.20 | 磁盘缓存与交替加载，目标至少三个项目持续轮转推进，不承诺三个重型项目常驻 | 已规划；实验与实现待办 |
+
+所有生产项目含自定义卡片，容量不能只测内置卡/空项目。`see_frames` 端到端低于 5 分钟是共同优先目标，不是已经通过或任意负载保证。旧“不得本机降级”限定为禁止因云端已满而静默改走本机，不限制已确认的合格本地优先路径；以后多服务器调度不豁免本轮单节点调度。
+
+本文第 9 节的旧常规裁定授权，对本次新增未决事项不适用：未满 5 分钟因等待项目提前回收、补渲故障/持续无进展的 A/B、删除权限/确认/共有归属和计数/释放名额时机均保留待确认。技术接口、重试/超时和起止点只作草案；不自行选定。
+
 ## 2. 先读什么
 
 按这个顺序读，读到够用为止，不必通读 `docs/semantics/`：
@@ -24,7 +38,7 @@
 2. `docs/plan/account-binding-task.md`：整体计划。重点看「已拍板」「三个版本」「逐项验收」「待决定、已否决与未来授权」。
 3. `docs/plan/account-binding-contract.md`：对外数据和操作约束的对齐草案，很多机制还标着待落清。
 4. `docs/plan/online-browser-task.md`：在线浏览器。第一步在 0.7.18，其余三步在 0.7.19。
-5. `docs/plan/cloud-agent-task.md`：云端 Agent 的用户决定（E～K）与完成条件。
+5. `docs/plan/cloud-agent-task.md`：云端 Agent 的用户决定（E～K）与完成条件；同时读 `docs/plan/render-scheduling-supplement.md`，核对新增已确认方向、技术建议和待确认项。
 6. 集成分支 `claude/four-stage` 上的 `docs/reports/HANDOFF-four-stage.md`：四段任务做到哪、第四段还差什么（第 3 节）、等用户定的事（第 5 节）、用户在对话里另外定的事（第 6 节）。**它的第 4 节「接手后的顺序」和第 5 节里的「甲、乙」已被三个版本的拆分取代**，照 `account-binding-task.md` 办。
 7. 集成分支上的三份契约：`docs/plan/cloud-agent-contract.md`、`online-card-exec-contract.md`、`hosted-render-contract.md`；验收与部署：`docs/reports/REPORT-verification-rework.md`、`docs/plan/four-stage-deploy-checklist.md`。
 8. VisuHive 仓库的 `docs/accounts.md`、`user_readme.md`、`README.md`：网站账号的设计与现状。

@@ -25,6 +25,19 @@
 
 模块路径以检索结果为准：中央文件是 `server/docservice/shared-service.mjs` 和 `server/docservice/service.mjs`，不存在 `server/docservice/server.mjs`。工具声明是 `server/tools/*.mjs`，不是 `.ts`。旧分支 `8fb6df79` 仅有未完成选型提交，无产品代码；只参考其动图/visual思路，不合并它。`product/agent.md` 运行位置仍有“同用户名”“主人独享”“一律停”等旧段落，与其接入段和本次决定冲突；实施契约同步包修正，不能拿旧段给权限放行。
 
+## 调度补充的设计边界（2026-10-08 文档增量）
+
+来源：[渲染调度与项目计划补充](render-scheduling-supplement.md)，版本/验收唯一映射见 [任务书](account-binding-task.md)「渲染调度与对话上限补充」。0.7.18 新增合格本地即时查询帧优先、云端单活跃项目兜底；0.7.19 预算实测满足才双项目并行；0.7.20 磁盘缓存/交替加载目标至少三项目持续推进，不承诺三重型常驻。三版本全部生产容量输入含自定义卡片，see_frames 端到端 <5 分钟是目标。此设计增量仅已规划，不是代码接线或测试结论。
+
+| 修改前 / 本文旧方案 | 修改后（已确认范围 / 技术草案） |
+|---|---|
+| 渲染容量章的 2 任务/16 项目数字和“不让 editor 改成本机” | 已确认 .18 云端单活跃项目；数字暂沿用并实测，连接/任务数不能突破活跃项目约束；只禁止云端满后的静默回本机，合格本地优先合法 |
+| 202 render-requests、GET/取消/事件接口及 OOM 重排队 | 修改后（草案）：本地资格/一致性/取消/迟到隔离与云端队列组合设计；已有拟接口不是逐项批准或现有能力。故障/无进展的 A 失败手动或 B 有限重试暂停待确认，正常容量等待仍保留任务 |
+| .19 原仅平台闸门/.20 原仅补偿与申请加入的派包计划 | 追加 .19 有条件双项目内存实验与 .20 磁盘轮换包；独占文件与具体接口由后续协调另租，不在本次文档中自定/开工 |
+| Agent ACL 表 rename/remove 的 owner 边界和删除 UI 延期 | 已确认 .18 必要删除入口与 50 满额阻新建；删除权限/确认/共有计数/释放时机待确认，原 API owner 不能代替决定 |
+
+未满 5 分钟提前回收与旧隔离工作进程 60 秒/45 秒规则有冲突，旧机制仅历史/待协调；本次不以最小裁定选择新策略。内存 7+7+2 / 5+5+6 GB 是示例，不能默认。具体计时起止、重试、超时和缓存机制均按任务书“修改前/修改后（草案）”落清；semantics 正文未改。
+
 ## 身份、恢复与唯一权威
 
 以下结构和API全部拟实现。`accountId`沿用VisuHive现存不可变 `acc_<24 hex>`。账号服务唯一管理密码和登录；文档服务唯一管理项目存在、创建者、成员、禁入、版本和操作。托管目录只牵线与中继，网站不能另建一张授权项目表。LAN自报ID、白名单、邀请、回环本机信任和主机角色**完整保留**；本地搬到云端是创建新的账号项目/迁入事务，原本地账号名不能升级成云端身份。
@@ -157,7 +170,7 @@ account不可达时，云端新修改不能取得可信接受见证，保持未�
 | send/reply/upload attachment | 当前有效rw成员 | 当前有效rw owner | creator在别人的private也不能发送；只读发消息即拒 |
 | change visibility | owner | owner | creator没有替别人切换特权 |
 | abort run | 该轮initiator，或项目creator | 同左，creator仍能停止 | 通过runId，不是笼统对话主人停全部 |
-| rename/remove | owner（沿用既有owner管理边界） | owner | 本期删除UI仍按既有延期；API不可成为其它成员删除入口 |
+| rename/remove | rename 保留旧方案；remove 权限待确认 | 同左 | 删除 UI 延期被补充第 5.1 节取代，0.7.18 必要入口；50 满额阻新建、不自动删，删除权限/确认/共有计数/释放时机待确认。原 owner remove 是修改前方案，非新批准 |
 | run工具管理员操作 | 永远拒 | 永远拒 | initiator为creator也拒；服务白名单独立 |
 
 读取/订阅都问doc的拟 `hosted.conversation.access {projectId,conversationId,action,principalRef,expectedAclRevision?}`，返回 `{allowed,aclRevision,ownerAccountId,visibility,creatorReadOnly}`。无对话权可404（不泄露）；private creator只读列表明确标识。HTTP先鉴权再flush SSE headers；补历史前、每次事件写前校验revision，document失联则暂停/关闭用户读取和新请求并503，不能把缓存当授权。事件广播只到仍有权限的listener；visibility提交同时发失权撤销控制事件，关闭他们全部history/visual/media发流、清浏览器对话内容与列表。已下载字节不能追回，但切换线性化点以后无新字节/历史/事件；测试含在同一个event loop里切换与event.emit竞态。
@@ -254,11 +267,11 @@ account不可达时，云端新修改不能取得可信接受见证，保持未�
 
 ### 渲染容量排队与Agent优先（已定，拟接线）
 
-真实 `server/hosted-render/limits.mjs LIMIT_DEFAULTS`暂沿用maxConcurrent2/maxProjects16/memoryMax6G/memoryHigh5G、低内存2GiB和30秒恢复；节点部署由root复核实际资源，不自动升级。`broker.mjs pickProjects`已有waiting项目，`look.mjs`目前背压或maxWaiting满回503 busy、等待不足回busy，必须改。超容量不拒项目/请求“已满”，不让editor改成本机渲染：预渲染任务继续留doc持久任务队列；等待接入项目依权威directory恢复；即时look/audio-js等Agent请求进入拟 `render-requests.mjs`持久队列（requestId/runGrant/project/priority/createdSeq/status），回202 `{requestId,state:'queued',queuePosition}`并可受权`GET /requests/<id>`/取消/事件取得结果。look-client支持此202握手和等待，不能把它作失败触发本机降级。临时资源故障是queued/retrying，真正项目删/关/失权是cancelled/forbidden，坏输入仍400；不以无限长HTTP连接充当持久队列。Agent等待本轮请求时不能先报告“已看完”。
+真实 `server/hosted-render/limits.mjs LIMIT_DEFAULTS`暂沿用maxConcurrent2/maxProjects16/memoryMax6G/memoryHigh5G、低内存2GiB和30秒恢复；节点部署由root复核实际资源，不自动升级。`broker.mjs pickProjects`已有waiting项目，`look.mjs`目前背压或maxWaiting满回503 busy、等待不足回busy，必须改。超容量不拒项目/请求“已满”，不让editor因云端满而静默改成本机渲染（已确认的合格本地即时查询帧优先另见首部调度补充）：预渲染任务继续留doc持久任务队列；等待接入项目依权威directory恢复；即时look/audio-js等Agent请求进入拟 `render-requests.mjs`持久队列（requestId/runGrant/project/priority/createdSeq/status），回202 `{requestId,state:'queued',queuePosition}`并可受权`GET /requests/<id>`/取消/事件取得结果。look-client支持此202握手和等待，不能把它作失败触发本机降级。正常容量压力是queued/waiting，真正项目删/关/失权是cancelled/forbidden，坏输入仍400；原“临时资源故障是queued/retrying”仅修改前方案，节点故障/持续无进展应选A失败手动还是B有限重试暂停仍待确认，不能由旧拟接口默选；不以无限长HTTP连接充当持久队列。Agent等待本轮请求时不能先报告“已看完”。
 
-在现有单节点资源看护内优先保证Agent：Agent进程独立slice/OS用户；render工作进程已有低cpuWeight/ioWeight/nice/OOM先终止渲染设置保留，资源压力时暂停新增预渲染认领，把可用渲染名额先交Agent look/audio请求，再做普通发布任务；已执行原子任务可到安全点，OOM重启未完成任务恢复排队，不丢失队列产物归属。不是本期新增跨服务器调度：项目分配多个服务器只留 `docs/plan/TODO.md`待办；web工具proxy和断网audio worker是节点工具隔离，不是已取消的**浏览器用户卡出口护栏**。正向验2任务+第3排队、16项目+第17等待、重启恢复、内存压力解除继续；反向验无“已满”提示/无客户端本机降级、不能借队列跨project或失权继续出图。
+在现有单节点资源看护内优先保证Agent：Agent进程独立slice/OS用户；render工作进程已有低cpuWeight/ioWeight/nice/OOM先终止渲染设置保留，资源压力时暂停新增预渲染认领，把可用渲染名额先交Agent look/audio请求，再做普通发布任务；已执行原子任务可到安全点，〔修改前机制建议，节点故障A/B待确认〕OOM重启未完成任务恢复排队，不丢失队列产物归属。不是本期新增跨服务器调度：项目分配多个服务器只留 `docs/plan/TODO.md`待办；web工具proxy和断网audio worker是节点工具隔离，不是已取消的**浏览器用户卡出口护栏**。正向验2任务+第3排队、16项目+第17等待、重启恢复、内存压力解除继续；反向验无“已满”提示/无云端满后的静默客户端本机降级、不能借队列跨project或失权继续出图。
 
-存储压力同样排队：asset硬上限和507作为**内部数据保护信号**保留，worker停止认领、未完成render任务继续在doc持久等待队列，已有claim经retryable-storage回交为waiting（幂等、不删除任务或误记completed）；upload/转码/px入库部分产物记录同project job归属和可续阶段，释放压力后重试。render-requests保留`blockedReason:'storage-pressure'`和重试次数，用户显示等待渲染/排队，不把内部507翻译成“已满”、不丢任务、不隐式本机降级。Agent优先仍适用；不能为腾空间删除pinned密码/操作历史或其它项目素材。容量probe新增磁盘/配额507注入→保留队列→恢复入库→一次完成、重启与部分upload恢复，verify任务数与可用产物相等。
+存储压力同样排队：asset硬上限和507作为**内部数据保护信号**保留，worker停止认领、未完成render任务继续在doc持久等待队列，已有claim经retryable-storage回交为waiting（幂等、不删除任务或误记completed）；upload/转码/px入库部分产物记录同project job归属和可续阶段，释放压力后重试。render-requests保留`blockedReason:'storage-pressure'`和重试次数，用户显示等待渲染/排队，不把内部507翻译成“已满”、不丢任务、不因云端满隐式本机降级。Agent优先仍适用；不能为腾空间删除pinned密码/操作历史或其它项目素材。容量probe新增磁盘/配额507注入→保留队列→恢复入库→一次完成、重启与部分upload恢复，verify任务数与可用产物相等。
 
 ## 真实旧文件、本地转换与缺失素材
 
@@ -316,6 +329,12 @@ guard包不能只删在线execGate：真实Linux云worker `vite-gate.mjs`有出�
 
 四档气泡逐字为“这台设备运行在顶配模式”“这台设备运行在标准模式”“这台设备运行在精简模式：复杂的效果交给云端渲染”“这台设备运行在低配模式：播放时只显示已渲染好的画面”；所有档都在预览窗口上方提示，几秒后自动消失，不能另起更名文案。P2纯浏览器超过图卡体积上限不认领仍保留，和P1所有浏览器画面执行是两件不同能力。取消出口限制和以后跨服务器调度只同步最新TODO，不塞回三版本。
 
+### 后续调度实施包与验收增量
+
+本次不改现有 owner/文件租约或代码。后续由协调者补 0.7.18 本地即时查询帧资格/云端单活跃调度、Agent 50 对话限制与删除入口；0.7.19 项目及总体内存实验；0.7.20 磁盘缓存与轮换实验。与当前容量包/Agent UI/存储包存在接口依赖，需先约接口，不能各写一套调度或对话计数。
+
+新增验收用 [任务书](account-binding-task.md) RS18-local、RS18-queue、RS18-chat、RS19-memory、RS20-rotation、RS-common 的输入/断言；旧 render capacity 和单一路 look 测试不足新目标。目标/规划/实现/测试/通过分开，留最终 SHA、配置和原始失败；本次状态明确为目标已确认、已规划、未由本次实现、未测试、未通过。
+
 ## 验收输入、正反探针与集成闸门
 
 | 场景组/所属包 | 可重复输入 | 必须断言与反向输入 |
@@ -328,7 +347,7 @@ guard包不能只删在线execGate：真实Linux云worker `vite-gate.mjs`有出�
 | consent/Agent UI | 同账号两个设备首次使用；拒绝再用；接受后改密/退出重登；直调send | 精确文案/两按钮，拒绝消息数/队列数/model调用数均0，下一次重弹，接受跨设备与重启保持；伪造客户端accepted/别账号consent拒，private仍显示托管方可读事实 |
 | all-member selection | A/B各两页面、C空选区；发起B离线/踢出，read-confirmed shared run保留 | 全部有效在线成员用户名和各页选区；B名字带“（当前用户）”，离线B仅发送快照且非实时；C空仍有条目，删clip明确missing，撤销立即移除live，另一project无数据 |
 | card外链/分源 | 同一用户卡/图卡加载受控图片、字体、CSS、JS，四浏览器含不支持allowlist | 全部画面执行/资源正常；不得恢复外发拦截，不以无allowlist降档；分源editor DOM/cookie摸取失败，账号CSRF拒、跨项目素材拒；截图交root事后审 |
-| render capacity | 并发2+1、项目16+1、背压压力/Agent look同时进入、manager重启 | 超额queued并恢复，无已满提示或本机降级；Agent资源优先，普通任务之后继续，requestId幂等；改private/off/delete即取消失权产物，不借队列继续写 |
+| render capacity | 保留旧2+1任务/16+1连接压力输入，追加均含自定义卡的多项目、合格本地/失格/离线/迟到、Agent look争用、manager重启 | 0.7.18 云端单活跃项目，超额queued并恢复，无已满提示或云端满后的静默本机回退；本地优先必须完整授权/能力/可用性核验；对应任务书 RS18-local/queue，新增未跑。原初值不能代替新约束；保留原requestId幂等、普通任务之后继续及改private/off/delete取消失权产物、不借队列继续写断言 |
 | 同hash素材/worker | A上传hash H，B知道H；另测B合法独立上传H | 各接口A权限读成功/B未入库读404；chunks/complete/thumbnail/PCM/stream/tier/key/worker/manifest都不漏；B自己上传正常；delete A不影响B；撤旧流、Private visual不能靠asset hash读 |
 | 工具与隔离 | 短speech/两镜头/移动点/人物fixture，受控网站，PCM正弦；真实模型示例句 | 不只status，实际result写doc且run/op相连；同project不同conversation browser隔离，系统/其它project/path/内网/redirect拒，安装参数白名单；spawn精确中文固定回复，代下载不上凭据 |
 | gone/missing/真实旧文件 | 真实旧proc/procp（包内全部/部分/无素材）、可信准确gone、错误authority/404/401/503 | 只有gone转换；内容/原引用/clip时序保留，local协作关，procp已landed不占位；截图文字、人声试听/导出、重开持久；截断/未知版本保留输入，不空覆盖 |
