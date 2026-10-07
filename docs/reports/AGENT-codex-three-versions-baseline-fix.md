@@ -42,6 +42,27 @@ all passed: original predicate missed observed live/3; session preserved running
 1. 读取原集成失败日志，确认唯一 CAU-SES-01b 失败发生在旧 live/3 waitFor；既有集成失败原始 4928/4926/1/1、66168.1248 ms 保留。
 2. 可控竞态证明脚本只运行一次，退出 0（旧谓词按设计 timeout，订阅证实曾出现目标状态，session 最终运行状态正确）。
 3. 修复后针对性 `npm test -- src/ai/cloud/cloud-chat.test.mjs` 只运行一次：19 tests、19 pass、0 fail、0 skipped、duration_ms 1549.7535，墙钟 1.9119644 秒，退出 0；CAU-SES-01b 为 31.135 ms，无包装器重跑。
-4. 最终类型与全量 npm test 待提交后各一次运行并补原始摘要。
+4. 提交 `329188e3` 后，最终类型检查只运行一次：先父仓库 `require.resolve('typescript/bin/tsc')`，再 `node <路径> -b --force`，退出 0、零诊断，墙钟 17.7784273 秒。
+5. 同一提交最终全量 `npm test` 只运行一次：退出 0，墙钟 74.7827626 秒；CAU-SES-01b 通过，为 47.0492 ms。原始摘要：
+
+```text
+ℹ tests 4928
+ℹ suites 0
+ℹ pass 4927
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 74363.5611
+✓ npm test 最终结果：零失败
+```
+
+6. 最终 `git diff --check` 零错误。相对起点只有测试文件和本报告；没有实现或其它文档变更。类型与针对性/全量测试均无包装器异常退出或自动重跑，原始集成失败仍保留记录。
+
+日志：系统 TMP 的 `promptcut-session-race-proof.log`、`promptcut-session-fixed-target.log`、`promptcut-session-final-types.log`、`promptcut-session-final-tests.log`。
 
 没有通过反复重跑掩盖原始失败。没有安装依赖、建 junction、改 Python 环境、启动服务、占用任何端口、操作节点或用户进程；所有 Node 命令均使用本命令绝对静默预载及指定 Python/无字节码环境。
+
+## 交回与未达成
+
+报告开工提交 `ed586513`，测试修复提交 `329188e3`，最后报告证据单独提交。工作分支交回后由主会话审查并重跑集成基线；原集成失败不是由这份子分支绿灯自动改为通过。没有待决产品语义或未达成修复项，未进行部署、发版和渲染验收（测试修复不改画面）；所有既有产品决定保持原样。
