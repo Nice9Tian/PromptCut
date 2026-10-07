@@ -43,7 +43,7 @@ VisuHive 推到 main 后，节点上的定时器每 5 分钟自动同步 `site/`
 
 ## 4. 分支与工作区（2026-10-08 清理之后）
 
-当天清掉了 122 个工作区、124 条本机分支、138 条远端分支，都是内容已并入的。下面是剩下的全部。
+当天清掉了 123 个工作区、125 条本机分支、138 条远端分支，都是内容已并入的。下面是剩下的全部：8 个工作区、8 条本机分支。
 
 ### 有用的
 
@@ -60,7 +60,6 @@ VisuHive 推到 main 后，节点上的定时器每 5 分钟自动同步 `site/`
 |---|---|
 | `claude/c10-accept`、`claude/c10-integ`、`claude/m7-probe-exp`（各带一个工作区） | 2026-09-28 的旧分支，各有几个提交没并入任何地方：验收报告、一次合并、几个实验。用户还没定去留，**不要删** |
 | `.worktrees/m7-integ`（没挂分支） | 有 3 个合并提交不在 main 里，同上 |
-| `codex/a45-pc-patch` 与它的工作区 | 分支已并入 main；工作区里有一份和主工作区不同的 `.env.local` 和 0.7.14 的补丁包，所以没删。**不要读它的 `.env.local`，不要删** |
 | `check_frontend_backend_separation` | 工作区在 Antigravity 的目录下（`C:\Users\admin\.gemini\antigravity\worktrees\PromptCut\`），不归本任务管 |
 | 远端 `claude/peaceful-meitner-ef78de` | 会话信箱第二版的设计与实现，只在 GitHub 上。和本任务无关 |
 | 远端 `Doger` | 协作者的声音分支，内容已在集成分支里 |
