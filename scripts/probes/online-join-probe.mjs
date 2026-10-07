@@ -38,6 +38,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
+import { seedSharedProject } from './lib-seed.mjs';
 import {
   createSharedProject, buildAuthProtocols, requestChallenge, deriveKey, adminProof, lookupProject, resolveInvite,
 } from '../../server/auth/client.mjs';
@@ -468,7 +469,7 @@ async function phaseOnline() {
   // 创建者那边看到的成员数
   if (state.creatorPage) {
     const n = await state.creatorPage.evaluate(() => document.querySelector('[data-pc="members-button"]')?.textContent ?? '');
-    check('online.creator-sees-members', /成员[::] ?[4-9] 人/.test(n), { members: n });
+    check('online.creator-sees-members', /成员[:：] ?[4-9] 人/.test(n), { members: n });
   }
   // 错误口径
   const e1 = await onlineJoin('online-err-password', `${PROXY}/editor`, async (page) => {
@@ -497,6 +498,10 @@ async function phaseOnline() {
   const rname = `c10a限定-${stamp}`;
   const rcreator = { username: 'rboss', password: 'rboss-pw-123' };
   const made = await createSharedProject({ base: DOC_DIRECT, name: rname, mode: 'restricted', creator: rcreator, list: [{ username: 'bob', password: 'bob-pw-123' }] });
+  // 在线页面只加入、不新建(`dce4b22b`,2026-10-04:服务端没有项目内容就拒绝,页面显示「连不上服务器」):
+  // 探针直接在托管端建的项目是空的,先替创建者写进一份空项目内容
+  const seeded = await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator: rcreator, name: rname });
+  check('online.restricted-seeded', seeded.ok, seeded);
   const inv = await adminViaWs(`${DOC_DIRECT}/`, made.projectId, rcreator, 'invite-create');
   check('online.restricted-invite', inv.type === 'shared.admin.ok' && typeof inv.code === 'string', { type: inv.type, reason: inv.reason });
   const r1 = await onlineJoin('online-5-restricted-manual', `${PROXY}/editor`, async (page) => {
