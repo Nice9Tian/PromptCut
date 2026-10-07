@@ -44,9 +44,9 @@ authorizationId是易失RAM引用，绑定已核验短凭证，重启失效，�
 | 实际尝试 / 日志（均%TEMP%） | 结果 | 原始耗时 |
 |---|---|---|
 | `node --test server/test/account-projects-provider.test.mjs` / pc-account-projects-target-1.log | 14 tests，14 pass，0 fail/cancelled/skipped | 2432.2479ms |
-| 追加事务失败/缺口/真实改密/两页恢复后 `node --test server/test/account-projects-*.test.mjs` / target-2.log | 21 tests，21 pass，0 fail/cancelled/skipped | 1421.2357ms |
-| 追加当前名单/只读与ACK丢响应重启后，同命令 / target-3.log | 23 tests，23 pass，0 fail/cancelled/skipped | 1701.7972ms |
-| 追加同event两个stage集合一致防线后，同命令 / target-4.log | 24 tests，24 pass，0 fail/cancelled/skipped | 1371.308ms |
+| 追加事务失败/缺口/真实改密/两页恢复后 `node --test server/test/account-projects-*.test.mjs` / pc-account-projects-target-2.log | 21 tests，21 pass，0 fail/cancelled/skipped | 1421.2357ms |
+| 追加当前名单/只读与ACK丢响应重启后，同命令 / pc-account-projects-target-3.log | 23 tests，23 pass，0 fail/cancelled/skipped | 1701.7972ms |
+| 追加同event两个stage集合一致防线后，同命令 / pc-account-projects-target-4.log | 24 tests，24 pass，0 fail/cancelled/skipped | 1371.308ms |
 | `node C:/Users/admin/Documents/PromptCut/node_modules/typescript/bin/tsc -b --force` / pc-account-projects-types-1.log | 首次exit0，0诊断错误 | 实测7450ms |
 | `npm test` / pc-account-projects-full-1.log | 首次4960 tests，4959 pass，0 fail，0 cancelled，1 skipped，0 todo；无异常自动重跑 | runner64747.8253ms；外层65143ms |
 | `git diff --check` | exit0，无差分错误；仅Windows LF→CRLF提示 | 静态核对 |
