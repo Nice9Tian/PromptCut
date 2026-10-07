@@ -31,6 +31,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const HASH = /^[0-9a-f]{64}$/;
 /** 请求的起点比已落盘的位置超前这么多,就直接从远程透传这一段 */
@@ -41,9 +42,15 @@ const HEADERS_TIMEOUT_MS = 30_000;
 const YIELD_POLL_MS = 250;
 
 const STATE_KEY = Symbol.for('promptcut.media-pull.state');
+const PROJECT_STATE_KEY = Symbol.for('promptcut.media-pull.projects.v2');
+const CONTEXT_KEY = Symbol.for('promptcut.media-pull.context.v2');
+const context = globalThis[CONTEXT_KEY] ??= new AsyncLocalStorage();
 function state() {
   const g = /** @type {any} */ (globalThis);
-  g[STATE_KEY] ??= {
+  const scope = context.getStore();
+  const holder = scope ? (g[PROJECT_STATE_KEY] ??= new Map()) : null;
+  let value = scope ? holder.get(scope.root) : g[STATE_KEY];
+  if (!value) value = {
     remote: null,          // { base, ticket: string | (() => Promise<string|null>) | null, gen }
     gen: 0,
     jobs: new Map(),       // hash → Job
@@ -53,7 +60,16 @@ function state() {
     running: false,
     log: [],               // 最近的事件(探针和单测看顺序用),只记哈希与动作,不记票据
   };
-  return g[STATE_KEY];
+  if (scope) holder.set(scope.root, value); else g[STATE_KEY] = value;
+  return value;
+}
+
+/** 每项目独立remote/jobs/queue；异步任务继承范围，local旧默认保持。 */
+export function projectMediaPull(scope) {
+  if (!scope?.projectId || !scope.root) throw new TypeError('project pull scope required');
+  const api = {};
+  for (const [name, fn] of Object.entries({ setRemoteAssetService, remoteAssetBase, fetchRemoteArtifact, pullLog, pullStatus, pullThrough, prefetch, incompleteOnService, resetPullStateForTest })) api[name] = (...args) => context.run(scope, () => fn(...args));
+  return api;
 }
 
 function note(event, fields) {
@@ -88,6 +104,8 @@ export function setRemoteAssetService(remote) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('远程素材服务的基址只能是 http(s)');
   if (url.username || url.password) throw new TypeError('远程素材服务的基址不能带用户名或密码');
   const ticket = remote.ticket ?? null;
+  const scope = context.getStore();
+  if (scope && remote.projectId !== scope.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
   if (s.remote && s.remote.base === base) {
     s.remote.ticket = ticket;
     return { base };
@@ -106,8 +124,7 @@ export function remoteAssetBase() {
   return state().remote?.base ?? null;
 }
 
-async function authHeaders() {
-  const r = state().remote;
+async function authHeaders(r = state().remote) {
   if (!r || !r.ticket) return {};
   const t = typeof r.ticket === 'function' ? await r.ticket() : r.ticket;
   return typeof t === 'string' && t ? { authorization: `Bearer ${t}` } : {};
@@ -138,13 +155,14 @@ export async function fetchRemoteArtifact(ns, hash, { timeoutMs = ARTIFACT_PULL_
   note('artifact.pull', { ns, hash: key });
   try {
     // 带上「这是按需拉取」的头:对面若也是本仓库的素材服务,不再替这个请求往它自己连的远程拉(防互指成环)
-    const res = await fetch(`${remote.base}/${ns}/${key}`, { headers: { ...(await authHeaders()), [ARTIFACT_PULL_HEADER]: '1' }, signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetch(`${remote.base}/${ns}/${key}`, { headers: { ...(await authHeaders(remote)), [ARTIFACT_PULL_HEADER]: '1' }, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) { await res.body?.cancel().catch(() => {}); note('artifact.miss', { ns, hash: key, status: res.status }); return null; }
     const len = Number(res.headers.get('content-length'));
     if (Number.isSafeInteger(len) && len > maxBytes) { await res.body?.cancel().catch(() => {}); return null; }
     const bytes = Buffer.from(await res.arrayBuffer());
     if (bytes.length === 0 || bytes.length > maxBytes) return null;
     if (crypto.createHash('sha256').update(bytes).digest('hex') !== key) { note('artifact.mismatch', { ns, hash: key }); return null; }
+    if (state().remote !== remote) return null;
     note('artifact.done', { ns, hash: key, bytes: bytes.length });
     return { bytes, contentType: res.headers.get('content-type') || 'application/octet-stream' };
   } catch (err) {
@@ -222,7 +240,8 @@ function startJob(hash, store, by) {
     note('pull.start', { hash, by });
     let fh = null;
     try {
-      const headers = await authHeaders();
+      await store.assert?.();
+      const headers = await authHeaders(remote);
       const timer = setTimeout(() => ac.abort(), HEADERS_TIMEOUT_MS);
       let res;
       try {
@@ -260,6 +279,8 @@ function startJob(hash, store, by) {
       if (job.size === null) job.size = job.written;
       const actual = digest.digest('hex');
       if (actual !== hash) { job.error = 'hash-mismatch'; note('pull.mismatch', { hash }); return; }
+      if (job.gen !== s.remote?.gen || job.error) throw new Error('remote-changed');
+      await store.assert?.();
       job.final = await store.finalize(hash, job.tmp, job.ext, job.contentType);
       job.done = true;
       note('pull.done', { hash, by, bytes: job.written });

@@ -41,6 +41,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
+const tierJobContext = new AsyncLocalStorage();
 
 export const SMALL_MAX_WIDTH = 800;
 export const SMALL_MAX_HEIGHT = 600;
@@ -125,6 +127,7 @@ function run(cmd, args, { low = false, max = 16 * 1024 * 1024 } = {}) {
     let child;
     try { child = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
     catch (error) { return resolve({ code: -1, stdout: '', stderr: String(error?.message ?? error) }); }
+    tierJobContext.getStore()?.trackProcess(child);
     if (low && child.pid) {
       try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* 调不了就算了 */ }
     }
@@ -261,7 +264,7 @@ const exists = async (file) => { try { await fs.stat(file); return true; } catch
  * @param {any} [options.queue]  上传队列(`createUploadQueue`);不给就只生成、不上传
  * @param {(event: string, fields: object) => void} [options.log]
  */
-export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => {} }) {
+export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => {}, ownership = null }) {
   const file = path.join(dir, TIERS_FILE);
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响 */ } };
   /** 素材原尺寸哈希 → { state: 'pending' | 'ready' | 'failed' | 'none', small?, name?, ext?, reason? } */
@@ -270,7 +273,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
   let remuxed = {};
   try {
     const saved = JSON.parse(fsSync.readFileSync(file, 'utf8'));
-    if (saved?.v === TIERS_VERSION) {
+    if (saved?.v === TIERS_VERSION && (!ownership || saved.projectId === ownership.projectId)) {
       if (saved.items && typeof saved.items === 'object') items = saved.items;
       if (saved.remuxed && typeof saved.remuxed === 'object') remuxed = saved.remuxed;
     }
@@ -278,7 +281,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
 
   let chain = Promise.resolve();
   const persist = () => {
-    chain = chain.then(() => atomicWrite(file, JSON.stringify({ v: TIERS_VERSION, items, remuxed }, null, 1)))
+    chain = chain.then(async () => { await ownership?.assert(); return atomicWrite(file, JSON.stringify({ v: TIERS_VERSION, items, remuxed, ...(ownership ? { projectId: ownership.projectId } : {}) }, null, 1)); })
       .catch((error) => say('tiers.persist-failed', { message: String(error?.message ?? error) }));
     return chain;
   };
@@ -292,6 +295,8 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
     const fileName = ext ? `${hash}.${ext}` : hash;
     const dest = path.join(dir, fileName);
     const had = await exists(dest);
+    await ownership?.assert();
+    tierJobContext.getStore()?.signal.throwIfAborted();
     if (had) await fs.rm(tmp, { force: true });
     else await fs.rename(tmp, dest);
     const size = (await fs.stat(dest)).size;
@@ -309,7 +314,13 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
     try {
       while (jobs.length) {
         const hash = jobs.shift();
-        await buildSmall(hash);
+        let lease;
+        try {
+          lease = await ownership?.acquire?.();
+          await ownership?.assert();
+          await tierJobContext.run(lease ?? null, () => buildSmall(hash));
+        } catch (error) { say('tiers.ownership-rejected', { hash, projectId: ownership?.projectId, code: error?.code ?? 'access-revoked' }); }
+        finally { lease?.release(); }
       }
     } finally {
       busy = false;
@@ -364,7 +375,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
     const tiers = [];
     if (rec.state === 'ready' && rec.small) tiers.push({ tier: 'small', hash: rec.small, ext: rec.smallExt || 'mp4' });
     tiers.push({ tier: 'original', hash, ext: rec.ext || '' });
-    try { await queue.enqueue({ name: rec.name || '', tiers }); }
+    try { await ownership?.assert(); await queue.enqueue({ name: rec.name || '', tiers, ...(ownership ? { projectId: ownership.projectId } : {}) }); }
     catch (error) { say('tiers.enqueue-failed', { hash, message: String(error?.message ?? error) }); }
   }
 
@@ -373,7 +384,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
     if (!queue) return;
     const hash = String(stored.hash).toLowerCase();
     const ext = String(stored.ext || '').toLowerCase().replace(/^\./, '');
-    try { await queue.enqueue({ name: stored.name || '', tiers: [{ tier: 'original', hash, ext }] }); }
+    try { await ownership?.assert(); await queue.enqueue({ name: stored.name || '', tiers: [{ tier: 'original', hash, ext }], ...(ownership ? { projectId: ownership.projectId } : {}) }); }
     catch (error) { say('tiers.enqueue-failed', { hash, message: String(error?.message ?? error) }); }
   }
 
@@ -385,6 +396,8 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
      * 回 `{ stored, tiers: { original, small } | null, small: 'pending' | 'ready' | 'failed' | 'none' | null, remux }`。
      */
     async prepareImport(stored, { remux = true } = {}) {
+      await ownership?.assert();
+      if (ownership && ((stored?.projectId && stored.projectId !== ownership.projectId) || !String(path.resolve(stored?.path ?? '')).startsWith(path.resolve(dir) + path.sep))) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch', status: 403 });
       const ext = String(stored?.ext || '').toLowerCase();
       if (!stored || !HASH.test(String(stored.hash))) return { stored, tiers: null, small: null, remux: null };
       if (!isVideoExt(ext)) {
@@ -450,6 +463,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
      * `ext` 是库里那份文件的扩展名。回 `{ state, small? }`,同 `status`。
      */
     async backfill({ hash, ext, name = '' }) {
+      await ownership?.assert();
       const h = String(hash || '').toLowerCase();
       const e = String(ext || '').toLowerCase();
       if (!HASH.test(h) || !isVideoExt(e)) return { state: 'skipped' };

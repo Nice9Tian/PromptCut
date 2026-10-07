@@ -9,14 +9,29 @@ import { createReadStream, createWriteStream } from "fs";
 import { spawn } from "child_process";
 import { Transform } from "stream";
 import { pipeline } from "stream/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const MEDIA_CONTEXT_KEY = Symbol.for("promptcut.asset.media-context.v2");
+const mediaContext: AsyncLocalStorage<any> = (globalThis as any)[MEDIA_CONTEXT_KEY] ??= new AsyncLocalStorage();
+function mediaOwnership(root: string): any {
+  const context = mediaContext.getStore();
+  if (!projectScope(root)) return null;
+  projectScope(root).assertActive();
+  if (context?.root !== path.resolve(root)) throw Object.assign(new Error("project-context-required"), { status: 403 });
+  return { projectId: context.projectId, authorizationId: context.lease.principal.authorizationId, assert: context.lease.check, acquire: context.lease.fork };
+}
 
 function sanitizeFilename(name: string) {
   return name.replace(/[/\\]/g, "").replace(/\.\./g, "");
 }
 
 function outRoot(root: string): string {
+  if (projectScope(root)) return path.join(path.resolve(root), "out");
   return process.env.PROMPTCUT_EXPORT_DIR || path.resolve(root, "out");
 }
+
+/** 只读可信factory注册表；HTTP字段不能登记root，打包实例共享同一目录身份。 */
+function projectScope(root: string): any { return (globalThis as any)[Symbol.for("promptcut.asset.project-roots.v2")]?.get(path.resolve(root)) ?? null; }
 
 function inside(file: string, dir: string): boolean {
   const target = path.resolve(file);
@@ -32,6 +47,7 @@ function inside(file: string, dir: string): boolean {
  */
 function allowedMediaRoots(root: string): string[] {
   const roots = [mediaDir(root)];
+  if (projectScope(root)) return roots;
   const legacy = path.join(os.homedir(), "Videos", "PromptCut", "media");
   roots.push(legacy);
   if (process.env.PROMPTCUT_MEDIA_DIR) roots.push(path.resolve(process.env.PROMPTCUT_MEDIA_DIR));
@@ -220,11 +236,15 @@ export async function resolveHashFile(root: string, hash: string, ext?: string):
 /** 本地内容库给拉取模块的几样操作:它不认目录布局,只经这里落盘、入库 */
 function pullStore(root: string) {
   const dir = mediaDir(root);
+  const ownership = mediaOwnership(root);
   return {
     dir,
+    projectId: ownership?.projectId,
+    assert: ownership?.assert,
     resolve: (hash: string) => resolveHashFile(root, hash),
     extForType: extForContentType,
     async finalize(hash: string, tmp: string, ext: string, contentType: string): Promise<string> {
+      await ownership?.assert();
       const file = ext ? `${hash}.${ext}` : hash;
       const dest = path.join(dir, file);
       if (await exists(dest)) {
@@ -282,15 +302,20 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 async function handlePullApi(req: Connect.IncomingMessage, res: ServerResponse, root: string): Promise<boolean> {
   const url = String(req.url || "").split("?")[0];
   if (url !== "/api/media/remote" && url !== "/api/media/prefetch" && url !== "/api/media/originals") return false;
-  const mod = await pullModule();
+  let mod: any = await pullModule();
   if (!mod) { sendJson(res, 501, { ok: false, error: "pull-unavailable" }); return true; }
+  const context = mediaContext.getStore();
+  if (projectScope(root)) mod = mod.projectMediaPull(context);
   try {
     if (url === "/api/media/remote") {
       if (req.method === "GET") { sendJson(res, 200, { ok: true, ...mod.pullStatus() }); return true; }
       if (req.method === "DELETE") { mod.setRemoteAssetService(null); sendJson(res, 200, { ok: true, base: null }); return true; }
       if (req.method === "POST") {
         const body = await readJsonBody(req);
-        const base = body?.base ? mod.setRemoteAssetService({ base: String(body.base), ticket: typeof body.ticket === "string" ? body.ticket : null })?.base : mod.setRemoteAssetService(null);
+        const target = body?.base ? { base: String(body.base), ticket: typeof body.ticket === "string" ? body.ticket : null } : null;
+        const checked = target && context ? await context.verifyRemoteTarget?.(req, target) : target;
+        if (target && context && checked?.projectId !== context.projectId) throw Object.assign(new Error("project-mismatch"), { status: 403 });
+        const base = checked ? mod.setRemoteAssetService(checked)?.base : mod.setRemoteAssetService(null);
         sendJson(res, 200, { ok: true, base: base ?? null });
         return true;
       }
@@ -308,7 +333,7 @@ async function handlePullApi(req: Connect.IncomingMessage, res: ServerResponse, 
     }
     sendJson(res, 405, { ok: false, error: "method" });
   } catch (err) {
-    sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    sendJson(res, (err as any)?.status ?? 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
   }
   return true;
 }
@@ -352,6 +377,8 @@ export interface StoredMedia {
  * 库里已经有同样内容就直接删掉临时文件(去重),两次导入同一内容拿到同一个键。
  */
 export async function storeMediaStream(root: string, name: string, source: Readable): Promise<StoredMedia> {
+  const ownership = mediaOwnership(root);
+  await ownership?.assert();
   const dir = mediaDir(root);
   await fs.mkdir(dir, { recursive: true });
   let decoded = String(name || "");
@@ -381,6 +408,7 @@ export async function storeMediaStream(root: string, name: string, source: Reada
   const file = ext ? `${hash}.${ext}` : hash;
   const dest = path.join(dir, file);
   const had = await exists(dest);
+  try { await ownership?.assert(); } catch (error) { await fs.rm(tmp, { force: true }); throw error; }
   if (had) await fs.rm(tmp, { force: true });
   else await fs.rename(tmp, dest);
 
@@ -399,9 +427,12 @@ export async function storeMediaStream(root: string, name: string, source: Reada
  * 素材收集那一侧可能还按原名在引用它。
  */
 export async function adoptMediaFile(root: string, filePath: string): Promise<StoredMedia> {
+  const ownership = mediaOwnership(root);
+  await ownership?.assert();
   const dir = mediaDir(root);
   await fs.mkdir(dir, { recursive: true });
   const src = path.resolve(filePath);
+  if (ownership && !inside(src, dir)) throw Object.assign(new Error("project-mismatch"), { status: 403 });
   const stat = await fs.stat(src);
   const name = path.basename(src);
   const ext = extOfName(name);
@@ -410,6 +441,7 @@ export async function adoptMediaFile(root: string, filePath: string): Promise<St
   const dest = path.join(dir, file);
 
   const had = await exists(dest);
+  await ownership?.assert();
   if (!had && path.resolve(dest) !== src) {
     try { await fs.link(src, dest); }
     catch { await fs.copyFile(src, dest); }
@@ -454,15 +486,16 @@ const tiersLog = (event: string, fields: object = {}) => {
  * 取(必要时建)这个根的两档服务。`withQueue: false` 只生成两档、不建上传队列。惰性 import:好几个单测把本文件单独转译到临时目录,静态 import 兄弟模块会解析失败。
  */
 export function mediaTierService(root: string, { withQueue = true }: { withQueue?: boolean } = {}): Promise<TierService> {
+  const ownership = mediaOwnership(root);
   const services = tierServices();
-  const key = path.resolve(root);
+  const key = path.resolve(root) + (ownership ? `:${ownership.authorizationId}` : "");
   let pending = services.get(key);
   if (pending) return pending;
   pending = (async () => {
     const tiersMod: any = await import("./media-tiers.mjs");
     const { findFfmpeg }: any = await import("./bakery/ffmpeg.mjs");
     let queue: any = null;
-    let current: { base: string; client: any } | null = null;
+    let current: { base: string; client: any; projectId?: string } | null = null;
     let ticketValue: string | null = null;
     const setTargetImpl = async (next: { base: string | null; ticket?: string | null } | null) => {
       const base = String(next?.base || "").trim().replace(/\/+$/, "");
@@ -472,14 +505,14 @@ export function mediaTierService(root: string, { withQueue = true }: { withQueue
       const { createAssetClient }: any = await import("./asset-store/client.mjs");
       // 票据只进 Authorization 头(客户端负责),这里不记
       const client = createAssetClient({ base, ticket: () => ticketValue, timeoutMs: 120_000 });
-      current = { base, client };
+      current = { base, client, ...(ownership ? { projectId: ownership.projectId } : {}) };
       tiersLog("upload.target", { base });
     };
     /*
      * 卡片快照(热备渲染器那条 `ui-render/bake-batch` 在编辑器进程里渲)写进本机素材服务之后,再推一份到当前连接的
      * 素材服务(`bake-store.mjs`);连的是本机时 `current` 为 null,不推。惰性 import,理由同上。
      */
-    if (withQueue) {
+    if (withQueue && !ownership) {
       try {
         const { setBakeRemote }: any = await import("./bake-store.mjs");
         setBakeRemote(() => (current ? { base: current.base, put: (ns: string, bytes: Buffer, o?: any) => current!.client.put(ns, bytes, o) } : null));
@@ -497,9 +530,10 @@ export function mediaTierService(root: string, { withQueue = true }: { withQueue
         resolveFile: (hash: string) => resolveHashFile(root, hash),
         gate,
         log: tiersLog,
+        ownership,
       });
     }
-    const envBase = String(process.env.PROMPTCUT_ASSET_URL || "").trim();
+    const envBase = ownership ? "" : String(process.env.PROMPTCUT_ASSET_URL || "").trim();
     if (envBase) await setTargetImpl({ base: envBase });
     await fs.mkdir(mediaDir(root), { recursive: true });
     const manager = tiersMod.createTierManager({
@@ -513,6 +547,7 @@ export function mediaTierService(root: string, { withQueue = true }: { withQueue
       ffmpeg: findFfmpeg,
       queue,
       log: tiersLog,
+      ownership,
     });
     return {
       manager,
@@ -564,6 +599,7 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({
       ok: true,
+      ...(projectScope(root) ? { projectId: projectScope(root).projectId } : {}),
       hash: stored.hash,
       ext: stored.ext,
       name: stored.name,
@@ -602,6 +638,7 @@ async function ffmpegCommand(): Promise<string> {
 function commandBuffer(executable: string, args: string[], max = PCM_MAX_BYTES): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    mediaContext.getStore()?.lease.trackProcess(child);
     const parts: Buffer[] = [];
     let size = 0, diagnostic = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -700,6 +737,7 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
     const send = (opts?: { start: number; end: number }) => {
       const stream = handle!.createReadStream(opts); // 读完或出错时流自己关句柄
       handle = null;
+      mediaContext.getStore()?.lease.track(stream);
       stream.on("error", () => { res.destroy(); });
       res.on("close", () => { stream.destroy(); });
       stream.pipe(res);
@@ -745,8 +783,10 @@ export { serveFile };
  * 媒体路由。和插件本身分开导出,单测可以直接把它架在一个裸 http server 上跑
  * (Range/206、哈希 URL 的 contentType、文件名回退都在这一层)。
  */
-export function mediaMiddleware(root: string) {
-  return async function media(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
+export interface ProjectMediaOptions { projectAccess?: any; projectStores?: any; verifyRemoteTarget?: (req: Connect.IncomingMessage, target: any) => Promise<any> }
+export function mediaMiddleware(root: string, options: ProjectMediaOptions = {}) {
+  if (!!options.projectAccess !== !!options.projectStores) throw new TypeError("projectStores and projectAccess required together");
+  const local = async function scopedMedia(req: Connect.IncomingMessage, res: ServerResponse, next: () => void, root: string) {
     if (!req.url) return next();
 
     // POST /api/media/upload/<文件名> —— 流式落盘 + 内容哈希
@@ -780,6 +820,7 @@ export function mediaMiddleware(root: string) {
         res.setHeader("Content-Type", "application/json");
         return res.end(JSON.stringify({
           ok: true,
+          ...(projectScope(root) ? { projectId: projectScope(root).projectId } : {}),
           hash: stored.hash,
           ext: stored.ext,
           name: stored.name,
@@ -861,6 +902,11 @@ export function mediaMiddleware(root: string) {
           const base = body?.base === null || body?.base === undefined ? null : String(body.base);
           if (base !== null && !/^https?:\/\//i.test(base)) { res.statusCode = 400; return res.end("base must be http(s) or null"); }
           const ticket = typeof body?.ticket === "string" ? body.ticket : null;
+          const context = mediaContext.getStore();
+          if (base && context) {
+            const checked = await context.verifyRemoteTarget?.(req, { base, ticket });
+            if (checked?.projectId !== context.projectId || checked.base !== base) return sendJson(res, 403, { ok: false, error: "project-mismatch" });
+          }
           await service.setTarget({ base, ticket });
           res.setHeader("Content-Type", "application/json");
           return res.end(JSON.stringify({ ok: true }));
@@ -910,7 +956,8 @@ export function mediaMiddleware(root: string) {
           const file = await resolveHashFile(root, hashed[1].toLowerCase(), hashed[2]);
           if (file) return serveFile(file, req, res);
           // C6.6 按需拉取:本地内容库没有,就向当前连接的远程素材服务流式拉、边落盘边服务;没连远程才直接 404
-          const mod = await pullModule();
+          let mod: any = await pullModule();
+          if (mod && projectScope(root)) mod = mod.projectMediaPull(mediaContext.getStore());
           if (mod && await mod.pullThrough({ hash: hashed[1].toLowerCase(), req, res, store: pullStore(root), serveFile: (f: string) => serveFile(f, req, res) })) return;
           res.statusCode = 404;
           return res.end("Not found");
@@ -920,6 +967,27 @@ export function mediaMiddleware(root: string) {
     }
 
     next();
+  };
+  return async function media(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
+    const pathname = String(req.url ?? "").split("?")[0];
+    if (!pathname.startsWith("/@media/") && !pathname.startsWith("/api/media/")) return next();
+    let context = (req as any)[Symbol.for("promptcut.asset.request.v2")];
+    try {
+      if (!context && options.projectAccess) {
+        const lease = await options.projectAccess.resolve(req, { action: ["GET", "HEAD"].includes(req.method ?? "GET") ? "read" : "write", resource: { ns: "media", route: pathname }, close: () => { req.destroy(); res.destroy(); } });
+        context = { ...options.projectStores.project(lease.projectId), lease, verifyRemoteTarget: options.verifyRemoteTarget };
+        Object.defineProperty(req, Symbol.for("promptcut.asset.request.v2"), { value: context, configurable: true });
+        res.once("finish", () => lease.release());
+        res.once("close", () => lease.release());
+      }
+      if (context) {
+        context.verifyRemoteTarget ??= options.verifyRemoteTarget;
+        await context.lease.assert();
+        if (!["GET", "HEAD"].includes(req.method ?? "GET") && context.lease.principal.access !== "rw") return sendJson(res, 403, { ok: false, error: "forbidden" });
+        if (context.lease.principal.service && context.lease.principal.actsFor !== "member" && !["GET", "HEAD"].includes(req.method ?? "GET")) return sendJson(res, 403, { ok: false, error: "forbidden" });
+      }
+      await mediaContext.run(context ?? null, () => local(req, res, next, context?.root ?? root));
+    } catch (err: any) { if (!res.destroyed) sendJson(res, err?.status ?? 500, { ok: false, error: err?.code ?? "media-failed" }); }
   };
 }
 

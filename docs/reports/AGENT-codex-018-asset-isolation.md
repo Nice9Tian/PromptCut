@@ -25,3 +25,21 @@
 - `project-access.mjs`：`authorizeAsset({authority,principal,projectId,action,resource})` 必须 project 匹配并每次委托 `authority.checkAccess`；`openProjectStream` 先同步登记 `authority.subscribeRevocations(context,callback)` 再核验，回 `{signal,assert,track,release,closed}`。撤销回调同步 abort/destroy，再等真实 close；持久消费/ACK由权威 adapter 实现。`createProjectAssetAccess({authority,resolvePrincipal(req)})` 不认 HTTP body 自报身份。
 - doc owner 已确认 opaque `authorizationId` RAM 绑定原凭证、逐次问 account.verify；公开 account/login/credential 字段不构成授权。当前 adapter shape 已发对方，待其实际 schema 校准，runGrant 必须由 doc 授权，不能仅 body 自报。
 - `node --test server/test/asset-project-stores.test.mjs`：6/6，0失败/跳过，113.7763ms；TMP/promptcut-asset-project-stores-1.log。覆盖 fs/memory 三 namespace 同hash独立入库、B未入库不命中、删除A不影响B、路径编码、逐次权威核验、持续流close及check等待中撤销竞态。
+
+## 第二块：真实 HTTP 路由与项目归属贯穿接线
+
+- project factory v2 把 media/snap/px 分到 projects/sha256(projectId) 下的独立物理目录；同内容分别上传分别落库，移除 A 的内部 store 不动 B。retired scope 的旧引用也拒绝继续用。纯本地无 factory/options 调用保持原目录和接口。
+- asset-service 按注入 projectAccess 从可信 principal 选 store，每次核 doc checkAccess，云端回环不放行；GET/HEAD/Range/chunks/complete/upload 三命名空间及旧 /@media 接线经过授权。云端响应 no-store；持续读 stream 注册撤销，先同步 abort/destroy 再等 close。principal 的 opaque authorizationId 必须由 doc 提供，公开 accountId/loginId/runGrantId 自报不能替代。
+- media 插件用项目 root + ALS 请求 context，legacy 路径/PCM/file/adopt/local/tier 查询只能看本项目；全局 EXPORT_DIR 不能覆盖项目目录。remote/pull 和 queue target 需中央注入 verifyRemoteTarget，返回 projectId 不同拒绝。/api/media/adopt 已在当前包；缩略 /api/shots/thumb 新授权、项目 shotsDir 和 GET/HEAD 实路由测试已获根扩租。shots 检测、安装、任务状态等仍待 perception owner 接权威，不声称全 shots 授权已挂载。
+- 后台 tier、upload queue、media stamp/ingest、frame stream、usage ledger 增加 projectId/ownership 注入和发布前重核；待下一块专用 worker/队列/持久化负向测试。这次提交只是接口接线的可审暂停点，不把这些尚未覆盖的分支算验收通过。
+- 与 doc owner 实现 ba10c8d2 实际字段对齐：resource.ns 为 media/snap/px；subscribe context 传精确 accountId/loginId/credentialId，跨项目/其它账号登录事件不关错人；project-created/member-joined/unban 不作撤销。doc 回调仅唤醒，不能自动 ACK；持久 eventsSince 连续追齐及 ackAccessEvent 重启协议仍需可信资产 adapter，下一块落实，当前不声称持久 ACK 已完成。
+- 首 HTTP 尝试因 fixture ROOT 多上一级导致 ENOENT .worktrees/server/asset-service.ts，4/4 失败、232.1264ms，尚未开 HTTP；修正精确路径后 HTTP-2 4/4、899.565ms；加入已授权 shots 后 HTTP-3 5/5、1749.6626ms。完整日志均留 TMP/promptcut-asset-project-http-{1,2,3}.log，没有抹掉首次失败。
+- HTTP-4 + store 定向 11/11、零失败/跳过，933.7245ms，TMP/promptcut-asset-project-http-4.log。真实端口5780每项关后复用；覆盖三 namespace A/B、B未知hash拒、B独立入库同hash可读、A删除B可读、回环无证401、PCM/旧URL/私路径/adopt/remote错项目拒、实际上传不污染全局目录、撤销持续流close、缩略filename隔离。合成 principal/provider 是测试夹具，不冒称真实 account 服务或生产中央已挂载。
+- type-1 --force 已零错，TMP/promptcut-asset-type-1.log；属于此前源码，新块提交后仍要最终 type/full。未启动服务/节点、未合并其它分支/推送/装依赖/改用户数据。
+- 本次一次文本编辑用绝对 cuda_Vit Python -B，未显式加该命令 PROMPTCUT_TEST_PYTHON/PYTHONDONTWRITEBYTECODE 环境；这是进程配置漏项。仅运行 stdin 文本编辑，没有 import 产品包/生成 pyc/安装/用户目录写入。后续命令已显式设置，两项不再省略。
+
+## 素材入口旧探针模型一致性补丁与暂停点
+
+- 根的基底 asset-path 首轮28过/1失败，P7 URL 为 template 而 direct 起末点略有差异；只读核 pyEnv 继承根 PROMPTCUT_MODELS，editor 明确覆盖自己的空 MODELS，证实输入模型目录不一致。
+- 按根扩租仅给 pyEnv 加 PROMPTCUT_MODELS: MODELS，与 editor 同一探针临时目录；保留模板逐字段比较、其它断言及全部已安装真实 weights。同一探针一次验收待根收 auth 测试生命周期修复后执行。
+- 本次提交后干净暂停，根将在本工作区收回独立 auth fixture 修复5bd65d27，通知后继续专用负向、type及一次完整 npm；此暂停不代替最终验收。
