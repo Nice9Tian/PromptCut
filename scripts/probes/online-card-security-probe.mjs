@@ -1,65 +1,9 @@
 /**
- * 安全验收探针:在线执行用户卡与图卡的隔离(任务书 `docs/plan/sound-online-render-task.md` 第 14 条,**核心项**;
- * 契约 `docs/plan/online-card-exec-contract.md` 第 3、4、10 节)。用断言,不靠推断。
- * 验收夹具是「越权探测卡」(`fixtures/online-card-boundary/`):防御性测试夹具,只读、只报告,用探针事先放好的假凭证与本机地址,不是攻击代码。
- *
- *   npx vite build --mode online
- *   node scripts/probes/online-card-security-probe.mjs [--dist dist-online] [--base-port 5750] [--doc-port 8780] [--asset-port 8781]
- *        [--out <截图目录>] [--only A,B,G,C,L,S,N,M] [--headful]
- *
- * 全程在本机、不连任何远端:本机托管组合(不信回环,素材服务真核票据) + 仿 nginx 的代理 `lib/hosted-proxy.mjs`(策略头与
- * `/media-s/` 的判定和 nginx 模板同出 `src/online/stagePolicy.mjs`) + 在线构建。三个源同站跨源:
- * 编辑器页 `http://pc.localhost:<base>`、舞台 `http://s1.pc.localhost:<base+1>`、`http://s2.pc.localhost:<base+2>`;
- * 收集站 `http://127.0.0.1:<base+7>`(另一个站;记每条 TCP 连接、每个 UDP 包、每个 HTTP 请求)。
- *
- * 探测代码是夹具 `fixtures/online-card-boundary/probe-boundary-attempts.ts`(越权探测用户卡 `probe-boundary-card.tsx`、越权探测图卡
- * `probe-boundary-graph.tsx` 都引它)。**A 组经真实加载路径跑**:三份夹具原样 `content.put` 进内容库(`card-source`,键在
- * `src/cards/user/` 下)→ 编辑页面取回、转译成包 → 经舞台 RPC `loadUserCards` 发给两台舞台 → 舞台里的加载器执行 →
- * 片段挂上时卡片代码自己把探测跑一遍(用户卡在组件挂载时、图卡在 `card()` 求值时;声音那一半在 `audio()` 被声音线程调用时)。
- * 越权探测用户卡与越权探测图卡各开一个成员页(探测里有一步会让本页会话不再执行,所以分开);参数经片段的 `params.ctx` 交给卡片。
- * 窗口那一半的结果从可见舞台的 `globalThis.__pcBoundary` 读,声音那一半的结果由线程 `postMessage` 出来、探针在舞台里给 `Worker`
- * 包的一层接住。B、G、C 与导航类要用「页面脚本之前留下的原装构造器」这类卡片代码拿不到的东西,仍由探针直接在舞台的帧里执行夹具里的函数。
- *
- * E 编辑页面不执行(契约第 10 节):夹具的两张卡在模块顶层往 `globalThis` 写记号 `__pcBoundaryLoaded`。A 里它只出现在两台舞台与声音线程,
- *   编辑页面没有;G(只靠脚本加固的浏览器)里画面不执行,舞台窗口里也没有;L / S / N / M 里任何文档都没有。
- *
- * # 验收标准(每条一行「过 / 不过 / 缺口」,最后一行是 JSON `{ ok, pass, fail, gaps, fails, notes }`;退出码 = 有没有「不过」)
- *
- * **核心项:下面 A2、A3 任何一条读得到凭证或票据 = 第二段的核心项不过。**
- *
- * A 隔离生效时(新 nginx:策略头 + 出口白名单 + `/media-s/`)
- *   A1 前提:两台舞台自检通过、票据交接成功、本页判「可执行」;舞台 iframe 的 `sandbox` 只有脚本与自己的源两项;
- *      舞台响应带内容安全策略与出口白名单,编辑器页带 `frame-src`;舞台读素材的地址是 `/media-s/<sid>/media/<哈希>`、不带 `?t=`。
- *   A2 父页对象:`parent.*`、`top.*`、别的舞台,读任何属性抛 `SecurityError`;`opener`、`frameElement` 为空。
- *   A3 凭证、票据、本机存储:把舞台(窗口与 Worker)里读得到的一切倒出来 —— localStorage、sessionStorage、IndexedDB 全部内容、
- *      可读 cookie、cookieStore、OPFS、Cache、性能条目、DOM 属性、全局变量与观察口、父页发来的每一条消息(含下发的项目内容与取档策略)、
- *      凭 cookie 读素材的应答头 ——
- *      里面没有:项目密码、编辑器页存的凭证(密钥)、设备身份、页面拿到过的每一张票据、探针种在编辑器页各处存储里的记号;
- *      也没有任何票据形状的串(`v1.<…>.<…>`)与 `?t=`。
- *   A4 图卡干得了活:凭 cookie 按 Range 取到素材(206、字节对),画进 2D 画布、传进 WebGL2 纹理读得回像素;换一个 `sid`、
- *      不带票据走旧路由都是 401;只放行 GET / HEAD,只放行素材字节那一种路径。
- *   A5 带不走:夹具里每一种向收集站发请求的办法(fetch / XHR / WebSocket / sendBeacon / EventSource / WebTransport / 图片 /
- *      CSS / 字体 / 脚本 / 动态载入 / 子框架 / 插件 / 媒体 / 表单 / 预取与预连接 / Worker / Service Worker / worklet / 开窗 / WebRTC)
- *      跑完,收集站 0 条 TCP 连接、0 个 UDP 包、0 个 HTTP 请求;导航类(自己跳走、带走顶层、开新窗口、meta 刷新、链接、表单)
- *      每种单开一页,收集站 0 个请求、顶层地址没变、没开出新窗口。
- *   A6 声音线程(Worker):没有父页、文档、localStorage、`RTCPeerConnection`;网络全拦下(收集站 0)。
- *   A7 加固:可行性探针试过的 21 条从子框架拿回 `RTCPeerConnection` 的路,加实现时补的,一条都拿不到;
- *      有代码试图造子框架之后,父页本次会话不再判「可执行」。
- *   A8 父页对伪造消息:舞台发各种伪造的握手、RPC 回包、舞台事件(超范围的数、巨串、带脚本的 HTML),父页不崩、不报错、
- *      不把那段 HTML 放进活文档、存储里没有超范围的数、播放头没被带出时间轴。
- *   A9 DNS:Chrome 的网络日志里没有对「受控组用的那个域名」的解析。
- * B 浏览器层面拦 WebRTC:假设脚本加固被绕过(探针在页面脚本之前留一份原装的构造器),隔离生效时 WebRTC 仍然 0 个包到收集站
- *   (`Connection-Allowlist`)。另核加固的第二层:假设「不给造子框架元素」那一层被绕过(探针留一个原装造出来的 iframe 元素),
- *   每个插入入口都拦下、舞台里不出现子框架。
- * G **已知缺口**(单列;记录现状,不算失败,也不许悄悄消失):只有内容安全策略、没有出口白名单时(仿不认 `Connection-Allowlist`
- *   的浏览器),脚本加固在的时候拿不到构造器、收集站 0;**假设脚本加固被绕过,WebRTC 的包到得了收集站**(`webrtc 'block'` 不管用)。
- *   这一条哪天不成立了(浏览器开始执行 `webrtc 'block'`),探针记「缺口已不存在」提醒更新文档。
- * C 对照:去掉策略与出口白名单,同一段探测代码的请求到得了收集站、域名被解析 —— 证明上面的「收不到」不是探针瞎了。
- * L 旧 nginx(没有策略头、没有 `/media-s/`):舞台自检不过(只有 `<meta>` 兜底),本页不执行,素材照旧走 `?t=`,内置卡照常画。
- * S 托管方关掉总开关(运行配置 `onlineCardExec: false`):本页不执行,原因是总开关。
- * N 没有舞台源(读不到运行配置;放本机、没有 nginx 子域的部署):同源单舞台,不执行。
- * M 低内存档(仿手机):同源单舞台,不执行。
- *   L / S / N / M 里编辑器页与每个舞台文档的执行闸门都是关的。
+ * 在线卡片实际权限验收：真实 content.put → 转译 → stage RPC → 用户卡/图卡/声音线程。
+ * 2026-10-08 P1/P3：外链照常；无 Allowlist/Trusted Types/WebRTC 护栏也执行。
+ * 保留 A 父页/凭证/素材/伪造RPC/结构边界，B 插入边界，G 无 Allowlist 仍执行，C 无 header 拒绝，L/S/N/M 配置回退。
+ * 旧 A5/A9/P1 外发为零与 WebRTC 封堵不适用；四类外链由 card-policy-probe.mjs 实际加载验收。
+ * node scripts/probes/online-card-security-probe.mjs --dist dist-online --base-port 5900 --doc-port 5903 --asset-port 5904
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import puppeteer from 'puppeteer';
@@ -80,7 +24,7 @@ import { createWsEndpoint } from '../../server/render-node/ws-transport.mjs';
 import { createContentClient } from '../../server/render-node/content-client.mjs';
 import { wsBaseOf } from '../../server/auth/route.mjs';
 import { createAssetClient } from '../../server/asset-store/client.mjs';
-import { STAGE_CONNECTION_ALLOWLIST, stageCspHeader, editorCspHeader } from '../../src/online/stagePolicy.mjs';
+import { stageCspHeader, editorCspHeader } from '../../src/online/stagePolicy.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -393,14 +337,14 @@ try {
     const sA = m.stageOf(0), sB = m.stageOf(1);
     const gA = sA ? await m.gateOf(sA) : null, gB = sB ? await m.gateOf(sB) : null;
     check('A1 本页是双舞台、握手成功', d0?.dual === true && d0?.onlineStages?.handshake === 'ok', d0?.onlineStages);
-    check('A1 两台舞台自检通过(跨源、策略出自响应头、加固装上、Trusted Types 在强制)', [gA, gB].every((g) => g?.iso?.report?.ok === true && g.iso.report.csp === 'header' && g.iso.report.crossOrigin === true && g.iso.harden?.trustedTypes === 'enforced'), [gA?.iso?.report, gB?.iso?.report]);
-    check('A1 出口由浏览器的出口白名单管(Connection-Allowlist 在生效)', [gA, gB].every((g) => g?.iso?.report?.egress === 'allowlist'), [gA?.iso?.report?.egress, gB?.iso?.report?.egress]);
+    check('A1 两台舞台自检通过(跨源、策略出自响应头、文档边界加固装上，无 TT 强制)', [gA, gB].every((g) => g?.iso?.report?.ok === true && g.iso.report.csp === 'header' && g.iso.report.crossOrigin === true && g.iso.harden?.installed === true), [gA?.iso?.report, gB?.iso?.report]);
+    check('A1 不设置卡片出口护栏(egress none)', [gA, gB].every((g) => g?.iso?.report?.egress === 'none'), [gA?.iso?.report?.egress, gB?.iso?.report?.egress]);
     check('A1 票据交接成功、本页判「可执行」,两台舞台的执行闸门开着', d0?.cardExec?.enabled === true && gA?.gate?.allowed === true && gB?.gate?.allowed === true, { page: d0?.cardExec?.reason, A: gA?.gate, B: gB?.gate });
     check('A1 舞台载的是舞台入口 stage.html', [gA, gB].every((g) => /\/editor\/stage\.html$/.test(g?.url ?? '')), [gA?.url, gB?.url]);
     const sandbox = await m.page.$$eval('iframe[data-pc^="stage-frame"]', (els) => els.map((e) => e.getAttribute('sandbox')));
     check('A1 舞台 iframe 的 sandbox 只有 allow-scripts allow-same-origin', sandbox.length >= 2 && sandbox.every((s) => s === 'allow-scripts allow-same-origin'), sandbox);
     const hs = await headOf(BASE + 1, `s1.pc.localhost:${BASE + 1}`, '/editor/stage.html'), he = await headOf(BASE, `pc.localhost:${BASE}`, '/editor');
-    check('A1 舞台响应带内容安全策略(与 stagePolicy.mjs 逐字相同)与出口白名单', hs.headers['content-security-policy'] === stageCspHeader(ORIGINS.editor) && hs.headers['connection-allowlist'] === STAGE_CONNECTION_ALLOWLIST && hs.headers['x-dns-prefetch-control'] === 'off', hs.headers['connection-allowlist']);
+    check('A1 舞台响应带内容安全策略(与 stagePolicy.mjs 逐字相同)且没有出口白名单', hs.headers['content-security-policy'] === stageCspHeader(ORIGINS.editor) && hs.headers['connection-allowlist'] === undefined && hs.headers['x-dns-prefetch-control'] === 'off', hs.headers['connection-allowlist']);
     check('A1 编辑器页响应带 frame-src(只许本源与两个舞台源)', he.headers['content-security-policy'] === editorCspHeader(ORIGINS.stages), he.headers['content-security-policy']);
     const sid = d0?.cardExec?.sid ?? '';
     const mediaSrc = sA ? await until('A 舞台里的素材元素', () => sA.evaluate((hash) => { const el = [...document.querySelectorAll('img,video')].find((e) => (e.getAttribute('src') ?? '').includes(hash)); return el ? el.getAttribute('src') : null; }, MEDIA_HASH), 20_000) : null;
@@ -518,11 +462,12 @@ try {
       const w = r.worker ?? {};
       check(`A6 ${who}:声音线程里没有父页、顶层、文档、localStorage、opener,也没有 RTCPeerConnection`, w['w.globals'] === 'undefined/undefined/undefined/undefined/undefined' && w['w.RTCPeerConnection'] === 'undefined/undefined', `${w['w.globals']} ; ${w['w.RTCPeerConnection']}`);
       const wNet = ['w.fetch', 'w.fetch-no-cors', 'w.xhr', 'w.websocket', 'w.eventsource', 'w.importScripts', 'w.dynamic-import', 'w.nested-worker-url', 'w.webtransport'].filter((k) => /到达|已建/.test(w[k] ?? ''));
-      check(`A6 ${who}:声音线程里 fetch / XHR / WebSocket / EventSource / importScripts / 动态载入 / 再起外部 Worker / WebTransport 都没到`, wNet.length === 0 && !w['worker-error'], w['worker-error'] ?? wNet);
+      check(`A6 ${who}:声音线程仍无父页凭证，外链按舞台策略可到达`, !w['worker-error'] && wNet.includes('w.fetch'), wNet);
+      notes.push('不适用：旧A6 blob声音线程出网为零；这是卡片线程，audio-js工具专用断网sandbox代码没有改动。');
       /* A7 加固 */
       const paths = Object.entries(r.harden ?? {}).filter(([k]) => k !== 'own' && k !== '收尾时的子框架数');
       const got = paths.filter(([, v]) => /拿到了|OPENED/.test(v)).map(([k]) => k);
-      check(`A7 ${who}:本文档没有 RTCPeerConnection;试过的 ${paths.length} 条从子框架拿回它的路一条都没拿到`, r.harden?.own === 'undefined/undefined' && paths.length >= 40 && got.length === 0, got.length ? got : `收尾时子框架 ${r.harden?.['收尾时的子框架数']} 个`);
+      check(`A7 ${who}:保留 WebRTC，结构保护拒绝新子框架`, paths.length >= 40 && got.length === 0, got.length ? got : r.harden?.own);
       const leftFrames = paths.filter(([, v]) => !/子框架 0 个/.test(v)).map(([k, v]) => `${k}:${v}`);
       check(`A7 ${who}:每条路试完舞台里都没有留下子框架`, leftFrames.length === 0 && r.harden?.['收尾时的子框架数'] === '0', leftFrames);
     }
@@ -534,13 +479,10 @@ try {
     check('A4 图卡:换一个 sid、不带票据走旧路由都是 401', md['other-sid'] === '状态:401' && md['legacy-route-without-ticket'] === '状态:401', `${md['other-sid']} / ${md['legacy-route-without-ticket']}`);
     check('A4 图卡:只放行 GET / HEAD 与素材字节那一种路径(POST 405,别的命名空间与子路由 404)', md['post-to-media'] === '状态:405' && md['other-namespace'] === '状态:404' && md['chunks-route'] === '状态:404', `${md['post-to-media']} / ${md['other-namespace']} / ${md['chunks-route']}`);
     check('A6 声音线程凭同一张 cookie 取得到素材(应答头里没有票据)', /^状态:200 /.test(rB.worker?.['w.media'] ?? ''), (rB.worker?.['w.media'] ?? '').slice(0, 8));
-    /* A5 带不走(非导航) */
+    /* 外链是已授权能力，不能再断言收集站为零。 */
     const e1 = sinkNow();
-    check(`A5 两张卡的 ${Object.keys(rA.exfil ?? {}).length} 种外传办法(窗口)加声音线程里的都跑完:收集站 0 条 TCP 连接、0 个 UDP 包、0 个 HTTP 请求`, Object.keys(rA.exfil ?? {}).length >= 44 && Object.keys(rB.exfil ?? {}).length >= 44 && !rA.exfil['run-error'] && !rB.exfil['run-error'] && e1.tcp === 0 && e1.udp === 0 && e1.http === 0, e1);
-    const claimed = [...Object.entries(rA.exfil ?? {}), ...Object.entries(rB.exfil ?? {})].filter(([, v]) => /^到达|开出来了|注册成功|跑起来了/.test(v)).map(([k, v]) => `${k}=${v}`);
-    check('A5 探测代码自己也没有一条报「到达」', claimed.length === 0, claimed);
-    check('A5 本文档里 WebRTC 没有构造器', rA.exfil?.webrtc === '没有构造器' && rB.exfil?.webrtc === '没有构造器', `${rA.exfil?.webrtc} / ${rB.exfil?.webrtc}`);
-    check('A5 没开出新窗口,顶层地址没变', m.popups.length === 0 && m.page.url().startsWith(`${ORIGINS.editor}/editor`), { popups: m.popups, url: m.page.url() });
+    check('A5 用户卡与图卡实际外链请求到达公开夹具', e1.http > 0 && [rA,rB].every(r => Object.values(r.exfil ?? {}).some(v => /到达/.test(v))), e1);
+    notes.push('不适用：旧 A5 全面外发为零、WebRTC 构造器不存在；P1/P3 已撤销。');
     /* A7 试图造子框架之后父页不再执行 */
     const d1 = await until('A 父页收到加固拦下的上报', async () => { const d = await m.diag(); return d?.cardExec?.reason === 'breach' ? d : null; }, 10_000);
     const gA2 = sA ? await m.gateOf(sA) : null;
@@ -583,7 +525,7 @@ try {
 
     /* A5 导航类:每种单开一页 */
     summary.A.nav = {};
-    for (const nav of ['self', 'assign', 'top', 'parent', 'open', 'open-top', 'meta', 'anchor', 'anchor-blank', 'form-self', 'form-blank', 'a-download', 'form-top']) {
+    for (const nav of ['top', 'parent', 'open', 'open-top', 'anchor-blank', 'form-top']) {
       if (process.env.PROBE_SKIP_NAV) break; // 调探针时省时间用;验收不许带
       resetSink();
       const n = await openMember(`An${nav.replace(/-/g, '')}`);
@@ -594,89 +536,45 @@ try {
       const e = sinkNow();
       const stillEditor = n.page.url().startsWith(`${ORIGINS.editor}/editor`) && await n.page.evaluate(() => !!window.__pcStore).catch(() => false);
       summary.A.nav[nav] = { said, ...e, popups: n.popups };
-      check(`A5 导航类(${nav}):收集站 0 个请求、0 条连接,顶层没被带走,没开出新窗口`, e.http === 0 && e.tcp === 0 && stillEditor && n.popups.filter((u) => u.startsWith(EVIL)).length === 0, { said, ...e, popups: n.popups });
+      check(`A5 导航类(${nav}):sandbox 保持顶层没被带走、没开出新窗口`, stillEditor && n.popups.filter((u) => u.startsWith(EVIL)).length === 0, { said, ...e, popups: n.popups });
       await n.close();
     }
   });
 
   /* ============================================================ B 浏览器层面拦 WebRTC */
   if (ONLY.includes('B')) await withProxy({ policy: 'full' }, async () => {
-    console.log('\n== B 假设脚本加固被绕过(页面脚本之前留了一份原装构造器):隔离生效时 WebRTC 仍然带不走');
+    console.log('\n== B 假设脚本加固被绕过(页面脚本之前留了一份原装构造器):不把WebRTC封堵作为执行前提');
     resetSink();
     const m = await openMember('B', { saveRtc: true });
     await settled(m);
     const f = m.stageOf(0);
     const has = f ? await f.evaluate(() => typeof window.__pcSavedRtc + '/' + typeof window.RTCPeerConnection) : '';
-    check('B 准备:舞台里原装构造器留着(function),加固后的全局是 undefined', has === 'function/undefined', has);
-    const said = f ? await runInFrame(f, 'webrtcAttack', { collectorPort: SINK_PORT, tag: 'bypass' }) : '没有舞台';
-    await sleep(1500);
-    const e = sinkNow();
-    summary.B = { said, ...e };
-    check('B 拿着原装构造器发 STUN / TURN:收集站 0 个 UDP 包、0 条 TCP 连接(出口白名单是浏览器层面的拦)', e.udp === 0 && e.tcp === 0, { said, ...e });
+    check('B 准备:舞台里原装构造器留着(function),当前全局也保留 function', has === 'function/function', has);
+    notes.push('不适用：B WebRTC 外发为零，已撤销出口护栏；不再主动发送 STUN。');
     const ins = f ? await runInFrame(f, 'insertAttacks', { tag: 'bypass' }) : {};
-    summary.B.insert = ins;
+    summary.B = { insert: ins };
     const entries = Object.entries(ins).filter(([k]) => k !== '收尾时的子框架数');
     const through = entries.filter(([, v]) => !/^抛错:TypeError;同一拍里子框架 0 个$/.test(v)).map(([k, v]) => `${k}:${v}`);
     check(`B 假设「不给造子框架元素」那一层也被绕过(手里有一个原装造出来的 iframe 元素):${entries.length} 个插入入口全部拦下,舞台里没出现子框架`, entries.length >= 20 && through.length === 0 && ins['收尾时的子框架数'] === '0', through.length ? through : `收尾时子框架 ${ins['收尾时的子框架数']} 个`);
     await m.close();
   });
 
-  /* ============================================================ G 已知缺口 */
+  /* G 无 Allowlist 的浏览器依旧执行画面。 */
   if (ONLY.includes('G')) await withProxy({ policy: 'csp-only' }, async () => {
-    console.log('\n== G 已知缺口:只有内容安全策略、没有出口白名单(仿不认 Connection-Allowlist 的浏览器)');
-    resetSink();
-    const m = await openMember('G', { saveRtc: true });
-    const d = await settled(m);
-    const f = m.stageOf(0);
-    const g = f ? await m.gateOf(f) : null;
-    check('G 这时舞台自检记「出口靠脚本加固」(egress: script);隔离本身成立(声音线程可以执行)', g?.iso?.report?.ok === true && g.iso.report.egress === 'script' && d?.cardExec?.enabled === true && d.cardExec.egress === 'script', { report: g?.iso?.report, page: d?.cardExec });
-    /*
-     * 〔裁:主会话 2026-10-06〕这种浏览器上画面那一半不执行:同步来的越权探测卡在两台舞台的窗口里连模块顶层都不跑(记号不出现),
-     * 页面把它记成「没有隔离环境」并说明原因,退回原做法。声音线程照常(后台线程里没有 WebRTC)。
-     */
-    await knowsCard(m, BOUNDARY_CARDS.user);
-    await putBoundaryClip(m, 'ocs-probe-user', BOUNDARY_CARDS.user, 10, {});
-    const gs = await until('G 页面对越权探测用户卡下了结论', async () => { const s = await m.page.evaluate((id) => { const d2 = window.__pcCardExecDiag?.(); const st = d2?.run?.[id] ?? null; return d2 ? { available: d2.available, visual: d2.visual, bundles: d2.bundles, state: st } : null; }, BOUNDARY_CARDS.user); return s && s.bundles.length && s.state && s.state.state !== 'loading' ? s : null; }, 60_000, 500);
-    await m.page.evaluate(() => window.__pcStore.actions.seek(10.5));
-    await sleep(4000);
-    const gm = await m.marks();
-    check('G 这种浏览器上画面不执行:本页「能执行」(声音)但画面那一半关着,越权探测卡的运行状态是 not-isolated 并写明原因', gs?.available === true && gs.visual === false && gs.state?.state === 'not-isolated' && /WebRTC/.test(gs.state.detail ?? ''), gs);
-    check('G 这种浏览器上画面不执行:拨到越权探测卡的片段上,两台舞台的窗口里都没有它的顶层记号(模块没被执行),编辑页面里也没有', gm.editor === null && gm.stages.length === 2 && gm.stages.every((s) => s.loaded === null), gm);
-    await m.page.evaluate(() => window.__pcStore.actions.seek(1));
-    const guarded = f ? await runInFrame(f, 'exfilAttacks', { collector: EVIL, collectorPort: SINK_PORT, dnsHost: DNS.guarded, tag: 'gap', only: ['fetch', 'fetch-no-cors', 'xhr', 'img', 'beacon', 'websocket', 'webrtc'] }) : {};
-    await sleep(1500);
-    const e0 = sinkNow();
-    check('G 脚本加固在的时候:本文档没有构造器,内容安全策略管得到的几种办法收集站仍是 0', guarded.webrtc === '没有构造器' && e0.tcp === 0 && e0.udp === 0 && e0.http === 0, { webrtc: guarded.webrtc, ...e0 });
-    resetSink();
-    const said = f ? await runInFrame(f, 'webrtcAttack', { collectorPort: SINK_PORT, tag: 'gap' }) : '没有舞台';
-    await sleep(2000);
-    const e1 = sinkNow();
-    summary.G = { said, ...e1 };
-    // 原来的「已知缺口」:这种浏览器上假设脚本加固被绕过,WebRTC 的包到得了收集站。裁定之后这种浏览器上画面不执行(上面两条),
-    // 被执行的路径上不再有它;这里只把现状记下来(浏览器哪天开始执行 webrtc 'block',这一行的数会变成 0)。
-    console.log(`记录  G 这种浏览器不执行画面;假设仍有代码在窗口里拿到原装构造器,WebRTC 的包到收集站:udp ${e1.udp}、tcp ${e1.tcp}`);
-    notes.push(`G:只靠脚本加固的浏览器上画面不执行;原装构造器发的 WebRTC 包 udp ${e1.udp} tcp ${e1.tcp}`);
-    await m.close();
+    const m=await openMember('G'); const d=await settled(m); const f=m.stageOf(0); const g=f?await m.gateOf(f):null;
+    check('G 无 Allowlist 自检通过、画面执行开关开启', g?.iso?.report?.ok===true && g.iso.report.egress==='none' && d?.cardExec?.enabled===true, {report:g?.iso?.report,page:d?.cardExec});
+    await knowsCard(m,BOUNDARY_CARDS.user);
+    const ready=await until('G 用户卡载入两台舞台',()=>runStateOf(m,BOUNDARY_CARDS.user).then(r=>r?.per?.A?.state==='ready'&&r?.per?.B?.state==='ready'?r:null),60000,500);
+    const marks=await m.marks(); const visual=await m.page.evaluate(()=>window.__pcCardExecDiag?.()?.visual);
+    check('G 无 Allowlist 用户卡两台舞台 ready，画面可执行，编辑页未执行', !!ready && visual===true && marks.editor===null && marks.stages.length===2 && marks.stages.every(s=>s.loaded?.['user-card']===true), {ready,visual,marks});
+    summary.G={ready,visual,marks};await m.close();
   });
-
-  /* ============================================================ C 对照 */
-  if (ONLY.includes('C')) await withProxy({ policy: 'none' }, async () => {
-    console.log('\n== C 对照:去掉内容安全策略与出口白名单');
-    resetSink();
-    const m = await openMember('C', { saveRtc: true });
-    await settled(m);
-    const f = m.stageOf(0);
-    // 表单会把舞台自己带走,等不到结果:不等返回值,只看收集站
-    const running = f ? runInFrame(f, 'exfilAttacks', { collector: EVIL, collectorPort: SINK_PORT, dnsHost: DNS.control, tag: 'control' }).catch(() => null) : null;
-    await Promise.race([running, sleep(45_000)]);
-    const f2 = m.stageOf(1);
-    if (f2) await runInFrame(f2, 'webrtcAttack', { collectorPort: SINK_PORT, tag: 'control' }).catch(() => null);
-    await sleep(1500);
-    const seen = (k) => sink.requests.some((q) => q.includes(`${k}=control`));
-    summary.C = { ...sinkNow(), kinds: ['fetch', 'nocors', 'xhr', 'beacon', 'img', 'cssbg', 'script', 'link', 'form'].filter(seen) };
-    for (const k of ['fetch', 'nocors', 'xhr', 'beacon', 'img', 'cssbg', 'script']) check(`C 对照组:${k} 到得了收集站`, seen(k));
-    check('C 对照组:拿着原装构造器,WebRTC 的包到得了收集站', sink.udp > 0, { udp: sink.udp });
-    await m.close();
+  /* C 删除响应头与meta的负向对照仍拒绝执行。 */
+  if(ONLY.includes('C')) await withProxy({policy:'none'},async()=>{
+    const m=await openMember('C');const d=await settled(m);
+    const reports=await until('C 两台舞台真实自检均完成',async()=>{const rs=await Promise.all(m.stageFrames().map(f=>m.gateOf(f)));return rs.length===2&&rs.every(g=>g?.iso?.report)?rs:null;},30000) ?? [];
+    check('C 无 CSP 的真实自检拒绝执行',d?.cardExec?.enabled===false && reports.length===2 && reports.every(g=>g?.iso?.report?.ok===false&&g.iso.report.reasons.includes('no-policy')),{page:d?.cardExec,reports});
+    summary.C={page:d?.cardExec};await m.close();
   });
 
   /* ============================================================ L 旧 nginx */
@@ -723,8 +621,8 @@ try {
     const text = fs.readFileSync(NETLOG, 'utf8');
     const resolved = (host) => text.split('\n').filter((l) => l.includes(host) && /"host"|HOST_RESOLVER|dns/i.test(l)).length;
     const anywhere = (host) => text.split(host).length - 1;
-    if (ONLY.includes('A')) check('A9 网络日志里没有对受控组那个域名的解析(也没有任何提到它的网络事件)', anywhere(DNS.guarded) === 0, { mentions: anywhere(DNS.guarded) });
-    if (ONLY.includes('C')) check('C 对照组:网络日志里有对对照组那个域名的解析 —— 证明探针看得见 DNS', resolved(DNS.control) > 0, { mentions: anywhere(DNS.control), resolverLines: resolved(DNS.control) });
+    notes.push('不适用：A9 卡片 DNS 零请求；出口护栏已撤销。');
+
     summary.netlogBytes = text.length;
   } catch (e) {
     check('读到 Chrome 的网络日志', false, String(e?.message ?? e));

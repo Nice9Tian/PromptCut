@@ -26,8 +26,8 @@
  *   - `"full"`(缺省):新 nginx —— 舞台源每个响应带 `stageSecurityHeaders`,编辑器页带 `frame-src`;
  *   - `"legacy"`:旧 nginx —— 没有策略头、没有 `/media-s/` 与 `_iso/`(落到 index.html),只有 `Origin-Agent-Cluster` 等原有三条。
  *     用来核对「新页面在旧 nginx 下自检不过、自动不执行」;
- *   - `"none"`:对照组 —— 路由同 `full`,但舞台源不带内容安全策略与出口白名单,舞台入口也回不带 `<meta>` 的 index.html(证明探针看得见外传)。
- *   - `"csp-only"`:只带内容安全策略、不带出口白名单(仿不认 `Connection-Allowlist` 的浏览器,记 WebRTC 的残余缺口)。
+ *   - `"none"`:对照组 —— 路由同 `full`,但舞台源不带内容安全策略,舞台入口也回不带 `<meta>` 的 index.html(验证缺少策略时自检拒绝)。
+ *   - `"csp-only"`:兼容旧选项名，当前与 full 相同；无出口白名单也执行。
  *
  * 直接运行(本机隔离托管组合,不连任何远端):
  *   node scripts/probes/lib/hosted-proxy.mjs --dist dist-online [--base-port 5750] [--doc-port 8780] [--asset-port 8781] [--policy full]

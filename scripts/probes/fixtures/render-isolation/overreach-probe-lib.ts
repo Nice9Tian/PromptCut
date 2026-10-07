@@ -196,10 +196,8 @@ export async function runOverreach(ctx: Ctx): Promise<Report> {
     ]));
   });
   section(async () => {
-  if (ctx.metadata) {
-    await t("metadata.cors", () => fetchText(ctx.metadata!));
-    await t("metadata.no-cors", () => fetchText(ctx.metadata!, { mode: "no-cors" }));
-  }
+  // P1/P3撤销出口护栏：不执行真实云metadata请求，不能再把不出网作为权限保证。
+  await t("metadata.not-applicable", () => "不适用：卡片出口护栏本三个版本不做；未请求元数据地址");
 
   });
 

@@ -54,10 +54,13 @@ window.runFixture=async function(){
     const css=document.createElement('link');css.rel='stylesheet';css.href=E+'/style.css';const cssReady=new Promise((r,j)=>{css.onload=r;css.onerror=j});document.head.append(css);await cssReady;
     const script=document.createElement('script');script.src=E+'/script.js';const scriptReady=new Promise((r,j)=>{script.onload=r;script.onerror=j});document.head.append(script);await scriptReady;
     const face=new FontFace('PolicyFixture','url('+E+'/font.ttf)');document.fonts.add(await face.load());
+    const parsed=document.createElement('div');parsed.innerHTML='<style>.policy-parsed{color:rgb(7,8,9)}</style><p class="policy-parsed">正常HTML与外链</p><img src="'+E+'/image.png">';document.body.append(parsed);await parsed.querySelector('img').decode();
+    window.fixture.normalHtml=getComputedStyle(parsed.querySelector('p')).color==='rgb(7, 8, 9)';
     window.fixture.resources={image:img.naturalWidth===4,style:getComputedStyle(document.body).backgroundColor==='rgb(20, 30, 40)',script:window.externalScript==='loaded',font:face.status==='loaded'};
     let parentRead='';try{parentRead=parent.document.title;}catch(e){parentRead=e.name;}
     let localRead='';try{localRead=parent.localStorage.getItem('credential');}catch(e){localRead=e.name;}
     window.fixture.boundaries={parentRead,localRead,cookie:document.cookie,editorAccount:await fetch(${JSON.stringify(EDITOR + '/account')},{credentials:'include'}).then(r=>r.text()).catch(e=>e.name),ownMedia:await fetch('/media-s/projectA/media/image').then(r=>r.status),otherMedia:await fetch('/media-s/projectB/media/image').then(r=>r.status),ownCloudApi:await fetch(${JSON.stringify(CLOUD + '/api/vision/frame')}).then(r=>r.status).catch(e=>e.name)};
+    window.fixture.structure={};for(const [name,fn] of Object.entries({innerHTML:()=>{document.createElement('div').innerHTML='<iframe></iframe>'},insertAdjacentHTML:()=>document.body.insertAdjacentHTML('beforeend','<object></object>'),range:()=>document.createRange().createContextualFragment('<iframe></iframe>'),template:()=>{document.createElement('template').innerHTML='<iframe></iframe>'},shadow:()=>{const host=document.createElement('div');document.body.append(host);host.attachShadow({mode:'open'}).innerHTML='<iframe></iframe>'}})){try{fn();window.fixture.structure[name]='accepted'}catch(e){window.fixture.structure[name]=e.name}}
   }
   window.fixture.done=true;
 };runFixture().catch(e=>{window.fixture={...window.fixture,error:String(e.stack),done:true}});`;
@@ -108,6 +111,8 @@ try {
       check('真实 header/base-uri 自检与跨源握手通过，无 Allowlist/TT 仍可执行', result.report?.ok && result.report.csp === 'header' && result.report.egress === 'none' && result.handshake && result.modules, result);
       for (const kind of ['image', 'font', 'style', 'script']) check(`外链 ${kind} 实际载入`, result.resources?.[kind]);
       check('WebRTC 构造器保留', result.rtcBefore === result.rtcAfter, { before: result.rtcBefore, after: result.rtcAfter });
+      check('无TT的HTML解析保护允许正常样式与外链图片', result.normalHtml);
+      check('innerHTML/insertAdjacentHTML/Range/template/shadow结构入口拒绝子框架', Object.values(result.structure ?? {}).length === 5 && Object.values(result.structure).every(v => v === 'TypeError'), result.structure);
       check('编辑器 DOM/localStorage 读取被 SOP 拒绝', result.boundaries?.parentRead === 'SecurityError' && result.boundaries.localRead === 'SecurityError');
       check('账号与素材票据没有交给卡片，另项目素材拒绝', result.boundaries?.cookie === '' && result.boundaries.ownMedia === 200 && result.boundaries.otherMedia === 401 && !JSON.stringify(result).includes('editor-secret'));
       await page.screenshot({ path: path.join(OUT, 'external-resources.png') });

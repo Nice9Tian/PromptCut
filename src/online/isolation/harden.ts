@@ -63,6 +63,7 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
   const strLower = String.prototype.toLowerCase;
   const strLastIndexOf = String.prototype.lastIndexOf;
   const strSlice = String.prototype.slice;
+  const regexpExec = RegExp.prototype.exec;
   const NodeP = w.Node.prototype, ElementP = w.Element.prototype, DocumentP = w.Document.prototype, FragmentP = w.DocumentFragment.prototype;
   const getter = (proto: object, key: string) => getOwnPropertyDescriptor(proto, key)?.get as ((this: unknown) => unknown) | undefined;
   const nodeTypeOf = getter(NodeP, "nodeType")!;
@@ -171,6 +172,47 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
   wrapInsert(DocumentP, "moveBefore", 0); wrapInsert(FragmentP, "moveBefore", 0);
   for (const k of ["before", "after", "replaceWith"]) { wrapInsert(w.CharacterData?.prototype, k); wrapInsert(w.DocumentType?.prototype, k); }
   for (const k of ["insertNode", "surroundContents"]) wrapInsert(w.Range?.prototype, k, 0);
+
+  /* HTML解析的结构边界独立于Trusted Types；普通HTML/外链script/style不受影响。 */
+  const checkHtml = (value: unknown) => {
+    const text = typeof value === "string" ? value : String(value ?? "");
+    if (apply(regexpExec, FRAME_HTML, [text]) || apply(regexpExec, ENTITY_DECL, [text])) {
+      breach("html");
+      throw new TypeError(BLOCKED);
+    }
+  };
+  const wrapHtmlMethod = (proto: object | undefined, key: string, which: number | "all") => {
+    if (!proto) return;
+    const d = getOwnPropertyDescriptor(proto, key);
+    if (typeof d?.value !== "function") return;
+    try {
+      const orig = d.value;
+      lock(proto, key, function (this: unknown) {
+        const args = arguments;
+        if (which === "all") checkHtml(Array.from(args).join(""));
+        else checkHtml(args[which]);
+        return apply(orig, this, args as unknown as unknown[]);
+      });
+      hooks++;
+    } catch (e) { errors.push(`${key}:${(e as Error).message}`); }
+  };
+  const wrapHtmlSetter = (proto: object | undefined, key: string) => {
+    if (!proto) return;
+    const d = getOwnPropertyDescriptor(proto, key);
+    if (!d?.set) return;
+    try {
+      const set = d.set;
+      defineProperty(proto, key, { ...d, configurable: false, set(this: unknown, value: unknown) { checkHtml(value); return apply(set, this, [value]); } });
+      hooks++;
+    } catch (e) { errors.push(`${key}:${(e as Error).message}`); }
+  };
+  for (const key of ["innerHTML", "outerHTML"]) wrapHtmlSetter(ElementP, key);
+  wrapHtmlSetter(w.ShadowRoot?.prototype, "innerHTML");
+  wrapHtmlMethod(ElementP, "insertAdjacentHTML", 1);
+  for (const key of ["setHTML", "setHTMLUnsafe"]) { wrapHtmlMethod(ElementP, key, 0); wrapHtmlMethod(w.ShadowRoot?.prototype, key, 0); }
+  for (const key of ["write", "writeln"]) wrapHtmlMethod(DocumentP, key, "all");
+  wrapHtmlMethod(w.Range?.prototype, "createContextualFragment", 0);
+  wrapHtmlMethod(w.DOMParser?.prototype, "parseFromString", 0);
 
   /* ---------- 5. 不经 Trusted Types 的解析入口 ---------- */
   try { defineProperty(w, "XSLTProcessor", { value: undefined, writable: false, configurable: false, enumerable: false }); hooks++; } catch (e) { errors.push(`XSLTProcessor:${(e as Error).message}`); }

@@ -57,15 +57,13 @@
  * I 换项目：渲完甲换去渲乙之前，隔离工作进程结束、整棵进程树不剩、数据目录清空（管理进程的记录与磁盘上都是空的）；
  *   乙那一轮的改动层里只有乙的卡；乙的页面里没有甲的卡片代码（甲的记号卡没有载入、取不到它的文件、清单里没有它）。
  * J 渲染身份不能改项目：以渲染服务的身份提交一次编辑、写卡片源码，被拒，项目版本号不变。
- * P 对照段（只留出口代理一层）：两层出口限制都在时浏览器先拦，请求到不了代理。所以另起一轮，用仅供验收的开关不发出口白名单头
- *   （`PROMPTCUT_TEST_NO_EGRESS_HEADER=1`），同一张探测卡再渲一遍：每个目的地在出口代理的拒绝记录里都有、页面仍然读不到任何内容、
- *   收集站仍然是 0——证明代理这一层自己拦得住。`--no-proxy-only` 跳过这一段。
+ * P 原出口代理对照段不适用：用户已撤销卡片出口护栏。
  * K 代理口：不带口令要清单 401；浏览器形状的请求（带 `Sec-Fetch-Site`）连状态口也 403；状态口的输出里没有任何假凭证与票据。
  * L 「看画面」这一路（云端 Agent 经管理进程的 `/look` 要一帧，契约第 8a 节；`--no-look` 跳过）。探针持一把登记过的 agent 服务私钥扮演 Agent 服务，
  *   为项目甲要一帧，项目内容里放着同一张越权探测卡（结果标 `look`）：
  *   L1 前提：这一帧由隔离工作进程出（不是常驻的）、回了图；取回了标 `look` 的结果对象、清单每一类都有记录；对照（读自己的模块与素材）是通的。
  *   L2 这一路的渲染页里同样读不到：别的项目的内容与卡片源码、节点上的假凭证、工作目录以外的文件；自己这台 Vite 的 `/api/**`（含看画面的那两条）
- *      全部 403；管理进程（含 `/look`）、常驻工作进程、文档服务、素材服务读不到；元数据地址连不出去；收集站仍然是 0。
+ *      全部 403；管理进程（含 `/look`）、常驻工作进程、文档服务、素材服务读不到；公开外链正常可达。
  *   L3 这个口子认身份：不带签名、渲染服务自己的私钥签的、签名对但请求体改过的 401；浏览器形状的（带 `Sec-Fetch-Site`）403；
  *      绕过管理进程直接请求两个工作进程的看画面接口（不带那个工作进程的口令）403。
  *
@@ -73,7 +71,7 @@
  *   1. 素材按哈希寻址：同一台素材服务上，任何有效票据都能按哈希读块（`auth-contract.md` 第 8 节的既有裁定）。探针先以甲的成员身份
  *      直接试一次读乙的那一块：读得到，说明这是成员本来就有的能力，探测卡经工作进程读到同一块不算隔离失败（记在残余面里）；
  *      读不到，则探测卡也必须读不到（算进 H）。乙的哈希是探针交给探测卡的最坏情况——真实情况下甲无从得知。
- *   2. 外传：隔离工作进程里的卡片代码**带不走本项目的内容**到任何外部地址（F 成立即是）；这比「卡片作者本来就是本项目成员」要求的更严。
+ *   2. 外链正常可达：公开collector是正向对照，不再承诺卡片内容不外发。
  *   3. 环境变量：名字不像秘密的那一个（F3 的第二个）会被工作进程继承——页面读不到进程环境变量，Node 一侧又过不了同步文件预检，所以带不回来；
  *      名字像秘密的那一个根本不传给工作进程。
  *   4. 图卡：见结果里的 `graph` 一项（渲染节点有没有对图卡的 `card()` 求值）。
@@ -118,7 +116,6 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-render-iso-'));
 const DOC_WS = `ws://127.0.0.1:${PORTS.doc}`;
 const STATUS = `http://127.0.0.1:${PORTS.status}`;
 const COLLECTOR = `http://127.0.0.1:${PORTS.collector}`;
-const METADATA = 'http://169.254.169.254/latest/meta-data/';
 const HOSTED_DATA = path.join(TMP, 'hosted');
 const RENDER_SECRETS = path.join(TMP, 'render-secrets');
 const RENDER_DATA = path.join(TMP, 'render');
@@ -444,7 +441,7 @@ async function main() {
       ownEditor: `http://127.0.0.1:${PORTS.iso}/api/frames/queue`, ownEditorCards: `http://127.0.0.1:${PORTS.iso}/api/cards/sync/status`,
       docService: `http://127.0.0.1:${PORTS.doc}/healthz`, assetService: `http://127.0.0.1:${PORTS.asset}/api/asset/media/${other.hash ?? '0'.repeat(64)}`,
     },
-    collector: COLLECTOR, metadata: METADATA,
+    collector: COLLECTOR,
     outsideFiles: [files.outside, files.keydir, files.registry, files.resident],
     other: { projectId: other.projectId, docId: other.docId, assetHash: other.hash },
     foreignCardFiles: other.cardFiles,
@@ -557,24 +554,16 @@ async function main() {
   const gated = (it) => it.ok === false || /^403 \S+ .*"error":"page-gate"/.test(it.got ?? '');
   check('E1', '自己这台预渲染 Vite 的 /api/**（清单里每一条，含写方法）与开发服务器的内部口：都被页面请求闸拒掉（403 page-gate）；WebSocket 升级被拒', selfItems.length >= 14 && selfItems.every(gated), selfItems.filter((it) => !gated(it)).slice(0, 4).concat(selfItems.slice(0, 2)));
   const loop = itemsOf(all, 'loopback.');
-  // 子框架去打开别的源：载入了也读不到里面（跨源），或者载入的是出口代理的拒绝页
+  // 子框架去打开别的源：载入了也读不到里面（跨源）；不是出口限制保证。
   const frameBlind = (it) => /\.frame$/.test(it.name) && /^(error|超时|load \(读不到\)|load\s*$|load egress blocked)/.test(it.got ?? '');
-  const loopRead = loop.filter((it) => !denied(it) && !opaque(it) && !frameBlind(it));
-  check('E2', '管理进程的状态口与代理口、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务：页面读不到任何内容，WebSocket 连不上', loop.length > 0 && loopRead.length === 0, loopRead.slice(0, 4).concat(loop.slice(0, 3)));
-  /*
-   * 两层出口限制谁先拦下都算：浏览器按文档执行的出口白名单（页面日志里是 `ERR_NETWORK_ACCESS_REVOKED`，请求没有离开浏览器），
-   * 或出口代理的拒绝记录（请求止于代理）。再核对代理确实在用（渲染页自己的请求都经它转）、它没有把任何请求转给别的目的地。
-   */
-  const revoked = (text.match(/ERR_NETWORK_ACCESS_REVOKED/g) ?? []).length;
-  const egressStats = out.jia.pageGate?.egress ?? null;
-  out.pageGate.revokedByAllowlist = revoked;
-  out.pageGate.proxy = egressStats;
-  check('E2', '出口限制生效：每一次向别的目的地的尝试都被浏览器的出口白名单或出口代理拦下；代理在用，且只把请求转给这台预渲染 Vite 自己',
-    revoked + gateLines.filter((l) => l.layer === 'egress').length > 0 && (egressStats?.forwarded ?? 0) > 0, { revokedByAllowlist: revoked, deniedAtProxy: gateLines.filter((l) => l.layer === 'egress').length, proxy: egressStats });
-  check('E2', '管理进程没有收到任何浏览器发来的请求', !supLogs.some((l) => l.event === 'broker.browser-refused'), supLogs.filter((l) => l.event === 'broker.browser-refused').length);
-  const meta = itemsOf(all, 'metadata.');
-  check('E3', '云厂商元数据地址：页面读不到任何内容（被出口限制拦下，没有连出去）', meta.length > 0 && meta.every((it) => it.ok === false), meta.slice(0, 2));
-  check('F', '收集站（测试专用的外部地址）：0 条 TCP 连接、0 个 HTTP 请求、0 个 UDP 包', collector.tcp === 0 && collector.http.length === 0 && collector.udp === 0, { tcp: collector.tcp, http: collector.http.slice(0, 4), udp: collector.udp, attempts: itemsOf(all, 'collector.').length });
+  const publicHealth = (it) => it.name === 'loopback.docService.cors' && /^200 /.test(it.got ?? '') && fakesIn(it.got ?? '').length === 0 && !TICKET_RE.test(it.got ?? '');
+  const loopRead = loop.filter((it) => !denied(it) && !opaque(it) && !frameBlind(it) && !publicHealth(it));
+  check('E2', '管理进程的状态口与代理口、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务：接口拒绝未经认证/跨源的敏感内容，公开healthz允许', loop.length > 0 && loopRead.length === 0, loopRead.slice(0, 4).concat(loop.slice(0, 3)));
+  out.pageGate.proxy=out.jia.pageGate?.egress ?? null;
+  check('E2','未启用出口代理/Allowlist；管理认证与API闸独立执行',out.pageGate.proxy===null&&!gateLines.some(l=>l.layer==='egress'),out.pageGate);
+  const meta=itemsOf(all,'metadata.');
+  check('E3','metadata出口测试不适用，夹具没有请求真实地址',meta.length>0&&meta.every(it=>it.name==='metadata.not-applicable'),meta);
+  check('F','公开外链收集站收到卡片请求',collector.http.length>0,{tcp:collector.tcp,http:collector.http.length,udp:collector.udp});
   const outside = itemsOf(all, 'outside[');
   const outsideHit = outside.filter((it) => fakesIn(`${it.got ?? ''}${it.err ?? ''}`).length > 0);
   // 回 200 的只能是开发服务器对「不认识的路径」统一回的首页（路径里的 .. 被浏览器先折掉了），不是那个文件
@@ -682,9 +671,9 @@ async function main() {
     check('L2', '这一路的渲染页请求自己这台 Vite 的 /api/**（清单里每一条，含看画面的那两条）：都被页面请求闸拒掉（403 page-gate）', selfL.length >= 16 && selfL.every(gated) && lookApis.length === 2,
       selfL.filter((it) => !gated(it)).slice(0, 4).concat(lookApis.map((it) => ({ name: it.name, got: String(it.got ?? it.err).slice(0, 60) }))));
     const loopL = itemsOf(lookReports, 'loopback.');
-    const loopReadL = loopL.filter((it) => !denied(it) && !opaque(it) && !frameBlind(it));
+    const loopReadL = loopL.filter((it) => !denied(it) && !opaque(it) && !frameBlind(it) && !publicHealth(it));
     const metaL = itemsOf(lookReports, 'metadata.');
-    check('L2', '这一路的渲染页读不到管理进程（状态口、代理口、/look）、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务；元数据地址连不出去', loopL.some((it) => /managerLook/.test(it.name)) && loopReadL.length === 0 && metaL.length > 0 && metaL.every((it) => it.ok === false),
+    check('L2', '这一路的渲染页读不到管理进程（状态口、代理口、/look）、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务；metadata未请求', loopL.some((it) => /managerLook/.test(it.name)) && loopReadL.length === 0 && metaL.every(it=>it.name==='metadata.not-applicable'),
       loopReadL.slice(0, 4).concat(loopL.filter((it) => /managerLook/.test(it.name)).slice(0, 2)));
     const outsideL = itemsOf(lookReports, 'outside[');
     const outsideHitL = outsideL.filter((it) => fakesIn(`${it.got ?? ''}${it.err ?? ''}`).length > 0);
@@ -692,8 +681,7 @@ async function main() {
     check('L2', '这一路的渲染页读不到工作目录以外的四个文件', outsideL.length >= 40 && outsideHitL.length === 0 && outside200L.length === 0, outsideHitL.concat(outside200L).slice(0, 3).concat([{ attempts: outsideL.length }]));
     const otherCardL = itemsOf(lookReports, 'other.card ');
     check('L2', '这一路的渲染页取不到别的项目（乙）的卡片文件', otherCardL.length > 0 && otherCardL.every((it) => denied(it) || !/overreachYiOnly/.test(it.got ?? '')), otherCardL.map((it) => `${it.name}=${String(it.got ?? it.err).slice(0, 40)}`));
-    check('L2', '看画面期间：收集站仍然 0 条 TCP 连接、0 个 HTTP 请求、0 个 UDP 包；管理进程没有收到任何浏览器发来的请求', collector.tcp === collectorL.tcp && collector.http.length === collectorL.http && collector.udp === collectorL.udp
-      && !supLogs.slice(supMarkL).some((l) => l.event === 'broker.browser-refused'), { tcp: collector.tcp - collectorL.tcp, http: collector.http.length - collectorL.http, udp: collector.udp - collectorL.udp });
+    check('L2','看画面期间公开外链请求正常到达',collector.http.length>collectorL.http,{http:collector.http.length-collectorL.http});
     const logsL = `${partL}\n${supLogs.slice(supMarkL).map((l) => JSON.stringify(l)).join('\n')}`;
     const inLogsL = fakesIn(logsL).filter((label) => NODE_LEVEL.includes(label));
     check('L2', '看画面期间工作进程与管理进程的输出里没有节点上的假凭证', inLogsL.length === 0, inLogsL);
@@ -719,49 +707,14 @@ async function main() {
     check('L3', '绕过管理进程直接请求工作进程的看画面接口（不带那个工作进程的口令）：常驻的 403；隔离的 403（或它已经结束、连不上）', /^403 .*look-key/.test(directResident) && (/^403 .*look-key/.test(directIso) || /^连不上/.test(directIso)), { resident: directResident, isolated: directIso });
   }
 
-  /* ---- P 对照段：只留出口代理一层（不发出口白名单头），同一张探测卡再渲一遍 */
-  if (!flag('--no-proxy-only')) {
-    say('proxy-only', {});
-    await stopSupervisor();
-    const mark = prerenderText().length;
-    const supMark = supLogs.length;
-    const collectorBefore = { tcp: collector.tcp, http: collector.http.length, udp: collector.udp };
-    startSupervisor({ PROBE_FAKE_MANAGER_TOKEN: F.envSecret, PROBE_FAKE_MANAGER_NOTE: F.envPlain, PROMPTCUT_TEST_NO_EGRESS_HEADER: '1' });
-    await waitFor(async () => { const s = await status(); return s.directory?.connected && s.worker?.ready && s.queue ? s : null; }, 300_000, '渲染服务就绪（对照段）', 1000);
-    const bing = await makeProject('丙', 'carol', 'bing');
-    await putCard(bing, 'src/cards/user/overreach-probe.tsx', probeCard);
-    await putCard(bing, 'src/cards/user/overreach-probe-lib.ts', probeLib);
-    const bingProject = projectOf(bing, [{ id: 'clip-probe', cardId: 'overreach-probe', params: { ctx: ctxOf('bing', { projectId: yi.projectId, docId: yi.docId, cardFiles: [] }) } }]);
-    const bingRev = await putProject(bing, bingProject);
-    const bingPlan = await publishPlan(bing, { rev: bingRev, clips: ['clip-probe'], codeVersion });
-    let bingDone = null;
-    try { bingDone = await waitRendered(bing, bingPlan); } catch (err) { out.bingError = String(err?.message ?? err); }
-    await delay(1500);
-    const part = prerenderText().slice(mark);
-    const bingReports = reportsFrom(part).filter((r) => r.tag === 'bing');
-    const bingLoop = itemsOf(bingReports, 'loopback.').concat(itemsOf(bingReports, 'metadata.'));
-    const bingRead = bingLoop.filter((it) => !denied(it) && !opaque(it) && !frameBlind(it));
-    const partGate = [...part.matchAll(/\[page-gate\] (deny|on) (\{.*\})/g)].map((m) => { try { return { kind: m[1], ...JSON.parse(m[2]) }; } catch { return { kind: m[1] }; } });
-    const proxyDenied = partGate.filter((l) => l.kind === 'deny' && l.layer === 'egress');
-    const headerOff = partGate.some((l) => l.kind === 'on' && l.role === 'prerender' && l.egressHeader === false);
-    const revokedP = (part.match(/ERR_NETWORK_ACCESS_REVOKED/g) ?? []).length;
-    out.proxyOnly = { done: bingDone, reports: bingReports.length, headerOff, revokedByAllowlist: revokedP, deniedAtProxy: proxyDenied.length, destinations: [...new Set(proxyDenied.map((l) => String(l.to)))].sort(),
-      collector: { tcp: collector.tcp - collectorBefore.tcp, http: collector.http.length - collectorBefore.http, udp: collector.udp - collectorBefore.udp } };
-    check('P', '对照段成立：出口白名单头确实没发、探测卡照样渲完并交回结果', headerOff && revokedP === 0 && !!bingDone && bingDone.failed === 0 && bingReports.length >= 1, { headerOff, revokedP, done: bingDone, reports: bingReports.length, error: out.bingError });
-    const wantDest = [STATUS, `http://127.0.0.1:${PORTS.worker}`, `http://127.0.0.1:${PORTS.iso}`, `http://127.0.0.1:${PORTS.doc}`, `http://127.0.0.1:${PORTS.asset}`, COLLECTOR, 'http://169.254.169.254'];
-    const missed = wantDest.filter((d) => !out.proxyOnly.destinations.includes(d));
-    check('P', '只靠出口代理一层：管理进程、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务、元数据地址、收集站——每个目的地在代理的拒绝记录里都有，请求止于代理', missed.length === 0, { missed, seen: out.proxyOnly.destinations });
-    check('P', '只靠出口代理一层：页面仍然读不到任何内容，收集站仍然 0 条 TCP 连接、0 个 HTTP 请求、0 个 UDP 包', bingLoop.length > 0 && bingRead.length === 0 && out.proxyOnly.collector.tcp === 0 && out.proxyOnly.collector.http === 0 && out.proxyOnly.collector.udp === 0
-      && fakesIn(bingReports.map((r) => r.raw).join('\n')).length === 0, { read: bingRead.slice(0, 3), collector: out.proxyOnly.collector });
-    check('P', '对照段里管理进程同样没有收到任何浏览器发来的请求', !supLogs.slice(supMark).some((l) => l.event === 'broker.browser-refused'), '');
-  }
+  out.proxyOnly={status:'not-applicable',reason:'P1/P3撤销出口护栏，没有出口代理或对应测试开关；不执行旧对照段'};
 
   /* ---- 残余面与图卡 */
   const assetItems = itemsOf(jiaReports, 'other.asset.');
   const cardGotYiAsset = assetItems.some((it) => (it.got ?? '').includes(F.yiAsset));
   residual.push({ id: 1, what: '素材按哈希寻址', memberCanReadOtherProjectBlobByHash: memberCanReadByHash, cardReadIt: cardGotYiAsset, routes: assetItems.map((it) => `${it.name}=${short(it.got ?? it.err).slice(0, 60)}`) });
   if (!memberCanReadByHash) check('H', '乙的素材：甲的成员直接读不到，探测卡也读不到', !cardGotYiAsset, assetItems.slice(0, 3));
-  residual.push({ id: 2, what: '外传本项目内容', collector: { tcp: collector.tcp, http: collector.http.length, udp: collector.udp }, note: '隔离工作进程的渲染页连不上任何外部地址，本项目的内容也带不走' });
+  residual.push({ id: 2, what: '外传本项目内容', collector: { tcp: collector.tcp, http: collector.http.length, udp: collector.udp }, note: 'P1/P3已撤销出口护栏，外链照常；按接口身份与项目权限保护私有内容' });
   residual.push({ id: 3, what: '名字不像秘密的环境变量会被工作进程继承', inResults: fakesIn(rawAll).includes('F3-ENV-PLAINNAME'), inLogs: fakesIn(logsText).includes('F3-ENV-PLAINNAME') });
   const graphEvaluated = /OVERREACH-GRAPH-EVALUATED/.test(text);
   out.graph = { cardEvaluated: graphEvaluated, reports: graphReports.length, loadedWithUserCards: itemsOf(jiaReports, 'other.loadedMarkers').some((it) => /overreach-graph/.test(it.got ?? '')), resultsClean: graphReports.every((r) => fakesIn(r.raw, allowJia).length === 0) };
