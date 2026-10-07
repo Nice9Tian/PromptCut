@@ -24,3 +24,9 @@
 | 6 | 三级 | 共享 SQLite seal 序列、完整 prepared、同锁 fence | seal 与密码同序；恢复只复用同一确定修改 | 3 | 1 | 4 | 开放，待实现与故障实证 |
 
 最终交付接口、全部尝试与原始结果、持久性证据、未挂载范围和限制；由主会话集成复验。
+
+## 首批接口与证据
+
+新增 `openOperationHistory`：SQLite WAL/FULL 保存 prepared、accepted、materialized、fence 和完整 item before/after。用独立 SQLite 独占事务持有进程写入权，崩溃由 OS 释放，不按旧 PID 清锁。`createPasswordOrder` 文档协调器提供 submit/fence/recover/resolveWitness；owner 必须把所有项目写和屏障接入同一实例。`checkGate` 必填；没有服务持久 ACK 不返回 complete=true。`createAccountOrderClient` 只接受 owner 配好的 mTLS transport，不接受用户 URL。
+
+首次真实 foundation SQLite 核心测试出现两类失败：临时目录删除钩子先于数据库关闭（Windows EPERM）；journal 的 payload.kind 覆盖事件 kind 导致检查不到 fence-committed。修正为保留 TMP 故障证据、每例关闭句柄，以及事件类型最后赋值。第二次 `npm test -- server/test/password-order-core.test.mjs` 7/7，通过，623.6579 ms，退出码 0，无自动重试。该轮用真实 provider（foundation 5a61229），不是 portable simulator；真实 crash 矩阵仍待执行。
