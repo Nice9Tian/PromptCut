@@ -154,6 +154,7 @@ import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, parseTaskId } from './m8/lib.mjs';
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 import { createTimings } from './probe-timings.mjs';
+import { hostClaimStatusOf } from '../render-host.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -523,11 +524,15 @@ async function cutWhileHolding({ queue, healthz, onHolding, doCut, holdTimeoutMs
  * 旁观节点(--cut 时,creator 一侧):成员身份、`role: 'render'` 连项目,`node.hello`(不带指纹:前置过滤放行全部任务)后
  * `queue.watch` 本项目,只收不认领,记每个任务的 task.taken / 认领后又 task.opened / task.closed。
  */
-async function startWatcher(M, { projectId, password }) {
+async function startWatcher(M, { projectId, password, diagnosticOnly = false }) {
   const c = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId, username: '旁观节点', password, as: 'member', role: 'render' });
   const seen = new Map();
+  const tasks = new Map();
   const rec = (id) => { if (!seen.has(id)) seen.set(id, { taken: 0, reopenedAfterTaken: 0, closed: [] }); return seen.get(id); };
   c.ep.onMessage((m) => {
+    if (m?.type === 'queue.snapshot') { tasks.clear(); for (const task of m.tasks ?? []) tasks.set(task.id, task); }
+    else if (m?.type === 'task.opened' && m.task?.id) tasks.set(m.task.id, m.task);
+    else if (['task.taken', 'task.closed'].includes(m?.type)) { const task = tasks.get(m.id); if (task) tasks.set(m.id, { ...task, state: m.type === 'task.taken' ? 'claimed' : m.state }); }
     if (m?.type === 'task.taken' && typeof m.id === 'string') rec(m.id).taken++;
     else if (m?.type === 'task.opened' && typeof m.task?.id === 'string') { const r = rec(m.task.id); if (r.taken > 0) r.reopenedAfterTaken++; }
     else if (m?.type === 'task.closed' && typeof m.id === 'string') rec(m.id).closed.push(m.state ?? null);
@@ -538,12 +543,12 @@ async function startWatcher(M, { projectId, password }) {
     return { hello, watch };
   };
   const { hello, watch } = await subscribe();
-  check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
+  if (!diagnosticOnly) check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
   // 会话结束后建了新会话(onOpen 只在新会话时调;接续调 onResume、订阅还在):重发 hello 与 watch。计数进结果
   const stats = { newSessions: 0, resumes: 0 };
   c.ep.onOpen(() => { stats.newSessions++; void subscribe(); });
   c.ep.onResume?.(() => { stats.resumes++; });
-  return { seen, stats, close: c.close };
+  return { seen, stats, tasks, close: c.close };
 }
 /** 成员页收到的 task.done(CDP 读页面 WebSocket 的入站帧;会话层的重发按 seq 去重,同一任务不同 seq 算两次) */
 async function countPageDone(page) {
@@ -1889,6 +1894,10 @@ try {
         watcherRef = watcher;
         pageDone = await countPageDone(member);
       }
+      if (!watcher) {
+        watcher = await startWatcher(M, { projectId: state.projectId, password: state.projectPassword, diagnosticOnly: true }).catch(() => null);
+        watcherRef = watcher;
+      }
       fs.writeFileSync(hostConfig, JSON.stringify([{ url: cutProxy ? cutProxy.url : M.wsBaseOf(HOSTED), projectId: state.projectId, username: '渲染主机', password: state.projectPassword,
         as: 'member', role: 'render', deviceId: `c10b-host-${RUN}`.padEnd(16, '0'), deviceName: 'c10-browser 独立渲染主机' }]));
       await startHost(hostConfig, E6R ? ['--max-concurrent', '1'] : []);
@@ -1905,10 +1914,29 @@ try {
           return false;
         },
       }) : null;
+      const claimDiagnostics = [];
+      let nextDiagnosticAt = 0, lastDiagnosticKey = '';
       claimed = await until('A5:独立渲染主机认领清单计划并切分完成', async () => {
-        const v = hostView(await hostQueue(), hostLog);
+        const body = await hostQueue();
+        if (Date.now() >= nextDiagnosticAt) {
+          nextDiagnosticAt = Date.now() + 5000;
+          const info = await getJson(`${host.origin}/api/prerender/info`, 5000).catch(() => null);
+          const events = info?.url ? (await getJson(`${info.url}/api/frames/diagnostics`, 5000).catch(() => null))?.queue?.events ?? [] : [];
+          const diagnostic = hostClaimStatusOf(body, events, watcher ? [...watcher.tasks.values()] : null);
+          const key = JSON.stringify(diagnostic);
+          if (key !== lastDiagnosticKey) {
+            lastDiagnosticKey = key;
+            const sample = { at: Date.now(), ...diagnostic };
+            claimDiagnostics.push(sample);
+            if (claimDiagnostics.length > 100) claimDiagnostics.splice(1, 1);
+            say('a5.claim-diagnostic', sample);
+            fs.writeFileSync(path.join(OUT, 'host-claim-diagnostics.json'), JSON.stringify(claimDiagnostics, null, 2));
+          }
+        }
+        const v = hostView(body, hostLog);
         return hostDidWork(v) ? v : null;
       }, 900_000, 2000);
+      out.hostClaimDiagnostics = claimDiagnostics;
       check(claimed, 'A5:独立渲染主机(host 档)认领、切分、完成', claimed ?? hostLog.slice(-12));
       check(claimed?.envFingerprint === HOST_FP && HOST_FP !== state.pageFp && HOST_FP !== state.creatorFp, 'A5:认领的节点与页面发布方环境不同(主机用测试指纹)', { host: claimed?.envFingerprint, page: state.pageFp, creator: state.creatorFp });
       if (cutP) {
