@@ -8,7 +8,7 @@
  *         「这个项目带没带卡片代码」的判定（只列键、拿不准就搁着）；代理口按工作进程分口令（隔离工作进程只看得到、只要得到它那一个项目，
  *         口令作废后什么都要不到）；交给工作进程的环境里没有管理进程的配置与名字像秘密的变量
  *   HR28  页面一侧的闸装到开发服务器上：浏览器发来的请求按表放行、其余 403，只记不拦的模式照放；浏览器发的 WebSocket 升级被掐；
- *         出口代理只转发到这台预渲染服务器自己，别的目的地与一切隧道都拒；代理口不答浏览器发来的请求
+ *         卡片外链照常加载；管理代理口仍拒绝浏览器形状请求与无口令调用
  *   HR32  同步文件预检：样式的 `@` 规则白名单、`@import` 的形状、`url()` 的落点；脚本的导入说明符、`import.meta.glob`、动态导入、
  *         `new URL(…, import.meta.url)`；`sourceMappingURL` 与 `@jsxImportSource`；越权探测卡的夹具——主卡与清单过得了，
  *         Node 一侧读盘的那两份被整份拒掉、每一种写法各有一条理由
@@ -32,7 +32,7 @@ import { createCardPresence } from '../hosted-render/card-presence.mjs';
 import { scrubWorkerEnv, renderServiceConfig } from '../hosted-render/main.mjs';
 import { pageGate } from '../hosted-render/page-gate.mjs';
 import { installHostedGate, hostedGateWanted, hostedGateMode, relayAllowed, GATE_PASS_ENV, GATE_PASS_HEADER } from '../hosted-render/vite-gate.mjs';
-import { checkSyncedSource, rejectedStub, hostedWorkerKind, scanCss } from '../hosted-render/source-gate.mjs';
+import { checkSyncedSource, rejectedStub, hostedWorkerKind, scanCss, normalizeBrowserCssImports } from '../hosted-render/source-gate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FIXTURES = path.join(ROOT, 'scripts', 'probes', 'fixtures', 'render-isolation');
@@ -336,7 +336,7 @@ test('HR28 闸只在托管方的工作进程里装；装上之后浏览器发来
   const editor = fakeViteServer();
   const envE = { PROMPTCUT_RENDER_BROKER: 'http://127.0.0.1:1' };
   const gateE = await installHostedGate(editor, { prerender: false, env: envE, write: (l) => lines.push(l) });
-  assert.equal(gateE.proxy, null, '出口代理只在预渲染的 Vite 里起');
+  assert.equal(gateE.proxy, null, '卡片出口代理不再启用');
   assert.equal(envE.PC_CHROME_ARGS, undefined);
   assert.equal(editor.run({ url: '/api/frames/queue', headers: {} }).passed, true);
   const refused = editor.run({ url: '/api/frames/queue', headers: { 'sec-fetch-site': 'same-site' } });
@@ -350,13 +350,15 @@ test('HR28 闸只在托管方的工作进程里装；装上之后浏览器发来
   assert.ok(lines.some((l) => l.startsWith('[page-gate] deny ') && l.includes('"reason":"websocket"')));
   assert.equal(gateE.counts().total, 3);
 
-  // 预渲染的 Vite：同源的页面请求放行并带出口白名单头；/api 只放行表里的；跨源一律拒；开发工具的口拒
+  // 预渲染的 Vite：页面结构头与 API 闸独立；没有出口白名单；开发工具的口拒
   const pre = fakeViteServer();
   const envP = { PROMPTCUT_RENDER_BROKER: 'http://127.0.0.1:1', PC_CHROME_ARGS: '--existing' };
   const gateP = await installHostedGate(pre, { prerender: true, env: envP, write: () => {} });
   try {
     const page = pre.run({ url: '/src/main.tsx', headers: { 'sec-fetch-site': 'same-origin' } });
     assert.deepEqual([page.passed, page.headers["connection-allowlist"]], [true, undefined]);
+    assert.equal(page.headers['content-security-policy'], undefined, '脚本资源不是结构策略目标');
+    assert.equal(pre.run({ url: '/?export=1', headers: { 'sec-fetch-dest': 'document' } }).headers['content-security-policy'], "frame-src 'none'; object-src 'none'; base-uri 'none'");
     assert.equal(pre.run({ url: '/?export=1', headers: { 'sec-fetch-site': 'none' } }).passed, true, 'puppeteer 直接开的导航');
     assert.equal(pre.run({ url: '/api/frames/queue', headers: { 'sec-fetch-site': 'same-origin' } }).status, 403);
     assert.equal(pre.run({ url: '/api/frames/queue/release', method: 'POST', headers: { 'sec-fetch-site': 'same-origin', origin: 'http://127.0.0.1:5555' } }).status, 403);
@@ -422,7 +424,7 @@ const bad = (rel, source, pattern) => {
   if (pattern) assert.match(r.errors.join(' | '), pattern, source.slice(0, 100));
 };
 
-test('HR32 样式：普通规则与不读文件的 @ 规则放行；@import 只许相对路径的 .css 且仍在卡片目录里；@plugin / @config / @source / @reference 等一律拒；url() 不许走出 src', () => {
+test('HR32 样式：普通规则与不读文件的 @ 规则放行；本地 @import 只许相对路径的 .css 且仍在卡片目录里；@plugin / @config / @source / @reference 等一律拒；url() 不许走出 src', () => {
   const css = 'src/cards/user/a.css';
   ok(css, '.a { color: red; content: "\\201C"; } @media (min-width: 10px) { .b { background: url(./x.png) } }');
   ok(css, '@keyframes k { from { opacity: 0 } to { opacity: 1 } } @font-face { font-family: X; src: url("/src/fonts/x.woff2") format("woff2"); } @layer base { .c { color: blue } } @supports (display: grid) { .d { display: grid } }');
@@ -518,4 +520,29 @@ test('HR32 越权探测卡的夹具：主卡、清单、记号卡、图卡过得
     assert.match(head, /不是攻击代码/, name);
     if (/^overreach-(probe|graph)|node-side/.test(name)) assert.match(head, /只读/, name);
   }
+});
+
+test('HR32 远端 CSS import 留给浏览器；协议相对裸字符串等价转 url，Node 不读远端', async () => {
+  const { compile } = await import('tailwindcss');
+  const css = 'src/cards/user/remote.css';
+  for (const source of [
+    '@import "http://example.invalid/a.css";',
+    '@import "https://example.invalid/a.css" layer(cards) supports(display: grid) screen;',
+    '@import url("https://example.invalid/a.css") layer(cards) screen;',
+    '@import url(//example.invalid/a.css) screen;',
+    '@import "//example.invalid/a.css" layer(cards) screen;',
+    "@import '//example.invalid/a.css' supports(display: grid);",
+  ]) {
+    ok(css, source);
+    const prepared = normalizeBrowserCssImports(source);
+    const reads = [];
+    const compiled = await compile(prepared, { loadStylesheet: async id => { reads.push(id); throw new Error('远端导入不可触发 Node 文件读取'); } });
+    const result = compiled.build([]);
+    assert.deepEqual(reads, [], source);
+    assert.match(result, /example\.invalid\/a\.css/);
+    if (!source.includes('"//') && !source.includes("'//")) assert.equal(prepared, source);
+  }
+  assert.equal(normalizeBrowserCssImports('/* @import "//x/a.css"; */ @import "./b.css";'), '/* @import "//x/a.css"; */ @import "./b.css";');
+  assert.equal(normalizeBrowserCssImports('@import /* "//x/a.css" */ "//x/a.css";'), '@import /* "//x/a.css" */ url("//x/a.css");');
+  for (const source of ['@import "file:///etc/a.css";', '@import url(file:///etc/a.css);', '@plugin "./p.ts";', '@config "./p.ts";', '@source "/etc";', '@reference "http://example.invalid/a.css";']) bad(css, source, /@import|不许的|协议/);
 });

@@ -62,3 +62,13 @@
 - 归属严格核验：精确hosted probe CLI Node38576 → supervisor50168 → isolated47516 → editor42040 → prerender49644；resident45972 → editor31292 → prerender34456；Chrome45016是49644子孙。已报主会话并仅killTree38576整树，所有5900～5909/1067/5103/5744 owned监听检查为空。首次按范围问题中止，不作通过；TMP/promptcut-card-policy-hosted-1.log，临时证据目录pc-render-iso-OfGcao保留。
 - 不改全局环境、不改产品端口池；等待主会话分配附加空段，拟仅探针进程级preload收束Node listen(0)，Chrome使用pipe消除调试TCP监听。
 - 真实Linux节点未运行或部署；当前是Windows真实worker调用链，cgroup明确not-linux，不冒称OS隔离生产验收通过。
+
+## hosted第二轮、CSS导入与经典云页结构补记
+
+- 主会话已核5930～5939零监听并仅授权本探针附加段。TMP/promptcut-card-policy-port-helper.mjs（SHA256 97F56D6BBB3FE52D7C6D9F20702A420B13CCCA3B20AC448E40334F527787A15B）通过仅测试树的NODE_OPTIONS将net.Server.listen(0)收进该段；明确端口不改，独占lease与真实bind避冲突，Puppeteer launch用pipe:true、不留调试TCP。helper smoke监听5930、Chrome152且wsEndpoint空。没有改产品/全局配置。
+- 第二轮真实预渲用5930/5931，固定服务仍5900～5909。完整执行至结束，41项过、3项失败（甲A1、乙A1、look L1）；日志TMP/promptcut-card-policy-hosted-2.log，pc-render-iso-i67SMt保留。甲3细项done1/failed2，乙2项failed2。日志明确warm-up 0帧后因Document http://127.0.0.1:5901/ 30秒未结束失败重试；look同一Document等待失败。不能说通过。自然shutdown清理后5900～5939本任务监听为空。
+- 原夹具frameLoad导航其它服务完整舞台根页，移掉iframe后仍留下网络等待记录；这是观察到的挂起位置，未把CDP具体内部成因当已证。主会话批准仅loopback frame改不存在只读API路径，仍实际跨源导航/SOP与API认证负向，collector frame正向按实际结构策略标记，不恢复出口代理。
+- 又核到经典云预渲页不走online stageGuard，原vite-gate只有出口头没有结构CSP。主会话批准经典HTML导航补frame-src/object-src/base-uri none，脚本/CSS/图片/字体/connect不加限制；结构闸与敏感API/管理认证分开断言。此为产品结构修正，区别于夹具导航修正与首次端口偏差。
+- 主会话扩独占source-gate.mjs及vite-plugin-cards.ts仅cardOverridesLoader.load接线。源码预检原拒所有远端@import；已装Vite postcss-import isProcessableURL跳过远端；Tailwind4.3.3 compile实证http(s)字符串/url保留且loadStylesheet 0次，裸字符串//会调用本地resolver而url(//)不会。仅将已通过预检、非raw的协议相对远端import裸字符串等价转url，保持地址/条件/源文件与raw不变；http(s)原样，保留私有文件/plugin/config/source/reference拒绝。
+- 新CSS单测首次10/10；加注释内同地址回归后必要第二次10/10。TMP/promptcut-card-policy-css-unit-1/2.log；TMP/css-toolchain只读实证脚本。新浏览器fixture将经真实Vite/Tailwind编译六种字符串/url、layer/supports/media与协议相对导入，再确认真实浏览器取回样式；还待新提交复验，不能套用此前16/16。
+- 用户main新增三阶段调度文档不扩大本包；本证据不构成并发容量验证。

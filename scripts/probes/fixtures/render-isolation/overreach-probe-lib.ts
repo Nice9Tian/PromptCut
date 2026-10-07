@@ -192,7 +192,8 @@ export async function runOverreach(ctx: Ctx): Promise<Report> {
       t(`loopback.${name}.cors`, () => fetchText(base)),
       t(`loopback.${name}.no-cors`, () => fetchText(base, { mode: "no-cors" })),
       t(`loopback.${name}.ws`, () => wsOpen(base.replace(/^http/, "ws"))),
-      t(`loopback.${name}.frame`, () => frameLoad(base)),
+      // 根页可能载入完整舞台及子资源；只读不存在 API 的导航仍验跨源/页面闸，不留下应用级长连接。
+      t(`loopback.${name}.frame`, () => frameLoad(`${base}/api/overreach-probe/no-such-endpoint`)),
     ]));
   });
   section(async () => {

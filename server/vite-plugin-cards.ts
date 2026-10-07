@@ -16,7 +16,7 @@ import {
 } from './card-overrides.mjs';
 import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
 import { cardCodePreimage, localImportsOf, CARD_CODE_ID_HEX } from '../src/render/cardCodeIdentity.mjs';
-import { checkSyncedSource, rejectedStub, hostedWorkerKind } from './hosted-render/source-gate.mjs';
+import { checkSyncedSource, rejectedStub, hostedWorkerKind, normalizeBrowserCssImports } from './hosted-render/source-gate.mjs';
 
 /* ────────────────────────────────────────────────────────────────────
  * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
@@ -1326,6 +1326,7 @@ function cardOverridesLoader(): Plugin {
       // 原样交出去的话,Vite 会把 TSX 源码当成这个 ?raw 模块的 JS 来跑。
       // 换行统一成 LF(同 `raw-eol.mjs`):源码版本 / 身份键不随检出方式变
       if (/[?&]raw\b/.test(id)) return `export default ${JSON.stringify(text.replace(/\r\n/g, "\n"))}`;
+      if (hostedKind === 'isolated' && file.endsWith('.css')) return normalizeBrowserCssImports(text);
       return text;
     },
   };

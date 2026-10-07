@@ -92,6 +92,11 @@ export async function installHostedGate(server, { prerender, env = process.env, 
   const lookKey = String(env[LOOK_KEY_ENV] ?? '');
 
   server.middlewares.use((req, res, next) => {
+    // 经典云预渲页也不允许子框架/插件/base 改写；其它资源及网络由浏览器照常加载。
+    const pagePath = String(req.url ?? '').split('?')[0];
+    if (prerender && (req.headers['sec-fetch-dest'] === 'document' || pagePath === '/' || /\.html$/i.test(pagePath))) {
+      res.setHeader('Content-Security-Policy', "frame-src 'none'; object-src 'none'; base-uri 'none'");
+    }
     const given = req.headers[GATE_PASS_HEADER];
     delete req.headers[GATE_PASS_HEADER];
     // 编辑器一侧：自己的预渲染进程转来的、已经过了那一侧的闸的素材请求

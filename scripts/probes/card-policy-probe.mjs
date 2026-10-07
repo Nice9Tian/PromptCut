@@ -16,6 +16,9 @@ import { PNG } from 'pngjs';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { stageSecurityHeaders, STAGE_CSP_META, editorCspHeader } from '../../src/online/stagePolicy.mjs';
 import { installHostedGate } from '../../server/hosted-render/vite-gate.mjs';
+import { checkSyncedSource, normalizeBrowserCssImports } from '../../server/hosted-render/source-gate.mjs';
+import { createServer } from 'vite';
+import tailwindcss from '@tailwindcss/vite';
 
 const arg = (k, d) => process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : d;
 const BASE = Number(arg('--base-port', 5900));
@@ -26,6 +29,23 @@ const EDITOR = `http://pc.localhost:${BASE}`;
 const STAGE = `http://s1.pc.localhost:${BASE + 1}`;
 const EXTERNAL = `http://127.0.0.1:${BASE + 2}`;
 const CLOUD = `http://127.0.0.1:${BASE + 3}`;
+const cssSource = [
+  `@import "${EXTERNAL}/import-1.css";`,
+  `@import url("${EXTERNAL}/import-2.css") screen;`,
+  `@import "${EXTERNAL}/import-3.css" layer(probe);`,
+  `@import url("${EXTERNAL}/import-4.css") supports(display: grid) screen;`,
+  `@import "//127.0.0.1:${BASE + 2}/import-5.css" layer(relative);`,
+  `@import url(//127.0.0.1:${BASE + 2}/import-6.css) screen;`,
+].join('\n');
+const cssVerdict = checkSyncedSource('src/cards/user/card-policy-imports.css', cssSource);
+if (!cssVerdict.ok) throw new Error(JSON.stringify(cssVerdict));
+const cssId = path.join(ROOT, 'src/cards/user/card-policy-imports.css').replaceAll('\\', '/');
+const cssBuilder = await createServer({ configFile: false, root: ROOT, server: { middlewareMode: true, hmr: false }, plugins: [
+  { name: 'card-policy-public-css-fixture', enforce: 'pre', resolveId(id) { if (id.split('?')[0].endsWith('card-policy-imports.css')) return cssId + (id.includes('?') ? '?' + id.split('?')[1] : ''); }, load(id) { if (id.split('?')[0] === cssId) return normalizeBrowserCssImports(cssSource); } },
+  tailwindcss({ optimize: false }),
+] });
+let compiledImports;
+try { compiledImports = (await cssBuilder.transformRequest('/src/cards/user/card-policy-imports.css?direct')).code; } finally { await cssBuilder.close(); }
 const fontPath = [arg('--font', ''), 'C:/Windows/Fonts/arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'].find((p) => p && fs.existsSync(p));
 if (!fontPath) throw new Error('需要一份已安装的公开字体；用 --font 指定，不安装依赖');
 const font = fs.readFileSync(fontPath);
@@ -54,6 +74,8 @@ window.runFixture=async function(){
     const css=document.createElement('link');css.rel='stylesheet';css.href=E+'/style.css';const cssReady=new Promise((r,j)=>{css.onload=r;css.onerror=j});document.head.append(css);await cssReady;
     const script=document.createElement('script');script.src=E+'/script.js';const scriptReady=new Promise((r,j)=>{script.onload=r;script.onerror=j});document.head.append(script);await scriptReady;
     const face=new FontFace('PolicyFixture','url('+E+'/font.ttf)');document.fonts.add(await face.load());
+    const imports=document.createElement('link');imports.rel='stylesheet';imports.href='/imports.css';const importsReady=new Promise((r,j)=>{imports.onload=r;imports.onerror=j});document.head.append(imports);await importsReady;
+    window.fixture.cssImports=Array.from({length:6},(_,i)=>getComputedStyle(document.documentElement).getPropertyValue('--import-'+(i+1)).trim());
     const parsed=document.createElement('div');parsed.innerHTML='<style>.policy-parsed{color:rgb(7,8,9)}</style><p class="policy-parsed">正常HTML与外链</p><img src="'+E+'/image.png">';document.body.append(parsed);await parsed.querySelector('img').decode();
     window.fixture.normalHtml=getComputedStyle(parsed.querySelector('p')).color==='rgb(7, 8, 9)';
     window.fixture.resources={image:img.naturalWidth===4,style:getComputedStyle(document.body).backgroundColor==='rgb(20, 30, 40)',script:window.externalScript==='loaded',font:face.status==='loaded'};
@@ -79,11 +101,13 @@ await serve(BASE, (req, res) => {
   if (req.url === '/account') return reply(res, 403, 'text/plain', 'denied');
   if (req.url.startsWith('/stage')) return reply(res, 200, 'text/html', frameHtml, stageSecurityHeaders(EDITOR));
   if (req.url === '/boot.js') return reply(res, 200, 'application/javascript', boot);
+  if (req.url === '/imports.css') return reply(res, 200, 'text/css', compiledImports);
   return reply(res, 200, 'text/html', parentHtml(new URL(req.url, EDITOR).searchParams.get('mode') || 'full'), { 'content-security-policy': editorCspHeader([STAGE]), 'set-cookie': 'fixtureAccount=editor-secret; HttpOnly; Path=/; SameSite=Strict' });
 });
 await serve(BASE + 1, (req, res) => {
   if (req.url.startsWith('/stage')) { const mode = new URL(req.url, STAGE).searchParams.get('mode');return reply(res, 200, 'text/html', frameHtml, { ...(mode === 'meta' ? {} : stageSecurityHeaders(EDITOR)), 'set-cookie': 'pc_rt=fixture-project-A; HttpOnly; Path=/media-s/projectA/; SameSite=Strict' }); }
   if (req.url === '/boot.js') return reply(res, 200, 'application/javascript', boot);
+  if (req.url === '/imports.css') return reply(res, 200, 'text/css', compiledImports);
   if (req.url.startsWith('/media-s/')) return reply(res, req.url.startsWith('/media-s/projectA/') && req.headers.cookie?.includes('pc_rt=fixture-project-A') ? 200 : 401, 'image/png', image);
   return reply(res, 404, 'text/plain', 'missing');
 });
@@ -92,6 +116,7 @@ await serve(BASE + 2, (req, res) => {
   const headers = { 'access-control-allow-origin': '*' };
   if (req.url === '/image.png') return reply(res, 200, 'image/png', image, headers);
   if (req.url === '/style.css') return reply(res, 200, 'text/css', 'body{background:rgb(20,30,40);color:white}', headers);
+  if (/^\/import-[1-6]\.css$/.test(req.url)) return reply(res, 200, 'text/css', `:root{--import-${req.url.match(/[1-6]/)[0]}:loaded}`, headers);
   if (req.url === '/script.js') return reply(res, 200, 'application/javascript', 'window.externalScript="loaded";', headers);
   if (req.url === '/font.ttf') return reply(res, 200, 'font/ttf', font, headers);
   return reply(res, 404, 'text/plain', 'missing', headers);
@@ -110,6 +135,7 @@ try {
     if (mode === 'full') {
       check('真实 header/base-uri 自检与跨源握手通过，无 Allowlist/TT 仍可执行', result.report?.ok && result.report.csp === 'header' && result.report.egress === 'none' && result.handshake && result.modules, result);
       for (const kind of ['image', 'font', 'style', 'script']) check(`外链 ${kind} 实际载入`, result.resources?.[kind]);
+      check('真实 Vite/Tailwind 编译后的六种远端 CSS @import 在浏览器加载', result.cssImports?.length === 6 && result.cssImports.every(value => value === 'loaded'), result.cssImports);
       check('WebRTC 构造器保留', result.rtcBefore === result.rtcAfter, { before: result.rtcBefore, after: result.rtcAfter });
       check('无TT的HTML解析保护允许正常样式与外链图片', result.normalHtml);
       check('innerHTML/insertAdjacentHTML/Range/template/shadow结构入口拒绝子框架', Object.values(result.structure ?? {}).length === 5 && Object.values(result.structure).every(v => v === 'TypeError'), result.structure);
@@ -119,6 +145,15 @@ try {
     } else check(`${mode} 缺少 ${mode === 'meta' ? 'header' : '跨源'} 时真实自检拒绝执行`, result.report?.ok === false && result.gate?.allowed === false && !result.modules, result.report);
   }
   const cloud = await browser.newPage();await cloud.goto(`${CLOUD}/`, { waitUntil: 'domcontentloaded' });
+  const structure = await cloud.evaluate(async external => {
+    const seen=[];addEventListener('securitypolicyviolation',event=>seen.push(event.effectiveDirective));
+    const frame=document.createElement('iframe');frame.src=external+'/cloud-frame';document.body.append(frame);
+    const object=document.createElement('object');object.data=external+'/cloud-object';document.body.append(object);
+    const base=document.createElement('base');base.href=external+'/cloud-base/';document.head.append(base);
+    await new Promise(resolve=>setTimeout(resolve,200));
+    return {seen,baseURI:document.baseURI,href:location.href};
+  }, EXTERNAL);
+  check('经典云预渲页 CSP 拒绝 frame/object/base，未恢复资源出口限制', ['frame-src','object-src','base-uri'].every(d=>structure.seen.includes(d)) && structure.baseURI===structure.href && !requests.some(p=>p.startsWith('/cloud-')), structure);
   const denied = await cloud.evaluate(() => fetch('/api/vision/frame').then(r => r.status));
   check('真实 hosted Vite 页面闸拒绝管理 API', denied === 403, denied);
   const withoutKey = await fetch(`${CLOUD}/api/vision/frame`).then(r => r.status);
