@@ -62,3 +62,16 @@ CONTROL: actual HTTP ownership, anonymous denial, success and duplicate per-requ
 ## 交回
 
 开工报告提交 `8bcc8234`，测试修复提交 `103620d1`，最终证据单独提交。不合并、不推送。没有待决产品语义，也没有发现需要扩范围的实现错误。另一独占进程树修复不在本分支里；主会话整合两份修复后重跑真正集成基线。
+
+## root 审查补充：答复聚合的有界等待
+
+root 逐行审查 `3e223fa8` 后发现：旧 `waitFor(statuses.length === 5, 3000)` 对答复收齐有 3 秒防卡死上限，首份修复的 `Promise.all(answers)` 失去该上限。本报告原“未放宽超时”因此不准确；第一轮 target/type/full 全绿仍保留原始证据，但不能证明答复永久不完成时测试会及时失败。
+
+本次实质补充不改变按 request ID 的断言和两请求并发，仅将聚合等待改为 `Promise.race([Promise.all(answers), 3000 ms 拒绝])`，并在 `finally` 中清 timer。回答失败照常拒绝，晚到的拒绝也由已挂上的 Promise handler 接住；既有回答 Promise 的即时 catch 与后续聚合传播保持。计时器是原有防卡死 deadline，不是增加 sleep，也没有扩大 deadline。
+
+新修改后针对性、类型和全量各一次作为审查复验，结果待补；不是重复旧提交直到通过。未改其它文件或产品实现。
+
+本次补充验证：
+
+- 标准针对性只跑一次：12 tests、12 pass、0 fail、0 skipped、duration_ms 8574.1558，墙钟 8.8769175 秒，退出 0；CA-REV-10 为 1666.4964 ms，没有包装器自动重跑。
+- 系统 TMP 的受控脚本直接提取当前测试的聚合等待源码，注入可控计时器，不等待真实 3 秒：成功时清 timer、回答失败传播同一 Error 并清 timer、计时器参数严格 3000、超时拒绝并清 timer、超时后回答再拒绝也无 unhandledRejection。全部断言通过，退出 0，只运行一次；源码没有新增 sleep。日志 `promptcut-page-race-bounded-proof.log`。

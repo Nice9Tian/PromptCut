@@ -354,7 +354,18 @@ test('CA-REV-10 HTTP:pageId、?page=、POST page-results;别人的对话 404,不
   assert.ok(reqs.every((r) => r.seq === undefined));
   const results = mine.events.filter((e) => e.type === 'tool_result');
   assert.deepEqual(results.map((e) => [e.name, e.ok]), [['seek', true], ['pause', true]]);
-  await Promise.all(answers);
+  // 按请求聚合回答,保留原来 3 秒的防卡死上限;任何回答失败都向测试传播。
+  let answerTimer;
+  try {
+    await Promise.race([
+      Promise.all(answers),
+      new Promise((_, reject) => {
+        answerTimer = setTimeout(() => reject(new Error('等待超时:各次交回都有了回答')), 3000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(answerTimer);
+  }
   assert.equal(statuses.size, 2, '两次工具调用对应两个不同请求');
   assert.equal(answers.length, 2, '每个请求的异步交回答复都已经核对');
   // 同一个 id 内依次验证拒绝、接受、一次性消费;不对不同 id 的网络完成顺序作断言。
