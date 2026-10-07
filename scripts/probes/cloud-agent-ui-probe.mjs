@@ -814,10 +814,6 @@ async function desktopPhase() {
   const memEnd = await until('D6:这一轮结束后几秒内自己那一行不再有云端 Agent 标记、顶栏只剩本机 Agent 的数', async () => { lastMemD6 = await membersList(page); const m = lastMemD6; return m && !m.rows.some((r) => r.cloudTag) && m.count === `成员：2 人 · Agent：${localAgents(m)} 个` ? m : null; }, 30_000, 800);
   const runningD6 = await P(page, async () => [...(await import('/src/editor/sync/presence.ts')).cloudRunning()]).catch((e) => String(e));
   check('D6:一轮结束后几秒内「[云端 Agent]」标记消失、「有一轮在跑」表空了、顶栏的 Agent 数只剩本机 Agent(不等 10 分钟回收)', !!memEnd && Array.isArray(runningD6) && runningD6.length === 0 && Date.now() - tD6End < 25_000, { count: (memEnd ?? lastMemD6)?.count, localAgents: localAgents(memEnd ?? lastMemD6), rows: (memEnd ?? lastMemD6)?.rows.map((r) => r.text.slice(0, 80)), running: runningD6, ms: Date.now() - tD6End });
-  check('D5:桌面页面没有页面错误', page.pageErrors.length === 0, page.pageErrors.slice(0, 3));
-  await ctx.close().catch(() => {});
-  await killDesktop(desktop);
-  desktop = null;
 
   /* ---- D12:反向通道——桌面版选了「云端」时,云端 Agent 同样能操作这张页面(契约第 28 节) */
   {
@@ -839,6 +835,10 @@ async function desktopPhase() {
     check('D12:交回结果的请求是跨源直连 Agent 服务、带委托票据(三次),没有经本机的 /api/ai/chat、/api/mcp/', results.length === 3 && results.every((r) => r.auth === 'ticket') && localAiReqs(page).length === localBase, { results: results.length, auth: results.map((r) => r.auth), localAi: localAiReqs(page).slice(localBase).map((r) => r.url) });
     await shot(page, 'D12-desktop-reverse-channel');
   }
+  check('D5:桌面页面没有页面错误', page.pageErrors.length === 0, page.pageErrors.slice(0, 3));
+  await ctx.close().catch(() => {});
+  await killDesktop(desktop);
+  desktop = null;
 }
 
 /* ================================================================== 主流程 */
