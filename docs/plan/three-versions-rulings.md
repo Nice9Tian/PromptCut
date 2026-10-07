@@ -20,11 +20,11 @@
 | # | 用户决定（简述） | 核对来源 | 状态 |
 |---|---|---|---|
 | D1 | 素材不能跨项目读取；素材服务按项目核对归属 | `cloud-agent-contract.md` 2026-10-08 补记:9；`account-binding-task.md`「待决定」:154、验收 126；主工作区 `product/asset-service.md` | 用户已定；旧「按哈希读不变、工具层另加一道」已被取代 |
-| D2 | 只读成员不能操作 Agent | `cloud-agent-contract.md` 2026-10-08 补记:8；主工作区 `product/agent.md` 接入:12 | 用户已定 |
-| D3 | Agent 对话归属一律按网站账号编号 | `cloud-agent-contract.md` 2026-10-08 补记:5；主工作区 `product/agent.md` 接入:11 | 用户已定 |
+| D2 | 只读成员不能操作 Agent | `cloud-agent-contract.md` 2026-10-08 补记:8；主工作区 `product/agent.md` 接入:13 | 用户已定 |
+| D3 | Agent 对话归属一律按网站账号编号 | `cloud-agent-contract.md` 2026-10-08 补记:5；主工作区 `product/agent.md` 接入:12 | 用户已定 |
 | D4 | 云端对话共有/私有；新建默认共有；共有成员可看、发；私有所属账号可用，创建者只读；只有发起者能切换 | `cloud-agent-contract.md` 2026-10-08 补记:6、11；主工作区 `product/agent.md` 接入:9–10 | 用户已定；切私、历史迁移及排队规则分别见 D13–D15 |
-| D5 | 每人只停自己的任务，创建者可停任何人的任务、可查看成员私有对话但不能发消息；Agent 能力不因创建者身份增减 | `cloud-agent-contract.md` 2026-10-08 补记:10–12；主工作区 `product/agent.md` 接入:10–12 | 用户已定 |
-| D6 | 改密退出或被踢时，已被 Agent 读到的共有消息触发的当前任务和修改保留继续；私有任务停止；旧账号项目访问仍撤销 | `product/agent.md` 接入:13；`product/document-service.md`「保存与延迟退出的修改处理」:91（主工作区） | 用户已定 |
+| D5 | 每人只停自己的任务，创建者可停任何人的任务、可查看成员私有对话但不能发消息；Agent 能力不因创建者身份增减 | `cloud-agent-contract.md` 2026-10-08 补记:10–12；主工作区 `product/agent.md` 接入:10–13 | 用户已定 |
+| D6 | 改密退出或被踢时，已被 Agent 读到的共有消息触发的当前任务和修改保留继续；私有任务停止；旧账号项目访问仍撤销 | `product/agent.md` 接入:14；`product/document-service.md`「保存与延迟退出的修改处理」:91（主工作区） | 用户已定 |
 | D7 | `spawn_agent` 关闭，三个版本都不做，报「云端暂不支持开子 Agent」，列入 0.7.20 后待办 | `cloud-agent-contract.md` 2026-10-08 补记:13；`three-versions-brief.md` 第 9 节:138（主工作区 brief，只读） | 用户已定 |
 | D8 | 素材采集默认匿名；需登录态时由发起人电脑代下，登录信息不出其电脑；做不成或发起人离线则退回匿名；上传登录信息到节点留待以后 | `cloud-agent-contract.md` 2026-10-08 补记:14；`three-versions-brief.md` 第 9 节:138（主工作区 brief，只读） | 用户已定 |
 | D9 | 0.7.18、0.7.19、0.7.20 各出完整安装包和补丁 | `account-binding-task.md` 版本/交付安排:133（主工作区）；`three-versions-brief.md` 第 1 节:9（主工作区 brief，只读） | 用户已定 |
