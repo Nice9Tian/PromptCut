@@ -13,6 +13,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
@@ -57,6 +59,56 @@ test('HR30b Windows 上父进程号被重用：早就成了孤儿的无关进程
   assert.deepEqual(treePids(100, procs, { self: 50 }), [100, 110, 111, 112, 113]);
   // 树根已经死了、它的号还没被重用：孩子照旧找得到
   assert.deepEqual(treePids(100, born([[110, 100, 210], [111, 110, 220]]), { self: 50 }), [110, 111]);
+});
+
+test('HR30c Windows 树的存活核对：快照中过期的记录不算存活，权限错误不能冒充已退出', () => {
+  const queried = [];
+  const snapshot = procsOf([[100, 50], [110, 100], [120, 100], [130, 100], [200, 50]]);
+  const remaining = treeAlive(100, {
+    platform: 'win32', list: () => snapshot,
+    kill: (pid, signal) => {
+      queried.push([pid, signal]);
+      if (pid === 100) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      if (pid === 120) throw Object.assign(new Error('denied'), { code: 'EPERM' });
+      if (pid === 130) throw Object.assign(new Error('unknown'), { code: 'EIO' });
+    },
+  });
+  assert.deepEqual(remaining, [110, 120, 130], '只排除已确认退出的记录；树根死了也不漏还活着的孩子');
+  assert.deepEqual(queried, [[100, 0], [110, 0], [120, 0], [130, 0]], '只做本树候选的无副作用存活查询');
+});
+
+test('HR30d Windows 核对先前观察的树：PID 重用不能冒充原进程，原孙进程仍活着时必须报出', () => {
+  const observed = new Map([[100, { ppid: 50, born: 1000 }], [110, { ppid: 100, born: 1100 }]]);
+  const replacement = new Map([[100, { ppid: 900, born: 2000 }], [110, { ppid: 100, born: 1100 }], [200, { ppid: 100, born: 2100 }]]);
+  const queried = [];
+  const options = { platform: 'win32', observed, list: () => replacement, kill: (pid, signal) => queried.push([pid, signal]) };
+  assert.deepEqual(treeAlive(100, options), [110], '树根号已换人仍能认出原来活着的孙进程；新树不算本轮残留');
+  assert.deepEqual(queried, [[110, 0]], '不查询替代进程的存活');
+  replacement.set(110, { ppid: 100, born: 2200 });
+  assert.deepEqual(treeAlive(100, options), [], '父孙号都被重用也不是原树残留');
+  replacement.set(110, { ppid: 100 });
+  assert.deepEqual(treeAlive(100, options), [110], '缺少创建时刻不能据此宣称没有残留');
+  observed.get(110).born = undefined;
+  replacement.set(110, { ppid: 100, born: 2200 });
+  assert.deepEqual(treeAlive(100, options), [110], '原观察缺少创建时刻也不能宣称没有残留');
+});
+
+test('HR30e Windows 的新进程表空了或漏项：先前观察的成员仍要查存活，不把枚举失败当作退出', () => {
+  const observed = new Map([[100, { ppid: 50, born: 1000 }], [110, { ppid: 100, born: 1100 }]]);
+  const queried = [];
+  const kill = (pid, signal) => {
+    queried.push([pid, signal]);
+    if (pid === 110) throw Object.assign(new Error('denied'), { code: 'EPERM' });
+  };
+  for (const current of [new Map(), new Map([[100, observed.get(100)]])]) {
+    queried.length = 0;
+    assert.deepEqual(treeAlive(100, { platform: 'win32', observed, list: () => current, kill }), [100, 110], '存活和权限不足的原成员都保留');
+    assert.deepEqual(queried, [[100, 0], [110, 0]]);
+  }
+  assert.deepEqual(treeAlive(100, {
+    platform: 'win32', observed, list: () => new Map(),
+    kill: () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); },
+  }), [], '原成员都明确 ESRCH 才确认退出');
 });
 
 test('HR30 结束进程树（Linux）：后代与带记号的孤儿逐个 SIGKILL（连同各自的进程组），再扫一遍收掉新起的；Windows 上用 taskkill /T', () => {
@@ -216,19 +268,36 @@ test('HR30 工作进程看护：每次起现生成记号放进环境、记进文
 });
 
 test('HR30 真的进程树：子进程再起一个自成进程组的孙进程（像工作进程起 Vite 那样），结束树根时孙进程一起没；按记号能找到它们', async (t) => {
-  // 父：起一个 detached 的孙进程（各自 sleep），把孙的 pid 打出来
-  const grandchild = 'setInterval(() => {}, 1000);';
+  const token = randomBytes(16).toString('hex');
+  const cleanupPipe = process.platform === 'win32' ? `\\\\.\\pipe\\pc-hr30-${token}` : path.join(os.tmpdir(), `pc-hr30-${token}.sock`);
+  // 失败后的兜底由孙进程收到本轮口令后自行退出，不向可能已被重用的旧 PID 发 SIGKILL。
+  const grandchild = `
+    require('node:net').createServer((socket) => {
+      let text = '';
+      socket.on('data', (data) => { text += data; if (text === ${JSON.stringify(token)}) process.exit(0); });
+    }).listen(${JSON.stringify(cleanupPipe)}, () => process.send('ready'));
+  `;
   const parentSrc = `
     const { spawn } = require('node:child_process');
-    const g = spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { detached: true, stdio: 'ignore', windowsHide: true });
-    console.log('GRANDCHILD ' + g.pid);
+    const g = spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
+    g.once('message', () => console.log('GRANDCHILD ' + g.pid));
     setInterval(() => {}, 1000);
   `;
-  const token = 'b'.repeat(32);
   const child = spawn(process.execPath, ['-e', parentSrc], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, detached: process.platform !== 'win32', env: { ...process.env, [TREE_ENV]: token } });
-  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { if (err.code === 'ESRCH') return false; throw err; } };
   let grandPid = null;
-  t.after(() => { for (const pid of [child.pid, grandPid]) { if (pid && alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经没了 */ } } } });
+  t.after(async () => {
+    await new Promise((resolve) => {
+      const socket = net.createConnection(cleanupPipe);
+      socket.once('connect', () => socket.end(token));
+      socket.once('error', () => socket.destroy()); // 树已退出时，管道不存在
+      socket.once('close', resolve);
+      socket.setTimeout(1000, () => socket.destroy());
+    });
+    // ChildProcess 保存本次启动的句柄；不用已经释放后可能换人的数值 PID。
+    child.kill('SIGKILL');
+    if (process.platform !== 'win32') fs.rmSync(cleanupPipe, { force: true });
+  });
   grandPid = await new Promise((resolve, reject) => {
     let buf = '';
     child.stdout.on('data', (c) => { buf += c; const m = /GRANDCHILD (\d+)/.exec(buf); if (m) resolve(Number(m[1])); });
@@ -236,8 +305,12 @@ test('HR30 真的进程树：子进程再起一个自成进程组的孙进程（
     setTimeout(() => reject(new Error('等孙进程超时')), 15_000).unref();
   });
   assert.equal(alive(grandPid), true);
-  const tree = treeAlive(child.pid, { token });
+  const observed = listProcesses({ token });
+  const tree = treeAlive(child.pid, { token, list: () => observed });
   assert.ok(tree.includes(child.pid) && tree.includes(grandPid), `进程表里找得到这棵树：${JSON.stringify(tree)}`);
+  if (process.platform === 'win32') {
+    assert.ok(Number.isFinite(observed.get(child.pid)?.born) && Number.isFinite(observed.get(grandPid)?.born), '本轮父孙的创建身份确实读到了');
+  }
   if (process.platform === 'linux') {
     assert.ok(treePids(null, listProcesses({ token })).includes(grandPid), 'Linux 上只按记号也找得到（孙进程继承了环境）');
   }
@@ -247,7 +320,7 @@ test('HR30 真的进程树：子进程再起一个自成进程组的孙进程（
   while ((alive(child.pid) || alive(grandPid)) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
   assert.equal(alive(child.pid), false, '树根没了');
   assert.equal(alive(grandPid), false, '自成进程组的孙进程也没了');
-  assert.deepEqual(treeAlive(child.pid, { token }).filter((p) => p === child.pid || p === grandPid), []);
+  assert.deepEqual(treeAlive(child.pid, { token, observed }).filter((p) => p === child.pid || p === grandPid), [], '本轮父孙身份都不再存活');
 });
 
 /* ------------------------------------------------------------------ HR31 */
