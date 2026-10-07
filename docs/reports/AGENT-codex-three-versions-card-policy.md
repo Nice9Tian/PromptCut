@@ -92,3 +92,9 @@
 - full-3在codex-auth-state测试文件长等待，缺最终总结；主会话批准只killTree本人54836→36980→39772→44292树，退出1记中止/未完成。精确CIM/命令证据在TMP/promptcut-card-policy-full-3-owned-processes.json，旧fake CLI在case-eepgiZ；终段case-PsZsKk为split+descendant。Get-Process未提供句柄读数，不能断言具体stdout句柄根因。主会话另派Astra生命周期包；没有越权改auth，没有盲跑full至绿。full-1/2的4927总、4926过、0失败、1skip只属于之前源码，既有skip名称为“集成:/api/cards/layout 对真实项目返回整数框”。最终共同候选全量仍是整合闸门。
 - 已只读986ebec6的render-scheduling-supplement全文及account/cloud/sound任务与brief新增映射；本包不实现提前回收/补渲A-B/删除权限待决，不把真实用户卡单项目/轮换/看画面探针冒称RS18/19/20容量、50对话或五分钟目标已验收。
 - 最后仅清理旧probe表述和本报告，不再改变产品源码；无merge/push/version/release/节点/依赖/用户数据操作。只涉及主会话授予的39个文件；diff --check通过。交回后root审diff/截图、与账号/asset包整合、Astra修复后共同候选全量和Linux真节点验收仍需主会话完成。
+
+## 收回后的探针环境保护补丁
+
+- 根在卡片＋认证共同候选全量得到4933项、4931通过、1失败、1既有跳过，88041.425ms；唯一失败是新card-policy-probe未以no-user-dirs为首个import且未显式禁止port.json。该共同候选首次失败由根保留，不能抹掉或称通过。
+- 根明确授权暂停素材包，回此旧分支只补该探针首个import `../lib/no-user-dirs.mjs`；它设置进程/子进程用户目录与端口文件保护。产品src/server源码、旧断言与固定第四轮身份不变，不改共同候选分支、不自行再跑全量。
+- 对应 `node --test server/test/port-file.test.mjs server/test/no-user-dirs.test.mjs` 11/11、0失败/跳过，199.5515ms；TMP/promptcut-card-policy-port-guard-1.log。diff --check后独立中文提交，交回根再冻结。
