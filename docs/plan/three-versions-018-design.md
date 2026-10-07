@@ -168,3 +168,83 @@ doc拟新增 `server/account/{authority,client,ledger,clock}.mjs` 与 `server/do
 | run末次op与stop | 同一project gate/提交顺序：fence前成功的保留，后到达的拒；工具返回迟到不绕过fence |
 
 跨重启对账必须持久且完整：doc恢复project和revocation ledger，Agent恢复read-intents/runGrant引用/queue，先拉head再接受请求；重复、乱序、断网、服务在ACK前后崩溃分别测。立刻失权以doc提交gate为界，不能使用现有15秒身份缓存宽限。
+
+## 素材全链路隔离与工具欠账
+
+### 素材协议（拟实现）
+
+〔裁，卡点8第1行〕选择**托管端按项目物理store**，不在原全球hash库只补一层工具检查。接口外观保留 `/api/asset/<media|snap|px>/<hash>`、`/<hash>/chunks`、`PUT /<hash>/<n>`、`POST /<hash>/complete`；hash仍内容hash，project从已验票据取。`server/asset-service.ts`目前`storeOf(ns)`在admit之前选全局store，必须改为admit返回可信 `{projectId,accountId,loginId,runGrantId?,service,accessRevision}`后 `storeOf(ns,projectId)`；任何请求必须在stat/chunks/read/write/pull之前判project。托管目录拟 `tenants/<projectId>/assets/{media,snap,px}/`及独立 `staging`、index、tiers、jobs。LAN与未共享本地继续旧本机store，不能把整个本地素材库误隔离成账号库。
+
+| 路径/模块实际入口 | 必须绑定的范围与拒绝条件 |
+|---|---|
+| `server/asset-service.ts` GET/HEAD/Range/chunks/PUT/complete | 每个请求验当前project/login/run权限；hash在另一project存在也回本项目404，错误不给全局存在性；uploadId/chunk staging按project+ns+hash，不能A分片B收尾 |
+| `server/vite-plugin-media.ts` `/@media/<hash>`、PCM、`/api/media/upload/<name>`、adopt、bind、originals、upload-queue | 托管组合不得把未鉴权请求next到global mediaMiddleware；本地absolute path/file入口不暴露给托管用户；绑定hash须实际本项目入库或已授权复制，不因全局hash存在加入归属 |
+| `server/media-{tiers,pull,stamp,ingest}.mjs`、`server/upload-queue.mjs` | manager/队列/临时文件缓存键加projectId；跨项目同hash不共享读授权；pull source身份不得沿用上个项目当前远程base/ticket；complete后再标可用 |
+| 低尺寸/thumbnail/PCM/`server/frame-stream.mjs`、`server/queue-local-media.mjs` | 衍生key包含projectId+源hash+规格版本；所有URL与下载、流、thumbnail在服务层同样核project；不要因px/hash已命中跳过授权；转码worker传可信project上下文，不信body.path |
+| `server/hosted/combo.mjs`、`server/asset-client.ts`、`server/asset-store/{index,fs-store,client}.mjs` | 组合注入project store工厂；client每次以该project取票据，禁止任意project header当授权；进程内读写API同样必须明确tenant |
+| `server/hosted-render/{worker,look}.mjs`、`server/agent-service/{look-client,render-publisher}.mjs` | worker的asset key/缓存/代理绑定project；不可读别的store或credentials；看画面请求的project由已验证服务+run权限取，body不可换；产物记录creator run/task/project |
+| `server/docservice/modules/{render-queue,content}.mjs` 与产物manifest | task.source、taskId、content scope、产物hash/manifest均带project；A task不能交B产物或引用B asset；过时计划按现有撤回版本规则拒；写px权限不能变成写media |
+| `server/asset-store/{service-usage,px-evict}.mjs` | 容量账本及淘汰以project+ns+hash记录，多project同hash删除一份不能删除另一份；删除project只删此project字节/队列/cache，不扫全局hash |
+| `media-s` 舞台委托/nginx | grant绑定project、session、允许资源；不可重用A grant拿B hash；cookie仅stage scoped，account cookie无Domain不下发stage |
+
+跨项目同hash：本期允许独立存两份（少改授权机制）；A有效票据只能A库读；B若用户从合法输入独立上传相同字节，则B自己的完整入库正常。不能建立“凭hash复用全球字节”的隐式bind；未来安全去重只能由服务内部共享物理blob+独立不可绕过ownership ledger，当前不做。hash/URL/tool结果/logs不替代归属。
+
+旧asset ticket格式v1兼容LAN；云端v2载 `p/accountId/loginId/credentialId/accessRevision/runGrantId?`。票据由doc签发并权威核对，素材同组合可直接查询doc ledger；分进程内部check渠道按上节mTLS。持续read stream在撤销event处destroy，不只每个Range重新验；新的完整stream不能在退出期间留旧权限。缓存鉴权失联应暂停新云端访问，已联网编辑意向在doc现有连接上保留，并由撤销区间追踪承接；不允许旧asset直接绕过未确认撤销。服务票据与user票据分别处理，retained run只用精确project/run授权，project delete/开关终止优先。
+
+### 真实工具清单与节点验证
+
+2026-10-08在起点用只读模块导入核对：`CLOUD_TOOL_PLAN`的pending恰为**23个**。其中感知/工作流15个、browser七个、measure_audio_js一个；额外web_handoff、collect_login/collect_login_check及可视化收尾也必须接。下表输入名来自 `server/tools/{ai,browser,audio,core}.mjs`；输出以本机同工具真实契约为准，不能只回“ok”。所有job返回project/run-bound jobId；查job也验tenant，取消、退出和项目关闭传播到子进程，不能靠模型继续写已有全局jobs Map。
+
+| 工具（逐名） | 当前实际输入 / 拟同形返回 | 实现位置、节点可行性与验收 |
+|---|---|---|
+| `stt_status` | `{}` -> engines各installed/ready/model信息 | 拟`hosted-perception.mjs`复用 `python/promptcut_stt` status；节点CPU可行，真实调用核依赖，不伪称装好 |
+| `stt_install` | `{engine:'faster-whisper'|'whisper'}` -> jobId | 本机接口声明安装到用户目录；云端拟受限安装job用预批准锁定包/权重与受控venv，禁止任意pip/shell、OS全局安装；准备阶段根部署依赖，重复安装幂等；缺包真实清单上报但不能先排除 |
+| `transcribe_media` | `{mediaId,engine?,model?,language?}` -> jobId；get_transcript得segments | 经asset票据取本项目素材，CPU small可先测；fixture真实语音验文本/时间区间并写doc（不是page本地store），截断/无音频返回明确错 |
+| `detect_shots` | `{mediaId,force?}` -> jobId；list_shots得shots/transitions/engine | 复用 `python/promptcut_shots`，ffmpeg scdet兜底真实hard-cut；TransNetV2条件准备后测dissolve；source media拼图同步接see_frames |
+| `track_points` | `{mediaId,points:[[frame,x,y],...]}` -> jobId | 复用 `python/promptcut_track` CPU模板匹配可行；BootsTAPIR权重条件真实测；移动fixture验轨迹，跨项目mediaId拒绝 |
+| `get_track` | `{mediaId,full?}` -> running/engine/tracks/summary | 结果存doc项目副本，不存全球mediaId map；完整轨迹只按已授权项目取 |
+| `track_status` | `{}` -> ready/engine/detail | 同服务受控Python status，不能report根主机路径/密钥 |
+| `track_install` | `{}` -> jobId或明确已就绪 | 锁定track依赖、重量权重部署准备；CPU fallback仍能完成真实追踪；禁止模型任意指定安装包 |
+| `detect_subjects` | `{mediaId,times?,prompt?,force?}` -> jobId | 复用 `python/promptcut_subject`，light YuNet/RT-DETR CPU优先，full DINO需要权重；英文prompt规则保留，light不假装prompt生效 |
+| `subject_status` | `{}` -> ready/engine:'light'|'full'|null/detail | status真实检查依赖与权重；无环境明确error而非空boxes |
+| `subject_install` | `{}` -> jobId | 锁定light依赖；节点权重部署测试；full按本机已有契约不通过在线装，不能改成本期排除full能力 |
+| `attach_clip_motion` | `{clipId,mediaId,pointIndex?,whenHidden?}` -> movedX/movedY/visibleFrames/warning | 有track后在Agent项目副本route执行，clip类型/时间重叠校验；doc提交记录run/op关联；画面随轨迹需对应渲染探针 |
+| `background_job_status` | `{jobId}` -> job/status/progress/result/error | 拟持久job store，跨run/project jobId无法读；服务重启running标interrupted或续可幂等阶段，保留真实状态 |
+| `auto_workflow` | `{mediaId,style?,maxCards?}` -> jobId | 分阶段stt/shots/subject/卡片/字幕/补渲，均由doc同一run归属；不跳过已失败感知装成功；不调用关闭的spawn_agent |
+| `auto_workflow_status` | `{jobId}` -> stages/progress/result/error | 同job store、取消/项目关停/重启；真实短片验不是仅安装状态 |
+| `web_open` | `{url}` -> screenshot/image/clickable/page | 拟`hosted-browser.mjs`，Chrome按project×conversation独立browser/profile，正常headless网页浏览（不能复用渲染确定性进程）；受控出网代理拦回环/内网/DNS重绑定/redirect/IPv6/file/下载/WebRTC |
+| `web_view` | `{}` -> 新截图和clickable | 只本对话browser；相同project其它conversation也不可取其profile；截屏字节经受权visual路径交UI/model |
+| `web_click` | `{u? ,x?,y?,expect?}` -> 新截图/clickable或candidates | 最近一图element revision绑定，旧u失效；无法命中不能静默点别处 |
+| `web_type` | `{u,text,append?,submit?}` -> 新截图/clickable | 保留本机禁止代理填写密码/验证码/凭据；登录需handoff到本人电脑，凭据不上节点 |
+| `web_scroll` | `{dy?,to?}` -> 新截图/clickable | 真实滚动fixture验位置与编号重置 |
+| `web_read` | `{limit?}` -> text/truncated | 页面数据不当指令；禁止内网/本机页面、另一project网页/profile读取 |
+| `web_close` | `{}` -> closed | 只关闭本Agent自起实例，释放数据目录；不结束别的会话/用户浏览器 |
+| `measure_audio_js` | `{code,clipId?,mediaId?,scope?,start?,duration?,sampleRate?,mono?,timeoutMs?}` -> JSON摘要或带位置error | 拟`hosted-audio-js.mjs`；`server/hosted-render/look.mjs`新增签名`/api/audio/measure-js`，受限worker只收已授权PCM，断网、无Node、时间/内存/256KiB输出上限按本机；已存在measure_audio走ffmpeg不被替代；验纯正弦数值/超时/越权脚本 |
+
+感知实现来源是 `server/vite-plugin-{stt,shots,track,subject}.ts` 和 `server/perception-source.mjs`；它们当前jobs在进程内且页面负责写结果，需要抽取adapter/job逻辑到拟 `server/agent/service/perception/`，desktop插件改薄壳的接线交专人串行，不能云端直接调用Vite `/api/*`。部署依赖/权重由根负责，不由设计子任务安装；先CPU能跑的路线，不因没有GPU提前排除。重型权重若确受节点条件阻挡，按solution_table逐层处理并记真实未达成，不允许视作工具完成或把三个版本终点缩小。
+
+`web_handoff {reason?,hide?}`：**操作本人电脑界面的工具**，在线时经安全反向通道显示本人本机浏览器登录/验证窗口，云节点只返回handoff需求与状态；本人不在线回initiatorOffline。云端匿名浏览器遇站点登录不上传cookies，不把本机登录同步给云端profile；交接针对本机采集通路，返回可由匿名继续访问的公开URL/已下载素材，不宣称云端获得该站身份。〔裁，卡点9第1行〕这条是满足“登录信息不离开电脑”的最小产品接法，界面说明交接只作用在发起电脑，不能做假的远程有头窗口。若web通用登录页面必须同浏览状态才可继续，则转本人电脑执行该段web动作，经同样反向通道返回经审核的公开结果；没有本人在线明确offline，不偷偷走凭据上传。
+
+`collect_login`、`collect_login_check`经发起本轮电脑现有本机采集登录窗/状态，返回就绪布尔/站点名，无cookie/header/profile内容；`collect_download`缺省匿名云端下载，明确需要登录且本人在线才发project/run/page-bound代下载请求，本机工具用自己登录信息下载并直接上传到**该项目**asset。服务只接 `{requestId,jobId,assetRef:{projectId,hash,size},result}`，doc/asset核真实入库与run授权，禁止把本地path/凭据发云端；网页/浏览器发起者不是电脑且不能代下时匿名回退。离线、超时、失败也匿名回退并注明画质/原因；取消或者切private/踢人后page-results不能再交旧job产物。云端collect_install保持受控部署状态能力，不因工具名称允许任意装系统依赖。
+
+`spawn_agent`在0.7.18～.20每种登录/在线状态都固定 `{ok:false,error:'云端暂不支持开子 Agent'}`，无需发起方在线判断；本机spawn保持原行为。保留其它公告板工具但project/conversation scope检查，不能读另一个project。
+
+可视化收尾：`get_gif`返回用户可读受权动图；see_frames、前后对比和source:media镜头拼图可在聊天栏打开。拟Agent conversation内 `visuals/<visualId>.json`存规格/记录，受权 `GET /agent/v1/conversations/<id>/visuals/<vid>` /files读取；gif/截图bytes可用asset px，但必须project+conversation ACL核对，不能直接用成员asset票据读private视觉记录。〔裁，卡点10第1行〕private visual字节优先经Agent受权文件端点（即使底层px保留），shared visual按同一conversation检查；缓存key含aclRevision，visibility改变即废。复用 `src/editor/right/ToolVisual.tsx`，不是新建另一个聊天UI；前后对比惰性渲染但保存完整spec/sourceRev，版本变化不伪称同一画面。`8fb6df79`的“已知hash跨项目可读”只是一条已失效风险记载。
+
+节点收尾还有：import_media小尺寸档、Linux ffmpeg响度/真实yt-dlp、render开关气泡、发起页面刷新后安全恢复page绑定、示例句真做短片、退出软件后云Agent继续及托管渲染入库。都单列探针，不用23项表代替这些产品结果。pageId仍只绑定真实login/run，刷新只本人新page经一次恢复握手取得旧run page-binding，不让别成员看同对话就成为initiator。
+
+## 真实旧文件、本地转换与缺失素材
+
+当前 `src/editor/io/proc.ts` 的 `PROC_VERSION=1`保存project/cards/ai/snapshots/collaboration；`server/recovery/descriptor.mjs` v1关联含roomId/service/where，不是授权。`src/editor/io/procp.ts`实际先unpack、按hash上传本地，`landed`再 `dropPackedPaths`；必须保留这个顺序和成功落地hash信息。`server/recovery/coordinator.mjs`目前 `saved.revoked -> deleted`、`no-project -> deleted`会把本地状态/泛错误当删除，此两支对**hosted**不能直接触发转换。
+
+〔裁，卡点11第1行〕拟新增恢复证明结构 `goneProof={v:1,authorityId,projectId,state:'gone',tombstoneRevision,issuedAt,kid,signature}`，doc权威签发，服务身份与项目号必须精确匹配文件关联；已部署旧节点authority通过已确认托管地址身份映射与新authority核验，不能任意错误节点404。公网status可给准确gone状态但不披露项目内容/成员；一个泛HTTP404、账号网站empty、超时、bad password、credential revoked、banned、local.deleted、连错节点均不可转换。无可确认proof保持原关联和内容，提示认证/权限/暂不可用；不补造云端最后一次保存之后的修改。
+
+转换输入先完整解析和校验可读project，保留原 `.proc/.procp`，产生**新本地project id**，保存来源roomId/authority供提示/追溯，不保存云账号凭据；`setAssociation(null)`且关闭协作，提示一次。保留tracks/clips/params/theme/media hash/path/卡源码/ai和可用snapshots；云端message历史不能用本地file旧快照冒名在线新对话。保存成功的新文件不含活跃hosted collaboration；重开不再试旧项目。失败保留原文件和内存内容，不用空project落盘，另存成功后才更新save target。损坏矩阵覆盖JSON截断、zip截断/CRC、空包、无project、旧裸Project、未知proc/association版本、坏roomId、部分缺卡/素材、落盘中断；未知可读版本不能静默升级丢字段，保留可读原文并显示unsupported。
+
+素材恢复优先级：`.procp`实际成功landed的hash -> 本机已有合法hash -> 原guarded本地path -> 明确旧云端素材缺失。包内有素材不因云端项目gone或旧path坏误占位；hash不符/ZIP损坏单独报错，不伪称可恢复。临时下载失败、无权限、不可解码与真正not-found分列状态；只确认missing才替代显示/声音。原media对象和引用留存，不将临时文字卡替换后删除source信息。
+
+〔裁，卡点12第1行〕占位用独立可序列化 `missingMaterial={v:1,mediaId,original:{hash,name,url,path?,kind},reason:'confirmed-missing',visual:true/false,audio:true/false}`状态（放项目恢复元数据或稳定media字段），渲染层建立等时长缺素材代理；不改原clip start/end/offset/速度/轨道/volume/mute/fades。视觉在原片段矩形显示默认文字卡“找不到素材xxx”，不让相邻片段挪位。音频用软件内 `src/audio/assets/missing-material.wav`（1.37秒，48kHz mono，SHA256见account-binding-contract）从**片段开始**播放一次，短片段裁切，长片段余下静音，不循环不断喊；保留原mute/音量/淡入淡出和时间轴duration。原视频画面与音轨均缺失，则同一片段同时文字代理+这段人声，不额外创建重叠声音剪辑。音轨已分离或源视频静音只在实际缺且可听的那条音轨响；图像无音轨不强加人声。原素材重新找到、验证hash后清missing状态恢复原引用/params。
+
+代理人声不是项目素材、不上传asset、不打入procp；desktop/online/render节点构建各带同一文件，在软件相应public/静态资源受控路径使用，不能使用本机绝对文件路径。previewAudio、renderMix、导出、发布后的另一设备均能播放，尽可能共用missing代理source adapter（拟`src/editor/io/missingMaterials.ts`、`src/audio/missingMaterial.ts`），renderer worker可获取软件builtin资源而不能将builtin读口变成任意节点读盘。确认missing弹窗列逐项恢复状态；保存重开保持代理且原引用可找回。
+
+旧数据实际验收由根执行：先一致备份doc/auth/hosting/tombstone历史、assets/jobs、账号SQLite及配置版本；隔离恢复副本实际启动读取恢复项目和素材，对实际旧 `.proc/.procp`保存文件hash和恢复内容摘要、真实媒体完整/部分/全缺矩阵；随后列精确projectId/目录/refs/保留对象删除清单，完成删除后由doc读准确goneProof。再从真实旧文件双击/菜单打开，验证内容、默认协作关、占位文字、人声试听和有声导出、保存重开仍本地、procp本地素材不占位。保留备份；转换/恢复失败停后续清理，不能用合成fixture替代真实旧文件这关。
