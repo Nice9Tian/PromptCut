@@ -43,6 +43,11 @@
  *       没有任何同源 /api/ 请求;
  *   O9(K) 在线页面「保存为文件」真的下载到文件、内容就是对话框里的报告;一键「报告」提交:页面直接跨源请求收集端(探针自己起的,跑的是仓库里真的 `tools/report-worker/worker.js`,令牌是假的),
  *       收集端存下的就是这份报告、没有任何凭证与提交令牌;D9(K) 桌面版云端对话的报告同样能提交;
+ *   O12 〔反向通道,契约第 28 节〕发起方在线时云端 Agent 能操作他的页面:调 `seek` 后页面的播放头到了那个时刻;调 `play` 后页面在播、
+ *       调 `pause` 后停下;`get_selection` 回的是页面当下的选区(不是发消息时的);AI 栏里这四步照本机的样子各显示一步、都成功;
+ *       页面交回结果的请求(`POST …/page-results`)带委托票据,发消息的请求体与事件流的查询串带了同一个页面号;没有同源 /api/* 请求;
+ *       (O4 里)关掉发起的页面后同样的 `seek`、`play` 回「发起方不在线」,这一轮照样跑完;此时同一位成员在另一台设备上看着这个对话,
+ *       那台设备的播放头不动、也没有收到要它执行的请求(只认发起这一轮的那一张页面);
  *
  * 桌面版(`desktop`,桌面 dev server 在 `?aimock=1` 下起,本机驱动是内置假流,保证有一个本机驱动可选)
  *   D1  放本机的项目:接入方式里没有「云端」,没有任何发往 Agent 服务的请求;
@@ -54,7 +59,10 @@
  *   D5  桌面页面重新打开回到同一个项目:AI 栏仍是本机驱动,只多一次 info 与一次对话列表;历史列表「云端」一组里找得到那个对话,点开找回完整过程;
  *   D9  桌面版云端对话里「诊断报告」可用(同 O9,不点保存为文件);D11 本机与云端的空对话都只有那一条示例句,本机模式下一键配特效不置灰。
  *   D6  云端对话还在跑时重新打开:AI 栏仍是本机驱动,出现「云端对话进行中」提示,点「接上看看」接上还在跑的对话;成员列表里自己那一行下
- *       有「〈成员名〉的云端 Agent」;跑完过程完整、改动落地。
+ *       有「〈成员名〉的云端 Agent」;顶栏的 Agent 数 = 本机 Agent 的个数 + 在跑的云端 Agent 1 个(〔用户 2026-10-07 定〕两种都算进 Agent 数);
+ *       跑完过程完整、改动落地。
+ *   D12 〔反向通道〕桌面版选了「云端」时同样:云端 Agent 调 `seek` / `play` / `pause`,桌面页面的播放头到位、在播、停下;交回结果的请求是跨源直连
+ *       Agent 服务、带委托票据,没有经本机的 /api/mcp/。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import { randomBytes } from 'node:crypto';
@@ -328,6 +336,38 @@ const diagA = await diagnostics(A, { save: true, submit: BUILT_HERE, shotName: '
     check('O9(K):收集端存下的内容里没有任何凭证:没有票据形状的串、Bearer、sk- Key、委托与提交令牌', !!stored && !TICKET_SHAPE.test(storedText) && !/Bearer\s+[A-Za-z0-9]/.test(storedText) && !/sk-[A-Za-z0-9_-]{12,}/.test(storedText) && !storedText.includes(COLLECTOR_TOKEN), { chars: storedText.length });
   }
 
+  /* ---- O12:反向通道——发起方在线时云端 Agent 操作他的页面(契约第 28 节) */
+  {
+    const pageState = () => P(A, () => { const s = window.__pcStore.getState(); return { t: s.t, playing: s.playing, selection: s.selection }; });
+    await P(A, () => { const { actions } = window.__pcStore; actions.pause(); actions.seek(0); actions.select(['c-ring']); });
+    const sel0 = (await pageState()).selection;
+    const base12 = toolCount(await msgs(A));
+    const reqBase = agentReqs(A).length;
+    // 发消息时选中的是 c-ring(快照);这一轮开始之后页面把选区换成 c-move,`get_selection` 该回 c-move
+    await startRun(A, [{ sleepMs: 1500 }, { tool: 'seek', input: { t: 3 } }, { sleepMs: 1800 }, { tool: 'play', input: {} }, { sleepMs: 1800 }, { tool: 'pause', input: {} }, { sleepMs: 1200 }, { tool: 'get_selection', input: {} }, { say: '播放头操作完了' }]);
+    await P(A, () => window.__pcStore.actions.select(['c-move']));
+    const atSeek = await until('O12:seek 之后页面的播放头到了 3 秒(没在播)', async () => { const s = await pageState(); return Math.abs(s.t - 3) < 0.05 && s.playing === false ? s : null; }, 15_000, 40);
+    await shot(A, 'O12-online-after-seek');
+    const atPlay = await until('O12:play 之后页面在播', async () => { const s = await pageState(); return s.playing === true ? s : null; }, 15_000, 40);
+    const atPause = await until('O12:pause 之后页面停下', async () => { const s = await pageState(); return s.playing === false && toolCount(await msgs(A)) - base12 >= 3 ? s : null; }, 15_000, 40);
+    await until('O12:这一轮结束', () => idle(A), 30_000, 100);
+    const a12 = lastAssistant(await msgs(A));
+    const tools12 = (a12?.parts ?? []).filter((p) => p.kind === 'tool');
+    check('O12:云端 Agent 调 seek 后页面的播放头到了那个时刻(3 秒)', !!atSeek, atSeek ?? (await pageState()));
+    check('O12:调 play 后页面在播,调 pause 后页面停下(停下时播放头已经走过 3 秒)', !!atPlay && !!atPause && atPause.t > 3, { atPlay, atPause });
+    check('O12:AI 栏里这四步照本机的样子各显示一步、都成功,回复在', tools12.map((t) => t.name).join() === 'seek,play,pause,get_selection' && tools12.every((t) => t.ok === true) && (a12?.text ?? '').includes('播放头操作完了'), { tools: tools12.map((t) => [t.name, t.ok, t.summary]), text: a12?.text });
+    const steps12 = await P(A, () => [...document.querySelectorAll('[data-pc="cloud-ai-panel"] *')].filter((e) => e.children.length === 0 && /^(seek|play|pause|get_selection)$/.test(e.textContent.trim())).map((e) => e.textContent.trim()));
+    const sel12 = String(tools12.find((t) => t.name === 'get_selection')?.summary ?? '');
+    check('O12:get_selection 回的是页面当下的选区(c-move),不是发消息时的(c-ring)', sel0.join() === 'c-ring' && sel12.includes('c-move') && !sel12.includes('c-ring'), { sel0, summary: sel12.slice(0, 200), domSteps: steps12 });
+    const reqs12 = agentReqs(A).slice(reqBase);
+    const results12 = reqs12.filter((r) => r.method === 'POST' && /\/page-results$/.test(r.url));
+    const proxied12 = S.agentLog.filter((r) => /\/page-results$/.test(r.path));
+    const pagesInStream = [...new Set(S.agentLog.filter((r) => /\/events\?/.test(r.path)).map((r) => new URL(r.path, S.SITE).searchParams.get('page')).filter(Boolean))];
+    check('O12:页面交回结果的请求(POST …/page-results)四次、都带委托票据;事件流的查询串带了页面号', results12.length === 4 && results12.every((r) => r.auth === 'ticket') && proxied12.length >= 4 && pagesInStream.length === 1 && /^pg-[0-9a-f]{32}$/.test(pagesInStream[0]), { results: results12.length, auth: results12.map((r) => r.auth), proxied: proxied12.length, pages: pagesInStream.length });
+    check('O12:这一段没有同源 /api/* 请求、没有页面错误', A.requests.filter((r) => { try { const u = new URL(r.url); return u.origin === S.SITE && u.pathname.startsWith('/api/'); } catch { return false; } }).length === 0 && A.pageErrors.length === 0, { pageErrors: A.pageErrors.slice(0, 3) });
+    await P(A, () => { window.__pcStore.actions.pause(); window.__pcStore.actions.select([]); });
+  }
+
   /* ---- O2:停止 */
   await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 30000 }, { say: '这句话不该出现' }]);
   await sleep(800);
@@ -366,7 +406,8 @@ const diagA = await diagnostics(A, { save: true, submit: BUILT_HERE, shotName: '
   check('O3:断流期间服务端的改动照常落地(标签是 r2)', labelNow === 'r2', { labelNow });
 
   /* ---- O4:关掉页面,另一台设备再进:自动接上还在跑的对话 */
-  await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 5000 }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'reopened' } }, { sleepMs: 5000 }, { say: '接上了' }]);
+  // 〔O12〕关掉发起的页面之后,脚本里同样的 seek、play:该回「发起方不在线」,这一轮照样跑完
+  await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 5000 }, { tool: 'seek', input: { t: 2 } }, { tool: 'play', input: {} }, { tool: 'update_clip', input: { clipId: 'c-text', label: 'reopened' } }, { sleepMs: 5000 }, { say: '接上了' }]);
   const base4 = toolCount(await msgs(A));
   await until('O4:关页面之前先看到这一轮的第一个工具调用', async () => toolCount(await msgs(A)) > base4 || (await view(A))?.streaming, 10_000, 50);
   await sleep(500);
@@ -394,7 +435,14 @@ const diagA = await diagnostics(A, { save: true, submit: BUILT_HERE, shotName: '
   const a4 = lastAssistant(m4);
   const users4 = m4.filter((x) => x.role === 'user');
   const lastRunTools = (a4?.parts ?? []).filter((p) => p.kind === 'tool');
-  check('O4:过程完整:最后一轮两个工具调用、回复「接上了」;整段对话里每轮一条用户消息,没有重复', lastRunTools.length === 2 && (a4?.text ?? '').includes('接上了') && users4.length === m4.filter((x) => x.role === 'assistant').length, { tools: lastRunTools.length, users: users4.length, text: a4?.text });
+  check('O4:过程完整:最后一轮四个工具调用(读项目、seek、play、改标签)、回复「接上了」;整段对话里每轮一条用户消息,没有重复', lastRunTools.length === 4 && (a4?.text ?? '').includes('接上了') && users4.length === m4.filter((x) => x.role === 'assistant').length, { tools: lastRunTools.length, users: users4.length, text: a4?.text });
+  {
+    const off = lastRunTools.filter((t) => t.name === 'seek' || t.name === 'play');
+    const stateB = await P(B, () => { const s = window.__pcStore.getState(); return { t: s.t, playing: s.playing }; });
+    const resultsB = agentReqs(B).filter((r) => /\/page-results$/.test(r.url));
+    check('O12:关掉发起的页面后同样的 seek、play 回「发起方不在线」,这一轮照样跑完(之后的改标签成功、回复在)', off.length === 2 && off.every((t) => t.ok === false && /发起方不在线/.test(String(t.summary ?? ''))) && lastRunTools.at(-1)?.name === 'update_clip' && lastRunTools.at(-1)?.ok === true && (a4?.text ?? '').includes('接上了'), { off: off.map((t) => [t.name, t.ok, String(t.summary ?? '').slice(0, 80)]), last: [lastRunTools.at(-1)?.name, lastRunTools.at(-1)?.ok] });
+    check('O12:同一位成员在另一台设备上看着这个对话:那台设备的播放头不动、没在播、没有交回过任何结果(只认发起这一轮的那张页面)', stateB.t === 0 && stateB.playing === false && resultsB.length === 0, { stateB, results: resultsB.length });
+  }
   check('O4:改动落地(标签是 reopened)', clipIn(await readProject(), 'c-text').label === 'reopened');
   await B.click('[data-pc="ai-history"]');
   const hist = await until('O4:历史列表的「云端」一组里有对话', () => P(B, () => { const g = document.querySelector('[data-pc="chat-cloud-group"]'); return g ? [...g.querySelectorAll('[data-pc="chat-cloud-item"]')].map((e) => ({ id: e.textContent.trim().slice(0, 40), state: e.getAttribute('data-state') })) : null; }), 10_000, 100);
@@ -741,10 +789,15 @@ async function desktopPhase() {
   const optsD6 = await providerOptions(page);
   check('D6:云端对话还在跑时重新打开:AI 栏仍是本机驱动,出现「云端对话进行中」提示', !!banner && optsD6 && optsD6.value !== 'cloud', { value: optsD6?.value });
   await shot(page, 'D6-desktop-running-banner');
-  const mem = await membersList(page);
+  // 行里的「[Agent ×n]」是本机 Agent 的连接数(桌面页面的本机对话带着自己的 Agent 连接)
+  const localAgents = (m) => (m?.rows ?? []).reduce((n, r) => n + Number((/\[Agent ×(\d+)\]/.exec(r.text) ?? [])[1] ?? 0), 0);
+  // 〔用户 2026-10-07 定〕本机 Agent 与云端 Agent 都算进 Agent 数:运行中 = 行里的本机 Agent 个数 + 在跑的云端 Agent 1 个。
+  // 本机 Agent 的连接在页面重新打开后要一小会儿才连上,所以等界面追上再判(界面与探针各算各的)
+  let mem = null;
+  await until('D6:成员列表追上(自己那一行下有云端 Agent,顶栏的 Agent 数 = 本机的 + 云端的 1 个)', async () => { mem = await membersList(page); return mem && mem.rows.some((r) => r.cloudTag) && mem.count === `成员：2 人 · Agent：${localAgents(mem) + 1} 个` ? mem : null; }, 20_000, 500);
   const mine = mem?.rows.find((r) => r.cloudTag) ?? null;
-  // 列表里另一行是探针自己的那条创建者连接(另一台设备):成员数 2 = 两台设备,云端 Agent 不占数
-  check('D6:成员列表里自己那一行下有「〈成员名〉的云端 Agent」(不另起一行、不计入成员数)', !!mine && mine.cloudRow === `${creator.username}的云端 Agent` && mem.rows.filter((r) => r.cloudTag).length === 1 && mem.count === '成员：2 人 · Agent：1 个' && mem.button === mem.count, { button: mem?.button, count: mem?.count, rows: mem?.rows.map((r) => r.text.slice(0, 60)) });
+  // 列表里另一行是探针自己的那条创建者连接(另一台设备):成员数 2 = 两台设备,云端 Agent 不另起一行、不占成员数、计入 Agent 数
+  check('D6:成员列表里自己那一行下有「〈成员名〉的云端 Agent」(不另起一行、不计入成员数,计入 Agent 数:本机 Agent 的个数 + 云端的 1 个)', !!mine && mine.cloudRow === `${creator.username}的云端 Agent` && mem.rows.filter((r) => r.cloudTag).length === 1 && mem.count === `成员：2 人 · Agent：${localAgents(mem) + 1} 个` && mem.button === mem.count, { button: mem?.button, count: mem?.count, localAgents: localAgents(mem), rows: mem?.rows.map((r) => r.text.slice(0, 60)) });
   await page.click('[data-pc="cloud-running-banner"] button');
   await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 });
   const attachedD6 = await until('D6:点了「接上看看」后接上还在跑的对话', async () => { const v = await view(page); return v?.streaming ? v : null; }, 20_000, 100);
@@ -757,11 +810,31 @@ async function desktopPhase() {
   // 一轮结束:自己那一行下的「[云端 Agent]」标记几秒内消失、云端 Agent 不再计入 Agent 数(连接还连着,不等回收)。
   // 桌面页面此时可能带着自己的本机 Agent 连接(行里的「[Agent ×n]」),它照常计数:期望的 Agent 数就是行里本机 Agent 的个数
   const tD6End = Date.now();
-  const localAgents = (m) => (m?.rows ?? []).reduce((n, r) => n + Number((/\[Agent ×(\d+)\]/.exec(r.text) ?? [])[1] ?? 0), 0);
   let lastMemD6 = null;
   const memEnd = await until('D6:这一轮结束后几秒内自己那一行不再有云端 Agent 标记、顶栏只剩本机 Agent 的数', async () => { lastMemD6 = await membersList(page); const m = lastMemD6; return m && !m.rows.some((r) => r.cloudTag) && m.count === `成员：2 人 · Agent：${localAgents(m)} 个` ? m : null; }, 30_000, 800);
   const runningD6 = await P(page, async () => [...(await import('/src/editor/sync/presence.ts')).cloudRunning()]).catch((e) => String(e));
   check('D6:一轮结束后几秒内「[云端 Agent]」标记消失、「有一轮在跑」表空了、顶栏的 Agent 数只剩本机 Agent(不等 10 分钟回收)', !!memEnd && Array.isArray(runningD6) && runningD6.length === 0 && Date.now() - tD6End < 25_000, { count: (memEnd ?? lastMemD6)?.count, localAgents: localAgents(memEnd ?? lastMemD6), rows: (memEnd ?? lastMemD6)?.rows.map((r) => r.text.slice(0, 80)), running: runningD6, ms: Date.now() - tD6End });
+
+  /* ---- D12:反向通道——桌面版选了「云端」时,云端 Agent 同样能操作这张页面(契约第 28 节) */
+  {
+    const pageState = () => P(page, () => { const s = window.__pcStore.getState(); return { t: s.t, playing: s.playing }; });
+    await P(page, () => { window.__pcStore.actions.pause(); window.__pcStore.actions.seek(0); });
+    const base = toolCount(await msgs(page));
+    const reqBase = agentReqs(page).length;
+    const localBase = localAiReqs(page).length;
+    await startRun(page, [{ sleepMs: 1500 }, { tool: 'seek', input: { t: 2 } }, { sleepMs: 1800 }, { tool: 'play', input: {} }, { sleepMs: 1800 }, { tool: 'pause', input: {} }, { say: 'D12 做完了' }]);
+    const atSeek = await until('D12:seek 之后桌面页面的播放头到了 2 秒', async () => { const s = await pageState(); return Math.abs(s.t - 2) < 0.05 && s.playing === false ? s : null; }, 15_000, 40);
+    const atPlay = await until('D12:play 之后桌面页面在播', async () => { const s = await pageState(); return s.playing === true ? s : null; }, 15_000, 40);
+    const atPause = await until('D12:pause 之后桌面页面停下', async () => { const s = await pageState(); return s.playing === false && toolCount(await msgs(page)) - base >= 3 ? s : null; }, 15_000, 40);
+    await until('D12:这一轮结束', () => idle(page), 30_000, 100);
+    const a = lastAssistant(await msgs(page));
+    const tools = (a?.parts ?? []).filter((p) => p.kind === 'tool');
+    check('D12:桌面版选了「云端」:云端 Agent 调 seek 后播放头到了 2 秒,调 play 后在播,调 pause 后停下', !!atSeek && !!atPlay && !!atPause && atPause.t > 2, { atSeek, atPlay, atPause });
+    check('D12:AI 栏里三步都成功、回复在', tools.map((t) => t.name).join() === 'seek,play,pause' && tools.every((t) => t.ok === true) && (a?.text ?? '').includes('D12 做完了'), { tools: tools.map((t) => [t.name, t.ok]), text: a?.text });
+    const results = agentReqs(page).slice(reqBase).filter((r) => r.method === 'POST' && /\/page-results$/.test(r.url));
+    check('D12:交回结果的请求是跨源直连 Agent 服务、带委托票据(三次),没有经本机的 /api/ai/chat、/api/mcp/', results.length === 3 && results.every((r) => r.auth === 'ticket') && localAiReqs(page).length === localBase, { results: results.length, auth: results.map((r) => r.auth), localAi: localAiReqs(page).slice(localBase).map((r) => r.url) });
+    await shot(page, 'D12-desktop-reverse-channel');
+  }
   check('D5:桌面页面没有页面错误', page.pageErrors.length === 0, page.pageErrors.slice(0, 3));
   await ctx.close().catch(() => {});
   await killDesktop(desktop);

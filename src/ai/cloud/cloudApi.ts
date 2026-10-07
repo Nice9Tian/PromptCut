@@ -206,6 +206,14 @@ export function createCloudApi(deps: CloudApiDeps) {
       return info;
     },
 
+    /**
+     * 交回反向通道上一次请求的结果(契约第 28 节)。服务端按「这个对话、这位成员、这张页面、还在等的 id」核对,一次有效;
+     * 已经不在等了(超时、这一轮结束了)回 410 `page-request-gone`,调用方不用管。
+     */
+    async pageResult(conversationId: string, body: { id: string; pageId: string; ok: boolean; result?: unknown; error?: string }): Promise<void> {
+      await request(`/conversations/${encodeURIComponent(conversationId)}/page-results`, { method: "POST", json: body });
+    },
+
     async abort(conversationId: string): Promise<void> {
       await request(`/conversations/${encodeURIComponent(conversationId)}/abort`, { method: "POST", json: {} });
     },
@@ -214,8 +222,10 @@ export function createCloudApi(deps: CloudApiDeps) {
      * 看一个对话的事件:先补发 `seq` 大于 `after` 的,再接实时的。流结束(服务端关了、网络断了)时 generator 正常返回或抛错,
      * 由调用方决定要不要重连。对话还不存在时服务端发一条 `{ type: "end", state: "none", seq: 0 }` 就关。
      */
-    async *events(conversationId: string, after: number, signal?: AbortSignal): AsyncGenerator<CloudEvent> {
-      const res = await request(`/conversations/${encodeURIComponent(conversationId)}/events?after=${Math.max(0, Math.floor(after))}`, {
+    async *events(conversationId: string, after: number, signal?: AbortSignal, pageId?: string): AsyncGenerator<CloudEvent> {
+      // `page`:这张页面的页面号(契约第 28 节)。它是页面自己起的随机串,不含任何个人信息
+      const page = pageId ? `&page=${encodeURIComponent(pageId)}` : "";
+      const res = await request(`/conversations/${encodeURIComponent(conversationId)}/events?after=${Math.max(0, Math.floor(after))}${page}`, {
         method: "GET",
         signal,
         headers: { Accept: "text/event-stream" },

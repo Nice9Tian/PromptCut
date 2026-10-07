@@ -9,7 +9,8 @@
  *              卡片源码经文档服务的内容库、花钱的调用记用量;
  *   server     就地执行,不碰项目(`wait`、`report_progress`、多 Agent 的公告板);
  *   initiator  要操作发起人自己的界面(选区、播放头、播放与暂停、网页接管、扫码登录、开页签)。**这是唯一可以缺省的一类**:
- *              发起方不在线时立刻回「发起方不在线」,Agent 据此继续,不卡住;在线时能答的照答(选区、播放头按发消息时的快照);
+ *              发起方不在线时立刻回「发起方不在线」,Agent 据此继续,不卡住;在线时经反向通道让他的页面执行(`page: true` 的四个:
+ *              `seek`、`play`、`pause`、`get_selection`;契约第 28 节),其余四个在线时回 `initiatorOnly` 并写明差什么(`online`);
  *   看画面的四个(`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom`,`look: true`)也是 route:读项目副本,再向同机的渲染服务要一帧
  *              (`server/agent-service/look-client.mjs`;契约第 9.8 节)。这台节点没有配看画面的口子时它们不交给模型,调用回明确的原因。
  *   pending    这一版在云节点上还没接上。逐项写明差什么(`why`),记未达成;不交给模型,调用时回明确的原因。
@@ -26,12 +27,13 @@ const P = 'pending';
 
 const NEED_PY = (what) => `${what}要节点上的 Python 运行环境与模型权重,并把页面里的作业表搬到服务端;这一版还没接上`;
 const NEED_WEB = '网页接管要节点上的浏览器,并让它只经出网闸的代理出网、按对话隔离用户数据目录;这一版还没接上';
+const NEED_LOGIN = '站点的登录态只能留在他自己的机器上,而云端的采集在云节点上跑、用不到它;云端按未登录的画质采集';
 
 /** 工具名 → { mode, why? }。按 `server/tools/` 的分组列,128 个 */
 export const CLOUD_TOOL_PLAN = Object.freeze({
   // project(7)
   get_project: { mode: R }, list_media: { mode: R }, set_project_meta: { mode: R }, set_theme: { mode: R }, list_media_effects: { mode: R },
-  get_selection: { mode: I, what: '页面的选区' },
+  get_selection: { mode: I, what: '页面的选区', page: true },
   import_media: { mode: H },
   // clips(8)
   add_clip: { mode: R }, update_clip: { mode: R }, remove_clip: { mode: R }, duplicate_clip: { mode: R }, split_clip: { mode: R },
@@ -81,17 +83,18 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
   collect_status: { mode: H }, collect_install: { mode: H }, collect_search: { mode: H },
   collect_probe: { mode: H }, collect_download: { mode: H }, collect_job: { mode: H },
   collect_logout: { mode: H },
-  collect_login: { mode: I, what: '登录窗口(要用户自己扫码或输口令)' }, collect_login_check: { mode: I, what: '登录窗口' },
+  // 登录态只能留在发起人自己的机器上,而云端的采集在云节点上跑、用不到它(传到节点就违反「登录态不上传」);所以在线时也做不了
+  collect_login: { mode: I, what: '登录窗口(要用户自己扫码或输口令)', online: NEED_LOGIN }, collect_login_check: { mode: I, what: '登录窗口', online: NEED_LOGIN },
   // browser(8)
   web_open: { mode: P, why: NEED_WEB }, web_view: { mode: P, why: NEED_WEB }, web_click: { mode: P, why: NEED_WEB }, web_type: { mode: P, why: NEED_WEB },
   web_scroll: { mode: P, why: NEED_WEB }, web_read: { mode: P, why: NEED_WEB }, web_close: { mode: P, why: NEED_WEB },
-  web_handoff: { mode: I, what: '网页接管窗口' },
+  web_handoff: { mode: I, what: '网页接管窗口', online: '云端的网页操作(web_*)还没接上,云端 Agent 没有开着的网页可以交给他' },
   // agent(5):公告板四个在服务进程里答;拉起子 Agent 要页面开页签
   declare_scope: { mode: S }, list_agents: { mode: S }, send_message: { mode: S }, check_messages: { mode: S },
-  spawn_agent: { mode: I, what: 'AI 栏的页签' },
+  spawn_agent: { mode: I, what: 'AI 栏的页签', online: '子 Agent 的那一轮要由他的页面另起一个云端对话(新的对话委托、占他的并发名额),这条路还没接上' },
   // core(8)
   wait: { mode: S }, report_progress: { mode: S },
-  seek: { mode: I, what: '播放头' }, play: { mode: I, what: '播放' }, pause: { mode: I, what: '播放' },
+  seek: { mode: I, what: '播放头', page: true }, play: { mode: I, what: '播放', page: true }, pause: { mode: I, what: '播放', page: true },
   background_job_status: { mode: P, why: '它查的后台作业(语音识别、扩展包安装)在云节点上还没接上' },
   auto_workflow: { mode: P, why: `一键流程的第一步是语音识别;${NEED_PY('语音识别')}` },
   auto_workflow_status: { mode: P, why: '一键流程在云节点上还没接上' },
@@ -150,7 +153,10 @@ export const CLOUD_AGENT_SIDE = Object.freeze(new Set(['list_cards', 'sound_pres
 /** 要操作发起人界面的 */
 export const CLOUD_INITIATOR_TOOLS = Object.freeze(new Set(namesOf(I)));
 
-/** 读页面状态、发起方在线时按发消息时的快照答的 */
+/** 发起方在线时经反向通道让他的页面执行的(契约第 28 节);页面那一侧的白名单是 `src/ai/cloud/pageRequests.ts` 的 `CLOUD_PAGE_REQUEST_TOOLS`,单测 CA-REV-08 对账 */
+export const CLOUD_PAGE_TOOLS = Object.freeze(new Set(Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.page === true).map(([n]) => n)));
+
+/** 读页面状态的:发起这一轮的那张页面连不上、但这位成员有别的窗口连着看时,按发消息时的快照答 */
 export const CLOUD_PAGE_STATE_READS = Object.freeze(new Set(['get_selection']));
 
 /** 要页面播放头的切剪辑工具:发起方在线用发消息时的播放头,不在线照常执行、播放头按 0 记并在结果里注明 */
@@ -164,12 +170,14 @@ export function initiatorOffline(tool) {
   return { ok: false, initiatorOffline: true, error: `发起方不在线,${tool} 要用到他的${what}。请按项目内容继续,不要等待。` };
 }
 
-/** 发起方在线、但这个工具要反过来操作他的页面:云端到页面的反向通道还没有 */
+/** 发起方在线、但这个工具在云端经不了他的页面(网页接管、扫码登录、开子 Agent 页签):写明差什么 */
 export function initiatorUnreachable(tool) {
-  const what = CLOUD_TOOL_PLAN[tool]?.what ?? '页面';
+  const plan = CLOUD_TOOL_PLAN[tool];
+  const what = plan?.what ?? '页面';
+  const why = plan?.online ?? '云端还不能经他的页面做这一步';
   return {
     ok: false, initiatorOnly: true,
-    error: `${tool} 要操作发起人的${what};云端的对话现在只读得到他发消息时的选区与播放头,还不能反过来操作他的页面。请按项目内容继续,需要的话告诉用户自己在界面上操作。`,
+    error: `${tool} 要操作发起人的${what}:${why}。请按项目内容继续,需要的话告诉用户自己在界面上操作。`,
   };
 }
 
@@ -218,7 +226,7 @@ const CLOUD_SYSTEM_NOTE_LINES = [
   '你是托管方的云端 Agent,运行在云节点上。你的改动经文档服务落到项目里,所有成员都看得到;用户关掉软件后你照常把这一轮做完。',
   '工具与本机一致,下面是仅有的差别:',
   '',
-  '- **用户可能已经离开。** 要用到他界面的工具(选区、播放头、播放与暂停、网页接管、扫码登录、开子 Agent 页签)在他不在线时会回「发起方不在线」:不要等,按项目内容继续,在进度汇报里说明哪一步没用上页面状态。',
+  '- **用户可能已经离开。** 要用到他界面的工具(`get_selection`、`seek`、`play`、`pause`)在他开着发消息的那个页面时照常生效;他不在线时会回「发起方不在线」:不要等、不要重试,按项目内容继续,在进度汇报里说明哪一步没用上页面状态。网页接管、扫码登录、开子 Agent 页签在云端做不了,需要时请用户自己在界面上操作。',
   LOOK_LINE,
   '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、自定义测量(measure_audio_js)、网页操作(web_*)。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
   '- **素材:** 附件在这个对话的工作目录里,地址形如 `work:attachments/<文件名>`,用 `import_media` 传这个地址装进素材库;网上的文件直接给 `import_media` 传 http(s) 地址。素材库是空的也可以只用卡片做片子,不必为了「有素材」去找素材。',

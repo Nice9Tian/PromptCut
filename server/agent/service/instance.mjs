@@ -23,7 +23,7 @@ import { annotateError, annotateResult, createUserEditingBoard, userEditingFor }
 import { effectiveIsFile } from '../../card-overrides.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
-  CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,
+  CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PAGE_TOOLS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,
   cloudSystemNote, cloudLookResult, lookUnavailable, lookSourceUnavailable,
 } from './cloud-tools.mjs';
 import { attachmentsPrompt } from './hosted-tools.mjs';
@@ -44,7 +44,8 @@ function sendJson(res, code, data) {
  * @param {'desktop' | 'hosted'} [env.profile] 缺省 `desktop`。`hosted`(云节点,契约第 3 节)时另给:
  *   `projectId`(这个实例只为它服务)、`docUrl`、`protocolsFor(对话号, 对话 id)`(连文档服务的子协议)、
  *   `execSerial`(进程级的串行锁,所有实例共用)、`log(event, fields)`,以及可选的
- *   `initiatorOnline(对话 id)`(发起这一轮的成员此刻有没有连着看)、`onWrite(对话 id, { opId, rev, clipIds })`(一次写入落地了)、
+ *   `initiatorOnline(对话 id)`(发起这一轮的成员此刻有没有连着看)、`pageCall(对话 id, 工具, 参数)`(反向通道:让发起这一轮的那张页面执行一次,
+ *   回 `{ ok: true, result: { ok, result?, error? } }` 或 `{ offline: true }`;契约第 28 节)、`onWrite(对话 id, { opId, rev, clipIds })`(一次写入落地了)、
  *   `onFinalClose({ code, reason })`(文档服务以 4003 / 4004 关掉了数据连接:撤销)、
  *   `hostedTools`(`hosted-tools.mjs` 的进程级那一份:在服务端实现的工具)、`ownerKey`(对话归谁,工作区的目录按它分)
  */
@@ -529,10 +530,11 @@ export function createAgentInstance(env) {
         await hostedContext(agent || '')?.refreshCards().catch(() => {});
         return cloudLookResult(tool, await callToolChecked(tool, toolDef, args, agent, callId));
       }
-      // 要操作发起人界面的(契约第 9.2 节):不在线立刻明说;在线时读得到的(选区)按发消息时的快照答,要反过来操作页面的做不了
+      // 要操作发起人界面的(契约第 9.2、28 节):四个经反向通道让发起这一轮的那张页面执行;那张页面不在就明说,不卡住。
+      // 其余四个(网页接管、扫码登录两个、开子 Agent 页签)不在线回「发起方不在线」,在线回做不了的原因
       if (CLOUD_INITIATOR_TOOLS.has(tool)) {
+        if (CLOUD_PAGE_TOOLS.has(tool)) return hostedPageTool(tool, args, agent || '');
         if (!hostedInitiatorOnline(agent || '')) return initiatorOffline(tool);
-        if (CLOUD_PAGE_STATE_READS.has(tool)) return hostedPageRead(tool, agent || '');
         return initiatorUnreachable(tool);
       }
       // 这个项目自己的用户卡:列一遍(有变才取正文),之后的等级判定、进锁登记都用它
@@ -1335,7 +1337,39 @@ export function createAgentInstance(env) {
     }
   }
 
-  /** 读页面状态的工具(get_selection):按发消息时的快照答;发起方不在线、或没带快照,立刻明说,不等 */
+  /**
+   * 经反向通道让发起这一轮的那张页面执行(`seek`、`play`、`pause`、`get_selection`;契约第 28 节)。
+   * 参数先按本机同样的规矩查(必填、`seek` 的 `t` 是不小于 0 的有限数),不合规矩的不发给页面。
+   * 页面执行了:回它交回的结果(与本机同一份实现,形状相同);`seek` 做成后把这个对话记着的播放头改成新的(之后切剪辑的工具用它)。
+   * 那张页面不在(没连着、超时、等的中途断了、旧页面没有反向通道):`get_selection` 在这位成员还有别的窗口连着看时退回发消息时的快照
+   * (注明是快照),否则与另外三个一样回「发起方不在线」。
+   */
+  async function hostedPageTool(tool, args, agent) {
+    const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+    if (tool === 'seek' && !(typeof a.t === 'number' && Number.isFinite(a.t) && a.t >= 0)) {
+      // 没有人连着看时先说不在线(Agent 该知道的是「这一步用不上页面」,而不是去补参数重试)
+      if (!hostedInitiatorOnline(agent)) return initiatorOffline(tool);
+      return { ok: false, error: 'seek 要给 t(秒,不小于 0 的数)。' };
+    }
+    const send = tool === 'seek' ? { t: a.t } : {};
+    let out = null;
+    try { out = env.pageCall ? await env.pageCall(agent, tool, send) : null; } catch { out = null; }
+    if (out?.ok === true && out.result && typeof out.result === 'object') {
+      const r = out.result;
+      if (r.ok !== true) return { ok: false, error: String(r.error || `${tool} 在发起人的页面上没有做成`) };
+      if (tool === 'seek') {
+        const ps = hostedPageStates.get(agent);
+        hostedPageStates.set(agent, { ...(ps && typeof ps === 'object' ? ps : {}), t: a.t });
+      }
+      if (tool === 'get_selection') return r.result ?? null;
+      return r.result && typeof r.result === 'object' ? r.result : { ok: true };
+    }
+    agentLog('agent.page.offline', { tool, why: out?.why ?? 'none' });
+    if (CLOUD_PAGE_STATE_READS.has(tool)) return hostedPageRead(tool, agent);
+    return initiatorOffline(tool);
+  }
+
+  /** 读页面状态的工具(get_selection)的退路:按发消息时的快照答;发起方不在线、或没带快照,立刻明说,不等 */
   function hostedPageRead(tool, agent) {
     const ps = hostedPageStates.get(agent) ?? null;
     const online = hostedInitiatorOnline(agent);

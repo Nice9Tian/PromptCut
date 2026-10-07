@@ -36,6 +36,11 @@
  *       当对话委托随消息带一律 403 `bad-grant`,不起任何一轮。别的对话的委托、别的成员的委托、短的委托票据冒充对话委托同样被拒。
  *   I7  过期的成员身份证明被拒:过期的委托票据 401;过期的对话委托 403 `bad-grant`。
  *   I8  只读成员发起的对话改不了项目:丁让模型改文案——工具被文档服务拒绝,项目版本不变;读照常。
+ *   R1～R3 反向通道(契约第 28 节:发起方在线时云端 Agent 经事件流让他的页面执行 `seek` 等,页面经 `POST …/page-results` 交回):
+ *       R1 成员乙(别的项目)、成员丙(同项目的别的成员)交不了甲的对话在等的结果(404,当作没有这个对话),也看不到甲的事件流里的请求;
+ *          甲自己拿编出来的 id、不对的页面号来交被拒(410);这些都没有让在等的那一次结束;甲的页面交回后收下;
+ *       R2 重复的 id 被拒(410);过期的 id(到时限没交,工具已回「发起方不在线」)被拒(410);这一轮结束之后再交被拒;这一轮照样跑完;
+ *       R3 只读成员的对话里这四个只读类工具(`seek`、`play`、`pause`、`get_selection`)能用,项目版本与内容不变。
  *   I9  创建者关掉开关后正在进行的对话被停掉:甲的对话正在连续写入(甲的页面连接此时已全部断开——成员不在线),
  *       创建者关开关 → 2 秒内事件流收到 `error { code: 'revoked', reason: 'disabled' }` 与 `end`,对话记录里留下原因;
  *       之后没有新的写入;再发消息回 403 `disabled`;同一时刻丙在项目二的对话照常跑完(只停这个项目的)。开回来后恢复。
@@ -363,6 +368,81 @@ async function main() {
     };
   }
   const stableRev = async (observer, docId) => { const a = (await projectOf(observer, docId)).rev; await sleep(1500); const b = (await projectOf(observer, docId)).rev; return { a, b, stable: a === b }; };
+
+  // ---------- R1～R3 反向通道(契约第 28 节)
+  {
+    const PAGE = `pg-${randomBytes(16).toString('hex')}`;
+    const post = (api, conv, body, opt = {}) => api.call('POST', `/v1/conversations/${conv}/page-results`, { body, ...opt });
+    const before = await projectOf(owner1, p1.projectId);
+    // 甲的一轮:两次 seek。第一次由甲的页面交回(之前先让别人来试);第二次不交,等它到时限
+    const sent = await A.jia.send('conv-rev', mockScript([{ sleepMs: 600 }, { tool: 'seek', input: { t: 1 } }, { tool: 'seek', input: { t: 2 } }, { sleepMs: 300 }, { say: '反向通道走完' }]), { extra: { pageId: PAGE } });
+    const tried = {};
+    const reqs = [];
+    let work = Promise.resolve();
+    // 乙(项目二)、丙(项目一的别的成员)各自开甲这个对话的事件流,报同一个页面号:看不到任何请求
+    const spyYi = A.yi.events('conv-rev', { page: PAGE, ms: 8_000 });
+    const spyBing = A.bing1.events('conv-rev', { page: PAGE, ms: 8_000 });
+    const ev = await A.jia.events('conv-rev', {
+      page: PAGE, ms: 60_000,
+      onEvent: (e) => {
+        if (e.type !== 'page.request') return;
+        reqs.push(e);
+        if (reqs.length !== 1) return; // 第二次不交
+        work = (async () => {
+          const good = { id: e.id, pageId: PAGE, ok: true, result: { ok: true } };
+          tried.yi = await post(A.yi, 'conv-rev', good);
+          tried.bing = await post(A.bing1, 'conv-rev', good);
+          tried.anon = await post(A.jia, 'conv-rev', good, { bearer: 'v1.aaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbb' });
+          tried.forgedId = await post(A.jia, 'conv-rev', { ...good, id: randomBytes(16).toString('base64url') });
+          tried.wrongPage = await post(A.jia, 'conv-rev', { ...good, pageId: `pg-${randomBytes(16).toString('hex')}` });
+          tried.noPage = await post(A.jia, 'conv-rev', { id: e.id, ok: true, result: { ok: true } });
+          tried.otherConv = await post(A.jia, 'conv-jia', good);
+          tried.mine = await post(A.jia, 'conv-rev', good);
+          tried.dup = await post(A.jia, 'conv-rev', good);
+        })();
+      },
+    });
+    await work;
+    const rs = ev.events.filter((e) => e.type === 'tool_result');
+    const [yiSaw, bingSaw] = await Promise.all([spyYi, spyBing]);
+    const code = (r) => `${r?.status}:${r?.code ?? (r?.ok === true ? 'ok' : '')}`;
+    check('R1 成员乙、成员丙交不了甲的对话在等的结果,也看不到甲的事件流里的请求;编的 id、不对的页面号被拒;都没有让在等的那一次结束', sent.status === 202 && reqs.length === 2 && reqs.every((r) => r.seq === undefined && r.tool === 'seek')
+      && tried.yi?.status === 404 && tried.bing?.status === 404 && tried.anon?.status === 401
+      && [tried.forgedId, tried.wrongPage, tried.noPage].every((r) => r?.status === 410 && r.code === 'page-request-gone') && [404, 410].includes(tried.otherConv?.status)
+      && tried.mine?.status === 200 && tried.mine.ok === true && rs[0]?.name === 'seek' && rs[0].ok === true
+      && !yiSaw.events.some((e) => e.type === 'page.request') && !bingSaw.events.some((e) => e.type === 'page.request') && yiSaw.events.every((e) => e.state === 'none') && bingSaw.events.every((e) => e.state === 'none'), {
+      sent: sent.status, requests: reqs.map((r) => r.tool), yi: code(tried.yi), bing: code(tried.bing), badTicket: code(tried.anon), forgedId: code(tried.forgedId), wrongPage: code(tried.wrongPage), noPage: code(tried.noPage), otherConv: code(tried.otherConv), mine: code(tried.mine), firstSeek: rs[0]?.ok ?? null, yiSaw: yiSaw.events.map((e) => `${e.type}:${e.state ?? ''}`), bingSaw: bingSaw.events.map((e) => `${e.type}:${e.state ?? ''}`),
+    });
+    // 第二次没交:到时限后工具回「发起方不在线」,这一轮照样跑完;过期的 id、这一轮结束之后再交,都被拒
+    const expired = reqs[1] ? await post(A.jia, 'conv-rev', { id: reqs[1].id, pageId: PAGE, ok: true, result: { ok: true } }) : null;
+    const afterEnd = reqs[0] ? await post(A.jia, 'conv-rev', { id: reqs[0].id, pageId: PAGE, ok: true, result: { ok: true } }) : null;
+    const meta = await A.jia.call('GET', '/v1/conversations/conv-rev');
+    const replay = await A.jia.events('conv-rev', { page: PAGE });
+    check('R2 重复的 id 被拒;过期的 id(到时限没交)被拒,工具回「发起方不在线」、这一轮照样跑完;结束之后再交被拒;补看的人看不到请求', tried.dup?.status === 410 && tried.dup.code === 'page-request-gone'
+      && rs.length === 2 && rs[1].ok === false && /发起方不在线/.test(String(rs[1].summary ?? '')) && ev.done && ev.events.at(-1)?.state === 'idle' && ev.events.some((e) => e.type === 'text' && /反向通道走完/.test(String(e.delta ?? '')))
+      && expired?.status === 410 && afterEnd?.status === 410 && meta.meta?.state === 'idle' && !replay.events.some((e) => e.type === 'page.request'), {
+      dup: code(tried.dup), secondSeek: `${rs[1]?.ok}:${String(rs[1]?.summary ?? '').slice(0, 60)}`, end: ev.events.at(-1)?.state ?? null, expired: code(expired), afterEnd: code(afterEnd), state: meta.meta?.state ?? null,
+    });
+    // 只读成员丁:这四个不改项目,能用
+    const PAGE_D = `pg-${randomBytes(16).toString('hex')}`;
+    const sentD = await A.ding.send('conv-ding-rev', mockScript([{ sleepMs: 600 }, { tool: 'seek', input: { t: 1.5 } }, { tool: 'play', input: {} }, { tool: 'pause', input: {} }, { tool: 'get_selection', input: {} }, { say: '只读成员也能看着播' }]), { extra: { pageId: PAGE_D } });
+    const answered = [];
+    let workD = Promise.resolve();
+    const evD = await A.ding.events('conv-ding-rev', {
+      page: PAGE_D, ms: 60_000,
+      onEvent: (e) => {
+        if (e.type !== 'page.request') return;
+        workD = workD.then(async () => { answered.push([e.tool, (await post(A.ding, 'conv-ding-rev', { id: e.id, pageId: PAGE_D, ok: true, result: e.tool === 'get_selection' ? null : { ok: true } })).status]); });
+      },
+    });
+    await workD;
+    const rsD = evD.events.filter((e) => e.type === 'tool_result');
+    const after = await projectOf(owner1, p1.projectId);
+    check('R3 只读成员的对话里 seek、play、pause、get_selection 能用,项目版本与内容不变', sentD.status === 202 && evD.done && rsD.map((r) => r.name).join() === 'seek,play,pause,get_selection' && rsD.every((r) => r.ok === true)
+      && answered.map((a) => a[1]).join() === '200,200,200,200' && after.rev === before.rev && JSON.stringify(after.project) === JSON.stringify(before.project), {
+      sent: sentD.status, toolResults: rsD.map((r) => `${r.name}:${r.ok ? 'ok' : 'error'}`), answered, rev: [before.rev, after.rev],
+    });
+  }
 
   // ---------- I9 创建者关开关(成员此时不在线)
   {
