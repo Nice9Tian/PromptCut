@@ -1,5 +1,5 @@
 /**
- * 四段最终验收运行器(scripts/acceptance/)的单测:命令行解析、清单格式校验、选取与续跑、判定、占位符、覆盖矩阵,
+ * 四段最终验收运行器(scripts/acceptance/)的单测:命令行解析、清单格式校验、按级别选取与续跑、判定(耗时只记录)、占位符、覆盖矩阵、发版耗时记录,
  * 以及一份假清单跑真的子进程流程(判定、重跑定稳定性、断点续跑、提交哈希变了拒绝续跑)。
  * 编号 FSA-01～:每条用例名里带编号,便于对账。
  */
@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   parseArgs, validateManifest, selectItems, planResume, judge, combineAttempts, expandPlaceholders, expandCmd,
   lastJsonObject, shiftPorts, globToRegExp, matchesToken, coverageReport, taskMatrix, summaryText, listText, CATEGORIES,
+  levelOf, LEVELS, parseTimingLines, releaseTimingsSection, VERDICTS, DONE_VERDICTS,
 } from '../../scripts/acceptance/acceptance-lib.mjs';
 import { ITEMS, EXCLUDED_PROBE_FILES, TASK_ACCEPTANCE } from '../../scripts/acceptance/four-stage-manifest.mjs';
 
@@ -20,7 +21,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const RUNNER = path.join(ROOT, 'scripts', 'acceptance', 'four-stage-acceptance.mjs');
 
 const base = (over = {}) => ({
-  id: 'T-1', name: '示例', category: 'G0', taskRef: '任务书一 第 1 条', cmd: ['node', '-e', '0'], pass: { exit: 0 }, ...over,
+  id: 'T-1', name: '示例', category: 'G0', level: 'local', taskRef: '任务书一 第 1 条', cmd: ['node', '-e', '0'], pass: { exit: 0 }, ...over,
 });
 
 /* ---------------------------------------------------------------- 命令行 */
@@ -79,8 +80,14 @@ test('FSA-04 validateManifest:逐项抓错', () => {
   bad(base({ id: 'T-2', pass: { must: ['('] } }), /不是合法正则/);
   bad(base({ id: 'T-2', pass: { limits: { n: { max: 1 } } } }), /没有对应的 metrics/);
   bad(base({ id: 'T-2', pass: { metrics: { n: 'x' }, limits: { n: {} } } }), /eq \/ max \/ min/);
-  bad(base({ id: 'T-2', timing: 'laptop' }), /timingNote/);
+  bad(base({ id: 'T-2', timing: 'record' }), /timingNote/);
   bad(base({ id: 'T-2', timing: 'yes' }), /timing 只能是/);
+  bad(base({ id: 'T-2', timing: 'laptop', timingNote: 'x' }), /timing 只能是/); // 「只在笔记本上作数」这一档已经没有了
+  bad(base({ id: 'T-2', cmd: undefined, pass: undefined, manual: '看图', timing: 'record', timingNote: 'x' }), /要有命令/);
+  bad(base({ id: 'T-2', level: undefined }), /level 要写/);
+  bad(base({ id: 'T-2', level: 'laptop' }), /level 要写/);
+  bad(base({ id: 'T-2', cmd: undefined, pass: undefined, remoteOnly: '在节点上验这一项' }), /level 要是 network/);
+  bad(base({ id: 'T-2', level: 'network' }), /不带本机命令/);
   bad(base({ id: 'T-2', needs: ['redis'] }), /needs 只能是/);
   bad(base({ id: 'T-2', prereq: ['不存在'] }), /prereq/);
   bad(base({ id: 'T-2', manual: '看图' }), /不能带命令/);
@@ -91,7 +98,7 @@ test('FSA-04 validateManifest:逐项抓错', () => {
   bad(base({ id: 'T-2', timeoutMin: 999 }), /timeoutMin/);
   bad(base({ id: 'T-2', requiresText: [{ file: 'a' }] }), /requiresText/);
   assert.ok(validateManifest([]).length);
-  assert.equal(validateManifest([base({ id: 'M-1', cmd: undefined, pass: undefined, manual: '看图' }), base({ id: 'R-1', cmd: undefined, pass: undefined, remoteOnly: '新节点上验' })]).length, 0);
+  assert.equal(validateManifest([base({ id: 'M-1', cmd: undefined, pass: undefined, manual: '看图' }), base({ id: 'R-1', level: 'network', cmd: undefined, pass: undefined, remoteOnly: '新节点上验' })]).length, 0);
 });
 
 test('FSA-05 清单自洽:prereq 都在、占位符都认得、端口不踩禁区、命令里的脚本存在或标了 requires', () => {
@@ -133,15 +140,23 @@ test('FSA-06 任务书的每一条编号验收都至少被清单里一项覆盖'
   for (const c of CATEGORIES) assert.ok(ITEMS.some((it) => it.category === c), `类别 ${c} 没有项`);
 });
 
-test('FSA-07 清单里带耗时门槛的项都写了门槛,只能在新节点上验的项不带命令', () => {
+test('FSA-07 清单里记耗时的项都写了记什么;每项都标了级别;真实网络验证的项不带命令;没有「只在笔记本上作数」的项', () => {
   for (const it of ITEMS) {
-    if (it.timing === 'laptop') assert.ok(it.timingNote);
+    assert.ok(LEVELS.includes(it.level), `${it.id} 没标级别`);
+    assert.equal(levelOf(it), it.remoteOnly ? 'network' : 'local', it.id);
+    assert.ok(it.timing === undefined || it.timing === false || it.timing === 'record', `${it.id} 的 timing`);
+    if (it.timing === 'record') assert.ok(it.timingNote && (it.cmd || it.steps), it.id);
+    assert.ok(!/笔记本|待复核|laptop|authoritative/.test(JSON.stringify(it)), `${it.id} 还带着按笔记本判的说法`);
     if (it.realModel) assert.ok(it.remoteOnly, `${it.id}:真实模型的行写在 remoteOnly 里`);
     if (it.remoteOnly) { assert.ok(!it.cmd && !it.steps, it.id); assert.ok(typeof it.remoteOnly === 'string' && it.remoteOnly.length > 10); }
     if (it.manual) assert.ok(!it.cmd && !it.steps, it.id);
   }
-  assert.ok(ITEMS.filter((i) => i.timing === 'laptop').length >= 8);
-  assert.ok(ITEMS.filter((i) => i.remoteOnly).length >= 8);
+  assert.ok(ITEMS.filter((i) => i.timing === 'record').length >= 14);
+  assert.equal(ITEMS.filter((i) => i.level === 'network').length, 16);
+  // 运行器没有「待笔记本复核」这一档判定
+  assert.ok(!VERDICTS.some((v) => v.startsWith('ref-')));
+  assert.deepEqual([...DONE_VERDICTS], ['pass']);
+  assert.throws(() => parseArgs(['--authoritative']), /看不懂的参数/);
 });
 
 /* ---------------------------------------------------------------- 选取与续跑 */
@@ -174,7 +189,7 @@ test('FSA-08 selectItems:编号、通配、类别、--from;可选项缺省不跑
 
 test('FSA-09 planResume:已过的跳过,不过的、缺的、没跑过的重跑;不续跑时全跑', () => {
   const prev = [
-    { id: 'G0-1', verdict: 'pass' }, { id: 'GR-1', verdict: 'ref-pass' }, { id: 'GR-2', verdict: 'fail' },
+    { id: 'G0-1', verdict: 'pass' }, { id: 'GR-1', verdict: 'pass' }, { id: 'GR-2', verdict: 'fail' },
     { id: 'P-a', verdict: 'missing' }, { id: 'S1-1', verdict: 'flaky' },
   ];
   const sel = SAMPLE.filter((i) => !i.optional);
@@ -236,14 +251,20 @@ test('FSA-13 judge:结果行里 fails 非空或 ok:false,即使退出码是 0 �
   assert.equal(judge(base({ pass: { exit: 0, strictJson: false } }), run1({ output: '{"fails":["x"]}' })).verdict, 'pass');
 });
 
-test('FSA-14 judge:带耗时门槛的项在 PC 上记 ref-pass / ref-fail', () => {
-  const it = base({ timing: 'laptop', timingNote: 'p50 ≤ 300 ms' });
-  assert.equal(judge(it, run1({})).verdict, 'ref-pass');
-  assert.equal(judge(it, run1({ exitCode: 1 })).verdict, 'ref-fail');
-  // 笔记本(--authoritative)上按过 / 不过判
-  assert.equal(judge(it, run1({}), { authoritative: true }).verdict, 'pass');
-  assert.equal(judge(it, run1({ exitCode: 1 }), { authoritative: true }).verdict, 'fail');
-  assert.equal(parseArgs(['--authoritative']).authoritative, true);
+test('FSA-14 judge:耗时只记录——记耗时的项与别的项一样按过 / 不过判;TIMINGS 行里的数字再大也不影响判定', () => {
+  const it = base({ timing: 'record', timingNote: '编码 p50' });
+  assert.equal(judge(it, run1({})).verdict, 'pass');
+  assert.equal(judge(it, run1({ exitCode: 1 })).verdict, 'fail');
+  const huge = 'TIMINGS {"probe":"p","timings":[{"name":"编码 p50","value":999999,"unit":"ms","formerLimit":"≤ 300 ms"},{"name":"没量到的","value":null,"unit":"ms"}]}\n{"ok":true,"fails":[]}';
+  const j = judge(it, run1({ output: huge }));
+  assert.equal(j.verdict, 'pass');
+  assert.deepEqual(j.reasons, []);
+  assert.equal(j.timings.length, 2);
+  assert.deepEqual(j.timings[0], { probe: 'p', name: '编码 p50', value: 999999, unit: 'ms', formerLimit: '≤ 300 ms' });
+  assert.equal(j.resultLine, '{"ok":true,"fails":[]}', 'TIMINGS 行不当结果行');
+  // 功能断言照旧:同样的耗时数字,结果行 fails 非空就不过
+  assert.equal(judge(it, run1({ output: 'TIMINGS {"probe":"p","timings":[{"name":"a","value":1}]}\n{"fails":["黑帧 3"]}' })).verdict, 'fail');
+  assert.deepEqual(parseTimingLines('x\nTIMINGS 不是 json\nTIMINGS {"probe":"q","timings":[{"name":"n","value":2}]}\n'), [{ probe: 'q', name: 'n', value: 2 }]);
 });
 
 test('FSA-15 judge:多步的项,每一步都要过;结果行取输出里最后的 JSON,没有就取最后一行', () => {
@@ -262,7 +283,6 @@ test('FSA-16 combineAttempts:全过、全不过、有过有不过(flaky)', () =>
   assert.deepEqual(combineAttempts([{ verdict: 'pass' }, { verdict: 'pass' }]), { verdict: 'pass', stability: '2/2' });
   assert.deepEqual(combineAttempts([{ verdict: 'fail' }, { verdict: 'fail' }, { verdict: 'fail' }]), { verdict: 'fail', stability: '0/3' });
   assert.deepEqual(combineAttempts([{ verdict: 'fail' }, { verdict: 'pass' }]), { verdict: 'flaky', stability: '1/2' });
-  assert.deepEqual(combineAttempts([{ verdict: 'ref-fail' }, { verdict: 'ref-pass' }]), { verdict: 'ref-fail', stability: '1/2' });
 });
 
 /* ---------------------------------------------------------------- 占位符与小工具 */
@@ -293,36 +313,94 @@ test('FSA-19 coverageReport:没登记也没排除的探针会被列出', () => {
 test('FSA-20 summaryText 与 listText 不出错、带关键信息', () => {
   const items = [
     { id: 'G0-1', name: 'tsc', category: 'G0', verdict: 'pass', durationSec: 5, resultLine: '', logs: ['logs/G0-1.log'] },
-    { id: 'GR-7', name: 'stream', category: 'G0-R', verdict: 'ref-fail', reasons: ['退出码 1'], resultLine: '{"fails":["x"]}', logs: [], known: '已知问题' },
-    { id: 'P-1', name: 'flaky', category: '探针', verdict: 'flaky', stability: '1/2', reasons: [], logs: [] },
+    { id: 'GR-7', name: 'stream', category: 'G0-R', level: 'local', verdict: 'fail', reasons: ['退出码 1'], resultLine: '{"fails":["x"]}', logs: [], known: '已知问题',
+      timings: [{ probe: 'stream-produce-probe', name: '编码 p50', value: 412, unit: 'ms', formerLimit: '≤ 300 ms' }] },
+    { id: 'P-1', name: 'flaky', category: '探针', level: 'local', verdict: 'flaky', stability: '1/2', reasons: [], logs: [] },
+    { id: 'S1-r2', name: '节点上换页面', category: '第一段', level: 'network', verdict: 'remote', reasons: ['在节点上做'], logs: [] },
   ];
   const t = summaryText({ meta: { startedAt: 'a', finishedAt: 'b', commit: 'abc' }, items });
   assert.match(t, /✓ G0-1/);
-  assert.match(t, /≉ GR-7/);
+  assert.match(t, /✗ GR-7/);
+  // 两级分开计数;耗时数字列出来、标明只记录
+  assert.match(t, /本地验证 3 项:过 1,  不过 1,  不稳定 1/);
+  assert.match(t, /真实网络验证 1 项:在节点上做\(脚本不跑\) 1/);
+  assert.match(t, /耗时\(只记录\):编码 p50=412 ms/);
+  assert.ok(!/笔记本|待复核/.test(t));
   assert.match(t, /稳定性1\/2/);
   assert.match(t, /已知问题/);
   const l = listText(ITEMS);
   assert.match(l, /GR-3/);
-  assert.match(l, /笔记本复核/);
-  assert.match(l, /只能在新节点上验/);
+  assert.ok(!/笔记本复核|待笔记本/.test(l));
+  // 两级分明:先本地验证,后真实网络验证
+  const a = l.indexOf('# 本地验证(104 项)');
+  const b = l.indexOf('# 真实网络验证(16 项)');
+  assert.ok(a === 0 && b > a, l.slice(0, 80));
+  assert.ok(l.indexOf('S1-r2') > b && l.indexOf('GR-3') < b);
+  assert.match(l, /只记录的耗时:/);
+});
+
+test('FSA-26 selectItems 按级别:缺省 all;local 不含真实网络验证的项;点名另一级的项抛错并说加哪个 --level', () => {
+  const two = [...SAMPLE, base({ id: 'S4-r1', category: '第四段', level: 'network', cmd: undefined, pass: undefined, remoteOnly: '在节点上部署并实测' })];
+  assert.deepEqual(selectItems(two, { level: 'local' }).map((i) => i.id), ['G0-1', 'GR-1', 'GR-2', 'P-a', 'S1-1']);
+  assert.deepEqual(selectItems(two, { level: 'network' }).map((i) => i.id), ['S4-r1']);
+  assert.equal(selectItems(two, { level: 'all' }).length, 6);
+  assert.equal(selectItems(two).length, 6);
+  assert.throws(() => selectItems(two, { level: 'local', only: ['S4-r1'] }), /属于真实网络验证.*--level network/);
+  assert.throws(() => selectItems(two, { level: 'network', only: ['G0-1'] }), /属于本地验证.*--level local/);
+  assert.deepEqual(selectItems(two, { level: 'local', only: ['探针', 'G0'] }).map((i) => i.id), ['G0-1', 'P-a', 'X-b']);
+  assert.throws(() => selectItems(two, { level: 'local', only: ['第四段', 'G0'] }), /--only 第四段:属于真实网络验证/);
+  // 旧结果里的 ref-pass(「PC 上过了、待笔记本复核」)不再算已过,续跑时会重跑
+  assert.deepEqual(planResume(two.slice(0, 1), [{ id: 'G0-1', verdict: 'ref-pass' }], { resume: true }).run.map((i) => i.id), ['G0-1']);
+  assert.equal(parseArgs(['--level', 'network']).level, 'network');
+  assert.equal(parseArgs([]).level, null);
+  assert.throws(() => parseArgs(['--level', 'laptop']), /local、network 或 all/);
+  assert.throws(() => parseArgs(['--timings-from', 'x.json']), /--release-timings/);
+  // 真清单:本地验证 104 项里可跑的缺省项都不带 remoteOnly
+  assert.ok(selectItems(ITEMS, { level: 'local' }).every((i) => !i.remoteOnly));
+  assert.equal(selectItems(ITEMS, { level: 'network', includeOptional: true }).length, 16);
+});
+
+test('FSA-27 releaseTimingsSection:版本与提交、机器配置、各项用时、探针量的耗时;放大过的数字不进记录', () => {
+  const run = {
+    meta: { commit: 'c'.repeat(40), dirtyFiles: 0, startedAt: '2026-10-07T00:00:00Z', finishedAt: '2026-10-07T01:00:00Z', host: 'PC-1', node: 'v24.0.0', cpus: 20,
+      machine: { name: 'PC-1', cpu: 'Some CPU 3.2GHz', logicalCores: 20, physicalCores: 14, memoryBytes: 32 * 1024 ** 3, gpus: ['GPU A', 'GPU B'], os: 'Windows 11 Pro 10.0.26200 x64' } },
+    items: [
+      { id: 'GR-7', name: '轨道流生产', verdict: 'pass', durationSec: 47, timing: 'record', timings: [{ probe: 'p', name: '编码 p50', value: 143, unit: 'ms', formerLimit: '≤ 300 ms' }] },
+      { id: 'GR-9', name: '兜底顺序', verdict: 'pass', durationSec: 66, timing: 'record', timings: [] },
+      { id: 'S1-m1', name: '人工项', verdict: 'manual' },
+      { id: 'X', name: '放大过', verdict: 'pass', durationSec: 3, timings: [{ probe: 'p', name: '放大的', value: 143000, unit: 'ms', scaled: 1000 }] },
+    ],
+  };
+  const md = releaseTimingsSection(run, { version: '0.7.18 候选' });
+  assert.match(md, /^## 0\.7\.18 候选/);
+  assert.match(md, /提交:`c{40}`/);
+  assert.match(md, /机器:PC-1;处理器 Some CPU 3\.2GHz;核数 14 物理 \/ 20 逻辑;内存 32\.0 GB;显卡 GPU A、GPU B;系统 Windows 11 Pro/);
+  assert.match(md, /\| GR-7 \| 轨道流生产 \| 过 \| 47 \|/);
+  assert.match(md, /\| GR-7 \| 编码 p50 \| 143 ms \| ≤ 300 ms \|/);
+  assert.ok(!md.includes('S1-m1'), '没跑的项不进');
+  assert.ok(!md.includes('143000'), '放大过的数字不进');
+  assert.match(md, /不能当发版记录/);
+  assert.match(md, /没报数字的项:GR-9/);
+  assert.match(md, /只记录,不决定过不过/);
+  assert.match(releaseTimingsSection(run, { version: 'v', machineName: '笔记本' }), /机器:笔记本;/);
 });
 
 /* ---------------------------------------------------------------- 真的子进程流程(假清单) */
 
 function writeFakeManifest(dir) {
   const items = [
-    { id: 'T-pass', name: '会过', category: 'G0', taskRef: '测试', cmd: ['node', '-e', 'console.log(JSON.stringify({ok:true,fails:[]}))'], pass: { exit: 0 } },
-    { id: 'T-fail', name: '会挂', category: 'G0', taskRef: '测试', cmd: ['node', '-e', 'console.log("boom");process.exit(1)'], pass: { exit: 0 }, known: '已知会挂' },
-    { id: 'T-flaky', name: '第一次挂第二次起过', category: 'G0-R', taskRef: '测试', cmd: ['node', '-e', 'const fs=require("fs");const f=process.argv[1];let n=0;try{n=+fs.readFileSync(f,"utf8")}catch{}fs.writeFileSync(f,String(n+1));process.exit(n===0?1:0)', '{out}/counter'], pass: { exit: 0 } },
-    { id: 'T-timing', name: '带耗时门槛', category: 'G0-R', taskRef: '测试', timing: 'laptop', timingNote: 'p50 ≤ 300 ms', cmd: ['node', '-e', '0'], pass: { exit: 0 } },
-    { id: 'T-json', name: '退出 0 但 fails 非空', category: '探针', taskRef: '测试', cmd: ['node', '-e', 'console.log(JSON.stringify({fails:["x"]}))'], pass: { exit: 0 } },
-    { id: 'T-steps', name: '两步并行', category: '探针', taskRef: '测试', parallel: true, steps: [{ cmd: ['node', '-e', 'console.log("s1")'] }, { cmd: ['node', '-e', 'console.log("s2")'] }], pass: { exit: 0, must: ['s1', 's2'] } },
-    { id: 'T-blocked', name: '前置没过', category: '探针', taskRef: '测试', prereq: ['T-fail'], cmd: ['node', '-e', '0'], pass: { exit: 0 } },
-    { id: 'T-missing', name: '缺文件', category: '第二段', taskRef: '测试', requires: ['scripts/probes/不存在的探针.mjs'], cmd: ['node', 'scripts/probes/不存在的探针.mjs'], pass: { exit: 0 } },
-    { id: 'T-manual', name: '人工', category: '第三段', taskRef: '测试', manual: '看图' },
-    { id: 'T-remote', name: '只能在新节点上验', category: '第四段', taskRef: '测试', remoteOnly: '在新节点上跑探针看结果' },
-    { id: 'T-optional', name: '补充项', category: '探针', taskRef: '测试', optional: true, cmd: ['node', '-e', '0'], pass: { exit: 0 } },
-    { id: 'T-idle', name: '没输出被杀', category: '探针', taskRef: '测试', idleKillMin: 0.02, timeoutMin: 1, cmd: ['node', '-e', 'setTimeout(()=>{},60000)'], pass: { exit: 0 } },
+    { id: 'T-pass', name: '会过', category: 'G0', level: 'local', taskRef: '测试', cmd: ['node', '-e', 'console.log(JSON.stringify({ok:true,fails:[]}))'], pass: { exit: 0 } },
+    { id: 'T-fail', name: '会挂', category: 'G0', level: 'local', taskRef: '测试', cmd: ['node', '-e', 'console.log("boom");process.exit(1)'], pass: { exit: 0 }, known: '已知会挂' },
+    { id: 'T-flaky', name: '第一次挂第二次起过', category: 'G0-R', level: 'local', taskRef: '测试', cmd: ['node', '-e', 'const fs=require("fs");const f=process.argv[1];let n=0;try{n=+fs.readFileSync(f,"utf8")}catch{}fs.writeFileSync(f,String(n+1));process.exit(n===0?1:0)', '{out}/counter'], pass: { exit: 0 } },
+    { id: 'T-timing', name: '记耗时(数字远超原门槛)', category: 'G0-R', level: 'local', taskRef: '测试', timing: 'record', timingNote: '编码 p50(原门槛 ≤ 300 ms)', cmd: ['node', '-e', "console.log(\"TIMINGS \"+JSON.stringify({probe:\"fake\",timings:[{name:\"编码 p50\",value:999999,unit:\"ms\",formerLimit:\"≤ 300 ms\"}]}));console.log(JSON.stringify({ok:true,fails:[]}))"], pass: { exit: 0 } },
+    { id: 'T-json', name: '退出 0 但 fails 非空', category: '探针', level: 'local', taskRef: '测试', cmd: ['node', '-e', 'console.log(JSON.stringify({fails:["x"]}))'], pass: { exit: 0 } },
+    { id: 'T-steps', name: '两步并行', category: '探针', level: 'local', taskRef: '测试', parallel: true, steps: [{ cmd: ['node', '-e', 'console.log("s1")'] }, { cmd: ['node', '-e', 'console.log("s2")'] }], pass: { exit: 0, must: ['s1', 's2'] } },
+    { id: 'T-blocked', name: '前置没过', category: '探针', level: 'local', taskRef: '测试', prereq: ['T-fail'], cmd: ['node', '-e', '0'], pass: { exit: 0 } },
+    { id: 'T-missing', name: '缺文件', category: '第二段', level: 'local', taskRef: '测试', requires: ['scripts/probes/不存在的探针.mjs'], cmd: ['node', 'scripts/probes/不存在的探针.mjs'], pass: { exit: 0 } },
+    { id: 'T-manual', name: '人工', category: '第三段', level: 'local', taskRef: '测试', manual: '看图' },
+    { id: 'T-remote', name: '真实网络验证的项', category: '第四段', level: 'network', taskRef: '测试', remoteOnly: '在新节点上跑探针看结果' },
+    { id: 'T-optional', name: '补充项', category: '探针', level: 'local', taskRef: '测试', optional: true, cmd: ['node', '-e', '0'], pass: { exit: 0 } },
+    { id: 'T-idle', name: '没输出被杀', category: '探针', level: 'local', taskRef: '测试', idleKillMin: 0.02, timeoutMin: 1, cmd: ['node', '-e', 'setTimeout(()=>{},60000)'], pass: { exit: 0 } },
   ];
   const file = path.join(dir, 'fake-manifest.mjs');
   fs.writeFileSync(file, `export const ITEMS = ${JSON.stringify(items, null, 2)};\nexport const EXCLUDED_PROBE_FILES = {};\nexport const TASK_ACCEPTANCE = { R: [], C: [], U: [], N: [] };\n`);
@@ -339,7 +417,11 @@ test('FSA-21 假清单跑真的子进程:判定、重跑定稳定性、进程清
   try {
     const manifest = writeFakeManifest(dir);
     const out = path.join(dir, 'out');
-    const r = runRunner(manifest, ['--out', out, '--flaky-rerun', '1', '--only', 'T-pass,T-fail,T-flaky,T-timing,T-json,T-steps,T-blocked,T-missing,T-manual,T-remote,T-idle']);
+    // 缺省只跑本地验证:点名真实网络验证的项不加 --level 会被拒,并说该加什么
+    const refused = runRunner(manifest, ['--out', out, '--only', 'T-pass,T-remote']);
+    assert.equal(refused.status, 2, refused.stdout);
+    assert.match(refused.stderr, /属于真实网络验证.*--level network/);
+    const r = runRunner(manifest, ['--out', out, '--flaky-rerun', '1', '--level', 'all', '--release-timings', '9.9.9 测试', '--machine-name', '测试机', '--only', 'T-pass,T-fail,T-flaky,T-timing,T-json,T-steps,T-blocked,T-missing,T-manual,T-remote,T-idle']);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     const res = JSON.parse(fs.readFileSync(path.join(out, 'results.json'), 'utf8'));
     const by = Object.fromEntries(res.items.map((i) => [i.id, i]));
@@ -348,7 +430,29 @@ test('FSA-21 假清单跑真的子进程:判定、重跑定稳定性、进程清
     assert.equal(by['T-fail'].stability, '0/2');
     assert.equal(by['T-flaky'].verdict, 'flaky');
     assert.equal(by['T-flaky'].stability, '1/2');
-    assert.equal(by['T-timing'].verdict, 'ref-pass');
+    // 耗时只记录:数字(999999 ms)远超原门槛(≤ 300 ms),这一项照样判过;数字进了 results.json
+    assert.equal(by['T-timing'].verdict, 'pass');
+    assert.deepEqual(by['T-timing'].timings, [{ probe: 'fake', name: '编码 p50', value: 999999, unit: 'ms', formerLimit: '≤ 300 ms' }]);
+    assert.equal(by['T-timing'].level, 'local');
+    assert.equal(by['T-remote'].level, 'network');
+    // 机器配置自动采集(不含凭证:只有这几个键)
+    assert.deepEqual(Object.keys(res.meta.machine).sort(), ['cpu', 'gpus', 'logicalCores', 'memoryBytes', 'name', 'os', 'physicalCores']);
+    assert.ok(res.meta.machine.logicalCores > 0 && res.meta.machine.memoryBytes > 0);
+    // 发版耗时记录的一节:写成文件、也打印出来
+    const section = fs.readFileSync(path.join(out, 'release-timings-section.md'), 'utf8');
+    assert.match(section, /^## 9\.9\.9 测试/);
+    assert.match(section, /机器:测试机;处理器 /);
+    assert.match(section, /\| T-timing \| 编码 p50 \| 999999 ms \| ≤ 300 ms \|/);
+    assert.ok(r.stdout.includes('## 9.9.9 测试'));
+    // 小结里两级分开计数
+    const summary = fs.readFileSync(path.join(out, 'summary.txt'), 'utf8');
+    assert.match(summary, /本地验证 10 项:/);
+    assert.match(summary, /真实网络验证 1 项:/);
+    // 不跑任何项,直接用已有的 results.json 出那一节
+    const again = runRunner(manifest, ['--timings-from', path.join(out, 'results.json'), '--release-timings', '9.9.9 重出']);
+    assert.equal(again.status, 0, again.stderr);
+    assert.match(again.stdout, /^## 9\.9\.9 重出/);
+    assert.match(again.stdout, /\| T-timing \| 编码 p50 \| 999999 ms/);
     assert.equal(by['T-json'].verdict, 'fail');
     assert.match(by['T-json'].reasons.join(), /fails 非空/);
     assert.equal(by['T-steps'].verdict, 'pass');
@@ -419,7 +523,17 @@ test('FSA-23 --list / --matrix / --dry-run 不跑任何命令;--only 拼错退�
     let r = runRunner(manifest, ['--list']);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /T-flaky/);
-    assert.match(r.stdout, /共 12 项/);
+    assert.match(r.stdout, /共 12 项:本地验证 11,真实网络验证 1/);
+    r = runRunner(manifest, ['--list', '--level', 'network']);
+    assert.match(r.stdout, /共 1 项:本地验证 0,真实网络验证 1/);
+    assert.ok(!r.stdout.includes('T-pass'));
+    // 缺省只跑本地验证:不点名时 T-remote 不在将跑的项里
+    r = runRunner(manifest, ['--dry-run', '--out', path.join(dir, 'o3')]);
+    assert.match(r.stdout, /将跑 10 项/);
+    assert.ok(!r.stdout.includes('T-remote'));
+    r = runRunner(manifest, ['--dry-run', '--out', path.join(dir, 'o4'), '--level', 'network']);
+    assert.match(r.stdout, /将跑 1 项/);
+    assert.match(r.stdout, /T-remote\t.*\[在节点上做\]/);
     r = runRunner(manifest, ['--list', '--json', '--only', 'T-pass']);
     assert.equal(JSON.parse(r.stdout).length, 1);
     r = runRunner(manifest, ['--dry-run', '--out', path.join(dir, 'o2'), '--only', 'T-pass,T-fail']);
@@ -439,7 +553,8 @@ test('FSA-24 真清单:--list 与 --matrix 能跑,两份任务书的编号一条
   const run = (args) => spawnSync(process.execPath, [RUNNER, ...args], { cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: 100_000 });
   const l = run(['--list']);
   assert.equal(l.status, 0, l.stderr);
-  assert.match(l.stdout, new RegExp(`共 ${ITEMS.length} 项`));
+  assert.match(l.stdout, new RegExp(`共 ${ITEMS.length} 项:本地验证 104,真实网络验证 16`));
+  assert.ok(!/待笔记本复核|笔记本复核/.test(l.stdout));
   const m = run(['--matrix']);
   assert.equal(m.status, 0, m.stderr);
   assert.ok(!m.stdout.includes('没有任何项覆盖'));
