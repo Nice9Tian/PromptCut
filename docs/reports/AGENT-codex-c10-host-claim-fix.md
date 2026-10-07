@@ -30,7 +30,7 @@
 
 ## 固定诊断源码最终复验与交回
 
-修正目标集（含原RH/RHC、分层守门及新增3项）37/37pass，0fail/cancel/skip，11263.4968ms，exit0，TMP/c10-host-claim-target-repair.log。完整npm修正后4934 tests，4933pass、0fail、1skip、0cancel，101488.7742ms，exit0，TMP/c10-host-claim-npm-repair-full.log；唯一skip是既有Native GPU P6 EGL真实着色器查询保留项，未改它。原全量失败不被覆盖。未发生测试文件原生崩溃重跑。
+修正目标集（含原RH/RHC、分层守门及新增3项）37/37pass，0fail/cancel/skip，11263.4968ms，exit0，TMP/c10-host-claim-target-repair.log。完整npm修正后4934 tests，4933pass、0fail、1skip、0cancel，101488.7742ms，exit0，TMP/c10-host-claim-npm-repair-full.log；唯一skip是既有“集成:/api/cards/layout 对真实项目返回整数框”（原日志857行 # SKIP），未改它。原全量失败不被覆盖。未发生测试文件原生崩溃重跑。
 
 固定两诊断脚本完整C10复验使用与未改源码首跑同一命令、原dist、5950端口，exit0，ok=true/fails=[]，总286175ms，A5 113679ms：host claimed3/plans1/completed1，新host指纹层ready60，main-v2；cleanup shared.admin.ok/listening=[]。TMP/c10-host-claim-diagnostic-full.log，夹具TMP/pc-c10-browser-GYZru7/shots。真实诊断记录4次变化：初次尚未连上、静态eligible1；连上后seen6/claimed1/plans1；之后held/running真实快照段，最后completed1。tickErrors均空，fingerprint过滤有真实计数。ready可以先于连接，不代表已能认领，但原失败已连接，不能据此定原根因。
 
