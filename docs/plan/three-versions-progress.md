@@ -55,7 +55,12 @@
 - 旧共同runner `913e6884` 新失败：M7实际877秒、exit1，无pending；仅page-layer-env-browser与page-dual-split-supersede-layermap两断言未过。三重卡anchor完成/服务端层点到browser已过，但页面即时层观察h1/h2仍pc、h3双份未见作废；原因待Astra核观测竞态或真实队列/层错误。asset-path 28过/1失败，Python已找到；已核direct继承主仓库模型而editor使用probe模型的夹具差异，修复只使两边用同一probe模型目录，保留逐字段断言，待复验。不把在途/人工项记通过。
 - VisuHive备份发布修复源码 `39e739aa`（报告 `1015ffda`）：根精确归档5文件SHA256 `a2da8129e830653d1981cf9ffbc0049b0aa8b18da65b07e841eb83704eba0e23`，节点新隔离目录、visuhive-account用户真实8/8、0失败/跳过、820.439415ms。非空WAL一致恢复、key伴随、无覆盖竞态/部分发布、既有父目录权限保持、新父目录700/文件600均过，现有account/nginx PID不变。首次Linux旧源码7过1失败（ENOENT）及根PATH包装未找到runuser都保留；未对真实生产库执行新schema迁移。
 - 网站兼容 `95a5b545` 已交回并经根看待选择/等待ACK最终图，补GET/me仅发起会话pending摘要、CSRF/requestId、恢复选择与两张项目503。最初图fixture漏event-status显示无法确认，以及加入列表旧占位均保留/修正；最终图只是UI fixture，不能当真实退出完成。根把网站+备份+顺序见证收进VisuHive隔离联合候选 `e974114`，独立full61条、60通过、0失败、1明确Windows POSIX权限跳过、6475.64ms（墙钟6.7689秒）；没有合入网站main或自动上线。
-- 当前独占实施：Sol doc-authority（5750–5759，账号/项目唯一权威与mTLS/outbox/签名gone），Sol asset-isolation（5780–5789，真实HTTP/目录/三namespace/队列/worker/PCM/tier/缩略图与撤销流），Astra validation-races（5800–5809，M7及C62测试生命周期）。doc/asset已由根在干净暂停点分别收回auth修复，全部保留完整npm要求；两个模块均未中央挂载、不算产品完成。root中央接线/部署/main仍未执行，原有工作保留。
+- 文档账号权威固定 `f873d3d1`（产品 `815510cf`）已由根逐源审查，独立目标24/24、0失败/跳过、1616.225ms；真实冻结账号provider、证书固定的mTLS、连续outbox、项目初始化失败关闭、准确gone签名与持久ACK均有模块证据。生产中央尚未挂载，不能以模块通过冒称完整项目交互已完成。
+- Astra素材测试生命周期修复固定 `f3f7233c`（源码 `7620aed4`）已审收回：真实HTTP关闭后owned child cwd仍在和Readable结束早于close的受控反例成立；等待本夹具requests/streams/tier manager及queue收口后再删临时目录，不吞EPERM、不碰生产进程。子包首次目标18过/2取消（MP4夹具门控早于目标边界）保留，修MKV后20/20；子包full4936/4935过/0失败/1跳过、77672.7596ms。原collect-plugin失败的具体持锁者仍未知，受控反例不冒认原进程。
+- 主会话新的PC隔离联合候选 `f9390dda` 包含已审卡片、auth、账号基础、文档权威、顺序/历史、A5诊断和素材夹具关闭修复，未含新项目素材服务产品包。显式指定真实冻结VisuHive provider/order模块后，首次完整npm4985条、4984通过、0失败/取消、1既有layout跳过、94446.2226ms（墙钟95.0087秒）；实际provider子进程崩溃矩阵33种切点本轮已执行通过，未当未配置时的skip算通过。此前两个联合full失败完整保留；这是修正源码后的有因联验，没有同源盲重跑。
+- 网站未知POST结果小修 `01601a91` 已逐差异审查并看中性等待/绿色完成两张fixture图；空值、数组、缺布尔ok、坏JSON、5xx结果未知时保留请求标识并禁用重复提交，明确400可纠正。根收进VH联合候选 `f8106233` 后独立full62条、61通过、0失败/取消、1明确Windows POSIX权限跳过、8923.9601ms（墙钟9.2742秒）；Linux权限证据仍为前述真实8/8，网页未合main或自动上线。旧加入列表占位文案仍待正式产品发布时收口。
+- 素材包 `443ec4fe`（产品 `56af4573`）已交回：子包full4955/4954通过/0失败/1跳过、68825.3059ms，目标23/23、isolated真实HTTP26/26，asset-path29/29；最后一项只证明URL/direct在同模板模型目录相同，不是安装模型推理证明。根审查发现finish/close直接release可能先于文件流实际close而漏掉后续撤销ACK，Sol确认边界成立，正在同叶补真实门控反例、收口及发布边界修正；旧包尚未收进最终联合候选。
+- 当前独占实施：Sol account-wiring（5820–5829，真实hosted账号/mTLS/WS/HTTP逐消息门控与初始化/票据），Sol asset-isolation（5780–5789，根审关闭及发布边界补正），Astra validation-races（5800–5809，M7真实观测修复与完整探针）。备份timer叶仅开工报告 `9c520a29`，为高优先级资产关闭复核释放并发槽，未写runner/unit或操作节点，之后从原叶继续。root联合C10真浏览器探针在5840–5849固定源码后台运行；旧共同runner仍在S3阶段，未终结结果不记通过。main、版本和生产账号/组合部署仍未执行。
 
 ## 接下来干什么
 
