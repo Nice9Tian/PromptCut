@@ -5,6 +5,7 @@
  * node scripts/probes/card-policy-probe.mjs --base-port 5900 [--out <TMP>] [--font <公开字体>]
  * 仅启用四个回环端口；字体从已安装的公开系统字体读取，不打包、不安装依赖。
  */
+import '../lib/no-user-dirs.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
