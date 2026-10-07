@@ -23,3 +23,5 @@
 真实 OnlineSnapshotSource 反例已证：初次层表只有 PC 候选，浏览器 markAlive 已发生而下一张候选层表回包被门控，debug 仍选 PC；放行真实 loadMap 后选 browser。现在 A4 在原 gateLift+600000ms 总截止内等待真实页面各重层指纹匹配，记录第一次样本、最终样本、次数、收敛耗时；时间本身不能判通过，持续错误有负向测试。完成耗时原值仍只记录，未恢复30s门槛。
 
 M7定向第一次 `TMP/promptcut-validation-races-m7-target-1.log`：7/6/1fail、134.0971ms、exit1，新实队列fixture错用了带PC指纹观察者（它收到hidden而非failed）；改为原探针的无指纹观察者后 `...m7-target-2.log` 7/7、121.1975ms、exit0。实队列输出 sampled=open,current=null,published=card-locked,publisher=superseded,watcher=failed；真实页面来源两次采样 first=PC,last=browser。原877s日志没有这些逐任务证据，所以这里只证明可执行失败路径，不追认原两次fail的唯一根因；真实full M7仍待跑。
+
+根协调者精确扩租既有 `server/test/m7-judge.test.mjs`。01521f94组合首验 types0/exit0/wall16879.7006ms；完整npm `TMP/promptcut-validation-races-full-2.log` exit1、wall97906.1341ms（计数如下次补记），唯一失败是 bakery-deps 的 server→scripts 依赖方向约束，新建 m7-observation.test 不在白名单。按根批准将4条实队列/真实来源控制测试并入已登记的 m7-judge.test，删除仅本包新文件；依赖守卫和白名单均不改。此次修改为明确失败修复后的必要复验，不因偶发失败反复重跑。
