@@ -1,5 +1,7 @@
 # 验证改造报告
 
+> 2026-10-08 补记：下面写的是出报告时的状态。成果 `1ad01a46` 已在 2026-10-07 合入集成分支 `claude/four-stage`（`87dd36bd`），正文里「没有合并回任何分支，等用户定」不再是现状。
+
 任务书：`docs/plan/verification-rework-task.md`。把 2026-10-07 用户改定的三条验证规则（耗时只记录不当闸门；验证分本地验证与真实网络验证两级；「跨机」不再单独成项）落到探针、验收运行器和文档里。规则本身在 `docs/semantics/guide_files/verification.md`，这次没有改。
 
 分支 `claude/verification-rework`，从集成分支 `claude/four-stage`（`2c495be2`）切出，先合入了 origin/main（`3d89ed15`）。**没有合并回任何分支，等用户定。** 没有动 `claude/four-stage`、main、`claude/cloud-agent-3`，没有碰新节点、阿里云和笔记本，没有派子 Agent。

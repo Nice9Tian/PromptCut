@@ -1,5 +1,13 @@
 # 四段连做的部署前检查清单与部署步骤
 
+> **2026-10-08 补记：下面几处已被用户后来的决定取代，照新的办**（`docs/plan/account-binding-task.md`、`docs/semantics/guide_files/verification.md`）。本清单其余步骤仍可参照，但不能再整份照单部署：
+>
+> - **A3**「0.7.19、0.7.20 不单独出」：改为分 0.7.18、0.7.19、0.7.20 三个版本，各自出。
+> - **A4**「只打补丁」：改为每个版本都出完整安装包和兼容补丁；外壳要不要升级由兼容证据定。
+> - **B1**「数据目录不动、不备份整份」：清理旧测试项目之前要有一致的备份，并实际验证过能恢复。
+> - **B4**「等连续 5 分钟不变、最多等 3 小时」：这三个版本部署切换时可以打断旧测试项目，不以这两条为停点；例外办结后恢复原规定。
+> - **新增要核的**：在线页面现在还有一个地址 `https://visuhive.com/editor/`（官网的站点配置在 VisuHive 仓库 `deploy/nginx-site-landing.conf`，里面照抄了本仓库的站点模板，改模板时那边跟着改）。账号后端、PromptCut 服务、网页的先后顺序见 `account-binding-task.md`「两仓库交付、部署与回退」。
+
 给主会话在「最后一次完整验收」通过之后照着做（任务书 `sound-online-render-task.md`「做法与验收节奏」第 4～6 步）。每一步写：做什么、哪条命令、改动前备份什么、怎么核对、不过怎么退。可以逐条打勾。2026-10-07 起草，同日按任务书更新（云端 Agent 的 F、J、K 与完成条件第 8 条）补入。
 
 先说清几件事：
@@ -18,7 +26,7 @@
   1. 基线全绿（A1）；
   2. `npm run build` 成功（清单 G0-3）；
   3. 改动涉及桌面壳、Chrome、ffmpeg、内置 Python 或运行时目录布局时，`desktop/` 下的发版构建也成功——**这次不涉及**（依据见 A3），所以这一条不适用；但仍跑 `node --test desktop/test/*.test.mjs`（清单 G0-5）作旁证。
-- [ ] **A3 版本号怎么判。**
+- [ ] **A3 版本号怎么判。**〔2026-10-08 部分已被取代，见文首〕
   - **应用版本 0.7.17 → 0.7.18**（只动了 Node 那一半，末位 +1；任务书已定统一为 0.7.18，文中的 0.7.19、0.7.20 不单独出）。改 `package.json` 的 `version` 与 `package-lock.json` 顶部、`packages[""]` 两处的 `version`，照上一次的发版提交 `073c8cca`（「chore: release v0.7.17 (shell 0.2.7)」，只改这两个文件）。构建在提交之后。
   - **外壳版本 0.2.7 不动。** 依据（起草时逐项查的，合流后再查一遍：`git diff <main 上一版>..<最终提交> --stat -- desktop python package.json`）：
     1. 第一段、第二段、第三段、第四段相对集成分支起点 `326e9069` 的 diff 里，`desktop/`（Rust 外壳、`tauri.conf.json`、发版脚本）与 `python/` 下**没有任何文件**；
@@ -26,7 +34,7 @@
     3. 运行时目录布局没变（新增的 `server/hosted-render/`、`server/agent-service/` 只在云节点上跑，桌面版运行副本带不带它们不影响运行）；
     4. 判断题「Node 这一半放到老外壳 0.2.7 上还能不能照常跑」：能。第二段的转译器只在在线构建里按需载入（桌面构建把那一行剪掉，`vite.config.ts` 里读 sucrase 版本的 `cardRuntimeDeps()` 只在在线配置里调用）。
     结论：落在 `git_and_release.md` 表的第一行（只动 Node 那一半），补丁 `shellGeneration` 仍是 `0.2`、`minShellVersion` 不动。
-- [ ] **A4 打补丁。** 在 PC 主工作区的 `desktop/` 下：`npm run release -- --from-head --patch-only`（源码取自 HEAD，所以先提交、再合入，从 main 上最终那个提交出；上一次 0.7.17 就是这样出的）。
+- [ ] **A4 打补丁。**〔2026-10-08 已被取代，见文首〕 在 PC 主工作区的 `desktop/` 下：`npm run release -- --from-head --patch-only`（源码取自 HEAD，所以先提交、再合入，从 main 上最终那个提交出；上一次 0.7.17 就是这样出的）。
   - 产物：`desktop/release/PromptCut-patch-0.7.18.exe`、`desktop/release/manifest-0.7.18.json`。
   - 取大小与 SHA-256（PowerShell）：`(Get-Item desktop\release\PromptCut-patch-0.7.18.exe).Length`、`Get-FileHash -Algorithm SHA256 desktop\release\PromptCut-patch-0.7.18.exe`、`manifest` 同样取一遍；贴进总报告。
   - **这次补丁会比上一次大很多**：`desktop/scripts/make-patch.mjs` 按 `package-lock.json` 里依赖内容的哈希判断「依赖变没变」，第二段加了 `sucrase`（及它的依赖）后依赖变了，补丁会带上整份 `node_modules`（脚本注释里写的量级是约 196 MB），而不是 0.7.17 那样的 17.9 MB。这是预期内的，要提前告诉用户；产物大小以实际为准。不要用 `--no-deps`（依赖变了脚本会拒绝，装上去会跑不起来）。
@@ -36,7 +44,7 @@
 
 ## B. 动新节点之前
 
-- [ ] **B1 备份与回退点的记录**（都在新节点上，路径见 docs/local.md；`/root/<备份目录>-<日期>` 一类）：
+- [ ] **B1 备份与回退点的记录**〔2026-10-08 「数据目录不备份」已被取代，见文首〕（都在新节点上，路径见 docs/local.md；`/root/<备份目录>-<日期>` 一类）：
   - 托管服务：`/opt/promptcut-hosted/app`（`deploy-hosted` 会把旧的留成 `server.prev` 一代，但自己再整份拷一份：`cp -a /opt/promptcut-hosted /opt/promptcut-hosted.bak-<日期>`，不含数据目录）、`/opt/promptcut-hosted/pm2.config.cjs`、`~/.pm2/dump.pm2`；
   - 在线页面：`/opt/promptcut-hosted/editor`（整份拷到 `/opt/promptcut-hosted/.editor-backups/editor-0.7.17-<日期>`，上一次换页面时同样做过）；
   - nginx：`cp -a /etc/nginx /root/nginx-backup-<日期>`；
@@ -52,7 +60,7 @@
   node scripts/probes/shared-project-probe.mjs --role inventory --hosted http://127.0.0.1:18787 --asset http://127.0.0.1:18788 --out work/four-stage/final/inventory-before.json
   ```
   重启后：`node scripts/probes/shared-project-probe.mjs --role migrate-check --from-inventory work/four-stage/final/inventory-before.json --to http://127.0.0.1:18787 --to-asset http://127.0.0.1:18788 --sample 100`，要 `ok: true`、各项目 `projectRev`「相等」计数 = 项目数（不归零、不落后）。
-- [ ] **B4 等写入停止（只读，用户桌面上的 5210 可能在往放在新节点上的项目里写）。** 用 `scripts/acceptance/wait-writes-quiet.mjs`（只发 `GET http://127.0.0.1:5210/api/agent/status` 与 `GET http://127.0.0.1:5210/api/media/upload-queue` 两个请求，别的路径代码里就拒绝，只许回环地址）：
+- [ ] **B4 等写入停止〔2026-10-08 这三个版本不以此为停点，见文首〕（只读，用户桌面上的 5210 可能在往放在新节点上的项目里写）。** 用 `scripts/acceptance/wait-writes-quiet.mjs`（只发 `GET http://127.0.0.1:5210/api/agent/status` 与 `GET http://127.0.0.1:5210/api/media/upload-queue` 两个请求，别的路径代码里就拒绝，只许回环地址）：
   ```
   node scripts/acceptance/wait-writes-quiet.mjs --quiet-min 5 --max-hours 3
   ```
