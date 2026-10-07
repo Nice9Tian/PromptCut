@@ -145,7 +145,7 @@ let VIDEO_HASH = '', BAD_HASH = '';
 const proxy = await startHostedProxy({ dist: DIST, basePort: BASE, docPort: DOC_PORT, assetPort: ASSET_PORT, policy: 'full' });
 const browsers = [];
 async function launch(extra = []) {
-  const b = await puppeteer.launch({ headless: true, protocolTimeout: 600_000,
+  const b = await puppeteer.launch({ pipe: true, headless: true, protocolTimeout: 600_000,
     args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--mute-audio', '--window-position=-32000,-32000', '--site-per-process', '--force-device-scale-factor=1', ...extra] });
   browsers.push(b);
   return b;

@@ -340,7 +340,7 @@ const AUDIO_HOOK = () => {
 };
 const browsers = [];
 async function launch(extra = []) {
-  const b = await puppeteer.launch({ headless: true, protocolTimeout: 600_000,
+  const b = await puppeteer.launch({ pipe: true, headless: true, protocolTimeout: 600_000,
     args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--mute-audio', '--autoplay-policy=no-user-gesture-required', '--window-position=-32000,-32000', '--site-per-process', '--force-device-scale-factor=1', ...extra] });
   browsers.push(b);
   return b;

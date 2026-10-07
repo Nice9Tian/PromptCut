@@ -158,7 +158,7 @@ const BOUNDARY_CARDS = { user: 'probe-boundary-card', graph: 'probe-boundary-gra
 /* ------------------------------------------------------------------ 浏览器 */
 const NETLOG = path.join(OUT, 'netlog.json');
 try { fs.rmSync(NETLOG, { force: true }); } catch { /* 没有 */ }
-const browser = await puppeteer.launch({
+const browser = await puppeteer.launch({ pipe: true,
   headless: !HEADFUL, protocolTimeout: 900_000,
   args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--mute-audio', '--window-position=-32000,-32000', '--site-per-process', `--log-net-log=${NETLOG}`, '--net-log-capture-mode=IncludeSensitive',
     ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : [])],
