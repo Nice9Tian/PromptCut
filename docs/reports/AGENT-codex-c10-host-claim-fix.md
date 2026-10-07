@@ -12,7 +12,7 @@
 
 ## 只读定位与反证
 
-原 host、原在线 dist、本工作区的 frameCode 都为 `33c0e27f47d929f009cb321f5149137ab6bf80807daefeb09eab5c68a14f410b`。禁流能力不阻清单 plan。相同真实 queue/JSON 环回 + 清单计划 + laneOf/laneBusy 对照 claimed=1/plans=1。临时调试脚本前两次分别因脚本括号错误、错写导出名在执行功能前退出1，第三次修正后通过；不当成功测试，也不当产品失败。第三次 full 完成后的诊断读取遇已正常清理端口 ECONNREFUSED；没有打断探针。
+原 host、原在线 dist、本工作区的 frameCode 都为 `33c0e27f47d929f009cb321f5149137ab6bf80807daefeb09eab5c68a14f410b`。禁流能力不阻清单 plan。相同真实 queue/JSON 环回 + 清单计划 + laneOf/laneBusy 对照 claimed=1/plans=1。临时调试脚本前两次分别因脚本括号错误、错写导出名在执行功能前退出1，第三次修正后通过；不当成功测试，也不当产品失败。完整 C10 完成后的诊断读取遇已正常清理端口 ECONNREFUSED；没有打断探针。
 
 原源码与原 dist 独立完整 C10：`node scripts/probes/c10-browser-probe.mjs --base-port 5950 --dist <根原 dist-online> --keep-temp`，exit0，总261821ms，A5 44764ms，claimed=3/completed=1，host新层ready31，main-v2，cleanup listening=[]。原日志保留在系统 TMP/c10-host-claim-baseline.log，夹具 TMP/pc-c10-browser-sOS4VN。此反证不能叫修复、不能推定根因；候选是节点侧过滤、在飞/闲时闸或隐藏周期错误，原日志无法区分。
 
@@ -23,3 +23,7 @@
 探针A5使用只收不认领的旁观连接，记录实际TaskView；按真实静态filter记录eligible与原因。该静态诊断不证明host lane/在飞/闲时闸已通过；缺host私有card-source视图的细任务标unknown；没有观察数据标null。最多保留100次变化样本，首样本不被滚出，输出为shots/host-claim-diagnostics.json与结果行；任务正文、URL、token/password、错误原文不进投影。未增加任何功能成功条件。
 
 新增目标回归3项：可接清单plan/版本拒接区分；私密字段排除、未知卡身份及错误分类；实际queue/provider、串行lane闲时与禁流能力的认领切分对照。连同原RH/RHC目标集34/34通过，fail/cancel/skip均0，11469.3931ms（TMP/c10-host-claim-target.log）；原主机测试无削弱。语法检查两脚本通过，git diff --check通过。下一阶段固定源码做一次具名full、types与完整npm；尚未称产品缺陷已修复。
+
+## 基线首次失败与最小修正
+
+类型检查使用主工作区现成 TypeScript bin（与tsc -b --force相同），exit0，16830ms，无安装或junction。完整npm首次：4934 tests，4932pass、1fail、1skip、0cancel，76358.8203ms。唯一失败为已有依赖方向守门 `server/** 不 import scripts/ 下的模块`，指出本包新测试的直接脚本import；原日志TMP/c10-host-claim-npm-full.log保留，不当绿。修正仅新测试：独立Node子进程调用脚本诊断导出，server本身不反向import脚本，原守门规则不改。两个诊断脚本未变，在途full C10源码继续固定。需要再跑目标含该守门与完整npm；类型检查无需因.mjs测试组织变化重复。

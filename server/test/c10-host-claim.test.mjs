@@ -3,11 +3,24 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hostClaimStatusOf } from '../../scripts/render-host.mjs';
+import { spawnSync } from 'node:child_process';
 import { clipsPlanTaskOf } from '../render-queue/messages.mjs';
 import { createRenderQueue } from '../render-queue/index.mjs';
 import { createRenderHost } from '../render-node/host.mjs';
 import { createLoopback } from './fake-loopback-transport.mjs';
+
+// Exercise the script in its own Node process; server modules do not import scripts.
+const entry = new URL('../../scripts/render-host.mjs', import.meta.url).href;
+function hostClaimStatusOf(queue, events = [], tasks = null) {
+  const code = `import { hostClaimStatusOf } from ${JSON.stringify(entry)};
+    let input = ''; for await (const part of process.stdin) input += part;
+    console.log(JSON.stringify(hostClaimStatusOf(...JSON.parse(input))));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+    input: JSON.stringify([queue, events, tasks]), encoding: 'utf8', windowsHide: true, timeout: 30000,
+  });
+  assert.equal(child.status, 0, '诊断脚本子进程应成功退出');
+  return JSON.parse(child.stdout);
+}
 
 const queueView = () => ({ profile: 'host', codeVersion: 'v1', envFingerprint: '0c10b0e5f1a9e7d2', maxConcurrent: 1,
   capabilities: { userCards: true, graphCards: false, streams: false, transcode: false },
