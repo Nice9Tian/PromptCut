@@ -1788,3 +1788,17 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 | 语义：`product/agent.md`「工具范围」加「发起方在线时要能用」与两条说明；`mechanism/agent.md` 把页面状态那一条拆成两条并写反向通道，接口清单补 `page-results` | `docs/semantics/` |
 
 守卫没有动：在线产物的 `/api/` 路径清单没有新增（这条路只打 `/agent/v1`），C10A-API-05、07、08 不变。
+
+### 28.6 验收（本机，Windows；模型全是模拟提供方，没有跑真实模型）
+
+- `npx tsc -b --force` 零错误；`npm test` 4919 项、4918 通过、0 失败、1 跳过（起点 4901 / 4900 / 1；新增 18 项）；`npm run build` 与 `npx vite build --mode online` 成功；在线产物的守卫 C10A-API-01～05、07、08 全过，`/api/` 路径的棘轮清单没有动。
+- 单测 `server/test/cloud-agent-page.test.mjs`（CA-REV-01～11，12 项）与 `src/ai/cloud/page-requests.test.mjs`（CAU-REV-01～06，6 项）全过。
+- `cloud-agent-isolation-probe`：35 条全过（新增 R1～R3）。R1：成员乙（别的项目）、成员丙（同项目的别的成员）交甲的对话在等的结果各回 404，乱写的票据 401，编的 id、不对的页面号、没带页面号、换一个对话交各回 410，这些都没有让在等的那一次结束，甲的页面交回 200；乙、丙开甲这个对话的事件流（报同一个页面号）只收到「没有这个对话」。R2：重复交 410；到时限没交的那一次工具回「发起方不在线」、这一轮照样跑完，过期的 id 与这一轮结束后的 id 再交都是 410。R3：只读成员的对话里四个工具都成功，项目版本不变（11 → 11）。
+- `cloud-agent-ui-probe`：在线 66 条、桌面 38 条全过。O12：云端 Agent 调 `seek` 后页面的播放头是 3 秒；调 `play` 后在播，调 `pause` 后停在 4.83 秒；`get_selection` 回的是页面当下的 c-move（发消息时选的是 c-ring）；AI 栏里四步都显示、都成功；四次 `page-results` 都带委托票据；关掉发起的页面后 `seek`、`play` 回「发起方不在线」、这一轮跑完，同一位成员另一台设备上的播放头没动、没有交回过结果。D12：桌面版选「云端」时播放头到 2 秒、在播、停在 3.83 秒，三次交回是跨源直连 Agent 服务，没有经本机的 `/api/mcp/`。D6 的期望值改成「本机 Agent 的个数 + 在跑的云端 Agent 1 个」（原来写死 1 个；桌面页面的本机对话带着自己的 Agent 连接时是 2 个，那条连接晚一点才连上，所以原来的写法时过时不过——产品数得没错）。
+- `cloud-agent-ux-ui-probe`：35 条全过（新增用户卡一步 UC1、UC2）：云端 Agent 建一张判重的用户卡并加片段，发起方的浏览器被结束后对话做完，补渲由隔离工作进程渲完（约 40 秒）；之后才上线的成员在真实浏览器的舞台上贴的是这张卡的预渲染结果（快照层在、没有占位、层表里这一层 11 帧就绪）。
+- `cloud-agent-ux-probe` 21 条、`cloud-agent-run-probe` 17 条全过；桌面版 Agent 不退步：`chat-window-probe` 19 条、`user-editing-probe` 18 项、`skill-mcp-probe` 35 项全过。
+
+### 28.7 没做成的
+
+- `spawn_agent`、`web_handoff`、`collect_login`、`collect_login_check` 发起方在线时仍做不了（28.3）。前两个差的是别的功能先接上或要用户定做法；后两个按「登录态不上传到节点」不该接。
+- 发起的那张页面刷新之后，这一轮余下的时间里它不再是「发起的那张」（页面号变了）。要让它接回来得把页面号存进会话存储并防别的页签冒用，这一版没做。
