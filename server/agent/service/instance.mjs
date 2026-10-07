@@ -1347,6 +1347,8 @@ export function createAgentInstance(env) {
   async function hostedPageTool(tool, args, agent) {
     const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
     if (tool === 'seek' && !(typeof a.t === 'number' && Number.isFinite(a.t) && a.t >= 0)) {
+      // 没有人连着看时先说不在线(Agent 该知道的是「这一步用不上页面」,而不是去补参数重试)
+      if (!hostedInitiatorOnline(agent)) return initiatorOffline(tool);
       return { ok: false, error: 'seek 要给 t(秒,不小于 0 的数)。' };
     }
     const send = tool === 'seek' ? { t: a.t } : {};
