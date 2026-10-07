@@ -13,3 +13,5 @@
 修复只在测试 harness：登记 middleware promise 与 pipe 源流 close；停止 HTTP 后等待这些工作、自己 root 的既有 tier manager.idle，以及 upload queue 停止与 working=false 后最后持久链。生产全局服务表只读取/移除本 fixture root，绝不创建新转码任务或操作其它根。rmSync 仍单次执行且错误传播。
 
 第一次定向 `TMP/promptcut-validation-races-target-1.log`：20 tests、18 pass、0 fail、2 cancelled，exit1，60266.03ms。受控门控最初选 MP4，其可执行查询在同步重封装阶段，阻塞 HTTP，两个新测试各 30s timeout；after 释放拥有的子进程并清理。改为不走重封装的 MKV 后第二次 `TMP/promptcut-validation-races-target-2.log`：20/20、0 fail/cancel/skip，exit0，27522.1808ms；旧 rmSync 反例 23649.7141ms，新收口204.1557ms，流 close103.6962ms。新增负向 fixture 的上限改为60s以容纳 Windows 同步 rm 失败内置重试，并记 rmMs；既有 collect 语义、10s job 时限、原断言均不改。
+
+源码7620aed4验收：`TMP/promptcut-validation-races-types-1.log` 类型0错，exit0，wall6847.5649ms；`TMP/promptcut-validation-races-full-1.log` 全量首次4936 tests /4935 pass /0 fail /0 cancelled /1 skip，duration77672.7596ms，wall78083.1568ms，exit0，没有自动重试。相比原失败全量的4934，去掉文件级after失败计数并新增3条。所有原业务断言保留，auth修复未触碰。此块不宣称原失败的唯一持锁者已证。
