@@ -89,3 +89,16 @@ root 在全量失败后明确扩展独占范围到 `server/test/sp-hosting.test.
 因果证据：真实 held-cwd child 握手后，删其 cwd 得到 EBUSY；kill 返回时 lifetime.closed=false；await close 后删除成功。该专用例 `node --test --test-name-pattern=SPH-lifecycle server/test/sp-hosting.test.mjs` 1/1 pass，151.7476ms，日志 `promptcut-018-sp-held-cwd.log`。该反例证明旧 fire-and-forget cleanup 存在可观测生命周期窗口；不追溯声称本次原 EPERM 的具体持锁者已查明。
 
 此前尝试的“孙进程继承 stdout 使父 exit 后 close 一直挂起”在本 Windows 环境未成立：首轮新增例期待 closed=false，却观察 true。该轮原14项全部pass、新例fail，共15/14/1/0，25414.0388ms，exit1，日志 `promptcut-018-sp-lifecycle-first.log`；故弃用不成立的跨平台管道假设，改用上面实际成立的 held-cwd/kill 反例。没有隐去失败或盲重复。官方 Node 文档区分 exit 与 stdio close：[Node child_process 文档源码](https://github.com/nodejs/node/blob/main/doc/api/child_process.md)；首次nodejs.org直链抓取404后查询官方源码，未据失败链接作证。
+
+## 最终收口结果（后于上文历史失败）
+
+追加清理修复最终源码 `c1394c5e` 上：
+- types `npx tsc -b --force` exit0、零错误，wall9.5409589s；`promptcut-018-order-types-lifecycle.log`。
+- 托管全文件+全部order目标测试 32 tests / 32 pass / 0 fail / 0 skip，25649.7344ms、wall26.1059282s；`promptcut-018-order-lifecycle-target-final.log`。
+- **PC 完整 npm：4949 tests / 4948 pass / 0 fail / 1 skip，83413.9621ms、wall84.100715s，exit0，无自动retry**；`promptcut-018-order-full-lifecycle.log`。
+- VH 最终源码仍 `2a2d41b`，报告HEAD `7eab553`；完整npm26/26pass，原始结果见前表，未因仅PC测试清理改动盲重复VH。
+- 顺序/历史源码自 `7aec017f` 未变；该源已通过实际provider password-order探针37/37、history探针6/6；最终全量再次运行33故障子项，未skip实际provider。
+
+两个前次全量失败均保留：依赖方向问题按明确规则修复；托管EPERM经追加授权修复可证明的自建child生命周期窗口，当前定向与全量均通过。受控孙pipe假设失败、第一次core清理失败也全部记在上文；无通过掩盖失败。
+
+最终diff范围扩为PC14文件（授权新增13文件，加root明确追加的sp-hosting测试），VH4新增文件。生产账号/doc挂载、真实四服务持久ACK与完整connection枚举、客户端/广播按当前ACL拒绝旧连接、产品UI与公网验收仍由owner接入；submit返回内部完整history，不可原样给客户端。此包不执行0.7.20补偿、不宣告三版本项目结束。最终仅补报告提交，两工作区clean。
