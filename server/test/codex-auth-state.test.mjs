@@ -6,13 +6,32 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { spawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
+import * as childProcess from 'node:child_process';
 import * as runtime from '../runners/cli-runtime.mjs';
 
 const fixture = fileURLToPath(new URL('./fixtures/codex-auth-cli.mjs', import.meta.url));
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-auth-state-'));
+const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-auth-lifecycle-'));
+let traceSeq = 0;
+const trace = value => fs.appendFileSync(path.join(evidence, 'lifecycle.jsonl'), JSON.stringify({ seq: ++traceSeq, monotonicNs: process.hrtime.bigint().toString(), ...value }) + '\n');
+const owned = new Set();
+const runs = new Set();
+const setups = new Set();
+function observe(child, args, options = {}) {
+  const entry = { child, case: path.basename(options.env?.PROMPTCUT_CLI_HOME ?? process.env.PROMPTCUT_CLI_HOME ?? ''), verb: args?.includes(fixture) ? args[args.indexOf(fixture) + 1] : 'fixture-helper', closed: false };
+  const record = (event, extra = {}) => trace({ event, case: entry.case, verb: entry.verb, pid: child.pid, ...extra });
+  entry.done = new Promise(resolve => child.once('close', (code, signal) => { entry.closed = true; record('close', { code, signal }); resolve(); }));
+  owned.add(entry); record('spawn');
+  child.once('exit', (code, signal) => record('exit', { code, signal }));
+  child.stdout?.once('end', () => record('stdout-end')); child.stderr?.once('end', () => record('stderr-end'));
+  return child;
+}
+mock.module('node:child_process', { namedExports: { ...childProcess,
+  spawn: (command, args, options) => observe(childProcess.spawn(command, args, options), args, options),
+  execFile: (command, args, options, callback) => observe(childProcess.execFile(command, args, options, callback), args, options),
+} });
 const previous = process.env.PROMPTCUT_CLI_HOME;
+const previousConfig = process.env.PROMPTCUT_AI_CONFIG;
 process.env.PROMPTCUT_AI_CONFIG = path.join(sandbox, 'ai.json');
 mock.module(new URL('../runners/cli-runtime.mjs', import.meta.url).href, { namedExports: {
   ...runtime, resolveCli: name => `${name}-auth-simulation`,
@@ -23,7 +42,8 @@ const { createCodexAuthState, codexAuthState, codexAuthReason, authErrorDecoder 
 const { probeAuth } = await import('../runners/auth.mjs');
 const { startRun } = await import('../runners/codex.mjs');
 const { listProviders, startRun: startProvider } = await import('../runners/index.mjs');
-const { createSetupService } = await import('../runners/setup.mjs');
+const { createSetupService: createActualSetupService } = await import('../runners/setup.mjs');
+const createSetupService = options => { const service = createActualSetupService(options); setups.add(service); return service; };
 const { startCliLoop } = await import('../runners/cli-loop.mjs');
 const { probeQuota } = await import('../runners/quota.mjs');
 let home;
@@ -35,13 +55,56 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
 function run(extra = {}) {
   const events = [];
   const handle = startRun({ cwd: home, prompt: 'simulation only', systemPrompt: '', onEvent: ev => events.push(ev), ...extra });
+  runs.add(handle);
   return { events, ...handle };
 }
 const terminals = events => events.filter(e => e.type === 'error' || e.type === 'done');
 function invalidate() { const s=codexAuthState(); assert.equal(s.invalidate(s.snapshot().generation, 'token_revoked'), true); }
-test.beforeEach(() => { home=fs.mkdtempSync(path.join(sandbox, 'case-')); process.env.PROMPTCUT_CLI_HOME=home; write({ loggedIn:true }); });
-test.after(() => { if(previous===undefined) delete process.env.PROMPTCUT_CLI_HOME; else process.env.PROMPTCUT_CLI_HOME=previous;
+test.beforeEach(t => { home=fs.mkdtempSync(path.join(sandbox, 'case-')); process.env.PROMPTCUT_CLI_HOME=home; write({ loggedIn:true }); trace({ event: 'case-start', case: path.basename(home), name: t.name }); });
+async function settleCase(name) {
+  let timer;
+  const closing = async () => {
+    for (const service of setups) { for (const job of service.list()) service.cancel(job.provider); service.dispose(); }
+    for (const handle of runs) handle.abort();
+    await Promise.all([...runs].map(handle => handle.done));
+    // Aborting a deferred text-protocol run prevents future spawns; setup cancellation is synchronous.
+    await Promise.all([...owned].map(entry => entry.done));
+  };
+  try {
+    await Promise.race([closing(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('fake CLI remained open at test boundary')), 10_000); })]);
+    assert.ok([...owned].every(entry => entry.closed));
+    setups.clear(); runs.clear(); owned.clear();
+  } catch (error) {
+    const pending = [...owned].filter(entry => !entry.closed);
+    trace({ event: 'unsettled-case', name, children: pending.map(entry => ({ pid: entry.child.pid, case: entry.case, verb: entry.verb })) });
+    for (const entry of pending) if (!entry.closed && entry.child.exitCode === null && entry.child.signalCode === null) entry.child.kill('SIGKILL');
+    clearTimeout(timer);
+    await Promise.race([Promise.all(pending.map(entry => entry.done)), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('owned fixture child did not close after cleanup failure')), 10_000); })]);
+    throw error;
+  } finally { clearTimeout(timer); trace({ event: 'case-end', name }); }
+}
+test.afterEach(t => settleCase(t.name));
+test.after(async () => { await settleCase('file teardown');
+  if(previous===undefined) delete process.env.PROMPTCUT_CLI_HOME; else process.env.PROMPTCUT_CLI_HOME=previous;
+  if(previousConfig===undefined) delete process.env.PROMPTCUT_AI_CONFIG; else process.env.PROMPTCUT_AI_CONFIG=previousConfig;
+  console.log(JSON.stringify({ evidence }));
   assert.equal(path.dirname(path.resolve(sandbox)), path.resolve(os.tmpdir())); fs.rmSync(sandbox,{recursive:true,force:true}); });
+
+test('fixture assertion failure before abort leaves a live fake CLI; case finally closes it before profile cleanup', async () => {
+  write({ scenario: 'hold' }); let reachedAbort = false;
+  await assert.rejects(async () => {
+    const handle = run(); await until(() => calls().some(call => call.args?.[0] === 'exec'));
+    assert.fail('controlled body failure');
+    reachedAbort = true; handle.abort();
+  }, /controlled body failure/);
+  const child = [...owned].find(entry => entry.verb === 'exec');
+  assert.equal(reachedAbort, false); assert.equal(child.closed, false); assert.equal(alive(child.child.pid), true);
+  trace({ event: 'counterexample', bodyFailureSkippedAbort: true, fakeChildAlive: true, pid: child.child.pid });
+  await settleCase('controlled body failure finally');
+  assert.equal(child.closed, true); assert.equal(child.child.exitCode !== null || child.child.signalCode !== null, true);
+  assert.equal(alive(child.child.pid), false);
+  console.log(JSON.stringify({ proof: 'assertion-before-abort', oldCleanupSkipped: true, realChildClosedBeforeProfileChange: true }));
+});
 
 test('explicit OpenAI evidence only; split UTF8/data, untruncated tail; ordinary faults stay ordinary', () => {
   for(const text of ['token_revoked', 'Failed to refresh token: refresh_token_reused', '401 Unauthorized https://api.openai.com/v1/responses', 'workspace routing discovery unauthorized (401)']) assert.ok(codexAuthReason(text), text);
@@ -131,7 +194,7 @@ test('known invalid and corrupt states block CLI at server entry, including text
   for(const toolProtocol of [false,true]) {const r=run({toolProtocol});await r.done;assert.equal(terminals(r.events).length,1);assert.equal(terminals(r.events)[0].authReason,'token_revoked');}
   assert.equal(calls().length,before);assert.equal((await probeAuth('agy',{refresh:true})).reason,undefined);
   const beforeQuota=calls().length;assert.equal((await probeQuota('codex')).ok,false);assert.equal(calls().length,beforeQuota,'invalid quota probe must not start app-server');
-  const otherEvents=[];const other=startProvider({provider:'claude',cwd:home,systemPrompt:'',prompt:'simulation only',onEvent:e=>otherEvents.push(e)});await other.done;
+  const otherEvents=[];const other=startProvider({provider:'claude',cwd:home,systemPrompt:'',prompt:'simulation only',onEvent:e=>otherEvents.push(e)});runs.add(other);await other.done;
   assert.equal(calls().length,beforeQuota+1,'another provider can still start its simulated CLI');assert.ok(!otherEvents.some(e=>e.type==='error'));
   const corruptHome=fs.mkdtempSync(path.join(sandbox,'corrupt-'));fs.mkdirSync(path.join(corruptHome,'codex-home'));fs.writeFileSync(path.join(corruptHome,'codex-home','promptcut-auth-state.json'),'invalid');
   process.env.PROMPTCUT_CLI_HOME=corruptHome;const unknown=run();await unknown.done;assert.equal(terminals(unknown.events)[0].authReason,'state_unknown');
@@ -154,7 +217,7 @@ test('immediate text-protocol cancel never starts CLI or executes queued tool bl
 test('review loop preserves auth metadata and never retries even if retryable was incorrectly set',async()=>{
   let starts=0;const events=[];const r=startCliLoop({prompt:'simulation',systemPrompt:'',onEvent:e=>events.push(e)},opts=>{
     starts++;opts.onEvent({type:'error',message:'login invalid',authProvider:'codex',authReason:'token_revoked',retryable:true});return{abort(){},done:Promise.resolve()};
-  },{lessonsStore:{read:()=>[],add(){}}});await r.done;assert.equal(starts,1);assert.equal(terminals(events).length,1);assert.equal(terminals(events)[0].authReason,'token_revoked');
+  },{lessonsStore:{read:()=>[],add(){}}});runs.add(r);await r.done;assert.equal(starts,1);assert.equal(terminals(events).length,1);assert.equal(terminals(events)[0].authReason,'token_revoked');
 });
 
 for(const error of ['network disconnected','timeout','429 Too Many Requests','503 Service Unavailable','MCP external 401 Unauthorized']) test(`runtime does not invalidate on ${error}`,async()=>{
@@ -176,8 +239,10 @@ test('cancel races authentication; abnormal exit and early turn done settle once
 
 test('fatal auth cleans only this Windows CLI process tree; unrelated task process survives', {skip:process.platform!=='win32'},async()=>{
   const unrelated=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{windowsHide:true,stdio:'ignore'});
+  observe(unrelated, ['fixture-unrelated'], {});
+  const lifetime = [...owned].find(entry => entry.child === unrelated);
   try { write({scenario:'split',descendant:true});const r=run();await r.done;
     for(const c of calls()) if(c.pid||c.descendant) await until(() => !alive(c.pid||c.descendant));
     assert.equal(alive(unrelated.pid),true);
-  } finally {const closed=new Promise(r=>unrelated.once('close',r));unrelated.kill('SIGKILL');await closed;}
+  } finally {if(unrelated.exitCode===null&&unrelated.signalCode===null) unrelated.kill('SIGKILL');await lifetime.done;}
 });
