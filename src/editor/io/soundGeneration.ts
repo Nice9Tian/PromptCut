@@ -2,7 +2,7 @@
 import { actions, getState } from "../../store/project";
 import { getCard } from "../../kernel/registry";
 import { findClip, newId } from "../../kernel/project";
-import { soundEffectReuseKey, SOUND_EFFECT_LIMITS, NOTIFICATION_SOUND_DEFAULTS, KEYBOARD_SOUND_DEFAULTS } from "../../kernel/soundEffects";
+import { soundEffectReuseKey, validateSoundEffectRecipe, SOUND_EFFECT_LIMITS, NOTIFICATION_SOUND_DEFAULTS, KEYBOARD_SOUND_DEFAULTS } from "../../kernel/soundEffects";
 import { createSoundGenerationManager, type SoundGenerationJob, SOUND_JOB_LIMITS } from "../../audio/soundGeneration";
 import { renderSoundEffectWavInWorker } from "../../audio/soundGenerationWorkerClient";
 import { hasGeneratedAudio, uploadGeneratedAudio } from "./generatedAudioUpload";
