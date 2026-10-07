@@ -32,7 +32,30 @@ const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MAIN = path.join(ROOT, 'server', 'hosted', 'main.mjs');
 const PROBE = path.join(ROOT, 'scripts', 'probes', 'shared-project-probe.mjs');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-sp-hosting-'));
-after(() => fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+const ownedChildren = new Map();
+function ownChild(child) {
+  const state = { child, closed: false, code: null, signal: null, error: null };
+  state.done = new Promise((resolve) => {
+    child.once('error', (error) => { state.error = error; });
+    child.once('close', (code, signal) => { state.closed = true; state.code = code; state.signal = signal; ownedChildren.delete(child); resolve(state); });
+  });
+  ownedChildren.set(child, state); return state;
+}
+async function closedWithin(state, ms = 10_000) {
+  let timer;
+  try { return await Promise.race([state.done, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('owned child did not close its stdio')), ms); })]); }
+  finally { clearTimeout(timer); }
+}
+async function stopOwned(state) {
+  if (!state || state.closed) return;
+  // A ChildProcess object created by this fixture is the ownership proof. Never signal an exited numeric PID.
+  if (state.child.exitCode === null && state.child.signalCode === null) state.child.kill('SIGTERM');
+  await closedWithin(state);
+}
+after(async () => {
+  await Promise.all([...ownedChildren.values()].map(stopOwned));
+  fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
 
 let seq = 0;
 const newDir = (label) => {
@@ -44,6 +67,22 @@ const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const token = () => crypto.randomBytes(32).toString('base64url');
 
+test('SPH-lifecycle kill 返回尚未 close：自建进程释放 cwd 后才清理', { timeout: 20_000 }, async (t) => {
+  const dir = newDir('held-cwd');
+  const source = "process.send('ready'); setInterval(()=>{},1000);";
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
+  const lifetime = ownChild(child); child.stdout.resume(); child.stderr.resume();
+  t.after(() => stopOwned(lifetime));
+  await new Promise((resolve, reject) => { child.once('message', resolve); child.once('error', reject); });
+  let cwdRemoval = 'allowed';
+  try { fs.rmdirSync(dir); } catch (error) { cwdRemoval = error.code; }
+  if (process.platform === 'win32') assert.equal(cwdRemoval, 'EBUSY');
+  const stopped = stopOwned(lifetime);
+  assert.equal(lifetime.closed, false, 'kill returning is not proof that this ChildProcess has closed');
+  await stopped; assert.equal(lifetime.closed, true);
+  if (fs.existsSync(dir)) fs.rmdirSync(dir);
+  console.log(JSON.stringify({ proof: 'owned-child-lifecycle', killReturnedBeforeClose: true, cleanupWaitedForClose: true, heldCwdRemoval: cwdRemoval }));
+});
 /** 同一套组合参数：端口 0、只绑回环、日志收进数组 */
 async function combo(dataDir, extra = {}) {
   const logs = [];
@@ -121,24 +160,23 @@ async function oneRound(c, p) {
 }
 
 /** 起 main.mjs 子进程，等它退出或打出 listen 行 */
-function runMain(env, { waitListen = false, ms = 20_000 } = {}) {
+async function runMain(env, { waitListen = false, ms = 20_000 } = {}) {
   const base = { ...process.env };
   for (const k of Object.keys(base)) if (k.startsWith('PROMPTCUT_')) delete base[k];
   const child = spawn(process.execPath, [MAIN], { env: { ...base, ...env }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const lifetime = ownChild(child);
   let out = '';
-  child.stdout.on('data', (d) => { out += d; });
-  child.stderr.on('data', (d) => { out += d; });
-  return new Promise((resolve) => {
-    const done = (code) => resolve({ code, out, child });
-    const t = setTimeout(() => { child.kill(); done('timeout'); }, ms);
-    child.once('exit', (code) => { clearTimeout(t); done(code); });
-    if (waitListen) {
-      const iv = setInterval(() => {
-        if (/"event":"listen"/.test(out)) { clearInterval(iv); clearTimeout(t); done('listening'); }
-      }, 50);
-      child.once('exit', () => clearInterval(iv));
-    }
-  });
+  let listening;
+  const ready = new Promise((resolve) => { listening = resolve; });
+  const collect = (d) => { out += d; if (waitListen && /"event":"listen"/.test(out)) listening('listening'); };
+  child.stdout.on('data', collect); child.stderr.on('data', collect);
+  let timer;
+  try {
+    const code = await Promise.race([lifetime.done.then((state) => state.code), ready, new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), ms); })]);
+    if (code === 'timeout') await stopOwned(lifetime);
+    if (lifetime.error) throw lifetime.error;
+    return { code, out, child, lifetime };
+  } finally { clearTimeout(timer); }
 }
 const configErrorOf = (out) => {
   const line = out.split('\n').find((l) => l.includes('"config.error"'));
@@ -291,7 +329,7 @@ test('SPH-failclosed-4 绑非回环：没设 PROMPTCUT_ASSET_PUBLIC_URL → asse
 test('SPH-failclosed-5 端口被占 → 退出码 1、config.error listen；正常时 listen 行带两个端口与布局', { timeout: 60_000 }, async (t) => {
   const d = newDir('listen');
   const ok = await runMain({ PROMPTCUT_DATA_DIR: d, PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1', PROMPTCUT_DOCSERVICE_PORT: '0', PROMPTCUT_ASSET_PORT: '0' }, { waitListen: true });
-  t.after(() => ok.child.kill());
+  t.after(() => stopOwned(ok.lifetime));
   assert.equal(ok.code, 'listening', ok.out);
   const listen = JSON.parse(ok.out.split('\n').find((l) => l.includes('"event":"listen"')));
   assert.ok(listen.docservice.port > 0 && listen.asset.port > 0);
@@ -478,17 +516,18 @@ test('SPH-SP3 一轮之后全部成员断开：新成员（重启前、重启后
 
 /* ================================================================== SP7 */
 
-function runProbe(args, env = {}) {
+async function runProbe(args, env = {}) {
   const base = { ...process.env };
   delete base.PROMPTCUT_CLUSTER_TOKEN;
   const child = spawn(process.execPath, [PROBE, ...args], { env: { ...base, ...env }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const lifetime = ownChild(child);
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
-  return new Promise((resolve) => child.once('exit', (code) => {
-    const last = out.trim().split('\n').reverse().find((l) => l.startsWith('{') && l.includes('"fails"'));
-    resolve({ code, out, result: last ? JSON.parse(last) : null });
-  }));
+  const { code, error } = await closedWithin(lifetime, 110_000);
+  if (error) throw error;
+  const last = out.trim().split('\n').reverse().find((l) => l.startsWith('{') && l.includes('"fails"'));
+  return { code, out, result: last ? JSON.parse(last) : null };
 }
 
 test('SPH-SP7 两份托管组合：停写、拷数据目录、两边都起来后 migrate-check 通过；新实例上少一个产物时不通过', { timeout: 120_000 }, async (t) => {
@@ -545,7 +584,8 @@ test('SPH-deploy-1 部署清单是闭合的：按 files.mjs 拼出的暂存目�
     cwd: stage, env: { ...base, PROMPTCUT_DATA_DIR: data, PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1', PROMPTCUT_DOCSERVICE_PORT: '0', PROMPTCUT_ASSET_PORT: '0' },
     stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
-  t.after(() => child.kill());
+  const lifetime = ownChild(child);
+  t.after(() => stopOwned(lifetime));
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
