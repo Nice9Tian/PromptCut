@@ -19,6 +19,7 @@
 | 手机版与 APP 版（将来）：2026-10-07 用户原话「将来做手机版，给桌面版升级为APP版，给APP版加回退」。现在的语义是手机应用、iPad 应用不做（`docs/semantics/product/platforms.md`「面向的平台」） | 还没有计划文件，方向未展开 | 只记方向，开工前先和用户对齐范围；在线浏览器的三道闸门到时给 APP 版用 |
 | 在线浏览器：浏览器能新建放云端的项目；撤销低内存档，电脑、iPad、手机统一为「在线浏览器」，由舞台、素材、即时渲染三道闸门判出每台设备做到哪一步，进入后气泡告知档位（语义 2026-10-07 用户逐条定，代码还是旧的） | `docs/plan/online-browser-task.md`；单独一个会话做，分支 `claude/online-browser`（从集成分支切出），不并进四段连做任务。真机上的核对（iOS Safari 崩溃后自动重新载入、安卓 Chrome 的进程隔离、各机型落在哪一档）留给用户 |
 | 验证改造：把 2026-10-07 改定的三条验证规则（耗时只记录不当闸门、分本地与真实网络两级、「跨机」撤销）落到探针、验收运行器和文档里 | `docs/plan/verification-rework-task.md`；单独一个会话做，分支 `claude/verification-rework`（从集成分支切出），不并进四段连做任务 |
+| 账号与云端项目：云端项目一律走网站账号（加入时服务器核对账号和密码、账号页两张项目列表、踢人对账号生效），旧云端项目清掉不兼容，旧文件自动回到本机；本地项目不用账号。出 0.7.18，第四段没做完的云端 Agent 工具延后一个版本 | `docs/plan/account-binding-task.md`（2026-10-07 任务书，含用户的决定 A～G、等用户定的 5 条与逐条验收）；账号本身已上线，在另一个仓库 VisuHive | 2026-10-07 用户定优先做；任务书已写，等用户定开工 |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有素材原尺寸的云端素材补转素材小尺寸；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
 | Agent 与工作方式：创造力等级、「用户正在编辑」、多 Agent、SKILL 经 MCP 直连、后台运行（托盘与悬浮窗）、Agent 用 JS 自定义测量 | `docs/plan/agent-workflow-plan.md`（2026-09-30 写，A1～A6） | A1～A6均已合入main；A4/A5及ps1-bom、draft-lock、release-no-git本轮验收并出正式应用0.7.14/外壳0.2.7，release已从main快进（2026-10-03，REPORT-post-M8第15轮）；R1/R2/R3/R4/R5/R7/R8过，R6物理双屏待用户，草稿锁政策维持 |
