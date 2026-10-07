@@ -1718,12 +1718,23 @@ try {
         const plane = w?.querySelector(':scope > [data-pc-snapshot-plane]');
         const liveChildren = w ? [...w.children].filter((c) => !c.matches('[data-pc-placeholder-slot],[data-pc-snapshot-plane]')) : [];
         return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null,
-          live: liveChildren.some((c) => (c.textContent ?? '').trim().length > 0), text: liveChildren.map((c) => (c.textContent ?? '').trim()).join('|').slice(0, 40) } : null;
+          // 活组件的子树露着才算 live:包裹层带着「贴快照 / 抑制 / 等快照 / 追帧」任何一个类时子树是藏起来的(`planeStyle.ts`)
+          live: !['pc-snapshot', 'pc-suppressed', 'pc-awaiting', 'pc-settling'].some((c) => w.classList.contains(c)) && liveChildren.some((c) => (c.textContent ?? '').trim().length > 0), text: liveChildren.map((c) => (c.textContent ?? '').trim()).join('|').slice(0, 40) } : null;
       }, state.userClip).catch(() => null) : null;
     };
     const badgeOf = () => P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null);
     await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); });
-    const liveU = await until('用户卡:成员页在可见舞台里直接活渲仓库用户卡(判轻),没有快照与图标', async () => {
+    /*
+     * 先看它在不在成员页发布的清单计划里,再决定断言哪一路(2026-10-07 改:以前「直接活渲、没有快照」那一条不分路、先断言)。
+     * 这个探针的项目里,用户卡与主重卡加若干张额外重卡叠在同一段时间上:每张重卡每拍都要计一份换帧的固定成本,加起来就超出一拍的预算,
+     * 轻卡在这个位置被挤出轻管线(K2 逐位置贪心,`pipelinePlan.mjs`)——它自己的成本记录是轻的(实测 stepMs 0.3、seekOk),
+     * 但整段进预渲染集合、由渲染节点渲出、舞台贴快照。这台 PC 上第二段合并提交(21b02329)与四段合流后连跑都是这一路(清单计划 12 张卡全在)。
+     * 判重的一路舞台贴着快照是对的,旧的不分路断言把它判成了不过。判轻直接活渲那一路由 `online-user-cards-probe.mjs` 与
+     * `online-card-exec-probe.mjs` 验(那里的项目不拥挤)。
+     */
+    const planU0 = await until('用户卡:成员页发布了清单计划', async () => { const d = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null); return d?.lastClips?.length ? d : null; }, 60_000, 1000);
+    const inPlanFirst = !!planU0?.lastClips?.includes(state.userClip);
+    const liveU = inPlanFirst ? null : await until('用户卡:成员页在可见舞台里直接活渲仓库用户卡(判轻),没有快照与图标', async () => {
       await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); }).catch(() => {});
       const st = await userStage();
       return st?.live && !st.snapshot && !st.placeholder ? st : null;
@@ -1731,7 +1742,14 @@ try {
     const lastU = { stage: await userStage(), badge: await badgeOf() };
     lastU.diag = await P(member, (id) => { const d = window.__pcPreviewDiag?.(); const j = d?.probeRun?.probed?.filter((x) => x.clipId === id) ?? []; return { probedN: j.length, identityKey: j.at(-1)?.identityKey ?? null, suppressed: (d?.suppressed ?? []).includes(id), pending: d?.probeRun?.running ?? null }; }, state.userClip).catch(() => null);
     lastU.layer = (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null;
-    check(!!liveU, '用户卡(新语义):成员页在可见舞台里直接看得到仓库用户卡的活画面(判轻活渲,或判重暂停后追精确;没有快照、没有「需要本地 PC 渲染辅助」图标)', { liveU, last: lastU });
+    // 排障:这张卡在本页的成本记录(判轻判重的依据),按身份键从 L2 里取
+    lastU.cost = await P(member, (key) => new Promise((resolve) => {
+      if (!key) { resolve(null); return; }
+      const r = indexedDB.open('promptcut-l2');
+      r.onsuccess = () => { const q = r.result.transaction('costs').objectStore('costs').getAll(); q.onsuccess = () => { resolve(q.result.filter((x) => JSON.stringify(x).includes(key)).map((x) => JSON.stringify(x.record ?? x).slice(0, 500))); r.result.close(); }; q.onerror = () => resolve(null); };
+      r.onerror = () => resolve(null);
+    }), lastU.diag?.identityKey ?? null).catch(() => null);
+    if (!inPlanFirst) check(!!liveU, '用户卡(新语义,判轻的一路):成员页在可见舞台里直接看得到仓库用户卡的活画面(没有快照、没有「需要本地 PC 渲染辅助」图标)', { liveU, last: lastU });
     check(lastU.badge === false, '用户卡(新语义):时间轴上它没有「需要本地 PC 渲染辅助」徽标', lastU);
     const planU = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
     /*
