@@ -8,6 +8,8 @@
 > - **B4**「等连续 5 分钟不变、最多等 3 小时」：这三个版本部署切换时可以打断旧测试项目，不以这两条为停点；例外办结后恢复原规定。
 > - **新增要核的**：在线页面现在还有一个地址 `https://visuhive.com/editor/`（官网的站点配置在 VisuHive 仓库 `deploy/nginx-site-landing.conf`，里面照抄了本仓库的站点模板，改模板时那边跟着改）。账号后端、PromptCut 服务、网页的先后顺序见 `account-binding-task.md`「两仓库交付、部署与回退」。
 
+> **2026-10-08 对齐补记（main `bf6e48e6`）：** 在线卡片的旧出口保护与外链阻断验收被用户决定取代：浏览器都执行用户卡/图卡、外链照常加载，本期不做卡片出口限制；舞台和编辑页分源、素材按项目隔离保留。P2 图卡任务体积上限照旧。托管渲染容量数字先沿用并在节点复核；任务遇容量压力等待、不报“已满”、不本机降级，云端 Agent 优先；渲染产物硬上限不突破，507 是内部容量信号，消费方改为保留任务等待并在可写时重试（尚待容量实施包完成）。该规则不用于账号/素材上传大小错误。选区规则、对话共有私有及托管方读取告知按 `account-binding-task.md`；本清单中的旧 P1/P3/P5 和旧容量失败验收需按此目标更新，未更新的历史测试记录不代表新策略已实施。只有撤销冲突窗口选项仍需用户事后审。
+
 给主会话在「最后一次完整验收」通过之后照着做（任务书 `sound-online-render-task.md`「做法与验收节奏」第 4～6 步）。每一步写：做什么、哪条命令、改动前备份什么、怎么核对、不过怎么退。可以逐条打勾。2026-10-07 起草，同日按任务书更新（云端 Agent 的 F、J、K 与完成条件第 8 条）补入。
 
 先说清几件事：
@@ -80,7 +82,7 @@
   5. `nginx -t`，**通过再** `systemctl reload nginx`（不重启托管服务）。
 - **备份。** B1 的 nginx 整份备份。
 - **核对**（README 里写的四条，都对着真地址）：
-  - `curl -sI https://s1.<域名>/editor/stage.html`：有 `Content-Security-Policy`（含 `frame-ancestors https://<域名>`）与 `Connection-Allowlist`；页面还没换时 `stage.html` 可能 404，这条放到 C2 之后核；
+  - `curl -sI https://s1.<域名>/editor/stage.html`：核对舞台/编辑页的跨源与 frame-ancestors 配置；不要求 `Connection-Allowlist`，也不把 CSP 当作卡片出口护栏；页面还没换时 `stage.html` 可能 404，这条放到 C2 之后核；
   - `curl -sI https://s1.<域名>/editor/_iso/ok` 是 204，`/editor/_iso/redirect` 是 302；
   - `curl -s -o /dev/null -w '%{http_code}' -X POST https://s1.<域名>/media-s/0123456789abcdef0123456789abcdef/_grant` 是 403（没有主站的 `Origin`）；
   - `curl -sI https://<域名>/editor` 有 `frame-src`；
@@ -89,7 +91,7 @@
 - **最可能出问题的地方（模板没在真 nginx 上验过，只在本机仿 nginx 的代理 `scripts/probes/lib/hosted-proxy.mjs` 上验过）：**
   1. **nginx 1.18 是节点上的版本**（Ubuntu 22.04 的包，比阿里云的 1.24 老）：`map` 里带命名捕获的正则、`if` 里只放 `return`、`add_header … always` 这些都在 1.18 支持，但**逐字逐句 `nginx -t` 一遍比相信模板更可靠**；
   2. **`add_header` 不跨层继承**：location 里只要有一条 `add_header`，server 层的就一条都不继承——模板因此在每个 location 里 `include` 片段。手工合并配置时漏掉一个 location，那个 location 的响应就没有策略头；核对时对 `/editor/assets/…`、`/catalog/…`、`/media`、404 的 `location /` 各 `curl -sI` 一次；
-  3. **`Connection-Allowlist` 与 CSP 里的 `webrtc 'block'`**：前者是较新的响应头，nginx 只是原样发出；浏览器是否认由浏览器版本决定（Chrome 152、154 本机实测拦得住 WebRTC，别的浏览器靠页面里的脚本加固，不是浏览器的保证）；
+  3. **旧卡片出口策略不再验收**：本期不要求 `Connection-Allowlist`、CSP `webrtc 'block'` 或脚本加固；所有在线浏览器执行用户卡/图卡，外链资源照常加载。仍核对舞台与编辑页分源、素材票据不跨项目使用。
   4. **`/media-s/<会话号>/_grant` 换 cookie**：`Set-Cookie` 带 `Secure; SameSite=Strict`，只在 https 的真实域名上才发得出来；本机仿 nginx 用 `*.localhost` 验的，**真域名 `s1.<域名>` 与主站是同站跨源，cookie 的 `Path`、`SameSite`、第三方 cookie 限制要在真浏览器里验一遍**（D 节第二段实测的第一条）；
   5. **`proxy_bind {{BIND_ADDR}}`**：节点没有内网地址，用公网地址；填错会 502；
   6. **主站 `server` 块与舞台 `server` 块的 `/agent/`**：别加到舞台块里（见上）。
@@ -221,7 +223,7 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
 
 - [ ] **S4-r7**（之前）在线构建里诊断报告收集端的配置：C2「构建前」三条。过：两个变量都有值、收集端域名被内联；不打印令牌。
 - [ ] **S1-r2** 页面换成与桌面同一提交：C2「核对」四条。过：三个源主脚本相同、`__PC_CODE_VERSION__` 与 `<SHA>` 算出来的一致、无头打开页面错误 0、失败请求 0。
-- [ ] **S2-r1**（补）`curl -sI https://s1.<域名>/editor/stage.html` 带 CSP 与 `Connection-Allowlist`；页面里新建测试房间，运行状态报「舞台已隔离」；`_grant` 的 cookie 在真 Chrome 里发得出来。
+- [ ] **S2-r1**（补）真浏览器中核对编辑页面与舞台不同源；运行同步用户卡/图卡，确认不依赖 `Connection-Allowlist` 且外链资源照常加载；以账号/项目隔离探针确认素材票据不能跨项目读；图卡超体积任务仍由 PC 或云端处理（不要求纯浏览器认领）。这是新验收目标，相关新探针尚待实现；旧“舞台已隔离”状态文案不作为出口护栏证据。
 - [ ] **S1-r3** 在线合成与在线导出：D1 表「R4、R5」一行。过：导出的成片有声、位置对齐、取消不留半截。
 - [ ] **S4-r7**（之后）在新节点的在线页面里点一次「报告」，收集端收到一份、再删掉。
 - [ ] 清单外·延迟与断线重连：无头 Chrome 以成员身份进测试房间，记加入用时与一次编辑到另一成员看到的用时（只记录）；在服务器侧断那条 TCP（不动宿主机网络，`constraints.md`），页面顶栏先显示断开、之后自动重连、重连后改动不丢。
@@ -262,10 +264,10 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
 
 | 部署之后 | 任务书条目 | 实测什么 | 用什么 | 指向 | 备注 |
 |---|---|---|---|---|---|
-| C1 之后 | 第二段 R19 后半 | nginx 策略头、`/media-s/`、舞台自检 | `curl` 四条（C1 核对）；页面换版后无头打开看舞台「已隔离」；`online-card-security-probe` 的 A1 前提断言思路 | `https://<域名>`、`s1.`、`s2.` | 真域名上 `_grant` 的 cookie 要在真 Chrome 里验 |
+| C1 之后 | 第二段 R19 后半 | nginx 舞台与编辑页分源、`/media-s/`、舞台自检；不再验出口阻断 | `curl` 核来源与素材路由；页面换版后核舞台来源隔离；不把旧 `online-card-security-probe` 出口断言当通过条件 | `https://<域名>`、`s1.`、`s2.` | 真域名上 `_grant` 的 cookie 要在真 Chrome 里验 |
 | C2 之后 | R10 | 三个源主脚本相同、代码版本与桌面 0.7.18 一致、无页面错误 | 本文 C2 核对；`c10a-demo-probe --site https://<域名>`（上一次换页面时用过） | 真地址 | 第 1～6 步全走完；测试项目验完删 |
 | C2 之后 | R4、R5（在线一半） | 在线合成与在线导出有声、位置对齐、取消不留半截 | `sound-ab-probe` 的在线段思路；对真地址：创建者桌面版建放云端的测试项目，无头 Chrome 以成员身份加入，放内置提示音、键盘声、有声卡，直接导出，量音轨 | 真地址 | `sound-ab-probe` 是本机替身，要对新节点需改写成 `--site` 形态〔待补〕；或手工按清单做 |
-| C2 之后 | R15（第二段功能的真实路径） | 在线浏览器直接画出用户卡、图卡，判重走预渲染 | `online-card-exec-probe`、`online-card-graph-probe` 同样需改写成对真地址；至少手工放一张用户卡一张图卡，截图 | 真地址 | 本机替身上的版本已在 A1 过 |
+| C2 之后 | R15（第二段功能的真实路径） | 在线浏览器直接画出用户卡、图卡且外链照常加载；舞台/编辑页分源、素材按项目隔离；纯浏览器仍把超体积图卡交 PC/云端 | `online-card-exec-probe`、`online-card-graph-probe` 改为真地址；至少手工放用户卡、图卡和外链资源，截图；跨项目素材访问应拒绝 | 真地址 | 不验 `Connection-Allowlist` 或出口阻断；不把素材隔离证据与出口护栏混同 |
 | C3 之后 | R22 | 中断时长、各项目版本号前后不变 | B3 的 `migrate-check --from-inventory`；`/healthz` 三个 | SSH 转发的回环端口 | 中断时长贴进总报告 |
 | C4 之后 | R23 第 1 点 | 手机仿真低内存档打开含重卡的测试项目，补渲任务被云节点认领、产物贴上 | `c10a-demo-probe --site https://<域名>` 的第 2、3 步（低内存档加入、改重卡参数、贴回新键）；外加看 `status-render` 里认领计数 | 真地址 | 创建者的桌面渲染节点不要开（`--no-host` 思路），好确认是云节点接的 |
 | C4 之后 | R23 第 2 点 | 在线普通档判重的层交给云节点，结果贴回 | `c10-browser-probe --site https://<域名> --no-host --only-a4`（外网模式） | 真地址 | A5 记「待外部主机」是正常的；本次要的是云节点接活 |
@@ -273,8 +275,8 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
 | C4 之后 | R23 第 4 点 | 新建项目不配置就接活；创建者关开关后不接；删项目后断开 | `hosted-render-probe` 的 `work`、`switch`、`delete` 三步的断言思路，手工对真地址做：新建测试项目看 `status-render` 诊断口出现这个项目、项目设置里关「托管方的渲染节点」再发计划确认不认领、删项目后确认断开 | 真地址 | 成员列表里应有「托管方的渲染节点」一行 |
 | C4 之后 | R23 第 5 点 | 用它的身份提交一次编辑被拒 | `hosted-render-probe` 的 `forbidden` 步思路 | 真地址 | 项目版本号不变 |
 | C4 之后 | R23 第 6 点 | 进程被杀自动拉起恢复接活；节点重启后自动起来 | `ssh "$PROMPTCUT_REMOTE" 'pm2 pid promptcut-render'` 然后只结束管理进程，等 pm2 拉起，再发一个计划做完；重启节点要用户授权（C4 第 6 步） | 真节点 | 重启会中断托管服务，先 B4 |
-| C4 之后 | R23 第 7、8 点 | 满载渲染时文档服务响应与素材下载速度前后对比；资源上限生效 | 空闲与满载各量 `/healthz` 往返（每次 20 次取中位数、p95）与一个固定素材的下载速度，写数字；把并发或内存上限调小一档观察超限表现（`worker.exit` 的 reason `oom`、降并发 `render.degraded`） | 真节点 | 改上限用 `PROMPTCUT_RENDER_*` 环境变量重新 `deploy-render`，测完调回 |
-| C5 之后（模拟模型） | C4 | 隔离：甲读不到乙的项目、改不了；一个项目的对话拿不到另一个项目的内容、素材、对话记录；伪造或过期的身份证明被拒；只读成员改不了；创建者关开关后对话被停 | `cloud-agent-auth-probe`、`cloud-agent-isolation-probe` 的断言思路，对真地址；这两个探针起的是本机整套，对新节点需改写成只用真地址的版本〔待补〕；更稳的是在新节点上用两个测试项目、三个测试成员手工逐条验并截图 | 真地址 | 核心项；任何一条不过：停 Agent 服务 |
+| C4 之后 | R23 第 7、8 点 | 满载渲染时文档服务响应与素材下载速度前后对比；资源上限生效；并发/内存/存储压力下，预渲染与即时看画面请求均等待且可恢复 | 空闲与满载各量 `/healthz` 与固定素材下载；触发并发/内存压力及产物硬上限，核对两类请求留队列/暂停、不丢失、不终态报“忙/已满”、不本机降级；腾出空间后消费方恢复；即时看画面可保留 deadline，到期需如实报超时/这次没看成；允许底层写入返回内部 507，但不得将渲染任务终态失败 | 真节点 | 硬上限仍有效；预渲染与看画面等待/恢复消费方尚待容量实现包对齐。账号或素材上传大小错误不适用渲染排队规则 |
+| C5 之后（模拟模型） | C4 | 项目/账号授权；共有对话切私时中止他人当前轮并作废其排队消息、已落地修改保留；同一共有对话 FIFO 且显示队位；所有在线成员选区署名、离线发起人用消息快照并标非实时；托管方读取告知与账号记忆授权 | `cloud-agent-auth-probe`、`cloud-agent-isolation-probe` 及新增真地址探针；用两个测试项目、多个成员分别核对共享/私有权限、队列、选区来源和首次同意/拒绝行为并截图 | 真地址 | 机制仍待设计/实施包改写，当前检查项描述目标，不表示已经实现 |
 | C5 之后（模拟模型） | C4a、C4b、C4c（2026-10-07 新增） | 工具读写按项目隔离；出网工具不能访问回环、内网、同机服务；配音记进用量 | 第四段补的探针与上面 C5 第 8 步的出网限制核对 | 真节点 | 命令待第四段补 |
 | C5 之后（模拟模型） | C6 | 端到端：桌面版建协作项目放云端；在线成员在 AI 栏让云端 Agent 改文案、挪片段、调卡片参数；桌面与另一成员都看到、署名「〈成员名〉的云端 Agent」；撤销；两成员同时各开一对话互不串；进程被杀自动拉起、进行中的对话明确报中断可重开 | `cloud-agent-ui-probe` 与 `cloud-agent-ux-ui-probe` 的断言思路，对真地址；被杀自动拉起手工做 | 真地址 | |
 | C5 之后（模拟模型） | C7 | 额度接口：把测试项目额度设成很小，超出被明确拒绝并告知原因，设回不限恢复，用量记录查得到项目、成员、模型与用量 | `cloud-agent-run-probe` 的 D 组思路；节点上用 `admin.mjs quota set/clear/show`、`admin.mjs usage` | 真节点 | 改完即生效，不重启 |

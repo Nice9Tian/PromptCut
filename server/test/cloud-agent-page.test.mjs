@@ -315,28 +315,36 @@ test('CA-REV-10 HTTP:pageId、?page=、POST page-results;别人的对话 404,不
   await sent.arrayBuffer();
 
   // 发起的那张页面:带 ?page= 读事件流,逐个答
-  const statuses = [];
+  const statuses = new Map();
+  const answers = [];
   let firstReq = null;
   const mine = await readSse(`${svc.url}/v1/conversations/c-h/events?after=0&page=${PAGE}`, A, (ev) => {
     if (ev.type === 'page.request') {
+      assert.equal(statuses.has(ev.id), false, '每个页面请求只交付一次');
+      const received = [];
+      statuses.set(ev.id, received);
       const answer = async () => {
         if (!firstReq) {
           firstReq = ev;
           // 成员乙拿着这个 id 来交:对话不是他的,404
           const r0 = await post('/v1/conversations/c-h/page-results', B, { id: ev.id, pageId: PAGE, ok: true, result: { ok: true } });
-          statuses.push(['bob', r0.status, (await r0.json()).code]);
+          received.push(['bob', r0.status, (await r0.json()).code]);
           // 不带票据:401
           const r1 = await post('/v1/conversations/c-h/page-results', {}, { id: ev.id, pageId: PAGE, ok: true, result: { ok: true } });
-          statuses.push(['anon', r1.status, (await r1.json()).code]);
+          received.push(['anon', r1.status, (await r1.json()).code]);
         }
         const r = await post('/v1/conversations/c-h/page-results', A, { id: ev.id, pageId: PAGE, ok: true, result: { ok: true } });
-        statuses.push(['alice', r.status, (await r.json()).ok]);
+        received.push(['alice', r.status, (await r.json()).ok]);
         if (ev === firstReq) {
           const dup = await post('/v1/conversations/c-h/page-results', A, { id: ev.id, pageId: PAGE, ok: true, result: { ok: true } });
-          statuses.push(['dup', dup.status, (await dup.json()).code]);
+          received.push(['dup', dup.status, (await dup.json()).code]);
         }
       };
-      void answer();
+      const answering = answer();
+      // SSE 可以先送来下一条请求;HTTP 回包跨请求没有完成顺序承诺。
+      // 先挂拒绝处理,随后 Promise.all 仍会把回答失败交给测试。
+      void answering.catch(() => {});
+      answers.push(answering);
     }
     return ev.type === 'end';
   });
@@ -346,9 +354,23 @@ test('CA-REV-10 HTTP:pageId、?page=、POST page-results;别人的对话 404,不
   assert.ok(reqs.every((r) => r.seq === undefined));
   const results = mine.events.filter((e) => e.type === 'tool_result');
   assert.deepEqual(results.map((e) => [e.name, e.ok]), [['seek', true], ['pause', true]]);
-  await waitFor(() => statuses.length === 5, 3000, '各次交回都有了回答');
-  assert.deepEqual(statuses.slice(0, 4), [['bob', 404, 'not-found'], ['anon', 401, 'unauthorized'], ['alice', 200, true], ['dup', 410, 'page-request-gone']]);
-  assert.deepEqual(statuses[4], ['alice', 200, true]);
+  // 按请求聚合回答,保留原来 3 秒的防卡死上限;任何回答失败都向测试传播。
+  let answerTimer;
+  try {
+    await Promise.race([
+      Promise.all(answers),
+      new Promise((_, reject) => {
+        answerTimer = setTimeout(() => reject(new Error('等待超时:各次交回都有了回答')), 3000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(answerTimer);
+  }
+  assert.equal(statuses.size, 2, '两次工具调用对应两个不同请求');
+  assert.equal(answers.length, 2, '每个请求的异步交回答复都已经核对');
+  // 同一个 id 内依次验证拒绝、接受、一次性消费;不对不同 id 的网络完成顺序作断言。
+  assert.deepEqual(statuses.get(reqs[0].id), [['bob', 404, 'not-found'], ['anon', 401, 'unauthorized'], ['alice', 200, true], ['dup', 410, 'page-request-gone']]);
+  assert.deepEqual(statuses.get(reqs[1].id), [['alice', 200, true]]);
   // 这一轮结束之后再交:410;补发里没有 page.request
   const late = await post('/v1/conversations/c-h/page-results', A, { id: firstReq.id, pageId: PAGE, ok: true, result: { ok: true } });
   assert.equal(late.status, 410);

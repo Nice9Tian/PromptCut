@@ -140,9 +140,22 @@ export function killTree(pid, { platform = process.platform, spawn = nodeSpawn, 
   return [...killed].sort((a, b) => a - b);
 }
 
-/** 这棵树还活着的进程（探针与单测核对「没有残留」用）；Windows 上只按父子关系找 */
-export function treeAlive(pid, { token = '', platform = process.platform, list = listProcesses } = {}) {
-  return treePids(Number.isInteger(pid) && pid > 0 ? pid : null, list({ platform, token }));
+/**
+ * 这棵树还活着的进程（探针与单测核对「没有残留」用）；Windows 的 CIM 记录还需 signal 0 核对。
+ * Windows 可传先前 listProcesses 的 `observed` 快照：只核对那次树中的进程，以 pid + born 认身份，
+ * 不把重用旧 pid 的新进程当残留；根已换人时仍逐个核对原后代。它不发现快照之后新起的进程。
+ * 创建时刻缺失、存活查询权限不足或出错时保守保留；只有明确的不同身份或 ESRCH 才排除。
+ */
+export function treeAlive(pid, { token = '', platform = process.platform, list = listProcesses, observed = null, kill = (p, sig) => process.kill(p, sig) } = {}) {
+  const current = list({ platform, token });
+  const root = Number.isInteger(pid) && pid > 0 ? pid : null;
+  if (platform !== 'win32') return treePids(root, current);
+  return treePids(root, observed ?? current).filter((p) => {
+    const now = current.get(p);
+    const before = observed?.get(p);
+    if (Number.isFinite(before?.born) && Number.isFinite(now?.born) && before.born !== now.born) return false;
+    try { kill(p, 0); return true; } catch (err) { return err?.code !== 'ESRCH'; }
+  });
 }
 
 /** Windows 上：这个 pid 还活着、而且命令行里确实有 `marker`（入口脚本的路径）才算是我们上一轮起的 */
