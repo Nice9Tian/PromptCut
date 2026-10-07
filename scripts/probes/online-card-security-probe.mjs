@@ -281,7 +281,7 @@ const runInFrameRaw = (frame, fn, ctx, { worker = false } = {}) => frame.evaluat
     const arg2 = fnName === 'webrtcAttack' ? window.__pcSavedRtc : undefined;
     return await mod.exports[fnName](c, arg2);
   }
-  // 声音那一半:舞台起 blob Worker(继承舞台文档的策略);Worker 里先建 Trusted Types 的缺省策略再执行(同 `spawnWorker.ts`)
+  // 声音那一半:舞台起 blob Worker(继承舞台文档的策略);保留旧worker可选TT编译兼容写法，不把TT支持作为执行前提
   const boot = 'if (self.trustedTypes && !self.trustedTypes.defaultPolicy) self.trustedTypes.createPolicy("default", { createHTML: (s) => s, createScript: (s) => s, createScriptURL: (s) => s });'
     + 'onmessage = async (e) => { const m = { exports: {} }; try { new Function("require", "module", "exports", e.data.code)(() => { throw new Error("no modules"); }, m, m.exports); postMessage({ ok: true, out: await m.exports[e.data.fn](e.data.ctx) }); } catch (err) { postMessage({ ok: false, error: String(err) }); } };';
   const w = new Worker(URL.createObjectURL(new Blob([boot], { type: 'text/javascript' })));
@@ -317,7 +317,7 @@ const settled = (m, ms = 40_000) => until(`${m.tag} 本页的执行判定落定`
 try {
   /* ============================================================ A 隔离生效 */
   if (ONLY.includes('A')) await withProxy({ policy: 'full' }, async (proxy) => {
-    console.log('\n== A 隔离生效(新 nginx:策略头 + 出口白名单 + /media-s/)');
+    console.log('\n== A 隔离生效(新 nginx:结构策略头 + /media-s/，无出口白名单)');
     resetSink();
     const m = await openMember('A');
     const canary = `PCCANARY${randomBytes(12).toString('hex')}`;
@@ -541,7 +541,7 @@ try {
     }
   });
 
-  /* ============================================================ B 浏览器层面拦 WebRTC */
+  /* ============================================================ B 保留 WebRTC 与结构边界 */
   if (ONLY.includes('B')) await withProxy({ policy: 'full' }, async () => {
     console.log('\n== B 假设脚本加固被绕过(页面脚本之前留了一份原装构造器):不把WebRTC封堵作为执行前提');
     resetSink();

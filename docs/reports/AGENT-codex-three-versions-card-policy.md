@@ -10,7 +10,7 @@
 
 ## 状态与验证计划
 
-实现与范围内浏览器验证已完成，hosted复验进行中；已读本工作区AGENTS入口、developer_guide、constraints、suggested_agent_behavior，并沿用已读verification/multi_agent/git_and_release/solution_table规则。接下来读真实调用链，按完整小块提交；先针对性测试、外链fixture与握手/权限反向探针，再最终类型和全量npm各一次。仅已安装浏览器实测，不冒称Firefox/Safari通过。particles覆盖相关参数分支桌面改前后逐帧，在线外链恢复可见；其它渲染附加项按实际范围挑，不拿没有NASA的演示当充分验证。
+实现与本包定向验收完成；最后一次全量full-3已因非本包fixture生命周期挂起中止，集成全量闸门由主会话派Astra诊断后复验。已读本工作区AGENTS入口、developer_guide、constraints、suggested_agent_behavior，并沿用已读verification/multi_agent/git_and_release/solution_table规则。已读真实调用链并按完整块提交；下列按源码阶段记录单测、外链fixture、握手/权限反向、类型与全量结果。仅已安装浏览器实测，不冒称Firefox/Safari通过。particles覆盖相关参数分支桌面改前后逐帧，在线外链恢复可见；其它渲染附加项按实际范围挑，不拿没有NASA的演示当充分验证。
 
 产品代码和探针已经修改；服务仅本任务临时回环夹具，关闭后核所有owned监听。
 
@@ -60,7 +60,7 @@
 - 首次固定5900～5909：resident编辑器5900与舞台5901/5902，isolated编辑器5903与舞台5904/5905，管理5906，collector5907，doc5908，asset5909。
 - 既有server/vite-plugin-prerender.ts freePort调用server/safe-port.mjs listen(0)，无现成进程级PORT_RANGE；另外resident prerender34456监听5103、isolated prerender49644监听1067。Chrome remote-debugging-port=0又被OS分到5744（PID45016），实际偏离授权段；没有向其它任务服务发请求。
 - 归属严格核验：精确hosted probe CLI Node38576 → supervisor50168 → isolated47516 → editor42040 → prerender49644；resident45972 → editor31292 → prerender34456；Chrome45016是49644子孙。已报主会话并仅killTree38576整树，所有5900～5909/1067/5103/5744 owned监听检查为空。首次按范围问题中止，不作通过；TMP/promptcut-card-policy-hosted-1.log，临时证据目录pc-render-iso-OfGcao保留。
-- 不改全局环境、不改产品端口池；等待主会话分配附加空段，拟仅探针进程级preload收束Node listen(0)，Chrome使用pipe消除调试TCP监听。
+- 不改全局环境、不改产品端口池；该首次计划已由主会话授权5930～5939落实，见后两节；只用探针进程级preload收束Node listen(0)，Chrome pipe消除调试TCP监听。
 - 真实Linux节点未运行或部署；当前是Windows真实worker调用链，cgroup明确not-linux，不冒称OS隔离生产验收通过。
 
 ## hosted第二轮、CSS导入与经典云页结构补记
@@ -80,3 +80,15 @@
 - 主会话批准独占loader.ts，增加可选onStyles逐文件回调，旧onStyle串回调兼容。stageRuntime每份CSS各自style，Tailwind最后，换代插在该卡旧样式位置而非改变与其它卡的级联顺序；失败/卸载/clear撤整组。无正则挪import、无授权/网络协议改动、壳最低版本不变。
 - cardRuntime针对此完整块17/17（含新数组/兼容/同代/失败/卸载/clear）；TMP/promptcut-card-policy-css-loader-unit-1.log。canonical补实际createCardLoader多CSS后续远端导入与真实DOM标签清理，待本提交后跑。
 - type-3零错；full-3还未结束，唯一剩余codex-auth-state文件测试树与旧fake CLI可能保持stdout句柄，已报主会话且不改非独占auth文件、不把缺总结叫通过。原始TMP日志/events保留；最终完整块后仍要type/full必要复验。
+
+## 最终固定源码验收与交回
+
+- 完整产品源码5fd666a2；10d5f45b只将exec/graph/security三个既有probe改pipe，消除随机Chrome调试TCP。第四轮前后真实HEAD均10d5f45b571e309340604801fecebabc6fffc119，frameCode均eabe33dcd994a1af084de08fd46d56306518c45639dc900d7b21e4a10fbd3008，git均空。TMP/promptcut-card-policy-hosted-4-before/after.json留完整身份。
+- 第三轮运行中我继续修改onStyles受监视源码，触发乙任务code-changed，0帧被作废；这是本人验证安排失误。完整自然跑完48过/1失败（乙A1），甲两细项60/60、五种外链与look成功仍不能替代完整全链通过。保留TMP/promptcut-card-policy-hosted-3.log及pc-render-iso-7NyN8Q，后续第四轮保持全部src/server固定，未盲复跑。
+- 第四轮完整49/49、退出0：甲3细项done3/failed0，乙2细项done2/failed0；项目切换实际终止/清空；真实隔离worker image/font/style/script/嵌套import都loaded；敏感API/管理认证/私文件/其它项目源码与内容读取负向通过；look768×432真实回图。TMP/promptcut-card-policy-hosted-4.log与pc-render-iso-rOGCsg保留，终止后5900～5939监听空。真实经典页结构CSP执行，卡片网络出口限制不适用。
+- hosted的旧素材按hash跨项目能力仍在residual(1)如实记录；本包未改asset，不将49/49等同新增项目素材全面隔离已实现/验收。由主会话素材包收紧后再按新权限验；原授权边界没有放宽。
+- 最新canonical20/20：六种CSS经过Vite/Tailwind真实编译并被Chrome加载，真实createCardLoader多CSS后续import、换代失败/卸载/clear DOM清理均通过。TMP/promptcut-card-policy-browser-4.log、pc-card-policy-css-loader-final/result.json和external-resources.png（已查看：中文正常、外链深底样式与绿图可见）。TT缺省模拟不支持，Firefox/Safari没有实机测试。
+- 新完整块online构建第三次成功，最新type-4 --force零错；exec第二次66/66，hot源码更新1609ms；graph第二次18/18。TMP/promptcut-card-policy-online-build-3/type-4/exec-2/graph-2.log；可看截图pc-card-policy-exec-final、pc-card-policy-graph-final。旧security最终117/117证明此前相同闸/HTML结构机制，新onStyles追加由canonical/exec/graph覆盖；未假称旧全量覆盖最新源码。
+- full-3在codex-auth-state测试文件长等待，缺最终总结；主会话批准只killTree本人54836→36980→39772→44292树，退出1记中止/未完成。精确CIM/命令证据在TMP/promptcut-card-policy-full-3-owned-processes.json，旧fake CLI在case-eepgiZ；终段case-PsZsKk为split+descendant。Get-Process未提供句柄读数，不能断言具体stdout句柄根因。主会话另派Astra生命周期包；没有越权改auth，没有盲跑full至绿。full-1/2的4927总、4926过、0失败、1skip只属于之前源码，既有skip名称为“集成:/api/cards/layout 对真实项目返回整数框”。最终共同候选全量仍是整合闸门。
+- 已只读986ebec6的render-scheduling-supplement全文及account/cloud/sound任务与brief新增映射；本包不实现提前回收/补渲A-B/删除权限待决，不把真实用户卡单项目/轮换/看画面探针冒称RS18/19/20容量、50对话或五分钟目标已验收。
+- 最后仅清理旧probe表述和本报告，不再改变产品源码；无merge/push/version/release/节点/依赖/用户数据操作。只涉及主会话授予的39个文件；diff --check通过。交回后root审diff/截图、与账号/asset包整合、Astra修复后共同候选全量和Linux真节点验收仍需主会话完成。
