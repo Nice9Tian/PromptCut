@@ -421,7 +421,7 @@ const NO_TRACE: WriteTrace = {};
 
 /** 核对素材票据(`server/auth/asset-tickets.mjs`) */
 export interface AssetTicketVerifier {
-  verify(ticket: string): { ok: true; access: "r" | "rw"; projectId: string; userId: string; service?: string } | { ok: false; reason: string };
+  verify(ticket: string): { ok: true; access: "r" | "rw"; projectId: string; userId: string; service?: string; actsFor?: "member" } | { ok: false; reason: string };
 }
 
 /** `Authorization: Bearer <票据>` 里的票据;没带或格式不对给 null */
@@ -465,6 +465,12 @@ function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVeri
     const v = verify(bearer);
     if (!v.ok) return DENY_401;
     if (write && v.access !== "rw") return DENY_403;
+    // 代成员进项目的服务(云端 Agent,`docs/plan/cloud-agent-contract.md` 第 4.4 节):按成员本人的权限写素材原件(`media`),
+    // 不许写预渲染产物;它写的块算成员的,不进托管方服务的容量账(回的结果不带 `service`)
+    if (v.actsFor === "member") {
+      if (write && ns !== "media") return DENY_403;
+      return { ok: true, projectId: v.projectId };
+    }
     if (write && v.service && ns !== "snap" && ns !== "px") return DENY_403;
     return { ok: true, service: v.service, projectId: v.projectId };
   }

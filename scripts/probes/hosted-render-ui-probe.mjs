@@ -298,7 +298,7 @@ async function main() {
   const svcIdx = list1.rows.findIndex((r) => r.service);
   const ok3 = svcIdx >= 0 && list1.rows[svcIdx].text.includes('托管方的渲染节点') && !list1.rows[svcIdx].text.includes('service:render')
     && list1.rows.slice(svcIdx + 1).every((r) => r.service) && list1.rows.slice(0, svcIdx).every((r) => !r.service)
-    && !list1.rows[svcIdx].kick && /成员: 2 人/.test(list1.button);
+    && !list1.rows[svcIdx].kick && /成员[::] ?2 人/.test(list1.button);
   check('U3.service-row-after-members-not-counted-no-kick', ok3, list1);
   await shot(member, 'ui-2-member-members-list');
   await member.keyboard.press('Escape');

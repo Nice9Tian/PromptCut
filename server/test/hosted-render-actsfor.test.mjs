@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { createProject, join, adminOp, ask, members, newDevice, PROTOCOL } from './auth-kit.mjs';
 import { serviceHostFor, outcome, TICKET_PREFIX, ALL_TYPES } from './hosted-render-kit.mjs';
 import { signTicket } from '../auth/tickets.mjs';
+import { SERVICE_ALLOW, AGENT_WRITE_TYPES } from '../docservice/service-gate.mjs';
 
 async function closedWithin(c, ms, what) {
   let timer;
@@ -27,7 +28,7 @@ function memberServiceTicket(env, projectId, { service = 'agent', userId, role =
   return signTicket(env.store.peek(projectId), fields, env.clock.now()).ticket;
 }
 
-test('HR7 代成员的服务票据：握手得到成员身份加 service 字段；照成员查名单、禁入、踢人；一律走白名单（本段全拒）', async (t) => {
+test('HR7 代成员的服务票据：握手得到成员身份加 service 字段；照成员查名单、禁入、踢人；一律走白名单（表外全拒）', async (t) => {
   const env = await serviceHostFor(t, { services: ['render', 'agent'] });
   assert.equal(env.registry.get('agent').actsFor, 'member');
   assert.equal(env.registry.get('render').actsFor, 'self');
@@ -42,11 +43,13 @@ test('HR7 代成员的服务票据：握手得到成员身份加 service 字段�
   const p = env.principals().find((x) => x.service === 'agent');
   assert.deepEqual(p, {
     userId: bobId, tenantId: proj.projectId, scope: 'member', username: 'bob', deviceId: dev.deviceId, deviceName: dev.deviceName,
-    creator: false, role: 'agent', conversation: 7, owner: null, service: 'agent', serviceKid: env.keys.agent.kid,
+    creator: false, role: 'agent', conversation: 7, owner: null, service: 'agent', serviceKid: env.keys.agent.kid, access: 'r',
   });
 
-  // 白名单按 service 字段查：agent 的表本段是空的，所以这条连接什么都发不了（包括成员本来能发的）
+  // 白名单按 service 字段查：agent 一行由第四段填（`cloud-agent-auth.test.mjs` 逐条测）；表外的这条连接一种都发不了（包括成员本来能发的）。
+  // 这张票据没带 `acc`，握手按只读记（失败即关），所以表里改项目的两种也被拒
   for (const type of ALL_TYPES) {
+    if (SERVICE_ALLOW.agent.includes(type) && !AGENT_WRITE_TYPES.includes(type)) continue;
     assert.equal(await outcome(agentConn, { type, projectId: 'doc-1', kind: 'asset', kinds: 'all', projects: 'all' }), 'error:forbidden', type);
   }
   assert.equal(await outcome(bob, { type: 'content.list', kind: 'card-source' }, 'content.listing'), 'content.listing', '成员自己的连接不受影响');

@@ -36,6 +36,8 @@ import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
 import { applyHostedChange, HOSTED_SERVICE_TEXT, parseHosted, type HostedServiceName, type HostedView } from "./hostedServices";
+import { clearHostedAgent, setHostedAgent, setHostedAgentEnabled } from "../../ai/cloud/endpoint";
+import { CloudDelegationError, setCloudIdentity, type CloudIdentity } from "../../ai/cloud/identity";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
@@ -64,7 +66,8 @@ export interface MemberRow {
   displayName: string;
   creator: boolean;
   tags: { editing: boolean; rendering: boolean; agents: number };
-  conns: { role: string; conversation?: number; service?: string }[];
+  /** `service: 'agent'` 的那一项是代这位成员进项目的云端 Agent */
+  conns: { role: string; conversation?: number | string; service?: string }[];
   /** 托管方的服务(不是成员):这一行按服务名显示(`hostedServices.ts`),不计入成员数、没有踢人按钮 */
   service?: string;
 }
@@ -519,6 +522,27 @@ const renderNodeHooks = {
   },
 };
 
+/**
+ * 云端 Agent 的身份(契约 `docs/plan/cloud-agent-contract.md` 第 4.2 节):委托票据与对话委托都在本页面这条共享项目的连接上要
+ * (`auth.ticket { kind: 'delegate', audience: 'agent', conversation? }`),身份与权限就是本页面这位成员的。在线页面与桌面版同一条路。
+ * 票据不缓存(委托票据只活 2 分钟,每个请求现取;对话委托每发一条消息取一张新的)、不进日志。
+ * 连接换了(离开项目、换项目)这份身份就作废:之后再要直接拒,不会拿到别的项目的票据。
+ */
+function cloudIdentityOf(link: SyncLink): CloudIdentity {
+  const ask = async (conversation?: string): Promise<string> => {
+    if (!cur || cur.link !== link || cur.kind !== "shared") throw new CloudDelegationError("closed");
+    let r: AnyMsg;
+    try {
+      r = await link.request({ type: "auth.ticket", kind: "delegate", audience: "agent", ...(conversation ? { conversation } : {}) });
+    } catch {
+      throw new CloudDelegationError("closed");
+    }
+    if (r.type !== "auth.ticket.ok" || typeof r.ticket !== "string" || !r.ticket) throw new CloudDelegationError(String(r.reason ?? r.type));
+    return r.ticket;
+  };
+  return { getTicket: () => ask(), getGrant: (conversationId) => ask(conversationId) };
+}
+
 /** 留在页面的 Agent 工具执行前记个位置,执行后取这期间本页面发出的提交(回包里带 opIds,server/agent/agent-side.mjs 用) */
 export function pageOpMark(): number | null {
   return cur ? cur.link.ds.opMark() : null;
@@ -556,6 +580,9 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     offs.push(() => clearInterval(tick));
   }
   cur = { link, kind, docProjectId, url, unbind, offs };
+  // 云端 Agent 的身份跟着共享项目的连接走:接上就绪,回本机空间撤掉(界面据此重取一次 info 与对话列表)
+  setCloudIdentity(kind === "shared" ? cloudIdentityOf(link) : null);
+  if (kind !== "shared") clearHostedAgent();
   if (kind === "shared" && !ONLINE_BUILD && !ONLINE) {
     const descriptor = currentAssociation();
     if (descriptor) offs.push(link.ds.on("project", () => persistJournal(link.ds, descriptor, getState().project.id ?? "")));
@@ -587,6 +614,8 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
 function detach() {
   const prev = cur;
   cur = null;
+  setCloudIdentity(null);
+  clearHostedAgent();
   setPresenceLink(null, null, "");
   if (prev) {
     for (const off of prev.offs) off();
@@ -842,6 +871,8 @@ function onSideMessage(msg: AnyMsg) {
       return;
     case "shared.members.list":
       patch({ members: Array.isArray(msg.devices) ? (msg.devices as MemberRow[]) : [], hosted: parseHosted(msg.hosted) });
+      // 托管端有没有云端 Agent、开没开、在哪(顶层 `hosted.agent`,比界面状态多一个 `url`;放本机的项目没有这个字段)
+      setHostedAgent(view.shared?.projectId ?? currentDocProjectId(), (msg.hosted as { agent?: unknown } | undefined)?.agent ?? null);
       return;
     case "shared.notice":
       if (msg.event === "password-changed") pushToast("项目密码已被修改。你当前的连接不受影响，但下次进入需要新密码。", "info", 8000);
@@ -853,6 +884,8 @@ function onSideMessage(msg: AnyMsg) {
           const text = HOSTED_SERVICE_TEXT[msg.service as HostedServiceName]?.changed(msg.enabled === true);
           if (text) pushToast(text, "info", 6000);
         }
+        // AI 栏里「云端」一项随之置灰或恢复
+        if (msg.service === "agent" && typeof msg.enabled === "boolean") setHostedAgentEnabled(view.shared?.projectId ?? currentDocProjectId(), msg.enabled);
       }
       return;
     case "events.event":
@@ -1564,6 +1597,8 @@ export async function setHostedService(service: HostedServiceName, enabled: bool
   const r = await adminOp("set-hosted-service", { key }, { service, enabled });
   if (!r.ok) return r;
   patch({ hosted: applyHostedChange(view.hosted, service, enabled) });
+  // 创建者自己这一页的 AI 栏也马上跟着变(通知只发给别的连接)
+  if (service === "agent") setHostedAgentEnabled(view.shared?.projectId ?? currentDocProjectId(), enabled);
   return { ok: true };
 }
 

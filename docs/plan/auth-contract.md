@@ -329,3 +329,108 @@ C6.5 第二批集成（`claude/c65-integ2`，2026-09-26）时主会话接受的�
 - **谁同步、什么时候**：主机在向云端托管服务登记时同步一次；以下操作成功后再同步：`set-password`、`set-list`、`kick`、`unban`（第 7 节），`set-creator-password`（第 15 节），以及邀请码的签发、作废与重发（邀请码的校验副本随凭证副本一起同步；邀请码本身在 C10a 契约里定）。主机离线时跳过，恢复后补；补上之前，云端托管服务以旧值为准。
 - **主机再验一次**：成员连上主机后（公网直连或经中继），仍按第 5 节用 `K` 向主机的文档服务交证明，主机核对通过才进入；禁入表也在主机上再核对一次。
 - **票据**：仍由主机的文档服务按第 8 节签发。云端托管服务不持有 `ticketKey`，不签票据。
+
+## 17. 云端 Agent 服务的身份证明（2026-10-06，第四段乙块）
+
+依据 `cloud-agent-contract.md` 第 4、5、7.2、16 节与 `hosted-render-contract.md` 第 1 节（服务身份的握手、登记表、目录模块、白名单）。本节只写凭证、票据与消息的确切形状；流程与理由在那两份契约里。实现：`server/auth/delegation.mjs`、`server/auth/service-client.mjs`、`server/docservice/modules/hosted.mjs`、`modules/shared.mjs`、`service-gate.mjs`。
+
+### 17.1 两种委托
+
+成员在**自己的页面连接**上要：
+
+```
+auth.ticket { kind: 'delegate', audience: 'agent' }                         → 委托票据（2 分钟）
+auth.ticket { kind: 'delegate', audience: 'agent', conversation: <对话 id> } → 对话委托（60 分钟）
+  → auth.ticket.ok { ticket, exp }
+  → error { reason }：service-disabled（这台文档服务没有 agent 服务，或项目关了它的开关）、forbidden（不是成员的 page 连接）、bad-message
+```
+
+- 只有 `scope: 'member'`、`role: 'page'` 的连接能要。`agent`、`render` 角色的连接、带 `service` 字段的连接（云端 Agent 自己的连接、发布连接、渲染服务）、`local` 身份、管理身份、控制连接都要不到。
+- 形状与签名同第 8 节（`v1.<负载>.<HMAC>`，密钥是项目记录的 `ticketKey`，同样认 `oldTicketKeys`）。负载：
+
+| 字段 | 委托票据 | 对话委托 |
+|---|---|---|
+| `kid`、`p`、`g`、`ug`、`exp`、`iat` | 同第 8 节 | 同左 |
+| `k` | `'dlg'` | `'dlg'` |
+| `u` | 成员的 `userId` | 同左 |
+| `dn`、`cr` | 设备名；以创建者身份进入的带 `cr: true` | 同左 |
+| `aud` | `'agent'` | `'agent'` |
+| `acc` | `'rw'` 或 `'r'`，文档服务按成员此刻的权限填（`memberAccess`：项目记录可选字段 `readonly: [用户名]`，没有就人人 `rw`，创建者恒 `rw`），页面指定不了 | 同左 |
+| `cid`、`run` | 没有 | `cid: <对话 id>`（`/^[A-Za-z0-9_-]{1,64}$/`）、`run: true` |
+| `exp - iat` | ≤ 2 分钟 | ≤ 60 分钟 |
+
+- `k: 'dlg'` 不是 `asset` 也不是 `conn`：委托直接拿去握手、拿去素材服务，都按格式不对拒（401）。
+- 核对（`checkDelegation`）：签名 → 形状 → 有效期（30 s 偏差）→ 项目代数与成员代数 → `aud` 等于来核对的服务名 → 登记表里有这个服务与它此刻所用的公钥 → 项目对它的开关开着 → 名单与禁入表。**不看成员在不在线。** 回的权限取「签发时的 `acc`」与「此刻的 `memberAccess`」里小的。
+- 没有「已发委托」的表。撤销靠这几样：改项目口令、改名单（项目代数）、踢人（成员代数加禁入表）、关开关、删项目。
+- 日志不记委托原文，只记 `delegationDigest`（SHA-256 的前 8 个十六进制字符）。
+
+### 17.2 控制连接上的两种消息（只对登记表 `actsFor: 'member'` 的服务开）
+
+```
+hosted.delegate.verify { delegation }
+  → hosted.delegate.ok { projectId, userId, username, deviceId, deviceName, creator, mode, acc, access, exp, ownerKey, grant, conversationId? }
+  → error { reason }
+
+hosted.ticket { projectId, conversation: <对话号>, conversationId: <对话 id>, delegation: <对话委托> }
+  → hosted.ticket.ok { ticket, exp, userId, username, access, ownerKey, conversation, conversationId }
+  → error { reason }
+
+hosted.ticket { projectId, purpose: 'publish' }
+  → hosted.ticket.ok { ticket, exp }
+```
+
+- `reason`（只在这条受信的连接上给）：`format`、`signature`、`expired`、`generation`、`audience`、`no-project`、`relocating` / `relocated`、`service-disabled`、`service-revoked`、`banned`、`not-listed`；`hosted.ticket` 另有 `not-grant`（给的是短的委托票据）、`project`（委托的 `p` 与 `projectId` 不符）、`conversation`（委托的 `cid` 与 `conversationId` 不符）、`forbidden`、`bad-message`。
+- `conversation` 是连接票据里的对话号（正整数，Agent 服务自己编）；`conversationId` 是页面起的对话 id，必须等于对话委托的 `cid`。**契约 `cloud-agent-contract.md` 第 4.3 ③只写了 `conversation`，这里补了 `conversationId`**：两样是两回事，核对 `cid` 需要后者。
+- `mode` 是项目的进入方式；`ownerKey` 是云端对话的归属键，由文档服务算好（`ownerKeyOf`）：以创建者身份进入的 `creator`；限定进入的名单成员 `user:<用户名>`；自由进入的成员 `device:<userId>`。键里不含项目，Agent 服务按「项目 / 归属键」分目录，不自己推断。
+- `actsFor: 'member'` 的服务不带委托、又不是 `purpose: 'publish'`：`forbidden`（没有「服务自己读写项目」）。`actsFor: 'self'` 的服务（渲染服务）带 `conversation`、`conversationId`、`delegation`、`purpose` 任何一个，或发 `hosted.delegate.verify`：`forbidden`。
+- 消息里自报的 `userId`、`username`、`access` 之类一律不看：身份只来自委托。
+
+### 17.3 两种连接票据（`k: 'conn'`，2 分钟，带 `sv: 'agent'`、`sk`）
+
+| | 代成员的 | 只用来发布的 |
+|---|---|---|
+| 负载 | `{ kid, k: 'conn', p, u: <成员的 userId>, r: 'agent', c: <对话号>, sv, sk, acc, dn?, cr?, g, ug: <成员的代数>, exp, iat }` | `{ kid, k: 'conn', p, u: 'service:agent@<instanceId>', r: 'agent', sv, sk, pu: 'publish', dn, g, ug: 1, exp, iat }` |
+| 握手核对 | 登记表、开关；名单与禁入表照成员查（`admissionOf`） | 登记表、开关；不查名单与禁入表（不是成员） |
+| principal | 成员的（`scope: 'member'`）加 `service: 'agent'`、`serviceKid`、`access: 'rw' \| 'r'`（票据的 `acc` 与此刻的 `memberAccess` 里小的；票据没写按 `r`） | `scope: 'service'`、`userId: 'service:agent@<instanceId>'`、`role: 'agent'`、`conversation: null`、`service: 'agent'`、`serviceKid`、`purpose: 'publish'` |
+| 白名单 | `SERVICE_ALLOW.agent`：`project.open`、`project.close`、`project.op`、`project.upload`、`events.create`、`events.complete`、`events.text`、`presence.set`、`presence.clear`、`presence.list`；`access` 不是 `rw` 的另拒 `project.op`、`project.upload` | `SERVICE_PUBLISH_ALLOW.agent`：`publisher.hello`、`task.publish`（每个任务都必须是带片段清单的计划：`kind: 'plan'`、结果键含 `#clips:` 或 `#backfill:`、`input.clips` 非空）、`task.unsubscribe` |
+| 成员列表 | 归在成员那一行，`conns` 里 `{ role: 'agent', conversation, service: 'agent' }`，`tags.agents` 加一。界面的计数「成员：N 人 · Agent：M 个」只看 `conns`（带 `service: 'agent'` 的不算真人在线、每位成员的云端 Agent 只算一个），不看 `tags`（`cloud-agent-contract.md` 第 22 节，〔用户 2026-10-07 定〕） | 不列出 |
+| 写入身份 | `{ userId, deviceId, role: 'agent', conversation, session, service: 'agent' }` | 不写任何东西 |
+
+- `acc` 只许出现在成员的 `sv` 连接票据上，`pu` 只许出现在服务自己身份的 `sv` 连接票据上；别处出现按格式不对拒。`pu: 'publish'` 的票据不带 `c`。
+- 逐消息的 `gate` 与会话接续前的 `resumeGate` 每次重新看：登记表与开关（`serviceAdmission`）、代成员的连接另看名单与禁入表、改项目的两种消息另按项目记录此刻的 `memberAccess` 判。
+- 素材〔2026-10-07 改，`cloud-agent-contract.md` 第 4.4、9.4 节〕：云端 Agent 代成员的连接可以要素材票据（`auth.ticket { kind: 'asset' }`，签成成员的身份加 `sv: 'agent'`，`r` 不超过成员此刻的权限，只读成员要不到读写的）；发布连接仍要不到任何票据。素材服务对这种票据：名单、禁入表、开关与成员此刻的权限每次核对都重看（撤销后当场失效），只许写素材原件（`media`）。以下是改之前的写法，留作对照——素材服务对带 `sv` 且登记表 `actsFor: 'member'` 的素材票据另加限制（以后签发时也成立）：只认 `r: 'r'`，名单与禁入表照成员查，开关与登记表照第 1.6 节（`hosted-render-contract.md`）当场看。
+
+### 17.4 撤销
+
+| 触发 | 代成员的连接 | 发布连接 | 已发的委托 |
+|---|---|---|---|
+| `set-hosted-service { service: 'agent', enabled: false }` | 4003 `service-disabled` | 4003 `service-disabled` | 核验、换票据回 `service-disabled`；开回来后没过期的又能用 |
+| `kick` | 4003 `kicked` | 不关 | `generation`（成员代数）；按新代数也被禁入表拦（`banned`） |
+| `set-list` 移出 | 4003 `removed` | 不关 | `generation`（项目代数，**本项目全部成员的委托都作废**，留下的成员下一轮带新的）；被移出的按新代数也被名单拦（`not-listed`） |
+| `delete` | 4004 `deleted` | 4004 `deleted` | `no-project` |
+| `set-password` | 不关 | 不关 | `generation` |
+| 撤掉服务的公钥（`keygen --retire`） | 4003 `service-revoked`（目录模块的 `tick`） | 同左 | `service-revoked` |
+
+- 关连接在创建者操作的处理里同步做，不经过成员的任何设备。本机实测从创建者发出操作到 Agent 的连接收到关闭：单测 2.7～4.3 ms，探针（含取挑战与派生证明）12～15 ms。
+- 〔裁〕`set-list` 不再关以服务自己身份进来的连接（渲染服务、发布连接）：它们不是成员，名单管不着。第 1 批的实现会把它们一并以 4003 `removed` 关掉。
+
+### 17.5 服务一侧的客户端
+
+`server/auth/service-client.mjs` 的 `createServiceClient({ base, key | keyFile, log?, … })`：取挑战、签名握手、开控制连接（断了按退避重连，重连后自动重订目录），封装 `watch`、`verifyDelegation`、`memberTicket`、`publishTicket`、`serviceTicket`、`demand`、`dataProtocols`、`protocolsForConversation`（给 `server/agent/doc-link.mjs` 的 `protocolsFor` 用，每次现换票据）。请求不抛错，回 `{ ok: true, … }` 或 `{ ok: false, reason }`；控制连接断着时立刻回 `unavailable`。
+
+### 17.6 测试编号
+
+| 编号 | 内容 | 在哪 |
+|---|---|---|
+| AU16 | 委托的签发：只有成员的页面连接要得到；两种的形状与有效期；`acc` 由文档服务定；开关关着或没有这个服务回 `service-disabled` | `cloud-agent-auth.test.mjs` 的 CA-AUTH-01 |
+| AU17 | `hosted.ticket` 的委托分支与 `hosted.delegate.verify`：票据的 `u`、`ug` 是成员的，握手得到成员身份加 `service`、`access`；别的要法一律拒；委托当不了握手票据 | CA-AUTH-02 |
+| AU18 | 伪造、过期、代数变了、受众不对的委托被拒 | CA-AUTH-03 |
+| AU19 | 只读成员的连接改不了项目 | CA-AUTH-04 |
+| AU20 | 关开关时以 4003 `service-disabled` 关连接，委托当场失效；移出、踢人、删项目同理 | CA-REVOKE-01～03 |
+| AU21 | 素材〔2026-10-07 改〕：云端 Agent 的连接按成员本人的权限要素材票据（读写成员写得进素材原件、写不了预渲染产物；只读成员要不到读写票据、写不进）；委托当不了素材票据；开关关掉、被踢、被改成只读后当场失效 | CA-ASSET-01 |
+
+另有 CA-AUTH-05（白名单逐条）、CA-AUTH-06（目录里的开关）、CA-GRANT-01～02、CA-RENDER-04（发布连接）、CA-SIGN-01、CA-OWNER-01、CA-URL-01～02、CA-LOG-01、CA-CLIENT-01～02；隔离探针 `scripts/probes/cloud-agent-auth-probe.mjs`（P1～P17；P16 是「发起成员的连接全部断开后，凭对话委托仍能换票据并提交编辑」，P17 是地址下发）。
+
+### 17.7 Agent 服务对外地址的下发
+
+托管组合读环境变量 `PROMPTCUT_AGENT_PUBLIC_URL`（形如 `https://<域名>/agent/v1`；设了却不是 http(s) 地址时失败即关，`config.error { reason: 'agent-public-url' }`），经 `startHostedCombo({ agentPublicUrl })` → `createSharedDocService({ hostedServiceUrls: { agent } })` 交给共享项目模块。`shared.members.list` 顶层的 `hosted.agent` 在登记表里有 `agent` 服务、且配了地址时多带 `url`；没配、或登记表里没有这个服务时没有这个字段，页面据此不出「云端」一项。放本机的项目（局域网主机）没有顶层的 `hosted`。

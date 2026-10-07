@@ -156,6 +156,34 @@ $PROMPTCUT_DATA_DIR/
 
 **回退**：新提交有问题时 `rollback-render`（换回 `.previous` 再重载）；整个渲染服务不要了时 `stop-render`，托管服务不受影响（项目照常用，只是没有云节点预渲染）。
 
+## 2b. Agent 服务的迁移与重建
+
+托管方的云端 Agent 服务（PM2 的 `promptcut-agent`，契约 `docs/plan/cloud-agent-contract.md`）与托管组合、渲染服务同在一台云节点上，代码用渲染服务那份检出。模板与逐步命令见 `server/hosted/deploy/README.md` 的「Agent 服务」一节。
+
+**什么要带、什么不用带：**
+
+| 东西 | 在哪 | 换机时 |
+|---|---|---|
+| 对话记录、模型历史、没渲完的补渲清单 | `/var/lib/promptcut/agent/tenants/` | **整个拷过去**：成员重新打开项目要能找回云端对话。停掉旧节点的 Agent 服务之后再拷（进行中的对话会被记为「中断」） |
+| 用量流水与额度 | `/var/lib/promptcut/agent/usage/`、`config/limits.json` | 拷过去：用量是托管方的账，额度是已经发给各项目的上限 |
+| 模型配置 | `/var/lib/promptcut/agent/config/ai.json` | 可以拷（厂商、地址、模型清单，不含 Key） |
+| 模型 Key 的密文 | `/var/lib/promptcut/agent/config/keys/custom.key` | **拷过去也解不开**：口令由机器指纹（`/etc/machine-id`）派生。新节点上重新走加密分发（〔用户 2026-10-07 定〕`machine-id-agent` 取新节点的识别码，用户用 `make-api-share.bat` 重新生成密文，`import-key-agent` 导入，见 README「模型 Key 的加密分发」）；云厂商重装镜像后 `machine-id` 会变，同样要重新导入 |
+| 服务私钥 | `/var/lib/promptcut/agent-secrets/service-key.json` | **不拷**：新节点重新生成 |
+| 服务登记表 | 托管数据目录里的 `secrets/services.json` | 随托管数据目录过去；旧节点那把 `agent` 公钥要撤掉 |
+| PM2 配置 | `/opt/promptcut-render/pm2-agent.config.cjs` | 不拷：`deploy-agent` 重新生成 |
+
+**在新节点上的步骤**（托管组合与渲染服务已经在新节点上起来之后；`$PROMPTCUT_REMOTE` 指向新节点）：
+
+1. 旧节点上 `stop-agent`，把 `/var/lib/promptcut/agent/` 下的 `tenants/`、`usage/`、`config/limits.json`、`config/ai.json` 拷到新节点同一位置（目录 0700，文件 0600）。
+2. `node scripts/remote/docservice.mjs deploy-agent --no-start`（先加 `--dry-run` 看脚本）。
+3. `keygen-agent --list` 看登记表，`keygen-agent --retire <旧 kid>` 撤掉旧节点的公钥，`keygen-agent` 生成新钥并登记。
+4. 托管组合的环境里 `PROMPTCUT_AGENT_PUBLIC_URL` 改成新域名的 `https://<主站域名>/agent/v1`（它是下发给页面的地址）；nginx 主站 `server` 块加 `nginx-location-agent.conf` 那一段。
+5. `deploy-agent --save`；`status-agent` 核对 PM2 在线、代码版本与渲染服务一致、数据目录里的项目数对得上。
+6. 在新节点上重新导入模型 Key 与配音等别的外部服务的 Key（加密分发：`machine-id-agent` → 用户用 `make-api-share.bat` 生成密文 → `import-key-agent`，做法见 README）；录入之前对话请求回「托管方还没有为云端 Agent 配置模型」。
+7. 用一个测试项目发一条云端对话核对：改动落地、署名正确、被改的重卡渲出来；验完删掉测试项目。
+
+**回退**：`stop-agent` 即可，托管服务与渲染服务不受影响（项目照常用，只是 AI 栏的「云端」一项用不了）。
+
 ## 3. 验收（M8）
 
 - 迁移后项目、素材、预渲染产物全部可用：

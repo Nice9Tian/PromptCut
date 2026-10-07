@@ -495,6 +495,12 @@ export function AgentBubble(props: {
 
       {latest.error && <div className="ai-message-error">{latest.error}</div>}
       {outcome && <div className="ai-message-outcome">{outcome}</div>}
+      {/* 云端对话:改动引出的补渲进展常驻一行(简洁模式里状态行不画,渲染失败不能只藏在详细模式里) */}
+      {latest.cloudRender && (
+        <div className={latest.cloudRender.state === "failed" || latest.cloudRender.state === "unavailable" ? "ai-message-error" : "ai-message-outcome"} data-pc="cloud-render-note" data-state={latest.cloudRender.state}>
+          {latest.cloudRender.text}
+        </div>
+      )}
 
       {simple && showThinking && <RawLog sections={rounds.map((r) => ({ key: r.m.id, parts: partsOf(r.m), live: !!r.m.pending }))} />}
     </div>

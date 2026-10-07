@@ -33,6 +33,7 @@ import {
 import { verifyServiceProof, serviceAdmission, SERVICE_SIG_BYTES } from './service-identity.mjs';
 import { isLocalOrigin } from './origin.mjs';
 import { verifyTicket } from './tickets.mjs';
+import { memberAccess, narrowAccess } from './delegation.mjs';
 import { roomUnavailableReason } from '../recovery/relocation.mjs';
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{32,256}$/;
@@ -275,7 +276,15 @@ export function createHandshakeAuth({
         const own = who.username === serviceUsername(p.sv);
         if (registry.get(p.sv).actsFor === 'member') {
           // 代成员进项目（云端 Agent 服务）：票据的 `u`、`ug` 是成员的，名单、禁入表照成员查
-          if (own) return reject('bad-format');
+          if (own) {
+            // 这种服务自己的身份只有一种用法：只用来发布补渲计划的连接（`cloud-agent-contract.md` 第 16 节）。
+            // 不是成员：不查名单与禁入表，也不带任何成员的权限；白名单只放发布那几种消息
+            if (p.pu !== 'publish') return reject('bad-format');
+            return {
+              ...serviceDataPrincipal({ service: p.sv, kid: p.sk, projectId: p.p, deviceId: who.deviceId, deviceName: p.dn ?? who.deviceId, role: p.r }),
+              purpose: 'publish',
+            };
+          }
           const asCreator = p.cr === true;
           const banned = admissionOf(v.record, { username: who.username, deviceId: who.deviceId, creator: asCreator });
           if (banned) return reject(banned);
@@ -285,10 +294,12 @@ export function createHandshakeAuth({
               creator: asCreator, role: p.r, conversation: p.c, owner: p.o,
             }),
             service: p.sv, serviceKid: p.sk,
+            // 权限取票据里的与此刻的里小的那个；票据没写的按只读（失败即关）
+            access: narrowAccess(p.acc === 'rw' ? 'rw' : 'r', memberAccess(v.record, who.username, asCreator)),
           };
         }
         // 以服务自己的身份进项目（渲染服务）：不是成员，不查名单与禁入表
-        if (!own) return reject('bad-format');
+        if (!own || p.pu !== undefined || p.acc !== undefined) return reject('bad-format');
         return serviceDataPrincipal({ service: p.sv, kid: p.sk, projectId: p.p, deviceId: who.deviceId, deviceName: p.dn ?? who.deviceId, role: p.r });
       }
       const creator = p.cr === true;

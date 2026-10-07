@@ -122,3 +122,112 @@ pm2 resurrect && pm2 list                     # 期望 list 里有 promptcut-ren
 ### 容量
 
 渲染服务写成的预渲染块在托管服务的素材服务里单独记账（`<托管数据目录>/assets/.service-usage/render.ndjson`），上限 `min(20 GiB, 托管数据目录所在盘总容量的四分之一)`，`PROMPTCUT_HOSTED_RENDER_CAP_BYTES`（设在 `promptcut-hosted` 的环境里）可改。到上限只拦渲染服务的写入（507 `service-quota`），成员不受影响；删项目时清只归它的块。`status-render` 末尾列记账文件的行数与大小。
+
+## Agent 服务
+
+托管方的云端 Agent 服务（契约 `docs/plan/cloud-agent-contract.md`）：一个不带页面的 Node 进程（PM2 应用 `promptcut-agent`，入口 `server/agent-service/main.mjs`），只绑回环，对外只经 nginx 的 `/agent/`。它用服务名 `agent` 的服务身份连文档服务的控制连接；每个请求的委托票据、每一轮的对话委托都交文档服务核验。它不持有集群令牌、任何成员的口令或项目密钥。
+
+| 占位符 | 缺省值 | 说明 |
+|---|---|---|
+| `DIR` | `/opt/promptcut-render` | 与渲染服务共用的部署目录；Agent 服务的 `cwd` 是 `DIR/current` |
+| `DATA` | `/var/lib/promptcut/agent` | 数据目录（0700）：`config/`（模型配置、Key 的密文、额度）、`tenants/`（对话）、`usage/`（用量流水）、`tmp/` |
+| `SECRETS` | `/var/lib/promptcut/agent-secrets` | 服务私钥目录（0700），里面是 `service-key.json`（0600） |
+| `DOC_URL` | `ws://127.0.0.1:8787` | 文档服务的本机地址（控制连接只认本机发起） |
+| `AGENT_PORT` | `8790` | Agent 服务的端口（只绑 127.0.0.1） |
+| `PUBLIC_ORIGIN` | 空 | 对外的源，只做格式检查并记进日志，可不填 |
+| `HEAP_MB` / `MAX_MEMORY_RESTART` / `KILL_TIMEOUT_MS` | `1536` / `2G` / `8000` | V8 老生代上限、常驻内存超过即由 PM2 重启、重启前给的收尾时间 |
+
+模板：`pm2-promptcut-agent.config.cjs`（PM2）、`nginx-location-agent.conf`（主站 `server` 块里的 `/agent/` 一段；两个舞台源的 `server` 块不加）。
+
+### 先决条件：与在线页面、渲染服务同一个提交
+
+Agent 服务不单独上传代码：它用 `deploy-render` 放上去的那份检出（完整仓库加依赖，要 vite 与 `src/`）。Agent 服务发布的补渲计划带着这份检出的代码版本，渲染服务只认领代码版本相同的计划，在线页面也按同一个代码版本找预渲染的结果。所以**三者必须出自同一个提交**：先换在线页面、`deploy-render`，再 `deploy-agent`。`status-agent` 把 Agent 服务与渲染服务的代码版本并排，不一致标红。
+
+Agent 服务自己不开 Chrome；预渲染用的 chrome-headless-shell 只属于渲染服务（见上面「渲染服务」一节）。含用户卡的项目由渲染服务的隔离工作进程渲（同时最多一个、冷启动约 10 秒），所以云端 Agent 建卡、改到用户卡片段之后的补渲比只有内置卡的项目慢。
+
+**云端 Agent 的工具与本机一致**（契约第 9 节）。与节点有关的几件事：
+
+- **素材写入**：PM2 模板里的 `PROMPTCUT_AGENT_ASSET_URL`（缺省 `http://127.0.0.1:8788`，同机素材服务的回环地址）。云端 Agent 导入素材、配音入库时凭代成员的素材票据写进它，权限不超过成员本人。
+- **工作目录**：`<DATA>/work/<项目>/<主人键>/<对话>/`（附件、下载的文件、合成的语音）。一个对话 2 GiB、一个项目 8 GiB 封顶；对话删除、项目删除时清掉。`status-agent` 报占用。
+- **出网闸**：按模型给的地址发请求的工具不能访问回环、内网、`169.254.169.254` 与本机各网卡的地址。**生产不要设 `PROMPTCUT_AGENT_EGRESS_TEST_ALLOW`**（只给探针）；`status-agent` 与 `/healthz` 的 `egressTestAllow` 必须是 `false`。出网闸只管 Agent 服务进程自己发的请求；以后接上会起子进程的工具（下载器、浏览器）时，另用系统级的办法兜底：给这些子进程一个独立的非特权用户，并按用户限制它的出网（例如 `iptables -A OUTPUT -m owner --uid-owner <那个用户> -d 127.0.0.0/8 -j REJECT`，内网段同理；这是改防火墙，命令由用户执行，会话不动）。
+- **配音**：托管方的配音服务地址与令牌走与模型 Key 相同的加密分发（`import-key-agent --service voice`）；没配时 `voice_generate` 回「还没有配置配音服务」。每次调用记进用量流水（`kind: "service"`）。
+- **可选的 ffprobe**：装了 ffmpeg（`ffprobe` 在 PATH 上，或设 `PROMPTCUT_FFPROBE`）时，导入的音视频带时长与宽高；没有时图片与 WAV 照常，其余不带。
+- **这一版还没接上的工具**（看画面、语音识别与镜头、追踪、主体识别、音效合成、网页采集与网页接管）要的东西列在契约第 9.9 节；现在不用为它们装任何东西。
+
+### 第一次部署（按顺序）
+
+1. 渲染服务已按上一节部署好（`current` 指向要用的提交）。
+2. `node scripts/remote/docservice.mjs deploy-agent --no-start`：建数据目录与私钥目录、写 PM2 配置，不起进程。
+3. `node scripts/remote/docservice.mjs keygen-agent`：在节点上给服务名 `agent` 生成密钥并登记公钥（等价于在节点上运行 `node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --secrets <SECRETS> --service agent`）。私钥不离开节点、不打印。
+4. 托管组合（`promptcut-hosted`）的环境里加 `PROMPTCUT_AGENT_PUBLIC_URL=https://<主站域名>/agent/v1`，按「重启托管服务前先确认没有正在写入的客户端」的规矩重启它一次。文档服务经成员列表把这个地址下发给页面；不设时页面不出「云端」一项。
+5. nginx 主站 `server` 块里加 `nginx-location-agent.conf` 的那一段，`nginx -t && systemctl reload nginx`。
+6. `node scripts/remote/docservice.mjs deploy-agent`，确认 `/healthz` 有应答；`status-agent` 看代码版本一致；确认无误后 `deploy-agent --save`（`pm2 save`，节点重启后自启）。
+7. 导入模型 Key（加密分发，见下一节：节点报出机器识别码，用户在自己的电脑上生成密文，会话把密文送到节点导入）。导入之前先用 `set-key.mjs --mock` 切到模拟模型验一遍。
+
+### 模型 Key 的加密分发（及配音等别的外部服务的 Key）
+
+〔用户 2026-10-07 定〕Key 不经会话、不进命令行与日志、不进仓库：节点报出自己的**机器识别码** → 用户在**自己的电脑**上用仓库根目录的 `make-api-share.bat` 把 Key 加密成**只有这台节点解得开的密文**（明文只经用户自己的手）→ 会话把密文送到节点、在节点本机解开，按现有的落盘加密存进数据目录。会话全程只接触密文。信封与桌面版「API 分发」是同一套（PBKDF2-SHA256 + AES-256-GCM，口令是机器识别码）。
+
+```
+1. 取节点的机器识别码（会话做）：
+     node scripts/remote/docservice.mjs machine-id-agent
+   等价于在节点上运行  cd <检出目录> && node server/agent-service/machine-id.mjs ，标准输出只有一行 PCM-XXXXX-XXXXX-XXXXX-XXXXX。
+2. 把这串码交给用户，用户在自己的电脑上生成密文（步骤见本节末，原文由会话转给用户）。
+3. 用户交回密文（以 PCAI1. 开头的一整段）后，会话把它存进一个本机的临时文件，送到节点导入：
+     node scripts/remote/docservice.mjs import-key-agent --file <密文文件> [--service model|voice] [--dry-run]
+   等价于在节点上运行
+     PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-service/import-key.mjs --file <密文文件> [--service model|voice]
+   （密文也可以从标准输入给：…import-key.mjs < 密文.txt；密文不能写在命令行上）。
+   密文经 ssh 标准输入进远端脚本，写到 <数据目录>/tmp/（0600），导入完——成功或失败——都删掉。
+4. 看到「已导入…  厂商 / 模型 / Key 末四位」就是成了；运行中的服务下一轮对话起就用它，不用重启。
+```
+
+- **按服务名导入**：`--service model`（缺省）是对话用的模型：写 `<数据目录>/config/ai.json`（厂商、接口地址、模型清单、token 上限）与 `config/keys/custom.key`（`PCENC1.` 落盘密文）。`--service voice` 是配音：写 `config/voice.json` 与 `config/keys/voice.key`（`PCVOC1.`，与对话 Key 是两把，互不相通）；生成密文时「API 地址」填配音网关的地址，「模型」填配音提供方（minimax / kling / vidu 之一，空 = minimax），「厂商」随便选。读出用 `server/agent-service/service-keys.mjs` 的 `readServiceKey(dataDir, service)`。以后加别的服务，只在它的服务表里加一项，命令行与远程子命令不用改。
+- **报错**：不是密文（不以 PCAI1. 开头）、格式不对、被截断、头部异常、已过期、厂商不对、没写模型，各有明确的中文原因；**密文不是按这台机器的识别码生成的，与密文在传输中被改过，在密码学上分不出来，报同一句**（「解不开：这份密文不是按这台机器的识别码生成的……或者内容在传输中被改过」）。任何一种都不写任何文件。输出里只有厂商、模型清单与 Key 的末四位，不打印 Key、不打印密文。
+- **识别码稳定性**：Linux 上取 `/etc/machine-id`（取不到再取 `/var/lib/dbus/machine-id`），加盐取 SHA-256 的前 100 位，不掺主机名、IP、用户名：换账号、改主机名、改 IP 都不变；**重装系统、或从镜像克隆后重新生成 machine-id 才会变**，变了就要重新生成密文、重新导入（落盘加密用的也是这个指纹，所以重装后原来存的 Key 同样解不开，要重新导入）。两个都取不到时退到「主机名 + 平台 + 架构 + 网卡」的兜底，稳定性差，`machine-id.mjs` 会警告。
+- **换 Key**：重新生成密文再导入一次（替换并写明）。**删掉 Key**：`PROMPTCUT_AGENT_DATA=… node server/agent-service/set-key.mjs --clear`。**切到模拟模型**（验收与排查用，不调用任何真实模型）：`… set-key.mjs --mock`；换回真实模型就再导入一次密文。
+- `set-key.mjs` 里交互式录入明文的那一路保留，**仅供本机调试**（用户本人坐在节点终端前、手边没有密文时）：它不接受命令行与环境变量里的 Key、标准输入不是终端时拒绝、运行时会先说明这是调试用法。正式录入一律走加密分发。
+- 这层封装挡的是「明文躺在文件里」，挡不住能以同一个系统用户在节点上运行程序的人（口令是机器自己算出来的）。
+
+**给用户的步骤（会话转述）**：收到节点的机器识别码（形如 PCM-XXXXX-XXXXX-XXXXX-XXXXX）后，在自己的电脑上：
+
+1. 双击仓库根目录里的 `make-api-share.bat`（第一次会先编译一两分钟，需要装了 Rust；编译过的直接打开）。窗口标题是「PromptCut · 生成 API 分发密文」，停在「生成密文」页。
+2. 「① 本机识别码」一栏粘贴收到的识别码（大小写、横线随意，别抄错字符）。
+3. 「② 填要分发的 API 配置」：「厂商」下拉里选 anthropic / openai / gemini；「API 地址」用厂商官方地址就留空；「模型」填模型清单（多个用 | 隔开，第一个是缺省，例如 `模型甲|模型乙`）；「API Key」填 Key（勾「显示」可以核对）。配音那一份：「API 地址」填配音网关地址，「模型」填 minimax / kling / vidu 之一，「厂商」随便选，「API Key」填配音的令牌。
+4. 「③ 可选」里「留言」可以写一句；**「有效期（天）」留空**（设了会过期，过期的密文会被节点拒收）；「maxTokens」留空用缺省 4096。
+5. 点「生成密文」，出现「生成成功，共 … 个字符」；想先自己验一遍：切到「校验密文」页，填同一个识别码，把密文粘进去点「解开看看」，能看到厂商 / 模型 / 末四位就对。
+6. 回到「生成密文」页点「复制密文」，把那一整段**以 PCAI1. 开头的密文**粘贴回给会话（密文本身是加密的，发给会话没关系；**不要**把明文 Key 发给任何人）。
+7. 换 Key 或再加配音，重复 2～6。
+
+### 在线页面的诊断报告（构建时带两个变量）
+
+〔用户 2026-10-07 定〕云端对话与本机对话都能出诊断报告，两种去向：「保存为文件」（在线页面是浏览器本地下载）与「提交」（页面直接请求诊断报告收集端 `tools/report-worker/`，存起来，用 `report-inbox.bat` 取回）。在线页面里报告在页面内生成，下载与提交**都不经编辑器进程的 `/api/*`**；提交是页面对收集端外部地址的跨源 POST（`text/plain`，简单请求、无预检），收集端的响应本来就带 `Access-Control-Allow-Origin`，收集端不用改、不用重新部署。
+
+提交地址与令牌是**构建期**变量，写在构建在线页面的那台电脑的 `.env.local` 里（或构建时的环境变量），`npx vite build --mode online` 会把它们编进页面：
+
+| 变量 | 说明 |
+|---|---|
+| `VITE_DIAG_SUBMIT_URL` | 收集端的地址（与桌面版「诊断」窗口的「提交」是同一个） |
+| `VITE_DIAG_SUBMIT_TOKEN` | 与收集端那边 `SUBMIT_TOKEN` 相同的串。它随页面一起发给所有访问者，**不是真正的密钥**，挡的是随手 curl；真要防滥用在收集端按 IP 限流 |
+
+没配 `VITE_DIAG_SUBMIT_URL` 时，对话框里「提交」按钮置灰并说明原因，用户仍可「复制」或「保存为文件」。**换了这两个变量要重新构建并换在线页面。** 报告内容是这段对话的过程、出错原因、客户端与版本信息，已脱敏：不含委托票据、对话委托、模型 Key 与提交令牌。
+
+### 额度与用量（托管方在节点上运行，改了即生效，不用重启）
+
+```
+cd /opt/promptcut-render/current
+PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mjs quota set <projectId> --tokens <N> [--window total|month|day] [--runs <N>]
+PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mjs quota clear <projectId>
+PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mjs quota show [<projectId>]
+PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mjs usage [--project <projectId>] [--since 2026-10-01] [--json]
+```
+
+现在不设上限：任何能进云端项目的成员都能用托管方的 Key 跑模型，对外开放之前先按项目把上限发下去。节点级的并发上限（全节点 6 轮、每个项目 3 轮、每位成员 2 轮）在 `<数据目录>/config/limits.json` 的 `node` 里，缺省就有。
+
+### 升级与回退
+
+- 升级：换在线页面 → `deploy-render --commit <提交>`（换 `current`）→ `deploy-agent`（重载；进行中的对话会被记为「中断」，主人回来说一句就接着做）。
+- 回退：`rollback-render` 把 `current` 换回上一份，再 `deploy-agent` 重载一次。在线页面同样退回那个提交。
+- 只停 Agent 服务：`stop-agent`（托管服务与渲染服务不动）；在线页面的「云端」一项会报连不上。要让页面不出这一项，去掉托管组合的 `PROMPTCUT_AGENT_PUBLIC_URL` 并重启它，或撤掉 `agent` 的公钥（`keygen-agent --retire <kid>`）。
+- 换服务密钥：`keygen-agent`（新旧公钥并存）→ `pm2 restart promptcut-agent` → `keygen-agent --retire <旧 kid>`。
+- 四个子命令都收 `--dry-run`：只打印要交给远端的脚本，不连任何远端。

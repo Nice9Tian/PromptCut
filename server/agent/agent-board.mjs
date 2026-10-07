@@ -249,6 +249,20 @@ export function createAgentBoard({ now = () => Date.now(), labelOf = () => null,
 
     isBusy,
 
+    /**
+     * 撤掉这个对话声明的范围;原来有才回 true。云端的一轮结束时用(`service/instance.mjs`):云端的对话没有页签可关,
+     * 一轮结束(含失败、被停、被撤销)后范围还挂着的话,别的成员会一直看到「〈成员〉的云端 Agent 正在改:…」。
+     */
+    clearScope(key) {
+      const a = agents.get(key);
+      if (!a || !a.scope) return false;
+      a.scope = null;
+      a.scopeAt = null;
+      a.lastActive = now();
+      emit();
+      return true;
+    },
+
     /** 这个对话此刻在跑的工具(提交流的记录带上工具名) */
     beginCall(key, tool) {
       if (typeof key === 'string') calls.set(key, tool);

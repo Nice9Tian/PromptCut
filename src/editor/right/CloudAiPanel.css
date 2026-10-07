@@ -1,0 +1,9 @@
+/* 「云端」接入方式的 AI 栏(CloudAiPanel.tsx):只多两行小字,其余沿用本机 AI 栏的样式 */
+.pc-cloud-note {
+  flex: 0 0 auto;
+  padding: 2px 12px 4px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-align: left;
+}
+.pc-cloud-reconnect { font-size: 12px; line-height: 1.5; }

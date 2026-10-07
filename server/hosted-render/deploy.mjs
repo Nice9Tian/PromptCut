@@ -69,7 +69,7 @@ const size$ = (name, value) => {
  * `PROMPTCUT_RENDER_DIR`（部署目录）、`PROMPTCUT_RENDER_DATA`、`PROMPTCUT_RENDER_SECRETS`、`PROMPTCUT_HOSTED_DATA`（托管数据目录，keygen 写登记表用）、
  * `PROMPTCUT_RENDER_DOC_URL`、`PROMPTCUT_RENDER_PORT`、`PROMPTCUT_RENDER_STATUS_PORT`、`PROMPTCUT_RENDER_MAX_CONCURRENT`、`PROMPTCUT_RENDER_MAX_PROJECTS`、
  * `PROMPTCUT_RENDER_MEMORY_MAX` / `_MEMORY_HIGH`、`PROMPTCUT_RENDER_CPU_QUOTA`、`PROMPTCUT_RENDER_USER`（空串表示与管理进程同一用户）、
- * `PROMPTCUT_RENDER_USER_CARDS`、`PROMPTCUT_RENDER_EDITOR_DIR`。
+ * `PROMPTCUT_RENDER_USER_CARDS`、`PROMPTCUT_RENDER_EDITOR_DIR`、`PROMPTCUT_RENDER_LOOK`（on / off，看画面的口子；off 时云端 Agent 的配置里也不带它的地址）。
  */
 export function renderInstance(env = process.env) {
   const e = (name, fallback) => (env[name] === undefined ? fallback : env[name]);
@@ -77,6 +77,8 @@ export function renderInstance(env = process.env) {
   if (userRaw !== '' && !USERNAME.test(userRaw)) throw new DeployUsageError(`PROMPTCUT_RENDER_USER 要是系统用户名或空串：${userRaw}`);
   const userCards = e('PROMPTCUT_RENDER_USER_CARDS', 'isolated');
   if (userCards !== 'isolated' && userCards !== 'off') throw new DeployUsageError(`PROMPTCUT_RENDER_USER_CARDS 只能是 isolated 或 off：${userCards}`);
+  const look = e('PROMPTCUT_RENDER_LOOK', 'on');
+  if (look !== 'on' && look !== 'off') throw new DeployUsageError(`PROMPTCUT_RENDER_LOOK 只能是 on 或 off：${look}`);
   const docUrl = e('PROMPTCUT_RENDER_DOC_URL', 'ws://127.0.0.1:8787');
   let u;
   try { u = new URL(docUrl); } catch { throw new DeployUsageError(`PROMPTCUT_RENDER_DOC_URL 不是合法的地址：${docUrl}`); }
@@ -91,6 +93,7 @@ export function renderInstance(env = process.env) {
     secrets: path$('PROMPTCUT_RENDER_SECRETS', e('PROMPTCUT_RENDER_SECRETS', '/var/lib/promptcut/render-secrets')),
     hostedData: path$('PROMPTCUT_HOSTED_DATA', e('PROMPTCUT_HOSTED_DATA', '/var/lib/promptcut/hosted')),
     editorDir: path$('PROMPTCUT_RENDER_EDITOR_DIR', e('PROMPTCUT_RENDER_EDITOR_DIR', '/opt/promptcut-hosted/editor')),
+    look,
     docUrl,
     workerPort: int$('PROMPTCUT_RENDER_PORT', e('PROMPTCUT_RENDER_PORT', 5400), 1024, 65000),
     statusPort: int$('PROMPTCUT_RENDER_STATUS_PORT', e('PROMPTCUT_RENDER_STATUS_PORT', 5399), 1024, 65535),
@@ -128,6 +131,8 @@ export function renderTemplateValues(inst) {
     CPU_QUOTA: inst.cpuQuota,
     RENDER_USER: inst.user,
     USER_CARDS: inst.userCards,
+    LOOK: inst.look,
+    HOSTED_DATA: inst.hostedData,
     MAX_MEMORY_RESTART: inst.maxMemoryRestart,
     KILL_TIMEOUT_MS: String(inst.killTimeoutMs),
   };

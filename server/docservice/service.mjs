@@ -47,9 +47,10 @@ const ANONYMOUS = Object.freeze({ userId: 'anonymous', tenantId: null });
 
 /**
  * principal 里认的字段（`docs/plan/auth-contract.md` 第 6 节）；鉴权给的别的字段不进核心。
- * 后三项是托管方服务身份的（`docs/plan/hosted-render-contract.md` 第 1.2、1.4 节）：服务名、握手所用公钥的编号、登记表里的角色
+ * `service`、`serviceKid`、`serviceRole` 是托管方服务身份的（`docs/plan/hosted-render-contract.md` 第 1.2、1.4 节）：服务名、握手所用公钥的编号、登记表里的角色；
+ * `access`、`purpose` 是云端 Agent 服务的（`docs/plan/cloud-agent-contract.md` 第 4.3、16 节）：代成员的连接的权限（`rw` / `r`）、只用来发布的连接的用途
  */
-const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner', 'service', 'serviceKid', 'serviceRole']);
+const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner', 'service', 'serviceKid', 'serviceRole', 'access', 'purpose']);
 
 /**
  * 规整鉴权给的 principal：`userId` 原样、`tenantId` 不是字符串就记 null，其余认得的字段有值才带上。

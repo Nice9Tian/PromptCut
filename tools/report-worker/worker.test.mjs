@@ -131,3 +131,41 @@ test("没配限流绑定时照常收(老部署不该因此挂掉)", async () => 
   const res = await post(env, { token: "tok", label: "x" });
   assert.equal(res.status, 200);
 });
+
+/*
+ * 在线页面跨源提交(用户 2026-10-07 定:云端与本机对话的报告都能一键提交到收集端)。
+ * 页面用 text/plain 发(CORS 简单请求,不触发预检),所以收集端只要在响应里带 Access-Control-Allow-Origin,
+ * 浏览器就放行并让页面读到回执。这里钉的是这一条:成功、令牌不对、太大这几种响应都带;预检也答得上。
+ */
+test("CAU-DIAG-06 跨源提交:成功与出错的响应都带 Access-Control-Allow-Origin,页面读得到回执", async () => {
+  const env = envWith();
+  const ok = await worker.fetch(new Request("https://reports.example.com/", {
+    method: "POST", headers: { Origin: "https://app.example.org", "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ token: "tok", label: "云端对话诊断", text: "{}" }),
+  }), env);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("access-control-allow-origin"), "*");
+  assert.match((await ok.json()).id, /^\d{4}-\d{2}-\d{2}-/);
+  const bad = await worker.fetch(new Request("https://reports.example.com/", {
+    method: "POST", headers: { Origin: "https://app.example.org", "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ token: "wrong", label: "x", text: "{}" }),
+  }), env);
+  assert.equal(bad.status, 403);
+  assert.equal(bad.headers.get("access-control-allow-origin"), "*", "出错的响应也要带,页面才读得到「令牌不对」");
+  const pre = await worker.fetch(new Request("https://reports.example.com/", { method: "OPTIONS", headers: { Origin: "https://app.example.org" } }), env);
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers.get("access-control-allow-origin"), "*");
+});
+
+test("CAU-DIAG-06b 收下的云端对话报告里没有提交令牌;存的是页面发来的那份报告文本", async () => {
+  const env = envWith();
+  const report = JSON.stringify({ format: "PromptCut cloud conversation debug v1", rounds: [] });
+  const res = await worker.fetch(new Request("https://reports.example.com/", {
+    method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ token: "tok", label: "云端对话诊断", at: "2026-10-07T00:00:00.000Z", text: report }),
+  }), env);
+  const { id } = await res.json();
+  const stored = await env.REPORTS.get(id);
+  assert.equal(stored.includes("\"tok\""), false, "令牌摘掉后才存");
+  assert.equal(JSON.parse(stored).text, report);
+});

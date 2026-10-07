@@ -12,10 +12,16 @@ export function redactDebug(value: unknown): unknown {
    * 最有用的数字。所以改成「在词边界(开头或 - _ . 之后)上整段结尾匹配」:
    * `x-api-key` 命中、`max_tokens` 不命中。
    */
-  const secret = /(^|[-_.])(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|password|passwd|client[_-]?secret|secret|cookie|credential)s?$/i;
+  const secret = /(^|[-_.])(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|password|passwd|client[_-]?secret|secret|cookie|credential|ticket|delegation|delegate|grant)s?$/i;
   const walk = (v: unknown): unknown => {
     if (typeof v === 'string') return v.replace(/\bBearer\s+[^\s"'<>]+/gi, 'Bearer [REDACTED]')
       .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, '[REDACTED]')
+      // 另几家厂商的 Key 形状,以及托管端的委托票据与对话委托(v1.<段>.<段>,见 server/auth/tickets.mjs)。
+      // 云端对话的报告早就按这些形状扫;本机对话的报告同样可能从工具结果、错误消息或用户粘贴里把它们带进来,是同一道底线。
+      .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, '[REDACTED]')
+      .replace(/\bxai-[A-Za-z0-9_-]{16,}/g, '[REDACTED]')
+      .replace(/\bgsk_[A-Za-z0-9]{16,}/g, '[REDACTED]')
+      .replace(/\bv1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[TICKET-REDACTED]')
       // 本机识别码是配置分发的解密口令，整串不能进报告。服务端那份已经先截过了，
       // 这里再兜一道：它也可能从执行日志、错误消息、用户粘进来的文本里溜进来。
       .replace(/\bPCM-[0-9A-HJKMNP-TV-Z]{5}(?:-[0-9A-HJKMNP-TV-Z]{5}){3}\b/gi, (m) => `${m.slice(0, 9)}-…`)
@@ -144,4 +150,19 @@ export async function copyDebugReport(text: string): Promise<void> {
   document.body.appendChild(field); field.select();
   try { if (!document.execCommand('copy')) throw new Error('自动复制失败,请手动选中文本复制'); }
   finally { field.remove(); }
+}
+
+/**
+ * 在浏览器里把报告存成文件(下载一份)。在线页面没有编辑器进程可以替它写盘(也不许请求 `/api/*`),云端对话的诊断报告走这条;
+ * 返回一句给用户看的回执。
+ */
+export function downloadReportFile(text: string, label: string): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
+  const name = `${label.replace(/[\/:*?"<>|\s]+/g, '_') || '诊断报告'}-${stamp}.json`;
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.style.display = 'none';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return `已下载:${name}`;
 }

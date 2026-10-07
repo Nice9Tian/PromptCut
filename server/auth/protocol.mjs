@@ -214,3 +214,14 @@ export function splitUserId(userId) {
   const deviceId = userId.slice(i + 1);
   return isDeviceId(deviceId) ? { username, deviceId } : null;
 }
+
+// ---------------------------------------------------------------- 云端 Agent 的委托（`docs/plan/cloud-agent-contract.md` 第 4.2 节）
+
+/** 委托票据（页面每个请求出示）与对话委托（绑一个对话，成员离线后仍有效）的有效期 */
+export const DELEGATION_TTL = Object.freeze({ ticket: 2 * 60_000, grant: 60 * 60_000 });
+/** 委托的受众：要它的那种托管方服务的服务名。现在只有云端 Agent 服务 */
+export const DELEGATION_AUDIENCES = Object.freeze(['agent']);
+/** 对话 id（页面起的）：1～64 个 `[A-Za-z0-9_-]` */
+export const isConversationId = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+/** 成员在项目里的权限：读写或只读 */
+export const isAccess = (v) => v === 'r' || v === 'rw';

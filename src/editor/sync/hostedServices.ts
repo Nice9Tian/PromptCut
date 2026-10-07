@@ -7,6 +7,10 @@
  * - 项目设置里每种服务一行勾选，**按服务名渲染**：现在只有 `render`，第四段（云端 Agent）往 `HOSTED_SERVICE_ROWS` 与
  *   `HOSTED_SERVICE_TEXT` 各加一项就多一行。
  *
+ * - 代成员进项目的服务连接（云端 Agent）不另起一行：归在那位成员的行里，`conns` 里那一项带 `service: 'agent'`，界面在这位成员下
+ *   显示「〈成员名〉的云端 Agent」（`cloudAgentConns`、`cloudAgentLabel`；契约 `docs/plan/cloud-agent-contract.md` 第 5 节）。
+ *   项目设置里 `agent` 一行就是「云端 Agent」开关。
+ *
  * 不引 React、不引同步管理的运行时（只用类型），单测直接 import。
  */
 import type { MemberRow } from "./syncManager";
@@ -20,15 +24,34 @@ export interface HostedServiceState {
 
 export type HostedView = Partial<Record<HostedServiceName, HostedServiceState>>;
 
-/** 项目设置里出现哪几行、按什么顺序。第四段加 `"agent"` */
-export const HOSTED_SERVICE_ROWS: readonly HostedServiceName[] = ["render"];
+/** 项目设置里出现哪几行、按什么顺序 */
+export const HOSTED_SERVICE_ROWS: readonly HostedServiceName[] = ["render", "agent"];
 
-/** 每种服务在界面上的文案。第四段加 `agent` 时在这里加一项、再把名字加进 `HOSTED_SERVICE_ROWS` */
-export const HOSTED_SERVICE_TEXT: Partial<Record<HostedServiceName, { label: string; hint: (enabled: boolean) => string; changed: (enabled: boolean) => string }>> = {
+export interface HostedServiceText {
+  label: string;
+  /** 勾选行下面的一行说明 */
+  hint: (enabled: boolean) => string;
+  /** 别的成员收到「创建者改了开关」时的提示；空串表示这个方向不提示（两个开关同一个规矩：只在关闭时提示，打开时不提示，〔用户 2026-10-07 定〕） */
+  changed: (enabled: boolean) => string;
+  /** 创建者确认弹窗里的一句话(`enabled` 是要改成的状态) */
+  confirm: (enabled: boolean) => string;
+}
+
+/** 每种服务在界面上的文案。加服务时在这里加一项、再把名字加进 `HOSTED_SERVICE_ROWS` */
+export const HOSTED_SERVICE_TEXT: Partial<Record<HostedServiceName, HostedServiceText>> = {
   render: {
     label: "托管方的渲染节点",
     hint: (enabled) => (enabled ? "云节点上托管方的渲染节点为这个项目做预渲染，创建者可以关掉。" : "已关闭：托管方的渲染节点不再为这个项目做预渲染，已经渲好的结果保留。"),
-    changed: (enabled) => (enabled ? "创建者打开了托管方的渲染节点。" : "创建者关闭了托管方的渲染节点，它不再为这个项目做预渲染。"),
+    // 与云端 Agent 同一个规矩：只在关闭时给别的成员气泡，打开时不提示〔用户 2026-10-07 定〕
+    changed: (enabled) => (enabled ? "" : "创建者关闭了托管方的渲染节点，它不再为这个项目做预渲染。"),
+    confirm: (enabled) => (enabled ? "打开后，托管方的渲染节点会为这个项目做预渲染。" : "关闭后，托管方的渲染节点不再为这个项目做预渲染，已经渲好的结果保留。"),
+  },
+  agent: {
+    label: "云端 Agent",
+    hint: (enabled) => (enabled ? "成员可以在 AI 栏里选「云端」，让云节点上的 Agent 代自己改项目，关掉软件也会继续。创建者可以关掉。" : "已关闭：成员不能再用云端 Agent，进行中的云端对话已被停下；已经落地的改动保留。"),
+    // 只有关闭时给别的成员一条气泡，打开时不提示（空串就不弹）〔用户 2026-10-07 定〕
+    changed: (enabled) => (enabled ? "" : "创建者关闭了云端 Agent，进行中的云端对话已被停下。"),
+    confirm: (enabled) => (enabled ? "打开后，成员可以在 AI 栏里选「云端」，让云节点上的 Agent 代自己改项目。" : "关闭后，成员不能再用云端 Agent，进行中的云端对话会被立刻停下；已经落地的改动保留。"),
   },
 };
 
@@ -77,6 +100,14 @@ export function hostedRowsOf(where: "lan" | "hosted" | null | undefined, hosted:
   return rows;
 }
 
+/** 这位成员名下代他进项目的云端 Agent 连接(成员列表行的 `conns` 里带 `service: 'agent'` 的那几项) */
+export function cloudAgentConns<T extends { role: string; service?: string }>(conns: readonly T[]): T[] {
+  return conns.filter((c) => c.service === "agent");
+}
+
+/** 云端 Agent 的署名:「〈成员名〉的云端 Agent」(操作记录、覆盖提示、成员列表都用这一处) */
+export const cloudAgentLabel = (name: string): string => `${name}的云端 Agent`;
+
 /** 成员列表的这一行是不是托管方的服务 */
 export const isServiceRow = (row: Pick<MemberRow, "service">): boolean => typeof row.service === "string" && row.service !== "";
 
@@ -91,4 +122,73 @@ export function splitMembers<T extends Pick<MemberRow, "service">>(rows: readonl
   const services: T[] = [];
   for (const r of rows) (isServiceRow(r) ? services : people).push(r);
   return { people, services };
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * 成员列表的计数口径〔用户 2026-10-07 定;同日改:云端 Agent 按「此刻有没有一轮在跑」算,不按「连没连着」〕：「成员：N 人 · Agent：M 个」
+ *
+ * 云端 Agent 的连接在一轮结束后还会连着(闲置 10 分钟才回收),连没连着说不清它在不在干活。Agent 服务在有一轮在跑时经在场状态挂一项
+ * `cloud-run`(`presence.ts` 的 `cloudRunning()`:成员键 `用户名@设备号` 的集合,与成员行的 `${username}@${deviceId}` 同一写法),下面的函数都带这张表:
+ *
+ * - 人数只算真人在线的：这一行有任何一条不是「云端 Agent」的连接（页面、本机 Agent、渲染进程都说明他的设备在线）才算；
+ * - Agent 数 = 本机 Agent（每个对话一条连接）加有一轮在跑的云端 Agent（每位成员最多一个，实例里有多条连接也只算一个）；闲置的云端 Agent 连接不计；
+ * - 成员本人不在线、他的云端 Agent 有一轮在跑：这一行照常显示并标「离线，Agent 在跑」，不计入人数、计入 Agent 数；
+ * - 成员本人不在线、只剩闲置的云端 Agent 连接：这一行不显示（不标、不计入任何一个数）；
+ * - 成员本人在线、云端 Agent 闲置：行里不显示「[云端 Agent]」标记；有一轮在跑才显示；
+ * - 托管方的服务行（渲染节点）不进任何一个数（`splitMembers` 已把它们分开）。
+ * ------------------------------------------------------------------------------------------- */
+
+type CountRow = Pick<MemberRow, "conns" | "username" | "deviceId">;
+
+/** 此刻云端 Agent 有一轮在跑的成员键(`用户名@设备号`) */
+export type CloudRunning = ReadonlySet<string>;
+
+/** 成员行在「有一轮在跑」表里的键:与在场状态里来源身份的 `userId` 是同一种写法(`用户名@设备号`) */
+export const memberKeyOf = (row: Pick<MemberRow, "username" | "deviceId">): string => `${row.username}@${row.deviceId}`;
+
+/** 这一行的成员此刻是不是真人在线 */
+export function isPersonOnline(row: Pick<MemberRow, "conns">): boolean {
+  return row.conns.some((c) => c.service !== "agent");
+}
+
+/** 这位成员的云端 Agent 此刻有一轮在跑(连着,且在「有一轮在跑」表里) */
+export function isCloudAgentRunning(row: CountRow, running: CloudRunning): boolean {
+  return cloudAgentConns(row.conns).length > 0 && running.has(memberKeyOf(row));
+}
+
+/** 这位成员本人不在线、他的云端 Agent 有一轮在跑:标「离线，Agent 在跑」 */
+export function isCloudAgentOnly(row: CountRow, running: CloudRunning): boolean {
+  return !isPersonOnline(row) && isCloudAgentRunning(row, running);
+}
+
+/** 这位成员本人不在线、只剩闲置的云端 Agent 连接:这一行不显示 */
+export function isIdleCloudAgentOnly(row: CountRow, running: CloudRunning): boolean {
+  return !isPersonOnline(row) && cloudAgentConns(row.conns).length > 0 && !isCloudAgentRunning(row, running);
+}
+
+/** 成员列表里要显示的行(去掉只剩闲置云端 Agent 连接的)。`people` 是 `splitMembers` 分出来的成员行 */
+export function visibleMembers<T extends CountRow>(people: readonly T[], running: CloudRunning): T[] {
+  return people.filter((r) => !isIdleCloudAgentOnly(r, running));
+}
+
+/** 本机 Agent 的数量(这一行里 `role: 'agent'` 且不是云端 Agent 的连接) */
+export function localAgentCount(row: Pick<MemberRow, "conns">): number {
+  return row.conns.filter((c) => c.role === "agent" && c.service !== "agent").length;
+}
+
+/** 顶栏成员数与 Agent 数。`people` 是 `splitMembers` 分出来的成员行 */
+export function memberCounts(people: readonly CountRow[], running: CloudRunning): { people: number; agents: number } {
+  let online = 0;
+  let agents = 0;
+  for (const r of visibleMembers(people, running)) {
+    if (isPersonOnline(r)) online++;
+    agents += localAgentCount(r) + (isCloudAgentRunning(r, running) ? 1 : 0);
+  }
+  return { people: online, agents };
+}
+
+/** 顶栏按钮上的字。自己总是在线的，所以人数至少 1 */
+export function memberCountLabel(people: readonly CountRow[], running: CloudRunning): string {
+  const c = memberCounts(people, running);
+  return `成员：${Math.max(1, c.people)} 人 · Agent：${c.agents} 个`;
 }

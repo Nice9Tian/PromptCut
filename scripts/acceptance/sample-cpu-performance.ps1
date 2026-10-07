@@ -1,4 +1,4 @@
-# 笔记本复核用:后台采样 "% Processor Performance"(全核频率相对标称的百分比),写成 CSV,结束后给出汇总。
+﻿# 笔记本复核用:后台采样 "% Processor Performance"(全核频率相对标称的百分比),写成 CSV,结束后给出汇总。
 # 这台笔记本有过全核频率只有标称 74% 的时段(REPORT 记录),那段时间里量的耗时不作数。
 #
 # 用法(PowerShell,窗口静默:用 Start-Process -WindowStyle Hidden 起,别开可见窗口):

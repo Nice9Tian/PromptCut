@@ -157,6 +157,8 @@ test('HR22b PM2 配置:求值后的字段、环境变量、应用名与入口;�
     PROMPTCUT_RENDER_CPU_QUOTA: '400%',
     PROMPTCUT_RENDER_USER: 'promptcut-render',
     PROMPTCUT_RENDER_USER_CARDS: 'isolated',
+    PROMPTCUT_RENDER_LOOK: 'on',
+    PROMPTCUT_RENDER_LOOK_SERVICES: '/var/lib/promptcut/hosted/secrets/services.json',
     PROMPTCUT_RENDER_EDITOR_DIR: '/opt/promptcut-hosted/editor',
     PUPPETEER_CACHE_DIR: '/opt/promptcut-render/current/.cache/puppeteer',
   });

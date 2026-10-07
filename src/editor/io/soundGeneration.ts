@@ -2,30 +2,16 @@
 import { actions, getState } from "../../store/project";
 import { getCard } from "../../kernel/registry";
 import { findClip, newId } from "../../kernel/project";
-import { createNotificationRecipe, createTypingSoundRecipe, validateSoundEffectRecipe, soundEffectReuseKey, SOUND_EFFECT_LIMITS, NOTIFICATION_SOUND_DEFAULTS, KEYBOARD_SOUND_DEFAULTS, type SoundEffectRecipe, type TypingScheduleOptions } from "../../kernel/soundEffects";
-import { typingScheduleOptionsFromParams } from "../../kernel/typingEvents";
+import { soundEffectReuseKey, SOUND_EFFECT_LIMITS, NOTIFICATION_SOUND_DEFAULTS, KEYBOARD_SOUND_DEFAULTS } from "../../kernel/soundEffects";
 import { createSoundGenerationManager, type SoundGenerationJob, SOUND_JOB_LIMITS } from "../../audio/soundGeneration";
 import { renderSoundEffectWavInWorker } from "../../audio/soundGenerationWorkerClient";
 import { hasGeneratedAudio, uploadGeneratedAudio } from "./generatedAudioUpload";
 import { decideClipSound, decideRecipeSound } from "./onlineSoundJudge";
 import { soundEffectReuseDigest } from "../../audio/soundGeneration";
 import { isViewOnly } from "./viewOnly";
+import { planSoundGeneration, type GenerateSoundOptions } from "../../audio/soundRequest";
 
-export interface GenerateSoundOptions {
-  preset?: "notification" | "keyboard";
-  recipe?: SoundEffectRecipe;
-  params?: Record<string, unknown>;
-  typing?: TypingScheduleOptions;
-  sourceClipId?: string;
-  clipId?: string;
-  start?: number;
-  trackId?: string;
-  seed?: number;
-  name?: string;
-  requestId?: string;
-  /** Regeneration can explicitly rebuild the schedule from the current typing card. */
-  refreshSource?: boolean;
-}
+export type { GenerateSoundOptions };
 
 let renderWav: typeof renderSoundEffectWavInWorker = renderSoundEffectWavInWorker;
 /** 单测换合成实现(真实页面里恒是 Worker 那一份) */
@@ -57,63 +43,15 @@ export function startSoundGeneration(options: GenerateSoundOptions): SoundGenera
   if (isViewOnly()) throw new Error("只读页面不能生成音效");
   const p = getState().project;
   const projectLoadToken = getState().projectLoadToken;
-  const target = options.clipId ? findClip(p, options.clipId) : null;
-  if (options.clipId && !target?.clip.soundEffect) throw new Error("找不到可重生成的音效片段");
-  if (target?.track.locked) throw new Error("请先解锁音效序列");
-  const requestedSourceId = options.sourceClipId ?? target?.clip.soundEffect?.sourceClipId;
-  const candidate = requestedSourceId ? findClip(p, requestedSourceId) : null;
-  const source = candidate?.clip.cardId === "mu-typing" ? candidate : null;
-  if ((options.sourceClipId || options.refreshSource) && !source) throw new Error("sourceClipId 必须指向当前剪辑中的打字机卡片");
-  // Removing the visual card does not erase the persisted sound recipe; ordinary regeneration detaches the orphan link.
-  const sourceClipId = source?.clip.id;
-  const previous = target?.clip.soundEffect?.recipe;
-  const preset = options.preset ?? options.recipe?.preset ?? previous?.preset ?? "notification";
-  let recipe: SoundEffectRecipe;
-  if (options.recipe) recipe = validateSoundEffectRecipe(options.recipe);
-  else if (previous && !options.refreshSource) {
-    const params = { ...previous.params, ...options.params };
-    const naturalFrames = (r: SoundEffectRecipe, duration = r.params.duration) => Math.max(1,
-      r.events.length ? r.events.at(-1)!.frame + Math.ceil(duration * r.sampleRate) : 0,
-      r.preset === "keyboard" ? Math.ceil((r.typingSource?.settleMs ?? 0) * r.sampleRate / 1000) : 0);
-    const hadNaturalRange = previous.frames === naturalFrames(previous);
-    if (previous.preset === "notification") {
-      const notesChanged = options.params?.notes !== undefined && JSON.stringify(options.params.notes) !== JSON.stringify(previous.params.notes);
-      const intervalChanged = options.params?.interval !== undefined && options.params.interval !== previous.params.interval;
-      const durationChanged = params.duration !== previous.params.duration;
-      // Sound-only edits preserve an explicitly supplied event table and padded/cropped asset range.
-      const rebuilt = createNotificationRecipe(params, { seed: options.seed ?? previous.seed, sampleRate: previous.sampleRate, channels: previous.channels });
-      const events = notesChanged || intervalChanged ? rebuilt.events : previous.events;
-      const candidate = { ...rebuilt, events };
-      const frames = hadNaturalRange && (notesChanged || intervalChanged || durationChanged) ? naturalFrames(candidate) : previous.frames;
-      recipe = validateSoundEffectRecipe({ ...candidate, frames });
-    } else {
-      const frames = hadNaturalRange && params.duration !== previous.params.duration ? naturalFrames(previous, Number(params.duration)) : previous.frames;
-      recipe = validateSoundEffectRecipe({ ...previous, frames, seed: options.seed ?? previous.seed, params });
-    }
-  } else if (preset === "keyboard") {
-    const typing = source ? typingScheduleOptionsFromParams(source.clip.params) : options.typing ?? (previous?.preset === "keyboard" ? previous.typingSource?.source : undefined);
-    if (!typing) throw new Error("键盘声需要 sourceClipId 或 typing.text 与节奏");
-    recipe = createTypingSoundRecipe(typing, { ...(previous?.preset === "keyboard" ? previous.params : {}), ...options.params }, { seed: options.seed ?? previous?.seed ?? typing.seed ?? 0 });
-  } else recipe = createNotificationRecipe(options.params, { seed: options.seed ?? 0 });
-  // A caller-owned object must not change while an async render is in flight.
-  recipe = validateSoundEffectRecipe(structuredClone(recipe));
+  const { recipe, target, source, sourceClipId, start, duration, mediaOffset, name, expectedClip, expectedSource } = planSoundGeneration(p, options);
   const implicitKey = JSON.stringify([p.id, p.activeCutId, options.clipId, sourceClipId, options.start ?? source?.clip.start, options.trackId, options.name, soundEffectReuseKey(recipe)]);
   let requestId = options.requestId ?? implicitRequests.get(implicitKey);
   if (!requestId) {
     requestId = newId("sound-request"); implicitRequests.set(implicitKey, requestId);
     if (implicitRequests.size > 32) implicitRequests.delete(implicitRequests.keys().next().value!);
   }
-  const expectedClip = target ? JSON.stringify(target.clip) : undefined;
-  const expectedSource = source ? JSON.stringify(source.clip) : undefined;
   const projectId = p.id;
   const cutId = p.activeCutId;
-  const start = target ? undefined : options.start ?? source?.clip.start;
-  const mediaOffset = source && recipe.preset === "keyboard" ? Math.max(0, source.clip.mediaOffset ?? 0) : 0;
-  const available = recipe.frames / recipe.sampleRate - mediaOffset;
-  if (!target && start !== undefined && available <= 0) throw new Error("这段打字范围没有剩余声音,请检查素材偏移");
-  if (start !== undefined && (!Number.isFinite(start) || start < 0 || start >= p.duration)) throw new Error("start 必须在项目时间范围内");
-  const duration = source && recipe.preset === "keyboard" ? Math.min(available, source.clip.end - source.clip.start) : available;
-  const name = `${(options.name || (recipe.preset === "keyboard" ? "键盘声" : "提示音")).replace(/\.wav$/i, "").slice(0, 100)}.wav`;
   const targetKey = `${projectId}:${projectLoadToken}:${cutId ?? ""}:${target?.clip.id ?? requestId}`;
   return manager.start({
     recipe, requestId, targetKey,

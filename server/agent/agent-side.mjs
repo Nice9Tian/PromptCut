@@ -35,6 +35,7 @@ export const PAGE_STATE_TOOL = '__page_state';
  *   `createUserEditingBoard().current`);给了就在读到 / 写到这些片段的工具结果里带 `userEditing` 与提示(A2,只提示不拦)
  * @param {(key: string) => string | null} [o.agentLabel] 对话 id → 厂商名,覆盖提示「Agent <身份> 刚改过」里用
  * @param {(agent: string, opIds: string[]) => void} [o.onPageWrites] 页面替某个 Agent 执行了写入(A3 公告板把这些提交记到它名下)
+ * @param {(agent: string, write: { opId: string, rev: number, clipIds: string[] }) => void} [o.onWrite] 某个对话的一次写入落地了
  * `callServer(tool, args, { agent })`:`side: "server"` 的工具(`wait`、`report_progress`、A3 的多 Agent 协调工具)。
  */
 export function createAgentSide({
@@ -56,6 +57,10 @@ export function createAgentSide({
   userEditing = null,
   agentLabel = null,
   onPageWrites = null,
+  onWrite = null,
+  execSerial = null,
+  isolateStore = false,
+  enterHost = null,
 } = {}) {
   if (!Array.isArray(tools)) throw new TypeError('createAgentSide: 要 tools(工具表)');
   if (typeof callPage !== 'function') throw new TypeError('createAgentSide: 要 callPage');
@@ -63,8 +68,8 @@ export function createAgentSide({
   const link = createAgentLink({ url, projectId, protocolsFor, log, ...(WebSocketImpl ? { WebSocketImpl } : {}), ...linkOptions });
 
   /** 经页面执行,统一成 { result, opIds } */
-  async function viaPage(tool, args, agent) {
-    const out = await callPage(tool, args, { agent });
+  async function viaPage(tool, args, agent, extra = null) {
+    const out = await callPage(tool, args, extra ? { agent, ...extra } : { agent });
     if (pageResult === 'wrapped') return { result: out?.result, opIds: Array.isArray(out?.opIds) ? out.opIds : [] };
     return { result: out, opIds: [] };
   }
@@ -78,9 +83,14 @@ export function createAgentSide({
     log,
     limits: execLimits,
     agentLabel,
+    // 多个实例共用一份服务端 store 时(托管档),锁由调用方给、进锁清场
+    ...(execSerial ? { serial: execSerial } : {}),
+    isolateStore,
+    ...(typeof enterHost === 'function' ? { enterHost } : {}),
     // 只读的页面状态:经同一条页面通道要一次
-    pageState: async (tool, args, keys) => {
-      const { result } = await viaPage(PAGE_STATE_TOOL, { tool, args, keys: [...keys] }, '');
+    // `agent` 仍是 ''(桌面的页面通道按它分发,行为不变);要它的那个对话另放在 `pageStateFor` 里,托管档按它找这个对话的页面状态
+    pageState: async (tool, args, keys, agentKey = '') => {
+      const { result } = await viaPage(PAGE_STATE_TOOL, { tool, args, keys: [...keys] }, '', { pageStateFor: agentKey });
       return result && typeof result === 'object' ? result : null;
     },
   });
@@ -92,7 +102,8 @@ export function createAgentSide({
     } else if (toolDef.side === 'server') {
       return callServer(tool, args, { agent });
     }
-    const { result, opIds } = await viaPage(tool, args, agent);
+    // `track` 是这次调用的事件上下文:托管档在服务端实现的工具把落地的写入记在它上面(桌面的页面通道不看它)
+    const { result, opIds } = await viaPage(tool, args, agent, { track: ctx });
     const own = opIds.filter((x) => typeof x === 'string');
     if (own.length) {
       // 页面替这个 Agent 执行的写入以页面身份提交:告诉公告板这几次提交是它的(A3)
@@ -123,6 +134,10 @@ export function createAgentSide({
       try {
         const result = await executor.track(tool, args, key, (ctx) => { seen = ctx; return dispatch(tool, args, key, toolDef, ctx); }, { callId });
         // 用户正在编辑的片段被这次读到或写到:结果带 userEditing 与一句提示(A2;只提示,不拦)
+        // 这次调用落地了一次写入:告诉宿主写到了哪些片段(托管档据此发补渲计划,契约 cloud-agent-contract.md 第 16 节)
+        if (seen?.write && typeof onWrite === 'function') {
+          try { onWrite(key, { opId: seen.write.opId, rev: seen.write.rev, clipIds: seen.write.clipIds ?? [] }); } catch { /* 宿主的事,不影响工具结果 */ }
+        }
         const hit = userEditingFor({ tool, args, written: seen?.write?.clipIds ?? [], editing: editingNow() });
         return annotateResult(result, { userEditing: hit });
       } catch (err) {

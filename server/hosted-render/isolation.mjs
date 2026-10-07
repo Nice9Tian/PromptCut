@@ -26,6 +26,8 @@ export const ISOLATION_DEFAULTS = Object.freeze({
   IDLE_MS: 60_000,
   /** 另有项目在等时，一个项目最多连续做这么久 */
   SLICE_MS: 5 * 60_000,
+  /** 等着的项目里有「要看画面」的（有人正等着一帧）时，当前这个项目最多再连续做这么久就轮换 */
+  LOOK_SLICE_MS: 45_000,
   /** 轮换时等手里的任务做完的上限；到点还没完就让掉认领结束 */
   DRAIN_MS: 120_000,
   /** 起来这么久还没交过诊断就算起不来 */
@@ -44,18 +46,29 @@ export const isoNodeIdFor = (instanceId, projectId) => `hosted-render-iso:${Stri
  * @param {{ projectId, cards?: { state: string }, pending?: number, pendingKey?: string }[]} o.residentNodes 常驻工作进程诊断里的各节点
  * @returns {{ projectId: string, members: boolean, pending: number, pendingKey: string }[]} 有成员在线的在前，其次按变成有活的先后
  */
-export function isolationCandidates({ directory = [], residentNodes = [] } = {}) {
+export function isolationCandidates({ directory = [], residentNodes = [], looks = null } = {}) {
   const byId = new Map(residentNodes.map((n) => [n.projectId, n]));
   const out = [];
   for (const p of directory) {
     if (!p.enabled || !p.active) continue;
     const n = byId.get(p.projectId);
-    if (!n || n.cards?.state !== 'some') continue;
-    const pending = Number(n.pending) || 0;
-    if (pending <= 0) continue;
-    out.push({ projectId: p.projectId, members: p.members === true, pending, pendingKey: String(n.pendingKey ?? ''), since: p.since ?? 0 });
+    /*
+     * 「要看画面」的项目（`looks`：projectId → 这次需求的记号；云端 Agent 经看画面的口子登记的，`look.mjs`）：没有任务等着也算候选，
+     * 而且排在最前——有人（模型的一轮）正等着这一帧。这样的项目不要求常驻工作进程已经报出「有卡」：Agent 服务刚把卡片源码写进内容库时，
+     * 常驻工作进程的那份诊断可能还是上一拍的。
+     */
+    const look = looks?.get(p.projectId) ?? null;
+    if (!look && (!n || n.cards?.state !== 'some')) continue;
+    const pending = Number(n?.pending) || 0;
+    if (pending <= 0 && !look) continue;
+    out.push({
+      projectId: p.projectId, members: p.members === true, pending,
+      pendingKey: look ? `${String(n?.pendingKey ?? '')}|look:${look}` : String(n?.pendingKey ?? ''),
+      ...(look ? { look: true } : {}), since: p.since ?? 0,
+    });
   }
-  out.sort((a, b) => (a.members === b.members ? (a.since - b.since) || (a.projectId < b.projectId ? -1 : 1) : a.members ? -1 : 1));
+  out.sort((a, b) => ((a.look === true) !== (b.look === true) ? (a.look ? -1 : 1)
+    : a.members === b.members ? (a.since - b.since) || (a.projectId < b.projectId ? -1 : 1) : a.members ? -1 : 1));
   return out.map(({ since, ...rest }) => rest);
 }
 
@@ -70,7 +83,7 @@ export function isolationCandidates({ directory = [], residentNodes = [] } = {})
  */
 export function createIsolation({
   runner, nodeIdOf, now = Date.now, log = () => {},
-  idleMs = ISOLATION_DEFAULTS.IDLE_MS, sliceMs = ISOLATION_DEFAULTS.SLICE_MS, drainMs = ISOLATION_DEFAULTS.DRAIN_MS,
+  idleMs = ISOLATION_DEFAULTS.IDLE_MS, sliceMs = ISOLATION_DEFAULTS.SLICE_MS, drainMs = ISOLATION_DEFAULTS.DRAIN_MS, lookSliceMs = ISOLATION_DEFAULTS.LOOK_SLICE_MS,
   startTimeoutMs = ISOLATION_DEFAULTS.START_TIMEOUT_MS, retryIdleMs = ISOLATION_DEFAULTS.RETRY_IDLE_MS,
 } = {}) {
   /** @type {null | { projectId, members, phase: 'preparing'|'starting'|'running'|'draining'|'stopping', startedAt, readyAt, lastBusyAt, drainAt, worked, pendingKey }} */
@@ -97,7 +110,9 @@ export function createIsolation({
       return false;
     });
     if (usable.length === 0) return null;
-    // 轮流：上一轮做的那个排到最后
+    // 要看画面的先（有人正等着这一帧）；其余轮流：上一轮做的那个排到最后
+    const urgent = usable.find((c) => c.look === true);
+    if (urgent) return urgent;
     const others = usable.filter((c) => c.projectId !== lastServed);
     return others[0] ?? usable[0];
   }
@@ -152,9 +167,12 @@ export function createIsolation({
      * @param {ReturnType<typeof isolationCandidates>} o.candidates
      * @param {(projectId: string) => boolean} o.eligible 这个项目现在还该不该由渲染服务做（目录里开着且有活，或手里还有认领）
      * @param {null | { at: number, queue: { nodes: object[] } }} o.report 隔离工作进程最近一次交来的诊断（`at` 是收到的时刻）
+     * @param {null | { wanted(projectId: string): boolean, busy: string | null }} [o.looks] 看画面（`look.mjs`）：`wanted` 这个项目此刻有没有
+     *   还没过期的看画面需求（有就不算闲置）；`busy` 正在出图的那个项目（出图的半路上不结束、不轮换走）
      */
-    tick({ candidates = [], eligible = () => true, report = null } = {}) {
+    tick({ candidates = [], eligible = () => true, report = null, looks = null } = {}) {
       waiting = candidates.filter((c) => c.projectId !== current?.projectId).map((c) => c.projectId);
+      const lookWaiting = candidates.some((c) => c.look === true && c.projectId !== current?.projectId);
       if (op) return;
       if (!current) {
         const c = pick(candidates);
@@ -175,18 +193,22 @@ export function createIsolation({
       if (runner.exited()) { void end('exit'); return; }
       const held = (node?.held?.length ?? 0) + (node?.running?.length ?? 0);
       if ((node?.claimed ?? 0) > 0) cur.worked = true;
+      const looking = looks?.busy === cur.projectId;
+      const lookWanted = looking || looks?.wanted?.(cur.projectId) === true;
+      // 出过图也算这一轮干了活（不然只为看画面起的一轮会被记成「什么都没认领到」而暂不再起）
+      if (looking) cur.worked = true;
       if (cur.phase === 'running') {
-        if (held > 0 || (node?.claimable ?? 0) > 0) cur.lastBusyAt = now();
-        if (!eligible(cur.projectId) && held === 0) { void end('not-listed'); return; }
+        if (held > 0 || (node?.claimable ?? 0) > 0 || lookWanted) cur.lastBusyAt = now();
+        if (!eligible(cur.projectId) && held === 0 && !looking) { void end('not-listed'); return; }
         if (now() - cur.lastBusyAt >= idleMs) { void end('idle'); return; }
-        if (waiting.length > 0 && now() - cur.readyAt >= sliceMs) {
+        if (waiting.length > 0 && !looking && now() - cur.readyAt >= (lookWaiting ? Math.min(sliceMs, lookSliceMs) : sliceMs)) {
           cur.phase = 'draining';
           cur.drainAt = now();
           log('isolation.rotate', { projectId: cur.projectId, waiting, held });
         }
       }
       if (cur.phase === 'draining') {
-        if (held === 0) { void end('rotated'); return; }
+        if (held === 0 && !looking) { void end('rotated'); return; }
         if (now() - cur.drainAt >= drainMs) { void end('rotate-timeout'); }
       }
     },

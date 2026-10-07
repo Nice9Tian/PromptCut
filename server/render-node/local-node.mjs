@@ -370,7 +370,11 @@ export function createLocalNode({
     // 是「确实有这样一台在线节点」的凭据;两边对得上才给浏览器出用户卡、图卡的那一份(`splitPlan` 的 `browserCards`)
     const browserCards = browserCardsOf(task?.input?.browser);
     const browserCardEnvFingerprints = Array.isArray(ctx.browserCardEnvFingerprints) ? ctx.browserCardEnvFingerprints : [];
-    const base = { ...plan, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, ...listPlanOverrides(task) };
+    // 执行器按别的版本切的(项目往前走了,契约 J.15):细任务的 `source.projectRev` 写实际那一版;`derivedFrom` 仍是这个 plan
+    const cutBy = Number.isSafeInteger(plan?.actualRev) && plan.actualRev !== task?.source?.projectRev
+      ? { ...task, source: { ...task.source, projectRev: plan.actualRev } }
+      : task;
+    const base = { ...plan, planTask: cutBy, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, ...listPlanOverrides(task) };
     const outcome = await publishDerived(run, base, plan?.cardLocks);
     if (!holding(run)) return discard();
     const { derived, published, relocked, gaveUp } = outcome;

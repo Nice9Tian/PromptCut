@@ -12,7 +12,8 @@ import { createPortal } from "react-dom";
 import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, setHostedService, useSync, type MemberRow } from "./syncManager";
 import { ListEditor } from "./SharedDialogs";
 import { rememberPasswords } from "./collab";
-import { HOSTED_SERVICE_TEXT, serviceRowLabel, splitMembers, type HostedServiceName } from "./hostedServices";
+import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, isCloudAgentOnly, isCloudAgentRunning, memberCountLabel, serviceRowLabel, splitMembers, visibleMembers, type HostedServiceName } from "./hostedServices";
+import { useCloudRunning } from "./presence";
 import "./sync.css";
 
 export type Flow =
@@ -28,6 +29,8 @@ export function MembersButton() {
   const shared = useSync((v) => v.shared);
   const members = useSync((v) => v.members);
   const device = useSync((v) => v.device);
+  /** 哪些成员的云端 Agent 此刻有一轮在跑(在场状态里的 `cloud-run`):表变了(开始、结束、过期)要重画 */
+  const running = useCloudRunning();
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -49,7 +52,10 @@ export function MembersButton() {
   if (!shared) return null;
   const isMe = (r: MemberRow) => r.username === shared.username && r.deviceId === device?.deviceId;
   // 托管方的服务(渲染节点)不是成员:排在成员之后,不计入成员数,没有踢人按钮
-  const { people, services } = splitMembers(members);
+  const split = splitMembers(members);
+  const services = split.services;
+  // 本人不在线、只剩闲置的云端 Agent 连接的行不显示、不计数(云端 Agent 的连接在一轮结束后还会连着一阵)
+  const people = visibleMembers(split.people, running);
   const others = people.filter((r) => !isMe(r));
   const mine = people.find(isMe);
   const iAmCreator = shared.creator || !!mine?.creator;
@@ -77,7 +83,7 @@ export function MembersButton() {
           <circle cx="11" cy="4.6" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.2" />
           <path d="M11.5 8.8c2 .2 3.5 1.8 3.5 4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
         </svg>
-        <span>成员: {Math.max(1, people.length)} 人</span>
+        <span data-pc="members-count">{memberCountLabel(people, running)}</span>
       </button>
       {open &&
         createPortal(
@@ -89,7 +95,12 @@ export function MembersButton() {
           >
             {[...(mine ? [mine] : []), ...others].map((row) => {
               const key = `${row.username}@${row.deviceId}`;
-              const agents = row.conns.filter((c) => c.role === "agent");
+              const allAgents = row.conns.filter((c) => c.role === "agent");
+              // 代这位成员进项目的云端 Agent 连接:归在他这一行里,不另起一行(契约 cloud-agent-contract.md 第 5 节)
+              // 闲置的云端 Agent 连接不算:有一轮在跑才显示标记与子行
+              const cloud = isCloudAgentRunning(row, running) ? cloudAgentConns(row.conns) : [];
+              const local = allAgents.filter((c) => c.service !== "agent");
+              const agents = [...local, ...cloud];
               const me = isMe(row);
               return (
                 <div className="pc-members-row" key={key}>
@@ -102,9 +113,11 @@ export function MembersButton() {
                       {me ? " (自己)" : ""}
                     </span>
                     {row.creator ? <span className="pc-sync-tag pc-sync-tag--creator">[创建者]</span> : null}
+                    {isCloudAgentOnly(row, running) ? <span className="pc-sync-tag" data-pc="members-offline-agent" title="这位成员不在线，他的云端 Agent 还在跑；不计入成员人数，计入 Agent 个数">[离线，Agent 在跑]</span> : null}
                     {row.tags.editing ? <span className="pc-sync-tag pc-sync-tag--editing">[编辑中]</span> : null}
                     {row.tags.rendering ? <span className="pc-sync-tag pc-sync-tag--rendering">[渲染中]</span> : null}
-                    {row.tags.agents > 0 ? <span className="pc-sync-tag">[Agent ×{row.tags.agents}]</span> : null}
+                    {local.length > 0 ? <span className="pc-sync-tag">[Agent ×{local.length}]</span> : null}
+                    {cloud.length > 0 ? <span className="pc-sync-tag" data-pc="members-cloud-agent" title={cloudAgentLabel(row.username)}>[云端 Agent]</span> : null}
                     {iAmCreator && !me && row.deviceId ? (
                       <button
                         type="button"
@@ -120,11 +133,12 @@ export function MembersButton() {
                   </div>
                   {expanded === key && agents.length ? (
                     <div className="pc-members-sub">
-                      {agents.map((a, i) => (
+                      {local.map((a, i) => (
                         <span key={i}>
                           {row.username} · Agent · 第 {a.conversation ?? i + 1} 个对话
                         </span>
                       ))}
+                      {cloud.length > 0 ? <span data-pc="members-cloud-agent-row">{cloudAgentLabel(row.username)}</span> : null}
                     </div>
                   ) : null}
                 </div>
@@ -486,7 +500,7 @@ function HostedServiceDialog({ service, enabled, v, onClose }: { service: Hosted
       }
     >
       <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
-        {enabled ? `打开后，${label}会为这个项目做预渲染。` : `关闭后，${label}不再为这个项目做预渲染，已经渲好的结果保留。`}
+        {HOSTED_SERVICE_TEXT[service]?.confirm(enabled) ?? (enabled ? `打开${label}。` : `关闭${label}。`)}
       </div>
       {err ? <div className="pc-sync-err">{err}</div> : null}
     </Dialog>

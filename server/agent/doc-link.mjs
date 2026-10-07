@@ -187,6 +187,12 @@ export function createAgentLink({
   gapTimeoutMs = AGENT_LINK_DEFAULTS.gapTimeoutMs,
   reconnectMs = AGENT_LINK_DEFAULTS.reconnectMs,
   historyKeep = AGENT_LINK_DEFAULTS.historyKeep,
+  /**
+   * 可选(托管档给):文档服务以「不会再让你连回来」的关闭码关掉某条连接时(4003:开关关了、被踢、被移出;4004:项目删了)
+   * 调 `onFinalClose(对话号, { code, reason })`,并且**不再自动重连**——这是撤销,不是暂时性断线(契约 cloud-agent-contract.md 第 4.5 节)。
+   * 不给时与原来相同(一律按断线退避重连)。
+   */
+  onFinalClose = null,
 } = {}) {
   // url 也可以按对话号给(测试里按查询串给写入身份;生产上各对话连同一个地址)
   if (typeof url !== 'function' && (typeof url !== 'string' || !url)) throw new TypeError('createAgentLink: url 必须是字符串或函数');
@@ -370,8 +376,9 @@ export function createAgentLink({
             if (feedConv === n) onFeedMessage(msg);
             emit(msg, n);
           });
-          const down = () => {
+          const down = (info) => {
             if (conn.ep !== ep) return;
+            const finalClose = typeof onFinalClose === 'function' && (info?.code === 4003 || info?.code === 4004);
             conn.ep = null;
             try { ep.close(); } catch { /* 已经关了 */ }
             conn.state = 'idle';
@@ -380,6 +387,12 @@ export function createAgentLink({
               clearTimeout(w.timer);
               w.reject(linkError('disconnected', '到文档服务的连接断了'));
               conn.waiters.delete(reqId);
+            }
+            if (finalClose) {
+              say('agent.link.final-close', { conversation: n, code: info.code, reason: String(info.reason ?? '').slice(0, 40) });
+              if (!opened) reject(linkError('revoked', `文档服务拒绝了这条连接（${info.code} ${info.reason ?? ''}）`));
+              try { onFinalClose(n, { code: info.code, reason: String(info.reason ?? '') }); } catch { /* 宿主的事 */ }
+              return;
             }
             if (!opened) {
               reject(linkError('connect-failed', '连不上文档服务（握手被拒或网络不通）'));

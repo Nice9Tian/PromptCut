@@ -253,8 +253,9 @@ test('HR4 控制身份：逐个发全部数据面与管理面消息都 forbidden
   assert.equal(await outcome(control, { type: 'hosted.watch' }), 'hosted.projects');
   assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: proj.projectId }), 'hosted.ticket.ok');
   assert.equal(await outcome(control, { type: 'hosted.demand', projectId: proj.projectId }), 'hosted.demand.ok');
-  assert.equal(await outcome(control, { type: 'hosted.delegate.verify', delegation: 'x' }), 'error:unsupported', '分发点留给第四段');
-  assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: proj.projectId, purpose: 'publish' }), 'error:unsupported', '分发点留给第四段');
+  // 第四段（云端 Agent）填了这两个分发点：它们只对代成员进项目的服务开，渲染服务发了回 forbidden
+  assert.equal(await outcome(control, { type: 'hosted.delegate.verify', delegation: 'x' }), 'error:forbidden', '渲染服务不能核验委托');
+  assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: proj.projectId, purpose: 'publish' }), 'error:forbidden', '渲染服务要不到发布用的票据');
   assert.equal(await outcome(control, { type: 'hosted.other' }), 'error:forbidden');
   assert.ok(!env.service.describe().conns.some((c) => c.principal.scope === 'service' && c.principal.tenantId), '控制连接不在任何空间里');
 
@@ -316,7 +317,7 @@ test('HR5 active 的判据：服务自己的连接不算；别的托管方服务
   const entry = async (c) => (await watchDirectory(c)).find((p) => p.projectId === proj.projectId);
   assert.equal((await entry(render)).active, false);
   assert.deepEqual((await entry(agent)).hosted, { render: { available: true, enabled: true }, agent: { available: true, enabled: true } });
-  assert.equal(await outcome(agent, { type: 'hosted.ticket', projectId: proj.projectId }), 'error:unsupported', '代成员的服务的票据由第四段签');
+  assert.equal(await outcome(agent, { type: 'hosted.ticket', projectId: proj.projectId }), 'error:forbidden', '代成员的服务不带对话委托、又不是发布用的，要不到票据');
 
   // 渲染服务自己连进项目：对它自己不算 active（否则永远不会断开）；对 agent 服务算
   const renderData = await openData(env, render, proj.projectId);
@@ -366,7 +367,7 @@ test('HR5 active 的判据：服务自己的连接不算；别的托管方服务
 
 // ------------------------------------------------------------------ HR6
 
-test('HR6 hosted.ticket：票据带 sv / sk、角色取登记表、两分钟；项目不存在、开关关着各回原因；conversation / delegation 回 unsupported', async (t) => {
+test('HR6 hosted.ticket：票据带 sv / sk、角色取登记表、两分钟；项目不存在、开关关着各回原因；渲染服务带 conversation / delegation 回 forbidden', async (t) => {
   const env = await serviceHostFor(t);
   const key = env.keys.render;
   const proj = await createProject(env, { mode: 'free' });
@@ -384,8 +385,8 @@ test('HR6 hosted.ticket：票据带 sv / sk、角色取登记表、两分钟；�
 
   assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: 'sp_aaaaaaaaaaaaaaaaaaaaaaaaaa' }), 'error:no-project');
   assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: 'not-an-id' }), 'error:bad-message');
-  assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: proj.projectId, conversation: 1 }), 'error:unsupported');
-  assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: proj.projectId, delegation: {} }), 'error:unsupported');
+  assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: proj.projectId, conversation: 1 }), 'error:forbidden');
+  assert.equal(await outcome(control, { type: 'hosted.ticket', projectId: proj.projectId, delegation: {} }), 'error:forbidden');
 
   const creator = await join(env, proj, { username: proj.creator.username, as: 'creator' });
   await adminOp(creator, proj, 'set-hosted-service', { service: 'render', enabled: false });

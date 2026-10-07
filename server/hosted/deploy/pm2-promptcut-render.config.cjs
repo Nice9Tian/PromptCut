@@ -34,6 +34,9 @@ module.exports = {
         PROMPTCUT_RENDER_CPU_QUOTA: '{{CPU_QUOTA}}',
         PROMPTCUT_RENDER_USER: '{{RENDER_USER}}',
         PROMPTCUT_RENDER_USER_CARDS: '{{USER_CARDS}}',
+        // 看画面（云端 Agent 服务凭服务身份向管理进程要一帧）：on / off；核对它的签名用托管组合的服务登记表（只有公钥）
+        PROMPTCUT_RENDER_LOOK: '{{LOOK}}',
+        PROMPTCUT_RENDER_LOOK_SERVICES: '{{HOSTED_DATA}}/secrets/services.json',
         // 与在线页面同一个提交的核对：管理进程从这里读在线页面构建里嵌的代码版本
         PROMPTCUT_RENDER_EDITOR_DIR: '{{EDITOR_DIR}}',
         // Chrome（chrome-headless-shell）装在发布目录里，随 current 换代
