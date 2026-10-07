@@ -195,17 +195,52 @@ test("CAU-SES-01 流断了自动重连,带已看到的 seq,交界处重复的不
   s.close();
 });
 
-test("CAU-SES-01b 断线期间界面仍显示这一轮在跑(服务端还在跑),重连时标出连接状态", async () => {
+test("CAU-SES-01b 断线期间界面仍显示这一轮在跑(服务端还在跑),重连时标出连接状态", { timeout: 3000 }, async (t) => {
   const store = memStore();
-  const { api } = fakeApi([{ events: run1.slice(0, 3), then: "throw" }, { events: [], then: "hang" }]);
+  const disconnect = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  const live = Promise.withResolvers();
+  const reconnecting = Promise.withResolvers();
+  const reconnected = Promise.withResolvers();
+  const openedAgain = Promise.withResolvers();
+  const afters = [];
+  const api = {
+    async send() { return { runId: "r1", seq: 1 }; },
+    async abort() { assert.fail("断线与关闭页面都不能停服务端任务"); },
+    async *events(_id, after, signal) {
+      afters.push(after);
+      if (afters.length === 1) {
+        // 连续交付不夹计时器:不能靠 5 ms 轮询碰巧看到只持续 1 ms 的 live/3。
+        for (const ev of run1.slice(0, 3)) yield ev;
+        await disconnect.promise;
+        throw new CloudError("network", "断了");
+      }
+      openedAgain.resolve();
+      await resume.promise;
+      if (signal.aborted) return;
+      yield run1[3];
+      if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    },
+  };
   const s = createCloudSession({ api, store, flushMs: 0, backoff: () => 30 });
-  const seen = new Set();
-  s.subscribe(() => seen.add(s.getView().connection));
+  t.after(() => { disconnect.resolve(); resume.resolve(); s.close(); });
+  // 在状态发布的同步点取快照,不在状态已经跨过去之后轮询它。
+  s.subscribe(() => {
+    const view = s.getView();
+    if (view.connection === "live" && view.lastSeq === 3) live.resolve(view);
+    if (view.connection === "reconnecting" && view.lastSeq === 3) reconnecting.resolve(view);
+    if (view.connection === "live" && view.lastSeq === 4) reconnected.resolve(view);
+  });
   s.open("c-1");
-  await waitFor(() => s.getView().connection === "live" && s.getView().lastSeq === 3);
-  await waitFor(() => seen.has("reconnecting"));
+  assert.equal((await live.promise).streaming, true, "断线前这一轮在跑");
+  disconnect.resolve();
+  assert.equal((await reconnecting.promise).streaming, true, "断线时发布给界面的状态仍是在跑");
+  await openedAgain.promise;
+  assert.deepEqual(afters, [0, 3], "重连从最后收到的事件续接");
+  assert.equal(s.getView().connection, "reconnecting", "新连接没有收到事件前标为重连中");
   assert.equal(s.getView().streaming, true, "没收尾的一轮,断线也还是在跑");
-  s.close();
+  resume.resolve();
+  assert.equal((await reconnected.promise).streaming, true, "收到补发事件后恢复连接,任务仍在跑");
 });
 
 test("CAU-SES-02 新对话读到「没有」就停下,发消息后接上;服务端把对话丢了就标中断", async () => {
