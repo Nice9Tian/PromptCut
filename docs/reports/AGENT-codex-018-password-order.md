@@ -21,7 +21,7 @@
 | 3 | 三级 | 丢 ACK 重跑业务 | 外部效果重复，不能恢复同一修改 | 1 | 5 | 6 | 关闭，反例成立 |
 | 4 | 三级 | prepared 无条件重放 | fence 前未接受却在 fence 后落地 | 1 | 5 | 6 | 关闭，stop/private 反例成立 |
 | 5 | 二级 | 改密前等 doc 在线 | 违反用户已定密码先成功流程 | 1 | 5 | 6 | 禁止，反例成立，不解锁 |
-| 6 | 三级 | 共享 SQLite seal 序列、完整 prepared、同锁 fence | seal 与密码同序；恢复只复用同一确定修改 | 3 | 1 | 4 | 开放，待实现与故障实证 |
+| 6 | 三级 | 共享 SQLite seal 序列、完整 prepared、同锁 fence | seal 与密码同序；恢复只复用同一确定修改 | 3 | 0 | 3 | 本包成立：33项实际进程突停/缺证据、4项真实mTLS控制链、6项历史探针；既有业务挂载交owner，未冒称集成完成 |
 
 最终交付接口、全部尝试与原始结果、持久性证据、未挂载范围和限制；由主会话集成复验。
 
@@ -62,3 +62,22 @@ private/agent-disabled fence 必须带当次 current/queued/preparing `runIds` �
 PC 首轮全量在源 `d3392fee`：4948 tests / 4946 pass / 1 fail / 1 skip，67498.9349 ms，wall 67.8873369 s，exit1。唯一失败 `bakery-deps`：server/test 导入 scripts 的故障矩阵违反依赖方向。原始日志 `promptcut-018-order-full-final.log` 保留。修复为矩阵实现放入本任务已授权 `server/test/password-order-fixture.mjs`，scripts 只向 server re-export，单测直接导入同层夹具；没有修改规则或扩大授权路径。定向依赖+全部 order tests 20/20，3438.3732 ms，exit0，无自动重试；日志 `promptcut-018-order-deps-fixed.log`，33 子案例目录 `pc-order-faults-i5XDv4`。因此重新跑 types/full 与 probe，非盲重试。
 
 修复前最终源类型零错误（wall 8.7642925 s），VH 完整 npm 26/26 pass、0 fail/skip，3427.1994 ms，wall 3.7278466 s；password-order 实际探针 37/37，wall 3.8484109 s，目录 `pc-order-probe-final-9994fd320eee4e969847bd5bff1415a9`。原日志分别 `promptcut-018-order-types-final.log`、`visuhive-018-order-full-final.log`、`promptcut-018-order-probe-final.log`。
+
+## 最终源码复验与未关闭基线
+
+最终业务/测试源码 `7aec017f`（VH源码`2a2d41b`，Foundation source`49ec9b4`/报告HEAD`580bec8`）上：
+
+| 项 | 结果 | 耗时 | 原始日志（系统TMP） |
+|---|---|---|---|
+| `npx tsc -b --force` | exit0，零错误 | wall 8.3020974 s | `promptcut-018-order-types-fixed.log` |
+| 依赖规则+全部order目标测试 | 20 tests / 20 pass / 0 fail / 0 skip；33实际故障子项 | 3438.3732 ms | `promptcut-018-order-deps-fixed.log` |
+| password-order-probe | 37 pass / 0 fail，exit0 | wall 4.1509713 s | `promptcut-018-order-probe-fixed.log` |
+| operation-history-probe | 6 pass / 0 fail，exit0；6ops/25journal/rev6 | wall 0.3340701 s | `promptcut-018-history-probe-fixed.log` |
+| VH `npm test` | 26 tests / 26 pass / 0 fail / 0 skip，exit0 | 3427.1994 ms；wall3.7278466s | `visuhive-018-order-full-final.log` |
+| PC 修复后 `npm test` | **4949 tests / 4947 pass / 1 fail / 1 skip，exit1** | 119101.9849 ms；wall119.664562s | `promptcut-018-order-full-fixed.log` |
+
+没有自动 retry。修复后 PC 全量唯一失败为既有 `server/test/sp-hosting.test.mjs:35` 全局 after 清理临时目录，Windows `EPERM`；不是 native crash，因此测试 runner 没有自动重跑。本包新增用例与依赖规则通过。未手动重复全量以求绿，也没有把该次全量说成通过。
+
+只读排查：失败路径 `C:\Users\admin\AppData\Local\Temp\pc-sp-hosting-j4f8NT`，当前残留目录名 stage-19、stage-data-20、tok-9；未读凭证内容、未删除目录、未结束旧 PID。该测试 :294 与 :548 的 t.after 只调用自己 child.kill() 不等待 close，runMain/runProbe 有基于 exit 的返回；这只是文件占用/生命周期的待证候选，尚未识别具体持锁者，不能宣称根因已证。文件不在授权路径，已把原始结果与候选交 root 指派 owner；本包不越界修改。**全量零失败闸门仍未关闭，须 owner 修复/集成复验。**
+
+最终 probe 产物：`pc-order-probe-fixed-bde531c638264423a09c89981b4d8fbf`、`pc-history-probe-fixed-891a72cd4c7e4b51b6a9d7149a63f335`（均系统TMP）；包含可审 JSON、逐 subprocess 原始 child.log、故障数据库与隔离证书。证书仅在TMP，不入仓库。diff仅本任务授权13个新增文件，类型/画面范围未涉及渲染，不跑G0-R。最终仅补报告，无代码变化。
