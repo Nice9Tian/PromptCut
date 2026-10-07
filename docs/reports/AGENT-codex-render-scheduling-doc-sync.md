@@ -72,3 +72,13 @@
 内容提交 `f01171a6c79247ac949b74271ae186350b169890`。最终 `git diff --cached --check`（来源已加入索引）发现 `render-scheduling-supplement.md`第3/4行尾随双空格，退出2；这些是来源blob已有Markdown强制换行，精确复制要求优先，原文没有修剪。此前未跟踪来源文件不参与未暂存diff，因此当时检查退出0不能替代本次完整结果；首次非0与后续核对分别保留。
 
 最终复核：标准 `git diff --check 913e6884..HEAD -- . :(exclude)docs/plan/render-scheduling-supplement.md`退出0；仅来源以单次 `-c core.whitespace=-blank-at-eol`允许已有hard break后检查退出0（不修改仓库配置）。来源仍与原blob字节相等，Git blob仍为 `720bfd83dac966d20ede71bcdd0996da6ddc4a88`。完整默认规则检查仅两处来源原文hard break，不能写成默认diff检查全绿。
+
+## 主会话审查与进度同步补记
+
+主会话逐份核对增量后另改 `three-versions-progress.md`，因此本次完整文档包为15个文件。TODO准备期的暂停/未定稿/待开工状态标历史或指向当前进度；brief将e0e3afc3正确标为来源提交，并限定“技术建议不是用户批准”，不误写成所有后续技术设计必须等待。没有修改产品语义正文、运行器manifest或任何实现。
+
+进度加入三个版本新增未完成项、RS六组规划状态、三组新未决选择与旧P4/M5/M7的替代/待协调来源；保留旧验收事实和原失败。其余在途包/节点操作来自原目标及单独工具/Python授权，未归作本次文档授权。固定913e6884验收未被本包合并或源码改动。
+
+主会话独立静态核验：新增相对Markdown链接36处、断链0；来源Git blob720bfd83dac966d20ede71bcdd0996da6ddc4a88，11,851字节，工作文件SHA-256仍1e05b28a907942df4418516dd974dd606b5dc45ec25acb268e683292b8971b1b；原验收报告正文完整前缀保持。再次ls-remote核到GitHub main仍e0e3afc37f04f51f0ea5e85eb9aa392183cf77c0，没有更改main。
+
+完整默认diff检查退出2，只有来源第3/4行原文Markdown硬换行双空格；排除来源其余增量检查退出0。未运行npm或渲染来验证本纯文档包，调度能力及新50对话入口都没有实现/测试/通过证据。工作分支提交后随集成正常收回，不把叶分支推送等同main已更新。
