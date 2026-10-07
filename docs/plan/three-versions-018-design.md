@@ -97,3 +97,74 @@ Cookie接口所有写方法（含登录、注册、reset、防登录CSRF）要�
 VisuHive `account/store.mjs`当前SQLite只有accounts/sessions/codes，密码事务和会话删除非原子；拟 `PRAGMA user_version=2`，原表增兼容nullable/default字段，迁移在事务内。新增 `login_credentials`（id/loginId/tokenHash/kind/generation/remember/createdAt/expiresAt/revokedEventId/rotatedFrom）、`password_events`（eventId/requestId/accountId/changeSeq/changedAt/clock/initiatorWebsiteLoginId/oldLoginIds/choice/choiceSeq/logoutState/modificationState）、`outbox`（eventId/seq/payload/status）、`consumer_acks`（eventId/service/cursor/result）、`rotation_results`（旧tokenHash/requestId/result密封短期存储）。hash不是可用凭证；实际token结果不能写日志。password change不自动增全账号授权代数；只有选是产生对应受影响登录的持久撤销。重设成功建立发起website会话并保留，其余旧会话在选择前完整保留。
 
 doc拟新增 `server/account/{authority,client,ledger,clock}.mjs` 与 `server/docservice/modules/account-projects.mjs`，分别管验证客户、幂等撤销账本、可信时钟证据、云端项目权威接口。account事件 `(issuer,eventId,seq)` 去重，收到seq跳跃拉缺口，旧seq ACK不倒退水位；收到撤销但密码事件尚未到则暂存不猜时间。doc的project/access/run/operation日志在一条可恢复提交序列里写先后关系，fsync成功才确认。不能沿用conversation当前“写盘失败仍广播成功”的行为保存授权/已读；授权日志持久失败应503并禁止启动下一轮。
+
+## 改密、退出完成点与0.7.20的操作历史
+
+### 密码成功和退出分开
+
+密码事务用服务器requestId幂等：核当前密码/reset验证码、计算新密码hash，进入事务写password与事件/outbox，成功提交后回“密码已修改”（或重设成功），**之后**显示是否退出选择。密码核对失败无事件、不显示成功。事件初始choice=pending；用户取消/关页面仍pending，下次同发起网站会话读状态可继续选择，不能默认退出。选否原子写retained，保留所有登录、恢复凭证、项目访问和写入，之后新密码用于新登录。选是原子固定受影响集合并写revocation/outbox。选择是/否仅首次有效，同requestId重试回原结果。
+
+受影响集合是密码成功时存在的旧登录ID，减去发起的website登录ID；包含所有旧editor登录（包括发起电脑editor），其余website登录。密码成功之后用新密码产生的新loginId不属于集合，不能只按 `accountId`一刀全部撤销。连续两次改密各自用独立事件/集合/顺序；重叠登录只撤一次，但每个事件均有完成结果。邮箱reset保持/建立的当前website登录是本次发起会话，旧其它website照集合处理。
+
+账号先持久撤销旧refresh/access记录，doc迟到时已有连接可以继续编辑，但新登录/创建失败明确报不可用。doc收到事件后立刻建立旧loginId拒绝屏障：所有新握手、resume、逐消息gate、素材票据签发、Agent消息和订阅拒旧登录；将旧连接标revoking并终止page/本机Agent/私有云Agent/不满足例外轮。asset/Agent/render收到project/login撤销后停止旧流和入口；共有已读当前run换专用授权继续，不算仍登录。不能用ticket TTL、15秒缓存或“通知稍后到”报告已退出。
+
+退出完成不等浏览器真正显示已退出或等待共有run结束，而是：account旧凭证持久不可用；doc旧连接全部关闭或进入永久拒绝状态且不能resume；asset旧票据/Range/stream授权不可继续；Agent失权read/SSE/page-request/queue已关闭且私有任务的提交权限已撤；各相关服务持久ACK确认屏障。doc收集多连接 `{connectionId,loginId,lastAcceptedOpSeq,closedAt,closeClock,reason}`；先登记撤销时全量连接，再到所有入口屏障提交点查新增连接（应为零），记录 `endCursor`、最大closeClock和服务ACK。`logoutState='complete'`需无pending服务；网络断开后不能凭连接消失跳过授权撤销。界面一直“正在退出已登录设备”，失败显示具体仍待服务与可重试；重新打开查持久结果，不能将timeout算完成。
+
+### 可信区间，而非比客户端时间戳
+
+〔裁，卡点4第1行〕当前节点账号/doc同机部署，选择**同一Linux内核单调时钟坐标 + bootId + 权威UTC锚点 + 文档顺序**。拟`server/account/clock.mjs`和VisuHive`account/clock.mjs`在Linux以经过探针核对同源的 `process.hrtime.bigint()`取纳秒（持久为十进制字符串，JSON不直接写BigInt），读取同一内核bootId；账号密码事件记录 `{clockVersion:1,hostClockId,bootId,tickNs,utcMs,changeSeq}`，`utcMs`由账号服务在密码事务成功线性化位置确认，不接受body。文档每条接受操作在提交顺序锁内记录 `{bootId,tickNs,docUtcMs,authoritySeq,projectRev}`。密码的“绝对时刻”以此可信事件命名，同时用同boot tick比较，不直接把两服务Date.now比较；NTP调时不会改区间选择。
+
+密码事务定义写入密码event的commit为改密生效点：在同一事务锁内为event采tick/UTC并立即COMMIT；事务提交失败不发布事件。密码验证、会话签发同一账号串行锁，doc操作独立。为了避免COMMIT调用期间的纳秒边界猜测，passwordEvent记录 `commitStartTickNs/commitEndTickNs`；0.7.20分类时若候选操作tick落入这段边界，doc向account持久commit witness查询并按两服务共同的时序屏障重建，**不能直接任选纳秒**。实施包需将最终线性化定义写成可测试协议：最低可行方式在改密commit窗口让doc记录操作接受意图并暂存，account成功后释放这些意图按commit之后接受（失败则按原顺序接受），仅短commit屏障；不影响选否保留登录。屏障通过持久 `password-commit.prepare/commit/abort`与doc `barrierId/authoritySeq`确认，account故障时屏障恢复按事务结果释放，不靠超时猜commit。既有连接在其它账号服务故障期间不进入这个短屏障，照既有可编辑意向继续。**最终以共同屏障顺序为区间边界，时钟证据用于可信绝对时间和审计**。
+
+执行步骤：account先向doc准备本账号commit barrier，doc把当前操作接受意图序列边界fsync并ACK；account成功密码事务写UTC/tick和barrierId，再发commit；doc把barrier里尚未接受的旧操作排在commitMarker之后，释放编辑，密码接口此后回成功。仅本账号旧登录的project.op/content.put等项目修改等到commit结果，其它账号无等待；选否不撤任何改动。若doc在改密期间不可达，密码成功仍可发生（找回账号不能被doc故障卡住），标 `barrier:'clock-fallback'`：同boot精确tick选范围，commit不确定窗口保留pending候选，恢复后必须用操作意图/持久见证消歧；不能到0.7.20发布时仍剩该边界不可判定。卡点4第2行的中央账本备选用于这种边界：将account密码事件与doc接受操作共同交给本机独立持久顺序器，旧连接断account仍可写doc/顺序器；若第1行探针证实无法重建，就落第2行，不改变用户区间。实现前Astra专包应证明这一点，主会话不凭设计文字宣布已证实。
+
+跨服务分机不在当前部署组合；禁止不核时钟偏差直接比较。若将来分机须换中央顺序器或有明确误差处理，属于另一个机制包。本机进程重启同boot保持tick坐标；机器重启boot变化时**旧连接已物理结束**，doc启动必须先恢复撤销ledger和对账account head，然后允许credential恢复。保存最后一条已接受操作的旧boot tick和连接断开水位；区间取旧boot从commitMarker/tick起到旧boot最后接受操作，再结合启动屏障，不能用新boot tick与旧boot比较。遇同账号旧登录在新boot复活说明启动屏障失败，验收直接失败。bootId/hostClockId不相符、缺见证或账本不完整标 `modifications='needs-reconciliation'`，保存原历史、保持已撤销授权、不进行猜测补偿；续办恢复，仍挡0.7.20撤回发布。
+
+区间上界为该事件受影响旧登录全部访问屏障和连接关闭确认完成，`endCursor`是doc最后接受这些登录修改的权威序号；各服务结束时间分别记，最大可信closeClock展示区间结束。候选选择同时满足：账号相同、loginId在oldLoginIds、credential/generation属旧授权、接受顺序在可信下界之后且不超过endCursor、projectId匹配；新登录、别人和无关项目不入选。明确共有已读runGrant例外按message/run精确排除，不能因同账号保留一切修改。
+
+### 从0.7.18保留到0.7.20的撤回信息
+
+拟操作日志v2字段：`opId/requestId,projectId,authoritySeq,projectRev,actor,acceptedClock,passwordBarrierId?,ops,changes[],dependencies,runGrantId?,compensatesOpId?,result`。`changes[]`每项 `{itemKey,before:{present,value},after:{present,value},beforeVersion,afterVersion}`；itemKey用对象稳定ID+JSON子路径，数组增删/移动同时记录父容器结构版本，不用易漂移的数组index充当永久身份。整root replace在服务端拆成实际叶项/结构变化，不能只存摘要；无法安全拆的结构项整体作为一项，对后来结构修改保守判冲突。内容库card-source、素材引用变更也记录before/after，不仅project.op。
+
+〔裁，卡点5第1行〕未完成password事件及其候选操作、已读message/run链、before/after和基准snapshot不可淘汰；完成后按项目生命周期保留审计与选择性撤销所需历史，容量达限拒相应新写或明确告知维护需求，不能静默删除未处理区间。conversations的8/12MB降级只能压缩thinking/diagnostic，不能去掉sender/read/run/queue/ACL审计。每次snapshot压缩保存引用中的操作历史；账号备份含outbox/acks、doc备份含历史及clock witness。
+
+0.7.20补偿在项目写锁下逐item比较：该项以后被**别人账号**写过/基于该项做派生结构变化即冲突，即便值后来巧合相等也不撤；本账号新登录的合法后续写也保护，不能被旧凭证补偿覆盖。逆序撤同事件旧操作，给其自身补偿建立版本链；若无法证明未被后续合法修改依赖，保留该项并记冲突原因。对可撤项发普通审计操作 `{opId: eventId/projectId/originalOpId/itemKey,compensatesOpId,expectedItemVersion}`，版本在检查与提交之间变化则重新判，不根替换。重复补偿回原结果，不重复version+1；私有任务已落地修改在区间内仍按逐项规则撤，共有已读当前轮改动排除。
+
+0.7.18/.19只记录 `modifications={state:'retained',candidateRange}`，绝不执行上述补偿；0.7.20显示处理进度独立于logout，失败保持 `pending/retrying/needs-reconciliation`，按持久任务续办，旧授权保持撤销。完成可报告changed/reverted/conflicted/exempt项数和证据，不弹改密冲突窗口。用户普通撤销（含AI“撤销这一步”）独立实现窗口：〔裁，卡点6第1行〕列出逐项当前值/原改值/还原值，给“只撤无冲突项”“选择冲突项覆盖”“取消”；没有冲突直接撤。窗口期间版本变化再核对、不能用同一窗口覆盖新冲突；该机制不修改已定的改密冲突不撤规则。
+
+## Agent共有/私有、FIFO、已读与任务授权
+
+拟对话结构v2存 `tenants/<projectId>/conversations/<conversationId>/`（不再owner目录决定访问），`meta={v:2,id,projectId,ownerAccountId,visibility:'shared'|'private',aclRevision,title,state,currentRunId,queueRevision}`；`messages`每条 `{messageId,requestId,arrivalSeq,senderAccountId,senderNameAtSend,loginId,credentialId,createdAt,content,queueState,runId,readReceiptId?}`。所属账号永远是创建对话者；sender永远实际凭证账号。model history保留逐条sender，不能把对话历史全部冒名owner。
+
+服务端同conversation持久接受锁分配arrivalSeq；202回 `{messageId,runId?,seq,queuePosition,queueRevision}`，重复requestId同sender回原结果，不能排两次。一个共有conversation最多一个currentRun，其余 `queued`严格按server到达序FIFO；不同conversation可并行。页面显示“排在第N”，位置由服务端计算并推 `queue.changed`，切换客户端/重连按持久队列恢复。入队时验成员、登录、visibility、rw；出队再验当前权限/credential，失权取消该条而非借owner启动；拒绝后原文保留历史并有明确状态，无新的run授权。切私有作废所有其它账号queued消息，不迁移到别的对话；owner queued仍按FIFO。
+
+| 能力 | shared | private | 其它限制 |
+|---|---|---|---|
+| list/get/history/events/visuals/diagnostic/attachments读取 | 同项目当前有效成员 | owner；creator只读例外 | 被踢/旧登录失效均拒；项目scope不能绕过；鉴权逐接口 |
+| send/reply/upload attachment | 当前有效rw成员 | 当前有效rw owner | creator在别人的private也不能发送；只读发消息即拒 |
+| change visibility | owner | owner | creator没有替别人切换特权 |
+| abort run | 该轮initiator，或项目creator | 同左，creator仍能停止 | 通过runId，不是笼统对话主人停全部 |
+| rename/remove | owner（沿用既有owner管理边界） | owner | 本期删除UI仍按既有延期；API不可成为其它成员删除入口 |
+| run工具管理员操作 | 永远拒 | 永远拒 | initiator为creator也拒；服务白名单独立 |
+
+读取/订阅都问doc的拟 `hosted.conversation.access {projectId,conversationId,action,principalRef,expectedAclRevision?}`，返回 `{allowed,aclRevision,ownerAccountId,visibility,creatorReadOnly}`。无对话权可404（不泄露）；private creator只读列表明确标识。HTTP先鉴权再flush SSE headers；补历史前、每次事件写前校验revision，document失联则暂停/关闭用户读取和新请求并503，不能把缓存当授权。事件广播只到仍有权限的listener；visibility提交同时发失权撤销控制事件，关闭他们全部history/visual/media发流、清浏览器对话内容与列表。已下载字节不能追回，但切换线性化点以后无新字节/历史/事件；测试含在同一个event loop里切换与event.emit竞态。
+
+**切私有即时行为已定**：doc先提交ACL/任务写入fence（同步禁止其他initiator run后续op），再通知Agent终止当前其它成员轮、取消其page requests和排队；已落地修改保留。creator只读例外仍能查看，但若creator不是owner，其在shared发起的当前轮同样中止，不能因能看private继续任务。接口成功必须Agent已停工具提交、撤销流完成ACK；过程status可pending，但权限fence从doc提交即生效。
+
+〔裁，卡点7第1行〕可信已读确认点：Agent从持久messages读出**该轮完整prompt**并装入runner输入，计算contentDigest，先fsync本机 `read-intents`；在首次模型调用/工具执行前，服务身份发 `hosted.run.read {requestId,projectId,conversationId,messageId,runId,promptDigest,readIntentId}`。doc验证当前被选中的currentRun、实际sender/登录、完整消息hash和服务登记，在同一事务追加 `readReceipt={receiptId,messageId,runId,promptDigest,authoritySeq,readAt}` 和 `runGrant`，ACK后才向模型交输入。客户端上报“已读”或model普通流量不算确认；仅HTTP202入队不算。ACK丢失用requestId查询结果，Agent禁止再发模型请求直到结果确定。
+
+拟 `hosted.run.admit`先为出队消息创建preparing/currentRun、锁定initiator；`hosted.run.read`完成上述可信确认；`hosted.run.finish`幂等持久end。doc是currentRun/receipt的最终仲裁，Agent WAL是读事实证据；“已读完成”以可信读记录被doc持久确认点为准。与退出同时发生用doc提交序排序：read先成功的shared当前run获得例外；撤销先则read被拒，Agent不能运行。保留已读消息内容、sender和历史，不允许conversations压缩/删除去掉该关联。
+
+`runGrant={v:2,grantId,projectId,conversationId,runId,messageIds:[...],initiatorAccountId,loginId,credentialId,admittedAt,readReceiptIds:[...],state:'active'|'retained'|'revoked'|'finished',visibilityAtRead,aclRevision,projectAccessRevision,serviceKid,reason,opIds,artifactRefs}` 由doc持久保存。Agent拿的是服务可恢复引用，不把旧用户access/recovery token保存为执行授权。拟 `hosted.ticket {projectId,runGrantId,purpose:'run'}`重新查run记录签短票据，principal包含runId/messageId/实际initiator但creator=false；每次操作gate重新查project、开关、service登记、run状态；即使豁免run也不能跨project。素材票据/渲染产物继承精确runGrantId。
+
+踢人或改密选退出：doc关闭旧真人登录访问；private当前run立即revoked，中止且保留已读历史；shared且已经read-confirmed的**当前run**置retained，当前轮继续并保留修改；未读/preparing/queued取消，其他成员的有效队列在当前轮完后可继续，旧登录不能新发/下一轮。项目删除/关Agent终止全项目run；切private取消其它initiator run，优先于retained例外。重新开服务不能自动复活revoked run或credential；保留服务重启前read与retained记录，重启后换执行票据仍查它。模型进程崩溃仍可按现有interrupted留痕，不声称重启会自动重做已发送外部请求；保留已读豁免和已落地操作，恢复待完任务必须有幂等工具/清楚续点，不能无证据从prompt重跑。
+
+| 同时发生 | 线性化优先级/结果 |
+|---|---|
+| project delete / hosted.agent=false / service key revoke 与任意操作 | project存在/开关/服务白名单是最外层，关闭后所有run拒；删除最高，不被retained豁免 |
+| shared->private 与 kick/password exit | 无论先后，非owner当前轮被private fence终止，已落地保留；旧用户仍撤；owner private轮遇退出仍停 |
+| read ACK 与 kick/exit | doc事务顺序：先read且shared current ->retained；先exit ->拒read，不启动 |
+| owner切回shared与旧queue/run | 旧取消消息/撤销grant不复活，新有效成员重新发送产生新requestId |
+| run末次op与stop | 同一project gate/提交顺序：fence前成功的保留，后到达的拒；工具返回迟到不绕过fence |
+
+跨重启对账必须持久且完整：doc恢复project和revocation ledger，Agent恢复read-intents/runGrant引用/queue，先拉head再接受请求；重复、乱序、断网、服务在ACK前后崩溃分别测。立刻失权以doc提交gate为界，不能使用现有15秒身份缓存宽限。
