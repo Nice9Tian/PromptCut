@@ -40,7 +40,7 @@ const cssSource = [
 const cssVerdict = checkSyncedSource('src/cards/user/card-policy-imports.css', cssSource);
 if (!cssVerdict.ok) throw new Error(JSON.stringify(cssVerdict));
 const cssId = path.join(ROOT, 'src/cards/user/card-policy-imports.css').replaceAll('\\', '/');
-const cssBuilder = await createServer({ configFile: false, root: ROOT, server: { middlewareMode: true, hmr: false }, plugins: [
+const cssBuilder = await createServer({ configFile: false, root: ROOT, cacheDir: path.join(OUT, 'vite-cache'), server: { middlewareMode: true, hmr: false }, plugins: [
   { name: 'card-policy-public-css-fixture', enforce: 'pre', resolveId(id) { if (id.split('?')[0].endsWith('card-policy-imports.css')) return cssId + (id.includes('?') ? '?' + id.split('?')[1] : ''); }, load(id) { if (id.split('?')[0] === cssId) return normalizeBrowserCssImports(cssSource); } },
   tailwindcss({ optimize: false }),
 ] });
@@ -53,7 +53,7 @@ const png = new PNG({ width: 4, height: 4 });
 for (let i = 0; i < 16; i++) png.data.set([10, 200, 30, 255], i * 4);
 const image = PNG.sync.write(png);
 const modules = {};
-for (const p of ['src/online/stagePolicy.mjs', 'src/online/isolation/harden.ts', 'src/online/isolation/isolationCheck.ts', 'src/online/isolation/execGate.ts']) {
+for (const p of ['src/online/stagePolicy.mjs', 'src/online/isolation/harden.ts', 'src/online/isolation/isolationCheck.ts', 'src/online/isolation/execGate.ts', 'src/online/cardRuntime/loader.ts']) {
   modules[`/${p}`] = ts.transpileModule(fs.readFileSync(path.join(ROOT, p), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, allowJs: true } }).outputText;
 }
 const loader = `const sources=${JSON.stringify(modules)}, cache={}; function load(id){if(cache[id])return cache[id].exports; const m={exports:{}};cache[id]=m; const req=(name)=>load(new URL(name,'http://fixture'+id).pathname);new Function('require','exports','module',sources[id])(req,m.exports,m);return m.exports;}`;
@@ -76,6 +76,18 @@ window.runFixture=async function(){
     const face=new FontFace('PolicyFixture','url('+E+'/font.ttf)');document.fonts.add(await face.load());
     const imports=document.createElement('link');imports.rel='stylesheet';imports.href='/imports.css';const importsReady=new Promise((r,j)=>{imports.onload=r;imports.onerror=j});document.head.append(imports);await importsReady;
     window.fixture.cssImports=Array.from({length:6},(_,i)=>getComputedStyle(document.documentElement).getPropertyValue('--import-'+(i+1)).trim());
+    imports.remove();
+    const L=load('/src/online/cardRuntime/loader.ts');let pendingStyles=[];
+    const cardLoader=L.createCardLoader({runtime:'fixture',host:{packages:{},builtin:()=>null},onStyles:(entry,files)=>{
+      for(const old of document.head.querySelectorAll('style[data-fixture-card-style]'))old.remove();pendingStyles=[];
+      for(const css of files){const style=document.createElement('style');style.setAttribute('data-fixture-card-style',entry);if(css.includes('@import'))pendingStyles.push(new Promise((r,j)=>{style.onload=r;style.onerror=j}));style.textContent=css;document.head.append(style)}
+    }});
+    const cardBundle={runtime:'fixture',entry:'public.tsx',generation:'1',modules:[{key:'public.tsx',imports:{},js:'exports.probe={id:"public",name:"public",defaults:{},controls:[],Component:()=>null};'}],styles:[{key:'first.css',css:':root{--first-file:loaded}'},{key:'later.css',css:${JSON.stringify(compiledImports)}}],tailwind:':root{--last-tailwind:loaded}'};
+    const loaded=await cardLoader.setBundles([cardBundle]);await Promise.all(pendingStyles);
+    window.fixture.loaderStyles={loaded:loaded[0]?.ok,imports:Array.from({length:6},(_,i)=>getComputedStyle(document.documentElement).getPropertyValue('--import-'+(i+1)).trim()),count:document.head.querySelectorAll('style[data-fixture-card-style]').length,first:getComputedStyle(document.documentElement).getPropertyValue('--first-file').trim(),last:getComputedStyle(document.documentElement).getPropertyValue('--last-tailwind').trim()};
+    await cardLoader.setBundles([{...cardBundle,generation:'bad',runtime:'wrong'}]);window.fixture.loaderStyles.failedClear=document.head.querySelectorAll('style[data-fixture-card-style]').length===0;
+    await cardLoader.setBundles([cardBundle]);await Promise.all(pendingStyles);await cardLoader.setBundles([]);window.fixture.loaderStyles.unloadClear=document.head.querySelectorAll('style[data-fixture-card-style]').length===0;
+    await cardLoader.setBundles([cardBundle]);await Promise.all(pendingStyles);cardLoader.clear();window.fixture.loaderStyles.clear=document.head.querySelectorAll('style[data-fixture-card-style]').length===0;
     const parsed=document.createElement('div');parsed.innerHTML='<style>.policy-parsed{color:rgb(7,8,9)}</style><p class="policy-parsed">正常HTML与外链</p><img src="'+E+'/image.png">';document.body.append(parsed);await parsed.querySelector('img').decode();
     window.fixture.normalHtml=getComputedStyle(parsed.querySelector('p')).color==='rgb(7, 8, 9)';
     window.fixture.resources={image:img.naturalWidth===4,style:getComputedStyle(document.body).backgroundColor==='rgb(20, 30, 40)',script:window.externalScript==='loaded',font:face.status==='loaded'};
@@ -136,6 +148,8 @@ try {
       check('真实 header/base-uri 自检与跨源握手通过，无 Allowlist/TT 仍可执行', result.report?.ok && result.report.csp === 'header' && result.report.egress === 'none' && result.handshake && result.modules, result);
       for (const kind of ['image', 'font', 'style', 'script']) check(`外链 ${kind} 实际载入`, result.resources?.[kind]);
       check('真实 Vite/Tailwind 编译后的六种远端 CSS @import 在浏览器加载', result.cssImports?.length === 6 && result.cssImports.every(value => value === 'loaded'), result.cssImports);
+      check('真实 createCardLoader 多CSS中的后续外链导入加载，文件与Tailwind顺序保留', result.loaderStyles?.loaded && result.loaderStyles.count===3 && result.loaderStyles.first==='loaded' && result.loaderStyles.last==='loaded' && result.loaderStyles.imports.every(value=>value==='loaded'), result.loaderStyles);
+      check('真实 createCardLoader 换代失败/卸载/clear 清空全部CSS标签', result.loaderStyles?.failedClear && result.loaderStyles.unloadClear && result.loaderStyles.clear, result.loaderStyles);
       check('WebRTC 构造器保留', result.rtcBefore === result.rtcAfter, { before: result.rtcBefore, after: result.rtcAfter });
       check('无TT的HTML解析保护允许正常样式与外链图片', result.normalHtml);
       check('innerHTML/insertAdjacentHTML/Range/template/shadow结构入口拒绝子框架', Object.values(result.structure ?? {}).length === 5 && Object.values(result.structure).every(v => v === 'TypeError'), result.structure);

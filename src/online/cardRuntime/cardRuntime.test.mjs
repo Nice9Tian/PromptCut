@@ -628,3 +628,19 @@ test("OCE-T-16 守门:编辑页面与导出页不引加载器;包名与白名单
   assert.equal(V.cardRuntimeVersionOf("ocr1", { sucrase: "3.35.1", tailwindcss: "4.3.3" }), "ocr1:sucrase@3.35.1:tailwindcss@4.3.3");
   assert.equal(require("sucrase/package.json").version, "3.35.1", "转译器钉在契约写的那一版");
 });
+
+test('OCE-T-05 多CSS按文件回调、Tailwind最后；换代失败/卸载/clear完整撤样式，旧串回调保留', async () => {
+  const entry = `${U}parts.tsx`;
+  const original = {runtime:RUNTIME,entry,generation:'1',modules:[{key:entry,imports:{},js:'exports.probe={id:"parts",name:"parts",defaults:{},controls:[],Component:()=>null};'}],styles:[{key:'first.css',css:'.first {color:red}'},{key:'later.css',css:'@import "https://example.invalid/public.css";'}],tailwind:'.last {color:blue}'};
+  const calls=[];
+  const loader=L.createCardLoader({runtime:RUNTIME,host:hostOf(),onStyles:(entry,files)=>calls.push([entry,[...files]]),onStyle:()=>assert.fail('多文件回调优先')});
+  assert.equal((await loader.setBundles([original]))[0].ok,true);
+  assert.deepEqual(calls.at(-1),[entry,[original.styles[0].css,original.styles[1].css,original.tailwind]]);
+  const count=calls.length;await loader.setBundles([original]);assert.equal(calls.length,count,'同代不重注样式');
+  assert.equal((await loader.setBundles([{...original,generation:'2',runtime:'bad'}]))[0].ok,false);
+  assert.deepEqual(calls.at(-1),[entry,[]],'换代失败撤旧样式');
+  await loader.setBundles([original]);await loader.setBundles([]);assert.deepEqual(calls.at(-1),[entry,[]],'卸载撤样式');
+  await loader.setBundles([original]);loader.clear();assert.deepEqual(calls.at(-1),[entry,[]],'clear撤全部');
+  const legacy=[];const older=L.createCardLoader({runtime:RUNTIME,host:hostOf(),onStyle:(e,css)=>legacy.push([e,css])});
+  await older.setBundles([original]);assert.deepEqual(legacy.at(-1),[entry,[...original.styles.map(s=>s.css),original.tailwind].join('\n')]);older.clear();assert.deepEqual(legacy.at(-1),[entry,'']);
+});

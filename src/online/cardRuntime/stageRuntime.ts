@@ -89,12 +89,13 @@ export function createStageCardRuntime(opts: StageCardRuntimeOptions = {}): Stag
     runtime: CARD_RUNTIME_VERSION,
     host: stageHostModules,
     compile: opts.compile,
-    onStyle(entry, css) {
-      let el: HTMLStyleElement | null = null;
-      for (const s of doc.head.querySelectorAll<HTMLStyleElement>(`style[${STYLE_ATTR}]`)) if (s.getAttribute(STYLE_ATTR) === entry) { el = s; break; }
-      if (!css) { el?.remove(); return; }
-      if (!el) { el = doc.createElement("style"); el.setAttribute(STYLE_ATTR, entry); doc.head.appendChild(el); }
-      if (el.textContent !== css) el.textContent = css;
+    onStyles(entry, cssFiles) {
+      const previous = [...doc.head.querySelectorAll<HTMLStyleElement>(`style[${STYLE_ATTR}]`)].filter(style => style.getAttribute(STYLE_ATTR) === entry);
+      const anchor = previous[0] ?? null; // 换代保留这张卡在其它卡样式之间的顺序
+      for (const css of cssFiles) {
+        const style = doc.createElement("style");style.setAttribute(STYLE_ATTR, entry);style.textContent = css;doc.head.insertBefore(style, anchor);
+      }
+      for (const style of previous) style.remove();
     },
     onCards: (defs) => { setRuntimeCards(defs); },
     onResults(results) {

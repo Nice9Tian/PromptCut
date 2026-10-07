@@ -72,3 +72,11 @@
 - 主会话扩独占source-gate.mjs及vite-plugin-cards.ts仅cardOverridesLoader.load接线。源码预检原拒所有远端@import；已装Vite postcss-import isProcessableURL跳过远端；Tailwind4.3.3 compile实证http(s)字符串/url保留且loadStylesheet 0次，裸字符串//会调用本地resolver而url(//)不会。仅将已通过预检、非raw的协议相对远端import裸字符串等价转url，保持地址/条件/源文件与raw不变；http(s)原样，保留私有文件/plugin/config/source/reference拒绝。
 - 新CSS单测首次10/10；加注释内同地址回归后必要第二次10/10。TMP/promptcut-card-policy-css-unit-1/2.log；TMP/css-toolchain只读实证脚本。新浏览器fixture将经真实Vite/Tailwind编译六种字符串/url、layer/supports/media与协议相对导入，再确认真实浏览器取回样式；还待新提交复验，不能套用此前16/16。
 - 用户main新增三阶段调度文档不扩大本包；本证据不构成并发容量验证。
+
+## 在线多文件CSS导入实证与完整修正
+
+- canonical第三次18/18：真实Vite/Tailwind编译六种远端import后在Chrome152取回，四外链正向与经典云页frame/object/base结构负向通过；TMP/promptcut-card-policy-browser-3.log、pc-card-policy-css-final/result.json和external-resources.png。
+- 进一步只读浏览器试验实际调用createCardLoader：第一试误用模块code字段（真实字段为js），回无卡片定义，保留TMP/promptcut-card-policy-css-loader-check-1.log；第二试按js字段卡定义成功，普通规则CSS后拼@import时远端属性为空，只有导入CSS时loaded（-2.log）。不是用户待决，而是已授权外链样式实现补漏。
+- 主会话批准独占loader.ts，增加可选onStyles逐文件回调，旧onStyle串回调兼容。stageRuntime每份CSS各自style，Tailwind最后，换代插在该卡旧样式位置而非改变与其它卡的级联顺序；失败/卸载/clear撤整组。无正则挪import、无授权/网络协议改动、壳最低版本不变。
+- cardRuntime针对此完整块17/17（含新数组/兼容/同代/失败/卸载/clear）；TMP/promptcut-card-policy-css-loader-unit-1.log。canonical补实际createCardLoader多CSS后续远端导入与真实DOM标签清理，待本提交后跑。
+- type-3零错；full-3还未结束，唯一剩余codex-auth-state文件测试树与旧fake CLI可能保持stdout句柄，已报主会话且不改非独占auth文件、不把缺总结叫通过。原始TMP日志/events保留；最终完整块后仍要type/full必要复验。
