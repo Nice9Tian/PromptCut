@@ -21,3 +21,19 @@
 末例保留“其他任务存活”的原断言，但对该fixture自行创建的unrelated child在创建时订阅close，避免若它已提前退出、finally才订阅close而永远等不到事件。死亡/descendant/split/认证语义断言及原等待时限均保留；无增加sleep。
 
 只读核对root最新986ebec6：调度补充的技术建议/待确认不是新增产品决策或执行授权，提前回收等未决项不在本任务范围；没有合入该文档提交或改产品语义。
+
+## 最终验证与交接
+
+被验证源码 `c3feb406`，之后仅本报告提交。只改测试和报告2文件，没有生产auth/公共killTree/原fake CLI改动，也没有引入上一顺序包的其它文件。
+
+| 项 | 结果 | 耗时 | 系统TMP原始日志 |
+|---|---|---|---|
+| 最终定向 `npm test -- server/test/codex-auth-state.test.mjs` | 27 tests / 27 pass / 0 fail / 0 skip，exit0 | 13466.9346ms；wall13.9021109s | `promptcut-auth-lifecycle-target-final.log` |
+| `npx tsc -b --force` | 零错误，exit0 | wall11.7353063s | `promptcut-auth-lifecycle-types.log` |
+| 本包首次完整 `npm test` | **4932 tests / 4931 pass / 0 fail / 1 skip，exit0** | 94994.2237ms；wall95.7283828s | `promptcut-auth-lifecycle-full-first.log` |
+
+所有本包尝试均无自动retry；完整npm只跑这一次，没有盲重跑。唯一skip为既有 `/api/cards/layout` 真实项目集成项。仅测试逻辑，不涉及画面，G0-R不适用。
+
+最终定向证据 `pc-auth-lifecycle-IFXKgC/lifecycle.jsonl`：62 spawn / 62 exit / 62 close / 0 missing close / 0 unsettled-case备用强制清理，主动失败反例1项。完整npm证据 `pc-auth-lifecycle-fO4I7E/lifecycle.jsonl` 同为62/62/62，备用强制清理0、主动反例1项；原split/descendant、旧新认证代次、取消/登录失败和unrelated存活断言全部通过。路径均为系统TMP内测试自产目录，日志没有真实profile或凭据内容。
+
+原full-3仍记录为root已授权中止、exit1，不改写成通过。现有证据支持测试缺少异常路径拥有者清理这一可复现缺口以及当前修复可结清；不证明原full-3唯一根因或具体stdout句柄。主会话可审diff、在卡片分支集成复验。本分支未merge/push、未部署、未触碰用户/其它Agent进程；最终clean提交交root，不宣布主项目结束。
