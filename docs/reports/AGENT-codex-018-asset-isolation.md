@@ -63,3 +63,26 @@
 - isolated资产probe固定29d0f60e 26/26、退出0，TMP/pc-asset-project-isolation-final/result.json与promptcut-asset-isolation-probe-1.log；该probe不连接真实account/中央、不冒称Linux生产全链，重放了旧hosted hash残余反例已被本isolated服务拒。
 - 只读复核发现分片写fd/complete哈希读fd此前只靠请求体destroy及发布前核验，ACK没有显式等这些实际文件流close。新增guard.track登记fs output/input并将lease AbortSignal交pipeline，media上传也登记真实write stream；收到撤销会abort pipeline，完成回执等文件流真实close。此改动在旧probe完成后实施，没有边运行Vite边改受监视源文件。
 - 新增关闭追踪后target-3 23/23、零失败/跳过1475.522ms，TMP/promptcut-asset-project-target-3.log；type-4 --force零错，TMP/promptcut-asset-type-4.log。target-2和旧probe证据不冒称覆盖这条最新产品增量；完整npm及isolated probe会在新提交固定源码再验一次。
+
+## 完成状态、最终验收与中央接线表
+
+当前状态：本包已完成独占模块、真实 isolated 服务和测试，停止实现；不再是开工状态。最终产品源码56af4573，随后仅本报告更新。根收回的认证测试生命周期修复434eece9（来自5bd65d27）只含其测试/报告，归根授权，不是本包擅改。
+
+| 提供方文件 | 实际接口/持久结构 | 中央或下游必须接什么 |
+| --- | --- | --- |
+| asset-store/index + project-stores | createProjectAssetStores({dir,kind:'fs'或'memory',contentTypeForExt?,chunkSize?})；v2 project(id) -> projectId/root/dirs/stores/assertActive；store(id,ns)；removeProject内部机制 | doc核准确项目存在/归属后选库；删除前终止全部项目任务/流，不能由HTTP自报ID调用removeProject；无旧生产数据自动迁移 |
+| project-access + project-revocations | authorizeAsset/openProjectStream；createAssetRevocationConsumer({authority,file,serviceId:'asset'})；await start()；createProjectAssetAccess({authority:consumer,resolvePrincipal})；v1 cursor/pending exactreceipt | provider注入doc checkAccess/subscribe/eventsSince/ack；每次principal opaque authorizationId重新核真实账号与doc成员；中央mTLS身份/事件持续通道/服务掉线close/完成barrier仍需挂载 |
+| asset-service.ts | assetServiceMiddleware(root,{projectStores,projectAccess,serviceUsage?})；serviceUsage必须projectScoped:true | 同时传双对象才启用云模式；无双对象纯本地兼容，不能把云中央默认当已保护；旧GET/HEAD/Range/chunks/complete/upload均按req principal选store |
+| vite-plugin-media.ts | mediaMiddleware(root,{projectStores,projectAccess,verifyRemoteTarget})；scoped root用于mediaDir/storeMediaStream/adoptMediaFile/mediaTierService；remote target校验返回projectId/base | verifyRemoteTarget须可信核远端项目票据/注册服务，不能只回body.claim；/api/media/adopt按物理root；中央媒体导入/worker必须传播scope，不能直接用全局root绕过去 |
+| vite-plugin-shots.ts | shotsThumbMiddleware(root,{projectStores,projectAccess})；shotsDir(scopedRoot) | 只覆盖/api/shots/thumb读口及目录hook。perception owner补其它detect/jobs/install/status权限与生成thumb时scope传播；本包没有改这些其它路由 |
+| frame-stream.mjs | StreamStore(root,{ownership,projectAccess})；StreamProducer(pipeline,{ownership,projectAccess})；result.projectId；清单projectId | 中央frames owner传doc核ownership和projectAccess，生产者close及队列/worker终止完成纳入中央完成barrier；当前未改vite-plugin-frames/pipeline挂载，不声称生产所有stream已切库 |
+| media-tiers/upload-queue/media-pull/media-stamp/media-ingest/queue-local-media | ownership {projectId,assert,acquire?}；queue item.projectId/target.projectId；tiers.json含projectId；每项目remote state；入库回包需同projectId | 持久队列只存归属和内容，重启重取当前授权；每项目独立queue/tiers目录；旧runtime authorizationId仅RAM引用，不能落token。Agent collect/工具端传播由其owner完成 |
+| service-usage/px-evict | projectScoped账本render-v2.ndjson；project/namespace/hash独立键；px store.projectDir精确验证 | 容量硬保护507保留，超容量任务排队/Agent优先由render调度owner接内部背压，不在本包实现新回收/调度业务 |
+
+- 最终固定源码56af4573的 isolated probe-2 26/26、0失败，退出0，TMP/pc-asset-project-isolation-final-2/result.json、promptcut-asset-isolation-probe-2.log。真实HTTP断言列表保留完整输入/输出status；没有依赖浏览器工具入口，旧hash跨项目残余在服务层变为404。
+- 一次完整 `npm.cmd test`（Node绝对静默预载、cuda_Vit/PYTHONDONTWRITEBYTECODE配置）4955总、4954过、0失败、1既有跳过、0取消，68825.3059ms，退出0；TMP/promptcut-asset-full-1.log。未出现旧fake CLI悬挂或本次C62 EPERM，不等于证明其它分支竞态不存在。没有同源盲重跑full；root另租Astra竞态修复没有合入本包。
+- 最终type-4 `tsc -b --force` 零错误；针对性target-3 23/23。类型/全量只对当前资产分支源码，不冒称卡片/账号/doc/真实节点组合候选已经联验。
+- 5780～5789验收后零监听，所有本任务服务/browser自然关；仓库无生成artifact、无secret/cipher读取、无dependency/environment/用户数据/节点/merge/push/main/version/release操作。最后diff --check通过，报告提交后git status应为空。
+- 相对base986ebec6，排除根收auth的两文件，本包25个文件、此前原始统计1136新增/90删除（本末段报告会增加文档行数）；实际最终raw git diff --stat由交回消息提供，不以这条预估冒称最终diff。
+
+一级风险/未做成原因：没有新增待用户决定。生产组合仍需中央接线、真实account/doc/mTLS撤销事件、权限票据重签、runGrant核验、Agent/perception传播及Linux真网络权限探针；这些文件由其它owner租用，本包按授权不能代改。当前provider fixture使用opaque引用和连续事件模拟，不把它说成真实跨服务部署完成；根整合应重新验真实hash跨读原反例、改密/kick持续流关闭与各服务完成barrier。调度50对话/阶段容量、未来提前回收/故障A-B/删除权限并非本包实现授权，未借此扩大018业务。
