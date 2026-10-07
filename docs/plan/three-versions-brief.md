@@ -145,7 +145,7 @@ VisuHive 推到 main 后，节点上的定时器每 5 分钟自动同步 `site/`
 
 6. Node、npm、git、ffmpeg、ffprobe 的版本；探针用的 Chrome 在不在。
 7. 桌面构建的前置：Rust、cargo、Tauri 命令行在不在（只查版本，不构建）。
-8. 带 numpy 的 Python 在不在。上两次验收有一项 `P-asset-path` 报缺它，其实机器上有：探针只认环境变量 `PROMPTCUT_TEST_PYTHON` 和 PATH 上的 `python`，不认 `py` 启动器，而这台机器 PATH 上的 `python` 是占位程序。该把环境变量设成什么见 `docs/local.md`「带 numpy 的 Python」；设好后用探针里的同一句（`import sys, numpy`）试一下。
+8. 带 numpy 的 Python 在不在。上两次验收有一项 `P-asset-path` 报缺它，其实机器上有：探针只认环境变量 `PROMPTCUT_TEST_PYTHON` 和 PATH 上的 `python`，不认 `py` 启动器，而这台机器 PATH 上的 `python` 是占位程序。该把环境变量设成什么见 `docs/local.md`「本机的 Python」；设好后用探针里的同一句（`import sys, numpy`）试一下。
 9. 本次要用的三个模型（Sol、Luna、Astra）各自能不能调用，各发一句话试一下。
 10. 任务播报脚本能不能调用（位置和用法在 `docs/local.md`）。
 
