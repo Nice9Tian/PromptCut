@@ -255,14 +255,15 @@ export function agentApi(agentUrl, page) {
       return api.call('POST', `/v1/conversations/${conversationId}/messages`, { bearer, body: { prompt, ...(g ? { grant: g } : {}), ...extra } });
     },
     /** 读事件流到 `until(事件, 已收到的)` 为真(缺省到 end),或到时限。回 `{ status, events, done }` */
-    async events(conversationId, { after = 0, until = (e) => e.type === 'end', ms = 60_000, bearer, onEvent } = {}) {
+    async events(conversationId, { after = 0, until = (e) => e.type === 'end', ms = 60_000, bearer, onEvent, page = null } = {}) {
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), ms);
       const out = [];
       let done = false;
       let status = 0;
       try {
-        const res = await fetch(`${agentUrl}/v1/conversations/${conversationId}/events?after=${after}`, { headers: { Authorization: `Bearer ${await tokenOf(bearer)}`, Accept: 'text/event-stream' }, signal: ctl.signal });
+        // `page`:这张「页面」的页面号(反向通道,契约第 28 节)
+        const res = await fetch(`${agentUrl}/v1/conversations/${conversationId}/events?after=${after}${page ? `&page=${page}` : ''}`, { headers: { Authorization: `Bearer ${await tokenOf(bearer)}`, Accept: 'text/event-stream' }, signal: ctl.signal });
         status = res.status;
         if (status !== 200) return { status, events: out, done: false };
         const reader = res.body.getReader();

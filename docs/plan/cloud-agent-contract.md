@@ -95,19 +95,19 @@ createAgentService({
 |---|---|---|---|
 | `GET /healthz` | — | `{ ok, version }` | 不鉴权，不含任何项目信息 |
 | `GET /v1/info` | — | `{ ok, enabled, render: { enabled }, models: [..], defaultModel, limits: { rounds, runMs }, usage: { tokens, limitTokens }, running: [对话 id] }` | 页面进入「云端」接入方式时取一次；`running` 是这位成员在这个项目里还在跑的对话 |
-| `POST /v1/conversations/<id>/messages` | `{ prompt, grant, model?, effort?, creativity?, script?, library?: [素材清单], pageState?: { t, selection } }` | 202 `{ ok, runId, seq }` | 发一条消息、起一轮。**这一轮从此与这个请求的连接无关。** `grant` 是这一轮的对话委托（4.2）。同一个对话已有进行中的回 409 `busy-conversation` |
-| `GET /v1/conversations/<id>/events` | `?after=<seq>`，`Accept: text/event-stream` | SSE（第 2.4 节） | 先补发 `seq` 大于 `after` 的全部事件，再接实时的。可以同时开多条（多台设备、多个页签） |
+| `POST /v1/conversations/<id>/messages` | `{ prompt, grant, model?, effort?, creativity?, script?, library?: [素材清单], pageState?: { t, selection }, pageId? }`（`pageId`：发这条消息的那张页面的页面号，第 28 节） | 202 `{ ok, runId, seq }` | 发一条消息、起一轮。**这一轮从此与这个请求的连接无关。** `grant` 是这一轮的对话委托（4.2）。同一个对话已有进行中的回 409 `busy-conversation` |
+| `GET /v1/conversations/<id>/events` | `?after=<seq>`，可选 `&page=<页面号>`（第 28 节），`Accept: text/event-stream` | SSE（第 2.4 节） | 先补发 `seq` 大于 `after` 的全部事件，再接实时的。可以同时开多条（多台设备、多个页签） |
 | `POST /v1/conversations/<id>/abort` | — | `{ ok }` | 停这个对话进行中的一轮。对话的主人从任何设备都能停 |
 | `GET /v1/conversations` | — | `{ ok, items: [{ id, title, updatedAt, state, lastSeq, startedOn: 设备名 }] }` | 这位成员在这个项目里的云端对话（归属见 7.2） |
 | `GET /v1/conversations/<id>` | — | `{ ok, meta: { id, title, state, lastSeq, reason? } }` | `state`：`idle`、`running`、`interrupted`、`failed`、`revoked` |
 | `PATCH /v1/conversations/<id>` | `{ title }` | `{ ok }` | 改标题 |
 | `DELETE /v1/conversations/<id>` | — | `{ ok }` | 进行中的先停；连模型历史一起删 |
 | `GET /v1/usage` | `?since=<毫秒>` | `{ ok, project: { tokens, calls }, members: [{ username, tokens, calls }] }` | 项目内任何成员可查本项目的 |
-| `POST /v1/conversations/<id>/page-result` | `{ reqId, result?, error? }` | `{ ok }` | 只在 9.4 的反向通道做了才有 |
+| `POST /v1/conversations/<id>/page-results` | `{ id, pageId, ok, result?, error? }` | `{ ok }` | 反向通道（第 28 节）：发起人的页面交回一次 `page.request` 的结果。按「这个对话的主人、发起这一轮的 `userId`、这一轮的页面号、还在等的 `id`」核对，一次有效；别人的或不存在的对话 404，不在等的（编的、过期的、交过的、这一轮已结束）410 `page-request-gone`，结果超过 64 KiB 回 413。〔这一行原来是占位的 `page-result { reqId, result?, error? }`，从未实现过；2026-10-07 按做成的改〕 |
 
 请求里**不收**这些桌面字段：`provider`（恒为 API 直连）、`sessionId`（模型历史按对话 id 找，不认页面自报的）、`deepAuto`、`reviewLoop`、`schemaCompat`、`attachments`、`hops`、`projectCreativity`（服务端读副本）。带了也忽略。
 
-错误统一为 `{ ok: false, code, message }`；`code` 取：`unauthorized`（401，不说原因）、`forbidden`（403）、`disabled`（项目关了开关）、`busy`（节点或项目并发已满）、`busy-conversation`、`quota-exceeded`、`no-model-key`、`too-large`、`bad-request`、`bad-grant`（对话委托不对：过期、不是这个对话的、不是这位成员的）、`unavailable`（文档服务连不上）。
+错误统一为 `{ ok: false, code, message }`；`code` 取：`unauthorized`（401，不说原因）、`forbidden`（403）、`disabled`（项目关了开关）、`busy`（节点或项目并发已满）、`busy-conversation`、`quota-exceeded`、`no-model-key`、`too-large`、`bad-request`、`bad-grant`（对话委托不对：过期、不是这个对话的、不是这位成员的）、`unavailable`（文档服务连不上）、`page-request-gone`（410，只在 `page-results` 上：这次请求已经不在等了）。
 
 ### 2.4 事件流：存下来再发
 
@@ -123,6 +123,7 @@ createAgentService({
 - `error` 带 `code`：`revoked`（开关关了、被移出或踢出、项目删了，附 `reason`）、`interrupted`（服务重启留下的）、`model`（模型接口报错）、`quota-exceeded`、`limit`（到了轮数或时间上限）；
 - `render`：这一轮的改动引出的补渲的进展 `{ state: 'published' | 'progress' | 'done' | 'failed' | 'unavailable', clips, done?, total?, reason? }`（第 16 节）；
 - `end`：一轮收尾 `{ runId, state }`，之后没有这一轮的事件了。
+- `page.request`：反向通道的一次请求 `{ id, runId, tool, args, timeoutMs }`（第 28 节）。它**不带 `seq`、不进事件记录、只发给发起这一轮的那张页面的那条流**；补发里没有它。不认得它的页面按「不认得的事件类型原样放过」处理。
 
 `text`、`thinking` 的增量在一轮结束时在事件记录里合并成整段（实时流照发增量），免得事件记录被逐字的增量撑大。`diagnostic` 在托管档只发 `configuration` 与 `request` / `response` 的计数，不带模型接口地址〔裁：地址是托管方的配置，成员不需要知道〕。
 
@@ -559,7 +560,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | 在副本上执行（`route`） | 在服务端的项目副本上同步执行，改动带期望版本提交给文档服务；进程级的锁里跑，实现必须是同步的。其中看画面的四个（标 `look`）读副本后向同机的渲染服务要一帧，不进锁（9.8） | 71 |
 | 服务端另有实现（`hosted`） | `server/agent/service/hosted-tools.mjs`（声音的三组在 `hosted-sound.mjs`、`hosted-audio.mjs`、`hosted-card-audio.mjs`，网页采集在 `hosted-collect.mjs`）：文件只进这个对话的工作区、出网只经出网闸、素材经素材服务、卡片源码经文档服务的内容库、花钱的调用记用量。外部的等待在锁外，进锁只做同步的改项目 | 20 |
 | 就地执行（`server`） | 不碰项目：`wait`、`report_progress`、多 Agent 公告板四个 | 6 |
-| 要操作发起人的界面（`initiator`） | 发起方不在线时立刻回 `{ ok: false, initiatorOffline: true, error }`，Agent 据此继续；在线时读得到的照答 | 8 |
+| 要操作发起人的界面（`initiator`） | 发起方不在线时立刻回 `{ ok: false, initiatorOffline: true, error }`，Agent 据此继续；在线时四个（`seek`、`play`、`pause`、`get_selection`）经反向通道让他的页面执行（第 28 节），另外四个回 `initiatorOnly` 并写明差什么 | 8 |
 | 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 23 |
 
 交给模型的是前四类共 105 个（加驱动自带的 `think`）〔2026-10-07 接上声音的六个与网页采集的七个，见 9.4a～9.4d 与第 26、27 节〕；节点没有配看画面的口子（`PROMPTCUT_AGENT_LOOK_URL`）时少掉看画面的四个与卡片声音的两个（都要同机的渲染服务），是 99 个，看画面的四个调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 在这台节点上看不了画面…' }`；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
@@ -568,21 +569,21 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 
 | 分组 | 在副本上执行 | 服务端另有实现 | 要操作发起人的界面 | 这一版还没接上（差什么） |
 |---|---|---|---|---|
-| project（7） | `get_project`、`list_media`、`set_project_meta`、`set_theme`、`list_media_effects` | `import_media` | `get_selection`（在线：发消息时的选区） | — |
+| project（7） | `get_project`、`list_media`、`set_project_meta`、`set_theme`、`list_media_effects` | `import_media` | `get_selection`（在线：经反向通道读页面当下的选区；第 28 节） | — |
 | clips（8）、layout（6）、tracks（5）、parts（6）、effects（10） | 全部。`get_layout` 的实体框向渲染服务量（9.8）；节点没配看画面的口子、或这次没量成时只回规定的框，`contentBox` 是 null 并带一句原因 | — | — | — |
 | cuts（8） | 全部。`switch_cut`、`add_cut`、`remove_cut` 要播放头：在线用发消息时的，不在线按 0 记并注明 | — | — | — |
 | audio（19） | `set_clip_volume`、`set_clip_muted`、`separate_audio`、`create_audio`、五个 `*_audio_fx`、`sound_presets` | `voice_list`、`voice_generate`；`sound_generate`、`sound_status`、`sound_cancel`（9.4a）；`measure_audio`（9.4b）；`render_card_audio`、`cancel_card_audio`（9.4c，要节点配了看画面的口子） | — | `measure_audio_js`：模型写的测量脚本要在断网的无头浏览器里跑，Agent 服务进程不起浏览器；差渲染服务那一侧开一个跑脚本的口子（解码出来的 PCM 怎么送过去、脚本的时限与内存上限怎么并进渲染服务的看护） |
 | ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption`、`list_shots`、`list_subjects` | — | — | `stt_status`、`stt_install`、`transcribe_media`（语音识别）、`detect_shots`（镜头）、`track_points`、`get_track`、`track_status`、`track_install`（追踪）、`detect_subjects`、`subject_status`、`subject_install`（主体）：要节点上的 Python 运行环境与模型权重，并把页面里的作业表搬到服务端。`attach_clip_motion`：要一份追踪结果 |
 | cards（8） | `list_cards`（含本项目的用户卡）、`apply_card`；`bake_card`、`inspect_card_dom`（看画面，9.8） | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | — |
 | vision（2） | `see_frames`（时间轴的画面）、`get_gif`（看画面，9.8） | — | — | `see_frames` 的素材镜头拼图（`source: "media"`）：要节点上的镜头识别，回明确的原因 |
-| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check`（要用户自己扫码或输口令） | — |
-| browser（8） | — | — | `web_handoff` | 其余七个：要节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录 |
-| agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（要页面开页签） | — |
-| core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause` | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
+| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check`（要用户自己扫码或输口令；在线时也做不了，原因见第 28.3 节） | — |
+| browser（8） | — | — | `web_handoff`（在线时也做不了，第 28.3 节） | 其余七个：要节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录 |
+| agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（要页面开页签；在线时也做不了，第 28.3 节） | — |
+| core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause`（在线：经反向通道在发起人的页面上执行；第 28 节） | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
 
 「这一版还没接上」的 23 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
 
-**要操作发起人界面的八个，发起方在线时**：`get_selection` 按发消息时的选区答；其余七个要反过来操作他的页面，云端到页面的反向通道这一版没有，回 `{ ok: false, initiatorOnly: true, error }`（说明做不了、请用户自己在界面上操作）。反向通道记未达成。
+**要操作发起人界面的八个，发起方在线时**〔2026-10-07 做成反向通道后改，细节在第 28 节〕：`seek`、`play`、`pause`、`get_selection` 经反向通道让**发起这一轮的那张页面**用它本机同一份实现执行，结果与本机同形；那张页面不在（没连着、到时限没答、等的中途断了）回 `initiatorOffline`，其中 `get_selection` 在这位成员还有别的窗口连着看时退回发消息时的选区并注明。`web_handoff`、`collect_login`、`collect_login_check`、`spawn_agent` 在线时仍回 `{ ok: false, initiatorOnly: true, error }`，`error` 里逐个写明差什么（第 28.3 节）。
 
 ### 9.3 建卡改卡
 
