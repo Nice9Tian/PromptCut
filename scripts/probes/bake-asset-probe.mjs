@@ -4,7 +4,8 @@
  *
  *   node scripts/probes/bake-asset-probe.mjs [--port 5970] [--keep]
  *
- * 自己起一个编辑器 dev server(`--port`,缺省 5970,舞台另占 +1、+2;带 PROMPTCUT_NO_PORT_FILE=1),产物与素材落在新建的临时目录;
+ * 自己起一个编辑器 dev server(`--port`,缺省 5970,舞台另占 +1、+2;带 PROMPTCUT_NO_PORT_FILE=1),产物与素材落在新建的临时目录
+ * (含 `PROMPTCUT_ARTIFACT_DIR`:px / snap 的本机存放,否则缺省落在仓库 `out/asset-store/`,第二次运行起 P7 的块本机已有);
  * 再在 `--port + 5` 上起一台计数的「远程素材服务」(内存里实现分片上传、对账、收尾、取回,三个命名空间都收),
  * 当作共享项目连着的那一台:编辑器带 `PROMPTCUT_ASSET_URL=<它>` 与 `PROMPTCUT_PUSH=1` 起,预渲染进程的推送队列、
  * 编辑器进程的上传目标都指向它(卡片快照写进本机素材服务之后再推一份过去)。
@@ -54,6 +55,7 @@ const EXPORT_DIR = path.join(os.tmpdir(), `pc-bake-asset-probe-${Date.now().toSt
 const DATA_DIR = path.join(EXPORT_DIR, 'data');
 const MEDIA_DIR = path.join(EXPORT_DIR, 'media');
 const INDEX_DIR = path.join(EXPORT_DIR, 'bake-index');
+const ARTIFACT_DIR = path.join(EXPORT_DIR, 'artifacts');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
@@ -103,6 +105,9 @@ async function startEditor() {
   editor = spawn(process.execPath, [viteBin(), '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'],
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       env: { ...process.env, PROMPTCUT_EXPORT_DIR: EXPORT_DIR, PROMPTCUT_DATA_DIR: DATA_DIR, PROMPTCUT_NO_PORT_FILE: '1',
+        // 产物(px / snap)的本机存放目录也落在临时目录:缺省是 `<仓库>/out/asset-store/`,跨次运行会留着上一次的块,
+        // P7 那张「只在远程上」的 PNG(内容固定、哈希固定)第二次起本机就有了,不再向远程取,「远程被请求过这一块」必不过
+        PROMPTCUT_ARTIFACT_DIR: ARTIFACT_DIR,
         // 共享项目连着的素材服务:预渲染进程的推送队列(J.12 要显式打开)与编辑器进程的上传目标都指向计数的那一台
         PROMPTCUT_ASSET_URL: `${REMOTE}/api/asset`, PROMPTCUT_PUSH: '1' } });
   const keep = (c) => { editorLog.push(c.toString()); if (editorLog.length > 600) editorLog.shift(); };
