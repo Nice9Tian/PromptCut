@@ -46,7 +46,7 @@ test('真实HTTP：回环无证拒、旧media及PCM、local/tiers/私路径/adop
   assert.equal((await request(f, 'B', `/api/media/file?path=${encodeURIComponent(file)}`)).status, 403);
   assert.equal((await request(f, 'B', `/api/media/adopt?path=${encodeURIComponent(file)}`, { method: 'POST' })).status, 403);
   const remote = await request(f, 'B', '/api/media/remote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base: `${f.base}/api/asset`, ticket: 'A-r' }) });
-  assert.equal(remote.status, 403); // 当前该控制路由保留bad-input回包，不能配置跨项目remote
+  assert.equal(remote.status, 403); // 真实归属错误保留权限状态，不能配置跨项目remote
   assert.equal((await (await request(f, 'B', '/api/media/remote')).json()).base, null);
 });
 test('真实HTTP：上传流入独立项目目录，环境全局目录不能覆盖，输入不被改写', async t => {
@@ -59,6 +59,8 @@ test('真实HTTP：上传流入独立项目目录，环境全局目录不能覆�
   const result = await res.json(); assert.equal(result.projectId, 'A'); assert.equal(result.hash, hash);
   assert.equal((await request(f, 'B', `/@media/${hash}`)).status, 404);
   assert.deepEqual(await fs.readFile(path.join(f.factory.project('A').dirs.media, `${hash}.wav`)), bytes);
+  const ownedFile = path.join(f.factory.project('A').dirs.media, 'already-local.wav'); await fs.writeFile(ownedFile, bytes);
+  const adopted = await request(f, 'A', `/api/media/adopt?path=${encodeURIComponent(ownedFile)}`, { method: 'POST' }); assert.equal(adopted.status, 200); const adoptedBody = await adopted.json(); assert.equal(adoptedBody.projectId, 'A'); assert.equal(adoptedBody.hash, hash); assert.deepEqual(await fs.readFile(ownedFile), bytes);
 });
 test('真实HTTP：失权持续流立刻销毁、关闭确认后旧GET/Range/chunks拒绝，B不受影响', async t => {
   let stream;

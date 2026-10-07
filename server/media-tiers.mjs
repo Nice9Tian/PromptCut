@@ -291,6 +291,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
 
   /** 把库外(同一卷上)的临时文件按内容哈希挪进库;库里已有就删掉临时文件 */
   async function adoptTemp(tmp, { ext, name }) {
+    try {
     const hash = await lib.hashFile(tmp);
     const fileName = ext ? `${hash}.${ext}` : hash;
     const dest = path.join(dir, fileName);
@@ -301,7 +302,8 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
     else await fs.rename(tmp, dest);
     const size = (await fs.stat(dest)).size;
     await lib.writeIndex(hash, { file: fileName, name, ext, size, contentType: lib.contentTypeForExt(ext) });
-    return { hash, ext, name, bytes: size, path: dest, url: `/@media/${hash}`, contentType: lib.contentTypeForExt(ext), deduped: had };
+    return { hash, ext, name, bytes: size, path: dest, url: `/@media/${hash}`, contentType: lib.contentTypeForExt(ext), deduped: had, ...(ownership ? { projectId: ownership.projectId } : {}) };
+    } finally { await fs.rm(tmp, { force: true }).catch(() => {}); }
   }
 
   /* ---------- 后台转码:一次一个 ---------- */

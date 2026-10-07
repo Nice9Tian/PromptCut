@@ -35,10 +35,11 @@ export async function openProjectStream({ authority, principal, projectId, actio
     if (event?.loginIds?.length && !event.loginIds.includes(principal?.loginId)) return;
     if (event?.type && !['login-revoked', 'project-access-changed'].includes(event.type)) return;
     if (event?.reason === 'unban') return;
+    if (controller.signal.aborted) return closePromise;
     if (!controller.signal.aborted) controller.abort(assetAccessError(event?.reason ?? 'access-revoked'));
     const pending = [...tracked].map(stream => stream.closed ? Promise.resolve() : new Promise(resolve => stream.once('close', resolve)));
     for (const stream of tracked) stream.destroy?.();
-    closePromise = Promise.resolve(close(event)).then(() => Promise.all(pending));
+    closePromise = Promise.resolve().then(() => close(event)).then(() => Promise.all(pending)).then(() => ({ closed: true }));
     return closePromise;
   };
   const unsubscribe = authority.subscribeRevocations(context, revoke);

@@ -43,3 +43,16 @@
 - 根的基底 asset-path 首轮28过/1失败，P7 URL 为 template 而 direct 起末点略有差异；只读核 pyEnv 继承根 PROMPTCUT_MODELS，editor 明确覆盖自己的空 MODELS，证实输入模型目录不一致。
 - 按根扩租仅给 pyEnv 加 PROMPTCUT_MODELS: MODELS，与 editor 同一探针临时目录；保留模板逐字段比较、其它断言及全部已安装真实 weights。同一探针一次验收待根收 auth 测试生命周期修复后执行。
 - 本次提交后干净暂停，根将在本工作区收回独立 auth fixture 修复5bd65d27，通知后继续专用负向、type及一次完整 npm；此暂停不代替最终验收。
+
+## 第三块：后台产物与持久撤销消费者
+
+- 新 createAssetRevocationConsumer({authority,file,serviceId:'asset'}) 直接适配 doc authority 源码815510cf：subscribe只即时fence和唤醒，eventsSince逐页连续追齐head；启动未齐/缺口/损坏文件/停服务拒开放请求。每次checkAccess前后追齐、原始401/403保留。无TTL权限缓存、不生成账号或项目权限、不保存token/authorizationId。
+- 通知回调同步abort/destroy，等待stream实际close及owned child close；完成后先写file、fsync、rename（Linux还fsync目录），再ackAccessEvent complete:true。只存v1 cursor/pending exactreceipt；ACK丢失/重启重发同receipt。receipt未成功落盘绝不先ACK；通知重复/乱序不能跳序ACK，已追齐旧seq只唤醒、不重新撤当前流。持久provider/channel或追齐失败关闭活动流，停服务同样关资源。可信serviceId来自构造接线，不作为外部HTTP body授权。
+- 消费者是可注入服务模块，尚未接中央mTLS transport、生产持续事件通道与完成barrier；中央owner必须先await start，再createProjectAssetAccess，res/worker/queue关闭完成与receipt由该可信实例负责。runGrant权限仍由未来doc run authority核验，本包没有自报runGrant绕过。
+- factory在putChunk/complete发布钩子加assertActive，px维护必须store.projectDir与px namespace精确匹配，不能配到另一个project。云端默认不启用旧本机自动px eviction，没有实现新调度/提前回收政策。v2 service ledger独立render-v2.ndjson，A/B同hash计两份实存，disown/dropA不摘B，旧v1不误回放。
+- tier后台独立lease可追踪真实ffmpeg子进程；input/cache/queue/target带projectId，每项发布前重核，失权临时.small/.remux清理。真实自建公开32×32视频分别验证合法转码登记与编码后lib.hashFile期间撤销：迟到小尺寸未登记、未入队、未留下完整新文件。源码输入和已有原件保留。
+- StreamStore按projects/hash(projectId)物理分开，manifest含projectId，读取HTTP需projectAccess；producer result归属不一致及失权save/adopt拒。中央frames插件尚未租/挂载，这里实际isolated清单/init/segment HTTP已验，不能冒称生产frames全部接通。
+- worker-1 11/11、535.971ms；补真实ffmpeg及缓存检查后的worker-2 12/12、719.5836ms。TMP/promptcut-asset-project-workers-{1,2}.log。此前缓存测试误写.tiers.json、未触发实际tiers.json加载，后精确修正真实文件名后再覆盖，不把旧证据算缓存验证。
+- 合并定向target-1共23项22过/1失败，1146.1415ms：HTTP与worker两个测试文件并行都起5780，真实EADDRINUSE，是本包测试端口布局失误。没有终止别人的进程；worker独立fixture改5782，stream5781，HTTP5780，均在独占段内；target-2 23/23零失败/跳过944.5352ms。完整首轮失败和修正日志均留TMP/promptcut-asset-project-target-{1,2}.log。
+- type-2 --force零错，TMP/promptcut-asset-type-2.log；待固定块后的最终检查。新增isolated资产probe直接实际服务模块，明确productionMounted:false，重放旧hosted residual已知hash反例，正反向结果JSON写TMP。
+- asset-path按根授权pyEnv模型目录一致；另Chrome改pipe仅消除随机调试TCP，浏览器行为/模板断言不变。独占5780～5782舞台及5785计数服务，真实探针随后在固定源码跑；没有改已有真实weights/全局环境。

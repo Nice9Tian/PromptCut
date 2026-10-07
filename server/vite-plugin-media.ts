@@ -18,7 +18,9 @@ function mediaOwnership(root: string): any {
   if (!projectScope(root)) return null;
   projectScope(root).assertActive();
   if (context?.root !== path.resolve(root)) throw Object.assign(new Error("project-context-required"), { status: 403 });
-  return { projectId: context.projectId, authorizationId: context.lease.principal.authorizationId, assert: context.lease.check, acquire: context.lease.fork };
+  const scope = projectScope(root);
+  const assert = async () => { scope.assertActive(); await context.lease.check(); scope.assertActive(); };
+  return { projectId: context.projectId, authorizationId: context.lease.principal.authorizationId, assert, acquire: async () => { await assert(); const lease = await context.lease.fork(); try { scope.assertActive(); return lease; } catch (error) { lease.release(); throw error; } } };
 }
 
 function sanitizeFilename(name: string) {
@@ -731,6 +733,9 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
     const range = req.headers.range ? parseRange(req.headers.range, stat.size) : null;
     const contentType = contentTypeForFile(filePath);
     const head = req.method === "HEAD";
+    const lease = mediaContext.getStore()?.lease;
+    if (lease) { await lease.assert(); res.setHeader("Cache-Control", "no-store"); }
+    if (res.destroyed) return;
     // Last-Modified:没有内容哈希的迁移期素材,帧管线按 `HEAD` 的 Content-Length + Last-Modified 打戳
     // (server/media-stamp.mjs),不再自己去 stat 这个目录
     const lastModified = stat.mtime.toUTCString();
@@ -770,7 +775,7 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
     }
   } catch (err) {
     if (res.headersSent) { res.destroy(); return; }
-    res.statusCode = 404;
+    res.statusCode = (err as any)?.status ?? 404;
     res.end("Not found");
   } finally {
     await handle?.close().catch(() => {});

@@ -333,7 +333,7 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
     // 磁盘满:这一片的标记没补(不算收到),已收的分片不动;请求体可能还在路上,回完就掐断
     if (isStorageFull(err)) return reject(req, res, 507, { ok: false, error: "insufficient-storage" });
     // 断线:对面已经不在了,回什么都收不到;这一片的标记没补,对账时报「没收到」
-    if (!res.headersSent && !res.destroyed) sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    if (!res.headersSent && !res.destroyed) sendJson(res, (err as any)?.status ?? 500, { ok: false, error: (err as any)?.code ?? (err instanceof Error ? err.message : String(err)) });
     return;
   }
   switch (out.status) {
@@ -398,6 +398,8 @@ async function serveBlob(req: IncomingMessage, res: ServerResponse, store: Asset
   // 流先打开再发头:入库的东西万一刚被删,还能干净地回 404
   const stream = head ? null : await store.read(hash, range ? { start: range.start, end: range.end } : {});
   if (!head && !stream) return sendJson(res, 404, { ok: false, error: "not-found" });
+  await assetContextOf(req)?.lease.assert();
+  if (res.destroyed) { stream?.destroy(); return; }
   res.writeHead(range ? 206 : 200, headers);
   if (!stream) return res.end();
   stream.on("error", () => res.destroy());

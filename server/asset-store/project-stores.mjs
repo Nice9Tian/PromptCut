@@ -39,7 +39,19 @@ export function createProjectAssetStores({ dir, kind = 'fs', contentTypeForExt, 
       const raw = kind === 'fs' ? createFsStore({ dir: dirs[ns], hooks, chunkSize }) : createMemoryStore({ chunkSize });
       Object.defineProperty(raw, 'projectId', { value: projectId });
       Object.defineProperty(raw, 'namespace', { value: ns });
-      stores[ns] = new Proxy(raw, { get(target, key) { const value = Reflect.get(target, key); return typeof value === 'function' ? (...args) => { assertActive(); return value.apply(target, args); } : value; } });
+      Object.defineProperty(raw, 'projectDir', { value: dirs[ns] });
+      stores[ns] = new Proxy(raw, { get(target, key) {
+        const value = Reflect.get(target, key);
+        if (typeof value !== 'function') return value;
+        return (...args) => {
+          assertActive();
+          if (key === 'putChunk' || key === 'complete') {
+            const n = key === 'putChunk' ? 2 : 1, options = args[n] ?? {}, previous = options.beforeCommit;
+            args[n] = { ...options, beforeCommit: async () => { assertActive(); await previous?.(); assertActive(); } };
+          }
+          return value.apply(target, args);
+        };
+      } });
     }
     const scope = Object.freeze({ v: 2, projectId, root, dir: root, dirs: Object.freeze(dirs), stores: Object.freeze(stores), assertActive, retire: () => { active = false; } });
     roots().set(root, scope);
