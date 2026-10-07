@@ -41,7 +41,7 @@
  *     左上角像素是预渲染原尺寸的颜色。
  * E9 手机低内存档(仿手机)按现有规则走:运行状态 `low-memory`、参数面板说明「低内存档」、两个文档里都没有执行卡片代码的记号,没有预渲染结果的卡显示图标。
  *
- * 带耗时门槛的项这里不设(时限只放宽到够 PC 与笔记本跑完)。不打印令牌、口令(输出里的票据形状串一律抹掉)。
+ * 耗时只记录,不当通过条件(verification.md「耗时只记录,不当闸门」):E8 换成新版的用时写进 TIMINGS 行;等待时限只为防卡死。不打印令牌、口令(输出里的票据形状串一律抹掉)。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import puppeteer from 'puppeteer';
