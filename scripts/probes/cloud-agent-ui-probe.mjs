@@ -789,10 +789,15 @@ async function desktopPhase() {
   const optsD6 = await providerOptions(page);
   check('D6:云端对话还在跑时重新打开:AI 栏仍是本机驱动,出现「云端对话进行中」提示', !!banner && optsD6 && optsD6.value !== 'cloud', { value: optsD6?.value });
   await shot(page, 'D6-desktop-running-banner');
-  const mem = await membersList(page);
+  // 行里的「[Agent ×n]」是本机 Agent 的连接数(桌面页面的本机对话带着自己的 Agent 连接)
+  const localAgents = (m) => (m?.rows ?? []).reduce((n, r) => n + Number((/\[Agent ×(\d+)\]/.exec(r.text) ?? [])[1] ?? 0), 0);
+  // 〔用户 2026-10-07 定〕本机 Agent 与云端 Agent 都算进 Agent 数:运行中 = 行里的本机 Agent 个数 + 在跑的云端 Agent 1 个。
+  // 本机 Agent 的连接在页面重新打开后要一小会儿才连上,所以等界面追上再判(界面与探针各算各的)
+  let mem = null;
+  await until('D6:成员列表追上(自己那一行下有云端 Agent,顶栏的 Agent 数 = 本机的 + 云端的 1 个)', async () => { mem = await membersList(page); return mem && mem.rows.some((r) => r.cloudTag) && mem.count === `成员：2 人 · Agent：${localAgents(mem) + 1} 个` ? mem : null; }, 20_000, 500);
   const mine = mem?.rows.find((r) => r.cloudTag) ?? null;
-  // 列表里另一行是探针自己的那条创建者连接(另一台设备):成员数 2 = 两台设备,云端 Agent 不占数
-  check('D6:成员列表里自己那一行下有「〈成员名〉的云端 Agent」(不另起一行、不计入成员数)', !!mine && mine.cloudRow === `${creator.username}的云端 Agent` && mem.rows.filter((r) => r.cloudTag).length === 1 && mem.count === '成员：2 人 · Agent：1 个' && mem.button === mem.count, { button: mem?.button, count: mem?.count, rows: mem?.rows.map((r) => r.text.slice(0, 60)) });
+  // 列表里另一行是探针自己的那条创建者连接(另一台设备):成员数 2 = 两台设备,云端 Agent 不另起一行、不占成员数、计入 Agent 数
+  check('D6:成员列表里自己那一行下有「〈成员名〉的云端 Agent」(不另起一行、不计入成员数,计入 Agent 数:本机 Agent 的个数 + 云端的 1 个)', !!mine && mine.cloudRow === `${creator.username}的云端 Agent` && mem.rows.filter((r) => r.cloudTag).length === 1 && mem.count === `成员：2 人 · Agent：${localAgents(mem) + 1} 个` && mem.button === mem.count, { button: mem?.button, count: mem?.count, localAgents: localAgents(mem), rows: mem?.rows.map((r) => r.text.slice(0, 60)) });
   await page.click('[data-pc="cloud-running-banner"] button');
   await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 });
   const attachedD6 = await until('D6:点了「接上看看」后接上还在跑的对话', async () => { const v = await view(page); return v?.streaming ? v : null; }, 20_000, 100);
@@ -805,7 +810,6 @@ async function desktopPhase() {
   // 一轮结束:自己那一行下的「[云端 Agent]」标记几秒内消失、云端 Agent 不再计入 Agent 数(连接还连着,不等回收)。
   // 桌面页面此时可能带着自己的本机 Agent 连接(行里的「[Agent ×n]」),它照常计数:期望的 Agent 数就是行里本机 Agent 的个数
   const tD6End = Date.now();
-  const localAgents = (m) => (m?.rows ?? []).reduce((n, r) => n + Number((/\[Agent ×(\d+)\]/.exec(r.text) ?? [])[1] ?? 0), 0);
   let lastMemD6 = null;
   const memEnd = await until('D6:这一轮结束后几秒内自己那一行不再有云端 Agent 标记、顶栏只剩本机 Agent 的数', async () => { lastMemD6 = await membersList(page); const m = lastMemD6; return m && !m.rows.some((r) => r.cloudTag) && m.count === `成员：2 人 · Agent：${localAgents(m)} 个` ? m : null; }, 30_000, 800);
   const runningD6 = await P(page, async () => [...(await import('/src/editor/sync/presence.ts')).cloudRunning()]).catch((e) => String(e));
