@@ -27,3 +27,15 @@
 ## 基线首次失败与最小修正
 
 类型检查使用主工作区现成 TypeScript bin（与tsc -b --force相同），exit0，16830ms，无安装或junction。完整npm首次：4934 tests，4932pass、1fail、1skip、0cancel，76358.8203ms。唯一失败为已有依赖方向守门 `server/** 不 import scripts/ 下的模块`，指出本包新测试的直接脚本import；原日志TMP/c10-host-claim-npm-full.log保留，不当绿。修正仅新测试：独立Node子进程调用脚本诊断导出，server本身不反向import脚本，原守门规则不改。两个诊断脚本未变，在途full C10源码继续固定。需要再跑目标含该守门与完整npm；类型检查无需因.mjs测试组织变化重复。
+
+## 固定诊断源码最终复验与交回
+
+修正目标集（含原RH/RHC、分层守门及新增3项）37/37pass，0fail/cancel/skip，11263.4968ms，exit0，TMP/c10-host-claim-target-repair.log。完整npm修正后4934 tests，4933pass、0fail、1skip、0cancel，101488.7742ms，exit0，TMP/c10-host-claim-npm-repair-full.log；唯一skip是既有Native GPU P6 EGL真实着色器查询保留项，未改它。原全量失败不被覆盖。未发生测试文件原生崩溃重跑。
+
+固定两诊断脚本完整C10复验使用与未改源码首跑同一命令、原dist、5950端口，exit0，ok=true/fails=[]，总286175ms，A5 113679ms：host claimed3/plans1/completed1，新host指纹层ready60，main-v2；cleanup shared.admin.ok/listening=[]。TMP/c10-host-claim-diagnostic-full.log，夹具TMP/pc-c10-browser-GYZru7/shots。真实诊断记录4次变化：初次尚未连上、静态eligible1；连上后seen6/claimed1/plans1；之后held/running真实快照段，最后completed1。tickErrors均空，fingerprint过滤有真实计数。ready可以先于连接，不代表已能认领，但原失败已连接，不能据此定原根因。
+
+完整C10与types运行时两个诊断脚本为576eae05；测试组织修正在45d299ed，未改任何types输入/产品源码或frameCode；修正目标与全量npm验45d299ed。最终只补此报告，无源码再变。两个目标集、两个全量npm、未改源码full及诊断源码full均保留真实结果；未跑全套探针/G0-R/网络/部署，依据本包无产品画面、渲染管线或网络连接实现变化及协调者点名范围，不算通过。
+
+此次完成的是诊断增强及复验，**原A5 15分钟不认领根因未确认，未声称修好产品缺陷**。暂时没有精准扩queue/plugin的证据。静态observer不读取host私有card-source或真实lane/在飞内部状态，不是时序证明；旁观连接仅探针夹具、只收不认领，随项目删除和进程清理，不是新生产调度能力。后续若再现可据新的有限诊断定位，不能以本次绿覆盖原失败。
+
+依赖向上解析，未npm ci/安装/联接；Node所有测试/构建/probe显式静默preload为file:///绝对URI，PROMPTCUT_TEST_PYTHON为cuda_Vit Python，PYTHONDONTWRITEBYTECODE=1；新测试子进程windowsHide=true。只处理本探针owned清理，根5690端口段和用户端口未碰。未动其它worktree、main、version、部署或推送。最终git diff --check通过，工作区干净；协调者可从报告提交收回这4个允许文件。
