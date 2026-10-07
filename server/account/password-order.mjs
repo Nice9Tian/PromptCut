@@ -41,7 +41,13 @@ export function createAccountOrderClient({ request, timeoutMs = 15_000 } = {}) {
   if (typeof request !== 'function') throw historyError('order-unavailable', 503);
   const call = (method, path, body) => new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(historyError('order-outcome-unknown', 503)), timeoutMs);
-    Promise.resolve().then(() => request({ method, path, body })).then(resolve, reject).finally(() => clearTimeout(timer));
+    Promise.resolve().then(() => request({ method, path, body })).then((value) => {
+      if (Object.hasOwn(value ?? {}, 'ok')) {
+        if (value.ok !== true) throw historyError(value.code ?? 'order-unavailable', 503);
+        const { ok, ...witness } = value; return witness;
+      }
+      return value;
+    }).then(resolve, reject).finally(() => clearTimeout(timer));
   });
   return {
     reserve: (body) => call('POST', '/internal/v2/order/reserve', body),
@@ -53,9 +59,10 @@ export function createAccountOrderClient({ request, timeoutMs = 15_000 } = {}) {
 }
 function affected(fence, operation) {
   const actor = operation.actor;
-  if (fence.kind === 'delete' || fence.kind === 'agent-disabled') return true;
+  if (fence.kind === 'delete') return true;
+  if (fence.kind === 'agent-disabled') return fence.runIds.includes(actor.runId);
   if (fence.kind === 'stop') return actor.runId === fence.runId;
-  if (fence.kind === 'private') return actor.conversationId === fence.conversationId && actor.accountId !== fence.ownerAccountId;
+  if (fence.kind === 'private') return fence.runIds.includes(actor.runId) && actor.conversationId === fence.conversationId && actor.accountId !== fence.ownerAccountId;
   if (fence.kind === 'credential') {
     if (!fence.loginIds.includes(actor.loginId)) return false;
     return !(fence.retainedRuns ?? []).some((run) => ['accountId', 'loginId', 'credentialId', 'loginGeneration', 'runGrantId', 'runId', 'messageId', 'conversationId'].every((field) => run[field] !== undefined && run[field] === actor[field]));
@@ -64,9 +71,11 @@ function affected(fence, operation) {
 }
 
 /** All document submit/fence entry points must use this one coordinator and its history store. */
-export function createPasswordOrder({ history, account, verifyWitness, checkGate, docAttestationPrivateKey, failpoint = () => {}, acknowledgeFence } = {}) {
+export function createPasswordOrder({ history, account, verifyWitness, checkGate, docAttestationPrivateKey, failpoint = () => {}, acknowledgeFence, onFenceRequested } = {}) {
   if (!history || !account || typeof verifyWitness !== 'function' || typeof checkGate !== 'function') throw historyError('order-unavailable', 503);
   const queues = new Map();
+  const reconciled = new Set();
+  async function query(witnessId) { try { return await account.get(witnessId); } catch (error) { if (error.code === 'witness-not-found' || error.status === 404) throw historyError('needs-reconciliation'); throw error; } }
   function locked(projectId, fn) {
     const work = (queues.get(projectId) ?? Promise.resolve()).then(fn);
     const tail = work.catch(() => {}); queues.set(projectId, tail);
@@ -78,6 +87,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     const result = await checkGate({ operation, phase, witness });
     if (result?.allowed !== true) throw historyError('operation-forbidden', 403);
     localGate(operation); // A control-plane fence may arrive while the owner checks its authorities.
+    if (result.retainedGrant && history.fences(operation.projectId).some((fence) => fence.kind === 'private' && fence.runIds.includes(operation.actor.runId) && fence.conversationId === operation.actor.conversationId)) throw historyError('private-overrides-retained', 403);
     return result;
   }
   async function accept(operation, witness) {
@@ -91,7 +101,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
   async function resolveWitness(operation, { resume = false } = {}) {
     history.verifyPrepared(operation);
     const binding = operationBinding(operation);
-    let witness = operation.witness ? await account.get(operation.witness.witnessId) : await account.reserve(binding);
+    let witness = operation.witness ? await query(operation.witness.witnessId) : await account.reserve(binding);
     verifyWitness(witness, operation);
     if (witness.state === 'sealed') return accept(operation, witness);
     if (witness.state === 'cancelled') return history.cancelOperation(operation, witness);
@@ -114,6 +124,15 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     return accept(operation, sealed);
   }
   async function recoverProject(projectId) {
+    for (const fence of history.fences(projectId)) if (fence.state === 'requested') onFenceRequested?.(fence);
+    history.validate(projectId);
+    if (!reconciled.has(projectId)) {
+      for (const op of history.accepted(projectId)) {
+        const witness = await query(op.witness.witnessId); verifyWitness(witness, op);
+        if (canonical(witness) !== canonical(op.witness)) throw historyError('needs-reconciliation');
+      }
+      reconciled.add(projectId);
+    }
     for (const operation of history.pending(projectId)) await resolveWitness(operation);
     for (const fence of history.fences(projectId)) if (fence.state === 'requested') { const { state, ...body } = fence; history.commitFence(body); }
   }
@@ -121,8 +140,9 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     return locked(spec.projectId, async () => {
       const prior = history.get(spec.projectId, spec.opId);
       if (prior) {
+        history.validate(spec.projectId);
         history.prepareOperation(spec); // Checks the complete immutable request, including actor and result.
-        if (prior.state === 'materialized') { verifyWitness(prior.witness, prior); history.verifyPrepared(prior); return prior; }
+        if (prior.state === 'materialized') { const witness = await query(prior.witness.witnessId); verifyWitness(witness, prior); if (canonical(witness) !== canonical(prior.witness)) throw historyError('needs-reconciliation'); return prior; }
         if (prior.state === 'cancelled') throw historyError('operation-cancelled');
         return resolveWitness(prior, { resume: true });
       }
@@ -134,15 +154,23 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
   }
   function fence(value) {
     if (!value?.id || !value.projectId || !['stop', 'private', 'delete', 'agent-disabled', 'credential'].includes(value.kind)) throw historyError('bad-fence', 400);
+    if (['private', 'agent-disabled'].includes(value.kind) && (!Array.isArray(value.runIds) || value.runIds.some((run) => typeof run !== 'string' || !run))) throw historyError('bad-fence', 400);
+    if (value.kind === 'private' && (!value.conversationId || !value.ownerAccountId)) throw historyError('bad-fence', 400);
+    if (value.kind === 'stop' && !value.runId) throw historyError('bad-fence', 400);
+    if (value.kind === 'credential' && (!Array.isArray(value.loginIds) || value.loginIds.some((login) => typeof login !== 'string' || !login))) throw historyError('bad-fence', 400);
     history.requestFence(value); // Durable request pauses affected new writes/read control immediately; not completion.
+    failpoint('fence-request-after-commit');
+    onFenceRequested?.(value); // Owner synchronously closes/rejects reads and tool dispatch; errors cannot undo the durable pause.
     return locked(value.projectId, async () => {
       await recoverProject(value.projectId);
       history.commitFence(value); failpoint('fence-after-commit');
-      const ack = acknowledgeFence ? await acknowledgeFence(value) : null;
+      const ack = history.fenceReceipt(value.id) ?? (acknowledgeFence ? await acknowledgeFence(value) : null);
+      if (ack?.durable === true) history.recordFenceReceipt(value, ack);
+      failpoint('fence-ack-after-commit');
       return { ...value, state: 'committed', complete: ack?.durable === true, acknowledgement: ack ?? null };
     });
   }
-  return { submit, fence, resolveWitness, recover: (projectId) => locked(projectId, () => recoverProject(projectId)) };
+  return { submit, fence, recover: (projectId) => locked(projectId, () => recoverProject(projectId)) };
 }
 
 /** 0.7.18 only records the candidate interval; no compensation is performed. */
@@ -154,7 +182,7 @@ export function passwordCandidates({ event, operations, projectId }) {
   for (const operation of operations) {
     const actor = operation.actor; const witness = operation.witness;
     if (!['accepted', 'materialized'].includes(operation.state) || operation.projectId !== projectId || actor.accountId !== (event.accountId ?? event.account_id) ||
-        !event.oldLoginIds.includes(actor.loginId) || !Number.isSafeInteger(actor.loginGeneration) || !actor.credentialId || witness?.state !== 'sealed' || witness.orderSeq <= start || witness.orderSeq > end) continue;
+        !event.oldLoginIds.includes(actor.loginId) || !Number.isSafeInteger(actor.loginGeneration) || !actor.credentialId || witness?.state !== 'sealed' || !Number.isSafeInteger(witness.orderSeq) || witness.orderSeq <= start || witness.orderSeq > end) continue;
     const grant = witness.authorization;
     if (grant?.kind === 'retained' && grant.projectId === projectId && ['runGrantId', 'runId', 'messageId', 'conversationId'].every((key) => grant[key] === actor[key])) exempt.push(operation.opId);
     else candidates.push(operation.opId);

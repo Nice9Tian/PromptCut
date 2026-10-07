@@ -54,6 +54,7 @@ export function openOperationHistory(file, { failpoint = () => {}, maxBytes = 25
   try {
     owner.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS owner(singleton INTEGER);');
     db = new DatabaseSync(file);
+    if (db.prepare('PRAGMA user_version').get().user_version > 2) throw historyError('unsupported-history-version');
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,rev INTEGER NOT NULL,snapshot TEXT NOT NULL,versions TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS operations(project_id TEXT NOT NULL,op_id TEXT NOT NULL,request_id TEXT NOT NULL,state TEXT NOT NULL,input_digest TEXT NOT NULL,prepared_digest TEXT NOT NULL,payload_digest TEXT NOT NULL,prepared TEXT NOT NULL,witness TEXT,PRIMARY KEY(project_id,op_id),UNIQUE(request_id));
@@ -142,24 +143,49 @@ export function openOperationHistory(file, { failpoint = () => {}, maxBytes = 25
       const current = get(op.projectId, op.opId);
       if (['accepted', 'materialized'].includes(current.state) || witness?.state === 'sealed') throw historyError('already-accepted');
       q("UPDATE operations SET state='cancelled',witness=? WHERE project_id=? AND op_id=?").run(witness ? canonical(witness) : null, op.projectId, op.opId);
-      append(op.projectId, 'cancelled-op', { opId: op.opId }); return get(op.projectId, op.opId);
+      append(op.projectId, 'cancelled-op', { opId: op.opId }); failpoint('cancelled-before-commit'); return get(op.projectId, op.opId);
     });
   }
   function requestFence(fence) {
     return tx(() => {
       const prior = q('SELECT * FROM fences WHERE id=?').get(fence.id);
       if (prior) { if (prior.payload !== canonical(fence)) throw historyError('fence-id-mismatch'); return JSON.parse(prior.payload); }
-      q("INSERT INTO fences VALUES(?,?,'requested',?)").run(fence.id, fence.projectId, canonical(fence)); append(fence.projectId, 'fence-requested', fence); return copy(fence);
+      q("INSERT INTO fences VALUES(?,?,'requested',?)").run(fence.id, fence.projectId, canonical(fence)); append(fence.projectId, 'fence-requested', fence); failpoint('fence-request-before-commit'); return copy(fence);
     });
   }
   function commitFence(fence) {
     return tx(() => {
       if (q("SELECT 1 FROM operations WHERE project_id=? AND state IN ('prepared','reserved','accepted')").get(fence.projectId)) throw historyError('pending-operation');
+      const prior = q('SELECT state FROM fences WHERE id=?').get(fence.id);
+      if (!prior) throw historyError('fence-not-found');
+      if (prior.state === 'committed') return copy(fence);
       q("UPDATE fences SET state='committed' WHERE id=?").run(fence.id); append(fence.projectId, 'fence-committed', fence); failpoint('fence-before-commit'); return copy(fence);
     });
   }
+  function validate(projectId) {
+    const genesis = q("SELECT payload FROM journal WHERE project_id=? AND kind='project-created' ORDER BY seq LIMIT 1").get(projectId);
+    if (!genesis) throw historyError('needs-reconciliation');
+    let value = JSON.parse(genesis.payload).snapshot; let rev = 0; let orderSeq = 0; const versions = {};
+    const rows = q("SELECT * FROM operations WHERE project_id=? AND state IN ('accepted','materialized') ORDER BY json_extract(prepared,'$.projectRev')").all(projectId);
+    for (const row of rows) {
+      const op = decode(row); const prepared = verifyPrepared(op);
+      if (op.expectedRev !== rev || op.projectRev !== rev + 1 || digest(op.before) !== digest(value) || !Number.isSafeInteger(op.witness?.orderSeq) || op.witness.orderSeq <= orderSeq) throw historyError('needs-reconciliation');
+      const accepted = q("SELECT payload FROM journal WHERE project_id=? AND kind='accepted-op' AND json_extract(payload,'$.opId')=?").get(projectId, op.opId);
+      const preparedLog = q("SELECT payload FROM journal WHERE project_id=? AND kind='prepared-op' AND json_extract(payload,'$.opId')=?").get(projectId, op.opId);
+      if (!accepted || canonical(JSON.parse(accepted.payload).witness) !== canonical(op.witness) || !preparedLog || canonical(JSON.parse(preparedLog.payload)) !== canonical({ ...prepared, preparedDigest: op.preparedDigest, payloadDigest: op.payloadDigest })) throw historyError('needs-reconciliation');
+      orderSeq = op.witness.orderSeq;
+      if (op.state === 'materialized') { rev = op.projectRev; value = op.after; for (const change of op.changes) versions[change.itemKey] = change.afterVersion; }
+    }
+    const acceptedCount = q("SELECT COUNT(*) AS n FROM journal WHERE project_id=? AND kind='accepted-op'").get(projectId).n;
+    const current = snapshot(projectId);
+    if (acceptedCount !== rows.length || current.projectRev !== rev || digest(current.value) !== digest(value) || canonical(current.versions) !== canonical(versions)) throw historyError('needs-reconciliation');
+    return current;
+  }
+  const fenceReceipt = (id) => { const row = q("SELECT payload FROM journal WHERE kind='fence-acknowledged' AND json_extract(payload,'$.id')=?").get(id); return row ? JSON.parse(row.payload).receipt : null; };
   return { prepareOperation, recordWitness, recordAcceptedOperation, materialize, cancelOperation, requestFence, commitFence, get, snapshot, verifyPrepared,
-    createProject(projectId, initial = {}) { tx(() => { if (!q('SELECT 1 FROM projects WHERE id=?').get(projectId)) q('INSERT INTO projects VALUES(?,0,?,?)').run(projectId, canonical(initial), '{}'); }); },
+    validate, fenceReceipt,
+    recordFenceReceipt(fence, receipt) { return tx(() => { if (receipt?.durable !== true || q('SELECT state FROM fences WHERE id=?').get(fence.id)?.state !== 'committed') throw historyError('fence-not-acknowledged'); const prior = fenceReceipt(fence.id); if (prior) return prior; append(fence.projectId, 'fence-acknowledged', { id: fence.id, receipt }); failpoint('fence-ack-before-commit'); return copy(receipt); }); },
+    createProject(projectId, initial = {}) { tx(() => { if (!q('SELECT 1 FROM projects WHERE id=?').get(projectId)) { q('INSERT INTO projects VALUES(?,0,?,?)').run(projectId, canonical(initial), '{}'); append(projectId, 'project-created', { snapshot: initial }); } }); },
     pending: (projectId) => q("SELECT * FROM operations WHERE project_id=? AND state IN ('prepared','reserved','accepted')").all(projectId).map(decode),
     accepted: (projectId) => q("SELECT * FROM operations WHERE project_id=? AND state IN ('accepted','materialized') ORDER BY json_extract(prepared,'$.projectRev')").all(projectId).map(decode),
     fences: (projectId) => q('SELECT * FROM fences WHERE project_id=?').all(projectId).map((row) => ({ ...JSON.parse(row.payload), state: row.state })),

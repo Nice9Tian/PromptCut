@@ -14,7 +14,7 @@ test('password-order exact acceptance: complete prepared, signed seal, accepted 
   const input = spec('one'); const result = await f.coordinator.submit(input);
   assert.equal(result.state, 'materialized'); assert.equal(f.history.snapshot('project-one').value.title, 'one');
   assert.deepEqual((await f.coordinator.submit(input)), result);
-  assert.deepEqual(f.history.journal('project-one').map((row) => row.kind), ['prepared-op', 'reserved-op', 'accepted-op', 'materialized-op']);
+  assert.deepEqual(f.history.journal('project-one').map((row) => row.kind), ['project-created', 'prepared-op', 'reserved-op', 'accepted-op', 'materialized-op']);
   await assert.rejects(f.coordinator.submit({ ...input, result: { altered: true } }), { code: 'operation-id-mismatch' });
 });
 test('password-order reserve/password/seal gap uses seal sequence, not clock or reservation', async (t) => {
@@ -49,7 +49,7 @@ test('password-order fence while reserve waits cancels unaccepted operation; ano
   } }); t.after(() => f.close());
   const submit = f.coordinator.submit(spec('paused', { principal })); const failed = assert.rejects(submit, { code: 'operation-fenced' });
   await waiting;
-  const fence = f.coordinator.fence({ id: 'private', projectId: 'project-one', kind: 'private', conversationId: 'conversation', ownerAccountId: actorOther.accountId });
+  const fence = f.coordinator.fence({ id: 'private', projectId: 'project-one', kind: 'private', conversationId: 'conversation', ownerAccountId: actorOther.accountId, runIds: ['run'] });
   const other = await f.coordinator.submit(spec('other-project', { projectId: 'project-two' })); assert.equal(other.state, 'materialized');
   release(); await failed; const result = await fence;
   assert.equal(result.complete, false, 'No durable service ACK is not completion');
@@ -88,4 +88,59 @@ test('password-order bad signature or digest never changes visible state', async
     try { await assert.rejects(f.coordinator.submit(spec('bad')), { code: 'bad-witness' }); assert.equal(f.history.snapshot('project-one').projectRev, 0); }
     finally { f.close(); }
   }
+});
+
+test('password-order private and disabled fences never revive old runs but permit new runs after current authority reopens', async (t) => {
+  for (const kind of ['private', 'agent-disabled']) {
+    let open = false;
+    const f = await fixture({ dir: tmp(), checkGate: async () => ({ allowed: open }) });
+    try {
+      const principal = { ...actor, runGrantId: 'grant', runId: 'old-run', messageId: 'message', conversationId: 'conversation' };
+      await f.coordinator.fence({ id: kind, kind, projectId: 'project-one', runIds: ['old-run'], ...(kind === 'private' ? { conversationId: 'conversation', ownerAccountId: actorOther.accountId } : {}) });
+      await assert.rejects(f.coordinator.submit(spec('closed', { principal: { ...principal, runId: 'new-run' } })), { code: 'operation-forbidden' });
+      open = true;
+      await assert.rejects(f.coordinator.submit(spec('old', { principal })), { code: 'operation-fenced' });
+      assert.equal((await f.coordinator.submit(spec('new', { principal: { ...principal, runId: 'new-run', runGrantId: 'new-grant', messageId: 'new-message' } }))).state, 'materialized');
+    } finally { f.close(); }
+  }
+});
+
+test('password-order precise retained run survives credential fence; private covers even owner retained run', async (t) => {
+  const principal = { ...actor, runGrantId: 'grant', runId: 'run', messageId: 'message', conversationId: 'conversation' };
+  const grant = { ...principal, projectId: 'project-one', state: 'retained', visibilityAtRead: 'shared', readConfirmed: true, currentRun: true, readReceiptId: 'read', fenceRevision: 1 };
+  const f = await fixture({ dir: tmp(), checkGate: async () => ({ allowed: true, retainedGrant: grant }) }); t.after(() => f.close());
+  const event = f.account.change(); f.account.choose(event, true);
+  await f.coordinator.fence({ id: 'logout', kind: 'credential', projectId: 'project-one', loginIds: [actor.loginId], retainedRuns: [principal] });
+  const accepted = await f.coordinator.submit(spec('retained', { principal }));
+  assert.equal(accepted.witness.authorization.kind, 'retained');
+  await assert.rejects(f.coordinator.submit(spec('wrong-message', { expectedRev: 1, principal: { ...principal, messageId: 'other' } })), { code: 'operation-fenced' });
+  await f.coordinator.fence({ id: 'private-owner', kind: 'private', projectId: 'project-one', runIds: ['run'], conversationId: 'conversation', ownerAccountId: actor.accountId });
+  await assert.rejects(f.coordinator.submit(spec('owner-retained-private', { expectedRev: 1, principal })), { code: 'private-overrides-retained' });
+});
+
+test('password-order global sequence gaps from other project and consecutive password events remain ordered across restart', async (t) => {
+  const dir = tmp(); const pair = keys(); let f = await fixture({ dir, pair });
+  const first = await f.coordinator.submit(spec('first'));
+  const e1 = f.account.change('change-one'); f.account.choose(e1, false);
+  await f.coordinator.submit(spec('other', { projectId: 'project-two' }));
+  const e2 = f.account.change('change-two');
+  const last = await f.coordinator.submit(spec('last', { expectedRev: 1 }));
+  assert.ok(last.witness.orderSeq > first.witness.orderSeq + 1);
+  const candidate = (event) => passwordCandidates({ event: { ...event, choice: 'exit', endOrderSeq: last.witness.orderSeq }, operations: f.history.accepted('project-one'), projectId: 'project-one' });
+  assert.deepEqual(candidate(e1).candidates, ['last']); assert.deepEqual(candidate(e2).candidates, ['last']);
+  const before = f.history.snapshot('project-one'); f.history.checkpoint(); f.close();
+  // Portable simulator has no persistent account truth; actual-provider mode proves both sides survive restart.
+  if (process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT) { f = await fixture({ dir, pair }); try { await f.coordinator.recover('project-one'); assert.deepEqual(f.history.snapshot('project-one'), before); } finally { f.close(); } }
+});
+
+test('password-order candidate interval excludes other account/new login/outside range and only exact retained scope', () => {
+  const event = { choice: 'exit', accountId: actor.accountId, oldLoginIds: [actor.loginId], changeSeq: 10, endOrderSeq: 20 };
+  const make = (opId, principal, seq, extra = {}) => ({ opId, actor: principal, projectId: 'project-one', state: 'materialized', witness: { state: 'sealed', orderSeq: seq, ...extra } });
+  const run = { ...actor, runGrantId: 'grant', runId: 'run', messageId: 'message', conversationId: 'conversation' };
+  const authorization = { kind: 'retained', projectId: 'project-one', runGrantId: 'grant', runId: 'run', messageId: 'message', conversationId: 'conversation' };
+  const operations = [make('old', actor, 11), make('other', actorOther, 12), make('new', actorNew, 13), make('before', actor, 10), make('later', actor, 21), make('invalid', actor, null), make('exact', run, 14, { authorization }), make('different-run', { ...run, runId: 'other' }, 15, { authorization })];
+  const result = passwordCandidates({ event, operations, projectId: 'project-one' });
+  assert.deepEqual(result.candidates, ['old', 'different-run']); assert.deepEqual(result.exempt, ['exact']);
+  assert.deepEqual(passwordCandidates({ event: { ...event, choice: 'retain' }, operations, projectId: 'project-one' }).candidates, []);
+  assert.equal(passwordCandidates({ event: { ...event, endOrderSeq: null }, operations, projectId: 'project-one' }).state, 'needs-reconciliation');
 });
