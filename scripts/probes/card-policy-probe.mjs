@@ -121,7 +121,7 @@ await serve(BASE + 2, (req, res) => {
   if (req.url === '/font.ttf') return reply(res, 200, 'font/ttf', font, headers);
   return reply(res, 404, 'text/plain', 'missing', headers);
 });
-const browser = await puppeteer.launch({ headless: !process.argv.includes('--headful'), args: [...PROBE_CHROME_ARGS, '--no-sandbox'] });
+const browser = await puppeteer.launch({ headless: !process.argv.includes('--headful'), pipe: true, args: [...PROBE_CHROME_ARGS, '--no-sandbox'] });
 const browserVersion = await browser.version();
 const checks = [], results = {};
 function check(name, ok, detail) { checks.push({ name, ok: !!ok, detail });console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); }

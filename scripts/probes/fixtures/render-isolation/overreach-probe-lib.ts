@@ -228,6 +228,12 @@ export async function runOverreach(ctx: Ctx): Promise<Report> {
   section(async () => {
   if (ctx.collector) {
     const c = ctx.collector;
+    await t('collector.resource.image', async () => {const image=new Image();image.src=`${c}/collect.png?tag=${ctx.tag}`;await image.decode();return image.naturalWidth===4?'loaded':'invalid';});
+    await t('collector.resource.font', async () => {const font=new FontFace('HostedPublicProbe',`url(${c}/public-font.ttf)`);document.fonts.add(await font.load());return font.status;});
+    const stylesheet = async (url: string) => {const link=document.createElement('link');link.rel='stylesheet';link.href=url;const ready=new Promise<void>((resolve,reject)=>{link.onload=()=>resolve();link.onerror=()=>reject(new Error('样式载入失败'));});document.head.append(link);await ready;};
+    await t('collector.resource.style', async () => {await stylesheet(`${c}/public-style.css`);return getComputedStyle(document.documentElement).getPropertyValue('--pc-public-style').trim();});
+    await t('collector.resource.import', async () => {await stylesheet(`${c}/public-import.css`);return getComputedStyle(document.documentElement).getPropertyValue('--pc-public-import').trim();});
+    await t('collector.resource.script', async () => {const script=document.createElement('script');script.src=`${c}/public-script.js`;const ready=new Promise<void>((resolve,reject)=>{script.onload=()=>resolve();script.onerror=()=>reject(new Error('脚本载入失败'));});document.head.append(script);await ready;return String((globalThis as any).__pcPublicExternalScript);});
     await Promise.all([
       t("collector.fetch", () => fetchText(`${c}/collect?via=fetch&tag=${ctx.tag}`, { mode: "no-cors" })),
       t("collector.post", () => fetchText(`${c}/collect?via=post&tag=${ctx.tag}`, { method: "POST", mode: "no-cors", body: "overreach-probe" })),

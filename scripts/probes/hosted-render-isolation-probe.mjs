@@ -83,6 +83,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { PNG } from 'pngjs';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startHostedCombo, hostedPaths } from '../../server/hosted/combo.mjs';
@@ -158,8 +159,22 @@ const status = async () => (await fetch(`${STATUS}/status`, { signal: AbortSigna
 
 /* ------------------------------------------------------------------ 收集站（测试专用的外部地址） */
 const collector = { tcp: 0, http: [], udp: 0 };
+const publicFontPath = [arg('--font', ''), 'C:/Windows/Fonts/arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'].find(p => p && fs.existsSync(p));
+if (!publicFontPath) throw new Error('外链字体探针需要已安装的公开字体（--font），不安装依赖');
+const publicFont = fs.readFileSync(publicFontPath);
+const publicPng = new PNG({width: 4, height: 4});publicPng.data.fill(255);
 const collectorSrv = http.createServer((req, res) => {
   collector.http.push(`${req.method} ${String(req.url).slice(0, 80)}`);
+  const pathname = new URL(req.url, COLLECTOR).pathname;
+  const resource = {
+    '/collect.png': ['image/png', PNG.sync.write(publicPng)],
+    '/public-font.ttf': ['font/ttf', publicFont],
+    '/public-script.js': ['application/javascript', 'window.__pcPublicExternalScript="loaded";'],
+    '/public-style.css': ['text/css', ':root{--pc-public-style:loaded}'],
+    '/public-import.css': ['text/css', `@import url("//127.0.0.1:${PORTS.collector}/public-nested.css") layer(public) supports(display: grid) screen;`],
+    '/public-nested.css': ['text/css', ':root{--pc-public-import:loaded}'],
+  }[pathname];
+  if (resource) { res.writeHead(200, {'access-control-allow-origin':'*','content-type':resource[0]});res.end(resource[1]);return; }
   res.writeHead(200, { 'access-control-allow-origin': '*', 'content-type': 'text/plain' });
   res.end('collected');
 });
@@ -563,6 +578,10 @@ async function main() {
   const meta=itemsOf(all,'metadata.');
   check('E3','metadata出口测试不适用，夹具没有请求真实地址',meta.length>0&&meta.every(it=>it.name==='metadata.not-applicable'),meta);
   check('F','公开外链收集站收到卡片请求',collector.http.length>0,{tcp:collector.tcp,http:collector.http.length,udp:collector.udp});
+  for (const kind of ['image','font','style','script','import']) {
+    const entries = itemsOf(jiaReports, `collector.resource.${kind}`);
+    check('F', `真实云worker外链 ${kind} 载入`, entries.length > 0 && entries.every(it => it.ok && it.got === 'loaded'), entries);
+  }
   const outside = itemsOf(all, 'outside[');
   const outsideHit = outside.filter((it) => fakesIn(`${it.got ?? ''}${it.err ?? ''}`).length > 0);
   // 回 200 的只能是开发服务器对「不认识的路径」统一回的首页（路径里的 .. 被浏览器先折掉了），不是那个文件
