@@ -338,7 +338,8 @@ try {
     check(out.steps.smallFirst.riff === 'RIFF' && out.steps.smallFirst.webp === 'WEBP', '小尺寸是 WebP', out.steps.smallFirst);
   }
   const longTasks = await P(page, () => window.__pcLongTasks.slice()).catch(() => []);
-  // M7-A12(生成快照期间主文档长任务 0)只记不判:长任务受机器忙闲影响,带耗时门槛的项在笔记本判(verification.md「性能基准机」)
+  // M7-A12(生成快照期间主文档长任务 0)在这支探针里只记不判(m7-browser-probe 的 A12 判)。原来的理由是「带耗时门槛的项在笔记本判」,那条规则 2026-10-07 已作废;
+  // 按 verification.md「耗时只记录,不当闸门」长任务数是不看时间的断言。这里要不要改成判,待用户定(REPORT-verification-rework.md 第 4 节)
   out.steps.page = { longTasks: longTasks.length, worst: longTasks.sort((a, b) => b.ms - a.ms).slice(0, 3), errors: pageErrors.slice(0, 5), assetWrites: assetReqs.filter((a) => a.method === 'PUT').length };
   await shot(page, 'm7-node-after');
 

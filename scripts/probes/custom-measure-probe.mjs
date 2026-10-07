@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 import { findFfmpeg } from '../../server/ai-visual.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -41,6 +42,8 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 const fails = [];
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):死循环脚本被终止用了多久只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('custom-measure-probe');
 const passes = [];
 const out = { port: PORT, exportDir: EXPORT_DIR };
 const check = (cond, label, extra) => {
@@ -181,7 +184,8 @@ try {
   const loop = await mcpCall('measure_audio_js', { mediaId: placed.mediaId, sampleRate: 8000, code: 'while (true) {}', timeoutMs: 2000 }, conv);
   const loopMs = Date.now() - t0;
   out.loop = { ...loop, ms: loopMs };
-  check(loop?.ok === false && loop.kind === 'timeout' && /超过 2 秒,已终止/.test(String(loop.error)) && loopMs < 2000 + 15000, 'M4 死循环在时限内终止,错误写明超时', out.loop);
+  timingLog.record('M4 死循环脚本从调用到被终止', loopMs, { formerLimit: '< 17 秒(脚本时限 2 秒 + 15 秒余量)' });
+  check(loop?.ok === false && loop.kind === 'timeout' && /超过 2 秒,已终止/.test(String(loop.error)), 'M4 死循环被终止,错误写明超时(用时只记录)', out.loop);
   t0 = Date.now();
   const alive = await fetch(EDITOR + '/api/prerender/info').then((r) => r.ok, () => false);
   check(alive && Date.now() - t0 < 5000, 'M4 死循环之后编辑器照常应答', { alive, ms: Date.now() - t0 });
@@ -215,4 +219,5 @@ for (const p of passes) console.log('PASS', p);
 for (const f of fails) console.log('FAIL', f);
 if (fails.length) console.log(editorLog.join('').slice(-3000));
 console.log(fails.length ? `探针未过:${fails.length} 项失败,${passes.length} 项通过` : `探针通过:${passes.length} 项`);
+timingLog.print();
 process.exit(fails.length ? 1 : 0);

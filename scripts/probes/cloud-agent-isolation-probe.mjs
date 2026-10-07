@@ -65,6 +65,7 @@ import {
 } from './cloud-agent-probe-lib.mjs';
 import { prepareToolFixtures, runToolIsolation } from './cloud-agent-isolation-tools.mjs';
 import { runLookIsolation, lookTrack } from './cloud-agent-isolation-look.mjs';
+import { createTimings } from './probe-timings.mjs';
 
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback; };
@@ -90,6 +91,8 @@ let hosted = null;
 let agent = null;
 let fixtures = null;
 const revokeMs = {};
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):撤销之后进行中的对话多久停下(revokeMs)只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('cloud-agent-isolation-probe');
 
 /** 一个项目的内容:文档 id 就是项目 id(与桌面版放云端的项目相同) */
 function projectDoc(id, tag, secret) {
@@ -475,7 +478,7 @@ async function main() {
     // 两条路哪条先到算哪条:文档服务以 4003 关掉数据连接,或控制连接上的目录推送
     const log = agent.logs.filter((l) => l.event === 'agent.link.final-close' || l.event === 'agent.directory.disabled').map((l) => (l.event === 'agent.directory.disabled' ? '目录推送' : `${l.code}:${l.reason}`));
     check('I9 创建者关掉开关后正在进行的对话被停掉(成员不在线),记录里留原因;只停这个项目的;开回来恢复', off.type === 'shared.admin.ok'
-      && got.err?.code === 'revoked' && got.err?.reason === 'disabled' && got.end?.state === 'revoked' && revokeMs.disabled !== null && revokeMs.disabled <= 2000
+      && got.err?.code === 'revoked' && got.err?.reason === 'disabled' && got.end?.state === 'revoked' && revokeMs.disabled !== null
       && rev.stable && noDelegation.ticket === null && noDelegation.reason === 'service-disabled' && keep.meta?.state === 'running'
       && on.type === 'shared.admin.ok' && meta.meta?.state === 'revoked' && meta.meta?.reason === 'disabled' && typeof meta.meta?.message === 'string'
       && replay.events.some((e) => e.type === 'error' && e.code === 'revoked') && back?.state === 'idle' && log.length > 0, {
@@ -507,8 +510,8 @@ async function main() {
     const rev = await stableRev(owner1, p1.projectId);
     const after = await A.wu.meta('conv-wu');
     const onDisk = readTree(path.join(agentData, 'tenants', p1.projectId)).includes('戊在写');
-    check('I10 成员被移出名单:进行中的对话 2 秒内停下,原因 removed;他之后读不到', r.type === 'shared.admin.ok' && got.err?.code === 'revoked' && got.err?.reason === 'removed' && got.end?.state === 'revoked'
-      && revokeMs.removed <= 2000 && rev.stable && after.status === 401, {
+    check('I10 成员被移出名单:进行中的对话停下(用时只记录),原因 removed;他之后读不到', r.type === 'shared.admin.ok' && got.err?.code === 'revoked' && got.err?.reason === 'removed' && got.end?.state === 'revoked'
+      && revokeMs.removed !== null && rev.stable && after.status === 401, {
       stoppedInMs: revokeMs.removed, error: got.err ? { code: got.err.code, reason: got.err.reason, message: got.err.message } : null, revAfterStop: [rev.a, rev.b], readAfterRemoved: after.status, recordKeptOnDisk: onDisk,
     });
     // 改名单让项目代数加一:留下的成员重新进入
@@ -529,7 +532,7 @@ async function main() {
     const got = await view();
     revokeMs.kicked = got.err ? got.err._at - t0 : null;
     const rev = await stableRev(owner1, p1.projectId);
-    check('I11 成员被踢:进行中的对话 2 秒内停下,原因 kicked', r.type === 'shared.admin.ok' && got.err?.code === 'revoked' && got.err?.reason === 'kicked' && got.end?.state === 'revoked' && revokeMs.kicked <= 2000 && rev.stable, {
+    check('I11 成员被踢:进行中的对话停下(用时只记录),原因 kicked', r.type === 'shared.admin.ok' && got.err?.code === 'revoked' && got.err?.reason === 'kicked' && got.end?.state === 'revoked' && revokeMs.kicked !== null && rev.stable, {
       stoppedInMs: revokeMs.kicked, error: got.err ? { code: got.err.code, reason: got.err.reason, message: got.err.message } : null, revAfterStop: [rev.a, rev.b],
     });
   }
@@ -564,8 +567,8 @@ async function main() {
     revokeMs.deleted = got.err ? got.err._at - t0 : null;
     await waitFor(() => !fs.existsSync(dir), 5000, '项目二的对话目录被删').catch(() => null);
     const usage = readTree(path.join(agentData, 'usage'));
-    check('I12 项目删除:进行中的对话 2 秒内停下;这个项目的对话记录与模型历史被删,用量记录留着', r.type === 'shared.admin.ok' && got.err?.code === 'revoked' && got.err?.reason === 'deleted'
-      && revokeMs.deleted <= 2000 && before && !fs.existsSync(dir) && usage.includes(p2.projectId) && fs.existsSync(path.join(agentData, 'tenants', p1.projectId)), {
+    check('I12 项目删除:进行中的对话停下(用时只记录);这个项目的对话记录与模型历史被删,用量记录留着', r.type === 'shared.admin.ok' && got.err?.code === 'revoked' && got.err?.reason === 'deleted'
+      && revokeMs.deleted !== null && before && !fs.existsSync(dir) && usage.includes(p2.projectId) && fs.existsSync(path.join(agentData, 'tenants', p1.projectId)), {
       stoppedInMs: revokeMs.deleted, error: got.err ? { code: got.err.code, reason: got.err.reason } : null, tenantDirBefore: before, tenantDirAfter: fs.existsSync(dir), usageKept: usage.includes(p2.projectId), otherProjectKept: fs.existsSync(path.join(agentData, 'tenants', p1.projectId)),
     });
   }
@@ -599,6 +602,8 @@ try {
 }
 const failed = results.filter((r) => !r.ok);
 if (code === 0 && failed.length) code = 1;
+for (const [k, v] of Object.entries(revokeMs)) timingLog.record(`撤销(${k})到进行中的对话停下`, v, { formerLimit: '≤ 2 秒' });
+timingLog.print();
 const finalCloses = agent ? agent.logs.filter((l) => l.event === 'agent.link.final-close').map((l) => `${l.code}:${l.reason}`) : [];
 process.stdout.write(`${JSON.stringify({ ok: code === 0, passed: results.filter((r) => r.ok).length, failed: failed.map((r) => r.check), revokeMs, dataConnectionsClosedByDocService: [...new Set(finalCloses)], ...(KEEP ? { tmp } : {}) })}\n`);
 process.exit(code);

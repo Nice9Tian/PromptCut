@@ -41,7 +41,7 @@
  *     左上角像素是预渲染原尺寸的颜色。
  * E9 手机低内存档(仿手机)按现有规则走:运行状态 `low-memory`、参数面板说明「低内存档」、两个文档里都没有执行卡片代码的记号,没有预渲染结果的卡显示图标。
  *
- * 带耗时门槛的项这里不设(时限只放宽到够 PC 与笔记本跑完)。不打印令牌、口令(输出里的票据形状串一律抹掉)。
+ * 耗时只记录,不当通过条件(verification.md「耗时只记录,不当闸门」):E8 换成新版的用时写进 TIMINGS 行;等待时限只为防卡死。不打印令牌、口令(输出里的票据形状串一律抹掉)。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import puppeteer from 'puppeteer';
@@ -53,6 +53,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { seedSharedProject } from './lib-seed.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
@@ -72,6 +73,8 @@ const DOC_DIRECT = `http://127.0.0.1:${DOC_PORT}`;
 fs.mkdirSync(OUT, { recursive: true });
 
 const fails = [];
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):源码更新后舞台换成新版用了多久只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('online-card-exec-probe');
 let pass = 0;
 const short = (v) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s === undefined ? '' : (s.length > 500 ? `${s.slice(0, 500)}…` : s).replace(/v1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, 'v1.***'); };
 const check = (label, ok, detail) => { console.log(`${ok ? '  过' : '不过'}  ${label}${detail !== undefined ? `  〔${short(detail)}〕` : ''}`); if (ok) pass++; else fails.push(label); return !!ok; };
@@ -699,9 +702,10 @@ try {
   const tPut = Date.now();
   const put2 = await putSource(CARD_KEYS['oce-visual'], visualSource('OCE2', '#33ccff'));
   check('E8 创建者写进新一版源码', put2.type === 'content.stored', put2);
-  const swapped = await until('A 舞台里的画面是新版的(OCE2 打头)', async () => { const s = await A.stageState([V.v], PROBES); return /^OCE2 /.test(s?.[V.v]?.text ?? '') ? s : null; }, 20_000, 250);
+  const swapped = await until('A 舞台里的画面是新版的(OCE2 打头)', async () => { const s = await A.stageState([V.v], PROBES); return /^OCE2 /.test(s?.[V.v]?.text ?? '') ? s : null; }, 120_000, 250); // 等待时限只为防卡死(原 20 秒)
   const swapMs = Date.now() - tPut;
-  check('E8 源码更新后 10 秒内舞台里的画面换成新版', !!swapped && swapMs <= 10_000, { swapMs, text: swapped?.[V.v]?.text });
+  timingLog.record('E8 写进新源码到舞台里的画面换成新版', swapped ? swapMs : null, { formerLimit: '≤ 10 秒' });
+  check('E8 源码更新后舞台里的画面换成新版(用时只记录)', !!swapped, { swapMs, text: swapped?.[V.v]?.text });
   const idAfter = await until('A 成本身份换了(新版又测了一次、身份不同)', async () => {
     const ids = await A.page.evaluate((id) => window.__pcPreviewDiag?.()?.probeRun?.probed?.filter((e) => e.clipId === id).map((e) => e.identityKey) ?? [], V.v);
     return ids.length > idBefore.length && new Set(ids).size > new Set(idBefore).size ? ids : null;
@@ -845,5 +849,6 @@ try {
   for (const dir of [dataDir, tmp]) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 临时目录 */ } }
 }
 const ok = fails.length === 0;
+timingLog.print();
 console.log(JSON.stringify({ ok, pass, fail: fails.length, fails, ...summary }));
 process.exit(ok ? 0 : 1);

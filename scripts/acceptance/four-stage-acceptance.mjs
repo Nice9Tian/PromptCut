@@ -1,16 +1,26 @@
 /**
  * 四段连做的最终验收:可断点续跑的清单式运行器(只用 Node 内置模块,加仓库里已有的 scripts/lib)。
  *
- *   node scripts/acceptance/four-stage-acceptance.mjs --list [--json]
- *   node scripts/acceptance/four-stage-acceptance.mjs [--only G0,G0-R,GR-*] [--from <编号>] [--out <目录>] [--resume]
+ *   node scripts/acceptance/four-stage-acceptance.mjs --list [--level local|network|all] [--json]
+ *   node scripts/acceptance/four-stage-acceptance.mjs [--level local] [--only G0,G0-R,GR-*] [--from <编号>] [--out <目录>] [--resume]
  *        [--flaky-rerun 2] [--main-ref main] [--dev-port 5690] [--dev-main-port 5693] [--include-optional] [--dry-run]
+ *        [--release-timings "<版本>"] [--machine-name <名字>]
+ *   node scripts/acceptance/four-stage-acceptance.mjs --timings-from <results.json> --release-timings "<版本>"
  *   node scripts/acceptance/four-stage-acceptance.mjs --check-coverage
  *
- * 清单是数据(`four-stage-manifest.mjs`):每项有编号、名字、类别、命令、工作目录、前置服务、通过标准、
- * 是否带耗时门槛(只在笔记本上作数)、是否只能在新节点上验(脚本不跑)、对应任务书哪一条。选项见 `--help`。
+ * 清单是数据(`four-stage-manifest.mjs`):每项有编号、名字、级别、类别、命令、工作目录、前置服务、通过标准、
+ * 记哪些耗时、对应任务书哪一条。选项见 `--help`。
+ *
+ * 两条规则(`docs/semantics/guide_files/verification.md`):
+ *   - 验证分两级。缺省只跑**本地验证**(合入 main 前跑的就是这一级);**真实网络验证**(`--level network`)只在往节点部署时、
+ *     或改到网络这一层时做,照 `docs/plan/four-stage-deploy-checklist.md` 在节点上做,脚本不跑、只把每项怎么验列出来。小结里两级分开计数。
+ *   - 耗时只记录,不当闸门。探针输出里的 `TIMINGS {…}` 行与每项的整项用时收进 results.json;`--release-timings` 把它们连同机器配置
+ *     (起跑时自动采集:哪台、处理器、核数、内存、显卡、系统;不含任何凭证)排成一节,贴进 `docs/reports/release-timings.md`。
+ *     没有「在某台机器上才作数」的项,在哪台机器上跑都一样判。
  *
  * 输出目录 <out>:
- *   results.json   每项:命令、起止时间、退出码、判定、结果行原文、日志路径(每跑完一项就整份重写,可随时看)
+ *   results.json   每项:命令、起止时间、退出码、判定、结果行原文、耗时数字、日志路径(每跑完一项就整份重写,可随时看);meta 里有机器配置
+ *   release-timings-section.md   给了 --release-timings 时:这一版的发版耗时记录一节
  *   summary.txt    可以直接贴进对话的文本小结(结束或被中断时写)
  *   logs/<编号>.log  每项各自的标准输出与标准错误(并行的几个实例各占一个文件)
  *   services/      dev server、在线构建的日志
@@ -29,7 +39,7 @@
  * 子进程一律 windowsHide(并预载 scripts/lib/test-silent-processes.mjs,孙进程也静默);脚本结束(含 Ctrl-C、被 kill 前的信号)
  * 时把自己起的进程树清掉,只按 pid。不碰不是自己起的进程。
  *
- * 退出码:本次选中的、会跑的项里有 fail / ref-fail / flaky / blocked / missing → 1;否则 0(ref-pass 与 manual / remote 不算失败)。
+ * 退出码:本次选中的、会跑的项里有 fail / flaky / blocked / missing → 1;否则 0(manual / remote 不算失败)。时间数字不影响退出码。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,并设 PROMPTCUT_NO_PORT_FILE=1
 import '../lib/test-silent-processes.mjs'; // 之后起的命令行孙进程也不弹窗
@@ -43,6 +53,7 @@ import { REPO, killTree, portFree, tripleFree, viteBin, waitHttp, startDevServer
 import {
   parseArgs, USAGE, validateManifest, selectItems, planResume, expandCmd, expandPlaceholders, judge, combineAttempts,
   listText, summaryText, commandText, describeItem, coverageReport, DONE_VERDICTS, matrixText, shiftPorts,
+  levelOf, LEVEL_LABEL, releaseTimingsSection,
 } from './acceptance-lib.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,6 +84,37 @@ function resolvePackageBin(pkg, rel) {
   const req = createRequire(path.join(REPO, 'package.json'));
   const pj = req.resolve(`${pkg}/package.json`);
   return path.join(path.dirname(pj), rel);
+}
+
+/**
+ * 这台机器的配置(发版耗时记录用):哪台、处理器、核数、内存、显卡、系统。只读系统信息,不含任何凭证;采不到的留 null。
+ */
+export function collectMachine() {
+  const cpus = os.cpus();
+  const machine = {
+    name: os.hostname(), cpu: cpus[0]?.model?.trim() ?? null, logicalCores: cpus.length, physicalCores: null,
+    memoryBytes: os.totalmem(), gpus: [], os: `${os.type()} ${os.release()} ${os.arch()}`,
+  };
+  const run = (file, args) => {
+    try { const r = spawnSync(file, args, { encoding: 'utf8', windowsHide: true, timeout: 20_000 }); return r.status === 0 ? (r.stdout || '').trim() : ''; } catch { return ''; }
+  };
+  if (process.platform === 'win32') {
+    const ps = (cmd) => run('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd]);
+    machine.gpus = ps('(Get-CimInstance Win32_VideoController).Name').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const cores = Number(ps('(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum'));
+    if (Number.isInteger(cores) && cores > 0) machine.physicalCores = cores;
+    const caption = ps('(Get-CimInstance Win32_OperatingSystem).Caption');
+    if (caption) machine.os = `${caption} ${os.release()} ${os.arch()}`;
+  } else if (process.platform === 'darwin') {
+    machine.gpus = run('system_profiler', ['SPDisplaysDataType']).split(/\r?\n/).map((l) => /Chipset Model:\s*(.+)/.exec(l)?.[1]?.trim()).filter(Boolean);
+    const cores = Number(run('sysctl', ['-n', 'hw.physicalcpu']));
+    if (Number.isInteger(cores) && cores > 0) machine.physicalCores = cores;
+  } else {
+    machine.gpus = run('sh', ['-c', 'lspci 2>/dev/null | grep -i -E "vga|3d|display"']).split(/\r?\n/).map((l) => l.replace(/^\S+\s+[^:]+:\s*/, '').trim()).filter(Boolean);
+    const cores = Number(run('sh', ['-c', "lscpu -p=core,socket 2>/dev/null | grep -v '^#' | sort -u | wc -l"]));
+    if (Number.isInteger(cores) && cores > 0) machine.physicalCores = cores;
+  }
+  return machine;
 }
 
 /* ------------------------------------------------------------------ 进程登记与清理 */
@@ -298,9 +340,17 @@ async function main() {
 
   if (opts.list) {
     let items;
-    try { items = selectItems(ITEMS, { only: opts.only, from: opts.from, includeOptional: true }); } catch (e) { console.error(e.message); return 2; }
+    try { items = selectItems(ITEMS, { only: opts.only, from: opts.from, includeOptional: true, level: opts.level || 'all' }); } catch (e) { console.error(e.message); return 2; }
     console.log(opts.json ? JSON.stringify(items, null, 2) : listText(items));
-    if (!opts.json) console.log(`\n共 ${items.length} 项`);
+    if (!opts.json) console.log(`\n共 ${items.length} 项:` + ['local', 'network'].map((l) => `${LEVEL_LABEL[l]} ${items.filter((it) => levelOf(it) === l).length}`).join(','));
+    return 0;
+  }
+  if (opts.timingsFrom) {
+    // 不跑任何项:用已有的 results.json 出发版耗时记录的一节
+    let run;
+    try { run = JSON.parse(fs.readFileSync(path.resolve(opts.timingsFrom), 'utf8')); } catch (e) { console.error(`读不了 ${opts.timingsFrom}:${e.message}`); return 2; }
+    if (!run.meta.machine) run.meta.machine = collectMachine();
+    console.log(releaseTimingsSection(run, { version: opts.releaseTimings, machineName: opts.machineName }));
     return 0;
   }
   if (opts.matrix) {
@@ -317,8 +367,10 @@ async function main() {
     return rep.unlisted.length ? 1 : 0;
   }
 
+  // 缺省只跑本地验证;真实网络验证要 --level network 单独选(verification.md「本地验证与真实网络验证」)
+  const level = opts.level || 'local';
   let selected;
-  try { selected = selectItems(ITEMS, { only: opts.only, from: opts.from, includeOptional: opts.includeOptional }); } catch (e) { console.error(e.message); return 2; }
+  try { selected = selectItems(ITEMS, { only: opts.only, from: opts.from, includeOptional: opts.includeOptional, level }); } catch (e) { console.error(e.message); return 2; }
 
   const mainWorkspace = mainWorkspaceOf(REPO);
   const out = path.resolve(opts.out || path.join(mainWorkspace, 'work', 'four-stage', 'final-prep', stamp()));
@@ -351,7 +403,9 @@ async function main() {
   const meta = {
     startedAt: nowIso(), finishedAt: null, commit: head, dirtyFiles: dirty, host: os.hostname(), node: process.version,
     platform: `${process.platform} ${os.release()}`, cpus: os.cpus().length, mainRef: opts.mainRef, mainCommit: null, out,
-    args: process.argv.slice(2), manifestItems: ITEMS.length,
+    args: process.argv.slice(2), manifestItems: ITEMS.length, level,
+    machine: opts.dryRun ? null : collectMachine(),
+    timingScale: process.env.PC_PROBE_TIMING_SCALE || null,
   };
   const results = []; // 本次的全部记录(含续跑沿用的)
   for (const { item, previous: prev } of plan.skip) results.push({ ...prev, carried: true });
@@ -370,7 +424,7 @@ async function main() {
 
   if (opts.dryRun) {
     console.log(`将跑 ${plan.run.length} 项(续跑跳过 ${plan.skip.length} 项),输出目录 ${out}`);
-    for (const it of plan.run) console.log(`${it.id}\t${it.name}\t${it.manual ? '[人工]' : it.remoteOnly ? '[新节点]' : commandText(it)}`);
+    for (const it of plan.run) console.log(`${it.id}\t${it.name}\t${it.manual ? '[人工]' : it.remoteOnly ? '[在节点上做]' : commandText(it)}`);
     return 0;
   }
 
@@ -391,13 +445,13 @@ async function main() {
     });
   }
 
-  log(`验收运行:提交 ${head.slice(0, 8)}${dirty ? `(工作区有 ${dirty} 个未提交改动)` : ''},选中 ${selected.length} 项,将跑 ${plan.run.length} 项,输出 ${out}`);
+  log(`验收运行(${level === 'all' ? '两级都选' : LEVEL_LABEL[level]}):提交 ${head.slice(0, 8)}${dirty ? `(工作区有 ${dirty} 个未提交改动)` : ''},选中 ${selected.length} 项,将跑 ${plan.run.length} 项,输出 ${out}`);
 
   const runOne = async (item, attemptNo) => {
     // attemptNo 是字符串标记:'' 首跑,'retry1'… 定稳定性的重跑,'idle' 空闲被杀后的那一次
     const tag = attemptNo ? `-${attemptNo}` : '';
     const rec = {
-      id: item.id, name: item.name, category: item.category, taskRef: item.taskRef,
+      id: item.id, name: item.name, category: item.category, level: levelOf(item), taskRef: item.taskRef,
       timing: item.timing || false, timingNote: item.timingNote || null, known: item.known || null,
       cmd: commandText(item) || null, flags: describeItem(item),
     };
@@ -459,11 +513,11 @@ async function main() {
       second.idleRetried = true;
       return second;
     }
-    const j = judge(item, steps, { authoritative: opts.authoritative });
+    const j = judge(item, steps);
     return {
       ...rec, cmd: steps.map((s, i) => expandCmd(stepSpecs[i].cmd, vars).join(' ')).join(item.parallel ? ' ‖ ' : ' && '),
       startedAt: new Date(startedMs).toISOString(), finishedAt: nowIso(), durationSec: Math.round((Date.now() - startedMs) / 1000),
-      exitCodes: steps.map((s) => s.exitCode), verdict: j.verdict, reasons: j.reasons, resultLine: j.resultLine, metrics: j.metrics,
+      exitCodes: steps.map((s) => s.exitCode), verdict: j.verdict, reasons: j.reasons, resultLine: j.resultLine, metrics: j.metrics, timings: j.timings,
       logs: steps.map((s) => path.relative(out, s.logFile)),
     };
   };
@@ -472,7 +526,7 @@ async function main() {
     log(`▶ ${item.id}  ${item.name}`);
     let rec;
     try { rec = await runOne(item, ''); } catch (e) {
-      rec = { id: item.id, name: item.name, category: item.category, taskRef: item.taskRef, verdict: 'fail', reasons: [`运行器出错:${e.stack || e.message}`], logs: [], known: item.known || null };
+      rec = { id: item.id, name: item.name, category: item.category, level: levelOf(item), taskRef: item.taskRef, verdict: 'fail', reasons: [`运行器出错:${e.stack || e.message}`], logs: [], known: item.known || null };
     }
     rec.attempts = [{ verdict: rec.verdict, exitCodes: rec.exitCodes, durationSec: rec.durationSec, logs: rec.logs }];
     results.push(rec);
@@ -481,7 +535,7 @@ async function main() {
   }
 
   if (opts.flakyRerun > 0) {
-    const failing = results.filter((r) => ['fail', 'ref-fail'].includes(r.verdict) && !r.carried);
+    const failing = results.filter((r) => r.verdict === 'fail' && !r.carried);
     for (const rec of failing) {
       const item = ITEMS.find((it) => it.id === rec.id);
       for (let n = 1; n <= opts.flakyRerun; n++) {
@@ -503,7 +557,13 @@ async function main() {
   const final = [...results].sort((a, b) => ITEMS.findIndex((i) => i.id === a.id) - ITEMS.findIndex((i) => i.id === b.id));
   console.log('\n' + summaryText({ meta, items: final }));
   console.log(`\nresults.json:${resultsFile}`);
-  const bad = results.filter((r) => ['fail', 'ref-fail', 'flaky', 'blocked', 'missing'].includes(r.verdict));
+  if (opts.releaseTimings) {
+    const section = releaseTimingsSection({ meta, items: final }, { version: opts.releaseTimings, machineName: opts.machineName });
+    const file = path.join(out, 'release-timings-section.md');
+    fs.writeFileSync(file, section);
+    console.log(`\n发版耗时记录的一节(贴进 docs/reports/release-timings.md):${file}\n\n${section}`);
+  }
+  const bad = results.filter((r) => ['fail', 'flaky', 'blocked', 'missing'].includes(r.verdict));
   return bad.length ? 1 : 0;
 }
 

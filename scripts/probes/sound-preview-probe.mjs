@@ -35,12 +35,16 @@
  *   P1 从头播放(这一页第一次播放):三段声音的来源对;起播时声音不抢在播放头前面;元素位置与时间轴对齐(见「阈值」);
  *      键盘声已采到的事件窗口(媒体时间 [E-0.02, E+0.12])里能量 ≥ 阈值的占 ≥ 80%;提示音、声画卡有能量;
  *      出声之后元素没有在播放中重新加载;放到素材尽头的元素没有从头重播;播的那份字节解码后事件位置上有能量;
- *   P2 暂停:暂停后 ≤ 300 ms 所有声音元素都停下、能量落到阈值以下;
+ *   P2 暂停:暂停后所有声音元素都停下、能量落到阈值以下(停下用了多久只记录,原门槛 ≤ 300 ms;看 4 秒,最后 1 秒必须全停);
  *   P3 拖动(真实指针拖卡尺):拖动途中没有元素在播放;松手后播放头停在指针处,元素停在对应的素材位置;
  *   P4 从片段中间开始播放:凡是没暂停、有数据的拍,currentTime 都不早于中间位置(不回到 0),之后一路对齐;被听到的事件都在中间位置之后;
  *   P5 片段静音与恢复(真实右键菜单):静音后片段有 data-audio-muted、时间轴有「已静音」标记(宽片段整块标记,窄片段外置图标),
  *      播放扫过它时没有该片段的声音元素、其他片段照常;恢复后标记消失、声音回来并接着当前位置;
  *   P6 声画卡:内嵌声音与画面是同一个片段(时间轴上没有第二个片段),元素的 data-card-audio-state = ready,从中间开始不重来。
+ *
+ * 耗时只记录(verification.md「耗时只记录,不当闸门」,2026-10-07):P2「暂停到停声」的用时只写进 `TIMINGS` 行与结果的 `timings`。
+ * 下面「阈值」里的对齐判据(ALIGN_SEC、占比、起声偏差、时间轴速率)判的是「声音和画面对不对齐」,阈值是时间:
+ * 任务书 `verification-rework-task.md` 定为先保留为通过条件、单列出来请用户定,这次没有动。
  *
  * 阈值(2026-10-06 改,原因):
  *   - ALIGN_SEC = 0.15 s、占比 ≥ 90%:没改。用于起播前就挂着的元素(P1 键盘声、P4、P6 中间、P5 恢复)。
@@ -67,6 +71,7 @@ import { randomBytes } from 'node:crypto';
 import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { startDevServer, viteBin } from '../lib/dev-server.mjs';
+import { createTimings } from './probe-timings.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -84,6 +89,10 @@ fs.mkdirSync(OUT, { recursive: true });
 
 const results = [];
 const fails = [];
+const timings = createTimings('sound-preview-probe');
+/** P2:暂停后看多久(防卡死的等待时限)、其中最后多久必须全停(通过条件看的是这一截,不看「多快停」) */
+const PAUSE_WATCH_MS = 4000;
+const PAUSE_TAIL_MS = 1000;
 const check = (ok, name, evidence = {}) => {
   results.push({ ok: !!ok, name, evidence });
   if (!ok) fails.push(name);
@@ -547,13 +556,20 @@ async function runSuite(page, label, truth, { quick = false, source = 'product' 
   await collect();
   await playTo(0.4, 1.3);
   const pausedAt = await S(() => { const s = window.__pcStore; const t0 = performance.now(); s.actions.pause(); return t0; });
-  await sleep(700);
+  // 耗时只记录(verification.md「耗时只记录,不当闸门」):原来只看暂停 300 ms 之后的拍(等于拿 300 ms 当门槛)。
+  // 现在多采一会儿(PAUSE_WATCH_MS),记下「暂停到最后一拍还在响」的用时;通过条件是最后 PAUSE_TAIL_MS 里全停了、能量都在阈值以下
+  await sleep(PAUSE_WATCH_MS);
   const t2 = await collect();
   const before = analyse(t2.filter((s) => s.w <= pausedAt), truth).kbd.filter(audible);
-  const after = t2.filter((s) => s.w > pausedAt + 300);
+  const afterAll = t2.filter((s) => s.w > pausedAt);
+  const noisy = (s) => s.els.some((e) => !e.paused) || s.els.some((e) => e.rms !== null && e.rms >= THR);
+  const lastNoisy = afterAll.filter(noisy).at(-1);
+  const stopMs = lastNoisy ? lastNoisy.w - pausedAt : 0;
+  const after = afterAll.filter((s) => s.w > pausedAt + PAUSE_WATCH_MS - PAUSE_TAIL_MS);
   const stillPlaying = after.filter((s) => s.els.some((e) => !e.paused));
   const stillLoud = after.filter((s) => s.els.some((e) => e.rms !== null && e.rms >= THR));
-  check(before.length > 10 && after.length > 10 && stillPlaying.length === 0 && stillLoud.length === 0, tag('P2 暂停后 300 ms 内所有声音元素停下、能量落到阈值以下'), { audibleBefore: before.length, samplesAfter: after.length, stillPlaying: stillPlaying.length, stillLoud: stillLoud.length });
+  timings.record(tag('P2 暂停到所有声音元素停下、能量落到阈值以下'), stopMs, { formerLimit: '≤ 300 ms' });
+  check(before.length > 10 && after.length > 10 && stillPlaying.length === 0 && stillLoud.length === 0, tag('P2 暂停后所有声音元素停下、能量落到阈值以下(用时只记录)'), { audibleBefore: before.length, samplesAfter: after.length, stillPlaying: stillPlaying.length, stillLoud: stillLoud.length, stopMs: round(stopMs) });
 
   /* ---- P3 拖动(真实指针拖卡尺) ---- */
   await stopAll();
@@ -975,6 +991,8 @@ summary.ok = fails.length === 0;
 summary.fails = fails;
 summary.retries = retries;
 summary.checks = results.length;
+summary.timings = timings.list;
+timings.print();
 fs.writeFileSync(path.join(OUT, `result-${MODE}.json`), JSON.stringify({ ...summary, results }, null, 2));
 console.log(JSON.stringify({ ok: summary.ok, checks: results.length, fails, retries: retries.length }));
 process.exit(summary.ok ? 0 : 1);

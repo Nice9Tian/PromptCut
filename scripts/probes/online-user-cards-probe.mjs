@@ -48,6 +48,7 @@
  */
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -70,6 +71,8 @@ const DOC_DIRECT = `http://127.0.0.1:${PORTS.doc}`;
 fs.mkdirSync(OUT, { recursive: true });
 
 const fails = [];
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):u 测完之后还在快照上停了多久只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('online-user-cards-probe');
 const out = { ok: false, out: OUT, normal: {}, lowmem: {} };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return !!cond; };
 const say = (k, v) => console.log(JSON.stringify({ [k]: v }));
@@ -525,7 +528,8 @@ try {
     n.uSeq = { seq: uSeq, measuredAt, switchedAt };
     check(kinds.includes('live') && switchedAt !== null, '乙:u 最后切到活渲(测量完成后)', n.uSeq);
     check(kinds.filter((k) => k !== 'none')[0] === 'snapshot' || kinds.filter((k) => k !== 'none')[0] === 'live', '乙:u 先贴已有的层(快照),或测得快时直接活渲;不是空的', n.uSeq);
-    check(!uSeq.some((x) => x.kind === 'snapshot' && x.measured && x.at > (measuredAt ?? 1e9) + 3000), '乙:切到活渲发生在 u 测完之后不久(测完后 3 秒内不再停留在快照)', n.uSeq);
+    // 原来「测完后 3 秒内不再停留在快照」是通过条件;切没切到活渲由上面第一条判,停了多久只记录
+    timingLog.record('乙 u 测完到最后一拍还停在快照', measuredAt == null ? null : Math.max(0, ...uSeq.filter((x) => x.kind === 'snapshot' && x.measured).map((x) => x.at - measuredAt)), { formerLimit: '≤ 3 秒' });
     check(!sawIcon && !emptyAfterFirst, '乙:切换前后画面连续:u 的片段没出过占位、没出过「需要本地 PC 渲染辅助」图标与徽标,没有「既没有快照又没有活内容」的空窗', n.uSeq);
   }
   check(last?.st?.[ID.s2]?.reason === 'unsupported' && last?.st?.[ID.s3]?.reason === 'unsupported' && last?.tl?.[ID.s2]?.badge && last?.tl?.[ID.s3]?.badge,
@@ -742,4 +746,5 @@ console.log(JSON.stringify({ ok: out.ok, fails, uSeq: out.normal.uSeq ?? null, i
   stageSeen: out.normal.stageSeen ?? null, dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null },
   switchProject: out.normal.switchProject ? { gate: out.normal.switchProject.gate, gateBefore: out.normal.switchProject.gateBefore, gateLast: out.normal.switchProject.gateLast, probed: out.normal.switchProject.probed } : null,
   unknownX: { a: out.normal.unknownXA ?? null, b: out.normal.unknownXB ?? null }, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, lowmem: { backfill: out.lowmem.backfill, requests: out.lowmem.requests }, assetRequests: out.assetRequests }));
+timingLog.print();
 process.exit(out.ok ? 0 : 1);

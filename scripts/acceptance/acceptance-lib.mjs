@@ -1,5 +1,6 @@
 /**
- * 四段连做的最终验收运行器的纯逻辑部分(命令行解析、清单校验、选取与续跑、判定、占位符、小结)。
+ * 四段连做的最终验收运行器的纯逻辑部分(命令行解析、清单校验、按级别选取与续跑、判定、占位符、小结、发版耗时记录的文本)。
+ * 两条规则都照 `docs/semantics/guide_files/verification.md`:耗时只记录、不当闸门;验证分本地验证与真实网络验证两级。
  * 不起进程、不碰网络,单测在 `server/test/four-stage-acceptance.test.mjs`。
  * 运行器本体见 `four-stage-acceptance.mjs`,清单(数据)见 `four-stage-manifest.mjs`。
  */
@@ -7,11 +8,17 @@
 /** 清单里允许的类别(显示顺序) */
 export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段'];
 
-/** 一项的最终判定。pass / ref-pass 算过;ref-* 是带耗时门槛的项在 PC 上的结果,只作参考 */
-export const VERDICTS = ['pass', 'fail', 'flaky', 'ref-pass', 'ref-fail', 'manual', 'remote', 'missing', 'blocked', 'skipped'];
+/** 一项的最终判定。时间数字不参与判定(只记录),所以没有「参考」一档;remote = 真实网络验证的项,脚本不跑 */
+export const VERDICTS = ['pass', 'fail', 'flaky', 'manual', 'remote', 'missing', 'blocked', 'skipped'];
 
 /** 这些判定在续跑时不再重跑 */
-export const DONE_VERDICTS = new Set(['pass', 'ref-pass']);
+export const DONE_VERDICTS = new Set(['pass']);
+
+/** 验证的两级(verification.md「本地验证与真实网络验证」)。local 合入 main 前跑;network 只在往节点部署时、或改到网络这一层时跑 */
+export const LEVELS = ['local', 'network'];
+export const LEVEL_LABEL = { local: '本地验证', network: '真实网络验证' };
+/** 清单项的级别:写了 level 的照写的;没写时带 remoteOnly 的是 network,其余 local */
+export const levelOf = (item) => item.level || (item.remoteOnly ? 'network' : 'local');
 
 /** 运行器能起的前置服务 */
 export const SERVICES = ['dev', 'dev-main', 'main-worktree', 'online-build'];
@@ -20,13 +27,15 @@ const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * 命令行。返回 { ...选项 } 或抛 Error(带可读的中文原因)。
- * 选项:list, only[], from, resume, out, mainRef, flakyRerun, devPort, devMainPort, json, checkCoverage, help, forceResume, keepMainWorktree
+ * 选项:list, only[], from, resume, out, mainRef, flakyRerun, devPort, devMainPort, json, checkCoverage, help, forceResume, keepMainWorktree,
+ *      level(local | network | all;跑的时候缺省 local,--list 缺省 all)、releaseTimings(版本号文字)、timingsFrom(已有的 results.json)
  */
 export function parseArgs(argv) {
   const o = {
     list: false, only: [], from: null, resume: false, forceResume: false, out: null, mainRef: 'main',
     flakyRerun: 0, devPort: 5690, devMainPort: 5693, json: false, checkCoverage: false, help: false,
-    keepMainWorktree: false, includeOptional: false, dryRun: false, matrix: false, portShift: 0, authoritative: false,
+    keepMainWorktree: false, includeOptional: false, dryRun: false, matrix: false, portShift: 0,
+    level: null, releaseTimings: null, timingsFrom: null, machineName: null,
   };
   const need = (i, name) => {
     const v = argv[i + 1];
@@ -45,12 +54,19 @@ export function parseArgs(argv) {
       case '--include-optional': o.includeOptional = true; break;
       case '--dry-run': o.dryRun = true; break;
       case '--matrix': o.matrix = true; break;
-      case '--authoritative': o.authoritative = true; break;
       case '--help': case '-h': o.help = true; break;
       case '--only': o.only.push(...need(i, a).split(',').map((s) => s.trim()).filter(Boolean)); i++; break;
       case '--from': o.from = need(i, a); i++; break;
       case '--out': o.out = need(i, a); i++; break;
       case '--main-ref': o.mainRef = need(i, a); i++; break;
+      case '--level': {
+        const v = need(i, a);
+        if (![...LEVELS, 'all'].includes(v)) throw new Error('--level 要 local、network 或 all');
+        o.level = v; i++; break;
+      }
+      case '--release-timings': o.releaseTimings = need(i, a); i++; break;
+      case '--timings-from': o.timingsFrom = need(i, a); i++; break;
+      case '--machine-name': o.machineName = need(i, a); i++; break;
       case '--flaky-rerun': {
         const n = Number(need(i, a));
         if (!Number.isInteger(n) || n < 0 || n > 10) throw new Error('--flaky-rerun 要 0～10 的整数');
@@ -71,25 +87,29 @@ export function parseArgs(argv) {
     }
   }
   if (o.resume && !o.out) throw new Error('--resume 要同时给 --out(上次的输出目录)');
+  if (o.timingsFrom && !o.releaseTimings) throw new Error('--timings-from 要同时给 --release-timings <版本>');
   return o;
 }
 
 export const USAGE = `用法:node scripts/acceptance/four-stage-acceptance.mjs [选项]
-  --list                  打印清单(编号、类别、命令、通过标准、是否带耗时门槛、是否只能在新节点上验)后退出
+  --list                  打印清单(按级别分两段:本地验证、真实网络验证;编号、类别、命令、通过标准、记哪些耗时)后退出
+  --level <级别>          local(本地验证,跑的时候的缺省)、network(真实网络验证:只在往节点部署时或改到网络这一层时跑)、all;--list 缺省 all
   --only <编号|类别|通配>  只跑这些(逗号分隔或重复给);类别如 G0、G0-R、探针、第一段;编号可带 * 通配,如 GR-*
   --from <编号>           从这一项起往后跑(按清单顺序)
   --resume                跳过上次(同一个 --out 里)已过的项;提交哈希变了要加 --force-resume
   --out <目录>            输出目录(缺省 <主工作区>/work/four-stage/final-prep/<时间戳>);--resume 必须给
   --main-ref <引用>       像素比对的 main 基准(缺省 main)
   --flaky-rerun <N>       全部跑完后,每个失败项再重跑至多 N 次定稳定性(过一次就记 flaky)
-  --port-shift <N>        把清单命令里 5xxx 的端口(端口类参数,5600～5999)整体平移 N(笔记本用 5580～5599 段时给 -110,并配 --dev-port 5580 --dev-main-port 5583);8xxx 的文档与素材服务端口不动
+  --port-shift <N>        把清单命令里 5xxx 的端口(端口类参数,5600～5999)整体平移 N(另一台机器分到的端口段不同时用,如给 -110 并配 --dev-port 5580 --dev-main-port 5583);8xxx 的文档与素材服务端口不动
   --dev-port <端口>       共享 dev server 的编辑器端口(缺省 5690,另占 +1、+2)
   --dev-main-port <端口>  main 基准树的 dev server(缺省 5693,另占 +1、+2)
   --include-optional      连带跑标了 optional 的补充项(缺省不跑)
   --keep-main-worktree    结束时不删 main 基准 worktree
   --check-coverage        对照 scripts/probes/ 下的文件,列出清单没登记也没写明排除原因的探针后退出
   --dry-run               只打印将要跑哪些项与命令,不执行
-  --authoritative         性能基准机(笔记本)专用:带耗时门槛的项按过 / 不过判,不再记 ref-*;要同时用 sample-cpu-performance.ps1 证明采样期间频率不低于 100%
+  --release-timings <版本> 跑完后按这次的结果出一节发版耗时记录(版本与提交、机器配置、各项耗时),写到 <out>/release-timings-section.md 并打印;贴进 docs/reports/release-timings.md
+  --timings-from <文件>   不跑任何项,直接用已有的 results.json 出那一节(配 --release-timings)
+  --machine-name <名字>   那一节里「哪台」写什么(缺省主机名)
   --matrix                打印两份任务书的每一条编号验收由哪些项覆盖(R<n> 任务书一、C<n> 任务书二完成条件、U<n> 用户体验验收)后退出
   --json                  --list 时输出 JSON`;
 
@@ -135,8 +155,12 @@ export function validateManifest(items) {
         if (!lim || (lim.eq === undefined && lim.max === undefined && lim.min === undefined)) errs.push(`${at}:pass.limits.${k} 要 eq / max / min`);
       }
     }
-    if (it.timing !== undefined && it.timing !== false && it.timing !== 'laptop') errs.push(`${at}:timing 只能是 false 或 'laptop'`);
-    if (it.timing === 'laptop' && !it.timingNote) errs.push(`${at}:timing 为 laptop 时要写 timingNote(哪个门槛)`);
+    if (it.timing !== undefined && it.timing !== false && it.timing !== 'record') errs.push(`${at}:timing 只能是 false 或 'record'(耗时只记录,不当通过条件)`);
+    if (it.timing === 'record' && !it.timingNote) errs.push(`${at}:timing 为 record 时要写 timingNote(记哪些耗时)`);
+    if (it.timing === 'record' && !runnable) errs.push(`${at}:timing 为 record 的项要有命令(不跑就没有耗时可记)`);
+    if (!LEVELS.includes(it.level)) errs.push(`${at}:level 要写 local(本地验证)或 network(真实网络验证)`);
+    if (it.remoteOnly && it.level !== 'network') errs.push(`${at}:remoteOnly 的项属于真实网络验证,level 要是 network`);
+    if (it.level === 'network' && runnable) errs.push(`${at}:真实网络验证的项不带本机命令(照部署清单在节点上做),写 remoteOnly`);
     if (it.needs !== undefined) {
       if (!Array.isArray(it.needs) || it.needs.some((s) => !SERVICES.includes(s))) errs.push(`${at}:needs 只能是 ${SERVICES.join('/')}`);
     }
@@ -169,14 +193,18 @@ export function matchesToken(item, token) {
 }
 
 /**
- * 按 --only / --from 选项。返回选中的项(保持清单顺序)。
- * 记号一个都没匹配到会抛错(拼错编号不要悄悄什么都不跑)。
+ * 按 --level / --only / --from 选项。返回选中的项(保持清单顺序)。
+ * 记号一个都没匹配到会抛错(拼错编号不要悄悄什么都不跑);记号匹配到的项全在另一级里也抛错,并说要加哪个 --level。
+ * level:'local' | 'network' | 'all'(缺省 'all',由调用方定缺省:跑的时候传 local)。
  */
-export function selectItems(items, { only = [], from = null, includeOptional = false } = {}) {
+export function selectItems(items, { only = [], from = null, includeOptional = false, level = 'all' } = {}) {
+  const inLevel = (it) => level === 'all' || levelOf(it) === level;
   for (const t of only) {
-    if (!items.some((it) => matchesToken(it, t))) throw new Error(`--only ${t}:没有这个编号或类别`);
+    const hit = items.filter((it) => matchesToken(it, t));
+    if (!hit.length) throw new Error(`--only ${t}:没有这个编号或类别`);
+    if (!hit.some(inLevel)) throw new Error(`--only ${t}:属于${LEVEL_LABEL[levelOf(hit[0])]},这次选的是${LEVEL_LABEL[level]};要跑它加 --level ${levelOf(hit[0])}`);
   }
-  let out = items;
+  let out = items.filter(inLevel);
   if (only.length) out = out.filter((it) => only.some((t) => matchesToken(it, t)));
   else if (!includeOptional) out = out.filter((it) => !it.optional);
   if (from) {
@@ -251,9 +279,10 @@ export const stripAnsi = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, '');
  *   - pass.must 每条正则都要在输出里出现,pass.mustNot 一条都不能出现;
  *   - pass.metrics 抓数,pass.limits 逐个比(eq / max / min);
  *   - 输出最后一行 JSON 里 fails 非空数组、或 ok === false:fail(退出码给了假的 0 也拦住);
- *   - 带耗时门槛(timing === 'laptop')的项:过记 ref-pass、不过记 ref-fail,在 PC 上只作参考。
+ *   - 时间数字不参与判定:输出里的 `TIMINGS {…}` 行(探针的 probe-timings.mjs 打的)原样收进 timings,只记录。
+ *     在哪台机器上跑都一样判,没有「待复核」一档。
  */
-export function judge(item, stepResults, { authoritative = false } = {}) {
+export function judge(item, stepResults) {
   const reasons = [];
   const pass = item.pass || {};
   const okExits = pass.exit === undefined ? [0] : Array.isArray(pass.exit) ? pass.exit : [pass.exit];
@@ -291,11 +320,8 @@ export function judge(item, stepResults, { authoritative = false } = {}) {
   let resultLine = pass.resultLine ? lastMatchLine(combined, pass.resultLine) : null;
   if (!resultLine && json) resultLine = json.line;
   if (!resultLine) resultLine = lastNonEmptyLine(combined);
-  const passed = reasons.length === 0;
-  let verdict;
-  if (item.timing === 'laptop' && !authoritative) verdict = passed ? 'ref-pass' : 'ref-fail';
-  else verdict = passed ? 'pass' : 'fail';
-  return { verdict, reasons, resultLine: clip(resultLine, 400), metrics };
+  const verdict = reasons.length === 0 ? 'pass' : 'fail';
+  return { verdict, reasons, resultLine: clip(resultLine, 400), metrics, timings: parseTimingLines(combined) };
 }
 
 function lastMatchLine(text, re) {
@@ -313,24 +339,23 @@ const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
 
 /**
  * 全部尝试(首跑加重跑)合成最终判定。attempts:[{ verdict }],首项是第一次。
- * 全部不过:保持首跑的判定;有过有不过:flaky(timing 项仍记 ref-*,附 flaky 标记在 stability 里)。
+ * 全部不过:保持首跑的判定;有过有不过:flaky。
  */
 export function combineAttempts(attempts) {
-  const isPass = (v) => v === 'pass' || v === 'ref-pass';
+  const isPass = (v) => v === 'pass';
   const passes = attempts.filter((a) => isPass(a.verdict)).length;
   const total = attempts.length;
   if (total === 1) return { verdict: attempts[0].verdict, stability: null };
   if (passes === total) return { verdict: attempts[0].verdict, stability: `${passes}/${total}` };
   if (passes === 0) return { verdict: attempts[0].verdict, stability: `0/${total}` };
-  const timing = attempts.some((a) => a.verdict.startsWith('ref-'));
-  return { verdict: timing ? 'ref-fail' : 'flaky', stability: `${passes}/${total}` };
+  return { verdict: 'flaky', stability: `${passes}/${total}` };
 }
 
 /** 一项在清单里的静态说明(--list 与小结用) */
 export function describeItem(item) {
   const flags = [];
-  if (item.timing === 'laptop') flags.push('笔记本复核');
-  if (item.remoteOnly) flags.push('只能在新节点上验');
+  flags.push(LEVEL_LABEL[levelOf(item)]);
+  if (item.timing === 'record') flags.push('记耗时');
   if (item.realModel) flags.push('真实模型');
   if (item.manual) flags.push('人工');
   if (item.optional) flags.push('补充');
@@ -344,19 +369,24 @@ export function commandText(item) {
   return '';
 }
 
-/** --list 的文本 */
+/** --list 的文本:先本地验证、后真实网络验证,各自按类别分段 */
 export function listText(items) {
   const lines = [];
-  let cat = null;
-  for (const it of items) {
-    if (it.category !== cat) { cat = it.category; lines.push('', `## ${cat}`); }
-    const flags = describeItem(it);
-    lines.push(`${it.id.padEnd(14)} ${it.name}${flags.length ? `  [${flags.join('、')}]` : ''}`);
-    if (it.manual) lines.push(`${' '.repeat(15)}人工:${it.manual}`);
-    else if (it.remoteOnly) lines.push(`${' '.repeat(15)}新节点:${it.remoteOnly}`);
-    else lines.push(`${' '.repeat(15)}$ ${commandText(it)}${it.cwd === 'main' ? '  (cwd=main 基准树)' : ''}`);
-    lines.push(`${' '.repeat(15)}标准:${passText(it)}${it.timingNote ? `  耗时门槛:${it.timingNote}` : ''}  ←${it.taskRef}`);
-    if (it.known) lines.push(`${' '.repeat(15)}已知:${it.known}`);
+  for (const level of LEVELS) {
+    const mine = items.filter((it) => levelOf(it) === level);
+    if (!mine.length) continue;
+    lines.push('', `# ${LEVEL_LABEL[level]}(${mine.length} 项)${level === 'network' ? ':只在往节点部署时、或改到网络这一层时跑;照 docs/plan/four-stage-deploy-checklist.md 在节点上做,脚本不跑' : ':合入 main 前跑的就是这一级'}`);
+    let cat = null;
+    for (const it of mine) {
+      if (it.category !== cat) { cat = it.category; lines.push('', `## ${cat}`); }
+      const flags = describeItem(it);
+      lines.push(`${it.id.padEnd(14)} ${it.name}${flags.length ? `  [${flags.join('、')}]` : ''}`);
+      if (it.manual) lines.push(`${' '.repeat(15)}人工:${it.manual}`);
+      else if (it.remoteOnly) lines.push(`${' '.repeat(15)}在节点上:${it.remoteOnly}`);
+      else lines.push(`${' '.repeat(15)}$ ${commandText(it)}${it.cwd === 'main' ? '  (cwd=main 基准树)' : ''}`);
+      lines.push(`${' '.repeat(15)}标准:${passText(it)}${it.timingNote ? `  只记录的耗时:${it.timingNote}` : ''}  ←${it.taskRef}`);
+      if (it.known) lines.push(`${' '.repeat(15)}已知:${it.known}`);
+    }
   }
   return lines.join('\n').trimStart();
 }
@@ -372,8 +402,8 @@ export function passText(it) {
 }
 
 const VERDICT_LABEL = {
-  pass: '过', fail: '不过', flaky: '不稳定', 'ref-pass': '过(PC 参考,待笔记本复核)', 'ref-fail': '不过(PC 参考,待笔记本复核)',
-  manual: '人工', remote: '只能在新节点上验', missing: '缺(本检出没有这个文件)', blocked: '跑不了(前置没过)', skipped: '续跑跳过',
+  pass: '过', fail: '不过', flaky: '不稳定',
+  manual: '人工', remote: '在节点上做(脚本不跑)', missing: '缺(本检出没有这个文件)', blocked: '跑不了(前置没过)', skipped: '续跑跳过',
 };
 export const verdictLabel = (v) => VERDICT_LABEL[v] || v;
 
@@ -382,23 +412,86 @@ export function summaryText(run) {
   const { items, meta } = run;
   const lines = [];
   lines.push(`四段验收运行 ${meta.startedAt} → ${meta.finishedAt || '(未结束)'}  提交 ${meta.commit}  机器 ${meta.host || ''}`);
-  const count = {};
-  for (const r of items) count[r.verdict] = (count[r.verdict] || 0) + 1;
-  lines.push('合计:' + Object.entries(count).map(([k, n]) => `${verdictLabel(k)} ${n}`).join(',  '));
+  // 两级分开计数(verification.md「本地验证与真实网络验证」)
+  for (const level of LEVELS) {
+    const mine = items.filter((r) => (r.level || 'local') === level);
+    if (!mine.length) continue;
+    const count = {};
+    for (const r of mine) count[r.verdict] = (count[r.verdict] || 0) + 1;
+    lines.push(`${LEVEL_LABEL[level]} ${mine.length} 项:` + Object.entries(count).map(([k, n]) => `${verdictLabel(k)} ${n}`).join(',  '));
+  }
+  const timed = items.filter((r) => (r.timings || []).length);
+  if (timed.length) lines.push(`耗时只记录、不决定过不过:${timed.length} 项带耗时数字,共 ${timed.reduce((n, r) => n + r.timings.length, 0)} 个`);
   lines.push('');
   let cat = null;
   for (const r of items) {
     if (r.category !== cat) { cat = r.category; lines.push(`【${cat}】`); }
-    const mark = { pass: '✓', 'ref-pass': '≈', fail: '✗', 'ref-fail': '≉', flaky: '~', manual: '·', remote: '·', missing: '?', blocked: '!', skipped: '-' }[r.verdict] || ' ';
+    const mark = { pass: '✓', fail: '✗', flaky: '~', manual: '·', remote: '·', missing: '?', blocked: '!', skipped: '-' }[r.verdict] || ' ';
     const dur = r.durationSec != null ? ` ${r.durationSec}s` : '';
     const stab = r.stability ? ` 稳定性${r.stability}` : '';
     lines.push(`${mark} ${r.id}  ${r.name}  ${verdictLabel(r.verdict)}${stab}${dur}`);
-    if (['fail', 'ref-fail', 'flaky', 'blocked', 'missing'].includes(r.verdict) && r.reasons && r.reasons.length) lines.push(`    原因:${r.reasons.join(';')}`);
-    if (r.resultLine && ['fail', 'ref-fail', 'flaky', 'pass', 'ref-pass'].includes(r.verdict)) lines.push(`    结果行:${r.resultLine}`);
+    if (['fail', 'flaky', 'blocked', 'missing'].includes(r.verdict) && r.reasons && r.reasons.length) lines.push(`    原因:${r.reasons.join(';')}`);
+    if (r.resultLine && ['fail', 'flaky', 'pass'].includes(r.verdict)) lines.push(`    结果行:${r.resultLine}`);
+    if ((r.timings || []).length) lines.push(`    耗时(只记录):${clip(r.timings.map(timingText).join(';'), 600)}`);
     if (r.known && r.verdict !== 'pass') lines.push(`    已知:${r.known}`);
     if (r.logs && r.logs.length && r.verdict !== 'skipped') lines.push(`    日志:${r.logs.join('  ')}`);
   }
   return lines.join('\n');
+}
+
+/** 一个耗时数字的文字:名字=数值单位 */
+export const timingText = (t) => `${t.name}=${t.value === null || t.value === undefined ? '没量到' : t.value}${t.value === null || t.value === undefined ? '' : ' ' + (t.unit || 'ms')}`;
+
+/** 从输出里取出全部 `TIMINGS {"probe":…,"timings":[…]}` 行,摊平(格式由 scripts/probes/probe-timings.mjs 定;这里另写一份,运行器不引探针目录) */
+export function parseTimingLines(output) {
+  const out = [];
+  for (const raw of String(output).split(/\r?\n/)) {
+    const l = raw.trim();
+    if (!l.startsWith('TIMINGS ')) continue;
+    try {
+      const v = JSON.parse(l.slice(8));
+      for (const t of v?.timings ?? []) if (t && typeof t.name === 'string') out.push({ probe: v.probe ?? null, ...t });
+    } catch { /* 不是合法的一行,跳过 */ }
+  }
+  return out;
+}
+
+/** 字节数写成 GB(一位小数) */
+const gb = (n) => (typeof n === 'number' && n > 0 ? `${(n / 1024 ** 3).toFixed(1)} GB` : '没采到');
+const cell = (s) => String(s ?? '').replace(/\|/g, '/').replace(/\r?\n/g, ' ');
+
+/**
+ * 发版耗时记录的一节(Markdown),贴进 docs/reports/release-timings.md(verification.md「耗时只记录,不当闸门」:一个版本一节)。
+ * run 是 results.json 的内容({ meta, items });machine 缺省取 run.meta.machine(运行器起跑时自动采集的:哪台、处理器、核数、内存、显卡、系统)。
+ * 只收跑过的项(有 durationSec 的);被人为放大的数字(scaled,证明时间不是闸门时用的)不进记录。
+ */
+export function releaseTimingsSection(run, { version, machineName = null } = {}) {
+  const { meta, items } = run;
+  const m = meta.machine || {};
+  const ran = items.filter((r) => r.durationSec != null);
+  const scaled = ran.some((r) => (r.timings || []).some((t) => t.scaled));
+  const lines = [];
+  lines.push(`## ${version}`, '');
+  lines.push(`- 提交:\`${meta.commit}\`${meta.dirtyFiles ? `(工作区另有 ${meta.dirtyFiles} 个未提交改动)` : ''}`);
+  lines.push(`- 跑的时间:${meta.startedAt} → ${meta.finishedAt || '(未结束)'}`);
+  lines.push(`- 机器:${machineName || m.name || meta.host || '没采到'};处理器 ${m.cpu || '没采到'};核数 ${m.physicalCores ? `${m.physicalCores} 物理 / ` : ''}${m.logicalCores ?? meta.cpus ?? '没采到'} 逻辑;内存 ${gb(m.memoryBytes)};显卡 ${(m.gpus && m.gpus.length ? m.gpus.join('、') : '没采到')};系统 ${m.os || meta.platform || '没采到'};Node ${meta.node || ''}`);
+  lines.push(`- 范围:${ran.length} 项(验收运行器跑过的;人工项与真实网络验证的项不在内)。合计机器耗时 ${Math.round(ran.reduce((n, r) => n + r.durationSec, 0) / 60)} 分钟`);
+  lines.push('- 这些数字只记录,不决定过不过。相邻两版之间某项明显变差,在发版汇报里指出来,由用户决定要不要查。');
+  if (scaled) lines.push('- **注意:这次带了 PC_PROBE_TIMING_SCALE(人为放大),放大的数字已略去,这一节不能当发版记录。**');
+  lines.push('', '### 各项整项用时', '', '| 编号 | 项 | 判定 | 整项用时(秒) |', '|---|---|---|---|');
+  for (const r of ran) lines.push(`| ${cell(r.id)} | ${cell(r.name)} | ${verdictLabel(r.verdict)} | ${r.durationSec} |`);
+  const withNumbers = ran.filter((r) => (r.timings || []).some((t) => !t.scaled));
+  lines.push('', '### 探针量的耗时', '');
+  if (!withNumbers.length) lines.push('(这次没有探针报耗时数字)');
+  else {
+    lines.push('| 编号 | 量的是什么 | 数值 | 原来的门槛(已不作通过条件) |', '|---|---|---|---|');
+    for (const r of withNumbers) for (const t of r.timings.filter((x) => !x.scaled)) {
+      lines.push(`| ${cell(r.id)} | ${cell(t.name)} | ${t.value === null || t.value === undefined ? '没量到' : `${t.value} ${t.unit || 'ms'}`} | ${cell(t.formerLimit || '')} |`);
+    }
+  }
+  const expected = ran.filter((r) => r.timing === 'record' && !(r.timings || []).length);
+  if (expected.length) lines.push('', `清单标了「记耗时」但这次没报数字的项:${expected.map((r) => r.id).join('、')}`);
+  return lines.join('\n') + '\n';
 }
 
 /**

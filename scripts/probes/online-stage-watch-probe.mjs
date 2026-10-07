@@ -17,11 +17,14 @@
  *      可见舞台重新画出片段(不空白);从弄崩到画回来的总耗时记在结果里。
  *   W4 退回后不反复重载:之后 60 秒里两个舞台源都没有再收到舞台页请求,`reloads` 不变。
  *
- * 机器忙时(同机别的探针在跑)判定的时限有余量:断开判定 15 秒 + 心跳 5 秒 + 重载时限 20 秒,各处等待都放宽到 2 倍以上。
+ * 耗时只记录(verification.md「耗时只记录,不当闸门」):重载、握回、退回、画回各自用了多久写进 `TIMINGS` 行与结果的 `timings`,
+ * 不决定过不过。等待时限只为防卡死:产品自己的计时是断开判定 15 秒 + 心跳 5 秒 + 重载时限 20 秒,各处等待一律不少于 180 秒。
+ * 「W3 退回不早于重载时限(≥ 20 秒)」是产品计时器的下界(早退才是缺陷,机器慢不会让它不过),仍是通过条件。
  * 结果最后一行是一行 JSON(`ok`、`fails`、各项数字),截图在 --out。
  */
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
@@ -50,8 +53,12 @@ const out = { ok: false, out: OUT, load: os.loadavg?.()[0] ?? null, cpus: os.cpu
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return !!cond; };
 const say = (k, v) => console.log(JSON.stringify({ [k]: v }));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 等待时限只为防卡死(verification.md「耗时只记录,不当闸门」):不到 WAIT_FLOOR_MS 的一律提到它;等到头没有结果仍算不过 */
+const WAIT_FLOOR_MS = 180_000;
+const timings = createTimings('online-stage-watch-probe');
 async function until(what, fn, ms = 20_000, every = 250) {
   const t0 = Date.now();
+  ms = Math.max(ms, WAIT_FLOOR_MS);
   let last = null;
   for (;;) {
     let v = null;
@@ -289,6 +296,13 @@ try {
   out.pageErrors = pageErrors.slice(0, 5);
   out.fails = fails;
   out.ok = fails.length === 0;
+  // 耗时只记录:这几个数原来靠 60 / 120 秒的等待上限把关
+  timings.record('W2 弄崩 B 到页面重载它', out.w2reloadMs ?? null, { formerLimit: '等待上限 60 秒(断开判定 15 秒 + 心跳 5 秒)' });
+  timings.record('W2 弄崩 B 到重新握手', out.w2recoverMs ?? null, { formerLimit: '等待上限 60 秒' });
+  timings.record('W3 弄崩 A 到退回单舞台', out.w3fallbackMs ?? null, { formerLimit: '等待上限 120 秒(断开判定 15 秒 + 心跳 5 秒 + 重载时限 20 秒)' });
+  timings.record('W3 弄崩 A 到单舞台画回片段', out.w3drawnMs ?? null, { formerLimit: '等待上限 60 秒' });
+  out.timings = timings.list;
+  timings.print();
   await browser.close().catch(() => {});
   for (const s of servers) { s.closeAllConnections?.(); await new Promise((r) => s.close(() => r())); }
   await combo.close?.().catch?.(() => {});

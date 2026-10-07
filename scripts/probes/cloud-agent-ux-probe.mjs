@@ -75,6 +75,7 @@ import { runKeygen } from '../../server/hosted-render/keygen.mjs';
 import {
   ROOT, KDF, sleep, waitFor, portBusy, killTree, startProcess, startHosted, startAgent, joinAs, adminOp, projectOf, putProject, mockScript, agentApi, createChecks, readTree,
 } from './cloud-agent-probe-lib.mjs';
+import { createTimings } from './probe-timings.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const args = process.argv.slice(2);
@@ -197,6 +198,8 @@ let agent = null;
 let render = null;
 const children = new Set();
 const timings = {};
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):停掉后多久收尾、满载时文档服务的往返时延与素材下载速度只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('cloud-agent-ux-probe');
 
 function startRender() {
   const env = {};
@@ -558,8 +561,9 @@ async function main() {
     // 另一台设备(另一个设备号、同一创建者身份):看得到在跑的,接着看,停掉,接着说
     const r = await visit({ ...aliceCfg(dev.a2), conversationId: 'ux-stop', do: { watchMs: 3000, abort: true, say: mockScript([{ tool: 'update_clip', input: { clipId: 'clip-bars', label: '换了设备接着说' } }, { say: '接上了' }]), project: true } });
     const a = r.aborted ?? {};
-    check('U9 另一台设备打开同一个对话:看得到在跑的并接着看;停掉后 2 秒内收尾、项目停在最后一次成功写入;接着说,新一轮正常跑完', (r.info?.running ?? []).includes('ux-stop') && (r.list ?? []).some((i) => i.id === 'ux-stop' && i.state === 'running')
-      && r.watched?.count > 5 && r.watched.types.includes('tool_result') && !r.watched.sawEnd && a.end?.state === 'idle' && a.ms !== null && a.ms <= 2000 && a.rev?.afterStop === a.rev?.later && a.rev.afterStop > startRev && a.rev.afterStop < startRev + 40
+    timingLog.record('U9 另一台设备停掉对话到收尾', a.ms ?? null, { formerLimit: '≤ 2 秒' });
+    check('U9 另一台设备打开同一个对话:看得到在跑的并接着看;停掉后收尾(用时只记录)、项目停在最后一次成功写入;接着说,新一轮正常跑完', (r.info?.running ?? []).includes('ux-stop') && (r.list ?? []).some((i) => i.id === 'ux-stop' && i.state === 'running')
+      && r.watched?.count > 5 && r.watched.types.includes('tool_result') && !r.watched.sawEnd && a.end?.state === 'idle' && a.ms !== null && a.rev?.afterStop === a.rev?.later && a.rev.afterStop > startRev && a.rev.afterStop < startRev + 40
       && a.meta?.state === 'idle' && a.meta?.reason === 'stopped' && r.said?.status === 202 && r.said.end === 'idle' && r.said.firstSeq === r.said.prevLastSeq + 1 && r.said.from === dev.a2.deviceName
       && clipOf({ tracks: [{ clips: r.project?.clips ?? [] }] }, 'clip-bars')?.label === '换了设备接着说', {
       running: r.info?.running ?? null, watched: r.watched ?? null, stop: a.end ?? null, stoppedInMs: a.ms ?? null, statusText: a.status ?? null, rev: a.rev ?? null, recorded: a.meta ? { state: a.meta.state, reason: a.meta.reason } : null,
@@ -809,10 +813,16 @@ async function main() {
     const mem = agent.child.pid ? spawnSync(process.platform === 'win32' ? 'powershell' : 'ps', process.platform === 'win32' ? ['-NoProfile', '-Command', `(Get-Process -Id ${agent.child.pid}).WorkingSet64`] : ['-o', 'rss=', '-p', String(agent.child.pid)], { windowsHide: true, encoding: 'utf8' }).stdout.trim() : '';
     const rssMb = mem ? Math.round(Number(mem) / (process.platform === 'win32' ? 1024 * 1024 : 1024)) : null;
     void st0; void st1;
-    check('U16 满载时同机文档服务的响应时间与素材下载速度(6 轮对话同时写 + 渲染服务在渲),对比空闲时', busy.healthz.p95 < 500 && busy.projectOpen.p95 < 1000 && runsAtStart === 6 && runsAtEnd === 6 && renderAtStart
-      && busyDownload.min >= Math.max(5, idleDownload.median * 0.2), {
+    // 往返时延与下载速度只记录(原门槛:healthz p95 < 500 ms、打开项目 p95 < 1000 ms、下载最慢一次 ≥ max(5 MiB/s, 空闲中位数的两成));
+    // 「采样期间确实满载」(6 轮都在跑、渲染服务在渲)仍是通过条件
+    timingLog.record('U16 满载时文档服务 /healthz 往返 p95', busy.healthz.p95, { formerLimit: '< 500 ms' });
+    timingLog.record('U16 满载时打开项目 p95', busy.projectOpen.p95, { formerLimit: '< 1000 ms' });
+    timingLog.record('U16 空闲时文档服务 /healthz 往返 p95', idle?.healthz?.p95 ?? null);
+    timingLog.record('U16 满载时素材下载最慢一次', busyDownload.min, { unit: 'MiB/s', formerLimit: '≥ max(5, 空闲中位数 × 0.2)' });
+    timingLog.record('U16 空闲时素材下载中位数', idleDownload.median, { unit: 'MiB/s' });
+    check('U16 满载时同机文档服务的响应时间与素材下载速度(6 轮对话同时写 + 渲染服务在渲),对比空闲时(数字只记录;判的是采样期间确实满载)', runsAtStart === 6 && runsAtEnd === 6 && renderAtStart, {
       idle, loaded: busy, assetDownloadMibPerSec: { idle: idleDownload, loaded: busyDownload, sizeMiB: 16 }, runsDuringSample: { atStart: runsAtStart, atEnd: runsAtEnd }, renderInProgress: { atStart: renderAtStart, atEnd: renderAtEnd }, agentRssMb: rssMb, agentHeapLimitMb: agent.ready?.heapLimitMb ?? null,
-      note: '本机数字只作参考;门槛只卡「没有被拖垮」(healthz p95 < 500 ms,与渲染服务的背压线相同;素材下载最慢的一次不低于空闲中位数的两成、且不低于每秒 5 MiB)',
+      note: '数字只记录,不决定过不过(原门槛:healthz p95 < 500 ms,与渲染服务的背压线相同;素材下载最慢的一次不低于空闲中位数的两成、且不低于每秒 5 MiB)',
     });
     for (const [a, ids] of [[api.alice, ['load-a1', 'load-a2']], [api.bob, ['load-b1']], [api.dan, ['load-d1', 'load-d2']], [api.eve, ['load-e1']]]) for (const id of ids) await a.abort(id);
     await sleep(500);
@@ -937,5 +947,7 @@ try {
 }
 const failed = results.filter((r) => !r.ok);
 if (code === 0 && failed.length) code = 1;
+for (const [k, v] of Object.entries(timings)) timingLog.record(k, v);
+timingLog.print();
 process.stdout.write(`${JSON.stringify({ ok: code === 0, passed: results.filter((r) => r.ok).length, failed: failed.map((r) => r.check), timings, ...(KEEP ? { tmp } : {}) })}\n`);
 process.exit(code);

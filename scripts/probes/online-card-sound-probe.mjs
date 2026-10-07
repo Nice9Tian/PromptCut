@@ -33,6 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 import { startDevServer } from '../lib/dev-server.mjs';
 
 const argv = process.argv.slice(2);
@@ -42,6 +43,8 @@ const PHASES = new Set(arg('--phases', 'dev,online').split(','));
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-card-sound-${Date.now().toString(36)}${randomBytes(2).toString('hex')}`)));
 fs.mkdirSync(OUT, { recursive: true });
 const results = [];
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):死循环的声音代码被掐断用了多久只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('online-card-sound-probe');
 const check = (name, ok, detail = {}) => { results.push({ check: name, ok: !!ok }); console.log(JSON.stringify({ check: name, ok: !!ok, detail }).slice(0, 2000)); return !!ok; };
 const log = (...a) => console.error('[card-sound]', ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -166,6 +169,7 @@ try {
 } finally {
   for (const fn of cleanups.reverse()) { try { await fn(); } catch { /* 尽力清 */ } }
 }
+timingLog.print();
 process.exit(exitCode);
 
 async function main() {
@@ -271,8 +275,10 @@ async function devPhase() {
     mods[0] === 5 && mods.length === want.mods.length && same(mods.slice(1), want.mods.slice(1)), { first: mods[0], n: mods.length, error: ran.mods.error });
   check('S5 卡片代码只在线程里执行:文件顶层的记号在线程里有,在编辑页面与舞台文档里都没有',
     env[6] === 1 && want.markInEditor === null && ran.markInStage === null, { inThread: env[6], inEditor: want.markInEditor, inStage: ran.markInStage });
+  // 下界(不早于合成时限)是产品计时器的行为,仍是通过条件;上界(原 < 8 秒)随机器快慢,只记录
+  timingLog.record('S6 死循环的声音代码从求这一块到被掐断', ran.loopMs, { formerLimit: '950 ms ～ 8 秒(上界不再作通过条件)' });
   check('S6 死循环掐得断:到时限这一块失败、线程被掐掉;之后别的卡照常合成(重新起了线程)',
-    /合成超时/.test(ran.loop.error ?? '') && ran.loopMs >= 950 && ran.loopMs < 8000 && same(ran.afterLoop.samples, want.good512) && ran.stats.timeouts === 1 && ran.stats.spawned === 2,
+    /合成超时/.test(ran.loop.error ?? '') && ran.loopMs >= 950 && same(ran.afterLoop.samples, want.good512) && ran.stats.timeouts === 1 && ran.stats.spawned === 2,
     { loop: ran.loop.error, loopMs: ran.loopMs, stats: ran.stats, afterLoop: ran.afterLoop.error ?? ran.afterLoop.samples?.length });
   check('S7 要读素材采样的节点不在线合成,原因说明白', /要读素材的声音采样/.test(ran.read.error ?? ''), { read: ran.read.error ?? 'ok' });
   check('页面没有报错', errors.length === 0, { errors: errors.slice(0, 5) });

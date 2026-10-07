@@ -78,6 +78,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSharedProject, lookupProject } from '../../server/auth/client.mjs';
 import { joinAs, adminOp, projectOf, putProject, agentApi } from './cloud-agent-probe-lib.mjs';
+import { createTimings } from './probe-timings.mjs';
 import {
   ROOT, sleep, USER_PORTS, createUi, startStack, startDesktop, killDesktop, launchBrowser, killBrowser, alive, newPage, P, mockSteps, msgs, view, conversationOf,
   toolParts, lastAssistant, idle, panelText, providerOptions, sendText, joinOnline, sharedProjectOf, hostedToggle, openProjectSettings,
@@ -108,6 +109,8 @@ const desktops = new Set();
 const nodeConns = new Set();
 const shots = [];
 const timings = {};
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):点「停止」到停下用了多久只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('cloud-agent-ux-ui-probe');
 const shot = async (page, name) => { const f = path.join(OUT, `${name}.png`); const ok = await page.screenshot({ path: f }).then(() => true, () => false); if (ok) shots.push(f); return f; };
 const store = (page, src, ...a) => page.evaluate((s, a2) => new Function('S', 'args', s)(window.__pcStore, a2), src, a);
 
@@ -658,7 +661,8 @@ async function stopStep() {
   const tools2 = toolParts(await msgs(d2.page)).length;
   const tStop = Date.now();
   await d2.page.click('[data-pc="cloud-ai-panel"] [data-pc="ai-stop"]').catch(() => {});
-  const stopped = await until('S:点「停止」后 5 秒内停下', () => idle(d2.page), 5_000, 50);
+  const stopped = await until('S:点「停止」后停下', () => idle(d2.page), 60_000, 50); // 等待时限只为防卡死(原 5 秒)
+  timingLog.record('S 点「停止」到这一轮停下', stopped ? Date.now() - tStop : null, { formerLimit: '< 5 秒' });
   const stopMs = Date.now() - tStop;
   const aStop = lastAssistant(await msgs(d2.page));
   const diskStop = S.diskConversation(PID, conv);
@@ -666,8 +670,8 @@ async function stopStep() {
   await sleep(1500);
   const p2 = await pageProject(bob.page);
   const okWrites = (diskStop?.events ?? []).filter((e) => e.type === 'tool_result' && e.ok === true).length;
-  check('S B2 创建者重新打开桌面版(新进程):AI 栏仍是本机驱动,出现「云端有一个对话正在进行」,接上后接着看得到过程;点「停止」5 秒内停下,记录里是已停止,之后项目不再变', !!banner && providerOnOpen !== 'cloud'
-    && !!attached && tools2 > tools1 && !!stopped && stopMs < 5000 && aStop?.outcome === 'aborted' && diskStop?.meta?.state === 'idle' && diskStop.meta.reason === 'stopped' && okWrites >= 2 && okWrites < 22 && JSON.stringify(p1) === JSON.stringify(p2), {
+  check('S B2 创建者重新打开桌面版(新进程):AI 栏仍是本机驱动,出现「云端有一个对话正在进行」,接上后接着看得到过程;点「停止」后停下(用时只记录),记录里是已停止,之后项目不再变', !!banner && providerOnOpen !== 'cloud'
+    && !!attached && tools2 > tools1 && !!stopped && aStop?.outcome === 'aborted' && diskStop?.meta?.state === 'idle' && diskStop.meta.reason === 'stopped' && okWrites >= 2 && okWrites < 22 && JSON.stringify(p1) === JSON.stringify(p2), {
     providerOnOpen, attachedWithToolCalls: attached?.tools ?? null, toolCallsWhileWatching: [tools1, tools2], stopMs, outcome: aStop?.outcome ?? null, recorded: diskStop ? { state: diskStop.meta.state, reason: diskStop.meta.reason } : null, writesLanded: okWrites, quietAfter: JSON.stringify(p1) === JSON.stringify(p2),
   });
   await shot(d2.page, 'S-3-creator-stopped');
@@ -1018,5 +1022,7 @@ try {
 }
 const failed = results.filter((r) => !r.ok);
 if (code === 0 && failed.length) code = 1;
+for (const [k, v] of Object.entries(timings)) if (typeof v === 'number') timingLog.record(k, v);
+timingLog.print();
 console.log(JSON.stringify({ summary: { ok: code === 0, total: results.length, failed: failed.length, failedChecks: failed.map((r) => r.check), timings, shots, ...(KEEP ? { tmp: TMP } : {}) } }));
 process.exit(code);

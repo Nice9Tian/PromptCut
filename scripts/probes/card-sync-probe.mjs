@@ -31,6 +31,7 @@
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -92,6 +93,8 @@ const SCOPES = path.join(ROOT, 'src', 'cards', 'user', '_scopes.json');
 const scopesBefore = fs.existsSync(SCOPES) ? fs.readFileSync(SCOPES) : null;
 const procs = [];
 const fails = [];
+/** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):卡片源码到达另一台、重新测量各用了多久只写进 TIMINGS 行,不决定过不过 */
+const timingLog = createTimings('card-sync-probe');
 const navigations = [];
 const consoleLog = [];
 const bHmrMessages = [];
@@ -528,10 +531,12 @@ try {
   res.aOverrideV2 = !!overOf(A)?.includes(MARK('v2'));
   res.bOverrideV2 = !!overOf(B)?.includes(MARK('v2'));
 
-  if (!(res.installMs !== null && res.installMs <= 5000)) fails.push(`installMs=${res.installMs}`);
+  // 原来 installMs、remeasureMs 各有 ≤ 5 秒的通过条件;到没到、测没测仍然判,用时只记录
+  timingLog.record('B 装上 A 改的卡片源码', res.installMs, { formerLimit: '≤ 5 秒' });
+  timingLog.record('B 装上后重新测量', res.remeasureMs, { formerLimit: '≤ 5 秒' });
+  if (res.installMs === null) fails.push('installMs=null');
   if (res.hmrMs === null) fails.push('b-page-no-hmr');
   if (res.remeasureMs === null) fails.push('b-no-remeasure');
-  else if (res.remeasureMs > 5000) fails.push(`remeasure-over-5s(${res.remeasureMs})`);
   if (res.stageMs === null) fails.push('b-stage-not-v2');
   { const [kept, all] = String(res.editorNodesKept).split('/').map(Number); if (!(all > 0 && kept === all)) fails.push(`b-editor-remounted(${res.editorNodesKept})`); }
   if (res.dialogAfterEdit && !res.dialogBeforeEdit) fails.push('b-ai-dialog-reshown');
@@ -576,6 +581,7 @@ try {
   else res.temp = TMP;
   res.fails = fails;
   res.ok = fails.length === 0;
+  timingLog.print();
   process.stdout.write(`${JSON.stringify(res)}\n`);
   process.exitCode = res.ok ? 0 : 1;
 }
