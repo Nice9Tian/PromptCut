@@ -30,7 +30,7 @@ CONTROL: actual HTTP ownership, anonymous denial, success and duplicate per-requ
 - `server/test/cloud-agent-page.test.mjs`：只改 CA-REV-10。按 `page.request.id` 建结果 Map，每次交付同步登记并拒绝重复 id；每请求的 bob404、anon401、alice200、重复410按原有顺序精确比较。第二请求单独精确比较 alice200；断言恰好两个不同 id 和两个回答任务。跟踪 answer Promise，显式 `Promise.all` 等待所有异步答复并传播失败，替代按全球数组长度轮询。两个请求仍并发处理，不人为串行。SSE 请求工具、参数、无 seq、两个工具成功、结束后迟到410、补发无 page.request、不存在404、非法400的断言全部保留。
 - 本报告：记录原集成失败、受控证明、修复范围与验证证据。
 
-没有加 sleep、放宽超时或放宽权限/一次性/工具结果断言；没有修改实现、产品、UI、接口或语义。
+首份修复没有加 sleep 或放宽权限/一次性/工具结果断言；聚合等待曾失去原 3000 ms 防卡死上限，已在下文 root 审查补充中修正。没有修改实现、产品、UI、接口或语义。
 
 ## 尝试与验证
 
@@ -75,3 +75,20 @@ root 逐行审查 `3e223fa8` 后发现：旧 `waitFor(statuses.length === 5, 300
 
 - 标准针对性只跑一次：12 tests、12 pass、0 fail、0 skipped、duration_ms 8574.1558，墙钟 8.8769175 秒，退出 0；CA-REV-10 为 1666.4964 ms，没有包装器自动重跑。
 - 系统 TMP 的受控脚本直接提取当前测试的聚合等待源码，注入可控计时器，不等待真实 3 秒：成功时清 timer、回答失败传播同一 Error 并清 timer、计时器参数严格 3000、超时拒绝并清 timer、超时后回答再拒绝也无 unhandledRejection。全部断言通过，退出 0，只运行一次；源码没有新增 sleep。日志 `promptcut-page-race-bounded-proof.log`。
+
+- `c1d3f8c7` 后类型检查一次：父仓库解析 TypeScript，`node <路径> -b --force` 退出 0、零诊断，墙钟 11.4865958 秒。
+- 同提交全量 npm test 一次：4928 tests、4927 pass、0 fail、1 skipped，退出 0；duration_ms 64588.2746，墙钟 64.9609395 秒。CA-REV-10 为 2474.822 ms。原始摘要：
+
+```text
+ℹ tests 4928
+ℹ suites 0
+ℹ pass 4927
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 64588.2746
+✓ npm test 最终结果：零失败
+```
+
+审查补充后的针对性、类型与全量均首次通过，没有失败、异常退出或包装器自动重跑。日志为系统 TMP 的 `promptcut-page-race-bounded-target.log`、`promptcut-page-race-bounded-types.log`、`promptcut-page-race-bounded-full.log`。原受控证明失败和原集成失败没有删除或被重跑结果替代。最终 diff-check 退出 0；对当前审查前提交只增加有界聚合及本报告证据；仍仅原两文件，工作区干净。不合并、不推送。
