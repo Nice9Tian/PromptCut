@@ -15,6 +15,10 @@
 
 > **2026-10-08 对齐补记（main `bf6e48e6`）：** 以下用户已定行为取代旧机制说明；本文旧方案和历史验收不等于已按新目标实现。共有/私有、单对话 FIFO、切私即中止他人当前任务并作废其排队消息、无存量对话不迁移，以 `account-binding-task.md`「已拍板」和 `mechanism/agent.md` 为准；旧第 3、4、7.2、19、28 节按这些规则重写。托管方读取全部记录（含私有）已审定，但首次使用的告知/同意门槛见下方“告知”补记，旧第 19 节 U5 不能单独当成完整用户流程。旧第 28.1 节只读发起页的 `get_selection` 退路由新决定取代：所有在线成员选区均需纳入并标用户名，发起人标为当前用户；发起人离线时使用消息快照并标为非实时。交互/API、鉴权、FIFO 内部机制由 0.7.18 的设计与实施包落实，本契约此处不声称已完成。
 
+> **看画面口径更正：** 第 23.1 节留下的“云端 Agent 第一版没有渲染能力，也不经素材服务拉取产物来看”是被后续第 25 节取代的旧句。目标分工是云端 Agent 服务请求同机托管渲染服务即时出图，Agent 服务自身不运行 renderer；具体部署是否具备该能力仍须按实际节点验收，不能仅凭本历史契约宣称已部署。
+
+> **发起人本机工具口径更正：** 第 28.3 节 `web_handoff` 与 `collect_login`/`collect_login_check` 的“没接”是实现状态，不是产品能力禁用或新的选型问题。`web_handoff` 目标只操作发起人自己的页面/本机界面，发起人离线时明确回 offline；素材采集默认匿名，需要登录时由发起人的电脑代下，登录信息不离开其电脑，代下失败或发起人离线则回退匿名，不上传登录信息。所需的本机桥接仍待实现；旧“评估后保持现状”的结论已被取代。
+
 > **托管方读取告知：** 第 7.2 节与第 19 节 U5 的“托管方读得到”补充为：首次使用云端 Agent 前告知托管方可读取含私有对话的全部记录，用户选“我知道了”后按账号记住；选“拒绝”不发送消息、不使用云端 Agent，下次再提示。该流程是产品目标，尚待实现。
 
 状态：**第二稿已由主会话审过并认可（2026-10-06），按它开工**；主会话的十三条裁定已写进对应处，标「〔裁：主会话 2026-10-06〕」，其中待用户审的汇在第 19 节。原状态：设计稿第二稿（2026-10-06，分支 `claude/cloud-agent`，起点 `e7d18340`，已并入 main `de03c915` 的任务书更新）。第二稿相对第一稿改了哪些见第 17 节。任务书 `cloud-agent-task.md`；用户的决定 E～J 在任务书里，本文不重复，只写怎么做到。
@@ -595,14 +599,14 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption`、`list_shots`、`list_subjects` | — | — | `stt_status`、`stt_install`、`transcribe_media`（语音识别）、`detect_shots`（镜头）、`track_points`、`get_track`、`track_status`、`track_install`（追踪）、`detect_subjects`、`subject_status`、`subject_install`（主体）：要节点上的 Python 运行环境与模型权重，并把页面里的作业表搬到服务端。`attach_clip_motion`：要一份追踪结果 |
 | cards（8） | `list_cards`（含本项目的用户卡）、`apply_card`；`bake_card`、`inspect_card_dom`（看画面，9.8） | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | — |
 | vision（2） | `see_frames`（时间轴的画面）、`get_gif`（看画面，9.8） | — | — | `see_frames` 的素材镜头拼图（`source: "media"`）：要节点上的镜头识别，回明确的原因 |
-| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check`（要用户自己扫码或输口令；在线时也做不了，原因见第 28.3 节） | — |
-| browser（8） | — | — | `web_handoff`（在线时也做不了，第 28.3 节） | 其余七个：要节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录 |
+| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check` 当前尚无发起电脑代下桥接；目标为素材采集默认匿名，需登录时由发起电脑代下，失败/离线退回匿名且不上传登录信息（见首部补记） | — |
+| browser（8） | — | — | `web_handoff` 当前尚未桥接；目标只作用发起人自己的页面/本机界面，离线明确回 offline（见首部补记） | 其余七个：要节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录 |
 | agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（0.7.18、0.7.19、0.7.20 全部关闭，统一提示“云端暂不支持开子 Agent”） | 0.7.20 之后待办 |
 | core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause`（在线：经反向通道在发起人的页面上执行；第 28 节） | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
 
 「这一版还没接上」的 23 个都不是事先排除：接上之后把它在 `CLOUD_TOOL_PLAN` 里挪到上面某一类即可。节点上要装什么见 9.9。
 
-**要操作页面的工具，发起方在线时**〔2026-10-07 反向通道实现记录；按 2026-10-08 用户决定修订目标〕：`seek`、`play`、`pause` 仍作用于发起页面；`get_selection` 的旧“只读发起页/同成员其它窗口快照”规则已被新规则取代，目标见第 28.1 节替代说明。`web_handoff` 与 `collect_login`、`collect_login_check` 仍不可用，原因见第 28.3 节。`spawn_agent` 不再属于在线条件分支，三个版本均关闭并列为 0.7.20 后待办。
+**要操作页面的工具，发起方在线时**〔2026-10-07 反向通道实现记录；按 2026-10-08 用户决定修订目标〕：`seek`、`play`、`pause` 仍作用于发起页面；`get_selection` 的旧“只读发起页/同成员其它窗口快照”规则已被新规则取代，目标见第 28.1 节替代说明。`web_handoff` 与 `collect_login`、`collect_login_check` 尚未桥接，目标范围见本文首部补记与第 28.3 节更正；不把旧“不可用”实现记录当成产品禁用规则。`spawn_agent` 不再属于在线条件分支，三个版本均关闭并列为 0.7.20 后待办。
 
 ### 9.3 建卡改卡
 
@@ -1785,9 +1789,9 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 | `pause` | 页面停下，回 `{ ok: true }` | `initiatorOffline` | 做成 |
 | `get_selection` | 旧行为：只读发起页面 | 旧行为：有同成员其它窗口时回消息快照 | **旧实现说明已由用户新决定取代**：当前目标为读取所有在线成员选区并标用户名、发起人标“当前用户”；发起人离线用消息快照并注明非实时。接口待设计，不把旧两列当成目标行为 |
 | `spawn_agent` | 云端暂不支持 | 云端暂不支持 | 用户已定：0.7.18、0.7.19、0.7.20 关闭，提示「云端暂不支持开子 Agent」，列 0.7.20 之后；不再等待用户选型 |
-| `web_handoff` | `initiatorOnly` | `initiatorOffline` | **没接**。它交出去的是 Agent 自己开着的那个网页窗口；云端的 `web_*` 七个还没接上（节点上没有浏览器），云端 Agent 没有开着的网页可交。差：先接上 `web_*`（9.2 的表），再定「节点上的浏览器怎么让发起人接手」（远程画面，还是把地址交给他本机的浏览器） |
-| `collect_login` | `initiatorOnly` | `initiatorOffline` | **没接，评估后保持现状**。登录态（站点的 Cookie）只能留在发起人自己的机器上、不上传到节点；而云端的采集（`collect_*`）在云节点上跑，用不到留在他机器上的登录态。让它「能用」只有两条路：把 Cookie 传到节点（违反上面这条），或把下载改到发起人的机器上做（那就不是云端采集，页面一关就停）。两条都不该由会话定。另外在线页面没有本机的 `/api/collect/*`，登录窗口无处可开。云端按未登录的画质采集，系统提示词里写明 |
-| `collect_login_check` | `initiatorOnly` | `initiatorOffline` | 同上 |
+| `web_handoff` | `initiatorOnly` | `initiatorOffline` | **尚未桥接（实现记录）**。目标仅操作发起人自己的页面/本机界面；发起人离线时明确回 offline。旧“转交 Agent 自己的网页窗口，再决定远程画面或地址交回”的未定描述不再是当前目标 |
+| `collect_login` | `initiatorOnly` | `initiatorOffline` | **尚未桥接（实现记录）**。目标是素材采集默认匿名；需登录时由发起人电脑代下，登录信息不上传节点；代下失败或发起人离线回退匿名。旧“评估后保持现状”已被取代 |
+| `collect_login_check` | `initiatorOnly` | `initiatorOffline` | **尚未桥接（实现记录）**；按 `collect_login` 的本机代下与匿名回退目标设计，不上传登录信息 |
 
 `initiatorOnly` 的 `error` 逐个写了上面「差什么」的那一句（`CLOUD_TOOL_PLAN[工具].online`），不再是原来那句笼统的「还不能反过来操作他的页面」。
 
