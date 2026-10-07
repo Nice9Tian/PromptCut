@@ -1,5 +1,6 @@
 import https from 'node:https';
 import { accountError, certificateFingerprint } from '../../account/client.mjs';
+import { requireRequestId } from '../../account/protocol.mjs';
 
 const INTERNAL = '/internal/v2/';
 const PUBLIC = '/hosted/shared/account';
@@ -38,6 +39,16 @@ export function mountAccountProjects({ authority, services = [], issueSession })
     const service = registry.get(certificateFingerprint(req.socket.getPeerCertificate()?.fingerprint256));
     if (!service) bad(403, 'service-forbidden'); return service;
   };
+  const session = async (actor, body) => {
+    if (typeof issueSession !== 'function') bad(503, 'session-unavailable');
+    requireRequestId(body.requestId);
+    if (typeof body.deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.deviceId)) bad(400, 'invalid-device');
+    const principal = await authority.authorizePrincipal(actor, { projectId: body.projectId });
+    const result = await issueSession({ principal, deviceId: body.deviceId, requestId: body.requestId });
+    if (!result || typeof result.connectionTicket !== 'string' || !result.connectionTicket ||
+      typeof result.assetTicket !== 'string' || !result.assetTicket || !Number.isSafeInteger(result.expiresAt)) bad(503, 'session-unavailable');
+    return result;
+  };
   async function dispatch(req, res, internal) {
     const url = new URL(req.url, 'http://route.invalid');
     if (internal ? !url.pathname.startsWith(INTERNAL) : !url.pathname.startsWith(PUBLIC)) return false;
@@ -69,12 +80,13 @@ export function mountAccountProjects({ authority, services = [], issueSession })
           if (['role', 'principal', 'loginId', 'credentialId', 'authorizationId', 'runGrantId', 'creator'].some(k => body[k] !== undefined) ||
             (body.accountId !== undefined && !url.pathname.endsWith('/admin'))) bad(400, 'invalid-authority-claim');
           if (url.pathname === `${PUBLIC}/create`) { result = await authority.createProject(actor, body); status = 201; }
-          else if (url.pathname === `${PUBLIC}/join`) result = await authority.joinProject(actor, body);
+          else if (url.pathname === `${PUBLIC}/join`) {
+            if (typeof issueSession !== 'function') bad(503, 'session-unavailable');
+            const membership = await authority.joinProject(actor, body); result = { membership, ...await session(actor, body) };
+          }
           else if (url.pathname === `${PUBLIC}/admin`) result = await authority.adminProject(actor, body);
           else if (url.pathname === `${PUBLIC}/session`) {
-            if (typeof issueSession !== 'function') bad(503, 'session-unavailable');
-            const principal = await authority.authorizePrincipal(actor, { projectId: body.projectId });
-            result = await issueSession({ principal, deviceId: body.deviceId, requestId: body.requestId });
+            result = await session(actor, body);
           } else bad(404, 'no-route');
         } else if (req.method === 'GET' && url.pathname === `${PUBLIC}/status`) {
           // Authenticate first: an invalid login cannot obtain an authoritative gone result.
@@ -90,7 +102,10 @@ export function mountAccountProjects({ authority, services = [], issueSession })
         } else bad(405, 'method-not-allowed');
       }
       send(res, status, { ok: true, ...result });
-    } catch (error) { send(res, error.status ?? (error.code?.startsWith('bad-') ? 400 : 503), { ok: false, error: error.code ?? 'authority-unavailable' }); }
+    } catch (error) {
+      const code = error.code ?? 'authority-unavailable';
+      send(res, error.status ?? (error.code?.startsWith('bad-') ? 400 : 503), { ok: false, error: code, code, message: code });
+    }
     return true;
   }
   return { authority, handlePublic: (req, res) => dispatch(req, res, false), handleInternal: (req, res) => dispatch(req, res, true) };

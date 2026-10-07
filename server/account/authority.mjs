@@ -1,6 +1,6 @@
 import { randomUUID, sign } from 'node:crypto';
 import { newProjectId } from '../auth/store.mjs';
-import { validateAccountEvent, requireRequestId } from './protocol.mjs';
+import { validateAccountEvent, validateEventBatch, requireRequestId } from './protocol.mjs';
 import { accountError } from './client.mjs';
 import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
 
@@ -31,10 +31,11 @@ const permission = (project, accountId, action) => {
  * This factory is deliberately not mounted in the legacy shared service by itself.
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
-  signingKey, keyId, now = Date.now, pollMs = 1000, onDiagnostic = () => {} }) {
+  signingKey, keyId, now = Date.now, pollMs = 1000, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier }) {
   const refs = new Map(); const subscriptions = new Set(); const creating = new Map();
   let syncing = null, timer = null, closed = false, ready = false;
   const notify = event => {
+    if (event.type !== 'login-revoked' && !(event.type === 'project-access-changed' && event.accountIds?.length)) return;
     for (const entry of subscriptions) {
       const context = entry.context;
       if (context.projectId && event.projectId && context.projectId !== event.projectId) continue;
@@ -52,6 +53,10 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         return { duplicate: true, event: null };
       }
       if (event.seq !== state.accountHead + 1) reject(503, 'account-event-gap');
+      const priorEvent = Object.values(state.accountEvents).find(row => row.event.eventId === event.eventId)?.event;
+      if (priorEvent && (priorEvent.type !== 'password-changed' || event.type !== 'credentials-revoked' ||
+        ['accountId', 'changeSeq', 'changedAt', 'initiatorWebsiteLoginId'].some(field => priorEvent[field] !== event[field]) ||
+        canonicalJson(priorEvent.oldLoginIds) !== canonicalJson(event.oldLoginIds))) reject(503, 'account-event-conflict');
       state.accountEvents[event.seq] = { event, digest: digestOf(event) };
       state.accountHead = event.seq;
       if (event.type !== 'credentials-revoked') return { duplicate: false, event: null };
@@ -74,7 +79,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         // Account's head is global. Validate and apply every page, never skip another account's seq.
         for (;;) {
           const cursor = ledger.read().accountHead;
-          const batch = await accountClient.events(cursor);
+          let batch;
+          try { batch = validateEventBatch(await accountClient.events(cursor), cursor); }
+          catch (error) { if (error.status) throw error; reject(503, 'account-event-gap'); }
           if (!Number.isSafeInteger(batch.headSeq) || batch.headSeq < cursor || !Array.isArray(batch.events)) reject(503, 'account-event-gap');
           if (batch.headSeq > cursor && batch.events.length === 0) reject(503, 'account-event-gap');
           for (const event of batch.events) applyRevocation(event);
@@ -125,6 +132,8 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   }
   async function checkAccess({ principal, projectId, action, resource } = {}) {
     if (!principal?.authorizationId) reject(401, 'login-required');
+    if (!accountIdOK(principal.accountId) || typeof principal.loginId !== 'string' || !principal.loginId ||
+      typeof principal.credentialId !== 'string' || !principal.credentialId || !Number.isSafeInteger(principal.loginGeneration)) reject(401, 'principal-mismatch');
     if (principal.projectId !== projectId) reject(403, 'project-mismatch');
     if (!['read', 'write'].includes(action)) reject(400, 'invalid-action');
     if (resource !== undefined && (!resource || typeof resource !== 'object' || !['media', 'snap', 'px'].includes(resource.ns))) reject(400, 'invalid-resource');
@@ -272,7 +281,8 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   function ackAccessEvent(eventId, serviceId, receipt) {
     if (!services.includes(serviceId)) reject(403, 'service-forbidden');
     requireRequestId(receipt?.receiptId);
-    if (!Number.isSafeInteger(receipt.cursor) || typeof receipt.complete !== 'boolean' || !Array.isArray(receipt.closedStreams) || !Array.isArray(receipt.stoppedRuns) || !Array.isArray(receipt.rejectedCredentials)) reject(400, 'invalid-receipt');
+    // A service sends its immutable receipt only after real close. Progress/pending is not an ACK.
+    if (!Number.isSafeInteger(receipt.cursor) || receipt.complete !== true || !Array.isArray(receipt.closedStreams) || !Array.isArray(receipt.stoppedRuns) || !Array.isArray(receipt.rejectedCredentials)) reject(400, 'invalid-receipt');
     return ledger.transaction(state => {
       const event = state.accessEvents.find(e => e.eventId === eventId); if (!event) reject(404, 'no-event');
       if (receipt.cursor < event.seq || receipt.cursor > state.accessHead) reject(409, 'ack-cursor-mismatch');
@@ -307,8 +317,49 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     if (p.creatorAccountId !== actor.accountId && !p.members[actor.accountId]) reject(403, 'not-listed');
     return status(query);
   }
+  async function flushAccountAcknowledgements() {
+    await synchronize();
+    const pending = [];
+    for (const { event } of Object.values(ledger.read().accountEvents)) {
+      const ackKey = `seq:${event.seq}`;
+      let persisted = ledger.read().accountAcks[ackKey];
+      if (persisted?.sent) continue;
+      if (!persisted) {
+        let receipt = { receiptId: `doc:${ledger.authorityId}:${event.seq}`, appliedSeq: event.seq, logoutComplete: false };
+        if (event.type === 'credentials-revoked') {
+          const barrier = revocationStatus(event.eventId);
+          // No default empty connection enumeration: only an owner-wired real registry/fence verifier can release this.
+          if (typeof getDocBarrier !== 'function' || typeof verifyDocBarrier !== 'function' ||
+            services.some(service => !barrier.serviceAcks[service]?.complete || barrier.serviceAcks[service].cursor < barrier.accessSeq)) {
+            pending.push(event.eventId); continue;
+          }
+          const proof = await getDocBarrier(structuredClone(barrier));
+          if (!proof || proof.eventId !== event.eventId || proof.accountEventSeq !== event.seq || proof.pendingSeals !== 0 ||
+            !Array.isArray(proof.connections) || !Number.isSafeInteger(proof.endCursor) || proof.endCursor < 0 ||
+            !proof.clockEvidence || !proof.modifications || await verifyDocBarrier(proof, barrier) !== true) {
+            pending.push(event.eventId); continue;
+          }
+          receipt = { ...receipt, logoutComplete: true, connections: proof.connections, endCursor: proof.endCursor,
+            clockEvidence: proof.clockEvidence, modifications: proof.modifications,
+            serviceAcks: Object.fromEntries(services.map(service => [service, {
+              receiptId: barrier.serviceAcks[service].receiptId, appliedSeq: event.seq, logoutComplete: true,
+              accessCursor: barrier.serviceAcks[service].cursor, closedStreams: barrier.serviceAcks[service].closedStreams,
+              stoppedRuns: barrier.serviceAcks[service].stoppedRuns, rejectedCredentials: barrier.serviceAcks[service].rejectedCredentials,
+            }])) };
+        }
+        persisted = ledger.transaction(state => {
+          state.accountAcks[ackKey] ??= { eventId: event.eventId, receipt, sent: false };
+          return state.accountAcks[ackKey];
+        });
+      }
+      // Persist the exact receipt before network send. A lost response/restart replays the same request.
+      await accountClient.ack(persisted.eventId, persisted.receipt);
+      ledger.transaction(state => { state.accountAcks[ackKey].sent = true; });
+    }
+    return { pendingEvents: [...new Set(pending)], accountHead: ledger.read().accountHead };
+  }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
-    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, revocationStatus,
+    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, revocationStatus, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);

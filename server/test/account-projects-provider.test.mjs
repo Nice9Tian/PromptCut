@@ -124,6 +124,29 @@ test('account project v2 real frozen provider, pinned mTLS, persisted doc author
       await fails(() => authority.adminProject(agent, body), 'creator-required');
       await fails(() => authority.adminProject({ accessToken: b.accessToken }, body), 'creator-required');
     });
+    await t.test('restricted entry/list writes enforce current revision; removal affects both devices and read-only forbids write', async () => {
+      const admin = async body => {
+        const before = await authority.authorizePrincipal(aPrincipal, { projectId: project.projectId });
+        return authority.adminProject(aPrincipal, { projectId: project.projectId, expectedAccessRevision: before.accessRevision, ...body });
+      };
+      const before = await authority.authorizePrincipal(aPrincipal, { projectId: project.projectId });
+      await admin({ op: 'set-entry', allowLinkJoin: false, requestId: 'restricted-entry' });
+      await fails(() => authority.adminProject(aPrincipal, { projectId: project.projectId, expectedAccessRevision: before.accessRevision,
+        op: 'set-entry', allowLinkJoin: true, requestId: 'stale-entry' }), 'access-revision-mismatch');
+      await admin({ op: 'set-list', members: [], requestId: 'remove-b-list' });
+      await fails(() => authority.checkAccess({ principal: bPrincipal, projectId: project.projectId, action: 'read' }), 'not-listed');
+      await fails(() => authority.authorizePrincipal({ accessToken: b2.accessToken }, { projectId: project.projectId }), 'not-listed');
+      await fails(() => authority.joinProject({ accessToken: b.accessToken }, { projectId: project.projectId, requestId: 'restricted-b-join' }), 'not-listed');
+      await admin({ op: 'set-list', members: [{ accountId: ids[1], access: 'r' }], requestId: 'allow-b-read' });
+      assert.equal(authority.listProjects(ids[1]).joined.length, 0);
+      await authority.joinProject({ accessToken: b.accessToken }, { projectId: project.projectId, requestId: 'listed-b-join' });
+      const read = await authority.authorizePrincipal({ accessToken: b.accessToken }, { projectId: project.projectId });
+      assert.equal((await authority.checkAccess({ principal: read, projectId: project.projectId, action: 'read' })).allowed, true);
+      await fails(() => authority.checkAccess({ principal: read, projectId: project.projectId, action: 'write' }), 'not-listed');
+      await admin({ op: 'set-list', members: [{ accountId: ids[1], access: 'rw' }], requestId: 'allow-b-write' });
+      await admin({ op: 'set-hosted-service', service: 'agent', enabled: true, requestId: 'enable-agent' });
+      assert.equal(ledger.read().projects[project.projectId].hosted.agent, true);
+    });
     await t.test('kick persists account ban and closes permissions for both device logins; notification alone does not complete', async () => {
       let notified = null; const unsubscribe = authority.subscribeRevocations({ projectId: project.projectId, accountId: ids[1] }, event => { notified = event; });
       const before = await authority.authorizePrincipal(aPrincipal, { projectId: project.projectId });
@@ -141,6 +164,45 @@ test('account project v2 real frozen provider, pinned mTLS, persisted doc author
       await fails(() => authority.authorizePrincipal({ accessToken: b2.accessToken }, { projectId: project.projectId }), 'banned');
       aPrincipal = await authority.authorizePrincipal({ accessToken: a.accessToken }, { projectId: project.projectId });
     });
+    await t.test('real password success retains old access for choice no; choice yes exact old set preserves new B login and initiator website', async () => {
+      const now = Date.now();
+      const website = store.createSession({ tokenHash: randomBytes(32).toString('hex'), accountId: ids[1], now, expiresAt: now + 86400000 });
+      const changed = store.changePassword({ accountId: ids[1], requestId: 'password-b-retain', pw: 'new-unusable-hash', now,
+        initiatorWebsiteLoginId: website.loginId });
+      await authority.synchronize();
+      assert.equal((await client.verify(b.accessToken)).loginId, b.loginId);
+      store.choose(changed.event_id, website.loginId, false, 'choose-retain');
+      await authority.synchronize(); assert.equal((await client.verify(b2.accessToken)).loginId, b2.loginId);
+      const acked = await authority.flushAccountAcknowledgements(); assert.equal(acked.pendingEvents.length, 0);
+      assert.equal(store.acks(changed.event_id).find(ack => ack.service === 'doc').logoutComplete, false);
+      const changed2 = store.changePassword({ accountId: ids[1], requestId: 'password-b-exit', pw: 'newer-unusable-hash', now: Date.now(),
+        initiatorWebsiteLoginId: website.loginId });
+      const freshB = login(1, 'b-after-password'); store.choose(changed2.event_id, website.loginId, true, 'choose-exit');
+      await authority.synchronize();
+      const status = authority.revocationStatus(changed2.event_id);
+      assert.ok(status.loginIds.includes(b.loginId)); assert.ok(status.loginIds.includes(b2.loginId));
+      assert.equal(status.loginIds.includes(freshB.loginId), false); assert.equal(status.loginIds.includes(website.loginId), false);
+      await fails(() => client.verify(b.accessToken), 'credential-revoked'); assert.equal((await client.verify(freshB.accessToken)).accountId, ids[1]);
+      assert.equal(store.login(website.loginId).revoked_event_id, null);
+      const pending = await authority.flushAccountAcknowledgements(); assert.ok(pending.pendingEvents.includes(changed2.event_id));
+      assert.equal(store.acks(changed2.event_id).some(ack => ack.logoutComplete), false);
+      const createdB = await authority.createProject({ accessToken: freshB.accessToken }, { name: 'B project', requestId: 'create-b' });
+      assert.equal(authority.listProjects(ids[1]).owned[0].projectId, createdB.projectId);
+      assert.equal(authority.listProjects(ids[0]).owned.length, 1);
+    });
+    await t.test('restart pulls every page through global account head including unrelated account events', async () => {
+      for (let i = 0; i < 105; i++) {
+        const id = `paged-login-${i}`;
+        store.createLogin({ id, accountId: ids[1], kind: 'editor', now: Date.now(), expiresAt: Date.now() + 3600000 });
+        store.logoutLogin(id, Date.now());
+      }
+      const cursor = ledger.read().accountHead;
+      assert.ok(store.eventHead() - cursor > 100);
+      authority.close(); ledger.close(); await open();
+      assert.equal(ledger.read().accountHead, store.eventHead());
+      assert.equal(Object.keys(ledger.read().accountEvents).length, store.eventHead());
+      aPrincipal = await authority.authorizePrincipal({ accessToken: a.accessToken }, { projectId: project.projectId });
+    });
     await t.test('ordinary real logout consumes exact global account sequence, no account-wide expansion; new login survives', async () => {
       const logout = store.logoutLogin(a.loginId, Date.now()); const fresh = login(0, 'a-fresh');
       await authority.synchronize(); const barrier = authority.revocationStatus(logout.eventId);
@@ -153,7 +215,7 @@ test('account project v2 real frozen provider, pinned mTLS, persisted doc author
       assert.equal(authority.applyRevocation(store.events(0).events[0]).duplicate, true);
     });
     await t.test('persisted service ACK idempotency and restart do not invent doc close/order evidence', async () => {
-      const event = authority.eventsSince(0).events.find(e => e.type === 'login-revoked');
+      const event = ledger.read().accessEvents.find(e => e.type === 'login-revoked' && e.loginIds.includes(a.loginId));
       const receipt = { receiptId: 'asset-close-real-fixture', cursor: event.seq, complete: true, closedStreams: ['fixture-stream-closed'], stoppedRuns: [], rejectedCredentials: [a.loginId] };
       assert.deepEqual(authority.ackAccessEvent(event.eventId, 'asset', receipt), receipt);
       assert.deepEqual(authority.ackAccessEvent(event.eventId, 'asset', receipt), receipt);
