@@ -147,3 +147,11 @@ Node二进制与脚本副本必须可由该用户执行/读取。脚本默认自
 本机仅执行syntax及纯CLI guard：最终node --check exit0；--help exit0；Windows --user入口exit1且code=probe-linux-root-required；非法--force exit1且code=probe-cli-invalid。原始TEMP/pc-asset-root-cgroup-cli-{help,platform,invalid}-1.log及最终-2.log保留，均未开启listener/guard/npm。没有运行Linux进程、systemd或节点；实际kernel pinnedFD行为仍待root唯一窗口。
 
 root执行前只读指出umask077入口问题：e00的--out分支mkdir755可能实为700，manifest mode644也受umask影响。最终窄补对**仅新建成功**的out/root显式chmod755，对新manifest显式chmod644，probe副本原已有chmod644；data显式700后chown专属asset用户。--out已存在时mkdir先EEXIST，绝不chmod既有路径，不改全局umask。最终syntax0/help0/Windowsguard1/非法CLI1，TEMP/pc-asset-root-cgroup-cli-{help,platform,invalid}-3.log；尚未节点执行。
+
+## Linux OS smoke 首次真实运行：失败，原证据保留
+
+root唯一实际运行固定886cd6b5（脚本SHA256 4a7f957074cb66da8b0b63d8ed80bd26676adead7f543e1c2ddc3f896b84629e），Node24.21/systemd249。root回传原始日志 `TEMP/pc-root-cgroup-os-886cd6b5-once.log`；VM保留 `/var/tmp/pc-root-cgroup-os-886cd6b5/once-output/result.json`。本Agent未执行节点。
+
+wall2283ms，okfalse，negativeObserved=true，emptyObserved=false。244ms旧FD读populated1，主子都在；268ms mainBirthGone=true，child仍持真实FD/TCP且populated1，负例成立；2261ms childEOF/close但birth仍在/populated1；2273ms两个birthgone，固定旧events FD读ENODEV，未读到populated0。唯一stop次数1且exit0，unitinactive/MainPID0、bothEOF/close真，6540–6549已清空。root独立核实际生产account274484/doc274497/asset273011/nginx9395的PID与NRestarts0均未变。
+
+结论是**旧cgroup空对象取证失败**，不是可接受关闭。没有以PID消失、EOF或ENODEV代替empty，也不重复同一smoke。原纯模型/CLI验证不覆盖此内核行为。下一机制必须可靠保留空对象到root读取，再准许其移除；尚未改producer、G或节点。
