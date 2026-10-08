@@ -121,7 +121,9 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     let control = committedControl;
     try {
       if (typeof provider?.applyAccessEvent === 'function') control = await provider.applyAccessEvent(event);
-      if (control && onRunControl) await onRunControl(control);
+      if (control && onRunControl) {
+        for (const value of Array.isArray(control) ? control : [control]) await onRunControl(value);
+      }
     } catch {
       for (const conn of runs) service.closeConn(conn.connId, 4003, 'run-authority-unavailable');
       throw accountError(503, 'run-authority-unavailable');
