@@ -245,3 +245,73 @@ root另只读回传本轮随机 `pcassetproofd43c2787b805d0c4.slice`：Id准确�
 scope释放前实际`closure-result.json`文件与目录fsync均成功，随后复核scope空；只stop自有service一次、只stop自有slice一次，均exit0，slice最终inactive，sliceCleanup.evidenceDurable=true/retained=false，6540–6549监听为空。生产account274484/doc274497/asset273011/nginx9395全部原PID/active/NRestarts0，前后完全相同。
 
 通过范围：systemd249上这个真实独占slice能够在服务叶被自动删除后，保留原cgroup/eventsFD供root读取真实递归empty，再耐久落证据后释放。原886 ENODEV失败和f8 synthetic前置误拒仍保留，不改判。**这不证明publisher整套轮换、TLS/exporter绑定、G checkpoint、业务closure ACK或生产run-assets整体就绪**；原publisher和G v1没有因此被自动改成scope机制。
+
+## Publisher/G v2双身份接口提案（只提案，未实现）
+
+只读基准为Git对象`8c1078f6:server/hosted/run-assets-current-registry.mjs`，没有读取或写入G当前物理工作区。现v1的instance.cgroup、expected.cgroupPath、anchor.cgroupPath及observed.cgroup被明确要求相等，含义都是服务叶；不能把slice路径直接填进这些字段。三级最小改动是另加真实closureScope，明确升v2，不改变旧字段含义。当前publisher/reader/生产配置仍v1且未动。
+
+### 精确数据形状
+
+`InstanceV1`完整保留原exact字段与含义：`{instanceId,bootId,pid,pidBirth:{bootId,startTicks},uid,unit,unitInvocationId,cgroup:{v2Path,dev,ino,bootId},serviceIdentity,clientFingerprint256,serverFingerprint256}`。其中unit/cgroup永远是实际asset服务，不是slice。
+
+新增`ClosureScopeV2` exact对象：
+
+```text
+{scopeId, authorityId, epoch, instanceId, kind:'systemd-slice',
+ unit, unitInvocationId, bootId, cgroup:{v2Path,dev,ino,bootId}}
+```
+
+scopeId为root每epoch新生成32位小写hex；不允许资产服务自报它来取得权限。scope.epoch/authorityId/instanceId必须与外层record及原instance精确一致；bootId必须与service及双方cgroup/pidBirth一致。服务与slice的InvocationID各自核对，不能互换或仅以同名unit替代。
+
+根可信配置`ExpectedV2`保留`{authorityId,serviceIdentity,uid,unit,clientFingerprint256,serverFingerprint256}`，把原固定service cgroupPath改为**新版本中的**`closurePolicy:{kind:'systemd-slice',unitNamespace,cgroupRoot:'/sys/fs/cgroup',placement:'direct-child',singleEpoch:true}`。namespace是root配置的本authority专属小写字母数字前缀，不含连字符；scope.unit必须严格等于`${unitNamespace}${epoch}n${scopeId}.slice`，scope.cgroup.v2Path严格等于`/sys/fs/cgroup/${scope.unit}`，service.cgroup.v2Path严格等于`${scope.cgroup.v2Path}/${instance.unit}`。这仅规定root预留名字，真正权限仍由内核路径、inode、systemd与/proc交叉核对产生；路径不是由body获信任。
+
+v2所有cgroup路径须绝对、规范、无空段/点/双点/重复分隔，不允许普通字符串startsWith代替严格直接子目录关系。root实际核service的Slice属性、ControlGroup、/proc归属及root-owned/no-delegation边界；G只核root已持久背书的精确关系，不声称doc自行读内核证明。每个新epoch使用新scopeId/new slice invocation；全历史拒绝scopeId或slice unit重用。scope内只有这一服务子树，无其它unit、helper或controller，允许该服务自己的真实后代；未知成员阻止关闭/下一代，不能擅杀。
+
+Registry v2 exact字段：
+
+```text
+{v:2,authorityId,serviceId:'asset',epoch,state,instance:InstanceV1,
+ closureScope:ClosureScopeV2,
+ previous:null|{epoch,registryDigest,instance:InstanceV1,
+               closureScope:ClosureScopeV2,closureWitnessDigest}}
+```
+
+previous必须是前一份已完成active记录的完整双身份拷贝，epoch精确n-1。`registryDigest`覆盖该前一份完整record；当前record的完整digest因此绑定authority、epoch、两身份、全部前链摘要。不能只传旧instanceId或单独scope digest代替历史。
+
+Anchor v2：`{v:2,protocol:'promptcut.asset-root-anchor.v2',...ExpectedV2,firstEpoch:1,firstRegistryDigest}`；Reservation v2：`{v:2,protocol:'promptcut.asset-root-reservation.v2',...ExpectedV2,epoch,instanceId,serviceCgroupPath,closureScope}`。先建立空slice取得真实invocation/inode，才签出这份reservation；serviceCgroupPath必须满足上述完整关系。asset仍启动时只读一次root reservation，冻结authorityId/epoch/instanceId，不通过reservation接受current。
+
+Closure witness v2：
+
+```text
+{v:2,protocol:'promptcut.asset-os-closure.v2',witnessId,authorityId,
+ fromEpoch,toEpoch,previousRegistry,
+ observed:{kind:'cgroup-empty',closed:true,at,bootId,
+   serviceInstance:InstanceV1,closureScope:ClosureScopeV2,
+   scopeActive:true,scopeExclusive:true,populated:0,
+   serviceInactive:true,mainBirthGone:true}}
+```
+
+observed中的完整两个tuple必须与previousRegistry逐字段相等，且witness.from/to严格n-1/n。同boot限制保留，at只诊断，不决定顺序。这里的true/0是**可信root producer在真实OS取证后记下的观察**，不能由网络body或服务自报布尔制造；根必须从启动前固定的同scope/eventsFD实际读pop0并核原service主PIDbirth消失、unit inactive及无scope侵入。services自报status/新MainPID/ENOENT/ENODEV都不能替代。业务资源closure receipt仍另有协议，OS witness不能自动使其ACK。
+
+Publication v2沿用完成门的exact形状并升protocol/version：`{v:2,protocol:'promptcut.asset-root-publication.v2',authorityId,epoch,registryDigest,anchorDigest,closureWitnessDigest,reservationDigest}`。digest仍为真实ledger.digestOf完整规范对象；firstEpoch closureWitnessDigest=null。recordDigest与reservationDigest都覆盖closureScope，无需另设可脱钩的scopeHead。
+
+### 发布、取证和接受顺序
+
+1. root独占耐久`.publisher.lock`覆盖所有受管unit/slice启停。Restart=no、KillMode=control-group、Delegate=no及无自动/旁路启动约束保持。先验证旧anchor及全部已完成历史；current置非active并耐久，doc立即拒绝新授权。
+2. 对旧service tuple与旧scope tuple双读，固定scope dir/eventsFD、验证真实包含与单epoch独占。仅停止该准确旧service；scope继续ACTIVE。等原scope实际pop0+原PIDbirthgone+service inactive，写`witness-<n>.json` file/dir fsync；重核后才释放旧scope。未知或异常保留锁/非active，不预留下一代。
+3. 旧scope释放失败同样不自动下一代。成功后root在transition中耐久预留下一scopeId/name，创建新独占slice，核初始空及真实scope tuple，写新的reservation。只有这一文件链完成后才以正常Slice=新scope启动受管asset服务。
+4. 新service的kernel/proc/systemd双身份 → 新连接pinned纯identity RPC → 再双读两身份；asset identity仍只需已约`authorityId/epoch/instanceId/pid/serviceIdentity/client+server pin`等字段，不让asset自报的scope/UID/birth充root证据。G原observer exporter/HMAC验证仍独立必需。
+5. 保存不可变`epoch-<n>.json`和`reservation-<n>.json`、active current，再完成publication marker file/dir fsync；最后才释放锁。scope在整个active epoch保持ACTIVE；不能在发布之后为了清理提前stop。所有await之后重核相应current/锁/身份边界。
+6. 目录沿用现文件布局，但v2放**新root-owned目录**，不覆盖v1证据；epoch1 anchor由root明确建立。G完整读取root文件链及锁前后双核，验当前marker再SQLite事务提交v2 checkpoint，最后RAM暴露。active已可见但marker不完整/锁仍在、post-rename fsync失败、同epoch身份变化，一律拒。
+
+历史要求：首次accept必须从受信任epoch1 anchor逐个验证到候选n，所有epoch、reservation、witness、publication无缺口，from/to和previous.registryDigest连续；每个previous完整双tuple等于真实前记录。已有耐久checkpoint时可验证其已接受摘要以上的连续增量，但不得跳过中间epoch；这是受信任前缀复用，不能把目录当前最大的文件号当head。历史过大可分批验证/逐epoch事务接受，不截断、缺尾降head或仅验最近一条。missing checkpoint时同步current仍503，不以root current可读自动补checkpoint。
+
+### Checkpoint与v1兼容/迁移边界
+
+Checkpoint v2 exact为`{v:2,authorityId,epoch,recordDigest,anchorDigest}`，使用单独v2存储键/版本判别；root配置须显式绑定允许的authority与初始anchor digest。initial accept是单独受信任配置下的明确动作，不能从任意新anchor自动重建信任。后续同epoch同digest幂等，低epoch/同epoch异digest/换anchor拒绝。完整marker和无锁已核后才commit，RAM不先走。
+
+v1 reader保留原exact解释：旧instance.cgroup还是服务叶，绝不把v1的ENODEV历史或缺尾补成slice witness。v2 parser拒绝混入v1 record/witness/reservation/publication/checkpoint，旧v1文件与checkpoint只读保留。当前生产run-assets尚未建立已接受v1授权链，因此可在root核实这一事实后显式初始化新的v2 authority/目录/anchor；不是隐式搬迁，也不能声称旧基础服务因此获得closure证明。
+
+若发现真实已接受v1 epoch、遗留授权/待结receipt，自动迁移不在此最小提案中：保持失败关闭，另设计明确的root迁移证据与doc checkpoint切换事务。不能重置epoch到1掩盖旧授权、复制旧checkpoint作v2，或以新scope为空证明旧scope已关闭。跨boot恢复仍不支持，重启后的缺旧FD/丢失持久阶段不能猜测重建见证。
+
+后续实现必须分别租producer和G各自模块；本轮没有写两端源码。最低联合验收应含：v1/v2混用拒、缺任一双tuple拒、伪包含/sibling/旧scope复用拒、full-history缺口/换anchor拒、active/marker/lock每个耐久失败门、doc checkpoint重启与同epoch回退拒；再由root执行真正Linux双epochpublisher＋实际TLS/G验收。刚通过的单scope OS smoke仅覆盖这里的内核对象保留与负例，不覆盖这些联验。
