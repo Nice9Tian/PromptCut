@@ -155,7 +155,7 @@ import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, par
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 import { createTimings } from './probe-timings.mjs';
 import { hostClaimStatusOf } from '../render-host.mjs';
-import { createC10Trace, hostDidWork, hostRenderedClip } from './c10-judge.mjs';
+import { createC10Trace, hostDidWork, hostRenderedClip, hostFixtureReadiness } from './c10-judge.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -1862,23 +1862,27 @@ try {
     const errorsBefore = member.pageErrors.length;
     const edited = await P(member, (id) => { const s = window.__pcStore; s.actions.setClipParams(id, { label: 'main-v2' }); return s.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)?.params?.label; }, state.main);
     check(edited === 'main-v2', 'A5:纯在线改一处(主重卡的文字)', { edited });
-    // The original main still races the browser. This separate real canvas clip
-    // supplies host-only work through the reviewed capabilities, not fake requires.
-    // A fresh physical duration participates in cardSnapshotIdentity (not clipId).
+    // The original main still races the browser. Real particles with normal
+    // controls are only a candidate: finished measurement and actual selection
+    // below must establish work before any host is started.
     if (!EXTERNAL_HOST && !E6R) {
-      const duration = 1 + (Number.parseInt(randomBytes(4).toString('hex'), 16) + 1) / 0x100000001 / FPS;
+      const duration = 3 + (Number.parseInt(randomBytes(4).toString('hex'), 16) + 1) / 0x100000001 / FPS;
+      const params = { config: '', color: '#8ab4ff', quantity: 400, speed: 1.2, size: 3, links: 'yes', seed: Number.parseInt(randomBytes(4).toString('hex'), 16) % 99999 + 1 };
       const beforeKeys = ((await onlineDiag(member))?.layers ?? []).map(layer => layer.resultKey);
-      const fixture = await P(member, ({ start, duration }) => {
+      const fixture = await P(member, ({ start, duration, params }) => {
         const s = window.__pcStore;
-        const clip = s.actions.addClipOnNewTrack({ index: 0, cardId: 'r6-canvas', start, duration });
+        const createdAt = Date.now();
+        const clip = s.actions.addClipOnNewTrack({ index: 0, cardId: 'particles', start, duration });
+        s.actions.setClipParams(clip.id, params);
         s.actions.setDurationManual(clip.end);
         const project = s.getState().project;
         const saved = project.tracks.flatMap(track => track.clips).find(item => item.id === clip.id);
-        return { clipId: saved.id, cardId: saved.cardId, start: saved.start, duration: saved.end - saved.start, projectDuration: project.duration, end: saved.end };
-      }, { start: SECONDS + 1, duration });
-      state.hostFixture = { ...fixture, beforeKeys };
-      check(fixture.cardId === 'r6-canvas' && fixture.clipId !== state.main && fixture.duration > 1 && fixture.duration < 1 + 1 / FPS && fixture.projectDuration >= fixture.end,
-        'A5:真实新增独立 canvas 片段，完整时长已持久保留，原 main 竞争保留', fixture);
+        return { clipId: saved.id, cardId: saved.cardId, params: saved.params, createdAt, start: saved.start, duration: saved.end - saved.start, projectDuration: project.duration, end: saved.end };
+      }, { start: SECONDS + 1, duration, params });
+      state.hostFixture = { ...fixture, projectId: state.projectId, beforeKeys };
+      if (!check(fixture.cardId === 'particles' && fixture.clipId !== state.main && fixture.duration > 3 && fixture.duration < 3 + 1 / FPS && fixture.projectDuration >= fixture.end &&
+        Object.entries(params).every(([k, v]) => fixture.params?.[k] === v),
+      'A5:真实新增 particles 合法参数与完整时长已保留，原 main 竞争保留', fixture)) throw new Error('A5:host fixture 写入不完整，未启动 host');
     }
     if (E6R) {
       // E6 反方向:全部重卡都改(文字 + burnMs),这一版的层全换成 Y 的;每帧更慢,好让 X 上线时这一版还没做完
@@ -1891,11 +1895,52 @@ try {
       }, { main: state.main, extras: state.extras, burn: E6R_BURN_MS });
       check(changed === EXTRA_HEAVY + 1, 'E6 反方向:全部重卡改了文字与 burnMs', { changed, burnMs: E6R_BURN_MS });
     }
-    const published = await until('A5:页面发布清单计划(测量落定后、防抖)', async () => {
+    let fixtureEvidence = null;
+    const publication = await until('A5:页面发布清单计划(测量落定后、防抖)', async () => {
+      if (state.hostFixture) {
+        const measured = await P(member, async clipId => {
+          const p = window.__pcPreviewDiag?.()?.probeRun;
+          const j = p?.probed?.filter(x => x.clipId === clipId).at(-1);
+          const d = window.__pcPlanPublisher?.();
+          // Project only diagnostic fields; no session, request body or error text.
+          const publisher = d ? { measured: d.measured, want: d.want, last: d.last, lastClips: d.lastClips,
+            log: d.log.map(e => ({ at: e.at, id: e.id, clips: e.clips, ok: e.ok, state: e.state })) } : null;
+          const records = j ? await new Promise(resolve => {
+            const r = indexedDB.open('promptcut-l2');
+            r.onerror = () => resolve([]);
+            r.onsuccess = () => {
+              const db = r.result;
+              if (!db.objectStoreNames.contains('costs')) { db.close(); resolve([]); return; }
+              const tx = db.transaction('costs'), q = tx.objectStore('costs').getAll();
+              tx.oncomplete = () => db.close(); tx.onabort = () => { db.close(); resolve([]); };
+              q.onerror = () => resolve([]);
+              q.onsuccess = () => resolve(q.result.map(x => x.record).filter(x => x?.identityKey === j.identityKey && x.mode === 'build'));
+            };
+          }) : [];
+          const keys = ['identityKey', 'fps', 'stepMs', 'stepMaxMs', 'inlineMs', 'rasterMs', 'serializeMs', 'catchUpMs',
+            'samples', 'capped', 'kind', 'vtOk', 'seekOk', 'seekMs', 'mode', 'demoted', 'pinnedHeavy', 'measuredAt', 'device'];
+          const costs = records.map(r => Object.fromEntries(keys.filter(k => r[k] !== undefined).map(k => [k, r[k]])));
+          return { job: j ? { clipId: j.clipId, cardId: j.cardId, identityKey: j.identityKey, at: j.at } : null,
+            probe: p ? { running: p.running, done: p.done, total: p.total } : null, costs, publisher };
+        }, state.hostFixture.clipId);
+        const frame = await frontFrame(member);
+        const pipeline = frame ? await frame.evaluate(({ id, t }) => window.__pcStagePipelineAt?.(id, t) ?? null,
+          { id: state.hostFixture.clipId, t: state.hostFixture.start + state.hostFixture.duration / 2 }) : null;
+        const record = measured.costs.sort((a, b) => b.measuredAt - a.measuredAt)[0] ?? null;
+        const readiness = hostFixtureReadiness({ fixture: state.hostFixture, fps: FPS, ...measured, record, pipeline });
+        fixtureEvidence = { fixture: state.hostFixture, ...measured, pipeline, readiness };
+        return readiness.ready || readiness.terminal ? { fixtureEvidence, published: readiness.published } : null;
+      }
       const d = await P(member, () => window.__pcPlanPublisher?.() ?? null);
       const hit = d?.log?.filter((e) => e.ok).at(-1);
-      return hit && d.log.filter((e) => e.ok).length >= 2 && (!state.hostFixture || d.lastClips?.includes(state.hostFixture.clipId)) ? { ...hit, all: d.log.length } : null;
+      return hit && d.log.filter((e) => e.ok).length >= 2 ? { published: { ...hit, all: d.log.length } } : null;
     }, 90_000, 500);
+    if (state.hostFixture) {
+      fs.writeFileSync(path.join(OUT, 'a5-fixture-prerequisite.json'), JSON.stringify(fixtureEvidence, null, 2));
+      out.steps.hostFixturePrerequisite = fixtureEvidence;
+      if (!publication?.fixtureEvidence?.readiness.ready) throw new Error(`A5:host fixture 前置未成立，未启动 host:${fixtureEvidence?.readiness?.reasons?.join(',') ?? 'no-observation'}`);
+    }
+    const published = publication?.published ?? null;
     const pubDiag = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
     check(published && published.id.includes('#clips:') && published.state === 'open', 'A5:页面发布清单计划(plan:<项目>@<版本>#clips:…),没有节点时 open 等着', published ?? pubDiag);
     out.steps.publisher = pubDiag;

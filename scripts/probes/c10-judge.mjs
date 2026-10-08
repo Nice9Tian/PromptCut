@@ -1,4 +1,34 @@
 import { createHash } from 'node:crypto';
+import { budgetOf, clipWeight } from '../../src/render/pipelinePlan.mjs';
+
+/** A prerequisite, never completion evidence. Costs must come from the page's
+ * finished probe/L2 record; canvasHeavy only governs splitting AFTER selection.
+ * Online l2CostBackend uses the normal default tuning, as does clipWeight here. */
+export function hostFixtureReadiness({ fixture, fps, job, probe, record, publisher, pipeline }) {
+  const reasons = [];
+  const measured = probe?.running === false && typeof job?.identityKey === 'string' &&
+    job.clipId === fixture.clipId && job.cardId === fixture.cardId && job.at >= fixture.createdAt &&
+    record?.identityKey === job.identityKey && record.mode === 'build' && record.fps === fps &&
+    record.measuredAt >= job.at && typeof record.device === 'string' && record.device.length > 0 &&
+    ['random', 'stepped'].includes(record.kind) &&
+    ['stepMs', 'inlineMs', 'rasterMs', 'serializeMs', 'catchUpMs'].every(k => Number.isFinite(record[k]) && record[k] >= 0);
+  if (!measured) reasons.push('measurement-not-settled');
+  const weight = measured ? clipWeight(record, 'stateful', fps) : null;
+  const heavy = !!weight && (weight.pinned || weight.w > budgetOf(fps));
+  if (measured && !heavy) reasons.push('measured-light');
+  if (pipeline !== 'heavy') reasons.push('stage-not-heavy');
+  const hit = publisher?.log?.filter(e => e.ok).at(-1);
+  const current = !!hit && publisher.measured === true && publisher.last === hit.id &&
+    publisher.want?.projectId === fixture.projectId &&
+    Number.isSafeInteger(publisher.want?.projectRev) && publisher.want.projectRev >= 0 &&
+    hit.id.startsWith(`plan:${publisher.want.projectId}@${publisher.want.projectRev}#clips:`) &&
+    publisher.lastClips?.includes(fixture.clipId) && hit.state === 'open';
+  if (!current) reasons.push('target-not-in-current-successful-plan');
+  return { ready: measured && heavy && pipeline === 'heavy' && current,
+    terminal: measured && !heavy, reasons, measured, budgetMs: budgetOf(fps),
+    weight: weight ? { ...weight, w: Number.isFinite(weight.w) ? weight.w : 'Infinity' } : null,
+    published: current ? hit : null };
+}
 
 // Completion is intentionally unchanged: splitting a plan is not rendering a fine task.
 export const hostDidWork = view => (view?.nodes ?? []).some(n => (n.completed ?? 0) > 0 && (n.claimed ?? 0) > (n.completed ?? 0) - 1);
