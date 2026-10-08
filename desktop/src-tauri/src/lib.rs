@@ -97,12 +97,14 @@ fn account_editor_port(identifier: &str, override_port: Option<&str>) -> Result<
     if !identifier.ends_with(".account-probe") { return Ok(EDITOR_PORT); }
     let port = override_port.ok_or("account probe requires its explicit editor port")?
         .parse::<u16>().map_err(|_| "invalid account probe port")?;
-    if !(6340..=6347).contains(&port) { return Err("account probe port is outside its lease".into()); }
+    if !(6340..=6347).contains(&port) && port != 6500 { return Err("account probe port is outside its lease".into()); }
     Ok(port)
 }
 
 fn account_cloud_binding(identifier: &str, origin: Option<&str>, pin: Option<&str>) -> Result<(String, Option<String>), String> {
     if !identifier.ends_with(".account-probe") { return Ok(("https://visuhive.com".into(), None)); }
+    // The public-path test uses the production origin and normal system certificate validation.
+    if origin == Some("https://visuhive.com") && pin.is_none() { return Ok(("https://visuhive.com".into(), None)); }
     if origin != Some("https://127.0.0.1:6388") { return Err("account probe requires its exact TLS origin".into()); }
     let pin = pin.ok_or("account probe requires its certificate pin")?;
     if pin.len() != 64 || !pin.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) { return Err("invalid account probe certificate pin".into()); }
@@ -782,6 +784,11 @@ mod tests {
         assert_eq!(account_editor_port("com.promptcut.desktop", Some("6340")).unwrap(), 5210);
         assert_eq!(account_editor_port("com.promptcut.isolated.account-probe", Some("6340")).unwrap(), 6340);
         assert_eq!(account_editor_port("com.promptcut.isolated.account-probe", Some("6347")).unwrap(), 6347);
+        assert_eq!(account_editor_port("com.promptcut.isolated.account-probe", Some("6500")).unwrap(), 6500);
+        assert_eq!(account_editor_port("com.promptcut.desktop", Some("6500")).unwrap(), 5210);
+        for port in ["6499", "6501", "6509", "6510"] {
+            assert!(account_editor_port("com.promptcut.isolated.account-probe", Some(port)).is_err());
+        }
         assert!(account_editor_port("com.promptcut.isolated.account-probe", None).is_err());
         assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("5210")).is_err());
         assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("6348")).is_err());
@@ -791,6 +798,11 @@ mod tests {
         assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), None).is_err());
         assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), Some("bad")).is_err());
         assert_eq!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), Some(&"a".repeat(64))).unwrap().0, "https://127.0.0.1:6388");
+        assert_eq!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://visuhive.com"), None).unwrap(), ("https://visuhive.com".into(), None));
+        for origin in ["http://visuhive.com", "https://www.visuhive.com", "https://visuhive.com/", "https://evil", "https://127.0.0.1:6500"] {
+            assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some(origin), None).is_err());
+        }
+        assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://visuhive.com"), Some(&"a".repeat(64))).is_err());
     }
 
     fn args(v: &[&str]) -> std::vec::IntoIter<String> {
