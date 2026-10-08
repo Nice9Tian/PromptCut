@@ -180,7 +180,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       let projectId; do { projectId = newProjectId(); } while (state.projects[projectId]);
       state.projects[projectId] = { v: 2, identityRealm: 'account', projectId, authorityId: ledger.authorityId,
         name, status: 'pending', creatorAccountId: actor.accountId, allowLinkJoin: payload.allowLinkJoin,
-        members: { [actor.accountId]: { access: 'rw', joinedAt: now() } }, bans: {}, accessRevision: 0,
+        members: { [actor.accountId]: { access: 'rw', joinedAt: now(), accountNameAtJoin: actor.accountName } }, bans: {}, accessRevision: 0,
         hosted: { render: false, agent: false }, creationRequestId: body.requestId, initialProject: payload.initialProject };
       state.requests[key] = { digest, projectId, state: 'pending' }; return { projectId, result: null };
     });
@@ -232,7 +232,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       if (!p.allowLinkJoin && !p.members[actor.accountId]) reject(403, 'not-listed');
       const previous = replay(state, key, digest); if (previous) return { result: previous.result, event: null };
       if (!p.members[actor.accountId]?.joinedAt) {
-        p.members[actor.accountId] = { access: p.members[actor.accountId]?.access ?? 'rw', joinedAt: now() };
+        p.members[actor.accountId] = { access: p.members[actor.accountId]?.access ?? 'rw', joinedAt: now(), accountNameAtJoin: actor.accountName };
         p.accessRevision = ++state.revision;
       }
       const result = { projectId: p.projectId, authorityId: ledger.authorityId, accessRevision: p.accessRevision,
@@ -267,9 +267,11 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
           for (const [id, old] of Object.entries(p.members)) if (!next[id] || (old.access === 'rw' && next[id].access === 'r')) affected.push(id);
           p.members = next; break;
         }
-        case 'kick':
+        case 'kick': {
           if (!accountIdOK(body.accountId) || body.accountId === p.creatorAccountId) reject(400, 'invalid-member');
-          delete p.members[body.accountId]; p.bans[body.accountId] = { reason: 'kick', requestId: body.requestId }; affected.push(body.accountId); break;
+          const accountNameAtJoin = p.members[body.accountId]?.accountNameAtJoin;
+          delete p.members[body.accountId]; p.bans[body.accountId] = { reason: 'kick', requestId: body.requestId, accountNameAtJoin }; affected.push(body.accountId); break;
+        }
         case 'unban':
           if (!accountIdOK(body.accountId)) reject(400, 'invalid-member'); delete p.bans[body.accountId]; break;
         case 'delete': p.status = 'deleted'; affected.push(...Object.keys(p.members)); break;

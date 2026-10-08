@@ -11,6 +11,16 @@ export interface CloudAgentConsent { accountId: string; accepted: boolean; notic
 export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
 export interface CloudProject { projectId: string; name: string; authorityId: string; creatorAccountId?: string; url?: string }
 export interface ProjectLists { owned: CloudProject[]; joined: CloudProject[] }
+export interface AccountMembersSnapshot {
+  v: 2; authorityId: string; projectId: string; accessRevision: number;
+  self: { accountId: string; creator: boolean; access: 'r' | 'rw' }; creatorAccountId: string; allowLinkJoin: boolean;
+  members: { accountId: string; accountName: string | null; access: 'r' | 'rw'; joinedAt: number | null }[];
+  devices: { accountId: string; accountName: string | null; deviceId: string; deviceName: string; creator: boolean;
+    conns: { role: 'page' | 'agent' | 'render'; service?: 'agent' | 'render'; conversation?: string | number }[] }[];
+  bans?: { accountId: string; accountName: string | null; reason: 'kick' }[];
+}
+export interface AccountMemberOperation { op: 'kick' | 'unban'; accountId: string; expectedAccessRevision: number; requestId: string }
+export interface AccountMemberResult { eventId: string; accessRevision: number; completed: false; state: 'pending-services' }
 export class AccountFailure extends Error {
   status: number;
   code: string;
@@ -22,7 +32,9 @@ export function accountErrorText(status: number, code: string): string {
     'not-listed': '你不在这个项目的成员名单中。', 'project-gone': '这个云端项目已不存在。',
     'asset-unavailable': '素材服务暂时不可用，项目尚不能进入，请稍后重试。', 'session-unavailable': '项目会话暂时不可用，请稍后重试。',
     'desktop-bridge-unavailable': '请使用桌面版登录，或在官网打开在线编辑器。',
-    'projects-unavailable': '暂时无法获取云端项目列表，请稍后重试。' };
+    'projects-unavailable': '暂时无法获取云端项目列表，请稍后重试。',
+    'members-unavailable': '暂时无法获取项目成员，请稍后重试。', 'members-changed': '成员状态已变化，请刷新后重试。',
+    'access-revision-mismatch': '成员状态已变化，请刷新并重新选择操作。', 'creator-required': '只有项目创建者可以管理成员。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
 type Native = (operation: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -150,9 +162,71 @@ export function createAccountClient(options: AccountClientOptions) {
         throw new AccountFailure(503, 'account-protocol');
       return { eventId: out.eventId as string, accessRevision: out.accessRevision as number, completed: false as const };
     },
+    async members(projectId: string): Promise<AccountMembersSnapshot> {
+      const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
+      const value = await request('/hosted/shared/account/members', { projectId }, current.accessToken);
+      if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+      return validateMembers(value, projectId, current.account.id);
+    },
+    async memberAdmin(projectId: string, operation: AccountMemberOperation): Promise<AccountMemberResult> {
+      if (!['kick', 'unban'].includes(operation.op) || !/^acc_[a-f0-9]{24}$/.test(operation.accountId) ||
+          !Number.isSafeInteger(operation.expectedAccessRevision) || operation.expectedAccessRevision < 0 ||
+          typeof operation.requestId !== 'string' || !operation.requestId || operation.requestId.length > 128)
+        throw new AccountFailure(400, 'invalid-member');
+      const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
+      const value = await request('/hosted/shared/account/admin', { projectId, op: operation.op, accountId: operation.accountId,
+        expectedAccessRevision: operation.expectedAccessRevision, requestId: operation.requestId }, current.accessToken);
+      if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+      if (typeof value.eventId !== 'string' || !value.eventId || !Number.isSafeInteger(value.accessRevision) ||
+          value.accessRevision < 0 || value.completed !== false || value.state !== 'pending-services') throw new AccountFailure(503, 'account-protocol');
+      return { eventId: value.eventId, accessRevision: value.accessRevision, completed: false, state: 'pending-services' };
+    },
     async join(projectId: string, requestId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/join', { projectId, deviceId: options.device.deviceId, requestId }, current.accessToken), now(), projectId); },
     async session(projectId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now(), projectId); },
   };
+}
+function validateMembers(value: Record<string, any>, projectId: string, accountId: string): AccountMembersSnapshot {
+  const bad = () => { throw new AccountFailure(503, 'account-protocol'); };
+  const id = (x: unknown) => typeof x === 'string' && /^acc_[a-f0-9]{24}$/.test(x);
+  const name = (x: unknown) => x === null || (typeof x === 'string' && x.length > 0 && x.length <= 200 && !/[\u0000-\u001f]/.test(x));
+  const access = (x: unknown) => x === 'r' || x === 'rw';
+  if (value.v !== 2 || value.projectId !== projectId || typeof value.authorityId !== 'string' || !value.authorityId ||
+      !Number.isSafeInteger(value.accessRevision) || value.accessRevision < 0 || !id(value.creatorAccountId) || typeof value.allowLinkJoin !== 'boolean' ||
+      value.self?.accountId !== accountId || typeof value.self.creator !== 'boolean' || !access(value.self.access) ||
+      value.self.creator !== (value.creatorAccountId === accountId) ||
+      !Array.isArray(value.members) || !Array.isArray(value.devices) || value.members.length > 10000 || value.devices.length > 10000 ||
+      (value.bans !== undefined && (!value.self.creator || !Array.isArray(value.bans) || value.bans.length > 10000))) bad();
+  const memberIds = new Set<string>(), devices = new Set<string>(), bans = new Set<string>();
+  const members = value.members.map((row: any) => {
+    if (!id(row?.accountId) || memberIds.has(row.accountId) || !name(row.accountName) || !access(row.access) ||
+        !(row.joinedAt === null || (Number.isSafeInteger(row.joinedAt) && row.joinedAt >= 0))) bad();
+    memberIds.add(row.accountId);
+    return { accountId: row.accountId, accountName: row.accountName, access: row.access, joinedAt: row.joinedAt };
+  });
+  if (!memberIds.has(accountId) || !memberIds.has(value.creatorAccountId)) bad();
+  const rows = value.devices.map((row: any) => {
+    const key = `${row?.accountId}\n${row?.deviceId}`;
+    if (!memberIds.has(row?.accountId) || devices.has(key) || !name(row.accountName) ||
+        typeof row.deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(row.deviceId) ||
+        typeof row.deviceName !== 'string' || !row.deviceName || row.deviceName.length > 200 ||
+        row.creator !== (row.accountId === value.creatorAccountId) || !Array.isArray(row.conns) || row.conns.length > 10000) bad();
+    devices.add(key);
+    const conns = row.conns.map((conn: any) => {
+      if (!['page', 'agent', 'render'].includes(conn?.role) || (conn.service !== undefined && !['agent', 'render'].includes(conn.service)) ||
+          (conn.conversation !== undefined && !((typeof conn.conversation === 'string' && conn.conversation.length <= 200) ||
+            (Number.isSafeInteger(conn.conversation) && conn.conversation >= 0)))) bad();
+      return { role: conn.role, ...(conn.service !== undefined ? { service: conn.service } : {}),
+        ...(conn.conversation !== undefined ? { conversation: conn.conversation } : {}) };
+    });
+    return { accountId: row.accountId, accountName: row.accountName, deviceId: row.deviceId, deviceName: row.deviceName, creator: row.creator, conns };
+  });
+  const banned = value.bans?.map((row: any) => {
+    if (!id(row?.accountId) || bans.has(row.accountId) || memberIds.has(row.accountId) || !name(row.accountName) || row.reason !== 'kick') bad();
+    bans.add(row.accountId); return { accountId: row.accountId, accountName: row.accountName, reason: 'kick' as const };
+  });
+  return { v: 2, projectId, authorityId: value.authorityId, accessRevision: value.accessRevision,
+    self: { accountId, creator: value.self.creator, access: value.self.access }, creatorAccountId: value.creatorAccountId,
+    allowLinkJoin: value.allowLinkJoin, members, devices: rows, ...(banned !== undefined ? { bans: banned } : {}) };
 }
 function validateConsent(value: Record<string, any>, accountId: string): CloudAgentConsent {
   if (value.accountId !== accountId || value.noticeVersion !== 1 || typeof value.accepted !== 'boolean' ||

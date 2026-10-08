@@ -774,3 +774,10 @@
   box-shadow: var(--ui-shadow, 0 6px 18px rgba(0, 0, 0, 0.35));
   pointer-events: none;
 }
+.pc-account-members { width: 360px; max-height: min(70vh, 600px); overflow: auto; }
+.pc-account-members-heading { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; }
+.pc-account-member { padding: 8px 4px; border-bottom: 1px solid var(--ui-border); }
+.pc-account-member-id { display: block; padding: 2px 8px; color: var(--ui-muted); overflow-wrap: anywhere; }
+.pc-account-members-error { padding: 8px; color: var(--ui-warn, #e0a030); }
+.pc-account-member-confirm { padding: 8px; border: 1px solid var(--ui-border-strong); border-radius: 8px; }
+.pc-account-member-confirm button { margin: 6px 6px 0 0; }

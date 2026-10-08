@@ -10,6 +10,43 @@ const session = { ok: true, connectionTicket: 'c'.repeat(43), assetTicket: 'a'.r
   projectId, creator: true, access: 'rw', accessRevision: 1, hosted: { agent: { available: true, enabled: false, url: 'https://visuhive.com/agent/v1' } } };
 const reply = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 
+const memberSnapshot = () => ({ ok: true, v: 2, authorityId: 'doc', projectId, accessRevision: 3,
+  self: { accountId: account.id, creator: true, access: 'rw' }, creatorAccountId: account.id, allowLinkJoin: true,
+  members: [{ accountId: account.id, accountName: account.name, access: 'rw', joinedAt: 1 }],
+  devices: [{ accountId: account.id, accountName: account.name, deviceId: device.deviceId, deviceName: 'fixture', creator: true, conns: [{ role: 'page' }] }], bans: [] });
+test('account members is exact bearer/omit route, strict white-listed projection; unknown delivery replays exact admin body and conflict propagates', async () => {
+  const calls = []; let failure = true;
+  const client = createAccountClient({ online: true, origin: 'https://visuhive.com', device, now: () => 1000,
+    fetch: async (url, init) => {
+      if (url.pathname.endsWith('/me')) return reply({ ok: true, account, csrfToken: 'csrf' });
+      if (url.pathname.includes('/editor/')) return reply(credential());
+      calls.push({ path: url.pathname, ...init });
+      if (url.pathname.endsWith('/members')) return reply({ ...memberSnapshot(), internalSecret: 'never-return' });
+      if (failure) { failure = false; throw Error('lost-response'); }
+      return reply({ ok: true, eventId: 'access:doc:4', accessRevision: 4, completed: false, state: 'pending-services' });
+    } });
+  await client.restore(); const snapshot = await client.members(projectId);
+  assert.equal(snapshot.internalSecret, undefined); assert.equal(snapshot.devices[0].conns[0].role, 'page');
+  assert.equal(calls[0].path, '/hosted/shared/account/members'); assert.equal(calls[0].credentials, 'omit');
+  assert.equal(calls[0].headers.Authorization, 'Bearer access-test'); assert.deepEqual(JSON.parse(calls[0].body), { projectId });
+  const op = { op: 'kick', accountId: 'acc_' + 'b'.repeat(24), expectedAccessRevision: 3, requestId: 'same-request' };
+  await assert.rejects(client.memberAdmin(projectId, op), { code: 'network' });
+  assert.deepEqual(await client.memberAdmin(projectId, op), { eventId: 'access:doc:4', accessRevision: 4, completed: false, state: 'pending-services' });
+  assert.equal(calls[1].body, calls[2].body);
+});
+test('member parser refuses wrong scope, duplicate identities/devices, role escalation and bans exposed to ordinary members', async () => {
+  const mutations = [v => { v.projectId = 'sp_' + 'b'.repeat(26); }, v => { v.self.accountId = 'acc_' + 'b'.repeat(24); },
+    v => { v.members.push(v.members[0]); }, v => { v.devices.push(v.devices[0]); }, v => { v.devices[0].conns[0].role = 'admin'; },
+    v => { v.self.creator = false; }, v => { v.accessRevision = -1; }, v => { v.members[0].accountName = '\u0000'; },
+    v => { v.creatorAccountId = 'acc_' + 'b'.repeat(24); v.self.creator = false; v.members.push({ accountId: v.creatorAccountId, accountName: 'other', access: 'rw', joinedAt: 1 }); }];
+  for (const mutate of mutations) {
+    const broken = memberSnapshot(); mutate(broken);
+    const client = createAccountClient({ online: false, origin: 'https://visuhive.com', device, now: () => 1000,
+      native: async operation => operation === 'recover' ? credential() : broken });
+    await client.restore(); await assert.rejects(client.members(projectId), { code: 'account-protocol' });
+  }
+});
+
 test('online account uses cookie+CSRF for website and omit+bearer for exact project; renewal never silently relogs', async () => {
   let clock = 1000; const calls = [];
   const client = createAccountClient({ online: true, origin: 'https://visuhive.com', device, now: () => clock,
