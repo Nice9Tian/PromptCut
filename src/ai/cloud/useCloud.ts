@@ -13,6 +13,7 @@ import { getScript } from "../script";
 import { mediaCardUrl } from "../mediaRef";
 import { cloudAgentVersion, resolveCloudAgent, subscribeCloudAgent, type CloudAgentAvailability } from "./endpoint";
 import { cloudIdentityVersion, subscribeCloudIdentity } from "./identity";
+import { cloudConsentState, requireCloudConsent, subscribeCloudConsent } from "./consent";
 import { CloudError, cloudErrorText, createCloudApi, type CloudApi } from "./cloudApi";
 import { createCloudSession, type CloudSession, type CloudSessionView } from "./session";
 import { titleOf } from "./events";
@@ -33,6 +34,8 @@ export interface CloudAgentState extends CloudAgentAvailability {
   projectId: string | null;
   /** 身份接口位被(重新)注入的次数:身份晚于「云端可用」才就绪时,据此重新取一次 */
   identityVersion: number;
+  accountMode: boolean;
+  accountId: string | null;
 }
 
 export function useCloudAgent(): CloudAgentState {
@@ -41,10 +44,13 @@ export function useCloudAgent(): CloudAgentState {
   const identityVersion = useSyncExternalStore(subscribeCloudIdentity, cloudIdentityVersion, cloudIdentityVersion);
   const projectId = shared?.projectId ?? (ONLINE_BUILD ? currentDocProjectId() || null : null);
   const where = shared?.where === "hosted";
+  const accountMode = ONLINE_BUILD || Boolean(shared?.accountId);
+  const accountId = shared?.accountId ?? null;
   return useMemo(
-    () => ({ ...resolveCloudAgent({ projectId, hostedWhere: where || ONLINE_BUILD, online: ONLINE_BUILD }), projectId, identityVersion }),
+    () => ({ ...resolveCloudAgent({ projectId, hostedWhere: where || ONLINE_BUILD, online: ONLINE_BUILD }), projectId, identityVersion,
+      accountMode, accountId }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectId, where, ver, identityVersion],
+    [projectId, where, ver, identityVersion, accountMode, accountId],
   );
 }
 
@@ -59,24 +65,26 @@ export function newCloudChatId(): string {
 }
 
 const CHAT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const chatKey = (projectId: string, tabId: string) => `pc.cloudChat:${projectId}:${tabId}`;
-const titlesKey = (projectId: string) => `pc.cloudTitles:${projectId}`;
+const chatKey = (projectId: string, tabId: string, accountScope = "") => accountScope
+  ? `pc.cloudChat:${accountScope}:${projectId}:${tabId}` : `pc.cloudChat:${projectId}:${tabId}`;
+const titlesKey = (projectId: string, accountScope = "") => accountScope
+  ? `pc.cloudTitles:${accountScope}:${projectId}` : `pc.cloudTitles:${projectId}`;
 
-function readTitles(projectId: string): Record<string, string> {
+function readTitles(projectId: string, accountScope = ""): Record<string, string> {
   try {
-    const v = JSON.parse(lsGet(titlesKey(projectId)) ?? "{}");
+    const v = JSON.parse(lsGet(titlesKey(projectId, accountScope)) ?? "{}");
     return v && typeof v === "object" ? v : {};
   } catch {
     return {};
   }
 }
-function rememberTitle(projectId: string, id: string, title: string) {
-  const t = readTitles(projectId);
+function rememberTitle(projectId: string, id: string, title: string, accountScope = "") {
+  const t = readTitles(projectId, accountScope);
   if (t[id] === title) return;
   const ids = Object.keys(t);
   if (ids.length > 200) delete t[ids[0]];
   t[id] = title;
-  lsSet(titlesKey(projectId), JSON.stringify(t));
+  lsSet(titlesKey(projectId, accountScope), JSON.stringify(t));
 }
 
 /** 素材库清单(附在每条消息后面,让模型不必先花一轮 list_media);只列库里已有的,用户这一轮传的附件走 `attachments` */
@@ -117,9 +125,7 @@ const pageExec: PageRequestExec = {
 };
 
 export function useCloudApi(url: string | null): CloudApi {
-  const urlRef = useRef(url);
-  urlRef.current = url;
-  return useMemo(() => createCloudApi({ baseUrl: () => urlRef.current }), []);
+  return useMemo(() => createCloudApi({ baseUrl: () => url }), [url]);
 }
 
 /* ---------------- 本机模式下看一眼云端(桌面版) ---------------- */
@@ -141,7 +147,12 @@ export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudD
   const [items, setItems] = useState<CloudChatItem[]>([]);
   const [running, setRunning] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const key = cloud.available && cloud.url && cloud.projectId ? `${cloud.projectId}|${cloud.url}|${cloud.identityVersion}` : "";
+  const [loadedKey, setLoadedKey] = useState("");
+  const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
+  const accountScope = cloud.accountMode ? `${cloud.accountId ?? "none"}:${consent.bindingVersion}` : "";
+  const key = cloud.available && cloud.url && cloud.projectId && (!cloud.accountMode ||
+    (consent.accepted === true && consent.accountId === cloud.accountId && !!cloud.accountId))
+    ? `${cloud.projectId}|${cloud.url}|${cloud.identityVersion}|${accountScope}` : "";
   const keyRef = useRef(key);
   keyRef.current = key;
 
@@ -153,15 +164,16 @@ export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudD
       const [info, list] = await Promise.all([withInfo ? api.info().catch(() => null) : Promise.resolve(null), api.list().catch(() => null)]);
       if (keyRef.current !== k) return;
       if (list) {
-        const titles = readTitles(cloud.projectId ?? "");
+        const titles = readTitles(cloud.projectId ?? "", accountScope);
         setItems(list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x)));
         setRunning(list.filter((x) => x.state === "running").map((x) => x.id));
+        setLoadedKey(k);
       }
       if (info && info.running.length) setRunning(info.running);
     } finally {
       if (keyRef.current === k) setLoading(false);
     }
-  }, [api, cloud.projectId]);
+  }, [api, cloud.projectId, accountScope]);
 
   useEffect(() => {
     setItems([]);
@@ -171,7 +183,7 @@ export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudD
   }, [key, enabled, load]);
 
   const refresh = useCallback(() => load(false), [load]);
-  return { items, running, loading, refresh };
+  return { items: loadedKey === key ? items : [], running: loadedKey === key ? running : [], loading: loading && !!key, refresh };
 }
 
 /* ---------------- 一页云端对话 ---------------- */
@@ -205,20 +217,28 @@ export interface CloudChat {
  */
 export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled: boolean; autoAttach: boolean; initialConversation?: string | null }): CloudChat {
   const { tabId, cloud, enabled } = o;
-  const store = useMemo(() => getChatStore(`cloud:${tabId}`), [tabId]);
+  const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
+  const projectId = cloud.projectId ?? "";
+  const accountScope = cloud.accountMode ? `${cloud.accountId ?? "none"}:${consent.bindingVersion}` : "";
+  const storeKey = cloud.accountMode ? `cloud:${tabId}:${projectId}:${accountScope}` : `cloud:${tabId}`;
+  const store = useMemo(() => getChatStore(storeKey), [storeKey]);
   const messages = useChatMessages(store);
   const api = useCloudApi(cloud.url);
-  const projectId = cloud.projectId ?? "";
-  const key = enabled && cloud.available && cloud.url && projectId ? `${projectId}|${cloud.url}|${tabId}|${cloud.identityVersion}` : "";
+  const key = enabled && cloud.available && cloud.url && projectId && (!cloud.accountMode ||
+    (consent.accepted === true && consent.accountId === cloud.accountId && !!cloud.accountId))
+    ? `${projectId}|${cloud.url}|${tabId}|${cloud.identityVersion}|${accountScope}` : "";
+  const keyRef = useRef(key);
+  keyRef.current = key;
 
   const [info, setInfo] = useState<CloudInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [conversationId, setConversationId] = useState<string>(() => (key ? lsGet(chatKey(projectId, tabId)) : null) ?? newCloudChatId());
+  const [conversationId, setConversationId] = useState<string>(() => (key ? lsGet(chatKey(projectId, tabId, accountScope)) : null) ?? newCloudChatId());
   const [view, setView] = useState<CloudSessionView>({ conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 });
   const [model, setModelState] = useState<string>(() => lsGet(MODEL_KEY) ?? "");
   const [histItems, setHistItems] = useState<CloudChatItem[]>([]);
   const [histLoading, setHistLoading] = useState(false);
   const sessionRef = useRef<CloudSession | null>(null);
+  const sessionKeyRef = useRef("");
   const convRef = useRef(conversationId);
   convRef.current = conversationId;
   /** 进入时的那一次「取 info、定对话」还没做完,用户已经自己选了对话(历史列表里点的、新对话):后到的结果不再改写他的选择 */
@@ -229,14 +249,18 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     if (!key) {
       sessionRef.current?.close();
       sessionRef.current = null;
+      sessionKeyRef.current = "";
+      if (cloud.accountMode) { store.set([]); setInfo(null); setHistItems([]); }
       return;
     }
     let dead = false;
     pickedRef.current = false;
-    const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : lsGet(chatKey(projectId, tabId));
+    if (cloud.accountMode) { setInfo(null); setHistItems([]); setNotice(null); }
+    const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : lsGet(chatKey(projectId, tabId, accountScope));
     const first = stored && CHAT_ID_RE.test(stored) ? stored : newCloudChatId();
     const session = createCloudSession({ api, store, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
     sessionRef.current = session;
+    sessionKeyRef.current = key;
     const off = session.subscribe(() => setView(session.getView()));
     setView(session.getView());
     setConversationId(first);
@@ -256,14 +280,15 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       }
       if (dead || pickedRef.current) return;
       setConversationId(id);
-      lsSet(chatKey(projectId, tabId), id);
+      lsSet(chatKey(projectId, tabId, accountScope), id);
       session.open(id);
     })();
     return () => {
       dead = true;
       off();
       session.close();
-      if (sessionRef.current === session) sessionRef.current = null;
+      if (cloud.accountMode) store.set([]);
+      if (sessionRef.current === session) { sessionRef.current = null; sessionKeyRef.current = ""; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
@@ -308,12 +333,18 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   // 记下对话标题,历史列表里没有服务端标题时用
   useEffect(() => {
     if (!projectId || !messages.length) return;
-    rememberTitle(projectId, convRef.current, titleOf(messages));
-  }, [projectId, messages]);
+    if (sessionKeyRef.current === key) rememberTitle(projectId, convRef.current, titleOf(messages), accountScope);
+  }, [projectId, messages, key, accountScope]);
 
   const send = useCallback(async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
+    if (!text.trim()) return false;
+    if (cloud.accountMode) {
+      if (!cloud.accountId || !key) return false;
+      try { await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }); }
+      catch (err) { setNotice(err instanceof Error ? err.message : cloudErrorText("network")); return false; }
+    }
     const s = sessionRef.current;
-    if (!s || !text.trim()) return false;
+    if (!s || !key || keyRef.current !== key || sessionKeyRef.current !== key) return false;
     setNotice(null);
     const sent = (files ?? []).filter((a) => !!a.url);
     const body: CloudSendBody = {
@@ -332,49 +363,59 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       return false;
     }
-  }, [tabId, model]);
+  }, [tabId, model, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
 
-  const attach = useCallback((file: File, signal?: AbortSignal): Promise<CloudAttachmentInfo> => api.attach(convRef.current, file, file.name, signal), [api]);
+  const attach = useCallback(async (file: File, signal?: AbortSignal): Promise<CloudAttachmentInfo> => {
+    if (cloud.accountMode) {
+      if (!cloud.accountId || !key) throw new CloudError("unavailable", "云端 Agent 暂时不可用。");
+      await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion });
+    }
+    if (!key || keyRef.current !== key || sessionKeyRef.current !== key) throw new CloudError("unavailable", "云端 Agent 暂时不可用。");
+    return api.attach(convRef.current, file, file.name, signal);
+  }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
 
   const abort = useCallback(async () => {
     try {
-      await sessionRef.current?.abort();
+      if (key && keyRef.current === key && sessionKeyRef.current === key) await sessionRef.current?.abort();
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
     }
-  }, []);
+  }, [key]);
 
   const switchTo = useCallback((id: string) => {
+    if (cloud.accountMode && (!key || keyRef.current !== key || sessionKeyRef.current !== key)) return;
     pickedRef.current = true;
     setConversationId(id);
-    if (projectId) lsSet(chatKey(projectId, tabId), id);
+    if (projectId) lsSet(chatKey(projectId, tabId, accountScope), id);
     setNotice(null);
     sessionRef.current?.open(id);
-  }, [projectId, tabId]);
+  }, [projectId, tabId, accountScope, cloud.accountMode, key]);
 
   const newChat = useCallback(() => switchTo(newCloudChatId()), [switchTo]);
 
   const refreshHistory = useCallback(async () => {
-    if (!key) return;
+    if (!key || keyRef.current !== key || sessionKeyRef.current !== key) return;
     setHistLoading(true);
     try {
       const list = await api.list();
-      const titles = readTitles(projectId);
+      if (keyRef.current !== key || sessionKeyRef.current !== key) return;
+      const titles = readTitles(projectId, accountScope);
       setHistItems(list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x)));
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
     } finally {
       setHistLoading(false);
     }
-  }, [api, key, projectId]);
+  }, [api, key, projectId, accountScope]);
 
   const setModel = useCallback((m: string) => { setModelState(m); lsSet(MODEL_KEY, m); }, []);
 
+  const blocked = cloud.accountMode && (!key || keyRef.current !== key || sessionKeyRef.current !== key);
   return {
     store,
-    messages,
-    view,
-    info,
+    messages: blocked ? [] : messages,
+    view: blocked ? { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 } : view,
+    info: blocked ? null : info,
     notice,
     clearNotice: () => setNotice(null),
     notify: setNotice,
@@ -384,7 +425,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     abort,
     newChat,
     openChat: switchTo,
-    history: { items: histItems, loading: histLoading, refresh: refreshHistory },
+    history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory },
     model,
     setModel,
   };

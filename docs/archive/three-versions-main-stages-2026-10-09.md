@@ -166,4 +166,26 @@ main产品合d948acb3已push；首次文档stage含已gitmv删除的旧报告路
 
 完成公网worktree018-account-public-path先push冻结2d2fcd11，再核mainancestor、clean/未跟踪0/ignored0/reparse0，git worktree remove及本机branch-d，无force、远端分支保留；根结果TEMP pc-public-path-cleanup-20261009.json。累计49=PC35+VH14，当前在用3，旧六个与非本任务目录未动。Sol新的浏览器夹具还在只读拟边界，未空建新工作区。
 
+## 独占进程组关闭实验与告知收回前验证
+
+固定Astra源码d08e8389、报告bd760d25、脚本SHA256 5740633a639180c297047d11b2a5b74f80eda97504a9adfe1438c2b69ccaf95e：root实际节点单次exit0，probe2442ms，节点外包装2.58秒。350ms原父birthgone、原子birthlive、真实文件FD仍持有、固定scope events populated=1；2349ms原父子birthgone、同固定FD populated=0、双EOF与close。服务身份和独占slice身份分别记录，scope始终同InvocationID/dev/ino且ACTIVE，外部观察器不在scope中。closure-result.json先完成文件与目录fsync后才stop自有slice一次；最终slice inactive、6540–6549 listeners=[]。生产account274484/doc274497/asset273011/nginx9395前后完全一致、NRestarts均0；未改生产unit、未挂publisher/G。原886 ENODEV与f8启动前误拒仍保留，未改判或同源重跑。
+
+原始root包装与输出：TEMP pc-root-cgroup-slice-bd760d25-once.py/.log，VM /var/tmp/pc-root-cgroup-slice-bd760d25/once-output/{closure-result.json,result.json}及root-result.json。官方v249 unit_is_pristine允许synthetic LOADED slice、StartTransientUnit再次原子检查；systemctl把无Job显示为空。Root独立核官方unit.c、dbus-manager.c、systemctl-show.c，不能以路径ENOENT或service inactive代替关闭证据。下一步是显式v2双scope协议设计；当前不声称生产登记、TLS/G checkpoint或Agent runner可用。
+
+首次告知原dcfbb72d实际Windows PowerShell SCRIPT由root从固定Git源码提取，在自己TMP目录运行，与真实VH main1b3b的RAM SQLite/TLS后台通信：16/16通过，含实际DPAPI登录、精确GET/POST同意、后台持久读取、七种越界请求在HTTP发出前拒绝、实际注销后Bearer401、自己的6388监听关闭。只运行实际SCRIPT，不称Rust IPC或桌面界面已验；密码、票据与TLS私钥均不输出。TEMP pc-consent-native-script-dcfbb72d.mjs和同名目录/result.json；Git源码SHA256 83d186dc1bbdfe538b44cc6b06ea5c1c70c759686fad21661e86f35ef846e2a5。Root随后审出许可竞态，旧GET被新查询取代时可能借显示缓存许可，交Sol在原分支补反例、修正，未提前合main。
+
+下一用户可见小阶段选择真实发送→持久排队→双方看到发送者与位置。新建018-cloud-queue-user-path/codex同名分支从main5fe070d6，租6520–6539；Sol先定接口，告知阶段收回后再同步main做产品。普通档历史夹具的旧菜单失配与真正缺渲染票据桥分开，不能只改选择器就称整套通过；root未给旧host或模拟ready放行。当前在用4个工作区，累计清理仍49。
+
 独占slice候选f8fb7f75第一实际运行首段失败：wall28ms、probe-unit-exists、未造输出dir/监听/worker/active slice，生产4PID均不变。真实249 systemctlshow未知合法slice自动合成loaded/inactive/dead、Transientno、FragmentPath/SourcePath/ControlGroup/InvocationID均空，不能拿service not-found判据直接套slice；原stdout节点/var/tmp/pc-root-cgroup-slice-f8fb7f75/once.log和TEMP pc-root-cgroup-slice-f8fb7f75-once.log保留。交Astra按pristine加载区分真占用，未直接放宽任何已active/有配置unit、未重复原码跑；OS机制仍待真正实验。
+
+## 首次告知小阶段：根独立验证与真实护栏更正
+
+根候选c5bae31a首次type0/7.078秒；full5318项、5313通过、1失败、4跳过、0取消、71418.3003ms（墙71.828秒），npm原生异常自动重跑0。唯一失败C10A-API-03，新增精确同意接口未进入在线棘轮；三处精确清单补齐，不撤未知接口拒绝。首次raw TEMP pc-consent-root-c5bae31a-{type,full}.log。该候选随后独立普通构建0/8.703秒、在线构建0/1.906秒、窗口19/19/2.891秒；后来根查出此窗口没有安装真实在线护栏，不能将该19项写成产品护栏通路。
+
+根审查真实apiGuard发现新增GET/POST会被旧白名单拒绝，Sol先留首红2项1过1失败，再精确修顶层/editor/同源fetch入口，并让新窗口安装产品bootApiGuard；舞台、iframe、未知路径、错误方法与credentials include仍拒。根联合最终候选b66ade57：type0、墙6.656秒；第一次full5318/5313通过/1失败/4跳过/0取消69918.6423ms，墙70.312秒，唯一失败account-hosted-wiring绑定127.0.0.1:5826报EADDRINUSE。该轮结束后只读监听为空，未终止占用者或改测试；按临时故障规则复查一次同源码。复查full5318/5314通过/0失败/4跳过/0取消69967.1448ms，墙70.328秒，两个full的npm原生自动重跑均0。分别raw TEMP pc-consent-root-b66ade57-full.log和pc-consent-root-b66ade57-after-port-release-full.log；没有用后轮覆盖原轮。
+
+最终b66普通构建0/9.094秒、在线0/1.766秒；根窗口启动首段因out名字含非hex而被临时路径保护拒，exit1/0.172秒，尚无服务/窗口。只纠正参数为新的12hex子目录，根实际VH后台/Chrome窗口23/23，exit0/墙2.703秒，含产品护栏已安装、真实GET/POST抵达后台、拒绝保草稿/不读Agent/不排队、跨设备保存与同页换账号隔离。真实Agent端点仍503，UI availability是受控探针条件，不能称生产模型已就绪。浏览器与服务close、6650–6659空；唯一资源404是favicon。raw TEMP pc-consent-root-b66ade57-after-port-release-browser.log及pc-consent-root-b66ade57-browser-arg-fixed-browser.log。根实际看过两张图后存入three-versions-user-path/cloud-consent-{notice,refusal}.png；图中无凭证。
+
+根离线Rust构建固定c5bae31a，exit0/21.219秒、--offline --locked、不装依赖，exe SHA256 32e40c9e9025d613e3687edf55daf3b2345ba0c15c39d407da230e35894d71eb；独立TMP配置与标识，旧exe保留。最终b66实际启动前lib.rs/account_vault.rs/build.rs/Cargo.toml/Cargo.lock五文件逐字对照编译来源一致。首两次自建IPC探针因临时USERPROFILE未建AppData/Local/Roaming，Rust setup unknown path、exit101；第一轮未捕获stderr，第二轮仅准备阶段有限stderr取证，不含任何登录数据。根承认漏了归档已有的测试目录要求；补齐这些临时标准目录及recover的真实deviceId参数后，实际Rust IPC、RAM SQLite、真实TLS VH后台21/21通过，墙5013ms。包含同源agent webview拒绝桥接、DPAPI登录、同意GET/POST/持久、无效body/路径拒绝、实际恢复与注销、Bearer撤销；原生自有9进程树和6340/6348/6388监听都关闭。scope是隔离空页面的真实原生桥接，不能称整份React桌面编辑器或真实模型已验。三次手工启动准备过程分别保留TEMP pc-consent-native-ipc-c5{,-diag,-profile-fixed}.mjs及各目录result.json，程序内nativeRetries=0不代表此前没有失败尝试。
+
+本阶段报告收回后归档到agent-reports/AGENT-codex-018-cloud-consent-user-path.md。G工作区复用为新生产登记v2读/接受分支，旧v1源码8c1078f6及已完成告知分支远端保留；没有以删目录丢弃未合成果。Astra负责显式双身份publisher，G只读根文件链和独立SQLite持久确认，Sol继续真实发送与排队界面；此时实际在用4个工作区，累计清理仍49=PC35+VH14。
