@@ -18,8 +18,10 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
  */
 export function createAccountHostedRuntime({ ledger, accountClient, dataDir, authorityUrl, signingKey, keyId,
   now = Date.now, pollMs = 1000, onDiagnostic = () => {}, assetReadyProbe = null,
-  assetInstanceId = null, allowFixtureAssetReady = false }) {
+  assetInstanceId = null, allowFixtureAssetReady = false, runHooks = null,
+  getRunProvider = () => null, onRunControl = null }) {
   if (!ledger || !accountClient) fail(503, 'account-configuration');
+  if (typeof getRunProvider !== 'function' || (onRunControl !== null && typeof onRunControl !== 'function')) fail(503, 'run-authority-unavailable');
   if (assetReadyProbe !== null && typeof assetReadyProbe !== 'function') fail(503, 'asset-configuration');
   if (assetInstanceId !== null && (typeof assetInstanceId !== 'string' || !assetInstanceId)) fail(503, 'asset-configuration');
   if (allowFixtureAssetReady && assetReadyProbe) fail(503, 'asset-configuration');
@@ -53,7 +55,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   }
   const storeOf = projectId => dataDir ? createFileStore({ dir: path.join(dataDir, 'tenants', projectId), log: () => {} }) :
     (memoryStores.get(projectId) ?? memoryStores.set(projectId, createMemoryStore()).get(projectId));
-  const authority = createAccountAuthority({ ledger, accountClient, authorityUrl, signingKey, keyId, now, pollMs, onDiagnostic,
+  const authority = createAccountAuthority({ ledger, accountClient, authorityUrl, signingKey, keyId, now, pollMs, onDiagnostic, runHooks,
     async initializeProject({ projectId, initialProject }) {
       const store = storeOf(projectId);
       const body = initialProject ?? null;
@@ -101,15 +103,37 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     if (matching.length !== 1 || list.some(value => [AUTH_PREFIX, TICKET_PREFIX, TENANT_PREFIX, TOKEN_PREFIX, SERVICE_PREFIX].some(prefix => value.startsWith(prefix)))) fail(401, 'account-ticket-required');
     return matching[0].slice(PREFIX.length);
   }
-  const unsubscribe = authority.subscribeRevocations({}, event => {
+  const unsubscribe = authority.subscribeRevocations({}, async (event, committedControl) => {
     if (!service) return;
+    const runs = [];
     for (const conn of service.describe().conns) {
       const principal = conn.principal;
       if (principal?.realm !== 'account') continue;
       if (event.projectId && event.projectId !== principal.tenantId) continue;
       if (event.accountIds?.length && !event.accountIds.includes(principal.accountId)) continue;
       if (event.loginIds?.length && !event.loginIds.includes(principal.loginId)) continue;
+      if (principal.role === 'agent' || principal.service === 'agent') { runs.push(conn); continue; }
+      // Agent-off revokes tasks, not the member's page login/project membership.
+      if (event.service === 'agent' && event.enabled === false) continue;
       service.closeConn(conn.connId, 4003, 'access-revoked');
+    }
+    const provider = getRunProvider();
+    let control = committedControl;
+    try {
+      if (typeof provider?.applyAccessEvent === 'function') control = await provider.applyAccessEvent(event);
+      if (control && onRunControl) {
+        for (const value of Array.isArray(control) ? control : [control]) await onRunControl(value);
+      }
+    } catch {
+      for (const conn of runs) service.closeConn(conn.connId, 4003, 'run-authority-unavailable');
+      throw accountError(503, 'run-authority-unavailable');
+    }
+    for (const conn of runs) {
+      try {
+        if (typeof provider?.checkAccess !== 'function') fail(503, 'run-authority-unavailable');
+        const checked = await provider.checkAccess({ principal: conn.principal, projectId: conn.principal.tenantId, action: 'read' });
+        if (checked?.allowed !== true || checked.retainedGrant?.state !== 'retained') fail(403, 'run-revoked');
+      } catch { service.closeConn(conn.connId, 4003, 'access-revoked'); }
     }
   });
   return {
@@ -128,21 +152,46 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       if (expiresAt <= now()) fail(401, 'credential-revoked');
       for (const [ticket, entry] of tickets) if (entry.expiresAt <= now()) tickets.delete(ticket);
       return { connectionTicket: issue('conn', principal, deviceId, expiresAt),
-        assetTicket: issue('asset', principal, deviceId, expiresAt), expiresAt };
+        assetTicket: issue('asset', principal, deviceId, expiresAt),
+        agentDelegationTicket: issue('agent', principal, deviceId, expiresAt), expiresAt };
     },
     async authenticate(req) { return resolve(ticketOf(req), 'conn'); },
     async resolveAssetTicket(ticket) { return resolve(ticket, 'asset'); },
+    // Only the authenticated Agent mTLS RPC calls this resolver. A reference is
+    // kind-bound and reverified, not a public accountId/authorizationId claim.
+    async resolveAgentDelegation(ticket) { return resolve(ticket, 'agent'); },
     async gate(principal, type, msg) {
       if (principal?.realm !== 'account') return null;
       if (type.startsWith('shared.') || type === 'auth.ticket' || type.startsWith('hosted.') || type.startsWith('service.')) return 'forbidden';
       if (msg?.projectId !== undefined && msg.projectId !== principal.tenantId) return 'project-mismatch';
-      const action = /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(type) ? 'write' : 'read';
-      try { await authority.checkAccess({ principal, projectId: principal.tenantId, action }); return null; }
+      if (type === 'selection.set' || type === 'selection.clear') {
+        if (['username', 'accountName', 'accountId', 'principal', 'actor'].some(field => msg?.[field] !== undefined)) return 'invalid-authority-claim';
+      }
+      // Presence of a selection does not modify project content. Readonly members
+      // publish their own live selection through the same read authority as open.
+      const action = type === 'selection.set' || type === 'selection.clear' ? 'read' :
+        /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(type) ? 'write' : 'read';
+      try {
+        if (principal.role === 'agent' || principal.service === 'agent') {
+          const provider = getRunProvider();
+          if (typeof provider?.checkAccess !== 'function') fail(503, 'run-authority-unavailable');
+          const checked = await provider.checkAccess({ principal, projectId: principal.tenantId, action });
+          if (checked?.allowed !== true) fail(403, 'run-revoked');
+        } else await authority.checkAccess({ principal, projectId: principal.tenantId, action });
+        return null;
+      }
       catch (error) { return error?.code === 'account-unavailable' || error?.status === 503 ? 'authority-unavailable' : error?.code ?? 'forbidden'; }
     },
     async resumeGate(principal) {
       if (principal?.realm !== 'account') return null;
-      try { await authority.checkAccess({ principal, projectId: principal.tenantId, action: 'read' }); return null; }
+      try {
+        if (principal.role === 'agent' || principal.service === 'agent') {
+          const provider = getRunProvider();
+          if (typeof provider?.checkAccess !== 'function') fail(503, 'run-authority-unavailable');
+          if ((await provider.checkAccess({ principal, projectId: principal.tenantId, action: 'read' }))?.allowed !== true) fail(403, 'run-revoked');
+        } else await authority.checkAccess({ principal, projectId: principal.tenantId, action: 'read' });
+        return null;
+      }
       catch (error) { return error?.code === 'account-unavailable' || error?.status === 503 ? 'authority-unavailable' : error?.code ?? 'forbidden'; }
     },
     close() { unsubscribe(); authority.close(); tickets.clear(); accountClient.close?.(); ledger.close?.(); },

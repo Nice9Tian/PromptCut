@@ -78,7 +78,7 @@ export function createOperationWiring({ history, account, verifyWitness, authori
       const principal = active.get(operation.requestId);
       if (!principal) throw historyError('operation-forbidden', 403);
       const result = await checkPrincipal(principal, operation.projectId);
-      if (result.retainedGrant && !docAttestationPrivateKey) throw historyError('run-provider-unavailable', 503);
+      if ((result.retainedGrant || result.activeGrant) && !docAttestationPrivateKey) throw historyError('run-provider-unavailable', 503);
       return result;
     },
     async materializeAccepted(operation) {
@@ -105,6 +105,11 @@ export function createOperationWiring({ history, account, verifyWitness, authori
       const requestIdentity = digest({ projectId, actor, request });
       const requestId = `project-op:${digest({ docAuthorityId, projectId, opId: request.opId })}`;
       await checkPrincipal(principal, projectId);
+      const retry = history.get(projectId, request.opId);
+      if (retry) {
+        history.verifyPrepared(retry);
+        if (retry.requestId !== requestId || retry.requestIdentity !== requestIdentity) throw historyError('operation-id-mismatch');
+      }
       return order.transact(projectId, async scope => {
         await checkPrincipal(principal, projectId);
         const prior = history.get(projectId, request.opId);
@@ -123,7 +128,7 @@ export function createOperationWiring({ history, account, verifyWitness, authori
           committed?.(result); // visible reply/broadcast precede the next fence's completion under the same lock
           return result;
         } finally { active.delete(requestId); }
-      });
+      }, { resumeOpId: retry?.opId });
     },
     fence: value => order.fence(value),
     idle: () => order.idle(),
