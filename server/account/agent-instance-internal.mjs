@@ -2,6 +2,11 @@ import { accountError, certificateFingerprint } from './client.mjs';
 
 export const INSTANCE_PROOF_HEADER = 'x-promptcut-instance-proof';
 export const INSTANCE_DATA_PROOF_HEADER = 'x-promptcut-data-proof';
+/** Classify the complete message name. This is a proof scope, not permission:
+ * the service whitelist and live authority still gate every dispatched message. */
+export function instanceMessageAction(type) {
+  return /^(?:(?:project\.(?:op|upload|snapshot\.put)|content\.put|presence\.(?:set|clear|send))$|(?:events|task|publisher|node)\.)/.test(type) ? 'write' : 'read';
+}
 const ROOT = '/internal/v2/instances/';
 const fail = (status, code) => { throw accountError(status, code); };
 const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) &&

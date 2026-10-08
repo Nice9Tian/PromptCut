@@ -69,3 +69,29 @@ root随后批准service/session/http-transport窄lease，以及仅可信Agent we
 固定7aac35a457cb03734fdb58f71f859bcf6b4cc936，组件加原HT1/session ACK/LP回归首测37/37、0失败/取消/跳过，5534.3693ms，exit0；TMP/pc-instance-doc-core-related-1.log。新真实HTTPS组件把未验proof超body/frame/empty与合法请求并列；旧recv/close持gate后真实resume再放行409，缓存仍1帧、新会话活；internal LP与带runGrant的普通page SID尝试拒，普通页面welcome无connId与合法public resume仍通过。测试私有能力fixture不能作为生产crypto证据。new owned端口逐项actualclose记录：WS6338、LP2922、LP boundary2538、普通WS6541/TLS6542；OS listen(0)由系统原子分配，不占已监听固定口。强制tsc -b --force零错误、exit0、wall6.8881s，TMP/pc-instance-doc-type-2.log。未运行577x/full或宽浏览器探针，前后源码不变且Git干净。
 
 生产factory+instanceAuthority的真实mTLS WS/LP签名目标仍待独立运行，不能借root全量或上面的组件绿声明生产数据连接完成。公共helper真实export/schema已同步Agent owner：instanceConnectionRequest/instanceDataRequest/instanceProtocolHeaders与INSTANCE_DATA_PROOF_HEADER，所有actual URL、原协议头tuple、原bodyText、connId、seq/ack、nonce、operation/action绑定；空batch请用签名recv取得ACK，不新增旁路。
+
+## LP请求认证前会话副作用：反例与修正
+
+root静态疑问经固定7aac HTTP实现实证：新真实HTTPS组件发送仅SID的未完成body，合法send实际409而非200。TMP测试进程registerHooks只将http-transport精确解析为git show 7aac的TMP版本，session/service保持真实模块；原body仅替换import路径以可达同源session，不改变函数体。node目标exit1，1失败/0取消，1404.2367ms，TMP/pc-instance-doc-preauth-7aac-counter.log，未知请求和owned server/socket在after实际关闭。此为旧源反例，不当作新源码失败或通过。首次两次apply_patch因重复上下文定位失败，没有部分修改；随后按完整onSend函数准确替换，原工具错误保留，不伪记运行结果。
+
+固定product074bbe27：Agent读取未完成body时只持本请求，完整首proof/current-run检查通过才track、lastSeen、sending；首invocation cap保持整个batch，之后每frame再独立proof/current检查，finally释放所有cap。未授权recv/close也不进入会话resource ownership，验权及current检查后才track。普通LAN/page原busy/超限/ACK路径保留，原语义断言未删。新增真实partial body证明合法发送不再busy，拨测试进程时钟后的真实heartbeat idle sweep仍脱开该会话（未验请求不能用sending阻止空闲），不修改主机时间或全局环境。
+
+074固定相关npm 38/38、0失败/取消/跳过，5537.8528ms、exit0，TMP/pc-instance-doc-core-related-2.log。五个新组件owned OS端口4619、1310、8882、3793/3794、9414都actualclose，原HTTP/session回归用其原listen(0)形态。此重复相关有因：认证前会话副作用代码及新反例改变，不盲跑旧源码。
+
+真实data测试块1c9db1e4与71ed0905（后一份仅补同cert新OS旧SID负向）尚未运行，product仍074。新增fixtures agent-instance-data.mjs / agent-instance-data-target.mjs只Node内置TLS/HTTPS/掩码WS编解码/内存Ed25519，从客户端socket独立计算exporter；不拿服务器cap或callback做授权。中央既有原title/readonly/history/restart断言保留；新增真正Agent写入agentVerified字段，单独核accepted actor/grant并把该配置分支预期rev由2改3、history由1改2。selection.query双独立proof、FIFO、same-instance新TLSresume、跨TLS/nonce重复、body/query/protocol/seq/ack/action变更、pageSID与newOS旧SID负向均已写定；private中止另一个成员实际run时，pending LP/WS实close与partial receipt核验，仍不得ACK Agent/OS完整关闭。
+
+固定1c9强制types --force exit0、零错误、wall6.7377s，TMP/pc-instance-doc-type-3.log；71ed只改测试断言不当作已通过data目标。当前真实中央5端口仍等待5770～5774租约，不为纯listen0要求改未租asset内部entry或重映射旧中央，未跑full。
+
+## 真实中央data首轮失败（保留，未重跑）
+
+root C10自然结束后授一次5770～5779窗口。固定7506e1e，进程级canonical PSModulePath、绝对silent preload、cuda_Vit/PYTHONDONTWRITEBYTECODE、VH327 account/order及本叶conversation module。npm wrapper首轮3项/2通过/1失败/0取消跳过，4893.7788ms、wall5255.3368ms、exit1；TMP/pc-instance-doc-data-central-1.log与-exit.json。两独立asset child日志pc-doc-assembly-child-1791432419000.log、pc-doc-assembly-child-1791432420435.log，after等实际child/socket/server关闭，5770～5779前后零LISTEN，source前后同7506、clean，窗口立即释放root。没有full或浏览器进程。
+
+required缺配置与原无Agent中央组通过；Agent组已真正TLS实例握手并得到welcome，完整签名首project.open收到type:error（预期project.state），在exerciseInstanceData第12行失败，未到write/selection/LP后续断言，不能宣称这些已通过。首夹具断言没有输出reason，只凭type无法可靠定位，因此不猜改权威。静态read真serviceGate/current registry/account gate/coordinator/scopedInput后，固定1b7fa38a test-only补安全{type,reason}断言诊断，不打印proof/exporter/token/principal；product仍074。新的诊断窗口已向root申请，未盲重跑。只读一次PowerShell scripts/test*路径glob错误、两次猜模块路径未找到，均后用rg --files确认，工具错误保留，不计产品运行失败。
+
+## 78c8真实诊断与消息边界定位
+
+root授固定78c8facb一次5770～5774诊断窗口。源码全程未变，npm自然exit1，3项/2通过/1失败/0取消跳过，5422.4829ms，命令墙5752.8327ms（以exit.json为准）；TMP/pc-instance-doc-data-central-2-diagnostic.log、pc-instance-doc-data-central-2-exit.json。安全断言明确首project.open返回{type:error,reason:instance-operation-forbidden}。两个asset child日志pc-doc-assembly-child-1791432780041.log、pc-doc-assembly-child-1791432781750.log；owned child/socket/server实际close，5770～5779前后零监听，clean，窗口立即释放。后续数据断言仍未执行，不借原HTTP或组件绿作为数据链通过。
+
+root静态指出写操作正则缺完整消息名边界。纯Node无端口实证旧正则把project.open和project.op均判write，project.snapshot.get/selection.query判read。实际factory、fixture dataAction、account-hosted runtime各有同一前缀；本次fixture实际签write，outer proof与runtime gate可通过，project模块operationCoordinator.read明确需要read，scopedInput找不到read capability后业务error。这是已定位分类错误，不需要再赌第三次服务诊断，不是允许write证明自动得到read能力。最小修正拟完整匹配project.op/upload/snapshot.put、content.put及presence.set/clear/send，既有events/task/publisher/node消息族分类保持；账号runtime单一分类行扩租已报root。第一次纯匹配组合命令PowerShell引号错误exit1无输出，修正命令后纯Nodeexit0；前一错误保留，不记成产品运行失败。两次真实中央红均完整保留。
+
+root批准account-hosted分类窄扩后新增共享instanceMessageAction(type)（agent-instance-internal.mjs），factory/runtime/真实客户端fixture共用。project.open读，project.op/upload/snapshot.put与content.put/presence.set/clear/send完整名写，events/task/publisher/node族保留。此分类不是服务白名单或权限许可，不支持的类型仍由原gate拒绝；任何cap只能原operation/action，不生成write→read万能cap。新增纯分类目标保留旧正则project.open误匹配反例及完整类型边界。root最初定位消息中的“fixture签read”是初步推断，实际fixture原签write，已按真实源码更正并同步worker；HTTP签名协议本身没有改变。
