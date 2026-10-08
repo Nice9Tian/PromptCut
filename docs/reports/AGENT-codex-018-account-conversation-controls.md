@@ -57,3 +57,11 @@
 - `Composer` 新增可选 `canStop` 与 `stopDisabledReason`；不传时 `canStop` 默认为真，维持本机旧行为。账号模式由 `CloudAiPanel` 传入 `canStopCurrentRun`，无权限时按钮禁用，并用 title 与 aria-label 说明“只能停止自己发起的任务”。`streaming` 仍按真实当前运行状态传递，没有通过隐藏运行状态规避权限。
 - 先保留真实组件 SSR 首红：用 TypeScript transpileModule 编译实际 `Composer.tsx`，ReactDOMServer 渲染非所有者、所有者与省略新 prop 的本机默认场景；旧实现 6 项通过、权限按钮用例 1 项失败（停止按钮没有 disabled）。修复后 7 项通过；实际 CloudAiPanel 的账号策略仍由既有角色策略测试覆盖。SSR 仅 mock 了 Composer 的旁支图标、弹层、尺寸 hook 与 CSS，按钮 DOM 来自真实 Composer 组件。
 - 验证：`node scripts/test-suite.mjs src/ai/cloud/account-conversation-controls.test.mjs`（7 项通过）、`npx tsc -p tsconfig.json --pretty false`、`git diff --check`。没有伪造 `running` 服务状态或 executor ACK；真实运行中的普通成员按钮显示仍需 root 的真实 executor 阶段确认。
+
+## 真实 Puppeteer 探针窄修（2026-10-09）
+
+- root 在首次真实窗口运行前审阅时发现三处探针风险：历史记录通过 `$$eval` 内的 DOM `.click()` 绕过 Puppeteer 用户点击路径；控制操作只等待短暂“正在”文本，真实 503 若先返回会导致探针漏掉本次操作；打开项目后立即同步查询 consent 弹窗，可能早于异步读取结果或弹窗出现。
+- `chooseHistory` 现在等待历史入口可见、可用且中心点击点未被遮挡，并等待目标记录可见；记录滚入可见区域后再复核中心无遮挡，随后通过 Puppeteer `ElementHandle.click()` 操作真实记录。移除了页面内直接调用 DOM `.click()` 的路径。
+- 共有/私有切换及停止重试在按钮点击前，按当前 conversation ID 注册精确路径与 POST 方法的真实 `waitForResponse`。每次调用都创建自己的响应等待；收到该次响应后才等待非加载状态并分类。返回中仅保留真实 HTTP 状态码，现有网络记录仍只写路径、状态、方法和 request ID 是否一致，不写 body 或 ID；没有伪造响应。
+- 项目打开前为账号 consent GET 注册真实响应监听；等待实际服务器 `accepted` 结果或真实可见弹窗。弹窗存在时以真实按钮确认，并等待同一路径的 POST 响应确认 `accepted` 后才继续。页面未注入 consent 状态。
+- 本次只改该 Puppeteer 探针和本报告；产品、测试、fixture 均保持冻结。没有启动浏览器、服务或节点，也未运行 SSR、类型检查、完整测试或真实 CLI，因此真实窗口结果和 fence 关闭 ACK 仍待 root 后续验证；本记录不将 private fence pending 说成跨服务撤销完成。没有新增首红，因为本次修复发生在首次真实探针运行之前。

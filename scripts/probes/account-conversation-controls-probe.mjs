@@ -71,18 +71,26 @@ export async function requestAccountVisibility(page, target, { timeoutMs = 30_00
   const label = await page.evaluate(element => element.textContent?.trim() ?? '', button);
   if (target === 'private' ? !label.includes('设为私有') && !label.includes('重试设为私有') : !label.includes('设为共有') && !label.includes('重试设为共有'))
     throw new Error(`visibility-control-does-not-target-${target}`);
+  const conversationId = await page.evaluate(() => window.__pcCloud?.main?.conversationId?.() ?? null);
+  if (typeof conversationId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(conversationId)) throw new Error('visibility-conversation-id-missing');
+  const response = waitForControlResponse(page, conversationId, 'visibility', timeoutMs);
   await button.click();
+  const realResponse = await response;
   await waitForControlResult(page, timeoutMs);
-  return classifyAccountControlOutcome(await inspectAccountConversationControls(page), target === 'private' ? '已切为私有。' : '已切为共有。');
+  return { ...classifyAccountControlOutcome(await inspectAccountConversationControls(page), target === 'private' ? '已切为私有。' : '已切为共有。'), httpStatus: realResponse.status() };
 }
 
 /** Retry the real stop control and report pending honestly; it never fabricates a fence ACK. */
 export async function retryAccountStop(page, { timeoutMs = 30_000 } = {}) {
   const button = await page.$('[data-pc="cloud-stop-retry"]');
   if (!button || !await elementVisible(page, button)) throw new Error('cloud-stop-retry-not-visible');
+  const conversationId = await page.evaluate(() => window.__pcCloud?.main?.conversationId?.() ?? null);
+  if (typeof conversationId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(conversationId)) throw new Error('stop-conversation-id-missing');
+  const response = waitForControlResponse(page, conversationId, 'abort', timeoutMs);
   await button.click();
+  const realResponse = await response;
   await waitForControlResult(page, timeoutMs);
-  return classifyAccountControlOutcome(await inspectAccountConversationControls(page), '云端已确认停止请求。正在同步对话状态。');
+  return { ...classifyAccountControlOutcome(await inspectAccountConversationControls(page), '云端已确认停止请求。正在同步对话状态。'), httpStatus: realResponse.status() };
 }
 
 async function elementVisible(page, element) {
@@ -97,11 +105,28 @@ async function elementVisible(page, element) {
   }, element);
 }
 
-async function waitForControlResult(page, timeoutMs) {
-  await page.waitForFunction(() => {
-    const text = document.querySelector('[data-pc="cloud-control-status"]')?.textContent?.trim() ?? '';
-    return text.startsWith('正在更新') || text.startsWith('正在向云端提交');
+function waitForControlResponse(page, conversationId, action, timeoutMs) {
+  if (action !== 'visibility' && action !== 'abort') throw new Error('unsupported-control-response');
+  const expectedPath = `/agent/v1/conversations/${encodeURIComponent(conversationId)}/${action}`;
+  return page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'POST' && url.pathname === expectedPath;
   }, { timeout: timeoutMs });
+}
+
+function waitForConsentResponse(page, method, timeoutMs) {
+  return page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/api/account/cloud-agent-consent' && response.request().method() === method;
+  }, { timeout: timeoutMs });
+}
+
+async function consentAccepted(response) {
+  if (!response.ok()) return false;
+  try { return (await response.json())?.accepted === true; } catch { return false; }
+}
+
+async function waitForControlResult(page, timeoutMs) {
   await page.waitForFunction(() => {
     const text = document.querySelector('[data-pc="cloud-control-status"]')?.textContent?.trim() ?? '';
     return Boolean(text) && !text.startsWith('正在更新') && !text.startsWith('正在向云端提交');
@@ -151,14 +176,49 @@ async function main() {
     const file = path.join(OUT, `${name}.png`);
     await page.screenshot({ path: file, fullPage: true }); result.screenshots.push({ name, file });
   };
+  const visibleAndUnobscured = (page, element) => page.evaluate(target => {
+    for (let node = target; node; node = node.parentElement) {
+      const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+      if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none' ||
+          style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0 ||
+          rect.width <= 0 || rect.height <= 0) return false;
+    }
+    const rect = target.getBoundingClientRect(), hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return Boolean(hit && (hit === target || target.contains(hit)));
+  }, element);
   const chooseHistory = async (page, conversationId) => {
+    await page.waitForFunction(() => {
+      const panel = document.querySelector('[data-pc="cloud-ai-panel"]'), button = panel?.querySelector('button[title*="历史"]');
+      if (!button || button.disabled) return false;
+      const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return Boolean(hit && (hit === button || button.contains(hit)));
+    }, { timeout: TIMEOUT });
     const history = await page.$('[data-pc="cloud-ai-panel"] button[title*="历史"]');
     check(Boolean(history), 'history-button-present'); await history.click();
-    await page.waitForFunction(id => Array.from(document.querySelectorAll('[data-pc="chat-cloud-item"]'))
-      .some(row => row.getAttribute('data-chat-id') === id), { timeout: TIMEOUT }, conversationId);
-    await page.$$eval('[data-pc="chat-cloud-item"]', (rows, id) => {
-      rows.find(row => row.getAttribute('data-chat-id') === id)?.click();
-    }, conversationId);
+    await page.waitForFunction(id => Array.from(document.querySelectorAll('[data-pc="chat-cloud-item"]')).some(row => {
+      if (row.getAttribute('data-chat-id') !== id) return false;
+      const rect = row.getBoundingClientRect(), style = getComputedStyle(row);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden' ||
+          row.hidden || row.getAttribute('aria-hidden') === 'true') return false;
+      return true;
+    }), { timeout: TIMEOUT }, conversationId);
+    const rows = await page.$$('[data-pc="chat-cloud-item"]');
+    let target = null;
+    for (const row of rows) if (await row.evaluate(element => element.getAttribute('data-chat-id')) === conversationId) { target = row; break; }
+    if (!target) throw new Error('history-row-not-found');
+    await target.scrollIntoView();
+    await page.waitForFunction(id => Array.from(document.querySelectorAll('[data-pc="chat-cloud-item"]')).some(row => {
+      if (row.getAttribute('data-chat-id') !== id) return false;
+      const rect = row.getBoundingClientRect(), style = getComputedStyle(row);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden' ||
+          row.hidden || row.getAttribute('aria-hidden') === 'true') return false;
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return Boolean(hit && (hit === row || row.contains(hit)));
+    }), { timeout: TIMEOUT }, conversationId);
+    if (!await visibleAndUnobscured(page, target)) throw new Error('history-row-obscured');
+    await target.click();
     await page.waitForFunction(id => window.__pcCloud?.main?.conversationId?.() === id, { timeout: TIMEOUT }, conversationId);
   };
   const serve = stage => async (req, res) => {
@@ -230,6 +290,7 @@ async function main() {
       await enabled(page, submit); await page.click(submit); await waitVisible(page, '[data-pc="account-name"]');
     }
     const openProject = async page => {
+      let consentRead;
       await page.waitForFunction(name => Array.from(document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row'))
         .some(row => row.querySelector('button')?.textContent?.trim() === name), { timeout: TIMEOUT }, projectName);
       const rows = await page.$$('[data-pc="cloud-project-lists"] .sp-account-row');
@@ -238,13 +299,26 @@ async function main() {
         if (title !== projectName) continue;
         const buttons = await row.$$('button');
         if (!buttons.length || await buttons[0].evaluate(button => button.disabled)) throw new Error('project-open-button-disabled');
+        consentRead = waitForConsentResponse(page, 'GET', TIMEOUT).then(async response => ({ kind: 'response', accepted: await consentAccepted(response) })).catch(() => null);
         await buttons[0].click(); break;
       }
       await waitVisible(page, '[data-pc="cloud-project-copy"]');
-      if (await page.$('[data-pc="cloud-agent-consent"]')) {
+      const consentDialog = page.waitForSelector('[data-pc="cloud-agent-consent"]', { visible: true, timeout: TIMEOUT })
+        .then(() => ({ kind: 'dialog' })).catch(() => null);
+      let consentState = await Promise.race([consentRead ?? Promise.resolve(null), consentDialog]);
+      if (consentState?.kind === 'response' && consentState.accepted) return;
+      if (consentState?.kind === 'response') consentState = await consentDialog;
+      if (consentState?.kind === 'dialog' || await page.$('[data-pc="cloud-agent-consent"]')) {
+        await waitVisible(page, '[data-pc="cloud-agent-consent"]');
         const buttons = await page.$$('[data-pc="cloud-agent-consent"] button');
         if (buttons.length < 2) throw new Error('cloud-consent-buttons-missing');
-        await buttons[1].click(); await page.waitForSelector('[data-pc="cloud-agent-consent"]', { hidden: true, timeout: TIMEOUT });
+        const acceptance = waitForConsentResponse(page, 'POST', TIMEOUT);
+        await buttons[1].click();
+        const accepted = await acceptance;
+        if (!await consentAccepted(accepted)) throw new Error('cloud-consent-acceptance-not-confirmed');
+        await page.waitForSelector('[data-pc="cloud-agent-consent"]', { hidden: true, timeout: TIMEOUT });
+      } else {
+        throw new Error('cloud-consent-read-or-dialog-not-observed');
       }
     };
     phase = 'project-open'; await openProject(creator); await openProject(owner);
