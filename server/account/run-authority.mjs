@@ -7,6 +7,7 @@ const text = x => typeof x === 'string' && x.length > 0 && x.length <= 256;
 const copy = x => structuredClone(x);
 const identity = ['accountId', 'loginId', 'credentialId', 'loginGeneration'];
 const binding = ['projectId', 'conversationId', 'messageId', 'runId'];
+const instanceBinding = ['instanceId', 'instanceGeneration'];
 const seq = s => {
   const next = (s.runClockV2 ?? 0) + 1;
   if (!Number.isSafeInteger(next)) reject(503, 'run-clock-overflow');
@@ -59,7 +60,8 @@ const member = (s, c, ref) => {
 // (login/account lists) belong to the payload digest, so changing them is a conflict.
 export function runControlScope(fence) {
   return { kind: fence.kind, projectId: fence.projectId ?? null, conversationId: fence.conversationId ?? null,
-    runId: fence.runId ?? null, serviceKid: fence.serviceKid ?? null, requestId: fence.requestId };
+    runId: fence.runId ?? null, serviceKid: fence.serviceKid ?? null,
+    instanceId: fence.instanceId ?? null, instanceGeneration: fence.instanceGeneration ?? null, requestId: fence.requestId };
 }
 export const runControlId = fence => `run-control:${digestOf(runControlScope(fence))}`;
 
@@ -67,19 +69,25 @@ export const runControlId = fence => `run-control:${digestOf(runControlScope(fen
  * transaction. Service authentication is an owner-supplied capability. Complete sent
  * records are independently rebuilt here, never authorized by an HTTP body's hash.
  */
-export function createRunAuthority({ ledger, conversationHooks, verifySender, verifyServiceInState,
+export function createRunAuthority({ ledger, conversationHooks, verifySender, verifyServiceInState, instanceAuthority,
   validatePromptInState, synchronize, now = Date.now, failpoint = () => {}, onControl = () => {} } = {}) {
   for (const value of [ledger?.transaction, ledger?.read, conversationHooks?.claimNextInState,
     conversationHooks?.markReadInState, conversationHooks?.finishInState, verifySender,
-    verifyServiceInState, synchronize])
+    verifyServiceInState, instanceAuthority?.verifyInState, instanceAuthority?.fenceInState, synchronize])
     if (typeof value !== 'function') reject(503, 'run-authority-configuration');
-  const service = (s, principal) => {
+  const service = (s, principal, invocation) => {
     const v = verifyServiceInState(s, principal);
     if (v?.then || !text(v?.serviceId) || !text(v?.serviceKid)) reject(403, 'run-service-forbidden');
-    return { serviceId: v.serviceId, serviceKid: v.serviceKid };
+    const registered = instanceAuthority.verifyInState(s, principal, invocation);
+    if (registered?.then || registered?.serviceId !== v.serviceId || registered.serviceKid !== v.serviceKid ||
+        !text(registered.instanceId) || !Number.isSafeInteger(registered.instanceGeneration) || registered.instanceGeneration < 1)
+      reject(403, 'run-instance-forbidden');
+    return { serviceId: v.serviceId, serviceKid: v.serviceKid,
+      instanceId: registered.instanceId, instanceGeneration: registered.instanceGeneration };
   };
   const matchService = (g, v) => {
     if (g.serviceId !== v.serviceId || g.serviceKid !== v.serviceKid) reject(403, 'run-service-mismatch');
+    if (instanceBinding.some(k => g[k] !== v[k])) reject(403, 'run-instance-mismatch');
   };
   const current = (s, g) => {
     const c = conversation(s, g.projectId, g.conversationId);
@@ -108,7 +116,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
 
   function fenceInState(s, f) {
     tables(s); request(f.requestId);
-    if (!['credential', 'member', 'private', 'stop', 'delete', 'agent-disabled', 'service-revoked'].includes(f.kind)) reject(400, 'invalid-run-fence');
+    if (!['credential', 'member', 'private', 'stop', 'delete', 'agent-disabled', 'service-revoked', 'instance-revoked'].includes(f.kind)) reject(400, 'invalid-run-fence');
     const scope = runControlScope(f), key = runControlId(f), digest = digestOf(f);
     const old = replay(s.runControlsV2, key, digest); if (old) return copy(old);
     const revision = seq(s), retained = [], revoked = [], cancelled = [];
@@ -116,6 +124,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       (!f.conversationId || g.conversationId === f.conversationId) &&
       (!f.runId || g.runId === f.runId) &&
       (!f.serviceKid || g.serviceKid === f.serviceKid) &&
+      (!f.instanceId || (g.instanceId === f.instanceId && g.instanceGeneration === f.instanceGeneration)) &&
       (!f.loginIds || f.loginIds.includes(g.loginId)) &&
       (!f.accountIds || f.accountIds.includes(g.accountId));
     for (const g of Object.values(s.runGrantsV2)) {
@@ -140,7 +149,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
         const candidate = { projectId: c.projectId, conversationId: c.id, runId: m.runId,
           accountId: m.senderAccountId, loginId: m.loginId };
         // Service-key revocation cancels only already assigned work for that service.
-        if (f.kind === 'service-revoked' || !matches(candidate) || (f.kind === 'private' && m.senderAccountId === c.ownerAccountId)) continue;
+        if (['service-revoked', 'instance-revoked'].includes(f.kind) || !matches(candidate) || (f.kind === 'private' && m.senderAccountId === c.ownerAccountId)) continue;
         m.queueState = 'cancelled'; m.cancelReason = f.kind; bumpQueue(s, c);
         cancelled.push(m.messageId);
       }
@@ -148,9 +157,11 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     const control = { controlId: key, scope, digest, payloadDigest: digest, requestId: f.requestId, kind: f.kind, projectId: f.projectId ?? null,
       fenceRevision: revision, retained, revoked, cancelled, state: 'pending', receipt: null };
     const affected = [...retained, ...revoked].map(id => s.runGrantsV2[id]);
+    control.instances = [...new Map(affected.map(g => [g.instanceId,
+      Object.fromEntries(['serviceId', 'serviceKid', ...instanceBinding].map(k => [k, g[k]]))])).values()];
     control.operationFences = [...new Set(affected.map(g => g.projectId))].map(projectId => ({
       id: `${key}:${projectId}`, projectId,
-      kind: ['credential', 'member'].includes(f.kind) ? 'credential' : f.kind === 'service-revoked' ? 'agent-disabled' : f.kind,
+      kind: ['credential', 'member'].includes(f.kind) ? 'credential' : ['service-revoked', 'instance-revoked'].includes(f.kind) ? 'agent-disabled' : f.kind,
       loginIds: [...new Set(affected.filter(g => g.projectId === projectId).map(g => g.loginId))],
       runIds: revoked.map(id => s.runGrantsV2[id]).filter(g => g.projectId === projectId).map(g => g.runId),
       ...(f.runId ? { runId: f.runId } : {}),
@@ -197,10 +208,12 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     for (const control of controls) onControl(copy(control)); return controls;
   }
 
-  async function admit({ servicePrincipal, projectId, conversationId, requestId }) {
+  async function admit(input) {
+    const { servicePrincipal, projectId, conversationId, requestId } = input;
+    const invocation = { operation: 'admit', input };
     request(requestId); await sync();
-    const before = ledger.read(), svc = service(before, servicePrincipal);
-    const key = `${svc.serviceKid}:${requestId}`, digest = digestOf({ projectId, conversationId });
+    const before = ledger.read(), svc = service(before, servicePrincipal, invocation);
+    const key = `${svc.instanceId}:${svc.instanceGeneration}:${requestId}`, digest = digestOf({ projectId, conversationId });
     const prior = replay(before.runRequestsV2 ?? {}, key, digest);
     if (prior) return copy(prior.result);
     const c = conversation(before, projectId, conversationId);
@@ -217,7 +230,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     }
     const ref = next && refOf(next);
     const result = ledger.transaction(s => {
-      reconcile(s); service(s, servicePrincipal);
+      reconcile(s); service(s, servicePrincipal, invocation);
       const old = replay(s.runRequestsV2, key, digest); if (old) return old.result;
       const conv = conversation(s, projectId, conversationId);
       for (const cancelledMessage of cancelled) {
@@ -246,7 +259,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     failpoint('run-admit-after-commit'); return result;
   }
 
-  function readKey(input, svc) { return `${svc.serviceKid}:${input.requestId}`; }
+  function readKey(input, svc) { return `${svc.instanceId}:${svc.instanceGeneration}:${input.requestId}`; }
   function readDigest(input) {
     return digestOf(Object.fromEntries([...binding, 'runGrantId', 'readIntentId', 'promptDigest'].map(k => [k, input[k]])));
   }
@@ -259,13 +272,14 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     request(input.requestId); request(input.readIntentId);
     if (typeof input.promptDigest !== 'string' || digestOf(input.prompt) !== input.promptDigest) reject(400, 'prompt-digest-mismatch');
     await sync();
-    const before = ledger.read(), svc = service(before, input.servicePrincipal);
+    const invocation = { operation: 'confirmRead', input };
+    const before = ledger.read(), svc = service(before, input.servicePrincipal, invocation);
     const digest = readDigest(input), key = readKey(input, svc);
     const old = replay(before.runReadRequestsV2 ?? {}, key, digest);
     if (old) return copy(old.result);
     const g = bound(before, input, svc), verified = await verifiedSender(g, g.messageRef);
     const result = ledger.transaction(s => {
-      reconcile(s); const registered = service(s, input.servicePrincipal);
+      reconcile(s); const registered = service(s, input.servicePrincipal, invocation);
       const prior = replay(s.runReadRequestsV2, key, digest); if (prior) return prior.result;
       const grant = bound(s, input, registered), { c, m } = current(s, grant);
       if (grant.state !== 'preparing') reject(403, 'run-not-preparing');
@@ -290,24 +304,24 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     failpoint('run-read-after-commit'); return result;
   }
   async function queryRead(input) {
-    request(input.requestId); await sync(); const s = ledger.read(), svc = service(s, input.servicePrincipal);
+    request(input.requestId); await sync(); const s = ledger.read(), svc = service(s, input.servicePrincipal, { operation: 'queryRead', input });
     bound(s, input, svc);
     const old = replay(s.runReadRequestsV2 ?? {}, readKey(input, svc), readDigest(input));
     return old ? copy(old.result) : { confirmed: false };
   }
 
-  async function checkAccess({ principal, projectId, action }) {
+  async function checkWithScope({ principal, projectId, action }, invocation) {
     if (!['read', 'write'].includes(action) || principal?.realm !== 'account' || principal.identityVersion !== 2 ||
       principal.role !== 'agent' || principal.projectId !== projectId) reject(403, 'run-principal-invalid');
     await sync();
-    const before = ledger.read(), svc = service(before, principal.servicePrincipal);
+    const before = ledger.read(), svc = service(before, principal.servicePrincipal, invocation);
     const original = bound(before, principal, svc);
-    if (identity.some(k => principal[k] !== original[k]) || principal.serviceId !== svc.serviceId || principal.serviceKid !== svc.serviceKid)
+    if ([...identity, ...instanceBinding].some(k => principal[k] !== original[k]) || principal.serviceId !== svc.serviceId || principal.serviceKid !== svc.serviceKid)
       reject(403, 'run-principal-mismatch');
     // Retained references intentionally do not renew/reuse the revoked user's token.
     const verified = original.state === 'active' ? await verifiedSender(original, original.messageRef) : null;
     return ledger.transaction(s => {
-      reconcile(s); const v = service(s, principal.servicePrincipal), g = bound(s, principal, v);
+      reconcile(s); const v = service(s, principal.servicePrincipal, invocation), g = bound(s, principal, v);
       const { c, m } = current(s, g); project(s, projectId);
       if (canonicalJson(acceptedMessageRef(m, g)) !== canonicalJson(g.messageRef)) reject(503, 'accepted-message-changed');
       if (!['active', 'retained'].includes(g.state) || !g.readReceiptId || !s.runReceiptsV2[g.readReceiptId]) reject(403, 'run-revoked');
@@ -320,26 +334,29 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
         ...(g.state === 'retained' ? { retainedGrant: { ...g, readConfirmed: true, currentRun: true } } : {}) };
     });
   }
-  async function authorizeQuery({ principal, projectId, runGrantId }) {
+  const checkAccess = input => checkWithScope(input, { operation: 'checkAccess', input });
+  async function authorizeQuery(input) {
+    const { principal, projectId, runGrantId } = input;
     if (runGrantId !== principal?.runGrantId) reject(403, 'run-binding-mismatch');
-    const { runGrant: g } = await checkAccess({ principal, projectId, action: 'read' });
+    const { runGrant: g } = await checkWithScope({ principal, projectId, action: 'read' }, { operation: 'authorizeQuery', input });
     return { projectId, runGrantId, initiatorAccountId: g.accountId, initiatorName: g.initiatorName,
       fenceRevision: g.fenceRevision, ...(g.selectionSnapshot ? { selectionSnapshot: copy(g.selectionSnapshot) } : {}) };
   }
-  async function resolveRunPrincipal({ servicePrincipal, projectId, runGrantId }) {
-    await sync(); const s = ledger.read(), svc = service(s, servicePrincipal);
+  async function resolveRunPrincipal(input) {
+    const { servicePrincipal, projectId, runGrantId } = input, invocation = { operation: 'resolveRunPrincipal', input };
+    await sync(); const s = ledger.read(), svc = service(s, servicePrincipal, invocation);
     const g = s.runGrantsV2?.[runGrantId];
     if (!g || g.projectId !== projectId) reject(403, 'run-binding-mismatch');
     matchService(g, svc);
     const principal = { realm: 'account', identityVersion: 2, role: 'agent', creator: false,
       ...Object.fromEntries([...identity, ...binding, 'runGrantId'].map(k => [k, g[k]])),
       ...svc, servicePrincipal };
-    await checkAccess({ principal, projectId, action: 'read' }); return principal;
+    await checkWithScope({ principal, projectId, action: 'read' }, invocation); return principal;
   }
   async function finish(input) {
     request(input.requestId); await sync();
     return ledger.transaction(s => {
-      reconcile(s); const g = bound(s, input, service(s, input.servicePrincipal));
+      reconcile(s); const g = bound(s, input, service(s, input.servicePrincipal, { operation: 'finish', input }));
       if (g.state === 'finished') return copy(g);
       if (g.state === 'revoked') reject(403, 'run-revoked');
       current(s, g); g.state = 'finished'; g.fenceRevision = seq(s); g.finishedAt = now();
@@ -350,6 +367,13 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   function fence(input) {
     const result = ledger.transaction(s => { reconcile(s); return fenceInState(s, input); });
     // Delivery is retriable. Only a separately verified close receipt can complete it.
+    onControl(copy(result)); return result;
+  }
+  function fenceInstance(input) {
+    const result = ledger.transaction(s => {
+      reconcile(s); instanceAuthority.fenceInState(s, input);
+      return fenceInState(s, { ...input, kind: 'instance-revoked' });
+    });
     onControl(copy(result)); return result;
   }
   function acknowledgeControl({ controlId, receipt }, validateReceiptInState) {
@@ -366,6 +390,6 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       control.receipt = copy(receipt); control.state = 'complete'; return copy(control);
     });
   }
-  return { admit, confirmRead, queryRead, finish, checkAccess, authorizeQuery, resolveRunPrincipal, applyAccessEvent, fence, acknowledgeControl,
+  return { admit, confirmRead, queryRead, finish, checkAccess, authorizeQuery, resolveRunPrincipal, applyAccessEvent, fence, fenceInstance, acknowledgeControl,
     hooks: { fenceInState }, synchronize: sync };
 }

@@ -54,7 +54,7 @@ const ANONYMOUS = Object.freeze({ userId: 'anonymous', tenantId: null });
 const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner', 'service', 'serviceKid', 'serviceRole', 'access', 'purpose',
   'identityVersion', 'realm', 'accountId', 'accountName', 'loginId', 'loginKind', 'loginGeneration', 'credentialId',
   'accountEventSeq', 'projectId', 'projectAccessRevision', 'authorizationId', 'authorityId', 'conversationId', 'messageId',
-  'runId', 'runGrantId', 'connectionId', 'servicePrincipal', 'serviceId']);
+  'runId', 'runGrantId', 'connectionId', 'servicePrincipal', 'serviceId', 'instanceId', 'instanceGeneration']);
 
 /**
  * 规整鉴权给的 principal：`userId` 原样、`tenantId` 不是字符串就记 null，其余认得的字段有值才带上。
