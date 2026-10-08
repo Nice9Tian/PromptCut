@@ -5,6 +5,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+test('fresh native recover executes the actual Windows script and returns JSON null without a vault or HTTP', { skip: process.platform !== 'win32' }, async () => {
+  const source = await fs.readFile(new URL('../../desktop/src-tauri/src/account_vault.rs', import.meta.url), 'utf8');
+  const script = /const SCRIPT: &str = r#"([\s\S]*?)"#;/.exec(source)?.[1]?.replace(/\r\n/g, '\n');
+  assert.ok(script);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-account-vault-fresh-'));
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide:true, stdio:['pipe', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => stdout += chunk); child.stderr.on('data', chunk => stderr += chunk);
+  child.stdin.end(JSON.stringify({ operation:'recover', directory, args:{ deviceId:'fixture-device-fresh' } }));
+  try {
+    const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+    assert.equal(code, 0, stderr);
+    assert.equal(stdout, 'null', 'no-vault recover must emit a valid JSON null, never an empty pipeline');
+    assert.equal(JSON.parse(stdout), null);
+    assert.deepEqual(await fs.readdir(directory), [], 'fresh recover creates no credential or temporary file');
+  } finally {
+    const relative = path.relative(os.tmpdir(), directory);
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    await fs.rm(directory, { recursive:true, force:true });
+  }
+});
+
 test('native vault script parses and actual Windows DPAPI/ACL/atomic replacement roundtrips only recovery', { skip: process.platform !== 'win32' }, async () => {
   const source = await fs.readFile(new URL('../../desktop/src-tauri/src/account_vault.rs', import.meta.url), 'utf8');
   const script = /const SCRIPT: &str = r#"([\s\S]*?)"#;/.exec(source)?.[1]?.replace(/\r\n/g, '\n');
