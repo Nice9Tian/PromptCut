@@ -78,6 +78,7 @@
 - VH备份timer联合030ac9ab：Windows67/64/0/3通过，首次真实Linux67/66/1/0失败，原因backup-schedule.test缺mkdirSync导入（Windows跳过该POSIX项而漏查）。Luna仅补导入971fcb23/报告7306bfe5后，root收回718fc180，新精确包装SHA2560961416041a6daca70e39ca81fe4efee366e1424e445448750fad32fcafcd2d4，真实Linux67/67、0fail/cancel/skip、11857.814ms（墙钟12.575秒），service用户运行，account/nginx PID不变。root新包装首次因utf8-sig编码拼写错误在SSH前退出，纠正包装后才进行此轮真实测试，原错误保留。
 - 节点对718fc180的两份backup unit只读systemd-analyze verify exit0；UTC每日02:17 calendar三次计算exit0。诊断仅系统既有snapd RestartMode不识别警告，未改系统unit。没有安装/启用/启动timer或部署新账号；此前非空备份恢复fixture及旧生产空库恢复与新生产完整恢复仍分开记录。
 - 联合阶段已审的9份AGENT报告按协议从docs/reports归档到docs/archive/agent-reports，均为100%原文重命名，没有改写首次失败。新素材中央/真实操作/选区各用新报告，旧报告不当后续接线验收；原8个工作区、生产数据和备份均保留。
+- 收回后另清理本任务的5个已完成PC叶及本机分支：auth-fixture-lifecycle、c10-host-claim-fix、018-doc-authority、three-versions-card-policy、018-asset-isolation。均已证提交在集成、tracked/untracked干净、reparse为0、无引用该叶的存活进程；使用正常worktree remove/branch -d、未强制删除。C10/card的ignored out证据已先移到TMP/pc-retired-worktree-evidence-b1de19d094be4d0cb4a8061fbc2fec2f，其余原始日志及Git提交保留；原8个工作区和其它会话分支不动。
 
 ## 接下来干什么
 
