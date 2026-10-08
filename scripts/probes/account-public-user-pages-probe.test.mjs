@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { publicOptions, projectFromVisibleLink, resourceMetadata, testIdentities } from './lib/account-public-path.mjs';
+import { publicOptions, projectFromVisibleLink, projectFrameMetadata, resourceMetadata, testIdentities } from './lib/account-public-path.mjs';
 
 test('public writes require an explicit flag and private native arguments never change the public host', () => {
   assert.equal(publicOptions([]).run, false);
@@ -43,6 +43,18 @@ test('actual Rust isolation functions and their own assertions compile and rejec
   } finally {
     assert.equal(path.dirname(path.resolve(dir)), path.resolve(os.tmpdir())); await fs.rm(dir, { recursive:true, force:true });
   }
+});
+
+test('real project-state diagnostics keep only exact public project binding and discard all other frame data', () => {
+  const projectId = `sp_${'a'.repeat(26)}`;
+  const payload = JSON.stringify({ type:'project.state', projectId, body:{ password:'never-log' }, ticket:'never-log', sid:'never-log' });
+  assert.deepEqual(projectFrameMetadata(payload, 'received'), { type:'project.state', projectId });
+  assert.deepEqual(projectFrameMetadata(payload, 'sent'), { type:'project.state' });
+  assert.deepEqual(projectFrameMetadata(JSON.stringify({ type:'project.open', projectId }), 'sent'), { type:'project.open', projectId });
+  assert.deepEqual(projectFrameMetadata(JSON.stringify({ type:'project.state', projectId:projectId + '?ticket=secret' }), 'received'), { type:'project.state' });
+  assert.equal(projectFrameMetadata('{', 'received'), null);
+  assert.equal(projectFrameMetadata('null', 'received'), null);
+  assert.equal(projectFrameMetadata(JSON.stringify({ type:'arbitrary\nsecret', projectId }), 'received'), null);
 });
 
 test('actual default/dry CLI stops before browser, public network or account creation', async () => {

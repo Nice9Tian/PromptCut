@@ -48,3 +48,13 @@ export function resourceMetadata(url, type, status, contentType) {
   return { path:parsed.pathname, type, status,
     mime:typeof contentType === 'string' && /^[a-z0-9.+-]+\/[a-z0-9.+-]+(?:;\s*charset=[a-z0-9_-]+)?$/i.test(contentType) ? contentType : contentType === undefined ? 'missing' : 'unexpected-content-type' };
 }
+export function projectFrameMetadata(payload, direction) {
+  let body;
+  try { body = JSON.parse(payload); } catch { return null; }
+  const type = body?.type;
+  if (typeof type !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_.:-]{0,99}$/.test(type)) return null;
+  const entry = { type };
+  if ((direction === 'received' && type === 'project.state' || direction === 'sent' && type === 'project.open') &&
+      /^sp_[a-z2-7]{26}$/.test(body.projectId ?? '')) entry.projectId = body.projectId;
+  return entry;
+}

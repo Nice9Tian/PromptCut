@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { publicOptions, testIdentities, projectFromVisibleLink, PUBLIC_ORIGIN, NATIVE_ORIGIN } from './lib/account-public-path.mjs';
+import { publicOptions, testIdentities, projectFromVisibleLink, projectFrameMetadata, PUBLIC_ORIGIN, NATIVE_ORIGIN } from './lib/account-public-path.mjs';
 
 /**
  * Root-run production probe. Default dry-preflight has no network or browser.
@@ -56,6 +56,7 @@ async function observePage(page, label) {
   pages.push(page);
   page.setDefaultTimeout(TIMEOUT); page.setDefaultNavigationTimeout(TIMEOUT);
   page.safeResponses = { projects: null, create: null, join: null };
+  page.safeProjectStateId = null;
   page.on('pageerror', error => { result.network.push({ page: label, kind:'pageerror', name:['Error', 'TypeError', 'RangeError', 'SyntaxError'].includes(error.name) ? error.name : 'Error' }); });
   const resourcePath = request => {
     const url = new URL(request.url());
@@ -128,9 +129,10 @@ async function observePage(page, label) {
       return;
     }
     if (response.opcode !== 1) return;
-    let type;
-    try { type = JSON.parse(response.payloadData).type; } catch { return; }
-    if (typeof type === 'string' && /^[a-zA-Z][a-zA-Z0-9_.:-]{0,99}$/.test(type)) record(requestId, { kind: 'message', direction, type });
+    const metadata = projectFrameMetadata(response.payloadData, direction);
+    if (!metadata) return;
+    if (direction === 'received' && metadata.type === 'project.state' && metadata.projectId) page.safeProjectStateId = metadata.projectId;
+    record(requestId, { kind: 'message', direction, ...metadata });
   };
   cdp.on('Network.webSocketFrameReceived', event => frame('received', event));
   cdp.on('Network.webSocketFrameSent', event => frame('sent', event));
@@ -407,8 +409,15 @@ async function enterNewProject(page, name, label) {
   } finally { diagnostic.after = await copyState(page); }
   const visibleText = await page.$eval('[data-pc="sync-toasts"]', el => el.textContent);
   const project = projectFromVisibleLink(visibleText);
-  await waitFor(() => page.safeResponses.create?.projectId === project.projectId, `${label}-real-create-response-id`);
-  assert(page.safeResponses.create?.projectId === project.projectId, `${label}-visible-link-matches-real-create-id`);
+  // Native HTTPS runs in the real bridge process, outside CDP HTTP observation.
+  // Its actual WSS project.state and later authoritative website lists prove
+  // the project binding; online still requires the real create response too.
+  if (!(DESKTOP_EXE && page === native?.page)) {
+    await waitFor(() => page.safeResponses.create?.projectId === project.projectId, `${label}-real-create-response-id`);
+    assert(page.safeResponses.create?.projectId === project.projectId, `${label}-visible-link-matches-real-create-id`);
+  }
+  await waitFor(() => page.safeProjectStateId === project.projectId, `${label}-real-project-state-id`);
+  assert(page.safeProjectStateId === project.projectId, `${label}-visible-link-matches-real-project-state-id`);
   result.ownedProjects.push({ projectId:project.projectId, name, path:label });
   await safeShot(page, `${label}-created-visible-link`);
   return project;
@@ -416,8 +425,12 @@ async function enterNewProject(page, name, label) {
 async function joinProject(page, project, label) {
   await type(page, '[data-pc="cloud-project-link"]', project.link); await page.click('[data-pc="cloud-join"]');
   await waitEditor(page, `${label}-member-enters-real-editor`);
-  await waitFor(() => page.safeResponses.join?.projectId === project.projectId, `${label}-real-join-id`);
-  assert(page.safeResponses.join.projectId === project.projectId, `${label}-real-join-id`);
+  if (!(DESKTOP_EXE && page === native?.page)) {
+    await waitFor(() => page.safeResponses.join?.projectId === project.projectId, `${label}-real-join-id`);
+    assert(page.safeResponses.join.projectId === project.projectId, `${label}-real-join-id`);
+  }
+  await waitFor(() => page.safeProjectStateId === project.projectId, `${label}-member-real-project-state-id`);
+  assert(page.safeProjectStateId === project.projectId, `${label}-member-real-project-state-id`);
   await safeShot(page, `${label}-joined`);
 }
 async function runOnline(accounts, marker) {
