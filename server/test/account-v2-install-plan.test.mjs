@@ -9,7 +9,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
-import { createAccountV2InstallPlan } from '../hosted/deploy/account-v2-install-plan.mjs';
+import { createAccountV2InstallPlan, formatWorkingDirectory } from '../hosted/deploy/account-v2-install-plan.mjs';
 
 function fixture(t, { cleanup = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-account-v2-install-'));
@@ -130,6 +130,9 @@ test('account v2 install plan emits exactly three independent path-only units an
   assert.deepEqual(result.filePolicies[result.units.doc.envFile], { owner: 'root', group: 'pc_doc', mode: '0640' });
   assert.deepEqual(result.filePolicies[result.units.doc.unitFile], { owner: 'root', group: 'root', mode: '0644' });
   const docUnit = result.files[result.units.doc.unitFile];
+  assert.equal(/^WorkingDirectory=(.*)$/m.exec(docUnit)?.[1],
+    options.pcSourceDir.replaceAll('%', '%%').replaceAll('\\', '\\\\'),
+    'systemd WorkingDirectory is one unquoted absolute path, not an ExecStart argument');
   assert.match(docUnit, /User=pc_doc/);
   assert.match(docUnit, /ReadWritePaths=.*doc-data/);
   assert.match(docUnit, /InaccessiblePaths=/);
@@ -146,6 +149,18 @@ test('account v2 install plan emits exactly three independent path-only units an
   assert.equal(fs.readFileSync(token, 'utf8'), 'A'.repeat(48));
   assert.equal(result.units.account.user, options.users.account);
   assert.equal(result.installOnly, true);
+});
+
+test('systemd WorkingDirectory keeps one raw path with internal space and escaped percent/backslash', () => {
+  const root = path.parse(process.cwd()).root;
+  const withSpace = path.join(root, 'PromptCut Source', '100%');
+  assert.equal(formatWorkingDirectory(withSpace), withSpace.replaceAll('%', '%%').replaceAll('\\', '\\\\'));
+  const withBackslash = path.join(root, 'PromptCut\\Source');
+  assert.equal(formatWorkingDirectory(withBackslash), withBackslash.replaceAll('\\', '\\\\'));
+  assert.throws(() => formatWorkingDirectory(path.join(root, 'PromptCut Source ')),
+    error => error.code === 'working-directory');
+  assert.throws(() => formatWorkingDirectory(path.join(root, 'Prompt"Cut')),
+    error => error.code === 'working-directory');
 });
 
 test('account v2 install plan rejects unsafe users, missing old token and shared private directories', t => {
