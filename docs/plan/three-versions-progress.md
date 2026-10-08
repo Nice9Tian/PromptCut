@@ -78,11 +78,12 @@
 
 ## 派出去的活
 
-本任务仍在用2个工作区，都在PromptCut的`.worktrees/`下；用户原有集成four-stage、另五个旧工作区与其它会话保留。
+本任务仍在用3个工作区，都在PromptCut的`.worktrees/`下；用户原有集成four-stage、另五个旧工作区与其它会话保留。
 
 | 谁 | 在做什么 | 仓库/工作区 |
 |---|---|---|
 | Sol | 校验生产账号、文档与独立素材的配置，生成可审查部署方案 | PromptCut/018-cloud-assets-central-glue |
+| Astra | 查强化浏览器探针回读项目全文超时，不挡其它阶段 | PromptCut/018-browser-doc-read |
 | 主会话 | 保留共同源码作分阶段集成与验证 | PromptCut/018-instance-http-repair-verification |
 
 ## 没做到的与原因
