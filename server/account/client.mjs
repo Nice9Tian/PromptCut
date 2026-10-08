@@ -51,6 +51,32 @@ export function createAccountClient({ origin, tls, serverFingerprint256, timeout
         return principal;
       } catch { throw accountError(503, 'account-protocol'); }
     },
+    /** Doc-persisted accepted-message qualification has a separate purpose from
+     * ordinary access-token admission. This never returns a reusable principal. */
+    async verifyAcceptedMessage(actorRef, context) {
+      const identity = ['accountId', 'loginId', 'credentialId', 'loginGeneration'];
+      const messageFields = ['projectId', 'conversationId', 'messageId', 'recordDigest'];
+      const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) &&
+        Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value, field));
+      const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
+      const messageRef = context?.messageRef;
+      if (!exact(actorRef, identity) || !/^acc_[0-9a-f]{24}$/.test(actorRef.accountId ?? '') ||
+          !reference(actorRef.loginId) || !reference(actorRef.credentialId) ||
+          !Number.isSafeInteger(actorRef.loginGeneration) || actorRef.loginGeneration < 1 ||
+          !exact(context, ['purpose', 'messageRef']) || context.purpose !== 'accepted-message' ||
+          !exact(messageRef, messageFields) || !messageFields.slice(0, 3).every(field => reference(messageRef[field])) ||
+          !/^[0-9a-f]{64}$/.test(messageRef.recordDigest ?? '')) throw accountError(400, 'accepted-message-reference');
+      const result = await request('POST', '/internal/v2/credentials/verify-accepted-message', {
+        requestId: randomUUID(), audience: 'doc', actorRef, messageRef,
+      });
+      if (!exact(result, ['ok', 'purpose', 'actorRef', 'messageRef', 'accountEventSeq', 'kind']) ||
+          result.purpose !== 'accepted-message' || result.kind !== 'editor' ||
+          !exact(result.actorRef, identity) || identity.some(field => result.actorRef[field] !== actorRef[field]) ||
+          !exact(result.messageRef, messageFields) || messageFields.some(field => result.messageRef[field] !== messageRef[field]) ||
+          !Number.isSafeInteger(result.accountEventSeq) || result.accountEventSeq < 0)
+        throw accountError(503, 'accepted-message-protocol');
+      return { ...result.actorRef, accountEventSeq: result.accountEventSeq };
+    },
     async events(after = 0) {
       const result = await request('GET', `${INTERNAL_PATHS.events}?after=${after}`);
       try { return validateEventBatch(result, after); } catch { throw accountError(503, 'account-event-gap'); }

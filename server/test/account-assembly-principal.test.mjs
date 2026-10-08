@@ -24,9 +24,10 @@ test('normalization preserves authenticated run service identity, legacy fields 
     connect(_ctx, id, actor) { actors.set(id, actor); },
     handle(ctx, id) { ctx.send(id, { type: 'probe.identity', actor: actors.get(id) }); },
   }] });
-  await service.listen(5770, '127.0.0.1'); t.after(() => service.close());
-  const client = wsClient('ws://127.0.0.1:5770', ['promptcut.v1', 'promptcut.session.new']);
-  t.after(() => client.close()); await client.opened; await client.next(value => value.type === 'session.welcome');
+  const address = await service.listen(0, '127.0.0.1');
+  const client = wsClient(`ws://127.0.0.1:${address.port}`, ['promptcut.v1', 'promptcut.session.new']);
+  t.after(async () => { client.close(); await client.closed; await service.close(); t.diagnostic(`owned principal WS port=${address.port} actual client closed`); });
+  await client.opened; await client.next(value => value.type === 'session.welcome');
   client.send({ type: 'probe.identity', seq: 1, serviceId: 'forged', serviceKid: 'forged',
     servicePrincipal: { service: 'render' }, principal: { accountId: 'forged' } });
   const response = await client.next(value => value.type === 'probe.identity');

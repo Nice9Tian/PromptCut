@@ -124,6 +124,12 @@ export function createSharedDocService({
   function serviceRefusal(principal) {
     if (typeof principal?.service !== 'string' && principal?.scope !== 'service') return null;
     if (!registry) return 'forbidden';
+    if (principal.realm === 'account' && principal.identityVersion === 2) {
+      // v2 project/member/run authority lives in the account ledger. The LAN
+      // username store cannot admit or revoke it; the service registry still can.
+      try { registry.refresh({ force: true }); } catch { return 'service-revoked'; }
+      return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
+    }
     if (!isProjectId(principal.tenantId)) return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
     const record = storeOf()?.peek(principal.tenantId) ?? null;
     const refused = serviceAdmission({ registry, record, service: principal.service, kid: principal.serviceKid, role: principal.role });
@@ -137,6 +143,7 @@ export function createSharedDocService({
   }
   /** 只读成员的云端 Agent 连接改不了项目：按项目记录**此刻**的权限判（连接建立之后才被改成只读的也拦得住） */
   function readonlyRefusal(principal, type) {
+    if (principal?.realm === 'account') return null;
     if (principal?.service !== 'agent' || principal.scope !== 'member' || !AGENT_WRITE_TYPES.includes(type)) return null;
     const record = storeOf()?.peek(principal.tenantId) ?? null;
     return record && memberAccess(record, principal.username, principal.creator === true) === 'rw' ? null : 'forbidden';
@@ -279,6 +286,7 @@ export function createSharedDocService({
     }
     return b;
   }
+  docAssembly?.bindTenantResolver(space => bundleForSpace(space));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).project }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).content }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));
