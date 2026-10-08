@@ -91,6 +91,16 @@ fn editor_url_with_open(open: Option<String>) -> String {
     }
 }
 
+/// Only an independently identified test shell can use its explicitly leased port.
+/// Production identifiers always keep the existing fixed service binding.
+fn account_editor_port(identifier: &str, override_port: Option<&str>) -> Result<u16, String> {
+    if !identifier.ends_with(".account-probe") { return Ok(EDITOR_PORT); }
+    let port = override_port.ok_or("account probe requires its explicit editor port")?
+        .parse::<u16>().map_err(|_| "invalid account probe port")?;
+    if !(6340..=6347).contains(&port) { return Err("account probe port is outside its lease".into()); }
+    Ok(port)
+}
+
 /// Holds the sidecar process ID so we can kill the whole tree on exit.
 struct SidecarPid(Mutex<Option<u32>>);
 
@@ -339,11 +349,18 @@ pub fn run() {
             let handle = app.handle().clone();
 
             // 双击 .proc 启动时,把路径挂在编辑器地址上带给前端
-            let editor_url = editor_url_with_open(proc_arg(env::args().skip(1)));
+            let port_override = env::var("PROMPTCUT_ACCOUNT_TEST_EDITOR_PORT").ok();
+            let editor_port = account_editor_port(&handle.config().identifier, port_override.as_deref())
+                .map_err(std::io::Error::other)?;
+            let origin = format!("http://127.0.0.1:{editor_port}");
+            let editor_url = if editor_port == EDITOR_PORT { editor_url_with_open(proc_arg(env::args().skip(1))) }
+                else { match proc_arg(env::args().skip(1)) { Some(p) => format!("{origin}/?open={}", percent_encode(&p)), None => format!("{origin}/") } };
+            handle.manage(account_vault::AccountBridgeBinding { origin,
+                vault_dir: handle.path().app_data_dir().map_err(std::io::Error::other)?.join("account-v1") });
 
             // ── Port check ──────────────────────────────────────────
             let mut existing_instance = false;
-            if let Ok(body) = probe_port(Duration::from_secs(2)) {
+            if let Ok(body) = probe_port_at(editor_port, Duration::from_secs(2)) {
                 if body.contains("PromptCut") {
                     // Another PromptCut is already serving on 5210.
                     existing_instance = true;
@@ -352,7 +369,7 @@ pub fn run() {
                     rfd::MessageDialog::new()
                         .set_title("PromptCut")
                         .set_description(&format!(
-                            "端口被占用\n\n端口 {EDITOR_PORT} 被别的程序占用，请关掉它再启动。"
+                            "端口被占用\n\n端口 {editor_port} 被别的程序占用，请关掉它再启动。"
                         ))
                         .set_level(rfd::MessageLevel::Error)
                         .show();
@@ -369,7 +386,8 @@ pub fn run() {
              * 「预览怎么变慢了」而无从查起。
              */
             if !existing_instance {
-                let busy = occupied_stage_ports(Duration::from_millis(400));
+                let busy = if editor_port == EDITOR_PORT { occupied_stage_ports(Duration::from_millis(400)) }
+                    else { [editor_port + 1, editor_port + 2].into_iter().filter(|port| probe_port_at(*port, Duration::from_millis(400)).is_ok()).collect() };
                 if !busy.is_empty() {
                     let list = busy
                         .iter()
@@ -539,7 +557,7 @@ pub fn run() {
             let sidecar_cmd = sidecar_cmd
                 .args([
                     "node_modules/vite/bin/vite.js",
-                    "--port", "5210",
+                    "--port", &editor_port.to_string(),
                     "--strictPort",
                     "--host", "127.0.0.1",
                 ])
@@ -641,7 +659,7 @@ pub fn run() {
                         let _ = win_poll.eval(&status_eval_script(&msg));
                         break;
                     }
-                    if let Ok(body) = probe_port(Duration::from_secs(2)) {
+                    if let Ok(body) = probe_port_at(editor_port, Duration::from_secs(2)) {
                         if body.starts_with("HTTP/1.1 200") || body.starts_with("HTTP/1.0 200") {
                             let _ = win_poll.navigate(editor_url_poll.parse().unwrap());
                             break;
@@ -746,6 +764,17 @@ fn show_about(handle: &tauri::AppHandle, runtime_dir: &PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_probe_binding_is_identifier_and_port_scoped() {
+        assert_eq!(account_editor_port("com.promptcut.desktop", Some("6340")).unwrap(), 5210);
+        assert_eq!(account_editor_port("com.promptcut.isolated.account-probe", Some("6340")).unwrap(), 6340);
+        assert_eq!(account_editor_port("com.promptcut.isolated.account-probe", Some("6347")).unwrap(), 6347);
+        assert!(account_editor_port("com.promptcut.isolated.account-probe", None).is_err());
+        assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("5210")).is_err());
+        assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("6348")).is_err());
+        assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("https://evil")).is_err());
+    }
 
     fn args(v: &[&str]) -> std::vec::IntoIter<String> {
         v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()

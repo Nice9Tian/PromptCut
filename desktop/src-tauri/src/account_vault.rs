@@ -1,7 +1,9 @@
 //! Windows-only, main-editor bridge. Passwords and access credentials never go on disk.
 use std::io::Write;
 use std::process::{Command, Stdio};
-use tauri::Manager;
+
+/// Constructed by Rust setup from the same URL/identifier as the owned editor.
+pub struct AccountBridgeBinding { pub origin: String, pub vault_dir: std::path::PathBuf }
 
 const SCRIPT: &str = r#"
 $ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
@@ -75,13 +77,13 @@ try {
 "#;
 
 #[tauri::command]
-pub async fn account_bridge(window: tauri::WebviewWindow, operation: String, args: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn account_bridge(window: tauri::WebviewWindow, binding: tauri::State<'_, AccountBridgeBinding>, operation: String, args: serde_json::Value) -> Result<serde_json::Value, String> {
     let url = window.url().map_err(|_| "desktop-account-bridge")?;
-    if window.label() != "main" || url.scheme() != "http" || url.host_str() != Some("127.0.0.1") || url.port() != Some(5210) || url.path() != "/" {
+    if window.label() != "main" || url.origin().ascii_serialization() != binding.origin || url.path() != "/" || !url.username().is_empty() || url.password().is_some() {
         return Err("desktop-account-forbidden".into());
     }
     if !["login", "recover", "logout", "request"].contains(&operation.as_str()) || !args.is_object() { return Err("desktop-account-request".into()); }
-    let directory = window.app_handle().path().app_data_dir().map_err(|_| "desktop-account-storage")?.join("account-v1");
+    let directory = binding.vault_dir.clone();
     let input = serde_json::to_vec(&serde_json::json!({"operation":operation,"args":args,"directory":directory})).map_err(|_| "desktop-account-request")?;
     if input.len() > 1024 * 1024 { return Err("desktop-account-request-too-large".into()); }
     tauri::async_runtime::spawn_blocking(move || execute(input)).await.map_err(|_| "desktop-account-bridge".to_string())?
