@@ -10,7 +10,7 @@ A 协议复用冻结 `909a6b96`，文件 SHA256 `d44879481a93af8c86aa258b5349084
 
 ## 验证约束与当前状态
 
-现已实现独立模块、物理导入与实际资源关闭目标，纯目标与类型结果见下节；真实 mTLS fixture 已编写，尚未启动。只运行获准的无业务 listener 精确 `npm.cmd test -- ...` 与类型；保留仓库 wrapper 的 38 个坏端口 guard 候选例外，不 bypass。固定 TLS fixture 后向 root 申请一次窄窗口。6480～6489 只是建议、未核空也未授权，不启动。full／宽 probe／部署／节点均未做。
+现已实现独立模块、物理导入与实际资源关闭目标；纯目标24/24、产品强制类型零错、获根单次窄窗口的真实mTLS目标1/1，精确源码/范围见下节。保留仓库 wrapper 的38个坏端口guard候选例外，不bypass。6480～6489从未启动。full／宽probe／部署／节点均未做，生产G接线不在本叶。
 
 所有自有数据、日志、spool、测试密钥在 TMP；子进程 windowsHide、隐藏绝对 preload；Python/cuda/models/provider/order 仅进程环境；不安装依赖、不 junction、不改变系统环境、用户端口或数据、不推送/合并。首红与每次有因修正将逐次补记。
 
@@ -38,7 +38,7 @@ e36目标 `npm.cmd test -- server/test/asset-run-lease.test.mjs server/test/asse
 
 Agent `createRunAssetClient`消费worker的隐藏raw票据facade；`createProjectAssets`只收可信8字段context/媒体引用/内容。resources用冻结register(context,{kind,resource})/signalFor等真实接口；spool quota的reserveImport与workspace(context)须真实宿主提供，sourceJob提供时另核同context，不设默认数字。存入字节与doc addMedia仍分开。
 
-G仍须接force current服务registry、真实A observed私有subject与actual closure verifier、asset lifecycle/root旧cgroup witness、双head required状态、真实worker transport/额度与workspace adapter。缺这些生产保持503，HTTP/UID/OS重启未知不借empty Map或计数0完成。当前TLS与全量仍未跑，root共同基线不是本B新源的证据。
+G仍须接force current服务registry、真实A observed私有subject与actual closure verifier、asset lifecycle/root旧cgroup witness、双head required状态、真实worker transport/额度与workspace adapter。缺这些生产保持503，HTTP/UID/OS重启未知不借empty Map或计数0完成。真实TLS只有下述本叶单目标，全量未跑；root共同基线不是本B新源的证据。
 
 ## 给中央接线的实际模块接口
 
@@ -53,4 +53,12 @@ G仍须接force current服务registry、真实A observed私有subject与actual c
 
 拟命令仅 `npm.cmd test -- server/test/asset-run-mtls.test.mjs`；业务监听恰doc/asset两个listen(0)，原wrapper guards例外另计；没有Agent服务、浏览器、Python或ffmpeg。TMP PKI通过现有helper运行windowsHide openssl短子进程，单命令30秒超时；用例60秒、每HTTP请求10秒。teardown先关闭 owned data sockets并等receipt RPC，再关闭client/consumer/server/all TLS sockets并删除准确TMP目录；source冻结后才申请窗口。覆盖GET/HEAD/Range/PUT/complete/verifyRef、完整wire tamper、真实nonce/TLS重放拒、错project、已读共有retained再读及stop拒。actual-close的长源gate已有纯目标，不将这里5字节素材当长流关闭或真实worker执行验收。
 
-未做：实际TLS执行、最终full、Linux全链/dirsync平台新包验证、生产G接线/required传播、真实worker+工具链、真实human+run双head并发、跨OS历史receipt恢复、全部晚结果/发布切点、用户UI及节点。latest render supplement仅作边界核对：不选择未批准earlyyield/补渲failure A/B/删除细节，不引入内存默认数字。
+### 单次真实TLS结果与窗口释放
+
+root全文核e361夹具后，先等G及共同基线结束，再明确授本叶单次窄窗口。固定 `e36150ee1ab1bc9d78c3c3debd5621eebacc5a40` 实际运行上述唯一npm命令：exit0，1项/1pass/0fail/cancel/skip，用例1493.9725ms，suite1581.2813ms，墙1884.2219ms；native retry0；sourceBefore/After均e361、全程无编辑。TMP原始stdout `pc-project-assets-mtls-1.log`、stderr `pc-project-assets-mtls-1.stderr.log`（空）、进程与监听观察 `pc-project-assets-mtls-1.meta.log` 原文保留。
+
+实际doc/asset业务端口1475/1477、Node测试PID28448；wrapper guards PID11896观察到38监听。隐藏启动树观察到PID11896/12608/19944/24372/28448/30612/33704/34288/38416（包含隐藏npm/cmd/Node及临时PKI命令中被观察到的进程，不把观察清单说成捕捉了每个极短子进程）。teardown诊断真正TLS socket Set空、两HTTPS server listening=false、准确TMP目录已删除；外部Get-CimInstance/Get-NetTCPConnection在结束后确认观察到的owned PIDs/listeners均无残留。自然结束后立即向root释放窗口，未加跑其它目标/full。该wrapper按约定保留原global setup/guard；凭据/proof/exporter没有输出。
+
+实际链：Agent真实实例注册/已读→doc A issue完整body→B原wire重建/独立asset cert问A→exact scope+TLS proof→physical chunks/hash/publish/read→owned HTTP/TCP/source fd实际收口→本地receipt持久→同observer doc关闭RPC；retained共有任务可再读、stop后拒。错project、raw body空白篡改、新TLS旧proof与已用nonce均拒。sender/registry/media/lifecycle/humanhead/closure回查仍为报告中明确的受控可信adapter；不冒称生产G、真实provider会话、三UID隔离、真实Worker facade或OS历史恢复。
+
+未做：最终full、Linux全链/dirsync平台新包验证、生产G接线/required传播、真实worker+工具链、真实human+run双head并发、跨OS历史receipt恢复、全部晚结果/发布切点、用户UI及节点。latest render supplement仅作边界核对：不选择未批准earlyyield/补渲failure A/B/删除细节，不引入内存默认数字。产品最后源码3d00696e，后续e361仅测试/报告；24pure/type3d和TLS e361各自范围分开。最终只报告提交不改变产品与已运行TLSfixture。
