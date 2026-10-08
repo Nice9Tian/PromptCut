@@ -119,3 +119,13 @@ assembly 首红还准确暴露一个等待顺序：当真实 run/retained/历史
 最后四文件命令为 `npm test -- server/test/agent-read-control.test.mjs server/test/cloud-queue-http.test.mjs server/test/agent-access-http.test.mjs server/test/account-assembly-central.test.mjs`。实际 provider/order 显式使用根确认的 VisuHive main **`1b3b0029eddf951225a8a2912597dc46854e9041`**，运行前后 SHA 一致；没有以缺 provider skip 掩盖目标。测试前后 5770–5779、5790/5791、6600–6619 均零 LISTEN。真实 asset 子进程由原 fixture 对自己创建的 ChildProcess 等待 close；新控制与 HTTP 生命周期在清理完成后测试进程自然退出。源码在 target 期间不变，结束 clean，diff-check 通过。
 
 本阶段没有 full、浏览器 UI probe、节点或生产部署。原 b11 的 1/1 实际 race 首绿证据仍独立保留；本轮真实 queue kick 补充了已抓取正文的关闭反例，不能将旧源码结果冒用于新源码。Luna 的新 controls fixture 后续需其 owner 接同协议，根将独立完整验证。真实 runner finish/outcome/resource closure 属根后续独立任务，本叶没有提前接入或把它算完成。
+
+## 下一窄阶段开工：finish outcome provider
+
+根在 `21c97ce0` 之后单独交接 finish provider；实际路径为 `server/account/run-internal.mjs`。租约仅 run-authority、run-internal、agent-instance-session/run-client 的 finish 必要增量、新 run-finish 专属目标；追加 agent-instance-authority 的 finish scope 窄分支。account-runner/create-agent-service/events 由 Sol 独占，不在本叶编辑。
+
+已核旧 provider 的 finish 无条件调用 `finishInState(...state:'done')`，仅有 requestId；instance cap 的 finish scope 也未包含 outcome。根同意本块先持久绑定真实终态报告，关闭未证时继续 pending/FIFO 占用，不能 resolve(donePromise) 就成功。
+
+冻结前协议提案：body 为原 projectId/conversationId/messageId/runId/runGrantId/requestId，加 readReceiptId 与 exact `outcome:{v:1,status:'done'|'failed'|'interrupted',eventId,eventDigest}`。eventDigest 应由执行者从其实际持久终态 row 的规范摘要导出；doc 验证的是精确实例签名绑定与已有 read receipt，不冒称 doc 自己运行模型。未知或 legacy 无 outcome 为安全拒绝；相同 tuple/request/outcome 幂等，异 outcome 冲突。无可信关闭引用先记录 outcome，禁止继续工具/数据写，但不释放 FIFO，不写完成。
+
+下一 finalizer 必须读取同一 doc 权威已核的 exact instance/generation/runGrant 控制回执，以及 doc 实际数据连接关闭证明，绑定本块不可变 finish receipt；本块不提供调用方可传 closed:Boolean 的入口，不另建 OS 权威，也不因 manager.closedRuns 或本机 drain 回调推断旧历史实例已空。真实关闭 producer 尚缺，明确保留 pending。根将 provider 与 Sol 的真实 consumer 配套后验证，不把只有严格新 provider、旧 caller 尚未迁移的中间点独立并入 main。
