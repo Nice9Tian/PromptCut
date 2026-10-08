@@ -79,12 +79,13 @@
 
 ## 派出去的活
 
-本任务仍在用3个工作区，都在PromptCut的`.worktrees/`下；用户原有集成four-stage、另五个旧工作区与其它会话保留。
+本任务在用4个工作区：PromptCut三个、VisuHive一个，均在各仓库`.worktrees/`下；用户原有六个工作区与其它会话保留。
 
 | 谁 | 在做什么 | 仓库/工作区 |
 |---|---|---|
 | Sol | 接任务素材服务的真实连接身份核对，缺可信登记时明确拒绝 | PromptCut/018-cloud-assets-central-glue |
 | Astra | 审查旧进程关闭与新实例登记的证据；强化探针仍隔离 | PromptCut/018-browser-doc-read |
+| Sol | 官网创建、加入请求保留正确路径，接回环服务并隔离素材Cookie | VisuHive/018-account-public-routing |
 | 主会话 | 分阶段收回、节点生产账号接线及真实网络验证 | PromptCut/018-instance-http-repair-verification |
 
 ## 没做到的与原因
