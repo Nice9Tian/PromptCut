@@ -273,7 +273,7 @@ test('云端 Agent 的反向通道(服务层)', async (t) => {
     assert.equal(await revOf(), before, '这几个工具不改项目');
   });
 
-  await t.test('CA-REV-11 工具表:经反向通道的恰好四个;另外四个在线时回 initiatorOnly 并写明差什么', async () => {
+  await t.test('CA-REV-11 工具表:经反向通道恰好四个;其余页面工具按各自关闭/不支持规则答复', async () => {
     assert.deepEqual([...CLOUD_PAGE_TOOLS].sort(), ['get_selection', 'pause', 'play', 'seek']);
     assert.equal(CLOUD_INITIATOR_TOOLS.size, 8);
     const rest = [...CLOUD_INITIATOR_TOOLS].filter((n) => !CLOUD_PAGE_TOOLS.has(n)).sort();
@@ -282,11 +282,15 @@ test('云端 Agent 的反向通道(服务层)', async (t) => {
     const inst = kit.service._instance(alice);
     const me = page(kit, alice, 'c-r11', PAGE);
     for (const name of rest) {
-      assert.ok(typeof CLOUD_TOOL_PLAN[name].online === 'string' && CLOUD_TOOL_PLAN[name].online.length > 8, `${name} 写了在线时差什么`);
       const out = await inst.callTool(name, name === 'spawn_agent' ? { role: 'editor', task: 'x' } : {}, 'c-r11');
-      assert.deepEqual(out, initiatorUnreachable(name), name);
-      assert.equal(out.initiatorOnly, true);
-      assert.ok(out.error.includes(CLOUD_TOOL_PLAN[name].online));
+      if (name === 'spawn_agent') {
+        assert.deepEqual(out, { ok: false, cloudUnavailable: true, error: '云端暂不支持开子 Agent' });
+      } else {
+        assert.ok(typeof CLOUD_TOOL_PLAN[name].online === 'string' && CLOUD_TOOL_PLAN[name].online.length > 8, `${name} 写了在线时差什么`);
+        assert.deepEqual(out, initiatorUnreachable(name), name);
+        assert.equal(out.initiatorOnly, true);
+        assert.ok(out.error.includes(CLOUD_TOOL_PLAN[name].online));
+      }
     }
     assert.equal(me.requests.length, 0, '这四个不经反向通道');
     me.off();
