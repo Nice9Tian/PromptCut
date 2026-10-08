@@ -61,6 +61,45 @@ function expectedMatches(record, expected, initial) {
     fail('asset-current-registry-invalid');
 }
 
+const publicationProtocol = 'promptcut.asset-root-publication.v1';
+const reservationProtocol = 'promptcut.asset-root-reservation.v1';
+
+export function validateAssetRootReservation({ reservation, expected } = {}) {
+  if (!keys(reservation, ['v', 'protocol', 'authorityId', 'serviceIdentity', 'uid', 'unit', 'cgroupPath',
+    'clientFingerprint256', 'serverFingerprint256', 'epoch', 'instanceId']) ||
+      reservation.v !== 1 || reservation.protocol !== reservationProtocol || !epoch(reservation.epoch) ||
+      !text(reservation.instanceId) || !keys(expected, ['authorityId', 'serviceIdentity', 'uid', 'unit',
+        'cgroupPath', 'clientFingerprint256', 'serverFingerprint256'])) fail('asset-current-reservation-invalid');
+  for (const key of Object.keys(expected)) if (reservation[key] !== expected[key]) fail('asset-current-reservation-invalid');
+  return Object.freeze(structuredClone(reservation));
+}
+
+/** A visible active rename is not a commit. The external root publisher must
+ * have durably completed its publication and released its root-owned lock. */
+export function validateRunAssetPublication({ record, trustAnchor, witness = null, reservation, publication,
+  publisherLocked = true } = {}) {
+  registry(record); anchor(trustAnchor, record);
+  if (publisherLocked || record.state !== 'active' ||
+      !keys(reservation, ['v', 'protocol', 'authorityId', 'serviceIdentity', 'uid', 'unit', 'cgroupPath',
+        'clientFingerprint256', 'serverFingerprint256', 'epoch', 'instanceId']) ||
+      reservation.v !== 1 || reservation.protocol !== reservationProtocol ||
+      reservation.authorityId !== record.authorityId || reservation.epoch !== record.epoch ||
+      reservation.instanceId !== record.instance.instanceId ||
+      !keys(publication, ['v', 'protocol', 'authorityId', 'epoch', 'registryDigest', 'anchorDigest',
+        'closureWitnessDigest', 'reservationDigest']) || publication.v !== 1 ||
+      publication.protocol !== publicationProtocol || publication.authorityId !== record.authorityId ||
+      publication.epoch !== record.epoch || publication.registryDigest !== digestOf(record) ||
+      publication.anchorDigest !== digestOf(trustAnchor) ||
+      publication.reservationDigest !== digestOf(reservation) ||
+      publication.closureWitnessDigest !== (record.epoch === 1 ? null : digestOf(witness)) ||
+      (record.epoch === 1 ? witness !== null : !witness)) fail('asset-current-publication-incomplete');
+  for (const key of ['serviceIdentity', 'uid', 'unit', 'clientFingerprint256', 'serverFingerprint256'])
+    if (reservation[key] !== record.instance[key]) fail('asset-current-publication-incomplete');
+  if (reservation.cgroupPath !== record.instance.cgroup.v2Path) fail('asset-current-publication-incomplete');
+  return { v: 1, authorityId: record.authorityId, epoch: record.epoch,
+    recordDigest: digestOf(record), anchorDigest: digestOf(trustAnchor) };
+}
+
 /** Canonical hashes are digestOf/canonicalJson of the COMPLETE exact-shape
  * JSON objects; a digest-shaped field alone is never a witness. */
 export function validateRunAssetCurrentRecord({ record, witness = null, trustAnchor, expected, checkpoint } = {}) {
@@ -124,6 +163,50 @@ function rootFile(filename) {
     return value;
   } catch (error) { if (error.status) throw error; fail('asset-current-registry-invalid'); }
   finally { fs.closeSync(fd); }
+}
+
+/** The asset process reads its root reservation ONCE at startup; it cannot
+ * later adopt a reservation for another OS generation. */
+export function readRootAssetReservation({ reservationFile, expected } = {}) {
+  try { return validateAssetRootReservation({ reservation: rootFile(reservationFile), expected }); }
+  catch (error) { if (error.status) throw error; fail('asset-current-reservation-unavailable'); }
+}
+
+function rootUnlocked(filename) {
+  if (process.platform !== 'linux' || typeof filename !== 'string' || !path.isAbsolute(filename))
+    fail('asset-current-registry-unavailable');
+  try { fs.lstatSync(filename); fail('asset-current-publication-incomplete'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // The directory is checked by every rootFile read. A later publisher can
+  // acquire the lock immediately; callers must recheck at the final gate.
+}
+
+/** Read a complete root-owned publication. This never advances doc state. */
+export function readRootRunAssetCandidate({ registryFile, anchorFile, reservationFile,
+  publisherLockFile, expected } = {}) {
+  try {
+    if (process.platform !== 'linux') fail('asset-current-registry-unavailable');
+    const dir = path.dirname(registryFile ?? '');
+    if (registryFile !== path.join(dir, 'current.json') || anchorFile !== path.join(dir, 'anchor.json') ||
+        reservationFile !== path.join(dir, 'reservation.json') || publisherLockFile !== path.join(dir, '.publisher.lock'))
+      fail('asset-current-registry-untrusted');
+    rootUnlocked(publisherLockFile);
+    const record = rootFile(registryFile), trustAnchor = rootFile(anchorFile);
+    const publicationFile = path.join(dir, `publication-${record.epoch}.json`);
+    const witnessFile = record.epoch === 1 ? null : path.join(dir, `witness-${record.epoch}.json`);
+    const witness = record.epoch === 1 ? null : rootFile(witnessFile);
+    const reservation = rootFile(reservationFile), publication = rootFile(publicationFile);
+    const checkpoint = validateRunAssetPublication({ record, trustAnchor, witness, reservation, publication,
+      publisherLocked: false });
+    expectedMatches(record, expected, trustAnchor);
+    validateRunAssetCurrentRecord({ record, witness, trustAnchor, expected, checkpoint });
+    // Catch a transition begun between the first and last file read.
+    rootUnlocked(publisherLockFile);
+    if (digestOf(rootFile(registryFile)) !== checkpoint.recordDigest ||
+        digestOf(rootFile(publicationFile)) !== digestOf(publication)) fail('asset-current-registry-changed');
+    rootUnlocked(publisherLockFile);
+    return { record, trustAnchor, witness, reservation, publication, checkpoint };
+  } catch (error) { if (error.status) throw error; fail('asset-current-registry-unavailable'); }
 }
 
 /** No acceptCurrent here. A missing durable checkpoint is always rejected. */

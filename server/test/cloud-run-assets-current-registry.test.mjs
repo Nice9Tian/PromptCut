@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { digestOf } from '../account/ledger.mjs';
-import { validateRunAssetCurrentRecord, readRootRunAssetCurrent } from '../hosted/run-assets-current-registry.mjs';
+import { validateRunAssetCurrentRecord, validateRunAssetPublication,
+  readRootRunAssetCurrent } from '../hosted/run-assets-current-registry.mjs';
+import { assertRunAssetCheckpointTransition } from '../hosted/run-assets-checkpoint.mjs';
 
 const bootId = '11111111-2222-3333-4444-555555555555';
 const pin = char => char.repeat(64);
@@ -63,4 +65,43 @@ test('next epoch needs full prior registry and root witness content, not a diges
 test('untrusted local platform cannot act as root-owned production registry', { skip: process.platform === 'linux' }, () => {
   assert.throws(() => readRootRunAssetCurrent({ registryFile: 'C:/temp/not-a-root-registry', expected: {}, checkpoint: {} }),
     error => error.code === 'asset-current-registry-unavailable');
+});
+
+test('visible active file cannot be accepted until exact root publication is complete and unlocked', () => {
+  const first = record(1, instance('asset-one')), trustAnchor = anchor(first);
+  const reservation = { v: 1, protocol: 'promptcut.asset-root-reservation.v1',
+    authorityId: first.authorityId, serviceIdentity: first.instance.serviceIdentity,
+    uid: first.instance.uid, unit: first.instance.unit, cgroupPath: first.instance.cgroup.v2Path,
+    clientFingerprint256: first.instance.clientFingerprint256,
+    serverFingerprint256: first.instance.serverFingerprint256, epoch: 1, instanceId: first.instance.instanceId };
+  const publication = { v: 1, protocol: 'promptcut.asset-root-publication.v1',
+    authorityId: first.authorityId, epoch: 1, registryDigest: digestOf(first),
+    anchorDigest: digestOf(trustAnchor), closureWitnessDigest: null, reservationDigest: digestOf(reservation) };
+  const bundle = { record: first, trustAnchor, reservation, publication };
+  assert.throws(() => validateRunAssetPublication(bundle), error => error.code === 'asset-current-publication-incomplete');
+  assert.equal(validateRunAssetPublication({ ...bundle, publisherLocked: false }).epoch, 1);
+  assert.throws(() => validateRunAssetPublication({ ...bundle, publisherLocked: false,
+    publication: { ...publication, reservationDigest: '0'.repeat(64) } }),
+  error => error.code === 'asset-current-publication-incomplete');
+  assert.throws(() => validateRunAssetPublication({ ...bundle, publisherLocked: false,
+    reservation: { ...reservation, instanceId: 'asset-two' } }),
+  error => error.code === 'asset-current-publication-incomplete');
+  const candidate = { ...bundle, checkpoint: validateRunAssetPublication({ ...bundle, publisherLocked: false }) };
+  assert.equal(assertRunAssetCheckpointTransition(null, candidate).epoch, 1);
+  assert.throws(() => assertRunAssetCheckpointTransition(null, { ...candidate,
+    checkpoint: { ...candidate.checkpoint, epoch: 4 } }), error => error.code === 'asset-current-anchor-invalid');
+});
+
+test('checkpoint advances only one witnessed epoch and never accepts a changed or skipped previous digest', () => {
+  const first = record(1, instance('asset-one')), next = instance('asset-two', 1202);
+  const prior = snapshot(first, anchor(first)).checkpoint;
+  const candidate = { record: record(2, next, { epoch: 1, registryDigest: digestOf(first),
+    instance: first.instance, closureWitnessDigest: 'a'.repeat(64) }),
+  checkpoint: { ...prior, epoch: 2, recordDigest: 'b'.repeat(64) } };
+  assert.equal(assertRunAssetCheckpointTransition(prior, candidate).epoch, 2);
+  assert.throws(() => assertRunAssetCheckpointTransition(prior, { ...candidate,
+    checkpoint: { ...candidate.checkpoint, epoch: 3 } }), error => error.code === 'asset-current-epoch-unaccepted');
+  assert.throws(() => assertRunAssetCheckpointTransition(prior, { ...candidate,
+    record: { ...candidate.record, previous: { ...candidate.record.previous, registryDigest: '0'.repeat(64) } } }),
+  error => error.code === 'asset-current-epoch-unaccepted');
 });
