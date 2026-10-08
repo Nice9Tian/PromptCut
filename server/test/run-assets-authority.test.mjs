@@ -160,3 +160,36 @@ test('parallel nonce admission linearizes in SQLite once; fake selector has no g
   x.setResource({ ...ticket.resource, projectId: 'sp_other' });
   await assert.rejects(x.issue(x.body('cross-project')), /resource-scope-mismatch/);
 });
+
+test('control inventory never closes another current run merely sharing its Agent instance', async t => {
+  const x = await setup(t), ticket = await x.issue(), first = x.checkInput(ticket), firstLease = await x.assets.check(first);
+  x.f.ledger.transaction(s => {
+    const original = s.conversationsV2[projectId][x.g.conversationId];
+    s.conversationsV2[projectId].second = { ...structuredClone(original), id: 'second', currentRunId: null,
+      messages: [{ ...structuredClone(original.messages[0]), messageId: 'second-message', requestId: 'send-second',
+        queueState: 'queued', runId: null, readReceiptId: null }] };
+  });
+  const second = await x.f.provider.admit({ servicePrincipal: x.f.agentProcess.principal,
+    projectId, conversationId: 'second', requestId: 'admit-second' });
+  await x.f.provider.confirmRead({ ...x.f.input(second, 'read-second'), conversationId: 'second' });
+  const secondTicket = await x.issue({ ...x.body('second-issue'), runGrantId: second.runGrantId });
+  const secondInput = x.checkInput(secondTicket, x.request(secondTicket, { runGrantId: second.runGrantId, nonce: 'second-nonce' }));
+  const secondLease = await x.assets.check(secondInput);
+  const c = x.f.provider.fence({ kind: 'stop', requestId: 'first-only', projectId, runId: x.g.runId });
+  const event = (await x.assets.eventsSince(0)).events[0]; x.setClosure(true);
+  await x.assets.closeLease({ leaseId: firstLease.leaseId, observer: x.observer,
+    receipt: { leaseId: firstLease.leaseId, receiptId: 'first-close', complete: true, evidenceDigest: digestOf('first-close') } });
+  const receipt = { receiptId: 'first-control', eventId: event.eventId, cursor: 1, controlId: c.controlId,
+    fenceRevision: c.fenceRevision, complete: true, assetInstanceId: x.observer.assetInstanceId,
+    closedLeaseIds: [firstLease.leaseId], retainedLeaseIds: [], evidenceDigest: digestOf('first-close') };
+  await x.assets.acknowledgeEvent({ eventId: event.eventId, observer: x.observer, receipt });
+  assert.equal(x.f.ledger.read().runAssetLeasesV1[secondLease.leaseId].state, 'admitted');
+  assert.equal((await x.assets.check({ ...secondInput, leaseId: secondLease.leaseId })).allowed, true);
+});
+
+test('durable outbox corruption/gap fails closed instead of exposing a false continuous head', async t => {
+  const x = await setup(t); x.f.provider.fence({ kind: 'stop', requestId: 'gap-control', projectId, runId: x.g.runId });
+  const page = await x.assets.eventsSince(0); assert.equal(page.headSeq, 1);
+  x.f.ledger.transaction(s => { s.runAssetControlOutboxV1[0].seq = 2; });
+  await assert.rejects(x.assets.eventsSince(0), /run-control-gap/);
+});
