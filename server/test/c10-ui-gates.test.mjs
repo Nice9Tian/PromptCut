@@ -8,7 +8,7 @@
  *   C10-UI-03 本页运行不了的用户卡、图卡（内容库同步来的没载入成功的；图卡；低内存档下的全部用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
  *             选帧、报缺口、取字节；暂停态整台「已精确」时它们的快照照挂（停下不追）——2026-09-29 用户改语义，撤销原豁免；
  *   C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧，同步表不影响桌面；
- *   C10-RA-01 旧本机 `/api` 清单只减不增；已批准账号入口固定7条字面量，不重复、不接受未知账号路径。
+ *   C10-RA-01 旧本机 `/api` 清单只减不增；已批准账号入口固定8条字面量，不重复、不接受未知账号路径。
  *
  * 置灰入口「点了不发请求、不露报错」要在真页面里点，归探针与验收 C10-A7（主会话），这里只核文案。
  * 假设见 `c10-kit.mjs` 的 K7、K8、K9。门不开时整组 skip。
@@ -157,12 +157,13 @@ const ratchet = ratchetGate();
 // account-binding-task.md / account-binding-contract.md：独立固定官网同源账号入口，
 // editor/ 是动态拼接的产物字面量，不能使其它 editor 子路径获得许可。
 const ACCOUNT_PATHS = [
+  '/api/account/cloud-agent-consent',
   '/api/account/editor/', '/api/account/editor/renew', '/api/account/editor/session',
   '/api/account/login', '/api/account/logout', '/api/account/me', '/api/account/projects',
 ];
 function assertRatchet(paths, baseline) {
   assert.ok(Array.isArray(paths), `${RATCHET_FILE} 应有 paths 数组`);
-  assert.deepEqual(baseline.accountPaths, ACCOUNT_PATHS, '账号许可必须是固定7条，不能扩为前缀');
+  assert.deepEqual(baseline.accountPaths, ACCOUNT_PATHS, '账号许可必须是固定8条，不能扩为前缀');
   assert.equal(new Set(paths).size, paths.length, '清单里有重复');
   const legacy = new Set(baseline.paths);
   assert.ok(baseline.paths.every((p) => !p.startsWith('/api/account/')), '旧基线不能夹带账号许可');
@@ -170,7 +171,7 @@ function assertRatchet(paths, baseline) {
   assert.deepEqual(added, [], `棘轮清单多出了未许可的路径：${added.join(', ')}`);
   assert.deepEqual(paths.filter((p) => p.startsWith('/api/account/')), ACCOUNT_PATHS, '账号产物清单逐条精确登记');
 }
-test('C10-RA-01 旧本机 /api 只减不增、账号入口固定7条、不重复', { skip: ratchet.ok ? false : ratchet.reason }, () => {
+test('C10-RA-01 旧本机 /api 只减不增、账号入口固定8条、不重复', { skip: ratchet.ok ? false : ratchet.reason }, () => {
   const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
   const baseline = JSON.parse(fs.readFileSync(repoPath(RATCHET_BASELINE), 'utf8'));
   assertRatchet(list.paths, baseline);
