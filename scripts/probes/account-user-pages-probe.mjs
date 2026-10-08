@@ -58,7 +58,7 @@ const MIME = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.cs
 const source = () => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim();
 const result = { sourceBefore: source(), checks: [], screenshots: [], network: [], websocket: [], stageDocuments:[], phase: 'preflight', desktop: 'not-run', cleanup: {} };
 let fixture, browser;
-let native;
+let native, nativeAttempt = 0;
 const stages = [], contexts = [], pages = [], responseTasks = new Set(), networkObservers = [];
 let browserPid;
 function assert(ok, name) { result.checks.push({ check: name, ok: Boolean(ok) }); if (!ok) { const error = new Error(name); error.probeCheck = name; throw error; } }
@@ -169,8 +169,11 @@ async function observePage(page, label) {
   return page;
 }
 async function type(page, selector, value) {
-  await page.waitForSelector(selector, { visible:true });
-  await page.click(selector, { clickCount:3 }); await page.keyboard.press('Backspace'); await page.type(selector, value);
+  const input = await page.waitForSelector(selector, { visible:true });
+  await input.focus();
+  await page.keyboard.down('Control');
+  try { await page.keyboard.press('A'); } finally { await page.keyboard.up('Control'); }
+  await page.keyboard.press('Backspace'); await input.type(value);
 }
 async function safeShot(page, label) {
   for (const input of await page.$$('input[type="password"]')) {
@@ -245,18 +248,33 @@ async function cdpClosed() {
     socket.once('close', () => resolve(closed));
   });
 }
+function nativeCertificatePin(fingerprint) {
+  if (typeof fingerprint !== 'string' || !/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(fingerprint)) throw new Error('invalid-native-certificate-pin');
+  return fingerprint.replaceAll(':', '').toLowerCase();
+}
 async function startNative(label) {
   await fs.access(DESKTOP_EXE);
   assert(await cdpClosed(), 'native-cdp-is-not-another-process');
   await fs.mkdir(DESKTOP_PROFILE, { recursive:true });
   const env = { ...process.env, USERPROFILE:DESKTOP_PROFILE,
     PROMPTCUT_ACCOUNT_TEST_EDITOR_PORT:'6340', PROMPTCUT_ACCOUNT_TEST_CLOUD_ORIGIN:ORIGIN,
-    PROMPTCUT_ACCOUNT_TEST_CLOUD_PIN:fixture.leafFingerprint256, PROMPTCUT_AGENT_CDP:'6348',
+    PROMPTCUT_ACCOUNT_TEST_CLOUD_PIN:nativeCertificatePin(fixture.leafFingerprint256), PROMPTCUT_AGENT_CDP:'6348',
     WEBVIEW2_USER_DATA_FOLDER:path.join(DESKTOP_PROFILE, 'webview2'), PROMPTCUT_NO_PORT_FILE:'1' };
-  const child = spawn(DESKTOP_EXE, [], { cwd:path.dirname(DESKTOP_EXE), env, windowsHide:true, stdio:'ignore' });
+  const child = spawn(DESKTOP_EXE, [], { cwd:path.dirname(DESKTOP_EXE), env, windowsHide:true, stdio:['ignore', 'ignore', 'pipe'] });
   const state = { child, env, connection:null, page:null, closed:childClosed(child) }; native = state;
+  const attempt = ++nativeAttempt, limit = 16 * 1024;
+  let capturing = true, bytes = 0, truncated = false, chunks = [], ipcConfirmed = false;
+  child.stderr.on('data', chunk => {
+    // Keep draining for the process lifetime, but retain only pre-IPC startup
+    // stderr, bounded in bytes. No login operation has happened at this stage.
+    if (!capturing) return;
+    const remaining = limit - bytes, retained = Math.min(chunk.length, remaining);
+    if (retained) { chunks.push(Buffer.from(chunk.subarray(0, retained))); bytes += retained; }
+    if (chunk.length > retained) truncated = true;
+  });
   // Supervise immediately; propagate startup failure through the normal first error.
   state.closed.catch(() => {});
+  try {
   await waitFor(async () => {
     if (child.exitCode !== null || child.signalCode !== null) throw new Error('native-exited-before-cdp');
     try { state.connection = await puppeteer.connect({ browserURL:'http://127.0.0.1:6348', defaultViewport:null, protocolTimeout:TIMEOUT }); return true; }
@@ -279,6 +297,27 @@ async function startNative(label) {
       agentReady:info.ready === true, port:info.port, origin:config.origin, ok:config.ok === true };
   });
   assert(bridge?.main && bridge.window && bridge.agentReady && bridge.port === 6348 && bridge.ok && bridge.origin === ORIGIN, 'actual-main-and-agent-configuration-ipc');
+  ipcConfirmed = true;
+  } finally {
+    capturing = false;
+    const raw = Buffer.concat(chunks, bytes); chunks = [];
+    const text = raw.toString('utf8'), osCode = text.match(/os error ([0-9]{1,10})/i)?.[1];
+    const classification = /failed to build tauri application/.test(text) ? 'tauri-build-panic' :
+      /failed to resolve app data dir/.test(text) ? 'app-data-dir-panic' :
+      /failed to resolve app log dir/.test(text) ? 'app-log-dir-panic' :
+      /failed to resolve resource dir/.test(text) ? 'resource-dir-panic' :
+      /thread .* panicked at/.test(text) ? 'rust-panic' : /webview2/i.test(text) ? 'webview2-startup' :
+      bytes ? 'unclassified-startup-stderr' : 'no-startup-stderr';
+    const file = `native-startup-${attempt}.stderr.log`;
+    let saved = false;
+    try { await fs.writeFile(path.join(OUT, file), raw, { flag:'wx', mode:0o600 }); saved = true; }
+    catch { result.cleanup.nativeStartupWriteFailed = true; process.exitCode = 1; }
+    result.nativeStartup ??= [];
+    result.nativeStartup.push({ attempt, pid:child.pid, ipcConfirmed, exitCode:child.exitCode,
+      signal:child.signalCode, classification, ...(osCode ? { osErrorCode:Number(osCode) } : {}),
+      capturedBytes:bytes, truncated, file:saved ? file : null });
+    // Raw stderr is TMP-only. It is never printed or copied into result.json/Git.
+  }
   let agent;
   await waitFor(async () => { agent = (await state.connection.pages()).find(page => page !== state.page && page.url().startsWith('about:blank')); return Boolean(agent); }, 'actual-agent-target');
   // Navigate only this owned agent webview to the allowed main origin to prove
@@ -364,6 +403,8 @@ try {
     await a.waitForFunction(origins => origins.every(origin => [...document.querySelectorAll('iframe')].some(frame => {
       try { return new URL(frame.src).origin === origin; } catch { return false; }
     })), {}, STAGES);
+    // DOM insertion can precede the second stage's actual HTTP request.
+    await waitFor(() => STAGES.every((_, i) => result.stageDocuments.some(request => request.port === 6341 + i && request.method === 'GET')), 'both-compiled-stage-policy-origins-used');
     assert(STAGES.every((_, i) => result.stageDocuments.some(request => request.port === 6341 + i)), 'both-compiled-stage-policy-origins-used');
   }
   result.phase = 'editor-b-login'; await loginEditor(b, fixture.accounts[1]);

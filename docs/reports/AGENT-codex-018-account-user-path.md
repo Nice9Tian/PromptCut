@@ -101,3 +101,29 @@ root授权仅给pages probe补安全CDP元数据：真实/hosted/ WS创建、握
 固定47b一次纯目标 `npm.cmd test -- src/editor/sync/reconnect.test.mjs src/account/client.test.mjs`：9/9、零失败取消跳过、427.3331ms、wall713ms、exit0、native重跑0，raw `%TEMP%/pc-account-ws-v1-pure-1.log`。新增断言初次实际socket含v1/account/session.new，欢迎后project.open有正确projectId及seq1；断传输后resume现取更新票据、仍有v1及原sid/ack，欢迎ack1后不重open或重放已确认消息。受控Socket只在内存，无监听；client凭据接口仍受控fetch/native，不是浏览器/壳完整通过。实际root0c66首次连接失败截图与日志保留，静态因果被root确认后才修，不声称用pure证据推翻首次失败。
 
 同47b强制type `node <主仓库node_modules>/typescript/bin/tsc -b --force`：exit0零错、wall6488ms，raw `%TEMP%/pc-account-ws-v1-type-1.log`。两次测前后source同47b、clean，未启动业务服务/Chrome/桌面exe/TLS fixture/full，也没有节点/环境/依赖操作。后续需要root共同源重建并实际在线/桌面复验；新增CDP观察仅nodecheck，尚未在Chrome验证，保持这项证据边界。
+
+## 两舞台真实请求等待
+
+root固定4adc实际在线首次4.117s，协议修复后A新建201/session200/真实101，收到session.welcome与project.open/opened，已进入编辑器并取得可见项目链接与新projectId。唯一失败为both-compiled-stage-policy-origins-used：DOM已存在两iframe，但断言当刻stageDocuments仅6341 GET。原探针先等待DOM插入后立刻断言服务器网络记录，不能保证第二次HTTP请求已到达。最窄只在该原断言前复用已有有界waitFor等待6341与6342两条真实stage GET，不伪造记录、不放宽两来源要求、不修改舞台政策/产品/超时。等待仍超时则保留同名失败，不以DOM替代网络证据。node --check/diff --check通过；本叶未启动listener/Chrome/full，真实重验仍由root安排，首次4adc结果保留。
+
+另root桌面首次0c66因隔离USERPROFILE使Puppeteer定位TMP空cache而fs.access失败，native尚未启动；root将为测试子进程显式设置现成Chrome的PUPPETEER_EXECUTABLE_PATH。这是root测试进程配置原因，本次不改getChromePath/产品、不安装Chrome，也不声称nativeIPC已有通过证据。
+
+## 隔离桌面启动stderr取证
+
+root固定4adc类型0、full5303/5299通过/0失败/4跳过、75.544s、build/online build exit0、native重跑0，原证据保留。桌面实际首次已启动Chrome，独立壳PID41184立即exit101，phase native-start、main/agent IPC未到；该PID/CDP及自有fixture/Chrome/Vite6340～6342已关闭。原probe stdio ignore未保留panic原因，不能把exit101归为账号逻辑失败。
+
+本块仅probe与报告：startNative保stdout/stdin忽略，将stderr设为pipe，进入真正main+agent configuration IPC确认之前最多留16KiB原字节；无论成功或首次失败都只写本次TMP输出的native-startup-N.stderr.log，不打印原文、不入Git、不进result正文。result只记PID/exitCode/是否IPC确认/固定panic或WebView2分类/数字os错误码/截断与文件名；没有复制任意errormessage/body。IPC确认后data监听继续排空但不保存；保存失败也标cleanup失败、exit1，不伪称取证成功。一次patch定位旧变量声明未匹配且未修改文件，按真实声明重做；node --check与diff --check通过。未启壳/listener/Chrome/full，实际stderr取证仍由root独立窗口执行。
+
+只读静态核：Tauri配置frontendDist为desktop/ui，main先用内置index.html再导航自有editor；隔离target/debug已有promptcut.exe与node.exe，未读用户app_data。lib.rs启动依赖可信端口/cloud binding、app_data/resource/log目录解析及WebView2主窗口build；主窗build失败经最终expect可panic，agent_webview.ensure失败只eprintln不直接终止。主/agent共用browser_args和用户目录约束；已有自有6340服务被识别时会跳过Node sidecar启动，不能仅因runtime资源目录不存在就断言其是本次101根因。系统WebView2/runtime可用性与具体错误要以新增实际stderr及root启动结果为准。本叶不改Rust、Tauri配置、资源、OS/环境/用户目录；Puppeteer缓存路径由root测试进程显式现成Chrome处理。
+
+## 实际表单输入清除默认值
+
+root读取0c66 failure-1与4adc创建截图发现实际项目名带“未命名双账号页面验收-...”默认前缀，而网站后续预期为probe生成的“ 双账号页面验收-...”无默认前缀。原type helper的三击没有可靠清除原input值，首图原因保留，不能改产品默认名称/网站断言来通过。独立仅改probe type helper：等待确切selector对应可见输入框，聚焦该节点后真实Control+A并释放Control、Backspace清空，再由该input.type输入；用户名/密码/链接也同样精确填入。没有DOM写value、页面脚本注值或mock。本次仅node --check/diff --check通过，无业务listener/Chrome/壳/full；实际键盘效果及完整路径由root固定probe重验，不借先前full作为此probe通过证据。
+
+## 测试证书指纹边界格式
+
+Astra只读静态核到确定格式冲突：fixture叶证书指纹来自Node X509Certificate.fingerprint256，是冒号分隔大写95字符；原startNative直接给CLOUD_PIN，Rust lib.rs account_cloud_binding只接受64位小写hex，在创建窗口/CDP前返回Err，最终Tauri build.expect会panic。此与root首native101发生位置吻合，但旧源stdio ignore，没有stderr证据，不能写已由stderr确认。本块只probe边界严格接受32组大写双hex的标准冒号SHA256结构，再去冒号/小写后给独立进程ENV；缺失/非标准/尾随字符直接受控错误拒，不改Rust pin验证/证书/客户端或生产host。
+
+下一步仅固定源最小纯验证，复用G静态assetWiringPki生成自有TMP证书，无服务listener；运行实际probe中的nativeCertificatePin函数，核95字符到64小写且等于同叶证书DER原字节SHA256、坏格式拒，私钥/指纹不打印。node --check/diff --check先通过。原native101/已闭PID和在线失败均保留，root后续实际壳及双网页再验，不为probe/报告重复全量。
+
+固定196cc384050121d8fd74fe4fa329feb8f075aad3最小纯验证exit0、wall962ms、raw `%TEMP%/pc-account-native-pin-pure-1.log`：从实际probe函数定义载入独立VM执行（不镜像重写算法、不执行probe顶层），G真实assetWiringPki在自建TMP生成证书；Node标准指纹95字符转64小写，并与同叶证书raw DER的createHash('sha256')逐字相等。9/9坏格式（缺失/null/数字/空/无冒号/尾随换行/截短/错分隔/非hex）真实拒。自有openssl子进程隐藏、正常结束，TMP目录核绝对归属后已清；无业务listener/Chrome/壳，未打印privatekey或pin、未读真实密钥、未npm/full/type。本次node --check/diff --check通过；测前后source同196且clean，raw只有通过计数与cleanup，不声称实际native启动通过。
