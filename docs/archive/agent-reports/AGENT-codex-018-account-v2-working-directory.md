@@ -13,3 +13,5 @@ Sol 真实静态首红 5项4通过1失败，修后6/6，包含原有实际三服
 根二次候选9efa8ecb实际verify3份退出0；真实隔离unit读取含字面反斜杠的EnvironmentFile仍ENOENT/resources，未进入Node。WorkingDirectory与EnvironmentFile不能共用全部路径承诺，因为后者随后经glob。日志TEMP pc-account-unit-verify-9efa8ecb/unit-proof-first.log保留，唯一unit已清，旧服务未停。
 
 第三次仅收d8cda394两文件：WorkingDirectory支持原单值字面反斜杠；EnvironmentFile独立格式，POSIX明确拒反斜杠及glob元字符，正常生产路径不受影响。Sol首红8项7过1败、修后8/8含原5真实三服务子进程，type0/6594ms；TEMP pc-account-v2-envfile-special-{red,green,type}.log。根将分别核复杂cwd与无特殊元字符的真实环境文件，再验完整基线。
+
+根固定第三次候选4c041cfcd060043f3d497fc5b52fe6baf0eae0e4：强制type exit0墙6.672秒；完整npm5309/5305通过/0失败/0取消/4跳过70320.2711ms墙70.656秒；native retries0；build exit0墙8.922秒、online build0墙1.765秒；运行前后同源码且clean。节点systemd249三份unit verify0，唯一历史snapd RestartMode警告未触；实际唯一oneshot start0/Resultsuccess/ExecMainStatus0，Node严格核对含空格/%/单字面反斜杠cwd与含空格/%但无glob特殊字符环境文件的公开marker，两者都正确；特殊环境路径由源码明确拒绝。旧钥匙、其它生成结果逐项不变，unit实际已stop/unlink，旧生产服务未停。日志TEMP pc-account-unit-verify-4c041cfc/unit-proof-first.log与pc-account-working-directory-4c041cfc-{type,full,build,online-build}.log。首红未重写；这次三层门槛成立，按小阶段收回。

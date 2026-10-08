@@ -125,3 +125,9 @@ VisuHive精确证书包以572a60eac5607b601c415e29e9c2a23293c9d08a合main并推�
 官网反代冻结4e1c946f根独立完整npm90/86通过/0失败/0取消/4跳过7290.8178ms（墙7.5秒）；Linux实际nginx专门目标4/4、零失败/跳过297.504668ms（墙0.59秒），三个精确账号路径/query、其它hosted旧rewrite、素材Cookie清除与WS101均通过。Windows启动脚本首次两次引号/ESM URL错误均在测试前，改TEMP启动器后才执行全量；源未变，日志保留，Sol独立核对。VH main ea1937a已收回推送；准确工作区HEAD3b2eeea在main、完整status空、ignored0、全树reparse0/绝对边界确认后清掉，累计PC34/VH12共46个。TMP vh-public-routing-root-full{,-run-2,-run-3}.log、vh-public-routing-root-linux-first.log、three-versions-public-routing-cleanup-20261009.json；详细阶段报告已移VH docs/archive/agent-reports/。
 
 仅为仍需做的公网真实路径新增PC018-account-public-path，Sol准备固定探针，根会话运行公网写入；尚未创建公网测试账号或项目。Astra完成的强化探针保留已推冻结分支，在干净同物理018-browser-doc-read切新018-asset-root-publisher分支做OS登记工具，旧源码未覆盖/删除。当前实际活跃PC四工作区，角色逐个列进进度；不是本任务旧六个及外部工作区不动。
+
+## 生产单元路径小阶段
+
+独立第三次根候选4c041cfc完整5309项/5305通过/0失败/4跳过、70320.2711ms（墙70.656秒），强制类型0、两种构建0、native重跑0。三份真实单元解析以及复杂cwd与真实环境文件读取均通过，详见 [独立单元报告](agent-reports/AGENT-codex-018-account-v2-working-directory.md)。此前引号、反斜杠、EnvFile glob三个实际失败保留。配置角色/私钥已一次生成并核角色间读拒绝，尚未切换旧服务。
+
+公网临时桌面编译源f20e318c，cargo offline/locked成功墙16.281秒，独立TMP exe SHA256 9bb3f757d89c09b8b937c68d8473d711f8c9b76b7c50a14f0c45343cc4258a5c，能力仅main6500、实际公网系统CA、编译5源文件逐字一致。首次准备断言把CRLF工作树和LF git show误当不同，发生在cargo之前；已以逐字工作树并正规化git内容双核更正，没有改产品代码。公网探针还没运行。
