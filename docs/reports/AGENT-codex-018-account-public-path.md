@@ -43,3 +43,15 @@ CDP只从project.state收到/ project.open发出的真实文本帧提取严格sp
 所有三.mjs node --check与git diff --check通过。末次6500～6509检查无listener。本叶只五文件变动：lib.rs两个隔离条件及实际断言、新公共页面探针、纯helper、专属pure目标、本报告；未改网站/服务器/凭据vault/stage/渲染/Agent/旧探针。报告最终提交只追加证据，不再更改上述840源码。
 
 实际公网用户路径、真实Chrome/WebView2、root新TMP壳构建/IPC、实际6500～6509服务器、整套npm/type/build、生产账号创建与项目写入、节点部署均未由本叶运行。无需依赖切换前503推断成功；必须由根以固定源码按--run-public运行，原生须先有新的精确6500/public系统CA隔离构建，旧e22.exe不合条件。cleanup只关闭本探针own资源并清自建profile，保留evidence/未知进程归属目录；不会删除任何公网测试账号/项目。最终用户路径是否通过，待根真实结果独立认定。
+
+## 根公网首败与探针初始化窄修
+
+根实际f20公网首轮7.25秒，9检查8通过/1失败：register-0成功，register-1没有POST便real-registered失败；ownedAccounts为空。根原始`%TEMP%/pc-account-public-f20e318c-first.log`及`%TEMP%/pc-account-public-f20e318c-first-out/result.json`/截图保留，Chrome/Vite6500～6502由根实际close，native未跑；实际留下1测试账号、无项目，本叶不删任何生产账号/日志/数据。这里是根执行结果，不是本叶运行。
+
+源码事实更正：f20 registerAccount原本每次createBrowserContext并contexts.push，并非defaultBrowserContext；Cookie共享诊断不成立。网站site/assets/account.js的register在await fillWho()后才addEventListener submit，而原probe只等domcontentloaded就填/点击，未等初始化和真实handler。HTML默认GET、初始按钮可用使未初始化表单有原生GET窗口；不保存或打印其query/输入值。根确认真实初始化race并将另派VH页面安全小修，本叶不跨租修改网站或用probe绿掩盖其产品窗口。
+
+固定72ac4ad70ca16ecaa4b3b2d53c00630655859dbe：保留独立context并加非default/不复用对象、page所属context实际断言；填写前等正常/me返回匿名、真实nav显示login/register、实际submit按钮enabled，以及CDP DOMDebugger只读确认现存form的submit listener。没有注入handler、DOM值、fetch拦截或读Cookie；只有监听真实已安装逻辑完成后才按原输入/点击提交。该DOMDebugger接缝尚待根真实浏览器复验，纯目标不冒称通过。
+
+实际v2后端account/app.mjs的POST/register返回嵌套account.id/name，原字段本身正确，不是top-level accountId。异步CDP response.json可能因成功导航失效，因此新增页面正常/me响应作为公共ID回填，不添加API请求；只接受精确pcpub marker对应的严格acc_24位hex，去重记录accountId+marker，session/CSRF/其它字段丢弃。register成功后必须页面name匹配且真实/me公共ID已记，便于根精确处理测试数据；任意top-level ID、非自身marker、畸形ID一律不记录。
+
+同72ac一次纯npm wrapper目标6/6，0失败取消跳过，762.744ms、wall1028ms、exit0、native重跑0；before/after同SHA、clean，raw `%TEMP%/pc-account-public-register-pure-72ac4ad7.log`。包含真实Rust边界编译执行、实际dry CLI零网络、公共account字段严格筛选负向；没有Chrome/网站/壳/公网注册或业务listener，原wrapper保护guards保留。三个.mjs node --check、git diff --check通过。随后只报告提交，未更改Rust或其它产品文件，等根固定后一次真实公网复验，不自行重跑。
