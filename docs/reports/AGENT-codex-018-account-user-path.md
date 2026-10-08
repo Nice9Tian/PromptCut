@@ -1,0 +1,63 @@
+# 账号登录与云端项目用户入口实施报告
+
+2026-10-09；工作分支`codex/018-account-wiring`；开工固定起点`26cbf7e07cb44a169b8aafe6cf1fae4500026e94`，tracked/untracked均干净。旧B素材叶保持冻结，不改其源或恢复机制。
+
+目标为真实账号登录→新建云端项目→第二账号凭链接加入→双方网站列表有项目，并给桌面版和在线浏览器完整入口。本叶只负责PromptCut开始页、编辑器云端进入/登录恢复桥；网站列表与真实后端接线由root协同，不用受控ready替代完整链。
+
+租约：`src/StartPage.tsx/css`，`src/editor/io`、`src/editor/sync`中账号登录/云端创建加入所需文件，新`src/account/`、专属tests/probe和本报告；desktop仅安全凭据存储及UI桥最小必要文件，具体路径先报告root。禁止修改server/account、server/hosted、素材store、Agent、B/G源、全局测试脚本/端口守门或环境安装。
+
+开工已读AGENTS入口、developer_guide索引、suggested_agent_behavior、constraints；继续核账号任务书/产品语义/真实account-hosted API与已有前端和桌面桥。先交可复用入口与最小清单再实现；网站账号模式不在localStorage存长期凭据，桌面复用现有vault原则或报告缺机制。后端503原样准确呈现并交真实依赖，不绕ready/ACL。
+
+验证未开始。6340～6349仅自身临时fixture；纯类型/无监听可做，任何监听目标/full先报命令待root排窗。Astra6320～6329在运行，不碰用户/其它Agent端口。所有数据日志TMP、子树windowsHide/绝对silent preload，Python仅进程cuda_Vit/models；不push/merge/节点/新worktree/install/junction。首红、具体源码与raw结果随后补记；用户路径功能探针实际通过才记阶段。
+
+## 第一个可审实施块（尚未产品验收）
+
+新`src/account/client.ts`严格消费VisuHive `account/app.mjs`的`/api/account/me`、`login/logout/projects`、`editor/session/renew`；网页请求cookie与CSRF同源，向doc`/hosted/shared/account/create|join|session`使用短期access bearer且credentials omit（真实doc public接口拒Cookie）。长期网站/editor凭据不写localStorage/sessionStorage；官网remember由服务器Cookie寿命决定。桌面login/recover/logout只走native桥；账号access只在RAM，恢复token只在DPAPI文件。
+
+StartPage在线入口替换旧云房间口令，桌面新增云账号入口且保留本地新建/草稿/LAN。新AccountProjects显示登录、云端新建、链接加入、网站权威两列表/失败重试；桌面打开官网查看两列表，不新增Bearer list API。新建固定requestId与initialProject重试，已成功create但session503时保留projectId，不能重复创建。join重试固定requestId。进入后提供真实项目链接复制操作。列表故障显示不可用，不造空列表。
+
+syncManager账号专用进入复用SyncLink和server projection，initialize:false不上传本地空根；WebSocket协议只用真实connectionTicket，每次resume/重建重新问session。旧auth.ticket/service.watch/shared.watch在v2明确禁用，因此账号素材分支用HTTP session assetTicket续签与已部署nginx`/media/api/asset`路径，旧LAN机制不改。账号selection.set/clear启用现有read发布者；旧Agent票据/节点/卡片同步不能凭旧协议绕入v2，本块没有伪造这几项授权，真实接线依赖其它owner。
+
+root已追加租`src/editor/media/assetTiers.ts`账号素材分支、desktop新`account_vault.rs`与lib注册。〔裁〕现Cargo无HTTP crate且不能安装依赖，采用固定官网HTTPS的PowerShell/.NET桥，stdin传凭据、CREATE_NO_WINDOW、stderr不回显、禁redirect/Cookie/任意header/path，20s HTTP超时、1MiB请求/2MiB响应上限；URL只`https://visuhive.com`且请求只三个doc路径，账号三登录路径由固定operation生成。调用者核main WebView label+真实5210根URL；卡片/子WebView边界还需真实壳探针证实，不拿静态核代替。恢复文件独占新account-v1子目录，DPAPI CurrentUser、当前SID/SYSTEM ACL、tmp继承私有ACL、文件Flush(true)与原子替换；进程内串行桥，恢复前先持久requestId供丢响应后幂等重取。没有密码或access落盘。旧壳缺command明确提示使用桌面新版或在线页面，不降级明文存储。非Windows安全vault暂无实现，明确拒绝。
+
+首次强制类型：`node C:/Users/admin/Documents/PromptCut/node_modules/typescript/bin/tsc -b --force`，exit1、3错误、wall7.2038s，raw`%TEMP%/pc-account-user-path-type-1.log`。分别为ensureDevice可空、默认randomUUID推断模板字符串、误写不存在onSharedMessage；已在本块精确修为设备空值拒、requestId:string、实际onSideMessage。第二次同命令exit0、零类型错误、wall7.5243s，raw`%TEMP%/pc-account-user-path-type-2.log`。使用绝对silent preload/规范PSModulePath，无业务listener。
+
+新增client受控协议目标和Windows真实DPAPI/ACL/原子替换目标尚未执行；不会把JS/native mock当真实登录链。PC全量、桌面check/build、双账号真实browser+doc+asset路径及截图尚未执行，等待root测试窗口与真实configured中央。backend503是可见未完成状态。本块源码提交后再申请目标；不借其它候选测试数字。
+
+2026-10-09首次窄pure `npm.cmd test -- src/account/client.test.mjs src/account/desktopVault.test.mjs` 于固定`cc144c2a`：2文件级/0过/2失败/0取消跳过，447.1618ms、wall828ms，raw`%TEMP%/pc-account-user-path-target-1.log`。无业务listener；原global guards保留。client在Node24 strip-only入口因constructor parameter property失败，不是权限断言失败；改显式status/code字段。Windows真实DPAPI首次封存/解密通过，但第二次File.Replace(tmp,file,$null)由PowerShell绑定出空backup路径，真实报路径非法；改为.NET真实null `[NullString]::Value`，保持原子替换，不能删原文件后move代替。这是实际运行发现的产品bug，保留首红。PS owned child自然close，TMP目录finally清理；后续仅固定修正后同目标有因复验。
+
+同目标修后固定`7b350daa`第二次：5/5、零失败取消跳过、338.3682ms、wall608ms，raw`%TEMP%/pc-account-user-path-target-2.log`，原npm wrapper未重跑(native retry0)。4条client为受控fetch/native adapter，1条Windows真DPAPI/目录ACL/第二次原子replace只碰自建TMP，不是Tauri完整IPC/真实密码登录。没有HTTP/WS业务服务监听。官网链接已对齐实际`/account`。
+
+后续root核要求避免用户5210～12：改Rust可信AccountBridgeBinding，setup从实际主服务origin与当前Tauri identifier的app_data_dir构造；native不信JS port/目录，核主窗口label+exact origin+根path。生产identifier恒5210；仅独立identifier结尾`.account-probe`允许process-only `PROMPTCUT_ACCOUNT_TEST_EDITOR_PORT`且限定6340～6347，统一主服务预检/sidecar args/启动poll与两个stage预检，测试壳app_data按独立identifier隔离。配置/构建/实际壳probe仍由root窗口安排，不能调用用户安装壳app_data。新增Rust纯端口绑定unit及账号素材HTTP票据受控renew/stop目标待跑；不把这些证明成真实Tauri或双账号产品链。
+
+固定`c5a2d2f8`扩展pure首次命令`npm.cmd test -- src/account/client.test.mjs src/account/desktopVault.test.mjs src/account/assetTicket.test.mjs src/editor/media/assetTiers.test.mjs src/editor/media/uploadTarget.test.mjs`：23/22过/1文件级失败/0取消跳过，2269.5119ms、wall2541ms，raw`%TEMP%/pc-account-user-path-related-1.log`。新assetTicket测试静态import会先于registerTs loader初始化，导致真实module扩展名解析失败；已改为与原assetTiers/uploadTarget测试一致的await dynamic import，不改变产品或断言。17条旧素材LAN/在线轮询上传回归及此前5条均过；此结果不能写整套通过。
+
+〔裁〕root授权最小真实壳fixture机制，实施前后边界：原production native仅固定`https://visuhive.com`、系统TLS校验；保留。仅Tauri独立identifier结尾`.account-probe`允许Rust setup读取process-only cloudOrigin且必须严格等于`https://127.0.0.1:6388`、64hex SHA256证书pin必填；native固定请求路径在该exactTLS入口上执行且仅接受pin证书，不改系统CA/代理/DNS/生产验证。G/root准备真实TLS反代account/doc/asset，不能JS给origin/pin。nativeconfiguration只给主编辑器非秘密cloudOrigin供WS/项目链接匹配；vault仍当前独立identifier app_data_dir内，生产identifier不读测试override。该机制是三级测试隔离选择，不写成用户逐条特别批准；真实壳/双网页目标未执行前不能标完整用户路径通过。
+
+固定`1c32c71d`扩展pure第二次同5文件：23/23，2234.4117ms、wall2496ms，raw`%TEMP%/pc-account-user-path-related-2.log`；同源强制type3零错，wall6618ms、raw`%TEMP%/pc-account-user-path-type-3.log`。不冒称该源之后新增cookie隔离/项目cache范围已测。静态继续发现asset-runtime拒Cookie，因此account素材轮询显式omit，same-base换项目须清completeHash及通知remote切换；LAN保留旧行为。HTML img/video自带同源Cookie问题交root/G ingress清Cookie，不改后端凭据规则。另Tauri build.rs/capability未登记新命令是实际IPC未接通缺口，已申请窄租，真实cargo/壳probe仍待办。
+
+root追加精确租后，build.rs只登记`account_bridge`，新增capabilities/account.json：仅main、local:false、exact生产`http://127.0.0.1:5210/*`、allow-account-bridge；原default capability不改。测试Tauri config必须嵌另一个单exact实际6340主origin的同权限capability（不要把stage6341/42列remote），独立identifier与Rustbinding再核。由于工作树无binaries/target，真实cargo应在root隔离验证树准备已装sidecar/runtime闭包与TMP target后执行，不能复制/调用用户安装壳：`cargo check --offline --locked --manifest-path desktop/src-tauri/Cargo.toml`；`cargo test --offline --locked --manifest-path desktop/src-tauri/Cargo.toml --lib account_probe_binding_is_identifier_and_port_scoped`。这两个命令尚未执行，不安装Cargo依赖，不冒称壳compile通过。测试配置identifier须唯一`.account-probe`结尾，process-only编辑器端口6340、cloudOrigin精确https://127.0.0.1:6388、G公共服务器证书SHA256 pin；配置嵌精确6340 account权限，app_data自动另目录，不操作已有用户目录。启动壳/6388真实入口仍等root窗口。
+
+## 当前固定交付与验证边界
+
+产品固定源码`de633822eaa62018fe88f12281556358578d27aa`，包含`1c32c71d`之后的`39ec5565`账号素材Cookie/cache隔离与`de633822`manifest/capability/测试origin链接修正。固定源同5文件pure第三次：24/24、零失败取消跳过，2238.0967ms、wall2508ms、exit0、native重跑0，raw`%TEMP%/pc-account-user-path-related-3.log`。新增第24条在真实assetTiers实现上以受控fetch核同源账号GET的credentials omit、同base换project清旧hash；不是实际nginx/asset网络验证。原global-setup坏端口guards保留，无本叶HTTP/WS/TLS业务listener；owned PowerShell子进程等待实际close且TMP自建vault清理。
+
+同固定源强制type4：绝对TypeScript路径、`tsc -b --force`，exit0零错、wall6865ms，raw`%TEMP%/pc-account-user-path-type-4.log`。测前后HEAD均de633822，tracked/untracked干净，diff --check通过；没有在测试期间改源码。累计首红仍保留：type1的3个实现错误、target1两个文件级失败（Node strip语法与实际DPAPI Replace）、related1新loader初始化失败；其余既往绿色只对应各自固定source。
+
+相对基底owned完整差异为15文件：开始页2、账号模块/专用tests6、syncManager/assetTiers2、Rust桥/lib/build3、新窄capability1、报告1；未修改server、Cargo依赖、default capability、用户目录或其它工作树。cargo工具绝对路径`C:/Users/admin/.cargo/bin/cargo.exe`，root可在隔离树用上述offline/locked命令，设置`CARGO_TARGET_DIR`到本次TMP；测试Tauri config的`app.security.capabilities`须包含原default/生产account引用与另一个仅main、local:false、remote.urls=[http://127.0.0.1:6340/*]、permissions=[allow-account-bridge]的独立inline能力。不得把6341/6342 stage或任意localhost加进账号能力；实际资源由root准备，不调用用户安装壳。
+
+本轮未执行cargo check/unit/build、真实Tauri IPC/子WebView拒绝、6388 TLS pin正反向、桌面恢复/WS Origin、两个网页账号创建/链接加入/网站两列表/显著分享截图、完整npm或节点公网。完整用户路径仍待root把真实G配置与此固定源组合验证，服务端503继续准确可见；不把pure/类型绿写成功能阶段完成。账号进入保持现有server projection，未接旧Agent/auth.ticket/节点/卡片同步；creator前端状态暂保守false，不借页面自报creator授管理员权。真实后端身份/权限仍唯一权威。HTML img/video Cookie剥离依赖root/G受信入口，后端素材票据验证不改成信Cookie。此处缺口需要真实产品探针继续，不用受控ready或native mock补作证据。
+
+## 双网页探针与两个额外精准修复（尚未实际网页验收）
+
+root新租仅新增`scripts/probes/account-user-pages-probe.mjs`及报告，保持原UI冻结；后续Astra只读发现两处真实源码问题，root分别追加精准原生桥/client退出租。锁定Cargo.lock的tauri2.11.5真实源码`webview/webview_window.rs`的CommandArg先检查window.is_webview_window，多webview窗口失败在guard前；`webview/mod.rs`的Webview CommandArg直接取实际调用者。独立`aa49ec86964739c515ef5dc700b6d2e98afdc11a`改命令参数为Webview，核实际webview.label=main与所属window.label=main、可信exactorigin/rootpath/no-userinfo；不移除agent child、不放宽capability、不改配置。只核源码接口，cargo/真实IPC待root独立壳验证，不能用compile或DPAPI测试证明IPC。
+
+退出原实现native结果不check、网站finally总清RAM，503会让UI显示退出但保留vault。先新增纯失败断言，原产品`aa49`+新test首红：`npm.cmd test -- src/account/client.test.mjs`，5/4过/1失败、223.0182ms、wall579ms、exit1，raw`%TEMP%/pc-account-user-path-logout-red.log`，实际Missing expected rejection。独立修复`807c2b16c2218e97ccae9cecc12db1a57bcd8aee`检查native结果，503/协议错误抛给UI且保留RAM；native401依据原桥已删vault视明确终止，网站失败不在finally伪清状态。未改变服务器退出范围。固定807同client+desktopVault两文件：6/6、零失败取消跳过、464.5289ms、wall728ms、exit0、native重跑0，raw`%TEMP%/pc-account-user-path-logout-green.log`。该纯client路径用受控响应；真实WindowsDPAPI/ACL/Replace仍仅TMP，未验证Tauri IPC。
+
+网页探针固定`c054c73f1cdb3b2728c5b2682149a962906eb7e2`，234行；`node --check scripts/probes/account-user-pages-probe.mjs`、diff --check通过，尚未执行探针/启动业务listener。实际依赖G固定`ceba99b36a79c33e88ac37e127bc3301054fa218`（报告7fc4de09）的`startAccountDualUserFixture({publicHandler})`，采用真实account/doc/独立asset子进程及6388TLS路由；publicHandler只给非API静态，真实API/WS/media优先，不吞503。静态网站来自root核定clean heldsite `C:/Users/admin/Documents/VisuHive/.worktrees/018-account-site-compat/site`、HEAD`01601a911117415dc180c2130a0c274f75de8d54`；PC来自root另构建的真实compiled dist-online，探针不构建或使用dev mock。网站当前DOM只显示项目名，探针同时核实际页面发起的权威/projects响应exact projectId/name与owned/joined可见文字，不假称DOM已展示ID。该静态页原“还在开发中”提示尚在，本叶不修改VH自动上线源。
+
+运行接口：`node scripts/probes/account-user-pages-probe.mjs --dist <真实compiled目录> --site-root <held016/site> --fixture-module <共同源码G probe文件> --out <本次TMP子目录>`；配置真实provider根及password-order路径为fixture要求的process env。需root独立窗口：G6380～6385和6388共7监听，加本探针6341/6342 stage共9，独立asset child和一个自建TMP profile的headless Chrome（pipe不占调试TCP）。stage路径来自compiled stage.html，响应头复用stageSecurityHeaders/editorSecurityHeaders，runtime-config准确s1.pc.localhost:6341/s2.pc.localhost:6342；断言两舞台确有加载。Chrome仅自身acceptInsecureCerts接受fixture证书，不改系统CA/代理/DNS；真实壳精确pin正反向另验。
+
+两隔离editor context实际输入官网账号表单；A新建唯一项目（不是fixture预建baseline），真正进入编辑器后点击可见分享按钮。〔裁〕临时浏览器context正常拒绝clipboard权限，使产品已有可见URL fallback出现，不写用户OS剪贴板，也不注入navigator/fetch/native/ready mock；B粘贴该可见URL并真实加入。另两个fresh website context在/login实际登录，到/account核两权威列表；再打开editor核共享Cookie恢复无需再次密码。截图先清除可见密码输入或已卸载/隐藏表单；结果仅安全phase/check/project/name/network method/path/status，不记录凭据、完整HTTP body/响应、Cookie、CSRF、ticket或proof。所有fixture数据/日志/图片/profile在TMP；await context/Chrome实际close、stage server/socket实际close、fixture独立child与各服务close后才输出收口，不把源码检查当页面通过。
+
+固定c054强制type5零错exit0，wall6846ms，raw`%TEMP%/pc-account-user-path-type-5.log`；测前后source未变且工作树干净。未执行网页探针、业务服务、全量、Cargo/真实壳、节点部署。完整用户路径继续标未验，下一步由root将G+此固定源码收共同验证树后执行真实在线页面，再由root/Astra验隔离桌面。原de633的24目标/type4仅对应旧固定源，未借给本新probe作通过证据。
