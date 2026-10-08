@@ -57,3 +57,19 @@ CDP只从project.state收到/ project.open发出的真实文本帧提取严格sp
 同72ac一次纯npm wrapper目标6/6，0失败取消跳过，762.744ms、wall1028ms、exit0、native重跑0；before/after同SHA、clean，raw `%TEMP%/pc-account-public-register-pure-72ac4ad7.log`。包含真实Rust边界编译执行、实际dry CLI零网络、公共account字段严格筛选负向；没有Chrome/网站/壳/公网注册或业务listener，原wrapper保护guards保留。三个.mjs node --check、git diff --check通过。随后只报告提交，未更改Rust或其它产品文件，等根固定后一次真实公网复验，不自行重跑。
 
 根指出DOMDebugger objectId必须属于同一CDP session，7aa54d1141f8e9f16f732e51507fdb05d5056d5e窄修单probe文件：用registrationCdp Runtime.evaluate只读获得现存form对象，在同session getEventListeners并finally releaseObject。不用Puppeteer主session ElementHandle ID，不注入DOM/handler。一次纯目标6/6、0fail/skip/cancel、502.2813ms、wall764ms、exit0、native重跑0，raw `%TEMP%/pc-public-register-cdp-pure-7aa54d11.log`；source clean，nodecheck/diffcheck通过。未真实浏览器/业务listener/公网，之后只报告再冻结；网站产品初始化风险仍待新VH独立叶修正。
+
+## 根公网第二轮未完成与真实控件等待窄修
+
+根固定9ccdcf3bb1767a89d4761c6926f7acc684984ee8第二轮实际退出1、wrapper wall69.812秒（result内部66802ms）。已执行16检查均通过、0检查失败，但completed=false，phase online-a-create、TimeoutError；不能称完整路径16/16通过。两个真实测试账号注册成功，公开精确ID已由result记录，ownedProjects为空；编辑器/me/login/editor-session/projects均200，没有create请求或WSS，desktop not-run。首轮f20失败与第二轮`%TEMP%/pc-account-public-9ccdcf3b-second.log`、`%TEMP%/pc-account-public-9ccdcf3b-second-out/result.json`及截图全部保留；自有Chrome/Vite6500～6502实际关闭由根报告，本叶没有公网执行或删除这些账号。
+
+只读定位src/account/AccountProjects.tsx：登录先setAccount(current)让账号名称出现，再await refreshLists()；外层perform的finally才setBusy(false)。第二轮最后account-name completed诊断真实为submitDisabled=true、busy=processing、errorCode=none。原probe loginEditor只等账号名称便返回，enterNewProject直接输入/点击cloud-create，没有等busy解除，所以disabled点击无动作，之后等待编辑器超时。截图时序须区分：online-a-logged-in是处理中的早截图；failure-3最终实际已填本次marker项目名、create/join已启用，不能把它描述成一直未命名或一直disabled。该定位不要求修改产品登录、列表或请求流程。
+
+0e0b845756605e41f4958f935eaee666f6c889e8先提交两项实际探针函数反例：从当前probe读取并执行enterNewProject/joinProject，受控DOM控件保持disabled，观察到两函数均过早填写。一次原npm wrapper纯目标8项/6通过/2失败/0取消跳过、588.8919ms、wall855ms、exit1，raw `%TEMP%/pc-public-enabled-controls-red.log`。它是无业务listener的受控时序反例，不是新增公网执行；原全局坏端口保护guard照常保留。
+
+7c6ae634cf6c3745998c179fa08303862842b4ca只改三个探针文件：lib新增waitForEnabledForm读取真实可见按钮/输入的disabled/readOnly和现存账号名称；create/join填写前等待真实可用、填写后再次等待再按原page.click提交。保持原TIMEOUT、真实键盘清空/填写、进入编辑器、真实响应ID/WSS项目状态及网站权威列表断言，不强改disabled、不注入handler/输入值、不增加失败写入重试。固定projectSteps记录create/join的form-ready、input、submit-ready、click、editor阶段，只记可见性、禁用状态、已知busy/error分类，不记输入值、用户名、密码、query、ticket或任意DOM文本。
+
+官网登录使用与注册相同的真实匿名/me完成、匿名nav、可用控件和同CDP session现存submit listener检查，填写后再核enabled才真实提交；注册原检查保留并统一该小接缝。固定websiteSteps只记goto-login、login-form-ready、username/password-input、submit-ready、submit阶段，以及form/input/button可见和disabled/anonymousNav布尔，不保存实际字段值。网站已由根独立修复HTML敏感表单初始化安全窗口，探针等待不代替该产品修复，也不修改或访问已经清理的VH工作区。
+
+同7c6一次`npm.cmd test -- scripts/probes/account-public-user-pages-probe.test.mjs`纯目标10/10、0失败取消跳过、512.0005ms、wall768ms、exit0、native重跑0，raw `%TEMP%/pc-public-enabled-controls-green-7c6ae634.log`。source before/after均7c6ae634cf6c3745998c179fa08303862842b4ca，工作区clean。实际函数反例转绿：控件未启用时不填写；填写期间另一个disabled窗口出现时不点击；官网真实函数在受控匿名初始化/现存handler未就绪时不填写，即使按钮可用仍等待handler；hidden/disabled/readOnly/无账号的真实浏览器predicate拒绝且不修改DOM。受控VM页和CDP adapter只用于纯时序测试，不能冒称Chrome、官网、实际/me、真实handler或实际用户路径已验证。既有实际Rust隔离函数编译执行、秘密筛选和实际dry CLI零网络目标继续通过。
+
+三个.mjs node --check及git diff --check通过。本阶段相对9cc只变更probe/helper/test/本报告；desktop/src-tauri/src/lib.rs及所有产品代码逐字不变。命令环境仅该进程canonical PSModulePath、绝对file URL silent preload、cuda_Vit与主out/models；原npm wrapper的保护guard不mock。未跑TS/full/build、业务listener、Chrome/WebView2、native壳、节点或公网HTTP；没有权限/ready/Cookie/TLS旁路。最终报告提交只补证据，源码冻结，等待根以固定源实际第三轮；原失败不抹除，不自行重复公网注册。
