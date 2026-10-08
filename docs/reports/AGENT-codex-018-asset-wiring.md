@@ -154,3 +154,12 @@ doc组合main：PROMPTCUT_ASSET_STATUS_ORIGIN https内部asset根origin，PROMPT
 生产恢复前提进一步明确：root在停机期读取claim与marker全部精确身份，逐一核所对应旧service cgroup确实空；未核前不删任何lock/claim。失败claim可能属于一次没改marker的新启动身份，不能只检查marker的老PID。Windows集成fixture在实际失败child close之后核该claim.pid/phase/nonce，才由父测试在自己TMP模拟root精确清理；运行时没有自动清理API或env开关。根部署脚本另owner，不在本叶实施或冒称验证生产cgroup。
 
 新源固定提交后只做lifecycle与真实integration/独立stage定向和类型；不再full，根联合候选跑。结果待下一条记录。
+
+
+### claim修正最终固定证据
+
+产品/测试源码5bb5ff3777caaa6102a6e8a8fcdc328c341a4ad5固定后，claim-target-1首轮6 tests/6pass/0fail/cancel/skip、9538.0555ms，TMP/promptcut-asset-wiring-claim-target-1.log。包含新双恢复启动反例收口、新正常close与启动竞态、失败claim/nonce保持，以及真实provider→combo→隔离stage完整素材/PCM/stream/thumb/HTTP end后source fd仍open的撤销等待/lostACK→own crash→exact receipt replay/clean restart/join/删A不影响B的整项再次通过（该整项5651.1167ms）。新real child日志TMP/promptcut-asset-wiring-entry-child-1791421136521.log；关闭后新业务5860–5869核零监听。
+
+同一固定新源type-2：node主仓库typescript/bin/tsc -b --force，exit0零错，TMP/promptcut-asset-wiring-type-2.log。两命令并行独立，整个跑程未改源码。此增量只窄lifecycle和对应测试/报告，49文件依赖清单不增文件/不增bare包；独立stage动态三个读口与入口在claim-target中实际重新跑。根反例仍保留原mjs/log；不得把旧full-1或旧4c/type作为新源完整全量通过。新联合full明确由根执行，生产root cgroup/private-key UID边界仍未在本叶验证。
+
+当前实现完成且交回待根独立审查；最终报告提交只记录结果不再改源码。整块base→HEAD diff--check零错，工作树tracked/untracked干净，无本叶服务遗留；没有merge/push/部署/版本变更。本叶所有失败、原counterexample及未完成闸门完整保留。
