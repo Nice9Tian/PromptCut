@@ -141,3 +141,16 @@ doc组合main：PROMPTCUT_ASSET_STATUS_ORIGIN https内部asset根origin，PROMPT
 最终状态：本叶已完成中央素材独立入口/真实mTLS权威/连续事件close→持久receipt→ACK/内部实时ready接线、精确部署闭包及本地产品正反向验证。未完成的闸门是共同候选full零失败与根节点部署/公网/OS权界；原因和所需环境/证明已明确，不借旧baseline称通过。原LAN v1和未决调度/回收/业务删除政策保持范围；不碰用户数据或别的owner工作区。git diff--check及最终干净SHA在交回时核，root收回审查后再推进共同full。
 
 最终base→HEAD diff--check首次发现四个新纯模块多余EOF空行；已仅删除空白，不改任何函数/语句，记录并提交后重新核整块diff，而非仅核工作区空diff。
+
+
+## 根独立并发反例后的lifecycle最小修正
+
+旧890/0de冻结证据不冒用为新源。根真实fs受控反例TMP/pc-root-asset-lock-race-0de62bd5.mjs/log，exit1：acceptedInstances=[next-a,next-b]且marker=next-b。两启动读同旧lock后，B根据旧读值无条件rm误删A新lock；此为本叶真实产品漏洞，不以systemd通常单实例掩盖。根授权暂不收回并补窄lifecycle修正。
+
+新原子.asset-start.claim必须wx创建在读取previous marker/owner之前，写v1/serviceId/serviceIdentity/instanceId/pid/own cert fingerprint/startedAt/nonce/phase/claimedAt并file-sync+dir-sync。claim串行proof核验、旧owner处理、新owner wx与marker持久；成功最后核自身nonce/instance/phase再释放自己的claim。wx busy不碰另一claim；任一持claim后的失败都遗留证据，不finally强删、不根据PID死亡/旧proof自动清。cleanClose也先claim，核owner.instanceId/pid/fingerprint为自己，再persist clean/移除自身owner/dir-sync后释放claim，堵住A clean marker落盘→B新owner→A误rm窗口。
+
+新增确定性真fs测试：A持starting claim并暂停旧owner read，B必须在wx busy、不能进入旧反例第二次读取barrier；显式timeout和finally release A，A最终唯一owner/marker。另A close已落clean marker但暂停owner unlink，B仍busy，A收口后B才能正常启动。失败恢复留下claim/nonce，后续启动busy且不能覆盖。所有IO是真TMP fs，hook只控制调度，不以两份RAM锁替代内核wx。
+
+生产恢复前提进一步明确：root在停机期读取claim与marker全部精确身份，逐一核所对应旧service cgroup确实空；未核前不删任何lock/claim。失败claim可能属于一次没改marker的新启动身份，不能只检查marker的老PID。Windows集成fixture在实际失败child close之后核该claim.pid/phase/nonce，才由父测试在自己TMP模拟root精确清理；运行时没有自动清理API或env开关。根部署脚本另owner，不在本叶实施或冒称验证生产cgroup。
+
+新源固定提交后只做lifecycle与真实integration/独立stage定向和类型；不再full，根联合候选跑。结果待下一条记录。

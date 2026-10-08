@@ -6,7 +6,24 @@ import { accountError, certificateFingerprint } from '../account/client.mjs';
 import { syncProjectDirectory } from '../asset-store/project-io.mjs';
 
 export async function openAssetLifecycle({ root, instanceId, cert, recoveryFence, serviceIdentity = null, allowFixtureRecoveryFence = false }) {
-  const file = path.join(root, 'asset-instance.json'), lock = path.join(root, '.asset-owner.lock');
+  const file = path.join(root, 'asset-instance.json'), lock = path.join(root, '.asset-owner.lock'), claimFile = path.join(root, '.asset-start.claim');
+  const state = { v: 1, serviceId: 'asset', serviceIdentity, instanceId, pid: process.pid, fingerprint256: certificateFingerprint(new X509Certificate(cert).fingerprint256), startedAt: Date.now(), state: 'running' };
+  async function acquireClaim(phase) {
+    const claim = { ...state, nonce: randomUUID(), phase, claimedAt: Date.now() };
+    let handle;
+    try { handle = await fs.open(claimFile, 'wx'); }
+    catch { throw accountError(503, 'asset-instance-busy'); }
+    // 从wx成功起只归当前事务。后续任何失败都留claim，不能finally强制清掉。
+    try { await handle.writeFile(JSON.stringify(claim)); await handle.sync(); } finally { await handle.close(); }
+    await syncProjectDirectory(root);
+    return async () => {
+      const current = JSON.parse(await fs.readFile(claimFile, 'utf8'));
+      if (current.nonce !== claim.nonce || current.instanceId !== instanceId || current.phase !== phase) throw accountError(503, 'asset-instance-busy');
+      await fs.rm(claimFile); await syncProjectDirectory(root);
+    };
+  }
+  // 原子claim必须先于读取旧marker/owner，串行整个恢复事务而非只串行wx新owner。
+  const releaseStartClaim = await acquireClaim('starting');
   let previous;
   try { previous = JSON.parse(await fs.readFile(file, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw accountError(503, 'asset-recovery-required'); }
   if (previous) {
@@ -37,7 +54,6 @@ export async function openAssetLifecycle({ root, instanceId, cert, recoveryFence
       } catch { throw accountError(503, 'asset-recovery-required'); }
     }
   }
-  const state = { v: 1, serviceId: 'asset', serviceIdentity, instanceId, pid: process.pid, fingerprint256: certificateFingerprint(new X509Certificate(cert).fingerprint256), startedAt: Date.now(), state: 'running' };
   // 清理旧锁只在上述真实关闭证明/clean记录成立时；并发启动不能覆盖另一实例的marker。
   try { const old = JSON.parse(await fs.readFile(lock, 'utf8')); if (!previous || old.instanceId !== previous.instanceId) throw new Error(); await fs.rm(lock); }
   catch (error) { if (error.code !== 'ENOENT') throw accountError(503, 'asset-instance-busy'); }
@@ -51,5 +67,12 @@ export async function openAssetLifecycle({ root, instanceId, cert, recoveryFence
     await fs.rename(temp, file); await syncProjectDirectory(root);
   }
   await persist(state);
-  return { file, state, async closeClean() { await persist({ ...state, state: 'clean', closedAt: Date.now() }); await fs.rm(lock); await syncProjectDirectory(root); } };
+  await releaseStartClaim();
+  return { file, state, async closeClean() {
+    const releaseCloseClaim = await acquireClaim('closing');
+    const owner = JSON.parse(await fs.readFile(lock, 'utf8'));
+    if (owner.instanceId !== instanceId || owner.pid !== state.pid || owner.fingerprint256 !== state.fingerprint256) throw accountError(503, 'asset-instance-busy');
+    await persist({ ...state, state: 'clean', closedAt: Date.now() }); await fs.rm(lock); await syncProjectDirectory(root);
+    await releaseCloseClaim();
+  } };
 }

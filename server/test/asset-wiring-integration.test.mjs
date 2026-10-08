@@ -113,6 +113,10 @@ test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全�
   await start().catch(error => { assert.match(error.message, /asset entry exited/); });
   assert.equal(child.exitCode, 1, 'missing trusted restart fence is rejected');
   assert.match(stdout, /asset-recovery-required/);
+  await childClosed;
+  // root准确清理失败启动自身遗留claim的停机期模拟；生产runtime不能自动删。
+  const failedClaimFile = path.join(assetDir, '.asset-start.claim'), failedClaim = JSON.parse(await fsp.readFile(failedClaimFile));
+  assert.equal(failedClaim.pid, child.pid); assert.equal(failedClaim.phase, 'starting'); assert.ok(failedClaim.nonce); await fsp.rm(failedClaimFile);
   assert.equal((await session(0, 'still-offline')).status, 503);
   // Production root/cgroup proof is deliberately not fabricated by this Windows test.
   assert.equal(old.state, 'running');
