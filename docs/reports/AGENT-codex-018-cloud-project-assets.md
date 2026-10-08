@@ -65,4 +65,32 @@ root全文核e361夹具后，先等G及共同基线结束，再明确授本叶�
 
 ### root复审中的待查异步窗口
 
-root独立读原始日志及7个产品diff后提出两处静态窗口：ProjectAssets.import第二次read fs.open后的track在try/finally之外，register/取消当场拒时read fd是否遗漏；assetRunAccess先构造closedTask，再await consumer.admit，active/catch在其后，持久admit拒时是否仍完整收口channel/live/task。Astra在独立只读叶取反例；本报告不把静态疑问说成已复现、不以本轮1/1证明这些故障路径通过。按root要求产品/fixture继续冻结，仅补事实报告；后续若精确授权修复，首证据与当前所有提交继续保留。
+root独立读原始日志及7个产品diff后提出两处静态窗口：ProjectAssets.import第二次read fs.open后的track在try/finally之外，register/取消当场拒时read fd是否遗漏；assetRunAccess先构造closedTask，再await consumer.admit，active/catch在其后，持久admit拒时是否仍完整收口channel/live/task。Astra随后取到下述真实反例/负向实证，原e361首次TLS并未覆盖它们。原首次源码与日志始终保留。
+
+## 异常生命周期受控修复
+
+root精确扩大租约后，仍在原B叶实现；不修改A、protocol909、中央、worker、run-resources或publication/store。Astra固定e361反例索引均在TMP：
+
+- `pc-assets-e361-admit-persist-counter.mjs/.log`：真实consumer/lease/文件持久I/O，受控doc/TLS且无监听。state.json置目录后实际rename EPERM；handler503、closedTask prepareClosure再EPERM，产生unhandled，idle成功、channel.close=0、closureACK=0。此为已证窗口。
+- `pc-assets-e361-fd-register-counter.log`：真实FileHandles与run-resources.register，拒绝前dispose并await实际close，read fd=-1、未复现泄漏。本次未为fake register改read fd路径。
+- `pc-assets-e361-pause-admission-counter.mjs/.log`：真实consumer/lease，另admission未结期间受控实际close回调拒绝；pause延迟监督派生结果，产生unhandled close-failure，外层已有catch也太晚。
+- `pc-assets-e361-openread-close-counter.mjs/.log`：真实RunResources/Readable，受控issue挂起；close先回streamsClosed:true，issue放行后又request创建源流。原e361的成功链不覆盖这条初始化竞态。
+
+5943449f新增正式admit回归，唯一handler目标首红6项5pass/1fail、0cancel/skip，342.4872ms、墙627.5502ms，TMP `pc-project-assets-admit-red-1.log`：idle未拒真实I/O失败。随后f8d3737c立即把closedTask纳入active并附非抛错监督，在admit失败后等待完整闭口；无论prepare持久化/closeLease RPC/closed持久化成败，都最终await observer.close。原持久错误保留，关闭也失败时保留AggregateError两因，idle/close等全体owned结束后再传播，不虚构ACK或witness。
+
+6f9a7bf1增加pause/openRead/verifyRef回归，两个pure文件首红13项10pass/3fail、0cancel/skip，126.5505ms、墙405.1434ms，TMP `pc-project-assets-lifecycle-red-1.log`：原close-failure unhandled以及两公开方法setup早返close均被正式测试捕获。d187683f把pause每个派生结果在生成时转为已监督settled结果，仍向调用方传播原错；ProjectAssets所有公开async方法在入口注册inflight，close先停止、关闭已拥有资源，再等待setup/泵送/实际closed，最后再次收口晚到资源。所有新I/O前重新核stopped/当前权限；不以逻辑pending=0替代真实resource close。既有真实register的fd dispose保持。
+
+最后b2064d68/a7d19fde增closeLease RPC拒绝反向：所有controlled observer资源必须close，持久record仍closing、不是已ACK；双持久错误聚合必须每一项都为真实I/O失败，断言不接受泛化错误。固定 `a7d19fdea1672193add55aa9f4228080d2960445` 五pure文件一次29/29/0fail/cancel/skip，393.3215ms、墙669.4695ms，TMP `pc-project-assets-lifecycle-fixed-1.log`；测前/后同源码。绝对tsc -b --force一次exit0/零错，墙5453.1374ms，TMP `pc-project-assets-lifecycle-type-1.log`，测前/后同a7。native retry0；wrapper原guards不bypass，除此没有业务listener/TLS/full/宽probe。父仓库silent preload、canonical PSModulePath、cuda/provider/order/conversation均仅进程配置。
+
+产品最新源码d187683f（handler首修f8包含在祖先），最终测试源码a7；原3d类型/24pure与e361TLS首过仅作对应旧源证据，不冒用为新生命周期块的TLS/full通过。新块只改2个产品文件、3个专属测试与本报告，不删素材或更改账号/共有retained语义。
+
+## 下一恢复续包提案（仅方案，尚未实现）
+
+root要求先交字段与风险，待逐读后另授窄实现；下面不改变当前503、A909格式或G生产ready。
+
+1. 已durable closed的旧asset实例可精确归档，不能把任何旧receipt.assetInstanceId改成新实例。建议持久state版本2新增`archivedInstances[assetInstanceId]`，包含原serviceIdentity、原lease binding、receipt和receiptDigest；当前`leases/pending`仍仅属于当前实例。归档准入需逐lease真实closed、完整原receipt与doc持久closed/ACK记录精确相等，且没有旧unknown/open/closing/pending。旧OS资源或observer无法证明则503，仍需root外部cgroup witness；有旧pending但doc已ACK时，必须由pinned doc只读查询确认原eventId/cursor/instance/serviceIdentity/receiptDigest后再归档。doc未ACK、旧epoch或证据不可用时不得猜游标或自行制造新ACK。
+2. 控制witness应精确eventId持久只读，不能只保存RAM最近一条。建议`controlReceipts[eventId]={assetInstanceId,serviceIdentity,cursor,controlId,fenceRevision,receiptDigest,receipt}`，与原pending receipt同一次原子落盘，ACK后继续保留；witness只返回该原记录，拒不存在/篡改/身份冲突。重启加载需逐digest/seq/event/receipt绑定核验，旧实例返回旧身份的历史记录，不能为当前observer重新签complete。当前A已ACK/lostACK历史核验通过G pinned doc→asset callback消费；如A现接口不能核历史observer，保持pending并交最窄接口缺口，不改protocol字段来绕过。
+
+需正式反例覆盖：全closed旧实例仅历史可审不改名；旧pending/open/unknown拒；doc已ACK精确原receipt归档与doc未ACK分开；连续多event和ACK后重启任意旧eventId精确回查；event/body/digest/服务身份篡改；持久文件sync/rename失败不得提前有witness。上述均未在本块跑/实现。
+
+G另交真实接缝风险：若A.check已持久lease、B resource lease未创建，G双head wrapper发现游标差1就拒，会让双方留下unknown。admission token未结内不能再await两consumer.sync，否则participant.pause等待token形成锁环。G暂未挂该wrapper，本块只记后续需精确pre-resource lease关闭或同步顺序设计；不在EPERM修复中扩大修改或降低双head要求。
