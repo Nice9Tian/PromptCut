@@ -100,3 +100,13 @@ doc 在现有 `accountRuntime.ledger` 上创建唯一 A `createRunAssets`，复�
 根授权窄扩租后，`HOSTED_ASSET_DEPLOY_FILES` 只加本次 asset-runtime 静态 import 的 `run-assets-metadata.mjs`、`run-assets-metadata-rpc.mjs`，及其 `run-asset-protocol.mjs`→`ledger.mjs` 闭包；未动 doc 目录清单。新 `cloud-run-assets-central-stage.test.mjs` 在独立 TMP staged 包中实际 import `asset-runtime.mjs`，不运行 `asset-main`/服务；首次 `pc-gcentral-stage-first.log` 1/1、106.0602ms、exit0。强制类型 `pc-gcentral-asset-runtime-type-first.log` exit0、零输出。该 staged import 只证明静态闭包，不证明独立服务启动、TLS 路由或生产配置；后者待 root 独占窗口。root 另按用户要求拆已测小阶段入 main，本 G/B 在途未联合通过的内容仍留专用叶，不由我合入。
 
 已写 `cloud-run-assets-central-private-tls.test.mjs` 的真实服务 fixture，源码静态 `node --check` exit0，**尚未执行**。它准备使用临时 CA 和实际 `startHostedAssetService`，自有 doc TLS/public HTTP/asset 内部 TLS 共三个 listener（asset 内部端口先取空闲号再绑定）；覆盖当前 lifecycle identity、项目小档完成文件、跨项目、doc 错证书、未挂 closure 503/public 禁 internal，以及实际关闭后 owned socket 计数。原 45 秒超时未改。需 root 释放唯一监听窗口后首次运行、原始证据再补；即使通过也只证明私有读口，不证明 B run 数据路由或当前 OS registry。
+
+## 双账号短链独立验收设计（本轮新优先级）
+
+这块只验真实 VH v2 网站账号 → 文档权威创建/加入/会话 → 独立素材服务追齐 access head。Agent、模型、长任务和 G 私有 run-assets 没有挂载，不是本链前置，也不能把其受控 adapter 的通过写作生产 ready。实际 VH provider 使用环境变量 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT` 指向已固定 v2 源码，`PROMPTCUT_PASSWORD_ORDER_MODULE` 指向真实 order 模块；缺任何一个测试直接失败，不按 skip 充过。旧 `018-account-foundation` 路径已移除，当前只读可见 VH `018-account-rollout` 为 `13ba88fa`，测试命令将显式绑定该源。
+
+新增 `scripts/probes/account-dual-user-path-probe.mjs` 导出 `runAccountDualUserPath`（完整短链）与 `startAccountDualUserFixture`（同真实链运行到两账号已加入后，把生命周期 `close()` 交给页面/壳验收）。`server/test/account-dual-user-path.test.mjs` 从原 `npm test` 包装入口调用前者。6380/6381 是实际 VH v2 public/internal；6382/6383 是文档 public/internal；6384/6385 是独立 asset 子进程 public/internal；6388 是自持 HTTPS 入口，凭临时 CA 的独立 leaf 反代 `/api/account`、`/hosted`、`/api/asset` 等真实路由。入口公开 leaf SHA256 pin，证书私钥仍只在自有 TMP 临时目录和进程内；native 可使用固定的 trusted Rust 测试 origin/pin，网页同源 cookie+CSRF，生产默认 origin 未改。
+
+验证顺序：网站 A/B 分别实际 GET `/me` 获取 CSRF、POST `/register`、POST `/editor/session` 取得真 Bearer；A 创建项目且 VH `/projects` 显示 owned；独立 asset 尚未启动时 B 以固定 requestId join 得 503、A session 得 503，真实 doc ledger B joined 仍空，VH B 列表仍空；独立 asset stage 子进程启动，doc-pin mTLS status 实际追 `accessCursor=accessHead=doc head` 后 B 用**相同 requestId** join 200、A/B session 200；VH 两个独立 cookie 的 `/projects` 分别显示 A owned、B joined。B 编辑器真 logout 后旧 Bearer session 401；资产子进程实际结束后 A session 503。所有证书由此 fixture 临时 CA 签，asset 自己进程只持 asset key；不能用 `allowFixtureAssetReady` 或 body 自报身份。
+
+这是本机隔离的后端产品路径，尚不证明前端两真实浏览器页面、桌面壳、节点 nginx/独立 UID 与旧 OS/cgroup 恢复；后几项由 root/PC owner 接新 lifecycle 做验证。现有 `asset-lifecycle` 对干净自有 TMP 首启/关闭足够；遇真实 bug 再报最小增租，不改 B6458 或其它 owner。当前仅固定源码与设计，监听目标尚未执行；首次原始测试结果和关闭证据稍后追加。
