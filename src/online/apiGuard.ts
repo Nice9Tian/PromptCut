@@ -2,7 +2,7 @@
  * 在线浏览器模式的 `/api/*` 守卫（C10a 契约 `docs/plan/c10a-contract.md` 第 2 节「在线页面不请求 `/api/*`」）。
  *
  * 在线页面没有编辑器进程，`/api/*` 是桌面运行环境（本机 dev server、桌面版）才有的接口。在线构建里
- * 该隐藏或改走在线替代的入口按契约逐个处理；这里是最后一道：`ONLINE` 下凡是发往同源 `/api/` 的请求，
+ * 该隐藏或改走在线替代的入口按契约逐个处理；这里是最后一道：`ONLINE` 下发往同源 `/api/` 的本机请求，
  * 在浏览器里就地拒掉，一个字节都不发出去，并记下来让漏网的调用在测试里暴露：
  *
  * - `fetch`：回一个被拒的 Promise（TypeError，调用方的「连不上」分支照常接住）；
@@ -18,6 +18,7 @@
  * （相对地址 `api/x` 在 `/editor/` 页面上会解析到 `/editor/api/x`）。别的源（素材服务、托管端）不管。
  *
  * 本文件不引 `mode.ts`：由 `main.tsx` 在 `ONLINE` 时调 `installApiGuard()`；判定函数在 Node 单测里也能直接用。
+ * 0.7.18官网账号Cookie接口是精确fetch例外，仅顶层编辑器页可用；舞台、未知账号路径及其它通道仍拒。
  */
 
 export interface ApiGuardOptions {
@@ -49,6 +50,25 @@ export function apiPathOf(input: unknown, { href, base = "/" }: ApiGuardOptions 
 }
 
 const MAX_RECORDS = 200;
+
+/** Website account endpoints are not local editor APIs. Keep their exception
+ * limited to the top editor document, exact route/method and same-origin cookies.
+ * A stage URL remains denied even when somebody opens it as a top-level page.
+ */
+function accountFetchAllowed(path: string, input: RequestInfo | URL, init: RequestInit | undefined, options: ApiGuardOptions): boolean {
+  if (window.top !== window.self) return false;
+  const page = new URL(options.href ?? location.href);
+  const base = options.base ?? '/';
+  const root = base.endsWith('/') ? base : `${base}/`;
+  if (![root, root.slice(0, -1) || '/', `${root}index.html`].includes(page.pathname) || page.searchParams.has('stage')) return false;
+  const expected = path === '/api/account/me' || path === '/api/account/projects' ? 'GET' :
+    ['/api/account/login', '/api/account/logout', '/api/account/editor/session', '/api/account/editor/renew'].includes(path) ? 'POST' : null;
+  if (!expected) return false;
+  const request = typeof Request !== 'undefined' && input instanceof Request ? input : null;
+  const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
+  const credentials = init?.credentials ?? request?.credentials ?? 'same-origin';
+  return method === expected && credentials === 'same-origin';
+}
 
 /** 被拦下的 SSE 的替身：readyState 已关闭，下一拍发一个 `error`，之后什么都不做 */
 function deadEventSource(url: string): EventSource {
@@ -105,7 +125,7 @@ export function installApiGuard(options: ApiGuardOptions = {}): string[] {
   const origFetch = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const path = check(input);
-    if (path) return Promise.reject(refuse(path, "fetch"));
+    if (path && !accountFetchAllowed(path, input, init, { ...options, base })) return Promise.reject(refuse(path, "fetch"));
     return origFetch(input, init);
   }) as typeof window.fetch;
 
