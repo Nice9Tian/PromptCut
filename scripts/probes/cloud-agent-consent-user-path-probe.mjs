@@ -21,12 +21,19 @@ import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 6650, ORIGIN = `http://127.0.0.1:${PORT}`;
+const outIndex = process.argv.indexOf('--out');
+const outPath = outIndex < 0 ? null : process.argv[outIndex + 1];
+if (outIndex >= 0 && (!outPath || !path.isAbsolute(outPath) ||
+  path.dirname(path.resolve(outPath)) !== path.resolve(os.tmpdir()) ||
+  !/^pc-cloud-consent-shots-[a-f0-9]{12}$/.test(path.basename(outPath)))) throw Error('probe-out-must-be-new-tmp-subdir');
+if (outPath) await fs.mkdir(outPath, { recursive:false });
 const providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT;
 if (!providerRoot || !path.isAbsolute(providerRoot)) throw Error('PROMPTCUT_ACCOUNT_PROVIDER_ROOT-required');
 const probeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-cloud-consent-'));
 const profile = path.join(probeDir, 'chrome');
 const results = { backend: 'real-vh-account-app', panel: 'real-react-controlled-availability', agent: '503-unavailable', checks: [], port: PORT,
   browserClosed: false, serverClosed: false };
+if (outPath) results.screenshots = {};
 const check = (condition, name) => { results.checks.push({ name, ok: Boolean(condition) }); assert.ok(condition, name); };
 const portOpen = async (port, host) => new Promise(resolve => {
   const socket = net.connect({ port, host });
@@ -95,12 +102,22 @@ try {
   const mountedA = await pageA.evaluate(() => window.__pcConsentProbe.mount());
   check(mountedA.accountId.startsWith('acc_') && mountedA.oldDelegation === false, 'account-bound-no-old-delegation');
   await pageA.waitForSelector('[data-pc="cloud-agent-consent"]', { timeout: 20_000 });
+  if (outPath) {
+    const file = path.join(outPath, 'notice.png');
+    await pageA.screenshot({ path:file });
+    results.screenshots.notice = file;
+  }
   check(agentRequests.length === 0, 'no-agent-info-read-before-consent');
   const notice = await pageA.$eval('[data-pc="cloud-agent-consent"] p', el => el.textContent);
   check(notice === '托管方能读到你和云端 Agent 的对话记录，包括私有对话', 'exact-notice');
   await pageA.type('[data-pc="ai-input"]', 'draft-kept-in-browser');
   await pageA.click('.pc-cloud-consent-actions button:first-child');
   await pageA.waitForFunction(() => !document.querySelector('[data-pc="cloud-agent-consent"]'));
+  if (outPath) {
+    const file = path.join(outPath, 'refusal.png');
+    await pageA.screenshot({ path:file });
+    results.screenshots.refusal = file;
+  }
   check(await pageA.$eval('[data-pc="ai-input"]', el => el.value === 'draft-kept-in-browser'), 'reject-retains-draft');
   check(agentRequests.length === 0, 'reject-no-agent-read-send');
   check((await pageA.evaluate(() => window.__pcConsentProbe.status())).queued === 0, 'reject-no-local-queue');
@@ -133,6 +150,22 @@ try {
   await pageA.evaluate(() => window.__pcConsentProbe.logout());
   await pageA.waitForFunction(() => !document.querySelector('[data-pc="cloud-agent-consent"]'), { timeout: 10_000 });
   check(agentRequests.every(x => x.method !== 'POST'), 'no-model-or-send-without-agent-service');
+  const otherPassword = `probe-${randomUUID()}-password`;
+  const otherName = `consent_${randomBytes(5).toString('hex')}`;
+  const otherRegistered = await pageA.evaluate(async ({ name, password }) => {
+    const me = await (await fetch('/api/account/me', { credentials:'same-origin' })).json();
+    const response = await fetch('/api/account/register', { method:'POST', credentials:'same-origin',
+      headers:{ 'content-type':'application/json', 'x-csrf-token':me.csrfToken },
+      body:JSON.stringify({ name, password, requestId:crypto.randomUUID() }) });
+    return { status:response.status, ok:(await response.json()).ok === true };
+  }, { name:otherName, password:otherPassword });
+  check(otherRegistered.status === 200 && otherRegistered.ok, 'same-tab-other-account-real-register');
+  const otherMounted = await pageA.evaluate(() => window.__pcConsentProbe.mount());
+  check(otherMounted.accountId !== mountedA.accountId && otherMounted.oldDelegation === false, 'account-switch-new-binding-no-delegation');
+  await pageA.waitForSelector('[data-pc="cloud-agent-consent"]', { timeout: 10_000 });
+  check(await pageA.$eval('[data-pc="ai-input"]', el => el.value === ''), 'other-account-cannot-see-old-draft');
+  check((await pageA.evaluate(() => window.__pcConsentProbe.status())).queued === 0 && agentRequests.every(x => x.method !== 'POST'),
+    'other-account-has-no-old-queue-or-agent-send');
 } finally {
   for (const context of contexts) await context.close().catch(() => {});
   if (browser) { await browser.close(); results.browserClosed = true; }

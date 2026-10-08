@@ -2,6 +2,7 @@ import { AccountFailure, type CloudAccountClient } from "../../account/client.ts
 
 /** This is a RAM view of the account server's consent, never its authority. */
 export interface CloudConsentState { accountId: string | null; bindingVersion: number; accepted: boolean | null; pending: boolean; error: string | null }
+export interface CloudConsentBinding { accountId: string; bindingVersion: number }
 type Source = { client: CloudAccountClient; accountId: string };
 let source: Source | null = null;
 let offAuth: (() => void) | null = null;
@@ -39,16 +40,23 @@ function boundSource() {
 function stillBound(bound: Source, revision: number) {
   if (source !== bound || generation !== revision || bound.client.account?.id !== bound.accountId) throw new AccountFailure(401, "credential-revoked");
 }
+function assertBinding(expected?: CloudConsentBinding) {
+  if (expected && (state.accountId !== expected.accountId || state.bindingVersion !== expected.bindingVersion))
+    throw new AccountFailure(401, "credential-revoked");
+}
 export class CloudConsentRequiredError extends Error { constructor() { super("使用云端 Agent 前，请先阅读并确认告知。"); } }
 
-export async function refreshCloudConsent(): Promise<boolean> {
+export async function refreshCloudConsent(expected?: CloudConsentBinding): Promise<boolean> {
+  assertBinding(expected);
   const { bound, generation: revision } = boundSource();
   const request = ++requestSeq;
   publish({ accountId: bound.accountId, bindingVersion: revision, accepted: state.accepted, pending: true, error: null });
   try {
     const result = await bound.client.cloudAgentConsent();
     stillBound(bound, revision);
-    if (request !== requestSeq) return state.accepted === true;
+    assertBinding(expected);
+    // A superseded read cannot authorize a send, even if an older display value is true.
+    if (request !== requestSeq) return false;
     publish({ accountId: bound.accountId, bindingVersion: revision, accepted: result.accepted, pending: false, error: null });
     return result.accepted;
   } catch (error) {
@@ -76,6 +84,8 @@ export async function acceptCloudConsent(): Promise<void> {
 }
 
 /** A fresh server read is required at every data operation; a prior UI result is only display state. */
-export async function requireCloudConsent(): Promise<void> {
-  if (!await refreshCloudConsent()) throw new CloudConsentRequiredError();
+export async function requireCloudConsent(expected?: CloudConsentBinding): Promise<void> {
+  if (!await refreshCloudConsent(expected)) throw new CloudConsentRequiredError();
+  assertBinding(expected);
+  if (state.accepted !== true || state.pending) throw new CloudConsentRequiredError();
 }

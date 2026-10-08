@@ -58,7 +58,42 @@ test('a delayed pre-accept GET cannot overwrite the durable accepted POST', asyn
   const pending = refreshCloudConsent();
   await acceptCloudConsent();
   releaseRead({ ok:true, accountId:account.id, accepted:false, noticeVersion:1 });
-  assert.equal(await pending, true);
+  assert.equal(await pending, false);
   assert.equal(cloudConsentState().accepted, true);
+  setCloudConsentSource(null);
+});
+
+test('a superseded false GET never borrows cached accepted=true as a fresh send permit', async () => {
+  let releaseFirst, releaseSecond, read = 0;
+  const first = new Promise(resolve => { releaseFirst = resolve; });
+  const second = new Promise(resolve => { releaseSecond = resolve; });
+  const client = createAccountClient({ online:false, origin:'https://visuhive.com', device, now:() => 1000,
+    native:async operation => operation === 'recover' ? credential : (++read === 1
+      ? { ok:true, accountId:account.id, accepted:true, noticeVersion:1 }
+      : read === 2 ? first : second) });
+  await client.restore(); setCloudConsentSource({ client, accountId:account.id });
+  assert.equal(await refreshCloudConsent(), true);
+  const permission = requireCloudConsent().then(() => 'allowed', () => 'denied');
+  const newer = refreshCloudConsent();
+  releaseFirst({ ok:true, accountId:account.id, accepted:false, noticeVersion:1 });
+  const outcome = await permission;
+  releaseSecond({ ok:true, accountId:account.id, accepted:false, noticeVersion:1 });
+  await newer;
+  assert.equal(outcome, 'denied');
+  setCloudConsentSource(null);
+});
+
+test('an old UI binding cannot borrow a newly logged in account consent', async () => {
+  const other = { id:'acc_'+'d'.repeat(24), name:'Other' };
+  const consentClient = (identity, loginId) => createAccountClient({ online:false, origin:'https://visuhive.com', device, now:() => 1000,
+    native:async operation => operation === 'recover'
+      ? { ...credential, account:identity, loginId }
+      : { ok:true, accountId:identity.id, accepted:true, noticeVersion:1 } });
+  const a = consentClient(account, 'login-A'), b = consentClient(other, 'login-B');
+  await a.restore(); await b.restore();
+  setCloudConsentSource({ client:a, accountId:account.id });
+  const bindingVersion = cloudConsentState().bindingVersion;
+  setCloudConsentSource({ client:b, accountId:other.id });
+  await assert.rejects(requireCloudConsent({ accountId:account.id, bindingVersion }), error => error.code === 'credential-revoked');
   setCloudConsentSource(null);
 });
