@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { digestOf } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
 import { accountError } from '../account/client.mjs';
 import { createFileStore, createMemoryStore, fileNameOf } from './store/index.mjs';
@@ -27,6 +28,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   if (allowFixtureAssetReady && assetReadyProbe) fail(503, 'asset-configuration');
   const tickets = new Map();
   const pageFences = new Map();
+  const docInstanceId = randomUUID();
   const memoryStores = new Map();
   let service = null;
   let assetReady = false;
@@ -130,6 +132,17 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
         ...(event.accountIds?.length ? { accountIds: event.accountIds } : {}) };
       if (criteria.projectId || criteria.loginIds || criteria.accountIds) {
         const closing = service.fencePrincipals(criteria).then(async receipt => {
+          ledger.transaction(state => {
+            const persisted = state.accessEvents.find(value => value.eventId === event.eventId);
+            if (!persisted || digestOf(persisted) !== digestOf(event) || receipt.actualClosed !== true)
+              fail(503, 'doc-close-evidence-unavailable');
+            const record = (state.docTransportClosuresV2 ??= {})[event.eventId] ??= {
+              eventId: event.eventId, seq: event.seq, eventDigest: digestOf(event), instances: {} };
+            record.instances[docInstanceId] ??= { docInstanceId, criteria, receipt, recordedAt: now(),
+              // Actual current-instance doc resources are closed. A complete
+              // multi-service logout/old-instance barrier is a different proof.
+              complete: false, docClosed: true };
+          });
           if (typeof onPageFence === 'function') await onPageFence({ event, receipt });
           return receipt;
         });
@@ -172,6 +185,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   });
   return {
     authority,
+    docInstanceId,
     get sessionReady() { return assetReady; },
     setAssetReady(value) {
       if (!allowFixtureAssetReady) fail(503, 'asset-configuration');

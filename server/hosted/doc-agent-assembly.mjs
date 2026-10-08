@@ -20,7 +20,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   if (!/^[a-f0-9]{64}$/.test(pin) || typeof kid !== 'string' || !kid || !ledger?.transaction ||
       !runtime?.authority || typeof accountClient?.verifyAcceptedMessage !== 'function' ||
       typeof getDocAssembly !== 'function' || typeof getService !== 'function') fail(503, 'doc-agent-configuration');
-  const docInstanceId = randomUUID(), subjects = new Map(), deliveries = new Map();
+  const docInstanceId = runtime.docInstanceId, subjects = new Map(), deliveries = new Map();
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
   let stopped = false, runAuthority, certifiedSubject = null;
