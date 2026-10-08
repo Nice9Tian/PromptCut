@@ -74,3 +74,9 @@
 同一顺序收敛：先记真实beforeRev、正常editCardProject；等待既有L2 CPU超budget/当前成功plan前置；随后再核完整服务端项目，最后才启动host。旧顺序在测量前要求publisher先上传快照存在依赖倒置。后置仍要求remoteRev>beforeRev、同clip/cardId/完整params/起止/总时长精确一致、source正文/hash/rev完全一致；保存via=body或accepted-snapshot及未就绪reason，不删任何回读尺子。原main-v2、当前plan含目标、hostFP/非dedup completed/新ready键不变；无新增sleep/延长时限/强上传/假成本。
 
 本轮新增两纯目标：实际queue-publish/project-client/project模块配真实TMP文件store，确认合法null、完整快照、重开模块与文件store后全文仍可读、announce后尚无快照不放行；独立受控回包拒错版本/错项目/缺片/乱序/坏摘要，并在完整旧快照结束后head已前进时不返回正文。原13条全部保留。当前待本固定实现的npm窄目标与type，实际C10/全文接受/browser成本/host仍由根下一窗口验证。
+
+固定源码 `ad62ccd040e4cdb0420d3a4028ecb3f80111794b` 首轮定向 `npm test -- server/test/c10-host-claim.test.mjs` exit0、15/15通过、0fail/cancel/skip/todo，duration2331.6372ms、wall2.5980862s；无native retry，原始 `%TEMP%/pc-c10-snapshot-ad62ccd0-target-1.log` / `-exit.json`。首轮 `tsc -b --force` exit0、零错误、wall8.4809284s，原始 `pc-c10-snapshot-ad62ccd0-types-1.log` / `-exit.json`。两脚本node--check与diff--check通过，测中源码未变。本轮npm/type无失败；早先counter缺ctx.now的首失败完整保留。SSR260.8761ms仍仅Node诊断，browserMeasurement=false。
+
+相对 `95cc8e76` 增量仅原4文件；无生产源码、成本阈值、能力、host判据或CPU卡源码改动。测试实际调用文件store（每次同步文件描述符由原store闭合），独占TMP目录在模块disconnect后删除，子进程spawnSync/windowsHide等实际退出；本轮无业务listener、HTTP/TLS/listen(0)、完整npm、真实probe或节点操作。npm窄目标仍使用原wrapper/global-setup临时guard，不冒称npm全程零监听。
+
+交回结论：合法metadata-only的误拒已在真实模块链路与持久文件回读上有因修正，纯目标/type通过；没有证明下一实际页面已新增/同步/发布该目标，也没有证明其CPU成本和host完成。根下一实际窗口按固定源自然运行一次，先成本与当前成功plan，再读取当前完整accepted项目/精确目标/source证据，最后保留原host完整标准。旧365/022/7dab/f7b首败及所有实际结果继续保留。
