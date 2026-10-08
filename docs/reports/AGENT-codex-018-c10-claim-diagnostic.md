@@ -36,6 +36,18 @@
 
 没有 native 自动重跑、没有 skip。第一次 fixture 失败与仅为确认其因果的第二次诊断保留，未放宽断言。最后自审发现多个 startWatcher 共用 channel 会混淆代次，故单独提交窄修再做目标/类型检查；没有重复宽测试。完整 npm 与真实 C10 probe **未跑**，当前无租约且 root 基线仍在运行；这不是可交整体修复的最终验收。
 
-## 下一阶段 fixture 提案（未实施）
+## 下一阶段 fixture 提案（先提案，后续批准实施见下）
 
 保持 main-v2 原浏览器竞争用例，另在 A5 creator 关闭后经真实 store.actions 加一张既有 `r6-canvas` 短片段，放在原10秒之后，不影响之前A1/A4压力。审阅表 `src/cards/capabilities.json` 已固定 independent/canvasHeavy=true；`src/cards/_probe/r6.tsx` 的 CanvasCard 实际绘制随时间变化的48个圆；frame-pipeline 的真实权重分类归 heavy，split.browserEligible 明确排除 canvasHeavy。因此不造 requires、不改卡/生产capabilities，可由正常产品规则给主机独有任务。仍须证明新内容没有复用旧产物（不能拿dedup当render）、主机确切完成该clip的细任务及其host指纹层就绪，并保留原main竞争。已将具体选法发root；获准前不写fixture、不起服务。端口6320–6329仅候选登记，尚未使用。
+
+## 获准后的 fixture 固定源码
+
+root 接受正常产品规则下的既有 r6-canvas 方案后，提交 `314d477c`。仅默认本机 all、非 E6R 的 A5 新增该片段，外部主机与 E6 既有实验不改。创建者已经关闭后，用页面真实 `store.actions.addClipOnNewTrack` 新增 start=11 秒的短片段；真实 duration 落在 1～1+1/30 秒之间并记录在结果。`server/card-identity.mjs` 的真实 `cardSnapshotIdentity` 将 duration 纳入共享键；没有拿不影响画面的伪 params、clipId 或错误 requires 造新内容。尚未实际运行浏览器，不先宣称该长链条成功。
+
+页面清单必须明确包含新 clipId 才启动主机。主机原 completed>0 判据原样保留，额外需要目标 clip 的 heavy、非 dual、host 指纹任务在连续 opened→closed done 证据中出现，并由主机诊断确切记录 `node.completed`；`node.dedup`、其他任务或其他指纹不能替代。ready 层还须相同 clip/resultKey/host fingerprint、ready>0，且键不在新增前层表中。原 main-v2 新层与显示断言保留。节点事件通过现有只读 diagnostics 采集，不修改生产执行器或能力表。
+
+新增第8项纯模块验证从真实 capabilities.json 读取 r6-canvas 的审阅能力，经真实 splitPlan 证明浏览器候选被正常 canvasHeavy 规则排除；真实 cardSnapshotIdentity 证明时长改变键。完成证据正/反例涵盖 wrong clip、wrong fingerprint、只有dedup、其他completed、completed混dedup及旧层resultKey拒绝。这只证明选择与判据，不是已渲染真实 canvas。
+
+固定314d的首次 `npm test -- server/test/c10-host-claim.test.mjs`：8 tests /8 pass /0 fail /0 skip，856.7495 ms，exit0，原始 `TMP/pc-c10-claim-diagnostic-fixture-target-1.log` 与 `-exit.json`。同源 `npx --no-install tsc -b --force` 零错误，exit0，`fixture-types-1.log` 与 `-exit.json`。此前最终诊断4df目标wall885.6179ms、类型wall7463.8534ms。没有自动重跑或隐藏失败。
+
+截至本报告，未运行完整 npm、C10 Chromium probe、自动预渲染或任何固定端口服务：root 长基线仍占资源，仅授权类型/纯模块。下一项必需真实完整 C10 探针租约及全量 npm；缺此不能称 A5 已整体修复。候选6320–6329未使用，旧 run-authority/VH 叶未修改。无模型/权限/instance registration 新机制混入此叶。
