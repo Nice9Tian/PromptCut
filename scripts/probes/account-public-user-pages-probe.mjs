@@ -370,16 +370,19 @@ async function startNative(label) {
 }
 async function quitNative() {
   if (!native) return;
-  const state = native, ownedPids = nativeDescendants(state.child.pid);
+  const state = native; let ownedPids = [], treeKnown = true;
+  try { ownedPids = nativeDescendants(state.child.pid); }
+  catch { treeKnown = false; result.cleanup.nativeFailed = true; }
   const quit = spawn(DESKTOP_EXE, ['--quit'], { cwd:path.dirname(DESKTOP_EXE), env:state.env, windowsHide:true, stdio:'ignore' });
   await childClosed(quit);
   assert(quit.exitCode === 0, 'actual-native-quit-command');
   await Promise.race([state.closed, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('native-actual-close-timeout')), TIMEOUT); timer.unref(); })]);
   state.connection?.disconnect();
-  await waitFor(() => Promise.resolve(ownedPids.every(pid => !pidAlive(pid))), 'native-owned-process-tree-closed');
+  if (treeKnown) await waitFor(() => Promise.resolve(ownedPids.every(pid => !pidAlive(pid))), 'native-owned-process-tree-closed');
   await waitFor(cdpClosed, 'native-cdp-listener-closed');
-  result.cleanup.nativeRuns ??= []; result.cleanup.nativeRuns.push({ pid:state.child.pid, ownedPids, exitCode:state.child.exitCode, actualClosed:true, cdpClosed:true });
+  result.cleanup.nativeRuns ??= []; result.cleanup.nativeRuns.push({ pid:state.child.pid, ownedPids, exitCode:state.child.exitCode, actualClosed:true, treeKnown, cdpClosed:true });
   native = null;
+  if (!treeKnown) throw new Error('native-owned-process-tree-unknown');
 }
 
 async function registerAccount(account, label) {
@@ -493,7 +496,9 @@ try {
   for (const context of contexts) await context.close().catch(() => {});
   if (browser) {
     const child = browser.process(); const closed = child && child.exitCode === null ? new Promise(resolve => child.once('close', resolve)) : Promise.resolve();
-    const ownedPids = child ? process.platform === 'win32' ? nativeDescendants(child.pid) : [child.pid] : [];
+    let ownedPids = [];
+    try { ownedPids = child ? process.platform === 'win32' ? nativeDescendants(child.pid) : [child.pid] : []; }
+    catch { result.cleanup.browserTreeUnknown = true; process.exitCode = 1; }
     try {
       await browser.close(); await closed;
       await waitFor(() => Promise.resolve(ownedPids.every(pid => !pidAlive(pid))), 'browser-owned-process-tree-closed');
@@ -501,7 +506,7 @@ try {
     } catch { result.cleanup.browserCloseFailed = true; process.exitCode = 1; }
     result.cleanup.browserOwnedPids = ownedPids;
   } else { result.cleanup.browser = 'not-started'; }
-  if (chromeProfile && result.cleanup.browserClosed) { await fs.rm(chromeProfile, { recursive:true, force:true }); result.cleanup.chromeProfileRemoved = true; }
+  if (chromeProfile && result.cleanup.browserClosed && !result.cleanup.browserTreeUnknown) { await fs.rm(chromeProfile, { recursive:true, force:true }); result.cleanup.chromeProfileRemoved = true; }
   if (nativeProfileOwned && !native && fsSync.existsSync(DESKTOP_PROFILE) && !result.cleanup.nativeFailed) {
     await fs.rm(DESKTOP_PROFILE, { recursive:true, force:true }); result.cleanup.nativeProfileRemoved = true;
   }
@@ -510,7 +515,7 @@ try {
   result.summary = { mode:result.mode, checks:result.checks.length, passed:result.checks.filter(check => check.ok).length,
     failed:result.checks.filter(check => !check.ok).length, completed:options.run && result.phase === 'complete',
     dryPreflightPassed:!options.run && result.phase === 'dry-preflight-complete', sourceUnchanged:result.sourceBefore === result.sourceAfter };
-  if ((!result.summary.completed && !result.summary.dryPreflightPassed) || !result.summary.sourceUnchanged || result.cleanup.nativeFailed || result.cleanup.browserCloseFailed) process.exitCode = 1;
+  if ((!result.summary.completed && !result.summary.dryPreflightPassed) || !result.summary.sourceUnchanged || result.cleanup.nativeFailed || result.cleanup.browserCloseFailed || result.cleanup.browserTreeUnknown) process.exitCode = 1;
   await fs.writeFile(path.join(OUT, 'result.json'), JSON.stringify(result, null, 2), { flag:'wx', mode:0o600 });
   process.stdout.write(JSON.stringify({ summary:result.summary, failure:result.failure, cleanup:result.cleanup, out:OUT }) + '\n');
 }
