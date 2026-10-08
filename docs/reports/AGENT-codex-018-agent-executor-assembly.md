@@ -85,3 +85,9 @@ worker用已实现 `createRunAssetTransport({runClient,assetOrigin,assetTls,asse
 ## 本报告验证与交回状态
 
 本轮只有read-only文件读取、Git对象检索、报告写入及diff-check，没有模型/业务监听/Chrome/npm/type/full/build/native/Linux/节点操作；技术方案均未实现、未验收。实际产品仍d59来源字节，Astra b11是其提供的冻结部分证据，G b851/63亦只按原报告范围引用。新的模块名/接口/事件格式是三级最小建议，须根按租约分派和provider精确handoff后实施；不能把建议或历史绿色测试称用户新增批准或生产ready。
+
+## 已授权执行事件核心小块（2026-10-09，方案后续实施）
+
+根于db7方案之后授权新增 `server/agent/service/account-run-events.mjs` 与同名test，修改account-runner/create-agent-service及本报告；未授权main/http/instance/provider/Astra所有在途路径。以下结果与上一节只读阶段分别记录。本块执行真实SQLite持久事件及受监督emit队列，下一模型/工具先flush再fresh doc gate，commit失败同步latch并abort，实际drain之前不能结束wake。事件模式仅记录 `runner_done`/settlement pending；缺真实outcome provider时 `run-outcome-unavailable`，不能doc.finish或推进下一轮，也不把executorMounted标ready。未配置事件文件的既有受控runnerFactory fixture保留旧路径；生产existing factory必须显式提供runEventsFile/authority，否则503。
+
+首红：npm wrapper运行同名新target，模块尚未实现，ERR_MODULE_NOT_FOUND；tests1/pass0/fail1，48.933ms，exit1，无native retry，原始TMP `pc-account-run-events-red-1.log`。测试不启动业务HTTP/WS/TLS/模型；原global-setup坏端口guards保留，不mock/scrub绕过。后续固定源码后只跑该纯target与已确认无监听的runner回归/类型，不跑full/浏览器/模型。fixtures用真实doc SQLite、RAM实例签名cap、runProvider与FULL read-intents；account sender/服务登记是受控adapter，不能称真实VH/TLS/生产执行器已通。

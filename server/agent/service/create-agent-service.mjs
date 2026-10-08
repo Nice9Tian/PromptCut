@@ -177,6 +177,8 @@ export function createHostedAgentService({
   runClient = null,
   requireAccountRunner = false,
   readIntentsFile = null,
+  runEventsFile = null,
+  runEventsAuthorityId = null,
   runnerFactory = null,
   serviceKid = null,
   instanceId = null,
@@ -189,7 +191,7 @@ export function createHostedAgentService({
     if (requireAccountRunner === true || runClient) return createAccountRunnerService({ root, loadModule, docUrl, dataDir,
       modelConfig, assetBase, look, voiceConfig: voiceConfig ?? (async () => null), collect,
       egress: egressOptions, workspaceLimits, toolLimits, toolFetch,
-      conversationClient, runClient, readIntentsFile, runnerFactory, serviceKid, instanceId,
+      conversationClient, runClient, readIntentsFile, runEventsFile, runEventsAuthorityId, runnerFactory, serviceKid, instanceId,
       connectionsClosed, childrenClosed, log, now });
     return createAccountConversationService({ conversationClient, now });
   }
