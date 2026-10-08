@@ -115,3 +115,7 @@ root固定4adc类型0、full5303/5299通过/0失败/4跳过、75.544s、build/on
 本块仅probe与报告：startNative保stdout/stdin忽略，将stderr设为pipe，进入真正main+agent configuration IPC确认之前最多留16KiB原字节；无论成功或首次失败都只写本次TMP输出的native-startup-N.stderr.log，不打印原文、不入Git、不进result正文。result只记PID/exitCode/是否IPC确认/固定panic或WebView2分类/数字os错误码/截断与文件名；没有复制任意errormessage/body。IPC确认后data监听继续排空但不保存；保存失败也标cleanup失败、exit1，不伪称取证成功。一次patch定位旧变量声明未匹配且未修改文件，按真实声明重做；node --check与diff --check通过。未启壳/listener/Chrome/full，实际stderr取证仍由root独立窗口执行。
 
 只读静态核：Tauri配置frontendDist为desktop/ui，main先用内置index.html再导航自有editor；隔离target/debug已有promptcut.exe与node.exe，未读用户app_data。lib.rs启动依赖可信端口/cloud binding、app_data/resource/log目录解析及WebView2主窗口build；主窗build失败经最终expect可panic，agent_webview.ensure失败只eprintln不直接终止。主/agent共用browser_args和用户目录约束；已有自有6340服务被识别时会跳过Node sidecar启动，不能仅因runtime资源目录不存在就断言其是本次101根因。系统WebView2/runtime可用性与具体错误要以新增实际stderr及root启动结果为准。本叶不改Rust、Tauri配置、资源、OS/环境/用户目录；Puppeteer缓存路径由root测试进程显式现成Chrome处理。
+
+## 实际表单输入清除默认值
+
+root读取0c66 failure-1与4adc创建截图发现实际项目名带“未命名双账号页面验收-...”默认前缀，而网站后续预期为probe生成的“ 双账号页面验收-...”无默认前缀。原type helper的三击没有可靠清除原input值，首图原因保留，不能改产品默认名称/网站断言来通过。独立仅改probe type helper：等待确切selector对应可见输入框，聚焦该节点后真实Control+A并释放Control、Backspace清空，再由该input.type输入；用户名/密码/链接也同样精确填入。没有DOM写value、页面脚本注值或mock。本次仅node --check/diff --check通过，无业务listener/Chrome/壳/full；实际键盘效果及完整路径由root固定probe重验，不借先前full作为此probe通过证据。

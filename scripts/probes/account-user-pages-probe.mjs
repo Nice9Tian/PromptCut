@@ -169,8 +169,11 @@ async function observePage(page, label) {
   return page;
 }
 async function type(page, selector, value) {
-  await page.waitForSelector(selector, { visible:true });
-  await page.click(selector, { clickCount:3 }); await page.keyboard.press('Backspace'); await page.type(selector, value);
+  const input = await page.waitForSelector(selector, { visible:true });
+  await input.focus();
+  await page.keyboard.down('Control');
+  try { await page.keyboard.press('A'); } finally { await page.keyboard.up('Control'); }
+  await page.keyboard.press('Backspace'); await input.type(value);
 }
 async function safeShot(page, label) {
   for (const input of await page.$$('input[type="password"]')) {
