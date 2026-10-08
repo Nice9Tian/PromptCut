@@ -145,3 +145,5 @@ Root 独立执行示例（**本Agent未执行，参数需root确认实际专属�
 Node二进制与脚本副本必须可由该用户执行/读取。脚本默认自动mkdtemp，也可省略--out；每次打印实际outputDirectory/unit等metadata。不要把错误后换参数再次跑当首轮通过。保留stdout和目录result.json；即使前置/内核不支持的结果也照实保留。unit是transient，不写生产unit，不改基础account/doc/asset服务与任何安全设置；此测试不包含publisher互斥交叉、真实TLS/HMAC、doc checkpoint或完整业务资源ACK。
 
 本机仅执行syntax及纯CLI guard：最终node --check exit0；--help exit0；Windows --user入口exit1且code=probe-linux-root-required；非法--force exit1且code=probe-cli-invalid。原始TEMP/pc-asset-root-cgroup-cli-{help,platform,invalid}-1.log及最终-2.log保留，均未开启listener/guard/npm。没有运行Linux进程、systemd或节点；实际kernel pinnedFD行为仍待root唯一窗口。
+
+root执行前只读指出umask077入口问题：e00的--out分支mkdir755可能实为700，manifest mode644也受umask影响。最终窄补对**仅新建成功**的out/root显式chmod755，对新manifest显式chmod644，probe副本原已有chmod644；data显式700后chown专属asset用户。--out已存在时mkdir先EEXIST，绝不chmod既有路径，不改全局umask。最终syntax0/help0/Windowsguard1/非法CLI1，TEMP/pc-asset-root-cgroup-cli-{help,platform,invalid}-3.log；尚未节点执行。

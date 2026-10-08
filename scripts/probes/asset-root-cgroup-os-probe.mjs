@@ -124,12 +124,17 @@ export async function runAssetCgroupOSProbe({ user, out }) {
     if (uid.code || gid.code || !/^[1-9][0-9]*\s*$/.test(uid.stdout) || !/^[1-9][0-9]*\s*$/.test(gid.stdout)) fail('probe-user-unavailable');
     result.uid = Number(uid.stdout); const groupId = Number(gid.stdout);
     if (out) { if (!path.isAbsolute(out)) fail('probe-out-invalid'); await fs.mkdir(out, { mode: 0o755 }); root = out; }
-    else { root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-asset-cgroup-os-')); await fs.chmod(root, 0o755); }
+    else root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-asset-cgroup-os-'));
+    // Only our newly created directory reaches here; never chmod an existing
+    // --out. Explicit modes avoid root's inherited umask hiding public metadata.
+    await fs.chmod(root, 0o755);
     result.outputDirectory = root;
-    await fs.mkdir(path.join(root, 'data'), { mode: 0o700 }); await fs.chown(path.join(root, 'data'), result.uid, groupId);
+    await fs.mkdir(path.join(root, 'data'), { mode: 0o700 }); await fs.chmod(path.join(root, 'data'), 0o700);
+    await fs.chown(path.join(root, 'data'), result.uid, groupId);
     const copy = path.join(root, 'probe.mjs'); await fs.copyFile(fileSelf, copy, constants.COPYFILE_EXCL); await fs.chmod(copy, 0o644);
     const manifest = path.join(root, 'manifest.json');
     await fs.writeFile(manifest, JSON.stringify({ unit, uid: result.uid, root, port: 6540 }), { flag: 'wx', mode: 0o644 });
+    await fs.chmod(manifest, 0o644);
     server = net.createServer(socket => {
       sockets.add(socket); let text = '', record;
       socket.on('error', () => {});
