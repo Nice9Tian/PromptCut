@@ -267,6 +267,9 @@ export function createAgentInstance(env) {
     if (mode === "hosted") {
       // 托管档的实例只为建它时定下的那个项目服务:项目与文档服务地址都不听请求的
       if (projectId !== env.projectId) throw new Error("这个实例不为这个项目服务");
+      if (env.accountDataRequired === true &&
+          (env.accountMode !== true || typeof env.accountDataWebSocketImpl !== 'function'))
+        throw new Error('账号数据连接缺少可信实例证明');
       url = env.docUrl;
     }
     if (agentBinding && agentBinding.projectId === projectId && agentBinding.mode === mode && agentBinding.url === url) return agentBinding;
@@ -292,6 +295,7 @@ export function createAgentInstance(env) {
       projectId,
       url,
       protocolsFor,
+      ...(env.accountMode === true && env.accountDataWebSocketImpl ? { WebSocketImpl: env.accountDataWebSocketImpl } : {}),
       // 托管档:几个只读项目与注册表的页面工具改在服务端副本上执行;在服务端另有实现的(导入素材、建卡改卡、配音)
       // 标成经「页面」执行——托管档的「页面」就是下面的 hostedCallPage,由它交给 hosted-tools.mjs
       tools: HOSTED ? tools.map((t) => (CLOUD_AGENT_SIDE.has(t.name) ? { ...t, side: "agent" } : CLOUD_HOSTED_TOOLS.has(t.name) ? { ...t, side: "page" } : t)) : tools,

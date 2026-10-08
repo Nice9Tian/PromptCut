@@ -19,15 +19,17 @@ const idOK = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(
 const keyOf = (projectId, conversationId) => `${projectId}\n${conversationId}`;
 
 /** Actual existing hosted Agent instance, one isolated instance per doc-owned run.
- * Only the doc-issued run ticket can bind its data connection; creator is never inferred.
+ * The doc-admitted grant binds this run's signed data connection; creator is never inferred.
  */
-export function createExistingHostedRunnerFactory({ root, loadModule, docUrl, dataDir, modelConfig, runClient,
+export function createExistingHostedRunnerFactory({ root, loadModule, dataClient, dataDir, modelConfig,
   assetBase = null, look = null, voiceConfig = async () => null, collect = null,
   egress: egressOptions = {}, workspaceLimits = {}, toolLimits = {}, toolFetch,
   now = Date.now, log = () => {} } = {}) {
-  if (typeof root !== 'string' || typeof loadModule !== 'function' || typeof docUrl !== 'string' || !/^wss:\/\//.test(docUrl) ||
+  if (typeof root !== 'string' || typeof loadModule !== 'function' ||
+    typeof dataClient?.wsUrl !== 'string' || !/^wss:\/\//.test(dataClient.wsUrl) ||
+    typeof dataClient.webSocketFor !== 'function' ||
     typeof dataDir !== 'string' || !path.isAbsolute(dataDir) || typeof modelConfig !== 'function' ||
-    typeof runClient?.runTicket !== 'function') fail(503, 'account-runner-configuration');
+    typeof dataClient.openCount !== 'function') fail(503, 'account-runner-configuration');
   const usage = createUsageLog({ dir: path.join(dataDir, 'usage'), now, log });
   const gate = createGate({ limitsFile: limitsFileOf(dataDir), usage, now, log });
   const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log });
@@ -45,13 +47,9 @@ export function createExistingHostedRunnerFactory({ root, loadModule, docUrl, da
     const ownerKey = createHash('sha256').update(`account-v2\n${grant.projectId}\n${grant.conversationId}`).digest('hex').slice(0, 32);
     const dir = path.join(dataDir, 'tenants', grant.projectId, 'conversations', grant.conversationId);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const protocolsFor = async () => {
-      const ticket = await runClient.runTicket({ projectId: grant.projectId, conversationId: grant.conversationId,
-        runGrantId: grant.runGrantId, purpose: 'run' });
-      if (typeof ticket?.connectionTicket !== 'string' || !ticket.connectionTicket || !Number.isSafeInteger(ticket.expiresAt) ||
-        ticket.expiresAt <= now()) fail(503, 'run-ticket-invalid');
-      return [PROTOCOL, `promptcut.account.${ticket.connectionTicket}`];
-    };
+    const DataWebSocket = dataClient.webSocketFor(grant);
+    if (typeof DataWebSocket?.closeOwned !== 'function') fail(503, 'account-data-configuration');
+    const protocolsFor = async () => [PROTOCOL];
     // This binding is made only from the doc-admitted grant. Tool arguments and
     // page messages never choose the run or supply a selection snapshot.
     const accountSelection = Object.freeze({ projectId: grant.projectId, conversationId: grant.conversationId,
@@ -62,11 +60,17 @@ export function createExistingHostedRunnerFactory({ root, loadModule, docUrl, da
       prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {} }) : null,
       latestMirror: () => null, latestPlayhead: () => null, projectId: grant.projectId,
       identity: { userId: grant.accountId, username: grant.initiatorName ?? record.senderNameAtSend }, ownerKey,
-      hostedTools, docUrl, protocolsFor, execSerial, accountMode: true, accountSelection, initiatorOnline: () => false,
+      hostedTools, docUrl: dataClient.wsUrl, protocolsFor, execSerial, accountMode: true, accountSelection,
+      accountDataRequired: true, accountDataWebSocketImpl: DataWebSocket, initiatorOnline: () => false,
       pageCall: async () => ({ offline: true, why: 'initiator-unavailable' }),
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
-    try { await inst.bindAgent({ projectId: grant.projectId, mode: 'hosted' }); }
-    catch (error) { inst.close('bind-failed'); throw error; }
+    try {
+      const binding = await inst.bindAgent({ projectId: grant.projectId, mode: 'hosted' });
+      // A signed welcome and current project.open reply must arrive before the
+      // local read intent can move to execution-started or any model/tool call.
+      binding.side.conversationNumber(grant.conversationId);
+      await binding.side.link.ready();
+    } catch (error) { inst.close('bind-failed'); await DataWebSocket.closeOwned(); throw error; }
     let handle = null;
     return {
       async start() {
@@ -91,6 +95,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, docUrl, da
         return handle;
       },
       async drain() { if (handle) await handle.drain(); inst.close('run-drained');
+        await DataWebSocket.closeOwned();
         return { runId: grant.runId, dispatchesOpen: 0 }; },
       close() { inst.close('run-finished'); },
     };
