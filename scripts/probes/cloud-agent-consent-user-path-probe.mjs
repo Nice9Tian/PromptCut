@@ -69,7 +69,9 @@ const server = http.createServer((req, res) => {
 let browser = null, contexts = [];
 try {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(PORT, '127.0.0.1', resolve); });
-  browser = await puppeteer.launch({ executablePath: puppeteer.executablePath(), headless: true, pipe: true,
+  const executablePath = await puppeteer.executablePath();
+  await fs.access(executablePath);
+  browser = await puppeteer.launch({ executablePath, headless: true, pipe: true,
     userDataDir: profile, args: [...PROBE_CHROME_ARGS, '--no-first-run'] });
   const password = `probe-${randomUUID()}-password`;
   const name = `consent_${randomBytes(5).toString('hex')}`;
@@ -130,6 +132,7 @@ try {
   store.close();
   const relative = path.relative(os.tmpdir(), probeDir);
   if (relative.startsWith('pc-cloud-consent-') && !relative.includes(path.sep)) await fs.rm(probeDir, { recursive:true, force:true });
+  results.portClosed = !await portOpen(PORT, '127.0.0.1');
+  console.log(JSON.stringify(results));
 }
-check(!await portOpen(PORT, '127.0.0.1'), 'owned-port-closed');
-console.log(JSON.stringify(results));
+check(results.portClosed, 'owned-port-closed');
