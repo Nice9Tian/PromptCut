@@ -31,8 +31,8 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
       !Number.isSafeInteger(ticketTtlMs) || ticketTtlMs < 1) fail(503, 'run-assets-unconfigured');
   const docEpoch = randomUUID(), tickets = new Map(), issued = new Map(), liveLeases = new Map();
   const observerIds = new WeakMap(), observerSockets = new Map();
-  let closed = false;
-  const requireOpen = () => { if (closed) fail(503, 'run-assets-unconfigured'); };
+  let closed = false, unavailable = false;
+  const requireOpen = () => { if (closed || unavailable) fail(503, 'run-assets-unconfigured'); };
   const time = () => { const n = now(); if (!Number.isSafeInteger(n) || n < 0) fail(503, 'run-asset-clock-invalid'); return n; };
   ledger.transaction(s => { tables(s); for (const l of Object.values(s.runAssetLeasesV1))
     if (l.state === 'admitted') l.state = 'unknown'; return null; });
@@ -40,6 +40,12 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
   function mirror() {
     return ledger.transaction(s => {
       tables(s);
+      for (const [index, event] of s.runAssetControlOutboxV1.entries()) {
+        const m = s.runAssetControlMirrorsV1[event.controlId];
+        if (event.v !== 1 || event.seq !== index + 1 || event.eventId !== `run-asset:${event.controlId}` ||
+            !m || m.seq !== event.seq || m.payloadDigest !== event.payloadDigest || m.digest !== digestOf(event.control))
+          fail(503, 'run-control-gap');
+      }
       for (const c of Object.values(s.runControlsV2 ?? {})) {
         if (!reference(c.controlId?.replace(/^run-control:/, '')) || !hashOf(c.payloadDigest) ||
             !Number.isSafeInteger(c.fenceRevision) || !Array.isArray(c.retained) || !Array.isArray(c.revoked) ||
@@ -69,9 +75,9 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
       const disconnected = () => {
         for (const [leaseId, live] of liveLeases) if (live.observerId === id) {
           liveLeases.delete(leaseId);
-          if (!closed) ledger.transaction(s => {
+          if (!closed) try { ledger.transaction(s => {
             const lease = s.runAssetLeasesV1?.[leaseId]; if (lease?.state === 'admitted') lease.state = 'unknown'; return null;
-          });
+          }); } catch { unavailable = true; } // RAM admission was already removed; persistence failure never reopens it.
         }
       };
       result.socket.once('close', disconnected); observerSockets.set(result.socket, disconnected);
@@ -124,7 +130,7 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
     return { ...selected, resource, resourceRev: resourceRevision(resource) };
   }
   async function issue({ body, transport, proof }) {
-    validateIssue(body); await synchronize();
+    body = validateIssue(body); proof = requestProof(proof); await synchronize();
     const auth = await authorized({ request: body, proof, transport, direct: true });
     try {
       const selected = await resourceFor(body, auth.principal), g = await auth.check();
@@ -173,6 +179,7 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
         ![value.agentFingerprint256, value.channelBinding].every(hashOf)) fail(403, 'asset-observer-forbidden');
   }
   async function check({ ticket, request, proof, observation, observer, leaseId }) {
+    request = clone(request); proof = requestProof(proof); observation = clone(observation);
     await synchronize(); const observed = observerOf(observer), intent = intentFor(ticket, request);
     observationOf(observation, observed);
     const digest = digestOf({ request, proof, observation });
@@ -215,6 +222,7 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
     } finally { auth.release(); }
   }
   async function closeLease({ leaseId, observer, receipt }) {
+    receipt = clone(receipt);
     const observed = observerOf(observer), lease = ledger.read().runAssetLeasesV1[leaseId];
     if (!lease || lease.docEpoch !== docEpoch || liveLeases.get(leaseId)?.observerId !== observed.observerId ||
         lease.assetInstanceId !== observed.assetInstanceId || lease.serviceIdentity !== observed.serviceIdentity)
@@ -248,6 +256,7 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
     return { events: clone(events.slice(after, after + 100)), headSeq: events.length };
   }
   async function acknowledgeEvent({ eventId, observer, receipt }) {
+    receipt = clone(receipt);
     await synchronize(); const observed = observerOf(observer), state = ledger.read();
     const event = state.runAssetControlOutboxV1.find(e => e.eventId === eventId);
     if (!event || !exactShape(receipt, receiptFields) || receipt.eventId !== eventId || receipt.cursor !== event.seq ||
@@ -263,7 +272,8 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
     if (old && event.seq < old.cursor) return clone(old.receipt);
     if (event.seq !== (old?.cursor ?? 0) + 1) fail(409, 'run-asset-cursor-gap');
     const relevant = l => event.control.revoked.includes(l.grantBinding.runGrantId) || event.control.retained.includes(l.grantBinding.runGrantId) ||
-      event.control.instances.some(i => i.instanceId === l.grantBinding.instanceId && i.instanceGeneration === l.grantBinding.instanceGeneration);
+      (event.control.kind === 'instance-revoked' && event.control.instances.some(i =>
+        i.instanceId === l.grantBinding.instanceId && i.instanceGeneration === l.grantBinding.instanceGeneration));
     const checkLeases = s => {
       for (const l of Object.values(s.runAssetLeasesV1).filter(relevant)) {
         if (event.control.retained.includes(l.grantBinding.runGrantId) && l.state === 'admitted') {
