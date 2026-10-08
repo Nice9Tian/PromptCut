@@ -115,4 +115,27 @@ doc 在现有 `accountRuntime.ledger` 上创建唯一 A `createRunAssets`，复�
 
 ## HTTPS 同源媒体 Cookie 入口窄修
 
-浏览器的 `<img>`／`<video>` 同源请求会附带 VH 网站 Cookie，素材后端的正确规则仍是 **Cookie 请求拒绝、项目票据才准入**。本轮只在自持 6388 HTTPS 测试入口的素材转发分支剥离 Cookie；VH `/api/account` 仍原样保留 Cookie，doc `/hosted` 也不经素材规则。fixture 用 A 的真实 assetTicket 上传一个 1px PNG，随后以网站 Cookie＋查询票据走 HTTPS edge 获取同字节；错误票据经同入口仍 401；同 Cookie 直接打素材后端仍 400；网站 `/me` 继续认回 A。没有修改生产素材服务、素材鉴权或网页通用连接。最新一次测试绑定已进入 VH main 的真实 provider 和 password-order 文件，而非待清理 rollout 工作树；报告后续补该固定源码的首次原始输出。
+浏览器的 `<img>`／`<video>` 同源请求会附带 VH 网站 Cookie，素材后端的正确规则仍是 **Cookie 请求拒绝、项目票据才准入**。本轮只在自持 6388 HTTPS 测试入口的素材转发分支剥离 Cookie；VH `/api/account` 仍原样保留 Cookie，doc `/hosted` 也不经素材规则。fixture 用 A 的真实 assetTicket 上传一个 1px PNG，随后以网站 Cookie＋查询票据走 HTTPS edge 获取同字节；错误票据经同入口仍 401；同 Cookie 直接打素材后端仍 400；网站 `/me` 继续认回 A。没有修改生产素材服务、素材鉴权或网页通用连接。最新一次测试绑定已进入 VH main 的真实 provider 和 password-order 文件，而非待清理 rollout 工作树。
+
+窄修源码先固定为 `56f0b08090747a12a7809a3f45dbb578e23d4534`，`node --check`／`git diff --check` 均 exit0 后才运行。VH main 基准 `43cfdf77520d099bc2160c5565bbba7b08d4e120` 的 `account/internal.mjs` 与 `account/password-order.mjs` 通过进程级环境显式提供。首次单文件 `npm test -- server/test/account-dual-user-path.test.mjs` 原始输出 `C:\Users\admin\AppData\Local\Temp\pc-dual-path-cookie-first.log`：1/1 通过、fail/cancel/skip 0、1831.6101ms、exit0、native retry0。真实边缘媒体带网站 Cookie＋正确 query 票据 200 同字节，错误票据 401，网站 `/me` Cookie 200；直接素材 Cookie 400 也在断言中。独立 asset 子进程的实际 close 已等待，所有自有 server 的 close 已等待；前后系统检查 6380–6389 都无监听。新 TMP fixture `C:\Users\admin\AppData\Local\Temp\pc-dual-account-path-HOg7Ha` 保留首轮审计，日志只记公开 leaf 指纹、状态和端口，没有输出测试账号密码、票据或私钥。没有额外跑 full 或 G 私有 TLS 目标。
+
+给 PC／根的 `keepOpen` 生命周期调用必须只输出非秘密连接信息；测试账号凭证在返回对象内存中给实际页面驱动使用，不能直接序列化整个返回对象：
+
+```js
+async function withFixture(runOwnedPageChecks) {
+  const fixture = await startAccountDualUserFixture({
+    providerRoot: 'C:/Users/admin/Documents/VisuHive',
+    passwordOrderModule: 'C:/Users/admin/Documents/VisuHive/account/password-order.mjs',
+  });
+  try {
+    console.log(JSON.stringify({ origin: fixture.origin,
+      leafFingerprint256: fixture.leafFingerprint256, ports: fixture.ports }));
+    // 页面驱动只在进程内读取 fixture.accounts，且绝不记录其中的 password。
+    return await runOwnedPageChecks(fixture);
+  } finally {
+    await fixture.close();
+  }
+}
+```
+
+调用方不得把短链的 `keepOpen` 结果作为生产 token/pin 配置持久化；该返回的 CA/leaf 与账号都只属于当前临时 fixture。`keepOpen` 分支本轮未独立执行，须由后续真实页面/壳验证记录结果和实际 close。
