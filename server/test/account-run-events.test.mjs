@@ -4,13 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createAccountRunEvents } from './account-run-events.mjs';
-import { openAccountLedger } from '../../account/ledger.mjs';
-import { createConversationAuthority, claimNextInState, markReadInState, finishInState } from '../../account/conversation-authority.mjs';
-import { createRunAuthority } from '../../account/run-authority.mjs';
-import { openReadIntents } from './read-intents.mjs';
-import { createAccountRunManager } from './account-runner.mjs';
-import { instanceFixture } from '../../test/agent-instance-fixture.mjs';
+import { createAccountRunEvents } from '../agent/service/account-run-events.mjs';
+import { openAccountLedger } from '../account/ledger.mjs';
+import { createConversationAuthority, claimNextInState, markReadInState, finishInState } from '../account/conversation-authority.mjs';
+import { createRunAuthority } from '../account/run-authority.mjs';
+import { openReadIntents } from '../agent/service/read-intents.mjs';
+import { createAccountRunManager } from '../agent/service/account-runner.mjs';
+import { instanceFixture } from './agent-instance-fixture.mjs';
 
 const grant = (extra = {}) => ({ projectId: 'project_a', conversationId: 'conversation_a',
   messageId: 'message_a', runId: 'run_a', runGrantId: 'grant_a', accountId: 'account_a',
