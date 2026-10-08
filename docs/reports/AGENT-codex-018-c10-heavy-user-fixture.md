@@ -50,3 +50,5 @@
 新 helper只读取真实同步元数据的sourceKey/cardId/defaults，合并完整params；以正常唯一随机clip/track ID及冲突检查创建新对象，经本页 store.actions.editCardProject、setDurationManual产生修改，原tracks对象与main-v2内容保留。不改生产catalog/能力/动作，不调用unsafe项目写接口；共享DocSync依旧以该页身份走原权限提交。源码计算内容不变。
 
 新增真实探针前置：动作前从doc project.open读取版本，动作后再经独立已有凭证连接回读doc真身（支持分片并核完整SHA256与rev）；必须rev增加、同clip/cardId、参数/起止/总时长准确，同时再次content.get核同sourceHash/body/rev。保存白名单 `a5-fixture-project.json`；回读不成立就在host前失败。本地构造只证明本地动作，不冒称doc已接受。之后原L2 CPU step>budget、当前成功plan含目标与host同clip/指纹/non-dedup/newready全部保留。
+
+新实现 `4ffcf88f` 首纯目标13/12pass/1fail，duration2305.5967ms/wall2.5899972s/exit1，日志 `%TEMP%/pc-c10-user-edit-4ffcf88f-target-1.log`、`-exit.json` 保留。失败在新增测试：动态import后解构 `export let state` 并闭包返回它，实际core.set替换state后测试仍返回旧对象，误报fixture-edit-not-applied。改测试为实际 `core.getState`，其它纯断言和真实helper不放宽；这是有因复验，不重复到绿。分片/摘要回读纯目标首轮已通过。
