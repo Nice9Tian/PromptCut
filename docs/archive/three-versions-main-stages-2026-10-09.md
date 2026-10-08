@@ -131,3 +131,15 @@ VisuHive精确证书包以572a60eac5607b601c415e29e9c2a23293c9d08a合main并推�
 独立第三次根候选4c041cfc完整5309项/5305通过/0失败/4跳过、70320.2711ms（墙70.656秒），强制类型0、两种构建0、native重跑0。三份真实单元解析以及复杂cwd与真实环境文件读取均通过，详见 [独立单元报告](agent-reports/AGENT-codex-018-account-v2-working-directory.md)。此前引号、反斜杠、EnvFile glob三个实际失败保留。配置角色/私钥已一次生成并核角色间读拒绝，尚未切换旧服务。
 
 公网临时桌面编译源f20e318c，cargo offline/locked成功墙16.281秒，独立TMP exe SHA256 9bb3f757d89c09b8b937c68d8473d711f8c9b76b7c50a14f0c45343cc4258a5c，能力仅main6500、实际公网系统CA、编译5源文件逐字一致。首次准备断言把CRLF工作树和LF git show误当不同，发生在cargo之前；已以逐字工作树并正规化git内容双核更正，没有改产品代码。公网探针还没运行。
+
+## 真实生产三角色与账号启动修正
+
+切换前再做schema0/原1账号在线SQLite备份及32字节凭据私有拷贝，实际读取integrityok/字段相同/凭据字节一致；第一次准备因要求旧环境中并不存在的两个nginx snippet而停，没有重跑数据库备份，确认旧环境不存在后继续，TEMP pc-account-pre-v2-cutover-backup-{,resume-}20261009.log保留。
+
+原3单元首启动失败：account对正确0600且ReadOnlyPaths保护的凭据无条件chmod→EROFS，doc account-unavailable，asset正常；root停止自身新account/doc自动重启（首段约17次），数据库已schema2且原账号字段未变，未回滚或更换钥匙。Sol af6f2df9仅正常key避免metadata写，非安全权限仍修或拒；根a01ae0bc独立全量93/89通过/0失败/4skip6671.6512ms墙6890ms，node syntax2项0，本VH无TS。真实Linux保持私钥只读、3服务active/NRestarts0、3健康200、key字节/0600/原账号字段不变。VH合b79ec16推送；root验证clean/noignored/reparse0/ancestor后清此VH工作区，累计47=PC34+VH13；原始TEMP vh-key-boot-deploy-a01ae0bc/actual-unit.log及vh-key-boot-cleanup-20261009.json。账号/me匿名200/null是原v2契约，未改成401。
+
+root公共部署：162静态文件及onlineCardExec:true，nginx精确account路由、素材Cookie剥离、允许卡片外链CSP、编辑/舞台分源。信任编辑源仅canonical visuhive和原sslip，grant不对任意Origin放行；模板cookie map缺分隔空格在部署渲染时补齐，模板源码后续单独收修。旧editor整目录保留editor-pre-v2-20261009、旧5份配置/数据/钥匙备份保留。nginx-t0及正常CA HTTPS官网/编辑器/账号me/双舞台/原编辑地址/runtime均200；还不算公网完整用户路径。日志TEMP pc-account-public-{prepare,install}-20261009.log。
+
+每日账号备份unit/timer真实安装，手动一次成功并实际读schema2/integrityok/账号2（原1＋首次公网自建1），备份key与原字节一致、三文件mode600，timer active下次2026-10-09 02:17UTC，没有保留期删除。路径/日志TEMP vh-account-daily-backup-20261009/actual-backup.log，节点/private目录及旧备份均保留。
+
+首次公网f20e318c：9check8通过1失败，墙7.25秒，停register-1，network显示第一注册POST200、第二只有GETme没有POST；真实留下1自建随机账号、无project，native未运行。Chrome owned7进程和Vite6500–2全部close。root初误断cookie共享；完整源码本已独立context，实际是register() awaitfillWho后才挂submit而probe仅等DOMContentLoaded的初始化race。原截图/JSON/日志TEMP pc-account-public-f20e318c-first{.log,-out/result.json}保留，禁止打印原URL/query/密码。Sol新探针等待实际匿名me/nav/submit listener且回填精确自身account公共ID；页面敏感表单本身另作独立守门，不靠探针等待掩盖它。
