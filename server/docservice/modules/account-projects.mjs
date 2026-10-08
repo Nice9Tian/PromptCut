@@ -27,7 +27,7 @@ const send = (res, status, value) => {
  * Caller certificate registration is immutable owner configuration, never body/loopback identity.
  * No cookies, legacy LAN tickets, runGrant body exemptions or automatic logout-complete ACKs.
  */
-export function mountAccountProjects({ authority, services = [], issueSession }) {
+export function mountAccountProjects({ authority, services = [], issueSession, resolveAssetTicket }) {
   const registry = new Map();
   for (const entry of services) {
     const fingerprint = certificateFingerprint(entry.fingerprint256);
@@ -62,7 +62,12 @@ export function mountAccountProjects({ authority, services = [], issueSession })
           if (url.pathname === '/internal/v2/access/check' && req.method === 'POST') {
             const body = await readBody(req);
             if (body.serviceId !== undefined || body.runGrantId !== undefined) bad(400, 'invalid-authority-claim');
-            result = await authority.checkAccess(body);
+            if (body.assetTicket !== undefined) {
+              if (typeof resolveAssetTicket !== 'function') bad(503, 'asset-ticket-unavailable');
+              if (typeof body.assetTicket !== 'string' || body.principal !== undefined) bad(400, 'invalid-authority-claim');
+              const principal = await resolveAssetTicket(body.assetTicket);
+              result = await authority.checkAccess({ principal, projectId: body.projectId, action: body.action, resource: body.resource });
+            } else result = await authority.checkAccess(body);
           } else if (url.pathname === '/internal/v2/access/events' && req.method === 'GET') {
             await authority.synchronize(); const after = Number(url.searchParams.get('after') ?? '0'); result = authority.eventsSince(after);
           } else {
