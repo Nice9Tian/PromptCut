@@ -190,6 +190,7 @@ export function createSessionLayer({
 
   const welcomeOf = (s, resumed) => ({
     type: 'session.welcome', sid: s.sid, resumed, ack: s.inSeq, retainMs: retain, transport: s.transport?.kind ?? s.lastTransport,
+    ...(s.principal?.realm === 'account' && s.principal?.role === 'agent' ? { connId: s.connId } : {}),
   });
 
   function noteFallback(s, fallback) {
@@ -465,8 +466,7 @@ export function createSessionLayer({
       const s = byConn.get(connId);
       if (!s || s.ended) return;
       if (s.legacy) {
-        router.dispatch(connId, text);
-        return;
+        return router.dispatch(connId, text);
       }
       let msg;
       try {
@@ -476,8 +476,7 @@ export function createSessionLayer({
       }
       // 不是带 type 的对象：交给核心回 bad-message（核心的回包照样编号）
       if (!isObj(msg) || typeof msg.type !== 'string') {
-        router.dispatch(connId, text);
-        return;
+        return router.dispatch(connId, text);
       }
       if (msg.type.startsWith(SESSION_TYPE_PREFIX)) {
         if (msg.type === 'session.ack') applyAck(s, msg.ack);
@@ -496,8 +495,9 @@ export function createSessionLayer({
       const body = { ...msg };
       delete body.seq;
       delete body.ack;
-      router.dispatch(connId, JSON.stringify(body));
+      const dispatched = router.dispatch(connId, JSON.stringify(body));
       noteReceived(s, byteLen(text));
+      return dispatched;
     },
 
     /**
