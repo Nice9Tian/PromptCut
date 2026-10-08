@@ -4,22 +4,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { clipsPlanTaskOf } from '../render-queue/messages.mjs';
 import { createRenderQueue } from '../render-queue/index.mjs';
 import { createRenderHost } from '../render-node/host.mjs';
 import { createLoopback } from './fake-loopback-transport.mjs';
+import { splitPlan } from '../render-node/split.mjs';
+import { cardSnapshotIdentity } from '../card-identity.mjs';
 
 // Exercise the script in its own Node process; server modules do not import scripts.
 const entry = new URL('../../scripts/render-host.mjs', import.meta.url).href;
 const judgeEntry = new URL('../../scripts/probes/c10-judge.mjs', import.meta.url).href;
-function traceOf(frames, view) {
-  const code = `import { createC10Trace, hostDidWork } from ${JSON.stringify(judgeEntry)};
+function traceOf(frames, view, fixture = null) {
+  const code = `import { createC10Trace, hostDidWork, hostRenderedClip } from ${JSON.stringify(judgeEntry)};
     let input=''; for await(const part of process.stdin) input+=part;
-    const {frames,view}=JSON.parse(input), trace=createC10Trace();
+    const {frames,view,fixture}=JSON.parse(input), trace=createC10Trace();
     for(const f of frames) f.boundary ? trace.boundary(f.channel,f.boundary) : trace.observe(f.message,{channel:f.channel,at:0});
-    console.log(JSON.stringify({worked:hostDidWork(view),...trace.snapshot()}));`;
+    console.log(JSON.stringify({worked:hostDidWork(view),...trace.snapshot(),fixture:fixture?hostRenderedClip(trace.snapshot(),fixture.events,fixture):null}));`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
-    input: JSON.stringify({ frames, view }), encoding: 'utf8', windowsHide: true, timeout: 30000,
+    input: JSON.stringify({ frames, view, fixture }), encoding: 'utf8', windowsHide: true, timeout: 30000,
   });
   assert.equal(child.status, 0, '独立诊断子进程实际退出');
   return JSON.parse(child.stdout);
@@ -184,4 +187,30 @@ test('A5 evidence requires a complete open/version chain for winner evidence and
   assert.equal(evidence.records.length, 2); assert.ok(evidence.records.every(r => r.winner === null && r.completeFromOpen === false));
   assert.equal(evidence.records[0].continuous, false);
   assert.equal(evidence.events.filter(e => e.type === 'boundary' && e.reason === 'queue-epoch').length, 1);
+});
+
+test('A5 canvas fixture follows audited capabilities and genuine snapshot duration identity; exact completion excludes dedup and other clips', () => {
+  const capabilities = JSON.parse(fs.readFileSync(new URL('../../src/cards/capabilities.json', import.meta.url), 'utf8'))['r6-canvas'];
+  assert.equal(capabilities.canvasHeavy, true); assert.equal(capabilities.compositing, 'independent');
+  const node = { cardId: 'r6-canvas', params: {} }, identity = duration => cardSnapshotIdentity(node, { duration, fps: { numerator: 30, denominator: 1 } });
+  assert.notEqual(identity(1.01), identity(1.02), '真实片段时长改变共享内容身份，不靠伪参数或clip ID');
+  const control = { clipId: 'new-canvas', cardId: 'r6-canvas', contentKey: identity(1.01), snapshotKey: identity(1.01),
+    tier: 'shared', compositing: capabilities.compositing, capabilities, start: 11, end: 12.01, count: 31 };
+  const tasks = splitPlan({ planTask: plan(), entryKey: 'entry', cardPlan: [control], browserFingerprints: ['bbbbbbbbbbbbbbbb'],
+    envFingerprint: queueView().envFingerprint, codeVersion: 'v1', weightOf: c => ({ class: c.capabilities.canvasHeavy ? 'heavy' : 'medium', estMs: null }) });
+  assert.equal(tasks.length, 1); assert.equal(tasks[0].input.dual, undefined); assert.equal(tasks[0].requires.envFingerprint, queueView().envFingerprint);
+  const task = { ...tasks[0], state: 'open', version: 1 }, frames = [
+    { channel: 'observer', message: { type: 'task.opened', task } },
+    { channel: 'observer', message: { type: 'task.taken', id: task.id, version: 2 } },
+    { channel: 'observer', message: { type: 'task.closed', id: task.id, state: 'done' } },
+  ];
+  const fixture = { clipId: control.clipId, fingerprint: queueView().envFingerprint, events: [{ event: 'node.completed', id: task.id }],
+    layer: { clipId: control.clipId, envFingerprint: queueView().envFingerprint, resultKey: task.resultKey, ready: 31 } };
+  assert.equal(traceOf(frames, queueView(), fixture).fixture.ready, true);
+  for (const change of [ { clipId: 'different' }, { fingerprint: 'bbbbbbbbbbbbbbbb' },
+    { events: [{ event: 'node.dedup', id: task.id }] }, { events: [{ event: 'node.completed', id: 'different' }] },
+    { events: [...fixture.events, { event: 'node.dedup', id: task.id }] } ]) {
+    assert.equal(traceOf(frames, queueView(), { ...fixture, ...change }).fixture.rendered, false);
+  }
+  assert.equal(traceOf(frames, queueView(), { ...fixture, layer: { ...fixture.layer, resultKey: 'old' } }).fixture.ready, false);
 });

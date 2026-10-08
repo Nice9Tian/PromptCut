@@ -2,6 +2,17 @@ import { createHash } from 'node:crypto';
 
 // Completion is intentionally unchanged: splitting a plan is not rendering a fine task.
 export const hostDidWork = view => (view?.nodes ?? []).some(n => (n.completed ?? 0) > 0 && (n.claimed ?? 0) > (n.completed ?? 0) - 1);
+/** Exact clip evidence; aggregate completed, dedup or a browser result cannot substitute. */
+export function hostRenderedClip(trace, nodeEvents, { clipId, fingerprint, layer = null } = {}) {
+  const completed = new Set(nodeEvents.filter(e => e.event === 'node.completed').map(e => e.id));
+  const dedup = new Set(nodeEvents.filter(e => e.event === 'node.dedup').map(e => e.id));
+  const tasks = (trace?.records ?? []).filter(r => r.kind === 'snapshot' && r.clipId === clipId && r.requires.envFingerprint === fingerprint &&
+    r.dual === false && r.weight.class === 'heavy' && r.completeFromOpen && r.continuous && r.closed?.state === 'done');
+  const rendered = tasks.filter(r => completed.has(r.id) && !dedup.has(r.id));
+  const ready = !!layer && layer.clipId === clipId && layer.envFingerprint === fingerprint && layer.ready > 0 && rendered.some(r => r.resultKey === layer.resultKey);
+  return { rendered: rendered.length > 0, ready, taskIds: [...new Set(rendered.map(r => r.id))],
+    resultKeys: [...new Set(rendered.map(r => r.resultKey))], rejectedDedup: tasks.filter(r => dedup.has(r.id)).map(r => r.id) };
+}
 const text = value => typeof value === 'string' ? value.slice(0, 240) : null;
 const number = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const reasonOf = value => ['superseded', 'orphan', 'released', 'expired', 'stalled', 'deleted', 'failed'].includes(value)

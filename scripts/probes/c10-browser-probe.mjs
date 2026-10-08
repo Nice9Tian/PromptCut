@@ -155,7 +155,7 @@ import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, par
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 import { createTimings } from './probe-timings.mjs';
 import { hostClaimStatusOf } from '../render-host.mjs';
-import { createC10Trace, hostDidWork } from './c10-judge.mjs';
+import { createC10Trace, hostDidWork, hostRenderedClip } from './c10-judge.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -403,6 +403,7 @@ function hostView(body, lines = []) {
 const a5Trace = createC10Trace();
 let a5TraceCdp = null;
 let a5ObserverNumber = 0;
+const a5NodeEvents = new Map();
 
 /* ================================================================== 主机持有任务时断一次传输(--cut,照 ht-w-probe) */
 
@@ -1861,6 +1862,20 @@ try {
     const errorsBefore = member.pageErrors.length;
     const edited = await P(member, (id) => { const s = window.__pcStore; s.actions.setClipParams(id, { label: 'main-v2' }); return s.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)?.params?.label; }, state.main);
     check(edited === 'main-v2', 'A5:纯在线改一处(主重卡的文字)', { edited });
+    // The original main still races the browser. This separate real canvas clip
+    // supplies host-only work through the reviewed capabilities, not fake requires.
+    // A fresh physical duration participates in cardSnapshotIdentity (not clipId).
+    if (!EXTERNAL_HOST && !E6R) {
+      const duration = 1 + (Number.parseInt(randomBytes(4).toString('hex'), 16) + 1) / 0x100000001 / FPS;
+      const beforeKeys = ((await onlineDiag(member))?.layers ?? []).map(layer => layer.resultKey);
+      const fixture = await P(member, ({ start, duration }) => {
+        const s = window.__pcStore;
+        const clip = s.actions.addClipOnNewTrack({ index: 0, cardId: 'r6-canvas', start, duration });
+        return { clipId: clip.id, cardId: clip.cardId, start, duration };
+      }, { start: SECONDS + 1, duration });
+      state.hostFixture = { ...fixture, beforeKeys };
+      check(fixture.cardId === 'r6-canvas' && fixture.clipId !== state.main, 'A5:真实新增独立 canvas 片段，原 main 竞争保留', fixture);
+    }
     if (E6R) {
       // E6 反方向:全部重卡都改(文字 + burnMs),这一版的层全换成 Y 的;每帧更慢,好让 X 上线时这一版还没做完
       const changed = await P(member, (spec) => {
@@ -1875,7 +1890,7 @@ try {
     const published = await until('A5:页面发布清单计划(测量落定后、防抖)', async () => {
       const d = await P(member, () => window.__pcPlanPublisher?.() ?? null);
       const hit = d?.log?.filter((e) => e.ok).at(-1);
-      return hit && d.log.filter((e) => e.ok).length >= 2 ? { ...hit, all: d.log.length } : null;
+      return hit && d.log.filter((e) => e.ok).length >= 2 && (!state.hostFixture || d.lastClips?.includes(state.hostFixture.clipId)) ? { ...hit, all: d.log.length } : null;
     }, 90_000, 500);
     const pubDiag = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
     check(published && published.id.includes('#clips:') && published.state === 'open', 'A5:页面发布清单计划(plan:<项目>@<版本>#clips:…),没有节点时 open 等着', published ?? pubDiag);
@@ -1934,6 +1949,10 @@ try {
           nextDiagnosticAt = Date.now() + 5000;
           const info = await getJson(`${host.origin}/api/prerender/info`, 5000).catch(() => null);
           const events = info?.url ? (await getJson(`${info.url}/api/frames/diagnostics`, 5000).catch(() => null))?.queue?.events ?? [] : [];
+          for (const event of events) if (['node.completed', 'node.dedup'].includes(event.event) && typeof event.id === 'string') {
+            const safe = { event: event.event, id: event.id, at: typeof event.at === 'string' || typeof event.at === 'number' ? event.at : null };
+            a5NodeEvents.set(`${safe.event}:${safe.id}`, safe);
+          }
           const diagnostic = hostClaimStatusOf(body, events, watcher ? [...watcher.tasks.values()] : null);
           const key = JSON.stringify(diagnostic);
           if (key !== lastDiagnosticKey) {
@@ -1946,8 +1965,10 @@ try {
           }
         }
         fs.writeFileSync(path.join(OUT, 'a5-task-evidence.json'), JSON.stringify(a5Trace.snapshot(), null, 2));
+        fs.writeFileSync(path.join(OUT, 'a5-host-render-evidence.json'), JSON.stringify([...a5NodeEvents.values()], null, 2));
         const v = hostView(body, hostLog);
-        return hostDidWork(v) ? v : null;
+        const exact = !state.hostFixture || hostRenderedClip(a5Trace.snapshot(), [...a5NodeEvents.values()], { clipId: state.hostFixture.clipId, fingerprint: HOST_FP }).rendered;
+        return hostDidWork(v) && exact ? v : null;
       }, 900_000, 2000);
       out.hostClaimDiagnostics = claimDiagnostics;
       check(claimed, 'A5:独立渲染主机(host 档)认领、切分、完成', claimed ?? hostLog.slice(-12));
@@ -2017,6 +2038,17 @@ try {
     }, 600_000, 2000);
     const layersNow = async () => ((await onlineDiag(member))?.layers ?? []).map((l) => ({ clip: l.clipId, main: l.clipId === state.main, fp: l.envFingerprint, ready: l.ready, candidates: l.candidates, newKey: l.clipId === state.main ? l.resultKey !== keyBefore : undefined }));
     check(fresh, 'A5:页面取到新快照', fresh ?? { main: (await layersNow()).find((l) => l.main) ?? null, hostFp, pageFp: state.pageFp, layers: (await layersNow()).length });
+    if (state.hostFixture) {
+      const fixtureReady = await until('A5:专用 canvas 的主机真实渲染与新层就绪', async () => {
+        const layer = (await onlineDiag(member))?.layers?.find(l => l.clipId === state.hostFixture.clipId);
+        const proof = hostRenderedClip(a5Trace.snapshot(), [...a5NodeEvents.values()], { clipId: state.hostFixture.clipId, fingerprint: HOST_FP, layer });
+        return proof.rendered && proof.ready && !state.hostFixture.beforeKeys.includes(layer.resultKey)
+          ? { ...proof, clipId: layer.clipId, resultKey: layer.resultKey, envFingerprint: layer.envFingerprint, ready: layer.ready } : null;
+      }, 600_000, 2000);
+      check(fixtureReady, 'A5:目标 canvas 细任务由正常 host 实际完成、非 dedup，页面 host 指纹新层就绪', fixtureReady ?? {
+        fixture: state.hostFixture, evidence: hostRenderedClip(a5Trace.snapshot(), [...a5NodeEvents.values()], { clipId: state.hostFixture.clipId, fingerprint: HOST_FP }) });
+      out.hostFixture = { ...state.hostFixture, proof: fixtureReady };
+    }
     if (!fresh) out.steps.a5FreshDiag = { hostFp, pageFp: state.pageFp, keyBefore: String(keyBefore ?? '').slice(0, 12), layers: await layersNow() };
     await P(member, () => window.__pcStore.actions.seek(2));
     await P(member, () => { const s = window.__pcStore; s.actions.seek(2); s.actions.play(); });
