@@ -52,7 +52,30 @@ export function bearerOf(req) {
  * @param {object} [o.limits] 覆盖 `WIRING_DEFAULTS`
  * @param {object} [o.publisherOptions] 透传给 `createQueuePublisher`(测试)
  */
-export function createHostedWiring({ client, docUrl, root, now = () => Date.now(), log = () => {}, limits: limitsIn = {}, publisherOptions = {} } = {}) {
+export function createHostedWiring({ client, docUrl, root, now = () => Date.now(), log = () => {}, limits: limitsIn = {}, publisherOptions = {},
+  accountMode = false, conversationClient = null } = {}) {
+  if (accountMode === true) {
+    if (typeof conversationClient?.identity !== 'function') throw new AgentServiceError('conversation-unavailable', 'doc conversation client is required', 503);
+    return {
+      accountMode: true,
+      async authenticate(req) {
+        const delegation = bearerOf(req);
+        if (!delegation) return null;
+        let checked;
+        try { checked = await conversationClient.identity({ delegation }); }
+        catch (error) { if (error?.code === 'agent-disabled') throw new AgentServiceError('disabled', 'cloud Agent is disabled', 403);
+          if (error?.status === 401 || error?.status === 403) return null;
+          throw new AgentServiceError('unavailable', 'doc conversation authority is unavailable', 503); }
+        if (!checked || typeof checked.accountId !== 'string' || typeof checked.projectId !== 'string' ||
+          typeof checked.loginId !== 'string' || !Number.isSafeInteger(checked.loginGeneration))
+          throw new AgentServiceError('unavailable', 'doc conversation identity is incomplete', 503);
+        return { ...checked, accountMode: true, delegation, userId: checked.accountId };
+      },
+      attach() {},
+      describe: () => ({ accountMode: true, verified: 0, control: true }),
+      close() { conversationClient.close?.(); },
+    };
+  }
   if (!client || typeof client.verifyDelegation !== 'function') throw new TypeError('createHostedWiring: 要服务客户端');
   const limits = { ...WIRING_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响服务 */ } };

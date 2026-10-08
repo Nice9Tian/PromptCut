@@ -15,6 +15,7 @@ import path from 'node:path';
 export const HOSTED_DEPLOY_DIRS = Object.freeze([
   'server/hosted',
   'server/docservice',
+  'server/account',
   'server/auth',
   'server/hosting',
   'server/recovery',
@@ -76,5 +77,67 @@ export function stageHostedFiles(repoRoot, outDir) {
   const pkg = path.join(out, 'package.json');
   fs.writeFileSync(pkg, HOSTED_PACKAGE_JSON);
   copied.push(pkg);
+  return copied;
+}
+
+/** 独立asset入口的literal import闭包；不改变旧hosted打包策略，不携带私钥/依赖安装。 */
+export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
+  'server/account/client.mjs',
+  'server/account/protocol.mjs',
+  'server/asset-announce.mjs',
+  'server/asset-client.ts',
+  'server/asset-service.ts',
+  'server/asset-store/atomic.mjs',
+  'server/asset-store/blob-store.mjs',
+  'server/asset-store/client.mjs',
+  'server/asset-store/fs-store.mjs',
+  'server/asset-store/index.mjs',
+  'server/asset-store/memory-store.mjs',
+  'server/asset-store/project-access.mjs',
+  'server/asset-store/project-io.mjs',
+  'server/asset-store/project-revocations.mjs',
+  'server/asset-store/project-stores.mjs',
+  'server/asset-store/px-evict.mjs',
+  'server/asset-store/ranges.mjs',
+  'server/asset-store/service-usage.mjs',
+  'server/asset-store/shots-thumb.mjs',
+  'server/asset-store/stream-store.mjs',
+  'server/auth/asset-tickets.mjs',
+  'server/auth/delegation.mjs',
+  'server/auth/handshake.mjs',
+  'server/auth/hosted-default.mjs',
+  'server/auth/invite.mjs',
+  'server/auth/origin.mjs',
+  'server/auth/protocol.mjs',
+  'server/auth/service-identity.mjs',
+  'server/auth/store.mjs',
+  'server/auth/tickets.mjs',
+  'server/bake-store.mjs',
+  'server/bakery/ffmpeg.mjs',
+  'server/bandwidth-gate.mjs',
+  'server/hosted/asset-doc-client.mjs',
+  'server/hosted/asset-lifecycle.mjs',
+  'server/hosted/asset-main.mjs',
+  'server/hosted/asset-runtime.mjs',
+  'server/hosted/ts-resolve.mjs',
+  'server/http-guard.mjs',
+  'server/media-pull.mjs',
+  'server/media-tiers.mjs',
+  'server/recovery/descriptor.mjs',
+  'server/recovery/paths.mjs',
+  'server/recovery/relocation.mjs',
+  'server/render-node/session-link.mjs',
+  'server/render-node/ws-transport.mjs',
+  'server/render-role.mjs',
+  'server/upload-queue.mjs',
+  'server/vite-plugin-media.ts',
+]);
+
+export function stageHostedAssetFiles(repoRoot, outDir) {
+  const root = path.resolve(repoRoot), out = path.resolve(outDir), copied = [];
+  fs.mkdirSync(out, { recursive: true });
+  if (fs.readdirSync(out).length) throw new Error('stageHostedAssetFiles: destination must be empty');
+  for (const rel of HOSTED_ASSET_DEPLOY_FILES) { const dst = path.join(out, rel); fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(path.join(root, rel), dst); copied.push(dst); }
+  const pkg = path.join(out, 'package.json'); fs.writeFileSync(pkg, HOSTED_PACKAGE_JSON); copied.push(pkg);
   return copied;
 }

@@ -43,6 +43,8 @@
  * server/asset-announce.mjs、server/asset-service.ts、server/vite-plugin-media.ts、server/http-guard.mjs。
  * `.ts` 靠 Node 的类型剥离直接载入（Node ≥ 22.18 / 24），不转译。
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { checkTokenFormat } from '../docservice/auth.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
 import { startHostedCombo, readClusterToken, checkDataDir, HostedConfigError } from './combo.mjs';
@@ -114,7 +116,59 @@ async function main() {
     if (!ok) return configError('agent-public-url', { detail: 'not-http' });
   }
 
+  let account = null;
+  if (env.PROMPTCUT_ACCOUNT_V2_REQUIRED !== undefined && env.PROMPTCUT_ACCOUNT_V2_REQUIRED !== '0' && env.PROMPTCUT_ACCOUNT_V2_REQUIRED !== '1') return configError('account-v2-required');
+  const accountRequired = env.PROMPTCUT_ACCOUNT_V2_REQUIRED === '1';
+  if (accountRequired && env.PROMPTCUT_ACCOUNT_V2 !== '1') return configError('account-v2-required');
+  if (env.PROMPTCUT_ACCOUNT_V2 !== undefined && env.PROMPTCUT_ACCOUNT_V2 !== '0' && env.PROMPTCUT_ACCOUNT_V2 !== '1') return configError('account-v2');
+  if (env.PROMPTCUT_ACCOUNT_V2 === '1') {
+    try {
+      const file = name => {
+        const filename = env[name];
+        if (!filename || !path.isAbsolute(filename)) throw new Error('missing-file');
+        return fs.readFileSync(filename);
+      };
+      const internalPort = portOf('PROMPTCUT_ACCOUNT_INTERNAL_PORT', NaN);
+      if (!Number.isInteger(internalPort) || internalPort < 1 || internalPort > 65535) throw new Error('internal-port');
+      const services = JSON.parse(file('PROMPTCUT_ACCOUNT_INTERNAL_SERVICES_FILE').toString('utf8'));
+      if (!Array.isArray(services) || services.length < 3) throw new Error('services');
+      account = {
+        origin: env.PROMPTCUT_ACCOUNT_ORIGIN,
+        authorityId: env.PROMPTCUT_ACCOUNT_AUTHORITY_ID,
+        authorityUrl: env.PROMPTCUT_ACCOUNT_AUTHORITY_URL,
+        serverFingerprint256: env.PROMPTCUT_ACCOUNT_SERVER_FINGERPRINT256,
+        keyId: env.PROMPTCUT_ACCOUNT_SIGNING_KEY_ID,
+        signingKey: file('PROMPTCUT_ACCOUNT_SIGNING_KEY_FILE'),
+        clientTls: { key: file('PROMPTCUT_ACCOUNT_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_ACCOUNT_CLIENT_CERT_FILE'), ca: file('PROMPTCUT_ACCOUNT_CA_FILE') },
+        internalTls: { key: file('PROMPTCUT_ACCOUNT_INTERNAL_KEY_FILE'), cert: file('PROMPTCUT_ACCOUNT_INTERNAL_CERT_FILE'), ca: file('PROMPTCUT_ACCOUNT_CA_FILE') },
+        services, internalPort,
+        order: {
+          witnessKeys: JSON.parse(file('PROMPTCUT_ACCOUNT_ORDER_WITNESS_KEYS_FILE').toString('utf8')),
+          issuer: env.PROMPTCUT_ACCOUNT_ORDER_ISSUER || 'visuhive-account',
+          docAttestationPrivateKey: file('PROMPTCUT_DOC_ORDER_ATTESTATION_KEY_FILE'),
+        },
+      };
+      if (env.PROMPTCUT_DOC_AGENT_SERVICE_KID) {
+        const agent = services.filter(service => service.serviceId === 'agent');
+        if (agent.length !== 1) throw new Error('agent-service');
+        account.agent = { fingerprint256: agent[0].fingerprint256, serviceKid: env.PROMPTCUT_DOC_AGENT_SERVICE_KID };
+      }
+      if (!account.authorityId || !account.authorityUrl || !account.keyId) throw new Error('authority');
+    } catch { return configError('account-v2'); }
+  }
+
   let combo;
+  // 独立v2素材status连接：这里仅doc client钥匙；asset进程另读自己的配置。
+  let assetStatus = null;
+  if (env.PROMPTCUT_ASSET_STATUS_ORIGIN) {
+    try {
+      if (!account || !assetPublicUrl) throw new Error('asset-status');
+      const file = name => { const filename = env[name]; if (!filename || !path.isAbsolute(filename)) throw new Error('asset-status'); return fs.readFileSync(filename); };
+      assetStatus = { origin: env.PROMPTCUT_ASSET_STATUS_ORIGIN, serverFingerprint256: env.PROMPTCUT_ASSET_STATUS_FINGERPRINT256,
+        instanceId: env.PROMPTCUT_ASSET_INSTANCE_ID || undefined,
+        tls: { key: file('PROMPTCUT_ASSET_STATUS_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_ASSET_STATUS_CLIENT_CERT_FILE'), ca: file('PROMPTCUT_ASSET_STATUS_CA_FILE') } };
+    } catch { return configError('asset-status'); }
+  }
   try {
     combo = await startHostedCombo({
       dataDir,
@@ -125,6 +179,9 @@ async function main() {
       assetPublicUrl,
       docPublicUrl: env.PROMPTCUT_DOCSERVICE_PUBLIC_URL || undefined,
       agentPublicUrl,
+      account,
+      accountRequired,
+      assetStatus,
       trustLoopback,
       localDevice: localDeviceInfo(),
       log,
@@ -145,6 +202,8 @@ async function main() {
     authStore: combo.credentialStore ? 'ok' : 'unavailable',
     loopbackTrust: trustLoopback,
     agent: { publicUrl: agentPublicUrl ?? null },
+    account: { mode: account ? 'v2' : 'legacy', required: accountRequired, assetReady: combo.accountRuntime?.sessionReady === true,
+      internalPort: combo.accountInternalPort },
   });
 
   let stopping = false;

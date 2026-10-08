@@ -10,7 +10,7 @@
  *   server     就地执行,不碰项目(`wait`、`report_progress`、多 Agent 的公告板);
  *   initiator  要操作发起人自己的界面(选区、播放头、播放与暂停、网页接管、扫码登录、开页签)。**这是唯一可以缺省的一类**:
  *              发起方不在线时立刻回「发起方不在线」,Agent 据此继续,不卡住;在线时经反向通道让他的页面执行(`page: true` 的四个:
- *              `seek`、`play`、`pause`、`get_selection`;契约第 28 节),其余四个在线时回 `initiatorOnly` 并写明差什么(`online`);
+ *              `seek`、`play`、`pause`、`get_selection`;契约第 28 节),可用项在线时回 `initiatorOnly`;单独标 `disabled` 的能力不开放且稳定拒绝;
  *   看画面的四个(`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom`,`look: true`)也是 route:读项目副本,再向同机的渲染服务要一帧
  *              (`server/agent-service/look-client.mjs`;契约第 9.8 节)。这台节点没有配看画面的口子时它们不交给模型,调用回明确的原因。
  *   pending    这一版在云节点上还没接上。逐项写明差什么(`why`),记未达成;不交给模型,调用时回明确的原因。
@@ -91,7 +91,8 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
   web_handoff: { mode: I, what: '网页接管窗口', online: '云端的网页操作(web_*)还没接上,云端 Agent 没有开着的网页可以交给他' },
   // agent(5):公告板四个在服务进程里答;拉起子 Agent 要页面开页签
   declare_scope: { mode: S }, list_agents: { mode: S }, send_message: { mode: S }, check_messages: { mode: S },
-  spawn_agent: { mode: I, what: 'AI 栏的页签', online: '子 Agent 的那一轮要由他的页面另起一个云端对话(新的对话委托、占他的并发名额),这条路还没接上' },
+  // 本机/LAN 仍支持 spawn_agent；仅 Hosted 云端明确关闭，模型也看不到这项。
+  spawn_agent: { mode: I, disabled: true, what: 'AI 栏的页签' },
   // core(8)
   wait: { mode: S }, report_progress: { mode: S },
   seek: { mode: I, what: '播放头', page: true }, play: { mode: I, what: '播放', page: true }, pause: { mode: I, what: '播放', page: true },
@@ -102,8 +103,10 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
 
 const namesOf = (...modes) => Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => modes.includes(p.mode)).map(([n]) => n);
 
-/** 交给模型的工具:除了「还没接上」的,全部 */
-export const CLOUD_OPEN_TOOLS = Object.freeze(new Set(namesOf(R, H, S, I)));
+/** 交给模型的工具:除 pending 与显式 disabled 外全部 */
+export const CLOUD_OPEN_TOOLS = Object.freeze(new Set(Object.entries(CLOUD_TOOL_PLAN)
+  .filter(([, p]) => [R, H, S, I].includes(p.mode) && p.disabled !== true)
+  .map(([name]) => name)));
 
 /** 要向渲染服务要一帧画面的(契约第 9.8 节)。`get_layout` 不在里面:它没有画面也答得了规定的框,只是量不到实体框 */
 export const CLOUD_LOOK_TOOLS = Object.freeze(new Set(Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.look === true).map(([n]) => n)));
@@ -187,6 +190,7 @@ export function initiatorUnreachable(tool) {
  */
 export function checkCloudTool(tool) {
   const plan = Object.hasOwn(CLOUD_TOOL_PLAN, tool) ? CLOUD_TOOL_PLAN[tool] : null;
+  if (plan?.disabled === true) return { ok: false, cloudUnavailable: true, error: '云端暂不支持开子 Agent' };
   if (plan && plan.mode !== P) return { ok: true, mode: plan.mode };
   const why = plan?.why ?? '这个工具还没有在云端的工具表里归类';
   return {
@@ -226,7 +230,7 @@ const CLOUD_SYSTEM_NOTE_LINES = [
   '你是托管方的云端 Agent,运行在云节点上。你的改动经文档服务落到项目里,所有成员都看得到;用户关掉软件后你照常把这一轮做完。',
   '工具与本机一致,下面是仅有的差别:',
   '',
-  '- **用户可能已经离开。** 要用到他界面的工具(`get_selection`、`seek`、`play`、`pause`)在他开着发消息的那个页面时照常生效;他不在线时会回「发起方不在线」:不要等、不要重试,按项目内容继续,在进度汇报里说明哪一步没用上页面状态。网页接管、扫码登录、开子 Agent 页签在云端做不了,需要时请用户自己在界面上操作。',
+  '- **用户可能已经离开。** 要用到他界面的工具(`get_selection`、`seek`、`play`、`pause`)在他开着发消息的那个页面时照常生效;他不在线时会回「发起方不在线」:不要等、不要重试,按项目内容继续,在进度汇报里说明哪一步没用上页面状态。网页接管和扫码登录在云端做不了,需要时请用户自己在界面上操作。云端暂不支持开子 Agent。',
   LOOK_LINE,
   '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、自定义测量(measure_audio_js)、网页操作(web_*)。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
   '- **素材:** 附件在这个对话的工作目录里,地址形如 `work:attachments/<文件名>`,用 `import_media` 传这个地址装进素材库;网上的文件直接给 `import_media` 传 http(s) 地址。素材库是空的也可以只用卡片做片子,不必为了「有素材」去找素材。',

@@ -267,15 +267,35 @@ export function createAgentInstance(env) {
     if (mode === "hosted") {
       // 托管档的实例只为建它时定下的那个项目服务:项目与文档服务地址都不听请求的
       if (projectId !== env.projectId) throw new Error("这个实例不为这个项目服务");
+      if (env.accountDataRequired === true &&
+          (env.accountMode !== true || typeof env.accountDataWebSocketImpl !== 'function'))
+        throw new Error('账号数据连接缺少可信实例证明');
       url = env.docUrl;
     }
+    // Only the trusted account runner may cancel its own pending binding.
+    // Page/LAN bind requests never supply or inherit this signal.
+    const bindSignal = mode === 'hosted' && env.accountMode === true && env.accountDataRequired === true &&
+      input?.signal && typeof input.signal.addEventListener === 'function' &&
+      typeof input.signal.removeEventListener === 'function' ? input.signal : null;
+    if (bindSignal?.aborted) throw new Error('run-fenced');
     if (agentBinding && agentBinding.projectId === projectId && agentBinding.mode === mode && agentBinding.url === url) return agentBinding;
     unbindAgent("rebind");
-    const [{ createAgentSide }, { loadSsrHost }, { tools, toolGroups }] = await Promise.all([
+    const imports = Promise.all([
       import(new URL("../agent-side.mjs", import.meta.url).href),
       import(new URL("../ssr-host.mjs", import.meta.url).href),
       import(new URL("../../mcp-tools.mjs", import.meta.url).href),
     ]);
+    let imported;
+    if (bindSignal) {
+      let rejectOnAbort;
+      const cancelled = new Promise((_, reject) => { rejectOnAbort = () => reject(new Error('run-fenced'));
+        bindSignal.addEventListener('abort', rejectOnAbort, { once: true });
+        if (bindSignal.aborted) rejectOnAbort(); });
+      try { imported = await Promise.race([imports, cancelled]); }
+      finally { bindSignal.removeEventListener('abort', rejectOnAbort); }
+      if (bindSignal.aborted) throw new Error('run-fenced');
+    } else imported = await imports;
+    const [{ createAgentSide }, { loadSsrHost }, { tools, toolGroups }] = imported;
     const protocolsFor = async (n) => {
       // 托管档:凭证按对话给(对话委托绑死一个对话,契约第 4.2 节),所以连同这个对话号对应的对话 id 一起交给宿主
       if (mode === "hosted") {
@@ -292,6 +312,7 @@ export function createAgentInstance(env) {
       projectId,
       url,
       protocolsFor,
+      ...(env.accountMode === true && env.accountDataWebSocketImpl ? { WebSocketImpl: env.accountDataWebSocketImpl } : {}),
       // 托管档:几个只读项目与注册表的页面工具改在服务端副本上执行;在服务端另有实现的(导入素材、建卡改卡、配音)
       // 标成经「页面」执行——托管档的「页面」就是下面的 hostedCallPage,由它交给 hosted-tools.mjs
       tools: HOSTED ? tools.map((t) => (CLOUD_AGENT_SIDE.has(t.name) ? { ...t, side: "agent" } : CLOUD_HOSTED_TOOLS.has(t.name) ? { ...t, side: "page" } : t)) : tools,
@@ -530,9 +551,11 @@ export function createAgentInstance(env) {
         await hostedContext(agent || '')?.refreshCards().catch(() => {});
         return cloudLookResult(tool, await callToolChecked(tool, toolDef, args, agent, callId));
       }
-      // 要操作发起人界面的(契约第 9.2、28 节):四个经反向通道让发起这一轮的那张页面执行;那张页面不在就明说,不卡住。
+      // Account-v2 的 get_selection 走 doc 的全员选区权威查询。其余页面工具
+      // 仍作用在发起人的页面；本地/LAN 的 get_selection 保持原来的页面通道。
       // 其余四个(网页接管、扫码登录两个、开子 Agent 页签)不在线回「发起方不在线」,在线回做不了的原因
       if (CLOUD_INITIATOR_TOOLS.has(tool)) {
+        if (env.accountMode === true && tool === 'get_selection') return hostedAccountSelection(agent || '');
         if (CLOUD_PAGE_TOOLS.has(tool)) return hostedPageTool(tool, args, agent || '');
         if (!hostedInitiatorOnline(agent || '')) return initiatorOffline(tool);
         return initiatorUnreachable(tool);
@@ -1338,12 +1361,44 @@ export function createAgentInstance(env) {
   }
 
   /**
-   * 经反向通道让发起这一轮的那张页面执行(`seek`、`play`、`pause`、`get_selection`;契约第 28 节)。
+   * 本地/LAN 的 `get_selection` 和页面控制工具仍经反向通道执行。
    * 参数先按本机同样的规矩查(必填、`seek` 的 `t` 是不小于 0 的有限数),不合规矩的不发给页面。
    * 页面执行了:回它交回的结果(与本机同一份实现,形状相同);`seek` 做成后把这个对话记着的播放头改成新的(之后切剪辑的工具用它)。
    * 那张页面不在(没连着、超时、等的中途断了、旧页面没有反向通道):`get_selection` 在这位成员还有别的窗口连着看时退回发消息时的快照
    * (注明是快照),否则与另外三个一样回「发起方不在线」。
    */
+  async function hostedAccountSelection(agent) {
+    const scope = env.accountSelection;
+    const binding = agentBinding;
+    const unavailable = reason => {
+      agentLog('agent.selection.unavailable', { reason });
+      return { ok: false, code: 'selection-unavailable', error: '当前项目选区暂不可用。' };
+    };
+    if (!scope || typeof scope.projectId !== 'string' || typeof scope.conversationId !== 'string' ||
+        typeof scope.runId !== 'string' || typeof scope.runGrantId !== 'string' || !scope.runGrantId ||
+        agent !== scope.conversationId || hostedRunIds.get(agent) !== scope.runId ||
+        binding?.projectId !== scope.projectId || binding.mode !== 'hosted') return unavailable('run-binding');
+    let reply;
+    try {
+      reply = await binding.side.executor.request(agent, {
+        type: 'selection.query', projectId: scope.projectId, runGrantId: scope.runGrantId,
+      }, (message) => message?.type === 'selection.state' || message?.type === 'error');
+    } catch { return unavailable('doc-request'); }
+    // An old response cannot be consumed by a later run or a rebound project.
+    if (agentBinding !== binding || hostedRunIds.get(agent) !== scope.runId ||
+        reply?.type !== 'selection.state' || reply.projectId !== scope.projectId ||
+        !Number.isSafeInteger(reply.projectRev) || !Number.isSafeInteger(reply.presenceRevision) ||
+        !Array.isArray(reply.members) || !Number.isSafeInteger(reply.queriedAt) ||
+        reply.members.some(member => typeof member?.accountId !== 'string' ||
+          typeof member.username !== 'string' || typeof member.displayName !== 'string' ||
+          typeof member.isInitiator !== 'boolean' || !Array.isArray(member.pages) ||
+          member.pages.some(page => typeof page?.pageId !== 'string' ||
+            typeof page.live !== 'boolean' || !Array.isArray(page.selection?.clipIds) ||
+            !Array.isArray(page.items)))) return unavailable(reply?.type === 'error' ? 'doc-denied' : 'doc-reply');
+    const { type: _type, reqId: _reqId, ...state } = reply;
+    return { ok: true, ...state };
+  }
+
   async function hostedPageTool(tool, args, agent) {
     const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
     if (tool === 'seek' && !(typeof a.t === 'number' && Number.isFinite(a.t) && a.t >= 0)) {
@@ -1369,7 +1424,7 @@ export function createAgentInstance(env) {
     return initiatorOffline(tool);
   }
 
-  /** 读页面状态的工具(get_selection)的退路:按发消息时的快照答;发起方不在线、或没带快照,立刻明说,不等 */
+  /** 旧页面通道的 get_selection 退路；account-v2 不会来到这里。 */
   function hostedPageRead(tool, agent) {
     const ps = hostedPageStates.get(agent) ?? null;
     const online = hostedInitiatorOnline(agent);
@@ -1393,8 +1448,13 @@ export function createAgentInstance(env) {
    */
   function startHostedRun(o) {
     const agentId = String(o.conversationId);
+    if (env.accountMode === true && env.accountSelection &&
+        (o.runId !== env.accountSelection.runId || agentId !== env.accountSelection.conversationId ||
+          agentBinding?.projectId !== env.accountSelection.projectId))
+      throw Object.assign(new Error('account run binding mismatch'), { code: 'run-record-mismatch' });
     let aborted = false;
     let inner = null;
+    const activeTools = new Set();
     const emit = (ev) => { try { o.onEvent(ev); } catch { /* 宿主的事 */ } };
     const done = (async () => {
       const binding = agentBinding;
@@ -1488,9 +1548,14 @@ export function createAgentInstance(env) {
           checkpoint: true,
           ...(typeof o.onModelCall === 'function' ? { onModelCall: o.onModelCall } : {}),
           callTool: async (name, args, meta) => {
+            // Account-v2 supplies a fresh doc runGrant/fence gate before any local
+            // or project tool side effect. Legacy hosted callers omit this hook.
+            if (typeof o.beforeToolCall === 'function') await o.beforeToolCall({ runId: o.runId, conversationId: agentId, name });
             // 单次工具调用的时限(契约第 11 节):到时不再等,明说这一步没做完。工具实现在进程级的串行锁里跑,
             // 所以这里只是不让这一轮干等;真卡住的实现由一轮的墙钟上限与看护兜底
             const work = callToolInternal(name, args, agentId, typeof meta?.callId === 'string' ? meta.callId : undefined);
+            activeTools.add(work);
+            void work.finally(() => activeTools.delete(work)).catch(() => {});
             // 看画面的工具另给时限:带用户卡的项目要等隔离工作进程起来,别的项目在渲时还要排队;渲染服务那一侧自己有更短的时限并回明确的原因
             const isLook = CLOUD_LOOK_TOOLS.has(name) || name === 'get_layout' || CLOUD_SLOW_TOOLS.has(name);
             const limitMs = isLook && Number(o.lookTimeoutMs) > 0 ? Number(o.lookTimeoutMs) : Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
@@ -1529,6 +1594,15 @@ export function createAgentInstance(env) {
       abort() {
         aborted = true;
         try { inner?.abort(); } catch { /* 已经结束 */ }
+      },
+      /** Control ACK waits for the runner AND timed-out underlying tool dispatches.
+       * A hung dispatch leaves this promise pending; callers must not claim closure. */
+      async drain() {
+        aborted = true;
+        try { inner?.abort(); } catch { /* 已经结束 */ }
+        await done;
+        while (activeTools.size) await Promise.allSettled([...activeTools]);
+        return { runId: o.runId, dispatchesOpen: 0 };
       },
       done,
     };

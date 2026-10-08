@@ -31,6 +31,7 @@ import { acceptUpgrade, rejectUpgrade, CLOSE } from './ws.mjs';
 import { createRouter, CORE_DEFAULTS } from './router.mjs';
 import { PROTOCOL, offeredProtocols } from './auth.mjs';
 import { createSessionLayer, parseSessionItem, SESSION_TYPE_PREFIX } from './session.mjs';
+import { createHttpTransport } from './http-transport.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { renderQueueModule, renderQueuePlaceholder, RENDER_QUEUE_MODULE } from './modules/render-queue.mjs';
 import { spacedModule } from './spaces.mjs';
@@ -50,7 +51,10 @@ const ANONYMOUS = Object.freeze({ userId: 'anonymous', tenantId: null });
  * `service`、`serviceKid`、`serviceRole` 是托管方服务身份的（`docs/plan/hosted-render-contract.md` 第 1.2、1.4 节）：服务名、握手所用公钥的编号、登记表里的角色；
  * `access`、`purpose` 是云端 Agent 服务的（`docs/plan/cloud-agent-contract.md` 第 4.3、16 节）：代成员的连接的权限（`rw` / `r`）、只用来发布的连接的用途
  */
-const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner', 'service', 'serviceKid', 'serviceRole', 'access', 'purpose']);
+const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner', 'service', 'serviceKid', 'serviceRole', 'access', 'purpose',
+  'identityVersion', 'realm', 'accountId', 'accountName', 'loginId', 'loginKind', 'loginGeneration', 'credentialId',
+  'accountEventSeq', 'projectId', 'projectAccessRevision', 'authorizationId', 'authorityId', 'conversationId', 'messageId',
+  'runId', 'runGrantId', 'connectionId', 'servicePrincipal', 'serviceId', 'instanceId', 'instanceGeneration']);
 
 /**
  * 规整鉴权给的 principal：`userId` 原样、`tenantId` 不是字符串就记 null，其余认得的字段有值才带上。
@@ -99,7 +103,7 @@ function jsonLog(event, fields) {
  */
 export function createDocService(options = {}) {
   const {
-    authenticate = () => ANONYMOUS,
+    authenticate: authenticateOwner = () => ANONYMOUS,
     remoteOf = (req) => req?.socket?.remoteAddress ?? null,
     adminTypes = ['service.'],
     http: httpHandler = null,
@@ -123,10 +127,48 @@ export function createDocService(options = {}) {
   const startedAt = now();
   /** 挂着的 WebSocket 传输（心跳用）；连接身份在核心里，会话在会话层里 */
   const wsTransports = new Set();
+  // Includes a newly accepted resume transport while its asynchronous gate is
+  // still running, before it can become the session's current transport.
+  const ownedWsTransports = new Set();
+  const additionalServers = new Map(), additionalSockets = new WeakSet();
+  const needsInvocation = (principal, req) => typeof options.dispatchInvocation === 'function' &&
+    (principal?.realm === 'account' && principal?.role === 'agent' || req &&
+      (additionalSockets.has(req.socket) || req.headers?.['x-promptcut-instance-proof'] ||
+        req.headers?.['x-promptcut-data-proof'] || new URL(req.url, 'http://localhost').searchParams.has('runGrantId')));
+  const dispatchInvocation = (input, next) => needsInvocation(input.principal, input.transport?.req) ?
+    options.dispatchInvocation(input, next) : next(input.text);
   /** 模块名 → { mod, timer }，按挂载顺序 */
   const mounted = new Map();
   let seq = 0;
   let closing = false;
+  const admissions = new Set(), admissionRows = new WeakMap(), admissionFences = [], connectionFences = new Map();
+  const matching = (principal, criteria) => principal?.realm === 'account' &&
+    (!criteria.projectId || (principal.projectId ?? principal.tenantId) === criteria.projectId) &&
+    ['accountIds', 'loginIds', 'runGrantIds', 'serviceKids', 'roles'].every((field, i) => !criteria[field] ||
+      criteria[field].includes(principal[['accountId', 'loginId', 'runGrantId', 'serviceKid', 'role'][i]]));
+  const admissionRefusal = (principal, row) => [...admissionFences, ...(row?.cohorts ?? [])]
+    .some(fence => matching(principal, fence.criteria));
+  function includeAdmission(fence, row) {
+    row.cohorts.add(fence);
+    if (fence.pending) fence.rows.add(row);
+  }
+  async function authenticate(req) {
+    let resolveDone, onClosed;
+    const row = { principal: null, socket: req.socket, cohorts: new Set(), rejected: false,
+      done: new Promise(resolve => { resolveDone = resolve; }),
+      actualClosed: req.socket.closed ? Promise.resolve() : new Promise(resolve => { onClosed = resolve; req.socket.once('close', onClosed); }),
+      complete() { resolveDone(); admissions.delete(row); admissionRows.delete(req);
+        if (!row.rejected && !admissionRefusal(row.principal, row) && onClosed) req.socket.off('close', onClosed); } };
+    for (const fence of admissionFences) includeAdmission(fence, row);
+    admissions.add(row); admissionRows.set(req, row);
+    row.principal = await (typeof options.transportAuthenticate === 'function' ?
+      options.transportAuthenticate(req, authenticateOwner, { internal: additionalSockets.has(req.socket) }) : authenticateOwner(req));
+    // Cohorts survive removal of a transient global predicate: this request
+    // started behind that barrier and cannot later use a stale auth result.
+    if (admissionRefusal(row.principal, row)) { row.rejected = true; req.socket.destroy(); return null; }
+    return row.principal;
+  }
+  const completeAdmission = req => admissionRows.get(req)?.complete();
 
   /** 会话层；`router` 建好之后才建（它要核心的入口） */
   let sessions = null;
@@ -141,13 +183,17 @@ export function createDocService(options = {}) {
     maxPendingBytes,
     // 管理身份只能发管理接口的消息（契约 auth-contract 第 5 节）；别的身份不在这里判
     gate(principal, type, msg) {
+      const adminReason = () => {
+        if (principal?.scope !== 'admin') return null;
+        const allowed = adminTypes.some((t) => (t.endsWith('.') ? type.startsWith(t) : type === t));
+        return allowed ? null : 'forbidden';
+      };
       if (typeof options.gate === 'function') {
         const reason = options.gate(principal, type, msg);
+        if (reason && typeof reason.then === 'function') return reason.then(value => typeof value === 'string' ? value : adminReason());
         if (typeof reason === 'string') return reason;
       }
-      if (principal?.scope !== 'admin') return null;
-      const allowed = adminTypes.some((t) => (t.endsWith('.') ? type.startsWith(t) : type === t));
-      return allowed ? null : 'forbidden';
+      return adminReason();
     },
   });
 
@@ -207,6 +253,15 @@ export function createDocService(options = {}) {
   }
 
   sessions = createSessionLayer({ router, nextConnId: () => `conn-${++seq}`, now, log, retainMs, tombstoneMs, resumeGate: options.resumeGate });
+  const httpTransport = options.enableHttpTransport === true ? createHttpTransport({
+    sessions, authenticate, remoteOf, normalizePrincipal, protocol, retainMs, maxFrameBytes: maxPayload,
+    admissionRefusal, completeAdmission, principalOf: id => router.describeConn(id)?.principal,
+    dispatchInvocation, needsInvocation,
+    internalTransport: req => additionalSockets.has(req.socket),
+    transportConnected: options.transportConnected,
+    canOpen: () => closing ? 'closing' : sessions.size() >= maxConnections ? 'full' : null,
+    now, log,
+  }) : null;
 
   const attached = hostServer !== undefined && hostServer !== null;
   if (attached && (typeof hostServer.on !== 'function' || typeof hostServer.off !== 'function')) {
@@ -221,6 +276,7 @@ export function createDocService(options = {}) {
       res.end(JSON.stringify(health()));
       return;
     }
+    if (httpTransport?.handle(req, res)) return;
     if (typeof httpHandler === 'function') {
       let handled = false;
       try {
@@ -258,10 +314,10 @@ export function createDocService(options = {}) {
    *   4404（会话不存在）/ 4410（已结束）/ 1002（ack 越界，会话随之结束）关闭（第 16 节：客户端读不到握手的状态码）；
    * - 写法不对、不止一项、接续项旁边还有鉴权项：400。
    */
-  function onUpgrade(req, socket, head) {
-    if (typeof options.upgrade === 'function' && options.upgrade(req, socket, head) === true) return;
+  async function onUpgrade(req, socket, head, internal = false) {
+    if (!internal && typeof options.upgrade === 'function' && options.upgrade(req, socket, head) === true) return;
     const mine = pathnameOf(req) === path;
-    if (attached && !mine) return;
+    if (!internal && attached && !mine) return;
     socket.on('error', () => {});
     if (closing) return rejectUpgrade(socket, 503, 'Service Unavailable');
     if (!mine) return rejectUpgrade(socket, 404, 'Not Found');
@@ -281,8 +337,22 @@ export function createDocService(options = {}) {
     if (item.kind === 'resume') {
       const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
       if (!ws) return;
-      const t = wsTransport(ws);
-      const r = sessions.resume({ sid: item.sid, ack: item.ack, transport: t });
+      const t = wsTransport(ws, req);
+      t.connId = sessions.connIdOf(item.sid);
+      t.principal = router.describeConn(t.connId)?.principal;
+      let transportClosed = false;
+      ws.on('close', () => { transportClosed = true; });
+      t.isUsable = () => !transportClosed && !socket.destroyed && socket.writable && !closing;
+      let r;
+      try {
+        r = await dispatchInvocation({ connId: t.connId, principal: t.principal,
+          kind: 'resume', sessionItem: { sid: item.sid, ack: item.ack },
+          transport: { kind: 'ws', req, socket, internal: additionalSockets.has(socket) } },
+          () => sessions.resume({ sid: item.sid, ack: item.ack, transport: t }));
+      } catch {
+        ws.closeNow(4003, 'instance-invocation-forbidden');
+        return;
+      }
       if (!r.ok) {
         ws.closeNow(r.code, r.reason);
         return;
@@ -294,47 +364,70 @@ export function createDocService(options = {}) {
     if (sessions.size() >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
     let principal;
     try {
-      principal = authenticate(req);
-    } catch {
-      principal = null;
+      principal = await authenticate(req);
+    } catch (error) {
+      return rejectUpgrade(socket, error?.status === 503 ? 503 : 401,
+        error?.status === 503 ? 'Service Unavailable' : 'Unauthorized');
     }
+    // Authentication can yield to another upgrade. The last check and synchronous open
+    // must share one event-loop turn, otherwise concurrent admissions exceed the cap.
+    if (closing || socket.destroyed || !socket.writable || sessions.size() >= maxConnections)
+      return rejectUpgrade(socket, 503, 'Service Unavailable');
     if (!principal || typeof principal.userId !== 'string') return rejectUpgrade(socket, 401, 'Unauthorized');
+    if (admissionRefusal(principal)) return rejectUpgrade(socket, 401, 'Unauthorized');
     const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
     if (!ws) return;
-    const t = wsTransport(ws);
+    const t = wsTransport(ws, req);
     const p = normalizePrincipal(principal);
+    t.principal = p;
     const remote = remoteFor(ws);
     if (item.kind === 'new') {
       // 先挂监听再建会话：建会话时就要经这条传输发 welcome，模块的 connect 也可能立刻发消息
       const pending = { connId: null };
       watchPending(pending, t, false);
       pending.connId = sessions.openSession({ principal: p, remote, transport: t }).connId;
+      options.transportConnected?.({ connId: pending.connId, principal: p, req });
       return;
     }
     const pending = { connId: null };
     watchPending(pending, t, true);
     pending.connId = sessions.openLegacy({ principal: p, remote, transport: t });
+    options.transportConnected?.({ connId: pending.connId, principal: p, req });
   }
 
-  (attached ? hostServer : ownServer).on('upgrade', onUpgrade);
+  const upgradeListener = (req, socket, head) => {
+    onUpgrade(req, socket, head).catch(() => { if (!socket.destroyed) rejectUpgrade(socket, 503, 'Service Unavailable'); })
+      .finally(() => completeAdmission(req));
+  };
+  (attached ? hostServer : ownServer).on('upgrade', upgradeListener);
 
   /** 把一条 WebSocket 包成会话层的传输；`alive` 给心跳用 */
-  function wsTransport(ws) {
-    return {
+  function wsTransport(ws, req) {
+    const socket = req.socket;
+    const actualClosed = Promise.all([new Promise(resolve => ws.once('close', resolve)),
+      socket.closed ? Promise.resolve() : new Promise(resolve => socket.once('close', resolve))]);
+    const t = {
       kind: 'ws',
       ws,
+      req, socket,
+      actualClosed,
       alive: true,
       connId: null,
       legacy: false,
+      invocationTail: Promise.resolve(),
       send: (text) => ws.send(text),
       control: (obj) => ws.send(JSON.stringify(obj)),
       close: (code, reason) => ws.close(code, reason),
       get bufferedAmount() { return ws.bufferedAmount; },
     };
+    ownedWsTransports.add(t);
+    actualClosed.then(() => ownedWsTransports.delete(t));
+    return t;
   }
 
   /** 已知 connId 的传输（接续）：挂心跳与事件 */
   function watch(connId, t, legacy) {
+    t.principal = router.describeConn(connId)?.principal;
     watchPending({ connId }, t, legacy);
   }
 
@@ -351,7 +444,18 @@ export function createDocService(options = {}) {
     if (legacy) ws.on('drain', () => { if (holder.connId) router.drained(holder.connId); });
     ws.on('message', (text) => {
       t.alive = true;
-      if (holder.connId) sessions.receive(holder.connId, text);
+      if (!holder.connId) return;
+      const principal = router.describeConn(holder.connId)?.principal;
+      if (!needsInvocation(principal)) { sessions.receive(holder.connId, text); return; }
+      t.invocationTail = t.invocationTail.then(() => {
+        if (!sessions.isCurrent(holder.connId, t)) return;
+        return dispatchInvocation({ connId: holder.connId, principal, text, kind: 'message',
+          transport: { kind: 'ws', req: t.req, socket: t.socket, internal: additionalSockets.has(t.socket) } },
+          frame => { if (sessions.isCurrent(holder.connId, t)) return sessions.receive(holder.connId, frame); });
+      }).catch(error => {
+          log('conn.error', { connId: holder.connId, code: error?.code ?? 'instance-invocation-forbidden' });
+          ws.closeNow(4003, 'instance-invocation-forbidden');
+        });
     });
     ws.on('close', ({ code, reason }) => {
       wsTransports.delete(t);
@@ -375,6 +479,7 @@ export function createDocService(options = {}) {
     for (const [k, v] of Object.entries(core)) {
       if (!Object.hasOwn(out, k)) out[k] = v;
     }
+    if (typeof options.healthExtra === 'function') Object.assign(out, options.healthExtra());
     return out;
   }
 
@@ -394,6 +499,7 @@ export function createDocService(options = {}) {
       t.ws.ping();
     }
     sessions.sweep();
+    httpTransport?.sweep();
   }, heartbeatMs);
   heartbeat.unref?.();
 
@@ -428,6 +534,25 @@ export function createDocService(options = {}) {
      */
     send(connId, message) {
       sendFromOutside(connId, message);
+    },
+
+    /** Only the trusted assembly attaches the same service to its mTLS server.
+     * HTTP routing remains explicit; no hosting/admin HTTP handler is forwarded. */
+    attachTransportServer(server) {
+      if (additionalServers.has(server)) return additionalServers.get(server).detach;
+      if (!server || typeof server.on !== 'function') throw new TypeError('TLS transport server required');
+      const secure = socket => { additionalSockets.add(socket); socket.once('close', () => additionalSockets.delete(socket)); };
+      const upgrade = (req, socket, head) => {
+        onUpgrade(req, socket, head, true).catch(() => { if (!socket.destroyed) rejectUpgrade(socket, 503, 'Service Unavailable'); })
+          .finally(() => completeAdmission(req));
+      };
+      const detach = () => { server.off('secureConnection', secure); server.off('upgrade', upgrade); additionalServers.delete(server); };
+      server.on('secureConnection', secure); server.on('upgrade', upgrade);
+      additionalServers.set(server, { detach }); return detach;
+    },
+    handleTransportHttp(req, res) {
+      if (!additionalSockets.has(req.socket)) return false;
+      return httpTransport?.handle(req, res) === true;
     },
 
     /** 挂一个模块（契约 G.3），返回卸载函数。类型或字段与已挂模块冲突时抛错、不挂 */
@@ -480,6 +605,60 @@ export function createDocService(options = {}) {
     /** 主动关闭一条连接（组装层与模块之外的调用方用）：会话立刻结束、不保留；连接不存在回 false */
     closeConn(connId, code, reason) {
       return sessions.close(connId, code, reason);
+    },
+    /** Dedicated security barrier. Ordinary close's tail replay is unchanged. */
+    fenceConn(connId, code = 4003, reason = 'access-revoked') {
+      if (connectionFences.has(connId)) return connectionFences.get(connId);
+      const logical = sessions.fence(connId, code, reason);
+      const transports = [...ownedWsTransports].filter(t => t.connId === connId);
+      const httpClosed = httpTransport?.fenceConn(connId, code, reason) ?? Promise.resolve({ closedHttp: 0 });
+      for (const t of transports) t.ws.terminate();
+      const result = Promise.all([logical.gone, httpClosed, ...transports.map(t => t.actualClosed)]).then(([, http]) => ({
+        connectionId: connId, logicalFenced: true, discarded: true, actualClosed: true,
+        closedWs: transports.length, closedHttp: http.closedHttp,
+      }));
+      connectionFences.set(connId, result); return result;
+    },
+    /** Trusted logout barrier includes every admission that was already awaiting
+     * authentication, and prevents a matching identity from entering afterwards. */
+    async fencePrincipals(criteria, code = 4003, reason = 'access-revoked') {
+      const selectors = ['accountIds', 'loginIds', 'runGrantIds', 'serviceKids'];
+      if (!criteria || (!criteria.projectId && !selectors.some(field => Array.isArray(criteria[field]) && criteria[field].length)) ||
+          criteria.projectId !== undefined && (typeof criteria.projectId !== 'string' || !criteria.projectId) ||
+          [...selectors, 'roles'].some(field => criteria[field] !== undefined &&
+            (!Array.isArray(criteria[field]) || !criteria[field].length || criteria[field].some(value => typeof value !== 'string' || !value))))
+        throw new TypeError('precise fence identity is required');
+      const scope = structuredClone(criteria);
+      // Only immutable revoked references remain permanent. Account/project and
+      // switch predicates fence this cohort, not future legitimate joins/runs.
+      const fence = { criteria: scope, rows: new Set(), pending: true,
+        permanent: ['loginIds', 'runGrantIds', 'serviceKids'].some(field => scope[field]?.length) };
+      admissionFences.push(fence);
+      for (const row of admissions) includeAdmission(fence, row);
+      const ids = new Set(sessions.connIds().filter(id => matching(router.describeConn(id)?.principal, scope)));
+      for (const t of ownedWsTransports) if (t.connId && matching(t.principal, scope)) ids.add(t.connId);
+      for (const id of httpTransport?.connectionIdsMatching(p => matching(p, scope)) ?? []) ids.add(id);
+      const fences = [...ids].map(id => this.fenceConn(id, code, reason));
+      const connectionReceipts = await Promise.all(fences);
+      const processed = new Set(); let rejectedAdmissions = 0;
+      for (;;) {
+        const pending = [...fence.rows].filter(row => !processed.has(row));
+        if (!pending.length) break;
+        // Unknown identity remains pending. Authentication completion is required
+        // even if all logical sessions are already gone.
+        await Promise.all(pending.map(row => row.done));
+        const affected = pending.filter(row => matching(row.principal, scope));
+        for (const row of affected) row.socket.destroy();
+        await Promise.all(affected.map(row => row.actualClosed));
+        rejectedAdmissions += affected.length;
+        for (const row of pending) processed.add(row);
+      }
+      // No yield between finishing this cohort and retiring its predicate. Each
+      // concurrent fence owns a separate record and cannot remove another's.
+      fence.pending = false; fence.rows.clear();
+      if (!fence.permanent) admissionFences.splice(admissionFences.indexOf(fence), 1);
+      return { actualClosed: true, connections: connectionReceipts,
+        pendingAdmissions: processed.size, rejectedAdmissions };
     },
     closeSpace(space, code = 1012, reason = 'relocating') { sessions.closeSpace(space, code, reason); },
 
@@ -537,17 +716,20 @@ export function createDocService(options = {}) {
      */
     close() {
       closing = true;
+      for (const { detach } of [...additionalServers.values()]) detach();
+      httpTransport?.shutdown();
       clearInterval(heartbeat);
       for (const record of mounted.values()) clearInterval(record.timer);
       // 会话一律以 1001 结束（脱开的也结束，不保留）；旧客户端关掉它的传输，等 close 事件注销
       const gone = sessions.closeAll(CLOSE.GOING_AWAY, 'server shutting down');
+      const actualWsGone = Promise.all([...ownedWsTransports].map(t => t.actualClosed));
       if (attached) {
-        hostServer.off('upgrade', onUpgrade);
-        return gone;
+        hostServer.off('upgrade', upgradeListener);
+        return Promise.all([gone, actualWsGone]).then(() => {});
       }
       const done = new Promise((resolve) => ownServer.close(() => resolve()));
       ownServer.closeIdleConnections();
-      return Promise.all([done, gone]).then(() => {});
+      return Promise.all([done, gone, actualWsGone]).then(() => {});
     },
   };
 }

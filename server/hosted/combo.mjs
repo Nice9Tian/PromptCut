@@ -30,6 +30,7 @@
  */
 import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import { createHostingService } from '../hosting/service.mjs';
 import { createHostedRelocation } from './relocation.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
@@ -45,6 +46,9 @@ import { createFsStore, ensureLayoutSync, LAYOUTS } from '../asset-store/fs-stor
 import { normalizeHash } from '../asset-store/blob-store.mjs';
 import { createServiceUsage, serviceCapBytes, diskTotalOf, SERVICE_USAGE_DIR } from '../asset-store/service-usage.mjs';
 import { startAssetAnnounce } from '../asset-announce.mjs';
+import { createAssetReadyProbe } from './asset-doc-client.mjs';
+import { createDocAssembly } from './doc-assembly.mjs';
+import { createDocAgentAssembly } from './doc-agent-assembly.mjs';
 
 export const HOSTED_NAMESPACES = Object.freeze(['media', 'snap', 'px']);
 /** 登记素材服务地址用的登记者身份 */
@@ -225,12 +229,18 @@ export async function startHostedCombo({
   limits,
   service: serviceOptions,
   renderCapBytes,
+  account = null,
+  accountRequired = false,
+  assetStatus = null,
 } = /** @type {any} */ ({})) {
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响服务 */ } };
   const root = checkDataDir(dataDir);
   const tokenGiven = typeof clusterToken === 'string' && clusterToken !== '';
   if (trustLoopback === false && !tokenGiven) throw new HostedConfigError('cluster-token-required');
+  if (accountRequired && !account) throw new HostedConfigError('account-v2-required');
+  if (accountRequired && !account?.order?.witnessKeys) throw new HostedConfigError('doc-assembly-configuration');
   const paths = hostedPaths(root);
+  if (account && assetStatus && !assetPublicUrl) throw new HostedConfigError('asset-public-url', { detail: 'separate-service-unset' });
   const loopbackBind = host === '127.0.0.1' || host === '::1' || host === 'localhost';
 
   // 目录：docservice/、assets/、secrets/（0700）
@@ -306,6 +316,88 @@ export async function startHostedCombo({
     return !!m && timingSafeEqual(sha256(m[1]), tokenDigest);
   }
 
+  let accountRuntime = null;
+  let docAssembly = null;
+  let docAgentAssembly = null;
+  let docService = null;
+  let accountProjects = null;
+  let accountInternalServer = null;
+  let accountInternalPort = null;
+  // v2素材独立进程；doc只加载自己的status client私钥，不读asset私钥或共享authority对象。
+  const assetReadyProbe = account && assetStatus ? createAssetReadyProbe(assetStatus) : null;
+  if (account) {
+    try {
+      const [{ createAccountClient }, { openAccountLedger }, { createAccountHostedRuntime },
+        { mountAccountProjects }] = await Promise.all([
+        import('../account/client.mjs'), import('../account/ledger.mjs'),
+        import('../docservice/account-hosted.mjs'), import('../docservice/modules/account-projects.mjs'),
+      ]);
+      const ledger = openAccountLedger({ file: account.ledgerFile || path.join(paths.docservice, 'account-v2.sqlite'), authorityId: account.authorityId });
+      const client = createAccountClient({ origin: account.origin, tls: account.clientTls,
+        serverFingerprint256: account.serverFingerprint256 });
+      accountRuntime = createAccountHostedRuntime({ ledger, accountClient: client, dataDir: paths.docservice,
+        authorityUrl: account.authorityUrl, signingKey: account.signingKey, keyId: account.keyId, now,
+        assetReadyProbe, assetInstanceId: assetStatus?.instanceId,
+        ...(account.agent ? { runHooks: { fenceInState(state, fence) {
+          if (!docAgentAssembly) throw new HostedConfigError('run-authority-unavailable');
+          return docAgentAssembly.runHooks.fenceInState(state, fence);
+        } }, getRunProvider: () => docAgentAssembly?.runProvider,
+        onRunControl: control => docAgentAssembly.deliver(control) } : {}),
+        onDiagnostic: event => say('account.diagnostic', event) });
+      if (account.agent) docAgentAssembly = createDocAgentAssembly({ ledger, accountClient: client, account,
+        runtime: accountRuntime, serviceRegistry, getDocAssembly: () => docAssembly,
+        getService: () => docService, now, onDiagnostic: event => say('run.diagnostic', event) });
+      await accountRuntime.start();
+      if (account.order) docAssembly = createDocAssembly({ dataDir: paths.docservice,
+        authority: accountRuntime.authority, account, runProvider: docAgentAssembly?.runProvider, now });
+      accountProjects = mountAccountProjects({ authority: accountRuntime.authority,
+        issueSession: input => accountRuntime.issueSession(input),
+        resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket) });
+      const internalProjects = mountAccountProjects({
+        authority: accountRuntime.authority, services: account.services,
+        resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket) });
+      const tls = account.internalTls;
+      if (!tls?.key || !tls?.cert || !tls?.ca) throw new HostedConfigError('account-v2');
+      accountInternalServer = https.createServer({ key: tls.key, cert: tls.cert, ca: tls.ca,
+        requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, async (req, res) => {
+        try {
+          if (await docAgentAssembly?.handleInternal(req, res)) return;
+          if (docService?.handleTransportHttp(req, res)) return;
+          const route = new URL(req.url ?? '/', 'https://internal.invalid').pathname;
+          if (route.startsWith('/internal/v2/runs/') || route.startsWith('/internal/v2/conversations/') ||
+              route.startsWith('/internal/v2/instances/')) {
+            res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            res.end(JSON.stringify({ ok: false, code: 'doc-agent-unavailable' })); return;
+          }
+          if (await internalProjects.handleInternal(req, res)) return;
+          res.writeHead(404); res.end();
+        } catch (error) {
+          if (!res.destroyed && !res.headersSent) {
+            res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            res.end(JSON.stringify({ ok: false, code: error.code ?? 'doc-agent-unavailable' }));
+          } else res.destroy();
+        }
+      });
+      accountInternalPort = await new Promise((resolve, reject) => {
+        accountInternalServer.once('error', reject);
+        accountInternalServer.listen(account.internalPort, '127.0.0.1', () => {
+          accountInternalServer.off('error', reject);
+          resolve(accountInternalServer.address().port);
+        });
+      });
+    } catch (error) {
+      await docAgentAssembly?.close();
+      await docAssembly?.close();
+      accountRuntime?.close();
+      assetReadyProbe?.close();
+      throw new HostedConfigError('account-v2', { code: error?.code ?? 'configuration' });
+    }
+  }
+  const closeAccountInternal = () => new Promise(resolve => {
+    if (!accountInternalServer?.listening) return resolve();
+    accountInternalServer.close(() => resolve());
+    accountInternalServer.closeAllConnections?.();
+  });
   const hosting = createHostingService({ dir: path.join(root, 'hosting'), now, authorityService: docPublicUrl || null });
   let relocation;
   const { service, authenticate } = createSharedDocService({
@@ -317,15 +409,31 @@ export async function startHostedCombo({
     localDevice,
     linkOrigin: publicOriginOf(docPublicUrl),
     serviceRegistry,
+    accountRuntime,
+    accountProjects,
+    accountRequired,
+    docAssembly,
     ...(typeof agentPublicUrl === 'string' && agentPublicUrl !== '' ? { hostedServiceUrls: { agent: agentPublicUrl } } : {}),
     now,
     log: say,
     ...(limits ? { limits } : {}),
     service: { ...serviceOptions,
+      ...(docAgentAssembly ? { transportAuthenticate: docAgentAssembly.transportAuthenticate,
+        transportConnected: docAgentAssembly.transportConnected,
+        dispatchInvocation: docAgentAssembly.dispatchInvocation } : {}),
       http(req, res) { if (relocation?.handle(req, res)) return true; if (String(req.url).startsWith('/hosting/')) { void hosting.handle(req, res); return true; } return serviceOptions?.http?.(req, res); },
       upgrade(req, socket, head) { if (String(req.url).startsWith('/hosting/')) { hosting.handleUpgrade(req, socket, head); return true; } return serviceOptions?.upgrade?.(req, socket, head); },
     },
   });
+  docService = service;
+  if (docAgentAssembly && accountInternalServer) service.attachTransportServer(accountInternalServer);
+  if (docAgentAssembly) {
+    try { await docAgentAssembly.start(); }
+    catch (error) {
+      await service.close(); await closeAccountInternal(); await docAgentAssembly.close();
+      await docAssembly?.close(); accountRuntime?.close(); assetReadyProbe?.close(); throw error;
+    }
+  }
 
   async function inventory() {
     const spaces = { local: scanSpace(paths.docservice) };
@@ -360,7 +468,9 @@ export async function startHostedCombo({
   async function handleAsset(req, res) {
     const url = new URL(req.url ?? '/', 'http://hosted.local');
     if (url.pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
-      return sendJson(res, 200, { ok: true, role: 'asset', layout: LAYOUTS.shard });
+      return sendJson(res, 200, { ok: true, role: 'asset', layout: LAYOUTS.shard,
+        ...(accountRuntime || accountRequired ? { accountMode: accountRuntime ? 'v2' : 'legacy',
+          accountRequired: accountRequired === true, assetReady: accountRuntime?.sessionReady === true } : {}) });
     }
     if (url.pathname.startsWith('/admin/')) {
       if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method' });
@@ -370,6 +480,8 @@ export async function startHostedCombo({
       if (m) return adminBlob(req, res, m[1], m[2]);
       return sendJson(res, 404, { ok: false, error: 'not-found' });
     }
+    // v2公网素材直达独立asset进程，旧combo端口绝不回落LAN全局库。
+    if (accountRuntime) return sendJson(res, 503, { ok: false, error: assetStatus ? 'asset-separate-service' : 'asset-account-wiring-pending' });
     preflight(req, res, () => {
       assetMiddleware(req, res, () => sendJson(res, 404, { ok: false, error: 'not-found' }));
     });
@@ -388,11 +500,12 @@ export async function startHostedCombo({
     docAddr = await service.listen(docPort, host);
   } catch (err) {
     await service.close().catch(() => {});
+    await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
   let assetAddr;
   try {
-    assetAddr = await new Promise((resolve, reject) => {
+    assetAddr = accountRuntime && assetStatus ? { port: null } : await new Promise((resolve, reject) => {
       assetServer.once('error', reject);
       assetServer.listen(assetPort, host, () => {
         assetServer.off('error', reject);
@@ -401,6 +514,7 @@ export async function startHostedCombo({
     });
   } catch (err) {
     await service.close().catch(() => {});
+    await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
 
@@ -446,6 +560,10 @@ export async function startHostedCombo({
     get credentialStore() { return store; },
     serviceRegistry,
     serviceUsage,
+    accountRuntime,
+    docAssembly,
+    docAgentAssembly,
+    accountInternalPort,
     inventory,
     async close() {
       if (closed) return;
@@ -459,6 +577,11 @@ export async function startHostedCombo({
         assetServer.closeAllConnections?.();
       });
       await service.close();
+      await closeAccountInternal();
+      await docAgentAssembly?.close();
+      await docAssembly?.close();
+      accountRuntime?.close();
+      assetReadyProbe?.close();
     },
   };
 }

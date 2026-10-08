@@ -190,6 +190,7 @@ export function createSessionLayer({
 
   const welcomeOf = (s, resumed) => ({
     type: 'session.welcome', sid: s.sid, resumed, ack: s.inSeq, retainMs: retain, transport: s.transport?.kind ?? s.lastTransport,
+    ...(s.principal?.realm === 'account' && s.principal?.role === 'agent' ? { connId: s.connId } : {}),
   });
 
   function noteFallback(s, fallback) {
@@ -282,7 +283,7 @@ export function createSessionLayer({
    * 结束会话：不保留。立墓碑（讲会话的）、关掉当前传输；下一轮事件循环再 `router.disconnect` 与打 `conn.close`
    * （模块的 `ctx.close` 可能正处在它自己的处理函数里）。回注销完成的 Promise。
    */
-  function endSession(s, code, reason, { closeTransport = true } = {}) {
+  function endSession(s, code, reason, { closeTransport = true, discard = false } = {}) {
     if (s.ended) return s.gone;
     s.ended = true;
     clearAckTimer(s);
@@ -295,7 +296,7 @@ export function createSessionLayer({
     const t = s.transport;
     s.transport = null;
     // 还没被确认的帧交给要关的传输：长轮询在带 `closed` 之前先回完它们（第 6.3 节）；WebSocket 早已写出，不用
-    const rest = t && closeTransport && t.kind !== 'ws' ? s.frames.slice(s.head).map((f) => withSeq(f.text, f.seq, s.inSeq)) : [];
+    const rest = !discard && t && closeTransport && t.kind !== 'ws' ? s.frames.slice(s.head).map((f) => withSeq(f.text, f.seq, s.inSeq)) : [];
     s.frames = [];
     s.head = 0;
     s.unackedBytes = 0;
@@ -311,6 +312,7 @@ export function createSessionLayer({
           say('conn.error', { connId: s.connId, message: String(err?.message ?? err) });
         }
         say('conn.close', { connId: s.connId, code, reason, transport: s.lastTransport });
+        s.resolveGone?.();
         resolve();
       });
     });
@@ -407,14 +409,14 @@ export function createSessionLayer({
         }
         return { ok: false, status: 404, code: SESSION_CLOSE.NO_SESSION, reason: 'no-session' };
       }
-      if (typeof resumeGate === 'function') {
-        let reason;
-        try { reason = resumeGate(s.principal); } catch { reason = 'forbidden'; }
+      const resumeAllowed = (reason) => {
+        if (s.ended) return { ok: false, status: 410, code: SESSION_CLOSE.SESSION_CLOSED, reason: 'session-closed' };
+        if (typeof transport.isUsable === 'function' && !transport.isUsable())
+          return { ok: false, status: 503, code: 1012, reason: 'transport-unavailable' };
         if (typeof reason === 'string') {
           endSession(s, 1012, reason);
           return { ok: false, status: 503, code: 1012, closedCode: 1012, closedReason: reason, reason };
         }
-      }
       if (!Number.isSafeInteger(ack) || ack < 0 || ack > s.outSeq) {
         badSeq(s);
         return { ok: false, status: 410, code: SESSION_CLOSE.BAD_SEQ, closedCode: SESSION_CLOSE.BAD_SEQ, closedReason: 'bad-seq', reason: 'bad-seq' };
@@ -451,6 +453,12 @@ export function createSessionLayer({
         }
       }
       return { ok: true, connId: s.connId, welcome };
+      };
+      if (typeof resumeGate !== 'function') return resumeAllowed(null);
+      try {
+        const reason = resumeGate(s.principal);
+        return reason && typeof reason.then === 'function' ? reason.then(resumeAllowed, () => resumeAllowed('forbidden')) : resumeAllowed(reason);
+      } catch { return resumeAllowed('forbidden'); }
     },
 
     /** 传输收到一条文本（第 3.3 节）。旧客户端原样交给核心 */
@@ -458,8 +466,7 @@ export function createSessionLayer({
       const s = byConn.get(connId);
       if (!s || s.ended) return;
       if (s.legacy) {
-        router.dispatch(connId, text);
-        return;
+        return router.dispatch(connId, text);
       }
       let msg;
       try {
@@ -469,8 +476,7 @@ export function createSessionLayer({
       }
       // 不是带 type 的对象：交给核心回 bad-message（核心的回包照样编号）
       if (!isObj(msg) || typeof msg.type !== 'string') {
-        router.dispatch(connId, text);
-        return;
+        return router.dispatch(connId, text);
       }
       if (msg.type.startsWith(SESSION_TYPE_PREFIX)) {
         if (msg.type === 'session.ack') applyAck(s, msg.ack);
@@ -489,8 +495,9 @@ export function createSessionLayer({
       const body = { ...msg };
       delete body.seq;
       delete body.ack;
-      router.dispatch(connId, JSON.stringify(body));
+      const dispatched = router.dispatch(connId, JSON.stringify(body));
       noteReceived(s, byteLen(text));
+      return dispatched;
     },
 
     /**
@@ -549,6 +556,19 @@ export function createSessionLayer({
       }
       endSession(s, code, reason);
       return true;
+    },
+
+    /** Security fence is separate from normal close/tail replay. The caller owns
+     * actual transport closure; this synchronously kills SID and outbound caches. */
+    fence(connId, code = 4003, reason = 'access-revoked') {
+      const s = byConn.get(connId);
+      if (!s) return { sid: null, gone: Promise.resolve(), existed: false };
+      const sid = s.sid;
+      // Even an ordinary-close session still waiting for router disconnect cannot
+      // leave its logical cache available through a dedicated security fence.
+      s.frames = []; s.head = 0; s.unackedBytes = 0;
+      const gone = endSession(s, code, reason, { closeTransport: false, discard: true });
+      return { sid, gone: gone ?? Promise.resolve(), existed: true };
     },
 
     // ---------- 长轮询用（HT-b 接线） ----------

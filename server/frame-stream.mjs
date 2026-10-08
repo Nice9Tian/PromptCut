@@ -41,8 +41,9 @@ import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
-import { mergeRanges } from './snapshot-store.mjs';
-import { atomic } from './frame-mov.mjs';
+
+import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
+export { StreamStore, readySegmentRanges, publicManifest, handleStreamRequest } from './asset-store/stream-store.mjs';
 
 export const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;
 /** G0-b 结论 1:先按 stride 3 把整段快速铺满 */
@@ -520,45 +521,6 @@ export function segmentSignature({ streamKey, segment, stride, encoder, rect }) 
   return sha(JSON.stringify({ streamKey, segment, stride, encoder, params: encoderParamsHash(encoder), rect }), 32);
 }
 
-/** 清单里就绪的分段号(区间,C3 的 `stream` 表单位是分段号) */
-export function readySegmentRanges(manifest) {
-  return mergeRanges(Object.keys(manifest?.segments ?? {}).map(Number).filter(Number.isInteger));
-}
-
-export class StreamStore {
-  constructor(root) { this.root = root; this.manifests = new Map(); }
-  dir(key) { return path.join(this.root, key); }
-  async load(key) {
-    if (this.manifests.has(key)) return this.manifests.get(key);
-    let manifest = null;
-    try { manifest = JSON.parse(await fs.readFile(path.join(this.dir(key), 'stream.json'), 'utf8')); } catch {}
-    if (!manifest || manifest.streamKey !== key) manifest = null;
-    this.manifests.set(key, manifest);
-    return manifest;
-  }
-  async save(manifest) {
-    this.manifests.set(manifest.streamKey, manifest);
-    await atomic(path.join(this.dir(manifest.streamKey), 'stream.json'), JSON.stringify(manifest));
-  }
-  /** 扫盘(F5):每条流的「键 → 就绪分段」 */
-  async scan() {
-    const out = [];
-    let items = [];
-    try { items = await fs.readdir(this.root, { withFileTypes: true }); } catch { return out; }
-    for (const item of items) {
-      if (!item.isDirectory() || !KEY_RE.test(item.name)) continue;
-      this.manifests.delete(item.name);
-      const manifest = await this.load(item.name);
-      if (!manifest) continue;
-      const ranges = readySegmentRanges(manifest);
-      if (ranges.length) out.push({ key: item.name, ranges, manifest });
-    }
-    return out;
-  }
-  initFile(key, id) { return path.join(this.dir(key), `init-${id}.mp4`); }
-  segFile(key, file) { return path.join(this.dir(key), file); }
-}
-
 /**
  * C6.2:校验一份任务清单 `StreamResult`(`artifact-transfer-contract.md` 第 3 节),整理成 `adoptSegments`
  * 要的形状 `{ key, range, header, inits, segments: [[n, seg]…] }`。不认识的字段忽略;格式不对就抛。
@@ -591,52 +553,6 @@ export function streamAdoption(result) {
   return { key, range: { from, to }, header, inits, segments };
 }
 
-/** 页面要的清单形状(不带签名等内部字段) */
-export function publicManifest(manifest) {
-  if (!manifest) return null;
-  const segments = {};
-  for (const [n, s] of Object.entries(manifest.segments ?? {})) segments[n] = { init: s.init, file: s.file, stride: s.stride, samples: s.samples };
-  const inits = {};
-  for (const [id, i] of Object.entries(manifest.inits ?? {})) inits[id] = { codec: i.codec, width: i.width, height: i.height, rect: i.rect };
-  return { streamKey: manifest.streamKey, kind: manifest.kind, plane: manifest.plane, clipIds: manifest.clipIds, fps: manifest.fps,
-    segmentFrames: SEGMENT_FRAMES, bound: manifest.bound, tight: manifest.tight ?? null, inits, segments };
-}
-
-/**
- * 分段字节的读口(C3 的快照字节同源,页面直连预渲染进程):
- *
- *   GET /stream/<streamKey>/manifest            清单(`no-store`:分段会被替换)
- *   GET /stream/<streamKey>/init/<initId>       init.mp4(内容寻址,immutable)
- *   GET /stream/<streamKey>/seg/<n>-<hash>.m4s  分段(内容寻址,immutable)
- *
- * `pathname` 是 `/api/frames` 之后那一段。认得就回 true(已经答了),不认得回 false。
- */
-export function handleStreamRequest(store, req, res, pathname) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
-  const m = /^\/stream\/([a-f0-9]{64})\/(manifest|init\/([a-f0-9]{16})|seg\/(\d{1,7}-[a-f0-9]{16}\.m4s))$/.exec(pathname);
-  if (!m) return false;
-  const key = m[1];
-  const fail = (status, error) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.setHeader('Cache-Control', 'no-store'); res.end(JSON.stringify({ error })); };
-  if (m[2] === 'manifest') {
-    store.manifests.delete(key);
-    void store.load(key).then(manifest => {
-      if (!manifest) return fail(404, 'Stream is not ready');
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Cache-Control', 'no-store');
-      res.end(JSON.stringify(publicManifest(manifest)));
-    }, () => fail(404, 'Stream is not ready'));
-    return true;
-  }
-  const file = m[3] ? store.initFile(key, m[3]) : store.segFile(key, m[4]);
-  void fs.readFile(file).then(buf => {
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    res.setHeader('Content-Length', buf.length);
-    res.end(req.method === 'HEAD' ? undefined : buf);
-  }, () => fail(404, 'Stream file is not ready'));
-  return true;
-}
-
 /* ======================================================================== *
  * 生产调度(G4)
  * ======================================================================== */
@@ -653,13 +569,14 @@ export function handleStreamRequest(store, req, res, pathname) {
  *   - **同时存活的分段编码器 ≤ 2 × streamPool**(双缓冲)。
  */
 export class StreamProducer {
-  constructor(pipeline, { env = process.env } = {}) {
+  constructor(pipeline, { env = process.env, ownership = null, projectAccess = null } = {}) {
+    this.ownership = ownership;
     this.pipeline = pipeline;
     this.enabled = streamsEnabled(env);
     this.budget = streamDecoderBudget(env);
     this.poolLimit = streamPoolLimit(env);
     this.pool = this.poolLimit.fixed ?? STREAM_POOL_DEFAULT;
-    this.store = new StreamStore(path.join(pipeline.root, 'streams'));
+    this.store = new StreamStore(path.join(pipeline.root, 'streams'), { ownership, projectAccess });
     this.streams = new Map();
     this.workers = new Set();
     this.encoding = new Set();
@@ -1187,6 +1104,7 @@ export class StreamProducer {
 
   /** 编完一个分段:切分、校验、落盘、改清单、发 `layer`;被替换的旧文件 5 秒后删(G6) */
   async storeSegment(state, generation, { segment, stride, rect, encoder, samples, out }) {
+    await this.ownership?.assert();
     const { spec } = state;
     const { init, segments, dropped } = splitFmp4(out.bytes);
     if (segments.length !== 1) throw new Error(`一次编码应当恰好一个分段,实际 ${segments.length} 个`);
@@ -1201,15 +1119,16 @@ export class StreamProducer {
     const manifest = state.manifest;
     const initId = sha(init, 16);
     const dir = this.store.dir(spec.streamKey);
+    await this.ownership?.assert();
     await fs.mkdir(dir, { recursive: true });
     if (!manifest.inits[initId]) {
       const meta = initInfo(init);
-      await atomic(this.store.initFile(spec.streamKey, initId), init);
+      await this.store.writeFile(this.store.initFile(spec.streamKey, initId), init);
       manifest.inits[initId] = { codec: meta.codec, width: meta.width, height: meta.height, timescale: meta.timescale, rect, encoder, bytes: init.length };
       this.note(`流 ${spec.streamKey.slice(0, 8)} 新变体 init-${initId}(${meta.codec} ${meta.width}×${meta.height})`);
     }
     const file = `${segment}-${sha(segments[0], 16)}.m4s`;
-    await atomic(this.store.segFile(spec.streamKey, file), segments[0]);
+    await this.store.writeFile(this.store.segFile(spec.streamKey, file), segments[0]);
     const old = manifest.segments[segment];
     manifest.segments[segment] = { file, init: initId, stride, samples, bytes: segments[0].length, encodeMs: out.encodeMs, tailMs: out.tailMs,
       sig: segmentSignature({ streamKey: spec.streamKey, segment, stride, encoder, rect }), dropped, at: Date.now() };
@@ -1259,6 +1178,8 @@ export class StreamProducer {
 
   /** `adoptSegments` 的本体(已串行化) */
   async adoptSegmentsNow(result, blobs) {
+    await this.ownership?.assert();
+    if (this.ownership && result?.projectId !== this.ownership.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
     const plan = streamAdoption(result);
     if (this.closed) throw Object.assign(new Error('Stream producer closed'), { cancelled: true });
     const { key } = plan;
@@ -1285,10 +1206,11 @@ export class StreamProducer {
     }));
     // 写文件(内容寻址,重复写同一份无害)
     await fs.mkdir(this.store.dir(key), { recursive: true });
-    for (const [id, bytes] of initBytes) await atomic(this.store.initFile(key, id), bytes);
+    for (const [id, bytes] of initBytes) { await this.ownership?.assert(); await this.store.writeFile(this.store.initFile(key, id), bytes); }
     for (const p of pending) {
+      await this.ownership?.assert();
       p.file = `${p.n}-${p.seg.hash.slice(0, 16)}.m4s`;
-      await atomic(this.store.segFile(key, p.file), p.bytes);
+      await this.store.writeFile(this.store.segFile(key, p.file), p.bytes);
     }
     // 写盘期间 `update()` 可能换了一版:以此刻 `this.streams` 里的为准,**同步**合并
     const live = this.streams.get(key);
@@ -1347,6 +1269,8 @@ export class StreamProducer {
    * 回 `{ segments: [n…], hashes: [hash…] }`。只读,不改状态。
    */
   async adoptionNeeds(result) {
+    await this.ownership?.assert();
+    if (this.ownership && result?.projectId !== this.ownership.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
     const plan = streamAdoption(result);
     const state = this.streams.get(plan.key) ?? { spec: { streamKey: plan.key }, manifest: await this.store.load(plan.key) };
     const segments = [], hashes = new Set();

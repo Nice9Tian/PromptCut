@@ -52,6 +52,7 @@ import { roomUnavailableReason } from '../recovery/relocation.mjs';
 import { hostedModule } from './modules/hosted.mjs';
 import { serviceGate, AGENT_WRITE_TYPES } from './service-gate.mjs';
 import { serviceAdmission } from '../auth/service-identity.mjs';
+import { offeredProtocols } from './auth.mjs';
 
 /**
  * @param {object} options
@@ -104,6 +105,10 @@ export function createSharedDocService({
   isDirectLocal = (req) => isLocalOrigin(req),
   hostedLingerMs,
   hostedServiceUrls = null,
+  accountRuntime = null,
+  accountProjects = null,
+  accountRequired = false,
+  docAssembly = null,
 } = {}) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedDocService: mode 只能是 'hosted' 或 'lan'");
   const say = typeof log === 'function' ? log : undefined;
@@ -119,6 +124,12 @@ export function createSharedDocService({
   function serviceRefusal(principal) {
     if (typeof principal?.service !== 'string' && principal?.scope !== 'service') return null;
     if (!registry) return 'forbidden';
+    if (principal.realm === 'account' && principal.identityVersion === 2) {
+      // v2 project/member/run authority lives in the account ledger. The LAN
+      // username store cannot admit or revoke it; the service registry still can.
+      try { registry.refresh({ force: true }); } catch { return 'service-revoked'; }
+      return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
+    }
     if (!isProjectId(principal.tenantId)) return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
     const record = storeOf()?.peek(principal.tenantId) ?? null;
     const refused = serviceAdmission({ registry, record, service: principal.service, kid: principal.serviceKid, role: principal.role });
@@ -132,6 +143,7 @@ export function createSharedDocService({
   }
   /** 只读成员的云端 Agent 连接改不了项目：按项目记录**此刻**的权限判（连接建立之后才被改成只读的也拦得住） */
   function readonlyRefusal(principal, type) {
+    if (principal?.realm === 'account') return null;
     if (principal?.service !== 'agent' || principal.scope !== 'member' || !AGENT_WRITE_TYPES.includes(type)) return null;
     const record = storeOf()?.peek(principal.tenantId) ?? null;
     return record && memberAccess(record, principal.username, principal.creator === true) === 'rw' ? null : 'forbidden';
@@ -151,6 +163,51 @@ export function createSharedDocService({
     now,
     log: say,
   });
+  if (accountRuntime && !accountProjects) throw new TypeError('accountProjects required for account runtime');
+  function authenticate(req) {
+    if (!accountRuntime) return auth.authenticate(req);
+    if (offeredProtocols(req).some(item => item.startsWith('promptcut.account.'))) return accountRuntime.authenticate(req);
+    const principal = auth.authenticate(req);
+    // In the account realm the old username/device/password handshake can never enter cloud data.
+    return principal?.scope === 'admin' || (principal?.scope === 'service' && !principal.tenantId) ? principal : null;
+  }
+  function handleSharedHttp(req, res) {
+    const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+    if (accountProjects && pathname.startsWith('/hosted/shared/account')) {
+      void (async () => {
+        let readiness;
+        if (pathname === '/hosted/shared/account/join' || pathname === '/hosted/shared/account/session') {
+          try { readiness = await accountRuntime.requireAssetReady(); }
+          catch {
+            if (!res.destroyed && !res.headersSent) {
+              res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+              res.end(JSON.stringify({ ok: false, code: 'session-unavailable' }));
+            }
+            return;
+          }
+        }
+        if (!res.destroyed) await accountProjects.handlePublic(req, res, { readiness });
+      })().catch(error => {
+        say?.('account.http-error', { code: String(error?.code ?? 'internal') });
+        if (!res.destroyed && !res.headersSent) {
+          res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify({ ok: false, code: 'account-unavailable' }));
+        }
+      });
+      return true;
+    }
+    if (mode === 'hosted' && pathname.startsWith('/hosted/shared/account')) {
+      res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, code: 'account-unavailable' }));
+      return true;
+    }
+    if (accountRuntime && pathname.startsWith('/shared/') && pathname !== '/shared/service-challenge') {
+      res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, code: 'account-required' }));
+      return true;
+    }
+    return sharedHttp.handle(req, res, '');
+  }
 
   const sharedHttp = createSharedHttp({
     store: storeOf,
@@ -174,18 +231,23 @@ export function createSharedDocService({
     gate(principal, type, msg) {
       const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
       // 托管方服务身份：白名单（缺省拒绝），再核对登记表与项目的开关
-      return reason ?? serviceGate(principal, type, msg) ?? serviceRefusal(principal) ?? readonlyRefusal(principal, type) ?? serviceOptions.gate?.(principal, type, msg) ?? null;
+      return reason ?? serviceGate(principal, type, msg) ?? serviceRefusal(principal) ??
+        (principal?.realm === 'account' ? accountRuntime.gate(principal, type, msg) : readonlyRefusal(principal, type) ?? serviceOptions.gate?.(principal, type, msg) ?? null);
     },
     resumeGate(principal) {
       const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
-      return reason ?? serviceRefusal(principal) ?? serviceOptions.resumeGate?.(principal) ?? null;
+      return reason ?? serviceRefusal(principal) ?? (principal?.realm === 'account' ? accountRuntime.resumeGate(principal) : serviceOptions.resumeGate?.(principal) ?? null);
     },
-    ...(mode === 'lan' ? { server, path: wsPath } : { http: (req, res) => sharedHttp.handle(req, res, '') || serviceOptions?.http?.(req, res) === true }),
-    authenticate: auth.authenticate,
+    ...(mode === 'lan' ? { server, path: wsPath } : { http: (req, res) => handleSharedHttp(req, res) || serviceOptions?.http?.(req, res) === true }),
+    authenticate,
+    enableHttpTransport: mode === 'hosted' && !!accountRuntime,
+    healthExtra: mode === 'hosted' && (accountRuntime || accountRequired) ? () => ({ accountMode: accountRuntime ? 'v2' : 'legacy',
+      accountRequired: accountRequired === true, assetReady: accountRuntime?.sessionReady === true }) : undefined,
     remoteOf,
     now,
     ...(say ? { log: say } : {}),
   });
+  accountRuntime?.bindService(service);
 
   const localStore = dataDir ? createFileStore({ dir: dataDir, ...(say ? { log: say } : {}) }) : createMemoryStore();
   const tenantDir = (space) => (dataDir && isProjectId(space) ? path.join(dataDir, 'tenants', space) : null);
@@ -209,23 +271,28 @@ export function createSharedDocService({
   function bundleForSpace(space) {
     let b = bundles.get(space);
     if (!b) {
-      const project = projectModule({ store: storeForSpace(space) });
+      const projectStore = storeForSpace(space);
+      const operationCoordinator = docAssembly?.coordinatorForSpace({ space, store: projectStore, directory: tenantDir(space) });
+      const project = projectModule({ store: projectStore, operationCoordinator });
       const content = contentModule({ store: storeForSpace(space) });
       // 成本记录（C10 其余第 3 节）：和内容库共用这个空间的存储，按项目空间隔离
       b = {
         project, content, events: eventsModule({ project, content }), costs: costsModule({ space, store: storeForSpace(space) }),
         // 在场状态(A3 第二阶段):成员页面的「正在编辑」、Agent 的范围与消息,只在内存里转发,借项目频道广播
         presence: presenceModule({ project }),
+        ...(docAssembly ? { selection: docAssembly.selectionForSpace({ space, project }) } : {}),
       };
       bundles.set(space, b);
     }
     return b;
   }
+  docAssembly?.bindTenantResolver(space => bundleForSpace(space));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).project }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).content }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).costs }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).presence }));
+  if (docAssembly) service.mount(spacedModule({ create: (space) => bundleForSpace(space).selection }));
   service.mount(sharedModule({
     store: storeOf,
     challenges: adminChallenges,
@@ -266,7 +333,8 @@ export function createSharedDocService({
     get store() { return store; },
     /** 托管方服务的登记表（没有是 null） */
     get serviceRegistry() { return registry; },
-    authenticate: auth.authenticate,
+    authenticate,
+    accountProjects,
     /**
      * 挂载模式：宿主把 HTTP 请求交进来，是 `<path>/shared/…` 的就处理并回 true，别的回 false、什么都不动。
      * 独立模式的端点已经挂在自建服务器上，这个函数也能用（前缀是空串）。

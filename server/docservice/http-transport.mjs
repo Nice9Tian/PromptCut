@@ -125,6 +125,13 @@ function readBody(req, limit) {
 export function createHttpTransport({
   sessions,
   authenticate,
+  admissionRefusal = () => false,
+  completeAdmission = () => {},
+  principalOf = () => null,
+  dispatchInvocation = (_input, next) => next(),
+  needsInvocation = () => false,
+  internalTransport = () => false,
+  transportConnected,
   canOpen = () => null,
   remoteOf = (req) => req?.socket?.remoteAddress ?? null,
   normalizePrincipal = (p) => p,
@@ -150,8 +157,34 @@ export function createHttpTransport({
 
   /** sid → 本传输的传输对象（最近一次经 HTTP 接上的；会话结束后留到剩余帧被取走） */
   const bySid = new Map();
+  // Active request/response pairs, including superseded transports. finish does
+  // not remove an owner: both actual close events must have happened.
+  const ownedRequests = new Set();
+  // A response close can follow finish while its keep-alive TCP socket remains
+  // open. Keep each associated socket until the actual socket close event.
+  const ownedSockets = new Set();
+  const fencedConns = new Set();
   const counters = { superseded: 0 };
   let shuttingDown = false;
+
+  function track(t, req, res) {
+    const record = { t, req, res, socket: req.socket };
+    const closed = target => target?.closed === true;
+    const actualClose = target => closed(target) ? Promise.resolve() : new Promise(resolve => target.once('close', resolve));
+    record.done = Promise.all([actualClose(req), actualClose(res)]);
+    ownedRequests.add(record);
+    record.done.then(() => ownedRequests.delete(record));
+    if (req.socket && ![...ownedSockets].some(owner => owner.t === t && owner.socket === req.socket)) {
+      const owner = { t, socket: req.socket, done: actualClose(req.socket) };
+      ownedSockets.add(owner);
+      owner.done.then(() => ownedSockets.delete(owner));
+    }
+    if (fencedConns.has(t.connId)) {
+      t.fenced = true; t.closed = { code: 4003, reason: 'access-revoked' }; t.rest = []; t.dead = true;
+      if (bySid.get(t.sid) === t) bySid.delete(t.sid);
+      res.destroy(); req.destroy(); req.socket?.destroy();
+    }
+  }
 
   // ---------- 回包 ----------
 
@@ -225,7 +258,13 @@ export function createHttpTransport({
   }
 
   /** 立即回一次 recv：会话还开着就向会话层取帧；已结束就回剩下的帧，都回完了带 `closed` 并忘掉这条传输 */
-  function respondRecv(t, res, cors) {
+  function respondRecv(t, res, cors, lease) {
+    if (lease) return Promise.resolve().then(() => lease.check()).then(() => {
+      if (t.fenced || t.dead || t.superseded || !t.closed && !sessions.isCurrent(t.connId, t))
+        throw Object.assign(Error('superseded'), { status: 409, code: 'superseded' });
+      return respondRecv(t, res, cors);
+    }).catch(error => sendJson(res, error?.status ?? 503,
+      { ok: false, error: error?.code ?? 'instance-invocation-forbidden' }, cors));
     t.lastSeen = now();
     if (t.closed) {
       const frames = [];
@@ -250,7 +289,7 @@ export function createHttpTransport({
     if (!t.waiter) return;
     if (immediate) {
       const w = clearWaiter(t);
-      respondRecv(t, w.res, w.cors);
+      respondRecv(t, w.res, w.cors, w.lease);
       return;
     }
     if (t.wakeQueued) return;
@@ -258,7 +297,7 @@ export function createHttpTransport({
     setImmediate(() => {
       t.wakeQueued = false;
       const w = clearWaiter(t);
-      if (w) respondRecv(t, w.res, w.cors);
+      if (w) respondRecv(t, w.res, w.cors, w.lease);
     });
   }
 
@@ -305,7 +344,25 @@ export function createHttpTransport({
     maxFrameBytes: maxFrame,
     protocol,
     transport: 'http',
+    ...(welcome.connId ? { connId: welcome.connId } : {}),
   });
+
+  function invoke(t, req, res, cors, kind, bodyText, next, extra = {}) {
+    if (!needsInvocation(t.principal, req)) return next();
+    return Promise.resolve().then(() => dispatchInvocation({ connId: t.connId, principal: t.principal,
+      kind, bodyText, ...extra, transport: { kind: 'http', req, res, socket: req.socket,
+        internal: internalTransport(req) } }, next)).catch(error => {
+      sendJson(res, error?.status ?? 503, { ok: false, error: error?.code ?? 'instance-invocation-forbidden' }, cors);
+      throw error;
+    });
+  }
+
+  // Only Agent instance dispatch is asynchronous. Recheck the exact transport
+  // after that await before mutating a session which may have been resumed.
+  function requireCurrentInvocation(t) {
+    if (needsInvocation(t.principal) && (t.fenced || t.dead || t.superseded || !sessions.isCurrent(t.connId, t)))
+      throw Object.assign(Error('superseded'), { status: 409, code: 'superseded' });
+  }
 
   async function onOpen(req, res, cors) {
     if (canOpen() === 'closing') return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
@@ -323,15 +380,24 @@ export function createHttpTransport({
       // 接续项在鉴权之前按 sid 查（第 14 节「open 的判定顺序」另加的一条）
       if (canOpen() === 'closing') return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
       const t = newTransport(item.sid);
-      const r = sessions.resume({ sid: item.sid, ack: item.ack, transport: t, fallback });
+      t.isUsable = () => !shuttingDown && !res.destroyed && !res.writableEnded && !req.aborted;
+      t.connId = sessions.connIdOf(item.sid);
+      t.principal = principalOf(t.connId);
+      if (t.connId) track(t, req, res);
+      const r = await invoke(t, req, res, cors, 'resume', body.text,
+        () => sessions.resume({ sid: item.sid, ack: item.ack, transport: t, fallback }),
+        { sessionItem: { sid: item.sid, ack: item.ack } });
       if (!r.ok) {
         if (r.status === 404) return sendJson(res, 404, { ok: false, error: 'no-session' }, cors);
+        if (r.status === 503) return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
         return sendJson(res, 410, { ok: false, error: 'session-closed', code: r.closedCode ?? r.code, reason: r.closedReason ?? r.reason }, cors);
       }
       t.connId = r.connId;
+      t.principal = principalOf(r.connId);
       const old = bySid.get(item.sid);
       if (old && old !== t) old.dead = true;
       bySid.set(item.sid, t);
+      if (!ownedRequests.size || ![...ownedRequests].some(record => record.req === req && record.res === res)) track(t, req, res);
       return sendJson(res, 200, openReply(r.welcome), cors);
     }
 
@@ -339,14 +405,21 @@ export function createHttpTransport({
     if (canOpen() !== null) return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
     // 同一个请求对象，只把子协议列表放进 WebSocket 握手的那个头；socket、url、其余头都不变
     const headers = { ...req.headers, 'sec-websocket-protocol': offered.join(', ') };
-    const authReq = Object.create(req, { headers: { value: headers, enumerable: true, writable: true, configurable: true } });
+    const authReq = Object.create(req, { headers: { value: headers, enumerable: true, writable: true, configurable: true },
+      transportBodyText: { value: body.text }, transportProtocolHeaders: { value: req.headers } });
     let principal;
     try {
-      principal = authenticate(authReq);
-    } catch {
-      principal = null;
+    try { principal = await authenticate(authReq); }
+    catch (error) {
+      return sendJson(res, error?.status === 503 ? 503 : 401,
+        { ok: false, error: error?.status === 503 ? 'unavailable' : 'unauthorized' }, cors);
     }
     if (!principal || typeof principal.userId !== 'string') return sendJson(res, 401, { ok: false, error: 'unauthorized' }, cors);
+    if (admissionRefusal(principal)) return sendJson(res, 401, { ok: false, error: 'unauthorized' }, cors);
+    // No await between this check and openSession: a peer finishing auth meanwhile
+    // cannot consume the last slot behind our back.
+    if (canOpen() !== null || res.destroyed || res.writableEnded || req.aborted)
+      return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
     let remote = null;
     try {
       remote = remoteOf(authReq) ?? req.socket?.remoteAddress ?? null;
@@ -354,6 +427,7 @@ export function createHttpTransport({
       remote = req.socket?.remoteAddress ?? null;
     }
     const t = newTransport(null);
+    t.principal = normalizePrincipal(principal);
     let opened;
     try {
       opened = sessions.openSession({ principal: normalizePrincipal(principal), remote, transport: t, fallback });
@@ -363,61 +437,87 @@ export function createHttpTransport({
     }
     t.sid = opened.sid;
     t.connId = opened.connId;
+    transportConnected?.({ connId: t.connId, principal: t.principal, req });
     bySid.set(opened.sid, t);
+    track(t, req, res);
     return sendJson(res, 200, openReply(opened.welcome), cors);
+    } finally { completeAdmission(authReq); }
   }
 
   async function onSend(req, res, cors) {
     const t = transportOf(req, res, cors);
     if (!t) return undefined;
-    t.lastSeen = now();
-    if (t.closed) {
-      req.resume();
-      return closedReply(t, res, cors);
-    }
-    if (t.sending) {
-      req.resume();
-      return sendJson(res, 409, { ok: false, error: 'busy' }, cors);
-    }
-    t.sending = true;
+    const scoped = needsInvocation(t.principal, req);
+    if (!scoped) { track(t, req, res); t.lastSeen = now(); }
+    if (!scoped && t.closed) { req.resume(); return closedReply(t, res, cors); }
+    if (!scoped && t.sending) { req.resume(); return sendJson(res, 409, { ok: false, error: 'busy' }, cors); }
+    if (!scoped) t.sending = true;
     try {
       const body = await readBody(req, maxSendBody);
       if (body.aborted) return undefined;
-      t.lastSeen = now();
+      if (!scoped) t.lastSeen = now();
       if (body.tooLarge) {
         sendJson(res, 413, { ok: false, error: 'too-large' }, cors);
-        sessions.close(t.connId, 1009, 'too-large');
+        // A SID locates a session; unverified input cannot close an Agent session.
+        if (!scoped) sessions.close(t.connId, 1009, 'too-large');
         return undefined;
       }
-      if (t.closed) return closedReply(t, res, cors);
+      if (!scoped && t.closed) return closedReply(t, res, cors);
       let msg;
-      try {
-        msg = JSON.parse(body.text);
-      } catch {
-        msg = null;
-      }
-      if (!isObj(msg) || !Array.isArray(msg.frames) || msg.frames.some((f) => typeof f !== 'string')) {
+      try { msg = JSON.parse(body.text); } catch { msg = null; }
+      if (!isObj(msg) || !Array.isArray(msg.frames) || msg.frames.some(f => typeof f !== 'string'))
         return sendJson(res, 400, { ok: false, error: 'bad-request' }, cors);
-      }
-      if (msg.frames.some((f) => byteLen(f) > maxFrame)) {
+      if (msg.frames.some(f => byteLen(f) > maxFrame)) {
         sendJson(res, 413, { ok: false, error: 'too-large' }, cors);
-        sessions.close(t.connId, 1009, 'too-large');
+        if (!scoped) sessions.close(t.connId, 1009, 'too-large');
         return undefined;
       }
+      if (scoped && msg.frames.length === 0) return sendJson(res, 400, { ok: false, error: 'empty-frames' }, cors);
+      if (scoped) return await invoke(t, req, res, cors, 'message', body.text, async firstFrame => {
+        requireCurrentInvocation(t);
+        if (t.sending) return sendJson(res, 409, { ok: false, error: 'busy' }, cors);
+        // Complete input and its first proof are verified before claiming a
+        // session slot, idle clock or resource lease. Partial input owns itself.
+        track(t, req, res); t.lastSeen = now(); t.sending = true;
+        try {
+          await sessions.receive(t.connId, firstFrame);
+          for (let frameIndex = 1; frameIndex < msg.frames.length; frameIndex++) {
+            requireCurrentInvocation(t);
+            await invoke(t, req, res, cors, 'message', body.text, frame => {
+              requireCurrentInvocation(t); return sessions.receive(t.connId, frame);
+            }, { text: msg.frames[frameIndex], frameIndex, frameCount: msg.frames.length });
+          }
+          requireCurrentInvocation(t);
+          return sendJson(res, 200, { ok: true, ack: sessions.takeAck(t.connId) }, cors);
+        } finally { t.sending = false; }
+      }, { text: msg.frames[0], frameIndex: 0, frameCount: msg.frames.length });
       for (const text of msg.frames) {
         if (t.closed || !sessions.isCurrent(t.connId, t)) break;
         sessions.receive(t.connId, text);
       }
       if (t.closed) return closedReply(t, res, cors);
       return sendJson(res, 200, { ok: true, ack: sessions.takeAck(t.connId) }, cors);
-    } finally {
-      t.sending = false;
-    }
+    } finally { if (!scoped) t.sending = false; }
   }
-
   function onRecv(req, res, cors, url) {
     const t = transportOf(req, res, cors);
     if (!t) return;
+    if (needsInvocation(t.principal, req)) return invoke(t, req, res, cors, 'recv', '', (_frame, check) => {
+      if (typeof check !== 'function') throw Object.assign(Error('instance-read-lease-required'),
+        { status: 503, code: 'instance-read-lease-required' });
+      requireCurrentInvocation(t); track(t, req, res);
+      return receiveAllowed(t, req, res, cors, url, { check });
+    });
+    track(t, req, res);
+    return receiveAllowed(t, req, res, cors, url);
+  }
+
+  function receiveAllowed(t, req, res, cors, url, lease) {
+    // This runs after signature/current-run checks, before ACK or waiter changes.
+    requireCurrentInvocation(t);
+    // A signed read invocation stays live until this response actually finishes
+    // or closes. Its fresh check is used again immediately before pulling bytes.
+    const replied = lease ? new Promise(resolve => { res.once('finish', resolve); res.once('close', resolve); }) : undefined;
     t.lastSeen = now();
     const rawWait = Number(url.searchParams.get('wait') ?? waitCap);
     const wait = Number.isFinite(rawWait) && rawWait >= 0 ? Math.min(rawWait, waitCap) : waitCap;
@@ -436,20 +536,20 @@ export function createHttpTransport({
         // 越界的 ack：会话已坏（第 3.5 节），会话层以 1002 结束它
         sessions.ack(t.connId, ack);
         sendJson(res, 400, { ok: false, error: 'bad-ack', last }, cors);
-        return;
+        return replied;
       }
       sessions.ack(t.connId, ack);
     }
 
     if (t.closed || wait === 0 || sessions.hasPending(t.connId)) {
-      respondRecv(t, res, cors);
-      return;
+      respondRecv(t, res, cors, lease);
+      return replied;
     }
-    const w = { res, cors, timer: null };
+    const w = { res, cors, timer: null, lease };
     w.timer = setTimeout(() => {
       if (t.waiter !== w) return;
       t.waiter = null;
-      respondRecv(t, res, cors);
+      respondRecv(t, res, cors, lease);
     }, wait);
     w.timer.unref?.();
     t.waiter = w;
@@ -458,21 +558,31 @@ export function createHttpTransport({
       clearWaiter(t);
       t.lastSeen = now();
     });
+    return replied;
   }
 
   async function onClose(req, res, cors) {
     const t = transportOf(req, res, cors);
     if (!t) return undefined;
+    const scoped = needsInvocation(t.principal, req);
     const body = await readBody(req, HTTP_TRANSPORT_DEFAULTS.SMALL_BODY_BYTES);
+    if (body.aborted) return undefined;
+    if (body.tooLarge) return sendJson(res, 413, { ok: false, error: 'too-large' }, cors);
+    if (scoped && body.text.length === 0) return sendJson(res, 400, { ok: false, error: 'bad-request' }, cors);
     let msg = null;
     if (body.text) {
       try { msg = JSON.parse(body.text); } catch { msg = null; }
     }
-    if (!t.closed) sessions.end(t.connId, isObj(msg) ? msg.code : undefined, isObj(msg) ? msg.reason : '');
-    // 客户端自己关的：剩下的帧它不要了
-    if (bySid.get(t.sid) === t) bySid.delete(t.sid);
-    sendJson(res, 200, { ok: true }, cors);
-    return undefined;
+    if (!scoped) track(t, req, res);
+    return invoke(t, req, res, cors, 'close', body.text, () => {
+      requireCurrentInvocation(t);
+      if (needsInvocation(t.principal, req)) track(t, req, res);
+      if (!t.closed) sessions.end(t.connId, isObj(msg) ? msg.code : undefined, isObj(msg) ? msg.reason : '');
+      // 客户端自己关的：剩下的帧它不要了
+      if (bySid.get(t.sid) === t) bySid.delete(t.sid);
+      sendJson(res, 200, { ok: true }, cors);
+      return undefined;
+    });
   }
 
   /**
@@ -532,6 +642,30 @@ export function createHttpTransport({
 
   return {
     handle,
+    connectionIdsMatching(predicate) {
+      return [...new Set([...bySid.values(), ...[...ownedRequests].map(record => record.t), ...[...ownedSockets].map(owner => owner.t)]
+        .filter(t => predicate(t.principal)).map(t => t.connId))];
+    },
+
+    /** Dedicated revocation never serves ordinary close's remaining frames. */
+    async fenceConn(connId, code = 4003, reason = 'access-revoked') {
+      fencedConns.add(connId);
+      const records = [...ownedRequests].filter(record => record.t.connId === connId);
+      const socketOwners = [...ownedSockets].filter(owner => owner.t.connId === connId);
+      const transports = new Set([...bySid.values(), ...records.map(record => record.t), ...socketOwners.map(owner => owner.t)]);
+      for (const t of transports) {
+        if (t.connId !== connId) continue;
+        t.closed = { code, reason }; t.fenced = true; t.rest = []; t.dead = true;
+        clearWaiter(t);
+        if (bySid.get(t.sid) === t) bySid.delete(t.sid);
+      }
+      const sockets = new Set([...records.map(record => record.socket), ...socketOwners.map(owner => owner.socket)].filter(Boolean));
+      const actualSockets = [...sockets].map(socket => socket.closed ? Promise.resolve() : new Promise(resolve => socket.once('close', resolve)));
+      for (const record of records) { record.res.destroy(); record.req.destroy(); }
+      for (const socket of sockets) socket.destroy();
+      await Promise.all([...records.map(record => record.done), ...actualSockets]);
+      return { actualClosed: true, closedHttp: records.length };
+    },
 
     /**
      * 组装层的心跳每轮调：`waitMs + 15 s` 内既没有挂着的 GET、也没来过请求的传输判断开，会话脱开（会话层进保留期）；

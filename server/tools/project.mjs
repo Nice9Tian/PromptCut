@@ -13,7 +13,7 @@ export const projectTools = [
   },
   {
     name: "get_selection",
-    description: "获取当前选中的 clip id 及其详情和所在轨道。",
+    description: "获取选区中的全部 clip 及其当前项目详情。账号云端模式返回项目内所有在线有效成员的每个页面选区，标明用户名和发起人；发起人离线时仅显示发消息时的非实时快照。本机/LAN 模式返回本页面的全部选区。",
     inputSchema: { type: "object", properties: {} },
     side: "page"
   },
