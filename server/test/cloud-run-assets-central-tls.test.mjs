@@ -70,7 +70,7 @@ test('doc reuses its registered RAM instance for direct Agent and pinned observe
         if (!await assembly.handleInternal(req, res)) reply(res, 404, { ok: false, code: 'no-route' });
       } catch (error) { reply(res, error.status ?? 503, { ok: false, code: error.code ?? 'internal-failed' }); }
     });
-    track(doc); doc.listen(0, '127.0.0.1'); await once(doc, 'listening');
+    track(doc); doc.listen(6445, '127.0.0.1'); await once(doc, 'listening');
     const docPort = doc.address().port;
     const process = await registerHttpInstance({ port: docPort, tls: pki.account, requestId: 'agent-os-one' });
     const signValue = (key, value) => sign(null, Buffer.from(canonicalJson(value)), key).toString('base64url');
@@ -99,7 +99,7 @@ test('doc reuses its registered RAM instance for direct Agent and pinned observe
         reply(res, forwarded.status, forwarded.body);
       } catch (error) { reply(res, error.status ?? 503, { ok: false, code: error.code ?? 'asset-test-failed' }); }
     });
-    track(asset); asset.listen(0, '127.0.0.1'); await once(asset, 'listening');
+    track(asset); asset.listen(6446, '127.0.0.1'); await once(asset, 'listening');
     const assetPort = asset.address().port;
     t.diagnostic(`owned-doc-port=${docPort}; owned-asset-port=${assetPort}; pid=${globalThis.process.pid}`);
     async function observed({ tls = pki.account, key = process.privateKey, altered = request } = {}) {

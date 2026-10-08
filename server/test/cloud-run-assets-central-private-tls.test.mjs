@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
-import net from 'node:net';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -15,8 +14,6 @@ import { createRunAssetPrivateClient } from '../hosted/run-assets-metadata-clien
 
 const send = (res, status, value) => { res.writeHead(status, { 'content-type': 'application/json', connection: 'close' }); res.end(JSON.stringify(value)); };
 const close = server => new Promise(resolve => { if (!server?.listening) return resolve(); server.closeAllConnections?.(); server.close(resolve); });
-async function unusedPort() { const server = net.createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  const value = server.address().port; await close(server); return value; }
 
 test('actual asset runtime serves pinned doc-only physical metadata; no run data or synthetic closure', { timeout: 45000 }, async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-gcentral-private-tls-'));
@@ -38,9 +35,9 @@ test('actual asset runtime serves pinned doc-only physical metadata; no run data
       return send(res, 200, { ok: true, headSeq: 0, events: [] });
     send(res, 503, { ok: false, code: 'unexpected-doc-route' });
   });
-  track(docServer); docServer.listen(0, '127.0.0.1'); await once(docServer, 'listening'); docPort = docServer.address().port;
-  internalPort = await unusedPort();
-  service = await startHostedAssetService({ dataDir: assetDir, host: '127.0.0.1', port: 0, internalPort,
+  docPort = 6440; internalPort = 6442;
+  track(docServer); docServer.listen(docPort, '127.0.0.1'); await once(docServer, 'listening');
+  service = await startHostedAssetService({ dataDir: assetDir, host: '127.0.0.1', port: 6441, internalPort,
     serviceIdentity: 'asset-service-test', pollMs: 60000,
     doc: { authorityId: 'gcentral-doc', origin: `https://127.0.0.1:${docPort}`,
       tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 },
