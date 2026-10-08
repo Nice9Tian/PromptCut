@@ -125,6 +125,9 @@ function readBody(req, limit) {
 export function createHttpTransport({
   sessions,
   authenticate,
+  admissionRefusal = () => false,
+  completeAdmission = () => {},
+  principalOf = () => null,
   canOpen = () => null,
   remoteOf = (req) => req?.socket?.remoteAddress ?? null,
   normalizePrincipal = (p) => p,
@@ -150,8 +153,34 @@ export function createHttpTransport({
 
   /** sid → 本传输的传输对象（最近一次经 HTTP 接上的；会话结束后留到剩余帧被取走） */
   const bySid = new Map();
+  // Active request/response pairs, including superseded transports. finish does
+  // not remove an owner: both actual close events must have happened.
+  const ownedRequests = new Set();
+  // A response close can follow finish while its keep-alive TCP socket remains
+  // open. Keep each associated socket until the actual socket close event.
+  const ownedSockets = new Set();
+  const fencedConns = new Set();
   const counters = { superseded: 0 };
   let shuttingDown = false;
+
+  function track(t, req, res) {
+    const record = { t, req, res, socket: req.socket };
+    const closed = target => target?.closed === true;
+    const actualClose = target => closed(target) ? Promise.resolve() : new Promise(resolve => target.once('close', resolve));
+    record.done = Promise.all([actualClose(req), actualClose(res)]);
+    ownedRequests.add(record);
+    record.done.then(() => ownedRequests.delete(record));
+    if (req.socket && ![...ownedSockets].some(owner => owner.t === t && owner.socket === req.socket)) {
+      const owner = { t, socket: req.socket, done: actualClose(req.socket) };
+      ownedSockets.add(owner);
+      owner.done.then(() => ownedSockets.delete(owner));
+    }
+    if (fencedConns.has(t.connId)) {
+      t.fenced = true; t.closed = { code: 4003, reason: 'access-revoked' }; t.rest = []; t.dead = true;
+      if (bySid.get(t.sid) === t) bySid.delete(t.sid);
+      res.destroy(); req.destroy(); req.socket?.destroy();
+    }
+  }
 
   // ---------- 回包 ----------
 
@@ -331,9 +360,11 @@ export function createHttpTransport({
         return sendJson(res, 410, { ok: false, error: 'session-closed', code: r.closedCode ?? r.code, reason: r.closedReason ?? r.reason }, cors);
       }
       t.connId = r.connId;
+      t.principal = principalOf(r.connId);
       const old = bySid.get(item.sid);
       if (old && old !== t) old.dead = true;
       bySid.set(item.sid, t);
+      track(t, req, res);
       return sendJson(res, 200, openReply(r.welcome), cors);
     }
 
@@ -343,12 +374,14 @@ export function createHttpTransport({
     const headers = { ...req.headers, 'sec-websocket-protocol': offered.join(', ') };
     const authReq = Object.create(req, { headers: { value: headers, enumerable: true, writable: true, configurable: true } });
     let principal;
+    try {
     try { principal = await authenticate(authReq); }
     catch (error) {
       return sendJson(res, error?.status === 503 ? 503 : 401,
         { ok: false, error: error?.status === 503 ? 'unavailable' : 'unauthorized' }, cors);
     }
     if (!principal || typeof principal.userId !== 'string') return sendJson(res, 401, { ok: false, error: 'unauthorized' }, cors);
+    if (admissionRefusal(principal)) return sendJson(res, 401, { ok: false, error: 'unauthorized' }, cors);
     // No await between this check and openSession: a peer finishing auth meanwhile
     // cannot consume the last slot behind our back.
     if (canOpen() !== null || res.destroyed || res.writableEnded || req.aborted)
@@ -360,6 +393,7 @@ export function createHttpTransport({
       remote = req.socket?.remoteAddress ?? null;
     }
     const t = newTransport(null);
+    t.principal = normalizePrincipal(principal);
     let opened;
     try {
       opened = sessions.openSession({ principal: normalizePrincipal(principal), remote, transport: t, fallback });
@@ -370,12 +404,15 @@ export function createHttpTransport({
     t.sid = opened.sid;
     t.connId = opened.connId;
     bySid.set(opened.sid, t);
+    track(t, req, res);
     return sendJson(res, 200, openReply(opened.welcome), cors);
+    } finally { completeAdmission(authReq); }
   }
 
   async function onSend(req, res, cors) {
     const t = transportOf(req, res, cors);
     if (!t) return undefined;
+    track(t, req, res);
     t.lastSeen = now();
     if (t.closed) {
       req.resume();
@@ -424,6 +461,7 @@ export function createHttpTransport({
   function onRecv(req, res, cors, url) {
     const t = transportOf(req, res, cors);
     if (!t) return;
+    track(t, req, res);
     t.lastSeen = now();
     const rawWait = Number(url.searchParams.get('wait') ?? waitCap);
     const wait = Number.isFinite(rawWait) && rawWait >= 0 ? Math.min(rawWait, waitCap) : waitCap;
@@ -469,6 +507,7 @@ export function createHttpTransport({
   async function onClose(req, res, cors) {
     const t = transportOf(req, res, cors);
     if (!t) return undefined;
+    track(t, req, res);
     const body = await readBody(req, HTTP_TRANSPORT_DEFAULTS.SMALL_BODY_BYTES);
     let msg = null;
     if (body.text) {
@@ -538,6 +577,30 @@ export function createHttpTransport({
 
   return {
     handle,
+    connectionIdsMatching(predicate) {
+      return [...new Set([...bySid.values(), ...[...ownedRequests].map(record => record.t), ...[...ownedSockets].map(owner => owner.t)]
+        .filter(t => predicate(t.principal)).map(t => t.connId))];
+    },
+
+    /** Dedicated revocation never serves ordinary close's remaining frames. */
+    async fenceConn(connId, code = 4003, reason = 'access-revoked') {
+      fencedConns.add(connId);
+      const records = [...ownedRequests].filter(record => record.t.connId === connId);
+      const socketOwners = [...ownedSockets].filter(owner => owner.t.connId === connId);
+      const transports = new Set([...bySid.values(), ...records.map(record => record.t), ...socketOwners.map(owner => owner.t)]);
+      for (const t of transports) {
+        if (t.connId !== connId) continue;
+        t.closed = { code, reason }; t.fenced = true; t.rest = []; t.dead = true;
+        clearWaiter(t);
+        if (bySid.get(t.sid) === t) bySid.delete(t.sid);
+      }
+      const sockets = new Set([...records.map(record => record.socket), ...socketOwners.map(owner => owner.socket)].filter(Boolean));
+      const actualSockets = [...sockets].map(socket => socket.closed ? Promise.resolve() : new Promise(resolve => socket.once('close', resolve)));
+      for (const record of records) { record.res.destroy(); record.req.destroy(); }
+      for (const socket of sockets) socket.destroy();
+      await Promise.all([...records.map(record => record.done), ...actualSockets]);
+      return { actualClosed: true, closedHttp: records.length };
+    },
 
     /**
      * 组装层的心跳每轮调：`waitMs + 15 s` 内既没有挂着的 GET、也没来过请求的传输判断开，会话脱开（会话层进保留期）；

@@ -103,7 +103,7 @@ function jsonLog(event, fields) {
  */
 export function createDocService(options = {}) {
   const {
-    authenticate = () => ANONYMOUS,
+    authenticate: authenticateOwner = () => ANONYMOUS,
     remoteOf = (req) => req?.socket?.remoteAddress ?? null,
     adminTypes = ['service.'],
     http: httpHandler = null,
@@ -131,6 +131,26 @@ export function createDocService(options = {}) {
   const mounted = new Map();
   let seq = 0;
   let closing = false;
+  const admissions = new Set(), admissionRows = new WeakMap(), admissionFences = [], connectionFences = new Map();
+  const matching = (principal, criteria) => principal?.realm === 'account' &&
+    (!criteria.projectId || (principal.projectId ?? principal.tenantId) === criteria.projectId) &&
+    ['accountIds', 'loginIds', 'runGrantIds', 'roles'].every((field, i) => !criteria[field] ||
+      criteria[field].includes(principal[['accountId', 'loginId', 'runGrantId', 'role'][i]]));
+  const admissionRefusal = principal => admissionFences.some(criteria => matching(principal, criteria));
+  async function authenticate(req) {
+    let resolveDone, onClosed;
+    const row = { principal: null, socket: req.socket, done: new Promise(resolve => { resolveDone = resolve; }),
+      actualClosed: req.socket.closed ? Promise.resolve() : new Promise(resolve => { onClosed = resolve; req.socket.once('close', onClosed); }),
+      complete() { resolveDone(); admissions.delete(row); admissionRows.delete(req);
+        if (!admissionRefusal(row.principal) && onClosed) req.socket.off('close', onClosed); } };
+    admissions.add(row); admissionRows.set(req, row);
+    try {
+      row.principal = await authenticateOwner(req);
+      if (admissionRefusal(row.principal)) { req.socket.destroy(); return null; }
+      return row.principal;
+    } catch (error) { throw error; }
+  }
+  const completeAdmission = req => admissionRows.get(req)?.complete();
 
   /** 会话层；`router` 建好之后才建（它要核心的入口） */
   let sessions = null;
@@ -217,6 +237,7 @@ export function createDocService(options = {}) {
   sessions = createSessionLayer({ router, nextConnId: () => `conn-${++seq}`, now, log, retainMs, tombstoneMs, resumeGate: options.resumeGate });
   const httpTransport = options.enableHttpTransport === true ? createHttpTransport({
     sessions, authenticate, remoteOf, normalizePrincipal, protocol, retainMs, maxFrameBytes: maxPayload,
+    admissionRefusal, completeAdmission, principalOf: id => router.describeConn(id)?.principal,
     canOpen: () => closing ? 'closing' : sessions.size() >= maxConnections ? 'full' : null,
     now, log,
   }) : null;
@@ -321,10 +342,12 @@ export function createDocService(options = {}) {
     if (closing || socket.destroyed || !socket.writable || sessions.size() >= maxConnections)
       return rejectUpgrade(socket, 503, 'Service Unavailable');
     if (!principal || typeof principal.userId !== 'string') return rejectUpgrade(socket, 401, 'Unauthorized');
+    if (admissionRefusal(principal)) return rejectUpgrade(socket, 401, 'Unauthorized');
     const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
     if (!ws) return;
     const t = wsTransport(ws);
     const p = normalizePrincipal(principal);
+    t.principal = p;
     const remote = remoteFor(ws);
     if (item.kind === 'new') {
       // 先挂监听再建会话：建会话时就要经这条传输发 welcome，模块的 connect 也可能立刻发消息
@@ -339,15 +362,18 @@ export function createDocService(options = {}) {
   }
 
   const upgradeListener = (req, socket, head) => {
-    onUpgrade(req, socket, head).catch(() => { if (!socket.destroyed) rejectUpgrade(socket, 503, 'Service Unavailable'); });
+    onUpgrade(req, socket, head).catch(() => { if (!socket.destroyed) rejectUpgrade(socket, 503, 'Service Unavailable'); })
+      .finally(() => completeAdmission(req));
   };
   (attached ? hostServer : ownServer).on('upgrade', upgradeListener);
 
   /** 把一条 WebSocket 包成会话层的传输；`alive` 给心跳用 */
   function wsTransport(ws) {
+    const actualClosed = new Promise(resolve => ws.once('close', resolve));
     return {
       kind: 'ws',
       ws,
+      actualClosed,
       alive: true,
       connId: null,
       legacy: false,
@@ -360,6 +386,7 @@ export function createDocService(options = {}) {
 
   /** 已知 connId 的传输（接续）：挂心跳与事件 */
   function watch(connId, t, legacy) {
+    t.principal = router.describeConn(connId)?.principal;
     watchPending({ connId }, t, legacy);
   }
 
@@ -507,6 +534,39 @@ export function createDocService(options = {}) {
     /** 主动关闭一条连接（组装层与模块之外的调用方用）：会话立刻结束、不保留；连接不存在回 false */
     closeConn(connId, code, reason) {
       return sessions.close(connId, code, reason);
+    },
+    /** Dedicated security barrier. Ordinary close's tail replay is unchanged. */
+    fenceConn(connId, code = 4003, reason = 'access-revoked') {
+      if (connectionFences.has(connId)) return connectionFences.get(connId);
+      const logical = sessions.fence(connId, code, reason);
+      const transports = [...wsTransports].filter(t => t.connId === connId);
+      const httpClosed = httpTransport?.fenceConn(connId, code, reason) ?? Promise.resolve({ closedHttp: 0 });
+      for (const t of transports) t.ws.terminate();
+      const result = Promise.all([logical.gone, httpClosed, ...transports.map(t => t.actualClosed)]).then(([, http]) => ({
+        connectionId: connId, logicalFenced: true, discarded: true, actualClosed: true,
+        closedWs: transports.length, closedHttp: http.closedHttp,
+      }));
+      connectionFences.set(connId, result); return result;
+    },
+    /** Trusted logout barrier includes every admission that was already awaiting
+     * authentication, and prevents a matching identity from entering afterwards. */
+    async fencePrincipals(criteria, code = 4003, reason = 'access-revoked') {
+      if (!criteria || !['accountIds', 'loginIds', 'runGrantIds'].some(field => Array.isArray(criteria[field]) && criteria[field].length) ||
+          ['accountIds', 'loginIds', 'runGrantIds', 'roles'].some(field => criteria[field] !== undefined &&
+            (!Array.isArray(criteria[field]) || !criteria[field].length || criteria[field].some(value => typeof value !== 'string' || !value))))
+        throw new TypeError('precise fence identity is required');
+      const scope = structuredClone(criteria); admissionFences.push(scope);
+      const pending = [...admissions];
+      const ids = new Set(sessions.connIds().filter(id => matching(router.describeConn(id)?.principal, scope)));
+      for (const t of wsTransports) if (matching(t.principal, scope)) ids.add(t.connId);
+      for (const id of httpTransport?.connectionIdsMatching(p => matching(p, scope)) ?? []) ids.add(id);
+      const fences = [...ids].map(id => this.fenceConn(id, code, reason));
+      await Promise.all(pending.map(row => row.done));
+      const affected = pending.filter(row => matching(row.principal, scope));
+      for (const row of affected) row.socket.destroy();
+      await Promise.all(affected.map(row => row.actualClosed));
+      return { actualClosed: true, connections: await Promise.all(fences),
+        pendingAdmissions: pending.length, rejectedAdmissions: affected.length };
     },
     closeSpace(space, code = 1012, reason = 'relocating') { sessions.closeSpace(space, code, reason); },
 
