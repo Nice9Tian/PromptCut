@@ -42,6 +42,10 @@ function missingRequired(tool: string, args: unknown): string[] {
 }
 
 export interface EditorApi {
+  soundPresets(): any;
+  soundGenerate(args: import("../editor/io/soundGeneration").GenerateSoundOptions): Promise<any>;
+  soundStatus(args?: { jobId?: string }): any;
+  soundCancel(args: { jobId: string }): any;
   backgroundJobStatus(args: { jobId: string }): any;
   listCards(args?: { cardId?: string; detail?: string }): any;
   getProject(): any;
@@ -68,7 +72,10 @@ export interface EditorApi {
   duplicateClip(args: { clipId: string }): any;
   splitClip(args: { clipId: string; t: number }): any;
   setClipVolume(args: { clipId: string; volume: number }): any;
-  separateAudio(args: { clipId: string }): any;
+  setClipMuted(args: { clipId: string; muted: boolean }): any;
+  renderCardAudio(args: { clipId: string; force?: boolean }): Promise<any>;
+  cancelCardAudio(args: { clipId: string }): any;
+  separateAudio(args: { clipId?: string; clipIds?: string[] }): any;
   createAudio(args: { mediaId?: string; clipId?: string }): any;
   setEmphasis(args: { clipId: string; kind: string; color?: string; size?: number; opacity?: number; dx?: number; dy?: number }): any;
   listTransitions(): any;
@@ -167,13 +174,13 @@ export interface EditorApi {
 /** 这些工具改的是时间轴:做成一次,就值得给 SKILL 悬浮窗下面那张预览图刷新一次 */
 const TIMELINE_TOOLS = new Set([
   "add_clip", "update_clip", "remove_clip", "duplicate_clip", "split_clip",
-  "add_transition", "remove_transition", "set_clip_volume", "separate_audio", "create_audio", "set_emphasis",
+  "add_transition", "remove_transition", "set_clip_volume", "set_clip_muted", "render_card_audio", "separate_audio", "create_audio", "set_emphasis",
   "set_position", "set_rect", "align", "nudge", "fill_captions", "edit_caption", "attach_clip_motion", "detach_clip_motion",
   "add_track", "remove_track", "update_track", "move_track",
   "create_filter", "update_filter", "remove_filter", "apply_filter",
   "create_pixel_map", "update_pixel_map", "remove_pixel_map", "apply_pixel_map",
   "create_audio_fx", "update_audio_fx", "remove_audio_fx", "apply_audio_fx",
-  "switch_cut", "add_cut", "set_theme", "voice_generate",
+  "switch_cut", "add_cut", "set_theme", "voice_generate", "sound_generate",
 ]);
 
 /**

@@ -6,15 +6,19 @@
  *        [--ticket-ttl-ms 20000]
  *        [--no-video]            不导入视频(只验卡片)
  *        [--only-a4]             只跑到 A4(播放、暂停追活渲)为止,跳过 A2 的重开与 A5(排障用)
- *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`),验端到端:成员页发布的清单计划含它,桌面渲染节点渲出来、
- *                                写进层表,成员页贴上快照、没有「需要本地 PC 渲染辅助」的图标与徽标(C10 契约第 9 节,2026-09-29)
- *        [--base-port 5420]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
+ *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`)。2026-10-06 起的新语义(`online-card-exec-contract.md` 第 11.3 节):它是在线包里构建时
+ *                                就有的卡,本页能运行,与内置卡一样按轻重区分。成员页进来时在加载遮罩下把它测完、判轻,于是在可见舞台里直接活渲(没有快照、没有
+ *                                「需要本地 PC 渲染辅助」的图标与徽标)、不在页面发布的清单计划里。旧语义(清单计划含它、桌面渲染节点渲出来写进层表、成员页贴快照)
+ *                                描述的是判重的那条路,这条路对判重的内置卡在 A1~A4 里验,对判重的同步用户卡在 `online-card-exec-probe.mjs` E6 里验。
+ *                                清单计划里含它的那一路(测量完成前它按重、计划先发出去)现在也可能由成员页自己的浏览器节点渲出(本页能运行的用户卡任务它认领),层的环境指纹是 cardEnvFingerprint
+ *        [--base-port 5780]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
  *                                (A5 里创建者关掉之后,独立渲染主机用同一段)
  *
  * 本机替身(与阿里云同形):
  *   - 托管组合(文档服务 + 素材服务,只绑 127.0.0.1);
- *   - 仿 nginx 的前缀代理,开三个源:编辑器页(+0)与两个舞台(+1、+2)都给 `/editor`(在线构建)、`/hosted/` 与 `/media/` 反代,
- *     **每个响应都带 `Origin-Agent-Cluster: ?1`**;`/editor/runtime-config.json` 给两个舞台源(同 `deploy-hosted --stage-origins` 写的);
+ *   - 共用的本机托管代理 `lib/hosted-proxy.mjs`(2026-10-06 起,取代各探针自带的仿 nginx 代理),开三个同站跨源的源 pc.localhost(+0)、s1.pc.localhost(+1)、s2.pc.localhost(+2),
+ *     带全套策略头(内容安全策略、OAC)、`/media-s/` 与舞台入口 `/editor/stage.html`;`/editor/runtime-config.json` 给两个舞台源(同 `deploy-hosted --stage-origins` 写的);
+ *     Node 这边(探针与它起的桌面 dev server、渲染主机)靠 `lib/localhost-dns.cjs` 认得 `*.localhost`;
  *   - 创建者 = 桌面版 dev server + 它的预渲染进程(队列节点,pc),建项目、放卡、勾「多用户协作」放云端、取邀请链接、预渲染;
  *   - 成员 = 电脑浏览器(普通档)打开邀请链接进入。
  *
@@ -31,16 +35,17 @@
  * ## 对远端跑(外网模式):--site <源>
  *
  *   node scripts/probes/c10-browser-probe.mjs --site https://8-219-80-16.sslip.io [--run <本轮 id>] [--stage-origins <源1>,<源2>]
- *        [--no-host] [--host-wait-min 15] [--timeout-min 120] [--coord <协调口基址>] [--out <目录>] [--base-port 5420]
+ *        [--no-host] [--host-wait-min 15] [--timeout-min 120] [--coord <协调口基址>] [--out <目录>] [--base-port 5780]
  *
  *   - 不起本机托管组合与代理:页面取 `<源>/editor`,文档服务 `<源>/hosted/`,素材服务 `<源>/media/api/asset`;
  *     两个舞台源缺省读 `<源>/editor/runtime-config.json` 的 `stageOrigins`(`deploy-hosted --stage-origins` 写的),读不到记一条失败、
  *     退回按 `s1.<主机>`、`s2.<主机>` 核;`--stage-origins` 给了就以它为准(仍核 runtime-config 与它一致)。
  *   - 创建者 = 本机桌面版 dev server(端口 +5～+7)连远端(同 c10a-demo-probe 的创建者);成员 = 本机无头 Chrome 普通档(桌面视口)。
- *   - 判据与本机替身相同,只有一处不同:A1 的「播放 10 秒主文档长任务 0」在外网模式只报数、标「待笔记本复核」(PC 忙,耗时类判断在 PC 上不作数)。
+ *   - 判据与本机替身相同:A1 的「播放 10 秒主文档长任务 0」在外网模式同样按过 / 不过判(长任务数是不看时间的断言,
+ *     `docs/semantics/guide_files/verification.md`「耗时只记录,不当闸门」;原来在外网模式只报数、标「待笔记本复核」,已去掉)。
  *   - A5 的独立渲染主机来自外部(下一节):没有节点在线时改一处、页面发布清单计划、不报错照常核;之后把本轮的项目与凭证写进协调口 KV,
  *     等外部主机报到(`--host-wait-min`,缺省 15 分钟),再等它认领并完成(至多 15 分钟)、页面取到它产的新快照(至多 10 分钟)。
- *     时限内没有主机报到:A5 的后半记「待笔记本主机」(`steps.a5.pendingHost`),不算失败。`--no-host` 不写 KV、不等,直接记「待笔记本主机」。
+ *     时限内没有主机报到:A5 的后半记「待外部主机」(`steps.a5.pendingHost`),不算失败。`--no-host` 不写 KV、不等,直接记「待外部主机」。
  *   - `--a10` 只对本机替身(要缩短托管端的票据时限)。
  *
  * ## 独立主机角色:--role host --run <id>(HT9 的跨机做法:在线页面发布带片段清单的 plan,独立渲染主机认领并完成)
@@ -115,9 +120,9 @@
  *       node scripts/probes/c10-browser-probe.mjs --role creator --e6-reverse --base-port 5740 --coord http://127.0.0.1:5748 --run <id>
  *       node scripts/probes/c10-browser-probe.mjs --role host --run <id> --coord http://127.0.0.1:5748 --port 5745 --test-fingerprint <Y>
  *       (Y 的端口段就是创建者编辑器的 +5～+7:config 在创建者关掉之后才写,主机拿到 config 才占端口)
- *     跨机(PC 起 creator 与 X,笔记本起 Y;令牌只从环境变量 PROBE_MAIL_TOKEN 取):
+ *     跨机(一台起 creator 与 X,另一台起 Y;令牌只从环境变量 PROBE_MAIL_TOKEN 取):
  *       PC:    node scripts/probes/c10-browser-probe.mjs --site https://8-219-80-16.sslip.io --e6-reverse --run <id> --base-port <PC 段起点> [--coord <协调口>]
- *       笔记本:node scripts/probes/c10-browser-probe.mjs --role host --run <id> --test-fingerprint <Y> --port <笔记本端口> [--coord <协调口>]
+ *       另一台:node scripts/probes/c10-browser-probe.mjs --role host --run <id> --test-fingerprint <Y> --port <那台的端口> [--coord <协调口>]
  *   结果写 `steps.e6r`:checks(每条 { name, ok, detail })、plan、细任务数、X 与 Y 的认领 / 完成、层表逐层指纹、l18。
  *   KV:不加新键;config 多一个字段 `e6Reverse`,host.progress 与 host 多一个字段 `ids`(见下一节)。
  *
@@ -144,8 +149,12 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, parseTaskId } from './m8/lib.mjs';
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
+import { createTimings } from './probe-timings.mjs';
+import { hostClaimStatusOf } from '../render-host.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -155,7 +164,9 @@ const ONLY_A4 = argv.includes('--only-a4');
 const USER_CARD = argv.includes('--user-card');
 const KEEP = argv.includes('--keep-temp');
 const VIDEO = !argv.includes('--no-video');
-const BASE = Number(arg('--base-port', 5420));
+const BASE = Number(arg('--base-port', 5780));
+// 探针起的 Node 子进程(桌面版 dev server、渲染主机、旁路代理)继承它,也能解析 pc.localhost
+process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 const TTL_MS = Number(arg('--ticket-ttl-ms', 20_000));
 /** 外网模式:给了 --site 就对远端跑,不起本机托管组合与代理 */
 const SITE_ARG = arg('--site', null);
@@ -200,9 +211,9 @@ const HOST_FP = '0c10b0e5f1a9e7d2';
 const RUN_ARG = arg('--run', null);
 if (RUN_ARG && RUN_ARG !== 'latest' && !/^[A-Za-z0-9_-]{1,24}$/.test(RUN_ARG)) { process.stderr.write('--run 要 1～24 个 [A-Za-z0-9_-]\n'); process.exit(2); }
 const RUN = RUN_ARG && RUN_ARG !== 'latest' ? RUN_ARG : `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
-const SITE = REMOTE ? String(SITE_ARG).replace(/\/+$/, '') : `http://127.0.0.1:${PORTS.editor}`;
+const SITE = REMOTE ? String(SITE_ARG).replace(/\/+$/, '') : proxyOrigins(PORTS.editor).editor;
 /** 两个舞台源:本机替身是 +1、+2 两个端口;外网模式在主流程开头按 --stage-origins / runtime-config.json 定 */
-let STAGE_ORIGINS = REMOTE ? [] : [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
+let STAGE_ORIGINS = REMOTE ? [] : proxyOrigins(PORTS.editor).stages;
 const HOSTED = `${SITE}/hosted/`;
 const EDITOR = `${SITE}/editor`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), ROLE === 'host' ? 'pc-c10-host-' : 'pc-c10-browser-'));
@@ -213,8 +224,10 @@ const deadline = started + Number(arg('--timeout-min', REMOTE || ROLE !== 'all' 
 
 const fails = [];
 const out = { ok: false, run: RUN, role: ROLE, mode: A10 ? 'a10' : E6R ? 'a1-a5+e6-reverse' : 'a1-a5', target: REMOTE ? 'site' : 'local', site: SITE, stageOrigins: STAGE_ORIGINS, out: OUT, steps: {} };
-/** 待笔记本复核 / 待笔记本主机的项(不算失败,只记下) */
+/** 等外部主机而没等到的项(不算失败,只记下) */
 const pending = [];
+/** 耗时只记录(verification.md「耗时只记录,不当闸门」):各步用时写进 TIMINGS 行与结果的 timings,不决定过不过 */
+const timings = createTimings('c10-browser-probe');
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ` :: ${JSON.stringify(extra).slice(0, 500)}`)); return !!cond; };
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), step, ...fields })}\n`);
 const codeOf = (link) => String(link ?? '').split('invite=')[1] ?? '';
@@ -261,9 +274,7 @@ function pidOnPort(port) {
 /* ================================================================== 本机替身:托管组合 + 三个源的仿 nginx 代理 */
 
 let combo = null;
-const proxies = [];
-/** 代理上升级过的连接(两头的 socket),收尾时一起掐掉 */
-const upgraded = new Set();
+let hostedProxy = null;
 const docHeaders = [];
 async function startLocalSite() {
   for (const p of [PORTS.editor, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
@@ -279,70 +290,10 @@ async function startLocalSite() {
   fs.mkdirSync(path.join(TMP, 'hosted'), { recursive: true });
   combo = await startHostedCombo({
     dataDir: path.join(TMP, 'hosted'), docPort: PORTS.doc, assetPort: PORTS.asset, host: '127.0.0.1',
-    docPublicUrl: `ws://127.0.0.1:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
+    docPublicUrl: `ws://pc.localhost:${PORTS.editor}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
   });
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-  const OAC = { 'origin-agent-cluster': '?1' };
-  const runtimeConfig = JSON.stringify({ v: 1, stageOrigins: STAGE_ORIGINS });
-  const makeProxy = (port) => {
-    const origin = `http://127.0.0.1:${port}`;
-    const forward = (req, res, upstream, strip) => {
-      const target = req.url.slice(strip.length) || '/';
-      const up = http.request({ host: '127.0.0.1', port: upstream, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => {
-        res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC });
-        r.pipe(res);
-      });
-      up.on('error', () => { res.writeHead(502, OAC); res.end('bad gateway'); });
-      req.pipe(up);
-    };
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, origin);
-      if (url.pathname === '/hosted' || url.pathname.startsWith('/hosted/')) return forward(req, res, PORTS.doc, '/hosted');
-      if (url.pathname.startsWith('/media/')) return forward(req, res, PORTS.asset, '/media');
-      const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
-      const sendFile = (file, cache) => {
-        res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
-        fs.createReadStream(file).pipe(res);
-      };
-      if (url.pathname === '/editor/runtime-config.json') {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec });
-        return res.end(runtimeConfig);
-      }
-      const index = path.join(DIST, 'index.html');
-      if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-      if (url.pathname.startsWith('/editor/assets/')) {
-        const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-        if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
-        return sendFile(f, 'public, max-age=31536000, immutable');
-      }
-      if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-      res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC });
-      res.end('not found');
-    });
-    server.on('upgrade', (req, socket, head) => {
-      const url = new URL(req.url, origin);
-      if (!(url.pathname === '/hosted' || url.pathname.startsWith('/hosted/'))) return socket.destroy();
-      const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-      upgraded.add(socket);
-      socket.on('close', () => upgraded.delete(socket));
-      const up = net.connect(PORTS.doc, '127.0.0.1', () => {
-        const lines = [`${req.method} ${target} HTTP/1.1`];
-        for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-        up.write(`${lines.join('\r\n')}\r\n\r\n`);
-        if (head?.length) up.write(head);
-        up.pipe(socket);
-        socket.pipe(up);
-      });
-      upgraded.add(up);
-      up.on('close', () => { upgraded.delete(up); socket.destroy(); });
-      socket.on('close', () => up.destroy());
-      up.on('error', () => socket.destroy());
-      socket.on('error', () => up.destroy());
-    });
-    proxies.push(server);
-    return new Promise((r) => server.listen(port, '127.0.0.1', r));
-  };
-  await Promise.all([makeProxy(PORTS.editor), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+  // 共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:同站跨源的三个源、策略头、`/media-s/`、运行配置)
+  hostedProxy = await startHostedProxy({ dist: DIST, basePort: PORTS.editor, docPort: PORTS.doc, assetPort: PORTS.asset, policy: 'full' });
   say('local.up', { site: SITE, stages: STAGE_ORIGINS, doc: PORTS.doc, asset: PORTS.asset, dist: DIST, ticketTtlMs: A10 ? TTL_MS : null });
 }
 
@@ -573,11 +524,15 @@ async function cutWhileHolding({ queue, healthz, onHolding, doCut, holdTimeoutMs
  * 旁观节点(--cut 时,creator 一侧):成员身份、`role: 'render'` 连项目,`node.hello`(不带指纹:前置过滤放行全部任务)后
  * `queue.watch` 本项目,只收不认领,记每个任务的 task.taken / 认领后又 task.opened / task.closed。
  */
-async function startWatcher(M, { projectId, password }) {
+async function startWatcher(M, { projectId, password, diagnosticOnly = false }) {
   const c = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId, username: '旁观节点', password, as: 'member', role: 'render' });
   const seen = new Map();
+  const tasks = new Map();
   const rec = (id) => { if (!seen.has(id)) seen.set(id, { taken: 0, reopenedAfterTaken: 0, closed: [] }); return seen.get(id); };
   c.ep.onMessage((m) => {
+    if (m?.type === 'queue.snapshot') { tasks.clear(); for (const task of m.tasks ?? []) tasks.set(task.id, task); }
+    else if (m?.type === 'task.opened' && m.task?.id) tasks.set(m.task.id, m.task);
+    else if (['task.taken', 'task.closed'].includes(m?.type)) { const task = tasks.get(m.id); if (task) tasks.set(m.id, { ...task, state: m.type === 'task.taken' ? 'claimed' : m.state }); }
     if (m?.type === 'task.taken' && typeof m.id === 'string') rec(m.id).taken++;
     else if (m?.type === 'task.opened' && typeof m.task?.id === 'string') { const r = rec(m.task.id); if (r.taken > 0) r.reopenedAfterTaken++; }
     else if (m?.type === 'task.closed' && typeof m.id === 'string') rec(m.id).closed.push(m.state ?? null);
@@ -588,12 +543,12 @@ async function startWatcher(M, { projectId, password }) {
     return { hello, watch };
   };
   const { hello, watch } = await subscribe();
-  check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
+  if (!diagnosticOnly) check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
   // 会话结束后建了新会话(onOpen 只在新会话时调;接续调 onResume、订阅还在):重发 hello 与 watch。计数进结果
   const stats = { newSessions: 0, resumes: 0 };
   c.ep.onOpen(() => { stats.newSessions++; void subscribe(); });
   c.ep.onResume?.(() => { stats.resumes++; });
-  return { seen, stats, close: c.close };
+  return { seen, stats, tasks, close: c.close };
 }
 /** 成员页收到的 task.done(CDP 读页面 WebSocket 的入站帧;会话层的重发按 seq 去重,同一任务不同 seq 算两次) */
 async function countPageDone(page) {
@@ -1110,6 +1065,14 @@ async function newPage(ctx) {
   page.on('request', (r) => {
     let u;
     try { u = new URL(r.url()); } catch { return; }
+    // 2026-10-06 隔离之后:舞台读素材走自己源上的 /media-s/<会话号>/media/<哈希>(票据在 cookie 里,地址里没有),照样记成 ns = media
+    const ms = new RegExp('^/media-s/[0-9a-f]{32}/media/([0-9a-f]{64})').exec(u.pathname);
+    if (ms) {
+      let fo = null;
+      try { fo = new URL(r.frame()?.url() ?? '').origin; } catch { /* 没有 frame */ }
+      page.assets.push({ at: Date.now(), method: r.method(), origin: u.origin, frameOrigin: fo, ns: 'media', hash: ms[1], sub: '', route: 'media-s', hasTicket: /[?&]t=/.test(u.search) });
+      return;
+    }
     const i = u.pathname.indexOf('/media/api/asset/');
     if (i < 0) return;
     const rest = u.pathname.slice(i + '/media/api/asset/'.length).split('/');
@@ -1661,8 +1624,7 @@ try {
   const playing = samples.filter((s) => s.playing);
   const mainSigs = playing.filter((s) => s.t >= 1).map((s) => s.wraps.find((w) => w.id === state.main)).filter((w) => w?.suppressed && w.plane).map((w) => w.planeSig);
   const worstLong = longTasks.slice().sort((a, b) => b.ms - a.ms).slice(0, 3);
-  if (REMOTE) pending.push({ item: 'A1:播放 10 秒,主文档长任务 0', status: '待笔记本复核', count: longTasks.length, worst: worstLong });
-  else check(longTasks.length === 0, 'A1:播放 10 秒,主文档长任务 0', { count: longTasks.length, worst: worstLong });
+  check(longTasks.length === 0, 'A1:播放 10 秒,主文档长任务 0', { count: longTasks.length, worst: worstLong });
   check(playing.length >= 10, 'A1:播放中采到可见舞台的样子', { samples: samples.length, playing: playing.length });
   check(new Set(mainSigs).size >= 5, 'A1:重层按拍换快照(播放中主重卡的快照平面一直在换帧)', { distinct: new Set(mainSigs).size, of: mainSigs.length });
   const deliveries = (beatAfter.deliveries ?? 0) - (beatBefore.deliveries ?? 0);
@@ -1738,9 +1700,11 @@ try {
   const sum1 = assetSummary(member.assets);
   check(sum1.snap > 0 && sum1.px === 0, 'A3:普通档取 snap/ 原尺寸、预渲染小尺寸请求 0', sum1);
   if (VIDEO) check(Object.keys(sum1.mediaByFrameOrigin).some((k) => STAGE_ORIGINS.some((o) => k === `${o}→${o}`)) && !Object.keys(sum1.mediaByFrameOrigin).some((k) => STAGE_ORIGINS.some((o) => k.startsWith(`${o}→`) && !k.endsWith(o))),
-    '第 2 节:跨源舞台用相对地址读自己源上反代的 /media', sum1.mediaByFrameOrigin);
+    '第 2 节(2026-10-06 隔离后):跨源舞台用相对地址读自己源上的 /media-s/<会话号>/media/<哈希>(不再是 /media)', sum1.mediaByFrameOrigin);
+  if (VIDEO) check(member.assets.some((a) => a.route === 'media-s') && !member.assets.some((a) => a.hasTicket), '第 2 节(2026-10-06 隔离后):舞台取素材的地址里没有票据(?t=),票据在舞台读不到的 cookie 里', { mediaS: member.assets.filter((a) => a.route === 'media-s').length });
   const o3 = await onlineDiag(member);
-  check(o3?.layers?.length && o3.layers.every((l) => l.envFingerprint === state.creatorFp), 'A3:一层只出自一种环境(层表记录的那一种)', o3?.layers?.map((l) => ({ clip: l.clipId.slice(0, 6), fp: l.envFingerprint })));
+  // 2026-10-06 起:本页能运行的仓库用户卡的任务,成员页自己的后台舞台(纯浏览器节点)也认领,它的那一层出自浏览器环境(cardEnvFingerprint),与桌面节点的环境本来就不同;每一层仍只出自一种环境。内置卡的层仍都出自创建者的桌面节点
+  check(o3?.layers?.length && o3.layers.filter((l) => l.clipId !== state.userClip).every((l) => l.envFingerprint === state.creatorFp), 'A3:一层只出自一种环境(层表记录的那一种;仓库用户卡那一层另论:它可能出自成员页自己的浏览器节点)', o3?.layers?.map((l) => ({ clip: l.clipId.slice(0, 6), fp: l.envFingerprint })));
   out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp, costPublish: state.costPublish,
     publisher: await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null) };
   say('step1.done', out.steps.member);
@@ -1749,34 +1713,75 @@ try {
     /* ---------------------------------------------------------------- 用户卡端到端(C10 契约第 9 节,2026-09-29 用户改语义) */
     const tU = Date.now();
     check(!!state.userClip, '用户卡:创建者放好了用户卡片段', state.userClip);
-    const planU = await until('用户卡:成员页发布的清单计划含用户卡片段', async () => {
-      const d = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
-      return d?.lastClips?.includes(state.userClip) ? d : null;
-    }, 120_000, 1000);
-    check(!!planU, '用户卡:成员页发布的清单计划含用户卡片段(页面一律按重卡)', planU?.lastClips);
+    /*
+     * 新语义(2026-10-06,契约 11.3 的 1757、1776~1777 两处):仓库用户卡在在线页面里本页能运行,与内置卡一样按轻重区分。
+     * 成员页进来时在加载遮罩下已把它测完;判轻的卡在可见舞台里直接活渲、不进页面发布的清单计划、时间轴不挂徽标。
+     * 旧断言「清单计划含它」「桌面渲染节点渲出来、成员页贴上快照、那一层出自创建者的桌面节点」说的是判重那条路,在这里不再成立。
+     */
     const userStage = async () => {
       const f = await frontFrame(member);
       return f ? f.evaluate((id) => {
         const w = document.querySelector(`[data-pc-clip="${id}"]:not([data-pc-media])`);
         const slot = w?.querySelector(':scope > [data-pc-placeholder-slot]');
         const plane = w?.querySelector(':scope > [data-pc-snapshot-plane]');
-        return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null } : null;
+        const liveChildren = w ? [...w.children].filter((c) => !c.matches('[data-pc-placeholder-slot],[data-pc-snapshot-plane]')) : [];
+        return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null,
+          // 活组件的子树露着才算 live:包裹层带着「贴快照 / 抑制 / 等快照 / 追帧」任何一个类时子树是藏起来的(`planeStyle.ts`)
+          live: !['pc-snapshot', 'pc-suppressed', 'pc-awaiting', 'pc-settling'].some((c) => w.classList.contains(c)) && liveChildren.some((c) => (c.textContent ?? '').trim().length > 0), text: liveChildren.map((c) => (c.textContent ?? '').trim()).join('|').slice(0, 40) } : null;
       }, state.userClip).catch(() => null) : null;
     };
-    const firstLook = { stage: await userStage(), badge: await P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null) };
+    const badgeOf = () => P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null);
     await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); });
-    const got = await until('用户卡:成员页贴出桌面渲染节点产的快照,图标与徽标撤掉', async () => {
+    /*
+     * 先看它在不在成员页发布的清单计划里,再决定断言哪一路(2026-10-07 改:以前「直接活渲、没有快照」那一条不分路、先断言)。
+     * 这个探针的项目里,用户卡与主重卡加若干张额外重卡叠在同一段时间上:每张重卡每拍都要计一份换帧的固定成本,加起来就超出一拍的预算,
+     * 轻卡在这个位置被挤出轻管线(K2 逐位置贪心,`pipelinePlan.mjs`)——它自己的成本记录是轻的(实测 stepMs 0.3、seekOk),
+     * 但整段进预渲染集合、由渲染节点渲出、舞台贴快照。这台 PC 上第二段合并提交(21b02329)与四段合流后连跑都是这一路(清单计划 12 张卡全在)。
+     * 判重的一路舞台贴着快照是对的,旧的不分路断言把它判成了不过。判轻直接活渲那一路由 `online-user-cards-probe.mjs` 与
+     * `online-card-exec-probe.mjs` 验(那里的项目不拥挤)。
+     */
+    const planU0 = await until('用户卡:成员页发布了清单计划', async () => { const d = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null); return d?.lastClips?.length ? d : null; }, 60_000, 1000);
+    const inPlanFirst = !!planU0?.lastClips?.includes(state.userClip);
+    const liveU = inPlanFirst ? null : await until('用户卡:成员页在可见舞台里直接活渲仓库用户卡(判轻),没有快照与图标', async () => {
       await P(member, () => { const s2 = window.__pcStore; s2.actions.seek(1); }).catch(() => {});
-      const o = await onlineDiag(member);
-      const l = o?.layers?.find((x) => x.clipId === state.userClip);
       const st = await userStage();
-      const badge = await P(member, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), state.userClip).catch(() => null);
-      return l && l.ready > 0 && st?.snapshot && !st.placeholder && badge === false ? { layer: l, stage: st, ms: Date.now() - tU } : null;
-    }, 1_200_000, 5000);
-    check(!!got, '用户卡端到端:桌面节点渲出、成员页贴上快照,没有图标与徽标', { got, firstLook, last: { stage: await userStage(), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null } });
-    if (got) check(got.layer.envFingerprint === state.creatorFp, '用户卡:那一层出自创建者的桌面节点', { layer: got.layer.envFingerprint, creator: state.creatorFp });
-    await shot(member, 'user-card-e2e');
-    out.steps.userCard = { ms: Date.now() - tU, clip: state.userClip, planClips: planU?.lastClips ?? null, firstLook, got };
+      return st?.live && !st.snapshot && !st.placeholder ? st : null;
+    }, 120_000, 1000);
+    const lastU = { stage: await userStage(), badge: await badgeOf() };
+    lastU.diag = await P(member, (id) => { const d = window.__pcPreviewDiag?.(); const j = d?.probeRun?.probed?.filter((x) => x.clipId === id) ?? []; return { probedN: j.length, identityKey: j.at(-1)?.identityKey ?? null, suppressed: (d?.suppressed ?? []).includes(id), pending: d?.probeRun?.running ?? null }; }, state.userClip).catch(() => null);
+    lastU.layer = (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null;
+    // 排障:这张卡在本页的成本记录(判轻判重的依据),按身份键从 L2 里取
+    lastU.cost = await P(member, (key) => new Promise((resolve) => {
+      if (!key) { resolve(null); return; }
+      const r = indexedDB.open('promptcut-l2');
+      r.onsuccess = () => { const q = r.result.transaction('costs').objectStore('costs').getAll(); q.onsuccess = () => { resolve(q.result.filter((x) => JSON.stringify(x).includes(key)).map((x) => JSON.stringify(x.record ?? x).slice(0, 500))); r.result.close(); }; q.onerror = () => resolve(null); };
+      r.onerror = () => resolve(null);
+    }), lastU.diag?.identityKey ?? null).catch(() => null);
+    if (!inPlanFirst) check(!!liveU, '用户卡(新语义,判轻的一路):成员页在可见舞台里直接看得到仓库用户卡的活画面(没有快照、没有「需要本地 PC 渲染辅助」图标)', { liveU, last: lastU });
+    check(lastU.badge === false, '用户卡(新语义):时间轴上它没有「需要本地 PC 渲染辅助」徽标', lastU);
+    const planU = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
+    /*
+     * 页面按测量结果给这张卡定轻重:判轻的不进清单计划(上面已断言活渲、没有图标与徽标);判重的与内置重卡同一条路 ——
+     * 进清单计划、由创建者的桌面渲染节点渲出来写进层表、成员页贴上快照。两条路都要成立,走哪一条看这台机器上它的实测结果(本机忙闲会让同一张卡落在两边),
+     * 所以按「它在不在清单计划里」分流断言。
+     */
+    const inPlan = !!planU?.lastClips?.includes(state.userClip);
+    lastU.inPlan = inPlan;
+    if (!inPlan) {
+      check(true, '用户卡(新语义):判轻的仓库用户卡不在成员页发布的清单计划里(不进预渲染集合)', planU?.lastClips);
+    } else {
+      const gotU = await until('用户卡(在清单计划里的一路):渲染节点把它渲出来写进层表(出自桌面节点或成员页自己的浏览器节点),图标与徽标始终没有', async () => {
+        await P(member, () => { window.__pcStore.actions.seek(1); }).catch(() => {});
+        const o = await onlineDiag(member);
+        const l = o?.layers?.find((x) => x.clipId === state.userClip);
+        const st = await userStage();
+        return l && l.ready > 0 && (st?.snapshot || st?.live) && !st.placeholder && (await badgeOf()) === false ? { layer: l, stage: st } : null;
+      }, 420_000, 5000);
+      check(!!gotU, '用户卡(在清单计划里的一路):渲染节点渲出、层表里有这一层(就绪帧 > 0),舞台上是快照或活画面,没有图标与徽标', { gotU, plan: planU?.lastClips?.length, last: { stage: await userStage(), layer: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.userClip) ?? null } });
+      if (gotU) check(!!gotU.layer.envFingerprint, '用户卡(在清单计划里的一路):那一层记着它的环境指纹(创建者的桌面节点是 ' + state.creatorFp + ',成员页自己的浏览器节点是它的 cardEnvFingerprint,两者都合法)', { layer: gotU.layer.envFingerprint, creator: state.creatorFp });
+    }
+    await shot(member, 'user-card-live');
+    out.steps.userCard = { ms: Date.now() - tU, clip: state.userClip, planClips: planU?.lastClips ?? null, live: liveU, last: lastU };
     say('user-card.done', out.steps.userCard);
   }
 
@@ -1804,7 +1809,8 @@ try {
       await delay(15_000);
     }
     check(exported?.frames === frames10, 'A10:逐帧导出照常完成', exported);
-    check(exported && exported.ms > TTL_MS * 1.2, 'A10:导出时长跨过票据时限', { ms: exported?.ms, ttl: TTL_MS });
+    // 耗时只记录:原来「导出时长 > 票据时限 × 1.2」是通过条件(机器快了反而不过)。跨没跨过时限由下一条「途中续签过」来判
+    timings.record('A10 逐帧导出用时', exported?.ms ?? null, { formerLimit: `> 票据时限 × 1.2(${Math.round(TTL_MS * 1.2)} ms)` });
     check(exported?.renewal?.renewals >= 1, 'A10:导出途中提前续签了票据', exported?.renewal);
     if (VIDEO) check(exported?.stats?.ticketSwaps > 0, 'A10:素材地址的票据跟着换', exported?.stats);
     out.steps.a10 = { ms: Date.now() - t10, ttlMs: TTL_MS, originalsWaits, export: exported };
@@ -1888,6 +1894,10 @@ try {
         watcherRef = watcher;
         pageDone = await countPageDone(member);
       }
+      if (!watcher) {
+        watcher = await startWatcher(M, { projectId: state.projectId, password: state.projectPassword, diagnosticOnly: true }).catch(() => null);
+        watcherRef = watcher;
+      }
       fs.writeFileSync(hostConfig, JSON.stringify([{ url: cutProxy ? cutProxy.url : M.wsBaseOf(HOSTED), projectId: state.projectId, username: '渲染主机', password: state.projectPassword,
         as: 'member', role: 'render', deviceId: `c10b-host-${RUN}`.padEnd(16, '0'), deviceName: 'c10-browser 独立渲染主机' }]));
       await startHost(hostConfig, E6R ? ['--max-concurrent', '1'] : []);
@@ -1904,10 +1914,29 @@ try {
           return false;
         },
       }) : null;
+      const claimDiagnostics = [];
+      let nextDiagnosticAt = 0, lastDiagnosticKey = '';
       claimed = await until('A5:独立渲染主机认领清单计划并切分完成', async () => {
-        const v = hostView(await hostQueue(), hostLog);
+        const body = await hostQueue();
+        if (Date.now() >= nextDiagnosticAt) {
+          nextDiagnosticAt = Date.now() + 5000;
+          const info = await getJson(`${host.origin}/api/prerender/info`, 5000).catch(() => null);
+          const events = info?.url ? (await getJson(`${info.url}/api/frames/diagnostics`, 5000).catch(() => null))?.queue?.events ?? [] : [];
+          const diagnostic = hostClaimStatusOf(body, events, watcher ? [...watcher.tasks.values()] : null);
+          const key = JSON.stringify(diagnostic);
+          if (key !== lastDiagnosticKey) {
+            lastDiagnosticKey = key;
+            const sample = { at: Date.now(), ...diagnostic };
+            claimDiagnostics.push(sample);
+            if (claimDiagnostics.length > 100) claimDiagnostics.splice(1, 1);
+            say('a5.claim-diagnostic', sample);
+            fs.writeFileSync(path.join(OUT, 'host-claim-diagnostics.json'), JSON.stringify(claimDiagnostics, null, 2));
+          }
+        }
+        const v = hostView(body, hostLog);
         return hostDidWork(v) ? v : null;
       }, 900_000, 2000);
+      out.hostClaimDiagnostics = claimDiagnostics;
       check(claimed, 'A5:独立渲染主机(host 档)认领、切分、完成', claimed ?? hostLog.slice(-12));
       check(claimed?.envFingerprint === HOST_FP && HOST_FP !== state.pageFp && HOST_FP !== state.creatorFp, 'A5:认领的节点与页面发布方环境不同(主机用测试指纹)', { host: claimed?.envFingerprint, page: state.pageFp, creator: state.creatorFp });
       if (cutP) {
@@ -1916,7 +1945,7 @@ try {
       }
       out.hostFacts = { ...hostLogFacts(hostLog), capabilities: await hostCapabilities(host.origin) };
     } else if (NO_HOST) {
-      hostPending = '待笔记本主机(--no-host:没有等外部主机)';
+      hostPending = '待外部主机(--no-host:没有等外部主机)';
     } else {
       // 外部独立渲染主机(另一台机器上的 --role host):本轮的项目与凭证写进 KV,等它报到、认领、完成
       // 旁观节点与页面 task.done 计数先起(主机认领之前),主机要是带 --cut,持有的任务按它们判
@@ -1929,7 +1958,7 @@ try {
       const tReady = Date.now();
       const ready = await xstore.wait('host.ready', Date.now() + HOST_WAIT_MS);
       if (!ready) {
-        hostPending = `待笔记本主机(${HOST_WAIT_MS / 60_000} 分钟内没有外部主机报到)`;
+        hostPending = `待外部主机(${HOST_WAIT_MS / 60_000} 分钟内没有外部主机报到)`;
       } else {
         hostFp = ready.envFingerprint ?? null;
         const readyMs = Date.now() - tReady;
@@ -2051,10 +2080,9 @@ try {
   try { fs.writeFileSync(path.join(OUT, 'creator-editor.log'), editorLog.join('\n')); fs.writeFileSync(path.join(OUT, 'host.log'), hostLog.join('\n')); } catch { /* 写不了 */ }
   await stopHost().catch(() => {});
   await stopEditor().catch(() => {});
-  // 升级过的 WebSocket 连接不归 http 服务器管,close 的回调会一直等它们:先全部掐掉,再限时等(以前会在这里挂住、不出结果行)
-  for (const sock of upgraded) { try { sock.destroy(); } catch { /* 已断 */ } }
+  // 升级过的 WebSocket 连接不归 http 服务器管:代理的 close 先把它们全部掐掉再关(限时等,以前会在这里挂住、不出结果行)
   const within = (p, ms) => Promise.race([p, delay(ms)]);
-  for (const s of proxies) await within(new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); }), 5000);
+  try { await within(hostedProxy?.close(), 10_000); } catch { /* 已关 */ }
   try { await within(combo?.close(), 10_000); } catch { /* 已关 */ }
   out.cleanup = { deleted, listening: [PORTS.editor, PORTS.stageA, PORTS.stageB, PORTS.doc, PORTS.asset, PORTS.node, PORTS.node + 1, PORTS.node + 2].filter((p) => pidOnPort(p)) };
   if (!KEEP) {
@@ -2065,6 +2093,13 @@ try {
     }
   }
   out.ms = Date.now() - started;
+  for (const [name, label] of [['creator', '创建者建项目、放云端'], ['member', '成员加入到两个舞台就绪'], ['play', 'A1 播放 10 秒这一步'], ['userCard', '用户卡一步'], ['reopen', 'A2 关掉再开'], ['a5', 'A5 独立渲染主机一步'], ['a10', 'A10 票据续签一步']]) {
+    if (out.steps[name]?.ms != null) timings.record(label, out.steps[name].ms);
+  }
+  if (out.steps.settleTiming) timings.record('A4 定位到换上精确帧', out.steps.settleTiming.seekToPreciseMs);
+  timings.record('整支探针', out.ms);
+  out.timings = timings.list;
+  timings.print();
   out.fails = fails;
   out.ok = fails.length === 0;
   console.log(JSON.stringify(out));

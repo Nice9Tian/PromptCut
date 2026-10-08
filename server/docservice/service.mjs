@@ -45,8 +45,12 @@ export const DOCSERVICE_DEFAULTS = Object.freeze({
 
 const ANONYMOUS = Object.freeze({ userId: 'anonymous', tenantId: null });
 
-/** principal 里认的字段（`docs/plan/auth-contract.md` 第 6 节）；鉴权给的别的字段不进核心 */
-const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner']);
+/**
+ * principal 里认的字段（`docs/plan/auth-contract.md` 第 6 节）；鉴权给的别的字段不进核心。
+ * `service`、`serviceKid`、`serviceRole` 是托管方服务身份的（`docs/plan/hosted-render-contract.md` 第 1.2、1.4 节）：服务名、握手所用公钥的编号、登记表里的角色；
+ * `access`、`purpose` 是云端 Agent 服务的（`docs/plan/cloud-agent-contract.md` 第 4.3、16 节）：代成员的连接的权限（`rw` / `r`）、只用来发布的连接的用途
+ */
+const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner', 'service', 'serviceKid', 'serviceRole', 'access', 'purpose']);
 
 /**
  * 规整鉴权给的 principal：`userId` 原样、`tenantId` 不是字符串就记 null，其余认得的字段有值才带上。
@@ -90,7 +94,7 @@ function jsonLog(event, fields) {
  *   独立模式：`/healthz` 之外的 HTTP 请求先交给它（共享项目端点），回 true 表示它处理了；挂载模式不用它
  * @param {number} [options.retainMs] 会话的传输断开后保留多久，缺省 60 s（`http-transport-contract.md` 第 4.2 节）
  * @param {number} [options.tombstoneMs] 结束的会话留墓碑多久（这段时间里拿它接续以 4410 关闭），缺省 2 分钟
- * @param {(principal: object, type: string) => string | null} [options.gate] 组装层的逐消息权限检查
+ * @param {(principal: object, type: string, msg: object) => string | null} [options.gate] 组装层的逐消息权限检查（第三个参数是整条消息）
  * @param {(principal: object) => string | null} [options.resumeGate] 接续前重新核对持久权限状态
  */
 export function createDocService(options = {}) {
@@ -136,9 +140,9 @@ export function createDocService(options = {}) {
     highWaterBytes,
     maxPendingBytes,
     // 管理身份只能发管理接口的消息（契约 auth-contract 第 5 节）；别的身份不在这里判
-    gate(principal, type) {
+    gate(principal, type, msg) {
       if (typeof options.gate === 'function') {
-        const reason = options.gate(principal, type);
+        const reason = options.gate(principal, type, msg);
         if (typeof reason === 'string') return reason;
       }
       if (principal?.scope !== 'admin') return null;
@@ -492,6 +496,12 @@ export function createDocService(options = {}) {
           log('module.error', { module: mod.name, hook: 'dropSpace', message: String(err?.message ?? err) });
         }
       }
+    },
+
+    /** 立即放回这条连接手里的全部认领（任务回到未认领）；队列没挂或不支持回 0 */
+    releaseClaims(connId, reason) {
+      const mod = mounted.get(RENDER_QUEUE_MODULE)?.mod;
+      return typeof mod?.releaseClaims === 'function' ? mod.releaseClaims(connId, reason) : 0;
     },
 
     /** 这条连接此刻持有的认领数（成员列表的「渲染中」标签）；队列没挂或不支持回 0 */

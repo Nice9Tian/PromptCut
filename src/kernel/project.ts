@@ -1,4 +1,18 @@
 import type { Clip, Timeline } from "./types";
+import type { SoundEffectRecipe } from "./soundEffects";
+
+/** 可重生成的音效配方。reuseKey 是合成输入身份,不是 WAV 内容哈希。 */
+export interface SoundEffectLink {
+  recipe: SoundEffectRecipe;
+  reuseKey: string;
+}
+
+export interface SoundEffectClipLink extends SoundEffectLink {
+  requestId: string;
+  /** 声画共享时间锚点,音频仍只消费普通 WAV 素材。 */
+  sourceClipId?: string;
+}
+
 
 /**
  * 项目文档模型(多轨)。这是编辑器、时间轴、左右栏、MCP 工具、导入导出共用的唯一真源。
@@ -119,6 +133,7 @@ export interface MediaTiers {
 }
 
 export interface MediaAsset {
+  soundEffect?: SoundEffectLink;
   /** 镜头切换识别结果(可选,由 detect_shots 写入) */
   shots?: Shots;
   /** 主体检测结果(可选,由 detect_subjects 写入) */
@@ -217,6 +232,11 @@ export interface Track {
 
 /** 轨道上的一段。overlay 轨用 cardId+params;video 轨用 mediaId(+ 素材内偏移)。 */
 export interface TrackClip extends Clip {
+  /** 视觉卡内带声音的持久能力标记，让无卡片运行时的导出也能拒绝缺失的声音。 */
+  embeddedAudio?: boolean;
+  /** 同片段视觉卡的持久 WAV 声音产物,由 AV 卡生成流程维护。 */
+  cardAudio?: import("./cardAudioRendition.mjs").CardAudioRendition;
+  soundEffect?: SoundEffectClipLink;
   mediaId?: string;
   /** 视频段从素材的第几秒开始播(默认 0) */
   mediaOffset?: number;
@@ -378,6 +398,10 @@ export function flattenOverlay(p: Project, graph?: Timeline["graph"]): Timeline 
       // 绑定看起来存下了、时间轴上也显示绑了,可预览和导出都一动不动。
       clips.push({
         id: c.id, cardId: c.cardId, start: c.start, end: c.end, params: c.params,
+        // 打字的画面与 WAV 共用源事件时间；切开后不能从第一个字重来。
+        ...((c.cardId === "mu-typing" || c.embeddedAudio || c.cardAudio || p.cardNodes?.some(n => n.id === c.nodeId && n.embeddedAudio))
+          ? c.mediaOffset !== undefined ? { sourceOffset: c.mediaOffset } : c.nodeId ? { sourceOffset: Number(p.cardNodes?.find(n => n.id === c.nodeId)?.timeOffset) || 0 } : null
+          : null),
         ...(c.nodeId ? { nodeId: c.nodeId } : null),
         ...(c.motion ? { motion: c.motion } : null),
         // frame 同理:它是 Stage 摆卡片时才用的,漏在这里 set_position 就成了写了不生效。

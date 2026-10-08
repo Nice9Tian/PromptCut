@@ -35,8 +35,8 @@ import { mirrorKey, pushWanted } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
 import { currentPlan } from "./planDispatch";
-import { cardsRegistryGen, syncedUserCardsGen } from "../kernel/registry";
-import { localOnlyClipIds, onlineBrowserMode } from "../render/placeholderHost";
+import { cardRunStatesGen, cardsRegistryGen, syncedUserCardsGen } from "../kernel/registry";
+import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { fitBeatSwaps, SWAP_MS, swapCostOfSize } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
@@ -390,7 +390,7 @@ function demoteReady(clipId: string, globalFrame: number, localFrame: number, co
 }
 
 /**
- * 在线浏览器模式下这台设备跑不了的卡（用户卡、图卡；C10 契约第 9 节，2026-09-29 用户改语义）：
+ * 在线浏览器模式下本页运行不了的卡（图卡、运行不了的用户卡，`placeholderHost.needsLocalPc`；C10 契约第 9 节，2026-10-06 起本页能运行的用户卡不算）：
  * 有预渲染结果就照贴，与内置卡相同。它们在这台设备上**一律按重卡**：不管分派表怎么判（表还没算出来、旧记录判轻），
  * 播放中抑制、照常选帧、报缺口、取字节；停下时不追（没有组件可追），所以暂停态的「已精确」（`settled`）对它们不成立，
  * 有这一帧的快照就一直贴着，没有就由舞台显示 `unsupported` 占位。判法与舞台同一个（`localOnlyClipIds`）；
@@ -400,7 +400,8 @@ let localOnlyMemo: { project: Project; key: string; ids: ReadonlySet<string> } |
 const NO_IDS: ReadonlySet<string> = new Set();
 export function localOnlyOf(project: Project): ReadonlySet<string> {
   if (!onlineBrowserMode()) return NO_IDS;
-  const key = `${cardsRegistryGen()}:${syncedUserCardsGen()}`;
+  // 运行状态的代数与档位也进键:同步来的卡载入成功(或失败)了、档位变了,哪些片段本页运行不了跟着变
+  const key = `${cardsRegistryGen()}:${syncedUserCardsGen()}:${cardRunStatesGen()}:${localOnlyLowMemory() ? 1 : 0}`;
   if (localOnlyMemo && localOnlyMemo.project === project && localOnlyMemo.key === key) return localOnlyMemo.ids;
   const ids = localOnlyClipIds(project.tracks.flatMap((tr) => tr.clips));
   localOnlyMemo = { project, key, ids };

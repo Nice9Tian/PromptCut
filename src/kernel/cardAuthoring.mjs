@@ -1,4 +1,5 @@
 import { normalizeCardInput, projectCardGraph } from './cardGraph.mjs';
+import { isAudiovisualCard, assertAudiovisualCardKind } from './cardAudioRendition.mjs';
 
 /** 图卡 = 注册表里写了 `card` 或 `audio` 的普通 CardDef。定义永远从注册表取,
  * 不存进项目 JSON —— 它和 TSX 用户卡一样是 `src/cards/user/<id>.tsx` 文件。 */
@@ -17,6 +18,7 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
   const definition = getCard(args.cardId);
   if (!definition) throw new Error(`Unknown card: ${args.cardId}`);
   if (!isGraphCard(definition)) throw new Error('This definition uses the existing card adapter');
+  assertAudiovisualCardKind(definition);
   const next = structuredClone(project);
   const clipById = id => next.tracks?.flatMap(track => track.clips ?? []).find(clip => clip.id === id);
   let track, clip;
@@ -43,7 +45,7 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
     if (!isGraphCard(def)) return;
     const id = crypto.randomUUID();
     next.cardNodes = [...(next.cardNodes || []), { id, adapter: 'card', cardId: target.cardId,
-      kind: def.kind ?? 'animation', inputs: {}, params: { ...def.defaults, ...target.params } }];
+      kind: def.kind ?? 'animation', ...(isAudiovisualCard(def) ? { embeddedAudio: true } : {}), inputs: {}, params: { ...def.defaults, ...target.params } }];
     target.nodeId = id;
   };
   const referencedClips = Object.values(args.inputs || {})
@@ -61,7 +63,7 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
    */
   const priorNodeId = clip.nodeId;
   const prior = priorNodeId ? next.cardNodes?.find(node => node.id === priorNodeId) : undefined;
-  if (prior?.adapter === 'card' && (prior.kind === 'audio') !== (definition.kind === 'audio'))
+  if (prior?.adapter === 'card' && (prior.kind === 'audio' && !prior.embeddedAudio) !== (definition.kind === 'audio' && !isAudiovisualCard(definition)))
     throw new Error('同一片段不能同时挂音频图卡和视觉图卡，先复制片段');
 
   const nodeId = args.nodeId || crypto.randomUUID();
@@ -98,7 +100,7 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
   if (inPlace) {
     // 原地改卡没传 inputs 就沿用旧节点的上游边,不然每次改参数都会把链剪断
     if (!explicit && previous?.inputs) for (const [name, ref] of Object.entries(previous.inputs)) inputs[name] = normalizeCardInput(ref);
-  } else if (!explicit && priorNodeId) {
+  } else if (!explicit && priorNodeId && !(definition.inputs && !Object.keys(definition.inputs).length)) {
     // 「先套反色再套模糊」:第二张的输入自动接第一张的输出,
     // 而不是接那个以本卡为 cardId 的 chrome 合成节点。
     inputs.source = normalizeCardInput({ nodeId: priorNodeId });
@@ -106,11 +108,11 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
 
   // ④ 兜底。第二次 apply_card 打同一片段时 clip.cardId 已经是本卡 id,
   // 不排除它就会塞一条指向自己的 source 输入、digest 跟着变。
-  if (!Object.keys(inputs).length && (clip.mediaId || (clip.cardId && clip.cardId !== definition.id)))
+  if (!(definition.inputs && !Object.keys(definition.inputs).length) && !Object.keys(inputs).length && (clip.mediaId || (clip.cardId && clip.cardId !== definition.id)))
     inputs.source = normalizeCardInput(`@clip/${clip.id}/source`);
 
   // ⑤ 建节点。kind 从定义抄进节点:Node 侧脚本读不到 TSX 定义,只能看节点。
-  const node = { id: nodeId, adapter: 'card', cardId: definition.id, kind: definition.kind ?? 'animation',
+  const node = { id: nodeId, adapter: 'card', cardId: definition.id, kind: definition.kind ?? 'animation', ...(isAudiovisualCard(definition) ? { embeddedAudio: true } : {}),
     params: { ...definition.defaults, ...args.params }, inputs };
   next.cardNodes = [...(next.cardNodes || []).filter(node => node.id !== nodeId), node];
 
@@ -120,7 +122,9 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
    * 它的消费方只看节点,片段照旧被素材层跳过、画面上不多一层。
    */
   clip.nodeId = nodeId;
-  if (definition.kind !== 'audio') clip.cardId = definition.id;
+  if (isAudiovisualCard(definition)) clip.embeddedAudio = true;
+  else { delete clip.embeddedAudio; delete clip.cardAudio; }
+  if (definition.kind !== 'audio' || isAudiovisualCard(definition)) clip.cardId = definition.id;
   // 实例参数节点存一份、片段也存一份:右栏和 setClipParams 写的是 clip.params,
   // Stage 读的也是它,不照抄就是 apply_card 的 params 在画面上静默丢掉。
   clip.params = { ...definition.defaults, ...args.params };

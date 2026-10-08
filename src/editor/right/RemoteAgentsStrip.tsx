@@ -15,7 +15,7 @@ export function RemoteAgentsStrip() {
     >
       {agents.map((a) => (
         <div key={a.id} data-pc="remote-agent" data-agent={a.id} title={`对话 ID ${a.id}`}>
-          成员 {a.member} 的 Agent{a.vendor ? `(${a.vendor})` : ""}正在改:{a.scope}
+          {a.cloud ? `${a.member}的云端 Agent` : `成员 ${a.member} 的 Agent${a.vendor ? `(${a.vendor})` : ""}`}正在改:{a.scope}
         </div>
       ))}
     </div>

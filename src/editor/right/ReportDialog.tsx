@@ -1,9 +1,12 @@
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
-import { DEBUG_INLINE_LIMIT, copyDebugReport, saveReportToFile } from "../../ai/debug";
+import { DEBUG_INLINE_LIMIT, copyDebugReport, downloadReportFile, saveReportToFile } from "../../ai/debug";
 import { SUBMIT_URL, submitBlockedReason, submitReport } from "../../ai/reportSubmit";
 import "./ReportDialog.css";
+
+/** 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」):在线构建里剪掉「请本机编辑器进程写盘」那条路 */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 /**
  * 诊断报告的子窗口:报告摆在文本框里,底下三个出口 —— 复制 / 保存为文件 / 提交。
@@ -25,6 +28,11 @@ export function ReportDialog(props: {
   label?: string;
   /** 顶上那句说明这份报告里有什么 */
   hint?: string;
+  /**
+   * 「保存为文件」的做法;不给时:桌面版请本机编辑器写盘并打开所在文件夹,在线页面在浏览器里下载一份
+   * (在线页面不请求编辑器进程的 `/api/*`)。返回给用户看的回执。
+   */
+  saveFile?: (text: string, label: string) => Promise<string> | string;
   onClose: () => void;
 }): JSX.Element | null {
   const { open, title, text, hint, onClose } = props;
@@ -78,6 +86,8 @@ export function ReportDialog(props: {
   });
 
   const doSave = () => run("save", async () => {
+    if (props.saveFile) return await props.saveFile(text, label);
+    if (ONLINE_BUILD) return downloadReportFile(text, label);
     const out = await saveReportToFile(text, label);
     return `已保存并打开了所在文件夹:${out.file}`;
   });
@@ -128,7 +138,7 @@ export function ReportDialog(props: {
           <button
             className="rpt-btn"
             disabled={collecting || busy !== ""}
-            title="存成 txt 并打开所在文件夹"
+            title={ONLINE_BUILD ? "下载成文件" : "存成 txt 并打开所在文件夹"}
             onClick={doSave}
           >
             {busy === "save" ? "保存中…" : "保存为文件"}

@@ -6,7 +6,8 @@ import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { themeStyle } from "./themes";
-import { allCards, getCard, unknownCardClipIds, userCardSources } from "./kernel/registry";
+import { allCards, getCard, setSyncedUserCards, unknownCardClipIds, userCardSources, type SyncedUserCard } from "./kernel/registry";
+import { setExportSyncedMount } from "./render/placeholderHost";
 import { cardSourceVersion } from "./render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles } from "./render/cardSourceFiles.mjs";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
@@ -291,6 +292,11 @@ export default function ExportView() {
        * 起 Chrome + goto + 字体首次布局加起来是固定的几秒钟,每渲一次都重付一遍太贵。
        * 走的是 install 自己,和重新加载页面同一条路径,不会两套行为。
        */
+      /** 在线逐帧导出:编辑页面把同步来的用户卡的表交给导出页,让它们的包裹层挂出来、好换成预渲染原尺寸(`placeholderHost.exportSyncedMountFor`) */
+      (window as unknown as { __pcSetSyncedUserCards?: (entries: SyncedUserCard[]) => void }).__pcSetSyncedUserCards = (entries) => {
+        setSyncedUserCards(entries);
+        setExportSyncedMount(true);
+      };
       window.__pcLoadProject = async (raw: unknown, options?: { deferCards?: boolean }) => {
         window.__pcReady = false;
         const next = raw && Array.isArray((raw as Project).tracks)
@@ -327,7 +333,7 @@ export default function ExportView() {
       }}
     >
       {renderProject ? <FrameScene project={renderProject} sourceProject={project!} t={t} directT={directT} playToken={playToken} graph={timeline.graph} />
-        : <Stage timeline={renderTimeline!} t={t} directT={directT} playToken={playToken} />}
+        : <Stage timeline={renderTimeline!} t={t} directT={directT} playToken={playToken} mountClock />}
 
     </div>
   );

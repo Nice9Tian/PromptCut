@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ModelBar } from "../ModelBar";
 import { IconPaperclip } from "../../../ui/icons";
 import type { AiProvider, ChatAttachment, ProviderInfo, PublicAiConfig } from "../../../ai/types";
@@ -16,6 +16,14 @@ import {
 } from "./composerHeight";
 import "./chat.css";
 
+/**
+ * 云端下「一键配特效」置灰的悬停说明。它在本机只是按角色依次发两条消息(`useAiChat.ts` 的 `runWorkflow`),本身云端也做得了;
+ * 卡在第一步:剪辑导演之后的特效助理要「根据他们说的内容」配字幕与动效,那得先给每个视频做语音识别(`transcribe_media`),
+ * 而语音识别在云节点上这一版还没接上(`server/agent/service/cloud-tools.mjs` 里 `transcribe_media`、`auto_workflow` 记为「还没接上」)。
+ * 接上之后:去掉这里的置灰,`CloudAiPanel` 的 `workflowRoles`、`onRunWorkflow` 改成按角色依次发给云端对话。
+ */
+export const CLOUD_NO_WORKFLOW = "一键配特效的第一步要给每个视频做语音识别,云节点上这一版还没接上语音识别(要节点上的 Python 运行环境和语音模型),接上之后才能用。现在可以改用本机接入方式";
+
 /** 「✦」菜单里的几样:不常点、但一点就改变这一轮怎么跑的东西,原来挤在顶栏上 */
 export interface ComposerMenuProps {
   /** 「一键配特效」依次跑的角色,只用来写悬停说明 */
@@ -25,6 +33,27 @@ export interface ComposerMenuProps {
   canDiagnose: boolean;
   onOpenDiagnostics: () => void;
   onNewChat: () => void;
+  /** 「云端」接入方式:一键配特效在云端下置灰(悬停写原因);诊断报告照常可用,内容换成这段云端对话的(〔用户 2026-10-07 定〕) */
+  cloudMode?: boolean;
+}
+
+/** 「云端」接入方式(契约 9.5) */
+export interface ComposerCloud {
+  /** 驱动下拉里要不要有「云端」这一项 */
+  show: boolean;
+  selected: boolean;
+  /** 这一项能不能选(创建者关了开关时不能,`disabledReason` 是悬停说明) */
+  disabled?: boolean;
+  disabledReason?: string;
+  onSelect: () => void;
+  /** 选中云端时又选了本机的某个驱动 */
+  onLeave: (p: AiProvider) => void;
+  /** 云端下模型那一组(`CloudModelBar`) */
+  toolbar: ReactNode;
+  /** 云端下附件按钮的悬停说明(附件传到云端这个对话的工作目录) */
+  attachTitle?: string;
+  /** 已不用(云端下附件按钮不再置灰)。`AiPanel.tsx` 里还在传一个空串,等那边顺手删掉后这一项也可以删 */
+  attachReason?: string;
 }
 
 export interface ComposerProps {
@@ -55,6 +84,11 @@ export interface ComposerProps {
   onSetProvider: (p: AiProvider) => void;
   config: PublicAiConfig | null;
   menu: ComposerMenuProps;
+  /**
+   * 「云端」接入方式:不给就与原来逐条相同。给了,驱动下拉里多一项「云端」(`show`),选中时模型那一组换成 `toolbar`,
+   * 附件按钮照常可用(传到云端);「一键配特效」置灰并写原因。在线页面没有本机驱动,下拉里只有这一项。
+   */
+  cloud?: ComposerCloud;
   /** 这一页的 id:运行选项里的创造力等级按页存 */
   tabId?: string;
 }
@@ -65,7 +99,7 @@ function providerLabel(p: ProviderInfo): string {
 
 /** 工具条上的「✦」菜单 */
 function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
-  const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming } = props;
+  const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming, cloudMode } = props;
   const pop = usePopover();
   /** 点了一项就收起菜单 */
   const pick = (fn: () => void) => () => {
@@ -92,8 +126,8 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
           role="menuitem"
           className="ai-menu-item"
           data-pc="ai-auto-workflow"
-          title={`依次跑：${workflowRoles.map((r) => r.name).join(" → ")}`}
-          disabled={streaming}
+          title={cloudMode ? CLOUD_NO_WORKFLOW : `依次跑：${workflowRoles.map((r) => r.name).join(" → ")}`}
+          disabled={streaming || cloudMode}
           onClick={pick(onRunWorkflow)}
         >
           <span className="ai-menu-icon" aria-hidden="true" />
@@ -104,7 +138,7 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
           role="menuitem"
           className="ai-menu-item"
           data-pc="ai-diagnostics"
-          title="把这段对话和每一步执行事件收成 JSON(不含密钥),在子窗口里复制 / 存文件 / 提交"
+          title={cloudMode ? "把这段云端对话的过程、出错原因和客户端信息收成 JSON(不含任何凭证),在子窗口里复制 / 存文件 / 提交" : "把这段对话和每一步执行事件收成 JSON(不含密钥),在子窗口里复制 / 存文件 / 提交"}
           disabled={!canDiagnose}
           onClick={pick(onOpenDiagnostics)}
         >
@@ -242,7 +276,11 @@ export function Composer(props: ComposerProps) {
     config,
     menu,
     tabId,
+    cloud,
   } = props;
+  const cloudOn = !!cloud?.selected;
+  /** 附件条上的动词:本机是「导入」,云端是传到云节点的「上传」 */
+  const verb = cloudOn ? "上传" : "导入";
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (hotkeysOff || !active) return;
@@ -272,7 +310,7 @@ export function Composer(props: ComposerProps) {
             <div
               key={a.id || idx}
               className={`ai-attachment-chip${a.status === "importing" ? " is-importing" : ""}${a.status === "error" ? " is-error" : ""}`}
-              title={a.status === "error" ? (a.error || "导入失败") : a.name}
+              title={a.status === "error" ? (a.error || `${verb}失败`) : a.name}
               onClick={() => {
                 if (a.status !== "error") return;
                 // 失败的卡片点一下重试:先变回导入中,再重新走一遍导入
@@ -281,7 +319,7 @@ export function Composer(props: ComposerProps) {
             >
               {a.status === "importing" ? <span className="ai-spinner" aria-hidden /> : <span aria-hidden="true">{attachIcon(a.kind)}</span>}
               <span className="ai-attachment-name">{a.name}</span>
-              {a.status === "importing" ? " · 导入中…" : a.status === "error" ? " · 导入失败,点击重试" : ""}
+              {a.status === "importing" ? ` · ${verb}中…` : a.status === "error" ? ` · ${verb}失败${cloudOn && a.error ? `:${a.error}` : ""},点击重试` : ""}
               <button
                 type="button"
                 className="ai-attachment-remove"
@@ -313,30 +351,40 @@ export function Composer(props: ComposerProps) {
             type="button"
             className="pc-icon-btn ai-bar-btn"
             data-pc="ai-attach"
-            title="添加附件"
+            title={cloudOn ? (cloud!.attachTitle ?? "添加附件") : "添加附件"}
             aria-label="添加附件"
             onClick={onPickFiles}
             disabled={uploading}
           >
             <IconPaperclip size={16} />
           </button>
-          <ComposerMenu {...menu} streaming={streaming} />
+          <ComposerMenu {...menu} cloudMode={cloudOn} streaming={streaming} />
           {/* 当前用哪个驱动是这一页的身份,再窄也留在工具条上 */}
           <select
             className="ai-bar-select ai-provider-select"
             data-pc="ai-provider"
             aria-label="AI 驱动方式"
             title="驱动方式"
-            value={provider || ""}
-            onChange={(e) => onSetProvider(e.target.value as AiProvider)}
+            value={cloudOn ? "cloud" : provider || ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "cloud") cloud?.onSelect();
+              else if (cloudOn) cloud!.onLeave(v as AiProvider);
+              else onSetProvider(v as AiProvider);
+            }}
           >
             {providers.map((p) => (
               <option key={p.id} value={p.id} disabled={!p.available} title={p.available ? "" : "未安装"}>
                 {providerLabel(p)}
               </option>
             ))}
+            {cloud?.show && (
+              <option value="cloud" disabled={cloud.disabled} title={cloud.disabled ? cloud.disabledReason : "消息发到云端,在云节点上执行;关掉软件也会继续"}>
+                云端
+              </option>
+            )}
           </select>
-          <ModelBar provider={provider} config={config} disabled={streaming} tabId={tabId} />
+          {cloudOn ? cloud!.toolbar : <ModelBar provider={provider} config={config} disabled={streaming} tabId={tabId} />}
         </div>
         {streaming ? (
           <>

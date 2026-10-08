@@ -12,13 +12,16 @@
 /** 注册表要先于工具实现就位:卡片、部件都靠 import 时的副作用登记 */
 const REGISTRIES = ['/src/cards/index.ts', '/src/parts/index.ts'];
 
+/** store 模块 → 它刚载入时的那份空项目(`clearProject` 放回去的就是它) */
+const EMPTY_PROJECT = new WeakMap();
+
 /**
  * @param {(id: string) => Promise<any>} load
  * @param {{ apiBase?: string }} [options] 工具实现里打编辑器接口用的地址(`src/mcp/apiUrl.ts`)
  */
 export async function loadSsrHost(load, { apiBase } = {}) {
   for (const id of REGISTRIES) await load(id);
-  const [core, api, routes, diff, common, apiUrl, duration] = await Promise.all([
+  const [core, api, routes, diff, common, apiUrl, duration, registry, cardParse, store, soundRequest, soundGeneration, soundEffects, cardAudioActions] = await Promise.all([
     load('/src/store/core.ts'),
     load('/src/mcp/api.ts'),
     load('/src/mcp/routes.mjs'),
@@ -26,8 +29,20 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     load('/src/mcp/common.ts'),
     load('/src/mcp/apiUrl.ts'),
     load('/src/kernel/duration.ts'),
+    load('/src/kernel/registry.ts'),
+    load('/src/kernel/cardSourceParse.mjs'),
+    load('/src/store/project.ts'),
+    load('/src/audio/soundRequest.ts'),
+    load('/src/audio/soundGeneration.ts'),
+    load('/src/kernel/soundEffects.ts'),
+    load('/src/store/actions/cardAudio.ts'),
   ]);
   if (apiBase) apiUrl.setApiBase(apiBase);
+  if (!EMPTY_PROJECT.has(core)) EMPTY_PROJECT.set(core, core.getState().project);
+  const dropUndo = () => {
+    if (Array.isArray(core.history)) core.history.length = 0;
+    if (Array.isArray(core.future)) core.future.length = 0;
+  };
   const editorApi = api.editorApi;
   const routeTable = routes.TOOL_ROUTES;
   return {
@@ -37,6 +52,19 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     },
     getProject() {
       return core.getState().project;
+    },
+    /**
+     * 多个实例共用这一份 store 时(托管档,`agent-exec.mjs` 的 `isolateStore`)进锁先调:项目以外的页面状态
+     * (播放头、选区、手动时长等)回到缺省值,撤销栈清空 —— 上一个实例的工具实现留下的东西不带给下一个。
+     */
+    resetStore() {
+      core.set({ t: 0, playing: false, selection: [], filePath: null, dirty: false, durationManual: null, lastCamera3dFov: null });
+      dropUndo();
+    },
+    /** 出锁时调:把项目换回刚载入时的空项目,store 里不留任何实例的内容 */
+    clearProject() {
+      core.set({ project: EMPTY_PROJECT.get(core), selection: [] });
+      dropUndo();
     },
     /** 路由表里的工具 → EditorApi 方法;不在表里回 undefined */
     routeOf(tool) {
@@ -78,5 +106,83 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     },
     frameLayoutOf: common.frameLayoutOf,
     stageSize: common.stageSize,
+
+    /* ---------------- 托管档:项目自己的用户卡与素材登记(契约 cloud-agent-contract.md 第 9.3、9.4 节) ---------------- */
+
+    /** 服务端卡片表里现有的卡片 id(检出里带的内置卡与随仓库的用户卡) */
+    cardIds() {
+      return registry.allCards().map((c) => c.id);
+    },
+    /**
+     * 静态解析一份用户卡源码(`src/kernel/cardSourceParse.mjs`):取 id、名字、说明、参数默认值与控件,只认字面量,**不执行源码**。
+     * `files(key)` 给它引到的同目录文件的源码。回 `[{ id, name, description?, defaults, controls, controlsIncomplete }]`。
+     */
+    parseCard(source, { key, files } = {}) {
+      return cardParse.parseCardSource(source, { key, ...(typeof files === 'function' ? { files } : {}) });
+    },
+    /** 一份卡片源码经相对导入引到的文件(仓库相对路径) */
+    cardImports(source, key) {
+      return cardParse.cardSourceImports(source, key);
+    },
+    /**
+     * 把一组静态解析出的用户卡临时登记进卡片表(只有数据:组件是个空壳,从不渲染),回撤掉它们的函数。
+     * 与表里已有的 id 撞车的不登记(内置卡优先,和 `src/cards/index.ts` 的兜底一致)。只在进程级的锁里用。
+     */
+    registerProjectCards(parsed) {
+      const taken = new Set(registry.allCards().map((c) => c.id));
+      const defs = [];
+      for (const p of Array.isArray(parsed) ? parsed : []) {
+        if (!p || typeof p.id !== 'string' || taken.has(p.id)) continue;
+        taken.add(p.id);
+        defs.push({
+          id: p.id, name: p.name, description: typeof p.description === 'string' ? p.description : '', source: 'user',
+          defaults: p.defaults && typeof p.defaults === 'object' ? p.defaults : {},
+          controls: Array.isArray(p.controls) ? p.controls : [],
+          Component: () => null,
+        });
+      }
+      if (!defs.length) return () => {};
+      registry.registerCards(defs);
+      return () => registry.unregisterCards(defs.map((d) => d.id));
+    },
+    /** 登记一条已经入库的素材(不进撤销栈);回登记好的那一条 */
+    addMedia(asset) {
+      return store.actions.addMedia(asset);
+    },
+    /** 把一条素材放上时间轴(与桌面版导入视频后自动放一段相同);回片段或 null */
+    addMediaClip(mediaId, start, opts = {}) {
+      return store.actions.addMediaClip(mediaId, start, opts);
+    },
+    /**
+     * 音效合成(契约第 9.4a 节):与桌面版同一份纯函数。`plan` 把 sound_generate 的参数变成配方与落点(只读传进来的项目);
+     * `renderWav` 按块合成 PCM16 WAV;`commit` 在放好项目的 store 上原子登记素材与片段(只在进程级的锁里用)。
+     */
+    sound: {
+      plan: (project, options) => soundRequest.planSoundGeneration(project, options),
+      renderWav: (recipe, options) => soundGeneration.renderSoundEffectWav(recipe, options),
+      reuseDigest: (recipe) => soundGeneration.soundEffectReuseDigest(recipe),
+      reuseKey: (recipe) => soundEffects.soundEffectReuseKey(recipe),
+      assertSize: (recipe) => soundGeneration.assertSoundRecipeSize(recipe),
+      commit: (spec) => store.actions.commitSoundEffect(spec),
+    },
+    /**
+     * 卡片声音(契约第 9.4c 节):WAV 已经由渲染服务的工作进程算好、入了库,这里只在放好项目的 store 上原子登记
+     * (与桌面版同一份 `commitCardAudio`;只在进程级的锁里用)。**这里不执行卡片代码。**
+     */
+    cardAudio: {
+      commit: (args) => cardAudioActions.commitCardAudio({ ...args, loadToken: core.getState().projectLoadToken }),
+    },
+    /**
+     * 测响度(契约第 9.4b 节):与桌面版同一份。`measureRequest` 按放好项目的 store 算出「测谁」(只在进程级的锁里用),
+     * `measureFinish` 给量出来的数标上谁在出声。
+     */
+    audio: {
+      measureRequest: (args) => common.measureAudioRequest(args),
+      measureFinish: (req, data) => common.measureAudioFinish(req, data),
+    },
+    /** 此刻 store 里项目内容的末尾(秒):新导入的视频接在后面放 */
+    contentEnd() {
+      return duration.contentEndOf(core.getState().project.tracks ?? []);
+    },
   };
 }

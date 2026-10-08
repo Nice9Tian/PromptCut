@@ -21,6 +21,9 @@
  */
 import { effectiveCreativity, normalizeCreativity, creativityRank } from '../../src/kernel/creativity.mjs';
 
+// 创造力等级的几个名字从这里转出:server/agent/service/ 不直接引用 src/(契约 cloud-agent-contract.md 第 2.1 节「载入缝」),本文件本来就引这个模块
+export { CREATIVITY_HINT, CREATIVITY_LABEL, normalizeCreativity, projectCreativity } from '../../src/kernel/creativity.mjs';
+
 export const SESSION_TYPES = Object.freeze(['api', 'cli', 'desktop']);
 
 /** 登记表的上限:超了按最久没动的先丢(一个编辑器进程正常只有几个对话) */

@@ -1,13 +1,15 @@
 import { AnimClock } from "../kernel/AnimClock";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { frameCss } from "../kernel/layout";
 import { perspectivePx } from "../kernel/space3d";
 import { motionAt } from "../kernel/motion";
 import { cardOpacityAt, hasOpacityControls } from "../kernel/project";
+import { forgetUnmounted, mountClockMsAt } from "./mountClock";
 import { emphasisFilter } from "../kernel/emphasis";
-import { getCard } from "../kernel/registry";
+import { getCard, isRuntimeCard } from "../kernel/registry";
 import { PartTree } from "./PartTree";
 import { GraphCard } from "./cards/GraphCard";
+import { RuntimeCardBoundary } from "./cards/RuntimeCardBoundary";
 import { frameBox } from "../kernel/layout";
 import type { CardDef, CardProps, Timeline } from "../kernel/types";
 import { cardMountedAt } from "./frameWindow.mjs";
@@ -18,7 +20,7 @@ import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
 /* 占位组件(product/rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
 import { PlaceholderPlane, PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, maxAnimated } from "./placeholder";
-import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, localOnlyReason, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholderFitFor, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
+import { ensurePlaceholderStyle, exportSyncedMountFor, geometryFor, isCatchingUpClip, localOnlyReason, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholderFitFor, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
 import type { PlaceholderReason } from "./placeholder/contract";
 
 setMaxAnimated(maxAnimated);
@@ -88,6 +90,13 @@ const EMPTY_SET: ReadonlySet<string> = new Set();
  * 顺带省掉 `renameSnapshotIds` 每拍把整份 html 哈希一遍的开销。
  */
 const snapshotPropByClip = new Map<string, { html: string; prop: { __html: string } }>();
+/**
+ * 运行时载入的卡(在线浏览器里执行的同步来的用户卡与图卡)包一层错误边界:渲染时抛错只撤这一张,不带垮舞台。
+ * 构建时就有的卡原样返回 —— 桌面、导出、预渲染的 React 树与以前逐字相同。
+ */
+function guardRuntimeCard(cardId: string | undefined, body: ReactNode): ReactNode {
+  return cardId && isRuntimeCard(cardId) ? <RuntimeCardBoundary cardId={cardId}>{body}</RuntimeCardBoundary> : body;
+}
 function snapshotProp(clipId: string, html: string): { __html: string } {
   const hit = snapshotPropByClip.get(clipId);
   if (hit && hit.html === html) return hit.prop;
@@ -101,7 +110,15 @@ function snapshotProp(clipId: string, html: string): { __html: string } {
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
-export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting }: { timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender } & StagePlaneProps) {
+export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting, mountClock = false }: {
+  timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender;
+  /**
+   * 给「按挂载时刻计时」的卡传挂载钟(`CardProps.mountClockMs`)。**只有平铺时间轴的导出页传 true**:
+   * 那条路径上卡片提前 `CARD_MOUNT_LEAD` 挂载,旧的打字卡从挂载那一帧起计时,导出像素基线(演示项目)就是那样渲出来的。
+   * 预览与 Project 导出不传:前者提前多少取决于哪一拍落进提前窗口,后者在起点才挂,都按 `t`。
+   */
+  mountClock?: boolean;
+} & StagePlaneProps) {
   const timeOf = (c: Timeline['clips'][number]) => clipFrameMode(c, getCard(c.cardId)) === 'direct' ? directT : t;
   const active = timeline.clips.filter((c) => cardMountedAt(c, timeOf(c)));
 
@@ -135,6 +152,20 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    * 放 Map 而不是单个值:live 路径下每个 clip 一个单片段 Stage、Map 里只有一条,
    * 但同一份代码也服务导出 / legacy 的多片段 Stage。
    */
+  /*
+   * 挂载钟(记账在 `mountClock.ts`):每张卡这一次挂载(`片段 id:代数`,和包裹层的 key 同一个)第一次渲染时的舞台时刻。
+   * 只在 `mountClock` 打开时记;渲染体里按 key 取,这一次渲染没挂的在提交后清掉。
+   */
+  const mountedAt = useRef(new Map<string, number>());
+  const mountKeys = new Set<string>();
+  const mountClockMsOf = (key: string, clip: Timeline["clips"][number], now: number): number | undefined => {
+    if (!mountClock) return undefined;
+    mountKeys.add(key);
+    return mountClockMsAt(mountedAt.current, key, clip.start, now);
+  };
+  useEffect(() => {
+    if (mountClock) forgetUnmounted(mountedAt.current, mountKeys);
+  });
   const frozenT = useRef(new Map<string, number>());
   const prevSuppressed = useRef<ReadonlySet<string>>(EMPTY_SET);
   const supNow = suppressed ?? EMPTY_SET;
@@ -234,7 +265,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            * 包裹层照内置重卡的路子挂快照平面、流平面,兜底顺序什么都贴不上时占位符显示 `unsupported`(C10 契约第 9 节)。
            * 模式关着(桌面、导出、预渲染、Agent 看到的画面)恒为 false,下面每一支和以前逐字相同。
            */
-          const localOnly = onlineBrowserMode() && unsupportedHere(clip.cardId, def);
+          const localOnly = (onlineBrowserMode() && unsupportedHere(clip.cardId, def)) || exportSyncedMountFor(clip.cardId, def);
           /*
            * 三道都在取 def 这一格剔掉,不放到分支里:
            *  - 定义没了(用户卡文件被删)——图卡的 def 在注册表里必然取得到,挡不住下面两种;
@@ -244,6 +275,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            */
           if (!localOnly && (!def || (!def.card && !def.Component) || (def.card && !timeline.graph))) return null;
           const C = def?.Component!;
+          // 声画卡的 DOM/图形由视觉出口选择，audio() 不改变视觉分派。
+          const embeddedOffset = def?.audio ? (clip.sourceOffset ?? 0) : 0;
           const cardT = timeOf(clip);
           const unsupported = localOnly;
 
@@ -264,6 +297,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            * `layoutId` 靠它换新、三维 / 终端卡靠它重播,只换 key 的话 Motion 会把重播当共享布局过渡。
            */
           const gen = remountGen?.get(clip.id) ?? playToken;
+          const mountClockMs = mountClockMsOf(`${clip.id}:${gen}`, clip, cardT);
           const isSettling = settling?.has(clip.id) ?? false;
           const snapshotHtml = snapshots?.get(clip.id);
           /*
@@ -335,7 +369,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 里没有那个键,没有这层就会把 undefined 传进组件。
                 正常情况下它一项都不会补 —— 补上了就说明 clip 缺参数。
               */}
-              {unsupported ? (
+              {guardRuntimeCard(clip.cardId, unsupported ? (
                 /* 这台设备跑不了的卡:卡片代码不跑,不挂组件(快照 / 流平面与占位槽位照常挂在下面) */
                 null
               ) : clip.cardId === "composite" && clip.parts?.length ? (
@@ -346,10 +380,10 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 <GraphCard def={def!} clip={clip} graph={timeline.graph} fps={timeline.fps}
                   t={localTOf(clip, cardT)} params={{ ...def!.defaults, ...clip.params }} stage={stageInfo} />
               ) : clipFrameMode(clip, def) === 'direct' ? (
-                <DirectCard def={def!} params={clip.params} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
+                <DirectCard def={def!} params={clip.params} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} duration={clip.end - clip.start} stage={stageInfo} />
               ) : (
-                <C params={{ ...def!.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
-              )}
+                <C params={{ ...def!.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} mountClockMs={mountClockMs} duration={clip.end - clip.start} stage={stageInfo} />
+              ))}
               {/*
                 gl 平面(R9,E7 的第五种兄弟平面)。它是**活渲的一部分**,不进四条平面选择器的放过名单 ——
                 藏子树时它和子树一起被藏。**不加 `data-pc-clip`**(`isSolid` 会把它当包裹层跳过)。

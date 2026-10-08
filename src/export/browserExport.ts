@@ -10,6 +10,7 @@
  *
  * 这一层不认识编辑器:项目、素材服务、文档服务、提示、确认都由调用方(`src/editor/io/index.ts` 的 `exportVideo` 在线分支)注入。
  */
+import { assertProjectCardAudio } from "../audio/cardAudio";
 import type { Project } from "../kernel/project";
 import { audioPlanOf } from "../kernel/audioPlan.mjs";
 import { renderMix, encodeWavFloat32, type MixPlan } from "../audio/renderMix";
@@ -48,6 +49,8 @@ export interface BrowserExportDeps {
    * 回 null 或不给 = 层表里的都算重卡(普通档)。
    */
   heavyOnly?: () => string[] | null;
+  /** 不管判轻判重都必须用预渲染原尺寸的片段(同步来的用户卡与图卡:导出页不执行它们的代码) */
+  requiredOriginals?: () => string[];
   /** 素材原尺寸的地址:在线页面换成远程素材服务 + 只读票据(`mediaTier.ts` 的 `remoteMediaUrl`) */
   mediaUrl?: (url: string) => string;
   /** 当前的只读票据(导出途中续签,C10 契约第 12 节;`ticketRenewal.ts`):每一帧装素材前换进素材地址 */
@@ -85,7 +88,7 @@ async function precheck(deps: BrowserExportDeps): Promise<OriginalsIndex | null>
     if (deps.signal.aborted) throw cancelled();
     const media = await deps.checkMediaOriginals();
     let index: OriginalsIndex | null = null;
-    if (deps.originals) index = await loadOriginalsIndex(deps.project.id || null, deps.originals, { fallbackHeavy: deps.fallbackHeavy?.() ?? [], onlyClips: deps.heavyOnly?.() ?? null, project: deps.project });
+    if (deps.originals) index = await loadOriginalsIndex(deps.project.id || null, deps.originals, { fallbackHeavy: deps.fallbackHeavy?.() ?? [], onlyClips: deps.heavyOnly?.() ?? null, project: deps.project, requiredClips: deps.requiredOriginals?.() ?? [] });
     const parts: string[] = [];
     if (media.length) parts.push(awaitingUploaderMessage(media));
     if (index?.missing.length) parts.push(ONLINE_EXPORT_TEXT.missingOriginals(index.missing.length));
@@ -130,6 +133,7 @@ async function sliceWav(source: ArrayBuffer, offset: number, dur: number): Promi
 
 async function encodeAudio(deps: BrowserExportDeps, durationSec: number): Promise<EncodedAudio | null> {
   const project = deps.project;
+  assertProjectCardAudio(project);
   const all = audioPlanOf(project).filter((e: { start: number }) => e.start < durationSec);
   if (!all.length) return null;
   const byId = new Map(project.media.map((m) => [m.id, m]));
@@ -213,6 +217,7 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
 
   const cap = await probeExportCapability({ width: project.width, height: project.height, fps }, deps.env);
   if (!cap.ok || !cap.videoCodec) throw new Error(cap.message || ONLINE_EXPORT_TEXT.unsupportedSize);
+  assertProjectCardAudio(project);
   const wantsAudio = audioPlanOf(project).some((e: { start: number }) => e.start < durationSec);
   if (wantsAudio && !cap.audio && !(await deps.confirm(ONLINE_EXPORT_TEXT.noAudio))) throw cancelled();
 

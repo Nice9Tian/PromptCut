@@ -28,7 +28,8 @@ import type { StageRole } from "../render/stageRpc";
 import { wirePlan } from "../render/wirePlan";
 import { clipIdentityOf } from "./costIdentity";
 import { frontStage, backStage } from "./stageBridge";
-import { onCardsUpdated, onSyncedUserCardsChanged, unknownCardClipIds } from "../kernel/registry";
+import { onCardRunStatesChanged, onCardsUpdated, onSyncedUserCardsChanged, unknownCardClipIds } from "../kernel/registry";
+import { setLocalOnlyLowMemory } from "../render/placeholderHost";
 
 let project: Project | null = null;
 let costs: CardCostRecord[] = [];
@@ -143,6 +144,11 @@ function schedule(): void {
  * 不给它们身份),所以重算重发一次。桌面不设这张表,永远不触发。
  */
 onSyncedUserCardsChanged(() => schedule());
+/*
+ * 同步来的卡的运行状态变了(载入成功、失败、换代;`docs/plan/online-card-exec-contract.md` 第 6、8 节):本页能运行的拿到身份、
+ * 照成本记录判轻重,运行不了的回到一律按重,所以重算重发一次。桌面没有运行状态,永远不触发。
+ */
+onCardRunStatesChanged(() => schedule());
 /* 卡片代码换了(热更新装上新卡):原来的未知卡片可能认得了,要重新进表 */
 onCardsUpdated(() => schedule());
 
@@ -177,6 +183,8 @@ export function mergePlanCosts(records: readonly CardCostRecord[]): void {
 export function setPlanLowMemory(on: boolean): void {
   if (lowMemory === !!on) return;
   lowMemory = !!on;
+  // 低内存档不执行用户卡的代码(含构建时就在包里的仓库用户卡):哪些片段本页运行不了跟着档位走(`placeholderHost.ts`)
+  setLocalOnlyLowMemory(lowMemory);
   if (!lowMemory) lowMemoryLight = null;
   schedule();
 }
@@ -246,6 +254,7 @@ export function lightCostAt(t: number): number {
 /** 测试用 */
 export function resetPlanDispatch(): void {
   lowMemory = false;
+  setLocalOnlyLowMemory(false);
   lowMemoryLight = null;
   judged = null;
   deadMs = null;

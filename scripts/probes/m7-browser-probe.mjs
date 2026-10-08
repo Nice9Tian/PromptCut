@@ -1,31 +1,35 @@
 /**
- * M7 验收探针：纯浏览器节点（契约 `docs/plan/m7-contract.md` 第 10 节 M7-A1～A12 与 W7；第 13 节主会话裁定 D1～D18 是定论）。
+ * M7 验收探针：纯浏览器节点（契约 `docs/plan/m7-contract.md` 第 10 节 M7-A1～A12；第 13 节主会话裁定 D1～D18 是定论）。
+ * 「跨机」不再单独成项（原 W7，verification.md「本地验证与真实网络验证」）：两个角色在不在同一台机器上不影响结论，功能断言都在 A1～A12 里。
  * 照契约写，不看页面节点分支（`claude/rq-m7-node`）的实现；页面诊断的读法收在 `m7-node-adapter.mjs`（集成时只改那一处）。
  *
  *   node scripts/probes/m7-browser-probe.mjs [--role all]                    本机替身：协调口 + creator、node 两个子进程
  *   node scripts/probes/m7-browser-probe.mjs --role creator [--coord <url>] [--bind 0.0.0.0 --public-host <PC 局域网 IP>]
- *   node scripts/probes/m7-browser-probe.mjs --role node --coord http://<PC>:5456 [--timing-authoritative]
+ *   node scripts/probes/m7-browser-probe.mjs --role node --coord http://<PC>:5456
  *
- * 角色（W7 跨机：PC 当 creator = 用户 A，笔记本当 node = 成员 B；协调口 KV 前缀 `m7ap`，键名见 `m8/kv.mjs`）：
- *   creator  起本机托管组合（进程内，回环不信任、集群令牌现场生成）与仿 nginx 的三源代理（编辑器页 + 两个舞台，都带 OAC）、
+ * 角色（两个角色可以分在两台机器上：一台当 creator = 用户 A，另一台当 node = 成员 B；协调口 KV 前缀 `m7ap`，键名见 `m8/kv.mjs`）：
+ *   creator  起本机托管组合（进程内，回环不信任、集群令牌现场生成）与共用的本机托管代理 `lib/hosted-proxy.mjs`（编辑器页 + 两个舞台，同站跨源 pc.localhost / s1. / s2.，带策略头与 `/media-s/`；
+ *            跨机 --bind / --public-host 时没有真域名，退回老的三口前缀代理、隔离不生效）、
  *            在线构建（`vite build --mode online`，或 `--dist` 复用）；以 A 建放云端的项目（自由进入）、上传夹具；
  *            起 A 的桌面编辑器当 pc 节点（测试指纹、`PROMPTCUT_TEST_PLAN_ONLY=1`，D15）；
  *            「上帝视角」：进程内 `service.describe()` 轮询 + 一个 pc 档旁观节点（看得见全部任务的正文）；
  *            服务端一侧现在就能判的项用替身节点真判（替身 = `server/render-node/session.mjs` + `filter.mjs`，
  *            经带 `owner: { kind: 'browser' }` 的 render 票据连文档服务，即页面节点按 D11 要用的同一份节点代码）；
  *            页面当了节点以后，判服务端那一侧（任务状态、锁、清单、`snap/` `px/` 块、层表）。
- *   node     无头 Chromium（W7 在笔记本上跑）：B 的普通档页面 b1（节点候选）、低内存档页面 low、退回单舞台的页面 single；
+ *   node     无头 Chromium：B 的普通档页面 b1（节点候选）、低内存档页面 low、退回单舞台的页面 single；
  *            A10 另开 b2。每页用 CDP 抓全部 WebSocket 帧（握手头、收发的业务消息），判据以线上消息为准，页面诊断只作对照。
  *   all      本机替身：协调口（进程内）+ 上面两个角色各一个子进程；stdout 最后一行是汇总。
  *
  * 结果：stdout 最后一行一行 JSON：`{ ok, fails, pending, items: { 'M7-A1': { status, parts }, … }, … }`。
  *   status：pass / fail / pending（`节点未就绪（等 rq-m7-node）` 或别的前置没到）；ok = 没有 fail 也没有 pending。
- *   退出码：0 全过；1 有 fail；3 没有 fail、只有 pending；2 参数不对。
- * 计时项（M7-A4 的 30 s、A5 的 500 ms、A12 的长任务）在 PC 上跑只作参考（`timing.authoritative: false`），
- * 以笔记本为准（`guide_files/verification.md`「性能基准机」）：笔记本跑 node 角色时加 `--timing-authoritative`。
+ *   退出码：0 全过；1 有 fail 或有 pending（没跑出来按不过处理）；2 参数不对。
+ * 耗时只记录（`guide_files/verification.md`「耗时只记录，不当闸门」）：M7-A4 最慢锚帧段的用时（原门槛 30 s）、A5 让路后恢复认领的用时、
+ * A10 切分与抢卡的用时只写进 `TIMINGS` 行与结果的 `timings`，不决定过不过，在哪台机器上跑都一样判。
+ * 不看时间的断言照旧是通过条件：A12 的长任务数为 0、A5「拖动结束后 500 ms 内不认领」（认领次数为 0）。
+ * 等待时限只为防卡死：A10 的切分 / 抢卡 / 换层三个上限缺省放宽到 600 / 900 / 900 秒，等到头没有结果仍算不过。
  *
- * 端口（本分支分到 5450～5459）：5450 编辑器页的源、5451 / 5452 两个舞台的源、5453～5455 A 的桌面编辑器（及舞台端口）、
- *   5456 协调口；托管组合的文档服务与素材服务用端口 0（只经代理访问）。不碰 5190～5192、5203～5205。
+ * 端口（缺省 5780～5789，`--base-port` 挪整段）：+0 编辑器页的源、+1 / +2 两个舞台的源、+3～+5 A 的桌面编辑器（及舞台端口）、
+ *   +6 协调口；托管组合的文档服务与素材服务用端口 0（只经代理访问）。不碰 5190～5192、5203～5205。
  * 令牌与口令：集群令牌、票据、会话号、口令都不打印、不进结果行；票据只在内存里做「有没有漏进地址 / 日志 / describe」的比对。
  *
  * 其它参数：
@@ -47,19 +51,24 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { argsOf, sayer, newRunId, lastJsonLine, fingerprintOf } from './m8/lib.mjs';
 import { roleKv, resolveRun } from './m8/kv.mjs';
 import { startCoord, startQueueEditor, viteBin, killTree, until, claimPorts, portFree } from './m8/procs.mjs';
 import { ASSUMPTIONS, readNodeDiag, readStageBakeDiag, releaseCauseOf } from './m7-node-adapter.mjs';
 import { judgeDualClip } from './m7-judge.mjs';
+import { createTimings, TIMINGS_PREFIX } from './probe-timings.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(SELF), '..', '..');
 const PROBE = 'm7-browser-probe';
 const PREFIX = 'm7ap';
-/** --base-port N：整段端口挪到 N～N+9（缺省 5450；笔记本用它自己的 5580～5599 段时给 --base-port 5590） */
-const BASE_PORT = (() => { const i = process.argv.indexOf('--base-port'); const v = i >= 0 ? Number(process.argv[i + 1]) : 5450; if (!Number.isInteger(v) || v < 1024 || v > 65526) throw new Error(`--base-port 不对：${process.argv[i + 1]}`); return v; })();
+/** --base-port N：整段端口挪到 N～N+9（缺省 5780） */
+const BASE_PORT = (() => { const i = process.argv.indexOf('--base-port'); const v = i >= 0 ? Number(process.argv[i + 1]) : 5780; if (!Number.isInteger(v) || v < 1024 || v > 65526) throw new Error(`--base-port 不对：${process.argv[i + 1]}`); return v; })();
 const BAND = [BASE_PORT, BASE_PORT + 9];
+// 探针起的 Node 子进程(桌面编辑器、协调口、node 角色)继承它,也能解析 pc.localhost
+process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 const PORTS = { site: BASE_PORT, stageA: BASE_PORT + 1, stageB: BASE_PORT + 2, editor: BASE_PORT + 3, coord: BASE_PORT + 6 };
 const FPS = 30;
 const SECONDS = 10;
@@ -75,10 +84,12 @@ const deadline = Date.now() + TIMEOUT_MS;
 const NODE_WAIT_MS = Number(arg('--node-wait-s', 60)) * 1000;
 const A3_MS = Number(arg('--a3-seconds', 60)) * 1000;
 /** A10 抢卡：加卡到 w1、w2 都切出细任务的上限；加卡到两张卡各做完一段的上限（依据见 pageServerSide 的 A10 末段） */
-const A10_SPLIT_MS = Number(arg('--a10-split-seconds', 90)) * 1000;
-const A10_RACE_MS = Number(arg('--a10-race-seconds', 180)) * 1000;
+// 等待时限只为防卡死（verification.md「耗时只记录，不当闸门」）：原缺省 90 / 180 / 240 秒，放宽到不会因机器快慢误报；用时记进 timings
+const A10_SPLIT_MS = Number(arg('--a10-split-seconds', 600)) * 1000;
+const A10_RACE_MS = Number(arg('--a10-race-seconds', 900)) * 1000;
 /** A10 抢卡判完之后，b2 页面上 z1 那一层换到 pc 环境、有就绪帧的上限（依据见 nodeRole 的 A10 末段） */
-const A10_LAYER_MS = Number(arg('--a10-layer-seconds', 240)) * 1000;
+const A10_LAYER_MS = Number(arg('--a10-layer-seconds', 900)) * 1000;
+const timings = createTimings(PROBE);
 /** 本机替身里素材服务每个请求的附加延迟（毫秒，模拟在线站点的往返；缺省 0） */
 const MEDIA_DELAY_MS = Math.max(0, Number(arg('--media-delay-ms', 0)) || 0);
 
@@ -90,7 +101,9 @@ async function waitSignal(kv, name) {
 
 /* ================================================================== 验收项的账本 */
 
-const ITEM_IDS = ['M7-A1', 'M7-A2', 'M7-A3', 'M7-A4', 'M7-A5', 'M7-A6', 'M7-A7', 'M7-A8', 'M7-A9', 'M7-A10', 'M7-A11', 'M7-A12', 'W7', 'D9', 'D10', 'D14', 'D1-D2-D12'];
+const ITEM_IDS = ['M7-A1', 'M7-A2', 'M7-A3', 'M7-A4', 'M7-A5', 'M7-A6', 'M7-A7', 'M7-A8', 'M7-A9', 'M7-A10', 'M7-A11', 'M7-A12', 'D9', 'D10', 'D14', 'D1-D2-D12'];
+/** 探针自己跑坏了（角色崩了、没交结果行、参数不对）记在这个编号下；只在出事时才有，不在 ITEM_IDS 里 */
+const RUN_ID = 'RUN';
 
 /** 每项由若干「部分」组成（服务端替身、页面、计时……），各部分 pass / fail / pending；项的状态取最差的 */
 function createBook() {
@@ -104,10 +117,10 @@ function createBook() {
       return status === 'pass';
     },
     judge(id, name, ok, detail) { return book.part(id, name, ok ? 'pass' : 'fail', detail); },
-    /** 带耗时门槛的判据：只有在性能基准机（笔记本，node 角色带 --timing-authoritative）上才判；别处只记录、标「待笔记本复核」 */
-    timed(id, name, ok, detail, authoritative) {
-      if (authoritative) return book.judge(id, name, ok, detail);
-      return book.part(id, name, 'pending', { reason: '待笔记本复核（这台机器上的计时只作参考）', referenceVerdict: ok ? 'pass' : 'fail', observed: detail });
+    /** 耗时只记录（verification.md「耗时只记录，不当闸门」）：数字进 timings 与这一部分的 detail，这一部分恒为 pass，不影响项的状态与退出码 */
+    recorded(id, name, label, ms, formerLimit, detail) {
+      const value = timings.record(`${id} ${label}`, ms, { formerLimit });
+      return book.part(id, name, 'pass', { recordedOnly: true, value, formerLimit, ...(detail ?? {}) });
     },
     pending(id, name, reason, detail) { return book.part(id, name, 'pending', { reason, ...(detail === undefined ? {} : { observed: detail }) }); },
     merge(other) { for (const [id, it] of Object.entries(other ?? {})) for (const [name, p] of Object.entries(it.parts ?? {})) (items[id] ??= { parts: {} }).parts[name] = p; },
@@ -246,8 +259,11 @@ async function startSite({ out, bind, publicHost }) {
   const dist = await buildOnline(out);
   const logs = [];
   const clusterToken = randomBytes(32).toString('base64url');
-  const site = `http://${publicHost}:${PORTS.site}`;
-  const stageOrigins = [`http://${publicHost}:${PORTS.stageA}`, `http://${publicHost}:${PORTS.stageB}`];
+  // 本机(回环)用共用的 `lib/hosted-proxy.mjs`:同站跨源的 pc.localhost / s1. / s2.,带策略头与 `/media-s/`(隔离生效)。
+  // 跨机(--bind / --public-host 给了局域网地址)没有真域名,做不出同站跨源的舞台子域,仍用下面老的三口前缀代理(隔离不生效,W7 跨机的老摆法)
+  const lan = bind !== '127.0.0.1' || publicHost !== '127.0.0.1';
+  const site = lan ? `http://${publicHost}:${PORTS.site}` : proxyOrigins(PORTS.site).editor;
+  const stageOrigins = lan ? [`http://${publicHost}:${PORTS.stageA}`, `http://${publicHost}:${PORTS.stageB}`] : proxyOrigins(PORTS.site).stages;
   const { startHostedCombo } = await import('../../server/hosted/combo.mjs');
   const dataDir = path.join(out, 'hosted');
   fs.mkdirSync(dataDir, { recursive: true });
@@ -319,10 +335,16 @@ async function startSite({ out, bind, publicHost }) {
     servers.push(server);
     return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, bind, resolve); });
   };
-  await Promise.all([makeProxy(PORTS.site), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+  let hostedProxy = null;
+  if (lan) await Promise.all([makeProxy(PORTS.site), makeProxy(PORTS.stageA), makeProxy(PORTS.stageB)]);
+  else {
+    // --media-delay-ms：素材服务的每个请求先压这么久再转发(钩子的 delayMs)
+    hostedProxy = await startHostedProxy({ dist, basePort: PORTS.site, docPort: combo.docPort, assetPort: combo.assetPort, policy: 'full',
+      intercept: MEDIA_DELAY_MS > 0 ? ({ url }) => (url.pathname.startsWith('/media/') ? { delayMs: MEDIA_DELAY_MS } : undefined) : undefined });
+  }
   say('site.up', { site, stageOrigins, bind, docPort: combo.docPort, assetPort: combo.assetPort });
   return {
-    site, stageOrigins, dist, combo, logs, urls,
+    site, stageOrigins, dist, combo, logs, urls: hostedProxy ? hostedProxy.urls : urls, hostedProxy,
     /** Node 侧直连文档服务（不经代理） */
     ws: `ws://127.0.0.1:${combo.docPort}`,
     /** 进程内的 describe()，队列部分拍平成一张表（本机空间 + 各共享项目空间） */
@@ -336,6 +358,7 @@ async function startSite({ out, bind, publicHost }) {
     },
     async stop() {
       for (const s of servers) await new Promise((r) => { s.close(() => r()); s.closeAllConnections?.(); });
+      await hostedProxy?.close().catch(() => {});
       await combo.close().catch(() => {});
     },
   };
@@ -776,25 +799,14 @@ async function runCreator(book, head) {
     await kv.done({});
     nodeResult = await kv.takeResult('node', deadline);
     if (nodeResult?.items) book.merge(nodeResult.items);
-    else book.part('W7', 'node-result', 'fail', { reason: 'node 角色没交结果行' });
-    // W7：跨机（D17）；M7-A1、A2、A3 过；M7-A4 的计时在笔记本判
-    const sum = book.summary().items;
-    const where = { creator: os.hostname(), node: ready.host ?? null, bind, publicHost, timingAuthoritative: !!ready.timingAuthoritative };
-    if (where.node && where.node !== where.creator) book.judge('W7', 'cross-machine', true, where);
-    else book.pending('W7', 'cross-machine', '本机替身（两个角色在同一台机器上），真跨机待复核（D17）', where);
-    for (const id of ['M7-A1', 'M7-A2', 'M7-A3']) {
-      const st = sum[id]?.status ?? 'pending';
-      if (st === 'pending') book.pending('W7', id, `${id} 还有待定的部分`);
-      else book.judge('W7', id, st === 'pass', { mirror: id });
-    }
-    const a4t = sum['M7-A4']?.parts?.['page-within-30s'];
-    if (!where.timingAuthoritative) book.pending('W7', 'A4-timing-on-laptop', '计时在笔记本判：这一轮 node 角色没带 --timing-authoritative', { reference: a4t ?? null });
-    else if (!a4t || a4t.status === 'pending') book.pending('W7', 'A4-timing-on-laptop', 'M7-A4 的计时这一轮没判出来', a4t ?? null);
-    else book.judge('W7', 'A4-timing-on-laptop', a4t.status === 'pass', a4t.detail);
+    else book.part(RUN_ID, 'node-result', 'fail', { reason: 'node 角色没交结果行' });
+    timings.merge(nodeResult?.timings);
+    // 两个角色各在哪台机器上只记下来（原 W7「跨机」不再单独成项，同机不再记待定）
+    head.where = { creator: os.hostname(), node: ready.host ?? null, bind, publicHost, sameMachine: !ready.host || ready.host === os.hostname() };
     Object.assign(head, { projectId, pcFp: ctx.pcFp, pcFpApplied: fpApplied, pageFp: ready.pageFp ?? null, pageNode: pn ?? null,
       planOnly: planOnlyState(ctx), godPolls: god.polls, nodesSeen: [...god.nodes.values()].map((n) => ({ profile: n.profile, userId: n.userId?.replace(/@.*/, '@…'), fp: n.envFingerprint, claimsMax: n.claimsMax })) });
   } catch (error) {
-    book.part('W7', 'creator-crash', 'fail', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
+    book.part(RUN_ID, 'creator-crash', 'fail', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
     say('creator-crash', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
     await kv.abort(errText(error));
   } finally {
@@ -980,6 +992,9 @@ async function serverChecks(ctx) {
     add('medium', base('medium', 2, {}, { weight: { class: 'medium', estMs: null, frames: 60 } }));
     add('heavy', base('heavy', 2, {}, { weight: { class: 'heavy', estMs: null, frames: 60 } }));
     add('local', base('local', 2, {}, { tier: 'local' }));
+    // 2026-10-06 新语义(契约 11.3):用户卡、图卡的任务本页能运行时纯浏览器节点也认领。认领的条件是任务的 requires.cardSources 里有这张卡的代码身份、
+    // 且节点的 cardEnvFingerprint 对得上。这里的任务 cardSources 为空、指纹是普通指纹,所以仍然认领 0 次(「没有对应代码身份的认领 0 次」那一半,规则 1、7);
+    // 「有代码身份的认领并完成」那一半在 online-card-node-probe.mjs(A-1~A-5)与单测 OCN-09/OCN-11 里验
     add('userCard', base('user', 2, { userCards: true }));
     add('graphCard', base('graph', 1, { graphCards: true }));
     add('modifiedCard', base('mod', 2, { cardSources: { 'probe-slow-stepped': 'user:deadbeef' } }));
@@ -1007,7 +1022,7 @@ async function serverChecks(ctx) {
     book.judge('M7-A3', 'server-standin-light-medium-done', ['light', 'medium'].every((k) => perClass[k].done === perClass[k].tasks && perClass[k].claimedBySq === perClass[k].tasks), { light: perClass.light, medium: perClass.medium });
     ctx.a3Classes = cls;
   } catch (error) {
-    book.part('W7', 'server-checks-crash', 'fail', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 5).join(' | ') });
+    book.part(RUN_ID, 'server-checks-crash', 'fail', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 5).join(' | ') });
   } finally {
     for (const c of closers.reverse()) { try { await c(); } catch { /* 忽略 */ } }
   }
@@ -1244,6 +1259,7 @@ async function pageServerSide(ctx) {
   };
   mkF('heavy', {}, { weight: { class: 'heavy', estMs: null, frames: 60 } });
   mkF('local', {}, { tier: 'local' });
+  // 同上:cardSources 为空、指纹不是 cardEnvFingerprint → 页面节点认领 0 次(有代码身份的那一半见 online-card-node-probe.mjs)
   mkF('user', { userCards: true });
   mkF('graph', { graphCards: true });
   mkF('modified', { cardSources: { 'probe-slow-stepped': 'user:deadbeef' } });
@@ -1337,6 +1353,7 @@ async function pageServerSide(ctx) {
   // 计划排在 pc 自己积压的细任务（这一步前接手的 h1～h3、z1 约 20 段重卡）后面时，要等积压做完才切，实测 214～311 s，b2 全程没活可接。
   // 上限依据：pc 手里那一段做完（笔记本上一段重卡最长约 19 s）+ 页面测量新卡、发计划（数秒）+ 切分（约 1 s），留约 3 倍余量
   const splitMs = await until(() => (['w1', 'w2'].every((c) => wTasks(c).length > 0) ? Date.now() - tAdd : null), A10_SPLIT_MS, 500);
+  timings.record('M7-A10 加卡到 w1、w2 都切出细任务', splitMs, { formerLimit: '等待上限 90 秒' });
   book.judge('M7-A10', 'server-race-split-promptly', splitMs !== null, { splitMs, limitMs: A10_SPLIT_MS, ...(splitMs === null ? await a10Stall(ctx, ['w1', 'w2']) : {}) });
   // 两张卡各要有一段做完；超时单独报，不算进「一张卡出自几种环境」。
   // 上限依据（从加卡算起，两张卡共用）：切分（上一条的上限 90 s）+ pc 那一张的第一段（约 12～19 s）+ 推产物偶发 400 重领一次（约 13 s），约 120 s，留 1.5 倍
@@ -1349,6 +1366,7 @@ async function pageServerSide(ctx) {
     if (!ok) timedOut.push(clip);
   }
   const raceMs = Date.now() - tAdd;
+  timings.record('M7-A10 加卡到两张卡各做完一段', timedOut.length ? null : raceMs, { formerLimit: '等待上限 180 秒' });
   book.judge('M7-A10', 'server-race-done-in-time', timedOut.length === 0, { raceMs, limitMs: A10_RACE_MS, splitMs, timedOut, race, ...(timedOut.length ? await a10Stall(ctx, timedOut) : {}) });
   const finished = Object.fromEntries(Object.entries(race).filter(([clip]) => !timedOut.includes(clip)));
   if (Object.keys(finished).length === 0) book.pending('M7-A10', 'server-race-one-env-per-card', '两张卡都没在上限内做完一段（见 server-race-done-in-time）', race);
@@ -1645,12 +1663,10 @@ async function hidePage(page) {
 
 async function runNode(book, head) {
   const coord = arg('--coord', arg('--site') ? arg('--site').replace(/\/+$/, '') + '/coord' : null);
-  if (!coord) { book.part('W7', 'args', 'fail', { reason: 'node 要给 --coord（或 --site，协调口取 <站点>/coord）' }); process.exitCode = 2; return; }
+  if (!coord) { book.part(RUN_ID, 'args', 'fail', { reason: 'node 要给 --coord（或 --site，协调口取 <站点>/coord）' }); process.exitCode = 2; return; }
   const run = await resolveRun({ coord, prefix: PREFIX, run: arg('--run'), isCreator: false, newRun: newRunId, deadline, log: say });
   Object.assign(head, { run });
   const kv = roleKv({ coord, prefix: PREFIX, run, role: 'node', log: say });
-  const authoritative = flag('--timing-authoritative');
-  head.timingAuthoritative = authoritative;
   head.host = os.hostname();
   let browser = null;
   try {
@@ -1662,7 +1678,7 @@ async function runNode(book, head) {
     const pageFp = await pageFingerprint(b1.page);
     const [low, single] = await Promise.all([openMember(browser, cfg, 'low', { lowMem: true }), openMember(browser, cfg, 'single', { single: true })]);
     const d1 = await previewDiag(b1.page);
-    await kv.ready({ pageFp, host: os.hostname(), timingAuthoritative: authoritative, gateLiftAt: b1.gateLiftAt, dual: d1?.dual ?? null });
+    await kv.ready({ pageFp, host: os.hostname(), gateLiftAt: b1.gateLiftAt, dual: d1?.dual ?? null });
     say('pages.up', { pageFp, gate: b1.gateSeen, dual: d1?.dual ?? null });
 
     // 页面当节点了没有：线上看 node.hello + node.welcome；诊断钩子只作对照
@@ -1688,14 +1704,15 @@ async function runNode(book, head) {
       await P(b1.page, () => window.__pcStore.actions.pause()).catch(() => {});
       const playLong = await longTasks(b1.page, tPlay);
       const playClaims = b1.tap.sent('task.claim', tPlay).filter((f) => f.at <= tPlay + 10_500).length;
-      book.timed('M7-A12', 'play-10s-longtasks-0', Array.isArray(playLong) && playLong.length === 0, { count: playLong?.length ?? null, worst: (playLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3) }, authoritative);
+      // 长任务数是不看时间的断言（verification.md）：在哪台机器上都按过 / 不过判
+      book.judge('M7-A12', 'play-10s-longtasks-0', Array.isArray(playLong) && playLong.length === 0, { count: playLong?.length ?? null, worst: (playLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3) });
       if (isNode) book.judge('M7-A12', 'play-10s-claims-0', playClaims === 0, { claims: playClaims, heldAtStart: null });
       else book.pending('M7-A12', 'play-10s-claims-0', NODE_PENDING, { claims: playClaims });
       await kv.signal('node.play-done', { at: Date.now() });
     };
     if (!isNode) await playCheck();
 
-    if (isNode) await pageFlows({ book, kv, cfg, browser, b1, low, single, pageFp, authoritative, playCheck });
+    if (isNode) await pageFlows({ book, kv, cfg, browser, b1, low, single, pageFp, playCheck });
     else {
       for (const id of ['M7-A4', 'M7-A5', 'M7-A6', 'M7-A9', 'M7-A10']) book.pending(id, 'page', NODE_PENDING, { diag: { available: diag0.available, reason: diag0.reason ?? null }, nodeHello: b1.tap.sent('node.hello').length });
       book.pending('M7-A12', 'bake-longtasks-0', NODE_PENDING);
@@ -1746,18 +1763,18 @@ async function runNode(book, head) {
 
     head.pages = Object.fromEntries([b1, low, single].map((p) => [p.key, { gateSeen: p.gateSeen, conns: p.tap.conns.size, render: p.tap.renderConns().length, frames: p.tap.frames.length, pageErrors: p.page.pageErrors.slice(-5) }]));
   } catch (error) {
-    book.part('W7', 'node-crash', 'fail', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
+    book.part(RUN_ID, 'node-crash', 'fail', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
     say('node-crash', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
     await kv.abort(errText(error));
   } finally {
     try { await browser?.close(); } catch { /* 已关 */ }
-    await kv.result({ items: book.items, head });
+    await kv.result({ items: book.items, head, timings: timings.list });
   }
 }
 
 /* ---------------------------------------------------------------- 页面当了节点：A4、A5、A6、A9、A10、A11 过期、A12 生成快照 */
 
-async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritative, playCheck }) {
+async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, playCheck }) {
   const tap = b1.tap;
   const page = b1.page;
   const heavy = ['h1', 'h2', 'h3'];
@@ -1782,14 +1799,14 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   const done = got ?? anchorDone();
   const worst = Math.max(...heavy.map((c) => Math.max(...(done[c] ?? [{ sinceGateMs: Infinity }]).map((x) => x.sinceGateMs))));
   const l2 = await l2Snapshots(page);
-  const a4 = { anchorRule, perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, authoritative, diag: await readNodeDiag(page),
+  const a4 = { anchorRule, perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, diag: await readNodeDiag(page),
     assetHttp: tap.assetHttp(b1.gateLiftAt),
     ticketReqs: tap.sent('auth.ticket', b1.gateLiftAt).reduce((o, f) => { const k = `${f.kind}:${f.access ?? f.role ?? ''}`; o[k] = (o[k] ?? 0) + 1; return o; }, {}),
     phases: await page.evaluate(() => window.__pcBrowserNode?.()?.stage?.phases ?? null).catch(() => null),
     uploadMs: await page.evaluate(() => window.__pcBrowserNode?.()?.upload?.ms ?? null).catch(() => null) };
   say('a4.timing', { bakeMs: a4.diag?.counts?.bakeMs ?? null, stageMs: a4.diag?.counts?.stageMs ?? null, assetHttp: a4.assetHttp, ticketReqs: a4.ticketReqs, phases: a4.phases, uploadMs: a4.uploadMs });
   book.judge('M7-A4', 'page-anchors-done', heavy.every((c) => done[c]?.length) && (l2 ?? 0) > 0, a4);
-  book.timed('M7-A4', 'page-within-30s', Number.isFinite(worst) && worst <= 30_000, { worstSinceGateMs: a4.worstSinceGateMs }, authoritative);
+  book.recorded('M7-A4', 'page-within-30s', '遮罩撤下到最慢的锚帧段做完', a4.worstSinceGateMs, '≤ 30 秒');
   const od = await onlineDiag(page);
   book.judge('M7-A4', 'page-layer-env-browser', heavy.every((c) => od?.layers?.find((l) => l.clipId === c)?.envFingerprint === pageFp), (od?.layers ?? []).map((l) => ({ clip: l.clipId, fp: l.envFingerprint, ready: l.ready })));
   await kv.signal('a4.page', { done: Object.fromEntries(Object.entries(done).map(([k, v]) => [k, v.length])), worstSinceGateMs: a4.worstSinceGateMs,
@@ -1798,7 +1815,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   // A12：生成快照期间主文档长任务 0（从遮罩撤下到三张卡的锚帧段做完）
   const bakeLong = await longTasks(page, b1.gateLiftAt);
   await playCheck();
-  book.timed('M7-A12', 'bake-longtasks-0', Array.isArray(bakeLong) && bakeLong.filter((x) => x.at <= b1.gateLiftAt + Math.max(30_000, a4.worstSinceGateMs ?? 0)).length === 0, { count: bakeLong?.length ?? null, worst: (bakeLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3) }, authoritative);
+  book.judge('M7-A12', 'bake-longtasks-0', Array.isArray(bakeLong) && bakeLong.filter((x) => x.at <= b1.gateLiftAt + Math.max(30_000, a4.worstSinceGateMs ?? 0)).length === 0, { count: bakeLong?.length ?? null, worst: (bakeLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3) });
 
   /* ---- 等本页拿着一段（生成快照中）：下面几条让路都要这个前提 */
   // 持有中 = 最后一次认领晚于最后一次结束（完成 / 放回 / 失败 / 丢认领），且这次认领之后报过进度、最近 3 s 内还在报（在生成快照）；
@@ -1836,13 +1853,15 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
     const l2After = await l2Snapshots(page);
     await delay(500);
     const quietClaims = tap.sent('task.claim', drag.endedAt).filter((f) => f.at < drag.endedAt + 500).length;
-    const resumed = await until(() => tap.sent('task.claim', drag.endedAt + 500)[0] ?? null, 30_000, 100);
+    const resumed = await until(() => tap.sent('task.claim', drag.endedAt + 500)[0] ?? null, 180_000, 100); // 等待时限只为防卡死（原 30 秒）
     const reclaim = tap.recv('task.claimed', drag.endedAt).find((f) => f.id === heldId);
     const a5 = { drag: drag.ok, claimsDuring, framesDuringDrag: doneDuring, releases: rel.map((r) => ({ reason: r.reason, cause: releaseCauseOf(r.reason), msAfterDrag: r.at - t0 })), l2: { before: l2Before, after: l2After },
-      claimsWithin500ms: quietClaims, resumedAfterMs: resumed ? resumed.at - drag.endedAt : null, attemptsOnReclaim: reclaim?.task?.attempts ?? null, authoritative };
+      claimsWithin500ms: quietClaims, resumedAfterMs: resumed ? resumed.at - drag.endedAt : null, attemptsOnReclaim: reclaim?.task?.attempts ?? null };
     book.judge('M7-A5', 'page-yield-on-drag', drag.ok && claimsDuring === 0 && doneDuring <= 1 && rel.length === 1 && (l2After ?? 0) - (l2Before ?? 0) <= 2, a5); // 一帧 = 原尺寸 + 小尺寸两块
     book.judge('M7-A5', 'page-attempts-unchanged', reclaim ? (reclaim.task?.attempts ?? 0) === 0 : true, { attemptsOnReclaim: a5.attemptsOnReclaim, note: '放回不计失败（C2）；认领回包里的 attempts 由队列给' });
-    book.timed('M7-A5', 'page-resume-after-500ms', quietClaims === 0 && !!resumed, { claimsWithin500ms: quietClaims, resumedAfterMs: a5.resumedAfterMs }, authoritative);
+    // 「拖动结束后 500 ms 内不认领」数的是认领次数、「之后恢复认领」是有没有：都不看时间，照旧判；恢复用了多久只记录
+    timings.record('M7-A5 拖动结束到恢复认领', a5.resumedAfterMs, { formerLimit: '等待上限 30 秒' });
+    book.judge('M7-A5', 'page-resume-after-500ms', quietClaims === 0 && !!resumed, { claimsWithin500ms: quietClaims, resumedAfterMs: a5.resumedAfterMs });
   }
 
   /* ---- A6：播放同 A5；页面隐藏后立即放回、隐藏期间认领 0 次、回前台恢复；更急的后台活来了停在帧边界 */
@@ -1950,6 +1969,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   const tLayer = Date.now();
   const layerOf = async () => (await onlineDiag(b2.page))?.layers?.find((l) => l.clipId === zClaim.task.clipId) ?? null;
   const zl = (await until(async () => { const l = await layerOf(); return l?.envFingerprint === cfg.pcFp && (l?.ready ?? 0) > 0 ? l : null; }, A10_LAYER_MS, 2000)) ?? (await layerOf());
+  timings.record('M7-A10 抢卡判完到 z1 那一层换到 pc 环境', zl?.envFingerprint === cfg.pcFp ? Date.now() - tLayer : null, { formerLimit: '等待上限 240 秒' });
   book.judge('M7-A10', 'page-layer-switched', zl?.envFingerprint === cfg.pcFp && (zl?.ready ?? 0) > 0, { clip: zClaim.task.clipId, fp: zl?.envFingerprint ?? null, pcFp: cfg.pcFp, ready: zl?.ready ?? null, waitedMs: Date.now() - tLayer, limitMs: A10_LAYER_MS });
 }
 
@@ -1972,8 +1992,7 @@ async function runAll() {
       c.stderr.on('data', (d) => process.stderr.write(d));
       c.once('exit', (code) => resolve({ role, code, line: lastJsonLine(stdout) }));
     });
-    // 计时项按不按判定只看 node 角色（它在页面旁边计时）：--role all 带 --timing-authoritative 就转给 node
-    const [cr, nd] = await Promise.all([runRole('creator'), runRole('node', flag('--timing-authoritative') ? ['--timing-authoritative'] : [])]);
+    const [cr, nd] = await Promise.all([runRole('creator'), runRole('node')]);
     return { run, out, creator: cr, node: nd };
   } finally {
     await coord.stop();
@@ -1995,16 +2014,19 @@ if (ROLE === 'all') {
   const nodeRes = await runCreator(book, head);
   const s = book.summary();
   final = { ...head, ok: s.fails.length === 0 && s.pending.length === 0, fails: s.fails, pending: s.pending, items: s.items,
-    timing: { authoritative: !!nodeRes?.head?.timingAuthoritative || false, note: '带耗时门槛的项（A4 的 30 s、A5 的 500 ms、A12 的长任务）以笔记本为准' },
+    timings: timings.list,
     nodeHead: nodeRes?.head ?? null, assumptions: ASSUMPTIONS, ms: Date.now() - started };
 } else if (ROLE === 'node') {
   await runNode(book, head);
   const s = book.summary();
-  final = { ...head, ok: s.fails.length === 0 && s.pending.length === 0, fails: s.fails, pending: s.pending, items: s.items, head, ms: Date.now() - started };
+  final = { ...head, ok: s.fails.length === 0 && s.pending.length === 0, fails: s.fails, pending: s.pending, items: s.items, timings: timings.list, head, ms: Date.now() - started };
 } else {
   final = { probe: PROBE, role: String(ROLE), ok: false, fails: ['--role 取 all | creator | node'], pending: [], items: {} };
   process.exitCode = 2;
 }
+// 耗时只记录：单独一行给验收运行器收（--role all 时 creator 的结果行里已并进 node 角色的）
+process.stdout.write(`${TIMINGS_PREFIX}${JSON.stringify({ probe: PROBE, timings: final.timings ?? [] })}\n`);
 process.stdout.write(`${JSON.stringify(final)}\n`);
-if (process.exitCode !== 2) process.exitCode = final.ok ? 0 : (final.fails?.length ? 1 : 3);
+// 有 pending = 没跑出来，按不过处理（原来「没有 fail、只有 pending」单给退出码 3，是为「只剩 W7 跨机待定」设的，已去掉）
+if (process.exitCode !== 2) process.exitCode = final.ok ? 0 : 1;
 setTimeout(() => process.exit(process.exitCode), 15_000).unref();

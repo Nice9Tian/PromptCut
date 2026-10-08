@@ -4,7 +4,8 @@
  * 数据面模块（渲染任务队列、项目、内容库）按连接 principal 的 `tenantId` 各起一份实例，互不相通：
  * - 连接进来时按 `tenantId` 找（没有就建）这个空间的实例，之后它的消息、断开都只交给这一份；
  *   `tenantId` 为 null（旧的匿名身份）算 `local`；
- * - 管理身份（`scope: 'admin'`）不进任何空间：发数据面消息回 `forbidden`；
+ * - 管理身份（`scope: 'admin'`）不进任何空间：发数据面消息回 `forbidden`；托管方服务的控制身份（`scope: 'service'`、
+ *   没有 `tenantId`，`docs/plan/hosted-render-contract.md` 第 1.3 节）同样不进任何空间——不然它会落进 `local`；
  * - 频道名在模块给的名字上再加空间前缀：`<前缀>:<其余>` → `<前缀>:@<空间>/<其余>`。`local` 空间沿用原来的
  *   频道名（M5 的行为），只有「其余」以 `@` 开头时才加 `@local/`，免得和别的空间撞上；
  * - `local` 空间的实例在挂上时就建好（核心要在挂载时问字段名），别的空间用到时才建；
@@ -19,10 +20,11 @@ export const LOCAL_SPACE = 'local';
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isReqId = (v) => typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
 
-/** 连接进哪个空间；管理身份回 null */
+/** 连接进哪个空间；管理身份、托管方服务的控制身份回 null */
 export function spaceOf(principal) {
   if (principal?.scope === 'admin') return null;
-  return typeof principal?.tenantId === 'string' && principal.tenantId !== '' ? principal.tenantId : LOCAL_SPACE;
+  if (typeof principal?.tenantId === 'string' && principal.tenantId !== '') return principal.tenantId;
+  return principal?.scope === 'service' ? null : LOCAL_SPACE;
 }
 
 /** 空间内的频道名 → 核心里的频道名 */
@@ -158,6 +160,14 @@ export function spacedModule({ create, health: mergeHealth } = {}) {
       const entry = space ? instance(space, false) : null;
       const fn = entry?.mod.claimsOf;
       return typeof fn === 'function' ? fn.call(entry.mod, connId) : 0;
+    },
+
+    /** 立即放回这条连接手里的认领（关掉托管方渲染节点的开关时用）；实例不支持回 0 */
+    releaseClaims(connId, reason) {
+      const space = conns.get(connId);
+      const entry = space ? instance(space, false) : null;
+      const fn = entry?.mod.releaseClaims;
+      return typeof fn === 'function' ? fn.call(entry.mod, connId, reason) : 0;
     },
 
     /** 丢掉一个空间的实例：剩下的连接先按断开处理，再调实例的 `dispose` */

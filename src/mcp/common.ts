@@ -256,14 +256,29 @@ export async function measureAudioJs(args: {
  * 再按同一份清单标上那一秒谁在出声 —— Agent 拿到「第 19 秒 -8 LUFS,出声的是配乐 + 配音 04」才能归因。
  */
 export async function measureAudio(args: { clipId?: string; mediaId?: string; scope?: string; series?: boolean }) {
-  const target = audioTargetOf(args);
-  const scope = target.scope;
-  if (!target.body) return { ok: true, scope, empty: true, note: NO_SOUND_NOTE };
-  const plan = target.plan;
-  const body: Record<string, unknown> = scope === "timeline" ? target.body : { ...target.body, series: !!args.series };
-  const res = await fetch(apiUrl("/api/audio/measure"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(55000) });
+  const req = measureAudioRequest(args);
+  if (!req.body) return req.empty;
+  const res = await fetch(apiUrl("/api/audio/measure"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req.body), signal: AbortSignal.timeout(55000) });
   const data = await res.json().catch(() => null);
   if (!res.ok || !data || data.ok === false) throw new Error(data?.error || `测响度失败(HTTP ${res.status})`);
+  return measureAudioFinish(req, data);
+}
+
+/**
+ * measure_audio 的前半:按此刻 store 里的项目算出「测谁、从第几秒到第几秒」。桌面版把 `body` 发给编辑器进程的 `/api/audio/measure`;
+ * 云端 Agent(`server/agent/service/hosted-audio.mjs`)拿同一份 `body` 在对话的工作目录里量。没有会出声的片段时 `body` 是 null、回 `empty`。
+ */
+export function measureAudioRequest(args: { clipId?: string; mediaId?: string; scope?: string; series?: boolean }) {
+  const target = audioTargetOf(args);
+  const scope = target.scope;
+  if (!target.body) return { scope, plan: target.plan, body: null, empty: { ok: true, scope, empty: true, note: NO_SOUND_NOTE } };
+  const body: Record<string, unknown> = scope === "timeline" ? target.body : { ...target.body, series: !!args.series };
+  return { scope, plan: target.plan, body, empty: null };
+}
+
+/** measure_audio 的后半:给量出来的数标上「那一秒谁在出声」与注意事项 */
+export function measureAudioFinish(req: { scope: string; plan: ReturnType<typeof audioPlanOf> | null }, data: Record<string, any>) {
+  const { scope, plan } = req;
   const notes: string[] = Array.isArray(data.notes) ? [...data.notes] : [];
   const out: Record<string, unknown> = { ...data, scope };
   if (plan) {

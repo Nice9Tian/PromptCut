@@ -24,11 +24,12 @@ test("七种事件各只认一个角色发来的(E0:不过滤就会在互换那�
   assert.equal(stageEventRole("bake-frame"), "back");
 });
 
-test("事件白名单就是这八种(E0 的七种 + M7 的 bake-frame),一个不多一个不少", () => {
+test("事件白名单就是这十种(E0 的七种 + M7 的 bake-frame + 在线执行用户卡与图卡的 card-states、sound-state),一个不多一个不少", () => {
   assert.deepEqual(
     [...STAGE_EVENT_TYPES].sort(),
-    ["bake-frame", "demote", "ended", "frame", "mediaReady", "probe", "probe-frame", "settled"],
+    ["bake-frame", "card-states", "demote", "ended", "frame", "mediaReady", "probe", "probe-frame", "settled", "sound-state"],
   );
+  // 后两种不分角色、两台都发:父页在各自的 RPC 客户端上直接听(`STAGE_ANY_ROLE_EVENTS`),不靠按角色过滤
   // 每一种都能分到一个角色:漏一种,那种事件就会被两个舞台都当成自己的
   for (const type of STAGE_EVENT_TYPES) assert.ok(stageEventRole(type) === "front" || stageEventRole(type) === "back");
 });

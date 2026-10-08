@@ -37,7 +37,7 @@ import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg } from './probe-connect.mjs';
 import { startDevServer } from '../lib/dev-server.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
-import { createSharedProject } from '../../server/auth/client.mjs';
+import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 
 const PHASE = flagArg('phase', 'all');
 const shots = flagArg('shots', path.join(os.tmpdir(), 'multi-agent-probe-shots'));
@@ -217,6 +217,22 @@ async function phase1() {
   await page.browserContext().close();
 }
 
+/** 以创建者身份连上文档服务,给刚建的共享项目放一份空的项目内容(文档 id 就是项目 id) */
+async function seedSharedProject(base, { projectId, name, username, password }) {
+  const protocols = await buildAuthProtocols({ base, projectId, username, deviceId: `ma-probe-seed-${randomBytes(6).toString('hex')}`, deviceName: 'seed', as: 'creator', password, role: 'page' });
+  const ws = new WebSocket(base.replace(/^http/, 'ws'), protocols);
+  await new Promise((resolve, reject) => { ws.addEventListener('open', resolve, { once: true }); ws.addEventListener('error', () => reject(new Error('创建者连不上文档服务')), { once: true }); });
+  const value = { version: 1, id: projectId, name, width: 1920, height: 1080, fps: 30, duration: 12, themeId: 'midnight', media: [], tracks: [{ id: 't1', name: '序列 1', clips: [] }], transitions: [] };
+  const reply = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('放项目内容超时')), 10_000);
+    ws.addEventListener('message', (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } if (m.reqId === 'seed') { clearTimeout(timer); resolve(m); } });
+  });
+  ws.send(JSON.stringify({ type: 'project.op', projectId, opId: `seed-${randomBytes(4).toString('hex')}`, session: 'ma-probe-seed', ops: [{ op: 'set', path: '', value }], reqId: 'seed' }));
+  const r = await reply;
+  ws.close();
+  if (r.type !== 'project.op.ok') throw new Error(`放项目内容失败:${JSON.stringify(r).slice(0, 200)}`);
+}
+
 async function phase2() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ma-probe-2-'));
   const hostedDir = path.join(root, 'hosted');
@@ -226,7 +242,12 @@ async function phase2() {
   const base = `http://127.0.0.1:${DOC_PORT}/`;
   const name = `ma-${Date.now().toString(36)}`;
   const PROJECT_PW = `pw-${randomBytes(6).toString('hex')}`;
-  const made = await createSharedProject({ base, name, mode: 'free', creator: { username: 'boss', password: `boss-${randomBytes(6).toString('hex')}` }, password: PROJECT_PW });
+  const BOSS_PW = `boss-${randomBytes(6).toString('hex')}`;
+  const made = await createSharedProject({ base, name, mode: 'free', creator: { username: 'boss', password: BOSS_PW }, password: PROJECT_PW });
+  // 新建的共享项目里还没有内容。成员的页面进入时要等到文档服务给出已确认的项目内容(协作重开恢复之后的规矩:进入一个没有内容的
+  // 项目按「主机数据缺失」拒绝,免得成员拿自己的本机项目去填别人的项目)。真实流程里内容由创建者的页面在建项目时放进去;
+  // 这里由探针以创建者身份先放一份空项目,再让两位成员进入
+  await seedSharedProject(base, { projectId: made.projectId, name, username: 'boss', password: BOSS_PW });
   const env = (who) => ({ PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_DATA_DIR: path.join(root, who, 'data'), PROMPTCUT_EXPORT_DIR: path.join(root, who, 'export') });
   const devA = await startDevServer({ port: A_PORT, logFile: path.join(shots, `dev-${A_PORT}.log`), env: env('a') });
   own.push(devA);

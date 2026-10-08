@@ -1,6 +1,18 @@
 /**
  * 远程主机上的独立文档服务骨架：探测环境、装 Node 与 PM2、部署、查状态。全部经本机的 ssh / scp 完成。
  *
+ * 云端 Agent 服务（契约 docs/plan/cloud-agent-contract.md 第 2.2 节；参数、模板与远端脚本在 server/agent-service/deploy.mjs）。
+ * PM2 应用 promptcut-agent。与渲染服务共用同一份检出（deploy-render 放上去的 current），所以没有上传代码的一步；三者同一个提交。
+ *   keygen-agent [--list | --retire <kid>] [--instance-name <名>]   在节点上给服务名 agent 生成并登记密钥（私钥不离开节点、不打印）
+ *   deploy-agent [--save] [--no-start]   建数据目录与私钥目录、写 PM2 配置、启动或重载、等 /healthz。--no-start：只建目录写配置
+ *   status-agent     PM2、/healthz、与渲染服务的代码版本并排（不一致标红）、数据目录、有没有配模型（不读 Key）
+ *   stop-agent [--delete]   pm2 stop 并 pm2 save；托管服务与渲染服务不动
+ *   四个都收 --dry-run：只打印要交给远端的脚本，不连任何远端。
+ *   模型 Key（及配音等别的外部服务的 Key）走加密分发（任务书 F；步骤与原理在 server/agent-service/service-keys.mjs 文件头）：
+ *   machine-id-agent                                       在节点上跑 machine-id.mjs，取回节点的机器识别码（用户用它在自己的电脑上、用 make-api-share.bat 生成密文）
+ *   import-key-agent --file <本机的密文文件> [--service model|voice]   把用户交回的密文经 ssh 标准输入送到节点、在节点本机解开并导入（import-key.mjs），导入完删掉临时文件
+ *   这两个也收 --dry-run（预览里密文只显示开头与长度）。全程只接触密文：明文 Key 不经本脚本，不进命令行、日志与仓库。
+ *
  * 用法：
  *   PROMPTCUT_REMOTE=<user@host> [PROMPTCUT_REMOTE_KEY=<私钥路径>] node scripts/remote/docservice.mjs <命令>
  *
@@ -47,6 +59,27 @@
  *   status-hosted [--instance drill]   PM2 里这个 app 的状态、两个端口的 /healthz、数据目录占用、UFW 里这两个端口的规则
  *   stage-hosted <本机目录>   只在本机按清单拼暂存目录（不连远端），用来核对清单
  *
+ * 托管方的渲染服务（契约 docs/plan/hosted-render-contract.md 第 7 节；参数、模板与远端脚本在 server/hosted-render/deploy.mjs，
+ * 模板在 server/hosted/deploy/）。PM2 应用 promptcut-render，部署目录 /opt/promptcut-render，按提交分目录、切 current 链接升级与回退。
+ * 所有子命令都收 --dry-run：只在本机打出会做什么与要交给远端的脚本，不连任何远端（也不需要 PROMPTCUT_REMOTE）。
+ *   install-render [--with-build-tools]   装系统包（中文字体、ffmpeg、Chrome 的运行库）、建服务用户 promptcut-render 与目录、写 systemd slice
+ *            （没有 systemd 的机器跳过 slice，打一行说明）。可反复跑。--with-build-tools：npm ci 要编译原生模块时才加
+ *   deploy-render [--commit <引用>] [--save] [--no-start] [--keep <n>]
+ *            把仓库在这个提交（缺省 HEAD）的完整内容 git archive 打包传到远端 <部署目录>/releases/<提交前 12 位>/（工作区未提交的改动不上传），
+ *            远端 npm ci、装 chrome-headless-shell、用新的 PM2 配置跑 --check；**自检过了才换 current 并 pm2 startOrReload**，
+ *            没过（退出码 78）什么都不换。--save：成功后 pm2 save（节点重启后自动起来要靠它）；pm2-<用户>.service 没装时装一个（有 systemd 才装）。
+ *            --no-start：只解包装依赖、换 current、写配置，不跑也不卡自检、不动 PM2（第一次部署：先这样，再 keygen-render，再不带 --no-start 部署一次）。
+ *            **渲染服务必须与在线页面出自同一个提交**，否则它一个任务也认领不了（诊断口的 codeVersion 与 status-render 会标出）。
+ *   status-render    PM2、发布目录（current / previous）、诊断口 /status（代码版本并排，不一致标红）、资源组、产物容量记账
+ *   stop-render [--delete]   pm2 stop（--delete：连登记一起删）并 pm2 save；托管服务不动
+ *   rollback-render [--to <发布目录名>]   current 换回上一份（或指定的一份）再重载
+ *   keygen-render [--list | --retire <kid>] [--instance-name <名>] [--release <发布目录名>]
+ *            在节点上生成服务密钥并登记公钥（私钥不离开节点、不打印）；--retire 撤旧钥；--list 看登记表
+ *   环境变量：PROMPTCUT_RENDER_DIR、PROMPTCUT_RENDER_DATA、PROMPTCUT_RENDER_SECRETS、PROMPTCUT_HOSTED_DATA、PROMPTCUT_RENDER_DOC_URL、
+ *            PROMPTCUT_RENDER_PORT、PROMPTCUT_RENDER_STATUS_PORT、PROMPTCUT_RENDER_MAX_CONCURRENT、PROMPTCUT_RENDER_MAX_PROJECTS、
+ *            PROMPTCUT_RENDER_MEMORY_MAX / _MEMORY_HIGH、PROMPTCUT_RENDER_CPU_QUOTA、PROMPTCUT_RENDER_USER、PROMPTCUT_RENDER_USER_CARDS、
+ *            PROMPTCUT_RENDER_EDITOR_DIR（见 deploy.mjs 的 renderInstance）
+ *
  * 其它环境变量：PROMPTCUT_REMOTE_DIR（远端部署目录，缺省 /opt/promptcut-docservice）、
  * PROMPTCUT_DOCSERVICE_PORT（缺省 8787）。远端需要 root，或能免密 sudo 的用户（install / deploy 里的命令按 root 写）。
  * 具体主机地址与私钥位置是本机信息，写在 docs/local.md，不进仓库。
@@ -59,6 +92,9 @@ import os from 'node:os';
 import { checkTokenFormat } from '../../server/docservice/auth.mjs';
 import { stageHostedFiles } from '../../server/hosted/files.mjs';
 import { hostedInstance, hostedPm2Config, hostedDeployScript, checkPublicUrl, checkStageOrigins, stageEditorBuild, shq } from '../../server/hosted/deploy.mjs';
+import { planRenderCommand, RENDER_COMMANDS, DeployUsageError } from '../../server/hosted-render/deploy.mjs';
+import { planAgentCommand, AGENT_COMMANDS } from '../../server/agent-service/deploy.mjs';
+import { planKeyCommand, KEY_COMMANDS } from '../../server/agent-service/key-deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = process.env.PROMPTCUT_REMOTE;
@@ -290,6 +326,110 @@ function statusHosted() {
   return sshScript(`${script}\n`, { timeout: 30_000 });
 }
 
+/* ------------------------------------------------------------------ *
+ * 托管方的渲染服务：参数、模板与远端脚本在 server/hosted-render/deploy.mjs
+ * ------------------------------------------------------------------ */
+
+/** 本机把 `--commit` 的引用解析成完整提交号（git 在仓库根里跑） */
+function resolveCommit(ref) {
+  const r = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) throw new DeployUsageError(`解析不了提交 ${ref}：${(r.stderr ?? '').trim()}`);
+  return r.stdout.trim();
+}
+
+function printDryRun(plan) {
+  const show = (title, body) => console.log(`\n=== ${title} ===\n${body}`);
+  console.log(`[dry-run] ${plan.cmd}（不连任何远端）`);
+  console.log(JSON.stringify({ app: plan.inst.app, dir: plan.inst.dir, data: plan.inst.data, secrets: plan.inst.secrets, user: plan.inst.user, slice: plan.inst.slice, statusPort: plan.inst.statusPort, workerPort: plan.inst.workerPort, ...(plan.id ? { commit: plan.commit, release: plan.id } : {}) }, null, 2));
+  if (plan.upload) {
+    show('本机要做的', [
+      `git archive --format=tar.gz -o <暂存目录>/${plan.upload.archive} ${plan.commit}`,
+      `scp <暂存目录>/${plan.upload.archive} <user@host>:${plan.upload.remote}`,
+    ].join('\n'));
+  }
+  show('经 ssh 标准输入交给远端 bash 的脚本', plan.script.trimEnd());
+}
+
+/** 渲染服务的六个子命令：解析在 planRenderCommand 里，这里只负责执行 */
+function runRender(cmd) {
+  let plan;
+  try {
+    plan = planRenderCommand(cmd, argv, process.env, { resolveCommit });
+  } catch (err) {
+    if (err instanceof DeployUsageError) { console.error(err.message); return 2; }
+    throw err;
+  }
+  if (plan.dryRun) { printDryRun(plan); return 0; }
+  if (cmd === 'deploy-render') {
+    const p = probe();
+    if (!p.ready) {
+      console.log(JSON.stringify(p, null, 2));
+      console.error('远端环境没就绪（要 Node LTS 与 PM2），先跑 install');
+      return 1;
+    }
+    console.log(`== 提交 ${plan.commit}（发布目录 ${plan.id}）；按提交部署，工作区没提交的改动不会上传。渲染服务必须与在线页面出自同一个提交。`);
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-render-stage-'));
+    try {
+      const made = spawnSync('git', ['archive', '--format=tar.gz', '-o', path.join(stage, plan.upload.archive), plan.commit], { cwd: ROOT, stdio: 'inherit', windowsHide: true, timeout: 300_000 });
+      if (made.status !== 0) { console.error('git archive 失败'); return made.status ?? 1; }
+      const size = fs.statSync(path.join(stage, plan.upload.archive)).size;
+      const prep = ssh(`mkdir -p ${shq(plan.inst.dir)}`);
+      if (prep.code !== 0) { console.error(prep.err); return 1; }
+      console.log(`== scp ${plan.upload.archive}（${(size / 1048576).toFixed(1)} MB）-> ${target}:${plan.inst.dir}/`);
+      // 相对路径 + cwd：Windows 的绝对路径带盘符冒号，scp 会把 C: 当成主机名
+      const up = spawnSync('scp', [...baseOpts, '-q', plan.upload.archive, `${target}:${plan.inst.dir}/`], { cwd: stage, stdio: 'inherit', timeout: 600_000, windowsHide: true });
+      if (up.status !== 0) return up.status ?? 1;
+    } finally {
+      fs.rmSync(stage, { recursive: true, force: true });
+    }
+    return sshScript(plan.script, { timeout: 1_800_000 });
+  }
+  return sshScript(plan.script, { timeout: cmd === 'install-render' ? 900_000 : 120_000 });
+}
+
+/**
+ * 云端 Agent 服务的四个子命令(契约 docs/plan/cloud-agent-contract.md 第 2.2 节;参数、模板与远端脚本在 server/agent-service/deploy.mjs)。
+ * 代码不在这里上传:Agent 服务与渲染服务共用 deploy-render 放上去的那份检出(同一个提交)。
+ */
+function runAgent(cmd) {
+  let plan;
+  try {
+    plan = planAgentCommand(cmd, argv, process.env);
+  } catch (err) {
+    if (err instanceof DeployUsageError) { console.error(err.message); return 2; }
+    throw err;
+  }
+  if (plan.dryRun) {
+    console.log(`[dry-run] ${plan.cmd}(不连任何远端)`);
+    console.log(JSON.stringify({ app: plan.inst.app, checkout: plan.inst.current, data: plan.inst.data, secrets: plan.inst.secrets, port: plan.inst.port, docUrl: plan.inst.docUrl, heapMb: plan.inst.heapMb, maxMemoryRestart: plan.inst.maxMemoryRestart }, null, 2));
+    console.log(`
+=== 经 ssh 标准输入交给远端 bash 的脚本 ===
+${plan.script.trimEnd()}`);
+    return 0;
+  }
+  return sshScript(plan.script, { timeout: 180_000 });
+}
+
+/** 模型 Key 的两个子命令（任务书 F；计划在 server/agent-service/key-deploy.mjs）。密文只经 ssh 标准输入进远端脚本 */
+function runKey(cmd) {
+  let plan;
+  try {
+    plan = planKeyCommand(cmd, argv, process.env);
+  } catch (err) {
+    if (err instanceof DeployUsageError) { console.error(err.message); return 2; }
+    throw err;
+  }
+  if (plan.dryRun) {
+    console.log(`[dry-run] ${plan.cmd}(不连任何远端)`);
+    console.log(JSON.stringify({ app: plan.inst.app, checkout: plan.inst.current, data: plan.inst.data }, null, 2));
+    console.log(`
+=== 经 ssh 标准输入交给远端 bash 的脚本(预览:密文只显示开头与长度) ===
+${plan.preview.trimEnd()}`);
+    return 0;
+  }
+  return sshScript(plan.script, { timeout: 120_000 });
+}
+
 const STATUS = String.raw`
 pm2 jlist | node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8")); for (const p of l) console.log(p.name, p.pm2_env.status, "pid="+p.pid, "restarts="+p.pm2_env.restart_time, "uptime="+Math.round((Date.now()-p.pm2_env.pm_uptime)/1000)+"s")'
 echo "== healthz"; curl -fsS "http://127.0.0.1:${port}/healthz"; echo
@@ -306,6 +446,9 @@ if (cmd === 'stage-hosted') {
   console.log(JSON.stringify({ ok: true, dir: path.resolve(out), files: files.length }));
   process.exit(0);
 }
+if (RENDER_COMMANDS.includes(cmd) && flag('--dry-run')) process.exit(runRender(cmd));
+if (AGENT_COMMANDS.includes(cmd) && flag('--dry-run')) process.exit(runAgent(cmd));
+if (KEY_COMMANDS.includes(cmd) && flag('--dry-run')) process.exit(runKey(cmd));
 if (!target) {
   console.error('缺 PROMPTCUT_REMOTE（形如 root@1.2.3.4），用法见文件头');
   process.exit(2);
@@ -332,7 +475,25 @@ switch (cmd) {
   case 'status-hosted':
     process.exit(statusHosted());
     break;
+  case 'install-render':
+  case 'deploy-render':
+  case 'status-render':
+  case 'stop-render':
+  case 'rollback-render':
+  case 'keygen-render':
+    process.exit(runRender(cmd));
+    break;
+  case 'deploy-agent':
+  case 'status-agent':
+  case 'stop-agent':
+  case 'keygen-agent':
+    process.exit(runAgent(cmd));
+    break;
+  case 'machine-id-agent':
+  case 'import-key-agent':
+    process.exit(runKey(cmd));
+    break;
   default:
-    console.error('命令：probe | install | deploy | status | deploy-hosted [--instance drill] | status-hosted [--instance drill] | stage-hosted <目录>');
+    console.error('命令：probe | install | deploy | status | deploy-hosted [--instance drill] | status-hosted [--instance drill] | stage-hosted <目录> | install-render | deploy-render | status-render | stop-render | rollback-render | keygen-render（渲染服务的都收 --dry-run）| deploy-agent | status-agent | stop-agent | keygen-agent（Agent 服务的都收 --dry-run）| machine-id-agent | import-key-agent --file <密文文件> [--service model|voice]（模型 Key 的加密分发，都收 --dry-run）');
     process.exit(2);
 }

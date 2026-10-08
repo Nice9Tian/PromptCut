@@ -10,7 +10,11 @@ import { bootApiGuard } from "./apiGuard";
 import { captureInviteFromLocation } from "./invite";
 import { markOnlinePage } from "./pageFlag";
 import { loadStageConfig } from "./stageOrigins";
+import { bootStageGuard } from "./isolation/stageGuard";
 
+// 跨源舞台(在线构建的 `stage.html`):加固与自检排在别的模块求值之前、任何卡片代码之前(契约 `online-card-exec-contract.md` 第 3 节)。
+// 桌面运行环境、编辑器页、同源单舞台不做事
+bootStageGuard({ online: ONLINE, base: import.meta.env.BASE_URL });
 // 运行期标记先设:会被 Node 单测载入、不能静态引 mode.ts 的模块读它停掉 /api 调用(pageFlag.ts)
 if (ONLINE) markOnlinePage();
 bootApiGuard(ONLINE, { base: import.meta.env.BASE_URL });

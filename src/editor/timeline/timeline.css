@@ -8,6 +8,12 @@
   );
 }
 
+/* 声音关闭必须一眼可见，不能只靠悬停或参数面板。极窄片段的图标由 ClipView 画在裁切框外。 */
+.pc-clip.is-audio-muted { border-color: #f5bf4f !important; box-shadow: inset 0 -3px 0 #f5bf4f; }
+.pc-clip-mute-badge { position: absolute; right: 3px; bottom: 3px; z-index: 25; display: inline-flex; align-items: center; gap: 3px; padding: 1px 4px; min-height: 16px; border: 1px solid #ffdd91; border-radius: 4px; color: #211503; background: #f5bf4f; font-size: 10px; line-height: 14px; font-weight: 700; pointer-events: none; white-space: nowrap; }
+.pc-clip-mute-badge.is-compact { width: 18px; height: 16px; padding: 1px 2px; bottom: auto; justify-content: center; }
+.pc-track-mute-summary { flex: none; border-radius: 3px; padding: 1px 3px; color: #211503; background: #f5bf4f; font-size: 9px; font-weight: 700; white-space: nowrap; }
+
 /* ── 时间轴的两条滚动条:右侧竖条(原生)和底部横条(Scrollbar.tsx)同一套样子 ──────────
  * 可见部分都是 10px 粗、全圆角,同一个淡底槽、同一个滑块色;外面各留 2px,占位 14px。
  * 竖条只在时间轴里改,全局皮肤那条 6px 的滚动条(skins.css)不动。

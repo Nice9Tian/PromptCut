@@ -36,11 +36,15 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
   for (const e of audioPlanOf(project)) {
     const sourceClip = (project.tracks ?? []).flatMap(track => track.clips ?? []).find(clip => clip.id === e.clipId);
     // A generated node replaces its corresponding source-media input; applying both would double it.
-    if (isCardAudioNode(project, sourceClip?.nodeId)) continue;
+    if (!sourceClip?.cardAudio && isCardAudioNode(project, sourceClip?.nodeId)) continue;
     const m = (project.media || []).find((x) => x.id === e.mediaId);
     const file = sourceOf(m);
-    if (!file || (!/^https?:/i.test(file) && !exists(file))) continue;
-    out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx });
+    const soundEffect = !!(sourceClip?.cardAudio || m?.soundEffect || sourceClip?.soundEffect);
+    if (!file || (!/^https?:/i.test(file) && !exists(file))) {
+      if (soundEffect) throw new Error(`${e.clipId} 的合成音效文件缺失，请恢复素材或重新生成`);
+      continue;
+    }
+    out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx, ...(soundEffect ? { soundEffect: true } : {}) });
   }
   // 音频图卡节点 have no ffmpeg-readable source file.  Keep them in the one common
   // plan so Chrome's OfflineAudioContext can request their true WAV blocks.  A caller that
@@ -48,7 +52,7 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
   for (const track of project.tracks ?? []) {
     if (track.hidden || track.muted) continue;
     for (const clip of track.clips ?? []) {
-      if (clip.audioMuted || !isCardAudioNode(project, clip.nodeId)) continue;
+      if (clip.audioMuted || clip.cardAudio || !isCardAudioNode(project, clip.nodeId)) continue;
       // Generated blocks are sample-addressed; do not quantize their timeline placement to
       // the legacy 3 ms audio-plan precision before converting duration to frames.
       const dur = clip.end - clip.start;
@@ -84,6 +88,16 @@ export function hasAudioStream(file, ffprobeCmd) {
   }
 }
 
+/** 普通静音视频可以略过；已有合成音效却读不到音轨时必须失败，不能报告无声成片成功。 */
+export function playableAudioPlan(plan, ffprobeCmd, probe = hasAudioStream) {
+  return plan.filter((entry) => {
+    if (entry.cardAudio) return true;
+    const playable = probe(entry.file, ffprobeCmd);
+    if (!playable && entry.soundEffect) throw new Error(`${entry.clipId} 的合成音效无法读取音轨，请恢复素材或重新生成`);
+    return playable;
+  });
+}
+
 /** 拼 ffmpeg 参数:视频流照抄,音频按计划混音 */
 export function buildFfmpegArgs(videoIn, plan, videoOut, durationSec) {
   if (plan.some(p => p.cardAudio)) throw new Error("ffmpeg audio mux cannot render card audio; use the Chrome audio mixer");
@@ -92,10 +106,13 @@ export function buildFfmpegArgs(videoIn, plan, videoOut, durationSec) {
   plan.forEach((p, i) => {
     args.push("-ss", String(p.offset), "-t", String(p.dur), "-i", p.file);
     const k = i + 1; // 0 是视频
-    const chain = [`adelay=${Math.round(p.start * 1000)}:all=1`];
-    if (p.fadeIn > 0) chain.push(`afade=t=in:st=${p.start.toFixed(3)}:d=${p.fadeIn}`);
+    const chain = p.soundEffect
+      ? ['aresample=48000', `adelay=${Math.round(p.start * 48000)}S:all=1`]
+      : [`adelay=${Math.round(p.start * 1000)}:all=1`];
+    if (p.fadeIn > 0) chain.push(`afade=t=in:st=${p.soundEffect ? p.start : p.start.toFixed(3)}:d=${p.fadeIn}`);
     if (p.fadeOut > 0) {
-      chain.push(`afade=t=out:st=${(p.start + p.dur - p.fadeOut).toFixed(3)}:d=${p.fadeOut}`);
+      const fadeStart = p.start + p.dur - p.fadeOut;
+      chain.push(`afade=t=out:st=${p.soundEffect ? fadeStart : fadeStart.toFixed(3)}:d=${p.fadeOut}`);
     }
     if (p.volume !== 1) chain.push(`volume=${p.volume}`);
     filters.push(`[${k}:a]${chain.join(",")}[a${k}]`);

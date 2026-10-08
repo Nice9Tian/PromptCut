@@ -10,6 +10,8 @@ import { CodeTab } from "./CodeTab";
 import { Frame3DForm } from "./Frame3DForm";
 import { ClipFilterForm } from "./ClipFilterForm";
 import { ClipAudioFxForm } from "./ClipAudioFxForm";
+import { SoundEffectForm, TypingSoundControls } from "./SoundEffectForm";
+import { CardAudioForm } from "./CardAudioForm";
 
 /**
  * 编辑分区的参数 / 代码两页。哪一页显示由分区头部的胶囊分页决定(tab),
@@ -58,6 +60,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
           />
           <span className="pc-left-faint">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
+        {clip.soundEffect && <SoundEffectForm key={clip.id} clip={clip} />}
         {media && (media.kind === "video" || media.kind === "image") && <ClipFilterForm clip={clip} />}
         {media && (media.kind === "video" || media.kind === "audio") && <ClipAudioFxForm clip={clip} />}
       </div>
@@ -73,6 +76,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
+      <CardAudioForm key={clip.id} clip={clip} />
       <div className="px-3 pb-2 pc-left-divider-b flex flex-col gap-2 shrink-0">
         <div className="flex items-center justify-between">
           <div className="font-semibold text-xs pc-left-strong truncate pr-2">{cardDef?.name ?? clip.cardId}</div>
@@ -126,6 +130,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto pc-left-scroll" style={{ display: tab === "form" ? "block" : "none" }}>
+        {clip.cardId === "mu-typing" && <TypingSoundControls key={clip.id} clip={clip} />}
         {isComposite(clip) ? <PartsForm clip={clip} /> : <ParamsForm clip={clip} cardDef={cardDef} />}
         {/* 三维排在卡片参数后面:它改的是「这张卡摆在哪」,不是卡片自己的内容 */}
         <Frame3DForm clip={clip} />

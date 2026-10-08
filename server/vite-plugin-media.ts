@@ -677,15 +677,33 @@ export function parseRange(header: string, size: number): { start: number; end: 
   return { start, end };
 }
 
+/**
+ * 发一个文件(整件或一段 Range)。
+ *
+ * 先把文件打开、在这个句柄上取大小,再从同一个句柄读:原来是先 `stat` 再按路径另开读流,文件在两步之间没了
+ * (素材被清、内容库换目录、测试里删文件)时,读流的 `error` 没人接,会把整个编辑器进程带崩 ——
+ * 页面上随后所有请求都是 `Failed to fetch`。
+ * 现在打不开就回 404;打开之后文件被删,句柄仍然读得完;读到一半出错只断这一条响应。
+ */
 async function serveFile(filePath: string, req: Connect.IncomingMessage, res: ServerResponse) {
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
-    const stat = await fs.stat(filePath);
+    handle = await fs.open(filePath, "r");
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("not a file");
     const range = req.headers.range ? parseRange(req.headers.range, stat.size) : null;
     const contentType = contentTypeForFile(filePath);
     const head = req.method === "HEAD";
     // Last-Modified:没有内容哈希的迁移期素材,帧管线按 `HEAD` 的 Content-Length + Last-Modified 打戳
     // (server/media-stamp.mjs),不再自己去 stat 这个目录
     const lastModified = stat.mtime.toUTCString();
+    const send = (opts?: { start: number; end: number }) => {
+      const stream = handle!.createReadStream(opts); // 读完或出错时流自己关句柄
+      handle = null;
+      stream.on("error", () => { res.destroy(); });
+      res.on("close", () => { stream.destroy(); });
+      stream.pipe(res);
+    };
 
     if (range === "unsatisfiable") {
       res.writeHead(416, { "Content-Range": `bytes */${stat.size}`, "Accept-Ranges": "bytes" });
@@ -701,8 +719,7 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
         "Last-Modified": lastModified,
       });
       if (head) return res.end();
-      const stream = createReadStream(filePath, { start, end });
-      stream.pipe(res);
+      send({ start, end });
     } else {
       res.writeHead(200, {
         "Content-Length": stat.size,
@@ -711,12 +728,14 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
         "Last-Modified": lastModified,
       });
       if (head) return res.end();
-      const stream = createReadStream(filePath);
-      stream.pipe(res);
+      send();
     }
   } catch (err) {
+    if (res.headersSent) { res.destroy(); return; }
     res.statusCode = 404;
     res.end("Not found");
+  } finally {
+    await handle?.close().catch(() => {});
   }
 }
 

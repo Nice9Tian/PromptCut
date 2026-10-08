@@ -18,7 +18,7 @@
 /** 分片大小(同 `asset-service.ts` 的 `chunkSize`) */
 export const CHUNK_SIZE = 8 * 1024 * 1024;
 
-export type Namespace = "snap" | "px";
+export type Namespace = "snap" | "px" | "media";
 
 export interface UploaderDeps {
   /** 素材服务基址(`…/api/asset`);没连上回 null */

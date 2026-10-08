@@ -517,6 +517,8 @@ export function projectModule({
 
     const principal = principals.get(connId);
     if (principal?.role === 'render') return reject('forbidden', { detail: '渲染节点的连接不能改项目' });
+    // 只读成员的云端 Agent 连接（principal 带 `access: 'r'`，`docs/plan/cloud-agent-contract.md` 第 4.6 节）；组装层的 gate 已经挡过一次
+    if (principal?.access === 'r') return reject('forbidden', { detail: '只读的连接不能改项目' });
 
     const done = st.opIds.get(opId);
     if (done !== undefined) {
@@ -664,6 +666,7 @@ export function projectModule({
   function upload(ctx, connId, msg, reqId) {
     const projectId = checkProjectId(msg.projectId);
     const uploadId = checkToken(msg.uploadId, 'uploadId');
+    if (principals.get(connId)?.access === 'r') return reply(ctx, connId, { type: 'error', reason: 'forbidden', detail: '只读的连接不能上传项目' }, reqId);
     const { index, count, data } = msg;
     if (!Number.isSafeInteger(count) || count < 1 || count > PROJECT_LIMITS.UPLOAD_MAX_PARTS) bad(`count 必须是 1～${PROJECT_LIMITS.UPLOAD_MAX_PARTS} 的整数`);
     if (!Number.isSafeInteger(index) || index < 0 || index >= count) bad('index 必须是 0～count-1 的整数');
@@ -836,7 +839,17 @@ export function projectModule({
     requireBlobStore();
 
     const withReq = (m) => (reqId === undefined ? m : { ...m, reqId });
-    const missing = () => reply(ctx, connId, { type: 'project.snapshot.part', projectId, projectRev, missing: true }, reqId);
+    /*
+     * 有真身的项目只给得出当前这一版(旧版本没有人上传过快照)。要的不是当前版本时,回包多带一项 `currentRev`:
+     * 渲染节点据此改按当前版本核对手里的任务(内容没变的照做,内容已经换掉的作废),不把「项目往前走了」当成失败
+     * (`docs/plan/render-queue-contract.md` J.15)。没有真身的项目不带这一项,行为同前。
+     */
+    const missing = () => {
+      const st = stateOf(projectId);
+      const message = { type: 'project.snapshot.part', projectId, projectRev, missing: true };
+      if (st.hasBody && st.projectRev !== projectRev) message.currentRev = st.projectRev;
+      reply(ctx, connId, message, reqId);
+    };
     const digest = digestOfRev(projectId, projectRev);
     if (digest === undefined) return missing();
     let text = store.readBlob(snapshotBlobName(projectId, projectRev));

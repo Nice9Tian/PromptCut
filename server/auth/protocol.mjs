@@ -13,6 +13,10 @@ export const TICKET_PREFIX = 'promptcut.ticket.';
 export const TENANT_PREFIX = 'promptcut.tenant.';
 export const ROLE_PREFIX = 'promptcut.role.';
 export const TOKEN_PREFIX = 'promptcut.token.';
+/** 托管方服务身份的握手项（契约 `docs/plan/hosted-render-contract.md` 第 1.2 节） */
+export const SERVICE_PREFIX = 'promptcut.service.';
+/** 以它开头的用户名留给托管方服务身份，成员不能用（同上第 1.4 节） */
+export const RESERVED_USERNAME_PREFIX = 'service:';
 
 /** 连接角色（契约第 1 节） */
 export const ROLES = Object.freeze(['page', 'agent', 'render']);
@@ -127,6 +131,11 @@ export function adminPurpose({ projectId, username, op, nonce }) {
   return utf8(`promptcut.admin.v1\n${projectId}\n${username}\n${op}\n${nonce}`);
 }
 
+/** 服务握手的用途串（`hosted-render-contract.md` 第 1.2 节）：`promptcut.service.v1\n<服务名>\n<instanceId>\n<nonce>` */
+export function servicePurpose({ service, deviceId, nonce }) {
+  return utf8(`promptcut.service.v1\n${service}\n${deviceId}\n${nonce}`);
+}
+
 // ---------------------------------------------------------------- 校验
 
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
@@ -149,6 +158,16 @@ export const nameKey = (name) => String(name).normalize('NFC').toLowerCase();
  * 契约只给了项目名的规则；用户名要拼进用途串（以换行分隔字段），所以至少不许有控制字符。
  */
 export const isUsername = (v) => typeof v === 'string' && v.length > 0 && charCount(v) <= 64 && !CONTROL_RE.test(v) && v.trim() === v;
+
+/** 服务名：1～32 个 `[a-z0-9-]` */
+export const isServiceName = (v) => typeof v === 'string' && /^[a-z0-9-]{1,32}$/.test(v);
+
+/** 留给服务身份的用户名（成员进入、建项目、名单、踢人都不许用） */
+export const isReservedUsername = (v) => typeof v === 'string' && v.startsWith(RESERVED_USERNAME_PREFIX);
+
+/** 服务在项目里的用户名与 `userId`：`service:<服务名>`、`service:<服务名>@<instanceId>` */
+export const serviceUsername = (service) => `${RESERVED_USERNAME_PREFIX}${service}`;
+export const serviceUserId = (service, deviceId) => `${serviceUsername(service)}@${deviceId}`;
 
 export const isDeviceId = (v) => typeof v === 'string' && DEVICE_ID_RE.test(v);
 
@@ -195,3 +214,14 @@ export function splitUserId(userId) {
   const deviceId = userId.slice(i + 1);
   return isDeviceId(deviceId) ? { username, deviceId } : null;
 }
+
+// ---------------------------------------------------------------- 云端 Agent 的委托（`docs/plan/cloud-agent-contract.md` 第 4.2 节）
+
+/** 委托票据（页面每个请求出示）与对话委托（绑一个对话，成员离线后仍有效）的有效期 */
+export const DELEGATION_TTL = Object.freeze({ ticket: 2 * 60_000, grant: 60 * 60_000 });
+/** 委托的受众：要它的那种托管方服务的服务名。现在只有云端 Agent 服务 */
+export const DELEGATION_AUDIENCES = Object.freeze(['agent']);
+/** 对话 id（页面起的）：1～64 个 `[A-Za-z0-9_-]` */
+export const isConversationId = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+/** 成员在项目里的权限：读写或只读 */
+export const isAccess = (v) => v === 'r' || v === 'rw';

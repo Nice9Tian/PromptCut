@@ -28,12 +28,25 @@
  * `project`(取项目快照、算这一版的计划)、`lane`(交给管线了、这一段的第一批还没交;`ahead` 是当时这条管线上
  * 已经在跑的 `'queue'` lane 工作数,大于 0 就是在排队)、`frames`(在出批)、`finish`(帧都交了,在收尾:补小尺寸、换页)。
  *
+ * # 项目往前走了(契约 `docs/plan/render-queue-contract.md` J.15)
+ *
+ * 细任务的结果按内容寻址,任务里的 `source.projectRev` 只是「去哪一版取输入」的线索。有真身的项目(共享项目)文档服务只给得出
+ * 当前这一版:发布之后项目又被改过,旧版本就取不到了。这不算失败——
+ *   - 取不到任务指的那一版、文档服务回了当前版本号(`projects.locate` 的 `currentRev`):改按当前版本算(必要时一路追到最新);
+ *   - 带片段清单的计划与它切出的细任务另加一条:本执行器已经算过这个项目更新的一版,就不再用旧的那一版,直接对着新的核
+ *     (旧版本的画面没人要了,不为它白渲;层表也不会被迟到的旧计划写回旧版本);
+ *   - 计划任务:按实际取到的那一版切,回的上下文带 `actualRev`,切分方把它写进细任务的 `source.projectRev`;
+ *   - 细任务:在实际那一版里按片段与内容键对回 control。内容没变的照做(产物与原来那一版的逐字节相同);片段没了、或内容键
+ *     换了,说明这份内容已经被新版本取代,抛 `superseded`(`error.superseded === true`、不可重试),由 runner 报给队列作废,
+ *     不记失败。
+ * 没有真身的项目(每一版都有上传的快照)文档服务不回 `currentRev`,行为与原来相同。
+ *
  * M6c 起执行器不再有 `isIdle()`(J.4 原有):PC 节点的闲时门槛改为 `queue-idle.mjs`(X5),独立渲染主机本来就
  * 只看全局并发闸,这个判据已经没人用(集成裁定,`docs/plan/m6c-contract.md`「集成时的裁定」)。
  */
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
-import { isListPlan } from './render-queue/index.mjs';
+import { isListPlan, CLIPS_KEY_MARK, BACKFILL_KEY_MARK } from './render-queue/index.mjs';
 import { splitCandidatesOf } from './artifact-transfer.mjs';
 
 /** `cardLocks`(Map、普通对象或缺省)→ `(lockKey) => 锁指纹 | null`(同 `split.mjs` 的读法) */
@@ -89,6 +102,19 @@ export const PLAN_CACHE_SIZE = 4;
 
 const fail = (code, message, retryable) => Object.assign(new Error(message), { code, retryable });
 
+/** 追当前版本最多追几跳(每一跳都是文档服务回的更新的版本号;项目在取的那一瞬间又变了才会多跳) */
+export const DRIFT_MAX_HOPS = 8;
+/** 作废的任务报给队列的 error:队列按它认「这份结果当时不要了」(`render-queue/queue.mjs` 的 `isSuperseded`) */
+export const SUPERSEDED = 'superseded';
+const superseded = (detail) => Object.assign(new Error(SUPERSEDED), { code: SUPERSEDED, superseded: true, retryable: false, detail });
+
+/** 带片段清单的计划,或它切出的细任务(看 `source.derivedFrom` 指的计划 id) */
+export function isListWork(task) {
+  if (isListPlan(task)) return true;
+  const from = task?.source?.derivedFrom;
+  return typeof from === 'string' && (from.includes(CLIPS_KEY_MARK) || from.includes(BACKFILL_KEY_MARK));
+}
+
 /**
  * 每条管线上经执行器交给 `'queue'` lane 的工作(快照的一段、plan 的取计划):管线 → 在跑的个数。
  * lane 是串行的(`FramePipeline.runQueueTask`),同一条管线由主机的几个项目节点的执行器共用,所以记在模块里、按管线分。
@@ -134,12 +160,31 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return { projectId, projectRev, id: `${projectId}@${projectRev}` };
   };
 
-  /** 取(或算)这一版的上下文。失败的不留在缓存里,下次重算 */
-  function contextFor(task, signal) {
-    const { projectId, projectRev, id: version } = versionOf(task);
+  /** projectId → 本执行器算成过的最新一版(见文件头「项目往前走了」) */
+  const newest = new Map();
+  /** 计划任务对象 → 它实际按哪一版切的(`afterSplit` 写层表要用同一版) */
+  const planned = new WeakMap();
+
+  const cacheIdOf = (projectId, projectRev) => {
+    const version = `${projectId}@${projectRev}`;
     let stamp = '';
     try { stamp = String(codeStamp() ?? ''); } catch { stamp = ''; }
-    const id = stamp ? `${version}#${stamp}` : version;
+    return stamp ? `${version}#${stamp}` : version;
+  };
+
+  /** 取这一版的项目:`{ json }`,没有时 `{ json: null, currentRev }`。项目客户端没有 `locate`(测试替身、旧客户端)时只用 `get` */
+  async function fetchProject(projectId, projectRev) {
+    if (typeof projects.locate === 'function') {
+      const found = await projects.locate(projectId, projectRev);
+      return { json: found?.project ?? null, currentRev: Number.isSafeInteger(found?.currentRev) ? found.currentRev : null };
+    }
+    return { json: await projects.get(projectId, projectRev), currentRev: null };
+  }
+
+  /** 取(或算)恰好这一版的上下文。失败的不留在缓存里,下次重算;文档服务说了当前版本的,错误带 `currentRev` */
+  function exactContext(projectId, projectRev, signal) {
+    const version = `${projectId}@${projectRev}`;
+    const id = cacheIdOf(projectId, projectRev);
     const hit = cache.get(id);
     if (hit) {
       cache.delete(id);
@@ -147,15 +192,18 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       return hit;
     }
     const work = (async () => {
-      let json;
-      try { json = await projects.get(projectId, projectRev); }
+      let found;
+      try { found = await fetchProject(projectId, projectRev); }
       catch (error) { throw fail(error?.code === 'digest-mismatch' ? 'bad-snapshot' : 'no-snapshot', `取不到项目快照 ${version}:${error?.message || error}`, true); }
-      if (!json) throw fail('no-snapshot', `文档服务上没有项目快照 ${version}`, true);
+      const json = found.json;
+      if (!json) throw Object.assign(fail('no-snapshot', `文档服务上没有项目快照 ${version}`, true), { currentRev: found.currentRev });
       const project = prepareProject(json);
       if (!Array.isArray(project?.tracks) || !Number.isFinite(project?.duration) || project.duration <= 0) {
         throw fail('bad-snapshot', `项目快照 ${version} 不是能渲的项目`, false);
       }
-      return onLane(pipeline, () => pipeline.planForQueue(project, { signal }));
+      const out = await onLane(pipeline, () => pipeline.planForQueue(project, { signal }));
+      if (projectRev > (newest.get(projectId) ?? -1)) newest.set(projectId, projectRev);
+      return out;
     })();
     cache.set(id, work);
     while (cache.size > PLAN_CACHE_SIZE) cache.delete(cache.keys().next().value);
@@ -163,9 +211,36 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return work;
   }
 
+  /**
+   * 这个任务按哪一版算(见文件头「项目往前走了」)。回 `{ entry, context, streamSpecs, rev, drifted }`:
+   * `rev` 是实际用的那一版,`drifted` 为真表示它不是任务指的那一版。
+   */
+  async function contextFor(task, signal) {
+    const { projectId, projectRev, id: version } = versionOf(task);
+    let want = projectRev;
+    // 带片段清单的计划与它的细任务:已经算过更新的一版就不回头用旧的
+    const known = newest.get(projectId);
+    if (isListWork(task) && Number.isSafeInteger(known) && known > want) want = known;
+    for (let hop = 0; ; hop += 1) {
+      try {
+        const got = await exactContext(projectId, want, signal);
+        if (want !== projectRev) say('executor.drift', { id: task?.id ?? null, version, actual: want });
+        return { ...got, rev: want, drifted: want !== projectRev };
+      } catch (error) {
+        const next = error?.currentRev;
+        if (!Number.isSafeInteger(next) || next <= want || hop >= DRIFT_MAX_HOPS) throw error;
+        want = next;
+      }
+    }
+  }
+
   async function plan(planTask, { signal } = {}) {
     const { id } = versionOf(planTask);
-    const { entry, context } = await contextFor(planTask, signal);
+    const resolved = await contextFor(planTask, signal);
+    if (planTask && typeof planTask === 'object') planned.set(planTask, resolved);
+    const { entry, rev, drifted } = resolved;
+    // 项目往前走了:按实际那一版切,细任务的 source.projectRev 也写那一版(local-node 读 actualRev)
+    const context = drifted ? { ...resolved.context, actualRev: rev } : resolved.context;
     // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
     // C10 契约第 18 节第 9 条:在线页面的清单计划同一条路(清单是页面自己判重的片段)
     if (isListPlan(planTask) && typeof pipeline.addBackfill === 'function') {
@@ -182,10 +257,16 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   }
 
   /** 附件第 3 节「把任务对回 control」:对不上的每一项都记进 `why`,有就抛 `plan-mismatch` */
-  function matchControl(task, entry) {
+  function matchControl(task, entry, { drifted = false } = {}) {
     const input = task.input ?? {};
     const control = (entry.cardPlan ?? []).find(item => item?.clipId === input.clipId);
     const why = [];
+    // 按的不是任务指的那一版(项目往前走了):片段没了或内容键换了 = 这份内容已被新版本取代,作废,不算失败
+    if (drifted) {
+      const tier = control ? (control.tier || snapshotTier(control.capabilities)) : null;
+      const current = !control ? null : tier === 'local' ? `${entry.key}/${control.contentKey}` : control.contentKey;
+      if (!control || input.contentKey !== current) throw superseded(!control ? `新版本里没有片段 ${input.clipId}` : `片段 ${input.clipId} 的内容在新版本里换了`);
+    }
     if (!control) why.push(`这一版没有片段 ${input.clipId}`);
     else {
       const tier = control.tier || snapshotTier(control.capabilities);
@@ -212,9 +293,10 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
    * M6c X1:把流任务对回这一版的流。流按内容键认(`input.contentKey`,即 `planStreams` 的 `contentKey`);
    * 结果键必须是本机指纹乘出来的(节点侧过滤已经按指纹挡过,这里再核一次);分段范围在这条流之内。
    */
-  function matchStream(task, specs) {
+  function matchStream(task, specs, { drifted = false } = {}) {
     const input = task.input ?? {};
     const spec = (specs ?? []).find(item => item?.contentKey === input.contentKey) ?? null;
+    if (!spec && drifted) throw superseded('新版本里没有这条流');
     const why = [];
     if (!spec) why.push(`这一版没有内容键为 ${String(input.contentKey).slice(0, 16)}… 的流`);
     else {
@@ -234,8 +316,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     if (typeof pipeline.streamCapable === 'function' && !(await pipeline.streamCapable())) {
       throw fail('no-streams', '本机不能产轨道流(PROMPTCUT_STREAMS=0 或没有能用的 H.264 编码器)', false);
     }
-    const { entry, streamSpecs } = await contextFor(task, signal);
-    const spec = matchStream(task, streamSpecs);
+    const { entry, streamSpecs, drifted } = await contextFor(task, signal);
+    const spec = matchStream(task, streamSpecs, { drifted });
     const range = { from: task.range.from, to: task.range.to };
     const started = Date.now();
     await pipeline.renderStreamRange(entry, spec, range, { signal, progress });
@@ -248,11 +330,12 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     if (task?.kind === 'stream') return renderStream(task, { signal, progress });
     if (task?.kind !== 'snapshot') throw fail('bad-task', `不认识的任务 kind:${task?.kind}`, false);
     say('project');
-    const { entry } = await contextFor(task, signal);
-    const control = matchControl(task, entry);
+    const { entry, drifted } = await contextFor(task, signal);
+    const control = matchControl(task, entry, { drifted });
     // c10a 契约第 17 节:补渲细任务的片段在本机可能判轻(不在预渲染集合里,管线会跳过它);按任务把它记成补渲再渲。
-    // 切分它的 plan 可能是别的进程、或本进程重启之前认领的,这里不能指望 plan() 已经记过
-    if (task.priority === 'backfill' && typeof pipeline.addBackfill === 'function' && !pipeline.prerenderPicked(entry, control.clipId)) {
+    // 切分它的 plan 可能是别的进程、或本进程重启之前认领的,这里不能指望 plan() 已经记过。
+    // 清单计划(在线页面、云端 Agent 服务发的)切出的细任务同理:清单是发布方判的,本机重启后、或换了一版算时都没记过
+    if ((task.priority === 'backfill' || isListWork(task)) && typeof pipeline.addBackfill === 'function' && !pipeline.prerenderPicked(entry, control.clipId)) {
       pipeline.addBackfill(entry, [control.clipId]);
     }
     const range = { from: task.range.from, to: task.range.to };
@@ -286,7 +369,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     if (typeof pipeline.recordSplitCandidates === 'function') pipeline.recordSplitCandidates(candidates);
     if (!isListPlan(planTask)) return;
     try {
-      const { entry } = await contextFor(planTask);
+      // 层表按切分时实际用的那一版写(项目往前走了时不是 planTask 指的那一版)
+      const { entry } = planned.get(planTask) ?? await contextFor(planTask);
       if (typeof publishLayerMap === 'function') publishLayerMap(entry);
       else if (typeof pipeline.publishLayerMap === 'function') pipeline.publishLayerMap(entry);
       say('executor.layer-map', { version: id, cards: candidates.size, dual: [...candidates.values()].filter(fps => fps.length > 1).length });
@@ -301,5 +385,5 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
    * `'queue'` lane、还没落定的工作数(包括已经被中止、管线还没收手的那一件)。
    */
   const laneOf = task => (task?.kind === 'snapshot' || task?.kind === 'plan' ? 'queue' : null);
-  return { plan, render, afterSplit, forget: () => cache.clear(), laneOf, laneBusy: () => laneBusy(pipeline) };
+  return { plan, render, afterSplit, forget: () => { cache.clear(); newest.clear(); }, laneOf, laneBusy: () => laneBusy(pipeline) };
 }

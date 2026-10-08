@@ -46,6 +46,33 @@ test("soundingAt:某一秒谁在出声", () => {
   assert.deepEqual(soundingAt(plan, 7), []);
 });
 
+test("合成 WAV 的起点、时长和裁切偏移保留采样精度，切分不重启第一事件", () => {
+  const sample = 1 / 48000;
+  const start = 17 * sample, split = start + 2537 * sample;
+  const p = {
+    media: [{ id: "s", kind: "audio", url: "/@media/s.wav", soundEffect: { reuseKey: "r" } }],
+    tracks: [{ id: "t", clips: [
+      { id: "left", mediaId: "s", start, end: split, mediaOffset: 31 * sample },
+      { id: "right", mediaId: "s", start: split, end: split + sample, mediaOffset: (31 + 2537) * sample },
+    ] }],
+  };
+  const [a, b] = audioPlanOf(p);
+  assert.equal(a.start, start);
+  assert.equal(a.dur, split - start);
+  assert.equal(b.offset, 2568 * sample);
+  assert.ok(Math.abs((b.offset - a.offset - a.dur) * 48000) < 1e-9);
+  assert.ok(Math.abs(b.dur * 48000 - 1) < 1e-9, "单个采样长度的片段不能被毫秒舍入丢掉");
+});
+
+test("被引用的合成素材缺失时明确失败，静音和隐藏序列仍不请求声音", () => {
+  const p = { media: [], tracks: [{ id: "t", clips: [{ id: "lost", mediaId: "gone", soundEffect: { reuseKey: "r" }, start: 0, end: 1 }] }] };
+  assert.throws(() => audioPlanOf(p), /lost.*合成音效素材缺失/);
+  assert.deepEqual(audioPlanOf({ ...p, tracks: [{ ...p.tracks[0], muted: true }] }), []);
+  assert.deepEqual(audioPlanOf({ ...p, tracks: [{ ...p.tracks[0], hidden: true }] }), []);
+  assert.deepEqual(audioPlanOf({ ...p, tracks: [{ ...p.tracks[0], clips: [{ ...p.tracks[0].clips[0], audioMuted: true }] }] }), []);
+  assert.throws(() => audioPlanOf({ ...p, media: [{ id: "gone", kind: "audio", url: "", soundEffect: {} }] }), /素材缺失/);
+});
+
 // 导出的淡入淡出包络:和 ffmpeg 两条 afade(线性)相乘一样。重叠、比片段还长这两种以前会出错
 import { fadeEnvelope } from "./audioPlan.mjs";
 test("fadeEnvelope:两条线性淡化相乘;重叠时是三角形,淡入比片段长时终点只到 dur/fadeIn", () => {

@@ -81,7 +81,7 @@ const PYLIBS = path.join(EXPORT_DIR, 'pylibs');
 const MODELS = path.join(EXPORT_DIR, 'models');
 fs.mkdirSync(PYLIBS, { recursive: true });
 /** 让 Python 找得到仓库里的包(和 vite-plugin-stt 的 buildEnv 对普通解释器的做法相同) */
-const pyEnv = (pylibs) => ({ ...process.env, PYTHONPATH: pylibs + path.delimiter + path.join(ROOT, 'python'), PYTHONNOUSERSITE: '1', PYTHONUTF8: '1', PROMPTCUT_PYLIBS: pylibs });
+const pyEnv = (pylibs) => ({ ...process.env, PYTHONPATH: pylibs + path.delimiter + path.join(ROOT, 'python'), PYTHONNOUSERSITE: '1', PYTHONUTF8: '1', PROMPTCUT_PYLIBS: pylibs, PROMPTCUT_MODELS: MODELS });
 const spawnPy = (python, a, env) => spawn(python, a, { env, windowsHide: true });
 /** 异步跑子进程:计数的远程素材服务就在探针进程里,spawnSync 会卡住事件循环、ffmpeg 发来的请求没人答 */
 function runAsync(cmd, a, env, timeoutMs = 180000) {

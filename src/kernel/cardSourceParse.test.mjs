@@ -264,3 +264,10 @@ test("isUserCardEntryKey:只认 src/cards/user/ 下一层的 .tsx", () => {
   assert.equal(isUserCardEntryKey("src/cards/native/c.tsx"), false);
   assert.equal(isUserCardEntryKey(undefined), false);
 });
+
+test('声画同片段源码只读识别embeddedAudio，Component与audio可共存', () => {
+  const [card] = parseCardSource('export const av = { id:"av", name:"声画", defaults:{}, controls:[], Component:()=>null, audio:()=>new Float32Array(4) };');
+  assert.equal(card.embeddedAudio, true);
+  const [sound] = parseCardSource('export const audio = { id:"sound", name:"声音", defaults:{}, controls:[], audio:()=>new Float32Array(4) };');
+  assert.equal(sound.embeddedAudio, undefined);
+});

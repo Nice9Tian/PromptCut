@@ -16,6 +16,16 @@
  * 指纹由文档服务按原始值算、在 `node.welcome.envFingerprint` 回来,节点记下它(节点侧过滤按它比任务的指纹),
  * 并交给宿主(清单计划的 `input.browser` 要它,第 3.3 节)。`queue.watch` 只列本项目(队列不许纯浏览器 watch `'all'`)。
  *
+ * # 用户卡与图卡(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节)
+ *
+ * 本页能执行同步来的用户卡与图卡时(`deps.cardInfo()` 回登记处的内容,`nodeCardInfo.ts`):
+ *   - `node.hello` 多报一项 `cardRuntime`(在线卡片运行时版本,原始值;指纹仍由文档服务算);
+ *   - 文档服务在 `node.welcome` 多回 `cardEnvFingerprint`(环境三项再加运行时版本),节点记下:用户卡、图卡的任务用它比指纹
+ *     (`filter.mjs` 规则 1),内置卡的任务照旧比 `envFingerprint`;
+ *   - 能力位 `capabilities.userCards` / `graphCards` 与 `cardSourceVersions`(每张本页已载入成功的卡的代码身份)随登记处实时更新,
+ *     节点侧过滤(规则 1、3)据此认领;换代后一小段时间不报(登记处的 `NODE_CARD_SETTLE_MS`)。
+ * 运行时版本在报到之后才变得可报(闸门晚于报到才立起来)时,重发一次 `node.hello`(带手里的认领接续)。不能执行时与原来完全相同。
+ *
  * # 一段细任务(第 4 节)
  *
  *   认领到 → `progress(0)`(停滞规则要覆盖卡死的执行器)→ 去重(给了 `lookupResult`:内容库清单在、块都在就直接 complete)
@@ -158,6 +168,13 @@ export interface BrowserNodeDeps {
   onTaskEnd?: (task: NodeTask, outcome: string) => void;
   /** `node.welcome` 回了指纹 */
   onFingerprint?: (envFingerprint: string) => void;
+  /**
+   * 本页能执行同步来的用户卡与图卡时回登记处的内容(`nodeCardInfo.ts` 的 `getNodeCardInfo`);不能或不给就是原来的纯浏览器节点。
+   * 每个节拍读一次,不缓存。
+   */
+  cardInfo?: () => { cardRuntime: string | null; userCards: boolean; graphCards: boolean; cardSources: Readonly<Record<string, string>> } | null;
+  /** `node.welcome` 回了(或没回)用户卡、图卡用的指纹(没有时传 null) */
+  onCardEnvFingerprint?: (cardEnvFingerprint: string | null) => void;
   /** 报到被文档服务拒了(`forbidden`、`not-chromium`、`bad-message`……):宿主结束会话,不重连 */
   onRefused?: (reason: string) => void;
   /**
@@ -174,6 +191,10 @@ export interface BrowserNodeDebug {
   reason: string | null;
   nodeId: string;
   envFingerprint: string | null;
+  /** 用户卡、图卡的任务用的指纹(块 N);没报运行时版本或旧队列为 null */
+  cardEnvFingerprint: string | null;
+  /** 此刻报给节点侧过滤的用户卡、图卡能力与卡片代码身份(块 N):卡片 id → 身份 */
+  cards: { runtime: string | null; userCards: boolean; graphCards: boolean; sources: Record<string, string> };
   codeVersion: string | null;
   holding: { id: string; token: number; done: number; of: number; projectRev: number | null }[];
   counters: {
@@ -201,6 +222,7 @@ export interface BrowserNode {
   stop(): void;
   debug(): BrowserNodeDebug;
   readonly envFingerprint: string | null;
+  readonly cardEnvFingerprint: string | null;
 }
 
 type NodeSession = {
@@ -275,9 +297,32 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     nodeId: deps.nodeId,
     userId: deps.userId,
     envFingerprint: null as string | null,
+    /** 用户卡、图卡的任务用的指纹(块 N,`node.welcome.cardEnvFingerprint`);filter.mjs 规则 1 对这类任务拿它比 */
+    cardEnvFingerprint: null as string | null,
     codeVersions: deps.codeVersion ? [deps.codeVersion] : [],
     capabilities: { transcode: false, streams: false, userCards: false, graphCards: false },
-    cardSourceVersions: {},
+    cardSourceVersions: {} as Record<string, string[]>,
+  };
+  /** 最近一次报给节点侧过滤的卡片登记(诊断)与最近一次 `node.hello` 里报的运行时版本(判要不要重新报到) */
+  let cardsNow: { runtime: string | null; userCards: boolean; graphCards: boolean; sources: Record<string, string> } = { runtime: null, userCards: false, graphCards: false, sources: {} };
+  let helloRuntime: string | null = null;
+  /** 此刻本页的卡片登记(宿主给);读不到、抛错都当没有 */
+  const readCardInfo = () => {
+    try {
+      const info = deps.cardInfo?.() ?? null;
+      if (!info || typeof info.cardRuntime !== "string" || !info.cardRuntime) return { runtime: null, userCards: false, graphCards: false, sources: {} as Record<string, string> };
+      return { runtime: info.cardRuntime, userCards: info.userCards === true, graphCards: info.graphCards === true, sources: { ...info.cardSources } };
+    } catch { return { runtime: null, userCards: false, graphCards: false, sources: {} as Record<string, string> }; }
+  };
+  /** 把登记同步进节点描述(能力位与卡片代码身份):节点侧过滤与认领据此判 */
+  const refreshCards = () => {
+    cardsNow = readCardInfo();
+    // 文档服务没有回 cardEnvFingerprint(旧队列、运行时版本不合格)时不报能力:认领了也会因为指纹对不上被拒,不必白发请求
+    const usable = cardsNow.runtime !== null && nodeDesc.cardEnvFingerprint !== null;
+    nodeDesc.capabilities = { ...nodeDesc.capabilities, userCards: usable && cardsNow.userCards, graphCards: usable && cardsNow.graphCards };
+    const versions: Record<string, string[]> = {};
+    if (usable) for (const [id, v] of Object.entries(cardsNow.sources)) versions[id] = [v];
+    nodeDesc.cardSourceVersions = versions;
   };
   let stopped = false;
   let welcomed = false;
@@ -304,6 +349,10 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     if (m.type === "node.hello") {
       const { envFingerprint: _own, ...rest } = m;
       m = { ...rest, profile: "browser", maxConcurrent: 1, environment: { ...deps.environment } };
+      // 块 N:能执行用户卡与图卡就多报运行时版本(原始值,文档服务算 cardEnvFingerprint);不能执行时与原来一字不差
+      const runtime = readCardInfo().runtime;
+      helloRuntime = runtime;
+      if (runtime) m = { ...m, cardRuntime: runtime };
     }
     if (m.type === "task.claim") counters.claims++;
     return deps.send(m);
@@ -537,17 +586,31 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
           nodeDesc.envFingerprint = fp;
           try { deps.onFingerprint?.(fp); } catch { /* 宿主坏了 */ }
         }
+        // 块 N:用户卡、图卡用的指纹(没有就清掉:重新报到、旧队列)
+        const cardFp = typeof message.cardEnvFingerprint === "string" && message.cardEnvFingerprint ? message.cardEnvFingerprint : null;
+        if (cardFp !== nodeDesc.cardEnvFingerprint) {
+          nodeDesc.cardEnvFingerprint = cardFp;
+          try { deps.onCardEnvFingerprint?.(cardFp); } catch { /* 宿主坏了 */ }
+        }
+        refreshCards();
       } else if (message.type === "error" && !welcomed && message.reqId === undefined) {
         // 报到被拒(D9 forbidden、D14 not-chromium、D10 bad-message):不当节点、不重连
         refused = String(message.reason ?? "error");
         lastError = `报到被拒:${refused}`;
         try { deps.onRefused?.(refused); } catch { /* 宿主坏了 */ }
       }
+      if (message.type === "queue.snapshot" || message.type === "task.opened") refreshCards();
       session.receive(message);
       if (message.type === "queue.snapshot" || message.type === "task.opened") noteBlocked();
     },
     tick() {
       if (stopped || refused) return;
+      // 块 N:登记变了随时同步进节点描述;运行时版本在报到之后才可报(或变了)就重新报到一次(带手里的认领接续)
+      refreshCards();
+      if (welcomed && cardsNow.runtime !== helloRuntime) {
+        welcomed = false;
+        session.start(session.held().filter((h) => runner.tokenOf(h.id) === h.token).map(({ id, token }) => ({ id, token })));
+      }
       // 让路之后当前帧迟迟做不完(播放、拖动时后台活的门关了,这一帧在舞台里被挡住):不再等,中止并立即放回
       const r = run;
       if (r && !r.ended && r.yieldCause && r.phase === "baking" && r.yieldAt !== null && deps.now() - r.yieldAt >= YIELD_FRAME_MAX_MS) {
@@ -593,6 +656,8 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
         reason: stopped ? "stopped" : refused ? `refused:${refused}` : !welcomed ? "hello" : r?.yieldCause ? `yield-${r.yieldCause}` : null,
         nodeId: deps.nodeId,
         envFingerprint: nodeDesc.envFingerprint,
+        cardEnvFingerprint: nodeDesc.cardEnvFingerprint,
+        cards: { runtime: cardsNow.runtime, userCards: nodeDesc.capabilities.userCards, graphCards: nodeDesc.capabilities.graphCards, sources: { ...cardsNow.sources } },
         codeVersion: deps.codeVersion,
         holding: held.map((h) => ({
           id: h.id, token: h.token,
@@ -610,5 +675,6 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
       };
     },
     get envFingerprint() { return nodeDesc.envFingerprint; },
+    get cardEnvFingerprint() { return nodeDesc.cardEnvFingerprint; },
   };
 }
