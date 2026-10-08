@@ -69,3 +69,15 @@ root随后批准service/session/http-transport窄lease，以及仅可信Agent we
 固定7aac35a457cb03734fdb58f71f859bcf6b4cc936，组件加原HT1/session ACK/LP回归首测37/37、0失败/取消/跳过，5534.3693ms，exit0；TMP/pc-instance-doc-core-related-1.log。新真实HTTPS组件把未验proof超body/frame/empty与合法请求并列；旧recv/close持gate后真实resume再放行409，缓存仍1帧、新会话活；internal LP与带runGrant的普通page SID尝试拒，普通页面welcome无connId与合法public resume仍通过。测试私有能力fixture不能作为生产crypto证据。new owned端口逐项actualclose记录：WS6338、LP2922、LP boundary2538、普通WS6541/TLS6542；OS listen(0)由系统原子分配，不占已监听固定口。强制tsc -b --force零错误、exit0、wall6.8881s，TMP/pc-instance-doc-type-2.log。未运行577x/full或宽浏览器探针，前后源码不变且Git干净。
 
 生产factory+instanceAuthority的真实mTLS WS/LP签名目标仍待独立运行，不能借root全量或上面的组件绿声明生产数据连接完成。公共helper真实export/schema已同步Agent owner：instanceConnectionRequest/instanceDataRequest/instanceProtocolHeaders与INSTANCE_DATA_PROOF_HEADER，所有actual URL、原协议头tuple、原bodyText、connId、seq/ack、nonce、operation/action绑定；空batch请用签名recv取得ACK，不新增旁路。
+
+## LP请求认证前会话副作用：反例与修正
+
+root静态疑问经固定7aac HTTP实现实证：新真实HTTPS组件发送仅SID的未完成body，合法send实际409而非200。TMP测试进程registerHooks只将http-transport精确解析为git show 7aac的TMP版本，session/service保持真实模块；原body仅替换import路径以可达同源session，不改变函数体。node目标exit1，1失败/0取消，1404.2367ms，TMP/pc-instance-doc-preauth-7aac-counter.log，未知请求和owned server/socket在after实际关闭。此为旧源反例，不当作新源码失败或通过。首次两次apply_patch因重复上下文定位失败，没有部分修改；随后按完整onSend函数准确替换，原工具错误保留，不伪记运行结果。
+
+固定product074bbe27：Agent读取未完成body时只持本请求，完整首proof/current-run检查通过才track、lastSeen、sending；首invocation cap保持整个batch，之后每frame再独立proof/current检查，finally释放所有cap。未授权recv/close也不进入会话resource ownership，验权及current检查后才track。普通LAN/page原busy/超限/ACK路径保留，原语义断言未删。新增真实partial body证明合法发送不再busy，拨测试进程时钟后的真实heartbeat idle sweep仍脱开该会话（未验请求不能用sending阻止空闲），不修改主机时间或全局环境。
+
+074固定相关npm 38/38、0失败/取消/跳过，5537.8528ms、exit0，TMP/pc-instance-doc-core-related-2.log。五个新组件owned OS端口4619、1310、8882、3793/3794、9414都actualclose，原HTTP/session回归用其原listen(0)形态。此重复相关有因：认证前会话副作用代码及新反例改变，不盲跑旧源码。
+
+真实data测试块1c9db1e4与71ed0905（后一份仅补同cert新OS旧SID负向）尚未运行，product仍074。新增fixtures agent-instance-data.mjs / agent-instance-data-target.mjs只Node内置TLS/HTTPS/掩码WS编解码/内存Ed25519，从客户端socket独立计算exporter；不拿服务器cap或callback做授权。中央既有原title/readonly/history/restart断言保留；新增真正Agent写入agentVerified字段，单独核accepted actor/grant并把该配置分支预期rev由2改3、history由1改2。selection.query双独立proof、FIFO、same-instance新TLSresume、跨TLS/nonce重复、body/query/protocol/seq/ack/action变更、pageSID与newOS旧SID负向均已写定；private中止另一个成员实际run时，pending LP/WS实close与partial receipt核验，仍不得ACK Agent/OS完整关闭。
+
+固定1c9强制types --force exit0、零错误、wall6.7377s，TMP/pc-instance-doc-type-3.log；71ed只改测试断言不当作已通过data目标。当前真实中央5端口仍等待5770～5774租约，不为纯listen0要求改未租asset内部entry或重映射旧中央，未跑full。
