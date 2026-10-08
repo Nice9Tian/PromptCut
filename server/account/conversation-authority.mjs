@@ -9,6 +9,10 @@ const safePositive = value => Number.isSafeInteger(value) && value > 0;
 const clock = state => { state.conversationClockV2 = (state.conversationClockV2 ?? 0) + 1; return state.conversationClockV2; };
 const rows = state => (state.conversationsV2 ??= {});
 const requests = state => (state.conversationRequestsV2 ??= {});
+// Request IDs are local to one action on one conversation. Canonical hashing also
+// avoids delimiter ambiguity in otherwise valid IDs.
+const requestKey = (action, { projectId, conversationId, accountId, requestId }) =>
+  `conversation:${digestOf({ action, projectId, conversationId, accountId, requestId })}`;
 const conversationOf = (state, projectId, conversationId) => rows(state)[projectId]?.[conversationId] ?? null;
 const queued = conversation => conversation.messages.filter(message => message.queueState === 'queued').sort((a, b) => a.arrivalSeq - b.arrivalSeq);
 
@@ -170,7 +174,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
     if (typeof checkConsent !== 'function') fail(503, 'consent-unavailable');
     const consent = await checkConsent({ accountId: principal.accountId, principal });
     if (consent?.accountId !== principal.accountId || consent.accepted !== true || consent.noticeVersion !== 1) fail(403, 'consent-required');
-    const key = `${projectId}:${principal.accountId}:${requestId}`;
+    const key = requestKey('send', { projectId, conversationId, accountId: principal.accountId, requestId });
     const digest = digestOf({ projectId, conversationId, requestId, content });
     const prior = ledger.read().conversationRequestsV2?.[key];
     if (prior) {
@@ -219,7 +223,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
     const principal = await verify(principalRef, projectId, 'write');
     const result = ledger.transaction(state => {
       const { conversation } = conversationAccessInState(state, principal, projectId, conversationId, 'switch');
-      const key = `switch:${projectId}:${principal.accountId}:${requestId}`;
+      const key = requestKey('switch', { projectId, conversationId, accountId: principal.accountId, requestId });
       const digest = digestOf({ projectId, conversationId, visibility });
       const prior = requests(state)[key];
       if (prior) {
@@ -252,7 +256,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
     const principal = await verify(principalRef, projectId, 'read');
     const result = ledger.transaction(state => {
       const { conversation, creator } = conversationAccessInState(state, principal, projectId, conversationId, 'read');
-      const key = `stop:${projectId}:${principal.accountId}:${requestId}`;
+      const key = requestKey('stop', { projectId, conversationId, accountId: principal.accountId, requestId });
       const digest = digestOf({ projectId, conversationId, runId });
       const prior = requests(state)[key];
       if (prior) { if (prior.digest !== digest) fail(409, 'request-mismatch'); return prior.result; }
