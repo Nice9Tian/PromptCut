@@ -1,6 +1,6 @@
 /** ONE bounded Linux/root OS experiment. Never invokes publisher or doc ACK.
  * Usage: node ... --user <existing-dedicated-asset-user> [--out <new-absolute-dir>]
- * Root creates only a random transient pc-asset-cgroup-proof-*.service and its
+ * Root creates one random transient service inside its own active slice and its
  * own TCP server on 6540, after checking ALL 6540..6549 are free. Evidence stays.
  * systemd 249: main exits on SIGTERM; child keeps real fd/TCP for two seconds.
  */
@@ -57,11 +57,39 @@ function command(executable, args, timeout) {
   }));
 }
 async function describe(unit, timeout) {
-  const names = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'Description', 'User', 'Restart', 'KillMode', 'Delegate'];
+  const names = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'Description', 'User', 'Restart', 'KillMode', 'Delegate',
+    'Slice', 'InvocationID', 'Transient', 'StopWhenUnneeded'];
   const result = await command('/usr/bin/systemctl', ['show', unit, '--no-pager', ...names.map(n => `--property=${n}`)], timeout);
   if (result.timedOut) fail('probe-systemctl-timeout');
   const value = Object.fromEntries(result.stdout.trim().split('\n').map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
   return value;
+}
+
+async function durableJSON(root, name, value) {
+  const file = await fs.open(path.join(root, name), 'wx', 0o644);
+  try { await file.chmod(0o644); await file.writeFile(JSON.stringify(value, null, 2) + '\n'); await file.sync(); }
+  finally { await file.close(); }
+  const directory = await fs.open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try { await directory.sync(); } finally { await directory.close(); }
+}
+
+// No sibling workload/sentinel is permitted. Read the actual cgroup tree; never
+// subtract an observer PID from populated or migrate any process to make it empty.
+async function inventory(cgroup) {
+  const groups = [], pids = [];
+  async function visit(dir) {
+    if (groups.length >= 16) fail('probe-scope-inventory-too-large');
+    groups.push(dir);
+    const text = (await fs.readFile(path.join(dir, 'cgroup.procs'), 'utf8')).trim();
+    if (text) for (const line of text.split('\n')) {
+      if (!/^[1-9][0-9]*$/.test(line)) fail('probe-scope-inventory-invalid');
+      pids.push(Number(line));
+    }
+    for (const entry of await fs.readdir(dir, { withFileTypes: true }))
+      if (entry.isDirectory()) await visit(path.join(dir, entry.name));
+  }
+  await visit(cgroup);
+  return { groups, pids: [...new Set(pids)].sort((a, b) => a - b) };
 }
 
 async function worker(role, manifestFile) {
@@ -71,7 +99,8 @@ async function worker(role, manifestFile) {
   const cfg = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
   const info = await processInfo(process.pid);
   if (!new RegExp(`^${unitPrefix}[a-f0-9]{16}\\.service$`).test(cfg.unit) || info.uid !== cfg.uid ||
-      info.cgroup !== `/system.slice/${cfg.unit}` || cfg.port !== 6540 || cfg.root !== path.dirname(manifestFile)) fail('probe-worker-scope');
+      !/^pcassetproof[a-f0-9]{16}\.slice$/.test(cfg.slice) || cfg.serviceCgroup !== `/${cfg.slice}/${cfg.unit}` ||
+      info.cgroup !== cfg.serviceCgroup || cfg.port !== 6540 || cfg.root !== path.dirname(manifestFile)) fail('probe-worker-scope');
   const resource = path.join(cfg.root, 'data', `${role}.bin`), handle = await fs.open(resource, 'wx');
   await handle.writeFile('owned-cgroup-os-smoke\n'); await handle.sync();
   const socket = net.createConnection({ host: '127.0.0.1', port: cfg.port });
@@ -102,24 +131,59 @@ export async function runAssetCgroupOSProbe({ user, out }) {
   const start = now(), deadline = start + 20000, totalDeadline = start + 30000;
   const time = () => Math.max(1, deadline - now());
   const id = randomBytes(8).toString('hex'), unit = `${unitPrefix}${id}.service`, description = `PromptCut asset cgroup OS proof ${id}`;
-  const result = { v: 1, ok: false, unit, port: 6540, negativeObserved: false, emptyObserved: false,
+  const slice = `pcassetproof${id}.slice`, sliceDescription = `PromptCut exclusive asset closure scope ${id}`;
+  const scopePath = `/${slice}`, servicePath = `${scopePath}/${unit}`, scopeDirectory = `/sys/fs/cgroup${scopePath}`;
+  const result = { v: 2, ok: false, unit, slice, port: 6540, negativeObserved: false, emptyObserved: false,
     eventsReadError: null, stopIssued: 0, samples: [], checks: {}, errors: [], productionMounted: false };
   let root, server, group, events, launchAttempted = false, stopTask, stopResult, main, child, groupStat;
+  let sliceAttempted = false, sliceInvocation, serviceInvocation, evidenceDurable = false;
   const sockets = new Set(), peers = new Map();
   async function issueStop() {
     if (stopTask) return stopTask;
     const state = await describe(unit, Math.min(2000, totalDeadline - now()));
     if (state.Id !== unit || state.Description !== description || ![user, String(result.uid)].includes(state.User) ||
-        state.ControlGroup && state.ControlGroup !== `/system.slice/${unit}`) fail('probe-stop-ownership-unproved');
+        state.Transient !== 'yes' || state.Slice !== slice || serviceInvocation && state.InvocationID !== serviceInvocation ||
+        state.ControlGroup && state.ControlGroup !== servicePath) fail('probe-stop-ownership-unproved');
+    const scope = await verifyScope();
+    if (scope.ActiveState !== 'active') fail('probe-stop-ownership-unproved');
+    const owned = await inventory(scopeDirectory);
+    if (owned.groups.some(g => g !== scopeDirectory && g !== `/sys/fs/cgroup${servicePath}`)) fail('probe-scope-not-exclusive');
+    // Before verified parent/child setup, still require all current processes to
+    // be the same dedicated UID and in this exact service, never a sibling.
+    for (const pid of owned.pids) {
+      const info = await processInfo(pid);
+      if (info.uid !== result.uid || info.cgroup !== servicePath || main && child && ![main.pid, child.pid].includes(pid))
+        fail('probe-stop-ownership-unproved');
+    }
     result.stopIssued++;
     stopTask = command('/usr/bin/systemctl', ['stop', unit, '--no-ask-password'], Math.min(7000, totalDeadline - now()))
       .then(value => { stopResult = { code: value.code, timedOut: value.timedOut }; return stopResult; });
     return stopTask;
   }
+  async function verifyScope() {
+    const state = await describe(slice, Math.min(2000, totalDeadline - now()));
+    // A slice has no ExecContext and no User. Its ownership is the unique root
+    // transient unit/description/invocation/cgroup, not an invented UID value.
+    if (state.Id !== slice || state.Description !== sliceDescription || state.Transient !== 'yes' || state.User ||
+        state.StopWhenUnneeded !== 'no' || state.ControlGroup !== scopePath || !/^[a-f0-9]{32}$/.test(state.InvocationID ?? '') ||
+        sliceInvocation && state.InvocationID !== sliceInvocation) fail('probe-slice-ownership-unproved');
+    return state;
+  }
+  async function readPinnedPopulated() {
+    const buf = Buffer.alloc(4096), read = await events.read(buf, 0, buf.length, 0);
+    const match = /^populated ([01])$/m.exec(buf.subarray(0, read.bytesRead).toString('utf8'));
+    const same = await group.stat({ bigint: true });
+    const current = await fs.lstat(scopeDirectory, { bigint: true });
+    if (!match || same.dev !== groupStat.dev || same.ino !== groupStat.ino || current.isSymbolicLink() ||
+        current.dev !== groupStat.dev || current.ino !== groupStat.ino) fail('probe-pinned-object-changed');
+    return Number(match[1]);
+  }
   try {
     if (await fs.readlink('/proc/self/ns/net') !== await fs.readlink('/proc/1/ns/net')) fail('probe-network-namespace');
     result.preflightListeners = await listeners(); if (result.preflightListeners.length) fail('probe-port-occupied');
-    const initial = await describe(unit, time()); if (initial.LoadState !== 'not-found') fail('probe-unit-exists');
+    for (const name of [unit, slice]) {
+      const initial = await describe(name, time()); if (initial.LoadState !== 'not-found') fail('probe-unit-exists');
+    }
     const uid = await command('/usr/bin/id', ['-u', '--', user], time()), gid = await command('/usr/bin/id', ['-g', '--', user], time());
     if (uid.code || gid.code || !/^[1-9][0-9]*\s*$/.test(uid.stdout) || !/^[1-9][0-9]*\s*$/.test(gid.stdout)) fail('probe-user-unavailable');
     result.uid = Number(uid.stdout); const groupId = Number(gid.stdout);
@@ -133,8 +197,39 @@ export async function runAssetCgroupOSProbe({ user, out }) {
     await fs.chown(path.join(root, 'data'), result.uid, groupId);
     const copy = path.join(root, 'probe.mjs'); await fs.copyFile(fileSelf, copy, constants.COPYFILE_EXCL); await fs.chmod(copy, 0o644);
     const manifest = path.join(root, 'manifest.json');
-    await fs.writeFile(manifest, JSON.stringify({ unit, uid: result.uid, root, port: 6540 }), { flag: 'wx', mode: 0o644 });
+    await fs.writeFile(manifest, JSON.stringify({ unit, slice, serviceCgroup: servicePath, uid: result.uid, root, port: 6540 }), { flag: 'wx', mode: 0o644 });
     await fs.chmod(manifest, 0o644);
+    // v249 supports transient .slice via the Manager API. systemd-run only has
+    // --slice (not --slice-property); do not accidentally put properties on the
+    // service. No runtime unit files, daemon-reload, or cgroup delegation.
+    sliceAttempted = true;
+    const created = await command('/usr/bin/busctl', ['--system', '--no-pager', 'call', 'org.freedesktop.systemd1',
+      '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
+      slice, 'fail', '2', 'Description', 's', sliceDescription, 'StopWhenUnneeded', 'b', 'false', '0'], time());
+    if (created.code) fail('probe-slice-start-failed');
+    let scopeState;
+    do {
+      scopeState = await describe(slice, time());
+      if (scopeState.ActiveState === 'active') break;
+      if (scopeState.ActiveState === 'failed') fail('probe-slice-start-failed');
+      await delay(10);
+    } while (now() < deadline);
+    scopeState = await verifyScope();
+    if (scopeState.ActiveState !== 'active') fail('probe-slice-not-active');
+    sliceInvocation = scopeState.InvocationID;
+    const self = (await fs.readFile('/proc/self/cgroup', 'utf8')).trim().slice(3);
+    if (self === scopePath || self.startsWith(`${scopePath}/`)) fail('probe-observer-inside-target');
+    if ((await fs.statfs(scopeDirectory)).type !== 0x63677270) fail('probe-cgroup-not-vtwo');
+    group = await fs.open(scopeDirectory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    groupStat = await group.stat({ bigint: true });
+    events = await fs.open(`/proc/self/fd/${group.fd}/cgroup.events`, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const initialInventory = await inventory(scopeDirectory);
+    if (initialInventory.groups.length !== 1 || initialInventory.pids.length || await readPinnedPopulated() !== 0)
+      fail('probe-scope-not-initially-empty');
+    const bootId = (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+    result.closureScope = { unit: slice, invocationId: sliceInvocation, bootId,
+      cgroup: { path: scopeDirectory, dev: String(groupStat.dev), ino: String(groupStat.ino) },
+      user: null, initialInventory, observerOutside: true };
     server = net.createServer(socket => {
       sockets.add(socket); let text = '', record;
       socket.on('error', () => {});
@@ -155,7 +250,7 @@ export async function runAssetCgroupOSProbe({ user, out }) {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(6540, '127.0.0.1', resolve); });
     launchAttempted = true;
     const launched = await command('/usr/bin/systemd-run', ['--quiet', `--unit=${unit}`, `--description=${description}`,
-      '--service-type=simple', `--uid=${result.uid}`, `--gid=${groupId}`, '--property=Restart=no', '--property=KillMode=control-group',
+      `--slice=${slice}`, '--service-type=simple', `--uid=${result.uid}`, `--gid=${groupId}`, '--property=Restart=no', '--property=KillMode=control-group',
       '--property=Delegate=no', '--property=TimeoutStopSec=5s', '--property=StandardOutput=null', '--property=StandardError=null',
       process.execPath, copy, '--worker', 'parent', manifest], time());
     if (launched.code) fail('probe-unit-start-failed');
@@ -164,23 +259,27 @@ export async function runAssetCgroupOSProbe({ user, out }) {
     const state = await describe(unit, time());
     if (state.Id !== unit || state.Description !== description || state.MainPID !== String(peers.get('parent').pid) ||
         ![user, String(result.uid)].includes(state.User) || state.Restart !== 'no' || state.KillMode !== 'control-group' || state.Delegate !== 'no' ||
-        state.ControlGroup !== `/system.slice/${unit}` || state.ActiveState !== 'active') fail('probe-unit-identity');
+        state.Transient !== 'yes' || state.Slice !== slice || !/^[a-f0-9]{32}$/.test(state.InvocationID ?? '') ||
+        state.ControlGroup !== servicePath || state.ActiveState !== 'active') fail('probe-unit-identity');
+    serviceInvocation = state.InvocationID;
     main = await processInfo(peers.get('parent').pid); child = await processInfo(peers.get('child').pid);
     const cgroup = `/sys/fs/cgroup${state.ControlGroup}`;
     if (main.uid !== result.uid || child.uid !== result.uid || main.cgroup !== state.ControlGroup || child.cgroup !== state.ControlGroup)
       fail('probe-worker-identity');
-    const self = (await fs.readFile('/proc/self/cgroup', 'utf8')).trim().slice(3);
-    if (self === state.ControlGroup || self.startsWith(`${state.ControlGroup}/`)) fail('probe-observer-inside-target');
     for (const role of ['parent', 'child']) {
       const peer = peers.get(role);
       if (await fs.readlink(`/proc/${peer.pid}/fd/${peer.fd}`) !== path.join(root, 'data', `${role}.bin`)) fail('probe-file-not-held');
     }
     if ((await fs.statfs(cgroup)).type !== 0x63677270) fail('probe-cgroup-not-vtwo');
-    group = await fs.open(cgroup, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    groupStat = await group.stat({ bigint: true });
-    events = await fs.open(`/proc/self/fd/${group.fd}/cgroup.events`, constants.O_RDONLY | constants.O_NOFOLLOW);
-    result.before = { main, child, cgroup: { path: cgroup, dev: String(groupStat.dev), ino: String(groupStat.ino) },
-      bootId: (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim(), heldFiles: 2, connectedPeers: 2 };
+    const serviceStat = await fs.lstat(cgroup, { bigint: true });
+    if (serviceStat.isSymbolicLink()) fail('probe-service-cgroup-invalid');
+    const owned = await inventory(scopeDirectory);
+    if (owned.groups.length !== 2 || !owned.groups.includes(cgroup) ||
+        JSON.stringify(owned.pids) !== JSON.stringify([main.pid, child.pid].sort((a, b) => a - b)) ||
+        await readPinnedPopulated() !== 1 || (await verifyScope()).ActiveState !== 'active') fail('probe-scope-not-exclusive');
+    result.before = { service: { unit, invocationId: serviceInvocation, uid: result.uid, bootId,
+      cgroup: { path: cgroup, dev: String(serviceStat.dev), ino: String(serviceStat.ino) } },
+      main, child, exclusiveInventory: owned, heldFiles: 2, connectedPeers: 2 };
     // Attach the rejection handler now; the sole stop proceeds concurrently.
     const stopping = issueStop().catch(e => { result.errors.push(safeCode(e)); stopResult = { code: 1, timedOut: false }; });
     let lastSample = '';
@@ -189,11 +288,7 @@ export async function runAssetCgroupOSProbe({ user, out }) {
       let populated = null;
       if (!result.emptyObserved && !result.eventsReadError) {
         try {
-          const buf = Buffer.alloc(4096), read = await events.read(buf, 0, buf.length, 0);
-          const match = /^populated ([01])$/m.exec(buf.subarray(0, read.bytesRead).toString('utf8'));
-          const same = await group.stat({ bigint: true });
-          if (!match || same.dev !== groupStat.dev || same.ino !== groupStat.ino) fail('probe-pinned-object-changed');
-          populated = Number(match[1]);
+          populated = await readPinnedPopulated();
           if (populated === 0 && mainGone && childGone) result.emptyObserved = true;
         } catch (e) { result.eventsReadError = safeCode(e); }
       }
@@ -205,14 +300,20 @@ export async function runAssetCgroupOSProbe({ user, out }) {
       if (mainGone && !childGone && populated === 1 && childFdHeld && !sample.childEof && !sample.childClosed) result.negativeObserved = true;
       const key = JSON.stringify(sample);
       if (key !== lastSample) { result.samples.push({ ms: Math.round(now() - start), ...sample }); lastSample = key; }
-      if (stopResult && mainGone && childGone && [...peers.values()].every(p => p.eof && p.closed)) break;
+      if (stopResult && mainGone && childGone && [...peers.values()].every(p => p.eof && p.closed) &&
+          (result.emptyObserved || result.eventsReadError)) break;
       await delay(10);
     }
     await stopping;
     const stopped = await describe(unit, Math.min(2000, totalDeadline - now()));
+    const stillActive = await verifyScope();
+    result.finalInventory = await inventory(scopeDirectory);
     result.checks = { mainBirthGone: await birthGone(main), childBirthGone: await birthGone(child),
       bothPeerEofAndClose: [...peers.values()].every(p => p.eof && p.closed),
       unitInactive: stopped.ActiveState === 'inactive' && Number(stopped.MainPID) === 0,
+      closureScopeStillActive: stillActive.ActiveState === 'active',
+      closureScopeStillEmpty: await readPinnedPopulated() === 0 && result.finalInventory.pids.length === 0 &&
+        result.finalInventory.groups.every(g => g === scopeDirectory || g === cgroup),
       stopSucceeded: stopResult?.code === 0 && !stopResult.timedOut };
     result.ok = result.negativeObserved && result.emptyObserved && Object.values(result.checks).every(Boolean);
     if (!result.ok) result.errors.push(!result.negativeObserved ? 'probe-negative-not-observed' :
@@ -221,21 +322,55 @@ export async function runAssetCgroupOSProbe({ user, out }) {
   finally {
     if (launchAttempted && !stopTask && now() < totalDeadline) try { await issueStop(); } catch (e) { result.errors.push(safeCode(e)); }
     if (stopTask) await stopTask;
+    // Real peer EOF/close checks above precede any forced observer cleanup.
     for (const socket of sockets) socket.destroy();
     if (server?.listening) await new Promise(resolve => server.close(resolve));
+    result.stop = stopResult ?? null;
+    result.sliceCleanup = { stopIssued: 0, evidenceDurable: false, retained: sliceAttempted };
+    if (sliceAttempted && events && group && now() < totalDeadline) try {
+      const scope = await verifyScope(), state = await describe(unit, Math.min(2000, totalDeadline - now()));
+      const contents = await inventory(scopeDirectory);
+      const empty = await readPinnedPopulated() === 0;
+      const noOldBirths = (!main || await birthGone(main)) && (!child || await birthGone(child));
+      if (scope.ActiveState !== 'active' || !empty || contents.pids.length || !noOldBirths ||
+          contents.groups.some(g => g !== scopeDirectory && g !== `/sys/fs/cgroup${servicePath}`) ||
+          !['inactive', 'failed'].includes(state.ActiveState) || Number(state.MainPID ?? 0) !== 0)
+        fail('probe-slice-release-unproved');
+      result.sliceCleanup.emptyReadBeforeRelease = { populated: 0, noOldBirths, contents, invocationId: scope.InvocationID };
+      // Persist this result while the exact scope is still ACTIVE and readable.
+      // An error here leaves the slice alive. No catch/unlink rollback assertion.
+      await durableJSON(root, 'closure-result.json', { ...result, phase: 'before-slice-release', wallMs: Math.round(now() - start) });
+      evidenceDurable = true; result.sliceCleanup.evidenceDurable = true;
+      // Recheck after the fsync await; never stop a newly replaced/occupied scope.
+      const rechecked = await verifyScope(), remaining = await inventory(scopeDirectory);
+      if (rechecked.ActiveState !== 'active' || await readPinnedPopulated() !== 0 || remaining.pids.length ||
+          remaining.groups.some(g => g !== scopeDirectory && g !== `/sys/fs/cgroup${servicePath}`)) fail('probe-slice-release-unproved');
+      if (now() >= totalDeadline) fail('probe-total-bound-exceeded');
+      result.sliceCleanup.stopIssued++;
+      const released = await command('/usr/bin/systemctl', ['stop', slice, '--no-ask-password'], Math.min(2000, totalDeadline - now()));
+      result.sliceCleanup.stop = { code: released.code, timedOut: released.timedOut };
+      const after = await describe(slice, Math.min(2000, totalDeadline - now()));
+      result.sliceCleanup.inactive = after.ActiveState === 'inactive' || after.LoadState === 'not-found';
+      result.sliceCleanup.retained = !result.sliceCleanup.inactive;
+      if (released.code || released.timedOut || !result.sliceCleanup.inactive) fail('probe-slice-release-incomplete');
+    } catch (e) { result.ok = false; result.errors.push(safeCode(e)); }
+    if (sliceAttempted && (!evidenceDurable || result.sliceCleanup.retained)) {
+      result.ok = false; result.errors.push('probe-slice-retained');
+    }
     await events?.close(); await group?.close();
     result.afterListeners = await listeners();
     if (result.afterListeners.length) { result.ok = false; result.errors.push('probe-listener-remains'); }
-    result.stop = stopResult ?? null; result.wallMs = Math.round(now() - start);
+    result.wallMs = Math.round(now() - start);
     if (result.wallMs > 30000) { result.ok = false; result.errors.push('probe-total-bound-exceeded'); }
-    if (root) await fs.writeFile(path.join(root, 'result.json'), JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o644 });
+    if (root) try { await durableJSON(root, 'result.json', result); }
+    catch (e) { result.ok = false; result.errors.push(safeCode(e), 'probe-result-not-durable'); }
   }
   return result;
 }
 
 export async function main(args) {
   if (args.length === 1 && args[0] === '--help') {
-    process.stdout.write('Linux root only: --user <existing-asset-user> [--out <new-absolute-dir>]; one random systemd unit, ports 6540..6549, 30s bound.\n'); return 0;
+    process.stdout.write('Linux root only: --user <existing-asset-user> [--out <new-absolute-dir>]; one random service + exclusive active slice, ports 6540..6549, 30s bound.\n'); return 0;
   }
   if (args.length === 3 && args[0] === '--worker') { await worker(args[1], args[2]); return 0; }
   if (![2, 4].includes(args.length) || args[0] !== '--user' || args.length === 4 && args[2] !== '--out') fail('probe-cli-invalid');
