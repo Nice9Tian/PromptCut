@@ -159,6 +159,14 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     const affected = [...retained, ...revoked].map(id => s.runGrantsV2[id]);
     control.instances = [...new Map(affected.map(g => [g.instanceId,
       Object.fromEntries(['serviceId', 'serviceKid', ...instanceBinding].map(k => [k, g[k]]))])).values()];
+    if (f.kind === 'instance-revoked') {
+      const registered = s.agentInstancesV2?.[f.instanceId];
+      if (!registered || registered.instanceGeneration !== f.instanceGeneration || registered.state === 'active')
+        reject(403, 'run-instance-fence-unverified');
+      // Idle/pre-admission instances still own OS resources. A zero-grant fence
+      // must retain this instance in the close inventory rather than imply none.
+      control.instances = [Object.fromEntries(['serviceId', 'serviceKid', ...instanceBinding].map(k => [k, registered[k]]))];
+    }
     control.operationFences = [...new Set(affected.map(g => g.projectId))].map(projectId => ({
       id: `${key}:${projectId}`, projectId,
       kind: ['credential', 'member'].includes(f.kind) ? 'credential' : ['service-revoked', 'instance-revoked'].includes(f.kind) ? 'agent-disabled' : f.kind,
@@ -370,9 +378,12 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     onControl(copy(result)); return result;
   }
   function fenceInstance(input) {
+    // An instance fence covers all of its projects/runs. Extra caller filters may
+    // not truncate the close inventory or leave an assigned grant outside it.
+    const exact = Object.fromEntries(['instanceId', 'instanceGeneration', 'requestId', 'reason'].map(k => [k, input[k]]));
     const result = ledger.transaction(s => {
-      reconcile(s); instanceAuthority.fenceInState(s, input);
-      return fenceInState(s, { ...input, kind: 'instance-revoked' });
+      reconcile(s); instanceAuthority.fenceInState(s, exact);
+      return fenceInState(s, { ...exact, kind: 'instance-revoked' });
     });
     onControl(copy(result)); return result;
   }

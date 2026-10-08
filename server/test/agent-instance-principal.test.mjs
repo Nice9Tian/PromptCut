@@ -29,7 +29,7 @@ test('real WS preserves trusted instance identity; message fields cannot substit
   client.send({ type: 'probe.instance', seq: 1, instanceId: 'forged', instanceGeneration: 999,
     servicePrincipal: { instanceSession: 'forged' }, principal: { instanceId: 'forged' } });
   assert.deepEqual(await client.next(message => message.type === 'probe.instance'),
-    { type: 'probe.instance', instanceId: trusted.instanceId, instanceGeneration: 7, unknownDropped: true });
+    { type: 'probe.instance', instanceId: trusted.instanceId, instanceGeneration: 7, unknownDropped: true, seq: 1, ack: 1 });
   assert.equal(JSON.stringify(client.all).includes('test-internal-only'), false);
   client.close(); await client.closed;
 });

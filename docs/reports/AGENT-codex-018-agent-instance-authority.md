@@ -18,7 +18,7 @@
 
 注册前后真实 SQLite crash/ACK 丢失、重复请求与改变公钥冲突、同证书新实例、伪造/旧代际/撤销、同实例重连、doc 重启、证书撤销夹缝、各 run API 精确绑定、旧实例资源仍存活与真实关闭、缺部署 witness、已启动执行不重放。首失败及原始日志保留。
 
-当前仅完成只读审阅；实现、定向、类型、full 均未跑。没有服务/固定端口/probe 租约；full 待 root 单独授权。不会把拟机制或受控 OS 夹具称为已完成生产实例关闭证明。
+开工时仅完成只读审阅，实现、定向、类型、full 尚未跑，亦无服务/固定端口/probe 租约。下文保留后续完整过程与最终结果；受控 OS 夹具始终不等于已完成生产实例关闭证明。
 
 ## 已实施接口（2026-10-08）
 
@@ -59,3 +59,26 @@
 - full 前只读自审发现 `normalizePrincipal` 缺 instanceId/instanceGeneration 会丢 trusted 身份，未赌全量绿；root 追加最窄租约仅在 `service.mjs` PRINCIPAL_EXTRA 增加这两字段，新增实际 WS/listen(0) 测试核 body 伪身份不能替换、其它未知字段仍丢、内部 cap 不外发。该接线待随后固定源码定向/type/full。
 
 实际账号 provider 固定为 VH `327ff674f16d9ddf83d5697f4c78f63847a82768`（018-active-run-order），order 同叶固定文件；没有用脏 provider。所有证书、SQLite、测试日志在系统 TMP，child windowsHide，未打印私钥/proof/exporter/token 值。共享 full 已获 root 租约，尚待最后窄接线固定验证；未运行宽渲染/节点/生产实例验收。
+
+- `c0e64ff5` WS 首轮目标：7 tests / 6 pass / 1 fail / 0 skip，10539.5742 ms，exit 1。原 6 项实际 project.op 全过；新增 normalize 测试的预期对象漏掉协议自动附加的 `seq:1,ack:1`，实际可信实例字段正确、body 伪造没有替换。原始 `%TEMP%/pc-agent-instance-ws-target-1.log` 保留。修正为包含这两个字段的完整精确对象，不省略身份断言；未重跑旧 6 项赌绿。该源码 types --force 0，wall 10014.2255 ms（`pc-agent-instance-types-2.log/-exit.json`）。
+- 最后自审补强：`fenceInstance` 只取 instanceId/generation/requestId/reason，忽略调用者额外 project/run 过滤，确保关闭 inventory 覆盖该实例所有 grant；新增用错误 project 过滤仍必须撤销的反例。
+
+- `8a1966a2` 有因 WS/实例目标 5/5、0 fail/skip，2147.1774 ms，exit 0（`pc-agent-instance-ws-target-2.log`）；types --force 0，wall 8373.1431 ms（`pc-agent-instance-types-3.log/-exit.json`）。
+- 同一固定 `8a1966a2640e0cc044b9e23f9cacf141279f55aa` 首次完整 npm：5176 tests / 5174 pass / 0 fail / 2 skip / 0 cancel，duration 75317.0617 ms，wall 75678.1037 ms，exit 0，无 native retry。源码前后相同，原始 `%TEMP%/pc-agent-instance-full-1.log`、`-exit.json`、`-ports-before.json`、`-ports-after.json`；共享端口 5730–39/5760–99/5820–29/5860–69/5920–29 前后均零 LISTEN，进程自然关闭，已向 root 释放租约。
+- full 运行时只读自审发现零 grant 实例的关闭 inventory 会从 affected grants 推导为空；没有改在途源码。full 后补强同事务 `instance-revoked` 控制必须包含已持久登记的确切实例，即使 admit 尚在 credential await。权限本已 fenced，新补强避免将历史 OS 资源误记为“没有待关闭实例”。定向新增 pending/instances/closure-null 精确断言；full1 不冒充该后续源码结果。
+
+## 最终交付与验证
+
+最终源码固定 **`a50f7dcd36186668341e19ab43686698bd910aca`**。此后只追加报告，不改生产/测试源码。相对基底共 15 文件；生产改动仅新增实例权威、现有 run-authority 精确实例/cap 接线，以及 service PRINCIPAL_EXTRA 追加两个可信实例字段。根扩租的既有测试只迁移实例注册与新旧重启断言；旧 crash child、中央 transport/registry、Agent runner/client/read-intents、account authority/ledger、部署均未改。
+
+| 验证 | 固定源与结果 | 原始证据（系统 TMP） |
+|---|---|---|
+| 零任务/多任务 inventory 初次目标 | afadc793：4/4，173.4239 ms，exit 0 | `pc-agent-instance-inventory-target-1.log` |
+| 最终 inventory 目标 | a50f7dcd：6/6、0 fail/skip，541.5056 ms，exit 0；含空闲无 grant、admit await 屏障、多个 grant 去重、其它实例 FIFO | `pc-agent-instance-inventory-target-2.log` |
+| 最终 types --force | a50f7dcd：零错误，exit 0，wall 8208.7283 ms | `pc-agent-instance-types-4.log`、`-exit.json` |
+| 最终 full2 | a50f7dcd：5178 tests / 5176 pass / 0 fail / 2 skip / 0 cancelled，duration 74328.686 ms，wall 74775.3181 ms，exit 0；无 native retry | `pc-agent-instance-full-2.log`、`-exit.json` |
+| 生命周期/固定源 | full2 前后 SHA 相同；端口段 5730–39/5760–99/5820–29/5860–69/5920–29 前后零 LISTEN；结束后本叶 Node 进程清单为空，统一 exec 会话已关闭 | `pc-agent-instance-full-2-ports-before.json`、`-ports-after.json` |
+
+命令经 `npm test -- <各目标文件>` 与 `npm test` 正规入口，类型 `npx --no-install tsc -b --force`。每条命令显式 cuda_Vit Python 路径、`PYTHONDONTWRITEBYTECODE=1`、静默 preload；full 加进程级主仓库 models 路径、规范 PowerShell 系统模块路径和固定 VH327 provider/order。不曾 naked node --test、修改依赖/Conda、抢宽渲染端口或结束非本任务进程。full2 是对已证明的关闭清单遗漏作有因重验，full1 绿与两份首失败原始日志全部保留。
+
+未做：生产中央/Agent 消费者挂载、持续 WS/LP 的精确帧能力交付、root 部署侧历史 OS/cgroup 资源 inventory/close witness、真实节点验证。旧没有实例绑定的 grant 不自动迁移/接管；只有完整同实例证明可恢复，缺失证据 fail closed。无画面改动，不适用 G0-R。本包没有自行 merge/push/main/部署，也不宣称整个 0.7.18 已完成。共享 full 租约已向 root 主动释放。
