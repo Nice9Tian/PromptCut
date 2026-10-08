@@ -16,6 +16,11 @@ const tables = s => {
   s.runGrantsV2 ??= {}; s.runRequestsV2 ??= {}; s.runReadRequestsV2 ??= {};
   s.runControlsV2 ??= {}; s.runReceiptsV2 ??= {};
 };
+const bumpQueue = (s, c) => {
+  const revision = Math.max(s.conversationClockV2 ?? 0, c.queueRevision ?? 0) + 1;
+  if (!Number.isSafeInteger(revision)) reject(503, 'conversation-clock-overflow');
+  c.queueRevision = s.conversationClockV2 = revision;
+};
 const conversation = (s, projectId, id) => {
   const c = s.conversationsV2?.[projectId]?.[id];
   if (!c) reject(404, 'conversation-not-found');
@@ -47,8 +52,8 @@ const member = (s, c, ref) => {
 };
 
 /** Durable run authorization, composed with conversation helpers in ONE account ledger
- * transaction. Service authentication and independent complete-prompt validation are
- * mandatory owner-supplied capabilities, never claims accepted from an HTTP body.
+ * transaction. Service authentication is an owner-supplied capability. Complete sent
+ * records are independently rebuilt here, never authorized by an HTTP body's hash.
  */
 export function createRunAuthority({ ledger, conversationHooks, verifySender, verifyServiceInState,
   validatePromptInState, synchronize, now = Date.now, failpoint = () => {}, onControl = () => {} } = {}) {
@@ -123,7 +128,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
           accountId: m.senderAccountId, loginId: m.loginId };
         // Service-key revocation cancels only already assigned work for that service.
         if (f.kind === 'service-revoked' || !matches(candidate) || (f.kind === 'private' && m.senderAccountId === c.ownerAccountId)) continue;
-        m.queueState = 'cancelled'; m.cancelReason = f.kind; c.queueRevision++;
+        m.queueState = 'cancelled'; m.cancelReason = f.kind; bumpQueue(s, c);
         cancelled.push(m.messageId);
       }
     }
@@ -183,15 +188,33 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     const prior = replay(before.runRequestsV2 ?? {}, key, digest);
     if (prior) return copy(prior.result);
     const c = conversation(before, projectId, conversationId);
-    const next = c.messages.find(m => m.queueState === 'queued');
-    if (!next || c.currentRunId) reject(409, 'run-not-ready');
-    const ref = refOf(next), verified = await verifiedSender(ref);
+    if (c.currentRunId) reject(409, 'run-not-ready');
+    const cancelled = []; let next = null, verified = null;
+    for (const candidate of c.messages.filter(m => m.queueState === 'queued').sort((a, b) => a.arrivalSeq - b.arrivalSeq)) {
+      try {
+        member(before, c, refOf(candidate));
+        verified = await verifiedSender(refOf(candidate)); next = candidate; break;
+      } catch (error) {
+        if (![401, 403].includes(error.status)) throw error;
+        cancelled.push({ messageId: candidate.messageId, reason: error.code ?? 'credential-revoked' });
+      }
+    }
+    const ref = next && refOf(next);
     const result = ledger.transaction(s => {
       reconcile(s); service(s, servicePrincipal);
       const old = replay(s.runRequestsV2, key, digest); if (old) return old.result;
-      const conv = conversation(s, projectId, conversationId); senderAtCommit(s, conv, ref, verified);
+      const conv = conversation(s, projectId, conversationId);
+      for (const cancelledMessage of cancelled) {
+        const m = conv.messages.find(row => row.messageId === cancelledMessage.messageId);
+        if (m?.queueState === 'queued') { m.queueState = 'cancelled'; m.reason = cancelledMessage.reason; bumpQueue(s, conv); }
+      }
+      if (!next) return { empty: true, cancelled: cancelled.map(m => m.messageId) };
+      senderAtCommit(s, conv, ref, verified);
       const runId = `run_${randomUUID()}`, runGrantId = `grant_${randomUUID()}`;
-      const { message } = conversationHooks.claimNextInState(s, { projectId, conversationId, runId });
+      const claimed = conversationHooks.claimNextInState(s, { projectId, conversationId, runId, expectedMessageId: next.messageId });
+      const { message } = claimed;
+      if (!message) return { empty: !claimed.retry, retry: claimed.retry === true,
+        cancelled: [...new Set([...cancelled.map(m => m.messageId), ...(claimed.cancelled ?? [])])] };
       if (message.messageId !== next.messageId || identity.some(k => refOf(message)[k] !== ref[k])) reject(409, 'run-queue-changed');
       const g = { v: 2, runGrantId, projectId, conversationId, runId, messageId: message.messageId,
         ...ref, ...svc, initiatorAccountId: ref.accountId, initiatorName: message.senderNameAtSend,

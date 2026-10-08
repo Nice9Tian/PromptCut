@@ -10,7 +10,7 @@ export const projectId = 'sp_fixture', conversationId = 'conversation_fixture';
 export const servicePrincipal = Object.freeze({ service: 'agent', scope: 'service', serviceKid: 'agent-test-key', authenticated: true });
 export const hooksModule = process.env.PROMPTCUT_CONVERSATION_AUTHORITY_MODULE;
 export async function runFixture({ dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-run-authority-')), failpoint,
-  ledgerFailpoint, intentFailpoint, verifySender, clock = { now: 100 }, seed = true } = {}) {
+  ledgerFailpoint, intentFailpoint, verifySender, synchronize = async () => {}, clock = { now: 100 }, seed = true } = {}) {
   const source = hooksModule ? pathToFileURL(path.resolve(hooksModule)).href : new URL('../account/conversation-authority.mjs', import.meta.url).href;
   const hooks = await import(source);
   const ledger = openAccountLedger({ file: path.join(dir, 'doc.db'), authorityId: 'doc-run-test', failpoint: ledgerFailpoint });
@@ -23,7 +23,7 @@ export async function runFixture({ dir = fs.mkdtempSync(path.join(os.tmpdir(), '
     s.testServices = { [servicePrincipal.serviceKid]: true };
   });
   const provider = createRunAuthority({ ledger, conversationHooks: hooks, now: () => clock.now, failpoint,
-    synchronize: async () => {},
+    synchronize,
     verifySender: verifySender ?? (async ref => {
       if (ledger.read().revokedLogins[`login:${ref.loginId}`]) throw new Error('credential-revoked');
       return { ...ref, accountEventSeq: ledger.read().accountHead };

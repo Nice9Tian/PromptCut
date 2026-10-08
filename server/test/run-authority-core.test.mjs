@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { runFixture, projectId, conversationId, servicePrincipal } from './run-authority-fixture.mjs';
-import { digestOf } from '../account/ledger.mjs';
+import { digestOf, appendAccessEvent } from '../account/ledger.mjs';
 import { createRunAuthority } from '../account/run-authority.mjs';
+import os from 'node:os';
+import path from 'node:path';
+import { accountFixture, actor } from './password-order-fixture.mjs';
+import { createAccountAuthority } from '../account/authority.mjs';
 
 async function fixture(t, options) {
   const f = await runFixture(options); t.after(() => { f.close(); fs.rmSync(f.dir, { recursive: true }); }); return f;
@@ -124,3 +128,63 @@ test('real async credential gap cannot admit after durable exit', async t => {
   f.enqueue(); const pending = f.admit(); await entered.promise; f.exit(); release.resolve();
   await assert.rejects(pending, /credential-revoked/); assert.equal(inspect(f).currentRunId, null);
 });
+
+test('invalid FIFO head is durably cancelled and next valid sender gets a separate credential check', async t => {
+  const checks = [];
+  const f = await fixture(t, { verifySender: async ref => {
+    checks.push(ref.accountId);
+    if (ref.accountId === 'sender') throw Object.assign(new Error('expired'), { status: 401, code: 'expired' });
+    return { ...ref, accountEventSeq: 0 };
+  } });
+  f.enqueue(); f.enqueue('next-other', 'other');
+  const g = await f.admit(); assert.equal(g.accountId, 'other');
+  assert.deepEqual(checks, ['sender', 'other']); assert.equal(inspect(f).messages[0].queueState, 'cancelled');
+});
+
+test('all invalid FIFO heads commit cancellation; transient account failure preserves queued text', async t => {
+  const f = await fixture(t, { verifySender: async () => { throw Object.assign(new Error('expired'), { status: 401 }); } });
+  f.enqueue(); assert.equal((await f.admit()).empty, true); assert.equal(inspect(f).messages[0].queueState, 'cancelled');
+  const unavailable = await fixture(t, { verifySender: async () => { throw Object.assign(new Error('unavailable'), { status: 503 }); } });
+  unavailable.enqueue(); await assert.rejects(unavailable.admit(), /unavailable/);
+  assert.equal(inspect(unavailable).messages[0].queueState, 'queued');
+});
+
+test('off then on durable events revoke old run; incomplete legacy event cannot infer uninterrupted service from latest flag', async t => {
+  const f = await fixture(t); f.enqueue(); const g = await f.admit(); await f.provider.confirmRead(f.input(g));
+  f.ledger.transaction(s => {
+    appendAccessEvent(s, { type: 'project-access-changed', projectId, reason: 'set-hosted-service', service: 'agent', enabled: false });
+    appendAccessEvent(s, { type: 'project-access-changed', projectId, reason: 'set-hosted-service', service: 'agent', enabled: true });
+  });
+  await assert.rejects(f.principal(g), /run-no-longer-current|run-revoked/);
+  const unknown = await fixture(t); unknown.enqueue(); const g2 = await unknown.admit(); await unknown.provider.confirmRead(unknown.input(g2));
+  unknown.ledger.transaction(s => appendAccessEvent(s, { type: 'project-access-changed', projectId, reason: 'set-hosted-service' }));
+  await assert.rejects(unknown.principal(g2), /run-service-event-incomplete/);
+});
+
+test('actual account SQLite password choice: no exit keeps run, exit retains exact shared current and fresh login remains independent',
+  { skip: !process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT && 'Actual account provider must be explicitly configured' }, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-run-real-account-'));
+    const account = await accountFixture({ dir, actual: true }); let authority;
+    const f = await runFixture({ dir, verifySender: ref => account.credentials.verifyActorRef(ref),
+      synchronize: () => authority.synchronize() });
+    authority = createAccountAuthority({ ledger: f.ledger, pollMs: 0, accountClient: { events: after => account.store.events(after) } });
+    t.after(() => { authority.close(); f.close(); account.close(); fs.rmSync(dir, { recursive: true }); });
+    f.enqueue();
+    f.ledger.transaction(s => {
+      const p = s.projects[projectId]; p.members[actor.accountId] = { access: 'rw' };
+      const m = s.conversationsV2[projectId][conversationId].messages[0];
+      Object.assign(m, { senderAccountId: actor.accountId, loginId: actor.loginId, credentialId: actor.credentialId,
+        loginGeneration: actor.loginGeneration, selectionSnapshot: { ...m.selectionSnapshot, accountId: actor.accountId } });
+    });
+    const g = await f.admit(); await f.provider.confirmRead(f.input(g));
+    account.choose(account.change('change-no-exit'), false);
+    assert.equal((await f.provider.checkAccess({ principal: await f.principal(g), projectId, action: 'write' })).runGrant.state, 'active');
+    const fresh = account.credentials.createEditor({ account: account.store.accountById(actor.accountId), deviceId: 'fresh-fixture', requestId: 'fresh-before-change' });
+    account.choose(account.change('change-exit'), true);
+    assert.throws(() => account.credentials.verifyActorRef(actor), /credential-revoked/);
+    assert.equal((await f.provider.checkAccess({ principal: await f.principal(g), projectId, action: 'write' })).retainedGrant.runId, g.runId);
+    assert.throws(() => account.credentials.verify(fresh.accessToken), /credential-revoked/);
+    const newLogin = account.credentials.createEditor({ account: account.store.accountById(actor.accountId), deviceId: 'fresh-fixture-after', requestId: 'fresh-after-change' });
+    assert.notEqual(account.credentials.verify(newLogin.accessToken).loginId, g.loginId);
+    f.privateFence(); await assert.rejects(f.principal(g), /run-no-longer-current|run-revoked/);
+  });
