@@ -1,12 +1,13 @@
 import https from 'node:https';
 import { accountError, certificateFingerprint } from './client.mjs';
 import { assertInstanceDirectTransport } from './agent-instance-internal.mjs';
+import { RUN_FINISH_FIELDS, validateRunFinishInput } from './run-authority.mjs';
 
 const ROOT = '/internal/v2/runs/';
 const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'];
 const readFields = [...binding, 'requestId', 'readIntentId', 'promptDigest', 'prompt'];
 const shapes = Object.freeze({ admit: ['projectId', 'conversationId', 'requestId'], read: readFields,
-  'read/query': readFields, check: ['projectId', 'runGrantId'], finish: [...binding, 'requestId'],
+  'read/query': readFields, check: ['projectId', 'runGrantId'], finish: RUN_FINISH_FIELDS,
   ticket: ['projectId', 'runGrantId', 'conversationId', 'purpose'], pending: [] });
 const fail = (status, code) => { throw accountError(status, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -26,6 +27,7 @@ async function bodyOf(req) {
   return body;
 }
 function validateBody(action, body) {
+  if (action === 'finish') { validateRunFinishInput(body); return; }
   const fields = shapes[action], optional = action === 'check' ? ['action'] : [];
   if (Object.keys(body).some(field => !fields.includes(field) && !optional.includes(field)) ||
       fields.some(field => !Object.hasOwn(body, field))) fail(400, 'invalid-run-body');

@@ -5,6 +5,7 @@ import { instanceProofPayload, instanceTlsBinding } from '../../account/agent-in
 import { INSTANCE_PROOF_HEADER } from '../../account/agent-instance-internal.mjs';
 import { RUN_ASSET_PROOF_HEADER, assetHttpTuple, runAssetIssueRequest } from '../../account/run-asset-protocol.mjs';
 import { CONVERSATION_CONTROL_ROOT, conversationControlOperations, conversationControlScope } from '../../account/agent-read-control.mjs';
+import { validateRunFinishInput } from '../../account/run-authority.mjs';
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -54,6 +55,10 @@ export function createAgentInstanceSession({ requestRegistration } = {}) {
         !operations.has(operation) || !body || typeof body !== 'object' || Array.isArray(body) ||
         (operation === 'checkAccess' && !['read', 'write'].includes(body.action)))
       fail('instance-proof-input');
+    if (operation === 'finish') {
+      if (path !== '/internal/v2/runs/finish') fail('instance-proof-input');
+      validateRunFinishInput(body);
+    }
     const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
       method, path, operation, requestDigest: digestOf(body) });
     const proof = { instanceId: registered.instanceId, instanceGeneration: registered.instanceGeneration,

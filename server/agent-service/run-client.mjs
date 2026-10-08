@@ -3,6 +3,7 @@ import { checkServerIdentity } from 'node:tls';
 import { certificateFingerprint, accountError } from '../account/client.mjs';
 import { createAgentInstanceSession } from '../agent/service/agent-instance-session.mjs';
 import { runAssetIssueRequest } from '../account/run-asset-protocol.mjs';
+import { validateRunFinishInput } from '../account/run-authority.mjs';
 
 const paths = Object.freeze({ admit: 'admit', confirmRead: 'read', queryRead: 'read/query',
   checkAccess: 'check', finish: 'finish', runTicket: 'ticket', pending: 'pending' });
@@ -94,6 +95,7 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
         'instanceId', 'instanceGeneration', 'instanceSession'].some(key => fields[key] !== undefined))
       throw accountError(400, 'invalid-authority-claim');
     if (name === 'checkAccess' && !['read', 'write'].includes(fields.action)) throw accountError(400, 'invalid-run-action');
+    if (name === 'finish') validateRunFinishInput(fields);
     if (name !== 'pending') await instanceSession.register();
     return transmit(`/internal/v2/runs/${paths[name]}`, fields, operations[name] ?? null);
   }

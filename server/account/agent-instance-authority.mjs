@@ -50,6 +50,7 @@ export function instanceRunScope(operation, input) {
     const value = { operation, ...Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId',
       'runGrantId', 'requestId'].map(key => [key, input[key]])) };
     if (operation !== 'finish') Object.assign(value, { readIntentId: input.readIntentId, promptDigest: input.promptDigest });
+    else Object.assign(value, { readReceiptId: input.readReceiptId, outcome: structuredClone(input.outcome) });
     return value;
   }
   deny(403, 'instance-operation-forbidden');

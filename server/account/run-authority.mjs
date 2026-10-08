@@ -8,6 +8,24 @@ const copy = x => structuredClone(x);
 const identity = ['accountId', 'loginId', 'credentialId', 'loginGeneration'];
 const binding = ['projectId', 'conversationId', 'messageId', 'runId'];
 const instanceBinding = ['instanceId', 'instanceGeneration'];
+export const RUN_FINISH_FIELDS = Object.freeze([...binding, 'runGrantId', 'requestId', 'readReceiptId', 'outcome']);
+/** Terminal evidence is reported by the authenticated live Agent instance.
+ * It is neither an OS-close witness nor a substitute for an unknown result. */
+export function validateRunFinishInput(input, { allowServicePrincipal = false } = {}) {
+  if (!input?.outcome || !input?.readReceiptId) reject(503, 'run-outcome-required');
+  const allowed = [...RUN_FINISH_FIELDS, ...(allowServicePrincipal ? ['servicePrincipal'] : [])];
+  if (typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed.includes(k)) ||
+      RUN_FINISH_FIELDS.some(k => !Object.hasOwn(input, k))) reject(400, 'invalid-run-finish');
+  for (const k of RUN_FINISH_FIELDS.filter(k => k !== 'outcome'))
+    if (typeof input[k] !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(input[k])) reject(400, 'invalid-run-finish');
+  const value = input.outcome;
+  if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 4 ||
+      !['v', 'status', 'eventId', 'eventDigest'].every(k => Object.hasOwn(value, k)) || value.v !== 1 ||
+      typeof value.eventId !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(value.eventId) ||
+      !/^[a-f0-9]{64}$/.test(value.eventDigest ?? '')) reject(400, 'invalid-run-outcome');
+  if (!['done', 'failed', 'interrupted'].includes(value.status)) reject(503, 'run-outcome-unknown');
+  return copy(value);
+}
 const seq = s => {
   const next = (s.runClockV2 ?? 0) + 1;
   if (!Number.isSafeInteger(next)) reject(503, 'run-clock-overflow');
@@ -16,6 +34,7 @@ const seq = s => {
 const tables = s => {
   s.runGrantsV2 ??= {}; s.runRequestsV2 ??= {}; s.runReadRequestsV2 ??= {};
   s.runControlsV2 ??= {}; s.runReceiptsV2 ??= {};
+  s.runFinishRequestsV2 ??= {}; s.runFinishReceiptsV2 ??= {};
 };
 const bumpQueue = (s, c) => {
   const revision = Math.max(s.conversationClockV2 ?? 0, c.queueRevision ?? 0) + 1;
@@ -333,6 +352,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       const { c, m } = current(s, g); project(s, projectId);
       if (canonicalJson(acceptedMessageRef(m, g)) !== canonicalJson(g.messageRef)) reject(503, 'accepted-message-changed');
       if (!['active', 'retained'].includes(g.state) || !g.readReceiptId || !s.runReceiptsV2[g.readReceiptId]) reject(403, 'run-revoked');
+      if (g.finishReceiptId) reject(403, 'run-finishing');
       if (c.visibility === 'private' && c.ownerAccountId !== g.accountId) reject(403, 'private-run-forbidden');
       if (g.state === 'active') {
         if (!verified) reject(403, 'run-state-changed'); senderAtCommit(s, c, g, verified);
@@ -362,15 +382,35 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     await checkWithScope({ principal, projectId, action: 'read' }, invocation); return principal;
   }
   async function finish(input) {
-    request(input.requestId); await sync();
-    return ledger.transaction(s => {
-      reconcile(s); const g = bound(s, input, service(s, input.servicePrincipal, { operation: 'finish', input }));
-      if (g.state === 'finished') return copy(g);
-      if (g.state === 'revoked') reject(403, 'run-revoked');
-      current(s, g); g.state = 'finished'; g.fenceRevision = seq(s); g.finishedAt = now();
-      conversationHooks.finishInState(s, { ...g, state: 'done' });
-      return copy(g);
+    const outcome = validateRunFinishInput(input, { allowServicePrincipal: true }); await sync();
+    const result = ledger.transaction(s => {
+      reconcile(s); const svc = service(s, input.servicePrincipal, { operation: 'finish', input });
+      const g = bound(s, input, svc), requestBody = Object.fromEntries(RUN_FINISH_FIELDS.map(k => [k, input[k]]));
+      const key = digestOf({ ...svc, runGrantId: g.runGrantId, requestId: input.requestId });
+      const digest = digestOf(requestBody), prior = replay(s.runFinishRequestsV2, key, digest);
+      if (prior) return prior.result;
+      if (g.finishReceiptId) reject(409, 'run-finish-conflict');
+      if (!['active', 'retained'].includes(g.state)) reject(403, 'run-revoked');
+      current(s, g);
+      const read = s.runReceiptsV2[input.readReceiptId];
+      if (g.readReceiptId !== input.readReceiptId || !read || read.promptDigest !== g.promptDigest ||
+          [...binding, 'runGrantId', 'serviceId', 'serviceKid', ...instanceBinding].some(k => read[k] !== g[k]))
+        reject(403, 'run-read-receipt-mismatch');
+      const receipt = { v: 1, finishReceiptId: `finish_${randomUUID()}`, authorityId: ledger.authorityId,
+        ...Object.fromEntries([...binding, 'runGrantId'].map(k => [k, g[k]])), ...svc,
+        requestId: input.requestId, readReceiptId: input.readReceiptId, outcome,
+        outcomeDigest: digestOf(outcome), requestDigest: digest, recordedAt: now(), authoritySeq: seq(s),
+        closureState: 'pending', complete: false };
+      s.runFinishReceiptsV2[receipt.finishReceiptId] = receipt;
+      g.finishReceiptId = receipt.finishReceiptId; g.fenceRevision = receipt.authoritySeq;
+      // Terminal recording prohibits further work but cannot release currentRun
+      // or FIFO. A later authority-owned finalizer must verify existing control
+      // and actual doc-data close evidence, never a caller Boolean.
+      const value = { ...copy(g), finishPending: true, finishReceipt: copy(receipt) };
+      s.runFinishRequestsV2[key] = { digest, result: value };
+      failpoint('run-finish-before-commit'); return value;
     });
+    failpoint('run-finish-after-commit'); return result;
   }
   function fence(input) {
     const result = ledger.transaction(s => { reconcile(s); return fenceInState(s, input); });
