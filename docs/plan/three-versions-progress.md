@@ -9,7 +9,7 @@
 - 版本：0.7.18，第一个整合小阶段进行中
 - 最后更新：2026-10-08，用户已分别确认计划定稿、开始实施
 - main：见 `git log`
-- 一句话：集成7cce722f收回权限/已读/对话完成模块；根冻结6c类型、71/71目标及full5160/5158/0/2通过，VH327真实Linux79/79。80长验收仍在跑，1800帧与main相同；桌面壳有因37/37，GR6 HTTP500及普通A5首失败保留并诊断。中央factory、实际runner与实例闭合仍在接；尚未合main/发版/部署新服务
+- 一句话：集成d001afe5收回根独立验证的中央factory与实际Agent消费者，8b组合类型零错、目标80/80、full5169/5167通过/0失败/2跳过。全员选区3f正在根组合复验；实例OS绑定继续接。80长验收仍在跑，1800帧与main相同；GR6 HTTP500、普通A5及SKILL端口参数首失败保留。尚未合main/发版/部署新服务
 
 ## 已经做了什么
 
@@ -104,7 +104,7 @@
 - 真实active run修改联验新源码PC b5c776b5/VH8ad627d：VH full74/71/0/3 Windows跳过；PC首次target45/40/5/0失败，五个新WS项都在prepare前operation-unavailable。Astra核到service normalize白名单丢失trusted authenticate产出的servicePrincipal/serviceId；中央owner获窄补租，不从消息body重造身份。类型、因果补验及全量待固定源码，原日志TMP/promptcut-run-authority-active-target-1.log保留，不能以原40模块通过判实际WS通过。
 - 中央专用关闭ac3bd9a2/报告f9d7456b，新6项与原33项39/39、0fail/cancel/skip、5574.3443ms；实际socket的_destroy门控证明逻辑连接零/旧SID410时回执仍pending，真实close才完成，含WS/LP异步resume窗口。根已读core3文件完整diff；永久账号/project条件改为本次cohort屏障正在补，不将此39项当整组跨服务资源ACK或Agent进程停止完成。
 
-## 本次做了什么
+### 最近一轮权限核心验证记录
 
 - 已审完成模块以no-ff收进集成7cce722f：run/read/TTL权限核心6c4cd8d8与对话原报告9ba4d8b8；没有合main、发版或部署新服务。已完成的run与对话AGENT报告100%原文归档，正在接线的中央factory和runner报告留在reports，不把fixture通过说成生产已挂载。
 - 根在独立冻结6c4cd8d8（当前对话authority、真实VH327ff674 provider/order）首跑：强制类型exit0/6.968秒，11文件目标71/71、0fail/cancel/skip、10686.2584ms，全量5160/5158通过/0fail/cancel/2skip、69838.2893ms（墙钟70.188秒），native重跑0、源码全程不变。原始TMP/pc-root-runtime-6c4cd8d8-{type,target,full}.log及result.json保留。两个既有skip不计通过；这不覆盖后来7a路由/factory或e546 runner。
@@ -114,6 +114,17 @@
 - 80b5e658的58项长验收仍在后台自然运行，不能把部分summary当最终结果。截至P-online-nav-stress完成，24项已记录21通过/3首次失败；桌面壳G0-5已凭测试进程环境因果修正37/37，原失败保留。GR6快照HTTP500仍未解；P-c10-browser-full首轮1084秒失败（主机plan=1/fine completed=0），原始输出与图保留。A4、用户卡、界面、舞台看守、改参不贴旧层、握手、导航200次均exit0，但不替代失败的普通A5。当前P-desktop-auto-node及后续未完成项不计通过，session89976/完整out目录仍保留。
 - C10只读证据不能唯一认定原因；真实队列受控反例确认浏览器可以合法先claim/complete所有双指纹细段，使host切plan但completed=0。Astra诊断fe62c39c保留原hostDidWork、分channel/connection/queueepoch/generation与unversioned ACK证据；首两次手写browser协议缺expectVersion失败保留，修夹具后纯队列目标7/7、551.4549ms及类型0。后续正常r6-canvas重型卡fixture经根审查再加，尚未起服务/新probe，无生产filter或超时修改。
 - 中央7a435d3c专用accepted client/routes首目标3/3、2061.2719ms；同ledger factory仍在装配，实例持久registration/generation/recovery未提供时实际run入口503。Sol runner e546首次控制目标两次hang均中止exit1并留原log，仅修测试child signalCode等待后1/1；根审又要求实际exit和close双观察，4f2927e8窄控制1/1、1161.8131ms，真实owned PID/socket/server关闭在回执前，缺witness仍503。root已合6c依赖得9c6fd979；固定4f消费者将首次强制类型/full。全员实时选区、历史实例OS/cgroup证明、生产挂载与恢复仍未完成，不能因当前模块绿给停止完成ACK。
+
+## 本次做了什么
+
+- 中央factory与实际Agent消费者以no-ff收回到集成d001afe5。根固定34e6b7ba首次独立验证：类型exit0/7.110秒，13文件目标74/74、0失败/取消/跳过、10730.1805ms；全量5163项/5161通过/0失败/0取消/2跳过、69106.3348ms（墙钟69.469秒），native重跑0、源码不变。当前实例owned child必须实际exit且close后才接受停止witness；历史OS/cgroup证据缺失仍pending。
+- 根固定8b255ab4组合中央e731与runner34e首次独立验证：类型exit0/7.843秒，16文件目标80/80、0失败/取消/跳过、10842.4277ms；全量5169项/5167通过/0失败/0取消/2跳过、79146.9525ms（墙钟79.531秒），native重跑0、源码不变。TMP/pc-root-agent-joint-8b255ab4-{type,target,full}.log及result.json为原始证据。运行授权仍缺真实instance注册/世代绑定时503，不把工厂夹具通过写成生产Agent上线。
+- 两份已完成模块报告AGENT-codex-018-cloud-doc-assembly.md及AGENT-codex-018-agent-runner.md逐字节核同后移入docs/archive/agent-reports；未改首次失败、取消、跳过和未挂载边界。新任务另建叶和报告，不在已验源码上继续编辑。
+- Sol全员选区消费者固定3f17b10a/报告cd7bd930：实际mock-model→Agent工具→真实doc WS目标1/1，LAN回归18/18、类型0，首次唯一full5164/5162通过/0失败/0取消/2跳过、73908.776ms。前三次目标失败因夹具把instance.callTool的agent字符串误传options对象，纠正夹具后通过，原失败保留。根已逐读差异并以bb0266fa组合独立验证，尚未取得根最终结果，不先计该组合通过。
+- Luna静态云端工具覆盖清单2e0d1b0d已读：30个不同工具名/用户可见行为、32能力行，现有20个hosted实现可复用不等于账号版逐工具或生产通过。新独占计划叶拆接口；Luna新独占实施叶对齐spawn_agent三个版本稳定关闭和自限定探针端口，旧叶冻结。
+- 80b5e658的58项长验收继续自然运行：新增桌面自动节点、M7浏览器/本机节点、换档、查询渲染、多Agent、自定义测量、素材路径与素材快照均退出0。P-skill-mcp首次退出1，运行器--port-shift210把固定5880改为6090，探针在启动服务前按5880～5899范围拒绝；不是产品服务失败。原始日志保留，修正参数后只补该项，不整套重跑。GR6 HTTP500及A5首次host completed=0仍未通过，未结束或人工项不计通过。
+- C10诊断固定9fc8e889/报告3652b04c保留hostDidWork完成标准，并为普通A5加真实r6-canvas重型fixture及精确clip→plan→claim→complete→ready新层校验；只通过纯队列8/8与类型0，尚无实际浏览器/主机探针结果。ready-index诊断0172f813仅加脱敏HTTP错误和保留临时输出，尚无实际补验；不会用诊断通过替代两项原失败。
+- Astra新实例authority首块9aa15681真实mTLS/两个独立Agent子进程5/5；同签名换TLS、同cert新OS冒旧实例均拒，活Agent在doc SQLite关闭重开后重新签名可继续，只有实际子进程exit/close才接受受控owned witness。接run API固定9811de71首目标50项/42通过/8失败、1923.3917ms；七个子项是旧crash矩阵要求亡Agent后的新key接管旧grant/ACK及错误码顺序，另一个为父suite。按精确实例语义改旧测试，保留SQLite/receipt/不重放全部断言，并新增doc-only crash且Agent仍活的矩阵；不落盘实例私钥，不降低拒绝标准。此模块尚未完成或生产挂载。
 
 ## 接下来干什么
 
