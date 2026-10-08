@@ -199,7 +199,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       } finally { polling = false; }
     };
     const timer = setInterval(() => { void poll(); }, 250); timer.unref?.();
-    req.on('close', release); res.on('close', release);
+    req.on('aborted', release); res.on('close', release);
     void poll();
     return undefined;
   }
