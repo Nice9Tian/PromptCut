@@ -34,3 +34,20 @@
 三级解法表第1行收敛为：请求路由使用同一实际共享 projectId；helper 另收 expected contentProjectId，对 inline/chunked body 和 accepted-snapshot 都核正文身份；保留回复路由键、head版本/摘要、完整片序和回核。源hash/rev、目标clip/card/完整params/起止/总长与版本增加全部保留。诊断逐项保存比较结果，不能用一个 false 隐去原因。产品无改动。
 
 新增 `--stop-after-doc-read` 明确是部分诊断，保留前序真实页面流程、成本与成功计划前置，完整当前全文成立后立即进入原finally清理，不启动host，不声称完整C10通过。默认运行不变，主机完成/同clip/hostFP/non-dedup/newresultKey原尺子不动。本次先此有界诊断；通过后才单次完整强化probe。
+
+## 固定源码验证与当前边界
+
+实现固定于 `2a467e4e8fc57f7a7d2267349059c062bfc1f90e`。
+
+- 首轮 `npm test -- server/test/c10-host-claim.test.mjs`：exit0，16/16通过，0失败/取消/跳过，2448.57ms，wall3.54411s，无native retry。原15项保留，新双ID回归另外拒绝错误正文ID的body与snapshot。原始 `%TEMP%/pc-browser-doc-read-2a467e4e-target-1.log` / `.result.json`。
+- 首轮 `tsc -b --force`：exit0、零错误、wall7.6778082s。原始 `pc-browser-doc-read-2a467e4e-types-1.log` / `.result.json`。两脚本node --check和git diff --check通过。
+- bounded-1属于环境前置未跑：6463预检发现用户Discord.exe监听，但预检与启动错误地放在同次工具调用、未先消费结果。探针自己的端口守门在启动任何业务前拒绝，exit1、script148ms/wall0.235s、1fail；无combo/editor/browser/host启动、无他人进程被结束。`pc-browser-doc-read-2a467e4e-bounded-1.py/.log/.result.json`原样保留。主会话之后改租6600–6609，未赌Discord端口空闲。
+- bounded-2为新段第一次真实运行：先独立读取6600–09 LISTEN为空，再启动固定2a源码。自然exit1、1fail/pending0、script150331ms/wall150.407s、native0、源码clean不变。创建者完成真实共享与初始预渲染；成员尚未加入，等待旧邀请入口 `join-invite-project` 60秒超时。没有进入本次修改的beforeProject/成本/全文前置，host未启动。
+
+bounded-2 原始文件前缀 `%TEMP%/pc-browser-doc-read-2a467e4e-bounded-2`：`.py`、`.handle.json`、`.log`、`.result.json`、`.postflight.json`、`-out/fatal-member.png`、`-out/fatal-creator.png`、`-out/creator-editor.log`、空的`host.log`。截图只显示空登录表单与account-protocol错误，无输入的凭据。
+
+新的独立卡点有精确源码依据：`cbe8398d→0b1454df` 的 `src/StartPage.tsx:91` 将在线开始页的 `JoinSection` 替为 `AccountProjects`；第96行由真实在线构建选择该页。旧C10仍使用邀请链接和v1 combo，没有账号API，因此新页面缺少它所等待的旧控件。不是双ID修正的拒绝，不是CPU卡被测轻，不是host故障，也不能靠延长等待解决。按本任务“不扩大账号路径”的范围，不擅改产品、不绕账号入口、不用当前未许可旧页面产物冒充新源码实证。已把具体差异与截图告主会话，后续需另定旧夹具适配范围。
+
+清理：脚本返回本轮`shared.admin.ok`及listening[]；独立postflight确认6600–6609零监听，probe488、creator44184及本轮TMP标记的node/chrome/python/ffmpeg候选均不存在，源码2a不变clean。没有结束Discord或其它用户进程，端口租约已交还主会话。
+
+当前结论：旧cbe全文超时的双ID探针错误，已由原证据、真实DocSync/文件store反例和窄修目标证实；类型与定向通过。当前基底的真实浏览器被更早的新账号入口挡住，**不能声明全文实浏览器回读通过，也不能声明完整强化C10通过**。未启动完整强化probe（有界前置尚未到达）；未跑全量npm、未做账号迁移或生产修改。该隔离分支不得整支合并，交主会话审查取舍。
