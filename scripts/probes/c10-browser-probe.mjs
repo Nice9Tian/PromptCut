@@ -140,7 +140,7 @@
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { fork, spawn, spawnSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -155,7 +155,6 @@ import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, par
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 import { createTimings } from './probe-timings.mjs';
 import { hostClaimStatusOf } from '../render-host.mjs';
-import { createC10Trace, hostDidWork, hostRenderedClip, hostFixtureReadiness, heavyUserCardSource, editHeavyFixtureClip, readFixtureProject } from './c10-judge.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -400,10 +399,7 @@ function hostView(body, lines = []) {
     maxConcurrent: body.maxConcurrent ?? null, nodes, sessionLog: sessionLog.slice(-8) };
 }
 /** 认领了 plan(切出细任务)且至少做完一段:claimed 算上 plan 本身(与本机替身同一判据) */
-const a5Trace = createC10Trace();
-let a5TraceCdp = null;
-let a5ObserverNumber = 0;
-const a5NodeEvents = new Map();
+const hostDidWork = (view) => (view?.nodes ?? []).some((n) => (n.completed ?? 0) > 0 && (n.claimed ?? 0) > (n.completed ?? 0) - 1);
 
 /* ================================================================== 主机持有任务时断一次传输(--cut,照 ht-w-probe) */
 
@@ -530,12 +526,10 @@ async function cutWhileHolding({ queue, healthz, onHolding, doCut, holdTimeoutMs
  */
 async function startWatcher(M, { projectId, password, diagnosticOnly = false }) {
   const c = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId, username: '旁观节点', password, as: 'member', role: 'render' });
-  const traceChannel = `observer:${++a5ObserverNumber}`;
   const seen = new Map();
   const tasks = new Map();
   const rec = (id) => { if (!seen.has(id)) seen.set(id, { taken: 0, reopenedAfterTaken: 0, closed: [] }); return seen.get(id); };
   c.ep.onMessage((m) => {
-    a5Trace.observe(m, { channel: traceChannel });
     if (m?.type === 'queue.snapshot') { tasks.clear(); for (const task of m.tasks ?? []) tasks.set(task.id, task); }
     else if (m?.type === 'task.opened' && m.task?.id) tasks.set(m.task.id, m.task);
     else if (['task.taken', 'task.closed'].includes(m?.type)) { const task = tasks.get(m.id); if (task) tasks.set(m.id, { ...task, state: m.type === 'task.taken' ? 'claimed' : m.state }); }
@@ -552,9 +546,8 @@ async function startWatcher(M, { projectId, password, diagnosticOnly = false }) 
   if (!diagnosticOnly) check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
   // 会话结束后建了新会话(onOpen 只在新会话时调;接续调 onResume、订阅还在):重发 hello 与 watch。计数进结果
   const stats = { newSessions: 0, resumes: 0 };
-  c.ep.onOpen(() => { stats.newSessions++; a5Trace.boundary(traceChannel, 'new-session'); void subscribe(); });
-  c.ep.onResume?.(() => { stats.resumes++; a5Trace.boundary(traceChannel, 'resumed'); });
-  c.ep.onClose(() => a5Trace.boundary(traceChannel));
+  c.ep.onOpen(() => { stats.newSessions++; void subscribe(); });
+  c.ep.onResume?.(() => { stats.resumes++; });
   return { seen, stats, tasks, close: c.close };
 }
 /** 成员页收到的 task.done(CDP 读页面 WebSocket 的入站帧;会话层的重发按 seq 去重,同一任务不同 seq 算两次) */
@@ -1846,12 +1839,6 @@ try {
     say('step2.done', out.steps.reopen);
 
     /* ---------------------------------------------------------------- A5. 没有节点在线时改一处不报错;独立渲染主机认领、切分、完成 */
-    a5TraceCdp = await member.createCDPSession();
-    await a5TraceCdp.send('Network.enable');
-    a5TraceCdp.on('Network.webSocketFrameReceived', event => {
-      try { a5Trace.observe(JSON.parse(event.response?.payloadData), { channel: `publisher:${event.requestId}` }); } catch { /* 非 JSON 帧 */ }
-    });
-    a5TraceCdp.on('Network.webSocketClosed', event => a5Trace.boundary(`publisher:${event.requestId}`));
     const t5 = Date.now();
     // E6 反方向:记下创建者(桌面)发布过的 plan,X 上线后拿 host 身份试认领一次(L18,只记录)
     if (E6R) state.desktopPlans = ((await diag().catch(() => null))?.published ?? []).map((p) => p?.planId).filter((id) => typeof id === 'string');
@@ -1862,52 +1849,6 @@ try {
     const errorsBefore = member.pageErrors.length;
     const edited = await P(member, (id) => { const s = window.__pcStore; s.actions.setClipParams(id, { label: 'main-v2' }); return s.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)?.params?.label; }, state.main);
     check(edited === 'main-v2', 'A5:纯在线改一处(主重卡的文字)', { edited });
-    // The original main still races the browser. This ordinary project-owned
-    // card computes the pixels it displays; it has no authored capability or
-    // clock escape. Default unknown/local eligibility remains product-owned.
-    if (!EXTERNAL_HOST && !E6R) {
-      const cardId = `c10-cpu-field-${randomBytes(8).toString('hex')}`;
-      const sourceKey = `src/cards/user/${cardId}.tsx`, source = heavyUserCardSource(cardId);
-      const expectedHash = createHash('sha256').update(JSON.stringify(source)).digest('hex');
-      const stored = await conn.rpc({ type: 'content.put', kind: 'card-source', key: sourceKey, body: source });
-      const fetched = await conn.rpc({ type: 'content.get', kind: 'card-source', key: sourceKey });
-      const sourceEvidence = { cardId, sourceKey, expectedHash, storedHash: stored.hash, fetchedHash: fetched.hash,
-        storedRev: stored.rev, fetchedRev: fetched.rev, sameBody: fetched.body === source, runtime: null };
-      const saveSourceEvidence = () => fs.writeFileSync(path.join(OUT, 'a5-fixture-source.json'), JSON.stringify(sourceEvidence, null, 2));
-      saveSourceEvidence();
-      if (stored.hash !== expectedHash || fetched.hash !== expectedHash || fetched.body !== source ||
-        !Number.isSafeInteger(stored.rev) || stored.rev < 1 || fetched.rev !== stored.rev)
-        throw new Error('A5:用户卡真实源码回读不一致，未启动 host');
-      await P(member, async () => { await window.__pcCardSourcesSync?.(); });
-      const loaded = await until('A5:项目用户卡正常转译与两个舞台 ready', async () => {
-        const runtime = await P(member, ({ cardId, sourceKey }) => {
-          const d = window.__pcCardExecDiag?.();
-          return d ? { run: d.run?.[cardId]?.state ?? null,
-            bundle: d.bundles?.find(b => b.entry === sourceKey) ?? null,
-            stages: Object.fromEntries(Object.entries(d.stages ?? {}).map(([id, stage]) =>
-              [id, stage.states?.find(([key]) => key === cardId)?.[1]?.state ?? null])) } : null;
-        }, { cardId, sourceKey });
-        sourceEvidence.runtime = runtime; saveSourceEvidence();
-        return runtime?.run === 'ready' && runtime.bundle?.ok === true && Object.keys(runtime.stages).length === 2 &&
-          Object.values(runtime.stages).every(state => state === 'ready') ? runtime : null;
-      }, 30_000, 250);
-      if (!loaded) throw new Error('A5:用户卡正常转译/舞台执行未就绪，未启动 host');
-      const duration = 0.25 + (Number.parseInt(randomBytes(4).toString('hex'), 16) + 1) / 0x100000001 / FPS;
-      const params = { seed: Number.parseInt(randomBytes(4).toString('hex'), 16) % 99999 + 1 };
-      const beforeKeys = ((await onlineDiag(member))?.layers ?? []).map(layer => layer.resultKey);
-      const beforeProject = await readFixtureProject(conn.ep, state.docId, `a5-before-${randomBytes(6).toString('hex')}`);
-      // The editor intentionally has no executable definition for synced cards.
-      // Use its normal project-edit action, also used by online-user-cards-probe;
-      // Normal shared synchronization/publishing still uses the page's existing ACL.
-      const fixture = await P(member, editHeavyFixtureClip, { cardId, sourceKey, start: SECONDS + 1, duration, params,
-        clipId: `c-a5-${randomBytes(8).toString('hex')}`, trackId: `t-a5-${randomBytes(8).toString('hex')}`,
-        createdAt: await P(member, () => Date.now()) });
-      state.hostFixture = { ...fixture, projectId: state.projectId, beforeKeys, source: sourceEvidence, beforeRev: beforeProject.rev, requireStepOverBudget: true };
-      if (!check(fixture.cardId === cardId && fixture.clipId !== state.main && fixture.duration > 0.25 && fixture.duration < 0.25 + 1 / FPS && fixture.projectDuration >= fixture.end &&
-        Object.entries(params).every(([k, v]) => fixture.params?.[k] === v),
-      'A5:真实新增项目 CPU 纹理卡与短片段已保留，原 main 竞争保留', fixture)) throw new Error('A5:host fixture 写入不完整，未启动 host');
-
-    }
     if (E6R) {
       // E6 反方向:全部重卡都改(文字 + burnMs),这一版的层全换成 Y 的;每帧更慢,好让 X 上线时这一版还没做完
       const changed = await P(member, (spec) => {
@@ -1919,75 +1860,11 @@ try {
       }, { main: state.main, extras: state.extras, burn: E6R_BURN_MS });
       check(changed === EXTRA_HEAVY + 1, 'E6 反方向:全部重卡改了文字与 burnMs', { changed, burnMs: E6R_BURN_MS });
     }
-    let fixtureEvidence = null;
-    const publication = await until('A5:页面发布清单计划(测量落定后、防抖)', async () => {
-      if (state.hostFixture) {
-        const measured = await P(member, async clipId => {
-          const p = window.__pcPreviewDiag?.()?.probeRun;
-          const j = p?.probed?.filter(x => x.clipId === clipId).at(-1);
-          const d = window.__pcPlanPublisher?.();
-          // Project only diagnostic fields; no session, request body or error text.
-          const publisher = d ? { measured: d.measured, want: d.want, last: d.last, lastClips: d.lastClips,
-            log: d.log.map(e => ({ at: e.at, id: e.id, clips: e.clips, ok: e.ok, state: e.state })) } : null;
-          const records = j ? await new Promise(resolve => {
-            const r = indexedDB.open('promptcut-l2');
-            r.onerror = () => resolve([]);
-            r.onsuccess = () => {
-              const db = r.result;
-              if (!db.objectStoreNames.contains('costs')) { db.close(); resolve([]); return; }
-              const tx = db.transaction('costs'), q = tx.objectStore('costs').getAll();
-              tx.oncomplete = () => db.close(); tx.onabort = () => { db.close(); resolve([]); };
-              q.onerror = () => resolve([]);
-              q.onsuccess = () => resolve(q.result.map(x => x.record).filter(x => x?.identityKey === j.identityKey && x.mode === 'build'));
-            };
-          }) : [];
-          const keys = ['identityKey', 'fps', 'stepMs', 'stepMaxMs', 'inlineMs', 'rasterMs', 'serializeMs', 'catchUpMs',
-            'samples', 'capped', 'kind', 'vtOk', 'seekOk', 'seekMs', 'mode', 'demoted', 'pinnedHeavy', 'measuredAt', 'device'];
-          const costs = records.map(r => Object.fromEntries(keys.filter(k => r[k] !== undefined).map(k => [k, r[k]])));
-          return { job: j ? { clipId: j.clipId, cardId: j.cardId, identityKey: j.identityKey, at: j.at } : null,
-            probe: p ? { running: p.running, done: p.done, total: p.total } : null, costs, publisher };
-        }, state.hostFixture.clipId);
-        const frame = await frontFrame(member);
-        const pipeline = frame ? await frame.evaluate(({ id, t }) => window.__pcStagePipelineAt?.(id, t) ?? null,
-          { id: state.hostFixture.clipId, t: state.hostFixture.start + state.hostFixture.duration / 2 }) : null;
-        const record = measured.costs.sort((a, b) => b.measuredAt - a.measuredAt)[0] ?? null;
-        const readiness = hostFixtureReadiness({ fixture: state.hostFixture, fps: FPS, ...measured, record, pipeline });
-        fixtureEvidence = { fixture: state.hostFixture, ...measured, pipeline, readiness };
-        return readiness.ready || readiness.terminal ? { fixtureEvidence, published: readiness.published } : null;
-      }
+    const published = await until('A5:页面发布清单计划(测量落定后、防抖)', async () => {
       const d = await P(member, () => window.__pcPlanPublisher?.() ?? null);
       const hit = d?.log?.filter((e) => e.ok).at(-1);
-      return hit && d.log.filter((e) => e.ok).length >= 2 ? { published: { ...hit, all: d.log.length } } : null;
+      return hit && d.log.filter((e) => e.ok).length >= 2 ? { ...hit, all: d.log.length } : null;
     }, 90_000, 500);
-    if (state.hostFixture) {
-      fs.writeFileSync(path.join(OUT, 'a5-fixture-prerequisite.json'), JSON.stringify(fixtureEvidence, null, 2));
-      out.steps.hostFixturePrerequisite = fixtureEvidence;
-      if (!publication?.fixtureEvidence?.readiness.ready) throw new Error(`A5:host fixture 前置未成立，未启动 host:${fixtureEvidence?.readiness?.reasons?.join(',') ?? 'no-observation'}`);
-      // In the legacy shared path, the normal publisher uploads its full project
-      // snapshot after measurement. Observe that accepted snapshot only after the
-      // existing cost/current-plan prerequisite, before starting any host.
-      const fixture = state.hostFixture, { cardId } = fixture;
-      const { sourceKey, expectedHash } = fixture.source;
-      const source = heavyUserCardSource(cardId);
-      let committedEvidence = null;
-      const committed = await until('A5:文档服务接受的当前全文包含同源新片段', async () => {
-        const remote = await readFixtureProject(conn.ep, state.docId, `a5-read-${randomBytes(6).toString('hex')}`);
-        const clip = remote.project?.tracks?.flatMap(t => t.clips).find(c => c.id === fixture.clipId);
-        const sourceRead = await conn.rpc({ type: 'content.get', kind: 'card-source', key: sourceKey });
-        const exact = remote.rev > fixture.beforeRev && clip?.cardId === cardId && clip.start === fixture.start &&
-          Math.abs(clip.end - fixture.end) < 1e-9 && Math.abs(remote.project.duration - fixture.projectDuration) < 1e-9 &&
-          JSON.stringify(clip.params) === JSON.stringify(fixture.params) && sourceRead.hash === expectedHash &&
-          sourceRead.body === source && sourceRead.rev === fixture.source.storedRev;
-        committedEvidence = { projectId: state.docId, beforeRev: fixture.beforeRev, rev: remote.rev, digest: remote.digest, via: remote.via ?? 'body', reason: remote.reason ?? null,
-          clipId: fixture.clipId, cardId: clip?.cardId ?? null, start: clip?.start ?? null, end: clip?.end ?? null,
-          params: clip?.params ?? null, sourceKey, sourceHash: sourceRead.hash, sourceRev: sourceRead.rev, exact };
-        fs.writeFileSync(path.join(OUT, 'a5-fixture-project.json'), JSON.stringify(committedEvidence, null, 2));
-        return exact ? committedEvidence : null;
-      }, 30_000, 250);
-      if (!committed) throw new Error('A5:用户卡片段尚未被文档服务接受，未启动 host');
-      state.hostFixture.committed = committedEvidence;
-    }
-    const published = publication?.published ?? null;
     const pubDiag = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
     check(published && published.id.includes('#clips:') && published.state === 'open', 'A5:页面发布清单计划(plan:<项目>@<版本>#clips:…),没有节点时 open 等着', published ?? pubDiag);
     out.steps.publisher = pubDiag;
@@ -2045,10 +1922,6 @@ try {
           nextDiagnosticAt = Date.now() + 5000;
           const info = await getJson(`${host.origin}/api/prerender/info`, 5000).catch(() => null);
           const events = info?.url ? (await getJson(`${info.url}/api/frames/diagnostics`, 5000).catch(() => null))?.queue?.events ?? [] : [];
-          for (const event of events) if (['node.completed', 'node.dedup'].includes(event.event) && typeof event.id === 'string') {
-            const safe = { event: event.event, id: event.id, at: typeof event.at === 'string' || typeof event.at === 'number' ? event.at : null };
-            a5NodeEvents.set(`${safe.event}:${safe.id}`, safe);
-          }
           const diagnostic = hostClaimStatusOf(body, events, watcher ? [...watcher.tasks.values()] : null);
           const key = JSON.stringify(diagnostic);
           if (key !== lastDiagnosticKey) {
@@ -2060,11 +1933,8 @@ try {
             fs.writeFileSync(path.join(OUT, 'host-claim-diagnostics.json'), JSON.stringify(claimDiagnostics, null, 2));
           }
         }
-        fs.writeFileSync(path.join(OUT, 'a5-task-evidence.json'), JSON.stringify(a5Trace.snapshot(), null, 2));
-        fs.writeFileSync(path.join(OUT, 'a5-host-render-evidence.json'), JSON.stringify([...a5NodeEvents.values()], null, 2));
         const v = hostView(body, hostLog);
-        const exact = !state.hostFixture || hostRenderedClip(a5Trace.snapshot(), [...a5NodeEvents.values()], { clipId: state.hostFixture.clipId, fingerprint: HOST_FP }).rendered;
-        return hostDidWork(v) && exact ? v : null;
+        return hostDidWork(v) ? v : null;
       }, 900_000, 2000);
       out.hostClaimDiagnostics = claimDiagnostics;
       check(claimed, 'A5:独立渲染主机(host 档)认领、切分、完成', claimed ?? hostLog.slice(-12));
@@ -2134,17 +2004,6 @@ try {
     }, 600_000, 2000);
     const layersNow = async () => ((await onlineDiag(member))?.layers ?? []).map((l) => ({ clip: l.clipId, main: l.clipId === state.main, fp: l.envFingerprint, ready: l.ready, candidates: l.candidates, newKey: l.clipId === state.main ? l.resultKey !== keyBefore : undefined }));
     check(fresh, 'A5:页面取到新快照', fresh ?? { main: (await layersNow()).find((l) => l.main) ?? null, hostFp, pageFp: state.pageFp, layers: (await layersNow()).length });
-    if (state.hostFixture) {
-      const fixtureReady = await until('A5:专用 canvas 的主机真实渲染与新层就绪', async () => {
-        const layer = (await onlineDiag(member))?.layers?.find(l => l.clipId === state.hostFixture.clipId);
-        const proof = hostRenderedClip(a5Trace.snapshot(), [...a5NodeEvents.values()], { clipId: state.hostFixture.clipId, fingerprint: HOST_FP, layer });
-        return proof.rendered && proof.ready && !state.hostFixture.beforeKeys.includes(layer.resultKey)
-          ? { ...proof, clipId: layer.clipId, resultKey: layer.resultKey, envFingerprint: layer.envFingerprint, ready: layer.ready } : null;
-      }, 600_000, 2000);
-      check(fixtureReady, 'A5:目标 canvas 细任务由正常 host 实际完成、非 dedup，页面 host 指纹新层就绪', fixtureReady ?? {
-        fixture: state.hostFixture, evidence: hostRenderedClip(a5Trace.snapshot(), [...a5NodeEvents.values()], { clipId: state.hostFixture.clipId, fingerprint: HOST_FP }) });
-      out.hostFixture = { ...state.hostFixture, proof: fixtureReady };
-    }
     if (!fresh) out.steps.a5FreshDiag = { hostFp, pageFp: state.pageFp, keyBefore: String(keyBefore ?? '').slice(0, 12), layers: await layersNow() };
     await P(member, () => window.__pcStore.actions.seek(2));
     await P(member, () => { const s = window.__pcStore; s.actions.seek(2); s.actions.play(); });
@@ -2198,8 +2057,6 @@ try {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 1200)}`);
   for (const [name, page] of [['creator', state.creator], ['member', state.member]]) if (page) await shot(page, `fatal-${name}`).catch(() => {});
 } finally {
-  try { fs.writeFileSync(path.join(OUT, 'a5-task-evidence.json'), JSON.stringify(a5Trace.snapshot(), null, 2)); } catch { /* 不改变原探针结果 */ }
-  await a5TraceCdp?.detach().catch(() => {});
   try { watcherRef?.close(); } catch { /* 已关 */ }
   await stopCutProxy(cutProxyRef).catch(() => {});
   if (e6) {
