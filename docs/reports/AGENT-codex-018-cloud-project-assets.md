@@ -62,3 +62,7 @@ root全文核e361夹具后，先等G及共同基线结束，再明确授本叶�
 实际链：Agent真实实例注册/已读→doc A issue完整body→B原wire重建/独立asset cert问A→exact scope+TLS proof→physical chunks/hash/publish/read→owned HTTP/TCP/source fd实际收口→本地receipt持久→同observer doc关闭RPC；retained共有任务可再读、stop后拒。错project、raw body空白篡改、新TLS旧proof与已用nonce均拒。sender/registry/media/lifecycle/humanhead/closure回查仍为报告中明确的受控可信adapter；不冒称生产G、真实provider会话、三UID隔离、真实Worker facade或OS历史恢复。
 
 未做：最终full、Linux全链/dirsync平台新包验证、生产G接线/required传播、真实worker+工具链、真实human+run双head并发、跨OS历史receipt恢复、全部晚结果/发布切点、用户UI及节点。latest render supplement仅作边界核对：不选择未批准earlyyield/补渲failure A/B/删除细节，不引入内存默认数字。产品最后源码3d00696e，后续e361仅测试/报告；24pure/type3d和TLS e361各自范围分开。最终只报告提交不改变产品与已运行TLSfixture。
+
+### root复审中的待查异步窗口
+
+root独立读原始日志及7个产品diff后提出两处静态窗口：ProjectAssets.import第二次read fs.open后的track在try/finally之外，register/取消当场拒时read fd是否遗漏；assetRunAccess先构造closedTask，再await consumer.admit，active/catch在其后，持久admit拒时是否仍完整收口channel/live/task。Astra在独立只读叶取反例；本报告不把静态疑问说成已复现、不以本轮1/1证明这些故障路径通过。按root要求产品/fixture继续冻结，仅补事实报告；后续若精确授权修复，首证据与当前所有提交继续保留。
