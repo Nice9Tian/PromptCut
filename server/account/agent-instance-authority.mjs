@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import { canonicalJson, digestOf } from './ledger.mjs';
 import { accountError } from './client.mjs';
+import { conversationControlOperations, conversationControlScope } from './agent-read-control.mjs';
 
 const deny = (status, code) => { throw accountError(status, code); };
 const text = value => typeof value === 'string' && value.length > 0 && value.length <= 256;
@@ -38,6 +39,7 @@ export function instanceProofPayload({ authorityId, instanceId, instanceGenerati
 // API scopes contain only the authority inputs. Derived actor fields are rebuilt
 // from the grant; a caller cannot enlarge an invocation by adding body identity.
 export function instanceRunScope(operation, input) {
+  if (Object.values(conversationControlOperations).includes(operation)) return conversationControlScope(operation, input);
   const p = input?.principal ?? input ?? {};
   const target = { projectId: input?.projectId, runGrantId: input?.runGrantId ?? p.runGrantId };
   if (operation === 'admit') return { operation, projectId: input.projectId,

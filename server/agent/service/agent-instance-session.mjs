@@ -4,6 +4,7 @@ import { canonicalJson, digestOf } from '../../account/ledger.mjs';
 import { instanceProofPayload, instanceTlsBinding } from '../../account/agent-instance-authority.mjs';
 import { INSTANCE_PROOF_HEADER } from '../../account/agent-instance-internal.mjs';
 import { RUN_ASSET_PROOF_HEADER, assetHttpTuple, runAssetIssueRequest } from '../../account/run-asset-protocol.mjs';
+import { CONVERSATION_CONTROL_ROOT, conversationControlOperations, conversationControlScope } from '../../account/agent-read-control.mjs';
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -97,7 +98,17 @@ export function createAgentInstanceSession({ requestRegistration } = {}) {
     })).toString('base64url') };
   }
 
-  return { register, proofFor, dataProofFor, runAssetIssueProofFor, runAssetHttpProofFor,
+  function conversationControlProofFor({ socket, path, operation, body }) {
+    if (closed || !registered) fail('instance-not-registered');
+    const action = Object.keys(conversationControlOperations).find(key => conversationControlOperations[key] === operation);
+    if (!action || path !== CONVERSATION_CONTROL_ROOT + action) fail('instance-proof-input');
+    conversationControlScope(operation, body);
+    const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
+      method: 'POST', path, operation, requestDigest: digestOf(body) });
+    return { name: INSTANCE_PROOF_HEADER, value: Buffer.from(JSON.stringify({ instanceId: registered.instanceId,
+      instanceGeneration: registered.instanceGeneration, signature: signatureOf(payload) })).toString('base64url') };
+  }
+  return { register, proofFor, dataProofFor, runAssetIssueProofFor, runAssetHttpProofFor, conversationControlProofFor,
     identity: () => registered ? { ...registered } : null,
     close() { closed = true; registered = null; challenge = null; } };
 }
