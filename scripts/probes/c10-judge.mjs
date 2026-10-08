@@ -52,8 +52,10 @@ export function editHeavyFixtureClip(spec, store = globalThis.__pcStore, catalog
 /** Read a C6.5 body or the exact current C6.3 server-accepted full snapshot.
  * Metadata alone is not a project. Recheck the head after snapshot assembly so
  * an older accepted snapshot cannot stand in for the current revision.
+ * projectId is the authority route key; contentProjectId independently checks
+ * the saved document identity. Shared rooms may preserve an older content id.
  * This collector never announces, uploads, or mutates a project. */
-export function readFixtureProject(endpoint, projectId, reqId, timeoutMs = 20000) {
+export function readFixtureProject(endpoint, projectId, reqId, timeoutMs = 20000, { contentProjectId = projectId } = {}) {
   return new Promise((resolve, reject) => {
     let head, finished = false, off, phase = 'body', activeReq = reqId, snapshot;
     const parts = new Map();
@@ -70,7 +72,9 @@ export function readFixtureProject(endpoint, projectId, reqId, timeoutMs = 20000
       if (!head || !Number.isSafeInteger(head.rev) || head.rev < 0 || head.projectId !== projectId ||
           (end && (end.rev !== head.rev || end.digest !== head.digest)) ||
           createHash('sha256').update(text).digest('hex') !== head.digest) throw new Error('A5:fixture-project-digest-mismatch');
-      finish(null, { project: JSON.parse(text), rev: head.rev, digest: head.digest });
+      const project = JSON.parse(text);
+      if (!project || project.id !== contentProjectId) throw new Error('A5:fixture-content-project-mismatch');
+      finish(null, { project, rev: head.rev, digest: head.digest });
     };
     off = endpoint.onMessage(m => {
       if (finished || m?.reqId !== activeReq) return;
@@ -96,7 +100,7 @@ export function readFixtureProject(endpoint, projectId, reqId, timeoutMs = 20000
             if (m.digest !== head.digest || createHash('sha256').update(text).digest('hex') !== head.digest)
               throw new Error('A5:fixture-project-digest-mismatch');
             snapshot = JSON.parse(text);
-            if (!snapshot || snapshot.id !== projectId) throw new Error('A5:fixture-snapshot-project-mismatch');
+            if (!snapshot || snapshot.id !== contentProjectId) throw new Error('A5:fixture-snapshot-project-mismatch');
             phase = 'verify';
             send('project.open', ':verify');
           } else throw new Error('A5:fixture-snapshot-reply-invalid');

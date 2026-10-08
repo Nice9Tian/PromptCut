@@ -22,3 +22,15 @@
 ## 验证与边界
 
 尚未运行新测试、类型检查、真实浏览器或主机。所有后续输出放系统 TMP，子进程隐藏并只清理本次归属资源。若需要修改产品，先提交精确因果和范围给主会话。
+
+## 首次根因与窄修
+
+原 `a5-fixture-project.json` 一直返回 `p-muzrks7j-a14e38ef@1` 的 accepted-snapshot，目标 clip 不存在；同轮 prerequisite 的真实 publisher 已为 `sp_minbc6gbwwrc65h52guson5lhr@4`，包含新目标，CPU step176.9ms、pipeline heavy、readiness全部成立。不是卡片又被测轻，也不是 snapshot 传输没回来。
+
+`Preview.tsx` 的 publisher 以 `currentDocProjectId()` 与 shared DocSync.rev 发计划；`syncManager.ts` 的 join/bind 以共享 sp_ 项目键提交真实 project.op。内容 Project.id 仍为 p_，并用于层表索引。旧探针却用 p_ 读取 project.open，碰巧那里留有创建者旧发布的合法快照，读到了错误的流。此前单ID legacy测试没有覆盖真实双ID，因此未发现该夹具错误。
+
+首无监听实际反例 `%TEMP%/pc-browser-doc-read-dual-id-counter.mjs` / `.log` exit0：真实 DocSync、bindStore、editCardProject、projectModule 和 TMP file store（只 transport 内存投递），旧内容键 rev1 无目标，共享权威键 rev2 有目标，正文仍保留旧内容ID且逐字等于已确认项目/真实store。没有运行浏览器、HTTP或TLS；未写成本、ready或capability。
+
+三级解法表第1行收敛为：请求路由使用同一实际共享 projectId；helper 另收 expected contentProjectId，对 inline/chunked body 和 accepted-snapshot 都核正文身份；保留回复路由键、head版本/摘要、完整片序和回核。源hash/rev、目标clip/card/完整params/起止/总长与版本增加全部保留。诊断逐项保存比较结果，不能用一个 false 隐去原因。产品无改动。
+
+新增 `--stop-after-doc-read` 明确是部分诊断，保留前序真实页面流程、成本与成功计划前置，完整当前全文成立后立即进入原finally清理，不启动host，不声称完整C10通过。默认运行不变，主机完成/同clip/hostFP/non-dedup/newresultKey原尺子不动。本次先此有界诊断；通过后才单次完整强化probe。

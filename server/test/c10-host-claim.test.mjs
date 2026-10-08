@@ -435,3 +435,49 @@ test('A5 snapshot fallback rejects foreign revisions, corrupt chunks and obsolet
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
   assert.equal(child.status, 0, child.stderr);
 });
+
+test('A5 shared authority route differs from content identity: actual DocSync edits cannot be read through the stale content snapshot', () => {
+  const root = new URL('../../', import.meta.url).href;
+  const code = `import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+    const root=${JSON.stringify(root)};await import(root+'src/testing/registerTs.mjs');
+    const {DocSync,bindStore}=await import(root+'src/store/docsync.ts');
+    const core=await import(root+'src/store/core.ts');
+    const {projectMeta}=await import(root+'src/store/actions/projectMeta.ts');
+    const {createEmptyProject}=await import(root+'src/kernel/project.ts');
+    const {projectModule}=await import(root+'server/docservice/modules/project.mjs');
+    const {createFileStore}=await import(root+'server/docservice/store/index.mjs');
+    const {createProjectClient}=await import(root+'server/render-node/project-client.mjs');
+    const {resolvePublishVersion}=await import(root+'server/queue-publish.mjs');
+    const {readFixtureProject}=await import(${JSON.stringify(judgeEntry)});
+    const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pc-c10-dual-id-')),listeners=new Set();let ds,unbind;
+    const mod=projectModule({store:createFileStore({dir,log(){}})});
+    const ctx={now:()=>Date.now(),send:(id,m)=>{if(id==='page')ds.receive(m);else for(const f of [...listeners])f(m);return true;},
+      subscribe(){},unsubscribe(){},publish(_channel,m){ds?.receive(m);},log(){},pendingBytes:()=>0};
+    for(const id of ['page','observer'])mod.connect(ctx,id,{userId:id});
+    const ep={onMessage:f=>{listeners.add(f);return()=>listeners.delete(f);},send:m=>{queueMicrotask(()=>mod.handle(ctx,'observer',m));return true;}};
+    try {
+      const initial={...createEmptyProject('isolated'),id:'content-original'},options={contentProjectId:initial.id};
+      const text=JSON.stringify(initial),client=createProjectClient(ep);
+      await resolvePublishVersion({projects:client,projectId:initial.id,text,rawText:text});
+      // A second actual server-accepted snapshot also exercises split route/body
+      // identity in the legacy fallback before DocSync makes this room a body.
+      await resolvePublishVersion({projects:client,projectId:'shared-authority',text,rawText:text});
+      const legacy=await readFixtureProject(ep,'shared-authority','legacy',2000,options);
+      assert.equal(legacy.via,'accepted-snapshot');assert.equal(legacy.project.id,initial.id);
+      await assert.rejects(readFixtureProject(ep,'shared-authority','wrong-legacy',2000,{contentProjectId:'foreign'}),/snapshot-project-mismatch/);
+      ds=new DocSync(initial,{projectId:'shared-authority',session:'page',send:m=>queueMicrotask(()=>mod.handle(ctx,'page',m))});
+      unbind=bindStore(ds);ds.connect();await ds.whenSettled({timeoutMs:2000});
+      const before=await readFixtureProject(ep,'shared-authority','before',2000,options);
+      projectMeta.editCardProject(p=>({...p,tracks:[{id:'new-track',name:'new',clips:[{id:'new-clip',cardId:'cpu',start:0,end:1,params:{seed:1}}]},...p.tracks]}));
+      await ds.whenSettled({timeoutMs:2000});
+      const old=await readFixtureProject(ep,initial.id,'old'),current=await readFixtureProject(ep,'shared-authority','current',2000,options);
+      assert.equal(old.rev,1);assert.equal(old.via,'accepted-snapshot');assert.equal(old.project.tracks.some(t=>t.clips.some(c=>c.id==='new-clip')),false);
+      assert.ok(current.rev>before.rev);assert.equal(current.project.id,initial.id);
+      assert.equal(current.project.tracks.some(t=>t.clips.some(c=>c.id==='new-clip')),true);
+      assert.deepEqual(current.project,ds.confirmedProject);assert.deepEqual(current.project,core.getState().project);
+      await assert.rejects(readFixtureProject(ep,'shared-authority','wrong-body',2000,{contentProjectId:'foreign'}),/content-project-mismatch/);
+      console.log(JSON.stringify({realDocSync:true,realStoreAction:true,realFileStore:true,listener:false,oldRev:old.rev,beforeRev:before.rev,currentRev:current.rev}));
+    }finally{unbind?.();ds?.disconnect();for(const id of ['page','observer'])mod.disconnect(ctx,id);fs.rmSync(dir,{recursive:true,force:true});}`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr);
+});

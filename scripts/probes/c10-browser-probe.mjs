@@ -6,6 +6,7 @@
  *        [--ticket-ttl-ms 20000]
  *        [--no-video]            不导入视频(只验卡片)
  *        [--only-a4]             只跑到 A4(播放、暂停追活渲)为止,跳过 A2 的重开与 A5(排障用)
+ *        [--stop-after-doc-read] 诊断模式:保留前序真实页面流程，A5 精确全文前置成功后立即清理；不启动 host，不代表完整 C10 通过
  *        [--user-card]           另放一张仓库用户卡(`mu-animated-shiny-text`)。2026-10-06 起的新语义(`online-card-exec-contract.md` 第 11.3 节):它是在线包里构建时
  *                                就有的卡,本页能运行,与内置卡一样按轻重区分。成员页进来时在加载遮罩下把它测完、判轻,于是在可见舞台里直接活渲(没有快照、没有
  *                                「需要本地 PC 渲染辅助」的图标与徽标)、不在页面发布的清单计划里。旧语义(清单计划含它、桌面渲染节点渲出来写进层表、成员页贴快照)
@@ -162,6 +163,7 @@ const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const A10 = argv.includes('--a10');
 const ONLY_A4 = argv.includes('--only-a4');
+const STOP_AFTER_DOC_READ = argv.includes('--stop-after-doc-read');
 const USER_CARD = argv.includes('--user-card');
 const KEEP = argv.includes('--keep-temp');
 const VIDEO = !argv.includes('--no-video');
@@ -178,6 +180,9 @@ if (REMOTE && ROLE === 'all') { process.stderr.write('外网模式没有 --role 
 if (REMOTE && A10) { process.stderr.write('--a10 只对本机替身(要缩短托管端的票据时限)\n'); process.exit(2); }
 /** A5 的独立渲染主机来自外部(经协调口 KV):外网模式、或本机替身里给了 --role creator */
 const EXTERNAL_HOST = ROLE === 'creator';
+if (STOP_AFTER_DOC_READ && (ROLE !== 'all' || REMOTE || A10 || ONLY_A4 || argv.includes('--e6-reverse'))) {
+  process.stderr.write('--stop-after-doc-read 仅用于本机普通 A5 前置诊断\n'); process.exit(2);
+}
 const NO_HOST = argv.includes('--no-host');
 const HOST_WAIT_MS = Number(arg('--host-wait-min', 15)) * 60_000;
 /** 主机持有任务时断一次传输:proxy(本机代理切,本机替身自测)| external(外部掐线,等 KV cut.done);不给就不断 */
@@ -224,7 +229,7 @@ const started = Date.now();
 const deadline = started + Number(arg('--timeout-min', REMOTE || ROLE !== 'all' ? 120 : 60)) * 60_000;
 
 const fails = [];
-const out = { ok: false, run: RUN, role: ROLE, mode: A10 ? 'a10' : E6R ? 'a1-a5+e6-reverse' : 'a1-a5', target: REMOTE ? 'site' : 'local', site: SITE, stageOrigins: STAGE_ORIGINS, out: OUT, steps: {} };
+const out = { ok: false, run: RUN, role: ROLE, mode: STOP_AFTER_DOC_READ ? 'doc-read-prerequisite-only' : A10 ? 'a10' : E6R ? 'a1-a5+e6-reverse' : 'a1-a5', target: REMOTE ? 'site' : 'local', site: SITE, stageOrigins: STAGE_ORIGINS, out: OUT, steps: {} };
 /** 等外部主机而没等到的项(不算失败,只记下) */
 const pending = [];
 /** 耗时只记录(verification.md「耗时只记录,不当闸门」):各步用时写进 TIMINGS 行与结果的 timings,不决定过不过 */
@@ -1377,7 +1382,7 @@ async function resolveStageOrigins() {
   out.runtimeConfig = cfg ? { v: cfg.v ?? null, stageOrigins: fromCfg } : { missing: why };
   return list;
 }
-try {
+probeRun: try {
   M = await mods();
   if (REMOTE) {
     STAGE_ORIGINS = await resolveStageOrigins();
@@ -1895,7 +1900,9 @@ try {
       const duration = 0.25 + (Number.parseInt(randomBytes(4).toString('hex'), 16) + 1) / 0x100000001 / FPS;
       const params = { seed: Number.parseInt(randomBytes(4).toString('hex'), 16) % 99999 + 1 };
       const beforeKeys = ((await onlineDiag(member))?.layers ?? []).map(layer => layer.resultKey);
-      const beforeProject = await readFixtureProject(conn.ep, state.docId, `a5-before-${randomBytes(6).toString('hex')}`);
+      // The shared authority key is sp_...; the unchanged content id p_... is
+      // used by layer manifests, not by the member's DocSync operation stream.
+      const beforeProject = await readFixtureProject(conn.ep, state.projectId, `a5-before-${randomBytes(6).toString('hex')}`, 20_000, { contentProjectId: state.docId });
       // The editor intentionally has no executable definition for synced cards.
       // Use its normal project-edit action, also used by online-user-cards-probe;
       // Normal shared synchronization/publishing still uses the page's existing ACL.
@@ -1963,29 +1970,37 @@ try {
       fs.writeFileSync(path.join(OUT, 'a5-fixture-prerequisite.json'), JSON.stringify(fixtureEvidence, null, 2));
       out.steps.hostFixturePrerequisite = fixtureEvidence;
       if (!publication?.fixtureEvidence?.readiness.ready) throw new Error(`A5:host fixture 前置未成立，未启动 host:${fixtureEvidence?.readiness?.reasons?.join(',') ?? 'no-observation'}`);
-      // In the legacy shared path, the normal publisher uploads its full project
-      // snapshot after measurement. Observe that accepted snapshot only after the
-      // existing cost/current-plan prerequisite, before starting any host.
+      // Read the same shared authority key used by the page's DocSync and plan.
+      // Its C6.5 body (or exact accepted legacy snapshot) must retain the content
+      // id and full target; an old snapshot under the content id cannot stand in.
       const fixture = state.hostFixture, { cardId } = fixture;
       const { sourceKey, expectedHash } = fixture.source;
       const source = heavyUserCardSource(cardId);
       let committedEvidence = null;
       const committed = await until('A5:文档服务接受的当前全文包含同源新片段', async () => {
-        const remote = await readFixtureProject(conn.ep, state.docId, `a5-read-${randomBytes(6).toString('hex')}`);
+        const remote = await readFixtureProject(conn.ep, state.projectId, `a5-read-${randomBytes(6).toString('hex')}`, 20_000, { contentProjectId: state.docId });
         const clip = remote.project?.tracks?.flatMap(t => t.clips).find(c => c.id === fixture.clipId);
         const sourceRead = await conn.rpc({ type: 'content.get', kind: 'card-source', key: sourceKey });
-        const exact = remote.rev > fixture.beforeRev && clip?.cardId === cardId && clip.start === fixture.start &&
-          Math.abs(clip.end - fixture.end) < 1e-9 && Math.abs(remote.project.duration - fixture.projectDuration) < 1e-9 &&
-          JSON.stringify(clip.params) === JSON.stringify(fixture.params) && sourceRead.hash === expectedHash &&
-          sourceRead.body === source && sourceRead.rev === fixture.source.storedRev;
-        committedEvidence = { projectId: state.docId, beforeRev: fixture.beforeRev, rev: remote.rev, digest: remote.digest, via: remote.via ?? 'body', reason: remote.reason ?? null,
+        const checks = { revisionAdvanced: remote.rev > fixture.beforeRev, contentId: remote.project?.id === state.docId,
+          cardId: clip?.cardId === cardId, start: clip?.start === fixture.start, end: Math.abs(clip?.end - fixture.end) < 1e-9,
+          duration: Math.abs(remote.project?.duration - fixture.projectDuration) < 1e-9,
+          params: JSON.stringify(clip?.params) === JSON.stringify(fixture.params), sourceHash: sourceRead.hash === expectedHash,
+          sourceBody: sourceRead.body === source, sourceRev: sourceRead.rev === fixture.source.storedRev };
+        const exact = Object.values(checks).every(Boolean);
+        committedEvidence = { projectId: state.projectId, contentProjectId: state.docId, beforeRev: fixture.beforeRev, rev: remote.rev, digest: remote.digest, via: remote.via ?? 'body', reason: remote.reason ?? null,
           clipId: fixture.clipId, cardId: clip?.cardId ?? null, start: clip?.start ?? null, end: clip?.end ?? null,
-          params: clip?.params ?? null, sourceKey, sourceHash: sourceRead.hash, sourceRev: sourceRead.rev, exact };
+          duration: remote.project?.duration ?? null, params: clip?.params ?? null, sourceKey, sourceHash: sourceRead.hash, sourceRev: sourceRead.rev,
+          checks, mismatch: Object.keys(checks).filter(key => !checks[key]), exact };
         fs.writeFileSync(path.join(OUT, 'a5-fixture-project.json'), JSON.stringify(committedEvidence, null, 2));
         return exact ? committedEvidence : null;
       }, 30_000, 250);
       if (!committed) throw new Error('A5:用户卡片段尚未被文档服务接受，未启动 host');
       state.hostFixture.committed = committedEvidence;
+      if (STOP_AFTER_DOC_READ) {
+        out.steps.docRead = { ms: Date.now() - t5, committed: committedEvidence, hostStarted: false, fullC10Validated: false };
+        say('a5.doc-read-only.done', out.steps.docRead);
+        break probeRun;
+      }
     }
     const published = publication?.published ?? null;
     const pubDiag = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
