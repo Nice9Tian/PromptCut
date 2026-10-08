@@ -128,3 +128,15 @@ bootApiGuard 的真实文件为 src/online/apiGuard.ts；新 members 是精确 P
 请求业务监听十个：site6560/account-internal6561/doc6562/doc-internal6563/asset6564/asset-internal6565/Agent6567/edge6568/stages6570/6571；6566禁用。一个独立asset Node child与一个自有Chrome进程树，TMP output/profile/SQLite/PKI/日志；teardown contexts/browser、舞台owned sockets/server、fixture全部服务与asset child实际close。root启动前再核这些口，occupied不能杀。各UIwait30秒、fixture20秒、HTTP5秒；root wrapper建议总上限240秒，首败teardown不重跑。
 
 root命令（先在共同固定候选编译 dist-online）：`node scripts/probes/project-member-controls-probe.mjs --dist <固定候选dist-online> --site-root C:/Users/admin/Documents/VisuHive/site --out <TMP独立目录>`；同前process-only silent preload、真实 PROMPTCUT_ACCOUNT_PROVIDER_ROOT=VH主根与 PROMPTCUT_PASSWORD_ORDER_MODULE=该根account/password-order.mjs、明确现装Chrome。验证真实A创建/B两设备join、名字/account/device、B无admin、踢出后两实际WS close与两当前join403、creator bans、unban后真join、回首页登录/joined保留并从同一真实列表行重入（不重建）。admin200只证明持久禁入/解禁，不证明多服务complete。Luna桌面092f路径由root另组合/实际编译IPC，本叶不借其结果冒称完成。
+
+## 根候选ab0首次真实浏览器与本次probe-only修正
+
+根独立候选 `ab0d1028` 已报告 type0/6.984s、目标27/27/3180.2215ms、full5410/5406pass/0fail/4skip/72.106s、online build0/1.890s；新Rust实际编译19.219s及真实members IPC35/35/12.136s。这些是根提供的候选证据，不冒用为本叶所有浏览器路径已完成。
+
+首次浏览器固定ab0源：34.741s（wrapper wall35.266s），仅 real-project-created 1/1 前置通过、completed=false，phase join-two-devices、TimeoutError。实际create201与两个join200，members/session反复200；没有kick/admin。own服务全部关闭、asset27836实际close。证据保留 `%TEMP%/pc-members-browser-ab0d1028-once/result.json` 与failure-0/1/2图、`pc-members-root-ab0d1028-browser-browser.log`。
+
+只读检查发现 phase 混合join(b)、join(b2)、B开浮层/两成员行、A开浮层/B两设备；下一个 ordinary-member-has-no-admin-controls 没有通过，故A设备断言未到。三图已进编辑器、无consent dialog/无成员pop，按钮显示2真人（实际devices投影非零，不能据此声称B两设备完整）。分享常驻气泡覆成员按钮中心区域，toast z960>pop900，原probe中心page.click可能命中气泡；这是遮挡候选，原raw没有elementFromPoint，须修后真实点击才确认因果。“创建者关闭Agent”不是成员入口失败的依据，未改开关或要求启Agent。
+
+主会话授权此次仅probe+报告。openMembers通过真实分享气泡×逐个关闭，并等真实消失；只在确需打开pop时用只读elementFromPoint确认按钮中心命中后正常page.click，已开的pop不重复点击。未JS改DOM、未强改disabled/forceclick、未假响应。子phase精确拆出B两次join、每页button-visible/dismiss-share-toast/button-center-hit/click-and-popup、B两账号行及A两B设备；memberDiagnostics只记页索引、固定阶段、布尔UI存在/中心命中及成员/设备/page设备/账号/单账号最大page设备数量。响应原principal、名字、token、完整URL/query和输入不记录。
+
+本次只Node --check新probe exit0与git diff --check零错；没有真实browser/native、监听、type/full/cargo重跑。产品和tests相对eeab完全无改，根可沿同ab0 compiled产品有因单次复验；初次红不覆盖、遮挡仍候选。
