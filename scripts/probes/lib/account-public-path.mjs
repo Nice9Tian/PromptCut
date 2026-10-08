@@ -58,3 +58,11 @@ export function projectFrameMetadata(payload, direction) {
       /^sp_[a-z2-7]{26}$/.test(body.projectId ?? '')) entry.projectId = body.projectId;
   return entry;
 }
+export function testAccountMetadata(body, expectedMarker) {
+  // Actual v2 /register and /me return public identity under account, never
+  // infer it from CSRF, session, an arbitrary top-level id or a page URL.
+  const account = body?.account;
+  if (!/^pcpub_[0-9a-f]{12}_[ab]$/.test(expectedMarker ?? '') || account?.name !== expectedMarker ||
+      !/^acc_[0-9a-f]{24}$/.test(account?.id ?? '')) return null;
+  return { accountId:account.id, marker:expectedMarker };
+}

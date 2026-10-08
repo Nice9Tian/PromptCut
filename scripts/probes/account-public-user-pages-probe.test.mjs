@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { publicOptions, projectFromVisibleLink, projectFrameMetadata, resourceMetadata, testIdentities } from './lib/account-public-path.mjs';
+import { publicOptions, projectFromVisibleLink, projectFrameMetadata, testAccountMetadata, resourceMetadata, testIdentities } from './lib/account-public-path.mjs';
 
 test('public writes require an explicit flag and private native arguments never change the public host', () => {
   assert.equal(publicOptions([]).run, false);
@@ -55,6 +55,17 @@ test('real project-state diagnostics keep only exact public project binding and 
   assert.equal(projectFrameMetadata('{', 'received'), null);
   assert.equal(projectFrameMetadata('null', 'received'), null);
   assert.equal(projectFrameMetadata(JSON.stringify({ type:'arbitrary\nsecret', projectId }), 'received'), null);
+});
+
+test('test account identity comes only from the actual public account shape and exact own marker', () => {
+  const marker = 'pcpub_abcdef012345_a', id = `acc_${'1'.repeat(24)}`;
+  const body = { account:{ id, name:marker, extra:'never-log' }, csrfToken:'never-log', session:{ token:'never-log' } };
+  assert.deepEqual(testAccountMetadata(body, marker), { accountId:id, marker });
+  assert.equal(testAccountMetadata({ account:null }, marker), null);
+  assert.equal(testAccountMetadata({ accountId:id, id }, marker), null);
+  assert.equal(testAccountMetadata(body, 'pcpub_abcdef012345_b'), null);
+  assert.equal(testAccountMetadata({ account:{ id:id + '?secret=x', name:marker } }, marker), null);
+  assert.equal(testAccountMetadata({ account:{ id, name:'unowned-account' } }, 'unowned-account'), null);
 });
 
 test('actual default/dry CLI stops before browser, public network or account creation', async () => {

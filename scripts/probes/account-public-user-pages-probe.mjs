@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { publicOptions, testIdentities, projectFromVisibleLink, projectFrameMetadata, PUBLIC_ORIGIN, NATIVE_ORIGIN } from './lib/account-public-path.mjs';
+import { publicOptions, testIdentities, projectFromVisibleLink, projectFrameMetadata, testAccountMetadata, PUBLIC_ORIGIN, NATIVE_ORIGIN } from './lib/account-public-path.mjs';
 
 /**
  * Root-run production probe. Default dry-preflight has no network or browser.
@@ -57,6 +57,7 @@ async function observePage(page, label) {
   page.setDefaultTimeout(TIMEOUT); page.setDefaultNavigationTimeout(TIMEOUT);
   page.safeResponses = { projects: null, create: null, join: null };
   page.safeProjectStateId = null;
+  page.safeMe = null;
   page.on('pageerror', error => { result.network.push({ page: label, kind:'pageerror', name:['Error', 'TypeError', 'RangeError', 'SyntaxError'].includes(error.name) ? error.name : 'Error' }); });
   const resourcePath = request => {
     const url = new URL(request.url());
@@ -83,10 +84,12 @@ async function observePage(page, label) {
     if (![ORIGIN, ...STAGES].includes(url.origin)) return;
     if (!url.pathname.startsWith('/api/account') && !url.pathname.startsWith('/hosted/')) return;
     result.network.push({ page: label, method: response.request().method(), path: url.pathname, status: response.status() });
-    if (url.pathname === '/api/account/register') {
+    if (response.ok() && ['/api/account/register', '/api/account/me'].includes(url.pathname)) {
       const accountTask = response.json().then(body => {
-        const id = body.account?.id;
-        if (/^acc_[0-9a-f]{24}$/.test(id ?? '')) result.ownedAccounts.push({ page:label, accountId:id });
+        const identity = testAccountMetadata(body, page.registrationMarker);
+        if (url.pathname === '/api/account/me') page.safeMe = { anonymous:body.account === null, identity };
+        if (identity && !result.ownedAccounts.some(entry => entry.accountId === identity.accountId && entry.marker === identity.marker))
+          result.ownedAccounts.push({ page:label, ...identity });
       }).catch(() => {}).finally(() => responseTasks.delete(accountTask));
       responseTasks.add(accountTask);
     }
@@ -104,6 +107,7 @@ async function observePage(page, label) {
   // CDP observes the real handshake and bytes without replacing WebSocket or
   // reading its credential-bearing URL/query, headers, protocols or full frames.
   const cdp = await page.createCDPSession(); networkObservers.push(cdp);
+  page.registrationCdp = cdp;
   const sockets = new Map();
   cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
     let parsed;
@@ -389,14 +393,38 @@ async function quitNative() {
 
 async function registerAccount(account, label) {
   const context = await browser.createBrowserContext(); contexts.push(context);
+  assert(context !== browser.defaultBrowserContext() && contexts.slice(0, -1).every(previous => previous !== context), `${label}-isolated-cookie-context`);
   const page = await newPage(context, label);
+  assert(page.browserContext() === context, `${label}-page-in-own-context`);
+  page.registrationMarker = account.name;
   await page.goto(`${ORIGIN}/register`, { waitUntil:'domcontentloaded' });
+  await waitFor(() => page.safeMe?.anonymous === true, `${label}-real-anonymous-me-complete`);
+  await page.waitForFunction(() => {
+    const nav = document.querySelector('.who');
+    return location.pathname === '/register' && nav?.querySelector('a[href="/login"]') && nav.querySelector('a[href="/register"]') &&
+      document.querySelector('#register button[type="submit"]')?.disabled === false;
+  });
+  // The site attaches submit only AFTER await fillWho(). Without the actual
+  // listener a click can submit the form as native GET with password query.
+  // Inspect existing listeners; never inject a handler or replace the form.
+  await waitFor(async () => {
+    const form = await page.$('#register');
+    if (!form) return false;
+    try {
+      const listeners = await page.registrationCdp.send('DOMDebugger.getEventListeners', { objectId:form.remoteObject().objectId });
+      return listeners.listeners.some(listener => listener.type === 'submit');
+    } finally { await form.dispose(); }
+  }, `${label}-actual-register-submit-listener-ready`);
   await type(page, '#register input[name="name"]', account.name);
   await type(page, '#register input[name="password"]', account.password);
   await type(page, '#register input[name="again"]', account.password);
   await Promise.all([page.waitForNavigation({ waitUntil:'domcontentloaded' }), page.click('#register button[type="submit"]')]);
   assert(new URL(page.url()).pathname === '/account', `${label}-real-registered`);
   await page.waitForFunction(name => document.querySelector('#acc-name')?.textContent === name, {}, account.name);
+  // The successful page navigation can invalidate a CDP response body read;
+  // use its normal, real /me response as a second authoritative identity source.
+  await waitFor(() => page.safeMe?.identity?.marker === account.name, `${label}-real-public-account-id`);
+  assert(result.ownedAccounts.some(entry => entry.marker === account.name && entry.accountId === page.safeMe.identity.accountId), `${label}-own-account-id-recorded`);
   await safeShot(page, label);
 }
 async function enterNewProject(page, name, label) {
