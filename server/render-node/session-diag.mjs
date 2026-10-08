@@ -123,14 +123,14 @@ export function sessionLogger(write, { extra = {}, throttle = createLogThrottle(
 export const SESSION_LINE_RE = /^\[(?:queue-node|artifact-push)\] docservice\.(session\.[a-z-]+)\b/;
 
 /**
- * 预渲染进程输出里的逐任务收尾行(`docs/archive/agent-reports/AGENT-stall-phases.md`):`[queue-node] node.task-<lost|failed|discarded|completed|dedup> {…}`
+ * 预渲染进程输出里的逐任务收尾行(`docs/archive/agent-reports/AGENT-stall-phases.md`):`[queue-node] node.task-<lost|failed|superseded|discarded|completed|dedup> {…}`
  * 与产物库没收全的 `[queue-node] sink.incomplete {…}`(`vite-plugin-frames.ts` 的 `taskEventLog`、`artifact-transfer.mjs` 的 `put`),
  * 以及产物库去重那一步的 `sink.has-miss`(为什么没走去重)/ `sink.has-pushed` / `sink.has-push-failed`、内容库清单读写出错的
  * `manifest.get-failed` / `manifest.put-failed`(`artifact-transfer.mjs` 的 `has`、`writeManifest`;`docs/archive/agent-reports/AGENT-xnode-dedup.md`)。
  * 另有队列细任务渲一段的分段耗时 `executor.render-timing`(`prerender-executor.mjs`;`docs/archive/agent-reports/AGENT-uc-latency.md`)。
  * 这些行只带任务 id、原因、阶段与毫秒数,不带会话号与凭证。
  */
-export const TASK_LINE_RE = /^\[queue-node\] (node\.task-(?:lost|failed|discarded|completed|dedup)|sink\.(?:incomplete|has-miss|has-pushed|has-push-failed)|manifest\.(?:get|put)-failed|executor\.render-timing)\b/;
+export const TASK_LINE_RE = /^\[queue-node\] (node\.task-(?:lost|failed|superseded|discarded|completed|dedup)|sink\.(?:incomplete|has-miss|has-pushed|has-push-failed)|manifest\.(?:get|put)-failed|executor\.render-timing)\b/;
 
 /**
  * 自动渲染节点的起停行(`docs/archive/agent-reports/AGENT-desktop-auto-node.md`):`[queue-node] render-node.<事件> {…}`(交接、起停、补推、等页面)、节点没起来的原因 `[queue-node] queue.skip {…}`

@@ -43,10 +43,11 @@ const BAKERY = path.join(SERVER, 'bakery');
  *   - `reopen-installed-lib.test.mjs` 测 `scripts/probes/reopen-installed-lib.mjs`(真实安装验收探针里一次启动算不算数的判定、已装构建与清单的核对);
  *   - `reopen-installed-state.test.mjs` 测 `scripts/probes/reopen-installed-state.mjs`(安装状态的备份、比对、还原)与 `scripts/probes/reopen-sealed.mjs`(探针之间只传公钥与密文的口令交接)。
  *   - `test-suite-policy.test.mjs` 测 `scripts/test-suite-policy.mjs` 与 `scripts/test-event-reporter.mjs` 的测试进程异常重跑判定。
+ *   - `probe-timings.test.mjs` 测 `scripts/probes/probe-timings.mjs`(探针共用的耗时记录件:耗时只记录,不当闸门)及它与验收运行器对 TIMINGS 行的解析一致。
  *
  * 多一条都要在这里显式写出来,加不进来就说明依赖方向真的破了。
  */
-const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs', 'server/test/port-file.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/m8-judges.test.mjs', 'server/test/maint-3-claim-gate-judge.test.mjs', 'server/test/reopen-installed-lib.test.mjs', 'server/test/reopen-installed-state.test.mjs', 'server/test/test-suite-policy.test.mjs']);
+const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/four-stage-acceptance.test.mjs', 'server/test/probe-timings.test.mjs', 'server/test/wait-writes-quiet.test.mjs', 'server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs', 'server/test/m7-judge.test.mjs', 'server/test/m8-no-lan.test.mjs', 'server/test/no-user-dirs.test.mjs', 'server/test/global-setup.mjs', 'server/test/port-file.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/m8-judges.test.mjs', 'server/test/maint-3-claim-gate-judge.test.mjs', 'server/test/reopen-installed-lib.test.mjs', 'server/test/reopen-installed-state.test.mjs', 'server/test/test-suite-policy.test.mjs']);
 
 const CODE = /\.(mjs|mts|ts|tsx)$/;
 

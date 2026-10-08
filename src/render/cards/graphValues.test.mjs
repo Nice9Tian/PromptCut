@@ -26,3 +26,9 @@ test('bitmap 是 CPU 像素算法的出口', () => {
   const image = { width: 2, height: 2 };
   assert.deepEqual(bitmap(image), { type: 'bitmap', image });
 });
+
+test('默认 at 查询显式保留卡片源时间，裁切与输入映射不退回局部零点', async () => {
+  const { sourceValueAt } = await import('./graphValues.ts');
+  assert.deepEqual(sourceValueAt({ nodeId: 'm', offset: -1.5, rate: 1 }, 2.5), { type: 'source', nodeId: 'm', offset: -1.5, rate: 1, time: 2.5 });
+  assert.equal(sourceValueAt({ nodeId: 'm' }, 2.5, 7).time, 7);
+});

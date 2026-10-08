@@ -1,13 +1,13 @@
 /**
  * C10 其余 `claude/c10-ui` 的验收探针(`docs/plan/c10-contract.md` 第 9、10、11 节,第 20 节 C10-A6、A7、A8)。
- * 全程在本机:本机托管组合代替阿里云,小代理代替 nginx,在线构建当页面,绝不连真正的托管端。
+ * 全程在本机:本机托管组合代替阿里云,共用的本机托管代理 `lib/hosted-proxy.mjs` 代替 nginx(同站跨源的 pc.localhost / s1. / s2.,带策略头与 `/media-s/`),在线构建当页面,绝不连真正的托管端。
  *
  *   npx vite build --mode online --outDir <目录>
  *   node scripts/probes/c10-ui-probe.mjs --dist <在线构建目录> [--out <截图目录>]
- *        [--proxy-port 5703] [--proxy2-port 5706] [--doc-port 5704] [--asset-port 5705]
+ *        [--proxy-port 5780] [--proxy2-port 5785] [--doc-port 5783] [--asset-port 5784]
  *
  * 起的东西(都由本探针起、跑完关掉):托管组合(文档服务、素材服务,数据目录在系统临时目录);两个同形的代理
- * (成员甲走 --proxy-port,成员乙走 --proxy2-port;只断甲的那一个,乙照常在线);无头 Chrome。
+ * (成员甲走 --proxy-port 起的三个源,成员乙走 --proxy2-port 起的三个源;只断甲的那一套,乙照常在线;各占 +0～+2 三个端口);无头 Chrome。
  *
  * 断言:
  *   A6 用户卡(仓库里的 `mu-animated-shiny-text`)的片段(2026-09-29 用户改语义:有预渲染结果就照贴,与内置卡相同):
@@ -29,12 +29,12 @@ import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
-import http from 'node:http';
-import net from 'node:net';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
+import './lib/localhost-dns.cjs'; // Node 这边(A8 的 fetch)也认得 *.localhost
+import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 
 const argv = process.argv.slice(2);
@@ -42,12 +42,12 @@ const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), 'c10-ui-shots')));
-const PROXY_PORT = Number(arg('--proxy-port', 5703));
-const PROXY2_PORT = Number(arg('--proxy2-port', 5706));
-const DOC_PORT = Number(arg('--doc-port', 5704));
-const ASSET_PORT = Number(arg('--asset-port', 5705));
-const PROXY = `http://127.0.0.1:${PROXY_PORT}`;
-const PROXY2 = `http://127.0.0.1:${PROXY2_PORT}`;
+const PROXY_PORT = Number(arg('--proxy-port', 5780));
+const PROXY2_PORT = Number(arg('--proxy2-port', 5785));
+const DOC_PORT = Number(arg('--doc-port', 5783));
+const ASSET_PORT = Number(arg('--asset-port', 5784));
+const PROXY = proxyOrigins(PROXY_PORT).editor; // 编辑器页 pc.localhost:<端口>,舞台 s1./s2.pc.localhost:<端口+1/+2>(同站跨源)
+const PROXY2 = proxyOrigins(PROXY2_PORT).editor;
 const DOC_DIRECT = `http://127.0.0.1:${DOC_PORT}`;
 fs.mkdirSync(OUT, { recursive: true });
 const DL = path.join(OUT, 'downloads');
@@ -84,65 +84,12 @@ const TEXT = {
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c10-ui-hosted-'));
 const combo = await startHostedCombo({
   dataDir, docPort: DOC_PORT, assetPort: ASSET_PORT, host: '127.0.0.1',
-  docPublicUrl: `ws://127.0.0.1:${PROXY_PORT}/hosted/`, assetPublicUrl: `${PROXY}/media/api/asset`, log: () => {},
+  docPublicUrl: `ws://pc.localhost:${PROXY_PORT}/hosted/`, assetPublicUrl: `${PROXY}/media/api/asset`, log: () => {},
 });
 
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
-/** 同形代理(代替 nginx)。`ctl.blockWs` 断 WebSocket(现有的掐掉、新的拒掉),`ctl.blockMedia` 让 `/media/` 连不上 */
-function makeProxy(port, origin) {
-  const ctl = { log: [], blockWs: false, blockMedia: false, sockets: new Set() };
-  const forward = (req, res, upPort, strip) => {
-    const target = req.url.slice(strip.length) || '/';
-    const up = http.request({ host: '127.0.0.1', port: upPort, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => { res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res); });
-    up.on('error', () => { res.statusCode = 502; res.end('bad gateway'); });
-    req.pipe(up);
-  };
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, origin);
-    ctl.log.push({ at: Date.now(), m: req.method, p: url.pathname });
-    if (url.pathname.startsWith('/hosted/')) return forward(req, res, DOC_PORT, '/hosted');
-    if (url.pathname.startsWith('/media/')) {
-      if (ctl.blockMedia) return req.socket.destroy();
-      return forward(req, res, ASSET_PORT, '/media');
-    }
-    const sendFile = (file, cache) => { res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache }); fs.createReadStream(file).pipe(res); };
-    const index = path.join(DIST, 'index.html');
-    if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-    if (url.pathname.startsWith('/editor/assets/')) {
-      const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-      if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404); return res.end('not found'); }
-      return sendFile(f, 'public, max-age=31536000, immutable');
-    }
-    if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-    res.writeHead(404); res.end('not found');
-  });
-  server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, origin);
-    if (!url.pathname.startsWith('/hosted/') || ctl.blockWs) return socket.destroy();
-    const target = url.pathname.slice('/hosted'.length) + url.search;
-    const up = net.connect(DOC_PORT, '127.0.0.1', () => {
-      const lines = [`${req.method} ${target} HTTP/1.1`];
-      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-      up.write(`${lines.join('\r\n')}\r\n\r\n`);
-      if (head?.length) up.write(head);
-      up.pipe(socket); socket.pipe(up);
-    });
-    const pair = { socket, up };
-    ctl.sockets.add(pair);
-    const drop = () => ctl.sockets.delete(pair);
-    socket.on('close', drop); up.on('close', drop);
-    up.on('error', () => socket.destroy());
-    socket.on('error', () => up.destroy());
-  });
-  ctl.cutWs = () => { ctl.blockWs = true; for (const p of ctl.sockets) { p.socket.destroy(); p.up.destroy(); } ctl.sockets.clear(); };
-  ctl.listen = () => new Promise((r) => server.listen(port, '127.0.0.1', r));
-  ctl.close = () => new Promise((r) => { for (const p of ctl.sockets) { p.socket.destroy(); p.up.destroy(); } server.close(() => r()); server.closeAllConnections?.(); });
-  return ctl;
-}
-const px1 = makeProxy(PROXY_PORT, PROXY);
-const px2 = makeProxy(PROXY2_PORT, PROXY2);
-await px1.listen();
-await px2.listen();
+/** 两套共用的本机托管代理(`lib/hosted-proxy.mjs`,full 策略:同站跨源的三个源 + 策略头 + `/media-s/`);成员甲走第一套、乙走第二套,只断甲的那一套 */
+const px1 = await startHostedProxy({ dist: DIST, basePort: PROXY_PORT, docPort: DOC_PORT, assetPort: ASSET_PORT, policy: 'full' });
+const px2 = await startHostedProxy({ dist: DIST, basePort: PROXY2_PORT, docPort: DOC_PORT, assetPort: ASSET_PORT, policy: 'full' });
 
 /* ------------------------------------------------------------------ 共享项目 */
 const stamp = Date.now().toString(36);
@@ -163,6 +110,20 @@ async function wsAsCreator() {
     ws.send(JSON.stringify({ ...msg, reqId }));
   });
   return { ask, close: () => ws.close() };
+}
+
+/**
+ * 在线页面只加入、不新建(`dce4b22b`,2026-10-04:加入用 `initialize: false`,服务端没有项目内容就拒绝,不拿本地这份去盖),
+ * 所以项目要先有内容才进得去。探针替创建者的桌面版写进一份空项目(尺寸、时长同「新建项目」的缺省)。
+ */
+{
+  const seeder = await wsAsCreator();
+  const opened = await seeder.ask({ type: 'project.open', projectId: made.projectId });
+  const body = { version: 1, id: `c10ui-seed-${made.projectId.slice(-8)}`, name: NAME, width: 1920, height: 1080, fps: 30, duration: 30, themeId: 'midnight', media: [],
+    tracks: [{ id: 't-1', name: '序列 1', clips: [] }, { id: 't-2', name: '序列 2', clips: [] }] };
+  const seeded = await seeder.ask({ type: 'project.op', projectId: made.projectId, opId: randomBytes(16).toString('base64url'), ops: [{ op: 'set', path: '', value: body }] });
+  check(!/error|reject/i.test(String(opened?.type ?? '') + String(seeded?.type ?? '')), '替创建者写进空项目', { opened: opened?.type, seeded: seeded?.type });
+  seeder.close();
 }
 
 /* ------------------------------------------------------------------ 浏览器 */
@@ -264,7 +225,7 @@ try {
 
   /* ============================================================ A6 用户卡(新语义:照取清单与字节;完整断言在 online-user-cards-probe) */
   await sleep(8000); // 层表每几秒轮询一次;预取按播放头前后 2 秒
-  const assetReq = (hashes) => px1.log.filter((r) => /\/media\/api\/asset\/(px|snap)\//.test(r.p) && hashes.some((h) => r.p.endsWith(h))).length;
+  const assetReq = (hashes) => px1.requests.filter((r) => /\/media\/api\/asset\/(px|snap)\//.test(r.path) && hashes.some((h) => r.path.split('?')[0].endsWith(h))).length;
   const a6 = {};
   a6.snapUser = await until('A6 用户卡那一层照取 snap/', () => { const n2 = assetReq(layers[0].full); return n2 > 0 ? n2 : null; }, 20_000) ?? 0;
   a6.pxUser = assetReq(layers[0].small);
@@ -456,7 +417,7 @@ try {
 
   /* ------------------------------------------------ /api 守卫与请求记录 */
   a7.apiBlocked = [...await A.evaluate(() => window.__pcApiBlocked ?? []), ...await B.evaluate(() => window.__pcApiBlocked ?? [])];
-  a7.apiRequests = [...px1.log, ...px2.log].filter((r) => /^\/(editor\/)?api\//.test(r.p)).map((r) => r.p);
+  a7.apiRequests = [...px1.requests, ...px2.requests].filter((r) => /^\/(editor\/)?api\//.test(r.path)).map((r) => r.path);
   check(a7.apiBlocked.length === 0 && a7.apiRequests.length === 0, 'A7 全程 /api 守卫一条没拦、网络记录里没有 /api 请求', { blocked: a7.apiBlocked.slice(0, 5), req: a7.apiRequests.slice(0, 5) });
   a7.pageErrors = [...A.errors, ...B.errors];
   a7.seen = (await seen(A)).map((s) => ({ t: Math.round((s.at - t0) / 1000), kind: s.kind, unsent: s.unsent }));

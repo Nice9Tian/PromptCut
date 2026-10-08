@@ -32,7 +32,7 @@
  */
 import { QUEUE_DEFAULTS } from '../../render-queue/constants.mjs';
 import { parseInbound, makeMessage, prioritySummaryValue, NODE_TYPES, PUBLISHER_TYPES } from '../../render-queue/messages.mjs';
-import { describeEnvironment, isChromiumUserAgent } from '../../render-node/fingerprint.mjs';
+import { describeEnvironment, describeCardEnvironment, isChromiumUserAgent } from '../../render-node/fingerprint.mjs';
 
 export const RENDER_QUEUE_MODULE = 'render-queue';
 
@@ -103,8 +103,25 @@ function admitNodeHello(principal, msg, nodeUserOf) {
       const envFingerprint = describeEnvironment({ platform: env.platform, renderer: env.renderer, vendor: env.vendor, chromeVersion: env.userAgent }).fingerprint;
       out = { ...msg, envFingerprint };
     }
+    // 块 N(`docs/plan/online-card-exec-contract.md` 第 7 节第 2 条):纯浏览器节点执行用户卡、图卡用的指纹 = 三项环境值再加
+    // 页面报的「在线卡片运行时版本」(`msg.cardRuntime`),同样由这里算、自报的不作数;没报或不合格就没有这个指纹。
+    // 别的 profile、没有 environment 的连接一律去掉这一项:只有浏览器节点有它。`envFingerprint` 一个字不变。
+    const { cardRuntime, ...rest } = out;
+    out = rest;
+    if (msg.profile === 'browser') {
+      const cardEnv = describeCardEnvironment({ platform: env.platform, renderer: env.renderer, vendor: env.vendor, chromeVersion: env.userAgent, cardRuntime });
+      out = { ...out, cardEnvFingerprint: cardEnv.cardEnvFingerprint };
+    } else {
+      const { cardEnvFingerprint: _own, ...others } = out;
+      out = others;
+    }
   } else if (browserOwned) {
     return { error: { reason: 'bad-message', detail: '纯浏览器节点要报 environment（页面的原始环境值），指纹由文档服务算' } };
+  }
+  if (msg.environment === undefined || msg.environment === null) {
+    // 没有原始环境值就算不出指纹:自报的 cardRuntime、cardEnvFingerprint 不作数
+    const { cardRuntime: _r, cardEnvFingerprint: _c, ...bare } = out;
+    out = bare;
   }
   const bound = typeof nodeUserOf === 'function' && typeof msg.nodeId === 'string' ? nodeUserOf(msg.nodeId) : null;
   if (bound !== null && principal && bound !== principal.userId) {
@@ -379,6 +396,19 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
       }
       const id = coalesceIdOf(message);
       return id === null ? {} : { coalesceKey: `task:${id}` };
+    },
+
+    /**
+     * 立即放回这条连接的节点手里的全部认领（不是 G.3 的模块接口）：逐个替它发 `task.release`，任务当场回到未认领，
+     * 不等断线的宽限期。关掉托管方渲染节点的开关时用（`docs/plan/hosted-render-contract.md` 第 3 节）。回放回的条数
+     */
+    releaseClaims(connId, reason = 'released') {
+      const nodeId = conns.get(connId)?.node?.nodeId;
+      if (!nodeId || typeof q.describe !== 'function') return 0;
+      const d = q.describe();
+      const held = (Array.isArray(d?.tasks) ? d.tasks : []).filter((t) => t.state === 'claimed' && t.claim?.nodeId === nodeId);
+      for (const t of held) q.handle(connId, { type: 'task.release', id: t.id, token: t.claim.token, reason });
+      return held.length;
     },
 
     /** 这条连接的节点此刻持有的认领数（不是 G.3 的模块接口，给成员列表用） */

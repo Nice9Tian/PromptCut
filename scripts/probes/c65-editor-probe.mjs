@@ -571,7 +571,7 @@ async function phaseShared() {
   check('members-list', pop.includes('alice (自己)') && pop.includes('[创建者]') && pop.includes('[编辑中]') && pop.includes('[Agent ×1]') && pop.includes('bob (MacBook)') && pop.includes('bob · Agent · 第 2 个对话') && pop.includes('项目管理（仅创建者可见）'), { pop });
   await shot(A, 'members-list');
   const btnText = await P(A, () => document.querySelector('[data-pc=members-button]')?.innerText ?? '');
-  check('members-button-badge', /成员: \d+ 人/.test(btnText), { btnText });
+  check('members-button-badge', /成员[:：] ?\d+ 人/.test(btnText), { btnText });
 
   // ---------- 创建者操作:改项目密码(验证 → 改),成员收到气泡
   await clickText(A, '改项目密码', '[data-pc=members-pop]');

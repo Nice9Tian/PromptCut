@@ -15,6 +15,7 @@ import { clips } from "./actions/clips";
 import { media } from "./actions/media";
 import { effects } from "./actions/effects";
 import { audio } from "./actions/audio";
+import { sound } from "./actions/sound";
 import { captions } from "./actions/captions";
 import { cuts } from "./actions/cuts";
 import { properties } from "./actions/properties";
@@ -28,6 +29,7 @@ export const actions = {
   ...media,
   ...effects,
   ...audio,
+  ...sound,
   ...captions,
   ...cuts,
   ...properties,

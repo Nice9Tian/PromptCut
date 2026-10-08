@@ -34,7 +34,10 @@
  * 用它比「相对修复前 p90 涨幅 ≤ 1 ms」)。修复前那一份用 `--label before` 在修复前的代码上跑出来,
  * 再用 `--baseline <那份 json>` 比。
  *
- * 验收:`transparent` 拍数为 0(`placeholder-delay` 单列、不算);给了 `--baseline` 时 `taskMs` 的 p90 涨幅 ≤ 1 ms。
+ * 验收:`transparent` 拍数为 0(`placeholder-delay` 单列、不算)。
+ * 耗时只记录(verification.md「耗时只记录,不当闸门」):每拍主线程耗时、给了 `--baseline` 时 `taskMs` 的 p90 涨幅
+ * (原门槛 ≤ 1 ms)都只写进 `TIMINGS` 行与结果的 `timings`,不决定过不过。等待时限(60 秒的记录等待是软的、
+ * 600 秒的满密度等待)只为防卡死。
  */
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -42,6 +45,7 @@ import path from 'node:path';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
+import { createTimings } from './probe-timings.mjs';
 
 const args = process.argv.slice(2);
 const origin = devOrigin(args);
@@ -55,6 +59,7 @@ const PAGE_PRELOAD = args.includes('--page-preload');
 const RUN = Date.now().toString(36);
 const fails = [];
 const notes = [];
+const timings = createTimings('preview-fallback-probe');
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pct = (xs, q) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); return +s[Math.min(s.length - 1, Math.floor(s.length * q))].toFixed(3); };
@@ -390,8 +395,13 @@ try {
       if (!b?.taskMs?.p90 || s.taskMs.p90 === null) continue;
       const delta = +(s.taskMs.p90 - b.taskMs.p90).toFixed(3);
       out.vsBaseline[name] = { before: b.taskMs.p90, after: s.taskMs.p90, delta };
-      check(delta <= 1, `${name}:每拍主线程耗时 p90 相对修复前涨幅 ≤ 1 ms`, out.vsBaseline[name]);
+      // 耗时只记录(verification.md「耗时只记录,不当闸门」):原来 delta ≤ 1 ms 是通过条件
+      timings.record(`${name}:每拍主线程耗时 p90 相对基线的涨幅`, delta, { formerLimit: '≤ 1 ms' });
     }
+  }
+  for (const [name, s] of Object.entries(out.scenarios)) {
+    timings.record(`${name}:每拍主线程耗时 p90(CDP TaskDuration)`, s.taskMs.p90);
+    timings.record(`${name}:舞台一拍干活时长 p90`, s.workMs.p90);
   }
   out.pageErrors = errors;
 } catch (error) {
@@ -399,10 +409,12 @@ try {
 } finally {
   out.fails = fails;
   out.notes = notes;
+  out.timings = timings.list;
   await browser.close().catch(() => {});
   const text = JSON.stringify(out, null, 2);
   if (JSON_OUT) await fs.writeFile(JSON_OUT, text);
   console.log(text);
+  timings.print();
   console.log(fails.length ? `FAIL ${fails.length}` : 'PASS');
   process.exit(fails.length ? 1 : 0);
 }

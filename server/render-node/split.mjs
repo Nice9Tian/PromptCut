@@ -57,6 +57,17 @@ import { resultKeyOf } from './fingerprint.mjs';
  * 已锁的卡照旧按锁出一份(锁在浏览器指纹上时那一份同样带 bake / compositing);浏览器指纹与自己相同、
  * 或没给浏览器指纹时,切分与原来完全相同。
  *
+ * # 用户卡、图卡也可以给浏览器(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条,2026-10-06 用户改语义)
+ *
+ * 任务的 `requires.userCards` 或 `requires.graphCards` 为真的卡(在线页面在舞台里转译、执行同步来的用户卡与图卡),
+ * 调用方给 `browserCards`(页面自报在清单计划 `input.browser` 里的 `{ cardEnvFingerprint, userCards, graphCards, cardSources }`,
+ * 经 `browserCardsOf` 规整)和 `browserCardEnvFingerprints`(文档服务确认「本项目有同一用户的在线浏览器节点带着这些
+ * `cardEnvFingerprint`」)时,两边对得上才出浏览器那一份:
+ *   - 页面声明了对应能力(`userCards` / `graphCards`),且这张卡 `requires.cardSources` 里每一项的代码身份都在 `browserCards.cardSources` 里;
+ *   - 浏览器那一份的指纹和结果键用 `cardEnvFingerprint`(不是页面的 `envFingerprint`):结果键 = 内容键 × cardEnvFingerprint,
+ *     所以同一台机器上的桌面节点与浏览器节点对同一张用户卡 / 图卡的结果键不同、不串。
+ * 不给 `browserCards` 或对不上时,用户卡、图卡不出浏览器那一份,切分与原来相同。内置卡片的切分与结果键一个字不变。
+ *
  * 纯函数:不读环境变量、不做 I/O。
  */
 
@@ -135,20 +146,39 @@ const BROWSER_WEIGHTS = new Set(['light', 'medium']);
 export const BROWSER_EXCLUDED_CARD = /^lottie(?:-|$)/;
 
 /**
- * 这张卡纯浏览器做不做得了(M7 契约 D1、D4):共享档、独立卡、不是用户卡图卡、没改过源码(`cardSources` 为空)、
- * light / medium、不用只在发布方本机的素材;另外不是画布卡(`canvasHeavy`:逐帧顺推与桌面不等价)、不是 Lottie 素材卡、
+ * 这张卡纯浏览器做不做得了(M7 契约 D1、D4):共享档、独立卡、light / medium、不用只在发布方本机的素材;
+ * 内置卡片要没改过源码(`cardSources` 为空);用户卡、图卡(块 N)要本页声明能运行(`pageCards`)且这张卡要的代码身份本页都有;
+ * 另外不是画布卡(`canvasHeavy`:逐帧顺推与桌面不等价)、不是 Lottie 素材卡、
  * 调用方没标它的帧超体积上限(`control.snapshotOversize`,执行器按本机快照库里已记为超限的内容键给)。
  * `requires` 是这张卡自己那一份的 requires(已含 localMedia)。
  */
-function browserEligible({ tier, compositing, requires, weight, control }) {
+function browserEligible({ tier, compositing, requires, weight, control, pageCards = null }) {
   return tier === 'shared' && compositing === 'independent'
-    && requires.userCards === false && requires.graphCards === false
-    && Object.keys(requires.cardSources ?? {}).length === 0
+    && cardCodeAllowed(requires, pageCards)
     && !('localMedia' in requires)
     && BROWSER_WEIGHTS.has(weight?.class)
     && control?.capabilities?.canvasHeavy !== true
     && !BROWSER_EXCLUDED_CARD.test(String(control?.cardId ?? ''))
     && control?.snapshotOversize !== true;
+}
+
+/** 这张卡的任务用不用在节点里执行用户卡、图卡的代码 */
+const runsCardCode = requires => requires.userCards === true || requires.graphCards === true;
+
+/**
+ * 卡片代码这一条(`browserEligible` 的一部分):
+ *   内置卡片:`cardSources` 为空(没改过源码);
+ *   用户卡、图卡:页面声明了对应能力、`cardSources` 非空(用户卡一定有代码身份,空了说明切分方没有身份可对)、
+ *   每一项的代码身份页面都在 `pageCards.cardSources` 里(同一张卡的身份对不上就是页面手里是另一版,不给)。
+ */
+function cardCodeAllowed(requires, pageCards) {
+  const sources = Object.entries(requires.cardSources ?? {});
+  if (!runsCardCode(requires)) return requires.userCards === false && requires.graphCards === false && sources.length === 0;
+  if (!pageCards) return false;
+  if (requires.userCards === true && !pageCards.userCards) return false;
+  if (requires.graphCards === true && !pageCards.graphCards) return false;
+  if (sources.length === 0) return false;
+  return sources.every(([cardId, version]) => pageCards.cardSources?.[cardId] === version);
 }
 
 /** 浏览器那一份要的隔离单卡工程参数(M7 契约第 4.3 节):页面照桌面 `isolatedCardProject` 的变换载入,不算 cardSampling */
@@ -179,6 +209,8 @@ export function splitPlan({
   usesLocalMedia = () => true,   // (control) => boolean;流任务传 { clipId: topClipId, kind: 'stream' }
   lane = 'normal',          // 'backfill':补渲计划任务切出的细任务,priority 一律标 'backfill'(c10a 契约第 17 节)
   browserFingerprints = [], // 本项目在线、同一用户的纯浏览器节点的指纹(M7 契约 D1):浏览器可做、没锁的卡另出这些指纹的一份
+  browserCards = null,      // 块 N:本页能运行的用户卡、图卡(`browserCardsOf(planTask.input.browser)` 的结果),见上文「用户卡、图卡也可以给浏览器」
+  browserCardEnvFingerprints = [], // 块 N:文档服务确认的在线浏览器节点的 cardEnvFingerprint;`browserCards.cardEnvFingerprint` 不在里面就不出用户卡、图卡的浏览器那一份
   browser = null,           // 同上的另一种写法:`{ nodeId, envFingerprint }` 或它的数组(契约第 3.3 节的形状)。
                             // 注意:切分方不读 `planTask.input.browser`(页面自报的),浏览器指纹以文档服务给的为准
 }) {
@@ -197,6 +229,9 @@ export function splitPlan({
   const browserSet = new Set([...(Array.isArray(browserFingerprints) ? browserFingerprints : []), ...browserAlias]
     .filter(fp => typeof fp === 'string' && fp !== ''));
   const browserFps = [...browserSet].filter(fp => fp !== envFingerprint);
+  /** 本页的用户卡、图卡运行情况:页面自报、且文档服务确认过有这样一台在线节点才算数 */
+  const cardEnvSet = new Set((Array.isArray(browserCardEnvFingerprints) ? browserCardEnvFingerprints : []).filter(fp => typeof fp === 'string' && fp !== ''));
+  const pageCards = browserCards && typeof browserCards.cardEnvFingerprint === 'string' && cardEnvSet.has(browserCards.cardEnvFingerprint) ? browserCards : null;
   const mediaOwner = typeof localMedia === 'string' && localMedia !== '' ? localMedia : null;
   /** 本地档能力闸(M6c X2):这一项的输入用到只在发布方本机的素材时,requires 加 `localMedia` */
   const gateLocalMedia = (requires, control) => {
@@ -261,13 +296,17 @@ export function splitPlan({
     gateLocalMedia(requires, control);
     const weight = weightOf(control);
     // M7 D1:这张卡出哪几份。没锁(或锁在自己的指纹上)、浏览器做得了时另出浏览器指纹的;锁在别处的照锁只出一份
-    const eligible = browserSet.size > 0 && browserEligible({ tier, compositing, requires, weight, control });
-    const fingerprints = eligible && lockOf(lockKey) == null && keying.fingerprint === envFingerprint ? [keying.fingerprint, ...browserFps] : [keying.fingerprint];
+    // 用户卡、图卡(块 N)的浏览器那一份用页面的 cardEnvFingerprint;内置卡片照旧用浏览器的 envFingerprint
+    const cardTask = runsCardCode(requires);
+    const eligible = (cardTask ? pageCards !== null : browserSet.size > 0) && browserEligible({ tier, compositing, requires, weight, control, pageCards });
+    const copyFps = cardTask ? (pageCards ? [pageCards.cardEnvFingerprint] : []) : browserFps;
+    const browserOf = cardTask ? new Set(copyFps) : browserSet;
+    const fingerprints = eligible && lockOf(lockKey) == null && keying.fingerprint === envFingerprint ? [keying.fingerprint, ...copyFps] : [keying.fingerprint];
     const dual = fingerprints.length > 1;
     for (const fingerprint of fingerprints) {
       const resultKey = resultKeyOf(contentKey, fingerprint);
       // 浏览器那一份(或锁在浏览器指纹上、照锁出的那一份)带页面生成快照要的两项
-      const forBrowser = eligible && browserSet.has(fingerprint);
+      const forBrowser = eligible && browserOf.has(fingerprint);
       const inputOf = () => {
         const input = { clipId, cardId, entryKey: tier === 'local' ? entryKey : null, contentKey, canvasHeavy };
         if (dual) input.dual = true;

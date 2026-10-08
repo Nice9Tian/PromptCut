@@ -5,7 +5,7 @@
  *   C10-UI-01 表 A 的文案（顶栏五种状态、离线常驻提示、置灰悬停的模板、时间轴徽标「需要本地 PC 渲染辅助」——
  *             2026-09-29 用户定与舞台图标同一句）以原文出现在 `src/` 的非测试源文件里；
  *   C10-UI-02 「该模式暂不支持素材输入的音频图卡」「该模式暂不支持自定义卡」不再出现（第 9 节：并入图标；徽标换了文字）；
- *   C10-UI-03 用户卡、图卡（含内容库同步来的、本机没有定义的用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
+ *   C10-UI-03 本页运行不了的用户卡、图卡（内容库同步来的没载入成功的；图卡；低内存档下的全部用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
  *             选帧、报缺口、取字节；暂停态整台「已精确」时它们的快照照挂（停下不追）——2026-09-29 用户改语义，撤销原豁免；
  *   C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧，同步表不影响桌面；
  *   C10-RA-01 `/api` 棘轮清单只减不增：清单是基线的子集，不重复。
@@ -124,9 +124,22 @@ itUi('C10-UI-03 在线时用户卡、图卡（含同步来的）与内置重卡�
     assert.deepEqual(feed.suppressedAt({ project: project(clips()), t: 1, playing: true }), ['b', 'g', 's', 'u'], '播放中一律抑制');
     feed.markAllSettled('front');
     const paused = feed.planFeed({ project: project(clips()), t: 1, playing: false });
-    assert.deepEqual([...paused.picks.keys()].sort(), ['g', 's', 'u'], '停下只剩本机跑不了的卡还贴快照');
+    // 2026-10-06(online-card-exec-contract.md 第 6 节):构建时就在包里的用户卡本页能运行,停下照内置卡追精确、不再贴快照
+    assert.deepEqual([...paused.picks.keys()].sort(), ['g', 's'], '停下只剩本页运行不了的卡还贴快照');
+    // 同步来的卡载入成功(运行状态 ready):不再一律按重,照分派表(表里没判它重)
+    registry.setCardRunStates([['c10-synced-card', { state: 'ready', version: 'g1' }]]);
+    assert.deepEqual(feed.suppressedAt({ project: project(clips()), t: 1, playing: true }), ['b', 'g', 'u'], '能运行的同步卡不再一律抑制');
+    assert.deepEqual([...feed.planFeed({ project: project(clips()), t: 1, playing: false }).picks.keys()].sort(), ['g'], '停下它也追精确');
+    registry.setCardRunStates([['c10-synced-card', { state: 'missing-module', detail: 'lodash' }]]);
+    assert.deepEqual(feed.suppressedAt({ project: project(clips()), t: 1, playing: true }), ['b', 'g', 's', 'u'], '运行不了的照旧一律抑制');
+    // 低内存档不执行用户卡的代码:构建时的用户卡也回到「本页运行不了」
+    placeholder.setLocalOnlyLowMemory(true);
+    assert.deepEqual([...feed.planFeed({ project: project(clips()), t: 1, playing: false }).picks.keys()].sort(), ['g', 's', 'u'], '低内存档:构建时的用户卡停下也不追');
+    placeholder.setLocalOnlyLowMemory(false);
   } finally {
     placeholder.setOnlineBrowserMode(false);
+    placeholder.setLocalOnlyLowMemory(false);
+    registry.setCardRunStates([]);
   }
 });
 

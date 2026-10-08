@@ -114,6 +114,7 @@ export function validateCardGraph(raw) {
 export function projectCardGraph(project, getLegacyCard = () => undefined) {
   const nodes = structuredClone(project.cardNodes ?? []), outputs = [];
   /** 图卡片段(定义来自注册表、写了 card / audio)。判据只看定义,不看节点。 */
+  const audiovisual = def => !!def?.audio && !!(def.card || def.Component);
   const graphCard = id => { const def = getLegacyCard(id); return def && (typeof def.card === 'function' || typeof def.audio === 'function') ? def : undefined; };
   const nodeIds = new Set(nodes.map(node => node.id));
   const media = new Map((project.media ?? []).map(value => [value.id, value]));
@@ -139,7 +140,7 @@ export function projectCardGraph(project, getLegacyCard = () => undefined) {
       // 面板拖入 / add_clip 建的图卡片段只有 cardId,就地合成一个渲染用的节点。
       // 这个 id 只给渲染用 —— 片段一旦被 apply_card 碰过就由物化规则换成真节点。
       if (!nodeId && graphDef) nodeId = add({ id: `@clip/${clip.id}/card`, adapter: 'card', cardId: clip.cardId,
-        kind: graphDef.kind ?? 'animation', inputs: {}, params: { ...graphDef.defaults, ...clip.params } });
+        kind: graphDef.kind ?? 'animation', ...(audiovisual(graphDef) ? { embeddedAudio: true, timeOffset: clip.mediaOffset ?? 0 } : {}), inputs: {}, params: { ...graphDef.defaults, ...clip.params } });
       if (!nodeId) continue;
       /*
        * 实例参数:节点自己存一份,但**片段指向的那个节点以 clip.params 为准**。
@@ -151,6 +152,16 @@ export function projectCardGraph(project, getLegacyCard = () => undefined) {
         if (instance?.adapter === 'card') {
           const def = getLegacyCard(instance.cardId);
           instance.params = { ...def?.defaults, ...clip.params };
+          if (audiovisual(def) || instance.embeddedAudio) {
+            instance.embeddedAudio = true;
+            const priorOffset = Number(instance.timeOffset) || 0;
+            instance.timeOffset = clip.mediaOffset ?? priorOffset;
+            // 自己的素材段已按 mediaOffset 裁切；共用时钟只折算一次。
+            for (const [name, input] of Object.entries(instance.inputs ?? {})) {
+              const ref = normalizeCardInput(input);
+              if (ref.nodeId === `@clip/${clip.id}/source`) instance.inputs[name] = { ...ref, offset: ref.offset + priorOffset - instance.timeOffset };
+            }
+          }
         }
       }
       for (const [field, library, adapter] of [['filter', 'filters', 'filter'], ['audioFx', 'audioFx', 'audio']]) {

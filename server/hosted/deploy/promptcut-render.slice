@@ -1,0 +1,24 @@
+# 托管方渲染服务的资源组（契约 docs/plan/hosted-render-contract.md 第 4 节）。
+# 放到 /etc/systemd/system/promptcut-render.slice，再 systemctl daemon-reload。
+# 渲染服务的管理进程用 `systemd-run --scope --slice=promptcut-render.slice` 起工作进程，所以 Chrome 等子进程都落在这一组里；
+# 文档服务与素材服务（PM2 的 promptcut-hosted）不在这个 slice 里，不受它限制。
+# 占位符见 server/hosted/deploy/README.md「渲染服务」一节；部署脚本 `install-render` 用 server/hosted-render/deploy.mjs 的 renderSliceUnit 生成同样内容。
+# 没有 systemd 的机器（容器）不用这个文件：管理进程自检报「无 cgroup 上限，只靠进程内看护」并照常工作。
+
+[Unit]
+Description=PromptCut hosted render service resource group
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+CPUAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+# 内存：到 MemoryHigh 内核对这一组限速，到 MemoryMax 在这一组里杀进程（通常是 Chrome）
+MemoryHigh={{MEMORY_HIGH}}
+MemoryMax={{MEMORY_MAX}}
+# 抢占时的权重是缺省 100 的五分之一；CPUQuota 是硬上限（400% = 最多 4 个核）
+CPUWeight=20
+CPUQuota={{CPU_QUOTA}}
+IOWeight=20
+TasksMax=4096

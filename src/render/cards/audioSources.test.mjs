@@ -122,3 +122,19 @@ test("没有内容哈希的老素材给一句能照做的报错", async () => wi
   const ctx = { graph: nodes, project: legacy, getCard: () => undefined, sampleRate: SR };
   await assert.rejects(() => blockOf(ctx, { clipId: "src" }, 0, 480), /重新导入/);
 }));
+
+test('声画同片段使用源时钟且显式输入偏移只折算一次', async () => withSources(async ({ evaluateCardAudio, clearAudioBlockCache }) => {
+  const { projectCardGraph } = await import('../../kernel/cardGraph.mjs');
+  const logs = []; stubFetch(logs); clearAudioBlockCache();
+  const seen = [];
+  const def = { id: 'av', defaults: {}, Component() {}, audio: (sources, range) => {
+    seen.push(range.start); return sources.source.block(range.start, range.count);
+  } };
+  const p = { media: [{ id: 'm', kind: 'video', hash: HASH }],
+    tracks: [{ id: 't', clips: [{ id: 'c', cardId: 'av', mediaId: 'm', nodeId: 'n', mediaOffset: 2.5, start: 0, end: 1, params: {} }] }],
+    cardNodes: [{ id: 'n', adapter: 'card', cardId: 'av', embeddedAudio: true, timeOffset: .5, inputs: { source: { nodeId: '@clip/c/source', offset: .5 } } }] };
+  const graph = projectCardGraph(p, () => def);
+  await evaluateCardAudio({ graph, project: p, getCard: () => def, sampleRate: SR }, 'n', { start: 7, count: 10, sampleRate: SR });
+  assert.equal(seen[0], 120007);
+  assert.equal(logs[0].start, 168007, '源时间2.5秒+显式上游偏移1秒，不能重复加mediaOffset');
+}));

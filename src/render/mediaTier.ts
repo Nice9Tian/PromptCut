@@ -1,5 +1,5 @@
 import type { MediaAsset, Project } from "../kernel/project";
-import { playableOnThisHost, probePlayable, shouldProbe } from "./playability";
+import { playableOnThisHost, probePlayable, shouldProbe } from "./playability.ts";
 
 /**
  * 「这一刻该拿哪个地址去播」—— 素材的换档判据(`docs/semantics/product/asset-service.md`「两档素材」「拉取」;

@@ -14,8 +14,15 @@ export class Agent {
    * maxInputTokens:单次请求的输入 token 预算。给了就按每轮 API 报回的真实 token 数截断
    * (见 history.fitTokens),不给就还是老的按字符数截。
    */
-  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, maxInputTokens = 0, onEvent, signal, history }) {
+  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, maxInputTokens = 0, onEvent, signal, history, onModelCall = null }) {
     Object.assign(this, { provider, system, tools, maxIterations, deepAuto, maxInputTokens, signal });
+    /*
+     * 每次向模型发请求的前后各调一次(可选;云端 Agent 的额度检查与用量记录接在这里,契约 cloud-agent-contract.md 第 6.2 节):
+     *   onModelCall('before', { round })  —— 抛错就不发这次请求,整轮以这个错结束;
+     *   onModelCall('after', { round, ok, ms, input, output, cacheRead })  —— 这一次请求的用量;它抛的错不影响这一轮。
+     * 不给时与原来逐行为相同。
+     */
+    this.onModelCall = typeof onModelCall === 'function' ? onModelCall : null;
     this.onEvent = onEvent || (() => {});
     this.history = history || new MessageHistory({ onEvent: this.onEvent });
   }
@@ -45,6 +52,13 @@ export class Agent {
       const content = [], calls = [];
       let text = '', current = '', lastInput = 0;
       const flush = () => { if (current) { content.push({ type: 'text', text: current }); current = ''; } };
+      if (this.onModelCall) {
+        await this.onModelCall('before', { round });
+        checkAbort(this.signal);
+      }
+      const callStarted = Date.now();
+      const callUsage = { input: 0, output: 0, cacheRead: 0 };
+      let callOk = false;
       const heartbeat = setInterval(() => progress(round, summarizing ? 'summarizing' : 'requesting', `仍在等待模型响应，已用时 ${Math.floor((Date.now() - started) / 1000)} 秒；可以随时停止。`), 10000);
       try {
         for await (const ev of this.provider.stream(this.history.get(), summarizing ? [] : this.tools, system, this.signal)) {
@@ -77,12 +91,20 @@ export class Agent {
             usage.input += Number(ev.input) || 0; usage.output += Number(ev.output) || 0;
             usage.cacheRead += Number(ev.cacheRead) || 0;
             lastInput = Number(ev.input) || 0;
+            callUsage.input += Number(ev.input) || 0; callUsage.output += Number(ev.output) || 0;
+            callUsage.cacheRead += Number(ev.cacheRead) || 0;
           }
         }
+        callOk = true;
       } catch (err) {
         if (!summarizing || this.signal?.aborted) throw err;
         this.onEvent({ type: 'status', text: `结果摘要请求失败：${err.message}` });
-      } finally { clearInterval(heartbeat); }
+      } finally {
+        clearInterval(heartbeat);
+        if (this.onModelCall) {
+          try { await this.onModelCall('after', { round, ok: callOk, ms: Date.now() - callStarted, ...callUsage }); } catch { /* 记账失败不影响这一轮 */ }
+        }
+      }
       flush();
       lastText = text;
       if (summarizing) {

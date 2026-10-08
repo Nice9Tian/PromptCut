@@ -193,9 +193,13 @@ export function startRun(opts) {
      */
     cfg = { ...cfg, model: picked, schemaCompat, effort: opts.effort || '' };
 
+    /*
+     * 历史文件放哪:缺省按 sessionId 放系统临时目录(桌面:一台机器一个用户)。`opts.historyFile` 给了就用它 ——
+     * 托管档的 Agent 服务按「项目、主人、对话」自己定路径,不认请求里的 sessionId(契约 cloud-agent-contract.md 第 3.2 节第 32 项)。
+     */
     const historyDir = path.join(os.tmpdir(), 'promptcut', 'harness-sessions');
-    fs.mkdirSync(historyDir, { recursive: true });
-    const historyFile = path.join(historyDir, `${sessionId}.json`);
+    const historyFile = typeof opts.historyFile === 'string' && opts.historyFile ? opts.historyFile : path.join(historyDir, `${sessionId}.json`);
+    fs.mkdirSync(path.dirname(historyFile), { recursive: true });
     
     let initialMessages = [];
     if (fs.existsSync(historyFile)) {
@@ -297,7 +301,8 @@ export function startRun(opts) {
       ? (opts.maxRounds === 0 ? Infinity : Number(opts.maxRounds) || 300)
       : 24;
     safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, effort: cfg.effort || '(默认)', maxTokens: cfg.maxTokens, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
-    const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent });
+    // localTools: false 时不给读写本地文件的 text_editor;toolFilter 是只交给模型的工具名单(托管档的开放清单)
+    const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent, localTools: opts.localTools !== false, only: opts.toolFilter ?? null });
     const agent = new Agent({ 
       provider, 
       system: opts.systemPrompt, 
@@ -311,8 +316,20 @@ export function startRun(opts) {
        */
       maxInputTokens: 1_000_000 - (Number(cfg.maxTokens) || 4096) - 30_000,
       onEvent: safeOnEvent, 
-      signal: abortController.signal, 
-      history 
+      signal: abortController.signal,
+      history,
+      /*
+       * 每次模型请求前后的回调(托管档的闸与用量记录)。`opts.checkpoint` 为真时,从第二次请求起每次请求之前把历史落一次盘:
+       * 这时上一次工具往返刚做完 —— 进程被杀也只丢正在进行的那一次(契约 cloud-agent-contract.md 第 7.1 节)。
+       * 桌面两样都不传,与原来相同。
+       */
+      ...(typeof opts.onModelCall === 'function' || opts.checkpoint ? {
+        onModelCall: async (phase, info) => {
+          if (phase === 'before' && opts.checkpoint && info?.round > 1) saveHistory();
+          if (typeof opts.onModelCall === 'function') return opts.onModelCall(phase, { ...info, vendor: cfg.vendor, model: cfg.model });
+          return undefined;
+        },
+      } : {}),
     });
 
     /*
@@ -325,7 +342,16 @@ export function startRun(opts) {
      */
     const saveHistory = () => {
       try {
-        const historyStr = JSON.stringify(healDanglingToolUse(history.toJSON()));
+        let historyStr = JSON.stringify(healDanglingToolUse(history.toJSON()));
+        // 历史文件的大小上限(只有托管档给,`opts.historyMaxBytes`):超了按现有的历史截断(从最早的整对消息删起)再落
+        const maxBytes = Number(opts.historyMaxBytes) > 0 ? Number(opts.historyMaxBytes) : 0;
+        for (let i = 0; maxBytes && i < 4 && Buffer.byteLength(historyStr, 'utf8') > maxBytes; i += 1) {
+          const before = history.size();
+          history.maxChars = Math.floor(before * (maxBytes / Buffer.byteLength(historyStr, 'utf8')) * 0.85);
+          history.truncate();
+          if (history.size() >= before) break; // 只剩截不动的两条了
+          historyStr = JSON.stringify(healDanglingToolUse(history.toJSON()));
+        }
         // 再确认一遍历史里没有 API Key
         fs.writeFileSync(
           historyFile,
@@ -390,7 +416,7 @@ export function startRun(opts) {
           retryPrompt: `接着上面继续做。上一轮没做完就断了,原因是:${msg}。\n`
             + `之前的进度都还在,不用重头再来,从刚才停下的地方接着做就行。\n`
             + `如果上一步是在等某个后台作业,用 wait 工具等几秒再查它的状态。`,
-        } : { type: 'error', message: msg });
+        } : { type: 'error', message: msg, ...(typeof err?.runErrorCode === 'string' ? { code: err.runErrorCode } : {}) });
       }
     }
   })();

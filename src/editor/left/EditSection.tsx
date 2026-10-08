@@ -3,6 +3,7 @@ import { Inspector } from "./Inspector";
 import { NodeGraphTab } from "../nodes/NodeGraphTab";
 import { readStored, writeStored } from "./stored";
 import { SectionHead } from "./SectionHead";
+import { SoundGenerationControls } from "./SoundEffectForm";
 
 type EditTab = "form" | "code" | "nodes";
 
@@ -46,6 +47,7 @@ export function EditSection() {
         </div>
       </SectionHead>
 
+      <SoundGenerationControls />
       <div className="pc-left-pane" style={{ display: tab === "nodes" ? "none" : "flex" }}>
         <Inspector tab={tab === "code" ? "code" : "form"} />
       </div>

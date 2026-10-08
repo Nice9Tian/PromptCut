@@ -36,8 +36,14 @@ function segmentsOf(layer: OnlineLayer, span: number): Array<[number, number]> {
 }
 
 /** 读层表与每一段清单,核对原尺寸是否齐全 */
-export async function loadOriginalsIndex(projectId: string | null, deps: OriginalsDeps, { fallbackHeavy = [] as readonly string[], onlyClips = null as readonly string[] | null, project = null as unknown } = {}): Promise<OriginalsIndex> {
-  const only = onlyClips ? new Set(onlyClips) : null;
+export async function loadOriginalsIndex(projectId: string | null, deps: OriginalsDeps, { fallbackHeavy = [] as readonly string[], onlyClips = null as readonly string[] | null, project = null as unknown, requiredClips = [] as readonly string[] } = {}): Promise<OriginalsIndex> {
+  /*
+   * `requiredClips`:导出时**必须**用预渲染原尺寸的片段,不管页面判它轻还是重 —— 同步来的用户卡与图卡
+   * (`docs/plan/online-card-exec-contract.md` 第 8 节「在线导出」:导出页与编辑页面同源,不执行它们的代码)。
+   * 它们不受 `onlyClips` 限制;层表里没有它们的层、或没有层表,都算缺。
+   */
+  const required = new Set(requiredClips);
+  const only = onlyClips ? new Set([...onlyClips, ...required]) : null;
   let map: LayerMap | null = null;
   if (projectId) {
     try {
@@ -46,7 +52,7 @@ export async function loadOriginalsIndex(projectId: string | null, deps: Origina
     } catch { map = null; }
   }
   if (!map) {
-    const missing = [...new Set(fallbackHeavy)].filter((id) => !only || only.has(id));
+    const missing = [...new Set([...fallbackHeavy, ...required])].filter((id) => !only || only.has(id));
     return { map: null, missing, hashAt: (clipId) => (missing.includes(clipId) ? null : undefined) };
   }
   const byClip = new Map<string, { layer: OnlineLayer; frames: Map<number, string> }>();
@@ -74,12 +80,15 @@ export async function loadOriginalsIndex(projectId: string | null, deps: Origina
     if (!complete) missing.push(layer.clipId);
     byClip.set(layer.clipId, { layer, frames });
   }
+  // 必须用原尺寸、层表里却没有层的片段:算缺(等渲染节点渲出来)
+  const requiredMissing = new Set([...required].filter((id) => !byClip.has(id)));
+  for (const id of requiredMissing) if (!missing.includes(id)) missing.push(id);
   return {
     map,
     missing,
     hashAt(clipId, globalFrame) {
       const hit = byClip.get(clipId);
-      if (!hit) return undefined;
+      if (!hit) return requiredMissing.has(clipId) ? null : undefined;
       const local = globalFrame - hit.layer.firstFrame;
       if (local < 0 || local >= hit.layer.count) return undefined;
       return hit.frames.get(local) ?? null;

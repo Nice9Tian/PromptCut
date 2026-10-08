@@ -139,3 +139,16 @@ test("preview selects generated-only and video-backed audio once and mutes their
     assert.equal(isCardAudioNode(project, "visual-node"), false);
     assert.equal(isCardAudioNode(project, "bare-node"), true);
 }));
+
+test('virtual AV nodes use current params and source version for repeated block requests', async () => withAudio(async ({ configureCardAudio, requestCardAudio }) => {
+  let source = 'v1', calls = 0;
+  const def = { id: 'av', defaults: { gain: 1 }, Component() {}, audio(_s, range, p) { calls++; return new Float32Array(range.count).fill(p.gain); } };
+  configureCardAudio({ getCard: id => id === 'av' ? def : undefined, sourceVersionOf: () => source });
+  const project = { media: [], tracks: [{ id: 't', clips: [{ id: 'c', cardId: 'av', start: 0, end: 1, params: { gain: 2 } }] }] };
+  const req = { project, nodeId: '@clip/c/card', start: 0, count: 4, sampleRate: 48000 };
+  assert.equal((await requestCardAudio(req)).samples[0], 2);
+  project.tracks[0].clips[0].params.gain = 3;
+  assert.equal((await requestCardAudio(req)).samples[0], 3);
+  source = 'v2'; await requestCardAudio(req);
+  assert.equal(calls, 3);
+}));

@@ -4,7 +4,7 @@ import { Stage, type StreamPlaneGroup } from "./render/Stage";
 import { FrameScene } from "./render/FrameScene";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
-import { cardsStamp, cardsVersion, getCard, onCardsUpdated, setSyncedUserCards, syncedUserCardsGen, cardsRegistryGen } from "./kernel/registry";
+import { cardsStamp, cardsVersion, getCard, onCardsUpdated, onRuntimeCardsChanged, runtimeCardsGen, setSyncedUserCards, syncedUserCardsGen, cardsRegistryGen } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
@@ -56,6 +56,11 @@ import { resolveGlRoute } from "./render/costDevice.mjs";
 import { themeStyle } from "./themes";
 import { ONLINE } from "./online/mode";
 import { setMediaTierPolicy } from "./render/mediaTier";
+import { cardExecGate as stageExecGate, cardVisualExecAllowed, noteMediaPolicy, subscribeCardExecGate as subscribeStageExecGate } from "./online/isolation/execGate";
+import type { StageCardRuntime } from "./online/cardRuntime/stageRuntime";
+import type { StageSound } from "./online/cardRuntime/stageSound";
+import type { CardBundle } from "./online/cardRuntime/protocol";
+import { announceStageIsolation } from "./online/isolation/stageGuard";
 import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
 import { clipFrameMode } from "./kernel/frameMode.mjs";
 import { resolveFrameSize } from "./kernel/frameSize.mjs";
@@ -318,6 +323,8 @@ export default function StageView() {
   useEffect(() => {
     if (cardsGen > 0) postStageCards(cardsStamp());
   }, [cardsGen]);
+  // 在线舞台里运行时载入的用户卡与图卡换了一批(`online/cardRuntime/stageRuntime.ts`):卡片图按新定义重解。桌面运行环境里这个数恒为 0
+  const runtimeGen = useSyncExternalStore(onRuntimeCardsChanged, runtimeCardsGen, runtimeCardsGen);
   const graph = useMemo(() => {
     if (!project) return undefined;
     try {
@@ -325,8 +332,8 @@ export default function StageView() {
     } catch {
       return undefined;
     }
-    // cardsGen:卡片定义换了,图也要重解
-  }, [project, cardsGen]);
+    // cardsGen:卡片定义换了,图也要重解;runtimeGen:在线舞台里运行时载入的卡换了(桌面恒为 0)
+  }, [project, cardsGen, runtimeGen]);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -401,13 +408,75 @@ export default function StageView() {
      */
     const onTrouble = (e: Event) => {
       if (!ONLINE) return;
-      if (e.type === "webglcontextlost") { postStageTrouble("webglcontextlost"); return; }
+      if (e.type === "webglcontextlost") { cardExec.runtime?.noteContextLost(); postStageTrouble("webglcontextlost"); return; }
       const v = e.target as HTMLVideoElement | null;
       if (!v || v.tagName !== "VIDEO") return;
       if (e.type === "error" && v.error?.code === 3 /* MEDIA_ERR_DECODE */) postStageTrouble("decode-failure");
       else if (e.type === "loadeddata") postStageTrouble("decode-ok");
     };
     if (ONLINE) for (const type of ["webglcontextlost", "error", "loadeddata"]) document.addEventListener(type, onTrouble, true);
+    /*
+     * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 2、3、4、8 节)。编辑页面经 `loadUserCards` 发来转译好的包;
+     * 这里只在**本文档自己的执行闸门**开着时执行(`online/isolation/execGate.ts`:是跨源舞台入口、自检通过、父页点头、从没见过票据、没出过加固拦下的事):
+     *   - 画面那一半还要本文档的出口由浏览器拦(`cardVisualExecAllowed`;〔裁:主会话 2026-10-06〕只靠脚本加固的浏览器上不执行画面);
+     *   - 声音那一半在这一台起的后台线程里执行(线程从 blob 地址引导,继承本文档的策略),只有父页点名的那一台(实例 B)起。
+     * 闸门晚开:包先记着,开了再执行;闸门关上(出了加固拦下的事):已载入的全部撤下。加载器与声音宿主都按需载入,桌面构建里整段剪掉。
+     */
+    const cardExec: { bundles: CardBundle[] | null; sound: boolean; runtime: StageCardRuntime | null; soundHost: StageSound | null; seq: number; stopped: boolean } =
+      { bundles: null, sound: false, runtime: null, soundHost: null, seq: 0, stopped: false };
+    const applyCardBundles = async (): Promise<void> => {
+      if (import.meta.env.VITE_PC_ONLINE !== "1" || cardExec.stopped) return;
+      const seq = ++cardExec.seq;
+      const stale = () => seq !== cardExec.seq || cardExec.stopped;
+      const bundles = cardExec.bundles;
+      if (!stageExecGate().allowed || !bundles) {
+        const had = !!cardExec.runtime || !!cardExec.soundHost;
+        cardExec.runtime?.dispose(); cardExec.runtime = null;
+        cardExec.soundHost?.dispose(); cardExec.soundHost = null;
+        if (had) {
+          postStageEvent({ type: "card-states", states: [], graph: "unknown", visual: false });
+          postStageEvent({ type: "sound-state", state: null });
+          commitPlanes();
+        }
+        return;
+      }
+      try {
+        if (cardVisualExecAllowed()) {
+          if (!cardExec.runtime) {
+            const m = await import("./online/cardRuntime/stageRuntime");
+            if (stale() || !cardVisualExecAllowed()) return;
+            cardExec.runtime ??= m.createStageCardRuntime({
+              longSide: () => Math.max(ref.current.project?.width ?? 1920, ref.current.project?.height ?? 1080),
+              onStates: (states, graph) => {
+                postStageEvent({ type: "card-states", states, graph, visual: true });
+                // 能运行的卡换了一批:重渲一次(活组件挂上 / 撤下、占位符重算)
+                commitPlanes();
+              },
+            });
+          }
+          await cardExec.runtime.setBundles(bundles);
+          if (stale()) return;
+        } else {
+          cardExec.runtime?.dispose(); cardExec.runtime = null;
+          postStageEvent({ type: "card-states", states: [], graph: "unknown", visual: false });
+        }
+        // 没有同步来的卡就不起声音线程(也不报声音状态):项目里没有用户卡、图卡时这一台与以前一样安静
+        if (cardExec.sound && (bundles.length > 0 || cardExec.soundHost)) {
+          if (!cardExec.soundHost) {
+            const [m, sp] = await Promise.all([import("./online/cardRuntime/stageSound"), import("./online/cardRuntime/soundSpawn")]);
+            if (stale() || !stageExecGate().allowed) return;
+            cardExec.soundHost ??= m.createStageSound({ spawn: sp.spawnSoundWorker, onState: (state) => postStageEvent({ type: "sound-state", state }) });
+          }
+          await cardExec.soundHost.setBundles(bundles);
+        } else if (cardExec.soundHost) {
+          cardExec.soundHost.dispose(); cardExec.soundHost = null;
+          postStageEvent({ type: "sound-state", state: null });
+        }
+      } catch (err) {
+        console.warn("[stage] 载入同步来的卡片出错", err);
+      }
+    };
+    const offCardExecGate = ONLINE ? subscribeStageExecGate(() => { void applyCardBundles(); }) : () => {};
     const gl = createGlHost({ stageId: caps.stageId, lowMemory: caps.lowMemory, route: resolveGlRoute(null, caps.lowMemory) });
     const onGlPort = (e: MessageEvent) => {
       if (e.source !== window.parent) return;
@@ -1543,6 +1612,8 @@ export default function StageView() {
         // R9:项目选项的路线(生效值;切了就重建 glHost 那一侧的连接,M2 / 约束第 1 条)
         gl.setRoute(resolveGlRoute(full.glRoute, caps.lowMemory));
         flushSync(() => setProject(full));
+        // 画幅可能变了:图卡的图形能力(最大纹理尺寸那一条)按新的长边重判
+        if (!prev || prev.width !== full.width || prev.height !== full.height) cardExec.runtime?.refreshGraph();
         window.clearTimeout(ref.current.settle);
         // 项目变了,在飞的补跑作废:探针会按新项目重发
         renderGen.current++;
@@ -2277,6 +2348,21 @@ export default function StageView() {
         bakeCursor = null;
         return { ok: true as const };
       },
+      /** 在线执行同步来的用户卡与图卡:收下编辑页面发来的包(全量);执行不执行看本文档自己的闸门(见上面 `applyCardBundles`) */
+      async loadUserCards(bundles, opts = {}) {
+        if (import.meta.env.VITE_PC_ONLINE !== "1") return { ok: false, reason: "unsupported" as const };
+        const gate = stageExecGate();
+        // 不是跨源舞台入口的文档(同源单舞台、编辑页面):不记、不执行
+        if (gate.reason === "not-stage") return { ok: false, reason: "unsupported" as const };
+        cardExec.bundles = Array.isArray(bundles) ? (bundles as CardBundle[]) : [];
+        cardExec.sound = opts?.sound === true;
+        void applyCardBundles();
+        return gate.allowed ? { ok: true } : { ok: false, reason: "gate" as const };
+      },
+      async synthCardAudio(request) {
+        if (!cardExec.soundHost || !stageExecGate().allowed) throw new Error("这一台舞台没有声音线程");
+        return cardExec.soundHost.render(request);
+      },
       /**
        * 在线页面读内容库卡片源码得到的「已知但本机不能运行」的用户卡(C10 契约第 9 节「识别」)。舞台是另一份文档,
        * 由父页发一份过来进本页的注册表;变了就重渲一次(这些片段改挂快照 / 流平面与 `unsupported` 占位)。
@@ -2306,7 +2392,10 @@ export default function StageView() {
       },
       async setMediaPolicy(next) {
         // 低内存档只会从普通改到低(运行中改判),不回头:舞台自己判出来的 true 不被父页的 false 盖掉
-        setMediaTierPolicy({ lowMemory: caps.lowMemory || !!next?.lowMemory, remote: next?.remote ?? null });
+        // 执行闸门(契约 `online-card-exec-contract.md` 第 3.1 节):带票据的策略让本文档永久不执行用户卡;闸门开过之后再来的票据不收
+        const gate = ONLINE ? noteMediaPolicy({ ticket: next?.remote?.ticket ?? null, cardExec: next?.cardExec }) : { acceptTicket: true };
+        const remote = next?.remote && !gate.acceptTicket && next.remote.ticket ? { ...next.remote, ticket: null } : next?.remote ?? null;
+        setMediaTierPolicy({ lowMemory: caps.lowMemory || !!next?.lowMemory, remote });
         commitPlanes();
         return { ok: true as const };
       },
@@ -2394,8 +2483,14 @@ export default function StageView() {
     (window as unknown as Record<string, unknown>).__pcGlWorkerDiag = () => gl.workerDiag();
     window.__pcStagePipelineAt = (clipId: string, tSec: number) => pipelineAt(ref.current.plan?.plan ?? null, clipId, tSec);
     postStageReady(caps);
+    // 跨源舞台的自检结果排在握手之后发(`online/isolation/stageGuard.ts`);别的文档什么都不发
+    if (ONLINE) announceStageIsolation();
     return () => {
       stopRpc();
+      cardExec.stopped = true;
+      offCardExecGate();
+      cardExec.runtime?.dispose(); cardExec.runtime = null;
+      cardExec.soundHost?.dispose(); cardExec.soundHost = null;
       player.stop();
       window.removeEventListener("message", onGlPort);
       if (ONLINE) for (const type of ["webglcontextlost", "error", "loadeddata"]) document.removeEventListener(type, onTrouble, true);

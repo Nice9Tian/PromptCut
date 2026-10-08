@@ -50,6 +50,8 @@ import { browserNodeEligibility, createBrowserNode, type BrowserNode, type Eligi
 import { manifestBlocks, manifestCovers, manifestKey, snapshotManifest } from "../online/bakeTask";
 import { createSnapUploader, type SnapUploader } from "../online/snapUploader";
 import { pageL2 } from "../online/l2";
+import { getNodeCardInfo, setNodeCardEnvFingerprint } from "../online/nodeCardInfo";
+import { startNodeCardInfoLive } from "./nodeCardInfoLive";
 import { pageEnvironment } from "./pageEnvironment.mjs";
 import { backWorkDiag } from "./backWorkGate";
 import { runBackJob, urgentBackJobs } from "./stageJobs";
@@ -445,6 +447,9 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
         if (outcome === "completed" || outcome === "dedup") { try { deps.onAlive?.(task.resultKey); } catch { /* 宿主坏了 */ } }
       },
       onFingerprint: () => setReady("ready"),
+      // 块 N:能执行用户卡与图卡时的登记(运行时版本、能力位、卡片代码身份),与文档服务回的 cardEnvFingerprint
+      cardInfo: () => getNodeCardInfo(),
+      onCardEnvFingerprint: (fp) => setNodeCardEnvFingerprint(fp),
       onRefused: (reason) => { fatal = `refused-${reason}`; lastError = `报到被拒:${reason}`; teardown(fatal); },
     });
     redialAt = 0;
@@ -459,6 +464,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     nodeProject = null;
     if (n) { try { n.stop(); } catch { /* 连接已坏 */ } lastStop = { reason, at: Date.now(), debug: n.debug() }; }
     closeLease();
+    setNodeCardEnvFingerprint(null);
     const e = ep;
     ep = null;
     // 放回的消息先发出去再关(会话层 close 先发 session.close)
@@ -492,6 +498,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     try { node?.tick(); } catch (e) { lastError = String((e as Error)?.message ?? e); }
   };
   const timer = setInterval(loop, HOST_TICK_MS);
+  // 块 N:本页能运行哪些用户卡与图卡的登记(随注册表、闸门、图形能力更新)
+  const offCardInfo = startNodeCardInfoLive();
   loop();
 
   const w = typeof window !== "undefined" ? (window as unknown as Record<string, unknown>) : null;
@@ -505,6 +513,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
         eligibility, fatal, ready: readyState, nodeId,
         state: d?.state ?? "off", reason: d?.reason ?? (fatal ?? eligibility.reason),
         envFingerprint: d?.envFingerprint ?? null, codeVersion: d?.codeVersion ?? null, holding: d?.holding ?? [],
+        cardEnvFingerprint: d?.cardEnvFingerprint ?? null, cards: d?.cards ?? null,
         counters: d?.counters ?? null,
         idle: node ? isIdle() : false,
         stage: {
@@ -528,6 +537,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   return () => {
     stopped = true;
     clearInterval(timer);
+    offCardInfo();
     teardown("unmount");
     baker.dispose();
     offStore();

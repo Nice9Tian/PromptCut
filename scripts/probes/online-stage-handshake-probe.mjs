@@ -2,6 +2,8 @@
  * 在线普通档两个跨源舞台的**首次握手**计时(`src/online/stageHandshake.ts`,〔裁〕2026-09-30 `claude/stage-handshake`):
  * 每台的 20 秒从那一台 iframe 的 `load` 起算,另有自挂上起 2 分钟的总上限;可见舞台 A 加载完才挂后台舞台 B。
  * 全程在本机:本机托管组合代替阿里云,仿 nginx 的前缀代理开三个源(编辑器页 + 两个舞台,都带 OAC),在线构建当页面。
+ * 代理仿的是**没有隔离策略头的旧 nginx**:跨源舞台载舞台入口 `stage.html`(自带 `<meta>` 策略),自检判没有隔离、素材照旧走 `?t=`;
+ * 握手计时与它无关。「舞台页请求」按 `/editor/stage.html?stage=1`(跨源)与 `/editor/?stage=1`(同源单舞台)两种地址认。
  * 慢网络只在应用层模拟:代理把**舞台源上**的主脚本(index.html 引的入口 `assets/index-*.js`)压住 `--stage-delay-ms` 再回,
  * 编辑器页自己的源不压(不动宿主机网络)。
  *
@@ -21,10 +23,16 @@
  *      只剩一个舞台 iframe、在编辑器页的源上,画出片段;从挂上到退回、到画出的时长记在结果里。
  *   S3 舞台 B 的源坏了:A 正常握手,B 在 A load 之后挂、错误页 load,约 20 秒后退回,单舞台画出片段。
  *
+ * 耗时只记录(verification.md「耗时只记录,不当闸门」):上面各条里的「约 20 秒」「≤ 24 秒」「19～30 秒」这类用时
+ * 只写进 `TIMINGS` 行与结果的 `timings`,不决定过不过。仍是通过条件的:退回不早于握手时限(≥ 19 秒,产品计时器的下界)、
+ * A 的 load 在压住的时长之后(夹具前提)、出画面之后可见舞台空白不超过 1 秒(看得见的空白)。
+ * 等待时限只为防卡死,一律不少于 180 秒。
+ *
  * 结果最后一行是一行 JSON(`ok`、`fails`、各项数字),截图在 --out。
  */
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
+import { createTimings } from './probe-timings.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
@@ -34,6 +42,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
+import { seedSharedProject } from './lib-seed.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -53,8 +62,12 @@ const fails = [];
 const out = { ok: false, out: OUT, delayMs: DELAY, cpus: os.cpus().length };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return !!cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 等待时限只为防卡死(verification.md「耗时只记录,不当闸门」):不到 WAIT_FLOOR_MS 的一律提到它;等到头没有结果仍算不过 */
+const WAIT_FLOOR_MS = 180_000;
+const timings = createTimings('online-stage-handshake-probe');
 async function until(what, fn, ms = 20_000, every = 250) {
   const t0 = Date.now();
+  ms = Math.max(ms, WAIT_FLOOR_MS);
   let last = null;
   for (;;) {
     let v = null;
@@ -110,11 +123,14 @@ function makeProxy(port) {
       return res.end(runtimeConfig);
     }
     const index = path.join(DIST, 'index.html');
-    const isPage = url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html';
+    // 跨源舞台载的是舞台入口 stage.html(在线执行用户卡与图卡,`online-card-exec-contract.md` 第 3.3 节);同源单舞台仍是 /editor/?stage=1
+    const isStageEntry = url.pathname === '/editor/stage.html';
+    const isPage = url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html' || isStageEntry;
     if (isPage && url.searchParams.get('stage') === '1') {
       push(log.page, port);
       if (cfg.broken.has(port)) { res.writeHead(503, { 'Content-Type': 'text/plain', ...sec }); return res.end('stage origin down (probe)'); }
     }
+    if (isStageEntry) { const entry = path.join(DIST, 'stage.html'); return sendFile(fs.existsSync(entry) ? entry : index, 'no-store'); }
     if (isPage) return sendFile(index, 'no-store');
     if (url.pathname.startsWith('/editor/assets/')) {
       const rel = decodeURIComponent(url.pathname.slice('/editor/'.length));
@@ -157,7 +173,9 @@ const stamp = Date.now().toString(36);
 const NAME = `osh-${stamp}`;
 const creator = { username: 'boss', password: `boss-${randomBytes(6).toString('hex')}` };
 const PROJECT_PW = `pw-${randomBytes(6).toString('hex')}`;
-await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+const made = await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+// 在线页面只加入、不新建(`dce4b22b`):先替创建者写进一份空项目,否则页面进不去
+check((await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator, name: NAME })).ok, '替创建者写进空项目');
 const CLIP = 'osh-b';
 
 /* ------------------------------------------------------------------ 浏览器 */
@@ -248,14 +266,19 @@ try {
         await sleep(100);
       }
     })();
-    // 挂上 25 秒:已进过渡期、同源单舞台出了画面,没失败
-    await sleep(Math.max(0, tMount + 25_000 - Date.now()));
-    const at25 = { hs: await m.hs(), preview: await m.preview(), drawn: await m.visibleDrawn(), warm: await m.page.$$eval('[data-pc="stage-frame-warm"]', (a) => a.length).catch(() => -1) };
+    // 进过渡期:同源单舞台出了画面,没失败。原来固定在挂上 25 秒那一刻看(等于拿 25 秒当门槛),现在等到它进了过渡期并画出片段再看,用时只记录
+    const interim = await until(`${tag} 进过渡期、同源单舞台画出片段`, async () => {
+      const hs = await m.hs();
+      if (hs?.phase !== 'interim') return null;
+      const drawn = await m.visibleDrawn();
+      return drawn ? { hs, drawn } : null;
+    }, 120_000, 250);
+    const at25 = { atMs: Date.now() - tMount, hs: interim?.hs ?? await m.hs(), preview: await m.preview(), drawn: interim?.drawn ?? null, warm: await m.page.$$eval('[data-pc="stage-frame-warm"]', (a) => a.length).catch(() => -1) };
     out[`${key}at25`] = at25;
-    check(at25.hs?.phase === 'interim' && at25.preview?.onlineStages?.handshake === 'interim' && at25.preview?.dual === false, `${tag} 挂上 25 秒时在过渡期(同源单舞台)、没失败`, at25);
+    check(at25.hs?.phase === 'interim' && at25.preview?.onlineStages?.handshake === 'interim' && at25.preview?.dual === false, `${tag} 握上手之前先进过渡期(同源单舞台)、没失败`, at25);
     check(!!at25.drawn && at25.drawn.url.startsWith(`${SITE}/`), `${tag} 过渡期里同源单舞台画出片段`, at25.drawn);
     check(at25.warm >= 1, `${tag} 过渡期里有隐藏的预热 iframe`, at25.warm);
-    check(tFirstDrawn !== null && tFirstDrawn - tMount <= 24_000, `${tag} 约 20 秒出画面(挂上到第一次画出 ≤ 24 秒)`, { firstDrawn: rel(tFirstDrawn, tMount) });
+    timings.record(`${tag} 挂上到进过渡期并画出片段`, at25.atMs, { formerLimit: '固定在挂上 25 秒时看' });
     await m.shot(`${key}-interim-25s`);
     const ok = await until(`${tag} 预热的两台都握上手`, async () => { const h = await m.hs(); return h && h.phase === 'ok' ? h : null; }, DELAY * 2 + 60_000, 250);
     const tOk = ok ? Date.now() : null;
@@ -275,6 +298,11 @@ try {
       maxGapAfterFirstDrawn: maxGap, slots: ok?.slots ?? null, stagePageHits: hits, preview,
       aEntryDone: rel(firstAfter(log.entryDone, PORTS.stageA, tStart), tMount), bPage: rel(firstAfter(log.page, PORTS.stageB, tStart), tMount),
     };
+    timings.record(`${tag} 挂上到第一次画出`, rel(tFirstDrawn, tMount), { formerLimit: '≤ 24 秒' });
+    timings.record(`${tag} 挂上到两台都握上手`, out[key].ok);
+    timings.record(`${tag} 握上手到换回双舞台`, out[key].handoverMs, { formerLimit: '等待上限 30 秒' });
+    timings.record(`${tag} 出画面之后可见舞台最长空白`, maxGap, { note: '≤ 1 秒仍是通过条件(是「有没有看得见的空白」,阈值是时间;见报告的待用户定)' });
+    check(tFirstDrawn !== null, `${tag} 过渡期出了画面(挂上到第一次画出的用时见 timings)`, { firstDrawn: rel(tFirstDrawn, tMount) });
     check(preview?.dual === true && preview?.onlineStages?.handshake === 'ok', `${tag} 最终是双舞台、handshake ok`, preview);
     check((ok?.slots?.A?.loadedAt ?? 0) >= DELAY - 1000, `${tag} A 的 load 在压住的时长之后`, ok?.slots);
     check(hits.a === 1 && hits.b === 1 && hits.e === 1, `${tag} 换回时预热的 iframe 直接接任,跨源舞台页各只请求一次(同源单舞台一次)`, hits);
@@ -305,7 +333,10 @@ try {
     const tDrawn = drawn ? Date.now() : null;
     out.s2 = { fellMs: rel(tFell, tMount), drawnMs: rel(tDrawn, tMount), reason: fell?.onlineStages?.reason ?? null, hs: await m.hs(), frames: m.stageFrames().map((f) => f.url().replace(/\?.*$/, '')) };
     check(/舞台 A 加载完 20 秒没握上手/.test(out.s2.reason ?? ''), 'S2 退回原因是 A 加载完 20 秒没握上手', out.s2);
-    check(out.s2.fellMs !== null && out.s2.fellMs >= 19_000 && out.s2.fellMs <= 30_000, 'S2 约 20 秒退回(19～30 秒)', out.s2);
+    // 下界(不早于 20 秒的握手时限)是产品计时器的行为,仍是通过条件;上界(原 ≤ 30 秒)随机器快慢,只记录
+    check(out.s2.fellMs !== null && out.s2.fellMs >= 19_000, 'S2 退回不早于握手时限(≥ 19 秒)', out.s2);
+    timings.record('S2 挂上到退回单舞台', out.s2.fellMs, { formerLimit: '19～30 秒(上界不再作通过条件)' });
+    timings.record('S2 挂上到单舞台画出片段', out.s2.drawnMs, { formerLimit: '等待上限 60 秒' });
     check(out.s2.frames.length === 1 && out.s2.frames[0].startsWith(`${SITE}/`), 'S2 只剩一个舞台 iframe,在编辑器页的源上', out.s2.frames);
     check(!!drawn && drawn.url.startsWith(`${SITE}/`), 'S2 同源单舞台画出片段', drawn);
     await m.shot('s2-single');
@@ -325,7 +356,9 @@ try {
     out.s3 = { bPage: rel(firstAfter(log.page, PORTS.stageB, tStart), tMount), fellMs: rel(tFell, tMount), drawnMs: rel(tDrawn, tMount), reason: fell?.onlineStages?.reason ?? null, hs: await m.hs() };
     check(/舞台 B 加载完 20 秒没握上手/.test(out.s3.reason ?? ''), 'S3 退回原因是 B 加载完 20 秒没握上手', out.s3);
     check(/握上手的舞台:A/.test(out.s3.reason ?? ''), 'S3 A 握上了手', out.s3);
-    check(out.s3.fellMs !== null && out.s3.fellMs >= 19_000 && out.s3.fellMs <= 35_000, 'S3 约 20 秒退回(19～35 秒)', out.s3);
+    check(out.s3.fellMs !== null && out.s3.fellMs >= 19_000, 'S3 退回不早于握手时限(≥ 19 秒)', out.s3);
+    timings.record('S3 挂上到退回单舞台', out.s3.fellMs, { formerLimit: '19～35 秒(上界不再作通过条件)' });
+    timings.record('S3 挂上到单舞台画出片段', out.s3.drawnMs, { formerLimit: '等待上限 60 秒' });
     check(!!drawn && drawn.url.startsWith(`${SITE}/`), 'S3 同源单舞台画出片段', drawn);
     await m.shot('s3-single');
     await m.close();
@@ -336,6 +369,8 @@ try {
   out.stagePageHits = Object.fromEntries([...log.page].map(([p, v]) => [p, v.length]));
   out.fails = fails;
   out.ok = fails.length === 0;
+  out.timings = timings.list;
+  timings.print();
   await browser.close().catch(() => {});
   for (const s of servers) { s.closeAllConnections?.(); await new Promise((r) => s.close(() => r())); }
   await combo.close?.().catch?.(() => {});

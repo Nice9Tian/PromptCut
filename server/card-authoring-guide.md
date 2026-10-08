@@ -21,7 +21,7 @@
 
 ### 图卡路线
 
-当需求需要现有参数做不到的**滤镜、转场、音频算法或多输入合成**时，写一张**图卡**。图卡不是另一套体系：它就是一张普通的 `CardDef`，源码同样是 `src/cards/user/<id>.tsx` 一个文件，同样用 `create_card` 落盘、`get_card_source` + `edit_card` 修改。区别只在于它不写 React `Component`，而是写 `card()`（视觉）或 `audio()`（音频），由宿主代为渲染。
+当需求需要现有参数做不到的**滤镜、转场、音频算法或多输入合成**时，写一张**图卡**。图卡不是另一套体系：它就是一张普通的 `CardDef`，源码同样是 `src/cards/user/<id>.tsx` 一个文件，同样用 `create_card` 落盘、`get_card_source` + `edit_card` 修改。视觉图卡写 `card()`，声音写 `audio()`，由宿主分别求值。动效卡可以同时写视觉 `Component` 或 `card()` 与 `audio()`，画面和声音属于同一个时间轴片段。
 
 建卡和应用是**两步**：`create_card({ id, source })` 落盘定义，再 `apply_card({ cardId, clipId, ... })` 建实例。
 
@@ -35,7 +35,7 @@
 | `inputs` | `Record<string, { description?: string }>`。`filter` / `emphasis` / `audio` 缺省 `{ source: {} }`，`transition` 缺省 `{ A: {}, B: {} }`，`animation` 缺省无输入 |
 | `card` | `(sources, t, params, ctx) => CardGpuValue \| Promise<CardGpuValue>`，视觉图卡的出口 |
 | `audio` | `(sources, range, params) => Float32Array \| Promise<Float32Array>`，音频图卡的出口 |
-| `Component` | **图卡不写**。`Component` / `card` / `audio` 三者至少有一个，有 `card` 或 `audio` 就不写 `Component` |
+| `Component` | DOM 视觉出口；可以与 `audio` 同时存在。视觉 `card` 与 `Component` 二选一，纯音频卡只写 `audio` |
 
 - `sources[name]` = `{ nodeId, at(t?), pixels(t?, signal?), block(start, count) }`。
   - `at(t)` 返回一个**惰性引用**（不落像素），直接喂给 GLSL；这是默认、也是最便宜的一条路。
@@ -226,7 +226,7 @@ export const priceTag: CardDef<Params> = {
 | `tags` | 建议 | 检索关键词 |
 | `defaults` | ✓ | 每个参数的默认值。见下面「默认值规则」 |
 | `controls` | ✓ | 参数控件表。界面面板和 AI 都靠它了解 schema |
-| `Component` | ✓ | React 组件。**图卡例外**：写了 `card` 或 `audio` 的定义不写它（见上面「图卡路线」） |
+| `Component` | ✓ | React 视觉组件，可以同时声明 `audio`。纯视觉图卡用 `card`，不再声明 `Component` |
 | `frameMode` | 建议 | `"direct"`（直接求值动画）：包括过渡在内，画面由 `params` 和局部时间 `t` 直接计算，可随机访问；`"stateful"`（状态推进动画）：依赖 Motion、CSS 动画、rAF 或模拟的历史，需要推进。是否使用 React 与这个分类无关。未填写默认保留历史；旧卡明确声明 `settleMs: 0, after: "hold"` 时自动按静态直接求值处理。 |
 | `parts` | 建议 | **部件树**(约定封装的结构):这张卡对外由哪几块组成,每块由哪些参数驱动、什么时候进场、多久落定。代码页和 `get_clip` 按它组织参数。见下面「部件树与生命周期」 |
 | `lifecycle` | 建议 | **生命周期**(约定封装的时间):进场多久落定(`settleMs`)、之后 `hold` 停住 / `loop` 循环 / `evolve` 持续变化、支持的退场(`exit`,目前都是 `["fade"]`) |
@@ -486,3 +486,13 @@ fill_captions({ clipId })
 要手动精修时，顺着文字稿找可视化的点，用每张卡的 `useWhen` 决定选哪张，
 在对应 segment 的时间点 `add_clip`。注意同一条轨上的 clip 不能重叠
 （store 会自动挪开，但结果多半不是你想要的）；需要并排显示就先 `add_track` 建新的 overlay 轨。
+
+## 有声动效卡与持久声音
+
+- 同一 `CardDef` 可写 `Component + audio` 或 `card + audio`；`kind` 保持视觉类别。不要在组件挂载时调用实时声音播放来代替 `audio()`，那种副作用不能保证定位、静音和成片一致。
+- `audio()` 按 48 kHz 采样位置返回交错浮点 PCM；只依赖完整参数、确定种子、事件身份与采样位置，不能用真实时钟或随机调用顺序推进声音。纯合成显式 `inputs: {}`。
+- 创建或修改后调用 `render_card_audio({ clipId })`，成功入库才可跨设备播放。改参数或源码后重新生成；支持 `cancel_card_audio`，失败不假装成功。
+- `set_clip_muted` 只关声音，时间轴醒目标记；声音仍在原动效片段中。对它调用 `separate_audio` 明确返回 `EMBEDDED_CARD_AUDIO_UNSEPARABLE`，不自动退回生成独立声音段。普通视频素材的分离能力不变。
+- 单独提示音或键盘音效先用 `sound_presets` / `sound_generate`，无需重新创建卡片。
+
+- 有声视觉卡的 `Component` 所收到的 `t`、视觉 `card()` 的 `t`、`audio()` 的 `range.start / sampleRate` 已由宿主归到同一源时间；裁切后不要再次加 `sourceOffset`。没有 `audio` 的普通 DOM 卡保留原局部 `t` 契约。

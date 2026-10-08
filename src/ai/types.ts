@@ -247,6 +247,10 @@ export interface ChatMessage {
   usage?: unknown;
   /** 这条回复用的模型/推理档/加速档/文本协议。旧历史里没有,报告里显示为「未记录」 */
   runtime?: MessageRuntime;
+  /** 云端对话(`src/ai/cloud/events.ts`):这条回复折到过的最大事件序号,重复到达的事件据此只折一次 */
+  cloudSeq?: number;
+  /** 云端对话:这一轮的改动引出的补渲此刻的进展(契约 cloud-agent-contract.md 第 16 节),气泡末尾常驻一行;失败与暂不可用用出错的样式 */
+  cloudRender?: { state: string; text: string };
   trace?: { at: string; event: RunEvent }[];
   traceTruncated?: boolean;
   traceBytes?: number;

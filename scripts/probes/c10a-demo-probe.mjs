@@ -719,17 +719,31 @@ try {
   const bfLog = await P(phone, () => window.__pcBackfill?.()?.log ?? []);
   check(!bfLog.some((e) => e.clips.includes(state.lightClip) || e.clips.includes(heavyClip)), '判轻的轻卡、已有产物的重卡都不发补渲', bfLog.map((e) => ({ id: e.id.slice(0, 30), clips: e.clips.length })));
   await P(phone, () => { const s = window.__pcStore; s.actions.seek(0.5); s.actions.play(); });
+  /*
+   * 低内存档的规则(不许动):播放中一律不活渲,判轻的卡也一样;有产物贴小尺寸,没有产物显示占位。
+   * 轻卡在手机上有没有产物取决于创建者那边:创建者桌面版通常把它测成轻卡、不进清单计划,手机上就没有产物;
+   * 但创建者那台机器忙的时候会把它判重、连它一起预渲染(完整验收第一遍实测:创建者的计划 10 个细任务、手机层表 2 层),
+   * 这时手机上贴的是它的小尺寸,不会出现占位。旧断言只认「占位」,把后一种合乎规则的情形判成不过。
+   * 现在按手机层表里这张卡有没有就绪的产物分两支断言;两支都要求播放中采到的每一拍它都抑制着(不活渲)。
+   */
+  const lightProductReady = await P(phone, (id) => ((window.__pcOnlineSnapshots?.()?.layers ?? []).find((l) => l.clipId === id)?.ready ?? 0), state.lightClip).catch(() => 0);
   let lightPlaceholder = null;
+  const lightSeen = [];
   for (let i = 0; i < 8 && !lightPlaceholder; i++) {
     await delay(400);
     const x = await stageSample(phone);
     const w = x?.playing ? x.wraps.find((y) => y.id === state.lightClip) : null;
-    if (w?.suppressed && w.placeholder && !w.small) { lightPlaceholder = { at: i }; await shotStage(phone, '2c-phone-stage-playing-light-placeholder'); }
+    if (w) lightSeen.push(`${w.suppressed ? 'S' : 'L'}${w.small ? '+img' : ''}${w.placeholder ? '+ph' : ''}`);
+    const hit = lightProductReady > 0 ? (w?.suppressed && w.small) : (w?.suppressed && w.placeholder && !w.small);
+    if (hit) { lightPlaceholder = { at: i }; await shotStage(phone, '2c-phone-stage-playing-light-placeholder'); }
   }
   await P(phone, () => { const s = window.__pcStore; s.actions.pause(); s.actions.seek(2.5); });
-  check(lightPlaceholder, '手机播放中判轻的轻卡不活渲、没有产物显示占位');
+  check(lightSeen.length > 0 && lightSeen.every((s) => s.startsWith('S')), '手机播放中判轻的轻卡每一拍都抑制着、不活渲', { seen: lightSeen });
+  check(lightPlaceholder, lightProductReady > 0
+    ? '手机播放中判轻的轻卡不活渲、有产物(创建者那边判重预渲染过)贴小尺寸'
+    : '手机播放中判轻的轻卡不活渲、没有产物显示占位', { productReady: lightProductReady, seen: lightSeen });
   out.steps.backfill = { ms: Date.now() - t2c, search: search ? { records: search.outcome.records, n: search.outcome.order.length, measurements: search.outcome.measurements, light: search.outcome.light.length, heavyClips: search.judgedHeavyClips.length } : null,
-    backfillLog: bfLog.length, lightPlaceholderWhilePlaying: !!lightPlaceholder };
+    backfillLog: bfLog.length, lightPlaceholderWhilePlaying: !!lightPlaceholder, lightProductReady, lightSeen };
   say('step2c.done', out.steps.backfill);
   // 排障:--hold-min N 在这里停 N 分钟(配 --debug-port 从外面连上浏览器看)
   if (Number(arg('--hold-min', 0)) > 0 && (!argv.includes('--hold-on-fail') || fails.length)) { say('hold', { minutes: Number(arg('--hold-min', 0)) }); await delay(Number(arg('--hold-min', 0)) * 60_000); }
@@ -819,17 +833,31 @@ try {
     const backfill = claims.map((c, i) => [c, i]).filter(([c]) => c.priority === 'backfill').map(([, i]) => i);
     // 补渲切出的细任务里,认领时是 normal 档的(同一个结果键已有创建方的 normal 任务:不另起、按 normal 做)
     const derivedClaims = (q.claims ?? []).filter((c) => derived.includes(c.id));
-    return { claims: claims.length, normal: normal.length, backfill: backfill.length, lastNormal: normal.length ? Math.max(...normal) : null, firstBackfill: backfill.length ? Math.min(...backfill) : null,
-      seq: claims.map((c) => (c.priority === 'backfill' ? 'B' : 'N')).join(''), derived: derived.length, derivedNormal: derivedClaims.filter((c) => c.priority !== 'backfill').length };
+    // 创建方这一版 normal 计划的发布时刻(同一个预渲染进程记的,与认领时刻可比)
+    const pubs = (q.published ?? []).filter((p) => p.at >= editAt - 1000).map((p) => p.at);
+    const normalPublishedAt = pubs.length ? Math.min(...pubs) : null;
+    const lastNormalIdx = normal.length ? Math.max(...normal) : null;
+    // 「抢先」的补渲认领:排在最后一个 normal 之前的 backfill。合乎规则的只有一种——认领时 normal 那一版计划还没发布
+    const early = backfill.filter((i) => lastNormalIdx !== null && i < lastNormalIdx).map((i) => ({ i, afterPublishMs: normalPublishedAt === null ? null : claims[i].at - normalPublishedAt }));
+    return { claims: claims.length, normal: normal.length, backfill: backfill.length, lastNormal: lastNormalIdx, firstBackfill: backfill.length ? Math.min(...backfill) : null,
+      seq: claims.map((c) => (c.priority === 'backfill' ? 'B' : 'N')).join(''), derived: derived.length, derivedNormal: derivedClaims.filter((c) => c.priority !== 'backfill').length,
+      normalPublishedMs: normalPublishedAt === null ? null : normalPublishedAt - editAt, early };
   }, 900_000, 2000) : null;
   /*
    * 两种结果都合乎「补渲排在后面」(mechanism/document-service.md「优先级」):
    * - 补渲的细任务是新键:标 backfill,节点先做完 normal 再做它们;
    * - 创建方这一版的 normal 计划也切到了新放的卡(它在创建方那边还没测、按声明判重),细任务同键:不另起、按 normal 做,
    *   一张 backfill 都不出现(c10-cost 第 2 轮实测 `NNNNNNN`,第 1 轮 `NNNNNNNNBB`,取决于两边谁先发布)。
+   * 第三种(完整验收实测 `BNNNNBB`、`BNNNNNNNNNNB`,main 上同样):手机的补渲计划比创建方的 normal 计划先发布(手机约 1 秒、
+   * 创建方约 2 秒),节点那时手里没有 normal 的活,按「先认 normal,没有了才认 backfill」认下了一个补渲细任务——合乎规则,
+   * 节点不抢占已经在做的任务。所以排在 normal 前面的 backfill 认领,只在「认领时 normal 计划还没发布」时才算合规:
+   * 认领时刻不晚于 normal 计划的发布时刻加 EARLY_SLACK_MS(发布到节点看得见要过一趟文档服务)。normal 发布之后、
+   * normal 还没认完之前出现的 backfill 认领仍然判不过。
    */
-  const orderOk = !!order && order.normal > 0 && (order.backfill > 0 ? order.lastNormal < order.firstBackfill : order.derivedNormal > 0);
-  check(orderOk, '补渲细任务排在本机判重的任务之后(节点先做完 normal,再做 backfill;同键已有 normal 任务时按 normal 做)', order);
+  const EARLY_SLACK_MS = 1000;
+  const earlyOk = !!order && order.early.every((e) => e.afterPublishMs !== null && e.afterPublishMs <= EARLY_SLACK_MS);
+  const orderOk = !!order && order.normal > 0 && (order.backfill > 0 ? earlyOk : order.derivedNormal > 0);
+  check(orderOk, '补渲细任务排在本机判重的任务之后(normal 发布之后节点先做完 normal、再做 backfill;normal 发布之前已认下的补渲不算;同键已有 normal 任务时按 normal 做)', order);
   const extraSmall = state.extraClip ? await until('新放的轻卡的小尺寸回到手机', () => P(phone, (id) => {
     const l = (window.__pcOnlineSnapshots?.()?.layers ?? []).find((x) => x.clipId === id);
     return l && l.ready > 0 ? { ready: l.ready } : null;

@@ -57,6 +57,8 @@ export interface SyncInput {
   seeking: boolean;
   /** 元素这一刻是不是暂停的 */
   paused: boolean;
+  /** 元素已经放到素材尽头(`el.ended`)。缺省 false */
+  ended?: boolean;
   /** 播放头换算到这条素材上的时刻 */
   target: number;
   /** 时间轴在播放中 */
@@ -115,6 +117,18 @@ export function planSync(input: SyncInput): SyncPlan {
 
   const drift = target - elTime; // 正数 = 视频落后于播放头
   const off = Math.abs(drift);
+
+  /*
+   * 元素已经放到素材尽头,而播放头还在这一段里(声音比播放头快了一点先放完,或片段比素材长)。
+   * 这时候**不能再调 play()**:浏览器对「放完了的元素」的 play() 是从头重播 —— 片段末尾会冒出一下开头的声音,
+   * 接着偏差过 0.5s 又被硬 seek 回末尾,尾巴再放一遍。放完了就安静等播放头走出这一段;
+   * 只有播放头真的回到了前面(超过硬 seek 的门槛)才 seek 回去接着放,seek 之后元素不再是「放完了」。
+   */
+  if (input.ended) {
+    if (drift >= -HARD_SEEK_SEC) return { ...NOTHING, rate: 1 };
+    if (now - lastSeekAt < SEEK_COOLDOWN_MS) return { ...NOTHING, rate: 1 };
+    return { seekTo: target, rate: 1, play: true, pause: false, retryInMs: null };
+  }
 
   if (off > HARD_SEEK_SEC) {
     // 真脱节了。但冷却没过就先忍着 —— 上一次 seek 的解码可能还在路上,

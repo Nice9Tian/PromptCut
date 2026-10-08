@@ -5,6 +5,7 @@ import { loadSlim } from "@tsparticles/slim";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { assetOptions } from "../catalogAssets";
 
+
 /**
  * 粒子背景:tsParticles(MIT)画在 canvas 上的漂浮粒子,可选连线。
  *

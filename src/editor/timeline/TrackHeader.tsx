@@ -18,6 +18,7 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(track.name);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const mutedClips = track.clips.filter(clip => clip.audioMuted || clip.audioVolume === 0).length;
 
   const handleBlur = () => {
     setIsEditing(false);
@@ -66,6 +67,9 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
             track.name
           )}
         </div>
+        {(track.muted || mutedClips > 0) && <span className="pc-track-mute-summary" title={track.muted ? "整条序列已静音" : `${mutedClips} 个片段已静音；放大时间轴可查看每段标记`}>
+          {track.muted ? "已静音" : `${mutedClips} 静音`}
+        </span>}
         <div className="pc-tl-row-acts" onPointerDown={(e) => e.stopPropagation()}>
           <button type="button" className={track.muted ? "is-active" : ""}
             onClick={() => actions.updateTrack(track.id, { muted: !track.muted })}

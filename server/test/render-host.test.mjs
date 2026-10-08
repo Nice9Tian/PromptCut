@@ -207,7 +207,7 @@ test('RH1 配置解析:单项、数组、缺字段报错;maxConcurrent 缺省 1�
 });
 
 test('RH1 render-host:参数解析与子进程环境变量(契约第 2 节)', () => {
-  assert.deepEqual(parseArgs(['--config', 'h.json']), { port: 5400, config: 'h.json', data: null, maxConcurrent: null, streams: false, verbose: false }, '缺省端口 5400');
+  assert.deepEqual(parseArgs(['--config', 'h.json']), { port: 5400, config: 'h.json', data: null, maxConcurrent: null, streams: false, verbose: false, cwd: null }, '缺省端口 5400；--cwd（隔离工作进程用自己的检出副本）缺省不给');
   assert.equal(parseArgs(['--port', '5403', '--max-concurrent', '2', '--streams']).port, 5403);
   assert.throws(() => parseArgs(['--max-concurrent', '5']), /1～4/);
   assert.throws(() => parseArgs(['--nope']), /不认识/);

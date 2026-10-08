@@ -10,6 +10,7 @@ import { EffectsSection } from "../left/EffectsSection";
 import { EditSection } from "../left/EditSection";
 import { CaptionsSection } from "../left/CaptionsSection";
 import { AiPanel } from "../right/AiPanel";
+import { OnlineAgentPage } from "../right/OnlineAgentPage";
 import { onlineUnsupported } from "../../online/pageFlag";
 import { ScriptPage } from "../right/chat/ScriptPage";
 import { AgentAttentionTracker } from "./agentAttention";
@@ -30,8 +31,8 @@ const EditPage = memo(EditSection);
 const CaptionsPage = memo(CaptionsSection);
 const ScriptPageMemo = memo(ScriptPage);
 /**
- * 在线浏览器模式的 Agent 页:AI 助手要本机编辑器进程(模型配置、对话记录、工具执行都走它的 `/api/*`),
- * 在线页面按契约第 2 节置灰,不挂 AiPanel、一个请求都不发。
+ * 在线浏览器模式的 Agent 页占位:手机竖屏(低内存档)仍是它。AI 助手的本机版要本机编辑器进程(模型配置、对话记录、工具执行都走它的 `/api/*`),
+ * 在线页面按契约第 2 节不挂 AiPanel;宽屏换成「云端」接入方式的 AI 栏(`OnlineAgentPage`,云端 Agent 服务契约 9.5)。
  */
 function OnlineAgentPlaceholder(_props: { tabId: string; active: boolean; mcpConnected: boolean }) {
   return (
@@ -43,7 +44,10 @@ function OnlineAgentPlaceholder(_props: { tabId: string; active: boolean; mcpCon
   );
 }
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
-const AgentPage = memo(ONLINE_BUILD ? OnlineAgentPlaceholder : AiPanel);
+function OnlineAgentSwitch(props: { tabId: string; active: boolean; mcpConnected: boolean }) {
+  return <OnlineAgentPage tabId={props.tabId} active={props.active} placeholder={<OnlineAgentPlaceholder {...props} />} />;
+}
+const AgentPage = memo(ONLINE_BUILD ? OnlineAgentSwitch : AiPanel);
 
 const goImport = () => activateRailItem("library", { expand: true });
 

@@ -1,9 +1,11 @@
 import { AudioWaveform } from "./AudioWaveform";
 import { ClipVolumeDialog } from "./ClipVolumeDialog";
+import { ClipMuteBadge, clipMuteReason, reportClipAudioResult } from "./ClipMuteBadge";
+import { clipHasAudio, clipHasEmbeddedAudio } from "../../kernel/cardAudioRendition.mjs";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
-import { getCard, knownCardName, onSyncedUserCardsChanged, syncedCardView, syncedUserCardsGen } from "../../kernel/registry";
+import { cardRunStatesGen, getCard, knownCardName, onCardRunStatesChanged, onSyncedUserCardsChanged, syncedCardView, syncedUserCardsGen } from "../../kernel/registry";
 import { clipSubtitleOf, paramsCardView } from "../left/paramsView";
 import { onlineBrowserMode, unsupportedHere } from "../../render/placeholderHost";
 import { clipCoverage, subscribeCoverage } from "../onlineCoverage";
@@ -33,6 +35,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const paramsView = clip.cardId ? paramsCardView(clip.cardId, { getCard, syncedCardView }) : undefined;
   // 同步来的用户卡(在线页面从内容库卡片源码认出来的)表变了要重绘:标签换成真名
   useSyncExternalStore(onSyncedUserCardsChanged, syncedUserCardsGen);
+  // 同步来的卡的运行状态变了也重绘:载入成功的不再挂「需要本地 PC 渲染辅助」的徽标,运行不了的照挂
+  useSyncExternalStore(onCardRunStatesChanged, cardRunStatesGen);
   // 标签:构建时定义的名字 → 同步表里的名字 →「未知卡片」(C10 契约第 9 节)
   const label = clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
   /*
@@ -47,6 +51,11 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
   // 这一段是不是「有画面的素材」:只有它能转成声音(卡片、图片、已经是声音的都不行)
   const canBecomeAudio = !!clip.mediaId && getState().project.media.find((m) => m.id === clip.mediaId)?.kind === "video";
+  const embeddedAudio = clipHasEmbeddedAudio(getState().project, clip, getCard);
+  const hasAudio = clipHasAudio(getState().project, clip, getCard);
+  const muteReason = clipMuteReason(clip, track);
+  const selectedAudioIds = selection.includes(clip.id) ? selection : [clip.id];
+  const reportAudio = (result: { ok: boolean; error?: string }) => reportClipAudioResult(result, message => window.alert(message));
 
   // 字幕卡不走「标题 + 副标题」那一套:它的内容是一条条字幕,直接在色块里画出来
   const isCaption = isCaptionClip(clip);
@@ -203,7 +212,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
     if (track.locked) return;
     e.preventDefault();
     e.stopPropagation();
-    actions.select([clip.id]);
+    if (!selection.includes(clip.id)) actions.select([clip.id]);
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
@@ -213,6 +222,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
     "pc-clip absolute top-1 bottom-1 rounded flex items-center px-2 text-xs overflow-hidden select-none border",
     track.locked ? "" : "cursor-pointer",
     isSelected ? "is-selected z-20" : "z-10",
+    muteReason ? "is-audio-muted" : "",
     dragState?.forbidden ? "is-forbidden bg-red-500/50 border-red-500 border-dashed" : "",
   ].join(" ");
 
@@ -232,6 +242,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
         ref={dragRef}
         data-clip-id={clip.id}
         data-track-kind={trackKind}
+        data-audio-muted={muteReason ? "true" : undefined}
+        aria-label={muteReason ? `${label || "片段"}，${muteReason}` : undefined}
+        title={muteReason ? `${label || "片段"}：${muteReason}` : undefined}
         className={clipClasses}
         style={{
           left: `${xOfTime(displayStart, pxPerSec)}px`,
@@ -287,6 +300,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           </span>
         )}
 
+        {muteReason && (displayEnd - displayStart) * pxPerSec >= 76 && <ClipMuteBadge reason={muteReason} label={label} />}
+
         {/* 镜头切换标记画在文字之上、把手之下:把手要能拖，标记只是看的 */}
         <ShotMarkers clip={clip} rowHeight={ROW_SIZE_H[rowSize]} />
 
@@ -295,6 +310,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           className={`absolute right-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize pc-clip-trim"}`}
         />
       </div>
+
+      {muteReason && (displayEnd - displayStart) * pxPerSec < 76 && <ClipMuteBadge reason={muteReason} label={label} compact
+        style={{ left: xOfTime(displayStart, pxPerSec) + Math.max(0, ((displayEnd - displayStart) * pxPerSec - 18) / 2), top: 5, right: "auto", transform: `translateY(${translateY}px)`, zIndex: 25 }} />}
 
       {volumeOpen && <ClipVolumeDialog clip={clip} track={track} onClose={() => setVolumeOpen(false)} />}
       {contextMenu && (
@@ -312,9 +330,14 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               ? [{ label: `去掉强调:${describeEmphasis(clip.emphasis)}`, action: () => actions.setClipEmphasis(clip.id, null) }]
               : []),
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
-            ...(media && media.kind !== "image" ? [{ label: "调整声音音量…", disabled: !!track.locked, action: () => setVolumeOpen(true) }] : []),
+            ...(hasAudio ? [
+              { label: clip.audioMuted ? "恢复片段声音" : "静音片段", disabled: !!track.locked, action: () => reportAudio(actions.setClipMuted(clip.id, !clip.audioMuted)) },
+              { label: "调整声音音量…", disabled: !!track.locked, action: () => setVolumeOpen(true) },
+            ] : []),
             // 只要声音:画面没了,位置、长度、素材内偏移、淡入淡出都留着;素材库里同时多一份声音素材
-            ...(canBecomeAudio ? [{ label: "音画分离", disabled: !!track.locked || !!clip.audioMuted, action: () => actions.separateAudio(clip.id) }, { label: "转换为声音", action: () => actions.convertClipToAudio(clip.id) }] : []),
+            ...(canBecomeAudio || embeddedAudio ? [{ label: selectedAudioIds.length > 1 ? `分离所选音轨（${selectedAudioIds.length} 段）` : "音画分离", disabled: !!track.locked,
+              action: () => reportAudio(actions.separateAudios(selectedAudioIds)) }] : []),
+            ...(canBecomeAudio && !embeddedAudio ? [{ label: "转换为声音", action: () => reportAudio(actions.convertClipToAudio(clip.id)) }] : []),
             // 有声音的素材段可以直接去转写(图片没有声音,不给这一项)
             ...(() => {
               const media = clip.mediaId ? getState().project.media.find((m) => m.id === clip.mediaId) : null;

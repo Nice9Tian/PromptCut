@@ -22,6 +22,10 @@ export interface ChatHeaderProps {
   onChangeShowThinking: (next: boolean) => void;
   onOpenHistory: () => void;
   onOpenSetup: () => void;
+  /** 「云端」接入方式:没有本机的 AI 设置可开,给了这句话按钮就置灰、悬停显示它(契约 9.5) */
+  settingsDisabled?: string;
+  /** 连接状态点的说明;不给就按 mcpConnected 的「已连接 / 未连接」 */
+  statusLabel?: string;
 }
 
 /**
@@ -33,9 +37,9 @@ export interface ChatHeaderProps {
  * 剧本变成 rail 上的一页。顶栏只留每一轮都可能要点的东西。
  */
 export function ChatHeader(props: ChatHeaderProps) {
-  const { title, mcpConnected, showThinking, onChangeShowThinking, onOpenHistory, onOpenSetup } = props;
+  const { title, mcpConnected, showThinking, onChangeShowThinking, onOpenHistory, onOpenSetup, settingsDisabled, statusLabel } = props;
   const side = useDockSide("right");
-  const conn = mcpConnected ? "已连接" : "未连接";
+  const conn = statusLabel ?? (mcpConnected ? "已连接" : "未连接");
   return (
     <div className={`ai-panel-header${side === "left" ? " is-left" : ""}`}>
       <CollapsePanelButton placement="start" />
@@ -70,8 +74,9 @@ export function ChatHeader(props: ChatHeaderProps) {
           type="button"
           className="pc-icon-btn"
           data-pc="ai-settings"
-          title="AI 设置"
+          title={settingsDisabled ?? "AI 设置"}
           aria-label="AI 设置"
+          disabled={!!settingsDisabled}
           onClick={onOpenSetup}
         >
           <IconSettings size={16} />

@@ -33,10 +33,20 @@ export interface CardProps<P> {
   /** 每次重播 +1。卡片组件用 key={playToken} 挂载,所以组件内部不需要读它;保留给需要手动重置的卡。 */
   playToken: number;
   /**
-   * 自 clip 起点起的秒数(舞台每帧传入)。绝大多数卡不需要它(挂载即播);
+   * 普通视觉卡为自 clip 起点起的秒数；带 audio() 的视觉卡为已包含源偏移的秒数(舞台每帧传入)。
+   * 声画卡与 audio 的 range.start/sampleRate 同钟，不要再次叠加 sourceOffset。绝大多数卡不需要它(挂载即播);
    * 只有「跟着时间轴走」的卡(章节导航、字幕轨、口播视频 seek)才读它。
    */
   t?: number;
+  /** 裁切/切分后的源偏移（秒）。普通 mu-typing 用它补局部 t；有 audio() 的卡其 t 已含此值，只作诊断。 */
+  sourceOffset?: number;
+  /**
+   * 挂载钟:这张卡自挂载起经过的舞台毫秒。**只有平铺时间轴的导出页**(`ExportView` 里不经 `FrameScene` 的那个 `Stage`)
+   * 会传,而且只在卡片是在片段起点之前挂上的时候传(舞台提前 `CARD_MOUNT_LEAD` 挂载,30 fps 下就是早一帧)。
+   * 旧的「挂载即播」卡从挂载那一刻起计时,在这条路径上比片段起点早走这一段;改成按 `t` 取画面的卡要与旧画面逐帧一致,
+   * 就在收到它时用它代替 `t`(mu-typing)。预览、Project 导出、预渲染都不传,那里一律按 `t`。
+   */
+  mountClockMs?: number;
   /** clip 总时长(秒) */
   duration?: number;
   /**
@@ -161,7 +171,7 @@ export interface CardDef<P = Record<string, unknown>> {
   defaults: P;
   controls: Control[];
   /**
-   * DOM 卡的 React 组件。**图卡(写了 `card` / `audio`)不写它**,由 `GraphCard` 代渲;
+   * DOM 卡的 React 组件。可同时声明 audio()，声音由宿主统一调度；视觉图卡 card() 由 GraphCard 代渲;
    * 两者都没有的定义既不是 DOM 卡也不是图卡,`Stage` 会整段跳过。
    */
   Component?: ComponentType<CardProps<P>>;
@@ -173,7 +183,7 @@ export interface CardDef<P = Record<string, unknown>> {
    */
   inputs?: Record<string, { description?: string }>;
   /**
-   * 视觉图卡:按片段本地时间 `t`(秒)算出一份 GPU 描述,由宿主在 WebGL 上执行。
+   * 视觉图卡:按片段源时间 `t`(秒，含节点 timeOffset)算出一份 GPU 描述,由宿主在 WebGL 上执行。
    * `sources[name]` 见 `src/render/cards/GraphCard.tsx`;帮助函数在 `src/render/cards/graphValues.ts`。
    */
   card?: (
@@ -182,7 +192,7 @@ export interface CardDef<P = Record<string, unknown>> {
     params: P,
     ctx: GraphCardContext,
   ) => import("./cardGpu").CardGpuValue | Promise<import("./cardGpu").CardGpuValue>;
-  /** 音频图卡:按采样区间产出交错的 Float32 采样块。 */
+  /** 按采样区间产出交错 Float32 采样块。可与 Component/card 共存，使用同一参数与源时间；不得自行播放音频。inputs:{} 表示纯合成。 */
   audio?: (
     sources: Record<string, GraphCardSource>,
     range: GraphAudioRange,
@@ -317,6 +327,8 @@ export interface Clip {
   start: number; // 秒
   end: number; // 秒
   params: Record<string, unknown>;
+  /** 仅渲染时间轴派生值，不另存配方；事件型卡片的原始时间偏移（秒）。 */
+  sourceOffset?: number;
   /** 绑定到一条运动轨迹。没绑就是 undefined，卡片位置固定 */
   motion?: ClipMotion;
   /** 卡片在舞台上的框(位置/尺寸/锚点/缩放/旋转)。没有就铺满舞台。见 ClipFrame */

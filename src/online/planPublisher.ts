@@ -18,6 +18,10 @@
  *   最多等 `BROWSER_NODE_WAIT_MS`(3 s,三级数字),超时照发。切分方认领计划时,队列按此刻在线、同一用户、watch 着本项目的浏览器节点
  *   给指纹(`claude/rq-m7-queue`),先发计划就轮不到本页。计划本身不写浏览器意向(页面自报的不作数)。由 `nodeReady()` 判;
  *   节点报到完时宿主调 `nodeChanged()`,等着的那一版马上发。
+ * - 用户卡、图卡(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条):本页能执行同步来的卡、且节点已报到拿到了
+ *   `cardEnvFingerprint` 时,`input.browser` 带 `{ cardEnvFingerprint, userCards, graphCards, cardSources }`(`cardSources`:本页已载入成功、
+ *   代码身份已定下来的卡片 id → 身份),切分方据此给浏览器出这几类卡的那一份。登记变了(转译好一张、换代、能力变了)就是另一个计划
+ *   (签名里带它的摘要),马上重发;没有这类卡时不带这一项,计划与原来逐字相同。登记在 `nodeCardInfo.ts`,由 `deps.browser` 注入或缺省读它。
  * - 每发一版之前调 `onPublish(version)`:宿主据此把这一版的已确认项目留在内存(M7 D6:执行细任务用任务的 `projectRev` 那一版)。
  *
  * 任务形状与队列侧 `server/render-queue/messages.mjs` 的 `clipsPlanTaskOf` 逐字段相同(单测对拍);这里照抄,页面构建不带服务端模块。
@@ -34,8 +38,8 @@ export const BROWSER_NODE_WAIT_MS = 3000;
 const NODE_WAIT_POLL_MS = 250;
 
 /** 片段清单的签名:与 `server/render-queue/messages.mjs` 的 `backfillSig` 同一个算法(FNV-1a 两轮,base36) */
-export function clipsSig(clips: readonly string[]): string {
-  const text = [...new Set(clips)].map(String).sort().join("\n");
+export function clipsSig(clips: readonly string[], extra?: string): string {
+  const text = [...new Set(clips)].map(String).sort().join("\n") + (extra ? `\n\u0000${extra}` : "");
   const fnv = (seed: number) => {
     let h = seed >>> 0;
     for (let i = 0; i < text.length; i++) {
@@ -47,27 +51,60 @@ export function clipsSig(clips: readonly string[]): string {
   return fnv(0x811c9dc5).toString(36) + fnv(0x2f4a7c15).toString(36);
 }
 
+/** 清单计划的 `input.browser`(与 `server/render-queue/messages.mjs` 的 `browserCardsOf` 的结果同形) */
+export interface BrowserCards {
+  cardEnvFingerprint: string;
+  userCards: boolean;
+  graphCards: boolean;
+  /** 卡片 id → 代码身份 */
+  cardSources: Record<string, string>;
+}
+
+const HEX16 = /^[0-9a-f]{16}$/;
+/** 规整:与 `messages.mjs` 的 `browserCardsOf` 逐条相同(指纹 16 位小写十六进制;卡片 id 升序、各有长度上限、最多 500 张);不合格回 null */
+export function browserCardsOf(v: unknown): BrowserCards | null {
+  const o = v as Record<string, unknown> | null | undefined;
+  if (!o || typeof o !== "object" || Array.isArray(o) || typeof o.cardEnvFingerprint !== "string" || !HEX16.test(o.cardEnvFingerprint)) return null;
+  const cardSources: Record<string, string> = {};
+  const src = o.cardSources as Record<string, unknown> | null | undefined;
+  if (src && typeof src === "object" && !Array.isArray(src)) {
+    for (const id of Object.keys(src).sort().slice(0, 500)) {
+      const version = src[id];
+      if (id === "" || id.length > 256 || typeof version !== "string" || version === "" || version.length > 128) continue;
+      cardSources[id] = version;
+    }
+  }
+  return { cardEnvFingerprint: o.cardEnvFingerprint, userCards: o.userCards === true, graphCards: o.graphCards === true, cardSources };
+}
+/** 同 `messages.mjs` 的 `browserCardsSig` */
+export function browserCardsSig(cards: BrowserCards): string {
+  return [cards.cardEnvFingerprint, cards.userCards ? 1 : 0, cards.graphCards ? 1 : 0, ...Object.keys(cards.cardSources).sort().map((id) => `${id}=${cards.cardSources[id]}`)].join("|");
+}
+
 export interface ClipsPlanTask {
   id: string;
   kind: "plan";
   resultKey: string;
   range: null;
   source: { projectId: string; projectRev: number };
-  input: { clips: string[] };
+  input: { clips: string[]; browser?: BrowserCards };
   weight: { class: "medium"; estMs: null; frames: null };
   requires: { codeVersion?: string };
   priority: "normal";
 }
 
-export function clipsPlanTask({ projectId, projectRev, clips, codeVersion }: { projectId: string; projectRev: number; clips: readonly string[]; codeVersion?: string | null }): ClipsPlanTask {
+export function clipsPlanTask({ projectId, projectRev, clips, codeVersion, browser }: { projectId: string; projectRev: number; clips: readonly string[]; codeVersion?: string | null; browser?: unknown }): ClipsPlanTask {
   const list = [...new Set(clips)].map(String).filter(Boolean).sort();
-  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${clipsSig(list)}`;
+  const cards = browserCardsOf(browser);
+  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${clipsSig(list, cards ? browserCardsSig(cards) : undefined)}`;
   return {
     id: `plan:${resultKey}`, kind: "plan", resultKey, range: null,
-    source: { projectId, projectRev }, input: { clips: list }, weight: { class: "medium", estMs: null, frames: null },
+    source: { projectId, projectRev }, input: cards ? { clips: list, browser: cards } : { clips: list }, weight: { class: "medium", estMs: null, frames: null },
     requires: typeof codeVersion === "string" && codeVersion ? { codeVersion } : {}, priority: "normal",
   };
 }
+
+import { getNodeCardInfo, subscribeNodeCardInfo, type NodeCardInfo } from "./nodeCardInfo.ts";
 
 type Request = (msg: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>;
 /** `createWsEndpoint` 的形状(只用这两样) */
@@ -97,6 +134,21 @@ export interface PlanPublisherDeps {
   nodeReady?: () => "none" | "pending" | "ready";
   /** 发这一版之前调(M7 D6:宿主留存这一版的已确认项目) */
   onPublish?: (v: Version) => void;
+  /**
+   * 本页能运行的用户卡、图卡(块 N):回 `input.browser` 要的内容,本页不能执行或节点还没拿到 `cardEnvFingerprint` 回 null。
+   * 缺省读 `nodeCardInfo.ts` 的登记处。
+   */
+  browser?: () => unknown | null;
+  /** 上面那份登记变了的通知(订阅,回退订);缺省订阅 `nodeCardInfo.ts` 的登记处。变了就重发(清单计划的签名带它的摘要) */
+  subscribeBrowser?: (cb: () => void) => () => void;
+}
+
+/** 登记处的内容 → `input.browser`:本页能执行(有运行时版本)、节点拿到了 cardEnvFingerprint、至少声明了一种能力才给 */
+export function browserCardsFromInfo(info: NodeCardInfo): BrowserCards | null {
+  if (!info.cardRuntime || !info.cardEnvFingerprint || !(info.userCards || info.graphCards)) return null;
+  // 本页一张能运行的卡也没有:不带这一项(计划与没有这个功能时逐字相同,不为空登记换签名)
+  if (Object.keys(info.cardSources).length === 0) return null;
+  return browserCardsOf({ cardEnvFingerprint: info.cardEnvFingerprint, userCards: info.userCards, graphCards: info.graphCards, cardSources: info.cardSources });
 }
 
 export interface Version { projectId: string | null; projectRev: number | null }
@@ -155,6 +207,8 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
   let disposed = false;
   /** 从哪一刻起在等本页的节点报到(这一版还没发出去);null = 没在等 */
   let waitSince: number | null = null;
+  // 本页能运行的卡变了:同一份清单也是另一个计划(签名带它的摘要),防抖后重发
+  const offBrowser = (deps.subscribeBrowser ?? subscribeNodeCardInfo)(() => { if (!disposed && measuredOk && want) schedule(); });
   const log: ReturnType<PlanPublisher["debug"]>["log"] = [];
   const note = (e: (typeof log)[number]) => { log.push(e); if (log.length > 20) log.splice(0, log.length - 20); };
 
@@ -166,7 +220,9 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
     if (!projectId || !Number.isSafeInteger(projectRev)) return;
     const clips = [...(deps.clips?.() ?? [])];
     if (!clips.length) return;
-    const task = clipsPlanTask({ projectId, projectRev: projectRev as number, clips, codeVersion: deps.codeVersion ?? null });
+    let browser: unknown = null;
+    try { browser = deps.browser ? deps.browser() : browserCardsFromInfo(getNodeCardInfo(now())); } catch { browser = null; }
+    const task = clipsPlanTask({ projectId, projectRev: projectRev as number, clips, codeVersion: deps.codeVersion ?? null, browser });
     if (task.id === last) return;
     // M7:本页当纯浏览器节点时先等它报到完(拿到指纹),最多 BROWSER_NODE_WAIT_MS,超时照发
     const node = deps.nodeReady?.() ?? "none";
@@ -231,6 +287,7 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
     },
     dispose() {
       disposed = true;
+      try { offBrowser(); } catch { /* 订阅方坏了 */ }
       if (timer !== null) clearTimer(timer);
       timer = null;
       over?.stop();

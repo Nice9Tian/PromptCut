@@ -26,10 +26,12 @@
  *   0  桌面页面建项目:重卡 H(`probe-slow-stepped`,本机 preload 先渲出来,只在本机帧库里 —— 真机缺陷里「两小时前渲过、只在本地」的层)、
  *      用户卡 U1、U2(`mu-animated-shiny-text`);勾「多用户协作」放云端(本机托管组合当云端)。
  *   A1 桌面进入项目后,队列诊断 `/api/frames/queue` 的 `nodes` 里有这个项目的节点;推送日志有 `push.started`,目标是云端素材服务
- *   A2 云端内容库出现这个项目的层表(`layers:<项目文档 id>`),H 那一层(交接前渲的、补推上去的)与用户卡 U1 那一层各段清单齐,产物字节在云端素材服务里
- *   A3 另一台设备(在线构建、另一个浏览器上下文 = 另一个设备 id)凭邀请进同一项目,贴出 U1 的层(没有「需要本地 PC 渲染辅助」图标与徽标)
- *   A4 桌面页面关掉(节点照常在线)之后,在线页面把 U2 改成一段新内容(没有预渲染结果):在线页面发布的清单计划被这台桌面的节点认领、切分,
- *      细任务由它完成,在线页面随之贴上
+ *   A2 云端内容库出现这个项目的层表(`layers:<项目文档 id>`),H 那一层(交接前渲的、补推上去的)各段清单齐,产物字节在云端素材服务里
+ *   A3 另一台设备(在线构建、另一个浏览器上下文 = 另一个设备 id)凭邀请进同一项目,贴出判重的 H 的层(出自这台桌面,没有「需要本地 PC 渲染辅助」
+ *      图标与徽标)。用户卡 U1 按新语义(2026-10-06:在线浏览器能执行仓库用户卡,按轻重区分)分两路:判轻 → 直接活渲、不进清单计划;
+ *      判重 → 桌面节点渲出、层表里有、贴得出来。两路都没有图标与徽标
+ *   A4 桌面页面关掉(节点照常在线)之后,在线页面把判重的 H 改成一段新内容(没有预渲染结果):在线页面发布的清单计划被这台桌面的节点认领、切分,
+ *      细任务由它完成,在线页面随之贴上(2026-10-07 之前这一步改的是用户卡 U2;它现在通常判轻、不进清单计划)
  *   A5 桌面页面回来(同一个标签页,刷新后回到共享项目、重交配置),再离开项目:节点撤掉,`nodes` 回空,推送队列停
  *   A7 桌面绑着共享项目时,另一个浏览器上下文在同一台桌面上开一个**不共享**的本机项目 B(同样的重卡,标签不同):
  *      B 的帧在本机渲完之后,云端素材服务里没有 B 的任何一块、云端内容库没有 B 的层表,B 的 plan 没发进共享项目的队列;
@@ -407,7 +409,11 @@ async function clipStage(page, clipId) {
     const w = document.querySelector(`[data-pc-clip="${id}"]:not([data-pc-media])`);
     const slot = w?.querySelector(':scope > [data-pc-placeholder-slot]');
     const plane = w?.querySelector(':scope > [data-pc-snapshot-plane]');
-    return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null } : null;
+    // live:活组件的子树露着(包裹层没有被「贴快照 / 抑制 / 等快照 / 追帧」藏起来,而且确实有内容)
+    const hidden = !!w && ['pc-snapshot', 'pc-suppressed', 'pc-awaiting', 'pc-settling'].some((c) => w.classList.contains(c));
+    const liveKids = w ? [...w.children].filter((c) => !c.matches('[data-pc-placeholder-slot],[data-pc-snapshot-plane],[data-pc-proxy-plane],[data-pc-stream-plane]')) : [];
+    return w ? { snapshot: !!plane && plane.childElementCount > 0, placeholder: !!slot && !slot.hidden, reason: slot?.getAttribute('data-pc-placeholder-reason') ?? null,
+      live: !hidden && liveKids.some((c) => c.childElementCount > 0 || (c.textContent ?? '').trim().length > 0) } : null;
   }, clipId).catch(() => null) : null;
 }
 const clipBadge = (page, clipId) => P(page, (id) => !!document.querySelector(`[data-clip-id="${id}"] [data-pc="clip-custom-card"]`), clipId).catch(() => null);
@@ -418,7 +424,8 @@ async function onlinePasted(page, clipId, seekTo, { notResultKey = null } = {}) 
   const l = o?.layers?.find((x) => x.clipId === clipId && (!notResultKey || x.resultKey !== notResultKey));
   const st = await clipStage(page, clipId);
   const badge = await clipBadge(page, clipId);
-  return l && l.ready > 0 && st?.snapshot && !st.placeholder && badge === false ? { layer: { ready: l.ready, envFingerprint: l.envFingerprint ?? null, resultKey: String(l.resultKey ?? '').slice(0, 16) }, stage: st } : null;
+  // 暂停着时判重的卡先贴快照、随后可能换成追出来的精确活画面(「停下追一帧」):两种都算贴出来了,占位不算
+  return l && l.ready > 0 && (st?.snapshot || st?.live) && !st.placeholder && badge === false ? { layer: { ready: l.ready, envFingerprint: l.envFingerprint ?? null, resultKey: String(l.resultKey ?? '').slice(0, 16) }, stage: st } : null;
 }
 
 /** 桌面页面建项目、放卡、测完 */
@@ -636,21 +643,48 @@ try {
     await until('A3:在线页面测完', async () => !(await P(member, () => !!document.querySelector('[data-pc="probe-gate"]'))) && (await previewDiag(member))?.dual !== undefined, 300_000, 500);
     const a3Marks = { joined: Date.now() - t3 };
     const firstU1 = { stage: await clipStage(member, state.u1), badge: await clipBadge(member, state.u1) };
-    const u1 = await until('A3:在线页面贴出 U1 的层(没有图标与徽标)', () => onlinePasted(member, state.u1, 1), 900_000, 4000);
+    // 判重的 H:这台桌面交接前渲的、补推到云端的那一层,在线页面贴得出来(桌面节点的产物到了另一台设备)
+    const hPasted = await until('A3:在线页面贴出判重的 H 的层(没有图标与徽标)', () => onlinePasted(member, state.heavy, 1), 900_000, 4000);
     a3Marks.pasted = Date.now() - t3;
-    a3Marks.firstPlanAt = ((await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null))?.log ?? []).find((x) => x.ok)?.at ?? null;
+    check(!!hPasted && hPasted.layer.envFingerprint === state.nodeSummary.envFingerprint, 'A3:在线页面贴出 H 的层,出自这台桌面的环境,没有「需要本地 PC 渲染辅助」',
+      { hPasted, node: state.nodeSummary.envFingerprint, last: { stage: await clipStage(member, state.heavy), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.heavy) ?? null } });
+    /*
+     * 用户卡 U1,新语义(2026-10-06 决定 C,product/platforms.md):仓库用户卡在在线页面里本页能运行,和内置卡一样按轻重区分。
+     * 旧断言「在线页面贴出 U1 的层」「U1 那一层写进云端层表」说的是「这台设备跑不了用户卡、一律判重」那时的路:页面把它放进清单计划、
+     * 桌面节点渲出来、页面贴层。现在它通常判轻:在可见舞台里直接活渲、不进清单计划,桌面节点也就不为它渲层(完整验收里旧断言因此等满 15 分钟)。
+     * 按「它在不在在线页面发布的清单计划里」分流:不在 → 活渲、没有图标与徽标;在(同位置的重卡把它挤出预算)→ 桌面节点渲出、层表里有、贴得出来。
+     * 「桌面节点认领在线页面发布的判重任务、结果贴回」由下面 A4 用判重的 H 验。
+     */
+    const planOf = () => P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
+    const plan3 = await until('A3:在线页面发布了清单计划(含判重的 H)', async () => { const d = await planOf(); return d?.lastClips?.includes(state.heavy) ? d : null; }, 120_000, 1000);
+    a3Marks.firstPlanAt = (plan3?.log ?? []).find((x) => x.ok)?.at ?? null;
     if (a3Marks.firstPlanAt) a3Marks.firstPlanAt -= t3;
+    check(!!plan3, 'A3:在线页面把 H 判重、放进它发布的清单计划', { lastClips: (await planOf())?.lastClips ?? null });
+    const u1InPlan = !!plan3?.lastClips?.includes(state.u1);
+    let u1 = null;
+    let u1Cloud = null;
+    if (u1InPlan) {
+      u1 = await until('A3:在线页面贴出 U1 的层(判重的一路;没有图标与徽标)', () => onlinePasted(member, state.u1, 1), 900_000, 4000);
+      check(!!u1, 'A3(U1 判重的一路):在线页面贴出用户卡 U1 的层,没有「需要本地 PC 渲染辅助」', { u1, firstU1, last: { stage: await clipStage(member, state.u1), badge: await clipBadge(member, state.u1), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.u1) ?? null } });
+      u1Cloud = await until('A2:云端层表里 U1 那一层齐、字节在云端', () => layerCovered(conn, state.docId, state.u1), 120_000, 3000);
+      check(!!u1Cloud, 'A2(U1 判重的一路):用户卡 U1 那一层写进云端层表,产物字节在云端素材服务', u1Cloud);
+    } else {
+      u1 = await until('A3:在线页面直接活渲 U1(判轻的一路;没有占位、图标与徽标)', async () => {
+        await P(member, () => window.__pcStore.actions.seek(1)).catch(() => {});
+        const st = await clipStage(member, state.u1);
+        return st?.live && !st.placeholder && (await clipBadge(member, state.u1)) === false ? { stage: st, live: true } : null;
+      }, 120_000, 2000);
+      check(!!u1, 'A3(U1 判轻的一路):在线页面在可见舞台里直接活渲用户卡 U1,没有占位、没有「需要本地 PC 渲染辅助」图标与徽标', { u1, firstU1, last: { stage: await clipStage(member, state.u1), badge: await clipBadge(member, state.u1) } });
+      check(!(await planOf())?.lastClips?.includes(state.u1), 'A3(U1 判轻的一路):它不在在线页面发布的清单计划里(不进预渲染集合)', (await planOf())?.lastClips ?? null);
+    }
     await shot(member, 'a3-online-u1');
-    check(!!u1, 'A3:在线页面贴出用户卡 U1 的层,没有「需要本地 PC 渲染辅助」', { u1, firstU1, last: { stage: await clipStage(member, state.u1), badge: await clipBadge(member, state.u1), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.u1) ?? null } });
-    const u1Cloud = await until('A2:云端层表里 U1 那一层齐、字节在云端', () => layerCovered(conn, state.docId, state.u1), 120_000, 3000);
-    check(!!u1Cloud, 'A2:用户卡 U1 那一层写进云端层表,产物字节在云端素材服务', u1Cloud);
     // 核对:项目文档 id 两边一致、层表键对得上
     const memberDocId = await P(member, () => window.__pcStore.getState().project.id);
-    check(memberDocId === state.docId && (u1Cloud?.mapProjectId ?? state.docId) === state.docId, '核对:桌面页面与在线页面的项目文档 id 一致,层表键 layers:<id> 对得上', { desktop: state.docId, member: memberDocId, map: u1Cloud?.mapProjectId, tenant: state.projectId });
+    check(memberDocId === state.docId && (heavyCloud?.mapProjectId ?? state.docId) === state.docId, '核对:桌面页面与在线页面的项目文档 id 一致,层表键 layers:<id> 对得上', { desktop: state.docId, member: memberDocId, map: heavyCloud?.mapProjectId, tenant: state.projectId });
     // 核对:节点报的代码版本 = 在线构建嵌的那一个
     const cvOk = await onlineBuildHas(state.nodeSummary.codeVersion).catch(() => false);
     check(cvOk, '核对:渲染节点报的代码版本就是在线构建嵌进页面的那一个(requires.codeVersion)', { node: String(state.nodeSummary.codeVersion).slice(0, 16) });
-    out.steps.a3 = { ms: Date.now() - t3, marks: a3Marks, firstU1, u1, u1Cloud, ids: { desktop: state.docId, member: memberDocId, tenant: state.projectId }, codeVersionInOnlineBuild: cvOk };
+    out.steps.a3 = { ms: Date.now() - t3, marks: a3Marks, hPasted, u1InPlan, firstU1, u1, u1Cloud, ids: { desktop: state.docId, member: memberDocId, tenant: state.projectId }, codeVersionInOnlineBuild: cvOk };
     say('a3.done', out.steps.a3);
 
     /* ---------------------------------------------------------------- A4. 桌面页面关掉;在线页面把 U2 改成新内容,清单计划由这台桌面认领并完成 */
@@ -660,18 +694,24 @@ try {
     const qGone = await dq();
     check(qGone?.nodes?.some((x) => x.projectId === state.projectId), 'A4:桌面页面关掉之后节点照常在线', qGone);
     const before = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
-    // U2 改之前那一层的结果键:改完之后要等一层新的(不同的结果键),免得把旧内容的层当成贴上了
-    const u2Old = await until('A4:改之前 U2 已有一层(在线计划渲的)', () => layerCovered(conn, state.docId, state.u2), 600_000, 3000);
+    /*
+     * 这一步原来改的是用户卡 U2(旧语义下在线页面跑不了用户卡、一律判重)。新语义下 U2 通常判轻、不进清单计划,
+     * 所以改成改**判重的 H**(`probe-slow-stepped`,每帧烧 40 ms,在线页面量出来就是重卡):换一个 label → 结果键变 →
+     * 在线页面发布含 H 的新清单计划 → 这台桌面的节点认领、切分、渲出来 → 在线页面贴上。下面变量名里的 u2 指的就是这一层。
+     */
+    const A4_CLIP = state.heavy;
+    // 改之前那一层的结果键(A2 核过的那一层):改完之后要等一层新的(不同的结果键),免得把旧内容的层当成贴上了
+    const u2Old = await until('A4:改之前 H 已有一层', () => layerCovered(conn, state.docId, A4_CLIP), 600_000, 3000);
     const oldKey = u2Old?.fullResultKey ?? null;
-    // 分段计时(毫秒,相对「在线页面改 U2」那一刻):planPublishedAt 是页面记的发布成功时刻,其余是探针看到的时刻(按各自的轮询间隔有滞后)
+    // 分段计时(毫秒,相对「在线页面改 H」那一刻):planPublishedAt 是页面记的发布成功时刻,其余是探针看到的时刻(按各自的轮询间隔有滞后)
     const marks = { start: t4, u2OldSeen: Date.now(), edit: Date.now() };
-    await P(member, (spec) => { const s = window.__pcStore; s.actions.setClipParams(spec.id, { text: spec.text }); s.actions.seek(1); }, { id: state.u2, text: `U2 新内容 ${RUN}` });
+    await P(member, (spec) => { const s = window.__pcStore; s.actions.setClipParams(spec.id, { label: spec.label }); s.actions.seek(1); }, { id: A4_CLIP, label: `H 新内容 ${RUN}` });
     await delay(1500);
-    const firstU2 = { stage: await clipStage(member, state.u2), badge: await clipBadge(member, state.u2) };
+    const firstU2 = { stage: await clipStage(member, A4_CLIP), badge: await clipBadge(member, A4_CLIP) };
     await shot(member, 'a4-online-u2-before');
-    const plan = await until('A4:在线页面发布了含 U2 的新清单计划', async () => {
+    const plan = await until('A4:在线页面发布了含 H 的新清单计划', async () => {
       const d = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
-      return d?.last && d.last !== before?.last && d.lastClips?.includes(state.u2) ? d : null;
+      return d?.last && d.last !== before?.last && d.lastClips?.includes(A4_CLIP) ? d : null;
     }, 120_000, 1000);
     const planId = plan?.last ?? null;
     marks.planSeen = Date.now();
@@ -684,13 +724,13 @@ try {
     }, 600_000, 2000);
     marks.claimedSeen = Date.now();
     check(!!claimed, 'A4:在线页面发布的清单计划被这台桌面的节点认领、切分', { planId, claimed: !!claimed });
-    const u2Cloud = await until('A4:云端层表里 U2 换成新内容那一层(结果键变了)、各段齐、字节在云端', () => layerCovered(conn, state.docId, state.u2, { notResultKey: oldKey }), 900_000, 3000);
+    const u2Cloud = await until('A4:云端层表里 H 换成新内容那一层(结果键变了)、各段齐、字节在云端', () => layerCovered(conn, state.docId, A4_CLIP, { notResultKey: oldKey }), 900_000, 3000);
     marks.cloudLayerSeen = Date.now();
-    check(!!u2Cloud && !!oldKey, 'A4:U2 的新内容由这台桌面渲出、推到云端、写进层表', { oldKey: oldKey?.slice(0, 16), u2Cloud });
-    const u2 = await until('A4:在线页面贴上 U2 的新内容', () => onlinePasted(member, state.u2, 1, { notResultKey: oldKey }), 900_000, 4000);
+    check(!!u2Cloud && !!oldKey && u2Cloud.envFingerprint === state.nodeSummary.envFingerprint, 'A4:H 的新内容由这台桌面渲出(那一层出自它的环境)、推到云端、写进层表', { oldKey: oldKey?.slice(0, 16), u2Cloud, node: state.nodeSummary.envFingerprint });
+    const u2 = await until('A4:在线页面贴上 H 的新内容', () => onlinePasted(member, A4_CLIP, 1, { notResultKey: oldKey }), 900_000, 4000);
     marks.pastedSeen = Date.now();
     await shot(member, 'a4-online-u2-after');
-    check(!!u2, 'A4:在线页面随之贴上 U2(没有图标与徽标)', { u2, firstU2, last: { stage: await clipStage(member, state.u2), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === state.u2) ?? null } });
+    check(!!u2, 'A4:在线页面随之贴上 H 的新内容(没有图标与徽标)', { u2, firstU2, last: { stage: await clipStage(member, A4_CLIP), online: (await onlineDiag(member))?.layers?.find((x) => x.clipId === A4_CLIP) ?? null } });
     const q4 = (await dDiag())?.queue;
     const derived = Array.isArray(q4?.plans?.[planId]) ? q4.plans[planId] : [];
     const doneByDesktop = derived.filter((id) => q4?.local?.completed?.includes(id) || q4?.local?.dedup?.includes(id));
@@ -707,10 +747,12 @@ try {
     const resumed = await until('A5:桌面页面回到共享项目(同一标签页,刷新后自动回去)', () => P(dpage, async () => {
       const S = await import('/src/editor/sync/syncManager.ts');
       const H = window.__pcRenderNodeHandoff?.();
-      return S.currentSharedLink() && H?.bound ? { handoff: H } : null;
+      // 等到页面真的把配置交出去(`sent`):页面接上共享项目时先记下绑定(`bound`),等挑到素材服务(最多 5 秒)才 POST。
+      // 以前只等 `bound` 就去读预渲染进程的计数,读早了 `same` 还是 0(2026-10-07 实测;交接的代码与 main 相同,是探针的竞态)
+      return S.currentSharedLink() && H?.bound && H.sent ? { handoff: H } : null;
     }), 180_000, 1000);
     check(!!resumed, 'A5:桌面页面回到共享项目、重交配置', resumed);
-    const rnBack = await dRenderNode();
+    const rnBack = (await until('A5:预渲染进程收到重交的配置(counters.same ≥ 1)', async () => { const r = await dRenderNode(); return r?.counters?.same >= 1 ? r : null; }, 20_000, 500)) ?? await dRenderNode();
     check(rnBack?.bound === true && rnBack.counters?.same >= 1 && rnBack.counters?.starts === 1, 'A5:同一个项目重交配置只换票据,不重建节点', rnBack?.counters);
     if (resumed) {
       await P(dpage, async () => { const S = await import('/src/editor/sync/syncManager.ts'); S.leaveSharedToLocal(); });
