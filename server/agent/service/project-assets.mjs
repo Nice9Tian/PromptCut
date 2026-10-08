@@ -17,14 +17,27 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
   if (typeof contextAccess?.authorize !== 'function' || !['issue', 'request', 'json'].every(k => typeof client?.[k] === 'function') ||
       typeof workspace !== 'function' || typeof reserveImport !== 'function' || !Number.isSafeInteger(maxImportBytes) || maxImportBytes < 1)
     fail(503, 'project-assets-unconfigured');
-  const owned = createToolAssetResources(resources), pending = new Set(); let stopped = false;
-  const authorize = async (context, action) => { if (stopped) fail(503, 'project-assets-closed'); await contextAccess.authorize(context, action); };
-  const track = (context, stream) => owned.track(context, stream);
-  const json = (context, handle, options) => client.json(context, handle, options, stream => track(context, stream));
+  const owned = createToolAssetResources(resources), pending = new Set(); let stopped = false, closePromise;
+  const watch = task => { pending.add(task); void task.then(() => pending.delete(task), () => pending.delete(task)); return task; };
+  const invocation = fn => (...args) => watch(Promise.resolve().then(() => fn(...args)));
+  const authorize = async (context, action) => {
+    if (stopped) fail(503, 'project-assets-closed'); await contextAccess.authorize(context, action);
+    if (stopped) fail(503, 'project-assets-closed');
+  };
+  const track = async (context, stream) => {
+    const registration = await owned.track(context, stream);
+    if (stopped) { stream.destroy(); await registration.closed; fail(503, 'project-assets-closed'); }
+    return registration;
+  };
+  const json = async (context, handle, options) => {
+    await authorize(context, ['PUT', 'POST'].includes(options.method) && !options.verify ? 'write' : 'read');
+    return client.json(context, handle, options, stream => track(context, stream));
+  };
   async function openRead(context, mediaId, options = {}) {
     if (!reference(mediaId) || !exactShape(options, [], ['tier', 'range']) || !['original', 'small'].includes(options.tier ?? 'original')) fail(400, 'project-assets-input-invalid');
     await authorize(context, 'read');
     const handle = await client.issue(context, 'openRead', { mediaId, tier: options.tier ?? 'original' }, crypto.randomUUID());
+    await authorize(context, 'read');
     const response = await client.request(context, handle, { method: 'GET', requestId: crypto.randomUUID(), ...(options.range ? { range: options.range } : {}) });
     const output = new PassThrough(); output.on('error', () => {});
     let inputRegistration, outputRegistration;
@@ -44,12 +57,11 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
       if (!options.range && (size !== handle.resource.size || digest.digest('hex') !== handle.resource.hash)) fail(409, 'asset-hash-mismatch');
       await authorize(context, 'read'); output.end();
     })();
-    pending.add(pumping);
-    pumping.catch(error => output.destroy(error)).finally(() => pending.delete(pumping));
+    void pumping.catch(error => output.destroy(error));
     const closed = (async () => {
       let error; try { await pumping; } catch (failure) { error = failure; response.stream.destroy(); output.destroy(failure); }
       await Promise.all([inputRegistration.closed, outputRegistration.closed, response.closed]); if (error) throw error;
-    })(); closed.catch(() => {});
+    })(); watch(closed);
     return { stream: output, assetRef: handle.resource, mediaRev: handle.mediaRev, projectRev: handle.projectRev, kind: handle.kind, closed };
   }
   async function importBytes(context, source, options) {
@@ -59,6 +71,7 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
     if (!source || (typeof source[Symbol.asyncIterator] !== 'function' && !(source instanceof Uint8Array))) fail(400, 'project-assets-source-invalid');
     if (options.sourceJobId && (typeof verifySourceJob !== 'function' || await verifySourceJob(context, options.sourceJobId) !== true)) fail(403, 'project-assets-job-mismatch');
     const ws = await workspace(context), ext = path.extname(options.name).slice(1).toLowerCase();
+    await authorize(context, 'write');
     if (!/^[a-z0-9]{1,8}$/.test(ext) || typeof ws?.resolve !== 'function' || typeof ws?.remove !== 'function') fail(503, 'project-assets-workspace-unconfigured');
     const importId = `import:${digestOf({ context, requestId: options.requestId })}`;
     const rel = `.tmp/run-import-${crypto.randomUUID()}`, file = ws.resolve(rel);
@@ -70,13 +83,16 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
       for await (const piece of input) { await authorize(context, 'write'); const bytes = Buffer.from(piece); size += bytes.length;
         if (size > maxImportBytes) fail(413, 'project-assets-import-too-large');
         await reserveImport(context, bytes.length);
-        for (let offset = 0; offset < bytes.length;) { const write = await handle.write(bytes, offset, bytes.length - offset); if (!write.bytesWritten) fail(503, 'project-assets-spool-write-failed'); offset += write.bytesWritten; }
+        for (let offset = 0; offset < bytes.length;) { await authorize(context, 'write'); const write = await handle.write(bytes, offset, bytes.length - offset); if (!write.bytesWritten) fail(503, 'project-assets-spool-write-failed'); offset += write.bytesWritten; }
         digest.update(bytes); }
+      await authorize(context, 'write');
       await handle.sync(); await wrapped.close(); await authorize(context, 'write');
       if (!size) fail(400, 'project-assets-empty-import');
       const hash = digest.digest('hex');
       const issued = await client.issue(context, 'import', { hash, size, ext, name: options.name, kind: options.kind, importId }, options.requestId);
+      await authorize(context, 'write');
       const statHandle = await client.issue(context, 'verifyRef', { hash, size }, `stat:${crypto.randomUUID()}`);
+      await authorize(context, 'write');
       const read = await fs.open(file, 'r'), readResource = owned.handle(read); await track(context, readResource.resource);
       try {
         let status = await json(context, statHandle, { method: 'GET', suffix: '/chunks', importId, requestId: crypto.randomUUID() });
@@ -105,6 +121,17 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
         result.resourceRev !== resourceRevision(resource) || result.assetRefId !== assetRefId(resource)) fail(503, 'run-asset-response-invalid');
     await authorize(context, 'read'); return result;
   }
-  return { openRead, import: (...args) => { const task = importBytes(...args); pending.add(task); task.finally(() => pending.delete(task)).catch(() => {}); return task; }, verifyRef,
-    async close() { stopped = true; const receipt = await owned.close(); await Promise.allSettled([...pending]); return receipt; } };
+  return { openRead: invocation(openRead), import: invocation(importBytes), verifyRef: invocation(verifyRef),
+    close() {
+      if (!closePromise) {
+        stopped = true;
+        closePromise = (async () => {
+          const outcomes = await Promise.allSettled([owned.close(), ...pending]);
+          const receipt = await owned.close(); // Includes resources whose setup was already in flight.
+          if (outcomes[0].status === 'rejected') throw outcomes[0].reason;
+          return receipt;
+        })();
+      }
+      return closePromise;
+    } };
 }

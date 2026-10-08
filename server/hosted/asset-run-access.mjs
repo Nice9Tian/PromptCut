@@ -42,14 +42,22 @@ export function createAssetRunConsumer({ client, file, assetInstanceId, serviceI
   function pause(event) {
     const seen = new Set(), results = [];
     const launch = () => { for (const [id, entry] of live) if (!seen.has(id) && (!event.control || relevant(state.leases[id], event.control))) {
-      seen.add(id); results.push(Promise.resolve(entry.lease.revoke(event)).then(async result => {
+      seen.add(id); let revoking;
+      try { revoking = entry.lease.revoke(event); } catch (error) { revoking = Promise.reject(error); }
+      const result = Promise.resolve(revoking).then(async result => {
         if (entry.lease.signal.aborted) await entry.closed; return result;
-      }));
+      });
+      // Supervise every result now, before waiting for the admission cohort.
+      // Convert to settled data, then propagate the original failure below.
+      results.push(result.then(value => ({ value }), error => ({ error })));
     } };
     launch(); // synchronous barrier before pending admissions/authority awaits
     return (async () => {
       const cohort = [...admissions.values()]; await Promise.all(cohort.map(a => a.done));
-      launch(); await Promise.all(results);
+      launch(); const outcomes = await Promise.all(results);
+      const failures = [...new Set(outcomes.filter(r => Object.hasOwn(r, 'error')).map(r => r.error))];
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, 'asset-run-closure-failed', { cause: failures[0] });
     })();
   }
   async function acknowledgePending() {
