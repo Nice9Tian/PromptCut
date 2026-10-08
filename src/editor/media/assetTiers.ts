@@ -447,7 +447,18 @@ function relayAssetBase(docBase: string, fallback: string | null): string | null
  * (放本机项目由 `lanAssetBaseOf` 给);都没有、或指向本页面自己(本机就是主机)就留在本地素材服务。回挑中的基址。
  * `online`:在线浏览器模式(调用方按 `mode.ts` 的 `ONLINE` 给;本模块会被 Node 单测载入,不静态引 `mode.ts`)。
  */
-export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false, fallback = null }: { online?: boolean; fallback?: string | null } = {}): Promise<string | null> {
+export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false, fallback = null, account }: { online?: boolean; fallback?: string | null; account?: { base: string; ticket: NonNullable<RemoteAssets['ticket']> } } = {}): Promise<string | null> {
+  // Account tickets are issued by the HTTP session authority. v2 forbids the old
+  // service.watch/auth.ticket protocols; keep them exclusively on the LAN branch.
+  if (account) {
+    discoveryGeneration++;
+    if (discoveryTimer !== null) clearTimeout(discoveryTimer);
+    discoveryTimer = null; sharedAssetContext = null; docLink = link;
+    setRemoteAssets({ base: account.base, ticket: account.ticket });
+    stopUploadTarget?.();
+    stopUploadTarget = startUploadTarget(link, account.base, { accountTicket: account.ticket.info });
+    return account.base;
+  }
   let base: string | null = null;
   // 同一条连接重连后再调(重新订阅登记):已经挑好的素材服务不因一次失败退回本地,挑到同一个也不重设
   const again = docLink === link && remote !== null;
@@ -523,6 +534,7 @@ export function disconnectSharedAssets(): void {
 let stopUploadTarget: (() => void) | null = null;
 
 export interface UploadTargetDeps {
+  accountTicket?: (opts?: { force?: boolean }) => Promise<{ ticket: string; exp: number } | null>;
   post?: (body: { base: string | null; ticket?: string | null }) => Promise<void>;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
@@ -571,10 +583,10 @@ export function startUploadTarget(link: LinkLike | null, base: string | null, de
     let ticket: string | null = null;
     let exp = issued + ASSET_TICKET_TTL_MS;
     try {
-      const r = await link.request({ type: "auth.ticket", kind: "asset", access: "rw" });
-      if (r.type === "auth.ticket.ok" && typeof r.ticket === "string") {
-        ticket = r.ticket;
-        exp = Number(r.exp) || exp;
+      if (deps.accountTicket) { const r = await deps.accountTicket(); if (r) { ticket = r.ticket; exp = r.exp; } }
+      else {
+        const r = await link.request({ type: "auth.ticket", kind: "asset", access: "rw" });
+        if (r.type === "auth.ticket.ok" && typeof r.ticket === "string") { ticket = r.ticket; exp = Number(r.exp) || exp; }
       }
     } catch { /* 下面按签不到处理 */ }
     if (stopped) return;

@@ -288,3 +288,8 @@
 .sp-export-tag.is-warn { color: var(--danger); }
 .sp-export-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .sp-danger-btn:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+.sp-account-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 16px 0; }
+.sp-account-form label { display: flex; flex-direction: column; gap: 6px; flex: 1 1 180px; }
+.sp-account-form input:not([type="checkbox"]) { min-width: 0; padding: 9px 12px; background: var(--panel, #181b24); color: inherit; border: 1px solid var(--border, #333746); border-radius: 8px; font: inherit; }
+.sp-account-form .sp-account-check { flex-direction: row; align-items: center; flex: 0 1 auto; }
+.sp-account-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }

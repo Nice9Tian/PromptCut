@@ -45,6 +45,9 @@ import { CloudDelegationError, setCloudIdentity, type CloudIdentity } from "../.
  */
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 import { loadBrowserDevice } from "../../online/device";
+import type { CloudAccountClient, ProjectSession } from "../../account/client";
+import { hostedWsUrlOf } from "../../online/invite";
+import { AccountFailure } from "../../account/client";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
 import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
 
@@ -82,6 +85,7 @@ export interface SharedInfo {
   /** 以创建者身份进入 */
   creator: boolean;
   hostDeviceName?: string;
+  accountId?: string;
 }
 
 export interface UndoNoticeView {
@@ -258,7 +262,7 @@ export function currentDocProjectId(): string {
 /** 本页面是谁(撤销提示条里认「你在另一个页面」用) */
 export function me(): Me {
   const s = view.shared;
-  if (s && view.device) return { session, userId: `${s.username}@${view.device.deviceId}` };
+  if (s && view.device) return { session, userId: `${s.accountId ? `account:${s.accountId}` : s.username}@${view.device.deviceId}` };
   return { session, userId: "local" };
 }
 
@@ -553,7 +557,7 @@ export function pageOpIdsSince(mark: number | null): string[] {
   return cur.link.ds.opIdsSince(mark);
 }
 
-function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string) {
+function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string, account = false) {
   const prev = cur;
   if (prev) {
     for (const off of prev.offs) off();
@@ -571,7 +575,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
       seenProject = p;
       noteProjectForCardSync(p);
       // 自动渲染节点:项目文档的 id(层表键用它)晚到时再交一次(同一个项目只换 id,不重建)
-      if (kind === "shared" && !ONLINE_BUILD && !ONLINE) bindRenderNode({ url, projectId: docProjectId, contentId: p.id || null }, renderNodeHooks);
+      if (!account && kind === "shared" && !ONLINE_BUILD && !ONLINE) bindRenderNode({ url, projectId: docProjectId, contentId: p.id || null }, renderNodeHooks);
     }),
   ];
   if (ONLINE) {
@@ -581,7 +585,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   }
   cur = { link, kind, docProjectId, url, unbind, offs };
   // 云端 Agent 的身份跟着共享项目的连接走:接上就绪,回本机空间撤掉(界面据此重取一次 info 与对话列表)
-  setCloudIdentity(kind === "shared" ? cloudIdentityOf(link) : null);
+  setCloudIdentity(kind === "shared" && !account ? cloudIdentityOf(link) : null);
   if (kind !== "shared") clearHostedAgent();
   if (kind === "shared" && !ONLINE_BUILD && !ONLINE) {
     const descriptor = currentAssociation();
@@ -592,11 +596,11 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     }
   }
   // 在场状态(A3 第二阶段):这个页面「正在编辑」的片段经这条连接发布,别的成员那边 Agent 的范围经它收
-  setPresenceLink(link, docProjectId, me().userId ?? "");
+  setPresenceLink(link, docProjectId, me().userId ?? "", account);
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, hosted: kind === "local" ? null : view.hosted, notice: null });
   refreshStatus();
   // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
-  if (!ONLINE_BUILD && !ONLINE) {
+  if (!account && !ONLINE_BUILD && !ONLINE) {
     bindAgentSide(kind, docProjectId, url);
     bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
     /*
@@ -1060,6 +1064,60 @@ export interface EnterCredentials {
 
 /** 进入失败:原因,限速时另带服务端给的冷却秒数(C10a 表 A「请 {秒数} 秒后再试」) */
 export type EnterResult = { ok: true } | { ok: false; error: EnterError; retryAfter?: number | null };
+
+/** Account v2 cloud entry. Server projection wins; no local root upload or legacy password proof. */
+export async function enterAccountProject(options: { client: CloudAccountClient; origin: string; projectId: string;
+  name: string; initial: Project; firstSession?: ProjectSession }): Promise<void> {
+  await ensureDevice();
+  const origin = new URL(options.origin).origin, base = `${origin}/hosted/`, url = hostedWsUrlOf(base);
+  let current = options.firstSession ?? await options.client.session(options.projectId);
+  let first = true, stopped = false, renewing: Promise<ProjectSession> | null = null;
+  const renew = () => renewing ??= options.client.session(options.projectId).then(value => current = value).finally(() => { renewing = null; });
+  const protocols = async () => { if (stopped) throw new AccountFailure(401, 'credential-revoked');
+    if (first) first = false; else await renew(); return [`promptcut.account.${current.connectionTicket}`]; };
+  const ticket = Object.assign(async () => (await ticket.info())?.ticket ?? null, {
+    info: async ({ force = false }: { force?: boolean } = {}) => {
+      if (stopped || cur?.link !== link) return null;
+      if (force || current.expiresAt <= Date.now() + 60_000) await renew();
+      if (stopped || cur?.link !== link) return null;
+      return { ticket: current.assetTicket, exp: current.expiresAt };
+    },
+  });
+  let ready = false;
+  let resolveEntry!: () => void, rejectEntry!: (error: unknown) => void;
+  const opened = new Promise<void>((resolve, reject) => { resolveEntry = resolve; rejectEntry = reject; });
+  const fail = (error: unknown) => { stopped = true; link.stop(); if (!ready) rejectEntry(error);
+    else { disconnectSharedAssets(); pushToast(error instanceof Error ? error.message : '云端登录已失效，请重新登录。', 'warn', Infinity); } };
+  const link = new SyncLink({ url, projectId: options.projectId, initial: options.initial, initialize: false, session,
+    protocols, resumeProtocols: async () => { await renew(); return [`promptcut.account.${current.connectionTicket}`]; },
+    saveBackup: b => void saveBackup(b), onMessage: onSideMessage,
+    onProtocolError: error => { const e = error as { status?: number }; if (e.status === 401 || e.status === 403) { fail(error); return true; }
+      pushToast(error instanceof Error ? error.message : '云端服务暂时不可用，正在等待重连。', 'warn'); return false; },
+    onOpen: () => { void (async () => {
+      await sharedStateReady(link);
+      if (stopped) return;
+      const account = options.client.account;
+      if (!account) throw new AccountFailure(401, 'login-required');
+      recoveryCoordinator.cancel(); releaseHolding(); setAssociation(null); clearSharedResume();
+      patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
+        username: account.name, accountId: account.id, creator: false }, members: [], hosted: null, blocked: null, association: null, reopenState: null });
+      bind(link, 'shared', options.projectId, url, true);
+      await connectSharedAssets(link, base, { online: ONLINE_BUILD || ONLINE, account: { base: `${origin}/media/api/asset`, ticket } });
+      link.send({ type: 'events.list' });
+      ready = true; resolveEntry();
+      const linkText = `${origin}/editor?project=${encodeURIComponent(options.projectId)}`;
+      pushToast('已进入云端项目，可以将项目链接发给另一位已登录成员。', 'info', Infinity, {
+        label: '复制项目链接', pc: 'cloud-project-copy', run: () => { void navigator.clipboard.writeText(linkText).then(
+          () => pushToast('项目链接已复制。', 'info'), () => pushToast(`项目链接：${linkText}`, 'info', Infinity)); },
+      });
+    })().catch(fail); },
+    onClosed: info => { if (!ready || info.fatal) fail(new AccountFailure(info.fatal ? 403 : 0, info.reason || 'network'));
+      else refreshStatus(); },
+  });
+  const timeout = setTimeout(() => { if (!ready) fail(new AccountFailure(503, 'session-unavailable')); }, 20_000);
+  link.start();
+  try { await opened; } finally { clearTimeout(timeout); }
+}
 
 const KICKED_KEY = "pc.shared.kicked";
 const CREATORS_KEY = "pc.shared.creators";

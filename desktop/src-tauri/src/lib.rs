@@ -15,6 +15,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 
 mod agent_webview;
+mod account_vault;
 mod background;
 mod chrome_color;
 mod chrome_path;
@@ -318,6 +319,7 @@ pub fn run() {
         // agent 浏览器的调试端口启动时就定下来:主窗口和子 webview 的启动参数都要带它
         .manage(agent_webview::AgentBrowser::new(agent_webview::pick_port()))
         .invoke_handler(tauri::generate_handler![
+            account_vault::account_bridge,
             acquire_proc_lock,
             release_proc_lock,
             is_proc_locked,
