@@ -4,7 +4,8 @@ import { createConversationAuthority } from '../account/conversation-authority.m
 import { createConversationInternalHandler } from '../account/conversation-internal.mjs';
 import { createRunAuthority } from '../account/run-authority.mjs';
 import { createRunInternalHandler } from '../account/run-internal.mjs';
-import { canonicalJson } from '../account/ledger.mjs';
+import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
+import { createAgentInstanceInternalHandler, instanceRequestProof } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
@@ -20,10 +21,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   if (!/^[a-f0-9]{64}$/.test(pin) || typeof kid !== 'string' || !kid || !ledger?.transaction ||
       !runtime?.authority || typeof accountClient?.verifyAcceptedMessage !== 'function' ||
       typeof getDocAssembly !== 'function' || typeof getService !== 'function') fail(503, 'doc-agent-configuration');
-  const docInstanceId = runtime.docInstanceId, subjects = new Map(), deliveries = new Map();
+  const docInstanceId = runtime.docInstanceId, subjects = new Map(), sockets = new WeakMap(), deliveries = new Map();
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
-  let stopped = false, runAuthority, certifiedSubject = null;
+  let stopped = false, runAuthority;
   const currentService = () => {
     if (stopped) fail(503, 'doc-agent-unavailable');
     try { serviceRegistry?.refresh({ force: true }); } catch { fail(403, 'run-service-forbidden'); }
@@ -31,21 +32,34 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     if (entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === kid))
       fail(403, 'run-service-forbidden');
   };
-  const resolveServicePrincipal = ({ fingerprint256 }) => {
-    if (certificateFingerprint(fingerprint256) !== pin) fail(403, 'run-service-forbidden');
+  const resolveServicePrincipal = ({ socket }) => {
+    if (!socket?.encrypted || socket.authorized !== true || socket.destroyed ||
+        certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== pin) fail(403, 'run-service-forbidden');
     currentService();
-    if (!certifiedSubject) {
+    instanceTlsBinding(socket); // exporter is taken only from the real peer socket.
+    let subject = sockets.get(socket);
+    if (!subject) {
       const authenticationId = randomUUID();
-      certifiedSubject = { service: 'agent', serviceKid: kid, authenticationId };
-      subjects.set(authenticationId, canonicalJson(certifiedSubject));
+      subject = { service: 'agent', serviceKid: kid, authenticationId };
+      sockets.set(socket, subject); subjects.set(authenticationId, socket);
+      socket.once('close', () => { subjects.delete(authenticationId); sockets.delete(socket); });
     }
-    return structuredClone(certifiedSubject);
+    return structuredClone(subject);
   };
   const verifyServiceInState = (_state, subject) => {
     currentService();
-    if (!subject || subjects.get(subject.authenticationId) !== canonicalJson(subject)) fail(403, 'run-service-forbidden');
+    const socket = subjects.get(subject?.authenticationId);
+    if (!socket || subject.service !== 'agent' || subject.serviceKid !== kid || socket.destroyed ||
+        socket.authorized !== true || certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== pin)
+      fail(403, 'run-service-forbidden');
     return { serviceId: 'agent', serviceKid: kid };
   };
+  const instanceAuthority = createAgentInstanceAuthority({ ledger,
+    verifyTransportInState(state, subject) {
+      const service = verifyServiceInState(state, subject);
+      return { ...service, authenticationId: subject.authenticationId,
+        channelBinding: instanceTlsBinding(subjects.get(subject.authenticationId)) };
+    } });
   // Operation and doc-transport closure are real partial evidence. Until the
   // registered Agent instance/resource witness exists, no control is ACKed.
   async function deliver(control) {
@@ -67,7 +81,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
           controlId: control.controlId, fenceRevision: control.fenceRevision, instances: {} };
         record.instances[docInstanceId] ??= { docInstanceId, operationReceipts, closed,
           // This is deliberately not a complete receipt or old-instance proof.
-          complete: false, agentState: 'registration-required', recordedAt: now() };
+          complete: false, agentState: 'resource-closure-required', recordedAt: now() };
       });
       return { pending: true, controlId: control.controlId };
     })();
@@ -96,7 +110,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     },
   });
   runAuthority = createRunAuthority({ ledger, conversationHooks: conversations.hooks,
-    verifyServiceInState, now, synchronize: () => runtime.authority.synchronize(),
+    verifyServiceInState, instanceAuthority, now, synchronize: () => runtime.authority.synchronize(),
     async verifySender(ref, context) {
       const checked = await accountClient.verifyAcceptedMessage(ref, context);
       await runtime.authority.synchronize();
@@ -105,21 +119,36 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     },
     onControl: control => { void deliver(control).catch(error => onDiagnostic({ code: error.code ?? 'run-control-pending', controlId: control.controlId })); },
   });
-  const requireRegisteredInstance = () => fail(503, 'run-instance-unavailable');
-  // The provider currently persists serviceId/kid but not an instance generation.
-  // Do not make public routes or WS use this gap as a free authorization path.
   const provider = {
-    checkAccess: requireRegisteredInstance, authorizeQuery: requireRegisteredInstance,
-    resolveRunPrincipal: requireRegisteredInstance, admit: requireRegisteredInstance,
-    confirmRead: requireRegisteredInstance, queryRead: requireRegisteredInstance, finish: requireRegisteredInstance,
+    checkAccess: input => runAuthority.checkAccess(input), authorizeQuery: input => runAuthority.authorizeQuery(input),
+    resolveRunPrincipal: input => runAuthority.resolveRunPrincipal(input), admit: input => runAuthority.admit(input),
+    confirmRead: input => runAuthority.confirmRead(input), queryRead: input => runAuthority.queryRead(input), finish: input => runAuthority.finish(input),
     applyAccessEvent: event => runAuthority.applyAccessEvent(event), synchronize: () => runAuthority.synchronize(),
   };
+  const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, resolveServicePrincipal });
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
     agentFingerprint256: pin, resolveDelegation: async ticket => {
       currentService(); return runtime.resolveAgentDelegation(ticket);
     } });
   const runsHandler = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: pin,
-    resolveServicePrincipal, issueRunTicket: input => runtime.issueRunTicket(input),
+    resolveServicePrincipal,
+    authenticateInvocation({ req, servicePrincipal, body, operation }) {
+      const cap = instanceAuthority.authenticate({ servicePrincipal, method: req.method,
+        path: new URL(req.url, 'https://internal.invalid').pathname, operation, request: body, proof: instanceRequestProof(req) });
+      return { servicePrincipal: { ...servicePrincipal, ...cap },
+        release: () => instanceAuthority.release(cap.instanceSession) };
+    },
+    principalForCheck({ projectId, runGrantId, servicePrincipal }) {
+      const grant = ledger.read().runGrantsV2?.[runGrantId];
+      if (!grant || grant.projectId !== projectId) fail(403, 'run-binding-mismatch');
+      return { ...Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId',
+        'accountId', 'loginId', 'credentialId', 'loginGeneration', 'serviceId', 'serviceKid',
+        'instanceId', 'instanceGeneration'].map(field => [field, grant[field]])),
+        realm: 'account', identityVersion: 2, role: 'agent', creator: false, servicePrincipal };
+    },
+    // A resolve invocation proves this read, not a long-lived data connection.
+    // Until the scoped data dispatch is mounted, no reusable run ticket is issued.
+    issueRunTicket: () => fail(503, 'run-data-proof-unavailable'),
     async listPendingRuns({ servicePrincipal }) {
       await runtime.authority.synchronize(); verifyServiceInState(ledger.read(), servicePrincipal);
       const state = ledger.read(), rows = [];
@@ -131,8 +160,8 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       return { conversations: rows };
     } });
   return { conversations, runProvider: provider, runHooks, deliver,
-    async handleInternal(req, res) { return await runsHandler(req, res) || await conversationsHandler(req, res); },
+    async handleInternal(req, res) { return await instancesHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
-    async close() { stopped = true; await Promise.allSettled([...deliveries.values()]); subjects.clear(); transport.close(); },
+    async close() { stopped = true; await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear(); transport.close(); },
   };
 }

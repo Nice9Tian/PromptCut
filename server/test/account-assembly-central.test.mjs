@@ -10,7 +10,9 @@ import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { startHostedCombo, hostedPaths } from '../hosted/combo.mjs';
 import { addServiceKey, generateServiceKeyPair } from '../auth/service-identity.mjs';
 import { createAssetMtlsTransport } from '../hosted/asset-doc-client.mjs';
-import { openAccountLedger } from '../account/ledger.mjs';
+import { openAccountLedger, digestOf } from '../account/ledger.mjs';
+import { canonicalReadRecord } from '../account/run-authority.mjs';
+import { instanceHttpRequest, registerHttpInstance } from './fixtures/agent-instance-request.mjs';
 import { stageHostedAssetFiles } from '../hosted/files.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { wsClient, waitFor } from './fake-ws-kit.mjs';
@@ -128,7 +130,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   assert.equal(delegation.accountId, ids[0]);
   await assert.rejects(combo.accountRuntime.resolveAgentDelegation(sessions[0].assetTicket), /ticket-expired/);
   await assert.rejects(combo.docAssembly.runProvider.checkAccess({ principal: delegation, projectId, action: 'read' }),
-    agentConfigured ? /run-instance-unavailable/ : /run-authority-unavailable/);
+    agentConfigured ? /instance-/ : /run-authority-unavailable/);
   if (agentConfigured) {
     assert.ok(combo.docAgentAssembly);
     const enable = async enabled => call(0, 'admin', { projectId, op: 'set-hosted-service', service: 'agent', enabled,
@@ -152,7 +154,33 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     const pending = (await rpc('runs/pending', {})).result;
     assert.deepEqual(pending.conversations.map(row => row.conversationId), ['actual-conversation']);
     assert.equal(Object.keys(pending.conversations[0]).length, 3);
-    await assert.rejects(rpc('runs/admit', { projectId, conversationId: 'actual-conversation', requestId: 'wake' }), /run-instance-unavailable/);
+    await assert.rejects(rpc('runs/admit', { projectId, conversationId: 'actual-conversation', requestId: 'wake' }), /instance-proof-required/);
+    const instance = await registerHttpInstance({ port: 5772, tls: pki.wrong, requestId: 'actual-agent-os-a' });
+    const signedRpc = (action, operation, body, os = instance) => instanceHttpRequest({ port: 5772, tls: pki.wrong,
+      path: '/internal/v2/runs/' + action, operation, body, instance: os });
+    const admitted = await signedRpc('admit', 'admit', { projectId, conversationId: 'actual-conversation', requestId: 'signed-wake' });
+    assert.equal(admitted.status, 200, JSON.stringify(admitted.body));
+    const grant = admitted.body.result;
+    assert.equal(grant.instanceId, instance.instanceId); assert.equal(grant.instanceGeneration, instance.instanceGeneration);
+    assert.equal(grant.accountId, ids[0]); assert.equal(grant.messageId, sent.messageId);
+    const runBinding = Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(field => [field, grant[field]]));
+    const prompt = canonicalReadRecord(grant.message, grant);
+    const readInput = { ...runBinding, requestId: 'signed-read', readIntentId: 'actual-os-read-intent', prompt, promptDigest: digestOf(prompt) };
+    const read = await signedRpc('read', 'confirmRead', readInput);
+    assert.equal(read.status, 200, JSON.stringify(read.body)); assert.equal(read.body.result.confirmed, true);
+    assert.equal((await signedRpc('read/query', 'queryRead', readInput)).status, 200);
+    const checkInput = { projectId, runGrantId: grant.runGrantId, action: 'write' };
+    const checked = await signedRpc('check', 'checkAccess', checkInput);
+    assert.equal(checked.status, 200, JSON.stringify(checked.body));
+    assert.equal(checked.body.result.principal.creator, false); assert.equal(checked.body.result.principal.accountId, ids[0]);
+    assert.equal(JSON.stringify(checked.body).includes('instanceSession'), false);
+    assert.equal(JSON.stringify(checked.body).includes('authenticationId'), false);
+    const otherOs = await registerHttpInstance({ port: 5772, tls: pki.wrong, requestId: 'actual-agent-os-b' });
+    assert.equal((await signedRpc('check', 'checkAccess', checkInput, otherOs)).status, 403, 'same cert new OS cannot consume old grant');
+    const ticket = await signedRpc('ticket', 'resolveRunPrincipal', { projectId, runGrantId: grant.runGrantId,
+      conversationId: grant.conversationId, purpose: 'run' });
+    assert.equal(ticket.status, 503); assert.equal(ticket.body.code, 'run-data-proof-unavailable');
+    assert.equal((await signedRpc('finish', 'finish', { ...runBinding, requestId: 'signed-finish' })).status, 200);
     await assert.rejects(rpc('conversations/send', { delegation: sessions[0].agentDelegationTicket, projectId,
       conversationId: 'fake', requestId: 'fake', content: 'fake', accountId: ids[1] }), /invalid-authority-claim/);
     await assert.rejects(rpc('conversations/switch', { delegation: sessions[0].agentDelegationTicket, projectId,
@@ -160,8 +188,8 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     const messages = (await rpc('conversations/get', { delegation: sessions[0].agentDelegationTicket, projectId,
       conversationId: 'actual-conversation' })).result.messages;
     assert.equal(messages.find(message => message.messageId !== sent.messageId).queueState, 'cancelled');
-    // off then on cannot revive already cancelled messages. Missing instance
-    // registration is explicitly pending, not replaced by this HTTP fixture.
+    // off then on cannot revive already cancelled messages. HTTP invocation
+    // proof does not establish a reusable WS/LP capability or OS-close witness.
     assert.equal((await enable(false)).status, 200); assert.equal((await enable(true)).status, 200);
     assert.equal((await rpc('runs/pending', {})).result.conversations.length, 0);
   }
@@ -193,7 +221,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
       priorClosureInstances = Object.values(state.docRunClosuresV2).flatMap(record => Object.keys(record.instances));
       assert.ok(priorClosureInstances.length > 0);
       assert.ok(Object.values(state.docRunClosuresV2).every(record => Object.values(record.instances)
-        .every(proof => proof.complete === false && proof.agentState === 'registration-required')));
+        .every(proof => proof.complete === false && proof.agentState === 'resource-closure-required')));
     } finally { audit.close(); }
   }
   combo = await startHostedCombo(config);
@@ -220,5 +248,5 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   const oldPrincipal = accepted[0].actor;
   assert.notEqual(await combo.accountRuntime.resumeGate({ ...oldPrincipal, realm: 'account', projectId, tenantId: projectId }), null);
   assert.equal((await call(0, 'session', { projectId, deviceId: 'page-0', requestId: 'revoked' })).status, 401);
-  t.diagnostic(`actual order accepted=${accepted.length}, orderSeq=${changed.orderSeq}; ${agentConfigured ? 'real factories; registered run instance/control ACK remains unavailable' : 'no run provider installed'}`);
+  t.diagnostic(`actual order accepted=${accepted.length}, orderSeq=${changed.orderSeq}; ${agentConfigured ? 'real registered HTTP run factory; WS/LP proof and control ACK remain unavailable' : 'no run provider installed'}`);
 });

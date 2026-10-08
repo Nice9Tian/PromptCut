@@ -11,6 +11,12 @@
  * 环境变量:
  *   PROMPTCUT_AGENT_DATA           数据目录,必须已存在且可写
  *   PROMPTCUT_AGENT_DOC_URL        文档服务地址(同机回环,如 ws://127.0.0.1:8787;控制连接只认本机发起)
+ *   PROMPTCUT_ACCOUNT_V2 / PROMPTCUT_ACCOUNT_V2_REQUIRED
+ *                                  账号版使用 1；required=1 时缺账号配置启动失败，绝不退回旧服务身份/用户名路径
+ *   PROMPTCUT_AGENT_DOC_INTERNAL_ORIGIN / PROMPTCUT_AGENT_DOC_FINGERPRINT256
+ *                                  账号版 doc 独立内部 mTLS HTTPS 源与 pinned 服务端证书
+ *   PROMPTCUT_AGENT_CLIENT_KEY_FILE / PROMPTCUT_AGENT_CLIENT_CERT_FILE / PROMPTCUT_AGENT_CA_FILE
+ *                                  Agent 独占 mTLS 私钥、证书、私有 CA 文件；只读，值不进日志
  *   PROMPTCUT_AGENT_SECRETS        服务身份的私钥目录(缺省 /var/lib/promptcut/agent-secrets),里面是 keygen 生成的 service-key.json(服务名 agent)
  *   PROMPTCUT_AGENT_HOST           缺省 127.0.0.1;只许回环(对外只经反向代理)
  *   PROMPTCUT_AGENT_PORT           缺省 8790
@@ -42,7 +48,9 @@
  * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发补渲。
  * 收到 SIGTERM / SIGINT:进行中的每一轮记「中断」后停下,状态落盘,5 秒内退出。
  *
- * 鉴权(契约第 4 节):命令行入口凭服务私钥连文档服务的控制连接(`server/auth/service-client.mjs`),每个请求的委托票据、
+ * 账号版当前仅开放 doc mTLS 对话 HTTP 与进程 RAM 实例注册。run 数据连接的逐帧证明尚未挂载；
+ * 虽然注册客户端能签 HTTP run 请求，生产 runner 不 admit，也不报 ready。
+ * 旧模式鉴权(契约第 4 节):命令行入口凭服务私钥连文档服务的控制连接(`server/auth/service-client.mjs`),每个请求的委托票据、
  * 每一轮的对话委托都交文档服务核验;连文档服务的数据连接用凭对话委托换来的连接票据(`hosted-wiring.mjs`)。
  * 补渲经服务身份的发布连接进文档服务的任务队列(`render-publisher.mjs`)。测试经 `startAgentService({ authenticate, credentials })` 给替身。
  * 本文件不引用 `src/`。
@@ -62,6 +70,8 @@ import { parseTestAllow } from '../agent/service/egress.mjs';
 import { readCollectConfig } from '../agent/service/hosted-collect.mjs';
 import { readDesktopModelConfig } from './rehearsal-model.mjs';
 import { createLookClient, parseLookUrl } from './look-client.mjs';
+import { createConversationClient } from './conversation-client.mjs';
+import { createRunClient } from './run-client.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -109,6 +119,8 @@ export async function startAgentService({
   workspaceLimits,
   toolLimits,
   collect = null,
+  accountMode = false,
+  conversationClient = null,
   root = ROOT,
   version = 'dev',
   codeVersion = null,
@@ -122,6 +134,8 @@ export async function startAgentService({
     throw new AgentConfigError('data-dir', `数据目录不可用:${err?.message ?? err}`);
   }
   if (typeof docUrl !== 'string' || !/^wss?:\/\//.test(docUrl)) throw new AgentConfigError('doc-url', '文档服务地址要是 ws(s)://');
+  if (accountMode === true && (!/^wss:\/\//.test(docUrl) || typeof conversationClient?.identity !== 'function'))
+    throw new AgentConfigError('account-v2', '账号模式需要真实安全文档连接和对话权威');
   if (!isLoopbackHost(host)) throw new AgentConfigError('bind-public', '这个服务只许绑回环地址,对外经反向代理');
 
   // 测试用的换驱动口子不带进这个进程(契约第 2.1 节)
@@ -160,6 +174,7 @@ export async function startAgentService({
     ...(workspaceLimits ? { workspaceLimits } : {}),
     ...(toolLimits ? { toolLimits } : {}),
     ...(collect ? { collect } : {}),
+    ...(accountMode ? { accountMode: true, conversationClient } : {}),
     log,
   });
   const api = createAgentHttp({ service, authenticate, version, codeVersion, log });
@@ -235,20 +250,41 @@ async function main() {
     const c = readDesktopModelConfig();
     line('agent.rehearsal.desktop-model', { found: !!c.apiKey, vendor: c.vendor ?? null, model: c.model ?? null });
   }
-  let key;
-  try {
-    key = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
-    if (key.service !== 'agent') throw new Error(`私钥文件是服务 ${key.service} 的,不是 agent`);
-  } catch (err) {
-    return fail('service-identity', { detail: String(err?.message ?? err).slice(0, 200) });
-  }
   let version = 'dev';
   try { version = String(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version ?? 'dev'); } catch { /* 读不到就算了 */ }
-
-  const client = createServiceClient({ base: docUrl, key, log: line });
-  // 文档服务一时连不上不退出:客户端自己退避重连,期间请求回 503
-  void client.ready().catch(() => {});
-  const wiring = createHostedWiring({ client, docUrl, root: ROOT, log: line });
+  if (env.PROMPTCUT_ACCOUNT_V2_REQUIRED !== undefined && !['0', '1'].includes(env.PROMPTCUT_ACCOUNT_V2_REQUIRED)) return fail('account-v2-required');
+  if (env.PROMPTCUT_ACCOUNT_V2 !== undefined && !['0', '1'].includes(env.PROMPTCUT_ACCOUNT_V2)) return fail('account-v2');
+  const accountMode = env.PROMPTCUT_ACCOUNT_V2 === '1';
+  if (env.PROMPTCUT_ACCOUNT_V2_REQUIRED === '1' && !accountMode) return fail('account-v2-required');
+  if (accountMode && !/^wss:\/\//.test(docUrl)) return fail('account-v2', { detail: 'doc-url-must-be-wss' });
+  let key = null, client = null, conversationClient = null, runClient = null, wiring;
+  if (accountMode) {
+    try {
+      const file = name => {
+        const filename = env[name];
+        if (!filename || !path.isAbsolute(filename)) throw new Error('account-v2-file');
+        return fs.readFileSync(filename);
+      };
+      const options = { origin: env.PROMPTCUT_AGENT_DOC_INTERNAL_ORIGIN,
+        serverFingerprint256: env.PROMPTCUT_AGENT_DOC_FINGERPRINT256,
+        tls: { key: file('PROMPTCUT_AGENT_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_AGENT_CLIENT_CERT_FILE'),
+          ca: file('PROMPTCUT_AGENT_CA_FILE') } };
+      conversationClient = createConversationClient(options);
+      runClient = createRunClient(options);
+      wiring = createHostedWiring({ accountMode: true, conversationClient, log: line });
+    } catch {
+      conversationClient?.close(); runClient?.close(); return fail('account-v2');
+    }
+  } else {
+    try {
+      key = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
+      if (key.service !== 'agent') throw new Error('wrong-service-identity');
+    } catch (err) { return fail('service-identity', { detail: String(err?.message ?? err).slice(0, 200) }); }
+    client = createServiceClient({ base: docUrl, key, log: line });
+    // Legacy service control connection remains explicit; account mode never falls through here.
+    void client.ready().catch(() => {});
+    wiring = createHostedWiring({ client, docUrl, root: ROOT, log: line });
+  }
   const stall = positiveMs(env.PROMPTCUT_AGENT_RENDER_STALL_MS);
   const debounce = positiveMs(env.PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS);
   let started;
@@ -265,29 +301,47 @@ async function main() {
       renderLimits: { ...(stall ? { stallMs: stall } : {}), ...(debounce ? { debounceMs: debounce } : {}) },
       ...(assetBase ? { assetBase } : {}),
       // 看画面:凭这把服务私钥的签名向同机的渲染服务要一帧
-      ...(lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
+      ...(!accountMode && lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
       ...(collect ? { collect } : {}),
+      ...(accountMode ? { accountMode: true, conversationClient } : {}),
       ...(rehearsal ? { modelConfig: () => readDesktopModelConfig() } : {}),
       version,
-      codeVersion: () => wiring.publisher.codeVersion(),
+      codeVersion: () => wiring.publisher?.codeVersion?.() ?? version,
       log: line,
     });
   } catch (err) {
     wiring.close();
-    client.close();
+    client?.close(); runClient?.close();
     if (err instanceof AgentConfigError) return fail(err.reason, { detail: err.message });
     throw err;
   }
   wiring.attach(started.service);
+  let registerTimer = null, registerStopped = false;
+  const registerInstance = async () => {
+    if (registerStopped || !runClient) return;
+    try {
+      const instance = await runClient.registerInstance();
+      line('agent.instance.registered', { instanceId: instance.instanceId, instanceGeneration: instance.instanceGeneration });
+    } catch (error) {
+      if (registerStopped) return;
+      line('agent.instance.pending', { code: error?.code ?? 'unavailable' });
+      registerTimer = setTimeout(registerInstance, 2_000); registerTimer.unref?.();
+    }
+  };
+  if (runClient) void registerInstance();
   line('agent.ready', {
-    url: started.url, auth: 'service-identity', service: key.service, kid: key.kid, version,
+    url: started.url, auth: accountMode ? 'account-v2-mtls' : 'service-identity',
+    service: 'agent', ...(key ? { kid: key.kid } : {}), version, accountMode,
+    ...(accountMode ? { runAuthorityMounted: false, runDataProofReady: false } : {}),
     ...(origin ? { publicOrigin: origin } : {}),
-    assetService: !!assetBase, look: !!lookUrl, egressTestAllow: testAllow.length > 0, collect: !!collect, collectTestRunner: collect?.testRunner === true,
+    assetService: !!assetBase, look: !accountMode && !!lookUrl, egressTestAllow: testAllow.length > 0,
+    collect: !accountMode && !!collect, collectTestRunner: !accountMode && collect?.testRunner === true,
     heapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
   });
   const stop = () => {
-    void started.close().then(() => { wiring.close(); client.close(); process.exit(0); });
+    registerStopped = true; if (registerTimer) clearTimeout(registerTimer);
+    void started.close().then(() => { wiring.close(); client?.close(); runClient?.close(); process.exit(0); });
     setTimeout(() => process.exit(0), 5000).unref();
   };
   process.once('SIGINT', stop);
