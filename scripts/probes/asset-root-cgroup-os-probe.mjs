@@ -109,7 +109,7 @@ export async function runAssetCgroupOSProbe({ user, out }) {
   async function issueStop() {
     if (stopTask) return stopTask;
     const state = await describe(unit, Math.min(2000, totalDeadline - now()));
-    if (state.Id !== unit || state.Description !== description || state.User !== String(result.uid) ||
+    if (state.Id !== unit || state.Description !== description || ![user, String(result.uid)].includes(state.User) ||
         state.ControlGroup && state.ControlGroup !== `/system.slice/${unit}`) fail('probe-stop-ownership-unproved');
     result.stopIssued++;
     stopTask = command('/usr/bin/systemctl', ['stop', unit, '--no-ask-password'], Math.min(7000, totalDeadline - now()))
@@ -158,7 +158,7 @@ export async function runAssetCgroupOSProbe({ user, out }) {
     if (peers.size !== 2) fail('probe-workers-not-ready');
     const state = await describe(unit, time());
     if (state.Id !== unit || state.Description !== description || state.MainPID !== String(peers.get('parent').pid) ||
-        state.User !== String(result.uid) || state.Restart !== 'no' || state.KillMode !== 'control-group' || state.Delegate !== 'no' ||
+        ![user, String(result.uid)].includes(state.User) || state.Restart !== 'no' || state.KillMode !== 'control-group' || state.Delegate !== 'no' ||
         state.ControlGroup !== `/system.slice/${unit}` || state.ActiveState !== 'active') fail('probe-unit-identity');
     main = await processInfo(peers.get('parent').pid); child = await processInfo(peers.get('child').pid);
     const cgroup = `/sys/fs/cgroup${state.ControlGroup}`;
