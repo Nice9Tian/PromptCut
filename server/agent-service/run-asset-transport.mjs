@@ -2,7 +2,6 @@ import https from 'node:https';
 import { checkServerIdentity } from 'node:tls';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
-import { once } from 'node:events';
 import { accountError, certificateFingerprint } from '../account/client.mjs';
 import { assetHttpTuple, bytesDigest, reference, resourceRevision, runAssetIssueRequest,
   ticketDigest, validateAssetRef } from '../account/run-asset-protocol.mjs';
@@ -38,6 +37,17 @@ function publicHeaders(headers) {
   return Object.freeze(result);
 }
 
+function waitForDrain(stream) {
+  if (stream.destroyed) return Promise.reject(accountError(503, 'run-asset-stream-closed'));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { stream.off('drain', drained); stream.off('close', closed); };
+    const drained = () => { cleanup(); resolve(); };
+    const closed = () => { cleanup(); reject(accountError(503, 'run-asset-stream-closed')); };
+    stream.once('drain', drained);
+    stream.once('close', closed);
+  });
+}
+
 /** Host-only transport. It holds the opaque ticket and uses the existing Agent OS RAM key. */
 export function createRunAssetTransport({ runClient, assetOrigin, assetTls, assetFingerprint256,
   resources, timeoutMs = 5000 } = {}) {
@@ -67,6 +77,7 @@ export function createRunAssetTransport({ runClient, assetOrigin, assetTls, asse
     if (identity?.instanceId !== context.instanceId || identity.instanceGeneration !== context.instanceGeneration)
       fail(403, 'instance-proof-invalid');
     const before = await resources.authorize(context, action);
+    if (before?.allowed !== true) fail(403, 'run-revoked');
     const result = await runClient.issueRunAsset(descriptor.body, { registerResource: (kind, resource) =>
       resources.register(context, { kind, resource }) });
     if (closed) fail(503, 'run-assets-unconfigured');
@@ -168,8 +179,10 @@ export function createRunAssetTransport({ runClient, assetOrigin, assetTls, asse
             closed: closedPromise });
           try {
             for await (const chunk of res) {
-              await resources.authorize(context, held.body.action);
-              if (!output.write(chunk)) await once(output, 'drain');
+              const access = await resources.authorize(context, held.body.action);
+              if (access?.allowed !== true || identityKey(runClient.instanceIdentity()) !== held.identityKey)
+                fail(403, 'run-revoked');
+              if (!output.write(chunk)) await waitForDrain(output);
             }
             output.end();
           } catch (error) { abort(error); }
