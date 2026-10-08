@@ -125,3 +125,5 @@ root读取0c66 failure-1与4adc创建截图发现实际项目名带“未命名�
 Astra只读静态核到确定格式冲突：fixture叶证书指纹来自Node X509Certificate.fingerprint256，是冒号分隔大写95字符；原startNative直接给CLOUD_PIN，Rust lib.rs account_cloud_binding只接受64位小写hex，在创建窗口/CDP前返回Err，最终Tauri build.expect会panic。此与root首native101发生位置吻合，但旧源stdio ignore，没有stderr证据，不能写已由stderr确认。本块只probe边界严格接受32组大写双hex的标准冒号SHA256结构，再去冒号/小写后给独立进程ENV；缺失/非标准/尾随字符直接受控错误拒，不改Rust pin验证/证书/客户端或生产host。
 
 下一步仅固定源最小纯验证，复用G静态assetWiringPki生成自有TMP证书，无服务listener；运行实际probe中的nativeCertificatePin函数，核95字符到64小写且等于同叶证书DER原字节SHA256、坏格式拒，私钥/指纹不打印。node --check/diff --check先通过。原native101/已闭PID和在线失败均保留，root后续实际壳及双网页再验，不为probe/报告重复全量。
+
+固定196cc384050121d8fd74fe4fa329feb8f075aad3最小纯验证exit0、wall962ms、raw `%TEMP%/pc-account-native-pin-pure-1.log`：从实际probe函数定义载入独立VM执行（不镜像重写算法、不执行probe顶层），G真实assetWiringPki在自建TMP生成证书；Node标准指纹95字符转64小写，并与同叶证书raw DER的createHash('sha256')逐字相等。9/9坏格式（缺失/null/数字/空/无冒号/尾随换行/截短/错分隔/非hex）真实拒。自有openssl子进程隐藏、正常结束，TMP目录核绝对归属后已清；无业务listener/Chrome/壳，未打印privatekey或pin、未读真实密钥、未npm/full/type。本次node --check/diff --check通过；测前后source同196且clean，raw只有通过计数与cleanup，不声称实际native启动通过。
