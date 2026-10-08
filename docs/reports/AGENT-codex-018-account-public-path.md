@@ -32,4 +32,14 @@
 
 固定40dde513fc7e85680da77d12d22ac2af18d94824一次pure目标4/4、0失败取消跳过、865.6661ms、wall1128ms、exit0、native重跑0；raw `%TEMP%/pc-account-public-pure-green.log`。包括参数显式写入/路径限制、资源query秘密丢弃/严格project链接、真实Rust编译执行边界目标、实际新CLI dry中browser not-started/network空/accountNames和ownedProjects未产生。原npm wrapper38坏端口guard保留；没有自建业务listener/Chrome/壳/公网。另同40dde独立dry命令exit0、wall185ms（probe内部31ms），raw `%TEMP%/pc-account-public-dry-40dde513.log`及out/result.json：checks0、completed=false、dryPreflightPassed=true、source unchanged、public not-contacted，不能把预检当用户路径通过。
 
-随后只补own进程树关闭与权威列表有界等待、未完成response body应先随浏览器关闭再收口，以及public-run结果分类；这些行为需要根真实窗口验证，当前未执行Browser/GUI路径。全部三个.mjs node --check与git diff --check通过。最终固定源pure复验另补；不运整套npm、cargo/Tauri build、6500～6509监听、公网注册/项目或节点部署。根公共服务尚待切换，新probe仍是可运行验证器，不表示实际公网已通过。
+随后只补own进程树关闭与权威列表有界等待、未完成response body应先随浏览器关闭再收口，以及public-run结果分类；这些行为需要根真实窗口验证，当前未执行Browser/GUI路径。固定1a4b42becc7e70a4a1f59c08e7a7045d6b26d7e5的一次pure复验4/4、0失败取消跳过、501.1601ms、wall768ms、exit0、native重跑0，raw `%TEMP%/pc-account-public-pure-final.log`；source before/after同一SHA且clean。该证据早于下述native观测修正，不冒用为新源码结果。
+
+## 最终静态自查修正与冻结证据
+
+静态查src/account/client.ts真实分支：desktop模式全部request由native桥发送，原生HTTPS不会出现在CDP页面Network。新probe初稿enterNewProject/joinProject误将在线CDP create/join响应等待复用于native，虽没有执行native，也会错误超时；这是本叶探针错误，不是生产账号接口错误。8401396e4bf708930617194e9736428def703bb2仅修观测：在线仍要求真实HTTP create/join ID，两个分支均核真实收到WSS project.state.projectId；native结合实际可见链接和后续官网fresh会话owned/joined精确projectId/name验证。server/docservice/modules/project.mjs的open返回真实project.state顶层projectId，绝不使用页面自报数据或mock网络。
+
+CDP只从project.state收到/ project.open发出的真实文本帧提取严格sp_加26位base32公开项目ID，附消息type；所有正文、actor、sid、ticket、错误reason都丢弃。纯目标增加invalid JSON/null/type/含query项目ID拒绝和秘密字段不留存断言，不把该纯测试算WSS握手通过。840固定源码一次`npm.cmd test -- scripts/probes/account-public-user-pages-probe.test.mjs`：5项/5通过/0失败取消跳过、502.851ms、wall758ms、exit0、native重跑0；raw `%TEMP%/pc-account-public-pure-state-8401396e.log`。before/after均8401396e4bf708930617194e9736428def703bb2且clean；wrapper原38坏端口guards不绕开，无业务listener、Chrome、native或公网HTTP。真实Rust函数加其inline边界断言仍经rustc编译和实际执行，但未cargo/Tauri构建或实际IPC。
+
+所有三.mjs node --check与git diff --check通过。末次6500～6509检查无listener。本叶只五文件变动：lib.rs两个隔离条件及实际断言、新公共页面探针、纯helper、专属pure目标、本报告；未改网站/服务器/凭据vault/stage/渲染/Agent/旧探针。报告最终提交只追加证据，不再更改上述840源码。
+
+实际公网用户路径、真实Chrome/WebView2、root新TMP壳构建/IPC、实际6500～6509服务器、整套npm/type/build、生产账号创建与项目写入、节点部署均未由本叶运行。无需依赖切换前503推断成功；必须由根以固定源码按--run-public运行，原生须先有新的精确6500/public系统CA隔离构建，旧e22.exe不合条件。cleanup只关闭本探针own资源并清自建profile，保留evidence/未知进程归属目录；不会删除任何公网测试账号/项目。最终用户路径是否通过，待根真实结果独立认定。
