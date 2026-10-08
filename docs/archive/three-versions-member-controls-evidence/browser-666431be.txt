@@ -1,0 +1,15 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs C:\Users\admin\AppData\Local\Temp\pc-members-root-666431be-browser.test.mjs
+
+{"completed":true,"phase":"home","checks":14,"wallMs":5922,"closed":true,"output":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-666431be-once"}
+✔ real compiled account member controls (6097.3042ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6169.2697
+✓ npm test 最终结果：零失败
