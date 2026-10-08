@@ -564,12 +564,16 @@ export function createHttpTransport({
   async function onClose(req, res, cors) {
     const t = transportOf(req, res, cors);
     if (!t) return undefined;
-    if (!needsInvocation(t.principal, req)) track(t, req, res);
+    const scoped = needsInvocation(t.principal, req);
     const body = await readBody(req, HTTP_TRANSPORT_DEFAULTS.SMALL_BODY_BYTES);
+    if (body.aborted) return undefined;
+    if (body.tooLarge) return sendJson(res, 413, { ok: false, error: 'too-large' }, cors);
+    if (scoped && body.text.length === 0) return sendJson(res, 400, { ok: false, error: 'bad-request' }, cors);
     let msg = null;
     if (body.text) {
       try { msg = JSON.parse(body.text); } catch { msg = null; }
     }
+    if (!scoped) track(t, req, res);
     return invoke(t, req, res, cors, 'close', body.text, () => {
       requireCurrentInvocation(t);
       if (needsInvocation(t.principal, req)) track(t, req, res);
