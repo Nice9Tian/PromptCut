@@ -93,3 +93,17 @@ VisuHive后端兼容安装之后，新网站收回main30a9908a并推送。网站
 新exe实际桌面28/28、complete、零失败、17600ms（墙20.734秒），首次登录按钮可用时errorVisible=false/errorCode=none。真实登录/创建/加入、同profile重启保护凭据恢复、切账号、两网站权威列表与cookie恢复仍全过；两轮各11个自有PID、CDP、Vite、Chrome和fixture均关。TMP pc-account-native-fresh-e22ff7f6/result.json、pc-account-desktop-fresh-e22ff7f6-out/result.json。所有目录和识别号只在TEMP，未触碰用户正在运行的编辑器。
 
 小阶段main72967e43及网站main30a9908a收回后，再核6458f7a4的素材工作区和99c6379的网页工作区：各HEAD已在main、完整status空、绝对.worktrees边界、全树reparse0；PC仅有可再生成的tsconfig.tsbuildinfo，VH无ignored文件。用git worktree remove和branch -d清2个，累计PC33/VH10，共43个，任务剩3个。详细TMP three-versions-user-path-worktree-cleanup-20261009.json；用户旧六个/其它会话不动。
+
+首次空凭据小修完成实际新壳28项验证并合main c3ad6156推送后，018-account-wiring工作区HEAD7d2d94779f8b4119b1622a9734a89e1bc4913ad5再核已在main、完整status空、全树reparse0和绝对.worktrees边界，用git worktree remove及branch -d移除。累计PC34/VH10，共44个。之后仅为仍需执行的账号到文档精确证书修复建VisuHive/018-account-doc-identity；本任务实际活跃工作区为PC两个及VH一个。
+
+## 生产配置的离线预检和文档服务身份
+
+配置校验固定c28a998726a3b8624a116348446f08b643449b14仅取两个新文件，未整合其旧private中央登记改动。真实反例首轮8项4过4败：缺字段、IP SAN前缀误认、同钥匙换路径、缺doc pin；首修8项7过1败为旧断言预期需改成更早的完整schema拒绝。最终目标9/9零失败/跳过、9034.0105ms，强制类型退出0；原始TMP pc-account-v2-deploy-config-53bbe-review-{red,after}.log、pc-account-v2-deploy-config-review-{9-target,final-type}.log。该模块只读既有root配置，产出path-only环境和公开登记；未生成私钥、实例或ready，未部署。
+
+VisuHive的doc叶证书精确绑定固定0aa9c962，在原CA和主机名验证上加pin；真实目标7/7，根完整83项74过零失败9跳过6538.8493ms。首红误用npm exec缓存下载另版Node已如实归档；最终用本机已有Node24，未擅自动缓存或CUDA环境。PC真实双账号fixture补上实际doc pin来使用新严格接口。详细首败与最终记录见VisuHive docs/archive/account-backend-main-2026-10-09.md。
+
+根共同候选fb0f486dde9ea010221714db39532e63cd5bfbb5：强制类型零错墙6.657秒；完整5301/5297通过/0失败/0取消/4跳过69555.2631ms（墙69.906秒）；build/online-build退出0墙8.484/1.765秒；源码前后不变clean、native重跑0。此全量包括新增9项真实证书/密钥清单与实际双账号TLS服务目标。TMP pc-account-prod-config-fb0f486d-{type,full,build,online-build}.log/.result.json。
+
+使用同候选实际在线构建、VisuHive main精确pin的新后端和新网站，真实Chrome19/19、零失败、complete、5562ms（墙5.703秒）；创建/加入/双方网站列表/cookie恢复仍全过。browser、两舞台6341/42、fixture子进程关闭，profile清理，source不变；没有模拟权限或ready。TMP pc-account-online-prod-config-fb0f486d-out/result.json及log。
+
+VisuHive精确证书包以572a60eac5607b601c415e29e9c2a23293c9d08a合main并推送后，018-account-doc-identity再核HEADecb35579已在main、完整status空、全树reparse0、无ignored、绝对.worktrees边界，移除工作区并branch-d。累计PC34/VH11，共45个，本任务仍用PC两个工作区。TMP three-versions-doc-identity-cleanup-20261009.json。

@@ -178,7 +178,7 @@ export async function runAccountDualUserPath({ ports = [6380, 6381, 6382, 6383, 
     accountServer = internalModule.createInternalServer({ tls: pki.account, store, credentials, order,
       services: [{ serviceId: 'doc', fingerprint256: pki.doc.fingerprint256 }] });
     await listen(accountServer, accountPort);
-    docAuthorityClient = internalModule.createDocAuthorityClient({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.account });
+    docAuthorityClient = internalModule.createDocAuthorityClient({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.account, serverFingerprint256: pki.doc.fingerprint256 });
     siteServer = http.createServer(appModule.createApp({ store, credentials,
       origins: [edgeOrigin], cookieSecure: true, docAuthority: docAuthorityClient }));
     await listen(siteServer, sitePort);
