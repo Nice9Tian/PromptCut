@@ -27,17 +27,17 @@ class ControlledResponse extends Writable {
 }
 const closed = item => item.closed ? Promise.resolve() : new Promise(r => item.once('close', r));
 
-async function fixture(t, publication = {}) {
+async function fixture(t, publication = {}, faults = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-asset-run-handler-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const stores = createProjectAssetStores({ dir, chunkSize: 8 }); let allowed = true, admissions = 0, checks = 0;
-  const tickets = new Map(), sockets = new Map();
+  const tickets = new Map(), sockets = new Map(); let observerCloses = 0;
   const ref = projectId => ({ projectId, ns: 'media', hash, size: bytes.length, ext: 'wav', contentType: 'audio/wav' });
   const ticket = (projectId, action) => { const raw = crypto.randomBytes(32).toString('base64url'); tickets.set(raw, { resource: ref(projectId), action }); return raw; };
   // This adapter deliberately owns no cryptographic authority. The fixture
   // tests actual bytes/physical stores/lease/fd/publication with controlled TLS
   // objects; genuine three-role mTLS is a separate, not-yet-run target.
   const client = { eventsSince: async () => ({ events: [], headSeq: 0 }), acknowledgeEvent: async () => {},
-    openLease(input) { const id = `lease-${++admissions}`, grant = tickets.get(input.ticket); let first = true;
+    openLease(input) { const id = `lease-${++admissions}`, grant = tickets.get(input.ticket), observer = new ControlledSocket(); let first = true;
       return { leaseId: id, async check() {
         checks++; validateAssetHttpTuple(input.request);
         if (!allowed) throw Object.assign(new Error('run-revoked'), { status: 403, code: 'run-revoked' });
@@ -47,7 +47,9 @@ async function fixture(t, publication = {}) {
         return { allowed: true, leaseId: id, projectId: grant.resource.projectId, action: grant.action, resource: grant.resource,
           resourceRev: resourceRevision(grant.resource), grantState: 'active', fenceRevision: 1, accessHead: 0, runAssetHead: 0 };
       }, async closeLease(receipt) { assert.equal(first, false); assert.equal(receipt.complete, true);
-        const owned = sockets.get(input.observation.assetLeaseId); assert.equal(owned.socket.closed, true); assert.equal(owned.response.closed, true); }, async close() {} };
+        const owned = sockets.get(input.observation.assetLeaseId); assert.equal(owned.socket.closed, true); assert.equal(owned.response.closed, true);
+        if (faults.closeLeaseError) throw faults.closeLeaseError;
+      }, async close() { observer.destroy(); await closed(observer); observerCloses++; } };
     } };
   const consumer = createAssetRunConsumer({ client, file: path.join(dir, 'run-state.json'), assetInstanceId: 'asset-one', serviceIdentity: 'asset-key', verifyLifecycle: async () => true }); await consumer.start();
   let currentSocket, currentResponse;
@@ -56,7 +58,10 @@ async function fixture(t, publication = {}) {
   const access = createAssetRunAccess({ client, consumer, projectStores: stores, humanConsumer: { ready: true, sync: async () => {} },
     assetInstanceId: 'asset-one', serviceIdentity: 'asset-key', agentFingerprint256: pin, resolveAgentTransport: async () => ({ serviceKid: 'agent-key' }),
     maxBodyBytes: 4096, publicationIO: { ...fs, ...publication } });
-  t.after(async () => { await access.close(); await consumer.close(); });
+  t.after(async () => {
+    if (faults.closeLeaseError) { await access.close().catch(error => assert.equal(error, faults.closeLeaseError)); await consumer.close().catch(error => assert.equal(error, faults.closeLeaseError)); }
+    else { await access.close(); await consumer.close(); }
+  });
   let seq = 0;
   async function request(projectId, method, suffix = '', body = Buffer.alloc(0), extras = {}) {
     const socket = new ControlledSocket(), req = Readable.from(body.length ? [body] : []); req.socket = socket; req.complete = true;
@@ -75,6 +80,7 @@ async function fixture(t, publication = {}) {
     return response;
   }
   return { stores, ref, ticket, client, consumer, dir, setAllowed(v) { allowed = v; }, get checks() { return checks; },
+    get observerCloses() { return observerCloses; },
     request, access };
 }
 
@@ -170,4 +176,14 @@ test('real admission persistence failure closes observer and stays a visible idl
   assert.equal(access.status().runAssetsReady, false);
   assert.throws(() => consumer.closureWitness('persist-fault-lease'), /closure-pending/);
   assert.equal((await fs.stat(file)).isDirectory(), true);
+});
+
+test('doc closeLease RPC rejection still awaits owned observer close and preserves the pending durable receipt', async t => {
+  const failure = new Error('doc-close-rejected'), f = await fixture(t, {}, { closeLeaseError: failure });
+  await assert.rejects(f.request('A', 'GET'), error => error === failure);
+  assert.equal(f.observerCloses, 1); await assert.rejects(f.access.idle(), error => error === failure);
+  assert.equal(f.access.status().runAssetsReady, false);
+  const persisted = JSON.parse(await fs.readFile(path.join(f.dir, 'run-state.json'), 'utf8'));
+  assert.equal(persisted.leases['lease-1'].state, 'closing'); // Real close evidence persisted; doc never accepted the ACK.
+  assert.deepEqual(f.consumer.closureWitness('lease-1').receipt, persisted.leases['lease-1'].receipt);
 });
