@@ -9,7 +9,7 @@
 - 版本：0.7.18，第一个整合小阶段进行中
 - 最后更新：2026-10-08，用户已分别确认计划定稿、开始实施
 - main：见 `git log`
-- 一句话：固定联合80b5e658已过根类型、定向68/68、完整npm5089/5087/0/2；根整套渲染/探针后台在跑，桌面壳首轮37/36/1/0保留。中央doc与对话/run新包继续组合，根独立发现跨对话control编号冲突及短access凭证到期误取消有效队列，修正和消息专属核验正在进行；尚未合入main/发版/部署新服务
+- 一句话：固定联合80b5e658已过根类型、定向68/68、完整npm5089/5087/0/2；整套渲染/探针后台在跑，1800帧与main相同、确定性与快照重放通过，GR-6快照HTTP500正定位。桌面壳仅纠正子进程环境后37/37。跨对话control冲突根反例已复验修正；accepted-message真实Linux69/69，中央doc与真实Agent操作仍在接；尚未合入main/发版/部署新服务
 
 ## 已经做了什么
 
@@ -96,9 +96,13 @@
 
 - 中央页接线固定bc6e5a42/324ca429定向2/2，authority同事务撤销hook03ee7fd1定向1/1；缺expectedAccessRevision的首次fixture失败保留。hook错误/thenable整事务回滚，agent关闭事件永久带service/enabled、空accountIds也通知；没有真实资源receipt仍pending。根在中央clean叶no-ff组合对话b25e5de8为eba60f05；capture快照e662aaf7定向5/5仅用服务端在线页与精确四身份，callback数组逐control处理。尚未宣称完整Agent执行挂载。
 - Agent对话候选b25e5de8/报告9ba4d8b8：根逐源核对权限/FIFO/50上限、专用mTLS、HTTP/SSE；读原始日志确认首且唯一full5095/5093通过/0fail/cancel/2skip、66071.662ms，native重跑0。该包消息只持久queued，fixture中的selection/run/close ACK不当生产证据，runner/附件/诊断/用量/UI仍需接。
-- 根固定ce444052独立反例TMP/pc-root-run-scope-ce444052.mjs/.log、exit1：不同对话合法复用同requestId，第二次切私有因run-request-mismatch409回滚为shared。Astra scoped controlId修正08335387目标40/40，原full5128/5126/0/2与修正后full5129/5127/0/2分别保留（71245.252/75318.156ms，无native重跑）；含真实19个exit73且close的崩溃切点，但生产service身份/runner仍待实际挂载。根尚待对最终源码复验原反例，不将子包绿代替独立核验。
+- 根固定ce444052独立反例TMP/pc-root-run-scope-ce444052.mjs/.log、exit1：不同对话合法复用同requestId，第二次切私有因run-request-mismatch409回滚为shared。Astra scoped controlId修正08335387目标40/40，原full5128/5126/0/2与修正后full5129/5127/0/2分别保留（71245.252/75318.156ms，无native重跑）；含真实19个exit73且close的崩溃切点。根固定083源码对应报告af8f1c83独立复验同反例，两对话都private、第二错误null、exit0（TMP/pc-root-run-scope-08335387.log）；生产service身份/runner仍待实际挂载。
 - 排队资格另发现短access TTL错接：Astra真实VH SQLite反例TMP/promptcut-run-authority-ttl-counterexample.log、exit1，发送后120001ms普通token已过期、login仍有效，原verifyActorRef却使queued取消。Luna已交严格普通actor-ref mTLS接口4f598506/报告99e31311，定向11/11、full68/65/0/3 Windows权限跳过；该接口本身不能用于长期已接受消息资格，批准独立accepted-message用途核验增量，不放宽普通token/order鉴权。新接口与真实actor/run联验进行中。
-- 根固定80b5e658新整套后台验收（TMP/pc-root-baseline-80b5e658-20261008，session89976，进程37696）：已有同源类型/full不重复，新增G0网页/在线构建、桌面壳、全部G0-R与探针类别共58项；main参考固定e0e3afc3，dev5900/5903、清单端口平移210，保留参考叶供安全清理。两构建已过；桌面壳37条36过/1失败/0skip，PowerShell补丁检查子进程缺Get-FileHash，根诊断中，首轮不记通过。其余仍在跑，未完成和人工不计通过。
+- 根固定80b5e658新整套后台验收（TMP/pc-root-baseline-80b5e658-20261008，session89976，进程37696）：已有同源类型/full不重复，新增G0网页/在线构建、桌面壳、全部G0-R与探针类别共58项；main参考固定e0e3afc3，dev5900/5903、清单端口平移210，保留参考叶供安全清理。两构建已过；GR1/2各1800帧、GR3零差异、GR4确定性及GR5重放通过。GR6首次快照HTTP500/磁盘14413字节不符、exit1，交Luna只读诊断；其余GR7～12通过。其它探针仍在跑，未完成和人工不计通过。
+- 桌面壳首轮37/36/1/0缺Get-FileHash原失败保留。根受控复现Python继承的PSMODULEPATH与Node加入的PSModulePath在Windows同名不同大小写冲突，使PowerShell5.1读到错误模块路径；单一规范键时Get-FileHash存在。仅在测试进程规范环境键后，同一80源码G0-5单项37/37、0fail/cancel/skip、844.6263ms、exit0（墙钟3.141秒），仓库与系统环境未改。TMP/pc-root-ps-module-inheritance*及pc-root-g05-module-fixed-80b5e658*保存两轮证据。
+- accepted-message用途接口固定Luna9c8d9a34/报告623fa1a93，根逐源核对精确actorRef/messageRef、真实登录类型与parent/logout/generation/consumed状态，普通verifyActorRef不放宽access过期。根精确Git隔离包SHA256 c2b76e44e07f9d467b95258708fb73e2fe696d2b3f8fc3fdc5697169c9e03c1f，在节点visuhive-account用户下首次真实Linux69/69、0fail/cancel/skip、11410.753492ms（墙钟12.1005秒），账号204715/nginx9395前后不变；未部署。原T0接口68/65/0/3 Windows结果保留，不冒称长期消息支持。
+- 真实active run修改联验新源码PC b5c776b5/VH8ad627d：VH full74/71/0/3 Windows跳过；PC首次target45/40/5/0失败，五个新WS项都在prepare前operation-unavailable。Astra核到service normalize白名单丢失trusted authenticate产出的servicePrincipal/serviceId；中央owner获窄补租，不从消息body重造身份。类型、因果补验及全量待固定源码，原日志TMP/promptcut-run-authority-active-target-1.log保留，不能以原40模块通过判实际WS通过。
+- 中央专用关闭ac3bd9a2/报告f9d7456b，新6项与原33项39/39、0fail/cancel/skip、5574.3443ms；实际socket的_destroy门控证明逻辑连接零/旧SID410时回执仍pending，真实close才完成，含WS/LP异步resume窗口。根已读core3文件完整diff；永久账号/project条件改为本次cohort屏障正在补，不将此39项当整组跨服务资源ACK或Agent进程停止完成。
 
 ## 接下来干什么
 
