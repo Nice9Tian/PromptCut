@@ -86,8 +86,18 @@ try {
   'logout' { $value=Http '/api/account/editor/logout' @{} $argsData.accessToken
     if ($value.ok -or $value.status -eq 401) { if ([IO.File]::Exists($file)) { [IO.File]::Delete($file) } }; $result=$value }
   'request' { $path=$argsData.path
-    if ($path -notin @('/hosted/shared/account/create','/hosted/shared/account/join','/hosted/shared/account/session')) { throw 'bad-path' }
-    if (!$argsData.accessToken -or $null -eq $argsData.body) { throw 'bad-request' }
+    $projectRoute=$path -in @('/hosted/shared/account/create','/hosted/shared/account/join','/hosted/shared/account/session')
+    $consentRoute=$path -eq '/api/account/cloud-agent-consent'
+    if (!$projectRoute -and !$consentRoute) { throw 'bad-path' }
+    if (!$argsData.accessToken) { throw 'bad-request' }
+    if ($projectRoute -and $null -eq $argsData.body) { throw 'bad-request' }
+    if ($consentRoute -and $null -ne $argsData.body) {
+      $keys=@($argsData.body.PSObject.Properties.Name)
+      if ($keys.Count -ne 3 -or $keys -notcontains 'accept' -or $keys -notcontains 'noticeVersion' -or $keys -notcontains 'requestId' -or
+          $argsData.body.accept -isnot [bool] -or $argsData.body.accept -ne $true -or
+          ($argsData.body.noticeVersion -isnot [int] -and $argsData.body.noticeVersion -isnot [long]) -or $argsData.body.noticeVersion -ne 1 -or
+          $argsData.body.requestId -isnot [string] -or $argsData.body.requestId.Length -lt 1 -or $argsData.body.requestId.Length -gt 128) { throw 'bad-request' }
+    }
     $result=Http $path $argsData.body $argsData.accessToken }
   default { throw 'bad-operation' }
  }

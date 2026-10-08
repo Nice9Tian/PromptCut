@@ -1,6 +1,7 @@
 {
- "note": "C10A-API-03 在线构建产物里的 /api/ 路径与本清单逐条一致，scanner不放宽。旧本机API剩19条，只许删、不许扩；server/test/c10-api-ratchet-baseline.json 单独固定这19条。0.7.18账号入口按 docs/plan/account-binding-task.md、docs/plan/account-binding-contract.md 登记7条实际产物字面量：src/account/client.ts 的editor/动态session或renew、me/login/logout/projects，加src/online/apiGuard.ts的精确editor/session与editor/renew。账号许可固定为这7条，不是任意account前缀授权；在线不包含桌面editor/login或recover。官网Cookie+CSRF只在顶层编辑器精确路由使用，旧本机渲染/快照/素材/导出请求与舞台账号请求仍由apiGuard拒绝。",
+ "note": "C10A-API-03 在线构建产物里的 /api/ 路径与本清单逐条一致，scanner不放宽。旧本机API剩19条，只许删、不许扩；server/test/c10-api-ratchet-baseline.json 单独固定这19条。0.7.18账号入口按 docs/plan/account-binding-task.md、docs/plan/account-binding-contract.md、docs/plan/three-versions-018-design.md 登记8条实际产物字面量：src/account/client.ts 的editor/动态session或renew、me/login/logout/projects、cloud-agent-consent，加src/online/apiGuard.ts的精确editor/session与editor/renew。cloud-agent-consent仅供当前账号首次告知的GET/POST，在线用网站Cookie+CSRF。账号许可固定为这8条，不是任意account前缀授权；在线不包含桌面editor/login或recover。官网Cookie+CSRF只在顶层编辑器精确路由使用，旧本机渲染/快照/素材/导出请求与舞台账号请求仍由apiGuard拒绝。",
  "paths": [
+  "/api/account/cloud-agent-consent",
   "/api/account/editor/",
   "/api/account/editor/renew",
   "/api/account/editor/session",

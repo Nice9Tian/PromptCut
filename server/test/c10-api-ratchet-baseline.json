@@ -1,5 +1,5 @@
 {
- "note": "仅供测试。旧本机API棘轮基线原从claude/c10a-integ@5b2fccc拷来并逐步删除归档接口；2026-10-09继续只删到当前在线产物的19条旧本机路径，后续仍只减不增。accountPaths单独记录已批准的0.7.18账号入口7条字面量，由c10-ui-gates.test.mjs固定精确集合并拒未知account路径；不能用旧基线或editor/动态字面量放宽账号许可。C10A-API-03仍逐条核实际产物与清单相等。",
+ "note": "仅供测试。旧本机API棘轮基线原从claude/c10a-integ@5b2fccc拷来并逐步删除归档接口；2026-10-09继续只删到当前在线产物的19条旧本机路径，后续仍只减不增。accountPaths单独记录已批准的0.7.18账号入口8条字面量，新增唯一首次云端Agent告知路由，由c10-ui-gates.test.mjs固定精确集合并拒未知account路径；不能用旧基线或editor/动态字面量放宽账号许可。C10A-API-03仍逐条核实际产物与清单相等。",
  "source": "claude/c10a-integ@5b2fccc:server/test/c10a-online-api-paths.json",
  "paths": [
   "/api/asset",
@@ -22,8 +22,9 @@
   "/api/vision/bake-evict",
   "/api/vision/bake-status"
  ],
- "accountSource": "docs/plan/account-binding-task.md; docs/plan/account-binding-contract.md; src/account/client.ts; src/online/apiGuard.ts",
+ "accountSource": "docs/plan/account-binding-task.md; docs/plan/account-binding-contract.md; docs/plan/three-versions-018-design.md; src/account/client.ts; src/online/apiGuard.ts",
  "accountPaths": [
+  "/api/account/cloud-agent-consent",
   "/api/account/editor/",
   "/api/account/editor/renew",
   "/api/account/editor/session",

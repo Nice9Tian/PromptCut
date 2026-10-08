@@ -2,6 +2,7 @@
 export interface Account { id: string; name: string; email?: string | null }
 export interface EditorLogin { account: Account; loginId: string; accessToken: string; accessExpiresAt: number }
 export interface ProjectSession { connectionTicket: string; assetTicket: string; expiresAt: number }
+export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
 export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
 export interface CloudProject { projectId: string; name: string; authorityId: string; creatorAccountId?: string; url?: string }
@@ -39,6 +40,10 @@ export function createAccountClient(options: AccountClientOptions) {
   const origin = new URL(options.origin).origin;
   let login: EditorLogin | null = null, csrf = '', websiteAccount: Account | null = null;
   let renewTask: Promise<EditorLogin> | null = null;
+  let authVersion = 0;
+  const authListeners = new Set<() => void>();
+  const authChanged = () => { authVersion++; for (const listener of [...authListeners]) listener(); };
+  const authIdentity = () => login ? `${login.account.id}:${login.loginId}` : null;
   const native = async (operation: string, args: Record<string, unknown> = {}) => {
     if (!options.native) throw new AccountFailure(503, 'desktop-bridge-unavailable');
     return options.native(operation, args);
@@ -68,7 +73,9 @@ export function createAccountClient(options: AccountClientOptions) {
     if (!value.account || !/^acc_[0-9a-f]{24}$/.test(value.account.id) || typeof value.account.name !== 'string' ||
       typeof value.loginId !== 'string' || !value.loginId || typeof value.accessToken !== 'string' || !value.accessToken ||
       !Number.isSafeInteger(value.accessExpiresAt) || value.accessExpiresAt <= now()) throw new AccountFailure(503, 'account-protocol');
+    const before = authIdentity();
     login = { account: value.account, loginId: value.loginId, accessToken: value.accessToken, accessExpiresAt: value.accessExpiresAt };
+    if (authIdentity() !== before) authChanged();
     return login;
   }
   async function website() { const value = await request('/api/account/me'); csrf = value.csrfToken || ''; websiteAccount = value.account ?? null; return websiteAccount; }
@@ -77,7 +84,7 @@ export function createAccountClient(options: AccountClientOptions) {
     if (renewTask) return renewTask;
     renewTask = (async () => {
       if (!options.online) return accept(check(await native('recover', options.device)));
-      if (!await website()) { login = null; throw new AccountFailure(401, 'login-required'); }
+      if (!await website()) { if (login) { login = null; authChanged(); } throw new AccountFailure(401, 'login-required'); }
       // Existing editor login must be renewed explicitly; revocation cannot become a fresh login.
       return accept(await request(`/api/account/editor/${login ? 'renew' : 'session'}`, {
         ...options.device, requestId: crypto.randomUUID(), ...(login ? { loginId: login.loginId } : {}) }));
@@ -86,12 +93,14 @@ export function createAccountClient(options: AccountClientOptions) {
   }
   return {
     get account() { return login?.account ?? websiteAccount; },
+    get authVersion() { return authVersion; },
+    subscribeAuth(listener: () => void) { authListeners.add(listener); return () => { authListeners.delete(listener); }; },
     async restore() { if (options.online) { await website(); if (!websiteAccount) return null; return (await ensureLogin()).account; }
       const value = await native('recover', options.device); if (value === null) return null; return accept(check(value)).account; },
     async login(identifier: string, password: string, remember: boolean, requestId: string = crypto.randomUUID()) {
       if (!options.online) return accept(check(await native('login', { ...options.device, name: identifier, password, requestId }))).account;
       await website(); const value = await request('/api/account/login', { name: identifier, password, remember });
-      csrf = value.csrfToken || ''; websiteAccount = value.account; login = null;
+      csrf = value.csrfToken || ''; websiteAccount = value.account; login = null; authChanged();
       return (await ensureLogin()).account;
     },
     async logout() {
@@ -102,7 +111,25 @@ export function createAccountClient(options: AccountClientOptions) {
         // Other failures preserve RAM/UI state and propagate to the visible error.
         if (!value || typeof value !== 'object' || (value as Record<string, unknown>).status !== 401) check(value);
       }
-      login = null; websiteAccount = null;
+      login = null; websiteAccount = null; authChanged();
+    },
+    async cloudAgentConsent(): Promise<CloudAgentConsent> {
+      const current = await ensureLogin();
+      const identity = authIdentity(), revision = authVersion;
+      if (options.online && (await website())?.id !== current.account.id) throw new AccountFailure(401, 'credential-revoked');
+      const result = await request('/api/account/cloud-agent-consent', undefined, options.online ? undefined : current.accessToken);
+      if (authIdentity() !== identity || authVersion !== revision) throw new AccountFailure(401, 'credential-revoked');
+      return validateConsent(result, current.account.id);
+    },
+    async acceptCloudAgentConsent(requestId: string = crypto.randomUUID()): Promise<CloudAgentConsent> {
+      const current = await ensureLogin();
+      const identity = authIdentity(), revision = authVersion;
+      if (options.online && (await website())?.id !== current.account.id) throw new AccountFailure(401, 'credential-revoked');
+      const result = await request('/api/account/cloud-agent-consent', { accept: true, noticeVersion: 1, requestId }, options.online ? undefined : current.accessToken);
+      if (authIdentity() !== identity || authVersion !== revision) throw new AccountFailure(401, 'credential-revoked');
+      const consent = validateConsent(result, current.account.id);
+      if (!consent.accepted) throw new AccountFailure(503, 'account-protocol');
+      return consent;
     },
     async lists(): Promise<ProjectLists> { if (!options.online) throw new AccountFailure(503, 'website-project-list', '请在官网登录，查看“我创建的”和“我加入的”项目。');
       await website(); const result = await request('/api/account/projects');
@@ -114,6 +141,11 @@ export function createAccountClient(options: AccountClientOptions) {
     async join(projectId: string, requestId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/join', { projectId, deviceId: options.device.deviceId, requestId }, current.accessToken), now()); },
     async session(projectId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now()); },
   };
+}
+function validateConsent(value: Record<string, any>, accountId: string): CloudAgentConsent {
+  if (value.accountId !== accountId || value.noticeVersion !== 1 || typeof value.accepted !== 'boolean' ||
+    (value.acceptedAt !== undefined && !Number.isSafeInteger(value.acceptedAt))) throw new AccountFailure(503, 'account-protocol');
+  return { accountId, accepted: value.accepted, noticeVersion: 1, ...(value.acceptedAt !== undefined ? { acceptedAt: value.acceptedAt } : {}) };
 }
 function validateSession(value: Record<string, any>, now: number): ProjectSession {
   if (!['connectionTicket', 'assetTicket'].every(k => typeof value[k] === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value[k])) ||
