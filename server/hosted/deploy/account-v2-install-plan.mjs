@@ -35,18 +35,18 @@ function environmentFile(values) {
   }).join('\n') + '\n';
 }
 const unitPath = value => `"${value.replaceAll('%', '%%').replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
-// WorkingDirectory is one path-valued setting, not an ExecStart argument
-// vector. systemd 249 keeps surrounding quotes as path bytes here. Internal
-// spaces are literal; trailing whitespace/quotes are ambiguous and rejected.
-export function formatWorkingDirectory(value) {
-  absolute(value, 'working-directory');
-  if (/[ \t]$/.test(value) || /["'\t]/.test(value)) invalid('working-directory');
-  return value.replaceAll('%', '%%').replaceAll('\\', '\\\\');
+// systemd 249 parses WorkingDirectory and EnvironmentFile as single rvalues,
+// without ExecStart's word extraction or C unescaping. Keep literal spaces and
+// backslashes; only % specifiers are escaped. Ambiguous suffix/quotes fail.
+export function formatUnitSinglePath(value) {
+  absolute(value, 'unit-single-path');
+  if (/[ \t]$/.test(value) || /["'\t]/.test(value)) invalid('unit-single-path');
+  return value.replaceAll('%', '%%');
 }
 function unit(role, { user, nodePath, sourceDir, entry, envFile, dataDir, privateFiles, forbiddenFiles }) {
   return `[Unit]\nDescription=PromptCut account v2 ${role}\nWants=network-online.target\nAfter=network-online.target\n\n` +
-    `[Service]\nType=simple\nUser=${user}\nGroup=${user}\nWorkingDirectory=${formatWorkingDirectory(sourceDir)}\n` +
-    `EnvironmentFile=${unitPath(envFile)}\nExecStart=${unitPath(nodePath)} ${unitPath(entry)}\nRestart=on-failure\nRestartSec=3s\n` +
+    `[Service]\nType=simple\nUser=${user}\nGroup=${user}\nWorkingDirectory=${formatUnitSinglePath(sourceDir)}\n` +
+    `EnvironmentFile=${formatUnitSinglePath(envFile)}\nExecStart=${unitPath(nodePath)} ${unitPath(entry)}\nRestart=on-failure\nRestartSec=3s\n` +
     `NoNewPrivileges=true\nProtectSystem=strict\nPrivateTmp=true\n` +
     `ReadWritePaths=${unitPath(dataDir)}\nReadOnlyPaths=${[sourceDir, ...privateFiles].map(unitPath).join(' ')}\n` +
     `InaccessiblePaths=${forbiddenFiles.map(unitPath).join(' ')}\n` +
