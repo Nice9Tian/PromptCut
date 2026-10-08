@@ -244,7 +244,7 @@ async function websiteList(account, kind, projectId, name, label) {
   await Promise.all([page.waitForNavigation({ waitUntil:'domcontentloaded' }), page.click('#login button[type="submit"]')]);
   assert(new URL(page.url()).pathname === '/account', `${label}-website-login`);
   await page.waitForFunction((kind, name) => [...document.querySelectorAll(`#${kind} li`)].some(el => el.textContent === name), {}, kind, name);
-  await Promise.all([...responseTasks]);
+  await waitFor(() => page.safeResponses.projects?.[kind]?.some(p => p.projectId === projectId && p.name === name), `${label}-authoritative-list-response`);
   assert(page.safeResponses.projects?.[kind]?.some(p => p.projectId === projectId && p.name === name), `${label}-authoritative-${kind}-id-name`);
   assert((await page.$eval('#acc-name', el => el.textContent)) === account.name, `${label}-website-account`);
   await safeShot(page, label);
@@ -490,7 +490,6 @@ try {
     catch { result.screenshotAttempts.push({ label, state:'capture-failed-or-password-not-cleared' }); }
   }
 } finally {
-  await Promise.allSettled([...responseTasks]);
   if (native) { try { await quitNative(); } catch { result.cleanup.nativeFailed = true; native.connection?.disconnect(); process.exitCode = 1; } }
   for (const observer of networkObservers) await observer.detach().catch(() => {});
   for (const context of contexts) await context.close().catch(() => {});
@@ -506,6 +505,9 @@ try {
     } catch { result.cleanup.browserCloseFailed = true; process.exitCode = 1; }
     result.cleanup.browserOwnedPids = ownedPids;
   } else { result.cleanup.browser = 'not-started'; }
+  // Closing the real browser/CDP also rejects any unfinished response-body read;
+  // it must never delay closing the owned process tree after a first failure.
+  await Promise.allSettled([...responseTasks]);
   if (chromeProfile && result.cleanup.browserClosed && !result.cleanup.browserTreeUnknown) { await fs.rm(chromeProfile, { recursive:true, force:true }); result.cleanup.chromeProfileRemoved = true; }
   if (nativeProfileOwned && !native && fsSync.existsSync(DESKTOP_PROFILE) && !result.cleanup.nativeFailed) {
     await fs.rm(DESKTOP_PROFILE, { recursive:true, force:true }); result.cleanup.nativeProfileRemoved = true;
