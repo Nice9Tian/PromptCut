@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
+import { checkServerIdentity } from 'node:tls';
 import { spawn, spawnSync } from 'node:child_process';
 import { X509Certificate, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -167,7 +168,8 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
     const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'doc-wiring-fixture' });
     const keys = generateKeyPairSync('ed25519');
     const runtime = createAccountHostedRuntime({ ledger, accountClient: client, dataDir: path.join(dir, 'docservice'),
-      authorityUrl: 'https://fixture.invalid/editor', signingKey: keys.privateKey, keyId: 'fixture', pollMs: 0 });
+      authorityUrl: 'https://fixture.invalid/editor', signingKey: keys.privateKey, keyId: 'fixture', pollMs: 0,
+      allowFixtureAssetReady: true });
     await runtime.start();
     const accountProjects = mountAccountProjects({ authority: runtime.authority,
       issueSession: input => runtime.issueSession(input), resolveAssetTicket: ticket => runtime.resolveAssetTicket(ticket) });
@@ -183,12 +185,14 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
         { serviceId: 'asset', fingerprint256: new X509Certificate(tls.asset.cert).fingerprint256 }] });
     await listen(internal, 5825);
     const privateOrigin = `https://127.0.0.1:${internal.address().port}`;
-    let ws, wsB, wsB2, sessionWs, resumedWs, recovery;
+    let ws, wsB, wsB2, sessionWs, resumedWs, recovery, probeRuntime, probeDoc, statusServer;
     t.after(async () => {
       try { ws?.close(); } catch {}
       try { sessionWs?.close(); resumedWs?.close(); } catch {}
       try { wsB?.close(); wsB2?.close(); } catch {}
-      await doc.service.close(); await close(internal); runtime.close(); recovery?.close(); await close(accountServer); provider.close();
+      await probeDoc?.service.close(); if (statusServer?.listening) await close(statusServer);
+      await doc.service.close(); await close(internal); runtime.close(); recovery?.close(); probeRuntime?.close();
+      await close(accountServer); provider.close();
       const target = path.resolve(dir); assert.equal(path.dirname(target), path.resolve(os.tmpdir()));
       fs.rmSync(target, { recursive: true, force: true });
     });
@@ -239,8 +243,15 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
     assert.equal(doc.service.describe().conns.find(conn => conn.connId === sessionConn)?.resumes, 1);
     const asset = await request(privateOrigin, tls.asset, 'POST', '/internal/v2/access/check', { assetTicket, projectId, action: 'read', resource: { ns: 'media' } });
     assert.equal(asset.status, 200); assert.equal(asset.body.allowed, true);
+    const assetInferred = await request(privateOrigin, tls.asset, 'POST', '/internal/v2/access/check',
+      { assetTicket, action: 'read', resource: { ns: 'media' } });
+    assert.equal(assetInferred.status, 200); assert.equal(assetInferred.body.projectId, projectId);
     assert.equal((await request(privateOrigin, tls.wrong, 'POST', '/internal/v2/access/check', { assetTicket, projectId, action: 'read' })).status, 403);
     assert.equal((await request(privateOrigin, { ca: tls.ca }, 'POST', '/internal/v2/access/check', { assetTicket, projectId, action: 'read' })).failed, true);
+    assert.equal((await request(privateOrigin, tls.asset, 'POST', '/internal/v2/access/check',
+      { assetTicket, principal: { accountId: idB }, action: 'read' })).status, 400);
+    assert.equal((await request(privateOrigin, tls.asset, 'POST', '/internal/v2/access/check',
+      { assetTicket, serviceId: 'account', action: 'read' })).status, 400);
     assert.equal((await request(privateOrigin, tls.asset, 'POST', '/internal/v2/access/check', { principal: { accountId: idA }, projectId, action: 'read' })).status, 401);
     assert.equal((await request(privateOrigin, tls.asset, 'POST', '/internal/v2/access/check', { assetTicket, projectId: `sp_${'a'.repeat(26)}`, action: 'read' })).status, 403);
     const lp = await fetch(`${origin}/lp/open`, { method: 'POST', headers: { 'x-promptcut-protocols': `promptcut.v1, promptcut.session.new, promptcut.account.${connectionTicket}` }, body: '{}' });
@@ -364,6 +375,69 @@ process.exit(0);
     assert.deepEqual(repeat, retried); assert.equal(retried.projectId, pending[0].projectId);
     assert.equal(recoveryLedger.read().projects[retried.projectId].status, 'active');
     assert.equal(persisted.read(`projects/${retried.projectId}`).length, 1);
+    let statusMode = 'auto', statusHead = 0, statusInstance = 'asset-probe-instance';
+    const probeLedger = openAccountLedger({ file: path.join(dir, 'probe.sqlite'), authorityId: 'doc-ready-probe' });
+    statusServer = https.createServer({ key: tls.asset.key, cert: tls.asset.cert, ca: tls.ca,
+      requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, (req, res) => {
+      if (req.socket.getPeerCertificate()?.fingerprint256 !== new X509Certificate(tls.doc.cert).fingerprint256 ||
+        req.url !== '/internal/v2/asset/status') { res.writeHead(403); res.end(); return; }
+      const head = statusMode === 'auto' ? probeRuntime.authority.eventsSince(0).headSeq : statusHead;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, ready: true, authorityId: probeLedger.authorityId,
+        instanceId: statusInstance, accessCursor: head, accessHead: head }));
+    });
+    await listen(statusServer, 5829);
+    const statusOrigin = 'https://127.0.0.1:5829';
+    const assetFingerprint = new X509Certificate(tls.asset.cert).fingerprint256;
+    let afterStatus = null;
+    const readinessCalls = [];
+    const probeClient = createAccountClient({ origin: `https://127.0.0.1:5823`, tls: tls.doc,
+      serverFingerprint256: new X509Certificate(tls.account.cert).fingerprint256 });
+    probeRuntime = createAccountHostedRuntime({ ledger: probeLedger, accountClient: probeClient,
+      dataDir: path.join(dir, 'probe-docservice'), authorityUrl: 'https://fixture.invalid/editor',
+      signingKey: keys.privateKey, keyId: 'fixture', pollMs: 0, assetInstanceId: 'asset-probe-instance',
+      async assetReadyProbe(input) {
+        readinessCalls.push(input);
+        const answer = await request(statusOrigin, { ...tls.doc, checkServerIdentity(host, certificate) {
+          return checkServerIdentity(host, certificate) ||
+            (certificate.fingerprint256 === assetFingerprint ? undefined : new Error('asset certificate mismatch'));
+        } }, 'GET', '/internal/v2/asset/status');
+        if (answer.failed || answer.status !== 200) throw new Error('asset unavailable');
+        if (afterStatus) { const action = afterStatus; afterStatus = null; await action(); }
+        return answer.body;
+      },
+    });
+    await probeRuntime.start();
+    assert.equal((await probeRuntime.requireAssetReady()).accessHead, 0);
+    assert.throws(() => probeRuntime.setAssetReady(true), { status: 503 });
+    let raceProject;
+    afterStatus = async () => { raceProject = await probeRuntime.authority.createProject({ accessToken: editorA.accessToken },
+      { name: 'Readiness head race', requestId: 'ready-head-race', allowLinkJoin: true, initialProject: { tracks: [] } }); };
+    await assert.rejects(probeRuntime.requireAssetReady(), { status: 503 });
+    assert.equal(probeRuntime.sessionReady, false);
+    assert.equal(readinessCalls.at(-1).requiredAccessHead, 0);
+    const mountedProbe = mountAccountProjects({ authority: probeRuntime.authority,
+      issueSession: input => probeRuntime.issueSession(input), resolveAssetTicket: ticket => probeRuntime.resolveAssetTicket(ticket) });
+    probeDoc = createSharedDocService({ mode: 'hosted', dataDir: path.join(dir, 'probe-docservice'),
+      accountRuntime: probeRuntime, accountProjects: mountedProbe, trustLoopback: false,
+      service: { autoTick: false }, log: () => {} });
+    await probeDoc.service.listen(5826, '127.0.0.1');
+    statusMode = 'lag'; statusHead = 0;
+    const lagJoin = await web('http://127.0.0.1:5826', 'POST', '/hosted/shared/account/join',
+      { projectId: raceProject.projectId, deviceId: 'device-b', requestId: 'probe-lag-join' }, bearerB);
+    assert.equal(lagJoin.status, 503);
+    assert.equal(probeRuntime.authority.listProjects(idB).joined.length, 0);
+    statusMode = 'auto';
+    const readyJoin = await web('http://127.0.0.1:5826', 'POST', '/hosted/shared/account/join',
+      { projectId: raceProject.projectId, deviceId: 'device-b', requestId: 'probe-ready-join' }, bearerB);
+    assert.equal(readyJoin.status, 200, readyJoin.body.code ?? readyJoin.body.error);
+    assert.equal(probeRuntime.authority.listProjects(idB).joined.length, 1);
+    assert.equal(readinessCalls.at(-1).requiredAccessHead, probeRuntime.authority.eventsSince(0).headSeq);
+    statusInstance = 'wrong-asset-instance';
+    await assert.rejects(probeRuntime.requireAssetReady(), { status: 503 });
+    statusInstance = 'asset-probe-instance';
+    await close(statusServer);
+    await assert.rejects(probeRuntime.requireAssetReady(), { status: 503 });
     const logout = provider.logoutLogin(editorA.loginId, Date.now());
     const after = next(ws, 'error', 'revoked-error'); ws.send(JSON.stringify({ type: 'project.open', projectId }));
     assert.ok(['credential-revoked', 'authorization-expired'].includes((await after).reason));
