@@ -92,9 +92,16 @@ export function createAccountClient(options: AccountClientOptions) {
       csrf = value.csrfToken || ''; websiteAccount = value.account; login = null;
       return (await ensureLogin()).account;
     },
-    async logout() { try { if (options.online) { await website(); await request('/api/account/logout', {}); }
-      else await native('logout', { ...(login ? { accessToken: login.accessToken } : {}) }); }
-      finally { login = null; websiteAccount = null; } },
+    async logout() {
+      if (options.online) { await website(); await request('/api/account/logout', {}); }
+      else {
+        const value = await native('logout', { ...(login ? { accessToken: login.accessToken } : {}) });
+        // Native401 is a confirmed terminal state: the bridge removes its vault.
+        // Other failures preserve RAM/UI state and propagate to the visible error.
+        if (!value || typeof value !== 'object' || (value as Record<string, unknown>).status !== 401) check(value);
+      }
+      login = null; websiteAccount = null;
+    },
     async lists(): Promise<ProjectLists> { if (!options.online) throw new AccountFailure(503, 'website-project-list', '请在官网登录，查看“我创建的”和“我加入的”项目。');
       await website(); const result = await request('/api/account/projects');
       if (!Array.isArray(result.owned) || !Array.isArray(result.joined)) throw new AccountFailure(503, 'account-protocol');

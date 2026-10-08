@@ -66,3 +66,22 @@ test('project links are bound to one trusted origin, never carry credential mate
   assert.throws(() => projectIdFromLink('https://user:pass@visuhive.com/editor?project=' + projectId, 'https://visuhive.com'));
   assert.throws(() => projectIdFromLink('missing', 'https://visuhive.com'));
 });
+
+test('logout failures preserve the visible authenticated state; only confirmed exit or native401 clears it', async () => {
+  let nativeStatus = 503;
+  const desktop = createAccountClient({ online:false, origin:'https://visuhive.com', device, now:() => 1000,
+    native:async operation => operation === 'recover' ? credential() : { ok:false, status:nativeStatus, code:'desktop-account-bridge' } });
+  await desktop.restore();
+  await assert.rejects(desktop.logout(), error => error.status === 503);
+  assert.deepEqual(desktop.account, account);
+  nativeStatus = 401; await desktop.logout(); assert.equal(desktop.account, null);
+
+  let webStatus = 503;
+  const online = createAccountClient({ online:true, origin:'https://visuhive.com', device, now:() => 1000,
+    fetch:async url => url.pathname.endsWith('/me') ? reply({ ok:true, account, csrfToken:'csrf' }) :
+      url.pathname.includes('/editor/') ? reply(credential()) : webStatus === 200 ? reply({ ok:true }) : reply({ ok:false, code:'account-unavailable' }, webStatus) });
+  await online.restore();
+  await assert.rejects(online.logout(), error => error.status === 503);
+  assert.deepEqual(online.account, account);
+  webStatus = 200; await online.logout(); assert.equal(online.account, null);
+});
