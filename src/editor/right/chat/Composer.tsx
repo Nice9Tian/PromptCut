@@ -74,6 +74,9 @@ export interface ComposerProps {
   onSubmit: (text: string) => void;
   /** 运行中「■ 停止」 */
   onStop: () => void;
+  /** Optional authority gate for shared cloud runs; omitted local callers keep their historical stop behavior. */
+  canStop?: boolean;
+  stopDisabledReason?: string;
   streaming: boolean;
   /** 快捷键被别处接管(对话框开着之类)时 Enter 只是换行 */
   hotkeysOff?: boolean;
@@ -267,6 +270,8 @@ export function Composer(props: ComposerProps) {
     onRemoveAttachment,
     onSubmit,
     onStop,
+    canStop = true,
+    stopDisabledReason = "只能停止自己发起的任务",
     streaming,
     hotkeysOff,
     active = true,
@@ -394,7 +399,9 @@ export function Composer(props: ComposerProps) {
                 加入队列
               </button>
             )}
-            <button type="button" className="pc-btn-primary ai-send-btn is-stop" data-pc="ai-stop" title="停止这一轮,已完成的修改保留;排队中的消息暂停发送" onClick={onStop}>
+            <button type="button" className="pc-btn-primary ai-send-btn is-stop" data-pc="ai-stop"
+              title={canStop ? "停止这一轮,已完成的修改保留;排队中的消息暂停发送" : stopDisabledReason}
+              aria-label={canStop ? undefined : stopDisabledReason} disabled={!canStop} onClick={onStop}>
               ■ 停止
             </button>
           </>
