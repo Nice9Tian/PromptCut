@@ -62,7 +62,7 @@ let native;
 const stages = [], contexts = [], pages = [], responseTasks = new Set();
 let browserPid;
 function assert(ok, name) { result.checks.push({ check: name, ok: Boolean(ok) }); if (!ok) { const error = new Error(name); error.probeCheck = name; throw error; } }
-async function getChromePath() { const executable = puppeteer.executablePath(); await fs.access(executable); return executable; }
+async function getChromePath() { const executable = await puppeteer.executablePath(); await fs.access(executable); return executable; }
 function below(root, relative) { const target = path.resolve(root, relative); const rel = path.relative(root, target); return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? target : null; }
 async function sendFile(req, res, root, relative, headers) {
   const file = below(root, relative);
