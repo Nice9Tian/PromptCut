@@ -64,9 +64,9 @@
 - 只读复核发现分片写fd/complete哈希读fd此前只靠请求体destroy及发布前核验，ACK没有显式等这些实际文件流close。新增guard.track登记fs output/input并将lease AbortSignal交pipeline，media上传也登记真实write stream；收到撤销会abort pipeline，完成回执等文件流真实close。此改动在旧probe完成后实施，没有边运行Vite边改受监视源文件。
 - 新增关闭追踪后target-3 23/23、零失败/跳过1475.522ms，TMP/promptcut-asset-project-target-3.log；type-4 --force零错，TMP/promptcut-asset-type-4.log。target-2和旧probe证据不冒称覆盖这条最新产品增量；完整npm及isolated probe会在新提交固定源码再验一次。
 
-## 完成状态、最终验收与中央接线表
+## 首轮完成状态、旧验收与中央接线表
 
-当前状态：本包已完成独占模块、真实 isolated 服务和测试，停止实现；不再是开工状态。最终产品源码56af4573，随后仅本报告更新。根收回的认证测试生命周期修复434eece9（来自5bd65d27）只含其测试/报告，归根授权，不是本包擅改。
+首轮状态（随后根复核继续）：独占模块、真实 isolated 服务和测试完成；首轮产品源码56af4573，随后443ec4fe仅报告更新。根收回的认证测试生命周期修复434eece9（来自5bd65d27）只含其测试/报告，归根授权，不是本包擅改。最终复核证据以本文末段为准。
 
 | 提供方文件 | 实际接口/持久结构 | 中央或下游必须接什么 |
 | --- | --- | --- |
@@ -109,3 +109,12 @@
 - durability-target-1为27总/19过/8失败，2290.6459ms（TMP/promptcut-asset-durability-target-1.log）：Windows只读文件句柄sync返回EPERM，尚未走到目录同步；改为本次拥有temp/backup的r+文件句柄。target-2为27/27、988.2186ms。两轮命令误写不存在的asset-project-isolation.test.mjs，未包含真实stores测试；最终target-3明确列全6份真实test：34总/33过/0失败/1跳过，1080.0894ms。跳过仅Windows未请求symlink权限，Linux同文件会真实执行；原日志全部保留，没有降低原断言。
 - recoverProjectPublications遇任何symlink即拒，不跟随；坏JSON/路径或backup尚未存在时同样failclosed并保留marker。恢复中已经还原backup、但marker未清即崩溃再次遇缺backup也会failclosed，需可信运维消歧；这是安全停用限制而非“任意崩溃自动恢复完整”。真实缺backup测试确认目标仍不可读，B项目不被触及。成功恢复先目录sync再清marker，杜绝先开放尚未耐久回退的目标。
 - asset-service文首旧“票据可读任何项目”注释限定为旧LAN/v1历史机制；账号v2由doc权威及物理项目库取代，不更改未授权的旧LAN产品语义。类型durability-type-1使用npx --no-install tsc -b --force零错；后续固定本块再跑一次必要完整npm及实际HTTP probe，不盲重跑cf。
+
+## 复核最终交付
+
+- 最终产品源码c7e94f31211faad8fd1fd5df704c730afa6ff3dc（含关闭增量cf49240a），之后仅本报告更新。最终durability-type-1零错；durability-target-3为34总/33过/0失败/1Windows平台skip；durability-probe-1实际HTTP为26/26、0失败、退出0，TMP/pc-asset-project-durability-final/result.json与promptcut-asset-durability-probe-1.log。probe JSON明确productionMounted:false，不把注入doc fixture说成真实账号/中央权限联验。
+- 固定c7完整npm仅跑一次：4966总/4964通过/0失败/2跳过/0取消，87519.3068ms，退出0，TMP/promptcut-asset-durability-full-1.log。两个skip为既有真实项目layout与本轮Windows未请求symlink权限；源码全程不变，cf旧full与本轮full分别留索引。未再跑asset-path；先前29/29只对应其固定29d0源码，模板fallback/像素原断言保留。
+- 真关闭负向：HTTP body finish仍等source _destroy实际close，持久receipt在gate前没有ACK；FileHandle read/open在途撤销等真实close；media rename及stream manifest/init/segment未接受产物隐藏且失权回退，已接受旧内容/cache保持；worker child等close。目录耐久故障前后分别拒发布或拒complete ACK；缺backup保留marker。其它GET/HEAD/Range/chunks/complete/upload/bind/PCM/tier/thumb/stream、同hash独立库和删A不损B均有首轮/本轮既有实际isolated用例，不另声称中央已挂通。
+- await lease.release()是正常释放合同，只有全部tracked资源actualclose与持有的异步操作收口才撤订阅；hold/run覆盖asyncopen和发布回退。wire owner应继续await消费者ACK、lease实际关闭；不得仅以HTTPfinish替代服务receipt。本叶未碰中央combo/票据/doc authority/mTLS/WS解析租文件，原authority基准815/f873不变。
+- 当前Windows已证实顺序和故障seam及文件syscall，目录fsync/实际symlink的Linux平台验证待根独立临时包装；物理掉电未做。自动恢复遇symlink、坏记录、缺backup严格failclosed，需可信运维消歧，不能宣称恢复任意崩溃无人工处理。没有新增一级待决，没有放宽立即撤销/项目隔离语义。
+- 最终只读核5780～5789零监听，diff --check通过，报告提交后tracked/untracked应为空；全部失败日志、结果JSON仍在TMP。没有安装依赖、触真实用户素材/权重、部署/节点操作、main/release/version/merge/push、清理worktree或停止其它进程。
