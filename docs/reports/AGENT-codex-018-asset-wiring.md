@@ -65,3 +65,77 @@ asset-wiring-integration.test.mjs用冻结VisuHive provider的store/credentials/
 未覆盖/未挂载：没有生产部署/真实公网/Linux完整HTTP或专用OS UID实权隔离；cgroup证明由根提供且本机未试orphan ffmpeg；未挂render/Agent runGrant权限（仍拒body豁免）、业务队列自动删除/回收未决语义不实施；流producer仍由后续owner传可信写lease，本包挂真实read routes并以TMP可信seed验证，不冒称生产render产物已贯通。combo旧LAN全局admin inventory/usage不变，v2 public不降级它；不推出新管理员删除策略。基底仍.17；root release .18前必须传播PROMPTCUT_ACCOUNT_V2_REQUIRED=1及独立asset/status/key/UID/fence配置，否则缺required/配置即未完成生产，不冒称可上线。
 
 待最终固定验证：type、含最新补充断言的target、一次必要npm full，以及diff--check/干净SHA；完成后另追加精确结果，不冒用旧节点6项或旧4966全量证据。
+
+
+## 最终固定验收与交回
+
+- 产品源码固定4c91f5d2f6b0a6f221df09638c52ceed69cbcc63；e32f26a6e7dbca171b0cefc87678372f4c83344a只补集成测试admin.expectedAccessRevision；最终测试补丁0de62bd5只改media-pcm BAKERY目标/regex两行，保留真实HTTP和逐样本断言。报告后续提交不改产品/测试源码。
+- type-1：实际node主仓库typescript/bin/tsc -b --force，exit0/零错误，TMP/promptcut-asset-wiring-type-1.log；类型受检产品即4c91。没有不存在的npm types命令。
+- target-1固定4c91：87项/86pass/1fail/0skip，10115.7612ms；最后新增delete隔离fixture漏现有expectedAccessRevision，真实服务409 access-revision-mismatch。按public status真实取revision，仅修fixture，无产品权限改动。
+- target-2固定e32：只复验完整真实provider/combo/独立stage/PCM/stream/thumb/source-fd-gate/crash/receipt/clean restart/successful join/delete-A不影响B的集成1/1，0fail/skip，6034.0082ms，TMP/promptcut-asset-wiring-target-2.log。原其余86项已在target-1通过，不把两轮写成一次87/87。
+- full-1固定e32：唯一npm.cmd test，5028 tests/5010pass/16fail/0cancel/2skip，65818.1163ms，exit1；TMP/promptcut-asset-wiring-full-1.log，整个跑程没有改受测源码。11失败为我设PROMPTCUT_ACCOUNT_PROVIDER_ROOT但漏PROMPTCUT_PASSWORD_ORDER_MODULE，password-order真实fixture按规则拒配置；5失败为media-pcm TMP transpile只rewrite旧bakery/index而生产已按授权改pure ffmpeg，读PCM500。新中央集成和所有其余5010项通过。不得称full零失败。根明确不在本叶重跑；共同候选由根补真实order模块环境后复验，不回避真实provider也不删断言。
+- 根扩租server/test/media-pcm.test.mjs仅上述两行。pcm-target-1固定0de：8/8，0fail/skip，808.8954ms，TMP/promptcut-asset-wiring-pcm-target-1.log，真实ffmpeg完整truth逐采样比较覆盖起点/中段/负start/尾部零/重采样与参数负向。该修正补上full的5项失效夹具，未重复full。
+- 根给full一轮5823–5829旧静态fixture端口例外；full开始/结束均核该段与新5860–5869零监听，已通知根释放，lease已转Astra。本叶无服务/owned子进程遗留。新业务测试只5860/61/62/63/64/66，RPC5865；既有PCM target listen(0)仅自有测试server。Node每命令绝对父仓库test-silent-processes预载、全子孙隐藏；Python变量每命令指定cuda_Vit与PYTHONDONTWRITEBYTECODE；没有装依赖/改全局env/读生产钥匙/操作节点。
+- 纯抽取对照5块（atomic、mergeRanges、store+ready、publicManifest+HTTP handler、剥类型后的shots函数）与e27原函数体逐字相同，仅标准化换行/剥TS：TMP/promptcut-asset-wiring-pure-move-compare.json全true。对照脚本首版用CRLF界限读git输出LF导致错误切片/assert失败（只读，无源改）；先标准化换行并要求界限存在后5/5相同。此为明确脚本证据修正，不算产品失败也不隐瞒首次尝试。
+
+### 独立部署精确文件清单（49）
+
+以下就是HOSTED_ASSET_DEPLOY_FILES，stage另写type:module package.json，不带node_modules/私钥。入口静态及literal dynamic import全可解析；外部bare包0；非literal dynamic目标0；Node builtins不算外部依赖。
+
+- server/account/client.mjs
+- server/account/protocol.mjs
+- server/asset-announce.mjs
+- server/asset-client.ts
+- server/asset-service.ts
+- server/asset-store/atomic.mjs
+- server/asset-store/blob-store.mjs
+- server/asset-store/client.mjs
+- server/asset-store/fs-store.mjs
+- server/asset-store/index.mjs
+- server/asset-store/memory-store.mjs
+- server/asset-store/project-access.mjs
+- server/asset-store/project-io.mjs
+- server/asset-store/project-revocations.mjs
+- server/asset-store/project-stores.mjs
+- server/asset-store/px-evict.mjs
+- server/asset-store/ranges.mjs
+- server/asset-store/service-usage.mjs
+- server/asset-store/shots-thumb.mjs
+- server/asset-store/stream-store.mjs
+- server/auth/asset-tickets.mjs
+- server/auth/delegation.mjs
+- server/auth/handshake.mjs
+- server/auth/hosted-default.mjs
+- server/auth/invite.mjs
+- server/auth/origin.mjs
+- server/auth/protocol.mjs
+- server/auth/service-identity.mjs
+- server/auth/store.mjs
+- server/auth/tickets.mjs
+- server/bake-store.mjs
+- server/bakery/ffmpeg.mjs
+- server/bandwidth-gate.mjs
+- server/hosted/asset-doc-client.mjs
+- server/hosted/asset-lifecycle.mjs
+- server/hosted/asset-main.mjs
+- server/hosted/asset-runtime.mjs
+- server/hosted/ts-resolve.mjs
+- server/http-guard.mjs
+- server/media-pull.mjs
+- server/media-tiers.mjs
+- server/recovery/descriptor.mjs
+- server/recovery/paths.mjs
+- server/recovery/relocation.mjs
+- server/render-node/session-link.mjs
+- server/render-node/ws-transport.mjs
+- server/render-role.mjs
+- server/upload-queue.mjs
+- server/vite-plugin-media.ts
+
+### 可启动配置与部署前提
+
+asset独立进程node server/hosted/asset-main.mjs：PROMPTCUT_ASSET_DATA_DIR绝对存在目录、HOST、PORT、公网PUBLIC_URL、INTERNAL_PORT；DOC_AUTHORITY_ID、DOC_ORIGIN https根origin、DOC_FINGERPRINT256、DOC_CA_FILE绝对路径；CLIENT_KEY_FILE/CLIENT_CERT_FILE仅own asset叶、INTERNAL_KEY_FILE/INTERNAL_CERT_FILE仅own asset叶（所有前缀PROMPTCUT_ASSET_）；DOC_CLIENT_FINGERPRINT256限定status调用方doc。PROMPTCUT_ASSET_SERVICE_IDENTITY设置部署的精确systemd unit/cgroup服务身份；unclean重启需要PROMPTCUT_ASSET_RECOVERY_FENCE_FILE=root控制的proof绝对文件。可选PROMPTCUT_HOSTED_RENDER_CAP_BYTES非负数，0真实保留，不转换缺省容量。
+
+doc组合main：PROMPTCUT_ASSET_STATUS_ORIGIN https内部asset根origin，PROMPTCUT_ASSET_STATUS_CLIENT_KEY_FILE/CERT_FILE/CA_FILE仅doc own privatekey/cert和peer CA；PROMPTCUT_ASSET_STATUS_FINGERPRINT256限定asset cert，PROMPTCUT_ASSET_INSTANCE_ID可选固定。对应startHostedCombo({assetStatus:{origin,tls,serverFingerprint256,instanceId?},assetPublicUrl,...})，inject真实assetReadyProbe；account模式不listen旧asset口。真实渲染/Agent后续各自独立UID/私钥，不能让一个OS用户拥有四角色钥匙来称隔离。根在release .18前传播account-required，核nginx公网asset指向独立服务和内部口无公网，核数据dir/UID/CA/pin、SQLite一致备份和恢复，以及cgroup证明。这里未部署，不能以Windows临时证书运行替代生产完成。
+
+最终状态：本叶已完成中央素材独立入口/真实mTLS权威/连续事件close→持久receipt→ACK/内部实时ready接线、精确部署闭包及本地产品正反向验证。未完成的闸门是共同候选full零失败与根节点部署/公网/OS权界；原因和所需环境/证明已明确，不借旧baseline称通过。原LAN v1和未决调度/回收/业务删除政策保持范围；不碰用户数据或别的owner工作区。git diff--check及最终干净SHA在交回时核，root收回审查后再推进共同full。
