@@ -415,8 +415,10 @@ export function createRouter({
     };
   }
 
-  function dispatch(connId, text) {
-    if (!conns.has(connId)) return;
+  const dispatchTails = new Map();
+  function runDispatch(connId, text) {
+    const conn = conns.get(connId);
+    if (!conn) return;
     let msg;
     try {
       msg = JSON.parse(text);
@@ -427,29 +429,33 @@ export function createRouter({
     if (!isObj(msg) || typeof msg.type !== 'string') return replyError(connId, 'bad-message', '消息必须是带字符串 type 字段的对象', reqId);
     const entry = ownerOf(msg.type);
     if (!entry) return replyError(connId, 'unsupported', '没有模块处理这种消息', reqId);
-    if (gate) {
-      let reason;
-      try {
-        reason = gate(conns.get(connId).principal, msg.type, msg);
-      } catch {
-        reason = 'forbidden';
-      }
-      if (typeof reason === 'string') return replyError(connId, reason, '这条连接不能发这种消息', reqId);
-    }
-
     const fail = (err) => {
       log('module.error', { module: entry.mod.name, type: msg.type, message: String(err?.message ?? err) });
       replyError(connId, 'internal', '处理这条消息时出错', reqId);
     };
-    let result;
+    const handle = (reason) => {
+      if (conns.get(connId) !== conn) return;
+      if (typeof reason === 'string') return replyError(connId, reason, '这条连接不能发这种消息', reqId);
+      try {
+        const result = entry.mod.handle(entry.ctx, connId, msg);
+        if (result && typeof result.then === 'function') return result.catch(fail);
+      } catch (err) { fail(err); }
+    };
+    if (!gate) return handle(null);
     try {
-      result = entry.mod.handle(entry.ctx, connId, msg);
-    } catch (err) {
-      return fail(err);
+      const reason = gate(conn.principal, msg.type, msg);
+      return reason && typeof reason.then === 'function' ? reason.then(handle, () => handle('forbidden')) : handle(reason);
+    } catch { return handle('forbidden'); }
+  }
+
+  function dispatch(connId, text) {
+    const previous = dispatchTails.get(connId);
+    const result = previous ? previous.then(() => runDispatch(connId, text)) : runDispatch(connId, text);
+    if (result && typeof result.then === 'function') {
+      const tail = result.catch(() => {}).finally(() => { if (dispatchTails.get(connId) === tail) dispatchTails.delete(connId); });
+      dispatchTails.set(connId, tail);
     }
-    if (result !== null && typeof result === 'object' && typeof result.then === 'function') {
-      result.then(undefined, fail);
-    }
+    return result;
   }
 
 

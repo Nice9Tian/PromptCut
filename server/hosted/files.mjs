@@ -15,6 +15,7 @@ import path from 'node:path';
 export const HOSTED_DEPLOY_DIRS = Object.freeze([
   'server/hosted',
   'server/docservice',
+  'server/account',
   'server/auth',
   'server/hosting',
   'server/recovery',

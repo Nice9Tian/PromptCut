@@ -41,7 +41,7 @@ function resolveRel(fromFile, spec) {
 export function createAssetHarness() {
   const OUT = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-c62-asset-'));
   const compiled = new Map();
-  const servers = new Set();
+  const services = new Set();
   let ts = null;
   let assetMod = null, mediaMod = null, storeMod = null;
   let rootSeq = 0;
@@ -92,23 +92,62 @@ export function createAssetHarness() {
     if (isTrusted !== undefined) opts.isTrusted = isTrusted;
     const service = a.assetServiceMiddleware(root, opts);
     const legacy = mediaMod.mediaMiddleware(root);
+    const requests = new Set(), streams = new Set();
+    const failures = [];
+    const track = (set, promise) => {
+      set.add(promise);
+      void promise.then(() => set.delete(promise), error => { set.delete(promise); failures.push(error); });
+      return promise;
+    };
     const server = http.createServer((req, res) => {
-      void service(req, res, () => { void legacy(req, res, () => { res.statusCode = 404; res.end('no route'); }); });
+      // A response may finish before its file descriptor closes. Register the source
+      // at pipe time, before either HTTP close or the source close can be observed.
+      res.on('pipe', source => {
+        if (source.closed) return;
+        track(streams, new Promise(resolve => source.once('close', resolve)));
+        res.once('close', () => { if (!source.closed) source.destroy(); });
+      });
+      track(requests, (async () => {
+        let fallback;
+        await service(req, res, () => { fallback = legacy(req, res, () => { res.statusCode = 404; res.end('no route'); }); });
+        await fallback;
+      })());
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const origin = `http://127.0.0.1:${server.address().port}`;
-    const close = () => new Promise((resolve) => {
-      if (!servers.delete(server)) return resolve();
-      server.closeAllConnections?.();
-      server.close(() => resolve());
-    });
-    servers.add(server);
-    return { origin, base: `${origin}/api/asset`, root, stores: own, close };
+    let closing;
+    const close = () => closing ??= (async () => {
+      await new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve); });
+      await Promise.all([...requests]);
+      await Promise.all([...streams]);
+      // Production deliberately shares this registry between module instances.
+      // Only inspect this fixture's root: creating a service here would start new work.
+      const registry = globalThis[Symbol.for('promptcut.media-tiers.services')];
+      const pending = registry?.get(path.resolve(root));
+      if (pending) {
+        const { manager, queue } = await pending;
+        await manager.idle(); // ffprobe/ffmpeg close, tiers index and enqueue finished
+        if (queue) {
+          await queue.stop();
+          // stop aborts the upload but its catch/finally can still persist after it.
+          const deadline = Date.now() + 30_000;
+          while (queue.stats().working) {
+            if (Date.now() >= deadline) throw new Error('asset fixture upload did not settle');
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          await queue.stop(); // flush writes enqueued by the final pump
+        }
+        registry.delete(path.resolve(root));
+      }
+      if (failures.length) throw new AggregateError(failures, 'asset fixture request failed');
+      services.delete(close);
+    })();
+    services.add(close);
+    return { origin, base: `${origin}/api/asset`, root, stores: own, close, server };
   }
 
   async function cleanup() {
-    await Promise.all([...servers].map((server) => new Promise((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); })));
-    servers.clear();
+    await Promise.all([...services].map(close => close()));
     fs.rmSync(OUT, { recursive: true, force: true });
   }
 

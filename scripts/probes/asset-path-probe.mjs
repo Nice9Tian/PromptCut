@@ -81,7 +81,7 @@ const PYLIBS = path.join(EXPORT_DIR, 'pylibs');
 const MODELS = path.join(EXPORT_DIR, 'models');
 fs.mkdirSync(PYLIBS, { recursive: true });
 /** 让 Python 找得到仓库里的包(和 vite-plugin-stt 的 buildEnv 对普通解释器的做法相同) */
-const pyEnv = (pylibs) => ({ ...process.env, PYTHONPATH: pylibs + path.delimiter + path.join(ROOT, 'python'), PYTHONNOUSERSITE: '1', PYTHONUTF8: '1', PROMPTCUT_PYLIBS: pylibs });
+const pyEnv = (pylibs) => ({ ...process.env, PYTHONPATH: pylibs + path.delimiter + path.join(ROOT, 'python'), PYTHONNOUSERSITE: '1', PYTHONUTF8: '1', PROMPTCUT_PYLIBS: pylibs, PROMPTCUT_MODELS: MODELS });
 const spawnPy = (python, a, env) => spawn(python, a, { env, windowsHide: true });
 /** 异步跑子进程:计数的远程素材服务就在探针进程里,spawnSync 会卡住事件循环、ffmpeg 发来的请求没人答 */
 function runAsync(cmd, a, env, timeoutMs = 180000) {
@@ -254,7 +254,7 @@ try {
   if (!(await startEditor())) throw new Error('编辑器进程没起来');
   check(fs.readdirSync(MEDIA_DIR).length === 0, '开始时编辑器的素材目录是空的', fs.readdirSync(MEDIA_DIR));
 
-  browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run'] });
+  browser = await puppeteer.launch({ headless: true, pipe: true, args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run'] });
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));

@@ -225,11 +225,14 @@ export async function startHostedCombo({
   limits,
   service: serviceOptions,
   renderCapBytes,
+  account = null,
+  accountRequired = false,
 } = /** @type {any} */ ({})) {
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响服务 */ } };
   const root = checkDataDir(dataDir);
   const tokenGiven = typeof clusterToken === 'string' && clusterToken !== '';
   if (trustLoopback === false && !tokenGiven) throw new HostedConfigError('cluster-token-required');
+  if (accountRequired && !account) throw new HostedConfigError('account-v2-required');
   const paths = hostedPaths(root);
   const loopbackBind = host === '127.0.0.1' || host === '::1' || host === 'localhost';
 
@@ -306,6 +309,47 @@ export async function startHostedCombo({
     return !!m && timingSafeEqual(sha256(m[1]), tokenDigest);
   }
 
+  let accountRuntime = null;
+  let accountProjects = null;
+  let accountInternalServer = null;
+  let accountInternalPort = null;
+  if (account) {
+    try {
+      const [{ createAccountClient }, { openAccountLedger }, { createAccountHostedRuntime },
+        { createAccountProjectsInternalServer, mountAccountProjects }] = await Promise.all([
+        import('../account/client.mjs'), import('../account/ledger.mjs'),
+        import('../docservice/account-hosted.mjs'), import('../docservice/modules/account-projects.mjs'),
+      ]);
+      const ledger = openAccountLedger({ file: account.ledgerFile || path.join(paths.docservice, 'account-v2.sqlite'), authorityId: account.authorityId });
+      const client = createAccountClient({ origin: account.origin, tls: account.clientTls,
+        serverFingerprint256: account.serverFingerprint256 });
+      accountRuntime = createAccountHostedRuntime({ ledger, accountClient: client, dataDir: paths.docservice,
+        authorityUrl: account.authorityUrl, signingKey: account.signingKey, keyId: account.keyId, now,
+        onDiagnostic: event => say('account.diagnostic', event) });
+      await accountRuntime.start();
+      accountProjects = mountAccountProjects({ authority: accountRuntime.authority,
+        issueSession: input => accountRuntime.issueSession(input),
+        resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket) });
+      accountInternalServer = createAccountProjectsInternalServer({ tls: account.internalTls,
+        authority: accountRuntime.authority, services: account.services,
+        resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket) });
+      accountInternalPort = await new Promise((resolve, reject) => {
+        accountInternalServer.once('error', reject);
+        accountInternalServer.listen(account.internalPort, '127.0.0.1', () => {
+          accountInternalServer.off('error', reject);
+          resolve(accountInternalServer.address().port);
+        });
+      });
+    } catch (error) {
+      accountRuntime?.close();
+      throw new HostedConfigError('account-v2', { code: error?.code ?? 'configuration' });
+    }
+  }
+  const closeAccountInternal = () => new Promise(resolve => {
+    if (!accountInternalServer?.listening) return resolve();
+    accountInternalServer.close(() => resolve());
+    accountInternalServer.closeAllConnections?.();
+  });
   const hosting = createHostingService({ dir: path.join(root, 'hosting'), now, authorityService: docPublicUrl || null });
   let relocation;
   const { service, authenticate } = createSharedDocService({
@@ -317,6 +361,9 @@ export async function startHostedCombo({
     localDevice,
     linkOrigin: publicOriginOf(docPublicUrl),
     serviceRegistry,
+    accountRuntime,
+    accountProjects,
+    accountRequired,
     ...(typeof agentPublicUrl === 'string' && agentPublicUrl !== '' ? { hostedServiceUrls: { agent: agentPublicUrl } } : {}),
     now,
     log: say,
@@ -360,7 +407,9 @@ export async function startHostedCombo({
   async function handleAsset(req, res) {
     const url = new URL(req.url ?? '/', 'http://hosted.local');
     if (url.pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
-      return sendJson(res, 200, { ok: true, role: 'asset', layout: LAYOUTS.shard });
+      return sendJson(res, 200, { ok: true, role: 'asset', layout: LAYOUTS.shard,
+        ...(accountRuntime || accountRequired ? { accountMode: accountRuntime ? 'v2' : 'legacy',
+          accountRequired: accountRequired === true, assetReady: accountRuntime?.sessionReady === true } : {}) });
     }
     if (url.pathname.startsWith('/admin/')) {
       if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method' });
@@ -370,6 +419,7 @@ export async function startHostedCombo({
       if (m) return adminBlob(req, res, m[1], m[2]);
       return sendJson(res, 404, { ok: false, error: 'not-found' });
     }
+    if (accountRuntime) return sendJson(res, 503, { ok: false, error: 'asset-account-wiring-pending' });
     preflight(req, res, () => {
       assetMiddleware(req, res, () => sendJson(res, 404, { ok: false, error: 'not-found' }));
     });
@@ -388,6 +438,7 @@ export async function startHostedCombo({
     docAddr = await service.listen(docPort, host);
   } catch (err) {
     await service.close().catch(() => {});
+    await closeAccountInternal(); accountRuntime?.close();
     throw err;
   }
   let assetAddr;
@@ -401,6 +452,7 @@ export async function startHostedCombo({
     });
   } catch (err) {
     await service.close().catch(() => {});
+    await closeAccountInternal(); accountRuntime?.close();
     throw err;
   }
 
@@ -446,6 +498,8 @@ export async function startHostedCombo({
     get credentialStore() { return store; },
     serviceRegistry,
     serviceUsage,
+    accountRuntime,
+    accountInternalPort,
     inventory,
     async close() {
       if (closed) return;
@@ -459,6 +513,8 @@ export async function startHostedCombo({
         assetServer.closeAllConnections?.();
       });
       await service.close();
+      await closeAccountInternal();
+      accountRuntime?.close();
     },
   };
 }

@@ -79,7 +79,7 @@ function needsServiceStamp(m) {
  *
  * `stamp(m)` 回戳(字符串),不该打戳的回 undefined。
  */
-export function createMediaStamper({ mediaUrl = () => null, exportRoot = () => null, fetch: doFetch = globalThis.fetch, now = Date.now, ttlMs = MEDIA_STAMP_TTL_MS, timeoutMs = MEDIA_STAMP_TIMEOUT_MS } = {}) {
+export function createMediaStamper({ mediaUrl = () => null, exportRoot = () => null, fetch: doFetch = globalThis.fetch, now = Date.now, ttlMs = MEDIA_STAMP_TTL_MS, timeoutMs = MEDIA_STAMP_TIMEOUT_MS, ownership = null } = {}) {
   /** url → { at, value: Promise<string> } —— 存 Promise,同一时刻的并发请求共用一次 HEAD */
   const cache = new Map();
   const head = url => {
@@ -99,10 +99,12 @@ export function createMediaStamper({ mediaUrl = () => null, exportRoot = () => n
   };
   return {
     async stamp(m) {
+      await ownership?.assert();
+      if (ownership && m?.projectId && m.projectId !== ownership.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
       const hash = mediaHashOf(m);
       if (hash) return hash;
       const exported = exportMediaFile(m?.url, exportRoot() || '.');
-      if (exported) {
+      if (exported && !ownership) {
         try { const stat = await fs.stat(exported); return `${stat.size}:${stat.mtimeMs}`; }
         catch { return 'missing'; }
       }
