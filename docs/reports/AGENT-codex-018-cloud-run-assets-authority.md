@@ -81,3 +81,13 @@ teardown真实等owned TLS socket close、两个server.close、pending closingRe
 只新增三模块/三目标/报告，无原lease之外编辑，无main/merge/push/节点/版本/进度或依赖安装。G需接两个私有subject/current registry callback、恢复后coordinator read/stat、实际asset关闭与control参与者，B实现项目物理store和upload/import/read字节；worker只消费root复制的冻结protocol，同RAMkey窄签名，不给模型key或任意signer。ToolJobs retained checkpoint/actualresources仍各owner接，不由A偷改。
 
 未做全量与最终强制类型是根共享窗口明确限制；root已决定no-ff到统一configured候选再验。本叶本次最后只提交报告，产品和protocol保持91d4冻结。除独立模块协议与上述目标，不声明生产入口ready或账号模式已完整接通。
+
+## 根审查后的连续性最小修正
+
+root/Astra在独立冻结7dab的真实SQLite受控反例发现：持久runControl与mirror仍在，将outbox尾项pop后，旧mirror只校验现存事件，eventsSince错误返回较小head。不是声称正常SQLite崩溃会丢已提交事务；原反例保留 `TMP pc-run-assets-review-7dab-counter.mjs/.log`。root重新授租仅run-assets.mjs、authority目标与本报告；B开工叶仍停在0923f62b，没有顺便修中央或协议。
+
+固定297485d4先加双向反例，原npm authority目标首红：19项15pass/4fail（3个叶断言缺尾、悬挂mirror、原control缺失失败及其父测试失败），0cancel/skip，603.386ms，墙893.9389ms；raw `TMP pc-run-assets-tail-red-1.log`。已有missing-middle、重复/seq越界/篡改拒绝仍保留。没有重跑原源赌绿。
+
+产品修正固定07d0f222：正向event→mirror原校验继续，增加每个mirror→精确outbox索引→原control完整不可变投影的反向一一绑定，并核已有ACK必须指向实际持久head内精确event/control/revision和receipt摘要。缺尾、悬挂、中间缺失、重复、篡改、原control删除、ACK越head全部503 run-control-gap，不自动重建损坏事件、不缩head。协议909文件、TLSfixture均不改。
+
+07d0f222经原npm wrapper `npm.cmd test -- server/test/run-assets-authority.test.mjs server/test/run-assets-protocol.test.mjs`：24/24、0fail/cancel/skip，609.4558ms，墙891.5307ms，raw `TMP pc-run-assets-tail-fixed-1.log`；包含先前未单跑的factory epoch用例。随后绝对tsc `-b --force` exit0/零错误，墙6778.8068ms，raw `TMP pc-run-assets-tail-type-1.log`。环境与原pure目标相同，只原wrapper坏端口guards，没有业务fixture listener、mTLS/full/C10/节点运行。root仍独占7dab的原基线/C10，本叶不改其候选。该增量最后只补报告并clean冻结，交root另组合后B继续；旧91d4 TLS证据不冒用为新源TLS复验。
