@@ -101,6 +101,7 @@ export function CloudAiPanel(props: {
   activeKeyRef.current = qKey;
   const stillCurrent = () => activeKeyRef.current === qKey && (!cloud.accountMode ||
     (cloudConsentState().accountId === cloud.accountId && cloudConsentState().bindingVersion === consent.bindingVersion));
+  useEffect(() => { if (cloud.accountMode) { setConsentOpen(false); setConsentError(null); } }, [cloud.accountMode, qKey]);
 
   const { tabs } = useAgentTabs();
   const tabTitle = desktop ? (tabs.find((t) => t.id === tabId)?.title ?? "AI 助手") : "云端 Agent";

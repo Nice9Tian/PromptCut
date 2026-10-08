@@ -97,3 +97,16 @@ test('an old UI binding cannot borrow a newly logged in account consent', async 
   await assert.rejects(requireCloudConsent({ accountId:account.id, bindingVersion }), error => error.code === 'credential-revoked');
   setCloudConsentSource(null);
 });
+
+test('the same account on a new project or login binding cannot reuse an old send permit', async () => {
+  const client = createAccountClient({ online:false, origin:'https://visuhive.com', device, now:() => 1000,
+    native:async operation => operation === 'recover' ? credential
+      : { ok:true, accountId:account.id, accepted:true, noticeVersion:1 } });
+  await client.restore();
+  setCloudConsentSource({ client, accountId:account.id });
+  const oldBinding = { accountId:account.id, bindingVersion:cloudConsentState().bindingVersion };
+  setCloudConsentSource({ client, accountId:account.id });
+  await assert.rejects(requireCloudConsent(oldBinding), error => error.code === 'credential-revoked');
+  await requireCloudConsent({ accountId:account.id, bindingVersion:cloudConsentState().bindingVersion });
+  setCloudConsentSource(null);
+});
