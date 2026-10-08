@@ -82,8 +82,13 @@ export function createConversationTransports({ instanceIdentity, onClosed = asyn
     for (const entry of [...entries.values()]) entry.revoke();
     return Promise.all([...entries.values()].map(entry => entry.closed));
   }
-  return { read, fence, disconnect, current: () => context.getStore(),
-    run(req, res, callback) { const entry = begin(req, res); return context.run(entry, callback); },
+  const dispatch = callback => {
+    const entry = context.getStore();
+    if (!entry) return callback();
+    return track(entry, Promise.resolve().then(callback), () => {});
+  };
+  return { read, fence, disconnect, dispatch, current: () => context.getStore(),
+    run(req, res, callback) { const entry = begin(req, res); return context.run(entry, () => dispatch(callback)); },
     ready() { if (!stopped) connected = true; },
     hasClosed: id => closed.has(id),
     async close() { stopped = true; await disconnect(); context.disable(); },

@@ -309,6 +309,14 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return ledger.transaction(state => {
       const event = state.accessEvents.find(e => e.eventId === eventId); if (!event) reject(404, 'no-event');
       if (receipt.cursor < event.seq || receipt.cursor > state.accessHead) reject(409, 'ack-cursor-mismatch');
+      if (serviceId === 'agent' && state.agentReadControlRequired === true) {
+        const closure = state.agentReadAccessClosuresV1?.[eventId];
+        if (!closure || closure.payload?.source !== 'doc-agent-read-control' || closure.payload.complete !== true ||
+            closure.payload.eventId !== eventId || closure.payload.accessSeq !== event.seq ||
+            !Array.isArray(closure.payload.controlIds) || !closure.payload.controlIds.length ||
+            closure.digest !== digestOf(closure.payload) || receipt.agentReadClosureDigest !== closure.digest)
+          reject(503, 'agent-read-closure-required');
+      }
       const key = `ack:${eventId}:${serviceId}`; const old = state.accessAcks[key];
       if (old && receipt.cursor < old.cursor) return old;
       if (old && receipt.cursor === old.cursor && digestOf(old) !== digestOf(receipt)) reject(409, 'ack-mismatch');

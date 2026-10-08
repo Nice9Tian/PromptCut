@@ -4,10 +4,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import https from 'node:https';
+import { randomUUID } from 'node:crypto';
 import { openAccountLedger } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
-import { createConversationAuthority } from '../account/conversation-authority.mjs';
-import { createConversationInternalServer } from '../account/conversation-internal.mjs';
+import { createConversationAuthority, conversationReadInState } from '../account/conversation-authority.mjs';
+import { createConversationInternalHandler } from '../account/conversation-internal.mjs';
+import { createAgentReadControl, createAgentReadControlHandler } from '../account/agent-read-control.mjs';
+import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
+import { createAgentInstanceInternalHandler } from '../account/agent-instance-internal.mjs';
+import { createRunClient } from '../agent-service/run-client.mjs';
+import { createConversationControlClient } from '../agent-service/conversation-control-client.mjs';
+import { certificateFingerprint } from '../account/client.mjs';
 import { createConversationClient } from '../agent-service/conversation-client.mjs';
 import { createAccountConversationService } from '../agent/service/conversation-policy.mjs';
 import { createAgentHttp } from '../agent-service/http.mjs';
@@ -19,9 +27,9 @@ const listen = (server, port) => new Promise((resolve, reject) => {
 });
 const close = server => new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve); });
 
-// First counter deliberately uses the real old HTTP path and real doc ACL over
-// pinned mTLS. The account credential issuer alone is controlled; nobody returns
-// a fabricated access.allowed. No model/runner or production data is involved.
+// Original first-red at 3fa5fcd8 used the old HTTP path. This regression keeps
+// that exact old-RPC-result boundary, with actual instance/control TLS connected.
+// The account credential issuer alone is controlled; access.allowed is doc ACL.
 test('Agent history cannot send an old real access RPC result after a private fence', { timeout: 15000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-agent-read-race-'));
   const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'read-race-doc' });
@@ -38,21 +46,50 @@ test('Agent history cannot send an old real access RPC result after a private fe
   } });
   ledger.transaction(s => { s.projects[projectId] = { projectId, creatorAccountId: owner, status: 'active',
     hosted: { agent: true }, bans: {}, members: { [owner]: { access: 'rw' }, [member]: { access: 'rw' } }, accessRevision: 1 }; });
+  const trusted = await account.authorizePrincipal({ accessToken: member }, { projectId, action: 'read' });
+  const subjects = new Map(), sockets = new WeakMap();
+  const resolveServicePrincipal = ({ socket }) => {
+    assert.equal(socket.authorized, true);
+    assert.equal(certificateFingerprint(socket.getPeerCertificate().fingerprint256), certificateFingerprint(pki.asset.fingerprint256));
+    if (!sockets.has(socket)) { const id = randomUUID(); sockets.set(socket, id); subjects.set(id, socket);
+      socket.once('close', () => subjects.delete(id)); }
+    return { service: 'agent', serviceKid: 'real-test-agent-key', authenticationId: sockets.get(socket) };
+  };
+  const instances = createAgentInstanceAuthority({ ledger, verifyTransportInState(_state, principal) {
+    const socket = subjects.get(principal.authenticationId);
+    assert.ok(socket && !socket.destroyed);
+    return { serviceId: 'agent', serviceKid: 'real-test-agent-key', authenticationId: principal.authenticationId,
+      channelBinding: instanceTlsBinding(socket) };
+  } });
+  const readControl = createAgentReadControl({ ledger, instanceAuthority: instances,
+    authorizeRead: async body => { assert.equal(body.delegation, 'temporary-delegation');
+      return account.authorizePrincipal({ authorizationId: trusted.authorizationId }, { projectId, action: 'read' }); },
+    checkReadInState: conversationReadInState });
+  const fenced = deferred();
   const conversations = createConversationAuthority({ ledger, accountAuthority: account,
     checkConsent: async ({ accountId }) => ({ accountId, accepted: true, noticeVersion: 1 }),
     verifySelectionSnapshot: async ({ principal }) => ({ projectId, accountId: principal.accountId,
       pageId: 'page_race', selection: {}, source: 'sent-snapshot', sentAt: 1 }),
-    // No run exists. The old production assembly likewise leaves closure pending.
-    runHooks: { fenceInState() {} }, onFence: async () => { throw Object.assign(new Error('agent-fence-pending'), { code: 'agent-fence-pending', status: 503 }); },
+    runHooks: { fenceInState(state, input) { const result = readControl.hooks.fenceInState(state, input);
+      queueMicrotask(() => fenced.resolve()); return result; } },
+    onFence: async input => { await readControl.waitCompletion(input); return { ack: true, ...input }; },
   });
   await conversations.send({ principalRef: { accessToken: owner }, projectId, conversationId,
     requestId: 'message1', content: 'PRIVATE_RACE_SENTINEL' });
-  const trusted = await account.authorizePrincipal({ accessToken: member }, { projectId, action: 'read' });
-  const doc = createConversationInternalServer({ tls: pki.doc, conversationAuthority: conversations,
+  const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations, requireReadControl: true,
     agentFingerprint256: pki.asset.fingerprint256,
     resolveDelegation: async value => { assert.equal(value, 'temporary-delegation'); return trusted; } });
-  const client = createConversationClient({ origin: 'https://127.0.0.1:6600', tls: pki.asset,
-    serverFingerprint256: pki.doc.fingerprint256 });
+  const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority: instances,
+    agentFingerprint256: pki.asset.fingerprint256, resolveServicePrincipal });
+  const controlsHandler = createAgentReadControlHandler({ control: readControl, instanceAuthority: instances, resolveServicePrincipal });
+  const doc = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true }, async (req, res) => {
+    if (!await instancesHandler(req, res) && !await controlsHandler(req, res) && !await conversationsHandler(req, res)) {
+      res.writeHead(404); res.end(); }
+  });
+  const options = { origin: 'https://127.0.0.1:6600', tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 };
+  const client = createConversationClient(options), runClient = createRunClient(options);
+  const controlClient = createConversationControlClient({ ...options, runClient, receiptFile: path.join(dir, 'agent-read.sqlite') });
+  client.useReadControl(controlClient);
   const checked = deferred(), release = deferred(); let held = false, actualAllowed = null;
   const originalAccess = client.access;
   client.access = async input => {
@@ -65,9 +102,14 @@ test('Agent history cannot send an old real access RPC result after a private fe
     userId: member, accountId: member, delegation: 'temporary-delegation' }) });
   const agent = http.createServer((req, res) => { void api.handle(req, res); });
   let request;
-  t.after(async () => { release.resolve(); request?.destroy(); client.close(); await close(agent); await close(doc);
+  t.after(async () => { release.resolve(); request?.destroy(); await controlClient.close(); client.close(); runClient.close();
+    readControl.close(); await close(agent); await close(doc); instances.close();
     account.close(); ledger.close(); fs.rmSync(dir, { recursive: true }); });
   await listen(doc, 6600); await listen(agent, 6601);
+  await controlClient.start();
+  const deadline = Date.now() + 5000;
+  while (!controlClient.describe().connected) { if (Date.now() > deadline) throw new Error('control-not-ready');
+    await new Promise(resolve => setTimeout(resolve, 5)); }
   const body = new Promise((resolve, reject) => {
     request = http.get(`http://127.0.0.1:6601/v1/conversations/${conversationId}/events`, res => {
       const chunks = []; res.on('data', bytes => chunks.push(bytes));
@@ -75,13 +117,17 @@ test('Agent history cannot send an old real access RPC result after a private fe
     }); request.once('error', reject);
   });
   await checked.promise;
-  await assert.rejects(conversations.switchVisibility({ principalRef: { accessToken: owner }, projectId, conversationId,
-    visibility: 'private', requestId: 'private1' }), { code: 'agent-fence-pending' });
+  let complete = false;
+  const switching = conversations.switchVisibility({ principalRef: { accessToken: owner }, projectId, conversationId,
+    visibility: 'private', requestId: 'private1' }).then(result => { complete = true; return result; });
+  await fenced.promise;
   assert.equal(ledger.read().conversationsV2[projectId][conversationId].visibility, 'private');
   assert.equal(actualAllowed, true);
-  release.resolve();
   const received = await body;
+  assert.equal(complete, false, 'actual socket close alone cannot skip an unresolved dispatch');
+  release.resolve();
+  assert.equal((await switching).visibility, 'private');
   t.diagnostic(JSON.stringify({ actualDocRpc: true, realSqlitePrivate: true, actualAllowed,
-    leakedSentinel: received.includes('PRIVATE_RACE_SENTINEL'), executorMounted: false }));
+    leakedSentinel: received.includes('PRIVATE_RACE_SENTINEL'), complete, actualCloseBeforeAck: true, executorMounted: false }));
   assert.equal(received.includes('PRIVATE_RACE_SENTINEL'), false, 'old lawful RPC result must not escape after the fence');
 });

@@ -74,7 +74,23 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       if (trusted.projectId !== body.projectId) fail(403, 'project-mismatch');
       return runtime.authority.authorizePrincipal({ authorizationId: trusted.authorizationId },
         { projectId: trusted.projectId, action: 'read' });
-    }, checkReadInState: conversationReadInState });
+    }, checkReadInState: conversationReadInState,
+    onProgress: () => { try { completeReadAccessEvents(); } catch (error) {
+      onDiagnostic({ code: error.code ?? 'agent-read-close-pending' }); } } });
+  function completeReadAccessEvents() {
+    const state = ledger.read();
+    for (const event of state.accessEvents) {
+      if (state.accessAcks[`ack:${event.eventId}:agent`] ||
+          !state.agentReadsV1?.controls.some(c => c.accessSeq === event.seq)) continue;
+      try {
+        const closure = readControl.finalizeAccessEvent({ eventId: event.eventId });
+        runtime.authority.ackAccessEvent(event.eventId, 'agent', { receiptId: `agent-read:${event.eventId}`,
+          cursor: event.seq, complete: true, agentReadClosureDigest: closure.digest,
+          closedStreams: closure.payload.receipts.flatMap(r => r.closedReadHandleIds),
+          stoppedRuns: [], rejectedCredentials: event.loginIds ?? [] });
+      } catch (error) { if (!['read-close-pending', 'agent-run-closure-pending'].includes(error.code)) throw error; }
+    }
+  }
   // Operation and doc-transport closure are real partial evidence. Until the
   // registered Agent instance/resource witness exists, no control is ACKed.
   async function deliver(control) {

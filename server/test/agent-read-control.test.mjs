@@ -134,3 +134,27 @@ test('legacy Agent ACK cannot bypass mandatory read closure, including module lo
   try { assert.throws(() => absentModule.ackAccessEvent(event.eventId, 'agent', receipt), { code: 'agent-read-closure-required' }); }
   finally { absentModule.close(); reopened.close(); }
 });
+
+test('only complete internal zero-run closure can produce the legacy ACK digest; real run inventory remains pending', async t => {
+  const f = setup(t); f.subscribe(); const opened = await f.open(), id = opened.readHandle.readHandleId;
+  const { event, control } = f.ledger.transaction(state => {
+    state.revokedLogins['login:login-member'] = { seq: 1 };
+    const event = appendAccessEvent(state, { type: 'login-revoked', loginIds: ['login-member'] });
+    const control = f.control.hooks.fenceInState(state, { kind: 'credential', loginIds: ['login-member'],
+      accessSeq: event.seq, requestId: `access:${event.eventId}` });
+    return { event, control };
+  });
+  assert.throws(() => f.control.finalizeAccessEvent({ eventId: event.eventId }), { code: 'read-close-pending' });
+  f.control.closeReads(f.signed('close', { readHandleIds: [id] }));
+  f.control.acknowledge(f.signed('ack', { controlId: control.controlId, payloadDigest: control.payloadDigest, seq: control.seq, readHandleIds: [id] }));
+  f.ledger.transaction(state => { state.runControlsV2 = { pending: { requestId: `access:${event.eventId}`,
+    instances: [f.process.registration], revoked: ['existing-run'], retained: [] } }; });
+  assert.throws(() => f.control.finalizeAccessEvent({ eventId: event.eventId }), { code: 'agent-run-closure-pending' });
+  f.ledger.transaction(state => { delete state.runControlsV2.pending; });
+  const closure = f.control.finalizeAccessEvent({ eventId: event.eventId });
+  const authority = createAccountAuthority({ ledger: f.ledger }); t.after(() => authority.close());
+  const receipt = { receiptId: 'closed', cursor: event.seq, complete: true, closedStreams: [id], stoppedRuns: [], rejectedCredentials: ['login-member'] };
+  assert.throws(() => authority.ackAccessEvent(event.eventId, 'agent', { ...receipt, agentReadClosureDigest: 'a'.repeat(64) }), { code: 'agent-read-closure-required' });
+  assert.equal(authority.ackAccessEvent(event.eventId, 'agent', { ...receipt, agentReadClosureDigest: closure.digest }).complete, true);
+  assert.deepEqual(f.control.finalizeAccessEvent({ eventId: event.eventId }), closure);
+});

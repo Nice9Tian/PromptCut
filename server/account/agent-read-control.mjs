@@ -80,7 +80,7 @@ export function createAgentReadControlHandler({ control, resolveServicePrincipal
  * release invocation capabilities only after the complete request/stream ends.
  * Unknown historical OS instances never become closed through an empty list. */
 export function createAgentReadControl({ ledger, instanceAuthority, authorizeRead, checkReadInState,
-  synchronize = async () => {} } = {}) {
+  synchronize = async () => {}, onProgress = () => {} } = {}) {
   if (![ledger?.read, ledger?.transaction, instanceAuthority?.verifyInState, authorizeRead, checkReadInState]
     .every(value => typeof value === 'function')) fail(503, 'read-control-configuration');
   ledger.transaction(state => { state.agentReadControlRequired = true; tables(state); });
@@ -212,7 +212,7 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     }
     t.controls.push(control);
     // Runs after the synchronous SQLite commit; rollback leaves nothing to send.
-    queueMicrotask(publish);
+    queueMicrotask(() => { publish(); onProgress(); });
     return clone(control);
   }
   function acknowledge({ servicePrincipal, body }) {
@@ -229,6 +229,7 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
       target.receipt = receipt; return clone(receipt);
     });
     for (const wake of waiters) wake();
+    onProgress();
     return result;
   }
   function completion({ projectId, conversationId, accessSeq } = {}) {
@@ -247,7 +248,23 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
       waiters.add(wake); wake();
     });
   }
-  return { open, closeReads, subscribe, publish, acknowledge, completion, waitCompletion,
+  function finalizeAccessEvent({ eventId }) {
+    return ledger.transaction(state => {
+      const event = state.accessEvents.find(row => row.eventId === eventId);
+      if (!event) fail(404, 'read-control-event-missing');
+      const controls = tables(state).controls.filter(c => c.accessSeq === event.seq);
+      if (!controls.length || controls.some(c => Object.values(c.targets).some(target => !target.receipt))) fail(503, 'read-close-pending');
+      // This phase cannot certify an active/retained/historical run's resources.
+      const runs = Object.values(state.runControlsV2 ?? {}).filter(c => c.requestId === `access:${event.eventId}`);
+      if (runs.some(c => c.instances.length || c.revoked.length || c.retained.length)) fail(503, 'agent-run-closure-pending');
+      const payload = { source: 'doc-agent-read-control', complete: true, eventId, accessSeq: event.seq,
+        controlIds: controls.map(c => c.controlId), receipts: controls.flatMap(c => Object.values(c.targets).map(t => t.receipt)) };
+      const result = { payload, digest: digestOf(payload) }, rows = state.agentReadAccessClosuresV1 ??= {};
+      if (rows[eventId] && canonicalJson(rows[eventId]) !== canonicalJson(result)) fail(409, 'read-control-closure-mismatch');
+      rows[eventId] = result; return result;
+    });
+  }
+  return { open, closeReads, subscribe, publish, acknowledge, completion, waitCompletion, finalizeAccessEvent,
     hooks: { fenceInState }, close() { stopped = true; for (const stream of [...streams.values()]) stream.close();
       for (const wake of waiters) wake(); } };
 }

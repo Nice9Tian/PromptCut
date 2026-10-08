@@ -164,7 +164,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     };
     const entry = { projectId: identity.projectId, userId: identity.userId, close: () => { release(); res.end(); } };
     openStreams.add(entry);
-    const poll = async () => {
+    const pollWork = async () => {
       if (polling || released || res.destroyed) return;
       polling = true;
       try {
@@ -198,9 +198,10 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         if (!released && !res.destroyed) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} entry.close(); }
       } finally { polling = false; }
     };
-    const timer = setInterval(() => { void poll(); }, 250); timer.unref?.();
+    const poll = () => service.readTransports ? service.readTransports.dispatch(pollWork) : pollWork();
+    const timer = setInterval(() => { void poll().catch(() => {}); }, 250); timer.unref?.();
     req.on('aborted', release); res.on('close', release);
-    void poll();
+    void poll().catch(() => {});
     return undefined;
   }
 
