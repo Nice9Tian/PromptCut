@@ -161,3 +161,9 @@ VisuHive实际表单源码3f95ac07，冻结报告e7af5956。四页共7表单显�
 ## 第三轮公网完整用户路径小阶段
 
 真实固定2d2fcd11完整58/58、0失败、completedtrue，probe38116ms/wrapper41.25秒；实际桌面壳两次运行/IPC隔离/DPAPI退出重开/换账号加入与两方fresh网站列表全部通过，原两轮失败仍保留。根已逐张看实际在线创建者列表、加入者列表和native编辑器，三幅安全截图随仓库归档。集成候选074769e5类型0/全量5309项5305通过0失败0取消4跳过70369.6038ms墙70.75秒/native重跑0，两构建0。58项不是模仿原测试回包，online create201/join200/WSS101与project.state精确编号，网站owned/joined编号精确一致；native真实HTTP在Rust进程，不冒称CDP读到它。仅本阶段用户路成立，未声称Agent/用户卡重渲/成员显示或全部附带事件都验过。详细首败/源码/端口/PID/测试记录见[独立公网报告](agent-reports/AGENT-codex-018-account-public-path.md)；公网注册账户及两个项目尚未删，后续按准确清单和备份做。
+
+main产品合d948acb3已push；首次文档stage含已gitmv删除的旧报告路径，git add失败，commit仅提交已stage的报告rename，未丢正文/截图；根随后显式stage现存路径，8ac0441f提交全部102行进度/实际截图/补充报告，main37920dff合入并push，local/origin main0/0。没有把此误stage隐成“一次提交全部包含”。旧release073c8cca按用户每版发完才进安排继续保留。
+
+完成公网worktree018-account-public-path先push冻结2d2fcd11，再核mainancestor、clean/未跟踪0/ignored0/reparse0，git worktree remove及本机branch-d，无force、远端分支保留；根结果TEMP pc-public-path-cleanup-20261009.json。累计49=PC35+VH14，当前在用3，旧六个与非本任务目录未动。Sol新的浏览器夹具还在只读拟边界，未空建新工作区。
+
+独占slice候选f8fb7f75第一实际运行首段失败：wall28ms、probe-unit-exists、未造输出dir/监听/worker/active slice，生产4PID均不变。真实249 systemctlshow未知合法slice自动合成loaded/inactive/dead、Transientno、FragmentPath/SourcePath/ControlGroup/InvocationID均空，不能拿service not-found判据直接套slice；原stdout节点/var/tmp/pc-root-cgroup-slice-f8fb7f75/once.log和TEMP pc-root-cgroup-slice-f8fb7f75-once.log保留。交Astra按pristine加载区分真占用，未直接放宽任何已active/有配置unit、未重复原码跑；OS机制仍待真正实验。
