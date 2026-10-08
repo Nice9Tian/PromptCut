@@ -8,7 +8,7 @@
 import { parseSseChunks } from "../sse.ts";
 import { CloudDelegationError, CloudIdentityError, cloudGrant, cloudTicket } from "./identity.ts";
 import { CLOUD_ATTACH_TOO_LARGE, normalizeAttachmentInfo, type CloudAttachmentInfo } from "./attach.ts";
-import type { CloudChatItem, CloudChatState, CloudEvent, CloudInfo, CloudSendBody, CloudSendAccepted } from "./types.ts";
+import type { CloudChatItem, CloudChatState, CloudEvent, CloudInfo, CloudQueueSnapshot, CloudSender, CloudSendBody, CloudSendAccepted } from "./types.ts";
 
 export class CloudError extends Error {
   readonly code: string;
@@ -69,6 +69,34 @@ async function readError(res: Response): Promise<CloudError> {
 
 const num = (v: unknown, d = 0) => (typeof v === "number" && Number.isFinite(v) ? v : d);
 const STATES = new Set(["idle", "running", "interrupted", "failed", "revoked"]);
+
+/** UI gating only; the server remains authoritative for every conversation operation. */
+export function cloudConversationControlPolicy(input: {
+  accountMode: boolean;
+  accountId: string | null;
+  creator: boolean;
+  conversation: CloudChatItem | null;
+  queue: CloudQueueSnapshot | null | undefined;
+  senders: Record<string, CloudSender> | undefined;
+  legacyStreaming: boolean;
+}) {
+  if (!input.accountMode) return { canSend: true, creatorReadOnly: false, canSwitchVisibility: false,
+    currentRunId: null, streaming: input.legacyStreaming, canStop: input.legacyStreaming };
+  const currentRunId = input.queue?.currentRunId ?? null;
+  const active = currentRunId ? input.queue?.items.find(item => item.runId === currentRunId &&
+    (item.state === "running" || item.state === "preparing")) ?? null : null;
+  const sender = active ? input.senders?.[`cq-${active.messageId}`] : undefined;
+  const creatorReadOnly = input.conversation?.creatorReadOnly === true;
+  return {
+    canSend: !creatorReadOnly,
+    creatorReadOnly,
+    canSwitchVisibility: Boolean(input.accountId && input.conversation?.ownerAccountId === input.accountId &&
+      (input.conversation.visibility === "shared" || input.conversation.visibility === "private")),
+    currentRunId,
+    streaming: Boolean(currentRunId && active),
+    canStop: Boolean(currentRunId && active && (input.creator || sender?.accountId === input.accountId)),
+  };
+}
 
 export function normalizeInfo(raw: Record<string, unknown>): CloudInfo {
   const models = Array.isArray(raw.models)
@@ -174,6 +202,23 @@ export function createCloudApi(deps: CloudApiDeps) {
       return (Array.isArray(body.items) ? body.items : []).map((x) => normalizeChatItem(x as Record<string, unknown>)).filter((x): x is CloudChatItem => !!x);
     },
 
+    /** 账号模式的对话所有者切换共有/私有；私有切换只有服务端 fence 确认后才算成功。 */
+    async switchVisibility(conversationId: string, visibility: "shared" | "private", requestId: string): Promise<CloudChatItem> {
+      if (!conversationId || !requestId || !["shared", "private"].includes(visibility))
+        throw new CloudError("bad-request", "对话权限请求无效。", 400);
+      const res = await request(`/conversations/${encodeURIComponent(conversationId)}/visibility`, {
+        method: "POST", json: { visibility, requestId },
+      });
+      let raw: unknown = null;
+      try { raw = await res.json(); } catch { /* 按无效确认处理 */ }
+      const body = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
+      const item = body && normalizeChatItem(body);
+      if (body?.ok !== true || !item || item.id !== conversationId || item.projectId !== deps.projectId?.() ||
+        item.visibility !== visibility || !Number.isSafeInteger(body.aclRevision) || Number(body.aclRevision) < 0)
+        throw new CloudError("unavailable", "云端权限切换尚未得到有效确认，请重新读取对话后重试。", res.status || 503);
+      return item;
+    },
+
     /** 发一条消息、起一轮。回 202:这一轮从此与这个请求无关 */
     async send(conversationId: string, body: CloudSendBody): Promise<CloudSendAccepted> {
       // 对话委托要不到(开关关了、连接断着)就不发:不带它服务端只会回 bad-grant,原因反而说不清
@@ -229,7 +274,18 @@ export function createCloudApi(deps: CloudApiDeps) {
       await request(`/conversations/${encodeURIComponent(conversationId)}/page-results`, { method: "POST", json: body });
     },
 
-    async abort(conversationId: string): Promise<void> {
+    async abort(conversationId: string, control?: { runId: string; requestId: string }): Promise<void> {
+      if (control) {
+        if (!control.runId || !control.requestId) throw new CloudError("bad-request", "停止任务请求无效。", 400);
+        const res = await request(`/conversations/${encodeURIComponent(conversationId)}/abort`, {
+          method: "POST", json: { runId: control.runId, requestId: control.requestId },
+        });
+        const body = await res.json().catch(() => null) as { ok?: unknown; runId?: unknown } | null;
+        if (body?.ok !== true || body.runId !== control.runId)
+          throw new CloudError("unavailable", "云端尚未确认停止这一轮，请重读状态后重试。", res.status || 503);
+        return;
+      }
+      // 旧 hosted/LAN 模式保持原请求形状与行为。
       await request(`/conversations/${encodeURIComponent(conversationId)}/abort`, { method: "POST", json: {} });
     },
 

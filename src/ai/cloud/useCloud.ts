@@ -204,10 +204,11 @@ export interface CloudChat {
   send: (text: string, files?: ChatAttachment[]) => Promise<boolean>;
   /** 传一个文件到这个对话的工作目录(对话还没发过消息也行);出错抛 `CloudError` */
   attach: (file: File, signal?: AbortSignal) => Promise<CloudAttachmentInfo>;
-  abort: () => Promise<void>;
+  abort: (runId?: string, requestId?: string) => Promise<void>;
+  switchVisibility: (visibility: "shared" | "private", requestId: string) => Promise<CloudChatItem>;
   newChat: () => void;
   openChat: (id: string) => void;
-  history: { items: CloudChatItem[]; loading: boolean; refresh: () => Promise<void> };
+  history: { items: CloudChatItem[]; loading: boolean; refresh: () => Promise<boolean> };
   model: string;
   setModel: (m: string) => void;
 }
@@ -386,13 +387,23 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     return api.attach(convRef.current, file, file.name, signal);
   }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
 
-  const abort = useCallback(async () => {
+  const abort = useCallback(async (runId?: string, requestId?: string) => {
     try {
-      if (key && keyRef.current === key && sessionKeyRef.current === key) await sessionRef.current?.abort();
+      if (!key || keyRef.current !== key || sessionKeyRef.current !== key) return;
+      if (cloud.accountMode && runId && requestId) await api.abort(convRef.current, { runId, requestId });
+      else await sessionRef.current?.abort();
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      if (cloud.accountMode && runId && requestId) throw err;
     }
-  }, [key]);
+  }, [api, cloud.accountMode, key]);
+
+  const switchVisibility = useCallback(async (visibility: "shared" | "private", requestId: string) => {
+    if (!cloud.accountMode || !cloud.accountId || !key || keyRef.current !== key || sessionKeyRef.current !== key)
+      throw new CloudError("forbidden", "当前账号不能切换这段云端对话的权限。", 403);
+    await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion });
+    return api.switchVisibility(convRef.current, visibility, requestId);
+  }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
 
   const switchTo = useCallback((id: string) => {
     if (cloud.accountMode && (!key || keyRef.current !== key || sessionKeyRef.current !== key)) return;
@@ -405,16 +416,18 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
 
   const newChat = useCallback(() => switchTo(newCloudChatId()), [switchTo]);
 
-  const refreshHistory = useCallback(async () => {
-    if (!key || keyRef.current !== key || sessionKeyRef.current !== key) return;
+  const refreshHistory = useCallback(async (): Promise<boolean> => {
+    if (!key || keyRef.current !== key || sessionKeyRef.current !== key) return false;
     setHistLoading(true);
     try {
       const list = await api.list();
-      if (keyRef.current !== key || sessionKeyRef.current !== key) return;
+      if (keyRef.current !== key || sessionKeyRef.current !== key) return false;
       const titles = readTitles(projectId, accountScope);
       setHistItems(list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x)));
+      return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      return false;
     } finally {
       setHistLoading(false);
     }
@@ -435,6 +448,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     send,
     attach,
     abort,
+    switchVisibility,
     newChat,
     openChat: switchTo,
     history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory },
