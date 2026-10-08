@@ -114,6 +114,7 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     },
     registerInstance: () => instanceSession.register(), instanceIdentity: () => instanceSession.identity(),
     dataProofFor: input => instanceSession.dataProofFor(input),
+    conversationControlProofFor: input => instanceSession.conversationControlProofFor(input),
     runAssetHttpProofFor: input => instanceSession.runAssetHttpProofFor(input),
     close() { closed = true; instanceSession.close(); for (const req of active) req.destroy(); },
   };

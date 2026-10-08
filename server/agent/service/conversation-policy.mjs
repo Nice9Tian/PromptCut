@@ -27,6 +27,7 @@ export function createAccountConversationService({ conversationClient, now = Dat
   };
   return {
     accountMode: true,
+    get readTransports() { return conversationClient.readTransports ?? null; },
     egressTestAllow: false, look: false, collect: false, collectTestRunner: false,
     conversations: identity => call('list', identity),
     conversation: (identity, conversationId, after = 0) => call('get', identity, conversationId, { after }),
