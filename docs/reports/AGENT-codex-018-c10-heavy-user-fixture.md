@@ -60,3 +60,17 @@
 相对根已收 `cd068fe7` 的增量仅4个获租文件：browser probe替换错误片段入口并加入真实doc提交证据；judge新增正常编辑和只读回包聚合helper；host-claim测试新增两项；本报告保留首败、三级收敛和验证边界。自审核对实际project模块的inline/parts/end形状、reqId/rev/digest与endpoint布尔send接口，未修改任何生产文件。
 
 本次可交付结论：**片段入口错误有因修正，纯路径和类型通过；实际共享doc接受、新卡浏览器CPU成本、当前成功plan与host完成仍未执行，C10尚未判通过。** 根下一次统一窗口应先取得新增 `a5-fixture-project.json`（rev增加、同ID/params/时间与sourceHash一致），随后才核 `a5-fixture-prerequisite.json` 的真实step超budget和当前成功plan；最后仍按同clip/hostFP/non-dedup completed/新ready键及原main竞争完整验收。任何前置失败保存原始证据并结束，不同源重跑赌绿。
+
+## 根 f7b 首次实际结果：合法 metadata-only 与已接受快照
+
+根联合 `f7b77a1a` 实际首次自然结束 exit1/okfalse/1fail/pending0/wall142.750s、native0，源码clean不变。原 `%TEMP%/pc-root-c10-assets-f7b77a1a.py`、`.log`、`.result.json`、`-out` 全保留。白名单读取 `a5-fixture-source.json`：卡 `c10-cpu-field-949a7a398ad9265a`，源码正文哈希 `1c1cea9f8941c5b7991b8f103fd0c2628e125a224e09bc26e2bf20f5d566f880`，真实put/get rev1/sameBody、bundleok/runready、根已核两stage ready；没有project/prerequisite文件，host未启。失败是旧helper在beforeProject处把合法 `project:null` 误报 `fixture-project-missing`，不是成本或host结果。
+
+实际链路：`server/vite-plugin-frames.ts` 的publish（625–673）调用 `server/queue-publish.mjs:resolvePublishVersion`；没有C6.5真身时，真实 `project.announce` 登记rev/digest，再由 `createProjectClient.putSnapshot` 上传完整项目JSON。`project.mjs:450–479` 的open只在hasBody时给正文；`845–898` 的snapshotPut核登记rev/摘要并持久保存全文blob，但不把它转换为C6.5 body；`939–976` 的snapshotGet按精确版本提供该全文。`renderProject` 只正常化media地址，保留clip/params/时长。这是合法共享旧路径。此前报告“必经DocSync真身”措辞过强，本次修正为正常共享同步/发布；不把render层产物当项目正文，也不假称所有页面都已接C6.5。
+
+首无监听counter `%TEMP%/pc-c10-f7b-metadata-counter.mjs/.log` exit1：实验ctx漏now，在真实announce之前报TypeError；保留。补齐context的新名 `pc-c10-f7b-metadata-counter-2.mjs/.log` exit0：真实projectModule+memoryStore+createProjectClient+resolvePublishVersion，普通v1 principal，只有内存transport投递，无listener。实际publish viaannounce/rev1，服务端读回完整同项目；head hasBodyfalse/projectnull/digest正确/no parts；旧helper明确拒绝合法metadata。它证明模块链路，不冒称新浏览器运行。
+
+三级解法表派生4a1（父4a，g5/h1/f6）：承认合法metadata，按真实head精确rev/digest读取服务端已接受的**完整项目快照**，核片序/总数/项目ID/全文摘要，结束再读head仍同版本才提供正文；缺快照或head前进仅返回project:null与未就绪原因。初始rev0可作版本基线，不作正文证据。4a2“用本地项目填null”关闭·禁止；4a3“强发project.op转换真身”关闭·无必要且会改变被测提交链。根批准4a1及取证顺序调整，未改生产/二级语义。
+
+同一顺序收敛：先记真实beforeRev、正常editCardProject；等待既有L2 CPU超budget/当前成功plan前置；随后再核完整服务端项目，最后才启动host。旧顺序在测量前要求publisher先上传快照存在依赖倒置。后置仍要求remoteRev>beforeRev、同clip/cardId/完整params/起止/总时长精确一致、source正文/hash/rev完全一致；保存via=body或accepted-snapshot及未就绪reason，不删任何回读尺子。原main-v2、当前plan含目标、hostFP/非dedup completed/新ready键不变；无新增sleep/延长时限/强上传/假成本。
+
+本轮新增两纯目标：实际queue-publish/project-client/project模块配真实TMP文件store，确认合法null、完整快照、重开模块与文件store后全文仍可读、announce后尚无快照不放行；独立受控回包拒错版本/错项目/缺片/乱序/坏摘要，并在完整旧快照结束后head已前进时不返回正文。原13条全部保留。当前待本固定实现的npm窄目标与type，实际C10/全文接受/browser成本/host仍由根下一窗口验证。
