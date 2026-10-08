@@ -1,5 +1,6 @@
 import https from 'node:https';
 import { accountError, certificateFingerprint } from './client.mjs';
+import { assertInstanceDirectTransport } from './agent-instance-internal.mjs';
 
 const ROOT = '/internal/v2/runs/';
 const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'];
@@ -43,7 +44,7 @@ function validateBody(action, body) {
 /** Only a pinned Agent leaf certificate reaches these routes. All service and
  * actor identities come from trusted callbacks/ledger, never from the body. */
 export function createRunInternalHandler({ runAuthority, agentFingerprint256, resolveServicePrincipal,
-  issueRunTicket, listPendingRuns } = {}) {
+  authenticateInvocation, principalForCheck, issueRunTicket, listPendingRuns } = {}) {
   const pin = certificateFingerprint(agentFingerprint256);
   if (!/^[a-f0-9]{64}$/.test(pin) || typeof resolveServicePrincipal !== 'function' ||
       !['admit', 'confirmRead', 'queryRead', 'checkAccess', 'resolveRunPrincipal', 'finish'].every(method =>
@@ -51,16 +52,27 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
   return async function handle(req, res) {
     const url = new URL(req.url, 'https://internal.invalid');
     if (!url.pathname.startsWith(ROOT)) return false;
+    let invocation = null;
     try {
+      assertInstanceDirectTransport(req);
       const peer = req.socket?.getPeerCertificate?.(), fingerprint256 = certificateFingerprint(peer?.fingerprint256);
       if (req.socket?.authorized !== true || fingerprint256 !== pin) fail(403, 'service-forbidden');
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = url.pathname.slice(ROOT.length);
       if (!Object.hasOwn(shapes, action)) fail(404, 'no-route');
       const body = await bodyOf(req); validateBody(action, body);
-      const servicePrincipal = await resolveServicePrincipal({ fingerprint256 });
+      let servicePrincipal = await resolveServicePrincipal({ fingerprint256, socket: req.socket });
       if (!servicePrincipal || servicePrincipal.service !== 'agent' || !reference(servicePrincipal.serviceKid))
         fail(403, 'run-service-forbidden');
+      if (action !== 'pending') {
+        if (typeof authenticateInvocation !== 'function') fail(503, 'instance-consumer-unavailable');
+        if (action === 'check' && !['read', 'write'].includes(body.action)) fail(400, 'invalid-run-action');
+        invocation = await authenticateInvocation({ req, servicePrincipal, body,
+          operation: ({ admit: 'admit', read: 'confirmRead', 'read/query': 'queryRead', finish: 'finish',
+            check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
+        if (!invocation?.servicePrincipal || typeof invocation.release !== 'function') fail(503, 'instance-consumer-unavailable');
+        servicePrincipal = invocation.servicePrincipal;
+      }
       const input = { ...body, servicePrincipal }; let result;
       if (action === 'admit') result = await runAuthority.admit(input);
       else if (action === 'read') result = await runAuthority.confirmRead(input);
@@ -75,16 +87,24 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
               !Number.isSafeInteger(row.queueRevision) || row.queueRevision < 0))
           fail(503, 'run-pending-protocol');
       } else {
-        const principal = await runAuthority.resolveRunPrincipal({ servicePrincipal,
-          projectId: body.projectId, runGrantId: body.runGrantId });
+        if (action === 'check' && typeof principalForCheck !== 'function') fail(503, 'instance-consumer-unavailable');
+        const principal = action === 'check' ? await principalForCheck(input) :
+          await runAuthority.resolveRunPrincipal({ servicePrincipal, projectId: body.projectId, runGrantId: body.runGrantId });
         if (principal?.realm !== 'account' || principal.identityVersion !== 2 || principal.role !== 'agent' ||
             principal.creator !== false || principal.serviceId !== 'agent' ||
             principal.projectId !== body.projectId || principal.runGrantId !== body.runGrantId ||
             principal.servicePrincipal !== servicePrincipal || principal.serviceKid !== servicePrincipal.serviceKid)
           fail(403, 'run-principal-mismatch');
-        const checked = await runAuthority.checkAccess({ principal, projectId: body.projectId, action: body.action ?? 'read' });
-        if (checked?.allowed !== true) fail(403, 'run-revoked');
-        if (action === 'check') result = { ...checked, principal };
+        if (action === 'check') {
+          const checked = await runAuthority.checkAccess({ principal, projectId: body.projectId, action: body.action });
+          if (checked?.allowed !== true) fail(403, 'run-revoked');
+          // The internal instanceSession/servicePrincipal never reaches HTTP.
+          const publicPrincipal = Object.fromEntries(['realm', 'identityVersion', 'role', 'creator',
+            ...binding, 'accountId', 'loginId', 'credentialId', 'loginGeneration', 'serviceId', 'serviceKid',
+            'instanceId', 'instanceGeneration'].filter(field => principal[field] !== undefined)
+            .map(field => [field, principal[field]]));
+          result = { ...checked, principal: publicPrincipal };
+        }
         else {
           if (principal.conversationId !== body.conversationId) fail(403, 'run-binding-mismatch');
           if (typeof issueRunTicket !== 'function') fail(503, 'run-ticket-unavailable');
@@ -95,6 +115,7 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       }
       response(res, 200, { ok: true, result });
     } catch (error) { response(res, error?.status ?? 503, { ok: false, code: error?.code ?? 'run-unavailable' }); }
+    finally { invocation?.release?.(); }
     return true;
   };
 }
