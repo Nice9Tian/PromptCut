@@ -405,3 +405,18 @@ worker的root配置/源码/公开证书均不可asset写；server私钥由root�
 - 隔离TLS worker：`b16cf802e08a5d892de9fbde5224ac3191860ecba69d9393a29c49b4f85f4da2`
 
 root执行闭包需带publisher→共享schema/account ledger的正常相对依赖；G readerModule及其相对依赖使用root冻结的真实G提交。worker自己仅Node内置模块加这个显式冻结G动态入口。阶段操作门与证据文件命名已固定，可以root外部一条编排同时运行probe和真实G SQLite验证；本包未写虚假doc执行器。最终没有改v1实例cgroup解释、G物理工作区、生产unit、账号/渲染/用户目录；源码diff-check通过。
+
+## 两次真实Linux v2首败与worker重复SIGTERM窄修（2026-10-09）
+
+本节覆盖前文尚未执行的交接状态，原始失败、源码和结果均保留，不改写成通过。root执行immutable `1df77168` producer/worker闭包与G `63bfc0fa`，本Agent仅只读本机归档的root JSON。没有自行运行节点、systemd、TLS或业务监听。
+
+1. 首轮namespace `c2ff589213d19e84`：raw `%TEMP%/pc-root-publisher-v2-1df77168-once/root.log`，probe exit1，492ms（root wrapper1.132s），`publisher-unit-slice-mismatch`，尚未epoch1，doc检查为空，service inactive/MainPID0/ControlGroup空。root初始fragment按本报告旧建议显式写了 `Slice=system.slice`；own drop-in虽已载入，实际Slice仍system.slice。本报告撤回该准备建议：隔离固定fragment不显式配置Slice，由root-owned drop-in唯一设置，并继续真实重读Slice强制核验；不放宽adapter。原建议和第一次失败留在历史段落供审查。
+2. root新namespace `2060b0bf2f68c345`仅去掉初始fragment显式Slice，源码保持原固定对象。raw `%TEMP%/pc-root-publisher-v2-1df77168-no-base-slice/root.log`，probe exit1，2378ms（root wrapper2.925s）。实际epoch1和epoch2均发布；真实doc UID996的epoch1七项检查全通过，包括显式accept、SQLite close/reopen、integrity/FULL，epoch2尚未交给doc。唯一轮转负例未观察到：1269ms父子alive/pop1/子FDheld；1446ms父子birthgone/pop0/双EOFclose，`negativeObserved:false`。错误为 `probe-real-rotation-negative-or-close-missing`，以及第二代仍监听6541的 `probe-listener-remains`。失败后current撤为nonactive/保锁，真实第二代资源需root按tuple处理，不能将此残留当作第一代没关闭。旧scope在真实producer witness2耐久后已释放，observer ENODEV只作诊断，不充empty。生产PID/NRestarts未改变的结论来自root原记录；本Agent不执行清理。
+
+三级机制定位：第一级关闭/负例标准不变；第二级publisher、schema、G reader、OS双身份/固定FD业务门均不改；第三级仅修隔离worker的信号监听生命周期。原worker在资源异步关闭之前使用 `process.once('SIGTERM', ...)`，首次触发即移除最后一个监听，而子进程尚处于原有两秒FD/TCP持有阶段。改为 `process.on`，保留现成 `stopping` 同步置位，重复信号不重建计时器、不重复关闭；原2000ms、所有父子birth/FD/TCP/populated证据标准完全不变。持续监听的signal handle在Node内部unref，不会单独阻止进程自然退出。
+
+权威源码依据：[Node v24.21.0 signal.js](https://github.com/nodejs/node/blob/v24.21.0/lib/internal/process/signal.js#L19-L45) 中监听数归零关闭signal watcher；[systemd v249 service.c](https://github.com/systemd/systemd/blob/v249/src/core/service.c#L3188-L3200) 主进程退出的停止分支进入stop-post，无ExecStopPost时在1642–1664行转FINAL_SIGTERM，1673–1685行将该状态映射为KILL_TERMINATE。这说明一次systemctl stop不能被worker假设为只收到一次SIGTERM。它与首败的短暂负例窗口消失相符，但原VM日志没有信号计数，尚不能声称直接抓到了第二次内核信号。
+
+本机有因counter源码 `%TEMP%/pc-asset-v2-worker-signal-counter.mjs` 从worker实际完整stop/注册代码块提取并执行，使用真实Node process EventEmitter，受控延迟门与关闭计数，不发送OS信号、不建立网络listener。旧字节SHA256 `b16cf802e08a5d892de9fbde5224ac3191860ecba69d9393a29c49b4f85f4da2` 的首次反例日志 `%TEMP%/pc-asset-v2-worker-signal-red.log`：首次handled=true，待关闭listener=0，第二次handled=false，断言exit1。新代码日志 `%TEMP%/pc-asset-v2-worker-signal-green.log`：listener=1，两次均handled=true；释放门前fileclose/socketend均0，delay仅一次；释放后fileclose/socketend各一次，exit0。Windows Node24.19.0的此结果只证明JS注册/幂等因果，不冒充Linux systemd SIGTERM、真实FD/TCP或双epoch整体通过。
+
+新worker `node --check` exit0，diff-check通过；本轮没有npm、types、full或任何业务listener。producer/schema/OSprobe文件不变。root下一次单独Linux执行仍必须实际观察父birthgone而子资源在/pop1，再观察真实空与关闭，不能用本counter替代；doc epoch2/full-history/checkpoint联合结果仍待该轮证据。

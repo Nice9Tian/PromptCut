@@ -57,7 +57,9 @@ async function worker(configFile, role) {
     await file.close(); socket.end();
     server?.close(); server?.closeAllConnections();
   };
-  process.once('SIGTERM', () => { stop().catch(() => { process.exitCode = 1; }); });
+  // systemd may signal the group again after the main process exits. Keep the
+  // handler until actual exit; stop's guard preserves the child's one close.
+  process.on('SIGTERM', () => { stop().catch(() => { process.exitCode = 1; }); });
   if (role === 'child') return;
   const [key, cert, ca, clientCert, observerCert] = await Promise.all(
     ['keyFile', 'certFile', 'caFile', 'clientCertFile', 'observerCertFile'].map(k => ownedFile(config.tls[k])));
