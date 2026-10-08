@@ -206,6 +206,24 @@ const enabled = (page, selector) => page.waitForFunction(query => {
   const element = document.querySelector(query); return element && !element.disabled;
 }, { timeout: TIMEOUT }, selector);
 const waitVisible = (page, selector) => page.waitForSelector(selector, { visible: true, timeout: TIMEOUT });
+const waitForVisibleUserMessage = (page, expectedText) => page.waitForFunction(expected => {
+  const panel = document.querySelector('[data-pc="cloud-ai-panel"]:not([data-inactive="1"]):not([aria-hidden="true"])');
+  const list = panel?.querySelector('.ai-messages');
+  if (!list) return false;
+  return [...list.querySelectorAll('.ai-message.user .ai-message-text')].some(element => {
+    const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+    for (let node = element; node; node = node.parentElement) {
+      const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+      if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none' ||
+          style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0 ||
+          rect.width <= 0 || rect.height <= 0) return false;
+      if (node === panel) break;
+    }
+    const rect = element.getBoundingClientRect(), clip = list.getBoundingClientRect();
+    return text.includes(expected) && rect.bottom > clip.top && rect.top < clip.bottom &&
+      rect.right > clip.left && rect.left < clip.right;
+  });
+}, { timeout: TIMEOUT }, expectedText);
 const portFree = port => new Promise(resolve => {
   const socket = net.createConnection({ host: '127.0.0.1', port });
   socket.once('connect', () => { socket.destroy(); resolve(false); });
@@ -441,24 +459,7 @@ async function main() {
     check(typeof conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(conversationId), 'owner-conversation-id-shape');
     await chooseHistory(creator, conversationId);
     await creator.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('共有对话'), { timeout: TIMEOUT });
-    await creator.waitForFunction(expected => {
-      const panel = document.querySelector('[data-pc="cloud-ai-panel"]:not([data-inactive="1"]):not([aria-hidden="true"])');
-      const list = panel?.querySelector('.ai-messages');
-      if (!list) return false;
-      return [...list.querySelectorAll('.ai-message.user .ai-message-text')].some(element => {
-        const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim();
-        for (let node = element; node; node = node.parentElement) {
-          const style = getComputedStyle(node), rect = node.getBoundingClientRect();
-          if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none' ||
-              style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0 ||
-              rect.width <= 0 || rect.height <= 0) return false;
-          if (node === panel) break;
-        }
-        const rect = element.getBoundingClientRect(), clip = list.getBoundingClientRect();
-        return text.includes(expected) && rect.bottom > clip.top && rect.top < clip.bottom &&
-          rect.right > clip.left && rect.left < clip.right;
-      });
-    }, { timeout: TIMEOUT }, ownerPrompt);
+    await waitForVisibleUserMessage(creator, ownerPrompt);
     const creatorShared = await inspectAccountConversationControls(creator);
     assertAccountConversationControls(creatorShared, { visibility: 'shared', canToggleVisibility: false, creatorReadOnly: false });
     check(creatorShared.visibleMessages > 0, 'creator-can-read-shared-conversation');
@@ -478,6 +479,7 @@ async function main() {
     phase = 'creator-private-readonly';
     await chooseHistory(creator, conversationId);
     await creator.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('私有对话'), { timeout: TIMEOUT });
+    await waitForVisibleUserMessage(creator, ownerPrompt);
     const creatorPrivate = await inspectAccountConversationControls(creator);
     assertAccountConversationControls(creatorPrivate, { visibility: 'private', canToggleVisibility: false, creatorReadOnly: true, composerVisible: false });
     check(creatorPrivate.visibleMessages > 0, 'creator-can-read-private-conversation');

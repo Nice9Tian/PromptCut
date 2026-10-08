@@ -109,3 +109,10 @@
 - `MessageList.tsx` 当前源中消息容器是 `.ai-messages`，用户正文实际由 `UserBubble` 渲染在 `.ai-message.user .ai-message-text`；旧探针只数 `.ai-row[data-pc-msg]`，没有验证消息正文，也没有保证 `inspect` 选中活动的 CloudAiPanel。虽然源码行容器目前仍带该标记，但此次错误证明仅凭行标记数量并不足以验收实际对话内容。
 - 探针现在在未隐藏的活动 CloudAiPanel 内等待固定用户正文文本实际出现在 `.ai-messages .ai-message.user .ai-message-text` 节点，并确认节点有可见尺寸且与消息滚动区域相交；`visibleMessages` 也改为统计活动面板内实际可见的用户正文节点。没有改产品标记或页面逻辑，也没有注入消息状态。读取与共享/私有按钮权限检查现在使用同一活动面板。
 - 本次只改探针与报告；保留实际异步 `waitForFunction` 等待，仍需 root 下一轮真实窗口验证文本读取和活动面板选择。这里只运行 `node --check`、`git diff --check` 和路径核对；没有启动浏览器、服务或运行 full/目标测试。
+
+## 私有历史正文异步等待复用（2026-10-09）
+
+- root 第五次实际窗口结果为 19/20，失败点是 `creator-private-readonly` 的正文可见消息即时计数。保留的 `result.json` 仅核对阶段、检查计数及脱敏网络方法/路径/状态；失败截图显示 creator 已处于“私有对话·项目创建者只读”，没有输入框，面板正文仍显示欢迎占位语。该轮事件接口有 200 响应到达，尚不能据此断言历史正文丢失。
+- 只读核对 `useCloud.ts` 的 `switchTo` 会调用 `session.open(id)`；`session.ts` 的 `open` 会清空该对话本地 store、发布状态并启动事件读取循环。故在私有标签先出现时立刻统计正文会早于同一真实对话的 SSE 回填。没有修改产品逻辑，也没有把权限检查放宽。
+- 探针将共享分支既有的固定测试正文可见等待抽为 `waitForVisibleUserMessage`，并在私有标签出现后、检查私有只读权限状态前对同一固定正文调用它。helper 仍要求活动 CloudAiPanel 的真实用户消息正文与滚动区相交且节点可见；history 点击和 conversationId 校验未变。不记录或输出消息文本、响应体、凭证等数据。
+- 本轮仅改探针与本报告；没有重跑浏览器、服务或测试。`node --check scripts/probes/account-conversation-controls-probe.mjs`、`git diff --check` 与改动路径核对通过；下一轮真实窗口应确认私有 SSE 回填后的可见正文及原有只读断言。
