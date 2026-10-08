@@ -8,10 +8,10 @@ import { createRunInternalServer } from '../account/run-internal.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 
 const closeServer = server => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
-function call(tls, route, body, method = 'POST') {
+function request(port, tls, route, body, method = 'POST') {
   return new Promise((resolve, reject) => {
     const encoded = Buffer.from(JSON.stringify(body));
-    const req = https.request({ host: '127.0.0.1', port: 5772, path: '/internal/v2/runs/' + route,
+    const req = https.request({ host: '127.0.0.1', port, path: '/internal/v2/runs/' + route,
       method, key: tls.key, cert: tls.cert, ca: tls.ca, minVersion: 'TLSv1.3', agent: false,
       headers: { 'content-type': 'application/json', 'content-length': encoded.length } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk));
@@ -22,8 +22,8 @@ function call(tls, route, body, method = 'POST') {
 }
 
 test('run internal routes pin Agent cert, inject trusted service only, bind grants and keep pending metadata narrow', { timeout: 15000 }, async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-run-internal-')); let server;
-  t.after(async () => { if (server?.listening) await closeServer(server); fs.rmSync(dir, { recursive: true, force: true }); });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-run-internal-')); let server, port;
+  t.after(async () => { if (server?.listening) await closeServer(server); t.diagnostic(`owned run route port=${port ?? 'not-opened'} listening=${server?.listening === true}`); fs.rmSync(dir, { recursive: true, force: true }); });
   const pki = assetWiringPki(dir), calls = [];
   const servicePrincipal = { service: 'agent', serviceKid: 'fixture-kid', scope: 'service', authentication: 'pinned-mtls' };
   const binding = { projectId: 'project-a', conversationId: 'conversation-a', messageId: 'message-a', runId: 'run-a', runGrantId: 'grant-a' };
@@ -48,7 +48,8 @@ test('run internal routes pin Agent cert, inject trusted service only, bind gran
       return { connectionTicket: 'fixture-opaque-kind-run', expiresAt: 1_900_000_000_000 };
     }, listPendingRuns: async () => ({ conversations: [{ projectId: 'project-a', conversationId: 'conversation-a', queueRevision: 7,
       ...(leakedMetadata ? { message: 'must-not-leak' } : {}) }] }) });
-  await new Promise(resolve => server.listen(5772, '127.0.0.1', resolve));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); port = server.address().port;
+  const call = (...args) => request(port, ...args);
   const admit = { projectId: binding.projectId, conversationId: binding.conversationId, requestId: 'admit-a' };
   assert.equal((await call(pki.wrong, 'admit', admit)).status, 403); assert.equal(calls.length, 0);
   assert.equal((await call(pki.asset, 'admit', { ...admit, accountId: 'forged' })).status, 400);
