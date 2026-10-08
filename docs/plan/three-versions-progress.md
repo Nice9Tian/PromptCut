@@ -89,12 +89,13 @@
 
 ## 派出去的活
 
-本任务在用3个工作区，均在PromptCut的`.worktrees/`下；登记读取成果冻结在分支，已用完的复用工作区也清了。用户原有六个工作区与其它会话保留。
+本任务在用4个工作区，均在PromptCut的`.worktrees/`下；登记读取成果保留在分支；排队工作区已改接成员控制，桌面窄块另派Luna。用户原有六个工作区与其它会话保留。
 
 | 谁 | 在做什么 | 仓库/工作区 |
 |---|---|---|
 | Sol | 排队小阶段已收回，接成员控制与退出界面 | PromptCut/018-cloud-queue-user-path |
-| Astra | 实际关闭实验已过，接两份进程组身份与生产登记工具 | PromptCut/018-browser-doc-read |
+| Astra | 修两代素材关闭实验的信号夹具；审即时撤销接线 | PromptCut/018-browser-doc-read |
+| Luna | 补桌面成员读取的精确路径守门 | PromptCut/018-member-native-route |
 | 主会话 | 分阶段收回、节点生产账号接线及真实网络验证 | PromptCut/018-instance-http-repair-verification |
 
 ## 没做到的与原因
