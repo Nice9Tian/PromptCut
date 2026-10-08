@@ -55,47 +55,11 @@ export interface ShotsJob {
   shots?: { start: number; end: number; inTransition: TransitionKind | null; outTransition: TransitionKind | null }[];
 }
 
+import { shotsDir, shotsThumbMiddleware } from './asset-store/shots-thumb.mjs';
+
 const jobs = new Map<string, ShotsJob>();
 
-export function shotsDir(root: string): string {
-  const scope = (globalThis as any)[Symbol.for("promptcut.asset.project-roots.v2")]?.get(path.resolve(root));
-  if (scope) { scope.assertActive(); return path.join(scope.root, "out", "shots"); }
-  return path.join(dataDir(root), "shots");
-}
-
-/** 云端缩略图读口只按已核principal选项目目录；perception owner生成thumb必须使用同一scoped root。 */
-export function shotsThumbMiddleware(root: string, { projectStores, projectAccess }: { projectStores?: any; projectAccess?: any } = {}) {
-  if (!!projectStores !== !!projectAccess) throw new TypeError("projectStores and projectAccess required together");
-  return async (req: Connect.IncomingMessage, res: ServerResponse, next: () => void) => {
-    const match = ["GET", "HEAD"].includes(req.method ?? "GET") && String(req.url ?? "").split("?")[0].match(/^\/api\/shots\/thumb\/([\w.-]+)$/);
-    if (!match) return next();
-    let lease: any;
-    let finish: (() => void) | undefined;
-    let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
-    try {
-      lease = projectAccess ? await projectAccess.resolve(req, { action: "read", resource: { ns: "media", route: String(req.url).split("?")[0] }, close: () => { req.destroy(); res.destroy(); } }) : null;
-      finish = lease?.hold();
-      const scope = lease ? projectStores.project(lease.projectId) : null;
-      const dir = shotsDir(scope?.root ?? root), file = path.join(dir, match[1]);
-      if (!file.startsWith(dir + path.sep)) return sendJson(res, 400, { ok: false });
-      handle = await fs.open(file, "r");
-      lease?.trackHandle(handle);
-      const stat = await handle.stat();
-      await lease?.assert();
-      res.setHeader("Content-Type", "image/jpeg");
-      res.setHeader("Content-Length", stat.size);
-      res.setHeader("Cache-Control", lease ? "no-store" : "max-age=3600");
-      if (req.method === "HEAD") return res.end();
-      const stream = handle.createReadStream(); handle = null;
-      lease?.track(stream);
-      res.once("close", () => { stream.destroy(); lease?.release(); });
-      res.once("finish", () => lease?.release());
-      stream.once("error", () => res.destroy());
-      stream.pipe(res);
-    } catch (error: any) { if (!res.destroyed) sendJson(res, error?.status ?? 404, { ok: false, error: error?.code ?? "缩略图不存在" }); }
-    finally { await handle?.close().catch(() => {}); finish?.(); if (res.writableFinished || !res.headersSent) lease?.release(); }
-  };
-}
+export { shotsDir, shotsThumbMiddleware } from './asset-store/shots-thumb.mjs';
 
 function sendJson(res: ServerResponse, code: number, data: unknown): void {
   if (res.headersSent) return;

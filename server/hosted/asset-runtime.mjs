@@ -12,22 +12,24 @@ import { createProjectAssetStores } from '../asset-store/project-stores.mjs';
 import { createProjectAssetAccess } from '../asset-store/project-access.mjs';
 import { createAssetRevocationConsumer } from '../asset-store/project-revocations.mjs';
 import { createServiceUsage, serviceCapBytes, diskTotalOf } from '../asset-store/service-usage.mjs';
-import { StreamStore, handleStreamRequest } from '../frame-stream.mjs';
+import { StreamStore, handleStreamRequest } from '../asset-store/stream-store.mjs';
+import { openAssetLifecycle } from './asset-lifecycle.mjs';
 
 const send = (res, status, value) => { if (res.destroyed || res.headersSent) return; res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); res.end(JSON.stringify(value)); };
 const listen = (server, port, host) => new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => { server.off('error', reject); resolve(server.address()); }); });
 const closeServer = server => new Promise(resolve => { if (!server?.listening) return resolve(); server.close(resolve); server.closeAllConnections?.(); });
 
 export async function startHostedAssetService({ dataDir, host = '127.0.0.1', port = 8788, internalPort, publicUrl,
-  doc, internalTls, docFingerprint256, renderCapBytes, pollMs = 100, log = () => {}, wrapStore }) {
+  doc, internalTls, docFingerprint256, renderCapBytes, pollMs = 100, log = () => {}, wrapStore, recoveryFence, serviceIdentity, allowFixtureRecoveryFence = false }) {
   const docPin = certificateFingerprint(docFingerprint256);
   if (!path.isAbsolute(dataDir ?? '') || !fs.statSync(dataDir).isDirectory() || !internalTls?.key || !internalTls?.cert || !internalTls?.ca ||
       !/^[a-f0-9]{64}$/.test(docPin) || !Number.isInteger(internalPort) || internalPort < 1 || internalPort > 65535 ||
       !Number.isInteger(pollMs) || pollMs < 1) throw accountError(503, 'asset-configuration');
   registerTsResolve();
-  const [asset, media, shots] = await Promise.all([import('../asset-service.ts'), import('../vite-plugin-media.ts'), import('../vite-plugin-shots.ts')]);
+  const [asset, media, shots] = await Promise.all([import('../asset-service.ts'), import('../vite-plugin-media.ts'), import('../asset-store/shots-thumb.mjs')]);
   const root = path.resolve(dataDir), assetsDir = path.join(root, 'assets-v2'); await fsp.mkdir(assetsDir, { recursive: true });
   const docClient = createAssetDocClient(doc), instanceId = randomUUID();
+  const lifecycle = await openAssetLifecycle({ root, instanceId, cert: doc.tls.cert, recoveryFence, serviceIdentity, allowFixtureRecoveryFence });
   const consumer = createAssetRevocationConsumer({ authority: docClient, file: path.join(root, 'access-cursor.json') });
   let stopped = false, failure = null, syncing = null, timer, assetServer, internalServer;
   const sync = () => {
@@ -77,7 +79,7 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
     preflight(req, res, () => {
       const run = async () => {
         if (!ready()) { await sync(); if (!ready()) throw accountError(503, 'asset-not-ready'); }
-        if (pathname.startsWith('/stream/')) { const p = await resolvePrincipal(req); await handleStreamRequest(streamStoreFor(p.projectId), req, res, req.url); return; }
+        if (pathname.startsWith('/stream/')) { const p = await resolvePrincipal(req); if (!handleStreamRequest(streamStoreFor(p.projectId), req, res, pathname)) send(res, 404, { ok: false, error: 'no-route' }); return; }
         await a(req, res, () => { void m(req, res, () => { void thumbnail(req, res, () => send(res, 404, { ok: false, error: 'no-route' })); }); });
       };
       void run().catch(error => send(res, error.status ?? 503, { ok: false, error: error.code ?? 'asset-unavailable' }));
@@ -95,6 +97,6 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
     effectivePublicUrl ??= `http://127.0.0.1:${addr.port}/api/asset`;
     timer = setInterval(() => { void sync().catch(error => log('asset.not-ready', { code: error.code ?? 'authority-unavailable' })); }, pollMs); timer.unref();
     return { port: addr.port, internalPort, instanceId, projectStores: factory, projectAccess, serviceUsage, streamStoreFor, status,
-      get ready() { return ready(); }, async close() { if (stopped) return; stopped = true; clearInterval(timer); await consumer.close(); docClient.close(); await Promise.all([closeServer(assetServer), closeServer(internalServer)]); } };
+      get ready() { return ready(); }, async close() { if (stopped) return; stopped = true; clearInterval(timer); await consumer.close(); docClient.close(); await Promise.all([closeServer(assetServer), closeServer(internalServer)]); await lifecycle.closeClean(); } };
   } catch (error) { stopped = true; clearInterval(timer); await consumer.close().catch(() => {}); docClient.close(); await Promise.all([closeServer(assetServer), closeServer(internalServer)]); throw error; }
 }

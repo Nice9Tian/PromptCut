@@ -15,7 +15,8 @@ try {
       serverFingerprint256: env.PROMPTCUT_ASSET_DOC_FINGERPRINT256,
       tls: { key: file('PROMPTCUT_ASSET_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_ASSET_CLIENT_CERT_FILE'), ca } },
     internalTls: { key: file('PROMPTCUT_ASSET_INTERNAL_KEY_FILE'), cert: file('PROMPTCUT_ASSET_INTERNAL_CERT_FILE'), ca },
-    docFingerprint256: env.PROMPTCUT_ASSET_DOC_CLIENT_FINGERPRINT256, log };
+    docFingerprint256: env.PROMPTCUT_ASSET_DOC_CLIENT_FINGERPRINT256, recoveryFence: env.PROMPTCUT_ASSET_RECOVERY_FENCE_FILE,
+    serviceIdentity: env.PROMPTCUT_ASSET_SERVICE_IDENTITY, log };
   if (env.PROMPTCUT_HOSTED_RENDER_CAP_BYTES !== undefined) {
     const cap = Number(env.PROMPTCUT_HOSTED_RENDER_CAP_BYTES); if (!Number.isFinite(cap) || cap < 0) throw new Error('asset-capacity'); config.renderCapBytes = Math.floor(cap);
   }
