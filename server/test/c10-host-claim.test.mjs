@@ -189,7 +189,7 @@ test('A5 evidence requires a complete open/version chain for winner evidence and
   assert.equal(evidence.events.filter(e => e.type === 'boundary' && e.reason === 'queue-epoch').length, 1);
 });
 
-test('A5 canvas fixture follows audited capabilities and genuine snapshot duration identity; exact completion excludes dedup and other clips', () => {
+test('A5 already-selected canvas control tests splitting only, not measured inclusion; exact completion excludes dedup and other clips', () => {
   const capabilities = JSON.parse(fs.readFileSync(new URL('../../src/cards/capabilities.json', import.meta.url), 'utf8'))['r6-canvas'];
   assert.equal(capabilities.canvasHeavy, true); assert.equal(capabilities.compositing, 'independent');
   const node = { cardId: 'r6-canvas', params: {} }, identity = duration => cardSnapshotIdentity(node, { duration, fps: { numerator: 30, denominator: 1 } });
@@ -213,4 +213,48 @@ test('A5 canvas fixture follows audited capabilities and genuine snapshot durati
     assert.equal(traceOf(frames, queueView(), { ...fixture, ...change }).fixture.rendered, false);
   }
   assert.equal(traceOf(frames, queueView(), { ...fixture, layer: { ...fixture.layer, resultKey: 'old' } }).fixture.ready, false);
+});
+
+function readinessOf(input) {
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `import { hostFixtureReadiness } from ${JSON.stringify(judgeEntry)};
+    let input=''; for await (const part of process.stdin) input+=part;
+    console.log(JSON.stringify(hostFixtureReadiness(JSON.parse(input))));`], {
+    input: JSON.stringify(input), encoding: 'utf8', windowsHide: true, timeout: 30000,
+  });
+  assert.equal(child.status, 0); return JSON.parse(child.stdout);
+}
+
+test('A5 host prerequisite rejects actual light-cost shape, unsettled/missing costs and stale or omitted target plans', () => {
+  // Controlled observations exercise the gate; these numbers do not claim that
+  // the browser actually measured particles. The wide probe must supply that.
+  const input = {
+    fixture: { clipId: 'new-particles', cardId: 'particles', projectId: 'sp_a', createdAt: 10 }, fps: 30,
+    job: { clipId: 'new-particles', cardId: 'particles', identityKey: 'measured-id', at: 11 }, probe: { running: false },
+    record: { identityKey: 'measured-id', fps: 30, stepMs: 40, inlineMs: 1, rasterMs: 1, serializeMs: 1,
+      catchUpMs: 120, kind: 'stepped', mode: 'build', device: 'test-device', measuredAt: 12 }, pipeline: 'heavy',
+    publisher: { measured: true, want: { projectId: 'sp_a', projectRev: 4 }, last: 'plan:sp_a@4#clips:target', lastClips: ['new-particles'],
+      log: [{ ok: true, id: 'plan:sp_a@4#clips:target', state: 'open' }] },
+  };
+  assert.equal(readinessOf(input).ready, true);
+  const light = readinessOf({ ...input, record: { ...input.record, stepMs: 0.2, catchUpMs: 0.2 } });
+  assert.equal(light.ready, false); assert.equal(light.terminal, true); assert.ok(light.reasons.includes('measured-light'));
+  for (const change of [
+    { record: null }, { probe: { running: true } }, { record: { ...input.record, stepMs: undefined } },
+    { record: { ...input.record, mode: 'dev' } }, { record: { ...input.record, identityKey: 'old-id' } },
+    { record: { ...input.record, measuredAt: 9 } }, { job: { ...input.job, at: 9 } },
+    { pipeline: 'light' }, { publisher: { ...input.publisher, lastClips: ['main'] } },
+    { publisher: { ...input.publisher, want: { projectId: 'sp_a', projectRev: 5 } } },
+    { publisher: { ...input.publisher, last: 'plan:sp_a@3#clips:old' } },
+    { fixture: { ...input.fixture, projectId: 'sp_other' } },
+  ]) assert.equal(readinessOf({ ...input, ...change }).ready, false, JSON.stringify(change));
+  assert.equal(readinessOf({ ...input, record: null }).terminal, false, '声明重兜底不能冒充实测重');
+});
+
+test('A5 particles candidate uses real independent canvas capability and content identity; heaviness remains subject to measurement', () => {
+  const capabilities = JSON.parse(fs.readFileSync(new URL('../../src/cards/capabilities.json', import.meta.url), 'utf8')).particles;
+  assert.equal(capabilities.canvasHeavy, true); assert.equal(capabilities.compositing, 'independent');
+  const node = { cardId: 'particles', params: { config: '', quantity: 400, links: 'yes', seed: 123, speed: 1.2, size: 3 } };
+  const options = { duration: 3.01, fps: { numerator: 30, denominator: 1 } };
+  assert.notEqual(cardSnapshotIdentity(node, options), cardSnapshotIdentity(node, { ...options, duration: 3.02 }));
+  assert.notEqual(cardSnapshotIdentity(node, options), cardSnapshotIdentity({ ...node, params: { ...node.params, seed: 124 } }, options));
 });
