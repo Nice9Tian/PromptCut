@@ -46,6 +46,7 @@ import { normalizeHash } from '../asset-store/blob-store.mjs';
 import { createServiceUsage, serviceCapBytes, diskTotalOf, SERVICE_USAGE_DIR } from '../asset-store/service-usage.mjs';
 import { startAssetAnnounce } from '../asset-announce.mjs';
 import { createAssetReadyProbe } from './asset-doc-client.mjs';
+import { createDocAssembly } from './doc-assembly.mjs';
 
 export const HOSTED_NAMESPACES = Object.freeze(['media', 'snap', 'px']);
 /** 登记素材服务地址用的登记者身份 */
@@ -235,6 +236,7 @@ export async function startHostedCombo({
   const tokenGiven = typeof clusterToken === 'string' && clusterToken !== '';
   if (trustLoopback === false && !tokenGiven) throw new HostedConfigError('cluster-token-required');
   if (accountRequired && !account) throw new HostedConfigError('account-v2-required');
+  if (accountRequired && !account?.order?.witnessKeys) throw new HostedConfigError('doc-assembly-configuration');
   const paths = hostedPaths(root);
   if (account && assetStatus && !assetPublicUrl) throw new HostedConfigError('asset-public-url', { detail: 'separate-service-unset' });
   const loopbackBind = host === '127.0.0.1' || host === '::1' || host === 'localhost';
@@ -313,6 +315,7 @@ export async function startHostedCombo({
   }
 
   let accountRuntime = null;
+  let docAssembly = null;
   let accountProjects = null;
   let accountInternalServer = null;
   let accountInternalPort = null;
@@ -333,6 +336,8 @@ export async function startHostedCombo({
         assetReadyProbe, assetInstanceId: assetStatus?.instanceId,
         onDiagnostic: event => say('account.diagnostic', event) });
       await accountRuntime.start();
+      if (account.order) docAssembly = createDocAssembly({ dataDir: paths.docservice,
+        authority: accountRuntime.authority, account, runProvider: account.runProvider, now });
       accountProjects = mountAccountProjects({ authority: accountRuntime.authority,
         issueSession: input => accountRuntime.issueSession(input),
         resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket) });
@@ -347,6 +352,7 @@ export async function startHostedCombo({
         });
       });
     } catch (error) {
+      await docAssembly?.close();
       accountRuntime?.close();
       assetReadyProbe?.close();
       throw new HostedConfigError('account-v2', { code: error?.code ?? 'configuration' });
@@ -371,6 +377,7 @@ export async function startHostedCombo({
     accountRuntime,
     accountProjects,
     accountRequired,
+    docAssembly,
     ...(typeof agentPublicUrl === 'string' && agentPublicUrl !== '' ? { hostedServiceUrls: { agent: agentPublicUrl } } : {}),
     now,
     log: say,
@@ -446,7 +453,7 @@ export async function startHostedCombo({
     docAddr = await service.listen(docPort, host);
   } catch (err) {
     await service.close().catch(() => {});
-    await closeAccountInternal(); accountRuntime?.close(); assetReadyProbe?.close();
+    await closeAccountInternal(); await docAssembly?.close(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
   let assetAddr;
@@ -460,7 +467,7 @@ export async function startHostedCombo({
     });
   } catch (err) {
     await service.close().catch(() => {});
-    await closeAccountInternal(); accountRuntime?.close(); assetReadyProbe?.close();
+    await closeAccountInternal(); await docAssembly?.close(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
 
@@ -507,6 +514,7 @@ export async function startHostedCombo({
     serviceRegistry,
     serviceUsage,
     accountRuntime,
+    docAssembly,
     accountInternalPort,
     inventory,
     async close() {
@@ -522,6 +530,7 @@ export async function startHostedCombo({
       });
       await service.close();
       await closeAccountInternal();
+      await docAssembly?.close();
       accountRuntime?.close();
       assetReadyProbe?.close();
     },

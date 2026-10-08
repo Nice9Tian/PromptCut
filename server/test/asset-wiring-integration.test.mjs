@@ -34,9 +34,15 @@ test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全�
   const pki = assetWiringPki(dir), modules = await Promise.all(['store', 'credentials', 'internal'].map(n => import(pathToFileURL(path.join(providerDir, `account/${n}.mjs`)))));
   provider = modules[0].openStore(path.join(dir, 'provider.sqlite'));
   const credentials = modules[1].createCredentials({ store: provider, key: randomBytes(32) });
+  if (!process.env.PROMPTCUT_PASSWORD_ORDER_MODULE) throw new Error('actual password order provider must be configured');
+  const orderModule = await import(pathToFileURL(process.env.PROMPTCUT_PASSWORD_ORDER_MODULE));
+  const orderKeys = { account: generateKeyPairSync('ed25519'), doc: generateKeyPairSync('ed25519') };
+  const order = orderModule.createPasswordOrder({ store: provider, credentials,
+    accountOrderSigningKey: orderKeys.account.privateKey, accountOrderKeyId: 'asset-fixture-order',
+    docAttestationPublicKey: orderKeys.doc.publicKey });
   const ids = ['acc_0123456789abcdef01234567', 'acc_abcdef0123456789abcdef01'];
   const editors = ids.map((id, i) => { provider.createAccount({ id, name: `Asset Fixture ${i}`, nameKey: `asset-fixture-${i}`, pw: 'fixture-only', now: Date.now() }); return credentials.createEditor({ account: provider.accountById(id), deviceId: `asset-device-${i}`, requestId: `asset-login-${i}` }); });
-  accountServer = modules[2].createInternalServer({ tls: pki.account, store: provider, credentials, services: [{ serviceId: 'doc', fingerprint256: pki.doc.fingerprint256 }] });
+  accountServer = modules[2].createInternalServer({ tls: pki.account, store: provider, credentials, order, services: [{ serviceId: 'doc', fingerprint256: pki.doc.fingerprint256 }] });
   await new Promise(resolve => accountServer.listen(5860, '127.0.0.1', resolve));
   const docDir = path.join(dir, 'doc'), assetDir = path.join(dir, 'asset'), app = path.join(dir, 'app'); await fsp.mkdir(docDir); await fsp.mkdir(assetDir); stageHostedAssetFiles(path.resolve('.'), app);
   const authorityId = 'asset-wire-doc', statusConfig = { origin: 'https://127.0.0.1:5864', tls: pki.doc, serverFingerprint256: pki.asset.fingerprint256 };
@@ -44,7 +50,8 @@ test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全�
     accountRequired: true, assetPublicUrl: 'http://127.0.0.1:5863/api/asset', assetStatus: statusConfig,
     account: { origin: 'https://127.0.0.1:5860', clientTls: pki.doc, serverFingerprint256: pki.account.fingerprint256, authorityId,
       authorityUrl: 'https://fixture.invalid/editor', signingKey: generateKeyPairSync('ed25519').privateKey, keyId: 'fixture', internalTls: pki.doc, internalPort: 5862,
-      services: [{ serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 }] } });
+      services: [{ serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 }],
+      order: { witnessKeys: { 'asset-fixture-order': orderKeys.account.publicKey }, docAttestationPrivateKey: orderKeys.doc.privateKey } } });
   assert.equal(combo.assetPort, null, 'combo does not mount v1 public assets in account mode');
   const origin = 'http://127.0.0.1:5861', assetOrigin = 'http://127.0.0.1:5863';
   const projects = [];

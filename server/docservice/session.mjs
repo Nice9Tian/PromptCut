@@ -282,7 +282,7 @@ export function createSessionLayer({
    * 结束会话：不保留。立墓碑（讲会话的）、关掉当前传输；下一轮事件循环再 `router.disconnect` 与打 `conn.close`
    * （模块的 `ctx.close` 可能正处在它自己的处理函数里）。回注销完成的 Promise。
    */
-  function endSession(s, code, reason, { closeTransport = true } = {}) {
+  function endSession(s, code, reason, { closeTransport = true, discard = false } = {}) {
     if (s.ended) return s.gone;
     s.ended = true;
     clearAckTimer(s);
@@ -295,7 +295,7 @@ export function createSessionLayer({
     const t = s.transport;
     s.transport = null;
     // 还没被确认的帧交给要关的传输：长轮询在带 `closed` 之前先回完它们（第 6.3 节）；WebSocket 早已写出，不用
-    const rest = t && closeTransport && t.kind !== 'ws' ? s.frames.slice(s.head).map((f) => withSeq(f.text, f.seq, s.inSeq)) : [];
+    const rest = !discard && t && closeTransport && t.kind !== 'ws' ? s.frames.slice(s.head).map((f) => withSeq(f.text, f.seq, s.inSeq)) : [];
     s.frames = [];
     s.head = 0;
     s.unackedBytes = 0;
@@ -311,6 +311,7 @@ export function createSessionLayer({
           say('conn.error', { connId: s.connId, message: String(err?.message ?? err) });
         }
         say('conn.close', { connId: s.connId, code, reason, transport: s.lastTransport });
+        s.resolveGone?.();
         resolve();
       });
     });
@@ -555,6 +556,19 @@ export function createSessionLayer({
       }
       endSession(s, code, reason);
       return true;
+    },
+
+    /** Security fence is separate from normal close/tail replay. The caller owns
+     * actual transport closure; this synchronously kills SID and outbound caches. */
+    fence(connId, code = 4003, reason = 'access-revoked') {
+      const s = byConn.get(connId);
+      if (!s) return { sid: null, gone: Promise.resolve(), existed: false };
+      const sid = s.sid;
+      // Even an ordinary-close session still waiting for router disconnect cannot
+      // leave its logical cache available through a dedicated security fence.
+      s.frames = []; s.head = 0; s.unackedBytes = 0;
+      const gone = endSession(s, code, reason, { closeTransport: false, discard: true });
+      return { sid, gone: gone ?? Promise.resolve(), existed: true };
     },
 
     // ---------- 长轮询用（HT-b 接线） ----------

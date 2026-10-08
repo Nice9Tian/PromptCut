@@ -225,6 +225,34 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
       members: [...members.values()].sort((a, b) => a.accountId.localeCompare(b.accountId)), queriedAt: clock() };
   }
 
+  /** Trusted doc-only send seam: pageId is a locator, never a submitted snapshot. */
+  async function captureSnapshot(input = {}) {
+    if (Object.keys(input).some(key => !['principal', 'projectId', 'pageId'].includes(key)))
+      throw error(400, 'invalid-authority-claim');
+    const { principal, projectId, pageId } = input;
+    if (!validId(projectId) || !validId(pageId)) throw error(400, 'invalid-selection');
+    const current = await checked(principal, projectId);
+    const fields = ['accountId', 'loginId', 'credentialId', 'loginGeneration'];
+    if (fields.some(field => current[field] === undefined)) throw error(403, 'principal-mismatch');
+    const live = () => [...(projects.get(projectId)?.values() ?? [])].filter(entry =>
+      !blocked.has(entry.connId) && principals.has(entry.connId) && !entry.synthetic && entry.pageId === pageId &&
+      fields.every(field => entry.principal[field] === current[field]));
+    const matches = live();
+    if (matches.length !== 1) throw error(403, 'selection-page-unavailable');
+    const entry = matches[0];
+    // The live record and both principals are checked across asynchronous authority
+    // calls. A new revision/disconnect/revocation cannot substitute another page.
+    await checked(entry.principal, projectId);
+    await checked(principal, projectId);
+    const after = live();
+    if (after.length !== 1 || after[0] !== entry || projects.get(projectId)?.get(entry.connId) !== entry)
+      throw error(403, 'selection-page-changed');
+    const sentAt = clock();
+    if (!Number.isSafeInteger(sentAt)) throw error(503, 'selection-clock-unavailable');
+    return { source: 'sent-snapshot', projectId, accountId: current.accountId, pageId,
+      selection: clone(entry.selection), sentAt };
+  }
+
   async function handle(ctx, connId, msg) {
     try {
       if (msg.type === 'selection.set') return await set(ctx, connId, msg);
@@ -261,6 +289,7 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
     },
     handle,
     querySelections,
+    captureSnapshot,
     revoke({ projectId, accountId, loginId } = {}) {
       if (!validId(projectId)) return 0;
       let removed = 0;

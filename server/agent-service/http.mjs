@@ -137,6 +137,99 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     return undefined;
   }
 
+  /** Account-v2 stream: authorize before headers and on every poll/event. Doc remains
+   * the source of the durable queue; this stream has no model output until run wiring. */
+  async function accountEvents(req, res, identity, conversationId, after) {
+    let view = await service.conversation(identity, conversationId, after);
+    if (!view) return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
+    const owner = identity.accountId;
+    if (streams >= MAX_STREAMS || (streamsByOwner.get(owner) ?? 0) >= MAX_STREAMS_PER_OWNER)
+      return sendJson(res, 429, { ok: false, code: 'busy' }, CORS);
+    streams += 1; streamsByOwner.set(owner, (streamsByOwner.get(owner) ?? 0) + 1);
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no', ...CORS });
+    res.flushHeaders?.();
+    let cursor = after; let released = false; let polling = false;
+    const release = () => {
+      if (released) return;
+      released = true; clearInterval(timer); openStreams.delete(entry);
+      streams -= 1; const left = (streamsByOwner.get(owner) ?? 1) - 1;
+      if (left > 0) streamsByOwner.set(owner, left); else streamsByOwner.delete(owner);
+    };
+    const entry = { projectId: identity.projectId, userId: identity.userId, close: () => { release(); res.end(); } };
+    openStreams.add(entry);
+    const poll = async () => {
+      if (polling || released || res.destroyed) return;
+      polling = true;
+      try {
+        view = await service.conversation(identity, conversationId, cursor);
+        for (const message of view.messages ?? []) {
+          if (released || res.destroyed) break;
+          // Recheck even when a batch was fetched before a private switch or kick.
+          await service.access(identity, conversationId, 'read');
+          if (message.arrivalSeq <= cursor) continue;
+          res.write(`data: ${JSON.stringify({ type: 'user', seq: message.arrivalSeq, messageId: message.messageId,
+            prompt: message.content, senderAccountId: message.senderAccountId, senderNameAtSend: message.senderNameAtSend,
+            queueState: message.queueState })}\n\n`);
+          cursor = message.arrivalSeq;
+        }
+        if (!released && !res.destroyed) res.write(': ping\n\n');
+      } catch {
+        if (!released && !res.destroyed) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} entry.close(); }
+      } finally { polling = false; }
+    };
+    const timer = setInterval(() => { void poll(); }, 250); timer.unref?.();
+    req.on('close', release); res.on('close', release);
+    void poll();
+    return undefined;
+  }
+
+  async function accountRoute(req, res, url, pathname, identity) {
+    if (pathname === '/v1/info' && req.method === 'GET') return sendJson(res, 200, { ok: true, ...await service.info(identity) }, CORS);
+    if (pathname === '/v1/conversations' && req.method === 'GET') return sendJson(res, 200, { ok: true,
+      items: await service.conversations(identity) }, CORS);
+    if (pathname === '/v1/usage' && req.method === 'GET') return sendJson(res, 200, { ok: true,
+      ...await service.usage(identity) }, CORS);
+    const one = /^\/v1\/conversations\/([^/]+)$/.exec(pathname);
+    if (one) {
+      const conversationId = decodeURIComponent(one[1]);
+      if (!CONVERSATION_ID_RE.test(conversationId)) throw new AgentServiceError('bad-request', 'invalid conversation id');
+      if (req.method === 'GET') return sendJson(res, 200, { ok: true, meta: await service.conversation(identity, conversationId) }, CORS);
+      if (req.method === 'PATCH') { const body = await readBody(req); await service.rename(identity, conversationId, body.title); return sendJson(res, 200, { ok: true }, CORS); }
+      if (req.method === 'DELETE') { await service.remove(identity, conversationId); return sendJson(res, 503, { ok: false, code: 'deletion-pending' }, CORS); }
+    }
+    const sub = /^\/v1\/conversations\/([^/]+)\/(messages|events|abort|visibility|attachments|page-results)$/.exec(pathname);
+    if (sub) {
+      const conversationId = decodeURIComponent(sub[1]);
+      if (!CONVERSATION_ID_RE.test(conversationId)) throw new AgentServiceError('bad-request', 'invalid conversation id');
+      if (sub[2] === 'messages' && req.method === 'POST') {
+        const body = await readBody(req);
+        if (['accountId', 'senderAccountId', 'senderNameAtSend', 'principal', 'principalRef', 'authorizationId',
+          'loginId', 'credentialId', 'serviceId', 'creator'].some(key => body[key] !== undefined))
+          throw new AgentServiceError('invalid-authority-claim', 'identity is set by the service', 400);
+        const out = await service.send(identity, conversationId, { prompt: body.prompt, requestId: body.requestId,
+          selectionSnapshot: body.selectionSnapshot, attachments: body.attachments });
+        return sendJson(res, 202, { ok: true, ...out }, CORS);
+      }
+      if (sub[2] === 'events' && req.method === 'GET') {
+        const after = Number(url.searchParams.get('after') ?? 0);
+        if (!Number.isSafeInteger(after) || after < 0) throw new AgentServiceError('bad-request', 'invalid cursor');
+        return accountEvents(req, res, identity, conversationId, after);
+      }
+      if (sub[2] === 'visibility' && req.method === 'POST') {
+        const body = await readBody(req);
+        return sendJson(res, 200, { ok: true, ...await service.switchVisibility(identity, conversationId, body.visibility, body.requestId) }, CORS);
+      }
+      if (sub[2] === 'abort' && req.method === 'POST') {
+        const body = await readBody(req);
+        return sendJson(res, 200, { ok: true, ...await service.abort(identity, conversationId, body.runId, body.requestId) }, CORS);
+      }
+      if (sub[2] === 'attachments' && req.method === 'POST') { await service.attach(identity); }
+      if (sub[2] === 'page-results' && req.method === 'POST') { await service.pageResult(identity); }
+    }
+    return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
+  }
+
   /** 处理一个请求。路径不认得回 404 */
   async function handle(req, res) {
     const url = new URL(req.url || '/', 'http://agent.invalid');
@@ -154,6 +247,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
 
       const identity = await identityOf(req);
       if (!identity) return sendJson(res, 401, { ok: false, code: 'unauthorized', message: 'unauthorized' }, CORS);
+      if (service.accountMode === true) return await accountRoute(req, res, url, pathname, identity);
 
       if (pathname === '/v1/info' && req.method === 'GET') {
         return sendJson(res, 200, { ok: true, ...(await service.info(identity)), ...info(identity) }, CORS);
