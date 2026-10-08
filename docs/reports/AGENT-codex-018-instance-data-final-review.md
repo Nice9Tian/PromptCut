@@ -78,3 +78,32 @@
 worker升级成功后以实际socket.close发关闭事件；LP等待socket close（没有socket时等request close），closeOwned会等待其关闭事件。升级前只依据ClientRequest close、没有独立登记TLS socket close这一点，本轮仅列证据边界，未凭静态猜测宣称发生残留；若要给全资源关闭receipt，应以真实pre-upgrade失败/取消目标核对两者，不能用openCount0代替外部witness。
 
 报告提交后本叶保持clean、停止审查并释放slot。未修改owner源码，未执行types/full/服务/节点/部署。本轮建议先按F1–F3窄修，再由root给新固定hash复核；C10 particles实际判重另等其独立窗口，与本审查不混算。
+
+## F1–F3 修复续审：022c326b
+
+根续派只读复核固定组合 `022c326b1c238c38f2692030d92acbf72ae0133f`，其中 worker修复16470ab5、LP guard e350ca1a。只从该Git对象导出模块到新TMP目录；没有读取根/owner脏源码作为验证对象，也没有修改产品或测试文件。原2485/d800/8ab反例脚本和日志全部保留。
+
+**此固定对象对本轮 F1–F3 的复核结果均为 PASS。未发现新的、已有具体反例支撑且需要阻挡 root 本次全量的源码问题。** 结论严格限定以下纯模块/原函数验证，不代替实际mTLS、OS/cgroup关闭witness或整体产品验收。
+
+| 项目 | 新固定源码与执行结果 |
+| --- | --- |
+| F1，close未完整正文 | onClose在invoke/track之前检查aborted、tooLarge和Agent空正文。声明4097及chunk4097均413，空正文400，aborted直接终止不回包；四者invocations0、session仍活、cache仍1、请求未track、lastSeen未刷新。lastSeen通过受控时钟+sweep核对原idle边界没有被失败请求延长；未track通过该请求没有新增close owner listener核对。 |
+| F2，累计/控制/UTF-8 | 两个5MiB fragment在累计超过8MiB时明确错误并清空已保留fragments/bytecount；原fragmented pong、126字节pong、一字节close均错误且不正常end；0xff非法UTF-8不交业务。合法JSON跨片、穿插ping、一个中文字符UTF-8跨片的控制组交付1条且无错误。源码另有MAX_FRAGMENTS16384及close code/reason严格校验；本轮没有把未另测分支冒称独立实测。 |
+| F3，early cancellation | 完整原factory函数体在modelConfig和bind挂起时收到abort，均在原依赖resolve之前返回run-fenced，unhandledRejection数组为空；取消Promise立即附处理，modelConfig/bind/ready均在race内。原bindAgent完整函数另验证：仅把三个动态import换成可控挂起adapter，其余正文保持；取消先完成，迟到imports随后resolve仍不创建AgentSide，计数0、unhandled0。 |
+
+F3的迟到验证针对实际造成连接创建的createAgentSide之前的取消边界。没有真实socket，因此准确结论是“不进入迟到AgentSide创建”，不写作“实测生产socket关闭”。factory受控close/drain调用数也仅是控制流证据。原真实ready阶段取消/close目标由owner和root的独立结果承担，本轮没有复跑服务。
+
+### 新原始输出
+
+新目录 `%TEMP%/pc-instance-final-review-022c/`：
+
+- `counter.mjs` / `counter.log`：首运行exit0；真实导出的session/router/http/parser模块，授权/网络对象受控；networkListeners0、realMtls:false、productionMounted:false。保留并复验旧R1/R2修复控制，不仅改预期看新三项。
+- `abort-counter.mjs` / `abort-counter.log`：首运行exit0；exactFactoryBody:true；bindBody为原函数，仅三个import适配；networkListeners0、realMtls:false。model-config/bind的pendingUntilOriginalDependencyResolves均false，unhandled均[]；lateImports的agentSidesCreatedAfterLateResolution为0。
+
+两条均为 `node <新TMP>/对应counter.mjs` 的纯脚本，不是裸node --test。命令明确设置cuda_Vit/PROMPTCUT_TEST_PYTHON/PROMPTCUT_PYTHON/PYTHONDONTWRITEBYTECODE/静默preload，没有listener（包括listen0）、模型、工具、固定服务、full或宽probe。首次全部通过，无重跑覆盖旧失败。原先两条日志仍在原2485-d800目录，未改写。
+
+### pre-upgrade witness与交回
+
+此续审没有取得pre-upgrade资源泄漏的具体可执行证据；不能把尚未执行的真实部署witness说成源码漏洞。升级前ClientRequest/socket实际close的外部inventory证据仍由相应真实测试/部署侧提供，OS关闭ACK仍不能依赖openCount或模型计数。该未实证边界与已复验通过的F1–F3分开。
+
+本叶仅追加报告提交，clean后释放slot。此结果可供root继续已授权的固定组合验收；没有扩大到无关协议审查或新增产品要求。
