@@ -60,6 +60,25 @@ for (const member of [false, true]) test(`real SQLite ${member ? 'member' : 'cre
   assert.equal((await jobs.get(context, started.jobId)).state, 'done');
 });
 
+for (const firstMember of [false, true]) test(`two independent ${firstMember ? 'member then credential' : 'credential then member'} retained fences remain resumable`, async t => {
+  const f = await fixture(t, { member: firstMember });
+  const { authority, resources, jobs, context, started } = f;
+  const first = await jobs.checkpointRetained(context, started.jobId, 1);
+  await assert.rejects(jobs.checkpointRetained(context, started.jobId, 2), fails('retained-checkpoint-denied'));
+  if (firstMember) authority.provider.applyAccessEvent(authority.exit());
+  else await authority.provider.fence({ kind: 'member', projectId, accountIds: ['sender'],
+    requestId: 'second-independent-member-retain' });
+  const current = await resources.authorize(context, 'write');
+  assert.equal(current.grantState, 'retained');
+  assert.equal(current.fenceRevision > first.fenceRevision, true);
+  await assert.rejects(jobs.update(context, started.jobId, 2, { progress: 0.4 }), fails('job-scope-mismatch'));
+  const second = await jobs.checkpointRetained(context, started.jobId, 2);
+  assert.deepEqual(second, { revision: 3, fenceRevision: current.fenceRevision, grantState: 'retained' });
+  await assert.rejects(jobs.checkpointRetained(context, started.jobId, 3), fails('retained-checkpoint-denied'));
+  await jobs.update(context, started.jobId, 3, { state: 'done', progress: 1 });
+  assert.equal((await jobs.get(context, started.jobId)).state, 'done');
+});
+
 test('unknown pre-marker row cannot silently migrate to retained', async t => {
   const f = await fixture(t);
   const raw = new DatabaseSync(path.join(f.authority.dir, 'tool-jobs.db'));

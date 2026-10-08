@@ -361,12 +361,12 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
             WHERE j.job_id=? AND ${contextWhere()}`).get(jobId, ...contextColumns(context));
           if (!row) fail('job-scope-mismatch');
           if (row.revision !== expectedRevision) fail('stale-revision');
-          if (row.grant_state !== 'active' || TERMINAL.has(row.state) ||
+          if (!['active', 'retained'].includes(row.grant_state) || TERMINAL.has(row.state) ||
               row.fence_revision >= before.fenceRevision) fail('retained-checkpoint-denied');
           const at = nextTime(row.updated_at);
           db.prepare('UPDATE tool_jobs SET fence_revision=?, revision=?, updated_at=? WHERE job_id=? AND revision=?')
             .run(before.fenceRevision, expectedRevision + 1, at, jobId, expectedRevision);
-          db.prepare("UPDATE tool_job_grant_states SET grant_state='retained' WHERE job_id=? AND grant_state='active'")
+          db.prepare("UPDATE tool_job_grant_states SET grant_state='retained' WHERE job_id=? AND grant_state IN ('active','retained')")
             .run(jobId);
           const after = await callAuthorize(context, 'write');
           if (!sameFence(before, after) || after.grantState !== 'retained') fail('fence-changed');
