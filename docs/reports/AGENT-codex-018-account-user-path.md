@@ -95,3 +95,9 @@ root同0c66在线首次63.010s completed=false：真实me/login/session200、新
 root授权仅给pages probe补安全CDP元数据：真实/hosted/ WS创建、握手HTTP status/pathname、文本消息type、close frame两字节code及closed/frame-error标记。CDP在页面导航前Network.enable，普通在线页与实际native main共用，teardown detach；没有替换WebSocket/fetch/native、没有读取或落盘完整URL/query、headers/protocol/ticket/frame正文/close reason。若Chrome握手本地拒绝而没有close frame，仅记closed而不捏造close code。node --check/diff --check通过，尚未运行fixture/浏览器，此增量不是实际握手已测证据。
 
 静态定位：syncManager.ts enterAccountProject初连只返回account票据protocol，session-link.mjs只追加session.new；service.mjs仅offered包含promptcut.v1才echo，ws.mjs否则不回Sec-WebSocket-Protocol。G真实WSS fixture明确提供v1+account并断言服务回v1，因此纯fixture已过不证明原新页面实际offer正确。root确认这是新入口遗漏既有标准协议，随后批准最窄补初连/恢复v1，生产修复将另独立提交并用真实SyncLink socket pure目标验证；不改服务Cookie/ACL/ready或代理安全规则。
+
+安全握手诊断固定35d94a48584179229b800a82af8712d73afa1bb0，仅probe/报告。实际传输协议修复固定47b1ac3882ce7f8de9f4f0f03dfdc45070d9a8eb：client.ts新增accountConnectionProtocols，syncManager初连/恢复共用标准v1+当前账号票据；reconnect.test.mjs通过真实SyncLink/createDocEndpoint捕捉实际受控WebSocket constructor参数与消息。没有改服务端协议echo、Cookie/鉴权/ACL/ready、LAN连接、全局测试配置或G夹具。
+
+固定47b一次纯目标 `npm.cmd test -- src/editor/sync/reconnect.test.mjs src/account/client.test.mjs`：9/9、零失败取消跳过、427.3331ms、wall713ms、exit0、native重跑0，raw `%TEMP%/pc-account-ws-v1-pure-1.log`。新增断言初次实际socket含v1/account/session.new，欢迎后project.open有正确projectId及seq1；断传输后resume现取更新票据、仍有v1及原sid/ack，欢迎ack1后不重open或重放已确认消息。受控Socket只在内存，无监听；client凭据接口仍受控fetch/native，不是浏览器/壳完整通过。实际root0c66首次连接失败截图与日志保留，静态因果被root确认后才修，不声称用pure证据推翻首次失败。
+
+同47b强制type `node <主仓库node_modules>/typescript/bin/tsc -b --force`：exit0零错、wall6488ms，raw `%TEMP%/pc-account-ws-v1-type-1.log`。两次测前后source同47b、clean，未启动业务服务/Chrome/桌面exe/TLS fixture/full，也没有节点/环境/依赖操作。后续需要root共同源重建并实际在线/桌面复验；新增CDP观察仅nodecheck，尚未在Chrome验证，保持这项证据边界。
