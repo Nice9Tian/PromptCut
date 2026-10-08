@@ -203,12 +203,60 @@ async function safeShot(page, label) {
   const name = `${label}.png`; await page.screenshot({ path:path.join(OUT, name), fullPage:true }); result.screenshots.push(name);
 }
 async function loginEditor(page, account) {
-  await page.goto(DESKTOP_EXE && page === native?.page ? `${DESKTOP_ORIGIN}/` : `${ORIGIN}/editor/`, { waitUntil:'domcontentloaded' });
-  await type(page, '[data-pc="account-projects"] input[name="username"]', account.name);
-  await type(page, '[data-pc="account-projects"] input[name="password"]', account.password);
-  await page.click('[data-pc="account-projects"] form button.sp-primary-btn');
-  await page.waitForSelector('[data-pc="account-name"]', { visible:true });
-  assert((await page.$eval('[data-pc="account-name"]', el => el.textContent)).includes(account.name), 'editor-authenticated-account');
+  const parentPhase = result.phase;
+  const step = async (stage, action) => {
+    result.loginStage = stage; result.loginSteps ??= [];
+    result.loginSteps.push({ phase:parentPhase, stage, state:'started', ui:await loginUiState(page) });
+    try {
+      await action();
+      result.loginSteps.push({ phase:parentPhase, stage, state:'completed', ui:await loginUiState(page) });
+    } catch (error) {
+      result.loginSteps.push({ phase:parentPhase, stage, state:'failed', ui:await loginUiState(page) });
+      throw error;
+    }
+  };
+  await step('goto', () => page.goto(DESKTOP_EXE && page === native?.page ? `${DESKTOP_ORIGIN}/` : `${ORIGIN}/editor/`, { waitUntil:'domcontentloaded' }));
+  await step('username-input', () => type(page, '[data-pc="account-projects"] input[name="username"]', account.name));
+  await step('password-input', () => type(page, '[data-pc="account-projects"] input[name="password"]', account.password));
+  await step('submit', async () => {
+    await page.waitForFunction(() => {
+      const button = document.querySelector('[data-pc="account-projects"] form button.sp-primary-btn');
+      return Boolean(button && !button.disabled);
+    });
+    result.loginSteps.push({ phase:parentPhase, stage:'submit-ready', state:'completed', ui:await loginUiState(page) });
+    await page.click('[data-pc="account-projects"] form button.sp-primary-btn');
+  });
+  await step('account-name', async () => {
+    await page.waitForSelector('[data-pc="account-name"]', { visible:true });
+    assert((await page.$eval('[data-pc="account-name"]', el => el.textContent)).includes(account.name), 'editor-authenticated-account');
+  });
+}
+async function loginUiState(page) {
+  return page.evaluate(() => {
+    const visible = selector => Boolean(document.querySelector(selector)?.getClientRects().length);
+    const button = document.querySelector('[data-pc="account-projects"] form button.sp-primary-btn');
+    const error = document.querySelector('[data-pc="account-error"]');
+    // Exact known product messages map to fixed codes; unknown DOM text is never
+    // copied. No input value, account-name text or credential is inspected here.
+    const known = new Map([
+      ['请先登录账号。', 'login-required'], ['登录已失效，请重新登录。', 'credential-revoked'],
+      ['账号或密码不正确。', 'bad-login'], ['这个项目名已被使用，请换一个名字。', 'name-taken'],
+      ['你已被禁止加入这个项目。', 'banned'], ['你不在这个项目的成员名单中。', 'not-listed'],
+      ['这个云端项目已不存在。', 'project-gone'], ['素材服务暂时不可用，项目尚不能进入，请稍后重试。', 'asset-unavailable'],
+      ['项目会话暂时不可用，请稍后重试。', 'session-unavailable'], ['请使用桌面版登录，或在官网打开在线编辑器。', 'desktop-bridge-unavailable'],
+      ['暂时无法获取云端项目列表，请稍后重试。', 'projects-unavailable'], ['云端服务暂时不可用，请稍后重试。', 'service-unavailable'],
+      ['没有访问这个项目的权限。', 'forbidden'], ['连接云端失败，请检查网络后重试。', 'network'],
+      ['无法取得当前设备身份，请重试。', 'device-unavailable'], ['登录恢复失败，请重新登录。', 'restore-failed'],
+      ['账号入口初始化失败。', 'initialization-failed'], ['请求失败，请重试。', 'request-failed'],
+    ]);
+    const buttonText = button?.textContent?.trim();
+    return { accountForm:visible('[data-pc="account-projects"]'), usernameVisible:visible('[data-pc="account-projects"] input[name="username"]'),
+      passwordVisible:visible('[data-pc="account-projects"] input[name="password"]'), accountNameVisible:visible('[data-pc="account-name"]'),
+      editorVisible:visible('[data-pc="editor"]'), submitVisible:Boolean(button?.getClientRects().length), submitDisabled:Boolean(button?.disabled),
+      busy:buttonText === '正在连接…' ? 'connecting' : buttonText === '正在处理…' ? 'processing' : buttonText === '登录账号' ? 'idle' : 'unknown',
+      errorVisible:Boolean(error?.getClientRects().length), errorCode:error ? known.get(error.textContent?.trim()) ?? 'other-error' : 'none',
+      tauriInvoke:typeof window.__TAURI__?.core?.invoke === 'function' };
+  }).catch(() => ({ state:'ui-unavailable' }));
 }
 async function waitEditor(page, check) {
   await page.waitForSelector('[data-pc="editor"]', { visible:true });
@@ -463,7 +511,13 @@ try {
   // Error messages/bodies may include credentials; only controlled check names
   // and phase are recorded. Preserve the first failure without retrying it.
   process.exitCode = 1;
-  for (let i = 0; i < pages.length; i++) if (!pages[i].isClosed()) await safeShot(pages[i], `failure-${i + 1}`).catch(() => {});
+  result.screenshotAttempts ??= [];
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i], label = `failure-${i + 1}`;
+    if (page.isClosed()) { result.screenshotAttempts.push({ label, state:'page-closed' }); continue; }
+    try { await safeShot(page, label); result.screenshotAttempts.push({ label, state:'saved' }); }
+    catch (error) { result.screenshotAttempts.push({ label, state:error?.message === 'password-screenshot-blocked' ? 'password-not-cleared' : 'capture-failed' }); }
+  }
 } finally {
   await Promise.allSettled([...responseTasks]);
   if (native) {

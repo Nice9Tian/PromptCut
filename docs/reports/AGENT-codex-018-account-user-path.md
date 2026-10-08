@@ -139,3 +139,13 @@ root固定1cc0cef4963f4fad6d216cd911c5fa7a362064c8实际online首次63.203s，4�
 旧auth.ticket另有真实接线缺口：Preview.tsx1328仅online/lowMem判据调用startBrowserNodeHost，member判据未区分account；browserNodeHost.ts384向docRequest申请旧conn/render票据、187申请旧asset/rw票据，docRequest沿assetTiers当前账号页面连接发送。本叶assetTiers.connectSharedAssets账号分支已使用HTTPsession票据并绕开service.watch/auth.ticket，不能把这一独立browserNode路径归为已修。建议后续获租owner为browserNodeHost提供来自真实v2 authority的项目/角色/凭据续签adapter，区分render连接身份与人类asset票据并逐次重核；中央若未提供精确render身份票据接口应明确未接通，不能复用人类票据升render角色/恢复旧自由auth.ticket，也不能禁用既定浏览器渲染能力来让探针过。本轮不改Preview/browserNode/授权协议/渲染产品。
 
 native1cc实际未知path panic由root/Astra继续只读定位；证书pin格式修保持。没有本轮main/agentIPC通过证据，不把旧native101归为账号登录失败。
+
+## 桌面登录固定阶段与安全截图诊断
+
+root冻结6df7d192实际online完整首次通过19/19、0失败、completed=true、5718ms；A/B编辑器与网站owned/joined列表截图目视项目ID/name一致，原各轮失败均保留。raw `%TEMP%/pc-account-online-diagnostic-6df7d192-out/result.json`。copy实际permission denied、button可见可用且documentFocused，点击后fallbackToast=true并取得真实链接。主A/B CSS200/text/css；官网Cookie恢复页一次CSS net::ERR_TOO_MANY_RETRIES，保留该样式异象，不改成缺MIME解释。
+
+root同6df隔离桌面标准profile补齐后，actual-main-and-agent-configuration-ipc与actual-agent-account-bridge-denied均真实通过；随后editor-a-login Timeout，nativeStartup ipcConfirmed=true/stderr0、screenshots/network为空，owned全关闭。raw `%TEMP%/pc-account-desktop-pathfix-6df7d192-out/result.json`。原生桥HTTP不在CDP network里，空network不能证明没有请求。root只读Vite日志另见导航时异步IPC callback missing，未据此改产品或归因账号密码。
+
+本叶完整Git核：observePage本已pages.push，startNative也调用它，最初“未登记原生主页”的静态判断不成立；已告root，不新增复杂nativePages/重复截图集合。只在原安全截图循环保存每次page-closed/saved/password-not-cleared/capture-failed固定分类，原安全清密码验证和拒带密码截图保留，不吞成空数组而不知原因。
+
+loginEditor沿原动作新增goto、username-input、password-input、submit、account-name的started/completed/failed固定阶段；UI只记账号区/输入框/账号名/编辑器可见布尔、提交disabled/busy固定分类及真实Tauri invoke是否存在。错误只按client/AccountProjects已有确切文案白名单映射固定代码，未知只记other-error，不保存任意DOM文本/用户名/输入值/凭据。root补核initial busy=true且输入仍可见，旧probe直接点disabled可能无动作：现真实click前等待实际form submit存在且!disabled，沿用TIMEOUT并记录submit-ready状态；不注入/绕过登录、不改产品状态。原账号名等待与真实名字断言保持，失败由finally/原异常路径记录。node --check/diff --check通过；本轮未真实browser/desktop/listener/full，旧6df用户链证据与新probe未测边界分开。
