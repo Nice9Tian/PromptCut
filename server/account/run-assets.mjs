@@ -16,6 +16,12 @@ function tables(s) {
 const receiptFields = ['receiptId', 'eventId', 'cursor', 'controlId', 'fenceRevision', 'complete',
   'assetInstanceId', 'closedLeaseIds', 'retainedLeaseIds', 'evidenceDigest'];
 const controlFields = ['kind', 'projectId', 'fenceRevision', 'retained', 'revoked', 'instances', 'operationFences'];
+function controlValue(c) {
+  const value = Object.fromEntries(controlFields.map(key => [key, clone(c[key])]));
+  if (c.scope?.conversationId) value.conversationId = c.scope.conversationId;
+  if (c.scope?.runId) value.runId = c.scope.runId;
+  return value;
+}
 
 /** Doc-owned resource metadata, not another ACL. The callbacks are production
  * trust seams: direct/observed authentication must use the SAME instanceAuthority
@@ -48,13 +54,27 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
             !m || m.seq !== event.seq || m.payloadDigest !== event.payloadDigest || m.digest !== digestOf(event.control))
           fail(503, 'run-control-gap');
       }
+      // Reverse validation is required: validating only the surviving events
+      // would silently shrink head after a missing tail or accept an orphan.
+      // Never reconstruct a lost persisted event from its mirror/control.
+      for (const [controlId, m] of Object.entries(s.runAssetControlMirrorsV1)) {
+        const event = s.runAssetControlOutboxV1[m.seq - 1], c = s.runControlsV2?.[controlId];
+        if (!Number.isSafeInteger(m.seq) || m.seq < 1 || !event || event.controlId !== controlId ||
+            !c || c.controlId !== controlId || m.payloadDigest !== c.payloadDigest ||
+            m.digest !== digestOf(controlValue(c))) fail(503, 'run-control-gap');
+      }
+      for (const ack of Object.values(s.runAssetAcksV1)) {
+        const event = s.runAssetControlOutboxV1[ack.cursor - 1];
+        if (!Number.isSafeInteger(ack.cursor) || ack.cursor < 1 || !event ||
+            ack.receipt?.cursor !== ack.cursor || ack.receipt.eventId !== event.eventId ||
+            ack.receipt.controlId !== event.controlId || ack.receipt.fenceRevision !== event.control.fenceRevision ||
+            ack.digest !== digestOf(ack.receipt)) fail(503, 'run-control-gap');
+      }
       for (const c of Object.values(s.runControlsV2 ?? {})) {
         if (!reference(c.controlId?.replace(/^run-control:/, '')) || !hashOf(c.payloadDigest) ||
             !Number.isSafeInteger(c.fenceRevision) || !Array.isArray(c.retained) || !Array.isArray(c.revoked) ||
             !Array.isArray(c.instances) || !Array.isArray(c.operationFences)) fail(503, 'run-control-invalid');
-        const value = Object.fromEntries(controlFields.map(key => [key, clone(c[key])]));
-        if (c.scope?.conversationId) value.conversationId = c.scope.conversationId;
-        if (c.scope?.runId) value.runId = c.scope.runId;
+        const value = controlValue(c);
         const digest = digestOf(value), old = s.runAssetControlMirrorsV1[c.controlId];
         if (old) { if (old.digest !== digest || old.payloadDigest !== c.payloadDigest) fail(503, 'run-control-mismatch'); continue; }
         const event = { v: 1, eventId: `run-asset:${c.controlId}`, seq: s.runAssetControlOutboxV1.length + 1,

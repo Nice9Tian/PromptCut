@@ -231,6 +231,7 @@ test('durable outbox is a bidirectional bijection with mirrors and original cont
     'original control missing': s => { delete s.runControlsV2[s.runAssetControlOutboxV1[0].controlId]; },
     'duplicate outbox': s => { s.runAssetControlOutboxV1[1] = structuredClone(s.runAssetControlOutboxV1[0]); },
     'outbox control tampered': s => { s.runAssetControlOutboxV1[0].control.revoked = ['forged-grant']; },
+    'ACK beyond persisted head': s => { s.runAssetAcksV1['asset-key-1'] = { cursor: 3, digest: 'a'.repeat(64), receipt: { cursor: 3 } }; },
   };
   for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async sub => {
     const x = await setup(sub);
