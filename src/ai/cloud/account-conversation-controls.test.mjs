@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ts from 'typescript';
 import { CloudError, cloudConversationControlPolicy, createCloudApi, createCloudControlScopeGuard, requireAccountAbortControl, withCloudControlConsent } from './cloudApi.ts';
 
 const conversation = (overrides = {}) => ({ id: 'conversation', projectId: 'project', ownerAccountId: 'alice',
@@ -127,4 +131,42 @@ test('account stop rejects missing current run/request IDs instead of falling ba
   assert.throws(() => requireAccountAbortControl('run-current'), error => error instanceof CloudError && error.status === 403);
   assert.deepEqual(requireAccountAbortControl('run-current', 'request-current'),
     { runId: 'run-current', requestId: 'request-current' });
+});
+
+
+async function renderActualComposer(overrides = {}) {
+  const source = await (await import('node:fs/promises')).readFile(new URL('../../editor/right/chat/Composer.tsx', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
+  const actualRequire = createRequire(import.meta.url);
+  const mockModules = {
+    '../ModelBar': { ModelBar: () => null },
+    '../../../ui/icons': { IconPaperclip: () => null },
+    './attachIcon': { attachIcon: () => 'file' },
+    './usePopover': { usePopover: () => ({ anchorRef: { current: null }, open: false, setOpen() {}, toggle() {} }) },
+    './composerHeight': { COMPOSER_MAX_RATIO: 0.7, COMPOSER_MIN_H: 80, MESSAGES_MIN_H: 80, persistComposerHeight() {}, resetComposerHeight() {}, setComposerHeight() {}, useComposerHeight: () => null },
+    './chat.css': {},
+  };
+  const cjsModule = { exports: {} };
+  const localRequire = id => Object.hasOwn(mockModules, id) ? mockModules[id] : actualRequire(id);
+  new Function('require', 'module', 'exports', compiled)(localRequire, cjsModule, cjsModule.exports);
+  const noop = () => {};
+  const props = { text: '', onTextChange: noop, textareaRef: { current: null }, attachments: [], uploading: false,
+    onPickFiles: noop, onRetryAttachment: noop, onRemoveAttachment: noop, onSubmit: noop, onStop: noop, streaming: true,
+    provider: null, providers: [], onSetProvider: noop, config: null,
+    menu: { workflowRoles: [], onRunWorkflow: noop, canDiagnose: false, onOpenDiagnostics: noop, onNewChat: noop }, ...overrides };
+  return renderToStaticMarkup(React.createElement(cjsModule.exports.Composer, props));
+}
+
+test('Composer renders account stop authority honestly and keeps local mode stop enabled by default', async () => {
+  const denied = await renderActualComposer({ canStop: false, stopDisabledReason: '只能停止自己发起的任务' });
+  assert.match(denied, /data-pc="ai-stop"[^>]*disabled/);
+  assert.match(denied, /title="只能停止自己发起的任务"/);
+  assert.match(denied, /aria-label="只能停止自己发起的任务"/);
+
+  const allowed = await renderActualComposer({ canStop: true });
+  assert.match(allowed, /data-pc="ai-stop"(?![^>]*disabled)/);
+  assert.doesNotMatch(allowed, /data-pc="ai-stop-permission-note"/);
+  const legacyDefault = await renderActualComposer();
+  assert.match(legacyDefault, /data-pc="ai-stop"(?![^>]*disabled)/);
 });

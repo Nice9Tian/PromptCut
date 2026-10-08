@@ -571,6 +571,8 @@ export function CloudAiPanel(props: {
         onRemoveAttachment={removeAttachment}
         onSubmit={handleSend}
         onStop={handleStop}
+        canStop={cloud.accountMode ? canStopCurrentRun : undefined}
+        stopDisabledReason={cloud.accountMode && !canStopCurrentRun ? "只能停止自己发起的任务" : undefined}
         streaming={streaming}
         hotkeysOff={props.hotkeysOff}
         active={active}

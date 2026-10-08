@@ -49,3 +49,11 @@
 - 可见性检查现在核对目标元素实际矩形和从元素到根节点的所有祖先样式、`hidden` 与 `aria-hidden`，避免隐藏 panel 内的按钮被误报可见。CLI 的结果分类纯测试覆盖 confirmed/pending/error 三种状态。
 - 代码检查只做 `node --check` 和 `git diff --check`；纯分类测试三种情况通过。本轮没有运行真实 CLI、浏览器或 fixture，也没有运行完整服务；因此尚无页面截图、真实 HTTP 503 或端口关闭实测结果。已有服务代码路径显示私有切换执行 `onFence` 并在 ACK 未完成时返回 `agent-fence-pending`，conversation authority 的 `get` 为创建者私有只读返回标志；这只是源码证据，不替代真实页面验收。
 - root 另审到 `Composer` 的 running 分支始终显示停止按钮，账号成员无权停止别人运行时 `handleStop` 只会静默返回。此为可见权限缺口，和对话 `streaming` 状态无关；本次在 CLI 中没有伪造 running 状态。root 已单独授权窄修 `src/editor/right/chat/Composer.tsx`，后续以独立提交修正并验证按钮的权限说明，同时保留真实运行态待 executor 验收。
+
+
+## 停止按钮权限显示补丁（2026-10-09）
+
+- root 复核发现 `Composer` 在 `streaming` 时总显示可点击的“停止”，普通成员虽无权停止别人的运行，点击只会被 `handleStop` 静默忽略。
+- `Composer` 新增可选 `canStop` 与 `stopDisabledReason`；不传时 `canStop` 默认为真，维持本机旧行为。账号模式由 `CloudAiPanel` 传入 `canStopCurrentRun`，无权限时按钮禁用，并用 title 与 aria-label 说明“只能停止自己发起的任务”。`streaming` 仍按真实当前运行状态传递，没有通过隐藏运行状态规避权限。
+- 先保留真实组件 SSR 首红：用 TypeScript transpileModule 编译实际 `Composer.tsx`，ReactDOMServer 渲染非所有者、所有者与省略新 prop 的本机默认场景；旧实现 6 项通过、权限按钮用例 1 项失败（停止按钮没有 disabled）。修复后 7 项通过；实际 CloudAiPanel 的账号策略仍由既有角色策略测试覆盖。SSR 仅 mock 了 Composer 的旁支图标、弹层、尺寸 hook 与 CSS，按钮 DOM 来自真实 Composer 组件。
+- 验证：`node scripts/test-suite.mjs src/ai/cloud/account-conversation-controls.test.mjs`（7 项通过）、`npx tsc -p tsconfig.json --pretty false`、`git diff --check`。没有伪造 `running` 服务状态或 executor ACK；真实运行中的普通成员按钮显示仍需 root 的真实 executor 阶段确认。
