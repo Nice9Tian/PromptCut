@@ -295,6 +295,59 @@ test('handleStreamRequest serves the manifest (no-store) and content-addressed f
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test('StreamProducer.handle serves snapshot stream requests and leaves unrelated routes unhandled', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-stream-producer-handle-'));
+  try {
+    const key = 'c'.repeat(64);
+    const producer = new StreamProducer({ root }, { env: {} });
+    await producer.store.save({
+      streamKey: key, kind: 'card', plane: 'local', clipIds: ['snapshot-card'], fps: 30,
+      bound: { x: 0, y: 0, w: 2, h: 2 }, tight: null,
+      inits: { '0123456789abcdef': { codec: 'avc1.64001f', width: 2, height: 2, rect: { x: 0, y: 0, w: 2, h: 2 } } },
+      segments: { 0: { file: '0-0123456789abcdef.m4s', init: '0123456789abcdef', stride: 1, samples: 15 } },
+    });
+    await fs.writeFile(producer.store.initFile(key, '0123456789abcdef'), 'INIT-BYTES');
+    await fs.writeFile(producer.store.segFile(key, '0-0123456789abcdef.m4s'), 'SEGMENT-BYTES');
+
+    const call = (pathname, method = 'GET') => {
+      let finish;
+      const responsePromise = new Promise((resolve) => { finish = resolve; });
+      const res = {
+        headers: {}, statusCode: 200,
+        setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
+        end(body) { finish({ handled: true, status: this.statusCode, headers: this.headers, body: body ?? '' }); },
+      };
+      const handled = producer.handle({ method }, res, pathname);
+      if (!handled) return Promise.resolve({ handled: false });
+      return responsePromise;
+    };
+
+    const manifestPath = `/stream/${key}/manifest`;
+    const manifest = await call(manifestPath);
+    assert.equal(manifest.status, 200);
+    assert.equal(manifest.headers['cache-control'], 'no-store');
+    assert.equal(JSON.parse(String(manifest.body)).segments[0].file, '0-0123456789abcdef.m4s');
+
+    const init = await call(`/stream/${key}/init/0123456789abcdef`);
+    assert.equal(init.status, 200);
+    assert.equal(init.headers['cache-control'], 'public, max-age=31536000, immutable');
+    assert.equal(String(init.body), 'INIT-BYTES');
+
+    const segmentPath = `/stream/${key}/seg/0-0123456789abcdef.m4s`;
+    const segment = await call(segmentPath);
+    assert.equal(segment.status, 200);
+    assert.equal(segment.headers['cache-control'], 'public, max-age=31536000, immutable');
+    assert.equal(String(segment.body), 'SEGMENT-BYTES');
+    const head = await call(segmentPath, 'HEAD');
+    assert.equal(head.status, 200);
+    assert.equal(head.headers['cache-control'], 'public, max-age=31536000, immutable');
+    assert.equal(String(head.body), '');
+
+    assert.deepEqual(await call('/not-a-stream'), { handled: false });
+    assert.deepEqual(await call(manifestPath, 'POST'), { handled: false });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test('StreamProducer.rescan stages stream keys on the ready index (F5); republish sends the stream layer with groupClipIds', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-stream-test-'));
   try {
