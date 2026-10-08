@@ -1871,10 +1871,14 @@ try {
       const fixture = await P(member, ({ start, duration }) => {
         const s = window.__pcStore;
         const clip = s.actions.addClipOnNewTrack({ index: 0, cardId: 'r6-canvas', start, duration });
-        return { clipId: clip.id, cardId: clip.cardId, start, duration };
+        s.actions.setDurationManual(clip.end);
+        const project = s.getState().project;
+        const saved = project.tracks.flatMap(track => track.clips).find(item => item.id === clip.id);
+        return { clipId: saved.id, cardId: saved.cardId, start: saved.start, duration: saved.end - saved.start, projectDuration: project.duration, end: saved.end };
       }, { start: SECONDS + 1, duration });
       state.hostFixture = { ...fixture, beforeKeys };
-      check(fixture.cardId === 'r6-canvas' && fixture.clipId !== state.main, 'A5:真实新增独立 canvas 片段，原 main 竞争保留', fixture);
+      check(fixture.cardId === 'r6-canvas' && fixture.clipId !== state.main && fixture.duration > 1 && fixture.duration < 1 + 1 / FPS && fixture.projectDuration >= fixture.end,
+        'A5:真实新增独立 canvas 片段，完整时长已持久保留，原 main 竞争保留', fixture);
     }
     if (E6R) {
       // E6 反方向:全部重卡都改(文字 + burnMs),这一版的层全换成 Y 的;每帧更慢,好让 X 上线时这一版还没做完
