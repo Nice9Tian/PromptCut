@@ -103,3 +103,28 @@ type AccountMembersSnapshot = {
 bootApiGuard 的真实文件为 src/online/apiGuard.ts；新 members 是精确 POST /hosted/shared/account/members，不是 /api/account 的新别名。守门与棘轮只登记这一实际路径，不开放 shared.*、未知 account 路径或舞台能力。专属测试/探针/fixture 在上表基础上获租，旧 fixture 只允许注入 AgentPort（默认仍6526）与 ports，不改变 ready/ACL/关闭行为。
 
 快照必须 fresh 授权后同步投影当前 ledger/真实连接，只白名单返回可信名字；admin 仍 pending200，不宣称多服务关闭完成。409 丢弃选择、刷新后让用户重选；丢 ACK 保留同一原 body/requestId 重试。轮询仅展示，不当撤销依据。未启动服务、未运行本阶段目标/type/full。先完成固定源码再申请主会话真实窗口，6566 明确禁用。
+
+## 已实施源码与验证（等待真实窗口）
+
+已固定核心 `63e43f07`：新增 project-members 白名单快照；runtime 的 `membersSnapshot(actor,{projectId})` 在 public mount 消费；账号 client 私有严格解析与 exact bearer/omit 请求；MembersButton 按账号分流，旧 LAN 密码界面完整保留。新 AccountMembersPanel 按 accountId 显示成员及设备，fresh creator 才有踢出/已禁入账号/解禁。authority 只有 create/join 的 actor.accountName 快照与 kick 从旧可信成员记录保存禁入显示名三处变化，未改原 ACL、runHooks、事件顺序或 pending-services 结果。
+
+客户端 admin 未知响应保留同一原 body/requestId/revision；409 丢掉操作选择、刷新后重选。快照失败显示不可用，不用空名单冒充成功。回项目首页仅作用于当前绑定，先等本页未确认编辑收口（5 秒，失败仍留页显示错误），然后 stop/detach/清账号项目素材连接，保留 account client 登录和 joined；不写 unjoin、logout 或本地转换。旧主体登录撤销/ban 的连接关闭仍由现有权威 fence 执行，轮询不是撤销机制。
+
+`d5421baa` 为纯夹具修正；`e98949b9` 为专属真实浏览器探针及准确按钮文案；`e13968b7` 再加重入必须等真实编辑器成员控件出现，防止残留复制链接气泡被错当进入。当前真实 Agent 未挂，验证预期 Agent=0；queued 不计数。被撤登录/踢出后共有已读 retained Agent 的实际运行投影仍欠真实 run-provider presence 接缝，按主会话确认另段接入，不借此改变 retained 权限或复制 run ACL。
+
+| 尝试 | 精确范围与结果 | 原始证据 |
+|---|---|---|
+| pure 首轮，固定核心63e43f07 | npm wrapper 六文件，34 tests /33 pass/1文件级fail/0skip，391.4937ms；新 XHR 断言本体通过，但 Node 无 ProgressEvent 导致结束后异步异常，非产品授权失败；未原码盲重跑 | `%TEMP%/pc-member-controls-63e43f07-pure-first.log` |
+| 修后守门d5421baa | 仅受影响 c10a-api-guard，3/3、143.8379ms，npm exit0；补测试浏览器事件类并等 timer 收口，不改产品权限 | `%TEMP%/pc-member-controls-d5421baa-guard-fixed.log` |
+| client 显式409加强e98949b9 | client target 12/12、110.1616ms、npm exit0。该文件字节对应e989；执行时另有不参与target的 probe 两行真实编辑器等待改动，随后已e139提交，不称整树固定验证 | `%TEMP%/pc-member-controls-e98949b9-client-conflict.log` |
+| 语法/diff | project-members/account-hosted/account-projects/newprobe Node --check exit0；git diff --check零错误 | 实时工具流 |
+
+上述 pure 使用仓库 npm wrapper/global setup，没有业务监听；仅既有38坏端口 guard 例外。子进程隐藏 preload 为父仓库绝对 file URL，环境使用唯一 PSModulePath 与仅进程 cuda_Vit/PYTHONDONTWRITEBYTECODE/models。无 full/type/build/Chrome/native/节点/公网，纯受控 account transport 与连接 inventory + 真 SQLite/authority 不等于真多浏览器。部署目录规则已核：HOSTED_DEPLOY_DIRS 包含 server/account 与 server/docservice，新增模块自然在现有目录闭包，不需要改 files.mjs。
+
+### 提交后申请的唯一真实窗口
+
+新 `scripts/probes/project-member-controls-probe.mjs` 只用实际 compiled online、真实 VH account/order + doc 同 SQLite + 独立 asset 子进程 + 实际 Agent account HTTP（executor未挂），不模拟 ready、ACL、队列、密码表单或用户卡。复用原 queue fixture 仅加 agentPort 配置（缺省6526不变）。三 Chrome 隔离 contexts 为 A、B设备1、B设备2，名字/密码只RAM，截图有密码input时不取；CDP只记录文档 WS created/closed 数，响应日志仅pathname/method/status及严格公共项目/账号ID，不输出认证协议、Cookie、票据、query或帧正文。
+
+请求业务监听十个：site6560/account-internal6561/doc6562/doc-internal6563/asset6564/asset-internal6565/Agent6567/edge6568/stages6570/6571；6566禁用。一个独立asset Node child与一个自有Chrome进程树，TMP output/profile/SQLite/PKI/日志；teardown contexts/browser、舞台owned sockets/server、fixture全部服务与asset child实际close。root启动前再核这些口，occupied不能杀。各UIwait30秒、fixture20秒、HTTP5秒；root wrapper建议总上限240秒，首败teardown不重跑。
+
+root命令（先在共同固定候选编译 dist-online）：`node scripts/probes/project-member-controls-probe.mjs --dist <固定候选dist-online> --site-root C:/Users/admin/Documents/VisuHive/site --out <TMP独立目录>`；同前process-only silent preload、真实 PROMPTCUT_ACCOUNT_PROVIDER_ROOT=VH主根与 PROMPTCUT_PASSWORD_ORDER_MODULE=该根account/password-order.mjs、明确现装Chrome。验证真实A创建/B两设备join、名字/account/device、B无admin、踢出后两实际WS close与两当前join403、creator bans、unban后真join、回首页登录/joined保留并从同一真实列表行重入（不重建）。admin200只证明持久禁入/解禁，不证明多服务complete。Luna桌面092f路径由root另组合/实际编译IPC，本叶不借其结果冒称完成。
