@@ -101,6 +101,14 @@ fn account_editor_port(identifier: &str, override_port: Option<&str>) -> Result<
     Ok(port)
 }
 
+fn account_cloud_binding(identifier: &str, origin: Option<&str>, pin: Option<&str>) -> Result<(String, Option<String>), String> {
+    if !identifier.ends_with(".account-probe") { return Ok(("https://visuhive.com".into(), None)); }
+    if origin != Some("https://127.0.0.1:6388") { return Err("account probe requires its exact TLS origin".into()); }
+    let pin = pin.ok_or("account probe requires its certificate pin")?;
+    if pin.len() != 64 || !pin.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) { return Err("invalid account probe certificate pin".into()); }
+    Ok(("https://127.0.0.1:6388".into(), Some(pin.into())))
+}
+
 /// Holds the sidecar process ID so we can kill the whole tree on exit.
 struct SidecarPid(Mutex<Option<u32>>);
 
@@ -355,7 +363,11 @@ pub fn run() {
             let origin = format!("http://127.0.0.1:{editor_port}");
             let editor_url = if editor_port == EDITOR_PORT { editor_url_with_open(proc_arg(env::args().skip(1))) }
                 else { match proc_arg(env::args().skip(1)) { Some(p) => format!("{origin}/?open={}", percent_encode(&p)), None => format!("{origin}/") } };
-            handle.manage(account_vault::AccountBridgeBinding { origin,
+            let test_cloud = env::var("PROMPTCUT_ACCOUNT_TEST_CLOUD_ORIGIN").ok();
+            let test_pin = env::var("PROMPTCUT_ACCOUNT_TEST_CLOUD_PIN").ok();
+            let (cloud_origin, cloud_pin) = account_cloud_binding(&handle.config().identifier, test_cloud.as_deref(), test_pin.as_deref())
+                .map_err(std::io::Error::other)?;
+            handle.manage(account_vault::AccountBridgeBinding { origin, cloud_origin, cloud_pin,
                 vault_dir: handle.path().app_data_dir().map_err(std::io::Error::other)?.join("account-v1") });
 
             // ── Port check ──────────────────────────────────────────
@@ -774,6 +786,11 @@ mod tests {
         assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("5210")).is_err());
         assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("6348")).is_err());
         assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("https://evil")).is_err());
+        assert_eq!(account_cloud_binding("com.promptcut.desktop", Some("https://evil"), Some("wrong")).unwrap(), ("https://visuhive.com".into(), None));
+        assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6389"), Some(&"a".repeat(64))).is_err());
+        assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), None).is_err());
+        assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), Some("bad")).is_err());
+        assert_eq!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), Some(&"a".repeat(64))).unwrap().0, "https://127.0.0.1:6388");
     }
 
     fn args(v: &[&str]) -> std::vec::IntoIter<String> {

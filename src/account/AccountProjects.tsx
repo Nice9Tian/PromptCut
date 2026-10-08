@@ -6,7 +6,7 @@ import { createAccountClient, projectIdFromLink, projectLink, type Account, type
 import { desktopAccountBridge } from './desktopVault';
 
 export function AccountProjects({ online, onEnterEditor }: { online: boolean; onEnterEditor: () => void }) {
-  const origin = online ? location.origin : 'https://visuhive.com';
+  const [origin, setOrigin] = useState(online ? location.origin : 'https://visuhive.com');
   const client = useRef<CloudAccountClient | null>(null);
   const [account, setAccount] = useState<Account | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState('');
   const [name, setName] = useState(''), [password, setPassword] = useState(''), [remember, setRemember] = useState(false);
@@ -22,13 +22,15 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
   useEffect(() => { let alive = true;
     void (async () => { const device = await ensureDevice(); if (!alive) return;
       if (!device) throw new Error('无法取得当前设备身份，请重试。');
-      const c = createAccountClient({ online, origin, device, ...(!online ? { native: desktopAccountBridge } : {}) }); client.current = c;
+      const serviceOrigin = online ? location.origin : (await desktopAccountBridge('configuration') as { origin: string }).origin;
+      if (!alive) return; setOrigin(serviceOrigin);
+      const c = createAccountClient({ online, origin: serviceOrigin, device, ...(!online ? { native: desktopAccountBridge } : {}) }); client.current = c;
       try { const current = await c.restore(); if (alive) { setAccount(current); if (current) await refreshLists(); } }
       catch (e) { if (alive) setError(e instanceof Error ? e.message : '登录恢复失败，请重新登录。'); }
       finally { if (alive) setBusy(false); }
     })().catch(e => { if (alive) { setError(e instanceof Error ? e.message : '账号入口初始化失败。'); setBusy(false); } });
     return () => { alive = false; };
-  }, [online, origin]);
+  }, [online]);
   async function perform(action: () => Promise<void>) { setBusy(true); setError(''); try { await action(); }
     catch (e) { setError(e instanceof Error ? e.message : '请求失败，请重试。'); } finally { setBusy(false); } }
   async function enter(projectId: string, label: string, firstSession?: Awaited<ReturnType<CloudAccountClient['join']>>) {

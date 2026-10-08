@@ -3,10 +3,10 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 /// Constructed by Rust setup from the same URL/identifier as the owned editor.
-pub struct AccountBridgeBinding { pub origin: String, pub vault_dir: std::path::PathBuf }
+pub struct AccountBridgeBinding { pub origin: String, pub vault_dir: std::path::PathBuf, pub cloud_origin: String, pub cloud_pin: Option<String> }
 
 const SCRIPT: &str = r#"
-$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Security
 $inputData=[Console]::In.ReadToEnd()|ConvertFrom-Json
 function ProtectDirectory($dir) {
@@ -36,9 +36,28 @@ function ReadVault {
 }
 function Http($path,$body,$token) {
   Add-Type -AssemblyName System.Net.Http
+  if ($inputData.cloudPin) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Net;
+using System.Security.Cryptography;
+public static class PromptCutAccountPinnedTls {
+ public static void Pin(string pin) {
+  ServicePointManager.ServerCertificateValidationCallback = (sender, cert, chain, errors) => {
+   if (cert == null) return false;
+   using (var sha = SHA256.Create()) {
+    var actual = BitConverter.ToString(sha.ComputeHash(cert.GetRawCertData())).Replace("-", "").ToLowerInvariant();
+    return String.Equals(actual, pin, StringComparison.Ordinal);
+   }
+  };
+ }
+}
+'@
+    [PromptCutAccountPinnedTls]::Pin($inputData.cloudPin)
+  }
   $handler=[Net.Http.HttpClientHandler]::new(); $handler.AllowAutoRedirect=$false; $handler.UseCookies=$false
   $client=[Net.Http.HttpClient]::new($handler); $client.Timeout=[TimeSpan]::FromSeconds(20)
-  $request=[Net.Http.HttpRequestMessage]::new(); $request.RequestUri=[Uri]('https://visuhive.com'+$path)
+  $request=[Net.Http.HttpRequestMessage]::new(); $request.RequestUri=[Uri]($inputData.cloudOrigin+$path)
   $request.Method=if ($null -eq $body) { [Net.Http.HttpMethod]::Get } else { [Net.Http.HttpMethod]::Post }
   if ($null -ne $body) { $request.Content=[Net.Http.StringContent]::new(($body|ConvertTo-Json -Depth 80 -Compress),[Text.Encoding]::UTF8,'application/json') }
   if ($token) { $request.Headers.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer',$token) }
@@ -82,9 +101,11 @@ pub async fn account_bridge(window: tauri::WebviewWindow, binding: tauri::State<
     if window.label() != "main" || url.origin().ascii_serialization() != binding.origin || url.path() != "/" || !url.username().is_empty() || url.password().is_some() {
         return Err("desktop-account-forbidden".into());
     }
+    if operation == "configuration" { return Ok(serde_json::json!({"ok":true,"origin":binding.cloud_origin})); }
     if !["login", "recover", "logout", "request"].contains(&operation.as_str()) || !args.is_object() { return Err("desktop-account-request".into()); }
     let directory = binding.vault_dir.clone();
-    let input = serde_json::to_vec(&serde_json::json!({"operation":operation,"args":args,"directory":directory})).map_err(|_| "desktop-account-request")?;
+    let input = serde_json::to_vec(&serde_json::json!({"operation":operation,"args":args,"directory":directory,
+        "cloudOrigin":binding.cloud_origin,"cloudPin":binding.cloud_pin})).map_err(|_| "desktop-account-request")?;
     if input.len() > 1024 * 1024 { return Err("desktop-account-request-too-large".into()); }
     tauri::async_runtime::spawn_blocking(move || execute(input)).await.map_err(|_| "desktop-account-bridge".to_string())?
 }
