@@ -9,7 +9,7 @@
 - 版本：0.7.18，第一个整合小阶段进行中
 - 最后更新：2026-10-08，用户已分别确认计划定稿、开始实施
 - main：见 `git log`
-- 一句话：固定联合80b5e658已过根类型、定向68/68、完整npm5089/5087/0/2；整套渲染/探针后台在跑，1800帧与main相同、确定性与快照重放通过，GR-6快照HTTP500正定位。桌面壳仅纠正子进程环境后37/37。跨对话control冲突根反例已复验修正；accepted-message真实Linux69/69，中央doc与真实Agent操作仍在接；尚未合入main/发版/部署新服务
+- 一句话：集成7cce722f收回权限/已读/对话完成模块；根冻结6c类型、71/71目标及full5160/5158/0/2通过，VH327真实Linux79/79。80长验收仍在跑，1800帧与main相同；桌面壳有因37/37，GR6 HTTP500及普通A5首失败保留并诊断。中央factory、实际runner与实例闭合仍在接；尚未合main/发版/部署新服务
 
 ## 已经做了什么
 
@@ -36,7 +36,7 @@
 - Luna `8817b6ec` 已收回到 `91a8d2db`：50 条去重清单（待事后审 1、已定 21、取代 15、实现记录 13）；旧 P1–P8、P10、R1 均不再待定。预渲染和即时看画面均遵守超容量等待，旧队列满/背压回忙被取代；既定请求 deadline 可保留。主会话审查发现并修正过“看画面除外”的语义缩窄，未以旧探针当新目标实现证据。
 - 独立 Sol 正实施卡片出口策略撤销；另一个 Sol 在 PromptCut/VisuHive 各自工作区实施账号基础，已先交 JSON principal/outbox/consent fixture 和内部 mTLS/store adapter；只是接口早交，完整产品和回归尚未过。Astra 获派顺序见证/操作历史，须先证时钟回拨、reserve/seal夹缝和 ACK/fence 反例，再验实际 SQLite/日志故障点。两个 Sol 的模型容量中断已原地续跑，不换模型。
 
-## 本次做了什么
+### 上一阶段整合与验证记录（2026-10-08）
 
 - 安全读取 GitHub main 的新增提交 `e0e3afc3`：只取得指定提交对象并完整阅读补充原文，没有 pull/reset 或盲目合入 main；读取时本机 main 为 `bf6e48e6`；后续只读核到本机与远端 main 均为 `e0e3afc3`，本会话未 pull/reset 或合入 main，在途共同候选产品源码保持 `913e6884`。补充原文 11,851 字节，Git blob `720bfd83dac966d20ede71bcdd0996da6ddc4a88` 逐字节保留。
 - 纯文档包 `f01171a6`/报告 `dcb93ecd` 已由主会话审查，增量同步计划索引、三版本范围、相关契约、验收覆盖和本文。旧自动淘汰对话与删除入口延期标被取代；旧2任务/16连接数不能替代0.7.18单活跃项目，提前回收及补渲故障策略留待确认。没有改语义正文、部署代码或删除实际数据。
@@ -103,6 +103,17 @@
 - accepted-message用途接口固定Luna9c8d9a34/报告623fa1a93，根逐源核对精确actorRef/messageRef、真实登录类型与parent/logout/generation/consumed状态，普通verifyActorRef不放宽access过期。根精确Git隔离包SHA256 c2b76e44e07f9d467b95258708fb73e2fe696d2b3f8fc3fdc5697169c9e03c1f，在节点visuhive-account用户下首次真实Linux69/69、0fail/cancel/skip、11410.753492ms（墙钟12.1005秒），账号204715/nginx9395前后不变；未部署。原T0接口68/65/0/3 Windows结果保留，不冒称长期消息支持。
 - 真实active run修改联验新源码PC b5c776b5/VH8ad627d：VH full74/71/0/3 Windows跳过；PC首次target45/40/5/0失败，五个新WS项都在prepare前operation-unavailable。Astra核到service normalize白名单丢失trusted authenticate产出的servicePrincipal/serviceId；中央owner获窄补租，不从消息body重造身份。类型、因果补验及全量待固定源码，原日志TMP/promptcut-run-authority-active-target-1.log保留，不能以原40模块通过判实际WS通过。
 - 中央专用关闭ac3bd9a2/报告f9d7456b，新6项与原33项39/39、0fail/cancel/skip、5574.3443ms；实际socket的_destroy门控证明逻辑连接零/旧SID410时回执仍pending，真实close才完成，含WS/LP异步resume窗口。根已读core3文件完整diff；永久账号/project条件改为本次cohort屏障正在补，不将此39项当整组跨服务资源ACK或Agent进程停止完成。
+
+## 本次做了什么
+
+- 已审完成模块以no-ff收进集成7cce722f：run/read/TTL权限核心6c4cd8d8与对话原报告9ba4d8b8；没有合main、发版或部署新服务。已完成的run与对话AGENT报告100%原文归档，正在接线的中央factory和runner报告留在reports，不把fixture通过说成生产已挂载。
+- 根在独立冻结6c4cd8d8（当前对话authority、真实VH327ff674 provider/order）首跑：强制类型exit0/6.968秒，11文件目标71/71、0fail/cancel/skip、10686.2584ms，全量5160/5158通过/0fail/cancel/2skip、69838.2893ms（墙钟70.188秒），native重跑0、源码全程不变。原始TMP/pc-root-runtime-6c4cd8d8-{type,target,full}.log及result.json保留。两个既有skip不计通过；这不覆盖后来7a路由/factory或e546 runner。
+- 根补公共对话API作用域反例：旧b25同owner/project/requestId用于两对话，第二send和switch均409，只有第一条落地、第二仍shared，exit1；11b1b8df对send/switch/stop按action+project+conversation+account+request作规范键后，两条均落地、两对话均private、exit0，变正文仍409。TMP/pc-root-conversation-request-scope-{b25,11b1b8df}.mjs/.log保留；不是仅调内部privateFence helper的原control反例。
+- Astra权限联验首次45/40/5失败为可信principal归一化丢服务字段，次轮46/44/2失败为owned fixture遗漏真实runHooks；各owner有因修正且加强真实fence/WS close断言后46/46，最终51d77560类型0、相关17/17、full5160/5158/0/2。首次日志完整保留，根独立6c联验另列，未把五个原失败或缺hook提前503当通过。
+- 根精确VH327ff674隔离归档SHA256 c36be9e49341f58e666560557a4d60a32852554aafac317202654fdc24fc7e20，节点visuhive-account用户实际79/79、0fail/cancel/skip、12540.122029ms（墙钟13.2452秒），含实际active-seal三次exit73且close。前轮漏显式provider为76/70/0/6skip，保留；第一次更正wrapper的全局ROOT替换损坏环境键，remote Python语法错、测试尚未启动，保留error；改成精确替换并先compile后才得到本次79结果。服务账号204715/nginx9395前后不变，无部署。TMP/vh-backup-timer-joint-linux-5db1eaa944ab4543b48cacc93db28f88.result.json及节点同runid原日志为证。
+- 80b5e658的58项长验收仍在后台自然运行，不能把部分summary当最终结果。截至P-online-nav-stress完成，24项已记录21通过/3首次失败；桌面壳G0-5已凭测试进程环境因果修正37/37，原失败保留。GR6快照HTTP500仍未解；P-c10-browser-full首轮1084秒失败（主机plan=1/fine completed=0），原始输出与图保留。A4、用户卡、界面、舞台看守、改参不贴旧层、握手、导航200次均exit0，但不替代失败的普通A5。当前P-desktop-auto-node及后续未完成项不计通过，session89976/完整out目录仍保留。
+- C10只读证据不能唯一认定原因；真实队列受控反例确认浏览器可以合法先claim/complete所有双指纹细段，使host切plan但completed=0。Astra诊断fe62c39c保留原hostDidWork、分channel/connection/queueepoch/generation与unversioned ACK证据；首两次手写browser协议缺expectVersion失败保留，修夹具后纯队列目标7/7、551.4549ms及类型0。后续正常r6-canvas重型卡fixture经根审查再加，尚未起服务/新probe，无生产filter或超时修改。
+- 中央7a435d3c专用accepted client/routes首目标3/3、2061.2719ms；同ledger factory仍在装配，实例持久registration/generation/recovery未提供时实际run入口503。Sol runner e546首次控制目标两次hang均中止exit1并留原log，仅修测试child signalCode等待后1/1；根审又要求实际exit和close双观察，4f2927e8窄控制1/1、1161.8131ms，真实owned PID/socket/server关闭在回执前，缺witness仍503。root已合6c依赖得9c6fd979；固定4f消费者将首次强制类型/full。全员实时选区、历史实例OS/cgroup证明、生产挂载与恢复仍未完成，不能因当前模块绿给停止完成ACK。
 
 ## 接下来干什么
 
@@ -212,10 +223,10 @@
 
 | 模型 | 工作 | 工作区 / 分支 | 状态 |
 |---|---|---|---|
-| Sol | 中央doc挂载operation/history、全员selection与真实run接口 | .worktrees/018-cloud-doc-assembly / codex/018-cloud-doc-assembly | 起点80b5e658；5770～5779；先约真实callback/装配，原asset叶已验收冻结 |
-| Sol | 对话ACL/FIFO、当前权限读取及发送者/快照持久化 | .worktrees/018-agent-access-v2 / codex/018-agent-access-v2 | 已交b25e5de8/报告9ba4d8b8；原full5095/5093/0/2，根审查/组合中；暂无新实施任务，删除细节仍未批准 |
-| Astra | doc可信read/currentRun/runGrant与退出/切私有竞态 | .worktrees/018-run-authority / codex/018-run-authority | 起点80b5e658；5730～5739；先约同ledger事务，旧operation已验收冻结 |
-| Luna | 账号内部持久actor-ref与已接受消息专属核验 | VisuHive .worktrees/018-actor-ref-endpoint / codex/018-actor-ref-endpoint | 起点718fc180；5780～5789；普通verify-actor已交4f598506，accepted-message增量应对真实120秒TTL反例，不改普通order鉴权/不部署 |
+| Sol | 中央doc真实同ledger对话/run工厂、专用accepted routes与selection/control挂载 | .worktrees/018-cloud-doc-assembly / codex/018-cloud-doc-assembly | 8bdcd1bb依赖含6c；5770～5779窄目标；7a routes 3/3；factory在途、实例缺失503，未占full |
+| Sol | 实际Agent持久队列消费者、read-intent/首次模型门控及停止资源回执 | .worktrees/018-agent-runner / codex/018-agent-runner | 固定4f2927e8；5790～5799；依赖6c已合，窄控制exit+close 1/1；下一独占full租约；原对话9ba已收回，删除未批准 |
+| Astra | C10普通A5主机无细产出真实队列反例与逐代诊断 | .worktrees/018-c10-claim-diagnostic / codex/018-c10-claim-diagnostic | fe62c39c纯队列7/7/type0；6320～6329候选未起服务；正常重型fixture待固定；原run6c模块已根验收冻结 |
+| Luna | 就绪索引HTTP500的脱敏诊断保留 | .worktrees/018-ready-index-diagnostic / codex/018-ready-index-diagnostic | 0172f813/报告e2c02586已交冻结；只改probe；node check通过，未跑实际probe/full。VH623 accepted包已根Linux69/69，暂闲 |
 
 ## 没做到的与原因
 
