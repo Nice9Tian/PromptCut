@@ -152,7 +152,14 @@ export function createRunAssetTransport({ runClient, assetOrigin, assetTls, asse
       if (!readyDone) { readyDone = true; closedPromise.then(() => readyReject(error)); }
       dispatch.abort(); closeCheck();
     };
-    const headers = { authorization: `Bearer ${held.ticket}`, 'content-length': bytes.length,
+    const headers = { authorization: `Bearer ${held.ticket}`,
+      'x-promptcut-run-project-id': tuple.projectId,
+      'x-promptcut-run-grant-id': tuple.runGrantId,
+      'x-promptcut-run-resource-rev': tuple.resourceRev,
+      'x-promptcut-run-nonce': tuple.nonce,
+      'x-promptcut-run-request-id': tuple.requestId,
+      ...(tuple.importId !== undefined ? { 'x-promptcut-run-import-id': tuple.importId } : {}),
+      'content-length': bytes.length,
       connection: 'close', ...(input.contentType ? { 'content-type': input.contentType } : {}),
       ...(input.range ? { range: input.range } : {}) };
     try {
