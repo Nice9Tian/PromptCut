@@ -212,3 +212,24 @@ v249语法已核：systemd-run只有`--slice`，没有`--slice-property`；[run.
 本机最终验证（固定b9源码）：node --check exit0；--help exit0；Windows正常入口 exit1=`probe-linux-root-required`；非法--force exit1=`probe-cli-invalid`，git diff --check通过。原始TEMP `pc-asset-root-cgroup-slice-{syntax,help,platform,invalid}-1.log`（初版）与`-2.log`（b9最终）均保留；第二轮有因是最后补足失败结果输出和部分启动清理空值保护后的固定源码验证。没有本地业务listener、npm guard/目标/full/type或任何Linux运行。
 
 Root单次执行命令不变，必须新out路径、真实专属用户和本节固定脚本hash：`node <fixed-script> --user <actual-asset-user> --out <new-unique-directory>`。需同时保留stdout、closure-result.json（若已到达）和result.json；首轮886 result不得覆盖。只有root下一次真实实验通过后，才讨论publisher/G显式双scope接口；当前生产run-assets仍503，此实验不证明TLS、业务资源ACK或跨进程完整部署。
+
+## 独占slice首轮启动前拒绝与systemd249前置窄修
+
+root实际固定f8fb7f75首次单轮exit1：probe wall28ms，errors=`probe-unit-exists`，preflightListeners=[]、stopIssued=0、sliceCleanup.retained=false；未建out目录、listener、workers或active slice。原VM stdout保留 `/var/tmp/pc-root-cgroup-slice-f8fb7f75/once.log`；本机原运行器/汇总保留 `TEMP/pc-root-cgroup-slice-f8fb7f75-once.py` 与`.log`。本Agent只读本机汇总：runner wallSec=0.123、nativeRetries=0，生产account274484/doc274497/asset273011/nginx9395均原PID/active/NRestarts0。28ms是probe内部耗时，与外层123ms区分；此短路不是empty/OS实验成功。
+
+root另只读回传本轮随机 `pcassetproofd43c2787b805d0c4.slice`：Id准确、Description=`Slice /pcassetproofd43c2787b805d0c4`、LoadState=loaded、ActiveState=inactive、SubState=dead、Transient=no、StopWhenUnneeded=no；FragmentPath/SourcePath/InvocationID/ControlGroup均空，User/MainPID未提供。这是systemd合成未使用slice，旧not-found-only判断误拒。
+
+精确源码因果：v249 [unit.c:4391 unit_is_pristine](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/unit.c)明确允许UNIT_LOADED/UNIT_NOT_FOUND，只要没有fragment/source/dropin/job/merged对象；其unit_load_fragment_and_dropin在slice不要求磁盘fragment时会把STUB置LOADED。[dbus-manager.c:803](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/dbus-manager.c)在StartTransientUnit处理内仍调用该pristine检查。故此次仅修探针API适配，原active slice保留机制未受实测，也不修改它的关闭尺子。
+
+新源码 `d08e8389a224875d6f54d159cb3d9e4829e770e5`，脚本SHA256 `5740633a639180c297047d11b2a5b74f80eda97504a9adfe1438c2b69ccaf95e`。只改既有OS smoke文件：
+
+- 普通service仍严格LoadState=not-found。
+- slice额外读取FragmentPath/SourcePath/DropInPaths/Job/Following，show加--all明确输出空字段。只接受精确随机Id、默认Description、loaded/inactive/dead、Transient=no、StopWhenUnneeded=no，无User/MainPID，全部配置路径、InvocationID、ControlGroup、Job、Following明确为空；缺关键属性同样拒绝。不能只凭inactive或loaded就接受。
+- [systemctl-show.c:927–936](https://raw.githubusercontent.com/systemd/systemd/v249/src/systemctl/systemctl-show.c)把没有Job的D-Bus值(0,'/')打印成`Job=`，故新guard要求空串而非`Job=0`。此点在本地验证前就按真实源码修正，没有为CLI表示猜测多跑VM。
+- 前置另核拟用cgroup路径尚不存在，并在StartTransientUnit前再次完整检查；这里ENOENT仅证明没有启动路径碰撞，完全不是旧cgroup关闭/empty证据。StartTransientUnit的原fail模式及manager内部pristine检查仍在，没有改成替换已配置unit。
+
+这是三级解法表第4行的API子修：g=1/h=1/f=2；没有实际进入scope的这次失败不关掉active-slice候选，也不改为采样竞赛。原886 ENODEV与f8启动前拒绝各保留，不能相互冒充。
+
+纯guard证据：`TEMP/pc-asset-slice-pristine-counter-1.mjs/.log`导入真实新函数，复用root回传synthetic形状；空Job/Following/DropInPaths的表示依官方249源码补充，明确不是新VM读取。旧not-found谓词对这份形状必拒，新guard接受1个正例，26个active/配置/dropin/job/身份/缺字段等变体全部拒，exit0。该counter只验证判断函数，无Linux/systemd/listener/mock empty或OS关闭证明。
+
+固定新源码本机syntax0/help0/Windows平台guard1/非法CLI1；原始 `TEMP/pc-asset-slice-pristine-{syntax,help,platform,invalid}-1.log`及counter日志保留，diff-check通过。没有npm/type/full、业务listener、节点执行或同源重跑；publisher/G与生产unit未动。root下一实际窗口仅以新hash、新out单次运行，结果仍未知。
