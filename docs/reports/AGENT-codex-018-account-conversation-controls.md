@@ -65,3 +65,11 @@
 - 共有/私有切换及停止重试在按钮点击前，按当前 conversation ID 注册精确路径与 POST 方法的真实 `waitForResponse`。每次调用都创建自己的响应等待；收到该次响应后才等待非加载状态并分类。返回中仅保留真实 HTTP 状态码，现有网络记录仍只写路径、状态、方法和 request ID 是否一致，不写 body 或 ID；没有伪造响应。
 - 项目打开前为账号 consent GET 注册真实响应监听；等待实际服务器 `accepted` 结果或真实可见弹窗。弹窗存在时以真实按钮确认，并等待同一路径的 POST 响应确认 `accepted` 后才继续。页面未注入 consent 状态。
 - 本次只改该 Puppeteer 探针和本报告；产品、测试、fixture 均保持冻结。没有启动浏览器、服务或节点，也未运行 SSR、类型检查、完整测试或真实 CLI，因此真实窗口结果和 fence 关闭 ACK 仍待 root 后续验证；本记录不将 private fence pending 说成跨服务撤销完成。没有新增首红，因为本次修复发生在首次真实探针运行之前。
+
+## 后续真实 read-control fixture 迁移计划（2026-10-09；尚未实施）
+
+- 本分支当前 fixture 的 Agent 只构造一个旧 `createConversationClient`：见 `server/test/fixtures/account-conversation-controls-user-path.mjs` 第 273 行附近；随后立即把它交给 `createHostedWiring` 和 `createHostedAgentService`（约第 275–276 行）。没有 read-control client，也没有 Agent 实例注册/连接等待。Astra b11d 安全 stage 改为拒绝 doc assembly 的旧 conversation read，因此这条旧路径的历史读取会以 503 失败；不能把缺失的 `readTransports` 当成期望的 fence pending。
+- 等 root 将新 protocol 同步到该工作区后，计划在 fixture 用与现有 pinned doc TLS 相同的配置建立单独 `runClient`；再以同一配置和 `runClient`、位于 fixture 自有 temp dir 的 receipt 文件建立 `createConversationControlClient`，将其接到 `conversationClient.useReadControl(controlClient)`。随后先真实 `registerInstance()`，启动 control consumer，并轮询其 `describe().connected` 到真连接后才开放 Agent HTTP 场景。不会伪造 access grant、read transport 或 ACK。需要按同步后的导出和真实方法签名实施，当前代码还没有这些导出，故本轮不提前写代码。
+- fixture 关闭顺序计划为先停 control consumer，再关闭 Agent HTTP/service 与 conversation client，再关闭 doc、run client 和其余自有资源；close 仍须等待所有自有 socket、子进程和端口释放。新增 receipt 只落在本 fixture 的独立临时目录，保留现有 fixture 失败证据目录策略。
+- 迁移后，浏览器主路径应改为断言真实 read-control 支持下的历史读取及真实私有切换结果；如果服务返回实际 ACK，就报告为 confirmed，不能继续把现有“缺 read transport 导致 503”称为 pending。需要另保留一个有真实在途消费/dispatch 尚未完成的 pending 反例，不能 stub control client、伪造 response、临时返回成功或把旧 `onFence` 缺项算作 pending。具体可控的真实在途路径必须等同步的 protocol/服务接口核实后再选；本报告不假定 API 或伪定实现方法。若接口不提供可复现且真实的未完成消费场景，应把 pending 反例列为阻塞的验收缺口并报告 root，不以模拟补齐。
+- 此计划阶段只做了只读检查，未启动 service、浏览器、fixture，未修改 fixture/探针或任何生产代码；当前唯一允许变更是本报告。后续实施待 root 同步 Astra protocol 并明确新 fixture 租约后再开始。
