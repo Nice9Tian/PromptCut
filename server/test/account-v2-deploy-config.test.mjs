@@ -56,7 +56,8 @@ function fixture(t) {
     paths: { accountRegistryFile: path.join(dir, 'account-registry.json'), docRegistryFile: path.join(dir, 'doc-registry.json'),
       orderWitnessKeysFile: path.join(dir, 'witness-keys.json'),
       accountCredentialKeyFile: write('credentials.key', Buffer.alloc(32, 7)),
-      docDataDir: path.join(dir, 'doc-data'), assetDataDir: path.join(dir, 'asset-data'),
+      accountDataDir: path.join(dir, 'account-data'), docDataDir: path.join(dir, 'doc-data'),
+      assetDataDir: path.join(dir, 'asset-data'),
       assetRecoveryFenceFile: path.join(dir, 'recovery-fence.json'),
       accountOrderModuleFile: fileURLToPath(new URL('../account/password-order.mjs', import.meta.url)) },
     keys: { docSigning: { keyId: 'doc-signing-1', privateFile: ed25519('doc-signing').privateFile },
@@ -76,6 +77,8 @@ test('v2 deploy config emits path-only runtime env and registries for actual thr
   assert.equal(result.assetEnv.PROMPTCUT_ASSET_DOC_FINGERPRINT256.toLowerCase().replaceAll(':', ''),
     result.publicConfig.servicePins.doc);
   assert.equal(result.accountEnv.ACCOUNT_CREDENTIAL_KEY_FILE, manifest.paths.accountCredentialKeyFile);
+  assert.equal(result.accountEnv.ACCOUNT_DATA_DIR, manifest.paths.accountDataDir);
+  assert.equal(result.accountEnv.ACCOUNT_ORIGINS, 'https://example.test');
   assert.deepEqual(JSON.parse(result.generatedFiles[manifest.paths.accountRegistryFile]),
     [{ serviceId: 'doc', fingerprint256: result.publicConfig.servicePins.doc }]);
   assert.deepEqual(JSON.parse(result.generatedFiles[manifest.paths.docRegistryFile]).map(item => item.serviceId), ['account', 'asset']);

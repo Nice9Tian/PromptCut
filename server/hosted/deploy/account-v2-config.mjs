@@ -148,12 +148,12 @@ export function loadAccountV2DeployConfig(manifestFile) {
   if (!assetPublicUrl.endsWith('/media/api/asset') || !docPublicUrl.includes('/hosted/') ||
       !authorityUrl.endsWith('/editor')) invalid('public-url');
 
-  exactKeys(manifest.paths, ['accountRegistryFile', 'docRegistryFile', 'orderWitnessKeysFile', 'accountCredentialKeyFile', 'docDataDir', 'assetDataDir', 'assetRecoveryFenceFile', 'accountOrderModuleFile'], 'paths');
+  exactKeys(manifest.paths, ['accountRegistryFile', 'docRegistryFile', 'orderWitnessKeysFile', 'accountCredentialKeyFile', 'accountDataDir', 'docDataDir', 'assetDataDir', 'assetRecoveryFenceFile', 'accountOrderModuleFile'], 'paths');
   const paths = Object.fromEntries(Object.entries(manifest.paths).map(([name, value]) => [name, absoluteDestination(value, 'path')]));
   absoluteFile(paths.accountOrderModuleFile, 'order-module');
   const credentialFile = absoluteFile(paths.accountCredentialKeyFile, 'account-credential-key', { privateFile: true });
   if (fs.statSync(credentialFile).size !== 32) invalid('account-credential-key');
-  if (new Set([paths.docDataDir, paths.assetDataDir]).size !== 2 ||
+  if (new Set([paths.accountDataDir, paths.docDataDir, paths.assetDataDir]).size !== 3 ||
       new Set([paths.accountRegistryFile, paths.docRegistryFile, paths.orderWitnessKeysFile]).size !== 3) invalid('path-conflict');
 
   exactKeys(manifest.keys, ['docSigning', 'accountOrder', 'docAttestation'], 'keys');
@@ -187,6 +187,7 @@ export function loadAccountV2DeployConfig(manifestFile) {
   };
   const accountEnv = {
     ACCOUNT_API_MODE: 'v2', ACCOUNT_HOST: '127.0.0.1', ACCOUNT_PORT: String(manifest.ports.account),
+    ACCOUNT_DATA_DIR: paths.accountDataDir, ACCOUNT_ORIGINS: new URL(accountOrigin).origin,
     ACCOUNT_CREDENTIAL_KEY_FILE: paths.accountCredentialKeyFile,
     ACCOUNT_INTERNAL_PORT: String(internal.account.port),
     ACCOUNT_INTERNAL_KEY_FILE: roles.account.keyFile, ACCOUNT_INTERNAL_CERT_FILE: roles.account.certFile,
@@ -198,7 +199,7 @@ export function loadAccountV2DeployConfig(manifestFile) {
   };
   const docEnv = {
     PROMPTCUT_ACCOUNT_V2: '1', PROMPTCUT_ACCOUNT_V2_REQUIRED: '1',
-    PROMPTCUT_DATA_DIR: paths.docDataDir,
+    PROMPTCUT_DATA_DIR: paths.docDataDir, PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1',
     PROMPTCUT_ACCOUNT_ORIGIN: internal.account.origin, PROMPTCUT_ACCOUNT_AUTHORITY_ID: authorityId,
     PROMPTCUT_ACCOUNT_AUTHORITY_URL: authorityUrl, PROMPTCUT_ACCOUNT_SERVER_FINGERPRINT256: roles.account.fingerprint256,
     PROMPTCUT_ACCOUNT_SIGNING_KEY_ID: docSigningKeyId, PROMPTCUT_ACCOUNT_SIGNING_KEY_FILE: docSigningFile,
