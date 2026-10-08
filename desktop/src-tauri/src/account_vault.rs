@@ -96,9 +96,11 @@ try {
 "#;
 
 #[tauri::command]
-pub async fn account_bridge(window: tauri::WebviewWindow, binding: tauri::State<'_, AccountBridgeBinding>, operation: String, args: serde_json::Value) -> Result<serde_json::Value, String> {
-    let url = window.url().map_err(|_| "desktop-account-bridge")?;
-    if window.label() != "main" || url.origin().ascii_serialization() != binding.origin || url.path() != "/" || !url.username().is_empty() || url.password().is_some() {
+pub async fn account_bridge(webview: tauri::Webview, binding: tauri::State<'_, AccountBridgeBinding>, operation: String, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    // Use the actual invoking webview: WebviewWindow CommandArg rejects windows
+    // with child webviews before this guard can run (locked Tauri 2.11.5).
+    let url = webview.url().map_err(|_| "desktop-account-bridge")?;
+    if webview.label() != "main" || webview.window().label() != "main" || url.origin().ascii_serialization() != binding.origin || url.path() != "/" || !url.username().is_empty() || url.password().is_some() {
         return Err("desktop-account-forbidden".into());
     }
     if operation == "configuration" { return Ok(serde_json::json!({"ok":true,"origin":binding.cloud_origin})); }
