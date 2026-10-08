@@ -362,6 +362,7 @@ export async function startHostedCombo({
         requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, async (req, res) => {
         try {
           if (await docAgentAssembly?.handleInternal(req, res)) return;
+          if (docService?.handleTransportHttp(req, res)) return;
           const route = new URL(req.url ?? '/', 'https://internal.invalid').pathname;
           if (route.startsWith('/internal/v2/runs/') || route.startsWith('/internal/v2/conversations/') ||
               route.startsWith('/internal/v2/instances/')) {
@@ -417,11 +418,15 @@ export async function startHostedCombo({
     log: say,
     ...(limits ? { limits } : {}),
     service: { ...serviceOptions,
+      ...(docAgentAssembly ? { transportAuthenticate: docAgentAssembly.transportAuthenticate,
+        transportConnected: docAgentAssembly.transportConnected,
+        dispatchInvocation: docAgentAssembly.dispatchInvocation } : {}),
       http(req, res) { if (relocation?.handle(req, res)) return true; if (String(req.url).startsWith('/hosting/')) { void hosting.handle(req, res); return true; } return serviceOptions?.http?.(req, res); },
       upgrade(req, socket, head) { if (String(req.url).startsWith('/hosting/')) { hosting.handleUpgrade(req, socket, head); return true; } return serviceOptions?.upgrade?.(req, socket, head); },
     },
   });
   docService = service;
+  if (docAgentAssembly && accountInternalServer) service.attachTransportServer(accountInternalServer);
   if (docAgentAssembly) {
     try { await docAgentAssembly.start(); }
     catch (error) {

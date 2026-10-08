@@ -4,6 +4,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { digestOf } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
 import { accountError } from '../account/client.mjs';
+import { instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createFileStore, createMemoryStore, fileNameOf } from './store/index.mjs';
 import { stateBlobName } from './modules/project.mjs';
 import { offeredProtocols } from './auth.mjs';
@@ -237,8 +238,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       }
       // Presence of a selection does not modify project content. Readonly members
       // publish their own live selection through the same read authority as open.
-      const action = type === 'selection.set' || type === 'selection.clear' ? 'read' :
-        /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(type) ? 'write' : 'read';
+      const action = instanceMessageAction(type);
       try {
         if (principal.role === 'agent' || principal.service === 'agent') {
           const provider = getRunProvider();
