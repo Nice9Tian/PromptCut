@@ -63,7 +63,7 @@ const server = http.createServer((req, res) => {
     res.end('<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module" src="/src/ai/cloud/consent-probe-harness.tsx"></script></body></html>');
     return;
   }
-  if (!pathname.startsWith('/src/') && !pathname.startsWith('/node_modules/') && !pathname.startsWith('/@') && !pathname.startsWith('/__vite')) {
+  if (!pathname.startsWith('/src/') && !pathname.startsWith('/server/') && !pathname.startsWith('/node_modules/') && !pathname.startsWith('/@') && !pathname.startsWith('/__vite')) {
     res.writeHead(404); res.end(); return;
   }
   vite.middlewares(req, res, () => { res.writeHead(404); res.end(); });
