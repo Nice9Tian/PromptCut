@@ -140,7 +140,7 @@
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { fork, spawn, spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -155,7 +155,7 @@ import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, par
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 import { createTimings } from './probe-timings.mjs';
 import { hostClaimStatusOf } from '../render-host.mjs';
-import { createC10Trace, hostDidWork, hostRenderedClip, hostFixtureReadiness } from './c10-judge.mjs';
+import { createC10Trace, hostDidWork, hostRenderedClip, hostFixtureReadiness, heavyUserCardSource } from './c10-judge.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -1862,27 +1862,53 @@ try {
     const errorsBefore = member.pageErrors.length;
     const edited = await P(member, (id) => { const s = window.__pcStore; s.actions.setClipParams(id, { label: 'main-v2' }); return s.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)?.params?.label; }, state.main);
     check(edited === 'main-v2', 'A5:纯在线改一处(主重卡的文字)', { edited });
-    // The original main still races the browser. Real particles with normal
-    // controls are only a candidate: finished measurement and actual selection
-    // below must establish work before any host is started.
+    // The original main still races the browser. This ordinary project-owned
+    // card computes the pixels it displays; it has no authored capability or
+    // clock escape. Default unknown/local eligibility remains product-owned.
     if (!EXTERNAL_HOST && !E6R) {
-      const duration = 3 + (Number.parseInt(randomBytes(4).toString('hex'), 16) + 1) / 0x100000001 / FPS;
-      const params = { config: '', color: '#8ab4ff', quantity: 400, speed: 1.2, size: 3, links: 'yes', seed: Number.parseInt(randomBytes(4).toString('hex'), 16) % 99999 + 1 };
+      const cardId = `c10-cpu-field-${randomBytes(8).toString('hex')}`;
+      const sourceKey = `src/cards/user/${cardId}.tsx`, source = heavyUserCardSource(cardId);
+      const expectedHash = createHash('sha256').update(JSON.stringify(source)).digest('hex');
+      const stored = await conn.rpc({ type: 'content.put', kind: 'card-source', key: sourceKey, body: source });
+      const fetched = await conn.rpc({ type: 'content.get', kind: 'card-source', key: sourceKey });
+      const sourceEvidence = { cardId, sourceKey, expectedHash, storedHash: stored.hash, fetchedHash: fetched.hash,
+        storedRev: stored.rev, fetchedRev: fetched.rev, sameBody: fetched.body === source, runtime: null };
+      const saveSourceEvidence = () => fs.writeFileSync(path.join(OUT, 'a5-fixture-source.json'), JSON.stringify(sourceEvidence, null, 2));
+      saveSourceEvidence();
+      if (stored.hash !== expectedHash || fetched.hash !== expectedHash || fetched.body !== source ||
+        !Number.isSafeInteger(stored.rev) || stored.rev < 1 || fetched.rev !== stored.rev)
+        throw new Error('A5:用户卡真实源码回读不一致，未启动 host');
+      await P(member, async () => { await window.__pcCardSourcesSync?.(); });
+      const loaded = await until('A5:项目用户卡正常转译与两个舞台 ready', async () => {
+        const runtime = await P(member, ({ cardId, sourceKey }) => {
+          const d = window.__pcCardExecDiag?.();
+          return d ? { run: d.run?.[cardId]?.state ?? null,
+            bundle: d.bundles?.find(b => b.entry === sourceKey) ?? null,
+            stages: Object.fromEntries(Object.entries(d.stages ?? {}).map(([id, stage]) =>
+              [id, stage.states?.find(([key]) => key === cardId)?.[1]?.state ?? null])) } : null;
+        }, { cardId, sourceKey });
+        sourceEvidence.runtime = runtime; saveSourceEvidence();
+        return runtime?.run === 'ready' && runtime.bundle?.ok === true && Object.keys(runtime.stages).length === 2 &&
+          Object.values(runtime.stages).every(state => state === 'ready') ? runtime : null;
+      }, 30_000, 250);
+      if (!loaded) throw new Error('A5:用户卡正常转译/舞台执行未就绪，未启动 host');
+      const duration = 0.25 + (Number.parseInt(randomBytes(4).toString('hex'), 16) + 1) / 0x100000001 / FPS;
+      const params = { seed: Number.parseInt(randomBytes(4).toString('hex'), 16) % 99999 + 1 };
       const beforeKeys = ((await onlineDiag(member))?.layers ?? []).map(layer => layer.resultKey);
-      const fixture = await P(member, ({ start, duration, params }) => {
+      const fixture = await P(member, ({ cardId, start, duration, params }) => {
         const s = window.__pcStore;
         const createdAt = Date.now();
-        const clip = s.actions.addClipOnNewTrack({ index: 0, cardId: 'particles', start, duration });
+        const clip = s.actions.addClipOnNewTrack({ index: 0, cardId, start, duration });
         s.actions.setClipParams(clip.id, params);
         s.actions.setDurationManual(clip.end);
         const project = s.getState().project;
         const saved = project.tracks.flatMap(track => track.clips).find(item => item.id === clip.id);
         return { clipId: saved.id, cardId: saved.cardId, params: saved.params, createdAt, start: saved.start, duration: saved.end - saved.start, projectDuration: project.duration, end: saved.end };
-      }, { start: SECONDS + 1, duration, params });
-      state.hostFixture = { ...fixture, projectId: state.projectId, beforeKeys };
-      if (!check(fixture.cardId === 'particles' && fixture.clipId !== state.main && fixture.duration > 3 && fixture.duration < 3 + 1 / FPS && fixture.projectDuration >= fixture.end &&
+      }, { cardId, start: SECONDS + 1, duration, params });
+      state.hostFixture = { ...fixture, projectId: state.projectId, beforeKeys, source: sourceEvidence, requireStepOverBudget: true };
+      if (!check(fixture.cardId === cardId && fixture.clipId !== state.main && fixture.duration > 0.25 && fixture.duration < 0.25 + 1 / FPS && fixture.projectDuration >= fixture.end &&
         Object.entries(params).every(([k, v]) => fixture.params?.[k] === v),
-      'A5:真实新增 particles 合法参数与完整时长已保留，原 main 竞争保留', fixture)) throw new Error('A5:host fixture 写入不完整，未启动 host');
+      'A5:真实新增项目 CPU 纹理卡与短片段已保留，原 main 竞争保留', fixture)) throw new Error('A5:host fixture 写入不完整，未启动 host');
     }
     if (E6R) {
       // E6 反方向:全部重卡都改(文字 + burnMs),这一版的层全换成 Y 的;每帧更慢,好让 X 上线时这一版还没做完
