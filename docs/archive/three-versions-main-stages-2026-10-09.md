@@ -143,3 +143,17 @@ root公共部署：162静态文件及onlineCardExec:true，nginx精确account路
 每日账号备份unit/timer真实安装，手动一次成功并实际读schema2/integrityok/账号2（原1＋首次公网自建1），备份key与原字节一致、三文件mode600，timer active下次2026-10-09 02:17UTC，没有保留期删除。路径/日志TEMP vh-account-daily-backup-20261009/actual-backup.log，节点/private目录及旧备份均保留。
 
 首次公网f20e318c：9check8通过1失败，墙7.25秒，停register-1，network显示第一注册POST200、第二只有GETme没有POST；真实留下1自建随机账号、无project，native未运行。Chrome owned7进程和Vite6500–2全部close。root初误断cookie共享；完整源码本已独立context，实际是register() awaitfillWho后才挂submit而probe仅等DOMContentLoaded的初始化race。原截图/JSON/日志TEMP pc-account-public-f20e318c-first{.log,-out/result.json}保留，禁止打印原URL/query/密码。Sol新探针等待实际匿名me/nav/submit listener且回填精确自身account公共ID；页面敏感表单本身另作独立守门，不靠探针等待掩盖它。
+
+## 网页表单与第二次真实公网
+
+VisuHive实际表单源码3f95ac07，冻结报告e7af5956。四页共7表单显式POST、初始disabled，脚本在首次await前安装同步capture守门；真实/me成功及业务submit handler安装后才自动启用。首红18项7通过11失败；修后专属18项全过70.1408ms，均保留raw。根固定e7af独立npm test104项/100通过/0失败/4跳过/0取消6670.5956ms，墙6875ms，native重跑0；syntax2项0、无TypeScript、源码不变且clean。报告归档后合VisuHive main1b3b002并push，TEMP vh-form-readiness-root-e7af5956-full.{log,result.json}。专属测试执行实际JS/HTML的受控DOM与延迟/me，不冒充Chrome或公网。
+
+实际部署五份网页/脚本，原文件逐个备份在节点/root/promptcut-account-cutover-eb8228a4/form-readiness-1b3b002/before。首次定位误以唯一root在/opt，实际landing配置同时有两个/var/www/landing和editor root，断言在任何备份/写live前停止；只读定位后以准确/var/www/landing继续，同一上传包未重做。正常CA公网五URL200、字节SHA均等于main；账号/doc/asset/nginx PID与重启状态均不变，未写账号数据。TEMP vh-form-readiness-deploy-1b3b002/deploy{,-resume}.log保留。
+
+第二次公网固定PC9ccdcf3b（探针源码7aa54d11），TMP实际exe仍f20源且5Rust文件逐字同，SHA9bb3f757…。wrapper墙69.812秒，probe66802ms，exit1：16个已执行check为真但completedfalse，online-a-create Timeout；注册两账号POST200，编辑器login/editor-session/projects200，无任何create请求/WSS，无project，native未运行。新自建公共账号ID acc_d6ec0d30a99509d45ff9eb7b（pcpub_273dfc4dae47_a）、acc_86cc4f3a0cd633ec91574f7d（_b）均保留供准确清理。Chrome own7进程+Vite PID42180/6500–2已关，源码不变clean，native重跑0；TMP pc-account-public-9ccdcf3b-second{.log,.result.json,-out/result.json}。已登录截图button仍busy；失败最终截图已恢复enabled、项目名已填。源码setAccount先显示，再await列表，finally解busy；探针只等account-name便点击disabled create，未触发请求。下一窄修等真实可交互，不改产品disabled，不把此超时计作完整通过。
+
+此表单工作区已核main祖先、clean/未跟踪0/ignored0/全树reparse0后git worktree remove与本机branch-d，无force，远端分支保留。TEMP vh-form-readiness-cleanup-20261009.json；累计48=PC34+VH14，在用PC4/VH0，旧6与其它会话未动。
+
+## 首次真实Linux进程组关闭取证
+
+固定Astra886cd6b5，脚本SHA4a7f957074cb66da8b0b63d8ed80bd26676adead7f543e1c2ddc3f896b84629e，在systemd249/node24.21真实唯一瞬态unit pc-asset-cgroup-proof-66f1b663560e6a51，专属asset UID995、端口6540；未启动生产publisher/doc接收。wall2283ms/exit1，stop只一次且exit0，负例已观察：268ms父出生消失，但子仍持文件FD/TCP，populated1；2261ms子关闭FD与连接但出生仍在；2273ms两个出生均消失，固定旧eventsFD读ENODEV，没观察到pop0，emptyObservedfalse，不能将未知视为空。最终两个EOF/close真、unitinactive/MainPID0，6540–49清空。生产account274484/doc274497/asset273011/nginx9395前后PID相同且NRestarts0/active。实际失败原文TEMP pc-root-cgroup-os-886cd6b5-once.log，节点/var/tmp/pc-root-cgroup-os-886cd6b5/once-output/result.json；不原码重复跑，交Astra列保留可观察空对象的三级解法，此模块仍不合main。
