@@ -130,7 +130,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   assert.equal(delegation.accountId, ids[0]);
   await assert.rejects(combo.accountRuntime.resolveAgentDelegation(sessions[0].assetTicket), /ticket-expired/);
   await assert.rejects(combo.docAssembly.runProvider.checkAccess({ principal: delegation, projectId, action: 'read' }),
-    agentConfigured ? /run-service-forbidden/ : /run-authority-unavailable/);
+    agentConfigured ? /run-principal-invalid/ : /run-authority-unavailable/);
   if (!agentConfigured) {
     agentTransport = createAssetMtlsTransport({ origin: 'https://127.0.0.1:5772', tls: pki.asset,
       serverFingerprint256: pki.doc.fingerprint256 });

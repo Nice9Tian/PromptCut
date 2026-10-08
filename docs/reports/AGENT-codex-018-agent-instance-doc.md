@@ -29,7 +29,7 @@ WS/LP方案已报root：必须完整router dispatch hook包住gate、module与co
 - 4ecbd1a5：HTTP注册/签名消费与首次fixtures完整块；routes首轮npm 1/1，0失败/取消/跳过，1156.8545ms（测试1079.8428ms），实际OS端口4455关闭。日志TMP/pc-instance-doc-routes-target-1.log。业务run methods仍为受控fixture，证据只覆盖真实instanceAuthority/TLS/route能力。
 - f85ecb9a：combo无Agent配置的instances入口也明确503；fixture等待客户端真实socket close；新增隔离部署import专测。routes/deploy第二轮npm 2/2，0失败/取消/跳过，1307.8812ms（routes1228.7045ms、stage112.585ms），实际OS端口12672关闭。日志TMP/pc-instance-doc-routes-deploy-target-2.log。重复routes有因：fixture实close生命周期变化；不是无变更重跑。
 - 隔离部署使用stageHostedFiles原递归清单，117个文件，TMP目录真子进程import新doc-agent-assembly，退出码0且等到child close。files.mjs无需改；只证明模块闭包/真实import，不当作服务部署或OS隔离验收。
-- b08bf5d3：中央既有direct raw provider调用无真实service主体的预期改精确run-service-forbidden（403），未配置run provider仍原503；增加无Agent配置注册503负向。源码冻结后强制tsc -b --force exit0，零错误，命令墙7.6168s，TMP/pc-instance-doc-type-1.log。
+- b08bf5d3：中央既有direct raw provider调用的403预期与无Agent配置注册503负向；未配置run provider仍原503。源码冻结后强制tsc -b --force exit0，零错误，命令墙7.6168s，TMP/pc-instance-doc-type-1.log。等待端口期间继续实际代码审查，确认该direct调用传的是editor delegation，checkWithScope首先role拒绝run-principal-invalid，而非后续service校验run-service-forbidden；未跑中央目标前修正为真实较早的403，权限断言不降。这是预期定位修正，不写成运行失败或已通过。
 
 中央account-assembly-central.test.mjs已写真实VH327 provider/order→combo→独立asset→两页面的签名注册/admit/read/query/check/finish与同证书另一OS旧grant拒绝、cap字段不泄漏；尚未运行。共享固定5770～5774未获释放前不启动，不能把旧中央/根full借作本新源码结果。此叶尚未full，原LAN与transport宽回归待新完整装配冻结后按root租约执行。
 
