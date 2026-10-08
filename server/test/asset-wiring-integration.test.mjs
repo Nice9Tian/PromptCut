@@ -168,7 +168,9 @@ test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全�
   await start();
   assert.equal((await session(1, 'after-clean-restart')).status, 200, 'real status automatically readies fresh instance after clean restart');
   const newLogin = credentials.createEditor({ account: provider.accountById(ids[0]), deviceId: 'replacement-device', requestId: 'replacement-login' });
-  const deleted = await web(origin, 'POST', '/hosted/shared/account/admin', { projectId: projects[0], op: 'delete', requestId: 'delete-A' }, newLogin.accessToken);
+  const current = await web(origin, 'GET', `/hosted/shared/account/status?authorityId=${authorityId}&projectId=${projects[0]}`, null, newLogin.accessToken);
+  assert.equal(current.status, 200);
+  const deleted = await web(origin, 'POST', '/hosted/shared/account/admin', { projectId: projects[0], op: 'delete', requestId: 'delete-A', expectedAccessRevision: current.body.accessRevision }, newLogin.accessToken);
   assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
   assert.equal((await fetch(assetOrigin + `/api/asset/media/${hash}`, { headers: { authorization: `Bearer ${joined.body.assetTicket}` } })).status, 404, 'deleted A cannot be read via a still-valid other member login');
   const survived = await request(1, `/api/asset/media/${hash}`); assert.equal(survived.status, 200); assert.deepEqual(Buffer.from(await survived.arrayBuffer()), bytes, 'deleting A does not affect B same hash');
