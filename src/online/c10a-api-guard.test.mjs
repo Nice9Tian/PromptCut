@@ -89,3 +89,38 @@ test('account website calls pass only in the top editor; stages, unknown account
     }
   } finally { globalThis.window = originalWindow; }
 });
+
+test('project members permits only exact top-editor same-origin POST omit; stage, method, suffix and non-fetch channels reject', async () => {
+  const { installApiGuard } = await import('./apiGuard.ts');
+  const original = globalThis.window;
+  const originalProgressEvent = globalThis.ProgressEvent;
+  globalThis.ProgressEvent ??= class extends Event {};
+  const context = (href, embedded = false) => {
+    const passed = []; const window = { fetch: async (input, init) => { passed.push({ input, init }); return new Response('{}'); },
+      EventSource: class {}, XMLHttpRequest: class extends EventTarget { open() {} send() { passed.push('xhr'); } } };
+    window.self = window; window.top = embedded ? {} : window; globalThis.window = window;
+    installApiGuard({ href, base: '/editor/' }); return { window, passed };
+  };
+  const path = '/hosted/shared/account/members';
+  try {
+    const main = context('https://h.example/editor/');
+    await main.window.fetch(path, { method: 'POST', credentials: 'omit' });
+    assert.equal(main.passed.length, 1);
+    for (const init of [{ method: 'GET', credentials: 'omit' }, { method: 'POST', credentials: 'same-origin' }, { method: 'POST', credentials: 'include' }])
+      await assert.rejects(main.window.fetch(path, init));
+    await assert.rejects(main.window.fetch(path + '/unknown', { method: 'POST', credentials: 'omit' }));
+    await assert.rejects(main.window.fetch('https://other.example' + path, { method: 'POST', credentials: 'omit' }));
+    const xhr = new main.window.XMLHttpRequest(); xhr.open('POST', path); xhr.send('{}');
+    const source = new main.window.EventSource(path); assert.equal(source.readyState, 2);
+    assert.equal(main.passed.length, 1);
+    for (const [href, embedded] of [['https://h.example/editor/stage.html', false], ['https://h.example/editor/?stage=1', false], ['https://h.example/editor/', true]]) {
+      const stage = context(href, embedded);
+      await assert.rejects(stage.window.fetch(path, { method: 'POST', credentials: 'omit' })); assert.equal(stage.passed.length, 0);
+    }
+  } finally {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    globalThis.window = original;
+    if (originalProgressEvent === undefined) delete globalThis.ProgressEvent;
+    else globalThis.ProgressEvent = originalProgressEvent;
+  }
+});

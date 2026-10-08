@@ -351,6 +351,7 @@ export async function startHostedCombo({
       if (account.order) docAssembly = createDocAssembly({ dataDir: paths.docservice,
         authority: accountRuntime.authority, account, runProvider: docAgentAssembly?.runProvider, now });
       accountProjects = mountAccountProjects({ authority: accountRuntime.authority,
+        membersSnapshot: (actor, body) => accountRuntime.membersSnapshot(actor, body),
         issueSession: input => accountRuntime.issueSession(input),
         resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket) });
       const internalProjects = mountAccountProjects({

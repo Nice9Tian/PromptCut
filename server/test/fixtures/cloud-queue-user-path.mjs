@@ -119,7 +119,7 @@ async function openHostedProjectOverWebSocket({ origin, ca, ticket, projectId })
   }
 }
 
-export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6524, 6525, 6528], keepOpen = false,
+export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6524, 6525, 6528], agentPort = 6526, keepOpen = false,
   providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT,
   passwordOrderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE,
   publicHandler = null,
@@ -139,7 +139,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
   const assetOrigin = edgeOrigin;
   const authorityId = 'dual-account-doc';
   const pki = assetWiringPki(dir);
-  const agentPort = 6526, agentKey = generateServiceKeyPair();
+  const agentKey = generateServiceKeyPair();
   let agentServer, agentClient, agentService;
   const staged = path.join(dir, 'staged-asset');
   const docDir = path.join(dir, 'doc');

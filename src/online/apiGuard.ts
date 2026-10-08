@@ -43,6 +43,7 @@ export function apiPathOf(input: unknown, { href, base = "/" }: ApiGuardOptions 
     return null;
   }
   const pageOrigin = new URL(page).origin;
+  if (u.pathname === '/hosted/shared/account/members' || u.pathname.startsWith('/hosted/shared/account/members/')) return u.pathname;
   if (u.origin !== pageOrigin) return null;
   const b = base.endsWith("/") ? base : `${base}/`;
   if (u.pathname.startsWith("/api/") || u.pathname === "/api" || (b !== "/" && u.pathname.startsWith(`${b}api/`))) return u.pathname;
@@ -58,17 +59,20 @@ const MAX_RECORDS = 200;
 function accountFetchAllowed(path: string, input: RequestInfo | URL, init: RequestInit | undefined, options: ApiGuardOptions): boolean {
   if (window.top !== window.self) return false;
   const page = new URL(options.href ?? location.href);
+  const requested = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, page.href);
+  if (requested.origin !== page.origin) return false;
   const base = options.base ?? '/';
   const root = base.endsWith('/') ? base : `${base}/`;
   if (![root, root.slice(0, -1) || '/', `${root}index.html`].includes(page.pathname) || page.searchParams.has('stage')) return false;
-  const expected = path === '/api/account/me' || path === '/api/account/projects' ? 'GET' :
+  const members = path === '/hosted/shared/account/members';
+  const expected = members ? 'POST' : path === '/api/account/me' || path === '/api/account/projects' ? 'GET' :
     ['/api/account/login', '/api/account/logout', '/api/account/editor/session', '/api/account/editor/renew'].includes(path) ? 'POST' : null;
   const consent = path === '/api/account/cloud-agent-consent';
   if (!expected && !consent) return false;
   const request = typeof Request !== 'undefined' && input instanceof Request ? input : null;
   const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
   const credentials = init?.credentials ?? request?.credentials ?? 'same-origin';
-  return (method === expected || (consent && (method === 'GET' || method === 'POST'))) && credentials === 'same-origin';
+  return (method === expected || (consent && (method === 'GET' || method === 'POST'))) && credentials === (members ? 'omit' : 'same-origin');
 }
 
 /** 被拦下的 SSE 的替身：readyState 已关闭，下一拍发一个 `error`，之后什么都不做 */
