@@ -79,3 +79,25 @@ root随后精准授`src/online/apiGuard.ts`及实际原test`src/online/c10a-api-
 root实际908在线首次已读`%TEMP%/pc-account-online-first-90832022-out/result.json`：sourceBefore/After同908，wall1583ms；2 fixture前置检查过，phase preflight TypeError，completed=false，没有截图/网页网络/Chrome进程，因此此次不是apiGuard失败，也不能称2/2用户路径通过。自有6341/42均listening=false/sockets0，fixture.closed/childClosed=true，profileRemoved=true。root只读最小复现定位当前已装puppeteer.executablePath返回Promise，旧getChromePath将Promise传fs.access导致ERR_INVALID_ARG_TYPE。本次精确只加await，不改其它2e82冻结源；guard缺口仍有独立pure首红，不能倒填为本次实际first原因。
 
 最小独立验证在2e82+该一行修改上用`node --input-type=module`直接import已装puppeteer/fs/assert，`await executablePath()`后断言typeof为string并实际fs.access；exit0、wall153ms，raw`%TEMP%/pc-account-chrome-path-await.log`，未输出Chrome路径/凭据、未启动浏览器或监听，无重跑。probe node --check/diff --check过，未再次执行在线/桌面/full/type；该纯文件发现修复不冒称页面链通过。原908结果与日志由root完整保留。
+
+## 账号入口棘轮资产补齐
+
+root固定0c66feb181df28711dae7161d7528023f323eeca首次full：5301/5295通过/2失败/4跳过、75.165s，raw `%TEMP%/pc-account-user-stage-0c66feb1-full.log`。本叶不重跑全量。两失败分别是旧C10-RA-01把已批准账号入口当成本机增项，以及C10A-API-03未登记apiGuard实际产物的editor/session、editor/renew精确字面量；此前764仅5条登记不足，保留该首红，不用type绿盖过。
+
+本块只改server/test/c10a-online-api-paths.json、c10-api-ratchet-baseline.json、c10-ui-gates.test.mjs与本报告。精确登记7条：editor/动态拼接字面量、editor/renew、editor/session、login、logout、me、projects；来源account-binding-task.md/account-binding-contract.md及真实client/apiGuard。旧本机baseline从历史集合只删至现19条，账号7条独立accountPaths并在测试中固定集合；unknown/account editor/login或recover、原已删ai/chat、任意本机增项及重复均拒。允许继续删除旧本机项，scanner及真实构建逐条相等断言未变，不修改apiGuard或扩大工具/API授权。下一步固定源，仅一次npm wrapper运行c10-ui-gates与c10a-online-build两文件，Vite实际在线/桌面构建只写TMP；无浏览器/业务listener/full。
+
+固定b8e60380ef9ff1ca46ee1dca8293d46209264ac3一次目标：`npm.cmd test -- server/test/c10-ui-gates.test.mjs server/test/c10a-online-build.test.mjs`，17/17通过、零失败取消跳过、3702.3346ms、wall3982ms、exit0、native重跑0，raw `%TEMP%/pc-account-ratchet-seven-1.log`。真实Vite在线及桌面构建成功，产物扫描7账号+19旧本机路径精确一致；未知账号/桌面账号恢复入口/旧本机增项/重复负向均过。测前后source b8e60380不变且clean。只使用原npm guards，无浏览器或业务listener，未全量、未另跑types；测试资产修改不借此前type/full当本块独立证据。
+
+root同0c66在线首次63.010s completed=false：真实me/login/session200、新建201/account session200，进入编辑器超时；failure-1显示连接云端失败，stageDocuments为空。raw `%TEMP%/pc-account-online-first-0c66feb1-out/result.json`及failure-1.png由root保留，Chrome/fixture/端口实际关闭。此为真实用户链未通过，与上面棘轮build修正分开。下一步仅静态查accountWS协议/握手，补探针安全HTTP握手status/pathname、消息type、close code，不输出URL完整query、headers、protocol票据或完整frame；不自行启动fixture/Chrome，不凭推断改生产权限或ready。
+
+## 真实浏览器握手诊断补充
+
+root授权仅给pages probe补安全CDP元数据：真实/hosted/ WS创建、握手HTTP status/pathname、文本消息type、close frame两字节code及closed/frame-error标记。CDP在页面导航前Network.enable，普通在线页与实际native main共用，teardown detach；没有替换WebSocket/fetch/native、没有读取或落盘完整URL/query、headers/protocol/ticket/frame正文/close reason。若Chrome握手本地拒绝而没有close frame，仅记closed而不捏造close code。node --check/diff --check通过，尚未运行fixture/浏览器，此增量不是实际握手已测证据。
+
+静态定位：syncManager.ts enterAccountProject初连只返回account票据protocol，session-link.mjs只追加session.new；service.mjs仅offered包含promptcut.v1才echo，ws.mjs否则不回Sec-WebSocket-Protocol。G真实WSS fixture明确提供v1+account并断言服务回v1，因此纯fixture已过不证明原新页面实际offer正确。root确认这是新入口遗漏既有标准协议，随后批准最窄补初连/恢复v1，生产修复将另独立提交并用真实SyncLink socket pure目标验证；不改服务Cookie/ACL/ready或代理安全规则。
+
+安全握手诊断固定35d94a48584179229b800a82af8712d73afa1bb0，仅probe/报告。实际传输协议修复固定47b1ac3882ce7f8de9f4f0f03dfdc45070d9a8eb：client.ts新增accountConnectionProtocols，syncManager初连/恢复共用标准v1+当前账号票据；reconnect.test.mjs通过真实SyncLink/createDocEndpoint捕捉实际受控WebSocket constructor参数与消息。没有改服务端协议echo、Cookie/鉴权/ACL/ready、LAN连接、全局测试配置或G夹具。
+
+固定47b一次纯目标 `npm.cmd test -- src/editor/sync/reconnect.test.mjs src/account/client.test.mjs`：9/9、零失败取消跳过、427.3331ms、wall713ms、exit0、native重跑0，raw `%TEMP%/pc-account-ws-v1-pure-1.log`。新增断言初次实际socket含v1/account/session.new，欢迎后project.open有正确projectId及seq1；断传输后resume现取更新票据、仍有v1及原sid/ack，欢迎ack1后不重open或重放已确认消息。受控Socket只在内存，无监听；client凭据接口仍受控fetch/native，不是浏览器/壳完整通过。实际root0c66首次连接失败截图与日志保留，静态因果被root确认后才修，不声称用pure证据推翻首次失败。
+
+同47b强制type `node <主仓库node_modules>/typescript/bin/tsc -b --force`：exit0零错、wall6488ms，raw `%TEMP%/pc-account-ws-v1-type-1.log`。两次测前后source同47b、clean，未启动业务服务/Chrome/桌面exe/TLS fixture/full，也没有节点/环境/依赖操作。后续需要root共同源重建并实际在线/桌面复验；新增CDP观察仅nodecheck，尚未在Chrome验证，保持这项证据边界。

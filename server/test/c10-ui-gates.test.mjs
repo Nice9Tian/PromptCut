@@ -8,7 +8,7 @@
  *   C10-UI-03 本页运行不了的用户卡、图卡（内容库同步来的没载入成功的；图卡；低内存档下的全部用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
  *             选帧、报缺口、取字节；暂停态整台「已精确」时它们的快照照挂（停下不追）——2026-09-29 用户改语义，撤销原豁免；
  *   C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧，同步表不影响桌面；
- *   C10-RA-01 `/api` 棘轮清单只减不增：清单是基线的子集，不重复。
+ *   C10-RA-01 旧本机 `/api` 清单只减不增；已批准账号入口固定7条字面量，不重复、不接受未知账号路径。
  *
  * 置灰入口「点了不发请求、不露报错」要在真页面里点，归探针与验收 C10-A7（主会话），这里只核文案。
  * 假设见 `c10-kit.mjs` 的 K7、K8、K9。门不开时整组 skip。
@@ -154,11 +154,34 @@ itUi('C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧，�
 /* ------------------------------------------------------------------ 棘轮（K9） */
 
 const ratchet = ratchetGate();
-test('C10-RA-01 /api 棘轮清单只减不增：是基线的子集、不重复', { skip: ratchet.ok ? false : ratchet.reason }, () => {
+// account-binding-task.md / account-binding-contract.md：独立固定官网同源账号入口，
+// editor/ 是动态拼接的产物字面量，不能使其它 editor 子路径获得许可。
+const ACCOUNT_PATHS = [
+  '/api/account/editor/', '/api/account/editor/renew', '/api/account/editor/session',
+  '/api/account/login', '/api/account/logout', '/api/account/me', '/api/account/projects',
+];
+function assertRatchet(paths, baseline) {
+  assert.ok(Array.isArray(paths), `${RATCHET_FILE} 应有 paths 数组`);
+  assert.deepEqual(baseline.accountPaths, ACCOUNT_PATHS, '账号许可必须是固定7条，不能扩为前缀');
+  assert.equal(new Set(paths).size, paths.length, '清单里有重复');
+  const legacy = new Set(baseline.paths);
+  assert.ok(baseline.paths.every((p) => !p.startsWith('/api/account/')), '旧基线不能夹带账号许可');
+  const added = paths.filter((p) => p.startsWith('/api/account/') ? !ACCOUNT_PATHS.includes(p) : !legacy.has(p));
+  assert.deepEqual(added, [], `棘轮清单多出了未许可的路径：${added.join(', ')}`);
+  assert.deepEqual(paths.filter((p) => p.startsWith('/api/account/')), ACCOUNT_PATHS, '账号产物清单逐条精确登记');
+}
+test('C10-RA-01 旧本机 /api 只减不增、账号入口固定7条、不重复', { skip: ratchet.ok ? false : ratchet.reason }, () => {
   const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
-  const base = new Set(JSON.parse(fs.readFileSync(repoPath(RATCHET_BASELINE), 'utf8')).paths);
-  assert.ok(Array.isArray(list.paths), `${RATCHET_FILE} 应有 paths 数组`);
-  const added = list.paths.filter((p) => !base.has(p));
-  assert.deepEqual(added, [], `棘轮清单多出了基线里没有的路径：${added.join(', ')}`);
-  assert.equal(new Set(list.paths).size, list.paths.length, '清单里有重复');
+  const baseline = JSON.parse(fs.readFileSync(repoPath(RATCHET_BASELINE), 'utf8'));
+  assertRatchet(list.paths, baseline);
+});
+test('C10-RA-02 未知账号、恢复桌面账号入口、旧本机增项和重复仍拒绝', { skip: ratchet.ok ? false : ratchet.reason }, () => {
+  const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
+  const baseline = JSON.parse(fs.readFileSync(repoPath(RATCHET_BASELINE), 'utf8'));
+  for (const extra of ['/api/account/unknown', '/api/account/editor/login', '/api/account/editor/recover', '/api/ai/chat', '/api/new-local']) {
+    assert.throws(() => assertRatchet([...list.paths, extra], baseline), { code: 'ERR_ASSERTION' });
+  }
+  assert.throws(() => assertRatchet([...list.paths, list.paths[0]], baseline), { code: 'ERR_ASSERTION' });
+  assert.throws(() => assertRatchet(list.paths, { ...baseline, accountPaths: [...ACCOUNT_PATHS, '/api/account/unknown'] }), { code: 'ERR_ASSERTION' });
+  assertRatchet(list.paths.filter((p) => p !== '/api/asset'), baseline); // 旧本机项可继续删除。
 });
