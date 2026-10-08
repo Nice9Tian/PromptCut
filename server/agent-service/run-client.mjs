@@ -2,6 +2,7 @@ import https from 'node:https';
 import { checkServerIdentity } from 'node:tls';
 import { certificateFingerprint, accountError } from '../account/client.mjs';
 import { createAgentInstanceSession } from '../agent/service/agent-instance-session.mjs';
+import { runAssetIssueRequest } from '../account/run-asset-protocol.mjs';
 
 const paths = Object.freeze({ admit: 'admit', confirmRead: 'read', queryRead: 'read/query',
   checkAccess: 'check', finish: 'finish', runTicket: 'ticket', pending: 'pending' });
@@ -23,15 +24,18 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
   /** Every call opens its own real TLS socket. The signature is constructed only
    * after secureConnect, then the exact body is sent, and completion waits for
    * the transport close. No HTTP capability is reused on a later request. */
-  function transmit(path, fields, operation = null) {
+  function transmit(path, fields, operation = null,
+    { bodyText = null, runAssetIssue = false, registerResource = null } = {}) {
     if (closed) return Promise.reject(accountError(503, 'run-client-unavailable'));
-    const encoded = Buffer.from(JSON.stringify(fields));
+    const encoded = Buffer.from(bodyText ?? JSON.stringify(fields), 'utf8');
     if (encoded.length > 1024 * 1024) return Promise.reject(accountError(413, 'run-body-too-large'));
     return new Promise((resolve, reject) => {
       let settled = false, responseReady = false, socket = null, socketClosed = false, requestClosed = false;
+      let responseSeen = false, responseClosed = false;
       let responseError = null, responseValue;
       const finish = () => {
-        if (settled || !responseReady || !(socket ? socketClosed : requestClosed)) return;
+        if (settled || !responseReady || !(socket ? socketClosed : requestClosed) ||
+            (runAssetIssue && responseSeen && !responseClosed)) return;
         settled = true; responseError ? reject(responseError) : resolve(responseValue);
       };
       const abort = error => { if (responseReady) return; responseError = error; responseReady = true; req.destroy(); finish(); };
@@ -40,6 +44,8 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
         checkServerIdentity(host, cert) { return checkServerIdentity(host, cert) ||
           (certificateFingerprint(cert.fingerprint256) !== pin ? accountError(503, 'run-server-certificate') : undefined); },
         headers: { 'content-type': 'application/json', 'content-length': encoded.length, connection: 'close' } }, res => {
+        responseSeen = true;
+        res.once('close', () => { responseClosed = true; finish(); });
         const chunks = []; let size = 0;
         res.on('data', chunk => { size += chunk.length; if (size > 1024 * 1024) res.destroy(); else chunks.push(chunk); });
         res.on('error', () => abort(accountError(503, 'run-client-unavailable')));
@@ -60,10 +66,17 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
       req.on('socket', current => {
         socket = current;
         current.once('close', () => { socketClosed = true; finish(); });
-        current.once('secureConnect', () => {
+        const registrations = registerResource ? Promise.all([
+          registerResource('stream', req), registerResource('socket', current),
+        ]) : Promise.resolve([]);
+        registrations.catch(abort);
+        current.once('secureConnect', async () => {
           try {
-            if (operation) {
-              const proof = instanceSession.proofFor({ socket: current, method: 'POST', path, operation, body: fields });
+            await registrations;
+            if (operation || runAssetIssue) {
+              const proof = runAssetIssue
+                ? instanceSession.runAssetIssueProofFor({ socket: current, body: fields, bodyText })
+                : instanceSession.proofFor({ socket: current, method: 'POST', path, operation, body: fields });
               req.setHeader(proof.name, proof.value);
             }
             req.end(encoded);
@@ -89,8 +102,19 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     queryRead: input => request('queryRead', input), checkAccess: input => request('checkAccess', input),
     finish: input => request('finish', input), runTicket: input => request('runTicket', input),
     pending: () => request('pending', {}),
+    async issueRunAsset(body, { registerResource } = {}) {
+      if (closed) throw accountError(503, 'run-client-unavailable');
+      if (registerResource !== undefined && typeof registerResource !== 'function')
+        throw accountError(503, 'run-assets-unconfigured');
+      const bodyText = JSON.stringify(body);
+      runAssetIssueRequest({ body, bodyText });
+      await instanceSession.register();
+      return transmit('/internal/v2/run-assets/issue', body, null,
+        { bodyText, runAssetIssue: true, registerResource });
+    },
     registerInstance: () => instanceSession.register(), instanceIdentity: () => instanceSession.identity(),
     dataProofFor: input => instanceSession.dataProofFor(input),
+    runAssetHttpProofFor: input => instanceSession.runAssetHttpProofFor(input),
     close() { closed = true; instanceSession.close(); for (const req of active) req.destroy(); },
   };
 }

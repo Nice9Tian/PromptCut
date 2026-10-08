@@ -3,6 +3,7 @@ import { accountError } from '../../account/client.mjs';
 import { canonicalJson, digestOf } from '../../account/ledger.mjs';
 import { instanceProofPayload, instanceTlsBinding } from '../../account/agent-instance-authority.mjs';
 import { INSTANCE_PROOF_HEADER } from '../../account/agent-instance-internal.mjs';
+import { RUN_ASSET_PROOF_HEADER, assetHttpTuple, runAssetIssueRequest } from '../../account/run-asset-protocol.mjs';
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -72,6 +73,31 @@ export function createAgentInstanceSession({ requestRegistration } = {}) {
       signature: signatureOf(payload), ...(operation === 'checkAccess' ? { action: request.action } : {}) };
   }
 
-  return { register, proofFor, dataProofFor, identity: () => registered ? { ...registered } : null,
+  function runAssetIssueProofFor({ socket, body, bodyText }) {
+    if (closed || !registered) fail('instance-not-registered');
+    const request = runAssetIssueRequest({ body, bodyText });
+    const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
+      method: 'POST', path: '/internal/v2/run-assets/issue', operation: 'checkAccess',
+      requestDigest: digestOf(request) });
+    return { name: INSTANCE_PROOF_HEADER, value: Buffer.from(JSON.stringify({
+      instanceId: registered.instanceId, instanceGeneration: registered.instanceGeneration,
+      signature: signatureOf(payload),
+    })).toString('base64url') };
+  }
+
+  function runAssetHttpProofFor({ socket, tuple }) {
+    if (closed || !registered) fail('instance-not-registered');
+    const request = assetHttpTuple(tuple);
+    const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
+      method: request.method, path: request.url, operation: 'checkAccess',
+      requestDigest: digestOf(request) });
+    return { name: RUN_ASSET_PROOF_HEADER, value: Buffer.from(JSON.stringify({
+      instanceId: registered.instanceId, instanceGeneration: registered.instanceGeneration,
+      signature: signatureOf(payload),
+    })).toString('base64url') };
+  }
+
+  return { register, proofFor, dataProofFor, runAssetIssueProofFor, runAssetHttpProofFor,
+    identity: () => registered ? { ...registered } : null,
     close() { closed = true; registered = null; challenge = null; } };
 }
