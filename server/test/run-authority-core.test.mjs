@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { runFixture, projectId, conversationId, servicePrincipal } from './run-authority-fixture.mjs';
 import { digestOf, appendAccessEvent } from '../account/ledger.mjs';
-import { createRunAuthority } from '../account/run-authority.mjs';
+import { createRunAuthority, runControlId } from '../account/run-authority.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { accountFixture, actor } from './password-order-fixture.mjs';
@@ -82,10 +82,45 @@ for (const kind of ['stop', 'delete', 'agent-disabled', 'service-revoked']) test
   const control = f.provider.fence({ kind, requestId: `fence-${kind}`, projectId, ...(kind === 'stop' ? { runId: g.runId } : {}),
     ...(kind === 'service-revoked' ? { serviceKid: servicePrincipal.serviceKid } : {}) });
   assert.equal(control.state, 'pending'); assert.deepEqual(control.revoked, [g.runGrantId]);
-  assert.throws(() => f.provider.acknowledgeControl({ requestId: control.requestId, receipt: { complete: true } }), /verifier-unavailable/);
-  assert.throws(() => f.provider.acknowledgeControl({ requestId: control.requestId, receipt: { complete: true } }, () => false), /incomplete/);
+  const ack = { controlId: control.controlId, receipt: { controlId: control.controlId, fenceRevision: control.fenceRevision, receiptId: 'receipt1', complete: true } };
+  assert.throws(() => f.provider.acknowledgeControl(ack), /verifier-unavailable/);
+  assert.throws(() => f.provider.acknowledgeControl(ack, () => false), /incomplete/);
   assert.equal(f.ledger.read().runGrantsV2[g.runGrantId].state, 'revoked');
   await assert.rejects(f.principal(g), /run-no-longer-current|run-revoked/);
+});
+
+test('same requestId in distinct real conversation/project scopes has distinct private controls and ACKs', async t => {
+  const f = await fixture(t); f.enqueue(); const g = await f.admit(); await f.provider.confirmRead(f.input(g));
+  f.ledger.transaction(s => {
+    const original = s.conversationsV2[projectId][conversationId];
+    const second = structuredClone(original); second.id = 'conversation_second'; second.currentRunId = null;
+    second.messages[0] = { ...second.messages[0], messageId: 'second-message', requestId: 'send-second', queueState: 'queued', runId: null, readReceiptId: null };
+    s.conversationsV2[projectId][second.id] = second;
+    s.projects.sp_second = { ...structuredClone(s.projects[projectId]), projectId: 'sp_second' };
+    s.conversationsV2.sp_second = { [conversationId]: { ...structuredClone(second), projectId: 'sp_second', id: conversationId, messages: [] } };
+  });
+  const secondGrant = await f.provider.admit({ servicePrincipal, projectId, conversationId: 'conversation_second', requestId: 'admit-second' });
+  await f.provider.confirmRead({ ...f.input(secondGrant, 'read-second'), conversationId: secondGrant.conversationId });
+  const scopes = [[projectId, conversationId], [projectId, 'conversation_second'], ['sp_second', conversationId]];
+  const controls = scopes.map(([p, c]) => {
+    f.ledger.transaction(s => f.hooks.privateFenceInState(s, { projectId: p, conversationId: c, ownerAccountId: 'owner', requestId: 'same-id', runHooks: f.provider.hooks }));
+    const input = { kind: 'private', projectId: p, conversationId: c, requestId: 'same-id' };
+    const stored = f.ledger.read().runControlsV2[runControlId(input)];
+    assert.equal(f.ledger.read().conversationsV2[p][c].visibility, 'private');
+    assert.deepEqual(f.provider.fence(input), stored, 'same exact scope and body is idempotent');
+    return stored;
+  });
+  assert.equal(new Set(controls.map(c => c.controlId)).size, 3);
+  assert.equal(controls[0].operationFences[0].id, `${controls[0].controlId}:${projectId}`);
+  assert.notEqual(controls[0].operationFences[0].id, controls[1].operationFences[0].id);
+  assert.throws(() => f.provider.fence({ kind: 'private', projectId, conversationId, requestId: 'same-id', accountIds: ['different'] }), /run-request-mismatch/);
+  const receipt = { controlId: controls[0].controlId, fenceRevision: controls[0].fenceRevision, receiptId: 'actual-close1', complete: true };
+  assert.throws(() => f.provider.acknowledgeControl({ controlId: controls[1].controlId, receipt }, () => true), /receipt-mismatch/);
+  assert.throws(() => f.provider.acknowledgeControl({ requestId: 'same-id', receipt }, () => true), /not-found/);
+  const verify = (_s, control, proof) => proof.receiptId === 'actual-close1' && control.controlId === controls[0].controlId;
+  assert.equal(f.provider.acknowledgeControl({ controlId: controls[0].controlId, receipt }, verify).state, 'complete');
+  assert.equal(f.ledger.read().runControlsV2[controls[1].controlId].state, 'pending');
+  assert.deepEqual((await f.provider.synchronize()).map(c => c.controlId).sort(), controls.slice(1).map(c => c.controlId).sort());
 });
 
 test('run references cannot alter any actor/project/service binding; normal finish releases FIFO only once', async t => {

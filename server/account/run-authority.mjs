@@ -50,6 +50,13 @@ const member = (s, c, ref) => {
   if (p.bans?.[ref.accountId] || (p.creatorAccountId !== ref.accountId && p.members?.[ref.accountId]?.access !== 'rw')) reject(403, 'member-revoked');
   if (c.visibility === 'private' && c.ownerAccountId !== ref.accountId) reject(403, 'private-run-forbidden');
 };
+// Request IDs are local to a logical operation scope. Targets within the operation
+// (login/account lists) belong to the payload digest, so changing them is a conflict.
+export function runControlScope(fence) {
+  return { kind: fence.kind, projectId: fence.projectId ?? null, conversationId: fence.conversationId ?? null,
+    runId: fence.runId ?? null, serviceKid: fence.serviceKid ?? null, requestId: fence.requestId };
+}
+export const runControlId = fence => `run-control:${digestOf(runControlScope(fence))}`;
 
 /** Durable run authorization, composed with conversation helpers in ONE account ledger
  * transaction. Service authentication is an owner-supplied capability. Complete sent
@@ -96,7 +103,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   function fenceInState(s, f) {
     tables(s); request(f.requestId);
     if (!['credential', 'member', 'private', 'stop', 'delete', 'agent-disabled', 'service-revoked'].includes(f.kind)) reject(400, 'invalid-run-fence');
-    const key = `control:${f.requestId}`, digest = digestOf(f);
+    const scope = runControlScope(f), key = runControlId(f), digest = digestOf(f);
     const old = replay(s.runControlsV2, key, digest); if (old) return copy(old);
     const revision = seq(s), retained = [], revoked = [], cancelled = [];
     const matches = g => (!f.projectId || g.projectId === f.projectId) &&
@@ -132,11 +139,11 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
         cancelled.push(m.messageId);
       }
     }
-    const control = { digest, requestId: f.requestId, kind: f.kind, projectId: f.projectId ?? null,
+    const control = { controlId: key, scope, digest, payloadDigest: digest, requestId: f.requestId, kind: f.kind, projectId: f.projectId ?? null,
       fenceRevision: revision, retained, revoked, cancelled, state: 'pending', receipt: null };
     const affected = [...retained, ...revoked].map(id => s.runGrantsV2[id]);
     control.operationFences = [...new Set(affected.map(g => g.projectId))].map(projectId => ({
-      id: `${f.requestId}:${projectId}`, projectId,
+      id: `${key}:${projectId}`, projectId,
       kind: ['credential', 'member'].includes(f.kind) ? 'credential' : f.kind === 'service-revoked' ? 'agent-disabled' : f.kind,
       loginIds: [...new Set(affected.filter(g => g.projectId === projectId).map(g => g.loginId))],
       runIds: revoked.map(id => s.runGrantsV2[id]).filter(g => g.projectId === projectId).map(g => g.runId),
@@ -170,7 +177,10 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       s.runAccessCursorV2 = e.seq;
     }
   }
-  const sync = async () => { await synchronize(); ledger.transaction(s => { reconcile(s); }); };
+  const sync = async () => {
+    await synchronize();
+    return ledger.transaction(s => { reconcile(s); return Object.values(s.runControlsV2).filter(c => c.state === 'pending'); });
+  };
   function applyAccessEvent(event) {
     const controls = ledger.transaction(s => {
       const stored = s.accessEvents.find(e => e.eventId === event?.eventId && e.seq === event?.seq);
@@ -332,10 +342,12 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     // Delivery is retriable. Only a separately verified close receipt can complete it.
     onControl(copy(result)); return result;
   }
-  function acknowledgeControl({ requestId, receipt }, validateReceiptInState) {
+  function acknowledgeControl({ controlId, receipt }, validateReceiptInState) {
     if (typeof validateReceiptInState !== 'function') reject(503, 'run-control-verifier-unavailable');
     return ledger.transaction(s => {
-      const control = s.runControlsV2?.[`control:${requestId}`]; if (!control) reject(404, 'run-control-not-found');
+      const control = s.runControlsV2?.[controlId]; if (!control) reject(404, 'run-control-not-found');
+      if (receipt?.controlId !== control.controlId || receipt.fenceRevision !== control.fenceRevision ||
+        receipt.complete !== true || !text(receipt.receiptId)) reject(403, 'run-control-receipt-mismatch');
       if (control.receipt) {
         if (canonicalJson(control.receipt) !== canonicalJson(receipt)) reject(409, 'run-control-ack-mismatch');
         return copy(control);
