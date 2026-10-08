@@ -58,11 +58,24 @@ function command(executable, args, timeout) {
 }
 async function describe(unit, timeout) {
   const names = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'Description', 'User', 'Restart', 'KillMode', 'Delegate',
-    'Slice', 'InvocationID', 'Transient', 'StopWhenUnneeded'];
-  const result = await command('/usr/bin/systemctl', ['show', unit, '--no-pager', ...names.map(n => `--property=${n}`)], timeout);
+    'Slice', 'InvocationID', 'Transient', 'StopWhenUnneeded', 'FragmentPath', 'SourcePath', 'DropInPaths', 'Job', 'Following'];
+  const result = await command('/usr/bin/systemctl', ['show', unit, '--no-pager', '--all', ...names.map(n => `--property=${n}`)], timeout);
   if (result.timedOut) fail('probe-systemctl-timeout');
   const value = Object.fromEntries(result.stdout.trim().split('\n').map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
   return value;
+}
+
+export function assertUnusedSlice(state, slice) {
+  // v249 unit_is_pristine explicitly permits LOADED synthetic slices. show
+  // itself loads this implicit object. Still reject configured, used, queued,
+  // transient, merged/other-ID and non-default objects; never relax service.
+  if (!/^pcassetproof[a-f0-9]{16}\.slice$/.test(slice) || state.Id !== slice ||
+      state.LoadState !== 'loaded' || state.ActiveState !== 'inactive' || state.SubState !== 'dead' ||
+      // systemctl v249 prints an absent D-Bus Job (0, '/') as Job=, not Job=0.
+      state.Transient !== 'no' || state.StopWhenUnneeded !== 'no' || state.Job !== '' || state.Following !== '' ||
+      state.Description !== `Slice /${slice.slice(0, -6)}` || state.User || state.MainPID ||
+      ['FragmentPath', 'SourcePath', 'DropInPaths', 'InvocationID', 'ControlGroup'].some(key => state[key] !== ''))
+    fail('probe-unit-exists');
 }
 
 async function durableJSON(root, name, value) {
@@ -178,12 +191,19 @@ export async function runAssetCgroupOSProbe({ user, out }) {
         current.dev !== groupStat.dev || current.ino !== groupStat.ino) fail('probe-pinned-object-changed');
     return Number(match[1]);
   }
+  async function checkSliceVacancy() {
+    const state = await describe(slice, time());
+    assertUnusedSlice(state, slice);
+    // ENOENT is only a pre-creation collision check. It is never closure proof.
+    try { await fs.lstat(scopeDirectory); }
+    catch (e) { if (e.code === 'ENOENT') return state; throw e; }
+    fail('probe-slice-path-exists');
+  }
   try {
     if (await fs.readlink('/proc/self/ns/net') !== await fs.readlink('/proc/1/ns/net')) fail('probe-network-namespace');
     result.preflightListeners = await listeners(); if (result.preflightListeners.length) fail('probe-port-occupied');
-    for (const name of [unit, slice]) {
-      const initial = await describe(name, time()); if (initial.LoadState !== 'not-found') fail('probe-unit-exists');
-    }
+    const initial = await describe(unit, time()); if (initial.LoadState !== 'not-found') fail('probe-unit-exists');
+    result.slicePreflight = await checkSliceVacancy();
     const uid = await command('/usr/bin/id', ['-u', '--', user], time()), gid = await command('/usr/bin/id', ['-g', '--', user], time());
     if (uid.code || gid.code || !/^[1-9][0-9]*\s*$/.test(uid.stdout) || !/^[1-9][0-9]*\s*$/.test(gid.stdout)) fail('probe-user-unavailable');
     result.uid = Number(uid.stdout); const groupId = Number(gid.stdout);
@@ -202,6 +222,7 @@ export async function runAssetCgroupOSProbe({ user, out }) {
     // v249 supports transient .slice via the Manager API. systemd-run only has
     // --slice (not --slice-property); do not accidentally put properties on the
     // service. No runtime unit files, daemon-reload, or cgroup delegation.
+    await checkSliceVacancy();
     sliceAttempted = true;
     const created = await command('/usr/bin/busctl', ['--system', '--no-pager', 'call', 'org.freedesktop.systemd1',
       '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
