@@ -202,7 +202,8 @@ test('actual account SQLite password choice: no exit keeps run, exit retains exa
     const account = await accountFixture({ dir, actual: true }); let authority;
     const f = await runFixture({ dir, verifySender: ref => account.credentials.verifyActorRef(ref),
       synchronize: () => authority.synchronize() });
-    authority = createAccountAuthority({ ledger: f.ledger, pollMs: 0, accountClient: { events: after => account.store.events(after) } });
+    authority = createAccountAuthority({ ledger: f.ledger, pollMs: 0, runHooks: f.provider.hooks,
+      accountClient: { events: after => account.store.events(after) } });
     t.after(() => { authority.close(); f.close(); account.close(); fs.rmSync(dir, { recursive: true }); });
     f.enqueue();
     f.ledger.transaction(s => {

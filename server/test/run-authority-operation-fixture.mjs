@@ -34,7 +34,8 @@ export async function runOperationFixture({ port = 5730, request, afterGate, wai
     if (result.purpose !== 'accepted-message') throw new Error('wrong accepted purpose');
     return { ...result.actorRef, accountEventSeq: result.accountEventSeq };
   } });
-  authority = createAccountAuthority({ ledger: f.ledger, pollMs: 0, accountClient: { events: after => accountStore.events(after) } });
+  authority = createAccountAuthority({ ledger: f.ledger, pollMs: 0, runHooks: f.provider.hooks,
+    accountClient: { events: after => accountStore.events(after) } });
   f.enqueue(); f.ledger.transaction(s => {
     s.projects[projectId].members[accountId] = { access: 'rw' };
     const m = s.conversationsV2[projectId][conversationId].messages[0];

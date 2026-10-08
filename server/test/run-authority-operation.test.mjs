@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { runOperationFixture } from './run-authority-operation-fixture.mjs';
 import { ask } from './fake-docservice-env.mjs';
 import { stateBlobName } from '../docservice/modules/project.mjs';
-const actual = { skip: !process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT && 'Actual accepted-message and active-order providers required' };
+const actual = { skip: !process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT && 'Actual accepted-message and active-order providers required', timeout: 15000 };
 const open = (c, projectId) => ask(c, { type: 'project.open', projectId }, 10000);
 const op = (c, projectId, opId, title = opId) => ask(c, { type: 'project.op', projectId, opId, ops: [{ op: 'set', path: '/title', value: title }] }, 10000);
 
@@ -53,8 +53,10 @@ for (const kind of ['private', 'stop']) test(`real ${kind} fence during active-4
     if (value.retainedGrant && !fenced) { fenced = true; own.control(kind); }
   } }); t.after(() => f.close());
   const c = await f.connect(); await open(c, f.projectId);
-  const reply = await op(c, f.projectId, `fenced-${kind}`);
-  assert.notEqual(reply.type, 'project.op.ok'); assert.equal(seals, 1); assert.equal(f.history.accepted(f.projectId).length, 0);
+  c.send({ type: 'project.op', projectId: f.projectId, opId: `fenced-${kind}`, ops: [{ op: 'set', path: '/title', value: 'must-not-land' }] });
+  await c.closed; await f.wiring.idle();
+  assert.equal(fenced, true); assert.equal(c.all.some(m => m.type === 'project.op.ok'), false);
+  assert.equal(seals, 1); assert.equal(f.history.accepted(f.projectId).length, 0);
   assert.equal(JSON.parse(f.store.readBlob(stateBlobName(f.projectId))).project.title, 'before');
 });
 
