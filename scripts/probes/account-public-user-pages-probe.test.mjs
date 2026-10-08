@@ -6,7 +6,48 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+import * as publicPath from './lib/account-public-path.mjs';
 import { publicOptions, projectFromVisibleLink, projectFrameMetadata, testAccountMetadata, resourceMetadata, testIdentities } from './lib/account-public-path.mjs';
+
+for (const name of ['enterNewProject', 'joinProject']) test(`actual ${name} waits for enabled controls before input and again before click`, async () => {
+  const source = await fs.readFile(new URL('./account-public-user-pages-probe.mjs', import.meta.url), 'utf8');
+  const body = new RegExp(`async function ${name}\\([\\s\\S]*?\\n}`).exec(source)?.[0];
+  assert.ok(body);
+  let enabled = false, stopped = false;
+  const fills = [], clicks = [];
+  const node = { disabled:false, readOnly:false, getClientRects:() => [1] };
+  const button = { ...node, get disabled() { return !enabled; } };
+  const document = { querySelector:selector => selector.includes('cloud-create') || selector.includes('cloud-join') ? button : node };
+  const page = {
+    async waitForFunction(predicate, _options, ...args) {
+      const check = vm.runInNewContext(`(${predicate.toString()})`, { document });
+      while (!check(...args)) {
+        if (stopped) throw new Error('controlled-test-stopped');
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    },
+    async click(selector) { clicks.push(selector); throw new Error('controlled-after-real-click'); },
+  };
+  const action = vm.runInNewContext(`(${body})`, {
+    waitForEnabledForm:publicPath.waitForEnabledForm,
+    projectStep:async (_page, _stage, callback) => callback(),
+    type:async (_page, selector) => { fills.push(selector); enabled = false; },
+  });
+  const outcome = action(page, name === 'joinProject' ? { link:'controlled-input' } : 'controlled-input', 'controlled').then(() => null, error => error);
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fills.length, 0, 'busy controls must prevent even early input');
+    assert.equal(clicks.length, 0);
+    enabled = true;
+    while (!fills.length) await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(clicks.length, 0, 'a new disabled interval during input must prevent submit');
+    enabled = true;
+    assert.equal((await outcome)?.message, 'controlled-after-real-click');
+    assert.equal(fills.length, 1); assert.equal(clicks.length, 1);
+  } finally { stopped = true; enabled = true; await outcome; }
+});
 
 test('public writes require an explicit flag and private native arguments never change the public host', () => {
   assert.equal(publicOptions([]).run, false);
