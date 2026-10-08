@@ -420,3 +420,67 @@ root执行闭包需带publisher→共享schema/account ledger的正常相对依�
 本机有因counter源码 `%TEMP%/pc-asset-v2-worker-signal-counter.mjs` 从worker实际完整stop/注册代码块提取并执行，使用真实Node process EventEmitter，受控延迟门与关闭计数，不发送OS信号、不建立网络listener。旧字节SHA256 `b16cf802e08a5d892de9fbde5224ac3191860ecba69d9393a29c49b4f85f4da2` 的首次反例日志 `%TEMP%/pc-asset-v2-worker-signal-red.log`：首次handled=true，待关闭listener=0，第二次handled=false，断言exit1。新代码日志 `%TEMP%/pc-asset-v2-worker-signal-green.log`：listener=1，两次均handled=true；释放门前fileclose/socketend均0，delay仅一次；释放后fileclose/socketend各一次，exit0。Windows Node24.19.0的此结果只证明JS注册/幂等因果，不冒充Linux systemd SIGTERM、真实FD/TCP或双epoch整体通过。
 
 新worker `node --check` exit0，diff-check通过；本轮没有npm、types、full或任何业务listener。producer/schema/OSprobe文件不变。root下一次单独Linux执行仍必须实际观察父birthgone而子资源在/pop1，再观察真实空与关闭，不能用本counter替代；doc epoch2/full-history/checkpoint联合结果仍待该轮证据。
+
+## 即时撤销的doc→Agent接线提案（只读，等待root分配实现租约）
+
+本提案按root指示恢复前一只读任务，与上节worker修复分别提交。固定审读对象为main `53b7246c265d56d49d7ec12a55096602f3fb0cc3`；本次查询时main已到`037587670cb6c0cd28379d4ee72d6007821a3b02`，只读diff确认下表的conversation-authority、doc-agent-assembly、HTTP、conversation-policy、run-control在两点之间无差异。不借owner WIP作为验证。未改任何产品文件，尤其未改Sol独占的account-hosted.mjs/combo.mjs；没有运行服务、节点、测试或额外Agent。下面的counter是待租约后执行的精确验证设计，不是已跑通过。
+
+### 已有能力与实缺口
+
+| 固定53源码位置 | 实际能力/缺口 | 接线要求 |
+|---|---|---|
+| `server/agent/service/conversation-policy.mjs:49` | account模式`onRevoke`是空订阅 | 接真实控制来源，不接自报事件或轮询布尔 |
+| `server/agent-service/http.mjs:142–204` | SSE每250ms拉取并逐事件access RPC，但旧合法access结果返回→res.write之间无本地撤销门；158–169库存只记projectId/userId，close先删库存再res.end | 在请求开始和异步鉴权前建本地pending项，可信鉴权后绑定精确读身份；撤销同步封输出，再等response/socket实际close |
+| 同文件`207–223` | list/get在await之后直接sendJson，未纳入openStreams | 普通有限正文也必须纳入，不能只修SSE |
+| 同文件`89–95` |旧onRevoke只按project/user过滤，既不表达conversation/loginGeneration，也不await关闭 | 账号路径用完整可信scope；LAN旧路径不改变 |
+| `server/hosted/doc-agent-assembly.mjs:70–98,115–125` | 已在首await前建立真实doc数据连接fence，随后operation持久收口；docRunClosures明确complete:false，onFence最终503 | 保留真实部分证据，补Agent传输/任务资源证据后才完成，不将现有pending改成假ACK |
+| `server/account/conversation-authority.mjs:112,220–251` | private与队列取消/run fence在同ledger事务；成功返回仍等待onFence | 在同事务建立持久人类读控制及pending完成屏障，不能仅依run库存 |
+| `server/account/run-authority.mjs:160–169` | 普通control.instances来自affected grants，特例instance-revoked可枚举零grant实例 | 没有run但正在读历史的Agent实例也必须登记；不能推断affected grants为空就是资源为空 |
+| `server/agent-service/run-control.mjs:26–60` | 现独立receiver只有doc cert和instanceId/kid绑定，缺generation；inFlight键未绑定payloadDigest；没有挂到实际main | 不能直接把它当生产完成通道；复用其drain概念而不绕实例证明 |
+| `server/agent/service/account-runner.mjs:248–272` | drain能abort并等实际runner completion；通知callback未await；dispatchesOpen固定0，socket/children证明依注入、默认false | 接实际资源库存与可等待close；unknown历史实例仍pending，不能将callback true当部署证据 |
+| `server/docservice/modules/account-projects.mjs:73–79`与`server/account/authority.mjs:304–318` | Agent access-event ACK入口按服务证书接受complete/数组，存储校验cursor与幂等，但尚未强制关联精确实例已落盘的真实关闭控制 | 新Agent ACK必须由doc已核验控制receipt派生，不能另从旧入口提交自由complete绕过 |
+| `server/agent-service/main.mjs:321–338` | 注册真实RAM实例，但account ready明确runAuthorityMounted:false/runDataProofReady:false | 本小阶段能先完成HTTP访问撤销；不能因队列/读通路通过就宣称真实模型已运行、已停 |
+
+语义边界：`docs/plan/account-binding-task.md`明确项目创建者能只读成员私有对话，此例外保留；切私有必须停所有非owner当前run，包括creator的run，并取消其queued。改密选择退出/踢人的共有已读current run可以retained，但旧登录的人类HTTP访问必须关闭；private/unread/下一轮不享例外。选否、合法新登录、其他项目/账号不误伤；开回shared不复活被取消队列。模型/工具、素材OS witness和Agent人类响应属于不同证据域，不能彼此替代。
+
+### 三级最小机制与时序
+
+一级用户流程、二级上述权限不改。三级修改前是“每次fresh RPC＋250ms下一轮发现”；修改后是“持久控制顺序＋精确实例订阅＋本地同步输出门＋真实关闭后完成”。仅加push仍不能消除doc提交到远端收到之间的传播间隔；不能将该间隔藏在RPC通过或ACK布尔里。
+
+1. **读资源先登记。** Agent HTTP收到账号请求即登记本地pending dispatch，包含实际req/res/socket和可取消的下游RPC；可信delegation解析后才绑定accountId/loginId/loginGeneration/project/conversation/操作范围。doc同ledger给精确实例登记读会话/请求库存，保证任何正文取回或输出前已有可被fence覆盖的readHandle。客户端传来的handle/instance只是引用，不是权限。list覆盖整个项目对话集合，不能只登记某一个conversation。鉴权晚返回必须再核本地barrier及doc head，不允许掉在已扫描库存之外。
+2. **doc持久prepare。** private/stop/access事件在现有同一ledger事务中立即封新准入、取消应取消队列和run，并追加不可变read-control/outbox与精确实例集合；连零run读者也纳入。保存kind、project/conversation、affected login集合/成员cohort、owner/creator读取规则、access/acl/run fence版本和payloadDigest。复用现有run hook组合入口；无异步等待留在SQLite事务里。scope的确定性id按完整逻辑操作域生成，不能改随机id规避重试。
+3. **真实控制订阅。** 建议Agent主动连现有doc内部mTLS端口的专用控制流，避免新增生产Agent监听地址。请求用同OS RAMkey、真实当前socket exporter、新nonce、完整method/path/requestDigest签名；doc逐次核当前kid/instanceId/generation。新增独立control订阅/ACK的精确operation scope，不能复用pending metadata、run read或write cap。持久连续seq/head与内容digest；首次订阅先核完整未完成控制，caught-up前账号响应保持关闭；断线立即封本地新输出/准入，重连须完整补齐，缺口503。流活着本身不是旧资源close证据。
+4. **Agent先同步封门。** 收到控制后，在第一个await之前标记匹配读资源和run禁止继续输出/派发，abort下游RPC，清理尚未执行的写回callback。所有res.write/sendJson进入同一同步gate：检查到write之间不得await；旧RPC迟到结果一律丢弃。对必须关闭的HTTP响应执行实际destroy/abort并等所属response及socket close；不能先从库存移除再声称为空。finite response、SSE、backpressure中的写、尚未完成鉴权都在此库存。运行中的共享retained任务只保留其精确run资源，绝不因此保留人类连接；private/Agentoff/delete优先停止。
+5. **实际close再持久receipt。** 每个实例的receipt绑定authorityId/controlId/seq/payloadDigest/fenceRevision/instanceId/instanceGeneration/serviceKid、明确closed readHandle/dispatch/run/resource集合及对应关闭记录。资源无归属、旧OS失联、外部child/cgroup证据不齐时只能pending。先落盘不可变receipt再发签名ACK；ACK丢失重送同一内容，改内容409。doc同事务核control当前内容、目标全覆盖、实际已登记来源、重复一致和完整连续游标，再将read barrier/run control/account-event相应完成记账。历史OS关闭仍需要独立部署侧witness，不能由新实例空库存代签。
+6. **成功的线性化点。** 现有private状态可立即对新请求拒绝，但应显式记录closePending；只有相关Agent关闭receipt＋现有doc operation/transport证据全部持久后才回复切私有/停任务完成。旧许可属于未结清读资源，必须被关闭或结清，不能在“已成功切私”之后写出。改密成功仍先成功再询问；只有选退出后的logout-complete等待全服务证据，不把改密本身绑到doc在线。网络此前已经发送并被对方保存的字节无法撤回，验收需精确定义为fence后不再新enqueue正文、成功线性化后受影响通道已真实关闭，不能声称擦除既有历史。跨进程无法保证在远端尚未收到控制的同一物理瞬间立即停止，必须用上述有界pending及完成屏障表达，不能宣称单push提供这种保证。
+
+互锁要求：prepare持久后释放ledger/project锁再送控制；Agent先abort被控数据RPC，不等待这些RPC成功返回才封门；控制流/ACK不能被自己的普通读fence关闭，不携带用户正文；不能持全局锁等待某个项目close。private发起者合法控制请求与被撤销读库存分开，避免等待自己回复才能ACK。新实例注册/同证书重连不继承旧库存为空；doc重启用durable inventory恢复pending，旧Agent用原RAMkey重证明，新key无权完成旧receipt。
+
+### 候选接口（待root定租约后冻结，不是现有导出）
+
+- doc `readControl.hooks.fenceInState(state, event)`：同现有runHooks组合，返回controlRef并记持久outbox，任何失败令同事务回滚。credential/member event的完整cohort来自已核account事件，不能只复制runIds。
+- doc `openRead({instanceInvocation, delegationRef, projectId, conversationId?, action, requestId})`：重核真实delegation/current access，登记readHandle与当前head，返回handle；不接body principal。`subscribeControls`和`acknowledgeControl`使用独立精确签名scope，包含full cursor/digest/handle集合；cap只在本次请求/完整流生命周期有效，结束release。
+- Agent `transports.begin(req,res)` → `bindTrustedIdentity(...)` → `writeIfCurrent(handle,bytes)`；`fence(control)`同步关门并返回`closed` Promise；`snapshotPending`只诊断，不能充receipt。下游conversation client接受AbortSignal，并暴露实际request/socket close结清Promise。
+- Agent `controlClient.start({instanceSession, transports, runManager?})`复用真实runClient的RAM实例密钥，不再生成并行身份；订阅控制按连续顺序落本地checkpoint，实际资源closure回执先耐久。没有runManager时真实executor保持未挂载，不伪造stoppedRuns；只对已确定无run历史且人类资源完整归属的控制完成相应HTTP部分。
+- doc completion将existing runAuthority.acknowledgeControl的validateReceiptInState接到真实ledger evidence。旧`/access/events/.../ack`对service=agent不得绕过这一验证，其它服务路径不趁机扩改。
+
+### 精确租约建议（全部尚未动）
+
+第一块建议新建三个独占文件：`server/account/agent-read-control.mjs`（doc持久库存/控制/receipt）、`server/agent-service/conversation-control-client.mjs`（同实例TLS控制消费）、`server/agent/service/conversation-transports.mjs`（实际HTTP输出与close库存）。对应独占测试可用`server/test/agent-read-control.test.mjs`、`server/test/agent-read-control-transport.test.mjs`，故障子fixture限定同前缀。先真实counter首红，再逐接口实现。
+
+既有最小接点：
+
+- doc：`server/account/conversation-authority.mjs`（同事务private/read库存及完成状态），`server/account/authority.mjs`（组合fence/Agent ACK核验），`server/account/conversation-internal.mjs`（绑定真实实例的read handle），`server/account/agent-instance-authority.mjs`（只新增control精确scope），`server/hosted/doc-agent-assembly.mjs`（现内部handler、同ledger hook与delivery/receipt），`server/docservice/modules/account-projects.mjs`（Agent ACK不得绕过验证）。控制内部HTTP handler可放新agent-read-control模块，经assembly挂接，不另修改run-internal普通run协议。
+- Agent：`server/agent/service/conversation-policy.mjs`、`server/agent-service/http.mjs`、`server/agent-service/conversation-client.mjs`、`server/agent-service/run-client.mjs`（只受限复用instance signer）、`server/agent-service/main.mjs`（注册后开始控制client，未同步前拒绝读，关闭真实结清）。
+- 任务实际关闭另一个小块：`server/agent/service/account-runner.mjs`及`server/agent-service/run-control.mjs`（如保留该receiver，补完整binding与持久幂等），只接已有真实runner/resource inventory，不同时扩大模型启动功能。是否还需run-resources改动应由首counter证明，暂不申请。
+- **排除**Sol当前`server/docservice/account-hosted.mjs`和`server/hosted/combo.mjs`。已有runtime runHooks/getRunProvider/onRunControl注入可承接组合；若实际挂载还缺一处，仅向root给明确callback签名由该owner接，不双写。这份范围是供root拆包分配，不是自行取得全部租约。
+
+### 可验收counter与边界
+
+1. 真实SQLite/doc authority创建共有对话，普通成员B打开SSE；让真实access RPC合法完成，在Agent消费这个真实结果之前用受控Promise门暂停。A真实private事务落库、queue/run fence与pending成立，随后释放旧结果。旧HTTP源码会res.write旧正文，形成确定race；不能用fake allow代替真实RPC。新实现先等实际控制同步gate建立再释放，body计数必须0。
+2. 受控挂住实际response/socket close完成观察：同步gate已拒绝写，但doc不得返回完成ACK；释放并收到真实close后，才允许持久receipt和成功回复。有限GET/list、首次SSE、后续消息、queue.state分别覆盖；没有run时同样必须覆盖。actual socket/client EOF是集成证据，纯函数调用不能替代。
+3. 在权限RPC发出前、await期间、返回后、写入backpressure待drain各个明确门执行kick/private/password-exit；验证没有晚来的鉴权callback重新登记/写出。控制丢包/断线时本地failclosed，doc完成仍pending；同实例重连完整补序后才恢复合法请求，gap/乱序/篡改digest拒绝。
+4. 真实shared已读current run在kick/exit后retained，人的HTTP连接关闭且不能发新消息，已排未读取消；private同run必须中止且queued不复活。creator私有可读但不可发消息、其非owner当前run同样停；选否、新登录、不同项目与其他合法账号正向不受损。
+5. 同control ACK丢失只重发同receipt；旧实例unknown、新OS同证书、错误generation/实例、同control异payload、缺任一资源closed证据全不得完成。doc/Agent重启分别验证inventory/receipt恢复，不自动重播execution-started模型或外部作用。
+
+验收分层：首纯状态counter只能证明顺序与拒绝；真实HTTP/TLS两角色及实际close证明传输接线；真实runner/ToolJobs停止另给归属、actualclose与不重播证据；部署OS历史关闭与publisher/asset独立Linux witness仍另验。当前没有任何新执行结果，不称race已修，也不阻塞已独立通过的基础账号成果。
