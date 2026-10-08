@@ -37,3 +37,17 @@ target-2固定324ca429，同一测试：2/2/0/0/0，4086.7212ms，TMP/pc-doc-ass
 authority同步钩子源码03ee7fd1。定向`account-assembly-fence-transaction.test.mjs`：1/1/0/0/0，118.5064ms，TMP/pc-doc-assembly-fence-1.log。实际provider与SQLite验证admin/revocation transaction内同步hook，throw/thenable整事务回滚，agent-off空affected仍通知，off→on→重启保留immutable service/enabled。该测试hook仅在真实事务中写受控证据，不是实际runGrant provider；receipt仍pending/null。原account事件seq/权限策略保留，缺hook且已有durable grants拒，page-only无grant不会自由授予run。
 
 后续runtime增量新增trusted getRunProvider/onRunControl、每消息/resume run核验，先关受影响page再处理run持久control，保留run要求provider返回精确retainedGrant。Agent-off不会误撤普通page。缺provider或失败关闭run，不自由ACK。本增量尚待真实run模块组合验证。按根指示固定此暂停点并停止编辑，由root组合conversation来源b25e5de8；不自行cherry-pick/merge。types/full尚未运行，待完整依赖固定后必要验证。
+
+## 可信选区与专用真实连接关闭
+
+选区源码e662aaf7：`captureSnapshot`只接受服务端principal/projectId/pageId，从现存未blocked、非synthetic的live entry取选区；账号/login/credential/generation四字段和page精确匹配，检查前后重新核live authority与entry对象身份。空选区真实输出空clipIds，不采客户端selection/name，不给离线发送兜底。独立target `account-assembly-selection-capture.test.mjs` 5/5/0失败/0取消/0跳过，78.1451ms，TMP/pc-doc-assembly-capture-1.log；尚非Agent UI送票据闭环。
+
+根窄扩租`server/docservice/service.mjs`、`http-transport.mjs`、`session.mjs`供dedicated fenceConn；常规close/tail-replay契约保持。源码8ba09633新增：同步会话fence丢未确认帧、SID立墓碑，真实WS TCP close Promise；HTTP请求/响应actual close及其已关联keep-alive socket保留到真实socket close（HTTP finish/res close不能代socket close）；精确fencePrincipals覆盖已在异步authenticate期间的admission registry并阻止旧身份晚入场。清逻辑连接不是ACK，返回receipt仅代表这些已关联doc transport实际关闭，未代表Agent工具/进程或跨重启OS已闭口。
+
+首轮新受控target固定8ba09633：4/4/0失败/0取消/0跳过，2151.9183ms，TMP/pc-doc-assembly-transport-fence-1.log。实际HTTP已end而keepalive TCP仍open时，覆盖server owned socket `_destroy` callback gate：describe=0、old SID recv/resume=410时receipt仍未完成，释放callback且实际closed才完成。其它测试覆盖held LP GET和未完整读取POST的两个socket分别释放、WS actualclose、异步authenticate前后窗口；所有gate仅替换该测试创建的socket实例，不碰其他进程/socket/global prototype。
+
+原三份transport/session回归固定8ba09633：33/33/0失败/0取消/0跳过，5535.9877ms，TMP/pc-doc-assembly-transport-regression-1.log。原`listen(0)`由OS原子分配临时端口，按root确认保留原形态，未加映射preload；准确临时端口未在原fixture输出中留存。正常LP关闭仍先交尾帧再closed，WS正常接续/确认/保留期/普通close等原断言保留且通过。
+
+审查追加窗口：WS已accept/LP已处理resume，但异步resumeGate未回时，尚未成为current transport的socket也须立即绑定可信旧SID对应conn。ac3bd9a2只增加该等待窗口的owned资源登记与真实close追踪，不放宽resume权限；new unknown SID没有任何actor绑定，仍按原拒绝流程处理。固定ac3bd9a2复验新6项（含WS/LP pending resume）和原33项：39/39/0失败/0取消/0跳过，5574.3443ms，TMP/pc-doc-assembly-transport-fence-2.log。pending resume actualclose前receipt保持未完成；释放后即便异步gate后来返回，旧session仍不能恢复且无welcome。定向固定端口5775–5779；结束5770–5779零监听。
+
+当前关闭证据边界：这些受控测试证明当前实例的doc owned TCP/HTTP/WS句柄，而非重启旧instance/cgroup、Agent实际资源停止或完整跨服务receipt。那些缺可信证据继续pending，不能用describe或fixture free ACK补齐。Astra scoped control+accepted-message专用核验接口仍待root组合；普通verify-actor存在access TTL反例，不能用于已经accepted的持久queued message资格。此次未跑types/full，full须租约；前面的源码证据不能冒用为后续全量结果。
