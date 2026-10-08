@@ -2,11 +2,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { Readable, PassThrough } from 'node:stream';
-import { once } from 'node:events';
 import { accountError } from '../../account/client.mjs';
 import { digestOf } from '../../account/ledger.mjs';
 import { validateAssetRef, resourceRevision, assetRefId, exactShape, reference } from '../../account/run-asset-protocol.mjs';
 import { createToolAssetResources } from './tool-assets-resources.mjs';
+import { waitAssetWritable } from '../../asset-store/project-access.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 /** Tools pass media references/bytes, never project/run credentials or paths.
@@ -39,7 +39,7 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
         await authorize(context, 'read'); inputRegistration.signal.throwIfAborted();
         const bytes = Buffer.from(piece); size += bytes.length; digest.update(bytes);
         if (!options.range && size > handle.resource.size) fail(409, 'asset-size-mismatch');
-        if (!output.write(bytes)) await Promise.race([once(output, 'drain'), once(output, 'close').then(() => fail(503, 'project-assets-read-aborted'))]);
+        if (!output.write(bytes)) await waitAssetWritable(output);
       }
       if (!options.range && (size !== handle.resource.size || digest.digest('hex') !== handle.resource.hash)) fail(409, 'asset-hash-mismatch');
       await authorize(context, 'read'); output.end();
@@ -56,6 +56,7 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
     if (!exactShape(options, ['name', 'kind', 'requestId'], ['sourceJobId']) || !reference(options.requestId) ||
         typeof options.name !== 'string' || !options.name || /[\r\n\0]/.test(options.name) || !['audio', 'image', 'video'].includes(options.kind)) fail(400, 'project-assets-input-invalid');
     await authorize(context, 'write');
+    if (!source || (typeof source[Symbol.asyncIterator] !== 'function' && !(source instanceof Uint8Array))) fail(400, 'project-assets-source-invalid');
     if (options.sourceJobId && (typeof verifySourceJob !== 'function' || await verifySourceJob(context, options.sourceJobId) !== true)) fail(403, 'project-assets-job-mismatch');
     const ws = await workspace(context), ext = path.extname(options.name).slice(1).toLowerCase();
     if (!/^[a-z0-9]{1,8}$/.test(ext) || typeof ws?.resolve !== 'function' || typeof ws?.remove !== 'function') fail(503, 'project-assets-workspace-unconfigured');
@@ -63,7 +64,7 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
     const rel = `.tmp/run-import-${crypto.randomUUID()}`, file = ws.resolve(rel);
     const handle = await fs.open(file, 'wx'), wrapped = owned.handle(handle);
     let size = 0; const digest = crypto.createHash('sha256');
-    const input = source?.destroy ? source : Readable.from(source);
+    const input = source?.destroy ? source : Readable.from(source instanceof Uint8Array ? [source] : source);
     try {
       await owned.track(context, wrapped.resource); await track(context, input);
       for await (const piece of input) { await authorize(context, 'write'); const bytes = Buffer.from(piece); size += bytes.length;

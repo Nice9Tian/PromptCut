@@ -4,6 +4,16 @@ const REQUEST = Symbol.for('promptcut.asset.request.v2');
 export const assetContextOf = req => req?.[REQUEST] ?? null;
 export function setAssetContext(req, context) { Object.defineProperty(req, REQUEST, { value: context, configurable: true }); }
 export function assetAccessError(code = 'forbidden', status = 403) { return Object.assign(new Error(code), { code, status }); }
+export function waitAssetWritable(stream) {
+  if (stream.closed) return Promise.reject(assetAccessError('asset-response-closed', 503));
+  return new Promise((resolve, reject) => {
+    const clear = () => { stream.removeListener('drain', drain); stream.removeListener('close', close); stream.removeListener('error', error); };
+    const drain = () => { clear(); resolve(); };
+    const close = () => { clear(); reject(assetAccessError('asset-response-closed', 503)); };
+    const error = failure => { clear(); reject(failure); };
+    stream.once('drain', drain); stream.once('close', close); stream.once('error', error);
+  });
+}
 
 /** principal 是已核验票据输出；projectId必须相同。每次调用 authority，不能用 TTL 缓存放宽撤销。 */
 export async function authorizeAsset({ authority, principal, projectId, action, resource }) {

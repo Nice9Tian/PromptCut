@@ -4,7 +4,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { Readable } from 'node:stream';
-import { createAssetResourceLease } from '../asset-store/project-access.mjs';
+import { createAssetResourceLease, waitAssetWritable } from '../asset-store/project-access.mjs';
+import { EventEmitter } from 'node:events';
 import { createAssetRevocationConsumer } from '../asset-store/project-revocations.mjs';
 import { createAssetRunConsumer } from '../hosted/asset-run-access.mjs';
 import { digestOf } from '../account/ledger.mjs';
@@ -70,4 +71,54 @@ test('run outbox ACK is continuous/persisted before send; lost ACK replay is exa
   restarted.finishAdmission(token);
   const another = createAssetRunConsumer(config); await assert.rejects(another.start(), /recovery-pending/);
   await restarted.close(); await another.close();
+});
+
+test('private closure witness and control ACK wait actual source close and durable bound receipt', { timeout: 5000 }, async t => {
+  const dir = await temp(t), file = path.join(dir, 'closure.json'), events = [], acknowledgements = [];
+  let consumer, allowed = true, destroy; const entryClosed = gate();
+  const client = { eventsSince: async after => ({ events: events.filter(e => e.seq > after), headSeq: events.length }),
+    acknowledgeEvent: async (id, receipt) => {
+      const persisted = JSON.parse(await fs.readFile(file, 'utf8'));
+      assert.deepEqual(persisted.pending.receipt, receipt);
+      assert.deepEqual(consumer.controlWitness(id).receipt, receipt); acknowledgements.push(receipt);
+    } };
+  consumer = createAssetRunConsumer({ client, file, assetInstanceId: 'asset-one', serviceIdentity: 'asset-key', verifyLifecycle: async () => true });
+  await consumer.start(); const token = consumer.beginAdmission();
+  const lease = await createAssetResourceLease({ check: async () => { if (!allowed) throw new Error('revoked'); return { allowed: true }; },
+    subscribe: () => () => {}, eventPolicy: 'recheck' });
+  const source = lease.track(new Readable({ read() {}, destroy(_error, done) { destroy = done; } }));
+  const record = { leaseId: 'real-lease', projectId: 'A', runGrantId: 'real-grant', instanceId: 'agent-one', instanceGeneration: 1 };
+  await consumer.admit(record, { lease, last: {}, closed: entryClosed.promise }, token); consumer.finishAdmission(token);
+  const receipt = { leaseId: record.leaseId, receiptId: 'actual-close', complete: true, evidenceDigest: digestOf(record) };
+  await assert.rejects(consumer.closed(record.leaseId, receipt), /closure-pending/);
+  let prepared = false; const preparing = consumer.prepareClosure(record.leaseId, receipt).then(() => { prepared = true; });
+  allowed = false; events.push({ v: 1, seq: 1, eventId: 'run-asset:stop-real', controlId: 'stop-real', payloadDigest: digestOf('stop'),
+    control: { kind: 'stop', revoked: [record.runGrantId], retained: [], instances: [], fenceRevision: 2 } });
+  const syncing = consumer.sync(); await new Promise(r => setImmediate(r));
+  assert.equal(source.closed, false); assert.equal(prepared, false); assert.equal(acknowledgements.length, 0);
+  assert.throws(() => consumer.closureWitness(record.leaseId), /closure-pending/);
+  destroy(); await preparing; assert.equal(source.closed, true);
+  assert.deepEqual(consumer.closureWitness(record.leaseId).binding, { projectId: 'A', runGrantId: 'real-grant', instanceId: 'agent-one', instanceGeneration: 1 });
+  await consumer.closed(record.leaseId, receipt); entryClosed.resolve(); await syncing;
+  assert.deepEqual(acknowledgements[0].closedLeaseIds, [record.leaseId]); await consumer.close();
+});
+
+test('new asset instance cannot rename a persisted lost-ACK receipt into a current observer proof', async t => {
+  const dir = await temp(t), file = path.join(dir, 'old-instance.json'); let sent = 0;
+  const receipt = { eventId: 'run-asset:old', cursor: 1, complete: true, assetInstanceId: 'asset-old' };
+  await fs.writeFile(file, JSON.stringify({ v: 1, assetInstanceId: 'asset-old', serviceIdentity: 'asset-key', cursor: 0,
+    leases: {}, pending: { eventId: receipt.eventId, receipt } }));
+  const consumer = createAssetRunConsumer({ client: { eventsSince: async () => ({ events: [], headSeq: 0 }), acknowledgeEvent: async () => { sent++; } },
+    file, assetInstanceId: 'asset-new', serviceIdentity: 'asset-key', verifyLifecycle: async () => true });
+  await assert.rejects(consumer.start(), /recovery-pending/); assert.equal(sent, 0); assert.equal(consumer.ready, false);
+  assert.throws(() => consumer.controlWitness(receipt.eventId), /closure-pending/); await consumer.close();
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).assetInstanceId, 'asset-old');
+});
+
+test('backpressure completion removes every losing close/error listener', async () => {
+  const stream = new EventEmitter(); stream.closed = false;
+  for (let n = 0; n < 20; n++) { const waiting = waitAssetWritable(stream); stream.emit('drain'); await waiting;
+    assert.equal(stream.listenerCount('close'), 0); assert.equal(stream.listenerCount('error'), 0); }
+  const waiting = waitAssetWritable(stream); stream.closed = true; stream.emit('close'); await assert.rejects(waiting, /response-closed/);
+  assert.equal(stream.listenerCount('drain'), 0);
 });

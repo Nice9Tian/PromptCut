@@ -2,7 +2,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
-import { once } from 'node:events';
 import { certificateFingerprint, accountError } from '../account/client.mjs';
 import { digestOf } from '../account/ledger.mjs';
 import { instanceTlsBinding } from '../account/agent-instance-authority.mjs';
@@ -10,7 +9,7 @@ import { assertInstanceDirectTransport } from '../account/agent-instance-interna
 import { RUN_ASSET_DATA_ROOT, RUN_ASSET_PROOF_HEADER, assetHttpTuple, validateAssetHttpTuple,
   validateAssetRef, resourceRevision, assetRefId, bytesDigest, ticketDigest, requestProof, reference, hashOf,
   decodeRunAssetBody, exactShape } from '../account/run-asset-protocol.mjs';
-import { createAssetResourceLease, authorizedAssetStore } from '../asset-store/project-access.mjs';
+import { createAssetResourceLease, authorizedAssetStore, waitAssetWritable } from '../asset-store/project-access.mjs';
 import { createFsStore } from '../asset-store/fs-store.mjs';
 import { publishProjectFile, syncProjectDirectory } from '../asset-store/project-io.mjs';
 
@@ -27,7 +26,8 @@ export function createAssetRunConsumer({ client, file, assetInstanceId, serviceI
       !['eventsSince', 'acknowledgeEvent'].every(k => typeof client?.[k] === 'function')) fail(503, 'asset-run-consumer-unconfigured');
   let state = { v: 1, assetInstanceId, serviceIdentity, cursor: 0, pending: null, leases: {} };
   let ready = false, stopped = false, chain = Promise.resolve(), writes = Promise.resolve(), head = 0;
-  const live = new Map(), admissions = new Map();
+  const live = new Map(), admissions = new Map(), durableClosures = new Map();
+  let durableControlReceipt, lifecycleVerified = false;
   function persist() {
     const snapshot = JSON.stringify(state);
     const result = writes.catch(() => {}).then(async () => {
@@ -37,7 +37,7 @@ export function createAssetRunConsumer({ client, file, assetInstanceId, serviceI
       try { await fs.rename(temp, file); await syncProjectDirectory(path.dirname(file)); }
       catch (error) { await fs.rm(temp, { force: true }); throw error; }
     });
-    writes = result; return result;
+    writes = result; return result.catch(error => { ready = false; throw error; });
   }
   function pause(event) {
     const seen = new Set(), results = [];
@@ -54,12 +54,15 @@ export function createAssetRunConsumer({ client, file, assetInstanceId, serviceI
   }
   async function acknowledgePending() {
     if (!state.pending) return;
-    await persist(); await client.acknowledgeEvent(state.pending.eventId, state.pending.receipt);
+    await persist(); durableControlReceipt = structuredClone(state.pending.receipt);
+    await client.acknowledgeEvent(state.pending.eventId, state.pending.receipt);
     state.cursor = state.pending.receipt.cursor; state.pending = null; await persist();
   }
   async function drain() {
     ready = false;
+    lifecycleVerified = false;
     if (stopped || await verifyLifecycle({ state: structuredClone(state) }) !== true) fail(503, 'asset-run-recovery-pending');
+    lifecycleVerified = true;
     if (Object.values(state.leases).some(l => l.state === 'unknown')) fail(503, 'asset-run-recovery-pending');
     await acknowledgePending();
     for (;;) {
@@ -99,7 +102,13 @@ export function createAssetRunConsumer({ client, file, assetInstanceId, serviceI
             saved.serviceIdentity !== serviceIdentity || (saved.pending && (saved.pending.receipt?.complete !== true || saved.pending.receipt.cursor !== saved.cursor + 1)))
           fail(503, 'asset-run-state-invalid');
         state = saved;
+        // A receipt belongs to its exact observed asset instance. A new OS
+        // instance cannot rename an old pending receipt into its own proof.
+        if (saved.assetInstanceId !== assetInstanceId && (saved.pending || Object.keys(saved.leases).length))
+          fail(503, 'asset-run-recovery-pending');
         for (const l of Object.values(state.leases)) if (l.state !== 'closed') l.state = 'unknown';
+        for (const l of Object.values(state.leases)) if (l.state === 'closed' && l.receipt)
+          durableClosures.set(l.leaseId, structuredClone(l.receipt));
         state.assetInstanceId = assetInstanceId; await persist();
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
       await sync();
@@ -112,12 +121,32 @@ export function createAssetRunConsumer({ client, file, assetInstanceId, serviceI
     finishAdmission(token) { const pending = admissions.get(token); if (pending) { admissions.delete(token); pending.resolve(); } },
     async admit(record, entry, token) { if (!admissions.has(token) || stopped || state.leases[record.leaseId]) fail(503, 'asset-run-not-ready');
       state.leases[record.leaseId] = { ...record, state: 'admitted', receipt: null }; live.set(record.leaseId, entry); await persist(); },
+    async unknownAdmission(record) { ready = false; state.leases[record.leaseId] = { ...record, state: 'unknown', receipt: null }; await persist(); },
     async closed(leaseId, receipt) { const record = state.leases[leaseId]; if (!record) fail(503, 'asset-run-lease-unavailable');
+      if (!durableClosures.has(leaseId) || digestOf(durableClosures.get(leaseId)) !== digestOf(receipt)) fail(503, 'asset-run-resource-closure-pending');
       if (record.receipt && digestOf(record.receipt) !== digestOf(receipt)) fail(409, 'receipt-mismatch');
-      record.state = 'closed'; record.receipt = structuredClone(receipt); await persist(); live.delete(leaseId); },
+      record.state = 'closed'; record.receipt = structuredClone(receipt); await persist(); live.delete(leaseId);
+      durableClosures.set(leaseId, structuredClone(receipt)); },
     async prepareClosure(leaseId, receipt) { const record = state.leases[leaseId]; if (!record) fail(503, 'asset-run-lease-unavailable');
+      const entry = live.get(leaseId);
+      if (!entry || receipt.leaseId !== leaseId || receipt.complete !== true || !reference(receipt.receiptId) || !hashOf(receipt.evidenceDigest))
+        fail(503, 'asset-run-resource-closure-pending');
+      await entry.lease.release(); // Independently await every owned source/fd/hold, not a caller count.
       if (record.receipt && digestOf(record.receipt) !== digestOf(receipt)) fail(409, 'receipt-mismatch');
-      record.state = 'closing'; record.receipt = structuredClone(receipt); await persist(); },
+      record.state = 'closing'; record.receipt = structuredClone(receipt); await persist(); durableClosures.set(leaseId, structuredClone(receipt)); },
+    // Private service-entry seams: G may expose these only to pinned doc mTLS.
+    // They read a proof recorded AFTER actual close + successful persistence;
+    // body complete/counts cannot create or advance these records.
+    closureWitness(leaseId) {
+      const receipt = durableClosures.get(leaseId), record = state.leases[leaseId];
+      if (!lifecycleVerified || !receipt || !record || !['closing', 'closed'].includes(record.state)) fail(503, 'asset-run-resource-closure-pending');
+      return { assetInstanceId, serviceIdentity, receipt: structuredClone(receipt), binding: {
+        projectId: record.projectId, runGrantId: record.runGrantId, instanceId: record.instanceId, instanceGeneration: record.instanceGeneration } };
+    },
+    controlWitness(eventId) {
+      if (!lifecycleVerified || !durableControlReceipt || durableControlReceipt.eventId !== eventId) fail(503, 'asset-run-resource-closure-pending');
+      return { assetInstanceId, serviceIdentity, receipt: structuredClone(durableControlReceipt) };
+    },
     async handleAccessEvent(event) {
       // Do not call humanConsumer.sync: it is awaiting this participant.
       await pause(event); await sync();
@@ -235,6 +264,7 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
           // be waiting for this owned operation to leave its publish/IO hold.
           // The dedicated continuation independently synchronizes doc authority
           // and checks this exact live lease on every read/write step.
+          if (req.socket.destroyed) fail(403, 'asset-run-request-closed');
           entry.last = await channel.check(); if (entry.last.allowed !== true) fail(403, 'run-revoked'); return entry.last;
         }, close: () => { req.destroy(); res.destroy(); req.socket?.destroy(); } });
       entry.lease = lease;
@@ -261,9 +291,7 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
           'accept-ranges': 'bytes', 'cache-control': 'no-store', connection: 'close', ...(range ? { 'content-range': `bytes ${range.start}-${range.end}/${stat.size}` } : {}) });
         if (req.method === 'HEAD') res.end();
         else { const source = await store.read(ref.hash, range ?? {}); if (!source) fail(404, 'asset-missing');
-          for await (const piece of source) { await lease.assert(); if (!res.write(piece)) await Promise.race([
-            once(res, 'drain'), once(res, 'close').then(() => fail(503, 'asset-run-response-closed')),
-          ]); } await lease.assert(); res.end(); }
+          for await (const piece of source) { await lease.assert(); if (!res.write(piece)) await waitAssetWritable(res); } await lease.assert(); res.end(); }
       } else if (route.operation === 'verifyRef') {
         const parsed = decodeRunAssetBody(body).body;
         if (!exactShape(parsed, ['projectId', 'hash', 'size']) || parsed.projectId !== input.projectId || parsed.hash !== ref.hash || parsed.size !== ref.size) fail(403, 'asset-run-resource-mismatch');
@@ -296,7 +324,11 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
       }
     } catch (error) {
       if (res.headersSent) { res.destroy(); req.socket?.destroy(); } else reply(res, error.status ?? 503, error.code ?? 'asset-run-unavailable');
-      if (!closedTask) { lease?.revoke({ reason: 'revocation-unavailable' }); await channel?.close(); }
+      if (!closedTask) {
+        void lease?.revoke({ reason: 'revocation-unavailable' }).catch(() => {});
+        try { if (channel?.leaseId) await consumer.unknownAdmission({ leaseId: channel.leaseId }); }
+        finally { await channel?.close(); }
+      }
     }
     finally { if (admission) consumer.finishAdmission(admission); }
     return true;

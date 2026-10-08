@@ -82,3 +82,12 @@ test('forged context/job, source abort and late permission loss cannot publish a
   f.setAllowed(false); await assert.rejects(f.assets.openRead(context, 'media-1'), /untrusted-context/);
   assert.deepEqual(f.workspace.list(), []);
 });
+
+test('byte array imports preserve whole bytes; invalid sources fail before any workspace fd opens', async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.assets.import(context, { path: 'caller-path' }, { name: 'x.wav', kind: 'audio', requestId: 'bad-source' }), /source-invalid/);
+  assert.deepEqual(f.workspace.list(), []);
+  const result = await f.assets.import(context, new Uint8Array(payload), { name: 'x.wav', kind: 'audio', requestId: 'bytes' });
+  assert.equal(result.assetRef.hash, hash(payload)); assert.equal(result.assetRef.size, payload.length);
+  assert.deepEqual(f.workspace.list(), []);
+});
