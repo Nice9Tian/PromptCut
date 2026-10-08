@@ -49,7 +49,7 @@ test('resolve/read capability cannot authorize check/write; missing/forged insta
 test('instance fence and grant revoke share a SQLite commit; queued work remains available to a new instance without reviving the old run', async t => {
   const f = await fixture(t); f.enqueue(); f.enqueue('queued-other', 'other'); const g = await f.admit();
   await f.provider.confirmRead(f.input(g));
-  const control = f.provider.fenceInstance({ ...f.agentProcess.registration, requestId: 'terminate-instance', reason: 'shutdown' });
+  const control = f.provider.fenceInstance({ ...f.agentProcess.registration, requestId: 'terminate-instance', reason: 'shutdown', projectId: 'wrong-filter' });
   const state = f.ledger.read(); assert.equal(state.agentInstancesV2[g.instanceId].state, 'fenced');
   assert.equal(state.runGrantsV2[g.runGrantId].state, 'revoked'); assert.equal(control.state, 'pending');
   assert.equal(control.instances[0].instanceId, g.instanceId); assert.equal(control.operationFences[0].runIds[0], g.runId);

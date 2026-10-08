@@ -370,9 +370,12 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     onControl(copy(result)); return result;
   }
   function fenceInstance(input) {
+    // An instance fence covers all of its projects/runs. Extra caller filters may
+    // not truncate the close inventory or leave an assigned grant outside it.
+    const exact = Object.fromEntries(['instanceId', 'instanceGeneration', 'requestId', 'reason'].map(k => [k, input[k]]));
     const result = ledger.transaction(s => {
-      reconcile(s); instanceAuthority.fenceInState(s, input);
-      return fenceInState(s, { ...input, kind: 'instance-revoked' });
+      reconcile(s); instanceAuthority.fenceInState(s, exact);
+      return fenceInState(s, { ...exact, kind: 'instance-revoked' });
     });
     onControl(copy(result)); return result;
   }

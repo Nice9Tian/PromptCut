@@ -59,3 +59,6 @@
 - full 前只读自审发现 `normalizePrincipal` 缺 instanceId/instanceGeneration 会丢 trusted 身份，未赌全量绿；root 追加最窄租约仅在 `service.mjs` PRINCIPAL_EXTRA 增加这两字段，新增实际 WS/listen(0) 测试核 body 伪身份不能替换、其它未知字段仍丢、内部 cap 不外发。该接线待随后固定源码定向/type/full。
 
 实际账号 provider 固定为 VH `327ff674f16d9ddf83d5697f4c78f63847a82768`（018-active-run-order），order 同叶固定文件；没有用脏 provider。所有证书、SQLite、测试日志在系统 TMP，child windowsHide，未打印私钥/proof/exporter/token 值。共享 full 已获 root 租约，尚待最后窄接线固定验证；未运行宽渲染/节点/生产实例验收。
+
+- `c0e64ff5` WS 首轮目标：7 tests / 6 pass / 1 fail / 0 skip，10539.5742 ms，exit 1。原 6 项实际 project.op 全过；新增 normalize 测试的预期对象漏掉协议自动附加的 `seq:1,ack:1`，实际可信实例字段正确、body 伪造没有替换。原始 `%TEMP%/pc-agent-instance-ws-target-1.log` 保留。修正为包含这两个字段的完整精确对象，不省略身份断言；未重跑旧 6 项赌绿。该源码 types --force 0，wall 10014.2255 ms（`pc-agent-instance-types-2.log/-exit.json`）。
+- 最后自审补强：`fenceInstance` 只取 instanceId/generation/requestId/reason，忽略调用者额外 project/run 过滤，确保关闭 inventory 覆盖该实例所有 grant；新增用错误 project 过滤仍必须撤销的反例。
