@@ -6,7 +6,7 @@ import { describeRunMedia, materializeRunMedia } from '../hosted/media-selector.
 const projectId = 'project_media_g';
 const original = bytesDigest(Buffer.from('original'));
 const small = bytesDigest(Buffer.from('small'));
-const snapshot = { projectRev: 7, value: { id: projectId, media: [{ id: 'media-one', kind: 'video', name: 'film.mp4',
+const snapshot = { projectRev: 7, value: { id: 'local-project-payload-id', media: [{ id: 'media-one', kind: 'video', name: 'film.mp4',
   url: '/old', path: 'C:/wrong-project/private.mp4', hash: original, size: 8, ext: 'mp4',
   tiers: { original, small } }] } };
 const mime = ext => ({ mp4: 'video/mp4', mov: 'video/quicktime' })[ext];
@@ -18,8 +18,8 @@ test('locked history selector uses only the project media row and original metad
   assert.equal(result.projectRev, 7);
   assert.match(result.mediaRev, /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(result).includes('private.mp4'), false);
-  assert.throws(() => describeRunMedia({ projectId: 'other', snapshot, purpose: 'openRead',
-    selector: { mediaId: 'media-one', tier: 'original' } }), { code: 'run-asset-project-unavailable' });
+  assert.equal((await materializeRunMedia(describeRunMedia({ projectId, snapshot, purpose: 'openRead',
+    selector: { mediaId: 'media-one', tier: 'original' } }), { contentTypeForExt: mime })).resource.projectId, projectId);
   assert.throws(() => describeRunMedia({ projectId, snapshot, purpose: 'openRead',
     selector: { mediaId: 'old-path', tier: 'original' } }), { code: 'run-asset-media-missing' });
 });

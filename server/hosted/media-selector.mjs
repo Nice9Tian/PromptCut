@@ -10,7 +10,7 @@ const validExt = value => typeof value === 'string' && /^[a-z0-9]{1,16}$/.test(v
  * in old project records are deliberately ignored. */
 export function describeRunMedia({ snapshot, projectId, purpose, selector }) {
   if (!reference(projectId) || !snapshot || !Number.isSafeInteger(snapshot.projectRev) ||
-      snapshot.projectRev < 0 || snapshot.value?.id && snapshot.value.id !== projectId)
+      snapshot.projectRev < 0)
     fail('run-asset-project-unavailable');
   const projectRev = snapshot.projectRev;
   if (purpose === 'import') {
