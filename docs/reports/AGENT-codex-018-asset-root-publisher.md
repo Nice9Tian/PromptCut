@@ -233,3 +233,15 @@ root另只读回传本轮随机 `pcassetproofd43c2787b805d0c4.slice`：Id准确�
 纯guard证据：`TEMP/pc-asset-slice-pristine-counter-1.mjs/.log`导入真实新函数，复用root回传synthetic形状；空Job/Following/DropInPaths的表示依官方249源码补充，明确不是新VM读取。旧not-found谓词对这份形状必拒，新guard接受1个正例，26个active/配置/dropin/job/身份/缺字段等变体全部拒，exit0。该counter只验证判断函数，无Linux/systemd/listener/mock empty或OS关闭证明。
 
 固定新源码本机syntax0/help0/Windows平台guard1/非法CLI1；原始 `TEMP/pc-asset-slice-pristine-{syntax,help,platform,invalid}-1.log`及counter日志保留，diff-check通过。没有npm/type/full、业务listener、节点执行或同源重跑；publisher/G与生产unit未动。root下一实际窗口仅以新hash、新out单次运行，结果仍未知。
+
+## 独占slice真实Linux单轮通过（只证明本OS实验）
+
+已只读根原始 `TEMP/pc-root-cgroup-slice-bd760d25-once.log`，其source=`bd760d250e79a2472f53d7f9a28917a1da1afe7f`、脚本SHA256=`5740633a639180c297047d11b2a5b74f80eda97504a9adfe1438c2b69ccaf95e`，exit0、probe.wallMs=2442、外层wallSec=2.58、nativeRetries=0。VM输出目录 `/var/tmp/pc-root-cgroup-slice-bd760d25/once-output`。本Agent未执行节点，也未重新运行。
+
+实际scope=`pcassetproof711a2aabe73150be.slice`，scope InvocationID=`97cca1ea06a346b4bd414d896ae4f241`，dev/ino=`29/42668`；真实服务=`pc-asset-cgroup-proof-711a2aabe73150be.service`，独立service InvocationID=`96f47394950a4fd6ac50ba9f06caa8d6`，dev/ino=`29/42717`，UID995。两者boot一致，服务cgroup是scope严格子目录。初始scope单目录/无PID，运行时inventory恰为scope+service两目录及真实父276266/子276277，观察器在外。
+
+关键时序：314ms主子都在、scope pop1、child真实FDheld；350ms父birthgone，子birthlive/FDheld/TCP未EOF，scope pop1，negativeObserved=true；2338ms子文件已close但birth仍在、pop1，仍不当empty；2349ms父子birthgone、原scope FD pop0、真实双EOF/close，emptyObserved=true。最终service inactive/MainPID0，scope仍同InvocationID/ACTIVE/原inode且空，eventsReadError=null、errors=[]。
+
+scope释放前实际`closure-result.json`文件与目录fsync均成功，随后复核scope空；只stop自有service一次、只stop自有slice一次，均exit0，slice最终inactive，sliceCleanup.evidenceDurable=true/retained=false，6540–6549监听为空。生产account274484/doc274497/asset273011/nginx9395全部原PID/active/NRestarts0，前后完全相同。
+
+通过范围：systemd249上这个真实独占slice能够在服务叶被自动删除后，保留原cgroup/eventsFD供root读取真实递归empty，再耐久落证据后释放。原886 ENODEV失败和f8 synthetic前置误拒仍保留，不改判。**这不证明publisher整套轮换、TLS/exporter绑定、G checkpoint、业务closure ACK或生产run-assets整体就绪**；原publisher和G v1没有因此被自动改成scope机制。
