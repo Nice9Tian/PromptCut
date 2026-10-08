@@ -9,9 +9,9 @@
 ## 当前进度
 
 - 已阅读仓库入口规则、开发者指南、建议行为、约束、子 Agent 协议，以及 `three-versions-brief.md` 第 11 节的当前小阶段安排。
-- 源码模板待做单字符分隔修正；随后仅做文本差异与 `git diff --check` 检查。
+- 已在 `server/hosted/deploy/nginx-site-promptcut-stages.conf:27` 只补 regex 和 value 之间的一个空格。原文为 `...v1\..+)$""pc_rt=...`，现在为 `...v1\..+)$" "pc_rt=...`；Cookie 属性、票据匹配式、舞台源及源隔离均未改。
 
 ## 验证与限制
 
-- 主会话负责从精确 Git 源提取 map block，在真实 Linux nginx 上先复现原配置失败、再验证修正后 `nginx -t` 通过。本地不连接节点；除非本机确有 nginx，否则不把文本检查描述为 nginx 验证。
-- 依据本任务明确边界，不跑 mirrorregex 单测或 full。最终报告补上源码证据、检查摘要和实际验证范围。
+- `git diff --check` 通过；源码 diff 只有该 map 行的一处必要空格差异；本地 `nginx` 不存在，因此未进行本地 nginx 语法检查。主会话负责从精确 Git 源提取 map block，在真实 Linux nginx 上先复现原配置失败、再验证修正后 `nginx -t` 通过。
+- 依据本任务明确边界，未跑 mirrorregex 单测或 full；本报告不把文本检查描述为 nginx 通过。
