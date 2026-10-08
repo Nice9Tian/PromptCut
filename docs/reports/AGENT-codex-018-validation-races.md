@@ -25,3 +25,13 @@
 M7定向第一次 `TMP/promptcut-validation-races-m7-target-1.log`：7/6/1fail、134.0971ms、exit1，新实队列fixture错用了带PC指纹观察者（它收到hidden而非failed）；改为原探针的无指纹观察者后 `...m7-target-2.log` 7/7、121.1975ms、exit0。实队列输出 sampled=open,current=null,published=card-locked,publisher=superseded,watcher=failed；真实页面来源两次采样 first=PC,last=browser。原877s日志没有这些逐任务证据，所以这里只证明可执行失败路径，不追认原两次fail的唯一根因；真实full M7仍待跑。
 
 根协调者精确扩租既有 `server/test/m7-judge.test.mjs`。01521f94组合首验 types0/exit0/wall16879.7006ms；完整npm `TMP/promptcut-validation-races-full-2.log` exit1、wall97906.1341ms（计数如下次补记），唯一失败是 bakery-deps 的 server→scripts 依赖方向约束，新建 m7-observation.test 不在白名单。按根批准将4条实队列/真实来源控制测试并入已登记的 m7-judge.test，删除仅本包新文件；依赖守卫和白名单均不改。此次修改为明确失败修复后的必要复验，不因偶发失败反复重跑。
+
+2a5ae175固定复验：定向+依赖守卫10/10、130.1101ms；types0，定向+types合计wall6120.7134ms；`TMP/promptcut-validation-races-full-3.log` 全量4940/4939pass/0fail/0cancel/1skip、77770.8906ms、wall78203.0255ms、exit0，无自动retry。补全上轮full-2：4940/4938pass/1fail/0cancel/1skip，97420.8639ms，唯一依赖方向失败。
+
+### 根审查后的历史边界修正
+
+在2a5在途完整M7期间仅于TMP跑独立反例、没有改在途源码或中断。`TMP/promptcut-validation-races-m7-review-counterexample.{mjs,log}` 真实队列依次superseded→同ID takeover重开(version又为1)→controlled-decode-error普通fail→推进600001ms过TTL，当前记录消失；旧历史superset与watcher最新failed会错误返回true。由此修复为：无指纹watcher必须从真实首次task.opened开始完整连续观察首代，同ID终态后opened/active snapshot进入下一代，初始snapshot、断线、epoch变更、隐藏或漏掉重开的迹象都不允许历史fallback。发布方改保存接收顺序seq、type、error、epoch、version（缺失明确null），采用最新终态，且epoch必须匹配；当前describe有记录仍是权威，普通failed绝不当superseded。
+
+首轮真实M7（仍为2a5、尚未含此修正）`TMP/promptcut-validation-races-m7-full-1.log`：16项、54部分、fails=[]、pending=[]、aggregate ok=true，outer exit0、wall873683.6414ms、creator ms873442，角色exit creator0/node1。node单角色summary保留服务器专属项缺席为pending，all以creator并入双方实际parts后的完整账本判定；不把node退出码改写成0。A4首样本即三层browser、worstSinceGate20011ms仅记录；D12 pass。它只证明审查前源码，不能代替审查修正后的验收。
+
+审查修正定向 `TMP/promptcut-validation-races-m7-target-4.log` 12/12、413.3233ms、exit0。包含真实重开/普通失败/TTL反例、真实瞬时删除正向、首snapshot(open/failed)、断线后snapshot、epoch变更、未见opened却taken、当前普通失败、错误publisher epoch/done的负向。

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { createRenderQueue } from '../render-queue/index.mjs';
 import { createQueueHarness } from './fake-render-queue-env.mjs';
 import { snapTask, importRepo } from './m7-kit.mjs';
-import { judgeDualClip, observedSuperseded, observeLayerEnvironments } from '../../scripts/probes/m7-judge.mjs';
+import { judgeDualClip, observedSuperseded, observeLayerEnvironments, createTaskObservationHistory } from '../../scripts/probes/m7-judge.mjs';
 
 const RANGES = ['0-59', '60-119', '120-179', '180-239', '240-299'];
 const all = (live) => RANGES.map((range) => ({ range, live }));
@@ -76,7 +76,10 @@ test('M7 observation: real queue supersedes then removes on locked republish bet
   for (const task of h.describe().tasks) sampled.set(task.id, task);
   const clip = pcLive => ({ groups: { pc: [{ range: '0-59', live: pcLive }], page: [{ range: '0-59', live: true }] }, candidates: ['pc', 'page'], layerFp: 'page' });
   assert.equal(judgeDualClip(clip(sampled.get(pc.id).state !== 'failed')).ok, false);
-  const proven = observedSuperseded({ current: h.task(pc.id), closed: terminal, publisherSuperseded: true });
+  const history = createTaskObservationHistory();
+  for (const message of h.bus.of('pc')) history.note(message);
+  const publisher = h.bus.of('page', 'task.failed').find(e => e.id === pc.id);
+  const proven = observedSuperseded({ current: h.task(pc.id), closed: terminal, publisher, history: history.proof(pc.id) });
   assert.equal(proven, true);
   assert.equal(judgeDualClip(clip(!proven)).ok, true);
   h.complete('br', page.id, claim.token, { v: 1 });
@@ -84,12 +87,13 @@ test('M7 observation: real queue supersedes then removes on locked republish bet
 });
 
 test('M7 observation: absent, generic failure, or old superseded after reopen cannot prove cancellation', () => {
+  const publisher = { type: 'task.failed', error: 'superseded', epoch: 'test' };
   assert.equal(observedSuperseded({}), false);
   assert.equal(observedSuperseded({ closed: { state: 'failed' } }), false);
-  assert.equal(observedSuperseded({ publisherSuperseded: true }), false);
-  assert.equal(observedSuperseded({ closed: { state: 'done' }, publisherSuperseded: true }), false);
-  for (const state of ['open', 'claimed', 'done']) assert.equal(observedSuperseded({ current: { state }, closed: { state: 'failed' }, publisherSuperseded: true }), false);
-  assert.equal(observedSuperseded({ current: { state: 'failed', lastError: 'decode-error' }, closed: { state: 'failed' }, publisherSuperseded: true }), false);
+  assert.equal(observedSuperseded({ publisher }), false);
+  assert.equal(observedSuperseded({ closed: { state: 'done' }, publisher }), false);
+  for (const state of ['open', 'claimed', 'done']) assert.equal(observedSuperseded({ current: { state }, closed: { state: 'failed' }, publisher }), false);
+  assert.equal(observedSuperseded({ current: { state: 'failed', lastError: 'decode-error' }, closed: { state: 'failed' }, publisher }), false);
   assert.equal(observedSuperseded({ current: { state: 'failed', lastError: 'superseded' } }), true);
 });
 
@@ -142,4 +146,67 @@ test('M7 observation: deadline preserves failure when the real layer never chang
   assert.equal(observed.samples, 3);
   assert.equal(observed.waitedMs, 2);
   assert.deepEqual(observed.layers, observed.first);
+});
+
+test('M7 review: real superseded -> reopen -> ordinary failure -> TTL removal cannot reuse old proof', t => {
+  const h = createQueueHarness(createRenderQueue);
+  h.publisher('p', 'pub');
+  h.node('watch', 'watch', { profile: 'pc', watch: ['p1'] });
+  h.node('pc', 'pc', { profile: 'pc', watch: ['p1'], hello: { envFingerprint: PC } });
+  h.node('page', 'page', { profile: 'browser', watch: ['p1'], hello: { envFingerprint: PAGE } });
+  const a = snapTask({ contentKey: 'review-reopen', fp: PC, seg: 0, input: { dual: true } });
+  const b = snapTask({ contentKey: 'review-reopen', fp: PAGE, seg: 0, input: { dual: true } });
+  h.publish('p', [a, b]);
+  h.claim('page', b.id, h.task(b.id).version);
+  const oldPublisher = h.bus.of('p', 'task.failed').find(m => m.id === a.id);
+  assert.equal(oldPublisher.error, 'superseded');
+  h.publish('p', [{ ...a, takeover: true }]);
+  const claim = h.claim('pc', a.id, h.task(a.id).version).one('pc', 'task.claimed');
+  h.fail('pc', a.id, claim.token, { error: 'controlled-decode-error', retryable: false });
+  assert.equal(h.task(a.id).lastError, 'controlled-decode-error');
+  h.advance(600_001);
+  assert.equal(h.task(a.id), null);
+  const closed = h.bus.of('watch', 'task.closed').filter(m => m.id === a.id).at(-1);
+  assert.equal(closed.state, 'failed');
+  // The pre-review fallback would accept this combination.
+  assert.equal(oldPublisher.error === 'superseded' && closed.state === 'failed', true);
+  const history = createTaskObservationHistory();
+  for (const message of h.bus.of('watch')) history.note(message);
+  const proof = history.proof(a.id);
+  assert.equal(proof.generation, 2);
+  assert.equal(proof.completeFirstGeneration, false);
+  assert.equal(observedSuperseded({ current: null, closed, publisher: oldPublisher, history: proof }), false);
+  const latestPublisher = h.bus.of('p', 'task.failed').filter(m => m.id === a.id).at(-1);
+  assert.equal(latestPublisher.error, 'controlled-decode-error');
+  assert.equal(observedSuperseded({ current: null, closed, publisher: latestPublisher, history: proof }), false);
+  t.diagnostic(JSON.stringify({ current: null, historicalError: oldPublisher.error, latestError: latestPublisher.error, proof }));
+});
+
+test('M7 review: snapshots, disconnects, epoch changes and missed reopens never restore complete-first-generation proof', () => {
+  const opened = { type: 'task.opened', epoch: 'q1', task: { id: 'x', version: 1 } };
+  const failed = { type: 'task.closed', epoch: 'q1', id: 'x', state: 'failed' };
+  const publisher = { type: 'task.failed', epoch: 'q1', id: 'x', error: 'superseded' };
+  const accepts = history => observedSuperseded({ current: null, closed: failed, publisher, history: history.proof('x') });
+  const first = createTaskObservationHistory();
+  first.note(opened); first.note(failed);
+  assert.equal(accepts(first), true);
+  assert.equal(observedSuperseded({ closed: failed, publisher: { ...publisher, epoch: 'q2' }, history: first.proof('x') }), false);
+  assert.equal(observedSuperseded({ closed: failed, publisher: { ...publisher, type: 'task.done' }, history: first.proof('x') }), false);
+  for (const state of ['open', 'failed']) {
+    const history = createTaskObservationHistory();
+    history.note({ type: 'queue.snapshot', epoch: 'q1', tasks: [{ id: 'x', state, version: 1 }] });
+    history.note(opened); history.note(failed);
+    assert.equal(accepts(history), false, `initial ${state} snapshot is not a first opened event`);
+  }
+  const disconnected = createTaskObservationHistory();
+  disconnected.note(opened); disconnected.invalidate();
+  disconnected.note({ type: 'queue.snapshot', epoch: 'q1', tasks: [{ id: 'x', state: 'open', version: 1 }] });
+  disconnected.note(failed);
+  assert.equal(accepts(disconnected), false);
+  const epochs = createTaskObservationHistory();
+  epochs.note(opened); epochs.note({ ...failed, epoch: 'q2' });
+  assert.equal(accepts(epochs), false);
+  const missed = createTaskObservationHistory();
+  missed.note(opened); missed.note(failed); missed.note({ type: 'task.taken', epoch: 'q1', id: 'x' }); missed.note(failed);
+  assert.equal(accepts(missed), false);
 });

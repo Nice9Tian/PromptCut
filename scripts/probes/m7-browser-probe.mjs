@@ -57,7 +57,7 @@ import { argsOf, sayer, newRunId, lastJsonLine, fingerprintOf } from './m8/lib.m
 import { roleKv, resolveRun } from './m8/kv.mjs';
 import { startCoord, startQueueEditor, viteBin, killTree, until, claimPorts, portFree } from './m8/procs.mjs';
 import { ASSUMPTIONS, readNodeDiag, readStageBakeDiag, releaseCauseOf } from './m7-node-adapter.mjs';
-import { judgeDualClip, observedSuperseded, observeLayerEnvironments } from './m7-judge.mjs';
+import { judgeDualClip, observedSuperseded, observeLayerEnvironments, createTaskObservationHistory } from './m7-judge.mjs';
 import { createTimings, TIMINGS_PREFIX } from './probe-timings.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
@@ -664,7 +664,10 @@ async function startWatcher({ url, projectId, cred, run, log }) {
   const bodies = new Map();
   const closed = new Map();
   const events = [];
+  const history = createTaskObservationHistory();
+  conn.ep.onClose(() => history.invalidate());
   conn.ep.onMessage((m) => {
+    history.note(m);
     const put = (t) => { if (t?.id) { bodies.set(t.id, t); closed.delete(t.id); } };
     if (m?.type === 'queue.snapshot') for (const t of m.tasks ?? []) put(t);
     else if (m?.type === 'task.opened') put(m.task);
@@ -678,7 +681,7 @@ async function startWatcher({ url, projectId, cred, run, log }) {
   };
   const first = await reg();
   conn.ep.onOpen(() => { reg().catch(() => {}); });
-  return { conn, bodies, closed, events, first, close: () => conn.close() };
+  return { conn, bodies, closed, events, history, first, close: () => conn.close() };
 }
 
 /* ================================================================== creator */
@@ -1198,14 +1201,15 @@ async function judgeDualOnPage(ctx, pageEvidence) {
   const pageFp = ctx.pageNode?.envFingerprint ?? null;
   god.poll();
   const current = god.remote ? null : new Map(ctx.site.queues().list.flatMap(q => q.tasks ?? []).map(t => [t.id, t]));
-  const pageSuperseded = new Set(pageEvidence?.supersededIds ?? []);
+  const publisherEvents = new Map((pageEvidence?.taskEvents ?? []).map(e => [e.id, e]));
   const disposition = t => {
     const live = current?.get(t.id);
     const closed = watcher.closed.get(t.id);
-    const superseded = observedSuperseded({ current: live, closed, publisherSuperseded: pageSuperseded.has(t.id) });
+    const history = watcher.history.proof(t.id), publisher = publisherEvents.get(t.id);
+    const superseded = observedSuperseded({ current: live, closed, publisher, history });
     return { id: t.id, sampledState: god.tasks.get(t.id)?.state ?? null,
       currentState: live?.state ?? null, currentError: live?.lastError ?? null,
-      watcherClosed: closed?.state ?? null, publisherSuperseded: pageSuperseded.has(t.id), superseded };
+      watcherClosed: closed?.state ?? null, publisher: publisher ?? null, history, superseded };
   };
   const perClip = {};
   for (const clip of ['h1', 'h2', 'h3']) {
@@ -1432,6 +1436,7 @@ async function tapPage(page, name) {
   await cdp.send('Network.enable');
   const conns = new Map();
   const frames = [];
+  let frameSequence = 0;
   const sidRole = new Map();
   const secrets = new Set();
   const leaks = [];
@@ -1480,6 +1485,7 @@ async function tapPage(page, name) {
     const keep = /^(node\.|queue\.|task\.|error$|auth\.ticket$|publisher\.)/.test(m.type ?? '');
     if (!keep) return;
     const slim = { at: Date.now(), dir, conn: requestId, type: m.type, id: m.id ?? m.task?.id ?? null, reqId: m.reqId ?? null };
+    if (m.type === 'task.failed' || m.type === 'task.done') Object.assign(slim, { epoch: m.epoch ?? null, version: m.version ?? null });
     if (m.reason !== undefined) slim.reason = m.reason;
     if (m.type === 'task.failed') slim.error = m.error;
     if (m.state !== undefined) slim.state = m.state;
@@ -1492,6 +1498,7 @@ async function tapPage(page, name) {
     if (m.type === 'task.claimed' && m.task) slim.task = { priority: m.task.priority, clipId: m.task.input?.clipId ?? null, fp: m.task.requires?.envFingerprint ?? null, resultKey: m.task.resultKey, range: m.task.range, weight: m.task.weight?.class ?? null, attempts: m.task.attempts ?? null };
     if (m.type === 'task.complete' && m.result) slim.result = { resultKey: m.result.resultKey, range: m.result.range, frames: m.result.frames?.length ?? null, small: m.result.small?.length ?? null, dedup: m.result.dedup ?? null };
     if (m.type === 'auth.ticket') Object.assign(slim, { kind: m.kind, role: m.role ?? null, owner: m.owner?.kind ?? null, access: m.access ?? null });
+    slim.seq = ++frameSequence;
     frames.push(slim);
     if (frames.length > 200_000) frames.shift();
   };
@@ -1530,6 +1537,8 @@ async function tapPage(page, name) {
     renderConns, assetHttp,
     sent: (type, since = 0) => frames.filter((f) => f.dir === 'sent' && f.type === type && f.at >= since),
     recv: (type, since = 0) => frames.filter((f) => f.dir === 'recv' && f.type === type && f.at >= since),
+    taskTerminals: () => frames.filter(f => f.dir === 'recv' && (f.type === 'task.failed' || f.type === 'task.done'))
+      .map(f => ({ id: f.id, type: f.type, error: f.error ?? null, epoch: f.epoch, version: f.version, seq: f.seq })),
     /** 页面当了节点：发过 node.hello 且收到 node.welcome */
     nodeState() {
       const h = frames.find((f) => f.dir === 'sent' && f.type === 'node.hello');
@@ -1826,7 +1835,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, playCheck })
   book.judge('M7-A4', 'page-layer-env-browser', layerObservation.ok, layerObservation);
   await kv.signal('a4.page', { done: Object.fromEntries(Object.entries(done).map(([k, v]) => [k, v.length])), worstSinceGateMs: a4.worstSinceGateMs,
     completedIds: tap.sent('task.complete').map((f) => f.id),
-    supersededIds: tap.recv('task.failed').filter(f => f.error === 'superseded').map(f => f.id) });
+    taskEvents: tap.taskTerminals() });
 
   // A12：生成快照期间主文档长任务 0（从遮罩撤下到三张卡的锚帧段做完）
   const bakeLong = await longTasks(page, b1.gateLiftAt);
