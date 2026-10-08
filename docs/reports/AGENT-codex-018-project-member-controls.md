@@ -140,3 +140,13 @@ root命令（先在共同固定候选编译 dist-online）：`node scripts/probe
 主会话授权此次仅probe+报告。openMembers通过真实分享气泡×逐个关闭，并等真实消失；只在确需打开pop时用只读elementFromPoint确认按钮中心命中后正常page.click，已开的pop不重复点击。未JS改DOM、未强改disabled/forceclick、未假响应。子phase精确拆出B两次join、每页button-visible/dismiss-share-toast/button-center-hit/click-and-popup、B两账号行及A两B设备；memberDiagnostics只记页索引、固定阶段、布尔UI存在/中心命中及成员/设备/page设备/账号/单账号最大page设备数量。响应原principal、名字、token、完整URL/query和输入不记录。
 
 本次只Node --check新probe exit0与git diff --check零错；没有真实browser/native、监听、type/full/cargo重跑。产品和tests相对eeab完全无改，根可沿同ab0 compiled产品有因单次复验；初次红不覆盖、遮挡仍候选。
+
+## 根ff874第二次真实浏览器与精确旧WS捕获修正
+
+根固定 `ff874e5b20660947929a3416235418fbb8406b72` 沿同ab0 compiled产品运行：35.198s，5 checks /4 pass/1 fail，completed=false，phase kick，失败为 affected-page-actual-websocket-closed。原 `%TEMP%/pc-members-browser-ff874e5b-once/result.json`、failure图与根原日志保留。真实×关闭前buttonCenter=false/shareToasts=1，关闭后toast=0/center=true且弹层两账号行；A的可信快照3个page设备、同账号最多2个，已证明原遮挡候选。本轮admin200，B/B2的session403及被踢提示出现，但原探针统计docSockets.closed=0，不能把这些HTTP/UI现象替代实际WS关闭。两设备禁入、unban、回首页后半路径尚未验证。
+
+只读实际接缝明确：`src/editor/sync/syncManager.ts:1106` 的账号入口构造 `${origin}/hosted/`；`src/online/invite.ts:79` 的 hostedWsUrlOf 只改protocol并保留pathname；`server/test/fixtures/cloud-queue-user-path.mjs:92` 的真实WSS辅助也连 `/hosted/`，edge upgrade将其strip到doc `/`。原probe只筛 `/hosted/ws`，确定漏掉当前账号真实连接，而非证明产品连接没关。只读检索时两次使用不存在的route通配路径产生rg路径错误，随后直接读invite和实际syncManager核定，没有把错误检索当证据。
+
+主会话授权此次仅probe+本报告，执行器计划暂缓。新过滤限定精确 `wss://127.0.0.1:6568` 与 `/hosted/`；CDP created和握手响应101分别记录，requestID与关联记录只RAM。踢人前两页各必须created>=1且至少一条已101、仍live的旧连接；快照这些旧记录之后才执行原真实kick。踢人后等待每条快照旧记录各收到对应webSocketClosed，新连接关闭不能满足旧连接屏障，DOM弹框也不能替代。新增两条 established-old-websocket-before-kick 检查；保留原 affected-page-actual-websocket-closed 名称但加强为全部旧连接实际关闭。输出仅页索引、固定阶段、安全origin/path/status101或null、created/handshaken/旧live/旧closed计数及布尔，不持久requestID、query、子协议、票据或帧。
+
+本次使用本机绝对Node路径及父仓库绝对file URL静默预载，仅 `--check scripts/probes/project-member-controls-probe.mjs` 与 git diff --check；未启动监听、Chrome、fixture、native，也未重跑type/full/cargo。产品/tests相对 `eeab9e3b193f3e548be333ebad38abf447819954` 字节不变。该修正尚未真实运行，不能记为“连接关闭通过”；由根沿同ab0产品dist有因单次验证。
