@@ -17,12 +17,40 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
  * Asset validation is exposed as a doc-side resolver for the separate mTLS access route.
  */
 export function createAccountHostedRuntime({ ledger, accountClient, dataDir, authorityUrl, signingKey, keyId,
-  now = Date.now, pollMs = 1000, onDiagnostic = () => {} }) {
+  now = Date.now, pollMs = 1000, onDiagnostic = () => {}, assetReadyProbe = null,
+  assetInstanceId = null, allowFixtureAssetReady = false }) {
   if (!ledger || !accountClient) fail(503, 'account-configuration');
+  if (assetReadyProbe !== null && typeof assetReadyProbe !== 'function') fail(503, 'asset-configuration');
+  if (assetInstanceId !== null && (typeof assetInstanceId !== 'string' || !assetInstanceId)) fail(503, 'asset-configuration');
+  if (allowFixtureAssetReady && assetReadyProbe) fail(503, 'asset-configuration');
   const tickets = new Map();
   const memoryStores = new Map();
   let service = null;
   let assetReady = false;
+  async function requireAssetReady({ expectedInstanceId } = {}) {
+    if (!assetReadyProbe) {
+      if (allowFixtureAssetReady && assetReady) return { instanceId: 'fixture-asset', accessHead: authority.eventsSince(0).headSeq };
+      fail(503, 'asset-unavailable');
+    }
+    try {
+      await authority.synchronize();
+      const before = authority.eventsSince(0).headSeq;
+      const state = await assetReadyProbe({ authorityId: authority.authorityId, requiredAccessHead: before });
+      await authority.synchronize();
+      const after = authority.eventsSince(0).headSeq;
+      if (!state || state.ok !== true || state.ready !== true || state.authorityId !== authority.authorityId ||
+        typeof state.instanceId !== 'string' || !state.instanceId ||
+        (assetInstanceId && state.instanceId !== assetInstanceId) ||
+        (expectedInstanceId && state.instanceId !== expectedInstanceId) ||
+        !Number.isSafeInteger(state.accessCursor) || !Number.isSafeInteger(state.accessHead) ||
+        state.accessCursor !== before || state.accessHead !== before || after !== before) fail(503, 'asset-unavailable');
+      assetReady = true;
+      return { instanceId: state.instanceId, accessHead: after };
+    } catch {
+      assetReady = false;
+      fail(503, 'asset-unavailable');
+    }
+  }
   const storeOf = projectId => dataDir ? createFileStore({ dir: path.join(dataDir, 'tenants', projectId), log: () => {} }) :
     (memoryStores.get(projectId) ?? memoryStores.set(projectId, createMemoryStore()).get(projectId));
   const authority = createAccountAuthority({ ledger, accountClient, authorityUrl, signingKey, keyId, now, pollMs, onDiagnostic,
@@ -87,11 +115,15 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   return {
     authority,
     get sessionReady() { return assetReady; },
-    setAssetReady(value) { assetReady = value === true; },
+    setAssetReady(value) {
+      if (!allowFixtureAssetReady) fail(503, 'asset-configuration');
+      assetReady = value === true;
+    },
+    requireAssetReady,
     bindService(value) { service = value; },
     async start() { return authority.start(); },
-    async issueSession({ principal, deviceId }) {
-      if (!assetReady) fail(503, 'session-unavailable');
+    async issueSession({ principal, deviceId, expectedAssetInstanceId }) {
+      await requireAssetReady({ expectedInstanceId: expectedAssetInstanceId });
       const expiresAt = Math.min(principal.expiresAt, now() + 5 * 60_000);
       if (expiresAt <= now()) fail(401, 'credential-revoked');
       for (const [ticket, entry] of tickets) if (entry.expiresAt <= now()) tickets.delete(ticket);
