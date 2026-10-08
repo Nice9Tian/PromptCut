@@ -1,0 +1,17 @@
+# 生产单元工作目录修复
+
+节点真实 systemd 249 拒绝之前生成的三个单元：WorkingDirectory 单值路径被外包双引号，报路径非绝对和 bad unit setting。新服务未启动，旧服务未停；生成的私钥、公开登记和旧数据均保留，没有重新生成钥匙来绕过问题。
+
+只收 Sol 独立两文件提交 e378081ddd6505e7431dc31669276578f27de8ff：工作目录用单值格式、拒尾随白字与引号；其它角色、TLS pin、私钥与数据分离守门，以及 ExecStart 等向量字段保持。任务素材中央登记和未完成的新实例接受机制仍留独立分支，没有一并合入。
+
+Sol 真实静态首红 5项4通过1失败，修后6/6，包含原有实际三服务路径；强制类型零错、6440–6449清空。原始 TEMP pc-account-v2-working-directory-{red,green,type}.log 保留。Windows 字符串断言不代替 Linux 实际单元解析；主会话还要核精确候选全量、生成配置和真实 systemd，再交付本阶段。
+
+根首次候选f5b96bf7类型零错、完整5307/5303通过/0失败/4跳过70187.4166ms（墙70.547秒）、两构建通过，native重跑0。节点实际verify退出0但三份EnvironmentFile带引号均被忽略；另启动唯一隔离unit、真实含空格/百分号/反斜杠目录，CHDIR退出200，证明首修仍未正确。临时unit停止并清掉，旧三服务未停/新三服务未装，完整日志TEMP pc-account-unit-verify-f5b96bf7/unit-proof-first.log及对应full/type/build保留；不把全量绿或verify退出0等同部署通过。
+
+二次仅收b51e494f两文件：WorkingDirectory与EnvironmentFile单值均只转义百分号，保留反斜杠与内部空格，向量字段原样保留。依据systemd v249 load-fragment.c的config_parse_working_directory/config_parse_unit_env_file源码，两者直接用rvalue解析。Sol新首红7项4过3败、修后7/7、type0，TEMP pc-account-v2-single-path-{red,green,type}.log；根还要以真实cwd与环境标记复核，不能用静态字符串断言代替实际加载。
+
+根二次候选9efa8ecb实际verify3份退出0；真实隔离unit读取含字面反斜杠的EnvironmentFile仍ENOENT/resources，未进入Node。WorkingDirectory与EnvironmentFile不能共用全部路径承诺，因为后者随后经glob。日志TEMP pc-account-unit-verify-9efa8ecb/unit-proof-first.log保留，唯一unit已清，旧服务未停。
+
+第三次仅收d8cda394两文件：WorkingDirectory支持原单值字面反斜杠；EnvironmentFile独立格式，POSIX明确拒反斜杠及glob元字符，正常生产路径不受影响。Sol首红8项7过1败、修后8/8含原5真实三服务子进程，type0/6594ms；TEMP pc-account-v2-envfile-special-{red,green,type}.log。根将分别核复杂cwd与无特殊元字符的真实环境文件，再验完整基线。
+
+根固定第三次候选4c041cfcd060043f3d497fc5b52fe6baf0eae0e4：强制type exit0墙6.672秒；完整npm5309/5305通过/0失败/0取消/4跳过70320.2711ms墙70.656秒；native retries0；build exit0墙8.922秒、online build0墙1.765秒；运行前后同源码且clean。节点systemd249三份unit verify0，唯一历史snapd RestartMode警告未触；实际唯一oneshot start0/Resultsuccess/ExecMainStatus0，Node严格核对含空格/%/单字面反斜杠cwd与含空格/%但无glob特殊字符环境文件的公开marker，两者都正确；特殊环境路径由源码明确拒绝。旧钥匙、其它生成结果逐项不变，unit实际已stop/unlink，旧生产服务未停。日志TEMP pc-account-unit-verify-4c041cfc/unit-proof-first.log与pc-account-working-directory-4c041cfc-{type,full,build,online-build}.log。首红未重写；这次三层门槛成立，按小阶段收回。

@@ -9,7 +9,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
-import { createAccountV2InstallPlan } from '../hosted/deploy/account-v2-install-plan.mjs';
+import { createAccountV2InstallPlan, formatEnvironmentFile, formatUnitSinglePath } from '../hosted/deploy/account-v2-install-plan.mjs';
 
 function fixture(t, { cleanup = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-account-v2-install-'));
@@ -130,6 +130,9 @@ test('account v2 install plan emits exactly three independent path-only units an
   assert.deepEqual(result.filePolicies[result.units.doc.envFile], { owner: 'root', group: 'pc_doc', mode: '0640' });
   assert.deepEqual(result.filePolicies[result.units.doc.unitFile], { owner: 'root', group: 'root', mode: '0644' });
   const docUnit = result.files[result.units.doc.unitFile];
+  assert.equal(/^WorkingDirectory=(.*)$/m.exec(docUnit)?.[1],
+    options.pcSourceDir.replaceAll('%', '%%'),
+    'systemd WorkingDirectory is one unquoted absolute path, not an ExecStart argument');
   assert.match(docUnit, /User=pc_doc/);
   assert.match(docUnit, /ReadWritePaths=.*doc-data/);
   assert.match(docUnit, /InaccessiblePaths=/);
@@ -146,6 +149,40 @@ test('account v2 install plan emits exactly three independent path-only units an
   assert.equal(fs.readFileSync(token, 'utf8'), 'A'.repeat(48));
   assert.equal(result.units.account.user, options.users.account);
   assert.equal(result.installOnly, true);
+});
+
+test('systemd WorkingDirectory keeps one raw path with internal space, percent and literal backslash', () => {
+  const root = path.parse(process.cwd()).root;
+  const withSpace = path.join(root, 'PromptCut Source', '100%');
+  assert.equal(formatUnitSinglePath(withSpace), withSpace.replaceAll('%', '%%'));
+  const withBackslash = path.join(root, 'PromptCut\\Source');
+  assert.equal(formatUnitSinglePath(withBackslash), withBackslash);
+  assert.throws(() => formatUnitSinglePath(path.join(root, 'PromptCut Source ')),
+    error => error.code === 'unit-single-path');
+  assert.throws(() => formatUnitSinglePath(path.join(root, 'Prompt"Cut')),
+    error => error.code === 'unit-single-path');
+});
+
+test('systemd EnvironmentFile is also a single raw absolute path', t => {
+  const { dir, options, load } = fixture(t);
+  options.installDir = path.join(dir, 'install path 100%');
+  const result = load();
+  for (const role of ['account', 'doc', 'asset']) {
+    const item = result.units[role];
+    assert.equal(/^EnvironmentFile=(.*)$/m.exec(result.files[item.unitFile])?.[1],
+      item.envFile.replaceAll('%', '%%'));
+  }
+});
+
+test('systemd EnvironmentFile rejects paths with glob syntax', t => {
+  const { dir, options, load } = fixture(t);
+  for (const suffix of ['install[glob]', 'install?glob', 'install*glob']) {
+    options.installDir = path.join(dir, suffix);
+    assert.throws(load, error => error.code === 'environment-file-path', suffix);
+  }
+  for (const suffix of ['back\\slash', 'question?mark', 'star*name', 'bracket[1]', 'close]bracket'])
+    assert.throws(() => formatEnvironmentFile(`/opt/pc-env/${suffix}`, { platform: 'linux' }),
+      error => error.code === 'environment-file-path', suffix);
 });
 
 test('account v2 install plan rejects unsafe users, missing old token and shared private directories', t => {
