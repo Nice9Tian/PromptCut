@@ -199,3 +199,15 @@ Luna源码7ae88cb6仅改server/hosted/deploy/nginx-site-promptcut-stages.conf的
 根联合候选9674ee8a：强制type0/墙6.610秒，完整npm5318项/5314通过/0失败/4跳过/0取消70524.7121ms（墙70.875秒），npm原生自动重跑0；源码始终同一head且clean。本阶段没有新增测试或重复全部历史探针，专属目标是上述真实nginx parser；raw TEMP pc-stage-map-root-9674ee8a-{type,full}.log、pc-stage-map-source-7ae88cb6.log，VM原/新.syntax.log均保留。Luna报告收回归档agent-reports/AGENT-codex-018-stage-nginx-map.md。
 
 移除复用工作区前核Luna7ae已在集成、无未提交或普通未跟踪文件。首次更严忽略文件检查发现70份Vite/TypeScript自建缓存，守门停止，没删除任何东西。全树3349项实际reparse0后，仅将本叶node_modules中的.vite/.vite-temp和tsconfig.tsbuildinfo用同一PowerShell LiteralPath移至TEMP/pc-stage-map-preserved-cache-20261009；未碰主库依赖、不沿联接、不卸包。移后ignored0，再git worktree remove无force；记录TEMP pc-stage-map-cleanup-20261009.json。累计清理50=PC36+VH14，剩本任务实际3个：真实队列Sol、关闭登记Astra、主会话集成；旧六个、其它会话与所有未合源分支继续保留。
+
+## 双账号消息与持久排队小阶段
+
+产品固定e9abf5945750907fbe75af9c05a6b61096a9f108；根集成候选430dcd68743865abf938fc0d58d88c48086f869f包含已有舞台模板小修。类型零错wall6.906s；npm全量5328项/5324通过/0失败/0取消/4跳过，71381.064ms、wall71.719s、nativeRetries=0。原日志TMP pc-queue-root-430dcd68-gates-type.log/full.log。根只跑小阶段三门，没有重跑整套发版验收。
+
+第一次真实双浏览器e9：compiled online build exit0/wall2.219s；运行35.002s/wrapper35.515s、9/9前置通过但completed=false，phase reload超时。实际两次messages202、双方精确消息编号/FIFO/用户名已通过；F5依法恢复账号首页，探针错误直接等待对话。原TMP pc-cloud-queue-e9abf594-once/result.json和四张截图、pc-queue-root-e9abf594-once-browser.log完整保留；没有把前置绿改判整链通过。
+
+修正ae6a6d10292bef9b8c115ca9dcf3a279e444c1d1只有probe/report改变，产品及test字节完全一致；集成4fc4abdfbfa51c900b8ae5ad6e5c23d6522eb972。真实F5→账号cookie恢复→同一joined项目行显示链接并核projectId→打开→历史选原conversation→同一messageIds/FIFO恢复，没有新建或重发。使用同一产品online产物有因再运行一次，15/15、completed=true、5205ms/wrapper5.797s、exit0；TMP pc-cloud-queue-ae6a6d10-reopen/result.json、pc-queue-root-ae6a6d10-reopen-browser.log。两个窗口真实VH provider/order、同SQLite doc、独立asset进程及 pinned mTLS Agent account-policy，不mock ACL/ready/SSE/队列。通过npm临时test入口保留原global guards，两个窗口own子进程均closed；asset PID35024/38456各实际收口。最后没有6520–6539监听。
+
+Root offline --locked Rust构建430d exit0/wall22.766s、配置及identifier只在TMP，未安装依赖或覆盖用户应用。实际exe SHA256 f10bef55a968f7ee9afdfb6abd4c9b60d1e38fd252526dc3839a6a143a259457；五个Rust源文件与最终集成字节一致。真实原生IPC 28/28、completed=true、9124ms、nativeRetries=0：真实VH/doc/独立asset TLS临时夹具，创建者fresh session及开启请求pending-services、过时revision409、成员403、无token/body/未知路径拒、恢复登录、退出及旧凭据401、同origin Agent webview桥接拒绝。TMP pc-queue-native-build-430dcd68/result.json和pc-queue-native-ipc-430dcd68/result.json，9个自有壳后代及asset37464均已close；6340/6348/6378/6381–6385/6388/6526监听清零。原生用隔离空页面，不能称真实完整对话桌面UI或公网验证。
+
+界面诚实显示executorMounted=false和“等待执行服务”；真实模型/runner未挂载、未部署Agent。共有切私有的跨服务立即关闭ACK仍缺真实control来源，fresh RPC/250ms轮询不充这一承诺，保持独立待做。此次源代码没有新增自动删历史、渲染调度策略或删除语义裁定。
