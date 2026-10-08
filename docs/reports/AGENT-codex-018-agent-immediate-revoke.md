@@ -87,3 +87,35 @@ await readControl.start();
 本次 ACK 门验证的是 required 持久之后的新写入。只读复核发现：`authority.mjs` 的 `revocationStatus` 仍直接返回已存在的 accessAcks，`flushAccountAcknowledgements` 消费该结果，assembly 的 `completeReadAccessEvents` 遇已有 Agent ACK 即跳过。因此若启用 required 之前数据库已有未完成 barrier 的 legacy ACK，该旧行尚未通过新摘要门重新核验。当前没有执行这个迁移场景的反例，也没有声称生产已发生；已向根提出精确范围建议：在读取/向 account 发最终回执前重用同一内部闭包判定，或把旧无摘要行保留为历史证据但不当新 complete。当前租约只允许 ackAccessEvent 的窄改，未擅改 status/flush。
 
 本阶段交回独立固定源码与真实首红/首绿；受影响旧消费者迁移、历史 ACK 升级边界、根独立全量和真实 runner 资源关闭仍未完成。本地阶段结果不等于已合 main 或已部署生产。
+
+## 后续授权：旧 ACK 消费门和四个消费者
+
+上述第一阶段报告固定为 `e042f93ceb189316bc712d2fb02fb09fbf5547f0`。根随后准确授权四个旧消费者文件，以及 `authority.mjs` 的 revocationStatus/flush 和 assembly 旧 ACK skip 的窄修；Luna controls 夹具仍归其 owner，本叶未改。原旧行读取风险现在有真实反例与修复，以下增量取代上节“未执行迁移反例”的当前状态，但保留原发现记录。
+
+真实预存 ACK 反例固定 `f6826017`：先通过原 authority API 为实际 account credentials-revoked 事件写入三种服务 ACK；两个分支分别不建 outbox、或真实运行 flush 生成 outbox 后注入账号 ACK 响应丢失。然后初始化真实 readControl 持久 required，关闭 SQLite，再以缺 read 模块的 authority 重开。原源码两分支均返回 `agentPending:false,forwardedAfterRequired:1,pendingEvents:0`。这里 doc/page barrier 是明确无页面、无 operation 的受控依赖；反例没有替 Agent 注入任何关闭证明。
+
+修复 `d2fa8e6f` 抽出唯一同步 `agentReadClosureComplete`，供原 ACK 事务、revocationStatus、flush 创建持久回执与最后网络发送前使用；assembly 通过 `hasAgentReadClosure` 判断已完成，不能遇任意旧行就跳过。旧 accessAcks 原行保留，缺摘要在状态查询中作为 pending；已有 unsent legacy account outbox 也原样保留，不在升级时重写成新证明。只有本次生成且绑定实际内部 closure digest 的 account outbox 可以发送；历史目标证据缺失仍需独立收口/对账，不能由新实例空表自动迁移。已经在升级前发送成功的历史回执不会被本模块伪装为“可撤回”。asset/render 原有 ACK 未变。
+
+消费者先在未迁移源上实际保留首红；没有先放宽 requireReadControl。新的共享夹具 `server/test/agent-read-control-fixture.mjs` 固定 `93ca2bc0`，通过真实 pinned TLS/exporter 注册 RAM key，使用同一实际 SQLite 控制库存。它只把调用测试明确提供的账号/consent 依赖当受控输入，不能作为 VH 生产证明。
+
+最终产品/消费者固定 **`45c47cd51b839daa54469db5c764bd47f2367e09`**：
+
+- cloud-queue-user-path 复用现有 Agent pinned TLS，建唯一生产 runClient，attach 控制客户端、等待实际 ready；清理先实际关闭控制流/HTTP dispatch，再关 clients。此次只完成源码接线，没有运行它的浏览器 probe。
+- account-assembly-central 保留原真实注册 RAM 私钥，四路径签名 adapter 仅使用这个既有实例及实际 socket exporter，正文改经自有 5775 HTTP/ALS read；额外证明旧 raw get 被拒。原 WS/LP、run 数据通道、持久历史与重启断言全部保留，未给尚未实现的 run/OS closure 自由 ACK。没有为了读正文注册替代实例。
+- agent-access-http 使用真实新控制协议；原双账号、consent、幂等、伪造主体、creator 私有只读与撤销检查保留。切私后的旧 SSE 现在断言真实 transport 终止，不强求安装输出 fence 后再发送一个友好 `access.revoked` 尾事件。
+- cloud-queue-http 原纯 Readable/Writable 路径改为明确缺安全 transport 先 503 的负例；原 queue snapshot、独立 revision、位置、去重与 fetched-plaintext 拒绝断言迁到真实 SQLite/doc mTLS/Agent HTTP。真实私有操作取消成员队列，owner 仍可读更新；再真实 kick owner，故意暂停已经取得新增正文的 get 回调，实际关闭后放行也不输出 `must-not-publish`。没有 mock readTransports 或 mock allowed。
+
+assembly 首红还准确暴露一个等待顺序：当真实 run/retained/历史实例库存已经明确本阶段不能完成时，先 await read 的 5 秒边界会撞既有 RPC 5 秒截止，客户端只见 transport unavailable。经根批准，仍先实际 deliver 所有 fence，然后非空 run 库存立即返回原 `agent-fence-pending`；仅零 run 分支等待实际 read close 后成功。没有延长任何超时，也没有把非空库存放行。
+
+| 固定源码 | 原始日志 basename | 结果 |
+|---|---|---|
+| `f6826017` | `pc-agent-read-legacy-consumer-red-1.log` | 11 / 8 pass / 3 fail / 0 skip/cancel；3138.3 ms；exit 1；native 0。两旧 ACK 消费反例及旧纯 HTTP consumer 分别失败 |
+| `d2fa8e6f` | `pc-agent-read-legacy-green-1.log` | 10 / 10 pass / 0 fail/skip/cancel；224.0914 ms；exit 0。两分支均 pending=true、转发 0、pendingEvents=1 |
+| `93ca2bc0` | `pc-agent-read-http-consumer-red-1.log` | 1 / 0 pass / 1 fail / 0 skip/cancel；963.3667 ms；exit 1。旧 accountMode HTTP 拒绝后没有 meta，原断言失败 |
+| `93ca2bc0` | `pc-agent-read-assembly-consumer-red-1.log` | 3 / 2 pass / 1 fail / 0 skip/cancel；9567.8096 ms；exit 1。真实非空 run 库存等待 read 控制，客户端先超时；尚未到旧 get |
+| `45c47cd5` | `pc-agent-read-consumer-types-1.log` | `tsc -b --force`，零错误/exit 0 |
+| `45c47cd5` | `pc-agent-read-consumers-green-1.log`、`.exit.json` | 四文件 target：16 / 16 pass / 0 fail/skip/cancel；6464.1351 ms；wall 6726 ms；exit 0；native 0 |
+
+最后四文件命令为 `npm test -- server/test/agent-read-control.test.mjs server/test/cloud-queue-http.test.mjs server/test/agent-access-http.test.mjs server/test/account-assembly-central.test.mjs`。实际 provider/order 显式使用根确认的 VisuHive main **`1b3b0029eddf951225a8a2912597dc46854e9041`**，运行前后 SHA 一致；没有以缺 provider skip 掩盖目标。测试前后 5770–5779、5790/5791、6600–6619 均零 LISTEN。真实 asset 子进程由原 fixture 对自己创建的 ChildProcess 等待 close；新控制与 HTTP 生命周期在清理完成后测试进程自然退出。源码在 target 期间不变，结束 clean，diff-check 通过。
+
+本阶段没有 full、浏览器 UI probe、节点或生产部署。原 b11 的 1/1 实际 race 首绿证据仍独立保留；本轮真实 queue kick 补充了已抓取正文的关闭反例，不能将旧源码结果冒用于新源码。Luna 的新 controls fixture 后续需其 owner 接同协议，根将独立完整验证。真实 runner finish/outcome/resource closure 属根后续独立任务，本叶没有提前接入或把它算完成。
