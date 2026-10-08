@@ -1,6 +1,7 @@
 /** External root supervisor. Never run inside the target service cgroup.
- * CLI has no fixture/force/recover flag. A failed transition stays inactive;
- * a root operator must inspect its journal before any subsequent attempt.
+ * CLI has no fixture/force/recover flag. Failure after rename may leave active
+ * VISIBLE, so consumers require a durable publication marker AND no lock.
+ * Failed/unknown transitions retain the lock for explicit root recovery.
  */
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -66,6 +67,13 @@ function activeRecord(scope, record) {
     !hash(record.previous.closureWitnessDigest)) fail('publisher-chain-invalid');
 }
 
+const reservationFor = (scope, epoch, instanceId) => ({ v: 1, protocol: 'promptcut.asset-root-reservation.v1',
+  ...scope, epoch, instanceId });
+const publicationFor = (scope, record, anchor) => ({ v: 1, protocol: 'promptcut.asset-root-publication.v1',
+  authorityId: scope.authorityId, epoch: record.epoch, registryDigest: digestOf(record), anchorDigest: digestOf(anchor),
+  closureWitnessDigest: record.previous?.closureWitnessDigest ?? null,
+  reservationDigest: digestOf(reservationFor(scope, record.epoch, record.instance.instanceId)) });
+
 async function history(io, scope, current, anchor) {
   if (!exact(anchor, ['v', 'protocol', ...SCOPE, 'firstEpoch', 'firstRegistryDigest']) || anchor.v !== 1 ||
       anchor.protocol !== 'promptcut.asset-root-anchor.v1' || anchor.firstEpoch !== 1 ||
@@ -75,6 +83,8 @@ async function history(io, scope, current, anchor) {
   for (;;) {
     activeRecord(scope, value);
     if (!equal(value, await io.read(`epoch-${value.epoch}.json`))) fail('publisher-history-mismatch');
+    if (!equal(publicationFor(scope, value, anchor), await io.read(`publication-${value.epoch}.json`)))
+      fail('publisher-publication-missing');
     if (value.epoch === 1) {
       if (anchor.firstRegistryDigest !== digestOf(value)) fail('publisher-anchor-invalid');
       return;
@@ -101,7 +111,7 @@ async function history(io, scope, current, anchor) {
 export async function publishAssetRootRegistry({ scope, mode, io }) {
   scope = validatePublisherScope(scope);
   if (!['initialize', 'rotate'].includes(mode)) fail('publisher-mode-invalid');
-  const release = await io.lock();
+  const release = await io.lock(); let publicationDurable = false;
   try {
     const old = await io.read('current.json');
     const anchor = await io.read('anchor.json');
@@ -118,8 +128,7 @@ export async function publishAssetRootRegistry({ scope, mode, io }) {
     }
     const epoch = old ? old.epoch + 1 : 1;
     if (!positive(epoch)) fail('publisher-epoch-overflow');
-    const reservation = { v: 1, protocol: 'promptcut.asset-root-reservation.v1', ...scope,
-      epoch, instanceId: io.uuid() };
+    const reservation = reservationFor(scope, epoch, io.uuid());
     let witness = null;
     if (old) {
       // Pin exact kernel objects BEFORE making the known unit stop. This step
@@ -161,12 +170,14 @@ export async function publishAssetRootRegistry({ scope, mode, io }) {
     if (!old) await io.write('anchor.json', { v: 1, protocol: 'promptcut.asset-root-anchor.v1',
       ...scope, firstEpoch: 1, firstRegistryDigest: digestOf(record) }, true);
     await io.write(`epoch-${epoch}.json`, record, true);
-    // Another check after filesystem awaits, before the sole authorization
-    // publication. Death just after publication cannot prove an old socket.
+    // Active is only a candidate until marker durability and successful unlock.
     if (!equal(after, await io.inspect(reservation))) fail('publisher-instance-changed');
     await io.write('current.json', record);
-    return { epoch, recordDigest: digestOf(record), anchorDigest: digestOf(old ? anchor : await io.read('anchor.json')) };
-  } finally { await release(); }
+    const complete = publicationFor(scope, record, old ? anchor : await io.read('anchor.json'));
+    await io.write(`publication-${epoch}.json`, complete, true);
+    publicationDurable = true; // Reached ONLY after marker file and directory fsync.
+    return { epoch, recordDigest: complete.registryDigest, anchorDigest: complete.anchorDigest };
+  } finally { await release({ publicationDurable }); }
 }
 
 async function rootDirectory(dir) {
@@ -221,14 +232,15 @@ export async function openPublisherLock(dir, { directoryBarrier = syncDirectory 
   const stat = await fd.stat();
   try { await fd.writeFile(JSON.stringify({ pid: process.pid })); await fd.sync(); await directoryBarrier(dir); }
   catch (error) { await fd.close(); throw error; }
-  return async ({ publicationDurable = true } = {}) => {
+  return async ({ publicationDurable = false } = {}) => {
     try {
       if (!publicationDurable) return; // Failed/unknown result retains the exclusion marker.
       const current = await fs.lstat(filename);
       if (current.ino !== stat.ino || current.dev !== stat.dev || current.isSymbolicLink()) fail('publisher-lock-changed');
       await fs.unlink(filename);
       await directoryBarrier(dir);
-    } finally { await fd.close(); }
+    } catch { fail('publisher-unlock-result-unknown'); }
+    finally { await fd.close(); }
   };
 }
 const exec = args => new Promise((resolve, reject) => execFile('/usr/bin/systemctl', args,

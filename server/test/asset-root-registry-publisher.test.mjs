@@ -28,7 +28,9 @@ function model() {
   const faults = {};
   const io = {
     uuid: () => `id-${++serial}`,
-    async lock() { if (locked) throw Error('locked'); locked = true; calls.push('lock'); return async () => { locked = false; calls.push('unlock'); }; },
+    async lock() { if (locked) throw Error('locked'); locked = true; calls.push('lock'); return async ({ publicationDurable }) => {
+      if (publicationDurable) { locked = false; calls.push('unlock'); } else calls.push('retain-lock');
+    }; },
     async read(name) { return clone(files.get(name) ?? null); },
     async write(name, value, exclusive) {
       calls.push(`write:${name}:${value.state ?? value.phase ?? ''}`);
@@ -91,13 +93,18 @@ test('controlled initialize creates immutable anchor; rotate closure precedes re
   assert.deepEqual(witness.previousRegistry, old); assert.deepEqual(witness.observed.pidBirth, old.instance.pidBirth);
   assert.deepEqual(m.calls, ['lock', 'pin', 'write:current.json:preparing', 'write:transition.json:closing', 'stop',
     'write:witness-2.json:', 'close-pinned-fd', 'write:reservation.json:', 'write:transition.json:reserved',
-    'start', 'inspect', 'identity', 'inspect', 'write:epoch-2.json:active', 'inspect', 'write:current.json:active', 'unlock']);
+    'start', 'inspect', 'identity', 'inspect', 'write:epoch-2.json:active', 'inspect', 'write:current.json:active',
+    'write:publication-2.json:', 'unlock']);
+  const publication = m.files.get('publication-2.json');
+  assert.deepEqual(publication, { v: 1, protocol: 'promptcut.asset-root-publication.v1', authorityId: scope.authorityId,
+    epoch: 2, registryDigest: digestOf(value), anchorDigest: digestOf(m.files.get('anchor.json')),
+    closureWitnessDigest: digestOf(witness), reservationDigest: digestOf(m.files.get('reservation.json')) });
 });
 
 test('controlled incorrect old process refuses stop; ENOENT observation remains inactive and never starts', async () => {
-  const m = model(); await m.run('initialize'); m.calls.length = 0; m.faults.pin = true;
-  await assert.rejects(m.run('rotate'), /wrong-process/); assert.equal(m.calls.includes('stop'), false);
-  delete m.faults.pin; m.faults.stop = true;
+  const wrong = model(); await wrong.run('initialize'); wrong.calls.length = 0; wrong.faults.pin = true;
+  await assert.rejects(wrong.run('rotate'), /wrong-process/); assert.equal(wrong.calls.includes('stop'), false);
+  const m = model(); await m.run('initialize'); m.calls.length = 0; m.faults.stop = true;
   await assert.rejects(m.run('rotate'), /ENOENT-not-proof/);
   assert.equal(m.files.get('current.json').state, 'preparing');
   assert.equal(m.files.has('witness-2.json'), false); assert.equal(m.calls.includes('start'), false);
@@ -115,14 +122,14 @@ test('controlled closure cannot substitute another boot/cgroup/birth/invocation 
   });
 });
 
-test('controlled fsync cuts never publish active second epoch; rerun refuses incomplete current', async t => {
+test('controlled pre-write cuts leave nonactive and retain lock; these do not model post-rename failure', async t => {
   for (const name of ['transition.json', 'witness-2.json', 'reservation.json', 'epoch-2.json', 'current-active']) {
     await t.test(name, async () => {
       const m = model(); await m.run('initialize');
       m.faults.write = (file, value) => name === 'current-active' ? file === 'current.json' && value.state === 'active' : file === name;
       await assert.rejects(m.run('rotate'), /fsync-failed/);
       assert.notEqual(m.files.get('current.json').state, 'active');
-      delete m.faults.write; await assert.rejects(m.run('rotate'), { code: 'publisher-current-invalid' });
+      delete m.faults.write; await assert.rejects(m.run('rotate'), /locked/);
     });
   }
 });
@@ -151,20 +158,18 @@ test('controlled bootstrap is explicit, prior files/history cannot be reset and 
   const pending = m.run('initialize');
   await Promise.resolve(); await assert.rejects(m.run('initialize'), /locked/); unblock(); await pending;
   await assert.rejects(m.run('initialize'), { code: 'publisher-bootstrap-not-empty' });
-  m.files.get('epoch-1.json').instance.pid++;
-  await assert.rejects(m.run('rotate'), { code: 'publisher-history-mismatch' });
+  const corrupt = model(); await corrupt.run('initialize'); corrupt.files.get('epoch-1.json').instance.pid++;
+  await assert.rejects(corrupt.run('rotate'), { code: 'publisher-history-mismatch' });
 });
 
 test('controlled third epoch checks complete owned history; corrupt/missing prior witness cannot stop a unit', async () => {
-  const m = model(); await m.run('initialize'); await m.run('rotate');
-  const good = clone(m.files.get('witness-2.json')); m.files.get('witness-2.json').observed.closed = false;
-  m.calls.length = 0; await assert.rejects(m.run('rotate'), { code: 'publisher-history-mismatch' });
-  assert.equal(m.calls.includes('stop'), false);
-  m.files.set('witness-2.json', good);
-  assert.equal((await m.run('rotate')).epoch, 3);
-  m.files.delete('witness-2.json'); m.calls.length = 0;
-  await assert.rejects(m.run('rotate'), { code: 'publisher-history-mismatch' });
-  assert.equal(m.calls.includes('stop'), false);
+  for (const corrupt of [true, false]) {
+    const m = model(); await m.run('initialize'); await m.run('rotate');
+    assert.equal((await m.run('rotate')).epoch, 3);
+    if (corrupt) m.files.get('witness-2.json').observed.closed = false; else m.files.delete('witness-2.json');
+    m.calls.length = 0; await assert.rejects(m.run('rotate'), { code: 'publisher-history-mismatch' });
+    assert.equal(m.calls.includes('stop'), false);
+  }
 });
 
 test('production entry never accepts Windows/nonroot as OS evidence; CLI rejects fixture/force before IO and actually closes', async () => {
@@ -196,4 +201,67 @@ test('real TMP current rename followed by directory fsync failure may expose act
   const visible = JSON.parse(await fs.readFile(path.join(dir, 'current.json'), 'utf8'));
   assert.equal(visible.state, 'active'); // Regression: "failure implies inactive" is false.
   assert.equal((await fs.lstat(path.join(dir, '.publisher.lock'))).isFile(), true);
+  t.diagnostic('actual active JSON visible after rename; injected directory barrier failure; lock retained; no accepted checkpoint claim');
+});
+
+async function diskModel(t, directoryBarrier, lockBarrier = directoryBarrier) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-root-publication-files-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const m = model(), original = m.io.write;
+  m.io.lock = () => openPublisherLock(dir, { directoryBarrier: lockBarrier });
+  m.io.write = async (name, value, exclusive) => {
+    await writePublisherArtifact({ dir, name, value, exclusive, directoryBarrier });
+    await original(name, value, exclusive);
+  };
+  return { ...m, dir, readDisk: async name => JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) };
+}
+
+test('real TMP publication hardlink visible then directory barrier fails: marker alone never permits unlock', async t => {
+  const m = await diskModel(t, async (_dir, item) => {
+    if (item?.name === 'publication-1.json') throw Error('injected-post-link-dir-fsync');
+  });
+  await assert.rejects(m.run('initialize'), /injected-post-link-dir-fsync/);
+  const record = await m.readDisk('current.json'), marker = await m.readDisk('publication-1.json');
+  assert.equal(record.state, 'active'); assert.equal(marker.registryDigest, digestOf(record));
+  assert.equal((await fs.lstat(path.join(m.dir, 'publication-1.json'))).nlink, 1);
+  assert.equal((await fs.lstat(path.join(m.dir, '.publisher.lock'))).isFile(), true);
+  await assert.rejects(openPublisherLock(m.dir), { code: 'EEXIST' });
+  t.diagnostic('actual active + publication marker visible; injected post-link barrier failure; lock retained; marker is not sole authorization');
+});
+
+test('real TMP in-flight publication barrier keeps lock; only successful completion removes it and binds every digest', async t => {
+  let entered, finish; const arrived = new Promise(r => { entered = r; }), gate = new Promise(r => { finish = r; });
+  const m = await diskModel(t, async (_dir, item) => { if (item?.name === 'publication-1.json') { entered(); await gate; } });
+  const running = m.run('initialize'); await arrived;
+  const marker = await m.readDisk('publication-1.json');
+  assert.equal((await fs.lstat(path.join(m.dir, '.publisher.lock'))).isFile(), true);
+  finish(); const result = await running;
+  await assert.rejects(fs.lstat(path.join(m.dir, '.publisher.lock')), { code: 'ENOENT' });
+  assert.equal(marker.registryDigest, digestOf(await m.readDisk('current.json')));
+  assert.equal(marker.anchorDigest, digestOf(await m.readDisk('anchor.json')));
+  assert.equal(marker.reservationDigest, digestOf(await m.readDisk('reservation.json')));
+  assert.equal(marker.closureWitnessDigest, null); assert.equal(result.recordDigest, marker.registryDigest);
+  t.diagnostic('real file operations; controlled directory barrier on Windows; no Linux durability/power-loss claim');
+});
+
+test('real TMP unlock barrier failure has unknown CLI result but cannot undo already completed publication', async t => {
+  let locks = 0;
+  const m = await diskModel(t, async () => {}, async () => { if (++locks === 2) throw Error('injected-unlink-dir-fsync'); });
+  await assert.rejects(m.run('initialize'), { code: 'publisher-unlock-result-unknown' });
+  await assert.rejects(fs.lstat(path.join(m.dir, '.publisher.lock')), { code: 'ENOENT' });
+  const marker = await m.readDisk('publication-1.json');
+  assert.equal(marker.registryDigest, digestOf(await m.readDisk('current.json')));
+  assert.equal(marker.anchorDigest, digestOf(await m.readDisk('anchor.json')));
+  t.diagnostic('unlock result unknown; marker/active barriers completed before unlink; failure is NOT a claim of inactive');
+});
+
+test('prior active without exact publication completion marker cannot be rotated', async () => {
+  for (const field of ['missing', 'anchorDigest', 'reservationDigest', 'closureWitnessDigest']) {
+    const m = model(); await m.run('initialize');
+    if (field === 'missing') m.files.delete('publication-1.json');
+    else m.files.get('publication-1.json')[field] = 'f'.repeat(64);
+    m.calls.length = 0;
+    await assert.rejects(m.run('rotate'), { code: 'publisher-publication-missing' });
+    assert.equal(m.calls.includes('stop'), false); assert.ok(m.calls.includes('retain-lock'));
+  }
 });
