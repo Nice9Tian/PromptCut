@@ -20,7 +20,7 @@ if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !SITE
 const ORIGIN = 'https://127.0.0.1:6568', STAGES = ['http://s1.pc.localhost:6570', 'http://s2.pc.localhost:6571'];
 const TIMEOUT = 30_000, stages = [], contexts = [], pages = [];
 const result = { sourceBefore: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim(),
-  checks: [], network: [], screenshots: [], completed: false, executorMounted: false, cleanup: {} };
+  checks: [], network: [], memberDiagnostics: [], screenshots: [], completed: false, executorMounted: false, cleanup: {} };
 let browser, fixture, phase = 'preflight';
 const check = (condition, name) => { result.checks.push({ name, pass: Boolean(condition) }); if (!condition) throw Error(name); };
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml',
@@ -64,11 +64,48 @@ const consent = async page => {
     await new Promise(resolve => setTimeout(resolve, 40));
   }
   throw Error('consent-not-ready');
-};const projectName = 'Account member controls browser project';
-const openMembers = async page => {
+};
+const projectName = 'Account member controls browser project';
+const memberDiagnostic = async (page, step) => {
+  const ui = await page.evaluate(() => {
+    const button = document.querySelector('[data-pc="members-button"]'), rect = button?.getBoundingClientRect();
+    const hit = rect ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) : null;
+    return { buttonPresent: Boolean(button), buttonCenterHits: Boolean(button && hit && button.contains(hit)),
+      popupPresent: Boolean(document.querySelector('[data-pc="members-pop"]')),
+      visibleMemberRows: document.querySelectorAll('[data-pc="account-member"]').length,
+      shareToasts: document.querySelectorAll('.pc-toast:has([data-pc="cloud-project-copy"])').length };
+  });
+  result.memberDiagnostics.push({ page: pages.indexOf(page), step, ...ui, ...(page.memberCounts ?? {}) });
+};
+const openMembers = async (page, label) => {
+  phase = `${label}-button-visible`;
   await page.waitForSelector('[data-pc="members-button"]', { visible: true });
-  if (!await page.$('[data-pc="members-pop"]')) await page.click('[data-pc="members-button"]');
+  await memberDiagnostic(page, phase);
+  phase = `${label}-dismiss-share-toast`;
+  const toast = '.pc-toast:has([data-pc="cloud-project-copy"])';
+  for (let i = 0; i < 10; i++) {
+    const close = await page.$(`${toast} button[aria-label="关闭"]`);
+    if (!close) break;
+    const before = await page.$$eval(toast, nodes => nodes.length);
+    try { await close.click(); } finally { await close.dispose(); }
+    await page.waitForFunction(({ selector, count }) => document.querySelectorAll(selector).length < count,
+      { timeout: TIMEOUT }, { selector: toast, count: before });
+  }
+  await page.waitForSelector(toast, { hidden: true });
+  if (!await page.$('[data-pc="members-pop"]')) {
+    phase = `${label}-button-center-hit`;
+    await page.waitForFunction(() => {
+      const button = document.querySelector('[data-pc="members-button"]');
+      if (!button) return false;
+      const rect = button.getBoundingClientRect(), hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return rect.width > 0 && rect.height > 0 && hit && button.contains(hit);
+    }, { timeout: TIMEOUT });
+    await memberDiagnostic(page, phase);
+    phase = `${label}-click-and-popup`;
+    await page.click('[data-pc="members-button"]');
+  } else phase = `${label}-popup-already-open`;
   await page.waitForSelector('[data-pc="account-member"]', { visible: true });
+  await memberDiagnostic(page, phase);
 };
 const project = page => page.createdProjectId;
 const reopen = async (page, id) => {
@@ -129,6 +166,14 @@ try {
       }).catch(() => {});
       if (pathname.endsWith('/members') && response.status() === 200) void response.json().then(body => {
         if (/^acc_[a-f0-9]{24}$/.test(body.self?.accountId)) page.accountId = body.self.accountId;
+        if (Array.isArray(body.members) && Array.isArray(body.devices)) {
+          const pageDevices = body.devices.filter(device => Array.isArray(device?.conns) && device.conns.some(conn => conn?.role === 'page'));
+          const perAccount = new Map();
+          for (const device of pageDevices) if (typeof device.accountId === 'string') perAccount.set(device.accountId, (perAccount.get(device.accountId) ?? 0) + 1);
+          page.memberCounts = { snapshotMembers: body.members.length, snapshotDevices: body.devices.length,
+            snapshotPageDevices: pageDevices.length, snapshotPageAccounts: perAccount.size,
+            snapshotMaxPageDevicesPerAccount: Math.max(0, ...perAccount.values()) };
+        }
       }).catch(() => {});
     });
     await login(page, fixture.accounts[i === 0 ? 0 : 1]);
@@ -137,11 +182,14 @@ try {
   phase = 'create'; await enabled(a, '[data-pc="cloud-create"]'); await fill(a, '[data-pc="cloud-project-name"]', projectName); await a.click('[data-pc="cloud-create"]');
   await a.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true }); await consent(a);
   const id = project(a); check(/^sp_[a-z2-7]{26}$/.test(id ?? ''), 'real-project-created'); result.projectId = id;
-  phase = 'join-two-devices'; await join(b, id); await join(b2, id);
-  await openMembers(b);
+  phase = 'join-b-device-one'; await join(b, id);
+  phase = 'join-b-device-two'; await join(b2, id);
+  await openMembers(b, 'b-members');
+  phase = 'b-members-two-account-rows';
   await b.waitForFunction(() => [...document.querySelectorAll('[data-pc="account-member"]')].length === 2, { timeout: TIMEOUT });
   check(!await b.$('[data-pc="account-member-kick"]'), 'ordinary-member-has-no-admin-controls');
-  await openMembers(a);
+  await openMembers(a, 'a-members');
+  phase = 'a-members-b-two-page-devices';
   await a.waitForFunction(() => [...document.querySelectorAll('[data-pc="account-member"]')].filter(row => row.querySelector('[data-pc="account-member-kick"]'))
     .some(row => row.querySelectorAll('.pc-members-sub').length === 2), { timeout: TIMEOUT });
   const targetId = await a.$eval('[data-pc="account-member-kick"]', button => button.closest('[data-account-id]').dataset.accountId);
@@ -163,12 +211,12 @@ try {
     await page.waitForFunction(() => [...document.querySelectorAll('[role="alert"],.sp-account-error')].some(node => node.textContent.includes('禁止加入')), { timeout: TIMEOUT });
   }
   check(result.network.filter(row => row.path.endsWith('/join') && row.status === 403).length === 2, 'both-devices-current-join-rejected');
-  phase = 'bans'; await openMembers(a); await a.click('[data-pc="account-bans-open"]');
+  phase = 'bans'; await openMembers(a, 'a-bans'); phase = 'bans-list'; await a.click('[data-pc="account-bans-open"]');
   await a.waitForSelector(`[data-pc="account-ban"][data-account-id="${targetId}"]`, { visible: true }); await shot(a, '03-creator-ban-account');
   phase = 'unban'; await a.click('[data-pc="account-member-unban"]'); await enabled(a, '[data-pc="account-member-submit"]'); await a.click('[data-pc="account-member-submit"]');
   await a.waitForSelector('[data-pc="account-member-confirm"]', { hidden: true });
   phase = 'rejoin'; await join(b, id);
-  await openMembers(b); const closesBeforeHome = b.docSockets.closed; await b.click('[data-pc="account-project-home"]');
+  await openMembers(b, 'b-rejoined-members'); phase = 'project-home-click'; const closesBeforeHome = b.docSockets.closed; await b.click('[data-pc="account-project-home"]');
   phase = 'home'; await reopen(b, id);
   check(b.docSockets.closed > closesBeforeHome, 'project-home-actually-closes-current-page-socket');
   check(result.network.filter(row => row.path.endsWith('/admin') && row.status === 200).length === 2, 'real-kick-and-unban-admin-requests');
@@ -177,6 +225,7 @@ try {
   result.completed = true;
 } catch (error) {
   result.failure = { phase, code: error?.name === 'TimeoutError' ? 'timeout' : 'probe-check-failed' };
+  for (const page of pages) await memberDiagnostic(page, 'failure').catch(() => {});
   for (let i = 0; i < pages.length; i++) await shot(pages[i], `failure-${i}`).catch(() => {});
   process.exitCode = 1;
 } finally {
