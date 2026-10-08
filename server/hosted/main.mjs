@@ -45,6 +45,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { X509Certificate } from 'node:crypto';
 import { checkTokenFormat } from '../docservice/auth.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
 import { startHostedCombo, readClusterToken, checkDataDir, HostedConfigError } from './combo.mjs';
@@ -66,6 +67,25 @@ function portOf(name, fallback) {
   if (raw === undefined || raw === '') return fallback;
   const n = Number(raw);
   return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : NaN;
+}
+
+const pinOf = value => String(value ?? '').replaceAll(':', '').toLowerCase();
+const pinValid = value => /^[a-f0-9]{64}$/.test(value);
+function accountServiceRegistry(services, { accountPin, assetPin, agentKid }) {
+  const expected = agentKid ? ['account', 'asset', 'agent'] : ['account', 'asset'];
+  if (!Array.isArray(services) || services.length !== expected.length) throw Error('services');
+  const rolePins = new Map(), pins = new Set();
+  for (const entry of services) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+        Object.keys(entry).length !== 2 || !Object.hasOwn(entry, 'serviceId') || !Object.hasOwn(entry, 'fingerprint256') ||
+        !expected.includes(entry.serviceId)) throw Error('services');
+    const pin = pinOf(entry.fingerprint256);
+    if (!pinValid(pin) || rolePins.has(entry.serviceId) || pins.has(pin)) throw Error('services');
+    rolePins.set(entry.serviceId, pin); pins.add(pin);
+  }
+  if (expected.some(role => !rolePins.has(role)) || rolePins.get('account') !== accountPin ||
+      rolePins.get('asset') !== assetPin || !pinValid(accountPin) || !pinValid(assetPin)) throw Error('services');
+  return [...rolePins].map(([serviceId, fingerprint256]) => ({ serviceId, fingerprint256 }));
 }
 
 async function main() {
@@ -131,7 +151,6 @@ async function main() {
       const internalPort = portOf('PROMPTCUT_ACCOUNT_INTERNAL_PORT', NaN);
       if (!Number.isInteger(internalPort) || internalPort < 1 || internalPort > 65535) throw new Error('internal-port');
       const services = JSON.parse(file('PROMPTCUT_ACCOUNT_INTERNAL_SERVICES_FILE').toString('utf8'));
-      if (!Array.isArray(services) || services.length < 3) throw new Error('services');
       account = {
         origin: env.PROMPTCUT_ACCOUNT_ORIGIN,
         authorityId: env.PROMPTCUT_ACCOUNT_AUTHORITY_ID,
@@ -148,11 +167,6 @@ async function main() {
           docAttestationPrivateKey: file('PROMPTCUT_DOC_ORDER_ATTESTATION_KEY_FILE'),
         },
       };
-      if (env.PROMPTCUT_DOC_AGENT_SERVICE_KID) {
-        const agent = services.filter(service => service.serviceId === 'agent');
-        if (agent.length !== 1) throw new Error('agent-service');
-        account.agent = { fingerprint256: agent[0].fingerprint256, serviceKid: env.PROMPTCUT_DOC_AGENT_SERVICE_KID };
-      }
       if (!account.authorityId || !account.authorityUrl || !account.keyId) throw new Error('authority');
     } catch { return configError('account-v2'); }
   }
@@ -168,6 +182,21 @@ async function main() {
         instanceId: env.PROMPTCUT_ASSET_INSTANCE_ID || undefined,
         tls: { key: file('PROMPTCUT_ASSET_STATUS_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_ASSET_STATUS_CLIENT_CERT_FILE'), ca: file('PROMPTCUT_ASSET_STATUS_CA_FILE') } };
     } catch { return configError('asset-status'); }
+  }
+  if (account) {
+    if (!assetStatus || env.PROMPTCUT_ASSET_INSTANCE_ID) return configError('asset-status');
+    try {
+      const accountPin = pinOf(account.serverFingerprint256), assetPin = pinOf(assetStatus.serverFingerprint256);
+      account.services = accountServiceRegistry(account.services, { accountPin, assetPin,
+        agentKid: env.PROMPTCUT_DOC_AGENT_SERVICE_KID });
+      const internalPin = pinOf(new X509Certificate(account.internalTls.cert).fingerprint256);
+      if (internalPin !== pinOf(new X509Certificate(account.clientTls.cert).fingerprint256) ||
+          internalPin !== pinOf(new X509Certificate(assetStatus.tls.cert).fingerprint256)) throw Error('doc-certificate');
+      if (env.PROMPTCUT_DOC_AGENT_SERVICE_KID) {
+        const agent = account.services.find(service => service.serviceId === 'agent');
+        account.agent = { fingerprint256: agent.fingerprint256, serviceKid: env.PROMPTCUT_DOC_AGENT_SERVICE_KID };
+      }
+    } catch { return configError('account-v2'); }
   }
   try {
     combo = await startHostedCombo({
