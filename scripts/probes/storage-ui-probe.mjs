@@ -96,16 +96,21 @@ async function portFree(p) {
 }
 
 let vite = null;
-async function stopTree(child) {
-  if (!child?.pid || child.exitCode !== null) return;
-  await new Promise((resolve) => {
-    const k = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-    k.once('error', resolve);
-    k.once('exit', resolve);
-  });
+async function stopTree(child, closed) {
+  if (!child?.pid) return;
+  const actualClose = closed ?? new Promise((resolve) => child.once('close', resolve));
+  if (child.exitCode === null && child.signalCode === null) {
+    await new Promise((resolve) => {
+      const k = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      k.once('error', resolve);
+      k.once('close', resolve);
+    });
+  }
+  await actualClose;
 }
 
 let browser = null;
+let viteClosed = null;
 try {
   for (const p of [PORT, PORT + 1, PORT + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占`);
   // vite 的 exports 不导出 bin/,按包目录找(同 server/vite-plugin-prerender.ts 的 viteBin);依赖向上解析到主仓库
@@ -117,6 +122,7 @@ try {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  viteClosed = new Promise((resolve) => vite.once('close', resolve));
   vite.stdout.on('data', (b) => { log.push(String(b)); if (log.length > 40) log.shift(); });
   vite.stderr.on('data', (b) => { log.push(String(b)); if (log.length > 40) log.shift(); });
   await until('dev server 回 200', async () => {
@@ -141,10 +147,15 @@ try {
 
   browser = await puppeteer.launch({ headless: true, args: [...PROBE_CHROME_ARGS, '--no-sandbox'] });
   const pageErrors = [];
+  const safeDiagnosticText = (value) => String(value ?? '').replace(/https?:\/\/\S+/gi, '[url]')
+    .replace(/(token|secret|password|cookie|authorization)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]').slice(0, 300);
+  const recordPageError = (error) => {
+    if (pageErrors.length < 12) pageErrors.push(safeDiagnosticText(error?.message || error));
+  };
   const newPage = async () => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 860 });
-    page.on('pageerror', (e) => pageErrors.push(String(e?.message || e)));
+    page.on('pageerror', recordPageError);
     page.on('dialog', (d) => { void d.accept(); });
     return page;
   };
@@ -290,13 +301,67 @@ try {
   await page.$eval('.sp-main', (el) => { el.scrollTop = 0; });
   await sleep(100);
   check(!(await inView(page)), 'U4 前提:滚回顶上后「存储」不在视野上半');
-  const openStorageFromMenu = async (p) => {
-    await p.click('.pc-titlebar-menu-button');
-    await until('菜单项「存储…」', () => p.$('[data-pc="titlebar-open-storage"]'));
-    await p.click('[data-pc="titlebar-open-storage"]');
+  const menuState = async (p) => p.evaluate(() => {
+    const hitInfo = (x, y) => {
+      const hit = document.elementFromPoint(x, y);
+      return hit ? { tag: hit.tagName.toLowerCase(), dataPc: hit.getAttribute('data-pc'), className: String(hit.className ?? '').slice(0, 80) } : null;
+    };
+    const describe = (el) => {
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      const x = Math.round(rect.left + rect.width / 2), y = Math.round(rect.top + rect.height / 2);
+      return {
+        box: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+        clickPoint: { x, y, hit: hitInfo(x, y) },
+      };
+    };
+    const button = document.querySelector('.pc-titlebar-menu-button');
+    const item = document.querySelector('[data-pc="titlebar-open-storage"]');
+    return {
+      pathname: location.pathname,
+      button: button ? {
+        label: String(button.getAttribute('aria-label') || button.getAttribute('title') || button.innerText || '').trim().slice(0, 80),
+        ariaExpanded: button.getAttribute('aria-expanded'),
+        ...describe(button),
+      } : null,
+      menuitem: item ? {
+        dataPc: item.getAttribute('data-pc'),
+        disabled: item.hasAttribute('disabled') || Boolean(item.disabled) || item.getAttribute('aria-disabled') === 'true',
+        ariaDisabled: item.getAttribute('aria-disabled'),
+        ...describe(item),
+      } : null,
+    };
+  });
+  const openStorageFromMenu = async (p, key) => {
+    const diagnostic = out.U4.diagnostics[key];
+    const capture = async (stage) => {
+      try { diagnostic[stage] = { ...(await menuState(p)), pageErrors: pageErrors.slice(-8) }; }
+      catch (error) { diagnostic[`${stage}CaptureError`] = safeDiagnosticText(error?.message || error); }
+    };
+    await capture('before');
+    try {
+      await p.click('.pc-titlebar-menu-button');
+      await capture('afterButtonClick');
+      await until('菜单项「存储…」', () => p.$('[data-pc="titlebar-open-storage"]'));
+      await capture('beforeMenuitemClick');
+      await p.click('[data-pc="titlebar-open-storage"]');
+      await capture('afterMenuitemClick');
+    } catch (error) {
+      await capture('onFailure');
+      const screenshot = path.join(TMP, `u4-${key}-failure.png`);
+      try {
+        await p.screenshot({ path: screenshot });
+        diagnostic.failureScreenshot = screenshot;
+      } catch (screenshotError) {
+        diagnostic.screenshotError = safeDiagnosticText(screenshotError?.message || screenshotError);
+      }
+      diagnostic.error = safeDiagnosticText(error?.message || error);
+      throw error;
+    }
   };
-  await openStorageFromMenu(page);
-  out.U4 = { fromStart: await until('开始页上滚到「存储」', () => inView(page), 5000).catch(() => false) };
+  out.U4 = { diagnostics: { fromStart: {}, fromEditor: {} } };
+  await openStorageFromMenu(page, 'fromStart');
+  out.U4.fromStart = await until('开始页上滚到「存储」', () => inView(page), 5000).catch(() => false);
   check(out.U4.fromStart, 'U4 开始页上点「存储…」滚到「存储」');
   await page.screenshot({ path: path.join(OUT, 'u4-menu-from-start.png') });
 
@@ -304,7 +369,7 @@ try {
   await ed.goto(ORIGIN + '/?editor', { waitUntil: 'domcontentloaded' });
   await until('编辑器', () => ed.$('.pc-bar--main'), 60_000);
   await sleep(1500);
-  await openStorageFromMenu(ed);
+  await openStorageFromMenu(ed, 'fromEditor');
   await until('回到开始页', () => ed.$('[data-pc="start-storage"]'), 15_000);
   out.U4.fromEditor = await until('从编辑器回来滚到「存储」', () => inView(ed), 8000).catch(() => false);
   check(out.U4.fromEditor, 'U4 从编辑器点「存储…」回到开始页并滚到「存储」');
@@ -392,9 +457,11 @@ try {
   fails.push(`探针自己出错:${e?.stack || e}`);
 } finally {
   await browser?.close().catch(() => {});
-  await stopTree(vite);
+  await stopTree(vite, viteClosed);
   await sleep(500);
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 留着也在临时目录里 */ }
+  if (fails.length === 0) {
+    try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 留着也在临时目录里 */ }
+  }
 }
 out.fails = fails;
 out.ok = fails.length === 0;
