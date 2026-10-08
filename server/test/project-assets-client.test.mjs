@@ -91,3 +91,22 @@ test('byte array imports preserve whole bytes; invalid sources fail before any w
   assert.equal(result.assetRef.hash, hash(payload)); assert.equal(result.assetRef.size, payload.length);
   assert.deepEqual(f.workspace.list(), []);
 });
+
+for (const method of ['openRead', 'verifyRef']) test(`ProjectAssets close owns ${method} setup and never dispatches new IO after delayed issue`, { timeout: 5000 }, async () => {
+  let release, started; const issued = new Promise(r => { started = r; }), delay = new Promise(r => { release = r; });
+  let requests = 0, returned = false, source;
+  const contextAccess = { fromGrant: async () => context, authorize: async () => ({ allowed: true }) };
+  const resources = createRunResources({ contextAccess });
+  const assets = createProjectAssets({ contextAccess, resources, maxImportBytes: 4096, workspace: async () => { throw new Error('not-needed'); },
+    reserveImport: async () => {}, runAssetClient: { async issue() { started(); await delay; return { resource: { size: 1, hash: 'a'.repeat(64) } }; },
+      async request() { requests++; source = new Readable({ read() {} }); return { status: 200, stream: source, closed: closed(source) }; },
+      async json() { requests++; throw new Error('unexpected-json-dispatch'); } } });
+  const pending = method === 'openRead' ? assets.openRead(context, 'media') : assets.verifyRef(context, { projectId: 'A', hash: 'a'.repeat(64), size: 1 });
+  const result = pending.then(() => null, error => error);
+  await issued; const closing = assets.close().then(receipt => { returned = true; return receipt; });
+  try {
+    await new Promise(r => setImmediate(r)); assert.equal(returned, false);
+    release(); assert.match((await result).message, /project-assets-closed/);
+    assert.equal((await closing).streamsClosed, true); assert.equal(requests, 0); assert.equal(source, undefined);
+  } finally { release(); await result; await closing; await resources.close(); }
+});

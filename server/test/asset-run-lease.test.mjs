@@ -122,3 +122,26 @@ test('backpressure completion removes every losing close/error listener', async 
   const waiting = waitAssetWritable(stream); stream.closed = true; stream.emit('close'); await assert.rejects(waiting, /response-closed/);
   assert.equal(stream.listenerCount('drain'), 0);
 });
+
+test('pause supervises a real lease close failure while a separate admission is still unresolved', { timeout: 5000 }, async t => {
+  const dir = await temp(t); const failure = Object.assign(new Error('controlled-actual-close-failure'), { code: 'close-failure' });
+  const consumer = createAssetRunConsumer({ client: { eventsSince: async () => ({ events: [], headSeq: 0 }),
+    acknowledgeEvent: async () => { throw new Error('must-not-ACK'); } }, file: path.join(dir, 'pause.json'),
+    assetInstanceId: 'asset-one', serviceIdentity: 'asset-key', verifyLifecycle: async () => true }); await consumer.start();
+  const lease = await createAssetResourceLease({ check: async () => ({ allowed: true }), subscribe: () => () => {}, close: () => { throw failure; } });
+  const initial = consumer.beginAdmission();
+  await consumer.admit({ leaseId: 'pause-lease', projectId: 'A', runGrantId: 'grant', instanceId: 'agent-one', instanceGeneration: 1 },
+    { lease, last: {}, closed: Promise.resolve() }, initial); consumer.finishAdmission(initial);
+  const admission = consumer.beginAdmission(), unhandled = [];
+  const onUnhandled = error => unhandled.push(error); process.on('unhandledRejection', onUnhandled);
+  const outcome = consumer.unavailable(new Error('stop')).then(() => null, error => error);
+  try {
+    await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r));
+    assert.deepEqual(unhandled, []); // The outer promise is handled, including during the pending cohort.
+    consumer.finishAdmission(admission); assert.equal(await outcome, failure); assert.equal(consumer.ready, false);
+    assert.throws(() => consumer.controlWitness('run-asset:none'), /closure-pending/);
+  } finally {
+    consumer.finishAdmission(admission); await outcome; await consumer.close().catch(() => {});
+    process.removeListener('unhandledRejection', onUnhandled);
+  }
+});
