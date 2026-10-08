@@ -20,6 +20,20 @@ export interface CloudIdentity {
   getGrant?(conversationId: string): Promise<string | undefined> | string | undefined;
 }
 
+/** Account-v2 delegates come only from the current doc session, never auth.ticket. */
+export function accountCloudIdentity(options: {
+  projectId: string;
+  isCurrent: () => boolean;
+  session: () => Promise<{ projectId: string; agentDelegationTicket: string }>;
+}): CloudIdentity {
+  return { async getTicket() {
+    if (!options.isCurrent()) throw new CloudIdentityError();
+    const value = await options.session();
+    if (!options.isCurrent() || value.projectId !== options.projectId || !/^[A-Za-z0-9_-]{43}$/.test(value.agentDelegationTicket)) throw new CloudIdentityError();
+    return value.agentDelegationTicket;
+  } };
+}
+
 export class CloudIdentityError extends Error {
   readonly code = "no-identity";
   constructor(message = "还没有取得云端 Agent 的身份证明") {

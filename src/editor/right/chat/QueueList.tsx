@@ -2,6 +2,26 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useQueue, remove, type QueuedItem } from "../../../ai/chatQueue";
 import { playEnter, prefersReducedMotion } from "../../enterMotion";
 import "./queue.css";
+import type { ChatMessage } from "../../../ai/types";
+import type { CloudQueueSnapshot, CloudSender } from "../../../ai/cloud/types";
+import { accountMessageId } from "../../../ai/cloud/events";
+
+/** Server FIFO is already accepted; local insert/edit/remove controls do not apply. */
+export function CloudQueueList(props: { queue?: CloudQueueSnapshot | null; messages: ChatMessage[]; senders?: Record<string, CloudSender> }) {
+  const items = props.queue?.items.filter(item => item.state === 'queued').sort((a, b) => (a.position ?? 0) - (b.position ?? 0)) ?? [];
+  if (!items.length) return null;
+  return <section className="ai-queue" data-pc="cloud-queue" data-queue-revision={props.queue?.queueRevision} aria-label="云端持久队列">
+    <div className="ai-queue-head">已排队 {items.length} 条 · 等待执行服务</div>
+    <ol className="ai-queue-list">{items.map(item => {
+      const id = accountMessageId(item.messageId), message = props.messages.find(row => row.id === id);
+      return <li className="ai-queue-item" key={item.messageId} data-message-id={item.messageId} data-queue-position={item.position}>
+        <span className="ai-queue-no">第 {item.position} 条</span>
+        <span className="pc-cloud-sender">{props.senders?.[id]?.name ?? '发送者正在读取'}</span>
+        <span className="ai-queue-text">{message?.text ?? '消息正在读取'}</span>
+      </li>;
+    })}</ol>
+  </section>;
+}
 
 /** 离开队列的那一行淡出、收起的时长,和 queue.css 的 ai-queue-row-leave 一致 */
 const LEAVE_MS = 160;

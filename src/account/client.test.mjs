@@ -6,7 +6,8 @@ const account = { id: 'acc_' + 'a'.repeat(24), name: 'Alice' };
 const projectId = 'sp_' + 'a'.repeat(26);
 const device = { deviceId: 'device-test', deviceName: 'fixture' };
 const credential = (at = 100_000) => ({ ok: true, account, loginId: 'editor-test', accessToken: 'access-test', accessExpiresAt: at });
-const session = { ok: true, connectionTicket: 'c'.repeat(43), assetTicket: 'a'.repeat(43), expiresAt: 100_000 };
+const session = { ok: true, connectionTicket: 'c'.repeat(43), assetTicket: 'a'.repeat(43), agentDelegationTicket: 'd'.repeat(43), expiresAt: 100_000,
+  projectId, creator: true, access: 'rw', accessRevision: 1, hosted: { agent: { available: true, enabled: false, url: 'https://visuhive.com/agent/v1' } } };
 const reply = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 
 test('online account uses cookie+CSRF for website and omit+bearer for exact project; renewal never silently relogs', async () => {
@@ -30,6 +31,30 @@ test('online account uses cookie+CSRF for website and omit+bearer for exact proj
   const renewal = calls.find(call => call.path.endsWith('/editor/renew'));
   assert.equal(JSON.parse(renewal.body).loginId, 'editor-test');
   assert.equal(calls.filter(call => call.path.endsWith('/editor/session')).length, 1);
+});
+
+test('account session keeps opaque Agent delegation and authoritative creator; admin uses bearer revision', async () => {
+  let wire;
+  const client = createAccountClient({ online: true, origin: 'https://visuhive.com', device, now: () => 1000,
+    fetch: async (url, init) => {
+      if (url.pathname.endsWith('/me')) return reply({ ok: true, account, csrfToken: 'csrf' });
+      if (url.pathname.includes('/editor/')) return reply(credential());
+      if (url.pathname.endsWith('/admin')) { wire = init; return reply({ ok: true, eventId: 'event', accessRevision: 2, completed: false, state: 'pending-services' }); }
+      return reply(session);
+    } });
+  await client.restore(); const actual = await client.session(projectId);
+  assert.equal(actual.agentDelegationTicket, 'd'.repeat(43)); assert.equal(actual.creator, true); assert.equal(actual.hosted.agent.enabled, false);
+  await client.setAgentEnabled(projectId, true, actual.accessRevision, 'enable-once');
+  assert.equal(wire.credentials, 'omit'); assert.equal(wire.headers.Authorization, 'Bearer access-test');
+  assert.deepEqual(JSON.parse(wire.body), { projectId, enabled: true, expectedAccessRevision: 1, requestId: 'enable-once', op: 'set-hosted-service', service: 'agent' });
+});
+
+test('missing delegation or another project projection cannot become a usable session', async () => {
+  for (const broken of [{ ...session, agentDelegationTicket: undefined }, { ...session, projectId: 'other' }, { ...session, creator: 'true' }]) {
+    const client = createAccountClient({ online: false, origin: 'https://visuhive.com', device, now: () => 1000,
+      native: async operation => operation === 'recover' ? credential() : broken });
+    await client.restore(); await assert.rejects(client.session(projectId), { code: 'session-unavailable' });
+  }
 });
 
 test('desktop password and recovery use only native bridge; caller request IDs are stable for retry', async () => {

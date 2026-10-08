@@ -13,8 +13,8 @@
 import type { ChatAttachment, ChatMessage } from "../types.ts";
 import type { ChatStore } from "../liveChat.ts";
 import { CloudError, cloudErrorText, type CloudApi } from "./cloudApi.ts";
-import { applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, userMessageId } from "./events.ts";
-import type { CloudEvent, CloudSendBody } from "./types.ts";
+import { accountMessageId, queueSnapshot, applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, userMessageId } from "./events.ts";
+import type { CloudEvent, CloudSendBody, CloudSendAccepted, CloudQueueSnapshot, CloudSender } from "./types.ts";
 import type { PageRequestAnswer } from "./pageRequests.ts";
 
 export type CloudConnection = "idle" | "connecting" | "live" | "reconnecting";
@@ -27,6 +27,8 @@ export interface CloudSessionView {
   /** 连不上、身份不对这类要给用户看的原因;连上了就清掉 */
   problem: string | null;
   lastSeq: number;
+  queue?: CloudQueueSnapshot | null;
+  senders?: Record<string, CloudSender>;
 }
 
 export interface CloudSessionDeps {
@@ -66,6 +68,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
   let problem: string | null = null;
   let wake: (() => void) | null = null;
   let closed = false;
+  let queue: CloudQueueSnapshot | null = null;
+  let senders: Record<string, CloudSender> = {};
   let queued: CloudEvent[] = [];
   /** 这一页刚发出去的消息带的附件(气泡里显示名字用):runId → 附件;服务端的 user 事件到了(或已经在)就贴上、从表里去掉 */
   const pendingAttachments = new Map<string, ChatAttachment[]>();
@@ -101,8 +105,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
   const listeners = new Set<() => void>();
 
   function publish() {
-    const next: CloudSessionView = { conversationId, streaming: hasOpenRun(store.get()), connection, problem, lastSeq };
-    if (next.conversationId === view.conversationId && next.streaming === view.streaming && next.connection === view.connection && next.problem === view.problem && next.lastSeq === view.lastSeq) return;
+    const next: CloudSessionView = { conversationId, streaming: hasOpenRun(store.get()), connection, problem, lastSeq, queue, senders };
+    if (next.conversationId === view.conversationId && next.streaming === view.streaming && next.connection === view.connection && next.problem === view.problem && next.lastSeq === view.lastSeq && next.queue === view.queue && next.senders === view.senders) return;
     view = next;
     for (const l of [...listeners]) l();
   }
@@ -128,6 +132,15 @@ export function createCloudSession(deps: CloudSessionDeps) {
   }
 
   function handle(ev: CloudEvent) {
+    if (ev.type === 'access.revoked') {
+      queue = null; senders = {}; queued = []; store.set([]);
+      problem = '当前账号已无法读取这个对话，请重新选择有权限的对话。'; publish(); return;
+    }
+    if (ev.type === 'queue.state' && conversationId) {
+      const snapshot = queueSnapshot(ev, conversationId);
+      if (!snapshot || (queue && (snapshot.queueRevision < queue.queueRevision || snapshot.aclRevision < queue.aclRevision))) return;
+      queue = snapshot; publish(); return;
+    }
     if (typeof ev.seq === "number") {
       if (ev.seq <= lastSeq) return; // 补发与实时交界处、重连后重复的:不重
       lastSeq = ev.seq;
@@ -138,6 +151,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
       else if (flushTimer === null) flushTimer = setTimeout(flush, flushMs);
     } else {
       flush();
+      if (ev.type === 'user' && typeof ev.messageId === 'string' && typeof ev.senderAccountId === 'string' && typeof ev.senderNameAtSend === 'string')
+        senders = { ...senders, [accountMessageId(ev.messageId)]: { accountId: ev.senderAccountId, name: ev.senderNameAtSend } };
       store.set((prev) => applyCloudEvent(prev, ev));
       if (ev.type === "user" && typeof ev.runId === "string") applyPendingAttachments(ev.runId);
     }
@@ -237,6 +252,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       lastSeq = 0;
       queued = [];
       pendingAttachments.clear();
+      queue = null; senders = {};
       problem = null;
       store.set([]);
       publish();
@@ -250,7 +266,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     async send(body: CloudSendBody, shown?: ChatAttachment[]): Promise<void> {
       if (!conversationId || closed) throw new CloudError("bad-request", "还没有打开对话。");
       const seenBefore = lastSeq;
-      let accepted: { runId: string; seq: number };
+      let accepted: CloudSendAccepted;
       try {
         accepted = await api.send(conversationId, pageId ? { ...body, pageId } : body);
       } catch (err) {

@@ -6,6 +6,8 @@ export interface CloudModelChoice {
 }
 
 export interface CloudInfo {
+  accountMode?: boolean;
+  executorMounted?: boolean;
   enabled: boolean;
   /** 托管方配置的模型;一个或没有时界面不给选 */
   models: CloudModelChoice[];
@@ -19,6 +21,11 @@ export interface CloudInfo {
 export type CloudChatState = "idle" | "running" | "interrupted" | "failed" | "revoked";
 
 export interface CloudChatItem {
+  projectId?: string;
+  ownerAccountId?: string;
+  visibility?: 'shared' | 'private';
+  creatorReadOnly?: boolean;
+  queueRevision?: number;
   id: string;
   title: string;
   /** 毫秒;服务端没给时是 0 */
@@ -44,6 +51,8 @@ export interface CloudPageState {
 }
 
 export interface CloudSendBody {
+  requestId?: string;
+  selectionSnapshot?: { pageId: string };
   prompt: string;
   model?: string;
   effort?: string;
@@ -56,3 +65,18 @@ export interface CloudSendBody {
   /** 发这条消息的那张页面的页面号(契约第 28 节):带了,这一轮里云端 Agent 才能经反向通道让这张页面执行播放头等操作 */
   pageId?: string;
 }
+
+export interface CloudSendAccepted {
+  runId: string | null; seq: number;
+  messageId?: string; queuePosition?: number; queueRevision?: number;
+}
+export interface CloudQueueItem {
+  messageId: string; arrivalSeq: number;
+  state: 'queued' | 'preparing' | 'running' | 'cancelled' | 'done';
+  position: number | null; runId: string | null;
+}
+export interface CloudQueueSnapshot {
+  conversationId: string; queueRevision: number; aclRevision: number;
+  currentRunId: string | null; items: CloudQueueItem[];
+}
+export interface CloudSender { accountId: string; name: string }

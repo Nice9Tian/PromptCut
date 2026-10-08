@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { getChatStore, useChatMessages, type ChatStore } from "../liveChat";
 import { getState } from "../../store/project";
 import { useSync, currentDocProjectId } from "../../editor/sync/syncManager";
+import { selectionPresenceStatus } from "../../editor/sync/selectionPresence";
 import { getTabCreativity } from "../agentTabs";
 import { getScript } from "../script";
 import { mediaCardUrl } from "../mediaRef";
@@ -124,8 +125,8 @@ const pageExec: PageRequestExec = {
   end: endAgentTool,
 };
 
-export function useCloudApi(url: string | null): CloudApi {
-  return useMemo(() => createCloudApi({ baseUrl: () => url }), [url]);
+export function useCloudApi(url: string | null, projectId: string | null = null): CloudApi {
+  return useMemo(() => createCloudApi({ baseUrl: () => url, projectId: () => projectId }), [url, projectId]);
 }
 
 /* ---------------- 本机模式下看一眼云端(桌面版) ---------------- */
@@ -143,7 +144,7 @@ export interface CloudDigest {
  * 「云端对话进行中」的提示靠它;之后不再轮询,用户打开历史列表时再刷新一次。没有云端、身份没就绪就什么都不发。
  */
 export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudDigest {
-  const api = useCloudApi(cloud.url);
+  const api = useCloudApi(cloud.url, cloud.projectId);
   const [items, setItems] = useState<CloudChatItem[]>([]);
   const [running, setRunning] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -223,7 +224,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const storeKey = cloud.accountMode ? `cloud:${tabId}:${projectId}:${accountScope}` : `cloud:${tabId}`;
   const store = useMemo(() => getChatStore(storeKey), [storeKey]);
   const messages = useChatMessages(store);
-  const api = useCloudApi(cloud.url);
+  const api = useCloudApi(cloud.url, cloud.projectId);
   const key = enabled && cloud.available && cloud.url && projectId && (!cloud.accountMode ||
     (consent.accepted === true && consent.accountId === cloud.accountId && !!cloud.accountId))
     ? `${projectId}|${cloud.url}|${tabId}|${cloud.identityVersion}|${accountScope}` : "";
@@ -238,6 +239,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const [histItems, setHistItems] = useState<CloudChatItem[]>([]);
   const [histLoading, setHistLoading] = useState(false);
   const sessionRef = useRef<CloudSession | null>(null);
+  const pendingSendRef = useRef<{ key: string; conversationId: string; text: string; requestId: string } | null>(null);
   const sessionKeyRef = useRef("");
   const convRef = useRef(conversationId);
   convRef.current = conversationId;
@@ -356,8 +358,18 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       ...(model ? { model } : {}),
       ...(sent.length ? { attachments: sent.map((a) => ({ url: a.url })) } : {}),
     };
+    if (cloud.accountMode) {
+      const presence = selectionPresenceStatus();
+      if (!presence.linked || !presence.pageId || presence.unsupported) { setNotice('当前页面选区尚未连接，请稍后重试。'); return false; }
+      const pending = pendingSendRef.current;
+      if (!pending || pending.key !== key || pending.conversationId !== s.conversationId || pending.text !== body.prompt)
+        pendingSendRef.current = { key, conversationId: s.conversationId!, text: body.prompt, requestId: crypto.randomUUID() };
+      body.requestId = pendingSendRef.current!.requestId;
+      body.selectionSnapshot = { pageId: presence.pageId };
+    }
     try {
       await s.send(body, sent.length ? bubbleAttachments(sent) : undefined);
+      pendingSendRef.current = null;
       return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
@@ -414,7 +426,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   return {
     store,
     messages: blocked ? [] : messages,
-    view: blocked ? { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 } : view,
+    view: blocked ? { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0, queue: null, senders: {} } : view,
     info: blocked ? null : info,
     notice,
     clearNotice: () => setNotice(null),
