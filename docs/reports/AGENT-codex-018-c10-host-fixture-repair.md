@@ -25,3 +25,30 @@
 优先尝试真实原生 `particles` 卡，使用其现有控件合法参数 quantity=400、links=yes、speed=1.2、size=3、config空、seed在1..99999；时长3到3+1/FPS之间，start=SECONDS+1。它有真实逐步粒子模拟、现有independent/canvasHeavy审阅能力，不改src或能力表。仍必须从页面实际probe身份/L2完整成本及最后成功plan证明确实已测并入集合，没进入就立即明确失败、保存证据，不以canvas标志或默认weight代替。该候选尚未真实渲染，不能承诺400粒子必重；只有获租实测才能裁定，轻则按原语义另选机制，不调成本JSON/产品预算。
 
 主main-v2浏览器竞争、同clip/hostFP/细任务node.completed非dedup/新ready键全部保留。其它用户91857分支仅Git对象只读，看到其按精确目标细任务诊断无任务的思路；不采纳其修改main竞争或计时门槛，不合并其源码。
+
+## 获准实施与源码固定
+
+root 审过 particles 的 simpleOptions/seed/stepTo 和真实 capabilities，批准上述三级最小机制；没有新增产品规则。源码固定 `0c1ccf2a`。
+
+- `c10-browser-probe.mjs` 以真实 store.actions 增加 particles400 / links=yes / speed1.2 / size3 / config空 / 随机合法seed，真实时长3..3+1/FPS；读回完整保存参数和项目duration。未改卡片、能力表、成本或产品分派阈值。
+- host 启动前读取目标最新真实 probe job、running=false、同身份且测量时间不早于本次job的完整 L2 build 成本。白名单保留 CardCostRecord 的所有现有字段（含 device、sample/stepMax/布尔探针及可选标记），不复制任意成本扩展、session、错误原文或协议载荷。
+- `c10-judge.mjs` 用生产 `clipWeight` 与在线 L2 后端同一默认 tuning 计算实测权重；并核可见舞台目标位置为 heavy、publisher.measured、最后成功ACK的ID=last=当前project/rev、lastClips确含目标且state=open。它是启动前置，不是完成证据。
+- 实测轻立即结束前置；其它缺失允许原90秒观测边界收口。两者均在保存 `a5-fixture-prerequisite.json` / out.steps 后 throw，不继续启动host或等待900/600秒。沿用边界防卡死，没有把耗时改成成功门槛。
+- `c10-host-claim.test.mjs` 保留原8项全部断言，仅明确旧 canvas 控制只证明已选之后的split。新增2项：实测轻/未落定/缺成本/错身份/旧测量/旧计划/漏目标/异项目/舞台轻全部拒；particles真实能力表和seed/duration内容身份。受控成本只测判定函数，不冒充浏览器实测。
+
+原 main-v2 浏览器竞争、hostDidWork、同clip+hostFP+完整任务世代+node.completed且非dedup、新resultKey的host层ready断言未放宽。当前没有把计划数或canvasHeavy等同实际完成。
+
+## 本次验证与边界
+
+固定源码 `0c1ccf2a`，测中未修改源码：
+
+| 项目 | 命令及原始日志 | 首次结果 |
+| --- | --- | --- |
+| 纯队列/诊断目标 | `npm test -- server/test/c10-host-claim.test.mjs`；`%TEMP%/pc-c10-fixture-repair-target-1.log` | exit0；10 tests/10 pass/0 fail/0 cancelled/0 skip；1537.3001ms；无自动重跑 |
+| 强制类型 | `npx --no-install tsc -b --force`；`%TEMP%/pc-c10-fixture-repair-types-1.log` | exit0、零错误；wall7.4852585s |
+| 全量npm | 未运行 | 共享租约未授，不冒用旧source通过 |
+| 真实particles宽探针 | 未运行 | root3652旧探针自然运行，未抢服务/端口/共享预渲染 |
+
+两条验证命令均设置 process-only cuda_Vit Python、PROMPTCUT_TEST_PYTHON、PYTHONDONTWRITEBYTECODE、静默 preload；目标的子进程均 windowsHide，spawnSync 实际返回退出状态，无新增服务/监听。旧80首失败、旧3652在途原始输出、前叶expectVersion失败均保留，没有删日志或重跑赌绿。
+
+剩余最关键待证：particles400 的真实测量可能仍判轻；纯目标和类型不证明它已进入实际清单，更不证明host渲染成功。待 root 原探针自然结束/owned服务关闭并另给运行窗口，再执行该固定源码的真实探针，先审前置完整成本与清单证据。若轻，保留首失败按合法参数/正常卡片机制继续选型，禁止伪造weight/cost或提高控件上限。当前交付是已定位夹具前提错误与最小替换/硬前置实现，不宣称整项C10已修复或三版本工作结束。
