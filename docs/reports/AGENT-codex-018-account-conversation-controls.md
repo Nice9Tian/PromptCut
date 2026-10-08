@@ -102,3 +102,10 @@
 - `openProject` 保留 `[data-pc="cloud-project-copy"]` 的可见等待作为项目分享功能原验收；consent 实际接受后，探针现在要求分享 toast 内的真实 `aria-label="关闭"` 按钮可见、启用且点击中心无遮挡，再用 Puppeteer `ElementHandle.click()` 关闭，并等待该 toast 从 DOM 消失。creator 与 owner 页面各自执行此步骤。
 - 历史入口现有的中心无遮挡检查和真实 ElementHandle 点击保持原样；没有通过 `evaluate`/DOM `.click()` 或删除 toast 节点规避遮挡。其余已记录的 pageerror 与安全快照不需额外扩大采集范围。
 - 本轮只做探针语法检查和 diff 检查，不运行浏览器、服务、type、目标测试或 full；root 将以已修复 metadata gate 的基线重新构建，并在一次真实窗口运行中验证。
+
+## 共享历史正文验收的语义化修正（2026-10-09）
+
+- root 第四次真实窗口记录 14/15 项：两账号登录、项目打开、toast 关闭、Agent 开启和消息发送均通过；在 `creator-can-read-shared-conversation` 失败。保留的失败截图显示 creator 的活动云端面板已出现本轮固定测试消息 `Owner-created shared conversation for control probe`，无 pageerror。此次没有重跑或覆盖这份首红证据。
+- `MessageList.tsx` 当前源中消息容器是 `.ai-messages`，用户正文实际由 `UserBubble` 渲染在 `.ai-message.user .ai-message-text`；旧探针只数 `.ai-row[data-pc-msg]`，没有验证消息正文，也没有保证 `inspect` 选中活动的 CloudAiPanel。虽然源码行容器目前仍带该标记，但此次错误证明仅凭行标记数量并不足以验收实际对话内容。
+- 探针现在在未隐藏的活动 CloudAiPanel 内等待固定用户正文文本实际出现在 `.ai-messages .ai-message.user .ai-message-text` 节点，并确认节点有可见尺寸且与消息滚动区域相交；`visibleMessages` 也改为统计活动面板内实际可见的用户正文节点。没有改产品标记或页面逻辑，也没有注入消息状态。读取与共享/私有按钮权限检查现在使用同一活动面板。
+- 本次只改探针与报告；保留实际异步 `waitForFunction` 等待，仍需 root 下一轮真实窗口验证文本读取和活动面板选择。这里只运行 `node --check`、`git diff --check` 和路径核对；没有启动浏览器、服务或运行 full/目标测试。

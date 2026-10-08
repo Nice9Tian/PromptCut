@@ -27,7 +27,7 @@ export function classifyAccountControlOutcome(state, confirmedText) {
 
 export async function inspectAccountConversationControls(page) {
   return page.evaluate(() => {
-    const panel = document.querySelector('[data-pc="cloud-ai-panel"]');
+    const panel = document.querySelector('[data-pc="cloud-ai-panel"]:not([data-inactive="1"]):not([aria-hidden="true"])');
     if (!panel) throw new Error('cloud-ai-panel-not-mounted');
     const visible = selector => {
       const element = panel.querySelector(selector);
@@ -40,6 +40,19 @@ export async function inspectAccountConversationControls(page) {
       }
       return true;
     };
+    const messageList = panel.querySelector('.ai-messages');
+    const visibleUserMessages = [...panel.querySelectorAll('.ai-messages .ai-message.user .ai-message-text')].filter(element => {
+      for (let node = element; node; node = node.parentElement) {
+        const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+        if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none' ||
+            style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0 ||
+            rect.width <= 0 || rect.height <= 0) return false;
+        if (node === panel) break;
+      }
+      if (!messageList) return false;
+      const rect = element.getBoundingClientRect(), clip = messageList.getBoundingClientRect();
+      return rect.bottom > clip.top && rect.top < clip.bottom && rect.right > clip.left && rect.left < clip.right;
+    });
     return {
       running: panel.getAttribute('data-cloud-running') === '1',
       canStop: panel.getAttribute('data-cloud-can-stop') === '1',
@@ -49,7 +62,7 @@ export async function inspectAccountConversationControls(page) {
       creatorReadOnly: visible('[data-pc="cloud-readonly-note"]'),
       stopVisible: visible('[data-pc="ai-stop"]') || visible('[data-pc="cloud-stop-readonly"]'),
       status: panel.querySelector('[data-pc="cloud-control-status"]')?.textContent?.trim() ?? null,
-      visibleMessages: panel.querySelectorAll('.ai-row[data-pc-msg]').length,
+      visibleMessages: visibleUserMessages.length,
     };
   });
 }
@@ -419,7 +432,8 @@ async function main() {
     await creator.waitForSelector('[data-pc="cloud-off"]', { hidden: true, timeout: TIMEOUT });
     await owner.waitForFunction(() => document.querySelector('[data-pc="cloud-off"]') === null, { timeout: TIMEOUT });
     phase = 'owner-creates-shared-conversation';
-    await fill(owner, '[data-pc="cloud-ai-panel"] [data-pc="ai-input"]', 'Owner-created shared conversation for control probe');
+    const ownerPrompt = 'Owner-created shared conversation for control probe';
+    await fill(owner, '[data-pc="cloud-ai-panel"] [data-pc="ai-input"]', ownerPrompt);
     await owner.keyboard.press('Enter');
     await owner.waitForFunction(() => document.querySelectorAll('[data-pc="cloud-queue"] li[data-message-id]').length === 1, { timeout: TIMEOUT });
     await owner.waitForFunction(() => Boolean(window.__pcCloud?.main?.conversationId?.()), { timeout: TIMEOUT });
@@ -427,6 +441,24 @@ async function main() {
     check(typeof conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(conversationId), 'owner-conversation-id-shape');
     await chooseHistory(creator, conversationId);
     await creator.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('共有对话'), { timeout: TIMEOUT });
+    await creator.waitForFunction(expected => {
+      const panel = document.querySelector('[data-pc="cloud-ai-panel"]:not([data-inactive="1"]):not([aria-hidden="true"])');
+      const list = panel?.querySelector('.ai-messages');
+      if (!list) return false;
+      return [...list.querySelectorAll('.ai-message.user .ai-message-text')].some(element => {
+        const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+        for (let node = element; node; node = node.parentElement) {
+          const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+          if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none' ||
+              style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0 ||
+              rect.width <= 0 || rect.height <= 0) return false;
+          if (node === panel) break;
+        }
+        const rect = element.getBoundingClientRect(), clip = list.getBoundingClientRect();
+        return text.includes(expected) && rect.bottom > clip.top && rect.top < clip.bottom &&
+          rect.right > clip.left && rect.left < clip.right;
+      });
+    }, { timeout: TIMEOUT }, ownerPrompt);
     const creatorShared = await inspectAccountConversationControls(creator);
     assertAccountConversationControls(creatorShared, { visibility: 'shared', canToggleVisibility: false, creatorReadOnly: false });
     check(creatorShared.visibleMessages > 0, 'creator-can-read-shared-conversation');
