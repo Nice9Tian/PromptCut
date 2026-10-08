@@ -84,12 +84,14 @@ const reopen = async (page, id) => {
     check(linked === id, 'joined-list-same-project-after-home'); await buttons[0].click();
   } finally { await row.dispose(); }
   await page.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true });
+  await page.waitForSelector('[data-pc="members-button"]', { visible: true });
 };
 const join = async (page, id) => {
   await enabled(page, '[data-pc="cloud-join"]');
   await fill(page, '[data-pc="cloud-project-link"]', `${ORIGIN}/editor?project=${encodeURIComponent(id)}`);
   await page.click('[data-pc="cloud-join"]');
   await page.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true });
+  await page.waitForSelector('[data-pc="members-button"]', { visible: true });
   await consent(page);
 };
 const started = Date.now();
