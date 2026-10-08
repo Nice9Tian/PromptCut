@@ -247,7 +247,7 @@ export function createSharedDocService({
     now,
     ...(say ? { log: say } : {}),
   });
-  accountRuntime?.bindService(service);
+  accountRuntime?.bindService(service, { registry, urls: hostedServiceUrls ?? {} });
 
   const localStore = dataDir ? createFileStore({ dir: dataDir, ...(say ? { log: say } : {}) }) : createMemoryStore();
   const tenantDir = (space) => (dataDir && isProjectId(space) ? path.join(dataDir, 'tenants', space) : null);
