@@ -193,3 +193,17 @@ test('durable outbox corruption/gap fails closed instead of exposing a false con
   x.f.ledger.transaction(s => { s.runAssetControlOutboxV1[0].seq = 2; });
   await assert.rejects(x.assets.eventsSince(0), /run-control-gap/);
 });
+
+test('full body/method/path are signed; failed proof never claims the nonce; missing resource size refuses issue', async t => {
+  const x = await setup(t), body = x.body();
+  for (const [method, path] of [['GET', '/internal/v2/run-assets/issue'], ['POST', '/internal/v2/run-assets/other']])
+    await assert.rejects(x.assets.issue({ body, transport: x.direct, proof: x.proof(body, method, path) }), /instance-proof-invalid/);
+  await assert.rejects(x.assets.issue({ body: { ...body, selector: { mediaId: 'different', tier: 'original' } },
+    transport: x.direct, proof: x.proof(body) }), /instance-proof-invalid/);
+  const ticket = await x.issue(), input = x.checkInput(ticket);
+  await assert.rejects(x.assets.check({ ...input, proof: { ...input.proof, signature: 'A'.repeat(86) } }), /instance-proof-invalid/);
+  assert.equal(Object.keys(x.f.ledger.read().runAssetNoncesV1).length, 0);
+  await x.assets.check(input); assert.equal(Object.keys(x.f.ledger.read().runAssetNoncesV1).length, 1);
+  const { size: _size, ...noSize } = ticket.resource; x.setResource(noSize);
+  await assert.rejects(x.issue(x.body('small-no-stat')), /resource-invalid/);
+});
