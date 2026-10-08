@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { canonicalJson, digestOf } from './ledger.mjs';
 import { RUN_ASSET_ROOT, RUN_ASSET_OPERATION, assetRefId, resourceRevision, ticketDigest,
-  validateAssetRef, validateIssue, validateAssetHttpTuple, requestProof, exactShape,
+  validateAssetRef, validateIssue, runAssetIssueRequest, validateAssetHttpTuple, requestProof, exactShape,
   reference, hashOf, failRunAsset as fail } from './run-asset-protocol.mjs';
 
 const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'accountId',
@@ -129,13 +129,14 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
       fail(503, 'run-asset-resource-unavailable');
     return { ...selected, resource, resourceRev: resourceRevision(resource) };
   }
-  async function issue({ body, transport, proof }) {
-    body = validateIssue(body); proof = requestProof(proof); await synchronize();
-    const auth = await authorized({ request: body, proof, transport, direct: true });
+  async function issue({ body, bodyText, transport, proof }) {
+    const request = runAssetIssueRequest({ body, bodyText }); body = request.body;
+    proof = requestProof(proof); await synchronize();
+    const auth = await authorized({ request, proof, transport, direct: true });
     try {
       const selected = await resourceFor(body, auth.principal), g = await auth.check();
       const key = digestOf({ binding: grantBinding(g), purpose: body.purpose, requestId: body.requestId });
-      const inputDigest = digestOf(body), raw = issued.get(key);
+      const inputDigest = digestOf(request), raw = issued.get(key);
       const old = ledger.read().runAssetIntentsV1[key];
       if (old) {
         if (old.inputDigest !== inputDigest) fail(409, 'request-mismatch');

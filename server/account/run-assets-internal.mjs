@@ -2,7 +2,7 @@ import https from 'node:https';
 import { certificateFingerprint } from './client.mjs';
 import { instanceTlsBinding } from './agent-instance-authority.mjs';
 import { assertInstanceDirectTransport, instanceRequestProof } from './agent-instance-internal.mjs';
-import { RUN_ASSET_ROOT, exactShape, requestProof, reference, failRunAsset as fail } from './run-asset-protocol.mjs';
+import { RUN_ASSET_ROOT, exactShape, requestProof, reference, decodeRunAssetBody, failRunAsset as fail } from './run-asset-protocol.mjs';
 
 function respond(res, status, body) {
   if (res.destroyed || res.writableEnded) return;
@@ -20,11 +20,7 @@ async function readBody(req, maximum) {
   catch (error) { if (error.status) throw error; fail(400, 'run-asset-body-incomplete'); }
   if (req.aborted || req.complete === false || (declared !== undefined && Number(declared) !== size))
     fail(400, 'run-asset-body-incomplete');
-  try {
-    const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    if (!value || typeof value !== 'object' || Array.isArray(value)) fail(400, 'run-asset-body-invalid');
-    return value;
-  } catch (error) { if (error.status) throw error; fail(400, 'run-asset-body-invalid'); }
+  return decodeRunAssetBody(Buffer.concat(chunks));
 }
 
 /** Dedicated mTLS routes. No forwarded header/loopback exemption; pins precede
@@ -53,7 +49,7 @@ export function createRunAssetsInternalHandler({ runAssets, agentFingerprint256,
       if (route !== 'events' && url.search) fail(400, 'run-asset-body-invalid');
       let result;
       if (route === 'issue') {
-        result = await runAssets.issue({ body: await readBody(req, maxBodyBytes), transport: req,
+        result = await runAssets.issue({ ...await readBody(req, maxBodyBytes), transport: req,
           proof: instanceRequestProof(req) });
       } else {
         const identity = await resolveObserver({ socket: req.socket, fingerprint256: peer });
@@ -69,7 +65,7 @@ export function createRunAssetsInternalHandler({ runAssets, agentFingerprint256,
           const leaseRoute = /^leases\/([A-Za-z0-9_.:-]{1,128})\/(check|closed)$/.exec(route);
           const ackRoute = /^events\/([A-Za-z0-9_.:-]{1,128})\/ack$/.exec(route);
           if (route !== 'check' && !leaseRoute && !ackRoute) fail(404, 'no-route');
-          const body = await readBody(req, maxBodyBytes);
+          const { body } = await readBody(req, maxBodyBytes);
           if (route === 'check' || leaseRoute?.[2] === 'check') {
             if (!exactShape(body, ['ticket', 'request', 'proof', 'observation'])) fail(400, 'run-asset-body-invalid');
             requestProof(body.proof);

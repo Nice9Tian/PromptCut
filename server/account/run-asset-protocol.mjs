@@ -45,6 +45,25 @@ export function validateIssue(body) {
   return structuredClone(body);
 }
 
+/** Preserve all actual wire bytes: fatal UTF8, no BOM stripping/replacement,
+ * no reserialization fallback. A valid parsed descriptor alone is not a proof. */
+export function decodeRunAssetBody(bytes) {
+  let bodyText, body;
+  try { bodyText = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); body = JSON.parse(bodyText); }
+  catch { failRunAsset(400, 'run-asset-body-invalid'); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) failRunAsset(400, 'run-asset-body-invalid');
+  return { body, bodyText };
+}
+export function runAssetIssueRequest({ body, bodyText } = {}) {
+  if (typeof bodyText !== 'string' || Buffer.from(bodyText, 'utf8').toString('utf8') !== bodyText)
+    failRunAsset(400, 'run-asset-body-invalid');
+  const actual = decodeRunAssetBody(Buffer.from(bodyText, 'utf8'));
+  const checked = validateIssue(body);
+  if (digestOf(actual.body) !== digestOf(checked)) failRunAsset(400, 'run-asset-body-invalid');
+  return { v: 1, purpose: 'run-asset-issue', projectId: checked.projectId, runGrantId: checked.runGrantId,
+    action: checked.action, body: checked, bodyText, bodyDigest: bytesDigest(Buffer.from(bodyText, 'utf8')) };
+}
+
 /** Signing input only. The asset role must supply these values from the ACTUAL
  * request/socket/spool; a public client-supplied tuple is never trusted input. */
 export function assetHttpTuple(input) {

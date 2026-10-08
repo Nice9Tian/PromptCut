@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { runFixture, projectId } from './run-authority-fixture.mjs';
 import { digestOf } from '../account/ledger.mjs';
 import { createRunAssets } from '../account/run-assets.mjs';
-import { assetHttpTuple, bytesDigest, resourceRevision, ticketDigest } from '../account/run-asset-protocol.mjs';
+import { assetHttpTuple, bytesDigest, resourceRevision, ticketDigest, runAssetIssueRequest } from '../account/run-asset-protocol.mjs';
 
 // Genuine SQLite, instance authority/RAM-key signature and run authority. Socket,
 // registry, account sender and media projection adapters are controlled here;
@@ -48,7 +48,10 @@ async function setup(t) {
     return { instanceId: signed.args.proof.instanceId, instanceGeneration: signed.args.proof.instanceGeneration,
       signature: signed.args.proof.signature };
   };
-  const issue = async (input = body()) => assets.issue({ body: input, transport: direct, proof: proof(input) });
+  const issue = async (input = body()) => {
+    const bodyText = JSON.stringify(input), request = runAssetIssueRequest({ body: input, bodyText });
+    return assets.issue({ body: input, bodyText, transport: direct, proof: proof(request) });
+  };
   function request(issued, delta = {}) {
     return assetHttpTuple({ projectId, runGrantId: g.runGrantId, action: 'read', ticketDigest: ticketDigest(issued.ticket),
       resourceRev: issued.resourceRev, nonce: 'nonce-1', requestId: 'asset-request-1', method: 'GET',
@@ -195,11 +198,14 @@ test('durable outbox corruption/gap fails closed instead of exposing a false con
 });
 
 test('full body/method/path are signed; failed proof never claims the nonce; missing resource size refuses issue', async t => {
-  const x = await setup(t), body = x.body();
+  const x = await setup(t), body = x.body(), bodyText = JSON.stringify(body), signed = runAssetIssueRequest({ body, bodyText });
   for (const [method, path] of [['GET', '/internal/v2/run-assets/issue'], ['POST', '/internal/v2/run-assets/other']])
-    await assert.rejects(x.assets.issue({ body, transport: x.direct, proof: x.proof(body, method, path) }), /instance-proof-invalid/);
+    await assert.rejects(x.assets.issue({ body, bodyText, transport: x.direct, proof: x.proof(signed, method, path) }), /instance-proof-invalid/);
   await assert.rejects(x.assets.issue({ body: { ...body, selector: { mediaId: 'different', tier: 'original' } },
-    transport: x.direct, proof: x.proof(body) }), /instance-proof-invalid/);
+    bodyText: JSON.stringify({ ...body, selector: { mediaId: 'different', tier: 'original' } }),
+    transport: x.direct, proof: x.proof(signed) }), /instance-proof-invalid/);
+  await assert.rejects(x.assets.issue({ body, bodyText: ` ${bodyText}`, transport: x.direct, proof: x.proof(signed) }), /instance-proof-invalid/);
+  await assert.rejects(x.assets.issue({ body, transport: x.direct, proof: x.proof(signed) }), /run-asset-body-invalid/);
   const ticket = await x.issue(), input = x.checkInput(ticket);
   await assert.rejects(x.assets.check({ ...input, proof: { ...input.proof, signature: 'A'.repeat(86) } }), /instance-proof-invalid/);
   assert.equal(Object.keys(x.f.ledger.read().runAssetNoncesV1).length, 0);
