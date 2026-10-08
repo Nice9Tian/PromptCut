@@ -33,6 +33,8 @@ const reply = (res, status, value) => {
 const collect = async req => { const chunks = []; for await (const part of req) chunks.push(part); return Buffer.concat(chunks); };
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 const close = server => new Promise(resolve => server.close(resolve));
+const waitOwnedClosed = sockets => Promise.all([...sockets].map(socket =>
+  new Promise(resolve => socket.once('close', resolve))));
 
 test('same Agent RAM key signs actual doc issue and asset bytes on their distinct mTLS exporters',
   { timeout: 45000 }, async t => {
@@ -187,6 +189,7 @@ test('same Agent RAM key signs actual doc issue and asset bytes on their distinc
     assert.deepEqual(Buffer.concat(chunks), clientBytes);
     await result.closed;
     assert.equal(capturedTuple.contentDigest, bytesDigest(Buffer.alloc(0)));
+    await waitOwnedClosed(liveDoc); await waitOwnedClosed(liveAsset);
     assert.equal(liveDoc.size, 0); assert.equal(liveAsset.size, 0);
     const head = await transport.request({ context: expectedContext, assetHandleId: issued.assetHandleId,
       method: 'HEAD', url: `/internal/v2/asset/run/media/${hash}`, requestId: 'head_asset_worker' });
@@ -266,7 +269,7 @@ test('same Agent RAM key signs actual doc issue and asset bytes on their distinc
     });
     assert.equal(replay.status, 403);
     assert.equal(JSON.parse(replay.body.toString('utf8')).code, 'instance-proof-invalid');
-    await new Promise(resolve => setImmediate(resolve));
+    await waitOwnedClosed(liveAsset);
     assert.equal(liveAsset.size, 0);
 
     const large = await transport.issue({ context: expectedContext, purpose: 'openRead',
@@ -277,6 +280,7 @@ test('same Agent RAM key signs actual doc issue and asset bytes on their distinc
     // Deliberately leave the output unread. The registry must close both sides of the real TLS stream.
     const receipt = await resources.abortForFence(expectedContext, 'stop');
     await blocked.closed;
+    await waitOwnedClosed(liveAsset);
     assert.equal(receipt.complete, false); // No child-tree witness was supplied.
     assert.equal(liveAsset.size, 0);
   });
