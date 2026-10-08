@@ -56,12 +56,12 @@ type CloudQueueSnapshot = {
   type: 'queue.state'; conversationId: string;
   queueRevision: number; aclRevision: number; currentRunId: string | null;
   items: Array<{messageId: string; arrivalSeq: number;
-    state: 'queued' | 'preparing' | 'running' | 'cancelled' | 'finished';
+    state: 'queued' | 'preparing' | 'running' | 'cancelled' | 'done';
     position: number | null; runId: string | null}>;
 };
 ```
 
-最终 state 枚举需按实际权威写入值逐项穷举，不能靠未知值默认运行或完成。queued 行按同一获权 get 快照 arrivalSeq 排序，position 从 1 开始；其它状态 position=null。user 事件独立保留 `{type:'user',seq,messageId,prompt,senderAccountId,senderNameAtSend,queueState}`，runId 仅权威确实有值时使用。客户端拒错误 conversationId、重复 messageId、非安全 revision/seq 和非法 position；旧 queueRevision 不回退，独立 seq 不覆盖队列 revision。初次订阅及变化均发送完整队列快照，普通消息按 arrivalSeq/messageId 去重，续接不丢已发送者或旧消息的队列变化。
+状态已按实际 `claimNextInState/markReadInState/finishInState/privateFenceInState` 核过，终态是 done/cancelled，不能用未知值默认运行或完成。queued 行按同一获权 get 快照 arrivalSeq 排序，position 从 1 开始；其它状态 position=null。user 事件独立保留 `{type:'user',seq,messageId,prompt,senderAccountId,senderNameAtSend,queueState}`，runId 仅权威确实有值时使用。客户端拒错误 conversationId、重复 messageId、非安全 revision/seq 和非法 position；旧 queueRevision 不回退，独立 seq 不覆盖队列 revision。初次订阅及变化均发送完整队列快照，普通消息按 arrivalSeq/messageId 去重，续接不丢已发送者或旧消息的队列变化。
 
 〔裁〕`/v1/info` 在 account-policy 模式返回现有 enabled/running，追加 `accountMode:true,executorMounted:false`，从现有未挂载执行器事实派生。页面文案为“已排队，等待执行服务”，不显示正在模型执行。将来 runner 接通后须由该实现自身报告 mounted，当前不新增自由 ready 参数。
 
