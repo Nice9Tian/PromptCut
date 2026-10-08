@@ -164,7 +164,9 @@ test('real admission persistence failure closes observer and stays a visible idl
     'x-promptcut-run-asset-proof': Buffer.from(JSON.stringify({ instanceId: 'agent-one', instanceGeneration: 1, signature: 'A'.repeat(86) })).toString('base64url') };
   t.after(async () => { socket.destroy(); response.destroy(); await Promise.all([closed(socket), closed(response)]);
     await access.close().catch(() => {}); await consumer.close().catch(() => {}); await fs.rm(dir, { recursive: true, force: true }); });
-  const actualIOFailure = error => ['EPERM', 'EISDIR', 'ENOTEMPTY', 'EEXIST'].includes(error.code);
+  const actualIOFailure = error => error instanceof AggregateError
+    ? error.errors.length > 0 && error.errors.every(actualIOFailure)
+    : ['EPERM', 'EISDIR', 'ENOTEMPTY', 'EEXIST'].includes(error?.code);
   let handlerFailure; try { await access.handler(req, response); } catch (error) { handlerFailure = error; }
   await Promise.all([closed(socket), closed(response)]);
   assert.equal(response.statusCode, 503); assert.equal(socket.closed, true); assert.equal(req.closed, true); assert.equal(response.closed, true);
