@@ -64,8 +64,11 @@ test('instance revoked during asynchronous credential verification cannot commit
   const entered = Promise.withResolvers(), resume = Promise.withResolvers();
   const f = await fixture(t, { verifySender: async ref => { entered.resolve(); await resume.promise; return { ...ref, accountEventSeq: 0 }; } });
   f.enqueue(); const pending = f.admit(); await entered.promise;
-  f.provider.fenceInstance({ ...f.agentProcess.registration, requestId: 'stop-during-admit', reason: 'shutdown' }); resume.resolve();
+  const control = f.provider.fenceInstance({ ...f.agentProcess.registration, requestId: 'stop-during-admit', reason: 'shutdown' }); resume.resolve();
   await assert.rejects(pending, /instance-revoked/);
   assert.equal(Object.keys(f.ledger.read().runGrantsV2).length, 0);
   assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].messages[0].queueState, 'queued');
+  assert.equal(control.state, 'pending'); assert.equal(control.instances.length, 1);
+  assert.equal(control.instances[0].instanceId, f.agentProcess.registration.instanceId);
+  assert.equal(f.ledger.read().agentInstancesV2[control.instances[0].instanceId].closure, null);
 });

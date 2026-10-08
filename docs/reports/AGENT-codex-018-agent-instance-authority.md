@@ -62,3 +62,7 @@
 
 - `c0e64ff5` WS 首轮目标：7 tests / 6 pass / 1 fail / 0 skip，10539.5742 ms，exit 1。原 6 项实际 project.op 全过；新增 normalize 测试的预期对象漏掉协议自动附加的 `seq:1,ack:1`，实际可信实例字段正确、body 伪造没有替换。原始 `%TEMP%/pc-agent-instance-ws-target-1.log` 保留。修正为包含这两个字段的完整精确对象，不省略身份断言；未重跑旧 6 项赌绿。该源码 types --force 0，wall 10014.2255 ms（`pc-agent-instance-types-2.log/-exit.json`）。
 - 最后自审补强：`fenceInstance` 只取 instanceId/generation/requestId/reason，忽略调用者额外 project/run 过滤，确保关闭 inventory 覆盖该实例所有 grant；新增用错误 project 过滤仍必须撤销的反例。
+
+- `8a1966a2` 有因 WS/实例目标 5/5、0 fail/skip，2147.1774 ms，exit 0（`pc-agent-instance-ws-target-2.log`）；types --force 0，wall 8373.1431 ms（`pc-agent-instance-types-3.log/-exit.json`）。
+- 同一固定 `8a1966a2640e0cc044b9e23f9cacf141279f55aa` 首次完整 npm：5176 tests / 5174 pass / 0 fail / 2 skip / 0 cancel，duration 75317.0617 ms，wall 75678.1037 ms，exit 0，无 native retry。源码前后相同，原始 `%TEMP%/pc-agent-instance-full-1.log`、`-exit.json`、`-ports-before.json`、`-ports-after.json`；共享端口 5730–39/5760–99/5820–29/5860–69/5920–29 前后均零 LISTEN，进程自然关闭，已向 root 释放租约。
+- full 运行时只读自审发现零 grant 实例的关闭 inventory 会从 affected grants 推导为空；没有改在途源码。full 后补强同事务 `instance-revoked` 控制必须包含已持久登记的确切实例，即使 admit 尚在 credential await。权限本已 fenced，新补强避免将历史 OS 资源误记为“没有待关闭实例”。定向新增 pending/instances/closure-null 精确断言；full1 不冒充该后续源码结果。
