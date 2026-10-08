@@ -119,3 +119,21 @@ f5b7之后有具体代码与验证增量才复验：关闭传播持久错误、�
 启动全程使用 `C:/Program Files/nodejs/node.exe` + 本机npm-cli.js，不裸node--test/npx/npm exec；NODE_OPTIONS绝对file URL指父仓库silent preload，子孙windowsHide；PSModulePath先移所有大小写变体仅留一个，process-only cuda_Vit/PYTHONDONTWRITEBYTECODE=1/models/provider/order/本叶conversation配置。只自建TMP SQLite，回收同fixture文件，未删真实权重/账号/用户数据。pure用例无业务server/WS/TLS/browser/model/child；npm global setup原坏端口guards例外仍原样执行。server/test/agent-runner-control.test.mjs检查发现会listen5795/5796/5797并spawn，未跑且没有借端口/开服务。两次只读检索命令分别遇PowerShell不支持brace路径语法、rg Windows直接glob参数不展开，改精确文件列表后查明，无测试/产品失败与隐藏监听。
 
 结束diff-check通过，最终只报告提交、产品保持a924；本叶clean后交根冻结。全量npm/真实HTTP控制/browser/模型/节点均未跑，遵根租约由共同候选补验；未写main/push/merge/release，当前0.7.17版本未动。
+
+## 默认全量发现与已接受消息镜像续块
+
+根于9ae之后窄增租 `server/test/account-run-events.test.mjs`。已中文提交 `80ffbcd2008958f2cbe814048acc4a91f74cb2e1`，把同名test从server/agent/service移动到server/test，只调整7处imports，原8条断言未删；未改test-suite/global glob。node --check exit0，新位置原8/8、0fail/cancel/skip、330.602ms/wall0.7322s/native重跑0，TMP `pc-account-run-events-moved-target.log`。上文“默认不含新test”是a924时状态，80ff之后默认全量已经自动发现。
+
+根继续授权runner/create-agent-service范围的accepted镜像私有接口。实现源码固定 `b234fabd02d973104cf850a15a32722b3d7bc604`（其余main/http/provider/instance/UI仍未改）。新增 `runEvents.mirrorAccepted({projectId,conversationId,read})`，read只可由可信内部调用者提供真实doc读取，不能给public body任意函数/消息或将send原文当authority；服务侧 `service.mirrorAccepted(identity,conversationId)` 固定调用既有 `base.conversation(identity,conversationId,0)`，走真实conversationClient.get，不另造身份权威。
+
+持久schema在同一private event SQLite增 `accepted_messages(project_id,conversation_id,message_id,arrival_seq,content,event_seq)`，项目/对话/messageId主键与项目/对话/arrivalSeq唯一。read回包要求v2/projectId/id严格匹配；逐消息核server messageId/requestId/senderAccountId/name/content/contentDigest、正safeInteger arrivalSeq、createdAt与绑定project/account/message的selectionSnapshot及attachments。白名单不可变发送记录进入canonical内容；登录/凭据不存，可变queueState/runId/cancelReason不进冲突键。按doc arrivalSeq排序后单FULL事务写accepted索引、user事件、每对话同一个head；任意一条冲突整批回滚。同messageId相同原文与身份复用原eventSeq，异内容409 accepted-message-conflict；旧索引找不到对应event为503 gap，不凭缓存造新事件。用户事件只有真实messageId/sender/prompt/snapshot/attachments/arrivalSeq，runId/runGrantId/instance字段为null，不伪造读或运行。内部event索引用grant非法字符@作message命名空间，避免与真实grant事件冲突。队列与ACL动态投影仍由doc权威get给出，镜像不承担权限、位置或完成判断。
+
+重要生产装配欠项：Astra冻结45c HTTP只为GET conversations/get/events建立真实readTransports.run；POST /messages尚无scope。此块**没有从send调用镜像，没有让POST自由读**。缺scope原样503，也没有把客户端prompt或doc.send仅messageId/seq的回包当完整可信原文。下一HTTP owner必须为本次POST在真实req/res/socket/pending-dispatch inventory内建立owned read scope后才调用私有镜像，并确定“doc已经接受但镜像失败”的同一requestId重试与补漏；GET重放/启动补漏同样要真实可核doc读取。当前retained执行不续用被撤销人的delegation，不能拿人体读scope做retained grant授权；暂无该无人体历史接口，明确pending。公共HTTP仍没有消费此镜像eventSeq，用户真实执行链未验收。
+
+首红镜像target：接口未实现，原8pass、新2fail，total10、316.926ms/wall0.5541s/exit1，无native重跑；TMP `pc-account-run-events-mirror-red-1.log`，原始TypeError镜像函数不存在保留。实现后增加私有service与commit回滚两条，不重跑旧源码赌绿。固定b234一次精准组合：`npm test -- server/test/account-run-events.test.mjs server/test/agent-runner-read.test.mjs server/test/agent-runner-scope.test.mjs server/test/agent-runner-ack-recovery.test.mjs server/test/agent-runner-early-abort-worker.test.mjs`，**19/19（事件/镜像12，旧runner7）、0fail/cancel/skip、456.0139ms/wall0.6791s/exit0/nativeRetry0**，TMP `pc-account-run-events-mirror-target-1.log`。绝对本机已装tsc -b --force **exit0/零输出、wall7.4758s**，TMP `pc-account-run-events-mirror-type-1.log`。启动隐藏/preload/单PSModulePath/process-only CUDA/models/provider/order/conversation环境沿上一块，原global guard例外不变，无业务listener/TLS/model/browser/child/full/节点操作。
+
+镜像正向source使用真正doc ledger+conversation-authority.get；account身份核验与serviceClient/read-scope是纯测试受控adapter，不代表实际VH/TLS/ALS关闭链已经接通。用例证明无scope拒绝、错项目/伪digest/body消息无可信callback拒、可变queue投影不重复、同ID更改原文409、镜像提交fault下row/head/index回滚；fault是事务before-commit注入，不声称物理掉电或跨进程恢复通过。
+
+Astra并行提供finish方向：五元binding/requestId/readReceiptId/outcome{v:1,status:'done'|'failed'|'interrupted',eventId,eventDigest}，先录不可变outcome、缺doc已核关闭引用仍finishPending/FIFO占用。当前本叶没有实现该调用或摘要；等实际runner drain/事件flush结束以及provider固定精确schema后，下一租约才组真实终态，不把donePromise或录outcome成功当用户complete。HTTP/main/关闭/finalizer由根明确移交后再接，未覆盖Astra路径。
+
+此次交回产品b234、报告后续独立提交，git diff --check0与clean；main/release/push/环境/真实数据均未操作。全部首红与较早绿证据按原source保留，不冒用19目标为完整模型路径通过。
