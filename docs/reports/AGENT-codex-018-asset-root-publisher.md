@@ -119,3 +119,29 @@ root/Sol 审查指出 617 的原受控 IO 只在 files.set 前注入故障，不
 部署恢复限制仍保留：所有root启停共用同一外锁；Restart=no/Delegate=no/精确cgroup；跨boot不支持；未知ENODEV/ENOENT不能closed；root需要显式核对与恢复失败事务，不能简单删除残锁来绕过未知的发布结果。当前业务生产run-assets仍无据503；独立account/doc/asset基础部署不被本包宣告覆盖。
 
 最终只改原3文件；无业务listener、full、节点、main写入、push或merge。真实Linuxroot/cgroup与G checkpoint联验由root后续分窗口执行。
+
+## 独立 Linux pinned-cgroup OS smoke（尚未节点执行）
+
+新增精确租赁文件 `scripts/probes/asset-root-cgroup-os-probe.mjs`，初始09d3f326，最终源码e00fbd832239f73e7f5177dbb5c5ca15ce434139。publisher/G 源码仍保持 ef5c 冻结，不借此脚本扩调度/部署。脚本自包含仅 Node builtins，可由 root 复制这一份到隔离节点运行。
+
+Root 纠正 VM systemd=249 后采用 Type=simple，不使用250以后才支持的ExitType=cgroup。只创建随机 `pc-asset-cgroup-proof-<16hex>.service`，使用root传入的既有专属asset用户（不创建账号）。Restart=no / KillMode=control-group / Delegate=no / TimeoutStopSec=5s；root观察器在目标cgroup外。systemd的User可显示精确用户名或其真实UID，两者都绑定root已解析的唯一用户；实际/proc四UID仍严格核对。
+
+单轮流程：
+
+1. Linux真root gate；核root network namespace与PID1一致；只读/proc/net/tcp和tcp6确认6540–6549全部无LISTEN；随机unit LoadState必须not-found。任一前置不符即失败，不动占用者。
+2. 新建自己的TMP目录（或`--out`明确不存在的绝对目录），只将其data目录chown给该asset用户。保留脚本副本、metadata manifest、父子真实文件和result.json，不删现场。
+3. root仅listen127.0.0.1:6540，transient unit真正Node parent/child各自打开并file.sync一个文件FD、连接该TCP。root把两端hello的PID/fd与真实MainPID、/proc startTicks/UID/cgroup、/proc/fd路径交叉核；hello自身不算身份依据。
+4. 在stop前固定打开旧cgroup目录和events FD，记录dev/ino/boot。只发一次systemctl stop自己随机unit，发令前核Id/Description/User/ControlGroup归属，不发送数值PID kill。
+5. parent收到SIGTERM立即exit；child在自己的SIGTERM handler延迟约2秒继续持有原FD/TCP，之后真实close文件、TCP并exit。此延迟只制造负例窗口，完成判据是实际资源状态；没有加长判据或第二轮。
+6. root与stop并发每10ms读取同一events FD、原PIDbirth是否消失、child原fd是否仍持有和TCP是否未EOF。在main已退出而child fd/TCP仍在且populated1时记录negativeObserved，不能closed。随后必须真的从固定旧FD读到populated0且父子birth消失、两个peer实际EOF+close、unitinactive/MainPID0、stop成功才ok。
+7. 若固定FD实际报ENODEV/ENOENT等，原码进入eventsReadError，不改读新路径、不将异常当empty。没有观察到负例或empty一律okfalse；不重跑到绿。unit只在自己的归属被核实后stop，cleanup不会再次stop；自己的TCP与FD实际close，目录保留。20秒工作预算加cleanup总30秒门，超过总预算也失败并记录wallMs。
+
+Root 独立执行示例（**本Agent未执行，参数需root确认实际专属用户和新目录**）：
+
+```sh
+/usr/bin/node /path/to/fixed/asset-root-cgroup-os-probe.mjs --user promptcut-asset --out /tmp/pc-asset-cgroup-proof-one-shot > /tmp/pc-asset-cgroup-proof-one-shot.log 2>&1
+```
+
+Node二进制与脚本副本必须可由该用户执行/读取。脚本默认自动mkdtemp，也可省略--out；每次打印实际outputDirectory/unit等metadata。不要把错误后换参数再次跑当首轮通过。保留stdout和目录result.json；即使前置/内核不支持的结果也照实保留。unit是transient，不写生产unit，不改基础account/doc/asset服务与任何安全设置；此测试不包含publisher互斥交叉、真实TLS/HMAC、doc checkpoint或完整业务资源ACK。
+
+本机仅执行syntax及纯CLI guard：最终node --check exit0；--help exit0；Windows --user入口exit1且code=probe-linux-root-required；非法--force exit1且code=probe-cli-invalid。原始TEMP/pc-asset-root-cgroup-cli-{help,platform,invalid}-1.log及最终-2.log保留，均未开启listener/guard/npm。没有运行Linux进程、systemd或节点；实际kernel pinnedFD行为仍待root唯一窗口。
