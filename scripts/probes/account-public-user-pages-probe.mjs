@@ -493,8 +493,13 @@ try {
   for (const context of contexts) await context.close().catch(() => {});
   if (browser) {
     const child = browser.process(); const closed = child && child.exitCode === null ? new Promise(resolve => child.once('close', resolve)) : Promise.resolve();
-    try { await browser.close(); await closed; } catch { result.cleanup.browserCloseFailed = true; process.exitCode = 1; }
-    result.cleanup.browserClosed = !child || child.exitCode !== null || child.signalCode !== null;
+    const ownedPids = child ? process.platform === 'win32' ? nativeDescendants(child.pid) : [child.pid] : [];
+    try {
+      await browser.close(); await closed;
+      await waitFor(() => Promise.resolve(ownedPids.every(pid => !pidAlive(pid))), 'browser-owned-process-tree-closed');
+      result.cleanup.browserClosed = true;
+    } catch { result.cleanup.browserCloseFailed = true; process.exitCode = 1; }
+    result.cleanup.browserOwnedPids = ownedPids;
   } else { result.cleanup.browser = 'not-started'; }
   if (chromeProfile && result.cleanup.browserClosed) { await fs.rm(chromeProfile, { recursive:true, force:true }); result.cleanup.chromeProfileRemoved = true; }
   if (nativeProfileOwned && !native && fsSync.existsSync(DESKTOP_PROFILE) && !result.cleanup.nativeFailed) {
