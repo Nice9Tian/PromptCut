@@ -9,7 +9,7 @@ export async function exerciseInstanceData({ port, tls, instance, grant, own }) 
   const welcome = await client.next(msg => msg.type === 'session.welcome'); assert.match(welcome.connId, /^conn-/);
   const send = async (frame, nonce) => { client.send(client.envelope({ connId: welcome.connId, nonce, frame })); return client.next(msg => msg.reqId === frame.reqId); };
   const opened = await send({ type: 'project.open', projectId, reqId: 'data-open', seq: 1, ack: 0 }, 2);
-  assert.equal(opened.type, 'project.state'); assert.equal(opened.rev, 2);
+  assert.equal(opened.type, 'project.state', JSON.stringify({ type: opened.type, reason: opened.reason })); assert.equal(opened.rev, 2);
   const selection = await send({ type: 'selection.query', projectId, runGrantId, reqId: 'data-selection', seq: 2, ack: 0 }, 3);
   assert.equal(selection.type, 'selection.state', JSON.stringify(selection));
   assert.equal(selection.members.find(member => member.isInitiator)?.accountId, grant.accountId);
