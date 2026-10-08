@@ -90,6 +90,7 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     finish: input => request('finish', input), runTicket: input => request('runTicket', input),
     pending: () => request('pending', {}),
     registerInstance: () => instanceSession.register(), instanceIdentity: () => instanceSession.identity(),
+    dataProofFor: input => instanceSession.dataProofFor(input),
     close() { closed = true; instanceSession.close(); for (const req of active) req.destroy(); },
   };
 }

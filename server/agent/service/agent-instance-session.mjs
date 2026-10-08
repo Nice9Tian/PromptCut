@@ -59,6 +59,19 @@ export function createAgentInstanceSession({ requestRegistration } = {}) {
     return { name: INSTANCE_PROOF_HEADER, value: Buffer.from(JSON.stringify(proof)).toString('base64url') };
   }
 
-  return { register, proofFor, identity: () => registered ? { ...registered } : null,
+  function dataProofFor({ socket, method, path, operation, request }) {
+    if (closed || !registered) fail('instance-not-registered');
+    if (!['GET', 'POST', 'WS'].includes(method) || (path !== '/' && !/^\/lp\/(open|send|recv|close)$/.test(path)) ||
+        !['resolveRunPrincipal', 'checkAccess', 'authorizeQuery'].includes(operation) ||
+        !request || typeof request !== 'object' || Array.isArray(request) ||
+        (operation === 'checkAccess' && !['read', 'write'].includes(request.action)))
+      fail('instance-data-proof-input');
+    const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
+      method, path, operation, requestDigest: digestOf(request) });
+    return { operation, instanceId: registered.instanceId, instanceGeneration: registered.instanceGeneration,
+      signature: signatureOf(payload), ...(operation === 'checkAccess' ? { action: request.action } : {}) };
+  }
+
+  return { register, proofFor, dataProofFor, identity: () => registered ? { ...registered } : null,
     close() { closed = true; registered = null; challenge = null; } };
 }

@@ -267,15 +267,35 @@ export function createAgentInstance(env) {
     if (mode === "hosted") {
       // 托管档的实例只为建它时定下的那个项目服务:项目与文档服务地址都不听请求的
       if (projectId !== env.projectId) throw new Error("这个实例不为这个项目服务");
+      if (env.accountDataRequired === true &&
+          (env.accountMode !== true || typeof env.accountDataWebSocketImpl !== 'function'))
+        throw new Error('账号数据连接缺少可信实例证明');
       url = env.docUrl;
     }
+    // Only the trusted account runner may cancel its own pending binding.
+    // Page/LAN bind requests never supply or inherit this signal.
+    const bindSignal = mode === 'hosted' && env.accountMode === true && env.accountDataRequired === true &&
+      input?.signal && typeof input.signal.addEventListener === 'function' &&
+      typeof input.signal.removeEventListener === 'function' ? input.signal : null;
+    if (bindSignal?.aborted) throw new Error('run-fenced');
     if (agentBinding && agentBinding.projectId === projectId && agentBinding.mode === mode && agentBinding.url === url) return agentBinding;
     unbindAgent("rebind");
-    const [{ createAgentSide }, { loadSsrHost }, { tools, toolGroups }] = await Promise.all([
+    const imports = Promise.all([
       import(new URL("../agent-side.mjs", import.meta.url).href),
       import(new URL("../ssr-host.mjs", import.meta.url).href),
       import(new URL("../../mcp-tools.mjs", import.meta.url).href),
     ]);
+    let imported;
+    if (bindSignal) {
+      let rejectOnAbort;
+      const cancelled = new Promise((_, reject) => { rejectOnAbort = () => reject(new Error('run-fenced'));
+        bindSignal.addEventListener('abort', rejectOnAbort, { once: true });
+        if (bindSignal.aborted) rejectOnAbort(); });
+      try { imported = await Promise.race([imports, cancelled]); }
+      finally { bindSignal.removeEventListener('abort', rejectOnAbort); }
+      if (bindSignal.aborted) throw new Error('run-fenced');
+    } else imported = await imports;
+    const [{ createAgentSide }, { loadSsrHost }, { tools, toolGroups }] = imported;
     const protocolsFor = async (n) => {
       // 托管档:凭证按对话给(对话委托绑死一个对话,契约第 4.2 节),所以连同这个对话号对应的对话 id 一起交给宿主
       if (mode === "hosted") {
@@ -292,6 +312,7 @@ export function createAgentInstance(env) {
       projectId,
       url,
       protocolsFor,
+      ...(env.accountMode === true && env.accountDataWebSocketImpl ? { WebSocketImpl: env.accountDataWebSocketImpl } : {}),
       // 托管档:几个只读项目与注册表的页面工具改在服务端副本上执行;在服务端另有实现的(导入素材、建卡改卡、配音)
       // 标成经「页面」执行——托管档的「页面」就是下面的 hostedCallPage,由它交给 hosted-tools.mjs
       tools: HOSTED ? tools.map((t) => (CLOUD_AGENT_SIDE.has(t.name) ? { ...t, side: "agent" } : CLOUD_HOSTED_TOOLS.has(t.name) ? { ...t, side: "page" } : t)) : tools,
