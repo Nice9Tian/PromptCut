@@ -221,3 +221,23 @@ test('new factory epoch invalidates the old runtime before any late admission ca
   await assert.rejects(x.issue(x.body('late-old-runtime')), /run-assets-unconfigured/);
   assert.equal(Object.keys(x.f.ledger.read().runAssetNoncesV1).length, 0);
 });
+
+test('durable outbox is a bidirectional bijection with mirrors and original controls', async t => {
+  const mutations = {
+    'missing tail': s => s.runAssetControlOutboxV1.pop(),
+    'missing middle': s => s.runAssetControlOutboxV1.shift(),
+    'dangling mirror': s => { s.runAssetControlMirrorsV1.orphan = { ...Object.values(s.runAssetControlMirrorsV1)[0] }; },
+    'mirror points outside head': s => { Object.values(s.runAssetControlMirrorsV1)[1].seq = 3; },
+    'original control missing': s => { delete s.runControlsV2[s.runAssetControlOutboxV1[0].controlId]; },
+    'duplicate outbox': s => { s.runAssetControlOutboxV1[1] = structuredClone(s.runAssetControlOutboxV1[0]); },
+    'outbox control tampered': s => { s.runAssetControlOutboxV1[0].control.revoked = ['forged-grant']; },
+  };
+  for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async sub => {
+    const x = await setup(sub);
+    x.f.provider.applyAccessEvent(x.f.exit()); x.f.privateFence();
+    const before = await x.assets.eventsSince(0); assert.equal(before.headSeq, 2);
+    assert.equal(Object.keys(x.f.ledger.read().runAssetControlMirrorsV1).length, 2);
+    x.f.ledger.transaction(s => { mutate(s); });
+    await assert.rejects(x.assets.eventsSince(0), /run-control-gap/);
+  });
+});
