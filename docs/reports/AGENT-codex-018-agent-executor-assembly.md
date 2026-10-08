@@ -91,3 +91,31 @@ worker用已实现 `createRunAssetTransport({runClient,assetOrigin,assetTls,asse
 根于db7方案之后授权新增 `server/agent/service/account-run-events.mjs` 与同名test，修改account-runner/create-agent-service及本报告；未授权main/http/instance/provider/Astra所有在途路径。以下结果与上一节只读阶段分别记录。本块执行真实SQLite持久事件及受监督emit队列，下一模型/工具先flush再fresh doc gate，commit失败同步latch并abort，实际drain之前不能结束wake。事件模式仅记录 `runner_done`/settlement pending；缺真实outcome provider时 `run-outcome-unavailable`，不能doc.finish或推进下一轮，也不把executorMounted标ready。未配置事件文件的既有受控runnerFactory fixture保留旧路径；生产existing factory必须显式提供runEventsFile/authority，否则503。
 
 首红：npm wrapper运行同名新target，模块尚未实现，ERR_MODULE_NOT_FOUND；tests1/pass0/fail1，48.933ms，exit1，无native retry，原始TMP `pc-account-run-events-red-1.log`。测试不启动业务HTTP/WS/TLS/模型；原global-setup坏端口guards保留，不mock/scrub绕过。后续固定源码后只跑该纯target与已确认无监听的runner回归/类型，不跑full/浏览器/模型。fixtures用真实doc SQLite、RAM实例签名cap、runProvider与FULL read-intents；account sender/服务登记是受控adapter，不能称真实VH/TLS/生产执行器已通。
+
+### 已实施接口、收口与精确下一接缝
+
+产品源码固定 `a9247fc18a009ed3dfe3da1e659264173d38968b`，之前首实现 `f5b7f4c70b7700de85189c55da406cbfdf779bf6`。只改租内四源码/测试路径及本报告，无main/HTTP/instance/provider/UI变化。
+
+- `createAccountRunEvents({file,authorityId,verifyGrant,failpoint?,now?})`：file为绝对私有SQLite，authorityId是可信配置的doc authorityId；verifyGrant每次register由真实runClient.checkAccess(write)取得允许的runGrant，精确比project/conversation/message/run/grant、instanceId/generation、serviceKid、accountId。缺配置503，错binding403，同grant不同binding409，authority不符503。module是Agent内部证据模块，register/append/after不允许直接挂public body，也不替代doc ACL。
+- 返回 `registerRun({grant})`、`append({binding,eventId,event})`、`after({projectId,conversationId,after}) -> {authorityId,projectId,conversationId,head,events}`、`writer({grant})`、`failure()/inspect()/close()`。每row为v1、上述精确binding（accountId转senderAccountId）、eventId/eventSeq/at/event。FULL事务同时写row/head；同grant/eventId相同payload原样幂等，不同409；事件内自报runId/身份会被可信binding覆盖。完整tool_result.output不保存/不外发，存outputOmitted。after仅按项目/对话索引，不能作为授权接口；未来HTTP必须先真read-control。游标负/非法400、超head409、count/max与持久head不符503 gap。原模块不是message acceptance镜像，本小块未实现acceptMessage。
+- `writer` 的同步emit在yield前copy，单run serial和全store append队列监督所有Promise；`failed`是只resolve原错误的监督通知，`beforeCall/flush`仍reject原错误。实际SQLite失败latch整个store，后续gate拒、关闭实际db之后close也reject，不能吞失败冒成功。manager收到failed立即abort本run；即使wake race已经拒，也必须等runner.drain，期间activeRuns仍1。运行收口后flush再结算；缺outcome时read-intent停execution-started，手动再wake拒uncertain，不重放工具。并发两个run只有共享事件cursor，不赋予同对话并行执行能力，FIFO仍由doc/manager控制。
+- `createAccountRunnerService` 与 `createHostedAgentService` 新增 `runEventsFile/runEventsAuthorityId` 显式参数；真实existing runnerFactory不能缺事件配置，受控runnerFactory未提供事件文件的旧fixture暂保兼容，不能当生产完成。服务暴露私有runEvents供未来HTTP消费，事件模式close先manager.close/idle再关闭event/read-intent db。main未透传这两个参数，生产整体仍未装配；没有改变info/executorMounted或runTicket503。
+- `onEvent`实际接到manager writer，下一onModelCall/beforeToolCall在fresh doc write gate前后均flush且查cancel/closed；当前instance同步emit吞宿主同步异常的旧实现未动，宿主callback不给它裸reject Promise。原done事件改记 `runner_done`、settlement pending，仅记录runner观察，不是用户可见完成或doc finish。纯目标捕获到已解决done Promise后仍0 finish；本期没有真实outcome接口，legacy fixture finish回归不代表事件模式已经能推进下一条。
+
+下一独占装配必须具体补：①main传可信doc authorityId与私有event文件、实际registered instance/run-data client；②HTTP accountEvents在Astra真实read-control/输出fence作用域内调用after，以eventSeq为执行游标、arrivalSeq另留FIFO位置，不直接复用旧到达游标，不把runner_done渲染成完成；③原provider owner给精确outcome/idempotent结算与跨event/read-intent/doc finish补偿接口，才解除run-outcome-unavailable；④accepted用户消息按doc messageId幂等镜像/重启补漏；⑤真实模型/工具/双页可见链、资源关闭与Astra交接验证。上述都未做，禁止用本块15目标绿写全链ready。事件模块test位于root明确租的同名 `server/agent/service/*.test.mjs`，现full默认glob不自动含此目录，根共同候选需要显式加本精准target，未改全局测试脚本。
+
+### 固定源码验证原始结果
+
+| 源码/命令 | 结果与范围 | 原始TMP日志 |
+| --- | --- | --- |
+| 模块不存在首红；npm test -- server/agent/service/account-run-events.test.mjs | 1文件级失败/0已执行用例，exit1，48.933ms，native重跑0；保留设计驱动首红 | pc-account-run-events-red-1.log |
+| f5b7，以上同target首实现 | 7/7，0fail/cancel/skip，258.1632ms，exit0，wrapper wall0.4936s；无重跑 | pc-account-run-events-target-1.log |
+| f5b7，npm test -- server/test/agent-runner-read.test.mjs server/test/agent-runner-scope.test.mjs server/test/agent-runner-ack-recovery.test.mjs server/test/agent-runner-early-abort-worker.test.mjs | 7/7，367.2762ms，exit0，wall0.5963s，无native重跑；无业务监听 | pc-account-run-events-regression-1.log |
+| a924，npm test -- 新同名target + 上述四原runner target | 15/15（新8/旧7），0fail/cancel/skip，370.669ms，exit0，wall0.5965s/native重跑0 | pc-account-run-events-final-target.log |
+| a924，绝对本机已装node＋typescript/bin/tsc -b --force | exit0/零错误/日志零输出，wall7.6850s | pc-account-run-events-final-type.log |
+
+f5b7之后有具体代码与验证增量才复验：关闭传播持久错误、旧finished intent在事件模式拒假成功、非法file统一503、callback空event交监督队列；新SQLite触发器RAISE(ABORT)是真db INSERT错误，不仅failpoint，并发writer验证共享cursor。另一manager故障用例仍是SQLite事务before-commit受控throw，准确标为注入失败而非物理掉电/I/O损坏；actual runner是受控对象，done/drain受控gate，不是真模型/工具子进程关闭证明。新7项中增加并发项成8，最终与原7项组合15。
+
+启动全程使用 `C:/Program Files/nodejs/node.exe` + 本机npm-cli.js，不裸node--test/npx/npm exec；NODE_OPTIONS绝对file URL指父仓库silent preload，子孙windowsHide；PSModulePath先移所有大小写变体仅留一个，process-only cuda_Vit/PYTHONDONTWRITEBYTECODE=1/models/provider/order/本叶conversation配置。只自建TMP SQLite，回收同fixture文件，未删真实权重/账号/用户数据。pure用例无业务server/WS/TLS/browser/model/child；npm global setup原坏端口guards例外仍原样执行。server/test/agent-runner-control.test.mjs检查发现会listen5795/5796/5797并spawn，未跑且没有借端口/开服务。两次只读检索命令分别遇PowerShell不支持brace路径语法、rg Windows直接glob参数不展开，改精确文件列表后查明，无测试/产品失败与隐藏监听。
+
+结束diff-check通过，最终只报告提交、产品保持a924；本叶clean后交根冻结。全量npm/真实HTTP控制/browser/模型/节点均未跑，遵根租约由共同候选补验；未写main/push/merge/release，当前0.7.17版本未动。
