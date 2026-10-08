@@ -1,5 +1,19 @@
 # 渲染任务队列 M1 / M2 接口契约（定稿）
 
+## 2026-10-08 单节点调度增量与历史契约边界
+
+来源：[渲染调度与项目计划补充](render-scheduling-supplement.md)；本轮用户确认的三版本方向见 [任务书](account-binding-task.md)新增版本/验收映射。旧 M1/M2/J 字段契约和既有运行结果保留，不因本次文档改动宣称新能力通过。
+
+0.7.18 合格本地即时查询帧优先（必须实际有查询帧端到端能力，不由预渲染节点名推定），云端单活跃项目兜底排队；0.7.19 实测项目/总体预算满足才两项目并行；0.7.20 磁盘缓存与交替加载目标至少三项目持续推进。生产容量输入均含自定义卡片。多服务器分配以后做与本轮单节点调度无关；普通队列 task 并发数和连接数不是活跃项目容量承诺。
+
+| 修改前 / 来源 | 修改后（草案或已确认边界） |
+|---|---|
+| A.2 MAX_ATTEMPTS/STALL_MS、A.7失败/收回、A.8扫描、A.12工作进度判停滞 | 保留历史队列机制；正常容量压力保留等待，不能终态失败。节点故障/持续无进展最终 A失败手动或B有限重试暂停待确认，不能凭 MAX_ATTEMPTS=3 当用户已选 B；具体重试预算/状态兼容另设计 |
+| J.0连不上文档服务的旧离线回落 | 原本地预渲染范围的历史机制，不授权云端满静默回本机；本轮本地即时查询帧优先是显式路径，资格/授权/版本/取消/迟到结果另设计，不改既有网络离线语义 |
+| A/B指纹、F卡片锁、J快照与素材版本 | 建议为新增本地/云端查询链复用完整输入身份，异步取消/迁移后旧结果不覆盖新结果；字段及接口仅草案，不代表现有队列已能 see_frames |
+
+see_frames 端到端 <5 分钟为优先目标；起止点、超时/重试都是技术建议。提前回收未满五分钟驻留仍待确认，不以目标偷换规则。新增 RS18-local/queue、RS19-memory、RS20-rotation、RS-common 均已规划但未实现/未测试/未通过；原 A.12 历史失败/修复证据不改。
+
 主 Agent 定稿，2026-09-24。实现方（Protocol/State、Pipeline/Node）和测试方（Verification/Test）**只照本文和设计写**，互不看对方的代码。本文要改只能由主 Agent 改，并同时通知各方。
 
 - 上位文档：`docs/plan/distributed-prerender-queue.md`（下称「设计」，含第 5.1 节 C1～C6）
@@ -336,6 +350,7 @@ export function filterClaimable(tasks, node) // → task[]（保持原顺序）
   profile: 'pc' | 'host' | 'browser',
   userId?: string,
   envFingerprint: string,
+  cardEnvFingerprint?: string,    // 只对 browser 有意义:envFingerprint 再加在线卡片运行时版本,用户卡、图卡的任务按它比(2026-10-06)
   codeVersions: string[],
   cardSourceVersions?: Record<cardId, string[]>,
   capabilities: { transcode: boolean, userCards: boolean, graphCards: boolean, memoryMB?: number },
@@ -353,6 +368,8 @@ export function filterClaimable(tasks, node) // → task[]（保持原顺序）
 | 1 | `task.kind !== 'plan'` 时：`requires.envFingerprint` 存在且 `!== node.envFingerprint`；或 `requires.codeVersion` 存在且不在 `codeVersions` 里；或 `requires.cardSources` 里任一 `[cardId, version]` 不在 `cardSourceVersions[cardId]` 里。`plan` 任务只查 `codeVersion` |
 | 2 | `task.kind === 'stream'` 或 `requires.transcode === true`，且 `!capabilities.transcode` |
 | 3 | `requires.userCards === true` 且 `!capabilities.userCards`；或 `requires.graphCards === true` 且 `!capabilities.graphCards` |
+
+纯浏览器节点自 2026-10-06 起在本页能运行时报 `userCards` / `graphCards` 为真；规则 1 对它的用户卡、图卡任务比的是 `cardEnvFingerprint`（`online-card-exec-contract.md` 第 7 节）。
 | 4 | 重度策略（见下）不允许 `weight.class`。缺 `weight` 按 `medium` |
 | 5 | `requires.memoryMB` 是数且 `capabilities.memoryMB` 是数，且前者大于后者 |
 | 6 | `task.kind === 'plan'` 且 `profile === 'browser'` |
@@ -2081,3 +2098,21 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 3. **队列文件**：限了项目的推送队列文件在帧库下 `push/<文档服务 host>-<项目 id>/push-queue.json`（老路径写了 `contentId` 时也一样）；换绑定、撤绑定时没推完的段留在原项目的目录，下次绑回同一个项目接着推，不推进别的项目的素材服务。读回的段不再判范围。不限的仍在帧库根。
 4. **plan 发布**：本机节点只替绑定项目发布 `plan`；别的项目（或页面还没交项目文档 id 时）本机自己产，不进共享项目的任务队列。
 5. **sink**：节点认领到的任务来自共享项目的队列，照旧推到共享项目的素材服务，不另判。
+
+### J.15 项目往前走了：旧版本取不到时按当前版本核对（2026-10-06，分支 `claude/cloud-agent`；缘由见 `cloud-agent-contract.md` 第 16.4 节）
+
+细任务的结果按内容寻址（内容键 × 指纹），任务里的 `source.projectRev` 只是「去哪一版取输入」的线索。有真身的项目（共享项目，收到过 `project.op`）文档服务只给得出当前这一版：J.1 的取回对旧版本回 `missing`。发布之后项目又被改过，计划与细任务指的那一版就取不到了；这不是失败。队列本体（A 节、F 节）与文档服务的队列模块没有改。
+
+1. **文档服务**（J.1 的补充）：`project.snapshot.get` 回 `missing: true` 时，项目有真身、而且要的不是当前版本，回包多带 `currentRev`（当前版本号）。没有真身的项目不带，行为同前。
+2. **项目客户端**（J.2 的补充）：加 `locate(projectId, projectRev) → { project, projectRev } | { project: null, currentRev: number | null }`。`get` 不变（没有回 `null`）。
+3. **执行器**（J.4 的补充，`server/prerender-executor.mjs`）：
+   - 取恰好那一版的上下文照旧（按版本缓存，约 4 条）。取不到、而客户端给了更新的 `currentRev`：改取那一版，再取不到再追，最多 8 跳（每一跳都是文档服务回的更新的版本号）；没给 `currentRev` 或追不上，照旧抛 `no-snapshot`（可重试）。
+   - 带片段清单的计划任务与它切出的细任务（`source.derivedFrom` 指的计划 id 里有 `#clips:` 或 `#backfill:`）另加一条：本执行器已经算成过这个项目更新的一版，就从那一版起取，不回头用旧的。清单计划的意思是「这几个片段，按现在的样子」；这样旧版本的画面不白渲，层表也不会被迟到的旧计划写回旧版本。不是清单计划切出的任务（桌面版的计划）不适用这一条。
+   - `plan`：按实际那一版算；不是任务指的那一版时回的上下文多带 `actualRev`。`afterSplit` 写层表用切分时的同一版。
+   - `render`：按的不是任务指的那一版时，先在实际那一版里按片段找 control、比内容键（本地档的内容键含 entry.key，换了版本一定不同）。片段没了或内容键不同，抛 `superseded`：`error.message === 'superseded'`、`error.superseded === true`、`retryable === false`。内容键相同就照做，其余核对（档位、帧范围、结果键）不变，对不上仍是 `plan-mismatch`。按的就是任务指的那一版时与原来完全相同。
+   - 清单计划切出的细任务，片段不在这一版的预渲染集合里时按任务把它记成补渲再渲（原来只对 `priority: 'backfill'` 的做）：清单是发布方判的，切分它的计划可能是别的进程、本进程重启之前、或按另一版算的。
+4. **切分方**（D.2 的补充，`local-node.mjs`）：执行器回的上下文带 `actualRev` 时，细任务的 `source.projectRev` 写它；`source.derivedFrom` 仍是那个计划任务。
+5. **细任务编排**（`task-runner.mjs`）：执行器抛的错带 `superseded === true` 时发 `task.fail { error: 'superseded', retryable: false }`，诊断事件是 `superseded`（不是 `failed`）。队列对它的处理就是现有的 `task.fail` 不可重试那一支：任务进 `failed`、`lastError = 'superseded'`，订阅者收 `task.failed { error: 'superseded' }`；之后同一个 id 再被发布时当它不存在（F.1「被作废的任务记录不挡重新发布」），重新建。
+6. **诊断**：独立渲染主机每个节点的计数多一项 `superseded`（`render-node/host.mjs` 的 `nodes()`），不计入 `failed`；预渲染进程的日志多一种行 `[queue-node] node.task-superseded {…}`（`session-diag.mjs` 的转发器放行）。
+7. **发布方怎么读**：订阅者收到 `task.failed { error: 'superseded' }` 表示「这份内容当时不要了」，不是做不了。云端 Agent 服务的发布通道据此不记失败（`cloud-agent-contract.md` 第 16.4 节）；在线页面不拿 `task.failed` 报错；它把 `superseded` 记成「这个结果键的那一份作废了」（M7 D12 选层表候选用，`src/render/snapshotSource.ts` 的 `noteQueueEvent`），同一个结果键之后做完又会认回来，旧内容的结果键也不在当前层表的候选里，所以不受影响。
+8. **测试**：`server/test/cloud-agent-rerender.test.mjs` 的 CA-RR-01～CA-RR-07（真队列、真主机编排、真执行器，管线与产物库是替身）。
