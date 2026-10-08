@@ -23,6 +23,7 @@ import { openVoiceSettings, useVoiceSettingsState } from "./ai/voiceSettingsStor
 import { getVoiceConfig } from "./ai/voice";
 import { JoinForm } from "./editor/sync/JoinForm";
 import { STORAGE_EVENT, takeStorageRequest } from "./ui/WindowTitleBar";
+import { AccountProjects } from "./account/AccountProjects";
 
 /** 字节数写成人看的样子。导出产物、预渲染缓存动辄几十 GB,所以到 G 为止 */
 function humanSize(bytes: number): string {
@@ -87,7 +88,7 @@ function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
         <Logo size={22} />
         <span className="sp-bar-spacer" />
       </header>
-      <main className="sp-main"><JoinSection onEnterEditor={props.onEnterEditor} /></main>
+      <main className="sp-main"><AccountProjects online onEnterEditor={props.onEnterEditor} /></main>
     </div>
   );
 }
@@ -181,6 +182,7 @@ function DesktopStartPage(props: { onEnterEditor: () => void }): JSX.Element {
           <span className="sp-hero-sub">新建一个空项目</span>
         </button>
 
+        <AccountProjects online={false} onEnterEditor={onEnterEditor} />
         <JoinSection onEnterEditor={onEnterEditor} />
 
         <section className="sp-section">

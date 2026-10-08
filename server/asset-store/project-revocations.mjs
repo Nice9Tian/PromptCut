@@ -4,9 +4,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { assetAccessError } from './project-access.mjs';
 
-export function createAssetRevocationConsumer({ authority, file, serviceId = 'asset' }) {
+export function createAssetRevocationConsumer({ authority, file, serviceId = 'asset', participants = [] }) {
   if (!file || serviceId !== 'asset') throw new TypeError('trusted asset consumer file/service required');
   for (const name of ['checkAccess', 'subscribeRevocations', 'eventsSince', 'ackAccessEvent']) if (typeof authority?.[name] !== 'function') throw new TypeError(`authority.${name} required`);
+  if (!Array.isArray(participants) || participants.some(p => typeof p?.handleAccessEvent !== 'function' || typeof p?.unavailable !== 'function'))
+    throw new TypeError('trusted resource participants required');
   let state = { v: 1, cursor: 0, pending: null }, chain = Promise.resolve(), ready = false, stopped = false, unsubscribe;
   const listeners = new Map(), deliveries = new Map();
   async function persist() {
@@ -24,7 +26,23 @@ export function createAssetRevocationConsumer({ authority, file, serviceId = 'as
       try { return Promise.resolve(entry.callback(event)).then(value => value?.closed ? id : null); }
       catch (error) { return Promise.reject(error); }
     });
-    const done = Promise.all(pending).then(ids => ids.filter(Boolean).sort());
+    // The sole human ACK waits for run participants too. These hooks must
+    // establish their pause synchronously and use independent doc rechecks;
+    // calling this consumer.sync() from a hook would be a lock cycle.
+    const additions = participants.map(p => {
+      try { return Promise.resolve(p.handleAccessEvent(event)); }
+      catch (error) { return Promise.reject(error); }
+    });
+    const done = Promise.all([Promise.all(pending), Promise.all(additions)]).then(([ids, receipts]) => {
+      const result = { closedStreams: ids.filter(Boolean), stoppedRuns: [], rejectedCredentials: [] };
+      for (const receipt of receipts) {
+        if (receipt?.complete !== true || Object.keys(result).some(k => !Array.isArray(receipt[k]) || receipt[k].some(id => typeof id !== 'string' || !id)))
+          throw assetAccessError('resource-closure-pending', 503);
+        for (const k of Object.keys(result)) result[k].push(...receipt[k]);
+      }
+      for (const k of Object.keys(result)) result[k] = [...new Set(result[k])].sort();
+      return result;
+    });
     deliveries.set(event.eventId, done);
     return done;
   }
@@ -48,8 +66,8 @@ export function createAssetRevocationConsumer({ authority, file, serviceId = 'as
       }
       for (const event of page.events) {
         if (event.seq !== state.cursor + 1 || !event.eventId) throw new Error('revocation-gap');
-        const closedStreams = await deliver(event);
-        state.pending = { eventId: event.eventId, receipt: { receiptId: crypto.randomUUID(), cursor: event.seq, complete: true, closedStreams, stoppedRuns: [], rejectedCredentials: [] } };
+        const resources = await deliver(event);
+        state.pending = { eventId: event.eventId, receipt: { receiptId: crypto.randomUUID(), cursor: event.seq, complete: true, ...resources } };
         // 先持久已完成凭据再 ACK；ACK丢失/崩溃后重复完全相同 receipt，不虚构未关闭完成。
         await persist();
         await ackPending();
@@ -60,7 +78,10 @@ export function createAssetRevocationConsumer({ authority, file, serviceId = 'as
   function sync() {
     const result = chain.catch(() => {}).then(drain);
     chain = result;
-    return result.catch(async error => { ready = false; await Promise.all([...listeners.values()].map(entry => entry.callback({ reason: 'revocation-unavailable' }))); throw error; });
+    return result.catch(async error => { ready = false; await Promise.all([
+      ...[...listeners.values()].map(entry => entry.callback({ reason: 'revocation-unavailable' })),
+      ...participants.map(p => p.unavailable(error)),
+    ]); throw error; });
   }
   return {
     async start() {
@@ -88,7 +109,10 @@ export function createAssetRevocationConsumer({ authority, file, serviceId = 'as
       const id = crypto.randomUUID(); listeners.set(id, { context, callback });
       return () => listeners.delete(id);
     },
-    async close() { stopped = true; ready = false; unsubscribe?.(); unsubscribe = null; await chain.catch(() => {}); await Promise.all([...listeners.values()].map(entry => entry.callback({ reason: 'revocation-unavailable' }))); listeners.clear(); },
+    async close() { stopped = true; ready = false; unsubscribe?.(); unsubscribe = null; await chain.catch(() => {}); await Promise.all([
+      ...[...listeners.values()].map(entry => entry.callback({ reason: 'revocation-unavailable' })),
+      ...participants.map(p => p.unavailable(assetAccessError('revocation-unavailable', 503))),
+    ]); listeners.clear(); },
     get cursor() { return state.cursor; },
     get ready() { return ready; },
   };

@@ -54,3 +54,34 @@ test("C10A-API-05 在线模式：fetch('/api/…') 抛错、不发出；别的�
     restore();
   }
 });
+
+test('account website calls pass only in the top editor; stages, unknown account routes and editor APIs remain blocked', async () => {
+  const { installApiGuard } = await import('./apiGuard.ts');
+  const originalWindow = globalThis.window;
+  const allowed = [['/api/account/me','GET'], ['/api/account/projects','GET'], ['/api/account/login','POST'],
+    ['/api/account/logout','POST'], ['/api/account/editor/session','POST'], ['/api/account/editor/renew','POST']];
+  function context(href, embedded = false) {
+    const passed = [], window = { fetch:async (input, init) => { passed.push({ input, init }); return new Response('{}'); } };
+    window.self = window; window.top = embedded ? {} : window; globalThis.window = window;
+    installApiGuard({ href, base:'/editor/' }); return { window, passed };
+  }
+  try {
+    const main = context('https://h.example/editor/');
+    for (const [url, method] of allowed) await main.window.fetch(url, { method, credentials:'same-origin' });
+    assert.equal(main.passed.length, 6);
+    for (const url of ['/api/account/editor/login','/api/account/editor/recover','/api/account/editor/logout',
+      '/api/account/editor/','/api/account/me/extra','/api/account/reset/confirm','/api/account/admin', '/api/docservice/device', '/editor/api/account/me']) {
+      await assert.rejects(main.window.fetch(url, { method:'POST', credentials:'same-origin' }));
+    }
+    await assert.rejects(main.window.fetch('/api/account/me', { method:'POST', credentials:'same-origin' }));
+    await assert.rejects(main.window.fetch('/api/account/login', { method:'GET', credentials:'same-origin' }));
+    await assert.rejects(main.window.fetch('/api/account/me', { credentials:'include' }));
+    assert.equal(main.passed.length, 6);
+    for (const [href, embedded] of [['https://h.example/editor/stage.html',false], ['https://h.example/editor/?stage=1',false],
+      ['https://h.example/editor/',true], ['https://h.example/other',false]]) {
+      const stage = context(href, embedded);
+      for (const [url, method] of allowed) await assert.rejects(stage.window.fetch(url, { method, credentials:'same-origin' }));
+      assert.deepEqual(stage.passed, []);
+    }
+  } finally { globalThis.window = originalWindow; }
+});

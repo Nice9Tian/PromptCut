@@ -53,3 +53,43 @@ VisuHive main合并43cfdf77520d099bc2160c5565bbba7b08d4e120并推送。独立候
 再清三份已收回工作区：PromptCut acceptance-main-baseline；VisuHive 018-account-backend-main、018-account-rollout。再次核完整status为空、HEAD已在各自main祖先中、绝对目录限定.worktrees、全树reparse为0，使用git worktree remove及branch -d。最后实际累计PromptCut32、VisuHive8，共40个；本任务剩6个（PC4、VH2）加用户原有集成four-stage。最后三份逐项证据TMP three-versions-final-worktree-cleanup-20261009.json。保留旧六个与两份其它会话工作区。
 
 下一阶段优先真实双账号桌面与浏览器产品路径。账号UI和原生桥纯目标已过，真实壳、真实TLS入口及双方列表尚待主会话共同验证；素材新关闭修复、中央登记和强化浏览器失败继续留分支。只读模块与纯测试不能替代完整用户路径。
+
+## 账号完整用户路径：共同候选首轮
+
+e5e6e058独立类型零错（墙7.218秒）；五个目标文件22/22、零失败/取消/跳过，2077.1782ms（墙2.344秒），含真实素材mTLS和真实双账号/doc/独立素材子进程。TMP pc-account-path-prerequisites-e5e6e058-{type,target}.log/.result.json。
+
+共同90832022类型零错（墙5.421秒），完整5300/5294通过/2失败/4跳过，75042.799ms（墙75.406秒）、native重跑0：服务端测试反向import scripts触犯原分层；在线产物新账号路径没有登记。修正组织位置并精确登记后，0c66feb1类型零错（墙6.281秒），完整5301/5295通过/2失败/4跳过，75165.4643ms（墙75.594秒）、native重跑0：旧棘轮基线未同步账号许可，guard另外两条精确session/renew字面量未登记。两次原日志不覆盖、不记通过，分别TMP pc-account-user-stage-{90832022,0c66feb1}-{type,full}.log/.result.json。后续只定位并补齐严格清单，不放宽scanner或旧本机接口限制。
+
+908在线首次在Chrome前TypeError退出，2个真实fixture前置通过，没有实际UI；puppeteer.executablePath返回Promise，探针缺await，最小复现与修后真实文件可读独立通过。0c66在线构建exit0、墙1.922秒；实际Chrome路径首次63.010秒：登录及真实创建201、项目会话200，但连接项目失败，未入编辑器/舞台，未完成第二账号和网站列表。Chrome、自有stage/fixture子进程及全部socket实际关闭。TMP pc-account-online-first-{90832022,0c66feb1}-out/result.json；后者failure-1.png显示产品明确连接错误，不算路径通过。
+
+原生壳隔离编译：固定de633源码cargo offline locked check exit0墙35.312秒、限定测试exit0墙38.407秒；修正实际Webview调用身份和退出失败逻辑后，固定908在TMP独立identifier编译exe。首次测试配置写错capability标识，build exit101墙1.782秒；只修TMP配置remote-sidecar后build exit0墙10.781秒，原源码未改。日志均在TMP pc-account-native-compile-oqemhch8内；编译不代表实际IPC、TLS或完整桌面路径通过。
+
+VisuHive节点固定43cfdf77 Linux实际76/76、零失败/跳过、12576.99244ms；现有1个账号一致备份与隔离真实恢复通过后，已用legacy兼容安装，公网/本机HTTP 200、schema0/accountCount1/integrityok、不生成新密钥。恢复启动路径及旧/me断言的两次脚本失败均保留，未改源码来适配验证。安装详情和全部路径见VisuHive docs/archive/account-backend-main-2026-10-09.md；新网站、v2激活与自动备份尚未做。
+
+已安装的账号后台共同分支018-active-run-order再核完整status空、HEAD在main、绝对目录限定、全树reparse0后移除，分支用-d删除；累计PromptCut32/VisuHive9，共41个，任务仍用5个工作区。用户旧六个与其它会话仍保留。
+
+## 桌面与在线完整账号路径小阶段
+
+固定根产品4adc48c2：类型exit0墙5.125秒，完整5303/5299通过/0失败/4跳过75544.0527ms；build/online-build exit0墙7.172/1.859秒。之后1cc、6df、0b1454df只增探针和报告，产品及tests逐字相同；未覆盖两轮首次全量失败。
+
+在线4adc实际7检查6过1败：已入编辑器和取得链接，第二舞台DOM插入早于实际GET，探针断言过早；1cc首次copy等待超时、4检查全过但未完成，截图样式异常。CSS MIME原已有，不能称缺少CSS类型。6df实际Chrome19/19、零失败、complete、5718ms（墙5.875秒），真实创建201/加入200、WSS101与project.state、两账号新网站权威列表、cookie恢复编辑器全过。主编辑器CSS200/text/css；一次恢复页CSS ERR_TOO_MANY_RETRIES仍留证，原因未完全排除。TMP pc-account-online-first-{4adc48c2,1cc0cef4}-out、pc-account-online-diagnostic-6df7d192-out；自有Chrome/舞台/fixture子进程全关。
+
+桌面首错逐轮留证：0c66在Chrome前因隔离USERPROFILE找不到浏览器；4adc原生exit101因测试指纹大写带冒号；1cc严格归一后unknown path。实证TEMP profile缺AppData/Local/Roaming时LocalApplicationData为空，补齐标准目录后6df实际main/agent配置IPC和agent拒绝通过，但login超时、6检查全过未完成。0b1454df实际诊断证明首次submit前disabled=true/connecting；等待真实按钮可用后才点击，没有改权限或模拟结果。
+
+0b1454df真实桌面28/28、零失败、complete、18039ms（墙21秒）：实际main账号桥与agent同URL拒绝、A登录创建、可见项目链接、--quit真实退出、同profile重启DPAPI恢复、退出A切B凭链接加入、双方新网站权威列表与cookie恢复全过。两轮各11个自有PID树、CDP、Vite6340～42、Chrome和fixture子进程均关闭。exe来自908真实Rust构建，当前Rust逐字相同；所有验证身份/端口/目录/模型路径仅临时进程。首次无vault仍显示恢复失败提示，作为独立小修处理，不伪称已修。TMP pc-account-desktop-first-{0c66feb1,4adc48c2,1cc0cef4}-out、pc-account-desktop-pathfix-6df7d192-out、pc-account-desktop-loginready-0b1454df-out。
+
+未过的强化C10探针、judge及其新增测试留原共同分支并已推送。main候选ff4f04cf529ac73c7cce28a36490d473fbb1821e与完整账号验证源没有生产代码差异，仅恢复该旧探针与对应测试。实际类型exit0墙7.250秒；完整5291/5287通过/0失败/0取消/4跳过68894.4272ms（墙69.265秒）；build/online-build exit0墙8.610/1.750秒；源不变clean、native重跑0。这是改变合并范围后的新候选验证，非覆盖首次失败。TMP pc-account-path-main-ff4f04cf-{type,full,build,online-build}.log/.result.json。
+
+VisuHive后端兼容安装之后，新网站收回main30a9908a并推送。网站381939e语法34文件零错；full80/71过/0失败/9跳过6654.5617ms，显式provider只补未执行目标两个文件10/10零跳过242.97ms；三项POSIX跳过保留。详细证据在其docs/archive/account-backend-main-2026-10-09.md。隔离真实在线/桌面验证含新网站，生产账号v2和项目/独立素材服务仍待接线激活，不称公网新项目已可用。
+
+## 首次无桌面凭据的独立小修
+
+实际运行原account_vault.rs内完整PowerShell SCRIPT，无vault recover stdout为''，Rust解析JSON失败；首红2项/1过1败499.3122ms（墙0.763秒），未发HTTP、不读生产凭据。仅把null结果输出字面JSON null，其他结果、DPAPI/ACL/原子替换不变；修后同目标2/2零失败505.8325ms（墙0.764秒），首次原log不覆盖。TMP pc-account-vault-fresh-{red,green,type}.log。
+
+根精确共同e22ff7f6a544535142e1022caf8dd662990a7d03：类型exit0墙6.531秒；full5292/5288通过/0失败/0取消/4跳过68819.9617ms（墙69.156秒）；build/online-build exit0墙8.578/1.812秒；源不变clean、native0。TMP pc-account-fresh-vault-e22ff7f6-{type,full,build,online-build}.log/.result.json。
+
+对应真实Rust重新离线locked编译exit0墙17.140秒。第一次临时准备脚本误把capability的identifier当文件名，FileNotFoundError，在cargo/原生启动前结束；实际文件remote.json，修的只有TEMP脚本，首错保留。新exe SHA256 64f12b5cb86e50cc71e3acd9e99bd1f4f7a99d5504d2e74a681bb1749f7919a2；原908已验证exe原字节另存pc-account-native-compile-oqemhch8/verified-90832022/promptcut.exe，未损失原证据。
+
+新exe实际桌面28/28、complete、零失败、17600ms（墙20.734秒），首次登录按钮可用时errorVisible=false/errorCode=none。真实登录/创建/加入、同profile重启保护凭据恢复、切账号、两网站权威列表与cookie恢复仍全过；两轮各11个自有PID、CDP、Vite、Chrome和fixture均关。TMP pc-account-native-fresh-e22ff7f6/result.json、pc-account-desktop-fresh-e22ff7f6-out/result.json。所有目录和识别号只在TEMP，未触碰用户正在运行的编辑器。
+
+小阶段main72967e43及网站main30a9908a收回后，再核6458f7a4的素材工作区和99c6379的网页工作区：各HEAD已在main、完整status空、绝对.worktrees边界、全树reparse0；PC仅有可再生成的tsconfig.tsbuildinfo，VH无ignored文件。用git worktree remove和branch -d清2个，累计PC33/VH10，共43个，任务剩3个。详细TMP three-versions-user-path-worktree-cleanup-20261009.json；用户旧六个/其它会话不动。
