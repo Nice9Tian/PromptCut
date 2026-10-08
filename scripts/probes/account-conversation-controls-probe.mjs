@@ -61,6 +61,54 @@ export function assertAccountConversationControls(state, expected) {
   return state;
 }
 
+function safePageError(error) {
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const category = /loading chunk|chunkloaderror/i.test(message) ? 'chunk-load' :
+    /cannot read properties|undefined is not an object|null is not an object/i.test(message) ? 'missing-value' :
+    /minified react|react error #|hydration/i.test(message) ? 'react-render' :
+    /failed to fetch|networkerror|load failed/i.test(message) ? 'network' :
+    /syntaxerror|unexpected token/i.test(message) ? 'syntax' : 'other';
+  const name = new Set(['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError']).has(error?.name) ? error.name : 'Error';
+  let frame = null;
+  if (typeof error?.stack === 'string') for (const line of error.stack.split('\n')) {
+    const match = line.match(/((?:https?|file):\/\/[^\s)]+):(\d+):(\d+)/);
+    if (!match) continue;
+    try {
+      const url = new URL(match[1]);
+      const origin = url.pathname.startsWith('/editor/') ? 'editor' : url.hostname.endsWith('.pc.localhost') ? 'stage' : 'other';
+      const file = path.posix.basename(url.pathname);
+      frame = { origin, ...( /^[A-Za-z0-9._-]{1,120}$/.test(file) ? { file } : {}), line: Number(match[2]), column: Number(match[3]) };
+      break;
+    } catch { /* never retain malformed or raw frame text */ }
+  }
+  return { name, category, ...(frame ? { frame } : {}) };
+}
+
+async function safePageSnapshot(page) {
+  const pathname = (() => { try { return new URL(page.url()).pathname; } catch { return null; } })();
+  try {
+    const state = await page.evaluate(() => {
+      const root = document.querySelector('#root');
+      return {
+        readyState: document.readyState,
+        rootPresent: Boolean(root),
+        rootChildCount: root?.childElementCount ?? 0,
+        bodyChildCount: document.body?.childElementCount ?? 0,
+        loginFormPresent: Boolean(document.querySelector('[data-pc="account-projects"] form')),
+        accountNamePresent: Boolean(document.querySelector('[data-pc="account-name"]')),
+        projectListPresent: Boolean(document.querySelector('[data-pc="cloud-project-lists"]')),
+        projectRowCount: document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row').length,
+        projectCopyPresent: Boolean(document.querySelector('[data-pc="cloud-project-copy"]')),
+        consentDialogPresent: Boolean(document.querySelector('[data-pc="cloud-agent-consent"]')),
+        cloudPanelPresent: Boolean(document.querySelector('[data-pc="cloud-ai-panel"]')),
+      };
+    });
+    return { pathname, ...state };
+  } catch {
+    return { pathname, snapshotUnavailable: true };
+  }
+}
+
 /** Click the actual owner control and distinguish a server-confirmed result from pending. */
 export async function requestAccountVisibility(page, target, { timeoutMs = 30_000 } = {}) {
   if (target !== 'private' && target !== 'shared') throw new Error('visibility-target-must-be-private-or-shared');
@@ -166,11 +214,15 @@ async function main() {
   const ports = [6620, 6621, 6622, 6623, 6624, 6625, 6626, 6627, 6628, 6629];
   const ORIGIN = 'https://127.0.0.1:6626', STAGES = ['http://s1.pc.localhost:6628', 'http://s2.pc.localhost:6629'];
   const result = { sourceBefore: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim(),
-    checks: [], network: [], screenshots: [], completed: false, fence: 'pending-unconfirmed', cleanup: {} };
+    checks: [], network: [], screenshots: [], pageErrors: [], pageSteps: [], completed: false, fence: 'pending-unconfirmed', cleanup: {} };
   const check = (condition, name) => { result.checks.push({ name, pass: Boolean(condition) }); if (!condition) throw new Error(name); };
   const stages = [], contexts = [], pages = [], requestIds = new WeakMap(), firstVisibilityId = new WeakMap(), visibilityCounts = new WeakMap();
-  let browser, fixture, phase = 'preflight', browserProfile;
+  let browser, fixture, phase = 'preflight', phaseDetail = null, browserProfile;
   const started = Date.now();
+  const recordPageStep = async (page, label, step) => {
+    phaseDetail = step;
+    result.pageSteps.push({ page: label, step, ...(await safePageSnapshot(page)) });
+  };
   const shot = async (page, name) => {
     if (await page.$('input[type="password"]')) return;
     const file = path.join(OUT, `${name}.png`);
@@ -260,6 +312,8 @@ async function main() {
     for (let i = 0; i < 2; i++) {
       const context = await browser.createBrowserContext(); contexts.push(context);
       const page = await context.newPage(); pages.push(page); page.setDefaultTimeout(TIMEOUT);
+      const pageLabel = i === 0 ? 'creator' : 'owner';
+      page.on('pageerror', error => result.pageErrors.push({ page: pageLabel, ...safePageError(error) }));
       page.on('request', request => {
         const url = new URL(request.url());
         if (url.pathname.endsWith('/visibility') && request.method() === 'POST') {
@@ -284,32 +338,47 @@ async function main() {
     phase = 'login';
     for (let index = 0; index < pages.length; index++) {
       const page = pages[index], account = fixture.accounts[index];
+      await recordPageStep(page, index === 0 ? 'creator' : 'owner', 'login:navigate');
       await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+      await recordPageStep(page, index === 0 ? 'creator' : 'owner', 'login:form-loaded');
       await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
       const submit = '[data-pc="account-projects"] form button.sp-primary-btn';
-      await enabled(page, submit); await page.click(submit); await waitVisible(page, '[data-pc="account-name"]');
+      await enabled(page, submit); await page.click(submit);
+      await waitVisible(page, '[data-pc="account-name"]');
+      await recordPageStep(page, index === 0 ? 'creator' : 'owner', 'login:account-ready');
     }
     const openProject = async page => {
+      const pageLabel = page === creator ? 'creator' : 'owner';
       let consentRead;
+      await recordPageStep(page, pageLabel, 'open-project:wait-list-row');
       await page.waitForFunction(name => Array.from(document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row'))
         .some(row => row.querySelector('button')?.textContent?.trim() === name), { timeout: TIMEOUT }, projectName);
+      await recordPageStep(page, pageLabel, 'open-project:list-row-ready');
       const rows = await page.$$('[data-pc="cloud-project-lists"] .sp-account-row');
+      let selected = false;
       for (const row of rows) {
         const title = await row.$eval('button', element => element.textContent?.trim() ?? '').catch(() => '');
         if (title !== projectName) continue;
         const buttons = await row.$$('button');
         if (!buttons.length || await buttons[0].evaluate(button => button.disabled)) throw new Error('project-open-button-disabled');
+        await recordPageStep(page, pageLabel, 'open-project:before-real-click');
         consentRead = waitForConsentResponse(page, 'GET', TIMEOUT).then(async response => ({ kind: 'response', accepted: await consentAccepted(response) })).catch(() => null);
-        await buttons[0].click(); break;
+        await buttons[0].click(); selected = true; break;
       }
+      if (!selected) throw new Error('project-open-row-not-selected');
+      await recordPageStep(page, pageLabel, 'open-project:clicked-wait-cloud-copy');
       await waitVisible(page, '[data-pc="cloud-project-copy"]');
+      await recordPageStep(page, pageLabel, 'open-project:cloud-copy-ready');
       const consentDialog = page.waitForSelector('[data-pc="cloud-agent-consent"]', { visible: true, timeout: TIMEOUT })
         .then(() => ({ kind: 'dialog' })).catch(() => null);
       let consentState = await Promise.race([consentRead ?? Promise.resolve(null), consentDialog]);
-      if (consentState?.kind === 'response' && consentState.accepted) return;
+      if (consentState?.kind === 'response' && consentState.accepted) {
+        await recordPageStep(page, pageLabel, 'open-project:consent-already-accepted'); return;
+      }
       if (consentState?.kind === 'response') consentState = await consentDialog;
       if (consentState?.kind === 'dialog' || await page.$('[data-pc="cloud-agent-consent"]')) {
         await waitVisible(page, '[data-pc="cloud-agent-consent"]');
+        await recordPageStep(page, pageLabel, 'open-project:consent-dialog-visible');
         const buttons = await page.$$('[data-pc="cloud-agent-consent"] button');
         if (buttons.length < 2) throw new Error('cloud-consent-buttons-missing');
         const acceptance = waitForConsentResponse(page, 'POST', TIMEOUT);
@@ -317,6 +386,7 @@ async function main() {
         const accepted = await acceptance;
         if (!await consentAccepted(accepted)) throw new Error('cloud-consent-acceptance-not-confirmed');
         await page.waitForSelector('[data-pc="cloud-agent-consent"]', { hidden: true, timeout: TIMEOUT });
+        await recordPageStep(page, pageLabel, 'open-project:consent-accepted');
       } else {
         throw new Error('cloud-consent-read-or-dialog-not-observed');
       }
@@ -374,7 +444,11 @@ async function main() {
     result.fence = 'pending-unconfirmed';
     result.completed = true;
   } catch (error) {
-    result.failure = { phase, code: error?.name === 'TimeoutError' ? 'timeout' : error?.name === 'Error' ? 'probe-check-failed' : 'probe-failed' };
+    result.failure = { phase, detail: phaseDetail, code: error?.name === 'TimeoutError' ? 'timeout' : error?.name === 'Error' ? 'probe-check-failed' : 'probe-failed' };
+    for (let index = 0; index < pages.length; index++) {
+      const page = pages[index];
+      result.pageSteps.push({ page: index === 0 ? 'creator' : 'owner', step: `failure-snapshot:${phase}`, ...(await safePageSnapshot(page)) });
+    }
     for (let index = 0; index < pages.length; index++) await shot(pages[index], `failure-${index}`).catch(() => {});
     process.exitCode = 1;
   } finally {
@@ -391,7 +465,8 @@ async function main() {
     result.sourceAfter = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim();
     await fs.writeFile(path.join(OUT, 'result.json'), JSON.stringify(result, null, 2));
     console.log(JSON.stringify({ completed: result.completed, phase, checks: result.checks.length, fence: result.fence,
-      wallMs: result.wallMs, closed: result.cleanup.fixtureAndPortsClosed === true, output: OUT,
+      detail: phaseDetail, pageErrors: result.pageErrors.length, wallMs: result.wallMs,
+      closed: result.cleanup.fixtureAndPortsClosed === true, output: OUT,
       fixtureEvidenceDir: result.fixtureEvidenceDir ?? null, browserProfileEvidenceDir: result.browserProfileEvidenceDir ?? null }));
     if (!result.cleanup.allPortsFree) process.exitCode = 1;
   }

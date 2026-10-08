@@ -73,3 +73,11 @@
 - fixture 关闭顺序计划为先停 control consumer，再关闭 Agent HTTP/service 与 conversation client，再关闭 doc、run client 和其余自有资源；close 仍须等待所有自有 socket、子进程和端口释放。新增 receipt 只落在本 fixture 的独立临时目录，保留现有 fixture 失败证据目录策略。
 - 迁移后，浏览器主路径应改为断言真实 read-control 支持下的历史读取及真实私有切换结果；如果服务返回实际 ACK，就报告为 confirmed，不能继续把现有“缺 read transport 导致 503”称为 pending。需要另保留一个有真实在途消费/dispatch 尚未完成的 pending 反例，不能 stub control client、伪造 response、临时返回成功或把旧 `onFence` 缺项算作 pending。具体可控的真实在途路径必须等同步的 protocol/服务接口核实后再选；本报告不假定 API 或伪定实现方法。若接口不提供可复现且真实的未完成消费场景，应把 pending 反例列为阻塞的验收缺口并报告 root，不以模拟补齐。
 - 此计划阶段只做了只读检查，未启动 service、浏览器、fixture，未修改 fixture/探针或任何生产代码；当前唯一允许变更是本报告。后续实施待 root 同步 Astra protocol 并明确新 fixture 租约后再开始。
+
+## Puppeteer 首轮失败的安全诊断补充（2026-10-09）
+
+- root 提供的真实运行摘要显示：端口前置检查 10 项全部通过；creator 页面点击项目后一直未进入项目视图，超时于 `project-open`，creator 截图为空黑页，owner 仍停在云端项目列表。这与串行流程一致：creator 的 `openProject` 未完成前不会打开 owner 项目。只核对了 result 中的阶段/检查/网络状态及两张截图，没有读取 fixture 凭证或密钥；6620–6629 在 root 的结果中全部释放。
+- 为定位 blank React 页面的异常，本次仅给 Puppeteer 探针补诊断：监听 `pageerror`，输出仅限白名单错误名、固定错误类别，以及经过筛选的脚本 basename/行列和 `editor`/`stage`/`other` 来源类别；不输出原始 message、stack、console、URL query、headers、body、cookie、密码或 token。页面快照只记 pathname、readyState、节点是否存在及计数，不读取任意页面文本或输入值。
+- `openProject` 增加等待项目行、实际点击前、点击后等待项目视图、项目视图已出现、consent 弹窗/接受等步骤快照；超时时记录最后一个受控步骤和两个页面的安全快照。result 仍留在调用者指定的临时输出目录，console 摘要只增加受控步骤名和 pageerror 数量。探针不收集一般 console 消息。
+- 顺带只读检查了 stop 权限显示：`CloudAiPanel.css` 的 `.pc-cloud-panel[data-cloud-can-stop="0"] [data-pc="ai-stop"] { display: none; }` 会隐藏 Composer 中以 `disabled`、`title` 和 `aria-label` 说明无权停止的按钮，因此这份权限说明在普通成员账号运行态下不可见。Composer 默认行为与禁用实现本身仍在；本次没有改产品，需 root 决定是否另授产品文件窄租约来调整可见说明。
+- 本次允许范围仅探针与本报告。不会重跑 browser、服务、类型或全量；接下来只做 `node --check`、`git diff --check` 和改动路径核对，再提交供 root 使用新构建复跑诊断。
