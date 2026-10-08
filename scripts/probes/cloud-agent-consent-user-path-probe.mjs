@@ -52,6 +52,7 @@ const store = openStore(':memory:');
 const now = Date.now;
 const credentials = createCredentials({ store, now, key: randomBytes(32) });
 const handleAccount = createApp({ store, credentials, now, origins: [ORIGIN], cookieSecure: false });
+const accountCalls = [];
 const agentRequests = [];
 const pageErrors = [];
 const missingPaths = [];
@@ -59,13 +60,18 @@ const vite = await createViteServer({ configFile: false, root: ROOT, plugins: [r
   server: { middlewareMode: true, hmr: false, fs: { strict: true, deny: ['**/.git/**', '**/out/**', '**/.env*', '**/*.{pem,key,crt}'] } } });
 const server = http.createServer((req, res) => {
   const pathname = new URL(req.url, ORIGIN).pathname;
-  if (pathname.startsWith('/api/account/')) { void handleAccount(req, res); return; }
+  if (pathname.startsWith('/api/account/')) { accountCalls.push({ method:req.method, path:pathname }); void handleAccount(req, res); return; }
   if (pathname.startsWith('/agent/v1')) {
     agentRequests.push({ method: req.method, path: pathname });
     res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end('{"ok":false,"code":"agent-unavailable"}'); return;
   }
   if (pathname === '/') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end('<!doctype html><html><head><meta charset="utf-8"></head><body>Account setup outside editor</body></html>');
+    return;
+  }
+  if (pathname === '/editor/' || pathname === '/editor/index.html') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end('<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module" src="/src/ai/cloud/consent-probe-harness.tsx"></script></body></html>');
     return;
@@ -98,7 +104,23 @@ try {
     return { status:response.status, ok:(await response.json()).ok === true };
   }, { name, password });
   check(registered.status === 200 && registered.ok, 'real-account-register');
+  const otherPassword = `probe-${randomUUID()}-password`;
+  const otherName = `consent_${randomBytes(5).toString('hex')}`;
+  const setup = await browser.createBrowserContext(); contexts.push(setup);
+  const setupPage = await setup.newPage();
+  await setupPage.goto(ORIGIN, { waitUntil:'domcontentloaded' });
+  const otherRegistered = await setupPage.evaluate(async ({ name, password }) => {
+    const me = await (await fetch('/api/account/me', { credentials:'same-origin' })).json();
+    const response = await fetch('/api/account/register', { method:'POST', credentials:'same-origin',
+      headers:{ 'content-type':'application/json', 'x-csrf-token':me.csrfToken },
+      body:JSON.stringify({ name, password, requestId:crypto.randomUUID() }) });
+    return { status:response.status, ok:(await response.json()).ok === true };
+  }, { name:otherName, password:otherPassword });
+  check(otherRegistered.status === 200 && otherRegistered.ok, 'other-account-outside-editor-register');
+  await setup.close();
+  await pageA.goto(`${ORIGIN}/editor/`, { waitUntil:'domcontentloaded' });
   await pageA.waitForFunction(() => Boolean(window.__pcConsentProbe), { timeout: 15_000 });
+  check(await pageA.evaluate(() => window.__pcApiGuard === true && Array.isArray(window.__pcApiBlocked)), 'production-boot-api-guard-active');
   const mountedA = await pageA.evaluate(() => window.__pcConsentProbe.mount());
   check(mountedA.accountId.startsWith('acc_') && mountedA.oldDelegation === false, 'account-bound-no-old-delegation');
   await pageA.waitForSelector('[data-pc="cloud-agent-consent"]', { timeout: 20_000 });
@@ -130,11 +152,16 @@ try {
   await pageA.waitForFunction(() => !document.querySelector('[data-pc="cloud-agent-consent"]'), { timeout: 10_000 });
   const consentA = await pageA.evaluate(async () => (await (await fetch('/api/account/cloud-agent-consent', { credentials:'same-origin' })).json()).accepted);
   check(consentA === true, 'server-persisted-accept');
+  check(accountCalls.some(x => x.method === 'GET' && x.path === '/api/account/cloud-agent-consent') &&
+    accountCalls.some(x => x.method === 'POST' && x.path === '/api/account/cloud-agent-consent') &&
+    await pageA.evaluate(() => !window.__pcApiBlocked.includes('/api/account/cloud-agent-consent')),
+  'real-consent-get-post-crossed-production-guard');
   const second = await browser.createBrowserContext(); contexts.push(second);
   const pageB = await second.newPage();
   pageB.on('pageerror', error => pageErrors.push(String(error.message).slice(0, 240)));
-  await pageB.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
+  await pageB.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
   await pageB.waitForFunction(() => Boolean(window.__pcConsentProbe), { timeout: 15_000 });
+  check(await pageB.evaluate(() => window.__pcApiGuard === true && Array.isArray(window.__pcApiBlocked)), 'second-device-production-guard-active');
   const logged = await pageB.evaluate(async ({ name, password }) => {
     const me = await (await fetch('/api/account/me', { credentials:'same-origin' })).json();
     const response = await fetch('/api/account/login', { method:'POST', credentials:'same-origin',
@@ -150,16 +177,14 @@ try {
   await pageA.evaluate(() => window.__pcConsentProbe.logout());
   await pageA.waitForFunction(() => !document.querySelector('[data-pc="cloud-agent-consent"]'), { timeout: 10_000 });
   check(agentRequests.every(x => x.method !== 'POST'), 'no-model-or-send-without-agent-service');
-  const otherPassword = `probe-${randomUUID()}-password`;
-  const otherName = `consent_${randomBytes(5).toString('hex')}`;
-  const otherRegistered = await pageA.evaluate(async ({ name, password }) => {
+  const otherLogged = await pageA.evaluate(async ({ name, password }) => {
     const me = await (await fetch('/api/account/me', { credentials:'same-origin' })).json();
-    const response = await fetch('/api/account/register', { method:'POST', credentials:'same-origin',
+    const response = await fetch('/api/account/login', { method:'POST', credentials:'same-origin',
       headers:{ 'content-type':'application/json', 'x-csrf-token':me.csrfToken },
-      body:JSON.stringify({ name, password, requestId:crypto.randomUUID() }) });
+      body:JSON.stringify({ name, password, remember:false, requestId:crypto.randomUUID() }) });
     return { status:response.status, ok:(await response.json()).ok === true };
   }, { name:otherName, password:otherPassword });
-  check(otherRegistered.status === 200 && otherRegistered.ok, 'same-tab-other-account-real-register');
+  check(otherLogged.status === 200 && otherLogged.ok, 'same-tab-other-account-real-login-through-guard');
   const otherMounted = await pageA.evaluate(() => window.__pcConsentProbe.mount());
   check(otherMounted.accountId !== mountedA.accountId && otherMounted.oldDelegation === false, 'account-switch-new-binding-no-delegation');
   await pageA.waitForSelector('[data-pc="cloud-agent-consent"]', { timeout: 10_000 });
