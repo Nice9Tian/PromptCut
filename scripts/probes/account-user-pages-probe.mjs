@@ -56,7 +56,7 @@ const STAGES = ['http://s1.pc.localhost:6341', 'http://s2.pc.localhost:6342'];
 const TIMEOUT = 60_000; // A missing product result is a failure; no automatic retry.
 const MIME = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.css':'text/css', '.json':'application/json', '.svg':'image/svg+xml', '.png':'image/png', '.jpg':'image/jpeg', '.woff':'font/woff', '.woff2':'font/woff2', '.ttf':'font/ttf', '.wasm':'application/wasm' };
 const source = () => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim();
-const result = { sourceBefore: source(), checks: [], screenshots: [], network: [], websocket: [], stageDocuments:[], phase: 'preflight', desktop: 'not-run', cleanup: {} };
+const result = { sourceBefore: source(), checks: [], screenshots: [], network: [], resources: [], websocket: [], stageDocuments:[], phase: 'preflight', desktop: 'not-run', cleanup: {} };
 let fixture, browser;
 let native, nativeAttempt = 0;
 const stages = [], contexts = [], pages = [], responseTasks = new Set(), networkObservers = [];
@@ -113,7 +113,25 @@ async function observePage(page, label) {
   page.setDefaultTimeout(TIMEOUT); page.setDefaultNavigationTimeout(TIMEOUT);
   page.safeResponses = { projects: null, create: null, join: null };
   page.on('pageerror', error => { result.network.push({ page: label, kind:'pageerror', name: error.name }); });
+  const resourcePath = request => {
+    const url = new URL(request.url());
+    if (![ORIGIN, ...STAGES].includes(url.origin) || !['document', 'stylesheet', 'script', 'font', 'image'].includes(request.resourceType())) return null;
+    return url.pathname.startsWith('/editor/') || url.pathname.startsWith('/assets/') ? url.pathname : null;
+  };
+  page.on('requestfailed', request => {
+    const pathname = resourcePath(request);
+    if (!pathname) return;
+    const error = request.failure()?.errorText;
+    result.resources.push({ page:label, kind:'requestfailed', path:pathname, type:request.resourceType(),
+      name:typeof error === 'string' && /^net::ERR_[A-Z0-9_]+$/.test(error) ? error : 'request-failed' });
+  });
   page.on('response', response => {
+    const pathname = resourcePath(response.request());
+    if (pathname) {
+      const mime = response.headers()['content-type'];
+      result.resources.push({ page:label, kind:'response', path:pathname, type:response.request().resourceType(), status:response.status(),
+        mime:typeof mime === 'string' && /^[a-z0-9.+-]+\/[a-z0-9.+-]+(?:;\s*charset=[a-z0-9_-]+)?$/i.test(mime) ? mime : mime === undefined ? 'missing' : 'unexpected-content-type' });
+    }
     const url = new URL(response.url());
     if (![ORIGIN, ...STAGES].includes(url.origin)) return;
     if (!url.pathname.startsWith('/api/account') && !url.pathname.startsWith('/hosted/')) return;
@@ -196,6 +214,25 @@ async function waitEditor(page, check) {
   await page.waitForSelector('[data-pc="editor"]', { visible:true });
   await page.waitForSelector('[data-pc="cloud-project-copy"]', { visible:true });
   assert(!(await page.$('[data-pc="account-projects"]')), check);
+}
+async function copyState(page) {
+  // Read only fixed classifications, never clipboard contents or complete DOM text.
+  return page.evaluate(async () => {
+    const button = document.querySelector('[data-pc="cloud-project-copy"]');
+    const toast = document.querySelector('[data-pc="sync-toasts"]')?.textContent ?? '';
+    let permission = 'unavailable';
+    try {
+      permission = await Promise.race([
+        navigator.permissions.query({ name:'clipboard-write' }).then(value => ['granted', 'denied', 'prompt'].includes(value.state) ? value.state : 'unknown'),
+        new Promise(resolve => setTimeout(() => resolve('query-timeout'), 1000)),
+      ]);
+    } catch { /* Unsupported browser permission query. */ }
+    return { buttonPresent:Boolean(button), buttonVisible:Boolean(button?.getClientRects().length),
+      buttonDisabled:Boolean(button?.disabled), buttonFocused:document.activeElement === button, documentFocused:document.hasFocus(),
+      clipboardApi:typeof navigator.clipboard?.writeText === 'function', permission,
+      enteredToast:toast.includes('已进入云端项目'), copiedToast:toast.includes('项目链接已复制。'),
+      fallbackToast:toast.includes('项目链接：https://127.0.0.1:6388/editor?project=') };
+  }).catch(() => ({ state:'copy-diagnostic-unavailable' }));
 }
 async function websiteList(account, kind, projectId, name, label) {
   const context = await browser.createBrowserContext(); contexts.push(context);
@@ -374,8 +411,11 @@ try {
   result.phase = 'editor-a-login'; await loginEditor(a, fixture.accounts[0]); await safeShot(a, '01-editor-a-logged-in');
   result.phase = 'editor-a-create'; const name = `双账号页面验收-${randomUUID().slice(0, 8)}`; result.projectName = name;
   await type(a, '[data-pc="cloud-project-name"]', name); await a.click('[data-pc="cloud-create"]'); await waitEditor(a, 'creator-enters-real-editor');
-  await a.click('[data-pc="cloud-project-copy"]');
-  await a.waitForFunction(() => document.querySelector('[data-pc="sync-toasts"]')?.textContent?.includes('项目链接：https://127.0.0.1:6388/editor?project='));
+  result.copy = { before:await copyState(a) };
+  try {
+    await a.click('[data-pc="cloud-project-copy"]');
+    await a.waitForFunction(() => document.querySelector('[data-pc="sync-toasts"]')?.textContent?.includes('项目链接：https://127.0.0.1:6388/editor?project='));
+  } finally { result.copy.after = await copyState(a); }
   const link = await a.$eval('[data-pc="sync-toasts"]', el => el.textContent.match(/https:\/\/127\.0\.0\.1:6388\/editor\?project=sp_[a-z2-7]{26}/)?.[0]);
   assert(Boolean(link), 'visible-project-link-after-start-page-unmount');
   const projectId = new URL(link).searchParams.get('project'); result.projectId = projectId;

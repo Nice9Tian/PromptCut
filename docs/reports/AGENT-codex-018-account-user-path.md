@@ -127,3 +127,15 @@ Astra只读静态核到确定格式冲突：fixture叶证书指纹来自Node X50
 下一步仅固定源最小纯验证，复用G静态assetWiringPki生成自有TMP证书，无服务listener；运行实际probe中的nativeCertificatePin函数，核95字符到64小写且等于同叶证书DER原字节SHA256、坏格式拒，私钥/指纹不打印。node --check/diff --check先通过。原native101/已闭PID和在线失败均保留，root后续实际壳及双网页再验，不为probe/报告重复全量。
 
 固定196cc384050121d8fd74fe4fa329feb8f075aad3最小纯验证exit0、wall962ms、raw `%TEMP%/pc-account-native-pin-pure-1.log`：从实际probe函数定义载入独立VM执行（不镜像重写算法、不执行probe顶层），G真实assetWiringPki在自建TMP生成证书；Node标准指纹95字符转64小写，并与同叶证书raw DER的createHash('sha256')逐字相等。9/9坏格式（缺失/null/数字/空/无冒号/尾随换行/截短/错分隔/非hex）真实拒。自有openssl子进程隐藏、正常结束，TMP目录核绝对归属后已清；无业务listener/Chrome/壳，未打印privatekey或pin、未读真实密钥、未npm/full/type。本次node --check/diff --check通过；测前后source同196且clean，raw只有通过计数与cleanup，不声称实际native启动通过。
+
+## 复制与样式真实失败诊断
+
+root固定1cc0cef4963f4fad6d216cd911c5fa7a362064c8实际online首次63.203s，4个检查均过：A创建201、WS101/welcome/project.state成功、creator真实进入编辑器。点击可见复制按钮后等待fallback链接toast超时；failure-1实际3304x1581图显示主页面原始按钮/白背景且只有原已进入提示，stage请求与资源均由root保留，source前后不变、所有资源已闭。本叶只读查看该图与result，不改结果或宣称复制通过。首次静态判断MIME缺.css错误，重新核完整git show c0cf与当前行57均有.css:text/css（原908也有），先前截断输出误读已向root更正；不重复补字段/改产品，当前样式根因未知。
+
+已核产品copy链：SyncOverlays.tsx Toasts按钮onClick直接绑定t.action.run；syncManager.enterAccountProject的回调等待navigator.clipboard.writeText，resolve显示复制成功、reject显示可见链接。源码未发现按钮未绑定；实际点击是否命中/页面焦点/permission及Promise悬挂需真实浏览器诊断，不凭截图倒推。不读剪贴板、不mock、不主动改变权限/焦点以凑通。
+
+本块仅probe安全诊断：对自有ORIGIN/STAGES静态editor/assets资源记录pathname、resourceType、实际HTTP status与经语法过滤的MIME；requestfailed只保存net::ERR固定码或request-failed，不保存任意错误文本/headers/body/query。复制前后只分类按钮存在/可见/禁用/焦点、document焦点、clipboard API及permission(granted/denied/prompt/unsupported/timeout)、三个既知toast包含布尔；不复制完整DOM text/项目URL/票据，失败也由finally留after分类。原复制等待/网站断言不减弱，node --check/diff --check通过，尚未执行实际probe，无监听器/Chrome/full。
+
+旧auth.ticket另有真实接线缺口：Preview.tsx1328仅online/lowMem判据调用startBrowserNodeHost，member判据未区分account；browserNodeHost.ts384向docRequest申请旧conn/render票据、187申请旧asset/rw票据，docRequest沿assetTiers当前账号页面连接发送。本叶assetTiers.connectSharedAssets账号分支已使用HTTPsession票据并绕开service.watch/auth.ticket，不能把这一独立browserNode路径归为已修。建议后续获租owner为browserNodeHost提供来自真实v2 authority的项目/角色/凭据续签adapter，区分render连接身份与人类asset票据并逐次重核；中央若未提供精确render身份票据接口应明确未接通，不能复用人类票据升render角色/恢复旧自由auth.ticket，也不能禁用既定浏览器渲染能力来让探针过。本轮不改Preview/browserNode/授权协议/渲染产品。
+
+native1cc实际未知path panic由root/Astra继续只读定位；证书pin格式修保持。没有本轮main/agentIPC通过证据，不把旧native101归为账号登录失败。
