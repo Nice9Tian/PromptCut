@@ -33,7 +33,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { bakeStream } from './bakery/bake.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
@@ -44,6 +44,7 @@ import { planStreamSegments } from './frame-playback.mjs';
 import { mergeRanges } from './snapshot-store.mjs';
 import { atomic } from './frame-mov.mjs';
 import { projectStorageKey } from './asset-store/project-stores.mjs';
+import { readProjectFile, publishProjectFile, projectFileAccepted } from './asset-store/project-io.mjs';
 
 export const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;
 /** G0-b 结论 1:先按 stride 3 把整段快速铺满 */
@@ -527,27 +528,37 @@ export function readySegmentRanges(manifest) {
 }
 
 export class StreamStore {
-  constructor(root, { ownership = null, projectAccess = null } = {}) {
+  constructor(root, { ownership = null, projectAccess = null, io = fs } = {}) {
     this.ownership = ownership; this.projectAccess = projectAccess;
+    this.io = io;
     this.projectId = ownership?.projectId ?? null;
     this.root = this.projectId ? path.join(root, 'projects', projectStorageKey(this.projectId)) : root;
     this.manifests = new Map();
   }
   dir(key) { return path.join(this.root, key); }
-  async load(key) {
-    if (this.manifests.has(key)) return this.manifests.get(key);
+  async load(key, { lease } = {}) {
+    if (this.manifests.has(key)) return this.projectId ? structuredClone(this.manifests.get(key)) : this.manifests.get(key);
     let manifest = null;
-    try { manifest = JSON.parse(await fs.readFile(path.join(this.dir(key), 'stream.json'), 'utf8')); } catch {}
+    try { const file = path.join(this.dir(key), 'stream.json'); if (this.projectId && !await projectFileAccepted(file)) return null; manifest = JSON.parse((await readProjectFile(file, lease, this.io)).toString('utf8')); } catch {}
     if (!manifest || manifest.streamKey !== key || (this.projectId && manifest.projectId !== this.projectId)) manifest = null;
-    this.manifests.set(key, manifest);
+    this.manifests.set(key, this.projectId ? structuredClone(manifest) : manifest);
     return manifest;
   }
   async save(manifest) {
     await this.ownership?.assert();
     if (this.projectId && manifest.projectId && manifest.projectId !== this.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
     if (this.projectId) manifest = { ...manifest, projectId: this.projectId };
-    this.manifests.set(manifest.streamKey, manifest);
-    await atomic(path.join(this.dir(manifest.streamKey), 'stream.json'), JSON.stringify(manifest));
+    await this.writeFile(path.join(this.dir(manifest.streamKey), 'stream.json'), JSON.stringify(manifest), { replace: true });
+    this.manifests.set(manifest.streamKey, this.projectId ? structuredClone(manifest) : manifest);
+  }
+  async writeFile(target, bytes, { replace = false } = {}) {
+    if (!this.ownership) await atomic(target, bytes);
+    else {
+      const lease = await this.ownership.acquire?.(), temp = `${target}.${randomUUID()}.tmp`;
+      const write = async () => { await this.ownership.assert(); await lease?.assert(); await this.io.mkdir(path.dirname(target), { recursive: true }); await this.io.writeFile(temp, bytes); await publishProjectFile({ temp, target, replace, assert: async () => { await this.ownership.assert(); await lease?.assert(); }, lease, io: this.io }); };
+      try { if (lease) await lease.run(write); else await write(); }
+      finally { await this.io.rm(temp, { force: true }); await lease?.release(); }
+    }
   }
   /** 扫盘(F5):每条流的「键 → 就绪分段」 */
   async scan() {
@@ -643,7 +654,7 @@ export function handleStreamRequest(store, req, res, pathname) {
   }
   if (m[2] === 'manifest') {
     store.manifests.delete(key);
-    void store.load(key).then(manifest => {
+    void store.load(key, { lease: req[Symbol.for('promptcut.asset.stream-checked.v2')] }).then(manifest => {
       if (res.destroyed) return;
       if (!manifest) return fail(404, 'Stream is not ready');
       res.setHeader('Content-Type', 'application/json');
@@ -653,7 +664,7 @@ export function handleStreamRequest(store, req, res, pathname) {
     return true;
   }
   const file = m[3] ? store.initFile(key, m[3]) : store.segFile(key, m[4]);
-  void fs.readFile(file).then(buf => {
+  void readProjectFile(file, req[Symbol.for('promptcut.asset.stream-checked.v2')], store.io).then(buf => {
     if (res.destroyed) return;
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Cache-Control', store.projectId ? 'no-store' : 'public, max-age=31536000, immutable');
@@ -1233,12 +1244,12 @@ export class StreamProducer {
     await fs.mkdir(dir, { recursive: true });
     if (!manifest.inits[initId]) {
       const meta = initInfo(init);
-      await atomic(this.store.initFile(spec.streamKey, initId), init);
+      await this.store.writeFile(this.store.initFile(spec.streamKey, initId), init);
       manifest.inits[initId] = { codec: meta.codec, width: meta.width, height: meta.height, timescale: meta.timescale, rect, encoder, bytes: init.length };
       this.note(`流 ${spec.streamKey.slice(0, 8)} 新变体 init-${initId}(${meta.codec} ${meta.width}×${meta.height})`);
     }
     const file = `${segment}-${sha(segments[0], 16)}.m4s`;
-    await atomic(this.store.segFile(spec.streamKey, file), segments[0]);
+    await this.store.writeFile(this.store.segFile(spec.streamKey, file), segments[0]);
     const old = manifest.segments[segment];
     manifest.segments[segment] = { file, init: initId, stride, samples, bytes: segments[0].length, encodeMs: out.encodeMs, tailMs: out.tailMs,
       sig: segmentSignature({ streamKey: spec.streamKey, segment, stride, encoder, rect }), dropped, at: Date.now() };
@@ -1316,11 +1327,11 @@ export class StreamProducer {
     }));
     // 写文件(内容寻址,重复写同一份无害)
     await fs.mkdir(this.store.dir(key), { recursive: true });
-    for (const [id, bytes] of initBytes) { await this.ownership?.assert(); await atomic(this.store.initFile(key, id), bytes); }
+    for (const [id, bytes] of initBytes) { await this.ownership?.assert(); await this.store.writeFile(this.store.initFile(key, id), bytes); }
     for (const p of pending) {
       await this.ownership?.assert();
       p.file = `${p.n}-${p.seg.hash.slice(0, 16)}.m4s`;
-      await atomic(this.store.segFile(key, p.file), p.bytes);
+      await this.store.writeFile(this.store.segFile(key, p.file), p.bytes);
     }
     // 写盘期间 `update()` 可能换了一版:以此刻 `this.streams` 里的为准,**同步**合并
     const live = this.streams.get(key);

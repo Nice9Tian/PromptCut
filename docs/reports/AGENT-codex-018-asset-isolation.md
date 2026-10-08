@@ -86,3 +86,16 @@
 - 相对base986ebec6，排除根收auth的两文件，本包25个文件、此前原始统计1136新增/90删除（本末段报告会增加文档行数）；实际最终raw git diff --stat由交回消息提供，不以这条预估冒称最终diff。
 
 一级风险/未做成原因：没有新增待用户决定。生产组合仍需中央接线、真实account/doc/mTLS撤销事件、权限票据重签、runGrant核验、Agent/perception传播及Linux真网络权限探针；这些文件由其它owner租用，本包按授权不能代改。当前provider fixture使用opaque引用和连续事件模拟，不把它说成真实跨服务部署完成；根整合应重新验真实hash跨读原反例、改密/kick持续流关闭与各服务完成barrier。调度50对话/阶段容量、未来提前回收/故障A-B/删除权限并非本包实现授权，未借此扩大018业务。
+
+## 根复核后继续：真实关闭与异步发布边界修正
+
+- 根审443/56发现HTTP finish先于源stream actualclose，明确授权本叶继续最小修复；旧443/56的所有通过仍是旧证据，不能冒用本增量。未触中央/wire/票据/doc/账号/进度租文件。
+- close-boundary-1真实HTTP与Readable _destroy callback gate：客户端已收完整body、source.closed=false，旧release解除订阅，持久事件却已complete ACK；1/1失败564.1137ms，TMP/promptcut-asset-close-boundary-1.log。明确证明缺陷，未把finish当close。
+- lease.release现在禁止新动作，但等待所有tracked close并保留撤销订阅；track记录晚返回的实际资源，wait动态追齐直到全部actualclose，不用exitCode/HTTPfinish代替。hold/run登记异步I/O/发布/回退整段，trackHandle跟踪真实FileHandle close。资源收口失败failClose保留barrier拒complete ACK。
+- frame读口改为显式open+readFile(signal)+finally close，租约覆盖open/read/实际close；异步fd读gate后res.destroy也不能提前完成闭流回调。media/shot open/stat的在途I/O也加hold与FileHandle追踪；BlobStore stat/read/chunks/putChunk/complete全段run，防请求finish解除尚在IO中的资源。
+- close-boundary-2（旧发布代码）4项2过2失败791.4096ms：media rename在途撤销仍先完成闭流，StreamStore.save失权后晚落新manifest/cache。原始日志保留；同轮真实HTTP finish gate与fd gate已通过。close-boundary-3修正后4/4、856.0047ms，随后补pending可见性/重启5/5、795.8659ms（-4.log）。
+- 〔裁〕对项目发布增加按target串行的小事务、持久意图与回退，替代仅前后assert（已实证会晚发布）或直接删除目标（会误删已有同hash/旧清单）。新目标在最后权威重核接受前带project-publication.json，实际asset GET、/@media、file与frame读口不可见；失败删除本次新目标、或备份恢复旧manifest；旧全件/dedupe及原输入保留，cache仅成功后更新且项目cache拷贝防caller提前改它。意图只含本目录路径，无账号/凭证。factory首次打开本项目目录恢复未完成意图，路径不在本目录/跨B拒，坏记录fail closed；没有改用户删除政策/其它项目或历史文件。
+- 接受点是发布和索引完成后最后权威/lease fence核验成功；之后撤销保留这份已接受内容，仍等待意图清理收口。之前撤销必须回退且ACK等回退结束。回退失败留意图使目标不可读、failClose拒完成ACK；重启本项目目录恢复，不能把进程退出/HTTPfinish说成产物已正确接受。
+- 新project-io为独占模块。媒体upload/adopt/pull finalize、tier发布和frame init/segment/save接同一guarded publish；原本地调用保留既有atomic/目录行为。frame项目cache与caller分离，新manifest未接受不覆盖已接受cache。
+- target合跑-1共28项27过/1失败5416.6129ms，原因是本包旧单测假设release同步unsubscribe；按新合同改为await release后保留原false断言。-2 28/28、1226.9154ms；最后补tier/segment等实际同helper后-3 28/28、3001.9382ms，TMP/promptcut-asset-close-target-{1,2,3}.log。close-type-{1,2}均零错，最新完整块固定后仍需一次type/npm；不盲重跑旧full。
+- 三次apply_patch因同一文件hunk非升序而找不到前段，均未落部分修改；拆成升序/精确片段后修正。不算测试，不归咎产品。所有尝试如实留工具记录。

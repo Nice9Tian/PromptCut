@@ -20,7 +20,7 @@ function mediaOwnership(root: string): any {
   if (context?.root !== path.resolve(root)) throw Object.assign(new Error("project-context-required"), { status: 403 });
   const scope = projectScope(root);
   const assert = async () => { scope.assertActive(); await context.lease.check(); scope.assertActive(); };
-  return { projectId: context.projectId, authorizationId: context.lease.principal.authorizationId, assert, acquire: async () => { await assert(); const lease = await context.lease.fork(); try { scope.assertActive(); return lease; } catch (error) { lease.release(); throw error; } } };
+  return { projectId: context.projectId, authorizationId: context.lease.principal.authorizationId, assert, publish: scope.publishProjectFile, acquire: async () => { await assert(); const lease = await context.lease.fork(); try { scope.assertActive(); return lease; } catch (error) { lease.release(); throw error; } } };
 }
 
 function sanitizeFilename(name: string) {
@@ -209,20 +209,23 @@ export async function resolveHashFile(root: string, hash: string, ext?: string):
   const key = String(hash || "").toLowerCase();
   if (!isMediaHash(key)) return null;
   const dir = mediaDir(root);
+  const visible = async (file: string) => await exists(file) && (!projectScope(root) || await projectScope(root).projectFileAccepted(file));
   if (ext) {
     const direct = path.join(dir, `${key}.${ext.toLowerCase()}`);
-    if (await exists(direct)) return direct;
+    if (await visible(direct)) return direct;
   }
   const index = await readMediaIndex(root);
   const entry = index[key];
   if (entry?.file) {
     const file = path.join(dir, sanitizeFilename(entry.file));
-    if (await exists(file)) return file;
+    if (await visible(file)) return file;
   }
   try {
     const names = await fs.readdir(dir);
-    const hit = names.find((n) => n.toLowerCase() === key || n.toLowerCase().startsWith(key + "."));
-    if (hit) {
+    for (const hit of names) {
+      if (!(hit.toLowerCase() === key || hit.toLowerCase().startsWith(key + "."))) continue;
+      if (projectScope(root) && !/^[a-f0-9]{64}(?:\.[a-z0-9]+)?$/i.test(hit)) continue;
+      if (!await visible(path.join(dir, hit))) continue;
       // 索引缺了就地补上,下次不用再扫
       indexCache.set(root, { ...index, [key]: { file: hit, ext: extOfName(hit), contentType: contentTypeForFile(hit) } });
       return path.join(dir, hit);
@@ -249,6 +252,11 @@ function pullStore(root: string) {
       await ownership?.assert();
       const file = ext ? `${hash}.${ext}` : hash;
       const dest = path.join(dir, file);
+      if (ownership) {
+        const lease = await ownership.acquire(), previous = (await readMediaIndex(root))[hash];
+        try { await ownership.publish({ temp: tmp, target: dest, lease, assert: async () => { await ownership.assert(); await lease.assert(); }, afterCommit: async () => { const stat = await fs.stat(dest); await writeMediaIndex(root, hash, { file, name: file, ext, size: stat.size, contentType: contentType || contentTypeForExt(ext) }); }, rollback: () => previous ? writeMediaIndex(root, hash, previous) : forgetMediaIndex(root, hash) }); return dest; }
+        finally { await lease.release(); }
+      }
       if (await exists(dest)) {
         await fs.rm(tmp, { force: true }).catch(() => {});
       } else {
@@ -380,6 +388,9 @@ export interface StoredMedia {
  */
 export async function storeMediaStream(root: string, name: string, source: Readable): Promise<StoredMedia> {
   const ownership = mediaOwnership(root);
+  const lease = ownership ? mediaContext.getStore()?.lease : null;
+  return lease ? lease.run(store) : store();
+  async function store(): Promise<StoredMedia> {
   await ownership?.assert();
   const dir = mediaDir(root);
   await fs.mkdir(dir, { recursive: true });
@@ -414,12 +425,14 @@ export async function storeMediaStream(root: string, name: string, source: Reada
   const dest = path.join(dir, file);
   const had = await exists(dest);
   try { await ownership?.assert(); } catch (error) { await fs.rm(tmp, { force: true }); throw error; }
-  if (had) await fs.rm(tmp, { force: true });
-  else await fs.rename(tmp, dest);
-
   const contentType = contentTypeForExt(ext);
-  await writeMediaIndex(root, hash, { file, name: safeName, ext, size: bytes, contentType });
+  if (ownership) {
+    const previous = (await readMediaIndex(root))[hash];
+    try { await ownership.publish({ temp: tmp, target: dest, lease, assert: async () => { await ownership.assert(); await lease.assert(); }, afterCommit: () => writeMediaIndex(root, hash, { file, name: safeName, ext, size: bytes, contentType }), rollback: () => previous ? writeMediaIndex(root, hash, previous) : forgetMediaIndex(root, hash) }); }
+    finally { await fs.rm(tmp, { force: true }); }
+  } else { if (had) await fs.rm(tmp, { force: true }); else await fs.rename(tmp, dest); await writeMediaIndex(root, hash, { file, name: safeName, ext, size: bytes, contentType }); }
   return { hash, ext, name: safeName, bytes, path: dest, url: `/@media/${hash}`, contentType, deduped: had };
+  }
 }
 
 /**
@@ -433,6 +446,9 @@ export async function storeMediaStream(root: string, name: string, source: Reada
  */
 export async function adoptMediaFile(root: string, filePath: string): Promise<StoredMedia> {
   const ownership = mediaOwnership(root);
+  const lease = ownership ? mediaContext.getStore()?.lease : null;
+  return lease ? lease.run(adopt) : adopt();
+  async function adopt(): Promise<StoredMedia> {
   await ownership?.assert();
   const dir = mediaDir(root);
   await fs.mkdir(dir, { recursive: true });
@@ -447,13 +463,18 @@ export async function adoptMediaFile(root: string, filePath: string): Promise<St
 
   const had = await exists(dest);
   await ownership?.assert();
-  if (!had && path.resolve(dest) !== src) {
-    try { await fs.link(src, dest); }
-    catch { await fs.copyFile(src, dest); }
-  }
   const contentType = contentTypeForExt(ext);
-  await writeMediaIndex(root, hash, { file, name, ext, size: stat.size, contentType });
+  if (ownership) {
+    const tmp = path.join(dir, `.adopt-${crypto.randomBytes(8).toString("hex")}.part`), previous = (await readMediaIndex(root))[hash];
+    try { try { await fs.link(src, tmp); } catch { await fs.copyFile(src, tmp); }
+      await ownership.publish({ temp: tmp, target: dest, lease, assert: async () => { await ownership.assert(); await lease.assert(); }, afterCommit: () => writeMediaIndex(root, hash, { file, name, ext, size: stat.size, contentType }), rollback: () => previous ? writeMediaIndex(root, hash, previous) : forgetMediaIndex(root, hash) });
+    } finally { await fs.rm(tmp, { force: true }); }
+  } else {
+    if (!had && path.resolve(dest) !== src) { try { await fs.link(src, dest); } catch { await fs.copyFile(src, dest); } }
+    await writeMediaIndex(root, hash, { file, name, ext, size: stat.size, contentType });
+  }
   return { hash, ext, name, bytes: stat.size, path: dest, url: `/@media/${hash}`, contentType, deduped: had };
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -546,6 +567,7 @@ export function mediaTierService(root: string, { withQueue = true }: { withQueue
       lib: {
         hashFile,
         writeIndex: (hash: string, entry: MediaIndexEntry) => writeMediaIndex(root, hash, entry),
+        entry: async (hash: string) => (await readMediaIndex(root))[hash],
         forget: (hash: string) => forgetMediaIndex(root, hash),
         contentTypeForExt,
       },
@@ -728,15 +750,19 @@ export function parseRange(header: string, size: number): { start: number; end: 
  * 现在打不开就回 404;打开之后文件被删,句柄仍然读得完;读到一半出错只断这一条响应。
  */
 async function serveFile(filePath: string, req: Connect.IncomingMessage, res: ServerResponse) {
+  const ownedLease = mediaContext.getStore()?.lease, finish = ownedLease?.hold();
   let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
     handle = await fs.open(filePath, "r");
+    ownedLease?.trackHandle(handle);
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error("not a file");
     const range = req.headers.range ? parseRange(req.headers.range, stat.size) : null;
     const contentType = contentTypeForFile(filePath);
     const head = req.method === "HEAD";
     const lease = mediaContext.getStore()?.lease;
+    if (lease && (path.basename(filePath).startsWith(".") || filePath.endsWith(".project-publication.json") || /\.[0-9a-f-]{36}\.backup$/i.test(filePath))) throw Object.assign(new Error("project-publication-private"), { status: 404 });
+    if (lease && !await projectScope(mediaContext.getStore().root).projectFileAccepted(filePath)) throw Object.assign(new Error("project-publication-pending"), { status: 404 });
     if (lease) { await lease.assert(); res.setHeader("Cache-Control", "no-store"); }
     if (res.destroyed) return;
     // Last-Modified:没有内容哈希的迁移期素材,帧管线按 `HEAD` 的 Content-Length + Last-Modified 打戳
@@ -782,6 +808,7 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
     res.end("Not found");
   } finally {
     await handle?.close().catch(() => {});
+    finish?.();
   }
 }
 

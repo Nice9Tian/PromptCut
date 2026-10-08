@@ -1,4 +1,5 @@
 /** 素材授权 adapter：唯一 doc authority 注入核验与持久撤销订阅；这里不生成账号/成员权限。 */
+import { EventEmitter } from 'node:events';
 const REQUEST = Symbol.for('promptcut.asset.request.v2');
 export const assetContextOf = req => req?.[REQUEST] ?? null;
 export function setAssetContext(req, context) { Object.defineProperty(req, REQUEST, { value: context, configurable: true }); }
@@ -26,8 +27,9 @@ export async function authorizeAsset({ authority, principal, projectId, action, 
  */
 export async function openProjectStream({ authority, principal, projectId, action = 'read', resource, close = () => {} }) {
   const controller = new AbortController(), tracked = new Set();
-  let released = false, closePromise = Promise.resolve();
+  let released = false, releasePromise, barrierError, closePromise = Promise.resolve();
   const context = { principal, projectId, action, resource, accountId: principal?.accountId, loginId: principal?.loginId, credentialId: principal?.credentialId };
+  const waitTracked = async () => { while (tracked.size) await Promise.all([...tracked].map(stream => new Promise(resolve => stream.once('close', resolve)))); };
   if (typeof authority?.subscribeRevocations !== 'function') throw assetAccessError('revocation-unavailable', 503);
   const revoke = event => {
     if (event?.projectId && event.projectId !== projectId) return;
@@ -37,9 +39,8 @@ export async function openProjectStream({ authority, principal, projectId, actio
     if (event?.reason === 'unban') return;
     if (controller.signal.aborted) return closePromise;
     if (!controller.signal.aborted) controller.abort(assetAccessError(event?.reason ?? 'access-revoked'));
-    const pending = [...tracked].map(stream => stream.closed ? Promise.resolve() : new Promise(resolve => stream.once('close', resolve)));
     for (const stream of tracked) stream.destroy?.();
-    closePromise = Promise.resolve().then(() => close(event)).then(() => Promise.all(pending)).then(() => ({ closed: true }));
+    closePromise = Promise.resolve().then(() => close(event)).then(waitTracked).then(() => { if (barrierError) throw barrierError; return { closed: true }; });
     return closePromise;
   };
   const unsubscribe = authority.subscribeRevocations(context, revoke);
@@ -51,12 +52,30 @@ export async function openProjectStream({ authority, principal, projectId, actio
   try { await assert(); } catch (error) { released = true; unsubscribe?.(); throw error; }
   return {
     ...context, signal: controller.signal, assert,
+    failClose(error) { barrierError = error; },
     check: () => authorizeAsset({ authority, ...context }),
     fork: () => openProjectStream({ authority, ...context }),
-    track(stream) { if (controller.signal.aborted || released) { stream.destroy?.(); throw assetAccessError('access-revoked'); } tracked.add(stream); stream.once?.('close', () => tracked.delete(stream)); return stream; },
+    track(stream) { if (!stream.closed) { tracked.add(stream); stream.once?.('close', () => tracked.delete(stream)); } if (controller.signal.aborted || released) { stream.destroy?.(); throw assetAccessError('access-revoked'); } return stream; },
     trackProcess(child) { let closed = false; child.once('close', () => { closed = true; }); this.track({ destroy: () => child.kill('SIGTERM'), once: child.once.bind(child), get closed() { return closed; } }); return child; },
-    release() { if (!released) { released = true; unsubscribe?.(); } },
-    get closed() { return closePromise; },
+    trackHandle(handle) {
+      let closed = false; handle.once('close', () => { closed = true; });
+      this.track({ destroy: () => { void handle.close().catch(() => {}); }, once: handle.once.bind(handle), get closed() { return closed; } });
+      return handle;
+    },
+    hold() {
+      const resource = new EventEmitter(); resource.closed = false; resource.destroy = () => {};
+      try { this.track(resource); } catch (error) { resource.closed = true; resource.emit('close'); throw error; }
+      return () => { if (!resource.closed) { resource.closed = true; resource.emit('close'); } };
+    },
+    run(task) { const finish = this.hold(); return Promise.resolve().then(task).finally(finish); },
+    release() {
+      if (!releasePromise) {
+        released = true; // HTTP已结束：拒新动作，但仍拥有未actualclose的资源，继续接撤销。
+        releasePromise = waitTracked().then(() => { if (!barrierError) unsubscribe?.(); });
+      }
+      return releasePromise;
+    },
+    get closed() { return Promise.all([closePromise, releasePromise ?? Promise.resolve()]); },
   };
 }
 
@@ -79,10 +98,10 @@ export function authorizedAssetStore(store, lease) {
   if (store.projectId !== lease.projectId) throw assetAccessError('project-mismatch');
   const guard = { beforeCommit: lease.assert, signal: lease.signal, track: stream => lease.track(stream) };
   return new Proxy(store, { get(target, key) {
-    if (key === 'putChunk') return async (hash, n, info, source) => { await lease.assert(); if (source?.destroy) lease.track(source); const value = await target.putChunk(hash, n, { ...info, ...guard }, source); await lease.assert(); return value; };
-    if (key === 'complete') return async hash => { await lease.assert(); return target.complete(hash, guard); };
-    if (key === 'read') return async (...args) => { await lease.assert(); const stream = await target.read(...args); if (stream) lease.track(stream); return stream; };
-    if (['stat', 'chunks', 'list', 'usage'].includes(key)) return async (...args) => { await lease.assert(); const value = await target[key](...args); await lease.assert(); return value; };
+    if (key === 'putChunk') return (hash, n, info, source) => lease.run(async () => { await lease.assert(); if (source?.destroy) lease.track(source); const value = await target.putChunk(hash, n, { ...info, ...guard }, source); await lease.assert(); return value; });
+    if (key === 'complete') return hash => lease.run(async () => { await lease.assert(); return target.complete(hash, guard); });
+    if (key === 'read') return (...args) => lease.run(async () => { await lease.assert(); const stream = await target.read(...args); if (stream) lease.track(stream); return stream; });
+    if (['stat', 'chunks', 'list', 'usage'].includes(key)) return (...args) => lease.run(async () => { await lease.assert(); const value = await target[key](...args); await lease.assert(); return value; });
     return Reflect.get(target, key);
   } });
 }

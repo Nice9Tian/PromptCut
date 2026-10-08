@@ -42,6 +42,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { publishProjectFile } from './asset-store/project-io.mjs';
 const tierJobContext = new AsyncLocalStorage();
 
 export const SMALL_MAX_WIDTH = 800;
@@ -298,10 +299,11 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
     const had = await exists(dest);
     await ownership?.assert();
     tierJobContext.getStore()?.signal.throwIfAborted();
-    if (had) await fs.rm(tmp, { force: true });
-    else await fs.rename(tmp, dest);
-    const size = (await fs.stat(dest)).size;
-    await lib.writeIndex(hash, { file: fileName, name, ext, size, contentType: lib.contentTypeForExt(ext) });
+    let size;
+    if (ownership) {
+      const existing = await lib.entry?.(hash), lease = tierJobContext.getStore();
+      await publishProjectFile({ temp: tmp, target: dest, lease, assert: async () => { await ownership.assert(); await lease?.assert(); }, afterCommit: async () => { size = (await fs.stat(dest)).size; await lib.writeIndex(hash, { file: fileName, name, ext, size, contentType: lib.contentTypeForExt(ext) }); }, rollback: async () => { if (existing) await lib.writeIndex(hash, existing); else await lib.forget?.(hash); } });
+    } else { if (had) await fs.rm(tmp, { force: true }); else await fs.rename(tmp, dest); size = (await fs.stat(dest)).size; await lib.writeIndex(hash, { file: fileName, name, ext, size, contentType: lib.contentTypeForExt(ext) }); }
     return { hash, ext, name, bytes: size, path: dest, url: `/@media/${hash}`, contentType: lib.contentTypeForExt(ext), deduped: had, ...(ownership ? { projectId: ownership.projectId } : {}) };
     } finally { await fs.rm(tmp, { force: true }).catch(() => {}); }
   }
@@ -320,7 +322,8 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
         try {
           lease = await ownership?.acquire?.();
           await ownership?.assert();
-          await tierJobContext.run(lease ?? null, () => buildSmall(hash));
+          if (lease) await lease.run(() => tierJobContext.run(lease, () => buildSmall(hash)));
+          else await tierJobContext.run(null, () => buildSmall(hash));
         } catch (error) { say('tiers.ownership-rejected', { hash, projectId: ownership?.projectId, code: error?.code ?? 'access-revoked' }); }
         finally { lease?.release(); }
       }
@@ -398,6 +401,10 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
      * 回 `{ stored, tiers: { original, small } | null, small: 'pending' | 'ready' | 'failed' | 'none' | null, remux }`。
      */
     async prepareImport(stored, { remux = true } = {}) {
+      const lease = await ownership?.acquire?.();
+      try { return lease ? await lease.run(() => tierJobContext.run(lease, prepare)) : await prepare(); }
+      finally { await lease?.release(); }
+      async function prepare() {
       await ownership?.assert();
       if (ownership && ((stored?.projectId && stored.projectId !== ownership.projectId) || !String(path.resolve(stored?.path ?? '')).startsWith(path.resolve(dir) + path.sep))) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch', status: 403 });
       const ext = String(stored?.ext || '').toLowerCase();
@@ -457,6 +464,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
         small: rec.state,
         remux: remuxInfo,
       };
+      }
     },
     /**
      * 打开项目时补转素材小尺寸(设计稿第 9 节第 2 条):项目里缺 `tiers.small`、本地内容库里有这份素材原尺寸的视频,

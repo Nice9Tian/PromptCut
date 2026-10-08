@@ -70,13 +70,16 @@ export function shotsThumbMiddleware(root: string, { projectStores, projectAcces
     const match = ["GET", "HEAD"].includes(req.method ?? "GET") && String(req.url ?? "").split("?")[0].match(/^\/api\/shots\/thumb\/([\w.-]+)$/);
     if (!match) return next();
     let lease: any;
+    let finish: (() => void) | undefined;
     let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
     try {
       lease = projectAccess ? await projectAccess.resolve(req, { action: "read", resource: { ns: "media", route: String(req.url).split("?")[0] }, close: () => { req.destroy(); res.destroy(); } }) : null;
+      finish = lease?.hold();
       const scope = lease ? projectStores.project(lease.projectId) : null;
       const dir = shotsDir(scope?.root ?? root), file = path.join(dir, match[1]);
       if (!file.startsWith(dir + path.sep)) return sendJson(res, 400, { ok: false });
       handle = await fs.open(file, "r");
+      lease?.trackHandle(handle);
       const stat = await handle.stat();
       await lease?.assert();
       res.setHeader("Content-Type", "image/jpeg");
@@ -90,7 +93,7 @@ export function shotsThumbMiddleware(root: string, { projectStores, projectAcces
       stream.once("error", () => res.destroy());
       stream.pipe(res);
     } catch (error: any) { if (!res.destroyed) sendJson(res, error?.status ?? 404, { ok: false, error: error?.code ?? "缩略图不存在" }); }
-    finally { await handle?.close().catch(() => {}); if (res.writableFinished || !res.headersSent) lease?.release(); }
+    finally { await handle?.close().catch(() => {}); finish?.(); if (res.writableFinished || !res.headersSent) lease?.release(); }
   };
 }
 

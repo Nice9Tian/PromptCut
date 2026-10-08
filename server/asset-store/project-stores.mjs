@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createFsStore } from './fs-store.mjs';
 import { createMemoryStore } from './memory-store.mjs';
+import { publishProjectFile, projectFileAccepted, recoverProjectPublications } from './project-io.mjs';
 
 const ROOTS = Symbol.for('promptcut.asset.project-roots.v2');
 const roots = () => (globalThis[ROOTS] ??= new Map());
@@ -30,12 +31,13 @@ export function createProjectAssetStores({ dir, kind = 'fs', contentTypeForExt, 
     if (removed.has(projectId)) throw Object.assign(new Error('project-gone'), { code: 'project-gone', status: 404 });
     if (projects.has(projectId)) return projects.get(projectId);
     const root = path.join(base, 'projects', projectStorageKey(projectId));
+    if (kind === 'fs') recoverProjectPublications(root);
     const dirs = { media: path.join(root, 'out', 'media'), snap: path.join(root, 'out', 'asset-store', 'snap'), px: path.join(root, 'out', 'asset-store', 'px') };
     let active = true;
     const assertActive = () => { if (!active) throw Object.assign(new Error('project-gone'), { code: 'project-gone', status: 404 }); };
     const stores = {};
     for (const ns of Object.keys(dirs)) {
-      const hooks = { contentTypeForExt: ext => ext === 'html' ? 'text/html; charset=utf-8' : ext === 'm4s' ? 'video/iso.segment' : contentTypeForExt?.(ext) ?? 'application/octet-stream' };
+      const hooks = { isPublished: projectFileAccepted, contentTypeForExt: ext => ext === 'html' ? 'text/html; charset=utf-8' : ext === 'm4s' ? 'video/iso.segment' : contentTypeForExt?.(ext) ?? 'application/octet-stream' };
       const raw = kind === 'fs' ? createFsStore({ dir: dirs[ns], hooks, chunkSize }) : createMemoryStore({ chunkSize });
       Object.defineProperty(raw, 'projectId', { value: projectId });
       Object.defineProperty(raw, 'namespace', { value: ns });
@@ -53,7 +55,7 @@ export function createProjectAssetStores({ dir, kind = 'fs', contentTypeForExt, 
         };
       } });
     }
-    const scope = Object.freeze({ v: 2, projectId, root, dir: root, dirs: Object.freeze(dirs), stores: Object.freeze(stores), assertActive, retire: () => { active = false; } });
+    const scope = Object.freeze({ v: 2, projectId, root, dir: root, dirs: Object.freeze(dirs), stores: Object.freeze(stores), assertActive, publishProjectFile, projectFileAccepted, retire: () => { active = false; } });
     roots().set(root, scope);
     projects.set(projectId, scope);
     return scope;

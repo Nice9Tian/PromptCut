@@ -145,7 +145,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
     const home = homeOf(hash);
     let names = [];
     try { names = await fs.readdir(home); } catch { return null; }
-    const hit = names.find((n) => n.toLowerCase() === hash || n.toLowerCase().startsWith(hash + '.'));
+    const hit = names.find((n) => (n.toLowerCase() === hash || n.toLowerCase().startsWith(hash + '.')) && (!hooks.isPublished || /^[a-f0-9]{64}(?:\.[a-z0-9]+)?$/i.test(n)));
     return hit ? path.join(home, hit) : null;
   }
 
@@ -184,6 +184,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
   async function stored(hash) {
     const file = await resolveFile(hash);
     if (!file) return null;
+    if (hooks.isPublished && !await hooks.isPublished(file)) return null;
     try {
       const st = await fs.stat(file);
       return { file, size: st.size, mtimeMs: st.mtimeMs };

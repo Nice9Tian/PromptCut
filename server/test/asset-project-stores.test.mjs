@@ -63,7 +63,7 @@ test('先订阅后核验、撤销同步拒新读并等待真实持续stream clos
   await assert.rejects(lease.assert(), /access-revoked/);
   await ack;
   assert.equal(stream.closed, true);
-  lease.release();
+  await lease.release();
   assert.equal(subscribed, false);
 });
 test('check等待期间撤销不能穿透open', async () => {
