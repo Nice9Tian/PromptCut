@@ -353,6 +353,9 @@ export function createHttpTransport({
       if (canOpen() === 'closing') return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
       const t = newTransport(item.sid);
       t.isUsable = () => !shuttingDown && !res.destroyed && !res.writableEnded && !req.aborted;
+      t.connId = sessions.connIdOf(item.sid);
+      t.principal = principalOf(t.connId);
+      if (t.connId) track(t, req, res);
       const r = await sessions.resume({ sid: item.sid, ack: item.ack, transport: t, fallback });
       if (!r.ok) {
         if (r.status === 404) return sendJson(res, 404, { ok: false, error: 'no-session' }, cors);
@@ -364,7 +367,7 @@ export function createHttpTransport({
       const old = bySid.get(item.sid);
       if (old && old !== t) old.dead = true;
       bySid.set(item.sid, t);
-      track(t, req, res);
+      if (!ownedRequests.size || ![...ownedRequests].some(record => record.req === req && record.res === res)) track(t, req, res);
       return sendJson(res, 200, openReply(r.welcome), cors);
     }
 

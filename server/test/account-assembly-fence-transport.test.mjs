@@ -29,8 +29,8 @@ function request(port, route, { agent = false, method = 'GET', sid, body, protoc
 }
 const open = (port, agent = false) => request(port, '/lp/open', { agent, method: 'POST', body: '{}',
   protocols: 'promptcut.v1, promptcut.session.new' });
-async function setup(t, port, authenticate, modules = []) {
-  const service = createDocService({ authenticate, modules, enableHttpTransport: true, autoTick: false, log() {} });
+async function setup(t, port, authenticate, modules = [], options = {}) {
+  const service = createDocService({ authenticate, modules, enableHttpTransport: true, autoTick: false, log() {}, ...options });
   await service.listen(port, '127.0.0.1'); t.after(() => service.close()); return service;
 }
 
@@ -106,3 +106,40 @@ test('logout fence includes asynchronous authentication admission and denies all
   assert.equal(await open(5778).then(() => 'admitted', () => 'closed'), 'closed');
   assert.equal(service.describe().conns.length, 0);
 });
+
+for (const transport of ['ws', 'http']) {
+  test(`security fence owns ${transport} resume socket while asynchronous resume gate is pending`, { timeout: 10000 }, async t => {
+    const entered = deferred(), release = deferred(); let socket;
+    const service = await setup(t, 5779, () => principal, [], { resumeGate: async () => {
+      entered.resolve(); await release.promise; return null;
+    } });
+    let sid;
+    if (transport === 'ws') {
+      const initial = wsClient('ws://127.0.0.1:5779', ['promptcut.v1', 'promptcut.session.new']);
+      await initial.opened; sid = (await initial.next(value => value.type === 'session.welcome')).sid;
+      initial.close(); await initial.closed;
+      await waitFor(() => service.describe().conns[0]?.detached === true);
+      service.server.on('upgrade', req => { socket = req.socket; });
+    } else {
+      const initial = await open(5779); sid = initial.body.sid;
+      service.server.on('request', req => { if (req.url === '/lp/open') socket = req.socket; });
+    }
+    const id = service.describe().conns[0].connId;
+    let resumed, outcome;
+    if (transport === 'ws') {
+      resumed = wsClient('ws://127.0.0.1:5779', ['promptcut.v1', `promptcut.session.${sid}.0`]);
+      outcome = resumed.closed;
+    } else {
+      outcome = request(5779, '/lp/open', { method: 'POST', body: '{}',
+        protocols: `promptcut.v1, promptcut.session.${sid}.0` }).then(() => 'resumed', () => 'closed');
+    }
+    await entered.promise; const gate = destroyGate(socket);
+    t.after(() => { release.resolve(); gate.release(); resumed?.close(); });
+    let completed = false; const barrier = service.fenceConn(id).then(value => { completed = true; return value; });
+    await gate.entered; await turn(); assert.equal(completed, false); assert.equal(socket.closed, false);
+    gate.release(); const receipt = await barrier; assert.equal(receipt.actualClosed, true); assert.equal(socket.closed, true);
+    release.resolve(); await outcome; await turn();
+    assert.equal(service.describe().conns.length, 0);
+    if (resumed) assert.equal(resumed.all.some(value => value.type === 'session.welcome'), false);
+  });
+}

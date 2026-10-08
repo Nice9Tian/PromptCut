@@ -127,6 +127,9 @@ export function createDocService(options = {}) {
   const startedAt = now();
   /** 挂着的 WebSocket 传输（心跳用）；连接身份在核心里，会话在会话层里 */
   const wsTransports = new Set();
+  // Includes a newly accepted resume transport while its asynchronous gate is
+  // still running, before it can become the session's current transport.
+  const ownedWsTransports = new Set();
   /** 模块名 → { mod, timer }，按挂载顺序 */
   const mounted = new Map();
   let seq = 0;
@@ -317,6 +320,8 @@ export function createDocService(options = {}) {
       const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
       if (!ws) return;
       const t = wsTransport(ws);
+      t.connId = sessions.connIdOf(item.sid);
+      t.principal = router.describeConn(t.connId)?.principal;
       let transportClosed = false;
       ws.on('close', () => { transportClosed = true; });
       t.isUsable = () => !transportClosed && !socket.destroyed && socket.writable && !closing;
@@ -370,7 +375,7 @@ export function createDocService(options = {}) {
   /** 把一条 WebSocket 包成会话层的传输；`alive` 给心跳用 */
   function wsTransport(ws) {
     const actualClosed = new Promise(resolve => ws.once('close', resolve));
-    return {
+    const t = {
       kind: 'ws',
       ws,
       actualClosed,
@@ -382,6 +387,9 @@ export function createDocService(options = {}) {
       close: (code, reason) => ws.close(code, reason),
       get bufferedAmount() { return ws.bufferedAmount; },
     };
+    ownedWsTransports.add(t);
+    actualClosed.then(() => ownedWsTransports.delete(t));
+    return t;
   }
 
   /** 已知 connId 的传输（接续）：挂心跳与事件 */
@@ -539,7 +547,7 @@ export function createDocService(options = {}) {
     fenceConn(connId, code = 4003, reason = 'access-revoked') {
       if (connectionFences.has(connId)) return connectionFences.get(connId);
       const logical = sessions.fence(connId, code, reason);
-      const transports = [...wsTransports].filter(t => t.connId === connId);
+      const transports = [...ownedWsTransports].filter(t => t.connId === connId);
       const httpClosed = httpTransport?.fenceConn(connId, code, reason) ?? Promise.resolve({ closedHttp: 0 });
       for (const t of transports) t.ws.terminate();
       const result = Promise.all([logical.gone, httpClosed, ...transports.map(t => t.actualClosed)]).then(([, http]) => ({
@@ -558,7 +566,7 @@ export function createDocService(options = {}) {
       const scope = structuredClone(criteria); admissionFences.push(scope);
       const pending = [...admissions];
       const ids = new Set(sessions.connIds().filter(id => matching(router.describeConn(id)?.principal, scope)));
-      for (const t of wsTransports) if (matching(t.principal, scope)) ids.add(t.connId);
+      for (const t of ownedWsTransports) if (t.connId && matching(t.principal, scope)) ids.add(t.connId);
       for (const id of httpTransport?.connectionIdsMatching(p => matching(p, scope)) ?? []) ids.add(id);
       const fences = [...ids].map(id => this.fenceConn(id, code, reason));
       await Promise.all(pending.map(row => row.done));
