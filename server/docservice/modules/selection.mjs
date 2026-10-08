@@ -43,13 +43,16 @@ function clipsOf(project) {
 /**
  * @param {object} options
  * @param {{bodyOf(projectId:string):object|null,revOf(projectId:string):number}} options.project
- * @param {(input:{principal:object,projectId:string,action:'read'|'write'})=>Promise<object|boolean>} options.checkAccess
+ * @param {(input:{principal:object,projectId:string,action:'read'})=>Promise<object|boolean>} options.checkAccess
  *   Must reverify live account credentials and the current account/access head, not cached admission.
+ *   Only true or {allowed:true,accountId,projectId,accountName?} allows access.
  * @param {(input:{principal:object,projectId:string,runGrantId:string})=>Promise<object>} options.authorizeQuery
  *   Must verify the Agent service identity, project-scoped current/retained runGrant,
- *   actual initiator and the persisted message's selectionSnapshot. No client snapshot fallback.
+ *   actual initiator and the persisted message's selectionSnapshot. Return a stable
+ *   fenceRevision when the run grant has one. No client snapshot fallback.
  */
-export function mountSelection({ project, checkAccess, authorizeQuery, now = Date.now } = {}) {
+export function mountSelection({ project, checkAccess, authorizeQuery, now = Date.now,
+  allowFixtureGrantWithoutFence = false } = {}) {
   if (typeof project?.bodyOf !== 'function' || typeof project?.revOf !== 'function' ||
       typeof checkAccess !== 'function' || typeof authorizeQuery !== 'function')
     throw new TypeError('selection authority and project providers are required');
@@ -74,13 +77,44 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
   };
   const pagePrincipal = (principal, projectId) => principal?.role === 'page' && !principal.service &&
     typeof principal.accountId === 'string' && principal.accountId && principal.tenantId === projectId;
-  async function checked(principal, projectId, action) {
+  async function checked(principal, projectId) {
     if (!pagePrincipal(principal, projectId)) throw error(403, 'forbidden');
-    const answer = await checkAccess({ principal, projectId, action });
-    if (!answer) throw error(403, 'forbidden');
+    const answer = await checkAccess({ principal, projectId, action: 'read' });
     if (answer === true) return principal;
+    if (!answer || typeof answer !== 'object' || answer.allowed !== true) throw error(403, 'forbidden');
     if (answer.accountId !== principal.accountId || answer.projectId !== projectId) throw error(403, 'principal-mismatch');
     return { ...principal, accountName: answer.accountName ?? principal.accountName };
+  }
+  function validatedGrant(grant, projectId, runGrantId) {
+    if (!grant || typeof grant.initiatorAccountId !== 'string' || !grant.initiatorAccountId ||
+        grant.projectId !== projectId || grant.runGrantId !== runGrantId) throw error(403, 'run-grant-invalid');
+    if (!(Number.isSafeInteger(grant.fenceRevision) && grant.fenceRevision >= 0) &&
+        !(allowFixtureGrantWithoutFence === true && grant.fenceRevision === undefined))
+      throw error(503, 'run-fence-unavailable');
+    const snapshot = grant.selectionSnapshot;
+    let normalized = null;
+    if (snapshot !== undefined) {
+      if (!snapshot || snapshot.source !== 'sent-snapshot' || snapshot.projectId !== projectId ||
+          snapshot.accountId !== grant.initiatorAccountId || !validId(snapshot.pageId) ||
+          !Number.isFinite(snapshot.sentAt)) throw error(403, 'snapshot-invalid');
+      try { normalized = selectionOf(snapshot.selection); }
+      catch { throw error(403, 'snapshot-invalid'); }
+    }
+    return { grant, snapshot: normalized, fingerprint: JSON.stringify({
+      projectId, runGrantId, initiatorAccountId: grant.initiatorAccountId,
+      fenceRevision: grant.fenceRevision ?? null,
+      selectionSnapshot: snapshot === undefined ? null : {
+        source: snapshot.source, projectId: snapshot.projectId, accountId: snapshot.accountId,
+        pageId: snapshot.pageId, sentAt: snapshot.sentAt, selection: normalized,
+      },
+    }) };
+  }
+  async function queryGrant(principal, projectId, runGrantId) {
+    let answer;
+    try { answer = await authorizeQuery({ principal, projectId, runGrantId }); }
+    catch (cause) { throw error(cause?.status === 403 ? 403 : 503,
+      cause?.status === 403 ? 'run-grant-invalid' : 'authority-unavailable'); }
+    return validatedGrant(answer, projectId, runGrantId);
   }
   const messageId = msg => msg?.requestId ?? msg?.reqId;
   const reply = (ctx, connId, msg, requestId) => ctx.send(connId,
@@ -89,18 +123,23 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
   async function set(ctx, connId, msg) {
     const principal = principals.get(connId);
     if (!validId(msg.projectId) || !validId(msg.pageId) ||
-        !Number.isSafeInteger(msg.revision) || msg.revision < 0) throw error(400, 'invalid-selection');
+        !Number.isSafeInteger(msg.revision) || msg.revision < 1) throw error(400, 'invalid-selection');
     const selection = selectionOf(msg.selection);
-    const current = await checked(principal, msg.projectId, 'write');
+    const current = await checked(principal, msg.projectId);
     if (!principals.has(connId) || blocked.has(connId)) throw error(403, 'connection-closed');
     const list = listOf(msg.projectId);
     const previous = list.get(connId);
-    if (previous?.pageId === msg.pageId && msg.revision <= previous.selectionRevision) {
+    if (previous && previous.pageId !== msg.pageId && !previous.synthetic)
+      throw error(403, 'page-mismatch');
+    if (previous?.pageId === msg.pageId && msg.revision < previous.selectionRevision)
+      throw error(409, 'stale-revision');
+    if (previous?.pageId === msg.pageId && msg.revision === previous.selectionRevision) {
+      if (JSON.stringify(previous.selection) !== JSON.stringify(selection)) throw error(409, 'revision-conflict');
       return reply(ctx, connId, { type: 'selection.ok', projectId: msg.projectId,
         pageId: msg.pageId, selectionRevision: previous.selectionRevision,
         presenceRevision: revisions.get(msg.projectId) ?? 0, duplicate: true }, messageId(msg));
     }
-    list.set(connId, { connId, principal: current, pageId: msg.pageId, selection,
+    list.set(connId, { connId, principal: current, pageId: msg.pageId, synthetic: false, selection,
       selectionRevision: msg.revision, serverReceivedAt: clock() });
     bump(msg.projectId);
     reply(ctx, connId, { type: 'selection.ok', projectId: msg.projectId, pageId: msg.pageId,
@@ -109,37 +148,49 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
 
   async function clear(ctx, connId, msg) {
     const principal = principals.get(connId);
-    if (!validId(msg.projectId) || !validId(msg.pageId)) throw error(400, 'invalid-selection');
-    const current = await checked(principal, msg.projectId, 'write');
+    if (!validId(msg.projectId) || !validId(msg.pageId) ||
+        !Number.isSafeInteger(msg.revision) || msg.revision < 1) throw error(400, 'invalid-selection');
+    const current = await checked(principal, msg.projectId);
     if (!principals.has(connId) || blocked.has(connId)) throw error(403, 'connection-closed');
     const existing = listOf(msg.projectId).get(connId);
-    if (existing && existing.pageId !== msg.pageId) throw error(403, 'page-mismatch');
-    listOf(msg.projectId).set(connId, { ...(existing ?? { connId, selectionRevision: 0 }),
-      principal: current, pageId: msg.pageId, selection: empty(), serverReceivedAt: clock() });
+    if (!existing || (existing.pageId !== msg.pageId && !existing.synthetic))
+      throw error(403, 'page-mismatch');
+    if (existing.pageId === msg.pageId && msg.revision < existing.selectionRevision)
+      throw error(409, 'stale-revision');
+    if (existing.pageId === msg.pageId && msg.revision === existing.selectionRevision) {
+      if (existing.selection.clipIds.length || existing.selection.range) throw error(409, 'revision-conflict');
+      return reply(ctx, connId, { type: 'selection.ok', projectId: msg.projectId,
+        pageId: msg.pageId, selectionRevision: existing.selectionRevision,
+        presenceRevision: revisions.get(msg.projectId) ?? 0, duplicate: true }, messageId(msg));
+    }
+    listOf(msg.projectId).set(connId, { ...existing,
+      principal: current, pageId: msg.pageId, synthetic: false,
+      selection: empty(), selectionRevision: msg.revision,
+      serverReceivedAt: clock() });
     bump(msg.projectId);
     reply(ctx, connId, { type: 'selection.ok', projectId: msg.projectId, pageId: msg.pageId,
-      selectionRevision: existing?.selectionRevision ?? 0, presenceRevision: revisions.get(msg.projectId) }, messageId(msg));
+      selectionRevision: msg.revision, presenceRevision: revisions.get(msg.projectId) }, messageId(msg));
   }
 
   async function querySelections({ principal, projectId, runGrantId } = {}) {
     if (!validId(projectId) || typeof runGrantId !== 'string' || !runGrantId ||
         principal?.service !== 'agent' || principal?.tenantId !== projectId) throw error(403, 'forbidden');
-    const grant = await authorizeQuery({ principal, projectId, runGrantId });
-    if (!grant || typeof grant.initiatorAccountId !== 'string' || !grant.initiatorAccountId ||
-        grant.projectId !== projectId || grant.runGrantId !== runGrantId) throw error(403, 'run-grant-invalid');
-    const initiator = grant.initiatorAccountId;
+    const initial = await queryGrant(principal, projectId, runGrantId);
+    const initiator = initial.grant.initiatorAccountId;
     const live = [...(projects.get(projectId)?.values() ?? [])];
     const valid = [];
     for (const entry of live) {
       if (blocked.has(entry.connId) || projects.get(projectId)?.get(entry.connId) !== entry) continue;
       try {
-        const current = await checked(entry.principal, projectId, 'read');
+        const current = await checked(entry.principal, projectId);
         if (projects.get(projectId)?.get(entry.connId) === entry) valid.push({ record: entry, principal: current });
       } catch (cause) {
         if (cause?.status !== 403) throw error(503, 'authority-unavailable');
         remove(projectId, entry.connId);
       }
     }
+    const finalGrant = await queryGrant(principal, projectId, runGrantId);
+    if (finalGrant.fingerprint !== initial.fingerprint) throw error(403, 'run-grant-changed');
     const projectRev = project.revOf(projectId);
     const clipMap = clipsOf(project.bodyOf(projectId));
     const itemsOf = selection => selection.clipIds.map(id => {
@@ -160,14 +211,11 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
       member.pages.push({ pageId: entry.pageId, selection: clone(entry.selection),
         selectionRevision: Math.max(0, entry.selectionRevision), items: itemsOf(entry.selection), live: true });
     }
-    const snapshot = grant.selectionSnapshot;
+    const snapshot = finalGrant.grant.selectionSnapshot;
     if (!members.has(initiator) && snapshot !== undefined) {
-      if (!snapshot || snapshot.source !== 'sent-snapshot' || snapshot.projectId !== projectId ||
-          snapshot.accountId !== initiator || !validId(snapshot.pageId) || !Number.isFinite(snapshot.sentAt))
-        throw error(403, 'snapshot-invalid');
-      const selection = selectionOf(snapshot.selection);
-      const username = typeof grant.initiatorName === 'string' && grant.initiatorName.trim()
-        ? grant.initiatorName.trim() : initiator;
+      const selection = finalGrant.snapshot;
+      const username = typeof finalGrant.grant.initiatorName === 'string' && finalGrant.grant.initiatorName.trim()
+        ? finalGrant.grant.initiatorName.trim() : initiator;
       members.set(initiator, { accountId: initiator, username, isInitiator: true,
         displayName: `${username}（当前用户）`, pages: [{ pageId: snapshot.pageId, selection,
           selectionRevision: null, items: itemsOf(selection), live: false, source: 'sent-snapshot',
@@ -202,7 +250,8 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
       if (!pagePrincipal(principal, principal?.tenantId)) return;
       const projectId = principal.tenantId;
       listOf(projectId).set(connId, { connId, principal: { ...principal },
-        pageId: `connection:${connId}`, selection: empty(), selectionRevision: 0, serverReceivedAt: clock() });
+        pageId: `connection:${connId}`, synthetic: true, selection: empty(),
+        selectionRevision: 0, serverReceivedAt: clock() });
       bump(projectId);
     },
     disconnect(_ctx, connId) {
