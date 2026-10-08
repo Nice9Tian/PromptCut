@@ -213,6 +213,7 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
         }, close: () => { req.destroy(); res.destroy(); req.socket?.destroy(); } });
       entry.lease = lease;
       lease.track(req); lease.track(res); lease.track(req.socket);
+      req.socket.once('close', () => { void lease.revoke({ reason: 'revocation-unavailable' }).catch(() => {}); });
       const done = actualClose(req.socket);
       closedTask = (async () => {
         await done; await lease.release();
@@ -234,7 +235,9 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
           'accept-ranges': 'bytes', 'cache-control': 'no-store', connection: 'close', ...(range ? { 'content-range': `bytes ${range.start}-${range.end}/${stat.size}` } : {}) });
         if (req.method === 'HEAD') res.end();
         else { const source = await store.read(ref.hash, range ?? {}); if (!source) fail(404, 'asset-missing');
-          for await (const piece of source) { await lease.assert(); if (!res.write(piece)) await once(res, 'drain'); } await lease.assert(); res.end(); }
+          for await (const piece of source) { await lease.assert(); if (!res.write(piece)) await Promise.race([
+            once(res, 'drain'), once(res, 'close').then(() => fail(503, 'asset-run-response-closed')),
+          ]); } await lease.assert(); res.end(); }
       } else if (route.operation === 'verifyRef') {
         const parsed = decodeRunAssetBody(body).body;
         if (!exactShape(parsed, ['projectId', 'hash', 'size']) || parsed.projectId !== input.projectId || parsed.hash !== ref.hash || parsed.size !== ref.size) fail(403, 'asset-run-resource-mismatch');

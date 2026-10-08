@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { Readable, PassThrough } from 'node:stream';
 import { once } from 'node:events';
 import { accountError } from '../../account/client.mjs';
+import { digestOf } from '../../account/ledger.mjs';
 import { validateAssetRef, resourceRevision, assetRefId, exactShape, reference } from '../../account/run-asset-protocol.mjs';
 import { createToolAssetResources } from './tool-assets-resources.mjs';
 
@@ -58,7 +59,7 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
     if (options.sourceJobId && (typeof verifySourceJob !== 'function' || await verifySourceJob(context, options.sourceJobId) !== true)) fail(403, 'project-assets-job-mismatch');
     const ws = await workspace(context), ext = path.extname(options.name).slice(1).toLowerCase();
     if (!/^[a-z0-9]{1,8}$/.test(ext) || typeof ws?.resolve !== 'function' || typeof ws?.remove !== 'function') fail(503, 'project-assets-workspace-unconfigured');
-    const importId = `import:${crypto.createHash('sha256').update(JSON.stringify([context, options.requestId])).digest('hex')}`;
+    const importId = `import:${digestOf({ context, requestId: options.requestId })}`;
     const rel = `.tmp/run-import-${crypto.randomUUID()}`, file = ws.resolve(rel);
     const handle = await fs.open(file, 'wx'), wrapped = owned.handle(handle);
     let size = 0; const digest = crypto.createHash('sha256');
@@ -67,7 +68,9 @@ export function createProjectAssets({ contextAccess, runAssetClient: client, wor
       await owned.track(context, wrapped.resource); await track(context, input);
       for await (const piece of input) { await authorize(context, 'write'); const bytes = Buffer.from(piece); size += bytes.length;
         if (size > maxImportBytes) fail(413, 'project-assets-import-too-large');
-        await reserveImport(context, bytes.length); await handle.write(bytes); digest.update(bytes); }
+        await reserveImport(context, bytes.length);
+        for (let offset = 0; offset < bytes.length;) { const write = await handle.write(bytes, offset, bytes.length - offset); if (!write.bytesWritten) fail(503, 'project-assets-spool-write-failed'); offset += write.bytesWritten; }
+        digest.update(bytes); }
       await handle.sync(); await wrapped.close(); await authorize(context, 'write');
       if (!size) fail(400, 'project-assets-empty-import');
       const hash = digest.digest('hex');

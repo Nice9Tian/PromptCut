@@ -1,21 +1,22 @@
 import { RUN_ASSET_DATA_ROOT, validateAssetRef, resourceRevision, reference } from '../../account/run-asset-protocol.mjs';
 import { accountError } from '../../account/client.mjs';
+import { digestOf } from '../../account/ledger.mjs';
 
 /** Thin consumer of the trusted worker facade. It owns neither RAM key nor
  * raw ticket and cannot construct an arbitrary instance signing invocation. */
 export function createRunAssetClient({ transport, maxResponseBytes } = {}) {
   if (!['issue', 'request'].every(k => typeof transport?.[k] === 'function') ||
       !Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1) throw accountError(503, 'run-asset-transport-unconfigured');
-  const issued = new WeakSet();
+  const issued = new WeakMap();
   const issue = async (context, purpose, selector, requestId) => {
     const result = await transport.issue({ context, purpose, selector, requestId });
     const resource = validateAssetRef(result?.resource);
     if (!reference(result.assetHandleId) || resource.projectId !== context.projectId || result.resourceRev !== resourceRevision(resource))
       throw accountError(503, 'run-asset-response-invalid');
-    const value = Object.freeze({ ...result, resource }); issued.add(value); return value;
+    const value = Object.freeze({ ...result, resource }); issued.set(value, digestOf(context)); return value;
   };
   async function request(context, handle, { method, suffix = '', verify = false, requestId, ...options }) {
-    if (!issued.has(handle) || handle.resource.projectId !== context.projectId) throw accountError(403, 'run-asset-handle-untrusted');
+    if (issued.get(handle) !== digestOf(context) || handle.resource.projectId !== context.projectId) throw accountError(403, 'run-asset-handle-untrusted');
     const result = await transport.request({ context, assetHandleId: handle.assetHandleId, method,
       url: verify ? `${RUN_ASSET_DATA_ROOT}refs/verify` : `${RUN_ASSET_DATA_ROOT}media/${handle.resource.hash}${suffix}`,
       requestId, ...options });
