@@ -529,14 +529,18 @@ export function matrixText(items, groups) {
 
 /**
  * 端口平移:命令里「端口类参数」(--port、--base-port、--port-a、--online-base 等)后面紧跟的 5600～5999 的数加 shift。
- * 8xxx 的文档与素材服务端口、别的参数不动。shift 为 0 原样返回。
+ * 两个自限定探针命令保留各自 5840～5859 / 5880～5899 的端口;8xxx 服务端口与别的参数不动。shift 为 0 原样返回。
  */
 export function shiftPorts(cmd, shift) {
   if (!shift) return cmd;
+  const command = cmd.map((part) => String(part).replaceAll('\\', '/')).join(' ');
+  const selfRange = command.includes('scripts/probes/multi-agent-probe.mjs') ? [5840, 5859]
+    : command.includes('scripts/probes/skill-mcp-probe.mjs') ? [5880, 5899] : null;
   return cmd.map((part, i) => {
     const flag = cmd[i - 1] || '';
     if (/^--[a-z-]*port(-[a-z])?$/.test(flag) || flag === '--online-base') {
       const n = Number(part);
+      if (selfRange && Number.isInteger(n) && n >= selfRange[0] && n <= selfRange[1]) return part;
       if (Number.isInteger(n) && n >= 5600 && n <= 5999) return String(n + shift);
     }
     return part;
