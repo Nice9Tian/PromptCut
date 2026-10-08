@@ -23,3 +23,49 @@ run ticket仍503 run-data-proof-unavailable：一次HTTP resolve证明不能被�
 语法核验六个新/改mjs与git diff --check均exit0。首次只读检索在PowerShell使用了不支持的brace路径展开，ParserError后改显式三路径，未启动服务/写产品；原命令错误保留于工具记录。render supplement全文与solution_table已重读，不扩大未批提前让位/删除细节/补渲故障语义。
 
 WS/LP方案已报root：必须完整router dispatch hook包住gate、module与coordinator，session.receive透传Promise，LP在实际mTLS请求内await；WSS取真实TLS socket逐完整frame签名，nonce绑定connId/seq且一次性；selection.query的authorizeQuery与recovery read分别签，绝不旁路HTTP关闭后复用cap。尚未授权/实施core新hook，因此此块不声称数据连接已可运行。
+
+## 固定源码与已完成核验
+
+- 4ecbd1a5：HTTP注册/签名消费与首次fixtures完整块；routes首轮npm 1/1，0失败/取消/跳过，1156.8545ms（测试1079.8428ms），实际OS端口4455关闭。日志TMP/pc-instance-doc-routes-target-1.log。业务run methods仍为受控fixture，证据只覆盖真实instanceAuthority/TLS/route能力。
+- f85ecb9a：combo无Agent配置的instances入口也明确503；fixture等待客户端真实socket close；新增隔离部署import专测。routes/deploy第二轮npm 2/2，0失败/取消/跳过，1307.8812ms（routes1228.7045ms、stage112.585ms），实际OS端口12672关闭。日志TMP/pc-instance-doc-routes-deploy-target-2.log。重复routes有因：fixture实close生命周期变化；不是无变更重跑。
+- 隔离部署使用stageHostedFiles原递归清单，117个文件，TMP目录真子进程import新doc-agent-assembly，退出码0且等到child close。files.mjs无需改；只证明模块闭包/真实import，不当作服务部署或OS隔离验收。
+- b08bf5d3：中央既有direct raw provider调用的403预期与无Agent配置注册503负向；未配置run provider仍原503。源码冻结后强制tsc -b --force exit0，零错误，命令墙7.6168s，TMP/pc-instance-doc-type-1.log。等待端口期间继续实际代码审查，确认该direct调用传的是editor delegation，checkWithScope首先role拒绝run-principal-invalid，而非后续service校验run-service-forbidden；未跑中央目标前修正为真实较早的403，权限断言不降。这是预期定位修正，不写成运行失败或已通过。
+
+中央account-assembly-central.test.mjs已写真实VH327 provider/order→combo→独立asset→两页面的签名注册/admit/read/query/check/finish与同证书另一OS旧grant拒绝、cap字段不泄漏；尚未运行。共享固定5770～5774未获释放前不启动，不能把旧中央/根full借作本新源码结果。此叶尚未full，原LAN与transport宽回归待新完整装配冻结后按root租约执行。
+
+## WS/LP待授权接线精确方案
+
+现有调用位置：service.mjs watchPending的ws.on(message)→session.receive；http-transport.mjs onSend逐frames→session.receive。session.receive三条业务分支未return router.dispatch，router内部dispatch才包住async gate与module.handle/coordinator。因此不能在gate返回后release，也不能在LP立即200后宣称调用已经完成。
+
+更窄方案已补报root：service新增完整dispatchInvocation({connId,principal,text,transport},next)，真实WSS socket由升级时关联；session仅return既有dispatch Promise，LP逐帧await同hook，ALS上下文贯穿router排队then与业务await。普通页面/LAN保持直接next；Agent必须真正mTLS且exporter可取。另需同service在内部TLS server挂真实transport入口，否则现公共HTTP WS没有受信exporter就继续拒绝。
+
+签名envelope拟exact{nonce,frame,proofs}，frame包含完整普通seq/ack/type/reqId/业务字段；nonce在本conn一次性且绑定seq。每份proof exact{operation,action（仅checkAccess）,instanceId,instanceGeneration,signature}，签名request={projectId,runGrantId,connId,nonce,frame,action（仅checkAccess）}，完整frame摘要与真实TLS exporter/method/path绑定。project/grant/实例/账号从已认证连接+doc ledger核，不从frame升级。project.op及现account-hosted写类映射checkAccess(write)；open/read与selection.set/clear映射checkAccess(read)；selection.query额外独立authorizeQuery，恢复projection时的checkAccess(read)另签，不能derive或把metadata/resolve当write。
+
+所有cap只在当前完整dispatch ALS内，provider按精确operation/action/project/grant选当前cap，outer finally release。LP从同一真实POST req取得socket并一直await业务，禁止先结束旁路HTTP再沿旧cap处理WS。resume/connect须各自真实proof，不凭sid或一次ticket复用；exact协议/core窄lease尚待root确认。生产data ticket仍503，控制关闭仍pending，未知历史实例没有默认closed。
+
+## 真实中央 HTTP 首次目标与新增 core 完整块
+
+root将最终Astra实例inventory/报告6e3cad46 no-ff组合为6c3ca23a，已在f85之前进入本叶祖先；没有自行merge/cherry-pick。最终实例零grant关闭清单照样pending，不把没有operationFences等同旧OS空。
+
+固定f45c912b首次中央npm target：3 tests / 3 pass / 0 fail/cancel/skip，duration5737.7801ms、wall6023.8063ms，exit0，前后同SHA。日志TMP/pc-instance-doc-central-target-1.log及-exit.json；独立asset子进程日志pc-doc-assembly-child-1791429762928.log、pc-doc-assembly-child-1791429764910.log，均等到child真实close。5770～5774前后零LISTEN，跑完已向root释放。验证包含真实provider/order、独立asset、两个页面、真实实例注册与grant/read/checkwrite/finish；同cert另OS旧grant拒；原readonly/选区伪名/op actor/重启/旧resume与required缺配置断言保留。此轮没有WS/LP逐帧证明，不冒称那条链已通过。
+
+root随后批准service/session/http-transport窄lease，以及仅可信Agent welcome公开connId、LP openReply透传可选字段。当前core新块待测试，未借上述HTTP绿或任何根full：
+
+- session仅三处router.dispatch Promise透传及Agent connId；原seq/ack/重复过滤不改。
+- service在现有admission注册内调用transportAuthenticate；额外内部HTTPS server真正socket标记与挂载/移除；普通页面/LAN走原fallback。带实例proof/公开run引用而非真正internal mTLS时拒绝，不掉回旧认证。WS保留实际升级req/socket；Agent invocation FIFO串行，进入与await后receive前均核当前t；同conn新旧transport不以身份相同替代。
+- LP只对Agent逐frame await（普通page仍原即时ACK）；签实际原bodyText/protocol/query。recv在清旧waiter、改ack前核read proof，能力保留到response finish/close；timer/wake真正pull前再次同cap核live grant/socket与current transport，绝不先release后读缓存。req/res/socket actualclose仍由原fence ownership tracking收据核验，finish不等actual资源关闭。
+- factory以ALS只在完整dispatch内替换当前scope对应servicePrincipal，原principal白名单不改；selection.query同时核独立authorizeQuery与read cap，read/resolve不能write。初次resolve结束即删除cap，cached principal只留可信actor/grant/实例和base socket主体；resume签cached同实例/grant+actual sid/ack item，验证后才回放。
+- 签名公共builders位于agent-instance-internal.mjs：instanceConnectionRequest、instanceDataRequest、instanceProtocolHeaders。协议头保存原actual {websocket,http,fallback}（LP合成sec-websocket头前保留原头），完整URL/原bodyText入签；header独立proof避免body自签循环。nonce正safeInteger，perconn一次，Set允许LP在途请求网络乱序；初握手nonce先按actual socket消费，再通过同步transportConnected仅关联server分配connId，不改actor/权限；新socket重签不能继承旧cap。HTTPticket仍503。
+- deliver先同步启动service.fencePrincipals读/入场/socket屏障，再await操作fence与实际close；conversation onFence先从已提交ledger控制发起barrier，再异步synchronize。所有closure记录仍complete:false，缺Agent/OS证据不ACK。
+
+只读Astra复核反例来自旧固定f45：session return缺口、异步seq乱序、被替换transport与LP waiter过早release；不是已上线故障。当前按确切接缝修正，不改router或常规close/tail契约。新增account-instance-dispatch-core.test.mjs为明确组件fixture：真实WS/HTTP/TLS/actualclose与ALS生命周期，不以它代替生产密码、grant或签名链；真正全中央数据负向/正向仍待后续目标。静态node --check、实际mjs import与diff --check通过。只读一次猜测旧test路径不存在，已rg找到真实docservice-http-transport.test.mjs，未执行不存在测试/未改其它文件；记录命令错误，非产品失败。
+
+## cc546组件首测与7aac复审修正
+
+固定cc5465a8组件首测2/2、0失败/取消/跳过，2135.1394ms，TMP/pc-instance-doc-core-target-1.log；WS OS端口4148、TLS LP5820均实际关闭。仅传输fixture认证/能力，不是生产密码或实例签名链。Astra固定Git真实session/http/router受控反例指出超body/超frame未验proof直接close、empty batch直接ACK，以及旧recv/close授权await后被resume替换仍副作用。原counter.log保留于TMP/pc-instance-data-review-cc5465-013c5e31640a4187b58731c991591dd8，exit0、零listener；没有删除或写成测试通过。此前f45三个反例也原保留。
+
+7aac35a4最小修正：Agent超限只回413、不凭SID结束会话；empty batch400且不取ACK；recv/close的next入口在ACK/clearWaiter/end前核fenced/dead/superseded/isCurrent，send末ACK也核，fresh read后再次核旧传输。普通LAN/page超限close与普通尾帧契约保持。另真实internal transport、实例proof头或runGrant尝试即使cached主体为page也进入factory明确拒，不能因cached role回落legacy；普通public页面原路径不变。已升级的WS拒绝用真正WS close4003，不能在upgrade后再写HTTP错误。
+
+固定7aac35a457cb03734fdb58f71f859bcf6b4cc936，组件加原HT1/session ACK/LP回归首测37/37、0失败/取消/跳过，5534.3693ms，exit0；TMP/pc-instance-doc-core-related-1.log。新真实HTTPS组件把未验proof超body/frame/empty与合法请求并列；旧recv/close持gate后真实resume再放行409，缓存仍1帧、新会话活；internal LP与带runGrant的普通page SID尝试拒，普通页面welcome无connId与合法public resume仍通过。测试私有能力fixture不能作为生产crypto证据。new owned端口逐项actualclose记录：WS6338、LP2922、LP boundary2538、普通WS6541/TLS6542；OS listen(0)由系统原子分配，不占已监听固定口。强制tsc -b --force零错误、exit0、wall6.8881s，TMP/pc-instance-doc-type-2.log。未运行577x/full或宽浏览器探针，前后源码不变且Git干净。
+
+生产factory+instanceAuthority的真实mTLS WS/LP签名目标仍待独立运行，不能借root全量或上面的组件绿声明生产数据连接完成。公共helper真实export/schema已同步Agent owner：instanceConnectionRequest/instanceDataRequest/instanceProtocolHeaders与INSTANCE_DATA_PROOF_HEADER，所有actual URL、原协议头tuple、原bodyText、connId、seq/ack、nonce、operation/action绑定；空batch请用签名recv取得ACK，不新增旁路。

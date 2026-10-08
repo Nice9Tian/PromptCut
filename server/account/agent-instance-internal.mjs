@@ -1,6 +1,7 @@
 import { accountError, certificateFingerprint } from './client.mjs';
 
 export const INSTANCE_PROOF_HEADER = 'x-promptcut-instance-proof';
+export const INSTANCE_DATA_PROOF_HEADER = 'x-promptcut-data-proof';
 const ROOT = '/internal/v2/instances/';
 const fail = (status, code) => { throw accountError(status, code); };
 const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) &&
@@ -32,6 +33,23 @@ export function instanceRequestProof(req) {
       typeof proof.signature !== 'string' || !/^[A-Za-z0-9_-]{86}$/.test(proof.signature))
     fail(400, 'instance-proof-invalid');
   return proof;
+}
+
+/** Public signing tuple. Callers independently obtain all actual transport
+ * values; the receiver never treats these fields as actor authorization. */
+export function instanceConnectionRequest({ projectId, runGrantId, nonce, purpose, url, protocols, bodyText = '', sessionItem }) {
+  return { projectId, runGrantId, nonce, purpose, url, protocols, bodyText,
+    ...(sessionItem ? { sessionItem } : {}) };
+}
+export function instanceProtocolHeaders(headers = {}) {
+  return { websocket: headers['sec-websocket-protocol'] ?? null, http: headers['x-promptcut-protocols'] ?? null,
+    fallback: headers['x-promptcut-fallback'] ?? null };
+}
+export function instanceDataRequest({ projectId, runGrantId, connId, nonce, kind, url, protocols, bodyText = '', text,
+  frameIndex, action }) {
+  return { projectId, runGrantId, connId, nonce, kind, url, protocols, bodyText,
+    ...(text !== undefined ? { text } : {}), ...(frameIndex !== undefined ? { frameIndex } : {}),
+    ...(action !== undefined ? { action } : {}) };
 }
 
 export function createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256, resolveServicePrincipal } = {}) {

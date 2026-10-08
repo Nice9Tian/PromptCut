@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { accountError, certificateFingerprint } from '../account/client.mjs';
 import { createConversationAuthority } from '../account/conversation-authority.mjs';
 import { createConversationInternalHandler } from '../account/conversation-internal.mjs';
 import { createRunAuthority } from '../account/run-authority.mjs';
 import { createRunInternalHandler } from '../account/run-internal.mjs';
 import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
-import { createAgentInstanceInternalHandler, instanceRequestProof } from '../account/agent-instance-internal.mjs';
+import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
+  INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
@@ -22,6 +24,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       !runtime?.authority || typeof accountClient?.verifyAcceptedMessage !== 'function' ||
       typeof getDocAssembly !== 'function' || typeof getService !== 'function') fail(503, 'doc-agent-configuration');
   const docInstanceId = runtime.docInstanceId, subjects = new Map(), sockets = new WeakMap(), deliveries = new Map();
+  const dispatchContext = new AsyncLocalStorage(), usedNonces = new Map(), handshakeNonces = new Map(), initialNonces = new WeakMap();
+  const actorBinding = ['accountId', 'loginId', 'credentialId', 'loginGeneration', 'projectId', 'conversationId',
+    'messageId', 'runId', 'runGrantId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'];
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
   let stopped = false, runAuthority;
@@ -42,7 +47,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       const authenticationId = randomUUID();
       subject = { service: 'agent', serviceKid: kid, authenticationId };
       sockets.set(socket, subject); subjects.set(authenticationId, socket);
-      socket.once('close', () => { subjects.delete(authenticationId); sockets.delete(socket); });
+      socket.once('close', () => { subjects.delete(authenticationId); sockets.delete(socket); handshakeNonces.delete(socket); });
     }
     return structuredClone(subject);
   };
@@ -70,9 +75,16 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         fail(403, 'run-control-mismatch');
       const doc = getDocAssembly(), service = getService();
       if (!doc || !service) fail(503, 'doc-agent-unavailable');
+      // fencePrincipals installs logical/admission barriers and terminates owned
+      // transports synchronously before its first await. Establish the read
+      // barrier before operation recovery can yield to any cache/push callback.
+      const closing = persisted.revoked.length ? service.fencePrincipals({ runGrantIds: persisted.revoked, roles: ['agent'] }) : Promise.resolve(null);
+      const closingResult = closing.then(value => ({ value }), error => ({ error }));
       const operationReceipts = [];
       for (const fence of persisted.operationFences ?? []) operationReceipts.push(await doc.fence(fence));
-      const closed = persisted.revoked.length ? await service.fencePrincipals({ runGrantIds: persisted.revoked, roles: ['agent'] }) : null;
+      const closeOutcome = await closingResult;
+      if (closeOutcome.error) throw closeOutcome.error;
+      const closed = closeOutcome.value;
       ledger.transaction(state => {
         const current = state.runControlsV2?.[control.controlId];
         if (!current || current.payloadDigest !== persisted.payloadDigest || current.fenceRevision !== persisted.fenceRevision)
@@ -101,9 +113,12 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       return doc.captureSnapshot(input);
     },
     async onFence(input) {
+      const matches = control => control.state === 'pending' && control.projectId === input.projectId &&
+        control.scope.conversationId === input.conversationId && (!input.runId || control.scope.runId === input.runId);
+      const immediate = Object.values(ledger.read().runControlsV2 ?? {}).filter(matches).map(deliver);
+      await Promise.all(immediate);
       const controls = await runAuthority.synchronize();
-      for (const control of controls.filter(control => control.projectId === input.projectId &&
-        control.scope.conversationId === input.conversationId && (!input.runId || control.scope.runId === input.runId))) await deliver(control);
+      await Promise.all(controls.filter(matches).map(deliver));
       // Neither an empty local manager nor a body instanceId proves old resources
       // closed. The conversation change remains durable and pending for retry.
       fail(503, 'agent-fence-pending');
@@ -119,12 +134,138 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     },
     onControl: control => { void deliver(control).catch(error => onDiagnostic({ code: error.code ?? 'run-control-pending', controlId: control.controlId })); },
   });
+  function scopedInput(input, operation) {
+    const ctx = dispatchContext.getStore();
+    if (!ctx) return input;
+    if (input.projectId !== ctx.principal.projectId ||
+        actorBinding.some(field => input.principal?.[field] !== ctx.principal[field])) fail(403, 'instance-dispatch-binding-mismatch');
+    const cap = ctx.caps.find(value => value.operation === operation &&
+      (operation !== 'checkAccess' || value.action === input.action));
+    if (!cap) fail(403, 'instance-operation-forbidden');
+    return { ...input, principal: { ...input.principal, servicePrincipal: cap.subject } };
+  }
   const provider = {
-    checkAccess: input => runAuthority.checkAccess(input), authorizeQuery: input => runAuthority.authorizeQuery(input),
+    checkAccess: input => runAuthority.checkAccess(scopedInput(input, 'checkAccess')),
+    authorizeQuery: input => runAuthority.authorizeQuery(scopedInput(input, 'authorizeQuery')),
     resolveRunPrincipal: input => runAuthority.resolveRunPrincipal(input), admit: input => runAuthority.admit(input),
     confirmRead: input => runAuthority.confirmRead(input), queryRead: input => runAuthority.queryRead(input), finish: input => runAuthority.finish(input),
     applyAccessEvent: event => runAuthority.applyAccessEvent(event), synchronize: () => runAuthority.synchronize(),
   };
+  function nonce(value) { if (!Number.isSafeInteger(value) || value < 1) fail(400, 'instance-nonce-invalid'); return value; }
+  function claimNonce(table, key, value) {
+    const used = table.get(key) ?? new Set();
+    if (used.has(value)) fail(403, 'instance-nonce-replayed');
+    used.add(value); table.set(key, used);
+  }
+  const sameShape = (body, keys) => body && typeof body === 'object' && !Array.isArray(body) &&
+    Object.keys(body).length === keys.length && keys.every(key => Object.hasOwn(body, key));
+  function dataEnvelope(encoded) {
+    if (typeof encoded !== 'string' || encoded.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(encoded)) fail(403, 'instance-data-proof-required');
+    try { return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); }
+    catch { fail(400, 'instance-data-proof-invalid'); }
+  }
+  function grantPrincipal(projectId, runGrantId, servicePrincipal) {
+    const grant = ledger.read().runGrantsV2?.[runGrantId];
+    if (!grant || grant.projectId !== projectId) fail(403, 'run-binding-mismatch');
+    return { ...Object.fromEntries(actorBinding.map(field => [field, grant[field]])),
+      realm: 'account', identityVersion: 2, role: 'agent', creator: false, servicePrincipal };
+  }
+  async function transportAuthenticate(req, fallback, { internal } = {}) {
+    const url = new URL(req.url ?? '/', 'https://internal.invalid');
+    const attempted = internal || req.headers?.['x-promptcut-instance-proof'] !== undefined ||
+      req.headers?.[INSTANCE_DATA_PROOF_HEADER] !== undefined || url.searchParams.has('runGrantId');
+    if (!attempted) return fallback(req);
+    if (!internal) fail(403, 'instance-internal-transport-required');
+    assertInstanceDirectTransport(req);
+    if (url.searchParams.size !== 3 || [...url.searchParams.keys()].some(key => !['projectId', 'runGrantId', 'nonce'].includes(key)))
+      fail(400, 'instance-connection-query-invalid');
+    const projectId = url.searchParams.get('projectId'), runGrantId = url.searchParams.get('runGrantId');
+    const requestNonce = nonce(Number(url.searchParams.get('nonce')));
+    const base = resolveServicePrincipal({ socket: req.socket });
+    const request = instanceConnectionRequest({ projectId, runGrantId, nonce: requestNonce, purpose: 'run-connection',
+      url: req.url, protocols: instanceProtocolHeaders(req.transportProtocolHeaders ?? req.headers), bodyText: req.transportBodyText ?? '' });
+    const cap = instanceAuthority.authenticate({ servicePrincipal: base, method: req.method, path: url.pathname,
+      operation: 'resolveRunPrincipal', request, proof: instanceRequestProof(req) });
+    try {
+      claimNonce(handshakeNonces, req.socket, requestNonce);
+      const principal = await runAuthority.resolveRunPrincipal({ servicePrincipal: { ...base, ...cap }, projectId, runGrantId });
+      initialNonces.set(req.socket, requestNonce);
+      return { ...principal, servicePrincipal: base, userId: principal.accountId, tenantId: projectId,
+        service: 'agent', scope: 'member' };
+    } finally { instanceAuthority.release(cap.instanceSession); }
+  }
+  function transportConnected({ connId, req }) {
+    const initial = initialNonces.get(req.socket);
+    if (initial === undefined) return;
+    claimNonce(usedNonces, connId, initial); initialNonces.delete(req.socket);
+  }
+  async function dispatchInvocation(input, next) {
+    const { principal, connId, transport, kind } = input;
+    if (principal?.realm !== 'account' || principal.role !== 'agent') {
+      if (transport?.internal || transport?.req?.headers?.[INSTANCE_PROOF_HEADER] ||
+          transport?.req?.headers?.[INSTANCE_DATA_PROOF_HEADER] ||
+          new URL(transport?.req?.url ?? '/', 'http://localhost').searchParams.has('runGrantId'))
+        fail(403, 'run-principal-invalid');
+      return next(input.text);
+    }
+    if (!transport?.internal) fail(403, 'instance-internal-transport-required');
+    const req = transport.req; assertInstanceDirectTransport(req);
+    const base = resolveServicePrincipal({ socket: transport.socket });
+    const url = new URL(req.url, 'https://internal.invalid');
+    const caps = []; let requestNonce, proofs, text = input.text, requestBase;
+    try {
+      if (kind === 'resume') {
+        if (url.searchParams.size !== 3 || url.searchParams.get('projectId') !== principal.projectId ||
+            url.searchParams.get('runGrantId') !== principal.runGrantId) fail(403, 'run-binding-mismatch');
+        requestNonce = nonce(Number(url.searchParams.get('nonce')));
+        requestBase = instanceConnectionRequest({ projectId: principal.projectId, runGrantId: principal.runGrantId,
+          nonce: requestNonce, purpose: 'run-resume', url: req.url, protocols: instanceProtocolHeaders(req.headers),
+          bodyText: input.bodyText ?? '', sessionItem: input.sessionItem });
+        proofs = [{ ...instanceRequestProof(req), operation: 'checkAccess', action: 'read' }];
+      } else {
+        let envelope;
+        if (transport.kind === 'ws') {
+          try { envelope = JSON.parse(input.text); } catch { fail(400, 'instance-data-proof-invalid'); }
+          if (!sameShape(envelope, ['nonce', 'frame', 'proofs']) || !envelope.frame || typeof envelope.frame !== 'object' || Array.isArray(envelope.frame))
+            fail(400, 'instance-data-proof-invalid');
+          text = JSON.stringify(envelope.frame);
+        } else {
+          envelope = dataEnvelope(req.headers?.[INSTANCE_DATA_PROOF_HEADER]);
+          if (kind === 'message') {
+            if (!sameShape(envelope, ['frames']) || !Array.isArray(envelope.frames) || envelope.frames.length !== input.frameCount)
+              fail(400, 'instance-data-proof-invalid');
+            envelope = envelope.frames[input.frameIndex];
+          }
+          if (!sameShape(envelope, ['nonce', 'proofs'])) fail(400, 'instance-data-proof-invalid');
+        }
+        requestNonce = nonce(envelope.nonce); proofs = envelope.proofs;
+        requestBase = instanceDataRequest({ projectId: principal.projectId, runGrantId: principal.runGrantId, connId,
+          nonce: requestNonce, kind, url: req.url, protocols: instanceProtocolHeaders(req.headers), bodyText: input.bodyText ?? '',
+          text: kind === 'message' ? text : undefined, frameIndex: input.frameIndex });
+      }
+      let frame;
+      if (kind === 'message') { try { frame = JSON.parse(text); } catch { fail(400, 'instance-data-proof-invalid'); } }
+      const action = frame && /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(frame.type) ? 'write' : 'read';
+      const operations = frame?.type === 'selection.query' ? ['checkAccess', 'authorizeQuery'] : ['checkAccess'];
+      if (!Array.isArray(proofs) || proofs.length !== operations.length) fail(400, 'instance-data-proof-invalid');
+      for (const operation of operations) {
+        const proof = proofs.find(value => value.operation === operation);
+        if (!sameShape(proof, ['operation', 'instanceId', 'instanceGeneration', 'signature',
+          ...(operation === 'checkAccess' ? ['action'] : [])]) || operation === 'checkAccess' && proof.action !== action)
+          fail(403, 'instance-operation-forbidden');
+        const request = operation === 'checkAccess' ? { ...requestBase, action } : requestBase;
+        const cap = instanceAuthority.authenticate({ servicePrincipal: base, method: transport.kind === 'ws' && kind === 'message' ? 'WS' : req.method,
+          path: url.pathname, operation, request, proof });
+        const subject = { ...base, ...cap }; caps.push({ ...cap, subject, operation, action });
+        if (cap.instanceId !== principal.instanceId || cap.instanceGeneration !== principal.instanceGeneration)
+          fail(403, 'run-instance-mismatch');
+      }
+      claimNonce(usedNonces, connId, requestNonce);
+      const check = () => runAuthority.checkAccess({ principal: { ...principal, servicePrincipal: caps[0].subject }, projectId: principal.projectId, action });
+      await check();
+      return await dispatchContext.run({ principal, caps }, () => next(text, check));
+    } finally { for (const cap of caps) instanceAuthority.release(cap.instanceSession); }
+  }
   const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, resolveServicePrincipal });
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
     agentFingerprint256: pin, resolveDelegation: async ticket => {
@@ -138,14 +279,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       return { servicePrincipal: { ...servicePrincipal, ...cap },
         release: () => instanceAuthority.release(cap.instanceSession) };
     },
-    principalForCheck({ projectId, runGrantId, servicePrincipal }) {
-      const grant = ledger.read().runGrantsV2?.[runGrantId];
-      if (!grant || grant.projectId !== projectId) fail(403, 'run-binding-mismatch');
-      return { ...Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId',
-        'accountId', 'loginId', 'credentialId', 'loginGeneration', 'serviceId', 'serviceKid',
-        'instanceId', 'instanceGeneration'].map(field => [field, grant[field]])),
-        realm: 'account', identityVersion: 2, role: 'agent', creator: false, servicePrincipal };
-    },
+    principalForCheck: ({ projectId, runGrantId, servicePrincipal }) => grantPrincipal(projectId, runGrantId, servicePrincipal),
     // A resolve invocation proves this read, not a long-lived data connection.
     // Until the scoped data dispatch is mounted, no reusable run ticket is issued.
     issueRunTicket: () => fail(503, 'run-data-proof-unavailable'),
@@ -159,9 +293,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       }
       return { conversations: rows };
     } });
-  return { conversations, runProvider: provider, runHooks, deliver,
+  return { conversations, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
     async handleInternal(req, res) { return await instancesHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
-    async close() { stopped = true; await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear(); transport.close(); },
+    async close() { stopped = true; await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
+      usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
 }
