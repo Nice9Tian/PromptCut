@@ -38,13 +38,24 @@ test('queue validates project conversation, FIFO order, unique IDs and separate 
 
 test('actual account 202 retains message, position and no-run; cookies omitted and reference untouched', async () => {
   let wire;
-  const api = createCloudApi({ baseUrl: () => 'https://fixture.invalid/v1', ticket: () => 'opaque', grant: () => undefined,
+  const api = createCloudApi({ baseUrl: () => 'https://fixture.invalid/v1', projectId: () => 'project', ticket: () => 'opaque', grant: () => undefined,
     fetchImpl: async (_, init) => { wire = init; return new Response(JSON.stringify({ messageId: 'msg-one', runId: null,
-      seq: 2, queuePosition: 1, queueRevision: 2, conversation: { id: 'conversation' } }), { status: 202 }); } });
+      seq: 2, queuePosition: 1, queueRevision: 2, conversation: { id: 'conversation', projectId: 'project' } }), { status: 202 }); } });
   const result = await api.send('conversation', { prompt: 'hello', requestId: 'req-one', selectionSnapshot: { pageId: 'authenticated-page' } });
   assert.equal(result.runId, null); assert.equal(result.messageId, 'msg-one'); assert.equal(result.queuePosition, 1);
   assert.equal(wire.credentials, 'omit'); assert.equal(JSON.parse(wire.body).grant, undefined);
   assert.deepEqual(JSON.parse(wire.body).selectionSnapshot, { pageId: 'authenticated-page' });
+});
+
+test('account acceptance from another project or a missing current binding is refused', async () => {
+  for (const current of ['project', null]) {
+    const api = createCloudApi({ baseUrl: () => 'https://fixture.invalid/v1', projectId: () => current,
+      ticket: () => 'opaque', grant: () => undefined, fetchImpl: async () => new Response(JSON.stringify({
+        messageId: 'msg-one', runId: null, seq: 2, queuePosition: 1, queueRevision: 2,
+        conversation: { id: 'conversation', projectId: 'other-project' },
+      }), { status: 202 }) });
+    await assert.rejects(api.send('conversation', { prompt: 'hello' }), { code: 'unavailable', status: 503 });
+  }
 });
 
 test('session sees queued sender, ignores old queue revisions and clears private content after access refusal', async () => {

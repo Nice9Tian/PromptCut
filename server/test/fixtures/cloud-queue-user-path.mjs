@@ -405,7 +405,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
         accounts: [{ name: 'dualUser0', password: 'temporary-dual-password-0' },
           { name: 'dualUser1', password: 'temporary-dual-password-1' }],
         ports: { site: sitePort, accountInternal: accountPort, doc: docPort,
-          docInternal: docInternalPort, asset: assetPort, assetInternal: assetInternalPort, edge: edgePort },
+          docInternal: docInternalPort, asset: assetPort, assetInternal: assetInternalPort, agent: agentPort, edge: edgePort },
         close };
     }
     const revoked = await docRequest(siteOrigin + '/api/account', 'POST', '/editor/logout', {}, editors[1], pki.ca);

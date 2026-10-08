@@ -30,7 +30,7 @@ const serve = stage => async (req, res) => {
   if (url.pathname === '/editor/runtime-config.json') { res.writeHead(200, { ...headers, 'content-type': 'application/json' }); res.end(JSON.stringify({ v: 1, stageOrigins: STAGES })); return; }
   if (url.pathname === '/editor/_iso/ok') { res.writeHead(204, headers); res.end(); return; }
   if (url.pathname === '/editor/_iso/redirect') { res.writeHead(302, { ...headers, location: '/editor/_iso/ok' }); res.end(); return; }
-  const editor = url.pathname.startsWith('/editor'), root = editor || stage ? DIST : path.resolve(SITE);
+  const editor = url.pathname.startsWith('/editor'), root = editor || stage || url.pathname.startsWith('/catalog/') ? DIST : path.resolve(SITE);
   const name = editor ? (url.pathname.replace(/^\/editor\/?/, '') || 'index.html') : url.pathname.slice(1) || 'index.html';
   const file = path.resolve(root, name), rel = path.relative(root, file);
   if (rel.startsWith('..') || path.isAbsolute(rel)) { res.writeHead(404); res.end(); return; }

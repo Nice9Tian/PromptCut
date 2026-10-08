@@ -4,7 +4,7 @@
 
 本任务接通账号项目里用户可见的“真实发送、持久排队、共有对话双方看到发送者与第几”。排队成功不代表 Agent 已读、运行或模型已经调用；未接通生产 runner 时必须明确显示等待执行服务。本任务不处理历史浏览器普通档探针，不选择删除、提前让位、补渲故障等未决产品方案。
 
-工作分支为 `codex/018-cloud-queue-user-path`，起点 `5fe070d62605dc3e5b360d1c4a9c43a948045c61`。开工时工作区干净；实际检查 6520–6539 没有监听。本任务没有启动监听、浏览器、服务、子进程测试或全量测试，也没有修改产品源码。用户常驻端口和其它 Agent 服务不在本任务操作范围。
+工作分支为 `codex/018-cloud-queue-user-path`，起点 `5fe070d62605dc3e5b360d1c4a9c43a948045c61`。开工时工作区干净；实际检查 6520–6539 没有监听。以下接口草案保留开工时的原状态；当前实现和验证见文末“实施与固定证据”。用户常驻端口和其它 Agent 服务不在本任务操作范围。
 
 已读 AGENTS 入口、开发者指南、建议行为、约束、多 Agent、提交规则及 Agent 产品语义；产品源码等待主会话收回首次告知阶段并通知同步后再编辑。本报告先独立提交。
 
@@ -88,3 +88,33 @@ type CloudQueueSnapshot = {
 当前仅只读路径/接口检索、起点与干净状态核对及监听预检。没有把模块已有测试、历史 58 项公网路径或主会话基线算成本任务通过。后续验证必须覆盖真实本机账号、文档与 Agent account-policy HTTP、两个隔离浏览器的真实发送及持久共有消息，不用 ready、ACL、SSE、队列 mock。临时服务与浏览器只用本任务端口、TMP 和自有进程，结束等待实际 close。类型与全量按主会话后续窗口执行，首次失败日志保留。
 
 待续：首次告知依赖收回后的源码同步；委托/创建者/选区接线；队列 SSE 窄扩租；真实双账号用户路径及持久恢复验收。当前为已提交开工与接口草案，尚未实施或交付用户路径。
+
+## 实施与固定证据
+
+主会话在工作区干净时同步首次告知 main，组合点为 `053e9f63d8464b088a7ba657f11f23a139704bc8`。开工草案以上的“尚未实施”均是历史记录，不代表当前状态。当前已实现产品接线，真实浏览器夹具尚未获启动窗口，不能称用户路径通过。
+
+源码块 `88a4f43e` 接通现有会话的 opaque agentDelegationTicket，续签前后核当前项目和账号绑定；退出或换项目撤掉 provider，账号模式不走旧 auth.ticket/getGrant。session 增 creator/accessRevision/hosted Agent 投影，creator 每次来自重新核过的 authority，开关来自项目记录，地址与登记来自可信 constructor 配置。syncManager 的开启操作使用 fresh creator、expectedAccessRevision 和真实 admin POST，返回 pending-services 不冒称多服务停止完成。桌面 SCRIPT 只增加精确 admin 路径，原主窗口/origin/token/POST body/上限守门不变。
+
+真实选区只发送已认证 presence 的 pageId。202 保留 messageId/arrivalSeq/queueRevision/position/runId:null；账号消息渲染不生成 assistant 或本机排队记录。SSE 独立 queue.state 从同一次获权完整持久 get 视图派生 FIFO，并在每项正文及队列写出前 fresh access/aclRevision 核验；请求 aborted 或响应 close 收口，不误把 GET 请求正常结束当 SSE 结束。发送者来自持久 senderAccountId/senderNameAtSend。页面展示“等待执行服务”，info 明确 accountMode=true/executorMounted=false；本块没有接 read/run/model。G 首次同意门保持原实现。
+
+`adfc9589` 对齐原账号客户端测试夹具的完整 session projection，新增 actual SCRIPT 路径守门及专属真实服务夹具。`ea63df0b` 新增浏览器探针和无业务监听的 HTTP/SSE 协议目标。后续窄补：202 响应精确 projectId 必须等于当前 CloudApi 项目绑定，拒错项目或已丢绑定；浏览器静态 catalog 使用真实 online 构建产物。
+
+| 固定源码 | 命令范围 | 实际结果与原始日志 |
+|---|---|---|
+| 88a4f43e | 绝对 TypeScript tsc -b --force | exit0、零错误，wall 6856.7ms；TMP `pc-queue-type-1.log` 为空输出 |
+| 88a4f43e | npm test：client、account-queue、cloud-chat 三文件 | 首次 32 项/31 通过/1 失败/0 取消/0 跳过，1575.8926ms，wrapper wall 1810ms，exit1；TMP `pc-queue-pure-1.log` 原文保留。旧客户端夹具缺委托和权威投影字段触发严格 503，未降低产品校验 |
+| ea63df0b | npm test：以上三文件＋cloud-queue-native-admin＋cloud-queue-http | 36 项/36 通过/0 失败/0 取消/0 跳过，1740.9864ms，wrapper wall 1965.3078ms，exit0；TMP `pc-queue-pure-2.log`，nativeRetries=0 |
+
+所有 npm 均使用已装 Node 的 npm-cli.js，经仓库 npm wrapper/global setup；唯一原坏端口 guard 仍按原规则运行并 teardown。本任务目标未建立 HTTP/TLS/WS 业务 listener，未启动 Chrome、实际壳或全量。子 PowerShell 执行的是实际 Rust SCRIPT，只有 Http 函数由受控无监听适配器替换，证明路径/body/token 分支，不能证明 native IPC/系统 TLS。HTTP/SSE 目标使用实际 handler/account-policy 与受控 doc RPC，证明消息/独立队列 revision/晚验权拒分支，不能证明真实对话权威持久化或即时跨服务 fence。
+
+### 已编写的真实服务与页面目标，尚未启动
+
+`server/test/fixtures/cloud-queue-user-path.mjs` 的 `startCloudQueueUserFixture(options)` 复用真实 VH store/app/internal/order、doc assembly 同 SQLite、临时服务登记、独立 asset Node 子进程及其真实持久 consumer/head/status，再增加真实 Agent HTTP account-policy 和 pinned mTLS conversation-client；不用 ready、ACL、队列或 SSE mock。options 为 `{providerRoot,passwordOrderModule,publicHandler,ports?}`，默认端口是 site6520/account-internal6521/doc6522/doc-internal6523/asset6524/asset-internal6525/Agent6526/edge6528；6539 仅 combo 旧 LAN 参数，账号组合明确 assetPort=null，未监听。返回 origin/公开 projectId/ports/assetPid/close 与仅 RAM accounts；禁止 stringify 整个返回对象。close 等 asset 子进程 close、升级双 socket、各服务器实际 close。
+
+`scripts/probes/cloud-queue-user-pages-probe.mjs` 使用真实 compiled dist-online、VH site 静态内容及两个隔离 Chrome context。舞台6530/6531，共十个业务监听，均在租约6520–6539。真实表单 A/B 登录，A 新建并确认首次同意、创建者开启 Agent，B 以真实链接加入和同意；A 发送→B 从真实历史选择同一共有对话→B 发送→两端核同 messageId/FIFO/发送者→B reload 核持久恢复。两个实际 messages202 必须出现，不用事件注入，不改 DOM disabled，不读剪贴板或打印账号秘密。所有阶段 timeout30s，夹具已有等待20s/HTTP5s；第一失败立即进入 owned teardown，不同源码盲重跑。截图遇密码字段跳过；网络只记录 pathname/status/method，查询串/headers/票据/正文不输出。浏览器临时证书容错只作用此隔离 browser 进程，不改系统 CA、原生 HTTP 或生产。
+
+本夹具是在同一 Windows OS 上用临时角色证书和真实 mTLS；registry/sender/head 等走真实 provider，但独立 OS 用户隔离与生产 root 实例注册不在此目标证明范围。Agent 只有 conversation-policy，没有 runner；队列通过也不表示 Agent 执行、模型、素材或关闭 receipt 链完成。
+
+待主会话批准的执行入口：先固定源码及真实 online 构建，再运行 `scripts/probes/cloud-queue-user-pages-probe.mjs --dist <本叶dist-online> --site-root <真实VH site> --out <TMP本任务独占目录>`，设置真实 provider/order 路径、fileURL silent preload 和仅进程 cuda/models 环境。asset 为唯一常驻业务 Node 子进程，Chrome 使用 pipe；临时 PKI openssl 子进程隐藏并等待 close。固定端口、业务子进程/浏览器与构建尚未实际启动。真实 Rust admin IPC 由主会话后续独立编译/窗口验证；本任务不占旧6388、不扩 lib.rs、不以受控注入替代。
+
+明确未做：整套 npm/真实双浏览器/真实 native IPC/节点与公网/模型执行/跨服务立即 fence。fresh RPC 与250ms轮询不替代已有即刻撤销承诺，account-policy onRevoke 的真实 control 来源仍须专属 owner 接线。

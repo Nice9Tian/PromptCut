@@ -43,6 +43,8 @@ export function cloudErrorText(code: string, serverMessage?: string): string {
 export interface CloudApiDeps {
   /** Agent 服务的 `/v1` 根地址(不带末尾斜杠);每次现取,项目换了地址跟着换 */
   baseUrl: () => string | null;
+  /** 账号会话的当前项目；只核响应归属，不作为服务端授权。 */
+  projectId?: () => string | null;
   ticket?: () => Promise<string>;
   grant?: (conversationId: string) => Promise<string | undefined>;
   fetchImpl?: typeof fetch;
@@ -186,7 +188,8 @@ export function createCloudApi(deps: CloudApiDeps) {
       if (out.messageId !== undefined) {
         if (typeof out.messageId !== 'string' || !out.messageId || out.runId !== null ||
           !Number.isSafeInteger(out.seq) || out.seq <= 0 || !Number.isSafeInteger(out.queuePosition) || out.queuePosition < 1 ||
-          !Number.isSafeInteger(out.queueRevision) || out.queueRevision < out.seq || out.conversation?.id !== conversationId)
+          !Number.isSafeInteger(out.queueRevision) || out.queueRevision < out.seq || out.conversation?.id !== conversationId ||
+          !deps.projectId?.() || out.conversation?.projectId !== deps.projectId())
           throw new CloudError('unavailable', '云端排队确认无效，请重新读取对话。', 503);
         return { runId: null, seq: out.seq, messageId: out.messageId, queuePosition: out.queuePosition, queueRevision: out.queueRevision };
       }
