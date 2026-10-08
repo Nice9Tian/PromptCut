@@ -155,6 +155,7 @@ import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, par
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 import { createTimings } from './probe-timings.mjs';
 import { hostClaimStatusOf } from '../render-host.mjs';
+import { createC10Trace, hostDidWork } from './c10-judge.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -399,7 +400,8 @@ function hostView(body, lines = []) {
     maxConcurrent: body.maxConcurrent ?? null, nodes, sessionLog: sessionLog.slice(-8) };
 }
 /** 认领了 plan(切出细任务)且至少做完一段:claimed 算上 plan 本身(与本机替身同一判据) */
-const hostDidWork = (view) => (view?.nodes ?? []).some((n) => (n.completed ?? 0) > 0 && (n.claimed ?? 0) > (n.completed ?? 0) - 1);
+const a5Trace = createC10Trace();
+let a5TraceCdp = null;
 
 /* ================================================================== 主机持有任务时断一次传输(--cut,照 ht-w-probe) */
 
@@ -530,6 +532,7 @@ async function startWatcher(M, { projectId, password, diagnosticOnly = false }) 
   const tasks = new Map();
   const rec = (id) => { if (!seen.has(id)) seen.set(id, { taken: 0, reopenedAfterTaken: 0, closed: [] }); return seen.get(id); };
   c.ep.onMessage((m) => {
+    a5Trace.observe(m, { channel: 'observer' });
     if (m?.type === 'queue.snapshot') { tasks.clear(); for (const task of m.tasks ?? []) tasks.set(task.id, task); }
     else if (m?.type === 'task.opened' && m.task?.id) tasks.set(m.task.id, m.task);
     else if (['task.taken', 'task.closed'].includes(m?.type)) { const task = tasks.get(m.id); if (task) tasks.set(m.id, { ...task, state: m.type === 'task.taken' ? 'claimed' : m.state }); }
@@ -546,8 +549,8 @@ async function startWatcher(M, { projectId, password, diagnosticOnly = false }) 
   if (!diagnosticOnly) check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
   // 会话结束后建了新会话(onOpen 只在新会话时调;接续调 onResume、订阅还在):重发 hello 与 watch。计数进结果
   const stats = { newSessions: 0, resumes: 0 };
-  c.ep.onOpen(() => { stats.newSessions++; void subscribe(); });
-  c.ep.onResume?.(() => { stats.resumes++; });
+  c.ep.onOpen(() => { stats.newSessions++; a5Trace.boundary('observer', 'new-session'); void subscribe(); });
+  c.ep.onResume?.(() => { stats.resumes++; a5Trace.boundary('observer', 'resumed'); });
   return { seen, stats, tasks, close: c.close };
 }
 /** 成员页收到的 task.done(CDP 读页面 WebSocket 的入站帧;会话层的重发按 seq 去重,同一任务不同 seq 算两次) */
@@ -1839,6 +1842,12 @@ try {
     say('step2.done', out.steps.reopen);
 
     /* ---------------------------------------------------------------- A5. 没有节点在线时改一处不报错;独立渲染主机认领、切分、完成 */
+    a5TraceCdp = await member.createCDPSession();
+    await a5TraceCdp.send('Network.enable');
+    a5TraceCdp.on('Network.webSocketFrameReceived', event => {
+      try { a5Trace.observe(JSON.parse(event.response?.payloadData), { channel: `publisher:${event.requestId}` }); } catch { /* 非 JSON 帧 */ }
+    });
+    a5TraceCdp.on('Network.webSocketClosed', event => a5Trace.boundary(`publisher:${event.requestId}`));
     const t5 = Date.now();
     // E6 反方向:记下创建者(桌面)发布过的 plan,X 上线后拿 host 身份试认领一次(L18,只记录)
     if (E6R) state.desktopPlans = ((await diag().catch(() => null))?.published ?? []).map((p) => p?.planId).filter((id) => typeof id === 'string');
@@ -1933,6 +1942,7 @@ try {
             fs.writeFileSync(path.join(OUT, 'host-claim-diagnostics.json'), JSON.stringify(claimDiagnostics, null, 2));
           }
         }
+        fs.writeFileSync(path.join(OUT, 'a5-task-evidence.json'), JSON.stringify(a5Trace.snapshot(), null, 2));
         const v = hostView(body, hostLog);
         return hostDidWork(v) ? v : null;
       }, 900_000, 2000);
@@ -2057,6 +2067,8 @@ try {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 1200)}`);
   for (const [name, page] of [['creator', state.creator], ['member', state.member]]) if (page) await shot(page, `fatal-${name}`).catch(() => {});
 } finally {
+  try { fs.writeFileSync(path.join(OUT, 'a5-task-evidence.json'), JSON.stringify(a5Trace.snapshot(), null, 2)); } catch { /* 不改变原探针结果 */ }
+  await a5TraceCdp?.detach().catch(() => {});
   try { watcherRef?.close(); } catch { /* 已关 */ }
   await stopCutProxy(cutProxyRef).catch(() => {});
   if (e6) {
