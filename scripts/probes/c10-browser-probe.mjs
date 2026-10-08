@@ -1898,31 +1898,15 @@ try {
       const beforeProject = await readFixtureProject(conn.ep, state.docId, `a5-before-${randomBytes(6).toString('hex')}`);
       // The editor intentionally has no executable definition for synced cards.
       // Use its normal project-edit action, also used by online-user-cards-probe;
-      // shared DocSync still commits this page's immutable edit with normal ACL.
+      // Normal shared synchronization/publishing still uses the page's existing ACL.
       const fixture = await P(member, editHeavyFixtureClip, { cardId, sourceKey, start: SECONDS + 1, duration, params,
         clipId: `c-a5-${randomBytes(8).toString('hex')}`, trackId: `t-a5-${randomBytes(8).toString('hex')}`,
         createdAt: await P(member, () => Date.now()) });
-      state.hostFixture = { ...fixture, projectId: state.projectId, beforeKeys, source: sourceEvidence, requireStepOverBudget: true };
+      state.hostFixture = { ...fixture, projectId: state.projectId, beforeKeys, source: sourceEvidence, beforeRev: beforeProject.rev, requireStepOverBudget: true };
       if (!check(fixture.cardId === cardId && fixture.clipId !== state.main && fixture.duration > 0.25 && fixture.duration < 0.25 + 1 / FPS && fixture.projectDuration >= fixture.end &&
         Object.entries(params).every(([k, v]) => fixture.params?.[k] === v),
       'A5:真实新增项目 CPU 纹理卡与短片段已保留，原 main 竞争保留', fixture)) throw new Error('A5:host fixture 写入不完整，未启动 host');
-      let committedEvidence = null;
-      const committed = await until('A5:文档服务真身包含同源新片段与更新版本', async () => {
-        const remote = await readFixtureProject(conn.ep, state.docId, `a5-read-${randomBytes(6).toString('hex')}`);
-        const clip = remote.project?.tracks?.flatMap(t => t.clips).find(c => c.id === fixture.clipId);
-        const sourceRead = await conn.rpc({ type: 'content.get', kind: 'card-source', key: sourceKey });
-        const exact = remote.rev > beforeProject.rev && clip?.cardId === cardId && clip.start === fixture.start &&
-          Math.abs(clip.end - fixture.end) < 1e-9 && remote.project.duration >= clip.end &&
-          JSON.stringify(clip.params) === JSON.stringify(fixture.params) && sourceRead.hash === expectedHash &&
-          sourceRead.body === source && sourceRead.rev === stored.rev;
-        committedEvidence = { projectId: state.docId, beforeRev: beforeProject.rev, rev: remote.rev, digest: remote.digest,
-          clipId: fixture.clipId, cardId: clip?.cardId ?? null, start: clip?.start ?? null, end: clip?.end ?? null,
-          params: clip?.params ?? null, sourceKey, sourceHash: sourceRead.hash, sourceRev: sourceRead.rev, exact };
-        fs.writeFileSync(path.join(OUT, 'a5-fixture-project.json'), JSON.stringify(committedEvidence, null, 2));
-        return exact ? committedEvidence : null;
-      }, 30_000, 250);
-      if (!committed) throw new Error('A5:用户卡片段尚未被文档服务接受，未启动 host');
-      state.hostFixture.committed = committedEvidence;
+
     }
     if (E6R) {
       // E6 反方向:全部重卡都改(文字 + burnMs),这一版的层全换成 Y 的;每帧更慢,好让 X 上线时这一版还没做完
@@ -1979,6 +1963,29 @@ try {
       fs.writeFileSync(path.join(OUT, 'a5-fixture-prerequisite.json'), JSON.stringify(fixtureEvidence, null, 2));
       out.steps.hostFixturePrerequisite = fixtureEvidence;
       if (!publication?.fixtureEvidence?.readiness.ready) throw new Error(`A5:host fixture 前置未成立，未启动 host:${fixtureEvidence?.readiness?.reasons?.join(',') ?? 'no-observation'}`);
+      // In the legacy shared path, the normal publisher uploads its full project
+      // snapshot after measurement. Observe that accepted snapshot only after the
+      // existing cost/current-plan prerequisite, before starting any host.
+      const fixture = state.hostFixture, { cardId } = fixture;
+      const { sourceKey, expectedHash } = fixture.source;
+      const source = heavyUserCardSource(cardId);
+      let committedEvidence = null;
+      const committed = await until('A5:文档服务接受的当前全文包含同源新片段', async () => {
+        const remote = await readFixtureProject(conn.ep, state.docId, `a5-read-${randomBytes(6).toString('hex')}`);
+        const clip = remote.project?.tracks?.flatMap(t => t.clips).find(c => c.id === fixture.clipId);
+        const sourceRead = await conn.rpc({ type: 'content.get', kind: 'card-source', key: sourceKey });
+        const exact = remote.rev > fixture.beforeRev && clip?.cardId === cardId && clip.start === fixture.start &&
+          Math.abs(clip.end - fixture.end) < 1e-9 && Math.abs(remote.project.duration - fixture.projectDuration) < 1e-9 &&
+          JSON.stringify(clip.params) === JSON.stringify(fixture.params) && sourceRead.hash === expectedHash &&
+          sourceRead.body === source && sourceRead.rev === fixture.source.storedRev;
+        committedEvidence = { projectId: state.docId, beforeRev: fixture.beforeRev, rev: remote.rev, digest: remote.digest, via: remote.via ?? 'body', reason: remote.reason ?? null,
+          clipId: fixture.clipId, cardId: clip?.cardId ?? null, start: clip?.start ?? null, end: clip?.end ?? null,
+          params: clip?.params ?? null, sourceKey, sourceHash: sourceRead.hash, sourceRev: sourceRead.rev, exact };
+        fs.writeFileSync(path.join(OUT, 'a5-fixture-project.json'), JSON.stringify(committedEvidence, null, 2));
+        return exact ? committedEvidence : null;
+      }, 30_000, 250);
+      if (!committed) throw new Error('A5:用户卡片段尚未被文档服务接受，未启动 host');
+      state.hostFixture.committed = committedEvidence;
     }
     const published = publication?.published ?? null;
     const pubDiag = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
