@@ -45,6 +45,7 @@ import { createFsStore, ensureLayoutSync, LAYOUTS } from '../asset-store/fs-stor
 import { normalizeHash } from '../asset-store/blob-store.mjs';
 import { createServiceUsage, serviceCapBytes, diskTotalOf, SERVICE_USAGE_DIR } from '../asset-store/service-usage.mjs';
 import { startAssetAnnounce } from '../asset-announce.mjs';
+import { createAssetReadyProbe } from './asset-doc-client.mjs';
 
 export const HOSTED_NAMESPACES = Object.freeze(['media', 'snap', 'px']);
 /** 登记素材服务地址用的登记者身份 */
@@ -227,6 +228,7 @@ export async function startHostedCombo({
   renderCapBytes,
   account = null,
   accountRequired = false,
+  assetStatus = null,
 } = /** @type {any} */ ({})) {
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响服务 */ } };
   const root = checkDataDir(dataDir);
@@ -234,6 +236,7 @@ export async function startHostedCombo({
   if (trustLoopback === false && !tokenGiven) throw new HostedConfigError('cluster-token-required');
   if (accountRequired && !account) throw new HostedConfigError('account-v2-required');
   const paths = hostedPaths(root);
+  if (account && assetStatus && !assetPublicUrl) throw new HostedConfigError('asset-public-url', { detail: 'separate-service-unset' });
   const loopbackBind = host === '127.0.0.1' || host === '::1' || host === 'localhost';
 
   // 目录：docservice/、assets/、secrets/（0700）
@@ -313,6 +316,8 @@ export async function startHostedCombo({
   let accountProjects = null;
   let accountInternalServer = null;
   let accountInternalPort = null;
+  // v2素材独立进程；doc只加载自己的status client私钥，不读asset私钥或共享authority对象。
+  const assetReadyProbe = account && assetStatus ? createAssetReadyProbe(assetStatus) : null;
   if (account) {
     try {
       const [{ createAccountClient }, { openAccountLedger }, { createAccountHostedRuntime },
@@ -325,6 +330,7 @@ export async function startHostedCombo({
         serverFingerprint256: account.serverFingerprint256 });
       accountRuntime = createAccountHostedRuntime({ ledger, accountClient: client, dataDir: paths.docservice,
         authorityUrl: account.authorityUrl, signingKey: account.signingKey, keyId: account.keyId, now,
+        assetReadyProbe, assetInstanceId: assetStatus?.instanceId,
         onDiagnostic: event => say('account.diagnostic', event) });
       await accountRuntime.start();
       accountProjects = mountAccountProjects({ authority: accountRuntime.authority,
@@ -342,6 +348,7 @@ export async function startHostedCombo({
       });
     } catch (error) {
       accountRuntime?.close();
+      assetReadyProbe?.close();
       throw new HostedConfigError('account-v2', { code: error?.code ?? 'configuration' });
     }
   }
@@ -419,7 +426,8 @@ export async function startHostedCombo({
       if (m) return adminBlob(req, res, m[1], m[2]);
       return sendJson(res, 404, { ok: false, error: 'not-found' });
     }
-    if (accountRuntime) return sendJson(res, 503, { ok: false, error: 'asset-account-wiring-pending' });
+    // v2公网素材直达独立asset进程，旧combo端口绝不回落LAN全局库。
+    if (accountRuntime) return sendJson(res, 503, { ok: false, error: assetStatus ? 'asset-separate-service' : 'asset-account-wiring-pending' });
     preflight(req, res, () => {
       assetMiddleware(req, res, () => sendJson(res, 404, { ok: false, error: 'not-found' }));
     });
@@ -438,12 +446,12 @@ export async function startHostedCombo({
     docAddr = await service.listen(docPort, host);
   } catch (err) {
     await service.close().catch(() => {});
-    await closeAccountInternal(); accountRuntime?.close();
+    await closeAccountInternal(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
   let assetAddr;
   try {
-    assetAddr = await new Promise((resolve, reject) => {
+    assetAddr = accountRuntime && assetStatus ? { port: null } : await new Promise((resolve, reject) => {
       assetServer.once('error', reject);
       assetServer.listen(assetPort, host, () => {
         assetServer.off('error', reject);
@@ -452,7 +460,7 @@ export async function startHostedCombo({
     });
   } catch (err) {
     await service.close().catch(() => {});
-    await closeAccountInternal(); accountRuntime?.close();
+    await closeAccountInternal(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
 
@@ -515,6 +523,7 @@ export async function startHostedCombo({
       await service.close();
       await closeAccountInternal();
       accountRuntime?.close();
+      assetReadyProbe?.close();
     },
   };
 }

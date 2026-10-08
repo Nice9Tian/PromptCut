@@ -657,7 +657,7 @@ const PCM_MAX_BYTES = 256 * 1024 * 1024;
  * 而且 server/test 里把这个插件转译到临时目录再 import 的那几个测试也不能因此解析失败。
  */
 async function ffmpegCommand(): Promise<string> {
-  const { findFfmpeg } = await import("./bakery/index.mjs");
+  const { findFfmpeg } = await import("./bakery/ffmpeg.mjs");
   return findFfmpeg();
 }
 
