@@ -12,6 +12,9 @@ import { openAccountLedger } from '../account/ledger.mjs';
 import { createAccountHostedRuntime } from '../docservice/account-hosted.mjs';
 import { createAccountProjectsInternalServer, mountAccountProjects } from '../docservice/modules/account-projects.mjs';
 import { createSharedDocService } from '../docservice/shared-service.mjs';
+import { createDocService } from '../docservice/service.mjs';
+import { createFileStore } from '../docservice/store/index.mjs';
+import { stateBlobName } from '../docservice/modules/project.mjs';
 import { stageHostedFiles } from '../hosted/files.mjs';
 
 const providerDir = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? 'C:/Users/admin/Documents/VisuHive/.worktrees/018-account-foundation';
@@ -54,11 +57,69 @@ const wsOpen = (url, protocols) => new Promise((resolve, reject) => {
   const ws = new WebSocket(url, protocols); ws.addEventListener('open', () => resolve(ws), { once: true });
   ws.addEventListener('error', () => reject(new Error('websocket rejected')), { once: true });
 });
+function wsCaptured(url, protocols) {
+  const ws = new WebSocket(url, protocols);
+  const inbox = [], waiters = [];
+  ws.addEventListener('message', event => {
+    const value = JSON.parse(event.data);
+    const index = waiters.findIndex(waiter => waiter.match(value));
+    if (index >= 0) waiters.splice(index, 1)[0].resolve(value);
+    else inbox.push(value);
+  });
+  const opened = new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve, { once: true });
+    ws.addEventListener('error', () => reject(new Error('websocket rejected')), { once: true });
+  });
+  return { ws, opened, next(match) {
+    const index = inbox.findIndex(match);
+    if (index >= 0) return Promise.resolve(inbox.splice(index, 1)[0]);
+    return timeout(new Promise(resolve => waiters.push({ match, resolve })), 'WS message');
+  } };
+}
 const next = (ws, type, stage = type) => new Promise((resolve, reject) => {
   const seen = [];
   const timer = setTimeout(() => { ws.removeEventListener('message', onMessage); reject(new Error(`missing ${stage}; seen ${seen.join(',')}`)); }, 3000);
   const onMessage = event => { const value = JSON.parse(event.data); seen.push(`${value.type}:${value.reason ?? ''}`); if (value.type === type) { clearTimeout(timer); ws.removeEventListener('message', onMessage); resolve(value); } };
   ws.addEventListener('message', onMessage);
+});
+const timeout = (promise, label, ms = 3000) => Promise.race([promise,
+  new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms); timer.unref?.(); })]);
+
+test('two asynchronous WS authentications cannot exceed maxConnections=1', async t => {
+  let entered = 0, release, reached;
+  const barrier = new Promise(resolve => { release = resolve; });
+  const both = new Promise(resolve => { reached = resolve; });
+  const service = createDocService({ maxConnections: 1, autoTick: false, log: () => {},
+    authenticate: async () => { if (++entered === 2) reached(); await barrier; return { userId: 'capacity-fixture' }; } });
+  const addr = await service.listen(5827, '127.0.0.1');
+  const clients = [new WebSocket(`ws://127.0.0.1:${addr.port}`, ['promptcut.v1']),
+    new WebSocket(`ws://127.0.0.1:${addr.port}`, ['promptcut.v1'])];
+  t.after(async () => { release(); for (const client of clients) client.close(); await service.close(); });
+  const outcomes = Promise.all(clients.map(client => new Promise(resolve => {
+    client.addEventListener('open', () => resolve(true), { once: true });
+    client.addEventListener('error', () => resolve(false), { once: true });
+  })));
+  await timeout(both, 'WS auth fence'); release();
+  const admitted = await timeout(outcomes, 'WS admission');
+  assert.equal(entered, 2); assert.equal(admitted.filter(Boolean).length, 1);
+  assert.equal(service.describe().conns.length, 1);
+});
+
+test('two asynchronous HTTP long-poll authentications cannot exceed maxConnections=1', async t => {
+  let entered = 0, release, reached;
+  const barrier = new Promise(resolve => { release = resolve; });
+  const both = new Promise(resolve => { reached = resolve; });
+  const service = createDocService({ maxConnections: 1, enableHttpTransport: true, autoTick: false, log: () => {},
+    authenticate: async () => { if (++entered === 2) reached(); await barrier; return { userId: 'capacity-fixture' }; } });
+  const addr = await service.listen(5828, '127.0.0.1');
+  t.after(async () => { release(); await service.close(); });
+  const requests = [0, 1].map(() => fetch(`http://127.0.0.1:${addr.port}/lp/open`, {
+    method: 'POST', headers: { 'x-promptcut-protocols': 'promptcut.v1, promptcut.session.new' }, body: '{}',
+  }).then(res => res.status));
+  await timeout(both, 'LP auth fence'); release();
+  const statuses = await timeout(Promise.all(requests), 'LP admission');
+  assert.equal(entered, 2); assert.deepEqual(statuses.sort(), [200, 503]);
+  assert.equal(service.describe().conns.length, 1);
 });
 
 test('staged hosted account dependencies are present and required mode fails closed without configuration', () => {
@@ -122,11 +183,12 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
         { serviceId: 'asset', fingerprint256: new X509Certificate(tls.asset.cert).fingerprint256 }] });
     await listen(internal, 5825);
     const privateOrigin = `https://127.0.0.1:${internal.address().port}`;
-    let ws, wsB, wsB2;
+    let ws, wsB, wsB2, sessionWs, resumedWs, recovery;
     t.after(async () => {
       try { ws?.close(); } catch {}
+      try { sessionWs?.close(); resumedWs?.close(); } catch {}
       try { wsB?.close(); wsB2?.close(); } catch {}
-      await doc.service.close(); await close(internal); runtime.close(); await close(accountServer); provider.close();
+      await doc.service.close(); await close(internal); runtime.close(); recovery?.close(); await close(accountServer); provider.close();
       const target = path.resolve(dir); assert.equal(path.dirname(target), path.resolve(os.tmpdir()));
       fs.rmSync(target, { recursive: true, force: true });
     });
@@ -156,6 +218,25 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
     assert.equal(await runtime.gate(livePrincipal, 'project.open', { projectId: wrongProject }), 'project-mismatch');
     const denied = next(ws, 'error', 'cross-project-error'); ws.send(JSON.stringify({ type: 'project.open', projectId: wrongProject }));
     assert.equal((await denied).reason, 'project-mismatch');
+    const beforeSession = new Set(doc.service.describe().conns.map(conn => conn.connId));
+    const firstSession = wsCaptured(`ws://127.0.0.1:${addr.port}`,
+      ['promptcut.v1', 'promptcut.session.new', `promptcut.account.${connectionTicket}`]);
+    sessionWs = firstSession.ws; await firstSession.opened;
+    const welcome = await firstSession.next(item => item.type === 'session.welcome');
+    const sessionConn = doc.service.describe().conns.find(conn => !beforeSession.has(conn.connId))?.connId;
+    assert.ok(sessionConn);
+    doc.service.send(sessionConn, { type: 'project.pushed', reason: 'account-resume' });
+    const pushed = await firstSession.next(item => item.type === 'project.pushed');
+    assert.equal(pushed.seq, 1);
+    const oldClosed = new Promise(resolve => sessionWs.addEventListener('close', resolve, { once: true }));
+    const resumed = wsCaptured(`ws://127.0.0.1:${addr.port}`,
+      ['promptcut.v1', `promptcut.session.${welcome.sid}.0`]);
+    resumedWs = resumed.ws; await resumed.opened;
+    const resumedWelcome = await resumed.next(item => item.type === 'session.welcome');
+    assert.equal(resumedWelcome.resumed, true); assert.equal(resumedWelcome.sid, welcome.sid);
+    assert.equal((await resumed.next(item => item.type === 'project.pushed')).seq, 1);
+    assert.equal((await timeout(oldClosed, 'superseded WS')).code, 4009);
+    assert.equal(doc.service.describe().conns.find(conn => conn.connId === sessionConn)?.resumes, 1);
     const asset = await request(privateOrigin, tls.asset, 'POST', '/internal/v2/access/check', { assetTicket, projectId, action: 'read', resource: { ns: 'media' } });
     assert.equal(asset.status, 200); assert.equal(asset.body.allowed, true);
     assert.equal((await request(privateOrigin, tls.wrong, 'POST', '/internal/v2/access/check', { assetTicket, projectId, action: 'read' })).status, 403);
@@ -164,6 +245,16 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
     assert.equal((await request(privateOrigin, tls.asset, 'POST', '/internal/v2/access/check', { assetTicket, projectId: `sp_${'a'.repeat(26)}`, action: 'read' })).status, 403);
     const lp = await fetch(`${origin}/lp/open`, { method: 'POST', headers: { 'x-promptcut-protocols': `promptcut.v1, promptcut.session.new, promptcut.account.${connectionTicket}` }, body: '{}' });
     assert.equal(lp.status, 200);
+    const lpBody = await lp.json();
+    const lpConn = doc.service.describe().conns.find(conn => conn.transport === 'http' && conn.principal?.accountId === idA)?.connId;
+    assert.ok(lpConn);
+    doc.service.send(lpConn, { type: 'project.pushed', reason: 'account-lp-resume' });
+    const lpResumed = await web(origin, 'POST', '/lp/open', null,
+      { 'x-promptcut-protocols': `promptcut.v1, promptcut.session.${lpBody.sid}.0` });
+    assert.equal(lpResumed.status, 200); assert.equal(lpResumed.body.resumed, true);
+    const lpFrames = await fetch(`${origin}/lp/recv?ack=0&wait=0`, { headers: { authorization: `Bearer ${lpBody.sid}` } });
+    assert.equal(lpFrames.status, 200);
+    assert.equal(JSON.parse((await lpFrames.json()).frames[0]).seq, 1);
     const probeOut = path.join(dir, 'probe');
     const probeResult = await new Promise(resolve => {
       const child = spawn(process.execPath, [path.resolve('scripts/probes/account-hosted-wiring-probe.mjs'), '--url', origin, '--out', probeOut], {
@@ -182,6 +273,9 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
     assert.equal(joinB2.status, 200, joinB2.body.code ?? joinB2.body.error);
     wsB = await wsOpen(`ws://127.0.0.1:${addr.port}`, ['promptcut.v1', `promptcut.account.${joinB.body.connectionTicket}`]);
     wsB2 = await wsOpen(`ws://127.0.0.1:${addr.port}`, ['promptcut.v1', `promptcut.account.${joinB2.body.connectionTicket}`]);
+    const lpB = await web(origin, 'POST', '/lp/open', null,
+      { 'x-promptcut-protocols': `promptcut.v1, promptcut.session.new, promptcut.account.${joinB.body.connectionTicket}` });
+    assert.equal(lpB.status, 200);
     const closedB = new Promise(resolve => wsB.addEventListener('close', resolve, { once: true }));
     const closedB2 = new Promise(resolve => wsB2.addEventListener('close', resolve, { once: true }));
     const accessRevision = runtime.authority.listProjects(idA).owned.find(item => item.projectId === projectId).accessRevision;
@@ -189,7 +283,87 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
       { projectId, op: 'kick', accountId: idB, expectedAccessRevision: accessRevision, requestId: 'kick-b' }, bearerA);
     assert.equal(kicked.status, 200, kicked.body.code ?? kicked.body.error);
     await Promise.all([closedB, closedB2]);
+    const kickedResume = await web(origin, 'POST', '/lp/open', null,
+      { 'x-promptcut-protocols': `promptcut.v1, promptcut.session.${lpB.body.sid}.0` });
+    assert.equal(kickedResume.status, 410);
     assert.equal((await web(origin, 'POST', '/hosted/shared/account/session', { projectId, deviceId: 'device-b', requestId: 'denied-b' }, bearerB)).status, 403);
+    await close(accountServer);
+    const unavailableResume = await web(origin, 'POST', '/lp/open', null,
+      { 'x-promptcut-protocols': `promptcut.v1, promptcut.session.${lpBody.sid}.0` });
+    assert.equal(unavailableResume.status, 503);
+    const unavailableWs = new WebSocket(`ws://127.0.0.1:${addr.port}`,
+      ['promptcut.v1', `promptcut.session.${welcome.sid}.0`]);
+    unavailableWs.addEventListener('error', () => {});
+    const unavailableWsClose = await timeout(new Promise(resolve => unavailableWs.addEventListener('close', resolve, { once: true })),
+      'unavailable WS resume');
+    assert.equal(unavailableWsClose.code, 1012);
+    await listen(accountServer, 5823);
+    const crashRoot = path.join(dir, 'crash'); fs.mkdirSync(crashRoot);
+    const crashLedgerFile = path.join(crashRoot, 'ledger.sqlite');
+    const crashDataDir = path.join(crashRoot, 'docservice');
+    const crashBody = { name: 'Crash-retry project', requestId: 'crash-retry-create', initialProject: { tracks: [{ id: 'persisted' }] } };
+    const privateKeyFile = path.join(crashRoot, 'signing.pem');
+    fs.writeFileSync(privateKeyFile, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }));
+    const moduleUrl = rel => pathToFileURL(path.resolve(rel)).href;
+    const childFile = path.join(crashRoot, 'crash-child.mjs');
+    fs.writeFileSync(childFile, `
+import fs from 'node:fs';
+import path from 'node:path';
+import { openAccountLedger } from ${JSON.stringify(moduleUrl('server/account/ledger.mjs'))};
+import { createAccountClient } from ${JSON.stringify(moduleUrl('server/account/client.mjs'))};
+import { createAccountHostedRuntime } from ${JSON.stringify(moduleUrl('server/docservice/account-hosted.mjs'))};
+const root = process.env.PC_CRASH_ROOT;
+const originalOpen = fs.openSync, originalSync = fs.fsyncSync;
+const files = new Map();
+fs.openSync = (file, ...rest) => { const fd = originalOpen(file, ...rest); files.set(fd, String(file)); return fd; };
+fs.fsyncSync = fd => {
+  originalSync(fd);
+  const file = files.get(fd) || '';
+  if (file.includes('tenants') && file.endsWith('.json') && !file.includes('.tmp-')) {
+    fs.writeSync(1, 'crashed-after-initializer-snapshot-fsync\\n');
+    process.exit(86);
+  }
+};
+const tls = { key: fs.readFileSync(path.join(root, 'doc.key')),
+  cert: fs.readFileSync(path.join(root, 'doc.crt')), ca: fs.readFileSync(path.join(root, 'ca.crt')) };
+const client = createAccountClient({ origin: process.env.PC_ACCOUNT_ORIGIN, tls,
+  serverFingerprint256: process.env.PC_ACCOUNT_PIN });
+const ledger = openAccountLedger({ file: process.env.PC_CRASH_LEDGER, authorityId: 'doc-crash-fixture' });
+const runtime = createAccountHostedRuntime({ ledger, accountClient: client, dataDir: process.env.PC_CRASH_DATA,
+  authorityUrl: 'https://fixture.invalid/editor', signingKey: fs.readFileSync(path.join(root, 'crash/signing.pem')),
+  keyId: 'fixture', pollMs: 0 });
+await runtime.start();
+await runtime.authority.createProject({ accessToken: process.env.PC_ACCOUNT_TOKEN }, ${JSON.stringify(crashBody)});
+process.exit(0);
+`);
+    const crashResult = await new Promise(resolve => {
+      const child = spawn(process.execPath, [childFile], { windowsHide: true,
+        env: { ...process.env, PC_CRASH_ROOT: dir, PC_CRASH_LEDGER: crashLedgerFile, PC_CRASH_DATA: crashDataDir,
+          PC_ACCOUNT_ORIGIN: `https://127.0.0.1:5823`,
+          PC_ACCOUNT_PIN: new X509Certificate(tls.account.cert).fingerprint256,
+          PC_ACCOUNT_TOKEN: editorA.accessToken } });
+      let output = ''; child.stdout.on('data', chunk => { output += chunk.toString(); });
+      child.stderr.on('data', chunk => { output += chunk.toString(); });
+      child.on('close', code => resolve({ code, output }));
+    });
+    assert.equal(crashResult.code, 86, crashResult.output);
+    assert.match(crashResult.output, /crashed-after-initializer-snapshot-fsync/);
+    const recoveryLedger = openAccountLedger({ file: crashLedgerFile, authorityId: 'doc-crash-fixture' });
+    const pending = Object.values(recoveryLedger.read().projects);
+    assert.equal(pending.length, 1); assert.equal(pending[0].status, 'pending');
+    const persisted = createFileStore({ dir: path.join(crashDataDir, 'tenants', pending[0].projectId), log: () => {} });
+    assert.ok(persisted.readBlob(stateBlobName(pending[0].projectId)));
+    assert.equal(persisted.read(`projects/${pending[0].projectId}`).length, 1);
+    const recoveryClient = createAccountClient({ origin: `https://127.0.0.1:5823`, tls: tls.doc,
+      serverFingerprint256: new X509Certificate(tls.account.cert).fingerprint256 });
+    recovery = createAccountHostedRuntime({ ledger: recoveryLedger, accountClient: recoveryClient, dataDir: crashDataDir,
+      authorityUrl: 'https://fixture.invalid/editor', signingKey: fs.readFileSync(privateKeyFile), keyId: 'fixture', pollMs: 0 });
+    await recovery.start();
+    const retried = await recovery.authority.createProject({ accessToken: editorA.accessToken }, crashBody);
+    const repeat = await recovery.authority.createProject({ accessToken: editorA.accessToken }, crashBody);
+    assert.deepEqual(repeat, retried); assert.equal(retried.projectId, pending[0].projectId);
+    assert.equal(recoveryLedger.read().projects[retried.projectId].status, 'active');
+    assert.equal(persisted.read(`projects/${retried.projectId}`).length, 1);
     const logout = provider.logoutLogin(editorA.loginId, Date.now());
     const after = next(ws, 'error', 'revoked-error'); ws.send(JSON.stringify({ type: 'project.open', projectId }));
     assert.ok(['credential-revoked', 'authorization-expired'].includes((await after).reason));
