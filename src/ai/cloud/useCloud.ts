@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { getChatStore, useChatMessages, type ChatStore } from "../liveChat";
 import { getState } from "../../store/project";
 import { useSync, currentDocProjectId } from "../../editor/sync/syncManager";
+import { selectionPresenceStatus } from "../../editor/sync/selectionPresence";
 import { getTabCreativity } from "../agentTabs";
 import { getScript } from "../script";
 import { mediaCardUrl } from "../mediaRef";
@@ -238,6 +239,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const [histItems, setHistItems] = useState<CloudChatItem[]>([]);
   const [histLoading, setHistLoading] = useState(false);
   const sessionRef = useRef<CloudSession | null>(null);
+  const pendingSendRef = useRef<{ key: string; conversationId: string; text: string; requestId: string } | null>(null);
   const sessionKeyRef = useRef("");
   const convRef = useRef(conversationId);
   convRef.current = conversationId;
@@ -356,8 +358,18 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       ...(model ? { model } : {}),
       ...(sent.length ? { attachments: sent.map((a) => ({ url: a.url })) } : {}),
     };
+    if (cloud.accountMode) {
+      const presence = selectionPresenceStatus();
+      if (!presence.linked || !presence.pageId || presence.unsupported) { setNotice('当前页面选区尚未连接，请稍后重试。'); return false; }
+      const pending = pendingSendRef.current;
+      if (!pending || pending.key !== key || pending.conversationId !== s.conversationId || pending.text !== body.prompt)
+        pendingSendRef.current = { key, conversationId: s.conversationId!, text: body.prompt, requestId: crypto.randomUUID() };
+      body.requestId = pendingSendRef.current!.requestId;
+      body.selectionSnapshot = { pageId: presence.pageId };
+    }
     try {
       await s.send(body, sent.length ? bubbleAttachments(sent) : undefined);
+      pendingSendRef.current = null;
       return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
@@ -414,7 +426,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   return {
     store,
     messages: blocked ? [] : messages,
-    view: blocked ? { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 } : view,
+    view: blocked ? { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0, queue: null, senders: {} } : view,
     info: blocked ? null : info,
     notice,
     clearNotice: () => setNotice(null),

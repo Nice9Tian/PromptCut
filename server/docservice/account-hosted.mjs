@@ -32,6 +32,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   const docInstanceId = randomUUID();
   const memoryStores = new Map();
   let service = null;
+  let hostedConfig = null;
   let assetReady = false;
   async function requireAssetReady({ expectedInstanceId } = {}) {
     if (!assetReadyProbe) {
@@ -193,15 +194,23 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       assetReady = value === true;
     },
     requireAssetReady,
-    bindService(value) { service = value; },
+    bindService(value, config = null) { service = value; hostedConfig = config; },
     async pageFenceReceipt(eventId) { return pageFences.get(eventId) ?? null; },
     async start() { return authority.start(); },
     async issueSession({ principal, deviceId, expectedAssetInstanceId }) {
       await requireAssetReady({ expectedInstanceId: expectedAssetInstanceId });
+      principal = await authority.authorizePrincipal({ authorizationId: principal.authorizationId }, { projectId: principal.projectId });
       const expiresAt = Math.min(principal.expiresAt, now() + 5 * 60_000);
       if (expiresAt <= now()) fail(401, 'credential-revoked');
       for (const [ticket, entry] of tickets) if (entry.expiresAt <= now()) tickets.delete(ticket);
-      return { connectionTicket: issue('conn', principal, deviceId, expiresAt),
+      const project = ledger.read().projects[principal.projectId];
+      hostedConfig?.registry?.refresh({ force: true });
+      const registered = hostedConfig?.registry?.get('agent');
+      const available = registered?.role === 'agent' && registered?.actsFor === 'member' && registered.keys?.length > 0;
+      const url = available && typeof hostedConfig?.urls?.agent === 'string' ? hostedConfig.urls.agent : null;
+      return { projectId: principal.projectId, creator: principal.creator === true, access: principal.access,
+        accessRevision: principal.accessRevision, hosted: { agent: { available: Boolean(available), enabled: project.hosted?.agent === true, url } },
+        connectionTicket: issue('conn', principal, deviceId, expiresAt),
         assetTicket: issue('asset', principal, deviceId, expiresAt),
         agentDelegationTicket: issue('agent', principal, deviceId, expiresAt), expiresAt };
     },

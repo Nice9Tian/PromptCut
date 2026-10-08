@@ -86,7 +86,7 @@ try {
   'logout' { $value=Http '/api/account/editor/logout' @{} $argsData.accessToken
     if ($value.ok -or $value.status -eq 401) { if ([IO.File]::Exists($file)) { [IO.File]::Delete($file) } }; $result=$value }
   'request' { $path=$argsData.path
-    $projectRoute=$path -in @('/hosted/shared/account/create','/hosted/shared/account/join','/hosted/shared/account/session')
+    $projectRoute=$path -in @('/hosted/shared/account/create','/hosted/shared/account/join','/hosted/shared/account/session','/hosted/shared/account/admin')
     $consentRoute=$path -eq '/api/account/cloud-agent-consent'
     if (!$projectRoute -and !$consentRoute) { throw 'bad-path' }
     if (!$argsData.accessToken) { throw 'bad-request' }

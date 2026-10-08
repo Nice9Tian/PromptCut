@@ -1,7 +1,11 @@
 /** Account credentials live in RAM. Only the native vault owns desktop recovery. */
 export interface Account { id: string; name: string; email?: string | null }
 export interface EditorLogin { account: Account; loginId: string; accessToken: string; accessExpiresAt: number }
-export interface ProjectSession { connectionTicket: string; assetTicket: string; expiresAt: number }
+export interface ProjectSession {
+  connectionTicket: string; assetTicket: string; agentDelegationTicket: string; expiresAt: number;
+  projectId: string; creator: boolean; access: 'r' | 'rw'; accessRevision: number;
+  hosted: { agent: { available: boolean; enabled: boolean; url: string | null } };
+}
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
 export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
@@ -138,8 +142,16 @@ export function createAccountClient(options: AccountClientOptions) {
     async create(name: string, initialProject: unknown, requestId: string): Promise<{ projectId: string; authorityId: string }> {
       const current = await ensureLogin(); return await request('/hosted/shared/account/create', { name, initialProject, allowLinkJoin: true, requestId }, current.accessToken) as any;
     },
-    async join(projectId: string, requestId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/join', { projectId, deviceId: options.device.deviceId, requestId }, current.accessToken), now()); },
-    async session(projectId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now()); },
+    async setAgentEnabled(projectId: string, enabled: boolean, expectedAccessRevision: number, requestId: string) {
+      const current = await ensureLogin();
+      const out = await request('/hosted/shared/account/admin', { projectId, enabled, expectedAccessRevision, requestId,
+        op: 'set-hosted-service', service: 'agent' }, current.accessToken);
+      if (typeof out.eventId !== 'string' || !Number.isSafeInteger(out.accessRevision) || out.completed !== false || out.state !== 'pending-services')
+        throw new AccountFailure(503, 'account-protocol');
+      return { eventId: out.eventId as string, accessRevision: out.accessRevision as number, completed: false as const };
+    },
+    async join(projectId: string, requestId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/join', { projectId, deviceId: options.device.deviceId, requestId }, current.accessToken), now(), projectId); },
+    async session(projectId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now(), projectId); },
   };
 }
 function validateConsent(value: Record<string, any>, accountId: string): CloudAgentConsent {
@@ -147,9 +159,15 @@ function validateConsent(value: Record<string, any>, accountId: string): CloudAg
     (value.acceptedAt !== undefined && !Number.isSafeInteger(value.acceptedAt))) throw new AccountFailure(503, 'account-protocol');
   return { accountId, accepted: value.accepted, noticeVersion: 1, ...(value.acceptedAt !== undefined ? { acceptedAt: value.acceptedAt } : {}) };
 }
-function validateSession(value: Record<string, any>, now: number): ProjectSession {
-  if (!['connectionTicket', 'assetTicket'].every(k => typeof value[k] === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value[k])) ||
-    !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now) throw new AccountFailure(503, 'session-unavailable');
-  return { connectionTicket: value.connectionTicket, assetTicket: value.assetTicket, expiresAt: value.expiresAt };
+function validateSession(value: Record<string, any>, now: number, projectId: string): ProjectSession {
+  const agent = value.hosted?.agent;
+  if (!['connectionTicket', 'assetTicket', 'agentDelegationTicket'].every(k => typeof value[k] === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value[k])) ||
+    !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.projectId !== projectId ||
+    typeof value.creator !== 'boolean' || !['r', 'rw'].includes(value.access) || !Number.isSafeInteger(value.accessRevision) || value.accessRevision < 0 ||
+    !agent || typeof agent.available !== 'boolean' || typeof agent.enabled !== 'boolean' ||
+    !(agent.url === null || (typeof agent.url === 'string' && /^https?:\/\//.test(agent.url)))) throw new AccountFailure(503, 'session-unavailable');
+  return { connectionTicket: value.connectionTicket, assetTicket: value.assetTicket, agentDelegationTicket: value.agentDelegationTicket,
+    expiresAt: value.expiresAt, projectId, creator: value.creator, access: value.access, accessRevision: value.accessRevision,
+    hosted: { agent: { available: agent.available, enabled: agent.enabled, url: agent.url } } };
 }
 export type CloudAccountClient = ReturnType<typeof createAccountClient>;

@@ -41,7 +41,7 @@ export function createAccountConversationService({ conversationClient, now = Dat
       call('switchVisibility', identity, conversationId, { visibility, requestId }),
     rename: (identity, conversationId, title) => call('rename', identity, conversationId, { title }),
     abort: (identity, conversationId, runId, requestId = randomUUID()) => call('stop', identity, conversationId, { runId, requestId }),
-    async info(identity) { await call('identity', identity); return { enabled: true, accountMode: true, running: [] }; },
+    async info(identity) { await call('identity', identity); return { enabled: true, accountMode: true, executorMounted: false, running: [] }; },
     async usage(identity) { await call('identity', identity); throw new AgentServiceError('usage-unavailable', 'usage authority is not mounted', 503); },
     async attach(identity) { await call('identity', identity); throw new AgentServiceError('attachment-unavailable', 'attachment authority is not mounted', 503); },
     async pageResult(identity) { await call('identity', identity); throw new AgentServiceError('run-unavailable', 'run authority is not mounted', 503); },

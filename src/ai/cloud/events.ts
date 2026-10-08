@@ -11,9 +11,10 @@
 import type { ChatAttachment, ChatMessage, MessagePart } from "../types.ts";
 import { appendTextPart, appendThinkingPart } from "../streamBatch.ts";
 import { cloudAttachKind } from "./attach.ts";
-import type { CloudEvent } from "./types.ts";
+import type { CloudEvent, CloudQueueSnapshot } from "./types.ts";
 
 export const userMessageId = (runId: string) => `cu-${runId}`;
+export const accountMessageId = (messageId: string) => `cq-${messageId}`;
 export const assistantMessageId = (runId: string) => `ca-${runId}`;
 
 /** 每个收尾原因在对话里留给人看的话(契约 7.3 节)。服务端的 `error.message` 优先,没给才用这里的 */
@@ -99,6 +100,11 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
   const runId = typeof ev.runId === "string" ? ev.runId : undefined;
 
   if (ev.type === "user") {
+    if (typeof ev.messageId === 'string' && ev.messageId && typeof ev.prompt === 'string' &&
+      Number.isSafeInteger(ev.seq) && Number(ev.seq) > 0 && typeof ev.senderAccountId === 'string' && typeof ev.senderNameAtSend === 'string') {
+      const id = accountMessageId(ev.messageId);
+      return messages.some(message => message.id === id) ? messages : [...messages, { id, role: 'user', text: ev.prompt }];
+    }
     if (!runId || messages.some((m) => m.id === userMessageId(runId))) return messages;
     const at = typeof ev.at === "number" ? ev.at : undefined;
     return [
@@ -181,6 +187,28 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
     default:
       return messages;
   }
+}
+
+/** Queue revision is independent from the arrival cursor; all rows are authoritative. */
+export function queueSnapshot(ev: CloudEvent, conversationId: string): CloudQueueSnapshot | null {
+  if (ev.type !== 'queue.state' || ev.conversationId !== conversationId || !Number.isSafeInteger(ev.queueRevision) || Number(ev.queueRevision) < 0 ||
+    !Number.isSafeInteger(ev.aclRevision) || Number(ev.aclRevision) < 0 || !(ev.currentRunId === null || typeof ev.currentRunId === 'string') || !Array.isArray(ev.items)) return null;
+  const ids = new Set<string>(); const positions = new Set<number>();
+  for (const item of ev.items) {
+    if (!item || typeof item.messageId !== 'string' || !item.messageId || ids.has(item.messageId) ||
+      !Number.isSafeInteger(item.arrivalSeq) || item.arrivalSeq < 1 || !['queued', 'preparing', 'running', 'done', 'cancelled'].includes(item.state) ||
+      !(item.runId === null || typeof item.runId === 'string')) return null;
+    ids.add(item.messageId);
+    if (item.state === 'queued') {
+      if (!Number.isSafeInteger(item.position) || item.position < 1 || positions.has(item.position)) return null;
+      positions.add(item.position);
+    } else if (item.position !== null) return null;
+  }
+  if ([...positions].some(value => value > positions.size)) return null;
+  const pending = [...ev.items].filter(item => item.state === 'queued').sort((a, b) => a.arrivalSeq - b.arrivalSeq);
+  if (pending.some((item, index) => item.position !== index + 1)) return null;
+  return { conversationId, queueRevision: Number(ev.queueRevision), aclRevision: Number(ev.aclRevision),
+    currentRunId: ev.currentRunId as string | null, items: ev.items.map(item => ({ ...item })) };
 }
 
 /** 按顺序折一串事件;文字与思考的增量由调用方先攒批再交进来也一样(这里一条一条折,结果相同) */

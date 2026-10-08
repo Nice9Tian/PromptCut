@@ -8,7 +8,7 @@
 import { parseSseChunks } from "../sse.ts";
 import { CloudDelegationError, CloudIdentityError, cloudGrant, cloudTicket } from "./identity.ts";
 import { CLOUD_ATTACH_TOO_LARGE, normalizeAttachmentInfo, type CloudAttachmentInfo } from "./attach.ts";
-import type { CloudChatItem, CloudChatState, CloudEvent, CloudInfo, CloudSendBody } from "./types.ts";
+import type { CloudChatItem, CloudChatState, CloudEvent, CloudInfo, CloudSendBody, CloudSendAccepted } from "./types.ts";
 
 export class CloudError extends Error {
   readonly code: string;
@@ -81,6 +81,7 @@ export function normalizeInfo(raw: Record<string, unknown>): CloudInfo {
   const limits = raw.limits && typeof raw.limits === "object" ? (raw.limits as Record<string, unknown>) : {};
   const usage = raw.usage && typeof raw.usage === "object" ? (raw.usage as Record<string, unknown>) : undefined;
   return {
+    ...(raw.accountMode === true ? { accountMode: true, executorMounted: raw.executorMounted === true } : {}),
     enabled: raw.enabled !== false,
     models,
     defaultModel: typeof raw.defaultModel === "string" ? raw.defaultModel : null,
@@ -94,6 +95,10 @@ export function normalizeChatItem(raw: Record<string, unknown>): CloudChatItem |
   if (typeof raw.id !== "string" || !raw.id) return null;
   const state = typeof raw.state === "string" && STATES.has(raw.state) ? (raw.state as CloudChatState) : "idle";
   return {
+    ...(raw.v === 2 ? { projectId: typeof raw.projectId === 'string' ? raw.projectId : undefined,
+      ownerAccountId: typeof raw.ownerAccountId === 'string' ? raw.ownerAccountId : undefined,
+      visibility: raw.visibility === 'private' ? 'private' as const : 'shared' as const,
+      creatorReadOnly: raw.creatorReadOnly === true, queueRevision: num(raw.queueRevision) } : {}),
     id: raw.id,
     title: typeof raw.title === "string" && raw.title ? raw.title : "云端对话",
     updatedAt: num(raw.updatedAt),
@@ -168,7 +173,7 @@ export function createCloudApi(deps: CloudApiDeps) {
     },
 
     /** 发一条消息、起一轮。回 202:这一轮从此与这个请求无关 */
-    async send(conversationId: string, body: CloudSendBody): Promise<{ runId: string; seq: number }> {
+    async send(conversationId: string, body: CloudSendBody): Promise<CloudSendAccepted> {
       // 对话委托要不到(开关关了、连接断着)就不发:不带它服务端只会回 bad-grant,原因反而说不清
       let grant: string | undefined;
       try {
@@ -177,7 +182,14 @@ export function createCloudApi(deps: CloudApiDeps) {
         throw identityError(err);
       }
       const res = await request(`/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", json: { ...body, ...(grant ? { grant } : {}) } });
-      const out = (await res.json()) as { runId?: string; seq?: number };
+      const out = (await res.json()) as Record<string, any>;
+      if (out.messageId !== undefined) {
+        if (typeof out.messageId !== 'string' || !out.messageId || out.runId !== null ||
+          !Number.isSafeInteger(out.seq) || out.seq <= 0 || !Number.isSafeInteger(out.queuePosition) || out.queuePosition < 1 ||
+          !Number.isSafeInteger(out.queueRevision) || out.queueRevision < out.seq || out.conversation?.id !== conversationId)
+          throw new CloudError('unavailable', '云端排队确认无效，请重新读取对话。', 503);
+        return { runId: null, seq: out.seq, messageId: out.messageId, queuePosition: out.queuePosition, queueRevision: out.queueRevision };
+      }
       return { runId: String(out.runId ?? ""), seq: num(out.seq) };
     },
 

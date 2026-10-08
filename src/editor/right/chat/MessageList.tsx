@@ -1,5 +1,6 @@
 import React, { useRef, useLayoutEffect, useReducer } from "react";
 import type { ChatMessage } from "../../../ai/types";
+import type { CloudSender } from "../../../ai/cloud/types";
 import type { useInstallJobs } from "../../../ai/sttInstallStore";
 import { UserBubble, type RewindHandlers } from "./UserBubble";
 import { AgentBubble } from "./AgentBubble";
@@ -88,6 +89,7 @@ function formatStamp(ts: number): string {
 }
 
 interface MessageRowProps {
+  sender?: CloudSender;
   m: ChatMessage;
   view: ViewMode;
   showThinking: boolean;
@@ -126,6 +128,7 @@ const MessageRow = /* @__PURE__ */ React.memo(function MessageRow(props: Message
   if (m.role === "user") {
     return (
       <div className="ai-row ai-row--user" data-pc-msg={m.id}>
+        {props.sender && <span className="pc-cloud-sender" data-pc="cloud-message-sender" data-account-id={props.sender.accountId}>{props.sender.name}</span>}
         <UserBubble m={m} rewind={props.rewind} />
       </div>
     );
@@ -153,10 +156,11 @@ const MessageRow = /* @__PURE__ */ React.memo(function MessageRow(props: Message
 }, (a, b) =>
   a.m === b.m && a.view === b.view && a.showThinking === b.showThinking && a.installJobs === b.installJobs &&
   a.openKeys === b.openKeys && a.runKeys === b.runKeys && a.on === b.on && a.rewind === b.rewind &&
-  a.inboundKey === b.inboundKey && sameList(a.followers, b.followers)
+  a.inboundKey === b.inboundKey && a.sender === b.sender && sameList(a.followers, b.followers)
 );
 
 export interface MessageListProps {
+  senders?: Record<string, CloudSender>;
   messages: ChatMessage[];
   view: ViewMode;
   showThinking: boolean;
@@ -495,6 +499,7 @@ export function MessageList(props: MessageListProps) {
           <MessageRow
             key={m.id}
             m={m}
+            sender={props.senders?.[m.id]}
             view={view}
             showThinking={showThinking}
             installJobs={installJobs}

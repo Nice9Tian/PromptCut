@@ -140,7 +140,13 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
   /** Account-v2 stream: authorize before headers and on every poll/event. Doc remains
    * the source of the durable queue; this stream has no model output until run wiring. */
   async function accountEvents(req, res, identity, conversationId, after) {
-    let view = await service.conversation(identity, conversationId, after);
+    let view;
+    try { view = await service.conversation(identity, conversationId, 0); }
+    catch (error) {
+      if (error?.status !== 404) throw error;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', ...CORS });
+      res.end('data: {"type":"end","state":"none","seq":0}\n\n'); return;
+    }
     if (!view) return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
     const owner = identity.accountId;
     if (streams >= MAX_STREAMS || (streamsByOwner.get(owner) ?? 0) >= MAX_STREAMS_PER_OWNER)
@@ -149,7 +155,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive',
       'X-Accel-Buffering': 'no', ...CORS });
     res.flushHeaders?.();
-    let cursor = after; let released = false; let polling = false;
+    let cursor = after; let released = false; let polling = false; let queueRevision = -1; let aclRevision = -1;
     const release = () => {
       if (released) return;
       released = true; clearInterval(timer); openStreams.delete(entry);
@@ -162,16 +168,30 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       if (polling || released || res.destroyed) return;
       polling = true;
       try {
-        view = await service.conversation(identity, conversationId, cursor);
+        view = await service.conversation(identity, conversationId, 0);
         for (const message of view.messages ?? []) {
           if (released || res.destroyed) break;
-          // Recheck even when a batch was fetched before a private switch or kick.
-          await service.access(identity, conversationId, 'read');
           if (message.arrivalSeq <= cursor) continue;
+          // Recheck even when a batch was fetched before a private switch or kick.
+          const access = await service.access(identity, conversationId, 'read');
+          if (released || res.destroyed) break;
+          if (access.allowed !== true || access.aclRevision !== view.aclRevision) return;
           res.write(`data: ${JSON.stringify({ type: 'user', seq: message.arrivalSeq, messageId: message.messageId,
             prompt: message.content, senderAccountId: message.senderAccountId, senderNameAtSend: message.senderNameAtSend,
             queueState: message.queueState })}\n\n`);
           cursor = message.arrivalSeq;
+        }
+        if (!released && !res.destroyed && (view.queueRevision !== queueRevision || view.aclRevision !== aclRevision)) {
+          const access = await service.access(identity, conversationId, 'read');
+          if (released || res.destroyed) return;
+          if (access.allowed !== true || access.aclRevision !== view.aclRevision) return;
+          const pending = (view.messages ?? []).filter(row => row.queueState === 'queued').sort((a, b) => a.arrivalSeq - b.arrivalSeq);
+          const positions = new Map(pending.map((row, index) => [row.messageId, index + 1]));
+          res.write(`data: ${JSON.stringify({ type: 'queue.state', conversationId,
+            queueRevision: view.queueRevision, aclRevision: view.aclRevision, currentRunId: view.currentRunId,
+            items: (view.messages ?? []).map(row => ({ messageId: row.messageId, arrivalSeq: row.arrivalSeq,
+              state: row.queueState, position: positions.get(row.messageId) ?? null, runId: row.runId ?? null })) })}\n\n`);
+          queueRevision = view.queueRevision; aclRevision = view.aclRevision;
         }
         if (!released && !res.destroyed) res.write(': ping\n\n');
       } catch {

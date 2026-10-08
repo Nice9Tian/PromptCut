@@ -17,7 +17,8 @@ import { useViewPrefs, setShowThinking } from "./chat/viewPrefs";
 import { ChatHeader } from "./chat/ChatHeader";
 import { MessageList } from "./chat/MessageList";
 import { ThinkingStrip } from "./chat/ThinkingStrip";
-import { QueueList } from "./chat/QueueList";
+import { CloudQueueList, QueueList } from "./chat/QueueList";
+import { setAccountAgentEnabled, useSync } from "../sync/syncManager";
 import { Composer } from "./chat/Composer";
 import { CloudModelBar } from "./CloudModelBar";
 import { AgentEventLog } from "../sync/AgentEventLog";
@@ -61,6 +62,8 @@ export function CloudAiPanel(props: {
   const tabId = props.tabId ?? MAIN_TAB;
   const active = props.active ?? true;
   const { cloud, desktop } = props;
+  const creator = useSync(state => state.shared?.creator === true);
+  const [enabling, setEnabling] = useState(false);
   const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
   const [consentOpen, setConsentOpen] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
@@ -183,7 +186,7 @@ export function CloudAiPanel(props: {
 
   const sendNow = async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
     if (off || !stillCurrent()) return false;
-    markSent();
+    if (!cloud.accountMode) markSent();
     const ok = await chat.send(text, files);
     if (!stillCurrent()) return false;
     if (!ok) { echoWait.current = false; bump((n) => n + 1); }
@@ -202,7 +205,7 @@ export function CloudAiPanel(props: {
       return;
     }
     if (skipped > 0) chat.notify(`${skipped} 个附件还在上传或上传失败,这次没带上。`);
-    if (busy()) {
+    if (!cloud.accountMode && busy()) {
       enqueue(qKey, { text: text.trim(), ...(usable.length ? { attachments: usable } : {}) });
     } else {
       if (!await sendNow(text.trim(), usable)) return;
@@ -216,6 +219,7 @@ export function CloudAiPanel(props: {
   // 一轮结束:空闲且没暂停就发队首
   const flushingRef = useRef(false);
   useEffect(() => {
+    if (cloud.accountMode) return;
     if (view.streaming || echoWait.current || off) return;
     if (queue.paused || queue.items.length === 0) return;
     if (flushingRef.current) return;
@@ -387,6 +391,8 @@ export function CloudAiPanel(props: {
 
       {!cloud.available && <div className="ai-banner" data-pc="cloud-unavailable">这个项目所在的托管端没有云端 Agent 服务。</div>}
       {cloud.available && off && <div className="ai-banner" data-pc="cloud-off">{offText}</div>}
+      {cloud.accountMode && cloud.available && off && creator && <button type="button" data-pc="cloud-agent-enable" disabled={enabling}
+        onClick={() => { setEnabling(true); void setAccountAgentEnabled(true).catch(error => chat.notify(error instanceof Error ? error.message : '暂时无法开启云端 Agent。')).finally(() => setEnabling(false)); }}>开启云端 Agent</button>}
       {view.connection === "reconnecting" && (
         <div className="ai-banner pc-cloud-reconnect" data-pc="cloud-reconnecting">
           和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。
@@ -396,6 +402,7 @@ export function CloudAiPanel(props: {
       <RemoteAgentsStrip />
       <MessageList
         messages={chat.messages}
+        senders={view.senders}
         view={viewMode}
         showThinking={showThinking}
         installJobs={installJobs}
@@ -407,12 +414,13 @@ export function CloudAiPanel(props: {
 
       <AgentEventLog />
       <ThinkingStrip messages={chat.messages} streaming={view.streaming} />
-      <QueueList tabId={qKey} running={view.streaming} onInsert={insertQueued} onEdit={editQueued} onResume={resumeQueue} hasDraft={hasDraft} />
+      {cloud.accountMode ? <CloudQueueList queue={view.queue} messages={chat.messages} senders={view.senders} /> :
+        <QueueList tabId={qKey} running={view.streaming} onInsert={insertQueued} onEdit={editQueued} onResume={resumeQueue} hasDraft={hasDraft} />}
 
       {chat.notice && (
         <div className="ai-toast" data-pc="cloud-notice" role="alert" onClick={chat.clearNotice} title="点一下关掉">{chat.notice}</div>
       )}
-      <div className="pc-cloud-note" data-pc="cloud-note">在云端运行,关闭后继续;重新打开可接着看</div>
+      <div className="pc-cloud-note" data-pc="cloud-note">{cloud.accountMode && chat.info?.executorMounted !== true ? '消息会持久排队，等待执行服务；重新打开可接着看。' : '在云端运行,关闭后继续;重新打开可接着看'}</div>
 
       <Composer
         text={inputText}

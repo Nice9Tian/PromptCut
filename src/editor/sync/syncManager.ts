@@ -37,7 +37,7 @@ import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
 import { applyHostedChange, HOSTED_SERVICE_TEXT, parseHosted, type HostedServiceName, type HostedView } from "./hostedServices";
 import { clearHostedAgent, setHostedAgent, setHostedAgentEnabled } from "../../ai/cloud/endpoint";
-import { CloudDelegationError, setCloudIdentity, type CloudIdentity } from "../../ai/cloud/identity";
+import { accountCloudIdentity, CloudDelegationError, setCloudIdentity, type CloudIdentity } from "../../ai/cloud/identity";
 import { setCloudConsentSource } from "../../ai/cloud/consent";
 
 /**
@@ -245,6 +245,7 @@ interface Current {
   offs: (() => void)[];
   /** Change the in-memory proof used by subsequent reconnects after a successful own-password update. */
   updateAuthentication?: (key: string) => void;
+  setAccountAgentEnabled?: (enabled: boolean) => Promise<void>;
 }
 
 let cur: Current | null = null;
@@ -1076,7 +1077,16 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   const origin = new URL(options.origin).origin, base = `${origin}/hosted/`, url = hostedWsUrlOf(base);
   let current = options.firstSession ?? await options.client.session(options.projectId);
   let first = true, stopped = false, renewing: Promise<ProjectSession> | null = null;
-  const renew = () => renewing ??= options.client.session(options.projectId).then(value => current = value).finally(() => { renewing = null; });
+  const projectAccountId = options.client.account?.id;
+  const isCurrent = () => !stopped && cur?.link === link && options.client.account?.id === projectAccountId;
+  const projectSession = (value: ProjectSession) => {
+    if (!isCurrent()) return;
+    patch({ shared: view.shared ? { ...view.shared, creator: value.creator } : null, hosted: value.hosted });
+    setHostedAgent(options.projectId, value.hosted.agent);
+  };
+  const renew = () => renewing ??= options.client.session(options.projectId).then(value => {
+    current = value; projectSession(value); return value;
+  }).finally(() => { renewing = null; });
   const protocols = async () => { if (stopped) throw new AccountFailure(401, 'credential-revoked');
     if (first) first = false; else await renew(); return accountConnectionProtocols(current); };
   const ticket = Object.assign(async () => (await ticket.info())?.ticket ?? null, {
@@ -1090,7 +1100,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   let ready = false;
   let resolveEntry!: () => void, rejectEntry!: (error: unknown) => void;
   const opened = new Promise<void>((resolve, reject) => { resolveEntry = resolve; rejectEntry = reject; });
-  const fail = (error: unknown) => { stopped = true; link.stop(); if (cur?.link === link) setCloudConsentSource(null); if (!ready) rejectEntry(error);
+  const fail = (error: unknown) => { stopped = true; link.stop(); if (cur?.link === link) { setCloudConsentSource(null); setCloudIdentity(null); } if (!ready) rejectEntry(error);
     else { disconnectSharedAssets(); pushToast(error instanceof Error ? error.message : '云端登录已失效，请重新登录。', 'warn', Infinity); } };
   const link = new SyncLink({ url, projectId: options.projectId, initial: options.initial, initialize: false, session,
     protocols, resumeProtocols: async () => { await renew(); return accountConnectionProtocols(current); },
@@ -1104,8 +1114,27 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       if (!account) throw new AccountFailure(401, 'login-required');
       recoveryCoordinator.cancel(); releaseHolding(); setAssociation(null); clearSharedResume();
       patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
-        username: account.name, accountId: account.id, creator: false }, members: [], hosted: null, blocked: null, association: null, reopenState: null });
+        username: account.name, accountId: account.id, creator: current.creator }, members: [], hosted: current.hosted, blocked: null, association: null, reopenState: null });
       bind(link, 'shared', options.projectId, url, options.client);
+      projectSession(current);
+      setCloudIdentity(accountCloudIdentity({ projectId: options.projectId, isCurrent, session: async () => {
+        if (current.expiresAt <= Date.now() + 60_000) await renew();
+        return current;
+      } }));
+      if (cur?.link === link) cur.setAccountAgentEnabled = async enabled => {
+        if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
+        await renew();
+        if (!isCurrent() || !current.creator) throw new AccountFailure(403, 'creator-required');
+        await options.client.setAgentEnabled(options.projectId, enabled, current.accessRevision, crypto.randomUUID());
+        await renew();
+      };
+      if (cur?.link === link) {
+        const metadataTimer = setInterval(() => {
+          if (!isCurrent()) return;
+          void renew().catch(error => { if (error instanceof AccountFailure && (error.status === 401 || error.status === 403)) fail(error); });
+        }, 3000);
+        cur.offs.push(() => clearInterval(metadataTimer));
+      }
       await connectSharedAssets(link, base, { online: ONLINE_BUILD || ONLINE, account: { base: `${origin}/media/api/asset`, projectId: options.projectId, ticket } });
       link.send({ type: 'events.list' });
       ready = true; resolveEntry();
@@ -1656,12 +1685,23 @@ export async function adminOp(
  * (服务端随后还会推一条刷新后的成员列表,以它为准)。
  */
 export async function setHostedService(service: HostedServiceName, enabled: boolean, key: string): Promise<{ ok: true } | { ok: false; error: AdminError }> {
+  if (view.shared?.accountId) {
+    if (service !== 'agent') return { ok: false, error: 'forbidden' };
+    try { await setAccountAgentEnabled(enabled); return { ok: true }; }
+    catch { return { ok: false, error: 'other' }; }
+  }
   const r = await adminOp("set-hosted-service", { key }, { service, enabled });
   if (!r.ok) return r;
   patch({ hosted: applyHostedChange(view.hosted, service, enabled) });
   // 创建者自己这一页的 AI 栏也马上跟着变(通知只发给别的连接)
   if (service === "agent") setHostedAgentEnabled(view.shared?.projectId ?? currentDocProjectId(), enabled);
   return { ok: true };
+}
+
+/** The account branch uses the live bearer/admin revision; no legacy password challenge. */
+export async function setAccountAgentEnabled(enabled: boolean): Promise<void> {
+  if (!cur?.setAccountAgentEnabled) throw new AccountFailure(503, 'session-unavailable');
+  await cur.setAccountAgentEnabled(enabled);
 }
 
 /** 新的一份口令凭证(改项目密码、改名单、改创建者密码用),kdf 与项目记录一致用缺省 */
