@@ -116,14 +116,16 @@ export function createAccountClient(options: AccountClientOptions) {
     async cloudAgentConsent(): Promise<CloudAgentConsent> {
       const current = await ensureLogin();
       const identity = authIdentity(), revision = authVersion;
-      const result = await request('/api/account/cloud-agent-consent', undefined, current.accessToken);
+      if (options.online && (await website())?.id !== current.account.id) throw new AccountFailure(401, 'credential-revoked');
+      const result = await request('/api/account/cloud-agent-consent', undefined, options.online ? undefined : current.accessToken);
       if (authIdentity() !== identity || authVersion !== revision) throw new AccountFailure(401, 'credential-revoked');
       return validateConsent(result, current.account.id);
     },
     async acceptCloudAgentConsent(requestId: string = crypto.randomUUID()): Promise<CloudAgentConsent> {
       const current = await ensureLogin();
       const identity = authIdentity(), revision = authVersion;
-      const result = await request('/api/account/cloud-agent-consent', { accept: true, noticeVersion: 1, requestId }, current.accessToken);
+      if (options.online && (await website())?.id !== current.account.id) throw new AccountFailure(401, 'credential-revoked');
+      const result = await request('/api/account/cloud-agent-consent', { accept: true, noticeVersion: 1, requestId }, options.online ? undefined : current.accessToken);
       if (authIdentity() !== identity || authVersion !== revision) throw new AccountFailure(401, 'credential-revoked');
       const consent = validateConsent(result, current.account.id);
       if (!consent.accepted) throw new AccountFailure(503, 'account-protocol');

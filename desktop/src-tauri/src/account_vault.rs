@@ -94,7 +94,8 @@ try {
     if ($consentRoute -and $null -ne $argsData.body) {
       $keys=@($argsData.body.PSObject.Properties.Name)
       if ($keys.Count -ne 3 -or $keys -notcontains 'accept' -or $keys -notcontains 'noticeVersion' -or $keys -notcontains 'requestId' -or
-          $argsData.body.accept -ne $true -or $argsData.body.noticeVersion -ne 1 -or
+          $argsData.body.accept -isnot [bool] -or $argsData.body.accept -ne $true -or
+          ($argsData.body.noticeVersion -isnot [int] -and $argsData.body.noticeVersion -isnot [long]) -or $argsData.body.noticeVersion -ne 1 -or
           $argsData.body.requestId -isnot [string] -or $argsData.body.requestId.Length -lt 1 -or $argsData.body.requestId.Length -gt 128) { throw 'bad-request' }
     }
     $result=Http $path $argsData.body $argsData.accessToken }
