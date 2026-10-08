@@ -19,7 +19,7 @@ import { assetHttpTuple, bytesDigest, ticketDigest, runAssetIssueRequest, RUN_AS
 // Actual TLS/cryptography/SQLite/run gates, three distinct role certificates.
 // Account sender/current registry/media projection remain controlled adapters.
 // Both servers are in this test process: NOT an independent UID/OS closure proof.
-test('real three-role TLS observer binds original instance, exact wire and live observer channel; retained rechecks', async t => {
+test('real three-role TLS observer binds original instance, exact wire and live observer channel; retained rechecks', { timeout: 60000 }, async t => {
   const f = await runFixture(), pki = assetWiringPki(f.dir), keys = generateKeyPairSync('ed25519');
   const agentPin = certificateFingerprint(pki.account.fingerprint256), assetPin = certificateFingerprint(pki.asset.fingerprint256);
   const serviceKid = 'mtls-agent-key', resource = { projectId, ns: 'media', hash: bytesDigest(Buffer.from('audio')),
@@ -122,6 +122,7 @@ test('real three-role TLS observer binds original instance, exact wire and live 
           try { value = JSON.parse(data.toString()); } catch { value = data.toString(); }
           resolve({ status: res.statusCode, value }); });
       });
+      req.setTimeout(10000, () => req.destroy(new Error('fixture-request-timeout')));
       req.once('error', reject); req.once('socket', socket => {
         const send = () => {
           try {
