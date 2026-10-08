@@ -127,7 +127,6 @@ function decodeRow(row) {
     instanceGeneration: row.instance_generation,
     senderAccountId: row.sender_account_id,
     messageId: row.message_id,
-    requestId: row.request_id,
     inputDigest: row.input_digest,
     fenceRevision: row.fence_revision,
     revision: row.revision,
@@ -157,8 +156,11 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
   if (typeof authorize !== 'function' || typeof verifyFence !== 'function') fail('authorization-required');
   if (typeof now !== 'function') fail('bad-clock');
   const file = path.resolve(databasePath);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const directory = path.dirname(file);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32' && (fs.statSync(directory).mode & 0o077) !== 0) fail('database-directory-not-private');
   const existed = fs.existsSync(file);
+  if (existed && process.platform !== 'win32' && (fs.statSync(file).mode & 0o077) !== 0) fail('database-file-not-private');
   const db = new DatabaseSync(file);
   if (!existed && process.platform !== 'win32') {
     try { fs.chmodSync(file, 0o600); } catch { db.close(); fail('database-permissions'); }
@@ -176,7 +178,6 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
       instance_generation INTEGER NOT NULL,
       sender_account_id TEXT NOT NULL,
       message_id TEXT NOT NULL,
-      request_id TEXT NOT NULL,
       request_key TEXT NOT NULL,
       input_digest TEXT NOT NULL,
       fence_revision INTEGER NOT NULL,
@@ -287,10 +288,10 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
         const at = nextTime();
         db.prepare(`INSERT INTO tool_jobs (
           job_id, kind, project_id, conversation_id, run_id, grant_id, instance_id, instance_generation,
-          sender_account_id, message_id, request_id, request_key, input_digest, fence_revision, revision,
+          sender_account_id, message_id, request_key, input_digest, fence_revision, revision,
           state, stage, progress, output_refs, error_code, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'queued', NULL, 0, '[]', NULL, ?, ?)`).run(
-          jobId, kind, ...contextColumns(context), requestId, requestKey, inputDigest, fenceRevision, at, at,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'queued', NULL, 0, '[]', NULL, ?, ?)`).run(
+          jobId, kind, ...contextColumns(context), requestKey, inputDigest, fenceRevision, at, at,
         );
         return { jobId, state: 'queued' };
       }));
