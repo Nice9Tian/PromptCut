@@ -315,3 +315,5 @@ v1 reader保留原exact解释：旧instance.cgroup还是服务叶，绝不把v1�
 若发现真实已接受v1 epoch、遗留授权/待结receipt，自动迁移不在此最小提案中：保持失败关闭，另设计明确的root迁移证据与doc checkpoint切换事务。不能重置epoch到1掩盖旧授权、复制旧checkpoint作v2，或以新scope为空证明旧scope已关闭。跨boot恢复仍不支持，重启后的缺旧FD/丢失持久阶段不能猜测重建见证。
 
 后续实现必须分别租producer和G各自模块；本轮没有写两端源码。最低联合验收应含：v1/v2混用拒、缺任一双tuple拒、伪包含/sibling/旧scope复用拒、full-history缺口/换anchor拒、active/marker/lock每个耐久失败门、doc checkpoint重启与同epoch回退拒；再由root执行真正Linux双epochpublisher＋实际TLS/G验收。刚通过的单scope OS smoke仅覆盖这里的内核对象保留与负例，不覆盖这些联验。
+
+部署控制仍有一个明确待接缝：本次OS通过使用全新transient service，不能据此假定已加载的现有固定service可以用`systemctl set-property Slice=...`换slice。v249 [dbus-unit.c:2083/2279](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/dbus-unit.c)把Slice置于transient/STUB创建属性，非普通live属性。后续root控制adapter必须明确提供受管service的下一epoch启动配置（如受管runtime配置由root生成并核加载结果，或独立已审核的transient部署模式）；两者均需另审/真实双epoch验证，不能让publisher默默改既有unit。本v2数据契约先要求启动后实际Slice/ControlGroup必须精确匹配，缺这种受管启动能力就失败关闭；不把它伪装为已有生产支持。
