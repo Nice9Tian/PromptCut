@@ -10,6 +10,7 @@ import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { startHostedCombo, hostedPaths } from '../hosted/combo.mjs';
 import { addServiceKey, generateServiceKeyPair } from '../auth/service-identity.mjs';
 import { createAssetMtlsTransport } from '../hosted/asset-doc-client.mjs';
+import { openAccountLedger } from '../account/ledger.mjs';
 import { stageHostedAssetFiles } from '../hosted/files.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { wsClient, waitFor } from './fake-ws-kit.mjs';
@@ -181,7 +182,30 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   await closePages();
   await assert.rejects(combo.docAssembly.captureSnapshot({ principal: pagePrincipal, projectId,
     selectionInput: { pageId: 'page-b' } }), /selection-page-unavailable/);
-  await combo.close(); combo = await startHostedCombo(config);
+  await combo.close();
+  let priorClosureInstances = [];
+  if (agentConfigured) {
+    const audit = openAccountLedger({ file: path.join(docDir, 'docservice/account-v2.sqlite'), authorityId: 'assembly-doc' });
+    try {
+      const state = audit.read();
+      assert.ok(Object.values(state.runControlsV2).length > 0);
+      assert.ok(Object.values(state.runControlsV2).every(control => control.state === 'pending' && control.receipt === null));
+      priorClosureInstances = Object.values(state.docRunClosuresV2).flatMap(record => Object.keys(record.instances));
+      assert.ok(priorClosureInstances.length > 0);
+      assert.ok(Object.values(state.docRunClosuresV2).every(record => Object.values(record.instances)
+        .every(proof => proof.complete === false && proof.agentState === 'registration-required')));
+    } finally { audit.close(); }
+  }
+  combo = await startHostedCombo(config);
+  if (agentConfigured) {
+    const audit = openAccountLedger({ file: path.join(docDir, 'docservice/account-v2.sqlite'), authorityId: 'assembly-doc' });
+    try {
+      const state = audit.read(), restored = Object.values(state.docRunClosuresV2).flatMap(record => Object.keys(record.instances));
+      assert.ok(priorClosureInstances.every(instance => restored.includes(instance)), 'restart preserves prior-instance closure evidence');
+      assert.ok(restored.some(instance => !priorClosureInstances.includes(instance)), 'new doc instance records only its own partial evidence');
+      assert.ok(Object.values(state.runControlsV2).every(control => control.state === 'pending' && control.receipt === null));
+    } finally { audit.close(); }
+  }
   a = await connect((await session(0)).connectionTicket);
   const recovered = await received(a, { type: 'project.open', projectId, reqId: 'reopen' });
   assert.equal(recovered.rev, 2); assert.equal(recovered.project.title, 'after');
