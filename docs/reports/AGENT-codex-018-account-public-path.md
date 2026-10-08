@@ -55,3 +55,5 @@ CDP只从project.state收到/ project.open发出的真实文本帧提取严格sp
 实际v2后端account/app.mjs的POST/register返回嵌套account.id/name，原字段本身正确，不是top-level accountId。异步CDP response.json可能因成功导航失效，因此新增页面正常/me响应作为公共ID回填，不添加API请求；只接受精确pcpub marker对应的严格acc_24位hex，去重记录accountId+marker，session/CSRF/其它字段丢弃。register成功后必须页面name匹配且真实/me公共ID已记，便于根精确处理测试数据；任意top-level ID、非自身marker、畸形ID一律不记录。
 
 同72ac一次纯npm wrapper目标6/6，0失败取消跳过，762.744ms、wall1028ms、exit0、native重跑0；before/after同SHA、clean，raw `%TEMP%/pc-account-public-register-pure-72ac4ad7.log`。包含真实Rust边界编译执行、实际dry CLI零网络、公共account字段严格筛选负向；没有Chrome/网站/壳/公网注册或业务listener，原wrapper保护guards保留。三个.mjs node --check、git diff --check通过。随后只报告提交，未更改Rust或其它产品文件，等根固定后一次真实公网复验，不自行重跑。
+
+根指出DOMDebugger objectId必须属于同一CDP session，7aa54d1141f8e9f16f732e51507fdb05d5056d5e窄修单probe文件：用registrationCdp Runtime.evaluate只读获得现存form对象，在同session getEventListeners并finally releaseObject。不用Puppeteer主session ElementHandle ID，不注入DOM/handler。一次纯目标6/6、0fail/skip/cancel、502.2813ms、wall764ms、exit0、native重跑0，raw `%TEMP%/pc-public-register-cdp-pure-7aa54d11.log`；source clean，nodecheck/diffcheck通过。未真实浏览器/业务listener/公网，之后只报告再冻结；网站产品初始化风险仍待新VH独立叶修正。
