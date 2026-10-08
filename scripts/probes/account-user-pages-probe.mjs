@@ -197,7 +197,7 @@ function nativeDescendants(pid) {
   for (let changed = true; changed;) { changed = false; for (const row of rows) if (ids.has(row.ParentProcessId) && !ids.has(row.ProcessId)) { ids.add(row.ProcessId); changed = true; } }
   return [...ids];
 }
-function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } }
 async function cdpClosed() {
   return new Promise(resolve => {
     const socket = net.connect({ host:'127.0.0.1', port:6348 });
