@@ -65,15 +65,19 @@ export function CloudAiPanel(props: {
   const [consentOpen, setConsentOpen] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
   useEffect(() => {
-    if (!cloud.accountMode || !cloud.available || !cloud.projectId || !consent.accountId) return;
+    if (!cloud.accountMode || !cloud.available || !cloud.projectId || !consent.accountId || consent.accountId !== cloud.accountId) return;
     let dead = false;
-    void refreshCloudConsent().then(accepted => { if (!dead && !accepted) setConsentOpen(true); },
+    void refreshCloudConsent().then(accepted => { if (!dead) setConsentOpen(!accepted); },
       error => { if (!dead) setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。"); });
     return () => { dead = true; };
     // A new account/project binding gets a fresh server result; rejecting does not trigger a loop.
-  }, [cloud.accountMode, cloud.available, cloud.projectId, consent.accountId]);
+  }, [cloud.accountMode, cloud.available, cloud.projectId, cloud.accountId, consent.accountId]);
   const consentForUse = async () => {
     if (!cloud.accountMode) return true;
+    if (!cloud.accountId || consent.accountId !== cloud.accountId) {
+      setConsentError("请先登录当前项目的账号。");
+      return false;
+    }
     try {
       const accepted = await refreshCloudConsent();
       if (!accepted) { setConsentError(null); setConsentOpen(true); }
@@ -88,7 +92,7 @@ export function CloudAiPanel(props: {
     error => setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。")); };
   const chat = useCloudChat({ tabId, cloud, enabled: true, autoAttach: true, initialConversation: props.initialConversation });
   const { view } = chat;
-  const qKey = `cloud:${tabId}`;
+  const qKey = cloud.accountMode ? `cloud:${tabId}:${cloud.accountId ?? "none"}:${consent.bindingVersion}:${cloud.projectId ?? "none"}` : `cloud:${tabId}`;
 
   const { tabs } = useAgentTabs();
   const tabTitle = desktop ? (tabs.find((t) => t.id === tabId)?.title ?? "AI 助手") : "云端 Agent";
@@ -111,6 +115,13 @@ export function CloudAiPanel(props: {
   /** 附件占位 id → 原始文件(失败重试用)与进行中的上传(移除时取消) */
   const retryFilesRef = useRef<Map<string, File>>(new Map());
   const uploadsRef = useRef<Map<string, AbortController>>(new Map());
+  useEffect(() => {
+    if (!cloud.accountMode) return;
+    setInputText("");
+    setAttachments([]);
+    for (const upload of uploadsRef.current.values()) upload.abort();
+    uploadsRef.current.clear(); retryFilesRef.current.clear();
+  }, [cloud.accountMode, consent.bindingVersion]);
   // 换了对话(新对话、历史里点了别的、进入时自动接上在跑的):附件只在传去的那个对话的工作目录里,不跟过去
   useEffect(() => {
     setAttachments((prev) => {
@@ -344,7 +355,7 @@ export function CloudAiPanel(props: {
 
   return (
     <aside className="panel panel-right ai-panel pc-cloud-panel" data-pc="cloud-ai-panel" data-inactive={active ? undefined : "1"} aria-hidden={active ? undefined : true}>
-      <CloudAgentConsentDialog open={active && consentOpen && cloud.accountMode} pending={consent.pending} error={consentError}
+      <CloudAgentConsentDialog open={active && consentOpen && cloud.accountMode && Boolean(consent.accountId) && consent.accountId === cloud.accountId} pending={consent.pending} error={consentError}
         onAccept={acceptConsent} onReject={() => { setConsentError(null); setConsentOpen(false); }} />
       <ChatHeader
         title={tabTitle}

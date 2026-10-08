@@ -35,6 +35,7 @@ export interface CloudAgentState extends CloudAgentAvailability {
   /** 身份接口位被(重新)注入的次数:身份晚于「云端可用」才就绪时,据此重新取一次 */
   identityVersion: number;
   accountMode: boolean;
+  accountId: string | null;
 }
 
 export function useCloudAgent(): CloudAgentState {
@@ -44,11 +45,12 @@ export function useCloudAgent(): CloudAgentState {
   const projectId = shared?.projectId ?? (ONLINE_BUILD ? currentDocProjectId() || null : null);
   const where = shared?.where === "hosted";
   const accountMode = ONLINE_BUILD || Boolean(shared?.accountId);
+  const accountId = shared?.accountId ?? null;
   return useMemo(
     () => ({ ...resolveCloudAgent({ projectId, hostedWhere: where || ONLINE_BUILD, online: ONLINE_BUILD }), projectId, identityVersion,
-      accountMode }),
+      accountMode, accountId }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectId, where, ver, identityVersion, accountMode],
+    [projectId, where, ver, identityVersion, accountMode, accountId],
   );
 }
 
@@ -146,7 +148,8 @@ export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudD
   const [running, setRunning] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
-  const key = cloud.available && cloud.url && cloud.projectId && (!cloud.accountMode || consent.accepted === true) ? `${cloud.projectId}|${cloud.url}|${cloud.identityVersion}` : "";
+  const key = cloud.available && cloud.url && cloud.projectId && (!cloud.accountMode ||
+    (consent.accepted === true && consent.accountId === cloud.accountId)) ? `${cloud.projectId}|${cloud.url}|${cloud.identityVersion}` : "";
   const keyRef = useRef(key);
   keyRef.current = key;
 
@@ -215,7 +218,8 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const api = useCloudApi(cloud.url);
   const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
   const projectId = cloud.projectId ?? "";
-  const key = enabled && cloud.available && cloud.url && projectId && (!cloud.accountMode || consent.accepted === true)
+  const key = enabled && cloud.available && cloud.url && projectId && (!cloud.accountMode ||
+    (consent.accepted === true && consent.accountId === cloud.accountId))
     ? `${projectId}|${cloud.url}|${tabId}|${cloud.identityVersion}` : "";
 
   const [info, setInfo] = useState<CloudInfo | null>(null);
@@ -387,11 +391,12 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
 
   const setModel = useCallback((m: string) => { setModelState(m); lsSet(MODEL_KEY, m); }, []);
 
+  const blocked = cloud.accountMode && !key;
   return {
     store,
-    messages,
-    view,
-    info,
+    messages: blocked ? [] : messages,
+    view: blocked ? { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 } : view,
+    info: blocked ? null : info,
     notice,
     clearNotice: () => setNotice(null),
     notify: setNotice,
@@ -401,7 +406,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     abort,
     newChat,
     openChat: switchTo,
-    history: { items: histItems, loading: histLoading, refresh: refreshHistory },
+    history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory },
     model,
     setModel,
   };
