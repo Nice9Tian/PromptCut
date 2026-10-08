@@ -64,6 +64,16 @@ test('controlled HTTP adapter rejects oversized/truncated/aborted raw body befor
   assert.deepEqual(calls[0].input.body, issueBody); assert.equal(calls[0].input.transport, req);
 });
 
+test('wire UTF8 is fatal and actual bodyText is delivered unchanged, never replaced or guessed', async () => {
+  const { handle, calls } = handler(), res = result();
+  const prefix = Buffer.from('{"name":"'), suffix = Buffer.from('"}');
+  await handle(fakeRequest({ raw: Buffer.concat([prefix, Buffer.from([0xc3, 0x28]), suffix]) }), res);
+  assert.equal(res.status, 400); assert.equal(calls.length, 0);
+  const raw = Buffer.from(` \n${JSON.stringify(issueBody)}\n `), legal = result();
+  await handle(fakeRequest({ raw }), legal); assert.equal(legal.status, 200);
+  assert.equal(calls[0].input.bodyText, raw.toString('utf8'));
+});
+
 test('controlled HTTP adapter pins role and refuses method/path/query/proxy and cap/body smuggling', async () => {
   const { handle, calls } = handler();
   for (const req of [fakeRequest({ peer: 'd'.repeat(64) }), fakeRequest({ delta: { method: 'GET' } }),
