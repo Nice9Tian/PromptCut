@@ -119,3 +119,9 @@ VisuHive精确证书包以572a60eac5607b601c415e29e9c2a23293c9d08a合main并推�
 隔离强化探针的当前全文难题另交Astra，工作区018-browser-doc-read，原失败源码保留；不是main合并门槛。首次工作区准备输错完整ref被Git拒绝，核真实0b1454df96fa8586712e9cea07d4b57b36964b62后才建，无重置/清理。最初6463为用户Discord占用，探针预检即拒、服务未起，未碰该进程；根重分配并确认6600–6609为空后再作有界诊断。该次环境前置不能算产品反例或通过。
 
 强化探针冻结dcc51bc0已推送，未合main：正文contentProjectId与文档服务shared project标识不同，真实项目模块反例及定向16项通过；修正回读后，有界真实浏览器在150.407秒失败于旧join-invite-project菜单。产品新账号入口已经替代该菜单，旧夹具尚未接账号服务，不能退回旧入口使探针通过；该次没有进入全文/主机最终验收，自有6600–6609服务均关。报告在隔离分支docs/reports/AGENT-codex-018-browser-doc-read.md，原始TMP pc-browser-doc-read-2a467e4e-bounded-2.log/.result.json/.postflight.json，fullC10Validated=false。
+
+节点固定源码Linux补查：VisuHive main572a60e在独立真实git历史副本以非root服务用户运行，显式本VH provider，86项全过/零失败/跳过14794.747895ms（墙14.873秒）；PC main eb8228a4的生产配置与真实三服务部署目标14/14零失败/跳过26174.001657ms（墙26.242秒），含account/doc/asset实际PID271019/271031/271043路径及真实head先拒503再ready200/create201/projects200。自有636x/644x均清，生产三PID不变，尚未安装。首次归档脚本根目录成员判断错误、第二次错误假设/usr/bin/node均发生在测试前；已明确现有Node=/usr/local/bin/node v24.21.0，仅修TEMP launcher/其自有stage目录权限，不改全局或产品源码；所有首次日志保留。实际计数从完成的原日志补读，未因报告器格式不同重跑。TMP pc-account-linux-stage-eb8228a4内linux-stage.log、linux-stage-resume.log、linux-test-run-2.log；节点对应visuhive-full-run-2.log与pc-config-and-plan-run-2.log。
+
+官网反代冻结4e1c946f根独立完整npm90/86通过/0失败/0取消/4跳过7290.8178ms（墙7.5秒）；Linux实际nginx专门目标4/4、零失败/跳过297.504668ms（墙0.59秒），三个精确账号路径/query、其它hosted旧rewrite、素材Cookie清除与WS101均通过。Windows启动脚本首次两次引号/ESM URL错误均在测试前，改TEMP启动器后才执行全量；源未变，日志保留，Sol独立核对。VH main ea1937a已收回推送；准确工作区HEAD3b2eeea在main、完整status空、ignored0、全树reparse0/绝对边界确认后清掉，累计PC34/VH12共46个。TMP vh-public-routing-root-full{,-run-2,-run-3}.log、vh-public-routing-root-linux-first.log、three-versions-public-routing-cleanup-20261009.json；详细阶段报告已移VH docs/archive/agent-reports/。
+
+仅为仍需做的公网真实路径新增PC018-account-public-path，Sol准备固定探针，根会话运行公网写入；尚未创建公网测试账号或项目。Astra完成的强化探针保留已推冻结分支，在干净同物理018-browser-doc-read切新018-asset-root-publisher分支做OS登记工具，旧源码未覆盖/删除。当前实际活跃PC四工作区，角色逐个列进进度；不是本任务旧六个及外部工作区不动。
