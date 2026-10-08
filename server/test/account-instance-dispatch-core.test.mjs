@@ -172,3 +172,41 @@ test('instance-attempt resume cannot fall back to a cached ordinary page; ordina
   await ordinary.opened; assert.equal((await ordinary.next(m => m.type === 'session.welcome')).resumed, true);
   assert.equal(invoked, 2, 'ordinary resume follows its unchanged path');
 });
+
+test('unproved partial Agent LP bodies own no send slot or idle clock', { timeout: 12000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-instance-partial-body-')), pki = assetWiringPki(dir), partials = [];
+  let offset = 0;
+  const service = createDocService({ enableHttpTransport: true, autoTick: false, heartbeatMs: 10, now: () => Date.now() + offset,
+    authenticate: () => fixtureAgent, dispatchInvocation(input, next) {
+      if (input.transport.req.headers['x-fixture-proof'] !== 'yes')
+        throw Object.assign(Error('proof-required'), { status: 403, code: 'fixture-proof-required' });
+      return next(input.text, async () => {});
+    } });
+  const server = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true }, (req, res) => {
+    if (!service.handleTransportHttp(req, res)) { res.writeHead(404); res.end('{}'); }
+  }); service.attachTransportServer(server);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); const port = server.address().port;
+  t.after(async () => { for (const owner of partials) owner.req.destroy(); await Promise.all(partials.map(owner => owner.closed));
+    await service.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true }); t.diagnostic(`owned partial-body TLS=${port}; actual close complete`); });
+  const request = (...args) => httpRequest(port, pki.asset, ...args);
+  const open = () => request('POST', '/lp/open', {}, { 'x-promptcut-protocols': 'promptcut.v1, promptcut.session.new' });
+  const partial = async sid => {
+    const owner = {}, flushed = deferred(), received = new Promise(resolve => server.once('request', resolve));
+    owner.req = https.request({ host: '127.0.0.1', port, path: '/lp/send', method: 'POST', agent: false, ...pki.asset,
+      headers: { authorization: `Bearer ${sid}`, 'content-length': 100 } }); owner.req.on('error', () => {});
+    owner.req.on('socket', socket => { owner.closed = new Promise(resolve => socket.once('close', resolve));
+      socket.once('secureConnect', () => owner.req.write('{', () => flushed.resolve())); });
+    partials.push(owner); await flushed.promise; await received;
+    // The server observes actual request bytes. Wait for its request callback,
+    // without allowing a response or completing the unproved body.
+    await new Promise(resolve => setImmediate(resolve)); return owner;
+  };
+  const first = await open(); await partial(first.body.sid);
+  const sent = await request('POST', '/lp/send', { frames: [JSON.stringify({ type: 'fixture.none', seq: 1, ack: 0 })] },
+    { authorization: `Bearer ${first.body.sid}`, 'x-fixture-proof': 'yes' });
+  assert.equal(sent.status, 200, 'unproved partial body cannot force legitimate send busy'); assert.equal(sent.body.ack, 1);
+  const second = await open(); await partial(second.body.sid); offset = 41000;
+  await waitFor(() => service.describe().conns.find(conn => conn.connId === second.body.connId)?.detached, 1000,
+    'unproved partial body cannot claim sending or refresh idle state');
+});

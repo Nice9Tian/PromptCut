@@ -447,68 +447,68 @@ export function createHttpTransport({
   async function onSend(req, res, cors) {
     const t = transportOf(req, res, cors);
     if (!t) return undefined;
-    track(t, req, res);
-    t.lastSeen = now();
-    if (t.closed) {
-      req.resume();
-      return closedReply(t, res, cors);
-    }
-    if (t.sending) {
-      req.resume();
-      return sendJson(res, 409, { ok: false, error: 'busy' }, cors);
-    }
-    t.sending = true;
+    const scoped = needsInvocation(t.principal, req);
+    if (!scoped) { track(t, req, res); t.lastSeen = now(); }
+    if (!scoped && t.closed) { req.resume(); return closedReply(t, res, cors); }
+    if (!scoped && t.sending) { req.resume(); return sendJson(res, 409, { ok: false, error: 'busy' }, cors); }
+    if (!scoped) t.sending = true;
     try {
       const body = await readBody(req, maxSendBody);
       if (body.aborted) return undefined;
-      t.lastSeen = now();
+      if (!scoped) t.lastSeen = now();
       if (body.tooLarge) {
         sendJson(res, 413, { ok: false, error: 'too-large' }, cors);
-        // A SID locates the session; an unverified oversize request cannot end it.
-        if (!needsInvocation(t.principal, req)) sessions.close(t.connId, 1009, 'too-large');
+        // A SID locates a session; unverified input cannot close an Agent session.
+        if (!scoped) sessions.close(t.connId, 1009, 'too-large');
         return undefined;
       }
-      if (t.closed) return closedReply(t, res, cors);
+      if (!scoped && t.closed) return closedReply(t, res, cors);
       let msg;
-      try {
-        msg = JSON.parse(body.text);
-      } catch {
-        msg = null;
-      }
-      if (!isObj(msg) || !Array.isArray(msg.frames) || msg.frames.some((f) => typeof f !== 'string')) {
+      try { msg = JSON.parse(body.text); } catch { msg = null; }
+      if (!isObj(msg) || !Array.isArray(msg.frames) || msg.frames.some(f => typeof f !== 'string'))
         return sendJson(res, 400, { ok: false, error: 'bad-request' }, cors);
-      }
-      if (msg.frames.some((f) => byteLen(f) > maxFrame)) {
+      if (msg.frames.some(f => byteLen(f) > maxFrame)) {
         sendJson(res, 413, { ok: false, error: 'too-large' }, cors);
-        if (!needsInvocation(t.principal, req)) sessions.close(t.connId, 1009, 'too-large');
+        if (!scoped) sessions.close(t.connId, 1009, 'too-large');
         return undefined;
       }
-      if (needsInvocation(t.principal, req) && msg.frames.length === 0)
-        return sendJson(res, 400, { ok: false, error: 'empty-frames' }, cors);
-      for (const [frameIndex, text] of msg.frames.entries()) {
+      if (scoped && msg.frames.length === 0) return sendJson(res, 400, { ok: false, error: 'empty-frames' }, cors);
+      if (scoped) return await invoke(t, req, res, cors, 'message', body.text, async firstFrame => {
+        requireCurrentInvocation(t);
+        if (t.sending) return sendJson(res, 409, { ok: false, error: 'busy' }, cors);
+        // Complete input and its first proof are verified before claiming a
+        // session slot, idle clock or resource lease. Partial input owns itself.
+        track(t, req, res); t.lastSeen = now(); t.sending = true;
+        try {
+          await sessions.receive(t.connId, firstFrame);
+          for (let frameIndex = 1; frameIndex < msg.frames.length; frameIndex++) {
+            requireCurrentInvocation(t);
+            await invoke(t, req, res, cors, 'message', body.text, frame => {
+              requireCurrentInvocation(t); return sessions.receive(t.connId, frame);
+            }, { text: msg.frames[frameIndex], frameIndex, frameCount: msg.frames.length });
+          }
+          requireCurrentInvocation(t);
+          return sendJson(res, 200, { ok: true, ack: sessions.takeAck(t.connId) }, cors);
+        } finally { t.sending = false; }
+      }, { text: msg.frames[0], frameIndex: 0, frameCount: msg.frames.length });
+      for (const text of msg.frames) {
         if (t.closed || !sessions.isCurrent(t.connId, t)) break;
-        if (needsInvocation(t.principal, req)) await invoke(t, req, res, cors, 'message', body.text,
-          frame => { if (!t.closed && sessions.isCurrent(t.connId, t)) return sessions.receive(t.connId, frame); },
-          { text, frameIndex, frameCount: msg.frames.length });
-        else sessions.receive(t.connId, text);
+        sessions.receive(t.connId, text);
       }
-      requireCurrentInvocation(t);
       if (t.closed) return closedReply(t, res, cors);
       return sendJson(res, 200, { ok: true, ack: sessions.takeAck(t.connId) }, cors);
-    } finally {
-      t.sending = false;
-    }
+    } finally { if (!scoped) t.sending = false; }
   }
-
   function onRecv(req, res, cors, url) {
     const t = transportOf(req, res, cors);
     if (!t) return;
-    track(t, req, res);
     if (needsInvocation(t.principal, req)) return invoke(t, req, res, cors, 'recv', '', (_frame, check) => {
       if (typeof check !== 'function') throw Object.assign(Error('instance-read-lease-required'),
         { status: 503, code: 'instance-read-lease-required' });
+      requireCurrentInvocation(t); track(t, req, res);
       return receiveAllowed(t, req, res, cors, url, { check });
     });
+    track(t, req, res);
     return receiveAllowed(t, req, res, cors, url);
   }
 
@@ -564,7 +564,7 @@ export function createHttpTransport({
   async function onClose(req, res, cors) {
     const t = transportOf(req, res, cors);
     if (!t) return undefined;
-    track(t, req, res);
+    if (!needsInvocation(t.principal, req)) track(t, req, res);
     const body = await readBody(req, HTTP_TRANSPORT_DEFAULTS.SMALL_BODY_BYTES);
     let msg = null;
     if (body.text) {
@@ -572,6 +572,7 @@ export function createHttpTransport({
     }
     return invoke(t, req, res, cors, 'close', body.text, () => {
       requireCurrentInvocation(t);
+      if (needsInvocation(t.principal, req)) track(t, req, res);
       if (!t.closed) sessions.end(t.connId, isObj(msg) ? msg.code : undefined, isObj(msg) ? msg.reason : '');
       // 客户端自己关的：剩下的帧它不要了
       if (bySid.get(t.sid) === t) bySid.delete(t.sid);
