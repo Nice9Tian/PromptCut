@@ -132,3 +132,42 @@ for (const cut of ['marker-created', 'renamed-under-marker']) test(`run revoke a
   const response = await f.request('A', 'POST', '/complete'); assert.equal(response.statusCode, 403); assert.equal(saw, true);
   assert.equal(await f.stores.store('A', 'media').stat(hash), null); assert.equal(await f.stores.store('B', 'media').stat(hash), null);
 });
+
+test('real admission persistence failure closes observer and stays a visible idle/close failure without a closure ACK', { timeout: 5000 }, async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-asset-run-admit-fault-')), file = path.join(dir, 'state.json');
+  const ref = { projectId: 'A', ns: 'media', hash, size: bytes.length, ext: 'wav', contentType: 'audio/wav' };
+  let channelCloses = 0, closureACKs = 0;
+  const client = { eventsSince: async () => ({ events: [], headSeq: 0 }), acknowledgeEvent: async () => { throw new Error('must-not-ACK'); },
+    openLease: () => ({ leaseId: 'persist-fault-lease', async check() {
+      // Real filesystem fault, not a mocked persist method: rename cannot
+      // replace this directory with the consumer's durable state file.
+      await fs.mkdir(file, { recursive: true });
+      return { allowed: true, projectId: 'A', action: 'read', resource: ref, resourceRev: resourceRevision(ref),
+        grantState: 'active', fenceRevision: 1, runAssetHead: 0 };
+    }, async closeLease() { closureACKs++; }, async close() { channelCloses++; } }) };
+  const consumer = createAssetRunConsumer({ client, file, assetInstanceId: 'asset-one', serviceIdentity: 'asset-key', verifyLifecycle: async () => true });
+  await consumer.start();
+  const access = createAssetRunAccess({ client, consumer, projectStores: { project() { throw new Error('must-not-reach-bytes'); } },
+    humanConsumer: { ready: true, sync: async () => {} }, assetInstanceId: 'asset-one', serviceIdentity: 'asset-key',
+    agentFingerprint256: pin, resolveAgentTransport: async () => ({ serviceKid: 'agent-key' }), maxBodyBytes: 4096 });
+  const socket = new ControlledSocket(), req = Readable.from([]), response = new ControlledResponse(socket);
+  req.socket = socket; req.complete = true; req.method = 'GET'; req.url = `/internal/v2/asset/run/media/${hash}`;
+  req.headers = { authorization: `Bearer ${'A'.repeat(43)}`, 'content-length': '0', 'x-promptcut-run-project-id': 'A',
+    'x-promptcut-run-grant-id': 'grant', 'x-promptcut-run-resource-rev': resourceRevision(ref), 'x-promptcut-run-nonce': 'fault-nonce',
+    'x-promptcut-run-request-id': 'fault-request',
+    'x-promptcut-run-asset-proof': Buffer.from(JSON.stringify({ instanceId: 'agent-one', instanceGeneration: 1, signature: 'A'.repeat(86) })).toString('base64url') };
+  t.after(async () => { socket.destroy(); response.destroy(); await Promise.all([closed(socket), closed(response)]);
+    await access.close().catch(() => {}); await consumer.close().catch(() => {}); await fs.rm(dir, { recursive: true, force: true }); });
+  const actualIOFailure = error => ['EPERM', 'EISDIR', 'ENOTEMPTY', 'EEXIST'].includes(error.code);
+  let handlerFailure; try { await access.handler(req, response); } catch (error) { handlerFailure = error; }
+  await Promise.all([closed(socket), closed(response)]);
+  assert.equal(response.statusCode, 503); assert.equal(socket.closed, true); assert.equal(req.closed, true); assert.equal(response.closed, true);
+  // An HTTP error is not completion: the real failed durable task remains
+  // observable even after all physical owned resources and channel close.
+  await assert.rejects(access.idle(), actualIOFailure); assert.ok(actualIOFailure(handlerFailure));
+  await assert.rejects(access.close(), actualIOFailure);
+  assert.equal(channelCloses, 1); assert.equal(closureACKs, 0); assert.equal(consumer.ready, false);
+  assert.equal(access.status().runAssetsReady, false);
+  assert.throws(() => consumer.closureWitness('persist-fault-lease'), /closure-pending/);
+  assert.equal((await fs.stat(file)).isDirectory(), true);
+});
