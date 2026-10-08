@@ -1,6 +1,32 @@
 import { createHash } from 'node:crypto';
 import { budgetOf, clipWeight } from '../../src/render/pipelinePlan.mjs';
 
+/** Ordinary project-owned card source. Every computed cell affects the image;
+ * no real-clock escape, export-mode shortcut or authored rendering capability.
+ * This is a workload candidate, not evidence of browser measurement. */
+export function heavyUserCardSource(id) {
+  if (!/^c10-cpu-field-[a-z0-9-]{1,80}$/.test(id)) throw new Error('invalid fixture card id');
+  return `import { useMemo } from "react";
+import type { CardDef, CardProps } from "../../kernel/types";
+function CpuField({ params, t }: CardProps<{ seed: number }>) {
+  const cells = useMemo(() => Array.from({ length: 128 }, (_, cell) => {
+    let x = (cell + 1) * 0.013 + params.seed * 0.001 + t * 0.1;
+    for (let i = 0; i < 32768; i++) x = Math.sin(x * 1.97 + i * 0.00001) + Math.cos(x * 0.71 + cell);
+    return Math.round((x + 2) * 90);
+  }), [params.seed, t]);
+  return <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "repeat(16, 1fr)", background: "#101828" }}>
+    <style>{"@keyframes ${id} { from { opacity: 0.7; } to { opacity: 1; } }"}</style>
+    {cells.map((hue, cell) => <div key={cell} style={{ background: "hsl(" + hue + " 70% 55%)", animation: "${id} 1s linear infinite alternate" }} />)}
+  </div>;
+}
+export const cpuField: CardDef<{ seed: number }> = {
+  id: "${id}", name: "递归纹理", source: "user", frameMode: "stateful",
+  description: "逐时刻计算递归纹理，CSS 动画调节透明度。",
+  defaults: { seed: 1 }, controls: [{ key: "seed", type: "number", label: "纹理种子" }], Component: CpuField,
+};
+`;
+}
+
 /** A prerequisite, never completion evidence. Costs must come from the page's
  * finished probe/L2 record; canvasHeavy only governs splitting AFTER selection.
  * Online l2CostBackend uses the normal default tuning, as does clipWeight here. */
@@ -16,6 +42,10 @@ export function hostFixtureReadiness({ fixture, fps, job, probe, record, publish
   const weight = measured ? clipWeight(record, 'stateful', fps) : null;
   const heavy = !!weight && (weight.pinned || weight.w > budgetOf(fps));
   if (measured && !heavy) reasons.push('measured-light');
+  // Unknown/local cards may be pinned by policy. That alone cannot establish
+  // the claimed CPU workload: this fixture additionally requires measured step.
+  const cpuMeasured = !fixture.requireStepOverBudget || (measured && record.stepMs > budgetOf(fps));
+  if (measured && !cpuMeasured) reasons.push('measured-step-not-over-budget');
   if (pipeline !== 'heavy') reasons.push('stage-not-heavy');
   const hit = publisher?.log?.filter(e => e.ok).at(-1);
   const current = !!hit && publisher.measured === true && publisher.last === hit.id &&
@@ -24,8 +54,8 @@ export function hostFixtureReadiness({ fixture, fps, job, probe, record, publish
     hit.id.startsWith(`plan:${publisher.want.projectId}@${publisher.want.projectRev}#clips:`) &&
     publisher.lastClips?.includes(fixture.clipId) && hit.state === 'open';
   if (!current) reasons.push('target-not-in-current-successful-plan');
-  return { ready: measured && heavy && pipeline === 'heavy' && current,
-    terminal: measured && !heavy, reasons, measured, budgetMs: budgetOf(fps),
+  return { ready: measured && heavy && cpuMeasured && pipeline === 'heavy' && current,
+    terminal: measured && (!heavy || !cpuMeasured), reasons, measured, cpuMeasured, budgetMs: budgetOf(fps),
     weight: weight ? { ...weight, w: Number.isFinite(weight.w) ? weight.w : 'Infinity' } : null,
     published: current ? hit : null };
 }

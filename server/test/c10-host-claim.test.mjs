@@ -248,6 +248,52 @@ test('A5 host prerequisite rejects actual light-cost shape, unsettled/missing co
     { fixture: { ...input.fixture, projectId: 'sp_other' } },
   ]) assert.equal(readinessOf({ ...input, ...change }).ready, false, JSON.stringify(change));
   assert.equal(readinessOf({ ...input, record: null }).terminal, false, '声明重兜底不能冒充实测重');
+  const cpu = { ...input, fixture: { ...input.fixture, requireStepOverBudget: true } };
+  assert.equal(readinessOf(cpu).ready, true);
+  for (const flags of [{ pinnedHeavy: true }, { capped: true }, { demoted: true }, { catchUpMs: 10000 }]) {
+    const pinnedOnly = readinessOf({ ...cpu, record: { ...cpu.record, stepMs: 0.2, ...flags } });
+    assert.equal(pinnedOnly.ready, false); assert.equal(pinnedOnly.terminal, true);
+    assert.ok(pinnedOnly.reasons.includes('measured-step-not-over-budget'));
+  }
+});
+
+test('A5 ordinary user CPU field parses, bundles, computes its pixels and keeps real unknown/local eligibility', t => {
+  const root = new URL('../../', import.meta.url);
+  const code = `import assert from 'node:assert/strict';
+    import { createRequire } from 'node:module';
+    import { heavyUserCardSource } from ${JSON.stringify(judgeEntry)};
+    import { parseCardSource } from ${JSON.stringify(new URL('src/kernel/cardSourceParse.mjs', root).href)};
+    import { cardCapabilities } from ${JSON.stringify(new URL('src/kernel/frameMode.mjs', root).href)};
+    import { snapshotTier } from ${JSON.stringify(new URL('server/snapshot-tier.mjs', root).href)};
+    import { bundleCard } from ${JSON.stringify(new URL('src/online/cardRuntime/transpile.ts', root).href)};
+    const require = createRequire(${JSON.stringify(new URL('package.json', root).href)});
+    const React=require('react'), {renderToStaticMarkup}=require('react-dom/server');
+    const id='c10-cpu-field-test', key='src/cards/user/'+id+'.tsx', source=heavyUserCardSource(id);
+    assert.equal(/__pc|Date\\.|performance|isExportMode|canvasHeavy|compositing|fetch\\(/.test(source), false);
+    const parsed=parseCardSource(source,{key}); assert.equal(parsed.length,1); assert.equal(parsed[0].id,id);
+    const result=await bundleCard({runtime:'test',entry:key,read:k=>k===key?{body:source,hash:'fixture-source'}:null,hasBuiltin:()=>false});
+    assert.equal(result.ok,true,JSON.stringify(result)); assert.equal(result.bundle.modules.length,1);
+    const mod={exports:{}}; new Function('require','module','exports',result.bundle.modules[0].js)(require,mod,mod.exports);
+    const def=mod.exports.cpuField, caps=cardCapabilities(def), tier=snapshotTier(caps);
+    assert.equal(caps.frameMode,'stateful'); assert.equal(caps.compositing,'unknown'); assert.equal(caps.canvasHeavy,false); assert.equal(tier,'local');
+    const render=(seed,t)=>renderToStaticMarkup(React.createElement(def.Component,{params:{seed},t}));
+    const start=performance.now(), first=render(1,0), same=render(1,0), changed=render(17,0.125);
+    assert.equal(first,same); assert.notEqual(first,changed); assert.equal((first.match(/background:hsl/g)||[]).length,128);
+    console.log(JSON.stringify({cardId:id,caps,tier,sourceChars:source.length,cpuDiagnosticMs:performance.now()-start,browserMeasurement:false}));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr);
+  const actual = JSON.parse(child.stdout); t.diagnostic(JSON.stringify(actual));
+  const control = { clipId: 'actual-user', cardId: actual.cardId, snapshotKey: 'content', tier: actual.tier,
+    compositing: actual.caps.compositing, capabilities: actual.caps, start: 11, end: 11.26, count: 8 };
+  // Selection is not forged here: this is explicitly the post-selection split.
+  // The actual browser prerequisite must establish selected/heavy before host.
+  const tasks = splitPlan({ planTask: plan(), entryKey: 'project-entry', cardPlan: [control],
+    envFingerprint: queueView().envFingerprint, codeVersion: 'v1', browserFingerprints: ['bbbbbbbbbbbbbbbb'],
+    isUserCard: () => true, cardSourceVersions: { [actual.cardId]: 'user:fixture-source' } });
+  assert.equal(tasks.length, 1); assert.equal(tasks[0].tier, 'local');
+  assert.equal(tasks[0].input.dual, undefined); assert.equal(tasks[0].requires.userCards, true);
+  assert.equal(tasks[0].requires.envFingerprint, queueView().envFingerprint);
+  assert.equal(tasks[0].weight.class, 'heavy');
 });
 
 test('A5 particles candidate uses real independent canvas capability and content identity; heaviness remains subject to measurement', () => {
