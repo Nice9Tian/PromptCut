@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { createAccountRunEvents } from './account-run-events.mjs';
 import { openAccountLedger } from '../../account/ledger.mjs';
 import { createConversationAuthority, claimNextInState, markReadInState, finishInState } from '../../account/conversation-authority.mjs';
@@ -78,12 +79,14 @@ test('supervised synchronous emitter copies payload, drains in order, omits full
 });
 
 test('real SQLite failure is supervised immediately; subsequent gate and flush reject original failure', async () => {
-  let shouldFail = false;
-  const f = fixture({ failpoint(point) { if (shouldFail && point === 'event-before-commit') throw new Error('durable-event-write-failed'); } });
+  const f = fixture();
   const store = f.open(); const unhandled = [];
   const capture = e => unhandled.push(e); process.on('unhandledRejection', capture);
   try {
-    const writer = await store.writer({ grant: grant() }); shouldFail = true;
+    const writer = await store.writer({ grant: grant() });
+    const faultDb = new DatabaseSync(f.file);
+    try { faultDb.exec("CREATE TRIGGER fail_event_insert BEFORE INSERT ON run_events BEGIN SELECT RAISE(ABORT,'durable-event-write-failed'); END;"); }
+    finally { faultDb.close(); }
     writer.emit({ type: 'tool_call', name: 'add_clip' });
     const failure = await writer.failed;
     assert.match(failure.message, /durable-event-write-failed/);
@@ -91,7 +94,21 @@ test('real SQLite failure is supervised immediately; subsequent gate and flush r
     await assert.rejects(writer.flush(), /durable-event-write-failed/);
     assert.equal(store.after({ ...grant(), after: 0 }).head, 0);
     await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(unhandled, []);
-  } finally { process.off('unhandledRejection', capture); await store.close(); f.cleanup(); }
+    await assert.rejects(store.close(), /durable-event-write-failed/);
+  } finally { process.off('unhandledRejection', capture); await store.close().catch(() => {}); f.cleanup(); }
+});
+
+test('concurrent registered runs share one committed conversation cursor, other conversations do not', async () => {
+  const f = fixture(); const store = f.open();
+  try {
+    const [a, b] = await Promise.all([store.writer({ grant: grant() }), store.writer({ grant: grant({ runGrantId: 'grant_b', runId: 'run_b', messageId: 'message_b' }) })]);
+    a.emit({ type: 'run' }); b.emit({ type: 'run' });
+    a.emit({ type: 'progress', step: 1 }); b.emit({ type: 'error', code: 'model-error' });
+    await Promise.all([a.flush(), b.flush()]);
+    const rows = store.after({ ...grant(), after: 0 }).events;
+    assert.deepEqual(rows.map(e => e.eventSeq), [1, 2, 3, 4]);
+    assert.equal(new Set(rows.map(e => `${e.runGrantId}:${e.eventId}`)).size, 4);
+  } finally { await store.close(); f.cleanup(); }
 });
 
 // Real doc ledger, RAM-key registration, signed invocation/run authority and FULL
@@ -132,7 +149,10 @@ async function managerFixture(failpoint = () => {}) {
   return { projectId, ledger, events, intents, finishes: () => finishes,
     manager(runnerFactory) { return manager = createAccountRunManager({ runClient: client, readIntents: intents, runEvents: events,
       runnerFactory, serviceKid: 'kid-a', instanceId: processInstance.registration.instanceId }); },
-    async close() { manager?.close(); await events.close(); intents.close(); instances.close(); ledger.close(); f.cleanup(); } };
+    async close() { manager?.close();
+      try { await events.close(); }
+      finally { intents.close(); instances.close(); ledger.close(); f.cleanup(); }
+    } };
 }
 
 test('real doc read/run bindings reach durable run/tool/model events, but no inferred successful finish', async () => {
@@ -179,5 +199,6 @@ test('append failure aborts actual runner handle, waits owned drain, and blocks 
     assert.equal(models, 0); assert.equal(tools, 0); assert.ok(aborted >= 1);
     assert.equal(f.finishes(), 0); assert.equal(drained, true);
     await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(unhandled, []);
-  } finally { releaseDrain(); process.off('unhandledRejection', capture); await f.close(); }
+    await assert.rejects(f.events.close(), /real-sqlite-commit-failure/);
+  } finally { releaseDrain(); process.off('unhandledRejection', capture); await f.close().catch(error => assert.match(error.message, /real-sqlite-commit-failure/)); }
 });

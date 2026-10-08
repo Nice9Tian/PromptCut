@@ -18,7 +18,7 @@ function validateBinding(value) {
  * authority. verifyGrant must invoke the current signed doc run gate. Never expose
  * registerRun/append to an HTTP body or treat an event binding as a credential. */
 export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoint = () => {}, now = Date.now } = {}) {
-  if (!path.isAbsolute(file ?? '') || !text(authorityId) || typeof verifyGrant !== 'function') fail(503, 'run-events-configuration');
+  if (typeof file !== 'string' || !path.isAbsolute(file) || !text(authorityId) || typeof verifyGrant !== 'function') fail(503, 'run-events-configuration');
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(file);
   try {
@@ -117,9 +117,12 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       async beforeCall() { await serial; if (error) throw error; usable(); },
     };
   }
-  return { registerRun, append, after, writer,
+  return { registerRun, append, after, writer, failure: () => fatal,
     inspect: () => ({ synchronous: db.prepare('PRAGMA synchronous').get().synchronous,
       journalMode: db.prepare('PRAGMA journal_mode').get().journal_mode, integrity: db.prepare('PRAGMA integrity_check').get().integrity_check }),
-    async close() { if (closed) return; closing = true; await tail; if (!closed) { closed = true; db.close(); } },
+    async close() { if (closed) { if (fatal) throw fatal; return; }
+      closing = true; await tail; if (!closed) { closed = true; db.close(); }
+      if (fatal) throw fatal;
+    },
   };
 }

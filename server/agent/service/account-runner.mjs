@@ -159,7 +159,10 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
         confirmed.receipt?.runGrantId !== grant.runGrantId) fail(503, 'read-confirmation-unknown');
     const local = readIntents.get(intent.readIntentId);
     if (local.state === 'execution-started') fail(503, 'run-execution-uncertain');
-    if (local.state === 'finished') { slot.grant = null; slot.finish = { ...binding, requestId: `finish:${grant.runGrantId}` }; return; }
+    if (local.state === 'finished') {
+      if (runEvents) fail(503, 'run-outcome-unavailable');
+      slot.grant = null; slot.finish = { ...binding, requestId: `finish:${grant.runGrantId}` }; return;
+    }
     let settle;
     const entry = { grant, runner: null, handle: null, cancelled: false, done: null,
       cancelController: new AbortController(),
@@ -187,7 +190,7 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       };
       const runner = await runnerFactory({ grant, record: prompt,
         onModelCall: gated, beforeToolCall: gated,
-        ...(events ? { onEvent: event => events.emit(event.type === 'done'
+        ...(events ? { onEvent: event => events.emit(event?.type === 'done'
           ? { ...event, type: 'runner_done', settlement: 'pending' } : event) } : {}),
         signal: entry.cancelController.signal });
       entry.runner = runner;
@@ -221,9 +224,9 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
         // No emit may remain unobserved when the owned runner has drained.
         try { await events?.flush(); }
         finally {
-        runnerClose(entry);
-        active.delete(grant.runId); if (drained) closedRuns.add(grant.runId);
-        settle();
+          runnerClose(entry);
+          active.delete(grant.runId); if (drained) closedRuns.add(grant.runId);
+          settle();
         }
       }
     }
@@ -269,7 +272,8 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     waking.set(key, work);
     try { return await work; }
     catch (error) {
-      if (error?.status === 503 && !['run-execution-uncertain', 'run-outcome-unavailable', 'run-events-persistence'].includes(error?.code) &&
+      if (error?.status === 503 && !runEvents?.failure?.() &&
+          !['run-execution-uncertain', 'run-outcome-unavailable', 'run-events-persistence'].includes(error?.code) &&
           (slot.admitRequestId || slot.grant || slot.finish)) scheduleRetry(key, projectId, conversationId);
       throw error;
     } finally { waking.delete(key); }
