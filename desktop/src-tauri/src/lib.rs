@@ -782,6 +782,11 @@ mod tests {
         assert_eq!(account_editor_port("com.promptcut.desktop", Some("6340")).unwrap(), 5210);
         assert_eq!(account_editor_port("com.promptcut.isolated.account-probe", Some("6340")).unwrap(), 6340);
         assert_eq!(account_editor_port("com.promptcut.isolated.account-probe", Some("6347")).unwrap(), 6347);
+        assert_eq!(account_editor_port("com.promptcut.isolated.account-probe", Some("6500")).unwrap(), 6500);
+        assert_eq!(account_editor_port("com.promptcut.desktop", Some("6500")).unwrap(), 5210);
+        for port in ["6499", "6501", "6509", "6510"] {
+            assert!(account_editor_port("com.promptcut.isolated.account-probe", Some(port)).is_err());
+        }
         assert!(account_editor_port("com.promptcut.isolated.account-probe", None).is_err());
         assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("5210")).is_err());
         assert!(account_editor_port("com.promptcut.isolated.account-probe", Some("6348")).is_err());
@@ -791,6 +796,11 @@ mod tests {
         assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), None).is_err());
         assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), Some("bad")).is_err());
         assert_eq!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://127.0.0.1:6388"), Some(&"a".repeat(64))).unwrap().0, "https://127.0.0.1:6388");
+        assert_eq!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://visuhive.com"), None).unwrap(), ("https://visuhive.com".into(), None));
+        for origin in ["http://visuhive.com", "https://www.visuhive.com", "https://visuhive.com/", "https://evil", "https://127.0.0.1:6500"] {
+            assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some(origin), None).is_err());
+        }
+        assert!(account_cloud_binding("com.promptcut.isolated.account-probe", Some("https://visuhive.com"), Some(&"a".repeat(64))).is_err());
     }
 
     fn args(v: &[&str]) -> std::vec::IntoIter<String> {
