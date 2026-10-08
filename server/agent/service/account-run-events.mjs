@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import { canonicalJson } from '../../account/ledger.mjs';
+import { canonicalJson, digestOf } from '../../account/ledger.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const text = v => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(v);
@@ -27,6 +27,9 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       CREATE TABLE IF NOT EXISTS run_bindings (grant_id TEXT PRIMARY KEY, binding TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_heads (project_id TEXT, conversation_id TEXT, head INTEGER NOT NULL,
         PRIMARY KEY(project_id,conversation_id));
+      CREATE TABLE IF NOT EXISTS accepted_messages (project_id TEXT, conversation_id TEXT, message_id TEXT,
+        arrival_seq INTEGER NOT NULL, content TEXT NOT NULL, event_seq INTEGER NOT NULL,
+        PRIMARY KEY(project_id,conversation_id,message_id), UNIQUE(project_id,conversation_id,arrival_seq));
       CREATE TABLE IF NOT EXISTS run_events (project_id TEXT, conversation_id TEXT, seq INTEGER NOT NULL,
         grant_id TEXT NOT NULL, event_id TEXT NOT NULL, content TEXT NOT NULL, payload TEXT NOT NULL,
         PRIMARY KEY(project_id,conversation_id,seq), UNIQUE(grant_id,event_id));`);
@@ -52,6 +55,16 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
     const found = db.prepare('SELECT binding FROM run_bindings WHERE grant_id=?').get(binding.runGrantId);
     if (!found || found.binding !== canonicalJson(binding)) fail(403, 'run-event-binding');
   };
+  const headOf = (projectId, conversationId) => db.prepare('SELECT head FROM conversation_heads WHERE project_id=? AND conversation_id=?').get(projectId, conversationId)?.head ?? 0;
+  function insertEvent(binding, eventId, event, grantKey, content) {
+    const args = [binding.projectId, binding.conversationId];
+    const eventSeq = headOf(...args) + 1;
+    if (!Number.isSafeInteger(eventSeq)) fail(503, 'run-event-overflow');
+    const row = { v: 1, authorityId, ...binding, eventId, eventSeq, at: now(), event };
+    db.prepare('INSERT INTO run_events VALUES(?,?,?,?,?,?,?)').run(...args, eventSeq, grantKey, eventId, content, JSON.stringify(row));
+    db.prepare('INSERT INTO conversation_heads VALUES(?,?,?) ON CONFLICT(project_id,conversation_id) DO UPDATE SET head=excluded.head').run(...args, eventSeq);
+    return row;
+  }
   async function registerRun({ grant }) {
     usable(); if (closing) fail(503, 'run-events-closed');
     const source = structuredClone(grant), binding = bindingOf(source); validateBinding(binding);
@@ -78,15 +91,60 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       const content = canonicalJson({ binding, event });
       const prior = db.prepare('SELECT content,payload FROM run_events WHERE grant_id=? AND event_id=?').get(binding.runGrantId, eventId);
       if (prior) { if (prior.content !== content) fail(409, 'run-event-conflict'); return JSON.parse(prior.payload); }
-      const args = [binding.projectId, binding.conversationId];
-      const head = db.prepare('SELECT head FROM conversation_heads WHERE project_id=? AND conversation_id=?').get(...args)?.head ?? 0;
-      const eventSeq = head + 1; if (!Number.isSafeInteger(eventSeq)) fail(503, 'run-event-overflow');
-      const row = { v: 1, authorityId, ...binding, eventId, eventSeq, at: now(), event };
-      db.prepare('INSERT INTO run_events VALUES(?,?,?,?,?,?,?)').run(...args, eventSeq, binding.runGrantId, eventId, content, JSON.stringify(row));
-      db.prepare('INSERT INTO conversation_heads VALUES(?,?,?) ON CONFLICT(project_id,conversation_id) DO UPDATE SET head=excluded.head').run(...args, eventSeq);
-      return row;
+      return insertEvent(binding, eventId, event, binding.runGrantId, content);
     }));
     // Supervise immediately; the returned original promise still rejects for its owner.
+    tail = work.catch(() => {}); return work;
+  }
+  /** Private caller supplies a fresh doc conversation read, never messages from a
+   * public send body. Production must own the actual read-control HTTP/SSE scope;
+   * absence of that scope is propagated, never replaced by an ACL bypass. */
+  async function mirrorAccepted({ projectId, conversationId, read }) {
+    usable(); if (closing) fail(503, 'run-events-closed');
+    if (typeof read !== 'function') fail(503, 'accepted-message-source');
+    if (!text(projectId) || !text(conversationId)) fail(403, 'accepted-message-scope');
+    const snapshot = structuredClone(await read());
+    if (snapshot?.v !== 2 || snapshot.projectId !== projectId || snapshot.id !== conversationId ||
+        !Array.isArray(snapshot.messages)) fail(403, 'accepted-message-scope');
+    if (closing) fail(503, 'run-events-closed');
+    // Mutable queue/read/run references do not change the accepted original.
+    const seen = new Set(), arrivals = new Set();
+    const records = snapshot.messages.map(message => {
+      if (!text(message?.messageId) || !text(message.requestId) || !text(message.senderAccountId) ||
+          typeof message.senderNameAtSend !== 'string' || typeof message.content !== 'string' ||
+          message.contentDigest !== digestOf(message.content) || !Number.isSafeInteger(message.arrivalSeq) || message.arrivalSeq < 1 ||
+          !Number.isSafeInteger(message.createdAt) || message.createdAt < 0 || !Array.isArray(message.attachments) ||
+          message.selectionSnapshot?.projectId !== projectId || message.selectionSnapshot?.accountId !== message.senderAccountId ||
+          message.selectionSnapshot?.messageId !== message.messageId || seen.has(message.messageId) || arrivals.has(message.arrivalSeq))
+        fail(403, 'accepted-message-record');
+      seen.add(message.messageId); arrivals.add(message.arrivalSeq);
+      return Object.fromEntries(['messageId', 'requestId', 'arrivalSeq', 'senderAccountId', 'senderNameAtSend',
+        'createdAt', 'content', 'contentDigest', 'selectionSnapshot', 'attachments'].map(k => [k, message[k]]));
+    }).sort((a, b) => a.arrivalSeq - b.arrivalSeq);
+    const work = tail.then(() => transaction('accepted-message', () => {
+      let appended = 0;
+      for (const record of records) {
+        const args = [projectId, conversationId, record.messageId], content = canonicalJson(record);
+        const prior = db.prepare('SELECT content,event_seq FROM accepted_messages WHERE project_id=? AND conversation_id=? AND message_id=?').get(...args);
+        if (prior) {
+          if (prior.content !== content) fail(409, 'accepted-message-conflict');
+          const event = db.prepare('SELECT content FROM run_events WHERE project_id=? AND conversation_id=? AND seq=?').get(projectId, conversationId, prior.event_seq);
+          if (!event || event.content !== content) fail(503, 'accepted-message-gap');
+          continue;
+        }
+        const binding = { projectId, conversationId, messageId: record.messageId, senderAccountId: record.senderAccountId,
+          runId: null, runGrantId: null, instanceId: null, instanceGeneration: null, serviceKid: null };
+        const event = { type: 'user', messageId: record.messageId, prompt: record.content,
+          senderAccountId: record.senderAccountId, senderNameAtSend: record.senderNameAtSend,
+          arrivalSeq: record.arrivalSeq, createdAt: record.createdAt,
+          selectionSnapshot: record.selectionSnapshot, attachments: record.attachments };
+        // @ is excluded from grant IDs, so message keys cannot collide with runs.
+        const row = insertEvent(binding, `message:${record.messageId}`, event, `@message:${projectId}:${conversationId}`, content);
+        db.prepare('INSERT INTO accepted_messages VALUES(?,?,?,?,?,?)').run(...args, record.arrivalSeq, content, row.eventSeq);
+        appended++;
+      }
+      return { appended, head: headOf(projectId, conversationId) };
+    }));
     tail = work.catch(() => {}); return work;
   }
   function after({ projectId, conversationId, after = 0 }) {
@@ -117,7 +175,7 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       async beforeCall() { await serial; if (error) throw error; usable(); },
     };
   }
-  return { registerRun, append, after, writer, failure: () => fatal,
+  return { registerRun, append, after, writer, mirrorAccepted, failure: () => fatal,
     inspect: () => ({ synchronous: db.prepare('PRAGMA synchronous').get().synchronous,
       journalMode: db.prepare('PRAGMA journal_mode').get().journal_mode, integrity: db.prepare('PRAGMA integrity_check').get().integrity_check }),
     async close() { if (closed) { if (fatal) throw fatal; return; }

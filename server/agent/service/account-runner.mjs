@@ -343,6 +343,14 @@ export function createAccountRunnerService({ conversationClient, runClient, read
       runEvents, connectionsClosed, childrenClosed, now, log });
     const base = createAccountConversationService({ conversationClient, now });
     return { ...base, runManager: manager, runEvents,
+      // Internal assembly seam only. A production caller must already own a
+      // genuine conversation read-control invocation. POST /messages currently
+      // lacks that scope; do not call here from send or fabricate it from body.
+      async mirrorAccepted(identity, conversationId) {
+        if (!runEvents) fail(503, 'run-events-configuration');
+        return runEvents.mirrorAccepted({ projectId: identity?.projectId, conversationId,
+          read: () => base.conversation(identity, conversationId, 0) });
+      },
       async send(identity, conversationId, body) {
         const response = await base.send(identity, conversationId, body);
         void manager.wake(identity.projectId, conversationId).catch(error => log('agent.account.run.pending',
