@@ -14,6 +14,7 @@ import { createRunAuthority } from '../account/run-authority.mjs';
 import { openReadIntents } from '../agent/service/read-intents.mjs';
 import { createAccountRunManager } from '../agent/service/account-runner.mjs';
 import { createRunControlServer } from '../agent-service/run-control.mjs';
+import { instanceFixture } from './agent-instance-fixture.mjs';
 
 const projectId = 'sp_' + 'a'.repeat(26), accountId = 'acc_' + 'b'.repeat(24);
 const listen = (server, port) => new Promise((resolve, reject) => {
@@ -40,11 +41,21 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
   const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'control-test' });
   ledger.transaction(state => { state.projects[projectId] = { status: 'active', creatorAccountId: accountId,
     members: { [accountId]: { access: 'rw' } }, bans: {}, hosted: { agent: true } }; });
-  const servicePrincipal = { authenticated: 'temporary-agent-cert' };
+  const verifyServiceInState = (_state, source) => source?.authenticated === 'temporary-agent-cert' &&
+    source?.serviceKid === 'kid-fixture' ? { serviceId: 'agent', serviceKid: 'kid-fixture' } : null;
+  const instances = instanceFixture(ledger, { verifyServiceInState });
+  const agentProcess = instances.boot({ principal: instances.connection({ authenticated: 'temporary-agent-cert', serviceKid: 'kid-fixture' }) });
   const run = createRunAuthority({ ledger, conversationHooks: { claimNextInState, markReadInState, finishInState },
     verifySender: async ref => ({ ...ref, accountEventSeq: 0 }),
-    verifyServiceInState: (_state, source) => source === servicePrincipal ? { serviceId: 'agent', serviceKid: 'kid-fixture' } : null,
+    verifyServiceInState, instanceAuthority: instances.authority,
     synchronize: async () => {} });
+  const invoke = async (operation, input) => {
+    const signed = instances.authorize(agentProcess, operation, input);
+    const forwarded = input.principal ? { ...input, principal: { ...input.principal, servicePrincipal: signed.principal } }
+      : { ...input, servicePrincipal: signed.principal };
+    try { return await run[operation](forwarded); }
+    finally { instances.authority.release(signed.principal.instanceSession); }
+  };
   const principal = { authorizationId: 'valid', projectId, accountId, accountName: 'Alice',
     loginId: 'login-a', credentialId: 'credential-a', loginGeneration: 1 };
   const authority = createConversationAuthority({ ledger, accountAuthority: { authorizePrincipal: async () => principal },
@@ -54,20 +65,20 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
     runHooks: run.hooks, onFence: async input => ({ ack: true, ...input }) });
   const intents = openReadIntents({ file: path.join(dir, 'intents.sqlite') });
   const client = {
-    admit: input => run.admit({ ...input, servicePrincipal }),
-    confirmRead: input => run.confirmRead({ ...input, servicePrincipal }),
-    queryRead: input => run.queryRead({ ...input, servicePrincipal }),
+    admit: input => invoke('admit', input),
+    confirmRead: input => invoke('confirmRead', input),
+    queryRead: input => invoke('queryRead', input),
     async checkAccess({ projectId: p, runGrantId, action }) {
-      const actor = await run.resolveRunPrincipal({ servicePrincipal, projectId: p, runGrantId });
-      return run.checkAccess({ principal: actor, projectId: p, action });
+      const actor = await invoke('resolveRunPrincipal', { projectId: p, runGrantId });
+      return invoke('checkAccess', { principal: actor, projectId: p, action });
     },
-    finish: input => run.finish({ ...input, servicePrincipal }),
+    finish: input => invoke('finish', input),
     pending: async () => ({ conversations: [] }),
   };
   let socket, server, child, childPid, childExitPromise, childClosePromise;
   let childExited = false, childClosed = false, socketClosed = false, started;
   const startedPromise = new Promise(resolve => { started = resolve; });
-  const manager = createAccountRunManager({ runClient: client, readIntents: intents, serviceKid: 'kid-fixture', instanceId: 'instance-fixture',
+  const manager = createAccountRunManager({ runClient: client, readIntents: intents, serviceKid: 'kid-fixture', instanceId: agentProcess.registration.instanceId,
     runnerFactory: async () => ({
       async start() {
         server = net.createServer(peer => { socket = peer; });
@@ -96,7 +107,7 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
       (child?.exitCode !== null || child?.signalCode !== null),
   });
   const controlServer = createRunControlServer({ tls: pki.asset, docFingerprint256: pki.doc.fingerprint256,
-    serviceKid: 'kid-fixture', instanceId: 'instance-fixture', manager });
+    serviceKid: 'kid-fixture', instanceId: agentProcess.registration.instanceId, manager });
   try {
     await listen(controlServer, 5795);
     await authority.send({ principalRef: { authorizationId: 'valid' }, projectId,
@@ -107,7 +118,7 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
     assert.equal(grant.runId.length > 0, true);
     const control = { controlId: 'control-1', fenceRevision: 1, kind: 'stop', projectId,
       scope: { conversationId: 'conv1' }, operationFences: [{ runIds: [grant.runId] }] };
-    const body = { control, targetInstanceId: 'instance-fixture', targetServiceKid: 'kid-fixture' };
+    const body = { control, targetInstanceId: agentProcess.registration.instanceId, targetServiceKid: 'kid-fixture' };
     assert.equal((await post(5795, pki.wrong, body)).status, 403);
     assert.equal((await post(5795, pki.doc, { ...body, targetInstanceId: 'forged' })).status, 403);
     const receipt = await post(5795, pki.doc, body);
@@ -118,8 +129,8 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
     assert.equal(childExited && childClosed && socketClosed && socket.destroyed && !server.listening, true);
     await work;
     const missingWitness = createRunControlServer({ tls: pki.asset, docFingerprint256: pki.doc.fingerprint256,
-      serviceKid: 'kid-fixture', instanceId: 'instance-fixture', manager: {
-        drainControl: async () => ({ instanceId: 'instance-fixture', serviceKid: 'kid-fixture', closedRunIds: [grant.runId],
+      serviceKid: 'kid-fixture', instanceId: agentProcess.registration.instanceId, manager: {
+        drainControl: async () => ({ instanceId: agentProcess.registration.instanceId, serviceKid: 'kid-fixture', closedRunIds: [grant.runId],
           dispatchesOpen: 0, connectionsOpen: 1, childrenOpen: 0, oldInstanceUnknown: false }),
       } });
     await listen(missingWitness, 5797);
@@ -130,6 +141,6 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
     if (server?.listening) await close(server);
     if (child && child.exitCode === null && child.signalCode === null) child.kill();
     if (childExitPromise && childClosePromise) await Promise.allSettled([childExitPromise, childClosePromise]);
-    intents.close(); ledger.close(); fs.rmSync(dir, { recursive: true, force: true });
+    instances.close(); intents.close(); ledger.close(); fs.rmSync(dir, { recursive: true, force: true });
   }
 });
