@@ -93,3 +93,13 @@ type AccountMembersSnapshot = {
 2. **桌面members路由守门与实际SCRIPT目标**：独占account_vault.rs仅新增精确members路径＋新 `server/test/account-member-native-route.test.mjs`，复用实际SCRIPT提取执行；无token/body/未知路径拒，原admin/create/session保留。不扩port/origin/bridge capability；纯HTTP可受控不监听但需明确不能算IPC，root另编实际壳。Sol不同时编辑vault。若根更希望Luna只测，可让其写这个专属目标，本Sol后改唯一route行。
 
 两包都不阻后台快照及关键可见界面先实现；申请加入、删除项目、50对话细则不派成“补齐”伪范围。当前仅方案与报告，所有拟export均未实现，仍待租约。
+
+## 2026-10-09 已批准实施范围（41e5 提案后）
+
+主会话采用本提案，授权真实账号成员快照、按 accountId 踢出/解禁与“回项目首页”。后者只断当前页连接，保留账号登录和 joined 关系；删除、申请加入、名单管理、改密仍另拆。本节记录新的实施租约，不覆盖前面的只读提案历史。
+
+本 Sol 独占前端 client/private parser、syncManager、MembersPanel 账号分流、新 AccountMembersPanel 和必要 sync.css；后端新 project-members、account-hosted projection、modules/account-projects members、combo 回调与 authority 三处可信显示名快照。authority 的 ACL/fence/事务语义不改。桌面 vault 和 account-member-native-route 目标改由 Luna 独占，本 Sol 不写。
+
+bootApiGuard 的真实文件为 src/online/apiGuard.ts；新 members 是精确 POST /hosted/shared/account/members，不是 /api/account 的新别名。守门与棘轮只登记这一实际路径，不开放 shared.*、未知 account 路径或舞台能力。专属测试/探针/fixture 在上表基础上获租，旧 fixture 只允许注入 AgentPort（默认仍6526）与 ports，不改变 ready/ACL/关闭行为。
+
+快照必须 fresh 授权后同步投影当前 ledger/真实连接，只白名单返回可信名字；admin 仍 pending200，不宣称多服务关闭完成。409 丢弃选择、刷新后让用户重选；丢 ACK 保留同一原 body/requestId 重试。轮询仅展示，不当撤销依据。未启动服务、未运行本阶段目标/type/full。先完成固定源码再申请主会话真实窗口，6566 明确禁用。
