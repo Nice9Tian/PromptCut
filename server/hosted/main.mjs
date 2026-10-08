@@ -148,6 +148,11 @@ async function main() {
           docAttestationPrivateKey: file('PROMPTCUT_DOC_ORDER_ATTESTATION_KEY_FILE'),
         },
       };
+      if (env.PROMPTCUT_DOC_AGENT_SERVICE_KID) {
+        const agent = services.filter(service => service.serviceId === 'agent');
+        if (agent.length !== 1) throw new Error('agent-service');
+        account.agent = { fingerprint256: agent[0].fingerprint256, serviceKid: env.PROMPTCUT_DOC_AGENT_SERVICE_KID };
+      }
       if (!account.authorityId || !account.authorityUrl || !account.keyId) throw new Error('authority');
     } catch { return configError('account-v2'); }
   }

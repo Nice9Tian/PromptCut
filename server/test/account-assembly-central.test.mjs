@@ -7,7 +7,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
-import { startHostedCombo } from '../hosted/combo.mjs';
+import { startHostedCombo, hostedPaths } from '../hosted/combo.mjs';
+import { addServiceKey, generateServiceKeyPair } from '../auth/service-identity.mjs';
+import { createAssetMtlsTransport } from '../hosted/asset-doc-client.mjs';
 import { stageHostedAssetFiles } from '../hosted/files.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { wsClient, waitFor } from './fake-ws-kit.mjs';
@@ -33,14 +35,15 @@ test('v2 required refuses missing order before opening any cloud entry', async (
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('actual provider/order → central doc → independent asset → two pages: durable op, readonly selection, restart and revoked resume', actual, async t => {
+for (const agentConfigured of [false, true]) test(`actual provider/order → central doc → independent asset → two pages${agentConfigured ? ' + real conversation/run factories' : ''}: durable op, readonly selection, restart and revoked resume`, actual, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-doc-assembly-central-'));
   const pki = assetWiringPki(dir), pair = { account: generateKeyPairSync('ed25519'), doc: generateKeyPairSync('ed25519') };
-  let provider, accountServer, combo, child, childClosed, childLog = '', closed = false;
+  let provider, accountServer, combo, child, childClosed, childLog = '', closed = false, agentTransport;
   const clients = [];
   const closePages = async () => { for (const client of clients) client.close(); await Promise.all(clients.map(client => client.closed)); clients.length = 0; };
   t.after(async () => {
     await closePages();
+    agentTransport?.close();
     if (child && child.exitCode === null && child.signalCode === null) child.kill();
     await childClosed;
     await combo?.close();
@@ -67,6 +70,9 @@ test('actual provider/order → central doc → independent asset → two pages:
   await new Promise(resolve => accountServer.listen(5770, '127.0.0.1', resolve));
   const docDir = path.join(dir, 'doc'), assetDir = path.join(dir, 'asset'), app = path.join(dir, 'app');
   fs.mkdirSync(docDir); fs.mkdirSync(assetDir); stageHostedAssetFiles(path.resolve('.'), app);
+  const agentKey = generateServiceKeyPair();
+  if (agentConfigured) addServiceKey(hostedPaths(docDir).servicesFile, {
+    service: 'agent', role: 'agent', actsFor: 'member', kid: agentKey.kid, pub: agentKey.pub });
   const config = { dataDir: docDir, docPort: 5771, assetPort: 5779, host: '127.0.0.1', trustLoopback: false,
     clusterToken: 'assembly-fixture-cluster-token-32', accountRequired: true,
     assetPublicUrl: 'http://127.0.0.1:5773/api/asset',
@@ -74,7 +80,9 @@ test('actual provider/order → central doc → independent asset → two pages:
     account: { origin: 'https://127.0.0.1:5770', clientTls: pki.doc, serverFingerprint256: pki.account.fingerprint256,
       authorityId: 'assembly-doc', authorityUrl: 'https://fixture.invalid/editor', signingKey: pair.doc.privateKey,
       keyId: 'assembly-doc', internalTls: pki.doc, internalPort: 5772,
-      services: [{ serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 }],
+      services: [{ serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 },
+        ...(agentConfigured ? [{ serviceId: 'agent', fingerprint256: pki.wrong.fingerprint256 }] : [])],
+      ...(agentConfigured ? { agent: { fingerprint256: pki.wrong.fingerprint256, serviceKid: agentKey.kid } } : {}),
       order: { witnessKeys: { 'assembly-account': pair.account.publicKey }, docAttestationPrivateKey: pair.doc.privateKey } } };
   combo = await startHostedCombo(config);
   const origin = 'http://127.0.0.1:5771';
@@ -118,7 +126,44 @@ test('actual provider/order → central doc → independent asset → two pages:
   const delegation = await combo.accountRuntime.resolveAgentDelegation(sessions[0].agentDelegationTicket);
   assert.equal(delegation.accountId, ids[0]);
   await assert.rejects(combo.accountRuntime.resolveAgentDelegation(sessions[0].assetTicket), /ticket-expired/);
-  await assert.rejects(combo.docAssembly.runProvider.checkAccess({ principal: delegation, projectId, action: 'read' }), /run-authority-unavailable/);
+  await assert.rejects(combo.docAssembly.runProvider.checkAccess({ principal: delegation, projectId, action: 'read' }),
+    agentConfigured ? /run-instance-unavailable/ : /run-authority-unavailable/);
+  if (agentConfigured) {
+    assert.ok(combo.docAgentAssembly);
+    const enable = async enabled => call(0, 'admin', { projectId, op: 'set-hosted-service', service: 'agent', enabled,
+      expectedAccessRevision: combo.accountRuntime.authority.listProjects(ids[0]).owned.find(item => item.projectId === projectId).accessRevision,
+      requestId: `agent-${enabled}-${Date.now()}` });
+    assert.equal((await enable(true)).status, 200);
+    agentTransport = createAssetMtlsTransport({ origin: 'https://127.0.0.1:5772', tls: pki.wrong,
+      serverFingerprint256: pki.doc.fingerprint256 });
+    const rpc = (action, body) => agentTransport.request('POST', '/internal/v2/' + action, body);
+    for (const [index, client] of [a, b].entries()) assert.equal((await received(client, {
+      type: 'selection.set', projectId, pageId: `sent-page-${index}`, revision: 1, selection: { clipIds: [] }, reqId: `sent-${index}` })).type, 'selection.ok');
+    const send = (index, conversationId, requestId, selectionInput = { pageId: `sent-page-${index}` }) => rpc('conversations/send', {
+      delegation: sessions[index].agentDelegationTicket, projectId, conversationId, requestId, content: `message ${index}`, selectionInput });
+    await assert.rejects(send(0, 'actual-conversation', 'first'), /consent-required/);
+    for (const id of ids) provider.acceptConsent(id, 'test-consent', Date.now());
+    const sent = (await send(0, 'actual-conversation', 'first')).result;
+    assert.equal(sent.queuePosition, 1);
+    assert.equal((await send(0, 'actual-conversation', 'first')).result.messageId, sent.messageId);
+    await assert.rejects(send(0, 'actual-conversation', 'forged', { pageId: 'sent-page-0', selection: { clipIds: ['fake'] } }), /invalid-authority-claim/);
+    assert.equal((await send(1, 'actual-conversation', 'second')).result.queuePosition, 2);
+    const pending = (await rpc('runs/pending', {})).result;
+    assert.deepEqual(pending.conversations.map(row => row.conversationId), ['actual-conversation']);
+    assert.equal(Object.keys(pending.conversations[0]).length, 3);
+    await assert.rejects(rpc('runs/admit', { projectId, conversationId: 'actual-conversation', requestId: 'wake' }), /run-instance-unavailable/);
+    await assert.rejects(rpc('conversations/send', { delegation: sessions[0].agentDelegationTicket, projectId,
+      conversationId: 'fake', requestId: 'fake', content: 'fake', accountId: ids[1] }), /invalid-authority-claim/);
+    await assert.rejects(rpc('conversations/switch', { delegation: sessions[0].agentDelegationTicket, projectId,
+      conversationId: 'actual-conversation', requestId: 'make-private', visibility: 'private' }), /agent-fence-pending/);
+    const messages = (await rpc('conversations/get', { delegation: sessions[0].agentDelegationTicket, projectId,
+      conversationId: 'actual-conversation' })).result.messages;
+    assert.equal(messages.find(message => message.messageId !== sent.messageId).queueState, 'cancelled');
+    // off then on cannot revive already cancelled messages. Missing instance
+    // registration is explicitly pending, not replaced by this HTTP fixture.
+    assert.equal((await enable(false)).status, 200); assert.equal((await enable(true)).status, 200);
+    assert.equal((await rpc('runs/pending', {})).result.conversations.length, 0);
+  }
   const readonly = await call(0, 'admin', { projectId, op: 'set-list', members: [{ accountId: ids[1], access: 'r' }],
     expectedAccessRevision: combo.accountRuntime.authority.listProjects(ids[0]).owned.find(item => item.projectId === projectId).accessRevision,
     requestId: 'readonly' });
@@ -151,5 +196,5 @@ test('actual provider/order → central doc → independent asset → two pages:
   const oldPrincipal = accepted[0].actor;
   assert.notEqual(await combo.accountRuntime.resumeGate({ ...oldPrincipal, realm: 'account', projectId, tenantId: projectId }), null);
   assert.equal((await call(0, 'session', { projectId, deviceId: 'page-0', requestId: 'revoked' })).status, 401);
-  t.diagnostic(`actual order accepted=${accepted.length}, orderSeq=${changed.orderSeq}; no run provider installed`);
+  t.diagnostic(`actual order accepted=${accepted.length}, orderSeq=${changed.orderSeq}; ${agentConfigured ? 'real factories; registered run instance/control ACK remains unavailable' : 'no run provider installed'}`);
 });
