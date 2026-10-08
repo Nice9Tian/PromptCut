@@ -88,3 +88,10 @@
 - fixture 现在直接导入 `src/kernel/project.ts` 的 `createEmptyProject`，并以同一项目名构造 `initialProject`，让浏览器流程使用真实完整项目形状。没有改 `ControlBar`、默认项目加载路径或渲染策略来掩盖 fixture 错误。
 - 删除 `CloudAiPanel.css` 中依据 `data-cloud-can-stop="0"` 隐藏 `ai-stop` 的单条规则。Composer 原有的 disabled 状态、title 与 aria-label 权限说明因此能在账号模式无停止权限时展示；没有改 Composer 或其它产品文件。
 - 只读 package 为 ES module；纯 Node 24 导入 `src/kernel/project.ts` 成功，生成对象检查为项目名正确、version 1、duration 30、两条轨道、media 数组。fixture 的 `node --check` 通过；`tsc -p tsconfig.json --pretty false` 通过；`node --import=./scripts/lib/test-silent-processes.mjs scripts/test-suite.mjs src/ai/cloud/account-conversation-controls.test.mjs` 7 项通过、0 失败，包含 Composer 真实 SSR 权限呈现回归。`git diff --check` 通过。未运行完整测试、listener、浏览器、节点或 fixture 服务。
+
+## Agent 服务重启后的对话权限重读（2026-10-09）
+
+- root 第三次真实窗口构建无 TypeScript/type/full 回归（type 0；full 5417 项、0 失败、4 skipped），浏览器通过 10 项端口前置检查，两个账号的编辑器打开和 consent 均完成，随后 owner 在创建共享对话阶段超时；result 无 pageerror。安全网络摘要显示 Agent 关闭期间 `info`、对话列表和 events 返回 403；creator 开启后 `info` 与 events 返回 200，但权限读取流程没有发起新的对话列表请求，面板一直停在“正在读取对话权限”。没有将 fixture 凭证写入或读取到报告。
+- 原 `metadataKey` 只由 qKey 和 conversation ID 组成，刷新 effect 也只依赖账号模式、consent、conversation、refresh 函数和该 key。Agent 开启状态变化时 key 不变，因此先前失败的历史/权限读取不会重做，发送区也继续正确保持关闭。
+- `CloudAiPanel.tsx` 将 `cloud.enabled` 和 `chat.info?.enabled` 的可用状态位纳入 `metadataKey`。项目开关或服务 `info.enabled` 状态恢复时，既有 metadata refresh effect 会重新读取当前对话权限；key 在 render 中同步变化，使 `metadataReady` 先转为 false，成功刷新前仍禁发。流程只重读原 conversation，不创建新对话；creator 私有只读仍由已读取的 conversation metadata 决定，异步控制请求 epoch/身份隔离没有变化。此次无需改 `useCloud.ts`。
+- 本修复验证：`node --check`、`tsc -p tsconfig.json --pretty false`、账号控制目标测试（7 项通过、0 失败）、`git diff --check`。没有重跑 browser、服务或 full；root 将用固定源码重新构建并实际复测。

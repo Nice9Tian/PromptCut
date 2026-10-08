@@ -135,7 +135,11 @@ export function CloudAiPanel(props: {
   useEffect(() => { setControlPending(null); setControlNoteState(null); }, [controlScope.epoch]);
   if (controlPendingRef.current && !controlScopeGuardRef.current.isCurrent(controlPendingRef.current.scope)) controlPendingRef.current = null;
   if (controlInFlightRef.current && controlPendingRef.current?.requestId !== controlInFlightRef.current) controlInFlightRef.current = null;
-  const metadataKey = `${qKey}:${chat.conversationId}`;
+  // Re-read permissions after the project switch or Agent service itself is restored.
+  // Including these availability bits in the synchronous key keeps sending gated
+  // during the render before the refresh effect runs.
+  const metadataAvailabilityKey = `${cloud.enabled ? "on" : "off"}:${chat.info?.enabled === false ? "off" : "on"}`;
+  const metadataKey = `${qKey}:${chat.conversationId}:${metadataAvailabilityKey}`;
   const metadataReady = !cloud.accountMode || metadataReadyKey === metadataKey;
   const creatorReadOnly = controlPolicy.creatorReadOnly;
   const canSwitchVisibility = controlPolicy.canSwitchVisibility;
