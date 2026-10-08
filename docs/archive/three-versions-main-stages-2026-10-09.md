@@ -225,3 +225,16 @@ Root offline --locked Rust构建430d exit0/wall22.766s、配置及identifier只�
 结果在TEMP pc-root-publisher-v2-7f827875-once/root.log和metadata.json，节点/run/pc-publisher-v2-851b319d789c4670/root-result.json、/var/tmp/pc-publisher-v2-851b319d789c4670/publisher-v2-result.json。成功实验实际stop自有service/scope、原父子出生关闭后，root再核inactive/PID0/两个scope空/6540–6549无监听；准确核fragment SHA及drop-in dev/ino/digest、保存两份配置后只移除对应unit/drop-in、daemon-reload。success-fixture清理记录successful-fixture-config-cleanup.json；锁与全部结果保留。生产account274484/doc274497/asset273011/nginx9395全程active、NRestarts0，前后完全相同。
 
 producer报告收回到agent-reports/AGENT-codex-018-asset-root-publisher.md。原Astra工作区安全复用为即时撤销分支；Luna原生members窄块092fbed4只收根集成，仍待真实最终Rust验证，原分支已push保留；Luna工作区复用为对话控制UI，Sol继续成员UI；本任务在用仍4个、累计物理清理仍50，不动用户旧六个及其它会话。
+
+
+## 成员界面、全设备踢出及原生members入口小阶段
+
+固定产品根候选ab0d10286703bf3bee3d0eb8337e60b78d322dde：type0/墙6.984秒；专属27/27、3180.2215ms；npm全量5410项/5406通过/0失败/0取消/4跳过、72106.8852ms（墙72.437秒），npm自动重跑0；online编译exit0/1.890秒。真实独立Rust离线锁定构建19.219秒、exe SHA256 d5dbad6489c669490d012b6f3736ff51e19169f54c3967912032d12492896178；实际IPC35/35/12136ms，五个Rust源文件与最终候选一致，含创建者/普通成员真实members快照、bans白名单、缺body/token/错误大小写/后缀拒绝、旧Bearer401及原同意/恢复/退出检查。空页面实际原生桥接不代表完整React桌面UI。原生自有9后代、asset42192均实际关闭，相关监听清零。
+
+浏览器首轮ab0：34.741秒/wrapper35.266秒/exit1，completed=false，1/1前置但join-two-devices超时；未kick/admin。真实分享气泡遮按钮中心。仅probe/report d525有因修正，通过正常×关闭而非DOM注入；二轮ff874：35.198秒/wrapper35.750秒，5项4过1失败，phase kick。气泡1/center未命中→气泡0/center命中、真正浮层2成员行，A真实3页设备且B占2；admin200和两个session403、真实被踢弹框已到，但错误WS路径过滤漏计，不能当close通过。两轮原JSON/日志/图保留，不把首次失败改绿。
+
+只读明确syncManager账号base构造/hosted/、invite仅变protocol、真实fixture同路径；原probe筛/hosted/ws。97c3窄修同时限定真实wss origin与/hosted/，created+101先证旧连接，再逐requestID等其对应Closed，ID只RAM，安全计数入报告。最终固定666431be第三真实单轮：14/14、completed=true、5922ms/wrapper6.437秒/exit0，B/B2各旧live1/101，之后各旧Closed1/allOldClosed=true；两真join403、禁入列表、unban后真join、回首页保账号/列表并重开同project、无重复创建全过。asset21188、Chrome三contexts/舞台/fixture均close，root最终6560–6579及6340/6348/6378/6381–6388/6526监听空。
+
+ab0→最终产品与所有test字节不变（src/server/desktop/package/lock diff0），两修仅probe+报告，沿用固定产品已通过的三门，不重复整套历史验收、full或cargo。安全根结果与三轮截图/原日志在 three-versions-member-controls-evidence/，成功图复制到 three-versions-user-path/account-creator-{two-devices,ban}.png，主会话已实际看图。禁入UI诚实“正在确认相关服务关闭”；真正Agent task/read关闭与改密退出待独立闭环，不冒称admin200即complete。
+
+Sol成员报告与Luna原生报告归档agent-reports。本任务继续4个物理工作区；这轮未删除工作区，累计清理仍50=PC36+VH14。实际Agent执行器与生产部署未完成，release尚不推进。

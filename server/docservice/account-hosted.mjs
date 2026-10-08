@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { digestOf } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
+import { createProjectMembers } from '../account/project-members.mjs';
 import { accountError } from '../account/client.mjs';
 import { instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createFileStore, createMemoryStore, fileNameOf } from './store/index.mjs';
@@ -195,6 +196,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     },
     requireAssetReady,
     bindService(value, config = null) { service = value; hostedConfig = config; },
+    membersSnapshot: createProjectMembers({ ledger, authority, getConnections: () => service?.describe().conns }),
     async pageFenceReceipt(eventId) { return pageFences.get(eventId) ?? null; },
     async start() { return authority.start(); },
     async issueSession({ principal, deviceId, expectedAssetInstanceId }) {

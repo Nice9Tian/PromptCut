@@ -1,0 +1,34 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs C:\Users\admin\AppData\Local\Temp\pc-members-root-ff874e5b-browser.test.mjs
+
+{"completed":false,"phase":"kick","checks":5,"wallMs":35198,"closed":true,"output":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ff874e5b-once"}
+✖ real compiled account member controls (35425.0958ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 35493.9389
+
+✖ failing tests:
+
+test at ..\..\..\..\AppData\Local\Temp\pc-members-root-ff874e5b-browser.test.mjs:4:1
+✖ real compiled account member controls (35425.0958ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///C:/Users/admin/AppData/Local/Temp/pc-members-root-ff874e5b-browser.test.mjs:4:629)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+✖ npm test 最终结果：仍有失败

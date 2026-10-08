@@ -1,0 +1,370 @@
+{
+  "sourceBefore": "ff874e5b20660947929a3416235418fbb8406b72",
+  "checks": [
+    {
+      "name": "real-project-created",
+      "pass": true
+    },
+    {
+      "name": "ordinary-member-has-no-admin-controls",
+      "pass": true
+    },
+    {
+      "name": "real-target-account-id",
+      "pass": true
+    },
+    {
+      "name": "trusted-member-name-visible",
+      "pass": true
+    },
+    {
+      "name": "affected-page-actual-websocket-closed",
+      "pass": false
+    }
+  ],
+  "network": [
+    {
+      "path": "/hosted/shared/account/create",
+      "status": 201,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/admin",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 403,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 403,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    }
+  ],
+  "memberDiagnostics": [
+    {
+      "page": 1,
+      "step": "b-members-button-visible",
+      "buttonPresent": true,
+      "buttonCenterHits": false,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 1,
+      "snapshotMembers": 2,
+      "snapshotDevices": 2,
+      "snapshotPageDevices": 2,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 1,
+      "step": "b-members-button-center-hit",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 2,
+      "snapshotPageDevices": 2,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 1,
+      "step": "b-members-click-and-popup",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": true,
+      "visibleMemberRows": 2,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 3,
+      "snapshotPageDevices": 3,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 2
+    },
+    {
+      "page": 0,
+      "step": "a-members-button-visible",
+      "buttonPresent": true,
+      "buttonCenterHits": false,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 1,
+      "snapshotMembers": 1,
+      "snapshotDevices": 1,
+      "snapshotPageDevices": 1,
+      "snapshotPageAccounts": 1,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 0,
+      "step": "a-members-button-center-hit",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 0,
+      "snapshotMembers": 1,
+      "snapshotDevices": 1,
+      "snapshotPageDevices": 1,
+      "snapshotPageAccounts": 1,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 0,
+      "step": "a-members-click-and-popup",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": true,
+      "visibleMemberRows": 2,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 3,
+      "snapshotPageDevices": 3,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 2
+    },
+    {
+      "page": 0,
+      "step": "failure",
+      "buttonPresent": true,
+      "buttonCenterHits": false,
+      "popupPresent": true,
+      "visibleMemberRows": 1,
+      "shareToasts": 0,
+      "snapshotMembers": 1,
+      "snapshotDevices": 1,
+      "snapshotPageDevices": 1,
+      "snapshotPageAccounts": 1,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 1,
+      "step": "failure",
+      "buttonPresent": false,
+      "buttonCenterHits": false,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 3,
+      "snapshotPageDevices": 3,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 2
+    },
+    {
+      "page": 2,
+      "step": "failure",
+      "buttonPresent": false,
+      "buttonCenterHits": false,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 1,
+      "snapshotMembers": 2,
+      "snapshotDevices": 3,
+      "snapshotPageDevices": 3,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 2
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "01-creator-two-devices",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ff874e5b-once\\01-creator-two-devices.png"
+    },
+    {
+      "name": "02-member-readonly-controls",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ff874e5b-once\\02-member-readonly-controls.png"
+    },
+    {
+      "name": "failure-0",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ff874e5b-once\\failure-0.png"
+    },
+    {
+      "name": "failure-1",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ff874e5b-once\\failure-1.png"
+    },
+    {
+      "name": "failure-2",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ff874e5b-once\\failure-2.png"
+    }
+  ],
+  "completed": false,
+  "executorMounted": false,
+  "cleanup": {
+    "closed": true,
+    "childClosed": true,
+    "assetPid": 44584,
+    "ports": [
+      6560,
+      6561,
+      6562,
+      6563,
+      6564,
+      6565,
+      6568
+    ]
+  },
+  "projectId": "sp_kwkjhdmygc3vwfuwbpnrcodnug",
+  "failure": {
+    "phase": "kick",
+    "code": "probe-check-failed"
+  },
+  "wallMs": 35198,
+  "sourceAfter": "ff874e5b20660947929a3416235418fbb8406b72"
+}

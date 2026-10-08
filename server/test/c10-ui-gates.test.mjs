@@ -161,6 +161,15 @@ const ACCOUNT_PATHS = [
   '/api/account/editor/', '/api/account/editor/renew', '/api/account/editor/session',
   '/api/account/login', '/api/account/logout', '/api/account/me', '/api/account/projects',
 ];
+test('C10-RA-03 project members has one separate exact hosted path without enlarging the /api scanner set', () => {
+  const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
+  const baseline = JSON.parse(fs.readFileSync(repoPath(RATCHET_BASELINE), 'utf8'));
+  for (const source of [list, baseline]) {
+    assert.deepEqual(source.projectAccountPaths, ['/hosted/shared/account/members']);
+    assert.equal(source.paths.some(p => p.startsWith('/hosted/')), false);
+  }
+  assertRatchet(list.paths, baseline);
+});
 function assertRatchet(paths, baseline) {
   assert.ok(Array.isArray(paths), `${RATCHET_FILE} 应有 paths 数组`);
   assert.deepEqual(baseline.accountPaths, ACCOUNT_PATHS, '账号许可必须是固定8条，不能扩为前缀');

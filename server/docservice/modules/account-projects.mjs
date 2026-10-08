@@ -27,7 +27,7 @@ const send = (res, status, value) => {
  * Caller certificate registration is immutable owner configuration, never body/loopback identity.
  * No cookies, legacy LAN tickets, runGrant body exemptions or automatic logout-complete ACKs.
  */
-export function mountAccountProjects({ authority, services = [], issueSession, resolveAssetTicket }) {
+export function mountAccountProjects({ authority, services = [], issueSession, resolveAssetTicket, membersSnapshot }) {
   const registry = new Map();
   for (const entry of services) {
     const fingerprint = certificateFingerprint(entry.fingerprint256);
@@ -92,6 +92,10 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
             const membership = await authority.joinProject(actor, body); result = { membership, ...await session(actor, body, context?.readiness) };
           }
           else if (url.pathname === `${PUBLIC}/admin`) result = await authority.adminProject(actor, body);
+          else if (url.pathname === `${PUBLIC}/members`) {
+            if (typeof membersSnapshot !== 'function') bad(503, 'members-unavailable');
+            result = await membersSnapshot(actor, body);
+          }
           else if (url.pathname === `${PUBLIC}/session`) {
             result = await session(actor, body, context?.readiness);
           } else bad(404, 'no-route');

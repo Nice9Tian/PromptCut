@@ -15,6 +15,7 @@ import { rememberPasswords } from "./collab";
 import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, isCloudAgentOnly, isCloudAgentRunning, memberCountLabel, serviceRowLabel, splitMembers, visibleMembers, type HostedServiceName } from "./hostedServices";
 import { useCloudRunning } from "./presence";
 import "./sync.css";
+import { AccountMembersPanel } from '../../account/AccountMembersPanel';
 
 export type Flow =
   | { kind: "password" }
@@ -26,6 +27,11 @@ export type Flow =
   | { kind: "hosted-service"; service: HostedServiceName; enabled: boolean };
 
 export function MembersButton() {
+  const account = useSync(v => !!v.shared?.accountId);
+  return account ? <AccountMembersPanel /> : <LegacyMembersButton />;
+}
+
+function LegacyMembersButton() {
   const shared = useSync((v) => v.shared);
   const members = useSync((v) => v.members);
   const device = useSync((v) => v.device);

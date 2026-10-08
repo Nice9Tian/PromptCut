@@ -46,7 +46,7 @@ import { setCloudConsentSource } from "../../ai/cloud/consent";
  */
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 import { loadBrowserDevice } from "../../online/device";
-import type { CloudAccountClient, ProjectSession } from "../../account/client";
+import type { CloudAccountClient, ProjectSession, AccountMembersSnapshot, AccountMemberOperation, AccountMemberResult } from "../../account/client";
 import { hostedWsUrlOf } from "../../online/invite";
 import { AccountFailure, accountConnectionProtocols } from "../../account/client";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
@@ -246,6 +246,8 @@ interface Current {
   /** Change the in-memory proof used by subsequent reconnects after a successful own-password update. */
   updateAuthentication?: (key: string) => void;
   setAccountAgentEnabled?: (enabled: boolean) => Promise<void>;
+  accountMembers?: () => Promise<AccountMembersSnapshot>;
+  accountMemberAdmin?: (operation: AccountMemberOperation) => Promise<AccountMemberResult>;
 }
 
 let cur: Current | null = null;
@@ -254,6 +256,33 @@ const session = `page-${(globalThis.crypto?.randomUUID?.() ?? Math.random().toSt
 
 export function pageSession(): string {
   return session;
+}
+
+export async function accountProjectMembers(): Promise<AccountMembersSnapshot> {
+  const current = cur;
+  if (!view.shared?.accountId || !current?.accountMembers) throw new AccountFailure(503, 'members-unavailable');
+  const result = await current.accountMembers();
+  if (cur !== current) throw new AccountFailure(401, 'credential-revoked');
+  return result;
+}
+export async function accountMemberAdmin(operation: AccountMemberOperation): Promise<AccountMemberResult> {
+  const current = cur;
+  if (!view.shared?.accountId || !current?.accountMemberAdmin) throw new AccountFailure(503, 'members-unavailable');
+  const result = await current.accountMemberAdmin(operation);
+  if (cur !== current) throw new AccountFailure(401, 'credential-revoked');
+  return result;
+}
+/** Only leave this page. No logout, membership deletion, or conversion to a local project. */
+export async function returnToAccountProjectHome(): Promise<void> {
+  const current = cur;
+  if (!view.shared?.accountId || !current) return;
+  // Keep unsent edits visible if they cannot be confirmed; do not silently discard them.
+  await current.link.ds.whenSettled({ timeoutMs: 5000 });
+  if (cur !== current) return;
+  current.link.stop();
+  detach(); disconnectSharedAssets(); clearSharedResume();
+  patch({ shared: null, members: [], hosted: null, blocked: null });
+  window.dispatchEvent(new Event('pc-go-home'));
 }
 
 /** 当前连着的项目号(本机项目是 project.id,共享项目是共享项目的 projectId);没接文档服务时是 project.id */
@@ -631,7 +660,7 @@ function detach() {
     prev.unbind();
     retire(prev.link);
     if (prev.kind === "shared" && !ONLINE_BUILD && !ONLINE) unbindRenderNode(prev.docProjectId, "left");
-    if (!ONLINE_BUILD && !ONLINE) {
+    if (!ONLINE_BUILD && !ONLINE && !view.shared?.accountId) {
       agentBoundKey = null;
       agentBindingWrite = agentBindingWrite.catch(() => undefined).then(() => fetch("/api/agent/unbind", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
       detachCardSync();
@@ -1100,7 +1129,10 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   let ready = false;
   let resolveEntry!: () => void, rejectEntry!: (error: unknown) => void;
   const opened = new Promise<void>((resolve, reject) => { resolveEntry = resolve; rejectEntry = reject; });
-  const fail = (error: unknown) => { stopped = true; link.stop(); if (cur?.link === link) { setCloudConsentSource(null); setCloudIdentity(null); } if (!ready) rejectEntry(error);
+  const fail = (error: unknown) => { stopped = true; link.stop(); if (cur?.link === link) { setCloudConsentSource(null); setCloudIdentity(null);
+    if (error instanceof AccountFailure && error.status === 403 && ['banned', 'not-listed'].includes(error.code))
+      patch({ blocked: error.code === 'banned' ? 'kicked' : 'removed' });
+  } if (!ready) rejectEntry(error);
     else { disconnectSharedAssets(); pushToast(error instanceof Error ? error.message : '云端登录已失效，请重新登录。', 'warn', Infinity); } };
   const link = new SyncLink({ url, projectId: options.projectId, initial: options.initial, initialize: false, session,
     protocols, resumeProtocols: async () => { await renew(); return accountConnectionProtocols(current); },
@@ -1128,6 +1160,25 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         await options.client.setAgentEnabled(options.projectId, enabled, current.accessRevision, crypto.randomUUID());
         await renew();
       };
+      if (cur?.link === link) {
+        cur.accountMembers = async () => {
+          if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
+          try {
+            const snapshot = await options.client.members(options.projectId);
+            if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
+            return snapshot;
+          } catch (error) {
+            if (error instanceof AccountFailure && (error.status === 401 || error.code === 'banned' || error.code === 'not-listed')) fail(error);
+            throw error;
+          }
+        };
+        cur.accountMemberAdmin = async operation => {
+          if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
+          const result = await options.client.memberAdmin(options.projectId, operation);
+          if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
+          return result;
+        };
+      }
       if (cur?.link === link) {
         const metadataTimer = setInterval(() => {
           if (!isCurrent()) return;

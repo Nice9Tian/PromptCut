@@ -1,0 +1,177 @@
+{
+  "source": "ab0d10286703bf3bee3d0eb8337e60b78d322dde",
+  "compiledSource": "ab0d10286703bf3bee3d0eb8337e60b78d322dde",
+  "exeSha256": "d5dbad6489c669490d012b6f3736ff51e19169f54c3967912032d12492896178",
+  "scope": "actual compiled Rust member IPC and real TLS VH/doc/separate asset fixture; temporary blank page, not React editor UI",
+  "checks": [
+    {
+      "label": "fixed-compiled-exe-sha",
+      "ok": true
+    },
+    {
+      "label": "compiled-source-matches-lib.rs",
+      "ok": true
+    },
+    {
+      "label": "compiled-source-matches-account_vault.rs",
+      "ok": true
+    },
+    {
+      "label": "compiled-source-matches-build.rs",
+      "ok": true
+    },
+    {
+      "label": "compiled-source-matches-Cargo.toml",
+      "ok": true
+    },
+    {
+      "label": "compiled-source-matches-Cargo.lock",
+      "ok": true
+    },
+    {
+      "label": "real-vh-doc-asset-fixture",
+      "ok": true
+    },
+    {
+      "label": "actual-main-configuration-ipc",
+      "ok": true
+    },
+    {
+      "label": "actual-agent-same-origin-bridge-denied",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-creatorMembers",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-memberMembers",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-membersNoBody",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-membersNoToken",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-membersUnknownCase",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-membersPathSuffix",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-membersOldBearerRevoked",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-creatorLogin",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-creatorSession",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-realEnable",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-freshEnabled",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-staleRejected",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-noToken",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-noBody",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-unknown",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-consentPersist",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-recover",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-logout",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-revoked",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-memberLogin",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-memberSession",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-memberDenied",
+      "ok": true
+    },
+    {
+      "label": "actual-rust-ipc-memberLogout",
+      "ok": true
+    },
+    {
+      "label": "actual-owned-native-quit",
+      "ok": true
+    },
+    {
+      "label": "actual-owned-native-tree-closed",
+      "ok": true
+    },
+    {
+      "label": "actual-owned-ports-closed",
+      "ok": true
+    }
+  ],
+  "nativeRetries": 0,
+  "nativePids": [
+    38064,
+    1964,
+    9712,
+    43088,
+    17712,
+    41676,
+    43612,
+    11896,
+    28388
+  ],
+  "fixtureCleanup": {
+    "closed": true,
+    "childClosed": true,
+    "assetPid": 42192,
+    "ports": [
+      6378,
+      6381,
+      6382,
+      6383,
+      6384,
+      6385,
+      6388
+    ]
+  },
+  "startupClassification": "no-startup-stderr",
+  "wallMs": 12136,
+  "completed": true
+}
