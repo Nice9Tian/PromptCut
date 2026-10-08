@@ -13,6 +13,7 @@
  * 不认识 store 以外的界面;连接由 syncManager 交进来(`setPresenceLink`),免得两边互相引用。
  */
 import { useSyncExternalStore } from "react";
+import { setSelectionLink } from "./selectionPresence.ts";
 
 interface LinkLike {
   request(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
@@ -58,7 +59,8 @@ function markReply(link: LinkLike, reply: Record<string, unknown> | null) {
 }
 
 /** syncManager 换了连接(或断开:null)时交进来。`me` 是本页面的 userId(别人的 Agent 与自己的区分开) */
-export function setPresenceLink(link: LinkLike | null, projectId: string | null, me: string): void {
+export function setPresenceLink(link: LinkLike | null, projectId: string | null, me: string, accountSelections = false): void {
+  setSelectionLink(accountSelections ? link : null, accountSelections ? projectId : null);
   current = link && projectId ? { link, projectId, me } : null;
   remote.clear();
   cloudRuns.clear();
