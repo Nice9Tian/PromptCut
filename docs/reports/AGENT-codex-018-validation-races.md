@@ -35,3 +35,15 @@ M7定向第一次 `TMP/promptcut-validation-races-m7-target-1.log`：7/6/1fail�
 首轮真实M7（仍为2a5、尚未含此修正）`TMP/promptcut-validation-races-m7-full-1.log`：16项、54部分、fails=[]、pending=[]、aggregate ok=true，outer exit0、wall873683.6414ms、creator ms873442，角色exit creator0/node1。node单角色summary保留服务器专属项缺席为pending，all以creator并入双方实际parts后的完整账本判定；不把node退出码改写成0。A4首样本即三层browser、worstSinceGate20011ms仅记录；D12 pass。它只证明审查前源码，不能代替审查修正后的验收。
 
 审查修正定向 `TMP/promptcut-validation-races-m7-target-4.log` 12/12、413.3233ms、exit0。包含真实重开/普通失败/TTL反例、真实瞬时删除正向、首snapshot(open/failed)、断线后snapshot、epoch变更、未见opened却taken、当前普通失败、错误publisher epoch/done的负向。
+
+### 最终固定源码验收与交付边界
+
+最终源码 `59b04d04`：`TMP/promptcut-validation-races-types-4.log` 类型0错、exit0、wall12562.7687ms；`TMP/promptcut-validation-races-full-4.log` 完整npm为4942 tests /4941 pass /0 fail /0 cancelled /1 skip，duration76331.4232ms、wall76791.5254ms、exit0，无自动重试。第二次完整M7是根审查发现真实历史关联反例、修复并补测试后的必要验收，不是重复跑相同失败源码。
+
+`TMP/promptcut-validation-races-m7-full-2.log` 最终16项/54部分全部pass，fails=[]、pending=[]、aggregate ok=true；outer exit0，wall787031.031ms，creator ms786831。角色实际exit仍为creator0/node1，保留上节单角色账本口径，不声称每个角色都exit0。执行过程中源码固定不动。结束后只读确认5800–5809没有监听。
+
+最终D12三重层各pc5/page5、winner=page；15条PC当前记录均缺席，15条全部有连续完整首次opened开始的generation1/no-gap历史、watcher failed，且publisher最新task.failed/error=superseded与watcher epoch相同。版本缺失仍明确null，没有按version猜关联。A4首样本已经三层browser/ready60，samples=1、waitedMs=10.4271；最慢anchor18769ms仍仅记录。两次真实完整M7均没有重现原现场的瞬时采样误读：D12神视图此次已采到failed，A4此次首样本已收敛。可执行控制实验证明具体缺口，完整运行证明修复后的端到端接受条件；不能倒推原877s失败的唯一现场原因。
+
+原始完整JSON直接取上述日志的probe结果行，未使用runner截断resultLine。安全字段摘要在 `TMP/promptcut-validation-races-m7-full-2-summary.json`，外层退出/耗时在 `TMP/promptcut-validation-races-m7-full-2-exit.json`；18份本任务原始日志的路径、长度、SHA256清单在 `TMP/promptcut-validation-races-evidence.json`。TMP均为 `C:\Users\admin\AppData\Local\Temp`。审查过程中另有TMP-only `promptcut-validation-races-m7-history-draft.{mjs,log}` 草案5/5断言通过，后由已入npm的正式边界测试覆盖；没有将草案当全量证明。
+
+最终范围六文件：本报告、fake-asset-service、asset-harness-lifecycle.test、m7-browser-probe、m7-judge、既有m7-judge.test。collect-plugin断言、生产tier/renderqueue/layer、依赖守卫/白名单均未改；没有push/merge/deploy，未操作其他任务进程或数据。原C62持锁者仍未知；对缺失首代/断线等证据采取保守不通过，可能要求重新完整观察，绝不把普通失败当作废。根协调者负责整合复核及项目后续验收，本包不宣布整个项目完成。
