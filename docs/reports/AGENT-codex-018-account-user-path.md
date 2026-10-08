@@ -89,3 +89,9 @@ root固定0c66feb181df28711dae7161d7528023f323eeca首次full：5301/5295通过/2
 固定b8e60380ef9ff1ca46ee1dca8293d46209264ac3一次目标：`npm.cmd test -- server/test/c10-ui-gates.test.mjs server/test/c10a-online-build.test.mjs`，17/17通过、零失败取消跳过、3702.3346ms、wall3982ms、exit0、native重跑0，raw `%TEMP%/pc-account-ratchet-seven-1.log`。真实Vite在线及桌面构建成功，产物扫描7账号+19旧本机路径精确一致；未知账号/桌面账号恢复入口/旧本机增项/重复负向均过。测前后source b8e60380不变且clean。只使用原npm guards，无浏览器或业务listener，未全量、未另跑types；测试资产修改不借此前type/full当本块独立证据。
 
 root同0c66在线首次63.010s completed=false：真实me/login/session200、新建201/account session200，进入编辑器超时；failure-1显示连接云端失败，stageDocuments为空。raw `%TEMP%/pc-account-online-first-0c66feb1-out/result.json`及failure-1.png由root保留，Chrome/fixture/端口实际关闭。此为真实用户链未通过，与上面棘轮build修正分开。下一步仅静态查accountWS协议/握手，补探针安全HTTP握手status/pathname、消息type、close code，不输出URL完整query、headers、protocol票据或完整frame；不自行启动fixture/Chrome，不凭推断改生产权限或ready。
+
+## 真实浏览器握手诊断补充
+
+root授权仅给pages probe补安全CDP元数据：真实/hosted/ WS创建、握手HTTP status/pathname、文本消息type、close frame两字节code及closed/frame-error标记。CDP在页面导航前Network.enable，普通在线页与实际native main共用，teardown detach；没有替换WebSocket/fetch/native、没有读取或落盘完整URL/query、headers/protocol/ticket/frame正文/close reason。若Chrome握手本地拒绝而没有close frame，仅记closed而不捏造close code。node --check/diff --check通过，尚未运行fixture/浏览器，此增量不是实际握手已测证据。
+
+静态定位：syncManager.ts enterAccountProject初连只返回account票据protocol，session-link.mjs只追加session.new；service.mjs仅offered包含promptcut.v1才echo，ws.mjs否则不回Sec-WebSocket-Protocol。G真实WSS fixture明确提供v1+account并断言服务回v1，因此纯fixture已过不证明原新页面实际offer正确。root确认这是新入口遗漏既有标准协议，随后批准最窄补初连/恢复v1，生产修复将另独立提交并用真实SyncLink socket pure目标验证；不改服务Cookie/ACL/ready或代理安全规则。

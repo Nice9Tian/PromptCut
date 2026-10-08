@@ -56,10 +56,10 @@ const STAGES = ['http://s1.pc.localhost:6341', 'http://s2.pc.localhost:6342'];
 const TIMEOUT = 60_000; // A missing product result is a failure; no automatic retry.
 const MIME = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.css':'text/css', '.json':'application/json', '.svg':'image/svg+xml', '.png':'image/png', '.jpg':'image/jpeg', '.woff':'font/woff', '.woff2':'font/woff2', '.ttf':'font/ttf', '.wasm':'application/wasm' };
 const source = () => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim();
-const result = { sourceBefore: source(), checks: [], screenshots: [], network: [], stageDocuments:[], phase: 'preflight', desktop: 'not-run', cleanup: {} };
+const result = { sourceBefore: source(), checks: [], screenshots: [], network: [], websocket: [], stageDocuments:[], phase: 'preflight', desktop: 'not-run', cleanup: {} };
 let fixture, browser;
 let native;
-const stages = [], contexts = [], pages = [], responseTasks = new Set();
+const stages = [], contexts = [], pages = [], responseTasks = new Set(), networkObservers = [];
 let browserPid;
 function assert(ok, name) { result.checks.push({ check: name, ok: Boolean(ok) }); if (!ok) { const error = new Error(name); error.probeCheck = name; throw error; } }
 async function getChromePath() { const executable = await puppeteer.executablePath(); await fs.access(executable); return executable; }
@@ -108,7 +108,7 @@ async function startStage(port) {
 async function newPage(context, label) {
   const page = await context.newPage(); return observePage(page, label);
 }
-function observePage(page, label) {
+async function observePage(page, label) {
   pages.push(page);
   page.setDefaultTimeout(TIMEOUT); page.setDefaultNavigationTimeout(TIMEOUT);
   page.safeResponses = { projects: null, create: null, join: null };
@@ -129,6 +129,43 @@ function observePage(page, label) {
     }).catch(() => {}).finally(() => responseTasks.delete(task));
     responseTasks.add(task);
   });
+  // CDP observes the real handshake and bytes without replacing WebSocket or
+  // reading its credential-bearing URL/query, headers, protocols or full frames.
+  const cdp = await page.createCDPSession(); networkObservers.push(cdp);
+  const sockets = new Map();
+  cdp.on('Network.webSocketCreated', ({ requestId, url }) => {
+    let parsed;
+    try { parsed = new URL(url); } catch { return; }
+    if (parsed.origin !== ORIGIN.replace(/^https:/, 'wss:') || parsed.pathname !== '/hosted/') return;
+    sockets.set(requestId, { path: parsed.pathname });
+    result.websocket.push({ page: label, kind: 'created', path: parsed.pathname });
+  });
+  const record = (requestId, entry) => {
+    const socket = sockets.get(requestId);
+    if (socket) result.websocket.push({ page: label, path: socket.path, ...entry });
+  };
+  cdp.on('Network.webSocketHandshakeResponseReceived', ({ requestId, response }) => {
+    record(requestId, { kind: 'handshake', status: response.status });
+  });
+  const frame = (direction, { requestId, response }) => {
+    if (!sockets.has(requestId)) return;
+    if (response.opcode === 8) {
+      // CDP binary payloads are base64. Retain only the two-byte close code;
+      // never retain the close reason or the payload itself.
+      const bytes = Buffer.from(response.payloadData, 'base64');
+      record(requestId, { kind: 'close-frame', direction, code: bytes.length >= 2 ? bytes.readUInt16BE(0) : null });
+      return;
+    }
+    if (response.opcode !== 1) return;
+    let type;
+    try { type = JSON.parse(response.payloadData).type; } catch { return; }
+    if (typeof type === 'string' && /^[a-zA-Z][a-zA-Z0-9_.:-]{0,99}$/.test(type)) record(requestId, { kind: 'message', direction, type });
+  };
+  cdp.on('Network.webSocketFrameReceived', event => frame('received', event));
+  cdp.on('Network.webSocketFrameSent', event => frame('sent', event));
+  cdp.on('Network.webSocketFrameError', ({ requestId }) => record(requestId, { kind: 'frame-error' }));
+  cdp.on('Network.webSocketClosed', ({ requestId }) => { record(requestId, { kind: 'closed' }); sockets.delete(requestId); });
+  await cdp.send('Network.enable');
   return page;
 }
 async function type(page, selector, value) {
@@ -228,7 +265,7 @@ async function startNative(label) {
   await waitFor(async () => {
     state.page = (await state.connection.pages()).find(page => page.url().startsWith(`${DESKTOP_ORIGIN}/`)); return Boolean(state.page);
   }, 'native-main-target');
-  observePage(state.page, label);
+  await observePage(state.page, label);
   await state.page.waitForFunction(() => Boolean(window.__TAURI__?.core?.invoke));
   const session = await state.page.createCDPSession();
   await session.send('Security.setIgnoreCertificateErrors', { ignore:true });
@@ -352,6 +389,7 @@ try {
     try { await quitNative(); }
     catch { result.cleanup.nativeFailed = true; native.connection?.disconnect(); process.exitCode = 1; }
   }
+  for (const observer of networkObservers) await observer.detach().catch(() => {});
   for (const context of contexts) await context.close().catch(() => {});
   if (browser) {
     const child = browser.process();
