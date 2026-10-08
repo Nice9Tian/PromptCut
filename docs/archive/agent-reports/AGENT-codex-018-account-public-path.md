@@ -73,3 +73,11 @@ CDP只从project.state收到/ project.open发出的真实文本帧提取严格sp
 同7c6一次`npm.cmd test -- scripts/probes/account-public-user-pages-probe.test.mjs`纯目标10/10、0失败取消跳过、512.0005ms、wall768ms、exit0、native重跑0，raw `%TEMP%/pc-public-enabled-controls-green-7c6ae634.log`。source before/after均7c6ae634cf6c3745998c179fa08303862842b4ca，工作区clean。实际函数反例转绿：控件未启用时不填写；填写期间另一个disabled窗口出现时不点击；官网真实函数在受控匿名初始化/现存handler未就绪时不填写，即使按钮可用仍等待handler；hidden/disabled/readOnly/无账号的真实浏览器predicate拒绝且不修改DOM。受控VM页和CDP adapter只用于纯时序测试，不能冒称Chrome、官网、实际/me、真实handler或实际用户路径已验证。既有实际Rust隔离函数编译执行、秘密筛选和实际dry CLI零网络目标继续通过。
 
 三个.mjs node --check及git diff --check通过。本阶段相对9cc只变更probe/helper/test/本报告；desktop/src-tauri/src/lib.rs及所有产品代码逐字不变。命令环境仅该进程canonical PSModulePath、绝对file URL silent preload、cuda_Vit与主out/models；原npm wrapper的保护guard不mock。未跑TS/full/build、业务listener、Chrome/WebView2、native壳、节点或公网HTTP；没有权限/ready/Cookie/TLS旁路。最终报告提交只补证据，源码冻结，等待根以固定源实际第三轮；原失败不抹除，不自行重复公网注册。
+
+## 根独立第三轮与小阶段收回
+
+根固定2d2fcd11实际运行第三轮正常CA公网：58/58、0失败、completed=true、desktop=actual-public-shell-complete，probe38116ms/wrapper41.25秒、native重跑0，源码不变且clean。在线真实注册两账号、create201/join200、WSS101精确project.state和双方fresh网站权威列表通过；真实TMP桌面壳两次PID树启动，实际Rust IPC/主与Agentwebview隔离/DPAPI退出重开恢复/切第二账号加入/两账号网站列表均通过。临时Chrome7进程、native两树各11进程、Vite6500–2/desktopCDP6508全部实际关闭；无installed PromptCut修改。TMP pc-account-public-2d2fcd11-third{.log,.result.json,-out/result.json}及16幅密码清空截图保留，根已看双方网站列表及native实际编辑器截图。
+
+实际公网两project：sp_knvubijdlvsl6onhrvgjykrx5n（online）、sp_h7ywbgvps7ktly6t7lvbmsnmwe（native）；仅本轮两测试账号acc_141f51a33317446926c0f81c、acc_3ea304263405c1bd643d36e3。原两轮失败和累计5个新账号、两个项目保留，待准确备份/清理，不冒称已删。此路径未验证完整Agent任务、成员显示、用户卡重渲、所有附带WSS事件；它只证明本次约定的登录→创建→加入→双方网站列表。
+
+根集成候选074769e5保留main已收的单元路径修正与所有新文档，实际类型0墙7.266秒；npm全量5309项/5305通过/0失败/0取消/4跳过、70369.6038ms墙70.75秒、native重跑0；normal build0墙8.516秒、online build0墙1.781秒，所有check固定同源码不变且clean。全量runner未收scripts/probes，这10个专属目标已另行纯测，实际58项由根第三轮验证；不把未收进全量的探针当重复跑过。日志TMP pc-public-path-074769e5-{type,full,build,online-build}.log及.result.json。release按用户三个版本安排，完整0.7.18发版条件未齐，仍保留可用旧版本。
