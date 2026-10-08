@@ -15,7 +15,7 @@ import { mediaCardUrl } from "../mediaRef";
 import { cloudAgentVersion, resolveCloudAgent, subscribeCloudAgent, type CloudAgentAvailability } from "./endpoint";
 import { cloudIdentityVersion, subscribeCloudIdentity } from "./identity";
 import { cloudConsentState, requireCloudConsent, subscribeCloudConsent } from "./consent";
-import { CloudError, cloudErrorText, createCloudApi, type CloudApi } from "./cloudApi";
+import { CloudError, cloudErrorText, createCloudApi, createCloudControlScopeGuard, requireAccountAbortControl, withCloudControlConsent, type CloudApi } from "./cloudApi";
 import { createCloudSession, type CloudSession, type CloudSessionView } from "./session";
 import { titleOf } from "./events";
 import { bubbleAttachments, type CloudAttachmentInfo } from "./attach";
@@ -244,6 +244,10 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const sessionKeyRef = useRef("");
   const convRef = useRef(conversationId);
   convRef.current = conversationId;
+  const operationScopeGuardRef = useRef(createCloudControlScopeGuard());
+  const operationScopeKey = JSON.stringify([key, cloud.accountMode, cloud.accountId, projectId, cloud.url,
+    cloud.identityVersion, consent.accountId, consent.bindingVersion, consent.accepted]);
+  const operationScope = operationScopeGuardRef.current.update(operationScopeKey, conversationId);
   /** 进入时的那一次「取 info、定对话」还没做完,用户已经自己选了对话(历史列表里点的、新对话):后到的结果不再改写他的选择 */
   const pickedRef = useRef(false);
 
@@ -388,22 +392,37 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
 
   const abort = useCallback(async (runId?: string, requestId?: string) => {
+    const scope = operationScope;
+    const expectedConversationId = conversationId;
+    const expectedSession = sessionRef.current;
+    const current = () => operationScopeGuardRef.current.isCurrent(scope) && keyRef.current === key &&
+      sessionKeyRef.current === key && sessionRef.current === expectedSession && convRef.current === expectedConversationId;
+    if (!key || !current()) return;
+    const accountControl = cloud.accountMode ? requireAccountAbortControl(runId, requestId) : null;
     try {
-      if (!key || keyRef.current !== key || sessionKeyRef.current !== key) return;
-      if (cloud.accountMode && runId && requestId) await api.abort(convRef.current, { runId, requestId });
-      else await sessionRef.current?.abort();
+      if (accountControl) await api.abort(expectedConversationId, accountControl);
+      else await expectedSession?.abort();
     } catch (err) {
-      setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
-      if (cloud.accountMode && runId && requestId) throw err;
+      if (current()) setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      if (cloud.accountMode) throw err;
     }
-  }, [api, cloud.accountMode, key]);
+  }, [api, cloud.accountMode, conversationId, key, operationScope]);
 
   const switchVisibility = useCallback(async (visibility: "shared" | "private", requestId: string) => {
-    if (!cloud.accountMode || !cloud.accountId || !key || keyRef.current !== key || sessionKeyRef.current !== key)
+    const scope = operationScope;
+    const expectedConversationId = conversationId;
+    const expectedSession = sessionRef.current;
+    const current = () => operationScopeGuardRef.current.isCurrent(scope) && keyRef.current === key &&
+      sessionKeyRef.current === key && sessionRef.current === expectedSession && convRef.current === expectedConversationId &&
+      cloudConsentState().accountId === cloud.accountId && cloudConsentState().bindingVersion === consent.bindingVersion;
+    if (!cloud.accountMode || !cloud.accountId || !key || !current())
       throw new CloudError("forbidden", "当前账号不能切换这段云端对话的权限。", 403);
-    await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion });
-    return api.switchVisibility(convRef.current, visibility, requestId);
-  }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
+    return withCloudControlConsent(
+      () => requireCloudConsent({ accountId: cloud.accountId!, bindingVersion: consent.bindingVersion }),
+      current,
+      () => api.switchVisibility(expectedConversationId, visibility, requestId),
+    );
+  }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, conversationId, key, operationScope]);
 
   const switchTo = useCallback((id: string) => {
     if (cloud.accountMode && (!key || keyRef.current !== key || sessionKeyRef.current !== key)) return;
@@ -417,21 +436,26 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const newChat = useCallback(() => switchTo(newCloudChatId()), [switchTo]);
 
   const refreshHistory = useCallback(async (): Promise<boolean> => {
-    if (!key || keyRef.current !== key || sessionKeyRef.current !== key) return false;
+    const scope = operationScope;
+    const expectedConversationId = conversationId;
+    const expectedSession = sessionRef.current;
+    const current = () => operationScopeGuardRef.current.isCurrent(scope) && keyRef.current === key &&
+      sessionKeyRef.current === key && sessionRef.current === expectedSession && convRef.current === expectedConversationId;
+    if (!key || !current()) return false;
     setHistLoading(true);
     try {
       const list = await api.list();
-      if (keyRef.current !== key || sessionKeyRef.current !== key) return false;
+      if (!current()) return false;
       const titles = readTitles(projectId, accountScope);
       setHistItems(list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x)));
       return true;
     } catch (err) {
-      setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      if (current()) setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       return false;
     } finally {
-      setHistLoading(false);
+      if (current()) setHistLoading(false);
     }
-  }, [api, key, projectId, accountScope]);
+  }, [api, key, projectId, accountScope, conversationId, operationScope]);
 
   const setModel = useCallback((m: string) => { setModelState(m); lsSet(MODEL_KEY, m); }, []);
 

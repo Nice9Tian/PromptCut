@@ -21,6 +21,40 @@ export class CloudError extends Error {
   }
 }
 
+export interface CloudControlScopeToken {
+  key: string;
+  conversationId: string;
+  epoch: number;
+}
+
+/** Tracks async control operations across account/project/conversation changes, including A→B→A. */
+export function createCloudControlScopeGuard() {
+  let current: CloudControlScopeToken = { key: "", conversationId: "", epoch: 0 };
+  return {
+    update(key: string, conversationId: string): CloudControlScopeToken {
+      if (key !== current.key || conversationId !== current.conversationId) {
+        current = { key, conversationId, epoch: current.epoch + 1 };
+      }
+      return current;
+    },
+    isCurrent(token: CloudControlScopeToken) {
+      return token.epoch === current.epoch && token.key === current.key && token.conversationId === current.conversationId;
+    },
+  };
+}
+
+/** Runs a control submission only if identity/conversation scope still matches after consent is resolved. */
+export async function withCloudControlConsent<T>(consent: () => Promise<unknown>, isCurrent: () => boolean, submit: () => Promise<T>): Promise<T> {
+  await consent();
+  if (!isCurrent()) throw new CloudError("forbidden", "账号、项目或对话已切换，请重新读取当前对话后再操作。", 403);
+  return submit();
+}
+
+export function requireAccountAbortControl(runId?: string, requestId?: string): { runId: string; requestId: string } {
+  if (!runId || !requestId) throw new CloudError("forbidden", "停止云端对话需要当前运行编号和请求编号。", 403);
+  return { runId, requestId };
+}
+
 /** 契约 2.3 节的错误码 → 给用户看的话。服务端自己带了说明(额度、原因)的用服务端的 */
 export function cloudErrorText(code: string, serverMessage?: string): string {
   switch (code) {

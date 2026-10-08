@@ -30,3 +30,13 @@
 实施中我有两次 `apply_patch` 路径漏掉 `.worktrees/018-member-native-route` 前缀，短暂把 `CloudAiPanel.tsx` handler 写入主工作区。核实时主工作区只有该文件被我改动；我仅撤销了这个由我造成的单文件差异，并确认主工作区 `git status --short` 为空，随后已向 root 报告该经过。root 表示会另行核对 main 文件与 HEAD 字节一致。本报告不把该事件记作“未发生”。
 
 本分支开工报告已先独立提交；实现与本报告的最终 SHA、干净状态由交接消息报告。未完成项：待 root 提供真实窗口后运行页面控件探针；账号 fencing 的实际执行确认由独立服务块验收。
+
+
+## 异步身份隔离补丁（2026-10-09）
+
+- root 审查指出，原 `applyCloudControl` 在 `await` 后只比较 render 闭包中的 conversation ID；账号或项目切换后若 conversation ID 相同，迟到结果可能清理新 scope 的 pending、显示旧操作成功，或在旧停止请求重试时误用新身份。
+- `CloudAiPanel.tsx` 现在把账号、项目、云端地址与身份版本、consent account/binding/accepted 状态及 conversation ID 绑定到单调 epoch。作用域变化时即时隐藏/清空旧 pending 与 in-flight；每次控制请求开始、接口 await 后、历史刷新 await 后、catch/finally 都校验原 epoch。旧请求不刷新、不写状态、不清新请求的 in-flight，也不能带旧 request ID 重试。
+- `useCloud.ts` 的权限切换在 consent promise 返回后重新核验同一 epoch、key、session 和 conversation，再提交 API；历史读取和错误提示也只允许原 scope 更新状态。账号模式 abort 必须有当前 run ID 与 request ID，否则拒绝，绝不回落到 session 的 legacy 空请求。
+- 回归测试不是源码字符串断言：以真实 deferred promise 模拟同一 conversation 的 A→B→A。保留首红输出：首次 4 项中 3 项通过、1 项失败，ABA 旧 token 被误判 current（`true !== false`）；单调 epoch 修复及 consent-迟到提交用例后，控制测试 6 项通过。测试还检查旧操作不能清除新 request pending，迟到 consent 后 API 提交次数为 0，账号 abort 缺任一编号会拒绝。
+- 浏览器探针补了实际签入页面的可调用操作 `requestAccountVisibility` / `retryAccountStop`，读取真实控件、点击真实按钮并区分 `confirmed`、`pending`、`error`。它不模拟服务端成功；仍需 root 提供的真实签入窗口做角色、private/fence-pending 页面验收和截图。
+- 本补丁验证：`node scripts/test-suite.mjs src/ai/cloud/account-conversation-controls.test.mjs src/ai/cloud/cloud-chat.test.mjs src/ai/cloud/account-queue.test.mjs`（31 项通过，0 失败）、`npx tsc -p tsconfig.json --pretty false`、`node --check scripts/probes/account-conversation-controls-probe.mjs`、`git diff --check`。未启动浏览器、服务或节点；实际账号 fence ACK 仍由独立服务块验收。

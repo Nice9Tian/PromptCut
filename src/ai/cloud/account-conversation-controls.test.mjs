@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CloudError, cloudConversationControlPolicy, createCloudApi } from './cloudApi.ts';
+import { CloudError, cloudConversationControlPolicy, createCloudApi, createCloudControlScopeGuard, requireAccountAbortControl, withCloudControlConsent } from './cloudApi.ts';
 
 const conversation = (overrides = {}) => ({ id: 'conversation', projectId: 'project', ownerAccountId: 'alice',
   visibility: 'shared', creatorReadOnly: false, title: '对话', updatedAt: 10, state: 'idle', lastSeq: 0, ...overrides });
@@ -78,4 +78,53 @@ test('fence pending remains an error, malformed success is rejected, and callers
 
   const malformed = baseApi(async () => Response.json({ ok: true, v: 2, ...conversation({ visibility: 'shared' }), aclRevision: 6 }));
   await assert.rejects(malformed.switchVisibility('conversation', 'private', 'bad-response'), error => error instanceof CloudError);
+});
+
+
+test('late control response cannot mutate state after an account/project A-B-A scope change', async () => {
+  const guard = createCloudControlScopeGuard();
+  const first = guard.update('alice:project-one:consent-7', 'same-conversation');
+  let releaseOld;
+  const oldResponse = new Promise(resolve => { releaseOld = resolve; });
+  const visible = { pending: 'old-request', note: 'waiting' };
+  const oldControl = oldResponse.then(() => {
+    if (!guard.isCurrent(first)) return false;
+    visible.pending = null;
+    visible.note = 'old scope succeeded';
+    return true;
+  });
+
+  guard.update('bob:project-two:consent-8', 'same-conversation');
+  const current = guard.update('alice:project-one:consent-7', 'same-conversation');
+  visible.pending = 'new-request';
+  visible.note = 'new scope waiting';
+  releaseOld();
+
+  assert.equal(await oldControl, false);
+  assert.equal(guard.isCurrent(current), true);
+  assert.deepEqual(visible, { pending: 'new-request', note: 'new scope waiting' });
+});
+
+
+test('late consent in an A-B-A identity change never submits the old visibility request', async () => {
+  const guard = createCloudControlScopeGuard();
+  const first = guard.update('alice:project-one:binding-7', 'same-conversation');
+  let releaseConsent;
+  const consent = new Promise(resolve => { releaseConsent = resolve; });
+  let submitted = 0;
+  const operation = withCloudControlConsent(() => consent, () => guard.isCurrent(first), async () => { submitted++; });
+
+  guard.update('bob:project-two:binding-8', 'same-conversation');
+  guard.update('alice:project-one:binding-7', 'same-conversation');
+  releaseConsent();
+  await assert.rejects(operation, error => error instanceof CloudError && error.status === 403);
+  assert.equal(submitted, 0);
+});
+
+
+test('account stop rejects missing current run/request IDs instead of falling back to an empty legacy abort', () => {
+  assert.throws(() => requireAccountAbortControl(), error => error instanceof CloudError && error.status === 403);
+  assert.throws(() => requireAccountAbortControl('run-current'), error => error instanceof CloudError && error.status === 403);
+  assert.deepEqual(requireAccountAbortControl('run-current', 'request-current'),
+    { runId: 'run-current', requestId: 'request-current' });
 });

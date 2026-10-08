@@ -5,7 +5,7 @@ import "./CloudAiPanel.css";
 import "katex/dist/katex.min.css";
 import { useCloudChat, type CloudAgentState } from "../../ai/cloud/useCloud";
 import { leaveCloudTab } from "../../ai/cloud/tabMode";
-import { CloudError, cloudConversationControlPolicy, cloudErrorText } from "../../ai/cloud/cloudApi";
+import { CloudError, cloudConversationControlPolicy, cloudErrorText, createCloudControlScopeGuard, type CloudControlScopeToken } from "../../ai/cloud/cloudApi";
 import { CLOUD_ATTACH_ACCEPT, CLOUD_ATTACH_NEED_TEXT, CLOUD_ATTACH_TITLE, cloudAttachKindOfName, newCloudAttachId, pickSendable } from "../../ai/cloud/attach";
 import { setTabBusy, setTabConversation, useAgentTabs } from "../../ai/agentTabs";
 import { MAIN_TAB } from "../../ai/liveChat";
@@ -32,8 +32,8 @@ import { CloudAgentConsentDialog } from "./CloudAgentConsentDialog";
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 type CloudControlRequest =
-  | { kind: "visibility"; target: "shared" | "private"; conversationId: string; requestId: string }
-  | { kind: "stop"; runId: string; conversationId: string; requestId: string };
+  | { kind: "visibility"; target: "shared" | "private"; conversationId: string; requestId: string; scope: CloudControlScopeToken }
+  | { kind: "stop"; runId: string; conversationId: string; requestId: string; scope: CloudControlScopeToken };
 
 /** 从桌面版的 AI 栏嵌进来时,本机一侧要给的几样(在线页面不给) */
 export interface CloudDesktopSide {
@@ -106,15 +106,14 @@ export function CloudAiPanel(props: {
   const [metadataReadyKey, setMetadataReadyKey] = useState("");
   const [controlPending, setControlPending] = useState<CloudControlRequest | null>(null);
   const controlPendingRef = useRef<CloudControlRequest | null>(null);
-  const controlInFlightRef = useRef(false);
-  const [controlNote, setControlNote] = useState<string | null>(null);
+  const controlInFlightRef = useRef<string | null>(null);
+  const [controlNoteState, setControlNoteState] = useState<{ epoch: number; text: string } | null>(null);
   const qKey = cloud.accountMode ? `cloud:${tabId}:${cloud.accountId ?? "none"}:${consent.bindingVersion}:${cloud.projectId ?? "none"}` : `cloud:${tabId}`;
   const activeKeyRef = useRef(qKey);
   activeKeyRef.current = qKey;
   const stillCurrent = () => activeKeyRef.current === qKey && (!cloud.accountMode ||
     (cloudConsentState().accountId === cloud.accountId && cloudConsentState().bindingVersion === consent.bindingVersion));
   useEffect(() => { if (cloud.accountMode) { setConsentOpen(false); setConsentError(null); } }, [cloud.accountMode, qKey]);
-
   const { tabs } = useAgentTabs();
   const tabTitle = desktop ? (tabs.find((t) => t.id === tabId)?.title ?? "AI 助手") : "云端 Agent";
   // 页签上的「对话 ID」是给本机 Agent 的多 Agent 通信用的;桌面版里这一页选回本机驱动后还要用它,云端的对话 id 不往里写
@@ -125,6 +124,17 @@ export function CloudAiPanel(props: {
   const currentRunId = controlPolicy.currentRunId;
   const canStopCurrentRun = controlPolicy.canStop;
   const streaming = controlPolicy.streaming;
+  const controlScopeGuardRef = useRef(createCloudControlScopeGuard());
+  const controlScopeKey = JSON.stringify([qKey, cloud.accountId, cloud.projectId, cloud.url, cloud.identityVersion,
+    consent.accountId, consent.bindingVersion, consent.accepted]);
+  const controlScope = controlScopeGuardRef.current.update(controlScopeKey, chat.conversationId);
+  const visibleControlPending = controlPending && controlScopeGuardRef.current.isCurrent(controlPending.scope) ? controlPending : null;
+  const controlNote = controlNoteState?.epoch === controlScope.epoch ? controlNoteState.text : null;
+  const setControlNote = (text: string | null) => setControlNoteState(text === null ? null : { epoch: controlScope.epoch, text });
+  const isCurrentControl = (request: CloudControlRequest) => controlScopeGuardRef.current.isCurrent(request.scope);
+  useEffect(() => { setControlPending(null); setControlNoteState(null); }, [controlScope.epoch]);
+  if (controlPendingRef.current && !controlScopeGuardRef.current.isCurrent(controlPendingRef.current.scope)) controlPendingRef.current = null;
+  if (controlInFlightRef.current && controlPendingRef.current?.requestId !== controlInFlightRef.current) controlInFlightRef.current = null;
   const metadataKey = `${qKey}:${chat.conversationId}`;
   const metadataReady = !cloud.accountMode || metadataReadyKey === metadataKey;
   const creatorReadOnly = controlPolicy.creatorReadOnly;
@@ -138,7 +148,7 @@ export function CloudAiPanel(props: {
     let live = true;
     setMetadataReadyKey("");
     setControlNote(null);
-    if (controlPendingRef.current?.conversationId !== chat.conversationId) {
+    if (controlPendingRef.current && !controlScopeGuardRef.current.isCurrent(controlPendingRef.current.scope)) {
       controlPendingRef.current = null;
       setControlPending(null);
     }
@@ -276,17 +286,18 @@ export function CloudAiPanel(props: {
   }, [view.streaming, queue.items, queue.paused, off]);
 
   const applyCloudControl = async (request: CloudControlRequest) => {
-    if (!cloud.accountMode || request.conversationId !== chat.conversationId || controlInFlightRef.current) return;
+    if (!cloud.accountMode || !isCurrentControl(request) || request.conversationId !== chat.conversationId || controlInFlightRef.current) return;
     if (controlPendingRef.current && controlPendingRef.current.requestId !== request.requestId) return;
-    controlInFlightRef.current = true;
+    controlInFlightRef.current = request.requestId;
     controlPendingRef.current = request;
     setControlPending(request);
     setControlNote(request.kind === "visibility" ? "正在更新对话权限…" : "正在向云端提交停止请求…");
     try {
       if (request.kind === "visibility") await chat.switchVisibility(request.target, request.requestId);
       else await chat.abort(request.runId, request.requestId);
-      if (request.conversationId !== chat.conversationId) return;
+      if (!isCurrentControl(request)) return;
       const refreshed = await chat.history.refresh();
+      if (!isCurrentControl(request)) return;
       if (refreshed) setMetadataReadyKey(metadataKey);
       controlPendingRef.current = null;
       setControlPending(null);
@@ -294,9 +305,10 @@ export function CloudAiPanel(props: {
         ? request.target === "private" ? "已切为私有。" : "已切为共有。"
         : "云端已确认停止请求。正在同步对话状态。");
     } catch (error) {
-      if (request.conversationId !== chat.conversationId) return;
+      if (!isCurrentControl(request)) return;
       // 重读可见性；503/fence pending 时保留原请求号，让用户安全重试同一操作。
       const refreshed = await chat.history.refresh();
+      if (!isCurrentControl(request)) return;
       if (refreshed) setMetadataReadyKey(metadataKey);
       const pending = error instanceof CloudError && (error.status >= 500 || error.code === "agent-fence-pending" || error.code === "agent-fence-unavailable");
       if (pending) {
@@ -311,35 +323,37 @@ export function CloudAiPanel(props: {
         setControlNote(error instanceof Error ? error.message : "云端控制请求失败，请重读对话状态。");
       }
     } finally {
-      controlInFlightRef.current = false;
+      if (isCurrentControl(request) && controlInFlightRef.current === request.requestId) controlInFlightRef.current = null;
     }
   };
 
   const handleVisibilityToggle = () => {
     const pending = controlPendingRef.current;
     if (pending) {
-      if (pending.kind === "visibility" && pending.conversationId === chat.conversationId) void applyCloudControl(pending);
+      if (pending.kind === "visibility" && isCurrentControl(pending)) void applyCloudControl(pending);
       return;
     }
     if (!canSwitchVisibility || !currentMeta) return;
     void applyCloudControl({ kind: "visibility", target: currentMeta.visibility === "private" ? "shared" : "private",
-      conversationId: chat.conversationId, requestId: crypto.randomUUID() });
+      conversationId: chat.conversationId, requestId: crypto.randomUUID(), scope: controlScope });
   };
 
   const handleStop = () => {
     if (cloud.accountMode) {
       const pending = controlPendingRef.current;
       if (pending) {
-        if (pending.kind === "stop" && pending.conversationId === chat.conversationId) void applyCloudControl(pending);
+        if (pending.kind === "stop" && isCurrentControl(pending)) void applyCloudControl(pending);
         return;
       }
       if (!canStopCurrentRun || !currentRunId) return;
-      void applyCloudControl({ kind: "stop", runId: currentRunId, conversationId: chat.conversationId, requestId: crypto.randomUUID() });
+      void applyCloudControl({ kind: "stop", runId: currentRunId, conversationId: chat.conversationId,
+        requestId: crypto.randomUUID(), scope: controlScope });
       return;
     }
     if (getQueue(qKey).length > 0) setQueuePaused(qKey, true);
     void chat.abort();
   };
+
   const insertQueued = async (item: QueuedItem) => {
     if (!await consentForUse() || !stillCurrent()) return;
     if (view.streaming) {
@@ -507,16 +521,16 @@ export function CloudAiPanel(props: {
               {currentMeta.visibility === "private" ? "私有对话" : "共有对话"}{creatorReadOnly ? " · 项目创建者只读" : ""}
             </span>
             {canSwitchVisibility && <button type="button" className="pc-cloud-control-btn" data-pc="cloud-visibility-toggle"
-              disabled={controlPending?.kind === "stop"}
+              disabled={visibleControlPending?.kind === "stop"}
               onClick={handleVisibilityToggle}>
-              {controlPending?.kind === "visibility"
-                ? `重试设为${controlPending.target === "private" ? "私有" : "共有"}`
+              {visibleControlPending?.kind === "visibility"
+                ? `重试设为${visibleControlPending.target === "private" ? "私有" : "共有"}`
                 : currentMeta.visibility === "private" ? "设为共有" : "设为私有"}
             </button>}
           </> : <span className="pc-cloud-access-label" data-pc="cloud-new-conversation">新云端对话 · 默认共有</span>}
           {controlNote && <span className="pc-cloud-control-note" data-pc="cloud-control-status" role="status">{controlNote}</span>}
-          {controlPending?.kind === "stop" && <button type="button" className="pc-cloud-control-btn" data-pc="cloud-stop-retry"
-            onClick={() => void applyCloudControl(controlPending)}>重试停止请求</button>}
+          {visibleControlPending?.kind === "stop" && <button type="button" className="pc-cloud-control-btn" data-pc="cloud-stop-retry"
+            onClick={() => visibleControlPending && void applyCloudControl(visibleControlPending)}>重试停止请求</button>}
         </div>
       )}
 
