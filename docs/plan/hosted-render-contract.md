@@ -47,7 +47,7 @@
 1. **用户卡在托管方的渲染服务里怎么跑。** 现在的独立渲染主机把各项目的用户卡装进同一个检出目录和同一个改动层（`render-host-contract.md` 第 7 节「限制」），预渲染页面与工作进程的本机接口同源。桌面上这是用户自己选择加入哪些项目；托管端任何人都能建项目（`auth-contract.md` 第 4 节「谁能建」），等于托管方替任意来源执行代码：
    - 项目甲的用户卡的顶层代码，会在渲染项目乙的页面里执行，读得到页面里项目乙的内容，再发到外面；
    - 卡片代码能请求工作进程自己的 `/api/*`。
-   
+
    本文按**方案 A：有用户卡的项目只在按项目隔离的工作进程里渲**来写（第 7.5 节）。备选**方案 B**：第一版托管方的渲染服务不接用户卡任务（`userCards: false`、不同步卡），任务书第 23 条「含用户卡、图卡的任务它能渲」记未达成。不建议方案 C（照现状共用一个实例）。请主会话选 A 或 B。
 2. **「创建者特权只有三项」这句要不要动。** `workflow/project.md` 与 `product/document-service.md` 各有一句。D 让创建者多了一个开关，这句不改就前后矛盾。任务书 D 只点名四份文档、没点 `document-service.md`，「三项」的措辞也没说怎么改。第 9 节给了建议稿（不改「三项」的数，另起一句），请主会话确认算不算在 D 的授权内。
 3. **图卡。** 现在 PC 节点与独立渲染主机报的能力都是 `graphCards: false`（`server/vite-plugin-frames.ts` 的 `nodeCapabilities`、`render-node/host.mjs` 的 `HOST_CAPABILITIES`），没有任何任务写 `requires.graphCards: true`。第二段怎么给图卡任务标能力、无头 Chrome 的软件 WebGL 能不能跑图卡，要等第二段合入后才知道。本文不替它定，第 5 节只写「按第二段定的能力位报」。
@@ -355,7 +355,7 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 - 工作进程：`scripts/render-host.mjs`（现有入口）加一种**代理模式**：环境变量 `PROMPTCUT_RENDER_BROKER=http://127.0.0.1:<端口>` 与 `PROMPTCUT_RENDER_BROKER_KEY=<每次启动随机>`。这时不读 `PROMPTCUT_SHARED_CONFIG`，改向管理进程的本机代理口要东西：
   - `GET /projects`（长轮询）：这个工作进程现在该连哪些项目；
   - `POST /ticket { projectId }`：一张连接票据（管理进程转 `hosted.ticket`）。每次建新会话取一张，与桌面版「页面每次交一张 render 票据」是同一做法（`auth-contract.md` 第 11 节）。
-  
+
   工作进程里**没有私钥、没有任何项目的口令或 `K`**，只有两分钟的票据。`createRenderHost` 要能在运行中增删项目（现在的成员表在构造时定死）。
 - 退出：管理进程收到 SIGTERM → 工作进程放回认领（现有 `/api/frames/queue/release`）→ 结束进程树 → 退出码 0。PM2 `kill_timeout` 20 s。
 - 诊断：管理进程 `GET http://127.0.0.1:<端口>/status`（只绑回环）回目录状态、各项目连接与计数（沿用 `render-host-contract.md` 第 3 节的字段）、资源读数、背压状态、最近一次自检；不含票据与密钥。

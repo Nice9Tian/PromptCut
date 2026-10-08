@@ -55,11 +55,11 @@ export interface ShotsJob {
   shots?: { start: number; end: number; inTransition: TransitionKind | null; outTransition: TransitionKind | null }[];
 }
 
+import { shotsDir, shotsThumbMiddleware } from './asset-store/shots-thumb.mjs';
+
 const jobs = new Map<string, ShotsJob>();
 
-function shotsDir(root: string): string {
-  return path.join(dataDir(root), "shots");
-}
+export { shotsDir, shotsThumbMiddleware } from './asset-store/shots-thumb.mjs';
 
 function sendJson(res: ServerResponse, code: number, data: unknown): void {
   if (res.headersSent) return;
@@ -282,11 +282,12 @@ async function runDetection(root: string, job: ShotsJob, video: string, ref: Rec
   job.status = "done";
 }
 
-export function shotsPlugin(): Plugin {
+export function shotsPlugin(options: { projectStores?: any; projectAccess?: any } = {}): Plugin {
   return {
     name: "vite-plugin-shots",
     configureServer(server: ViteDevServer) {
       const root = server.config.root;
+      server.middlewares.use(shotsThumbMiddleware(root, options));
 
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith("/api/shots")) return next();
@@ -357,7 +358,7 @@ export function shotsPlugin(): Plugin {
         }
 
         // GET /api/shots/thumb/<文件名> —— 时间轴上的缩略图
-        const thumbMatch = req.method === "GET" && url.match(/^\/api\/shots\/thumb\/([\w.-]+)$/);
+        const thumbMatch = !options.projectStores && req.method === "GET" && url.match(/^\/api\/shots\/thumb\/([\w.-]+)$/);
         if (thumbMatch) {
           const file = path.join(shotsDir(root), thumbMatch[1]);
           // 文件名已经被正则限死,这里再确认一次没跑出目录

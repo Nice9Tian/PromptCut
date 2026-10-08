@@ -31,20 +31,34 @@ const permission = (project, accountId, action) => {
  * This factory is deliberately not mounted in the legacy shared service by itself.
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
-  signingKey, keyId, now = Date.now, pollMs = 1000, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier }) {
+  signingKey, keyId, now = Date.now, pollMs = 1000, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
+  runHooks = null }) {
+  if (runHooks !== null && typeof runHooks?.fenceInState !== 'function') reject(503, 'run-authority-unavailable');
   const refs = new Map(); const subscriptions = new Set(); const creating = new Map();
   let syncing = null, timer = null, closed = false, ready = false;
-  const notify = event => {
-    if (event.type !== 'login-revoked' && !(event.type === 'project-access-changed' && event.accountIds?.length)) return;
+  const notify = (event, control = null) => {
+    if (event.type !== 'login-revoked' && !(event.type === 'project-access-changed' &&
+      (event.accountIds?.length || (event.service === 'agent' && event.enabled === false)))) return;
     for (const entry of subscriptions) {
       const context = entry.context;
       if (context.projectId && event.projectId && context.projectId !== event.projectId) continue;
       if (context.loginId && event.loginIds?.length && !event.loginIds.includes(context.loginId)) continue;
       if (context.accountId && event.accountIds?.length && !event.accountIds.includes(context.accountId)) continue;
-      try { Promise.resolve(entry.callback(structuredClone(event))).catch(() => onDiagnostic({ code: 'revocation-subscriber-failed', seq: event.seq })); }
+      try { Promise.resolve(entry.callback(structuredClone(event), structuredClone(control))).catch(() => onDiagnostic({ code: 'revocation-subscriber-failed', seq: event.seq })); }
       catch { onDiagnostic({ code: 'revocation-subscriber-failed', seq: event.seq }); }
     }
   };
+  function fenceRuns(state, fence) {
+    if (runHooks) {
+      const result = runHooks.fenceInState(state, fence);
+      if (result?.then) reject(503, 'ledger-async-transaction');
+      return result;
+    }
+    // A deployment may still be page-only before run authority is mounted. Durable
+    // grants can never survive a missing fence implementation or be silently skipped.
+    if (Object.keys(state.runGrantsV2 ?? {}).length) reject(503, 'run-authority-unavailable');
+    return null;
+  }
   function applyRevocation(input) {
     const event = validateAccountEvent(input);
     const result = ledger.transaction(state => {
@@ -66,9 +80,11 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         accountEventSeq: event.seq, accountIds: [event.accountId], loginIds, createdAt: now() });
       state.barriers[`event:${event.eventId}`] = { eventId: event.eventId, accountEventSeq: event.seq,
         accessEventId: accessEvent.eventId, accessSeq: accessEvent.seq, loginIds, state: 'pending' };
-      return { duplicate: false, event: accessEvent };
+      const control = fenceRuns(state, { kind: 'credential', requestId: `access:${accessEvent.eventId}`,
+        loginIds, accessSeq: accessEvent.seq });
+      return { duplicate: false, event: accessEvent, control };
     });
-    if (result.event) notify(result.event);
+    if (result.event) notify(result.event, result.control);
     return { duplicate: result.duplicate, accountHead: ledger.read().accountHead };
   }
   async function synchronize() {
@@ -264,13 +280,20 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       }
       p.accessRevision = ++state.revision;
       const event = appendAccessEvent(state, { type: 'project-access-changed', reason: body.op, projectId: p.projectId,
-        accountIds: affected, accessRevision: p.accessRevision, createdAt: now() });
+        accountIds: affected, accessRevision: p.accessRevision, createdAt: now(),
+        ...(body.op === 'set-hosted-service' ? { service: body.service, enabled: body.enabled } : {}) });
+      let control = null;
+      const fence = { requestId: `access:${event.eventId}`, projectId: p.projectId, accessSeq: event.seq };
+      if (body.op === 'delete') control = fenceRuns(state, { ...fence, kind: 'delete' });
+      else if (body.op === 'set-hosted-service' && body.service === 'agent' && body.enabled === false)
+        control = fenceRuns(state, { ...fence, kind: 'agent-disabled' });
+      else if (affected.length) control = fenceRuns(state, { ...fence, kind: 'member', accountIds: affected });
       if (p.status === 'deleted') p.tombstone = { revision: p.accessRevision, deletedAt: now() };
       const result = { eventId: event.eventId, accessRevision: p.accessRevision, completed: false, state: 'pending-services' };
       state.requests[key] = { digest, result, state: 'complete' };
-      return { result, event };
+      return { result, event, control };
     });
-    if (committed.event) notify(committed.event); return committed.result;
+    if (committed.event) notify(committed.event, committed.control); return committed.result;
   }
   function eventsSince(after = 0) {
     if (!ready || closed) reject(503, 'authority-not-ready');

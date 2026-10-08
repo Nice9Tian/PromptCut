@@ -70,11 +70,11 @@ export const projectHandlers = {
   },
   getSelection: () => {
     const state = getState();
-    if (state.selection.length === 0) return null;
-    const clipId = state.selection[0];
-    const hit = findClip(state.project, clipId);
-    if (!hit) return null;
-    return { id: clipId, trackId: hit.track.id, clip: hit.clip };
+    return { selection: { clipIds: [...state.selection] },
+      items: state.selection.map((id) => {
+        const hit = findClip(state.project, id);
+        return hit ? { id, trackId: hit.track.id, clip: hit.clip } : { id, missing: true };
+      }) };
   },
   /**
    * 总时长不走 setProjectMeta:直接写进项目会被时间轴立刻按内容末尾改回去。

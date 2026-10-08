@@ -24,14 +24,14 @@ const OUT = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-media-pcm-'));
 delete process.env.PROMPTCUT_EXPORT_DIR;
 delete process.env.PROMPTCUT_MEDIA_DIR;
 
-const BAKERY = pathToFileURL(path.join(ROOT, 'server', 'bakery', 'index.mjs')).href;
+const BAKERY = pathToFileURL(path.join(ROOT, 'server', 'bakery', 'ffmpeg.mjs')).href;
 
 function compile(srcRel, outName) {
   const src = fs.readFileSync(path.join(ROOT, srcRel), 'utf8');
   let js = ts.transpileModule(src, {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText;
-  js = js.replace(/(["'])\.\/bakery\/index\.mjs\1/g, JSON.stringify(BAKERY));
+  js = js.replace(/(["'])\.\/bakery\/ffmpeg\.mjs\1/g, JSON.stringify(BAKERY));
   const file = path.join(OUT, outName);
   fs.writeFileSync(file, js);
   return pathToFileURL(file).href;

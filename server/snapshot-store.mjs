@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { atomic } from './frame-mov.mjs';
+import { atomic } from './asset-store/atomic.mjs';
+import { mergeRanges } from './asset-store/ranges.mjs';
+export { mergeRanges } from './asset-store/ranges.mjs';
 
 /**
  * A3a 的 HTML 快照库。两层档案,目录形状是唯一的对外契约:
@@ -27,24 +29,6 @@ import { atomic } from './frame-mov.mjs';
 
 export const SHARED_DIR = 'controls-html';
 export const LOCAL_DIR = 'controls-local';
-
-/** 闭区间合并:接受帧号和区间混排,排序、去重、相邻(b + 1 === a)也并掉。 */
-export function mergeRanges(ranges) {
-  const parts = [];
-  for (const value of ranges ?? []) {
-    const [from, to] = Array.isArray(value) ? value : [value, value];
-    if (!Number.isInteger(from) || !Number.isInteger(to) || to < from) continue;
-    parts.push([from, to]);
-  }
-  parts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const merged = [];
-  for (const [from, to] of parts) {
-    const last = merged[merged.length - 1];
-    if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to);
-    else merged.push([from, to]);
-  }
-  return merged;
-}
 
 export const rangeCount = ranges => ranges.reduce((total, [from, to]) => total + (to - from + 1), 0);
 export const rangeHas = (ranges, frame) => ranges.some(([from, to]) => frame >= from && frame <= to);

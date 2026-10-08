@@ -17,6 +17,10 @@ import { createFsStore, ensureLayoutSync, readLayoutSync, LAYOUT_FILE, LAYOUTS }
 import { createMemoryStore } from './memory-store.mjs';
 import { BLOB_CHUNK_SIZE } from './blob-store.mjs';
 import { createAssetClient } from './client.mjs';
+export { createProjectAssetStores, projectScopeOfRoot, projectStorageKey, PROJECT_ASSET_LAYOUT_VERSION } from './project-stores.mjs';
+export { createAssetRevocationConsumer } from './project-revocations.mjs';
+export { authorizeAsset, openProjectStream, createProjectAssetAccess } from './project-access.mjs';
+export { assetContextOf, setAssetContext, authorizedAssetStore } from './project-access.mjs';
 
 export { BLOB_CHUNK_SIZE, createFsStore, createMemoryStore, createAssetClient, ensureLayoutSync, readLayoutSync, LAYOUT_FILE, LAYOUTS };
 

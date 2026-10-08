@@ -46,7 +46,8 @@ export function normalizeUploadItem(raw) {
   }
   const original = tiers.find((t) => t.tier === 'original');
   if (!original) return null;
-  return { id: original.hash, name: typeof raw.name === 'string' ? raw.name.slice(0, 200) : '', tiers };
+  const projectId = typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : null;
+  return { id: projectId ? `${projectId}:${original.hash}` : original.hash, name: typeof raw.name === 'string' ? raw.name.slice(0, 200) : '', tiers, ...(projectId ? { projectId } : {}) };
 }
 
 /** 一次按哈希入队最多收多少个素材 */
@@ -122,7 +123,7 @@ async function atomicWrite(file, text) {
  * @param {() => number} [options.now]
  */
 export function createUploadQueue({
-  file, target, resolveFile, gate = null, log = () => {}, backoff = UPLOAD_BACKOFF_MS, now = Date.now,
+  file, target, resolveFile, gate = null, log = () => {}, backoff = UPLOAD_BACKOFF_MS, now = Date.now, ownership = null,
 } = /** @type {any} */ ({})) {
   if (typeof target !== 'function') throw new TypeError('createUploadQueue needs target()');
   if (typeof resolveFile !== 'function') throw new TypeError('createUploadQueue needs resolveFile()');
@@ -146,7 +147,7 @@ export function createUploadQueue({
   let pending = null;
   const snapshot = () => JSON.stringify({
     v: FILE_VERSION,
-    items: [...items.values()].sort((a, b) => a.seq - b.seq).map(({ id, name, tiers, attempts }) => ({ id, name, tiers, attempts })),
+    items: [...items.values()].sort((a, b) => a.seq - b.seq).map(({ id, name, tiers, attempts, projectId }) => ({ id, name, tiers, attempts, ...(projectId ? { projectId } : {}) })),
   });
   const persist = () => {
     if (!file) return Promise.resolve();
@@ -168,6 +169,7 @@ export function createUploadQueue({
     if (!saved || saved.v !== FILE_VERSION || !Array.isArray(saved.items)) return;
     for (const record of saved.items) {
       const item = normalizeUploadItem(record);
+      if (ownership && item?.projectId !== ownership.projectId) continue;
       if (!item || items.has(item.id)) continue;
       items.set(item.id, { ...item, attempts: Math.max(0, Math.floor(Number(record.attempts) || 0)), nextAt: 0, seq: seq++ });
       counters.restored++;
@@ -205,7 +207,10 @@ export function createUploadQueue({
     controller = new AbortController();
     const signal = controller.signal;
     try {
+      await ownership?.assert();
+      if (ownership && (item.projectId !== ownership.projectId || where.projectId !== ownership.projectId)) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
       await uploadItem(item, where.client, signal);
+      await ownership?.assert();
       items.delete(item.id);
       counters.done++;
       say('upload.item-done', { id: item.id, name: item.name, tiers: item.tiers.map((t) => t.tier) });
@@ -234,6 +239,8 @@ export function createUploadQueue({
   async function uploadItem(item, client, signal) {
     const done = [];
     for (const t of item.tiers) {
+      await ownership?.assert();
+      if (ownership && target()?.projectId !== item.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
       const filePath = await resolveFile(t.hash);
       if (!filePath) {
         // 本地内容库里没有这一档(被删了):传不了,记一笔跳过这一档;素材原尺寸也没有就整个丢掉
@@ -246,6 +253,8 @@ export function createUploadQueue({
         hash: t.hash,
         ext: t.ext || undefined,
         beforeChunk: async () => {
+          await ownership?.assert();
+          if (ownership && target()?.projectId !== item.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
           if (!running || signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
           const release = gate ? await gate.acquireMedia({ signal }) : null;
           counters.chunks++;
@@ -270,7 +279,9 @@ export function createUploadQueue({
      * @param {{ name?: string, tiers: { tier: 'small' | 'original', hash: string, ext?: string }[] }} raw
      */
     async enqueue(raw) {
-      const item = normalizeUploadItem(raw);
+      await ownership?.assert();
+      if (ownership && raw?.projectId && raw.projectId !== ownership.projectId) return { queued: false, reason: 'project-mismatch' };
+      const item = normalizeUploadItem(ownership ? { ...raw, projectId: ownership.projectId } : raw);
       if (!item) { say('upload.bad-item', {}); return { queued: false, reason: 'bad-item' }; }
       const where = target();
       if (!where || !where.client) {

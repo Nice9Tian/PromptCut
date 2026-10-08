@@ -29,7 +29,10 @@ export const INGEST_TIMEOUT_MS = 10 * 60 * 1000;
  * @returns {Promise<{ hash: string, ext: string, name: string, url: string, bytes: number, deduped: boolean, path?: string, tiers?: { original: string, small: string | null }, small?: string }>}
  *   失败抛 `AssetSourceError`:取不到地址、连不上、超时、非 2xx、回包里没有哈希,都写明素材服务地址与原因。
  */
-export async function ingestFile({ file, name, origin, tiers = true, fetchImpl = globalThis.fetch, timeoutMs = INGEST_TIMEOUT_MS }) {
+export async function ingestFile({ file, name, origin, tiers = true, fetchImpl = globalThis.fetch, timeoutMs = INGEST_TIMEOUT_MS, ownership = null, ticket = null }) {
+  await ownership?.assert();
+  const token = typeof ticket === 'function' ? await ticket() : ticket;
+  if (ownership && !token) throw new AssetSourceError('项目素材入库缺少授权票据');
   const base = origin();
   if (!base) throw new AssetSourceError('素材服务不可达:编辑器进程取不到素材服务的地址,没能入库');
   const fileName = name || path.basename(file);
@@ -40,7 +43,7 @@ export async function ingestFile({ file, name, origin, tiers = true, fetchImpl =
   try {
     res = await fetchImpl(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
+      headers: { 'Content-Type': 'application/octet-stream', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: Readable.toWeb(fs.createReadStream(file)),
       duplex: 'half',
       signal: AbortSignal.timeout(timeoutMs),
@@ -54,7 +57,10 @@ export async function ingestFile({ file, name, origin, tiers = true, fetchImpl =
   let data;
   try { data = JSON.parse(text); } catch { data = null; }
   if (!data?.ok || typeof data.hash !== 'string') throw new AssetSourceError(`素材服务的入库回包里没有内容哈希(${base})`);
+  await ownership?.assert();
+  if (ownership && data.projectId !== ownership.projectId) throw new AssetSourceError('项目素材入库回包归属不匹配');
   return {
+    ...(ownership ? { projectId: ownership.projectId } : {}),
     hash: data.hash,
     ext: String(data.ext || ''),
     name: String(data.name || fileName),

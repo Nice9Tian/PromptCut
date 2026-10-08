@@ -108,6 +108,7 @@ export function createSharedDocService({
   accountRuntime = null,
   accountProjects = null,
   accountRequired = false,
+  docAssembly = null,
 } = {}) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedDocService: mode 只能是 'hosted' 或 'lan'");
   const say = typeof log === 'function' ? log : undefined;
@@ -123,6 +124,12 @@ export function createSharedDocService({
   function serviceRefusal(principal) {
     if (typeof principal?.service !== 'string' && principal?.scope !== 'service') return null;
     if (!registry) return 'forbidden';
+    if (principal.realm === 'account' && principal.identityVersion === 2) {
+      // v2 project/member/run authority lives in the account ledger. The LAN
+      // username store cannot admit or revoke it; the service registry still can.
+      try { registry.refresh({ force: true }); } catch { return 'service-revoked'; }
+      return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
+    }
     if (!isProjectId(principal.tenantId)) return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
     const record = storeOf()?.peek(principal.tenantId) ?? null;
     const refused = serviceAdmission({ registry, record, service: principal.service, kid: principal.serviceKid, role: principal.role });
@@ -136,6 +143,7 @@ export function createSharedDocService({
   }
   /** 只读成员的云端 Agent 连接改不了项目：按项目记录**此刻**的权限判（连接建立之后才被改成只读的也拦得住） */
   function readonlyRefusal(principal, type) {
+    if (principal?.realm === 'account') return null;
     if (principal?.service !== 'agent' || principal.scope !== 'member' || !AGENT_WRITE_TYPES.includes(type)) return null;
     const record = storeOf()?.peek(principal.tenantId) ?? null;
     return record && memberAccess(record, principal.username, principal.creator === true) === 'rw' ? null : 'forbidden';
@@ -263,23 +271,28 @@ export function createSharedDocService({
   function bundleForSpace(space) {
     let b = bundles.get(space);
     if (!b) {
-      const project = projectModule({ store: storeForSpace(space) });
+      const projectStore = storeForSpace(space);
+      const operationCoordinator = docAssembly?.coordinatorForSpace({ space, store: projectStore, directory: tenantDir(space) });
+      const project = projectModule({ store: projectStore, operationCoordinator });
       const content = contentModule({ store: storeForSpace(space) });
       // 成本记录（C10 其余第 3 节）：和内容库共用这个空间的存储，按项目空间隔离
       b = {
         project, content, events: eventsModule({ project, content }), costs: costsModule({ space, store: storeForSpace(space) }),
         // 在场状态(A3 第二阶段):成员页面的「正在编辑」、Agent 的范围与消息,只在内存里转发,借项目频道广播
         presence: presenceModule({ project }),
+        ...(docAssembly ? { selection: docAssembly.selectionForSpace({ space, project }) } : {}),
       };
       bundles.set(space, b);
     }
     return b;
   }
+  docAssembly?.bindTenantResolver(space => bundleForSpace(space));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).project }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).content }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).costs }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).presence }));
+  if (docAssembly) service.mount(spacedModule({ create: (space) => bundleForSpace(space).selection }));
   service.mount(sharedModule({
     store: storeOf,
     challenges: adminChallenges,

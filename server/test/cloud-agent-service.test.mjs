@@ -103,7 +103,8 @@ test('CA-TOOL-02 工具表里的每个工具都归了类;在副本上执行的�
   const count = (mode) => Object.values(CLOUD_TOOL_PLAN).filter((p) => p.mode === mode).length;
   assert.deepEqual({ route: count('route'), hosted: count('hosted'), server: count('server'), initiator: count('initiator'), pending: count('pending') },
     { route: 71, hosted: 20, server: 6, initiator: 8, pending: 23 });
-  assert.equal(CLOUD_OPEN_TOOLS.size, 105, '交给模型的 = 除「还没接上」的全部(看画面的四个要节点配了看画面的口子才交,见 cloud-agent-look.test.mjs)');
+  assert.equal(CLOUD_OPEN_TOOLS.size, 104, 'pending 与明确关闭的 spawn_agent 不交给模型(看画面的四个要节点配了看画面的口子才交)');
+  assert.equal(CLOUD_OPEN_TOOLS.has('spawn_agent'), false);
   // 在副本上执行的:走路由表的必须是同步实现(进程级的锁里不等外部);点名的两个例外实现本身是同步的
   const route = Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.mode === 'route').map(([n]) => n);
   // 看画面的四个不走路由表(读副本后向渲染服务要一帧,不进锁),与 get_layout 同理
@@ -128,8 +129,8 @@ test('CA-TOOL-02 工具表里的每个工具都归了类;在副本上执行的�
   assert.match(no.error, /云端 Agent 这一版还用不了 web_open/);
   assert.equal(checkCloudTool('no_such_tool').cloudUnavailable, true);
   // 系统提示词:不再说旧范围的话
-  for (const stale of ['只能用内置卡', '云端第一版不支持', '云端暂不支持', '新建或修改卡片代码、']) assert.equal(CLOUD_SYSTEM_NOTE.includes(stale), false, stale);
-  for (const must of ['发起方不在线', 'import_media', 'create_card', '托管方的配音服务']) assert.ok(CLOUD_SYSTEM_NOTE.includes(must), must);
+  for (const stale of ['只能用内置卡', '云端第一版不支持', '新建或修改卡片代码、']) assert.equal(CLOUD_SYSTEM_NOTE.includes(stale), false, stale);
+  for (const must of ['发起方不在线', '云端暂不支持开子 Agent', 'import_media', 'create_card', '托管方的配音服务']) assert.ok(CLOUD_SYSTEM_NOTE.includes(must), must);
 });
 
 test('CA-TOOL-04 交给模型的工具只有清单里的加 think', async () => {
@@ -351,10 +352,10 @@ test('CA-ISO-01 / CA-ISO-02 / CA-TOOL-01 / CA-PAGE-01 / CA-HIST-01 / CA-RUN-01 /
     assert.notEqual((await kit.doc.stateOf('p-a')).project.tracks[0].clips[0].end, 11, '停下之后没有新的写入');
   });
 
-  await t.test('CA-TOOL-01 还没接上的工具逐个回 cloudUnavailable 与原因;要操作发起人界面的在他不在线时逐个回 initiatorOffline;项目版本不变', async () => {
+  await t.test('CA-TOOL-01 pending 工具逐个回 cloudUnavailable;发起人页面工具离线即回;关闭的 spawn 单独稳定拒绝', async () => {
     const inst = kit.service._instance(alice);
     const before = (await kit.doc.stateOf('p-a')).rev;
-    const closed = tools.map((x) => x.name).filter((n) => !CLOUD_OPEN_TOOLS.has(n));
+    const closed = tools.map((x) => x.name).filter((n) => !CLOUD_OPEN_TOOLS.has(n) && CLOUD_TOOL_PLAN[n]?.disabled !== true);
     assert.equal(closed.length, 23);
     for (const name of closed) {
       const r = await inst.callTool(name, {}, 'c-tools');
@@ -362,8 +363,12 @@ test('CA-ISO-01 / CA-ISO-02 / CA-TOOL-01 / CA-PAGE-01 / CA-HIST-01 / CA-RUN-01 /
       assert.equal(r.ok, false);
       assert.ok(r.error.includes(name) && r.error.includes(CLOUD_TOOL_PLAN[name].why), `${name} 的回答里写了差什么`);
     }
-    // 发起方不在线(这个对话没有人连着看):八个要操作他界面的工具立刻回,不等
+    // 发起方不在线(这个对话没有人连着看):可用的发起人页面工具立刻回,不等;disabled 的 spawn 单独拒绝
     for (const name of CLOUD_INITIATOR_TOOLS) {
+      if (CLOUD_TOOL_PLAN[name]?.disabled === true) {
+        assert.deepEqual(await inst.callTool(name, {}, 'c-tools'), { ok: false, cloudUnavailable: true, error: '云端暂不支持开子 Agent' });
+        continue;
+      }
       const t0 = Date.now();
       const r = await inst.callTool(name, {}, 'c-tools');
       assert.equal(r?.initiatorOffline, true, name);
