@@ -9,7 +9,7 @@
 - 版本：0.7.18，第一个整合小阶段进行中
 - 最后更新：2026-10-08，用户已分别确认计划定稿、开始实施
 - main：见 `git log`
-- 一句话：集成分支已推送调度文档与根验证记录，产品源码仍与913e6884相同；旧共同候选在S4继续，已知A5/M7/素材探针失败保留；账号后端联合候选Linux62/62，hosted账号接线交回但素材ready及三服务回执未完，尚未合入main/发版/部署新服务
+- 一句话：已审模块以 --no-ff 收回集成9131dd43；隔离联合候选74a6b67c类型及完整npm5029/5027/0/2通过，旧共同首轮58过/3失败/18人工及后续有因修正证据分别保留。账号联合候选718fc180真实Linux67/67；中央独立素材接线、真实project.op顺序/历史接线和全员选区继续，尚未合入main/发版/部署新服务
 
 ## 已经做了什么
 
@@ -67,12 +67,22 @@
 - 素材关闭增量固定 `cf49240a`：子包受控5例及目标28/28、full4960/4959通过/0失败/1跳过、98823.2154ms。根确认release不应先于实际I/O关闭，并指出marker仅文件sync不足以证明Linux目录掉电耐久；Sol在固定源码全量结束后另补目录耐久顺序，旧有模拟重启证明不冒称Linux实测。旧finish先完成1/1失败与异步发布2/4失败均保留，尚未收回产品包。
 - 根 `f9390dda` GR首轮在途：与main产品树的1800帧逐字节比对零差异，两遍导出确定性1800/1800相同、快照重放一致均通过（GR1–5）；其它GR项仍待首轮完成，不能据此划掉整组。实际main `e0e3afc3` 的非文档产品树与基准 `bf6e48e6` 相同，未改/重置参考工作区。
 - M7旧观测修正 `2a5ae175` 的首轮真浏览器16项/54部分通过、fails/pending空、creator0/node单角色1/all汇总0、墙钟873.6836秒；根发现旧历史作废fallback可能把同ID重开后的普通失败错认作旧superseded，受控反例已证。Astra收紧连续首代/同epoch及publisher最新终态，固定 `59b04d04` full4942/4941通过/0失败/1跳过、76331.4232ms，影响M7第二轮由此源码更正触发，正在进行，旧第一轮不当最终收回证明。
+- 旧共同候选913e6884首轮最终完成：79项中58通过、3失败、18人工，墙钟7786.641秒；三失败为A5主机未认领、M7两观测断言、asset-path模型目录差异。S4-6最后35/35通过、843秒；其余18人工仍不计通过。首次失败留TMP/promptcut-three-versions-combined-d66f4db8ef6b4a249cb49536d1bbd97c，后续有因修正不改写首轮结果。
+- 根GR首轮固定f9390dda：12项9通过/3失败，墙钟1239.278秒；GR6/11/12仍用manifest默认5690端口，碰到本会话旧共同runner，而非用户端口。根纠正--port-shift210后仅这3项复验，全通过、墙钟107.765秒，TMP/pc-root-gr-port-fixed-b7ebc568ff9d449b8302905254fb6fd2。前9项未重复，原端口失败仍保留；准备核所有权时原GR进程已自然退出，未结束任何进程。1800帧零差异、确定性1800/1800及重放证据属于f939固定源码。
+- M7最终固定59b04d04/b885daf3：根直接解析原始TMP/promptcut-validation-races-m7-full-2.log，16项/54子断言全pass、fails/pending空，脚本786831ms、墙钟787.031秒、外层exit0；creator0/node单角色1如实保留。15份缺失PC候选均须首代连续无缺口/同epoch/发布者最新superseded与watcher failed，当前describe优先；已有反例已被拒，未把同ID重开后的普通失败视为作废。A4本轮第一样本已就绪，不宣称复现原现场唯一根因。
+- 项目素材最终b363df43（源码c7e94f31）已审收回：子包full4966/4964/0/2、87519.307ms，目标34/33/0/1、HTTP26/26；根Linux精确两文件包装6/6、0跳过、202.546ms，真实目录fsync/正常恢复/symlink拒通过，账号204715/nginx9395不变。Windows目录fsync明确unsupported；正常恢复和故障门控不当物理掉电证明，缺备份或坏marker failclosed需可信运维消歧。
+- 根hosted账号初包d96530d5完整npm4987/4986/0/1、84012.734ms，但受控两并发异步鉴权在maxConnections=1时实际接入2连接，独立反例exit1。修正da476e15重新核容量/transport，真实resume/初始化child crash证据补齐；根最终联合74a6b67c同反例接入1/连接1、exit0，未以旧全量全绿掩盖产品容量缺陷。
+- doc实时素材就绪增量0e12db21已审收回：每次join/session同步access head、mTLS探针后再同步核head，cursor/head/authority/instance精确一致；join首次不ready不写membership，签票据再核同instance。生产缺可信callback503，setAssetReady仅显式fixture。中央真实asset/status正在接，不能以fixture ready或一次历史true说生产已可用。
+- 根隔离联合74a6b67c固定源码：类型exit0（5.25秒）；npm定向47条/46通过/0失败/1Windows符号链接跳过，2214.825ms；首次完整npm5029条/5027通过/0失败/0取消/2跳过，63880.997ms（墙钟64.234秒），native重跑0。两full跳过仅既有未配置真实舞台layout与Windows symlink权限；实际provider崩溃矩阵仍运行。产品树已无冲突合入9131dd43，root进度文档另写，未放入main。
+- 根同联合素材HTTP26/26、exit0（0.375秒），真实模块但注入权威fixture、productionMounted:false；asset-path原日志29项通过，P7两边均template且逐字段相同，P11像素相同。根汇总包装在探针结束后误按单行JSON读取多行输出，wrapper exit1；没有重跑探针赌绿，实际子进程exit码未保存，不补造。TMP/pc-root-asset-probes-74a6b67c-*保留；未当真实安装模型推理证明。
+- VH备份timer联合030ac9ab：Windows67/64/0/3通过，首次真实Linux67/66/1/0失败，原因backup-schedule.test缺mkdirSync导入（Windows跳过该POSIX项而漏查）。Luna仅补导入971fcb23/报告7306bfe5后，root收回718fc180，新精确包装SHA2560961416041a6daca70e39ca81fe4efee366e1424e445448750fad32fcafcd2d4，真实Linux67/67、0fail/cancel/skip、11857.814ms（墙钟12.575秒），service用户运行，account/nginx PID不变。root新包装首次因utf8-sig编码拼写错误在SSH前退出，纠正包装后才进行此轮真实测试，原错误保留。
+- 节点对718fc180的两份backup unit只读systemd-analyze verify exit0；UTC每日02:17 calendar三次计算exit0。诊断仅系统既有snapd RestartMode不识别警告，未改系统unit。没有安装/启用/启动timer或部署新账号；此前非空备份恢复fixture及旧生产空库恢复与新生产完整恢复仍分开记录。
 
 ## 接下来干什么
 
-1. 固定旧共同候选完成首轮自动探针；保留A5/M7/asset首次失败，收回已审卡片/auth保护、独立A5脱敏诊断与有据的M7/C62修复后按影响复验。人工、真实网络和未完成项不计通过。
+1. 旧共同候选首轮与有因修正已完成并保留；中央独立asset接线固定后先核真实账号/doc/mTLS/head、实际关闭回执及独立部署依赖闭包。已通过模块与fixture不能替代完整产品交互；18人工、真实网络和未完成项不计通过。
 2. 调度纯文档已收回并推送，沿用claude/four-stage；不盲合最新main、不打断在途验收。小阶段真正共同基线通过后合入main并推送，进度随提交更新。
-3. 完成并独立核doc权威、素材隔离包；复核网站未知请求结果边界、签名顺序/连续ACK，之后按接口依赖派Agent/UI与中央接线包。账号联合候选full已过，但生产挂载、真实OS权限、部署前完整备份/恢复仍需完成。
+3. 已审doc/素材模块基础和网站未知请求边界；Astra把顺序见证/完整历史接真实project.op，Sol实现全在线成员选区provider。之后按接口依赖派Agent ACL/read/run/FIFO/UI；生产挂载、独立OS私钥、部署前完整备份/恢复仍需完成。
 4. 新调度包先约本地完整查询资格与云端单活跃项目接口，准备真实自定义卡片容量场景；提前让位、故障A/B和删除细节仅记录/草拟，不依据旧常规裁定授权自行选择。原先已授权且不依赖它们的工作继续。
 ## 还差什么
 
@@ -176,12 +186,10 @@
 
 | 模型 | 工作 | 工作区 / 分支 | 状态 |
 |---|---|---|---|
-| Sol | 撤销卡片出口限制，外链正常且分源/接口边界保留 | .worktrees/three-versions-card-policy / codex/three-versions-card-policy | 实现已交，固定源码补验全链；full-3中止不能计通过 |
-| Sol | 账号schema/public/internal/凭据/同意/撤销基础 | 两仓库.worktrees/018-account-foundation / codex/018-account-foundation | 已交待审，主会话VH40/40；部署兼容/备份待补包 |
-| Astra | 改密顺序见证、权限fence、历史故障实证 | 两仓库.worktrees/018-password-order / codex/018-password-order | 已交待审；生产挂载/网络未做 |
-| Sol | 渲染调度补充文档整合 | .worktrees/render-scheduling-doc-sync / codex/render-scheduling-doc-sync | 已交主会话审查并补进度；纯文档，无新业务实现证据 |
-| Sol | C10 A5主机已连但不认领 | .worktrees/c10-host-claim-fix / codex/c10-host-claim-fix | 只读复现定位；5950～5959独占 |
-| Astra | codex-auth-state fake CLI测试不退出 | .worktrees/auth-fixture-lifecycle / codex/auth-fixture-lifecycle | 54836树中止证据交接后独立定位；不动生产auth |
+| Sol | 中央独立素材入口、mTLS权威与实时ready、关闭回执及部署闭包 | .worktrees/018-asset-wiring / codex/018-asset-wiring | 正在实现；5860～5869；无依赖部署树首轮缺pngjs失败保留，纯模块分层解法已授权，未部署 |
+| Sol | 项目全员在线选区、可信名字与发起人离线快照provider | .worktrees/018-project-selections / codex/018-project-selections | 开场ff01d9b6；5920～5929；接口已约，未完成，不改中央/Agent UI |
+| Astra | 真实project.op顺序见证、完整历史与投影崩溃恢复接线 | .worktrees/018-operation-wiring / codex/018-operation-wiring | 开场3d872632；5760～5769；发现原append未fsync/先广播及history仅镜像，准备真实反例与窄接口增量 |
+| Luna | 账号备份每日runner/unit与POSIX测试补导入 | VisuHive .worktrees/018-account-backup-timer / codex/018-account-backup-timer | 已交7306bfe5并由root独立Linux67/67；当前无实施任务，未启动节点timer |
 
 ## 没做到的与原因
 
