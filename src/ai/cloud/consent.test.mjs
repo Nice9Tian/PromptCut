@@ -29,6 +29,7 @@ test('a refusal never posts, remains blocked, and the next use asks the server a
   assert.equal(calls.filter(x => x.body).length, 1);
   await client.logout();
   assert.equal(cloudConsentState().accepted, null);
+  assert.equal(cloudConsentState().accountId, null);
   await assert.rejects(requireCloudConsent(), error => error.code === 'login-required');
   setCloudConsentSource(null);
 });

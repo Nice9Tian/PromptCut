@@ -25,7 +25,8 @@ export function setCloudConsentSource(next: Source | null) {
       if (source !== bound) return;
       generation++;
       requestSeq++;
-      publish({ accountId: bound.accountId, bindingVersion: generation, accepted: null, pending: false, error: null });
+      publish({ accountId: bound.client.account?.id === bound.accountId ? bound.accountId : null,
+        bindingVersion: generation, accepted: null, pending: false, error: null });
     });
   }
 }
