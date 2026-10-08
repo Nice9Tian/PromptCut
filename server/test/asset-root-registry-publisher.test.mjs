@@ -64,7 +64,7 @@ test('publisher parses actual /proc stat field 22 without whitespace/comm confus
   assert.deepEqual(parseProcStat(`123 (name ) with spaces) ${fields.join(' ')}`), { pid: 123, startTicks: '987654321' });
   assert.throws(() => parseProcStat('123 malformed'));
   assert.deepEqual(validatePublisherScope(scope), scope);
-  for (const change of [{ uid: 0 }, { unit: '../other.service' }, { cgroupPath: '/sys/fs/cgroup/a/../b' },
+  for (const change of [{ uid: 0 }, { unit: '../other.service' }, { unit: '--help.service' }, { cgroupPath: '/sys/fs/cgroup/a/../b' },
     { cgroupPath: '/sys/fs/cgroup/a//b' }, { arbitraryUnit: 'other.service' }]) assert.throws(() => validatePublisherScope({ ...scope, ...change }));
 });
 
@@ -141,6 +141,18 @@ test('controlled bootstrap is explicit, prior files/history cannot be reset and 
   await assert.rejects(m.run('initialize'), { code: 'publisher-bootstrap-not-empty' });
   m.files.get('epoch-1.json').instance.pid++;
   await assert.rejects(m.run('rotate'), { code: 'publisher-history-mismatch' });
+});
+
+test('controlled third epoch checks complete owned history; corrupt/missing prior witness cannot stop a unit', async () => {
+  const m = model(); await m.run('initialize'); await m.run('rotate');
+  const good = clone(m.files.get('witness-2.json')); m.files.get('witness-2.json').observed.closed = false;
+  m.calls.length = 0; await assert.rejects(m.run('rotate'), { code: 'publisher-history-mismatch' });
+  assert.equal(m.calls.includes('stop'), false);
+  m.files.set('witness-2.json', good);
+  assert.equal((await m.run('rotate')).epoch, 3);
+  m.files.delete('witness-2.json'); m.calls.length = 0;
+  await assert.rejects(m.run('rotate'), { code: 'publisher-history-mismatch' });
+  assert.equal(m.calls.includes('stop'), false);
 });
 
 test('production entry never accepts Windows/nonroot as OS evidence; CLI rejects fixture/force before IO and actually closes', async () => {

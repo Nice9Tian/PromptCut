@@ -26,7 +26,7 @@ const pin = v => String(v ?? '').replaceAll(':', '').toLowerCase();
 
 export function validatePublisherScope(scope) {
   if (!exact(scope, SCOPE) || !ref(scope.authorityId) || !ref(scope.serviceIdentity) ||
-      !positive(scope.uid) || !/^[A-Za-z0-9_.@-]+\.service$/.test(scope.unit) ||
+      !positive(scope.uid) || !/^[A-Za-z0-9][A-Za-z0-9_.@-]*\.service$/.test(scope.unit) ||
       !/^\/sys\/fs\/cgroup\/[A-Za-z0-9_.@/-]+$/.test(scope.cgroupPath) ||
       scope.cgroupPath.split('/').slice(1).some(p => !p || p === '.' || p === '..') ||
       path.posix.normalize(scope.cgroupPath) !== scope.cgroupPath ||
@@ -38,7 +38,7 @@ export function parseProcStat(text) {
   // comm is parenthesized and may itself contain spaces or ')'.
   const end = text.lastIndexOf(')'), pid = Number(text.slice(0, text.indexOf(' ')));
   const fields = text.slice(end + 2).trim().split(/\s+/);
-  if (end < 1 || !positive(pid) || !ticks(fields[19])) fail('publisher-proc-invalid');
+  if (!/^[1-9][0-9]* \(/.test(text) || end < 1 || !positive(pid) || !ticks(fields[19])) fail('publisher-proc-invalid');
   return { pid, startTicks: fields[19] };
 }
 
@@ -66,6 +66,35 @@ function activeRecord(scope, record) {
     !hash(record.previous.closureWitnessDigest)) fail('publisher-chain-invalid');
 }
 
+async function history(io, scope, current, anchor) {
+  if (!exact(anchor, ['v', 'protocol', ...SCOPE, 'firstEpoch', 'firstRegistryDigest']) || anchor.v !== 1 ||
+      anchor.protocol !== 'promptcut.asset-root-anchor.v1' || anchor.firstEpoch !== 1 ||
+      !hash(anchor.firstRegistryDigest)) fail('publisher-anchor-invalid');
+  for (const k of SCOPE) if (anchor[k] !== scope[k]) fail('publisher-anchor-invalid');
+  let value = current;
+  for (;;) {
+    activeRecord(scope, value);
+    if (!equal(value, await io.read(`epoch-${value.epoch}.json`))) fail('publisher-history-mismatch');
+    if (value.epoch === 1) {
+      if (anchor.firstRegistryDigest !== digestOf(value)) fail('publisher-anchor-invalid');
+      return;
+    }
+    const w = await io.read(`witness-${value.epoch}.json`), previous = value.previous;
+    if (!exact(w, ['v', 'protocol', 'witnessId', 'authorityId', 'fromEpoch', 'toEpoch', 'previousRegistry', 'observed']) ||
+        w.v !== 1 || w.protocol !== 'promptcut.asset-os-closure.v1' || !ref(w.witnessId) ||
+        w.authorityId !== scope.authorityId || w.fromEpoch !== value.epoch - 1 || w.toEpoch !== value.epoch ||
+        digestOf(w) !== previous.closureWitnessDigest || digestOf(w.previousRegistry) !== previous.registryDigest ||
+        !equal(w.previousRegistry?.instance, previous.instance) ||
+        !exact(w.observed, ['kind', 'closed', 'at', 'bootId', 'cgroup', 'unitInvocationId', 'pidBirth']) ||
+        w.observed.kind !== 'cgroup-empty' || w.observed.closed !== true || !positive(w.observed.at) ||
+        w.observed.bootId !== value.instance.bootId || !equal(w.observed.cgroup, previous.instance.cgroup) ||
+        w.observed.unitInvocationId !== previous.instance.unitInvocationId || !equal(w.observed.pidBirth, previous.instance.pidBirth))
+      fail('publisher-history-mismatch');
+    value = w.previousRegistry;
+    if (value.epoch !== w.fromEpoch) fail('publisher-history-mismatch');
+  }
+}
+
 /** Pure transaction coordinator. Injected IO in tests is a controlled model,
  * never an OS attestation. Only runAssetRootPublisher constructs production IO.
  */
@@ -85,12 +114,7 @@ export async function publishAssetRootRegistry({ scope, mode, io }) {
     } else {
       if (!old || !anchor) fail('publisher-anchor-missing');
       activeRecord(scope, old);
-      if (anchor.authorityId !== scope.authorityId || anchor.protocol !== 'promptcut.asset-root-anchor.v1' ||
-          anchor.firstEpoch !== 1) fail('publisher-anchor-invalid');
-      for (const k of SCOPE.filter(k => k !== 'authorityId')) if (anchor[k] !== scope[k]) fail('publisher-anchor-invalid');
-      if (old.epoch === 1 && anchor.firstRegistryDigest !== digestOf(old)) fail('publisher-anchor-invalid');
-      const committed = await io.read(`epoch-${old.epoch}.json`);
-      if (!equal(old, committed)) fail('publisher-history-mismatch');
+      await history(io, scope, old, anchor);
     }
     const epoch = old ? old.epoch + 1 : 1;
     if (!positive(epoch)) fail('publisher-epoch-overflow');
@@ -175,7 +199,8 @@ async function atomicWrite(dir, name, value, exclusive = false) {
   if (exclusive && await rootRead(target, true)) fail('publisher-record-exists');
   const tmp = path.join(dir, `.${name}.${randomUUID()}.tmp`), fd = await fs.open(tmp, 'wx', 0o644);
   try { await fd.writeFile(JSON.stringify(value)); await fd.sync(); } finally { await fd.close(); }
-  await fs.rename(tmp, target);
+  if (exclusive) { await fs.link(tmp, target); await fs.unlink(tmp); }
+  else await fs.rename(tmp, target);
   const directory = await fs.open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try { await directory.sync(); } finally { await directory.close(); }
 }
@@ -247,7 +272,8 @@ export async function runAssetRootPublisher({ configFile, mode }) {
       !exact(config.identity, ['origin', 'keyFile', 'certFile', 'caFile'])) fail('publisher-config-invalid');
   const scope = validatePublisherScope(config.scope), dir = config.registryDir;
   const origin = new URL(config.identity.origin);
-  if (origin.protocol !== 'https:' || origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password)
+  if (origin.protocol !== 'https:' || !['127.0.0.1', '[::1]', 'localhost'].includes(origin.hostname) ||
+      origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password)
     fail('publisher-config-invalid');
   await rootDirectory(dir);
   const selfGroup = (await fs.readFile('/proc/self/cgroup', 'utf8')).trim();
@@ -259,7 +285,9 @@ export async function runAssetRootPublisher({ configFile, mode }) {
     write: (name, value, exclusive) => atomicWrite(dir, name, value, exclusive),
     async lock() {
       const filename = path.join(dir, '.publisher.lock'), fd = await fs.open(filename, 'wx', 0o600);
-      const stat = await fd.stat(); await fd.writeFile(JSON.stringify({ pid: process.pid })); await fd.sync();
+      const stat = await fd.stat();
+      try { await fd.writeFile(JSON.stringify({ pid: process.pid })); await fd.sync(); }
+      catch (error) { await fd.close(); throw error; } // Stale lock requires root inspection, never guessed from PID.
       return async () => { try {
         const current = await fs.lstat(filename);
         if (current.ino !== stat.ino || current.dev !== stat.dev || current.isSymbolicLink()) fail('publisher-lock-changed');
@@ -271,6 +299,15 @@ export async function runAssetRootPublisher({ configFile, mode }) {
       if (unit.ActiveState !== 'inactive' || Number(unit.MainPID) !== 0) fail('publisher-bootstrap-unit-active');
       const files = await fs.readdir(dir);
       if (files.some(n => n !== '.publisher.lock')) fail('publisher-bootstrap-not-empty');
+      // No historical closure is inferred here. Explicit root initialization
+      // authorizes a genuinely fresh scope; any existing populated group vetoes it.
+      let group;
+      try { group = await fs.open(scope.cgroupPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); }
+      catch (e) { if (e.code !== 'ENOENT') throw e; }
+      if (group) try {
+        const events = await fs.readFile(`/proc/self/fd/${group.fd}/cgroup.events`, 'utf8');
+        if (!/^populated 0$/m.test(events)) fail('publisher-bootstrap-cgroup-populated');
+      } finally { await group.close(); }
     },
     async pinPrevious(previous) {
       if (!equal(previous, await inspect(scope, previous))) fail('publisher-previous-instance-mismatch');
