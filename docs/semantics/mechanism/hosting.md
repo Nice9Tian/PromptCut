@@ -59,3 +59,13 @@
 云端到本机由已有有效身份的成员在目标设备显式启动，首次证明绑定实际目标设备；源服务参与封锁、导出和发布，不将成员权限扩大为源主机登记权限。本机在请求前加密落盘原事务、新目标登记密钥和专用传输能力，云端只保存能力摘要。两端重开后凭精确原事务续传；完成后原子写入目标主机绑定和当前位置。持久搬迁任务完成前协调器保持等待，不能因旧源暂时仍可访问而提前加入；完成后设备绑定优先于旧文件位置提示。删除/取消清任务并留下注销待办，迟到完成不复活。〔裁〕执行报告卡点 8 第 2、3 行（`../../reports/REPORT-collaboration-reopen-recovery.md`）
 
 Agent 接续中继会话时重新取得当前页面委托票据；网关先核验权限，再剥除仅供网关的票据项，原文档服务仍严格核验会话秘密。订阅重开在首次取票或握手暂时失败时也沿现有退避继续，不仅在曾经打开后才安排重试；关闭/解除订阅仍撤销它。〔裁〕执行报告卡点 9 第 1、2 行（`../../reports/REPORT-collaboration-reopen-recovery.md`）
+
+# 云端 Agent 服务的部署
+
+从属于 `../product/hosting.md` 的「托管方的 Agent 服务」。本节全部〔裁：主会话 2026-10-06；出处 `../../plan/cloud-agent-contract.md` 第 2.2、8、10、11、20 节〕。
+
+- **进程与目录**：PM2 的 `promptcut-agent`（`server/hosted/deploy/pm2-promptcut-agent.config.cjs`），单进程，`--max-old-space-size=1536`、`max_memory_restart: '2G'`、`kill_timeout: 8000`；只绑回环，只经反向代理对外（`/agent/` 一段见 `server/hosted/deploy/nginx-location-agent.conf`）。代码不单独上传，用 `deploy-render` 放上去的那份检出，Agent 服务、渲染服务、在线页面须出自同一个提交，`/healthz` 的 `codeVersion` 用来核对。数据目录 `PROMPTCUT_AGENT_DATA`（0700），按「项目 / 主人 / 对话」分目录存对话，另有模型配置、Key 密文、`limits.json`、用量流水。
+- **服务身份**：凭 `PROMPTCUT_AGENT_SECRETS` 下 `service-key.json`（服务名 `agent` 的私钥，由 keygen 生成）连文档服务的控制连接；不读集群令牌；文档服务一时连不上不退出，自己退避重连，期间新请求回 503。
+- **部署子命令**：`keygen-agent`、`deploy-agent`、`status-agent`、`stop-agent`，都收 `--dry-run`。模型 Key 与别的外部服务的 Key 另有 `machine-id-agent`（取节点的机器识别码）与 `import-key-agent --file <密文文件> [--service model|voice]`（把用户生成的密文送到节点导入），也收 `--dry-run`；办法见 `mechanism/agent.md`「Key 与模型」。〔用户 2026-10-07 定〕
+- **在线页面的诊断报告提交**：构建在线页面时带 `VITE_DIAG_SUBMIT_URL` 与 `VITE_DIAG_SUBMIT_TOKEN`（只写变量名；值在构建那台电脑的 `.env.local` 里）。〔用户 2026-10-07 定〕
+- **Key 与换机**：Key 的密文由本机指纹派生口令封装，整个文件拷到别的机器解不开，换机（或重装系统）后要重新生成密文、重新导入；对话与用量数据目录整个拷走即可。迁移办法见 `../../plan/hosting-migration.md`。
