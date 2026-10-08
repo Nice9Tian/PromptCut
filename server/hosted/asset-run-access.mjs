@@ -155,25 +155,51 @@ function reply(res, status, result) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', connection: 'close' });
   res.end(JSON.stringify(status < 400 ? { ok: true, result } : { ok: false, code: result }));
 }
+async function copyImportFile(source, temp, ref, lease, chunkSize) {
+  return lease.run(async () => {
+    let input, output, failure;
+    try {
+      await lease.assert(); input = await fs.open(source, 'r'); lease.trackHandle(input);
+      await lease.assert(); output = await fs.open(temp, 'wx'); lease.trackHandle(output);
+      const digest = crypto.createHash('sha256'); let size = 0;
+      for (;;) {
+        await lease.assert(); const buffer = Buffer.alloc(chunkSize), read = await input.read(buffer, 0, buffer.length, null);
+        if (!read.bytesRead) break;
+        const bytes = buffer.subarray(0, read.bytesRead); size += bytes.length; digest.update(bytes);
+        if (size > ref.size) fail(409, 'asset-size-mismatch');
+        for (let offset = 0; offset < bytes.length;) {
+          await lease.assert(); const written = await output.write(bytes, offset, bytes.length - offset);
+          if (!written.bytesWritten) fail(503, 'asset-run-write-failed'); offset += written.bytesWritten;
+        }
+      }
+      if (size !== ref.size || digest.digest('hex') !== ref.hash) fail(409, 'asset-hash-mismatch');
+      await output.sync(); await lease.assert();
+    } catch (error) { failure = error; throw error; }
+    finally {
+      try { await input?.close(); await output?.close(); if (failure) await fs.rm(temp, { force: true }); }
+      catch (error) { lease.failClose(error); throw error; }
+    }
+  });
+}
 
 /** Dedicated Agent mTLS entry. No human/LAN resolver or hash-global fallback.
  * All bytes and wire metadata are observed here; the doc only receives hashes,
  * the exact signature tuple and real TLS evidence. Public tuple/body actor is
  * never an authorization input. */
 export function createAssetRunAccess({ client, consumer, projectStores, humanConsumer, assetInstanceId, serviceIdentity,
-  agentFingerprint256, resolveAgentTransport, maxBodyBytes } = {}) {
+  agentFingerprint256, resolveAgentTransport, maxBodyBytes, publicationIO = fs } = {}) {
   const pin = certificateFingerprint(agentFingerprint256);
   if (!/^[a-f0-9]{64}$/.test(pin) || ![assetInstanceId, serviceIdentity].every(reference) ||
       typeof resolveAgentTransport !== 'function' || !Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1 ||
       typeof client?.openLease !== 'function' || typeof consumer?.sync !== 'function' || typeof humanConsumer?.sync !== 'function' ||
       typeof projectStores?.project !== 'function') fail(503, 'asset-run-access-unconfigured');
-  const active = new Set(); let stopped = false;
+  const active = new Set(); let stopped = false, closureError;
   const freshHeads = async () => { await humanConsumer.sync(); await consumer.sync(); if (!humanConsumer.ready || !consumer.ready) fail(503, 'asset-run-not-ready'); };
   async function handler(req, res) {
     if (!req.url?.startsWith(RUN_ASSET_DATA_ROOT)) return false;
     let channel, lease, closedTask, admission;
     try {
-      if (stopped) fail(503, 'asset-run-not-ready');
+      if (stopped || closureError) fail(503, 'asset-run-not-ready');
       assertInstanceDirectTransport(req); const binding = instanceTlsBinding(req.socket);
       if (certificateFingerprint(req.socket.getPeerCertificate?.()?.fingerprint256) !== pin || req.headers.cookie) fail(403, 'asset-run-service-forbidden');
       const service = await resolveAgentTransport({ req, socket: req.socket, fingerprint256: pin });
@@ -226,7 +252,7 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
       await consumer.admit({ leaseId: channel.leaseId, projectId: input.projectId, runGrantId: input.runGrantId,
         instanceId: proof.instanceId, instanceGeneration: proof.instanceGeneration }, entry, admission);
       consumer.finishAdmission(admission); admission = null;
-      active.add(closedTask); closedTask.finally(() => active.delete(closedTask)).catch(() => {});
+      active.add(closedTask); closedTask.finally(() => active.delete(closedTask)).catch(error => { closureError = error; });
       const scope = projectStores.project(input.projectId), store = authorizedAssetStore(scope.stores.media, lease), ref = entry.last.resource;
       if (route.operation === 'openRead') {
         const stat = await store.stat(ref.hash); if (!stat) fail(404, 'asset-missing'); if (stat.size !== ref.size) fail(409, 'asset-size-mismatch');
@@ -261,8 +287,8 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
             else {
               const sourceFile = path.join(dir, ref.ext ? `${ref.hash}.${ref.ext}` : ref.hash), target = path.join(scope.dirs.media, path.basename(sourceFile));
               await lease.run(async () => { await lease.assert(); await fs.mkdir(scope.dirs.media, { recursive: true });
-                const temp = `${target}.${crypto.randomUUID()}.tmp`; await fs.copyFile(sourceFile, temp); await lease.assert();
-                await publishProjectFile({ temp, target, assert: lease.assert, lease }); await lease.assert(); });
+                const temp = `${target}.${crypto.randomUUID()}.tmp`; await copyImportFile(sourceFile, temp, ref, lease, store.chunkSize); await lease.assert();
+                await publishProjectFile({ temp, target, assert: lease.assert, lease, io: publicationIO }); await lease.assert(); });
               reply(res, 200, { status: 'ok', size: ref.size, ext: ref.ext });
             }
           }
@@ -275,6 +301,8 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
     finally { if (admission) consumer.finishAdmission(admission); }
     return true;
   }
-  return { handler, async close() { stopped = true; await consumer.unavailable(new Error('host-close')); await Promise.allSettled([...active]); },
-    status() { return { runAssetsConfigured: true, runAssetCursor: consumer.cursor, runAssetHead: consumer.head, runAssetsReady: consumer.ready }; } };
+  const idle = async () => { await Promise.all([...active]); if (closureError) throw closureError; };
+  return { handler, idle, async close() { stopped = true; await consumer.unavailable(new Error('host-close')); await idle(); },
+    status() { return { runAssetsConfigured: true, runAssetCursor: consumer.cursor, runAssetHead: consumer.head,
+      runAssetsReady: !stopped && !closureError && consumer.ready && humanConsumer.ready }; } };
 }

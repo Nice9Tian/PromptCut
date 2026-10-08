@@ -23,7 +23,7 @@ export function createAssetRunClient({ origin, tls, serverFingerprint256, timeou
       minVersion: 'TLSv1.3', keepAlive: true, maxSockets: 1, maxFreeSockets: 1,
       checkServerIdentity(host, cert) { return checkServerIdentity(host, cert) ||
         (certificateFingerprint(cert.fingerprint256) !== pin ? fail('asset-run-peer-forbidden') : undefined); } });
-    let socket, lost = false, closing = false;
+    let socket, lost = false, closing = false, closePromise;
     const pending = new Set();
     const request = (method, route, body) => new Promise((resolve, reject) => {
       if (stopped || closing || lost || !route.startsWith(RUN_ASSET_ROOT)) return reject(fail('asset-run-observer-lost'));
@@ -51,11 +51,12 @@ export function createAssetRunClient({ origin, tls, serverFingerprint256, timeou
       req.on('timeout', () => req.destroy(fail('asset-run-authority-unavailable')));
       req.on('error', () => reject(fail('asset-run-authority-unavailable'))); req.end(bytes);
     });
-    const result = { request, get lost() { return lost || closing; }, async close() {
-      if (closing) return; closing = true;
-      const waits = [...pending].map(actualClose); if (socket) waits.push(actualClose(socket));
-      for (const req of pending) req.destroy(); agent.destroy(); socket?.destroy();
-      await Promise.all(waits); channels.delete(result);
+    const result = { request, get lost() { return lost || closing; }, close() {
+      if (!closePromise) { closing = true; closePromise = (async () => {
+        const waits = [...pending].map(actualClose); if (socket) waits.push(actualClose(socket));
+        for (const req of pending) req.destroy(); agent.destroy(); socket?.destroy();
+        await Promise.all(waits); channels.delete(result);
+      })(); } return closePromise;
     } };
     channels.add(result); return result;
   }
