@@ -1,0 +1,383 @@
+{
+  "sourceBefore": "ab0d10286703bf3bee3d0eb8337e60b78d322dde",
+  "checks": [
+    {
+      "name": "real-project-created",
+      "pass": true
+    }
+  ],
+  "network": [
+    {
+      "path": "/hosted/shared/account/create",
+      "status": 201,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "failure-0",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ab0d1028-once\\failure-0.png"
+    },
+    {
+      "name": "failure-1",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ab0d1028-once\\failure-1.png"
+    },
+    {
+      "name": "failure-2",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-ab0d1028-once\\failure-2.png"
+    }
+  ],
+  "completed": false,
+  "executorMounted": false,
+  "cleanup": {
+    "closed": true,
+    "childClosed": true,
+    "assetPid": 27836,
+    "ports": [
+      6560,
+      6561,
+      6562,
+      6563,
+      6564,
+      6565,
+      6568
+    ]
+  },
+  "projectId": "sp_b3yn6jksu7iy7tfopb2sf5rd5l",
+  "failure": {
+    "phase": "join-two-devices",
+    "code": "timeout"
+  },
+  "wallMs": 34741,
+  "sourceAfter": "ab0d10286703bf3bee3d0eb8337e60b78d322dde"
+}

@@ -150,3 +150,12 @@ root命令（先在共同固定候选编译 dist-online）：`node scripts/probe
 主会话授权此次仅probe+本报告，执行器计划暂缓。新过滤限定精确 `wss://127.0.0.1:6568` 与 `/hosted/`；CDP created和握手响应101分别记录，requestID与关联记录只RAM。踢人前两页各必须created>=1且至少一条已101、仍live的旧连接；快照这些旧记录之后才执行原真实kick。踢人后等待每条快照旧记录各收到对应webSocketClosed，新连接关闭不能满足旧连接屏障，DOM弹框也不能替代。新增两条 established-old-websocket-before-kick 检查；保留原 affected-page-actual-websocket-closed 名称但加强为全部旧连接实际关闭。输出仅页索引、固定阶段、安全origin/path/status101或null、created/handshaken/旧live/旧closed计数及布尔，不持久requestID、query、子协议、票据或帧。
 
 本次使用本机绝对Node路径及父仓库绝对file URL静默预载，仅 `--check scripts/probes/project-member-controls-probe.mjs` 与 git diff --check；未启动监听、Chrome、fixture、native，也未重跑type/full/cargo。产品/tests相对 `eeab9e3b193f3e548be333ebad38abf447819954` 字节不变。该修正尚未真实运行，不能记为“连接关闭通过”；由根沿同ab0产品dist有因单次验证。
+
+
+## 根实际第三轮与小阶段收回
+
+最终探针集成666431be沿同一ab0编译产品运行：14/14、completed=true、5922ms（npm墙6.437秒）、exit0、自动重跑0。两页各created1/handshake101/旧live1，踢人后各旧closed1/allOldClosed=true；真实两个join403、解禁admin200、重新join200、回首页实际关闭页面连接、保留账号与原joined列表、重开同项目、不重复create均通过。截图由根实际看过，禁入提示仍是“账号已禁入，正在确认相关服务关闭”，不宣称全服务ACK完成。根再核全部自用6560–6579、原生6340/6348/6378/6381–6388/6526无监听。asset21188及Chrome/contexts/stages/fixture均正常收口。
+
+ab0→最终src/server/desktop/package.json/package-lock.json逐字一致（git diff exit0），只有probe和报告增量，沿用已实际验证的type0、目标27/27、full5410/5406pass/0fail/4skip/0cancel/72106.8852ms、online build0、真实Rust原生35/35/12136ms；没有无因重跑全量/cargo。原生scope是临时空页面真实Rust IPC，完整React桌面成员界面尚未独立运行，不把原生桥接等同完整桌面UI。原始三次result及根基线/原生摘要归档到 docs/archive/three-versions-member-controls-evidence/；详细过程在 docs/archive/three-versions-main-stages-2026-10-09.md。
+
+本阶段交付成员/设备白名单展示、按账号踢人与解禁、回项目首页，以及原生精确members路由。真正Agent任务关闭、改密退出、共有/私有完整跨服务即时撤销仍在独立分支，执行器和生产Agent尚未部署。本报告收回归档；工作区准备安全复用。

@@ -1,0 +1,416 @@
+{
+  "sourceBefore": "666431be183c6b0033a1c29bcb2aad69b8af19de",
+  "checks": [
+    {
+      "name": "real-project-created",
+      "pass": true
+    },
+    {
+      "name": "ordinary-member-has-no-admin-controls",
+      "pass": true
+    },
+    {
+      "name": "real-target-account-id",
+      "pass": true
+    },
+    {
+      "name": "trusted-member-name-visible",
+      "pass": true
+    },
+    {
+      "name": "affected-page-established-old-websocket-before-kick",
+      "pass": true
+    },
+    {
+      "name": "affected-page-established-old-websocket-before-kick",
+      "pass": true
+    },
+    {
+      "name": "affected-page-actual-websocket-closed",
+      "pass": true
+    },
+    {
+      "name": "affected-page-actual-websocket-closed",
+      "pass": true
+    },
+    {
+      "name": "both-devices-current-join-rejected",
+      "pass": true
+    },
+    {
+      "name": "home-preserves-account-login",
+      "pass": true
+    },
+    {
+      "name": "joined-list-same-project-after-home",
+      "pass": true
+    },
+    {
+      "name": "project-home-actually-closes-current-page-socket",
+      "pass": true
+    },
+    {
+      "name": "real-kick-and-unban-admin-requests",
+      "pass": true
+    },
+    {
+      "name": "home-reopens-no-duplicate-create",
+      "pass": true
+    }
+  ],
+  "network": [
+    {
+      "path": "/hosted/shared/account/create",
+      "status": 201,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/admin",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 403,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 403,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 403,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 403,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/admin",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    }
+  ],
+  "memberDiagnostics": [
+    {
+      "page": 1,
+      "step": "b-members-button-visible",
+      "buttonPresent": true,
+      "buttonCenterHits": false,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 1,
+      "snapshotMembers": 2,
+      "snapshotDevices": 2,
+      "snapshotPageDevices": 2,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 1,
+      "step": "b-members-button-center-hit",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 2,
+      "snapshotPageDevices": 2,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 1,
+      "step": "b-members-click-and-popup",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": true,
+      "visibleMemberRows": 2,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 3,
+      "snapshotPageDevices": 3,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 2
+    },
+    {
+      "page": 0,
+      "step": "a-members-button-visible",
+      "buttonPresent": true,
+      "buttonCenterHits": false,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 1,
+      "snapshotMembers": 1,
+      "snapshotDevices": 1,
+      "snapshotPageDevices": 1,
+      "snapshotPageAccounts": 1,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 0,
+      "step": "a-members-button-center-hit",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 0,
+      "snapshotMembers": 1,
+      "snapshotDevices": 1,
+      "snapshotPageDevices": 1,
+      "snapshotPageAccounts": 1,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 0,
+      "step": "a-members-click-and-popup",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": true,
+      "visibleMemberRows": 2,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 3,
+      "snapshotPageDevices": 3,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 2
+    },
+    {
+      "page": 0,
+      "step": "a-bans-button-visible",
+      "buttonPresent": true,
+      "buttonCenterHits": false,
+      "popupPresent": true,
+      "visibleMemberRows": 1,
+      "shareToasts": 0,
+      "snapshotMembers": 1,
+      "snapshotDevices": 1,
+      "snapshotPageDevices": 1,
+      "snapshotPageAccounts": 1,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 0,
+      "step": "a-bans-popup-already-open",
+      "buttonPresent": true,
+      "buttonCenterHits": false,
+      "popupPresent": true,
+      "visibleMemberRows": 1,
+      "shareToasts": 0,
+      "snapshotMembers": 1,
+      "snapshotDevices": 1,
+      "snapshotPageDevices": 1,
+      "snapshotPageAccounts": 1,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 1,
+      "step": "b-rejoined-members-button-visible",
+      "buttonPresent": true,
+      "buttonCenterHits": false,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 1,
+      "snapshotMembers": 2,
+      "snapshotDevices": 2,
+      "snapshotPageDevices": 2,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 1,
+      "step": "b-rejoined-members-button-center-hit",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": false,
+      "visibleMemberRows": 0,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 2,
+      "snapshotPageDevices": 2,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 1
+    },
+    {
+      "page": 1,
+      "step": "b-rejoined-members-click-and-popup",
+      "buttonPresent": true,
+      "buttonCenterHits": true,
+      "popupPresent": true,
+      "visibleMemberRows": 2,
+      "shareToasts": 0,
+      "snapshotMembers": 2,
+      "snapshotDevices": 2,
+      "snapshotPageDevices": 2,
+      "snapshotPageAccounts": 2,
+      "snapshotMaxPageDevicesPerAccount": 1
+    }
+  ],
+  "docSocketDiagnostics": [
+    {
+      "page": 1,
+      "step": "before-kick",
+      "origin": "wss://127.0.0.1:6568",
+      "path": "/hosted/",
+      "status": 101,
+      "created": 1,
+      "handshaken": 1,
+      "oldLive": 1
+    },
+    {
+      "page": 2,
+      "step": "before-kick",
+      "origin": "wss://127.0.0.1:6568",
+      "path": "/hosted/",
+      "status": 101,
+      "created": 1,
+      "handshaken": 1,
+      "oldLive": 1
+    },
+    {
+      "page": 1,
+      "step": "after-kick",
+      "origin": "wss://127.0.0.1:6568",
+      "path": "/hosted/",
+      "oldLive": 1,
+      "oldClosed": 1,
+      "allOldClosed": true
+    },
+    {
+      "page": 2,
+      "step": "after-kick",
+      "origin": "wss://127.0.0.1:6568",
+      "path": "/hosted/",
+      "oldLive": 1,
+      "oldClosed": 1,
+      "allOldClosed": true
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "01-creator-two-devices",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-666431be-once\\01-creator-two-devices.png"
+    },
+    {
+      "name": "02-member-readonly-controls",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-666431be-once\\02-member-readonly-controls.png"
+    },
+    {
+      "name": "03-creator-ban-account",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-666431be-once\\03-creator-ban-account.png"
+    },
+    {
+      "name": "04-rejoined-after-project-home",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-members-browser-666431be-once\\04-rejoined-after-project-home.png"
+    }
+  ],
+  "completed": true,
+  "executorMounted": false,
+  "cleanup": {
+    "closed": true,
+    "childClosed": true,
+    "assetPid": 21188,
+    "ports": [
+      6560,
+      6561,
+      6562,
+      6563,
+      6564,
+      6565,
+      6568
+    ]
+  },
+  "projectId": "sp_sgbxgl7wcxhsyjdu53z7qgote6",
+  "wallMs": 5922,
+  "sourceAfter": "666431be183c6b0033a1c29bcb2aad69b8af19de"
+}
