@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { publicOptions, projectFromVisibleLink, resourceMetadata, testIdentities } from './lib/account-public-path.mjs';
 
 test('public writes require an explicit flag and private native arguments never change the public host', () => {
@@ -12,7 +13,7 @@ test('public writes require an explicit flag and private native arguments never 
   assert.equal(publicOptions(['--dry-preflight']).run, false);
   assert.equal(publicOptions(['--run-public']).run, true);
   for (const args of [['--origin', 'https://evil'], ['--password', 'secret'], ['--run-public', '--dry-preflight'], ['--out', os.tmpdir()], ['--desktop-exe', 'C:/installed.exe']]) assert.throws(() => publicOptions(args));
-  const options = publicOptions(['--desktop-exe', path.join(os.tmpdir(), 'isolated-public-build', 'promptcut.exe'), '--desktop-profile-root', path.join(os.tmpdir(), 'isolated-public-profile'), '--desktop-sha256', 'a'.repeat(64)]);
+  const options = publicOptions(['--desktop-exe', path.join(os.tmpdir(), 'isolated-public-build', 'promptcut.exe'), '--desktop-profile-root', path.join(os.tmpdir(), 'isolated-public-profile'), '--desktop-sha256', 'a'.repeat(64), '--desktop-source-root', path.join(os.tmpdir(), 'isolated-public-source')]);
   assert.equal(options.run, false); assert.equal(options.sha, 'a'.repeat(64));
 });
 test('resource diagnostics discard query/header secrets and visible link has a strict real public project shape', () => {
@@ -42,4 +43,21 @@ test('actual Rust isolation functions and their own assertions compile and rejec
   } finally {
     assert.equal(path.dirname(path.resolve(dir)), path.resolve(os.tmpdir())); await fs.rm(dir, { recursive:true, force:true });
   }
+});
+
+test('actual default/dry CLI stops before browser, public network or account creation', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-account-public-dry-'));
+  try {
+    const out = path.join(dir, 'out');
+    const checked = spawnSync(process.execPath, [fileURLToPath(new URL('./account-public-user-pages-probe.mjs', import.meta.url)), '--dry-preflight', '--out', out], {
+      windowsHide:true, encoding:'utf8', timeout:10_000,
+    });
+    assert.equal(checked.error, undefined); assert.equal(checked.status, 0, checked.stderr);
+    const result = JSON.parse(await fs.readFile(path.join(out, 'result.json'), 'utf8'));
+    assert.equal(result.summary.mode, 'dry-preflight'); assert.equal(result.summary.completed, false);
+    assert.equal(result.summary.dryPreflightPassed, true); assert.equal(result.cleanup.browser, 'not-started');
+    assert.deepEqual(result.network, []); assert.deepEqual(result.websocket, []); assert.deepEqual(result.screenshots, []);
+    assert.equal(result.accountNames, undefined); assert.equal(result.ownedProjects, undefined);
+    assert.equal(result.preflight.publicNetwork, 'not-contacted');
+  } finally { assert.equal(path.dirname(path.resolve(dir)), path.resolve(os.tmpdir())); await fs.rm(dir, { recursive:true, force:true }); }
 });

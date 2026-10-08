@@ -12,7 +12,7 @@ export function temporaryPath(value) {
 }
 export function publicOptions(args) {
   const flags = new Set(['--run-public', '--dry-preflight']);
-  const values = new Set(['--out', '--desktop-exe', '--desktop-profile-root', '--desktop-sha256']);
+  const values = new Set(['--out', '--desktop-exe', '--desktop-profile-root', '--desktop-sha256', '--desktop-source-root']);
   const parsed = {};
   for (let i = 0; i < args.length; i++) {
     const key = args[i];
@@ -24,11 +24,12 @@ export function publicOptions(args) {
   const desktop = parsed['--desktop-exe'] ? temporaryPath(parsed['--desktop-exe']) : null;
   const profile = parsed['--desktop-profile-root'] ? temporaryPath(parsed['--desktop-profile-root']) : null;
   const sha = parsed['--desktop-sha256'] ?? null;
-  if (desktop && (!profile || path.extname(desktop).toLowerCase() !== '.exe' || !/^[0-9a-f]{64}$/.test(sha ?? ''))) throw new Error('native-private-build-and-sha-required');
-  if (!desktop && (profile || sha)) throw new Error('native-option-without-exe');
+  const nativeSource = parsed['--desktop-source-root'] ? temporaryPath(parsed['--desktop-source-root']) : null;
+  if (desktop && (!profile || !nativeSource || path.extname(desktop).toLowerCase() !== '.exe' || !/^[0-9a-f]{64}$/.test(sha ?? ''))) throw new Error('native-private-build-source-and-sha-required');
+  if (!desktop && (profile || sha || nativeSource)) throw new Error('native-option-without-exe');
   const out = temporaryPath(parsed['--out'] ?? path.join(os.tmpdir(), `pc-account-public-${randomUUID()}`));
   if (profile && (out === profile || out.startsWith(profile + path.sep) || profile.startsWith(out + path.sep))) throw new Error('native-profile-and-evidence-must-be-separate');
-  return { run:parsed['--run-public'] === true, out, desktop, profile, sha };
+  return { run:parsed['--run-public'] === true, out, desktop, profile, sha, nativeSource };
 }
 export function testIdentities() {
   const marker = `pcpub_${randomBytes(6).toString('hex')}`;
