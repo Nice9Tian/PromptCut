@@ -39,16 +39,18 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     recordService: row => gate.record(row) });
   let lock = Promise.resolve();
   const execSerial = fn => { const work = lock.then(fn, fn); lock = work.catch(() => {}); return work; };
-  return async ({ grant, record, onModelCall, beforeToolCall, onEvent = () => {} }) => {
+  return async ({ grant, record, onModelCall, beforeToolCall, onEvent = () => {}, signal }) => {
     if (!idOK(grant.projectId) || !idOK(grant.conversationId) || !idOK(grant.runId) ||
       grant.messageId !== record.messageId || grant.runId !== record.runId) fail(503, 'run-record-mismatch');
     const cfg = await modelConfig();
+    if (signal?.aborted) fail(403, 'run-fenced');
     if (!modelReady(cfg)) fail(503, 'no-model-key');
     const ownerKey = createHash('sha256').update(`account-v2\n${grant.projectId}\n${grant.conversationId}`).digest('hex').slice(0, 32);
     const dir = path.join(dataDir, 'tenants', grant.projectId, 'conversations', grant.conversationId);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const DataWebSocket = dataClient.webSocketFor(grant);
     if (typeof DataWebSocket?.closeOwned !== 'function') fail(503, 'account-data-configuration');
+    if (signal?.aborted) fail(403, 'run-fenced');
     const protocolsFor = async () => [PROTOCOL];
     // This binding is made only from the doc-admitted grant. Tool arguments and
     // page messages never choose the run or supply a selection snapshot.
@@ -64,13 +66,26 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       accountDataRequired: true, accountDataWebSocketImpl: DataWebSocket, initiatorOnline: () => false,
       pageCall: async () => ({ offline: true, why: 'initiator-unavailable' }),
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
+    let removeAbort = () => {};
+    const aborted = new Promise((_, reject) => {
+      if (!signal) return;
+      const onAbort = () => {
+        inst.close('run-fenced');
+        reject(Object.assign(new Error('run-fenced'), { status: 403, code: 'run-fenced' }));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      removeAbort = () => signal.removeEventListener('abort', onAbort);
+      if (signal.aborted) onAbort();
+    });
     try {
       const binding = await inst.bindAgent({ projectId: grant.projectId, mode: 'hosted' });
+      if (signal?.aborted) fail(403, 'run-fenced');
       // A signed welcome and current project.open reply must arrive before the
       // local read intent can move to execution-started or any model/tool call.
       binding.side.conversationNumber(grant.conversationId);
-      await binding.side.link.ready();
-    } catch (error) { inst.close('bind-failed'); await DataWebSocket.closeOwned(); throw error; }
+      await Promise.race([binding.side.link.ready(), aborted]);
+      if (signal?.aborted) fail(403, 'run-fenced');
+    } catch (error) { removeAbort(); inst.close('bind-failed'); await DataWebSocket.closeOwned(); throw error; }
     let handle = null;
     return {
       async start() {
@@ -94,10 +109,10 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
           }, beforeToolCall, onEvent });
         return handle;
       },
-      async drain() { if (handle) await handle.drain(); inst.close('run-drained');
-        await DataWebSocket.closeOwned();
+      async drain() { try { if (handle) await handle.drain(); }
+        finally { removeAbort(); inst.close('run-drained'); await DataWebSocket.closeOwned(); }
         return { runId: grant.runId, dispatchesOpen: 0 }; },
-      close() { inst.close('run-finished'); },
+      close() { removeAbort(); inst.close('run-finished'); },
     };
   };
 }
@@ -137,12 +152,15 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     if (local.state === 'finished') { slot.grant = null; slot.finish = { ...binding, requestId: `finish:${grant.runGrantId}` }; return; }
     let settle;
     const entry = { grant, runner: null, handle: null, cancelled: false, done: null,
+      cancelController: new AbortController(),
       completion: new Promise(resolve => { settle = resolve; }) };
     active.set(grant.runId, entry);
     try {
       const runner = await runnerFactory({ grant, record: prompt,
-        onModelCall: () => check(grant, 'write'), beforeToolCall: () => check(grant, 'write') });
+        onModelCall: () => check(grant, 'write'), beforeToolCall: () => check(grant, 'write'),
+        signal: entry.cancelController.signal });
       entry.runner = runner;
+      if (entry.cancelled) fail(403, 'run-fenced');
       await readIntents.executeOnce(intent.readIntentId, { authorize: () => check(grant, 'write'), execute: async () => {
         if (entry.cancelled) fail(403, 'run-fenced');
         const handle = await runner.start(); entry.handle = handle;
@@ -155,8 +173,11 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       slot.grant = null;
       slot.finish = { ...binding, requestId: `finish:${grant.runGrantId}` };
     } finally {
-      let drained = !entry.handle;
-      try { if (entry.handle?.drain) { await entry.handle.drain(); drained = true; } }
+      let drained = !entry.handle && !entry.runner;
+      try {
+        if (entry.runner?.drain) { await entry.runner.drain(); drained = true; }
+        else if (entry.handle?.drain) { await entry.handle.drain(); drained = true; }
+      }
       finally {
         runnerClose(entry);
         active.delete(grant.runId); if (drained) closedRuns.add(grant.runId);
@@ -231,7 +252,7 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     for (const runId of targets) {
       const entry = active.get(runId);
       if (!entry) { if (!closedRuns.has(runId)) oldInstanceUnknown = true; continue; }
-      entry.cancelled = true;
+      entry.cancelled = true; entry.cancelController.abort();
       try { entry.handle?.abort(); } catch {}
       await entry.completion;
     }
@@ -244,7 +265,8 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
   return { wake, resumeQueued, drainControl, onRevoke(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     describe: () => ({ accountMode: true, instanceId, activeRuns: active.size, closedRuns: closedRuns.size,
       readIntents: readIntents.pending().length, pendingAdmissions: pending.size, runAuthorityMounted: true, at: now() }),
-    close() { closed = true; for (const entry of active.values()) { entry.cancelled = true; try { entry.handle?.abort(); } catch {} }
+    close() { closed = true; for (const entry of active.values()) { entry.cancelled = true; entry.cancelController.abort();
+        try { entry.handle?.abort(); } catch {} }
       for (const timer of retryTimers.values()) clearTimeout(timer);
       retryTimers.clear(); retryDelay.clear(); pending.clear(); listeners.clear(); } };
 }
