@@ -6,8 +6,14 @@ import { instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders
   instanceMessageAction, INSTANCE_PROOF_HEADER } from '../account/agent-instance-internal.mjs';
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+const MAX_FRAGMENTS = 16 * 1024;
 const fail = (code, status = 503) => { throw accountError(status, code); };
 const actionOf = frame => instanceMessageAction(frame?.type);
+const validCloseCode = code =>
+  (code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code)) ||
+  (code >= 3000 && code <= 4999);
+const strictText = bytes => new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 const sessionItemOf = protocols => {
   const item = protocols.find(value => value.startsWith('promptcut.session.'));
   if (item === 'promptcut.session.new') return { kind: 'new' };
@@ -67,7 +73,8 @@ export function createRunDataClient({ origin, tls, serverFingerprint256, runClie
       }
       constructor(url, protocols) {
         this.handlers = new Map(); this.socket = null; this.request = null; this.buffer = Buffer.alloc(0);
-        this.fragments = null; this.connId = null; this.ended = false; this.closeSent = false;
+        this.fragments = null; this.fragmentBytes = 0; this.fragmentCount = 0;
+        this.connId = null; this.ended = false; this.closeSent = false;
         this.closeInfo = { code: 1006, reason: 'transport-close' }; this.closeTimer = null;
         if (closed || !Array.isArray(protocols) || protocols[0] !== 'promptcut.v1' ||
             protocols.some(value => typeof value !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(value)))
@@ -86,7 +93,9 @@ export function createRunDataClient({ origin, tls, serverFingerprint256, runClie
       addEventListener(type, handler) { const list = this.handlers.get(type) ?? new Set(); list.add(handler); this.handlers.set(type, list); }
       removeEventListener(type, handler) { this.handlers.get(type)?.delete(handler); }
       emit(type, value = {}) { for (const handler of this.handlers.get(type) ?? []) try { handler(value); } catch {} }
-      fail(error) { if (this.ended) return; this.emit('error', { error, message: error?.code ?? 'run-data-unavailable' });
+      fail(error) { if (this.ended) return;
+        this.fragments = null; this.fragmentBytes = 0; this.fragmentCount = 0; this.buffer = Buffer.alloc(0);
+        this.emit('error', { error, message: error?.code ?? 'run-data-unavailable' });
         this.closeInfo = { code: 1006, reason: 'transport-error' };
         if (this.socket) this.socket.destroy();
         else if (this.request) this.request.destroy();
@@ -144,24 +153,33 @@ export function createRunDataClient({ origin, tls, serverFingerprint256, runClie
           let length = b[1] & 127, offset = 2;
           if (length === 126) { if (b.length < 4) return; length = b.readUInt16BE(2); offset = 4; }
           else if (length === 127) { if (b.length < 10) return; const big = b.readBigUInt64BE(2);
-            if (big > 8n * 1024n * 1024n) return this.fail(accountError(503, 'run-data-frame'));
+            if (big > BigInt(MAX_MESSAGE_BYTES)) return this.fail(accountError(503, 'run-data-frame'));
             length = Number(big); offset = 10; }
-          if (length > 8 * 1024 * 1024 || b.length < offset + length) return length > 8 * 1024 * 1024 ?
+          if (length > MAX_MESSAGE_BYTES || b.length < offset + length) return length > MAX_MESSAGE_BYTES ?
             this.fail(accountError(503, 'run-data-frame')) : undefined;
           const payload = b.subarray(offset, offset + length); this.buffer = b.subarray(offset + length);
-          if (op === 9) { if (!fin || length > 125) return this.fail(accountError(503, 'run-data-frame'));
+          if (op >= 8 && (!fin || length > 125 || ![8, 9, 10].includes(op)))
+            return this.fail(accountError(503, 'run-data-frame'));
+          if (op === 9) {
             this.socket.write(maskedFrame(10, payload)); continue; }
           if (op === 10) continue;
-          if (op === 8) { const code = length >= 2 ? payload.readUInt16BE(0) : 1000;
-            const reason = length >= 2 ? payload.subarray(2).toString('utf8') : '';
+          if (op === 8) { if (length === 1) return this.fail(accountError(503, 'run-data-frame'));
+            const code = length >= 2 ? payload.readUInt16BE(0) : 1000;
+            if (!validCloseCode(code)) return this.fail(accountError(503, 'run-data-frame'));
+            let reason; try { reason = length >= 2 ? strictText(payload.subarray(2)) : ''; }
+            catch { return this.fail(accountError(503, 'run-data-frame')); }
             if (!this.closeSent && this.socket.writable) this.socket.write(maskedFrame(8, payload));
             this.closeInfo = { code, reason }; this.socket.end(); return; }
           if (op !== 1 && op !== 0) return this.fail(accountError(503, 'run-data-frame'));
           if (op === 1 && this.fragments) return this.fail(accountError(503, 'run-data-frame'));
           if (op === 0 && !this.fragments) return this.fail(accountError(503, 'run-data-frame'));
-          if (!fin) { this.fragments ??= []; this.fragments.push(payload); continue; }
-          const text = this.fragments ? Buffer.concat([...this.fragments, payload]).toString('utf8') : payload.toString('utf8');
-          this.fragments = null;
+          if (this.fragmentBytes + payload.length > MAX_MESSAGE_BYTES ||
+              this.fragmentCount + 1 > MAX_FRAGMENTS) return this.fail(accountError(503, 'run-data-frame'));
+          if (!fin) { this.fragments ??= []; this.fragments.push(payload);
+            this.fragmentBytes += payload.length; this.fragmentCount++; continue; }
+          let text; try { text = strictText(this.fragments ? Buffer.concat([...this.fragments, payload]) : payload); }
+          catch { return this.fail(accountError(503, 'run-data-frame')); }
+          this.fragments = null; this.fragmentBytes = 0; this.fragmentCount = 0;
           let frame; try { frame = JSON.parse(text); } catch { return this.fail(accountError(503, 'run-data-frame')); }
           if (frame?.type === 'session.welcome') {
             if (typeof frame.connId !== 'string' || !frame.connId) return this.fail(accountError(503, 'run-data-conn-id'));

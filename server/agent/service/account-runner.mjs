@@ -42,13 +42,30 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
   return async ({ grant, record, onModelCall, beforeToolCall, onEvent = () => {}, signal }) => {
     if (!idOK(grant.projectId) || !idOK(grant.conversationId) || !idOK(grant.runId) ||
       grant.messageId !== record.messageId || grant.runId !== record.runId) fail(503, 'run-record-mismatch');
-    const cfg = await modelConfig();
+    let inst, DataWebSocket;
+    let removeAbort = () => {};
+    const aborted = new Promise((_, reject) => {
+      if (!signal) return;
+      const onAbort = () => {
+        try { inst?.close('run-fenced'); } catch { /* Cleanup below still awaits the socket. */ }
+        reject(Object.assign(new Error('run-fenced'), { status: 403, code: 'run-fenced' }));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      removeAbort = () => signal.removeEventListener('abort', onAbort);
+      if (signal.aborted) onAbort();
+    });
+    // Registration can be aborted before any phase starts. Attach a rejection
+    // handler immediately; bind/ready may not have entered their race yet.
+    void aborted.catch(() => {});
+    try {
+    if (signal?.aborted) fail(403, 'run-fenced');
+    const cfg = await Promise.race([modelConfig(), aborted]);
     if (signal?.aborted) fail(403, 'run-fenced');
     if (!modelReady(cfg)) fail(503, 'no-model-key');
     const ownerKey = createHash('sha256').update(`account-v2\n${grant.projectId}\n${grant.conversationId}`).digest('hex').slice(0, 32);
     const dir = path.join(dataDir, 'tenants', grant.projectId, 'conversations', grant.conversationId);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const DataWebSocket = dataClient.webSocketFor(grant);
+    DataWebSocket = dataClient.webSocketFor(grant);
     if (typeof DataWebSocket?.closeOwned !== 'function') fail(503, 'account-data-configuration');
     if (signal?.aborted) fail(403, 'run-fenced');
     const protocolsFor = async () => [PROTOCOL];
@@ -56,7 +73,6 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     // page messages never choose the run or supply a selection snapshot.
     const accountSelection = Object.freeze({ projectId: grant.projectId, conversationId: grant.conversationId,
       runId: grant.runId, runGrantId: grant.runGrantId });
-    let inst;
     inst = createAgentInstance({ profile: 'hosted', server: { httpServer: null, ssrLoadModule: loadModule,
       config: { root }, middlewares: { use() {} } },
       prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {} }) : null,
@@ -66,26 +82,13 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       accountDataRequired: true, accountDataWebSocketImpl: DataWebSocket, initiatorOnline: () => false,
       pageCall: async () => ({ offline: true, why: 'initiator-unavailable' }),
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
-    let removeAbort = () => {};
-    const aborted = new Promise((_, reject) => {
-      if (!signal) return;
-      const onAbort = () => {
-        inst.close('run-fenced');
-        reject(Object.assign(new Error('run-fenced'), { status: 403, code: 'run-fenced' }));
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-      removeAbort = () => signal.removeEventListener('abort', onAbort);
-      if (signal.aborted) onAbort();
-    });
-    try {
-      const binding = await inst.bindAgent({ projectId: grant.projectId, mode: 'hosted' });
+      const binding = await Promise.race([inst.bindAgent({ projectId: grant.projectId, mode: 'hosted', signal }), aborted]);
       if (signal?.aborted) fail(403, 'run-fenced');
       // A signed welcome and current project.open reply must arrive before the
       // local read intent can move to execution-started or any model/tool call.
       binding.side.conversationNumber(grant.conversationId);
       await Promise.race([binding.side.link.ready(), aborted]);
       if (signal?.aborted) fail(403, 'run-fenced');
-    } catch (error) { removeAbort(); inst.close('bind-failed'); await DataWebSocket.closeOwned(); throw error; }
     let handle = null;
     return {
       async start() {
@@ -114,6 +117,12 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
         return { runId: grant.runId, dispatchesOpen: 0 }; },
       close() { removeAbort(); inst.close('run-finished'); },
     };
+    } catch (error) {
+      removeAbort();
+      try { inst?.close('bind-failed'); } catch { /* The socket witness remains mandatory. */ }
+      if (DataWebSocket) await DataWebSocket.closeOwned();
+      throw error;
+    }
   };
 }
 

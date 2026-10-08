@@ -272,13 +272,30 @@ export function createAgentInstance(env) {
         throw new Error('账号数据连接缺少可信实例证明');
       url = env.docUrl;
     }
+    // Only the trusted account runner may cancel its own pending binding.
+    // Page/LAN bind requests never supply or inherit this signal.
+    const bindSignal = mode === 'hosted' && env.accountMode === true && env.accountDataRequired === true &&
+      input?.signal && typeof input.signal.addEventListener === 'function' &&
+      typeof input.signal.removeEventListener === 'function' ? input.signal : null;
+    if (bindSignal?.aborted) throw new Error('run-fenced');
     if (agentBinding && agentBinding.projectId === projectId && agentBinding.mode === mode && agentBinding.url === url) return agentBinding;
     unbindAgent("rebind");
-    const [{ createAgentSide }, { loadSsrHost }, { tools, toolGroups }] = await Promise.all([
+    const imports = Promise.all([
       import(new URL("../agent-side.mjs", import.meta.url).href),
       import(new URL("../ssr-host.mjs", import.meta.url).href),
       import(new URL("../../mcp-tools.mjs", import.meta.url).href),
     ]);
+    let imported;
+    if (bindSignal) {
+      let rejectOnAbort;
+      const cancelled = new Promise((_, reject) => { rejectOnAbort = () => reject(new Error('run-fenced'));
+        bindSignal.addEventListener('abort', rejectOnAbort, { once: true });
+        if (bindSignal.aborted) rejectOnAbort(); });
+      try { imported = await Promise.race([imports, cancelled]); }
+      finally { bindSignal.removeEventListener('abort', rejectOnAbort); }
+      if (bindSignal.aborted) throw new Error('run-fenced');
+    } else imported = await imports;
+    const [{ createAgentSide }, { loadSsrHost }, { tools, toolGroups }] = imported;
     const protocolsFor = async (n) => {
       // 托管档:凭证按对话给(对话委托绑死一个对话,契约第 4.2 节),所以连同这个对话号对应的对话 id 一起交给宿主
       if (mode === "hosted") {
