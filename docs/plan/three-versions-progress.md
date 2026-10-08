@@ -9,7 +9,7 @@
 - 版本：0.7.18，第一个整合小阶段进行中
 - 最后更新：2026-10-08，用户已分别确认计划定稿、开始实施
 - main：见 `git log`
-- 一句话：已审模块以 --no-ff 收回集成9131dd43；隔离联合候选74a6b67c类型及完整npm5029/5027/0/2通过，旧共同首轮58过/3失败/18人工及后续有因修正证据分别保留。账号联合候选718fc180真实Linux67/67；中央独立素材接线、真实project.op顺序/历史接线和全员选区继续，尚未合入main/发版/部署新服务
+- 一句话：三项接线已按 --no-ff 收回集成b7647627；根隔离联合候选80b5e658类型及定向68/68、完整npm5089/5087/0/2通过。原首轮失败、根反例和有因修正证据保留；账号联合718fc180真实Linux67/67，operation另真实Linux45过/1Windows专属跳过。后续中央doc装配、对话ACL/FIFO和可信已读run授权继续，尚未合入main/发版/部署新服务
 
 ## 已经做了什么
 
@@ -84,6 +84,12 @@
 - 素材中央包固定4c91f5d2，真实独立stage/provider/doc/asset集成3/3，实际fd关闭前不ACK、ACK响应持续丢失后的同receipt重放和clean restart均有证；部署49文件闭包bare依赖/非literal目标/missing均0。target首次87/86/1/0，fixture删除请求漏expectedAccessRevision，e32f26a6仅补真实status前置条件，单项复验1/1。首次完整npm5028/5010/16失败/2跳过，65818.116ms：11条漏设真实password-order模块，5条PCM旧测试夹具仍引用抽取前index路径；原日志TMP/promptcut-asset-wiring-full-1.log保留，夹具改后仅定向复验，联合候选再有因跑full。
 - 根独立审查素材生命周期另发现并发重启锁竞态：两个启动先读同一旧锁，后一方无条件rm可删掉前一方刚建的新锁，两个实例均获准；TMP/pc-root-asset-lock-race-0de62bd5.log，exit1，acceptedInstances为next-a/next-b。暂不收回，本包owner修原子启动/恢复claim、遗留claim failclosed；生产旧资源关闭仍须root在专用cgroup真实为空后作证明，PID死亡及本机fixture不替代该证据。
 - 真实project.op接线固定7c4f1f11，子包target58/58、15682.505ms，25个真实子进程切点均exit73且close，含fence提交与ACK夹缝；原33个账号provider故障切点另保留。实际Chromium双context双账号WS探针exit0、519.485ms，unsealed无ok/广播，同值两账号rev2/rev3，重启后真实页读取rev3和两份accepted。是隔离fixture，不是生产UI验收；root源码、历史投影和Linux目录fsync仍待复核。本包正在冻结源完整测试，5823～5829全量fixture端口串行使用，Sol选区full等待，无源码在跑测中修改。
+
+- 根新候选80b5e658以三个固定包06dd5bb1/a5b1da34/d4cb04ca合流；唯一modify/delete冲突为已归档account-wiring报告，两份Git blob同为9c6d5a3b，保留归档正文。新素材5bb5ff37的启动/close均先wx原子claim串行，失败claim不自行清理；根同联合目标含确定性双启动/关闭竞态及真实stage集成全部通过，旧acceptedInstances双实例反例不删除。
+- 根80b5e658独立最终复验：tsc -b --force零錯、exit0（7.672秒）；定向68/68、0fail/cancel/skip、14726.416ms；首次完整npm5089/5087通过/0fail/cancel/2skip、75124.744ms（墙钟75.516秒），native重跑0，源码全程固定。两跳过仍为未配置真实舞台layout和Windows符号链接权限。2026-10-08T10:06:56+09:00核5760/5823/5860/5920各测试段零监听。TMP/pc-root-central-80b5e658-*保留；此结果不等于所有新生产模块已经装配或版本交互/公网验收完成。
+- 根独立operation两页Chromium probe exit0（脚本602.308ms、墙钟0.875秒）、core/crash46/46、14270.657ms；固定7c4f1f11、真实provider580bec8/order7eab553。节点精确51文件隔离包SHA2562dfa55ebc99fa56de33474c6558dcb9cf6ee7bc5e49107d15c5124ae302c9c59，在visuhive-account用户/TMP/空环境下真实Linux46条中45通过/0失败/1Windows专属跳过、25804.849ms（墙钟27.223秒），native重跑0、前后5760/5761为空、账号204715/nginx9395不变。首次包装全局替换ROOT破坏环境变量名，远端在语法阶段退出未跑测试；修包装后才跑本轮，错误日志保留。
+- 根读取上述同一strace原始日志作严格二次解析，没有重跑测试：63组同PID且无同目标中间rename的临时文件fsync→rename→目标文件fsync→父projects目录fsync均返回0；初步宽匹配85组不当最终精确数。证据 /var/tmp/pc-operation-proof-bdbe2de24e3a4c54a0e7dff960168218/trace-strict.result.json；只跟踪fsync/rename、不打印写缓冲区。这是实际Linux系统调用/崩溃切点证据，仍不是物理断电或生产OS隔离证明。
+- 新联合已以no-ff收回b7647627，三份新AGENT与渲染文档整合报告均100%原文归档，首次失败保留。下一阶段各新叶从固定80b5e658出发，互斥文件/端口：Sol中央doc装配5770～5779、Sol对话ACL/FIFO5790～5799、Astra可信read/runGrant5730～5739；先交接口再接消费者，全量fixture端口由root串行出租。旧模块通过不冒称这些新项已完成。
 
 ## 接下来干什么
 
@@ -193,9 +199,9 @@
 
 | 模型 | 工作 | 工作区 / 分支 | 状态 |
 |---|---|---|---|
-| Sol | 中央独立素材入口、mTLS权威与实时ready、关闭回执及部署闭包 | .worktrees/018-asset-wiring / codex/018-asset-wiring | 5860～5869；独立stage真实集成通过，首full16失败分类保留；根双启动竞态反例已交回修，未收回/部署 |
-| Sol | 项目全员在线选区、可信名字与发起人离线快照provider | .worktrees/018-project-selections / codex/018-project-selections | 固定4370101c，5920～5929；type/target11项与根独立6项通过；等待全量租约，不改中央/Agent UI |
-| Astra | 真实project.op顺序见证、完整历史与投影崩溃恢复接线 | .worktrees/018-operation-wiring / codex/018-operation-wiring | 固定7c4f1f11；5760～5769；58项与双Chromium页探针通过，正在完整测试；root尚未复核/收回 |
+| Sol | 中央doc挂载operation/history、全员selection与真实run接口 | .worktrees/018-cloud-doc-assembly / codex/018-cloud-doc-assembly | 起点80b5e658；5770～5779；先约真实callback/装配，原asset叶已验收冻结 |
+| Sol | 对话ACL/FIFO、当前权限读取及发送者/快照持久化 | .worktrees/018-agent-access-v2 / codex/018-agent-access-v2 | 起点80b5e658；5790～5799；先交doc schema与run接口，删除细节未批准不自行确定 |
+| Astra | doc可信read/currentRun/runGrant与退出/切私有竞态 | .worktrees/018-run-authority / codex/018-run-authority | 起点80b5e658；5730～5739；先约同ledger事务，旧operation已验收冻结 |
 | Luna | 账号备份每日runner/unit与POSIX测试补导入 | VisuHive .worktrees/018-account-backup-timer / codex/018-account-backup-timer | 已交7306bfe5并由root独立Linux67/67；当前无实施任务，未启动节点timer |
 
 ## 没做到的与原因
