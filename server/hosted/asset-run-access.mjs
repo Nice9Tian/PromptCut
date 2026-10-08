@@ -272,17 +272,28 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
       req.socket.once('close', () => { void lease.revoke({ reason: 'revocation-unavailable' }).catch(() => {}); });
       const done = actualClose(req.socket);
       closedTask = (async () => {
-        await done; await lease.release();
-        const receipt = { leaseId: channel.leaseId, receiptId: crypto.randomUUID(), complete: true,
-          evidenceDigest: digestOf({ leaseId: channel.leaseId, sourceClosed: true, reqClosed: req.closed, resClosed: res.closed, socketClosed: req.socket?.closed }) };
-        await consumer.prepareClosure(channel.leaseId, receipt); // durable actual-close proof before any doc ACK
-        await channel.closeLease(receipt); await consumer.closed(channel.leaseId, receipt); await channel.close();
+        let failure;
+        try {
+          await done; await lease.release();
+          const receipt = { leaseId: channel.leaseId, receiptId: crypto.randomUUID(), complete: true,
+            evidenceDigest: digestOf({ leaseId: channel.leaseId, sourceClosed: true, reqClosed: req.closed, resClosed: res.closed, socketClosed: req.socket?.closed }) };
+          await consumer.prepareClosure(channel.leaseId, receipt); // durable actual-close proof before any doc ACK
+          await channel.closeLease(receipt); await consumer.closed(channel.leaseId, receipt);
+        } catch (error) { failure = error; }
+        // Closing the observer is mandatory even when persistence or its doc
+        // RPC failed. Preserve both failures; closing is never a closure ACK.
+        try { await channel.close(); }
+        catch (error) { failure = failure ? new AggregateError([failure, error], 'asset-run-closure-failed', { cause: failure }) : error; }
+        if (failure) throw failure;
       })();
+      // Supervise immediately: admit() below may fail real durable IO before
+      // its await returns. No rejected task may escape or disappear from idle.
+      active.add(closedTask);
+      void closedTask.then(() => active.delete(closedTask), error => { closureError ??= error; active.delete(closedTask); });
       entry.closed = closedTask;
       await consumer.admit({ leaseId: channel.leaseId, projectId: input.projectId, runGrantId: input.runGrantId,
         instanceId: proof.instanceId, instanceGeneration: proof.instanceGeneration }, entry, admission);
       consumer.finishAdmission(admission); admission = null;
-      active.add(closedTask); closedTask.finally(() => active.delete(closedTask)).catch(error => { closureError = error; });
       const scope = projectStores.project(input.projectId), store = authorizedAssetStore(scope.stores.media, lease), ref = entry.last.resource;
       if (route.operation === 'openRead') {
         const stat = await store.stat(ref.hash); if (!stat) fail(404, 'asset-missing'); if (stat.size !== ref.size) fail(409, 'asset-size-mismatch');
@@ -323,18 +334,25 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
         }
       }
     } catch (error) {
+      if (closedTask && admission) closureError ??= error;
       if (res.headersSent) { res.destroy(); req.socket?.destroy(); } else reply(res, error.status ?? 503, error.code ?? 'asset-run-unavailable');
       if (!closedTask) {
         void lease?.revoke({ reason: 'revocation-unavailable' }).catch(() => {});
         try { if (channel?.leaseId) await consumer.unknownAdmission({ leaseId: channel.leaseId }); }
         finally { await channel?.close(); }
-      }
+      } else await closedTask;
     }
     finally { if (admission) consumer.finishAdmission(admission); }
     return true;
   }
-  const idle = async () => { await Promise.all([...active]); if (closureError) throw closureError; };
-  return { handler, idle, async close() { stopped = true; await consumer.unavailable(new Error('host-close')); await idle(); },
+  const idle = async () => { await Promise.allSettled([...active]); if (closureError) throw closureError; };
+  return { handler, idle, async close() {
+    stopped = true;
+    const outcomes = await Promise.allSettled([consumer.unavailable(new Error('host-close')), idle()]);
+    const failures = [...new Set(outcomes.filter(r => r.status === 'rejected').map(r => r.reason))];
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, 'asset-run-closure-failed', { cause: failures[0] });
+  },
     status() { return { runAssetsConfigured: true, runAssetCursor: consumer.cursor, runAssetHead: consumer.head,
       runAssetsReady: !stopped && !closureError && consumer.ready && humanConsumer.ready }; } };
 }
