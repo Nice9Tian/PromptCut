@@ -52,3 +52,11 @@
 新增真实探针前置：动作前从doc project.open读取版本，动作后再经独立已有凭证连接回读doc真身（支持分片并核完整SHA256与rev）；必须rev增加、同clip/cardId、参数/起止/总时长准确，同时再次content.get核同sourceHash/body/rev。保存白名单 `a5-fixture-project.json`；回读不成立就在host前失败。本地构造只证明本地动作，不冒称doc已接受。之后原L2 CPU step>budget、当前成功plan含目标与host同clip/指纹/non-dedup/newready全部保留。
 
 新实现 `4ffcf88f` 首纯目标13/12pass/1fail，duration2305.5967ms/wall2.5899972s/exit1，日志 `%TEMP%/pc-c10-user-edit-4ffcf88f-target-1.log`、`-exit.json` 保留。失败在新增测试：动态import后解构 `export let state` 并闭包返回它，实际core.set替换state后测试仍返回旧对象，误报fixture-edit-not-applied。改测试为实际 `core.getState`，其它纯断言和真实helper不放宽；这是有因复验，不重复到绿。分片/摘要回读纯目标首轮已通过。
+
+修正后的固定源码 `e8a02e701b99516edddd02b8b193165a85afa7ea`：定向第二次 exit0，13/13pass、0fail/cancel/skip/todo，duration2399.2842ms、wall2.6776006s，无 native retry。原始 `%TEMP%/pc-c10-user-edit-e8a02e70-target-2.log` 与 `-exit.json`。保留原11项，再加实际store正常编辑/隔离和完整project回读两项；旧失败没有删除或覆盖。真实store目标证明旧入口仍null、新入口产生不可变项目且保留全部旧track对象、默认params与手动时长，始终没有编辑页Component注册；该目标明确 `actualDocCommit:false`。回读目标只证明协议聚合器，不冒充本轮真实doc提交。
+
+同一源码首次 `npx --no-install tsc -b --force` exit0、零错误、wall7.6963756s；原始 `%TEMP%/pc-c10-user-edit-e8a02e70-types-1.log` 与 `-exit.json`。两个脚本 `node --check` exit0，git diff --check通过。命令均为process-only规定Python/models/preload与去重PSModulePath；没有业务fixture监听、HTTP/TLS/listen(0)、完整npm或C10运行，npm窄目标仍走既有临时guard。测中源码未变，之后仅补本报告。
+
+相对根已收 `cd068fe7` 的增量仅4个获租文件：browser probe替换错误片段入口并加入真实doc提交证据；judge新增正常编辑和只读回包聚合helper；host-claim测试新增两项；本报告保留首败、三级收敛和验证边界。自审核对实际project模块的inline/parts/end形状、reqId/rev/digest与endpoint布尔send接口，未修改任何生产文件。
+
+本次可交付结论：**片段入口错误有因修正，纯路径和类型通过；实际共享doc接受、新卡浏览器CPU成本、当前成功plan与host完成仍未执行，C10尚未判通过。** 根下一次统一窗口应先取得新增 `a5-fixture-project.json`（rev增加、同ID/params/时间与sourceHash一致），随后才核 `a5-fixture-prerequisite.json` 的真实step超budget和当前成功plan；最后仍按同clip/hostFP/non-dedup completed/新ready键及原main竞争完整验收。任何前置失败保存原始证据并结束，不同源重跑赌绿。
