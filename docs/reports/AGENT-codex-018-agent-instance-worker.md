@@ -10,4 +10,6 @@
 
 首次目标测试 `npm test -- server/test/agent-instance-worker.test.mjs`：1/1 通过、0 失败/取消/跳过，1167.3705 ms，exit 0。有因加入“注册已提交但 ACK 丢失”场景后二次：1/1，1212.9613 ms，exit 0。账号入口接线后当前固定源码目标：2/2，0 失败/取消/跳过，1167.9246 ms，exit 0；记录的临时监听端口 9542、关闭后 active TLS sockets 0、两个 Agent child 均收到 close。独立类型 `C:\Users\admin\Documents\PromptCut\node_modules\.bin\tsc.cmd -b --force` exit 0。`git diff --cached --check` exit 0。以上均是本机临时证书/fixture，未运行真实模型或生产节点；没有独立全量 `npm test`，共享租约仍由根持有。
 
+提交报告后又针对 CLI required 配置补了有因负例：`PROMPTCUT_ACCOUNT_V2_REQUIRED=1` 而 V2 关，及 V2 开但证书文件缺失，两个独立子进程都 exit 1、只写 `config.error`、没有监听或 `agent.ready`。随后的目标测试 3/3 通过、0 失败/取消/跳过，1397.6113 ms，exit 0；临时端口 2527，实际 TLS socket 0，两个 Agent child close。新增仅测试断言，生产源码仍为 `623d0941`；待提交此测试增量并纳入最终固定源码复核。
+
 后续边界：中央 WS/LP 逐帧完整请求、连接 nonce/公开 connId、原 seq/ack 重试与实际 TLS capability 仍在中央窄核心设计/实现中；本叶未改 doc 核心、未复用已关闭 HTTP capability 充当数据写权限。跨重启对未确认 external side effect 不重放，旧实例资源缺实际 OS/cgroup witness 时 ACK 继续 pending。生产部署、证书文件路径、节点私钥隔离、真实模型输入及全量回归仍待根集成验证。

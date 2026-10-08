@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fork } from 'node:child_process';
+import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +13,24 @@ import { createAgentInstanceInternalHandler, instanceRequestProof } from '../acc
 import { createRunInternalServer } from '../account/run-internal.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { startAgentService, AgentConfigError } from '../agent-service/main.mjs';
+
+test('required account Agent CLI fails closed before listening when flags or mTLS files are missing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-agent-instance-config-'));
+  try {
+    const env = { ...process.env, PROMPTCUT_AGENT_DATA: dir, PROMPTCUT_AGENT_DOC_URL: 'wss://127.0.0.1:9999',
+      PROMPTCUT_AGENT_PORT: '0', PROMPTCUT_ACCOUNT_V2_REQUIRED: '1', PROMPTCUT_ACCOUNT_V2: '0' };
+    const run = () => spawnSync(process.execPath, [fileURLToPath(new URL('../agent-service/main.mjs', import.meta.url))],
+      { env, windowsHide: true, encoding: 'utf8', timeout: 10000 });
+    const disabled = run();
+    assert.equal(disabled.status, 1); assert.match(disabled.stdout, /"reason":"account-v2-required"/);
+    env.PROMPTCUT_ACCOUNT_V2 = '1'; env.PROMPTCUT_AGENT_DOC_INTERNAL_ORIGIN = 'https://127.0.0.1:9999/';
+    env.PROMPTCUT_AGENT_DOC_FINGERPRINT256 = 'a'.repeat(64);
+    env.PROMPTCUT_AGENT_CLIENT_KEY_FILE = 'relative-missing-key';
+    const missing = run();
+    assert.equal(missing.status, 1); assert.match(missing.stdout, /"reason":"account-v2"/);
+    assert.doesNotMatch(missing.stdout, /agent\.ready/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('required account service uses doc conversation authority and keeps runner unmounted until data proof exists', { timeout: 30000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-agent-instance-entry-'));
