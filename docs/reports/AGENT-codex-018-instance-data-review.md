@@ -63,3 +63,62 @@
 ## 交回状态
 
 只提交本报告，无源码跨写、无依赖/系统/节点/部署变更；原实例权威和两个 owner 工作区均未写。必须项已即时发给 owners 与 root。root 要求此阶段收口释放 slot，待两位 Sol 固定数据通道源码后再派独立 diff/实证复审；本报告不授予最终数据通道通过结论。
+
+## 固定数据通道增量复审（cc5465a8 / cc1bac0f）
+
+根再次授权在同叶只读审查。本轮只读中央 Git 对象 `cc5465a8eeb5edffca14ddabf23e8a0c40616e59` 和 worker Git 对象 `cc1bac0fcde54b90b74e5c8a99d04451118aadab`（实际 ACK 源码为其祖先 `d5d7de676fc6d91be98ee302f5ea4192c8f1bfde`）。没有借 owner 后续工作区修改验证，也没有写任何产品源码。
+
+### 原 M1–M6 的判定
+
+| 原项 | 固定源码复审结果 | 边界 |
+|---|---|---|
+| M1，完整异步 dispatch 能力生命周期 | 已解决该源码缺口。session 的三条业务分支返回 router Promise；factory 在 ALS.run 的完整返回 Promise 结束后 finally release。纯控制组验证普通业务 receive 返回 Promise，模块恢复时 cap 仍 live。 | 不是最终真实 mTLS/project.op 成功证明；真实各分支与 production gate 仍由 owner 的集成目标验证。 |
+| M2，外围 FIFO 与旧传输 | WS 已落 invocationTail，鉴权前及 receive 前各核 isCurrent；LP send 在 t.sending 内逐 frame await，且在 await 后 receive 前核当前 t。 | LP recv/close 仍缺授权 await 后、修改会话前的当前 t 检查，反例见 R2。不能把 M2 整项记全过。 |
+| M3，LP 延迟 read 与缓存 | recv 的 returned Promise 现在等 res.finish/close；timer/wake 的 respondRecv 在真正 pull 前再次 lease.check，随后核 fenced/current。代码消除了原提前释放 cap 的缺口。 | fresh pull 检查发生在 receiveAllowed 的 ACK/替换 waiter 之后，不能挽回旧请求已造成的副作用；send 还有 R1 未认证分支。 |
+| M4，同步关闭先于收口等待 | 已落。deliver 在第一次 await doc.fence 前调用 service.fencePrincipals，该调用同步建立入场/session/cache 屏障并启动实际 socket 关闭；onFence 先从持久 control 发起 deliver，再 synchronize。 | 完整 Agent/历史 OS 资源关闭仍 pending；record.complete 明确 false，没有冒充全部退出完成。实际 transport 关闭与长 seal 并发仍需最终集成实证。 |
+| M5，同 OS admit ACK 不确定 | 已落原 requestId 与 grant 的 RAM slot；失败不丢 tuple，后续 wake/resumeQueued 使用原 slot；新 OS 没有继承旧 RAM key/tuple 的机制。 | 已读 owner 两项真实 SQLite + 签名适配 fixture；本轮没有重跑，也不将其称真实 mTLS 数据通道。 |
+| M6，finish ACK 不确定不重执行 | 已落 finished → 原 finish:<grantId> 续办；execution-started 明确 run-execution-uncertain，不自动重做模型/工具。 | 还需 R3：finish 续办前的模型 preflight 会在模型配置消失时阻断不需模型的完成重试。 |
+
+### 必须修复的剩余项
+
+**R1 — LP 未认证 send 仍能操作 Agent 会话（中央 owner）。** `http-transport.mjs` 固定对象的 458–477 行在 invoke 之前处理 body.tooLarge / 超大单帧，两处都调用 sessions.close。持有 SID 的请求尚未证明实例私钥、当前 socket 或 read/write 权限，就可结束合法会话。空 `frames:[]` 也完全跳过 invoke，直接 takeAck 并返回 200。应对未认证超限仅拒绝本次请求，不据此关闭会话；空 batch 要明确拒绝或有独立已验证 read 操作，不能以循环零次自然绕过认证。保留原普通页面/LAN 协议规则由 owner 精确区分，不削弱其它超限标准。
+
+**R2 — LP 旧 recv/close 在 resume 后仍修改新会话（中央 owner）。** `receiveAllowed`（504 行起）在清旧 waiter 与 sessions.ack 前没有检查当前 transport；onClose 的 next（560 行起）也没有。请求可先取得旧 t、停在异步授权，另一次合法 resume 替换 t，然后旧请求继续执行。真正的 sessions 反例证明：旧 close 把新传输关闭；旧 recv 先释放未确认缓存，最终 respondRecv 才以 409 拒绝。应在这些副作用之前重新核当前 t/fenced/dead；拒绝旧请求不能删除新会话缓存、关闭新连接或替换其 waiter。send 已有的检查应保留。
+
+**R3 — 无模型配置阻断 finish 续办（worker owner）。** `account-runner.mjs` 的 182 行 preflight 在 183 行 slot.finish 之前。模型/工具已完成、doc finish 已提交但 ACK 丢失后，如模型配置撤去，下一 wake 以 no-model-key 退出而不再发送原 finish。此阶段无需新模型，应该先续已确定的 finish，再在新 admit/执行前做模型 preflight；仍由原 finish API 核实例与 grant，不能绕过失权检查。此结论是固定源码控制流审查，未执行真实模型；已发 worker 请求窄修及相应回归。
+
+**R4 — Agent 尝试不能经非 Agent cached principal 降级（中央需确认并补负向）。** service 的 dispatchInvocation 与 LP invoke 只依据 cached principal 的 realm/role 决定是否调用 factory。resume 本身不经过 transportAuthenticate。于是 internal Agent mTLS 或带 instance proof 的请求若定位普通 page/LAN SID，当前分支会直接用旧 SID resume，跳过 factory 的 internal/proof 检查。按根明确的“Agent cert/proof 无效不可 fallback 到 legacy”，应在实际内部/实例尝试入口识别并拒绝主体不匹配；保留普通公共 page resume。这里是静态分支证据，尚无真实 mTLS 攻击复现，不把它写成已部署泄露。
+
+上述项已即时发 owners 并抄 root。owners 的后续修正不包含在本报告固定对象的通过结论中。
+
+### 本轮无端口反例及原始结果
+
+只从中央固定 Git 对象导出 `session.mjs`、`router.mjs`、`http-transport.mjs`。脚本使用真实三个模块；req/res 和授权等待为受控 EventEmitter/Promise，不启动网络或冒造真实 mTLS。
+
+- TMP 目录：`%TEMP%/pc-instance-data-review-cc5465-013c5e31640a4187b58731c991591dd8/`。
+- 脚本 `counter.mjs`，最终原始结果 `counter.log`，第一次原始结果 `counter-first.log` 均保留。
+- 两次命令均 `node <TMP>/counter.mjs`，均 exit **0**；这是纯脚本而非裸 node --test。显式 cuda_Vit Python 环境、PYTHONDONTWRITEBYTECODE 与静默 preload。没有 listener、child、模型、工具、服务或固定端口。
+- 第二次有因修正反例脚本的观测：第一次把 fresh.closed 数组引用留到最终打印，cleanup 又追加自身关闭记录。改为 structuredClone 当场快照，保留原始首日志；产品模块及所有判定断言不变，不是产品失败后赌绿。
+
+| 反例/控制组 | 最终实际输出 |
+|---|---|
+| 超大 body | status 413；proofInvocations 0；sessionAlive false |
+| 超大单帧 | status 413；proofInvocations 0；sessionAlive false |
+| 空 frames | status 200；proofInvocations 0；returnedAck 0 |
+| 旧 close 授权等待期间 resume | status 200；sessionAlive false；新 transport 收到 close 1000 |
+| 旧 recv 授权等待期间 resume | status 409；sessionAlive true；缓存从 1 条变 0 条；新 transport 当时未被关闭 |
+| 修后 session Promise 控制组 | returnsPromise true；capLiveAtModuleCompletion true |
+
+`exit 0` 表示反例及控制组与断言一致，不能写作 R1/R2 已修复。日志明示 productionMounted:false、realMtls:false、networkListeners:0，不含 SID/key/proof/exporter/账号凭证值。
+
+只读检索期间两次猜测 account runtime 文件名、一次猜测 ACK test 文件名不存在；随后用 Git 路径清单与 git grep 找到真实 `docservice/account-hosted.mjs`、`agent-runner-ack-recovery.test.mjs`。这些是只读命令路径错误，没有执行不存在测试或修改源码。
+
+### 签名、nonce、恢复与尚待实证
+
+固定 factory 静态已绑定真实 req.socket exporter、当前 cert/kid、authorityId/instanceId/generation、method/path/operation；connection request 包含实际完整 URL、原始 websocket/http/fallback 协议头和 LP 原 bodyText，LP 合成 sec-websocket 头前另存原头。frame request 包含可信 project/grant/connId、nonce、kind、完整 text（含 seq/ack）、LP 原 bodyText/frameIndex，action 由实际 type 分类，与 account-hosted 当前分类一致。selection.query 要两份各自精确 checkAccess(read)/authorizeQuery proof。握手 cap 在 finally 释放，只缓存基础 socket subject 与可信 grant/actor；cap 不在 principal/network 中作为长期授权。
+
+初握手 nonce 在验签后按真实 socket 消费；连接建立后将初值记入该 connId 集合。逐帧与 resume nonce 在各 proof 验签/实例匹配后、首次 await check 前同步 claim，后续权限失败不回收已 claim 值。resume 证明覆盖真实 sid/ack 与相同实例/grant，新 TLS socket 必须重新签名。并发 nonce 同值一次性、请求重排、初握手到 connId 关联、双 resume、错误实例、错误 exporter、伪 headers/protocol/url/body、无效 proof 不得 fallback、签名失败不影响旧合法会话，仍需最终固定生产 factory + 真实 mTLS WS/LP 目标；本轮不以源码推理替代实证。长生命周期 usedNonces 的容量/会话结束清理属于后续资源压力检查，不能用提前清表放开重放。
+
+transport ACK 仍不代表 project.op 持久 OK；发送方须保留原业务 opId/requestId，并以业务响应/历史解析不确定性。worker 的原 tuple 修复只解决 admit/read/finish 阶段，不能据此宣称 WS 业务 ACK 全部收口。私有/stop/fence 的真实退出、缓存零新字节、所有历史 Agent 子树/socket 关闭证据仍待最终集成与 root 部署侧提供。
+
+本轮是只读源码审查与纯反例，依根租约没有运行 types/full/固定服务/宽探针，没有新增生产代码。原三个已确认缺口得到部分修复，R1/R2 仍被真实模块反例证实；因此不授予此固定数据通道整体通过结论。
