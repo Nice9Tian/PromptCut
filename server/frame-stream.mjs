@@ -42,7 +42,7 @@ import { cardStreamIdentity } from './card-identity.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
 
-import { StreamStore, readySegmentRanges } from './asset-store/stream-store.mjs';
+import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
 export { StreamStore, readySegmentRanges, publicManifest, handleStreamRequest } from './asset-store/stream-store.mjs';
 
 export const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;

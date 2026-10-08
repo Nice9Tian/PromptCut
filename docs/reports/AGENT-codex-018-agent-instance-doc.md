@@ -95,3 +95,15 @@ root授固定78c8facb一次5770～5774诊断窗口。源码全程未变，npm自
 root静态指出写操作正则缺完整消息名边界。纯Node无端口实证旧正则把project.open和project.op均判write，project.snapshot.get/selection.query判read。实际factory、fixture dataAction、account-hosted runtime各有同一前缀；本次fixture实际签write，outer proof与runtime gate可通过，project模块operationCoordinator.read明确需要read，scopedInput找不到read capability后业务error。这是已定位分类错误，不需要再赌第三次服务诊断，不是允许write证明自动得到read能力。最小修正拟完整匹配project.op/upload/snapshot.put、content.put及presence.set/clear/send，既有events/task/publisher/node消息族分类保持；账号runtime单一分类行扩租已报root。第一次纯匹配组合命令PowerShell引号错误exit1无输出，修正命令后纯Nodeexit0；前一错误保留，不记成产品运行失败。两次真实中央红均完整保留。
 
 root批准account-hosted分类窄扩后新增共享instanceMessageAction(type)（agent-instance-internal.mjs），factory/runtime/真实客户端fixture共用。project.open读，project.op/upload/snapshot.put与content.put/presence.set/clear/send完整名写，events/task/publisher/node族保留。此分类不是服务白名单或权限许可，不支持的类型仍由原gate拒绝；任何cap只能原operation/action，不生成write→read万能cap。新增纯分类目标保留旧正则project.open误匹配反例及完整类型边界。root最初定位消息中的“fixture签read”是初步推断，实际fixture原签write，已按真实源码更正并同步worker；HTTP签名协议本身没有改变。
+
+## 146d有因复验与冻结交付
+
+产品修复固定146d5714ad4f4ef7edd4b04db6c7c423d259d572。纯分类npm首1/1，0失败/取消/跳过，73.4288ms、命令墙359.959ms，TMP/pc-instance-doc-action-target-1.log与-exit.json；没有监听器。强制tsc -b --force exit0、零错误，命令墙7039.0481ms，TMP/pc-instance-doc-type-4.log与-exit.json，源码不变。
+
+root另授权该固定源一次5770～5774真实中央目标。有因第三轮npm自然exit0，3/3、0失败/取消/跳过，7183.0952ms、命令墙7518.0168ms；原无Agent组1695.2082ms、真实Agent组3402.6137ms。TMP/pc-instance-doc-data-central-3.log、-exit.json、-before.json、-after.json；asset child日志pc-doc-assembly-child-1791433179634.log与pc-doc-assembly-child-1791433183036.log。测试期间源码未变，after等owned child/socket/server实际close，5770～5779前后零LISTEN，Git clean，第一结果后立即释放root窗口。命令的一次预设完整SHA字符串误填，检查打印实际146d完整SHA；实际运行与exit.json均固定正确146d、没有reset/切源，也没有由此启动额外运行。
+
+本轮实际执行真实VH327账号/专用accepted-message/order→中央同SQLite factories→独立asset→两个页面，以及RAM实例注册、逐HTTP调用签名、逐WS/LP真实TLS exporter作用域：project.open读、project.op写、selection.query双独立proof、完整dispatch FIFO、同实例新TLS续接；读proof不能写、缺query proof、seq/ack变更、nonce重放、跨TLS重放、actual URL/body/protocol变更、普通page SID禁止Agent fallback、同cert新OS旧grant/旧SID均拒。私有切换真实关闭pending LP socket与WS、无新缓存尾帧，doc partial receipt等actualclose后持久；完整control仍pending且receipt为空，不自由ACK。
+
+本叶owned生产差异仅：doc-agent-assembly实例工厂/ALS逐完整调用与同步fence装配；run-internal逐实例HTTP作用域；新agent-instance-internal真实mTLS注册及公开签名tuple/消息分类helper；combo窄internal TLS transport attach/configuration；service/http-transport/session完整dispatch Promise、逐帧proof/当前transport/FIFO/actualclose与可信Agent公开connId；account-hosted单一消息分类。其余instance/run-authority与两项Astra principal/run tests由root no-ff固定依赖带入，不由此叶双改。自己的真实TLS fixtures、中央旧断言窄扩、组件/部署/分类tests和本报告均在Git保存。没有修改router、白名单、普通LAN/page路径、注册权威、operation底层、Agent worker、部署参数或费用/删除/提前让位/故障策略。
+
+交付边界：本轮没有full或Chromium宽probe，不借root旧full算此源通过；生产HTTP run-ticket仍明确503，Agent消费者必须使用已实现的直接真实内网TLS握手与逐消息证明。实例资源收口、可信OS/cgroup闭口、完整control ACK及节点不同OS UID部署仍未完成，保持pending；不能用samecert新进程、自报complete/0计数或空operationFences复活旧实例。root负责后续组合worker与冻结联合验证。本叶停止编辑/服务目标，仅此报告提交后冻结clean。

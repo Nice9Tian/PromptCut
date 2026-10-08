@@ -21,7 +21,8 @@
  *
  *   node scripts/probes/ready-index-probe.mjs [--port 5231] [--out <dir>] [--keep]
  *
- * `--keep` 不关 dev server、也不删产物(调试用)。默认跑完就关、跑完就删。
+ * `--keep-out` 保留本次临时产物、不保留 dev server;`--keep` 是旧调试开关。
+ * 默认成功后清理,失败会留一份限长且过滤敏感值的诊断证据。
  *
  * **每次都从冷缓存开始**:`PROMPTCUT_EXPORT_DIR` 指到一个新建的临时目录,所以
  * 「锚帧先于其他帧就绪」这一条量的是真的冷启动,而不是上一次跑剩下的盘。
@@ -47,6 +48,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const args = process.argv.slice(2);
 const PORT = Number(args.includes('--port') ? args[args.indexOf('--port') + 1] : 5231);
 const KEEP = args.includes('--keep');
+const KEEP_OUT = args.includes('--keep-out');
 const EDITOR = `http://127.0.0.1:${PORT}`;
 const EXPORT_DIR = path.resolve(args.includes('--out') ? args[args.indexOf('--out') + 1]
   : path.join(os.tmpdir(), `pc-r6-probe-${Date.now().toString(36)}`));
@@ -62,6 +64,22 @@ const out = { port: PORT, exportDir: EXPORT_DIR };
 const timings = createTimings('ready-index-probe');
 const WAIT_FLOOR_MS = 120000;
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra))); return cond; };
+
+function safeDiagnosticText(value, limit = 4096) {
+  return String(value ?? '')
+    .replace(/(["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|recovery[_-]?token|password|secret|authorization|cookie|session|credential)(?:hash|token)?["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n,;<>}]+)/gi, '$1[REDACTED]')
+    .replace(/\bBearer\s+[^\s"'<>]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|AIza[A-Za-z0-9_-]{20,})\b/g, '[REDACTED]')
+    .replace(/-----BEGIN [A-Z ]*(?:PRIVATE KEY|SECRET)[\s\S]*?-----END [A-Z ]*(?:PRIVATE KEY|SECRET)-----/gi, '[REDACTED KEY MATERIAL]')
+    .slice(0, limit);
+}
+
+function serviceErrorExcerpt() {
+  const relevant = editorLog.join('').split(/\r?\n/)
+    .filter(line => /\b(?:error|exception|failed|500)\b|Internal Server Error|内部服务器错误/i.test(line))
+    .slice(-12);
+  return safeDiagnosticText(relevant.join('\n'), 4096);
+}
 
 const SESSION = `r6-${Date.now().toString(36)}`;
 const FPS = 30;
@@ -263,7 +281,12 @@ try {
     const httpText = await overHttp.text();
     const file = path.join(LIBRARY, 'controls-html', statefulLayer.key, `${localFrame}.html`);
     const onDisk = await fs.readFile(file, 'utf8').catch(() => null);
-    out.snapshot = { status: overHttp.status, bytes: httpText.length, file, sameBytes: onDisk !== null && onDisk === httpText };
+    out.snapshot = {
+      status: overHttp.status, bytes: httpText.length, file, sameBytes: onDisk !== null && onDisk === httpText,
+      contentType: safeDiagnosticText(overHttp.headers.get('content-type') || '', 200),
+      cacheControl: safeDiagnosticText(overHttp.headers.get('cache-control') || '', 200),
+      ...(!overHttp.ok ? { errorBody: safeDiagnosticText(httpText), serviceErrors: serviceErrorExcerpt() } : {}),
+    };
     check(overHttp.ok, '③ GET /api/frames/snapshot/... 取得到', out.snapshot);
     check(out.snapshot.sameBytes, '③ 取到的 HTML 与磁盘上的逐字节相同', { ...out.snapshot, diskBytes: onDisk?.length ?? null });
     check((overHttp.headers.get('cache-control') || '').includes('immutable'), '③ 内容寻址的键回 immutable', overHttp.headers.get('cache-control'));
@@ -449,7 +472,16 @@ try {
   fails.push('exception: ' + (error?.stack || error));
 } finally {
   stopEditor();
-  if (KEEP) out.kept = EXPORT_DIR;
+  if (fails.length) {
+    const diagnosticFile = path.join(EXPORT_DIR, 'ready-index-diagnostic.json');
+    try {
+      await fs.writeFile(diagnosticFile, JSON.stringify({ probe: 'ready-index-probe', port: PORT, snapshot: out.snapshot ?? null }, null, 2), 'utf8');
+      out.diagnosticFile = diagnosticFile;
+    } catch (error) {
+      out.diagnosticWriteError = safeDiagnosticText(error?.message || String(error), 1000);
+    }
+  }
+  if (KEEP || KEEP_OUT || fails.length) out.kept = EXPORT_DIR;
   else { await delay(500); await fs.rm(EXPORT_DIR, { recursive: true, force: true }).catch(() => {}); }
 }
 
