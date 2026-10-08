@@ -5,6 +5,17 @@ import { randomUUID, randomBytes } from 'node:crypto';
 export const PUBLIC_ORIGIN = 'https://visuhive.com';
 export const NATIVE_ORIGIN = 'http://127.0.0.1:6500';
 export const NATIVE_CDP_PORT = 6508;
+// Read the live controls in the browser. This never changes disabled, values,
+// handlers or account state; callers recheck after input and before real click.
+export async function waitForEnabledForm(page, { buttonSelector, inputSelector, requireAccount = false }) {
+  await page.waitForFunction((buttonSelector, inputSelector, requireAccount) => {
+    const visible = node => Boolean(node?.getClientRects().length);
+    const button = document.querySelector(buttonSelector);
+    const input = document.querySelector(inputSelector);
+    return visible(button) && !button.disabled && visible(input) && !input.disabled && !input.readOnly &&
+      (!requireAccount || visible(document.querySelector('[data-pc="account-name"]')));
+  }, {}, buttonSelector, inputSelector, requireAccount);
+}
 export function temporaryPath(value) {
   const target = path.resolve(value), relative = path.relative(os.tmpdir(), target);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('private-tmp-child-required');

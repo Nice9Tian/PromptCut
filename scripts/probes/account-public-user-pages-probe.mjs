@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { publicOptions, testIdentities, projectFromVisibleLink, projectFrameMetadata, testAccountMetadata, PUBLIC_ORIGIN, NATIVE_ORIGIN } from './lib/account-public-path.mjs';
+import { publicOptions, testIdentities, projectFromVisibleLink, projectFrameMetadata, testAccountMetadata, waitForEnabledForm, PUBLIC_ORIGIN, NATIVE_ORIGIN } from './lib/account-public-path.mjs';
 
 /**
  * Root-run production probe. Default dry-preflight has no network or browser.
@@ -212,10 +212,34 @@ async function loginUiState(page) {
     return { accountForm:visible('[data-pc="account-projects"]'), usernameVisible:visible('[data-pc="account-projects"] input[name="username"]'),
       passwordVisible:visible('[data-pc="account-projects"] input[name="password"]'), accountNameVisible:visible('[data-pc="account-name"]'),
       editorVisible:visible('[data-pc="editor"]'), submitVisible:Boolean(button?.getClientRects().length), submitDisabled:Boolean(button?.disabled),
+      createVisible:visible('[data-pc="cloud-create"]'), createDisabled:Boolean(document.querySelector('[data-pc="cloud-create"]')?.disabled),
+      joinVisible:visible('[data-pc="cloud-join"]'), joinDisabled:Boolean(document.querySelector('[data-pc="cloud-join"]')?.disabled),
+      projectNameVisible:visible('[data-pc="cloud-project-name"]'), projectLinkVisible:visible('[data-pc="cloud-project-link"]'),
       busy:buttonText === '正在连接…' ? 'connecting' : buttonText === '正在处理…' ? 'processing' : buttonText === '登录账号' ? 'idle' : 'unknown',
       errorVisible:Boolean(error?.getClientRects().length), errorCode:error ? known.get(error.textContent?.trim()) ?? 'other-error' : 'none',
       tauriInvoke:typeof window.__TAURI__?.core?.invoke === 'function' };
   }).catch(() => ({ state:'ui-unavailable' }));
+}
+async function projectStep(page, stage, action) {
+  result.projectStage = stage; result.projectSteps ??= [];
+  const record = async state => result.projectSteps.push({ phase:result.phase, stage, state, ui:await loginUiState(page) });
+  await record('started');
+  try { const value = await action(); await record('completed'); return value; }
+  catch (error) { await record('failed'); throw error; }
+}
+async function websiteStep(page, stage, action) {
+  result.websiteStage = stage; result.websiteSteps ??= [];
+  const record = async state => result.websiteSteps.push({ phase:result.phase, stage, state, ui:await page.evaluate(() => {
+    const button = document.querySelector('#login button[type="submit"]');
+    const visible = selector => Boolean(document.querySelector(selector)?.getClientRects().length);
+    const nav = document.querySelector('.who');
+    return { formVisible:visible('#login'), usernameVisible:visible('#login input[name="name"]'),
+      passwordVisible:visible('#login input[name="password"]'), submitVisible:Boolean(button?.getClientRects().length),
+      submitDisabled:Boolean(button?.disabled), anonymousNav:Boolean(nav?.querySelector('a[href="/login"]') && nav.querySelector('a[href="/register"]')) };
+  }).catch(() => ({ state:'ui-unavailable' })) });
+  await record('started');
+  try { const value = await action(); await record('completed'); return value; }
+  catch (error) { await record('failed'); throw error; }
 }
 async function waitEditor(page, check) {
   await page.waitForSelector('[data-pc="editor"]', { visible:true });
@@ -244,10 +268,12 @@ async function copyState(page) {
 async function websiteList(account, kind, projectId, name, label) {
   const context = await browser.createBrowserContext(); contexts.push(context);
   const page = await newPage(context, label);
-  await page.goto(`${ORIGIN}/login`, { waitUntil:'domcontentloaded' });
-  await type(page, '#login input[name="name"]', account.name);
-  await type(page, '#login input[name="password"]', account.password);
-  await Promise.all([page.waitForNavigation({ waitUntil:'domcontentloaded' }), page.click('#login button[type="submit"]')]);
+  await websiteStep(page, 'goto-login', () => page.goto(`${ORIGIN}/login`, { waitUntil:'domcontentloaded' }));
+  await websiteStep(page, 'login-form-ready', () => waitWebsiteFormReady(page, 'login', label));
+  await websiteStep(page, 'username-input', () => type(page, '#login input[name="name"]', account.name));
+  await websiteStep(page, 'password-input', () => type(page, '#login input[name="password"]', account.password));
+  await websiteStep(page, 'submit-ready', () => waitForEnabledForm(page, { buttonSelector:'#login button[type="submit"]', inputSelector:'#login input[name="name"]' }));
+  await websiteStep(page, 'submit', () => Promise.all([page.waitForNavigation({ waitUntil:'domcontentloaded' }), page.click('#login button[type="submit"]')]));
   assert(new URL(page.url()).pathname === '/account', `${label}-website-login`);
   await page.waitForFunction((kind, name) => [...document.querySelectorAll(`#${kind} li`)].some(el => el.textContent === name), {}, kind, name);
   await waitFor(() => page.safeResponses.projects?.[kind]?.some(p => p.projectId === projectId && p.name === name), `${label}-authoritative-list-response`);
@@ -391,19 +417,14 @@ async function quitNative() {
   if (!treeKnown) throw new Error('native-owned-process-tree-unknown');
 }
 
-async function registerAccount(account, label) {
-  const context = await browser.createBrowserContext(); contexts.push(context);
-  assert(context !== browser.defaultBrowserContext() && contexts.slice(0, -1).every(previous => previous !== context), `${label}-isolated-cookie-context`);
-  const page = await newPage(context, label);
-  assert(page.browserContext() === context, `${label}-page-in-own-context`);
-  page.registrationMarker = account.name;
-  await page.goto(`${ORIGIN}/register`, { waitUntil:'domcontentloaded' });
+async function waitWebsiteFormReady(page, formId, label) {
+  if (!['register', 'login'].includes(formId)) throw new Error('unknown-website-form');
   await waitFor(() => page.safeMe?.anonymous === true, `${label}-real-anonymous-me-complete`);
-  await page.waitForFunction(() => {
+  await page.waitForFunction(formId => {
     const nav = document.querySelector('.who');
-    return location.pathname === '/register' && nav?.querySelector('a[href="/login"]') && nav.querySelector('a[href="/register"]') &&
-      document.querySelector('#register button[type="submit"]')?.disabled === false;
-  });
+    return location.pathname === `/${formId}` && nav?.querySelector('a[href="/login"]') && nav.querySelector('a[href="/register"]');
+  }, {}, formId);
+  await waitForEnabledForm(page, { buttonSelector:`#${formId} button[type="submit"]`, inputSelector:`#${formId} input[name="name"]` });
   // The site attaches submit only AFTER await fillWho(). Without the actual
   // listener a click can submit the form as native GET with password query.
   // Inspect existing listeners; never inject a handler or replace the form.
@@ -411,7 +432,7 @@ async function registerAccount(account, label) {
     // CDP objectIds are session-local: create and inspect the object through
     // this same observer session, rather than a Puppeteer ElementHandle.
     const remote = await page.registrationCdp.send('Runtime.evaluate', {
-      expression:"document.querySelector('#register')", returnByValue:false,
+      expression:`document.querySelector('#${formId}')`, returnByValue:false,
     });
     const objectId = remote.result?.objectId;
     if (!objectId) return false;
@@ -419,10 +440,20 @@ async function registerAccount(account, label) {
       const listeners = await page.registrationCdp.send('DOMDebugger.getEventListeners', { objectId });
       return listeners.listeners.some(listener => listener.type === 'submit');
     } finally { await page.registrationCdp.send('Runtime.releaseObject', { objectId }); }
-  }, `${label}-actual-register-submit-listener-ready`);
+  }, `${label}-actual-${formId}-submit-listener-ready`);
+}
+async function registerAccount(account, label) {
+  const context = await browser.createBrowserContext(); contexts.push(context);
+  assert(context !== browser.defaultBrowserContext() && contexts.slice(0, -1).every(previous => previous !== context), `${label}-isolated-cookie-context`);
+  const page = await newPage(context, label);
+  assert(page.browserContext() === context, `${label}-page-in-own-context`);
+  page.registrationMarker = account.name;
+  await page.goto(`${ORIGIN}/register`, { waitUntil:'domcontentloaded' });
+  await waitWebsiteFormReady(page, 'register', label);
   await type(page, '#register input[name="name"]', account.name);
   await type(page, '#register input[name="password"]', account.password);
   await type(page, '#register input[name="again"]', account.password);
+  await waitForEnabledForm(page, { buttonSelector:'#register button[type="submit"]', inputSelector:'#register input[name="name"]' });
   await Promise.all([page.waitForNavigation({ waitUntil:'domcontentloaded' }), page.click('#register button[type="submit"]')]);
   assert(new URL(page.url()).pathname === '/account', `${label}-real-registered`);
   await page.waitForFunction(name => document.querySelector('#acc-name')?.textContent === name, {}, account.name);
@@ -433,8 +464,12 @@ async function registerAccount(account, label) {
   await safeShot(page, label);
 }
 async function enterNewProject(page, name, label) {
-  await type(page, '[data-pc="cloud-project-name"]', name);
-  await page.click('[data-pc="cloud-create"]'); await waitEditor(page, `${label}-creator-enters-real-editor`);
+  const controls = { buttonSelector:'[data-pc="cloud-create"]', inputSelector:'[data-pc="cloud-project-name"]', requireAccount:true };
+  await projectStep(page, 'create-form-ready', () => waitForEnabledForm(page, controls));
+  await projectStep(page, 'create-name-input', () => type(page, controls.inputSelector, name));
+  await projectStep(page, 'create-submit-ready', () => waitForEnabledForm(page, controls));
+  await projectStep(page, 'create-click', () => page.click(controls.buttonSelector));
+  await projectStep(page, 'create-editor', () => waitEditor(page, `${label}-creator-enters-real-editor`));
   result.copy ??= []; const diagnostic = { label, before:await copyState(page) }; result.copy.push(diagnostic);
   try {
     await page.click('[data-pc="cloud-project-copy"]');
@@ -456,8 +491,12 @@ async function enterNewProject(page, name, label) {
   return project;
 }
 async function joinProject(page, project, label) {
-  await type(page, '[data-pc="cloud-project-link"]', project.link); await page.click('[data-pc="cloud-join"]');
-  await waitEditor(page, `${label}-member-enters-real-editor`);
+  const controls = { buttonSelector:'[data-pc="cloud-join"]', inputSelector:'[data-pc="cloud-project-link"]', requireAccount:true };
+  await projectStep(page, 'join-form-ready', () => waitForEnabledForm(page, controls));
+  await projectStep(page, 'join-link-input', () => type(page, controls.inputSelector, project.link));
+  await projectStep(page, 'join-submit-ready', () => waitForEnabledForm(page, controls));
+  await projectStep(page, 'join-click', () => page.click(controls.buttonSelector));
+  await projectStep(page, 'join-editor', () => waitEditor(page, `${label}-member-enters-real-editor`));
   if (!(DESKTOP_EXE && page === native?.page)) {
     await waitFor(() => page.safeResponses.join?.projectId === project.projectId, `${label}-real-join-id`);
     assert(page.safeResponses.join.projectId === project.projectId, `${label}-real-join-id`);

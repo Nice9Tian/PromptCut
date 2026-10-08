@@ -49,6 +49,73 @@ for (const name of ['enterNewProject', 'joinProject']) test(`actual ${name} wait
   } finally { stopped = true; enabled = true; await outcome; }
 });
 
+test('actual website login waits for anonymous initialization, its existing handler and enabled submit', async () => {
+  const source = await fs.readFile(new URL('./account-public-user-pages-probe.mjs', import.meta.url), 'utf8');
+  const extract = name => new RegExp(`async function ${name}\\([\\s\\S]*?\\n}`).exec(source)?.[0];
+  let enabled = false, handlerReady = false, stopped = false;
+  const fills = [], clicks = [], inspected = [];
+  const button = { get disabled() { return !enabled; }, getClientRects:() => [1] };
+  const input = { disabled:false, readOnly:false, getClientRects:() => [1] };
+  const nav = { querySelector:() => input };
+  const document = { querySelector:selector => selector === '.who' ? nav : selector.includes('button') ? button : input };
+  const page = {
+    safeMe:{ anonymous:false },
+    async goto() {}, async waitForNavigation() {},
+    async waitForFunction(predicate, _options, ...args) {
+      const check = vm.runInNewContext(`(${predicate.toString()})`, { document, location:{ pathname:'/login' } });
+      while (!check(...args)) { if (stopped) throw new Error('controlled-test-stopped'); await new Promise(resolve => setImmediate(resolve)); }
+    },
+    async click(selector) { clicks.push(selector); throw new Error('controlled-after-real-click'); },
+    registrationCdp:{ async send(method, payload) {
+      inspected.push({ method, objectId:payload?.objectId });
+      if (method === 'Runtime.evaluate') return { result:{ objectId:'same-session-form' } };
+      if (method === 'DOMDebugger.getEventListeners') return { listeners:handlerReady ? [{ type:'submit' }] : [] };
+      return {};
+    } },
+  };
+  const context = {
+    browser:{ async createBrowserContext() { return {}; } }, contexts:[], newPage:async () => page,
+    ORIGIN:'https://visuhive.com', waitForEnabledForm:publicPath.waitForEnabledForm,
+    websiteStep:async (_page, _stage, callback) => callback(),
+    waitFor:async predicate => { while (!await predicate()) { if (stopped) throw new Error('controlled-test-stopped'); await new Promise(resolve => setImmediate(resolve)); } },
+    type:async (_page, selector) => { fills.push(selector); enabled = false; },
+  };
+  context.waitWebsiteFormReady = vm.runInNewContext(`(${extract('waitWebsiteFormReady')})`, context);
+  const login = vm.runInNewContext(`(${extract('websiteList')})`, context);
+  const outcome = login({ name:'controlled-name', password:'never-log' }, 'owned', 'controlled-id', 'controlled-project', 'controlled').then(() => null, error => error);
+  try {
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(fills.length, 0);
+    page.safeMe.anonymous = true; enabled = true;
+    // A visible/enabled button alone is insufficient without the actual handler.
+    while (!inspected.length) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fills.length, 0); handlerReady = true;
+    while (fills.length < 2) await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(clicks.length, 0);
+    enabled = true;
+    assert.equal((await outcome)?.message, 'controlled-after-real-click');
+    assert.equal(clicks.length, 1);
+    assert.ok(inspected.filter(entry => entry.method === 'DOMDebugger.getEventListeners').every(entry => entry.objectId === 'same-session-form'));
+    assert.ok(inspected.some(entry => entry.method === 'Runtime.releaseObject' && entry.objectId === 'same-session-form'));
+  } finally { stopped = true; enabled = true; handlerReady = true; await outcome; }
+});
+
+test('the browser availability predicate rejects hidden, locked and unauthenticated project controls without changing DOM', async () => {
+  let visible = true, buttonDisabled = false, inputDisabled = false, readOnly = false, accountPresent = true;
+  const button = { get disabled() { return buttonDisabled; }, getClientRects:() => visible ? [1] : [] };
+  const input = { get disabled() { return inputDisabled; }, get readOnly() { return readOnly; }, getClientRects:() => [1] };
+  const document = { querySelector:selector => selector === 'button' ? button : selector === 'input' ? input : accountPresent ? input : null };
+  const page = { async waitForFunction(predicate, _options, ...args) {
+    assert.equal(vm.runInNewContext(`(${predicate.toString()})`, { document })(...args), true);
+  } };
+  const options = { buttonSelector:'button', inputSelector:'input', requireAccount:true };
+  await publicPath.waitForEnabledForm(page, options);
+  for (const set of [() => { visible = false; }, () => { buttonDisabled = true; }, () => { inputDisabled = true; }, () => { readOnly = true; }, () => { accountPresent = false; }]) {
+    visible = true; buttonDisabled = false; inputDisabled = false; readOnly = false; accountPresent = true;
+    set(); await assert.rejects(publicPath.waitForEnabledForm(page, options), { code:'ERR_ASSERTION' });
+  }
+  assert.equal(accountPresent, false, 'the predicate must not fabricate authentication');
+});
+
 test('public writes require an explicit flag and private native arguments never change the public host', () => {
   assert.equal(publicOptions([]).run, false);
   assert.equal(publicOptions(['--dry-preflight']).run, false);
