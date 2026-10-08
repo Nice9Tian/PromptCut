@@ -28,7 +28,54 @@
 
 〔裁〕最小候选为 accountEvents 用真实 conversation get 的完整获权视图追踪队列 revision，在首次订阅和 revision 变化时发独立 `queue.state`，内容为 conversationId、queueRevision、currentRunId 和精确 messageId/queueState/position 行；普通 user 仍按 arrivalSeq 去重，包含真实发送者。位置按该同一权威快照的 queued 行 arrivalSeq 顺序编号。每次事件仍经真实 read 验权；没有 runner 不发 read/run/model 事件。是否将 position 放入 doc public projection，待主会话核最小租约后固定；两种方式均不改变权威 FIFO。
 
-拟新增租约为 `server/agent-service/http.mjs` 的 accountEvents 窄段及专属 account-policy HTTP/SSE target。如果主会话要求 doc 显式逐行 position，则另请求 `server/account/conversation-authority.mjs` 仅 public projection 的派生字段，不改事务、ACL、队列 claim 或 run hooks。当前均未获租、未修改。
+主会话已批准 `server/agent-service/http.mjs` 仅 accountEvents/queue.state 和专属 HTTP/SSE target；`server/agent/service/conversation-policy.mjs` 仅 info 诚实暴露账号模式与执行器未挂载状态。对话权威不修改，位置从 get 的完整获权持久消息视图派生。`server/docservice/shared-service.mjs` 仅 bindService 一处传既有可信 registry/urls，`server/docservice/account-hosted.mjs` 仅 session projection。产品源码仍等首次告知阶段收回后通知同步，目前均未修改。
+
+### 拟固定的命名与响应校验
+
+〔裁〕账号会话响应在 `server/docservice/account-hosted.mjs` 的 `createAccountHostedRuntime().issueSession` 扩充如下，其它三种票据的 kind、到期和解析规则保持原实现：
+
+```ts
+interface AccountProjectSession {
+  connectionTicket: string; assetTicket: string; agentDelegationTicket: string;
+  expiresAt: number;
+  projectId: string; creator: boolean; access: 'r' | 'rw'; accessRevision: number;
+  hosted: { agent: { available: boolean; enabled: boolean; url: string | null } };
+}
+```
+
+三张票据均严格为 43 字符 base64url，expiresAt 必须是未来的安全整数；projectId 必须等于请求的项目，creator/access/revision 的形状逐项校验。creator 来自 authority 重新核过的 principal，开关来自同一项目持久记录，available 来自既有服务登记表当前 Agent 条目，url 只来自 constructor 的既有 `hostedServiceUrls.agent` 可信配置。无登记则 available=false，未配地址则 url=null；页面不能据在线默认地址自报服务存在。available 仅说明登记了服务，不代表 runner 已运行。共享服务构造器现有 `accountRuntime.bindService(service)` 传入 registry 与 urls，让 runtime 使用可信 provider，每次会话重新核；不用请求正文设这些字段。该接口只投影账号 Agent 信息，不提前接渲染服务。
+
+〔裁〕客户端新增 `setAgentEnabled(projectId, enabled, expectedAccessRevision, requestId)`，内部真实 POST `/hosted/shared/account/admin`，正文精确为 `{projectId,requestId,expectedAccessRevision,op:'set-hosted-service',service:'agent',enabled}`。凭据由现有 ensureLogin 获取、credentials omit；不得接收 creator/role/principal。真实返回当前是 `{eventId,accessRevision,completed:false,state:'pending-services'}`，不能将开关写入成功说成资源关闭完成。收到后重新取得 session，以服务端投影更新 UI；409 revision 变化时重新读取并显示重试，禁止无条件覆盖新开关。其它 LAN 创建者操作保留旧路径。
+
+〔裁〕排队成功单独类型 `CloudSendAccepted`，账号分支验证 `{messageId,runId:null,seq,queuePosition,queueRevision,conversation}`，seq/revision/position 均安全整数，conversation.id 必须等于请求对话且 projectId 等于当前项目。服务首次 send 自动创建共有对话，前端不增加假的创建 API。重试沿用 requestId，失 ACK 后通过消息去重和真 get 重载确认；不使用 assistant/runId 占位代替消息。
+
+〔裁〕SSE 独立事件命名 `queue.state`，无 seq，响应如下：
+
+```ts
+type CloudQueueSnapshot = {
+  type: 'queue.state'; conversationId: string;
+  queueRevision: number; aclRevision: number; currentRunId: string | null;
+  items: Array<{messageId: string; arrivalSeq: number;
+    state: 'queued' | 'preparing' | 'running' | 'cancelled' | 'finished';
+    position: number | null; runId: string | null}>;
+};
+```
+
+最终 state 枚举需按实际权威写入值逐项穷举，不能靠未知值默认运行或完成。queued 行按同一获权 get 快照 arrivalSeq 排序，position 从 1 开始；其它状态 position=null。user 事件独立保留 `{type:'user',seq,messageId,prompt,senderAccountId,senderNameAtSend,queueState}`，runId 仅权威确实有值时使用。客户端拒错误 conversationId、重复 messageId、非安全 revision/seq 和非法 position；旧 queueRevision 不回退，独立 seq 不覆盖队列 revision。初次订阅及变化均发送完整队列快照，普通消息按 arrivalSeq/messageId 去重，续接不丢已发送者或旧消息的队列变化。
+
+〔裁〕`/v1/info` 在 account-policy 模式返回现有 enabled/running，追加 `accountMode:true,executorMounted:false`，从现有未挂载执行器事实派生。页面文案为“已排队，等待执行服务”，不显示正在模型执行。将来 runner 接通后须由该实现自身报告 mounted，当前不新增自由 ready 参数。
+
+### 实际撤销边界与尚未接通处
+
+每次事件写出前 fresh access 并核获权快照 aclRevision；不能用 250ms 轮询缓存延迟拒绝。精确检索发现 `server/agent/service/conversation-policy.mjs` 的 `onRevoke` 当前是 no-op，HTTP 的 openStreams 订阅虽已有回调，却没有账号的真实控制来源。fresh mTLS RPC 不能单独证明“doc 提交切私有/踢人后 Agent HTTP 零新正文”，因为 RPC 成功与实际 write 跨服务仍有窗口。
+
+这项不得以本任务队列绿色冒称完成。已向主会话报告，需要现有 doc→Agent control owner 提供真实同步 subscription fence，关闭实际 HTTP/源 socket，组合真实 receipt 后才确认完成；不能用轮询、自由回调或 HTTP finish 当 actual close。当前 lease 只含 info 与 accountEvents，不含 main/runner/control 接线，故先保留明确缺口并等精确接口，既定撤销语义没有降级。
+
+### 真实本机夹具组合
+
+新增专属夹具可复用 `server/test/fixtures/account-dual-user-path.mjs` 已验证的临时真实 VH provider、doc combo、独立 asset 子进程、HTTPS edge 和真实站点账号会话机制，但该现有夹具没有 Agent 登记/私有客户端，不能直接宣称发送已接通。新夹具须在临时服务登记表登记 Agent，从 `server/agent-service/conversation-client.mjs` 建真实 pin+mTLS client，经 `server/agent-service/hosted-wiring.mjs` 的账号 authenticate 和 `createAccountConversationService` 接 HTTP；edge 转实际 `/agent/v1`。真实 doc assembly 使用同 ledger、真实 accepted-message provider、同意与 selection capture，不伪造权限或 ready。
+
+端口计划全部在 6520–6539：账号网站/内部、doc 公共/内部、asset 公共/内部、Agent HTTP、HTTPS edge、两舞台源；页面构建复用真实 compiled online artifact。夹具秘密、TLS key 与账号凭据仅 TMP/RAM，日志只固定状态、公开 ID 和端口。尚未编写或运行；实际监听和浏览器目标待主会话窗口。现有夹具 account mode 的 `assetPort:6389` 仅参数占位，实际明确 `combo.assetPort===null`，不新增监听，不借此占用其它段。
 
 ## 文件独占边界
 
