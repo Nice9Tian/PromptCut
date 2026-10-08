@@ -20,7 +20,7 @@ if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !SITE
 const ORIGIN = 'https://127.0.0.1:6568', STAGES = ['http://s1.pc.localhost:6570', 'http://s2.pc.localhost:6571'];
 const TIMEOUT = 30_000, stages = [], contexts = [], pages = [];
 const result = { sourceBefore: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim(),
-  checks: [], network: [], memberDiagnostics: [], screenshots: [], completed: false, executorMounted: false, cleanup: {} };
+  checks: [], network: [], memberDiagnostics: [], docSocketDiagnostics: [], screenshots: [], completed: false, executorMounted: false, cleanup: {} };
 let browser, fixture, phase = 'preflight';
 const check = (condition, name) => { result.checks.push({ name, pass: Boolean(condition) }); if (!condition) throw Error(name); };
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml',
@@ -146,14 +146,24 @@ try {
   for (let i = 0; i < 3; i++) {
     const context = await browser.createBrowserContext(); contexts.push(context); const page = await context.newPage(); pages.push(page);
     page.setDefaultTimeout(TIMEOUT);
-    const cdp = await page.createCDPSession(), wsIds = new Set();
-    page.docSockets = { opened: 0, closed: 0 };
+    const cdp = await page.createCDPSession(), wsIds = new Map();
+    page.docSockets = { opened: 0, handshaken: 0, closed: 0, records: wsIds };
     await cdp.send('Network.enable');
     cdp.on('Network.webSocketCreated', event => {
-      if (new URL(event.url).pathname !== '/hosted/ws') return;
-      wsIds.add(event.requestId); page.docSockets.opened++;
+      const url = new URL(event.url);
+      if (url.origin !== 'wss://127.0.0.1:6568' || url.pathname !== '/hosted/') return;
+      wsIds.set(event.requestId, { handshaken: false, closed: false }); page.docSockets.opened++;
     });
-    cdp.on('Network.webSocketClosed', event => { if (wsIds.delete(event.requestId)) page.docSockets.closed++; });
+    cdp.on('Network.webSocketHandshakeResponseReceived', event => {
+      const record = wsIds.get(event.requestId);
+      if (!record || event.response.status !== 101 || record.handshaken) return;
+      record.handshaken = true; page.docSockets.handshaken++;
+    });
+    cdp.on('Network.webSocketClosed', event => {
+      const record = wsIds.get(event.requestId);
+      if (!record || record.closed) return;
+      record.closed = true; page.docSockets.closed++;
+    });
     page.on('response', response => {
       const pathname = new URL(response.url()).pathname;
       if (pathname === '/api/account/cloud-agent-consent' && response.status() === 200) {
@@ -196,13 +206,27 @@ try {
   check(/^acc_[a-f0-9]{24}$/.test(targetId), 'real-target-account-id');
   check(await b.$eval('[data-pc="account-member"] .pc-members-name', node => node.textContent !== ''), 'trusted-member-name-visible');
   await shot(a, '01-creator-two-devices'); await shot(b, '02-member-readonly-controls');
+  // IDs stay only in RAM. Snapshot the established sockets before kick so a
+  // later connection close cannot satisfy the old connection's close barrier.
+  phase = 'kick-before-established-sockets';
+  const affectedSockets = [b, b2].map(page => ({ page,
+    records: [...page.docSockets.records.values()].filter(record => record.handshaken && !record.closed) }));
+  for (const { page, records } of affectedSockets) {
+    result.docSocketDiagnostics.push({ page: pages.indexOf(page), step: 'before-kick',
+      origin: 'wss://127.0.0.1:6568', path: '/hosted/', status: page.docSockets.handshaken > 0 ? 101 : null,
+      created: page.docSockets.opened, handshaken: page.docSockets.handshaken, oldLive: records.length });
+    check(page.docSockets.opened >= 1 && records.length >= 1, 'affected-page-established-old-websocket-before-kick');
+  }
   phase = 'kick'; await a.click('[data-pc="account-member-kick"]'); await enabled(a, '[data-pc="account-member-submit"]'); await a.click('[data-pc="account-member-submit"]');
   await a.waitForSelector('[data-pc="account-member-confirm"]', { hidden: true });
-  for (const page of [b, b2]) {
+  for (const { page, records } of affectedSockets) {
     await page.waitForFunction(() => [...document.querySelectorAll('.pc-toast')].some(node => /登录已失效|访问.*权限|禁止加入|连接/.test(node.textContent)), { timeout: TIMEOUT });
     const until = Date.now() + TIMEOUT;
-    while (page.docSockets.closed === 0 && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 40));
-    check(page.docSockets.closed >= 1, 'affected-page-actual-websocket-closed');
+    while (!records.every(record => record.closed) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 40));
+    result.docSocketDiagnostics.push({ page: pages.indexOf(page), step: 'after-kick',
+      origin: 'wss://127.0.0.1:6568', path: '/hosted/', oldLive: records.length,
+      oldClosed: records.filter(record => record.closed).length, allOldClosed: records.every(record => record.closed) });
+    check(records.every(record => record.closed), 'affected-page-actual-websocket-closed');
     // Real reload goes through current session/join. No public principal or old ticket is injected.
     await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-pc="account-name"]', { visible: true });
