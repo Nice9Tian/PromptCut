@@ -184,7 +184,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     assert.equal(checked.body.result.principal.creator, false); assert.equal(checked.body.result.principal.accountId, ids[0]);
     assert.equal(JSON.stringify(checked.body).includes('instanceSession'), false);
     assert.equal(JSON.stringify(checked.body).includes('authenticationId'), false);
-    await exerciseInstanceData({ port: 5772, tls: pki.wrong, instance, grant, own: client => dataClients.push(client) });
+    const dataResult = await exerciseInstanceData({ port: 5772, tls: pki.wrong, instance, grant, own: client => dataClients.push(client) });
     const actualAgentHistory = combo.docAssembly.history.accepted(projectId);
     assert.equal(actualAgentHistory.length, 2);
     assert.equal(actualAgentHistory[1].actor.runGrantId, grant.runGrantId);
@@ -201,6 +201,11 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     assert.equal(wrongPage.closeFrame.code, 4003); assert.equal(wrongPage.all.some(message => message.type === 'session.welcome'), false);
     const otherOs = await registerHttpInstance({ port: 5772, tls: pki.wrong, requestId: 'actual-agent-os-b' });
     assert.equal((await signedRpc('check', 'checkAccess', checkInput, otherOs)).status, 403, 'same cert new OS cannot consume old grant');
+    const newOsOldSid = await instanceWsClient({ port: 5772, tls: pki.wrong, instance: otherOs, projectId, runGrantId: grant.runGrantId, nonce: 110,
+      protocols: ['promptcut.v1', `promptcut.session.${dataResult.resumeIdentity.sid}.0`],
+      sessionItem: { sid: dataResult.resumeIdentity.sid, ack: 0 } }); dataClients.push(newOsOldSid);
+    assert.equal(newOsOldSid.status, 101); await newOsOldSid.ended;
+    assert.equal(newOsOldSid.closeFrame.code, 4003); assert.equal(newOsOldSid.all.some(message => message.type === 'session.welcome'), false);
     const ticket = await signedRpc('ticket', 'resolveRunPrincipal', { projectId, runGrantId: grant.runGrantId,
       conversationId: grant.conversationId, purpose: 'run' });
     assert.equal(ticket.status, 503); assert.equal(ticket.body.code, 'run-data-proof-unavailable');

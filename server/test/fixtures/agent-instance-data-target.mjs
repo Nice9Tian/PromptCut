@@ -68,5 +68,5 @@ export async function exerciseInstanceData({ port, tls, instance, grant, own }) 
   assert.equal(resumedLp.status, 200, JSON.stringify(resumedLp.body)); assert.equal(resumedLp.body.connId, lp.body.connId);
   assert.equal((await request({ kind: 'close', nonce: 27, connId: lp.body.connId, url: '/lp/close', body: {}, headers: auth })).status, 200);
   for (const c of clients) c.destroy(); await Promise.all(clients.map(c => c.ended));
-  return { written, expectedRev: 3 };
+  return { written, expectedRev: 3, resumeIdentity: { sid: welcome.sid, connId: welcome.connId } };
 }
