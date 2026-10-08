@@ -91,6 +91,9 @@
 - 根读取上述同一strace原始日志作严格二次解析，没有重跑测试：63组同PID且无同目标中间rename的临时文件fsync→rename→目标文件fsync→父projects目录fsync均返回0；初步宽匹配85组不当最终精确数。证据 /var/tmp/pc-operation-proof-bdbe2de24e3a4c54a0e7dff960168218/trace-strict.result.json；只跟踪fsync/rename、不打印写缓冲区。这是实际Linux系统调用/崩溃切点证据，仍不是物理断电或生产OS隔离证明。
 - 新联合已以no-ff收回b7647627，三份新AGENT与渲染文档整合报告均100%原文归档，首次失败保留。下一阶段各新叶从固定80b5e658出发，互斥文件/端口：Sol中央doc装配5770～5779、Sol对话ACL/FIFO5790～5799、Astra可信read/runGrant5730～5739；先交接口再接消费者，全量fixture端口由root串行出租。旧模块通过不冒称这些新项已完成。
 
+- 三个已收回实现叶（018-asset-wiring/018-operation-wiring/018-project-selections）及render-scheduling-doc-sync叶和本机分支已正常清理，未用force。根预核clean/ancestor/zero reparse/zero process references；三个实现叶生成的ignored data/auth身份与tsbuildinfo先移到TMP/pc-retired-second-stage-evidence-8b7a0f68bf1c463d863c9f958080ea1a，内容未打印，retirement.json与Git提交保留。新三个在途叶、根80验证叶、既有用户工作区及生产数据/备份不动。
+- 下一授权接口审查：Agent关闭再开启不能复活旧grant，现authority事件缺service/enabled且listener可能略过空accountIds；中央Sol获窄租同ledger事务runHooks/fenceInState与不可变事件字段，Astra提供run权威接口，不双改文件。旧接线通过不替此边界通过。〔裁·三级最小收敛，拟实施〕可信read独立验证完整持久消息record及sender/currentRun/snapshot/附件关联，不要求doc重构模型system/history/tools全部上下文；Agent先从持久record读全并装入runner、fsync readIntent，再取doc持久ACK后才首次model/tool，最终model input digest另作审计。替代为doc复写模型prompt编译器，会额外复制职责且不能可靠推断Agent私有上下文；用户已定的已读消息例外不变，未标新用户批准，真实instance接线尚未完成。
+
 ## 接下来干什么
 
 1. 旧共同候选首轮与有因修正已完成并保留；中央独立asset接线固定后先核真实账号/doc/mTLS/head、实际关闭回执及独立部署依赖闭包。已通过模块与fixture不能替代完整产品交互；18人工、真实网络和未完成项不计通过。
