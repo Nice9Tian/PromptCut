@@ -402,6 +402,7 @@ function hostView(body, lines = []) {
 /** 认领了 plan(切出细任务)且至少做完一段:claimed 算上 plan 本身(与本机替身同一判据) */
 const a5Trace = createC10Trace();
 let a5TraceCdp = null;
+let a5ObserverNumber = 0;
 
 /* ================================================================== 主机持有任务时断一次传输(--cut,照 ht-w-probe) */
 
@@ -528,11 +529,12 @@ async function cutWhileHolding({ queue, healthz, onHolding, doCut, holdTimeoutMs
  */
 async function startWatcher(M, { projectId, password, diagnosticOnly = false }) {
   const c = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId, username: '旁观节点', password, as: 'member', role: 'render' });
+  const traceChannel = `observer:${++a5ObserverNumber}`;
   const seen = new Map();
   const tasks = new Map();
   const rec = (id) => { if (!seen.has(id)) seen.set(id, { taken: 0, reopenedAfterTaken: 0, closed: [] }); return seen.get(id); };
   c.ep.onMessage((m) => {
-    a5Trace.observe(m, { channel: 'observer' });
+    a5Trace.observe(m, { channel: traceChannel });
     if (m?.type === 'queue.snapshot') { tasks.clear(); for (const task of m.tasks ?? []) tasks.set(task.id, task); }
     else if (m?.type === 'task.opened' && m.task?.id) tasks.set(m.task.id, m.task);
     else if (['task.taken', 'task.closed'].includes(m?.type)) { const task = tasks.get(m.id); if (task) tasks.set(m.id, { ...task, state: m.type === 'task.taken' ? 'claimed' : m.state }); }
@@ -549,8 +551,9 @@ async function startWatcher(M, { projectId, password, diagnosticOnly = false }) 
   if (!diagnosticOnly) check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
   // 会话结束后建了新会话(onOpen 只在新会话时调;接续调 onResume、订阅还在):重发 hello 与 watch。计数进结果
   const stats = { newSessions: 0, resumes: 0 };
-  c.ep.onOpen(() => { stats.newSessions++; a5Trace.boundary('observer', 'new-session'); void subscribe(); });
-  c.ep.onResume?.(() => { stats.resumes++; a5Trace.boundary('observer', 'resumed'); });
+  c.ep.onOpen(() => { stats.newSessions++; a5Trace.boundary(traceChannel, 'new-session'); void subscribe(); });
+  c.ep.onResume?.(() => { stats.resumes++; a5Trace.boundary(traceChannel, 'resumed'); });
+  c.ep.onClose(() => a5Trace.boundary(traceChannel));
   return { seen, stats, tasks, close: c.close };
 }
 /** 成员页收到的 task.done(CDP 读页面 WebSocket 的入站帧;会话层的重发按 seq 去重,同一任务不同 seq 算两次) */
