@@ -64,7 +64,8 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
     finish: input => run.finish({ ...input, servicePrincipal }),
     pending: async () => ({ conversations: [] }),
   };
-  let socket, server, child, childExited = false, socketClosed = false, started;
+  let socket, server, child, childPid, childExitPromise, childClosePromise;
+  let childExited = false, childClosed = false, socketClosed = false, started;
   const startedPromise = new Promise(resolve => { started = resolve; });
   const manager = createAccountRunManager({ runClient: client, readIntents: intents, serviceKid: 'kid-fixture', instanceId: 'instance-fixture',
     runnerFactory: async () => ({
@@ -75,10 +76,14 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
         await once(local, 'connect');
         child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true, stdio: 'ignore' });
         await once(child, 'spawn');
+        childPid = child.pid;
+        childExitPromise = once(child, 'exit');
+        childClosePromise = once(child, 'close');
         const done = new Promise(resolve => {
           const stop = async () => {
             local.destroy(); socket.destroy(); await close(server); socketClosed = true;
-            child.kill(); await once(child, 'exit'); childExited = true; resolve();
+            child.kill(); await childExitPromise; childExited = true;
+            await childClosePromise; childClosed = true; resolve();
           };
           this.stop = stop;
         });
@@ -87,7 +92,8 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
       }, close() {},
     }),
     connectionsClosed: async () => socketClosed && socket?.destroyed === true && server?.listening === false,
-    childrenClosed: async () => childExited && (child?.exitCode !== null || child?.signalCode !== null),
+    childrenClosed: async () => childExited && childClosed &&
+      (child?.exitCode !== null || child?.signalCode !== null),
   });
   const controlServer = createRunControlServer({ tls: pki.asset, docFingerprint256: pki.doc.fingerprint256,
     serviceKid: 'kid-fixture', instanceId: 'instance-fixture', manager });
@@ -108,7 +114,8 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
     assert.equal(receipt.status, 200);
     assert.equal(receipt.body.result.complete, true);
     assert.deepEqual(receipt.body.result.closedRunIds, [grant.runId]);
-    assert.equal(childExited && socketClosed && socket.destroyed && !server.listening, true);
+    assert.equal(Number.isSafeInteger(childPid) && childPid > 0, true);
+    assert.equal(childExited && childClosed && socketClosed && socket.destroyed && !server.listening, true);
     await work;
     const missingWitness = createRunControlServer({ tls: pki.asset, docFingerprint256: pki.doc.fingerprint256,
       serviceKid: 'kid-fixture', instanceId: 'instance-fixture', manager: {
@@ -121,7 +128,8 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
   } finally {
     manager.close(); await close(controlServer);
     if (server?.listening) await close(server);
-    if (child && child.exitCode === null && child.signalCode === null) { child.kill(); await once(child, 'exit'); }
+    if (child && child.exitCode === null && child.signalCode === null) child.kill();
+    if (childExitPromise && childClosePromise) await Promise.allSettled([childExitPromise, childClosePromise]);
     intents.close(); ledger.close(); fs.rmSync(dir, { recursive: true, force: true });
   }
 });
