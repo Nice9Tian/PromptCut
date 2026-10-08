@@ -85,3 +85,45 @@ test('logout failures preserve the visible authenticated state; only confirmed e
   assert.deepEqual(online.account, account);
   webStatus = 200; await online.logout(); assert.equal(online.account, null);
 });
+
+test('consent reads and accepts only the current account through exact bearer route', async () => {
+  let accepted = false;
+  const calls = [];
+  const client = createAccountClient({ online:true, origin:'https://visuhive.com', device, now:() => 1000,
+    fetch:async (url, init) => {
+      calls.push({ path:url.pathname, init });
+      if (url.pathname.endsWith('/me')) return reply({ ok:true, account, csrfToken:'csrf' });
+      if (url.pathname.includes('/editor/')) return reply(credential());
+      if (url.pathname.endsWith('/cloud-agent-consent')) {
+        if (init.method === 'POST') { assert.deepEqual(Object.keys(JSON.parse(init.body)).sort(), ['accept','noticeVersion','requestId']); accepted = true; }
+        return reply({ ok:true, accountId:account.id, accepted, noticeVersion:1, ...(accepted ? { acceptedAt:5 } : {}) });
+      }
+      throw new Error('unexpected route');
+    } });
+  await client.restore();
+  assert.equal((await client.cloudAgentConsent()).accepted, false);
+  assert.equal(calls.filter(x => x.path.endsWith('/cloud-agent-consent') && x.init.method === 'POST').length, 0);
+  assert.equal((await client.acceptCloudAgentConsent('stable-request')).accepted, true);
+  assert.equal((await client.cloudAgentConsent()).accepted, true);
+  for (const call of calls.filter(x => x.path.endsWith('/cloud-agent-consent'))) {
+    assert.equal(call.init.credentials, 'omit');
+    assert.equal(call.init.headers.Authorization, 'Bearer access-test');
+    assert.equal(call.init.headers['X-CSRF-Token'], undefined);
+  }
+});
+
+test('consent rejects a forged account reply and a logout during an in-flight read', async () => {
+  let release;
+  const delayed = new Promise(resolve => { release = resolve; });
+  let defer = false;
+  const client = createAccountClient({ online:false, origin:'https://visuhive.com', device, now:() => 1000,
+    native: async (operation, args) => operation === 'recover' ? credential() : operation === 'logout' ? { ok:true } :
+      args.path === '/api/account/cloud-agent-consent' ? (defer ? delayed : { ok:true, accountId:'acc_'+'b'.repeat(24), accepted:true, noticeVersion:1 }) : { ok:false, status:503 } });
+  await client.restore();
+  await assert.rejects(client.cloudAgentConsent(), error => error.code === 'account-protocol');
+  defer = true;
+  const pending = client.cloudAgentConsent();
+  await client.logout();
+  release({ ok:true, accountId:account.id, accepted:true, noticeVersion:1 });
+  await assert.rejects(pending, error => error.code === 'credential-revoked');
+});

@@ -13,6 +13,7 @@ import { getScript } from "../script";
 import { mediaCardUrl } from "../mediaRef";
 import { cloudAgentVersion, resolveCloudAgent, subscribeCloudAgent, type CloudAgentAvailability } from "./endpoint";
 import { cloudIdentityVersion, subscribeCloudIdentity } from "./identity";
+import { cloudConsentState, requireCloudConsent, subscribeCloudConsent } from "./consent";
 import { CloudError, cloudErrorText, createCloudApi, type CloudApi } from "./cloudApi";
 import { createCloudSession, type CloudSession, type CloudSessionView } from "./session";
 import { titleOf } from "./events";
@@ -33,6 +34,7 @@ export interface CloudAgentState extends CloudAgentAvailability {
   projectId: string | null;
   /** 身份接口位被(重新)注入的次数:身份晚于「云端可用」才就绪时,据此重新取一次 */
   identityVersion: number;
+  accountMode: boolean;
 }
 
 export function useCloudAgent(): CloudAgentState {
@@ -41,10 +43,12 @@ export function useCloudAgent(): CloudAgentState {
   const identityVersion = useSyncExternalStore(subscribeCloudIdentity, cloudIdentityVersion, cloudIdentityVersion);
   const projectId = shared?.projectId ?? (ONLINE_BUILD ? currentDocProjectId() || null : null);
   const where = shared?.where === "hosted";
+  const accountMode = ONLINE_BUILD || Boolean(shared?.accountId);
   return useMemo(
-    () => ({ ...resolveCloudAgent({ projectId, hostedWhere: where || ONLINE_BUILD, online: ONLINE_BUILD }), projectId, identityVersion }),
+    () => ({ ...resolveCloudAgent({ projectId, hostedWhere: where || ONLINE_BUILD, online: ONLINE_BUILD }), projectId, identityVersion,
+      accountMode }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectId, where, ver, identityVersion],
+    [projectId, where, ver, identityVersion, accountMode],
   );
 }
 
@@ -141,7 +145,8 @@ export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudD
   const [items, setItems] = useState<CloudChatItem[]>([]);
   const [running, setRunning] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const key = cloud.available && cloud.url && cloud.projectId ? `${cloud.projectId}|${cloud.url}|${cloud.identityVersion}` : "";
+  const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
+  const key = cloud.available && cloud.url && cloud.projectId && (!cloud.accountMode || consent.accepted === true) ? `${cloud.projectId}|${cloud.url}|${cloud.identityVersion}` : "";
   const keyRef = useRef(key);
   keyRef.current = key;
 
@@ -208,8 +213,10 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const store = useMemo(() => getChatStore(`cloud:${tabId}`), [tabId]);
   const messages = useChatMessages(store);
   const api = useCloudApi(cloud.url);
+  const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
   const projectId = cloud.projectId ?? "";
-  const key = enabled && cloud.available && cloud.url && projectId ? `${projectId}|${cloud.url}|${tabId}|${cloud.identityVersion}` : "";
+  const key = enabled && cloud.available && cloud.url && projectId && (!cloud.accountMode || consent.accepted === true)
+    ? `${projectId}|${cloud.url}|${tabId}|${cloud.identityVersion}` : "";
 
   const [info, setInfo] = useState<CloudInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -229,6 +236,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     if (!key) {
       sessionRef.current?.close();
       sessionRef.current = null;
+      if (cloud.accountMode) { store.set([]); setInfo(null); setHistItems([]); }
       return;
     }
     let dead = false;
@@ -312,8 +320,13 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   }, [projectId, messages]);
 
   const send = useCallback(async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
+    if (!text.trim()) return false;
+    if (cloud.accountMode) {
+      try { await requireCloudConsent(); }
+      catch (err) { setNotice(err instanceof Error ? err.message : cloudErrorText("network")); return false; }
+    }
     const s = sessionRef.current;
-    if (!s || !text.trim()) return false;
+    if (!s || !key) return false;
     setNotice(null);
     const sent = (files ?? []).filter((a) => !!a.url);
     const body: CloudSendBody = {
@@ -332,9 +345,13 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       return false;
     }
-  }, [tabId, model]);
+  }, [tabId, model, cloud.accountMode, key]);
 
-  const attach = useCallback((file: File, signal?: AbortSignal): Promise<CloudAttachmentInfo> => api.attach(convRef.current, file, file.name, signal), [api]);
+  const attach = useCallback(async (file: File, signal?: AbortSignal): Promise<CloudAttachmentInfo> => {
+    if (cloud.accountMode) await requireCloudConsent();
+    if (!key) throw new CloudError("unavailable", "云端 Agent 暂时不可用。");
+    return api.attach(convRef.current, file, file.name, signal);
+  }, [api, cloud.accountMode, key]);
 
   const abort = useCallback(async () => {
     try {

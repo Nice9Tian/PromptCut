@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import "./AiPanel.css";
 import "./CloudAiPanel.css";
 // 公式样式表:LiveMarkdown 用 KaTeX 渲染数学
@@ -25,6 +25,8 @@ import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { ReportDialog } from "./ReportDialog";
 import { cloudConversationReport } from "../../ai/cloud/report";
 import { CODE_VERSION } from "../../online/buildInfo";
+import { acceptCloudConsent, cloudConsentState, refreshCloudConsent, subscribeCloudConsent } from "../../ai/cloud/consent";
+import { CloudAgentConsentDialog } from "./CloudAgentConsentDialog";
 
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
@@ -59,6 +61,31 @@ export function CloudAiPanel(props: {
   const tabId = props.tabId ?? MAIN_TAB;
   const active = props.active ?? true;
   const { cloud, desktop } = props;
+  const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!cloud.accountMode || !cloud.available || !cloud.projectId || !consent.accountId) return;
+    let dead = false;
+    void refreshCloudConsent().then(accepted => { if (!dead && !accepted) setConsentOpen(true); },
+      error => { if (!dead) setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。"); });
+    return () => { dead = true; };
+    // A new account/project binding gets a fresh server result; rejecting does not trigger a loop.
+  }, [cloud.accountMode, cloud.available, cloud.projectId, consent.accountId]);
+  const consentForUse = async () => {
+    if (!cloud.accountMode) return true;
+    try {
+      const accepted = await refreshCloudConsent();
+      if (!accepted) { setConsentError(null); setConsentOpen(true); }
+      return accepted;
+    } catch (error) {
+      setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。");
+      setConsentOpen(true);
+      return false;
+    }
+  };
+  const acceptConsent = () => { void acceptCloudConsent().then(() => { setConsentError(null); setConsentOpen(false); },
+    error => setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。")); };
   const chat = useCloudChat({ tabId, cloud, enabled: true, autoAttach: true, initialConversation: props.initialConversation });
   const { view } = chat;
   const qKey = `cloud:${tabId}`;
@@ -142,9 +169,10 @@ export function CloudAiPanel(props: {
     return ok;
   };
 
-  const handleSend = (text: string) => {
+  const handleSend = async (text: string) => {
     if (!text.trim() && attachments.length === 0) return;
     if (off) return;
+    if (!await consentForUse()) return;
     // 还在上传或上传失败的附件这次先不带上,但发送本身不被挡住
     const { usable, skipped } = pickSendable(attachments, chat.conversationId);
     if (!text.trim()) {
@@ -156,19 +184,27 @@ export function CloudAiPanel(props: {
     if (busy()) {
       enqueue(qKey, { text: text.trim(), ...(usable.length ? { attachments: usable } : {}) });
     } else {
-      void sendNow(text.trim(), usable);
+      if (!await sendNow(text.trim(), usable)) return;
     }
-    setInputText("");
-    setAttachments([]);
+    setInputText(previous => previous === text ? "" : previous);
+    setAttachments(previous => previous === attachments ? [] : previous);
   };
 
   // 一轮结束:空闲且没暂停就发队首
+  const flushingRef = useRef(false);
   useEffect(() => {
     if (view.streaming || echoWait.current || off) return;
     if (queue.paused || queue.items.length === 0) return;
+    if (flushingRef.current) return;
     const head = queue.items[0];
-    removeQueued(qKey, head.id);
-    void sendNow(head.text, head.attachments);
+    flushingRef.current = true;
+    void (async () => {
+      try {
+        if (!await consentForUse()) { setQueuePaused(qKey, true); return; }
+        if (await sendNow(head.text, head.attachments)) removeQueued(qKey, head.id);
+        else setQueuePaused(qKey, true);
+      } finally { flushingRef.current = false; }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.streaming, queue.items, queue.paused, off]);
 
@@ -177,13 +213,14 @@ export function CloudAiPanel(props: {
     void chat.abort();
   };
   const insertQueued = async (item: QueuedItem) => {
-    removeQueued(qKey, item.id);
+    if (!await consentForUse()) return;
     if (view.streaming) {
       await chat.abort();
       // 停止要等服务端收尾的事件回来
       for (let i = 0; i < 40 && chat.store.get().some((m) => m.pending); i++) await new Promise((r) => setTimeout(r, 100));
     }
-    void sendNow(item.text, item.attachments);
+    if (await sendNow(item.text, item.attachments)) removeQueued(qKey, item.id);
+    else setQueuePaused(qKey, true);
   };
   const editQueued = (item: QueuedItem) => {
     removeQueued(qKey, item.id);
@@ -212,23 +249,28 @@ export function CloudAiPanel(props: {
       },
     );
   };
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (files.length === 0 || off) return;
+    const admitted = await consentForUse();
     for (const file of files) {
       const id = newCloudAttachId();
       retryFilesRef.current.set(id, file);
-      // 先把占位卡片插进去,这一步之前不许有任何 await,输入区一秒都不能卡
-      setAttachments((prev) => [...prev, { id, url: "", name: file.name, kind: cloudAttachKindOfName(file.name), bytes: file.size, srcPath: null, conversationId: chat.conversationId, status: "importing" as const }]);
-      runUpload(id, file);
+      setAttachments((prev) => [...prev, { id, url: "", name: file.name, kind: cloudAttachKindOfName(file.name), bytes: file.size,
+        srcPath: null, conversationId: chat.conversationId, status: admitted ? "importing" as const : "error" as const,
+        ...(!admitted ? { error: "请先确认云端 Agent 告知，再重试上传。" } : {}) }]);
+      if (admitted) runUpload(id, file);
     }
   };
   const retryAttachment = (id: string) => {
     const file = retryFilesRef.current.get(id);
     if (!file) return;
-    setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "importing" as const, error: undefined, conversationId: chat.conversationId } : a)));
-    runUpload(id, file);
+    void consentForUse().then(admitted => {
+      if (!admitted) return;
+      setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, status: "importing" as const, error: undefined, conversationId: chat.conversationId } : a)));
+      runUpload(id, file);
+    });
   };
   const removeAttachment = (idx: number) => {
     setAttachments((prev) => {
@@ -302,6 +344,8 @@ export function CloudAiPanel(props: {
 
   return (
     <aside className="panel panel-right ai-panel pc-cloud-panel" data-pc="cloud-ai-panel" data-inactive={active ? undefined : "1"} aria-hidden={active ? undefined : true}>
+      <CloudAgentConsentDialog open={active && consentOpen && cloud.accountMode} pending={consent.pending} error={consentError}
+        onAccept={acceptConsent} onReject={() => { setConsentError(null); setConsentOpen(false); }} />
       <ChatHeader
         title={tabTitle}
         mcpConnected={view.connection === "live"}

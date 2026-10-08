@@ -38,6 +38,7 @@ import { cacheCollabSecrets } from "./collabSecrets";
 import { applyHostedChange, HOSTED_SERVICE_TEXT, parseHosted, type HostedServiceName, type HostedView } from "./hostedServices";
 import { clearHostedAgent, setHostedAgent, setHostedAgentEnabled } from "../../ai/cloud/endpoint";
 import { CloudDelegationError, setCloudIdentity, type CloudIdentity } from "../../ai/cloud/identity";
+import { setCloudConsentSource } from "../../ai/cloud/consent";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
@@ -557,7 +558,8 @@ export function pageOpIdsSince(mark: number | null): string[] {
   return cur.link.ds.opIdsSince(mark);
 }
 
-function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string, account = false) {
+function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string, accountClient: CloudAccountClient | null = null) {
+  const account = accountClient !== null;
   const prev = cur;
   if (prev) {
     for (const off of prev.offs) off();
@@ -586,6 +588,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   cur = { link, kind, docProjectId, url, unbind, offs };
   // 云端 Agent 的身份跟着共享项目的连接走:接上就绪,回本机空间撤掉(界面据此重取一次 info 与对话列表)
   setCloudIdentity(kind === "shared" && !account ? cloudIdentityOf(link) : null);
+  setCloudConsentSource(kind === "shared" && accountClient ? { client: accountClient, accountId: accountClient.account?.id ?? "" } : null);
   if (kind !== "shared") clearHostedAgent();
   if (kind === "shared" && !ONLINE_BUILD && !ONLINE) {
     const descriptor = currentAssociation();
@@ -619,6 +622,7 @@ function detach() {
   const prev = cur;
   cur = null;
   setCloudIdentity(null);
+  setCloudConsentSource(null);
   clearHostedAgent();
   setPresenceLink(null, null, "");
   if (prev) {
@@ -1086,7 +1090,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   let ready = false;
   let resolveEntry!: () => void, rejectEntry!: (error: unknown) => void;
   const opened = new Promise<void>((resolve, reject) => { resolveEntry = resolve; rejectEntry = reject; });
-  const fail = (error: unknown) => { stopped = true; link.stop(); if (!ready) rejectEntry(error);
+  const fail = (error: unknown) => { stopped = true; link.stop(); if (cur?.link === link) setCloudConsentSource(null); if (!ready) rejectEntry(error);
     else { disconnectSharedAssets(); pushToast(error instanceof Error ? error.message : '云端登录已失效，请重新登录。', 'warn', Infinity); } };
   const link = new SyncLink({ url, projectId: options.projectId, initial: options.initial, initialize: false, session,
     protocols, resumeProtocols: async () => { await renew(); return accountConnectionProtocols(current); },
@@ -1101,7 +1105,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       recoveryCoordinator.cancel(); releaseHolding(); setAssociation(null); clearSharedResume();
       patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
         username: account.name, accountId: account.id, creator: false }, members: [], hosted: null, blocked: null, association: null, reopenState: null });
-      bind(link, 'shared', options.projectId, url, true);
+      bind(link, 'shared', options.projectId, url, options.client);
       await connectSharedAssets(link, base, { online: ONLINE_BUILD || ONLINE, account: { base: `${origin}/media/api/asset`, projectId: options.projectId, ticket } });
       link.send({ type: 'events.list' });
       ready = true; resolveEntry();
