@@ -84,6 +84,7 @@ export async function createAssetResourceLease({ context = {}, check, subscribe,
   const assert = async () => {
     if (released || controller.signal.aborted) throw assetAccessError('access-revoked');
     while (paused) await rechecks;
+    if (released || controller.signal.aborted) throw assetAccessError('access-revoked');
     await check();
     while (paused) await rechecks;
     if (released || controller.signal.aborted) throw assetAccessError('access-revoked');
