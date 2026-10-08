@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runAccountDualUserPath } from '../../scripts/probes/account-dual-user-path-probe.mjs';
+import { runAccountDualUserPath } from './fixtures/account-dual-user-path.mjs';
 
 test('真实双账号网站列表与文档创建/加入/会话经独立素材追头开放', { timeout: 90_000 }, async t => {
   let staticCalls = 0;
