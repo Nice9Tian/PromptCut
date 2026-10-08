@@ -166,4 +166,14 @@ main产品合d948acb3已push；首次文档stage含已gitmv删除的旧报告路
 
 完成公网worktree018-account-public-path先push冻结2d2fcd11，再核mainancestor、clean/未跟踪0/ignored0/reparse0，git worktree remove及本机branch-d，无force、远端分支保留；根结果TEMP pc-public-path-cleanup-20261009.json。累计49=PC35+VH14，当前在用3，旧六个与非本任务目录未动。Sol新的浏览器夹具还在只读拟边界，未空建新工作区。
 
+## 独占进程组关闭实验与告知收回前验证
+
+固定Astra源码d08e8389、报告bd760d25、脚本SHA256 5740633a639180c297047d11b2a5b74f80eda97504a9adfe1438c2b69ccaf95e：root实际节点单次exit0，probe2442ms，节点外包装2.58秒。350ms原父birthgone、原子birthlive、真实文件FD仍持有、固定scope events populated=1；2349ms原父子birthgone、同固定FD populated=0、双EOF与close。服务身份和独占slice身份分别记录，scope始终同InvocationID/dev/ino且ACTIVE，外部观察器不在scope中。closure-result.json先完成文件与目录fsync后才stop自有slice一次；最终slice inactive、6540–6549 listeners=[]。生产account274484/doc274497/asset273011/nginx9395前后完全一致、NRestarts均0；未改生产unit、未挂publisher/G。原886 ENODEV与f8启动前误拒仍保留，未改判或同源重跑。
+
+原始root包装与输出：TEMP pc-root-cgroup-slice-bd760d25-once.py/.log，VM /var/tmp/pc-root-cgroup-slice-bd760d25/once-output/{closure-result.json,result.json}及root-result.json。官方v249 unit_is_pristine允许synthetic LOADED slice、StartTransientUnit再次原子检查；systemctl把无Job显示为空。Root独立核官方unit.c、dbus-manager.c、systemctl-show.c，不能以路径ENOENT或service inactive代替关闭证据。下一步是显式v2双scope协议设计；当前不声称生产登记、TLS/G checkpoint或Agent runner可用。
+
+首次告知原dcfbb72d实际Windows PowerShell SCRIPT由root从固定Git源码提取，在自己TMP目录运行，与真实VH main1b3b的RAM SQLite/TLS后台通信：16/16通过，含实际DPAPI登录、精确GET/POST同意、后台持久读取、七种越界请求在HTTP发出前拒绝、实际注销后Bearer401、自己的6388监听关闭。只运行实际SCRIPT，不称Rust IPC或桌面界面已验；密码、票据与TLS私钥均不输出。TEMP pc-consent-native-script-dcfbb72d.mjs和同名目录/result.json；Git源码SHA256 83d186dc1bbdfe538b44cc6b06ea5c1c70c759686fad21661e86f35ef846e2a5。Root随后审出许可竞态，旧GET被新查询取代时可能借显示缓存许可，交Sol在原分支补反例、修正，未提前合main。
+
+下一用户可见小阶段选择真实发送→持久排队→双方看到发送者与位置。新建018-cloud-queue-user-path/codex同名分支从main5fe070d6，租6520–6539；Sol先定接口，告知阶段收回后再同步main做产品。普通档历史夹具的旧菜单失配与真正缺渲染票据桥分开，不能只改选择器就称整套通过；root未给旧host或模拟ready放行。当前在用4个工作区，累计清理仍49。
+
 独占slice候选f8fb7f75第一实际运行首段失败：wall28ms、probe-unit-exists、未造输出dir/监听/worker/active slice，生产4PID均不变。真实249 systemctlshow未知合法slice自动合成loaded/inactive/dead、Transientno、FragmentPath/SourcePath/ControlGroup/InvocationID均空，不能拿service not-found判据直接套slice；原stdout节点/var/tmp/pc-root-cgroup-slice-f8fb7f75/once.log和TEMP pc-root-cgroup-slice-f8fb7f75-once.log保留。交Astra按pristine加载区分真占用，未直接放宽任何已active/有配置unit、未重复原码跑；OS机制仍待真正实验。
