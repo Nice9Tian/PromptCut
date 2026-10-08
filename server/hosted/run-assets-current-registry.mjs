@@ -181,6 +181,10 @@ function rootUnlocked(filename) {
   // acquire the lock immediately; callers must recheck at the final gate.
 }
 
+/** Shared root-owned file primitives for the explicit v2 reader. Existing v1
+ * callers and their interpretation remain unchanged. */
+export { rootFile as readRootAssetEvidenceFile, rootUnlocked as assertRootAssetPublisherUnlocked };
+
 /** Read a complete root-owned publication. This never advances doc state. */
 export function readRootRunAssetCandidate({ registryFile, anchorFile, reservationFile,
   publisherLockFile, expected } = {}) {

@@ -19,6 +19,7 @@ import { createAssetRunClient } from './asset-run-client.mjs';
 import { createAssetRunConsumer, createAssetRunAccess } from './asset-run-access.mjs';
 import { createRunAssetHeadClient } from './run-assets-head-client.mjs';
 import { readRootAssetReservation } from './run-assets-current-registry.mjs';
+import { readRootAssetReservationV2 } from './run-assets-current-registry-v2.mjs';
 import { createAssetObserverChannels } from './run-assets-observer-binding.mjs';
 
 const send = (res, status, value) => { if (res.destroyed || res.headersSent) return; res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); res.end(JSON.stringify(value)); };
@@ -36,11 +37,16 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
       typeof runAssets.resolveAgentTransport !== 'function' ||
       ![runAssets.timeoutMs, runAssets.maxResponseBytes, runAssets.maxBodyBytes].every(value => Number.isSafeInteger(value) && value > 0)))
     throw accountError(503, 'asset-run-configuration');
+  if (runAssets?.rootProtocol != null && !['v1', 'v2'].includes(runAssets.rootProtocol))
+    throw accountError(503, 'asset-root-protocol-unsupported');
+  if (runAssets?.rootProtocol === 'v2' && !runAssets.rootReservationFile)
+    throw accountError(503, 'asset-root-v2-reservation-required');
   registerTsResolve();
   const [asset, media, shots] = await Promise.all([import('../asset-service.ts'), import('../vite-plugin-media.ts'), import('../asset-store/shots-thumb.mjs')]);
   const root = path.resolve(dataDir), assetsDir = path.join(root, 'assets-v2'); await fsp.mkdir(assetsDir, { recursive: true });
-  const rootReservation = runAssets?.rootReservationFile ? readRootAssetReservation({
-    reservationFile: runAssets.rootReservationFile, expected: runAssets.rootExpected }) : null;
+  const rootReservation = runAssets?.rootReservationFile ? (runAssets.rootProtocol === 'v2'
+    ? readRootAssetReservationV2({ reservationFile: runAssets.rootReservationFile, expected: runAssets.rootExpected })
+    : readRootAssetReservation({ reservationFile: runAssets.rootReservationFile, expected: runAssets.rootExpected })) : null;
   const observerChannels = rootReservation ? createAssetObserverChannels({ docFingerprint256 }) : null;
   const runClient = runAssets ? createAssetRunClient({ origin: doc.origin, tls: doc.tls,
     serverFingerprint256: doc.serverFingerprint256, timeoutMs: runAssets.timeoutMs,
