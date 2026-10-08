@@ -139,3 +139,11 @@ async function withFixture(runOwnedPageChecks) {
 ```
 
 调用方不得把短链的 `keepOpen` 结果作为生产 token/pin 配置持久化；该返回的 CA/leaf 与账号都只属于当前临时 fixture。`keepOpen` 分支本轮未独立执行，须由后续真实页面/壳验证记录结果和实际 close。
+
+## 页面所需隔离入口补齐
+
+6388 原先只做 HTTP 转发，不能把在线编辑器的 `wss://<同源>/hosted/` 接到文档服务。现 fixture 对 `/hosted` upgrade 逐字转发原 `Origin`、完整 `Sec-WebSocket-Protocol` 与其它原始请求头，只把公网路径映到 doc 实际 `/`；账号短期票据既不解析、也不记录。当前 doc 的账号 HTTP handler 实际匹配 `/hosted/shared/account/*`，故 6388 对该族 HTTP 保留原路径，其余 `/hosted/*` 映到 doc 根路径。`/media/api/asset/*` 映到独立 asset 的 `/api/asset/*`，只在素材分支剥网站 Cookie；其它未知 `/api/*`／`/media/*` 明确 404。非 API 才交调用方的 `publicHandler(req,res)`，返回 `false` 且未写响应时为 404，抛异常时为 500；实际账号/doc/asset 的 503 原样转发，不由页面 handler 兜底。
+
+fixture 的真实 WebSocket 用已经安装的标准 `ws` 客户端，从同源 WSS 携本次真 `connectionTicket` 与 `Origin` 建连，要求 `promptcut.v1` 子协议回显并用 `project.open` 得当前项目 rev1；关闭帧／socket 完成后才结束。测试另注入 `/editor` 的最小 `publicHandler` 并断言只有这一条非 API 请求触发它。`startAccountDualUserFixture` 保持同一入口，可让 PC owner 注入已构建的在线编辑器与 VH held site 静态响应；返回新增 `assetPid`，其 `close()` 等所有自有连接与子进程关闭并返回 `{closed,childClosed,assetPid,ports}`。页面探针仍须实测自己的浏览器/壳与舞台 6341/42，不能把此标准 WS 夹具当 UI 已验。
+
+另独立改 `server/hosted/deploy/nginx-site-promptcut.conf` 的窄生产模板：只让 `/hosted/shared/account/(create|join|session)` HTTP 原路径到 doc，其它 `/hosted` 仍按现有方式 rewrite（WebSocket `/hosted/` 仍去前缀）；`/media` 只加 `proxy_set_header Cookie ""`，真实素材票据仍由 asset 服务核。未改节点、生成脚本或其它模板，模板真实部署需 root 验证。
