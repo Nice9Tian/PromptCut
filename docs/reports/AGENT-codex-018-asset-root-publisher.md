@@ -155,3 +155,38 @@ root唯一实际运行固定886cd6b5（脚本SHA256 4a7f957074cb66da8b0b63d8ed80
 wall2283ms，okfalse，negativeObserved=true，emptyObserved=false。244ms旧FD读populated1，主子都在；268ms mainBirthGone=true，child仍持真实FD/TCP且populated1，负例成立；2261ms childEOF/close但birth仍在/populated1；2273ms两个birthgone，固定旧events FD读ENODEV，未读到populated0。唯一stop次数1且exit0，unitinactive/MainPID0、bothEOF/close真，6540–6549已清空。root独立核实际生产account274484/doc274497/asset273011/nginx9395的PID与NRestarts0均未变。
 
 结论是**旧cgroup空对象取证失败**，不是可接受关闭。没有以PID消失、EOF或ENODEV代替empty，也不重复同一smoke。原纯模型/CLI验证不覆盖此内核行为。下一机制必须可靠保留空对象到root读取，再准许其移除；尚未改producer、G或节点。
+
+## 首红后的三级解法表：保留真实空容器到取证完成
+
+本节是机制提案，尚未实施或节点验证。修改前：将服务自身会被systemd自动回收的叶cgroup作为closure scope。拟修改后：root显式启动并保持一个只容纳该服务的独占slice，以该真实祖先cgroup作为closure scope；仍另存服务自己的准确cgroup路径、MainPID/birth及unit invocation，不能把两者混称同一对象。不改变用户功能或关闭标准，不修改Delegate权限，不影响独立账号成果。
+
+| 候选（均为三级） | 证据与判断 | 状态 |
+| --- | --- | --- |
+| 原服务叶固定FD，缩短轮询间隔 | 真实886首红在pop1之后直接ENODEV；加密采样仍与systemd删除竞赛，不能保证对象保留 | 排除，不重跑 |
+| RemainAfterExit=yes保留服务 | systemd v249 service.c:1000–1003在SERVICE_EXITED显式unit_prune_cgroup；active/exited本身并不保留叶对象 | 排除，不试验 |
+| 同一被观测组内放保活helper或ExecStopPost | helper仍属递归populated集合，活着就不能观察真实空；减去helper不是内核empty证明 | 排除 |
+| root持久管理独占ACTIVE slice，服务为其唯一子树 | v249 slice_start建立cgroup并置ACTIVE；slice_stop才置DEAD。ACTIVE不会被unit_may_gc卸载，StopWhenUnneeded=no不会因子服务停止而自动stop。内核populated递归覆盖全部子孙 | 最小候选，须独立真实OS验证 |
+| root另行管理工作负载cgroup并迁移进程 | 可另设计生命周期，但涉及进程迁移、控制器与systemd归属交叉，影响大于普通Slice=配置；当前不实施 | 保留后备，未证明 |
+
+原首红与systemd249删除路径一致：unit.c的unit_notify在inactive/failed时调用unit_prune_cgroup；cgroup.c:2399–2429调用cg_trim_everywhere并释放对象。固定打开FD不等于阻止cgroup离线。没有内核trace，因此这里不冒称定位到本次删除syscall的确切执行时刻。
+
+依据仅取官方固定版本源码与内核文档：
+
+- [systemd v249 service.c](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/service.c)：SERVICE_EXITED亦主动prune。
+- [systemd v249 cgroup.c](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/cgroup.c)：unit_prune_cgroup及递归trim。
+- [systemd v249 unit.c](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/unit.c)：unit_may_gc（343起）拒收ACTIVE；unit_is_unneeded（1878起）先检查stop_when_unneeded；inactive通知（2437起）prune。
+- [systemd v249 slice.c](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/slice.c)：slice_start（204起）与slice_stop（222起）；没有以cgroup空通知自动停止slice的处理器。
+- [Linux cgroup v2文档](https://docs.kernel.org/admin-guide/cgroup-v2.html#un-populated-notification)：populated=0表示自身及全部后代没有live process，状态递归传播；并不需要保留已被删除的服务叶才能读取祖先的真实空状态。
+
+最小可验证方案只修改已有OS smoke文件（须root裁定下一步后实现），不新增文件、不改publisher/G格式或现有生产unit：
+
+1. 独立随机slice名与service名，两者首次not-found；root显式启动slice，核ACTIVE、StopWhenUnneeded=no、精确ControlGroup及InvocationID。采用不带连字符的随机slice主体避免名字隐含额外slice层级，路径仍从systemd读取而非推测。
+2. 真实service仅增加普通Slice=归属；Restart=no/KillMode=control-group/Delegate=no均不变。root观察者仍在外，slice中不放sentinel/观察者/stop helper，也不放生产服务。
+3. root核service的Slice、ControlGroup与/proc真实父子归属，确认service路径是slice路径的严格后代、无其它已知unit/进程混入；固定打开slice目录和events FD并记录boot/dev/ino，与服务自己的tuple分别保存。独占外锁覆盖创建、停止、取证与销毁，禁止该段时间再次启动服务。
+4. 和首轮一样只发一次service stop，保留main先退出、child延迟2秒仍持真实文件/TCP的负例。此次须从同一个已固定slice events FD看到pop1负例，之后看到pop0；还须原父子birth消失、真实双EOF/close和service inactive/MainPID0。slice必须仍ACTIVE且同一InvocationID/dev/ino，没有换FD或新建路径代替旧对象。
+5. root将上述实际结果文件fsync并对目录fsync完成，才允许显式stop这个自己创建的slice。若写证据失败，不能把后续清理当已签发closure；若ENODEV/ENOENT/身份变化/未观察负例则失败，保留原结果，不重跑。同组意外进程不能由probe随意终止；应失败并保留归属待root处理。
+6. 一轮仍总预算30秒、自己的service TimeoutStopSec=5；预检6540–6549空，生产PID/NRestarts前后只读核对。此方案是新增因果机制后的单轮实验，不是重复886原机制。
+
+如果真实OS实验通过，后续publisher与G必须另约显式schema：保留serviceCgroup及service unitInvocation；新增closureScope的sliceUnit/sliceInvocationId/cgroup{path,bootId,dev,ino}并绑定同epoch、authority和真实包含关系。所有root启停仍走同一互斥锁，只有真实旧scope空且证据耐久后才能预留/启动下一代。现v1 exact schema不能静默把serviceCgroup改成slice路径，更不能仅把本方案说明或服务已inactive当witness。现有跨boot不支持、marker+无锁接受协议保持，生产run-assets继续失败关闭。
+
+本轮只有报告更新和官方资料只读，无本地listener、npm/type/full、systemd或节点执行；886脚本及publisher源码均未改。实际slice可观测性、publisher互斥交叉、TLS/G checkpoint与自然掉电仍未证明。
