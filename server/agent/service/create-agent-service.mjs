@@ -33,6 +33,7 @@ import { modelReady, pickModel, publicModelInfo } from './model-config.mjs';
 import { createWorkspaces } from './workspace.mjs';
 import { createEgressGate } from './egress.mjs';
 import { createHostedTools, readHostedVoiceConfig, saveAttachment } from './hosted-tools.mjs';
+import { createAccountConversationService } from './conversation-policy.mjs';
 
 export const CONVERSATION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -170,9 +171,12 @@ export function createHostedAgentService({
   toolLimits = {},
   toolFetch = undefined,
   collect = null,
+  accountMode = false,
+  conversationClient = null,
   log = () => {},
   now = () => Date.now(),
 } = {}) {
+  if (accountMode === true) return createAccountConversationService({ conversationClient, now });
   if (typeof loadModule !== 'function') throw new TypeError('createHostedAgentService: 要 loadModule');
   if (typeof docUrl !== 'string' || !/^wss?:\/\//.test(docUrl)) throw new TypeError('createHostedAgentService: docUrl 要是 ws(s):// 地址');
   if (!credentials || typeof credentials.protocolsFor !== 'function') throw new TypeError('createHostedAgentService: 要 credentials.protocolsFor');
