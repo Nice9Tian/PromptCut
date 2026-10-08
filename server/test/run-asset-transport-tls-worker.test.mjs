@@ -153,6 +153,7 @@ test('same Agent RAM key signs actual doc issue and asset bytes on their distinc
     });
     asset.on('secureConnection', socket => { liveAsset.add(socket); socket.once('close', () => liveAsset.delete(socket)); });
     const assetPort = await listen(asset);
+    t.diagnostic(`owned-pid=${process.pid}; doc-port=${docPort}; asset-port=${assetPort}`);
     runClient = createRunClient({ origin: `https://127.0.0.1:${docPort}/`, tls: pki.asset,
       serverFingerprint256: pki.doc.fingerprint256 });
     const instance = await runClient.registerInstance();
