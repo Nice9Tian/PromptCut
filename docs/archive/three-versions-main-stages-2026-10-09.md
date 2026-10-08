@@ -211,3 +211,17 @@ Luna源码7ae88cb6仅改server/hosted/deploy/nginx-site-promptcut-stages.conf的
 Root offline --locked Rust构建430d exit0/wall22.766s、配置及identifier只在TMP，未安装依赖或覆盖用户应用。实际exe SHA256 f10bef55a968f7ee9afdfb6abd4c9b60d1e38fd252526dc3839a6a143a259457；五个Rust源文件与最终集成字节一致。真实原生IPC 28/28、completed=true、9124ms、nativeRetries=0：真实VH/doc/独立asset TLS临时夹具，创建者fresh session及开启请求pending-services、过时revision409、成员403、无token/body/未知路径拒、恢复登录、退出及旧凭据401、同origin Agent webview桥接拒绝。TMP pc-queue-native-build-430dcd68/result.json和pc-queue-native-ipc-430dcd68/result.json，9个自有壳后代及asset37464均已close；6340/6348/6378/6381–6385/6388/6526监听清零。原生用隔离空页面，不能称真实完整对话桌面UI或公网验证。
 
 界面诚实显示executorMounted=false和“等待执行服务”；真实模型/runner未挂载、未部署Agent。共有切私有的跨服务立即关闭ACK仍缺真实control来源，fresh RPC/250ms轮询不充这一承诺，保持独立待做。此次源代码没有新增自动删历史、渲染调度策略或删除语义裁定。
+
+## 素材根登记生成的小阶段与真实两代验证
+
+根固定候选252f655619406b1002e9b9083421f08125b16833：强制类型检查exit0、wall7.422s；专属npm目标73/73、0失败/取消/跳过、211.2615ms；全量5401项、5397通过、0失败/取消、4跳过、71200.9431ms（wall71.547s）。所有命令使用同一提交，运行前后clean，npm原生自动重跑0。TEMP pc-publisher-root-252f6556-gates-{type,target,full}.log与.result.json保留。本次只验用户规定的小阶段三门，未把整套发版验收设为合入门槛。
+
+实际Linux前两次失败原样保留：第一次固定producer/worker1df77168，492ms、publisher-unit-slice-mismatch，root初始固定unit显式Slice=system.slice与新drop-in不匹配，未发布任何epoch；第二次只去掉该准备项、源码不变，2378ms、probe-real-rotation-negative-or-close-missing和6541残留。第二轮确实发布两代，doc第一代7项过；子进程once信号监听过早移除，负例持资源窗口未观察到，doc第二代未执行。两个实验的服务/隔离scope均由root核完整身份后实际停止；空对象证据先fsync再释放，仅准确备份并移除自有unit/drop-in，失败、锁、登记及数据库均保留。生产四服务PID/NRestarts未变；没有用后轮覆盖前轮。
+
+第三次有因单轮保持producer/schema/OS probe1df77168与reader63bfc0fa，仅从7f827875导出修正worker（SHA256 8baa31ea55dce1debbd9ce4342403cc1c85b388236a576a42c3d8d26bc55cea1）。root准备新namespace851b319d789c4670、真正asset UID995/doc UID996、独立根拥有的unit/slices/TLS、6540–6549；生产挂载false。probe6563ms、root7174ms、节点外wrapper8204ms、exit0：1223ms父birthgone、子birthlive、真实文件FD仍持有、TCP未EOF/close、原固定scope事件FD populated1；3233ms父子birthgone、同固定FD populated0、双EOF/close，negativeObserved=true。producer先耐久写witness2、再释放旧scope、再发布第二代；observer其后ENODEV只作诊断，不用于推断为空。
+
+根并行编排的是实际G读端工厂与真实SQLite，不是probe自报doc通过：第一代7/7、第二代14/14，共21/21，真实doc账号显式accept、close/reopen、integrity ok/FULL synchronous；第二代还拒绝旧代回滚、v1/v2混用、缺publication、保锁、错误预配anchor，负例未修改checkpoint。probe自己的docAcceptanceVerified=false字段保留，其任务只产证据；根外部doc结果单独证明数据库检查。G中央读取与传输分支未整体收回，本小阶段只交付可信登记生成、共享格式和对应OS实验，不声称生产素材传输或Agent runner已挂。
+
+结果在TEMP pc-root-publisher-v2-7f827875-once/root.log和metadata.json，节点/run/pc-publisher-v2-851b319d789c4670/root-result.json、/var/tmp/pc-publisher-v2-851b319d789c4670/publisher-v2-result.json。成功实验实际stop自有service/scope、原父子出生关闭后，root再核inactive/PID0/两个scope空/6540–6549无监听；准确核fragment SHA及drop-in dev/ino/digest、保存两份配置后只移除对应unit/drop-in、daemon-reload。success-fixture清理记录successful-fixture-config-cleanup.json；锁与全部结果保留。生产account274484/doc274497/asset273011/nginx9395全程active、NRestarts0，前后完全相同。
+
+producer报告收回到agent-reports/AGENT-codex-018-asset-root-publisher.md。原Astra工作区安全复用为即时撤销分支；Luna原生members窄块092fbed4只收根集成，仍待真实最终Rust验证，原分支已push保留；Luna工作区复用为对话控制UI，Sol继续成员UI；本任务在用仍4个、累计物理清理仍50，不动用户旧六个及其它会话。
