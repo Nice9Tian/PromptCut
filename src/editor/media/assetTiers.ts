@@ -36,6 +36,8 @@ const ASSET_TICKET_TTL_MS = 15 * 60_000;
 export interface RemoteAssets {
   /** 远程素材服务的 API 基址,形如 `http://<ip>:<port>/api/asset` */
   base: string;
+  /** Account cache identity is project scoped even when the public base is shared. */
+  accountProjectId?: string;
   /** 取一张只读素材票据;取不到给 null(那就不带,由素材服务回 401) */
   ticket?: (() => Promise<string | null>) & { info?: (opts?: { force?: boolean }) => Promise<{ ticket: string; exp: number } | null> };
 }
@@ -162,7 +164,7 @@ async function pushRemoteToEditor(): Promise<void> {
  */
 export function setRemoteAssets(next: RemoteAssets | null): void {
   const base = next ? next.base.replace(/\/+$/, "") : null;
-  if ((remote?.base ?? null) === base) {
+  if ((remote?.base ?? null) === base && remote?.accountProjectId === next?.accountProjectId) {
     if (next && remote) remote.ticket = next.ticket;
     return;
   }
@@ -191,7 +193,7 @@ export async function askComplete(hashes: readonly string[]): Promise<Set<string
     for (let h = queue.shift(); h; h = queue.shift()) {
       let r: Response;
       try {
-        r = await fetch(`${base}/media/${h}/chunks`, { headers, cache: "no-store" });
+        r = await fetch(`${base}/media/${h}/chunks`, { headers, cache: "no-store", ...(remote?.accountProjectId ? { credentials: 'omit' as const } : {}) });
       } catch { unreachable++; continue; } // 网络错误:连不上素材服务
       answered++;
       try {
@@ -447,14 +449,14 @@ function relayAssetBase(docBase: string, fallback: string | null): string | null
  * (放本机项目由 `lanAssetBaseOf` 给);都没有、或指向本页面自己(本机就是主机)就留在本地素材服务。回挑中的基址。
  * `online`:在线浏览器模式(调用方按 `mode.ts` 的 `ONLINE` 给;本模块会被 Node 单测载入,不静态引 `mode.ts`)。
  */
-export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false, fallback = null, account }: { online?: boolean; fallback?: string | null; account?: { base: string; ticket: NonNullable<RemoteAssets['ticket']> } } = {}): Promise<string | null> {
+export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false, fallback = null, account }: { online?: boolean; fallback?: string | null; account?: { base: string; projectId: string; ticket: NonNullable<RemoteAssets['ticket']> } } = {}): Promise<string | null> {
   // Account tickets are issued by the HTTP session authority. v2 forbids the old
   // service.watch/auth.ticket protocols; keep them exclusively on the LAN branch.
   if (account) {
     discoveryGeneration++;
     if (discoveryTimer !== null) clearTimeout(discoveryTimer);
     discoveryTimer = null; sharedAssetContext = null; docLink = link;
-    setRemoteAssets({ base: account.base, ticket: account.ticket });
+    setRemoteAssets({ base: account.base, accountProjectId: account.projectId, ticket: account.ticket });
     stopUploadTarget?.();
     stopUploadTarget = startUploadTarget(link, account.base, { accountTicket: account.ticket.info });
     return account.base;

@@ -1,7 +1,7 @@
 import '../testing/registerTs.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-const { startUploadTarget, resetAssetTiersForTest } = await import('../editor/media/assetTiers.ts');
+const { startUploadTarget, resetAssetTiersForTest, setNoEditorProcess, setRemoteAssets, pollOnce, tierHashes } = await import('../editor/media/assetTiers.ts');
 
 test('account upload target renews session HTTP ticket without legacy auth.ticket and clears target on stop', async () => {
   const posted = [], timers = []; let legacyCalls = 0, issued = 0;
@@ -19,4 +19,19 @@ test('account upload target renews session HTTP ticket without legacy auth.ticke
     stop(); await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(posted.at(-1), { base: null }); assert.equal(timers.length, 0);
   } finally { stop(); resetAssetTiersForTest(); }
+});
+
+test('account same-origin asset reads omit cookies and changing project clears known same-base hashes', async () => {
+  const originalFetch = globalThis.fetch, calls = []; const hash = 'a'.repeat(64);
+  setNoEditorProcess(true);
+  globalThis.fetch = async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify({ complete: true }), { headers: { 'Content-Type': 'application/json' } }); };
+  try {
+    setRemoteAssets({ base: 'https://visuhive.com/media/api/asset', accountProjectId: 'project-a', ticket: async () => 'ticket-a' });
+    await pollOnce({ media: [{ id: 'one', name: 'fixture', kind: 'video', url: '/@media/' + hash, hash }] });
+    assert.equal(calls.at(-1).init.credentials, 'omit'); assert.ok(tierHashes().includes(hash));
+    setRemoteAssets({ base: 'https://visuhive.com/media/api/asset', accountProjectId: 'project-b', ticket: async () => 'ticket-b' });
+    assert.deepEqual(tierHashes(), []);
+    await pollOnce({ media: [{ id: 'one', name: 'fixture', kind: 'video', url: '/@media/' + hash, hash }] });
+    assert.equal(calls.at(-1).init.headers.Authorization, 'Bearer ticket-b');
+  } finally { resetAssetTiersForTest(); setNoEditorProcess(false); globalThis.fetch = originalFetch; }
 });

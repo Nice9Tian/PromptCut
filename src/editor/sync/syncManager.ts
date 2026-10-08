@@ -1102,7 +1102,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
         username: account.name, accountId: account.id, creator: false }, members: [], hosted: null, blocked: null, association: null, reopenState: null });
       bind(link, 'shared', options.projectId, url, true);
-      await connectSharedAssets(link, base, { online: ONLINE_BUILD || ONLINE, account: { base: `${origin}/media/api/asset`, ticket } });
+      await connectSharedAssets(link, base, { online: ONLINE_BUILD || ONLINE, account: { base: `${origin}/media/api/asset`, projectId: options.projectId, ticket } });
       link.send({ type: 'events.list' });
       ready = true; resolveEntry();
       const linkText = `${origin}/editor?project=${encodeURIComponent(options.projectId)}`;

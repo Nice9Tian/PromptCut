@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 
 test('native vault script parses and actual Windows DPAPI/ACL/atomic replacement roundtrips only recovery', { skip: process.platform !== 'win32' }, async () => {
   const source = await fs.readFile(new URL('../../desktop/src-tauri/src/account_vault.rs', import.meta.url), 'utf8');
-  const script = /const SCRIPT: &str = r#"([\s\S]*?)"#;/.exec(source)?.[1];
+  const script = /const SCRIPT: &str = r#"([\s\S]*?)"#;/.exec(source)?.[1]?.replace(/\r\n/g, '\n');
   assert.ok(script);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-account-vault-test-'));
   const program = String.raw`
