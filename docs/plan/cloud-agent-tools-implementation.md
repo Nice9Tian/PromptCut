@@ -4,6 +4,8 @@
 
 ## 当前真实起点和不可跨越的边界
 
+2026-10-08 增量：F0的ToolContext和ToolJobs已交模块，源码与验证范围见[工作进度](three-versions-progress.md)，不代表生产工具执行已挂载。尚缺project-assets按[素材基础实施设计](cloud-agent-project-assets-implementation.md)的A/B/唯一G及worker窄接口拆分；该设计替代下方F0“一起新建三个空模块”的派工草案，产品范围和其他工具包保留。三个〔裁-F0〕是三级技术选型，未把建议当用户新增批准。
+
 `cloud-tools.mjs` 仍将感知／工作流 15 项、浏览器 7 项和 `measure_audio_js` 共 23 项列为 `pending`。已有 Hosted 工具 20 项与 timeline 看画面的代码路径只说明复用可能；旧 Hosted 测试、桌面 Python 测试都不是账号版逐工具端到端证明。全员选区叶 `3f17b10a` 已用真实 doc 通道与模拟模型运行实际 Agent 工具路径；生产实例注册、mTLS 全链和真实模型仍须中央组合验证。`account-runner.mjs` 已有逐模型／工具 `beforeToolCall` 闸，`run-client.mjs` 有 doc mTLS run API；本计划不能以模型自报的项目、发送者、页面或票据替代 doc grant。
 
 已定范围：云端工具原则上与本机一致；仅操作发起人本人界面的能力在其离线时明确返回 offline。`spawn_agent` 在 .18、.19、.20 均固定回「云端暂不支持开子 Agent」，另由已有 owner 对齐；不列为本批可实现工具。用户卡、图卡及其外链资源正常加载，不把下文**Agent 浏览器**防内网规则套在卡片资源上。账号授权、对话共有／私有、当前轮保留、stop／Agent 关闭的优先级，沿用 doc/run authority，不由工具层创造新例外。删除权限和名额释放细节、未满五分钟提前让位、补渲故障 A/B 仍待确认，不放进本批默认行为。

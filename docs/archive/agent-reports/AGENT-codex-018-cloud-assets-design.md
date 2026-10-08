@@ -8,7 +8,7 @@
 
 ## 已交付设计
 
-[完整实施设计](../plan/cloud-agent-project-assets-implementation.md)包含真实源码接缝表、三级候选、ProjectAssets类型与成功点、逐HTTP签名、独立asset→doc再验、opaque票据绑定/期限、连续控制日志、持久intent/nonce/import/receipt、实际close与重启未知、两个功能包和唯一中央glue、产品与Linux验收矩阵。
+[完整实施设计](../../plan/cloud-agent-project-assets-implementation.md)包含真实源码接缝表、三级候选、ProjectAssets类型与成功点、逐HTTP签名、独立asset→doc再验、opaque票据绑定/期限、连续控制日志、持久intent/nonce/import/receipt、实际close与重启未知、两个功能包和唯一中央glue、产品与Linux验收矩阵。
 
 已定产品承诺保持：项目素材隔离；字节不经doc；旧人类登录撤销；已读共有当前run可retained继续；private/stop/off/delete/instance fence优先；Agent不得借creator或全局hash。未决补渲故障A/B、提前让位、删除细节/计数/释放时机未被选择；没有新默认内存数字。所有新API和文件均写明尚未存在，不把方案当已实现或用户逐项批准。
 
