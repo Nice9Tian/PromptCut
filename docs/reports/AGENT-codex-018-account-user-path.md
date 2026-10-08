@@ -107,3 +107,11 @@ root授权仅给pages probe补安全CDP元数据：真实/hosted/ WS创建、握
 root固定4adc实际在线首次4.117s，协议修复后A新建201/session200/真实101，收到session.welcome与project.open/opened，已进入编辑器并取得可见项目链接与新projectId。唯一失败为both-compiled-stage-policy-origins-used：DOM已存在两iframe，但断言当刻stageDocuments仅6341 GET。原探针先等待DOM插入后立刻断言服务器网络记录，不能保证第二次HTTP请求已到达。最窄只在该原断言前复用已有有界waitFor等待6341与6342两条真实stage GET，不伪造记录、不放宽两来源要求、不修改舞台政策/产品/超时。等待仍超时则保留同名失败，不以DOM替代网络证据。node --check/diff --check通过；本叶未启动listener/Chrome/full，真实重验仍由root安排，首次4adc结果保留。
 
 另root桌面首次0c66因隔离USERPROFILE使Puppeteer定位TMP空cache而fs.access失败，native尚未启动；root将为测试子进程显式设置现成Chrome的PUPPETEER_EXECUTABLE_PATH。这是root测试进程配置原因，本次不改getChromePath/产品、不安装Chrome，也不声称nativeIPC已有通过证据。
+
+## 隔离桌面启动stderr取证
+
+root固定4adc类型0、full5303/5299通过/0失败/4跳过、75.544s、build/online build exit0、native重跑0，原证据保留。桌面实际首次已启动Chrome，独立壳PID41184立即exit101，phase native-start、main/agent IPC未到；该PID/CDP及自有fixture/Chrome/Vite6340～6342已关闭。原probe stdio ignore未保留panic原因，不能把exit101归为账号逻辑失败。
+
+本块仅probe与报告：startNative保stdout/stdin忽略，将stderr设为pipe，进入真正main+agent configuration IPC确认之前最多留16KiB原字节；无论成功或首次失败都只写本次TMP输出的native-startup-N.stderr.log，不打印原文、不入Git、不进result正文。result只记PID/exitCode/是否IPC确认/固定panic或WebView2分类/数字os错误码/截断与文件名；没有复制任意errormessage/body。IPC确认后data监听继续排空但不保存；保存失败也标cleanup失败、exit1，不伪称取证成功。一次patch定位旧变量声明未匹配且未修改文件，按真实声明重做；node --check与diff --check通过。未启壳/listener/Chrome/full，实际stderr取证仍由root独立窗口执行。
+
+只读静态核：Tauri配置frontendDist为desktop/ui，main先用内置index.html再导航自有editor；隔离target/debug已有promptcut.exe与node.exe，未读用户app_data。lib.rs启动依赖可信端口/cloud binding、app_data/resource/log目录解析及WebView2主窗口build；主窗build失败经最终expect可panic，agent_webview.ensure失败只eprintln不直接终止。主/agent共用browser_args和用户目录约束；已有自有6340服务被识别时会跳过Node sidecar启动，不能仅因runtime资源目录不存在就断言其是本次101根因。系统WebView2/runtime可用性与具体错误要以新增实际stderr及root启动结果为准。本叶不改Rust、Tauri配置、资源、OS/环境/用户目录；Puppeteer缓存路径由root测试进程显式现成Chrome处理。
