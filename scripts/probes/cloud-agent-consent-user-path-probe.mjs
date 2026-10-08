@@ -47,6 +47,7 @@ const credentials = createCredentials({ store, now, key: randomBytes(32) });
 const handleAccount = createApp({ store, credentials, now, origins: [ORIGIN], cookieSecure: false });
 const agentRequests = [];
 const pageErrors = [];
+const missingPaths = [];
 const vite = await createViteServer({ configFile: false, root: ROOT, plugins: [react()], appType: 'custom',
   server: { middlewareMode: true, hmr: false, fs: { strict: true, deny: ['**/.git/**', '**/out/**', '**/.env*', '**/*.{pem,key,crt}'] } } });
 const server = http.createServer((req, res) => {
@@ -80,6 +81,7 @@ try {
   const pageA = await first.newPage();
   pageA.on('pageerror', error => pageErrors.push(String(error.message).slice(0, 240)));
   pageA.on('console', message => { if (message.type() === 'error') pageErrors.push(message.text().slice(0, 240)); });
+  pageA.on('response', response => { if (response.status() === 404) missingPaths.push(new URL(response.url()).pathname); });
   await pageA.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
   const registered = await pageA.evaluate(async ({ name, password }) => {
     const me = await (await fetch('/api/account/me', { credentials: 'same-origin' })).json();
@@ -140,6 +142,7 @@ try {
   if (relative.startsWith('pc-cloud-consent-') && !relative.includes(path.sep)) await fs.rm(probeDir, { recursive:true, force:true });
   results.portClosed = !await portOpen(PORT, '127.0.0.1');
   results.pageErrors = pageErrors.slice(0, 5);
+  results.missingPaths = missingPaths.slice(0, 10);
   console.log(JSON.stringify(results));
 }
 check(results.portClosed, 'owned-port-closed');
