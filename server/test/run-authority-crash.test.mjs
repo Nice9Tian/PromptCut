@@ -44,12 +44,14 @@ test('actual SQLite child process crashes preserve doc read and Agent intent wit
       assert.equal(effects.length, effectCommitted ? 1 : 0);
       const pending = f.intents.pending();
       if (['credential-event-after-commit', 'credential-retained-after-commit'].includes(cut)) {
-        const p = await f.principal(grants[0]);
-        assert.equal((await f.provider.checkAccess({ principal: p, projectId, action: 'write' })).retainedGrant.runGrantId, grants[0].runGrantId);
+        // Both doc and the original Agent died. This new OS/RAM key cannot adopt
+        // even an eligible retained run; the persisted read remains audit evidence.
+        await assert.rejects(f.principal(grants[0]), { status: 403, code: 'run-instance-mismatch' });
+        assert.ok(grants[0].readReceiptId);
       }
       if (['run-fence-after-commit', 'private-after-retained-commit', 'agent-off-on-after-commit'].includes(cut)) {
         assert.equal(grants[0].state, 'revoked');
-        await assert.rejects(f.principal(grants[0]), /run-no-longer-current|run-revoked/);
+        await assert.rejects(f.principal(grants[0]), { status: 403, code: 'run-instance-mismatch' });
       }
       if (['read-execution-after-commit', 'external-effect-after-fsync', 'read-finished-before-commit'].includes(cut)) {
         assert.equal(pending[0].state, 'execution-started');
@@ -58,7 +60,9 @@ test('actual SQLite child process crashes preserve doc read and Agent intent wit
       }
       if (['run-read-after-commit', 'read-confirmation-before-commit'].includes(cut)) {
         const before = Object.keys(f.ledger.read().runReceiptsV2);
-        await f.intents.confirm(pending[0].readIntentId, f.transport);
+        await assert.rejects(f.intents.confirm(pending[0].readIntentId, f.transport), /read-confirmation-unknown/);
+        await assert.rejects(f.provider.queryRead({ ...f.input({ ...grants[0], message: state.conversationsV2[projectId].conversation_fixture.messages[0] }),
+          readIntentId: pending[0].readIntentId }), { status: 403, code: 'run-instance-mismatch' });
         assert.deepEqual(Object.keys(f.ledger.read().runReceiptsV2), before);
       }
       // Restart itself performed zero external actions; the file must remain exact.
