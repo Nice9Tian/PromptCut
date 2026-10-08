@@ -1,7 +1,7 @@
 import '../testing/registerTs.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startUploadTarget, resetAssetTiersForTest } from '../editor/media/assetTiers.ts';
+const { startUploadTarget, resetAssetTiersForTest } = await import('../editor/media/assetTiers.ts');
 
 test('account upload target renews session HTTP ticket without legacy auth.ticket and clears target on stop', async () => {
   const posted = [], timers = []; let legacyCalls = 0, issued = 0;
