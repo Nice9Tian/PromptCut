@@ -25,3 +25,5 @@ root已追加租`src/editor/media/assetTiers.ts`账号素材分支、desktop新`
 新增client受控协议目标和Windows真实DPAPI/ACL/原子替换目标尚未执行；不会把JS/native mock当真实登录链。PC全量、桌面check/build、双账号真实browser+doc+asset路径及截图尚未执行，等待root测试窗口与真实configured中央。backend503是可见未完成状态。本块源码提交后再申请目标；不借其它候选测试数字。
 
 2026-10-09首次窄pure `npm.cmd test -- src/account/client.test.mjs src/account/desktopVault.test.mjs` 于固定`cc144c2a`：2文件级/0过/2失败/0取消跳过，447.1618ms、wall828ms，raw`%TEMP%/pc-account-user-path-target-1.log`。无业务listener；原global guards保留。client在Node24 strip-only入口因constructor parameter property失败，不是权限断言失败；改显式status/code字段。Windows真实DPAPI首次封存/解密通过，但第二次File.Replace(tmp,file,$null)由PowerShell绑定出空backup路径，真实报路径非法；改为.NET真实null `[NullString]::Value`，保持原子替换，不能删原文件后move代替。这是实际运行发现的产品bug，保留首红。PS owned child自然close，TMP目录finally清理；后续仅固定修正后同目标有因复验。
+
+同目标修后固定`7b350daa`第二次：5/5、零失败取消跳过、338.3682ms、wall608ms，raw`%TEMP%/pc-account-user-path-target-2.log`，原npm wrapper未重跑(native retry0)。4条client为受控fetch/native adapter，1条Windows真DPAPI/目录ACL/第二次原子replace只碰自建TMP，不是Tauri完整IPC/真实密码登录。没有HTTP/WS业务服务监听。官网链接已对齐实际`/account`。

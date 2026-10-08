@@ -38,7 +38,7 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
   }
   return <section className="sp-section sp-account" data-pc="account-projects">
     <div className="sp-section-head"><h2 className="sp-section-title">云端项目</h2>
-      <a className="sp-ghost-btn" href={`${origin}/`} target="_blank" rel="noopener noreferrer">官网账号与项目列表</a></div>
+      <a className="sp-ghost-btn" href={`${origin}/account`} target="_blank" rel="noopener noreferrer">官网账号与项目列表</a></div>
     {error && <div className="sp-error" role="alert" data-pc="account-error">{error}</div>}
     {!account ? <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void perform(async () => {
       if (!client.current) throw new Error('账号入口尚未就绪。');
@@ -50,7 +50,7 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
       <label>密码<input name="password" type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)} /></label>
       {online && <label className="sp-account-check"><input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />记住登录状态</label>}
       <button className="sp-primary-btn" disabled={busy}>{busy ? '正在连接…' : '登录账号'}</button>
-      <a href={`${origin}/`} target="_blank" rel="noopener noreferrer">注册账号 / 忘记密码</a>
+      <a href={`${origin}/account`} target="_blank" rel="noopener noreferrer">注册账号 / 忘记密码</a>
     </form> : <>
       <div className="sp-account-row"><span data-pc="account-name">已登录：{account.name}</span><button className="sp-ghost-btn" disabled={busy} onClick={() => void perform(async () => {
         await client.current!.logout(); setAccount(null); setLists(null);
