@@ -35,10 +35,28 @@ function environmentFile(values) {
   }).join('\n') + '\n';
 }
 const unitPath = value => `"${value.replaceAll('%', '%%').replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+// systemd 249 parses WorkingDirectory and EnvironmentFile as single rvalues,
+// without ExecStart's word extraction or C unescaping. Keep literal spaces and
+// backslashes; only % specifiers are escaped. Ambiguous suffix/quotes fail.
+export function formatUnitSinglePath(value) {
+  absolute(value, 'unit-single-path');
+  if (/[ \t]$/.test(value) || /["'\t]/.test(value)) invalid('unit-single-path');
+  return value.replaceAll('%', '%%');
+}
+// EnvironmentFile is subsequently globbed by systemd. Literal backslashes on
+// POSIX and glob metacharacters have no proved safe single-path spelling here,
+// so refuse them rather than letting an env file silently disappear.
+export function formatEnvironmentFile(value, { platform = process.platform } = {}) {
+  const grammar = platform === 'win32' ? path.win32 : path.posix;
+  if (typeof value !== 'string' || !value || !grammar.isAbsolute(value) || grammar.normalize(value) !== value ||
+      /[\r\n\0"'\t?*\[\]]/.test(value) || /[ \t]$/.test(value) ||
+      (platform !== 'win32' && value.includes('\\'))) invalid('environment-file-path');
+  return value.replaceAll('%', '%%');
+}
 function unit(role, { user, nodePath, sourceDir, entry, envFile, dataDir, privateFiles, forbiddenFiles }) {
   return `[Unit]\nDescription=PromptCut account v2 ${role}\nWants=network-online.target\nAfter=network-online.target\n\n` +
-    `[Service]\nType=simple\nUser=${user}\nGroup=${user}\nWorkingDirectory=${unitPath(sourceDir)}\n` +
-    `EnvironmentFile=${unitPath(envFile)}\nExecStart=${unitPath(nodePath)} ${unitPath(entry)}\nRestart=on-failure\nRestartSec=3s\n` +
+    `[Service]\nType=simple\nUser=${user}\nGroup=${user}\nWorkingDirectory=${formatUnitSinglePath(sourceDir)}\n` +
+    `EnvironmentFile=${formatEnvironmentFile(envFile)}\nExecStart=${unitPath(nodePath)} ${unitPath(entry)}\nRestart=on-failure\nRestartSec=3s\n` +
     `NoNewPrivileges=true\nProtectSystem=strict\nPrivateTmp=true\n` +
     `ReadWritePaths=${unitPath(dataDir)}\nReadOnlyPaths=${[sourceDir, ...privateFiles].map(unitPath).join(' ')}\n` +
     `InaccessiblePaths=${forbiddenFiles.map(unitPath).join(' ')}\n` +
