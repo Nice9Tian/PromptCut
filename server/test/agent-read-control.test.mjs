@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { openAccountLedger } from '../account/ledger.mjs';
+import { openAccountLedger, appendAccessEvent } from '../account/ledger.mjs';
+import { createAccountAuthority } from '../account/authority.mjs';
 import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT } from '../account/agent-read-control.mjs';
 import { conversationReadInState } from '../account/conversation-authority.mjs';
 import { instanceFixture } from './agent-instance-fixture.mjs';
@@ -116,4 +117,20 @@ test('same control scope has immutable payload and rollback cannot publish a pha
   await new Promise(resolve => queueMicrotask(resolve));
   assert.equal(f.ledger.read().agentReadsV1.head, head);
   assert.equal(f.frames.some(frame => frame.seq > head), false);
+});
+
+test('legacy Agent ACK cannot bypass mandatory read closure, including module loss after SQLite reopen', t => {
+  const f = setup(t);
+  const event = f.ledger.transaction(state => appendAccessEvent(state, { type: 'login-revoked', loginIds: ['login-member'] }));
+  const receipt = { receiptId: 'unproved', cursor: event.seq, complete: true, closedStreams: [], stoppedRuns: [], rejectedCredentials: [] };
+  const authority = createAccountAuthority({ ledger: f.ledger });
+  t.after(() => authority.close());
+  assert.equal(f.ledger.read().agentReadControlRequired, true);
+  assert.throws(() => authority.ackAccessEvent(event.eventId, 'agent', receipt), { code: 'agent-read-closure-required' });
+  assert.equal(authority.ackAccessEvent(event.eventId, 'asset', receipt).complete, true);
+  f.control.close();
+  const reopened = openAccountLedger({ file: f.file, authorityId: 'read-core' });
+  const absentModule = createAccountAuthority({ ledger: reopened });
+  try { assert.throws(() => absentModule.ackAccessEvent(event.eventId, 'agent', receipt), { code: 'agent-read-closure-required' }); }
+  finally { absentModule.close(); reopened.close(); }
 });

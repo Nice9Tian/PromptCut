@@ -72,6 +72,7 @@ import { readDesktopModelConfig } from './rehearsal-model.mjs';
 import { createLookClient, parseLookUrl } from './look-client.mjs';
 import { createConversationClient } from './conversation-client.mjs';
 import { createRunClient } from './run-client.mjs';
+import { createConversationControlClient } from './conversation-control-client.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -257,7 +258,7 @@ async function main() {
   const accountMode = env.PROMPTCUT_ACCOUNT_V2 === '1';
   if (env.PROMPTCUT_ACCOUNT_V2_REQUIRED === '1' && !accountMode) return fail('account-v2-required');
   if (accountMode && !/^wss:\/\//.test(docUrl)) return fail('account-v2', { detail: 'doc-url-must-be-wss' });
-  let key = null, client = null, conversationClient = null, runClient = null, wiring;
+  let key = null, client = null, conversationClient = null, runClient = null, conversationControl = null, wiring;
   if (accountMode) {
     try {
       const file = name => {
@@ -271,9 +272,13 @@ async function main() {
           ca: file('PROMPTCUT_AGENT_CA_FILE') } };
       conversationClient = createConversationClient(options);
       runClient = createRunClient(options);
+      conversationControl = createConversationControlClient({ ...options, runClient,
+        receiptFile: path.join(env.PROMPTCUT_AGENT_DATA, 'conversation-read-closures.sqlite'),
+        onDiagnostic: event => line('agent.read-control', event) });
+      conversationClient.useReadControl(conversationControl);
       wiring = createHostedWiring({ accountMode: true, conversationClient, log: line });
     } catch {
-      conversationClient?.close(); runClient?.close(); return fail('account-v2');
+      await conversationControl?.close(); conversationClient?.close(); runClient?.close(); return fail('account-v2');
     }
   } else {
     try {
@@ -312,7 +317,7 @@ async function main() {
     });
   } catch (err) {
     wiring.close();
-    client?.close(); runClient?.close();
+    await conversationControl?.close(); client?.close(); runClient?.close();
     if (err instanceof AgentConfigError) return fail(err.reason, { detail: err.message });
     throw err;
   }
@@ -322,6 +327,7 @@ async function main() {
     if (registerStopped || !runClient) return;
     try {
       const instance = await runClient.registerInstance();
+      await conversationControl?.start();
       line('agent.instance.registered', { instanceId: instance.instanceId, instanceGeneration: instance.instanceGeneration });
     } catch (error) {
       if (registerStopped) return;
@@ -341,7 +347,7 @@ async function main() {
   });
   const stop = () => {
     registerStopped = true; if (registerTimer) clearTimeout(registerTimer);
-    void started.close().then(() => { wiring.close(); client?.close(); runClient?.close(); process.exit(0); });
+    void Promise.resolve(conversationControl?.close()).then(() => started.close()).then(() => { wiring.close(); client?.close(); runClient?.close(); process.exit(0); });
     setTimeout(() => process.exit(0), 5000).unref();
   };
   process.once('SIGINT', stop);

@@ -343,5 +343,14 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     }
   }
 
-  return { handle };
+  return { async handle(req, res) {
+    const route = new URL(req.url || '/', 'http://agent.invalid').pathname.replace(/\/+$/, '') || '/';
+    const history = req.method === 'GET' && /^\/v1\/conversations(?:\/[^/]+(?:\/events)?)?$/.test(route);
+    if (service.accountMode !== true || !history) return handle(req, res);
+    if (!service.readTransports) return sendJson(res, 503, { ok: false, code: 'read-control-unavailable' }, CORS);
+    try { return await service.readTransports.run(req, res, () => handle(req, res)); }
+    catch (error) { if (!res.destroyed && !res.headersSent) return sendJson(res, error.status ?? 503,
+      { ok: false, code: error.code ?? 'read-control-unavailable' }, CORS);
+      res.destroy(); }
+  } };
 }

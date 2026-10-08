@@ -83,7 +83,8 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
   synchronize = async () => {} } = {}) {
   if (![ledger?.read, ledger?.transaction, instanceAuthority?.verifyInState, authorizeRead, checkReadInState]
     .every(value => typeof value === 'function')) fail(503, 'read-control-configuration');
-  const streams = new Map(); let stopped = false;
+  ledger.transaction(state => { state.agentReadControlRequired = true; tables(state); });
+  const streams = new Map(), waiters = new Set(); let stopped = false;
   const instance = (state, servicePrincipal, action, body) => {
     const operation = conversationControlOperations[action]; conversationControlScope(operation, body);
     if (stopped) fail(503, 'read-control-closed');
@@ -215,7 +216,7 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     return clone(control);
   }
   function acknowledge({ servicePrincipal, body }) {
-    return ledger.transaction(state => {
+    const result = ledger.transaction(state => {
       const who = instance(state, servicePrincipal, 'ack', body); nonce(state, who, body);
       const t = tables(state), control = t.controls.find(c => c.controlId === body.controlId), target = control?.targets[who.instanceId];
       if (!control || control.seq !== body.seq || control.payloadDigest !== body.payloadDigest || !target ||
@@ -227,6 +228,8 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
       if (target.receipt && canonicalJson(target.receipt) !== canonicalJson(receipt)) fail(409, 'read-control-receipt-mismatch');
       target.receipt = receipt; return clone(receipt);
     });
+    for (const wake of waiters) wake();
+    return result;
   }
   function completion({ projectId, conversationId, accessSeq } = {}) {
     const state = ledger.read(), t = tables(state);
@@ -235,6 +238,16 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     const pending = relevant.filter(c => Object.values(c.targets).some(target => !target.receipt));
     return { complete: pending.length === 0, controlIds: relevant.map(c => c.controlId), pending: pending.map(c => c.controlId) };
   }
-  return { open, closeReads, subscribe, publish, acknowledge, completion,
-    hooks: { fenceInState }, close() { stopped = true; for (const stream of [...streams.values()]) stream.close(); } };
+  function waitCompletion(scope, timeoutMs = 5000) {
+    if (completion(scope).complete) return Promise.resolve(completion(scope));
+    return new Promise((resolve, reject) => {
+      const wake = () => { const result = completion(scope); if (!result.complete && !stopped) return;
+        clearTimeout(timer); waiters.delete(wake); stopped ? reject(accountError(503, 'read-control-closed')) : resolve(result); };
+      const timer = setTimeout(() => { waiters.delete(wake); reject(accountError(503, 'read-close-pending')); }, timeoutMs);
+      waiters.add(wake); wake();
+    });
+  }
+  return { open, closeReads, subscribe, publish, acknowledge, completion, waitCompletion,
+    hooks: { fenceInState }, close() { stopped = true; for (const stream of [...streams.values()]) stream.close();
+      for (const wake of waiters) wake(); } };
 }

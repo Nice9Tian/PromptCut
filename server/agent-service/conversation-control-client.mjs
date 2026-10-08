@@ -39,7 +39,8 @@ export function createConversationControlClient({ origin, tls, serverFingerprint
         if (settled || !complete || !(socket ? socketClosed : requestClosed) || (responseSeen && !responseClosed)) return;
         settled = true; signal?.removeEventListener('abort', abortSignal); error ? reject(error) : resolve(result);
       };
-      const abort = reason => { error ??= reason; complete = true; req.destroy(); socket?.destroy(); finish(); };
+      const abort = reason => { if (frame) void transports.disconnect();
+        error ??= reason; complete = true; req.destroy(); socket?.destroy(); finish(); };
       const abortSignal = () => abort(accountError(503, 'read-control-aborted'));
       const req = https.request(new URL(path, base), { method: 'POST', agent: false, key: tls.key, cert: tls.cert,
         ca: tls.ca, rejectUnauthorized: true, minVersion: 'TLSv1.3', timeout: 5000,
@@ -103,11 +104,11 @@ export function createConversationControlClient({ origin, tls, serverFingerprint
       if (!Number.isSafeInteger(value.seq) || value.seq !== expectedSeq + 1 || !Array.isArray(value.readHandleIds)) fail('read-control-gap');
       expectedSeq = value.seq;
       if (!value.required) return;
+      const key = value.controlId;
+      if (work.has(key)) return;
       // fence() synchronously closes output before any Promise continuation.
       const unknown = value.readHandleIds.filter(id => !transports.hasClosed(id) && !local()[id]);
       const closing = transports.fence(unknown);
-      const key = value.controlId;
-      if (work.has(key)) return;
       const pending = (async () => {
         if (value.unknownInstance) fail('read-resource-unknown');
         await closing;

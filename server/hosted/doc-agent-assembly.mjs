@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { accountError, certificateFingerprint } from '../account/client.mjs';
-import { createConversationAuthority } from '../account/conversation-authority.mjs';
+import { createConversationAuthority, conversationReadInState } from '../account/conversation-authority.mjs';
+import { createAgentReadControl, createAgentReadControlHandler } from '../account/agent-read-control.mjs';
 import { createConversationInternalHandler } from '../account/conversation-internal.mjs';
 import { createRunAuthority } from '../account/run-authority.mjs';
 import { createRunInternalHandler } from '../account/run-internal.mjs';
@@ -65,9 +66,19 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       return { ...service, authenticationId: subject.authenticationId,
         channelBinding: instanceTlsBinding(subjects.get(subject.authenticationId)) };
     } });
+  const readControl = createAgentReadControl({ ledger, instanceAuthority,
+    synchronize: () => runtime.authority.synchronize(),
+    async authorizeRead(body) {
+      currentService();
+      const trusted = await runtime.resolveAgentDelegation(body.delegation);
+      if (trusted.projectId !== body.projectId) fail(403, 'project-mismatch');
+      return runtime.authority.authorizePrincipal({ authorizationId: trusted.authorizationId },
+        { projectId: trusted.projectId, action: 'read' });
+    }, checkReadInState: conversationReadInState });
   // Operation and doc-transport closure are real partial evidence. Until the
   // registered Agent instance/resource witness exists, no control is ACKed.
   async function deliver(control) {
+    readControl.publish();
     if (deliveries.has(control.controlId)) return deliveries.get(control.controlId);
     const pending = (async () => {
       const persisted = ledger.read().runControlsV2?.[control.controlId];
@@ -100,7 +111,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     deliveries.set(control.controlId, pending);
     try { return await pending; } finally { deliveries.delete(control.controlId); }
   }
-  const runHooks = { fenceInState: (state, fence) => runAuthority.hooks.fenceInState(state, fence) };
+  const runHooks = { fenceInState(state, fence) {
+    readControl.hooks.fenceInState(state, fence);
+    return runAuthority.hooks.fenceInState(state, fence);
+  } };
   const conversations = createConversationAuthority({ ledger, accountAuthority: runtime.authority, runHooks, now,
     async checkConsent({ accountId }) {
       const answer = await transport.request('GET', `/internal/v2/consents?accountId=${encodeURIComponent(accountId)}`);
@@ -119,6 +133,18 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       await Promise.all(immediate);
       const controls = await runAuthority.synchronize();
       await Promise.all(controls.filter(matches).map(deliver));
+      const readClosed = await readControl.waitCompletion({ projectId: input.projectId, conversationId: input.conversationId });
+      const relevant = Object.values(ledger.read().runControlsV2 ?? {}).filter(matches);
+      if (relevant.every(control => control.instances.length === 0 && control.retained.length === 0 && control.revoked.length === 0)) {
+        // This phase mounts human HTTP reads only. Empty run inventory is checked
+        // in the transaction; it cannot stand in for a historical OS/runner close.
+        for (const control of relevant) runAuthority.acknowledgeControl({ controlId: control.controlId,
+          receipt: { controlId: control.controlId, fenceRevision: control.fenceRevision, complete: true,
+            receiptId: `read-only:${control.controlId}`, readControlIds: readClosed.controlIds } }, (state, current) =>
+          current.instances.length === 0 && current.retained.length === 0 && current.revoked.length === 0 &&
+          readControl.completion({ projectId: input.projectId, conversationId: input.conversationId }).complete);
+        return { ack: true, ...input };
+      }
       // Neither an empty local manager nor a body instanceId proves old resources
       // closed. The conversation change remains durable and pending for retry.
       fail(503, 'agent-fence-pending');
@@ -268,9 +294,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   }
   const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, resolveServicePrincipal });
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
-    agentFingerprint256: pin, resolveDelegation: async ticket => {
+    agentFingerprint256: pin, requireReadControl: true, resolveDelegation: async ticket => {
       currentService(); return runtime.resolveAgentDelegation(ticket);
     } });
+  const readControlsHandler = createAgentReadControlHandler({ control: readControl, resolveServicePrincipal, instanceAuthority });
   const runsHandler = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: pin,
     resolveServicePrincipal,
     authenticateInvocation({ req, servicePrincipal, body, operation }) {
@@ -293,10 +320,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       }
       return { conversations: rows };
     } });
-  return { conversations, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
-    async handleInternal(req, res) { return await instancesHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
+  return { conversations, readControl, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
+    async handleInternal(req, res) { return await instancesHandler(req, res) || await readControlsHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
-    async close() { stopped = true; await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
+    async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
 }
