@@ -21,7 +21,9 @@ function object(value, code) {
 
 function exactKeys(value, names, code) {
   object(value, code);
-  if (Object.keys(value).some(key => !names.includes(key))) invalid(code);
+  if (Object.keys(value).length !== names.length ||
+      Object.keys(value).some(key => !names.includes(key)) ||
+      names.some(key => !Object.hasOwn(value, key))) invalid(code);
 }
 
 function text(value, code) {
@@ -88,7 +90,7 @@ function leafOf(serviceId, entry, caFile) {
   try {
     leaf = new X509Certificate(fs.readFileSync(certFile));
     ca = new X509Certificate(fs.readFileSync(caFile));
-    if (!ca.ca || ca.subject !== ca.issuer || !ca.verify(ca.publicKey) ||
+    if (!ca.ca || leaf.ca || ca.subject !== ca.issuer || !ca.verify(ca.publicKey) ||
         !leaf.checkIssued(ca) || !leaf.verify(ca.publicKey) ||
         !leaf.checkPrivateKey(createPrivateKey(fs.readFileSync(keyFile)))) invalid('role-certificate');
   } catch { invalid('role-certificate'); }
@@ -97,7 +99,7 @@ function leafOf(serviceId, entry, caFile) {
       now < Date.parse(ca.validFrom) || now > Date.parse(ca.validTo)) invalid('role-certificate-expired');
   // The installer issues one node-local identity per enabled service. A
   // localhost SAN is required because the same leaf serves internal HTTPS.
-  if (leaf.subject !== `CN=${serviceId}` || !leaf.subjectAltName?.includes('IP Address:127.0.0.1')) invalid('role-identity');
+  if (leaf.subject !== `CN=${serviceId}` || leaf.checkIP('127.0.0.1') !== '127.0.0.1') invalid('role-identity');
   const actualPin = fingerprint(leaf.fingerprint256, 'role-certificate');
   if (actualPin !== fingerprint(entry.fingerprint256, 'role-pin')) invalid('role-pin');
   return { serviceId, keyFile, certFile, caFile, fingerprint256: actualPin,
@@ -169,6 +171,13 @@ export function loadAccountV2DeployConfig(manifestFile) {
   const docAttestation = keyPair(manifest.keys.docAttestation.privateFile, manifest.keys.docAttestation.publicFile, 'doc-attestation-key');
   const signingPaths = [docSigningFile, accountOrder.privateFile, docAttestation.privateFile];
   if (new Set(signingPaths).size !== signingPaths.length || signingPaths.some(file => enabled.some(role => roles[role].keyFile === file))) invalid('duplicate-signing-key');
+  const signingPublicKeys = [
+    createPublicKey(createPrivateKey(fs.readFileSync(docSigningFile))),
+    createPublicKey(fs.readFileSync(accountOrder.publicFile)),
+    createPublicKey(fs.readFileSync(docAttestation.publicFile)),
+  ].map(key => key.export({ format: 'der', type: 'spki' }).toString('base64'));
+  if (new Set([...signingPublicKeys, ...enabled.map(role => roles[role].publicKey)]).size !== signingPublicKeys.length + enabled.length)
+    invalid('duplicate-signing-key');
   const generatedPaths = [paths.accountRegistryFile, paths.docRegistryFile, paths.orderWitnessKeysFile];
   const sourcePaths = [source, paths.accountCredentialKeyFile, paths.accountOrderModuleFile,
     docSigningFile, accountOrder.privateFile, accountOrder.publicFile,
@@ -192,7 +201,8 @@ export function loadAccountV2DeployConfig(manifestFile) {
     ACCOUNT_INTERNAL_PORT: String(internal.account.port),
     ACCOUNT_INTERNAL_KEY_FILE: roles.account.keyFile, ACCOUNT_INTERNAL_CERT_FILE: roles.account.certFile,
     ACCOUNT_INTERNAL_CA_FILE: caFile, ACCOUNT_SERVICE_REGISTRY_FILE: paths.accountRegistryFile,
-    ACCOUNT_DOC_ORIGIN: internal.doc.origin, ACCOUNT_DOC_KEY_FILE: roles.account.keyFile,
+    ACCOUNT_DOC_ORIGIN: internal.doc.origin, ACCOUNT_DOC_SERVER_FINGERPRINT256: roles.doc.fingerprint256,
+    ACCOUNT_DOC_KEY_FILE: roles.account.keyFile,
     ACCOUNT_DOC_CERT_FILE: roles.account.certFile, ACCOUNT_DOC_CA_FILE: caFile,
     ACCOUNT_ORDER_MODULE: paths.accountOrderModuleFile, ACCOUNT_ORDER_SIGNING_KEY_FILE: accountOrder.privateFile,
     ACCOUNT_ORDER_KEY_ID: accountOrderKeyId, ACCOUNT_DOC_ATTESTATION_PUBLIC_KEY_FILE: docAttestation.publicFile,

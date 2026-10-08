@@ -32,7 +32,7 @@ function fixture(t) {
   const caFile = path.join(dir, 'ca.crt');
   const role = name => ({ keyFile: path.join(dir, `${name}.key`), certFile: path.join(dir, `${name}.crt`),
     caFile, fingerprint256: pki[name].fingerprint256 });
-  const additionalRole = name => {
+  const additionalRole = (name, san = '127.0.0.1', isCa = false) => {
     const openssl = process.env.OPENSSL ?? (process.platform === 'win32'
       ? path.join(process.env.ProgramFiles ?? 'C:/Program Files', 'Git/usr/bin/openssl.exe') : 'openssl');
     const run = args => {
@@ -41,8 +41,11 @@ function fixture(t) {
     };
     run(['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-subj', `/CN=${name}`,
       '-keyout', `${name}.key`, '-out', `${name}.csr`]);
+    const extensionFile = san === '127.0.0.1' && !isCa ? 'extensions.txt' : `${name}-extensions.txt`;
+    if (extensionFile !== 'extensions.txt') fs.writeFileSync(path.join(dir, extensionFile),
+      `subjectAltName=DNS:localhost,IP:${san}\nextendedKeyUsage=serverAuth,clientAuth\n${isCa ? 'basicConstraints=critical,CA:TRUE\n' : ''}`);
     run(['x509', '-req', '-in', `${name}.csr`, '-CA', 'ca.crt', '-CAkey', 'ca.key',
-      '-CAcreateserial', '-days', '1', '-extfile', 'extensions.txt', '-out', `${name}.crt`]);
+      '-CAcreateserial', '-days', '1', '-extfile', extensionFile, '-out', `${name}.crt`]);
     return { keyFile: path.join(dir, `${name}.key`), certFile: path.join(dir, `${name}.crt`), caFile,
       fingerprint256: new X509Certificate(fs.readFileSync(path.join(dir, `${name}.crt`))).fingerprint256 };
   };
@@ -79,6 +82,7 @@ test('v2 deploy config emits path-only runtime env and registries for actual thr
   assert.equal(result.accountEnv.ACCOUNT_CREDENTIAL_KEY_FILE, manifest.paths.accountCredentialKeyFile);
   assert.equal(result.accountEnv.ACCOUNT_DATA_DIR, manifest.paths.accountDataDir);
   assert.equal(result.accountEnv.ACCOUNT_ORIGINS, 'https://example.test');
+  assert.equal(result.accountEnv.ACCOUNT_DOC_SERVER_FINGERPRINT256, result.publicConfig.servicePins.doc);
   assert.deepEqual(JSON.parse(result.generatedFiles[manifest.paths.accountRegistryFile]),
     [{ serviceId: 'doc', fingerprint256: result.publicConfig.servicePins.doc }]);
   assert.deepEqual(JSON.parse(result.generatedFiles[manifest.paths.docRegistryFile]).map(item => item.serviceId), ['account', 'asset']);
@@ -124,9 +128,9 @@ test('v2 deploy config rejects non-loopback or colliding internal ports and inco
   manifest.internalOrigins.asset = 'https://example.test:8794/'; reject('internal-origin');
   manifest.internalOrigins.asset = manifest.internalOrigins.doc; reject('port-conflict');
   manifest.internalOrigins.asset = 'https://127.0.0.1:8794/';
-  delete manifest.roles.asset.caFile; reject('role-ca');
+  delete manifest.roles.asset.caFile; reject('role-configuration');
   manifest.roles.asset.caFile = manifest.roles.doc.caFile;
-  delete manifest.internalOrigins.asset; reject('internal-origin');
+  delete manifest.internalOrigins.asset; reject('internal-origins');
 });
 
 test('v2 deploy config preserves and validates account order and credential references', t => {
@@ -149,4 +153,33 @@ test('v2 deploy config preserves and validates account order and credential refe
   manifest.paths.docRegistryFile = manifest.paths.accountCredentialKeyFile; reject('path-conflict');
   manifest.paths.docRegistryFile = oldRegistry;
   assert.equal(load().accountEnv.ACCOUNT_ORDER_SIGNING_KEY_FILE, manifest.keys.accountOrder.privateFile);
+});
+
+test('v2 deploy config requires every nested deployment field, including unused destination paths', t => {
+  const { manifest, load } = fixture(t);
+  delete manifest.paths.assetRecoveryFenceFile;
+  assert.throws(load, error => error.code === 'paths');
+});
+
+test('v2 deploy config rejects a correctly signed asset leaf with a prefix-only loopback SAN', t => {
+  const { manifest, load, additionalRole } = fixture(t);
+  manifest.roles.asset = additionalRole('asset', '127.0.0.10');
+  assert.throws(load, error => error.code === 'role-identity');
+});
+
+test('v2 deploy config rejects a CA certificate used as a service leaf', t => {
+  const { manifest, load, additionalRole } = fixture(t);
+  manifest.roles.asset = additionalRole('asset', '127.0.0.1', true);
+  assert.throws(load, error => error.code === 'role-certificate');
+});
+
+test('v2 deploy config rejects a reused Ed25519 key saved under different paths', t => {
+  const { dir, manifest, load } = fixture(t);
+  const duplicatePrivate = path.join(dir, 'duplicate-order.pem');
+  const duplicatePublic = path.join(dir, 'duplicate-order.pub.pem');
+  fs.copyFileSync(manifest.keys.docAttestation.privateFile, duplicatePrivate);
+  fs.copyFileSync(manifest.keys.docAttestation.publicFile, duplicatePublic);
+  manifest.keys.accountOrder.privateFile = duplicatePrivate;
+  manifest.keys.accountOrder.publicFile = duplicatePublic;
+  assert.throws(load, error => error.code === 'duplicate-signing-key');
 });
