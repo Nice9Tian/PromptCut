@@ -396,3 +396,12 @@ worker的root配置/源码/公开证书均不可asset写；server私钥由root�
 每个人工协调门最多30秒，生产publisher原每次systemctl命令上限120秒保留；探针固定unit实际StopTimeout5秒，最终stop命令7秒、slice stop3秒。新模式不宣称沿用原单scope总30秒保证。没有盲重试整轮；唯一startup ECONNREFUSED仍是producer限定同一OS身份的退避，不掩盖协议/pin错误。失败会保留证据与未知资源，不猜PID去stop；已知发布若阶段门失败，会取得真实锁并将精确同record置preparing，已有publisher失败锁不替换。未知state留metadata供root准确恢复。
 
 本机验证：三个修改源码`node --check`均通过；Windows调用新OS CLI返回exit1 `probe-linux-root-required`，worker CLI返回exit1 `worker-platform`，raw `pc-asset-root-v2-os-probe-cli-1.log`及`pc-asset-root-v2-worker-cli-1.log`。这是平台边界拒绝，非Linux运行通过。chmod及诊断窄补后纯目标73/73零fail/cancel/skip，239.8896ms/wall1717ms，`pc-asset-root-publisher-v2-target-3.log`；类型零错exit0/wall7602ms，`pc-asset-root-publisher-v2-types-3.log`。保留全部前次结果/首types未启动记录；尚未跑Linux双代/TLS/G SQLite，不把已有单scopeOS通过扩大。
+
+交接固定源码`1df77168261c6eebc462dd07010a733a810f7482`（前一协调块`cdf528b7`、共享schema`4b7b09dc`）。最终阶段门失败撤授权和stop前再核窄补后再次syntax通过；Windows新CLI仍在读取任何配置/创建任何out之前exit1 `probe-linux-root-required`，原始`pc-asset-root-v2-os-probe-cli-2.log`保留。没有Linux执行。Git blob与当前工作区字节SHA256一致：
+
+- publisher：`53d6e3f785aacd228638687a0ef8753610d9ee67fa826f4e58a5e312f472236d`
+- schema v2：`f7a96b5fc6fbde15fb1dc18c3d576e433cb6c7c1b505aeec999fd0e6cb490f20`
+- OS probe：`7ab3291d29ca06c6c32e56cd28133c8e1b77e7529d95307b911f468b4074ce15`
+- 隔离TLS worker：`b16cf802e08a5d892de9fbde5224ac3191860ecba69d9393a29c49b4f85f4da2`
+
+root执行闭包需带publisher→共享schema/account ledger的正常相对依赖；G readerModule及其相对依赖使用root冻结的真实G提交。worker自己仅Node内置模块加这个显式冻结G动态入口。阶段操作门与证据文件命名已固定，可以root外部一条编排同时运行probe和真实G SQLite验证；本包未写虚假doc执行器。最终没有改v1实例cgroup解释、G物理工作区、生产unit、账号/渲染/用户目录；源码diff-check通过。
