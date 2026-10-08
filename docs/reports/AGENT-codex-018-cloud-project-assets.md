@@ -10,7 +10,7 @@ A 协议复用冻结 `909a6b96`，文件 SHA256 `d44879481a93af8c86aa258b5349084
 
 ## 验证约束与当前状态
 
-目前只开工、读规则/已审方案和源码；没有 B 功能验证结果。可做无业务 listener 的精确 `npm.cmd test -- ...` 与类型；保留仓库 wrapper 的 38 个坏端口 guard 候选例外，不 bypass。真实 mTLS／子进程目标仅先编写，固定源码后向 root 申请一次窄窗口。6480～6489 只是建议、未核空也未授权，不启动。full／宽 probe／部署／节点均未做。
+现已实现独立模块、物理导入与实际资源关闭目标，纯目标与类型结果见下节；真实 mTLS fixture 已编写，尚未启动。只运行获准的无业务 listener 精确 `npm.cmd test -- ...` 与类型；保留仓库 wrapper 的 38 个坏端口 guard 候选例外，不 bypass。固定 TLS fixture 后向 root 申请一次窄窗口。6480～6489 只是建议、未核空也未授权，不启动。full／宽 probe／部署／节点均未做。
 
 所有自有数据、日志、spool、测试密钥在 TMP；子进程 windowsHide、隐藏绝对 preload；Python/cuda/models/provider/order 仅进程环境；不安装依赖、不 junction、不改变系统环境、用户端口或数据、不推送/合并。首红与每次有因修正将逐次补记。
 
@@ -22,7 +22,13 @@ e36目标 `npm.cmd test -- server/test/asset-run-lease.test.mjs server/test/asse
 
 790da014目标 `npm.cmd test -- server/test/project-assets-client.test.mjs server/test/asset-run-lease.test.mjs` 6/6、0fail/cancel/skip，121.4459ms，墙492.6387ms，`pc-project-assets-client-1.log`。真实physical projectStores/完整hash/实际Readable与FileHandle，工具import只返stored、无mediaId/registeredMedia；context/Job/abort反向和handle跨run拒。wire、account、lifecycle与sender adapter受控，不是production crypto或三方mTLS。
 
-原npm wrapper38坏端口候选guards保留；上述fixture无业务listener。所有Node带父仓库绝对silent preload，PSModulePath唯一canonical键，cuda_Vit/PYTHONDONTWRITEBYTECODE/models与显式VH provider/order/conversation只有进程env。没有运行裸node --test、业务TLS、full/C10或节点。最终类型与完整新handler验证尚未做，前两轮pure绿不替代它们。
+7bc952b6新增handler的实际FileHandle复制、marker/rename撤销切点测试。首次实际 `npm.cmd test -- server/test/asset-run-handler.test.mjs` 5/5、0fail/cancel/skip，358.3829ms、墙727.1355ms，TMP `pc-project-assets-handler-1.log`。前一次编排命令因内存环境前缀变量缺失生成 `undefined$taskTimer`，PowerShell解析失败，npm没有启动；补回完整环境后才进行上述首次实际目标，不算一次测试重跑。ControlledSocket/exporter/account adapter受控；真实的是物理projectStores、完整hash、源流/文件句柄和publication，不能据此宣称真实TLS或生产接通。
+
+3d00696ed1571032db0cb0bab661bd0d3608f534补actual-close后的私有持久witness、丢ACK新实例拒、异步资源背压监听清理、Uint8Array完整输入。五文件精确目标 `npm.cmd test -- server/test/asset-run-handler.test.mjs server/test/asset-run-lease.test.mjs server/test/project-assets-client.test.mjs server/test/asset-project-stores.test.mjs server/test/asset-project-revocations.test.mjs` 24/24、0fail/cancel/skip，402.4595ms、墙745.951ms，TMP `pc-project-assets-pure-3.log`，测前/后源码相同。保留9项旧humanstore/撤销回归；新增真实Readable `_destroy` callback gate：HTTP/源逻辑结束与资源actualclose分开，prepareClosure阻塞至真实close，落盘前没有closureWitness，没有run ACK。
+
+同固定3d源码绝对TypeScript `tsc -b --force` exit0/零错、墙5873.532ms，TMP `pc-project-assets-type-1.log`。npm/type使用绝对silent preload、唯一canonical PSModulePath与仅进程cuda_Vit/models/显式VH provider/order/conversation。没有裸node --test、业务listener、full/C10或节点。后续新TLS测试源码不冒用这次类型/24项为已运行TLS证据。
+
+新 `server/test/asset-run-mtls.test.mjs` 写入后首次 `node --check` 失败：同测试词法作用域 `verified` 重复声明；工具原输出保留，未启动测试或监听。仅将verifyRef句柄局部名改为verifyHandle；第二次静态检查exit0、TMP `pc-project-assets-mtls-syntax-2.log`。第一次静态命令没有显式preload前缀；仅解析、无子进程或监听，后续检查已带完整前缀。不得把静态检查写成TLS通过。
 
 ## 当前接口与可信缺缝
 
@@ -32,4 +38,19 @@ e36目标 `npm.cmd test -- server/test/asset-run-lease.test.mjs server/test/asse
 
 Agent `createRunAssetClient`消费worker的隐藏raw票据facade；`createProjectAssets`只收可信8字段context/媒体引用/内容。resources用冻结register(context,{kind,resource})/signalFor等真实接口；spool quota的reserveImport与workspace(context)须真实宿主提供，sourceJob提供时另核同context，不设默认数字。存入字节与doc addMedia仍分开。
 
-G仍须接force current服务registry、真实A observed私有subject与actual closure verifier、asset lifecycle/root旧cgroup witness、双head required状态、真实worker transport/额度与workspace adapter。缺这些生产保持503，HTTP/UID/OS重启未知不借empty Map或计数0完成。当前未正式交付，handler/receipt/发布目标与最终类型仍在本叶补；root共同基线不是本B新源的证据。
+G仍须接force current服务registry、真实A observed私有subject与actual closure verifier、asset lifecycle/root旧cgroup witness、双head required状态、真实worker transport/额度与workspace adapter。缺这些生产保持503，HTTP/UID/OS重启未知不借empty Map或计数0完成。当前TLS与全量仍未跑，root共同基线不是本B新源的证据。
+
+## 给中央接线的实际模块接口
+
+- `createAssetRunAccess({client,consumer,projectStores,humanConsumer,assetInstanceId,serviceIdentity,agentFingerprint256,resolveAgentTransport,maxBodyBytes,publicationIO?})` → `handler/idle/close/status`。`resolveAgentTransport({req,socket,fingerprint256})`必须force current并仅回`{serviceKid}`；`projectStores.project(已核projectId)`提供`root/dirs.media/stores.media`，不收callerpath。`status()`回`runAssetsConfigured/runAssetCursor/runAssetHead/runAssetsReady`，本方法不自动同步；G真实status入口必须先同步两个consumer，再组合原human的head/cursor/instance状态。
+- `createAssetRunConsumer({client,file,assetInstanceId,serviceIdentity,verifyLifecycle})` → `start/sync/beginAdmission/finishAdmission/admit/prepareClosure/closed/unknownAdmission/handleAccessEvent/unavailable/close`及ready/cursor/head。私有`closureWitness(leaseId)`回`{assetInstanceId,serviceIdentity,receipt,binding:{projectId,runGrantId,instanceId,instanceGeneration}}`；私有`controlWitness(eventId)`回`{assetInstanceId,serviceIdentity,receipt}`。只能由G暴露于pinned doc mTLS，实际lease release及成功落盘前503，不能从public body生成。人类access消费等待participant，run连续outbox仍单独ACK；continuation仅独立问doc，不递归await任何consumer队列。
+- 生产新assetInstance遇持久旧实例pending ACK或lease记录一律503，不改写旧receipt归属。相同instance的受控lost-ACK重发已验；新OS/旧doc epoch/旧实例observer的恢复仍需G与A的可信精确恢复接缝。本模块不宣称已解决该跨进程恢复。
+- `createRunAssetClient({transport,maxResponseBytes})` → `issue(context,purpose,selector,requestId)/request(context,handle,options)/json(context,handle,options,track)`；只消费worker隐藏票据facade，handle绑定完整可信context，工具不能取raw ticket/私钥。`createProjectAssets({contextAccess,runAssetClient,workspace,resources,reserveImport,maxImportBytes,verifySourceJob?})` → `openRead/import/verifyRef/close`；import只回stored，不代替doc addMedia注册。`createToolAssetResources(resources)` → `track/handle/close`，适配冻结register/context signal/authorize/verifyFence，仅自身scope资源证明。
+
+## TLS窗口申请的固定测试边界
+
+`asset-run-mtls.test.mjs`沿用现有TMP PKI和runFixture：真正SQLite、RAM Ed25519注册、instance/run权威、三个不同角色cert、两个HTTPS服务器（doc/asset），真实assetRunClient observer RPC和assetRunAccess physical stores。sender/currentregistry/media/lifecycle及doc回查B witness由受控可信adapter注入；humanConsumer为受控head0，未挂生产唯一human access consumer。两个server同测试OS/UID，不是生产三进程或OS隔离完成。
+
+拟命令仅 `npm.cmd test -- server/test/asset-run-mtls.test.mjs`；业务监听恰doc/asset两个listen(0)，原wrapper guards例外另计；没有Agent服务、浏览器、Python或ffmpeg。TMP PKI通过现有helper运行windowsHide openssl短子进程，单命令30秒超时；用例60秒、每HTTP请求10秒。teardown先关闭 owned data sockets并等receipt RPC，再关闭client/consumer/server/all TLS sockets并删除准确TMP目录；source冻结后才申请窗口。覆盖GET/HEAD/Range/PUT/complete/verifyRef、完整wire tamper、真实nonce/TLS重放拒、错project、已读共有retained再读及stop拒。actual-close的长源gate已有纯目标，不将这里5字节素材当长流关闭或真实worker执行验收。
+
+未做：实际TLS执行、最终full、Linux全链/dirsync平台新包验证、生产G接线/required传播、真实worker+工具链、真实human+run双head并发、跨OS历史receipt恢复、全部晚结果/发布切点、用户UI及节点。latest render supplement仅作边界核对：不选择未批准earlyyield/补渲failure A/B/删除细节，不引入内存默认数字。
