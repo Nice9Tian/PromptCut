@@ -408,12 +408,17 @@ async function registerAccount(account, label) {
   // listener a click can submit the form as native GET with password query.
   // Inspect existing listeners; never inject a handler or replace the form.
   await waitFor(async () => {
-    const form = await page.$('#register');
-    if (!form) return false;
+    // CDP objectIds are session-local: create and inspect the object through
+    // this same observer session, rather than a Puppeteer ElementHandle.
+    const remote = await page.registrationCdp.send('Runtime.evaluate', {
+      expression:"document.querySelector('#register')", returnByValue:false,
+    });
+    const objectId = remote.result?.objectId;
+    if (!objectId) return false;
     try {
-      const listeners = await page.registrationCdp.send('DOMDebugger.getEventListeners', { objectId:form.remoteObject().objectId });
+      const listeners = await page.registrationCdp.send('DOMDebugger.getEventListeners', { objectId });
       return listeners.listeners.some(listener => listener.type === 'submit');
-    } finally { await form.dispose(); }
+    } finally { await page.registrationCdp.send('Runtime.releaseObject', { objectId }); }
   }, `${label}-actual-register-submit-listener-ready`);
   await type(page, '#register input[name="name"]', account.name);
   await type(page, '#register input[name="password"]', account.password);
