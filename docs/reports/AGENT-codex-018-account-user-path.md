@@ -79,3 +79,9 @@ root随后精准授`src/online/apiGuard.ts`及实际原test`src/online/c10a-api-
 root实际908在线首次已读`%TEMP%/pc-account-online-first-90832022-out/result.json`：sourceBefore/After同908，wall1583ms；2 fixture前置检查过，phase preflight TypeError，completed=false，没有截图/网页网络/Chrome进程，因此此次不是apiGuard失败，也不能称2/2用户路径通过。自有6341/42均listening=false/sockets0，fixture.closed/childClosed=true，profileRemoved=true。root只读最小复现定位当前已装puppeteer.executablePath返回Promise，旧getChromePath将Promise传fs.access导致ERR_INVALID_ARG_TYPE。本次精确只加await，不改其它2e82冻结源；guard缺口仍有独立pure首红，不能倒填为本次实际first原因。
 
 最小独立验证在2e82+该一行修改上用`node --input-type=module`直接import已装puppeteer/fs/assert，`await executablePath()`后断言typeof为string并实际fs.access；exit0、wall153ms，raw`%TEMP%/pc-account-chrome-path-await.log`，未输出Chrome路径/凭据、未启动浏览器或监听，无重跑。probe node --check/diff --check过，未再次执行在线/桌面/full/type；该纯文件发现修复不冒称页面链通过。原908结果与日志由root完整保留。
+
+## 账号入口棘轮资产补齐
+
+root固定0c66feb181df28711dae7161d7528023f323eeca首次full：5301/5295通过/2失败/4跳过、75.165s，raw `%TEMP%/pc-account-user-stage-0c66feb1-full.log`。本叶不重跑全量。两失败分别是旧C10-RA-01把已批准账号入口当成本机增项，以及C10A-API-03未登记apiGuard实际产物的editor/session、editor/renew精确字面量；此前764仅5条登记不足，保留该首红，不用type绿盖过。
+
+本块只改server/test/c10a-online-api-paths.json、c10-api-ratchet-baseline.json、c10-ui-gates.test.mjs与本报告。精确登记7条：editor/动态拼接字面量、editor/renew、editor/session、login、logout、me、projects；来源account-binding-task.md/account-binding-contract.md及真实client/apiGuard。旧本机baseline从历史集合只删至现19条，账号7条独立accountPaths并在测试中固定集合；unknown/account editor/login或recover、原已删ai/chat、任意本机增项及重复均拒。允许继续删除旧本机项，scanner及真实构建逐条相等断言未变，不修改apiGuard或扩大工具/API授权。下一步固定源，仅一次npm wrapper运行c10-ui-gates与c10a-online-build两文件，Vite实际在线/桌面构建只写TMP；无浏览器/业务listener/full。
