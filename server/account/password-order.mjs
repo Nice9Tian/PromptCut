@@ -35,6 +35,18 @@ export function retainedOperationProof(operation, witness, grant, privateKey) {
   return signDocProof({ v: 1, domain: 'promptcut.retained-operation', ...operationBinding(operation), witnessId: witness.witnessId,
     state: 'retained', visibilityAtRead: 'shared', readConfirmed: true, currentRun: true, readReceiptId: grant.readReceiptId, fenceRevision: grant.fenceRevision }, privateKey);
 }
+export function activeRunOperationProof(operation, witness, grant, privateKey) {
+  const actor = operation.actor;
+  if (grant.state !== 'active' || grant.readConfirmed !== true || grant.currentRun !== true ||
+      ['projectId', 'runId', 'messageId', 'conversationId', 'runGrantId'].some(field => grant[field] !== (field === 'projectId' ? operation.projectId : actor[field])) ||
+      ['accountId', 'loginId', 'credentialId', 'loginGeneration'].some(field => grant[field] !== actor[field]) ||
+      grant.messageRef?.projectId !== operation.projectId || grant.messageRef?.conversationId !== actor.conversationId ||
+      grant.messageRef?.messageId !== actor.messageId || !/^[0-9a-f]{64}$/.test(grant.messageRef?.recordDigest))
+    throw historyError('invalid-active-run-grant', 403);
+  return signDocProof({ v: 1, domain: 'promptcut.active-run-operation', ...operationBinding(operation), witnessId: witness.witnessId,
+    state: 'active', readConfirmed: true, currentRun: true, readReceiptId: grant.readReceiptId,
+    fenceRevision: grant.fenceRevision, messageRef: grant.messageRef }, privateKey);
+}
 
 /** request is the owner's authenticated doc mTLS transport, never a user-supplied URL. */
 export function createAccountOrderClient({ request, timeoutMs = 15_000 } = {}) {
@@ -121,10 +133,22 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     failpoint('before-seal');
     const body = { ...binding };
     if (authorization.retainedGrant) body.retainedProof = retainedOperationProof(operation, witness, authorization.retainedGrant, docAttestationPrivateKey);
-    const sealed = await account.seal(witness.witnessId, body); failpoint('seal-ack');
+    if (authorization.activeGrant) body.activeRunProof = activeRunOperationProof(operation, witness, authorization.activeGrant, docAttestationPrivateKey);
+    let sealed;
+    try { sealed = await account.seal(witness.witnessId, body); }
+    catch (error) {
+      if (!body.activeRunProof || error.status !== 401) throw error;
+      // Account may see exit before doc receives its event. Recheck under THIS lock;
+      // only doc's exact shared-current retained exception can continue this prepared op.
+      const renewed = await gate(operation, 'active-seal-rejected', witness);
+      if (!renewed.retainedGrant) throw error;
+      const retainedProof = retainedOperationProof(operation, witness, renewed.retainedGrant, docAttestationPrivateKey);
+      sealed = await account.seal(witness.witnessId, { ...binding, retainedProof });
+    }
+    failpoint('seal-ack');
     return accept(operation, sealed);
   }
-  async function recoverProject(projectId) {
+  async function recoverProject(projectId, { resumeOpId } = {}) {
     await initializeProject?.(projectId);
     for (const fence of history.fences(projectId)) if (fence.state === 'requested') onFenceRequested?.(fence);
     history.validate(projectId);
@@ -135,7 +159,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
       }
       reconciled.add(projectId);
     }
-    for (const operation of history.pending(projectId)) await resolveWitness(operation);
+    for (const operation of history.pending(projectId)) if (operation.opId !== resumeOpId) await resolveWitness(operation);
     const latest = history.accepted(projectId).at(-1);
     if (latest) await materializeAccepted?.(latest);
     for (const fence of history.fences(projectId)) if (fence.state === 'requested') { const { state, ...body } = fence; history.commitFence(body); }
@@ -157,8 +181,8 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
   const submit = (spec) => locked(spec.projectId, () => submitUnlocked(spec));
   // The owner constructs the immutable specification under this SAME lock, after recovery.
   // A scope cannot escape its callback or submit into another project's lock.
-  const transact = (projectId, work) => locked(projectId, async () => {
-    await recoverProject(projectId);
+  const transact = (projectId, work, { resumeOpId } = {}) => locked(projectId, async () => {
+    await recoverProject(projectId, { resumeOpId });
     let active = true;
     try { return await work({ submit(spec) {
       if (!active || spec.projectId !== projectId) throw historyError('invalid-operation-scope');

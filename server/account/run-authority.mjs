@@ -44,6 +44,11 @@ export function canonicalReadRecord(message, { projectId, conversationId }) {
     content: copy(message.content), contentDigest: message.contentDigest,
     selectionSnapshot: copy(message.selectionSnapshot ?? null), attachments: copy(message.attachments ?? []) };
 }
+export function acceptedMessageRef(message, context) {
+  const { runId: _runId, ...record } = canonicalReadRecord(message, context);
+  return { projectId: context.projectId, conversationId: context.conversationId,
+    messageId: message.messageId, recordDigest: digestOf(record) };
+}
 const member = (s, c, ref) => {
   const p = project(s, c.projectId);
   if (s.revokedLogins[`login:${ref.loginId}`]) reject(403, 'credential-revoked');
@@ -83,8 +88,9 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       identity.some(k => refOf(m)[k] !== g[k])) reject(403, 'run-no-longer-current');
     return { c, m };
   };
-  const verifiedSender = async ref => {
-    const v = await verifySender(Object.fromEntries(identity.map(k => [k, ref[k]])));
+  const verifiedSender = async (ref, messageRef) => {
+    const v = await verifySender(Object.fromEntries(identity.map(k => [k, ref[k]])),
+      { purpose: 'accepted-message', messageRef: copy(messageRef) });
     if (!v || identity.some(k => v[k] !== ref[k]) || !Number.isSafeInteger(v.accountEventSeq) || v.accountEventSeq < 0)
       reject(403, 'run-sender-mismatch');
     return v;
@@ -203,7 +209,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     for (const candidate of c.messages.filter(m => m.queueState === 'queued').sort((a, b) => a.arrivalSeq - b.arrivalSeq)) {
       try {
         member(before, c, refOf(candidate));
-        verified = await verifiedSender(refOf(candidate)); next = candidate; break;
+        verified = await verifiedSender(refOf(candidate), acceptedMessageRef(candidate, { projectId, conversationId })); next = candidate; break;
       } catch (error) {
         if (![401, 403].includes(error.status)) throw error;
         cancelled.push({ messageId: candidate.messageId, reason: error.code ?? 'credential-revoked' });
@@ -231,6 +237,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
         selectionSnapshot: message.selectionSnapshot ?? null, state: 'preparing', readReceiptId: null,
         visibilityAtRead: null, fenceRevision: seq(s), accessHeadAtAdmission: s.accessHead,
         admittedAt: now(), contentDigest: message.contentDigest };
+      g.messageRef = acceptedMessageRef(message, { projectId, conversationId });
       s.runGrantsV2[runGrantId] = g;
       const value = { ...g, message: copy(message) };
       s.runRequestsV2[key] = { digest, result: value };
@@ -256,7 +263,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     const digest = readDigest(input), key = readKey(input, svc);
     const old = replay(before.runReadRequestsV2 ?? {}, key, digest);
     if (old) return copy(old.result);
-    const g = bound(before, input, svc), verified = await verifiedSender(g);
+    const g = bound(before, input, svc), verified = await verifiedSender(g, g.messageRef);
     const result = ledger.transaction(s => {
       reconcile(s); const registered = service(s, input.servicePrincipal);
       const prior = replay(s.runReadRequestsV2, key, digest); if (prior) return prior.result;
@@ -264,6 +271,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       if (grant.state !== 'preparing') reject(403, 'run-not-preparing');
       senderAtCommit(s, c, grant, verified);
       const expected = canonicalReadRecord(m, grant);
+      if (canonicalJson(acceptedMessageRef(m, grant)) !== canonicalJson(grant.messageRef)) reject(503, 'accepted-message-changed');
       if (canonicalJson(expected) !== canonicalJson(input.prompt)) reject(403, 'complete-prompt-unverified');
       if (validatePromptInState && validatePromptInState(s, { conversation: c, message: m,
         prompt: copy(input.prompt), promptDigest: input.promptDigest }) !== true) reject(403, 'complete-prompt-unverified');
@@ -297,16 +305,18 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     if (identity.some(k => principal[k] !== original[k]) || principal.serviceId !== svc.serviceId || principal.serviceKid !== svc.serviceKid)
       reject(403, 'run-principal-mismatch');
     // Retained references intentionally do not renew/reuse the revoked user's token.
-    const verified = original.state === 'active' ? await verifiedSender(original) : null;
+    const verified = original.state === 'active' ? await verifiedSender(original, original.messageRef) : null;
     return ledger.transaction(s => {
       reconcile(s); const v = service(s, principal.servicePrincipal), g = bound(s, principal, v);
-      const { c } = current(s, g); project(s, projectId);
+      const { c, m } = current(s, g); project(s, projectId);
+      if (canonicalJson(acceptedMessageRef(m, g)) !== canonicalJson(g.messageRef)) reject(503, 'accepted-message-changed');
       if (!['active', 'retained'].includes(g.state) || !g.readReceiptId || !s.runReceiptsV2[g.readReceiptId]) reject(403, 'run-revoked');
       if (c.visibility === 'private' && c.ownerAccountId !== g.accountId) reject(403, 'private-run-forbidden');
       if (g.state === 'active') {
         if (!verified) reject(403, 'run-state-changed'); senderAtCommit(s, c, g, verified);
       } else if (c.visibility !== 'shared' || g.visibilityAtRead !== 'shared') reject(403, 'run-retained-invalid');
       return { allowed: true, projectId, accountId: g.accountId, runGrant: copy(g),
+        ...(g.state === 'active' ? { activeGrant: { ...g, readConfirmed: true, currentRun: true } } : {}),
         ...(g.state === 'retained' ? { retainedGrant: { ...g, readConfirmed: true, currentRun: true } } : {}) };
     });
   }
