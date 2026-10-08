@@ -4,7 +4,7 @@ import { randomBytes, createHash, sign } from 'node:crypto';
 import { canonicalJson, digestOf } from '../../account/ledger.mjs';
 import { instanceProofPayload, instanceTlsBinding } from '../../account/agent-instance-authority.mjs';
 import { INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceProtocolHeaders,
-  instanceConnectionRequest, instanceDataRequest } from '../../account/agent-instance-internal.mjs';
+  instanceConnectionRequest, instanceDataRequest, instanceMessageAction } from '../../account/agent-instance-internal.mjs';
 
 // Test-only keys remain in RAM. Client signatures use the client's actual TLS
 // exporter; no server callback supplies a capability or a signature to this code.
@@ -17,7 +17,7 @@ export function signDataProof(socket, instance, method, url, operation, request,
 }
 const referenceProof = proof => ({ instanceId: proof.instanceId, instanceGeneration: proof.instanceGeneration, signature: proof.signature });
 const headerOf = proof => Buffer.from(JSON.stringify(proof)).toString('base64url');
-export const dataAction = frame => /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(frame.type) ? 'write' : 'read';
+export const dataAction = frame => instanceMessageAction(frame.type);
 
 export function instanceDataHttpRequest({ port, tls: identity, instance, projectId, runGrantId, connId, nonce,
   kind, url, method = kind === 'recv' ? 'GET' : 'POST', body, headers = {}, sessionItem,

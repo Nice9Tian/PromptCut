@@ -7,7 +7,7 @@ import { createRunAuthority } from '../account/run-authority.mjs';
 import { createRunInternalHandler } from '../account/run-internal.mjs';
 import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
 import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
-  INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders } from '../account/agent-instance-internal.mjs';
+  INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
@@ -245,7 +245,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       }
       let frame;
       if (kind === 'message') { try { frame = JSON.parse(text); } catch { fail(400, 'instance-data-proof-invalid'); } }
-      const action = frame && /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(frame.type) ? 'write' : 'read';
+      const action = instanceMessageAction(frame?.type);
       const operations = frame?.type === 'selection.query' ? ['checkAccess', 'authorizeQuery'] : ['checkAccess'];
       if (!Array.isArray(proofs) || proofs.length !== operations.length) fail(400, 'instance-data-proof-invalid');
       for (const operation of operations) {
