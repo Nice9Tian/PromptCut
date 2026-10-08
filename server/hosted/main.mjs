@@ -142,6 +142,11 @@ async function main() {
         clientTls: { key: file('PROMPTCUT_ACCOUNT_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_ACCOUNT_CLIENT_CERT_FILE'), ca: file('PROMPTCUT_ACCOUNT_CA_FILE') },
         internalTls: { key: file('PROMPTCUT_ACCOUNT_INTERNAL_KEY_FILE'), cert: file('PROMPTCUT_ACCOUNT_INTERNAL_CERT_FILE'), ca: file('PROMPTCUT_ACCOUNT_CA_FILE') },
         services, internalPort,
+        order: {
+          witnessKeys: JSON.parse(file('PROMPTCUT_ACCOUNT_ORDER_WITNESS_KEYS_FILE').toString('utf8')),
+          issuer: env.PROMPTCUT_ACCOUNT_ORDER_ISSUER || 'visuhive-account',
+          docAttestationPrivateKey: file('PROMPTCUT_DOC_ORDER_ATTESTATION_KEY_FILE'),
+        },
       };
       if (!account.authorityId || !account.authorityUrl || !account.keyId) throw new Error('authority');
     } catch { return configError('account-v2'); }

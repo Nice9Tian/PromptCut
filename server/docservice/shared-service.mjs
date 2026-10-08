@@ -108,6 +108,7 @@ export function createSharedDocService({
   accountRuntime = null,
   accountProjects = null,
   accountRequired = false,
+  docAssembly = null,
 } = {}) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedDocService: mode 只能是 'hosted' 或 'lan'");
   const say = typeof log === 'function' ? log : undefined;
@@ -263,13 +264,16 @@ export function createSharedDocService({
   function bundleForSpace(space) {
     let b = bundles.get(space);
     if (!b) {
-      const project = projectModule({ store: storeForSpace(space) });
+      const projectStore = storeForSpace(space);
+      const operationCoordinator = docAssembly?.coordinatorForSpace({ space, store: projectStore, directory: tenantDir(space) });
+      const project = projectModule({ store: projectStore, operationCoordinator });
       const content = contentModule({ store: storeForSpace(space) });
       // 成本记录（C10 其余第 3 节）：和内容库共用这个空间的存储，按项目空间隔离
       b = {
         project, content, events: eventsModule({ project, content }), costs: costsModule({ space, store: storeForSpace(space) }),
         // 在场状态(A3 第二阶段):成员页面的「正在编辑」、Agent 的范围与消息,只在内存里转发,借项目频道广播
         presence: presenceModule({ project }),
+        ...(docAssembly ? { selection: docAssembly.selectionForSpace({ space, project }) } : {}),
       };
       bundles.set(space, b);
     }
@@ -280,6 +284,7 @@ export function createSharedDocService({
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).costs }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).presence }));
+  if (docAssembly) service.mount(spacedModule({ create: (space) => bundleForSpace(space).selection }));
   service.mount(sharedModule({
     store: storeOf,
     challenges: adminChallenges,

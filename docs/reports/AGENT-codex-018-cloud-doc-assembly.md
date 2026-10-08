@@ -12,4 +12,18 @@
 
 初始实际API：createOperationWiring({history,account,verifyWitness,authority,projection,docAuthorityId,runProvider,docAttestationPrivateKey,...})；coordinator绑定project adapter，read/execute内部反复核authority，runProvider缺失/精确字段缺失拒。createAccountHostedRuntime实际位于server/docservice/account-hosted.mjs；全员选区module独立，中央未挂。run-authority owner已确认新模块尚未实现，会先交checkAccess/selection authorizeQuery schema，不能把proposal当已存在。
 
-当前状态：开工报告，尚未修改产品代码、未启动服务/基线。后续补API图、固定实现、首次失败、验收准确数和未挂载限制。
+## 中央 API 图与租约修正
+
+根已确认实际租约为`server/docservice/account-hosted.mjs`、`shared-service.mjs`（constructor/可信callback/逐消息read-write直接接线）和`service-gate.mjs`；http-transport不改。额外已批准新`server/hosted/doc-assembly.mjs`、main窄order配置和旧asset-wiring/account-hosted测试必要真实order setup。
+
+路径：public `/hosted/shared/account/create|join|session` → runtime authority → 每次真实asset mTLS status双head核齐 → opaque connection/asset/agent delegation票据。页面WS → account RAM引用每条凭证/项目重核 → shared tenant bundle → projectModule绑定该tenant唯一operationCoordinator → 单个持久`docservice/operation-history-v2.sqlite` → doc自有证书mTLS `/internal/v2/order/reserve|<id>|<id>/seal|cancel` → account签名sealed →同一prepared历史和真实tenant项目projection。跨项目共用历史库和order连接，不共用project module/coordinator绑定。
+
+`createDocAssembly({dataDir,authority,account,runProvider,now})`返回`coordinatorForSpace({space,store,directory})`、`selectionForSpace({space,project})`、`fence(value)`、`history`、`runProvider`和异步`close`。close在doc实际关闭后等所有coordinator.idle再关SQLite/transport。投影路径必须等于可信dataDir/tenants/space；local不创建coordinator。运行授权与selection query只转可信provider，缺出口503。
+
+main只加载doc自己的account client/private attestation key与account公开witness keys：`PROMPTCUT_ACCOUNT_ORDER_WITNESS_KEYS_FILE`为`{keyId:PEM公钥}`JSON，`PROMPTCUT_ACCOUNT_ORDER_ISSUER`默认visuhive-account，`PROMPTCUT_DOC_ORDER_ATTESTATION_KEY_FILE`为doc自有Ed25519私钥。真实运行不读其它角色私钥；测试仅TMP临时CA与角色证书。REQUIRED缺order配置启动拒；非法/空公钥和不完整attestation也拒。
+
+全员selection已挂每tenant实例：set/clear显式read，客户端伪名/account/actor声明拒；project.op保持write，actor从真实principal取。Agent delegation独立kind随机票据，session返回`agentDelegationTicket`，resolver重新核live credential/head/project；asset票据不能代它。对话owner新mTLS路由消费resolver，UI尚未送此票据，不能声称生产Agent接通。
+
+Astra已定`createRunAuthority`出口checkAccess/authorizeQuery/resolveRunPrincipal；运行principal必须带从真实签名或mTLS核验所得servicePrincipal，公开runRefs不构成凭证。run尚未提供固定源码，当前生产run/query仍拒。root已扩租authority窄同步runHooks事务接线，待owner完整签名，禁止后置自由授予。对话owner正在写独立conversation internal handler/client，未在本块假接通。
+
+当前状态：页面/history/selection完整块待固定源码定向验证；所有首次失败、重启/权限边界和准确计数将在后文追加。尚未跑全量；full须先租约。

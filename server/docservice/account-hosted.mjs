@@ -128,15 +128,25 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       if (expiresAt <= now()) fail(401, 'credential-revoked');
       for (const [ticket, entry] of tickets) if (entry.expiresAt <= now()) tickets.delete(ticket);
       return { connectionTicket: issue('conn', principal, deviceId, expiresAt),
-        assetTicket: issue('asset', principal, deviceId, expiresAt), expiresAt };
+        assetTicket: issue('asset', principal, deviceId, expiresAt),
+        agentDelegationTicket: issue('agent', principal, deviceId, expiresAt), expiresAt };
     },
     async authenticate(req) { return resolve(ticketOf(req), 'conn'); },
     async resolveAssetTicket(ticket) { return resolve(ticket, 'asset'); },
+    // Only the authenticated Agent mTLS RPC calls this resolver. A reference is
+    // kind-bound and reverified, not a public accountId/authorizationId claim.
+    async resolveAgentDelegation(ticket) { return resolve(ticket, 'agent'); },
     async gate(principal, type, msg) {
       if (principal?.realm !== 'account') return null;
       if (type.startsWith('shared.') || type === 'auth.ticket' || type.startsWith('hosted.') || type.startsWith('service.')) return 'forbidden';
       if (msg?.projectId !== undefined && msg.projectId !== principal.tenantId) return 'project-mismatch';
-      const action = /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(type) ? 'write' : 'read';
+      if (type === 'selection.set' || type === 'selection.clear') {
+        if (['username', 'accountName', 'accountId', 'principal', 'actor'].some(field => msg?.[field] !== undefined)) return 'invalid-authority-claim';
+      }
+      // Presence of a selection does not modify project content. Readonly members
+      // publish their own live selection through the same read authority as open.
+      const action = type === 'selection.set' || type === 'selection.clear' ? 'read' :
+        /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(type) ? 'write' : 'read';
       try { await authority.checkAccess({ principal, projectId: principal.tenantId, action }); return null; }
       catch (error) { return error?.code === 'account-unavailable' || error?.status === 503 ? 'authority-unavailable' : error?.code ?? 'forbidden'; }
     },
