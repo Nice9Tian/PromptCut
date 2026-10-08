@@ -35,9 +35,17 @@ function environmentFile(values) {
   }).join('\n') + '\n';
 }
 const unitPath = value => `"${value.replaceAll('%', '%%').replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+// WorkingDirectory is one path-valued setting, not an ExecStart argument
+// vector. systemd 249 keeps surrounding quotes as path bytes here. Internal
+// spaces are literal; trailing whitespace/quotes are ambiguous and rejected.
+export function formatWorkingDirectory(value) {
+  absolute(value, 'working-directory');
+  if (/[ \t]$/.test(value) || /["'\t]/.test(value)) invalid('working-directory');
+  return value.replaceAll('%', '%%').replaceAll('\\', '\\\\');
+}
 function unit(role, { user, nodePath, sourceDir, entry, envFile, dataDir, privateFiles, forbiddenFiles }) {
   return `[Unit]\nDescription=PromptCut account v2 ${role}\nWants=network-online.target\nAfter=network-online.target\n\n` +
-    `[Service]\nType=simple\nUser=${user}\nGroup=${user}\nWorkingDirectory=${unitPath(sourceDir)}\n` +
+    `[Service]\nType=simple\nUser=${user}\nGroup=${user}\nWorkingDirectory=${formatWorkingDirectory(sourceDir)}\n` +
     `EnvironmentFile=${unitPath(envFile)}\nExecStart=${unitPath(nodePath)} ${unitPath(entry)}\nRestart=on-failure\nRestartSec=3s\n` +
     `NoNewPrivileges=true\nProtectSystem=strict\nPrivateTmp=true\n` +
     `ReadWritePaths=${unitPath(dataDir)}\nReadOnlyPaths=${[sourceDir, ...privateFiles].map(unitPath).join(' ')}\n` +
