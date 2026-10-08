@@ -5,6 +5,7 @@ import { createAccountClient, type CloudAccountClient } from "../../account/clie
 import { cloudConsentState, setCloudConsentSource } from "./consent";
 import { hasCloudIdentity } from "./identity";
 import { CloudAiPanel } from "../../editor/right/CloudAiPanel";
+import { getQueue } from "../chatQueue";
 
 let client: CloudAccountClient | null = null;
 const root = createRoot(document.getElementById("root")!);
@@ -21,6 +22,7 @@ const root = createRoot(document.getElementById("root")!);
     return { accountId: account.id, oldDelegation: hasCloudIdentity() };
   },
   async logout() { if (!client) throw Error("not-mounted"); await client.logout(); },
-  status() { const state = cloudConsentState(); return { accountId: state.accountId, accepted: state.accepted, pending: state.pending }; },
+  status() { const state = cloudConsentState(); return { accountId: state.accountId, accepted: state.accepted, pending: state.pending,
+    queued: getQueue(`cloud:consent-probe:${state.accountId ?? "none"}:${state.bindingVersion}:sp_${"a".repeat(26)}`).length }; },
   close() { setCloudConsentSource(null); root.unmount(); },
 };

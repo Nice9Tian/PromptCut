@@ -68,7 +68,7 @@ export function CloudAiPanel(props: {
     if (!cloud.accountMode || !cloud.available || !cloud.projectId || !consent.accountId || consent.accountId !== cloud.accountId) return;
     let dead = false;
     void refreshCloudConsent().then(accepted => { if (!dead) setConsentOpen(!accepted); },
-      error => { if (!dead) setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。"); });
+      error => { if (!dead && cloudConsentState().accepted !== true) setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。"); });
     return () => { dead = true; };
     // A new account/project binding gets a fresh server result; rejecting does not trigger a loop.
   }, [cloud.accountMode, cloud.available, cloud.projectId, cloud.accountId, consent.accountId]);

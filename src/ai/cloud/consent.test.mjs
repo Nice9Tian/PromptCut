@@ -45,3 +45,19 @@ test('an old account result cannot re-open consent after project detach', async 
   await assert.rejects(pending, error => error.code === 'credential-revoked');
   assert.equal(cloudConsentState().accepted, null);
 });
+
+test('a delayed pre-accept GET cannot overwrite the durable accepted POST', async () => {
+  let releaseRead;
+  const oldRead = new Promise(resolve => { releaseRead = resolve; });
+  const client = createAccountClient({ online:false, origin:'https://visuhive.com', device, now:() => 1000,
+    native:async (operation, args) => operation === 'recover' ? credential : args.body
+      ? { ok:true, accountId:account.id, accepted:true, noticeVersion:1 }
+      : oldRead });
+  await client.restore(); setCloudConsentSource({ client, accountId:account.id });
+  const pending = refreshCloudConsent();
+  await acceptCloudConsent();
+  releaseRead({ ok:true, accountId:account.id, accepted:false, noticeVersion:1 });
+  assert.equal(await pending, true);
+  assert.equal(cloudConsentState().accepted, true);
+  setCloudConsentSource(null);
+});

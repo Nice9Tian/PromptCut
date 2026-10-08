@@ -103,10 +103,12 @@ try {
   await pageA.waitForFunction(() => !document.querySelector('[data-pc="cloud-agent-consent"]'));
   check(await pageA.$eval('[data-pc="ai-input"]', el => el.value === 'draft-kept-in-browser'), 'reject-retains-draft');
   check(agentRequests.length === 0, 'reject-no-agent-read-send');
+  check((await pageA.evaluate(() => window.__pcConsentProbe.status())).queued === 0, 'reject-no-local-queue');
   await pageA.click('[data-pc="ai-send"]');
   await pageA.waitForSelector('[data-pc="cloud-agent-consent"]', { timeout: 10_000 });
   check(await pageA.$eval('[data-pc="ai-input"]', el => el.value === 'draft-kept-in-browser'), 'next-use-prompts-with-draft');
   check(agentRequests.length === 0, 'retry-before-accept-no-agent-call');
+  check((await pageA.evaluate(() => window.__pcConsentProbe.status())).queued === 0, 'retry-before-accept-no-local-queue');
   await pageA.click('.pc-cloud-consent-actions button:last-child');
   await pageA.waitForFunction(() => !document.querySelector('[data-pc="cloud-agent-consent"]'), { timeout: 10_000 });
   const consentA = await pageA.evaluate(async () => (await (await fetch('/api/account/cloud-agent-consent', { credentials:'same-origin' })).json()).accepted);
