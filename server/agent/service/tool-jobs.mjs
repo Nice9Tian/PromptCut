@@ -142,7 +142,7 @@ function decodeRow(row) {
 
 function sameFence(a, b) {
   return b?.allowed === true && b.fenceRevision === a.fenceRevision &&
-    (b.grantState === 'active' || b.grantState === 'retained');
+    b.grantState === a.grantState;
 }
 
 /**
@@ -193,6 +193,10 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
   `);
   db.exec('BEGIN IMMEDIATE;');
   try {
+    db.exec(`CREATE TABLE IF NOT EXISTS tool_job_grant_states (
+      job_id TEXT PRIMARY KEY REFERENCES tool_jobs(job_id) ON DELETE CASCADE,
+      grant_state TEXT NOT NULL CHECK (grant_state IN ('active','retained'))
+    );`);
     db.exec('DROP INDEX IF EXISTS tool_jobs_idempotency;');
     db.exec(`CREATE UNIQUE INDEX tool_jobs_idempotency ON tool_jobs (
       project_id, conversation_id, run_id, grant_id, instance_id, instance_generation,
@@ -254,7 +258,7 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
     await callVerifyFence(context, before.fenceRevision);
     db.exec('BEGIN IMMEDIATE;');
     try {
-      const result = operation(before.fenceRevision);
+      const result = operation(before.fenceRevision, before.grantState);
       const after = await callAuthorize(context, 'write');
       if (!sameFence(before, after)) fail('fence-changed');
       await callVerifyFence(context, before.fenceRevision);
@@ -284,14 +288,17 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
       const inputDigest = checkedDigest(digestValue);
       const requestId = checkedRequestId(requestIdValue);
       const requestKey = createHash('sha256').update(requestId).digest('hex');
-      return enqueue(() => authorizedWrite(context, (fenceRevision) => {
+      return enqueue(() => authorizedWrite(context, (fenceRevision, grantState) => {
         const key = [context.projectId, context.conversationId, context.runId, context.runGrantId,
           context.instanceId, context.instanceGeneration, context.senderAccountId, context.messageId, kind, requestKey];
-        const existing = db.prepare(`SELECT job_id, state, input_digest FROM tool_jobs WHERE
+        const existing = db.prepare(`SELECT j.job_id, j.state, j.input_digest, j.fence_revision,
+          g.grant_state FROM tool_jobs j LEFT JOIN tool_job_grant_states g ON g.job_id=j.job_id WHERE
           project_id=? AND conversation_id=? AND run_id=? AND grant_id=? AND instance_id=? AND
           instance_generation=? AND sender_account_id=? AND message_id=? AND kind=? AND request_key=?`).get(...key);
         if (existing) {
           if (existing.input_digest !== inputDigest) fail('idempotency-conflict');
+          if (existing.fence_revision !== fenceRevision || existing.grant_state !== grantState)
+            fail('job-scope-mismatch');
           return { jobId: existing.job_id, state: existing.state };
         }
         const jobId = `job_${randomUUID()}`;
@@ -303,6 +310,7 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'queued', NULL, 0, '[]', NULL, ?, ?)`).run(
           jobId, kind, ...contextColumns(context), requestKey, inputDigest, fenceRevision, at, at,
         );
+        db.prepare('INSERT INTO tool_job_grant_states (job_id, grant_state) VALUES (?, ?)').run(jobId, grantState);
         return { jobId, state: 'queued' };
       }));
     },
@@ -336,6 +344,42 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
           JSON.stringify(outputRefs), errorCode, at, jobId, expectedRevision);
         return undefined;
       }));
+    },
+
+    checkpointRetained(contextValue, jobId, expectedRevisionValue) {
+      const context = canonicalContext(contextValue);
+      if (typeof jobId !== 'string' || !/^job_[0-9a-f-]{36}$/.test(jobId)) fail('bad-job-id');
+      const expectedRevision = checkedRevision(expectedRevisionValue);
+      return enqueue(async () => {
+        const before = await callAuthorize(context, 'write');
+        if (before.grantState !== 'retained') fail('retained-grant-required');
+        await callVerifyFence(context, before.fenceRevision);
+        db.exec('BEGIN IMMEDIATE;');
+        try {
+          const row = db.prepare(`SELECT j.*, g.grant_state FROM tool_jobs j
+            LEFT JOIN tool_job_grant_states g ON g.job_id=j.job_id
+            WHERE j.job_id=? AND ${contextWhere()}`).get(jobId, ...contextColumns(context));
+          if (!row) fail('job-scope-mismatch');
+          if (row.revision !== expectedRevision) fail('stale-revision');
+          if (!['active', 'retained'].includes(row.grant_state) || TERMINAL.has(row.state) ||
+              row.fence_revision >= before.fenceRevision) fail('retained-checkpoint-denied');
+          const at = nextTime(row.updated_at);
+          db.prepare('UPDATE tool_jobs SET fence_revision=?, revision=?, updated_at=? WHERE job_id=? AND revision=?')
+            .run(before.fenceRevision, expectedRevision + 1, at, jobId, expectedRevision);
+          db.prepare("UPDATE tool_job_grant_states SET grant_state='retained' WHERE job_id=? AND grant_state IN ('active','retained')")
+            .run(jobId);
+          const after = await callAuthorize(context, 'write');
+          if (!sameFence(before, after) || after.grantState !== 'retained') fail('fence-changed');
+          await callVerifyFence(context, before.fenceRevision);
+          db.exec('COMMIT;');
+          return Object.freeze({ revision: expectedRevision + 1, fenceRevision: before.fenceRevision,
+            grantState: 'retained' });
+        } catch (error) {
+          try { db.exec('ROLLBACK;'); } catch { /* Preserve the first failure. */ }
+          if (error instanceof ToolJobsError) throw error;
+          fail('storage-error');
+        }
+      });
     },
 
     get(contextValue, jobId) {
