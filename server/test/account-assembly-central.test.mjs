@@ -13,6 +13,8 @@ import { createAssetMtlsTransport } from '../hosted/asset-doc-client.mjs';
 import { openAccountLedger, digestOf } from '../account/ledger.mjs';
 import { canonicalReadRecord } from '../account/run-authority.mjs';
 import { instanceHttpRequest, registerHttpInstance } from './fixtures/agent-instance-request.mjs';
+import { instanceWsClient, instanceDataHttpRequest } from './fixtures/agent-instance-data.mjs';
+import { exerciseInstanceData } from './fixtures/agent-instance-data-target.mjs';
 import { stageHostedAssetFiles } from '../hosted/files.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { wsClient, waitFor } from './fake-ws-kit.mjs';
@@ -42,10 +44,11 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-doc-assembly-central-'));
   const pki = assetWiringPki(dir), pair = { account: generateKeyPairSync('ed25519'), doc: generateKeyPairSync('ed25519') };
   let provider, accountServer, combo, child, childClosed, childLog = '', closed = false, agentTransport;
-  const clients = [];
+  const clients = [], dataClients = [];
   const closePages = async () => { for (const client of clients) client.close(); await Promise.all(clients.map(client => client.closed)); clients.length = 0; };
   t.after(async () => {
     await closePages();
+    for (const client of dataClients) client.destroy(); await Promise.all(dataClients.map(client => client.ended));
     agentTransport?.close();
     if (child && child.exitCode === null && child.signalCode === null) child.kill();
     await childClosed;
@@ -181,16 +184,61 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     assert.equal(checked.body.result.principal.creator, false); assert.equal(checked.body.result.principal.accountId, ids[0]);
     assert.equal(JSON.stringify(checked.body).includes('instanceSession'), false);
     assert.equal(JSON.stringify(checked.body).includes('authenticationId'), false);
+    await exerciseInstanceData({ port: 5772, tls: pki.wrong, instance, grant, own: client => dataClients.push(client) });
+    const actualAgentHistory = combo.docAssembly.history.accepted(projectId);
+    assert.equal(actualAgentHistory.length, 2);
+    assert.equal(actualAgentHistory[1].actor.runGrantId, grant.runGrantId);
+    assert.equal(actualAgentHistory[1].actor.accountId, ids[0]);
+    assert.equal(actualAgentHistory[1].after.agentVerified, true);
+    assert.equal(actualAgentHistory[1].after.shouldNotExist, undefined);
+    const pageSession = await session(0), pageWithSid = wsClient(`ws://127.0.0.1:5771`,
+      ['promptcut.v1', `promptcut.account.${pageSession.connectionTicket}`, 'promptcut.session.new']); clients.push(pageWithSid);
+    await pageWithSid.opened; const pageWelcome = await pageWithSid.next(message => message.type === 'session.welcome');
+    assert.equal(pageWelcome.connId, undefined);
+    const wrongPage = await instanceWsClient({ port: 5772, tls: pki.wrong, instance, projectId, runGrantId: grant.runGrantId, nonce: 100,
+      protocols: ['promptcut.v1', `promptcut.session.${pageWelcome.sid}.0`], sessionItem: { sid: pageWelcome.sid, ack: 0 } });
+    dataClients.push(wrongPage); assert.equal(wrongPage.status, 101); await wrongPage.ended;
+    assert.equal(wrongPage.closeFrame.code, 4003); assert.equal(wrongPage.all.some(message => message.type === 'session.welcome'), false);
     const otherOs = await registerHttpInstance({ port: 5772, tls: pki.wrong, requestId: 'actual-agent-os-b' });
     assert.equal((await signedRpc('check', 'checkAccess', checkInput, otherOs)).status, 403, 'same cert new OS cannot consume old grant');
     const ticket = await signedRpc('ticket', 'resolveRunPrincipal', { projectId, runGrantId: grant.runGrantId,
       conversationId: grant.conversationId, purpose: 'run' });
     assert.equal(ticket.status, 503); assert.equal(ticket.body.code, 'run-data-proof-unavailable');
     assert.equal((await signedRpc('finish', 'finish', { ...runBinding, requestId: 'signed-finish' })).status, 200);
+    const second = await signedRpc('admit', 'admit', { projectId, conversationId: grant.conversationId, requestId: 'second-wake' });
+    assert.equal(second.status, 200); const otherGrant = second.body.result;
+    assert.equal(otherGrant.accountId, ids[1]);
+    const otherBinding = Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(field => [field, otherGrant[field]]));
+    const otherPrompt = canonicalReadRecord(otherGrant.message, otherGrant);
+    assert.equal((await signedRpc('read', 'confirmRead', { ...otherBinding, requestId: 'second-read', readIntentId: 'second-read-intent',
+      prompt: otherPrompt, promptDigest: digestOf(otherPrompt) })).status, 200);
+    const waitingWs = await instanceWsClient({ port: 5772, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId, nonce: 1 });
+    dataClients.push(waitingWs); await waitingWs.next(message => message.type === 'session.welcome');
+    const lp = await instanceDataHttpRequest({ port: 5772, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId,
+      kind: 'connection', nonce: 1, url: `/lp/open?projectId=${projectId}&runGrantId=${otherGrant.runGrantId}&nonce=1`, body: {},
+      headers: { 'x-promptcut-protocols': 'promptcut.v1, promptcut.session.new' } });
+    assert.equal(lp.status, 200, JSON.stringify(lp.body));
+    const waitingLp = instanceDataHttpRequest({ port: 5772, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId,
+      kind: 'recv', nonce: 2, connId: lp.body.connId, url: '/lp/recv?ack=0&wait=5000',
+      headers: { authorization: `Bearer ${lp.body.sid}` } }).then(value => ({ value }), error => ({ error }));
+    // Receipt asserts below require an actually tracked pending HTTP request;
+    // this delay alone is never treated as evidence that the request was closed.
+    await new Promise(resolve => setTimeout(resolve, 100));
     await assert.rejects(rpc('conversations/send', { delegation: sessions[0].agentDelegationTicket, projectId,
       conversationId: 'fake', requestId: 'fake', content: 'fake', accountId: ids[1] }), /invalid-authority-claim/);
     await assert.rejects(rpc('conversations/switch', { delegation: sessions[0].agentDelegationTicket, projectId,
       conversationId: 'actual-conversation', requestId: 'make-private', visibility: 'private' }), /agent-fence-pending/);
+    await waitingWs.ended; const closedRecv = await waitingLp;
+    assert.ok(closedRecv.error, 'private fence closes pending LP socket without a cache/tail response');
+    assert.equal(waitingWs.all.some(message => message.seq), false, 'private fence sends no new cached data');
+    const fencedAudit = openAccountLedger({ file: path.join(docDir, 'docservice/account-v2.sqlite'), authorityId: 'assembly-doc' });
+    try {
+      const state = fencedAudit.read(), control = Object.values(state.runControlsV2).find(control => control.kind === 'private');
+      assert.equal(control.state, 'pending'); assert.equal(control.receipt, null);
+      const closure = state.docRunClosuresV2[control.controlId];
+      assert.ok(Object.values(closure.instances).some(record => record.closed?.actualClosed === true &&
+        record.closed.connections.some(connection => connection.actualClosed && connection.closedHttp > 0)), 'real LP request/socket close receipt precedes partial evidence');
+    } finally { fencedAudit.close(); }
     const messages = (await rpc('conversations/get', { delegation: sessions[0].agentDelegationTicket, projectId,
       conversationId: 'actual-conversation' })).result.messages;
     assert.equal(messages.find(message => message.messageId !== sent.messageId).queueState, 'cancelled');
@@ -212,7 +260,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     selectionInput: { pageId: 'page-b', selection: { clipIds: ['forged'] } } }), /invalid-authority-claim/);
   assert.equal((await received(b, { type: 'selection.set', projectId, pageId: 'page-b', revision: 2, selection: { clipIds: [] }, username: 'forged', reqId: 'name' })).reason, 'invalid-authority-claim');
   assert.equal((await received(b, { type: 'project.op', projectId, opId: 'readonly-op', ops: [{ op: 'set', path: '/title', value: 'bad' }], reqId: 'readonly-op' })).reason, 'not-listed');
-  assert.equal(combo.docAssembly.history.accepted(projectId).length, 1);
+  assert.equal(combo.docAssembly.history.accepted(projectId).length, agentConfigured ? 2 : 1);
   await closePages();
   await assert.rejects(combo.docAssembly.captureSnapshot({ principal: pagePrincipal, projectId,
     selectionInput: { pageId: 'page-b' } }), /selection-page-unavailable/);
@@ -242,8 +290,9 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   }
   a = await connect((await session(0)).connectionTicket);
   const recovered = await received(a, { type: 'project.open', projectId, reqId: 'reopen' });
-  assert.equal(recovered.rev, 2); assert.equal(recovered.project.title, 'after');
-  assert.equal(combo.docAssembly.history.accepted(projectId).length, 1);
+  assert.equal(recovered.rev, agentConfigured ? 3 : 2); assert.equal(recovered.project.title, 'after');
+  if (agentConfigured) assert.equal(recovered.project.agentVerified, true);
+  assert.equal(combo.docAssembly.history.accepted(projectId).length, agentConfigured ? 2 : 1);
   // A restart never persists reusable connection/delegation tickets.
   await assert.rejects(combo.accountRuntime.resolveAgentDelegation(sessions[0].agentDelegationTicket), /ticket-expired/);
   provider.createLogin({ id: 'assembly-website', accountId: ids[0], kind: 'website', now: Date.now(), expiresAt: Date.now() + 60000, generation: 1 });
@@ -254,5 +303,5 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   const oldPrincipal = accepted[0].actor;
   assert.notEqual(await combo.accountRuntime.resumeGate({ ...oldPrincipal, realm: 'account', projectId, tenantId: projectId }), null);
   assert.equal((await call(0, 'session', { projectId, deviceId: 'page-0', requestId: 'revoked' })).status, 401);
-  t.diagnostic(`actual order accepted=${accepted.length}, orderSeq=${changed.orderSeq}; ${agentConfigured ? 'real registered HTTP run factory; WS/LP proof and control ACK remain unavailable' : 'no run provider installed'}`);
+  t.diagnostic(`actual order accepted=${accepted.length}, orderSeq=${changed.orderSeq}; ${agentConfigured ? 'registered HTTP + scoped mTLS WS/LP data; control ACK/OS closure remain pending' : 'no run provider installed'}`);
 });
