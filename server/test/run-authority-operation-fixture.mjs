@@ -13,7 +13,7 @@ import { projectModule, stateBlobName } from '../docservice/modules/project.mjs'
 import { createDocService } from '../docservice/service.mjs';
 import { wsClient } from './fake-ws-kit.mjs';
 
-export async function runOperationFixture({ port = 5730, request, afterGate, failpoint = () => {}, accountFailpoint = () => {} } = {}) {
+export async function runOperationFixture({ port = 5730, request, afterGate, waitPastAccessExpiry = false, failpoint = () => {}, accountFailpoint = () => {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-run-operation-'));
   const providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT;
   if (!providerRoot || !process.env.PROMPTCUT_PASSWORD_ORDER_MODULE) throw new Error('actual providers required');
@@ -41,6 +41,7 @@ export async function runOperationFixture({ port = 5730, request, afterGate, fai
     Object.assign(m, { senderAccountId: actor.accountId, loginId: actor.loginId, credentialId: actor.credentialId,
       loginGeneration: actor.loginGeneration, selectionSnapshot: { ...m.selectionSnapshot, accountId } });
   });
+  if (waitPastAccessExpiry) clock.now = session.accessExpiresAt + 1;
   const grant = await f.admit(); await f.provider.confirmRead(f.input(grant));
   const keys = { account: generateKeyPairSync('ed25519'), doc: generateKeyPairSync('ed25519') };
   const accountOrder = createPasswordOrder({ store: accountStore, credentials, accountOrderSigningKey: keys.account.privateKey,
@@ -52,7 +53,10 @@ export async function runOperationFixture({ port = 5730, request, afterGate, fai
   store.writeBlob(stateBlobName(projectId), JSON.stringify({ v: 1, projectId, rev: 1, at: clock.now,
     project: { title: 'before', clips: [] }, writers: [], history: [], opIds: [] }));
   const wiring = createOperationWiring({ history, account: client, verifyWitness: createWitnessVerifier({ keys: { test: keys.account.publicKey } }),
-    authority: { checkAccess: () => { throw new Error('ordinary page unavailable in run-only fixture'); } },
+    authority: { checkAccess: () => {
+      credentials.verify(session.accessToken); // Real ordinary token check; this fixture never grants page access.
+      throw new Error('ordinary page unavailable in run-only fixture');
+    } },
     projection: createDurableProjectProjection({ store, directory: storeDir }), docAuthorityId: 'doc-run-fixture',
     docAttestationPrivateKey: keys.doc.privateKey, failpoint,
     runProvider: { checkAccess: async args => { const value = await f.provider.checkAccess(args); await afterGate?.(value, result); return value; } } });
@@ -63,6 +67,7 @@ export async function runOperationFixture({ port = 5730, request, afterGate, fai
   const clients = [], controls = [];
   let changes = 0;
   const result = { ...f, grant, actor, credentials, accountStore, history, wiring, project, store, clock, projectId,
+    ordinaryPrincipal: { ...actor, projectId, role: 'page' },
     expireAccess() { clock.now = session.accessExpiresAt + 1; },
     change(exit) { const id = `change-${++changes}`; const event = accountStore.changePassword({ accountId, requestId: id,
       pw: 'next-fixture-hash', now: clock.now, initiatorWebsiteLoginId: 'website', clock: { diagnosticOnly: true } });

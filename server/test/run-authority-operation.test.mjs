@@ -18,6 +18,16 @@ test('real WS project.op with actual active proof after access TTL and password 
   assert.equal(JSON.parse(f.store.readBlob(stateBlobName(f.projectId))).project.title, 'expired-active');
 });
 
+test('actual accepted FIFO message waiting past 120 seconds still admits/reads and commits through real WS', actual, async t => {
+  const f = await runOperationFixture({ waitPastAccessExpiry: true }); t.after(() => f.close());
+  assert.equal(f.grant.state, 'preparing');
+  assert.equal(f.ledger.read().runGrantsV2[f.grant.runGrantId].state, 'active');
+  assert.throws(() => f.credentials.verifyActorRef(f.actor), { code: 'credential-revoked' });
+  const c = await f.connect(); await open(c, f.projectId);
+  assert.equal((await op(c, f.projectId, 'waited-message')).type, 'project.op.ok');
+  assert.equal(f.history.accepted(f.projectId)[0].witness.authorization.kind, 'active-run');
+});
+
 test('account exit in first active seal changes to retained using same real witness/prepared and no new op', actual, async t => {
   const attempts = []; let changed = false;
   const f = await runOperationFixture({ request(args, invoke, own) {
@@ -60,6 +70,10 @@ test('explicit identical real project.op resumes reserved without new prepared; 
   assert.notEqual((await op(c, f.projectId, 'retry')).type, 'project.op.ok');
   assert.equal(f.history.get(f.projectId, 'retry').state, 'reserved');
   const changed = await op(c, f.projectId, 'retry', 'different'); assert.equal(changed.reason, 'operation-id-mismatch');
+  assert.equal(f.history.get(f.projectId, 'retry').state, 'reserved');
+  f.expireAccess();
+  await assert.rejects(f.wiring.execute({ projectId: f.projectId, principal: f.ordinaryPrincipal, actor: f.actor,
+    request: { opId: 'retry', ops: [{ op: 'set', path: '/title', value: 'retry' }] } }, () => { throw new Error('must not prepare'); }), { code: 'credential-revoked' });
   assert.equal(f.history.get(f.projectId, 'retry').state, 'reserved');
   assert.equal((await op(c, f.projectId, 'retry')).type, 'project.op.ok');
   assert.equal(f.history.accepted(f.projectId).length, 1);
