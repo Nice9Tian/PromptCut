@@ -475,6 +475,7 @@ try {
       defaultViewport:{ width:1440, height:1000 }, protocolTimeout:TIMEOUT,
       args:[...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--no-default-browser-check', '--force-device-scale-factor=1', '--mute-audio'] });
     browserPid = browser.process()?.pid; result.browserPid = browserPid;
+    result.preflight.publicNetwork = 'contacted-by-real-browser'; result.preflight.productionActions = 'explicit-public-ui-run';
     for (let i = 0; i < identities.accounts.length; i++) { result.phase = `public-register-${i}`; await registerAccount(identities.accounts[i], `public-register-${i}`); }
     await runOnline(identities.accounts, identities.marker);
     if (DESKTOP_EXE) await runDesktop(identities.accounts, identities.marker);
