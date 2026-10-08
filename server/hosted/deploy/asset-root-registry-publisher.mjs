@@ -9,9 +9,12 @@ import path from 'node:path';
 import https from 'node:https';
 import { checkServerIdentity } from 'node:tls';
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { digestOf } from '../../account/ledger.mjs';
+import { assetClosureUnitV2, validateAssetRootExpectedV2, validateAssetRootScopeV2, validateAssetRootInstanceV2,
+  validateAssetRootRecordV2, validateAssetRootReservationV2, validateAssetRootWitnessV2,
+  validateAssetRootHistoryV2 } from '../asset-root-registry-schema-v2.mjs';
 
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
 const equal = (a, b) => digestOf(a) === digestOf(b);
@@ -180,6 +183,94 @@ export async function publishAssetRootRegistry({ scope, mode, io }) {
   } finally { await release({ publicationDurable }); }
 }
 
+/** Independent v2 entry. The injected IO is a sequencing model, not permission
+ * to attest OS facts. Production IO is only created by runAssetRootPublisherV2.
+ * Original v1 coordinator and CLI are not upgraded implicitly.
+ */
+export async function publishAssetRootRegistryV2({ expected, mode, io }) {
+  expected = validateAssetRootExpectedV2(expected);
+  if (!['initialize', 'rotate'].includes(mode)) fail('publisher-mode-invalid');
+  const release = await io.lock(); let publicationDurable = false;
+  try {
+    const old = await io.read('current.json'), initialAnchor = await io.read('anchor.json'), entries = [];
+    if (mode === 'initialize') {
+      if (old || initialAnchor || await io.read('reservation.json') || await io.read('transition.json')) fail('publisher-bootstrap-not-empty');
+      await io.assertInitial();
+    } else {
+      if (!old || !initialAnchor) fail('publisher-anchor-missing');
+      validateAssetRootRecordV2(old, { expected });
+      for (let n = 1; n <= old.epoch; n++) entries.push({ record: await io.read(`epoch-${n}.json`),
+        reservation: await io.read(`reservation-${n}.json`), witness: n === 1 ? null : await io.read(`witness-${n}.json`),
+        publication: await io.read(`publication-${n}.json`) });
+      // We own the transition lock. This validates completed historical markers,
+      // not a doc acceptance of the currently locked candidate.
+      validateAssetRootHistoryV2({ entries, currentRecord: old, anchor: initialAnchor, expected, publisherLocked: false });
+    }
+    const epoch = old ? old.epoch + 1 : 1;
+    if (!positive(epoch)) fail('publisher-epoch-overflow');
+    const plan = { epoch, instanceId: io.uuid(), scopeId: io.scopeId() };
+    assetClosureUnitV2(expected, plan);
+    if (entries.some(e => e.record.instance.instanceId === plan.instanceId || e.record.closureScope.scopeId === plan.scopeId))
+      fail('publisher-history-identity-reused');
+    let witness = null;
+    if (old) {
+      const pinned = await io.pinPrevious(old);
+      try {
+        await io.write('current.json', { ...old, state: 'preparing' });
+        await io.write('transition.json', { v: 2, phase: 'closing', fromDigest: digestOf(old), toEpoch: epoch });
+        const observed = await pinned.stopAndObserve();
+        witness = { v: 2, protocol: 'promptcut.asset-os-closure.v2', witnessId: io.uuid(), authorityId: expected.authorityId,
+          fromEpoch: old.epoch, toEpoch: epoch, previousRegistry: old, observed };
+        validateAssetRootWitnessV2(witness, { expected, previousRecord: old, nextEpoch: epoch, bootId: old.instance.bootId });
+        await io.write(`witness-${epoch}.json`, witness, true);
+        // The old empty scope survives until its complete witness is durable.
+        // This await is deliberately after the witness file+directory barrier.
+        await pinned.releaseScope();
+      } finally { await pinned.close(); }
+    }
+    await io.write('transition.json', { v: 2, phase: 'scope-reserved', fromDigest: old ? digestOf(old) : null, ...plan });
+    const closureScope = await io.createScope(plan);
+    validateAssetRootScopeV2(closureScope, { expected, epoch, instanceId: plan.instanceId });
+    if (old && closureScope.bootId !== old.instance.bootId) fail('publisher-cross-boot-unsupported');
+    const reservation = { v: 2, protocol: 'promptcut.asset-root-reservation.v2', ...expected,
+      epoch, instanceId: plan.instanceId, serviceCgroupPath: `${closureScope.cgroup.v2Path}/${expected.unit}`, closureScope };
+    validateAssetRootReservationV2(reservation, { expected });
+    await io.write(`reservation-${epoch}.json`, reservation, true);
+    await io.write('reservation.json', reservation);
+    await io.configureService(reservation);
+    await io.start(reservation);
+    const before = await io.inspect(reservation);
+    validateAssetRootInstanceV2(before.instance, { expected, closureScope: before.closureScope });
+    if (!equal(before.closureScope, closureScope)) fail('publisher-scope-changed');
+    const identity = await io.identity(reservation);
+    const after = await io.inspect(reservation);
+    if (!equal(before, after)) fail('publisher-instance-changed');
+    if (!exact(identity, ['v', 'serviceId', 'authorityId', 'epoch', 'instanceId', 'pid', 'startedAt', 'serviceIdentity',
+      'docClientFingerprint256', 'internalServerFingerprint256', 'state']) || identity.v !== 1 || identity.serviceId !== 'asset' ||
+        identity.authorityId !== expected.authorityId || identity.epoch !== epoch || identity.instanceId !== plan.instanceId ||
+        after.instance.instanceId !== plan.instanceId || identity.pid !== after.instance.pid || !positive(identity.startedAt) ||
+        identity.serviceIdentity !== expected.serviceIdentity || identity.state !== 'running' ||
+        identity.docClientFingerprint256 !== expected.clientFingerprint256 || identity.internalServerFingerprint256 !== expected.serverFingerprint256)
+      fail('publisher-identity-mismatch');
+    const record = { v: 2, authorityId: expected.authorityId, serviceId: 'asset', epoch, state: 'active', instance: after.instance,
+      closureScope, previous: old ? { epoch: old.epoch, registryDigest: digestOf(old), instance: old.instance,
+        closureScope: old.closureScope, closureWitnessDigest: digestOf(witness) } : null };
+    const anchor = initialAnchor ?? { v: 2, protocol: 'promptcut.asset-root-anchor.v2', ...expected, firstEpoch: 1, firstRegistryDigest: digestOf(record) };
+    const publication = { v: 2, protocol: 'promptcut.asset-root-publication.v2', authorityId: expected.authorityId, epoch,
+      registryDigest: digestOf(record), anchorDigest: digestOf(anchor), closureWitnessDigest: witness ? digestOf(witness) : null,
+      reservationDigest: digestOf(reservation) };
+    const checkpoint = validateAssetRootHistoryV2({ entries: [...entries, { record, reservation, witness, publication }],
+      currentRecord: record, anchor, expected, publisherLocked: false });
+    if (!old) await io.write('anchor.json', anchor, true);
+    await io.write(`epoch-${epoch}.json`, record, true);
+    if (!equal(after, await io.inspect(reservation))) fail('publisher-instance-changed');
+    await io.write('current.json', record);
+    await io.write(`publication-${epoch}.json`, publication, true);
+    publicationDurable = true;
+    return checkpoint;
+  } finally { await release({ publicationDurable }); }
+}
+
 async function rootDirectory(dir) {
   if (!path.isAbsolute(dir) || path.normalize(dir) !== dir) fail('publisher-path-untrusted');
   for (let p = dir; ; p = path.dirname(p)) {
@@ -242,6 +333,45 @@ export async function openPublisherLock(dir, { directoryBarrier = syncDirectory 
     } catch { fail('publisher-unlock-result-unknown'); }
     finally { await fd.close(); }
   };
+}
+const bytesDigest = bytes => createHash('sha256').update(bytes).digest('hex');
+
+/** Portable real-file primitive for the exclusive root runtime adapter. The
+ * production caller separately authenticates every ancestor/receipt/base file.
+ * A post-rename barrier failure is unknown-visible and must retain its lock.
+ */
+export async function writePublisherTextV2({ filename, text, previous = null, directoryBarrier = syncDirectory }) {
+  const check = async () => {
+    let st;
+    try { st = await fs.lstat(filename, { bigint: true }); }
+    catch (e) { if (e.code === 'ENOENT' && previous === null) return; throw e; }
+    if (!previous || !st.isFile() || st.isSymbolicLink() || st.nlink !== 1n || String(st.dev) !== previous.dev ||
+        String(st.ino) !== previous.ino || bytesDigest(await fs.readFile(filename)) !== previous.digest) fail('publisher-dropin-ownership');
+  };
+  await check();
+  const dir = path.dirname(filename), tmp = path.join(dir, `.publisher-${randomUUID()}.tmp`), fd = await fs.open(tmp, 'wx', 0o644);
+  try { await fd.chmod(0o644); await fd.writeFile(text); await fd.sync(); } finally { await fd.close(); }
+  await check();
+  if (previous === null) { await fs.link(tmp, filename); await fs.unlink(tmp); }
+  else await fs.rename(tmp, filename);
+  await directoryBarrier(dir);
+  const st = await fs.lstat(filename, { bigint: true });
+  if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1n || bytesDigest(await fs.readFile(filename)) !== bytesDigest(text))
+    fail('publisher-dropin-ownership');
+  return { dev: String(st.dev), ino: String(st.ino), digest: bytesDigest(text) };
+}
+
+export function validatePublisherRuntimeAdapterV2(value, expected) {
+  validateAssetRootExpectedV2(expected);
+  const file = v => exact(v, ['path', 'sha256']) && typeof v.path === 'string' &&
+    /^\/(?:etc|run|usr|lib)\/[A-Za-z0-9_.@/-]+$/.test(v.path) && path.posix.normalize(v.path) === v.path &&
+    !v.path.split('/').some(s => s === '.' || s === '..') && hash(v.sha256);
+  if (!exact(value, ['unitFragment', 'baseDropIns', 'ownDropInPath']) || !file(value.unitFragment) ||
+      !Array.isArray(value.baseDropIns) || value.baseDropIns.some(v => !file(v)) ||
+      value.ownDropInPath !== `/run/systemd/system/${expected.unit}.d/90-promptcut-root-slice.conf` ||
+      new Set([value.unitFragment.path, ...value.baseDropIns.map(v => v.path), value.ownDropInPath]).size !== value.baseDropIns.length + 2)
+    fail('publisher-runtime-config-invalid');
+  return structuredClone(value);
 }
 const exec = args => new Promise((resolve, reject) => execFile('/usr/bin/systemctl', args,
   { windowsHide: true, timeout: 120000, maxBuffer: 65536, encoding: 'utf8' }, (error, stdout) =>
@@ -407,11 +537,243 @@ export async function runAssetRootPublisher({ configFile, mode }) {
   return await publishAssetRootRegistry({ scope, mode, io });
 }
 
+const sliceTextV2 = (expected, reservation) => `# PromptCut root publisher v2 ${expected.authorityId} epoch ${reservation.epoch}\n[Service]\nSlice=${reservation.closureScope.unit}\n`;
+const systemPropertiesV2 = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'InvocationID',
+  'KillMode', 'Delegate', 'Restart', 'Slice', 'User', 'FragmentPath', 'SourcePath', 'DropInPaths', 'Following', 'Transient', 'Job', 'Description', 'StopWhenUnneeded'];
+async function systemUnitV2(unit) {
+  const raw = await exec(['show', unit, '--no-pager', '--all', ...systemPropertiesV2.map(n => `--property=${n}`)]);
+  return Object.fromEntries(raw.trim().split('\n').map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
+}
+const externalV2 = (file, args) => new Promise((resolve, reject) => execFile(file, args,
+  { windowsHide: true, timeout: 10000, maxBuffer: 65536, encoding: 'utf8' }, (error, stdout) =>
+    error ? reject(Object.assign(new Error('publisher-control-failed'), { code: 'publisher-control-failed' })) : resolve(stdout)));
+
+/** Explicit Linux root v2 runtime. It only manages the configured service and
+ * its exact owned runtime drop-in; no live Slice mutation or v1 migration.
+ */
+export async function runAssetRootPublisherV2({ configFile, mode }) {
+  if (process.platform !== 'linux' || process.getuid?.() !== 0 || process.geteuid?.() !== 0) fail('publisher-linux-root-required');
+  const config = await rootRead(configFile);
+  if (!exact(config, ['v', 'expected', 'registryDir', 'identity', 'runtimeAdapter']) || config.v !== 2 ||
+      !exact(config.identity, ['origin', 'keyFile', 'certFile', 'caFile'])) fail('publisher-config-invalid');
+  const expected = validateAssetRootExpectedV2(config.expected), adapter = validatePublisherRuntimeAdapterV2(config.runtimeAdapter, expected);
+  const dir = config.registryDir, origin = new URL(config.identity.origin);
+  if (origin.protocol !== 'https:' || !['127.0.0.1', '[::1]', 'localhost'].includes(origin.hostname) ||
+      origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password) fail('publisher-config-invalid');
+  await rootDirectory(dir);
+  const read = name => rootRead(path.join(dir, name), true);
+  const write = (name, value, exclusive) => atomicWrite(dir, name, value, exclusive);
+  const receiptName = 'runtime-dropin.json';
+  const descriptor = async filename => {
+    const content = await rootRead(filename, false, true), st = await fs.lstat(filename, { bigint: true });
+    return { content, dev: String(st.dev), ino: String(st.ino), digest: bytesDigest(content) };
+  };
+  async function configuration(reservation = null) {
+    const unit = validatePublisherUnit(await systemUnitV2(expected.unit), expected.unit);
+    if (unit.FragmentPath !== adapter.unitFragment.path || unit.SourcePath || unit.Following || unit.Transient !== 'no')
+      fail('publisher-unit-config-changed');
+    for (const declared of [adapter.unitFragment, ...adapter.baseDropIns])
+      if ((await descriptor(declared.path)).digest !== declared.sha256) fail('publisher-unit-config-changed');
+    const receipt = await read(receiptName);
+    let content = null;
+    const ownDir = path.dirname(adapter.ownDropInPath);
+    await rootDirectory(path.dirname(ownDir));
+    let ownDirExists = true;
+    try { await fs.lstat(ownDir); } catch (e) { if (e.code === 'ENOENT') ownDirExists = false; else throw e; }
+    if (ownDirExists) content = await rootRead(adapter.ownDropInPath, true, true);
+    if (receipt) {
+      if (!exact(receipt, ['v', 'authorityId', 'epoch', 'unit', 'path', 'scopeUnit', 'file', 'adapterDigest']) || receipt.v !== 2 ||
+          receipt.authorityId !== expected.authorityId || receipt.unit !== expected.unit || receipt.path !== adapter.ownDropInPath ||
+          receipt.adapterDigest !== digestOf(adapter) || !positive(receipt.epoch) || !content) fail('publisher-dropin-ownership');
+      const previousReservation = await read(`reservation-${receipt.epoch}.json`);
+      validateAssetRootReservationV2(previousReservation, { expected });
+      const actual = await descriptor(adapter.ownDropInPath);
+      if (receipt.scopeUnit !== previousReservation.closureScope.unit ||
+          !equal(receipt.file, { dev: actual.dev, ino: actual.ino, digest: actual.digest }) ||
+          !content.equals(Buffer.from(sliceTextV2(expected, previousReservation)))) fail('publisher-dropin-ownership');
+    } else if (content) fail('publisher-dropin-ownership');
+    const loaded = (unit.DropInPaths ?? '').split(' ').filter(Boolean).sort();
+    const allowed = [...adapter.baseDropIns.map(v => v.path), ...(receipt ? [adapter.ownDropInPath] : [])].sort();
+    if (!equal(loaded, allowed)) fail('publisher-foreign-dropin');
+    if (!/^[A-Za-z_][A-Za-z0-9_-]{0,63}$|^[1-9][0-9]*$/.test(unit.User ?? '')) fail('publisher-unit-user');
+    const userId = Number((await externalV2('/usr/bin/id', ['-u', '--', unit.User])).trim());
+    if (userId !== expected.uid) fail('publisher-unit-user');
+    if (reservation && (!receipt || receipt.epoch !== reservation.epoch || unit.Slice !== reservation.closureScope.unit))
+      fail('publisher-unit-slice-mismatch');
+    return { unit, receipt, content };
+  }
+  async function scopeInfo(scope) {
+    validateAssetRootScopeV2(scope, { expected, epoch: scope.epoch, instanceId: scope.instanceId });
+    const u = await systemUnitV2(scope.unit), cg = await fs.lstat(scope.cgroup.v2Path, { bigint: true });
+    const self = (await fs.readFile('/proc/self/cgroup', 'utf8')).trim();
+    if (u.Id !== scope.unit || u.ActiveState !== 'active' || u.Transient !== 'yes' || u.StopWhenUnneeded !== 'no' || u.User ||
+        u.Description !== `PromptCut root closure ${expected.authorityId} epoch ${scope.epoch} ${scope.scopeId}` ||
+        u.InvocationID !== scope.unitInvocationId || `/sys/fs/cgroup${u.ControlGroup}` !== scope.cgroup.v2Path ||
+        !cg.isDirectory() || cg.isSymbolicLink() || cg.uid !== 0n || (cg.mode & 0o022n) ||
+        String(cg.dev) !== scope.cgroup.dev || String(cg.ino) !== scope.cgroup.ino || await bootId() !== scope.bootId ||
+        !/^0::\/[^\n]*$/.test(self) || `/sys/fs/cgroup${self.slice(3)}` === scope.cgroup.v2Path ||
+        `/sys/fs/cgroup${self.slice(3)}`.startsWith(`${scope.cgroup.v2Path}/`)) fail('publisher-scope-changed');
+    if ((await fs.statfs(scope.cgroup.v2Path)).type !== 0x63677270) fail('publisher-cgroup-not-v2');
+    return scope;
+  }
+  async function exclusiveScope(scope, empty = false) {
+    const prefix = `${scope.cgroup.v2Path}/${expected.unit}`;
+    async function visit(p) {
+      const st = await fs.lstat(p);
+      if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== 0 || (st.mode & 0o022)) fail('publisher-scope-not-exclusive');
+      const pids = (await fs.readFile(path.join(p, 'cgroup.procs'), 'utf8')).trim().split('\n').filter(Boolean);
+      if ((empty || p === scope.cgroup.v2Path) && pids.length) fail('publisher-scope-not-exclusive');
+      for (const line of pids) {
+        if (!/^[1-9][0-9]*$/.test(line)) fail('publisher-scope-not-exclusive');
+        const proc = await procInfo(Number(line));
+        if (proc.uid !== expected.uid || !(proc.cgroupPath === prefix || proc.cgroupPath.startsWith(`${prefix}/`)))
+          fail('publisher-scope-not-exclusive');
+      }
+      for (const item of await fs.readdir(p, { withFileTypes: true })) if (item.isDirectory()) {
+        const child = path.join(p, item.name);
+        if (!(child === prefix || child.startsWith(`${prefix}/`))) fail('publisher-scope-not-exclusive');
+        await visit(child);
+      }
+    }
+    await visit(scope.cgroup.v2Path);
+  }
+  async function inspectV2(reservation) {
+    validateAssetRootReservationV2(reservation, { expected });
+    await configuration(reservation); await scopeInfo(reservation.closureScope);
+    const instance = await inspect({ ...expected, cgroupPath: reservation.serviceCgroupPath }, reservation);
+    await exclusiveScope(reservation.closureScope);
+    await configuration(reservation); await scopeInfo(reservation.closureScope);
+    validateAssetRootInstanceV2(instance, { expected, closureScope: reservation.closureScope });
+    return { instance, closureScope: reservation.closureScope };
+  }
+  const io = {
+    uuid: randomUUID, scopeId: () => randomBytes(16).toString('hex'), read, write, lock: () => openPublisherLock(dir),
+    async assertInitial() {
+      if ((await fs.readdir(dir)).some(n => n !== '.publisher.lock')) fail('publisher-bootstrap-not-empty');
+      const { unit } = await configuration();
+      if (unit.ActiveState !== 'inactive' || Number(unit.MainPID) !== 0 || unit.ControlGroup || unit.Job)
+        fail('publisher-bootstrap-unit-active');
+      // Explicit fresh-authority bootstrap is not a witness for legacy work.
+    },
+    async createScope(plan) {
+      const unit = assetClosureUnitV2(expected, plan), cgPath = `/sys/fs/cgroup/${unit}`;
+      const u = await systemUnitV2(unit);
+      if (u.Id !== unit || u.LoadState !== 'loaded' || u.ActiveState !== 'inactive' || u.SubState !== 'dead' || u.Transient !== 'no' ||
+          u.Description !== `Slice /${unit.slice(0, -6)}` || u.StopWhenUnneeded !== 'no' || u.User || u.MainPID ||
+          ['FragmentPath', 'SourcePath', 'DropInPaths', 'InvocationID', 'ControlGroup', 'Job', 'Following'].some(k => u[k] !== ''))
+        fail('publisher-slice-collision');
+      try { await fs.lstat(cgPath); fail('publisher-slice-collision'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      await externalV2('/usr/bin/busctl', ['--system', '--no-pager', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
+        'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))', unit, 'fail', '2', 'Description', 's',
+        `PromptCut root closure ${expected.authorityId} epoch ${plan.epoch} ${plan.scopeId}`, 'StopWhenUnneeded', 'b', 'false', '0']);
+      const deadline = Date.now() + 10000; let active;
+      do { active = await systemUnitV2(unit); if (active.ActiveState === 'active') break;
+        if (active.ActiveState === 'failed') fail('publisher-slice-start-failed');
+        await new Promise(r => setTimeout(r, 20));
+      } while (Date.now() < deadline);
+      const st = await fs.lstat(cgPath, { bigint: true }), currentBoot = await bootId();
+      const scope = { ...plan, authorityId: expected.authorityId, kind: 'systemd-slice', unit,
+        unitInvocationId: active.InvocationID, bootId: currentBoot,
+        cgroup: { v2Path: cgPath, dev: String(st.dev), ino: String(st.ino), bootId: currentBoot } };
+      await scopeInfo(scope); await exclusiveScope(scope, true);
+      if (!/^populated 0$/m.test(await fs.readFile(path.join(cgPath, 'cgroup.events'), 'utf8'))) fail('publisher-scope-not-empty');
+      return scope;
+    },
+    async configureService(reservation) {
+      const previous = await configuration();
+      if (previous.unit.ActiveState !== 'inactive' || Number(previous.unit.MainPID) !== 0 || previous.unit.Job)
+        fail('publisher-unit-not-stopped');
+      await scopeInfo(reservation.closureScope); await exclusiveScope(reservation.closureScope, true);
+      const ownDir = path.dirname(adapter.ownDropInPath); await rootDirectory(path.dirname(ownDir));
+      try { await fs.mkdir(ownDir, { mode: 0o755 }); await fs.chmod(ownDir, 0o755); await syncDirectory(path.dirname(ownDir)); }
+      catch (e) { if (e.code !== 'EEXIST') throw e; }
+      await rootDirectory(ownDir);
+      await write(`runtime-backup-${reservation.epoch}.json`, { v: 2, authorityId: expected.authorityId, epoch: reservation.epoch,
+        path: adapter.ownDropInPath, previousReceipt: previous.receipt, previousText: previous.content?.toString('utf8') ?? null }, true);
+      const file = await writePublisherTextV2({ filename: adapter.ownDropInPath, text: sliceTextV2(expected, reservation), previous: previous.receipt?.file ?? null });
+      await write(receiptName, { v: 2, authorityId: expected.authorityId, epoch: reservation.epoch, unit: expected.unit,
+        path: adapter.ownDropInPath, scopeUnit: reservation.closureScope.unit, file, adapterDigest: digestOf(adapter) });
+      await exec(['daemon-reload']);
+      const loaded = await configuration(reservation);
+      if (loaded.unit.ActiveState !== 'inactive' || Number(loaded.unit.MainPID) !== 0 || loaded.unit.Job) fail('publisher-unit-not-stopped');
+      await scopeInfo(reservation.closureScope); await exclusiveScope(reservation.closureScope, true);
+    },
+    async start(reservation) {
+      const state = await configuration(reservation);
+      if (state.unit.ActiveState !== 'inactive' || Number(state.unit.MainPID) !== 0 || state.unit.Job) fail('publisher-unit-not-stopped');
+      await scopeInfo(reservation.closureScope); await exclusiveScope(reservation.closureScope, true);
+      await exec(['start', expected.unit, '--no-ask-password']);
+    },
+    inspect: inspectV2,
+    async identity(reservation) {
+      const original = await inspectV2(reservation);
+      for (let attempt = 0; ; attempt++) {
+        try { return await freshIdentity(config.identity, expected); }
+        catch (error) {
+          if (!error.retryable || attempt >= 6) throw error;
+          if (!equal(original, await inspectV2(reservation))) fail('publisher-instance-changed');
+          await new Promise(resolve => setTimeout(resolve, Math.min(100 * 2 ** attempt, 1600)));
+          if (!equal(original, await inspectV2(reservation))) fail('publisher-instance-changed');
+        }
+      }
+    },
+    async pinPrevious(old) {
+      const reservation = await read(`reservation-${old.epoch}.json`);
+      if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: old.closureScope })) fail('publisher-previous-instance-mismatch');
+      const scope = old.closureScope, group = await fs.open(scope.cgroup.v2Path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      let events;
+      try {
+        events = await fs.open(`/proc/self/fd/${group.fd}/cgroup.events`, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const empty = async () => {
+          await scopeInfo(scope);
+          const st = await group.stat({ bigint: true });
+          if (String(st.dev) !== scope.cgroup.dev || String(st.ino) !== scope.cgroup.ino) fail('publisher-scope-changed');
+          const buf = Buffer.alloc(4096), { bytesRead } = await events.read(buf, 0, buf.length, 0);
+          const match = /^populated ([01])$/m.exec(buf.subarray(0, bytesRead).toString('utf8'));
+          if (!match) fail('publisher-cgroup-observation-invalid');
+          return match[1] === '0';
+        };
+        const stopped = async () => {
+          const { unit } = await configuration(reservation);
+          if (unit.ActiveState !== 'inactive' || Number(unit.MainPID) !== 0 || unit.Job) fail('publisher-unit-not-stopped');
+          try { if (parseProcStat(await fs.readFile(`/proc/${old.instance.pid}/stat`, 'utf8')).startTicks === old.instance.pidBirth.startTicks)
+            fail('publisher-old-birth-live'); }
+          catch (e) { if (e.code !== 'ENOENT') throw e; }
+          if (!await empty()) fail('publisher-closure-unproved');
+          await exclusiveScope(scope, true);
+        };
+        return {
+          async stopAndObserve() {
+            if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: scope })) fail('publisher-previous-instance-mismatch');
+            const stopping = exec(['stop', expected.unit, '--no-ask-password']).then(() => true, () => false);
+            let observed = false;
+            try {
+              const deadline = Date.now() + 120000;
+              do { if (await empty()) { observed = true; break; } await new Promise(r => setTimeout(r, 20)); } while (Date.now() < deadline);
+            } finally { if (!await stopping) fail('publisher-stop-failed'); }
+            if (!observed) fail('publisher-closure-unproved');
+            await stopped();
+            return { kind: 'cgroup-empty', closed: true, at: Date.now(), bootId: old.instance.bootId,
+              serviceInstance: old.instance, closureScope: scope, scopeActive: true, scopeExclusive: true,
+              populated: 0, serviceInactive: true, mainBirthGone: true };
+          },
+          async releaseScope() { await stopped(); await exec(['stop', scope.unit, '--no-ask-password']);
+            const after = await systemUnitV2(scope.unit);
+            if (after.ActiveState !== 'inactive' || after.Job) fail('publisher-scope-release-incomplete'); },
+          async close() { await events.close(); await group.close(); },
+        };
+      } catch (e) { await events?.close(); await group.close(); throw e; }
+    },
+  };
+  return await publishAssetRootRegistryV2({ expected, mode, io });
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const args = process.argv.slice(2);
-    if (args.length !== 3 || args[0] !== '--config' || !['--initialize', '--rotate'].includes(args[2])) fail('publisher-cli-invalid');
-    const result = await runAssetRootPublisher({ configFile: args[1], mode: args[2].slice(2) });
+    if (args.length !== 3 || !['--config', '--config-v2'].includes(args[0]) || !['--initialize', '--rotate'].includes(args[2])) fail('publisher-cli-invalid');
+    const run = args[0] === '--config-v2' ? runAssetRootPublisherV2 : runAssetRootPublisher;
+    const result = await run({ configFile: args[1], mode: args[2].slice(2) });
     process.stdout.write(JSON.stringify({ ok: true, epoch: result.epoch, recordDigest: result.recordDigest, anchorDigest: result.anchorDigest }) + '\n');
   } catch (e) {
     process.stderr.write(JSON.stringify({ ok: false, code: /^publisher-[a-z-]+$/.test(e.code ?? '') ? e.code : 'publisher-failed' }) + '\n');

@@ -327,3 +327,22 @@ root选定的受管启动adapter：config v2另外提供`runtimeAdapter:{unitFra
 修改前：v1启动固定service时不改变Slice，无法保持每代独占closureScope。修改后：同一耐久外锁内，只有准确service停止、旧scope实际empty证据已耐久并释放后，备份原own配置并fsync，写新Slice drop-in并完成file/dir fsync，daemon-reload，再核真实加载的Slice、Restart=no、KillMode=control-group、Delegate=no以及所有base配置仍同摘要，才start。任何阶段未知保锁/nonactive；rename后失败不虚称rollback。该adapter由root显式配置精确自有路径才可运行，不能把旧probe的transient服务通过当作本adapter已测。
 
 验收分层保持：纯schema/协调模型只证明解析与顺序；Windows真实文件故障只证明文件操作和失败可见性边界；Linux双epoch受管unit、实际pinned TLS/identity与G checkpoint仍由root在后续独立窗口执行。本Agent不执行节点/改生产unit，也不扩全量测试。
+
+## v2 producer协调与runtime adapter首块
+
+共享pure schema/API固定`4b7b09dceaad5409fb697163f15500854b5879ed`，G独立收相同blob，不写其工作区。文件名确认：`current.json`、`anchor.json`、`reservation.json`、`epoch-<n>.json`、`reservation-<n>.json`、`witness-<n>.json`（首代无witness）、`publication-<n>.json`、`.publisher.lock`。每代reservation archive是完整历史的必需项；`transition.json`、`runtime-dropin.json`、`runtime-backup-<n>.json`仅root内部协调/归属凭据，不替代doc接受链。
+
+G显式配置字段为`configuredAnchorDigest`，必须由root离带核准整份anchor的canonical digest。producer初始化仅返回实际anchorDigest供root核验/配置，不替doc写配置或初始化checkpoint。缺配置或不符应拒，不能reader自行信任目录里新anchor。
+
+新增独立`publishAssetRootRegistryV2({expected,mode,io})`与`runAssetRootPublisherV2({configFile,mode})`，CLI必须`--config-v2 <root配置> --initialize|--rotate`。旧v1原导出与`--config`路径保留。coordinator在锁内验证全部旧历史，预检随机scope/instance不复用历史，再固定旧双身份→current preparing→实际stop/empty→witness持久→旧scope释放→新scope创建/空核→reservation归档→受管drop-in→启动/双inspect+真实pinned identity→完整新历史核→active/marker持久→unlock。第三代复用首代的scope/instance/invocation也拒。
+
+Linux root adapter只接受精确root配置的固定service Fragment/baseDropIns哈希白名单与own runtime drop-in。配置未知、缺receipt、inode/字节变化或foreign DropInPaths均失败关闭。写own文件前耐久备份，首次硬链接排除覆盖、后续精确旧receipt才rename；post-rename目录barrier失败仍可能新内容可见，因此保锁而非宣称rollback。daemon-reload后再核实际Slice与全部服务/文件身份；无live set-property。root其它systemctl操作仍必须使用同外部串行约束，Restart=no/Delegate=no/单epoch独占条件不变。自然故障不自动清锁、不删除未知配置或stop新猜测PID。生产运行还未执行。
+
+验证原始结果（均无业务fixture listener；npm wrapper仍有既定guard启动/teardown）：
+
+- schema首次26/26，`pc-asset-root-schema-v2-target-1.log`，96.5056ms/wall1106ms。
+- producer+schema首目标72/72，`pc-asset-root-publisher-v2-target-1.log`，199.546ms/wall1197ms，exit0。
+- 增加非相邻历史复用用例后有因复验73/73，0fail/cancel/skip，`pc-asset-root-publisher-v2-target-2.log`，207.4552ms/wall1196ms，exit0；没有native重试。
+- types首次`pc-asset-root-publisher-v2-types-1.log` exit1/wall749ms：本叶没有node_modules/typescript/bin/tsc，编译器尚未运行。已保留，未装依赖。改用主库已安装TypeScript绝对入口后`tsc -b --force`零错，`pc-asset-root-publisher-v2-types-2.log` exit0/wall7741ms。
+
+证据层级：新IO callbacks属于纯顺序/拒绝模型。Windows真实TMP文件测试实际执行hardlink/rename/锁并注入目录fsync失败，证明“新文件可见但失败保锁”，不能声称Windows支持Linux目录耐久或自然掉电。Linuxroot入口在Windows明确拒绝，未运行systemd/TLS。此前bd760d25单scope真实OS通过仍仅其原边界；本v2双代runtime adapter、真实G reservation/identity与doc checkpoint联合尚待root独立执行。没有完整npm/节点/部署，本轮按root小阶段租约只跑纯目标与类型。

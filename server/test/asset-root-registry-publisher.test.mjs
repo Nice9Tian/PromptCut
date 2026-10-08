@@ -7,7 +7,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { digestOf } from '../account/ledger.mjs';
 import { publishAssetRootRegistry, parseProcStat, validatePublisherScope, validatePublisherUnit, runAssetRootPublisher,
-  writePublisherArtifact, openPublisherLock } from '../hosted/deploy/asset-root-registry-publisher.mjs';
+  writePublisherArtifact, openPublisherLock, publishAssetRootRegistryV2, runAssetRootPublisherV2,
+  validatePublisherRuntimeAdapterV2, writePublisherTextV2 } from '../hosted/deploy/asset-root-registry-publisher.mjs';
+import { assetClosureUnitV2, validateAssetRootHistoryV2 } from '../hosted/asset-root-registry-schema-v2.mjs';
 
 const scope = { authorityId: 'doc-test', serviceIdentity: 'asset-test', uid: 12001,
   unit: 'promptcut-asset-test.service', cgroupPath: '/sys/fs/cgroup/system.slice/promptcut-asset-test.service',
@@ -264,4 +266,163 @@ test('prior active without exact publication completion marker cannot be rotated
     await assert.rejects(m.run('rotate'), { code: 'publisher-publication-missing' });
     assert.equal(m.calls.includes('stop'), false); assert.ok(m.calls.includes('retain-lock'));
   }
+});
+
+const expectedV2 = { authorityId: scope.authorityId, serviceIdentity: scope.serviceIdentity, uid: scope.uid, unit: scope.unit,
+  clientFingerprint256: scope.clientFingerprint256, serverFingerprint256: scope.serverFingerprint256,
+  closurePolicy: { kind: 'systemd-slice', unitNamespace: 'pcassetmodel', cgroupRoot: '/sys/fs/cgroup', placement: 'direct-child', singleEpoch: true } };
+// Controlled ordering/failure model only: these callbacks attest no real OS,
+// runtime drop-in, TLS identity, or production resource closure.
+function modelV2() {
+  const files = new Map(), calls = [], faults = {}; let serial = 0, locked = false, current;
+  const io = {
+    uuid: () => `id-${++serial}`, scopeId: () => String(++serial).padStart(32, '0'),
+    async lock() { if (locked) throw Error('locked'); locked = true; calls.push('lock'); return async ({ publicationDurable }) => {
+      if (publicationDurable) { locked = false; calls.push('unlock'); } else calls.push('retain-lock');
+    }; },
+    async read(name) { return clone(files.get(name) ?? null); },
+    async write(name, value, exclusive) {
+      calls.push(`write:${name}:${value.state ?? value.phase ?? ''}`);
+      if (exclusive && files.has(name)) throw Error('exists');
+      if (faults.beforeWrite?.(name, value)) throw Error('injected-before-write');
+      files.set(name, clone(value));
+      if (faults.afterWrite?.(name, value)) throw Error('injected-post-visible-fsync');
+    },
+    async assertInitial() { calls.push('initial'); },
+    async pinPrevious(old) {
+      calls.push('pin');
+      return {
+        async stopAndObserve() {
+          calls.push('stop'); if (faults.stop) throw Error('ENODEV');
+          const observed = { kind: 'cgroup-empty', closed: true, at: 100, bootId, serviceInstance: clone(old.instance),
+            closureScope: clone(old.closureScope), scopeActive: true, scopeExclusive: true, populated: 0, serviceInactive: true, mainBirthGone: true };
+          return faults.observed ? faults.observed(observed) : observed;
+        },
+        async releaseScope() { calls.push('release-scope'); if (faults.release) throw Error('release-failed'); },
+        async close() { calls.push('close-pinned-fd'); },
+      };
+    },
+    async createScope(plan) {
+      calls.push('create-scope'); if (faults.create) throw Error('collision');
+      const unit = assetClosureUnitV2(expectedV2, plan);
+      return { ...plan, authorityId: expectedV2.authorityId, kind: 'systemd-slice', unit,
+        unitInvocationId: String(plan.epoch * 2).padStart(32, '0'), bootId,
+        cgroup: { v2Path: `/sys/fs/cgroup/${unit}`, dev: '30', ino: String(300 + plan.epoch), bootId } };
+    },
+    async configureService() { calls.push('configure-service'); if (faults.configure) throw Error('foreign-dropin'); },
+    async start(r) {
+      calls.push('start');
+      const value = instance(r.instanceId, r.epoch); value.cgroup.v2Path = r.serviceCgroupPath;
+      value.unitInvocationId = String(r.epoch * 2 + 1).padStart(32, '0');
+      current = { instance: value, closureScope: clone(r.closureScope) };
+    },
+    async inspect() { calls.push('inspect'); return faults.inspect ? faults.inspect(clone(current)) : clone(current); },
+    async identity() {
+      calls.push('identity'); const r = files.get('reservation.json');
+      const value = { v: 1, serviceId: 'asset', authorityId: expectedV2.authorityId, epoch: r.epoch, instanceId: r.instanceId,
+        pid: current.instance.pid, startedAt: 100, serviceIdentity: expectedV2.serviceIdentity, state: 'running',
+        docClientFingerprint256: expectedV2.clientFingerprint256, internalServerFingerprint256: expectedV2.serverFingerprint256 };
+      return faults.identity ? faults.identity(value) : value;
+    },
+  };
+  return { io, files, calls, faults, run: mode => publishAssetRootRegistryV2({ expected: expectedV2, mode, io }) };
+}
+
+test('v2 controlled two-epoch publisher persists witness before releasing old scope, archives every reservation and keeps new scope', async () => {
+  const m = modelV2(); await m.run('initialize'); m.calls.length = 0;
+  const cp = await m.run('rotate'); assert.equal(cp.v, 2); assert.equal(cp.epoch, 2);
+  const pos = call => m.calls.indexOf(call);
+  assert.ok(pos('write:witness-2.json:') < pos('release-scope'));
+  assert.ok(pos('release-scope') < pos('create-scope'));
+  assert.ok(pos('write:reservation-2.json:') < pos('configure-service'));
+  assert.ok(pos('configure-service') < pos('start'));
+  assert.ok(pos('write:publication-2.json:') < pos('unlock'));
+  assert.equal(m.calls.filter(c => c === 'release-scope').length, 1);
+  const entries = [1, 2].map(n => ({ record: m.files.get(`epoch-${n}.json`), reservation: m.files.get(`reservation-${n}.json`),
+    publication: m.files.get(`publication-${n}.json`), witness: n === 1 ? null : m.files.get(`witness-${n}.json`) }));
+  assert.deepEqual(validateAssetRootHistoryV2({ entries, currentRecord: m.files.get('current.json'), anchor: m.files.get('anchor.json'),
+    expected: expectedV2, publisherLocked: false }), cp);
+});
+
+test('v2 controlled faults never release old scope before durable empty witness or authorize new active generation', async t => {
+  for (const [name, set, forbidden] of [
+    ['ENODEV', m => { m.faults.stop = true; }, 'release-scope'],
+    ['populated', m => { m.faults.observed = o => ({ ...o, populated: 1 }); }, 'release-scope'],
+    ['wrong tuple', m => { m.faults.observed = o => ({ ...o, closureScope: { ...o.closureScope, unitInvocationId: 'f'.repeat(32) } }); }, 'release-scope'],
+    ['witness visible but fsync fails', m => { m.faults.afterWrite = n => n === 'witness-2.json'; }, 'release-scope'],
+    ['release unknown', m => { m.faults.release = true; }, 'create-scope'],
+    ['scope collision', m => { m.faults.create = true; }, 'configure-service'],
+    ['foreign configuration', m => { m.faults.configure = true; }, 'start'],
+    ['identity mismatch', m => { m.faults.identity = o => ({ ...o, instanceId: 'other' }); }, 'write:current.json:active'],
+  ]) await t.test(name, async () => {
+    const m = modelV2(); await m.run('initialize'); m.calls.length = 0; set(m);
+    await assert.rejects(m.run('rotate')); assert.equal(m.calls.includes(forbidden), false);
+    assert.equal(m.files.get('current.json').state, 'preparing'); assert.ok(m.calls.includes('retain-lock'));
+  });
+});
+
+test('v2 refuses missing reservation history before any stop and rejects implicit v1 upgrade', async () => {
+  const m = modelV2(); await m.run('initialize'); m.files.delete('reservation-1.json'); m.calls.length = 0;
+  await assert.rejects(m.run('rotate')); assert.equal(m.calls.includes('stop'), false);
+  const old = model(); await old.run('initialize');
+  await assert.rejects(publishAssetRootRegistryV2({ expected: expectedV2, mode: 'rotate', io: old.io }));
+  assert.equal(old.calls.includes('stop'), false);
+});
+
+test('v2 visible active/marker write failures retain exclusion, not a fictitious rollback', async () => {
+  for (const name of ['current.json', 'publication-1.json']) {
+    const m = modelV2(); m.faults.afterWrite = (n, value) => n === name && (n !== 'current.json' || value.state === 'active');
+    await assert.rejects(m.run('initialize'));
+    assert.equal(m.files.get('current.json').state, 'active'); assert.ok(m.calls.includes('retain-lock'));
+    assert.equal(m.calls.includes('unlock'), false);
+  }
+});
+
+test('v2 third epoch cannot reuse nonadjacent history identities or invocations', async () => {
+  for (const field of ['scopeId', 'instanceId', 'unitInvocationId']) {
+    const m = modelV2(); await m.run('initialize'); await m.run('rotate'); m.calls.length = 0;
+    const first = m.files.get('epoch-1.json');
+    if (field === 'scopeId') m.io.scopeId = () => first.closureScope.scopeId;
+    if (field === 'instanceId') m.io.uuid = () => first.instance.instanceId;
+    if (field === 'unitInvocationId') m.faults.inspect = pair => {
+      pair.instance.unitInvocationId = first.instance.unitInvocationId; return pair;
+    };
+    await assert.rejects(m.run('rotate'));
+    if (field !== 'unitInvocationId') assert.equal(m.calls.includes('stop'), false);
+    assert.equal(m.files.has('epoch-3.json'), false);
+    assert.equal(m.files.has('publication-3.json'), false);
+    assert.ok(m.calls.includes('retain-lock'));
+  }
+});
+
+test('v2 runtime configuration permits only exact owned drop-in and immutable declared base set; Linux root gate remains', async () => {
+  const adapter = { unitFragment: { path: '/etc/systemd/system/promptcut-asset-test.service', sha256: 'a'.repeat(64) },
+    baseDropIns: [], ownDropInPath: `/run/systemd/system/${expectedV2.unit}.d/90-promptcut-root-slice.conf` };
+  assert.deepEqual(validatePublisherRuntimeAdapterV2(adapter, expectedV2), adapter);
+  for (const changed of [{ ...adapter, ownDropInPath: '/etc/systemd/system/other.service.d/90.conf' },
+    { ...adapter, baseDropIns: [{ path: adapter.ownDropInPath, sha256: 'b'.repeat(64) }] },
+    { ...adapter, unitFragment: { path: '/etc/systemd/system/../other', sha256: 'a'.repeat(64) } }, { ...adapter, force: true }])
+    assert.throws(() => validatePublisherRuntimeAdapterV2(changed, expectedV2));
+  if (process.platform !== 'linux' || process.getuid?.() !== 0)
+    await assert.rejects(runAssetRootPublisherV2({ configFile: 'not-read', mode: 'initialize' }), { code: 'publisher-linux-root-required' });
+});
+
+test('v2 real file drop-in replacement refuses foreign contents/inode; post-rename fsync failure retains real lock', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-root-v2-dropin-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const filename = path.join(dir, 'owned.conf');
+  const first = await writePublisherTextV2({ filename, text: '[Service]\nSlice=old.slice\n', directoryBarrier: async () => {} });
+  await assert.rejects(writePublisherTextV2({ filename, text: 'foreign replacement', directoryBarrier: async () => {} }), { code: 'publisher-dropin-ownership' });
+  await assert.rejects(writePublisherTextV2({ filename, text: 'foreign replacement', previous: { ...first, ino: '999999' },
+    directoryBarrier: async () => {} }), { code: 'publisher-dropin-ownership' });
+  const release = await openPublisherLock(dir, { directoryBarrier: async () => {} });
+  try {
+    await assert.rejects(writePublisherTextV2({ filename, text: '[Service]\nSlice=new.slice\n', previous: first,
+      directoryBarrier: async () => { throw Error('post-rename-directory-fsync'); } }), /post-rename-directory-fsync/);
+  } finally { await release({ publicationDurable: false }); }
+  assert.equal(await fs.readFile(filename, 'utf8'), '[Service]\nSlice=new.slice\n');
+  assert.ok((await fs.lstat(path.join(dir, '.publisher.lock'))).isFile());
+  await assert.rejects(openPublisherLock(dir, { directoryBarrier: async () => {} }), { code: 'EEXIST' });
+  await assert.rejects(writePublisherTextV2({ filename, text: 'stale receipt', previous: first, directoryBarrier: async () => {} }), { code: 'publisher-dropin-ownership' });
+  t.diagnostic('Real Windows file/rename/lock; injected directory fsync failure, not Linux unit or durability proof');
 });
