@@ -14,6 +14,7 @@ import { createAssetRevocationConsumer } from '../asset-store/project-revocation
 import { createServiceUsage, serviceCapBytes, diskTotalOf } from '../asset-store/service-usage.mjs';
 import { StreamStore, handleStreamRequest } from '../asset-store/stream-store.mjs';
 import { openAssetLifecycle } from './asset-lifecycle.mjs';
+import { createRunAssetMetadataRpc } from './run-assets-metadata-rpc.mjs';
 
 const send = (res, status, value) => { if (res.destroyed || res.headersSent) return; res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); res.end(JSON.stringify(value)); };
 const listen = (server, port, host) => new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => { server.off('error', reject); resolve(server.address()); }); });
@@ -50,6 +51,11 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
   const projectAccess = createProjectAssetAccess({ authority: consumer, resolvePrincipal });
   const factory = createProjectAssetStores({ dir: assetsDir, contentTypeForExt: media.contentTypeForExt });
   const projectStores = wrapStore ? { project: id => { const p = factory.project(id); return { ...p, stores: Object.fromEntries(Object.entries(p.stores).map(([ns, store]) => [ns, wrapStore(id, ns, store)])) }; } } : factory;
+  // Private physical metadata is available only through the doc-pinned TLS
+  // connection. No run admission or closure ACK is inferred from this read.
+  const runPrivateReads = serviceIdentity ? createRunAssetMetadataRpc({ docFingerprint256,
+    internalServerCert: internalTls.cert, lifecycle, projectStores: factory,
+    isOpen: () => !stopped }) : null;
   const capBytes = Number.isFinite(renderCapBytes) && renderCapBytes >= 0 ? Math.floor(renderCapBytes) : serviceCapBytes({ diskTotal: await diskTotalOf(assetsDir) });
   const serviceUsage = createServiceUsage({ dir: path.join(root, '.service-usage'), projectScoped: true, capBytes });
   const opts = { projectAccess, projectStores, serviceUsage, pxEvict: null, pullArtifact: null };
@@ -87,6 +93,10 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
   });
   internalServer = https.createServer({ ...internalTls, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, async (req, res) => {
     if (req.socket.authorized !== true || certificateFingerprint(req.socket.getPeerCertificate()?.fingerprint256) !== docPin) return send(res, 403, { ok: false, error: 'service-forbidden' });
+    if (req.url?.startsWith('/internal/v2/asset/run/')) {
+      if (!runPrivateReads) return send(res, 503, { ok: false, error: 'run-assets-unavailable' });
+      await runPrivateReads.handler(req, res); return;
+    }
     if (req.method !== 'GET' || req.url !== '/internal/v2/asset/status') return send(res, 404, { ok: false, error: 'no-route' });
     try { send(res, 200, await status()); } catch (error) { send(res, 503, { ok: false, error: 'asset-not-ready' }); }
   });

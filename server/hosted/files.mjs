@@ -83,7 +83,9 @@ export function stageHostedFiles(repoRoot, outDir) {
 /** 独立asset入口的literal import闭包；不改变旧hosted打包策略，不携带私钥/依赖安装。 */
 export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
   'server/account/client.mjs',
+  'server/account/ledger.mjs',
   'server/account/protocol.mjs',
+  'server/account/run-asset-protocol.mjs',
   'server/asset-announce.mjs',
   'server/asset-client.ts',
   'server/asset-service.ts',
@@ -119,6 +121,8 @@ export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
   'server/hosted/asset-lifecycle.mjs',
   'server/hosted/asset-main.mjs',
   'server/hosted/asset-runtime.mjs',
+  'server/hosted/run-assets-metadata.mjs',
+  'server/hosted/run-assets-metadata-rpc.mjs',
   'server/hosted/ts-resolve.mjs',
   'server/http-guard.mjs',
   'server/media-pull.mjs',
