@@ -151,3 +151,9 @@ POST /messages事件模式加入真实req/res/socket readTransports.run，doc接
 新constructor首红：npm wrapper精准server/test/account-executor-assembly.test.mjs，1/0pass/1fail、63.4236ms、exit1，ERR_MODULE_NOT_FOUND，TMP pc-account-executor-red-1.log保留。未启动业务服务；global-setup原38候选坏端口guards例外仍原样执行。新增mTLS fixture已编写未跑，6640 docHTTPS/6641 AgentHTTP/6642 controlHTTPS，30s测试/5s局部等待，无浏览器/真实模型/VH。真实SQLite、注册RAMkey、exporter与doc run/read-control/HTTP/SSE，sender/registry/selection/driver是受控adapter，同OS证书角色不算生产UID分离。原旧control target5795–97另有真实own child，执行前再核端口。
 
 首次写完node --check（new assembly/main/new TLS test）exit0，diffcheck0。读取过程中3处猜测路径不存在均纠正为真实tool-context/agent/service/agent-instance-session/read-control-fixture，只有只读命令失败，无测试或产品修改效应。以下追加固定source与实际目标结果后才交付。
+
+装配首固定c305423e960dc54fe1db7a62e5ed0a60e003e72c，pure首轮21/21、0fail/cancel/skip、480.1984ms/wall0.6661008s、exit0/nativeRetry0，TMP pc-account-executor-c305-pure-1.log；includes新constructor1、event13、原runner7。随后首次真实TLS测试首红：case1211.9856ms已失败，finally await assembly.close报account-executor-close-pending（内account-runner-pending），跳过docServer后续清理，公开6641与control6642已闭但doc6640遗留。spec最终stack被finally异常替换，不能把“真实首错误已观察为queued断言”说成直接证据；静态核fixture确把doc send不存在的accepted.queued断言true，实际源码只有queuePosition/runId:null，此为确切夹具shape错误候选，修后保真实原shape断言。
+
+真实首次清理核到self-owned pwsh24160→node npm44528→cmd42684→suite1608→node --test37920→case37740；只case37740拥有6640，复核ParentProcessId37920与CommandLine精确test文件后只Stop-Process37740，所有6640–42无监听。原事件保留TMP promptcut-test-BSRAJS/events-all.ndjson，首次原log pc-account-executor-c305-mtls-1.log；最终1/0pass/1fail、87073.0965ms/wall87.2796995s/exit1/nativeRetry0，无cancel/skip。87秒是测试早失败后未收口进程的等待与受控中止，不写实际30秒测试通过；未杀其它进程，源全程c305未变。
+
+根允许最窄有因修夹具：实际queuePosition正safeInteger/runId:null，等待已发生的runner pending诊断与activeRuns0后关闭，不根据done Promise声称成功；finally用allSettled且检查每条错误，真实doc/socket/db清理不能被第一条close拒绝跳过，原primary和cleanupErrors都保留，任何close异常仍失败。产品assembly.close错误未吞/未改绿，不用错误码白名单过滤异常。新固定后只一次目标，后续记录实际结果。

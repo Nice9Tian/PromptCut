@@ -92,7 +92,8 @@ test('one registered RAM instance assembles real mTLS run/read clients; POST mir
     track(docServer);
     const listen = (server, port) => new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
     let assembly, publicServer, controlClient, client, runClient;
-    const abort = new AbortController(); let models = 0, tools = 0;
+    const abort = new AbortController(); let models = 0, tools = 0, failure = null;
+    const diagnostics = [];
     try {
       await listen(docServer, 6640);
       const doc = { origin: 'https://127.0.0.1:6640', tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 };
@@ -101,6 +102,7 @@ test('one registered RAM instance assembles real mTLS run/read clients; POST mir
       client.useReadControl(controlClient);
       assembly = await createAccountExecutorAssembly({ dataDir: dir, doc, runClient, conversationClient: client, readControl: controlClient,
         controlPort: 6642, root: dir, loadModule: async () => { throw Error('no-real-model-module'); }, modelConfig: async () => ({}),
+        log: (event, fields) => diagnostics.push({ event, code: fields.code }),
         runnerFactory: async ({ onEvent, onModelCall, beforeToolCall }) => ({ async start() {
           onEvent({ type: 'run' }); await onModelCall(); models++;
           onEvent({ type: 'text', delta: 'Controlled result' });
@@ -113,7 +115,9 @@ test('one registered RAM instance assembles real mTLS run/read clients; POST mir
       publicServer = http.createServer((req, res) => { void api.handle(req, res); }); track(publicServer); await listen(publicServer, 6641);
       const base = `http://127.0.0.1:6641/v1/conversations/${conversationId}`, headers = { Authorization: 'Bearer controlled-delegation', 'Content-Type': 'application/json' };
       const response = await fetch(base + '/messages', { method: 'POST', headers, body: JSON.stringify({ prompt: 'Doc accepted original', requestId: 'send_a' }) });
-      assert.equal(response.status, 202); const accepted = await response.json(); assert.equal(accepted.queued, true);
+      assert.equal(response.status, 202); const accepted = await response.json();
+      assert.ok(Number.isSafeInteger(accepted.queuePosition) && accepted.queuePosition >= 1);
+      assert.equal(accepted.runId, null);
       const deadline = Date.now() + 5000;
       while (assembly.service.runEvents.after({ projectId, conversationId }).head < 6) {
         if (Date.now() >= deadline) throw Error('durable-events-timeout'); await new Promise(resolve => setTimeout(resolve, 10));
@@ -133,13 +137,24 @@ test('one registered RAM instance assembles real mTLS run/read clients; POST mir
       const replay = bytes.split('\n').filter(s => s.startsWith('data: ')).map(s => JSON.parse(s.slice(6))).filter(row => Number.isSafeInteger(row.seq));
       assert.deepEqual(replay.map(row => row.seq), rows.slice(1).map(row => row.eventSeq));
       assert.equal(replay.some(row => row.type === 'user'), false); abort.abort(); await reader.cancel().catch(() => {});
+      while (!diagnostics.some(row => row.event === 'agent.account.run.pending' && row.code === 'run-outcome-unavailable')) {
+        if (Date.now() >= deadline) throw Error('actual-driver-drain-timeout'); await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal(assembly.service.runManager.describe().activeRuns, 0);
       assert.equal(assembly.describe().completionReady, false);
+    } catch (error) { failure = error;
     } finally {
       abort.abort();
       if (publicServer?.listening) { publicServer.closeAllConnections(); await new Promise(resolve => publicServer.close(resolve)); }
-      await assembly?.close(); await controlClient?.close(); client?.close(); runClient?.close(); reads.close();
+      // A rejected owned close must not skip any later server/socket/db cleanup.
+      // Inspect every result, retain the primary assertion, and fail on cleanup.
+      const results = await Promise.allSettled([assembly?.close(), controlClient?.close()]);
+      const errors = results.filter(row => row.status === 'rejected').map(row => row.reason);
+      client?.close(); runClient?.close(); reads.close();
       await Promise.all([...sockets].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); })));
       if (docServer.listening) await new Promise(resolve => docServer.close(resolve));
       instances.close(); ledger.close(); assert.equal(sockets.size, 0); fs.rmSync(dir, { recursive: true, force: true });
+      if (failure) { if (errors.length) failure.cleanupErrors = errors; throw failure; }
+      if (errors.length) throw new AggregateError(errors, 'fixture-owned-close-failed');
     }
   });
