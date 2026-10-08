@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { digestOf } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
 import { accountError } from '../account/client.mjs';
 import { createFileStore, createMemoryStore, fileNameOf } from './store/index.mjs';
@@ -19,13 +20,15 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
 export function createAccountHostedRuntime({ ledger, accountClient, dataDir, authorityUrl, signingKey, keyId,
   now = Date.now, pollMs = 1000, onDiagnostic = () => {}, assetReadyProbe = null,
   assetInstanceId = null, allowFixtureAssetReady = false, runHooks = null,
-  getRunProvider = () => null, onRunControl = null }) {
+  getRunProvider = () => null, onRunControl = null, onPageFence = null }) {
   if (!ledger || !accountClient) fail(503, 'account-configuration');
   if (typeof getRunProvider !== 'function' || (onRunControl !== null && typeof onRunControl !== 'function')) fail(503, 'run-authority-unavailable');
   if (assetReadyProbe !== null && typeof assetReadyProbe !== 'function') fail(503, 'asset-configuration');
   if (assetInstanceId !== null && (typeof assetInstanceId !== 'string' || !assetInstanceId)) fail(503, 'asset-configuration');
   if (allowFixtureAssetReady && assetReadyProbe) fail(503, 'asset-configuration');
   const tickets = new Map();
+  const pageFences = new Map();
+  const docInstanceId = randomUUID();
   const memoryStores = new Map();
   let service = null;
   let assetReady = false;
@@ -97,6 +100,22 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       tenantId: entry.projectId, scope: 'member', identityVersion: 2, realm: 'account', loginKind: checked.kind,
       projectAccessRevision: checked.accessRevision };
   }
+  async function resolveRun(ticket) {
+    const entry = tickets.get(ticket), provider = getRunProvider();
+    if (!entry || entry.kind !== 'run' || entry.expiresAt <= now()) fail(401, 'ticket-expired');
+    if (typeof provider?.resolveRunPrincipal !== 'function') fail(503, 'run-authority-unavailable');
+    const principal = await provider.resolveRunPrincipal({ servicePrincipal: entry.servicePrincipal,
+      projectId: entry.projectId, runGrantId: entry.runGrantId });
+    const fields = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'serviceKid',
+      'accountId', 'loginId', 'credentialId', 'loginGeneration', 'instanceId', 'instanceGeneration'];
+    if (fields.some(field => principal?.[field] !== entry.principal[field]) || principal?.creator !== false ||
+        principal?.role !== 'agent' || principal?.serviceId !== 'agent') fail(403, 'run-binding-mismatch');
+    if ((await provider.checkAccess({ principal, projectId: entry.projectId, action: 'read' }))?.allowed !== true)
+      fail(403, 'run-revoked');
+    return { ...principal, service: 'agent', tenantId: entry.projectId, scope: 'member',
+      userId: `account:${principal.accountId}@run:${principal.runId}`, deviceId: principal.runId,
+      deviceName: principal.runId, creator: false };
+  }
   function ticketOf(req) {
     const list = offeredProtocols(req);
     const matching = list.filter(value => value.startsWith(PREFIX));
@@ -105,6 +124,34 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   }
   const unsubscribe = authority.subscribeRevocations({}, async (event, committedControl) => {
     if (!service) return;
+    // Start the page admission barrier synchronously, before any asynchronous run
+    // delivery. The core barrier includes authenticating sockets and real close.
+    if (!(event.service === 'agent' && event.enabled === false)) {
+      const criteria = { roles: ['page'], ...(event.projectId ? { projectId: event.projectId } : {}),
+        ...(event.loginIds?.length ? { loginIds: event.loginIds } : {}),
+        ...(event.accountIds?.length ? { accountIds: event.accountIds } : {}) };
+      if (criteria.projectId || criteria.loginIds || criteria.accountIds) {
+        const closing = service.fencePrincipals(criteria).then(async receipt => {
+          ledger.transaction(state => {
+            const persisted = state.accessEvents.find(value => value.eventId === event.eventId);
+            if (!persisted || digestOf(persisted) !== digestOf(event) || receipt.actualClosed !== true)
+              fail(503, 'doc-close-evidence-unavailable');
+            const record = (state.docTransportClosuresV2 ??= {})[event.eventId] ??= {
+              eventId: event.eventId, seq: event.seq, eventDigest: digestOf(event), instances: {} };
+            record.instances[docInstanceId] ??= { docInstanceId, criteria, receipt, recordedAt: now(),
+              // Actual current-instance doc resources are closed. A complete
+              // multi-service logout/old-instance barrier is a different proof.
+              complete: false, docClosed: true };
+          });
+          if (typeof onPageFence === 'function') await onPageFence({ event, receipt });
+          return receipt;
+        });
+        pageFences.set(event.eventId, closing);
+        // notify owns error diagnostics; this catch also prevents an unhandled
+        // rejection while run control delivery is awaiting another resource.
+        closing.catch(() => {});
+      }
+    }
     const runs = [];
     for (const conn of service.describe().conns) {
       const principal = conn.principal;
@@ -115,7 +162,6 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       if (principal.role === 'agent' || principal.service === 'agent') { runs.push(conn); continue; }
       // Agent-off revokes tasks, not the member's page login/project membership.
       if (event.service === 'agent' && event.enabled === false) continue;
-      service.closeConn(conn.connId, 4003, 'access-revoked');
     }
     const provider = getRunProvider();
     let control = committedControl;
@@ -125,7 +171,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
         for (const value of Array.isArray(control) ? control : [control]) await onRunControl(value);
       }
     } catch {
-      for (const conn of runs) service.closeConn(conn.connId, 4003, 'run-authority-unavailable');
+      await Promise.all(runs.map(conn => service.fenceConn(conn.connId, 4003, 'run-authority-unavailable')));
       throw accountError(503, 'run-authority-unavailable');
     }
     for (const conn of runs) {
@@ -133,11 +179,13 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
         if (typeof provider?.checkAccess !== 'function') fail(503, 'run-authority-unavailable');
         const checked = await provider.checkAccess({ principal: conn.principal, projectId: conn.principal.tenantId, action: 'read' });
         if (checked?.allowed !== true || checked.retainedGrant?.state !== 'retained') fail(403, 'run-revoked');
-      } catch { service.closeConn(conn.connId, 4003, 'access-revoked'); }
+      } catch { await service.fenceConn(conn.connId, 4003, 'access-revoked'); }
     }
+    await pageFences.get(event.eventId);
   });
   return {
     authority,
+    docInstanceId,
     get sessionReady() { return assetReady; },
     setAssetReady(value) {
       if (!allowFixtureAssetReady) fail(503, 'asset-configuration');
@@ -145,6 +193,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     },
     requireAssetReady,
     bindService(value) { service = value; },
+    async pageFenceReceipt(eventId) { return pageFences.get(eventId) ?? null; },
     async start() { return authority.start(); },
     async issueSession({ principal, deviceId, expectedAssetInstanceId }) {
       await requireAssetReady({ expectedInstanceId: expectedAssetInstanceId });
@@ -155,7 +204,26 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
         assetTicket: issue('asset', principal, deviceId, expiresAt),
         agentDelegationTicket: issue('agent', principal, deviceId, expiresAt), expiresAt };
     },
-    async authenticate(req) { return resolve(ticketOf(req), 'conn'); },
+    async authenticate(req) {
+      const ticket = ticketOf(req);
+      return tickets.get(ticket)?.kind === 'run' ? resolveRun(ticket) : resolve(ticket, 'conn');
+    },
+    async issueRunTicket({ principal, servicePrincipal, purpose }) {
+      if (purpose !== 'run' || principal?.creator !== false || principal?.role !== 'agent' ||
+          principal?.serviceId !== 'agent' || principal?.servicePrincipal !== servicePrincipal) fail(403, 'run-binding-mismatch');
+      // The current provider has no durable instance generation yet. Missing
+      // registration is a deployment gap, never a default or an empty-resource ACK.
+      if (typeof principal.instanceId !== 'string' || !principal.instanceId ||
+          !Number.isSafeInteger(principal.instanceGeneration) || principal.instanceGeneration < 1)
+        fail(503, 'run-instance-unavailable');
+      const provider = getRunProvider();
+      if ((await provider?.checkAccess?.({ principal, projectId: principal.projectId, action: 'read' }))?.allowed !== true)
+        fail(403, 'run-revoked');
+      const connectionTicket = randomBytes(32).toString('base64url'), expiresAt = now() + 5 * 60_000;
+      tickets.set(connectionTicket, { kind: 'run', projectId: principal.projectId, runGrantId: principal.runGrantId,
+        principal: structuredClone(principal), servicePrincipal: structuredClone(servicePrincipal), expiresAt });
+      return { connectionTicket, expiresAt };
+    },
     async resolveAssetTicket(ticket) { return resolve(ticket, 'asset'); },
     // Only the authenticated Agent mTLS RPC calls this resolver. A reference is
     // kind-bound and reverified, not a public accountId/authorizationId claim.
