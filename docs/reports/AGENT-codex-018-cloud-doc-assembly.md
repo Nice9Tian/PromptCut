@@ -27,3 +27,13 @@ main只加载doc自己的account client/private attestation key与account公开w
 Astra已定`createRunAuthority`出口checkAccess/authorizeQuery/resolveRunPrincipal；运行principal必须带从真实签名或mTLS核验所得servicePrincipal，公开runRefs不构成凭证。run尚未提供固定源码，当前生产run/query仍拒。root已扩租authority窄同步runHooks事务接线，待owner完整签名，禁止后置自由授予。对话owner正在写独立conversation internal handler/client，未在本块假接通。
 
 当前状态：页面/history/selection完整块待固定源码定向验证；所有首次失败、重启/权限边界和准确计数将在后文追加。尚未跑全量；full须先租约。
+
+## 首轮固定源码证据及依赖暂停点
+
+页面源码bc6e5a42，fixture修正324ca429。target-1 `npm test -- server/test/account-assembly-central.test.mjs`：2项/1通过/1失败/0取消/0跳过，3700.3072ms；首次真实admin返回409 access-revision-mismatch，因为本新fixture漏expectedAccessRevision，保留TMP/pc-doc-assembly-target-1.log与child-1791422201304.log。补真实当前accessRevision，并按真实只读权限码not-listed核断言，未弱化版本/权限。
+
+target-2固定324ca429，同一测试：2/2/0/0/0，4086.7212ms，TMP/pc-doc-assembly-target-2.log及child-1791422248533.log。真实临时account+order mTLS→中央→隔离部署树独立asset child→两页面WS，验证一条操作orderSeq=1、完整before/after/change项、真实actor、readonly选区/伪名拒/写拒、重启projection/history恢复、delegation种类/restart作废、退出后旧凭证session/resume拒和required缺order配置拒。缺runProvider的拒绝已测；不将此冒称实际run或生产Agent通过。
+
+authority同步钩子源码03ee7fd1。定向`account-assembly-fence-transaction.test.mjs`：1/1/0/0/0，118.5064ms，TMP/pc-doc-assembly-fence-1.log。实际provider与SQLite验证admin/revocation transaction内同步hook，throw/thenable整事务回滚，agent-off空affected仍通知，off→on→重启保留immutable service/enabled。该测试hook仅在真实事务中写受控证据，不是实际runGrant provider；receipt仍pending/null。原account事件seq/权限策略保留，缺hook且已有durable grants拒，page-only无grant不会自由授予run。
+
+后续runtime增量新增trusted getRunProvider/onRunControl、每消息/resume run核验，先关受影响page再处理run持久control，保留run要求provider返回精确retainedGrant。Agent-off不会误撤普通page。缺provider或失败关闭run，不自由ACK。本增量尚待真实run模块组合验证。按根指示固定此暂停点并停止编辑，由root组合conversation来源b25e5de8；不自行cherry-pick/merge。types/full尚未运行，待完整依赖固定后必要验证。
