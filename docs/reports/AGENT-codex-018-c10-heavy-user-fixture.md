@@ -26,3 +26,13 @@
 前置协议：现有 creator 协议连接执行真实 `content.put/get card-source`，校验完整 body、JSON正文 SHA256 和同一正 rev；成员在线页面正常 `__pcCardSourcesSync`，必须入口 bundle成功、编辑运行状态及两个舞台该卡均 ready，再通过真实 store.actions 添加片段。输出 `a5-fixture-source.json` 只含源码键/哈希/rev/ready枚举，不带源码或凭据。随后仍读取完整白名单 L2 build成本、probe settled、精确 identity/FPS/时间、stage heavy、当前 rev 的最后成功plan含目标。新增 `requireStepOverBudget` 明确要求 stepMs>budget；即使 pinned/capped/demoted/over-catchup 也不能代替 CPU 测量。失败仍保存 `a5-fixture-prerequisite.json`，在 host 前抛出，不追加长等待。
 
 纯测试使用真实源码静态识别、生产 bundleCard/Sucrase/包解析、React SSR确定性计算和生产能力/档位/切分函数；SSR耗时仅诊断，不作为 Chromium build测量或host完成证据。保留原10条及既有反例断言，新增一条源路径测试。无服务 fixture 监听；npm 仍经既有 wrapper/global-setup 临时19坏端口×2地址 guard，未绕过它，不能说 npm 全程无监听。
+
+## 固定源码与本轮结果
+
+开工报告 `9093e5a3`；实现固定 `b1562e8e`，测中源码未改。首轮 `npm test -- server/test/c10-host-claim.test.mjs`：exit0、11/11 pass、0fail/cancel/skip，duration2113.1854ms、wall2.3942299s，无 native retry。原始 `%TEMP%/pc-c10-heavy-user-b156-target-1.log` 和 `-exit.json`。源纯验证真实 bundle成功、128个计算输出、同输入同HTML/变seed+t不同HTML，正常 caps unknown/canvasHeavyfalse、tierlocal，生产split在已选择前提下仅一份host/userCards细任务。三次SSR合计259.8024ms只作诊断，明确 `browserMeasurement:false`。
+
+首轮 `npx --no-install tsc -b --force`：exit0、零错误、wall7.1000937s，原始 `%TEMP%/pc-c10-heavy-user-b156-types-1.log` 和 `-exit.json`。两脚本 `node --check` exit0。全部命令 process-only Python=cuda_Vit、PYTHONDONTWRITEBYTECODE、静默预加载；测试子进程 windowsHide，spawnSync 返回实际结束，不新建持久子树。git diff --check通过。本轮没有新测试失败；旧022/365真实失败未删、未覆盖。
+
+未跑：完整 npm、实际 C10、HTTP/TLS/listen(0) fixture、G0-R、节点。根限定此轮纯/type窗口，下一次真实宽窗口由根统一租约；本包不改生产渲染/卡片/阈值。当前结论是候选实现与纯路径验证通过，**尚未证明 Chromium 实测超预算、真实当前plan包含它、host编译执行和最终ready**，不能称 C10 修好。下一次必须先读 `a5-fixture-source.json` 与 `a5-fixture-prerequisite.json`，不满足即保留反例结束，不改成本/能力或同源盲重跑。实际通过还须 `a5-task-evidence.json`、`a5-host-render-evidence.json` 内同clip/hostFP/non-dedup完成和新键；主main原竞争同时照验。
+
+变更清单仅本报告、`scripts/probes/c10-browser-probe.mjs`、`scripts/probes/c10-judge.mjs`、`server/test/c10-host-claim.test.mjs`。旧审查和C10失败工作区保持冻结。没有merge/push/main/部署/依赖/用户项目或用户进程操作。
