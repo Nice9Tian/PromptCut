@@ -364,6 +364,8 @@ try {
     await a.waitForFunction(origins => origins.every(origin => [...document.querySelectorAll('iframe')].some(frame => {
       try { return new URL(frame.src).origin === origin; } catch { return false; }
     })), {}, STAGES);
+    // DOM insertion can precede the second stage's actual HTTP request.
+    await waitFor(() => STAGES.every((_, i) => result.stageDocuments.some(request => request.port === 6341 + i && request.method === 'GET')), 'both-compiled-stage-policy-origins-used');
     assert(STAGES.every((_, i) => result.stageDocuments.some(request => request.port === 6341 + i)), 'both-compiled-stage-policy-origins-used');
   }
   result.phase = 'editor-b-login'; await loginEditor(b, fixture.accounts[1]);

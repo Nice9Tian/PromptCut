@@ -101,3 +101,9 @@ root授权仅给pages probe补安全CDP元数据：真实/hosted/ WS创建、握
 固定47b一次纯目标 `npm.cmd test -- src/editor/sync/reconnect.test.mjs src/account/client.test.mjs`：9/9、零失败取消跳过、427.3331ms、wall713ms、exit0、native重跑0，raw `%TEMP%/pc-account-ws-v1-pure-1.log`。新增断言初次实际socket含v1/account/session.new，欢迎后project.open有正确projectId及seq1；断传输后resume现取更新票据、仍有v1及原sid/ack，欢迎ack1后不重open或重放已确认消息。受控Socket只在内存，无监听；client凭据接口仍受控fetch/native，不是浏览器/壳完整通过。实际root0c66首次连接失败截图与日志保留，静态因果被root确认后才修，不声称用pure证据推翻首次失败。
 
 同47b强制type `node <主仓库node_modules>/typescript/bin/tsc -b --force`：exit0零错、wall6488ms，raw `%TEMP%/pc-account-ws-v1-type-1.log`。两次测前后source同47b、clean，未启动业务服务/Chrome/桌面exe/TLS fixture/full，也没有节点/环境/依赖操作。后续需要root共同源重建并实际在线/桌面复验；新增CDP观察仅nodecheck，尚未在Chrome验证，保持这项证据边界。
+
+## 两舞台真实请求等待
+
+root固定4adc实际在线首次4.117s，协议修复后A新建201/session200/真实101，收到session.welcome与project.open/opened，已进入编辑器并取得可见项目链接与新projectId。唯一失败为both-compiled-stage-policy-origins-used：DOM已存在两iframe，但断言当刻stageDocuments仅6341 GET。原探针先等待DOM插入后立刻断言服务器网络记录，不能保证第二次HTTP请求已到达。最窄只在该原断言前复用已有有界waitFor等待6341与6342两条真实stage GET，不伪造记录、不放宽两来源要求、不修改舞台政策/产品/超时。等待仍超时则保留同名失败，不以DOM替代网络证据。node --check/diff --check通过；本叶未启动listener/Chrome/full，真实重验仍由root安排，首次4adc结果保留。
+
+另root桌面首次0c66因隔离USERPROFILE使Puppeteer定位TMP空cache而fs.access失败，native尚未启动；root将为测试子进程显式设置现成Chrome的PUPPETEER_EXECUTABLE_PATH。这是root测试进程配置原因，本次不改getChromePath/产品、不安装Chrome，也不声称nativeIPC已有通过证据。
