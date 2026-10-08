@@ -122,3 +122,5 @@
 transport ACK 仍不代表 project.op 持久 OK；发送方须保留原业务 opId/requestId，并以业务响应/历史解析不确定性。worker 的原 tuple 修复只解决 admit/read/finish 阶段，不能据此宣称 WS 业务 ACK 全部收口。私有/stop/fence 的真实退出、缓存零新字节、所有历史 Agent 子树/socket 关闭证据仍待最终集成与 root 部署侧提供。
 
 本轮是只读源码审查与纯反例，依根租约没有运行 types/full/固定服务/宽探针，没有新增生产代码。原三个已确认缺口得到部分修复，R1/R2 仍被真实模块反例证实；因此不授予此固定数据通道整体通过结论。
+
+中央 owner 在本轮报告提交后确认接受 R4，且 root 已批准该窄修。其说明 WIP 将按实际 internal TLS/proof/runGrant 尝试进入 factory，对非 Agent cached principal 明确拒绝；同时处理 R1/R2，并补实际 HTTPS 组件负向。该消息仅确认归属与修复计划，未给新的固定源码/目标结果，本轮仍以 cc5465a8 判定，不提前标修复通过。
