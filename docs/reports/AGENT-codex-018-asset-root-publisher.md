@@ -317,3 +317,13 @@ v1 reader保留原exact解释：旧instance.cgroup还是服务叶，绝不把v1�
 后续实现必须分别租producer和G各自模块；本轮没有写两端源码。最低联合验收应含：v1/v2混用拒、缺任一双tuple拒、伪包含/sibling/旧scope复用拒、full-history缺口/换anchor拒、active/marker/lock每个耐久失败门、doc checkpoint重启与同epoch回退拒；再由root执行真正Linux双epochpublisher＋实际TLS/G验收。刚通过的单scope OS smoke仅覆盖这里的内核对象保留与负例，不覆盖这些联验。
 
 部署控制仍有一个明确待接缝：本次OS通过使用全新transient service，不能据此假定已加载的现有固定service可以用`systemctl set-property Slice=...`换slice。v249 [dbus-unit.c:2083/2279](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/dbus-unit.c)把Slice置于transient/STUB创建属性，非普通live属性。后续root控制adapter必须明确提供受管service的下一epoch启动配置（如受管runtime配置由root生成并核加载结果，或独立已审核的transient部署模式）；两者均需另审/真实双epoch验证，不能让publisher默默改既有unit。本v2数据契约先要求启动后实际Slice/ControlGroup必须精确匹配，缺这种受管启动能力就失败关闭；不把它伪装为已有生产支持。
+
+## v2 producer实现开工与受管runtime drop-in边界
+
+root已采用上述显式v2机制，属于实现裁定，不称用户逐字段批准。新增精确租赁共享纯schema模块及其测试；producer/test/OS probe/本报告继续本Agent独占，G reader由另一owner接入，不读写其物理工作区。先冻结共享API，再接producer。v1原导出/含义全部保留，生产v2只有显式入口/config，不能自动升级。
+
+root选定的受管启动adapter：config v2另外提供`runtimeAdapter:{unitFragment:{path,sha256},baseDropIns:[{path,sha256}],ownDropInPath}`。ownDropInPath仅允许`/run/systemd/system/<exact configured unit>.d/90-promptcut-root-slice.conf`；实际FragmentPath、DropInPaths必须精确等于声明且摘要匹配的base集合，加上有本publisher持久ownership receipt证明的own文件。首次own文件必须不存在；既有own文件若无历史归属、字节/摘要/对象身份变化，均不能覆盖。目录与文件都需root-owned/no-symlink/非group-write；不改任意foreign drop-in，不为容错删未知配置。
+
+修改前：v1启动固定service时不改变Slice，无法保持每代独占closureScope。修改后：同一耐久外锁内，只有准确service停止、旧scope实际empty证据已耐久并释放后，备份原own配置并fsync，写新Slice drop-in并完成file/dir fsync，daemon-reload，再核真实加载的Slice、Restart=no、KillMode=control-group、Delegate=no以及所有base配置仍同摘要，才start。任何阶段未知保锁/nonactive；rename后失败不虚称rollback。该adapter由root显式配置精确自有路径才可运行，不能把旧probe的transient服务通过当作本adapter已测。
+
+验收分层保持：纯schema/协调模型只证明解析与顺序；Windows真实文件故障只证明文件操作和失败可见性边界；Linux双epoch受管unit、实际pinned TLS/identity与G checkpoint仍由root在后续独立窗口执行。本Agent不执行节点/改生产unit，也不扩全量测试。
