@@ -47,7 +47,7 @@ const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.V
 import { loadBrowserDevice } from "../../online/device";
 import type { CloudAccountClient, ProjectSession } from "../../account/client";
 import { hostedWsUrlOf } from "../../online/invite";
-import { AccountFailure } from "../../account/client";
+import { AccountFailure, accountConnectionProtocols } from "../../account/client";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
 import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
 
@@ -1074,7 +1074,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   let first = true, stopped = false, renewing: Promise<ProjectSession> | null = null;
   const renew = () => renewing ??= options.client.session(options.projectId).then(value => current = value).finally(() => { renewing = null; });
   const protocols = async () => { if (stopped) throw new AccountFailure(401, 'credential-revoked');
-    if (first) first = false; else await renew(); return [`promptcut.account.${current.connectionTicket}`]; };
+    if (first) first = false; else await renew(); return accountConnectionProtocols(current); };
   const ticket = Object.assign(async () => (await ticket.info())?.ticket ?? null, {
     info: async ({ force = false }: { force?: boolean } = {}) => {
       if (stopped || cur?.link !== link) return null;
@@ -1089,7 +1089,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   const fail = (error: unknown) => { stopped = true; link.stop(); if (!ready) rejectEntry(error);
     else { disconnectSharedAssets(); pushToast(error instanceof Error ? error.message : '云端登录已失效，请重新登录。', 'warn', Infinity); } };
   const link = new SyncLink({ url, projectId: options.projectId, initial: options.initial, initialize: false, session,
-    protocols, resumeProtocols: async () => { await renew(); return [`promptcut.account.${current.connectionTicket}`]; },
+    protocols, resumeProtocols: async () => { await renew(); return accountConnectionProtocols(current); },
     saveBackup: b => void saveBackup(b), onMessage: onSideMessage,
     onProtocolError: error => { const e = error as { status?: number }; if (e.status === 401 || e.status === 403) { fail(error); return true; }
       pushToast(error instanceof Error ? error.message : '云端服务暂时不可用，正在等待重连。', 'warn'); return false; },

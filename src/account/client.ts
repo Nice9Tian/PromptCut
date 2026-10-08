@@ -2,6 +2,8 @@
 export interface Account { id: string; name: string; email?: string | null }
 export interface EditorLogin { account: Account; loginId: string; accessToken: string; accessExpiresAt: number }
 export interface ProjectSession { connectionTicket: string; assetTicket: string; expiresAt: number }
+/** Keep the standard transport protocol alongside the opaque account credential. */
+export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
 export interface CloudProject { projectId: string; name: string; authorityId: string; creatorAccountId?: string; url?: string }
 export interface ProjectLists { owned: CloudProject[]; joined: CloudProject[] }
 export class AccountFailure extends Error {
