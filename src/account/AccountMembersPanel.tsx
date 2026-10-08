@@ -72,11 +72,14 @@ export function AccountMembersPanel() {
     } finally { if (generation.current === own) setBusy(false); }
   };
   const online = new Set(snapshot?.devices.filter(row => row.conns.some(conn => conn.role === 'page')).map(row => row.accountId) ?? []);
+  // Only actual connections are displayed. Persisted queued messages are never Agents.
+  // The retained-run presence projection remains a separate provider integration.
+  const agents = snapshot?.devices.reduce((total, row) => total + row.conns.filter(conn => conn.role === 'agent').length, 0) ?? 0;
   if (!shared?.accountId) return null;
   return <>
     <button ref={button} type="button" className="pc-sync-chip" data-pc="members-button" title="成员" onClick={() => {
       setRect(button.current?.getBoundingClientRect() ?? null); setOpen(!open); void refresh().catch(() => undefined);
-    }}>成员 <span data-pc="members-count">{snapshot ? `${online.size} 人` : '暂不可用'}</span></button>
+    }}><span data-pc="members-count">{snapshot ? `成员：${online.size} 人 · Agent：${agents} 个` : '成员：暂不可用'}</span></button>
     {open && createPortal(<div ref={pop} className="pc-members-pop pc-account-members" data-pc="members-pop"
       style={{ top: (rect?.bottom ?? 40) + 6, left: Math.max(8, Math.min((rect?.right ?? 340) - 360, window.innerWidth - 368)) }}>
       <div className="pc-account-members-heading">项目成员 <button type="button" disabled={busy} onClick={() => { void refresh().catch(() => undefined); }}>刷新</button></div>

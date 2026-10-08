@@ -15,7 +15,7 @@ const memberSnapshot = () => ({ ok: true, v: 2, authorityId: 'doc', projectId, a
   members: [{ accountId: account.id, accountName: account.name, access: 'rw', joinedAt: 1 }],
   devices: [{ accountId: account.id, accountName: account.name, deviceId: device.deviceId, deviceName: 'fixture', creator: true, conns: [{ role: 'page' }] }], bans: [] });
 test('account members is exact bearer/omit route, strict white-listed projection; unknown delivery replays exact admin body and conflict propagates', async () => {
-  const calls = []; let failure = true;
+  const calls = []; let failure = true, conflict = false;
   const client = createAccountClient({ online: true, origin: 'https://visuhive.com', device, now: () => 1000,
     fetch: async (url, init) => {
       if (url.pathname.endsWith('/me')) return reply({ ok: true, account, csrfToken: 'csrf' });
@@ -23,6 +23,7 @@ test('account members is exact bearer/omit route, strict white-listed projection
       calls.push({ path: url.pathname, ...init });
       if (url.pathname.endsWith('/members')) return reply({ ...memberSnapshot(), internalSecret: 'never-return' });
       if (failure) { failure = false; throw Error('lost-response'); }
+      if (conflict) return reply({ ok: false, code: 'access-revision-mismatch' }, 409);
       return reply({ ok: true, eventId: 'access:doc:4', accessRevision: 4, completed: false, state: 'pending-services' });
     } });
   await client.restore(); const snapshot = await client.members(projectId);
@@ -33,6 +34,7 @@ test('account members is exact bearer/omit route, strict white-listed projection
   await assert.rejects(client.memberAdmin(projectId, op), { code: 'network' });
   assert.deepEqual(await client.memberAdmin(projectId, op), { eventId: 'access:doc:4', accessRevision: 4, completed: false, state: 'pending-services' });
   assert.equal(calls[1].body, calls[2].body);
+  conflict = true; await assert.rejects(client.memberAdmin(projectId, op), { status: 409, code: 'access-revision-mismatch' });
 });
 test('member parser refuses wrong scope, duplicate identities/devices, role escalation and bans exposed to ordinary members', async () => {
   const mutations = [v => { v.projectId = 'sp_' + 'b'.repeat(26); }, v => { v.self.accountId = 'acc_' + 'b'.repeat(24); },
