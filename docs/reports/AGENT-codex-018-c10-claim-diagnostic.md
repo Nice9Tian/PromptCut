@@ -51,3 +51,5 @@ root 接受正常产品规则下的既有 r6-canvas 方案后，提交 `314d477c
 固定314d的首次 `npm test -- server/test/c10-host-claim.test.mjs`：8 tests /8 pass /0 fail /0 skip，856.7495 ms，exit0，原始 `TMP/pc-c10-claim-diagnostic-fixture-target-1.log` 与 `-exit.json`。同源 `npx --no-install tsc -b --force` 零错误，exit0，`fixture-types-1.log` 与 `-exit.json`。此前最终诊断4df目标wall885.6179ms、类型wall7463.8534ms。没有自动重跑或隐藏失败。
 
 截至本报告，未运行完整 npm、C10 Chromium probe、自动预渲染或任何固定端口服务：root 长基线仍占资源，仅授权类型/纯模块。下一项必需真实完整 C10 探针租约及全量 npm；缺此不能称 A5 已整体修复。候选6320–6329未使用，旧 run-authority/VH 叶未修改。无模型/权限/instance registration 新机制混入此叶。
+
+最后自审窄修 `9fc8e889`：新增片段后用真实 `setDurationManual(clip.end)` 明确使项目包含片段尾端，再从 store 读回实际 saved start/end/duration，断言时长未被量化掉且不越项目尾端，不能仅回显请求参数。仍只改探针，不动产品时长规则。固定该源码的 `fixture-target-fixed.log` 为8/8、零fail/skip、exit0；`fixture-types-fixed.log` 零错误、exit0，完整SHA/wall见各自-exit.json。真实浏览器尚未执行，读回断言会在获租后的真实探针验证。
