@@ -484,3 +484,9 @@ root执行闭包需带publisher→共享schema/account ledger的正常相对依�
 5. 同control ACK丢失只重发同receipt；旧实例unknown、新OS同证书、错误generation/实例、同control异payload、缺任一资源closed证据全不得完成。doc/Agent重启分别验证inventory/receipt恢复，不自动重播execution-started模型或外部作用。
 
 验收分层：首纯状态counter只能证明顺序与拒绝；真实HTTP/TLS两角色及实际close证明传输接线；真实runner/ToolJobs停止另给归属、actualclose与不重播证据；部署OS历史关闭与publisher/asset独立Linux witness仍另验。当前没有任何新执行结果，不称race已修，也不阻塞已独立通过的基础账号成果。
+
+## root收回与独立验证补记
+
+本节由root补充，不将前文未执行或失败改判。固定候选252f6556：类型零错；专属73/73；全量5401项、5397通过、0失败/取消、4跳过，71200.9431ms。实际Linux第三轮保留producer/schema/probe1df77168，仅worker7f827875；两代真实UID/TLS/固定cgroup事件句柄关闭与发布通过，probe6563ms。真实doc工厂63bfc0fa在两个阶段分别接受并实际SQLite关闭重开，共21/21；旧代、混用、缺标记、锁和错误锚点负例均拒绝。两次首败、原日志、真实成功和准确自有配置清理详见[本轮验证归档](../three-versions-main-stages-2026-10-09.md)。
+
+只收登记生成及共享格式；G中央传输接线、实际模型执行、上述新即时撤销提案尚未完成。四生产服务进程号和重启次数均未变，隔离实验最终服务/两代scope停下、6540–6549无监听；锁、登记、数据库和所有原始结果保留。
