@@ -25,5 +25,8 @@
 | `24167198` 浏览器加载诊断 | exit 1，404 路径明确指向浏览器安全依赖 `/server/*.mjs` 未由隔离 Vite 入口放行；6650 已关闭 | `%TEMP%/pc-consent-browser-ae34d27c/browser.out.log` |
 | `2b41892a` 首次完整浏览器 | 真 VH `createApp`、两个隔离 Chrome context、真实账号注册/第二设备登录：13/13 检查，exit 0，wall 2286 ms；浏览器、服务器与 6650 关闭 | `%TEMP%/pc-consent-browser-2b41892a/browser.out.log` |
 | `9cd1dcf5` 加迟到 GET 与队列核验 | 真后端/Chrome 15/15，exit 0，wall 2319 ms；纯目标 38/38，0 fail/skip，exit 0；强制类型 exit 0 | `%TEMP%/pc-consent-browser-9cd1dcf5/browser.out.log`、`%TEMP%/pc-consent-9cd1dcf5/target.out.log` |
+| `dcfbb72d` 注销视图撤销后最终源码 | 真后端/Chrome 15/15、exit 0、wall 2323 ms，纯目标 38/38、0 fail/cancel/skip、exit 0、wall 1651 ms，强制类型 exit 0；前后 `6650–6659` 零监听 | `%TEMP%/pc-consent-browser-dcfbb72d/browser.out.log`、`%TEMP%/pc-consent-dcfbb72d/target.out.log` |
 
 浏览器探针的 `cloud.available=true` 是隔离 UI 条件，`/agent/v1` 明确回 503；它只证明同意前不调用 Agent、拒绝草稿/队列保留、同意持久/跨设备、旧委托仍关闭。它**不证明**生产 Agent 已可运行、真实模型或桌面 Rust IPC。页面唯一 404 是 `/favicon.ico`，不属于产品接口。6650–6659 在开始前全空；fixture 的 Chrome profile、服务与监听由自身 finally 关闭，原日志只含状态/路径，不含密码、Cookie 或票据。全量 `npm test` 与节点验收留给根的联合固定源码；本叶没有执行。
+
+真后端探针只从本机 `VisuHive main@1b3b0029eddf951225a8a2912597dc46854e9041` 导入 `openStore/createApp/createCredentials`，使用独立 RAM SQLite、临时 Chrome profile 和只在本地 6650 的 HTTP。只测同意用户路径，不混用未部署的 Agent 运行器。最终源码提交与报告提交分别以 Git 记录为准；没有合并、推送或改节点。
