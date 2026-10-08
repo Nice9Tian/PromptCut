@@ -79,5 +79,12 @@
 - root 提供的真实运行摘要显示：端口前置检查 10 项全部通过；creator 页面点击项目后一直未进入项目视图，超时于 `project-open`，creator 截图为空黑页，owner 仍停在云端项目列表。这与串行流程一致：creator 的 `openProject` 未完成前不会打开 owner 项目。只核对了 result 中的阶段/检查/网络状态及两张截图，没有读取 fixture 凭证或密钥；6620–6629 在 root 的结果中全部释放。
 - 为定位 blank React 页面的异常，本次仅给 Puppeteer 探针补诊断：监听 `pageerror`，输出仅限白名单错误名、固定错误类别，以及经过筛选的脚本 basename/行列和 `editor`/`stage`/`other` 来源类别；不输出原始 message、stack、console、URL query、headers、body、cookie、密码或 token。页面快照只记 pathname、readyState、节点是否存在及计数，不读取任意页面文本或输入值。
 - `openProject` 增加等待项目行、实际点击前、点击后等待项目视图、项目视图已出现、consent 弹窗/接受等步骤快照；超时时记录最后一个受控步骤和两个页面的安全快照。result 仍留在调用者指定的临时输出目录，console 摘要只增加受控步骤名和 pageerror 数量。探针不收集一般 console 消息。
-- 顺带只读检查了 stop 权限显示：`CloudAiPanel.css` 的 `.pc-cloud-panel[data-cloud-can-stop="0"] [data-pc="ai-stop"] { display: none; }` 会隐藏 Composer 中以 `disabled`、`title` 和 `aria-label` 说明无权停止的按钮，因此这份权限说明在普通成员账号运行态下不可见。Composer 默认行为与禁用实现本身仍在；本次没有改产品，需 root 决定是否另授产品文件窄租约来调整可见说明。
-- 本次允许范围仅探针与本报告。不会重跑 browser、服务、类型或全量；接下来只做 `node --check`、`git diff --check` 和改动路径核对，再提交供 root 使用新构建复跑诊断。
+- 顺带只读检查了 stop 权限显示：当时 `CloudAiPanel.css` 的 `.pc-cloud-panel[data-cloud-can-stop="0"] [data-pc="ai-stop"] { display: none; }` 会隐藏 Composer 中以 `disabled`、`title` 和 `aria-label` 说明无权停止的按钮，因此这份权限说明在普通成员账号运行态下不可见。当时 Composer 默认行为与禁用实现仍在且未改；后续授权修复见下一节。
+- 当时的窄租约仅包含探针与本报告；没有重跑 browser、服务、类型或全量。该阶段用 `node --check`、`git diff --check` 与改动路径核对后提交供 root 复跑诊断。
+
+## 项目 fixture 首红修复与停止说明可见性（2026-10-09）
+
+- root 复核真实首红日志：前置检查 10/10 通过，随后 creator 在打开项目时超时；白名单页面诊断给出 `TypeError` / `missing-value`，安全 frame 为 `assets/index-wyXE3Vt3.js:33734:72685`。root 依据精确构建列映射到 `ControlBar` 对 `duration.toFixed(2)` 的调用。fixture 之前只传 `initialProject: { tracks: [] }`，缺少正常编辑器项目字段；正常产品 `AccountProjects` 通过 `createEmptyProject(label)` 创建完整初始项目。
+- fixture 现在直接导入 `src/kernel/project.ts` 的 `createEmptyProject`，并以同一项目名构造 `initialProject`，让浏览器流程使用真实完整项目形状。没有改 `ControlBar`、默认项目加载路径或渲染策略来掩盖 fixture 错误。
+- 删除 `CloudAiPanel.css` 中依据 `data-cloud-can-stop="0"` 隐藏 `ai-stop` 的单条规则。Composer 原有的 disabled 状态、title 与 aria-label 权限说明因此能在账号模式无停止权限时展示；没有改 Composer 或其它产品文件。
+- 只读 package 为 ES module；纯 Node 24 导入 `src/kernel/project.ts` 成功，生成对象检查为项目名正确、version 1、duration 30、两条轨道、media 数组。fixture 的 `node --check` 通过；`tsc -p tsconfig.json --pretty false` 通过；`node --import=./scripts/lib/test-silent-processes.mjs scripts/test-suite.mjs src/ai/cloud/account-conversation-controls.test.mjs` 7 项通过、0 失败，包含 Composer 真实 SSR 权限呈现回归。`git diff --check` 通过。未运行完整测试、listener、浏览器、节点或 fixture 服务。

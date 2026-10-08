@@ -40,4 +40,3 @@
   color: var(--ink-muted);
   font-size: 12px;
 }
-.pc-cloud-panel[data-cloud-can-stop="0"] [data-pc="ai-stop"] { display: none; }
