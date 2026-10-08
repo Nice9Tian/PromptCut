@@ -15,4 +15,3 @@ export function mergeRanges(ranges) {
   }
   return merged;
 }
-

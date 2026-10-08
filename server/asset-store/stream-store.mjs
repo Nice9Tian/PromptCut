@@ -128,4 +128,3 @@ export function handleStreamRequest(store, req, res, pathname) {
   }, () => fail(404, 'Stream file is not ready'));
   return true;
 }
-

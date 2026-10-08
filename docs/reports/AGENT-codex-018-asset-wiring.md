@@ -60,16 +60,16 @@
 
 asset-wiring-integration.test.mjs用冻结VisuHive provider的store/credentials/internal真实代码，新TMP SQLite与临时CA/账号，不读真实密码/钥匙/数据。实际combo(doc public5861/internal5862)问实际provider5860，隔离stage asset-main public5863/internal5864，asset角色独立进程且仅读取own cert/key。受控ACK丢失代理5866仅转发真实doc，先等doc持久成功再断响应；不伪造权限/ACK。RPC专用5865。子树隐藏并await实际close，所有artifact仅TMP。
 
-覆盖三命名空间A/B独立同hash上传完成和GET/HEAD/Range/chunks/complete；B未入库404/空清单，同hash分别入库可读；无证/伪principal/错project/public内部口拒；回环缺client cert真实TLS失败；media上传/真实非零ffmpeg PCM、同项目adopt保留输入/跨项目私路径拒；真实stream manifest/init/seg、未接受publication marker隐藏；真实thumb文件隔离；asset离线join/session503且不加成员、上线真实head自动可用；HTTP正文结束后真fs source _destroy gate使closed=false、fd仍数值，持久logout时receipt为空/cursor不越事件；release到actualclose之后才完成ACK；真实网络持续丢ACK响应→own child crash→可信fixture fence→pending同receiptId及全字段重放；clean restart实际asset-main换instance并session再次通过。最后扩充成功join、新登录删除A而B同hash保留等断言待固定完整块target确认。
+覆盖三命名空间A/B独立同hash上传完成和GET/HEAD/Range/chunks/complete；B未入库404/空清单，同hash分别入库可读；无证/伪principal/错project/public内部口拒；回环缺client cert真实TLS失败；media上传/真实非零ffmpeg PCM、同项目adopt保留输入/跨项目私路径拒；真实stream manifest/init/seg、未接受publication marker隐藏；真实thumb文件隔离；asset离线join/session503且不加成员、上线真实head自动可用；HTTP正文结束后真fs source _destroy gate使closed=false、fd仍数值，持久logout时receipt为空/cursor不越事件；release到actualclose之后才完成ACK；真实网络持续丢ACK响应→own child crash→可信fixture fence→pending同receiptId及全字段重放；clean restart实际asset-main换instance并session再次通过。最后扩充成功join、新登录删除A而B同hash保留等断言已由下方target-2和full-1的同一集成确认。
 
 未覆盖/未挂载：没有生产部署/真实公网/Linux完整HTTP或专用OS UID实权隔离；cgroup证明由根提供且本机未试orphan ffmpeg；未挂render/Agent runGrant权限（仍拒body豁免）、业务队列自动删除/回收未决语义不实施；流producer仍由后续owner传可信写lease，本包挂真实read routes并以TMP可信seed验证，不冒称生产render产物已贯通。combo旧LAN全局admin inventory/usage不变，v2 public不降级它；不推出新管理员删除策略。基底仍.17；root release .18前必须传播PROMPTCUT_ACCOUNT_V2_REQUIRED=1及独立asset/status/key/UID/fence配置，否则缺required/配置即未完成生产，不冒称可上线。
 
-待最终固定验证：type、含最新补充断言的target、一次必要npm full，以及diff--check/干净SHA；完成后另追加精确结果，不冒用旧节点6项或旧4966全量证据。
+该阶段待验记录（历史）：type、最新target、一次full；实际结果见最终段，不冒用旧节点6项或旧4966证据。
 
 
 ## 最终固定验收与交回
 
-- 产品源码固定4c91f5d2f6b0a6f221df09638c52ceed69cbcc63；e32f26a6e7dbca171b0cefc87678372f4c83344a只补集成测试admin.expectedAccessRevision；最终测试补丁0de62bd5只改media-pcm BAKERY目标/regex两行，保留真实HTTP和逐样本断言。报告后续提交不改产品/测试源码。
+- 产品源码固定4c91f5d2f6b0a6f221df09638c52ceed69cbcc63；e32f26a6e7dbca171b0cefc87678372f4c83344a只补集成测试admin.expectedAccessRevision；最终测试补丁0de62bd5只改media-pcm BAKERY目标/regex两行，保留真实HTTP和逐样本断言。最终交回格式收口只删四个新纯模块末尾多余空行，函数/语句与4c91相同；不据此重复type/full。
 - type-1：实际node主仓库typescript/bin/tsc -b --force，exit0/零错误，TMP/promptcut-asset-wiring-type-1.log；类型受检产品即4c91。没有不存在的npm types命令。
 - target-1固定4c91：87项/86pass/1fail/0skip，10115.7612ms；最后新增delete隔离fixture漏现有expectedAccessRevision，真实服务409 access-revision-mismatch。按public status真实取revision，仅修fixture，无产品权限改动。
 - target-2固定e32：只复验完整真实provider/combo/独立stage/PCM/stream/thumb/source-fd-gate/crash/receipt/clean restart/successful join/delete-A不影响B的集成1/1，0fail/skip，6034.0082ms，TMP/promptcut-asset-wiring-target-2.log。原其余86项已在target-1通过，不把两轮写成一次87/87。
@@ -136,6 +136,8 @@ asset-wiring-integration.test.mjs用冻结VisuHive provider的store/credentials/
 
 asset独立进程node server/hosted/asset-main.mjs：PROMPTCUT_ASSET_DATA_DIR绝对存在目录、HOST、PORT、公网PUBLIC_URL、INTERNAL_PORT；DOC_AUTHORITY_ID、DOC_ORIGIN https根origin、DOC_FINGERPRINT256、DOC_CA_FILE绝对路径；CLIENT_KEY_FILE/CLIENT_CERT_FILE仅own asset叶、INTERNAL_KEY_FILE/INTERNAL_CERT_FILE仅own asset叶（所有前缀PROMPTCUT_ASSET_）；DOC_CLIENT_FINGERPRINT256限定status调用方doc。PROMPTCUT_ASSET_SERVICE_IDENTITY设置部署的精确systemd unit/cgroup服务身份；unclean重启需要PROMPTCUT_ASSET_RECOVERY_FENCE_FILE=root控制的proof绝对文件。可选PROMPTCUT_HOSTED_RENDER_CAP_BYTES非负数，0真实保留，不转换缺省容量。
 
-doc组合main：PROMPTCUT_ASSET_STATUS_ORIGIN https内部asset根origin，PROMPTCUT_ASSET_STATUS_CLIENT_KEY_FILE/CERT_FILE/CA_FILE仅doc own privatekey/cert和peer CA；PROMPTCUT_ASSET_STATUS_FINGERPRINT256限定asset cert，PROMPTCUT_ASSET_INSTANCE_ID可选固定。对应startHostedCombo({assetStatus:{origin,tls,serverFingerprint256,instanceId?},assetPublicUrl,...})，inject真实assetReadyProbe；account模式不listen旧asset口。真实渲染/Agent后续各自独立UID/私钥，不能让一个OS用户拥有四角色钥匙来称隔离。根在release .18前传播account-required，核nginx公网asset指向独立服务和内部口无公网，核数据dir/UID/CA/pin、SQLite一致备份和恢复，以及cgroup证明。这里未部署，不能以Windows临时证书运行替代生产完成。
+doc组合main：PROMPTCUT_ASSET_STATUS_ORIGIN https内部asset根origin，PROMPTCUT_ASSET_STATUS_CLIENT_KEY_FILE、PROMPTCUT_ASSET_STATUS_CLIENT_CERT_FILE、PROMPTCUT_ASSET_STATUS_CA_FILE仅doc own privatekey/cert和peer CA；PROMPTCUT_ASSET_STATUS_FINGERPRINT256限定asset cert，PROMPTCUT_ASSET_INSTANCE_ID可选固定。对应startHostedCombo({assetStatus:{origin,tls,serverFingerprint256,instanceId?},assetPublicUrl,...})，inject真实assetReadyProbe；account模式不listen旧asset口。真实渲染/Agent后续各自独立UID/私钥，不能让一个OS用户拥有四角色钥匙来称隔离。根在release .18前传播account-required，核nginx公网asset指向独立服务和内部口无公网，核数据dir/UID/CA/pin、SQLite一致备份和恢复，以及cgroup证明。这里未部署，不能以Windows临时证书运行替代生产完成。
 
 最终状态：本叶已完成中央素材独立入口/真实mTLS权威/连续事件close→持久receipt→ACK/内部实时ready接线、精确部署闭包及本地产品正反向验证。未完成的闸门是共同候选full零失败与根节点部署/公网/OS权界；原因和所需环境/证明已明确，不借旧baseline称通过。原LAN v1和未决调度/回收/业务删除政策保持范围；不碰用户数据或别的owner工作区。git diff--check及最终干净SHA在交回时核，root收回审查后再推进共同full。
+
+最终base→HEAD diff--check首次发现四个新纯模块多余EOF空行；已仅删除空白，不改任何函数/语句，记录并提交后重新核整块diff，而非仅核工作区空diff。

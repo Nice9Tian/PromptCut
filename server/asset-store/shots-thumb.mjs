@@ -44,4 +44,3 @@ export function shotsThumbMiddleware(root        , { projectStores, projectAcces
     finally { await handle?.close().catch(() => {}); finish?.(); if (res.writableFinished || !res.headersSent) lease?.release(); }
   };
 }
-
