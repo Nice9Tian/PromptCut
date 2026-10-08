@@ -167,3 +167,17 @@ doc 本块验证的是已认证真实实例对终态报告的签名绑定及既�
 尚未迁移的真实调用处：`account-runner.mjs` 的两处 slot.finish；`run-authority-core.test.mjs:131` 原无证据 finish 后释放 FIFO；`account-assembly-central.test.mjs:247` 原 signed finish 后 admit 下一轮；`account-assembly-run-internal.test.mjs:85` 原 finish body；agent-runner read/control/ack-recovery 和 agent-instance-data-worker 目标转发旧 manager 协议。这些旧成功预期需要真实终态及后续关闭 producer 配套，不能直接补字面量 done。本叶没有运行它们以制造已知红，也没有删弱原断言；共同 baseline 此刻不宣称通过。
 
 建议后续**仅内部** `finalizeFinishInState(state,{finishReceiptId,controlId,controlReceiptDigest,docClosureDigest})` 接口：引用必须从已有 doc ledger 内重建并验全量绑定，不接受网络 body 的 closed:Boolean；核已确认的同实例/generation/runGrant control receipt、doc 数据连接真实关闭、原 outcome/readReceipt 以及 currentRun/message 未被替换，再在单事务准确映射 done/failed/interrupted 并释放 FIFO。此入口本块没有实现或开放。现有 stop/private control 会取消会话，不能拿它伪装普通成功结算；仍缺正常终态 closing control 的实际 producer、真实 Agent 资源 drain 的可信回执接线以及与 `docRunClosuresV2` 的同目标汇总。根会另给此小块租约。未知旧实例资源仍 pending，不能以新实例零库存或 timeout 补全。
+
+## 正常终态关闭阶段（开工，75ea 后续）
+
+三级机制修改前：finish 只持久记录 outcome/read receipt 并阻止继续读写，既无正常 closing control，也无最终释放 FIFO 的关闭证明；现 stop/private drain 会取消任务，不能替代正常结束。
+
+修改后拟定：finish 同事务建立 kind=terminal 的精确关闭目标，保留原当前 run 和消息 running 状态。目标绑定 authorityId、finishReceiptId、readReceiptId、outcomeDigest、project/conversation/message/run/grant、serviceId/kid、instanceId/generation。独立 queryFinish 使用原 finish 请求全部字段（包括 outcome）和单独签名 scope，幂等查询不得创建新终态或改变原请求。
+
+Doc delivery 先同步阻断目标 grant 的后续数据访问，等待实际连接与正在分派消息退出后，将 docRunClosuresV2 精确库存持久化；在首次 await 之前记录本 docInstanceId 的待关闭库存，重启时新实例空清单不能消除旧实例 pending。正常 terminal 不提交 stop/private operation fence，不将消息标 cancelled。
+
+Agent receiver 独立 prepareTerminalClosure 只查询已真实 drain 的同一运行实例，不能 abort/cancel。回执使用原 RAM Ed25519 key，独立固定域，实际 doc→Agent TLS exporter、当次 nonce、完整 target 和 drain evidence digest 绑定。管理端点仅显式配置回环 HTTPS 和证书 pin；缺配置/资源证明保留 pending。签名证明当前实例回执来源，不自动证明历史 OS 资源已空。
+
+权威内部 finalizer 只能从同账本读取目标、read/outcome、已验实例回执和实际 doc 关闭库存；同事务重核 grant/instance/currentRun，private/stop 先提交不得被终态复活或释放另一个 run。网络无 closed 布尔入口。manager 真实资源/OS 引用尚须与 Sol 消费者协商；未知历史始终 pending，不以 donePromise 或新实例空库存放行。
+
+本轮额外窄租：run-control.mjs 的正常 terminal 分支、agent-instance-session.mjs 的固定域 terminalControlProofFor。原撤销路径保留。可选配置 account.agent.controlOrigin/controlServerFingerprint256；root 管理端点显式配置，生产尚未挂。
