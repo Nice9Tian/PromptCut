@@ -130,7 +130,13 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   assert.equal(delegation.accountId, ids[0]);
   await assert.rejects(combo.accountRuntime.resolveAgentDelegation(sessions[0].assetTicket), /ticket-expired/);
   await assert.rejects(combo.docAssembly.runProvider.checkAccess({ principal: delegation, projectId, action: 'read' }),
-    agentConfigured ? /instance-/ : /run-authority-unavailable/);
+    agentConfigured ? /run-service-forbidden/ : /run-authority-unavailable/);
+  if (!agentConfigured) {
+    agentTransport = createAssetMtlsTransport({ origin: 'https://127.0.0.1:5772', tls: pki.asset,
+      serverFingerprint256: pki.doc.fingerprint256 });
+    await assert.rejects(agentTransport.request('POST', '/internal/v2/instances/challenge', {
+      requestId: 'not-configured', publicKey: pair.account.publicKey.export({ type: 'spki', format: 'pem' }).toString() }), /doc-agent-unavailable/);
+  }
   if (agentConfigured) {
     assert.ok(combo.docAgentAssembly);
     const enable = async enabled => call(0, 'admin', { projectId, op: 'set-hosted-service', service: 'agent', enabled,
