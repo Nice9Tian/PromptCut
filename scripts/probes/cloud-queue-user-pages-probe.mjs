@@ -61,6 +61,13 @@ const queue = async (page, count) => {
   await page.waitForFunction(count => document.querySelectorAll('[data-pc="cloud-queue"] li[data-message-id]').length === count, { timeout: TIMEOUT }, count);
   return page.$$eval('[data-pc="cloud-queue"] li[data-message-id]', rows => rows.map(row => ({ messageId: row.dataset.messageId, position: Number(row.dataset.queuePosition) })));
 };
+const chooseHistory = async (page, conversationId) => {
+  const history = await page.$('[data-pc="cloud-ai-panel"] button[title*="历史"]');
+  check(Boolean(history), 'history-button-visible'); await history.click();
+  const row = `[data-pc="chat-cloud-item"][data-chat-id="${conversationId}"]`;
+  await page.waitForSelector(row, { visible: true }); await page.click(row);
+  await page.waitForFunction(id => window.__pcCloud?.main?.conversationId?.() === id, { timeout: TIMEOUT }, conversationId);
+};
 const started = Date.now();
 try {
   await fs.mkdir(OUT, { recursive: true }); await fs.access(path.join(DIST, 'index.html'));
@@ -98,8 +105,7 @@ try {
   phase = 'shared-history';
   await a.waitForFunction(() => Boolean(window.__pcCloud?.main?.conversationId?.()));
   const conversationId = await a.evaluate(() => window.__pcCloud.main.conversationId()); result.conversationId = conversationId;
-  const history = await b.$('[data-pc="cloud-ai-panel"] button[title*="历史"]'); check(Boolean(history), 'history-button-visible'); await history.click();
-  await b.waitForSelector(`[data-pc="chat-cloud-item"][data-chat-id="${conversationId}"]`, { visible: true }); await b.click(`[data-pc="chat-cloud-item"][data-chat-id="${conversationId}"]`);
+  await chooseHistory(b, conversationId);
   await queue(b, 1);
   phase = 'send-b'; await fill(b, '[data-pc="cloud-ai-panel"] [data-pc="ai-input"]', 'Bob persistent second'); await b.keyboard.press('Enter');
   const [qa, qb] = await Promise.all([queue(a, 2), queue(b, 2)]);
@@ -111,7 +117,29 @@ try {
   }
   await shot(a, '01-shared-queue-a'); await shot(b, '02-shared-queue-b');
   phase = 'reload'; await b.reload({ waitUntil: 'domcontentloaded' });
+  await b.waitForSelector('[data-pc="account-name"]', { visible: true });
+  check(!await b.$('input[type="password"]'), 'reload-cookie-restored');
+  // A normal reload opens the account homepage. Reopen through its real list;
+  // first verify the visible row's actual link, then select the same history.
+  const projectName = 'Queue shared browser project';
+  await b.waitForFunction(name => Array.from(document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row'))
+    .some(row => row.querySelector('button')?.textContent === name && !row.querySelector('button').disabled), { timeout: TIMEOUT }, projectName);
+  const rowHandle = await b.evaluateHandle(name => Array.from(document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row'))
+    .find(row => row.querySelector('button')?.textContent === name), projectName);
+  try {
+    const buttons = await rowHandle.asElement().$$('button');
+    await buttons[1].click();
+    const linkedProject = await b.$eval('[data-pc="cloud-project-link"]', input => {
+      const link = new URL(input.value); return link.origin === location.origin ? link.searchParams.get('project') : null;
+    });
+    check(linkedProject === id, 'reopen-list-link-exact-project');
+    await buttons[0].click();
+  } finally { await rowHandle.dispose(); }
+  await b.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true });
+  phase = 'reopen-history'; await chooseHistory(b, conversationId);
+  check(await b.evaluate(() => window.__pcCloud.main.conversationId()) === conversationId, 'reopen-same-conversation');
   const reopened = await queue(b, 2); check(JSON.stringify(reopened) === JSON.stringify(qa), 'persistent-queue-restores-after-page-reload');
+  await shot(b, '03-reopened-shared-queue-b');
   check(result.network.filter(row => row.path.endsWith('/messages') && row.status === 202).length === 2, 'two-actual-202-requests');
   result.completed = true;
 } catch (error) {
