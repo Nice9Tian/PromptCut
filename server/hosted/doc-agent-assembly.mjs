@@ -10,6 +10,9 @@ import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanc
   INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
 import { createRunAssetsInstanceAdapter } from './run-assets-instance-adapter.mjs';
+import { createRunAssets } from '../account/run-assets.mjs';
+import { createRunAssetsInternalHandler } from '../account/run-assets-internal.mjs';
+import { createRunAssetClosure } from './run-assets-closure.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 
@@ -30,7 +33,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     'messageId', 'runId', 'runGrantId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'];
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
-  let stopped = false, runAuthority, assetInstanceAdapter = null;
+  let stopped = false, runAuthority, assetInstanceAdapter = null, runAssets = null, runAssetsHandler = null;
   const currentService = () => {
     if (stopped) fail(503, 'doc-agent-unavailable');
     try { serviceRegistry?.refresh({ force: true }); } catch { fail(403, 'run-service-forbidden'); }
@@ -296,6 +299,30 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     };
     return Object.freeze({ authenticateDirect, authenticateObserved, verifyObserver: adapter.verifyObserver });
   }
+  function mountRunAssets({ assetFingerprint256, currentAsset, resolveObserver, privateClient,
+    ticketTtlMs, maxBodyBytes, now: runNow = now } = {}) {
+    if (runAssets || typeof resolveObserver !== 'function' || typeof privateClient?.identity !== 'function')
+      fail(503, 'run-assets-unconfigured');
+    const doc = getDocAssembly();
+    if (typeof doc?.resolveRunMedia !== 'function') fail(503, 'run-assets-unconfigured');
+    const authentication = createRunAssetAuthentication({ assetFingerprint256, currentAsset });
+    let authority;
+    try {
+      const closure = createRunAssetClosure({ privateClient, currentAsset });
+      authority = createRunAssets({ ledger, runProvider: provider,
+        authenticateDirect: authentication.authenticateDirect,
+        authenticateObserved: authentication.authenticateObserved,
+        verifyObserver: authentication.verifyObserver,
+        resolveMedia: input => doc.resolveRunMedia(input),
+        verifyLeaseClosure: input => closure.verifyLeaseClosure(input),
+        verifyControlReceipt: input => closure.verifyControlReceipt(input),
+        now: runNow, ticketTtlMs });
+      const handler = createRunAssetsInternalHandler({ runAssets: authority,
+        agentFingerprint256: pin, assetFingerprint256, resolveObserver, maxBodyBytes });
+      runAssets = authority; runAssetsHandler = handler;
+      return Object.freeze({ authority, handler });
+    } catch (error) { authority?.close(); assetInstanceAdapter?.close(); assetInstanceAdapter = null; throw error; }
+  }
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
     agentFingerprint256: pin, resolveDelegation: async ticket => {
       currentService(); return runtime.resolveAgentDelegation(ticket);
@@ -322,11 +349,12 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       }
       return { conversations: rows };
     } });
-  return { conversations, runProvider: provider, runHooks, deliver, createRunAssetAuthentication,
+  return { conversations, runProvider: provider, runHooks, deliver, createRunAssetAuthentication, mountRunAssets,
     transportAuthenticate, transportConnected, dispatchInvocation,
-    async handleInternal(req, res) { return await instancesHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
+    async handleInternal(req, res) { return await runAssetsHandler?.(req, res) || await instancesHandler(req, res) ||
+      await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
-    async close() { stopped = true; await Promise.allSettled([...deliveries.values()]); assetInstanceAdapter?.close(); instanceAuthority.close(); subjects.clear();
+    async close() { stopped = true; await Promise.allSettled([...deliveries.values()]); runAssets?.close(); assetInstanceAdapter?.close(); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
 }
