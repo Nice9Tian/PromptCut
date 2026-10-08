@@ -12,6 +12,31 @@ import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/age
 import { createAgentInstanceInternalHandler, instanceRequestProof } from '../account/agent-instance-internal.mjs';
 import { createRunInternalServer } from '../account/run-internal.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
+import { startAgentService, AgentConfigError } from '../agent-service/main.mjs';
+
+test('required account service uses doc conversation authority and keeps runner unmounted until data proof exists', { timeout: 30000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-agent-instance-entry-'));
+  const calls = [];
+  const conversationClient = {
+    identity: async input => { calls.push(['identity', input]); return { accountId: 'acc-fixture', projectId: 'project-fixture',
+      loginId: 'login-fixture', loginGeneration: 1 }; },
+    access: async () => ({ allowed: true }), list: async () => ({ conversations: [] }), get: async () => ({ messages: [] }),
+    send: async input => { calls.push(['send', input]); return { queued: true }; },
+    switchVisibility: async () => ({}), stop: async () => ({}), rename: async () => ({}), close() {},
+  };
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  await assert.rejects(startAgentService({ dataDir: dir, docUrl: 'ws://127.0.0.1:9999', port: 0,
+    accountMode: true, conversationClient }), error => error instanceof AgentConfigError && error.reason === 'account-v2');
+  const service = await startAgentService({ dataDir: dir, docUrl: 'wss://127.0.0.1:9999', port: 0,
+    accountMode: true, conversationClient });
+  t.after(async () => { await service.close(); });
+  assert.equal(service.service.accountMode, true);
+  assert.equal(service.service.describe().runAuthorityMounted, false);
+  await service.service.send({ accountMode: true, accountId: 'acc-fixture', projectId: 'project-fixture',
+    delegation: 'doc-opaque-fixture' }, 'conversation-fixture', { prompt: 'Queued until actual data proof' });
+  assert.equal(calls.at(-1)[0], 'send');
+  assert.equal(service.service.runManager, undefined);
+});
 
 test('Agent OS RAM keys register through actual mTLS; signed run requests bind exact socket/body/action and close', { timeout: 30000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-agent-instance-worker-'));
