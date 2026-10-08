@@ -107,3 +107,11 @@ VisuHive的doc叶证书精确绑定固定0aa9c962，在原CA和主机名验证�
 使用同候选实际在线构建、VisuHive main精确pin的新后端和新网站，真实Chrome19/19、零失败、complete、5562ms（墙5.703秒）；创建/加入/双方网站列表/cookie恢复仍全过。browser、两舞台6341/42、fixture子进程关闭，profile清理，source不变；没有模拟权限或ready。TMP pc-account-online-prod-config-fb0f486d-out/result.json及log。
 
 VisuHive精确证书包以572a60eac5607b601c415e29e9c2a23293c9d08a合main并推送后，018-account-doc-identity再核HEADecb35579已在main、完整status空、全树reparse0、无ignored、绝对.worktrees边界，移除工作区并branch-d。累计PC34/VH11，共45个，本任务仍用PC两个工作区。TMP three-versions-doc-identity-cleanup-20261009.json。
+
+## 三服务生产接线与完整托管备份
+
+只收ea298821租内四文件，报告归档至agent-reports，不带其旧private中央登记改动。根候选50e3f1a2c05e2d109099da11910c3819829f5e58类型退出0墙6.547秒；全量5306/5302通过/0失败/0取消/4跳过69722.0022ms（墙70.078秒）；build/online-build退出0墙8.984/1.750秒；source不变clean、native重跑0。全量内本包五个目标都实际执行，真实账号/doc/独立asset创建及素材追齐后开放会话/权威项目列表通过，三个进程close，6440–45清空。原始TMP pc-account-prod-plan-50e3f1a2-{type,full,build,online-build}.log/.result.json；初次模块路径和teardown失败见归档原报告，未覆盖日志。安装计划只产配置，尚未在节点执行。
+
+节点生产旧托管完整一致备份：/root/promptcut-full-backup-20261009-account-cutover（0700，产物0600），58,307文件/3,247,803,549数据字节，无symlink；停旧测试hosted71.445秒后立即恢复，PID24163→269595，账号268732/nginx9395未变。SQLite在线备份schema0/accountCount1/integrityok。hosted-data.tar 3,294,904,320字节/SHA256 a09f078c103b2586a0c78613b2da4fbaa2b70d4b26865f994c319fa60b46eff9；旧代码、配置/nginx/私有PM2快照另保存，未打印秘密值。没有生成生产v2钥匙、迁移或删除实际数据；恢复仍待验证，不能据备份完成就删除。TMP pc-hosted-{backup-preflight,full-backup}-20261009.log。
+
+隔离强化探针的当前全文难题另交Astra，工作区018-browser-doc-read，原失败源码保留；不是main合并门槛。首次工作区准备输错完整ref被Git拒绝，核真实0b1454df96fa8586712e9cea07d4b57b36964b62后才建，无重置/清理。最初6463为用户Discord占用，探针预检即拒、服务未起，未碰该进程；根重分配并确认6600–6609为空后再作有界诊断。该次环境前置不能算产品反例或通过。
