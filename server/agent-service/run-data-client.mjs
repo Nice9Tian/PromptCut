@@ -7,7 +7,8 @@ import { instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const fail = (code, status = 503) => { throw accountError(status, code); };
-const actionOf = frame => /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(frame?.type) ? 'write' : 'read';
+const actionOf = frame => /^(?:project\.op|project\.upload|project\.snapshot\.put|content\.put|presence\.(?:set|clear|send))$/.test(frame?.type) ||
+  /^(?:events\.|task\.|publisher\.|node\.)/.test(frame?.type) ? 'write' : 'read';
 const sessionItemOf = protocols => {
   const item = protocols.find(value => value.startsWith('promptcut.session.'));
   if (item === 'promptcut.session.new') return { kind: 'new' };

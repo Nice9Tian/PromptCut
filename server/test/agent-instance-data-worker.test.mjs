@@ -42,7 +42,7 @@ test('Agent data client signs real TLS WS/LP requests and closes owned sockets',
     agentFingerprint256: pki.asset.fingerprint256, resolveServicePrincipal: ({ socket }) => principalOf(socket) });
   const service = createDocService({ autoTick: false, enableHttpTransport: true,
     authenticate: () => null,
-    modules: [{ name: 'fixture', types: ['fixture.', 'selection.'], handle(api, connId, frame) {
+    modules: [{ name: 'fixture', types: ['fixture.', 'selection.', 'project.'], handle(api, connId, frame) {
       api.send(connId, { type: 'fixture.reply', reqId: frame.reqId, projectId });
     } }],
     async transportAuthenticate(req, _fallback, { internal }) {
@@ -83,11 +83,12 @@ test('Agent data client signs real TLS WS/LP requests and closes owned sockets',
         kind: input.kind, url: req.url, protocols: instanceProtocolHeaders(req.headers), bodyText,
         ...(frame ? { text: JSON.stringify(frame) } : {}),
         ...(input.frameIndex !== undefined ? { frameIndex: input.frameIndex } : {}) });
-      const action = /^(project\.op|project\.upload|project\.snapshot\.put|content\.put|events\.|presence\.(set|clear|send)|task\.|publisher\.|node\.)/.test(frame?.type) ? 'write' : 'read';
+      const action = frame?.type === 'project.op' ? 'write' : 'read';
       assert.equal(envelope.proofs.length, frame?.type === 'selection.query' ? 2 : 1);
       if (frame?.type === 'selection.query') queryProofs++;
       for (const proof of envelope.proofs) {
         const operation = proof.operation;
+        if (operation === 'checkAccess') assert.equal(proof.action, action);
         const cap = authority.authenticate({ servicePrincipal: base,
           method: input.transport.kind === 'ws' ? 'WS' : req.method, path: url.pathname, operation,
           request: operation === 'checkAccess' ? { ...request, action } : request, proof });
@@ -119,8 +120,14 @@ test('Agent data client signs real TLS WS/LP requests and closes owned sockets',
   const one = reply(ws, frame => frame.reqId === 'first');
   ws.send(JSON.stringify({ type: 'fixture.echo', reqId: 'first', seq: 1, ack: 0 }));
   assert.equal((await one).type, 'fixture.reply');
+  const openedProject = reply(ws, frame => frame.reqId === 'project-read');
+  ws.send(JSON.stringify({ type: 'project.open', reqId: 'project-read', projectId, seq: 2, ack: 0 }));
+  assert.equal((await openedProject).type, 'fixture.reply');
+  const wroteProject = reply(ws, frame => frame.reqId === 'project-write');
+  ws.send(JSON.stringify({ type: 'project.op', reqId: 'project-write', projectId, opId: 'fixture-op', seq: 3, ack: 0 }));
+  assert.equal((await wroteProject).type, 'fixture.reply');
   const selection = reply(ws, frame => frame.reqId === 'query');
-  ws.send(JSON.stringify({ type: 'selection.query', reqId: 'query', projectId, runGrantId, seq: 2, ack: 0 }));
+  ws.send(JSON.stringify({ type: 'selection.query', reqId: 'query', projectId, runGrantId, seq: 4, ack: 0 }));
   assert.equal((await selection).type, 'fixture.reply');
   assert.equal(queryProofs, 1);
   ws.terminate();
@@ -129,14 +136,18 @@ test('Agent data client signs real TLS WS/LP requests and closes owned sockets',
   await new Promise((resolve, reject) => { resumed.addEventListener('open', resolve); resumed.addEventListener('error', reject); });
   assert.equal((await resumedWelcome).connId, welcome.connId);
   const afterResume = reply(resumed, frame => frame.reqId === 'resumed');
-  resumed.send(JSON.stringify({ type: 'fixture.echo', reqId: 'resumed', seq: 3, ack: 0 }));
+  resumed.send(JSON.stringify({ type: 'fixture.echo', reqId: 'resumed', seq: 5, ack: 0 }));
   assert.equal((await afterResume).type, 'fixture.reply');
-  assert.throws(() => ws.send(JSON.stringify({ type: 'fixture.echo', reqId: 'stale', seq: 4, ack: 0 })), /run-data-not-open/);
+  assert.throws(() => ws.send(JSON.stringify({ type: 'fixture.echo', reqId: 'stale', seq: 6, ack: 0 })), /run-data-not-open/);
   await WebSocketImpl.closeOwned(); assert.equal(data.openCount(), 0);
   const lp = data.longPollFor({ projectId, runGrantId });
   const opened = await lp.open(); assert.equal(typeof opened.connId, 'string');
   const sent = await lp.send([JSON.stringify({ type: 'fixture.echo', reqId: 'lp', seq: 1, ack: 0 })]);
   assert.equal(sent.ack, 1);
+  const lpRead = await lp.send([JSON.stringify({ type: 'project.open', reqId: 'lp-read', projectId, seq: 2, ack: 0 })]);
+  assert.equal(lpRead.ack, 2);
+  const lpWrite = await lp.send([JSON.stringify({ type: 'project.op', reqId: 'lp-write', projectId, opId: 'lp-op', seq: 3, ack: 0 })]);
+  assert.equal(lpWrite.ack, 3);
   const received = await lp.recv({ ack: 0, wait: 0 });
   assert.equal(received.frames.some(text => JSON.parse(text).reqId === 'lp'), true);
   const lpResumed = await lp.open({ resume: { sid: opened.sid, ack: 0 } });
