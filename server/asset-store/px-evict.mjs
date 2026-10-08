@@ -85,6 +85,7 @@ export function planPxEviction(blobs, { capBytes, now, protectMs = PX_EVICT_DEFA
  * @param {Partial<typeof PX_EVICT_DEFAULTS>} [p.options]
  */
 export function createPxEvictor({ dir, store, capBytes, now = Date.now, log = () => {}, options = {} }) {
+  if (store?.projectId && (store.namespace !== 'px' || path.resolve(dir) !== path.resolve(store.projectDir))) throw new TypeError('project px eviction directory mismatch');
   const o = { ...PX_EVICT_DEFAULTS, ...options };
   if (typeof store?.list !== 'function') throw new TypeError('createPxEvictor:数据层没有 list(只有 fs 实现能做淘汰)');
   const usageFile = path.join(dir, PX_USAGE_FILE);

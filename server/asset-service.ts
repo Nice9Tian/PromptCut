@@ -92,7 +92,9 @@
  *     或者查询串 `?t=<票据>`。查询串只认 `r: 'r'` 的票据,写入一律不认查询串;
  *   - 没票据、签名不对、过期、代数不符回 401 `{ ok: false, error: "unauthorized" }`;写入用了只读票据回 403
  *     `{ ok: false, error: "forbidden" }`。每个请求都重新核对,包括同一段播放里的每个 Range 请求。
- * - 票据不限定哈希:持某个项目的有效票据,就能读这台服务上任何已知哈希的内容(契约〔裁〕)。
+ * - 旧LAN/v1历史机制的票据不限定哈希，可读该服务已知内容；仅描述下文旧模式。
+ *   账号v2云模式传入projectStores/projectAccess后由doc权威逐次核项目归属，
+ *   只能读本项目独立库中的已知哈希；知道其它项目hash不能越权。本包不改旧LAN语义。
  * - 票据由文档服务签发;核对用同一进程里的凭证存储(`server/auth/asset-tickets.mjs`),缺省按
  *   `<root>/out/docservice/auth` 取进程内单例。**集群令牌不再用于素材服务**(C5 的「非本机写入凭集群令牌」退役)。
  * - 带查询串票据的响应加 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`。
@@ -114,7 +116,7 @@ import { Readable } from "stream";
 import path from "path";
 import { createHash } from "crypto";
 import { apiPath, isAssetServicePath, clientAddressOf, isLocalOrigin } from "./http-guard.mjs";
-import { createBlobStore, candidateFileResolver } from "./asset-store/index.mjs";
+import { createBlobStore, candidateFileResolver, projectScopeOfRoot, assetContextOf, setAssetContext, authorizedAssetStore } from "./asset-store/index.mjs";
 import {
   mediaDir, isMediaHash, extOfName, contentTypeForExt, resolveHashFile, writeMediaIndex, parseRange,
 } from "./vite-plugin-media";
@@ -233,6 +235,8 @@ function artifactContentType(ext: string): string {
 
 /** 产物命名空间的 fs 目录:`<root>/out/asset-store/<ns>`(契约第 1 节) */
 export function artifactStoreDir(root: string, ns: "snap" | "px"): string {
+  const scoped = projectScopeOfRoot(root);
+  if (scoped) return scoped.dirs[ns];
   return process.env.PROMPTCUT_ARTIFACT_DIR ? path.resolve(process.env.PROMPTCUT_ARTIFACT_DIR, ns) : path.resolve(root, "out", "asset-store", ns);
 }
 
@@ -316,22 +320,22 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
   const usage = writer.usage;
   const accounted = !!(usage && writer.service && usage.accounts(writer.service));
   let reservedHere = false;
-  if (accounted && usage && !usage.has(ns, hash) && !(await store.stat(hash))) {
-    if (!usage.reserve(ns, hash, size)) return reject(req, res, 507, { ok: false, error: "service-quota" });
+  if (accounted && usage && !usage.has(ns, hash, writer.projectId) && !(await store.stat(hash))) {
+    if (!usage.reserve(ns, hash, size, writer.projectId)) return reject(req, res, 507, { ok: false, error: "service-quota" });
     reservedHere = true;
   }
   // 没有服务标记的写入(成员或本机)写到了渲染服务记过账的块:这个块不再只归服务
-  if (usage && !writer.service) usage.disown(ns, hash);
+  if (usage && !writer.service) usage.disown(ns, hash, writer.projectId);
 
   let out;
   try {
     out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req, ns) }, req);
   } catch (err) {
-    if (reservedHere) usage?.release(ns, hash);
+    if (reservedHere) usage?.release(ns, hash, writer.projectId);
     // 磁盘满:这一片的标记没补(不算收到),已收的分片不动;请求体可能还在路上,回完就掐断
     if (isStorageFull(err)) return reject(req, res, 507, { ok: false, error: "insufficient-storage" });
     // 断线:对面已经不在了,回什么都收不到;这一片的标记没补,对账时报「没收到」
-    if (!res.headersSent && !res.destroyed) sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    if (!res.headersSent && !res.destroyed) sendJson(res, (err as any)?.status ?? 500, { ok: false, error: (err as any)?.code ?? (err instanceof Error ? err.message : String(err)) });
     return;
   }
   switch (out.status) {
@@ -351,10 +355,10 @@ async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: 
   // 收尾之前这个块已经入库:不是这次新写的(成员写的不记;渲染服务自己写过的只补项目归属)
   const existed = accounted ? !!(await store.stat(hash)) : true;
   const out = await store.complete(hash);
-  if (usage && accounted && out.status === "hash-mismatch") usage.release(ns, hash); // 这一哈希已收的分片全部丢弃,在途名额放掉
+  if (usage && accounted && out.status === "hash-mismatch") usage.release(ns, hash, writer.projectId); // 这一哈希已收的分片全部丢弃,在途名额放掉
   if (usage && out.status === "ok") {
-    if (!writer.service) usage.disown(ns, hash);
-    else if (accounted && (!existed || usage.has(ns, hash))) usage.record({ ns, hash, size: out.size, projectId: writer.projectId as string });
+    if (!writer.service) usage.disown(ns, hash, writer.projectId);
+    else if (accounted && (!existed || usage.has(ns, hash, writer.projectId))) usage.record({ ns, hash, size: out.size, projectId: writer.projectId as string });
   }
   switch (out.status) {
     case "ok": return sendJson(res, 200, { ok: true, hash, size: out.size, complete: true, url: ns === "media" ? `/@media/${hash}` : `/api/asset/${ns}/${hash}` });
@@ -396,9 +400,12 @@ async function serveBlob(req: IncomingMessage, res: ServerResponse, store: Asset
   // 流先打开再发头:入库的东西万一刚被删,还能干净地回 404
   const stream = head ? null : await store.read(hash, range ? { start: range.start, end: range.end } : {});
   if (!head && !stream) return sendJson(res, 404, { ok: false, error: "not-found" });
+  await assetContextOf(req)?.lease.assert();
+  if (res.destroyed) { stream?.destroy(); return; }
   res.writeHead(range ? 206 : 200, headers);
   if (!stream) return res.end();
   stream.on("error", () => res.destroy());
+  res.once("close", () => stream.destroy());
   stream.pipe(res);
 }
 
@@ -478,7 +485,7 @@ function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVeri
   const q = queryTicketOf(req);
   if (q === null) return DENY_401;
   const v = verify(q);
-  return v.ok && v.access === "r" ? { ok: true } : DENY_401;
+  return v.ok && v.access === "r" ? { ok: true, service: v.service, projectId: v.projectId } : DENY_401;
 }
 
 /* ------------------------------------------------------------------ *
@@ -558,16 +565,19 @@ export function assetPreflightMiddleware() {
  */
 export interface ServiceUsageHook {
   accounts(service: string): boolean;
-  has(ns: string, hash: string): boolean;
+  has(ns: string, hash: string, projectId?: string): boolean;
   /** 新块放行与否(占在途名额);放不下回 false */
-  reserve(ns: string, hash: string, size: number): boolean;
+  reserve(ns: string, hash: string, size: number, projectId?: string): boolean;
   record(rec: { ns: string; hash: string; size: number; projectId: string }): void;
-  release(ns: string, hash: string): void;
+  release(ns: string, hash: string, projectId?: string): void;
   /** 别人写了同一个块:不再只归服务 */
-  disown(ns: string, hash: string): boolean;
+  disown(ns: string, hash: string, projectId?: string): boolean;
 }
 
 export interface AssetServiceOptions {
+  /** 云项目模式：必须同时给权威授权adapter与项目物理库；本机信任不能绕过它。中央owner挂载。 */
+  projectStores?: any;
+  projectAccess?: any;
   /** 托管方服务写入的容量记账(只有托管组合给);缺省与 null 都表示不记账 */
   serviceUsage?: ServiceUsageHook | null;
   stores?: { media?: AssetBlobStore; snap?: AssetBlobStore; px?: AssetBlobStore };
@@ -618,6 +628,8 @@ async function pullArtifactInto(store: AssetBlobStore, hash: string, pull: NonNu
 }
 
 export function assetServiceMiddleware(root: string, opts: AssetServiceOptions = {}) {
+  if (!!opts.projectStores !== !!opts.projectAccess) throw new TypeError("projectStores and projectAccess required together");
+  if (opts.projectStores && opts.serviceUsage && !(opts.serviceUsage as any).projectScoped) throw new TypeError("project-scoped service usage required");
   const media = opts.stores?.media ?? opts.store ?? defaultAssetStore(root);
   const artifactStores: Partial<Record<"snap" | "px", AssetBlobStore>> = { snap: opts.stores?.snap, px: opts.stores?.px };
   const storeOf = (ns: AssetNamespace): AssetBlobStore => {
@@ -645,6 +657,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
    * 惰性 import(好几个单测把本文件单独转译,静态 import 兄弟模块会解析失败)。
    */
   const pxEvictor: Promise<any> | null = (() => {
+    if (opts.projectStores) return null; // 托管项目库不应用本地px淘汰规则
     if (opts.pxEvict === null || process.env.PROMPTCUT_PX_EVICT === "0") return null;
     if (opts.stores?.px && !opts.pxEvict) return null;
     const pxStore: any = storeOf("px");
@@ -673,6 +686,20 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     if (queryTicketOf(req) !== null) {
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("Referrer-Policy", "no-referrer");
+    }
+    if (opts.projectAccess) {
+      res.setHeader("Cache-Control", "no-store");
+      try {
+        const lease = await opts.projectAccess.resolve(req, { action: write ? "write" : "read", resource: { ns: ns ?? "media", route: apiPath(req.url) }, close: () => { req.destroy(); res.destroy(); } });
+        const p = lease.principal;
+        if (write && p.access !== "rw") { lease.release(); reject(req, res, 403, { ok: false, error: "forbidden" }); return null; }
+        if (write && ((p.actsFor === "member" && ns !== "media") || (p.service && p.actsFor !== "member" && ns === "media"))) { lease.release(); reject(req, res, 403, { ok: false, error: "forbidden" }); return null; }
+        const scope = opts.projectStores.project(lease.projectId);
+        setAssetContext(req, { ...scope, lease });
+        res.once("close", () => lease.release());
+        res.once("finish", () => lease.release());
+        return { ok: true, projectId: lease.projectId, service: p.actsFor === "member" ? undefined : p.service };
+      } catch (err: any) { reject(req, res, err?.status ?? 503, { ok: false, error: err?.code ?? "authority-unavailable" }); return null; }
     }
     let trusted = false;
     try { trusted = !!isTrusted(req); } catch { trusted = false; }
@@ -703,20 +730,25 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     const tail = parts[5];
     const method = String(req.method || "GET").toUpperCase();
     try {
-      const store = storeOf(ns);
       if (!isMediaHash(hash)) return sendJson(res, 400, { ok: false, error: "bad-hash" });
+      const scopedStore = () => {
+        const context = assetContextOf(req);
+        return context ? authorizedAssetStore(context.stores[ns], context.lease) : storeOf(ns);
+      };
       if (tail === undefined) {
         if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { ok: false, error: "method" });
-        if (!(await admit(req, res, false))) return;
+        if (!(await admit(req, res, false, ns))) return;
+        const store = scopedStore();
         // px 本机没有这一块:向当前连接的远程素材服务取一次再答(共享项目里别的成员推上去的卡片快照)
         // 带 x-promptcut-pull 的是别的素材服务替它的页面来拉的:不再往下拉,防两台互指成环
-        if (ns === "px" && pullArtifact && !req.headers["x-promptcut-pull"] && !(await store.stat(hash))) await pullArtifactInto(store, hash, pullArtifact);
+        if (!opts.projectStores && ns === "px" && pullArtifact && !req.headers["x-promptcut-pull"] && !(await store.stat(hash))) await pullArtifactInto(store, hash, pullArtifact);
         if (ns === "px") touchPx(hash);
         return await serveBlob(req, res, store, hash);
       }
       if (tail === "chunks") {
         if (method !== "GET") return sendJson(res, 405, { ok: false, error: "method" });
-        if (!(await admit(req, res, false))) return;
+        if (!(await admit(req, res, false, ns))) return;
+        const store = scopedStore();
         // 对账也算用过(卡片快照的索引每次命中、页面每轮盘点都问它):还在被用着的块不会被当成最久没用的淘汰掉
         if (ns === "px") touchPx(hash);
         return sendJson(res, 200, await store.chunks(hash));
@@ -725,18 +757,18 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
         const who = await admit(req, res, true, ns);
         if (!who) return;
-        await handleComplete(res, store, hash, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId });
+        await handleComplete(res, scopedStore(), hash, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId });
         if (ns === "px" && pxEvictor) { touchPx(hash); void pxEvictor.then((ev) => ev?.onStored()); }
         return;
       }
       if (method !== "PUT") return reject(req, res, 405, { ok: false, error: "method" });
       const who = await admit(req, res, true, ns);
       if (!who) return;
-      return await handlePutChunk(req, res, store, hash, tail, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId });
+      return await handlePutChunk(req, res, scopedStore(), hash, tail, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId });
     } catch (err) {
       // 收尾时磁盘满:数据层没有入库、暂存保留(fs 实现的收尾只在成功改名后才删暂存)
       if (isStorageFull(err)) return sendJson(res, 507, { ok: false, error: "insufficient-storage" });
-      sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      sendJson(res, (err as any)?.status ?? 500, { ok: false, error: (err as any)?.code ?? (err instanceof Error ? err.message : String(err)) });
     }
   };
   /** 单测、排查用:这个中间件的 px 淘汰器(没开是 null) */

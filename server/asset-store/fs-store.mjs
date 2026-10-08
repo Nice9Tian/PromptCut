@@ -145,7 +145,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
     const home = homeOf(hash);
     let names = [];
     try { names = await fs.readdir(home); } catch { return null; }
-    const hit = names.find((n) => n.toLowerCase() === hash || n.toLowerCase().startsWith(hash + '.'));
+    const hit = names.find((n) => (n.toLowerCase() === hash || n.toLowerCase().startsWith(hash + '.')) && (!hooks.isPublished || /^[a-f0-9]{64}(?:\.[a-z0-9]+)?$/i.test(n)));
     return hit ? path.join(home, hit) : null;
   }
 
@@ -184,6 +184,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
   async function stored(hash) {
     const file = await resolveFile(hash);
     if (!file) return null;
+    if (hooks.isPublished && !await hooks.isPublished(file)) return null;
     try {
       const st = await fs.stat(file);
       return { file, size: st.size, mtimeMs: st.mtimeMs };
@@ -255,7 +256,9 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       return { size: meta.size, chunkSize, received: await receivedChunks(key, meta), complete: false };
     },
 
-    async putChunk(hash, n, { size, ext } = /** @type {any} */ ({}), source) {
+    async putChunk(hash, n, { size, ext, beforeCommit, signal, track } = /** @type {any} */ ({}), source) {
+      await beforeCommit?.();
+      signal?.throwIfAborted();
       const key = normalizeHash(hash);
       checkChunkArgs(n, size);
       const wantExt = normalizeExt(ext);
@@ -306,7 +309,11 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       });
       // r+：原位写，不截断别的片已经写进去的字节。pipeline 等到文件句柄关掉才返回；
       // 出错（断线等）原样抛给调用方，这一片的标记没补，对账时报「没收到」
-      await pipeline(source, counter, createWriteStream(path.join(d, 'data'), { flags: 'r+', start: n * chunkSize }));
+      const output = createWriteStream(path.join(d, 'data'), { flags: 'r+', start: n * chunkSize });
+      track?.(output);
+      await pipeline(source, counter, output, ...(signal ? [{ signal }] : []));
+      await beforeCommit?.();
+      signal?.throwIfAborted();
       if (bytes !== expected) return { status: 'length', expected, got: bytes };
       // 标记落在暂存目录里；这期间要是被收尾丢弃了，目录不在，标记也就不写。
       // 目录不在是因为另一路先收尾入库了（两路同时推同一内容）：这一片的字节已在全件里，回 complete
@@ -315,9 +322,11 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       return { status: 'ok', bytes };
     },
 
-    async complete(hash) {
+    async complete(hash, { beforeCommit, signal, track } = {}) {
       const key = normalizeHash(hash);
       return withLock(lockKey(key), async () => {
+        await beforeCommit?.();
+        signal?.throwIfAborted();
         const done = await stored(key);
         if (done) return { status: 'ok', size: done.size, ext: extOfName(done.file) };
         const meta = await readMeta(key);
@@ -331,7 +340,9 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
         const data = path.join(d, 'data');
         const digest = crypto.createHash('sha256');
         // 句柄在 pipeline 返回前就关了，下面才能改名（Windows 上开着的文件改不了名）
-        await pipeline(createReadStream(data, { start: 0, end: meta.size - 1 }), digest);
+        const input = createReadStream(data, { start: 0, end: meta.size - 1 });
+        track?.(input);
+        await pipeline(input, digest, ...(signal ? [{ signal }] : []));
         const actual = digest.digest('hex');
         if (actual !== key) {
           await fs.rm(d, { recursive: true, force: true });
@@ -347,7 +358,12 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
           await fsyncPath(data);
           await fs.mkdir(home, { recursive: true });
         }
-        await fs.rename(data, path.join(home, file));
+        await beforeCommit?.();
+        signal?.throwIfAborted();
+        const target = path.join(home, file);
+        await fs.rename(data, target);
+        // 撤销/关项目与 rename 在途竞态：未完成发布的此份新全件撤回暂存；不动任何已有全件。
+        if (signal?.aborted) { await fs.rename(target, data); signal.throwIfAborted(); }
         if (sharded) await fsyncPath(home, { dir: true });
         await fs.rm(d, { recursive: true, force: true });
         await onStored({ hash: key, file, ext: meta.ext, size: meta.size, contentType: contentTypeForExt(meta.ext) });

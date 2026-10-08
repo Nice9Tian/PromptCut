@@ -66,10 +66,10 @@ const keyOf = (ns, hash) => `${ns}/${hash}`;
  * @param {(event: string, fields?: object) => void} [p.log]
  * @param {Partial<typeof SERVICE_USAGE_DEFAULTS>} [p.options]
  */
-export function createServiceUsage({ dir, capBytes, service = 'render', now = Date.now, log = () => {}, options = {} }) {
+export function createServiceUsage({ dir, capBytes, service = 'render', now = Date.now, log = () => {}, options = {}, projectScoped = false }) {
   if (typeof dir !== 'string' || dir === '') throw new TypeError('createServiceUsage：dir 必须是非空字符串');
   const o = { ...SERVICE_USAGE_DEFAULTS, ...options };
-  const file = path.join(path.resolve(dir), SERVICE_USAGE_FILE);
+  const file = path.join(path.resolve(dir), projectScoped ? 'render-v2.ndjson' : SERVICE_USAGE_FILE);
   /** `ns/hash` → { ns, hash, size, projects: Map<projectId, at> } */
   const blocks = new Map();
   /** `ns/hash` → { size, at }：在途的新块 */
@@ -77,12 +77,17 @@ export function createServiceUsage({ dir, capBytes, service = 'render', now = Da
   let lines = 0;
   let writable = true;
   let dirMade = false;
+  const blockKey = (ns, hash, projectId) => {
+    if (!projectScoped) return keyOf(ns, hash);
+    if (typeof projectId !== 'string' || !projectId) throw new TypeError('projectId required for physical project usage');
+    return `${JSON.stringify(projectId)}/${ns}/${hash}`;
+  };
 
   const cap = () => (typeof capBytes === 'function' ? Number(capBytes()) : Number(capBytes));
 
   function applyAdd(rec) {
     if (!NAMESPACES.has(rec.ns) || !HASH.test(rec.hash) || !Number.isSafeInteger(rec.size) || rec.size < 0 || typeof rec.projectId !== 'string' || !rec.projectId) return;
-    const k = keyOf(rec.ns, rec.hash);
+    const k = blockKey(rec.ns, rec.hash, rec.projectId);
     let b = blocks.get(k);
     if (!b) blocks.set(k, (b = { ns: rec.ns, hash: rec.hash, size: rec.size, projects: new Map() }));
     b.projects.set(rec.projectId, Number(rec.at) || 0);
@@ -91,12 +96,12 @@ export function createServiceUsage({ dir, capBytes, service = 'render', now = Da
     const gone = [];
     for (const [k, b] of blocks) {
       if (!b.projects.delete(projectId)) continue;
-      if (b.projects.size === 0) { blocks.delete(k); gone.push({ ns: b.ns, hash: b.hash, size: b.size }); }
+      if (b.projects.size === 0) { blocks.delete(k); gone.push({ ns: b.ns, hash: b.hash, size: b.size, ...(projectScoped ? { projectId } : {}) }); }
     }
     return gone;
   }
-  function applyDropBlock(ns, hash) {
-    return blocks.delete(keyOf(ns, hash));
+  function applyDropBlock(ns, hash, projectId) {
+    return blocks.delete(blockKey(ns, hash, projectId));
   }
 
   function append(rec) {
@@ -147,7 +152,7 @@ export function createServiceUsage({ dir, capBytes, service = 'render', now = Da
       if (!rec || typeof rec !== 'object') continue;
       if (rec.op === 'add') applyAdd(rec);
       else if (rec.op === 'drop-project' && typeof rec.projectId === 'string') applyDropProject(rec.projectId);
-      else if (rec.op === 'drop-block') applyDropBlock(rec.ns, rec.hash);
+      else if (rec.op === 'drop-block' && (!projectScoped || rec.projectId)) applyDropBlock(rec.ns, rec.hash, rec.projectId);
     }
     if (lines > blocks.size * o.compactFactor + o.compactSlack) compact();
   }
@@ -161,6 +166,7 @@ export function createServiceUsage({ dir, capBytes, service = 'render', now = Da
 
   const api = {
     service,
+    projectScoped,
     file,
     capBytes: cap,
     /** 这个服务名的写入要不要记账 */
@@ -179,9 +185,9 @@ export function createServiceUsage({ dir, capBytes, service = 'render', now = Da
     },
     /** 已记账的块数 */
     blockCount: () => blocks.size,
-    has: (ns, hash) => blocks.has(keyOf(ns, String(hash).toLowerCase())),
-    projectsOf(ns, hash) {
-      const b = blocks.get(keyOf(ns, String(hash).toLowerCase()));
+    has: (ns, hash, projectId) => blocks.has(blockKey(ns, String(hash).toLowerCase(), projectId)),
+    projectsOf(ns, hash, projectId) {
+      const b = blocks.get(blockKey(ns, String(hash).toLowerCase(), projectId));
       return b ? [...b.projects.keys()] : [];
     },
     /** 某项目名下记着多少字节（含与别的项目共有的块，各按全额计） */
@@ -194,8 +200,8 @@ export function createServiceUsage({ dir, capBytes, service = 'render', now = Da
      * 渲染服务要写一个新块（还没入库）：放行就占住 `size` 字节的名额，回 true；加上已记账与在途的会超过上限回 false。
      * 同一个块第二次来（分片一片一片到）不重复占。
      */
-    reserve(ns, hash, size) {
-      const k = keyOf(ns, String(hash).toLowerCase());
+    reserve(ns, hash, size, projectId) {
+      const k = blockKey(ns, String(hash).toLowerCase(), projectId);
       pruneReserved();
       if (reserved.has(k)) return true;
       if (api.usedBytes() + api.reservedBytes() + size > cap()) return false;
@@ -205,7 +211,7 @@ export function createServiceUsage({ dir, capBytes, service = 'render', now = Da
     /** 渲染服务写成了一个块（收尾成功）：记一笔、放掉在途名额。同一个块再来只补项目归属 */
     record({ ns, hash, size, projectId }) {
       const h = String(hash).toLowerCase();
-      const k = keyOf(ns, h);
+      const k = blockKey(ns, h, projectId);
       reserved.delete(k);
       const rec = { op: 'add', ns, hash: h, size, projectId, at: now() };
       const before = blocks.get(k)?.projects.get(projectId);
@@ -213,14 +219,14 @@ export function createServiceUsage({ dir, capBytes, service = 'render', now = Da
       if (before === undefined) append(rec);
     },
     /** 在途的名额放掉（这次写失败了） */
-    release(ns, hash) {
-      reserved.delete(keyOf(ns, String(hash).toLowerCase()));
+    release(ns, hash, projectId) {
+      reserved.delete(blockKey(ns, String(hash).toLowerCase(), projectId));
     },
     /** 别人（成员，或没有服务标记的写入）写了同一个块：它不再只归渲染服务，从这里摘掉 */
-    disown(ns, hash) {
+    disown(ns, hash, projectId) {
       const h = String(hash).toLowerCase();
-      if (!applyDropBlock(ns, h)) return false;
-      append({ op: 'drop-block', ns, hash: h, at: now() });
+      if (!applyDropBlock(ns, h, projectId)) return false;
+      append({ op: 'drop-block', ns, hash: h, ...(projectScoped ? { projectId } : {}), at: now() });
       return true;
     },
     /** 删项目：去掉这个项目名下的条目；回不再被任何项目记着的块（调用方从数据层删掉） */
