@@ -18,7 +18,7 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
  */
 export function createAccountHostedRuntime({ ledger, accountClient, dataDir, authorityUrl, signingKey, keyId,
   now = Date.now, pollMs = 1000, onDiagnostic = () => {}, assetReadyProbe = null,
-  assetInstanceId = null, allowFixtureAssetReady = false }) {
+  assetInstanceId = null, allowFixtureAssetReady = false, runHooks = null }) {
   if (!ledger || !accountClient) fail(503, 'account-configuration');
   if (assetReadyProbe !== null && typeof assetReadyProbe !== 'function') fail(503, 'asset-configuration');
   if (assetInstanceId !== null && (typeof assetInstanceId !== 'string' || !assetInstanceId)) fail(503, 'asset-configuration');
@@ -53,7 +53,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   }
   const storeOf = projectId => dataDir ? createFileStore({ dir: path.join(dataDir, 'tenants', projectId), log: () => {} }) :
     (memoryStores.get(projectId) ?? memoryStores.set(projectId, createMemoryStore()).get(projectId));
-  const authority = createAccountAuthority({ ledger, accountClient, authorityUrl, signingKey, keyId, now, pollMs, onDiagnostic,
+  const authority = createAccountAuthority({ ledger, accountClient, authorityUrl, signingKey, keyId, now, pollMs, onDiagnostic, runHooks,
     async initializeProject({ projectId, initialProject }) {
       const store = storeOf(projectId);
       const body = initialProject ?? null;
