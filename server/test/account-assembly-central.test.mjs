@@ -119,12 +119,14 @@ test('actual provider/order → central doc → independent asset → two pages:
   assert.equal(delegation.accountId, ids[0]);
   await assert.rejects(combo.accountRuntime.resolveAgentDelegation(sessions[0].assetTicket), /ticket-expired/);
   await assert.rejects(combo.docAssembly.runProvider.checkAccess({ principal: delegation, projectId, action: 'read' }), /run-authority-unavailable/);
-  const readonly = await call(0, 'admin', { projectId, op: 'set-list', members: [{ accountId: ids[1], access: 'r' }], requestId: 'readonly' });
+  const readonly = await call(0, 'admin', { projectId, op: 'set-list', members: [{ accountId: ids[1], access: 'r' }],
+    expectedAccessRevision: combo.accountRuntime.authority.listProjects(ids[0]).owned.find(item => item.projectId === projectId).accessRevision,
+    requestId: 'readonly' });
   assert.equal(readonly.status, 200, JSON.stringify(readonly.body)); await b.closed;
   const readonlySession = await session(1); b = await connect(readonlySession.connectionTicket);
   assert.equal((await received(b, { type: 'selection.set', projectId, pageId: 'page-b', revision: 1, selection: { clipIds: [] }, reqId: 'select' })).type, 'selection.ok');
   assert.equal((await received(b, { type: 'selection.set', projectId, pageId: 'page-b', revision: 2, selection: { clipIds: [] }, username: 'forged', reqId: 'name' })).reason, 'invalid-authority-claim');
-  assert.equal((await received(b, { type: 'project.op', projectId, opId: 'readonly-op', ops: [{ op: 'set', path: '/title', value: 'bad' }], reqId: 'readonly-op' })).reason, 'readonly');
+  assert.equal((await received(b, { type: 'project.op', projectId, opId: 'readonly-op', ops: [{ op: 'set', path: '/title', value: 'bad' }], reqId: 'readonly-op' })).reason, 'not-listed');
   assert.equal(combo.docAssembly.history.accepted(projectId).length, 1);
   await closePages(); await combo.close(); combo = await startHostedCombo(config);
   a = await connect((await session(0)).connectionTicket);
