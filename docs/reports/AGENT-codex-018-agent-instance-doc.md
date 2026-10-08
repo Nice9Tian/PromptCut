@@ -81,3 +81,9 @@ root静态疑问经固定7aac HTTP实现实证：新真实HTTPS组件发送仅SI
 真实data测试块1c9db1e4与71ed0905（后一份仅补同cert新OS旧SID负向）尚未运行，product仍074。新增fixtures agent-instance-data.mjs / agent-instance-data-target.mjs只Node内置TLS/HTTPS/掩码WS编解码/内存Ed25519，从客户端socket独立计算exporter；不拿服务器cap或callback做授权。中央既有原title/readonly/history/restart断言保留；新增真正Agent写入agentVerified字段，单独核accepted actor/grant并把该配置分支预期rev由2改3、history由1改2。selection.query双独立proof、FIFO、same-instance新TLSresume、跨TLS/nonce重复、body/query/protocol/seq/ack/action变更、pageSID与newOS旧SID负向均已写定；private中止另一个成员实际run时，pending LP/WS实close与partial receipt核验，仍不得ACK Agent/OS完整关闭。
 
 固定1c9强制types --force exit0、零错误、wall6.7377s，TMP/pc-instance-doc-type-3.log；71ed只改测试断言不当作已通过data目标。当前真实中央5端口仍等待5770～5774租约，不为纯listen0要求改未租asset内部entry或重映射旧中央，未跑full。
+
+## 真实中央data首轮失败（保留，未重跑）
+
+root C10自然结束后授一次5770～5779窗口。固定7506e1e，进程级canonical PSModulePath、绝对silent preload、cuda_Vit/PYTHONDONTWRITEBYTECODE、VH327 account/order及本叶conversation module。npm wrapper首轮3项/2通过/1失败/0取消跳过，4893.7788ms、wall5255.3368ms、exit1；TMP/pc-instance-doc-data-central-1.log与-exit.json。两独立asset child日志pc-doc-assembly-child-1791432419000.log、pc-doc-assembly-child-1791432420435.log，after等实际child/socket/server关闭，5770～5779前后零LISTEN，source前后同7506、clean，窗口立即释放root。没有full或浏览器进程。
+
+required缺配置与原无Agent中央组通过；Agent组已真正TLS实例握手并得到welcome，完整签名首project.open收到type:error（预期project.state），在exerciseInstanceData第12行失败，未到write/selection/LP后续断言，不能宣称这些已通过。首夹具断言没有输出reason，只凭type无法可靠定位，因此不猜改权威。静态read真serviceGate/current registry/account gate/coordinator/scopedInput后，固定1b7fa38a test-only补安全{type,reason}断言诊断，不打印proof/exporter/token/principal；product仍074。新的诊断窗口已向root申请，未盲重跑。只读一次PowerShell scripts/test*路径glob错误、两次猜模块路径未找到，均后用rg --files确认，工具错误保留，不计产品运行失败。
