@@ -93,6 +93,8 @@ test('account website calls pass only in the top editor; stages, unknown account
 test('project members permits only exact top-editor same-origin POST omit; stage, method, suffix and non-fetch channels reject', async () => {
   const { installApiGuard } = await import('./apiGuard.ts');
   const original = globalThis.window;
+  const originalProgressEvent = globalThis.ProgressEvent;
+  globalThis.ProgressEvent ??= class extends Event {};
   const context = (href, embedded = false) => {
     const passed = []; const window = { fetch: async (input, init) => { passed.push({ input, init }); return new Response('{}'); },
       EventSource: class {}, XMLHttpRequest: class extends EventTarget { open() {} send() { passed.push('xhr'); } } };
@@ -115,5 +117,10 @@ test('project members permits only exact top-editor same-origin POST omit; stage
       const stage = context(href, embedded);
       await assert.rejects(stage.window.fetch(path, { method: 'POST', credentials: 'omit' })); assert.equal(stage.passed.length, 0);
     }
-  } finally { globalThis.window = original; }
+  } finally {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    globalThis.window = original;
+    if (originalProgressEvent === undefined) delete globalThis.ProgressEvent;
+    else globalThis.ProgressEvent = originalProgressEvent;
+  }
 });
