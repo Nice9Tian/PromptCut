@@ -46,6 +46,7 @@ const now = Date.now;
 const credentials = createCredentials({ store, now, key: randomBytes(32) });
 const handleAccount = createApp({ store, credentials, now, origins: [ORIGIN], cookieSecure: false });
 const agentRequests = [];
+const pageErrors = [];
 const vite = await createViteServer({ configFile: false, root: ROOT, plugins: [react()], appType: 'custom',
   server: { middlewareMode: true, hmr: false, fs: { strict: true, deny: ['**/.git/**', '**/out/**', '**/.env*', '**/*.{pem,key,crt}'] } } });
 const server = http.createServer((req, res) => {
@@ -77,6 +78,8 @@ try {
   const name = `consent_${randomBytes(5).toString('hex')}`;
   const first = await browser.createBrowserContext(); contexts.push(first);
   const pageA = await first.newPage();
+  pageA.on('pageerror', error => pageErrors.push(String(error.message).slice(0, 240)));
+  pageA.on('console', message => { if (message.type() === 'error') pageErrors.push(message.text().slice(0, 240)); });
   await pageA.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
   const registered = await pageA.evaluate(async ({ name, password }) => {
     const me = await (await fetch('/api/account/me', { credentials: 'same-origin' })).json();
@@ -86,6 +89,7 @@ try {
     return { status:response.status, ok:(await response.json()).ok === true };
   }, { name, password });
   check(registered.status === 200 && registered.ok, 'real-account-register');
+  await pageA.waitForFunction(() => Boolean(window.__pcConsentProbe), { timeout: 15_000 });
   const mountedA = await pageA.evaluate(() => window.__pcConsentProbe.mount());
   check(mountedA.accountId.startsWith('acc_') && mountedA.oldDelegation === false, 'account-bound-no-old-delegation');
   await pageA.waitForSelector('[data-pc="cloud-agent-consent"]', { timeout: 20_000 });
@@ -107,7 +111,9 @@ try {
   check(consentA === true, 'server-persisted-accept');
   const second = await browser.createBrowserContext(); contexts.push(second);
   const pageB = await second.newPage();
+  pageB.on('pageerror', error => pageErrors.push(String(error.message).slice(0, 240)));
   await pageB.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
+  await pageB.waitForFunction(() => Boolean(window.__pcConsentProbe), { timeout: 15_000 });
   const logged = await pageB.evaluate(async ({ name, password }) => {
     const me = await (await fetch('/api/account/me', { credentials:'same-origin' })).json();
     const response = await fetch('/api/account/login', { method:'POST', credentials:'same-origin',
@@ -133,6 +139,7 @@ try {
   const relative = path.relative(os.tmpdir(), probeDir);
   if (relative.startsWith('pc-cloud-consent-') && !relative.includes(path.sep)) await fs.rm(probeDir, { recursive:true, force:true });
   results.portClosed = !await portOpen(PORT, '127.0.0.1');
+  results.pageErrors = pageErrors.slice(0, 5);
   console.log(JSON.stringify(results));
 }
 check(results.portClosed, 'owned-port-closed');
