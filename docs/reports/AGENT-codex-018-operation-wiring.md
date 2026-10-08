@@ -23,3 +23,31 @@
 本包provider固定只读foundation580bec81325e09a92a805f8d33bb7353a45503d8、order7eab5535462ebb1980d37be7579f419d382e3efa，测试经真实SQLite/credentials/authority接口调用；账号transport在本包fixture内直接调用，不能冒称新增mTLS传输证明（其真实传输由已收foundation包与根中央挂接覆盖）。`TMP/promptcut-operation-wiring-types-1.log` 类型0错、exit0、工具wall7.4654s。完整npm等待root全量端口lease，不与其它owner全量相撞；上述测试尚未替代最终固定源码全量。
 
 根扩租 `scripts/probes/operation-wiring-probe.mjs` 后新增两张实际Chromium页面（两个独立BrowserContext、不同账号），仍只访问自建fixture，不是生产UI验收。`TMP/promptcut-operation-wiring-browser-1.log` exit0、519.4845ms，Chrome/152.0.7977.75：reserve门控期间原store rev1、ok0、广播0；放行后账号A写rev2、账号B同值写rev3且保留版本依赖，重启原store+SQLite再经页面WS打开得到rev3/2条accepted，伪造actor未采用。浏览器自建TMP profile，完成后等待自己的Browser ChildProcess close；fixture先关真实socket、再等coordinator idle，最后关SQLite，未操作其他进程。root已移交全量lease，最终提交冻结后开始完整npm，首结果保留。
+
+## 最终固定提交验收
+
+实现提交 `7c4f1f11297d8abcd7d846d668e399b1bd7ec0f8`，运行期间没有改源码。`TMP/promptcut-operation-wiring-types-2.log` 类型0错、exit0、wall6894.2661ms；`TMP/promptcut-operation-wiring-full-1.log` 首次完整npm为5075 tests /5073 pass /0 fail /0 cancelled /2 skip，duration66675.0945ms、wall67023.9414ms、exit0，无native retry。两个跳过分别是既有Linux symlink恢复验证和既有真实layout集成项；本包46条新测试全执行，实际provider旧33切点也执行。各轮定向和浏览器probe没有失败或自动重跑。
+
+全量开始前5823–5829零监听；结束后5760–5769及5823–5829均零监听，`TMP/promptcut-operation-wiring-ports-after-full.json`记录结束时间与空列表。已向root归还lease，后续不再使用这些端口。全部日志路径/长度/SHA256在 `TMP/promptcut-operation-wiring-evidence.json`；退出码与wall分别在 `...types-2-exit.json`、`...full-1-exit.json`。
+
+## Linux 独立 syscall 验证闭包
+
+根要求的可移植清单在 `TMP/promptcut-operation-wiring-linux-closure.json`：PC根47文件、只读foundation根2文件（account/store.mjs、credentials.mjs）、只读order根2文件（account/password-order.mjs、order-witnesses.mjs）；只含Node内建模块，无第三方import。PC保留相对路径和package.json；两个VH根分别保留account目录。只读静态扫描首尝试把注释中的import当真，误报不存在的scripts/lib/lib/no-user-dirs.mjs，exit1，完整错误在该次工具输出；移除注释再生成清单exit0，日志 `TMP/promptcut-operation-wiring-linux-closure.log`。这是闭包工具的只读失败，不是生产或测试失败。
+
+由root在隔离Linux目录准备已有Node（支持node:sqlite及仓库test-suite参数）、TMP与trace目录后运行下列命令；不要带Windows NODE_OPTIONS路径。fixture只监听5760/5761，既有global-setup照常临时占回环fetch坏端口，不改网络配置。该独立闭包不运行Chromium，因此不需下载浏览器或安装依赖。
+
+```sh
+PROMPTCUT_ACCOUNT_PROVIDER_ROOT="$FIX/vh-foundation" \
+PROMPTCUT_PASSWORD_ORDER_MODULE="$FIX/vh-order/account/password-order.mjs" \
+TMPDIR="$FIX/tmp" NODE_OPTIONS='' \
+strace -ff -yy -o "$FIX/trace/fs" \
+  -e trace=fsync,fdatasync,rename,renameat,renameat2 \
+  npm test -- server/test/operation-wiring-core.test.mjs \
+    server/test/operation-wiring-crash.test.mjs > "$FIX/result.log" 2>&1
+```
+
+需核同进程临时投影文件fd fsync→rename→目标文件fd fsync→projects目录fd fsync，结合25个真实退出切点的准确rev/body/actor/opId/witness结果；不trace write缓冲区，不输出凭证。本人没有上节点、改部署或声称Linux syscall已验证，交root独立执行。
+
+## 交付边界
+
+本包只接真实project.op及actor、同锁恢复和持久投影；其它内容库/素材操作入口、中央combo/main/shared-service/account-hosted接线不在此包。runProvider是待后续owner接的明确接口；缺失时拒绝，测试的活动run provider只作受控实时authority检查，未冒称完整retained产品路径已交付。fence ACK测试验证“原store真实收口在前、持久ACK记录在后”，四服务实际屏障ACK仍由根/对应owner整合，不凭本包回调模拟宣称全局logout完成。0.7.20补偿与UI未实现。投影含完整prepared前后镜像，原store遇不明状态不会覆盖；已有LAN v1行为保留。全部11个改动文件在授权范围，未push/merge、未改main或其它工作区；根负责收回审查及后续项目验收。
