@@ -77,6 +77,7 @@
 - 根同联合素材HTTP26/26、exit0（0.375秒），真实模块但注入权威fixture、productionMounted:false；asset-path原日志29项通过，P7两边均template且逐字段相同，P11像素相同。根汇总包装在探针结束后误按单行JSON读取多行输出，wrapper exit1；没有重跑探针赌绿，实际子进程exit码未保存，不补造。TMP/pc-root-asset-probes-74a6b67c-*保留；未当真实安装模型推理证明。
 - VH备份timer联合030ac9ab：Windows67/64/0/3通过，首次真实Linux67/66/1/0失败，原因backup-schedule.test缺mkdirSync导入（Windows跳过该POSIX项而漏查）。Luna仅补导入971fcb23/报告7306bfe5后，root收回718fc180，新精确包装SHA2560961416041a6daca70e39ca81fe4efee366e1424e445448750fad32fcafcd2d4，真实Linux67/67、0fail/cancel/skip、11857.814ms（墙钟12.575秒），service用户运行，account/nginx PID不变。root新包装首次因utf8-sig编码拼写错误在SSH前退出，纠正包装后才进行此轮真实测试，原错误保留。
 - 节点对718fc180的两份backup unit只读systemd-analyze verify exit0；UTC每日02:17 calendar三次计算exit0。诊断仅系统既有snapd RestartMode不识别警告，未改系统unit。没有安装/启用/启动timer或部署新账号；此前非空备份恢复fixture及旧生产空库恢复与新生产完整恢复仍分开记录。
+- 联合阶段已审的9份AGENT报告按协议从docs/reports归档到docs/archive/agent-reports，均为100%原文重命名，没有改写首次失败。新素材中央/真实操作/选区各用新报告，旧报告不当后续接线验收；原8个工作区、生产数据和备份均保留。
 
 ## 接下来干什么
 
