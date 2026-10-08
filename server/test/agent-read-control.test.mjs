@@ -158,3 +158,42 @@ test('only complete internal zero-run closure can produce the legacy ACK digest;
   assert.equal(authority.ackAccessEvent(event.eventId, 'agent', { ...receipt, agentReadClosureDigest: closure.digest }).complete, true);
   assert.deepEqual(f.control.finalizeAccessEvent({ eventId: event.eventId }), closure);
 });
+
+for (const lostOldAccountAck of [false, true]) test(`pre-existing legacy Agent ACK stays evidence, not completion after required/reopen (outbox=${lostOldAccountAck})`, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-agent-read-legacy-'));
+  const file = path.join(dir, 'doc.sqlite'), authorityId = 'legacy-read';
+  let ledger = openAccountLedger({ file, authorityId });
+  const event = { v: 2, issuer: 'visuhive-account', type: 'credentials-revoked', eventId: 'account-exit',
+    accountId: 'acc_' + 'a'.repeat(24), seq: 1, changeSeq: 1, changedAt: 1, oldLoginIds: ['old-login'] };
+  let sends = 0;
+  const client = { async events(after) { return { headSeq: 1, events: after ? [] : [event] }; },
+    async ack() { sends++; if (lostOldAccountAck && sends === 1) throw new Error('lost-old-account-ack'); } };
+  // The doc/page side of this isolated counter has no transports or operations.
+  // It does not supply an Agent receipt, which is precisely the missing proof.
+  const options = { accountClient: client, pollMs: 0,
+    getDocBarrier: async barrier => ({ eventId: barrier.eventId, accountEventSeq: 1, pendingSeals: 0,
+      connections: [], endCursor: 0, clockEvidence: {}, modifications: {} }), verifyDocBarrier: async () => true };
+  let authority = createAccountAuthority({ ledger, ...options });
+  t.after(() => { authority.close(); ledger.close(); fs.rmSync(dir, { recursive: true }); });
+  await authority.synchronize();
+  const barrier = authority.revocationStatus(event.eventId);
+  const legacy = { receiptId: 'legacy', cursor: barrier.accessSeq, complete: true,
+    closedStreams: [], stoppedRuns: [], rejectedCredentials: ['old-login'] };
+  for (const service of ['asset', 'agent', 'render']) authority.ackAccessEvent(barrier.accessEventId, service, legacy);
+  if (lostOldAccountAck) await assert.rejects(authority.flushAccountAcknowledgements(), /lost-old-account-ack/);
+  const instances = instanceFixture(ledger);
+  const required = createAgentReadControl({ ledger, instanceAuthority: instances.authority,
+    authorizeRead: async () => { throw Error('no-read-issued'); }, checkReadInState: conversationReadInState });
+  required.close(); instances.close(); authority.close(); ledger.close();
+  ledger = openAccountLedger({ file, authorityId });
+  authority = createAccountAuthority({ ledger, ...options }); // read module intentionally absent
+  const before = sends, status = authority.revocationStatus(event.eventId);
+  const flushed = await authority.flushAccountAcknowledgements();
+  t.diagnostic(JSON.stringify({ lostOldAccountAck, agentPending: status.pendingServices.includes('agent'),
+    forwardedAfterRequired: sends - before, pendingEvents: flushed.pendingEvents.length }));
+  assert.deepEqual(ledger.read().accessAcks[`ack:${barrier.accessEventId}:agent`], legacy);
+  assert.equal(status.serviceAcks.asset.complete, true);
+  assert.equal(status.pendingServices.includes('agent'), true);
+  assert.equal(sends, before);
+  assert.deepEqual(flushed.pendingEvents, [event.eventId]);
+});
