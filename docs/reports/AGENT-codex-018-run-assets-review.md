@@ -48,3 +48,21 @@ worker d462 的连续 retained checkpoint 修复在同一固定候选中独立�
 开工报告 `339a9933`。本轮三个纯脚本均首次exit0（两个证明产品应拒却未拒的反例、一个修复正向），无重试；没有运行 npm/type/full/服务/probe/listen0，根共享租约不受影响。命令 process-only cuda_Vit/PYTHONDONTWRITEBYTECODE/models/静默预加载，未改全局环境或依赖。无子树留存；同步Node结束后工具返回exit0。其它全部源码只读，`git diff --check`通过；相对7dab仅本报告变化。报告源码基点不因报告提交改变。
 
 root及A owner已收到首反例和seq复用后果。后续需owner窄修并在新固定源码复验，保留上述原反例；本次不自行修产品或借根全量结果宣告资产生产链完成。
+
+## 修复后独立复验：df309b06
+
+root将A固定修复 `56dbee2c`（产品 `07d0f222`）no-ff合入本叶，固定对象 `df309b06e0dbbee40383554065089040d1cad1db`。本轮只追加报告，产品/测试仍只读；执行前后 HEAD相同且工作区clean，原7dab脚本/log不覆盖。
+
+新 `%TEMP%/pc-run-assets-review-df309-fixed-counter.mjs` / `.log` 首exit0，直接导入本叶固定真实模块，仍是SQLite/RAM key/runProvider，没有listener、free-allow或npm wrapper：
+
+| 复验 | 实际结果 |
+|---|---|
+| 原tail loss | 原真实stop镜像head1后受控pop；`assert.rejects`精确核status503/code`run-control-gap`，不返回head0。 |
+| 原seq reuse | 接着真实第二条enqueue/admit/read/stop；after=0及after=1都明确gap。事务后outbox仍0、mirror仍1、原真实controls为2；新control没有mirror，没有追加或复用seq。 |
+| 无损正常连续流 | 独立新SQLite fixture两次真实run stop：seq严格[1,2]、head2，cursor1只返回第二个control；再次mirror结果完全相同。 |
+
+拒绝是脚本内预期断言通过，不把抛异常误记成执行失败。新反例输出只case、code、计数；未打印身份秘密。两fixture finally实际关闭SQLite并只清本次自建TMP。
+
+新 `%TEMP%/pc-run-assets-review-df309-retained.mjs` / `.log` 首exit0：保持原真实边界与算法，固定导入本叶，credential retain rev3→member retain rev4，第二checkpoint jobrev3/fence4/retained，随后update progress .4成功。ToolJobs/资源注册生产装配与网络仍未在此证明。
+
+静态复核补丁确认 mirror在追加之前反向要求每个mirror对应位置上的event与原control一致，另核ACK cursor/receipt/digest归属当前event。**本报告原已证缺尾/seq复用问题在df309独立复验已解决，无该项剩余阻断。** 本轮未扩大到自然掉电、真实mTLS、中央/不同UID或OS关闭证明；这些限制与原证据保留。没有npm/type/full/probe/listener/节点，根在途7dab C10源码及进程不动。
