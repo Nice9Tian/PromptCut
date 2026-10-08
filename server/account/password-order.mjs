@@ -71,7 +71,7 @@ function affected(fence, operation) {
 }
 
 /** All document submit/fence entry points must use this one coordinator and its history store. */
-export function createPasswordOrder({ history, account, verifyWitness, checkGate, docAttestationPrivateKey, failpoint = () => {}, acknowledgeFence, onFenceRequested } = {}) {
+export function createPasswordOrder({ history, account, verifyWitness, checkGate, docAttestationPrivateKey, failpoint = () => {}, acknowledgeFence, onFenceRequested, materializeAccepted, initializeProject } = {}) {
   if (!history || !account || typeof verifyWitness !== 'function' || typeof checkGate !== 'function') throw historyError('order-unavailable', 503);
   const queues = new Map();
   const reconciled = new Set();
@@ -96,6 +96,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     history.verifyPrepared(operation);
     const accepted = history.recordAcceptedOperation(operation, witness); failpoint('accepted-after-commit');
     const materialized = history.materialize(accepted); failpoint('materialize-after-commit');
+    await materializeAccepted?.(materialized);
     return materialized;
   }
   async function resolveWitness(operation, { resume = false } = {}) {
@@ -124,6 +125,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     return accept(operation, sealed);
   }
   async function recoverProject(projectId) {
+    await initializeProject?.(projectId);
     for (const fence of history.fences(projectId)) if (fence.state === 'requested') onFenceRequested?.(fence);
     history.validate(projectId);
     if (!reconciled.has(projectId)) {
@@ -134,10 +136,11 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
       reconciled.add(projectId);
     }
     for (const operation of history.pending(projectId)) await resolveWitness(operation);
+    const latest = history.accepted(projectId).at(-1);
+    if (latest) await materializeAccepted?.(latest);
     for (const fence of history.fences(projectId)) if (fence.state === 'requested') { const { state, ...body } = fence; history.commitFence(body); }
   }
-  async function submit(spec) {
-    return locked(spec.projectId, async () => {
+  async function submitUnlocked(spec) {
       const prior = history.get(spec.projectId, spec.opId);
       if (prior) {
         history.validate(spec.projectId);
@@ -150,8 +153,18 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
       await gate(spec, 'before-prepare');
       const operation = history.prepareOperation(spec); failpoint('prepared-after-commit');
       return resolveWitness(operation, { resume: true });
-    });
   }
+  const submit = (spec) => locked(spec.projectId, () => submitUnlocked(spec));
+  // The owner constructs the immutable specification under this SAME lock, after recovery.
+  // A scope cannot escape its callback or submit into another project's lock.
+  const transact = (projectId, work) => locked(projectId, async () => {
+    await recoverProject(projectId);
+    let active = true;
+    try { return await work({ submit(spec) {
+      if (!active || spec.projectId !== projectId) throw historyError('invalid-operation-scope');
+      return submitUnlocked(spec);
+    } }); } finally { active = false; }
+  });
   function fence(value) {
     if (!value?.id || !value.projectId || !['stop', 'private', 'delete', 'agent-disabled', 'credential'].includes(value.kind)) throw historyError('bad-fence', 400);
     if (['private', 'agent-disabled'].includes(value.kind) && (!Array.isArray(value.runIds) || value.runIds.some((run) => typeof run !== 'string' || !run))) throw historyError('bad-fence', 400);
@@ -170,7 +183,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
       return { ...value, state: 'committed', complete: ack?.durable === true, acknowledgement: ack ?? null };
     });
   }
-  return { submit, fence, recover: (projectId) => locked(projectId, () => recoverProject(projectId)) };
+  return { submit, transact, fence, recover: (projectId) => locked(projectId, () => recoverProject(projectId)) };
 }
 
 /** 0.7.18 only records the candidate interval; no compensation is performed. */

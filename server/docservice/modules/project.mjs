@@ -40,6 +40,7 @@ import { createHash } from 'node:crypto';
 import { createMemoryStore, fileNameOf } from '../store/index.mjs';
 import { actorOf } from './actor.mjs';
 import { applyOps, entitiesOf, normalizeEntity, parsePath, formatPath, idSegment, OpError } from '../json-ops.mjs';
+import { canonical, digest as historyDigest, historyError } from './operation-history.mjs';
 
 export const PROJECT_MODULE = 'project';
 
@@ -228,6 +229,7 @@ export function projectModule({
   maxOpsBytes = PROJECT_LIMITS.MAX_OPS_BYTES,
   overwriteWindowMs = PROJECT_LIMITS.OVERWRITE_WINDOW_MS,
   entityNames = PROJECT_ENTITY_NAMES,
+  operationCoordinator,
 } = {}) {
   const entityOpts = { names: entityNames === null ? null : [...entityNames] };
   /**
@@ -260,6 +262,41 @@ export function projectModule({
   let lastCtx = null;
 
   const clock = (ctx) => (typeof now === 'function' ? now() : ctx.now());
+
+  const snapshotOf = (projectId, st) => ({ v: 1, projectId, rev: st.projectRev, at: st.at, project: st.body,
+    writers: [...st.writers].map(([entity, w]) => [entity, { actor: w.actor, at: w.at, rev: w.rev }]),
+    history: st.history, opIds: [...st.opIds] });
+  operationCoordinator?.bind({
+    read(projectId) {
+      const st = stateOf(projectId);
+      const raw = store.readBlob?.(stateBlobName(projectId));
+      return { projectRev: st.projectRev, value: st.body, orderProjection: raw ? JSON.parse(raw).orderProjection : null };
+    },
+    materialize(operation, projection) {
+      const { projectId } = operation;
+      const expected = { ...operation.projection, orderProjection: { opId: operation.opId, requestId: operation.requestId,
+        preparedDigest: operation.preparedDigest, witnessId: operation.witness.witnessId, orderSeq: operation.witness.orderSeq } };
+      if (expected.projectId !== projectId || expected.rev !== operation.projectRev || historyDigest(expected.project) !== historyDigest(operation.after) ||
+          canonical(operation.result.record.actor) !== canonical(operation.actor) || operation.result.record.opId !== operation.opId ||
+          operation.result.record.rev !== operation.projectRev) throw historyError('needs-reconciliation');
+      // Reload the real store, including a rename that succeeded just before a prior crash/error.
+      projects.delete(projectId);
+      const current = stateOf(projectId);
+      const text = store.readBlob?.(stateBlobName(projectId));
+      if (current.projectRev === operation.projectRev) {
+        if (!text || canonical(JSON.parse(text)) !== canonical(expected)) throw historyError('needs-reconciliation');
+      } else {
+        if (current.projectRev !== operation.expectedRev || historyDigest(current.body) !== historyDigest(operation.before)) throw historyError('needs-reconciliation');
+      }
+      // Repeat durability completion even after a previous rename, never infer fsync from readback.
+      projection.write(stateBlobName(projectId), expected);
+      // Exact complete projection, including actor/rev/opId and all historical metadata.
+      if (canonical(JSON.parse(store.readBlob(stateBlobName(projectId)))) !== canonical(expected)) throw historyError('needs-reconciliation');
+      projects.delete(projectId);
+      const landed = stateOf(projectId);
+      if (landed.projectRev !== operation.projectRev || historyDigest(landed.body) !== historyDigest(operation.after)) throw historyError('needs-reconciliation');
+    },
+  });
 
   function log(event, fields) {
     try {
@@ -608,6 +645,60 @@ export function projectModule({
     if (st.sinceSnapshot >= snapshotEvery) persistState(ctx, projectId, st);
   }
 
+  async function submitAccount(ctx, connId, msg, reqId) {
+    const projectId = checkProjectId(msg.projectId);
+    const opId = checkToken(msg.opId, 'opId');
+    const session = checkSession(msg.session);
+    const principal = principals.get(connId);
+    const actor = actorOf(principal, session);
+    if (!operationCoordinator) throw historyError('order-unavailable', 503);
+    if (principal.role === 'render' || principal.access === 'r') throw historyError('operation-forbidden', 403);
+    if (!Array.isArray(msg.ops) || !msg.ops.length) throw historyError('bad-path', 400);
+    if (Buffer.byteLength(JSON.stringify(msg.ops)) > maxOpsBytes) throw historyError('too-large', 413);
+    if (msg.expectRev != null && (!Number.isSafeInteger(msg.expectRev) || msg.expectRev < 0)) bad('expectRev 必须是非负整数');
+    const undoOf = msg.undoOf == null ? null : checkToken(msg.undoOf, 'undoOf');
+    const request = { opId, ops: msg.ops, expectRev: msg.expectRev ?? null, undoOf, session };
+    const result = await operationCoordinator.execute({ projectId, principal, actor, request }, (binding) => {
+      const st = stateOf(projectId);
+      if (request.expectRev !== null && request.expectRev !== st.projectRev) throw historyError('stale');
+      let ops, used, applied;
+      try { ({ ops, used } = resolveUploads(projectId, msg.ops)); applied = applyOps(st.body, ops); }
+      catch (error) { if (error instanceof OpError) throw historyError('bad-path', 400); throw error; }
+      const entities = entitiesOf(applied.effects, entityOpts);
+      const at = clock(ctx), rev = st.projectRev + 1, identity = identityOf(actor);
+      const record = { projectId, rev, opId, ops, actor, at, entities, ...(undoOf ? { undoOf } : {}) };
+      const overwrote = [], victims = [];
+      for (const entity of entities) {
+        const prev = st.writers.get(entity);
+        if (!prev || prev.identity === identity || at - prev.at > overwriteWindowMs) continue;
+        overwrote.push({ entity, by: prev.actor, rev: prev.rev, at: prev.at });
+        if (!isUnfollowed(projectId, prev.identity, entity)) victims.push({ identity: prev.identity, entity, writer: prev.actor });
+      }
+      const next = { ...st, writers: new Map(st.writers), history: [...st.history], opIds: new Map(st.opIds) };
+      landCommit(next, record, applied.root);
+      return { ...binding, projectId, opId, expectedRev: st.projectRev, actor, ops,
+        projection: snapshotOf(projectId, next), result: { record, overwrote, victims, used: used ?? [] } };
+    });
+    const { operation, duplicate } = result;
+    const { record, overwrote, victims, used } = operation.result;
+    for (const key of used) bodyUploads.delete(key);
+    trackIdentity(connId, identityOf(actor));
+    reply(ctx, connId, { type: 'project.op.ok', projectId, opId, rev: record.rev, overwrote: duplicate ? [] : overwrote,
+      ...(duplicate ? { duplicate: true } : {}), orderSeq: operation.witness.orderSeq }, reqId);
+    if (duplicate) { stats.duplicates++; return; }
+    stats.commits++; stats.overwrites += overwrote.length;
+    for (const victim of victims) for (const target of identityConns.get(victim.identity) ?? []) {
+      ctx.send(target, { type: 'project.overwritten', projectId, entity: victim.entity, by: record.actor,
+        writer: victim.writer, rev: record.rev, at: record.at });
+    }
+    const broadcast = { type: 'project.ops', projectId, rev: record.rev, opId, ops: record.ops, actor: record.actor, at: record.at,
+      ...(record.undoOf ? { undoOf: record.undoOf } : {}) };
+    if (used.length && Buffer.byteLength(JSON.stringify(broadcast)) > PROJECT_LIMITS.INLINE_BYTES) {
+      delete broadcast.ops; broadcast.resync = true;
+    }
+    ctx.publish(channelOf(projectId), broadcast, { except: connId });
+  }
+
   /** 落一次真身快照，再把日志截断到快照之后（存储支持时）。出错只记日志：日志本身已经完整 */
   function persistState(ctx, projectId, st) {
     if (typeof store.writeBlob !== 'function') return;
@@ -915,6 +1006,31 @@ export function projectModule({
       const reqId = isReqId(msg.reqId) ? msg.reqId : undefined;
       const fn = HANDLERS[msg.type];
       if (!fn) return reply(ctx, connId, { type: 'error', reason: 'unsupported', detail: '项目模块不支持这种消息' }, reqId);
+      const principal = principals.get(connId);
+      if (principal?.realm === 'account' || principal?.identityVersion === 2) {
+        return Promise.resolve().then(async () => {
+          if (msg.type === 'project.op') return submitAccount(ctx, connId, msg, reqId);
+          const projectId = checkProjectId(msg.projectId);
+          // Existing authority-gated readers remain usable before the owner mounts order.
+          // A projection that already belongs to order can never be read without recovery.
+          if (!operationCoordinator) {
+            const text = store.readBlob?.(stateBlobName(projectId));
+            if (text && JSON.parse(text).orderProjection) throw historyError('order-unavailable', 503);
+            return fn(ctx, connId, msg, reqId);
+          }
+          return operationCoordinator.read(projectId, principal, () => {
+            if (msg.type === 'project.announce' && !stateOf(projectId).hasBody) throw historyError('operation-required');
+            return fn(ctx, connId, msg, reqId);
+          }, ['project.upload', 'project.snapshot.put'].includes(msg.type) ? 'write' : 'read');
+        }).catch(error => {
+          const reason = error instanceof BadMessage ? 'bad-message' : error.code ?? 'operation-unavailable';
+          if (msg.type === 'project.op') {
+            stats.rejected++;
+            return reply(ctx, connId, { type: 'project.op.rejected', projectId: msg.projectId, opId: msg.opId, reason }, reqId);
+          }
+          return reply(ctx, connId, { type: 'error', reason }, reqId);
+        });
+      }
       try {
         fn(ctx, connId, msg, reqId);
       } catch (err) {
@@ -952,6 +1068,7 @@ export function projectModule({
     /** Server-internal snapshot inspection; never expose the mutable cached body. */
     bodyOf(projectId) {
       if (!PROJECT_ID_RE.test(projectId)) return null;
+      if (operationCoordinator && !operationCoordinator.isReady(projectId)) return null;
       const state = stateOf(projectId);
       return state.hasBody ? structuredClone(state.body) : null;
     },

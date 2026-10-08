@@ -11,6 +11,21 @@
  * 以服务自己的身份进来的连接（渲染服务）不带：它的 `userId` 本身就是 `service:<服务名>@…`。
  */
 export function actorOf(principal, session) {
+  if (principal?.realm === 'account' || principal?.identityVersion === 2) {
+    if (principal.realm !== 'account' || principal.identityVersion !== 2 ||
+        ['accountId', 'loginId', 'credentialId'].some(key => typeof principal[key] !== 'string' || !principal[key]) ||
+        !Number.isSafeInteger(principal.loginGeneration) || principal.loginGeneration < 1) {
+      throw Object.assign(new Error('invalid-account-principal'), { code: 'invalid-account-principal', status: 403 });
+    }
+    const actor = { userId: principal.userId ?? principal.accountId, deviceId: principal.deviceId ?? null,
+      role: principal.role ?? 'page', conversation: principal.conversation ?? null, session,
+      identityVersion: 2, realm: 'account' };
+    for (const key of ['accountId', 'loginId', 'credentialId', 'loginGeneration', 'runGrantId', 'runId', 'messageId', 'conversationId']) {
+      if (principal[key] !== undefined) actor[key] = principal[key];
+    }
+    if (typeof principal.service === 'string') actor.service = principal.service;
+    return actor;
+  }
   const userId = principal?.userId ?? null;
   if (principal?.role === undefined) return { userId, session };
   const actor = {
