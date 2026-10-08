@@ -8,9 +8,12 @@ import { createOperationWiring, createDurableProjectProjection } from '../docser
 import { mountSelection } from '../docservice/modules/selection.mjs';
 import { createAccountOrderClient, createWitnessVerifier } from '../account/password-order.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
+import { describeRunMedia, materializeRunMedia } from './media-selector.mjs';
+import { digestOf } from '../account/ledger.mjs';
 
 export function createDocAssembly({ dataDir, authority, account, runProvider = null,
-  now = Date.now, onFenceRequested, acknowledgeFence } = {}) {
+  now = Date.now, onFenceRequested, acknowledgeFence,
+  resolveTierAssetRef, contentTypeForExt } = {}) {
   if (!dataDir || !authority?.checkAccess || !authority.authorityId || !account?.order?.witnessKeys)
     throw historyError('doc-assembly-configuration', 503);
   // Validate the public key configuration before opening any persistent history.
@@ -84,6 +87,22 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
       if (!selection) throw historyError('selection-unavailable', 503);
       return selection.captureSnapshot({ principal: { ...principal, tenantId: projectId },
         projectId, pageId: selectionInput.pageId });
+    },
+    async resolveRunMedia({ principal, projectId, purpose, selector } = {}) {
+      requireOpen();
+      if (principal?.realm !== 'account' || principal.role !== 'agent' ||
+          principal.projectId !== projectId || !isProjectId(projectId))
+        throw historyError('run-asset-project-forbidden', 403);
+      const coordinator = ensureTenant(projectId);
+      const describe = () => describeRunMedia({ snapshot: history.snapshot(projectId), projectId, purpose, selector });
+      // Both reads recover and authorize under the existing project order lock.
+      // A small-tier metadata lookup is outside that lock: the asset metadata
+      // endpoint must never re-enter run.check or humanConsumer.sync.
+      const first = await coordinator.read(projectId, principal, describe, 'read');
+      const selected = await materializeRunMedia(first, { resolveTierAssetRef, contentTypeForExt });
+      const second = await coordinator.read(projectId, principal, describe, 'read');
+      if (digestOf(first) !== digestOf(second)) throw historyError('stale-media-ref', 409);
+      return selected;
     },
     coordinatorForSpace({ space, store, directory }) {
       requireOpen();

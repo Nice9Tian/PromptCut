@@ -42,6 +42,8 @@ B 叶在只读 `790da014` 可见实际导出：`server/hosted/asset-run-client.m
 
 ## 下一块准确源码位置与租约边界
 
+G-doc 子包新增文件定为 `server/hosted/run-assets-instance-adapter.mjs`（asset 观测的 RAM subject 与当前 socket/registry 验证）和 `server/hosted/media-selector.mjs`（只处理已恢复历史快照的媒体元数据）。本轮另只动 `server/hosted/doc-agent-assembly.mjs`、`doc-assembly.mjs`、专属 `server/test/cloud-run-assets-central*.test.mjs` 和此报告；不碰 combo/main/asset-runtime/files、A、B、worker 或 operation 底层。
+
 以下行号对应本报告基准 `2fd8dbc0`；B 行号对应其**只读、仍在途**的 `790da014`，正式产品接线前必须复核其最终固定提交。这些是第三层实现入口定位，不是把未挂模块说成已有生产能力。
 
 | 最小 owner 与文件 | 精确 symbol／参数位置 | 所需增量与不越过的边界 |
@@ -55,4 +57,14 @@ B 叶在只读 `790da014` 可见实际导出：`server/hosted/asset-run-client.m
 | 根/部署 owner 待明确：`server/hosted/asset-lifecycle.mjs`；需要时另租 `server/asset-store/project-revocations.mjs`／`project-access.mjs` | `openAssetLifecycle` 在 `asset-runtime.mjs` 36 被用；human `createAssetRevocationConsumer` 在 38 创建；B `handleAccessEvent` 在其文件 121 | 历史 asset OS/cgroup 空证明、当前实例重启身份与 human access participant 的持久关闭契约不属于只改 `combo` 可解决。根先给可信 witness 来源与窄租，B owner先固定 participant 接口；未知一律不 complete。G 不写这些文件，不能用同 PID/空 Map 代证明。 |
 | Agent owner 后续另租：`server/agent-service/main.mjs`、`server/agent/service/{account-runner,hosted-tools}.mjs` | `main` accountMode 配置 257–315、状态 334–338；`account-runner:createExistingHostedRunnerFactory` 24、旧 `createHostedTools` 构造 37；`hosted-tools:createHostedTools` 208、旧 `auth.ticket` 286/300/756 | 只有中央 doc/asset 真接线与资源宿主可信注入固定后，才把 B `createRunAssetClient/createProjectAssets` 交 accountMode 工具；普通 LAN 路径不动。main 当前的 `runAuthorityMounted:false/runDataProofReady:false` 不能因资产模块就改 true；read/model/工具总接线和旧实例 OS witness 仍另包。 |
 
-本轮仅文档审读：未运行服务、监听、npm、类型、全量、探针或节点命令；上述矩阵是下一块验收条件，不是通过结果。F0 中提前让位、补渲故障选项与删除细节仍待用户确认，本报告不裁定。当前阻断项不会让普通 accountMode 走 LAN fallback，也不借 `runTicket`/`auth.ticket` 放宽。旧 worker 原始失败和有限 TLS 证据继续按其报告保留。
+上段预备工作在 `fde13496` 固定时仅文档审读，未运行服务、监听、npm、类型、全量、探针或节点命令。F0 中提前让位、补渲故障选项与删除细节仍待用户确认，本报告不裁定。当前阻断项不会让普通 accountMode 走 LAN fallback，也不借 `runTicket`/`auth.ticket` 放宽。旧 worker 原始失败和有限 TLS 证据继续按其报告保留。
+
+## G-doc 窄实施（本次工作树；尚未中央挂载）
+
+新增 `server/hosted/run-assets-instance-adapter.mjs`：从实际经 CA 和 asset pin 核验的 TLS socket、同 socket 的 exporter 与**同步强核当前** `currentAsset({socket}) → {assetInstanceId,serviceIdentity}` 建 RAM subject。asset 观测中的 `authenticationId` 只经 schema 验证，不作 doc 身份；私有 subject 由 doc mint，asset socket close 即删。同一 `doc-agent-assembly` 的 `instanceAuthority` 对 direct Agent 和 observed Agent 均验 RAM Ed25519 实例签名、真实请求 method/path/operation/digest 与当前注册 generation；`release` 于每次调用后释放 cap。`currentAgent()` 仍每次强刷现有服务登记。窄导出为 `createRunAssetAuthentication({assetFingerprint256,currentAsset}) → {authenticateDirect,authenticateObserved,verifyObserver}`，由后续 combo 在可信配置下交 A；没有成功构造这些 callback，A 不会挂载。
+
+`currentAsset` 不能是配置常量或 body 读取器：应在当前已 pin asset 证书下查实际已登记的 asset OS instance/服务 identity，且必须是同步只读、每次强核。它可能在 `instanceAuthority` 的 ledger 事务内执行，不得反入 doc ledger/等待 asset RPC。G 后续中央 owner仍需提供它的真实登记来源；目前只有测试受控 callback，不可称真实当前 registry 已完成。历史 old asset OS 的 recovery witness 也没有来源，不能用新实例空 Map/同证书/receipt.complete 自证旧资源消失。后续最窄 `verifyRecoveryClosure` 应绑定 `leaseId`、原 `assetInstanceId/serviceIdentity`、登记 generation 与外部 PID/cgroup 及起始身份，并给实际进程树、fd/socket 空证明和持久签收；任何字段/见证缺失保持 unknown/pending。
+
+新增 `server/hosted/media-selector.mjs` 和 `doc-assembly.resolveRunMedia({principal,projectId,purpose,selector})`：第一次 `coordinator.read(...,'read')` 中恢复与选取当前 project history；可信小档元数据查询**在锁外**，随后第二次进入同 coordinator 顺序锁重核 ACL 与历史快照，任何变化报 `stale-media-ref`。只使用本项目记录的 media id/hash/size/ext/kind 与 tier hash，不使用旧绝对路径或 URL；`mediaRev` 包含规范化 media digest、档位和精确 AssetRef。small 档未带 size/ext/type，必须经后续 pin 的 asset 内部 mTLS 只读 `resolveTierAssetRef({projectId,hash,tier:'small',mediaId})` 查此 projectStores 的实际 file/stat 与派生格式 metadata，返回精确 `{projectId,hash,size,ext,contentType}`；缺 callback、缺文件或 project/hash 不符一律 503，不能复用 original 元数据。本查询不得反调 run.check 或 humanConsumer.sync，避免 doc coordinator 锁与 asset 同步锁环；权限由 doc 前后校验，不在元数据 endpoint 新造 ACL。original 的元数据从已接受 history 取，实际字节存在性仍由 B 数据服务核验。import/verifyRef 的 selector 只绑定目标项目和待验 hash/size，不把 `stored` 当 doc 已接受的媒体记录。
+
+本包已写 `cloud-run-assets-central-tls.test.mjs`，用于真实独立 Agent→doc、Agent→asset、asset→doc TLS socket 与同 RAM 实例签名的正反证；在 root 宽窗口期间仅编写和 `node --check`，**尚未运行**，不能将受控纯单测算作 mTLS 或生产验证。初次无业务监听的 npm 纯目标：`C:\Users\admin\AppData\Local\Temp\pc-gdoc-media-target-first.log` 为 3/3/0；新增 mediaRev digest 后的有因复验 `pc-gdoc-media-target-second.log` 为 3/3/0；最终两文件纯目标 `pc-gdoc-pure-target-first.log` 为 5/5/0、0 skip、77.5884ms、exit0；强制类型 `pc-gdoc-type-first.log` exit0。测试均经仓库 `npm test -- ...` 包装，原 global setup loopback guard 未绕过；没有业务 listener/full/node。首次失败为零，native 重跑为零。上述纯 callback fixture 使用受控 socket/registry，仅证明对象边界，真实 TLS fixture 与当前 registry/closure callbacks 仍待独占窗口与后续 owner 接线。
