@@ -63,11 +63,12 @@ function accountFetchAllowed(path: string, input: RequestInfo | URL, init: Reque
   if (![root, root.slice(0, -1) || '/', `${root}index.html`].includes(page.pathname) || page.searchParams.has('stage')) return false;
   const expected = path === '/api/account/me' || path === '/api/account/projects' ? 'GET' :
     ['/api/account/login', '/api/account/logout', '/api/account/editor/session', '/api/account/editor/renew'].includes(path) ? 'POST' : null;
-  if (!expected) return false;
+  const consent = path === '/api/account/cloud-agent-consent';
+  if (!expected && !consent) return false;
   const request = typeof Request !== 'undefined' && input instanceof Request ? input : null;
   const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
   const credentials = init?.credentials ?? request?.credentials ?? 'same-origin';
-  return method === expected && credentials === 'same-origin';
+  return (method === expected || (consent && (method === 'GET' || method === 'POST'))) && credentials === 'same-origin';
 }
 
 /** 被拦下的 SSE 的替身：readyState 已关闭，下一拍发一个 `error`，之后什么都不做 */

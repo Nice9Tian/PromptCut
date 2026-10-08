@@ -6,7 +6,9 @@ import { cloudConsentState, setCloudConsentSource } from "./consent";
 import { hasCloudIdentity } from "./identity";
 import { CloudAiPanel } from "../../editor/right/CloudAiPanel";
 import { getQueue } from "../chatQueue";
+import { bootApiGuard } from "../../online/apiGuard";
 
+bootApiGuard(true, { base: "/editor/" });
 let client: CloudAccountClient | null = null;
 const root = createRoot(document.getElementById("root")!);
 (window as unknown as { __pcConsentProbe: unknown }).__pcConsentProbe = {
