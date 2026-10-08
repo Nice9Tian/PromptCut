@@ -1,0 +1,244 @@
+/** ONE bounded Linux/root OS experiment. Never invokes publisher or doc ACK.
+ * Usage: node ... --user <existing-dedicated-asset-user> [--out <new-absolute-dir>]
+ * Root creates only a random transient pc-asset-cgroup-proof-*.service and its
+ * own TCP server on 6540, after checking ALL 6540..6549 are free. Evidence stays.
+ * systemd 249: main exits on SIGTERM; child keeps real fd/TCP for two seconds.
+ */
+import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import net from 'node:net';
+import { execFile, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const fail = code => { throw Object.assign(new Error(code), { code }); };
+const now = () => performance.now();
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const safeCode = e => /^[A-Z0-9_-]+$|^probe-[a-z-]+$/.test(e?.code ?? '') ? e.code : 'probe-error';
+const fileSelf = fileURLToPath(import.meta.url);
+const unitPrefix = 'pc-asset-cgroup-proof-';
+const procStat = text => {
+  const end = text.lastIndexOf(')'), fields = text.slice(end + 2).trim().split(/\s+/);
+  if (!/^[1-9][0-9]* \(/.test(text) || !/^[1-9][0-9]*$/.test(fields[19])) fail('probe-proc-invalid');
+  return { pid: Number(text.slice(0, text.indexOf(' '))), startTicks: fields[19] };
+};
+async function processInfo(pid) {
+  const first = procStat(await fs.readFile(`/proc/${pid}/stat`, 'utf8'));
+  const status = await fs.readFile(`/proc/${pid}/status`, 'utf8');
+  const uid = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/m.exec(status);
+  const cg = (await fs.readFile(`/proc/${pid}/cgroup`, 'utf8')).trim();
+  const last = procStat(await fs.readFile(`/proc/${pid}/stat`, 'utf8'));
+  if (!uid || uid.slice(1).some(v => v !== uid[1]) || first.pid !== pid || first.startTicks !== last.startTicks || !/^0::\/[^\n]+$/.test(cg))
+    fail('probe-proc-changed');
+  return { ...first, uid: Number(uid[1]), cgroup: cg.slice(3) };
+}
+async function birthGone(record) {
+  try { return procStat(await fs.readFile(`/proc/${record.pid}/stat`, 'utf8')).startTicks !== record.startTicks; }
+  catch (e) { if (e.code === 'ENOENT') return true; throw e; }
+}
+async function listeners() {
+  const result = [];
+  for (const name of ['tcp', 'tcp6']) {
+    const table = await fs.readFile(`/proc/net/${name}`, 'utf8');
+    for (const line of table.trim().split('\n').slice(1)) {
+      const fields = line.trim().split(/\s+/), port = Number.parseInt(fields[1]?.split(':')[1], 16);
+      if (fields[3] === '0A' && port >= 6540 && port <= 6549) result.push({ family: name, port });
+    }
+  }
+  return result;
+}
+function command(executable, args, timeout) {
+  return new Promise(resolve => execFile(executable, args, { windowsHide: true,
+    timeout: Math.max(1, Math.floor(timeout)), maxBuffer: 65536, encoding: 'utf8' }, (error, stdout) => {
+    resolve({ code: error ? typeof error.code === 'number' ? error.code : 1 : 0,
+      stdout: stdout ?? '', timedOut: !!error?.killed });
+  }));
+}
+async function describe(unit, timeout) {
+  const names = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'Description', 'User', 'Restart', 'KillMode', 'Delegate'];
+  const result = await command('/usr/bin/systemctl', ['show', unit, '--no-pager', ...names.map(n => `--property=${n}`)], timeout);
+  if (result.timedOut) fail('probe-systemctl-timeout');
+  const value = Object.fromEntries(result.stdout.trim().split('\n').map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
+  return value;
+}
+
+async function worker(role, manifestFile) {
+  if (process.platform !== 'linux' || process.getuid?.() === 0 || !['parent', 'child'].includes(role)) fail('probe-worker-forbidden');
+  const st = await fs.lstat(manifestFile);
+  if (!st.isFile() || st.isSymbolicLink() || st.uid !== 0 || (st.mode & 0o022)) fail('probe-worker-manifest');
+  const cfg = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+  const info = await processInfo(process.pid);
+  if (!new RegExp(`^${unitPrefix}[a-f0-9]{16}\\.service$`).test(cfg.unit) || info.uid !== cfg.uid ||
+      info.cgroup !== `/system.slice/${cfg.unit}` || cfg.port !== 6540 || cfg.root !== path.dirname(manifestFile)) fail('probe-worker-scope');
+  const resource = path.join(cfg.root, 'data', `${role}.bin`), handle = await fs.open(resource, 'wx');
+  await handle.writeFile('owned-cgroup-os-smoke\n'); await handle.sync();
+  const socket = net.createConnection({ host: '127.0.0.1', port: cfg.port });
+  await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+  socket.on('error', () => {});
+  socket.write(JSON.stringify({ role, pid: process.pid, fd: handle.fd }) + '\n');
+  let stopping = false;
+  if (role === 'parent') {
+    process.on('SIGTERM', () => process.exit(0));
+    const child = spawn(process.execPath, [fileSelf, '--worker', 'child', manifestFile], {
+      windowsHide: true, stdio: 'ignore', env: { PATH: '/usr/bin:/bin' },
+    });
+    child.on('error', () => process.exit(2));
+  } else process.on('SIGTERM', () => {
+    if (stopping) return; stopping = true;
+    // Deliberate one-shot negative window, NOT a completion timeout extension.
+    setTimeout(() => { void (async () => {
+      await handle.close();
+      const closed = new Promise(resolve => socket.once('close', resolve)); socket.end();
+      await closed; process.exit(0);
+    })().catch(() => process.exit(3)); }, 2000);
+  });
+}
+
+export async function runAssetCgroupOSProbe({ user, out }) {
+  if (process.platform !== 'linux' || process.getuid?.() !== 0 || process.geteuid?.() !== 0) fail('probe-linux-root-required');
+  if (typeof user !== 'string' || !/^[a-z_][a-z0-9_-]{0,31}$/.test(user)) fail('probe-user-invalid');
+  const start = now(), deadline = start + 20000, totalDeadline = start + 30000;
+  const time = () => Math.max(1, deadline - now());
+  const id = randomBytes(8).toString('hex'), unit = `${unitPrefix}${id}.service`, description = `PromptCut asset cgroup OS proof ${id}`;
+  const result = { v: 1, ok: false, unit, port: 6540, negativeObserved: false, emptyObserved: false,
+    eventsReadError: null, stopIssued: 0, samples: [], checks: {}, errors: [], productionMounted: false };
+  let root, server, group, events, launchAttempted = false, stopTask, stopResult, main, child, groupStat;
+  const sockets = new Set(), peers = new Map();
+  async function issueStop() {
+    if (stopTask) return stopTask;
+    const state = await describe(unit, Math.min(2000, totalDeadline - now()));
+    if (state.Id !== unit || state.Description !== description || state.User !== String(result.uid) ||
+        state.ControlGroup && state.ControlGroup !== `/system.slice/${unit}`) fail('probe-stop-ownership-unproved');
+    result.stopIssued++;
+    stopTask = command('/usr/bin/systemctl', ['stop', unit, '--no-ask-password'], Math.min(7000, totalDeadline - now()))
+      .then(value => { stopResult = { code: value.code, timedOut: value.timedOut }; return stopResult; });
+    return stopTask;
+  }
+  try {
+    if (await fs.readlink('/proc/self/ns/net') !== await fs.readlink('/proc/1/ns/net')) fail('probe-network-namespace');
+    result.preflightListeners = await listeners(); if (result.preflightListeners.length) fail('probe-port-occupied');
+    const initial = await describe(unit, time()); if (initial.LoadState !== 'not-found') fail('probe-unit-exists');
+    const uid = await command('/usr/bin/id', ['-u', '--', user], time()), gid = await command('/usr/bin/id', ['-g', '--', user], time());
+    if (uid.code || gid.code || !/^[1-9][0-9]*\s*$/.test(uid.stdout) || !/^[1-9][0-9]*\s*$/.test(gid.stdout)) fail('probe-user-unavailable');
+    result.uid = Number(uid.stdout); const groupId = Number(gid.stdout);
+    if (out) { if (!path.isAbsolute(out)) fail('probe-out-invalid'); await fs.mkdir(out, { mode: 0o755 }); root = out; }
+    else { root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-asset-cgroup-os-')); await fs.chmod(root, 0o755); }
+    result.outputDirectory = root;
+    await fs.mkdir(path.join(root, 'data'), { mode: 0o700 }); await fs.chown(path.join(root, 'data'), result.uid, groupId);
+    const copy = path.join(root, 'probe.mjs'); await fs.copyFile(fileSelf, copy, constants.COPYFILE_EXCL); await fs.chmod(copy, 0o644);
+    const manifest = path.join(root, 'manifest.json');
+    await fs.writeFile(manifest, JSON.stringify({ unit, uid: result.uid, root, port: 6540 }), { flag: 'wx', mode: 0o644 });
+    server = net.createServer(socket => {
+      sockets.add(socket); let text = '', record;
+      socket.on('error', () => {});
+      socket.on('data', piece => {
+        if (record) return;
+        text += piece.toString('utf8'); if (text.length > 1024) { socket.destroy(); return; }
+        if (!text.includes('\n')) return;
+        try {
+          const hello = JSON.parse(text.trim());
+          if (!['parent', 'child'].includes(hello.role) || peers.has(hello.role) || !Number.isSafeInteger(hello.pid) ||
+              hello.pid < 1 || !Number.isSafeInteger(hello.fd) || hello.fd < 0) throw Error();
+          record = { ...hello, eof: false, closed: false }; peers.set(hello.role, record);
+        } catch { socket.destroy(); }
+      });
+      socket.on('end', () => { if (record) record.eof = true; });
+      socket.on('close', () => { if (record) record.closed = true; sockets.delete(socket); });
+    });
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(6540, '127.0.0.1', resolve); });
+    launchAttempted = true;
+    const launched = await command('/usr/bin/systemd-run', ['--quiet', `--unit=${unit}`, `--description=${description}`,
+      '--service-type=simple', `--uid=${result.uid}`, `--gid=${groupId}`, '--property=Restart=no', '--property=KillMode=control-group',
+      '--property=Delegate=no', '--property=TimeoutStopSec=5s', '--property=StandardOutput=null', '--property=StandardError=null',
+      process.execPath, copy, '--worker', 'parent', manifest], time());
+    if (launched.code) fail('probe-unit-start-failed');
+    while (peers.size !== 2 && now() < deadline) await delay(10);
+    if (peers.size !== 2) fail('probe-workers-not-ready');
+    const state = await describe(unit, time());
+    if (state.Id !== unit || state.Description !== description || state.MainPID !== String(peers.get('parent').pid) ||
+        state.User !== String(result.uid) || state.Restart !== 'no' || state.KillMode !== 'control-group' || state.Delegate !== 'no' ||
+        state.ControlGroup !== `/system.slice/${unit}` || state.ActiveState !== 'active') fail('probe-unit-identity');
+    main = await processInfo(peers.get('parent').pid); child = await processInfo(peers.get('child').pid);
+    const cgroup = `/sys/fs/cgroup${state.ControlGroup}`;
+    if (main.uid !== result.uid || child.uid !== result.uid || main.cgroup !== state.ControlGroup || child.cgroup !== state.ControlGroup)
+      fail('probe-worker-identity');
+    const self = (await fs.readFile('/proc/self/cgroup', 'utf8')).trim().slice(3);
+    if (self === state.ControlGroup || self.startsWith(`${state.ControlGroup}/`)) fail('probe-observer-inside-target');
+    for (const role of ['parent', 'child']) {
+      const peer = peers.get(role);
+      if (await fs.readlink(`/proc/${peer.pid}/fd/${peer.fd}`) !== path.join(root, 'data', `${role}.bin`)) fail('probe-file-not-held');
+    }
+    if ((await fs.statfs(cgroup)).type !== 0x63677270) fail('probe-cgroup-not-vtwo');
+    group = await fs.open(cgroup, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    groupStat = await group.stat({ bigint: true });
+    events = await fs.open(`/proc/self/fd/${group.fd}/cgroup.events`, constants.O_RDONLY | constants.O_NOFOLLOW);
+    result.before = { main, child, cgroup: { path: cgroup, dev: String(groupStat.dev), ino: String(groupStat.ino) },
+      bootId: (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim(), heldFiles: 2, connectedPeers: 2 };
+    // Attach the rejection handler now; the sole stop proceeds concurrently.
+    const stopping = issueStop().catch(e => { result.errors.push(safeCode(e)); stopResult = { code: 1, timedOut: false }; });
+    let lastSample = '';
+    while (now() < deadline) {
+      const mainGone = await birthGone(main), childGone = await birthGone(child);
+      let populated = null;
+      if (!result.emptyObserved && !result.eventsReadError) {
+        try {
+          const buf = Buffer.alloc(4096), read = await events.read(buf, 0, buf.length, 0);
+          const match = /^populated ([01])$/m.exec(buf.subarray(0, read.bytesRead).toString('utf8'));
+          const same = await group.stat({ bigint: true });
+          if (!match || same.dev !== groupStat.dev || same.ino !== groupStat.ino) fail('probe-pinned-object-changed');
+          populated = Number(match[1]);
+          if (populated === 0 && mainGone && childGone) result.emptyObserved = true;
+        } catch (e) { result.eventsReadError = safeCode(e); }
+      }
+      let childFdHeld = false;
+      if (!childGone) try { childFdHeld = await fs.readlink(`/proc/${child.pid}/fd/${peers.get('child').fd}`) === path.join(root, 'data', 'child.bin'); }
+      catch (e) { if (e.code !== 'ENOENT') throw e; }
+      const sample = { mainGone, childGone, populated, childFdHeld, parentEof: peers.get('parent').eof,
+        childEof: peers.get('child').eof, childClosed: peers.get('child').closed };
+      if (mainGone && !childGone && populated === 1 && childFdHeld && !sample.childEof && !sample.childClosed) result.negativeObserved = true;
+      const key = JSON.stringify(sample);
+      if (key !== lastSample) { result.samples.push({ ms: Math.round(now() - start), ...sample }); lastSample = key; }
+      if (stopResult && mainGone && childGone && [...peers.values()].every(p => p.eof && p.closed)) break;
+      await delay(10);
+    }
+    await stopping;
+    const stopped = await describe(unit, Math.min(2000, totalDeadline - now()));
+    result.checks = { mainBirthGone: await birthGone(main), childBirthGone: await birthGone(child),
+      bothPeerEofAndClose: [...peers.values()].every(p => p.eof && p.closed),
+      unitInactive: stopped.ActiveState === 'inactive' && Number(stopped.MainPID) === 0,
+      stopSucceeded: stopResult?.code === 0 && !stopResult.timedOut };
+    result.ok = result.negativeObserved && result.emptyObserved && Object.values(result.checks).every(Boolean);
+    if (!result.ok) result.errors.push(!result.negativeObserved ? 'probe-negative-not-observed' :
+      !result.emptyObserved ? 'probe-pinned-empty-not-observed' : 'probe-final-close-incomplete');
+  } catch (e) { result.errors.push(safeCode(e)); }
+  finally {
+    if (launchAttempted && !stopTask && now() < totalDeadline) try { await issueStop(); } catch (e) { result.errors.push(safeCode(e)); }
+    if (stopTask) await stopTask;
+    for (const socket of sockets) socket.destroy();
+    if (server?.listening) await new Promise(resolve => server.close(resolve));
+    await events?.close(); await group?.close();
+    result.afterListeners = await listeners();
+    if (result.afterListeners.length) { result.ok = false; result.errors.push('probe-listener-remains'); }
+    result.stop = stopResult ?? null; result.wallMs = Math.round(now() - start);
+    if (result.wallMs > 30000) { result.ok = false; result.errors.push('probe-total-bound-exceeded'); }
+    if (root) await fs.writeFile(path.join(root, 'result.json'), JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o644 });
+  }
+  return result;
+}
+
+export async function main(args) {
+  if (args.length === 1 && args[0] === '--help') {
+    process.stdout.write('Linux root only: --user <existing-asset-user> [--out <new-absolute-dir>]; one random systemd unit, ports 6540..6549, 30s bound.\n'); return 0;
+  }
+  if (args.length === 3 && args[0] === '--worker') { await worker(args[1], args[2]); return 0; }
+  if (![2, 4].includes(args.length) || args[0] !== '--user' || args.length === 4 && args[2] !== '--out') fail('probe-cli-invalid');
+  const result = await runAssetCgroupOSProbe({ user: args[1], out: args[3] });
+  process.stdout.write(JSON.stringify(result) + '\n'); return result.ok ? 0 : 1;
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main(process.argv.slice(2)).then(code => { process.exitCode = code; }, e => {
+    process.stderr.write(JSON.stringify({ ok: false, code: safeCode(e) }) + '\n'); process.exitCode = 1;
+  });
+}
