@@ -238,6 +238,25 @@ async function main() {
     const rect = target.getBoundingClientRect(), hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
     return Boolean(hit && (hit === target || target.contains(hit)));
   }, element);
+  const closeProjectShareToast = async (page, pageLabel) => {
+    const toast = '.pc-toast:has([data-pc="cloud-project-copy"])';
+    const closeSelector = `${toast} button[aria-label="关闭"]`;
+    check(Boolean(await page.$(`${toast} [data-pc="cloud-project-copy"]`)), `${pageLabel}-project-copy-toast-present`);
+    await page.waitForFunction(selector => {
+      const button = document.querySelector(selector);
+      if (!button || button.disabled) return false;
+      const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return Boolean(hit && (hit === button || button.contains(hit)));
+    }, { timeout: TIMEOUT }, closeSelector);
+    const closeButton = await page.$(closeSelector);
+    if (!closeButton || !await visibleAndUnobscured(page, closeButton)) throw new Error('project-share-toast-close-obscured');
+    await recordPageStep(page, pageLabel, 'open-project:share-toast-close-visible');
+    await closeButton.click();
+    await page.waitForFunction(selector => document.querySelector(selector) === null, { timeout: TIMEOUT }, toast);
+    await recordPageStep(page, pageLabel, 'open-project:share-toast-dismissed');
+  };
   const chooseHistory = async (page, conversationId) => {
     await page.waitForFunction(() => {
       const panel = document.querySelector('[data-pc="cloud-ai-panel"]'), button = panel?.querySelector('button[title*="历史"]');
@@ -373,23 +392,25 @@ async function main() {
         .then(() => ({ kind: 'dialog' })).catch(() => null);
       let consentState = await Promise.race([consentRead ?? Promise.resolve(null), consentDialog]);
       if (consentState?.kind === 'response' && consentState.accepted) {
-        await recordPageStep(page, pageLabel, 'open-project:consent-already-accepted'); return;
-      }
-      if (consentState?.kind === 'response') consentState = await consentDialog;
-      if (consentState?.kind === 'dialog' || await page.$('[data-pc="cloud-agent-consent"]')) {
-        await waitVisible(page, '[data-pc="cloud-agent-consent"]');
-        await recordPageStep(page, pageLabel, 'open-project:consent-dialog-visible');
-        const buttons = await page.$$('[data-pc="cloud-agent-consent"] button');
-        if (buttons.length < 2) throw new Error('cloud-consent-buttons-missing');
-        const acceptance = waitForConsentResponse(page, 'POST', TIMEOUT);
-        await buttons[1].click();
-        const accepted = await acceptance;
-        if (!await consentAccepted(accepted)) throw new Error('cloud-consent-acceptance-not-confirmed');
-        await page.waitForSelector('[data-pc="cloud-agent-consent"]', { hidden: true, timeout: TIMEOUT });
-        await recordPageStep(page, pageLabel, 'open-project:consent-accepted');
+        await recordPageStep(page, pageLabel, 'open-project:consent-already-accepted');
       } else {
-        throw new Error('cloud-consent-read-or-dialog-not-observed');
+        if (consentState?.kind === 'response') consentState = await consentDialog;
+        if (consentState?.kind === 'dialog' || await page.$('[data-pc="cloud-agent-consent"]')) {
+          await waitVisible(page, '[data-pc="cloud-agent-consent"]');
+          await recordPageStep(page, pageLabel, 'open-project:consent-dialog-visible');
+          const buttons = await page.$$('[data-pc="cloud-agent-consent"] button');
+          if (buttons.length < 2) throw new Error('cloud-consent-buttons-missing');
+          const acceptance = waitForConsentResponse(page, 'POST', TIMEOUT);
+          await buttons[1].click();
+          const accepted = await acceptance;
+          if (!await consentAccepted(accepted)) throw new Error('cloud-consent-acceptance-not-confirmed');
+          await page.waitForSelector('[data-pc="cloud-agent-consent"]', { hidden: true, timeout: TIMEOUT });
+          await recordPageStep(page, pageLabel, 'open-project:consent-accepted');
+        } else {
+          throw new Error('cloud-consent-read-or-dialog-not-observed');
+        }
       }
+      await closeProjectShareToast(page, pageLabel);
     };
     phase = 'project-open'; await openProject(creator); await openProject(owner);
     phase = 'enable-agent';
