@@ -78,7 +78,7 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
   const invocations = new Map();
   function transport(state, principal) {
     const v = verifyTransportInState(state, principal);
-    if (v?.then || !text(v?.serviceId) || !text(v?.serviceKid) || !text(v?.authenticationId) ||
+    if (v?.then || v?.serviceId !== 'agent' || !text(v?.serviceKid) || !text(v?.authenticationId) ||
         !/^[a-f0-9]{64}$/.test(v?.channelBinding ?? '')) deny(403, 'instance-transport-forbidden');
     return v;
   }
@@ -143,7 +143,7 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
     const instanceSession = `instance-invocation_${randomUUID()}`;
     invocations.set(instanceSession, { instanceId: instance.instanceId, instanceGeneration: instance.instanceGeneration,
       serviceId: svc.serviceId, serviceKid: svc.serviceKid, authenticationId: svc.authenticationId,
-      channelBinding: svc.channelBinding, operation, scopeDigest });
+      channelBinding: svc.channelBinding, method, path, requestDigest: digestOf(request), operation, scopeDigest });
     // Internal capability: adapter must not serialize this in an HTTP response.
     return { instanceSession, instanceId: instance.instanceId, instanceGeneration: instance.instanceGeneration };
   }
@@ -151,6 +151,7 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
     const svc = transport(state, principal), cap = invocations.get(principal?.instanceSession);
     if (!cap || cap.authenticationId !== svc.authenticationId || cap.channelBinding !== svc.channelBinding ||
         cap.serviceId !== svc.serviceId || cap.serviceKid !== svc.serviceKid || cap.operation !== operation ||
+        principal.instanceId !== cap.instanceId || principal.instanceGeneration !== cap.instanceGeneration ||
         cap.scopeDigest !== digestOf(instanceRunScope(operation, input))) deny(403, 'instance-invocation-forbidden');
     const value = current(state, cap.instanceId, cap.instanceGeneration, svc);
     return { serviceId: svc.serviceId, serviceKid: svc.serviceKid,

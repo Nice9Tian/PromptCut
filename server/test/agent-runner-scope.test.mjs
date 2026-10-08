@@ -6,6 +6,7 @@ import path from 'node:path';
 import { openAccountLedger } from '../account/ledger.mjs';
 import { createConversationAuthority, claimNextInState, markReadInState, finishInState } from '../account/conversation-authority.mjs';
 import { createRunAuthority } from '../account/run-authority.mjs';
+import { instanceFixture } from './agent-instance-fixture.mjs';
 
 const projectId = 'sp_' + 'a'.repeat(26), accountId = 'acc_' + 'b'.repeat(24);
 test('same request ID scopes to action and conversation with real run hooks in one SQLite ledger', async () => {
@@ -16,7 +17,9 @@ test('same request ID scopes to action and conversation with real run hooks in o
       members: { [accountId]: { access: 'rw' } }, bans: {}, hosted: { agent: true } }; });
     const principal = { authorizationId: 'valid', projectId, accountId, accountName: 'Alice',
       loginId: 'login-1', credentialId: 'credential-1', loginGeneration: 1 };
-    const run = createRunAuthority({ ledger, conversationHooks: { claimNextInState, markReadInState, finishInState },
+    const instances = instanceFixture(ledger); instances.boot();
+    const run = createRunAuthority({ ledger, instanceAuthority: instances.authority,
+      conversationHooks: { claimNextInState, markReadInState, finishInState },
       verifySender: async ref => ({ ...ref, accountEventSeq: 0 }),
       verifyServiceInState: () => ({ serviceId: 'agent', serviceKid: 'kid-test' }),
       synchronize: async () => {} });
