@@ -40,6 +40,8 @@ export interface CardLoaderOptions {
    * 空串 = 撤掉。舞台里换一个 `<style data-pc-card-style="<入口>">`;声音线程不给这个回调。
    */
   onStyle?: (entry: string, css: string) => void;
+  /** 每份 CSS 独立注入，Tailwind 最后；保留各文件 @import 在自己的样式表开头。提供时优先于 onStyle。 */
+  onStyles?: (entry: string, cssFiles: readonly string[]) => void;
   /** 载入成功的卡片定义整份换了(所有包合在一起;同一 id 多个包都有时取入口键靠前的) */
   onCards?: (defs: CardDef<any>[]) => void;
   /** 各入口的结论换了(入口键 → 结论);创建者据此算每张卡的运行状态报给编辑页面 */
@@ -150,6 +152,10 @@ export function createCardLoader(opts: CardLoaderOptions): CardLoader {
   }
 
   const styleOf = (b: CardBundle) => [...b.styles.map((s) => s.css), b.tailwind].filter(Boolean).join("\n");
+  const setStyles = (entry: string, bundle?: CardBundle) => {
+    if (opts.onStyles) opts.onStyles(entry, bundle ? [...bundle.styles.map(s => s.css), bundle.tailwind].filter(Boolean) : []);
+    else opts.onStyle?.(entry, bundle ? styleOf(bundle) : "");
+  };
 
   function publish(): void {
     opts.onCards?.(api.cards());
@@ -163,7 +169,7 @@ export function createCardLoader(opts: CardLoaderOptions): CardLoader {
     for (const entry of [...loaded.keys()]) {
       if (want.has(entry)) continue;
       loaded.delete(entry);
-      opts.onStyle?.(entry, "");
+      setStyles(entry);
       changed = true;
     }
     for (const [entry, bundle] of [...want].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
@@ -172,7 +178,7 @@ export function createCardLoader(opts: CardLoaderOptions): CardLoader {
       changed = true;
       const fail = (state: CardRunState) => {
         loaded.set(entry, { bundle, defs: [], result: { ok: false, entry, generation: bundle.generation, state } });
-        opts.onStyle?.(entry, "");
+        setStyles(entry);
       };
       // 换代:旧一代先撤,新一代整张卡重新执行
       loaded.delete(entry);
@@ -180,7 +186,7 @@ export function createCardLoader(opts: CardLoaderOptions): CardLoader {
       const miss = await preload(bundle);
       if (miss) { fail({ state: "missing-module", detail: miss.missing, file: miss.file }); continue; }
       // 样式先于执行注入:卡片第一次挂上去时样式已经在了
-      opts.onStyle?.(entry, styleOf(bundle));
+      setStyles(entry, bundle);
       const out = evaluate(bundle);
       if ("state" in out) { fail(out.state); continue; }
       loaded.set(entry, { bundle, defs: out.defs, result: { ok: true, entry, generation: bundle.generation, cardIds: out.defs.map((d) => d.id) } });
@@ -208,7 +214,7 @@ export function createCardLoader(opts: CardLoaderOptions): CardLoader {
     },
     clear() {
       const had = loaded.size > 0;
-      for (const entry of loaded.keys()) opts.onStyle?.(entry, "");
+      for (const entry of loaded.keys()) setStyles(entry);
       loaded.clear();
       if (had) publish();
     },

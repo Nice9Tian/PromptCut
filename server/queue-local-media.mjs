@@ -62,7 +62,9 @@ export function localMediaGate(project) {
  * `owner` 是素材所在那台机器的节点 id:plan 的发布方(`source.publisher.id`,PC 节点的发布方 id 就是它的 nodeId)。
  * 项目里没有只在本机的素材,或者没有 owner,原样返回。
  */
-export function withLocalMedia(ctx, { project, owner }) {
+export function withLocalMedia(ctx, { project, owner, projectId }) {
+  if (projectId && ctx?.projectId && ctx.projectId !== projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+  if (projectId) ctx = { ...ctx, projectId }; // 任务产物接收方按此可信上下文核验，非文档内自报id
   const gate = localMediaGate(project);
   if (!gate || typeof owner !== 'string' || owner === '' || !ctx || typeof ctx !== 'object') return ctx;
   return { ...ctx, localMedia: owner, usesLocalMedia: gate };

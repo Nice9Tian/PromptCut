@@ -48,6 +48,7 @@
  * 不会先把预渲染进程打死、来不及放回认领。
  */
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -56,6 +57,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { renderHostArgs as parseArgs, renderHostEnv as hostEnv } from '../server/render-node/host.mjs';
 import { sessionStatusOf } from '../server/render-node/session-diag.mjs';
+import { checkClaimable } from '../server/render-node/filter.mjs';
 import { killTree as killProcessTree, TREE_ENV } from '../server/hosted-render/worker.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,6 +72,43 @@ function viteBin() {
 }
 
 const say = (tag, fields) => console.log(`[render-host] ${tag} ${JSON.stringify(fields)}`);
+
+/** Diagnostic projection only: never include arbitrary task payloads, URLs or error text.
+ * Observer eligibility is the static filter, not proof that the host's lane/claim gate is free.
+ * Fine tasks needing card source identities remain unknown without the host's private view.
+ */
+export function hostClaimStatusOf(queue, events = [], tasks = null) {
+  const observed = Array.isArray(tasks);
+  const observedTasks = observed ? tasks : [];
+  const count = value => Number.isFinite(value) && value >= 0 ? value : 0;
+  const ids = value => Array.isArray(value) ? value.filter(x => typeof x === 'string').map(x => x.slice(0, 180)).slice(0, 100) : [];
+  const nodes = (Array.isArray(queue?.nodes) ? queue.nodes : []).map(n => {
+    const filters = {};
+    let eligible = 0, unknown = 0;
+    for (const task of observedTasks.filter(t => t?.state === 'open' && t?.source?.projectId === n.projectId)) {
+      if (task.kind !== 'plan' && Object.keys(task.requires?.cardSources ?? {}).length > 0) { unknown++; continue; }
+      const result = checkClaimable(task, { profile: queue.profile, nodeId: n.nodeId, envFingerprint: queue.envFingerprint,
+        codeVersions: [queue.codeVersion], capabilities: queue.capabilities });
+      if (result.ok) eligible++;
+      else filters[result.reason] = (filters[result.reason] ?? 0) + 1;
+    }
+    return { projectId: n.projectId, nodeId: n.nodeId, connected: n.connected === true,
+      ...Object.fromEntries(['seen', 'claimed', 'plans', 'completed', 'dedup', 'failed', 'lost', 'released'].map(k => [k, count(n[k])])),
+      watching: ids(n.watching), held: ids(n.held), running: ids(n.running),
+      eligible: observed ? eligible : null, unknownCardSources: observed ? unknown : null, filters };
+  });
+  const tickErrors = [...new Map(events.filter(e => e?.event === 'queue.tick-error').map(e => {
+    const message = String(e.message ?? '');
+    const hash = createHash('sha256').update(message).digest('hex');
+    const category = /is not a function/.test(message) ? 'not-a-function' : /Cannot read properties/.test(message) ? 'property-access'
+      : /is not defined/.test(message) ? 'undefined-reference' : 'other';
+    return [hash, { hash, category }];
+  })).values()];
+  const capabilities = Object.fromEntries(['userCards', 'graphCards', 'streams', 'transcode'].map(k => [k, queue?.capabilities?.[k] === true]));
+  return { profile: queue?.profile ?? null, codeVersion: queue?.codeVersion ?? null, envFingerprint: queue?.envFingerprint ?? null,
+    maxConcurrent: count(queue?.maxConcurrent), paused: queue?.paused === true, quotaPausedUntil: queue?.quotaPausedUntil ?? null,
+    capabilities, nodes, tickErrors, observedTasks: observed ? tasks.length : null, eligibility: 'observer-static-filter-only' };
+}
 
 async function getJson(url, init) {
   const res = await fetch(url, { ...init, signal: AbortSignal.timeout(init?.timeoutMs ?? 5000) });
@@ -211,14 +250,25 @@ async function main() {
   }
   // 会话计数有变化才打一行(混沌测试看「接续了几次、丢了几次、是否重建会话」)
   let lastKey = sessionStatusOf(summary).key;
+  let lastClaimKey = '';
+  let watching = false;
   const watch = setInterval(async () => {
     if (stopping) { clearInterval(watch); return; }
+    if (watching) return;
+    watching = true;
     try {
       const q = await getJson(`${editorUrl}/api/frames/queue`, { timeoutMs: 5000 });
       if (stopping) return;
       const { key, status } = sessionStatusOf(q.body);
       if (key !== lastKey) { lastKey = key; say('session', status); }
+      const info = await getJson(`${editorUrl}/api/prerender/info`);
+      const diagnostic = info.body?.url ? await getJson(`${info.body.url}/api/frames/diagnostics`) : null;
+      if (stopping) return;
+      const claim = hostClaimStatusOf(q.body, diagnostic?.body?.queue?.events ?? []);
+      const claimKey = JSON.stringify(claim);
+      if (claimKey !== lastClaimKey) { lastClaimKey = claimKey; say('claim-diagnostic', claim); }
     } catch { /* 这一拍没问到,下一拍再看 */ }
+    finally { watching = false; }
   }, 5000);
   watch.unref?.();
 }

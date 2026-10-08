@@ -145,7 +145,7 @@ let VIDEO_HASH = '', BAD_HASH = '';
 const proxy = await startHostedProxy({ dist: DIST, basePort: BASE, docPort: DOC_PORT, assetPort: ASSET_PORT, policy: 'full' });
 const browsers = [];
 async function launch(extra = []) {
-  const b = await puppeteer.launch({ headless: true, protocolTimeout: 600_000,
+  const b = await puppeteer.launch({ pipe: true, headless: true, protocolTimeout: 600_000,
     args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--mute-audio', '--window-position=-32000,-32000', '--site-per-process', '--force-device-scale-factor=1', ...extra] });
   browsers.push(b);
   return b;
@@ -228,7 +228,7 @@ try {
   const d1 = await until('A 图卡在两台舞台里载入成功', async () => { const d = await m.diag(); return d && d.per.A?.state === 'ready' && d.per.B?.state === 'ready' && d.run?.state === 'ready' ? d : null; }, 90_000, 500);
   const dNow = d1 ?? await m.diag();
   summary.G1 = dNow;
-  check('G1 本页隔离生效(双舞台、可执行、出口由浏览器拦)', dNow?.dual === true && dNow?.cardExec?.enabled === true && dNow.cardExec.egress === 'allowlist', dNow?.cardExec);
+  check('G1 本页隔离生效(双舞台、可执行、外链允许)', dNow?.dual === true && dNow?.cardExec?.enabled === true && dNow.cardExec.egress === 'none', dNow?.cardExec);
   check('G1 图卡在两台舞台里载入成功(运行状态 ready),两台的图形能力都是 ok', dNow?.run?.state === 'ready' && dNow?.graph?.A === 'ok' && dNow?.graph?.B === 'ok', { run: dNow?.run, per: dNow?.per, graph: dNow?.graph, bundles: dNow?.bundles });
   const sid = dNow?.cardExec?.sid ?? '';
   const want = COLOR.map((c) => 255 - c);

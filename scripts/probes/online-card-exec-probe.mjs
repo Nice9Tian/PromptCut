@@ -18,7 +18,7 @@
  *
  * # 验收标准(每条一行「过 / 不过」,最后一行是 JSON `{ ok, pass, fail, fails, ... }`;退出码 = 有没有「不过」)
  *
- * E1 前提:本页隔离生效(双舞台、可执行、出口由浏览器拦),没有任何预渲染产物(层表空、没有 `snap/` 与 `px/` 请求);
+ * E1 前提:本页隔离生效(双舞台、可执行、外链允许),没有任何预渲染产物(层表空、没有 `snap/` 与 `px/` 请求);
  *    各张同步卡在两台舞台里载入成功(运行状态 `ready`)。
  * E2 判轻的直接画出来:`oce-visual`、`oce-sound`、`oce-rel` 的片段在可见舞台里是活的 DOM(带各自的记号节点与文字),没有「需要本地 PC 渲染辅助」
  *    的图标、时间轴不挂徽标、整个过程里没有 `snap/` 与 `px/` 请求;截图。相对导入生效:引到的 helper 的文字、`.css` 的背景色(算出样式)、
@@ -340,7 +340,7 @@ const AUDIO_HOOK = () => {
 };
 const browsers = [];
 async function launch(extra = []) {
-  const b = await puppeteer.launch({ headless: true, protocolTimeout: 600_000,
+  const b = await puppeteer.launch({ pipe: true, headless: true, protocolTimeout: 600_000,
     args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--mute-audio', '--autoplay-policy=no-user-gesture-required', '--window-position=-32000,-32000', '--site-per-process', '--force-device-scale-factor=1', ...extra] });
   browsers.push(b);
   return b;
@@ -547,7 +547,7 @@ try {
   }, 120_000, 500);
   const diag0 = await A.page.evaluate(() => window.__pcPreviewDiag?.() ?? null);
   summary.E1 = { run: d0?.run, graph: d0?.graph, cardExec: diag0?.cardExec };
-  check('E1 本页隔离生效(双舞台、可执行、出口由浏览器拦)', diag0?.dual === true && diag0?.cardExec?.enabled === true && diag0.cardExec.egress === 'allowlist', diag0?.cardExec);
+  check('E1 本页隔离生效(双舞台、可执行、出口由浏览器拦)', diag0?.dual === true && diag0?.cardExec?.enabled === true && diag0.cardExec.egress === 'none', diag0?.cardExec);
   check('E1 用户画面卡、有声卡、相对导入卡、慢卡、图卡、纯合成音频卡在两台舞台里载入成功(运行状态 ready)', !!d0, d0?.run);
   check('E1 读采样的音频图卡也载入成功(它的声音在线合成不了是另一回事,见 E3)', (await A.run())?.run['oce-sample']?.state === 'ready', (await A.run())?.run['oce-sample']);
   check('E1 没有任何预渲染产物:层表空、没有 snap/ 与 px/ 请求', assetLog.length === 0 && ((await A.page.evaluate(() => window.__pcOnlineSnapshots?.()?.mapVersion ?? null)) === null), { requests: assetLog.length });

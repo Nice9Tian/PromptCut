@@ -31,6 +31,7 @@ import { acceptUpgrade, rejectUpgrade, CLOSE } from './ws.mjs';
 import { createRouter, CORE_DEFAULTS } from './router.mjs';
 import { PROTOCOL, offeredProtocols } from './auth.mjs';
 import { createSessionLayer, parseSessionItem, SESSION_TYPE_PREFIX } from './session.mjs';
+import { createHttpTransport } from './http-transport.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { renderQueueModule, renderQueuePlaceholder, RENDER_QUEUE_MODULE } from './modules/render-queue.mjs';
 import { spacedModule } from './spaces.mjs';
@@ -50,7 +51,10 @@ const ANONYMOUS = Object.freeze({ userId: 'anonymous', tenantId: null });
  * `service`、`serviceKid`、`serviceRole` 是托管方服务身份的（`docs/plan/hosted-render-contract.md` 第 1.2、1.4 节）：服务名、握手所用公钥的编号、登记表里的角色；
  * `access`、`purpose` 是云端 Agent 服务的（`docs/plan/cloud-agent-contract.md` 第 4.3、16 节）：代成员的连接的权限（`rw` / `r`）、只用来发布的连接的用途
  */
-const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner', 'service', 'serviceKid', 'serviceRole', 'access', 'purpose']);
+const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner', 'service', 'serviceKid', 'serviceRole', 'access', 'purpose',
+  'identityVersion', 'realm', 'accountId', 'accountName', 'loginId', 'loginKind', 'loginGeneration', 'credentialId',
+  'accountEventSeq', 'projectId', 'projectAccessRevision', 'authorizationId', 'authorityId', 'conversationId', 'messageId',
+  'runId', 'runGrantId', 'connectionId']);
 
 /**
  * 规整鉴权给的 principal：`userId` 原样、`tenantId` 不是字符串就记 null，其余认得的字段有值才带上。
@@ -141,13 +145,17 @@ export function createDocService(options = {}) {
     maxPendingBytes,
     // 管理身份只能发管理接口的消息（契约 auth-contract 第 5 节）；别的身份不在这里判
     gate(principal, type, msg) {
+      const adminReason = () => {
+        if (principal?.scope !== 'admin') return null;
+        const allowed = adminTypes.some((t) => (t.endsWith('.') ? type.startsWith(t) : type === t));
+        return allowed ? null : 'forbidden';
+      };
       if (typeof options.gate === 'function') {
         const reason = options.gate(principal, type, msg);
+        if (reason && typeof reason.then === 'function') return reason.then(value => typeof value === 'string' ? value : adminReason());
         if (typeof reason === 'string') return reason;
       }
-      if (principal?.scope !== 'admin') return null;
-      const allowed = adminTypes.some((t) => (t.endsWith('.') ? type.startsWith(t) : type === t));
-      return allowed ? null : 'forbidden';
+      return adminReason();
     },
   });
 
@@ -207,6 +215,11 @@ export function createDocService(options = {}) {
   }
 
   sessions = createSessionLayer({ router, nextConnId: () => `conn-${++seq}`, now, log, retainMs, tombstoneMs, resumeGate: options.resumeGate });
+  const httpTransport = options.enableHttpTransport === true ? createHttpTransport({
+    sessions, authenticate, remoteOf, normalizePrincipal, protocol, retainMs, maxFrameBytes: maxPayload,
+    canOpen: () => closing ? 'closing' : sessions.size() >= maxConnections ? 'full' : null,
+    now, log,
+  }) : null;
 
   const attached = hostServer !== undefined && hostServer !== null;
   if (attached && (typeof hostServer.on !== 'function' || typeof hostServer.off !== 'function')) {
@@ -221,6 +234,7 @@ export function createDocService(options = {}) {
       res.end(JSON.stringify(health()));
       return;
     }
+    if (httpTransport?.handle(req, res)) return;
     if (typeof httpHandler === 'function') {
       let handled = false;
       try {
@@ -258,7 +272,7 @@ export function createDocService(options = {}) {
    *   4404（会话不存在）/ 4410（已结束）/ 1002（ack 越界，会话随之结束）关闭（第 16 节：客户端读不到握手的状态码）；
    * - 写法不对、不止一项、接续项旁边还有鉴权项：400。
    */
-  function onUpgrade(req, socket, head) {
+  async function onUpgrade(req, socket, head) {
     if (typeof options.upgrade === 'function' && options.upgrade(req, socket, head) === true) return;
     const mine = pathnameOf(req) === path;
     if (attached && !mine) return;
@@ -282,7 +296,10 @@ export function createDocService(options = {}) {
       const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
       if (!ws) return;
       const t = wsTransport(ws);
-      const r = sessions.resume({ sid: item.sid, ack: item.ack, transport: t });
+      let transportClosed = false;
+      ws.on('close', () => { transportClosed = true; });
+      t.isUsable = () => !transportClosed && !socket.destroyed && socket.writable && !closing;
+      const r = await sessions.resume({ sid: item.sid, ack: item.ack, transport: t });
       if (!r.ok) {
         ws.closeNow(r.code, r.reason);
         return;
@@ -294,10 +311,15 @@ export function createDocService(options = {}) {
     if (sessions.size() >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
     let principal;
     try {
-      principal = authenticate(req);
-    } catch {
-      principal = null;
+      principal = await authenticate(req);
+    } catch (error) {
+      return rejectUpgrade(socket, error?.status === 503 ? 503 : 401,
+        error?.status === 503 ? 'Service Unavailable' : 'Unauthorized');
     }
+    // Authentication can yield to another upgrade. The last check and synchronous open
+    // must share one event-loop turn, otherwise concurrent admissions exceed the cap.
+    if (closing || socket.destroyed || !socket.writable || sessions.size() >= maxConnections)
+      return rejectUpgrade(socket, 503, 'Service Unavailable');
     if (!principal || typeof principal.userId !== 'string') return rejectUpgrade(socket, 401, 'Unauthorized');
     const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
     if (!ws) return;
@@ -316,7 +338,10 @@ export function createDocService(options = {}) {
     pending.connId = sessions.openLegacy({ principal: p, remote, transport: t });
   }
 
-  (attached ? hostServer : ownServer).on('upgrade', onUpgrade);
+  const upgradeListener = (req, socket, head) => {
+    onUpgrade(req, socket, head).catch(() => { if (!socket.destroyed) rejectUpgrade(socket, 503, 'Service Unavailable'); });
+  };
+  (attached ? hostServer : ownServer).on('upgrade', upgradeListener);
 
   /** 把一条 WebSocket 包成会话层的传输；`alive` 给心跳用 */
   function wsTransport(ws) {
@@ -375,6 +400,7 @@ export function createDocService(options = {}) {
     for (const [k, v] of Object.entries(core)) {
       if (!Object.hasOwn(out, k)) out[k] = v;
     }
+    if (typeof options.healthExtra === 'function') Object.assign(out, options.healthExtra());
     return out;
   }
 
@@ -394,6 +420,7 @@ export function createDocService(options = {}) {
       t.ws.ping();
     }
     sessions.sweep();
+    httpTransport?.sweep();
   }, heartbeatMs);
   heartbeat.unref?.();
 
@@ -537,12 +564,13 @@ export function createDocService(options = {}) {
      */
     close() {
       closing = true;
+      httpTransport?.shutdown();
       clearInterval(heartbeat);
       for (const record of mounted.values()) clearInterval(record.timer);
       // 会话一律以 1001 结束（脱开的也结束，不保留）；旧客户端关掉它的传输，等 close 事件注销
       const gone = sessions.closeAll(CLOSE.GOING_AWAY, 'server shutting down');
       if (attached) {
-        hostServer.off('upgrade', onUpgrade);
+        hostServer.off('upgrade', upgradeListener);
         return gone;
       }
       const done = new Promise((resolve) => ownServer.close(() => resolve()));

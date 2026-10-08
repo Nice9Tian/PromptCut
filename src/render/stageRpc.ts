@@ -334,7 +334,7 @@ export interface StageRpcApi {
   /**
    * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 2、8 节):编辑页面把转译好的包(全量)发给舞台。
    * 包里只有转译结果(`src/online/cardRuntime/protocol.ts` 的 `CardBundle`),**不带任何凭证或票据**。舞台先记下,
-   * 自己的执行闸门开着才执行(`online/isolation/execGate.ts`;画面还要出口由浏览器拦),闸门晚开就到时再执行;载入结果经
+   * 自己的执行闸门开着才执行(`online/isolation/execGate.ts`;画面不另要求出口拦截),闸门晚开就到时再执行;载入结果经
    * `card-states` 事件报回。`opts.sound`:这一台同时起声音线程(舞台实例 B;线程跟实例走,不跟角色走),结果经 `sound-state` 事件报回。
    * 桌面运行环境、同源单舞台回 `{ ok: false }`。
    */

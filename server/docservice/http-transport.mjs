@@ -323,9 +323,11 @@ export function createHttpTransport({
       // 接续项在鉴权之前按 sid 查（第 14 节「open 的判定顺序」另加的一条）
       if (canOpen() === 'closing') return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
       const t = newTransport(item.sid);
-      const r = sessions.resume({ sid: item.sid, ack: item.ack, transport: t, fallback });
+      t.isUsable = () => !shuttingDown && !res.destroyed && !res.writableEnded && !req.aborted;
+      const r = await sessions.resume({ sid: item.sid, ack: item.ack, transport: t, fallback });
       if (!r.ok) {
         if (r.status === 404) return sendJson(res, 404, { ok: false, error: 'no-session' }, cors);
+        if (r.status === 503) return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
         return sendJson(res, 410, { ok: false, error: 'session-closed', code: r.closedCode ?? r.code, reason: r.closedReason ?? r.reason }, cors);
       }
       t.connId = r.connId;
@@ -341,12 +343,16 @@ export function createHttpTransport({
     const headers = { ...req.headers, 'sec-websocket-protocol': offered.join(', ') };
     const authReq = Object.create(req, { headers: { value: headers, enumerable: true, writable: true, configurable: true } });
     let principal;
-    try {
-      principal = authenticate(authReq);
-    } catch {
-      principal = null;
+    try { principal = await authenticate(authReq); }
+    catch (error) {
+      return sendJson(res, error?.status === 503 ? 503 : 401,
+        { ok: false, error: error?.status === 503 ? 'unavailable' : 'unauthorized' }, cors);
     }
     if (!principal || typeof principal.userId !== 'string') return sendJson(res, 401, { ok: false, error: 'unauthorized' }, cors);
+    // No await between this check and openSession: a peer finishing auth meanwhile
+    // cannot consume the last slot behind our back.
+    if (canOpen() !== null || res.destroyed || res.writableEnded || req.aborted)
+      return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
     let remote = null;
     try {
       remote = remoteOf(authReq) ?? req.socket?.remoteAddress ?? null;

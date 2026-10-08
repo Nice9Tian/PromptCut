@@ -36,43 +36,29 @@ export const TICKET_PATTERN = "v1\\.[A-Za-z0-9_-]{1,1600}\\.[A-Za-z0-9_-]{1,200}
  *
  * - `'unsafe-eval'`:执行转译结果(`new Function`)必需;舞台本来就按不可信对待,不靠它防注入。
  * - `worker-src blob:` 不含 `'self'`:从同源脚本地址起的 Worker 不继承文档的策略,只许从 blob 地址起(继承创建者的策略)。
- * - `webrtc 'block'`:Chrome 152 / 154 实测不执行,照样写着,浏览器哪天开始执行就自动生效。真正拦住 WebRTC 的是下面的
- *   `Connection-Allowlist`。
+ * - 外链图片、字体、样式、脚本和连接照常允许；三版本不设置卡片出口护栏。
+ * - frame/object/base/form 约束保护舞台文档和嵌入结构，不把编辑页面或账号放进卡片的源。
  */
 const STAGE_DIRECTIVES = Object.freeze([
   "default-src 'none'",
-  "script-src 'self' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "media-src 'self' blob:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
+  "script-src 'self' http: https: 'unsafe-eval'",
+  "style-src 'self' http: https: 'unsafe-inline'",
+  "img-src 'self' http: https: data: blob:",
+  "media-src 'self' http: https: data: blob:",
+  "font-src 'self' http: https: data:",
+  "connect-src 'self' http: https: ws: wss:",
   "worker-src blob:",
   "frame-src 'none'",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
-  "webrtc 'block'",
-]);
-
-/**
- * 只放在舞台入口 `stage.html` 的 `<meta>` 里、**不进响应头**的两条:Trusted Types。只许一个缺省策略(舞台加固脚本建的那个,
- * 拒掉带子框架的 HTML 串),卡片代码建不了第二个。
- *
- * 为什么不进响应头:响应头由 nginx 对舞台源上的一切响应加,而部署顺序是「先改 nginx 再换页面」—— 这段时间里旧版页面的舞台
- * (`/editor/?stage=1`,没有缺省策略)要照常工作;带上这两条它一贴快照就会被拦下。放在 `<meta>` 里,它就只跟着带缺省策略的
- * 那一版页面走。强制与否由舞台加固实测(`isolation/harden.ts` 的 `trustedTypes: "enforced"`),不靠响应头。
- */
-const STAGE_TRUSTED_TYPES_DIRECTIVES = Object.freeze([
-  "require-trusted-types-for 'script'",
-  "trusted-types default",
 ]);
 
 /** 响应头与 `<meta>` 共有的那一段 */
 const STAGE_CSP_BASE = STAGE_DIRECTIVES.join("; ");
 
-/** 舞台入口 `stage.html` 里 `<meta>` 用的策略:共有的一段加 Trusted Types(不含 `frame-ancestors`,它在 `<meta>` 里无效) */
-export const STAGE_CSP_META = [...STAGE_DIRECTIVES, ...STAGE_TRUSTED_TYPES_DIRECTIVES].join("; ");
+/** 舞台入口 `stage.html` 里 `<meta>` 用的策略:共有的一段(不含 `frame-ancestors`,它在 `<meta>` 里无效) */
+export const STAGE_CSP_META = STAGE_CSP_BASE;
 
 /** 只出现在响应头那一份里的指令名:舞台自检据此分辨「策略出自响应头」还是「只有 `<meta>` 兜底」 */
 export const STAGE_CSP_HEADER_ONLY_DIRECTIVE = "frame-ancestors";
@@ -95,13 +81,6 @@ export function stageCspHeader(editorOrigin, { template = false } = {}) {
 }
 
 /**
- * 舞台源的出口白名单(`Connection-Allowlist`,Chrome 152 起默认生效;实测见 `docs/reports/AGENT-online-cards-s.md`):
- * 文档能连的只有它自己的源。**WebRTC 缺省被它整个拦下**(不写 `webrtc=allow`),重定向缺省也拦下,空白子框架与 blob Worker 继承。
- * 这是浏览器层面拦 WebRTC 的办法;不认这个头的浏览器靠脚本加固(`isolation/harden.ts`),不是浏览器保证。
- */
-export const STAGE_CONNECTION_ALLOWLIST = "(response-origin)";
-
-/**
  * 编辑器页的策略:只加舞台隔离必需的一条 —— 舞台 iframe 只能载入本源与两个舞台源(它自己跳走也归这条管)。
  * `blob:` 与 `data:` 不放行:编辑器页自己没有这样的子框架。
  */
@@ -112,12 +91,11 @@ export function editorCspHeader(stageOrigins, { template = false } = {}) {
 
 /**
  * 舞台源上**每个**响应都带的安全头(小写名 → 值)。`Origin-Agent-Cluster`、`Referrer-Policy`、`X-Content-Type-Options`
- * 是原有的,照旧;新增三条:策略、出口白名单、关 DNS 预解析。
+ * 是原有的,照旧;文档策略与关 DNS 预解析沿用，外链资源不设出口白名单。
  */
 export function stageSecurityHeaders(editorOrigin, opts = {}) {
   return {
     "content-security-policy": stageCspHeader(editorOrigin, opts),
-    "connection-allowlist": STAGE_CONNECTION_ALLOWLIST,
     "x-dns-prefetch-control": "off",
     "origin-agent-cluster": "?1",
     "referrer-policy": "no-referrer",

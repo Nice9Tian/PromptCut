@@ -10,7 +10,7 @@
  */
 declare const __PC_CARD_RUNTIME_DEPS__: { sucrase?: string; tailwindcss?: string } | undefined;
 
-export const CARD_RUNTIME_ABI = "ocr1";
+export const CARD_RUNTIME_ABI = "ocr2";
 
 const deps = typeof __PC_CARD_RUNTIME_DEPS__ === "object" && __PC_CARD_RUNTIME_DEPS__ ? __PC_CARD_RUNTIME_DEPS__ : null;
 
@@ -18,5 +18,5 @@ export function cardRuntimeVersionOf(abi: string, d: { sucrase?: string; tailwin
   return `${abi}:sucrase@${d?.sucrase || "dev"}:tailwindcss@${d?.tailwindcss || "dev"}`;
 }
 
-/** 形如 `ocr1:sucrase@3.35.1:tailwindcss@4.3.3` */
+/** 形如 `ocr2:sucrase@3.35.1:tailwindcss@4.3.3` */
 export const CARD_RUNTIME_VERSION: string = cardRuntimeVersionOf(CARD_RUNTIME_ABI, deps);

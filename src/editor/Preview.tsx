@@ -360,7 +360,7 @@ export function Preview() {
     if (!ONLINE) return;
     const sync = () => {
       const s = onlineCardExec();
-      setCardExecGate({ site: onlineStageState().cardExec, isolated: s.enabled, reason: s.enabled ? null : s.reason, visual: !s.enabled || s.egress === "allowlist" });
+      setCardExecGate({ site: onlineStageState().cardExec, isolated: s.enabled, reason: s.enabled ? null : s.reason, visual: true });
     };
     const offs = [subscribeOnlineCardExec(sync), subscribeOnlineStages(sync)];
     sync();

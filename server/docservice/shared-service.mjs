@@ -52,6 +52,7 @@ import { roomUnavailableReason } from '../recovery/relocation.mjs';
 import { hostedModule } from './modules/hosted.mjs';
 import { serviceGate, AGENT_WRITE_TYPES } from './service-gate.mjs';
 import { serviceAdmission } from '../auth/service-identity.mjs';
+import { offeredProtocols } from './auth.mjs';
 
 /**
  * @param {object} options
@@ -104,6 +105,9 @@ export function createSharedDocService({
   isDirectLocal = (req) => isLocalOrigin(req),
   hostedLingerMs,
   hostedServiceUrls = null,
+  accountRuntime = null,
+  accountProjects = null,
+  accountRequired = false,
 } = {}) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedDocService: mode 只能是 'hosted' 或 'lan'");
   const say = typeof log === 'function' ? log : undefined;
@@ -151,6 +155,51 @@ export function createSharedDocService({
     now,
     log: say,
   });
+  if (accountRuntime && !accountProjects) throw new TypeError('accountProjects required for account runtime');
+  function authenticate(req) {
+    if (!accountRuntime) return auth.authenticate(req);
+    if (offeredProtocols(req).some(item => item.startsWith('promptcut.account.'))) return accountRuntime.authenticate(req);
+    const principal = auth.authenticate(req);
+    // In the account realm the old username/device/password handshake can never enter cloud data.
+    return principal?.scope === 'admin' || (principal?.scope === 'service' && !principal.tenantId) ? principal : null;
+  }
+  function handleSharedHttp(req, res) {
+    const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+    if (accountProjects && pathname.startsWith('/hosted/shared/account')) {
+      void (async () => {
+        let readiness;
+        if (pathname === '/hosted/shared/account/join' || pathname === '/hosted/shared/account/session') {
+          try { readiness = await accountRuntime.requireAssetReady(); }
+          catch {
+            if (!res.destroyed && !res.headersSent) {
+              res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+              res.end(JSON.stringify({ ok: false, code: 'session-unavailable' }));
+            }
+            return;
+          }
+        }
+        if (!res.destroyed) await accountProjects.handlePublic(req, res, { readiness });
+      })().catch(error => {
+        say?.('account.http-error', { code: String(error?.code ?? 'internal') });
+        if (!res.destroyed && !res.headersSent) {
+          res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify({ ok: false, code: 'account-unavailable' }));
+        }
+      });
+      return true;
+    }
+    if (mode === 'hosted' && pathname.startsWith('/hosted/shared/account')) {
+      res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, code: 'account-unavailable' }));
+      return true;
+    }
+    if (accountRuntime && pathname.startsWith('/shared/') && pathname !== '/shared/service-challenge') {
+      res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, code: 'account-required' }));
+      return true;
+    }
+    return sharedHttp.handle(req, res, '');
+  }
 
   const sharedHttp = createSharedHttp({
     store: storeOf,
@@ -174,18 +223,23 @@ export function createSharedDocService({
     gate(principal, type, msg) {
       const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
       // 托管方服务身份：白名单（缺省拒绝），再核对登记表与项目的开关
-      return reason ?? serviceGate(principal, type, msg) ?? serviceRefusal(principal) ?? readonlyRefusal(principal, type) ?? serviceOptions.gate?.(principal, type, msg) ?? null;
+      return reason ?? serviceGate(principal, type, msg) ?? serviceRefusal(principal) ??
+        (principal?.realm === 'account' ? accountRuntime.gate(principal, type, msg) : readonlyRefusal(principal, type) ?? serviceOptions.gate?.(principal, type, msg) ?? null);
     },
     resumeGate(principal) {
       const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
-      return reason ?? serviceRefusal(principal) ?? serviceOptions.resumeGate?.(principal) ?? null;
+      return reason ?? serviceRefusal(principal) ?? (principal?.realm === 'account' ? accountRuntime.resumeGate(principal) : serviceOptions.resumeGate?.(principal) ?? null);
     },
-    ...(mode === 'lan' ? { server, path: wsPath } : { http: (req, res) => sharedHttp.handle(req, res, '') || serviceOptions?.http?.(req, res) === true }),
-    authenticate: auth.authenticate,
+    ...(mode === 'lan' ? { server, path: wsPath } : { http: (req, res) => handleSharedHttp(req, res) || serviceOptions?.http?.(req, res) === true }),
+    authenticate,
+    enableHttpTransport: mode === 'hosted' && !!accountRuntime,
+    healthExtra: mode === 'hosted' && (accountRuntime || accountRequired) ? () => ({ accountMode: accountRuntime ? 'v2' : 'legacy',
+      accountRequired: accountRequired === true, assetReady: accountRuntime?.sessionReady === true }) : undefined,
     remoteOf,
     now,
     ...(say ? { log: say } : {}),
   });
+  accountRuntime?.bindService(service);
 
   const localStore = dataDir ? createFileStore({ dir: dataDir, ...(say ? { log: say } : {}) }) : createMemoryStore();
   const tenantDir = (space) => (dataDir && isProjectId(space) ? path.join(dataDir, 'tenants', space) : null);
@@ -266,7 +320,8 @@ export function createSharedDocService({
     get store() { return store; },
     /** 托管方服务的登记表（没有是 null） */
     get serviceRegistry() { return registry; },
-    authenticate: auth.authenticate,
+    authenticate,
+    accountProjects,
     /**
      * 挂载模式：宿主把 HTTP 请求交进来，是 `<path>/shared/…` 的就处理并回 true，别的回 false、什么都不动。
      * 独立模式的端点已经挂在自建服务器上，这个函数也能用（前缀是空串）。

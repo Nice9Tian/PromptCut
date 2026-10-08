@@ -407,14 +407,14 @@ export function createSessionLayer({
         }
         return { ok: false, status: 404, code: SESSION_CLOSE.NO_SESSION, reason: 'no-session' };
       }
-      if (typeof resumeGate === 'function') {
-        let reason;
-        try { reason = resumeGate(s.principal); } catch { reason = 'forbidden'; }
+      const resumeAllowed = (reason) => {
+        if (s.ended) return { ok: false, status: 410, code: SESSION_CLOSE.SESSION_CLOSED, reason: 'session-closed' };
+        if (typeof transport.isUsable === 'function' && !transport.isUsable())
+          return { ok: false, status: 503, code: 1012, reason: 'transport-unavailable' };
         if (typeof reason === 'string') {
           endSession(s, 1012, reason);
           return { ok: false, status: 503, code: 1012, closedCode: 1012, closedReason: reason, reason };
         }
-      }
       if (!Number.isSafeInteger(ack) || ack < 0 || ack > s.outSeq) {
         badSeq(s);
         return { ok: false, status: 410, code: SESSION_CLOSE.BAD_SEQ, closedCode: SESSION_CLOSE.BAD_SEQ, closedReason: 'bad-seq', reason: 'bad-seq' };
@@ -451,6 +451,12 @@ export function createSessionLayer({
         }
       }
       return { ok: true, connId: s.connId, welcome };
+      };
+      if (typeof resumeGate !== 'function') return resumeAllowed(null);
+      try {
+        const reason = resumeGate(s.principal);
+        return reason && typeof reason.then === 'function' ? reason.then(resumeAllowed, () => resumeAllowed('forbidden')) : resumeAllowed(reason);
+      } catch { return resumeAllowed('forbidden'); }
     },
 
     /** 传输收到一条文本（第 3.3 节）。旧客户端原样交给核心 */

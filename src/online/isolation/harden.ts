@@ -1,32 +1,6 @@
-/**
- * 舞台加固(契约 `docs/plan/online-card-exec-contract.md` 第 3.4 节;主会话 2026-10-06 选甲)。
- *
- * 只在**跨源舞台**(在线构建的 `stage.html`)里装,在任何卡片代码之前。桌面运行环境、同源单舞台、编辑器页、导出页都不装。
- *
- * # 它是什么、不是什么
- *
- * 拦 WebRTC 的**浏览器层面**的办法是响应头 `Connection-Allowlist`(`stagePolicy.mjs`;Chrome 152 起生效,WebRTC 缺省整个拦下)。
- * 这里是**脚本层面**的加固:在不认那个头的浏览器上,它是 WebRTC 唯一的一道拦;在认的浏览器上,它是第二道。
- * 脚本加固不是浏览器保证 —— 卡片代码与它在同一个脚本环境里,堵的是已知的路,不能证明没有别的路。
- * 万一被绕过,带得走的是本项目的内容与素材;凭证与票据不在舞台的脚本环境里(跨源、HttpOnly cookie),带不走。
- *
- * # 做什么
- *
- * 1. `RTCPeerConnection`、`webkitRTCPeerConnection`、`mozRTCPeerConnection` 改成不可改的 `undefined`。
- * 2. 不让舞台里出现子框架(子框架是同源的新脚本环境,里面有原装的构造器):
- *    - Trusted Types 的缺省策略拒掉带 `iframe` / `frame` / `frameset` / `object` / `embed` / `portal` / `fencedframe` 的 HTML 串,
- *      也拒掉带 `<!ENTITY` 的(XML 的实体展开能在源文本里不出现标签名的情况下造出元素);策略头只许这一个策略;
- *    - `createElement` / `createElementNS` / `customElements.define` 不给造这几种元素;
- *    - DOM 的插入入口(`appendChild`、`insertBefore`、`replaceChild`、`append`、`prepend`、`before`、`after`、`replaceWith`、
- *      `replaceChildren`、`insertAdjacentElement`、`moveBefore`、`Range.insertNode`、`Range.surroundContents`)插入前查一遍子树;
- *    - 删掉 `XSLTProcessor`(它能在不经 Trusted Types 的情况下生成元素);
- *    - `XMLHttpRequest` 不给以文档类型取回(`responseType = "document"`、`responseXML`):那样解析出来的文档不经 Trusted Types;
- *    - `document.execCommand` 一律不做。
- * 3. `document.cookie` 与 `cookieStore` 只读不写:舞台用不着写 cookie,卡片代码也不该能往父域种 cookie。
- * 4. 兜底:`MutationObserver` 发现子框架就摘掉,并向父页报一次(`pc-stage-isolation` 的 `breach`),父页本次会话不再执行用户卡。
- *
- * 钩子里用到的内置方法在安装时全部先取下来存在闭包里,之后不经原型查找(卡片代码改 `Element.prototype.querySelector`、
- * `Function.prototype.call` 之类不影响钩子)。
+/** 舞台文档边界加固。只在跨源stage安装，不修改WebRTC或网络API，不强制Trusted Types。
+ * frame/object插入保护和cookie只读保留；是否能执行由分源/响应头策略与票据交接决定。
+ * 这些钩子不能证明或声称阻止外发；外链图片、字体、样式和脚本照常加载。
  */
 
 /** 会开出新脚本环境的元素(小写本地名) */
@@ -51,14 +25,10 @@ export function isFrameName(name: unknown): boolean {
 }
 
 export interface HardenReport {
-  /** 装过了(重复调用只装一次) */
   installed: boolean;
-  /** 本文档里 `RTCPeerConnection` 已经是 `undefined` */
+  /** 兼容诊断字段；本版本不移除WebRTC。 */
   webrtcRemoved: boolean;
-  /**
-   * Trusted Types:`enforced` = 缺省策略建好、而且实测带子框架的 HTML 串被拒;`created` = 策略建好但浏览器没在强制
-   * (策略头没到);`unsupported` = 浏览器没有这个接口;`failed` = 建策略时出错
-   */
+  /** 兼容诊断字段；本阶段不安装或要求Trusted Types策略。 */
   trustedTypes: "enforced" | "created" | "unsupported" | "failed";
   /** 装上的钩子数 */
   hooks: number;
@@ -67,11 +37,6 @@ export interface HardenReport {
 }
 
 export type BreachKind = "html" | "create" | "insert" | "observed" | "define";
-
-interface TrustedTypesLike {
-  createPolicy(name: string, rules: Record<string, (s: string) => string>): unknown;
-  defaultPolicy?: unknown;
-}
 
 let report: HardenReport | null = null;
 
@@ -98,7 +63,7 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
   const strLower = String.prototype.toLowerCase;
   const strLastIndexOf = String.prototype.lastIndexOf;
   const strSlice = String.prototype.slice;
-  const reExec = RegExp.prototype.exec;
+  const regexpExec = RegExp.prototype.exec;
   const NodeP = w.Node.prototype, ElementP = w.Element.prototype, DocumentP = w.Document.prototype, FragmentP = w.DocumentFragment.prototype;
   const getter = (proto: object, key: string) => getOwnPropertyDescriptor(proto, key)?.get as ((this: unknown) => unknown) | undefined;
   const nodeTypeOf = getter(NodeP, "nodeType")!;
@@ -110,8 +75,7 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
   const removeEl = ElementP.remove;
   const SELECTOR = FRAME_TAGS.join(",");
   // 自己的正则不经原型上的 exec(卡片代码改 `RegExp.prototype.exec` 不影响判定)
-  const frameRe = new RegExp(FRAME_HTML.source, "i"), entityRe = new RegExp(ENTITY_DECL.source, "i");
-  const hit = (re: RegExp, s: string) => apply(reExec, re, [s]) !== null;
+
 
   let reporting = false;
   const breach = (kind: BreachKind) => {
@@ -148,33 +112,9 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
     defineProperty(target, key, { value, writable: false, configurable: false, enumerable: false });
   };
 
-  /* ---------- 1. WebRTC 的构造器 ---------- */
-  for (const k of ["RTCPeerConnection", "webkitRTCPeerConnection", "mozRTCPeerConnection"]) {
-    try { defineProperty(w, k, { value: undefined, writable: false, configurable: false, enumerable: false }); } catch (e) { errors.push(`${k}:${(e as Error).message}`); }
-  }
-  const webrtcRemoved = typeof w.RTCPeerConnection === "undefined" && typeof w.webkitRTCPeerConnection === "undefined";
-
-  /* ---------- 2. Trusted Types 的缺省策略 ---------- */
-  let trustedTypes: HardenReport["trustedTypes"] = "unsupported";
-  const tt = (w as unknown as { trustedTypes?: TrustedTypesLike }).trustedTypes;
-  if (tt && typeof tt.createPolicy === "function") {
-    try {
-      tt.createPolicy("default", {
-        createHTML: (s: string) => {
-          const text = typeof s === "string" ? s : `${s as string}`;
-          if (hit(frameRe, text) || hit(entityRe, text)) { breach("html"); throw new TypeError(BLOCKED); }
-          return text;
-        },
-        // 执行转译结果(`new Function`)与起 blob Worker 要经这两条;出口由内容安全策略管,这里原样放行
-        createScript: (s: string) => s,
-        createScriptURL: (s: string) => s,
-      });
-      trustedTypes = "created";
-    } catch (e) {
-      trustedTypes = "failed";
-      errors.push(`trustedTypes:${(e as Error).message}`);
-    }
-  }
+  /* 不移除WebRTC，也不建立强制Trusted Types策略：卡片出口护栏本三个版本不做。 */
+  const webrtcRemoved = false;
+  const trustedTypes: HardenReport["trustedTypes"] = "unsupported";
 
   /* ---------- 3. 不给造子框架类元素 ---------- */
   const wrapCreate = (key: "createElement" | "createElementNS", nameIndex: number) => {
@@ -232,6 +172,47 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
   wrapInsert(DocumentP, "moveBefore", 0); wrapInsert(FragmentP, "moveBefore", 0);
   for (const k of ["before", "after", "replaceWith"]) { wrapInsert(w.CharacterData?.prototype, k); wrapInsert(w.DocumentType?.prototype, k); }
   for (const k of ["insertNode", "surroundContents"]) wrapInsert(w.Range?.prototype, k, 0);
+
+  /* HTML解析的结构边界独立于Trusted Types；普通HTML/外链script/style不受影响。 */
+  const checkHtml = (value: unknown) => {
+    const text = typeof value === "string" ? value : String(value ?? "");
+    if (apply(regexpExec, FRAME_HTML, [text]) || apply(regexpExec, ENTITY_DECL, [text])) {
+      breach("html");
+      throw new TypeError(BLOCKED);
+    }
+  };
+  const wrapHtmlMethod = (proto: object | undefined, key: string, which: number | "all") => {
+    if (!proto) return;
+    const d = getOwnPropertyDescriptor(proto, key);
+    if (typeof d?.value !== "function") return;
+    try {
+      const orig = d.value;
+      lock(proto, key, function (this: unknown) {
+        const args = arguments;
+        if (which === "all") checkHtml(Array.from(args).join(""));
+        else checkHtml(args[which]);
+        return apply(orig, this, args as unknown as unknown[]);
+      });
+      hooks++;
+    } catch (e) { errors.push(`${key}:${(e as Error).message}`); }
+  };
+  const wrapHtmlSetter = (proto: object | undefined, key: string) => {
+    if (!proto) return;
+    const d = getOwnPropertyDescriptor(proto, key);
+    if (!d?.set) return;
+    try {
+      const set = d.set;
+      defineProperty(proto, key, { ...d, configurable: false, set(this: unknown, value: unknown) { checkHtml(value); return apply(set, this, [value]); } });
+      hooks++;
+    } catch (e) { errors.push(`${key}:${(e as Error).message}`); }
+  };
+  for (const key of ["innerHTML", "outerHTML"]) wrapHtmlSetter(ElementP, key);
+  wrapHtmlSetter(w.ShadowRoot?.prototype, "innerHTML");
+  wrapHtmlMethod(ElementP, "insertAdjacentHTML", 1);
+  for (const key of ["setHTML", "setHTMLUnsafe"]) { wrapHtmlMethod(ElementP, key, 0); wrapHtmlMethod(w.ShadowRoot?.prototype, key, 0); }
+  for (const key of ["write", "writeln"]) wrapHtmlMethod(DocumentP, key, "all");
+  wrapHtmlMethod(w.Range?.prototype, "createContextualFragment", 0);
+  wrapHtmlMethod(w.DOMParser?.prototype, "parseFromString", 0);
 
   /* ---------- 5. 不经 Trusted Types 的解析入口 ---------- */
   try { defineProperty(w, "XSLTProcessor", { value: undefined, writable: false, configurable: false, enumerable: false }); hooks++; } catch (e) { errors.push(`XSLTProcessor:${(e as Error).message}`); }
@@ -293,18 +274,6 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
     }).observe(w.document, { childList: true, subtree: true });
     hooks++;
   } catch (e) { errors.push(`MutationObserver:${(e as Error).message}`); }
-
-  /* ---------- 实测 Trusted Types 在不在强制 ---------- */
-  if (trustedTypes === "created") {
-    try {
-      const probe = apply(DocumentP.createElement, w.document, ["div"]) as HTMLElement;
-      let threw = false;
-      const before = opts.onBreach;
-      opts.onBreach = undefined; // 自己这一下试探不算有人试图造子框架
-      try { probe.innerHTML = "<iframe></iframe>"; } catch { threw = true; } finally { opts.onBreach = before; }
-      if (threw) trustedTypes = "enforced";
-    } catch { /* 留在 created */ }
-  }
 
   report = { installed: true, webrtcRemoved, trustedTypes, hooks, errors };
   return report;
